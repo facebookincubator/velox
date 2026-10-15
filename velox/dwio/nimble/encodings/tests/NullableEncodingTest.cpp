@@ -24,7 +24,11 @@
 #include "velox/dwio/nimble/common/Vector.h"
 #include "velox/dwio/nimble/common/tests/GTestUtils.h"
 #include "velox/dwio/nimble/common/tests/TestUtils.h"
+#include "velox/dwio/nimble/encodings/ConstantEncoding.h"
+#include "velox/dwio/nimble/encodings/RLEEncoding.h"
 #include "velox/dwio/nimble/encodings/SentinelEncoding.h"
+#include "velox/dwio/nimble/encodings/SliceEncoding.h"
+#include "velox/dwio/nimble/encodings/SparseBoolEncoding.h"
 #include "velox/dwio/nimble/encodings/TrivialEncoding.h"
 #include "velox/dwio/nimble/encodings/common/Encoding.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
@@ -632,16 +636,159 @@ void checkOutput(
     const T* data,
     const char* actualNulls,
     const T* actualData,
-    bool hasNulls) {
+    bool hasNulls,
+    uint32_t outputOffset = 0) {
   if (nulls[index]) {
-    ASSERT_EQ(data[index], actualData[index]) << index;
+    ASSERT_EQ(data[index], actualData[index + outputOffset]) << index;
   }
   if (hasNulls) {
     ASSERT_EQ(
         velox::bits::isBitSet(
-            reinterpret_cast<const uint8_t*>(actualNulls), index),
+            reinterpret_cast<const uint8_t*>(actualNulls),
+            index + outputOffset),
         nulls[index])
         << index;
+  }
+}
+
+void checkNullableMaterialization(
+    velox::memory::MemoryPool& pool,
+    const nimble::Vector<bool>& nonNulls,
+    std::string_view serializedNulls) {
+  const auto rowCount = folly::to<uint32_t>(nonNulls.size());
+  nimble::Vector<uint32_t> values(&pool);
+  for (uint32_t row = 0; row < rowCount; ++row) {
+    if (nonNulls[row]) {
+      values.push_back(row + 1);
+    }
+  }
+  const auto expected = spreadNullsIntoData<uint32_t>(pool, values, nonNulls);
+
+  nimble::Buffer valueChildBuffer{pool};
+  const auto serializedValues =
+      nimble::test::Encoder<nimble::TrivialEncoding<uint32_t>>::encode(
+          valueChildBuffer, values, nimble::CompressionType::Uncompressed);
+  nimble::Buffer nullableBuffer{pool};
+  const auto serializedNullable =
+      nimble::NullableEncoding<uint32_t>::encodeNullable(
+          rowCount, serializedValues, serializedNulls, nullableBuffer, {});
+  nimble::NullableEncoding<uint32_t> encoding{
+      pool, serializedNullable, [](uint32_t /*totalLength*/) -> void* {
+        return nullptr;
+      }};
+
+  nimble::Vector<uint32_t> output(&pool, rowCount);
+  nimble::Vector<char> outputNulls(&pool, rowCount);
+  const auto nonNullCount = encoding.materializeNullable(
+      rowCount, output.data(), [&]() -> void* { return outputNulls.data(); });
+  EXPECT_EQ(nonNullCount, values.size());
+  for (uint32_t row = 0; row < rowCount; ++row) {
+    checkOutput(
+        row,
+        nonNulls.data(),
+        expected.data(),
+        outputNulls.data(),
+        output.data(),
+        nonNullCount != rowCount);
+  }
+}
+
+template <typename NullEncoding>
+void checkNullableMaterialization(
+    velox::memory::MemoryPool& pool,
+    const nimble::Vector<bool>& nonNulls) {
+  nimble::Buffer nullChildBuffer{pool};
+  const auto serializedNulls = nimble::test::Encoder<NullEncoding>::encode(
+      nullChildBuffer, nonNulls, nimble::CompressionType::Uncompressed);
+  checkNullableMaterialization(pool, nonNulls, serializedNulls);
+}
+
+TEST_F(NullableEncodingSliceTest, materializeNullableBoolChildren) {
+  {
+    SCOPED_TRACE("Constant");
+    checkNullableMaterialization<nimble::ConstantEncoding<bool>>(
+        *pool_, toBoolVector({true, true, true, true}));
+  }
+  {
+    SCOPED_TRACE("Trivial");
+    checkNullableMaterialization<nimble::TrivialEncoding<bool>>(
+        *pool_, toBoolVector({true, false, true, false, true}));
+  }
+  {
+    SCOPED_TRACE("RLE");
+    checkNullableMaterialization<nimble::RLEEncoding<bool>>(
+        *pool_, toBoolVector({true, true, false, false, false, true, true}));
+  }
+  {
+    SCOPED_TRACE("SparseBool");
+    checkNullableMaterialization<nimble::SparseBoolEncoding>(
+        *pool_, toBoolVector({false, false, true, false, false}));
+  }
+  {
+    SCOPED_TRACE("Slice");
+    const auto source = toBoolVector({false, true, true, false, true, false});
+    nimble::Buffer sourceBuffer{*pool_};
+    const auto serializedSource =
+        nimble::test::Encoder<nimble::RLEEncoding<bool>>::encode(
+            sourceBuffer, source, nimble::CompressionType::Uncompressed);
+    nimble::Buffer sliceBuffer{*pool_};
+    const auto serializedNulls = nimble::SliceEncoding<bool>::wrap(
+        serializedSource,
+        /*offset=*/1,
+        /*length=*/4,
+        sliceBuffer,
+        {});
+    checkNullableMaterialization(
+        *pool_, toBoolVector({true, true, false, true}), serializedNulls);
+  }
+}
+
+TEST(NullableEncodingEdgeTest, materializeNullableWordBoundaries) {
+  auto pool = velox::memory::deprecatedAddDefaultLeafMemoryPool();
+
+  for (const uint32_t rowCount : {1U, 63U, 64U, 65U, 127U, 128U, 129U}) {
+    SCOPED_TRACE(testing::Message() << "rowCount=" << rowCount);
+    for (const bool lastRowIsNonNull : {false, true}) {
+      SCOPED_TRACE(
+          testing::Message() << "lastRowIsNonNull=" << lastRowIsNonNull);
+      nimble::Vector<bool> nonNulls(pool.get(), rowCount, !lastRowIsNonNull);
+      nonNulls[rowCount - 1] = lastRowIsNonNull;
+
+      nimble::Vector<uint32_t> values(pool.get());
+      for (uint32_t row = 0; row < rowCount; ++row) {
+        if (nonNulls[row]) {
+          values.push_back(row + 1);
+        }
+      }
+      const auto expected =
+          spreadNullsIntoData<uint32_t>(*pool, values, nonNulls);
+
+      nimble::Buffer encoded{*pool};
+      auto encoding = nimble::test::
+          Encoder<nimble::NullableEncoding<uint32_t>>::createNullableEncoding(
+              encoded,
+              values,
+              nonNulls,
+              [](uint32_t /*totalLength*/) -> void* { return nullptr; },
+              nimble::CompressionType::Uncompressed);
+      nimble::Vector<uint32_t> output(pool.get(), rowCount);
+      nimble::Vector<char> outputNulls(pool.get(), rowCount);
+
+      const auto nonNullCount = encoding->materializeNullable(
+          rowCount, output.data(), [&]() -> void* {
+            return outputNulls.data();
+          });
+      EXPECT_EQ(nonNullCount, values.size());
+      for (uint32_t row = 0; row < rowCount; ++row) {
+        checkOutput(
+            row,
+            nonNulls.data(),
+            expected.data(),
+            outputNulls.data(),
+            output.data(),
+            nonNullCount != rowCount);
+      }
+    }
   }
 }
 
@@ -874,8 +1021,10 @@ TYPED_TEST(NullableEncodingTest, materializeNullable) {
                 options);
         ASSERT_TRUE(encoding->isNullable());
         const uint32_t rowCount = encoding->rowCount();
-        nimble::Vector<E> buffer(this->pool_.get(), rowCount);
-        nimble::Vector<char> bitmap(this->pool_.get(), rowCount);
+        constexpr uint32_t kOutputOffset = 11;
+        nimble::Vector<E> buffer(this->pool_.get(), rowCount + kOutputOffset);
+        nimble::Vector<char> bitmap(
+            this->pool_.get(), rowCount + kOutputOffset);
 
         auto nonNullCount = encoding->materializeNullable(
             rowCount, buffer.data(), [&]() { return bitmap.data(); });
@@ -891,6 +1040,27 @@ TYPED_TEST(NullableEncodingTest, materializeNullable) {
               bitmap.data(),
               buffer.data(),
               nonNullCount != rowCount);
+        }
+
+        encoding->reset();
+        nonNullCount = encoding->materializeNullable(
+            rowCount,
+            buffer.data(),
+            [&]() { return bitmap.data(); },
+            nullptr,
+            kOutputOffset);
+        EXPECT_EQ(
+            std::accumulate(nulls.data(), nulls.data() + nulls.size(), 0),
+            nonNullCount);
+        for (int i = 0; i < rowCount; ++i) {
+          checkOutput(
+              i,
+              nulls.data(),
+              spreadData.data(),
+              bitmap.data(),
+              buffer.data(),
+              nonNullCount != rowCount,
+              kOutputOffset);
         }
 
         encoding->reset();

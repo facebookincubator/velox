@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include <mutex>
 #include <string_view>
 
 #include "velox/exec/GroupingSet.h"
@@ -128,6 +129,10 @@ class HashAggregation : public Operator {
   // Returns the default global grouping set rows for the () set.
   RowVectorPtr getDefaultGlobalGroupingSetOutput();
 
+  // Combines global partial aggregation states across this operator's peers
+  // when doing so reduces the data sent downstream.
+  void combineGlobalPartialAggregation();
+
   std::shared_ptr<const core::AggregationNode> aggregationNode_;
 
   const bool isPartialOutput_;
@@ -148,6 +153,11 @@ class HashAggregation : public Operator {
   const int32_t abandonPartialAggregationMinPct_;
 
   int64_t maxPartialAggregationMemoryUsage_;
+
+  // Guards 'groupingSet_' between close() and a peer driver that reads or
+  // takes it after all peers finish. Task termination closes waiting peers
+  // concurrently with that driver.
+  std::mutex mutex_;
   std::unique_ptr<GroupingSet> groupingSet_;
 
   // Cached from groupingSet_->hasCompactableAggregates() during initialize().
@@ -165,6 +175,10 @@ class HashAggregation : public Operator {
   bool finished_ = false;
   // True if partial aggregation has been found to be non-reducing.
   bool abandonedPartialAggregation_{false};
+
+  // True for a global partial aggregation whose states can be merged across
+  // drivers before output.
+  bool canCombineGlobalPartialAggregation_{false};
 
   RowContainerIterator resultIterator_;
   bool pushdownChecked_ = false;

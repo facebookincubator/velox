@@ -81,7 +81,7 @@ What Goes Where
      - Random
      - TabletReader → CachedMetadataInput (lazy)
    * - Cluster / chunk stats
-     - FlatBuffers
+     - FlatBuffers containing raw (V1) or Nimble-encoded (V2) arrays
      - Random
      - TabletReader → CachedMetadataInput
    * - Column data streams
@@ -89,9 +89,9 @@ What Goes Where
      - Sequential
      - ReaderBase → CachedBufferedInput
 
-The boundary isn't metadata vs data
-
-FlatBuffers (contiguous, random access) vs encoded streams (non-contiguous, sequential)
+The boundary isn't metadata vs data. V2 chunk stats embeds Nimble-encoded arrays
+inside FlatBuffer metadata: the container remains randomly addressable while
+the larger numeric arrays use Nimble encoding.
 
 6 Nimble File Layout
 --------------------
@@ -151,7 +151,7 @@ Stripe N
 
 3
 
-Pointers to StripeChunkStats 0, 1…
+Pointers to version-specific chunk stats 0, 1…
 
 
 stripe_indexes: [MetadataSection]
@@ -377,7 +377,9 @@ footerSize, compressionType, checksum, version, magic
     │   Schema         "columnar.schema"          — type tree                 │
     │   Metadata       "columnar.metadata"        — key-value pairs           │
     │   Stats          "columnar.vectorized_stats"— per-column stats          │
-    │   ChunkStats     "columnar.chunk.stats"     — root → per-group blobs   │
+    │   ChunkStats     (at most one version is present):                     │
+    │     V1 "columnar.chunk.stats"     — root → per-group blobs             │
+    │     V2 "columnar.chunk.stats.v2"  — root → per-group blobs             │
     │   FileIndexes    "columnar.indexes"         — named index manifest     │
     │   StrideIndex    "columnar.stride.index"    — root → per-group blobs   │
     ├──────────────────────────────────────────────────────────────────────────┤
@@ -400,11 +402,19 @@ Per-Group FlatBuffer Details
       stream_sizes:    [uint32]   flattened [stripe x stream]
           ↑ locates individual stream bytes within stripe data
 
-    StripeChunkStats (one per group)
+    StripeChunkStats V1 (one per group)
       stream_count:          uint32
       stream_chunk_counts:   [uint32]   prefix-sum [stripe x stream]
       stream_chunk_rows:     [uint32]   prefix-sum row counts per chunk
       stream_chunk_offsets:  [uint32]   byte offset per chunk
+      stream_chunk_null_counts: [uint32]   null count per chunk
+
+    StripeChunkStatsV2 (one per group)
+      stream_count:          uint32
+      stream_chunk_counts:   [uint32]   prefix-sum [stream x stripe]
+      stream_chunk_rows:     EncodedStream   prefix-sum row counts per chunk
+      stream_chunk_offsets:  EncodedStream   byte offset per chunk
+      stream_chunk_null_counts: EncodedStream   null count per chunk
 
     StripeStrideIndex (one per group, *** NEW ***)
       stride_size:           uint32    (e.g. 10,000 rows)
@@ -435,7 +445,8 @@ Footer = Directory of Pointers
                        │                                                {0x9000, 248, Zstd}]
                        │                              optional_sections:
                        │                                "columnar.schema"        → {0xB000, ...}
-                       │                                "columnar.chunk.stats"   → {0xC000, ...}
+                       │                                "columnar.chunk.stats" or
+                       │                                "columnar.chunk.stats.v2" → {0xC000, ...}
                        │                                "columnar.indexes"       → {0xD000, ...}
                        │
                        ├─ 0x8000: StripeGroup 0 blob

@@ -24,6 +24,24 @@
 
 namespace facebook::velox::functions::sparksql {
 
+/// Throws a user error formatted from 'formatString' and 'args' when
+/// 'ansiEnabled' is true; does nothing otherwise. Use when the caller
+/// signals NULL via its own bool/Status return, not std::optional (see
+/// nullOrUserFail() below for that case).
+///
+/// Error messages should follow Velox convention: static description first,
+/// runtime values at the end of the format string.
+template <typename... Args>
+void ansiUserFail(
+    bool ansiEnabled,
+    fmt::format_string<Args...> formatString,
+    Args&&... args) {
+  if (FOLLY_UNLIKELY(ansiEnabled)) {
+    VELOX_USER_FAIL(
+        "{}", fmt::format(formatString, std::forward<Args>(args)...));
+  }
+}
+
 /// Returns std::nullopt when ANSI mode is disabled; throws a user error
 /// formatted from 'formatString' and 'args' when enabled. Use at validation
 /// sites in Spark functions that return NULL on invalid input unless ANSI mode
@@ -34,18 +52,12 @@ namespace facebook::velox::functions::sparksql {
 ///         ansiEnabled, "Invalid value for hour, must be in [0, 24): {}",
 ///         hour);
 ///   }
-///
-/// Error messages should follow Velox convention: static description first,
-/// runtime values at the end of the format string.
 template <typename... Args>
 std::nullopt_t nullOrUserFail(
     bool ansiEnabled,
     fmt::format_string<Args...> formatString,
     Args&&... args) {
-  if (FOLLY_UNLIKELY(ansiEnabled)) {
-    VELOX_USER_FAIL(
-        "{}", fmt::format(formatString, std::forward<Args>(args)...));
-  }
+  ansiUserFail(ansiEnabled, formatString, std::forward<Args>(args)...);
   return std::nullopt;
 }
 

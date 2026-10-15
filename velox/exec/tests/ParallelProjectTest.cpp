@@ -29,8 +29,8 @@ class ParallelProjectTest : public test::OperatorTestBase {
 
 TEST_F(ParallelProjectTest, basic) {
   auto data = makeRowVector({
-      makeFlatVector<int32_t>(100, folly::identity),
-      makeFlatVector<int32_t>(100, folly::identity),
+      makeFlatIdentityVector<int32_t>(100),
+      makeFlatIdentityVector<int32_t>(100),
   });
 
   createDuckDbTable({data});

@@ -213,6 +213,12 @@ About comment style:
 
 * **Avoid redundant comments** that simply repeat what the code already says.
   Comments should explain *why*, not *what*.
+  * "Why" means why the code is the way it is: the constraint, invariant or
+    tradeoff a reader must respect to change it safely. Not how it got that
+    way. What the code used to be, why that was wrong, and which alternative
+    was rejected describe the change, not the code, and belong in the commit
+    message, which `git blame` will find. A comment is read every time; a
+    commit message is read once, by whoever asks.
 
 ```cpp
 // ❌ Avoid - comment just repeats the code
@@ -230,6 +236,17 @@ return result;
 // ✅ Prefer - comment explains WHY, not WHAT
 // Use a larger buffer to avoid repeated reallocations for typical queries.
 buffer.reserve(1024);
+
+// ❌ Avoid - comment explains the change, not the code
+/// Was a std::string, which forced a JSON round-trip per row. Replaced with
+/// an opaque payload so the framework never parses it. Deriving a response
+/// type per function was rejected because it makes a missing response
+/// representable.
+std::shared_ptr<const Payload> payload;
+
+// ✅ Prefer - comment explains the constraint the reader must respect
+/// Opaque to the framework. Only the function that produced it may read it.
+std::shared_ptr<const Payload> payload;
 ```
 
 * **Do not reference other implementations** in comments ("like Java Presto",

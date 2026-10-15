@@ -14,6 +14,7 @@
 
 add_library(
   velox_cudf_hive_connector
+  BufferedInputDataSource.cpp
   CudfHiveConfig.cpp
   CudfHiveConnector.cpp
   CudfHiveConnectorSplit.cpp
@@ -21,12 +22,12 @@ add_library(
   CudfHiveDataSource.cpp
   CudfHiveTableHandle.cpp
   CudfSplitReader.cpp
-  CudfSplitReaderHelpers.cpp
+  CudfSplitReaderByteFetch.cpp
 )
 
 target_link_libraries(
   velox_cudf_hive_connector
-  PRIVATE velox_dwio_common velox_hive_connector
+  PRIVATE velox_common_io velox_dwio_common velox_hive_connector
   PUBLIC cudf::cudf nvtx3::nvtx3-cpp velox_cudf_expression
 )
 

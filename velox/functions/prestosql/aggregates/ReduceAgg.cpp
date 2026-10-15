@@ -146,6 +146,11 @@ class ReduceAgg : public exec::Aggregate {
     return false;
   }
 
+  bool isReducing() const override {
+    // The input lambda can produce state that grows with input cardinality.
+    return false;
+  }
+
   int32_t accumulatorFixedWidthSize() const override {
     return sizeof(ReduceAggAccumulator);
   }

@@ -17,6 +17,19 @@
 # NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS as well (see ../CMakeLists.txt), so they
 # need the benchmark switch guarded explicitly rather than relying on the parent.
 if(VELOX_ENABLE_BENCHMARKS)
+  add_executable(nimble_alprd_benchmark ALPRDBenchmark.cpp)
+
+  target_link_libraries(
+    nimble_alprd_benchmark
+    velox_dwio_common
+    nimble_encodings
+    nimble_common
+    Folly::follybenchmark
+    Folly::folly
+    velox_memory
+    fmt::fmt
+  )
+
   add_executable(
     nimble_fixed_bit_width_benchmark
     FixedBitWidthBenchmark.cpp
@@ -51,6 +64,31 @@ if(VELOX_ENABLE_BENCHMARKS)
     Folly::follybenchmark
     Folly::folly
     velox_memory
+  )
+
+  add_executable(nimble_nullable_benchmark NullableBenchmark.cpp BenchmarkUtils.h)
+
+  target_link_libraries(
+    nimble_nullable_benchmark
+    nimble_encodings
+    nimble_common
+    Folly::follybenchmark
+    Folly::folly
+    velox_common_base
+    velox_memory
+  )
+
+  add_executable(nimble_sentinel_encoding_view_benchmark SentinelEncodingViewBenchmark.cpp)
+
+  target_link_libraries(
+    nimble_sentinel_encoding_view_benchmark
+    nimble_encodings
+    nimble_common
+    Folly::follybenchmark
+    Folly::folly
+    velox_common_base
+    velox_memory
+    fmt::fmt
   )
 
   add_executable(nimble_exact_bit_width_storage_benchmark ExactBitWidthStorageBenchmark.cpp)
@@ -171,9 +209,12 @@ if(VELOX_ENABLE_BENCHMARKS)
   target_link_libraries(
     nimble_alp_encoding_benchmark
     nimble_encodings
+    nimble_velox_selective
+    nimble_writer
     nimble_common
     Folly::follybenchmark
     Folly::folly
+    velox_dwio_common
     velox_memory
     fmt::fmt
   )

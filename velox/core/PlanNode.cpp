@@ -171,6 +171,7 @@ AggregationNode::AggregationNode(
     const std::optional<FieldAccessTypedExprPtr>& groupId,
     bool ignoreNullKeys,
     bool noGroupsSpanBatches,
+    std::optional<bool> mayRetainInput,
     PlanNodePtr source)
     : PlanNode(id),
       step_(step),
@@ -182,6 +183,7 @@ AggregationNode::AggregationNode(
       groupId_(groupId),
       globalGroupingSets_(globalGroupingSets),
       noGroupsSpanBatches_(noGroupsSpanBatches),
+      mayRetainInput_(mayRetainInput),
       sources_{source},
       outputType_(getAggregationOutputType(
           groupingKeys_,
@@ -230,6 +232,10 @@ AggregationNode::AggregationNode(
   VELOX_USER_CHECK(
       !noGroupsSpanBatches_ || isPreGrouped(),
       "noGroupsSpanBatches can only be set for streaming aggregation (pre-grouped)");
+
+  VELOX_USER_CHECK(
+      !mayRetainInput_.value_or(noGroupsSpanBatches_) || isPreGrouped(),
+      "mayRetainInput can only be set for streaming aggregation (pre-grouped)");
 }
 
 AggregationNode::AggregationNode(
@@ -241,6 +247,7 @@ AggregationNode::AggregationNode(
     const std::vector<Aggregate>& aggregates,
     bool ignoreNullKeys,
     bool noGroupsSpanBatches,
+    std::optional<bool> mayRetainInput,
     PlanNodePtr source)
     : AggregationNode(
           id,
@@ -253,6 +260,7 @@ AggregationNode::AggregationNode(
           kDefaultGroupId,
           ignoreNullKeys,
           noGroupsSpanBatches,
+          mayRetainInput,
           source) {}
 
 namespace {
@@ -344,6 +352,11 @@ void AggregationNode::addDetails(std::stringstream& stream) const {
   if (noGroupsSpanBatches_) {
     stream << " noGroupsSpanBatches";
   }
+
+  if (mayRetainInput_.has_value()) {
+    stream << " mayRetainInput="
+           << (mayRetainInput_.value() ? "true" : "false");
+  }
 }
 
 namespace {
@@ -383,6 +396,9 @@ folly::dynamic AggregationNode::serialize() const {
   }
   obj["ignoreNullKeys"] = ignoreNullKeys_;
   obj["noGroupsSpanBatches"] = noGroupsSpanBatches_;
+  if (mayRetainInput_.has_value()) {
+    obj["mayRetainInput"] = mayRetainInput_.value();
+  }
   return obj;
 }
 
@@ -519,7 +535,10 @@ PlanNodePtr AggregationNode::create(const folly::dynamic& obj, void* context) {
       obj["ignoreNullKeys"].asBool(),
       obj.count("noGroupsSpanBatches") ? obj["noGroupsSpanBatches"].asBool()
                                        : false,
-      deserializeSingleSource(obj, context));
+      obj.count("mayRetainInput")
+          ? std::optional<bool>(obj["mayRetainInput"].asBool())
+          : std::nullopt,
+      std::move(source));
 }
 
 namespace {
@@ -1376,12 +1395,14 @@ const std::vector<PlanNodePtr>& ExchangeNode::sources() const {
 
 void ExchangeNode::addDetails(std::stringstream& stream) const {
   addVectorSerdeKind(serdeKind_, stream);
+  stream << " " << transportKind_;
 }
 
 folly::dynamic ExchangeNode::serialize() const {
   auto obj = PlanNode::serialize();
   obj["outputType"] = ExchangeNode::outputType()->serialize();
   obj["serdeKind"] = serdeKind_;
+  obj["transportKind"] = transportKind_;
   return obj;
 }
 
@@ -1396,7 +1417,9 @@ PlanNodePtr ExchangeNode::create(const folly::dynamic& obj, void* context) {
   return std::make_shared<ExchangeNode>(
       deserializePlanNodeId(obj),
       deserializeRowType(obj["outputType"]),
-      obj["serdeKind"].asString());
+      obj["serdeKind"].asString(),
+      obj.getDefault("transportKind", std::string{TransportKind::kInMemory})
+          .asString());
 }
 
 UnnestNode::UnnestNode(
@@ -3429,8 +3452,9 @@ MergeExchangeNode::MergeExchangeNode(
     const RowTypePtr& type,
     const std::vector<FieldAccessTypedExprPtr>& sortingKeys,
     const std::vector<SortOrder>& sortingOrders,
-    std::string serdeKind)
-    : ExchangeNode(id, type, std::move(serdeKind)),
+    std::string serdeKind,
+    std::string transportKind)
+    : ExchangeNode(id, type, std::move(serdeKind), std::move(transportKind)),
       sortingKeys_(sortingKeys),
       sortingOrders_(sortingOrders) {}
 
@@ -3438,6 +3462,7 @@ void MergeExchangeNode::addDetails(std::stringstream& stream) const {
   addSortingKeys(sortingKeys_, sortingOrders_, stream);
   stream << ", ";
   addVectorSerdeKind(serdeKind(), stream);
+  stream << " " << transportKind();
 }
 
 folly::dynamic MergeExchangeNode::serialize() const {
@@ -3446,6 +3471,7 @@ folly::dynamic MergeExchangeNode::serialize() const {
   obj["sortingKeys"] = ISerializable::serialize(sortingKeys_);
   obj["sortingOrders"] = serializeSortingOrders(sortingOrders_);
   obj["serdeKind"] = serdeKind();
+  obj["transportKind"] = transportKind();
   return obj;
 }
 
@@ -3463,12 +3489,16 @@ PlanNodePtr MergeExchangeNode::create(
   const auto sortingKeys = deserializeFields(obj["sortingKeys"], context);
   const auto sortingOrders = deserializeSortingOrders(obj["sortingOrders"]);
   const auto serdeKind = obj["serdeKind"].asString();
+  const auto transportKind =
+      obj.getDefault("transportKind", std::string{TransportKind::kInMemory})
+          .asString();
   return std::make_shared<MergeExchangeNode>(
       deserializePlanNodeId(obj),
       outputType,
       sortingKeys,
       sortingOrders,
-      serdeKind);
+      serdeKind,
+      transportKind);
 }
 
 void LocalPartitionNode::addDetails(std::stringstream& stream) const {

@@ -24,6 +24,12 @@
 
 namespace facebook::nimble::index {
 
+const std::shared_ptr<const IndexLookup::LookupRequest::Options>&
+IndexLookup::LookupRequest::defaultOptions() {
+  static const auto kDefaultOptions = std::make_shared<const Options>();
+  return kDefaultOptions;
+}
+
 void IndexLookup::Options::validate() const {
   NIMBLE_CHECK_NOT_NULL(file.get());
   NIMBLE_CHECK_NOT_NULL(ioOptions);
@@ -52,7 +58,9 @@ std::shared_ptr<MetadataInput> createIndexMetadataInput(
       .maxCoalesceBytes = options.ioOptions->maxCoalesceBytes(),
       .executor = options.ioOptions->ioExecutor().get(),
       .fileHandle = options.fileHandle,
-      .cache = options.cache};
+      .cache = options.cache,
+      .maxCacheEntrySize = options.maxCacheEntrySize,
+  };
   return MetadataInput::create(options.file.get(), metadataOptions);
 }
 

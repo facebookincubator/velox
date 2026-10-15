@@ -123,7 +123,7 @@ class FunctionBaseTest : public testing::Test,
   /// multiple times, the returned statistics will contain values aggregated
   /// across all calls. Statistics will be missing for functions and
   /// special forms that didn't get evaluated.
-  std::pair<VectorPtr, std::unordered_map<std::string, exec::ExprStats>>
+  std::pair<VectorPtr, folly::F14FastMap<std::string, exec::ExprStats>>
   evaluateWithStats(
       const std::string& expression,
       const RowVectorPtr& data,

@@ -73,10 +73,10 @@ CudfTopN::CudfTopN(
 CudfVectorPtr CudfTopN::mergeTopK(
     std::vector<CudfVectorPtr> topNBatches,
     int32_t k,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   std::vector<cudf::table_view> tableViews;
-  std::vector<rmm::cuda_stream_view> inputStreams;
+  std::vector<cuda::stream_ref> inputStreams;
   tableViews.reserve(topNBatches.size());
   inputStreams.reserve(topNBatches.size());
   for (const auto& batch : topNBatches) {
@@ -108,7 +108,7 @@ CudfVectorPtr CudfTopN::mergeTopK(
 std::unique_ptr<cudf::table> CudfTopN::getTopK(
     cudf::table_view const& values,
     int32_t k,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   auto keys = values.select(sortKeys_);
   auto const indices =
@@ -122,7 +122,7 @@ std::unique_ptr<cudf::table> CudfTopN::getTopK(
       cudf::out_of_bounds_policy::DONT_CHECK,
       cudf::negative_index_policy::NOT_ALLOWED,
       stream,
-      mr);
+      cudf::memory_resources{mr, get_temp_mr()});
 }
 
 // helper to get topk of a table

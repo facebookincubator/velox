@@ -76,13 +76,16 @@ using facebook::velox::fuzzer::AtTimezoneArgValuesGenerator;
 using facebook::velox::fuzzer::CastVarcharAndJsonArgValuesGenerator;
 using facebook::velox::fuzzer::ExpressionFuzzer;
 using facebook::velox::fuzzer::FuzzerRunner;
+using facebook::velox::fuzzer::InverseFCdfArgValuesGenerator;
 using facebook::velox::fuzzer::JsonExtractArgValuesGenerator;
 using facebook::velox::fuzzer::JsonParseArgValuesGenerator;
 using facebook::velox::fuzzer::prestoSkippedFunctions;
 using facebook::velox::fuzzer::prestoSkippedFunctionsSOT;
 using facebook::velox::fuzzer::QDigestArgValuesGenerator;
+#ifdef VELOX_ENABLE_GEO
 using facebook::velox::fuzzer::S2CellIdArgValuesGenerator;
 using facebook::velox::fuzzer::S2CellTokenArgValuesGenerator;
+#endif
 using facebook::velox::fuzzer::SetDigestArgValuesGenerator;
 using facebook::velox::fuzzer::TDigestArgValuesGenerator;
 using facebook::velox::fuzzer::UnifiedDigestArgValuesGenerator;
@@ -118,6 +121,8 @@ std::unordered_map<std::string, std::shared_ptr<ExprTransformer>>
 std::unordered_map<std::string, std::shared_ptr<ArgValuesGenerator>>
     argValuesGenerators = {
         {"at_timezone", std::make_shared<AtTimezoneArgValuesGenerator>()},
+        {"at_timezone_convert",
+         std::make_shared<AtTimezoneArgValuesGenerator>()},
         {"cast", std::make_shared<CastVarcharAndJsonArgValuesGenerator>()},
         {"json_parse", std::make_shared<JsonParseArgValuesGenerator>()},
         {"json_extract", std::make_shared<JsonExtractArgValuesGenerator>()},
@@ -158,13 +163,17 @@ std::unordered_map<std::string, std::shared_ptr<ArgValuesGenerator>>
         {"intersection_cardinality",
          std::make_shared<SetDigestArgValuesGenerator>(
              "intersection_cardinality")},
+#ifdef VELOX_ENABLE_GEO
         {"s2_cell_area_sq_km", std::make_shared<S2CellIdArgValuesGenerator>()},
         {"s2_cell_contains", std::make_shared<S2CellIdArgValuesGenerator>()},
         {"s2_cell_level", std::make_shared<S2CellIdArgValuesGenerator>()},
         {"s2_cell_parent", std::make_shared<S2CellIdArgValuesGenerator>()},
         {"s2_cell_to_token", std::make_shared<S2CellIdArgValuesGenerator>()},
         {"s2_cell_from_token",
-         std::make_shared<S2CellTokenArgValuesGenerator>()}};
+         std::make_shared<S2CellTokenArgValuesGenerator>()},
+#endif
+        {"inverse_f_cdf", std::make_shared<InverseFCdfArgValuesGenerator>()},
+};
 
 const std::unordered_set<std::string> skipFunctionsLocalRunner{};
 

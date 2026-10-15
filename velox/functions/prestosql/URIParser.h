@@ -78,7 +78,7 @@ std::optional<StringView> extractParameter(
       }
 
       // Move past this match to continue searching
-      pos = matches[0].end() - input.data();
+      pos = matches[0].end() - input.begin();
       if (pos == matches[0].data() - input.data()) {
         // Avoid infinite loop on zero-width matches
         ++pos;

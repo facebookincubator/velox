@@ -11,12 +11,19 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-add_library(nimble_index_projector NimbleIndexProjector.cpp NimbleIndexProjector.h)
+add_library(
+  nimble_index_projector
+  NimbleIndexProjector.cpp
+  NimbleIndexProjector.h
+  StripeStreams.cpp
+  StripeStreams.h
+)
 target_link_libraries(
   nimble_index_projector
   nimble_data_input
   nimble_index
   nimble_stream_data_writer
+  nimble_stream_reader
   nimble_stream_slicer
   nimble_tablet_reader
   nimble_tablet_reader_cache
@@ -25,6 +32,25 @@ target_link_libraries(
   velox_time
   velox_key_encoder
   velox_type
+  Folly::folly
+)
+
+add_library(
+  nimble_index_iterator
+  IndexScanCursor.cpp
+  IndexScanCursor.h
+  NimbleBatchIterator.cpp
+  NimbleIterator.cpp
+  NimbleIterator.h
+  NimbleRowIterator.cpp
+)
+target_link_libraries(
+  nimble_index_iterator
+  nimble_index_projector
+  nimble_stream_reader
+  velox_buffer
+  velox_row_fast
+  velox_test_util
   Folly::folly
 )
 

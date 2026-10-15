@@ -357,6 +357,11 @@ class HistogramAggregate : public exec::Aggregate {
     return false;
   }
 
+  bool isReducing() const override {
+    // Retains a count for every distinct input value.
+    return false;
+  }
+
   void extractValues(char** groups, int32_t numGroups, VectorPtr* result)
       override {
     auto* mapVector = (*result)->as<MapVector>();
@@ -592,7 +597,7 @@ void registerHistogramAggregate(
             exec::isRawInput(step) ? argTypes[0] : argTypes[0]->childAt(0);
 
         if (inputType->providesCustomComparison()) {
-          return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+          return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH_WITH_UNKNOWN(
               createHistogramAggregateWithCustomCompare,
               inputType->kind(),
               resultType);
@@ -637,7 +642,7 @@ void registerHistogramAggregate(
                 inputType->toString());
         }
       },
-      {.orderSensitive = false},
+      {.orderSensitive = false, .ignoreNullInputs = true},
       withCompanionFunctions,
       overwrite);
 }

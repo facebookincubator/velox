@@ -15,7 +15,8 @@
  */
 #pragma once
 
-#include "velox/common/Enums.h"
+#include "velox/common/EnumDeclare.h"
+#include "velox/common/EnumDefine.h"
 #include "velox/common/base/RuntimeMetrics.h"
 #include "velox/exec/Exchange.h"
 #include "velox/experimental/ucx-exchange/CommElement.h"
@@ -29,11 +30,10 @@
 #include <cuda_runtime.h>
 #include <ucxx/api.h>
 #include <ucxx/utils/ucx.h>
+#include <cuda/stream>
 
 #include <rmm/cuda_stream_pool.hpp>
-#include <rmm/cuda_stream_view.hpp>
 #include <rmm/mr/cuda_memory_resource.hpp>
-#include <rmm/mr/device_memory_resource.hpp>
 #include <rmm/mr/pool_memory_resource.hpp>
 
 namespace facebook::velox::ucx_exchange {
@@ -145,7 +145,8 @@ class UcxExchangeSource
   struct DataAndMetadata {
     MetadataMsg metadata;
     std::unique_ptr<rmm::device_buffer> dataBuf;
-    rmm::cuda_stream_view stream; // The stream used to allocate dataBuf
+    cuda::stream_ref stream{
+        cudaStream_t{cudaStreamDefault}}; // The stream used to allocate dataBuf
   };
 
   /// @brief The constructor is private in order to ensure that exchange sources
@@ -212,8 +213,12 @@ class UcxExchangeSource
 
   /// @brief For intra-node transfer: handles data retrieved from registry.
   /// @param data The packed_columns from registry (nullptr if atEnd or error)
+  /// @param numRows Logical rows in 'data'
   /// @param atEnd True if this is end-of-stream
-  void onIntraNodeData(std::shared_ptr<cudf::packed_columns> data, bool atEnd);
+  void onIntraNodeData(
+      std::shared_ptr<cudf::packed_columns> data,
+      vector_size_t numRows,
+      bool atEnd);
 
   /// @brief Sets the new state of this exchange source using
   /// sequential consistency. Logs transitions at VLOG(2).

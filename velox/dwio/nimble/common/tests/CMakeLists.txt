@@ -26,11 +26,13 @@ add_executable(
   ExceptionTests.cpp
   FeatureGateTest.cpp
   FixedBitArrayTests.cpp
+  TypesTest.cpp
   VarintTests.cpp
   VectorTest.cpp
   TestUtils.h
   NimbleCompare.h
   GTestUtils.h
+  ScopedFeatureGate.h
 )
 
 add_test(nimble_common_tests nimble_common_tests)

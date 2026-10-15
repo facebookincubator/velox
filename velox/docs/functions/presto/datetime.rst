@@ -87,6 +87,28 @@ Date and Time Operators
 Date and Time Functions
 -----------------------
 
+.. function:: at_timezone(timestamp with time zone, zone) -> timestamp with time zone
+
+    Returns the same instant as ``timestamp with time zone``, tagged with
+    ``zone``.
+
+.. function:: at_timezone(time with time zone, zone) -> time with time zone
+    :noindex:
+
+    Returns the same instant as ``time with time zone``, tagged with ``zone``.
+    ``zone`` must be a ``+HH:mm`` offset.
+
+.. function:: at_timezone_convert(timestamp with time zone, zone) -> timestamp
+
+    Returns the wall clock that ``timestamp with time zone`` shows in ``zone``.
+    The zone the input carries is ignored; only its instant is used.
+
+.. function:: at_timezone_convert(time with time zone, zone) -> time with time zone
+    :noindex:
+
+    Returns the same instant as ``time with time zone``, tagged with ``zone``.
+    ``zone`` must be a ``+HH:mm`` offset.
+
 .. function:: current_date() -> date
 
     Returns the current date.
@@ -150,7 +172,9 @@ Date and Time Functions
     Returns the UNIX timestamp ``unixtime`` as a timestamp.  If the
     :doc:`adjust_timestamp_to_session_timezone <../../configs>` property is set
     to true, then the timestamp is adjusted to the time zone specified in
-    :doc:`session_timezone <../../configs>`.
+    :doc:`session_timezone <../../configs>`. Values above or below the range
+    representable by a timestamp are clamped to the maximum or minimum
+    timestamp, respectively.
 
 .. function:: from_unixtime(unixtime, string) -> timestamp with time zone
     :noindex:

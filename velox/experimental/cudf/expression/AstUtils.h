@@ -17,6 +17,7 @@
 
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/CudfNoDefaults.h"
+#include "velox/experimental/cudf/exec/GpuResources.h"
 
 #include "velox/core/Expressions.h"
 #include "velox/type/Timestamp.h"
@@ -31,6 +32,8 @@
 #include <cudf/scalar/scalar.hpp>
 #include <cudf/types.hpp>
 #include <cudf/utilities/default_stream.hpp>
+#include <cudf/utilities/traits.hpp>
+#include <cudf/utilities/type_dispatcher.hpp>
 
 #include <optional>
 
@@ -42,16 +45,33 @@ cudf::ast::literal makeLiteralFromScalar(
     const TypePtr& type) {
   if constexpr (cudf::is_fixed_width<T>()) {
     if (type->isDecimal()) {
-      if (type->kind() == TypeKind::BIGINT) {
-        using CudfScalarType = cudf::fixed_point_scalar<numeric::decimal64>;
-        return cudf::ast::literal{*static_cast<CudfScalarType*>(&scalar)};
+      switch (scalar.type().id()) {
+        case cudf::type_id::DECIMAL32: {
+          using CudfScalarType = cudf::fixed_point_scalar<numeric::decimal32>;
+          return cudf::ast::literal{*static_cast<CudfScalarType*>(&scalar)};
+        }
+        case cudf::type_id::DECIMAL64: {
+          using CudfScalarType = cudf::fixed_point_scalar<numeric::decimal64>;
+          return cudf::ast::literal{*static_cast<CudfScalarType*>(&scalar)};
+        }
+        case cudf::type_id::DECIMAL128: {
+          using CudfScalarType = cudf::fixed_point_scalar<numeric::decimal128>;
+          return cudf::ast::literal{*static_cast<CudfScalarType*>(&scalar)};
+        }
+        default:
+          VELOX_CHECK(
+              cudf::is_integral(scalar.type()),
+              "Invalid cuDF decimal scalar type: {}",
+              static_cast<int32_t>(scalar.type().id()));
+          return cudf::type_dispatcher<cudf::dispatch_storage_type>(
+              scalar.type(), [&]<typename U>() -> cudf::ast::literal {
+                if constexpr (std::is_integral_v<U>) {
+                  return cudf::ast::literal{
+                      *static_cast<cudf::numeric_scalar<U>*>(&scalar)};
+                }
+                VELOX_UNREACHABLE();
+              });
       }
-      if (type->kind() == TypeKind::HUGEINT) {
-        using CudfScalarType = cudf::fixed_point_scalar<numeric::decimal128>;
-        return cudf::ast::literal{*static_cast<CudfScalarType*>(&scalar)};
-      }
-      VELOX_UNREACHABLE(
-          "Invalid Decimal Type (bad TypeKind: {})", type->kind());
     } else if (type->isIntervalDayTime()) {
       using CudfDurationType = cudf::duration_ms;
       if constexpr (std::is_same_v<T, CudfDurationType::rep>) {
@@ -96,8 +116,8 @@ std::unique_ptr<cudf::scalar> makeScalarFromValue(
     T value,
     bool isNull,
     std::optional<cudf::type_id> toType = std::nullopt,
-    rmm::cuda_stream_view stream =
-        cudf::get_default_stream(cudf::allow_default_stream)) {
+    std::optional<int32_t> toScale = std::nullopt,
+    cuda::stream_ref stream = getDefaultStreamForCurrentThread()) {
   auto mr = get_temp_mr();
 
   // Synchronize before returning as scalar construction can enqueue an
@@ -109,28 +129,28 @@ std::unique_ptr<cudf::scalar> makeScalarFromValue(
       auto micros = isNull ? 0 : value.toMicros();
       auto scalar = std::make_unique<cudf::timestamp_scalar<CudfTimestampType>>(
           CudfTimestampType{cudf::duration_us{micros}}, !isNull, stream, mr);
-      stream.synchronize();
+      stream.sync();
       return scalar;
     } else if (unit == cudf::type_id::TIMESTAMP_NANOSECONDS) {
       using CudfTimestampType = cudf::timestamp_ns;
       auto nanos = isNull ? 0 : value.toNanos();
       auto scalar = std::make_unique<cudf::timestamp_scalar<CudfTimestampType>>(
           CudfTimestampType{cudf::duration_ns{nanos}}, !isNull, stream, mr);
-      stream.synchronize();
+      stream.sync();
       return scalar;
     } else if (unit == cudf::type_id::TIMESTAMP_MILLISECONDS) {
       using CudfTimestampType = cudf::timestamp_ms;
       auto millis = isNull ? 0 : value.toMillis();
       auto scalar = std::make_unique<cudf::timestamp_scalar<CudfTimestampType>>(
           CudfTimestampType{cudf::duration_ms{millis}}, !isNull, stream, mr);
-      stream.synchronize();
+      stream.sync();
       return scalar;
     } else if (unit == cudf::type_id::TIMESTAMP_SECONDS) {
       using CudfTimestampType = cudf::timestamp_s;
       auto seconds = isNull ? 0 : value.getSeconds();
       auto scalar = std::make_unique<cudf::timestamp_scalar<CudfTimestampType>>(
           CudfTimestampType{cudf::duration_s{seconds}}, !isNull, stream, mr);
-      stream.synchronize();
+      stream.sync();
       return scalar;
     } else {
       VELOX_FAIL("Unsupported timestamp unit: {}", static_cast<int32_t>(unit));
@@ -140,29 +160,63 @@ std::unique_ptr<cudf::scalar> makeScalarFromValue(
       // Velox DECIMAL scale is positive for fractional digits
       // cuDF scale is negative for fractional digits
       // @TODO check the bigger picture here!
+      numeric::scale_type cudfScale{0};
+      cudf::type_id defaultType{cudf::type_id::EMPTY};
       if (type->kind() == TypeKind::BIGINT) {
         auto const decimalType =
             std::dynamic_pointer_cast<const ShortDecimalType>(type);
         VELOX_CHECK(decimalType, "Invalid Decimal Type (failed dynamic_cast)");
-        auto const cudfScale = numeric::scale_type{-decimalType->scale()};
-        using CudfDecimalType = cudf::fixed_point_scalar<numeric::decimal64>;
-        auto scalar = std::make_unique<CudfDecimalType>(
-            value, cudfScale, !isNull, stream, mr);
-        stream.synchronize();
-        return scalar;
+        cudfScale = numeric::scale_type{-decimalType->scale()};
+        defaultType = cudf::type_id::DECIMAL64;
       } else if (type->kind() == TypeKind::HUGEINT) {
         auto const decimalType =
             std::dynamic_pointer_cast<const LongDecimalType>(type);
         VELOX_CHECK(decimalType, "Invalid Decimal Type (failed dynamic_cast)");
-        auto const cudfScale = numeric::scale_type{-decimalType->scale()};
-        using CudfDecimalType = cudf::fixed_point_scalar<numeric::decimal128>;
-        auto scalar = std::make_unique<CudfDecimalType>(
-            value, cudfScale, !isNull, stream, mr);
-        stream.synchronize();
-        return scalar;
+        cudfScale = numeric::scale_type{-decimalType->scale()};
+        defaultType = cudf::type_id::DECIMAL128;
+      } else {
+        VELOX_UNREACHABLE(
+            "Invalid Decimal Type (bad TypeKind: {})", type->kind());
       }
-      VELOX_UNREACHABLE(
-          "Invalid Decimal Type (bad TypeKind: {})", type->kind());
+
+      if (toScale.has_value()) {
+        cudfScale = numeric::scale_type{-*toScale};
+      }
+      std::unique_ptr<cudf::scalar> scalar;
+      const auto targetType = toType.value_or(defaultType);
+      switch (targetType) {
+        case cudf::type_id::DECIMAL32:
+          scalar =
+              std::make_unique<cudf::fixed_point_scalar<numeric::decimal32>>(
+                  static_cast<int32_t>(value), cudfScale, !isNull, stream, mr);
+          break;
+        case cudf::type_id::DECIMAL64:
+          scalar =
+              std::make_unique<cudf::fixed_point_scalar<numeric::decimal64>>(
+                  static_cast<int64_t>(value), cudfScale, !isNull, stream, mr);
+          break;
+        case cudf::type_id::DECIMAL128:
+          scalar =
+              std::make_unique<cudf::fixed_point_scalar<numeric::decimal128>>(
+                  static_cast<int128_t>(value), cudfScale, !isNull, stream, mr);
+          break;
+        default:
+          VELOX_CHECK(
+              cudf::is_integral(cudf::data_type{targetType}),
+              "Invalid target cuDF decimal type: {}",
+              static_cast<int32_t>(targetType));
+          scalar = cudf::type_dispatcher<cudf::dispatch_storage_type>(
+              cudf::data_type{targetType},
+              [&]<typename U>() -> std::unique_ptr<cudf::scalar> {
+                if constexpr (std::is_integral_v<U>) {
+                  return std::make_unique<cudf::numeric_scalar<U>>(
+                      static_cast<U>(value), !isNull, stream, mr);
+                }
+                VELOX_UNREACHABLE();
+              });
+      }
+      stream.sync();
+      return scalar;
     } else if (type->isIntervalYearMonth()) {
       VELOX_FAIL("Interval year month not supported");
     } else if (type->isIntervalDayTime()) {
@@ -170,7 +224,7 @@ std::unique_ptr<cudf::scalar> makeScalarFromValue(
       if constexpr (std::is_same_v<T, CudfDurationType::rep>) {
         auto scalar = std::make_unique<cudf::duration_scalar<CudfDurationType>>(
             value, !isNull, stream, mr);
-        stream.synchronize();
+        stream.sync();
         return scalar;
       }
     } else if (type->isDate()) {
@@ -178,14 +232,14 @@ std::unique_ptr<cudf::scalar> makeScalarFromValue(
       if constexpr (std::is_same_v<T, CudfDateType::rep>) {
         auto scalar = std::make_unique<cudf::timestamp_scalar<CudfDateType>>(
             value, !isNull, stream, mr);
-        stream.synchronize();
+        stream.sync();
         return scalar;
       }
     } else if (toType.has_value()) {
       if (toType == cudf::type_id::DURATION_DAYS) {
         auto scalar = std::make_unique<cudf::duration_scalar<cudf::duration_D>>(
             value, !isNull, stream, mr);
-        stream.synchronize();
+        stream.sync();
         return scalar;
       }
       VELOX_FAIL(
@@ -193,7 +247,7 @@ std::unique_ptr<cudf::scalar> makeScalarFromValue(
     } else {
       auto scalar =
           std::make_unique<cudf::numeric_scalar<T>>(value, !isNull, stream, mr);
-      stream.synchronize();
+      stream.sync();
       return scalar;
     }
     VELOX_FAIL("Unsupported fixed-width scalar type");
@@ -202,7 +256,7 @@ std::unique_ptr<cudf::scalar> makeScalarFromValue(
       std::is_same_v<T, std::string>) {
     auto scalar = std::make_unique<cudf::string_scalar>(
         std::string_view(value.data(), value.size()), !isNull, stream, mr);
-    stream.synchronize();
+    stream.sync();
     return scalar;
   }
   VELOX_NYI("Scalar creation not implemented for type {}", type->toString());
@@ -213,23 +267,26 @@ static std::unique_ptr<cudf::scalar> createCudfScalar(
     const core::ConstantTypedExpr& value,
     memory::MemoryPool* pool,
     std::optional<cudf::type_id> toType = std::nullopt,
-    rmm::cuda_stream_view stream =
-        cudf::get_default_stream(cudf::allow_default_stream)) {
+    cuda::stream_ref stream = getDefaultStreamForCurrentThread()) {
   using T = typename TypeTraits<Kind>::NativeType;
   const auto valueVector = value.hasValueVector()
       ? value.valueVector()
       : value.toConstantVector(pool);
   auto vector = valueVector->as<velox::ConstantVector<T>>();
   return makeScalarFromValue<T>(
-      vector->type(), vector->value(), vector->isNullAt(0), toType, stream);
+      vector->type(),
+      vector->value(),
+      vector->isNullAt(0),
+      toType,
+      std::nullopt,
+      stream);
 }
 
 inline std::unique_ptr<cudf::scalar> makeScalarFromConstantExpr(
     const core::TypedExprPtr& expr,
     memory::MemoryPool* pool,
     std::optional<cudf::type_id> toType = std::nullopt,
-    rmm::cuda_stream_view stream =
-        cudf::get_default_stream(cudf::allow_default_stream)) {
+    cuda::stream_ref stream = getDefaultStreamForCurrentThread()) {
   auto constExpr =
       std::dynamic_pointer_cast<const core::ConstantTypedExpr>(expr);
   VELOX_CHECK_NOT_NULL(constExpr);
@@ -272,16 +329,18 @@ cudf::ast::literal makeScalarAndLiteral(
     const TypePtr& type,
     const variant& var,
     bool isNull,
-    std::vector<std::unique_ptr<cudf::scalar>>& scalars) {
+    std::vector<std::unique_ptr<cudf::scalar>>& scalars,
+    std::optional<cudf::type_id> toType = std::nullopt,
+    std::optional<int32_t> toScale = std::nullopt) {
   using T = typename TypeTraits<kind>::NativeType;
   if constexpr (cudf::is_fixed_width<T>() || kind == TypeKind::VARCHAR) {
     if (isNull) {
-      auto scalar = makeScalarFromValue<T>(type, T{}, true);
+      auto scalar = makeScalarFromValue<T>(type, T{}, true, toType, toScale);
       scalars.emplace_back(std::move(scalar));
       return makeLiteralFromScalar<T>(*(scalars.back()), type);
     }
     auto value = var.value<T>();
-    auto scalar = makeScalarFromValue(type, value, false);
+    auto scalar = makeScalarFromValue(type, value, false, toType, toScale);
     scalars.emplace_back(std::move(scalar));
     return makeLiteralFromScalar<T>(*(scalars.back()), type);
   }
@@ -292,8 +351,10 @@ template <TypeKind kind>
 cudf::ast::literal makeScalarAndLiteral(
     const TypePtr& type,
     const variant& var,
-    std::vector<std::unique_ptr<cudf::scalar>>& scalars) {
-  return makeScalarAndLiteral<kind>(type, var, false, scalars);
+    std::vector<std::unique_ptr<cudf::scalar>>& scalars,
+    std::optional<cudf::type_id> toType = std::nullopt,
+    std::optional<int32_t> toScale = std::nullopt) {
+  return makeScalarAndLiteral<kind>(type, var, false, scalars, toType, toScale);
 }
 
 /// Returns true if expr is non-null and its output type is one the AST/JIT

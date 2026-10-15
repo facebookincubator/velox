@@ -17,6 +17,8 @@
 
 #include <string_view>
 
+#include <folly/container/F14Map.h>
+
 #include "velox/common/base/RuntimeMetrics.h"
 #include "velox/common/memory/MemoryPool.h"
 #include "velox/common/time/CpuWallTimer.h"
@@ -128,6 +130,10 @@ struct OperatorStats {
   /// construction of the Operator where applicable.
   std::string operatorType;
 
+  /// Stamped by Operator::stats() from Operator::planNodeBoundary(); never
+  /// written into an operator's live stats.
+  core::PlanNode::Boundary planNodeBoundary{core::PlanNode::Boundary::kBoth};
+
   /// Number of splits (or chunks of work). Split can be a part of data file to
   /// read.
   int64_t numSplits{0};
@@ -204,7 +210,7 @@ struct OperatorStats {
   // A map of expression name to its respective stats.
   // These are only populated when a copy of the stats is returned via
   // Operator::stats(bool) API.
-  std::unordered_map<std::string, ExprStats> expressionStats;
+  folly::F14FastMap<std::string, ExprStats> expressionStats;
 
   int numDrivers = 0;
 

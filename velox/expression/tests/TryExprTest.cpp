@@ -514,7 +514,7 @@ DEBUG_ONLY_TEST_F(TryExprTest, errorRestoringContext) {
 TEST_F(TryExprTest, memoryUsage) {
   vector_size_t size = 10'000;
 
-  auto data = makeRowVector({makeFlatVector<int64_t>(size, folly::identity)});
+  auto data = makeRowVector({makeFlatIdentityVector<int64_t>(size)});
 
   // Measure memory usage without TRY.
   int64_t baseline;

@@ -43,7 +43,6 @@ target_link_libraries(
   nimble_common
   nimble_encodings
   nimble_index
-  nimble_vector_index
   nimble_tablet_writer
   nimble_velox_field_writer
   nimble_velox_layout_planner

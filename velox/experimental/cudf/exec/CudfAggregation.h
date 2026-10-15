@@ -108,7 +108,7 @@ std::vector<ResolvedAggregateInfo> resolveAggregateInfos(
 std::unique_ptr<cudf::column> applyMask(
     cudf::column_view values,
     cudf::column_view mask,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr);
 
 // Materializes the masked raw-input value column for an aggregate: when
@@ -121,7 +121,7 @@ std::unique_ptr<cudf::column> materializeMaskedColumn(
     cudf::table_view const& input,
     uint32_t inputIndex,
     std::optional<uint32_t> maskIndex,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr);
 
 // Returns a BOOL8 column whose validity is exactly "mask is true": a true entry
@@ -130,7 +130,7 @@ std::unique_ptr<cudf::column> materializeMaskedColumn(
 // count(*)/count(const).
 std::unique_ptr<cudf::column> maskToValidityColumn(
     cudf::column_view mask,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr);
 
 // Result of buildAggregationInputChannels: a channel permutation that places

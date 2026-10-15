@@ -737,7 +737,7 @@ class SpillerTest : public exec::test::RowContainerTestBase {
             break;
           }
           ASSERT_TRUE(rowVector_->equalValueAt(
-              &stream->current(), indices[i], stream->currentIndex()));
+              stream->current().get(), indices[i], stream->currentIndex()));
           stream->pop();
         }
       } else {
@@ -762,7 +762,7 @@ class SpillerTest : public exec::test::RowContainerTestBase {
             ASSERT_EQ(i, indices.size());
             break;
           }
-          sourceVectors[outputSize] = &stream->current();
+          sourceVectors[outputSize] = stream->current().get();
           bool isEndOfBatch = false;
           sourceIndices[outputSize] = stream->currentIndex(&isEndOfBatch);
           ++outputSize;
@@ -1591,7 +1591,7 @@ TEST_P(AggregationOutputOnly, basic) {
         auto* stream = merge->next();
         ASSERT_TRUE(stream != nullptr);
         ASSERT_TRUE(rowVector_->equalValueAt(
-            &stream->current(),
+            stream->current().get(),
             partitions_[0][numListedRows + i],
             stream->currentIndex()));
         stream->pop();
@@ -1707,7 +1707,9 @@ TEST_P(SortOutputOnly, basic) {
         auto* stream = merge->next();
         ASSERT_TRUE(stream != nullptr);
         ASSERT_TRUE(rowVector_->equalValueAt(
-            &stream->current(), partitions_[0][i], stream->currentIndex()));
+            stream->current().get(),
+            partitions_[0][i],
+            stream->currentIndex()));
         stream->pop();
       }
     }

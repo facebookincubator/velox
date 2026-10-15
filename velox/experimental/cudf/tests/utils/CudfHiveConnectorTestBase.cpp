@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConnector.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
@@ -66,6 +67,8 @@ void CudfHiveConnectorTestBase::SetUp() {
   OperatorTestBase::SetUp();
 
   // Register cudf to enable the CudfDatasource creation from CudfHiveConnector
+  facebook::velox::cudf_velox::CudfConfig::getInstance().allowCpuFallback =
+      false;
   facebook::velox::cudf_velox::registerCudf();
 
   // Register Hive connector
@@ -167,7 +170,7 @@ void CudfHiveConnectorTestBase::writeToFile(
           vector->pool(),
           stream,
           cudf::get_current_device_resource_ref());
-      stream.synchronize();
+      stream.sync();
       cudfTables.emplace_back(std::move(cudfTable));
     }
   }
@@ -205,7 +208,7 @@ void CudfHiveConnectorTestBase::writeToFile(
   auto stream = cudf::get_default_stream();
   auto cudfTable = with_arrow::toCudfTable(
       vector, vector->pool(), stream, cudf::get_current_device_resource_ref());
-  stream.synchronize();
+  stream.sync();
   auto tableInputMetadata = cudf::io::table_input_metadata(cudfTable->view());
   fillColumnNames(tableInputMetadata, rowType);
   auto options =

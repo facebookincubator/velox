@@ -22,6 +22,9 @@ namespace facebook::velox::functions {
 
 /// @param throwOnNull If true, throws exception when input array is null or
 /// contains null entry. Otherwise, returns null.
-void registerMapFromEntriesFunction(const std::string& name, bool throwForNull);
+void registerMapFromEntriesFunction(
+    const std::string& name,
+    bool throwForNull,
+    std::string_view defaultOwner = {});
 
 } // namespace facebook::velox::functions

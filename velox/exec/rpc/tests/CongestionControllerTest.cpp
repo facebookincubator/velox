@@ -312,6 +312,14 @@ TEST(CongestionControllerTest, shrinkCountTracksTheReportedLimit) {
     }
   }
   EXPECT_EQ(window.numShrinks(), observedDrops);
+  EXPECT_GT(observedDrops, 0);
+  EXPECT_EQ(window.numOverloadShrinks(), 0);
+
+  const int64_t beforeOverload = window.limit();
+  window.onError();
+  EXPECT_LT(window.limit(), beforeOverload);
+  EXPECT_EQ(window.numShrinks(), observedDrops + 1);
+  EXPECT_EQ(window.numOverloadShrinks(), 1);
 }
 
 // A backend that batches internally gets *faster* as concurrency rises until

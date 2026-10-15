@@ -312,19 +312,14 @@ void IcebergSplitReaderBenchmark::readSingleColumn(
           std::unordered_map<std::string, std::string>());
 
   std::unique_ptr<connector::ConnectorQueryCtx> connectorQueryCtx_ =
-      std::make_unique<connector::ConnectorQueryCtx>(
-          opPool.get(),
-          connectorPool.get(),
-          connectorSessionProperties_.get(),
-          nullptr,
-          common::PrefixSortConfig(),
-          nullptr,
-          nullptr,
-          "query.IcebergSplitReader",
-          "task.IcebergSplitReader",
-          "planNodeId.IcebergSplitReader",
-          0,
-          "");
+      connector::ConnectorQueryCtx::Builder()
+          .operatorPool(opPool.get())
+          .connectorPool(connectorPool.get())
+          .sessionProperties(connectorSessionProperties_.get())
+          .queryId("query.IcebergSplitReader")
+          .taskId("task.IcebergSplitReader")
+          .planNodeId("planNodeId.IcebergSplitReader")
+          .build();
 
   FileHandleFactory fileHandleFactory(
       std::make_unique<SimpleLRUCache<FileHandleKey, FileHandle>>(

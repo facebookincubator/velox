@@ -16,6 +16,8 @@
 
 #include <gtest/gtest.h>
 
+#include <type_traits>
+
 #include "velox/core/SimpleFunctionMetadata.h"
 #include "velox/expression/FunctionSignature.h"
 #include "velox/functions/prestosql/types/JsonType.h"
@@ -194,6 +196,10 @@ TEST_F(TypeAnalysisTest, testStringType) {
   testStringType<Array<int32_t>>({"array(integer)"});
   testStringType<Map<Any, int32_t>>({"map(any, integer)"});
   testStringType<Row<int32_t, int32_t>>({"row(integer, integer)"});
+  using NamedRow = Row<Field<"x", int32_t>, Field<"y", int32_t>>;
+  static_assert(
+      std::is_same_v<TypeAnalysis<NamedRow>::child_type_at<0>, int32_t>);
+  testStringType<NamedRow>({"row(\"x\" integer, \"y\" integer)"});
 
   testStringType<Any>({"any"});
   testStringType<Generic<T1>>({"__user_T1"});
@@ -405,6 +411,8 @@ TEST_F(TypeAnalysisTest, physicalType) {
 
   testPhysicalType<Row<int32_t, Array<double>, Variadic<bool>>>(
       ROW({INTEGER(), ARRAY(DOUBLE()), BOOLEAN()}));
+  testPhysicalType<Row<Field<"x", int32_t>, Field<"y", int32_t>>>(
+      ROW({{"x", INTEGER()}, {"y", INTEGER()}}));
 
   testPhysicalType<Json>(VARCHAR());
   testPhysicalType<Array<Json>>(ARRAY(VARCHAR()));

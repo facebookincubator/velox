@@ -23,6 +23,7 @@
 #include <vector>
 
 #include "velox/connectors/hive/HiveConnectorSplit.h"
+#include "velox/connectors/hive/iceberg/IcebergChangelogSplitInfo.h"
 #include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
 
 namespace facebook::velox::connector::hive::iceberg {
@@ -52,6 +53,11 @@ struct HiveIcebergSplit : public connector::hive::HiveConnectorSplit {
   /// therefore cannot prove a transform is identity.
   std::unordered_map<int32_t, std::optional<std::string>> identityPartitionKeys;
 
+  /// Changelog split information. Present when this split represents a
+  /// changelog table query; contains the operation type, ordinal, and snapshot
+  /// ID that are constant for every row in the split.
+  std::optional<ChangelogSplitInfo> changelogSplitInfo;
+
   HiveIcebergSplit(
       const std::string& connectorId,
       const std::string& filePath,
@@ -70,7 +76,8 @@ struct HiveIcebergSplit : public connector::hive::HiveConnectorSplit {
       const std::unordered_map<int32_t, std::optional<std::string>>&
           identityPartitionKeys = {},
       std::optional<dwio::common::ColumnMappingMode> columnMappingMode =
-          std::nullopt);
+          std::nullopt,
+      std::optional<ChangelogSplitInfo> changelogSplitInfo = std::nullopt);
 
   // For tests only
   HiveIcebergSplit(
@@ -92,7 +99,8 @@ struct HiveIcebergSplit : public connector::hive::HiveConnectorSplit {
       const std::unordered_map<int32_t, std::optional<std::string>>&
           identityPartitionKeys = {},
       std::optional<dwio::common::ColumnMappingMode> columnMappingMode =
-          std::nullopt);
+          std::nullopt,
+      std::optional<ChangelogSplitInfo> changelogSplitInfo = std::nullopt);
 };
 
 /// Builds Iceberg splits with named parameters.
@@ -155,8 +163,18 @@ class IcebergSplitBuilder {
     return *this;
   }
 
+  IcebergSplitBuilder& physicalFilePath(std::string path) {
+    physicalFilePath_ = std::move(path);
+    return *this;
+  }
+
   IcebergSplitBuilder& columnMappingMode(dwio::common::ColumnMappingMode mode) {
     columnMappingMode_ = mode;
+    return *this;
+  }
+
+  IcebergSplitBuilder& changelogSplitInfo(ChangelogSplitInfo info) {
+    changelogSplitInfo_ = std::move(info);
     return *this;
   }
 
@@ -164,6 +182,7 @@ class IcebergSplitBuilder {
 
  private:
   const std::string filePath_;
+  std::string physicalFilePath_;
   std::string connectorId_;
   dwio::common::FileFormat fileFormat_{dwio::common::FileFormat::DWRF};
   uint64_t start_{0};
@@ -175,6 +194,7 @@ class IcebergSplitBuilder {
   std::unordered_map<int32_t, std::optional<std::string>>
       identityPartitionKeys_;
   std::optional<dwio::common::ColumnMappingMode> columnMappingMode_;
+  std::optional<ChangelogSplitInfo> changelogSplitInfo_;
 };
 
 } // namespace facebook::velox::connector::hive::iceberg

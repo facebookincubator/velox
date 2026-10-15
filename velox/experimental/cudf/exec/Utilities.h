@@ -20,7 +20,7 @@
 
 #include <cudf/table/table.hpp>
 
-#include <rmm/cuda_stream_view.hpp>
+#include <cuda/stream>
 
 #include <memory>
 #include <span>
@@ -30,7 +30,7 @@ namespace facebook::velox::cudf_velox {
 // Concatenate a vector of cuDF tables into a single table
 [[nodiscard]] std::unique_ptr<cudf::table> concatenateTables(
     std::vector<std::unique_ptr<cudf::table>> tables,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr);
 
 /**
@@ -44,8 +44,9 @@ namespace facebook::velox::cudf_velox {
  * The input tables are consumed and deallocated when the function returns.
  * If the input vector is empty, returns an empty table matching tableType.
  *
- * @param tables Input vector of CudfVectors to concatenate (consumed during
- * operation)
+ * @param tables Input vector of CudfVectors to concatenate. Taken by value so
+ * that the caller's vector is left empty and the inputs are released when this
+ * function returns.
  * @param tableType Velox type representation for creating empty tables when
  * needed
  * @param stream CUDA stream for concatenation and memory management
@@ -53,9 +54,9 @@ namespace facebook::velox::cudf_velox {
  * @return Single concatenated table
  */
 [[nodiscard]] std::unique_ptr<cudf::table> getConcatenatedTable(
-    std::vector<CudfVectorPtr>&& tables,
+    std::vector<CudfVectorPtr> tables,
     const TypePtr& tableType,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr);
 
 /**
@@ -75,6 +76,10 @@ namespace facebook::velox::cudf_velox {
  * are also properly synchronized. The input tables are consumed and deallocated
  * after synchronization.
  *
+ * Input ownership is released one output batch at a time after stream-safe
+ * deallocation ordering has been established. This avoids retaining the full
+ * input set while all output batches are materialized.
+ *
  * @param tables Input vector of CUDF tables to concatenate (consumed during
  * operation)
  * @param tableType Velox type representation for creating empty tables when
@@ -82,13 +87,12 @@ namespace facebook::velox::cudf_velox {
  * @param stream CUDA stream for asynchronous operations and memory management
  * @return Vector of concatenated tables (multiple if input exceeded size
  * limits)
- *
  */
 [[nodiscard]] std::vector<std::unique_ptr<cudf::table>>
 getConcatenatedTableBatched(
-    std::vector<CudfVectorPtr>&& tables,
+    std::vector<CudfVectorPtr> tables,
     const TypePtr& tableType,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr);
 
 /**
@@ -102,7 +106,7 @@ getConcatenatedTableBatched(
     memory::MemoryPool* pool,
     std::vector<CudfVectorPtr>&& vectors,
     const TypePtr& tableType,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr);
 
 /**
@@ -161,7 +165,7 @@ class CudaEvent {
    * @param stream The CUDA stream in which to record the event
    * @return Reference to this CudaEvent for method chaining
    */
-  const CudaEvent& recordFrom(rmm::cuda_stream_view stream) const;
+  const CudaEvent& recordFrom(cuda::stream_ref stream) const;
 
   /**
    * @brief Makes the specified stream wait until this event has been recorded.
@@ -174,7 +178,17 @@ class CudaEvent {
    * @param stream The CUDA stream that should wait for this event
    * @return Reference to this CudaEvent for method chaining
    */
-  const CudaEvent& waitOn(rmm::cuda_stream_view stream) const;
+  const CudaEvent& waitOn(cuda::stream_ref stream) const;
+
+  /**
+   * @brief Blocks the host thread until the most recent recordFrom() has
+   * completed.
+   *
+   * Returns immediately if the event has never been recorded.
+   *
+   * @return Reference to this CudaEvent for method chaining
+   */
+  const CudaEvent& synchronize() const;
 
  private:
   cudaEvent_t event_{};
@@ -193,8 +207,8 @@ class CudaEvent {
  */
 void streamsWaitForStream(
     CudaEvent& event,
-    std::span<const rmm::cuda_stream_view> streams,
-    rmm::cuda_stream_view stream);
+    std::span<const cuda::stream_ref> streams,
+    cuda::stream_ref stream);
 
 /**
  * @brief Orders CudfVector deallocations after work on a target stream.
@@ -206,8 +220,17 @@ void streamsWaitForStream(
  */
 void orderCudfVectorDeallocationsAfterStream(
     std::span<const CudfVectorPtr> vectors,
-    std::span<const rmm::cuda_stream_view> inputStreams,
-    rmm::cuda_stream_view stream);
+    std::span<const cuda::stream_ref> inputStreams,
+    cuda::stream_ref stream);
+
+/// Creates an all-null cuDF column of \p numRows for the given Velox \p type.
+/// Supports cuDF-compatible scalar types and nested Velox ARRAY and ROW types.
+/// Throws for unsupported types.
+std::unique_ptr<cudf::column> makeAllNullColumn(
+    const TypePtr& type,
+    cudf::size_type numRows,
+    cuda::stream_ref stream,
+    rmm::device_async_resource_ref mr);
 
 /// Extract the base function name from a possibly-prefixed name.
 /// Handles both Presto-style "presto.default.lag" and simple "lag".

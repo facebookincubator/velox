@@ -109,6 +109,9 @@ EncodingSelectionPolicyCreator testEncodingSelectionPolicyCreator(
   return
       [valueEncodingReadFactors = std::move(valueEncodingReadFactors)](
           DataType dataType) -> std::unique_ptr<EncodingSelectionPolicyBase> {
+        // TODO: Only Int32, Uint32 and String are given tailored read
+        // factors; the remaining fixed-width types fall through to the shared
+        // default. Extend the pool so they are exercised distinctly too.
         EncodingReadFactors encodingReadFactors;
         switch (dataType) {
           case DataType::Int32:
@@ -633,12 +636,9 @@ TEST_F(SharedDictionaryWriterTest, stripeScope) {
       ASSERT_TRUE(alphabetChunk.has_value());
       expectAlphabetEntries(
           *alphabetChunk, stripe.expectedAlphabet, pool_.get());
-      NIMBLE_ASSERT_THROW(
-          writer.encodeAlphabet(buffer),
-          fmt::format(
-              "Stripe shared dictionary 7 already finalized its alphabet for "
-              "stripe {}.",
-              i));
+      // Closing released the stripe, so a repeated close finds nothing to
+      // store rather than reporting a repeated finalize.
+      EXPECT_FALSE(writer.encodeAlphabet(buffer).has_value());
     }
   }
 }
@@ -846,10 +846,8 @@ TEST_F(
   const auto alphabet = writer.encodeAlphabet(buffer);
   ASSERT_TRUE(alphabet.has_value());
   expectAlphabetEntries(*alphabet, std::array<int32_t, 2>{10, 20}, pool_.get());
-  NIMBLE_ASSERT_THROW(
-      writer.encodeAlphabet(buffer),
-      "Stripe shared dictionary 7 already finalized its alphabet for stripe "
-      "0.");
+  // Closing released the stripe, so a repeated close finds nothing to store.
+  EXPECT_FALSE(writer.encodeAlphabet(buffer).has_value());
 
   NIMBLE_ASSERT_THROW(
       encodeValues(
@@ -876,10 +874,8 @@ TEST_F(
   ASSERT_TRUE(nextStripeAlphabet.has_value());
   expectAlphabetEntries(
       *nextStripeAlphabet, std::array<int32_t, 1>{30}, pool_.get());
-  NIMBLE_ASSERT_THROW(
-      writer.encodeAlphabet(buffer),
-      "Stripe shared dictionary 7 already finalized its alphabet for stripe "
-      "1.");
+  // Closing released the stripe, so a repeated close finds nothing to store.
+  EXPECT_FALSE(writer.encodeAlphabet(buffer).has_value());
 }
 
 TEST_F(
@@ -1107,12 +1103,7 @@ TEST_F(
       const auto encodedAlphabet = writer.encodeAlphabet(buffer);
       ASSERT_TRUE(encodedAlphabet.has_value());
       expectAlphabetEntries(*encodedAlphabet, expected.alphabet, pool_.get());
-      NIMBLE_ASSERT_THROW(
-          writer.encodeAlphabet(buffer),
-          fmt::format(
-              "Stripe shared dictionary 7 already finalized its alphabet for "
-              "stripe {}.",
-              stripeIndex));
+      EXPECT_FALSE(writer.encodeAlphabet(buffer).has_value());
     }
   }
 }
@@ -1160,10 +1151,8 @@ TEST_F(SharedDictionaryWriterTest, stripeScopeAbandon) {
   }
   EXPECT_FALSE(writer.encodeAlphabet(buffer).has_value());
   EXPECT_FALSE(writer.hasUsedDictionary());
-  NIMBLE_ASSERT_THROW(
-      writer.encodeAlphabet(buffer),
-      "Stripe shared dictionary 7 already finalized its alphabet for stripe "
-      "0.");
+  // Closing released the stripe, so a repeated close finds nothing to store.
+  EXPECT_FALSE(writer.encodeAlphabet(buffer).has_value());
 
   const auto repeated = repeatedValues(std::array<int32_t, 2>{10, 20}, 512);
   const auto nextStripeEncoded = encodeValues(
@@ -1393,9 +1382,7 @@ TEST_F(SharedDictionaryWriterTest, fileScope) {
   ASSERT_TRUE(alphabet.has_value());
   expectAlphabetEntries(
       *alphabet, std::array<int32_t, 5>{10, 20, 30, 40, 50}, pool_.get());
-  NIMBLE_ASSERT_THROW(
-      writer.encodeAlphabet(buffer),
-      "File shared dictionary 17 already finalized its alphabet.");
+  EXPECT_FALSE(writer.encodeAlphabet(buffer).has_value());
   NIMBLE_ASSERT_THROW(
       encodeValues(
           writer,
@@ -1560,9 +1547,7 @@ TEST_F(SharedDictionaryWriterTest, fileScopeWithExternalAlphabet) {
       EncodingPrefix::encodingType(alphabet->content.front()),
       EncodingType::Trivial);
   expectAlphabetEntries(*alphabet, externalAlphabet, pool_.get());
-  NIMBLE_ASSERT_THROW(
-      writer.encodeAlphabet(buffer),
-      "File shared dictionary 23 already finalized its alphabet.");
+  EXPECT_FALSE(writer.encodeAlphabet(buffer).has_value());
   NIMBLE_ASSERT_THROW(
       encodeValues(
           writer,

@@ -84,6 +84,13 @@ class Aggregate {
     return true;
   }
 
+  /// Returns true if the accumulator state is expected to be smaller than its
+  /// input. Aggregates whose state generally grows with input cardinality
+  /// should return false.
+  virtual bool isReducing() const {
+    return true;
+  }
+
   /// Returns true if toIntermediate() is supported.
   virtual bool supportsToIntermediate() const {
     return false;
@@ -539,6 +546,12 @@ struct AggregateFunctionMetadata {
   /// True if results of the aggregation depend on the order of inputs. For
   /// example, array_agg is order sensitive while count is not.
   bool orderSensitive{true};
+
+  /// True if, for every registered signature, an input row holding a null in
+  /// any argument leaves the result unchanged. Companion functions inherit the
+  /// value, so setting it also asserts that merging null intermediate results
+  /// leaves the result unchanged.
+  bool ignoreNullInputs{false};
 
   /// Indicates if this is a companion function.
   bool companionFunction{false};

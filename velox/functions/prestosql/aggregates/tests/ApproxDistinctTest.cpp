@@ -116,9 +116,13 @@ class ApproxDistinctTest : public AggregationTestBase {
     auto vectors = makeRowVector({keys, values});
     auto expected = toRowVector(expectedResults);
 
-    testAggregations({vectors}, {"c0"}, {"approx_distinct(c1)"}, {expected});
+    testAggregations(
+        {vectors, vectors, vectors},
+        {"c0"},
+        {"approx_distinct(c1)"},
+        {expected});
     testAggregationsWithCompanion(
-        {vectors},
+        {vectors, vectors, vectors},
         [](auto& /*builder*/) {},
         {"c0"},
         {"approx_distinct(c1)"},
@@ -128,7 +132,7 @@ class ApproxDistinctTest : public AggregationTestBase {
 
     if (testApproxSet) {
       testAggregations(
-          {vectors},
+          {vectors, vectors, vectors},
           {"c0"},
           {"approx_set(c1)"},
           {"c0", "cardinality(a0)"},
@@ -186,8 +190,9 @@ TEST_F(ApproxDistinctTest, groupByHighCardinalityIntegers) {
   auto values = makeFlatVector<int64_t>(size, [](auto row) { return row; });
 
   testGroupByAgg(keys, values, {{0, 516}, {1, 507}}, false);
+  auto vectors = makeRowVector({keys, values});
   testAggregations(
-      {makeRowVector({keys, values})},
+      {vectors, vectors, vectors},
       {"c0"},
       {"approx_set(c1)"},
       {"c0", "cardinality(a0)"},
@@ -212,9 +217,10 @@ TEST_F(ApproxDistinctTest, groupByAllNulls) {
   auto vectors = makeRowVector({keys, values});
   auto expected = toRowVector<int32_t, int64_t>({{0, 0}, {1, 3}});
 
-  testAggregations({vectors}, {"c0"}, {"approx_distinct(c1)"}, {expected});
+  testAggregations(
+      {vectors, vectors, vectors}, {"c0"}, {"approx_distinct(c1)"}, {expected});
   testAggregationsWithCompanion(
-      {vectors},
+      {vectors, vectors, vectors},
       [](auto& /*builder*/) {},
       {"c0"},
       {"approx_distinct(c1)"},
@@ -318,7 +324,7 @@ TEST_F(ApproxDistinctTest, globalAggIntegersWithError) {
     testGlobalAgg(values, 0.2, 936);
     testGlobalAgg(values, common::hll::kHighestMaxStandardError, 929);
 
-    values = makeFlatVector<int32_t>(50'000, folly::identity);
+    values = makeFlatIdentityVector<int32_t>(50'000);
     testGlobalAgg(values, common::hll::kLowestMaxStandardError, 50043);
     testGlobalAgg(values, common::hll::kHighestMaxStandardError, 39069);
   }
@@ -334,7 +340,7 @@ TEST_F(ApproxDistinctTest, globalAggIntegersWithError) {
     testGlobalAgg(
         values, common::hll::kHighestMaxStandardError, 1814, true, 1034);
 
-    values = makeFlatVector<int64_t>(50'000, folly::identity);
+    values = makeFlatIdentityVector<int64_t>(50'000);
     testGlobalAgg(
         values, common::hll::kLowestMaxStandardError, 50060, true, 50284);
     testGlobalAgg(
@@ -416,7 +422,7 @@ TEST_F(ApproxDistinctTest, hugeInt) {
 
 TEST_F(ApproxDistinctTest, streaming) {
   auto rawInput1 = makeFlatVector<int64_t>({1, 2, 3});
-  auto rawInput2 = makeFlatVector<int64_t>(1000, folly::identity);
+  auto rawInput2 = makeFlatIdentityVector<int64_t>(1000);
   auto result =
       testStreaming("approx_distinct", true, {rawInput1}, {rawInput2});
   ASSERT_EQ(result->size(), 1);
@@ -473,7 +479,7 @@ TEST_F(ApproxDistinctTest, mergeWithEmpty) {
 TEST_F(ApproxDistinctTest, toIntermediate) {
   constexpr int kSize = 1000;
   auto input = makeRowVector({
-      makeFlatVector<int32_t>(kSize, folly::identity),
+      makeFlatIdentityVector<int32_t>(kSize),
       makeConstant<int64_t>(1, kSize),
   });
   auto plan = PlanBuilder()

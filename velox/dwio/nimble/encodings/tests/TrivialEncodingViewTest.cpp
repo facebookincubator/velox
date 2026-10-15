@@ -43,6 +43,25 @@ TEST_F(EncodingViewTest, readsTrivialEncodingForAllLayoutFamilies) {
       {3, 0, 1, 2});
 }
 
+TEST_F(TrivialEncodingViewTest, readsInternallyCompressedPayloads) {
+  const auto positions = randomizedPositions(/*seed=*/33);
+  const auto integers = constantInt32(42);
+  const auto booleans = randomBool(/*seed=*/34);
+  std::vector<std::string> backing;
+  const auto strings = randomStringViews(backing, /*seed=*/35);
+
+  for (const auto compressionType :
+       {nimble::CompressionType::Zstd, nimble::CompressionType::MetaInternal}) {
+    SCOPED_TRACE(nimble::toString(compressionType));
+    expectReads<nimble::TrivialEncoding<int32_t>>(
+        integers, positions, {}, compressionType);
+    expectReads<nimble::TrivialEncoding<bool>>(
+        booleans, positions, {}, compressionType);
+    expectReads<nimble::TrivialEncoding<std::string_view>>(
+        strings, positions, {}, compressionType);
+  }
+}
+
 TEST_F(TrivialEncodingViewTest, concurrent) {
   const auto positions = randomizedPositions(/*seed=*/2);
   std::vector<std::string> backing;

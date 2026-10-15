@@ -212,7 +212,10 @@ class SliceFunction : public exec::VectorFunction {
 };
 
 // @param kind The type kind of start and length.
-void registerSliceFunction(const std::string& prefix, TypeKind kind) {
+void registerSliceFunction(
+    const std::string& prefix,
+    TypeKind kind,
+    std::string_view defaultOwner) {
   auto kindName = exec::sanitizeName(std::string(TypeKindName::toName(kind)));
 
   std::vector<std::shared_ptr<exec::FunctionSignature>> signatures = {
@@ -224,16 +227,25 @@ void registerSliceFunction(const std::string& prefix, TypeKind kind) {
           .argumentType(kindName)
           .build()};
   exec::registerVectorFunction(
-      prefix + "slice", signatures, std::make_unique<SliceFunction>(kind));
+      prefix + "slice",
+      signatures,
+      std::make_unique<SliceFunction>(kind),
+      {},
+      /*overwrite=*/true,
+      defaultOwner);
 }
 } // namespace
 
-void registerBigintSliceFunction(const std::string& prefix) {
-  registerSliceFunction(prefix, TypeKind::BIGINT);
+void registerBigintSliceFunction(
+    const std::string& prefix,
+    std::string_view defaultOwner) {
+  registerSliceFunction(prefix, TypeKind::BIGINT, defaultOwner);
 }
 
-void registerIntegerSliceFunction(const std::string& prefix) {
-  registerSliceFunction(prefix, TypeKind::INTEGER);
+void registerIntegerSliceFunction(
+    const std::string& prefix,
+    std::string_view defaultOwner) {
+  registerSliceFunction(prefix, TypeKind::INTEGER, defaultOwner);
 }
 
 } // namespace facebook::velox::functions

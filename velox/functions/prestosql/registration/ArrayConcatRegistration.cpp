@@ -20,39 +20,43 @@
 namespace facebook::velox::functions {
 namespace {
 template <typename T>
-inline void registerArrayConcatFunctions(const std::string& prefix) {
+inline void registerArrayConcatFunctions(
+    const std::string& prefix,
+    std::string_view defaultOwner) {
   registerFunction<
       ParameterBinder<ArrayConcatFunction, T>,
       Array<T>,
       Array<T>,
-      T>({prefix + "concat"});
+      T>({prefix + "concat"}, true, defaultOwner);
   registerFunction<
       ParameterBinder<ArrayConcatFunction, T>,
       Array<T>,
       T,
-      Array<T>>({prefix + "concat"});
+      Array<T>>({prefix + "concat"}, true, defaultOwner);
   registerFunction<
       ParameterBinder<ArrayConcatFunction, T>,
       Array<T>,
       Array<T>,
       Array<T>,
-      Variadic<Array<T>>>({prefix + "concat"});
+      Variadic<Array<T>>>({prefix + "concat"}, true, defaultOwner);
 }
 } // namespace
 
-void registerArrayConcatFunctions(const std::string& prefix) {
-  registerArrayConcatFunctions<Generic<T1>>(prefix);
+void registerArrayConcatFunctions(
+    const std::string& prefix,
+    std::string_view defaultOwner) {
+  registerArrayConcatFunctions<Generic<T1>>(prefix, defaultOwner);
   // Fast paths for primitives types.
-  registerArrayConcatFunctions<int8_t>(prefix);
-  registerArrayConcatFunctions<int16_t>(prefix);
-  registerArrayConcatFunctions<int32_t>(prefix);
-  registerArrayConcatFunctions<int64_t>(prefix);
-  registerArrayConcatFunctions<int128_t>(prefix);
-  registerArrayConcatFunctions<float>(prefix);
-  registerArrayConcatFunctions<double>(prefix);
-  registerArrayConcatFunctions<bool>(prefix);
-  registerArrayConcatFunctions<Varchar>(prefix);
-  registerArrayConcatFunctions<Timestamp>(prefix);
-  registerArrayConcatFunctions<Date>(prefix);
+  registerArrayConcatFunctions<int8_t>(prefix, defaultOwner);
+  registerArrayConcatFunctions<int16_t>(prefix, defaultOwner);
+  registerArrayConcatFunctions<int32_t>(prefix, defaultOwner);
+  registerArrayConcatFunctions<int64_t>(prefix, defaultOwner);
+  registerArrayConcatFunctions<int128_t>(prefix, defaultOwner);
+  registerArrayConcatFunctions<float>(prefix, defaultOwner);
+  registerArrayConcatFunctions<double>(prefix, defaultOwner);
+  registerArrayConcatFunctions<bool>(prefix, defaultOwner);
+  registerArrayConcatFunctions<Varchar>(prefix, defaultOwner);
+  registerArrayConcatFunctions<Timestamp>(prefix, defaultOwner);
+  registerArrayConcatFunctions<Date>(prefix, defaultOwner);
 }
 } // namespace facebook::velox::functions

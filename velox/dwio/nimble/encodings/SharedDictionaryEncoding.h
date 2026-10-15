@@ -452,6 +452,16 @@ class SharedDictionaryAlphabet {
   const std::unique_ptr<EncodingView> entryView_;
 };
 
+/// Resolves external shared dictionaries referenced by a tablet.
+class ExternalDictionaryResolver {
+ public:
+  virtual ~ExternalDictionaryResolver() = default;
+
+  virtual std::shared_ptr<const SharedDictionaryAlphabet> resolve(
+      uint32_t dictionaryId,
+      DataType dataType) const = 0;
+};
+
 /// The layout for a shared dictionary encoding is an encoding prefix followed
 /// by encoded indices. The value stream's catalog binding supplies the
 /// alphabet.
@@ -865,6 +875,10 @@ std::string_view SharedDictionaryEncoding<T>::encodeMaterializedDictionarySlice(
       Statistics<physicalType>::create(
           std::span<const physicalType>{values.data(), values.size()}),
       std::move(policy)};
+  // TODO: Reuses the Dictionary nested-encoding identifiers. That is
+  // unambiguous today because the shared-dictionary streams are already
+  // distinguishable by their dictionary stream identifiers, but dedicated
+  // EncodingIdentifiers::SharedDictionary entries would be more future proof.
   const auto serializedAlphabet = selection.template encodeNested<physicalType>(
       EncodingIdentifiers::Dictionary::Alphabet,
       std::span<const physicalType>{values.data(), values.size()},

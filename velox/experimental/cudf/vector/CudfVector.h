@@ -22,7 +22,7 @@
 #include <cudf/contiguous_split.hpp>
 #include <cudf/table/table.hpp>
 
-#include <rmm/cuda_stream_view.hpp>
+#include <cuda/stream>
 
 #include <memory>
 #include <utility>
@@ -48,7 +48,7 @@ class CudfVector : public RowVector {
       TypePtr type,
       vector_size_t size,
       std::unique_ptr<cudf::table>&& table,
-      rmm::cuda_stream_view stream);
+      cuda::stream_ref stream);
 
   /// Constructs a CudfVector from packed_table.
   /// The packed data is retained and tabView_ references the table view inside
@@ -58,9 +58,9 @@ class CudfVector : public RowVector {
       TypePtr type,
       vector_size_t size,
       std::unique_ptr<cudf::packed_table>&& packedTable,
-      rmm::cuda_stream_view stream);
+      cuda::stream_ref stream);
 
-  rmm::cuda_stream_view stream() const {
+  cuda::stream_ref stream() const {
     return stream_;
   }
 
@@ -77,7 +77,7 @@ class CudfVector : public RowVector {
   /// This only changes future stream/deallocation association. It does not make
   /// 'stream' wait on the previous stream or any producer stream.
   /// Returns false when the storage cannot be rebound without materializing.
-  bool rebindStream(rmm::cuda_stream_view stream);
+  bool rebindStream(cuda::stream_ref stream);
 
   uint64_t estimateFlatSize() const override;
 
@@ -95,7 +95,7 @@ class CudfVector : public RowVector {
   // packedTable_->table.
   cudf::table_view tabView_;
 
-  rmm::cuda_stream_view stream_;
+  cuda::stream_ref stream_;
   uint64_t flatSize_;
 };
 

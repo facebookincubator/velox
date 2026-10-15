@@ -31,7 +31,7 @@ struct ReduceAggregator {
       cudf::table_view const& input,
       TypePtr const& outputType,
       vector_size_t inputRowCount,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) = 0;
 
   virtual ~ReduceAggregator() = default;
@@ -101,7 +101,7 @@ class CudfReduce : public CudfOperatorBase {
  private:
   CudfVectorPtr doGlobalAggregation(
       cudf::table_view tableView,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr);
 
   std::shared_ptr<const core::AggregationNode> aggregationNode_;

@@ -16,8 +16,7 @@
 #pragma once
 
 #include <cstdint>
-#include <deque>
-#include <optional>
+#include <memory>
 #include <span>
 #include <string>
 #include <string_view>
@@ -28,6 +27,7 @@
 #include <fmt/core.h>
 
 #include "absl/container/flat_hash_map.h"
+#include "velox/dwio/nimble/common/Buffer.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/common/Vector.h"
 #include "velox/dwio/nimble/encodings/SharedDictionaryEncoding.h"
@@ -192,6 +192,9 @@ class StreamingSharedDictionaryBuilder final
         scope,
         SharedDictionaryScope::External,
         "Streaming shared dictionary builder cannot use external scope.");
+    if constexpr (std::is_same_v<T, std::string_view>) {
+      stringBuffer_ = std::make_unique<Buffer>(*this->pool());
+    }
   }
 
   Kind kind() const final {
@@ -237,16 +240,19 @@ class StreamingSharedDictionaryBuilder final
   }
 
   void resetImpl() final {
+    // Clear the views before the storage they point into: Buffer::reset()
+    // invalidates every string_view previously handed out.
     alphabet_.clear();
     alphabetIndex_.clear();
-    stringValues_.clear();
+    if constexpr (std::is_same_v<T, std::string_view>) {
+      stringBuffer_->reset();
+    }
   }
 
  private:
   T storeValue(const T& value) {
     if constexpr (std::is_same_v<T, std::string_view>) {
-      stringValues_.emplace_back(value);
-      return stringValues_.back();
+      return stringBuffer_->writeString(value);
     } else {
       return value;
     }
@@ -254,7 +260,14 @@ class StreamingSharedDictionaryBuilder final
 
   Vector<T> alphabet_;
   DictionaryIndexType<T> alphabetIndex_;
-  std::deque<std::string> stringValues_;
+  // Backing storage for the alphabet's string bytes. Both alphabet_ and
+  // alphabetIndex_ hold string_views into it, so it must keep earlier views
+  // valid as it grows; Buffer's chunks never move already-written bytes.
+  // Held by pointer, not by value or optional: Buffer embeds a mutex and its
+  // chunk bookkeeping, and only string alphabets ever need one. Null for
+  // numeric alphabets, which also avoids Buffer allocating its first chunk in
+  // its constructor.
+  std::unique_ptr<Buffer> stringBuffer_;
 };
 
 /// Builder for externally supplied dictionaries.

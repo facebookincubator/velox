@@ -359,6 +359,11 @@ class MultiMapAggAggregate : public exec::Aggregate {
     return false;
   }
 
+  bool isReducing() const override {
+    // Retains every input value.
+    return false;
+  }
+
   int32_t accumulatorFixedWidthSize() const override {
     return sizeof(AccumulatorType);
   }
@@ -623,7 +628,7 @@ void registerMultiMapAggAggregate(
         const auto typeKind = keyType->kind();
 
         if (keyType->providesCustomComparison()) {
-          return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+          return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH_WITH_UNKNOWN(
               createMultiMapAggAggregateWithCustomCompare,
               typeKind,
               resultType);

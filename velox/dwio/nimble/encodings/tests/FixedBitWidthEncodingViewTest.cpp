@@ -30,6 +30,17 @@ TEST_F(EncodingViewTest, readsFixedBitWidthEncoding) {
       makeVector({10, 12, 15, 31, 33, 63}), {5, 0, 4, 2, 1});
 }
 
+TEST_F(FixedBitWidthEncodingViewTest, readsInternallyCompressedPayload) {
+  const auto values = randomNarrowUnsigned<uint32_t>(/*seed=*/36);
+  const auto positions = randomizedPositions(/*seed=*/37);
+  for (const auto compressionType :
+       {nimble::CompressionType::Zstd, nimble::CompressionType::MetaInternal}) {
+    SCOPED_TRACE(nimble::toString(compressionType));
+    expectReads<nimble::FixedBitWidthEncoding<uint32_t>>(
+        values, positions, {}, compressionType);
+  }
+}
+
 TEST_F(FixedBitWidthEncodingViewTest, concurrent) {
   expectConcurrentReads<nimble::FixedBitWidthEncoding<uint32_t>>(
       randomNarrowUnsigned<uint32_t>(/*seed=*/6),

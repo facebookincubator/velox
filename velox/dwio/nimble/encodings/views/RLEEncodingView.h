@@ -16,6 +16,7 @@
 #pragma once
 
 #include <algorithm>
+#include <type_traits>
 
 #include "velox/dwio/nimble/common/Vector.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
@@ -52,8 +53,10 @@ class RLEEncodingView final : public TypedEncodingView<T> {
     NIMBLE_CHECK_EQ(end, this->rowCount_);
 
     pos += runLengthsSize;
-    values_ = detail::createTypedEncodingView<T>(
-        {pos, static_cast<size_t>(data.end() - pos)}, this->pool_, options);
+    values_ = detail::createTypedEncodingView<runValueType>(
+        {pos, static_cast<size_t>(data.data() + data.size() - pos)},
+        this->pool_,
+        options);
     NIMBLE_CHECK_NOT_NULL(values_);
   }
 
@@ -66,7 +69,9 @@ class RLEEncodingView final : public TypedEncodingView<T> {
     NIMBLE_CHECK_LT(index, this->rowCount_);
     const auto it = std::upper_bound(runEnds_.begin(), runEnds_.end(), index);
     NIMBLE_CHECK(it != runEnds_.end());
-    return values_->readAt(static_cast<uint32_t>(it - runEnds_.begin()));
+    physicalType value;
+    values_->readAt(static_cast<uint32_t>(it - runEnds_.begin()), &value);
+    return detail::castFromPhysicalType<T>(value);
   }
 
   void readPhysical(uint32_t offset, uint32_t length, physicalType* output)
@@ -91,8 +96,13 @@ class RLEEncodingView final : public TypedEncodingView<T> {
     }
   }
 
+  // RLE serializes floating run values with their logical type and all other
+  // run values with their physical type.
+  using runValueType =
+      std::conditional_t<isFloatingPointType<T>(), T, physicalType>;
+
   Vector<uint32_t> runEnds_;
-  std::unique_ptr<TypedEncodingView<T>> values_;
+  std::unique_ptr<TypedEncodingView<runValueType>> values_;
 };
 
 template <>
@@ -121,7 +131,7 @@ class RLEEncodingView<bool> final : public TypedEncodingView<bool> {
     NIMBLE_CHECK_EQ(end, this->rowCount_);
 
     pos += runLengthsSize;
-    NIMBLE_CHECK_EQ(pos + sizeof(bool), data.end());
+    NIMBLE_CHECK_EQ(pos + sizeof(bool), data.data() + data.size());
     initialValue_ = *reinterpret_cast<const bool*>(pos);
   }
 

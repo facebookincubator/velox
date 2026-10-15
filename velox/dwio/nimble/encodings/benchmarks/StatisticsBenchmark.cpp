@@ -17,7 +17,9 @@
 #include <algorithm>
 #include <cstdint>
 #include <limits>
+#include <optional>
 #include <span>
+#include <utility>
 #include <vector>
 
 #include "folly/Benchmark.h"
@@ -93,6 +95,43 @@ void updateMinMaxBlockStatsPerValue(
   }
 }
 
+template <typename T>
+std::optional<std::pair<T, uint64_t>> scanMostFrequent(
+    const UniqueValueCounts<T>& uniqueCounts) {
+  if (uniqueCounts.size() == 0) {
+    return std::nullopt;
+  }
+  const auto it = std::max_element(
+      uniqueCounts.cbegin(),
+      uniqueCounts.cend(),
+      [](const auto& left, const auto& right) {
+        if (left.second != right.second) {
+          return left.second < right.second;
+        }
+        return left.first > right.first;
+      });
+  return std::make_pair(it->first, it->second);
+}
+
+template <typename T>
+void scanMostFrequent(uint32_t iters, const std::vector<T>& data) {
+  const auto statistics = Statistics<T>::create(data);
+  const auto& uniqueCounts = statistics.uniqueCounts().value();
+  while (iters-- > 0) {
+    folly::doNotOptimizeAway(scanMostFrequent(uniqueCounts));
+  }
+}
+
+template <typename T>
+void readCachedMostFrequent(uint32_t iters, const std::vector<T>& data) {
+  const auto statistics = Statistics<T>::create(data);
+  const auto& uniqueCounts = statistics.uniqueCounts().value();
+  folly::doNotOptimizeAway(uniqueCounts.mostFrequent());
+  while (iters-- > 0) {
+    folly::doNotOptimizeAway(uniqueCounts.mostFrequent());
+  }
+}
+
 void prepareData() {
   int64DenseRange.resize(kValueCount);
   int64SingleValue.resize(kValueCount);
@@ -155,6 +194,22 @@ BENCHMARK(MinMaxBlocks_PerValue_Uint64DenseRangeAtMax, iters) {
 BENCHMARK_RELATIVE(MinMaxBlocks_BlockWise_Uint64DenseRangeAtMax, iters) {
   updateMinMaxBlockStats(
       iters, uint64DenseRangeAtMax, kBlockBitPackingBlockSize);
+}
+
+BENCHMARK(MostFrequentScan_Int64DenseRange, iters) {
+  scanMostFrequent(iters, int64DenseRange);
+}
+
+BENCHMARK_RELATIVE(MostFrequentCached_Int64DenseRange, iters) {
+  readCachedMostFrequent(iters, int64DenseRange);
+}
+
+BENCHMARK(MostFrequentScan_Int64SingleValue, iters) {
+  scanMostFrequent(iters, int64SingleValue);
+}
+
+BENCHMARK_RELATIVE(MostFrequentCached_Int64SingleValue, iters) {
+  readCachedMostFrequent(iters, int64SingleValue);
 }
 
 int main(int argc, char** argv) {

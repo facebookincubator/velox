@@ -319,7 +319,7 @@ TEST_F(KHyperLogLogAggregateTest, mergeKHyperLogLog) {
 TEST_F(KHyperLogLogAggregateTest, mergeToIntermediate) {
   constexpr int kSize = 1000;
   auto input = makeRowVector({
-      makeFlatVector<int32_t>(kSize, folly::identity),
+      makeFlatIdentityVector<int32_t>(kSize),
       makeFlatVector<int64_t>(kSize, [](auto /*row*/) { return 1; }),
       makeFlatVector<int64_t>(kSize, [](auto /*row*/) { return 1; }),
   });
@@ -341,5 +341,15 @@ TEST_F(KHyperLogLogAggregateTest, mergeToIntermediate) {
       digests, {"c0"}, {"merge(a0)"}, expectedCardinalities);
 }
 
+TEST_F(KHyperLogLogAggregateTest, unknownType) {
+  auto data = makeRowVector(
+      {makeAllNullFlatVector<UnknownValue>(10),
+       makeAllNullFlatVector<UnknownValue>(10)});
+
+  auto expected = makeRowVector(
+      {makeNullableFlatVector<StringView>({std::nullopt}, VARBINARY())});
+
+  testAggregations({data}, {}, {"khyperloglog_agg(c0, c1)"}, {expected});
+}
 } // namespace
 } // namespace facebook::velox::aggregate::test

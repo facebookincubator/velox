@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConfig.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConnector.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveTableHandle.h"
@@ -48,6 +49,8 @@ class S3ReadTest : public S3Test, public ::test::VectorTestBase {
     S3Test::SetUp();
     // Register cudf to enable the CudfDatasource creation from
     // CudfHiveConnector
+    facebook::velox::cudf_velox::CudfConfig::getInstance().allowCpuFallback =
+        false;
     facebook::velox::cudf_velox::registerCudf();
     filesystems::registerS3FileSystem();
 
@@ -55,7 +58,7 @@ class S3ReadTest : public S3Test, public ::test::VectorTestBase {
     facebook::velox::cudf_velox::connector::hive::CudfHiveConnectorFactory
         factory;
     auto hiveConnector = factory.newConnector(
-        kCudfHiveConnectorId, minioServer_->s3Config(), ioExecutor_.get());
+        kCudfHiveConnectorId, siloServer_->s3Config(), ioExecutor_.get());
     facebook::velox::connector::ConnectorRegistry::global().insert(
         hiveConnector->connectorId(), hiveConnector);
   }
@@ -64,6 +67,7 @@ class S3ReadTest : public S3Test, public ::test::VectorTestBase {
     filesystems::finalizeS3FileSystem();
     facebook::velox::connector::ConnectorRegistry::global().erase(
         kCudfHiveConnectorId);
+    facebook::velox::cudf_velox::unregisterCudf();
     S3Test::TearDown();
   }
 };
@@ -88,14 +92,27 @@ std::string resolveIntParquetPath() {
 TEST_F(S3ReadTest, s3ReadTest) {
   const auto sourceFile = resolveIntParquetPath();
   const char* bucketName = "data";
-  const auto destinationFile = S3Test::localPath(bucketName) + "/int.parquet";
-  minioServer_->addBucket(bucketName);
+  siloServer_->addBucket(bucketName);
   std::ifstream src(sourceFile, std::ios::binary);
-  std::ofstream dest(destinationFile, std::ios::binary);
-  // Copy source file to destination bucket.
-  dest << src.rdbuf();
-  ASSERT_GT(dest.tellp(), 0) << "Unable to copy from source " << sourceFile;
-  dest.close();
+  const std::string content(
+      (std::istreambuf_iterator<char>(src)), std::istreambuf_iterator<char>());
+  ASSERT_GT(content.size(), 0) << "Unable to read source " << sourceFile;
+  src.close();
+
+  // Upload the source file to the S3 bucket via the S3 API; the server
+  // only serves objects it stores.
+  auto s3Config = siloServer_->s3Config();
+  {
+    // Upload via the S3 API; getFileSystem initializes S3 on first creation.
+    auto s3fs = facebook::velox::filesystems::getFileSystem(
+        facebook::velox::filesystems::s3URI(bucketName, "int.parquet"),
+        s3Config);
+    auto writeFile = s3fs->openFileForWrite(
+        facebook::velox::filesystems::s3URI(bucketName, "int.parquet"),
+        {{}, pool(), std::nullopt});
+    writeFile->append(content);
+    writeFile->close();
+  }
 
   // Read the parquet file via the S3 bucket.
   auto rowType = ROW({"int", "bigint"}, {INTEGER(), BIGINT()});

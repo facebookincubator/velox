@@ -105,6 +105,30 @@ TEST(StatsUtilTest, findMinMaxHandlesStringViews) {
   EXPECT_EQ(minMax.max.data(), aliased[0].data());
 }
 
+TEST(StatsUtilTest, findMinMaxAndTotalSizeSumsEveryValue) {
+  using namespace std::string_view_literals;
+
+  // Sizes sum over every value, including the two that set the bounds and the
+  // one the scan skips comparing against the max.
+  std::vector<std::string_view> values = {"mmm"sv, "aaa"sv, "zzz"sv, "qqq"sv};
+  auto result = findMinMaxAndTotalSize(std::span<std::string_view>(values));
+  EXPECT_EQ(result.min, "aaa"sv);
+  EXPECT_EQ(result.max, "zzz"sv);
+  EXPECT_EQ(result.totalSize, 12);
+
+  // Embedded NULs count toward the size; the scan measures bytes, not strlen.
+  std::vector<std::string_view> withNuls = {"a\0a"sv, "a\0"sv};
+  result = findMinMaxAndTotalSize(std::span<std::string_view>(withNuls));
+  EXPECT_EQ(result.totalSize, 5);
+
+  // An empty value contributes nothing but must not be skipped as a bound.
+  std::vector<std::string_view> withEmpty = {"bb"sv, ""sv};
+  result = findMinMaxAndTotalSize(std::span<std::string_view>(withEmpty));
+  EXPECT_EQ(result.min, ""sv);
+  EXPECT_EQ(result.max, "bb"sv);
+  EXPECT_EQ(result.totalSize, 2);
+}
+
 TEST(StatsUtilTest, findMinMaxHandlesFloatingPointTypes) {
   std::vector<float> floatValues(257, 1.25F);
   floatValues[11] = -123.5F;

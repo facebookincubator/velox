@@ -23,11 +23,11 @@
 #include <vector>
 
 #include "velox/common/memory/Memory.h"
-#include "velox/dwio/nimble/common/Types.h"
+#include "velox/dwio/nimble/index/KeyCursor.h"
 
 namespace facebook::nimble::index {
 
-/// Thread-safe random-access key store for index lookups.
+/// Thread-safe random-access reader for a flat encoding of packed keys.
 ///
 /// Provides seek(), get(), and materialize() for key-to-row resolution.
 /// Fully decoupled from the sequential Encoding API — takes raw encoded
@@ -45,7 +45,7 @@ class KeyEncoding {
  public:
   virtual ~KeyEncoding() = default;
 
-  /// Creates the appropriate KeyEncoding from raw encoded data.
+  /// Creates the appropriate flat KeyEncoding from raw encoded data.
   ///
   /// Internally creates a temporary Encoding to parse/decompress the data,
   /// extracts what it needs, then discards the temporary Encoding. The
@@ -75,7 +75,10 @@ class KeyEncoding {
       uint32_t startRow,
       uint32_t count) const = 0;
 
-  virtual EncodingType encodingType() const = 0;
+  /// Returns a cursor positioned at 'startRow', which must be a valid row.
+  /// The cursor reads through this encoding, which must outlive it.
+  /// Safe to call concurrently; the returned cursor is single-threaded.
+  virtual std::unique_ptr<KeyCursor> cursor(uint32_t startRow) const = 0;
 
   virtual uint32_t rowCount() const = 0;
 };
@@ -95,9 +98,7 @@ class TrivialKeyEncoding final : public KeyEncoding {
   std::vector<std::string> materialize(uint32_t startRow, uint32_t count)
       const override;
 
-  EncodingType encodingType() const override {
-    return EncodingType::Trivial;
-  }
+  std::unique_ptr<KeyCursor> cursor(uint32_t startRow) const override;
 
   uint32_t rowCount() const override {
     return static_cast<uint32_t>(values_.size());
@@ -125,17 +126,28 @@ class PrefixKeyEncoding final : public KeyEncoding {
   std::vector<std::string> materialize(uint32_t startRow, uint32_t count)
       const override;
 
-  EncodingType encodingType() const override {
-    return EncodingType::Prefix;
-  }
+  std::unique_ptr<KeyCursor> cursor(uint32_t startRow) const override;
 
   uint32_t rowCount() const override {
     return rowCount_;
   }
 
  private:
-  static std::string_view
-  decodeEntryAt(const char*& pos, uint32_t& row, std::string& decoded);
+  // Reconstructs prefix-compressed keys while retaining capacity across rows.
+  class KeyScratch;
+  class PrefixKeyCursor;
+
+  // Returns a cleared thread-local scratch buffer for non-cursor reads.
+  static KeyScratch& scanScratch();
+
+  // Decodes the entry at 'position' and advances both it and 'row'. 'end'
+  // bounds the encoded data so a corrupt length cannot read past it. The
+  // returned view aliases 'scratch' and is invalidated by the next call.
+  static std::string_view decodeEntryAt(
+      const char*& position,
+      const char* end,
+      uint32_t& row,
+      KeyScratch& scratch);
 
   uint32_t restartOffset(uint32_t restartIndex) const;
 
@@ -148,6 +160,7 @@ class PrefixKeyEncoding final : public KeyEncoding {
   const uint32_t numRestarts_;
   const char* const restartOffsets_;
   const char* const dataStart_;
+  const char* const dataEnd_;
 };
 
 } // namespace facebook::nimble::index

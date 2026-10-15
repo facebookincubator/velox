@@ -160,7 +160,7 @@ bool hasCompanionAggregates(
 std::unique_ptr<cudf::column> applyMask(
     cudf::column_view values,
     cudf::column_view mask,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   // copy_if_else(lhs, rhs, bool_mask): out[i] = (mask.valid(i) && mask[i]) ?
   // lhs[i] : rhs. A null mask element is treated as false, so mask-false and
@@ -177,7 +177,7 @@ std::unique_ptr<cudf::column> materializeMaskedColumn(
     cudf::table_view const& input,
     uint32_t inputIndex,
     std::optional<uint32_t> maskIndex,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   if (!maskIndex.has_value()) {
     return nullptr;
@@ -188,7 +188,7 @@ std::unique_ptr<cudf::column> materializeMaskedColumn(
 
 std::unique_ptr<cudf::column> maskToValidityColumn(
     cudf::column_view mask,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   // bools_to_mask sets bit i iff mask[i] is true; a false or null entry clears
   // it. Using that bitmask as the column's validity makes COUNT_VALID over the

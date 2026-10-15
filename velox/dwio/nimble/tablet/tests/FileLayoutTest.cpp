@@ -147,7 +147,8 @@ TEST_F(FileLayoutTest, emptyFileWithChunkIndex) {
       &writeFile,
       *pool_,
       {
-          .enableChunkIndex = true,
+          .enableChunkStats = true,
+          .chunkStatsVersion = nimble::ChunkStatsVersion::kV1,
       });
   tabletWriter->close();
   writeFile.close();

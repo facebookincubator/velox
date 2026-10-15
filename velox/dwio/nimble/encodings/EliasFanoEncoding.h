@@ -100,9 +100,12 @@ class EliasFanoEncoding final
       Buffer& buffer,
       const Encoding::Options& options = {});
 
-  /// Estimates encoded bytes or returns nullopt for unsupported input.
+  /// Estimates encoded size, or returns nullopt for empty, unsorted, or
+  /// oversized input. Requires 'statistics' derived from 'values'.
   static std::optional<uint64_t> estimateSize(
-      std::span<const physicalType> values);
+      std::span<const physicalType> values,
+      const Statistics<physicalType>& statistics,
+      const Encoding::Options& options = {});
 
   /// Returns a human-readable description of the encoded layout.
   std::string debugString(int offset) const final;
@@ -112,8 +115,19 @@ class EliasFanoEncoding final
       std::is_integral_v<T> && !std::is_same_v<T, bool>,
       "EliasFanoEncoding only supports non-bool integer types.");
 
-  using Encoder =
-      folly::compression::EliasFanoEncoder<uint64_t, uint64_t, 128, 256>;
+  // The wire layout is [prefix][base][lower bit count][upper byte count]
+  // [alignment padding][skip pointers][forward pointers][lower bits]
+  // [upper bits][trailing padding]. The constants below define this layout and
+  // must remain stable unless the Nimble wire format is versioned.
+  static constexpr size_t kSkipQuantum{128};
+  static constexpr size_t kForwardQuantum{256};
+  static constexpr bool kUpperFirst{false};
+  using Encoder = folly::compression::EliasFanoEncoder<
+      uint64_t,
+      uint64_t,
+      kSkipQuantum,
+      kForwardQuantum,
+      kUpperFirst>;
   using Reader = folly::compression::EliasFanoReader<Encoder>;
 
   // Number of bytes between the common prefix and the Folly payload.
@@ -123,7 +137,8 @@ class EliasFanoEncoding final
 
   // Makes Folly's word-at-a-time payload reads safe at the end of the stream.
   static constexpr size_t kPayloadPaddingBytes{
-      folly::compression::kUpperTrailingBytes};
+      kUpperFirst ? folly::compression::kLowerTrailingBytes
+                  : folly::compression::kUpperTrailingBytes};
 
   // Aligns Folly's uint64 pointer tables while encoding into the arena.
   static constexpr size_t kPayloadAlignment{alignof(uint64_t)};
@@ -158,10 +173,19 @@ class EliasFanoEncoding final
     }
   }
 
-  // Validates monotonicity and derives the Folly payload layout.
-  static std::optional<Encoder::Layout> layoutForValues(
+  // Holds the normalized base and the corresponding Folly payload layout.
+  struct ValueLayout {
+    // Absolute value represented by relative value zero in the payload.
+    uint64_t base{0};
+
+    // Describes the byte layout of the base-relative values.
+    Encoder::Layout payload;
+  };
+
+  // Returns the normalized base and payload layout for valid input.
+  static std::optional<ValueLayout> layoutForValues(
       std::span<const physicalType> values,
-      uint64_t& base);
+      const Statistics<physicalType>& statistics);
 
   // Returns the format-defined payload offset for the selected prefix size.
   static constexpr size_t payloadOffset(uint32_t prefixSize) {
@@ -225,6 +249,25 @@ class EliasFanoEncoding final
   // Next logical row consumed by the stateful Encoding interface.
   uint32_t row_{0};
 };
+
+namespace detail::elias_fano {
+
+// Returns nullopt so encoding selection can skip oversized streams. encode()
+// turns nullopt into an exception if the selected encoding exceeds the limit.
+constexpr std::optional<uint32_t> trySerializedSize(
+    uint64_t payloadOffset,
+    uint64_t payloadBytes,
+    uint64_t paddingBytes) noexcept {
+  constexpr uint64_t kMaxSerializedSize{std::numeric_limits<uint32_t>::max()};
+  if (payloadOffset > kMaxSerializedSize ||
+      paddingBytes > kMaxSerializedSize - payloadOffset ||
+      payloadBytes > kMaxSerializedSize - payloadOffset - paddingBytes) {
+    return std::nullopt;
+  }
+  return static_cast<uint32_t>(payloadOffset + payloadBytes + paddingBytes);
+}
+
+} // namespace detail::elias_fano
 
 template <typename T>
 EliasFanoEncoding<T>::EliasFanoEncoding(
@@ -420,41 +463,40 @@ void EliasFanoEncoding<T>::readWithVisitor(
 }
 
 template <typename T>
-std::optional<typename EliasFanoEncoding<T>::Encoder::Layout> EliasFanoEncoding<
-    T>::layoutForValues(std::span<const physicalType> values, uint64_t& base) {
-  if (values.empty()) {
+std::optional<typename EliasFanoEncoding<T>::ValueLayout>
+EliasFanoEncoding<T>::layoutForValues(
+    std::span<const physicalType> values,
+    const Statistics<physicalType>& statistics) {
+  if (values.empty() || !statistics.template isNonDecreasing<T>()) {
     return std::nullopt;
   }
 
-  base = toOrdered(values.front());
-  uint64_t previous = base;
-  for (size_t i = 1; i < values.size(); ++i) {
-    const auto current = toOrdered(values[i]);
-    if (current < previous) {
-      return std::nullopt;
-    }
-    previous = current;
-  }
-  return Encoder::Layout::fromUpperBoundAndSize(previous - base, values.size());
+  const auto base = toOrdered(values.front());
+  return ValueLayout{
+      .base = base,
+      .payload = Encoder::Layout::fromUpperBoundAndSize(
+          toOrdered(values.back()) - base, values.size()),
+  };
 }
 
 template <typename T>
 std::optional<uint64_t> EliasFanoEncoding<T>::estimateSize(
-    std::span<const physicalType> values) {
+    std::span<const physicalType> values,
+    const Statistics<physicalType>& statistics,
+    const Encoding::Options& options) {
   if (values.size() > std::numeric_limits<uint32_t>::max()) {
     return std::nullopt;
   }
-  uint64_t base;
-  const auto layout = layoutForValues(values, base);
+  const auto layout = layoutForValues(values, statistics);
   if (!layout.has_value()) {
     return std::nullopt;
   }
   const auto rowCount = static_cast<uint32_t>(values.size());
-  const auto maxPayloadOffset = std::max(
-      payloadOffset(EncodingPrefix::kFixedPrefixSize),
-      payloadOffset(
-          EncodingPrefix::serializedSize(rowCount, /*useVarint=*/true)));
-  return maxPayloadOffset + layout->bytes() + kPayloadPaddingBytes;
+  const auto prefixSize =
+      EncodingPrefix::serializedSize(rowCount, options.useVarintRowCount);
+  const auto encodingSize = detail::elias_fano::trySerializedSize(
+      payloadOffset(prefixSize), layout->payload.bytes(), kPayloadPaddingBytes);
+  return encodingSize;
 }
 
 template <typename T>
@@ -470,20 +512,18 @@ std::string_view EliasFanoEncoding<T>::encode(
   const auto prefixSize =
       Encoding::serializePrefixSize(rowCount, options.useVarintRowCount);
   const auto encodedPayloadOffset = payloadOffset(prefixSize);
-  const uint64_t encodingSize =
-      encodedPayloadOffset + payloadBytes + kPayloadPaddingBytes;
-  NIMBLE_CHECK_LE(
-      encodingSize,
-      std::numeric_limits<uint32_t>::max(),
-      "EliasFano encoding exceeds uint32 size.");
+  const auto encodingSize = detail::elias_fano::trySerializedSize(
+      encodedPayloadOffset, payloadBytes, kPayloadPaddingBytes);
+  NIMBLE_CHECK(
+      encodingSize.has_value(), "EliasFano encoding exceeds uint32 size.");
 
-  const auto allocationSize = encodingSize + kPayloadAlignment - 1;
+  const auto allocationSize = *encodingSize + kPayloadAlignment - 1;
   void* reserved = buffer.reserve(allocationSize);
   auto availableBytes = static_cast<size_t>(allocationSize);
   NIMBLE_CHECK_NOT_NULL(
       std::align(
           kPayloadAlignment,
-          static_cast<size_t>(encodingSize),
+          static_cast<size_t>(*encodingSize),
           reserved,
           availableBytes));
   auto* const encodedBegin = static_cast<char*>(reserved);
@@ -517,13 +557,13 @@ std::string_view EliasFanoEncoding<T>::encode(
   std::memset(position, 0, kPayloadPaddingBytes);
   position += kPayloadPaddingBytes;
   NIMBLE_CHECK_EQ(
-      position - encodedBegin, encodingSize, "Encoding size mismatch.");
-  return {encodedBegin, static_cast<size_t>(encodingSize)};
+      position - encodedBegin, *encodingSize, "Encoding size mismatch.");
+  return {encodedBegin, static_cast<size_t>(*encodingSize)};
 }
 
 template <typename T>
 std::string_view EliasFanoEncoding<T>::encode(
-    EncodingSelection<physicalType>& /*selection*/,
+    EncodingSelection<physicalType>& selection,
     std::span<const physicalType> values,
     Buffer& buffer,
     const Encoding::Options& options) {
@@ -531,8 +571,7 @@ std::string_view EliasFanoEncoding<T>::encode(
       values.size(),
       std::numeric_limits<uint32_t>::max(),
       "EliasFano row count exceeds uint32.");
-  uint64_t base;
-  const auto layout = layoutForValues(values, base);
+  const auto layout = layoutForValues(values, selection.statistics());
   if (!layout.has_value()) {
     NIMBLE_INCOMPATIBLE_ENCODING(
         "EliasFano requires non-empty non-decreasing values.");
@@ -540,9 +579,9 @@ std::string_view EliasFanoEncoding<T>::encode(
 
   return encode(
       static_cast<uint32_t>(values.size()),
-      base,
-      *layout,
-      [&](uint32_t row) { return toOrdered(values[row]) - base; },
+      layout->base,
+      layout->payload,
+      [&](uint32_t row) { return toOrdered(values[row]) - layout->base; },
       buffer,
       options);
 }

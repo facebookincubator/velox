@@ -451,7 +451,7 @@ TEST_F(GreatestLeastTest, stringBuffersMoved) {
 }
 
 TEST_F(GreatestLeastTest, clearNulls) {
-  auto c0 = makeFlatVector<int64_t>(10, folly::identity);
+  auto c0 = makeFlatIdentityVector<int64_t>(10);
   auto result = evaluate<SimpleVector<int64_t>>(
       "SWITCH(c0 > 5, null::BIGINT, greatest(c0))", makeRowVector({c0}));
   ASSERT_EQ(result->size(), 10);

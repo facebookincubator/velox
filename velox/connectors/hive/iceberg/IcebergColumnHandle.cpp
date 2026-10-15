@@ -173,7 +173,8 @@ IcebergColumnHandle::IcebergColumnHandle(
     std::vector<common::Subfield> requiredSubfields,
     std::optional<std::string> initialDefaultValue,
     IcebergFieldMetadata icebergMetadata,
-    std::function<void(VectorPtr&)> postProcessor)
+    std::function<void(VectorPtr&)> postProcessor,
+    std::optional<std::string> writeDefaultValue)
     : HiveColumnHandle(
           name,
           columnType,
@@ -185,7 +186,8 @@ IcebergColumnHandle::IcebergColumnHandle(
           std::move(postProcessor)),
       field_(std::move(icebergField)),
       initialDefaultValue_(std::move(initialDefaultValue)),
-      icebergMetadata_(std::move(icebergMetadata)) {}
+      icebergMetadata_(std::move(icebergMetadata)),
+      writeDefaultValue_(std::move(writeDefaultValue)) {}
 
 const parquet::ParquetFieldId& IcebergColumnHandle::field() const {
   return field_;
@@ -196,6 +198,9 @@ std::string IcebergColumnHandle::toString() const {
   fields += ", field: " + fieldIdToString(field_);
   if (initialDefaultValue_.has_value()) {
     fields += ", initialDefaultValue: " + *initialDefaultValue_;
+  }
+  if (writeDefaultValue_.has_value()) {
+    fields += ", writeDefaultValue: " + *writeDefaultValue_;
   }
   if (!icebergMetadata_.empty()) {
     fields +=
@@ -220,6 +225,10 @@ folly::dynamic IcebergColumnHandle::serialize() const {
 
   if (initialDefaultValue_.has_value()) {
     obj["initialDefaultValue"] = *initialDefaultValue_;
+  }
+
+  if (writeDefaultValue_.has_value()) {
+    obj["writeDefaultValue"] = *writeDefaultValue_;
   }
 
   // Only serialize icebergMetadata when at least one node carries a set
@@ -250,6 +259,11 @@ ColumnHandlePtr IcebergColumnHandle::create(const folly::dynamic& obj) {
     initialDefaultValue = it->second.asString();
   }
 
+  std::optional<std::string> writeDefaultValue;
+  if (auto it = obj.find("writeDefaultValue"); it != obj.items().end()) {
+    writeDefaultValue = it->second.asString();
+  }
+
   IcebergFieldMetadata icebergMetadata;
   if (auto it = obj.find("icebergMetadata"); it != obj.items().end()) {
     icebergMetadata = deserializeFieldMetadata(it->second);
@@ -262,7 +276,9 @@ ColumnHandlePtr IcebergColumnHandle::create(const folly::dynamic& obj) {
       std::move(field),
       std::move(requiredSubfields),
       std::move(initialDefaultValue),
-      std::move(icebergMetadata));
+      std::move(icebergMetadata),
+      /*postProcessor=*/std::function<void(VectorPtr&)>{},
+      std::move(writeDefaultValue));
 }
 
 // static

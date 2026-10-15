@@ -20,16 +20,20 @@
 namespace facebook::velox::functions {
 namespace {
 
-void registerSimpleFunctions(const std::string& prefix) {
+void registerSimpleFunctions(
+    const std::string& prefix,
+    std::string_view defaultOwner) {
   registerFunction<XxHash64RealFunction, int64_t, float>(
-      {prefix + "xxhash64_internal"});
+      {prefix + "xxhash64_internal"}, {}, true, defaultOwner);
   registerFunction<XxHash64DoubleFunction, int64_t, double>(
-      {prefix + "xxhash64_internal"});
+      {prefix + "xxhash64_internal"}, {}, true, defaultOwner);
 }
 } // namespace
 
-void registerFloatingPointFunctions(const std::string& prefix) {
-  registerSimpleFunctions(prefix);
+void registerFloatingPointFunctions(
+    const std::string& prefix,
+    std::string_view defaultOwner) {
+  registerSimpleFunctions(prefix, defaultOwner);
 }
 
 } // namespace facebook::velox::functions

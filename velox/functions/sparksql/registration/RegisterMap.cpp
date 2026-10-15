@@ -16,12 +16,12 @@
 #include "velox/functions/lib/MapConcat.h"
 #include "velox/functions/lib/MapFromEntries.h"
 #include "velox/functions/lib/RegistrationHelpers.h"
-#include "velox/functions/sparksql/Size.h"
 
 namespace facebook::velox::functions {
 extern void registerElementAtFunction(
     const std::string& name,
-    bool enableCaching);
+    bool enableCaching,
+    std::string_view defaultOwner = {});
 
 void registerSparkMapFunctions(const std::string& prefix) {
   registerMapFromEntriesFunction(
@@ -47,7 +47,6 @@ void registerMapFunctions(const std::string& prefix) {
       udf_map_from_arrays, prefix + "map_from_arrays");
   // This is the semantics of spark.sql.ansi.enabled = false.
   registerElementAtFunction(prefix + "element_at", true);
-  registerSize(prefix + "size");
 }
 } // namespace sparksql
 } // namespace facebook::velox::functions

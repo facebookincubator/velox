@@ -61,7 +61,7 @@ class CudfTopNRowNumber : public CudfOperatorBase {
   /// then gathers the full payload for the surviving rows.
   CudfVectorPtr reduceBatchToLocalCandidates(
       const CudfVectorPtr& cudfInput,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr);
 
   /// Merges two candidate sets (each already sorted by partition+ordering
@@ -71,7 +71,7 @@ class CudfTopNRowNumber : public CudfOperatorBase {
   CudfVectorPtr mergeAndPruneCandidates(
       const CudfVectorPtr& previous,
       const CudfVectorPtr& incoming,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr);
 
   const std::shared_ptr<const core::TopNRowNumberNode> node_;

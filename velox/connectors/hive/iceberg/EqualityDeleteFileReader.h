@@ -87,8 +87,8 @@ class EqualityDeleteFileReader {
   ///
   /// @param output The base data output vector to filter.
   /// @param deleteBitmap Output bitmap. Bit i is set if row i matches an
-  ///   equality delete. The bitmap must be pre-allocated to cover at least
-  ///   output->size() rows.
+  ///   equality delete. Rows whose bit is already set are skipped. The bitmap
+  ///   must be pre-allocated to cover at least output->size() rows.
   void applyDeletes(const RowVectorPtr& output, BufferPtr deleteBitmap);
 
   /// Returns the number of delete key tuples loaded from the file.
@@ -107,6 +107,12 @@ class EqualityDeleteFileReader {
   // outputColumnIndices_ for reuse across rows.
   const std::vector<column_index_t>& resolveOutputColumnIndices(
       const RowVectorPtr& row) const;
+
+  // Re-encodes any geometry equality-delete column of 'deleteRows' from the
+  // file's ISO WKB into Velox's internal geometry encoding, so the delete keys
+  // hash in the same logical encoding as the already-converted base rows they
+  // are probed with. No-op when no equality column contains geometry.
+  void convertGeometryColumns(const RowVectorPtr& deleteRows) const;
 
   // Hashes a single row's equality delete columns into a uint64_t key.
   uint64_t hashRow(

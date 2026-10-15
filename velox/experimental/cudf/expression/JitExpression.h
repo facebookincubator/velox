@@ -33,12 +33,13 @@ class JitExpression : public CudfExpression {
   JitExpression(
       const core::TypedExprPtr& expr,
       const RowTypePtr& inputRowSchema,
-      memory::MemoryPool* pool);
+      memory::MemoryPool* pool,
+      const core::QueryConfig& config);
 
   // Evaluates the expression tree for the given input columns
   ColumnOrView eval(
       std::vector<cudf::column_view> inputColumnViews,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref mr,
       bool finalize = false) override;
 

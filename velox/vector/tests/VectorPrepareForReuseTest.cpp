@@ -326,7 +326,7 @@ TEST_F(VectorPrepareForReuseTest, dataDependentFlags) {
 
 TEST_F(VectorPrepareForReuseTest, recursivelyReusableFlatVector) {
   // Single reference flat vector should be reusable.
-  VectorPtr vector = makeFlatVector<int32_t>(100, [](auto row) { return row; });
+  VectorPtr vector = makeFlatIdentityVector<int32_t>(100);
   ASSERT_TRUE(BaseVector::recursivelyReusable(vector));
 
   // Multiple references make it non-reusable.
@@ -366,7 +366,7 @@ TEST_F(VectorPrepareForReuseTest, recursivelyReusableArrayVector) {
 
 TEST_F(VectorPrepareForReuseTest, recursivelyReusableRowVector) {
   // Create children vectors first
-  auto child0 = makeFlatVector<int32_t>(100, [](auto row) { return row; });
+  auto child0 = makeFlatIdentityVector<int32_t>(100);
   auto child1 = makeFlatVector<int64_t>(100, [](auto row) { return row * 2; });
 
   // Create row vector - children are moved in, so row vector owns them
@@ -456,7 +456,7 @@ TEST_F(VectorPrepareForReuseTest, recursivelyReusableNestedArrayOfRow) {
 
 TEST_F(VectorPrepareForReuseTest, recursivelyReusableDictionaryVector) {
   // Dictionary vectors are not considered reusable encoding.
-  auto flat = makeFlatVector<int32_t>(100, [](auto row) { return row; });
+  auto flat = makeFlatIdentityVector<int32_t>(100);
   auto indices = makeIndices(100, [](auto row) { return row; });
   auto dictionary = BaseVector::wrapInDictionary(nullptr, indices, 100, flat);
 

@@ -124,7 +124,7 @@ DeltaEncoding<T>::DeltaEncoding(
   pos += isRestatementsOffset;
   isRestatements_ = factory.create(
       memoryPool,
-      {pos, static_cast<size_t>(data.end() - pos)},
+      {pos, static_cast<size_t>(data.data() + data.size() - pos)},
       stringBufferFactory,
       Encoding::Options{});
 }

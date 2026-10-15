@@ -33,7 +33,9 @@ class SparseBoolEncodingView final : public TypedEncodingView<bool> {
     const char* pos = data.data() + this->dataOffset_;
     sparseValue_ = static_cast<bool>(encoding::readChar(pos));
     indices_ = detail::createTypedEncodingView<uint32_t>(
-        {pos, static_cast<size_t>(data.end() - pos)}, pool, options);
+        {pos, static_cast<size_t>(data.data() + data.size() - pos)},
+        pool,
+        options);
     NIMBLE_CHECK_NOT_NULL(indices_);
     NIMBLE_CHECK_GT(indices_->rowCount(), 0);
     NIMBLE_CHECK_EQ(

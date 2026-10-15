@@ -35,6 +35,7 @@
 #include "velox/dwio/nimble/velox/selective/SelectiveNimbleReader.h"
 #include "velox/dwio/nimble/writer/EncodingLayoutTree.h"
 #include "velox/dwio/nimble/writer/Writer.h"
+#include "velox/vector/EncodedVectorCopy.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
 
 namespace facebook::nimble {
@@ -4445,6 +4446,141 @@ TEST_P(E2EFilterTest, dictionaryChunkExhaustedAllNullTail) {
 
   EXPECT_EQ(totalRows, kTotalRows);
   EXPECT_EQ(totalNonNull, kNonNullCount);
+}
+
+// Exercises an indexed skip that consumes the final dictionary chunk before
+// an all-null nested-string range is materialized.
+TEST_P(E2EFilterTest, dictionaryStringAllNullRangeAfterStreamEnd) {
+  if (!param().stringDecoderZeroCopy ||
+      !param().nimblePreserveDictionaryEncoding) {
+    GTEST_SKIP()
+        << "Dictionary path requires stringDecoderZeroCopy and nimblePreserveDict";
+  }
+
+  constexpr size_t kBatchSize = 50'000;
+  constexpr size_t kSecondBatchSize = 620;
+  constexpr size_t kTotalRows = kBatchSize + kSecondBatchSize;
+  const auto nestedType = ROW({"other", "val"}, VARCHAR());
+  const auto outerType = ROW("nested", nestedType);
+  const auto type = ROW({{"filter_col", BIGINT()}, {"info", outerType}});
+  rowType_ = asRowType(type);
+
+  velox::test::VectorMaker maker(leafPool_.get());
+  const auto filterVector = maker.flatVector<int64_t>(
+      kTotalRows, [](auto row) { return static_cast<int64_t>(row); });
+  const auto valVector = maker.flatVector<velox::StringView>(
+      kTotalRows,
+      [](auto /*row*/) { return velox::StringView("dictionary-value"); });
+  auto nestedNulls =
+      velox::AlignedBuffer::allocate<bool>(kTotalRows, leafPool_.get());
+  velox::bits::fillBits(
+      nestedNulls->asMutable<uint64_t>(), 0, kBatchSize, velox::bits::kNotNull);
+  velox::bits::fillBits(
+      nestedNulls->asMutable<uint64_t>(),
+      kBatchSize,
+      kTotalRows,
+      velox::bits::kNull);
+  const auto nestedStruct = std::make_shared<RowVector>(
+      leafPool_.get(),
+      nestedType,
+      nestedNulls,
+      kTotalRows,
+      std::vector<VectorPtr>{valVector, valVector});
+  auto outerNulls =
+      velox::AlignedBuffer::allocate<bool>(kTotalRows, leafPool_.get());
+  velox::bits::fillBits(
+      outerNulls->asMutable<uint64_t>(), 0, kBatchSize, velox::bits::kNotNull);
+  velox::bits::fillBits(
+      outerNulls->asMutable<uint64_t>(),
+      kBatchSize,
+      kTotalRows - 1,
+      velox::bits::kNull);
+  velox::bits::setBit(outerNulls->asMutable<uint64_t>(), kTotalRows - 1, true);
+  const auto infoVector = std::make_shared<RowVector>(
+      leafPool_.get(),
+      outerType,
+      outerNulls,
+      kTotalRows,
+      std::vector<VectorPtr>{nestedStruct});
+  const auto batch = std::make_shared<RowVector>(
+      leafPool_.get(),
+      type,
+      nullptr,
+      kTotalRows,
+      std::vector<VectorPtr>{filterVector, infoVector});
+
+  {
+    auto writeFile = std::make_unique<InMemoryWriteFile>(&sinkData_);
+    WriterOptions writerOptions;
+    writerOptions.enableChunkIndex = true;
+    writerOptions.chunkStatsMinAvgChunks = 0;
+    writerOptions.enableChunking = true;
+    writerOptions.minStreamChunkRawSize = 0;
+    writerOptions.flushPolicyFactory = [] {
+      return std::make_unique<LambdaFlushPolicy>(
+          /*flushLambda=*/[](const StripeProgress&) { return false; },
+          /*chunkLambda=*/[](const StripeProgress&) { return true; });
+    };
+    auto layoutTree = EncodingLayoutTree{
+        Kind::Row,
+        {},
+        "",
+        {EncodingLayoutTree{Kind::Scalar, {}, "filter_col"},
+         EncodingLayoutTree{
+             Kind::Row,
+             {},
+             "info",
+             {EncodingLayoutTree{
+                 Kind::Row,
+                 {},
+                 "nested",
+                 {EncodingLayoutTree{Kind::Scalar, {}, "other"},
+                  EncodingLayoutTree{
+                      Kind::Scalar,
+                      {{EncodingLayoutTree::StreamIdentifiers::Scalar::
+                            ScalarStream,
+                        EncodingLayout{
+                            EncodingType::Dictionary,
+                            {},
+                            CompressionType::Uncompressed,
+                            {std::nullopt, std::nullopt}}}},
+                      "val"}}}}}}};
+    writerOptions.encodingLayoutTree.emplace(std::move(layoutTree));
+    Writer writer(
+        type, std::move(writeFile), *rootPool_, std::move(writerOptions));
+    writer.write(batch->slice(0, kBatchSize / 2));
+    writer.write(batch->slice(kBatchSize / 2, kBatchSize / 2));
+    writer.write(batch->slice(kBatchSize, kSecondBatchSize));
+    writer.close();
+  }
+
+  auto input = std::make_unique<velox::dwio::common::BufferedInput>(
+      std::make_shared<velox::InMemoryReadFile>(sinkData_),
+      *leafPool_,
+      velox::dwio::common::MetricsLog::voidLog());
+  velox::dwio::common::ReaderOptions readerOptions{leafPool_.get()};
+  readerOptions.setMetadataIoStats(metadataIoStats_);
+  auto reader = makeReader(readerOptions, std::move(input));
+
+  auto scanSpec = std::make_shared<velox::common::ScanSpec>("root");
+  scanSpec->addAllChildFields(*type);
+  scanSpec->childByName("filter_col")
+      ->setFilter(
+          std::make_unique<velox::common::BigintRange>(
+              kTotalRows - 1, kTotalRows - 1, /*nullAllowed=*/false));
+  velox::dwio::common::RowReaderOptions rowReaderOptions;
+  rowReaderOptions.setScanSpec(scanSpec);
+  rowReaderOptions.setStringDecoderZeroCopy(true);
+  rowReaderOptions.setNimblePreserveDictionaryEncoding(true);
+  auto rowReader = reader->createRowReader(rowReaderOptions);
+
+  VectorPtr result = velox::BaseVector::create(type, 0, leafPool_.get());
+  ASSERT_EQ(rowReader->next(kBatchSize, result), kBatchSize);
+  ASSERT_EQ(result->size(), 0);
+  ASSERT_EQ(rowReader->next(kBatchSize, result), kTotalRows - kBatchSize);
+  EXPECT_EQ(result->size(), 1);
+  const auto copy = encodedVectorCopy(result);
+  EXPECT_TRUE(copy->equalValueAt(batch.get(), 0, kTotalRows - 1));
 }
 
 namespace {

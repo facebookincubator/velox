@@ -25,59 +25,64 @@ namespace facebook::velox::functions {
 
 namespace {
 
-void registerSimpleBingTileFunctions(const std::string& prefix) {
+void registerSimpleBingTileFunctions(
+    const std::string& prefix,
+    std::string_view defaultOwner) {
   // BingTile constructors
   registerFunction<BingTileFunction, BingTile, int32_t, int32_t, int32_t>(
-      {prefix + "bing_tile"});
-  registerFunction<BingTileFunction, BingTile, Varchar>({prefix + "bing_tile"});
+      {prefix + "bing_tile"}, {}, true, defaultOwner);
+  registerFunction<BingTileFunction, BingTile, Varchar>(
+      {prefix + "bing_tile"}, {}, true, defaultOwner);
 
   // BingTile accessors
   registerFunction<BingTileZoomLevelFunction, int8_t, BingTile>(
-      {prefix + "bing_tile_zoom_level"});
+      {prefix + "bing_tile_zoom_level"}, {}, true, defaultOwner);
   registerFunction<
       BingTileCoordinatesFunction,
-      Row<int32_t, int32_t>,
-      BingTile>({prefix + "bing_tile_coordinates"});
+      Row<Field<"x", int32_t>, Field<"y", int32_t>>,
+      BingTile>({prefix + "bing_tile_coordinates"}, {}, true, defaultOwner);
 
   // Parent/child tiles
   registerFunction<BingTileParentFunction, BingTile, BingTile>(
-      {prefix + "bing_tile_parent"});
+      {prefix + "bing_tile_parent"}, {}, true, defaultOwner);
   registerFunction<BingTileParentFunction, BingTile, BingTile, int8_t>(
-      {prefix + "bing_tile_parent"});
+      {prefix + "bing_tile_parent"}, {}, true, defaultOwner);
   registerFunction<BingTileParentFunction, BingTile, BingTile, int32_t>(
-      {prefix + "bing_tile_parent"});
+      {prefix + "bing_tile_parent"}, {}, true, defaultOwner);
   registerFunction<BingTileChildrenFunction, Array<BingTile>, BingTile>(
-      {prefix + "bing_tile_children"});
+      {prefix + "bing_tile_children"}, {}, true, defaultOwner);
   registerFunction<
       BingTileChildrenFunction,
       Array<BingTile>,
       BingTile,
-      int32_t>({prefix + "bing_tile_children"});
+      int32_t>({prefix + "bing_tile_children"}, {}, true, defaultOwner);
   registerFunction<BingTileToQuadKeyFunction, Varchar, BingTile>(
-      {prefix + "bing_tile_quadkey"});
+      {prefix + "bing_tile_quadkey"}, {}, true, defaultOwner);
   registerFunction<BingTileAtFunction, BingTile, double, double, int32_t>(
-      {prefix + "bing_tile_at"});
+      {prefix + "bing_tile_at"}, {}, true, defaultOwner);
   registerFunction<
       BingTilesAroundFunction,
       Array<BingTile>,
       double,
       double,
-      int32_t>({prefix + "bing_tiles_around"});
+      int32_t>({prefix + "bing_tiles_around"}, {}, true, defaultOwner);
   registerFunction<
       BingTilesAroundFunction,
       Array<BingTile>,
       double,
       double,
       int32_t,
-      double>({prefix + "bing_tiles_around"});
+      double>({prefix + "bing_tiles_around"}, {}, true, defaultOwner);
 }
 
 } // namespace
 
-void registerBingTileFunctions(const std::string& prefix) {
+void registerBingTileFunctions(
+    const std::string& prefix,
+    std::string_view defaultOwner) {
   registerBingTileType();
 
-  registerSimpleBingTileFunctions(prefix);
+  registerSimpleBingTileFunctions(prefix, defaultOwner);
 }
 
 } // namespace facebook::velox::functions

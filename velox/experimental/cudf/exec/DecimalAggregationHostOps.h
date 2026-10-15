@@ -20,7 +20,7 @@
 #include <cudf/column/column.hpp>
 #include <cudf/column/column_view.hpp>
 
-#include <rmm/cuda_stream_view.hpp>
+#include <cuda/stream>
 
 #include <memory>
 
@@ -52,7 +52,7 @@ void validateIntermediateColumnType(cudf::column_view const& column);
 cudf::column_view castDecimal64InputToDecimal128(
     cudf::column_view inputCol,
     std::unique_ptr<cudf::column>& holder,
-    rmm::cuda_stream_view stream);
+    cuda::stream_ref stream);
 
 /**
  * Ensures the partial-row count column is INT64, casting with the temporary
@@ -65,7 +65,7 @@ cudf::column_view castDecimal64InputToDecimal128(
  */
 std::unique_ptr<cudf::column> castCountColumnToInt64(
     std::unique_ptr<cudf::column> count,
-    rmm::cuda_stream_view stream);
+    cuda::stream_ref stream);
 
 /**
  * Normalizes the count column to INT64, then encodes sum and count into a
@@ -82,7 +82,7 @@ std::unique_ptr<cudf::column> castCountColumnToInt64(
 std::unique_ptr<cudf::column> serializeDecimalPartialOrIntermediateState(
     std::unique_ptr<cudf::column> sum,
     std::unique_ptr<cudf::column> count,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr);
 
 /**
@@ -102,7 +102,7 @@ std::unique_ptr<cudf::column> finalizeDecimalAverage(
     std::unique_ptr<cudf::column> sum,
     std::unique_ptr<cudf::column> count,
     const TypePtr& resultType,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref mr);
 
 } // namespace facebook::velox::cudf_velox

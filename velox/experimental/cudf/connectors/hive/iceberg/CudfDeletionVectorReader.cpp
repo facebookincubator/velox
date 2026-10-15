@@ -104,7 +104,7 @@ CudfDeletionVectorReader::CudfDeletionVectorReader(
       dvFile_.recordCount);
 }
 
-void CudfDeletionVectorReader::loadBitmap(rmm::cuda_stream_view stream) {
+void CudfDeletionVectorReader::loadBitmap(cuda::stream_ref stream) {
   if (loaded_) {
     return;
   }
@@ -290,7 +290,7 @@ CudfDeletionVectorReader::loadBlobSource() {
 void CudfDeletionVectorReader::buildBitmap(
     cudf::roaring_bitmap_type bitmapType,
     std::string_view roaringBitmapPayload,
-    rmm::cuda_stream_view stream) {
+    cuda::stream_ref stream) {
   auto const* bitmapBytes =
       reinterpret_cast<cuda::std::byte const*>(roaringBitmapPayload.data());
   auto const bitmapSize = roaringBitmapPayload.size();
@@ -307,7 +307,7 @@ void CudfDeletionVectorReader::buildBitmap(
 void CudfDeletionVectorReader::applyDeletes(
     cudf::mutable_column_view const& deleteMask,
     cudf::column_view const& rowIndex,
-    rmm::cuda_stream_view stream,
+    cuda::stream_ref stream,
     rmm::device_async_resource_ref temp_mr) {
   if (rowIndex.size() == 0) {
     return;

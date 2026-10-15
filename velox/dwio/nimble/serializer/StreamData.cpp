@@ -28,27 +28,21 @@
 namespace facebook::nimble::serde {
 
 StreamData::StreamData(
-    ScalarKind kind,
     std::vector<velox::BufferPtr>& stringBuffers,
-    velox::memory::MemoryPool* pool,
-    velox::BufferPtr* decompressionBuffer)
-    : kind_{kind},
-      pool_{pool},
-      decompressionBuffer_{decompressionBuffer},
-      stringBuffers_{&stringBuffers} {
+    velox::memory::MemoryPool* pool)
+    : pool_{pool}, stringBuffers_{&stringBuffers} {
   NIMBLE_CHECK_NOT_NULL(pool_, "Memory pool required for encoding");
-  NIMBLE_CHECK_NOT_NULL(decompressionBuffer_, "Decompression buffer required");
 }
 
 StreamData::StreamData(
-    ScalarKind kind,
     std::string_view data,
+    ScalarKind kind,
     std::vector<velox::BufferPtr>& stringBuffers,
     velox::memory::MemoryPool* pool,
     const Options& options)
     : kind_{kind},
       pool_{pool},
-      encodingEnabled_{nonLegacyFormat(options.version)},
+      legacyHeaderless_{options.legacyHeaderless},
       useVarintRowCount_{options.streamEncodingUsesVarintRowCount},
       bufferPool_{options.bufferPool},
       decompressionBuffer_{options.decompressionBuffer},
@@ -60,11 +54,9 @@ StreamData::StreamData(
 
 void StreamData::reset(
     std::string_view data,
-    SerializationVersion version,
     bool streamEncodingUsesVarintRowCount) {
   readRows_ = 0;
   encoding_.reset();
-  encodingEnabled_ = nonLegacyFormat(version);
   useVarintRowCount_ = streamEncodingUsesVarintRowCount;
   init(data);
 }
@@ -74,15 +66,13 @@ void StreamData::skip(uint32_t count) {
     return;
   }
   NIMBLE_CHECK_NOT_NULL(
-      encoding_, "StreamData::skip requires an encoded (non-legacy) stream");
+      encoding_, "StreamData::skip requires an encoded stream");
   NIMBLE_CHECK_LE(
       count, remainingRows(), "StreamData::skip past end of segment");
   encoding_->skip(count);
   readRows_ += count;
 }
 
-// Copy legacy stream data to output buffer.
-// Data is already decompressed by init() -> decompress().
 uint32_t StreamData::copyTo(char* output, uint32_t bufferSize) {
   const uint32_t length =
       std::min(static_cast<uint32_t>(end_ - pos_), bufferSize);
@@ -94,12 +84,22 @@ uint32_t StreamData::copyTo(char* output, uint32_t bufferSize) {
 StreamData::DecodeResult StreamData::decodeStrings(
     uint32_t count,
     std::string_view* output) {
-  if (encodingEnabled_) {
+  if (!legacyHeaderless_) {
     return decode(output, /*offset=*/0, count, /*width=*/0);
   }
   uint32_t index = 0;
   while (pos_ < end_ && index < count) {
-    output[index++] = encoding::readString(pos_);
+    NIMBLE_CHECK_GE(
+        static_cast<size_t>(end_ - pos_),
+        sizeof(uint32_t),
+        "Truncated legacy headerless string length");
+    const auto length = encoding::readUint32(pos_);
+    NIMBLE_CHECK_LE(
+        length,
+        static_cast<size_t>(end_ - pos_),
+        "Legacy headerless string exceeds stream data");
+    output[index++] = std::string_view(pos_, length);
+    pos_ += length;
   }
   return {
       .numOutputRows = index,
@@ -113,12 +113,12 @@ void StreamData::init(std::string_view data) {
     end_ = nullptr;
     return;
   }
-  pos_ = data.begin();
-  end_ = data.end();
-  if (encodingEnabled_) {
-    prepareForDecoding({pos_, end_});
-  } else {
+  pos_ = data.data();
+  end_ = data.data() + data.size();
+  if (legacyHeaderless_) {
     decompress();
+  } else {
+    prepareForDecoding(data);
   }
 }
 
@@ -130,7 +130,7 @@ void StreamData::ensureDecompressionBuffer(size_t minBytes) {
 }
 
 void StreamData::decompress() {
-  NIMBLE_CHECK(!encodingEnabled_);
+  NIMBLE_CHECK(legacyHeaderless_);
 
   // Skip for string/binary - they don't have a compression prefix.
   if (kind_ == ScalarKind::String || kind_ == ScalarKind::Binary) {
@@ -138,6 +138,11 @@ void StreamData::decompress() {
   }
 
   auto compression = static_cast<CompressionType>(encoding::readChar(pos_));
+  // Sanity ceiling on the declared decompressed size for a legacy headerless
+  // stream. Production payloads are well under this; anything larger is
+  // treated as corruption rather than a legitimate multi-GB allocation.
+  constexpr size_t kMaxLegacyDecompressedBytes = 1ULL << 30; // 1 GiB.
+  // NOLINTNEXTLINE(clang-diagnostic-switch-enum)
   switch (compression) {
     case CompressionType::Uncompressed: {
       break;
@@ -150,6 +155,10 @@ void StreamData::decompress() {
           decompressedSize != ZSTD_CONTENTSIZE_ERROR &&
               decompressedSize != ZSTD_CONTENTSIZE_UNKNOWN,
           "Error determining decompressed size");
+      NIMBLE_CHECK_LE(
+          decompressedSize,
+          kMaxLegacyDecompressedBytes,
+          "Zstd decompressed size exceeds legacy headerless bound");
       ensureDecompressionBuffer(decompressedSize);
       auto& buffer = decompressionBuf();
       const auto ret = ZSTD_decompressDCtx(
@@ -166,7 +175,15 @@ void StreamData::decompress() {
     case CompressionType::Lz4: {
       // LZ4 block data is preceded by the uncompressed size (uint32).
       // Wire format: [origSize:u32][lz4_data...]
+      NIMBLE_CHECK_GE(
+          static_cast<size_t>(end_ - pos_),
+          sizeof(uint32_t),
+          "Truncated LZ4 uncompressed size");
       const auto decompressedSize = encoding::readUint32(pos_);
+      NIMBLE_CHECK_LE(
+          static_cast<size_t>(decompressedSize),
+          kMaxLegacyDecompressedBytes,
+          "LZ4 decompressed size exceeds legacy headerless bound");
       const auto compressedSize = static_cast<size_t>(end_ - pos_);
       ensureDecompressionBuffer(decompressedSize);
       auto& buffer = decompressionBuf();
@@ -189,7 +206,7 @@ void StreamData::decompress() {
 }
 
 void StreamData::prepareForDecoding(std::string_view data) {
-  NIMBLE_CHECK(encodingEnabled_);
+  NIMBLE_CHECK(!legacyHeaderless_);
   NIMBLE_CHECK_NULL(encoding_, "Encoding already set");
   NIMBLE_CHECK_NOT_NULL(
       stringBuffers_, "String buffer storage required for encoded stream data");
@@ -221,16 +238,12 @@ StreamData::DecodeResult StreamData::decode(
   // Decoding zero rows is a no-op. Empty streams are omitted from the
   // serialized payload (see StreamDataWriter::writeData) and so are never
   // reset() with an encoding; a zero-count decode of such a stream must not
-  // require one. Mirrors the count == 0 guards in decodeLegacy() and
-  // materialize().
+  // require one. Mirrors the count == 0 guard in materialize().
   if (count == 0) {
     return {};
   }
 
-  // Nimble encoding path: use materialize() to decode.
-  NIMBLE_CHECK_NOT_NULL(
-      encoding_,
-      "Legacy StreamData must be decoded through copyTo() or decodeStrings()");
+  NIMBLE_CHECK_NOT_NULL(encoding_, "StreamData has no encoding to decode");
   // Only decode as many values as remain in the encoding.
   const uint32_t remainingRows = this->remainingRows();
   const uint32_t readCount = std::min(count, remainingRows);
@@ -350,19 +363,22 @@ void StreamData::decodeNonNull(
   }
 }
 
-StreamData::DecodeResult StreamData::decodeLegacy(
+StreamData::DecodeResult StreamData::decodeLegacyHeaderless(
     void* output,
     uint32_t offset,
     uint32_t count,
     uint32_t width) {
-  NIMBLE_CHECK(!encodingEnabled_, "decodeLegacy called for encoded stream");
-  NIMBLE_CHECK_NE(width, 0, "String type not supported for legacy path");
+  NIMBLE_CHECK(
+      legacyHeaderless_, "decodeLegacyHeaderless called for an encoded stream");
+  NIMBLE_CHECK_NE(
+      width, 0, "String type not supported for the legacy headerless path");
   if (count == 0) {
     return {.segmentExhausted = pos_ == end_};
   }
   auto* dest = static_cast<char*>(output) + offset * width;
   const auto copied = copyTo(dest, count * width);
-  NIMBLE_CHECK_EQ(copied % width, 0, "Legacy stream ended mid-value");
+  NIMBLE_CHECK_EQ(
+      copied % width, 0, "Legacy headerless stream ended mid-value");
   const auto rows = copied / width;
   return {
       .numOutputRows = rows,

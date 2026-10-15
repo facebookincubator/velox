@@ -492,6 +492,10 @@ void NimbleDslLib::describe() {
         offsets =
             std::to_string(childType->asFlatMap().nullsDescriptor().offset());
         break;
+      case Kind::HybridFlatMap:
+        offsets = std::to_string(
+            childType->asHybridFlatMap().nullsDescriptor().offset());
+        break;
       case Kind::TimestampMicroNano: {
         const auto& ts = childType->asTimestampMicroNano();
         offsets = "m:" + std::to_string(ts.microsDescriptor().offset()) +

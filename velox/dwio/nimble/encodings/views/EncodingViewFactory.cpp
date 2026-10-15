@@ -18,7 +18,9 @@
 #include <algorithm>
 #include <array>
 
+#include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
 #include "velox/dwio/nimble/encodings/views/ALPEncodingView.h"
+#include "velox/dwio/nimble/encodings/views/ALPRDEncodingView.h"
 #include "velox/dwio/nimble/encodings/views/BitRangeSplitEncodingView.h"
 #include "velox/dwio/nimble/encodings/views/BlockBitPackingEncodingView.h"
 #include "velox/dwio/nimble/encodings/views/ConstantEncodingView.h"
@@ -27,12 +29,16 @@
 #include "velox/dwio/nimble/encodings/views/EliasFanoEncodingView.h"
 #include "velox/dwio/nimble/encodings/views/FOREncodingView.h"
 #include "velox/dwio/nimble/encodings/views/FixedBitWidthEncodingView.h"
+#include "velox/dwio/nimble/encodings/views/FsstEncodingView.h"
 #include "velox/dwio/nimble/encodings/views/HuffmanEncodingView.h"
 #include "velox/dwio/nimble/encodings/views/MainlyConstantEncodingView.h"
+#include "velox/dwio/nimble/encodings/views/NullableEncodingView.h"
 #include "velox/dwio/nimble/encodings/views/PFOREncodingView.h"
 #include "velox/dwio/nimble/encodings/views/RLEEncodingView.h"
+#include "velox/dwio/nimble/encodings/views/SentinelEncodingView.h"
 #include "velox/dwio/nimble/encodings/views/SimdForBitpackEncodingView.h"
 #include "velox/dwio/nimble/encodings/views/SparseBoolEncodingView.h"
+#include "velox/dwio/nimble/encodings/views/SubIntSplitEncodingView.h"
 #include "velox/dwio/nimble/encodings/views/TrivialEncodingView.h"
 
 namespace facebook::nimble {
@@ -46,6 +52,10 @@ std::unique_ptr<TypedEncodingView<T>> createTypedEncodingView(
   using physicalType = typename TypeTraits<T>::physicalType;
   const auto encodingType = EncodingPrefix::encodingType(data);
   switch (encodingType) {
+    case EncodingType::Nullable:
+      return std::make_unique<NullableEncodingView<T>>(data, pool, options);
+    case EncodingType::Sentinel:
+      return std::make_unique<SentinelEncodingView<T>>(data, pool, options);
     case EncodingType::Constant:
       return std::make_unique<ConstantEncodingView<T>>(data, pool, options);
     case EncodingType::Trivial:
@@ -64,6 +74,13 @@ std::unique_ptr<TypedEncodingView<T>> createTypedEncodingView(
       }
       NIMBLE_INCOMPATIBLE_ENCODING(
           "ALP encoding only supports float and double data types, got {}.",
+          TypeTraits<T>::dataType);
+    case EncodingType::ALPRD:
+      if constexpr (isFloatingPointType<T>()) {
+        return std::make_unique<ALPRDEncodingView<T>>(data, pool, options);
+      }
+      NIMBLE_INCOMPATIBLE_ENCODING(
+          "ALPRD encoding only supports float and double data types, got {}.",
           TypeTraits<T>::dataType);
     case EncodingType::FixedBitWidth:
       if constexpr (isNumericType<physicalType>()) {
@@ -147,6 +164,24 @@ std::unique_ptr<TypedEncodingView<T>> createTypedEncodingView(
       }
       NIMBLE_INCOMPATIBLE_ENCODING(
           "BlockBitPacking encoding should not be selected for non-numeric data types.");
+    case EncodingType::SubIntSplit:
+      if constexpr (
+          isNumericType<physicalType>() &&
+          (sizeof(physicalType) == 4 || sizeof(physicalType) == 8)) {
+        return std::make_unique<SubIntSplitEncodingView<T>>(
+            data, pool, options);
+      }
+      NIMBLE_INCOMPATIBLE_ENCODING(
+          "SubIntSplit encoding only supports 32- and 64-bit numeric data "
+          "types, got {}.",
+          TypeTraits<T>::dataType);
+    case EncodingType::Fsst:
+      if constexpr (std::is_same_v<T, std::string_view>) {
+        return std::make_unique<FsstEncodingView>(data, pool, options);
+      }
+      NIMBLE_INCOMPATIBLE_ENCODING(
+          "FSST encoding only supports string data, got {}.",
+          TypeTraits<T>::dataType);
     default:
       NIMBLE_UNSUPPORTED("{} does not support EncodingView.", encodingType);
   }
@@ -178,10 +213,13 @@ INSTANTIATE_CREATE_TYPED_ENCODING_VIEW(std::string_view);
 bool supportsEncodingView(EncodingType encodingType) {
   // Keep in sync with the encoding dispatch in createTypedEncodingView().
   static constexpr std::array kViewableEncodings{
+      EncodingType::Nullable,
+      EncodingType::Sentinel,
       EncodingType::Constant,
       EncodingType::Trivial,
       EncodingType::MainlyConstant,
       EncodingType::ALP,
+      EncodingType::ALPRD,
       EncodingType::FixedBitWidth,
       EncodingType::Dictionary,
       EncodingType::SparseBool,
@@ -193,7 +231,9 @@ bool supportsEncodingView(EncodingType encodingType) {
       EncodingType::PFOR,
       EncodingType::SimdForBitpack,
       EncodingType::BitRangeSplit,
-      EncodingType::BlockBitPacking};
+      EncodingType::BlockBitPacking,
+      EncodingType::SubIntSplit,
+      EncodingType::Fsst};
   return std::find(
              kViewableEncodings.begin(),
              kViewableEncodings.end(),

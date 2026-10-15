@@ -22,9 +22,14 @@
 #include <fmt/format.h>
 #include <gtest/gtest.h>
 
+#include "velox/common/base/Exceptions.h"
+#include "velox/common/caching/SsdCache.h"
+#include "velox/common/file/PlainUserNameTokenProvider.h"
 #include "velox/common/memory/Memory.h"
+#include "velox/connectors/ConnectorExceptionProperties.h"
 #include "velox/connectors/ConnectorRegistry.h"
 #include "velox/core/QueryCtx.h"
+#include "velox/expression/Expr.h"
 
 namespace facebook::velox::connector {
 namespace {
@@ -32,6 +37,9 @@ namespace {
 class TestConnector : public connector::Connector {
  public:
   TestConnector(const std::string& id) : connector::Connector(id) {}
+
+  TestConnector(const std::string& id, std::string owner)
+      : connector::Connector(id, nullptr, std::move(owner)) {}
 
   std::unique_ptr<connector::DataSource> createDataSource(
       const RowTypePtr& /* outputType */,
@@ -49,6 +57,36 @@ class TestConnector : public connector::Connector {
     VELOX_NYI();
   }
 };
+
+TEST(ConnectorTest, exceptionProperties) {
+  auto makeProperties = [](VeloxException::Type /*exceptionType*/,
+                           void* untypedConnector)
+      -> std::shared_ptr<const ExceptionContextProperties> {
+    const auto* connector = static_cast<const Connector*>(untypedConnector);
+    auto properties = std::make_shared<ConnectorExceptionProperties>();
+    properties->owner = connector->owner();
+    properties->connectorId = connector->connectorId();
+    properties->tableName = "orders";
+    return properties;
+  };
+
+  auto connector = std::make_shared<TestConnector>("test", "test-owner");
+  ExceptionContextSetter context(
+      {.arg = connector.get(), .propertiesFunc = makeProperties});
+  try {
+    throw std::invalid_argument("boom");
+  } catch (const std::exception& exception) {
+    VeloxUserError veloxException(
+        std::current_exception(), exception.what(), false);
+    const auto properties =
+        std::dynamic_pointer_cast<const ConnectorExceptionProperties>(
+            veloxException.properties());
+    ASSERT_NE(properties, nullptr);
+    EXPECT_EQ(properties->owner, "test-owner");
+    EXPECT_EQ(properties->connectorId, "test");
+    EXPECT_EQ(properties->tableName, "orders");
+  }
+}
 
 TEST(ConnectorTest, registryOperations) {
   const int32_t numConnectors = 10;
@@ -73,12 +111,147 @@ TEST(ConnectorTest, registryOperations) {
   EXPECT_EQ(ConnectorRegistry::findAll<TestConnector>().size(), 0);
 }
 
+TEST(ConnectorTest, positionalQueryCtxConstructorRemainsPublic) {
+  config::ConfigBase sessionProperties({});
+  ConnectorQueryCtx context(
+      nullptr,
+      nullptr,
+      &sessionProperties,
+      nullptr,
+      {},
+      nullptr,
+      nullptr,
+      "query",
+      "task",
+      "scan",
+      3,
+      "UTC");
+
+  EXPECT_EQ(context.sessionProperties(), &sessionProperties);
+  EXPECT_EQ(context.scanId(), "task.scan");
+  EXPECT_EQ(context.driverId(), 3);
+  EXPECT_EQ(context.customMemoryPool("gpu"), nullptr);
+}
+
+TEST(ConnectorTest, builderPreservesConfiguredFields) {
+  memory::MemoryManager manager;
+  auto connectorPool = manager.addRootPool("builder-connector");
+  auto operatorPool = connectorPool->addLeafChild("builder-operator");
+  auto queryCtx = core::QueryCtx::Builder().pool(connectorPool).build();
+  config::ConfigBase sessionProperties({});
+  common::SpillConfig spillConfig{};
+  const common::PrefixSortConfig prefixSortConfig{64, 16, 8};
+  auto evaluator = std::make_unique<exec::SimpleExpressionEvaluator>(
+      queryCtx.get(), operatorPool.get());
+  auto* evaluatorPtr = evaluator.get();
+  cache::AsyncDataCache cache{manager.allocator()};
+  folly::CancellationSource cancellationSource;
+  auto tokenProvider =
+      std::make_shared<filesystems::PlainUserNameTokenProvider>("test-user");
+
+  auto connectorQueryCtx = ConnectorQueryCtx::Builder()
+                               .operatorPool(operatorPool.get())
+                               .connectorPool(connectorPool.get())
+                               .sessionProperties(&sessionProperties)
+                               .spillConfig(&spillConfig)
+                               .prefixSortConfig(prefixSortConfig)
+                               .expressionEvaluator(std::move(evaluator))
+                               .asyncDataCache(&cache)
+                               .queryId("query")
+                               .taskId("task")
+                               .planNodeId("plan")
+                               .driverId(7)
+                               .sessionTimezone("America/Los_Angeles")
+                               .adjustTimestampToTimezone(true)
+                               .cancellationToken(cancellationSource.getToken())
+                               .tokenProvider(tokenProvider)
+                               .build();
+
+  EXPECT_EQ(connectorQueryCtx->memoryPool(), operatorPool.get());
+  EXPECT_EQ(connectorQueryCtx->connectorMemoryPool(), connectorPool.get());
+  EXPECT_EQ(connectorQueryCtx->sessionProperties(), &sessionProperties);
+  EXPECT_EQ(connectorQueryCtx->spillConfig(), &spillConfig);
+  EXPECT_EQ(connectorQueryCtx->prefixSortConfig().maxNormalizedKeyBytes, 64);
+  EXPECT_EQ(connectorQueryCtx->prefixSortConfig().minNumRows, 16);
+  EXPECT_EQ(connectorQueryCtx->prefixSortConfig().maxStringPrefixLength, 8);
+  EXPECT_EQ(connectorQueryCtx->expressionEvaluator(), evaluatorPtr);
+  EXPECT_EQ(connectorQueryCtx->cache(), &cache);
+  EXPECT_EQ(connectorQueryCtx->queryId(), "query");
+  EXPECT_EQ(connectorQueryCtx->taskId(), "task");
+  EXPECT_EQ(connectorQueryCtx->planNodeId(), "plan");
+  EXPECT_EQ(connectorQueryCtx->scanId(), "task.plan");
+  EXPECT_EQ(connectorQueryCtx->driverId(), 7);
+  EXPECT_EQ(connectorQueryCtx->sessionTimezone(), "America/Los_Angeles");
+  EXPECT_TRUE(connectorQueryCtx->adjustTimestampToTimezone());
+  EXPECT_EQ(connectorQueryCtx->fsTokenProvider(), tokenProvider);
+  EXPECT_FALSE(
+      connectorQueryCtx->cancellationToken().isCancellationRequested());
+  cancellationSource.requestCancellation();
+  EXPECT_TRUE(connectorQueryCtx->cancellationToken().isCancellationRequested());
+}
+
+TEST(ConnectorTest, builderRejectsSecondBuild) {
+  config::ConfigBase sessionProperties({});
+  ConnectorQueryCtx::Builder builder;
+  builder.sessionProperties(&sessionProperties);
+
+  auto context = builder.build();
+  EXPECT_NE(context, nullptr);
+  EXPECT_THROW(builder.build(), VeloxRuntimeError);
+}
+
 class ConnectorRegistryTest : public testing::Test {
  protected:
   static void SetUpTestSuite() {
     memory::MemoryManager::testingSetInstance({});
   }
 };
+
+class ConnectorQueryCtxTest : public testing::Test {
+ protected:
+  static void SetUpTestSuite() {
+    memory::MemoryManager::testingSetInstance({});
+  }
+};
+
+TEST_F(ConnectorQueryCtxTest, noCustomMemoryPoolsByDefault) {
+  auto pool = memory::memoryManager()->addLeafPool("operator");
+  config::ConfigBase config{std::unordered_map<std::string, std::string>{}};
+  auto context = ConnectorQueryCtx::Builder()
+                     .operatorPool(pool.get())
+                     .sessionProperties(&config)
+                     .queryId("query")
+                     .taskId("task")
+                     .planNodeId("scan")
+                     .build();
+
+  EXPECT_EQ(context->memoryPool(), pool.get());
+  EXPECT_EQ(context->customMemoryPool("gpu"), nullptr);
+  EXPECT_EQ(context->customMemoryPool("cxl"), nullptr);
+}
+
+TEST_F(ConnectorQueryCtxTest, customMemoryPoolsByTag) {
+  auto pool = memory::memoryManager()->addLeafPool("operator");
+  auto gpu = memory::memoryManager()->addLeafPool("gpu");
+  auto cxl = memory::memoryManager()->addLeafPool("cxl");
+  config::ConfigBase config{std::unordered_map<std::string, std::string>{}};
+  std::unordered_map<std::string, memory::MemoryPool*> customPools{
+      {"gpu", gpu.get()}, {"cxl", cxl.get()}};
+  auto context = ConnectorQueryCtx::Builder()
+                     .operatorPool(pool.get())
+                     .sessionProperties(&config)
+                     .queryId("query")
+                     .taskId("task")
+                     .planNodeId("scan")
+                     .customPools(customPools)
+                     .build();
+  customPools.clear();
+
+  EXPECT_EQ(context->memoryPool(), pool.get());
+  EXPECT_EQ(context->customMemoryPool("gpu"), gpu.get());
+  EXPECT_EQ(context->customMemoryPool("cxl"), cxl.get());
+  EXPECT_EQ(context->customMemoryPool("missing"), nullptr);
+}
 
 TEST_F(ConnectorRegistryTest, queryScopedOverride) {
   auto globalConnector = std::make_shared<TestConnector>("global");

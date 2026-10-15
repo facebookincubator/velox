@@ -16,6 +16,7 @@
 
 #include "velox/dwio/parquet/reader/StructColumnReader.h"
 
+#include <algorithm>
 #include <optional>
 #include <tuple>
 
@@ -176,9 +177,10 @@ StructColumnReader::StructColumnReader(
           fileType,
           params,
           scanSpec) {
-  auto& childSpecs = scanSpec_->stableChildren();
+  const auto stableChildren = scanSpec_->stableChildren();
+  const auto& childSpecs = *stableChildren;
   for (auto i = 0; i < childSpecs.size(); ++i) {
-    auto childSpec = childSpecs[i];
+    const auto& childSpec = childSpecs[i];
     if (childSpec->isConstant() || isChildMissing(*childSpec)) {
       childSpec->setSubscript(kConstantChildSpecSubscript);
       continue;
@@ -199,6 +201,8 @@ StructColumnReader::StructColumnReader(
 
     childSpecs[i]->setSubscript(children_.size() - 1);
   }
+  applyMissingFieldPolicy(
+      columnReaderOptions, params.nullStructIfAllFieldsMissing());
   ensureSyntheticRepDefSource(columnReaderOptions, params);
   auto type = reinterpret_cast<const ParquetTypeWithId*>(fileType_.get());
   if (type->parent()) {
@@ -208,6 +212,32 @@ StructColumnReader::StructColumnReader(
         repDefSourceLevelMode(*type, repDefSourceType(*repDefSourceReader_));
   }
   VELOX_DCHECK_EQ(type->parent() == nullptr, repDefSourceReader_ == nullptr);
+}
+
+void StructColumnReader::applyMissingFieldPolicy(
+    const dwio::common::ColumnReaderOptions& columnReaderOptions,
+    bool nullStructIfAllFieldsMissing) {
+  const bool useColumnNames = columnReaderOptions.columnMappingMode_ ==
+      dwio::common::ColumnMappingMode::kName;
+  if (!nullStructIfAllFieldsMissing || !useColumnNames) {
+    return;
+  }
+
+  const auto stableChildren = scanSpec_->stableChildren();
+  const auto& childSpecs = *stableChildren;
+  if (childSpecs.empty()) {
+    nullStructForMissingFields_ = true;
+    return;
+  }
+
+  if (std::all_of(
+          childSpecs.begin(), childSpecs.end(), [&](const auto& childSpec) {
+            return childSpec->columnType() ==
+                common::ScanSpec::ColumnType::kRegular &&
+                isChildMissing(*childSpec);
+          })) {
+    nullStructForMissingFields_ = true;
+  }
 }
 
 void StructColumnReader::ensureSyntheticRepDefSource(
@@ -333,22 +363,34 @@ void StructColumnReader::seekToEndOfPresetNulls() {
 }
 
 void StructColumnReader::setNullsFromRepDefs(PageReader& pageReader) {
-  if (levelInfo_.defLevel == 0) {
+  if (levelInfo_.defLevel == 0 && !nullStructForMissingFields_) {
     return;
   }
   auto repDefRange = pageReader.repDefRange();
   int32_t numRepDefs = repDefRange.second - repDefRange.first;
   dwio::common::ensureCapacity<uint64_t>(
       nullsInReadRange_, bits::nwords(numRepDefs), pool_);
-  auto numStructs = pageReader.getLengthsAndNulls(
-      levelMode_,
-      levelInfo_,
-      repDefRange.first,
-      repDefRange.second,
-      numRepDefs,
-      nullptr,
-      nullsInReadRange()->asMutable<uint64_t>(),
-      0);
+  // A required struct has no definition levels. In that case, each entry in
+  // the decoded range represents one struct directly.
+  auto numStructs = numRepDefs;
+  if (levelInfo_.defLevel != 0) {
+    numStructs = pageReader.getLengthsAndNulls(
+        levelMode_,
+        levelInfo_,
+        repDefRange.first,
+        repDefRange.second,
+        numRepDefs,
+        nullptr,
+        nullsInReadRange()->asMutable<uint64_t>(),
+        0);
+  }
+  // Repeated parents still need rep/def levels to determine the number of
+  // structs. Preserve that count, but mark every struct null when the
+  // missing-field policy applies to this reader.
+  if (nullStructForMissingFields_) {
+    bits::fillBits(
+        nullsInReadRange()->asMutable<uint64_t>(), 0, numStructs, bits::kNull);
+  }
   formatData_->as<ParquetData>().setNulls(nullsInReadRange(), numStructs);
 }
 

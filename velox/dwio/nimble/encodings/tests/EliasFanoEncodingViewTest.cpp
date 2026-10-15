@@ -23,6 +23,7 @@
 #include <gtest/gtest.h>
 
 #include "velox/dwio/nimble/encodings/EliasFanoEncoding.h"
+#include "velox/dwio/nimble/encodings/views/EliasFanoEncodingView.h"
 
 using namespace facebook;
 
@@ -42,6 +43,30 @@ TEST_F(EliasFanoEncodingViewTest, readsSignedAndUnsignedValues) {
   expectReads<nimble::EliasFanoEncoding<uint64_t>>(
       makeVector<uint64_t>({0, 1, 1, 7, 1'000, 1'000, 1'000'000}),
       {6, 0, 2, 3, 5, 1});
+}
+
+TEST_F(EliasFanoEncodingViewTest, lowerBound) {
+  const auto values = makeVector<uint64_t>({3, 7, 7, 20});
+  const auto serialized =
+      nimble::test::Encoder<nimble::EliasFanoEncoding<uint64_t>>::encode(
+          *buffer_, values);
+  auto view = nimble::createEncodingView(serialized, pool_.get());
+  const auto* eliasFanoView =
+      dynamic_cast<const nimble::EliasFanoEncodingView<uint64_t>*>(view.get());
+  ASSERT_NE(eliasFanoView, nullptr);
+
+  for (const auto& [value, expected] : {
+           std::pair<uint64_t, uint32_t>{0, 0},
+           {3, 0},
+           {6, 1},
+           {7, 1},
+           {8, 3},
+           {20, 3},
+           {21, 4},
+       }) {
+    SCOPED_TRACE(value);
+    EXPECT_EQ(eliasFanoView->lowerBound(value), expected);
+  }
 }
 
 TEST_F(EliasFanoEncodingViewTest, supportsConcurrentReads) {

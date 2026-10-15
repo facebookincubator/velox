@@ -114,7 +114,8 @@ SentinelEncoding<T>::SentinelEncoding(
   sentineledData_ = deserializeEncoding(this->pool_, {pos, sentineledBytes});
   pos += sentineledBytes;
   sentinelValue_ = encoding::read<physicalType>(pos);
-  NIMBLE_CHECK(pos == data.end(), "Unexpected sentinel encoding end");
+  NIMBLE_CHECK(
+      pos == data.data() + data.size(), "Unexpected sentinel encoding end");
 }
 
 template <typename T>

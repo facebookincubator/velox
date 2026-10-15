@@ -64,12 +64,14 @@ class ChunkedDecoder {
       velox::memory::MemoryPool* pool,
       bool stringDecoderZeroCopy = false,
       velox::dwio::common::DecodingStats* decodingStats = nullptr,
-      DictionaryAlphabetLoader dictionaryAlphabetLoader = nullptr)
+      DictionaryAlphabetLoader dictionaryAlphabetLoader = nullptr,
+      bool dictionaryAwareReads = false)
       : input_{std::move(input)},
         pool_{pool},
         decodeValuesWithNulls_{decodeValuesWithNulls},
         encodingFactory_(encodingFactory),
         stringDecoderZeroCopy_{stringDecoderZeroCopy},
+        dictionaryAwareReads_{dictionaryAwareReads},
         streamIndex_{std::move(streamIndex)},
         streamRowCount_{
             streamIndex_ ? std::optional<uint32_t>(streamIndex_->rowCount())
@@ -130,6 +132,7 @@ class ChunkedDecoder {
     const auto numRows = visitor.numRows();
     ReadWithVisitorParams params{};
     params.numScanned = readOffset;
+    params.dictionaryAwareReads = dictionaryAwareReads_;
     // readOffset > 0 means a single read range is being decoded in segments
     // across multiple readWithVisitor calls (e.g. the dict→flat
     // abandon-dictionary fallback resuming at the abandoned chunk boundary), so
@@ -331,7 +334,7 @@ class ChunkedDecoder {
   // reading stopped early at a chunk boundary (the callback returned false);
   // in that case it advances the reader's readOffset_ to the boundary so the
   // flat encoding fallback resumes the decode there.
-  template <typename DictionaryVisitor>
+  template <typename T, typename DictionaryVisitor>
   bool readDictionaryIndices(
       DictionaryVisitor& visitor,
       const ChunkBoundaryCallback& onChunkBoundary) {
@@ -385,7 +388,7 @@ class ChunkedDecoder {
           return nulls->template asMutable<uint64_t>();
         };
       }
-      return readDictionaryIndicesImpl<true>(
+      return readDictionaryIndicesImpl<T, true>(
           visitor, nulls->template as<uint64_t>(), onChunkBoundary, params);
     } else {
       const auto numRows = visitor.numRows();
@@ -404,7 +407,7 @@ class ChunkedDecoder {
             .nullsInReadRange()
             ->template asMutable<uint64_t>();
       };
-      return readDictionaryIndicesImpl<false>(
+      return readDictionaryIndicesImpl<T, false>(
           visitor, /*nulls=*/nullptr, onChunkBoundary, params);
     }
   }
@@ -420,7 +423,7 @@ class ChunkedDecoder {
   // readWithVisitorImpl, this handles chunk transitions explicitly at the
   // top of the loop (for both kHasNulls and !kHasNulls paths) instead of
   // relying on testNulls which counts non-nulls across chunk boundaries.
-  template <bool kHasNulls, typename V>
+  template <typename T, bool kHasNulls, typename V>
   bool readDictionaryIndicesImpl(
       V& visitor,
       const uint64_t* nulls,
@@ -521,7 +524,7 @@ class ChunkedDecoder {
       if (visitor.rowIndex() < endRowIndex) {
         visitor.setRows(velox::RowSet(visitor.rows(), endRowIndex));
         if (numNonNulls > 0) {
-          callReadIndicesWithVisitor(*encoding_, visitor, params);
+          callReadIndicesWithVisitor<T>(*encoding_, visitor, params);
         } else if (!visitor.allowNulls()) {
           visitor.setRowIndex(endRowIndex);
         } else {
@@ -902,6 +905,7 @@ class ChunkedDecoder {
   const bool decodeValuesWithNulls_;
   const EncodingFactory* const encodingFactory_;
   const bool stringDecoderZeroCopy_{false};
+  const bool dictionaryAwareReads_{false};
   // Optional stream index for accelerating skip operations
   const std::shared_ptr<index::StreamIndex> streamIndex_;
   // Total row count in the stream, set from stream index if available.

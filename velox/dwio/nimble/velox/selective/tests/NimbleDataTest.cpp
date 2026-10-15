@@ -116,7 +116,7 @@ class NimbleDataTest : public ::testing::Test,
 // Scalar column with no nulls — readNulls should produce no null bitmap.
 TEST_F(NimbleDataTest, scalarNoNulls) {
   auto input = makeRowVector({
-      makeFlatVector<int64_t>(100, folly::identity),
+      makeFlatIdentityVector<int64_t>(100),
   });
   auto scanSpec = std::make_shared<common::ScanSpec>("root");
   scanSpec->addAllChildFields(*input->type());
@@ -151,8 +151,7 @@ TEST_F(NimbleDataTest, scalarAllNulls) {
 // ROW type with null rows — tests nullsDescriptor path.
 TEST_F(NimbleDataTest, rowNulls) {
   auto input = makeRowVector({
-      makeRowVector(
-          {makeFlatVector<int32_t>(50, folly::identity)}, nullEvery(3)),
+      makeRowVector({makeFlatIdentityVector<int32_t>(50)}, nullEvery(3)),
   });
   auto scanSpec = std::make_shared<common::ScanSpec>("root");
   scanSpec->addAllChildFields(*input->type());
@@ -193,8 +192,8 @@ TEST_F(NimbleDataTest, mapNulls) {
 
 // Nested ROW inside ARRAY — tests combined null propagation.
 TEST_F(NimbleDataTest, nestedNulls) {
-  auto innerRow = makeRowVector(
-      {makeFlatVector<int32_t>(50, folly::identity)}, nullEvery(7));
+  auto innerRow =
+      makeRowVector({makeFlatIdentityVector<int32_t>(50)}, nullEvery(7));
   auto input = makeRowVector({
       innerRow,
       makeArrayVector<int64_t>(
@@ -217,7 +216,7 @@ TEST_F(NimbleDataTest, lazyPrimitiveField) {
   // Create a struct with two fields. Make the struct have nulls so the
   // inner fields become lazy.
   auto input = makeRowVector({
-      makeFlatVector<int64_t>(100, folly::identity),
+      makeFlatIdentityVector<int64_t>(100),
       makeRowVector(
           {makeFlatVector<int64_t>(100, [](auto i) { return i * 2; })},
           nullEvery(3)),
@@ -242,7 +241,7 @@ TEST_F(NimbleDataTest, lazyPrimitiveField) {
 // Lazy-loaded string field — verify variable-length size tracking.
 TEST_F(NimbleDataTest, lazyStringField) {
   auto input = makeRowVector({
-      makeFlatVector<int64_t>(50, folly::identity),
+      makeFlatIdentityVector<int64_t>(50),
       makeRowVector(
           {makeFlatVector<std::string>(
               50, [](auto i) { return "string_value_" + std::to_string(i); })},
@@ -263,7 +262,7 @@ TEST_F(NimbleDataTest, lazyStringField) {
 // Lazy-loaded array field — verify element size tracking.
 TEST_F(NimbleDataTest, lazyArrayField) {
   auto input = makeRowVector({
-      makeFlatVector<int64_t>(50, folly::identity),
+      makeFlatIdentityVector<int64_t>(50),
       makeRowVector(
           {makeArrayVector<int32_t>(
               50, [](auto i) { return 1 + i % 5; }, [](auto j) { return j; })},
@@ -286,7 +285,7 @@ TEST_F(NimbleDataTest, lazyArrayField) {
 TEST_F(NimbleDataTest, estimatedRowSizeAfterLazyLoad) {
   constexpr int kSize = 50;
   auto input = makeRowVector({
-      makeFlatVector<int64_t>(kSize, folly::identity),
+      makeFlatIdentityVector<int64_t>(kSize),
       makeFlatVector<std::string>(
           kSize, [](auto i) { return "val_" + std::to_string(i); }),
       makeArrayVector<int32_t>(

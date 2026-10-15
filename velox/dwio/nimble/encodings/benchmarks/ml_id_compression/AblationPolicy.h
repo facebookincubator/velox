@@ -27,9 +27,9 @@
 #include <vector>
 
 #include "velox/dwio/nimble/common/Types.h"
-#include "velox/dwio/nimble/encodings/SubIntSplitCostModels.h"
-#include "velox/dwio/nimble/encodings/SubIntSplitMetrics.h"
-#include "velox/dwio/nimble/encodings/SubIntSplitSelector.h"
+#include "velox/dwio/nimble/encodings/subintsplit/CostModel.h"
+#include "velox/dwio/nimble/encodings/subintsplit/SectionMetrics.h"
+#include "velox/dwio/nimble/encodings/subintsplit/SplitSelector.h"
 
 namespace facebook::nimble::mlidc {
 
@@ -123,10 +123,10 @@ inline std::vector<AblationRung> combinedLadder() {
 }
 
 namespace detail_ablation {
-using namespace facebook::nimble::detail::subintsplit;
+using namespace facebook::nimble::subintsplit;
 
 inline double bestCostBitsRestricted(
-    const SegmentMetrics& m,
+    const SectionMetrics& m,
     size_t numValues,
     int bitWidth,
     EncodingType& bestEncoding,
@@ -163,13 +163,13 @@ inline SelectorResult selectSplitsRestricted(
     size_t fullCount,
     const SelectorConfig& cfg,
     const std::unordered_set<EncodingType>& allowed) {
-  return selectSplitsImpl(
+  return selectSplits(
       samples,
       kBits,
       fullCount,
       cfg,
       [&allowed](
-          const SegmentMetrics& m,
+          const SectionMetrics& m,
           size_t numValues,
           int bitWidth,
           EncodingType& bestEnc) noexcept {

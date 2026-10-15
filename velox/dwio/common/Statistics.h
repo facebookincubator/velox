@@ -19,6 +19,7 @@
 #include <fmt/format.h>
 #include <folly/Hash.h>
 #include <folly/container/F14Map.h>
+#include <string_view>
 #include <type_traits>
 #include <utility>
 #include "velox/common/time/Timer.h"
@@ -32,6 +33,12 @@
 #include "velox/type/Type.h"
 
 namespace facebook::velox::dwio::common {
+
+/// Runtime metric name for rows skipped by chunk-level statistics filtering.
+inline constexpr std::string_view kChunkSkippedRows = "chunkSkippedRows";
+
+/// Runtime metric name for rows traversed by reads or chunk-statistics skips.
+inline constexpr std::string_view kProcessedRows = "processedRows";
 
 /// Provides a common base for writer version information used when
 /// interpreting metadata.
@@ -575,6 +582,12 @@ struct RuntimeStats {
 
   // Number of strides (row groups) processed based on statistics.
   int64_t processedStrides{0};
+
+  // Rows skipped by chunk-level statistics filtering.
+  int64_t chunkSkippedRows{0};
+
+  // Rows traversed by reads or chunk-statistics skips.
+  int64_t processedRows{0};
 
   // Records extra bytes read past the ideal footer size.
   int64_t footerBufferOverread{0};

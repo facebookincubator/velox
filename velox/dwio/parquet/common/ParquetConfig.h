@@ -51,6 +51,16 @@ class ParquetConfig {
       false,
       "Allow reading INT32 Parquet columns as a narrower integer type.")
 
+  VELOX_FORMAT_CONFIG(
+      kNullStructIfAllFieldsMissingSession,
+      kNullStructIfAllFieldsMissing,
+      nullStructIfAllFieldsMissing,
+      "null_struct_if_all_fields_missing",
+      "null-struct-if-all-fields-missing",
+      bool,
+      false,
+      "When name-based mapping is enabled and all requested struct children are missing, return NULL struct instead of a non-null struct with all-null children.")
+
   static constexpr uint64_t kDefaultFooterMemoryTrackingThreshold =
       std::numeric_limits<uint64_t>::max();
   VELOX_FORMAT_CONFIG(
@@ -129,7 +139,7 @@ class ParquetConfig {
       "writer_enable_page_index",
       "writer.enable-page-index",
       bool,
-      false,
+      true,
       "Write the Parquet page index (column index and offset index) in the "
       "Parquet writer. When enabled, per-page statistics are stored in the "
       "page index instead of the data page headers.")
@@ -263,6 +273,9 @@ class ParquetConfig {
         kWriterEnablePageIndexSessionProperty>(properties, sessionPrefix);
     dwio::common::registerFormatConfigProperty<
         kWriterRowGroupSizeSessionProperty>(properties, sessionPrefix);
+    dwio::common::registerFormatConfigProperty<
+        kNullStructIfAllFieldsMissingSessionProperty>(
+        properties, sessionPrefix);
   }
 };
 

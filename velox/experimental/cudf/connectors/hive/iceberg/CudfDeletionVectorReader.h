@@ -25,7 +25,7 @@
 #include <cudf/utilities/memory_resource.hpp>
 #include <cudf/utilities/roaring_bitmap.hpp>
 
-#include <rmm/cuda_stream_view.hpp>
+#include <cuda/stream>
 
 #include <cstddef>
 #include <cstdint>
@@ -68,7 +68,7 @@ class CudfDeletionVectorReader {
   void applyDeletes(
       cudf::mutable_column_view const& rowMask,
       cudf::column_view const& rowIndex,
-      rmm::cuda_stream_view stream,
+      cuda::stream_ref stream,
       rmm::device_async_resource_ref temp_mr);
 
  private:
@@ -91,12 +91,12 @@ class CudfDeletionVectorReader {
   void buildBitmap(
       cudf::roaring_bitmap_type bitmapType,
       std::string_view roaringBitmapPayload,
-      rmm::cuda_stream_view stream);
+      cuda::stream_ref stream);
 
   // Loads the deletion vector blob from the Puffin file, strips the DV-v1
   // envelope, and constructs the cuco roaring bitmap. Called lazily on the
   // first `applyDeletionVector` call.
-  void loadBitmap(rmm::cuda_stream_view stream);
+  void loadBitmap(cuda::stream_ref stream);
 
   // Opaque wrapper class for cuco's 32 or 64 bit roaring bitmap
   std::unique_ptr<cudf::roaring_bitmap> bitmap_;

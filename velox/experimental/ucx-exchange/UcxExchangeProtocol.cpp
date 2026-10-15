@@ -66,6 +66,9 @@ std::pair<std::shared_ptr<uint8_t>, size_t> MetadataMsg::serialize() {
   std::memcpy(ptr, &dataSizeBytes, sizeof(dataSizeBytes));
   ptr += sizeof(dataSizeBytes);
 
+  std::memcpy(ptr, &numRows, sizeof(numRows));
+  ptr += sizeof(numRows);
+
   WireLengthType numRemaining = remainingBytes.size();
   std::memcpy(ptr, &numRemaining, sizeof(numRemaining));
   ptr += sizeof(numRemaining);
@@ -100,35 +103,46 @@ MetadataMsg MetadataMsg::deserializeMetadataMsg(const uint8_t* buffer) {
   const uint8_t* endPtr = buffer + totalSize;
 
   WireLengthType metaSize = 0;
-  if (ptr + sizeof(metaSize) > endPtr)
+  if (ptr + sizeof(metaSize) > endPtr) {
     throw std::runtime_error("Insufficient data for cudfMetadata size");
+  }
   std::memcpy(&metaSize, ptr, sizeof(metaSize));
   ptr += sizeof(metaSize);
 
   record.cudfMetadata = std::make_unique<std::vector<uint8_t>>(metaSize);
   if (metaSize > 0) {
-    if (ptr + metaSize > endPtr)
+    if (ptr + metaSize > endPtr) {
       throw std::runtime_error("Insufficient data for cudfMetadata bytes");
+    }
     std::memcpy(record.cudfMetadata->data(), ptr, metaSize);
     ptr += metaSize;
   }
 
-  if (ptr + sizeof(record.dataSizeBytes) > endPtr)
+  if (ptr + sizeof(record.dataSizeBytes) > endPtr) {
     throw std::runtime_error("Insufficient data for dataSizeBytes");
+  }
   std::memcpy(&record.dataSizeBytes, ptr, sizeof(record.dataSizeBytes));
   ptr += sizeof(record.dataSizeBytes);
 
+  if (ptr + sizeof(record.numRows) > endPtr) {
+    throw std::runtime_error("Insufficient data for numRows");
+  }
+  std::memcpy(&record.numRows, ptr, sizeof(record.numRows));
+  ptr += sizeof(record.numRows);
+
   WireLengthType numRemaining = 0;
-  if (ptr + sizeof(numRemaining) > endPtr)
+  if (ptr + sizeof(numRemaining) > endPtr) {
     throw std::runtime_error("Insufficient data for remainingBytes count");
+  }
   std::memcpy(&numRemaining, ptr, sizeof(numRemaining));
   ptr += sizeof(numRemaining);
 
   record.remainingBytes.resize(numRemaining);
   if (numRemaining > 0) {
     auto bytesSize = numRemaining * sizeof(record.remainingBytes[0]);
-    if (ptr + bytesSize > endPtr)
+    if (ptr + bytesSize > endPtr) {
       throw std::runtime_error("Insufficient data for remainingBytes values");
+    }
     std::memcpy(record.remainingBytes.data(), ptr, bytesSize);
     ptr += bytesSize;
   }

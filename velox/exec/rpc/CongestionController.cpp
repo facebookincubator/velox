@@ -27,6 +27,7 @@ void CongestionController::onError() {
       std::max<double>(effective_ / 2.0, static_cast<double>(minWindow_));
   if (limit() < prevLimit) {
     ++numShrinks_;
+    ++numOverloadShrinks_;
   }
   // Drop the in-progress sample window so partial pre-overload samples don't
   // contaminate the next gradient computation. baselineRttNs_ is deliberately

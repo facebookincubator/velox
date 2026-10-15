@@ -265,6 +265,100 @@ TEST_P(EqualityDeleteFileReaderTestP, equalityColumnNotInProjection) {
   assertEqualResults({expected}, {result});
 }
 
+// A delete column that only a later split needs: 'id' enters the scan spec
+// when the second split is prepared, and its delete still applies.
+TEST_P(EqualityDeleteFileReaderTestP, equalityDeleteColumnAddedBySecondSplit) {
+  auto tableType = ROW({{"id", BIGINT()}, {"value", VARCHAR()}});
+  // 'id' is outside the projection, so only the delete file puts it in the
+  // scan spec.
+  auto outputType = ROW("value", VARCHAR());
+
+  auto deleteData = makeRowVector({"id"}, {makeFlatVector<int64_t>({6, 8})});
+  auto eqDeleteFile = writeDataFileP({deleteData}, {1});
+  auto icebergDeleteFile =
+      makeDeleteFile(eqDeleteFile->getPath(), {1}, GetParam().format);
+
+  // Three files of five rows, ids 0-14 with values 'a' through 'o'. Only the
+  // second carries the delete. 'dataFiles' keeps the temp files alive.
+  constexpr int32_t kNumFiles = 3;
+  constexpr int32_t kRowsPerFile = 5;
+  constexpr int32_t kFileWithDelete = 1;
+  std::vector<std::shared_ptr<common::testutil::TempFilePath>> dataFiles;
+  std::vector<std::shared_ptr<ConnectorSplit>> splits;
+  for (int32_t file = 0; file < kNumFiles; ++file) {
+    std::vector<int64_t> ids(kRowsPerFile);
+    std::vector<std::string> values(kRowsPerFile);
+    for (auto i = 0; i < kRowsPerFile; ++i) {
+      ids[i] = file * kRowsPerFile + i;
+      values[i] = std::string(1, static_cast<char>('a' + ids[i]));
+    }
+    dataFiles.push_back(writeDataFileP(
+        {makeRowVector(
+            {"id", "value"},
+            {
+                makeFlatVector<int64_t>(ids),
+                makeFlatVector<std::string>(values),
+            })},
+        {1, 2}));
+    auto fileSplits = file == kFileWithDelete
+        ? makeSplitsP(dataFiles.back()->getPath(), {icebergDeleteFile})
+        : makeSplitsP(dataFiles.back()->getPath());
+    splits.insert(splits.end(), fileSplits.begin(), fileSplits.end());
+  }
+
+  // One driver and no preloading make the splits share one ScanSpec. With
+  // preloading each gets its own and the shared path goes untested.
+  auto plan = makeIcebergTableScanPlan(outputType, tableType);
+  auto result = AssertQueryBuilder(plan)
+                    .splits(splits)
+                    .maxDrivers(1)
+                    .config(core::QueryConfig::kMaxSplitPreloadPerDriver, "0")
+                    .copyResults(pool());
+
+  // Only the second split loses rows, id=6 ('g') and id=8 ('i').
+  auto expected = makeRowVector(
+      {"value"},
+      {makeFlatVector<std::string>(
+          {"a", "b", "c", "d", "e", "f", "h", "j", "k", "l", "m", "n", "o"})});
+
+  assertEqualResults({expected}, {result});
+}
+
+// A split whose byte range starts past the last stripe or row group: nothing
+// is read, so no reader tree is built for the delete column.
+TEST_P(EqualityDeleteFileReaderTestP, equalityDeleteSplitCoveringNoRows) {
+  auto tableType = ROW({{"id", BIGINT()}, {"value", VARCHAR()}});
+  auto outputType = ROW("value", VARCHAR());
+
+  auto data = makeRowVector(
+      {"id", "value"},
+      {
+          makeFlatVector<int64_t>({0, 1, 2, 3, 4}),
+          makeFlatVector<std::string>({"a", "b", "c", "d", "e"}),
+      });
+  auto dataFile = writeDataFileP({data}, {1, 2});
+
+  auto deleteData = makeRowVector({"id"}, {makeFlatVector<int64_t>({1, 3})});
+  auto eqDeleteFile = writeDataFileP({deleteData}, {1});
+  auto icebergDeleteFile =
+      makeDeleteFile(eqDeleteFile->getPath(), {1}, GetParam().format);
+
+  // All rows sit in one stripe or row group at the head of the file, so the
+  // second half of the byte range covers none of them.
+  auto splits = makeIcebergSplits(
+      dataFile->getPath(),
+      {icebergDeleteFile},
+      /*partitionKeys=*/{},
+      /*splitCount=*/2);
+  ASSERT_EQ(splits.size(), 2);
+
+  auto plan = makeIcebergTableScanPlan(outputType, tableType);
+  auto result =
+      AssertQueryBuilder(plan).splits({splits.back()}).copyResults(pool());
+
+  EXPECT_EQ(result->size(), 0);
+}
+
 /// Two delete files targeting the same column not in the projection.
 TEST_P(EqualityDeleteFileReaderTestP, multipleDeleteFilesSameMissingColumn) {
   auto tableType = ROW({"id", "value"}, {BIGINT(), VARCHAR()});

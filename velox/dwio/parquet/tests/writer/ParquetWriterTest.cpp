@@ -17,6 +17,7 @@
 #include <arrow/io/memory.h>
 #include <arrow/type.h>
 #include <folly/init/Init.h>
+#include <thrift/lib/cpp2/protocol/Serializer.h>
 #include "velox/dwio/parquet/writer/arrow/tests/TestUtil.h"
 
 #include "velox/common/base/tests/GTestUtils.h"
@@ -80,6 +81,16 @@ class ParquetWriterTest : public ParquetTestBase {
     auto data = makeRowVector({makeFlatVector<Timestamp>(
         rows, [](auto row) { return Timestamp(row, row); })});
     return data;
+  }
+
+  // Creates an all-null flat vector without a values buffer.
+  template <typename T>
+  std::shared_ptr<FlatVector<T>> makeAllNullFlatVector(
+      const TypePtr& type,
+      vector_size_t size,
+      const BufferPtr& nulls) {
+    return std::make_shared<FlatVector<T>>(
+        leafPool_.get(), type, nulls, size, nullptr, std::vector<BufferPtr>{});
   }
 
   // Builds a dictionary column of 'size' rows over 'values', mapping each row
@@ -273,7 +284,7 @@ TEST_F(ParquetWriterTest, createFormatOptions) {
   EXPECT_TRUE(parquetOptions->enableWritePageIndex.value());
 
   // When unset in both connector and session config, the option is left unset
-  // so the writer falls back to its default (page index off).
+  // so the writer falls back to its default (page index on).
   {
     auto defaultOptions =
         checkedPointerCast<ParquetWriterOptions>(factory.createFormatOptions(
@@ -308,10 +319,14 @@ TEST_F(ParquetWriterTest, dictionaryEncodingWithDictionaryPageSize) {
         if (isFirstPage) {
           return readPageHeader(sinkPtr, 0);
         }
-        constexpr int64_t kFirstDataPageCompressedSize = 1291;
-        constexpr int64_t kFirstDataPageHeaderSize = 48;
+        const auto firstPageHeader = readPageHeader(sinkPtr, 0);
+        const auto firstPageHeaderSize =
+            apache::thrift::CompactSerializer::serialize<std::string>(
+                firstPageHeader)
+                .size();
         return readPageHeader(
-            sinkPtr, kFirstDataPageCompressedSize + kFirstDataPageHeaderSize);
+            sinkPtr,
+            firstPageHeaderSize + *firstPageHeader.compressed_page_size());
       };
 
   // Test default config (i.e., no explicit config)
@@ -803,8 +818,8 @@ TEST_F(ParquetWriterTest, writePageIndex) {
     return {columnChunk.hasColumnIndex(), columnChunk.hasOffsetIndex()};
   };
 
-  // Unset leaves the page index off (default behavior).
-  EXPECT_EQ(writeAndReadPageIndex(std::nullopt), std::make_pair(false, false));
+  // Unset leaves the page index on (default behavior).
+  EXPECT_EQ(writeAndReadPageIndex(std::nullopt), std::make_pair(true, true));
   // Explicitly disabled leaves the page index off.
   EXPECT_EQ(writeAndReadPageIndex(false), std::make_pair(false, false));
   // Enabled writes both the column index and the offset index.
@@ -1953,29 +1968,54 @@ TEST_F(ParquetWriterTest, selectiveFlatteningMixedEncodings) {
 }
 
 TEST_F(ParquetWriterTest, allNulls) {
-  auto schema = ROW({"c0"}, {INTEGER()});
-  const int64_t kRows = 4096;
-  // Create a column with all elements being null.
-  auto nulls = makeNulls(kRows, [](auto /*row*/) { return true; });
-  auto flatVector = std::make_shared<FlatVector<int32_t>>(
-      pool_.get(),
-      schema->childAt(0),
-      nulls,
-      kRows,
-      /*values=*/nullptr,
-      std::vector<BufferPtr>());
-  auto data = std::make_shared<RowVector>(
-      pool_.get(), schema, nullptr, kRows, std::vector<VectorPtr>{flatVector});
+  auto rowType = ROW({
+      {"bool_col", BOOLEAN()},
+      {"tinyint_col", TINYINT()},
+      {"smallint_col", SMALLINT()},
+      {"int_col", INTEGER()},
+      {"bigint_col", BIGINT()},
+      {"float_col", REAL()},
+      {"double_col", DOUBLE()},
+      {"string_col", VARCHAR()},
+      {"binary_col", VARBINARY()},
+      {"date_col", DATE()},
+      {"timestamp_col", TIMESTAMP()},
+      {"decimal_col", DECIMAL(10, 2)},
+  });
 
-  auto* sinkPtr = write(data);
+  const int64_t kRows = 100;
+
+  // Share an all-null bitmap across every column.
+  BufferPtr nulls = makeNulls(kRows, [](auto /*row*/) { return true; });
+
+  auto vector = std::make_shared<RowVector>(
+      leafPool_.get(),
+      rowType,
+      nullptr,
+      kRows,
+      std::vector<VectorPtr>{
+          makeAllNullFlatVector<bool>(BOOLEAN(), kRows, nulls),
+          makeAllNullFlatVector<int8_t>(TINYINT(), kRows, nulls),
+          makeAllNullFlatVector<int16_t>(SMALLINT(), kRows, nulls),
+          makeAllNullFlatVector<int32_t>(INTEGER(), kRows, nulls),
+          makeAllNullFlatVector<int64_t>(BIGINT(), kRows, nulls),
+          makeAllNullFlatVector<float>(REAL(), kRows, nulls),
+          makeAllNullFlatVector<double>(DOUBLE(), kRows, nulls),
+          makeAllNullFlatVector<StringView>(VARCHAR(), kRows, nulls),
+          makeAllNullFlatVector<StringView>(VARBINARY(), kRows, nulls),
+          makeAllNullFlatVector<int32_t>(DATE(), kRows, nulls),
+          makeAllNullFlatVector<Timestamp>(TIMESTAMP(), kRows, nulls),
+          makeAllNullFlatVector<int64_t>(DECIMAL(10, 2), kRows, nulls),
+      });
+
+  auto sinkPtr = write(vector);
 
   auto reader = createReaderInMemory(*sinkPtr);
-
   ASSERT_EQ(reader->numberOfRows(), kRows);
-  ASSERT_EQ(*reader->rowType(), *schema);
+  ASSERT_EQ(*reader->rowType(), *rowType);
 
-  auto rowReader = createRowReaderFromReader(*reader, schema);
-  assertReadWithReaderAndExpected(schema, *rowReader, data, *leafPool_);
+  auto rowReader = createRowReaderFromReader(*reader, rowType);
+  assertReadWithReaderAndExpected(rowType, *rowReader, vector, *leafPool_);
 }
 
 // Verifies that close() without any prior write() does not crash.

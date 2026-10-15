@@ -28,6 +28,8 @@ on:
       - .github/workflows/scheduled.yml
       - pyproject.toml
 
+  # The Presto source of truth fuzzers skip this event. The Regression Fuzzer
+  # is replacing them and already runs here.
   push:
     branches:
       - main
@@ -95,7 +97,7 @@ jobs:
     # prevent errors when forks ff their main branch
     if: ${{ github.repository == 'facebookincubator/velox' }}
     runs-on: 32-core-ubuntu
-    container: ghcr.io/facebookincubator/velox-dev:centos9
+    container: ghcr.io/facebookincubator/velox-dev:centos9-debug
     timeout-minutes: 120
     env:
       CCACHE_DIR: ${{ github.workspace }}/ccache
@@ -457,7 +459,7 @@ jobs:
     name: Build LocalRunnerService
     if: ${{ github.repository == 'facebookincubator/velox' }}
     runs-on: 32-core-ubuntu
-    container: ghcr.io/facebookincubator/velox-dev:centos9
+    container: ghcr.io/facebookincubator/velox-dev:centos9-debug
     timeout-minutes: 120
     env:
       CCACHE_DIR: ${{ github.workspace }}/ccache
@@ -600,7 +602,7 @@ jobs:
     name: Presto Fuzzer
     if: ${{ needs.compile.outputs.presto_bias  != 'true' }}
     runs-on: 4-core-ubuntu
-    container: ghcr.io/facebookincubator/velox-dev:centos9
+    container: ghcr.io/facebookincubator/velox-dev:centos9-debug
     needs: compile
     timeout-minutes: 30
     steps:
@@ -682,7 +684,7 @@ jobs:
   presto-fuzzer-with-local-runner-run:
     name: Regression Fuzzer
     runs-on: 4-core-ubuntu
-    container: ghcr.io/facebookincubator/velox-dev:centos9
+    container: ghcr.io/facebookincubator/velox-dev:centos9-debug
     needs: [compile, compile-baseline-local-runner]
     timeout-minutes: 120
     # Soft launch: this job is being monitored for signal quality and must not
@@ -788,6 +790,7 @@ jobs:
 
   presto-sot-fuzzer-run:
     name: Expression Fuzzer with Presto SOT
+    if: ${{ github.event_name != 'push' }}
     needs: compile
     runs-on: 4-core-ubuntu
     container: ghcr.io/facebookincubator/velox-dev:presto-java
@@ -867,7 +870,7 @@ jobs:
   presto-bias-fuzzer:
     name: Presto Bias Fuzzer
     runs-on: 4-core-ubuntu
-    container: ghcr.io/facebookincubator/velox-dev:centos9
+    container: ghcr.io/facebookincubator/velox-dev:centos9-debug
     needs: compile
     if: ${{ needs.compile.outputs.presto_bias  == 'true' }}
     timeout-minutes: 120
@@ -1046,7 +1049,7 @@ jobs:
   spark-bias-fuzzer:
     name: Spark Bias Fuzzer
     runs-on: 4-core-ubuntu
-    container: ghcr.io/facebookincubator/velox-dev:centos9
+    container: ghcr.io/facebookincubator/velox-dev:centos9-debug
     needs: compile
     if: ${{ needs.compile.outputs.spark_bias  == 'true' }}
     timeout-minutes: 120
@@ -1105,7 +1108,7 @@ jobs:
     name: Spark Fuzzer
     if: ${{ needs.compile.outputs.spark_bias  != 'true' }}
     runs-on: 4-core-ubuntu
-    container: ghcr.io/facebookincubator/velox-dev:centos9
+    container: ghcr.io/facebookincubator/velox-dev:centos9-debug
     needs: compile
     timeout-minutes: 30
     steps:
@@ -1156,6 +1159,7 @@ jobs:
 
   presto-java-join-fuzzer-run:
     name: Join Fuzzer
+    if: ${{ github.event_name != 'push' }}
     runs-on: 4-core-ubuntu
     container: ghcr.io/facebookincubator/velox-dev:presto-java
     needs: compile
@@ -1226,7 +1230,7 @@ jobs:
   exchange-fuzzer-run:
     name: Exchange Fuzzer
     runs-on: ubuntu-latest
-    container: ghcr.io/facebookincubator/velox-dev:centos9
+    container: ghcr.io/facebookincubator/velox-dev:centos9-debug
     needs: compile
     timeout-minutes: 30
     steps:
@@ -1271,6 +1275,7 @@ jobs:
 
   presto-java-row-number-fuzzer-run:
     name: RowNumber Fuzzer
+    if: ${{ github.event_name != 'push' }}
     runs-on: 4-core-ubuntu
     container: ghcr.io/facebookincubator/velox-dev:presto-java
     needs: compile
@@ -1340,6 +1345,7 @@ jobs:
 
   presto-java-topn-row-number-fuzzer-run:
     name: TopNRowNumber Fuzzer
+    if: ${{ github.event_name != 'push' }}
     runs-on: 4-core-ubuntu
     container: ghcr.io/facebookincubator/velox-dev:presto-java
     needs: compile
@@ -1410,7 +1416,7 @@ jobs:
   cache-fuzzer-run:
     name: Cache Fuzzer
     runs-on: 4-core-ubuntu
-    container: ghcr.io/facebookincubator/velox-dev:centos9
+    container: ghcr.io/facebookincubator/velox-dev:centos9-debug
     needs: compile
     timeout-minutes: 30
     # Temporarily disable on PRs till flakiness is fixed #12167
@@ -1454,7 +1460,7 @@ jobs:
   table-evolution-fuzzer-run:
     name: Table Evolution Fuzzer
     runs-on: 4-core-ubuntu
-    container: ghcr.io/facebookincubator/velox-dev:centos9
+    container: ghcr.io/facebookincubator/velox-dev:centos9-debug
     needs: compile
     timeout-minutes: 30
     steps:
@@ -1496,7 +1502,7 @@ jobs:
   memory-arbitration-fuzzer-run:
     name: Memory Arbitration Fuzzer
     runs-on: 4-core-ubuntu
-    container: ghcr.io/facebookincubator/velox-dev:centos9
+    container: ghcr.io/facebookincubator/velox-dev:centos9-debug
     needs: compile
     timeout-minutes: 30
     steps:
@@ -1537,6 +1543,7 @@ jobs:
 
   presto-java-aggregation-fuzzer-run:
     name: Aggregation Fuzzer with Presto as source of truth
+    if: ${{ github.event_name != 'push' }}
     needs: compile
     runs-on: 4-core-ubuntu
     container: ghcr.io/facebookincubator/velox-dev:presto-java
@@ -1608,11 +1615,11 @@ jobs:
 
   presto-java-only-bias-function-expression-fuzzer-run:
     name: Biased Expression Fuzzer with Only Added/Updated Functions and Presto as source of truth
+    if: ${{ github.event_name != 'push' && needs.compile.outputs.presto_bias == 'true' }}
     needs: compile
     runs-on: 4-core-ubuntu
     container: ghcr.io/facebookincubator/velox-dev:presto-java
     timeout-minutes: 120
-    if: ${{ needs.compile.outputs.presto_bias  == 'true' }}
     env:
       CCACHE_DIR: ${{ github.workspace }}/ccache/
       LINUX_DISTRO: centos
@@ -1707,11 +1714,11 @@ jobs:
 
   presto-bias-java-aggregation-fuzzer-run:
     name: Biased Aggregation Fuzzer with Presto as source of truth
+    if: ${{ github.event_name != 'push' && needs.compile.outputs.presto_aggregate_bias == 'true' }}
     needs: compile
     runs-on: 4-core-ubuntu
     container: ghcr.io/facebookincubator/velox-dev:presto-java
     timeout-minutes: 120
-    if: ${{ needs.compile.outputs.presto_aggregate_bias  == 'true' }}
     env:
       CCACHE_DIR: ${{ github.workspace }}/ccache/
       LINUX_DISTRO: centos
@@ -1822,6 +1829,7 @@ jobs:
 
   presto-java-window-fuzzer-run:
     name: Window Fuzzer with Presto as source of truth
+    if: ${{ github.event_name != 'push' }}
     needs: compile
     runs-on: 4-core-ubuntu
     container: ghcr.io/facebookincubator/velox-dev:presto-java
@@ -1894,6 +1902,7 @@ jobs:
 
   presto-java-writer-fuzzer-run:
     name: Writer Fuzzer with Presto as source of truth
+    if: ${{ github.event_name != 'push' }}
     needs: compile
     runs-on: 4-core-ubuntu
     container: ghcr.io/facebookincubator/velox-dev:presto-java
@@ -1969,7 +1978,7 @@ jobs:
   spatial-join-fuzzer-run:
     name: Spatial Join Fuzzer
     runs-on: 4-core-ubuntu
-    container: ghcr.io/facebookincubator/velox-dev:centos9
+    container: ghcr.io/facebookincubator/velox-dev:centos9-debug
     needs: compile
     timeout-minutes: 30
     steps:

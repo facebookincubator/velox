@@ -241,6 +241,12 @@ RowVectorPtr Merge::getOutputFromSource() {
   VELOX_CHECK_NULL(spillMerger_);
   bool atEnd = false;
   output_ = sourceMerger_->getOutput(sourceBlockingFutures_, atEnd);
+  // The spill path re-reads rows already counted here, so record only on the
+  // streaming path.
+  if (output_ != nullptr && recordsSourceInput()) {
+    stats_.wlock()->addInputVector(
+        output_->estimateFlatSize(), output_->size());
+  }
   if (needSpill()) {
     spill();
     VELOX_CHECK_NULL(output_);

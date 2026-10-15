@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
@@ -26,6 +27,7 @@ using namespace facebook::velox::exec::test;
 class LimitTest : public HiveConnectorTestBase {
   void SetUp() override {
     HiveConnectorTestBase::SetUp();
+    cudf_velox::CudfConfig::getInstance().allowCpuFallback = false;
     cudf_velox::registerCudf();
   }
 

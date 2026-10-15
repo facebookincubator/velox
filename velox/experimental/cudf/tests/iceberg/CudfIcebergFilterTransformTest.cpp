@@ -34,6 +34,10 @@ namespace {
 
 using testing::ElementsAre;
 
+constexpr auto kFoldTrue = ConstantFilterFold::kAlwaysTrue;
+constexpr auto kFoldFalse = ConstantFilterFold::kAlwaysFalse;
+constexpr auto kFoldUnknown = ConstantFilterFold::kUnknown;
+
 // Returns the column indices referenced by the operands of 'operation', which
 // are all expected to be column references.
 std::vector<cudf::size_type> operandColumnIndices(
@@ -50,54 +54,346 @@ std::vector<cudf::size_type> operandColumnIndices(
   return indices;
 }
 
-TEST(CudfIcebergFilterTransformTest, logicalAnd) {
+// Owns a two-column logical expression used across fold truth-table tests.
+struct LogicalExpression {
+  LogicalExpression(
+      cudf::ast::ast_operator logicalOperator,
+      cudf::size_type physicalColumnIndex)
+      : injected(tree.push(cudf::ast::column_reference{0})),
+        physical(tree.push(cudf::ast::column_reference{physicalColumnIndex})),
+        expression(tree.push(
+            cudf::ast::operation{logicalOperator, injected, physical})) {}
+
+  TransformedFilter transform(ConstantFilterFold fold) const {
+    return transformFilterForInjectedColumns(
+        expression, std::array<cudf::size_type, 1>{0}, std::array{fold});
+  }
+
   cudf::ast::tree tree;
-  const auto& injected = tree.push(cudf::ast::column_reference{0});
-  const auto& physical = tree.push(cudf::ast::column_reference{2});
-  const auto& expression = tree.push(
-      cudf::ast::operation{
-          cudf::ast::ast_operator::NULL_LOGICAL_AND, injected, physical});
+  const cudf::ast::expression& injected;
+  const cudf::ast::expression& physical;
+  const cudf::ast::expression& expression;
+};
 
-  const auto result = transformFilterForInjectedColumns(
-      expression, std::array<cudf::size_type, 1>{0});
+// Owns a negated two-column logical expression used across fold tests.
+struct NegatedLogicalExpression {
+  explicit NegatedLogicalExpression(cudf::ast::ast_operator logicalOperator)
+      : injected(tree.push(cudf::ast::column_reference{0})),
+        physical(tree.push(cudf::ast::column_reference{1})),
+        logical(tree.push(
+            cudf::ast::operation{logicalOperator, injected, physical})),
+        expression(tree.push(
+            cudf::ast::operation{cudf::ast::ast_operator::NOT, logical})) {}
 
-  EXPECT_TRUE(result.referencesInjectedColumn);
+  TransformedFilter transform(ConstantFilterFold fold) const {
+    return transformFilterForInjectedColumns(
+        expression, std::array<cudf::size_type, 1>{0}, std::array{fold});
+  }
+
+  cudf::ast::tree tree;
+  const cudf::ast::expression& injected;
+  const cudf::ast::expression& physical;
+  const cudf::ast::expression& logical;
+  const cudf::ast::expression& expression;
+};
+
+} // namespace
+
+TEST(CudfIcebergFilterTransformTest, unknownConjunctIsDeferred) {
+  LogicalExpression expression{
+      cudf::ast::ast_operator::NULL_LOGICAL_AND, /*physicalColumnIndex=*/2};
+  const auto result = expression.transform(kFoldUnknown);
+
+  EXPECT_FALSE(result.skipSplit);
   const auto* transformed =
-      dynamic_cast<const cudf::ast::column_reference*>(result.expr);
+      dynamic_cast<const cudf::ast::column_reference*>(result.pushedExpr);
   ASSERT_NE(transformed, nullptr);
   EXPECT_EQ(transformed->get_column_index(), 1);
+  // Only the undecided conjunct is left for the assembled table.
+  EXPECT_EQ(result.deferredExpr, &expression.injected);
 }
 
-TEST(CudfIcebergFilterTransformTest, logicalOr) {
+TEST(CudfIcebergFilterTransformTest, trueConjunctDropsOut) {
+  LogicalExpression expression{
+      cudf::ast::ast_operator::NULL_LOGICAL_AND, /*physicalColumnIndex=*/2};
+  const auto result = expression.transform(kFoldTrue);
+
+  EXPECT_FALSE(result.skipSplit);
+  const auto* transformed =
+      dynamic_cast<const cudf::ast::column_reference*>(result.pushedExpr);
+  ASSERT_NE(transformed, nullptr);
+  EXPECT_EQ(transformed->get_column_index(), 1);
+  // The pushed filter is exact, so no pass over the assembled table is needed.
+  EXPECT_EQ(result.deferredExpr, nullptr);
+}
+
+TEST(CudfIcebergFilterTransformTest, falseConjunctRejectsSplit) {
+  LogicalExpression expression{
+      cudf::ast::ast_operator::NULL_LOGICAL_AND, /*physicalColumnIndex=*/2};
+  const auto result = expression.transform(kFoldFalse);
+
+  EXPECT_TRUE(result.skipSplit);
+  EXPECT_EQ(result.pushedExpr, nullptr);
+  EXPECT_EQ(result.deferredExpr, nullptr);
+}
+
+TEST(CudfIcebergFilterTransformTest, unknownDisjunctIsDeferred) {
+  LogicalExpression expression{
+      cudf::ast::ast_operator::NULL_LOGICAL_OR, /*physicalColumnIndex=*/1};
+  const auto result = expression.transform(kFoldUnknown);
+
+  EXPECT_EQ(result.pushedExpr, nullptr);
+  // An undecided disjunct relaxes the whole disjunction.
+  EXPECT_EQ(result.deferredExpr, &expression.expression);
+}
+
+TEST(CudfIcebergFilterTransformTest, falseDisjunctDropsOut) {
+  LogicalExpression expression{
+      cudf::ast::ast_operator::NULL_LOGICAL_OR, /*physicalColumnIndex=*/1};
+  const auto result = expression.transform(kFoldFalse);
+
+  const auto* transformed =
+      dynamic_cast<const cudf::ast::column_reference*>(result.pushedExpr);
+  ASSERT_NE(transformed, nullptr);
+  EXPECT_EQ(transformed->get_column_index(), 0);
+  EXPECT_EQ(result.deferredExpr, nullptr);
+}
+
+TEST(CudfIcebergFilterTransformTest, trueDisjunctAcceptsEveryRow) {
+  LogicalExpression expression{
+      cudf::ast::ast_operator::NULL_LOGICAL_OR, /*physicalColumnIndex=*/1};
+  const auto result = expression.transform(kFoldTrue);
+
+  EXPECT_FALSE(result.skipSplit);
+  EXPECT_EQ(result.pushedExpr, nullptr);
+  EXPECT_EQ(result.deferredExpr, nullptr);
+}
+
+TEST(CudfIcebergFilterTransformTest, negatedConjunctionIsPushedOnceFolded) {
+  NegatedLogicalExpression expression{
+      cudf::ast::ast_operator::NULL_LOGICAL_AND};
+  const auto result = expression.transform(kFoldTrue);
+
+  const auto* transformed =
+      dynamic_cast<const cudf::ast::operation*>(result.pushedExpr);
+  ASSERT_NE(transformed, nullptr);
+  EXPECT_EQ(transformed->get_operator(), cudf::ast::ast_operator::NOT);
+  EXPECT_THAT(operandColumnIndices(*transformed), ElementsAre(0));
+  EXPECT_EQ(result.deferredExpr, nullptr);
+}
+
+// A negation over a `kAlwaysFalse` fold must be deferred, not inverted.
+TEST(CudfIcebergFilterTransformTest, negatedRejectingConjunctionIsDeferred) {
+  NegatedLogicalExpression expression{
+      cudf::ast::ast_operator::NULL_LOGICAL_AND};
+  const auto result = expression.transform(kFoldFalse);
+
+  EXPECT_FALSE(result.skipSplit);
+  EXPECT_EQ(result.pushedExpr, nullptr);
+  EXPECT_EQ(result.deferredExpr, &expression.expression);
+}
+
+// A fold is false for a NULL value too, which the predicate itself evaluates
+// to NULL, so a negation of the disjunction it was dropped from is deferred.
+TEST(CudfIcebergFilterTransformTest, negatedRejectingDisjunctionIsDeferred) {
+  NegatedLogicalExpression expression{cudf::ast::ast_operator::NULL_LOGICAL_OR};
+  const auto result = expression.transform(kFoldFalse);
+
+  EXPECT_FALSE(result.skipSplit);
+  EXPECT_EQ(result.pushedExpr, nullptr);
+  EXPECT_EQ(result.deferredExpr, &expression.expression);
+}
+
+TEST(CudfIcebergFilterTransformTest, rejectingDisjunctIsStillDropped) {
   cudf::ast::tree tree;
   const auto& injected = tree.push(cudf::ast::column_reference{0});
   const auto& physical = tree.push(cudf::ast::column_reference{1});
-  const auto& expression = tree.push(
+  const auto& firstPhysical = tree.push(cudf::ast::column_reference{2});
+  const auto& disjunction = tree.push(
       cudf::ast::operation{
           cudf::ast::ast_operator::NULL_LOGICAL_OR, injected, physical});
+  // The inexactness survives a logical operator, which cannot tell false from
+  // NULL either.
+  const auto& expression = tree.push(
+      cudf::ast::operation{
+          cudf::ast::ast_operator::NULL_LOGICAL_AND,
+          disjunction,
+          firstPhysical});
 
   const auto result = transformFilterForInjectedColumns(
-      expression, std::array<cudf::size_type, 1>{0});
+      expression, std::array<cudf::size_type, 1>{0}, std::array{kFoldFalse});
 
-  EXPECT_TRUE(result.referencesInjectedColumn);
-  EXPECT_EQ(result.expr, nullptr);
+  const auto* transformed =
+      dynamic_cast<const cudf::ast::operation*>(result.pushedExpr);
+  ASSERT_NE(transformed, nullptr);
+  EXPECT_EQ(
+      transformed->get_operator(), cudf::ast::ast_operator::NULL_LOGICAL_AND);
+  EXPECT_THAT(operandColumnIndices(*transformed), ElementsAre(0, 1));
+  EXPECT_EQ(result.deferredExpr, nullptr);
 }
 
-TEST(CudfIcebergFilterTransformTest, negatedDroppedExpression) {
+TEST(CudfIcebergFilterTransformTest, negatedUnknownConjunctionIsDeferred) {
+  NegatedLogicalExpression expression{
+      cudf::ast::ast_operator::NULL_LOGICAL_AND};
+  const auto result = expression.transform(kFoldUnknown);
+
+  EXPECT_EQ(result.pushedExpr, nullptr);
+  EXPECT_EQ(result.deferredExpr, &expression.expression);
+}
+
+// A fold is the value of the whole predicate on the column, so it is applied
+// once, at the highest expression referencing that column and nothing else.
+// Applying it to each reference separately would let the negation invert it.
+TEST(CudfIcebergFilterTransformTest, negatedRangeOnInjectedColumnFoldsOnce) {
   cudf::ast::tree tree;
   const auto& injected = tree.push(cudf::ast::column_reference{0});
+  cudf::numeric_scalar<int32_t> lowValue{1};
+  cudf::numeric_scalar<int32_t> highValue{9};
+  const auto& low = tree.push(cudf::ast::literal{lowValue});
+  const auto& high = tree.push(cudf::ast::literal{highValue});
+  const auto& lowerBound = tree.push(
+      cudf::ast::operation{
+          cudf::ast::ast_operator::GREATER_EQUAL, injected, low});
+  const auto& upperBound = tree.push(
+      cudf::ast::operation{
+          cudf::ast::ast_operator::LESS_EQUAL, injected, high});
+  const auto& range = tree.push(
+      cudf::ast::operation{
+          cudf::ast::ast_operator::NULL_LOGICAL_AND, lowerBound, upperBound});
+  const auto& expression =
+      tree.push(cudf::ast::operation{cudf::ast::ast_operator::NOT, range});
+
+  const auto result = transformFilterForInjectedColumns(
+      expression, std::array<cudf::size_type, 1>{0}, std::array{kFoldFalse});
+
+  EXPECT_TRUE(result.skipSplit);
+  EXPECT_EQ(result.pushedExpr, nullptr);
+  EXPECT_EQ(result.deferredExpr, nullptr);
+}
+
+TEST(CudfIcebergFilterTransformTest, comparisonOnInjectedColumnFolds) {
+  cudf::ast::tree tree;
+  const auto& injected = tree.push(cudf::ast::column_reference{0});
+  cudf::numeric_scalar<int32_t> literalValue{5};
+  const auto& literal = tree.push(cudf::ast::literal{literalValue});
+  const auto& comparison = tree.push(
+      cudf::ast::operation{cudf::ast::ast_operator::EQUAL, injected, literal});
+  const auto& physical = tree.push(cudf::ast::column_reference{1});
+  const auto& expression = tree.push(
+      cudf::ast::operation{
+          cudf::ast::ast_operator::NULL_LOGICAL_AND, comparison, physical});
+
+  const auto result = transformFilterForInjectedColumns(
+      expression, std::array<cudf::size_type, 1>{0}, std::array{kFoldTrue});
+
+  const auto* transformed =
+      dynamic_cast<const cudf::ast::column_reference*>(result.pushedExpr);
+  ASSERT_NE(transformed, nullptr);
+  EXPECT_EQ(transformed->get_column_index(), 0);
+  EXPECT_EQ(result.deferredExpr, nullptr);
+}
+
+TEST(CudfIcebergFilterTransformTest, negatedInjectedOnlyPredicateFolds) {
+  cudf::ast::tree tree;
+  const auto& injected = tree.push(cudf::ast::column_reference{0});
+  cudf::numeric_scalar<int32_t> literalValue{5};
+  const auto& literal = tree.push(cudf::ast::literal{literalValue});
+  const auto& comparison = tree.push(
+      cudf::ast::operation{cudf::ast::ast_operator::EQUAL, injected, literal});
+  const auto& negation =
+      tree.push(cudf::ast::operation{cudf::ast::ast_operator::NOT, comparison});
+  const auto& physical = tree.push(cudf::ast::column_reference{1});
+  const auto& expression = tree.push(
+      cudf::ast::operation{
+          cudf::ast::ast_operator::NULL_LOGICAL_AND, negation, physical});
+
+  // The fold is the value of the negation, so the split is rejected rather
+  // than the negation being inverted a second time.
+  const auto result = transformFilterForInjectedColumns(
+      expression, std::array<cudf::size_type, 1>{0}, std::array{kFoldFalse});
+
+  EXPECT_TRUE(result.skipSplit);
+}
+
+TEST(CudfIcebergFilterTransformTest, foldedConjunctInsideOrIsPushed) {
+  cudf::ast::tree tree;
+  const auto& injected = tree.push(cudf::ast::column_reference{0});
+  const auto& firstPhysical = tree.push(cudf::ast::column_reference{1});
+  const auto& secondPhysical = tree.push(cudf::ast::column_reference{2});
+  const auto& conjunction = tree.push(
+      cudf::ast::operation{
+          cudf::ast::ast_operator::NULL_LOGICAL_AND, injected, firstPhysical});
+  const auto& expression = tree.push(
+      cudf::ast::operation{
+          cudf::ast::ast_operator::NULL_LOGICAL_OR,
+          conjunction,
+          secondPhysical});
+
+  const auto result = transformFilterForInjectedColumns(
+      expression, std::array<cudf::size_type, 1>{0}, std::array{kFoldTrue});
+
+  const auto* transformed =
+      dynamic_cast<const cudf::ast::operation*>(result.pushedExpr);
+  ASSERT_NE(transformed, nullptr);
+  EXPECT_EQ(
+      transformed->get_operator(), cudf::ast::ast_operator::NULL_LOGICAL_OR);
+  EXPECT_THAT(operandColumnIndices(*transformed), ElementsAre(0, 1));
+  EXPECT_EQ(result.deferredExpr, nullptr);
+}
+
+TEST(CudfIcebergFilterTransformTest, unknownConjunctInsideOrDefersTheOr) {
+  cudf::ast::tree tree;
+  const auto& injected = tree.push(cudf::ast::column_reference{0});
+  const auto& firstPhysical = tree.push(cudf::ast::column_reference{1});
+  const auto& secondPhysical = tree.push(cudf::ast::column_reference{2});
+  const auto& conjunction = tree.push(
+      cudf::ast::operation{
+          cudf::ast::ast_operator::NULL_LOGICAL_AND, injected, firstPhysical});
+  const auto& expression = tree.push(
+      cudf::ast::operation{
+          cudf::ast::ast_operator::NULL_LOGICAL_OR,
+          conjunction,
+          secondPhysical});
+
+  const auto result = transformFilterForInjectedColumns(
+      expression, std::array<cudf::size_type, 1>{0}, std::array{kFoldUnknown});
+
+  // The relaxed conjunction accepts rows the disjunction rejects, which only
+  // re-applying the whole disjunction can recover.
+  const auto* transformed =
+      dynamic_cast<const cudf::ast::operation*>(result.pushedExpr);
+  ASSERT_NE(transformed, nullptr);
+  EXPECT_EQ(
+      transformed->get_operator(), cudf::ast::ast_operator::NULL_LOGICAL_OR);
+  EXPECT_THAT(operandColumnIndices(*transformed), ElementsAre(0, 1));
+  EXPECT_EQ(result.deferredExpr, &expression);
+}
+
+TEST(CudfIcebergFilterTransformTest, foldsEachInjectedColumnSeparately) {
+  cudf::ast::tree tree;
+  const auto& firstInjected = tree.push(cudf::ast::column_reference{2});
+  const auto& secondInjected = tree.push(cudf::ast::column_reference{0});
   const auto& physical = tree.push(cudf::ast::column_reference{1});
   const auto& conjunction = tree.push(
       cudf::ast::operation{
-          cudf::ast::ast_operator::NULL_LOGICAL_AND, injected, physical});
+          cudf::ast::ast_operator::NULL_LOGICAL_AND,
+          firstInjected,
+          secondInjected});
   const auto& expression = tree.push(
-      cudf::ast::operation{cudf::ast::ast_operator::NOT, conjunction});
+      cudf::ast::operation{
+          cudf::ast::ast_operator::NULL_LOGICAL_AND, conjunction, physical});
 
   const auto result = transformFilterForInjectedColumns(
-      expression, std::array<cudf::size_type, 1>{0});
+      expression,
+      std::array<cudf::size_type, 2>{0, 2},
+      std::array{kFoldTrue, kFoldUnknown});
 
-  EXPECT_TRUE(result.referencesInjectedColumn);
-  EXPECT_EQ(result.expr, nullptr);
+  const auto* transformed =
+      dynamic_cast<const cudf::ast::column_reference*>(result.pushedExpr);
+  ASSERT_NE(transformed, nullptr);
+  EXPECT_EQ(transformed->get_column_index(), 0);
+  // The column that folded true drops out, the undecided one is deferred.
+  EXPECT_EQ(result.deferredExpr, &firstInjected);
 }
 
 TEST(CudfIcebergFilterTransformTest, nestedLogicalAndRetainsOr) {
@@ -107,43 +403,23 @@ TEST(CudfIcebergFilterTransformTest, nestedLogicalAndRetainsOr) {
   const auto& secondPhysical = tree.push(cudf::ast::column_reference{2});
   const auto& disjunction = tree.push(
       cudf::ast::operation{
-          cudf::ast::ast_operator::LOGICAL_OR, firstPhysical, secondPhysical});
+          cudf::ast::ast_operator::NULL_LOGICAL_OR,
+          firstPhysical,
+          secondPhysical});
   const auto& expression = tree.push(
       cudf::ast::operation{
-          cudf::ast::ast_operator::LOGICAL_AND, injected, disjunction});
+          cudf::ast::ast_operator::NULL_LOGICAL_AND, injected, disjunction});
 
   const auto result = transformFilterForInjectedColumns(
-      expression, std::array<cudf::size_type, 1>{0});
+      expression, std::array<cudf::size_type, 1>{0}, std::array{kFoldUnknown});
 
-  EXPECT_TRUE(result.referencesInjectedColumn);
   const auto* transformed =
-      dynamic_cast<const cudf::ast::operation*>(result.expr);
+      dynamic_cast<const cudf::ast::operation*>(result.pushedExpr);
   ASSERT_NE(transformed, nullptr);
-  EXPECT_EQ(transformed->get_operator(), cudf::ast::ast_operator::LOGICAL_OR);
+  EXPECT_EQ(
+      transformed->get_operator(), cudf::ast::ast_operator::NULL_LOGICAL_OR);
   EXPECT_THAT(operandColumnIndices(*transformed), ElementsAre(0, 1));
-}
-
-TEST(CudfIcebergFilterTransformTest, droppedAndInsideOrIsPushed) {
-  cudf::ast::tree tree;
-  const auto& injected = tree.push(cudf::ast::column_reference{0});
-  const auto& firstPhysical = tree.push(cudf::ast::column_reference{1});
-  const auto& secondPhysical = tree.push(cudf::ast::column_reference{2});
-  const auto& conjunction = tree.push(
-      cudf::ast::operation{
-          cudf::ast::ast_operator::LOGICAL_AND, injected, firstPhysical});
-  const auto& expression = tree.push(
-      cudf::ast::operation{
-          cudf::ast::ast_operator::LOGICAL_OR, conjunction, secondPhysical});
-
-  const auto result = transformFilterForInjectedColumns(
-      expression, std::array<cudf::size_type, 1>{0});
-
-  EXPECT_TRUE(result.referencesInjectedColumn);
-  const auto* transformed =
-      dynamic_cast<const cudf::ast::operation*>(result.expr);
-  ASSERT_NE(transformed, nullptr);
-  EXPECT_EQ(transformed->get_operator(), cudf::ast::ast_operator::LOGICAL_OR);
-  EXPECT_THAT(operandColumnIndices(*transformed), ElementsAre(0, 1));
+  EXPECT_EQ(result.deferredExpr, &injected);
 }
 
 TEST(CudfIcebergFilterTransformTest, rebasesMultiplePhysicalColumns) {
@@ -152,16 +428,20 @@ TEST(CudfIcebergFilterTransformTest, rebasesMultiplePhysicalColumns) {
   const auto& secondPhysical = tree.push(cudf::ast::column_reference{3});
   const auto& expression = tree.push(
       cudf::ast::operation{
-          cudf::ast::ast_operator::LOGICAL_AND, firstPhysical, secondPhysical});
+          cudf::ast::ast_operator::NULL_LOGICAL_AND,
+          firstPhysical,
+          secondPhysical});
 
   const auto result = transformFilterForInjectedColumns(
-      expression, std::array<cudf::size_type, 2>{0, 2});
+      expression,
+      std::array<cudf::size_type, 2>{0, 2},
+      std::array{kFoldUnknown, kFoldUnknown});
 
-  EXPECT_FALSE(result.referencesInjectedColumn);
   const auto* transformed =
-      dynamic_cast<const cudf::ast::operation*>(result.expr);
+      dynamic_cast<const cudf::ast::operation*>(result.pushedExpr);
   ASSERT_NE(transformed, nullptr);
   EXPECT_THAT(operandColumnIndices(*transformed), ElementsAre(0, 1));
+  EXPECT_EQ(result.deferredExpr, nullptr);
 }
 
 TEST(CudfIcebergFilterTransformTest, negatedPhysicalExpressionIsPushed) {
@@ -175,11 +455,10 @@ TEST(CudfIcebergFilterTransformTest, negatedPhysicalExpressionIsPushed) {
       tree.push(cudf::ast::operation{cudf::ast::ast_operator::NOT, comparison});
 
   const auto result = transformFilterForInjectedColumns(
-      expression, std::array<cudf::size_type, 1>{0});
+      expression, std::array<cudf::size_type, 1>{0}, std::array{kFoldUnknown});
 
-  EXPECT_FALSE(result.referencesInjectedColumn);
   const auto* transformed =
-      dynamic_cast<const cudf::ast::operation*>(result.expr);
+      dynamic_cast<const cudf::ast::operation*>(result.pushedExpr);
   ASSERT_NE(transformed, nullptr);
   EXPECT_EQ(transformed->get_operator(), cudf::ast::ast_operator::NOT);
   const auto* transformedComparison = dynamic_cast<const cudf::ast::operation*>(
@@ -191,6 +470,7 @@ TEST(CudfIcebergFilterTransformTest, negatedPhysicalExpressionIsPushed) {
       &transformedComparison->get_operands()[0].get());
   ASSERT_NE(column, nullptr);
   EXPECT_EQ(column->get_column_index(), 0);
+  EXPECT_EQ(result.deferredExpr, nullptr);
 }
 
 TEST(
@@ -205,15 +485,14 @@ TEST(
       cudf::ast::operation{cudf::ast::ast_operator::EQUAL, physical, literal});
 
   const auto result = transformFilterForInjectedColumns(
-      expression, std::array<cudf::size_type, 1>{0});
+      expression, std::array<cudf::size_type, 1>{0}, std::array{kFoldUnknown});
 
-  EXPECT_FALSE(result.referencesInjectedColumn);
   EXPECT_TRUE(result.requiresSplitSpecificDecimalTypes);
 }
 
 TEST(
     CudfIcebergFilterTransformTest,
-    droppedDecimalDoesNotRequireSplitSpecificTypes) {
+    foldedDecimalDoesNotRequireSplitSpecificTypes) {
   cudf::ast::tree tree;
   const auto& injected = tree.push(cudf::ast::column_reference{0});
   cudf::fixed_point_scalar<numeric::decimal64> decimalValue{
@@ -231,15 +510,15 @@ TEST(
           cudf::ast::ast_operator::EQUAL, physical, integerLiteral});
   const auto& expression = tree.push(
       cudf::ast::operation{
-          cudf::ast::ast_operator::LOGICAL_AND,
+          cudf::ast::ast_operator::NULL_LOGICAL_AND,
           decimalComparison,
           integerComparison});
 
   const auto result = transformFilterForInjectedColumns(
-      expression, std::array<cudf::size_type, 1>{0});
+      expression, std::array<cudf::size_type, 1>{0}, std::array{kFoldTrue});
 
-  EXPECT_TRUE(result.referencesInjectedColumn);
   EXPECT_FALSE(result.requiresSplitSpecificDecimalTypes);
+  EXPECT_EQ(result.deferredExpr, nullptr);
 }
 
 TEST(
@@ -252,23 +531,24 @@ TEST(
       cudf::ast::operation{cudf::ast::ast_operator::ADD, injected, physical});
 
   const auto result = transformFilterForInjectedColumns(
-      expression, std::array<cudf::size_type, 1>{0});
+      expression, std::array<cudf::size_type, 1>{0}, std::array{kFoldTrue});
 
-  EXPECT_TRUE(result.referencesInjectedColumn);
-  EXPECT_EQ(result.expr, nullptr);
+  EXPECT_EQ(result.pushedExpr, nullptr);
+  EXPECT_EQ(result.deferredExpr, &expression);
 }
 
-TEST(CudfIcebergFilterTransformTest, isNullOnInjectedColumnIsNotPushed) {
+TEST(CudfIcebergFilterTransformTest, isNullOnInjectedColumnFolds) {
   cudf::ast::tree tree;
   const auto& injected = tree.push(cudf::ast::column_reference{1});
   const auto& expression = tree.push(
       cudf::ast::operation{cudf::ast::ast_operator::IS_NULL, injected});
 
   const auto result = transformFilterForInjectedColumns(
-      expression, std::array<cudf::size_type, 1>{1});
+      expression, std::array<cudf::size_type, 1>{1}, std::array{kFoldTrue});
 
-  EXPECT_TRUE(result.referencesInjectedColumn);
-  EXPECT_EQ(result.expr, nullptr);
+  EXPECT_FALSE(result.skipSplit);
+  EXPECT_EQ(result.pushedExpr, nullptr);
+  EXPECT_EQ(result.deferredExpr, nullptr);
 }
 
 TEST(CudfIcebergFilterTransformTest, rebasePhysicalColumn) {
@@ -276,11 +556,10 @@ TEST(CudfIcebergFilterTransformTest, rebasePhysicalColumn) {
   const auto& expression = tree.push(cudf::ast::column_reference{2});
 
   const auto result = transformFilterForInjectedColumns(
-      expression, std::array<cudf::size_type, 1>{0});
+      expression, std::array<cudf::size_type, 1>{0}, std::array{kFoldUnknown});
 
-  EXPECT_FALSE(result.referencesInjectedColumn);
   const auto* transformed =
-      dynamic_cast<const cudf::ast::column_reference*>(result.expr);
+      dynamic_cast<const cudf::ast::column_reference*>(result.pushedExpr);
   ASSERT_NE(transformed, nullptr);
   EXPECT_EQ(transformed->get_column_index(), 1);
 }
@@ -290,11 +569,27 @@ TEST(CudfIcebergFilterTransformTest, trailingInjectedColumnDoesNotRebase) {
   const auto& expression = tree.push(cudf::ast::column_reference{1});
 
   const auto result = transformFilterForInjectedColumns(
-      expression, std::array<cudf::size_type, 1>{2});
+      expression, std::array<cudf::size_type, 1>{2}, std::array{kFoldUnknown});
 
-  EXPECT_FALSE(result.referencesInjectedColumn);
   // Nothing changed, so the input expression is pushed as is.
-  EXPECT_EQ(result.expr, &expression);
+  EXPECT_EQ(result.pushedExpr, &expression);
+}
+
+TEST(CudfIcebergFilterTransformTest, nullPropagatingOperatorFails) {
+  cudf::ast::tree tree;
+  const auto& injected = tree.push(cudf::ast::column_reference{0});
+  const auto& physical = tree.push(cudf::ast::column_reference{1});
+  const auto& expression = tree.push(
+      cudf::ast::operation{
+          cudf::ast::ast_operator::LOGICAL_OR, injected, physical});
+
+  // Folding this to TRUE would keep the rows a null-propagating OR rejects.
+  VELOX_ASSERT_THROW(
+      (transformFilterForInjectedColumns(
+          expression,
+          std::array<cudf::size_type, 1>{0},
+          std::array{kFoldTrue})),
+      "Iceberg subfield filter must use the null-aware logical operators");
 }
 
 TEST(CudfIcebergFilterTransformTest, emptyInjectedColumnIndicesFail) {
@@ -303,7 +598,9 @@ TEST(CudfIcebergFilterTransformTest, emptyInjectedColumnIndicesFail) {
 
   VELOX_ASSERT_THROW(
       (transformFilterForInjectedColumns(
-          expression, std::span<const cudf::size_type>{})),
+          expression,
+          std::span<const cudf::size_type>{},
+          std::span<const ConstantFilterFold>{})),
       "Injected column indices to cuDF filter transformer must be non-empty, ascending, and unique");
 }
 
@@ -313,8 +610,22 @@ TEST(CudfIcebergFilterTransformTest, unsortedInjectedColumnIndicesFail) {
 
   VELOX_ASSERT_THROW(
       (transformFilterForInjectedColumns(
-          expression, std::array<cudf::size_type, 2>{2, 0})),
+          expression,
+          std::array<cudf::size_type, 2>{2, 0},
+          std::array{kFoldUnknown, kFoldUnknown})),
       "Injected column indices to cuDF filter transformer must be non-empty, ascending, and unique");
+}
+
+TEST(CudfIcebergFilterTransformTest, missingFoldsFail) {
+  cudf::ast::tree tree;
+  const auto& expression = tree.push(cudf::ast::column_reference{3});
+
+  VELOX_ASSERT_THROW(
+      (transformFilterForInjectedColumns(
+          expression,
+          std::array<cudf::size_type, 2>{0, 2},
+          std::array{kFoldUnknown})),
+      "cuDF filter transformer needs one fold per injected column");
 }
 
 TEST(CudfIcebergFilterTransformTest, columnNameReferenceFails) {
@@ -323,9 +634,9 @@ TEST(CudfIcebergFilterTransformTest, columnNameReferenceFails) {
 
   VELOX_ASSERT_THROW(
       (transformFilterForInjectedColumns(
-          expression, std::array<cudf::size_type, 1>{0})),
+          expression,
+          std::array<cudf::size_type, 1>{0},
+          std::array{kFoldUnknown})),
       "Iceberg subfield filter must use column index references");
 }
-
-} // namespace
 } // namespace facebook::velox::cudf_velox::connector::hive::iceberg

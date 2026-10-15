@@ -834,7 +834,7 @@ TEST_F(MixedUnionWithTableScanTest, zeroBatchSizeHintUsesDefault) {
   constexpr int kRows = 100;
 
   auto data = makeRowVector({
-      makeFlatVector<int64_t>(kRows, folly::identity),
+      makeFlatIdentityVector<int64_t>(kRows),
   });
 
   auto filePath = TempFilePath::create();
@@ -874,7 +874,7 @@ TEST_F(MixedUnionWithTableScanTest, batchSizeHintDirectlyControlsBatchSize) {
   constexpr int32_t kBatchHint = 50;
 
   auto data = makeRowVector({
-      makeFlatVector<int64_t>(kRows, folly::identity),
+      makeFlatIdentityVector<int64_t>(kRows),
   });
 
   auto filePath = TempFilePath::create();
@@ -937,7 +937,7 @@ TEST_F(
   constexpr uint32_t kOverride = 75;
 
   auto data = makeRowVector({
-      makeFlatVector<int64_t>(kRows, folly::identity),
+      makeFlatIdentityVector<int64_t>(kRows),
   });
 
   auto filePath = TempFilePath::create();
@@ -1151,7 +1151,7 @@ TEST_F(MixedUnionWithTableScanTest, batchSizeHintWithSmallValue) {
   constexpr int32_t kBatchHint = 5;
 
   auto data = makeRowVector({
-      makeFlatVector<int64_t>(kRows, folly::identity),
+      makeFlatIdentityVector<int64_t>(kRows),
   });
 
   auto filePath = TempFilePath::create();

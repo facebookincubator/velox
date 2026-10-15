@@ -197,3 +197,19 @@ TEST_F(ArrayDuplicatesTest, constant) {
   expected = makeConstantArray<int64_t>(size, {6});
   assertEqualVectors(expected, result);
 }
+
+TEST_F(ArrayDuplicatesTest, unknownType) {
+  auto array = makeNullableArrayVector<UnknownValue>(
+      std::vector<std::vector<std::optional<UnknownValue>>>{
+          {},
+          {std::nullopt, std::nullopt, std::nullopt},
+      });
+
+  auto expected = makeNullableArrayVector<UnknownValue>(
+      std::vector<std::vector<std::optional<UnknownValue>>>{
+          {},
+          {std::nullopt},
+      });
+
+  testExpr(expected, "array_duplicates(C0)", {array});
+}

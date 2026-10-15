@@ -40,6 +40,7 @@ add_library(
   ReaderBase.h
   NullColumnReader.h
   NimbleData.h
+  NimbleReaderFuzzerStats.h
   IntegerColumnReader.h
   FloatingPointColumnReader.h
   FlatMapColumnReader.h

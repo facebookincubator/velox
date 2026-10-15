@@ -33,12 +33,17 @@ class Xxh3_64Checksum : public Checksum {
     XXH3_freeState(state_);
   }
 
+  void reset() override {
+    const auto result = XXH3_64bits_reset(state_);
+    NIMBLE_CHECK(result != XXH_ERROR, "XXH3_64bits_reset error.");
+  }
+
   void update(std::string_view data) override {
     const auto result = XXH3_64bits_update(state_, data.data(), data.size());
     NIMBLE_CHECK(result != XXH_ERROR, "XXH3_64bits_update error.");
   }
 
-  uint64_t getChecksum(bool reset) override {
+  uint64_t getChecksum64(bool reset) override {
     auto ret = static_cast<uint64_t>(XXH3_64bits_digest(state_));
     if (UNLIKELY(reset)) {
       this->reset();
@@ -46,17 +51,37 @@ class Xxh3_64Checksum : public Checksum {
     return ret;
   }
 
+  uint32_t getChecksum32(bool reset) override {
+    return narrow(getChecksum64(reset));
+  }
+
+  uint64_t computeChecksum64(std::string_view data) override {
+    // The one-shot entry point skips the streaming state machine entirely and
+    // reaches XXH3's specialized small-input paths. Reset so accumulated state
+    // cannot leak into a later getChecksum64().
+    reset();
+    return static_cast<uint64_t>(XXH3_64bits(data.data(), data.size()));
+  }
+
+  uint32_t computeChecksum32(std::string_view data) override {
+    return narrow(computeChecksum64(data));
+  }
+
   ChecksumType getType() const override {
     return ChecksumType::XXH3_64;
   }
 
  private:
-  XXH3_state_t* state_;
-
-  void reset() {
-    const auto result = XXH3_64bits_reset(state_);
-    NIMBLE_CHECK(result != XXH_ERROR, "XXH3_64bits_reset error.");
+  // Folds the high half into the low half, so the result depends on all 64
+  // bits even for a digest whose low half is the weaker one.
+  //
+  // This value is persisted in stripe-group metadata. Changing it invalidates
+  // the checksums in every file already written.
+  static uint32_t narrow(uint64_t checksum) {
+    return static_cast<uint32_t>(checksum ^ (checksum >> 32));
   }
+
+  XXH3_state_t* const state_;
 };
 } // namespace
 

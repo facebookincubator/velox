@@ -187,6 +187,18 @@ class JsonFormatFunction : public exec::VectorFunction {
   }
 };
 
+// Requires 'later' to sort at or after 'earlier'.
+template <bool kNeedNormalize>
+bool keyEqualToSortedPredecessor(
+    std::string_view earlier,
+    std::string_view later) {
+  if constexpr (kNeedNormalize) {
+    return !lessThanForJsonParse(earlier, later);
+  } else {
+    return earlier == later;
+  }
+}
+
 // A performant json parsing implementation. Does not handle null rows. This is
 // also leveraged by json functions other than json_parse that need to parse a
 // varchar input. If `nullOnError` is true, the result will have null values for
@@ -490,11 +502,24 @@ class JsonParseImpl {
       sortIndices(
           [&](int32_t i, int32_t j) { return fields[i].key < fields[j].key; });
     }
-    for (auto i = 0; i < numFields; ++i) {
-      if (i > 0) {
+    // The sort is not stable, so the last occurrence of a key is the greatest
+    // original index in its run, not the last element of the run.
+    bool first{true};
+    for (int i = 0; i < numFields; ++i) {
+      const auto key = fields[sortIndices_[i]].key;
+      int32_t lastOccurrence = sortIndices_[i];
+      while (i + 1 < numFields &&
+             keyEqualToSortedPredecessor<kNeedNormalize>(
+                 key, fields[sortIndices_[i + 1]].key)) {
+        ++i;
+        lastOccurrence = std::max(lastOccurrence, sortIndices_[i]);
+      }
+      VELOX_DCHECK_EQ(key, fields[lastOccurrence].key);
+      if (!first) {
         addOrMergeChar(views_, kSeparator);
       }
-      auto& field = fields[sortIndices_[i]];
+      first = false;
+      const auto& field = fields[lastOccurrence];
       for (int j = 0; j < field.size; ++j) {
         views_.push_back(views_[field.offset + j]);
       }

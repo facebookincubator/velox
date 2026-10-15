@@ -475,5 +475,17 @@ TEST_F(MultiMapAggTest, timestampWithTimeZoneGroupBy) {
       {expected});
 }
 
+TEST_F(MultiMapAggTest, unknownKey) {
+  auto data = makeRowVector({
+      makeFlatVector<int8_t>({1, 2, 1, 2, 1, 2}),
+      makeAllNullFlatVector<UnknownValue>(6),
+      makeConstant<int32_t>(123, 6),
+  });
+
+  testAggregations(
+      {data}, {"c0"}, {"multimap_agg(c1, c2)"}, "VALUES (1, NULL), (2, NULL)");
+
+  testAggregations({data}, {}, {"multimap_agg(c1, c2)"}, "VALUES (NULL)");
+}
 } // namespace
 } // namespace facebook::velox::aggregate::prestosql

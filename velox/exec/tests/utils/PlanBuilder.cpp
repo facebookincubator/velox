@@ -526,10 +526,14 @@ PlanBuilder& PlanBuilder::traceScan(
 
 PlanBuilder& PlanBuilder::exchange(
     const RowTypePtr& outputType,
-    std::string serdeKind) {
+    std::string serdeKind,
+    std::string transportKind) {
   VELOX_CHECK_NULL(planNode_, "Exchange must be the source node");
   planNode_ = std::make_shared<core::ExchangeNode>(
-      nextPlanNodeId(), outputType, serdeKind);
+      nextPlanNodeId(),
+      outputType,
+      std::move(serdeKind),
+      std::move(transportKind));
   VELOX_CHECK(!planNode_->supportsBarrier());
   return *this;
 }
@@ -566,13 +570,19 @@ parseOrderByClauses(
 PlanBuilder& PlanBuilder::mergeExchange(
     const RowTypePtr& outputType,
     const std::vector<std::string>& keys,
-    std::string serdeKind) {
+    std::string serdeKind,
+    std::string transportKind) {
   VELOX_CHECK_NULL(planNode_, "MergeExchange must be the source node");
   auto [sortingKeys, sortingOrders] =
       parseOrderByClauses(keys, outputType, pool_);
 
   planNode_ = std::make_shared<core::MergeExchangeNode>(
-      nextPlanNodeId(), outputType, sortingKeys, sortingOrders, serdeKind);
+      nextPlanNodeId(),
+      outputType,
+      sortingKeys,
+      sortingOrders,
+      std::move(serdeKind),
+      std::move(transportKind));
   VELOX_CHECK(!planNode_->supportsBarrier());
   return *this;
 }
@@ -1143,7 +1153,8 @@ PlanBuilder& PlanBuilder::aggregation(
     const std::vector<std::string>& masks,
     core::AggregationNode::Step step,
     bool ignoreNullKeys,
-    const std::vector<std::vector<TypePtr>>& rawInputTypes) {
+    const std::vector<std::vector<TypePtr>>& rawInputTypes,
+    std::optional<bool> mayRetainInput) {
   auto aggregatesAndNames = createAggregateExpressionsAndNames(
       aggregates, masks, step, rawInputTypes);
 
@@ -1175,6 +1186,7 @@ PlanBuilder& PlanBuilder::aggregation(
       groupId,
       ignoreNullKeys,
       /*noGroupsSpanBatches=*/false,
+      mayRetainInput,
       planNode_);
   VELOX_CHECK(aggregationNode->supportsBarrier());
   planNode_ = std::move(aggregationNode);
@@ -1187,7 +1199,8 @@ PlanBuilder& PlanBuilder::streamingAggregation(
     const std::vector<std::string>& masks,
     core::AggregationNode::Step step,
     bool ignoreNullKeys,
-    bool noGroupsSpanBatches) {
+    bool noGroupsSpanBatches,
+    std::optional<bool> mayRetainInput) {
   auto aggregatesAndNames =
       createAggregateExpressionsAndNames(aggregates, masks, step);
   auto aggregationNode = std::make_shared<core::AggregationNode>(
@@ -1199,6 +1212,7 @@ PlanBuilder& PlanBuilder::streamingAggregation(
       aggregatesAndNames.aggregates,
       ignoreNullKeys,
       noGroupsSpanBatches,
+      mayRetainInput,
       planNode_);
   VELOX_CHECK(aggregationNode->supportsBarrier());
   planNode_ = std::move(aggregationNode);

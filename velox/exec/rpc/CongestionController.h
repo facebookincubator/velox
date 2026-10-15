@@ -126,6 +126,12 @@ class CongestionController {
     return numShrinks_;
   }
 
+  /// Returns the number of reported window decreases caused by explicit
+  /// overload signals, excluding latency-gradient decreases.
+  int64_t numOverloadShrinks() const {
+    return numOverloadShrinks_;
+  }
+
   /// Halves the window, floored at 1 so dispatch never fully stalls. The fast
   /// overload path (rate limit / timeout).
   void onError();
@@ -166,6 +172,8 @@ class CongestionController {
 
   // Count of window-shrink events (onError halving + gradient shrinks).
   int64_t numShrinks_{0};
+  // Subset of numShrinks_ caused by onError halving.
+  int64_t numOverloadShrinks_{0};
 };
 
 } // namespace facebook::velox::exec::rpc

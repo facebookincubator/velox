@@ -27,6 +27,7 @@
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/index/ChunkStatsGroup.h"
 #include "velox/dwio/nimble/index/ClusterIndex.h"
+#include "velox/dwio/nimble/index/HierarchicalClusterIndex.h"
 #include "velox/dwio/nimble/index/IndexConfig.h"
 #include "velox/dwio/nimble/tablet/TabletReader.h"
 #include "velox/dwio/nimble/tablet/TabletWriter.h"
@@ -140,6 +141,10 @@ struct StreamStats {
   std::vector<uint32_t> chunkNullCounts;
 };
 
+/// Returns raw V1 metadata for serialization-focused tests.
+const MetadataBuffer& chunkStatsGroupV1MetadataForTest(
+    const ChunkStatsGroup& chunkStats);
+
 /// Specification for a single chunk in a stream (for test data creation).
 struct ChunkSpec {
   uint32_t rowCount{};
@@ -189,7 +194,7 @@ class ClusterIndexTestHelper {
         pool));
   }
 
-  explicit ClusterIndexTestHelper(const ClusterIndex* clusterIndex)
+  explicit ClusterIndexTestHelper(const ClusterIndexBase* clusterIndex)
       : clusterIndex_(clusterIndex) {}
 
   /// Returns the partition-level statistics for the given partition.
@@ -244,7 +249,7 @@ class ClusterIndexTestHelper {
   }
 
  private:
-  const ClusterIndex* const clusterIndex_;
+  const ClusterIndexBase* const clusterIndex_;
 };
 
 /// Test helper class for ChunkStatsGroup.
@@ -254,15 +259,15 @@ class ChunkStatsTestHelper {
       : chunkStats_(chunkIndex) {}
 
   uint32_t firstStripe() const {
-    return chunkStats_->firstStripe_;
+    return chunkStats_->firstStripe();
   }
 
   uint32_t stripeCount() const {
-    return chunkStats_->stripeCount_;
+    return chunkStats_->numStripes();
   }
 
   uint32_t streamCount() const {
-    return chunkStats_->streamCount_;
+    return chunkStats_->numStreams();
   }
 
   /// Returns stream position index statistics for the specified stream.

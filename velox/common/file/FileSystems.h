@@ -22,6 +22,7 @@
 
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string_view>
 
 namespace facebook::velox {
@@ -145,6 +146,14 @@ class FileSystem {
   virtual std::unique_ptr<ReadFile> openFileForRead(
       std::string_view path,
       const FileOptions& options = {}) = 0;
+
+  /// Opaque blob for 'path', returned to openFileForRead() via
+  /// FileOptions::extraFileInfo. nullopt if unsupported; stale blobs throw.
+  virtual std::optional<std::string> serializeExtraFileInfo(
+      std::string_view /*path*/,
+      const FileOptions& /*options*/ = {}) {
+    return std::nullopt;
+  }
 
   /// Returns a WriteFile handle for a given file path
   virtual std::unique_ptr<WriteFile> openFileForWrite(

@@ -36,6 +36,8 @@ class AggregateCompanionFunctionBase : public Aggregate {
 
   bool isFixedSize() const override final;
 
+  bool isReducing() const override final;
+
   void destroy(folly::Range<char**> groups) override final;
 
   void initializeNewGroups(

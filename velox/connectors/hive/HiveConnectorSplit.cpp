@@ -19,15 +19,20 @@
 namespace facebook::velox::connector::hive {
 
 std::string HiveConnectorSplit::toString() const {
+  const std::string physicalPath = physicalFilePath.empty()
+      ? ""
+      : fmt::format(" read from {}", physicalFilePath);
   if (tableBucketNumber.has_value()) {
     return fmt::format(
-        "Hive: {} {} - {} {}",
+        "Hive: {} {} - {} {}{}",
         filePath,
         start,
         length,
-        tableBucketNumber.value());
+        tableBucketNumber.value(),
+        physicalPath);
   }
-  return fmt::format("Hive: {} {} - {}", filePath, start, length);
+  return fmt::format(
+      "Hive: {} {} - {}{}", filePath, start, length, physicalPath);
 }
 
 folly::dynamic HiveConnectorSplit::serialize() const {
@@ -102,6 +107,9 @@ folly::dynamic HiveConnectorSplit::serialize() const {
   if (columnMappingMode.has_value()) {
     obj["columnMappingMode"] =
         dwio::common::ColumnMappingModeName::toName(*columnMappingMode);
+  }
+  if (!physicalFilePath.empty()) {
+    obj["physicalFilePath"] = physicalFilePath;
   }
 
   return obj;
@@ -195,7 +203,7 @@ std::shared_ptr<HiveConnectorSplit> HiveConnectorSplit::create(
     columnMappingMode = *parsedColumnMappingMode;
   }
 
-  return std::make_shared<HiveConnectorSplit>(
+  auto split = std::make_shared<HiveConnectorSplit>(
       connectorId,
       filePath,
       fileFormat,
@@ -213,6 +221,10 @@ std::shared_ptr<HiveConnectorSplit> HiveConnectorSplit::create(
       rowIdProperties,
       bucketConversion,
       columnMappingMode);
+  if (auto it = obj.find("physicalFilePath"); it != obj.items().end()) {
+    split->physicalFilePath = it->second.asString();
+  }
+  return split;
 }
 
 // static

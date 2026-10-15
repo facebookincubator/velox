@@ -31,6 +31,12 @@ class MapAggAggregate : public MapAggregateBase<K, AccumulatorType> {
   explicit MapAggAggregate(TypePtr resultType, bool throwOnNestedNulls = false)
       : Base(std::move(resultType)), throwOnNestedNulls_(throwOnNestedNulls) {}
 
+  bool isReducing() const override {
+    // Duplicate keys are expected to be rare, so state generally grows with
+    // input cardinality.
+    return false;
+  }
+
   bool supportsToIntermediate() const override {
     return true;
   }
@@ -191,7 +197,7 @@ void registerMapAggAggregate(
         const auto typeKind = keyType->kind();
 
         if (keyType->providesCustomComparison()) {
-          return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(
+          return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH_WITH_UNKNOWN(
               createMapAggAggregateWithCustomCompare, typeKind, resultType);
         }
 

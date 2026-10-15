@@ -807,6 +807,9 @@ void __global__ __launch_bounds__(1024) addOne4x64BranchKernel(
     params.l1 = *addCast<long2>(numbers, sizeof(int64_t) * index);
     params.l2 =
         *addCast<long2>(numbers, sizeof(int64_t) * (index + halfStride));
+    // Unrolling would emit the asm block, and so the labels it defines, more
+    // than once in the same function.
+#pragma unroll 1
     for (auto counter = 0; counter < repeats; ++counter) {
       asm volatile(
           "ts: .branchtargets BLK0, BLK1, BLK2, BLK3, BLK4, BLK5, BLK6, BLK7, BLK8, BLK9, BLK10, BLK11, BLK12, BLK13, BLK14, BLK15, BLK16, BLK17, BLK18, BLK19, BLK20, BLK21, BLK22, BLK23, BLK24, BLK25, BLK26, BLK27, BLK28, BLK29, BLK30, BLK31;");

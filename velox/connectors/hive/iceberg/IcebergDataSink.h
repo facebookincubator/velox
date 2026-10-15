@@ -143,7 +143,8 @@ class IcebergInsertTableHandle final : public HiveInsertTableHandle {
       std::unordered_map<std::string, ExistingDeletionVector>
           existingDeletionVectors = {},
       std::shared_ptr<const FileNameGenerator> fileNameGenerator =
-          std::make_shared<const IcebergFileNameGenerator>());
+          std::make_shared<const IcebergFileNameGenerator>(),
+      std::vector<std::string> insertedColumns = {});
 
   /// Returns the Iceberg partition specification that defines how the table
   /// is partitioned.
@@ -165,11 +166,22 @@ class IcebergInsertTableHandle final : public HiveInsertTableHandle {
     return existingDeletionVectors_;
   }
 
+  /// Returns the target column names of the INSERT statement. Fully populated
+  /// on the INSERT path: the columns the user listed, or all table columns
+  /// when no list was given. Empty on paths that carry no statement columns
+  /// (CTAS, MERGE, DELETE, procedures), where no write-default is substituted.
+  /// A column absent from a non-empty list receives its write-default; one
+  /// present keeps the supplied value, including an explicit NULL.
+  const std::vector<std::string>& insertedColumns() const {
+    return insertedColumns_;
+  }
+
  private:
   const IcebergPartitionSpecPtr partitionSpec_;
   const WriteKind writeKind_;
   const std::unordered_map<std::string, ExistingDeletionVector>
       existingDeletionVectors_;
+  const std::vector<std::string> insertedColumns_;
 };
 
 using IcebergInsertTableHandlePtr =
@@ -184,6 +196,14 @@ class IcebergDataSink : public HiveDataSink {
       CommitStrategy commitStrategy,
       const std::shared_ptr<const HiveConfig>& hiveConfig,
       const IcebergConfigPtr& icebergConfig);
+
+  /// Applies write-default values for columns omitted from the INSERT
+  /// statement, then delegates to HiveDataSink::appendData. Omission is
+  /// determined at plan time from insertedColumns; every row in the batch
+  /// is substituted. Explicitly-inserted NULLs (columns present in
+  /// insertedColumns) are not touched. Throws if an omitted column carries a
+  /// non-null value, which would mean the substitution discards user data.
+  void appendData(RowVectorPtr input) override;
 
   /// Generates Iceberg-specific commit messages for all writers containing
   /// metadata about written files. Creates a JSON object for each writer
@@ -210,6 +230,16 @@ class IcebergDataSink : public HiveDataSink {
   std::vector<std::string> commitMessage() const override;
 
  private:
+  // Descriptor of a column whose write-default must be materialized on every
+  // appendData call. Pre-computed once in the constructor.
+  struct WriteDefaultColumn {
+    // Index of this column within the input RowVector.
+    column_index_t index;
+    // Size-1 constant vector holding the default value, wrapped to the batch
+    // size via BaseVector::wrapInConstant in appendData.
+    VectorPtr constantVector;
+  };
+
   IcebergDataSink(
       RowTypePtr inputType,
       IcebergInsertTableHandlePtr insertTableHandle,
@@ -360,6 +390,10 @@ class IcebergDataSink : public HiveDataSink {
   std::vector<int64_t> reportedRowsPerWriter_;
 
   const IcebergInsertTableHandlePtr icebergInsertTableHandle_;
+
+  // Columns that need write-defaults materialized on every appendData call,
+  // pre-computed once in the constructor.
+  std::vector<WriteDefaultColumn> writeDefaultColumns_;
 
   // Collects per-file Iceberg column statistics and wires Iceberg field ids
   // into the writer options. Polymorphic over the table's file format; created

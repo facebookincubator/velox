@@ -48,7 +48,7 @@ RLEEncoding<bool>::RLEEncoding(
       internal::RLEEncodingBase<bool, RLEEncoding<bool>>::getValuesStart());
   NIMBLE_CHECK(
       (internal::RLEEncodingBase<bool, RLEEncoding<bool>>::getValuesStart() +
-       1) == data.end(),
+       1) == data.data() + data.size(),
       "Unexpected run length encoding end");
   internal::RLEEncodingBase<bool, RLEEncoding<bool>>::reset();
 }
@@ -112,7 +112,9 @@ void RLEEncoding<bool>::countTrue(
   const std::string_view runLengthsData{pos, runLengthsSize};
   pos += runLengthsSize;
   NIMBLE_CHECK_EQ(
-      pos + sizeof(bool), encoded.end(), "Unexpected boolean RLE encoding end");
+      pos + sizeof(bool),
+      encoded.data() + encoded.size(),
+      "Unexpected boolean RLE encoding end");
   bool value = encoding::read<bool>(pos);
 
   NIMBLE_CHECK_EQ(

@@ -391,7 +391,7 @@ std::string HiveTableHandle::toString() const {
 }
 
 folly::dynamic HiveTableHandle::serializeHiveFields(
-    const std::string& typeName) const {
+    std::string_view typeName) const {
   folly::dynamic obj = ConnectorTableHandle::serializeBase(typeName);
   obj["tableName"] = tableName_;
 

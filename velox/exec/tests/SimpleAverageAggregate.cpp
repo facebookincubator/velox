@@ -174,6 +174,7 @@ exec::AggregateRegistrationResult registerSimpleAverageAggregate(
           }
         }
       },
+      {.ignoreNullInputs = true},
       true /*registerCompanionFunctions*/,
       true /*overwrite*/);
 }

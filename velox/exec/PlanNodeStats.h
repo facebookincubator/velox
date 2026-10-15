@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include <folly/container/F14Map.h>
 #include <folly/dynamic.h>
 #include "velox/common/time/CpuWallTimer.h"
 #include "velox/exec/Operator.h"
@@ -144,7 +145,7 @@ struct PlanNodeStats {
   uint32_t spilledFiles{0};
 
   /// A map of expression name to its respective stats.
-  std::unordered_map<std::string, ExprStats> expressionStats;
+  folly::F14FastMap<std::string, ExprStats> expressionStats;
 
   /// Add stats for a single operator instance.
   void add(const OperatorStats& stats);
@@ -163,7 +164,7 @@ struct PlanNodeStats {
   const PlanNodeStats& operatorStatsFor(std::string_view operatorType) const;
 
  private:
-  void addTotals(const OperatorStats& stats);
+  void addTotals(const OperatorStats& stats, bool gateByBoundary);
 };
 
 std::unordered_map<core::PlanNodeId, PlanNodeStats> toPlanStats(

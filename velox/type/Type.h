@@ -507,6 +507,9 @@ class ScalarType : public CanProvideCustomComparisonType<KIND> {
   // TODO: This and all similar functions should be constexpr starting from
   // C++23. In such case similar places but with type parameters can be
   // constexpr too.
+  //
+  // Types derived from a scalar type (DATE, JSON, DECIMAL, ...) delete
+  // create(); inherited, it would return this base type. Use their get().
   static std::shared_ptr<const ScalarType<KIND>> create() {
     static constexpr ScalarType<KIND> kInstance;
     return {std::shared_ptr<const ScalarType<KIND>>{}, &kInstance};
@@ -529,6 +532,8 @@ TypePtr DECIMAL(uint8_t precision, uint8_t scale);
 template <TypeKind KIND>
 class DecimalType : public ScalarType<KIND> {
  public:
+  static std::shared_ptr<const DecimalType> create() = delete;
+
   static_assert(KIND == TypeKind::BIGINT || KIND == TypeKind::HUGEINT);
   static constexpr uint8_t kMaxPrecision = KIND == TypeKind::BIGINT ? 18 : 38;
   static constexpr uint8_t kMinPrecision = KIND == TypeKind::BIGINT ? 1 : 19;
@@ -688,12 +693,16 @@ FOLLY_ALWAYS_INLINE const LongDecimalType& Type::asLongDecimal() const {
   return dynamic_cast<const LongDecimalType&>(*this);
 }
 
+// dynamic_cast is expensive on hot paths such as Presto serialization.
+// Checking kind_ first skips it for every type that cannot be a decimal.
 FOLLY_ALWAYS_INLINE bool Type::isShortDecimal() const {
-  return dynamic_cast<const ShortDecimalType*>(this) != nullptr;
+  return kind_ == TypeKind::BIGINT &&
+      dynamic_cast<const ShortDecimalType*>(this) != nullptr;
 }
 
 FOLLY_ALWAYS_INLINE bool Type::isLongDecimal() const {
-  return dynamic_cast<const LongDecimalType*>(this) != nullptr;
+  return kind_ == TypeKind::HUGEINT &&
+      dynamic_cast<const LongDecimalType*>(this) != nullptr;
 }
 
 FOLLY_ALWAYS_INLINE bool Type::isDecimal() const {
@@ -1172,6 +1181,8 @@ using VarbinaryType = ScalarType<TypeKind::VARBINARY>;
 // Timestamp type in UTC that is not subject to session timezone adjustment.
 class TimestampUtcType final : public TimestampType {
  public:
+  static std::shared_ptr<const TimestampUtcType> create() = delete;
+
   static std::shared_ptr<const TimestampUtcType> get() {
     VELOX_CONSTEXPR_SINGLETON TimestampUtcType kInstance;
     return {std::shared_ptr<const TimestampUtcType>{}, &kInstance};
@@ -1210,6 +1221,8 @@ class IntervalDayTimeType final : public BigintType {
   IntervalDayTimeType() = default;
 
  public:
+  static std::shared_ptr<const IntervalDayTimeType> create() = delete;
+
   static std::shared_ptr<const IntervalDayTimeType> get() {
     VELOX_CONSTEXPR_SINGLETON IntervalDayTimeType kInstance;
     return {std::shared_ptr<const IntervalDayTimeType>{}, &kInstance};
@@ -1255,6 +1268,8 @@ class IntervalYearMonthType final : public IntegerType {
   IntervalYearMonthType() = default;
 
  public:
+  static std::shared_ptr<const IntervalYearMonthType> create() = delete;
+
   static std::shared_ptr<const IntervalYearMonthType> get() {
     VELOX_CONSTEXPR_SINGLETON IntervalYearMonthType kInstance;
     return {std::shared_ptr<const IntervalYearMonthType>{}, &kInstance};
@@ -1298,6 +1313,8 @@ class DateType final : public IntegerType {
   DateType() = default;
 
  public:
+  static std::shared_ptr<const DateType> create() = delete;
+
   static std::shared_ptr<const DateType> get() {
     VELOX_CONSTEXPR_SINGLETON DateType kInstance;
     return {std::shared_ptr<const DateType>{}, &kInstance};
@@ -1359,6 +1376,8 @@ VELOX_DECLARE_ENUM_NAME(TimePrecision);
 template <TimePrecision kPrecision, bool kLocalTime>
 class TimeType : public BigintType {
  public:
+  static std::shared_ptr<const TimeType> create() = delete;
+
   std::string toString() const override {
     return name();
   }
@@ -1816,12 +1835,35 @@ std::shared_ptr<const OpaqueType> OPAQUE() {
     }                                                                \
   }()
 
+#define VELOX_DYNAMIC_TEMPLATE_TYPE_DISPATCH_WITH_UNKNOWN(           \
+    TEMPLATE_FUNC, T, typeKind, ...)                                 \
+  [&]() {                                                            \
+    if ((typeKind) == ::facebook::velox::TypeKind::UNKNOWN) {        \
+      return TEMPLATE_FUNC<T, ::facebook::velox::TypeKind::UNKNOWN>( \
+          __VA_ARGS__);                                              \
+    } else {                                                         \
+      return VELOX_DYNAMIC_TEMPLATE_TYPE_DISPATCH(                   \
+          TEMPLATE_FUNC, T, typeKind, __VA_ARGS__);                  \
+    }                                                                \
+  }()
+
 #define VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH_ALL(TEMPLATE_FUNC, typeKind, ...)   \
   [&]() {                                                                      \
     if ((typeKind) == ::facebook::velox::TypeKind::UNKNOWN) {                  \
       return TEMPLATE_FUNC<::facebook::velox::TypeKind::UNKNOWN>(__VA_ARGS__); \
     } else if ((typeKind) == ::facebook::velox::TypeKind::OPAQUE) {            \
       return TEMPLATE_FUNC<::facebook::velox::TypeKind::OPAQUE>(__VA_ARGS__);  \
+    } else {                                                                   \
+      return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(                               \
+          TEMPLATE_FUNC, typeKind, __VA_ARGS__);                               \
+    }                                                                          \
+  }()
+
+#define VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH_WITH_UNKNOWN(                       \
+    TEMPLATE_FUNC, typeKind, ...)                                              \
+  [&]() {                                                                      \
+    if ((typeKind) == ::facebook::velox::TypeKind::UNKNOWN) {                  \
+      return TEMPLATE_FUNC<::facebook::velox::TypeKind::UNKNOWN>(__VA_ARGS__); \
     } else {                                                                   \
       return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH(                               \
           TEMPLATE_FUNC, typeKind, __VA_ARGS__);                               \
@@ -1892,6 +1934,16 @@ std::shared_ptr<const OpaqueType> OPAQUE() {
 
 #define VELOX_DYNAMIC_TYPE_DISPATCH(TEMPLATE_FUNC, typeKind, ...) \
   VELOX_DYNAMIC_TYPE_DISPATCH_IMPL(TEMPLATE_FUNC, , typeKind, __VA_ARGS__)
+
+#define VELOX_DYNAMIC_TYPE_DISPATCH_WITH_UNKNOWN(TEMPLATE_FUNC, typeKind, ...) \
+  [&]() {                                                                      \
+    if ((typeKind) == ::facebook::velox::TypeKind::UNKNOWN) {                  \
+      return TEMPLATE_FUNC<::facebook::velox::TypeKind::UNKNOWN>(__VA_ARGS__); \
+    } else {                                                                   \
+      return VELOX_DYNAMIC_TYPE_DISPATCH(                                      \
+          TEMPLATE_FUNC, typeKind, __VA_ARGS__);                               \
+    }                                                                          \
+  }()
 
 #define VELOX_DYNAMIC_TYPE_DISPATCH_ALL(TEMPLATE_FUNC, typeKind, ...)          \
   [&]() {                                                                      \
@@ -2325,7 +2377,19 @@ std::string stringifyTruncatedElementList(
 
 } // namespace facebook::velox
 
+// std::hash specialization for UnknownValue is required so that
+// folly::F14FastMap<UnknownValue, ...> (used by IndexedPriorityQueue) compiles.
+// Without this, VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH_ALL would need explicit
+// UNKNOWN exclusions in every callsite.
 namespace std {
+template <>
+struct hash<::facebook::velox::UnknownValue> {
+  size_t operator()(
+      const ::facebook::velox::UnknownValue& /* value */) const noexcept {
+    return 0;
+  }
+};
+
 template <>
 struct hash<facebook::velox::Type> {
   size_t operator()(const facebook::velox::Type& type) const noexcept {

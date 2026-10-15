@@ -91,16 +91,26 @@ class CountIfAggregate : public exec::Aggregate {
     DecodedVector decoded(*args[0], rows);
 
     if (decoded.isConstantMapping()) {
+      if (decoded.isNullAt(0)) {
+        return;
+      }
       auto numTrue = decoded.valueAt<int64_t>(0);
       rows.applyToSelected(
           [&](vector_size_t i) { addToGroup(groups[i], numTrue); });
       return;
     }
 
-    rows.applyToSelected([&](vector_size_t i) {
-      auto numTrue = decoded.valueAt<int64_t>(i);
-      addToGroup(groups[i], numTrue);
-    });
+    if (decoded.mayHaveNulls()) {
+      rows.applyToSelected([&](vector_size_t i) {
+        if (!decoded.isNullAt(i)) {
+          addToGroup(groups[i], decoded.valueAt<int64_t>(i));
+        }
+      });
+    } else {
+      rows.applyToSelected([&](vector_size_t i) {
+        addToGroup(groups[i], decoded.valueAt<int64_t>(i));
+      });
+    }
   }
 
   void addSingleGroupRawInput(
@@ -146,10 +156,19 @@ class CountIfAggregate : public exec::Aggregate {
       const SelectivityVector& rows,
       const std::vector<VectorPtr>& args,
       bool /*mayPushdown*/) override {
-    auto arg = args[0]->as<SimpleVector<int64_t>>();
+    DecodedVector decoded(*args[0], rows);
 
     int64_t numTrue = 0;
-    rows.applyToSelected([&](auto row) { numTrue += arg->valueAt(row); });
+    if (decoded.mayHaveNulls()) {
+      rows.applyToSelected([&](auto row) {
+        if (!decoded.isNullAt(row)) {
+          numTrue += decoded.valueAt<int64_t>(row);
+        }
+      });
+    } else {
+      rows.applyToSelected(
+          [&](auto row) { numTrue += decoded.valueAt<int64_t>(row); });
+    }
 
     addToGroup(group, numTrue);
   }
@@ -206,7 +225,7 @@ void registerCountIfAggregate(
 
         return std::make_unique<CountIfAggregate>();
       },
-      {.orderSensitive = false},
+      {.orderSensitive = false, .ignoreNullInputs = true},
       withCompanionFunctions,
       overwrite);
 }

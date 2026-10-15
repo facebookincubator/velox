@@ -648,6 +648,7 @@ void registerAggregateFunctionImpl(
               resultType, true);
         }
       },
+      {.ignoreNullInputs = true},
       withCompanionFunctions,
       overwrite);
 }

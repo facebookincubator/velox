@@ -16,6 +16,9 @@
 
 #include "velox/expression/SimpleFunctionRegistry.h"
 
+#include <algorithm>
+#include <tuple>
+
 namespace facebook::velox::exec {
 namespace {
 
@@ -37,8 +40,11 @@ bool SimpleFunctionRegistry::registerFunctionInternal(
     const std::string& name,
     const std::shared_ptr<const Metadata>& metadata,
     const FunctionFactory& factory,
-    bool overwrite) {
+    bool overwrite,
+    std::string_view defaultOwner) {
   const auto sanitizedName = sanitizeName(name);
+  const auto resolvedOwner =
+      metadata->owner().empty() ? defaultOwner : metadata->owner();
   return registeredFunctions_.withWLock([&](auto& map) {
     SignatureMap& signatureMap = map[sanitizedName];
     auto& functions = signatureMap[*metadata->signature()];
@@ -63,7 +69,8 @@ bool SimpleFunctionRegistry::registerFunctionInternal(
     }
 
     functions.emplace_back(
-        std::make_unique<const FunctionEntry>(metadata, factory));
+        std::make_unique<const FunctionEntry>(
+            metadata, factory, resolvedOwner));
     return true;
   });
 }
@@ -134,7 +141,7 @@ SimpleFunctionRegistry::getFunctionSignaturesAndMetadata(
             .defaultNullBehavior =
                 functions[0]->getMetadata().defaultNullBehavior(),
             .companionFunction = false,
-            .owner = functions[0]->getMetadata().owner()};
+            .owner = functions[0]->owner()};
         result.emplace_back(
             std::pair<VectorFunctionMetadata, const FunctionSignature*>{
                 metadata, &signature});
@@ -184,7 +191,7 @@ SimpleFunctionRegistry::resolveFunction(
   registeredFunctions_.withRLock([&](const auto& map) {
     if (const auto* signatureMap = getSignatureMap(name, map)) {
       std::vector<std::pair<std::vector<Coercion>, Candidate>> candidates;
-      std::optional<uint32_t> priority;
+      std::optional<std::tuple<bool, int64_t, uint32_t>> sortKey;
 
       for (const auto& [candidateSignature, functionEntry] : *signatureMap) {
         SignatureBinder binder(candidateSignature, argTypes, coercer);
@@ -199,6 +206,11 @@ SimpleFunctionRegistry::resolveFunction(
         }
 
         if (bound) {
+          const bool needsCoercion = std::ranges::any_of(
+              requiredCoercions,
+              [](const auto& coercion) { return coercion.type != nullptr; });
+          const auto coercionCost = Coercion::overallCost(requiredCoercions);
+
           for (const auto& currentCandidate : functionEntry) {
             const auto& m = currentCandidate->getMetadata();
 
@@ -227,15 +239,16 @@ SimpleFunctionRegistry::resolveFunction(
             VELOX_CHECK_NOT_NULL(resultType);
 
             if (physicalTypeMatches(resultType, m.resultPhysicalType())) {
-              const auto currentPriority = m.priority();
+              const std::tuple<bool, int64_t, uint32_t> currentSortKey{
+                  needsCoercion, coercionCost, m.priority()};
 
-              if (!priority.has_value() || currentPriority < priority.value()) {
+              if (!sortKey.has_value() || currentSortKey < sortKey.value()) {
                 candidates.clear();
                 candidates.emplace_back(
                     requiredCoercions,
                     std::make_pair(currentCandidate.get(), resultType));
-                priority = currentPriority;
-              } else if (allowCoercion && currentPriority == priority.value()) {
+                sortKey = currentSortKey;
+              } else if (allowCoercion && currentSortKey == sortKey.value()) {
                 candidates.emplace_back(
                     requiredCoercions,
                     std::make_pair(currentCandidate.get(), resultType));

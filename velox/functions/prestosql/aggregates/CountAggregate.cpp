@@ -34,6 +34,36 @@ class CountAggregate : public SimpleNumericAggregate<bool, int64_t, int64_t> {
     return sizeof(int64_t);
   }
 
+  bool supportsToIntermediate() const override {
+    return true;
+  }
+
+  void toIntermediate(
+      const SelectivityVector& rows,
+      std::vector<VectorPtr>& args,
+      VectorPtr& result) const override {
+    if (rows.isAllSelected() && (args.empty() || !args[0]->mayHaveNulls())) {
+      result = BaseVector::createConstant(
+          BIGINT(), int64_t{1}, rows.size(), allocator_->pool());
+      return;
+    }
+
+    auto* vector = result->asFlatVector<int64_t>();
+    vector->clearAllNulls();
+    auto* rawValues = vector->mutableRawValues();
+    std::fill_n(rawValues, rows.size(), 0);
+
+    if (args.empty()) {
+      rows.applyToSelected([&](vector_size_t row) { rawValues[row] = 1; });
+      return;
+    }
+
+    DecodedVector decoded(*args[0], rows);
+    rows.applyToSelected([&](vector_size_t row) {
+      rawValues[row] = decoded.isNullAt(row) ? 0 : 1;
+    });
+  }
+
   void extractValues(char** groups, int32_t numGroups, VectorPtr* result)
       override {
     BaseAggregate::doExtractValues(groups, numGroups, result, [&](char* group) {
@@ -75,9 +105,17 @@ class CountAggregate : public SimpleNumericAggregate<bool, int64_t, int64_t> {
       const std::vector<VectorPtr>& args,
       bool /*mayPushdown*/) override {
     decodedIntermediate_.decode(*args[0], rows);
-    rows.applyToSelected([&](vector_size_t i) {
-      addToGroup(groups[i], decodedIntermediate_.valueAt<int64_t>(i));
-    });
+    if (decodedIntermediate_.mayHaveNulls()) {
+      rows.applyToSelected([&](vector_size_t i) {
+        if (!decodedIntermediate_.isNullAt(i)) {
+          addToGroup(groups[i], decodedIntermediate_.valueAt<int64_t>(i));
+        }
+      });
+    } else {
+      rows.applyToSelected([&](vector_size_t i) {
+        addToGroup(groups[i], decodedIntermediate_.valueAt<int64_t>(i));
+      });
+    }
   }
 
   void addSingleGroupRawInput(
@@ -181,7 +219,7 @@ void registerCountAggregate(
             argTypes.size(), 1, "{} takes at most one argument", names.front());
         return std::make_unique<CountAggregate>();
       },
-      {.orderSensitive = false},
+      {.orderSensitive = false, .ignoreNullInputs = true},
       withCompanionFunctions,
       overwrite);
 }

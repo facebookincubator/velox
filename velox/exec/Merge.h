@@ -72,6 +72,14 @@ class Merge : public SourceOperator {
  protected:
   virtual BlockingReason addMergeSources(ContinueFuture* future) = 0;
 
+  /// Returns true if the rows pulled from the merge sources are this
+  /// operator's input. They are for LocalMerge, whose sources are fed by sinks
+  /// belonging to the same plan node and which would otherwise report no
+  /// input. MergeExchange reads remote splits and already accounts for them.
+  virtual bool recordsSourceInput() const {
+    return false;
+  }
+
   std::vector<std::shared_ptr<MergeSource>> sources_;
   size_t numStartedSources_{0};
   /// Maximum number of merge sources per run.
@@ -368,8 +376,16 @@ class LocalMerge : public Merge {
       DriverCtx* driverCtx,
       const std::shared_ptr<const core::LocalMergeNode>& localMergeNode);
 
+  core::PlanNode::Boundary planNodeBoundary() const override {
+    return core::PlanNode::Boundary::kOutput;
+  }
+
  protected:
   BlockingReason addMergeSources(ContinueFuture* future) override;
+
+  bool recordsSourceInput() const override {
+    return true;
+  }
 };
 
 // MergeExchange merges its sources' outputs into a single stream of

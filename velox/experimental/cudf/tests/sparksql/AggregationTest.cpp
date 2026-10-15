@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/AggregationRegistry.h"
 #include "velox/experimental/cudf/exec/SparkAggregateFunctions.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
@@ -37,6 +38,7 @@ class AggregationTest : public AggregationTestBase {
     // After register supports function prefix, we could register the function
     // with spark_ to align with sparksql AverageAggregationTest, the
     // function name overwrite may not work well in some condition.
+    cudf_velox::CudfConfig::getInstance().allowCpuFallback = false;
     cudf_velox::registerCudf();
     cudf_velox::registerSparkAggregateFunctions("");
   }

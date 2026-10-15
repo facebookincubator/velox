@@ -737,8 +737,13 @@ class PlanBuilder {
   /// splits.
   ///
   /// @param outputType The type of the data coming in and out of the exchange.
-  /// @param serdekind The kind of seralized data format.
-  PlanBuilder& exchange(const RowTypePtr& outputType, std::string serdekind);
+  /// @param serdeKind The kind of seralized data format.
+  /// @param transportKind The transport the data is received over; see
+  /// core::TransportKind.
+  PlanBuilder& exchange(
+      const RowTypePtr& outputType,
+      std::string serdeKind,
+      std::string transportKind = std::string{core::TransportKind::kInMemory});
 
   /// Add a MergeExchangeNode using specified ORDER BY clauses.
   ///
@@ -751,7 +756,8 @@ class PlanBuilder {
   PlanBuilder& mergeExchange(
       const RowTypePtr& outputType,
       const std::vector<std::string>& keys,
-      std::string serdekind);
+      std::string serdeKind,
+      std::string transportKind = std::string{core::TransportKind::kInMemory});
 
   /// Add a ProjectNode using specified SQL expressions.
   ///
@@ -1081,7 +1087,8 @@ class PlanBuilder {
       const std::vector<std::string>& aggregates,
       const std::vector<std::string>& masks,
       core::AggregationNode::Step step,
-      bool ignoreNullKeys) {
+      bool ignoreNullKeys,
+      std::optional<bool> mayRetainInput = std::nullopt) {
     return aggregation(
         groupingKeys,
         preGroupedKeys,
@@ -1089,7 +1096,8 @@ class PlanBuilder {
         masks,
         step,
         ignoreNullKeys,
-        {});
+        {},
+        mayRetainInput);
   }
 
   /// A convenience method to create partial aggregation plan node for the case
@@ -1126,7 +1134,8 @@ class PlanBuilder {
       const std::vector<std::string>& masks,
       core::AggregationNode::Step step,
       bool ignoreNullKeys,
-      bool noGroupsSpanBatches = false);
+      bool noGroupsSpanBatches = false,
+      std::optional<bool> mayRetainInput = std::nullopt);
 
   /// Add a GroupIdNode using the specified grouping keys, grouping sets,
   /// aggregation inputs and a groupId column name.
@@ -1824,7 +1833,8 @@ class PlanBuilder {
       const std::vector<std::string>& masks,
       core::AggregationNode::Step step,
       bool ignoreNullKeys,
-      const std::vector<std::vector<TypePtr>>& rawInputTypes);
+      const std::vector<std::vector<TypePtr>>& rawInputTypes,
+      std::optional<bool> mayRetainInput = std::nullopt);
 
   /// Create WindowNode based on whether input is sorted and then compute the
   /// window functions.
