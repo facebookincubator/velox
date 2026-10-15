@@ -195,11 +195,27 @@ class IcebergPositionalDeleteTest : public test::IcebergTestBase {
                     .outputType(ROW({"c0"}, {BIGINT()}))
                     .endTableScan()
                     .planNode();
-    exec::test::AssertQueryBuilder(plan)
-        .config(core::QueryConfig::kMaxSplitPreloadPerDriver, numPrefetchSplits)
-        .splits(splits)
-        .assertResults(
-            makeRowVector({makeFlatVector<int64_t>(expectedValues)}));
+    auto task =
+        exec::test::AssertQueryBuilder(plan)
+            .config(
+                core::QueryConfig::kMaxSplitPreloadPerDriver, numPrefetchSplits)
+            .splits(splits)
+            .assertResults(
+                makeRowVector({makeFlatVector<int64_t>(expectedValues)}));
+    int64_t totalRows = 0;
+    for (const auto& dataFile : dataFiles) {
+      totalRows += std::accumulate(
+          dataFile.rowGroupSizes.begin(),
+          dataFile.rowGroupSizes.end(),
+          int64_t{0});
+    }
+    const auto stats = task->taskStats();
+    const auto& runtimeStats =
+        stats.pipelineStats[0].operatorStats[0].runtimeStats;
+    const auto deletedRows = runtimeStats.find("icebergDeletedRows");
+    EXPECT_EQ(
+        deletedRows == runtimeStats.end() ? 0 : deletedRows->second.sum,
+        totalRows - expectedValues.size());
   }
 
   IcebergDeleteFile makePositionalDeleteFile(
