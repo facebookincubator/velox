@@ -15,6 +15,7 @@
  */
 
 #include <faiss/IndexFlat.h>
+#include <faiss/IndexIVF.h>
 #include <fmt/format.h>
 #include <folly/ScopeGuard.h>
 #include <gtest/gtest.h>
@@ -592,6 +593,86 @@ TEST_F(VectorIndexTest, searchMatchesAcrossBatchSizes) {
   }
 }
 
+TEST_F(VectorIndexTest, searchResultsDerivesCounts) {
+  VectorIndex::SearchResults results{
+      std::vector<VectorIndex::SearchResult>{{.rowId = 7, .score = 1.0}},
+      std::vector<size_t>{0, 1},
+      VectorIndex::SearchStats{
+          .numQueries = 9,
+          .numResults = 9,
+          .routingTiming = {},
+          .searchTiming = {},
+          .ivf = {},
+      },
+  };
+
+  EXPECT_EQ(results.stats().numQueries, 1);
+  EXPECT_EQ(results.stats().numResults, 1);
+}
+
+TEST_F(VectorIndexTest, searchStats) {
+  constexpr uint32_t kNumQueries{3};
+  const auto data = generateRandomVectors(500, kDimensions);
+  const auto queries =
+      generateRandomVectors(kNumQueries, kDimensions, /*seed=*/99);
+
+  {
+    const auto written =
+        writeIndexFromVectors(makeConfig(VectorIndexType::kIvfFlat), data);
+    const auto results = readIndex(written)->search({
+        .numQueries = kNumQueries,
+        .queryVectors = queries,
+        .numNeighbors = 5,
+        .searchOptions = std::make_shared<VectorIndex::IvfSearchOptions>(8),
+    });
+
+    EXPECT_EQ(results.stats().numQueries, kNumQueries);
+    EXPECT_EQ(results.stats().numResults, results.totalNumResults());
+    EXPECT_EQ(results.stats().routingTiming.count, 1);
+    EXPECT_EQ(results.stats().searchTiming.count, 1);
+    ASSERT_TRUE(results.stats().ivf.has_value());
+    EXPECT_GT(results.stats().ivf->numPartitionsScanned, 0);
+    EXPECT_GT(results.stats().ivf->numDistanceComputations, 0);
+    EXPECT_GT(results.stats().ivf->numHeapUpdates, 0);
+  }
+
+#ifndef DISABLE_META_INTERNAL_FAISS_IVF_RABITQ_FAST_SCAN
+  {
+    const auto written = writeIndexFromVectors(
+        makeConfig(VectorIndexType::kIvfRaBitQFastScan), data);
+    const auto results = readIndex(written)->search({
+        .numQueries = kNumQueries,
+        .queryVectors = queries,
+        .numNeighbors = 5,
+        .searchOptions = std::make_shared<VectorIndex::IvfSearchOptions>(8),
+    });
+
+    EXPECT_EQ(results.stats().numQueries, kNumQueries);
+    EXPECT_EQ(results.stats().numResults, results.totalNumResults());
+    EXPECT_EQ(results.stats().routingTiming.count, 1);
+    EXPECT_EQ(results.stats().searchTiming.count, 1);
+    EXPECT_FALSE(results.stats().ivf.has_value());
+  }
+#endif
+
+  {
+    const auto written =
+        writeIndexFromVectors(makeConfig(VectorIndexType::kHnswSq8), data);
+    const auto results = readIndex(written)->search({
+        .numQueries = kNumQueries,
+        .queryVectors = queries,
+        .numNeighbors = 5,
+        .searchOptions = std::make_shared<VectorIndex::HnswSearchOptions>(32),
+    });
+
+    EXPECT_EQ(results.stats().numQueries, kNumQueries);
+    EXPECT_EQ(results.stats().numResults, results.totalNumResults());
+    EXPECT_EQ(results.stats().routingTiming.count, 0);
+    EXPECT_EQ(results.stats().searchTiming.count, 1);
+    EXPECT_FALSE(results.stats().ivf.has_value());
+  }
+}
+
 TEST_F(VectorIndexTest, searchRejectsInvalidConfig) {
   constexpr uint32_t kNumVectors{100};
   const auto data = generateRandomVectors(kNumVectors, kDimensions);
@@ -713,6 +794,11 @@ TEST_F(VectorIndexTest, searchControlsAndRestoresThreadCount) {
   EXPECT_EQ(omp_get_max_threads(), configuredNumThreads);
 }
 
+template <typename SearchParameters>
+constexpr bool supportsEnsureTopKFull() {
+  return requires(SearchParameters parameters) { parameters.ensure_topk_full; };
+}
+
 TEST_F(VectorIndexTest, searchLimitsScannedCodes) {
   constexpr uint32_t kNumVectors{500};
   constexpr uint32_t kNumNeighbors{10};
@@ -732,6 +818,7 @@ TEST_F(VectorIndexTest, searchLimitsScannedCodes) {
           /*ensureTopKFull=*/false),
   });
   EXPECT_LE(limited.totalNumResults(), 1);
+  EXPECT_EQ(limited.stats().searchTiming.count, 1);
 
   const auto filled = reader->search({
       .numQueries = 1,
@@ -743,6 +830,11 @@ TEST_F(VectorIndexTest, searchLimitsScannedCodes) {
           /*ensureTopKFull=*/true),
   });
   EXPECT_EQ(filled.totalNumResults(), kNumNeighbors);
+  if constexpr (supportsEnsureTopKFull<faiss::SearchParametersIVF>()) {
+    EXPECT_EQ(filled.stats().searchTiming.count, 1);
+  } else {
+    EXPECT_EQ(filled.stats().searchTiming.count, 2);
+  }
 }
 
 TEST_F(VectorIndexTest, searchClampsOversizedSearchParameters) {
