@@ -96,6 +96,61 @@ class RPCStateTest : public testing::Test {
   std::shared_ptr<RPCState> state_;
 };
 
+TEST_F(RPCStateTest, configuresBatchCongestionStartWindow) {
+  {
+    state_->setStreamingMode(RPCStreamingMode::kBatch);
+    EXPECT_EQ(state_->operatorSnapshot().windowLimit, 2);
+  }
+  {
+    state_->setStreamingMode(RPCStreamingMode::kPerRow);
+    EXPECT_EQ(state_->operatorSnapshot().windowLimit, 100);
+  }
+  {
+    state_->setStreamingMode(
+        RPCStreamingMode::kBatch,
+        /*minWindow=*/1,
+        /*stepCoef=*/1.0,
+        /*maxWindow=*/64,
+        /*batchStartWindow=*/8);
+    EXPECT_EQ(state_->operatorSnapshot().windowLimit, 8);
+  }
+  {
+    state_->setStreamingMode(
+        RPCStreamingMode::kPerRow,
+        /*minWindow=*/1,
+        /*stepCoef=*/1.0,
+        /*maxWindow=*/64,
+        /*batchStartWindow=*/8);
+    EXPECT_EQ(state_->operatorSnapshot().windowLimit, 64);
+  }
+  {
+    state_->setStreamingMode(
+        RPCStreamingMode::kBatch,
+        /*minWindow=*/4,
+        /*stepCoef=*/1.0,
+        /*maxWindow=*/64,
+        /*batchStartWindow=*/2);
+    EXPECT_EQ(state_->operatorSnapshot().windowLimit, 4);
+  }
+  {
+    state_->setStreamingMode(
+        RPCStreamingMode::kBatch,
+        /*minWindow=*/1,
+        /*stepCoef=*/1.0,
+        /*maxWindow=*/4,
+        /*batchStartWindow=*/8);
+    EXPECT_EQ(state_->operatorSnapshot().windowLimit, 4);
+  }
+  VELOX_ASSERT_THROW(
+      state_->setStreamingMode(
+          RPCStreamingMode::kBatch,
+          /*minWindow=*/1,
+          /*stepCoef=*/1.0,
+          /*maxWindow=*/64,
+          /*batchStartWindow=*/-1),
+      "must be non-negative");
+}
+
 // ========== PER_ROW mode tests ==========
 
 TEST_F(RPCStateTest, basicAddAndClaim) {
@@ -1192,6 +1247,76 @@ TEST_F(RPCStateTest, batchWindowGrowsViaGradientSamples) {
   for (auto& promise : promises) {
     promise.setValue(std::vector<RPCResponse>{});
   }
+}
+
+TEST_F(RPCStateTest, batchWindowGrowsOnCleanCompletions) {
+  // BATCH async-job successes carry no usable latency, so they grow the
+  // window additively on completion count: 8 clean units lift 2 -> 3.
+  state_->setStreamingMode(
+      RPCStreamingMode::kBatch,
+      /*minWindow=*/1,
+      /*stepCoef=*/1.0,
+      /*maxWindow=*/0,
+      /*batchStartWindow=*/0,
+      /*asyncGrowthMaxWindow=*/64);
+  EXPECT_EQ(state_->operatorSnapshot().windowLimit, 2);
+  state_->onUnitCleanCompletions(7);
+  EXPECT_EQ(state_->operatorSnapshot().windowLimit, 2);
+  state_->onUnitCleanCompletions(1);
+  EXPECT_EQ(state_->operatorSnapshot().windowLimit, 3);
+}
+
+TEST_F(RPCStateTest, perRowWindowIgnoresCleanCompletions) {
+  // PER_ROW windows start at their ceiling and must only shrink: clean
+  // completions must not ramp them upward into rate-limit storms.
+  state_->setStreamingMode(
+      RPCStreamingMode::kPerRow,
+      /*minWindow=*/1,
+      /*stepCoef=*/1.0,
+      /*maxWindow=*/0,
+      /*batchStartWindow=*/0,
+      /*asyncGrowthMaxWindow=*/64);
+  EXPECT_EQ(state_->operatorSnapshot().windowLimit, 100);
+  // Shrink first: at the ceiling the test cannot tell a missing BATCH-only
+  // check from a working one, since the window cannot grow past it anyway.
+  state_->onUnitError();
+  EXPECT_EQ(state_->operatorSnapshot().windowLimit, 50);
+  state_->onUnitCleanCompletions(1'000);
+  EXPECT_EQ(state_->operatorSnapshot().windowLimit, 50);
+}
+
+TEST_F(RPCStateTest, cleanCompletionsRespectMaxWindow) {
+  // Growth stops at maxWindow_ even with a higher clean cap configured.
+  state_->setStreamingMode(
+      RPCStreamingMode::kBatch,
+      /*minWindow=*/1,
+      /*stepCoef=*/1.0,
+      /*maxWindow=*/8,
+      /*batchStartWindow=*/0,
+      /*asyncGrowthMaxWindow=*/64);
+  state_->onUnitCleanCompletions(1'000);
+  EXPECT_EQ(state_->operatorSnapshot().windowLimit, 8);
+}
+
+TEST_F(RPCStateTest, cleanGrowthDisabledByDefault) {
+  // async_growth_max_window defaults to 0: clean completions are ignored and
+  // the BATCH window stays pinned at its start.
+  state_->setStreamingMode(RPCStreamingMode::kBatch);
+  state_->onUnitCleanCompletions(1'000);
+  EXPECT_EQ(state_->operatorSnapshot().windowLimit, 2);
+}
+
+TEST_F(RPCStateTest, cleanGrowthRespectsAsyncCap) {
+  // The async-growth cap binds below maxWindow_.
+  state_->setStreamingMode(
+      RPCStreamingMode::kBatch,
+      /*minWindow=*/1,
+      /*stepCoef=*/1.0,
+      /*maxWindow=*/0,
+      /*batchStartWindow=*/0,
+      /*asyncGrowthMaxWindow=*/8);
+  state_->onUnitCleanCompletions(1'000);
+  EXPECT_EQ(state_->operatorSnapshot().windowLimit, 8);
 }
 
 TEST_F(RPCStateTest, setMaxWindowOverridesModeDefault) {

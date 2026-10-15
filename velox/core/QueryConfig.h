@@ -135,27 +135,13 @@ class QueryConfig {
   /// When adjust_timestamp_to_session_timezone is false, casts to TIMESTAMP use
   /// the session zone when this property is true and the embedded zone when it
   /// is false.
-  VELOX_QUERY_CONFIG_PROPERTY(
+  VELOX_QUERY_CONFIG(
       kUseSessionTimezoneForTimestampWithTimezone,
+      useSessionTimezoneForTimestampWithTimezone,
       "use_session_timezone_for_timestamp_with_timezone",
       bool,
       false,
       "Render TIMESTAMP WITH TIME ZONE values in the session timezone (true) or each value's embedded zone (false); when adjust_timestamp_to_session_timezone is false, casts to TIMESTAMP use the session zone (true) or embedded zone (false).")
-
-  /// Returns the explicitly configured value, or the inverse of the deprecated
-  /// legacy property when the new property is absent.
-  bool useSessionTimezoneForTimestampWithTimezone() const;
-
-#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
-  /// Deprecated config key retained while downstream callers migrate.
-  static constexpr const char* kLegacyTimestampWithTimezone =
-      "legacy_timestamp_with_timezone";
-
-  /// Legacy API. Prefer useSessionTimezoneForTimestampWithTimezone().
-  bool legacyTimestampWithTimezone() const {
-    return !useSessionTimezoneForTimestampWithTimezone();
-  }
-#endif // VELOX_ENABLE_BACKWARD_COMPATIBILITY
 
   /// Whether to use the simplified expression evaluation path. False by
   /// default.
@@ -895,8 +881,12 @@ class QueryConfig {
 
   /// The number of local parallel table writer operators per task for
   /// partitioned writes. If not set, use "task_writer_count". No default.
-  static constexpr const char* kTaskPartitionedWriterCount =
-      "task_partitioned_writer_count";
+  VELOX_QUERY_CONFIG_PROPERTY(
+      kTaskPartitionedWriterCount,
+      "task_partitioned_writer_count",
+      std::optional<uint32_t>,
+      std::optional<uint32_t>{},
+      "The number of local parallel table writer operators per task for partitioned writes. If not set, use \"task_writer_count\".")
 
   /// If true, finish the hash probe on an empty build table for a specific set
   /// of hash joins.
@@ -1468,6 +1458,20 @@ class QueryConfig {
       1000,
       "Batch size threshold for zero-copy in MarkSorted operator.")
 
+  /// Initial per-driver BATCH RPC congestion window (RPCOperator).
+  VELOX_QUERY_CONFIG(
+      kRpcCongestionBatchStartWindow,
+      rpcCongestionBatchStartWindow,
+      "rpc.congestion.batch_start_window",
+      int64_t,
+      0,
+      "Initial per-driver BATCH RPC congestion window. 0 keeps the built-in "
+      "default of 2. Positive values are clamped to [minWindow, maxWindow]. "
+      "PER_ROW always starts at its ceiling. Size at or below the backend's "
+      "measured concurrency knee: starting above it seeds the unloaded-RTT "
+      "baseline with queueing delay, leaving only explicit overload errors "
+      "to shrink the window.")
+
   /// Floor the RPC congestion window may shrink to under overload
   /// (RPCOperator).
   VELOX_QUERY_CONFIG(
@@ -1505,6 +1509,20 @@ class QueryConfig {
       "adaptive limiter shrinks concurrency only under overload. With "
       "admission-controlled dispatch this ceiling now actually bounds in-flight "
       "rows, so it must be sized for the backend's healthy concurrency.")
+
+  /// Cap for BATCH driver-window growth on clean no-latency completions.
+  VELOX_QUERY_CONFIG(
+      kRpcCongestionAsyncGrowthMaxWindow,
+      rpcCongestionAsyncGrowthMaxWindow,
+      "rpc.congestion.async_growth_max_window",
+      int64_t,
+      0,
+      "Cap for per-driver BATCH congestion-window growth on clean completions "
+      "that carry no usable latency sample (MetaGen async-job batches). 0 "
+      "(default) disables the growth, keeping the legacy pinned start window. "
+      "Positive values let the window discover capacity additively up to the "
+      "cap; size at or below the backend's measured concurrency knee (16 is a "
+      "conservative start). Clamped to [minWindow, maxWindow].")
 
   /// Enables AIMD adaptation of each backend's rate-limit capacity.
   VELOX_QUERY_CONFIG(

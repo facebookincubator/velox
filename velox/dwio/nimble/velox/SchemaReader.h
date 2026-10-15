@@ -249,7 +249,9 @@ class HybridFlatMapType : public Type {
     /// Stable group identifier. Default uses HybridFlatMap::kDefaultGroupId.
     uint32_t groupId;
     /// Feature keys in key-presence bitmap order. Default keys are accumulated
-    /// in first-seen order and may be empty before any are observed.
+    /// in first-seen order and may be empty before any are observed. A
+    /// projection whose requested keys are all absent also holds a keyless
+    /// Default group.
     std::vector<std::string> groupKeys;
     /// One bit per schema key; trailing omitted bits are absent.
     StreamDescriptor keyPresenceDescriptor;
@@ -279,8 +281,9 @@ class HybridFlatMapType : public Type {
   /// ordinal, not a group ID.
   const Group& groupAt(size_t index) const;
 
-  /// Returns the reserved Default group. Fails when a projected schema omitted
-  /// Default because it was not selected.
+  /// Returns the reserved Default group. Fails when a projected schema kept
+  /// only configured groups. In a projection whose requested keys are all
+  /// absent, returns a keyless Default group that carries no data.
   const Group& defaultGroup() const;
 
   /// Returns the schema-order index of the group containing `key`, including

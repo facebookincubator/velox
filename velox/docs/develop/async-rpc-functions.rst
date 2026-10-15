@@ -346,7 +346,11 @@ independently reduce the per-driver gradient window.
        let the limiter recover.
    * - ``kSuccessNoLatency``
      - The unit completed cleanly; let the limiter recover without feeding its
-       latency to the gradient window.
+       latency to the gradient window. In BATCH mode, when
+       ``rpc.congestion.async_growth_max_window`` is set, it also grows the
+       driver window additively on completion count and skips training the
+       shared service horizon. With the default 0 the window stays pinned
+       and the horizon trains as before.
    * - ``kOverloaded``
      - The backend shed load — rate limited, or timed out under pressure.
        Applies multiplicative decrease to both controllers.
@@ -374,10 +378,14 @@ Putting it together, for each unit the operator:
    shared decrease for the admission epoch, and releases the shared lease.
 #. **On driver consumption**, obtains the function's aggregate verdict.
    ``kSuccess`` feeds round-trip time to the per-driver window and recovers
-   shared admission; ``kSuccessNoLatency`` only recovers shared admission; a
-   recorded canonical overload shrinks the driver window without repeating the
-   shared decrease; a function-specific ``kOverloaded`` verdict shrinks both
-   controllers; the other verdicts leave both controllers unchanged.
+   shared admission; ``kSuccessNoLatency`` recovers shared admission without
+   training the gradient, and, when ``rpc.congestion.async_growth_max_window``
+   is set, also skips shared-horizon training and grows the BATCH driver
+   window additively on completion count (with the default 0 the horizon
+   trains as before); a recorded canonical overload shrinks the driver window without
+   repeating the shared decrease; a function-specific ``kOverloaded`` verdict
+   shrinks both controllers; the other verdicts leave both controllers
+   unchanged.
 
 Retries and error handling
 --------------------------

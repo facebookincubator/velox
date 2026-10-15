@@ -928,9 +928,10 @@ void HashProbe::prepareOutput(vector_size_t size) {
 }
 
 namespace {
-VectorPtr createConstantFalse(vector_size_t size, memory::MemoryPool* pool) {
+VectorPtr
+createConstantBool(vector_size_t size, bool value, memory::MemoryPool* pool) {
   return std::make_shared<ConstantVector<bool>>(
-      pool, size, false /*isNull*/, BOOLEAN(), false /*value*/);
+      pool, size, /*isNull=*/false, BOOLEAN(), bool{value});
 }
 } // namespace
 
@@ -940,7 +941,7 @@ void HashProbe::fillLeftSemiProjectMatchColumn(vector_size_t size) {
     if (nullAware_ && buildSideHasNullKeys_) {
       matchColumn() = BaseVector::createNullConstant(BOOLEAN(), size, pool());
     } else {
-      matchColumn() = createConstantFalse(size, pool());
+      matchColumn() = createConstantBool(size, /*value=*/false, pool());
     }
   } else {
     auto flatMatch = matchColumn()->as<FlatVector<bool>>();
@@ -1005,6 +1006,17 @@ void HashProbe::fillOutput(vector_size_t size) {
 }
 
 RowVectorPtr HashProbe::getBuildSideOutput() {
+  const bool probeFinishedEarly = joinBridge_->probeFinishedEarly();
+  if (probeFinishedEarly && !isRightSemiFilterJoin(joinType_) &&
+      !isRightSemiProjectJoin(joinType_)) {
+    // If any probe input was left unread, an unprobed build row may still have
+    // had a match. Do not emit rows whose correctness depends on the absence of
+    // a match. Omitting these rows is safe only because a probe closes early
+    // when its downstream no longer needs output, for example after satisfying
+    // a partial limit. Any new early-close path must preserve this invariant.
+    return nullptr;
+  }
+
   if (buildSideOutputRowContainerId_ == -1) {
     buildSideOutputRowContainerId_ =
         joinBridge_->getAndIncrementUnclaimedRowContainerId();
@@ -1019,7 +1031,11 @@ RowVectorPtr HashProbe::getBuildSideOutput() {
   int32_t numOut{0};
   while (numOut == 0 &&
          buildSideOutputRowContainerId_ < table_->numRowContainers()) {
-    if (isRightSemiFilterJoin(joinType_)) {
+    // Right semi filter emits only matched build rows. After an early probe
+    // close, right semi project also emits only confirmed matches: unread probe
+    // input could still change the match status of unprobed build rows.
+    if (isRightSemiFilterJoin(joinType_) ||
+        (probeFinishedEarly && isRightSemiProjectJoin(joinType_))) {
       numOut = table_->listProbedRows(
           lastProbeIterator_,
           buildSideOutputRowContainerId_,
@@ -1071,10 +1087,13 @@ RowVectorPtr HashProbe::getBuildSideOutput() {
 
   if (isRightSemiProjectJoin(joinType_)) {
     // Populate 'match' column.
-    if (noInput_ && nullAware_) {
+    if (probeFinishedEarly) {
+      // Only positively matched rows are returned after an early probe close.
+      matchColumn() = createConstantBool(numOut, /*value=*/true, pool());
+    } else if (noInput_ && nullAware_) {
       // Probe side is empty. All rows should return 'match = false', even ones
       // with a null join key. (This applies to null-aware joins only.)
-      matchColumn() = createConstantFalse(numOut, pool());
+      matchColumn() = createConstantBool(numOut, /*value=*/false, pool());
     } else {
       table_->rows()->extractProbedFlags(
           outputTableRows,
@@ -1996,7 +2015,7 @@ void HashProbe::noMoreInputInternal() {
   const bool outputBuildRowsInParallel =
       canOutputBuildRowsInParallel_ && needLastProbe();
   const bool shouldBlock = canSpill() || outputBuildRowsInParallel;
-  if (!operatorCtx_->allPeersFinished(
+  if (!operatorCtx_->allPeersArrived(
           shouldBlock ? &future_ : nullptr,
           shouldBlock ? promises_ : promises,
           peerOperators)) {
@@ -2461,6 +2480,70 @@ void HashProbe::checkMaxSpillLevel(
 }
 
 void HashProbe::close() {
+  // A last prober owns the barrier promises. Release them even if a later close
+  // step fails.
+  SCOPE_EXIT {
+    if (lastProber_) {
+      wakeupPeerOperators();
+    }
+  };
+
+  const auto& task = operatorCtx_->task();
+  // A downstream early finish can close the probe while it is still kRunning.
+  // For a running task, record incomplete probing: unread probe input may still
+  // match build rows that peers would otherwise report as unmatched.
+  if (isRunning() && task->isRunning() && needLastProbe() &&
+      (input_ != nullptr || hasMoreInput() ||
+       (canSpill() && hasMoreSpillData()))) {
+    auto* driver = operatorCtx_->driver();
+    VELOX_CHECK_NOT_NULL(driver);
+    auto* sinkOperator = driver->sinkOperator();
+    VELOX_CHECK_NOT_NULL(sinkOperator);
+    VELOX_CHECK(
+        sinkOperator->isFinished(),
+        "HashProbe may leave probe input unread only after downstream has "
+        "finished");
+    joinBridge_->setProbeFinishedEarly();
+  }
+
+  const bool outputBuildRowsInParallel =
+      canOutputBuildRowsInParallel_ && needLastProbe();
+  const bool needsBarrierCoordination = canSpill() || outputBuildRowsInParallel;
+  if (isRunning() && needsBarrierCoordination &&
+      !task->hasMixedExecutionGroupJoin(joinNode_.get()) && task->isRunning()) {
+    if (lastProber_ || noMoreSpillInput_) {
+      // This probe has already arrived at the current barrier. Exclude it from
+      // future spill rounds without registering a second arrival in this round.
+      if (canSpill()) {
+        task->finishPeerFromBarrier(planNodeId(), operatorCtx_->driver());
+      }
+    } else {
+      std::vector<std::shared_ptr<Driver>> peers;
+      const bool allArrived = canSpill()
+          ? task->allPeersArrivedAndFinishPeer(
+                planNodeId(), operatorCtx_->driver(), nullptr, promises_, peers)
+          : task->allPeersArrived(
+                planNodeId(),
+                operatorCtx_->driver(),
+                nullptr,
+                promises_,
+                peers);
+      if (allArrived) {
+        lastProber_ = true;
+        joinBridge_->resetUnclaimedRowContainerId();
+      }
+    }
+    // The last prober ends the current round even when it closes early,
+    // allowing build drivers to restore the next spill partition or finish.
+    // Free the current table before waking the probe peers.
+    if (lastProber_ && canSpill()) {
+      joinBridge_->probeFinished();
+      if (table_ != nullptr) {
+        table_->clear(true);
+      }
+    }
+  }
+
   Operator::close();
 
   // Free up major memory usage.
@@ -2472,11 +2555,6 @@ void HashProbe::close() {
   spillOutputPartitionSet_.clear();
   spillOutputReader_.reset();
   clearBuffers();
-
-  // Fulfill any pending promises
-  if (lastProber_) {
-    wakeupPeerOperators();
-  }
 }
 
 void HashProbe::clearBuffers() {

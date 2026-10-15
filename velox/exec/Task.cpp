@@ -2572,9 +2572,49 @@ std::vector<Operator*> Task::findPeerOperators(
   return peers;
 }
 
+bool Task::allPeersArrived(
+    const core::PlanNodeId& planNodeId,
+    Driver* caller,
+    ContinueFuture* future,
+    std::vector<ContinuePromise>& promises,
+    std::vector<std::shared_ptr<Driver>>& peers) {
+  return allPeersArrivedImpl(
+      planNodeId,
+      caller,
+      /*finishPeer=*/false,
+      future,
+      promises,
+      peers);
+}
+
 bool Task::allPeersFinished(
     const core::PlanNodeId& planNodeId,
     Driver* caller,
+    ContinueFuture* future,
+    std::vector<ContinuePromise>& promises,
+    std::vector<std::shared_ptr<Driver>>& peers) {
+  return allPeersArrived(planNodeId, caller, future, promises, peers);
+}
+
+bool Task::allPeersArrivedAndFinishPeer(
+    const core::PlanNodeId& planNodeId,
+    Driver* caller,
+    ContinueFuture* future,
+    std::vector<ContinuePromise>& promises,
+    std::vector<std::shared_ptr<Driver>>& peers) {
+  return allPeersArrivedImpl(
+      planNodeId,
+      caller,
+      /*finishPeer=*/true,
+      future,
+      promises,
+      peers);
+}
+
+bool Task::allPeersArrivedImpl(
+    const core::PlanNodeId& planNodeId,
+    Driver* caller,
+    bool finishPeer,
     ContinueFuture* future,
     std::vector<ContinuePromise>& promises,
     std::vector<std::shared_ptr<Driver>>& peers) {
@@ -2585,13 +2625,35 @@ bool Task::allPeersFinished(
         errorMessageImpl(exception_));
   }
   const auto splitGroupId = caller->driverCtx()->splitGroupId;
-  auto& barriers = splitGroupStates_[splitGroupId].barriers;
-  auto& state = barriers[planNodeId];
+  auto& splitGroupState = splitGroupStates_[splitGroupId];
+  auto& barriers = splitGroupState.barriers;
+  auto& barrierState = barriers[planNodeId];
+  const auto pipelineId = caller->driverCtx()->pipelineId;
+  auto& numFinishedPeers =
+      splitGroupState.finishedBarrierPeers[planNodeId][pipelineId];
+  const auto numDrivers = this->numDrivers(pipelineId);
 
-  const auto numPeers = numDrivers(caller->driverCtx()->pipelineId);
-  if (++state.numRequested == numPeers) {
-    peers = std::move(state.drivers);
-    promises = std::move(state.allPeersFinishedPromises);
+  if (barrierState.numPeers == 0) {
+    VELOX_CHECK_LE(numFinishedPeers, numDrivers);
+    barrierState.numPeers = numDrivers - numFinishedPeers;
+    VELOX_CHECK_GT(barrierState.numPeers, 0);
+    barrierState.pipelineId = pipelineId;
+  } else {
+    VELOX_CHECK(barrierState.pipelineId.has_value());
+    VELOX_CHECK_EQ(barrierState.pipelineId.value(), pipelineId);
+  }
+  VELOX_CHECK_LT(barrierState.numRequested, barrierState.numPeers);
+  const bool allArrived = ++barrierState.numRequested == barrierState.numPeers;
+  if (finishPeer) {
+    // The caller participates in this round, so compute this round's completion
+    // first. Record it as finished before erasing this round so that the next
+    // round observes the reduced peer count.
+    VELOX_CHECK_LT(numFinishedPeers, numDrivers);
+    ++numFinishedPeers;
+  }
+  if (allArrived) {
+    peers = std::move(barrierState.drivers);
+    promises = std::move(barrierState.allPeersArrivedPromises);
     barriers.erase(planNodeId);
     return true;
   }
@@ -2603,16 +2665,40 @@ bool Task::allPeersFinished(
     }
   }
   VELOX_CHECK_NOT_NULL(
-      callerShared, "Caller of Task::allPeersFinished is not a valid Driver");
-  // NOTE: we only set promise for the driver caller if it wants to wait for all
-  // the peers to finish.
+      callerShared, "Caller of Task::allPeersArrived is not a valid Driver");
+  // NOTE: we only set a promise for the caller if it wants to wait for all the
+  // peers to arrive.
   if (future != nullptr) {
-    state.drivers.push_back(callerShared);
-    state.allPeersFinishedPromises.emplace_back(
-        fmt::format("Task::allPeersFinished {}", taskId_));
-    *future = state.allPeersFinishedPromises.back().getSemiFuture();
+    barrierState.drivers.push_back(callerShared);
+    barrierState.allPeersArrivedPromises.emplace_back(
+        fmt::format("Task::allPeersArrived {}", taskId_));
+    *future = barrierState.allPeersArrivedPromises.back().getSemiFuture();
   }
   return false;
+}
+
+void Task::finishPeerFromBarrier(
+    const core::PlanNodeId& planNodeId,
+    Driver* caller) {
+  std::lock_guard<std::timed_mutex> l(mutex_);
+  const auto splitGroupId = caller->driverCtx()->splitGroupId;
+  auto& splitGroupState = splitGroupStates_[splitGroupId];
+  const auto pipelineId = caller->driverCtx()->pipelineId;
+  const auto barrierIt = splitGroupState.barriers.find(planNodeId);
+  // The only call site, HashProbe::close(), reaches here only after leaving the
+  // current barrier. The last peer erases the barrier; any other peer returns
+  // to the running state only after the last peer has erased the barrier and
+  // fulfilled its promise. Hence the caller's pipeline cannot own an active
+  // barrier here.
+  VELOX_CHECK(
+      barrierIt == splitGroupState.barriers.end() ||
+          !barrierIt->second.pipelineId.has_value() ||
+          barrierIt->second.pipelineId.value() != pipelineId,
+      "Cannot finish a peer while its pipeline barrier is active");
+  auto& numFinishedPeers =
+      splitGroupState.finishedBarrierPeers[planNodeId][pipelineId];
+  VELOX_CHECK_LT(numFinishedPeers, numDrivers(pipelineId));
+  ++numFinishedPeers;
 }
 
 void Task::addHashJoinBridgesLocked(
@@ -3201,6 +3287,13 @@ TaskStats Task::taskStats() const {
     }
   }
   return taskStats;
+}
+
+std::optional<FixedPointExecutionStats> Task::fixedPointExecutionStats() const {
+  if (fixedPoint_ == nullptr) {
+    return std::nullopt;
+  }
+  return fixedPoint_->executionStats();
 }
 
 bool Task::getLongRunningOpCalls(

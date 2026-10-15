@@ -2003,6 +2003,21 @@ TEST_F(DateTimeFunctionsTest, timestampadd) {
           "year",
           10,
           Timestamp(1582970400, 500'999'999) /*2020-02-29 10:00:00.500*/));
+
+  // Timestamps before the epoch keep the calendar day of their local time,
+  // so the month arithmetic starts from November 30, not December 1.
+  EXPECT_EQ(
+      parseTimestamp("1969-12-30 12:00:00"),
+      timestampadd("month", 1, parseTimestamp("1969-11-30 12:00:00")));
+  EXPECT_EQ(
+      parseTimestamp("1969-02-28 12:00:00"),
+      timestampadd("month", 1, parseTimestamp("1969-01-30 12:00:00")));
+  EXPECT_EQ(
+      parseTimestamp("1969-05-28 12:00:00"),
+      timestampadd("quarter", 1, parseTimestamp("1969-02-28 12:00:00")));
+  EXPECT_EQ(
+      parseTimestamp("1968-02-28 12:00:00"),
+      timestampadd("year", -1, parseTimestamp("1969-02-28 12:00:00")));
 }
 
 TEST_F(DateTimeFunctionsTest, timestampAddTimestampUtc) {

@@ -29,6 +29,7 @@
 #include "velox/common/memory/Memory.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/common/Types.h"
+#include "velox/dwio/nimble/velox/stats/VectorizedStatistics.h"
 #include "velox/type/Type.h"
 #include "velox/vector/BaseVector.h"
 
@@ -357,7 +358,8 @@ class NimbleWriterFuzzer {
   void verifyColumnStatistics(
       const std::string& file,
       const velox::RowTypePtr& schema,
-      const std::vector<velox::VectorPtr>& batches);
+      const std::vector<velox::VectorPtr>& batches,
+      const VectorizedFileStats::Options& statsOptions);
 
   // Verifies the serialized schema round-trips back to the written Velox type,
   // and that per-stream byte ranges within each stripe are non-overlapping.
