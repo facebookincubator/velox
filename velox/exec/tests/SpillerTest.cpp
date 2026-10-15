@@ -736,8 +736,19 @@ class SpillerTest : public exec::test::RowContainerTestBase {
             FAIL() << "Stream ends after " << i << " entries";
             break;
           }
-          ASSERT_TRUE(rowVector_->equalValueAt(
-              stream->current().get(), indices[i], stream->currentIndex()));
+          const auto& current = stream->current();
+          if (type_ == SpillerType::AGGREGATION_INPUT) {
+            ASSERT_EQ(current->childrenSize(), rowType_->size() + 1);
+            for (auto column = 0; column < rowType_->size(); ++column) {
+              ASSERT_TRUE(rowVector_->childAt(column)->equalValueAt(
+                  current->childAt(column).get(),
+                  indices[i],
+                  stream->currentIndex()));
+            }
+          } else {
+            ASSERT_TRUE(rowVector_->equalValueAt(
+                current.get(), indices[i], stream->currentIndex()));
+          }
           stream->pop();
         }
       } else {
