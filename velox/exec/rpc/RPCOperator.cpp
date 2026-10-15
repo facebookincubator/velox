@@ -57,7 +57,8 @@ RPCOperator::RPCOperator(
       queryConfig.rpcCongestionMinWindow(),
       queryConfig.rpcCongestionStepCoef(),
       queryConfig.rpcCongestionMaxWindow(),
-      queryConfig.rpcCongestionBatchStartWindow());
+      queryConfig.rpcCongestionBatchStartWindow(),
+      queryConfig.rpcCongestionAsyncGrowthMaxWindow());
 }
 
 RPCOperator::~RPCOperator() {
@@ -828,9 +829,27 @@ void RPCOperator::recordCongestion(
     }
   } else if (signal == AsyncRPCFunction::CongestionSignal::kSuccess) {
     state_->onUnitSamples(roundTripTimesNs);
+  } else if (signal == AsyncRPCFunction::CongestionSignal::kSuccessNoLatency) {
+    // No usable latency (async-job queue time dominates), so the gradient gets
+    // nothing — but clean completions still prove capacity. Grow on completion
+    // count; on the batch path there is one measured round trip per completed
+    // flush, i.e. one unit per completed batch. RPCState ignores this in
+    // PER_ROW mode, whose window is shrink-only by design.
+    state_->onUnitCleanCompletions(
+        static_cast<int64_t>(roundTripTimesNs.size()));
   }
 
-  int64_t serviceHorizonNs = roundTripTimesNs.empty()
+  // No-latency successes skip time-based estimates only on the gated
+  // clean-growth path: with growth disabled they train the shared service
+  // horizon exactly as before, so default-off preserves legacy paced-admission
+  // behavior. When growth is enabled, queue-dominated elapsed times must not
+  // train it — feeding them would pace admissions at queue-time pace after an
+  // overload. updateServiceHorizonLocked ignores non-positive samples, so zero
+  // skips the horizon update while unit growth proceeds.
+  const bool skipHorizon =
+      signal == AsyncRPCFunction::CongestionSignal::kSuccessNoLatency &&
+      state_->cleanGrowthEnabled();
+  int64_t serviceHorizonNs = (skipHorizon || roundTripTimesNs.empty())
       ? 0
       : *std::min_element(roundTripTimesNs.begin(), roundTripTimesNs.end());
   for (const auto& [overloadEpoch, successUnits] : successUnitsByEpoch) {

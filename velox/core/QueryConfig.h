@@ -1510,6 +1510,20 @@ class QueryConfig {
       "admission-controlled dispatch this ceiling now actually bounds in-flight "
       "rows, so it must be sized for the backend's healthy concurrency.")
 
+  /// Cap for BATCH driver-window growth on clean no-latency completions.
+  VELOX_QUERY_CONFIG(
+      kRpcCongestionAsyncGrowthMaxWindow,
+      rpcCongestionAsyncGrowthMaxWindow,
+      "rpc.congestion.async_growth_max_window",
+      int64_t,
+      0,
+      "Cap for per-driver BATCH congestion-window growth on clean completions "
+      "that carry no usable latency sample (MetaGen async-job batches). 0 "
+      "(default) disables the growth, keeping the legacy pinned start window. "
+      "Positive values let the window discover capacity additively up to the "
+      "cap; size at or below the backend's measured concurrency knee (16 is a "
+      "conservative start). Clamped to [minWindow, maxWindow].")
+
   /// Enables AIMD adaptation of each backend's rate-limit capacity.
   VELOX_QUERY_CONFIG(
       kRpcRateLimiterAdaptiveEnabled,
