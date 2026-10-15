@@ -392,7 +392,11 @@ let the limiter recover.</p></td>
 </tr>
 <tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">kSuccessNoLatency</span></code></p></td>
 <td><p>The unit completed cleanly; let the limiter recover without feeding its
-latency to the gradient window.</p></td>
+latency to the gradient window. In BATCH mode, when
+<code class="docutils literal notranslate"><span class="pre">rpc.congestion.async_growth_max_window</span></code> is set, it also grows the
+driver window additively on completion count and skips training the
+shared service horizon. With the default 0 the window stays pinned
+and the horizon trains as before.</p></td>
 </tr>
 <tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">kOverloaded</span></code></p></td>
 <td><p>The backend shed load — rate limited, or timed out under pressure.
@@ -424,10 +428,14 @@ limiter have headroom; otherwise it waits.</p></li>
 shared decrease for the admission epoch, and releases the shared lease.</p></li>
 <li><p><strong>On driver consumption</strong>, obtains the function’s aggregate verdict.
 <code class="docutils literal notranslate"><span class="pre">kSuccess</span></code> feeds round-trip time to the per-driver window and recovers
-shared admission; <code class="docutils literal notranslate"><span class="pre">kSuccessNoLatency</span></code> only recovers shared admission; a
-recorded canonical overload shrinks the driver window without repeating the
-shared decrease; a function-specific <code class="docutils literal notranslate"><span class="pre">kOverloaded</span></code> verdict shrinks both
-controllers; the other verdicts leave both controllers unchanged.</p></li>
+shared admission; <code class="docutils literal notranslate"><span class="pre">kSuccessNoLatency</span></code> recovers shared admission without
+training the gradient, and, when <code class="docutils literal notranslate"><span class="pre">rpc.congestion.async_growth_max_window</span></code>
+is set, also skips shared-horizon training and grows the BATCH driver
+window additively on completion count (with the default 0 the horizon
+trains as before); a recorded canonical overload shrinks the driver window without
+repeating the shared decrease; a function-specific <code class="docutils literal notranslate"><span class="pre">kOverloaded</span></code> verdict
+shrinks both controllers; the other verdicts leave both controllers
+unchanged.</p></li>
 </ol>
 </section>
 <section id="retries-and-error-handling">

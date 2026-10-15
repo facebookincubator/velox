@@ -304,6 +304,14 @@ Generic Configuration
      - Multiplier on the RPC congestion window's sqrt(window) additive\-increase headroom. Default 1.0
        is the plain sqrt headroom; lower values converge tighter at small windows. The controller
        clamps this to be non\-negative.
+   * - rpc.congestion.async_growth_max_window
+     - integer
+     - 0
+     - Cap for per\-driver BATCH window growth on clean completions that carry no usable latency
+       sample (MetaGen async\-job batches). 0 (default) disables the growth, keeping the legacy
+       pinned start window. Positive values let the window discover capacity additively up to the
+       cap; size at or below the backend's measured concurrency knee (16 is a conservative start).
+       Clamped to [minWindow, maxWindow].
 
 
 Expression Evaluation Configuration
