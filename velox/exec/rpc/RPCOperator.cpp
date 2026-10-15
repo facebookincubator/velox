@@ -49,16 +49,15 @@ RPCOperator::RPCOperator(
           std::make_shared<RPCState>(operatorCtx_->pool()->shared_from_this())),
       dispatchBatchSize_(rpcNode_->dispatchBatchSize()) {
   // Configure RPCState with the streaming mode and the congestion-window
-  // tunables. The two knobs are registered QueryConfig properties
-  // (rpc.congestion.min_window / rpc.congestion.step_coef) with safe defaults,
-  // so they can be retuned via SET SESSION / configerator with no code change;
-  // unset means the controller's defaults (floor 1, headroom 1.0x).
+  // tunables. They are registered QueryConfig properties with safe defaults,
+  // so they can be retuned without a code change.
   const auto& queryConfig = driverCtx->queryConfig();
   state_->setStreamingMode(
       rpcNode_->streamingMode(),
       queryConfig.rpcCongestionMinWindow(),
       queryConfig.rpcCongestionStepCoef(),
-      queryConfig.rpcCongestionMaxWindow());
+      queryConfig.rpcCongestionMaxWindow(),
+      queryConfig.rpcCongestionBatchStartWindow());
 }
 
 RPCOperator::~RPCOperator() {

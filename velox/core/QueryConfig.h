@@ -1458,6 +1458,20 @@ class QueryConfig {
       1000,
       "Batch size threshold for zero-copy in MarkSorted operator.")
 
+  /// Initial per-driver BATCH RPC congestion window (RPCOperator).
+  VELOX_QUERY_CONFIG(
+      kRpcCongestionBatchStartWindow,
+      rpcCongestionBatchStartWindow,
+      "rpc.congestion.batch_start_window",
+      int64_t,
+      0,
+      "Initial per-driver BATCH RPC congestion window. 0 keeps the built-in "
+      "default of 2. Positive values are clamped to [minWindow, maxWindow]. "
+      "PER_ROW always starts at its ceiling. Size at or below the backend's "
+      "measured concurrency knee: starting above it seeds the unloaded-RTT "
+      "baseline with queueing delay, leaving only explicit overload errors "
+      "to shrink the window.")
+
   /// Floor the RPC congestion window may shrink to under overload
   /// (RPCOperator).
   VELOX_QUERY_CONFIG(

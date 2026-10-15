@@ -96,6 +96,61 @@ class RPCStateTest : public testing::Test {
   std::shared_ptr<RPCState> state_;
 };
 
+TEST_F(RPCStateTest, configuresBatchCongestionStartWindow) {
+  {
+    state_->setStreamingMode(RPCStreamingMode::kBatch);
+    EXPECT_EQ(state_->operatorSnapshot().windowLimit, 2);
+  }
+  {
+    state_->setStreamingMode(RPCStreamingMode::kPerRow);
+    EXPECT_EQ(state_->operatorSnapshot().windowLimit, 100);
+  }
+  {
+    state_->setStreamingMode(
+        RPCStreamingMode::kBatch,
+        /*minWindow=*/1,
+        /*stepCoef=*/1.0,
+        /*maxWindow=*/64,
+        /*batchStartWindow=*/8);
+    EXPECT_EQ(state_->operatorSnapshot().windowLimit, 8);
+  }
+  {
+    state_->setStreamingMode(
+        RPCStreamingMode::kPerRow,
+        /*minWindow=*/1,
+        /*stepCoef=*/1.0,
+        /*maxWindow=*/64,
+        /*batchStartWindow=*/8);
+    EXPECT_EQ(state_->operatorSnapshot().windowLimit, 64);
+  }
+  {
+    state_->setStreamingMode(
+        RPCStreamingMode::kBatch,
+        /*minWindow=*/4,
+        /*stepCoef=*/1.0,
+        /*maxWindow=*/64,
+        /*batchStartWindow=*/2);
+    EXPECT_EQ(state_->operatorSnapshot().windowLimit, 4);
+  }
+  {
+    state_->setStreamingMode(
+        RPCStreamingMode::kBatch,
+        /*minWindow=*/1,
+        /*stepCoef=*/1.0,
+        /*maxWindow=*/4,
+        /*batchStartWindow=*/8);
+    EXPECT_EQ(state_->operatorSnapshot().windowLimit, 4);
+  }
+  VELOX_ASSERT_THROW(
+      state_->setStreamingMode(
+          RPCStreamingMode::kBatch,
+          /*minWindow=*/1,
+          /*stepCoef=*/1.0,
+          /*maxWindow=*/64,
+          /*batchStartWindow=*/-1),
+      "must be non-negative");
+}
+
 // ========== PER_ROW mode tests ==========
 
 TEST_F(RPCStateTest, basicAddAndClaim) {
