@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/exec/Aggregate.h"
+#include "velox/exec/SimpleAggregateAdapter.h"
 #include "velox/functions/lib/window/tests/WindowTestBase.h"
 #include "velox/functions/prestosql/window/WindowFunctionsRegistration.h"
 
@@ -441,6 +443,103 @@ TEST_F(AggregateWindowTest, singlePartitionColumnForPrefixSort) {
       "min(c2)",
       {"partition by c0"},
       {"rows between unbounded preceding and unbounded following"});
+}
+
+// Sums its first argument plus a constant offset that it reads from its second
+// argument in setConstantInputs(). The offset stays 0 if the constant inputs
+// are not passed, which makes the result detectably wrong.
+class ConstantOffsetSumAggregate {
+ public:
+  using InputType = Row<int64_t, int64_t>;
+  using IntermediateType = int64_t;
+  using OutputType = int64_t;
+
+  void setConstantInputs(const std::vector<VectorPtr>& constantInputs) {
+    VELOX_CHECK_EQ(constantInputs.size(), 2);
+    VELOX_CHECK_NULL(constantInputs[0]);
+    VELOX_CHECK_NOT_NULL(constantInputs[1]);
+    offset_ = constantInputs[1]->as<ConstantVector<int64_t>>()->valueAt(0);
+  }
+
+  struct Accumulator {
+    int64_t sum{0};
+    ConstantOffsetSumAggregate* fn;
+
+    explicit Accumulator(
+        HashStringAllocator* /*allocator*/,
+        ConstantOffsetSumAggregate* fn)
+        : fn(fn) {}
+
+    void addInput(
+        HashStringAllocator* /*allocator*/,
+        exec::arg_type<int64_t> value,
+        exec::arg_type<int64_t> /*offset*/) {
+      sum += value + fn->offset_;
+    }
+
+    void combine(
+        HashStringAllocator* /*allocator*/,
+        exec::arg_type<int64_t> other) {
+      sum += other;
+    }
+
+    bool writeIntermediateResult(exec::out_type<IntermediateType>& out) {
+      out = sum;
+      return true;
+    }
+
+    bool writeFinalResult(exec::out_type<OutputType>& out) {
+      out = sum;
+      return true;
+    }
+  };
+
+  using AccumulatorType = Accumulator;
+
+  int64_t offset_{0};
+};
+
+void registerConstantOffsetSumAggregate(const std::string& name) {
+  std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures{
+      exec::AggregateFunctionSignatureBuilder()
+          .returnType("bigint")
+          .intermediateType("bigint")
+          .argumentType("bigint")
+          .argumentType("bigint")
+          .build(),
+  };
+  exec::registerAggregateFunction(
+      name,
+      std::move(signatures),
+      [](core::AggregationNode::Step step,
+         const std::vector<TypePtr>& argTypes,
+         const TypePtr& resultType,
+         const core::QueryConfig& /*config*/)
+          -> std::unique_ptr<exec::Aggregate> {
+        return std::make_unique<
+            exec::SimpleAggregateAdapter<ConstantOffsetSumAggregate>>(
+            step, argTypes, resultType);
+      },
+      /*registerCompanionFunctions=*/false,
+      /*overwrite=*/true);
+}
+
+// Aggregates used as window functions receive their constant arguments through
+// setConstantInputs(), as they do in the aggregation operators.
+TEST_F(AggregateWindowTest, constantInputs) {
+  registerConstantOffsetSumAggregate("constant_offset_sum");
+
+  auto input = makeRowVector({makeFlatVector<int64_t>({1, 2, 3})});
+  auto expected = makeRowVector({
+      makeFlatVector<int64_t>({1, 2, 3}),
+      makeFlatVector<int64_t>({11, 23, 36}),
+  });
+  WindowTestBase::testWindowFunction(
+      {input},
+      "constant_offset_sum(c0, 10)",
+      "order by c0",
+      "rows between unbounded preceding and current row",
+      expected);
 }
 
 }; // namespace

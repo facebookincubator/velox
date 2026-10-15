@@ -45,8 +45,13 @@ class AggregateWindowFunction : public exec::WindowFunction {
     argTypes_.reserve(args.size());
     argIndices_.reserve(args.size());
     argVectors_.reserve(args.size());
+    // Constant inputs passed to the aggregate, with nullptr for non-constant
+    // arguments, as the aggregation operators do.
+    std::vector<VectorPtr> constantInputs;
+    constantInputs.reserve(args.size());
     for (const auto& arg : args) {
       argTypes_.push_back(arg.type);
+      constantInputs.push_back(arg.constantValue);
       if (arg.constantValue) {
         argIndices_.push_back(kConstantChannel);
         argVectors_.push_back(arg.constantValue);
@@ -66,6 +71,12 @@ class AggregateWindowFunction : public exec::WindowFunction {
         resultType,
         config);
     aggregate_->setAllocator(stringAllocator_);
+
+    // Pass constant inputs to the aggregate so it can read constant arguments
+    // (e.g., flags) at initialization time.
+    if (!constantInputs.empty()) {
+      aggregate_->setConstantInputs(constantInputs);
+    }
 
     // Aggregate initialization.
     // Row layout is:
