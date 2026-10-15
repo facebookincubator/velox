@@ -29,14 +29,15 @@
 
 namespace facebook::velox::cudf_velox::connector::hive {
 
-/// KvikIO-backed cache fills, followed by a reusable per-thread pinned H2D
-/// staging buffer. This is separate from the BufferedInput/AWS SDK datasource;
-/// it does not change that reader's I/O.
-/// Device-read cache misses use the delegate's asynchronous host API. Pending
-/// fills and exclusive-entry waits do not occupy remote executor threads.
-/// Admission is bounded before allocating cache entries, independently of
-/// driver/preload counts. The returned future still fences destination writes
-/// on both consumption and discard; failed/short fills are never published.
+/// Serves reads of a KvikIO datasource through the AsyncDataCache. A miss reads
+/// the bytes from the delegate into a new cache entry. Device reads copy each
+/// cached piece to the GPU through a reusable per-thread pinned buffer. This is
+/// separate from the BufferedInput/AWS SDK datasource and does not change that
+/// reader's I/O.
+/// device_read_async() fills the cache on one pool and copies to the GPU on a
+/// second, smaller pool of cudf.kvikio_cache_threads threads. Its future also
+/// waits for the GPU copy, whether it is consumed or discarded. Failed or
+/// short fills are never published.
 ///
 /// Cache keys are (file ID, request offset). Reads reuse smaller entries at
 /// successive offsets and fill only the remaining suffix. This is exact-offset

@@ -117,9 +117,7 @@ struct AsyncReadControl {
   std::vector<std::function<void()>> pending;
   bool open{false};
   std::atomic<size_t> submitted{0};
-  std::atomic<size_t> synchronous{0};
   std::atomic<bool> failSubmission{false};
-  std::atomic<bool> invalidFuture{false};
 
   void add(std::function<void()> fill) {
     {
@@ -167,9 +165,9 @@ class AsyncMemorySource : public MemorySource {
       std::shared_ptr<AsyncReadControl> control)
       : MemorySource(state), state_(state), control_(std::move(control)) {}
 
+  // Like cuDF's KvikIO datasource.
   size_t host_read(size_t offset, size_t bytes, uint8_t* dst) override {
-    ++control_->synchronous;
-    return MemorySource::host_read(offset, bytes, dst);
+    return host_read_async(offset, bytes, dst).get();
   }
 
   std::future<size_t> host_read_async(size_t offset, size_t bytes, uint8_t* dst)
@@ -177,9 +175,6 @@ class AsyncMemorySource : public MemorySource {
     VELOX_CHECK(
         !control_->failSubmission.exchange(false),
         "Injected submission failure");
-    if (control_->invalidFuture.exchange(false)) {
-      return {};
-    }
     auto promise = std::make_shared<std::promise<size_t>>();
     auto future = promise->get_future();
     state_->recordRead(offset, bytes);
@@ -276,7 +271,7 @@ class CachingDataSourceTest : public testing::Test {
   const std::string path_ = "s3://test/caching-datasource";
 };
 
-TEST_F(CachingDataSourceTest, asyncFillsExceedExecutorThreadsAndStayBounded) {
+TEST_F(CachingDataSourceTest, asyncFillsExceedCopyThreadsAndStayBounded) {
   constexpr size_t kRequests = 24;
   constexpr size_t kBytes = 4096;
   fillPattern(kRequests * kBytes);
@@ -298,8 +293,7 @@ TEST_F(CachingDataSourceTest, asyncFillsExceedExecutorThreadsAndStayBounded) {
   ASSERT_TRUE(waitUntil([&] { return control->submitted.load() >= 8; }));
   std::this_thread::sleep_for(20ms);
   EXPECT_EQ(control->submitted, 8)
-      << "The host-read window must exceed two executor threads but stay bounded";
-  EXPECT_EQ(control->synchronous, 0);
+      << "Eight fill threads, more than the two copy threads, run one fill each";
   control->releaseAll();
   for (auto& read : reads) {
     EXPECT_EQ(read.get(), kBytes);
@@ -307,7 +301,6 @@ TEST_F(CachingDataSourceTest, asyncFillsExceedExecutorThreadsAndStayBounded) {
   EXPECT_EQ(fromDevice(dst, read_->data.size()), read_->data);
   EXPECT_EQ(read_->reads, kRequests);
   EXPECT_EQ(control->submitted, kRequests);
-  EXPECT_EQ(control->synchronous, 0);
 }
 
 class CachingDataSourceFragmentTest : public CachingDataSourceTest,
@@ -316,8 +309,8 @@ class CachingDataSourceFragmentTest : public CachingDataSourceTest,
 
 TEST_P(CachingDataSourceFragmentTest, deviceReadsReuseCachedFragments) {
   const bool nonContiguous = GetParam();
-  // More fragments than the per-key retry limit, with nonuniform data to
-  // catch incorrect source offsets or overwriting an earlier destination.
+  // Many fragments, with nonuniform data to catch incorrect source offsets or
+  // overwriting an earlier destination.
   constexpr size_t kFragments = 40;
   constexpr size_t kFragmentBytes = 4096;
   constexpr size_t kTailBytes = 4096 + 731;
@@ -352,7 +345,6 @@ TEST_P(CachingDataSourceFragmentTest, deviceReadsReuseCachedFragments) {
   EXPECT_EQ(
       read_->recordedReads(),
       (ReadState::Requests{{kPrefixBytes, kTailBytes}}));
-  EXPECT_EQ(control->synchronous, 0);
   auto metrics = stats_->stats();
   EXPECT_EQ(metrics.at("cudfKvikioCacheHitBytes").sum, kPrefixBytes);
   EXPECT_EQ(metrics.at("cudfKvikioCacheMissBytes").sum, kTailBytes);
@@ -402,7 +394,6 @@ TEST_F(
   EXPECT_EQ(fromDevice(dst, 5120), std::string(5120, 'x'));
   EXPECT_EQ(stats_->stats().at("cudfKvikioCacheHitBytes").sum, 1024);
   EXPECT_EQ(stats_->stats().at("cudfKvikioCacheMissBytes").sum, 4096);
-  EXPECT_EQ(control->synchronous, 0);
 }
 
 TEST_F(CachingDataSourceTest, asyncSharedFillAndOutOfOrderCompletion) {
@@ -417,8 +408,8 @@ TEST_F(CachingDataSourceTest, asyncSharedFillAndOutOfOrderCompletion) {
   auto release = folly::makeGuard([&] { control->releaseAll(); });
   reads.push_back(input->device_read_async(0, 4096, dst, stream.view()));
   ASSERT_TRUE(waitUntil([&] { return control->submitted.load() == 1; }));
-  // Two followers of the pending fill must not occupy the two executor
-  // threads and prevent a later, independent fill from being submitted.
+  // Two followers wait for the pending fill on fill threads. They must not
+  // block a later, independent fill.
   reads.push_back(input->device_read_async(0, 4096, dst + 4096, stream.view()));
   reads.push_back(input->device_read_async(0, 4096, dst + 8192, stream.view()));
   reads.push_back(
@@ -459,10 +450,6 @@ TEST_F(CachingDataSourceTest, asyncFailedAndShortFillsAreNotPublished) {
   EXPECT_THROW(
       input->device_read_async(0, 4096, dst, stream.view()).get(),
       VeloxRuntimeError);
-  control->invalidFuture = true;
-  EXPECT_THROW(
-      input->device_read_async(0, 4096, dst, stream.view()).get(),
-      VeloxRuntimeError);
   EXPECT_EQ(input->device_read_async(0, 4096, dst, stream.view()).get(), 4096);
   EXPECT_EQ(input->device_read_async(0, 4096, dst, stream.view()).get(), 4096);
   EXPECT_EQ(control->submitted, 3);
@@ -500,6 +487,7 @@ TEST_F(
 TEST_F(CachingDataSourceTest, asyncCapacityFailureUsesUncachedFallback) {
   read_->data.assign(32 << 20, 'b');
   auto control = std::make_shared<AsyncReadControl>();
+  control->releaseAll();
   auto input = asyncSource(control);
   rmm::cuda_stream stream;
   rmm::device_buffer destination(
@@ -510,8 +498,9 @@ TEST_F(CachingDataSourceTest, asyncCapacityFailureUsesUncachedFallback) {
   EXPECT_EQ(
       input->device_read_async(0, read_->data.size(), dst, stream.view()).get(),
       read_->data.size());
-  EXPECT_EQ(control->submitted, 0);
-  EXPECT_EQ(control->synchronous, 1);
+  EXPECT_EQ(control->submitted, 1);
+  EXPECT_EQ(
+      stats_->stats().at("cudfKvikioCacheBypassBytes").sum, read_->data.size());
   EXPECT_EQ(fromDevice(dst, read_->data.size()), read_->data);
   EXPECT_EQ(cache_->refreshStats().numEntries, 0);
 }
@@ -673,6 +662,7 @@ TEST_F(CachingDataSourceTest, failedHostSuffixPreservesCachedPrefix) {
 TEST_F(CachingDataSourceTest, uncachedFallbackReadsOnlyMissingSuffix) {
   read_->data.assign(32 << 20, 'b');
   auto control = std::make_shared<AsyncReadControl>();
+  control->releaseAll();
   auto input = asyncSource(control);
   input->host_read(0, 4096);
   // Hold the prefix so an unsuccessful large cache allocation cannot evict it.
@@ -703,7 +693,6 @@ TEST_F(CachingDataSourceTest, uncachedFallbackReadsOnlyMissingSuffix) {
           {4096, read_->data.size() - 4096},
           {4096, read_->data.size() - 4096},
           {4096, read_->data.size() - 4096}}));
-  EXPECT_EQ(control->submitted, 0);
 }
 
 TEST_F(CachingDataSourceTest, cacheCapacityFailureFallsBackWithoutPublishing) {
