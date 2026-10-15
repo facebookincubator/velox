@@ -36,8 +36,9 @@ class CudfIcebergConnector final
       std::shared_ptr<const ConfigBase> config,
       folly::Executor* executor);
 
-  /// Creates a CudfIcebergDataSource when reading from Iceberg tables when cudf
-  /// is registered, otherwise falls back to the base IcebergDataSource.
+  /// Creates a CudfIcebergDataSource when reading from Iceberg tables when
+  /// cuDF is enabled for the query, otherwise falls back to the base
+  /// IcebergDataSource.
   ///
   /// @param outputType The schema of the output data to read.
   /// @param tableHandle The table handle containing table metadata.
