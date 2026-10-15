@@ -27,14 +27,19 @@ namespace facebook::velox::exec {
 /// initial iterations, then returns a fixed look-ahead for the remainder.
 class AdaptivePrefetch {
  public:
+  /// @param numIterations Total number of loop iterations. Used to disable
+  /// prefetching near the end of the loop. The latency measurement starts at
+  /// construction.
   explicit AdaptivePrefetch(int32_t numIterations)
       : numIterations_(numIterations),
         start_(std::chrono::steady_clock::now()) {}
 
-  /// Returns look-ahead distance, or 0 when too close to the end.
+  /// Call once per loop iteration. Returns look-ahead distance, or 0 when too
+  /// close to the end. Uses kMinLookAhead until the first
+  /// kMeasurementIterations iterations have been measured.
   int32_t lookAhead() {
     if (iteration_ == kMeasurementIterations) {
-      computeLookAhead();
+      measureAndSetLookAhead();
     }
     ++iteration_;
     if (iteration_ + lookAhead_ > numIterations_) {
@@ -43,6 +48,9 @@ class AdaptivePrefetch {
     return lookAhead_;
   }
 
+  /// Maps the elapsed time of the measurement iterations to a look-ahead
+  /// distance, clamped to [kMinLookAhead, kMaxLookAhead]. Non-positive
+  /// 'elapsedNs' is treated as 1ns, which yields the maximum look-ahead.
   static int32_t computeLookAhead(int64_t elapsedNs) {
     return std::clamp(
         static_cast<int32_t>(
@@ -59,7 +67,7 @@ class AdaptivePrefetch {
   static constexpr int64_t kAssumedDramLatencyNs = 100;
   static constexpr int64_t kCoefficient = 4;
 
-  void computeLookAhead() {
+  void measureAndSetLookAhead() {
     const auto elapsedNs = std::chrono::duration_cast<std::chrono::nanoseconds>(
                                std::chrono::steady_clock::now() - start_)
                                .count();
