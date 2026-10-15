@@ -29,25 +29,30 @@
 
 namespace facebook::velox::cudf_velox::connector::hive {
 
-/// Serves reads of a KvikIO datasource through the AsyncDataCache. A miss reads
-/// the bytes from the delegate into a new cache entry. Device reads copy each
-/// cached piece to the GPU through a reusable per-thread pinned buffer. This is
-/// separate from the BufferedInput/AWS SDK datasource and does not change that
-/// reader's I/O.
-/// device_read_async() fills the cache on one pool and copies to the GPU on a
-/// second, smaller pool of cudf.kvikio_cache_threads threads. Its future also
-/// waits for the GPU copy, whether it is consumed or discarded. Failed or
-/// short fills are never published.
+/// Reads a KvikIO datasource through Velox's AsyncDataCache.
 ///
-/// Cache keys are (file ID, request offset). Reads reuse smaller entries at
-/// successive offsets and fill only the remaining suffix. This is exact-offset
-/// fragment reuse, not an arbitrary interval lookup: differently aligned
-/// ranges need not reuse cached bytes. The process-wide cache must outlive
-/// reads.
+/// Each read is split into pieces, one per cache entry. A cached piece is
+/// copied from the cache. A missing piece is read from KvikIO into a new cache
+/// entry first. A piece that cannot be cached (the cache is full, or the piece
+/// is too big) is read from KvikIO directly, together with the rest of the
+/// read. A partly read entry is never made readable.
+///
+/// GPU reads copy each piece through a pinned host buffer, one per thread.
+/// device_read_async() fills the cache on one thread pool and copies to the
+/// GPU on a second, smaller pool of cudf.kvikio_cache_threads threads. Its
+/// future waits until the bytes are in GPU memory, whether cuDF calls get() on
+/// it or drops it.
+///
+/// Cache entries are keyed by (file, offset). A read can use a shorter cached
+/// entry at its offset, then continue with the entry right after it. Entries
+/// at other offsets are not used, even if they overlap the read.
+///
+/// This does not change the BufferedInput/AWS SDK reader. The process-wide
+/// cache must outlive all reads.
 class CachingDataSource final : public cudf::io::datasource {
  public:
   CachingDataSource(
-      std::unique_ptr<cudf::io::datasource> delegate,
+      std::unique_ptr<cudf::io::datasource> kvikioSource,
       std::string_view path,
       cache::AsyncDataCache* cache,
       std::shared_ptr<IoStats> ioStats = nullptr);
@@ -79,19 +84,17 @@ class CachingDataSource final : public cudf::io::datasource {
   device_read(size_t offset, size_t size, cuda::stream_ref stream) override;
 
  private:
-  struct State;
-  // Asynchronous work owns the delegate and file ID independently of the
-  // datasource object's lifetime.
-  std::shared_ptr<State> state_;
+  struct Reader;
+  // Shared with async work, which may outlive this object.
+  std::shared_ptr<Reader> reader_;
 };
 
-/// With caching disabled (or a non-cacheable split), return the original
-/// datasource itself. This preserves the direct KvikIO path, including native
-/// async interfaces, without extra pools, file IDs or staging allocations.
-/// Presto marks splits cacheable only under soft or hard affinity scheduling,
-/// so with its default NO_PREFERENCE the cache is never used.
+/// Returns 'kvikioSource' wrapped in a CachingDataSource, or 'kvikioSource'
+/// itself when 'cache' is null or the split is not cacheable. Presto marks
+/// splits cacheable only under soft or hard affinity scheduling, so with its
+/// default NO_PREFERENCE the cache is never used.
 std::unique_ptr<cudf::io::datasource> maybeCacheKvikioDataSource(
-    std::unique_ptr<cudf::io::datasource> delegate,
+    std::unique_ptr<cudf::io::datasource> kvikioSource,
     std::string_view path,
     cache::AsyncDataCache* cache,
     bool cacheable,
