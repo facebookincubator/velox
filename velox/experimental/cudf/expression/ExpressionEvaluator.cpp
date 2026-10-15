@@ -3175,6 +3175,11 @@ ColumnOrView FunctionExpression::eval(
   }
 
   if (function_) {
+    // CudfFunction implementations operate on plain cuDF columns and assume
+    // each input has its expression's declared type, so finalize every child: a
+    // child whose cuDF result type differs (e.g. INT16 from
+    // extract_datetime_component for a BIGINT year()) is cast before the
+    // function sees it.
     std::vector<ColumnOrView> subexprResults;
     subexprResults.reserve(subexpressions_.size());
 
@@ -3197,7 +3202,8 @@ ColumnOrView FunctionExpression::eval(
       // conditional discards. Hand each branch inputs whose null mask excludes
       // the rows it does not supply; the kernels already skip null rows. Velox
       // CPU narrows a SelectivityVector per branch instead.
-      auto condition = subexpressions_[0]->eval(inputColumnViews, stream, mr);
+      auto condition = subexpressions_[0]->eval(
+          inputColumnViews, stream, mr, /*finalize=*/true);
       const auto conditionView = asView(condition);
       subexprResults.push_back(std::move(condition));
 
@@ -3217,11 +3223,12 @@ ColumnOrView FunctionExpression::eval(
             mr));
         subexprResults.push_back(
             subexpressions_[branch]->eval(
-                branchInputs.back().views, stream, mr));
+                branchInputs.back().views, stream, mr, /*finalize=*/true));
       }
     } else {
       for (const auto& subexpr : subexpressions_) {
-        subexprResults.push_back(subexpr->eval(inputColumnViews, stream, mr));
+        subexprResults.push_back(
+            subexpr->eval(inputColumnViews, stream, mr, /*finalize=*/true));
       }
     }
 
