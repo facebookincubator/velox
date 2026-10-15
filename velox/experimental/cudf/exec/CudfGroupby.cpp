@@ -834,7 +834,11 @@ struct GroupbyMeanAggregator : GroupbyAggregator {
         cudf_velox::veloxToCudfDataType(resultType),
         stream,
         mr);
-    // Mask on count so empty groups become NULL and legitimate NaNs survive.
+    // Null out groups where count == 0 (empty groups).
+    // SQL semantics require avg of an empty group to be NULL, but
+    // cudf's 0/0 division produces NaN.  We mask on count rather
+    // than using column_nans_to_nulls so that legitimate NaN
+    // results (from NaN inputs) are preserved.
     cudf::numeric_scalar<int64_t> zero(0, true, stream, get_temp_mr());
     auto validMask = cudf::binary_operation(
         *count,
