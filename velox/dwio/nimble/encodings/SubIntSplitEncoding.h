@@ -353,16 +353,19 @@ void SubIntSplitEncoding<T>::readWithVisitor(
       std::is_integral_v<OutputType> && std::is_integral_v<physicalType>;
 
   // Fast path: bulk-decode for integral 4/8-byte physical types extracted into
-  // the reader with a compatible (at-least-as-wide integral) output type.
+  // the reader or an opted-in hook with a compatible (at-least-as-wide
+  // integral) output type.
   // Float/double fall through here (kIsFluidCast is false for them) and use the
   // slow path, which applies castFromPhysicalType. The runtime useFastPath
   // check additionally requires a deterministic filter, AVX2, and the bulk path
   // being enabled with null+filter/hook compatibility.
   if constexpr (
       kIsSuitableWidth &&
-      std::is_same_v<
-          typename V::Extract,
-          velox::dwio::common::ExtractToReader> &&
+      (std::is_same_v<
+           typename V::Extract,
+           velox::dwio::common::ExtractToReader> ||
+       (V::kHasHook && !V::kHasFilter &&
+        detail::hookAllowsBulkFastPath<typename V::HookType>())) &&
       kIsFluidCast) {
     auto* nulls = visitor.reader().rawNullsInReadRange();
     if (velox::dwio::common::useFastPath(visitor, nulls)) {

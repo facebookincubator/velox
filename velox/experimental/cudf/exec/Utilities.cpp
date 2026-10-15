@@ -122,7 +122,7 @@ std::unique_ptr<cudf::table> makeEmptyTable(
 } // namespace
 
 std::unique_ptr<cudf::table> getConcatenatedTable(
-    std::vector<CudfVectorPtr>&& tables,
+    std::vector<CudfVectorPtr> tables,
     const TypePtr& tableType,
     cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
@@ -157,7 +157,7 @@ std::unique_ptr<cudf::table> getConcatenatedTable(
 }
 
 std::vector<std::unique_ptr<cudf::table>> getConcatenatedTableBatched(
-    std::vector<CudfVectorPtr>&& tables,
+    std::vector<CudfVectorPtr> tables,
     const TypePtr& tableType,
     cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
@@ -305,6 +305,11 @@ const CudaEvent& CudaEvent::recordFrom(cuda::stream_ref stream) const {
 
 const CudaEvent& CudaEvent::waitOn(cuda::stream_ref stream) const {
   CUDF_CUDA_TRY(cudaStreamWaitEvent(stream.get(), event_, 0));
+  return *this;
+}
+
+const CudaEvent& CudaEvent::synchronize() const {
+  CUDF_CUDA_TRY(cudaEventSynchronize(event_));
   return *this;
 }
 

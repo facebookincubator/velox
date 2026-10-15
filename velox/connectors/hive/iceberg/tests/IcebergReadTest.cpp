@@ -674,6 +674,251 @@ TEST_F(IcebergReadTest, schemaEvolutionAddColumns) {
       .assertResults(expectedVectors);
 }
 
+// Each file below stores partition values that differ from the split's
+// identity partition values, so the results show which one the reader used.
+TEST_F(IcebergReadTest, identityPartitionColumnsUseSplitValues) {
+  constexpr int32_t kPartitionDays = 19345; // 2022-12-22
+  const auto tableType =
+      ROW({"part", "part_date", "value"}, {INTEGER(), DATE(), VARCHAR()});
+  const auto dataFile = writeDataFile({makeRowVector(
+      tableType->names(),
+      {
+          makeFlatVector<int32_t>({1, 1, 1}),
+          makeFlatVector<int32_t>({0, 0, 0}, DATE()),
+          makeFlatVector<std::string>({"a", "b", "c"}),
+      })});
+
+  // Field IDs follow column order: part = 1, part_date = 2.
+  const auto splits = makeIcebergSplits(
+      dataFile->getPath(),
+      /*deleteFiles=*/{},
+      /*partitionKeys=*/{},
+      /*splitCount=*/1,
+      /*infoColumns=*/{},
+      /*dataSequenceNumber=*/0,
+      /*identityPartitionKeys=*/
+      {{1, "2"}, {2, std::to_string(kPartitionDays)}});
+
+  exec::test::AssertQueryBuilder(makeIcebergTableScanPlan(tableType))
+      .splits(splits)
+      .assertResults(makeRowVector(
+          tableType->names(),
+          {
+              makeFlatVector<int32_t>({2, 2, 2}),
+              makeFlatVector<int32_t>(
+                  {kPartitionDays, kPartitionDays, kPartitionDays}, DATE()),
+              makeFlatVector<std::string>({"a", "b", "c"}),
+          }));
+}
+
+TEST_F(IcebergReadTest, identityPartitionFilterOnlyColumnUsesSplitValue) {
+  const auto tableType = ROW({"part", "value"}, {INTEGER(), VARCHAR()});
+  const auto outputType = ROW({"value"}, {VARCHAR()});
+  const auto dataFile = writeDataFile({makeRowVector(
+      tableType->names(),
+      {
+          makeFlatVector<int32_t>({1, 1, 1}),
+          makeFlatVector<std::string>({"a", "b", "c"}),
+      })});
+
+  const auto makeIdentitySplits = [&] {
+    return makeIcebergSplits(
+        dataFile->getPath(),
+        /*deleteFiles=*/{},
+        /*partitionKeys=*/{},
+        /*splitCount=*/1,
+        /*infoColumns=*/{},
+        /*dataSequenceNumber=*/0,
+        /*identityPartitionKeys=*/{{1, "2"}});
+  };
+
+  {
+    const auto plan = makeIcebergTableScanPlan(
+        outputType, tableType, /*dataColumnFieldIds=*/{}, {"part = 2"});
+    exec::test::AssertQueryBuilder(plan)
+        .splits(makeIdentitySplits())
+        .assertResults(makeRowVector(
+            {"value"}, {makeFlatVector<std::string>({"a", "b", "c"})}));
+  }
+  {
+    const auto plan = makeIcebergTableScanPlan(
+        outputType, tableType, /*dataColumnFieldIds=*/{}, {"part = 1"});
+    exec::test::AssertQueryBuilder(plan)
+        .splits(makeIdentitySplits())
+        .assertResults(
+            makeRowVector({"value"}, {makeFlatVector<std::string>({})}));
+  }
+}
+
+TEST_F(IcebergReadTest, nonIdentityPartitionColumnReadFromFile) {
+  const auto tableType = ROW({"part", "value"}, {INTEGER(), VARCHAR()});
+  const auto data = makeRowVector(
+      tableType->names(),
+      {
+          makeFlatVector<int32_t>({1, 1, 1}),
+          makeFlatVector<std::string>({"a", "b", "c"}),
+      });
+  const auto dataFile = writeDataFile({data});
+
+  // A transformed partition field reaches the split only through the
+  // name-keyed 'partitionKeys', never through 'identityPartitionKeys'.
+  const auto splits = makeIcebergSplits(
+      dataFile->getPath(),
+      /*deleteFiles=*/{},
+      /*partitionKeys=*/{{"part", "2"}},
+      /*splitCount=*/1,
+      /*infoColumns=*/{},
+      /*dataSequenceNumber=*/0,
+      /*identityPartitionKeys=*/{});
+
+  exec::test::AssertQueryBuilder(makeIcebergTableScanPlan(tableType))
+      .splits(splits)
+      .assertResults(data);
+}
+
+TEST_F(IcebergReadTest, identityPartitionScalarTypesUseSplitValues) {
+  const auto tableType =
+      ROW({"flag", "id", "name", "value"},
+          {BOOLEAN(), BIGINT(), VARCHAR(), VARCHAR()});
+  const auto dataFile = writeDataFile({makeRowVector(
+      tableType->names(),
+      {
+          makeFlatVector<bool>({false, false}),
+          makeFlatVector<int64_t>({1, 1}),
+          makeFlatVector<std::string>({"file", "file"}),
+          makeFlatVector<std::string>({"a", "b"}),
+      })});
+
+  // The strings are what Java Iceberg's 'value.toString()' sends for each
+  // type.
+  const auto splits = makeIcebergSplits(
+      dataFile->getPath(),
+      /*deleteFiles=*/{},
+      /*partitionKeys=*/{},
+      /*splitCount=*/1,
+      /*infoColumns=*/{},
+      /*dataSequenceNumber=*/0,
+      /*identityPartitionKeys=*/
+      {{1, "true"}, {2, "9000000000"}, {3, "2026-10-09+18:00:99"}});
+
+  exec::test::AssertQueryBuilder(makeIcebergTableScanPlan(tableType))
+      .splits(splits)
+      .assertResults(makeRowVector(
+          tableType->names(),
+          {
+              makeFlatVector<bool>({true, true}),
+              makeFlatVector<int64_t>({9'000'000'000, 9'000'000'000}),
+              makeFlatVector<std::string>(
+                  {"2026-10-09+18:00:99", "2026-10-09+18:00:99"}),
+              makeFlatVector<std::string>({"a", "b"}),
+          }));
+}
+
+TEST_F(IcebergReadTest, identityPartitionNullValue) {
+  const auto tableType = ROW({"part", "value"}, {INTEGER(), VARCHAR()});
+  const auto outputType = ROW({"value"}, {VARCHAR()});
+  const auto dataFile = writeDataFile({makeRowVector(
+      tableType->names(),
+      {
+          makeFlatVector<int32_t>({1, 1}),
+          makeFlatVector<std::string>({"a", "b"}),
+      })});
+  const auto makeNullPartitionSplits = [&] {
+    return makeIcebergSplits(
+        dataFile->getPath(),
+        /*deleteFiles=*/{},
+        /*partitionKeys=*/{},
+        /*splitCount=*/1,
+        /*infoColumns=*/{},
+        /*dataSequenceNumber=*/0,
+        /*identityPartitionKeys=*/{{1, std::nullopt}});
+  };
+
+  {
+    const auto plan = makeIcebergTableScanPlan(
+        outputType, tableType, /*dataColumnFieldIds=*/{}, {"part is null"});
+    exec::test::AssertQueryBuilder(plan)
+        .splits(makeNullPartitionSplits())
+        .assertResults(makeRowVector(
+            {"value"}, {makeFlatVector<std::string>({"a", "b"})}));
+  }
+  {
+    const auto plan = makeIcebergTableScanPlan(
+        outputType, tableType, /*dataColumnFieldIds=*/{}, {"part = 1"});
+    exec::test::AssertQueryBuilder(plan)
+        .splits(makeNullPartitionSplits())
+        .assertResults(
+            makeRowVector({"value"}, {makeFlatVector<std::string>({})}));
+  }
+}
+
+// Java Iceberg sends TIMESTAMP as epoch microseconds and VARBINARY as Base64,
+// neither of which the partition value parser reads, so these columns must
+// still come from the file.
+TEST_F(IcebergReadTest, identityPartitionUnsupportedTypesReadFromFile) {
+  const auto tableType =
+      ROW({"ts", "bin", "value"}, {TIMESTAMP(), VARBINARY(), VARCHAR()});
+  const auto data = makeRowVector(
+      tableType->names(),
+      {
+          makeFlatVector<Timestamp>({Timestamp(1, 0), Timestamp(1, 0)}),
+          makeFlatVector<std::string>({"ab", "ab"}, VARBINARY()),
+          makeFlatVector<std::string>({"a", "b"}),
+      });
+  const auto dataFile = writeDataFile({data});
+
+  const auto splits = makeIcebergSplits(
+      dataFile->getPath(),
+      /*deleteFiles=*/{},
+      /*partitionKeys=*/{},
+      /*splitCount=*/1,
+      /*infoColumns=*/{},
+      /*dataSequenceNumber=*/0,
+      /*identityPartitionKeys=*/{{1, "1000000"}, {2, "YWI="}});
+
+  exec::test::AssertQueryBuilder(makeIcebergTableScanPlan(tableType))
+      .splits(splits)
+      .assertResults(data);
+}
+
+TEST_F(IcebergReadTest, identityPartitionConstantDoesNotLeakToNextSplit) {
+  const auto tableType = ROW({"part", "value"}, {INTEGER(), VARCHAR()});
+  const auto identityFile = writeDataFile({makeRowVector(
+      tableType->names(),
+      {
+          makeFlatVector<int32_t>({1, 1}),
+          makeFlatVector<std::string>({"a", "b"}),
+      })});
+  const auto plainFile = writeDataFile({makeRowVector(
+      tableType->names(),
+      {
+          makeFlatVector<int32_t>({5, 5}),
+          makeFlatVector<std::string>({"c", "d"}),
+      })});
+
+  auto splits = makeIcebergSplits(
+      identityFile->getPath(),
+      /*deleteFiles=*/{},
+      /*partitionKeys=*/{},
+      /*splitCount=*/1,
+      /*infoColumns=*/{},
+      /*dataSequenceNumber=*/0,
+      /*identityPartitionKeys=*/{{1, "2"}});
+  const auto plainSplits = makeIcebergSplits(plainFile->getPath());
+  splits.insert(splits.end(), plainSplits.begin(), plainSplits.end());
+
+  // One driver reads both splits, so they share a scan spec.
+  exec::test::AssertQueryBuilder(makeIcebergTableScanPlan(tableType))
+      .maxDrivers(1)
+      .splits(splits)
+      .assertResults(makeRowVector(
+          tableType->names(),
+          {
+              makeFlatVector<int32_t>({2, 2, 5, 5}),
+              makeFlatVector<std::string>({"a", "b", "c", "d"}),
+          }));
+}
+
 #ifdef VELOX_ENABLE_PARQUET
 TEST_F(IcebergReadTest, readParquetFlatSchemaEvolutionByFieldId) {
   const auto testData = writeFlatParquetFieldIdData();

@@ -21,6 +21,7 @@
 #include "velox/common/memory/Memory.h"
 #include "velox/common/testutil/OptionalEmpty.h"
 #include "velox/common/testutil/RandomSeed.h"
+#include "velox/type/tests/utils/CustomTypesForTesting.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
@@ -73,16 +74,7 @@ class FlatMapVectorTest : public testing::Test, public VectorTestBase {
     // Validate that the updated flat map matches the expectation.
     auto expectedFlatMap =
         makeFlatMapVectorFromJson<int64_t, int32_t>(expectedData);
-    EXPECT_EQ(baseFlatMap->size(), expectedFlatMap->size());
-
-    for (vector_size_t i = 0; i < baseFlatMap->size(); ++i) {
-      EXPECT_EQ(
-          baseFlatMap->compare(
-              expectedFlatMap.get(), i, i, CompareFlags{.equalsOnly = true}),
-          0)
-          << "Failed at index " << i << ":\n  " << baseFlatMap->toString(i)
-          << "\nvs.\n  " << expectedFlatMap->toString(i);
-    }
+    assertEqualVectors(expectedFlatMap, baseFlatMap);
   }
 
   std::shared_ptr<memory::MemoryPool> pool_{
@@ -1163,6 +1155,111 @@ TEST_F(FlatMapVectorTest, complexKeys) {
   EXPECT_EQ(projectedKey->valueAt(1), 202);
 }
 
+TEST_F(FlatMapVectorTest, getKeyChannels) {
+  auto flatMap = makeFlatMapVectorFromJson<int32_t, int32_t>({
+      "{1: 10, 2: 20}",
+      "{2: 21}",
+      "{3: 30}",
+      "{1: 13}",
+      "{1: 14}",
+  });
+  auto channel = [&](int32_t key) { return *flatMap->getKeyChannel(key); };
+  constexpr auto kNone = FlatMapVector::kNoChannel;
+
+  // Row 1 finds key 1 even though its map lacks it: in-map bits are not
+  // checked. Row 3 has a null key and row 4 a key the flat map does not have.
+  auto keys = makeNullableFlatVector<int32_t>({2, 1, 3, std::nullopt, 9});
+  SelectivityVector rows(5);
+  DecodedVector decodedKeys(*keys, rows);
+  EXPECT_THAT(
+      flatMap->getKeyChannels(rows, decodedKeys),
+      ::testing::ElementsAre(channel(2), channel(1), channel(3), kNone, kNone));
+
+  // Unselected rows are kNoChannel.
+  rows.setValid(0, false);
+  rows.updateBounds();
+  EXPECT_EQ(flatMap->getKeyChannels(rows, decodedKeys)[0], kNone);
+
+  // Dictionary-encoded keys, without and with nulls added by the dictionary.
+  SelectivityVector allRows(4);
+  auto baseKeys = makeFlatVector<int32_t>({1, 2, 3, 9});
+  auto wrappedKeys = BaseVector::wrapInDictionary(
+      nullptr, makeIndices({3, 0, 2, 1}), 4, baseKeys);
+  DecodedVector decodedWrappedKeys(*wrappedKeys, allRows);
+  EXPECT_THAT(
+      flatMap->getKeyChannels(allRows, decodedWrappedKeys),
+      ::testing::ElementsAre(kNone, channel(1), channel(3), channel(2)));
+
+  auto dictionaryNulls = allocateNulls(4, pool());
+  bits::setNull(dictionaryNulls->asMutable<uint64_t>(), 2);
+  auto wrappedNullableKeys = BaseVector::wrapInDictionary(
+      dictionaryNulls, makeIndices({3, 0, 2, 1}), 4, baseKeys);
+  DecodedVector decodedWrappedNullableKeys(*wrappedNullableKeys, allRows);
+  EXPECT_THAT(
+      flatMap->getKeyChannels(allRows, decodedWrappedNullableKeys),
+      ::testing::ElementsAre(kNone, channel(1), kNone, channel(2)));
+
+  // Constant keys: one the flat map has, one it does not, and a null one.
+  auto constantKeys = [&](const VectorPtr& keys) {
+    DecodedVector decoded(*keys, allRows);
+    return flatMap->getKeyChannels(allRows, decoded);
+  };
+  EXPECT_THAT(
+      constantKeys(BaseVector::wrapInConstant(4, 1, baseKeys)),
+      ::testing::Each(channel(2)));
+  EXPECT_THAT(
+      constantKeys(BaseVector::wrapInConstant(4, 3, baseKeys)),
+      ::testing::Each(kNone));
+  EXPECT_THAT(
+      constantKeys(BaseVector::createNullConstant(INTEGER(), 4, pool())),
+      ::testing::Each(kNone));
+}
+
+TEST_F(FlatMapVectorTest, getKeyChannelsKeyTypes) {
+  // Each case has keys that look up the first key, the second key and a key
+  // the flat map does not have.
+  auto check = [&](const VectorPtr& flatMapVector, const VectorPtr& keys) {
+    SCOPED_TRACE(keys->type()->toString());
+    const auto* flatMap = flatMapVector->as<FlatMapVector>();
+    SelectivityVector rows(keys->size());
+    DecodedVector decodedKeys(*keys, rows);
+    EXPECT_THAT(
+        flatMap->getKeyChannels(rows, decodedKeys),
+        ::testing::ElementsAre(
+            *flatMap->getKeyChannel(keys, 0),
+            *flatMap->getKeyChannel(keys, 1),
+            FlatMapVector::kNoChannel));
+  };
+
+  // Typed lookups.
+  check(
+      makeFlatMapVectorFromJson<int64_t, int32_t>({"{1: 1, 2: 2}"}),
+      makeFlatVector<int64_t>({1, 2, 3}));
+  check(
+      makeFlatMapVectorFromJson<std::string, int32_t>({R"({"a": 1, "b": 2})"}),
+      makeFlatVector<std::string>({"a", "b", "c"}));
+
+  // Generic lookup, for a key type without a typed one.
+  check(
+      makeFlatMapVectorFromJson<int16_t, int32_t>({"{1: 1, 2: 2}"}),
+      makeFlatVector<int16_t>({1, 2, 3}));
+
+  // Generic lookup for keys with custom comparison, where 256 equals 0 and 257
+  // equals 1.
+  auto customType = test::BIGINT_TYPE_WITH_CUSTOM_COMPARISON();
+  check(
+      std::make_shared<FlatMapVector>(
+          pool(),
+          MAP(customType, INTEGER()),
+          nullptr,
+          1,
+          makeFlatVector<int64_t>({0, 1}, customType),
+          std::vector<VectorPtr>{
+              makeFlatVector<int32_t>({0}), makeFlatVector<int32_t>({1})},
+          std::vector<BufferPtr>{}),
+      makeFlatVector<int64_t>({256, 257, 3}, customType));
+}
+
 TEST_F(FlatMapVectorTest, setDistinctKeys) {
   // Distinct keys vector.
   auto distinctKeys = maker_.flatVector<int64_t>({
@@ -1532,6 +1629,55 @@ TEST_F(FlatMapVectorTest, fromMapVector) {
   auto flatMapVector = FlatMapVector::fromMapVector(*mapVector);
   EXPECT_EQ(flatMapVector->numDistinctKeys(), 2);
   assertEqualVectors(mapVector, flatMapVector);
+}
+
+TEST_F(FlatMapVectorTest, withFlatMapBaseAndWithMapBase) {
+  auto map = makeMapVectorFromJson<int32_t, int32_t>({
+      "{1: 10}",
+      "null",
+      "{2: 20, 1: 11}",
+  });
+  auto dictionaryNulls = allocateNulls(3, pool());
+  bits::setNull(dictionaryNulls->asMutable<uint64_t>(), 0);
+
+  // Each input keeps its wrapping, and only its base map changes encoding.
+  for (const auto& input : std::vector<VectorPtr>{
+           map,
+           BaseVector::wrapInDictionary(
+               dictionaryNulls, makeIndicesInReverse(3), 3, map),
+           BaseVector::wrapInConstant(3, 2, map),
+       }) {
+    SCOPED_TRACE(input->toString());
+    const bool wrapped = input->wrappedVector() != input.get();
+
+    auto flatMapBased = withFlatMapBase(input);
+    EXPECT_EQ(
+        flatMapBased->wrappedVector()->encoding(),
+        VectorEncoding::Simple::FLAT_MAP);
+    if (wrapped) {
+      EXPECT_EQ(flatMapBased->encoding(), input->encoding());
+    }
+    assertEqualVectors(input, flatMapBased);
+
+    auto mapBased = withMapBase(flatMapBased);
+    EXPECT_EQ(
+        mapBased->wrappedVector()->encoding(), VectorEncoding::Simple::MAP);
+    if (wrapped) {
+      EXPECT_EQ(mapBased->encoding(), input->encoding());
+    }
+    assertEqualVectors(input, mapBased);
+  }
+
+  // A null constant stays a null constant.
+  auto nullConstant =
+      BaseVector::createNullConstant(MAP(INTEGER(), INTEGER()), 3, pool());
+  auto flatMapBased = withFlatMapBase(nullConstant);
+  EXPECT_TRUE(flatMapBased->isConstantEncoding());
+  assertEqualVectors(nullConstant, flatMapBased);
+  assertEqualVectors(nullConstant, withMapBase(flatMapBased));
+
+  // A base that already has the requested encoding is returned as is.
+  EXPECT_EQ(withMapBase(map), map);
 }
 
 TEST_F(FlatMapVectorTest, copyRanges) {

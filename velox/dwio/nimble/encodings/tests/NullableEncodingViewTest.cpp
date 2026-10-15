@@ -24,6 +24,7 @@
 
 #include <gtest/gtest.h>
 
+#include "velox/dwio/nimble/common/tests/GTestUtils.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
 
@@ -64,9 +65,23 @@ class NullableEncodingViewTest : public EncodingViewTest {
         std::nullopt);
     const auto encoded = EncodingFactory::encodeNullable<int64_t>(
         std::move(policy), nonNullValues, isNonNull, *buffer_);
-    return createEncodingView(encoded, pool_.get());
+    auto view = createEncodingView(encoded, pool_.get());
+    return view;
   }
 };
+
+TEST_F(NullableEncodingViewTest, requiresNonNullRowsForSingleValueReads) {
+  auto view = makeView({10, std::nullopt, 12, std::nullopt});
+  int64_t value{0};
+  view->readAt(2, &value);
+  EXPECT_EQ(value, 12);
+  for (const uint32_t index : {1, 3}) {
+    SCOPED_TRACE(index);
+    NIMBLE_ASSERT_THROW(
+        view->readAt(index, &value),
+        "Nullable EncodingView physical reads require a non-null row");
+  }
+}
 
 TEST_F(NullableEncodingViewTest, readsMixedRows) {
   auto view = makeView({10, std::nullopt, 12, 13, std::nullopt, 15});

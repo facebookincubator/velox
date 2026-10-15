@@ -25,6 +25,7 @@
 
 #include "folly/Random.h"
 #include "velox/dwio/nimble/encodings/ALPEncoding.h"
+#include "velox/dwio/nimble/encodings/ALPRDEncoding.h"
 #include "velox/dwio/nimble/encodings/BlockBitPackingEncoding.h"
 #include "velox/dwio/nimble/encodings/ConstantEncoding.h"
 #include "velox/dwio/nimble/encodings/DeltaBlockEncoding.h"
@@ -499,6 +500,20 @@ class AlpEncodingViewFuzzerTest : public ::testing::Test {};
 TYPED_TEST_SUITE(AlpEncodingViewFuzzerTest, AlpViewTypes);
 
 TYPED_TEST(AlpEncodingViewFuzzerTest, readAtMatchesMaterialize) {
+  runEncodingViewFuzzer<TypeParam>(
+      FLAGS_view_fuzzer_iterations,
+      FLAGS_view_fuzzer_max_rows,
+      FLAGS_view_fuzzer_seed);
+}
+
+using AlprdViewTypes =
+    ::testing::Types<ALPRDEncoding<float>, ALPRDEncoding<double>>;
+
+template <typename E>
+class AlprdEncodingViewFuzzerTest : public ::testing::Test {};
+TYPED_TEST_SUITE(AlprdEncodingViewFuzzerTest, AlprdViewTypes);
+
+TYPED_TEST(AlprdEncodingViewFuzzerTest, readAtMatchesMaterialize) {
   runEncodingViewFuzzer<TypeParam>(
       FLAGS_view_fuzzer_iterations,
       FLAGS_view_fuzzer_max_rows,

@@ -203,6 +203,19 @@ class IcebergSplitReader : public FileSplitReader {
   // out of its file-natural position.
   folly::F14FastSet<std::string> equalityAugmentedPartitionColumns_;
 
+  // Sets every scan-spec column the split proves is an identity partition
+  // field (see 'HiveIcebergSplit::identityPartitionKeys') to its partition
+  // value, as Java Presto does for 'PARTITION_KEY' columns. The column is then
+  // never read from the data file, which Iceberg writers fill with the same
+  // value on every row. Clears the constants it set for the previous split
+  // first, because the scan spec is shared across splits.
+  void configureIdentityPartitionColumns();
+
+  // Names of scan-spec children 'configureIdentityPartitionColumns' set to a
+  // partition-value constant for the current split. 'adaptColumns' keeps
+  // these constants when the data file also carries the column.
+  folly::F14FastSet<std::string> identityPartitionColumns_;
+
  protected:
   const std::shared_ptr<const HiveIcebergSplit> icebergSplit_;
 

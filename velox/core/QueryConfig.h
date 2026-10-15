@@ -881,8 +881,12 @@ class QueryConfig {
 
   /// The number of local parallel table writer operators per task for
   /// partitioned writes. If not set, use "task_writer_count". No default.
-  static constexpr const char* kTaskPartitionedWriterCount =
-      "task_partitioned_writer_count";
+  VELOX_QUERY_CONFIG_PROPERTY(
+      kTaskPartitionedWriterCount,
+      "task_partitioned_writer_count",
+      std::optional<uint32_t>,
+      std::optional<uint32_t>{},
+      "The number of local parallel table writer operators per task for partitioned writes. If not set, use \"task_writer_count\".")
 
   /// If true, finish the hash probe on an empty build table for a specific set
   /// of hash joins.

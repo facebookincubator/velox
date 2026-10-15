@@ -16,6 +16,8 @@
 
 #pragma once
 
+#include <limits>
+
 #include <folly/synchronization/DelayedInit.h>
 
 #include "velox/vector/BaseVector.h"
@@ -23,6 +25,8 @@
 #include "velox/vector/FlatMapKeyIndex.h"
 
 namespace facebook::velox {
+
+class DecodedVector;
 
 /// FlatMapVector implements the flat map layout, which is an alternative way of
 /// encoding logical maps.
@@ -170,6 +174,19 @@ class FlatMapVector : public BaseVector {
   std::optional<column_index_t> getKeyChannel(int32_t scalarKey) const;
   std::optional<column_index_t> getKeyChannel(int64_t scalarKey) const;
   std::optional<column_index_t> getKeyChannel(StringView scalarKey) const;
+
+  /// Returned by getKeyChannels() for keys this flat map does not have.
+  static constexpr column_index_t kNoChannel =
+      std::numeric_limits<column_index_t>::max();
+
+  /// Returns, for each row selected in `rows`, the channel of key `keys[row]`,
+  /// or kNoChannel when the key is null or this flat map does not have it.
+  /// The result has `rows.end()` entries, indexed by row; unselected rows are
+  /// kNoChannel too. Like getKeyChannel(), this does not check the in-map
+  /// bits: callers check isInMap() for the map of each row.
+  std::vector<column_index_t> getKeyChannels(
+      const SelectivityVector& rows,
+      const DecodedVector& keys) const;
 
   /// Returns a vector containing a projection for a specific primitive key.
   /// This is an efficient operation in flat maps (zero-copy).

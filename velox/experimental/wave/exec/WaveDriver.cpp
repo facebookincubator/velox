@@ -420,7 +420,7 @@ bool WaveDriver::maybeWaitForPeers() {
   std::vector<ContinuePromise> promises;
   std::vector<std::shared_ptr<exec::Operator>> peerOperators;
 
-  if (!operatorCtx_->allPeersFinished(
+  if (!operatorCtx_->allPeersArrived(
           &blockingFuture_, promises, peerOperators)) {
     blockingReason_ = exec::BlockingReason::kYield;
     return true;
