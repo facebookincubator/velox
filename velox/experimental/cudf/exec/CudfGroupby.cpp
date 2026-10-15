@@ -1074,6 +1074,7 @@ struct GroupbyStddevSampAggregator : GroupbyAggregator {
     auto stateView = state->view();
     auto countView = stateView.child(0);
     auto m2View = stateView.child(2);
+    // count - 1 (binary_operation handles type promotion)
     cudf::numeric_scalar<double> one(1.0, true, stream, get_temp_mr());
     auto countMinus1 = cudf::binary_operation(
         countView,
