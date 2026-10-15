@@ -167,7 +167,7 @@ TEST_F(EncodingViewTest, readsSubIntSplitEncoding) {
   const std::vector<uint64_t> values{
       0x299aff8ca62b0001,
       0x299be75117820001,
-      0x0999c1e5b8460001,
+      0x2999c1e5b8460001,
       0x299f100bfa830002,
   };
   const std::vector<nimble::subintsplit::SectionPlan> segments{
@@ -209,6 +209,10 @@ TEST_F(EncodingViewTest, readsSubIntSplitEncoding) {
   const auto captured = nimble::EncodingLayoutCapture::capture(encoded, {});
   EXPECT_EQ(captured.encodingType(), nimble::EncodingType::SubIntSplit);
   EXPECT_EQ(captured.childrenCount(), segments.size());
+  // The shared high bits should remain compact instead of being materialized
+  // as a per-row child stream.
+  ASSERT_TRUE(captured.child(2).has_value());
+  EXPECT_EQ(captured.child(2)->encodingType(), nimble::EncodingType::Constant);
   EXPECT_EQ(
       captured.config().get(
           std::string(nimble::subintsplit::kSplitBoundariesConfigKey)),
@@ -221,6 +225,11 @@ TEST_F(EncodingViewTest, readsSubIntSplitEncoding) {
     view->readAt(row, &actual);
     EXPECT_EQ(actual, values[row]);
   }
+
+  // Exercise the direct-output contiguous path in addition to scalar reads.
+  std::vector<uint64_t> contiguous(values.size());
+  view->read(0, static_cast<uint32_t>(values.size()), contiguous.data());
+  EXPECT_EQ(contiguous, values);
 
   const std::vector<uint32_t> indices{3, 0, 2, 2};
   std::vector<uint64_t> actual(indices.size());
