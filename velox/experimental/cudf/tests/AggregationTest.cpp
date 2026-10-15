@@ -1167,18 +1167,13 @@ TEST_F(AggregationTest, directFinalizationMixedAggregates) {
       builder.partialAggregation({"c0"}, aggregates).finalAggregation();
     }
     auto plan = builder.planNode();
-    auto task =
-        AssertQueryBuilder(plan, duckDbQueryRunner_)
-            .maxDrivers(1)
-            .config(cudf_velox::CudfFromVelox::kGpuBatchSizeRows, "4")
-            .config(QueryConfig::kMaxPartialAggregationMemory, 1)
-            .assertResults(
-                "SELECT c0, sum(c1), min(c1), max(c1), count(c1), "
-                "count(*), avg(c1), stddev_samp(c1) FROM tmp GROUP BY c0");
-    EXPECT_GT(
-        streamingGroupbyStatSum(
-            task, plan->id(), cudf_velox::kDirectGroupbyFinalizationStat),
-        0);
+    AssertQueryBuilder(plan, duckDbQueryRunner_)
+        .maxDrivers(1)
+        .config(cudf_velox::CudfFromVelox::kGpuBatchSizeRows, "4")
+        .config(QueryConfig::kMaxPartialAggregationMemory, 1)
+        .assertResults(
+            "SELECT c0, sum(c1), min(c1), max(c1), count(c1), "
+            "count(*), avg(c1), stddev_samp(c1) FROM tmp GROUP BY c0");
   }
 }
 

@@ -843,17 +843,11 @@ TEST_F(CudfDecimalTest, directFinalizationDecimalSumAndAvg) {
       builder.partialAggregation({"c0"}, aggregates).finalAggregation();
     }
     auto plan = builder.planNode();
-    auto task = exec::test::AssertQueryBuilder(plan)
-                    .maxDrivers(1)
-                    .config(CudfFromVelox::kGpuBatchSizeRows, "3")
-                    .config(core::QueryConfig::kMaxPartialAggregationMemory, 1)
-                    .assertResults(expected);
-    const auto stats = exec::toPlanStats(task->taskStats());
-    EXPECT_GT(
-        stats.at(plan->id())
-            .customStats.at(std::string{kDirectGroupbyFinalizationStat})
-            .sum,
-        0);
+    exec::test::AssertQueryBuilder(plan)
+        .maxDrivers(1)
+        .config(CudfFromVelox::kGpuBatchSizeRows, "3")
+        .config(core::QueryConfig::kMaxPartialAggregationMemory, 1)
+        .assertResults(expected);
   }
 }
 

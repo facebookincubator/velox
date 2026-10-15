@@ -32,8 +32,6 @@ inline constexpr std::string_view kStreamingGroupbyUsedStat{
     "streamingGroupbyUsed"};
 inline constexpr std::string_view kStreamingGroupbyRebuildsStat{
     "streamingGroupbyRebuilds"};
-inline constexpr std::string_view kDirectGroupbyFinalizationStat{
-    "directGroupbyFinalization"};
 
 // Type-specific adapter between Velox final-aggregation state and libcudf's
 // flattened streaming_groupby request/result interface. prepareInput() must be

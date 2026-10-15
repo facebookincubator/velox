@@ -2010,8 +2010,6 @@ CudfVectorPtr CudfGroupby::finalizeGroupedStates(
     columns[numKeys + i] = aggregators[i]->finalize(
         std::move(columns[numKeys + i]), stream, get_output_mr());
   }
-  stats_.wlock()->addRuntimeStat(
-      std::string{kDirectGroupbyFinalizationStat}, RuntimeCounter(1));
   return std::make_shared<CudfVector>(
       pool(),
       outputType_,
