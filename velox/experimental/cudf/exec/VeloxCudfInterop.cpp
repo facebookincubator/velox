@@ -218,16 +218,22 @@ void setArrowFormatBackToVarbinary(ArrowSchema* schema, const TypePtr& type) {
       break;
     }
     case TypeKind::VARBINARY: {
-      // Replace any format string with "z" to indicate VARBINARY.
-      static constexpr const char* kVarbinaryArrowFormat = "z";
+      // Replace the string format with the matching binary format. cuDF
+      // exports a string column as "u" (32-bit offsets), or as "U" (large
+      // string, 64-bit offsets) once its offsets are INT64. The offset width
+      // must be preserved because the importer reads the offsets buffer
+      // according to the format: "z" for 32-bit offsets, "Z" for 64-bit.
+      const bool largeOffsets =
+          schema->format != nullptr && std::strcmp(schema->format, "U") == 0;
+      const char* const varbinaryArrowFormat = largeOffsets ? "Z" : "z";
       if (schema->format != nullptr) {
         std::free(const_cast<char*>(schema->format));
         schema->format = nullptr;
       }
-      const size_t bufferLen = std::strlen(kVarbinaryArrowFormat) + 1;
+      const size_t bufferLen = std::strlen(varbinaryArrowFormat) + 1;
       auto* buffer = static_cast<char*>(std::malloc(bufferLen));
       VELOX_CHECK_NOT_NULL(buffer);
-      std::memcpy(buffer, kVarbinaryArrowFormat, bufferLen);
+      std::memcpy(buffer, varbinaryArrowFormat, bufferLen);
       schema->format = buffer;
       break;
     }
@@ -267,7 +273,8 @@ RowVectorPtr toVeloxColumn(
   // format is overridden to "z" when the exportVarbinaryAsString option is set
   // to true in the exportToArrow() call) because cuDF does not have a VARBINARY
   // type. This code implements the other side of the conversion, to change the
-  // format back to "z" so that the data re-imports as VARBINARY.
+  // format back to "z" (or "Z" for 64-bit offsets) so that the data
+  // re-imports as VARBINARY.
   if (outputType) {
     setArrowFormatBackToVarbinary(&schemaCopy, *outputType);
   }
