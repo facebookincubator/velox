@@ -984,6 +984,7 @@ struct GroupbyStddevSampAggregator : GroupbyAggregator {
         cudf::data_type{cudf::type_id::FLOAT64},
         stream,
         get_temp_mr());
+    // m2 / (count - 1)
     auto variance = cudf::binary_operation(
         m2View,
         *countMinus1,
@@ -991,8 +992,10 @@ struct GroupbyStddevSampAggregator : GroupbyAggregator {
         cudf::data_type{cudf::type_id::FLOAT64},
         stream,
         get_temp_mr());
+    // sqrt(variance)
     auto stddev = cudf::unary_operation(
         *variance, cudf::unary_operator::SQRT, stream, get_temp_mr());
+    // count >= 2
     cudf::numeric_scalar<int64_t> two(2, true, stream, get_temp_mr());
     auto validMask = cudf::binary_operation(
         countView,
@@ -1001,6 +1004,7 @@ struct GroupbyStddevSampAggregator : GroupbyAggregator {
         cudf::data_type{cudf::type_id::BOOL8},
         stream,
         get_temp_mr());
+    // Apply mask: where count < 2, result is NULL
     cudf::numeric_scalar<double> nullDouble(0.0, false, stream, get_temp_mr());
     return cudf::copy_if_else(*stddev, nullDouble, *validMask, stream, mr);
   }
