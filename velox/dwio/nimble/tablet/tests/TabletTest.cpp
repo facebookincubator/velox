@@ -2423,6 +2423,40 @@ TEST_P(TabletTest, rejectsPropertiesClaimingAbsentStreamChecksums) {
       "File properties claim stripe-group checksum arrays, but stripe group 0 carries none.");
 }
 
+// A file that requires a feature this reader lacks is refused when the reader
+// opens it, before any stream is decoded.
+TEST_P(TabletTest, rejectsUnsupportedRequiredFeatures) {
+  std::string file;
+  velox::InMemoryWriteFile writeFile(&file);
+  auto tabletWriter = nimble::TabletWriter::create(&writeFile, *pool_, {});
+
+  nimble::Buffer buffer{*pool_};
+  std::vector<nimble::Stream> streams;
+  streams.push_back(
+      nimble::index::test::createStream(
+          buffer, {.offset = 0, .chunks = {{.rowCount = 10, .size = 16}}}));
+  tabletWriter->writeStripe(10, std::move(streams));
+  tabletWriter->writeOptionalSection(
+      std::string(nimble::kPropertiesSection),
+      nimble::FileProperties{/*compactRowCountEncoding=*/false,
+                             /*clusterIndexKeyColumnStorageOmitted=*/false,
+                             /*clusterIndexKeyColumnsWithOmittedStorage=*/{},
+                             /*hasStreamChecksums=*/false,
+                             /*streamTrailerLayout=*/{},
+                             /*hasTopLevelNulls=*/false,
+                             /*requiredFeatures=*/
+                             {static_cast<nimble::RequiredFeature>(100)}}
+          .serialize());
+  tabletWriter->close();
+  writeFile.close();
+
+  auto readFile =
+      std::make_shared<nimble::testing::InMemoryTrackableReadFile>(file, false);
+  NIMBLE_ASSERT_USER_THROW(
+      createTabletReader(readFile, nimble::TabletReader::Options{}),
+      "File requires features this reader does not support. Count: 1, lowest bit: 100");
+}
+
 TEST_P(TabletTest, stripeGroupEncodingLayouts) {
   // Write the same 2-stripe layout in each StripeGroup metadata format, then
   // verify: (1) each round-trips its stream offsets/sizes, and (2) all formats
