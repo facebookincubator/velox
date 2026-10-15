@@ -172,7 +172,11 @@ negiative.</p>
 <dt class="sig sig-object py" id="at_timezone_convert">
 <span class="sig-name descname"><span class="pre">at_timezone_convert</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">timestamp</span> <span class="pre">with</span> <span class="pre">time</span> <span class="pre">zone</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">zone</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">timestamp</span></span></span><a class="headerlink" href="#at_timezone_convert" title="Link to this definition">¶</a></dt>
 <dd><p>Returns the wall clock that <code class="docutils literal notranslate"><span class="pre">timestamp</span> <span class="pre">with</span> <span class="pre">time</span> <span class="pre">zone</span></code> shows in <code class="docutils literal notranslate"><span class="pre">zone</span></code>.
-The zone the input carries is ignored; only its instant is used.</p>
+The zone the input carries is ignored; only its instant is used.
+With <a class="reference internal" href="../../configs.html"><span class="doc">adjust_timestamp_to_session_timezone</span></a> enabled,
+the result is read in <a class="reference internal" href="../../configs.html"><span class="doc">session_timezone</span></a>. Times skipped
+by a daylight-saving transition move forward, and repeated times use the
+earlier instant.</p>
 </dd></dl>
 
 <dl class="py function">

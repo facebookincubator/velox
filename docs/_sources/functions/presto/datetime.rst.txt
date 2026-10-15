@@ -102,6 +102,10 @@ Date and Time Functions
 
     Returns the wall clock that ``timestamp with time zone`` shows in ``zone``.
     The zone the input carries is ignored; only its instant is used.
+    With :doc:`adjust_timestamp_to_session_timezone <../../configs>` enabled,
+    the result is read in :doc:`session_timezone <../../configs>`. Times skipped
+    by a daylight-saving transition move forward, and repeated times use the
+    earlier instant.
 
 .. function:: at_timezone_convert(time with time zone, zone) -> time with time zone
     :noindex:
