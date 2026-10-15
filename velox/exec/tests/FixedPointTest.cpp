@@ -37,6 +37,7 @@
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/LocalExchangeSource.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/exec/tests/utils/TestIndexStorageConnector.h"
 
 namespace facebook::velox::exec {
 namespace {
@@ -2896,6 +2897,124 @@ TEST_F(FixedPointTest, addSplitRejectsPlanNodeThatTakesNoSplits) {
           "no-such-node",
           exec::Split(std::make_shared<exec::RemoteConnectorSplit>("peer"))),
       "Plan node takes no splits");
+}
+
+// The loop feeds splits only to its initial plans and to the Exchange linking a
+// plan to its predecessor, so a body or convergence plan that reads a table is
+// rejected rather than left waiting for splits.
+TEST_F(FixedPointTest, stepTableScan) {
+  auto schema = ROW("x", BIGINT());
+  auto tableSchema = ROW("y", BIGINT());
+  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto declaration = std::make_shared<VectorStateDeclaration>(
+      "n", schema, /*initialPlan=*/nullptr, /*append=*/true);
+  const ConvergenceConfig noConvergence{
+      .maxIterations = 3, .errorWhenMaxIterationReached = false};
+
+  // A body that joins a table.
+  {
+    auto scan = PlanBuilder(idGenerator).tableScan(tableSchema).planNode();
+    VELOX_ASSERT_USER_THROW(
+        PlanBuilder(idGenerator)
+            .fixedPoint(
+                declaration,
+                PlanBuilder(idGenerator)
+                    .stateSource("n", schema)
+                    .hashJoin({"x"}, {"y"}, scan, "", {"x"}),
+                noConvergence),
+        fmt::format(
+            "FixedPointNode: only an initial plan can read splits; other "
+            "plans must read their rows from state: plan 0, TableScan {}",
+            scan->id()));
+  }
+
+  // A convergence plan that joins a table.
+  {
+    auto scan = PlanBuilder(idGenerator).tableScan(tableSchema).planNode();
+    auto convergence = PlanBuilder(idGenerator)
+                           .stateSource("n", schema, /*delta=*/false)
+                           .hashJoin({"x"}, {"y"}, scan, "", {"x"})
+                           .singleAggregation({}, {"count(1)"})
+                           .project({"a0 = 0"})
+                           .planNode();
+    VELOX_ASSERT_USER_THROW(
+        PlanBuilder(idGenerator)
+            .fixedPoint(
+                declaration,
+                PlanBuilder(idGenerator).stateSource("n", schema),
+                ConvergenceConfig{.plans = {convergence}, .maxIterations = 3}),
+        fmt::format(
+            "FixedPointNode: only an initial plan can read splits; other "
+            "plans must read their rows from state: convergence plan 0, "
+            "TableScan {}",
+            scan->id()));
+  }
+
+  // An index lookup reads splits for its lookup side only if the connector
+  // asks for them.
+  auto lookupTable = [&](bool needsIndexSplit) {
+    auto lookup = std::make_shared<core::TableScanNode>(
+        idGenerator->next(),
+        tableSchema,
+        std::make_shared<test::TestIndexTableHandle>(
+            "test-index",
+            /*indexTable=*/nullptr,
+            /*asyncLookup=*/false,
+            needsIndexSplit),
+        connector::ColumnHandleMap{});
+    return PlanBuilder(idGenerator)
+        .stateSource("n", schema)
+        .indexLookupJoin(
+            {"x"},
+            {"y"},
+            lookup,
+            /*joinConditions=*/{},
+            /*filter=*/"",
+            /*hasMarker=*/false,
+            {"x"});
+  };
+
+  {
+    ASSERT_NO_THROW(PlanBuilder(idGenerator)
+                        .fixedPoint(
+                            declaration,
+                            lookupTable(/*needsIndexSplit=*/false),
+                            noConvergence));
+  }
+
+  {
+    auto body = lookupTable(/*needsIndexSplit=*/true);
+    VELOX_ASSERT_USER_THROW(
+        PlanBuilder(idGenerator).fixedPoint(declaration, body, noConvergence),
+        fmt::format(
+            "FixedPointNode: only an initial plan can read splits; other "
+            "plans must read their rows from state: plan 0, IndexLookupJoin {}",
+            body.planNode()->id()));
+  }
+
+  // A loop nested in the body gets no splits for its initial plans.
+  {
+    auto scan = PlanBuilder(idGenerator).tableScan(tableSchema).planNode();
+    auto inner = PlanBuilder(idGenerator)
+                     .fixedPoint(
+                         std::make_shared<VectorStateDeclaration>(
+                             "m", tableSchema, scan, /*append=*/true),
+                         PlanBuilder(idGenerator).stateSource("m", tableSchema),
+                         noConvergence)
+                     .planNode();
+    VELOX_ASSERT_USER_THROW(
+        PlanBuilder(idGenerator)
+            .fixedPoint(
+                declaration,
+                PlanBuilder(idGenerator)
+                    .stateSource("n", schema)
+                    .hashJoin({"x"}, {"y"}, inner, "", {"x"}),
+                noConvergence),
+        fmt::format(
+            "FixedPointNode: only an initial plan can read splits; other "
+            "plans must read their rows from state: plan 0, TableScan {}",
+            scan->id()));
+  }
 }
 
 // A NULL verdict is a malformed criterion, not a "no".  Read as "not
