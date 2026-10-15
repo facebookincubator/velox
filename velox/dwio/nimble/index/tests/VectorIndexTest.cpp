@@ -1897,6 +1897,54 @@ TEST_F(VectorIndexTest, usesTopLevelRowCount) {
   EXPECT_EQ(index->config()->num_vectors(), kNumRows);
 }
 
+TEST_F(VectorIndexTest, rejectsInvalidDimensionBeforeOffsetArithmetic) {
+  auto writer =
+      createWriter(makeConfig(VectorIndexType::kIvfFlat), createType());
+  const auto data = generateRandomVectors(10, kDimensions);
+  const auto input = makeInputFromVectors(data, kDimensions);
+  auto* arrayVector = input->childAt(1)->as<velox::ArrayVector>();
+  ASSERT_NE(arrayVector, nullptr);
+  arrayVector->mutableOffsets(1)->asMutable<velox::vector_size_t>()[0] = 1;
+  arrayVector->mutableSizes(1)->asMutable<velox::vector_size_t>()[0] =
+      std::numeric_limits<velox::vector_size_t>::max();
+
+  NIMBLE_ASSERT_THROW(
+      writer->write(input), "Vector dimension mismatch at row: 0");
+}
+
+TEST_F(VectorIndexTest, identityMappedNonContiguousVectors) {
+  constexpr velox::vector_size_t kNumVectors{100};
+  const auto data = generateRandomVectors(kNumVectors, kDimensions);
+
+  for (const velox::vector_size_t secondOffset :
+       {static_cast<velox::vector_size_t>(kDimensions - 1),
+        static_cast<velox::vector_size_t>(kDimensions + 1)}) {
+    SCOPED_TRACE(fmt::format("secondOffset={}", secondOffset));
+    const auto input = makeInputFromVectors(data, kDimensions);
+    auto* arrayVector = input->childAt(1)->as<velox::ArrayVector>();
+    ASSERT_NE(arrayVector, nullptr);
+    arrayVector->mutableOffsets(kNumVectors)
+        ->asMutable<velox::vector_size_t>()[1] = secondOffset;
+
+    auto config = makeConfig(VectorIndexType::kIvfFlat);
+    config.numPartitions = 2;
+    const auto reader = readIndex(writeIndex(config, {input}));
+    const auto queryBegin = data.begin() + secondOffset;
+    const auto searchResult = reader->search({
+        .numQueries = 1,
+        .queryVectors =
+            std::vector<float>(queryBegin, queryBegin + kDimensions),
+        .numNeighbors = 1,
+        .searchOptions = std::make_shared<VectorIndex::IvfSearchOptions>(2),
+    });
+    const auto results = searchResult.results(0);
+
+    ASSERT_EQ(results.size(), 1);
+    EXPECT_EQ(results.front().rowId, 1);
+    EXPECT_NEAR(results.front().score, 0.0f, 1e-4f);
+  }
+}
+
 TEST_F(VectorIndexTest, dictionaryEncodedVectors) {
   constexpr velox::vector_size_t kNumVectors{100};
   const auto data = generateRandomVectors(kNumVectors, kDimensions);
