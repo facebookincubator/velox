@@ -16,16 +16,20 @@
 
 /// Basic end-to-end read tests for the cudf Iceberg connector.
 
+#include "velox/experimental/cudf/CudfConfig.h"
+#include "velox/experimental/cudf/connectors/hive/iceberg/CudfIcebergDataSource.h"
 #include "velox/experimental/cudf/tests/iceberg/CudfDeletionVectorTestUtils.h"
 #include "velox/experimental/cudf/tests/iceberg/CudfIcebergTestBase.h"
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/encode/Base64.h"
 #include "velox/common/file/FileSystems.h"
+#include "velox/connectors/ConnectorRegistry.h"
 #include "velox/connectors/hive/BufferedInputBuilder.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
+#include "velox/connectors/hive/iceberg/IcebergDataSource.h"
 #include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
 #include "velox/connectors/hive/iceberg/IcebergMetadataColumns.h"
 #include "velox/connectors/hive/iceberg/IcebergSplit.h"
@@ -558,6 +562,65 @@ TEST_F(CudfIcebergReadTest, basicRead) {
 
   auto expected = makeRowVector({makeFlatVector<int64_t>({0, 1, 2, 3, 4})});
   AssertQueryBuilder(plan).splits(splits).assertResults({expected});
+}
+
+// Like the Hive connector, the Iceberg one has to follow the query's
+// 'cudf.enabled' and not just this process': a query the driver adapter left
+// on the CPU cannot consume the CudfVectors of a CudfIcebergDataSource.
+TEST_F(CudfIcebergReadTest, dataSourceFollowsQueryCudfEnabled) {
+  const auto icebergConnector =
+      facebook::velox::connector::ConnectorRegistry::tryGet(
+          kCudfIcebergConnectorId);
+  ASSERT_NE(icebergConnector, nullptr);
+
+  auto rowType = ROW({"c0"}, {BIGINT()});
+  auto tableHandle =
+      std::make_shared<facebook::velox::connector::hive::HiveTableHandle>(
+          kCudfIcebergConnectorId,
+          "iceberg_table",
+          facebook::velox::common::SubfieldFilters{},
+          nullptr,
+          rowType);
+  const auto assignments = makeAssignments(rowType, {});
+
+  auto makeQueryCtx =
+      [&](const facebook::velox::config::ConfigBase* sessionProperties) {
+        return facebook::velox::connector::ConnectorQueryCtx::Builder()
+            .operatorPool(pool_.get())
+            .connectorPool(pool_.get())
+            .sessionProperties(sessionProperties)
+            .queryId("query.CudfIcebergReadTest")
+            .taskId("task.CudfIcebergReadTest")
+            .planNodeId("0")
+            .build();
+      };
+
+  // Nothing set: the worker-level default, which this fixture leaves enabled.
+  const facebook::velox::config::ConfigBase defaultProperties{{}};
+  const auto defaultQueryCtx = makeQueryCtx(&defaultProperties);
+  const auto gpuDataSource = icebergConnector->createDataSource(
+      rowType, tableHandle, assignments, defaultQueryCtx.get());
+  EXPECT_NE(
+      dynamic_cast<facebook::velox::cudf_velox::connector::hive::iceberg::
+                       CudfIcebergDataSource*>(gpuDataSource.get()),
+      nullptr);
+
+  // The query opted out, so the CPU data source reads the same table.
+  const facebook::velox::config::ConfigBase disabledProperties{
+      {{std::string(facebook::velox::cudf_velox::CudfConfig::kCudfEnabled),
+        "false"}}};
+  const auto disabledQueryCtx = makeQueryCtx(&disabledProperties);
+  const auto cpuDataSource = icebergConnector->createDataSource(
+      rowType, tableHandle, assignments, disabledQueryCtx.get());
+  EXPECT_EQ(
+      dynamic_cast<facebook::velox::cudf_velox::connector::hive::iceberg::
+                       CudfIcebergDataSource*>(cpuDataSource.get()),
+      nullptr);
+  EXPECT_NE(
+      dynamic_cast<
+          facebook::velox::connector::hive::iceberg::IcebergDataSource*>(
+          cpuDataSource.get()),
+      nullptr);
 }
 
 TEST_F(CudfIcebergReadTest, reusesFooterMetadataDuringReaderSetup) {

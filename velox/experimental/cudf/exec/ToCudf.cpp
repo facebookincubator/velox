@@ -31,6 +31,7 @@
 
 #include "folly/Conv.h"
 #include "velox/common/base/Exceptions.h"
+#include "velox/connectors/Connector.h"
 
 #include <cudf/detail/nvtx/ranges.hpp>
 #include <cudf/utilities/memory_resource.hpp>
@@ -318,14 +319,17 @@ struct CudfDriverAdapter {
   // Call operator needed by DriverAdapter
   bool operator()(const exec::DriverFactory& factory, exec::Driver& driver) {
     const auto& queryConfig = driver.driverCtx()->queryConfig();
+    // A query that turns cuDF off stays on the CPU whatever
+    // kCudfAllowCpuFallback says. That switch decides what happens when a GPU
+    // conversion fails, not whether one is attempted, so letting it override
+    // the request would compile a plan the query asked to keep off the GPU.
+    if (!queryConfig.get<bool>(
+            CudfConfig::kCudfEnabled, CudfConfig::getInstance().enabled)) {
+      return false;
+    }
     const auto allowCpuFallback = queryConfig.get<bool>(
         CudfConfig::kCudfAllowCpuFallback,
         CudfConfig::getInstance().allowCpuFallback);
-    if (!queryConfig.get<bool>(
-            CudfConfig::kCudfEnabled, CudfConfig::getInstance().enabled) &&
-        allowCpuFallback) {
-      return false;
-    }
     auto state = CompileState(factory, driver);
     return state.compile(allowCpuFallback);
   }
@@ -335,6 +339,18 @@ static bool isCudfRegistered = false;
 
 bool cudfIsRegistered() {
   return isCudfRegistered;
+}
+
+bool cudfIsEnabled(
+    const ::facebook::velox::connector::ConnectorQueryCtx* connectorQueryCtx) {
+  if (!cudfIsRegistered()) {
+    return false;
+  }
+  if (connectorQueryCtx == nullptr) {
+    return CudfConfig::getInstance().enabled;
+  }
+  return connectorQueryCtx->sessionProperties()->get<bool>(
+      CudfConfig::kCudfEnabled, CudfConfig::getInstance().enabled);
 }
 
 void registerCudf() {

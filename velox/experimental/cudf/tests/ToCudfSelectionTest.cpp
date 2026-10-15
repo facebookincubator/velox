@@ -218,6 +218,42 @@ TEST_F(ToCudfSelectionTest, logicalTypesFallBackBeforeConversion) {
       makeFlatVector<int64_t>({1}, TIME_MICRO_UTC()));
 }
 
+// A query that turns cuDF off runs entirely on CPU operators even though cuDF
+// is registered in this process.
+TEST_F(ToCudfSelectionTest, queryDisabledKeepsCpuOperators) {
+  auto input = makeRowVector({makeFlatVector<int64_t>({1, 2, 3})});
+  auto plan =
+      PlanBuilder().values({input}).project({"c0 + 1 AS result"}).planNode();
+
+  std::shared_ptr<Task> task;
+  AssertQueryBuilder(plan)
+      .config(cudf_velox::CudfConfig::kCudfEnabled, false)
+      .countResults(task);
+
+  EXPECT_FALSE(wasCudfFilterProjectUsed(task));
+  EXPECT_TRUE(wasDefaultFilterProjectUsed(task));
+  EXPECT_EQ(toOperatorStats(task->taskStats()).count("CudfFromVelox"), 0);
+}
+
+// kCudfAllowCpuFallback governs what happens when a GPU conversion fails, not
+// whether the query asked for one, so turning it off must not resurrect GPU
+// execution for a query that turned cuDF off.
+TEST_F(ToCudfSelectionTest, queryDisabledWithoutCpuFallbackKeepsCpuOperators) {
+  auto input = makeRowVector({makeFlatVector<int64_t>({1, 2, 3})});
+  auto plan =
+      PlanBuilder().values({input}).project({"c0 + 1 AS result"}).planNode();
+
+  std::shared_ptr<Task> task;
+  AssertQueryBuilder(plan)
+      .config(cudf_velox::CudfConfig::kCudfEnabled, false)
+      .config(cudf_velox::CudfConfig::kCudfAllowCpuFallback, false)
+      .countResults(task);
+
+  EXPECT_FALSE(wasCudfFilterProjectUsed(task));
+  EXPECT_TRUE(wasDefaultFilterProjectUsed(task));
+  EXPECT_EQ(toOperatorStats(task->taskStats()).count("CudfFromVelox"), 0);
+}
+
 TEST_F(ToCudfSelectionTest, timeToVarcharCastFallsBack) {
   auto input = makeRowVector(
       {makeNullableFlatVector<int64_t>({0, 3'661'000, std::nullopt}, TIME())});
