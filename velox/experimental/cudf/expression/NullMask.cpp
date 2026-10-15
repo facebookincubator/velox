@@ -13,14 +13,13 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/expression/NullMask.h"
 
 #include "velox/common/base/Exceptions.h"
 
 #include <cudf/copying.hpp>
 #include <cudf/null_mask.hpp>
-
-#include <rmm/mr/per_device_resource.hpp>
 
 #include <utility>
 #include <vector>
@@ -59,8 +58,7 @@ void mergeNullSourceNullsIntoResult(
         cudf::copy_bitmask(
             nullSourceColumn,
             stream,
-            cudf::memory_resources{
-                mr, rmm::mr::get_current_device_resource_ref()}),
+            cudf::memory_resources{mr, get_temp_mr()}),
         nullSourceColumn.null_count());
     return;
   }
@@ -82,7 +80,7 @@ void mergeNullSourceNullsIntoResult(
       beginBits,
       result.size(),
       stream,
-      cudf::memory_resources{mr, rmm::mr::get_current_device_resource_ref()});
+      cudf::memory_resources{mr, get_temp_mr()});
   result.set_null_mask(std::move(nullMask), nullCount);
 }
 

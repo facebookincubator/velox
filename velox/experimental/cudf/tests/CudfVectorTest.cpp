@@ -157,8 +157,7 @@ std::unique_ptr<cudf::table> makeTable(
               0,
               cudf::mask_state::UNALLOCATED,
               stream,
-              cudf::memory_resources{
-                  mr, rmm::mr::get_current_device_resource_ref()}),
+              cudf::memory_resources{mr, mr}),
           0));
   return std::make_unique<cudf::table>(std::move(columns));
 }

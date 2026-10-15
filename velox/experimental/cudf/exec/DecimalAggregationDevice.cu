@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/exec/DecimalAggregationDevice.h"
 
 #include <cudf/column/column_device_view.cuh>
@@ -25,7 +26,6 @@
 
 #include <rmm/device_scalar.hpp>
 #include <rmm/exec_policy.hpp>
-#include <rmm/mr/per_device_resource.hpp>
 
 #include <cub/device/device_for.cuh>
 #include <cuda/iterator>
@@ -184,12 +184,13 @@ buildStateValidityMaskImpl(
             0,
             cudf::mask_state::UNALLOCATED,
             stream,
-            cudf::memory_resources{
-                mr, rmm::mr::get_current_device_resource_ref()}),
+            cudf::memory_resources{mr, get_temp_mr()}),
         0};
   }
-  auto sumDeviceView = cudf::column_device_view::create(sumCol, stream);
-  auto countDeviceView = cudf::column_device_view::create(countCol, stream);
+  auto sumDeviceView =
+      cudf::column_device_view::create(sumCol, stream, get_temp_mr());
+  auto countDeviceView =
+      cudf::column_device_view::create(countCol, stream, get_temp_mr());
   StateValidPredicate pred{*sumDeviceView, *countDeviceView};
   // Build a BOOL8 column of per-row validity, then convert via the public API.
   auto bools = cudf::make_fixed_width_column(
@@ -327,9 +328,11 @@ bool unpackDecimalSumState(
     cuda::stream_ref stream) {
   auto const numRows = stateCol.size();
   auto const n = static_cast<size_t>(numRows);
-  auto stateDeviceView = cudf::column_device_view::create(stateCol, stream);
+  auto stateDeviceView =
+      cudf::column_device_view::create(stateCol, stream, get_temp_mr());
   int32_t initialInvalidState{0};
-  rmm::device_scalar<int32_t> invalidState{initialInvalidState, stream};
+  rmm::device_scalar<int32_t> invalidState{
+      initialInvalidState, stream, get_temp_mr()};
   launchDeviceFor(
       numRows,
       [&] {

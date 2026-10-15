@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/expression/DecimalExpressionKernels.h"
 #include "velox/experimental/cudf/expression/DecimalExpressionKernelsGpu.h"
 
@@ -24,8 +25,6 @@
 #include <cudf/column/column_factories.hpp>
 #include <cudf/null_mask.hpp>
 #include <cudf/table/table_view.hpp>
-
-#include <rmm/mr/per_device_resource.hpp>
 
 namespace facebook::velox::cudf_velox {
 namespace {
@@ -171,7 +170,7 @@ std::unique_ptr<cudf::column> decimalDivide(
   auto [nullMask, nullCount] = cudf::bitmask_and(
       cudf::table_view({lhs, rhs}),
       stream,
-      cudf::memory_resources{mr, rmm::mr::get_current_device_resource_ref()});
+      cudf::memory_resources{mr, get_temp_mr()});
   auto out = cudf::make_fixed_width_column(
       outputType, lhs.size(), std::move(nullMask), nullCount, stream, mr);
 
@@ -213,9 +212,7 @@ std::unique_ptr<cudf::column> decimalDivide(
 
   // The scalar is valid here, so the column's mask is the whole stencil.
   auto nullMask = cudf::copy_bitmask(
-      lhs,
-      stream,
-      cudf::memory_resources{mr, rmm::mr::get_current_device_resource_ref()});
+      lhs, stream, cudf::memory_resources{mr, get_temp_mr()});
   auto out = cudf::make_fixed_width_column(
       outputType,
       lhs.size(),
@@ -267,9 +264,7 @@ std::unique_ptr<cudf::column> decimalDivide(
 
   // The scalar is valid here, so the column's mask is the whole stencil.
   auto nullMask = cudf::copy_bitmask(
-      rhs,
-      stream,
-      cudf::memory_resources{mr, rmm::mr::get_current_device_resource_ref()});
+      rhs, stream, cudf::memory_resources{mr, get_temp_mr()});
   auto out = cudf::make_fixed_width_column(
       outputType,
       rhs.size(),

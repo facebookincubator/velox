@@ -76,8 +76,7 @@ std::pair<cuda::device_buffer<std::byte>, cudf::size_type> makeNullMask(
             0,
             cudf::mask_state::UNALLOCATED,
             stream,
-            cudf::memory_resources{
-                mr, rmm::mr::get_current_device_resource_ref()}),
+            cudf::memory_resources{mr, mr}),
         0};
   }
   auto maskBytes = cudf::bitmask_allocation_size_bytes(numBits);
@@ -97,7 +96,7 @@ std::pair<cuda::device_buffer<std::byte>, cudf::size_type> makeNullMask(
       numBits,
       cudf::mask_state::UNINITIALIZED,
       stream,
-      cudf::memory_resources{mr, rmm::mr::get_current_device_resource_ref()});
+      cudf::memory_resources{mr, mr});
   if (!host.empty()) {
     auto status = cudaMemcpyAsync(
         mask.data(),
@@ -1840,8 +1839,7 @@ TEST_F(CudfDecimalTest, decimalDeserializeSumStateRejectsInvalidRowWidth) {
           0,
           cudf::mask_state::UNALLOCATED,
           stream,
-          cudf::memory_resources{
-              mr, rmm::mr::get_current_device_resource_ref()}));
+          cudf::memory_resources{mr, mr}));
 
   VELOX_ASSERT_THROW(
       deserializeDecimalSumState(stateCol->view(), 2, stream),

@@ -66,10 +66,7 @@ cuda::device_buffer<std::byte> makeNullMask(
     rmm::device_async_resource_ref mr) {
   auto size = checkedSize(valid);
   auto nullMask = cudf::create_null_mask(
-      size,
-      cudf::mask_state::ALL_NULL,
-      stream,
-      cudf::memory_resources{mr, rmm::mr::get_current_device_resource_ref()});
+      size, cudf::mask_state::ALL_NULL, stream, cudf::memory_resources{mr, mr});
   std::vector<cudf::bitmask_type> hostMask(cudf::num_bitmask_words(size), 0);
   for (cudf::size_type i = 0; i < size; ++i) {
     if (valid[i]) {
