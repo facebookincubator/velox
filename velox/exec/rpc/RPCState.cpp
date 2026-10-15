@@ -114,7 +114,8 @@ void RPCState::setStreamingMode(
     int64_t minWindow,
     double stepCoef,
     int64_t maxWindow,
-    int64_t batchStartWindow) {
+    int64_t batchStartWindow,
+    int64_t asyncGrowthMaxWindow) {
   VELOX_USER_CHECK_GE(
       batchStartWindow,
       0,
@@ -129,6 +130,7 @@ void RPCState::setStreamingMode(
         minWindow,
         stepCoef,
     };
+    window_.setCleanMaxWindow(asyncGrowthMaxWindow);
   } else {
     // PER_ROW: start == max. Default ceiling 100; a high-latency backend can
     // raise it via rpc.congestion.max_window. Pinning start == max is
@@ -793,6 +795,27 @@ void RPCState::onUnitSamples(const std::vector<int64_t>& rttNsList) {
   if (window_.limit() != prev) {
     RPC_STATE_LOG(INFO) << "RPC congestion: " << rttNsList.size()
                         << " gradient samples, window " << prev << " -> "
+                        << window_.limit();
+  }
+}
+
+bool RPCState::cleanGrowthEnabled() const {
+  std::lock_guard<std::mutex> l(mutex_);
+  return streamingMode_ == RPCStreamingMode::kBatch &&
+      window_.cleanMaxWindow() > 0;
+}
+
+void RPCState::onUnitCleanCompletions(int64_t numUnits) {
+  std::lock_guard<std::mutex> l(mutex_);
+  if (streamingMode_ != RPCStreamingMode::kBatch || numUnits <= 0 ||
+      window_.cleanMaxWindow() <= 0) {
+    return;
+  }
+  const auto prev = window_.limit();
+  window_.onCleanUnits(numUnits);
+  if (window_.limit() != prev) {
+    RPC_STATE_LOG(INFO) << "RPC congestion: " << numUnits
+                        << " clean completions, window " << prev << " -> "
                         << window_.limit();
   }
 }
