@@ -7091,6 +7091,19 @@ TEST_F(DateTimeFunctionsTest, atTimezoneConvertTest) {
               pack(winterInstant, tz::getTimeZoneID("UTC")))),
       "Unknown time zone");
 
+  setQueryTimeZone("America/Los_Angeles");
+  const auto midnightUtc = parseTimestamp("2023-01-01 00:00:00").toMillis();
+  EXPECT_EQ(
+      toTimestamp(pack(midnightUtc, tz::getTimeZoneID("UTC")), "UTC"),
+      parseTimestamp("2023-01-01 08:00:00"));
+  EXPECT_EQ(
+      evaluateOnce<std::string>(
+          "to_iso8601(at_timezone_convert(c0, c1))",
+          {TIMESTAMP_WITH_TIME_ZONE(), VARCHAR()},
+          std::optional<int64_t>(pack(midnightUtc, tz::getTimeZoneID("UTC"))),
+          std::optional<std::string>("UTC")),
+      "2023-01-01T00:00:00.000-08:00");
+
   // A naive TIMESTAMP has no signature.
   VELOX_ASSERT_THROW(
       evaluateOnce<Timestamp>(
@@ -7098,6 +7111,21 @@ TEST_F(DateTimeFunctionsTest, atTimezoneConvertTest) {
           {TIMESTAMP()},
           std::optional<Timestamp>(parseTimestamp("2024-01-01 00:00:00"))),
       "Scalar function signature is not supported");
+}
+
+TEST_F(DateTimeFunctionsTest, atTimezoneConvertDstTransitions) {
+  setQueryTimeZone("Europe/Warsaw");
+  const auto toIso8601 = [&](const std::string& wallClock) {
+    return evaluateOnce<std::string>(
+        "to_iso8601(at_timezone_convert(c0, 'UTC'))",
+        {TIMESTAMP_WITH_TIME_ZONE()},
+        std::optional<int64_t>(pack(
+            parseTimestamp(wallClock).toMillis(), tz::getTimeZoneID("UTC"))));
+  };
+
+  // Resolve overlaps to the earlier instant and normalize gaps forward.
+  EXPECT_EQ(toIso8601("2020-10-25 02:30:00"), "2020-10-25T02:30:00.000+02:00");
+  EXPECT_EQ(toIso8601("2020-03-29 02:30:00"), "2020-03-29T03:30:00.000+02:00");
 }
 
 TEST_F(DateTimeFunctionsTest, atTimezoneConvertTimeWithTimezoneTest) {
