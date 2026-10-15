@@ -386,7 +386,16 @@ explicitly enable it.</p></td>
 Default 1, which never fully stalls dispatch. The controller clamps this to the range
 [1, maxWindow].</p></td>
 </tr>
-<tr class="row-odd"><td><p>rpc.congestion.step_coef</p></td>
+<tr class="row-odd"><td><p>rpc.congestion.batch_start_window</p></td>
+<td><p>integer</p></td>
+<td><p>0</p></td>
+<td><p>Initial per-driver BATCH RPC congestion window. 0 keeps the built-in default of 2.
+Positive values are clamped to [minWindow, maxWindow]. PER_ROW always starts at its ceiling.
+Size at or below the backend’s measured concurrency knee: starting above it seeds the
+unloaded-RTT baseline with queueing delay, leaving only explicit overload errors to shrink
+the window.</p></td>
+</tr>
+<tr class="row-even"><td><p>rpc.congestion.step_coef</p></td>
 <td><p>double</p></td>
 <td><p>1.0</p></td>
 <td><p>Multiplier on the RPC congestion window’s sqrt(window) additive-increase headroom. Default 1.0
