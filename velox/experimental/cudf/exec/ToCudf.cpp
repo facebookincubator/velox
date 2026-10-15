@@ -30,7 +30,9 @@
 #include "velox/experimental/cudf/expression/JitExpression.h"
 
 #include "folly/Conv.h"
+#include "folly/String.h"
 #include "velox/common/base/Exceptions.h"
+#include "velox/exec/Task.h"
 
 #include <cudf/detail/nvtx/ranges.hpp>
 #include <cudf/utilities/memory_resource.hpp>
@@ -267,18 +269,52 @@ bool CompileState::compile(bool allowCpuFallback) {
                 << ", planNode = " << bool(planNode);
     }
     if (isPureCpuOperator) {
-      LOG(WARNING) << "Replacement with cuDF operator failed. "
-                   << (allowCpuFallback ? "Falling back to CPU execution"
-                                        : "No fallback allowed");
-      LOG(WARNING) << "Replacement Failed Operator: " << oper->toString();
-      LOG(WARNING) << "Replacement Failed PlanNode: "
-                   << (planNode ? planNode->toString(true, false) : "null");
-    }
-    if (!allowCpuFallback) {
-      // condition is if GPU replacement success or if CPU operators itself is
-      // GPU compatible. or if specific CPU operator is allowed even when
-      // fallback is disabled.
-      VELOX_CHECK(!isPureCpuOperator, "Replacement with cuDF operator failed");
+      const auto& config = CudfConfig::getInstance();
+      const bool allowlisted =
+          config.isAllowedCpuOperator(oper->operatorType());
+
+      // Record the verdict on the operator itself. Operator runtime stats are
+      // forwarded to the coordinator with the task, so this is how a caller
+      // learns, per query, which operators stayed on the CPU and why --
+      // without scraping worker logs.
+      oper->stats().wlock()->addRuntimeStat(
+          allowlisted ? kCudfCpuAllowlistedStat : kCudfCpuFallbackStat,
+          RuntimeCounter(1));
+
+      if (allowlisted) {
+        if (debugEnabled) {
+          LOG(INFO) << "cuDF: task " << ctx->task->taskId() << " operator "
+                    << oper->operatorType() << "[" << id
+                    << "] stays on CPU (listed in "
+                    << CudfConfig::kCudfAllowedCpuOperators << ")";
+        }
+      } else {
+        if (config.logFallback) {
+          // Tagged with the task id so a line can be attributed to a query
+          // when many run concurrently against one worker.
+          LOG(WARNING) << "cuDF fallback: task " << ctx->task->taskId()
+                       << " operator " << oper->operatorType() << "[" << id
+                       << "] has no GPU path. "
+                       << (allowCpuFallback ? "Falling back to CPU execution"
+                                            : "No fallback allowed");
+          LOG(WARNING) << "Replacement Failed Operator: " << oper->toString();
+          LOG(WARNING) << "Replacement Failed PlanNode: "
+                       << (planNode ? planNode->toString(true, false) : "null");
+        }
+        // Strict mode: a CPU operator that is neither GPU-replaceable nor
+        // explicitly allowed fails the task. Name the operator so the failure
+        // is diagnosable from the error alone.
+        VELOX_CHECK(
+            allowCpuFallback,
+            // Keep the historical prefix: tests and log parsers match on it.
+            "Replacement with cuDF operator failed: strict mode rejects "
+            "operator '{}' (id {}); it has no GPU implementation and is not "
+            "listed in {}. Plan node: {}",
+            oper->operatorType(),
+            id,
+            CudfConfig::kCudfAllowedCpuOperators,
+            planNode ? planNode->toString(true, false) : "null");
+      }
     }
 
     if (not replaceOp.empty()) {
@@ -495,6 +531,17 @@ void CudfConfig::initialize(
   if (config.find(kCudfAllowCpuFallback) != config.end()) {
     allowCpuFallback = folly::to<bool>(config[kCudfAllowCpuFallback]);
   }
+  if (config.find(kCudfAllowedCpuOperators) != config.end()) {
+    allowedCpuOperators.clear();
+    std::vector<std::string> names;
+    folly::split(',', config[kCudfAllowedCpuOperators], names);
+    for (auto& name : names) {
+      auto trimmed = folly::trimWhitespace(name);
+      if (!trimmed.empty()) {
+        allowedCpuOperators.emplace(trimmed.str());
+      }
+    }
+  }
   if (config.find(kUcxExchange) != config.end()) {
     exchange = folly::to<bool>(config[kUcxExchange]);
   }
@@ -535,6 +582,10 @@ void CudfConfig::initialize(
           "Invalid timestamp unit: {}. Valid values are: s, ms, us, ns", unit);
     }
   }
+}
+
+bool CudfConfig::isAllowedCpuOperator(std::string_view operatorType) const {
+  return allowedCpuOperators.count(std::string(operatorType)) > 0;
 }
 
 } // namespace facebook::velox::cudf_velox
