@@ -14,10 +14,15 @@
  * limitations under the License.
  */
 
+#include <cstdint>
+#include <memory>
+#include <optional>
+#include <unordered_set>
+#include <vector>
+
 #include <folly/init/Init.h>
 #include <gflags/gflags.h>
 #include <gtest/gtest.h>
-#include <unordered_set>
 
 #include "velox/dwio/parquet/RegisterParquetWriter.h"
 #include "velox/exec/fuzzer/AggregationFuzzerOptions.h"
@@ -50,6 +55,43 @@ DEFINE_string(
 DEFINE_int64(allocator_capacity, 8L << 30, "Allocator capacity in bytes.");
 
 DEFINE_int64(arbitrator_capacity, 6L << 30, "Arbitrator capacity in bytes.");
+
+namespace {
+
+// Generates arbitrary histogram values with a valid constant bin count.
+class HistogramNumericInputGenerator
+    : public facebook::velox::exec::test::InputGenerator {
+ public:
+  std::vector<facebook::velox::VectorPtr> generate(
+      const std::vector<facebook::velox::TypePtr>& types,
+      facebook::velox::VectorFuzzer& fuzzer,
+      facebook::velox::FuzzerGenerator& rng,
+      facebook::velox::memory::MemoryPool* pool) override {
+    VELOX_CHECK_EQ(types.size(), 2);
+    VELOX_CHECK(types[1]->isInteger());
+
+    const auto size = fuzzer.getOptions().vectorSize;
+    if (!numBins_.has_value()) {
+      numBins_ = facebook::velox::fuzzer::rand<int32_t>(rng, 2, 100);
+    }
+
+    return {
+        fuzzer.fuzz(types[0], size),
+        facebook::velox::BaseVector::createConstant(
+            facebook::velox::INTEGER(), numBins_.value(), size, pool),
+    };
+  }
+
+  void reset() override {
+    numBins_.reset();
+  }
+
+ private:
+  // Shared by all input batches in one fuzzer iteration.
+  std::optional<int32_t> numBins_;
+};
+
+} // namespace
 
 int main(int argc, char** argv) {
   facebook::velox::functions::aggregate::sparksql::registerAggregateFunctions(
@@ -97,9 +139,6 @@ int main(int argc, char** argv) {
       // doesn't support. The fuzzer may pick this signature and fail.
       "collect_set",
       "first_ignore_null",
-      // The reference fuzzer cannot generate the constant numBins argument.
-      "histogram_numeric",
-      "histogram_numeric_legacy",
       "last_ignore_null",
       "regr_replacement",
       // https://github.com/facebookincubator/velox/issues/17124
@@ -155,6 +194,11 @@ int main(int argc, char** argv) {
   options.onlyFunctions = FLAGS_only;
   options.skipFunctions = skipFunctions;
   options.customVerificationFunctions = customVerificationFunctions;
+  options.customInputGenerators = {
+      {"histogram_numeric", std::make_shared<HistogramNumericInputGenerator>()},
+      {"histogram_numeric_legacy",
+       std::make_shared<HistogramNumericInputGenerator>()},
+  };
   options.orderableGroupKeys = true;
   options.timestampPrecision =
       facebook::velox::VectorFuzzer::Options::TimestampPrecision::kMicroSeconds;

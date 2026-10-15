@@ -22,6 +22,7 @@
 #include <tuple>
 
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/exec/Aggregate.h"
 #include "velox/exec/AggregateFunctionRegistry.h"
 #include "velox/exec/WindowFunction.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
