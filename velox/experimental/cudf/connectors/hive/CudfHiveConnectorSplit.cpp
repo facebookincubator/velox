@@ -38,8 +38,7 @@ std::string stripFilePrefix(const std::string& targetPath) {
 } // namespace
 
 std::optional<size_t> knownKvikioFileSize(const CudfHiveConnectorSplit& split) {
-  // Presto forwards HiveFileSplit.fileSize as this synthesized column. It is
-  // object metadata, not the byte range assigned to this particular split.
+  // The whole file's size, not this split's range.
   const auto it = split.infoColumns.find("$file_size");
   if (it == split.infoColumns.end() || it->second.empty()) {
     return std::nullopt;

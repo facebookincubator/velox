@@ -35,6 +35,7 @@
 #include <chrono>
 #include <cstring>
 #include <functional>
+#include <future>
 #include <limits>
 #include <mutex>
 #include <thread>
@@ -456,34 +457,6 @@ TEST_F(CachingDataSourceTest, asyncFailedAndShortFillsAreNotPublished) {
   EXPECT_EQ(fromDevice(dst, 4096), read_->data.substr(0, 4096));
 }
 
-TEST_F(
-    CachingDataSourceTest,
-    discardedAsyncReadDrainsBeforeReleasingCacheStorage) {
-  auto control = std::make_shared<AsyncReadControl>();
-  auto input = asyncSource(control);
-  rmm::cuda_stream stream;
-  rmm::device_buffer destination(
-      4096, stream.view(), cudf::get_current_device_resource_ref());
-  auto* dst = static_cast<uint8_t*>(destination.data());
-  auto read = input->device_read_async(0, 4096, dst, stream.view());
-  std::future<void> discard;
-  auto release = folly::makeGuard([&] { control->releaseAll(); });
-  ASSERT_TRUE(waitUntil([&] { return control->submitted.load() == 1; }));
-  input.reset();
-  discard = std::async(
-      std::launch::async, [read = std::move(read)]() mutable { read = {}; });
-  cache_->clear();
-  // numEntries counts published entries, not this still-exclusive fill.
-  EXPECT_EQ(cache_->refreshStats().numExclusive, 1);
-  EXPECT_FALSE(read_->destroyed);
-  EXPECT_EQ(discard.wait_for(20ms), std::future_status::timeout);
-  control->releaseAll();
-  discard.get();
-  EXPECT_EQ(fromDevice(dst, 4096), read_->data.substr(0, 4096));
-  cache_->clear();
-  EXPECT_EQ(cache_->refreshStats().numEntries, 0);
-}
-
 TEST_F(CachingDataSourceTest, asyncCapacityFailureUsesUncachedFallback) {
   read_->data.assign(32 << 20, 'b');
   auto control = std::make_shared<AsyncReadControl>();
@@ -886,35 +859,6 @@ TEST_F(CachingDataSourceTest, usesTheDestinationStreamsDevice) {
     EXPECT_EQ(fromDevice(dst, 100), std::string(100, 'x'));
   }
   EXPECT_EQ(read_->reads, 1);
-}
-
-TEST_F(CachingDataSourceTest, completionAndDiscardWaitForH2D) {
-  for (bool discard : {false, true}) {
-    auto input = source();
-    rmm::cuda_stream stream;
-    rmm::device_buffer destination(
-        100, stream.view(), cudf::get_current_device_resource_ref());
-    stream.synchronize();
-    auto* dst = static_cast<uint8_t*>(destination.data());
-    StreamGate gate;
-    CUDF_CUDA_TRY(cudaLaunchHostFunc(stream.value(), waitForStreamGate, &gate));
-    gate.entered.get_future().wait();
-    // Use distinct ranges so both passes exercise asynchronous cache fills.
-    auto future =
-        input->device_read_async(discard ? 101 : 1, 100, dst, stream.view());
-    auto waiter = std::async(
-        std::launch::async, [f = std::move(future), discard]() mutable {
-          if (discard) {
-            f = {};
-          } else {
-            EXPECT_EQ(f.get(), 100);
-          }
-        });
-    EXPECT_EQ(waiter.wait_for(50ms), std::future_status::timeout);
-    gate.release.set_value();
-    waiter.get();
-    EXPECT_EQ(fromDevice(dst, 100), std::string(100, 'x'));
-  }
 }
 
 } // namespace

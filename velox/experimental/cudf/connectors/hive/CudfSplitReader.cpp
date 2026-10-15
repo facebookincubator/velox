@@ -537,10 +537,9 @@ std::unique_ptr<cudf::io::datasource> makeKvikioDataSource(
     const CudfHiveConnectorSplit& split,
     const std::shared_ptr<IoStats>& ioStats) {
   const auto knownSize = knownKvikioFileSize(split);
-  // Open precedes the cache wrapper. Without the whole-file size, KvikIO
-  // issues a synchronous HEAD even when all requested bytes are cached.
-  // Describe the whole file (offset 0, no size estimate), not this split's
-  // range: the reader also needs the footer at the end of the file.
+  // Open the whole file (offset 0, no size estimate), not this split's range,
+  // because the reader also reads the footer at the end of the file. With the
+  // file size known, opening sends no HEAD request to S3.
   auto source = cudf::io::datasource::create(
       split.filePath, /*offset=*/0, /*max_size_estimate=*/0, knownSize);
   if (ioStats) {

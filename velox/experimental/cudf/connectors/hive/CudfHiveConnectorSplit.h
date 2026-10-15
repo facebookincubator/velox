@@ -69,8 +69,9 @@ struct CudfHiveConnectorSplit
       const folly::dynamic& obj);
 };
 
-/// Returns the coordinator's whole-file size when present and consistent with
-/// the split range. A split's length alone never establishes the file size.
+/// The size of the whole file, which Presto sends with the split as
+/// '$file_size'. Returns nullopt if it is missing, malformed, or smaller than
+/// the split's range.
 std::optional<size_t> knownKvikioFileSize(const CudfHiveConnectorSplit& split);
 
 class CudfHiveConnectorSplitBuilder {

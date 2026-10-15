@@ -123,8 +123,8 @@ struct CudfConfig {
   /// disable accumulation.
   int64_t partitionedOutputBatchRows{10'000};
 
-  /// Number of threads that serve KvikIO reads through the async data cache.
-  /// Applies to the whole process and is read when the first cached read runs.
+  /// Threads that copy KvikIO data from the async data cache to the GPU. One
+  /// pool for the whole process, created by the first cached GPU read.
   int32_t kvikioCacheThreads{16};
 
   /// Memory resource for cuDF.
