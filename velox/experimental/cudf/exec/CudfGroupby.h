@@ -49,7 +49,11 @@ struct StreamingGroupbyAggregator {
   // positions in the prepared streaming_groupby input table.
   virtual void prepareInput(
       cudf::table_view input,
-      std::vector<cudf::column_view>& preparedColumns) = 0;
+      std::vector<cudf::column_view>& preparedColumns,
+      cuda::stream_ref stream) = 0;
+
+  // Release prepared temporaries after their last use has been enqueued.
+  virtual void releaseInput() {}
 
   // Appends requests using the positions recorded by prepareInput() and records
   // their result positions.
@@ -98,6 +102,11 @@ struct GroupbyAggregator {
       std::unique_ptr<cudf::column> state,
       cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) = 0;
+
+  // Release request temporaries after aggregate() has enqueued their last use.
+  virtual void releaseInput() {
+    maskedValues_.reset();
+  }
 
   virtual ~GroupbyAggregator() = default;
 
@@ -211,7 +220,9 @@ class CudfGroupby : public CudfOperatorBase {
       const std::vector<VectorPtr>& constants,
       const std::vector<std::optional<uint32_t>>& maskChannels);
 
-  cudf::table_view makeStreamingGroupbyInputView(cudf::table_view input);
+  cudf::table_view makeStreamingGroupbyInputView(
+      cudf::table_view input,
+      cuda::stream_ref stream);
 
   std::unique_ptr<cudf::groupby::streaming_groupby> createStreamingGroupby(
       size_t capacity);
