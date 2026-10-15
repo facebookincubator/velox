@@ -15,7 +15,6 @@
  */
 
 #include "velox/functions/Registerer.h"
-#include "velox/functions/sparksql/SparkQueryConfig.h"
 #include "velox/functions/sparksql/detail/DecimalArithmeticFunctions.h"
 
 namespace facebook::velox::functions::sparksql {
@@ -37,7 +36,7 @@ struct DecimalPmodFunction {
   template <typename A, typename B>
   void initialize(
       const std::vector<TypePtr>& inputTypes,
-      const core::QueryConfig& config,
+      const core::QueryConfig& /*config*/,
       const A* /*dividend*/,
       const B* /*divisor*/) {
     const auto [dividendPrecision, dividendScale] =
@@ -54,7 +53,6 @@ struct DecimalPmodFunction {
     divisorFactor_ =
         velox::DecimalUtil::kPowersOfTen[resultScale - divisorScale];
     resultLimit_ = velox::DecimalUtil::kPowersOfTen[resultPrecision];
-    ansiEnabled_ = checked || SparkQueryConfig{config}.ansiEnabled();
   }
 
   template <typename R, typename A, typename B>
@@ -79,9 +77,6 @@ struct DecimalPmodFunction {
     if constexpr (checked) {
       return Status::UserError(errorMessage);
     } else {
-      if (ansiEnabled_) {
-        VELOX_USER_FAIL("{}", errorMessage);
-      }
       return false;
     }
   }
@@ -118,7 +113,6 @@ struct DecimalPmodFunction {
   int128_t dividendFactor_;
   int128_t divisorFactor_;
   int128_t resultLimit_;
-  bool ansiEnabled_;
 };
 
 template <typename TExec>

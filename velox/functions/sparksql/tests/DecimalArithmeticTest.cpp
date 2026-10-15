@@ -479,27 +479,28 @@ TEST_F(DecimalArithmeticTest, pmodErrors) {
           "checked_pmod_deny_precision_loss"}) {
       SCOPED_TRACE(fmt::format("{} ANSI={}", name, ansiEnabled));
       const auto expression = fmt::format("{}(c0, c1)", name);
+      const bool checked = std::string_view(name).find("checked_") == 0;
       const auto input = makeRowVector(
           {makeNullableFlatVector<int64_t>(
                {-1, 1, 1, std::nullopt}, DECIMAL(1, 0)),
            makeFlatVector<int64_t>({100, 0, 3, 0}, DECIMAL(3, 0))});
       const auto expected = makeNullableFlatVector<int64_t>(
           {std::nullopt, std::nullopt, 1, std::nullopt}, DECIMAL(1, 0));
+      const auto divisionByZeroInput = makeRowVector(
+          {makeFlatVector<int64_t>({1}, DECIMAL(1, 0)),
+           makeFlatVector<int64_t>({0}, DECIMAL(3, 0))});
       assertEqualVectors(
           expected, evaluate(fmt::format("try({})", expression), input));
-      if (std::string_view(ansiEnabled) == "false" &&
-          std::string_view(name).find("checked_") != 0) {
+      if (!checked) {
         assertEqualVectors(expected, evaluate(expression, input));
+        assertEqualVectors(
+            makeNullableFlatVector<int64_t>({std::nullopt}, DECIMAL(1, 0)),
+            evaluate(expression, divisionByZeroInput));
       } else {
         VELOX_ASSERT_USER_THROW(
             evaluate(expression, input), "Decimal overflow in pmod");
         VELOX_ASSERT_USER_THROW(
-            evaluate(
-                expression,
-                makeRowVector(
-                    {makeFlatVector<int64_t>({1}, DECIMAL(1, 0)),
-                     makeFlatVector<int64_t>({0}, DECIMAL(3, 0))})),
-            "Division by zero");
+            evaluate(expression, divisionByZeroInput), "Division by zero");
       }
       // The correction itself can exceed 128 bits, then the result precision.
       const auto wideInput = makeRowVector(
@@ -510,8 +511,7 @@ TEST_F(DecimalArithmeticTest, pmodErrors) {
           makeNullableFlatVector<int128_t>({std::nullopt}, DECIMAL(38, 38));
       assertEqualVectors(
           nullResult, evaluate(fmt::format("try({})", expression), wideInput));
-      if (std::string_view(ansiEnabled) == "false" &&
-          std::string_view(name).find("checked_") != 0) {
+      if (!checked) {
         assertEqualVectors(nullResult, evaluate(expression, wideInput));
       } else {
         VELOX_ASSERT_USER_THROW(
