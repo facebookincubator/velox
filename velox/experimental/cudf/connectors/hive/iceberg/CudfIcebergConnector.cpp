@@ -63,7 +63,7 @@ std::unique_ptr<DataSource> CudfIcebergConnector::createDataSource(
     const ConnectorTableHandlePtr& tableHandle,
     const ColumnHandleMap& columnHandles,
     ConnectorQueryCtx* connectorQueryCtx) {
-  if (cudfIsRegistered() && isTypeSupportedByCudf(outputType) &&
+  if (cudfIsEnabled(connectorQueryCtx) && isTypeSupportedByCudf(outputType) &&
       CudfHiveDataSource::isSupported(tableHandle, *connectorQueryCtx)) {
     return std::make_unique<CudfIcebergDataSource>(
         outputType,
