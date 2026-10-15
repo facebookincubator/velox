@@ -60,8 +60,7 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     HistogramNumericTypes.cpp
     SparkNumericHistogram.cpp
     TARGET_DIRECTORY velox_functions_spark_aggregates
-    PROPERTIES
-      COMPILE_OPTIONS "-fno-fast-math;-ffp-contract=off"
+    PROPERTIES COMPILE_OPTIONS "-fno-fast-math;-ffp-contract=off"
   )
 endif()
 
