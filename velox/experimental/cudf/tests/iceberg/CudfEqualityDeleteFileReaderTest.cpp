@@ -70,7 +70,9 @@ TEST_P(CudfEqualityDeleteFileReaderTest, basicSingleColumnDelete) {
 
   auto splits = makeIcebergSplits(dataFile->getPath(), {icebergDeleteFile});
   auto plan = makeTableScanPlan(rowType);
-  auto result = AssertQueryBuilder(plan).splits(splits).copyResults(pool());
+  std::shared_ptr<facebook::velox::exec::Task> task;
+  auto result =
+      AssertQueryBuilder(plan).splits(splits).copyResults(pool(), task);
 
   auto expected = makeRowVector(
       {"id", "value"},
@@ -80,6 +82,7 @@ TEST_P(CudfEqualityDeleteFileReaderTest, basicSingleColumnDelete) {
       });
 
   assertEqualResults({expected}, {result});
+  assertDeletedRows(task, 2);
 }
 
 /// Verifies multi-column equality deletes (both columns must match).
@@ -164,7 +167,9 @@ TEST_P(CudfEqualityDeleteFileReaderTest, noMatchingDeletes) {
 
   auto splits = makeIcebergSplits(dataFile->getPath(), {icebergDeleteFile});
   auto plan = makeTableScanPlan(rowType);
-  auto result = AssertQueryBuilder(plan).splits(splits).copyResults(pool());
+  std::shared_ptr<facebook::velox::exec::Task> task;
+  auto result =
+      AssertQueryBuilder(plan).splits(splits).copyResults(pool(), task);
 
   auto expected = makeRowVector(
       {"id"},
@@ -173,6 +178,7 @@ TEST_P(CudfEqualityDeleteFileReaderTest, noMatchingDeletes) {
       });
 
   assertEqualResults({expected}, {result});
+  assertDeletedRows(task, 0);
 }
 
 /// Verifies that all rows are deleted when every base row matches.
@@ -206,9 +212,12 @@ TEST_P(CudfEqualityDeleteFileReaderTest, allRowsDeleted) {
 
   auto splits = makeIcebergSplits(dataFile->getPath(), {icebergDeleteFile});
   auto plan = makeTableScanPlan(rowType);
-  auto result = AssertQueryBuilder(plan).splits(splits).copyResults(pool());
+  std::shared_ptr<facebook::velox::exec::Task> task;
+  auto result =
+      AssertQueryBuilder(plan).splits(splits).copyResults(pool(), task);
 
   EXPECT_EQ(result->size(), 0);
+  assertDeletedRows(task, 3);
 }
 
 /// Verifies equality deletes with VARCHAR columns.
@@ -604,7 +613,7 @@ TEST_P(CudfEqualityDeleteFileReaderTest, subfieldFilter) {
   auto dataFile = TempFilePath::create();
   writeToFile(dataFile->getPath(), data);
 
-  auto deleteData = makeRowVector({"c0"}, {makeFlatVector<int64_t>({20})});
+  auto deleteData = makeRowVector({"c0"}, {makeFlatVector<int64_t>({20, 40})});
   auto deleteFile = TempFilePath::create();
   const auto deleteFileFormat = GetParam();
   writeDeleteFile(deleteFileFormat, deleteFile->getPath(), {deleteData});
@@ -613,7 +622,7 @@ TEST_P(CudfEqualityDeleteFileReaderTest, subfieldFilter) {
       FileContent::kEqualityDeletes,
       deleteFile->getPath(),
       toDwioFormat(deleteFileFormat),
-      1,
+      2,
       getFileSize(deleteFile->getPath()),
       /*equalityFieldIds=*/{1});
 
@@ -628,9 +637,11 @@ TEST_P(CudfEqualityDeleteFileReaderTest, subfieldFilter) {
                   .planNode();
 
   auto expected = makeRowVector({makeFlatVector<int64_t>({10, 30})});
-  AssertQueryBuilder(plan)
-      .splits(makeIcebergSplits(dataFile->getPath(), {icebergDeleteFile}))
-      .assertResults({expected});
+  auto task =
+      AssertQueryBuilder(plan)
+          .splits(makeIcebergSplits(dataFile->getPath(), {icebergDeleteFile}))
+          .assertResults({expected});
+  assertDeletedRows(task, 1);
 }
 
 /// Verifies that lowercase table names match mixed-case data and delete file
@@ -725,7 +736,7 @@ TEST_F(CudfMixedFormatEqualityDeleteTest, mixedFormatDeleteFiles) {
   auto deleteData2 = makeRowVector(
       {"id"},
       {
-          makeFlatVector<int64_t>({4}),
+          makeFlatVector<int64_t>({2, 4}),
       });
   auto eqDeleteFile2 = TempFilePath::create();
   writeDeleteFile(
@@ -734,14 +745,16 @@ TEST_F(CudfMixedFormatEqualityDeleteTest, mixedFormatDeleteFiles) {
       FileContent::kEqualityDeletes,
       eqDeleteFile2->getPath(),
       dwio::common::FileFormat::PARQUET,
-      1,
+      2,
       getFileSize(eqDeleteFile2->getPath()),
       /*equalityFieldIds=*/{1});
 
   auto splits = makeIcebergSplits(
       dataFile->getPath(), {icebergDeleteFile1, icebergDeleteFile2});
   auto plan = makeTableScanPlan(rowType);
-  auto result = AssertQueryBuilder(plan).splits(splits).copyResults(pool());
+  std::shared_ptr<facebook::velox::exec::Task> task;
+  auto result =
+      AssertQueryBuilder(plan).splits(splits).copyResults(pool(), task);
 
   auto expected = makeRowVector(
       {"id", "value"},
@@ -751,6 +764,7 @@ TEST_F(CudfMixedFormatEqualityDeleteTest, mixedFormatDeleteFiles) {
       });
 
   assertEqualResults({expected}, {result});
+  assertDeletedRows(task, 2);
 }
 
 } // namespace facebook::velox::cudf_velox::exec::test

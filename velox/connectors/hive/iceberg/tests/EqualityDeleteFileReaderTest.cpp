@@ -16,6 +16,7 @@
 
 #include <gtest/gtest.h>
 
+#include "velox/connectors/hive/iceberg/IcebergMetadataColumns.h"
 #include "velox/connectors/hive/iceberg/tests/IcebergTestBase.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 
@@ -52,6 +53,17 @@ struct FileWriteMode {
 // ---------------------------------------------------------------------------
 class EqualityDeleteFileReaderTest : public IcebergTestBase {
  protected:
+  void assertDeletedRows(
+      const std::shared_ptr<exec::Task>& task,
+      int64_t expected) {
+    const auto stats = task->taskStats();
+    const auto& runtimeStats =
+        stats.pipelineStats[0].operatorStats[0].runtimeStats;
+    const auto deletedRows = runtimeStats.find("icebergDeletedRows");
+    ASSERT_NE(deletedRows, runtimeStats.end());
+    EXPECT_EQ(deletedRows->second.sum, expected);
+  }
+
   /// Writes a file in the format described by 'mode'. When
   /// Writes a file according to 'mode':
   ///   DWRF  + withFieldIds=false  — plain DWRF, no iceberg.id attributes
@@ -504,7 +516,7 @@ TEST_P(EqualityDeleteFileReaderTestP, multiColumnDelete) {
   assertEqualResults({expected}, {result});
 }
 
-/// Two separate delete files both apply (multi-reader path).
+/// Overlapping delete files count each deleted row once.
 TEST_P(EqualityDeleteFileReaderTestP, twoDeleteFiles) {
   auto tableType = ROW({"id", "value"}, {BIGINT(), VARCHAR()});
   auto outputType = ROW({"value"}, {VARCHAR()});
@@ -523,20 +535,24 @@ TEST_P(EqualityDeleteFileReaderTestP, twoDeleteFiles) {
   auto icebergDelete1 =
       makeDeleteFile(eqDeleteFile1->getPath(), {1}, GetParam().format);
 
-  auto deleteData2 = makeRowVector({"id"}, {makeFlatVector<int64_t>({3, 8})});
+  auto deleteData2 =
+      makeRowVector({"id"}, {makeFlatVector<int64_t>({3, 5, 8})});
   auto eqDeleteFile2 = writeDataFileP({deleteData2}, {1});
-  auto icebergDelete2 =
-      makeDeleteFile(eqDeleteFile2->getPath(), {1}, GetParam().format);
+  auto icebergDelete2 = makeDeleteFile(
+      eqDeleteFile2->getPath(), {1}, GetParam().format, /*recordCount=*/3);
 
   auto splits =
       makeSplitsP(dataFile->getPath(), {icebergDelete1, icebergDelete2});
   auto plan = makeIcebergTableScanPlan(outputType, tableType);
-  auto result = AssertQueryBuilder(plan).splits(splits).copyResults(pool());
+  std::shared_ptr<exec::Task> task;
+  auto result =
+      AssertQueryBuilder(plan).splits(splits).copyResults(pool(), task);
 
   // Deleted: 1,3,5,8. Surviving: 0,2,4,6,7,9.
   auto expected = makeRowVector(
       {"value"}, {makeFlatVector<std::string>({"a", "c", "e", "g", "h", "j"})});
   assertEqualResults({expected}, {result});
+  assertDeletedRows(task, 4);
 }
 
 /// No rows match the delete — all rows survive.
@@ -555,10 +571,13 @@ TEST_P(EqualityDeleteFileReaderTestP, noMatchingDeletes) {
 
   auto splits = makeSplitsP(dataFile->getPath(), {icebergDeleteFile});
   auto plan = makeIcebergTableScanPlan(rowType);
-  auto result = AssertQueryBuilder(plan).splits(splits).copyResults(pool());
+  std::shared_ptr<exec::Task> task;
+  auto result =
+      AssertQueryBuilder(plan).splits(splits).copyResults(pool(), task);
 
   assertEqualResults(
       {makeRowVector({"id"}, {makeFlatVector<int64_t>({1, 2, 3})})}, {result});
+  assertDeletedRows(task, 0);
 }
 
 /// Every row is deleted.
@@ -576,9 +595,66 @@ TEST_P(EqualityDeleteFileReaderTestP, allRowsDeleted) {
 
   auto splits = makeSplitsP(dataFile->getPath(), {icebergDeleteFile});
   auto plan = makeIcebergTableScanPlan(rowType);
-  auto result = AssertQueryBuilder(plan).splits(splits).copyResults(pool());
+  std::shared_ptr<exec::Task> task;
+  auto result =
+      AssertQueryBuilder(plan).splits(splits).copyResults(pool(), task);
 
   EXPECT_EQ(result->size(), 0);
+  assertDeletedRows(task, 3);
+}
+
+TEST_P(EqualityDeleteFileReaderTestP, mixedDeletesMetric) {
+  auto data = makeRowVector(
+      {"id"}, {makeFlatVector<int64_t>({0, 1, 2, 3, 4, 5, 6, 7, 8, 9})});
+  auto dataFile = writeDataFileP({data}, {1});
+  auto equalityData =
+      makeRowVector({"id"}, {makeFlatVector<int64_t>({3, 5, 7, 9})});
+  auto equalityFile = writeDataFileP({equalityData}, {1});
+  auto positionalData = makeRowVector(
+      {"file_path", "pos"},
+      {makeFlatVector<std::string>(
+           3, [&](auto) { return dataFile->getPath(); }),
+       makeFlatVector<int64_t>({1, 3, 5})});
+  auto positionalFile = writeDataFileP(
+      {positionalData},
+      {IcebergMetadataColumn::kFilePathId, IcebergMetadataColumn::kPosId});
+  std::vector<IcebergDeleteFile> deleteFiles{
+      makeDeleteFile(
+          equalityFile->getPath(), {1}, GetParam().format, /*recordCount=*/4),
+      IcebergDeleteFile(
+          FileContent::kPositionalDeletes,
+          positionalFile->getPath(),
+          GetParam().format,
+          /*recordCount=*/3,
+          getFileSize(positionalFile->getPath()))};
+
+  for (bool filter : {false, true}) {
+    SCOPED_TRACE(filter);
+    const auto rowType = asRowType(data->type());
+    IcebergPlanBuilder planBuilder;
+    auto plan = planBuilder.startTableScan()
+                    .outputType(rowType)
+                    .dataColumns(rowType)
+                    .subfieldFilters(
+                        filter ? std::vector<std::string>{"id < 8"}
+                               : std::vector<std::string>{})
+                    .endTableScan()
+                    .planNode();
+    std::shared_ptr<exec::Task> task;
+    auto result = AssertQueryBuilder(plan)
+                      .config(core::QueryConfig::kPreferredOutputBatchRows, 2)
+                      .config(core::QueryConfig::kMaxOutputBatchRows, 2)
+                      .splits(makeSplitsP(dataFile->getPath(), deleteFiles))
+                      .copyResults(pool(), task);
+    const std::vector<int64_t> expected = filter
+        ? std::vector<int64_t>{0, 2, 4, 6}
+        : std::vector<int64_t>{0, 2, 4, 6, 8};
+    assertEqualResults(
+        {makeRowVector({"id"}, {makeFlatVector<int64_t>(expected)})}, {result});
+    // Position deletes remove 1, 3 and 5. Equality deletes remove 7 and 9,
+    // unless the filter already removed 9. Row 8 is only filtered out.
+    assertDeletedRows(task, filter ? 4 : 5);
+  }
 }
 
 /// VARCHAR column equality delete.

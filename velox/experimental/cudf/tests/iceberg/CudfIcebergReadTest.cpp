@@ -200,7 +200,7 @@ class CudfIcebergReadTest : public CudfIcebergTestBase {
       splits.insert(splits.end(), icebergSplits.begin(), icebergSplits.end());
     }
 
-    std::string duckdbSql =
+    const auto [duckdbSql, expectedDeletedRows] =
         getDuckDBQuery(rowGroupSizesForFiles, deleteFilesForBaseDatafiles);
     auto plan = PlanBuilder()
                     .startTableScan()
@@ -213,8 +213,12 @@ class CudfIcebergReadTest : public CudfIcebergTestBase {
     auto planStats = toPlanStats(task->taskStats());
     auto it = planStats.find(plan->id());
     ASSERT_TRUE(it != planStats.end());
+    const auto& customStats = it->second.customStats;
+    const auto deletedRows = customStats.find("icebergDeletedRows");
+    EXPECT_EQ(
+        deletedRows == customStats.end() ? 0 : deletedRows->second.sum,
+        expectedDeletedRows);
     if (numPrefetchSplits > 0) {
-      const auto& customStats = it->second.customStats;
       ASSERT_EQ(
           customStats.count(
               std::string(facebook::velox::exec::TableScan::kPreloadedSplits)),
@@ -390,7 +394,7 @@ class CudfIcebergReadTest : public CudfIcebergTestBase {
     return vectors;
   }
 
-  std::string getDuckDBQuery(
+  std::pair<std::string, int64_t> getDuckDBQuery(
       const std::map<std::string, std::vector<int64_t>>& rowGroupSizesForFiles,
       const std::unordered_map<
           std::string,
@@ -431,10 +435,10 @@ class CudfIcebergReadTest : public CudfIcebergTestBase {
     }
 
     if (totalNumDeletePositions == 0) {
-      return "SELECT * FROM tmp";
+      return {"SELECT * FROM tmp", 0};
     }
     if (totalNumDeletePositions >= totalNumRowsInAllBaseFiles) {
-      return "SELECT * FROM tmp WHERE 1 = 0";
+      return {"SELECT * FROM tmp WHERE 1 = 0", totalNumDeletePositions};
     }
 
     std::vector<int64_t> allDeleteValues;
@@ -454,9 +458,11 @@ class CudfIcebergReadTest : public CudfIcebergTestBase {
       numRowsInPreviousBaseFiles += baseFileSize.second;
     }
 
-    return fmt::format(
-        "SELECT * FROM tmp WHERE c0 NOT IN ({})",
-        folly::join(", ", allDeleteValues));
+    return {
+        fmt::format(
+            "SELECT * FROM tmp WHERE c0 NOT IN ({})",
+            folly::join(", ", allDeleteValues)),
+        totalNumDeletePositions};
   }
 
   std::vector<int64_t> flattenAndDedup(
@@ -1318,10 +1324,14 @@ TEST_F(CudfIcebergReadTest, countStarWithPositionalDeletes) {
 
   const auto countRows =
       [&](const std::vector<IcebergDeleteFile>& deleteFiles) {
+        std::shared_ptr<facebook::velox::exec::Task> task;
         auto result =
             AssertQueryBuilder(plan)
                 .splits(makeIcebergSplits(dataFile->getPath(), deleteFiles))
-                .copyResults(pool());
+                .copyResults(pool(), task);
+        if (!deleteFiles.empty()) {
+          assertDeletedRows(task, 2);
+        }
         return result->childAt(0)->as<SimpleVector<int64_t>>()->valueAt(0);
       };
 
@@ -1928,9 +1938,11 @@ TEST_F(CudfIcebergReadTest, deletionVectorWithInjectedOnlyProjection) {
                   .planNode();
   auto expected = makeRowVector(
       {"country"}, {makeFlatVector<std::string>({"US", "US", "US"})});
-  AssertQueryBuilder(plan)
-      .splits(makeIcebergSplits(dataFile->getPath(), {dvDelete}, partitionKeys))
-      .assertResults({expected});
+  auto task = AssertQueryBuilder(plan)
+                  .splits(makeIcebergSplits(
+                      dataFile->getPath(), {dvDelete}, partitionKeys))
+                  .assertResults({expected});
+  assertDeletedRows(task, 2);
 }
 
 /// Verifies sub-splits over an all-injected projection.
@@ -2340,9 +2352,10 @@ TEST_F(CudfIcebergReadTest, remainingFilterAndPositionalDeletes) {
           makeFlatVector<int64_t>({40}),
       });
 
-  AssertQueryBuilder(plan)
-      .splits(makeIcebergSplits(dataFile->getPath(), {deleteFile}))
-      .assertResults({expected});
+  auto task = AssertQueryBuilder(plan)
+                  .splits(makeIcebergSplits(dataFile->getPath(), {deleteFile}))
+                  .assertResults({expected});
+  assertDeletedRows(task, 1);
 }
 
 // Subfield filter (no injection) and positional deletes. Filter is not
@@ -2387,9 +2400,10 @@ TEST_F(CudfIcebergReadTest, subfieldFilterWithPositionalDeletes) {
 
   auto expected = makeRowVector({makeFlatVector<int64_t>({40})});
 
-  AssertQueryBuilder(plan)
-      .splits(makeIcebergSplits(dataFile->getPath(), {deleteFile}))
-      .assertResults({expected});
+  auto task = AssertQueryBuilder(plan)
+                  .splits(makeIcebergSplits(dataFile->getPath(), {deleteFile}))
+                  .assertResults({expected});
+  assertDeletedRows(task, 2);
 }
 
 TEST_F(CudfIcebergReadTest, singleBaseFileSinglePositionalDeleteFile) {
@@ -2641,7 +2655,9 @@ TEST_F(CudfIcebergReadTest, deletionVectorWithFilteredSubSplit) {
                   .planNode();
   auto expected = makeRowVector(
       {makeFlatVector<int64_t>({90, 91, 93, 94, 96, 97, 98, 99})});
-  AssertQueryBuilder(plan).splits(secondSplit).assertResults({expected});
+  auto task =
+      AssertQueryBuilder(plan).splits(secondSplit).assertResults({expected});
+  assertDeletedRows(task, 1);
 }
 
 // Verifies positional deletes with a row-group filter.
@@ -3073,9 +3089,8 @@ TEST_F(CudfIcebergReadTest, combinedPositionalAndEqualityDeletes) {
       2,
       getFileSize(posDeleteFile->getPath()));
 
-  // Equality delete: remove rows where c0={5, 7}
   auto eqDeleteData = makeRowVector({
-      makeFlatVector<int64_t>({5, 7}),
+      makeFlatVector<int64_t>({3, 5, 7}),
   });
   auto eqDeleteFile = TempFilePath::create();
   writeDeleteFile(
@@ -3085,23 +3100,44 @@ TEST_F(CudfIcebergReadTest, combinedPositionalAndEqualityDeletes) {
       FileContent::kEqualityDeletes,
       eqDeleteFile->getPath(),
       dwio::common::FileFormat::PARQUET,
-      2,
+      3,
       getFileSize(eqDeleteFile->getPath()),
       /*equalityFieldIds=*/{1});
 
-  auto splits = makeIcebergSplits(
-      dataFile->getPath(), {posIcebergDelete, eqIcebergDelete});
-  auto plan = makeTableScanPlan(rowType);
-  auto result = AssertQueryBuilder(plan).splits(splits).copyResults(pool());
+  auto bitmapData = serializeRoaringBitmapNoRun<int64_t>({1, 5, 9});
+  auto dvFile = writeDvFile(bitmapData);
+  auto dvDelete = makeDvDeleteFile(dvFile->getPath(), bitmapData.size(), 3);
 
-  // Positional removes pos 1,3 (c0=1,3). Equality removes c0=5,7.
-  // Surviving: 0, 2, 4, 6, 8, 9
-  auto expected = makeRowVector({
-      makeFlatVector<int64_t>({0, 2, 4, 6, 8, 9}),
-      makeFlatVector<int64_t>({10, 12, 14, 16, 18, 19}),
-  });
-
-  assertEqualResults({expected}, {result});
+  for (bool countOnly : {false, true}) {
+    SCOPED_TRACE(countOnly);
+    for (bool filter : {false, true}) {
+      SCOPED_TRACE(filter);
+      auto builder = PlanBuilder();
+      builder.startTableScan()
+          .connectorId(kCudfIcebergConnectorId)
+          .outputType(countOnly ? ROW({}, {}) : rowType)
+          .dataColumns(rowType)
+          .subfieldFilters(
+              filter ? std::vector<std::string>{"c0 < 9"}
+                     : std::vector<std::string>{})
+          .endTableScan();
+      if (countOnly) {
+        builder.singleAggregation({}, {"count(1)"});
+      }
+      auto expected = countOnly
+          ? makeRowVector({makeFlatVector<int64_t>({5})})
+          : makeRowVector({
+                makeFlatVector<int64_t>({0, 2, 4, 6, 8}),
+                makeFlatVector<int64_t>({10, 12, 14, 16, 18}),
+            });
+      auto task = AssertQueryBuilder(builder.planNode())
+                      .splits(makeIcebergSplits(
+                          dataFile->getPath(),
+                          {posIcebergDelete, eqIcebergDelete, dvDelete}))
+                      .assertResults({expected});
+      assertDeletedRows(task, filter ? 4 : 5);
+    }
+  }
 }
 
 /// Non-projected equality delete key column.

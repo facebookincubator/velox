@@ -109,6 +109,15 @@ These stats are reported only by TableScan operator
      - The number of splits read for each file format (e.g. fileFormat.dwrf,
        fileFormat.parquet, fileFormat.nimble). Reported per format encountered
        during the query.
+   * - icebergDeletedRows
+     -
+     - The number of scanned rows removed by Iceberg position deletes, deletion
+       vectors, or equality deletes on CPU and GPU. Overlapping deletes count
+       each row once. Rows skipped before delete evaluation are not counted.
+       On CPU, position deletes and deletion vectors count marked positions in
+       the scanned range, while equality deletes count only surviving rows.
+       On GPU, all deletes count only rows surviving filters pushed into the
+       data-file reader. Rows removed only by query filters are not counted.
 
 TableWriter
 -----------
