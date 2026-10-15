@@ -38,10 +38,7 @@ add_executable(
   VarianceAggregationTest.cpp
 )
 
-velox_add_test_headers(
-  velox_functions_spark_aggregates_test
-  BitmapBuilder.h
-)
+velox_add_test_headers(velox_functions_spark_aggregates_test BitmapBuilder.h)
 
 add_test(velox_functions_spark_aggregates_test velox_functions_spark_aggregates_test)
 
@@ -55,6 +52,7 @@ target_link_libraries(
   velox_hive_connector
   velox_vector_fuzzer
   gflags::gflags
+  GTest::gmock
   GTest::gtest
   GTest::gtest_main
 )
