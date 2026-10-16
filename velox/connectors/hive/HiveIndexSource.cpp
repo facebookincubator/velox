@@ -1357,7 +1357,8 @@ std::unordered_map<std::string, RuntimeMetric> HiveIndexSource::runtimeStats() {
           read.count(),
           static_cast<int64_t>(read.min()),
           static_cast<int64_t>(read.max()),
-          RuntimeCounter::Unit::kBytes);
+          RuntimeCounter::Unit::kBytes,
+          RuntimeCounter::AggregationKind::kPerOperator);
     }
     const auto& ramHit = ioStatistics_->ramHit();
     if (ramHit.count() > 0) {
@@ -1368,7 +1369,8 @@ std::unordered_map<std::string, RuntimeMetric> HiveIndexSource::runtimeStats() {
           ramHit.count(),
           static_cast<int64_t>(ramHit.min()),
           static_cast<int64_t>(ramHit.max()),
-          RuntimeCounter::Unit::kBytes);
+          RuntimeCounter::Unit::kBytes,
+          RuntimeCounter::AggregationKind::kPerOperator);
     }
     const auto& ssdRead = ioStatistics_->ssdRead();
     if (ssdRead.count() > 0) {

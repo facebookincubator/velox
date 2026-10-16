@@ -17,8 +17,6 @@
 #pragma once
 
 #include <string_view>
-#include <utility>
-
 #include "velox/common/base/RuntimeMetrics.h"
 
 namespace facebook::velox::dwrf {
@@ -30,10 +28,11 @@ struct DwrfRuntimeStats {
       "flattenStringDictionaryValues";
 
   /// Describes the flatten-string-dictionary runtime metric.
-  inline static constexpr std::pair<std::string_view, RuntimeCounter::Unit>
+  inline static constexpr RuntimeMetricDefinition
       kFlattenStringDictionaryValuesMetric = {
           kFlattenStringDictionaryValues,
-          RuntimeCounter::Unit::kNone};
+          RuntimeCounter::Unit::kNone,
+          RuntimeCounter::AggregationKind::kPerEvent};
 };
 
 } // namespace facebook::velox::dwrf

@@ -1913,7 +1913,11 @@ CudfVectorPtr CudfGroupby::releaseAndResetBufferedResult() {
         std::string(exec::HashAggregation::kFlushRowCount),
         RuntimeCounter(numOutputRows));
     lockedStats->addRuntimeStat(
-        std::string(exec::HashAggregation::kFlushTimes), RuntimeCounter(1));
+        std::string(exec::HashAggregation::kFlushTimes),
+        RuntimeCounter(
+            1,
+            RuntimeCounter::Unit::kNone,
+            RuntimeCounter::AggregationKind::kPerOperator));
     lockedStats->addRuntimeStat(
         std::string(exec::HashAggregation::kPartialAggregationPct),
         RuntimeCounter(aggregationPct));

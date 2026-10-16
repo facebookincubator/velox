@@ -324,7 +324,8 @@ std::unordered_map<std::string, RuntimeCounter> FileDataSink::runtimeStats()
   const auto fsStatsMap = fileSystemStats_->stats();
   for (const auto& [statName, statValue] : fsStatsMap) {
     runtimeStats.emplace(
-        statName, RuntimeCounter(statValue.sum, statValue.unit));
+        statName,
+        RuntimeCounter(statValue.sum, statValue.unit, statValue.aggregation));
   }
 
   return runtimeStats;

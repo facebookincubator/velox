@@ -24,6 +24,8 @@ namespace facebook::velox::io {
 
 namespace {
 
+using AggregationKind = RuntimeCounter::AggregationKind;
+
 void addIoCounterMetric(
     IoCounter& counter,
     const std::string& key,
@@ -47,6 +49,7 @@ void addIoStatsMetric(
     IoCounter& counter,
     const std::string& key,
     RuntimeCounter::Unit unit,
+    AggregationKind aggregation,
     std::unordered_map<std::string, RuntimeMetric>& runtimeStats) {
   if (counter.count() > 0) {
     runtimeStats.insert(
@@ -56,13 +59,15 @@ void addIoStatsMetric(
              counter.count(),
              saturateCast(counter.min()),
              saturateCast(counter.max()),
-             unit)});
+             unit,
+             aggregation)});
   }
 }
 
 void addIoLatencyMetric(
     IoCounter& counter,
     const std::string& key,
+    AggregationKind aggregation,
     std::unordered_map<std::string, RuntimeMetric>& runtimeStats) {
   if (counter.count() > 0) {
     runtimeStats.insert(
@@ -72,7 +77,8 @@ void addIoLatencyMetric(
              counter.count(),
              saturateCast(counter.min() * 1'000),
              saturateCast(counter.max() * 1'000),
-             RuntimeCounter::Unit::kNanos)});
+             RuntimeCounter::Unit::kNanos,
+             aggregation)});
   }
 }
 
@@ -86,24 +92,38 @@ void addIoStatsToRuntimeStats(
     return prefix.empty() ? std::string(name)
                           : fmt::format("{}.{}", prefix, name);
   };
+  const auto aggregation = prefix.empty() ? AggregationKind::kPerOperator
+                                          : AggregationKind::kPerEvent;
 
   addIoLatencyMetric(
-      ioStats.queryThreadIoLatencyUs(), key(kIoWaitWallNanos), runtimeStats);
+      ioStats.queryThreadIoLatencyUs(),
+      key(kIoWaitWallNanos),
+      aggregation,
+      runtimeStats);
   addIoLatencyMetric(
-      ioStats.storageReadLatencyUs(), key(kStorageReadWallNanos), runtimeStats);
+      ioStats.storageReadLatencyUs(),
+      key(kStorageReadWallNanos),
+      aggregation,
+      runtimeStats);
   addIoLatencyMetric(
       ioStats.ssdCacheReadLatencyUs(),
       key(kSsdCacheReadWallNanos),
+      aggregation,
       runtimeStats);
   addIoLatencyMetric(
-      ioStats.cacheWaitLatencyUs(), key(kCacheWaitWallNanos), runtimeStats);
+      ioStats.cacheWaitLatencyUs(),
+      key(kCacheWaitWallNanos),
+      aggregation,
+      runtimeStats);
   addIoLatencyMetric(
       ioStats.coalescedSsdLoadLatencyUs(),
       key(kCoalescedSsdLoadWallNanos),
+      aggregation,
       runtimeStats);
   addIoLatencyMetric(
       ioStats.coalescedStorageLoadLatencyUs(),
       key(kCoalescedStorageLoadWallNanos),
+      aggregation,
       runtimeStats);
 
   addIoCounterMetric(ioStats.prefetch(), key(kNumPrefetch), runtimeStats);
@@ -111,6 +131,7 @@ void addIoStatsToRuntimeStats(
       ioStats.prefetch(),
       key(kPrefetchBytes),
       RuntimeCounter::Unit::kBytes,
+      aggregation,
       runtimeStats);
   addIoCounterMetric(
       ioStats.totalScanTimeNs(),
@@ -127,23 +148,27 @@ void addIoStatsToRuntimeStats(
       ioStats.read(),
       key(kStorageReadBytes),
       RuntimeCounter::Unit::kBytes,
+      aggregation,
       runtimeStats);
   addIoCounterMetric(ioStats.ssdRead(), key(kNumLocalRead), runtimeStats);
   addIoStatsMetric(
       ioStats.ssdRead(),
       key(kLocalReadBytes),
       RuntimeCounter::Unit::kBytes,
+      AggregationKind::kPerEvent,
       runtimeStats);
   addIoCounterMetric(ioStats.ramHit(), key(kNumRamRead), runtimeStats);
   addIoStatsMetric(
       ioStats.ramHit(),
       key(kRamReadBytes),
       RuntimeCounter::Unit::kBytes,
+      aggregation,
       runtimeStats);
   addIoStatsMetric(
       ioStats.readGap(),
       key(kReadGapBytes),
       RuntimeCounter::Unit::kBytes,
+      AggregationKind::kPerEvent,
       runtimeStats);
 }
 
