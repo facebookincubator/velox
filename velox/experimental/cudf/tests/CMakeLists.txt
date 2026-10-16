@@ -144,7 +144,7 @@ velox_add_cudf_test(
 velox_add_cudf_test(
   NAME velox_cudf_decimal_arithmetic_device_test
   SOURCES DecimalArithmeticDeviceTest.cu
-  LIBS cudf::cudf
+  LIBS cudf::cudf Folly::folly
 )
 set_target_properties(velox_cudf_decimal_arithmetic_device_test PROPERTIES CUDA_STANDARD 20)
 target_include_directories(

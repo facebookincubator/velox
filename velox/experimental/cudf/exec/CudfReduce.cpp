@@ -246,7 +246,10 @@ struct ReduceMeanAggregator : ReduceAggregator {
             1,
             rmm::device_buffer{},
             cudf::create_null_mask(
-                0, cudf::mask_state::UNALLOCATED, stream, mr),
+                0,
+                cudf::mask_state::UNALLOCATED,
+                stream,
+                cudf::memory_resources{mr, get_temp_mr()}),
             0,
             std::move(children));
       }
@@ -595,7 +598,11 @@ struct ApproxDistinctAggregator : ReduceAggregator {
         cudf::data_type{cudf::type_id::INT32},
         2,
         std::move(offsets_device),
-        cudf::create_null_mask(0, cudf::mask_state::UNALLOCATED, stream, mr),
+        cudf::create_null_mask(
+            0,
+            cudf::mask_state::UNALLOCATED,
+            stream,
+            cudf::memory_resources{mr, get_temp_mr()}),
         0);
 
     return cudf::make_strings_column(
@@ -603,7 +610,11 @@ struct ApproxDistinctAggregator : ReduceAggregator {
         std::move(offsets_column),
         std::move(chars_buffer),
         0,
-        cudf::create_null_mask(0, cudf::mask_state::UNALLOCATED, stream, mr));
+        cudf::create_null_mask(
+            0,
+            cudf::mask_state::UNALLOCATED,
+            stream,
+            cudf::memory_resources{mr, get_temp_mr()}));
   }
 
   template <typename Func>

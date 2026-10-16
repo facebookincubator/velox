@@ -42,6 +42,8 @@
 #include <cudf/strings/strings_column_view.hpp>
 #include <cudf/utilities/default_stream.hpp>
 
+#include <rmm/mr/per_device_resource.hpp>
+
 #include <cuda_runtime_api.h>
 
 #include <cstdlib>
@@ -71,7 +73,11 @@ std::pair<cuda::device_buffer<std::byte>, cudf::size_type> makeNullMask(
   auto numBits = static_cast<cudf::size_type>(valid.size());
   if (numBits == 0) {
     return {
-        cudf::create_null_mask(0, cudf::mask_state::UNALLOCATED, stream, mr),
+        cudf::create_null_mask(
+            0,
+            cudf::mask_state::UNALLOCATED,
+            stream,
+            cudf::memory_resources{mr, mr}),
         0};
   }
   auto maskBytes = cudf::bitmask_allocation_size_bytes(numBits);
@@ -88,7 +94,10 @@ std::pair<cuda::device_buffer<std::byte>, cudf::size_type> makeNullMask(
     }
   }
   auto mask = cudf::create_null_mask(
-      numBits, cudf::mask_state::UNINITIALIZED, stream, mr);
+      numBits,
+      cudf::mask_state::UNINITIALIZED,
+      stream,
+      cudf::memory_resources{mr, mr});
   if (!host.empty()) {
     auto status = cudaMemcpyAsync(
         mask.data(),
@@ -1894,7 +1903,11 @@ TEST_F(CudfDecimalTest, decimalDeserializeSumStateRejectsInvalidRowWidth) {
       std::move(offsetsCol),
       std::move(charsBuf),
       0,
-      cudf::create_null_mask(0, cudf::mask_state::UNALLOCATED, stream, mr));
+      cudf::create_null_mask(
+          0,
+          cudf::mask_state::UNALLOCATED,
+          stream,
+          cudf::memory_resources{mr, mr}));
 
   VELOX_ASSERT_THROW(
       deserializeDecimalSumState(stateCol->view(), 2, stream),

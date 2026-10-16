@@ -298,8 +298,10 @@ CudfHashJoinBuild::CudfHashJoinBuild(
       joinNode_(joinNode) {}
 
 void CudfHashJoinBuild::recordInputStats(const CudfVector& input) {
-  auto [_, nullCount] =
-      cudf::bitmask_and(input.getTableView(), input.stream(), get_temp_mr());
+  auto [_, nullCount] = cudf::bitmask_and(
+      input.getTableView(),
+      input.stream(),
+      cudf::memory_resources{get_temp_mr(), get_temp_mr()});
   {
     auto lockedStats = stats_.wlock();
     lockedStats->numNullKeys += nullCount;
@@ -586,7 +588,9 @@ void CudfHashJoinProbe::doAddInput(RowVectorPtr input) {
   VELOX_CHECK_NOT_NULL(cudfInput);
   // Count nulls in join key columns
   auto [_, null_count] = cudf::bitmask_and(
-      cudfInput->getTableView(), cudfInput->stream(), get_temp_mr());
+      cudfInput->getTableView(),
+      cudfInput->stream(),
+      cudf::memory_resources{get_temp_mr(), get_temp_mr()});
   {
     // Update statistics for null keys in join operator.
     auto lockedStats = stats_.wlock();
