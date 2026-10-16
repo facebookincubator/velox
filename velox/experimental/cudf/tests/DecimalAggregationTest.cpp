@@ -17,6 +17,7 @@
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/CudfConversion.h"
 #include "velox/experimental/cudf/exec/CudfGroupby.h"
+#include "velox/experimental/cudf/exec/CudfReduce.h"
 #include "velox/experimental/cudf/exec/DecimalAggregationState.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
@@ -601,7 +602,7 @@ TEST_F(CudfDecimalTest, decimalAvgGlobalSingleRounds) {
   facebook::velox::test::assertEqualVectors(expected, result);
 }
 
-TEST_F(CudfDecimalTest, decimalAvgGlobalSingleDecimal64Overflow) {
+TEST_F(CudfDecimalTest, decimalAvgGlobalDecimal64Overflow) {
   // 12 values of 9e17 (DECIMAL(18,0)) sum to 1.08e19, past 2^63. The sum must
   // accumulate in 128 bits or a DECIMAL64 accumulator wraps; avg is 9e17.
   constexpr int64_t kBig = 900'000'000'000'000'000;
@@ -610,20 +611,25 @@ TEST_F(CudfDecimalTest, decimalAvgGlobalSingleDecimal64Overflow) {
 
   auto input =
       makeRowVector({"d"}, {makeFlatVector<int64_t>(values, DECIMAL(18, 0))});
-
-  std::vector<RowVectorPtr> vectors = {input};
-
-  auto plan = exec::test::PlanBuilder()
-                  .values(vectors)
-                  .singleAggregation({}, {"avg(d) AS a"})
-                  .planNode();
-
   auto expected =
       makeRowVector({"a"}, {makeFlatVector<int64_t>({kBig}, DECIMAL(18, 0))});
 
-  auto result =
-      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
-  facebook::velox::test::assertEqualVectors(expected, result);
+  auto testAggregation = [&](bool partial) {
+    auto builder = exec::test::PlanBuilder().values({input});
+    auto plan = partial
+        ? builder.partialAggregation({}, {"avg(d) AS a"})
+              .finalAggregation()
+              .planNode()
+        : builder.singleAggregation({}, {"avg(d) AS a"}).planNode();
+    auto result =
+        facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(
+            pool());
+    facebook::velox::test::assertEqualVectors(expected, result);
+  };
+
+  for (bool partial : {false, true}) {
+    testAggregation(partial);
+  }
 }
 
 TEST_F(CudfDecimalTest, decimalAvgGroupbySingleDecimal64Overflow) {
@@ -1103,6 +1109,64 @@ TEST_F(CudfDecimalTest, decimalSumGlobalSingle) {
       .assertResults("SELECT sum(d) AS s FROM tmp");
 }
 
+TEST_F(CudfDecimalTest, decimalSumGlobalSingleRescalesOutput) {
+  auto const inputType = DECIMAL(12, 2);
+  auto testRescale = [&](const std::vector<int64_t>& values,
+                         const TypePtr& outputType,
+                         int128_t expected) {
+    auto source = exec::test::PlanBuilder()
+                      .values({makeRowVector(
+                          {"d"}, {makeFlatVector<int64_t>(values, inputType)})})
+                      .planNode();
+    auto aggregation = std::make_shared<core::AggregationNode>(
+        "aggregation",
+        core::AggregationNode::Step::kSingle,
+        std::vector<core::FieldAccessTypedExprPtr>{},
+        std::vector<core::FieldAccessTypedExprPtr>{},
+        std::vector<std::string>{"s"},
+        std::vector<core::AggregationNode::Aggregate>{
+            {.call = std::make_shared<core::CallTypedExpr>(
+                 outputType,
+                 std::vector<core::TypedExprPtr>{
+                     std::make_shared<core::FieldAccessTypedExpr>(
+                         inputType, "d")},
+                 "sum"),
+             .rawInputTypes = {inputType}}},
+        false,
+        false,
+        source);
+    auto aggregators = toReduceAggregators(
+        *aggregation,
+        core::AggregationNode::Step::kSingle,
+        aggregation->outputType(),
+        {nullptr},
+        {std::nullopt});
+
+    auto stream = cudf::get_default_stream();
+    auto input = makeDecimalColumn<int64_t>(values, 2, nullptr, stream);
+    std::vector<cudf::column_view> columns{input->view()};
+    auto result = aggregators.front()->doReduce(
+        cudf::table_view{columns},
+        outputType,
+        input->size(),
+        stream,
+        cudf::get_current_device_resource_ref());
+
+    ASSERT_EQ(result->size(), 1);
+    ASSERT_EQ(result->null_count(), 0);
+    EXPECT_EQ(result->type(), cudf_velox::veloxToCudfDataType(outputType));
+    EXPECT_EQ(
+        copyColumnData<int128_t>(result->view(), stream),
+        std::vector<int128_t>{expected});
+  };
+
+  testRescale({12'345, 100}, DECIMAL(38, 3), 124'450);
+  // Cast-before-sum truncates each 0.06 to 0.0, instead of summing to 0.12 and
+  // then truncating the result to 0.1.
+  testRescale({6, 6}, DECIMAL(38, 1), 0);
+  testRescale({-16, -16}, DECIMAL(38, 1), -2);
+}
+
 // Masked groupby sum: the mask null-injects raw input so cuDF sum excludes
 // masked rows. Group 3 is fully masked out -> NULL. Runs on GPU (fallback off).
 TEST_F(CudfDecimalTest, decimalSumMaskedGroupbySingle) {
@@ -1234,31 +1298,35 @@ TEST_F(CudfDecimalTest, decimalSumGroupbySingleDecimal64Overflow) {
   facebook::velox::test::assertEqualVectors(expected, result);
 }
 
-TEST_F(CudfDecimalTest, decimalSumGlobalPartialFinalDecimal64Overflow) {
-  // Global SUM whose total overflows DECIMAL64; exercises the partial raw sum
-  // (serialized to VARBINARY) and the final merge, both in 128 bits.
+TEST_F(CudfDecimalTest, decimalSumGlobalDecimal64Overflow) {
+  // 12 values of 9e17 (DECIMAL(18,0)) sum to 1.08e19, past 2^63. Exercise both
+  // the single path and the partial state serialization and final merge.
   constexpr int64_t kBig = 900'000'000'000'000'000;
   constexpr int kNumRows = 12;
   std::vector<int64_t> values(kNumRows, kBig);
 
   auto input =
       makeRowVector({"d"}, {makeFlatVector<int64_t>(values, DECIMAL(18, 0))});
-
-  std::vector<RowVectorPtr> vectors = {input};
-
   const int128_t expectedSum = static_cast<int128_t>(kBig) * kNumRows;
-  auto plan = exec::test::PlanBuilder()
-                  .values(vectors)
-                  .partialAggregation({}, {"sum(d) AS s"})
-                  .finalAggregation()
-                  .planNode();
-
   auto expected = makeRowVector(
       {"s"}, {makeFlatVector<int128_t>({expectedSum}, DECIMAL(38, 0))});
 
-  auto result =
-      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
-  facebook::velox::test::assertEqualVectors(expected, result);
+  auto testAggregation = [&](bool partial) {
+    auto builder = exec::test::PlanBuilder().values({input});
+    auto plan = partial
+        ? builder.partialAggregation({}, {"sum(d) AS s"})
+              .finalAggregation()
+              .planNode()
+        : builder.singleAggregation({}, {"sum(d) AS s"}).planNode();
+    auto result =
+        facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(
+            pool());
+    facebook::velox::test::assertEqualVectors(expected, result);
+  };
+
+  for (bool partial : {false, true}) {
+    testAggregation(partial);
+  }
 }
 
 TEST_F(CudfDecimalTest, decimalSumPartialFinalVarbinaryNullGroup) {

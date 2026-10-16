@@ -29,6 +29,13 @@ struct DecimalSumStateColumns {
   std::unique_ptr<cudf::column> count;
 };
 
+/** Directly reduces DECIMAL64 input into a sum at the specified scale. */
+DecimalSumStateColumns reduceDecimal64SumCount(
+    const cudf::column_view& input,
+    numeric::scale_type outputScale,
+    cuda::stream_ref stream,
+    rmm::device_async_resource_ref mr);
+
 /**
  * Decodes intermediate decimal SUM aggregate state stored as a cuDF STRING
  * column (fixed-size packed bytes per row, converted from Velox VARBINARY) into
