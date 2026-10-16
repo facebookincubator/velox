@@ -15,53 +15,60 @@
  */
 #pragma once
 
+#include "velox/exec/ExchangeClient.h"
 #include "velox/experimental/ucx-exchange/UcxExchangeQueue.h"
 #include "velox/experimental/ucx-exchange/UcxExchangeSource.h"
 
 namespace facebook::velox::ucx_exchange {
 
-// Handle for a set of producers. This may be shared by multiple UcxExchanges,
-// one per consumer thread.
+/// Handle for a set of producers reached over UCX, buffering the
+/// cudf::packed_columns they push in a UcxExchangeQueue. This may be shared by
+/// multiple UcxExchange operators, one per consumer thread.
+///
+/// This is the client of the UCX transport (core::TransportKind::kUcx). Its
+/// data plane -- next() and queue() -- is deliberately not part of the
+/// exec::ExchangeClient interface: the payloads are GPU buffers rather than
+/// serialized pages. The UcxExchange operator is registered together with this
+/// client in exec::ExchangeTransportRegistry, so it always knows the concrete
+/// client type and reaches the data plane directly.
 class UcxExchangeClient
-    : public std::enable_shared_from_this<UcxExchangeClient> {
+    : public exec::ExchangeClient,
+      public std::enable_shared_from_this<UcxExchangeClient> {
  public:
-  // used for some primitive type of flow control, limits the size of elements
-  // in the UcxExchangeQueue
+  /// Flow control limit on the number of elements buffered in the queue.
   static constexpr int32_t kDefaultMaxQueuedColumns = 32;
-  static constexpr std::chrono::milliseconds kRequestDataMaxWait{100};
 
+  /// @param taskId Id of the consuming task, for logging.
+  /// @param destination Partition the consuming task reads. Only validated:
+  /// each split URL names the partition its source fetches.
+  /// @param numberOfConsumers Number of UcxExchange operators sharing this
+  /// client.
   UcxExchangeClient(
       std::string taskId,
       int destination,
-      int32_t numberOfConsumers,
-      int32_t requestDataSizesMaxWaitSec = 10)
-      : taskId_{std::move(taskId)},
-        destination_(destination),
-        maxQueuedColumns_(kDefaultMaxQueuedColumns),
-        kRequestDataSizesMaxWaitSec_(requestDataSizesMaxWaitSec),
-        queue_(std::make_shared<UcxExchangeQueue>(numberOfConsumers)) {
-    VELOX_CHECK_GE(
-        destination, 0, "Exchange client destination must not be negative");
-  }
+      int32_t numberOfConsumers);
 
-  ~UcxExchangeClient();
+  ~UcxExchangeClient() override;
 
-  // Creates a UCX exchange source and starts fetching data from the specified
-  // upstream task. If 'close' has been called already, creates an exchange
-  // source and immediately closes it to notify the upstream task that data is
-  // no longer needed. Repeated calls with the same 'taskId' are ignored.
-  void addRemoteTaskId(std::string_view remoteTaskId);
+  /// Creates a UCX exchange source and starts fetching data from the upstream
+  /// task identified by 'remoteTaskId'. If close() has been called already,
+  /// creates an exchange source and immediately closes it to notify the
+  /// upstream task that its data is no longer needed. Repeated calls with the
+  /// same 'remoteTaskId' are ignored.
+  void addRemoteTaskId(std::string_view remoteTaskId) override;
 
-  void noMoreRemoteTasks();
+  void noMoreRemoteTasks() override;
 
-  // Closes all exchange sources.
-  void close();
+  void close() override;
 
-  // Returns runtime statistics aggregated across all of the exchange sources.
-  // ExchangeClient is expected to report background CPU time by including a
-  // runtime metric named Operator::kBackgroundCpuTimeNanos.
-  folly::F14FastMap<std::string, RuntimeMetric> stats() const;
+  folly::F14FastMap<std::string, RuntimeMetric> stats() const override;
 
+  std::string toString() const override;
+
+  folly::dynamic toJson() const override;
+
+  /// Returns the queue the received packed tables are buffered in. Part of the
+  /// UCX data plane, used by the UcxExchange operator and by UcxExchangeSource.
   const std::shared_ptr<UcxExchangeQueue>& queue() const {
     return queue_;
   }
@@ -71,36 +78,22 @@ class UcxExchangeClient
   /// If no data is available returns a nullptr and sets 'atEnd' to true if no
   /// more data is expected. If data is still expected, sets 'atEnd' to false
   /// and sets 'future' to a Future that will complete when data arrives.
-  ///
   PackedTableWithStreamPtr
   next(int consumerId, bool* atEnd, ContinueFuture* future);
-
-  std::string toString() const;
-
-  folly::dynamic toJson() const;
-
-  std::chrono::seconds requestDataSizesMaxWaitSec() const {
-    return kRequestDataSizesMaxWaitSec_;
-  }
-
-  const std::unordered_set<std::string>& getRemoteTaskIdList() const {
-    return remoteTaskIds_;
-  }
 
  private:
   // Handy for ad-hoc logging.
   const std::string taskId_;
-  const int destination_;
   const int32_t maxQueuedColumns_;
-  const std::chrono::seconds kRequestDataSizesMaxWaitSec_;
 
   const std::shared_ptr<UcxExchangeQueue> queue_;
 
   std::unordered_set<std::string> remoteTaskIds_;
   std::vector<std::shared_ptr<UcxExchangeSource>> sources_;
+  // Guarded by queue_->mutex().
   bool closed_{false};
 
-  // Total number of packed_clumns in flight.
+  // Total number of packed columns in flight.
   int64_t totalPendingColumns_{0};
 
   // Diagnostic counters for progress and flow control.

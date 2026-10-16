@@ -55,6 +55,12 @@ class UcxExchange : public SourceOperator, public cudf_velox::NvtxHelper {
 
   void close() override;
 
+  /// Returns kInput for a MergeExchangeNode, whose output the CudfOrderBy
+  /// spliced in behind this operator reports, and kBoth otherwise.
+  core::PlanNode::Boundary planNodeBoundary() const override {
+    return planNodeBoundary_;
+  }
+
  private:
   // Invoked to create exchange client for remote tasks. The function shuffles
   // the source task ids first to randomize the source tasks we fetch data from.
@@ -88,6 +94,10 @@ class UcxExchange : public SourceOperator, public cudf_velox::NvtxHelper {
   const bool processSplits_;
   const int pipelineId_;
   const int driverId_;
+
+  // See planNodeBoundary().
+  const core::PlanNode::Boundary planNodeBoundary_;
+
   bool noMoreSplits_ = false;
 
   // A future received from Task::getSplitOrFuture(). It will be complete when

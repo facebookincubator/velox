@@ -22,6 +22,7 @@ set(
   UcxExchangeServer.cpp
   UcxExchangeQueue.cpp
   UcxExchangeClient.cpp
+  UcxExchangeRegistration.cpp
   Communicator.cpp
   Acceptor.cpp
   EndpointRef.cpp
