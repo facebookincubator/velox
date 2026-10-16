@@ -68,6 +68,7 @@ add_executable(
   MaskTest.cpp
   MightContainTest.cpp
   MonotonicallyIncreasingIdTest.cpp
+  ParseUrlTest.cpp
   RaiseErrorTest.cpp
   RandStrTest.cpp
   RandTest.cpp
