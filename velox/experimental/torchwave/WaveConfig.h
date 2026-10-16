@@ -152,6 +152,25 @@ struct WaveConfig {
   // actual thread block clock distribution.
   bool autoAdjustCost{true};
 
+  // Ablation knobs.  Each switches one optimization off so its contribution
+  // can be measured by comparing runtimes; none is meant for production use.
+
+  // If true, share a step's blocks among its ops by element count alone,
+  // ignoring each op's declared unit cost.
+  bool uniformCost{false};
+
+  // If true, launch each op of a step on its own instead of putting all of a
+  // step's ops in one kernel launch.
+  bool launchPerOp{false};
+
+  // If false, compile every structurally identical subgraph of a node
+  // separately instead of reusing the first one's ProjectOperation.
+  bool dedupProjectOps{true};
+
+  // If true, wait for the torch stream after every standalone that does
+  // device work, so standalones stop overlapping the wave kernels.
+  bool serializeStandalones{false};
+
   // If true, reuse a value's buffer in place when an op is its unique last use
   // (turning copying ops into in-place ops), and drop clones that no consumer
   // needs. On by default.

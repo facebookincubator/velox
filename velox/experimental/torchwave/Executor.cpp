@@ -603,6 +603,9 @@ void runStandalones(
       executeNode(
           actualNode, kernelIt->second, *state.frame, &state.traceState);
     }
+    if (!metadataOnly && WaveConfig::get().serializeStandalones) {
+      syncTorchDefaultStream();
+    }
     if (timing) {
       // Per-op GPU attribution needs a sync after each op, which serializes the
       // standalones against each other and against the wave stream. That is the

@@ -3610,7 +3610,8 @@ std::unique_ptr<CompiledNode> CompileCtx::compileNode(ProjectNode& project) {
   // and either reuse a duplicate ProjectOperation or build a new one.
   auto generateNode = [&](NodeCP genNode) {
     auto sg = extractSubgraph(genNode, project.inputs(), placed_);
-    auto it = projectOps_.find(sg);
+    auto it = WaveConfig::get().dedupProjectOps ? projectOps_.find(sg)
+                                                : projectOps_.end();
     if (it != projectOps_.end()) {
       ops_.emplace_back(it->second, sg, ivalueStorage_);
       addDuplicateExtraBindings(
