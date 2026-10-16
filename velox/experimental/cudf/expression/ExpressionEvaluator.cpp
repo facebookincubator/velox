@@ -338,14 +338,43 @@ bool isCheckedDecimalArithmetic(const core::TypedExprPtr& expr) {
       name == "mod";
 }
 
-/// A checked decimal operation is safe under branch masking only if at least
-/// one of its inputs still carries the masked-row null to that operation.
-bool checkedDecimalOpsPreserveMaskedRows(const core::TypedExprPtr& expr) {
-  if (isCheckedDecimalArithmetic(expr) && !preservesMaskedRowNull(expr)) {
+/// Calls whose cuDF implementation raises on row data but skips null rows.
+/// Branch masking exists to keep the rows a conditional discards away from
+/// these.
+bool isFailFastCall(const core::TypedExprPtr& expr) {
+  if (isCheckedDecimalArithmetic(expr)) {
+    return true;
+  }
+  if (expr->kind() != core::ExprKind::kCall) {
+    return false;
+  }
+  const auto name =
+      unprefixedFunctionName(*expr->asUnchecked<core::CallTypedExpr>());
+  return name == "subscript" || name == "element_at" || name == "get" ||
+      name == "like";
+}
+
+bool containsFailFastCall(const core::TypedExprPtr& expr) {
+  if (isFailFastCall(expr)) {
+    return true;
+  }
+  if (expr->isLambdaKind()) {
+    return containsFailFastCall(
+        expr->asUnchecked<core::LambdaTypedExpr>()->body());
+  }
+  return std::ranges::any_of(expr->inputs(), [](const auto& input) {
+    return containsFailFastCall(input);
+  });
+}
+
+/// A fail-fast call is safe under branch masking only if at least one of its
+/// inputs still carries the masked-row null to that call.
+bool failFastCallsPreserveMaskedRows(const core::TypedExprPtr& expr) {
+  if (isFailFastCall(expr) && !preservesMaskedRowNull(expr)) {
     return false;
   }
   return std::ranges::all_of(expr->inputs(), [](const auto& input) {
-    return checkedDecimalOpsPreserveMaskedRows(input);
+    return failFastCallsPreserveMaskedRows(input);
   });
 }
 
@@ -3054,11 +3083,24 @@ std::shared_ptr<FunctionExpression> FunctionExpression::create(
   }
 
   if (node->function_ && isConditionalFunction(expr)) {
-    node->propagateActivity_.reserve(node->subexpressions_.size());
+    node->branchMasking_.reserve(node->subexpressions_.size());
     for (const auto& input : expr->inputs()) {
-      if (!input->isConstantKind() && !input->isInputKind()) {
-        node->propagateActivity_.push_back(
-            !checkedDecimalOpsPreserveMaskedRows(input));
+      if (input->isConstantKind() || input->isInputKind()) {
+        continue;
+      }
+      auto& masking = node->branchMasking_.emplace_back();
+      masking.mask = containsFailFastCall(input);
+      if (!masking.mask) {
+        continue;
+      }
+      masking.propagateActivity = !failFastCallsPreserveMaskedRows(input);
+      masking.readsInput.resize(inputRowSchema->size(), false);
+      std::unordered_set<std::string> fields;
+      collectReferencedInputFields(input, fields);
+      for (const auto& field : fields) {
+        if (auto index = inputRowSchema->getChildIdxIfExists(field)) {
+          masking.readsInput[*index] = true;
+        }
       }
     }
   }
@@ -3162,10 +3204,12 @@ cuda::device_buffer<std::byte> makeBranchRowMask(
   return limitToActiveRows(std::move(*mask));
 }
 
-/// Views over \p inputs' data with \p rowMask ANDed into every null mask, so a
-/// branch subtree sees the rows its conditional discards as null. The masks
-/// travel with the views because the views only borrow them, and a subtree
-/// result can itself be a view (e.g. a bare field reference).
+/// Views over \p inputs' data with \p rowMask ANDed into the null mask of each
+/// column \p readsInput marks, so a branch subtree sees the rows its
+/// conditional discards as null. Columns the subtree never reads pass through
+/// unchanged. The masks travel with the views because the views only borrow
+/// them, and a subtree result can itself be a view (e.g. a bare field
+/// reference).
 struct MaskedInputs {
   std::vector<cudf::column_view> views;
   std::vector<cuda::device_buffer<std::byte>> masks;
@@ -3173,14 +3217,17 @@ struct MaskedInputs {
 
 MaskedInputs maskInputRows(
     const std::vector<cudf::column_view>& inputs,
+    const std::vector<bool>& readsInput,
     const cudf::bitmask_type* rowMask,
     cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   MaskedInputs masked;
   masked.views.reserve(inputs.size());
   masked.masks.reserve(inputs.size());
-  for (const auto& input : inputs) {
-    if (input.size() == 0) {
+  for (size_t column = 0; column < inputs.size(); ++column) {
+    const auto& input = inputs[column];
+    const bool read = column >= readsInput.size() || readsInput[column];
+    if (!read || input.size() == 0) {
       masked.views.push_back(input);
       continue;
     }
@@ -3349,10 +3396,11 @@ ColumnOrView FunctionExpression::evalWithActivity(
 
     if (maskBranches) {
       // Branches are materialized over every row before copy_if_else selects,
-      // so a fail-fast kernel in one would abort the batch over rows the
-      // conditional discards. Hand each branch inputs whose null mask excludes
-      // the rows it does not supply; the kernels already skip null rows. Velox
-      // CPU narrows a SelectivityVector per branch instead.
+      // so a fail-fast call in one would abort the batch over rows the
+      // conditional discards. Hand each such branch inputs whose null mask
+      // excludes the rows it does not supply; the calls already skip null
+      // rows. A branch without one cannot abort, and copy_if_else discards its
+      // other rows. Velox CPU narrows a SelectivityVector per branch instead.
       auto condition =
           evalSubexpression(0, inputColumnViews, activeRows, stream, mr);
       const auto conditionView = asView(condition);
@@ -3361,6 +3409,12 @@ ColumnOrView FunctionExpression::evalWithActivity(
       branchInputs.reserve(subexpressions_.size() - 1);
       branchRowMasks.reserve(subexpressions_.size() - 1);
       for (size_t branch = 1; branch < subexpressions_.size(); ++branch) {
+        const auto& masking = branchMasking_[branch];
+        if (!masking.mask) {
+          subexprResults.push_back(
+              subexpressions_[branch]->eval(inputColumnViews, stream, mr));
+          continue;
+        }
         branchRowMasks.push_back(makeBranchRowMask(
             conditionView,
             /*takeWhenTrue=*/operandIndex[branch] == 1,
@@ -3369,14 +3423,14 @@ ColumnOrView FunctionExpression::evalWithActivity(
             mr));
         const auto* branchRows = reinterpret_cast<const cudf::bitmask_type*>(
             branchRowMasks.back().data());
-        branchInputs.push_back(
-            maskInputRows(inputColumnViews, branchRows, stream, mr));
-        // Masked inputs suffice while every path to a checked decimal op
+        branchInputs.push_back(maskInputRows(
+            inputColumnViews, masking.readsInput, branchRows, stream, mr));
+        // Masked inputs suffice while every path to a fail-fast call
         // propagates nulls. A null-eliminating node such as coalesce can turn
         // an excluded row valid again, so such a branch reapplies its mask
         // after every intermediate result instead.
         const bool propagate =
-            activeRows != nullptr || propagateActivity_[branch];
+            activeRows != nullptr || masking.propagateActivity;
         subexprResults.push_back(evalSubexpression(
             branch,
             branchInputs.back().views,

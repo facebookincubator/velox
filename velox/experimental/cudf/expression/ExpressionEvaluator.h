@@ -198,10 +198,21 @@ class FunctionExpression : public CudfExpression {
   // FieldAccess/Dereference expressions. -1 for non-nested or non-field
   // expressions.
   int32_t fieldIndex_{-1};
-  // For if/switch, aligned with subexpressions_: true for a branch whose
-  // checked decimal arithmetic can see an excluded row as valid, so its
-  // evaluation must reapply the branch mask to every intermediate result.
-  std::vector<bool> propagateActivity_;
+
+  struct BranchMasking {
+    // The subtree has a call that raises on row data, so the rows the
+    // conditional discards must be hidden from it.
+    bool mask{false};
+    // A null-eliminating node can turn a discarded row valid again before it
+    // reaches such a call, so the mask is reapplied to every intermediate
+    // result.
+    bool propagateActivity{false};
+    // Indexed by input column; only the columns the subtree reads are masked.
+    std::vector<bool> readsInput;
+  };
+  // For if/switch, aligned with subexpressions_. Entry 0, the condition, is
+  // unused.
+  std::vector<BranchMasking> branchMasking_;
 
   RowTypePtr inputRowSchema_;
 };
