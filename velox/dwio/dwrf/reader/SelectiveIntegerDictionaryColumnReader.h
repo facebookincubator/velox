@@ -47,6 +47,8 @@ class SelectiveIntegerDictionaryColumnReader
 
   uint64_t skip(uint64_t numValues) override;
 
+  void getValues(const RowSet& rows, VectorPtr* result) override;
+
   void read(int64_t offset, const RowSet& rows, const uint64_t* incomingNulls)
       override;
 
