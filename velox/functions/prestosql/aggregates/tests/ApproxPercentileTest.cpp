@@ -447,6 +447,37 @@ TEST_F(ApproxPercentileTest, partialFull) {
   waitForAllTasksToBeDeleted();
 }
 
+TEST_F(ApproxPercentileTest, partialFinalAbandonWithWeight) {
+  std::vector<RowVectorPtr> data = {
+      makeRowVector({
+          makeFlatVector<int32_t>(150, [](auto row) { return row; }),
+          makeFlatVector<int32_t>(150, [](auto row) { return row; }),
+          makeFlatVector<int64_t>(150, [](auto /*row*/) { return 1; }),
+      }),
+      makeRowVector({
+          makeFlatVector<int32_t>(150, [](auto row) { return row; }),
+          makeFlatVector<int32_t>(150, [](auto row) { return row; }),
+          makeFlatVector<int64_t>(150, [](auto /*row*/) { return 1; }),
+      }),
+  };
+
+  createDuckDbTable(data);
+
+  auto plan =
+      PlanBuilder()
+          .values(data)
+          .partialAggregation({"c0"}, {"approx_percentile(c1, c2, 0.5, 0.01)"})
+          .finalAggregation()
+          .planNode();
+
+  AssertQueryBuilder(duckDbQueryRunner_)
+      .config(core::QueryConfig::kAbandonPartialAggregationMinRows, "100")
+      .config(core::QueryConfig::kAbandonPartialAggregationMinPct, "50")
+      .maxDrivers(1)
+      .plan(plan)
+      .assertResults("SELECT c0, c0 FROM tmp GROUP BY 1");
+}
+
 TEST_F(ApproxPercentileTest, finalAggregateAccuracy) {
   auto batch = makeRowVector(
       {makeFlatVector<int32_t>(1000, [](auto row) { return row; })});
