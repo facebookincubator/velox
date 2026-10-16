@@ -1080,6 +1080,24 @@ TEST_F(RPCOperatorTest, localOnlyPerRowPayloadMemoryIsAccounted) {
   EXPECT_GT(memoryStats.cumulativeExternalBytes, 0);
 }
 
+TEST_F(RPCOperatorTest, invalidRequestRowsAreCountedByErrorKind) {
+  DeferredAdmissionRPCFunction::reset();
+  auto input = makeRowVector(
+      {"prompt"}, {makeFlatVector<StringView>({"live prompt", "local error"})});
+  auto plan = makeRPCNode(
+      PlanBuilder().values({input}).planNode(),
+      {"prompt"},
+      "deferred_admission_rpc");
+
+  std::shared_ptr<Task> task;
+  AssertQueryBuilder(plan).maxDrivers(1).copyResults(pool(), task);
+
+  const auto planStats = toPlanStats(task->taskStats());
+  const auto& customStats = planStats.at(plan->id()).customStats;
+  ASSERT_EQ(customStats.count(RPCOperator::kRpcErrorKindInvalidRequest), 1);
+  EXPECT_EQ(customStats.at(RPCOperator::kRpcErrorKindInvalidRequest).sum, 1);
+}
+
 TEST_F(RPCOperatorTest, localOnlyBatchPreservesPendingAdmittedRows) {
   DeferredAdmissionBatchRPCFunction::reset();
   std::vector<RowVectorPtr> inputs{
