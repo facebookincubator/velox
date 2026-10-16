@@ -16,6 +16,8 @@
 
 #pragma once
 
+#include <folly/CancellationToken.h>
+
 #include "velox/common/base/Counters.h"
 #include "velox/common/base/StatsReporter.h"
 #include "velox/common/future/VeloxPromise.h"
@@ -30,7 +32,9 @@ class ArbitrationOperation {
   ArbitrationOperation(
       ScopedArbitrationParticipant&& pool,
       uint64_t requestBytes,
-      uint64_t timeoutNs);
+      uint64_t timeoutNs,
+      folly::CancellationToken taskToken = {},
+      folly::CancellationToken operationToken = {});
 
   ~ArbitrationOperation();
 
@@ -66,6 +70,23 @@ class ArbitrationOperation {
   /// Returns true if the corresponding arbitration participant has been
   /// aborted.
   bool aborted() const;
+
+  bool canBeCancelled() const {
+    return taskToken_.canBeCancelled() || operationToken_.canBeCancelled();
+  }
+
+  bool cancellationRequested() const {
+    return taskToken_.isCancellationRequested() ||
+        operationToken_.isCancellationRequested();
+  }
+
+  const folly::CancellationToken& taskCancellationToken() const {
+    return taskToken_;
+  }
+
+  const folly::CancellationToken& operationCancellationToken() const {
+    return operationToken_;
+  }
 
   /// Invoked to set the grow targets for this arbitration operation based on
   /// the request size.
@@ -154,6 +175,8 @@ class ArbitrationOperation {
 
   const uint64_t requestBytes_;
   const uint64_t timeoutNs_;
+  const folly::CancellationToken taskToken_;
+  const folly::CancellationToken operationToken_;
 
   // Time when this operation was created and enqueued, before it starts
   // running. See Stats for how the timestamps carve the timeline.
