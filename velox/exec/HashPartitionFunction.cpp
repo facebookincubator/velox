@@ -13,8 +13,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include <velox/exec/HashPartitionFunction.h>
-#include <velox/exec/VectorHasher.h>
+#include "velox/exec/HashPartitionFunction.h"
+#include "velox/exec/VectorHasher.h"
 
 #include "velox/common/base/XxHashInline.h"
 

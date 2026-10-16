@@ -16,12 +16,12 @@
 
 #include <folly/container/F14Set.h>
 
-#include <velox/vector/TypeAliases.h>
 #include "velox/expression/EvalCtx.h"
 #include "velox/expression/Expr.h"
 #include "velox/expression/VectorFunction.h"
 #include "velox/functions/lib/CheckedArithmetic.h"
 #include "velox/functions/lib/LambdaFunctionUtil.h"
+#include "velox/vector/TypeAliases.h"
 
 namespace facebook::velox::functions {
 namespace {

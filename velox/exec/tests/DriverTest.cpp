@@ -13,10 +13,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/exec/Driver.h"
 #include <folly/OperationCancelled.h>
 #include <folly/Unit.h>
 #include <folly/init/Init.h>
-#include <velox/exec/Driver.h>
 #include <memory>
 #include "folly/synchronization/EventCount.h"
 #include "velox/common/base/tests/GTestUtils.h"

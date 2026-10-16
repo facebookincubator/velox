@@ -15,8 +15,8 @@
  */
 
 #include "velox/dwio/dwrf/writer/ColumnWriter.h"
-#include <velox/dwio/common/exception/Exception.h>
 #include "velox/dwio/common/ChainedBuffer.h"
+#include "velox/dwio/common/exception/Exception.h"
 #include "velox/dwio/dwrf/common/EncoderUtil.h"
 #include "velox/dwio/dwrf/writer/DictionaryEncodingUtils.h"
 #include "velox/dwio/dwrf/writer/EntropyEncodingSelector.h"

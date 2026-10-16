@@ -18,11 +18,11 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include <sys/mman.h>
-#include <velox/type/Type.h>
 #include <functional>
 #include <optional>
 #include <string>
 #include <vector>
+#include "velox/type/Type.h"
 
 #include "velox/common/base/VeloxException.h"
 #include "velox/common/base/tests/GTestUtils.h"

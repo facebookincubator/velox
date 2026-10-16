@@ -19,7 +19,7 @@
 
 #include <folly/Random.h>
 #include <gtest/gtest.h>
-#include <velox/common/memory/Memory.h>
+#include "velox/common/memory/Memory.h"
 
 using namespace facebook::velox::dwio::common;
 using namespace facebook::velox;

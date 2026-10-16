@@ -15,7 +15,7 @@
  */
 
 #include <gtest/gtest.h>
-#include <velox/buffer/Buffer.h>
+#include "velox/buffer/Buffer.h"
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 

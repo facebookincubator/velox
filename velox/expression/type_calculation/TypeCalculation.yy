@@ -1,7 +1,7 @@
 %{
 #define yyFlexLexer veloxtcFlexLexer
 #include <FlexLexer.h>
-#include <velox/common/base/Exceptions.h>
+#include "velox/common/base/Exceptions.h"
 %}
 %require "3.0.4"
 %language "C++"
