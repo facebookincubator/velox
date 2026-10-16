@@ -22,6 +22,7 @@
 ///   --fuzzer_seed=N           Fixed seed, 0=random (default: 42)
 ///   --fuzzer_compression      Enable compression testing (default: true)
 
+#include <folly/init/Init.h>
 #include <gflags/gflags.h>
 #include <gtest/gtest.h>
 
@@ -406,6 +407,137 @@ TYPED_TEST(HuffmanFuzzerTest, correctness) {
   fuzzer.run();
 }
 
+// FrequencyPartition: every non-bool type. Each indexed layout restores the
+// original row order, so it runs through the positional fuzzer with nested
+// selection choosing the index streams' encodings; TierTagArray also runs with
+// and without resolving tier values at construction.
+using FrequencyPartitionTypes = ::testing::Types<
+    FrequencyPartitionEncoding<int8_t>,
+    FrequencyPartitionEncoding<uint8_t>,
+    FrequencyPartitionEncoding<int16_t>,
+    FrequencyPartitionEncoding<uint16_t>,
+    FrequencyPartitionEncoding<int32_t>,
+    FrequencyPartitionEncoding<uint32_t>,
+    FrequencyPartitionEncoding<int64_t>,
+    FrequencyPartitionEncoding<uint64_t>,
+    FrequencyPartitionEncoding<float>,
+    FrequencyPartitionEncoding<double>,
+    FrequencyPartitionEncoding<std::string_view>>;
+
+template <typename E>
+class FrequencyPartitionFuzzerTest : public ::testing::Test {};
+TYPED_TEST_SUITE(FrequencyPartitionFuzzerTest, FrequencyPartitionTypes);
+
+TYPED_TEST(FrequencyPartitionFuzzerTest, indexedCorrectness) {
+  struct IndexCase {
+    FreqPartIndexType indexType;
+    bool resolveTierValues;
+  };
+  for (const auto& indexCase : {
+           IndexCase{FreqPartIndexType::PerTierBitmaps, true},
+           IndexCase{FreqPartIndexType::TierTagArray, true},
+           IndexCase{FreqPartIndexType::TierTagArray, false},
+           IndexCase{FreqPartIndexType::EliasFano, true},
+       }) {
+    SCOPED_TRACE(
+        ::testing::Message()
+        << "indexType=" << static_cast<int>(indexCase.indexType)
+        << " resolveTierValues=" << indexCase.resolveTierValues);
+    Encoding::Options options;
+    options.frequencyPartitionIndex = static_cast<uint8_t>(indexCase.indexType);
+    options.frequencyPartitionResolveTierValues = indexCase.resolveTierValues;
+    EncodingFuzzer<TypeParam> fuzzer(
+        FLAGS_fuzzer_iterations,
+        FLAGS_fuzzer_max_rows,
+        FLAGS_fuzzer_seed,
+        FLAGS_fuzzer_compression,
+        options,
+        /*minDistinctValues=*/1,
+        /*maxDistinctValues=*/std::numeric_limits<uint32_t>::max(),
+        /*largeInputRows=*/0,
+        /*realNestedSelection=*/true);
+    fuzzer.run();
+  }
+}
+
+// Without an index, FrequencyPartition returns rows grouped by tier, so only
+// the multiset of values survives the round trip.
+TYPED_TEST(FrequencyPartitionFuzzerTest, noIndexKeepsValues) {
+  using T = typename TypeParam::cppDataType;
+  auto pool = velox::memory::deprecatedAddDefaultLeafMemoryPool();
+  Buffer dataBuffer(*pool);
+  uint32_t seed = FLAGS_fuzzer_seed;
+  if (seed == 0) {
+    seed = folly::Random::rand32();
+  }
+  LOG(INFO) << "FrequencyPartition NoIndex fuzzer seed: " << seed;
+  std::mt19937 rng(seed);
+
+  // Byte images sort the same way for every T, NaN payloads included.
+  auto sortedBytes = [](std::span<const T> values) {
+    std::vector<std::string> bytes;
+    bytes.reserve(values.size());
+    for (const auto& value : values) {
+      if constexpr (std::is_same_v<T, std::string_view>) {
+        bytes.emplace_back(value);
+      } else {
+        bytes.emplace_back(reinterpret_cast<const char*>(&value), sizeof(T));
+      }
+    }
+    std::sort(bytes.begin(), bytes.end());
+    return bytes;
+  };
+
+  for (uint32_t iter = 0; iter < FLAGS_fuzzer_iterations; ++iter) {
+    const uint32_t rowCount =
+        1 + folly::Random::rand32(rng) % FLAGS_fuzzer_max_rows;
+    std::vector<Vector<T>> datasets;
+    Vector<T> random(pool.get());
+    random.reserve(rowCount);
+    nimble::testing::addRandomData<T>(rng, rowCount, &random, &dataBuffer);
+    datasets.push_back(std::move(random));
+    datasets.push_back(
+        makeLowCardinalityData<T>(*pool, rng, rowCount, &dataBuffer));
+    datasets.push_back(
+        makeDominantValueData<T>(*pool, rng, rowCount, &dataBuffer));
+    datasets.push_back(
+        makeMixedRegimeData<T>(*pool, rng, rowCount, &dataBuffer));
+
+    for (const auto& data : datasets) {
+      SCOPED_TRACE(
+          ::testing::Message() << "seed=" << seed << " iter=" << iter
+                               << " rowCount=" << data.size());
+      Buffer encodeBuffer(*pool);
+      std::string_view encoded;
+      try {
+        encoded = Encoder<TypeParam>::encode(
+            encodeBuffer,
+            data,
+            CompressionType::Uncompressed,
+            /*options=*/{},
+            /*realNestedSelection=*/true);
+      } catch (const NimbleUserError& e) {
+        if (e.errorCode() == error_code::IncompatibleEncoding) {
+          continue;
+        }
+        throw;
+      }
+      std::vector<velox::BufferPtr> stringBuffers;
+      TypeParam encoding(*pool, encoded, [&](uint32_t totalLength) {
+        auto& buf = stringBuffers.emplace_back(
+            velox::AlignedBuffer::allocate<char>(totalLength, pool.get()));
+        return buf->template asMutable<void>();
+      });
+      ASSERT_EQ(encoding.rowCount(), data.size());
+      Vector<T> actual(pool.get(), data.size());
+      encoding.materialize(data.size(), actual.data());
+      ASSERT_EQ(
+          sortedBytes({actual.data(), actual.size()}),
+          sortedBytes({data.data(), data.size()}));
+    }
+  }
+}
+
 #ifdef NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
 // SubIntSplit: 32- and 64-bit numeric types (no bool, no string_view)
 using SubIntSplitTypes = ::testing::Types<
@@ -702,3 +834,11 @@ TYPED_TEST(SubIntSplitFuzzerTest, emptyInputRejected) {
   EXPECT_THROW(Encoder<TypeParam>::encode(buffer, empty), NimbleUserError);
 }
 #endif // NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
+
+// Defines main() through folly::Init, as NimbleWriterFuzzerTest does, so the
+// flags above are parsed; gtest_main would leave them at their defaults.
+int main(int argc, char** argv) {
+  ::testing::InitGoogleTest(&argc, argv);
+  folly::Init init(&argc, &argv);
+  return RUN_ALL_TESTS();
+}
