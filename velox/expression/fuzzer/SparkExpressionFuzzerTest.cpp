@@ -32,12 +32,14 @@
 #include "velox/functions/sparksql/fuzzer/DivideArgTypesGenerator.h"
 #include "velox/functions/sparksql/fuzzer/MakeTimestampArgTypesGenerator.h"
 #include "velox/functions/sparksql/fuzzer/MultiplyArgTypesGenerator.h"
+#include "velox/functions/sparksql/fuzzer/PadArgValuesGenerator.h"
 #include "velox/functions/sparksql/fuzzer/UnscaledValueArgTypesGenerator.h"
 #include "velox/functions/sparksql/registration/Register.h"
 
 using namespace facebook::velox::functions::sparksql::fuzzer;
 using facebook::velox::functions::sparksql::SparkQueryConfig;
 using facebook::velox::fuzzer::ArgTypesGenerator;
+using facebook::velox::fuzzer::ArgValuesGenerator;
 using facebook::velox::test::ReferenceQueryRunner;
 
 DEFINE_int64(
@@ -134,7 +136,9 @@ int main(int argc, char** argv) {
 
   std::unordered_map<std::string, std::shared_ptr<ArgValuesGenerator>>
       argValuesGenerators = {
-          {"levenshtein", std::make_shared<LevenshteinArgValuesGenerator>()}};
+          {"levenshtein", std::make_shared<LevenshteinArgValuesGenerator>()},
+          {"lpad", std::make_shared<PadArgValuesGenerator>()},
+          {"rpad", std::make_shared<PadArgValuesGenerator>()}};
 
   std::shared_ptr<ReferenceQueryRunner> referenceQueryRunner{nullptr};
   return FuzzerRunner::run(
