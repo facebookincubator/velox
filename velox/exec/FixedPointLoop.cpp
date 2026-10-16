@@ -83,7 +83,7 @@ void clearTaskStats(FixedPointChainExecutionStats& chain) {
 // this returns at once for it while its loop keeps running; see the
 // cancellation TODO on FixedPointLoop.  Runs while an error unwinds, so it logs
 // a failure to abort instead of throwing.
-void abortAndWait(const std::vector<std::shared_ptr<exec::Task>>& tasks) {
+void abortAndWait(const std::vector<exec::TaskPtr>& tasks) {
   std::vector<ContinueFuture> futures;
   futures.reserve(tasks.size());
   for (const auto& task : tasks) {
@@ -102,8 +102,7 @@ void abortAndWait(const std::vector<std::shared_ptr<exec::Task>>& tasks) {
 // Waits for each of 'tasks' to finish without holding a thread.  If one fails,
 // aborts the rest and rethrows its error.  Callers pass a named vector: GCC 11
 // fails to compile a braced list in a co_await operand.
-folly::coro::Task<void> awaitTasks(
-    std::vector<std::shared_ptr<exec::Task>> tasks) {
+folly::coro::Task<void> awaitTasks(std::vector<exec::TaskPtr> tasks) {
   for (const auto& task : tasks) {
     co_await task->taskCompletionFuture();
     if (auto error = task->error()) {
@@ -221,16 +220,20 @@ FixedPointLoop::FixedPointLoop(
 
   // One worker per output partition of whichever chain shuffles -- the body,
   // the convergence sequence, or a fixed point nested in either (see
-  // FixedPointNode::numWorkers).
+  // FixedPointNode::numWorkers).  A fixed point that does not shuffle may run
+  // as any number of tasks, each an independent loop over the rows its initial
+  // plans read for its destination.
   const auto& plans = node_->plans();
   numWorkers_ = node_->numWorkers();
-  VELOX_CHECK_LT(
-      workerIndex_,
-      numWorkers_,
-      "Worker destination out of range; create exactly {} FixedPointLoops "
-      "with destinations 0..{}",
-      numWorkers_,
-      numWorkers_ - 1);
+  if (numWorkers_ > 1) {
+    VELOX_CHECK_LT(
+        workerIndex_,
+        numWorkers_,
+        "Worker destination out of range; create exactly {} FixedPointLoops "
+        "with destinations 0..{}",
+        numWorkers_,
+        numWorkers_ - 1);
+  }
 
   // Every id a caller may address a split to.  The fixed point itself takes a
   // peer worker's remote split; everything else is a split-requiring source in
@@ -699,7 +702,7 @@ void FixedPointLoop::appendOutput(const std::string& stateEntry) {
 }
 
 void FixedPointLoop::routeSplits(
-    const std::shared_ptr<exec::Task>& task,
+    const exec::TaskPtr& task,
     const core::PlanNodeId& sourceId) {
   std::lock_guard<std::mutex> l(splitsMutex_);
   const bool complete = splitsComplete_.contains(sourceId);
@@ -901,17 +904,15 @@ folly::coro::Task<TaskStats> FixedPointLoop::consumePlan(
 }
 
 void FixedPointLoop::feedInitSplits(
-    const std::shared_ptr<exec::Task>& task,
+    const exec::TaskPtr& task,
     const core::PlanNodePtr& plan) {
-  // An Exchange source reads the upstream producer the coordinator launched and
-  // named via options_.upstreamExchangeUri (keyed by the Exchange node id); the
-  // worker pulls its own partition by task destination.
-  if (auto exchangeId = findExchangeNodeId(plan)) {
-    VELOX_CHECK(
-        options_.upstreamExchangeUri,
-        "Initial plan reads via Exchange {}; the coordinator must set "
-        "FixedPointOptions::upstreamExchangeUri",
-        *exchangeId);
+  // With options_.upstreamExchangeUri set, an Exchange source reads the one
+  // upstream producer it names (keyed by the Exchange node id); the worker
+  // pulls its own partition by task destination.  Without it, the Exchange
+  // reads the remote splits the coordinator addresses to it, one per upstream
+  // task, like any other split source below.
+  auto exchangeId = findExchangeNodeId(plan);
+  if (exchangeId.has_value() && options_.upstreamExchangeUri) {
     // This branch feeds the Exchange and nothing else, so a connector split the
     // coordinator also assigned has no source to go to.  Fail rather than drop
     // it silently, which would just produce missing rows.
@@ -938,8 +939,9 @@ void FixedPointLoop::feedInitSplits(
     task->noMoreSplits(*exchangeId);
     return;
   }
-  // Any other split source (e.g. a TableScan) reads the coordinator-assigned
-  // source splits; a local source (e.g. Values) needs none.
+  // Any other split source (a TableScan, or an Exchange without the hook)
+  // reads the coordinator-assigned splits; a local source (e.g. Values) needs
+  // none.
   folly::F14FastSet<core::PlanNodeId> sourceIds;
   collectSplitTargets(plan, node_.get(), sourceIds);
   // Splits are held under the id of the node that reads them, so each source
@@ -1012,7 +1014,7 @@ folly::coro::Task<std::vector<RowVectorPtr>> FixedPointLoop::runParallelChain(
   // worker's partition.  Each producer is created under the task id from
   // producerLocation() -- a pure function of (this worker's task id, iteration,
   // plan) -- so a peer can address it knowing only this worker's task id.
-  std::vector<std::shared_ptr<exec::Task>> tasks;
+  std::vector<exec::TaskPtr> tasks;
   tasks.reserve(plans.size());
   const auto planDrivers = distributeDriverBudget(
       iterationDrivers(), plans.size(), singleDriverLastPlan);

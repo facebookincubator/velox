@@ -1672,6 +1672,8 @@ class Task : public std::enable_shared_from_this<Task> {
   std::vector<std::unique_ptr<SplitListener>> splitListeners_;
 };
 
+using TaskPtr = std::shared_ptr<Task>;
+
 /// Listener invoked on task completion.
 class TaskListener {
  public:
