@@ -161,6 +161,15 @@ TextRowReader::TextRowReader(
           std::make_shared<dwio::common::DataBuffer<char>>(contents_->pool)} {
   // Seek to first line at or after the specified region.
   if (contents_->compression == CompressionKind::CompressionKind_NONE) {
+    // With more than 1 header line, a split that does not start at offset 0
+    // can start inside the header lines, and those lines would be read as
+    // rows. Splitting such files is not supported. Presto does not split them.
+    VELOX_USER_CHECK(
+        pos_ == 0 || opts.skipRows() <= 1,
+        "Splits of a text file with more than 1 header line must start at offset 0: offset {}, header lines {}",
+        pos_,
+        opts.skipRows());
+
     // TODO: Inconsistent row skipping behavior (kept for Presto compatibility)
     // Issue: When reading from byte offset > 0, we skip rows inclusively at the
     // start position, but when reading from byte 0, no rows are skipped. This
@@ -179,11 +188,12 @@ TextRowReader::TextRowReader(
         contents_->fileLength - streamPosition_,
         dwio::common::LogType::STREAM);
 
+    // Header lines are at the start of the file, so only the split that starts
+    // at offset 0 skips them. Other splits start after a partial line.
     if (pos_ != 0) {
       unreadData_.clear();
       (void)skipLine();
-    }
-    if (opts.skipRows() > 0) {
+    } else if (opts.skipRows() > 0) {
       (void)seekToRow(opts.skipRows());
     }
   } else {
