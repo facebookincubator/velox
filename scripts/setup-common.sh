@@ -159,7 +159,7 @@ function install_boost {
 function install_protobuf {
   install_abseil
 
-  wget_and_untar https://github.com/protocolbuffers/protobuf/releases/download/v"${PROTOBUF_VERSION}"/protobuf-all-"${PROTOBUF_VERSION}".tar.gz protobuf
+  wget_and_untar https://github.com/protocolbuffers/protobuf/archive/refs/tags/v"${PROTOBUF_VERSION}".tar.gz protobuf
   cmake_install_dir protobuf -Dprotobuf_BUILD_TESTS=OFF -Dprotobuf_ABSL_PROVIDER=package
 }
 

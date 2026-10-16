@@ -16,10 +16,10 @@ include_guard(GLOBAL)
 velox_set_source(absl)
 velox_resolve_dependency(absl CONFIG REQUIRED)
 
-set(VELOX_GRPC_BUILD_VERSION 1.48.1)
+set(VELOX_GRPC_BUILD_VERSION 1.65.5)
 set(
   VELOX_GRPC_BUILD_SHA256_CHECKSUM
-  320366665d19027cda87b2368c03939006a37e0388bfd1091c8d2a96fbc93bd8
+  bdab9cb52e3ee703d6c09d15716bcc10a150b2e9e414182e5b375d32050dba84
 )
 string(
   CONCAT

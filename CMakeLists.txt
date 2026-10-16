@@ -687,9 +687,19 @@ if(
   OR VELOX_ENABLE_GCS
   OR VELOX_ENABLE_NIMBLE
 )
-  # Locate or build protobuf.
+  # Locate or build protobuf. Use CONFIG mode so Protobuf's own
+  # ProtobufConfig.cmake declares the transitive dependencies that
+  # Protobuf 22+ introduced (utf8_range, expanded Abseil components).
+  # The CMake FindProtobuf.cmake module predates these and does not
+  # propagate them, leading to unresolved utf8_range / absl symbols
+  # when statically linking libprotobuf.a.
+  #
+  # The version range (3.21.7...30) accommodates Protobuf's
+  # SameMajorVersion compat policy: a bare "3.21.7" is rejected by
+  # protobuf-config-version.cmake of 26.x because 26 != 3. The range
+  # tells CMake 3.19+ to accept any Protobuf from 3.21.7 up to <30.
   velox_set_source(Protobuf)
-  velox_resolve_dependency(Protobuf 3.21.7 REQUIRED)
+  velox_resolve_dependency(Protobuf 3.21.7...30 CONFIG REQUIRED)
   include_directories(${Protobuf_INCLUDE_DIRS})
 endif()
 
