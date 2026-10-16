@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/exec/Aggregate.h"
+#include "velox/exec/RowContainer.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
@@ -270,6 +272,52 @@ TEST_F(CountDistinctTest, timestampWithTimeZone) {
 
   testAggregations(
       {data}, {"c0"}, {"\"$internal$count_distinct\"(c1)"}, {expected});
+}
+
+TEST_F(CountDistinctTest, destroyInitializedAccumulator) {
+  core::QueryConfig config({});
+  auto function = Aggregate::create(
+      "$internal$count_distinct",
+      core::AggregationNode::Step::kSingle,
+      {VARCHAR()},
+      BIGINT(),
+      config);
+
+  Accumulator accumulator(function.get(), ARRAY(VARCHAR()));
+  RowContainer rowContainer(
+      {},
+      false,
+      {accumulator},
+      {},
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      pool());
+  const auto rowColumn = rowContainer.columnAt(0);
+  function->setOffsets(
+      rowColumn.offset(),
+      rowColumn.nullByte(),
+      rowColumn.nullMask(),
+      rowColumn.initializedByte(),
+      rowColumn.initializedMask(),
+      rowContainer.rowSizeOffset());
+  function->setAllocator(&rowContainer.stringAllocator());
+
+  auto* group = rowContainer.newRow();
+  const auto indices = std::vector<vector_size_t>{0};
+  function->initializeNewGroups(&group, indices);
+
+  const auto input = makeFlatVector<StringView>({"a", "b"});
+  SelectivityVector rows(input->size());
+  std::vector<char*> groups(input->size(), group);
+  function->addRawInput(groups.data(), rows, {input}, false);
+  EXPECT_GT(rowContainer.stringAllocator().currentBytes(), 0);
+
+  function->destroy(folly::Range<char**>(&group, 1));
+  EXPECT_EQ(rowContainer.stringAllocator().currentBytes(), 0);
 }
 
 } // namespace
