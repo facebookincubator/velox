@@ -26,8 +26,9 @@ namespace facebook::velox::functions {
 /// Signed integer types have been remapped to unsigned types (as in the
 /// original) to avoid undefined signed integer overflow and sign extension.
 ///
-/// The mixing steps must stay in the header: they are called per row, so the
-/// bodies have to be visible for inlining into the caller's hash loop.
+/// The hashInt64 and mixing methods must stay in the header: they are called
+/// per row, so the bodies have to be visible for inlining into the caller's
+/// hash loop.
 class Murmur3Hash32Base {
  protected:
   /// Hash the lower int, then combine with higher int, is a fast path of
