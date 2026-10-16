@@ -1171,6 +1171,15 @@ std::string MemoryPoolImpl::treeMemoryUsage(bool skipEmptyPool) const {
   return outTopLeafMemUsages.str() + out.str() + "\n";
 }
 
+namespace {
+// Returns the capacity left after 'reservation'. The reservation can be
+// temporarily larger than the capacity while the pool is under memory
+// arbitration, and then nothing is free.
+uint64_t unreservedCapacity(int64_t capacity, int64_t reservation) {
+  return capacity > reservation ? capacity - reservation : 0;
+}
+} // namespace
+
 uint64_t MemoryPoolImpl::freeBytes() const {
   if (parent_ != nullptr) {
     return parent_->freeBytes();
@@ -1179,12 +1188,7 @@ uint64_t MemoryPoolImpl::freeBytes() const {
   if (capacity_ == kMaxMemory) {
     return 0;
   }
-  if (capacity_ < reservationBytes_) {
-    // NOTE: the memory reservation could be temporarily larger than its
-    // capacity if this memory pool is under memory arbitration processing.
-    return 0;
-  }
-  return capacity_ - reservationBytes_;
+  return unreservedCapacity(capacity_, reservationBytes_);
 }
 
 void MemoryPoolImpl::setReclaimer(std::unique_ptr<MemoryReclaimer> reclaimer) {
@@ -1248,7 +1252,7 @@ uint64_t MemoryPoolImpl::shrink(uint64_t targetBytes) {
   std::lock_guard<std::mutex> l(mutex_);
   // We don't expect to shrink a memory pool without capacity limit.
   VELOX_CHECK_NE(capacity_, kMaxMemory);
-  uint64_t freeBytes = std::max<uint64_t>(0, capacity_ - reservationBytes_);
+  uint64_t freeBytes = unreservedCapacity(capacity_, reservationBytes_);
   if (targetBytes != 0) {
     freeBytes = std::min(targetBytes, freeBytes);
   }

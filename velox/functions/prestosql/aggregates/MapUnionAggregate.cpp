@@ -28,6 +28,12 @@ class MapUnionAggregate : public MapAggregateBase<K, AccumulatorType> {
 
   explicit MapUnionAggregate(TypePtr resultType) : Base(resultType) {}
 
+  bool isReducing() const override {
+    // Duplicate keys across input maps are expected to be rare, so state
+    // generally grows with input cardinality.
+    return false;
+  }
+
   bool supportsToIntermediate() const override {
     return true;
   }
@@ -121,6 +127,7 @@ void registerMapUnionAggregate(
 
         return createMapAggregate<MapUnionAggregate>(resultType);
       },
+      {.ignoreNullInputs = true},
       withCompanionFunctions,
       overwrite);
 }

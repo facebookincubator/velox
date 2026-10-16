@@ -101,7 +101,7 @@ class DeserializerSkipTest : public ::testing::Test {
     const auto rowCount = parser.initialize(serialized);
     auto header = serde::createTabletChunkHeader({
         .rowCount = rowCount,
-        .requiresNullBarrier = parser.requiresNullBarrier(),
+        .requiredBarrier = parser.requiredBarrier(),
         .streamEncodingUsesVarintRowCount =
             parser.streamEncodingUsesVarintRowCount(),
         .streamHasChunkHeader = false,
@@ -960,7 +960,7 @@ TEST_F(DeserializerSkipTest, barrierFlagSetOnlyWhenNestedRowHasNulls) {
     DeserializerOptions dsOpts{};
     serde::StreamDataParser parser{pool_.get()};
     parser.initialize(blob);
-    return parser.requiresNullBarrier();
+    return parser.requiredBarrier();
   };
 
   auto [withNulls, schema1] =

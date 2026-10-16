@@ -71,8 +71,8 @@ class IndexWriter {
       const velox::VectorPtr& input,
       const std::vector<velox::column_index_t>& keyColumnIndices);
 
-  // Validates that the encoding is supported by index key streams.
-  static void validateKeyStreamEncodingLayout(const EncodingLayout& layout);
+  // Validates that the encoding is supported by the flat key layout.
+  static void validateFlatKeyEncodingLayout(const EncodingLayout& layout);
 
   // Returns deduplicated key column indices across multiple column sets.
   static std::vector<velox::column_index_t> getKeyColumnIndices(

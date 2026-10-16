@@ -408,8 +408,9 @@ class ColumnVisitor {
   inline void addNull();
   inline void addOutputRow(vector_size_t row);
 
-  /// Bulk variant of process() with SIMD paths for AlwaysTrue and
-  /// deterministic integer filters; otherwise per-row fallback.
+  /// Processes a run of values. Dense deterministic filters append matches to
+  /// the supplied buffers and update numValues, using SIMD where supported.
+  /// Requires dense rows, a deterministic filter, and no hook or scatter.
   template <bool hasFilter, bool hasHook, bool scatter>
   FOLLY_ALWAYS_INLINE void processRun(
       const T* input,
@@ -428,32 +429,34 @@ class ColumnVisitor {
     }
     if constexpr (
         hasFilter && !hasHook && !scatter && isDense &&
-        TFilter::deterministic &&
-        (std::is_same_v<T, int32_t> || std::is_same_v<T, int64_t> ||
-         std::is_same_v<T, int16_t>)) {
+        TFilter::deterministic) {
       const int32_t firstRow = currentRow();
-      constexpr int32_t kWidth = xsimd::batch<T>::size;
-      constexpr int32_t kIndexLaneCount = xsimd::batch<int32_t>::size;
       int32_t i = 0;
-      while (i + kWidth <= numInput) {
-        auto batch = xsimd::load_unaligned(input + i);
-        processFixedFilter<
-            T,
-            /*filterOnly=*/false,
-            /*scatter=*/false,
-            /*dense=*/true>(
-            batch,
-            kWidth,
-            firstRow + i,
-            filter_,
-            [&](int32_t offset) {
-              return simd::loadGatherIndices<T>(
-                  rows_ + rowIndex_ + i + offset * kIndexLaneCount);
-            },
-            values,
-            filterHits,
-            numValues);
-        i += kWidth;
+      if constexpr (
+          std::is_same_v<T, int32_t> || std::is_same_v<T, int64_t> ||
+          std::is_same_v<T, int16_t>) {
+        constexpr int32_t kWidth = xsimd::batch<T>::size;
+        constexpr int32_t kIndexLaneCount = xsimd::batch<int32_t>::size;
+        while (i + kWidth <= numInput) {
+          auto batch = xsimd::load_unaligned(input + i);
+          processFixedFilter<
+              T,
+              /*filterOnly=*/false,
+              /*scatter=*/false,
+              /*dense=*/true>(
+              batch,
+              kWidth,
+              firstRow + i,
+              filter_,
+              [&](int32_t offset) {
+                return simd::loadGatherIndices<T>(
+                    rows_ + rowIndex_ + i + offset * kIndexLaneCount);
+              },
+              values,
+              filterHits,
+              numValues);
+          i += kWidth;
+        }
       }
       for (; i < numInput; ++i) {
         if (velox::common::applyFilter(filter_, input[i])) {
@@ -465,13 +468,7 @@ class ColumnVisitor {
       rowIndex_ += numInput;
       return;
     }
-    bool atEnd = false;
-    for (int32_t i = 0; i < numInput; ++i) {
-      process(input[i], atEnd);
-      if (atEnd) {
-        return;
-      }
-    }
+    VELOX_UNREACHABLE("Unsupported ColumnVisitor::processRun configuration");
   }
 
   const TFilter& filter() {
@@ -816,6 +813,21 @@ class DictionaryColumnVisitor
       SelectiveColumnReader* reader,
       const RowSet& rows,
       ExtractValues values)
+      : DictionaryColumnVisitor(
+            filter,
+            reader,
+            rows,
+            values,
+            reader->scanState().rawState) {}
+
+  /// Reads the dictionary and filter cache from 'state' instead of the
+  /// reader's scan state. Nimble builds 'state' per encoding chunk.
+  DictionaryColumnVisitor(
+      const TFilter& filter,
+      SelectiveColumnReader* reader,
+      const RowSet& rows,
+      ExtractValues values,
+      RawScanState state)
       : ColumnVisitor<T, TFilter, ExtractValues, isDense>(
             filter,
             reader,
@@ -825,7 +837,7 @@ class DictionaryColumnVisitor
             reader->fileType().type()->kind() == TypeKind::BIGINT        ? 8
                 : reader->fileType().type()->kind() == TypeKind::INTEGER ? 4
                                                                          : 2),
-        state_(reader->scanState().rawState) {}
+        state_(std::move(state)) {}
 
   // Re-reads the cached scan-state snapshot from the reader. Nimble rebuilds
   // the per-chunk filter dictionary at each chunk boundary during a multi-chunk
@@ -899,6 +911,126 @@ class DictionaryColumnVisitor
       return 0;
     }
     return super::currentRow() - previous - 1;
+  }
+
+  /// Processes a batch of non-null dictionary indices read from 'input', a
+  /// separate int32 buffer. 'inputRows' maps each index to its position in the
+  /// requested row set.
+  ///
+  /// Like processRun(), this method handles only non-null values. Projection
+  /// scatters values around null gaps, and filtering appends packed passing
+  /// values and rows. The caller writes the null bits and merges passing nulls
+  /// into filtered output, as the DWRF and Parquet decoders do around
+  /// processRun(). Unlike processRun(), 'input' need not alias the output
+  /// values buffer.
+  // TODO: Deduplicate with filterDictionaryRunSimd() in DecoderUtil.h.
+  void processBulk(
+      const int32_t* input,
+      int32_t numInput,
+      const int32_t* inputRows) {
+    static_assert(!super::kHasHook);
+    static_assert(TFilter::deterministic);
+    if (numInput == 0) {
+      return;
+    }
+    VELOX_DCHECK_EQ(inputRows[0], super::rowIndex_);
+    const auto endRowIndex = inputRows[numInput - 1] + 1;
+    VELOX_CHECK_LE(endRowIndex, super::numRows_);
+    const auto numRows = endRowIndex - super::rowIndex_;
+    const bool scatter = numRows != numInput;
+    if constexpr (
+        std::is_same_v<TFilter, velox::common::AlwaysTrue> &&
+        std::is_same_v<ExtractValues, ExtractToReader>) {
+      if (!inDict()) {
+        auto* values = reinterpret_cast<T*>(super::reader_->rawValues()) +
+            super::reader_->numValues();
+        const auto* dictionary = dict();
+        if (scatter) {
+          for (int32_t i = 0; i < numInput; ++i) {
+            values[inputRows[i] - super::rowIndex_] = dictionary[input[i]];
+          }
+        } else {
+          for (int32_t i = 0; i < numInput; ++i) {
+            values[i] = dictionary[input[i]];
+          }
+        }
+        super::rowIndex_ = endRowIndex;
+        super::addNumValues(numRows);
+        return;
+      }
+    }
+    if constexpr (!hasFilter()) {
+      bool atEnd{false};
+      for (int32_t i = 0; i < numInput; ++i) {
+        super::rowIndex_ = inputRows[i];
+        process(input[i], atEnd);
+        if (atEnd) {
+          return;
+        }
+      }
+      return;
+    }
+
+    constexpr bool kFilterOnly = super::kFilterOnly;
+    constexpr int32_t kWidth = xsimd::batch<int32_t>::size;
+    const auto numOutputValues = super::reader_->numValues();
+    auto numValues = numOutputValues;
+    auto* filterHits = super::outputRows(numInput) - numOutputValues;
+    auto* values = reinterpret_cast<T*>(super::reader_->rawValues());
+    const auto* rows = super::rows_ + super::rowIndex_;
+
+    for (int32_t offset = 0; offset < numInput; offset += kWidth) {
+      const auto width = std::min(kWidth, numInput - offset);
+      const auto indices = xsimd::load_unaligned(input + offset);
+      const auto validLanes = simd::leadingMask<int32_t>(width);
+      const auto cache = simd::maskGather<int32_t, int32_t, 1>(
+          xsimd::broadcast<int32_t>(0),
+          validLanes,
+          reinterpret_cast<const int32_t*>(filterCache() - 3),
+          indices);
+      uint16_t uncachedLanes = simd::toBitMask(
+          (cache & xsimd::batch<int32_t>(kUnknown << 24)) !=
+          xsimd::batch<int32_t>(0));
+      auto passed = simd::toBitMask(cache < xsimd::batch<int32_t>(0));
+      while (uncachedLanes) {
+        const auto lane = bits::getAndClearLastSetBit(uncachedLanes);
+        const auto dictionaryIndex = input[offset + lane];
+        if (applyFilter(super::filter_, dict()[dictionaryIndex])) {
+          filterCache()[dictionaryIndex] = FilterResult::kSuccess;
+          passed |= 1 << lane;
+        } else {
+          filterCache()[dictionaryIndex] = FilterResult::kFailure;
+        }
+      }
+      passed &= bits::lowMask(width);
+      if (!passed) {
+        continue;
+      }
+
+      const auto numPassed = __builtin_popcount(passed);
+      auto outputRows =
+          xsimd::load_unaligned((scatter ? inputRows : rows) + offset);
+      if constexpr (!isDense) {
+        if (scatter) {
+          outputRows = simd::maskGather<int32_t, int32_t, sizeof(int32_t)>(
+              xsimd::broadcast<int32_t>(0),
+              validLanes,
+              super::rows_,
+              outputRows);
+        }
+      }
+      simd::filter(outputRows, passed).store_unaligned(filterHits + numValues);
+      if constexpr (!kFilterOnly) {
+        const auto selectedLanes = simd::byteSetBits(passed);
+        for (int32_t i = 0; i < numPassed; ++i) {
+          values[numValues + i] = dict()[input[offset + selectedLanes[i]]];
+        }
+      }
+      numValues += numPassed;
+    }
+
+    super::rowIndex_ = endRowIndex;
+    super::addNumValues(numValues - numOutputValues);
   }
 
   // Processes 'numInput' dictionary indices in 'input'. Sets 'values'
@@ -1340,6 +1472,7 @@ class StringDictionaryColumnVisitor
   // and produce hits and if not filter only compact the values to
   // remove non-passing. Returns the number of values in the result
   // after processing.
+  // TODO: Deduplicate with filterDictionaryRunSimd() in DecoderUtil.h.
   template <bool hasFilter, bool hasHook, bool scatter>
   void processRun(
       const int32_t* input,
@@ -1377,11 +1510,6 @@ class StringDictionaryColumnVisitor
     }
     constexpr bool filterOnly =
         std::is_same_v<typename super::Extract, DropValues>;
-    // TODO: This inline SIMD loop duplicates the shared
-    // filterDictionaryRunSimd() free function in DecoderUtil.h; rewire
-    // processRun to call it in a follow-up diff. The dedup is split out to keep
-    // this DWRF change separate from the Nimble post-hoc dictionary filter
-    // feature.
     constexpr int32_t kWidth = xsimd::batch<int32_t>::size;
     for (auto i = 0; i < numInput; i += kWidth) {
       auto indices = xsimd::load_unaligned(input + i);

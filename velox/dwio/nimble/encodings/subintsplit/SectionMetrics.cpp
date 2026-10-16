@@ -17,6 +17,14 @@
 
 #include <algorithm>
 
+// Planner context:
+//
+//   section sample -> [fused value stats + frequency counter] -> metrics
+//
+// The collector is reused across the cost grid. Direct-indexed and hashed
+// counting must agree below the cap, and all touched scratch state must be
+// cleared before the next candidate range.
+
 namespace facebook::nimble::subintsplit {
 
 FrequencyCounter::Result FrequencyCounter::countDirect(

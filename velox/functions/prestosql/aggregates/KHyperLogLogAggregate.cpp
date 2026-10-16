@@ -99,6 +99,7 @@ std::vector<exec::AggregateRegistrationResult> registerKHyperLogLogAgg(
         return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH_WITH_UNKNOWN(
             dispatchOnUiiType, joinKeyKind, uiiKind, resultType);
       },
+      {.ignoreNullInputs = true},
       withCompanionFunctions,
       overwrite);
 }

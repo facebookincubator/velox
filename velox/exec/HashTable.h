@@ -1154,8 +1154,10 @@ class HashTable : public BaseHashTable {
   template <bool isJoin, bool isNormalizedKey = false>
   void fullProbe(HashLookup& lookup, ProbeState& state, bool extraCheck);
 
-  // Shortcut path for group by with normalized keys.
-  void groupNormalizedKeyProbe(HashLookup& lookup);
+  // Probes and inserts group-by rows in windows of kPrefetchSize rows so the
+  // bucket and row cache misses of a window overlap.
+  template <bool isNormalizedKey>
+  void groupProbeWithPrefetch(HashLookup& lookup);
 
   // Array probe with SIMD.
   void arrayJoinProbe(HashLookup& lookup);

@@ -64,9 +64,9 @@ TEST_F(ReaderTest, getOrCreateChild) {
 TEST_F(ReaderTest, projectColumnsFilterStruct) {
   constexpr int kSize = 10;
   auto input = makeRowVector({
-      makeFlatVector<int64_t>(kSize, folly::identity),
+      makeFlatIdentityVector<int64_t>(kSize),
       makeRowVector({
-          makeFlatVector<int64_t>(kSize, folly::identity),
+          makeFlatIdentityVector<int64_t>(kSize),
       }),
   });
   common::ScanSpec spec("<root>");
@@ -84,8 +84,8 @@ TEST_F(ReaderTest, projectColumnsNullField) {
   constexpr int kSize = 10;
   auto input = makeRowVector(
       {makeFlatVector<int64_t>(kSize),
-       makeRowVector({makeFlatVector<int64_t>(kSize, folly::identity)}),
-       makeFlatVector<int64_t>(kSize, folly::identity)});
+       makeRowVector({makeFlatIdentityVector<int64_t>(kSize)}),
+       makeFlatIdentityVector<int64_t>(kSize)});
   input->childAt(0) = nullptr;
 
   common::ScanSpec spec("<root>");
@@ -105,7 +105,7 @@ TEST_F(ReaderTest, projectColumnsNullField) {
 TEST_F(ReaderTest, projectColumnsFilterArray) {
   constexpr int kSize = 10;
   auto input = makeRowVector({
-      makeFlatVector<int64_t>(kSize, folly::identity),
+      makeFlatIdentityVector<int64_t>(kSize),
       makeArrayVector<int64_t>(
           kSize,
           [](auto) { return 1; },
@@ -137,7 +137,7 @@ TEST_F(ReaderTest, projectColumnsFilterArray) {
 
 TEST_F(ReaderTest, projectColumnsMutation) {
   constexpr int kSize = 10;
-  auto input = makeRowVector({makeFlatVector<int64_t>(kSize, folly::identity)});
+  auto input = makeRowVector({makeFlatIdentityVector<int64_t>(kSize)});
   common::ScanSpec spec("<root>");
   spec.addAllChildFields(*input->type());
   std::vector<uint64_t> deleted(bits::nwords(kSize));
@@ -231,7 +231,7 @@ TEST_F(ReaderTest, projectColumnsTopLevelNulls) {
   // All nulls
   {
     SCOPED_TRACE("All nulls");
-    auto child = makeFlatVector<int64_t>(kSize, folly::identity);
+    auto child = makeFlatIdentityVector<int64_t>(kSize);
     auto input = makeRowVector({child});
 
     auto nulls = AlignedBuffer::allocate<bool>(kSize, pool());
@@ -257,7 +257,7 @@ TEST_F(ReaderTest, projectColumnsTopLevelNulls) {
   // Partial nulls.
   {
     SCOPED_TRACE("Partial nulls");
-    auto child = makeFlatVector<int64_t>(kSize, folly::identity);
+    auto child = makeFlatIdentityVector<int64_t>(kSize);
     auto input = makeRowVector({child});
 
     auto nulls = AlignedBuffer::allocate<bool>(kSize, pool());
@@ -425,7 +425,7 @@ TEST_F(ReaderTest, projectColumnsFiltersRowNullsWithMutation) {
   constexpr int kSize = 10;
 
   // Create a RowVector with some null rows
-  auto child = makeFlatVector<int64_t>(kSize, folly::identity);
+  auto child = makeFlatIdentityVector<int64_t>(kSize);
   auto input = makeRowVector({child});
 
   // Set rows 0, 2, 4, 6, 8 as null (even indices)
@@ -472,8 +472,7 @@ TEST_F(ReaderTest, projectColumnsWithSelectionIdentity) {
   // No filter: every input row passes, selectedRows is null to signal
   // identity mapping with input.
   constexpr int kSize = 5;
-  auto input =
-      makeRowVector({"c0"}, {makeFlatVector<int64_t>(kSize, folly::identity)});
+  auto input = makeRowVector({"c0"}, {makeFlatIdentityVector<int64_t>(kSize)});
 
   common::ScanSpec spec("<root>");
   spec.addAllChildFields(*input->type());
@@ -487,8 +486,7 @@ TEST_F(ReaderTest, projectColumnsWithSelectionFiltered) {
   // Filter keeps a subset; selectedRows must list the surviving input
   // indices in order.
   constexpr int kSize = 6;
-  auto input =
-      makeRowVector({"c0"}, {makeFlatVector<int64_t>(kSize, folly::identity)});
+  auto input = makeRowVector({"c0"}, {makeFlatIdentityVector<int64_t>(kSize)});
 
   common::ScanSpec spec("<root>");
   spec.addAllChildFields(*input->type());
@@ -512,8 +510,7 @@ TEST_F(ReaderTest, projectColumnsWithSelectionAllFiltered) {
   // zero-length buffer (non-null) so callers can distinguish "empty after
   // filtering" from "identity mapping".
   constexpr int kSize = 4;
-  auto input =
-      makeRowVector({"c0"}, {makeFlatVector<int64_t>(kSize, folly::identity)});
+  auto input = makeRowVector({"c0"}, {makeFlatIdentityVector<int64_t>(kSize)});
 
   common::ScanSpec spec("<root>");
   spec.addAllChildFields(*input->type());
@@ -529,8 +526,7 @@ TEST_F(ReaderTest, projectColumnsWithSelectionEmptyInput) {
   // Empty input: no rows were dropped, so the identity contract holds and
   // selectedRows must be null. Distinguishes "empty identity" from "all
   // rows filtered out", which returns a non-null zero-length buffer.
-  auto input =
-      makeRowVector({"c0"}, {makeFlatVector<int64_t>(0, folly::identity)});
+  auto input = makeRowVector({"c0"}, {makeFlatIdentityVector<int64_t>(0)});
 
   common::ScanSpec spec("<root>");
   spec.addAllChildFields(*input->type());

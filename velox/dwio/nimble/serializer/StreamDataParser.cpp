@@ -365,7 +365,7 @@ uint32_t StreamDataParser::initialize(std::string_view data) {
   }
   auto header = readSerializationHeader(pos_, end_);
   version_ = header.version;
-  requiresNullBarrier_ = header.flags.requiresNullBarrier;
+  requiredBarrier_ = header.flags.requiredBarrier;
   streamEncodingUsesVarintRowCount_ =
       header.flags.streamEncodingUsesVarintRowCount;
   streamHasChunkHeader_ = header.flags.streamHasChunkHeader;

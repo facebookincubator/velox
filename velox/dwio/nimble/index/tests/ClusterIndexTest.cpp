@@ -1479,7 +1479,7 @@ DEBUG_ONLY_TEST_F(ClusterIndexTest, keyIteratorReusesCachedChunk) {
   // Fires only after a cache miss, so it counts decodes rather than reads.
   std::atomic_uint32_t decodeCount{0};
   SCOPED_TESTVALUE_SET(
-      "facebook::nimble::index::ClusterIndex::getDecodedChunk",
+      "facebook::nimble::index::ClusterIndexBase::getDecodedChunk",
       std::function<void(DecodedKeyChunk*)>(
           [&](DecodedKeyChunk* /*decodedChunk*/) { ++decodeCount; }));
 
@@ -2011,7 +2011,7 @@ DEBUG_ONLY_TEST_F(ClusterIndexTest, loadPartitionOnce) {
   folly::Baton firstLoaderProceed;
 
   SCOPED_TESTVALUE_SET(
-      "facebook::nimble::index::ClusterIndex::loadPartition",
+      "facebook::nimble::index::ClusterIndexBase::loadPartition",
       std::function<void(uint32_t*)>([&](uint32_t* partitionId) {
         ASSERT_EQ(*partitionId, 0);
         const auto count = ++loadCount;
@@ -2067,7 +2067,7 @@ DEBUG_ONLY_TEST_F(ClusterIndexTest, decodeChunkFirstWins) {
   folly::Baton secondProceed;
 
   SCOPED_TESTVALUE_SET(
-      "facebook::nimble::index::ClusterIndex::getDecodedChunk",
+      "facebook::nimble::index::ClusterIndexBase::getDecodedChunk",
       std::function<void(DecodedKeyChunk*)>([&](DecodedKeyChunk* decodedChunk) {
         const auto count = ++decodeCount;
         if (count == 1) {
@@ -2170,7 +2170,7 @@ DEBUG_ONLY_TEST_F(ClusterIndexTest, decodeChunksDifferentChunksInParallel) {
   folly::Baton secondProceed;
 
   SCOPED_TESTVALUE_SET(
-      "facebook::nimble::index::ClusterIndex::getDecodedChunk",
+      "facebook::nimble::index::ClusterIndexBase::getDecodedChunk",
       std::function<void(DecodedKeyChunk*)>(
           [&](DecodedKeyChunk* /*decodedChunk*/) {
             const auto count = ++decodeCount;

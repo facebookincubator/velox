@@ -367,8 +367,8 @@ These stats are reported by shuffle operators.
      - Description
    * - shuffleSerdeKind
      -
-     - Indicates the vector serde kind used by an operator for shuffle with 1
-       for Presto, 2 for CompactRow, 3 for UnsafeRow. It is reported by Exchange,
+     - Indicates the vector serde kind used by an operator for shuffle with 0
+       for Presto, 1 for CompactRow, 2 for UnsafeRow. It is reported by Exchange,
        MergeExchange and PartitionedOutput operators for now.
    * - shuffleCompressionKind
      -

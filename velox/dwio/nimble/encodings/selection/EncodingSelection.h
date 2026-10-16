@@ -21,6 +21,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <unordered_map>
 
 #include "velox/dwio/nimble/common/Constants.h"
@@ -142,7 +143,9 @@ class EncodingSelection {
   /// triggering a new encoding selection operation for the nested data and
   /// recursively encoding internal nested stream (if further nested encodings
   /// are selected).
-  template <typename NestedT>
+  /// LogicalT preserves a floating-point type for ALP/ALPRD and, when the
+  /// policy opts in, for containers whose children may select ALP or ALPRD.
+  template <typename NestedT, typename LogicalT = NestedT>
   std::string_view encodeNested(
       NestedEncodingIdentifier nestedEncodingIdentifier,
       std::span<const NestedT> values,
@@ -177,6 +180,14 @@ class EncodingSelectionPolicyBase {
   }
 
   virtual ~EncodingSelectionPolicyBase() = default;
+
+  /// Reports whether configured candidates or replayed layouts contain an
+  /// AlpLike encoding (ALP or ALP_RD). Callers use logical floating-point types
+  /// for nested selection when this is true. Defaults to false to preserve
+  /// physical selection and layouts.
+  virtual bool hasAlpLikeCandidates() const {
+    return false;
+  }
 
  protected:
   /// This method allows creating a child (nested) encoding selection policy
@@ -226,6 +237,15 @@ class EncodingSelectionPolicy : public EncodingSelectionPolicyBase {
   virtual ~EncodingSelectionPolicy() = default;
 };
 
+namespace detail {
+/// Returns whether an encoding can retain a logical floating-point type.
+/// Applies to value-stream encodings; Nullable wrappers use selectNullable().
+/// Container encodings also require the policy to request logical selection.
+bool useLogicalTypeForEncoding(
+    DataType logicalDataType,
+    EncodingType encodingType);
+} // namespace detail
+
 namespace {
 template <typename T, typename S>
 std::unique_ptr<T> unique_ptr_cast(std::unique_ptr<S> src) {
@@ -234,31 +254,55 @@ std::unique_ptr<T> unique_ptr_cast(std::unique_ptr<S> src) {
 } // namespace
 
 template <typename T>
-template <typename NestedT>
+template <typename NestedT, typename LogicalT>
 std::string_view EncodingSelection<T>::encodeNested(
     NestedEncodingIdentifier nestedEncodingIdentifier,
     std::span<const NestedT> values,
     Buffer& buffer,
     const Encoding::Options& options) {
-  // Create the nested encoding selection policy instance, and cast it to the
-  // strongly templated type.
-  auto nestedPolicy = std::unique_ptr<EncodingSelectionPolicy<NestedT>>(
-      static_cast<EncodingSelectionPolicy<NestedT>*>(
-          selectionPolicy_
-              ->template create<NestedT>(
-                  encodingType(), nestedEncodingIdentifier)
-              .release()));
+  auto nestedPolicy = selectionPolicy_->template create<NestedT>(
+      encodingType(), nestedEncodingIdentifier);
   auto statistics = Statistics<NestedT>::create(values);
-  auto selectionResult = nestedPolicy->select(values, statistics, options);
+  EncodingSelectionResult selectionResult{};
+  const bool selectWithLogicalType{
+      isFloatingPointType<LogicalT>() && nestedPolicy->hasAlpLikeCandidates()};
+  if (selectWithLogicalType) {
+    nestedPolicy = selectionPolicy_->template create<LogicalT>(
+        encodingType(), nestedEncodingIdentifier);
+    selectionResult =
+        static_cast<EncodingSelectionPolicy<LogicalT>*>(nestedPolicy.get())
+            ->select(values, statistics, options);
+  } else {
+    selectionResult =
+        static_cast<EncodingSelectionPolicy<NestedT>*>(nestedPolicy.get())
+            ->select(values, statistics, options);
+  }
 
+  NIMBLE_CHECK_NE(
+      selectionResult.encodingType,
+      EncodingType::Nullable,
+      "EncodingSelectionPolicy::select() must not return Nullable.");
+
+  EncodingSelection<NestedT> nestedSelection{
+      std::move(selectionResult),
+      std::move(statistics),
+      std::move(nestedPolicy)};
+  if constexpr (isFloatingPointType<LogicalT>()) {
+    static_assert(
+        std::is_same_v<NestedT, typename TypeTraits<LogicalT>::physicalType>);
+    const auto type = nestedSelection.encodingType();
+    const bool requiresLogicalType{
+        type == EncodingType::ALP || type == EncodingType::ALPRD};
+    if (requiresLogicalType ||
+        (selectWithLogicalType &&
+         detail::useLogicalTypeForEncoding(
+             TypeTraits<LogicalT>::dataType, type))) {
+      return EncodingFactory::encode<LogicalT>(
+          std::move(nestedSelection), values, buffer, options);
+    }
+  }
   return EncodingFactory::encode<NestedT>(
-      EncodingSelection<NestedT>{
-          std::move(selectionResult),
-          std::move(statistics),
-          std::move(nestedPolicy)},
-      values,
-      buffer,
-      options);
+      std::move(nestedSelection), values, buffer, options);
 }
 
 } // namespace facebook::nimble

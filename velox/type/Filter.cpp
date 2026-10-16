@@ -1963,25 +1963,25 @@ std::unique_ptr<Filter> NegatedBigintRange::mergeWith(
         return other->mergeWith(this);
       }
       assert(this->lower() <= otherNegatedRange->lower());
-      if (this->upper() < std::numeric_limits<int64_t>::max() &&
+      if (!nonNegated_->upperUnbounded() &&
           this->upper() + 1 < otherNegatedRange->lower()) {
         std::vector<std::unique_ptr<common::BigintRange>> outRanges;
         int64_t smallLower = this->lower();
         int64_t smallUpper = this->upper();
         int64_t bigLower = otherNegatedRange->lower();
         int64_t bigUpper = otherNegatedRange->upper();
-        if (smallLower > std::numeric_limits<int64_t>::min()) {
+        if (!nonNegated_->lowerUnbounded()) {
           outRanges.emplace_back(
               std::make_unique<common::BigintRange>(
                   std::numeric_limits<int64_t>::min(), smallLower - 1, false));
         }
-        if (smallUpper < std::numeric_limits<int64_t>::max() &&
-            bigLower > std::numeric_limits<int64_t>::min()) {
+        if (!nonNegated_->upperUnbounded() &&
+            !otherNegatedRange->nonNegated_->lowerUnbounded()) {
           outRanges.emplace_back(
               std::make_unique<common::BigintRange>(
                   smallUpper + 1, bigLower - 1, false));
         }
-        if (bigUpper < std::numeric_limits<int64_t>::max()) {
+        if (!otherNegatedRange->nonNegated_->upperUnbounded()) {
           outRanges.emplace_back(
               std::make_unique<common::BigintRange>(
                   bigUpper + 1, std::numeric_limits<int64_t>::max(), false));
@@ -2154,6 +2154,35 @@ std::unique_ptr<Filter> HugeintValuesUsingHashTable::mergeWith(
   }
 }
 
+namespace {
+
+// Calls 'callback' for each value in the inclusive range [min, max]. Does
+// nothing if min > max.
+//
+// The obvious loop, 'for (v = min; v <= max; ++v)', is wrong when max is
+// INT64_MAX: 'v <= max' is always true, so after visiting INT64_MAX the loop
+// increments 'v' past it. Signed overflow is undefined behavior; in practice
+// 'v' wraps to INT64_MIN and the loop either runs forever or indexes out of
+// bounds.
+//
+// This comes up in real merges: 'x >= c' is a BigintRange with upper bound
+// INT64_MAX, and IN-lists may contain INT64_MAX itself.
+//
+// To avoid this, loop over the half-open range [min, max), where '++v' never
+// goes past max, then visit max separately.
+template <typename Callable>
+void safeForEachInt64(int64_t min, int64_t max, Callable&& callback) {
+  if (min > max) {
+    return;
+  }
+  for (auto value = min; value < max; ++value) {
+    callback(value);
+  }
+  callback(max);
+}
+
+} // namespace
+
 std::unique_ptr<Filter> BigintValuesUsingBitmask::mergeWith(
     const Filter* other) const {
   switch (other->kind()) {
@@ -2195,11 +2224,11 @@ std::unique_ptr<Filter> BigintValuesUsingBitmask::mergeWith(
       for (const auto& range : otherMultiRange->ranges()) {
         auto min = std::max(min_, range->lower());
         auto max = std::min(max_, range->upper());
-        for (auto i = min; i <= max; ++i) {
-          if (bitmask_[i - min_] && range->testInt64(i)) {
-            valuesToKeep.push_back(i);
+        safeForEachInt64(min, max, [&](int64_t value) {
+          if (bitmask_[value - min_] && range->testInt64(value)) {
+            valuesToKeep.push_back(value);
           }
-        }
+        });
       }
 
       bool bothNullAllowed = nullAllowed_ && other->testNull();
@@ -2222,11 +2251,11 @@ std::unique_ptr<Filter> BigintValuesUsingBitmask::mergeWith(
   bool bothNullAllowed = nullAllowed_ && other->testNull();
 
   std::vector<int64_t> valuesToKeep;
-  for (auto i = min; i <= max; ++i) {
-    if (bitmask_[i - min_] && other->testInt64(i)) {
-      valuesToKeep.push_back(i);
+  safeForEachInt64(min, max, [&](int64_t value) {
+    if (bitmask_[value - min_] && other->testInt64(value)) {
+      valuesToKeep.push_back(value);
     }
-  }
+  });
   return createBigintValues(valuesToKeep, bothNullAllowed);
 }
 
@@ -2397,6 +2426,10 @@ std::unique_ptr<Filter> BigintValuesUsingBloomFilter::mergeWith(
       return clone(false);
     case FilterKind::kBigintRange: {
       auto* filter = other->as<BigintRange>();
+      const bool bothNullAllowed = nullAllowed_ && other->testNull();
+      if (filter->lower() > filter->upper()) {
+        return nullOrFalse(bothNullAllowed);
+      }
       // If the hash table or bitmask generated is not small enough to fit in
       // cache, we would rather not merging it.
       int64_t range;
@@ -2406,12 +2439,12 @@ std::unique_ptr<Filter> BigintValuesUsingBloomFilter::mergeWith(
       }
       std::vector<int64_t> values;
       values.reserve(range + 1);
-      for (int64_t i = filter->lower(); i <= filter->upper(); ++i) {
-        if (testInt64(i)) {
-          values.push_back(i);
+      safeForEachInt64(filter->lower(), filter->upper(), [&](int64_t value) {
+        if (testInt64(value)) {
+          values.push_back(value);
         }
-      }
-      return createBigintValues(values, nullAllowed_ && other->testNull());
+      });
+      return createBigintValues(values, bothNullAllowed);
     }
     case FilterKind::kBigintValuesUsingHashTable: {
       auto* filter = other->as<BigintValuesUsingHashTable>();
@@ -2429,11 +2462,11 @@ std::unique_ptr<Filter> BigintValuesUsingBloomFilter::mergeWith(
       auto* filter = other->as<BigintValuesUsingBitmask>();
       std::vector<int64_t> values;
       values.reserve(filter->max() - filter->min() + 1);
-      for (int64_t i = filter->min(); i <= filter->max(); ++i) {
-        if (filter->testInt64(i) && testInt64(i)) {
-          values.push_back(i);
+      safeForEachInt64(filter->min(), filter->max(), [&](int64_t value) {
+        if (filter->testInt64(value) && testInt64(value)) {
+          values.push_back(value);
         }
-      }
+      });
       return createBigintValues(values, nullAllowed_ && other->testNull());
     }
     case FilterKind::kNegatedBigintRange:

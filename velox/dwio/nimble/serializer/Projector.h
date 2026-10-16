@@ -166,10 +166,11 @@ class Projector {
 
   // The stream projection helpers return output stream sizes. Size-zero
   // streams remain zero slots in the returned vector and are omitted by the
-  // trailer writer. outputRequiresNullBarrier is set only when a copied stream
-  // has bytes, inputRequiresNullBarrier is true, and its corresponding
-  // rowOrFlatMapNullStreams entry is true. rowOrFlatMapNullStreams is parallel
-  // to output stream indices.
+  // trailer writer. The caller initializes the batch-level Hybrid FlatMap
+  // barrier before invoking these helpers. A helper may also set the barrier
+  // when a copied stream has bytes, the input requires a barrier, and its
+  // corresponding mask entry is true. The mask is parallel to output stream
+  // indices.
 
   // Projects selected streams from a contiguous IOBuf in unsorted order.
   // Walks selectedStreamIndices in output order; for each, binary-searches the
@@ -182,9 +183,10 @@ class Projector {
       const std::vector<uint32_t>& streamIndices,
       const std::vector<uint32_t>& streamSizes,
       const std::vector<uint32_t>& selectedStreamIndices,
-      bool inputRequiresNullBarrier,
+      bool inputRequiredBarrier,
+      bool hasProjectedHybridFlatMaps,
       const std::vector<bool>& rowOrFlatMapNullStreams,
-      bool& outputRequiresNullBarrier,
+      bool& outputRequiredBarrier,
       std::unique_ptr<folly::IOBuf>& output);
 
   // Projects selected streams from a contiguous IOBuf in sorted order.
@@ -196,9 +198,10 @@ class Projector {
       const std::vector<uint32_t>& streamIndices,
       const std::vector<uint32_t>& streamSizes,
       const std::vector<uint32_t>& selectedStreamIndices,
-      bool inputRequiresNullBarrier,
+      bool inputRequiredBarrier,
+      bool hasProjectedHybridFlatMaps,
       const std::vector<bool>& rowOrFlatMapNullStreams,
-      bool& outputRequiresNullBarrier,
+      bool& outputRequiredBarrier,
       std::unique_ptr<folly::IOBuf>& output);
 
   // Projects selected streams from a chained IOBuf in sorted order.
@@ -209,9 +212,10 @@ class Projector {
       const std::vector<uint32_t>& streamIndices,
       const std::vector<uint32_t>& streamSizes,
       const std::vector<uint32_t>& selectedStreamIndices,
-      bool inputRequiresNullBarrier,
+      bool inputRequiredBarrier,
+      bool hasProjectedHybridFlatMaps,
       const std::vector<bool>& rowOrFlatMapNullStreams,
-      bool& outputRequiresNullBarrier,
+      bool& outputRequiredBarrier,
       std::unique_ptr<folly::IOBuf>& output);
 
   // Projects selected streams from a chained IOBuf in unsorted order.
@@ -222,9 +226,10 @@ class Projector {
       const std::vector<uint32_t>& streamIndices,
       const std::vector<uint32_t>& streamSizes,
       const std::vector<StreamMapping>& sortedStreamMappings,
-      bool inputRequiresNullBarrier,
+      bool inputRequiredBarrier,
+      bool hasProjectedHybridFlatMaps,
       const std::vector<bool>& rowOrFlatMapNullStreams,
-      bool& outputRequiresNullBarrier,
+      bool& outputRequiredBarrier,
       std::unique_ptr<folly::IOBuf>& output);
 
   // Appends the trailer to the output IOBuf chain and returns it.
@@ -243,6 +248,10 @@ class Projector {
   // reordering). Enables fast-path projection that avoids sorting and
   // reordering overhead.
   bool inputStreamsSorted_{false};
+
+  // Hybrid FlatMap groups are independent per-batch blocks even when a selected
+  // group is absent from a particular batch and contributes no stream bytes.
+  bool hasProjectedHybridFlatMaps_{false};
 
   // Cached mapping from input stream index to output stream index, sorted by
   // input stream index. Built once in the constructor when

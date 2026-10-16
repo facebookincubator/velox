@@ -70,8 +70,10 @@ namespace facebook::velox::exec::rpc {
 /// - Async RPC callbacks may run on any thread (transport executor pool).
 ///   All cross-thread coordination goes through RPCState, which is fully
 ///   mutex-protected (see RPCState.h for per-method annotations).
-/// - RPCRateLimiter tokens use RAII: destruction (including from cancelled
-///   futures) automatically releases the slot and wakes a parked driver.
+/// - RPCState owns each RAII admission lease until its response completes.
+///   Completion applies canonical shared overload feedback before releasing
+///   admission; the driver applies its local and aggregate feedback later when
+///   it consumes the ready response.
 ///
 class RPCOperator : public exec::Operator {
  public:
@@ -79,6 +81,16 @@ class RPCOperator : public exec::Operator {
       int32_t operatorId,
       exec::DriverCtx* driverCtx,
       std::shared_ptr<const core::RPCNode> rpcNode);
+
+  /// Releases the retained input vectors. Driver::~Driver() is defaulted, so
+  /// an operator destroyed outside closeOperators() never runs close().
+  ~RPCOperator() override;
+
+  // Disable copy and move
+  RPCOperator(const RPCOperator&) = delete;
+  RPCOperator& operator=(const RPCOperator&) = delete;
+  RPCOperator(RPCOperator&&) = delete;
+  RPCOperator& operator=(RPCOperator&&) = delete;
 
   void initialize() override;
 
@@ -134,9 +146,17 @@ class RPCOperator : public exec::Operator {
   static inline const std::string kRpcErrorKindInternal{"rpcErrorKindInternal"};
   // Shared rate-limiter stats, refreshed on every stats() call.
   static inline const std::string kRpcRateLimiterCap{"rpcRateLimiterCap"};
+  static inline const std::string kRpcRateLimiterHardLimit{
+      "rpcRateLimiterHardLimit"};
   static inline const std::string kRpcRateLimiterPeakPending{
       "rpcRateLimiterPeakPending"};
   static inline const std::string kRpcRateLimiterMinCap{"rpcRateLimiterMinCap"};
+  static inline const std::string kRpcRateLimiterLimitMilli{
+      "rpcRateLimiterLimitMilli"};
+  static inline const std::string kRpcRateLimiterMinLimitMilli{
+      "rpcRateLimiterMinLimitMilli"};
+  static inline const std::string kRpcRateLimiterServiceHorizonNanos{
+      "rpcRateLimiterServiceHorizonNanos"};
 
   /// Live liveness stats, refreshed on every stats() call rather than only at
   /// close(). Units dispatched but not yet completed.
@@ -145,6 +165,17 @@ class RPCOperator : public exec::Operator {
   /// the RPC executor threads, so it moves even while the driver is blocked.
   static inline const std::string kRpcCompletionsSignaled{
       "rpcCompletionsSignaled"};
+  /// Monotonic count of retry attempts the function's transports have
+  /// scheduled. A retry is neither a dispatch nor a completion, so a request
+  /// climbing a doubling backoff schedule leaves both counters above frozen
+  /// for as long as the ladder runs. Advances from the transport executor
+  /// threads, so it moves even while the driver is blocked.
+  static inline const std::string kRpcRetriesAttempted{"rpcRetriesAttempted"};
+
+  /// Null once close() has run.
+  const std::shared_ptr<RPCState>& testingState() const {
+    return state_;
+  }
 
  private:
   // How much of the accumulator a dispatch is willing to send.
@@ -179,11 +210,9 @@ class RPCOperator : public exec::Operator {
   // Send whatever admission currently allows of that work.
   void drainPending();
 
-  // The end-of-input drain, shared by both modes. Sends what admission allows;
-  // once nothing is left, declares the input closed. If work remains and this
-  // driver has nothing in flight, only another driver's release can help, so
-  // it parks on the backend. Returns a reason only in that parking case --
-  // otherwise the caller carries on to its own finish handling.
+  // Drains BATCH input at end-of-input. Sends what admission allows; once
+  // nothing is left, declares the input closed. If work remains and this
+  // driver has nothing in flight, it parks on backend admission.
   std::optional<exec::BlockingReason> drainOrParkOnAdmission(
       ContinueFuture* future);
 
@@ -248,7 +277,8 @@ class RPCOperator : public exec::Operator {
   void recordCongestion(
       AsyncRPCFunction::CongestionSignal signal,
       const std::vector<int64_t>& roundTripTimesNs,
-      int64_t successUnits);
+      const std::vector<std::pair<uint64_t, int64_t>>& successUnitsByEpoch,
+      bool sharedOverloadHandled);
 
   // isBlocked() decomposed. Each returns the reason to hand the driver; the
   // try* helpers return nullopt when the state reports finished, which the
@@ -302,17 +332,18 @@ class RPCOperator : public exec::Operator {
   void addLiveProgressStats(exec::OperatorStats& stats, bool includeGauges)
       const;
 
-  // The two objects addLiveProgressStats() reads. They are published here
-  // instead of being read from state_ / limiter_ directly because stats() runs
-  // on the task stats collector thread while the driver thread may be in
-  // initialize() (which sets limiter_) or close() (which drops state_), and
-  // racing on the pointers themselves is undefined behaviour. Holding the read
-  // lock across the sample also keeps close() from freeing RPCState underneath
-  // an in-progress read. Off every hot path: written twice per operator, read
-  // once per stats sample.
+  // The objects addLiveProgressStats() reads. They are published here instead
+  // of being read from state_ / limiter_ / function_ directly because stats()
+  // runs on the task stats collector thread while the driver thread may be in
+  // initialize() (which sets limiter_ and function_) or close() (which drops
+  // state_ and function_), and racing on the pointers themselves is undefined
+  // behaviour. Holding the read lock across the sample also keeps close() from
+  // freeing RPCState or the function underneath an in-progress read. Off every
+  // hot path: written twice per operator, read once per stats sample.
   struct LiveStatsSources {
     std::shared_ptr<RPCState> state;
     RPCRateLimiter* limiter{nullptr};
+    std::shared_ptr<AsyncRPCFunction> function;
   };
   folly::Synchronized<LiveStatsSources> liveStatsSources_;
 

@@ -280,6 +280,28 @@ TEST_F(EncodingViewDecoderTest, readsSequentialRowsAfterSkipAndReset) {
   EXPECT_EQ(output[0], 10);
 }
 
+TEST_F(EncodingViewDecoderTest, remainingRowsTracksSequentialCursor) {
+  const std::array<int64_t, 4> values{10, 11, 12, 13};
+  const auto stream = encode<int64_t>(values);
+  auto decoder = makeDecoder(stream);
+  std::array<int64_t, 1> output{};
+  std::vector<velox::BufferPtr> stringBuffers;
+
+  EXPECT_EQ(decoder->remainingRows(), 4);
+  decoder->skip(2);
+  EXPECT_EQ(decoder->remainingRows(), 2);
+  EXPECT_EQ(
+      decoder->next(
+          1,
+          output.data(),
+          /*getOutputNulls=*/nullptr,
+          stringBuffers),
+      1);
+  EXPECT_EQ(decoder->remainingRows(), 1);
+  decoder->skip(1);
+  EXPECT_EQ(decoder->remainingRows(), 0);
+}
+
 TEST_F(EncodingViewDecoderTest, scattersSequentialRows) {
   const auto stream = encodeNullable<int64_t>({10, std::nullopt, 12});
   auto decoder = makeDecoder(stream);

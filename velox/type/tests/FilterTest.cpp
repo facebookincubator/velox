@@ -797,6 +797,50 @@ TEST(FilterTest, bigintValuesUsingBloomFilterMergeWith) {
   }
 }
 
+TEST(FilterTest, bloomMergeAtInt64Max) {
+  const auto max = std::numeric_limits<int64_t>::max();
+  BigintValuesUsingBloomFilter bloom(4, true);
+  bloom.insert(max);
+
+  {
+    BigintRange range(max - 2, max, false);
+    auto merged = bloom.mergeWith(&range);
+    ASSERT_TRUE(merged->testInt64(max));
+    EXPECT_FALSE(merged->testNull());
+  }
+
+  {
+    BigintRange range(max, max, true);
+    auto merged = bloom.mergeWith(&range);
+    ASSERT_TRUE(merged->testInt64(max));
+    EXPECT_TRUE(merged->testNull());
+  }
+
+  {
+    const std::vector<int64_t> values{max - 2, max};
+    BigintValuesUsingBitmask bitmask(
+        values.front(), values.back(), values, false);
+    auto merged = bloom.mergeWith(&bitmask);
+    ASSERT_TRUE(merged->testInt64(max));
+    EXPECT_FALSE(merged->testNull());
+  }
+}
+
+TEST(FilterTest, bloomMergeEmptyRange) {
+  for (bool nullAllowed : {false, true}) {
+    SCOPED_TRACE(testing::Message() << "nullAllowed=" << nullAllowed);
+    BigintValuesUsingBloomFilter bloom(4, nullAllowed);
+    bloom.insert(10);
+    BigintRange range(10, 5, nullAllowed);
+    auto merged = bloom.mergeWith(&range);
+    const auto expectedKind =
+        nullAllowed ? FilterKind::kIsNull : FilterKind::kAlwaysFalse;
+    EXPECT_EQ(merged->kind(), expectedKind);
+    EXPECT_EQ(merged->testNull(), nullAllowed);
+    EXPECT_FALSE(merged->testInt64(10));
+  }
+}
+
 TEST(FilterTest, bigintMultiRange) {
   // x between 1 and 10 or x between 100 and 120
   auto filter = bigintOr(between(1, 10), between(100, 120));
@@ -2017,6 +2061,28 @@ TEST(FilterTest, mergeWithBigintMultiRange) {
     for (const auto& right : filters) {
       testMergeWithBigint(left.get(), right.get());
     }
+  }
+}
+
+TEST(FilterTest, bitmaskMergeAtInt64Max) {
+  const auto max = std::numeric_limits<int64_t>::max();
+  auto bitmask = createBigintValues({max - 2, max}, true);
+
+  {
+    std::vector<std::unique_ptr<BigintRange>> subRanges;
+    subRanges.push_back(std::make_unique<BigintRange>(0, 5, false));
+    subRanges.push_back(std::make_unique<BigintRange>(max - 2, max, false));
+    BigintMultiRange multiRange(std::move(subRanges), false);
+    auto merged = bitmask->mergeWith(&multiRange);
+    ASSERT_TRUE(merged->testInt64(max));
+    EXPECT_FALSE(merged->testNull());
+  }
+
+  {
+    NegatedBigintRange negated(15, 25, true);
+    auto merged = bitmask->mergeWith(&negated);
+    ASSERT_TRUE(merged->testInt64(max));
+    EXPECT_TRUE(merged->testInt64(max - 2));
   }
 }
 

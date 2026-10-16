@@ -17,6 +17,7 @@
 #include <gmock/gmock.h>
 
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/functions/prestosql/Probability.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 
 namespace facebook::velox {
@@ -246,6 +247,7 @@ TEST_F(ProbabilityTest, invBetaCDF) {
   EXPECT_EQ(1.0, invBetaCDF(3, 3.6, 1.0));
   EXPECT_EQ(0.34696754854406159, invBetaCDF(3, 3.6, 0.3));
   EXPECT_EQ(0.76002724631002683, invBetaCDF(3, 3.6, 0.95));
+  EXPECT_EQ(0.5, invBetaCDF(5, 5, 0.5));
 
   EXPECT_EQ(std::nullopt, invBetaCDF(std::nullopt, 3.6, 0.95));
   EXPECT_EQ(std::nullopt, invBetaCDF(3.6, std::nullopt, 0.95));
@@ -272,6 +274,13 @@ TEST_F(ProbabilityTest, invBetaCDF) {
   VELOX_ASSERT_THROW(
       invBetaCDF(3, 5, -0.1), "p must be in the interval [0, 1]");
   VELOX_ASSERT_THROW(invBetaCDF(3, 5, 1.1), "p must be in the interval [0, 1]");
+}
+
+TEST_F(ProbabilityTest, invBetaCDFFallbackIterationLimit) {
+  const boost::math::beta_distribution<> distribution(5, 5);
+  VELOX_ASSERT_THROW(
+      functions::inverseBetaCdfByBracketing(distribution, 0.5, 1),
+      "Failed to compute inverse beta CDF: fallback solver did not converge");
 }
 
 TEST_F(ProbabilityTest, chiSquaredCDF) {
@@ -690,7 +699,9 @@ TEST_F(ProbabilityTest, invBinomialCDF) {
   EXPECT_EQ(10, invBinomialCDF(20, 0.5, 0.5));
   EXPECT_EQ(20, invBinomialCDF(20, 0.5, 1.0));
   EXPECT_EQ(INT32_MAX, invBinomialCDF(INT32_MAX, 0.5, 1));
-  EXPECT_EQ(611204, invBinomialCDF(1223340, 0.5, 0.2));
+  EXPECT_EQ(611205, invBinomialCDF(1223340, 0.5, 0.2));
+  // p < 0.5 must round up to the smallest k with CDF(k) >= p, not outwards.
+  EXPECT_EQ(2, invBinomialCDF(10, 0.3, 0.3));
 
   EXPECT_EQ(std::nullopt, invBinomialCDF(std::nullopt, 1, 1));
   EXPECT_EQ(std::nullopt, invBinomialCDF(1, std::nullopt, 1));
@@ -733,7 +744,11 @@ TEST_F(ProbabilityTest, invPoissonCDF) {
   };
 
   EXPECT_EQ(0, invPoissonCDF(3, 0));
-  // EXPECT_EQ(2, invPoissonCDF(3, 0.3)); // 1.499999... round to floor to 1
+  // Smallest k with CDF(k) >= p. For p < 0.5 the quantile must round up, not
+  // outwards: inverse_poisson_cdf(3, 0.3) is 2 (CDF(1)=0.199, CDF(2)=0.423).
+  EXPECT_EQ(2, invPoissonCDF(3, 0.3));
+  EXPECT_EQ(1, invPoissonCDF(1, 0.45));
+  EXPECT_EQ(0, invPoissonCDF(1, 0.3));
   EXPECT_EQ(6, invPoissonCDF(3, 0.95));
   EXPECT_EQ(17, invPoissonCDF(3, 0.99999999));
   EXPECT_EQ(

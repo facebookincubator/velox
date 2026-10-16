@@ -33,6 +33,19 @@ using namespace facebook::nimble;
 
 namespace {
 
+TEST(SubIntSplitTuningConfigTest, usesProductionDefaults) {
+  const auto& tuning = subintsplit::kDefaultTuningConfig;
+
+  EXPECT_EQ(tuning.sampler.maxSamples, 2'048);
+  EXPECT_EQ(tuning.sampler.blockSize, 128);
+  EXPECT_DOUBLE_EQ(tuning.selector.boundaryPruneThreshold, 0.001);
+  EXPECT_EQ(tuning.selector.maxCandidateBoundaries, 0);
+  EXPECT_EQ(tuning.selector.maxSectionWidth, 0);
+  EXPECT_EQ(tuning.selector.frequencyMetricsMaxWidth, 0);
+  EXPECT_DOUBLE_EQ(tuning.selector.decodeCostBitsPerValue, 0.0);
+  EXPECT_EQ(tuning.decodeChunkSize, 4'096);
+}
+
 TEST(SubIntSplitCandidateBoundariesTest, zeroThresholdHonorsBoundaryCap) {
   const std::vector<uint64_t> samples{0, 0xff};
 
@@ -63,7 +76,7 @@ class SubIntSplitPlannerOptionsTest : public ::testing::Test {
 
   std::string encode(
       const std::vector<uint64_t>& values,
-      const Encoding::Options& options) {
+      const subintsplit::TuningConfig& tuning) {
     const std::span<const uint64_t> input{values.data(), values.size()};
     ManualEncodingSelectionPolicyFactory factory;
     EncodingSelection<uint64_t> selection{
@@ -72,7 +85,7 @@ class SubIntSplitPlannerOptionsTest : public ::testing::Test {
         factory.createPolicy(DataType::Uint64)};
 
     const auto encoded = SubIntSplitEncoding<uint64_t>::encode(
-        selection, input, *buffer_, options);
+        selection, input, *buffer_, {}, tuning);
     return std::string{encoded};
   }
 
@@ -101,29 +114,13 @@ class SubIntSplitPlannerOptionsTest : public ::testing::Test {
   std::unique_ptr<Buffer> buffer_;
 };
 
-// Every knob is opt-in, so their sentinels together have to leave the bytes
-// alone.
-TEST_F(SubIntSplitPlannerOptionsTest, sentinelsKeepTheDefaultPlan) {
-  const auto values = makeMultiFieldValues(10'000);
-  const auto baseline = encode(values, {});
-
-  Encoding::Options explicitDefaults;
-  explicitDefaults.subIntSplitPlannerMaxSamples = 0;
-  explicitDefaults.subIntSplitBoundaryPruneThreshold = -1.0;
-  explicitDefaults.subIntSplitMaxCandidateBoundaries = 0;
-  explicitDefaults.subIntSplitMaxSectionWidth = 0;
-  explicitDefaults.subIntSplitFrequencyMetricsMaxWidth = 0;
-
-  EXPECT_EQ(encode(values, explicitDefaults), baseline);
-}
-
 TEST_F(SubIntSplitPlannerOptionsTest, anyBoundaryCapRoundTrips) {
   const auto values = makeMultiFieldValues(10'000);
 
   for (const uint32_t cap : {1u, 2u, 4u, 16u, 1'000u}) {
-    Encoding::Options options;
-    options.subIntSplitMaxCandidateBoundaries = cap;
-    EXPECT_EQ(decode(encode(values, options), values.size()), values)
+    auto tuning = subintsplit::kDefaultTuningConfig;
+    tuning.selector.maxCandidateBoundaries = cap;
+    EXPECT_EQ(decode(encode(values, tuning), values.size()), values)
         << "boundary cap " << cap;
   }
 }
@@ -137,9 +134,9 @@ TEST_F(
   const auto values = makeMultiFieldValues(10'000);
 
   for (const uint32_t maxWidth : {1u, 2u, 8u, 24u, 64u}) {
-    Encoding::Options options;
-    options.subIntSplitMaxSectionWidth = maxWidth;
-    EXPECT_EQ(decode(encode(values, options), values.size()), values)
+    auto tuning = subintsplit::kDefaultTuningConfig;
+    tuning.selector.maxSectionWidth = maxWidth;
+    EXPECT_EQ(decode(encode(values, tuning), values.size()), values)
         << "max section width " << maxWidth;
   }
 }
@@ -150,9 +147,9 @@ TEST_F(SubIntSplitPlannerOptionsTest, anyFrequencyWidthCapRoundTrips) {
   const auto values = makeMultiFieldValues(10'000);
 
   for (const uint32_t maxWidth : {1u, 8u, 16u, 32u, 64u}) {
-    Encoding::Options options;
-    options.subIntSplitFrequencyMetricsMaxWidth = maxWidth;
-    EXPECT_EQ(decode(encode(values, options), values.size()), values)
+    auto tuning = subintsplit::kDefaultTuningConfig;
+    tuning.selector.frequencyMetricsMaxWidth = maxWidth;
+    EXPECT_EQ(decode(encode(values, tuning), values.size()), values)
         << "frequency metrics max width " << maxWidth;
   }
 }
@@ -163,12 +160,12 @@ TEST_F(SubIntSplitPlannerOptionsTest, anyFrequencyWidthCapRoundTrips) {
 TEST_F(SubIntSplitPlannerOptionsTest, allHeuristicsAtOnceRoundTrips) {
   const auto values = makeMultiFieldValues(10'000);
 
-  Encoding::Options fastest;
-  fastest.subIntSplitPlannerMaxSamples = 64;
-  fastest.subIntSplitBoundaryPruneThreshold = 0.05;
-  fastest.subIntSplitMaxCandidateBoundaries = 2;
-  fastest.subIntSplitMaxSectionWidth = 8;
-  fastest.subIntSplitFrequencyMetricsMaxWidth = 8;
+  auto fastest = subintsplit::kDefaultTuningConfig;
+  fastest.sampler.maxSamples = 64;
+  fastest.selector.boundaryPruneThreshold = 0.05;
+  fastest.selector.maxCandidateBoundaries = 2;
+  fastest.selector.maxSectionWidth = 8;
+  fastest.selector.frequencyMetricsMaxWidth = 8;
 
   EXPECT_EQ(decode(encode(values, fastest), values.size()), values);
 }
@@ -177,9 +174,9 @@ TEST_F(SubIntSplitPlannerOptionsTest, anySampleCountRoundTrips) {
   const auto values = makeMultiFieldValues(10'000);
 
   for (const uint32_t maxSamples : {1u, 2u, 64u, 512u, 4096u, 100'000u}) {
-    Encoding::Options options;
-    options.subIntSplitPlannerMaxSamples = maxSamples;
-    const auto encoded = encode(values, options);
+    auto tuning = subintsplit::kDefaultTuningConfig;
+    tuning.sampler.maxSamples = maxSamples;
+    const auto encoded = encode(values, tuning);
     EXPECT_EQ(decode(encoded, values.size()), values)
         << "max samples " << maxSamples;
   }
@@ -191,9 +188,9 @@ TEST_F(SubIntSplitPlannerOptionsTest, anyPruneThresholdRoundTrips) {
   // 0.0 considers every bit position; 1.0 is past the maximum possible
   // set-rate change, so only the stream's own edges survive as boundaries.
   for (const double threshold : {0.0, 0.001, 0.02, 0.5, 1.0}) {
-    Encoding::Options options;
-    options.subIntSplitBoundaryPruneThreshold = threshold;
-    const auto encoded = encode(values, options);
+    auto tuning = subintsplit::kDefaultTuningConfig;
+    tuning.selector.boundaryPruneThreshold = threshold;
+    const auto encoded = encode(values, tuning);
     EXPECT_EQ(decode(encoded, values.size()), values)
         << "threshold " << threshold;
   }
@@ -204,9 +201,9 @@ TEST_F(SubIntSplitPlannerOptionsTest, anyPruneThresholdRoundTrips) {
 TEST_F(SubIntSplitPlannerOptionsTest, pruningEveryBoundaryStillEncodes) {
   const auto values = makeMultiFieldValues(10'000);
 
-  Encoding::Options options;
-  options.subIntSplitBoundaryPruneThreshold = 1.0;
-  const auto encoded = encode(values, options);
+  auto tuning = subintsplit::kDefaultTuningConfig;
+  tuning.selector.boundaryPruneThreshold = 1.0;
+  const auto encoded = encode(values, tuning);
 
   EXPECT_EQ(decode(encoded, values.size()), values);
   EXPECT_GT(encoded.size(), 0u);
@@ -217,9 +214,9 @@ TEST_F(SubIntSplitPlannerOptionsTest, pruningEveryBoundaryStillEncodes) {
 TEST_F(SubIntSplitPlannerOptionsTest, undersampledPlanStillDecodesEveryValue) {
   const auto values = makeMultiFieldValues(10'000);
 
-  Encoding::Options options;
-  options.subIntSplitPlannerMaxSamples = 1;
-  const auto encoded = encode(values, options);
+  auto tuning = subintsplit::kDefaultTuningConfig;
+  tuning.sampler.maxSamples = 1;
+  const auto encoded = encode(values, tuning);
 
   EXPECT_EQ(decode(encoded, values.size()), values);
 }

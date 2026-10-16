@@ -13,21 +13,28 @@
 # limitations under the License.
 add_library(
   nimble_index
+  HierarchicalKeyReader.cpp
   BlockedBloomFilter.cpp
   BloomFilter.cpp
   ChunkStats.cpp
   ChunkStatsGroup.cpp
   ClusterIndex.cpp
+  ClusterIndexBase.cpp
   ClusterIndexFactory.cpp
   ClusterIndexWriter.cpp
+  ClusterIndexWriterBase.cpp
   DenseIndexFactory.cpp
   DenseIndexRegistry.cpp
   HashIndex.cpp
   HashIndexWriter.cpp
+  HierarchicalClusterIndex.cpp
+  HierarchicalClusterIndexWriter.cpp
   IndexConfig.cpp
   IndexFilter.cpp
   IndexKeyEncoder.cpp
+  KeyChunkBuilder.cpp
   KeyChunkDecoder.cpp
+  KeyReader.cpp
   KeyEncoding.cpp
   SortedIndex.cpp
   SortedIndexWriter.cpp
@@ -37,11 +44,18 @@ add_library(
   VectorIndexWriter.h
   VectorIndexConfig.h
   SortedIndexWriter.h
+  HierarchicalClusterIndex.h
+  HierarchicalClusterIndexWriter.h
+  HierarchicalKeyFormat.h
+  HierarchicalKeyReader.h
   SortedIndexConfig.h
   SortedIndex.h
   SortOrder.h
   KeyEncoding.h
+  KeyChunkBuilder.h
   KeyChunkDecoder.h
+  KeyReader.h
+  KeyCursor.h
   IndexWriter.h
   IndexTypes.h
   IndexSerialization.h
@@ -58,9 +72,11 @@ add_library(
   DenseIndexRegistry.h
   DenseIndexFactory.h
   ClusterIndexWriter.h
+  ClusterIndexWriterBase.h
   ClusterIndexFactory.h
   ClusterIndexConfig.h
   ClusterIndex.h
+  ClusterIndexBase.h
   ChunkStatsGroup.h
   ChunkStats.h
   BlockedBloomFilter.h
@@ -90,6 +106,8 @@ target_link_libraries(
   Folly::folly
 )
 
+find_package(OpenMP REQUIRED)
+
 add_library(
   nimble_vector_index
   VectorIndex.cpp
@@ -110,6 +128,7 @@ target_link_libraries(
   velox_vector
   FAISS::faiss
   Folly::folly
+  OpenMP::OpenMP_CXX
 )
 
 if(NIMBLE_BUILD_TESTING)

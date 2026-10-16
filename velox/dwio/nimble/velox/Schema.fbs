@@ -74,8 +74,8 @@ table StringPair {
 // Typed Hybrid FlatMap metadata. Physical stream descriptors and value types
 // are represented by the group's child schema nodes, following FlatMap. The
 // parallel ID and count vectors describe consecutive slices in group_keys.
-// Default has a zero key count; its key identities are carried by its data
-// stream.
+// Every group's key order defines the corresponding key-presence bitmap.
+// Default starts empty and appends keys in first-seen order while writing.
 table HybridFlatMap {
   group_ids:[uint32];
   group_key_counts:[uint32];

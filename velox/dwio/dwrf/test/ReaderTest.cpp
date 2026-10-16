@@ -2630,7 +2630,7 @@ TEST_F(TestReader, failToReuseReaderNulls) {
   auto c0 = makeRowVector(
       {"a", "b"},
       {
-          makeFlatVector<int64_t>(11, folly::identity),
+          makeFlatIdentityVector<int64_t>(11),
           makeFlatVector<int64_t>(
               11, folly::identity, [](auto i) { return i % 3 == 0; }),
       });
@@ -2638,7 +2638,7 @@ TEST_F(TestReader, failToReuseReaderNulls) {
   bits::setNull(c0->mutableRawNulls(), 10);
   auto data = makeRowVector({
       c0,
-      makeRowVector({"c"}, {makeFlatVector<int64_t>(11, folly::identity)}),
+      makeRowVector({"c"}, {makeFlatIdentityVector<int64_t>(11)}),
   });
   auto schema = asRowType(data->type());
   auto [writer, reader] =
@@ -2683,7 +2683,7 @@ TEST_F(TestReader, readFlatMapsSomeEmpty) {
           5,
           6 // map 4 has some selected keys.
       });
-  auto values = makeFlatVector<int64_t>(16, folly::identity);
+  auto values = makeFlatIdentityVector<int64_t>(16);
   auto maps =
       makeMapVector(std::vector<vector_size_t>{0, 6, 9, 12, 16}, keys, values);
   auto row = makeRowVector({"a"}, {maps});
@@ -2747,7 +2747,7 @@ TEST_F(TestReader, readFlatMapsWithNullMaps) {
   // empty.
   auto keys =
       makeFlatVector<int64_t>(16, [](vector_size_t row) { return row % 4; });
-  auto values = makeFlatVector<int64_t>(16, folly::identity);
+  auto values = makeFlatIdentityVector<int64_t>(16);
   auto maps = makeMapVector(
       std::vector<vector_size_t>{0, 4, 4, 8, 8, 12, 12, 16, 16},
       keys,
@@ -3235,7 +3235,7 @@ TEST_F(TestReader, missingSubfieldsNoResultReusing) {
   constexpr int kSize = 10;
   auto batch = makeRowVector({
       makeRowVector({
-          makeFlatVector<int64_t>(kSize, folly::identity),
+          makeFlatIdentityVector<int64_t>(kSize),
       }),
   });
   auto [writer, reader] =
@@ -3252,7 +3252,7 @@ TEST_F(TestReader, missingSubfieldsNoResultReusing) {
   ASSERT_EQ(rowReader->next(1024, actual), 10);
   auto expected = makeRowVector({
       makeRowVector({
-          makeFlatVector<int64_t>(kSize, folly::identity),
+          makeFlatIdentityVector<int64_t>(kSize),
           BaseVector::createNullConstant(VARCHAR(), kSize, pool()),
       }),
   });
@@ -3700,10 +3700,10 @@ TEST_F(TestReader, extractionTransformAfterScanSpecReorder) {
       [](auto row) { return row % 5 == 0; });
   auto data = makeRowVector(
       {"constant", "maps", "plain", "id"},
-      {makeFlatVector<int64_t>(kNumRows, folly::identity),
+      {makeFlatIdentityVector<int64_t>(kNumRows),
        maps,
        makeFlatVector<int64_t>(kNumRows, [](auto row) { return 100 + row; }),
-       makeFlatVector<int64_t>(kNumRows, folly::identity)});
+       makeFlatIdentityVector<int64_t>(kNumRows)});
   auto [writer, reader] =
       createWriterReader({data}, pool(), dataIoStats_, metadataIoStats_);
 
@@ -3836,7 +3836,7 @@ TEST_F(TestReader, extractionMapKeySizeWithSeek) {
   }
   auto keys = makeFlatVector<StringView>(
       kNumRows * 2, [&](auto i) { return StringView(keyStrs[i]); });
-  auto values = makeFlatVector<int64_t>(kNumRows * 2, folly::identity);
+  auto values = makeFlatIdentityVector<int64_t>(kNumRows * 2);
   std::vector<vector_size_t> offsets(kNumRows);
   for (int i = 0; i < kNumRows; ++i) {
     offsets[i] = i * 2;
@@ -3942,7 +3942,7 @@ TEST_F(TestReader, extractionSizeResultVectorReuse) {
   }
   auto keys = makeFlatVector<StringView>(
       kNumRows * 2, [&](auto i) { return StringView(keyStrs[i]); });
-  auto values = makeFlatVector<int64_t>(kNumRows * 2, folly::identity);
+  auto values = makeFlatIdentityVector<int64_t>(kNumRows * 2);
   // Each row has 2 map entries.
   std::vector<vector_size_t> offsets(kNumRows);
   for (int i = 0; i < kNumRows; ++i) {
@@ -3996,7 +3996,7 @@ TEST_F(TestReader, extractionMapKeysMultipleBatches) {
   }
   auto keys = makeFlatVector<StringView>(
       kNumRows * 3, [&](auto i) { return StringView(keyStrs[i]); });
-  auto values = makeFlatVector<int64_t>(kNumRows * 3, folly::identity);
+  auto values = makeFlatIdentityVector<int64_t>(kNumRows * 3);
   std::vector<vector_size_t> offsets(kNumRows);
   for (int i = 0; i < kNumRows; ++i) {
     offsets[i] = i * 3;
@@ -4052,7 +4052,7 @@ TEST_F(TestReader, extractionMapKeysIoReduction) {
   }
   auto keys = makeFlatVector<StringView>(
       kNumRows * 2, [&](auto i) { return StringView(keyStrs[i]); });
-  auto values = makeFlatVector<int64_t>(kNumRows * 2, folly::identity);
+  auto values = makeFlatIdentityVector<int64_t>(kNumRows * 2);
   std::vector<vector_size_t> offsets(kNumRows);
   for (int i = 0; i < kNumRows; ++i) {
     offsets[i] = i * 2;
@@ -4241,7 +4241,7 @@ TEST_F(TestReader, extractionNestedChainScanSpec) {
   std::vector<vector_size_t> mapOffsets(kNumRows);
   std::iota(mapOffsets.begin(), mapOffsets.end(), 0);
   auto map = makeMapVector(mapOffsets, keys, rowValues);
-  auto bCol = makeFlatVector<int32_t>(kNumRows, folly::identity);
+  auto bCol = makeFlatIdentityVector<int32_t>(kNumRows);
   auto batch = makeRowVector({"a", "b"}, {map, bCol});
 
   auto [writer, reader] =
@@ -4332,7 +4332,7 @@ TEST_F(TestReader, extractionNestedChainScanSpec) {
   std::vector<vector_size_t> largeMapOffsets(kLargeNumRows);
   std::iota(largeMapOffsets.begin(), largeMapOffsets.end(), 0);
   auto largeMap = makeMapVector(largeMapOffsets, largeKeysVec, largeRowValues);
-  auto largeBCol = makeFlatVector<int32_t>(kLargeNumRows, folly::identity);
+  auto largeBCol = makeFlatIdentityVector<int32_t>(kLargeNumRows);
   auto largeBatch = makeRowVector({"a", "b"}, {largeMap, largeBCol});
 
   auto largeSink =

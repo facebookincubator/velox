@@ -24,11 +24,19 @@
 #include "velox/dwio/nimble/encodings/subintsplit/BitSection.h"
 #include "velox/dwio/nimble/encodings/subintsplit/SectionMetrics.h"
 
-// DP-based bit-range split selector for SubIntSplitEncoding.
-//
-// Scores a grid of bit ranges on a sample of uint64_t values, runs dynamic
-// programming over bit positions to find the minimum-cost partition, and
-// returns the sections that partition implies.
+/// DP-based bit-range split selector for SubIntSplitEncoding.
+///
+/// Scores a grid of bit ranges on a sample of uint64_t values, runs dynamic
+/// programming over bit positions to find the minimum-cost partition, and
+/// returns the sections that partition implies.
+///
+/// Planner context:
+///
+///   sampled bit patterns + SelectorConfig -> [selectSplits] -> SelectorResult
+///
+/// `SelectorResult` is the only boundary between planning and full-data encode.
+/// Its sections must cover the physical width and its cost must use full-stream
+/// units so split penalties remain comparable.
 
 namespace facebook::nimble::subintsplit {
 

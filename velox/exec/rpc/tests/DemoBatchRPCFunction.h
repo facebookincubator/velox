@@ -71,6 +71,10 @@ class DemoBatchRPCFunction : public AsyncRPCFunction {
     return VARCHAR();
   }
 
+  double configuredAdaptiveFloor() const override {
+    return 0.25;
+  }
+
   /// With failOnError=true, mimics the meta_ai_on_error='fail' policy: any
   /// errored response hard-fails the query (VELOX_USER_FAIL) instead of NULLing
   /// the row. Otherwise defers to the base (errors -> NULL).
@@ -92,7 +96,7 @@ class DemoBatchRPCFunction : public AsyncRPCFunction {
 
   int32_t pendingBatchSize() const override;
 
-  /// Treats rate limits and timeouts as overload, other errors as non-overload
+  /// Treats overload-category errors as overload, other errors as non-overload
   /// failures, an empty batch as neutral, and every other batch as successful.
   /// Lets tests drive the operator's AIMD paths in BATCH mode; inert unless the
   /// backend is configured adaptive, which is off by default.

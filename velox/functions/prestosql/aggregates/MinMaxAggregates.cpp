@@ -595,7 +595,7 @@ std::vector<exec::AggregateRegistrationResult> registerMinMax(
           }
         }
       },
-      {.orderSensitive = false},
+      {.orderSensitive = false, .ignoreNullInputs = true},
       withCompanionFunctions,
       overwrite);
 }

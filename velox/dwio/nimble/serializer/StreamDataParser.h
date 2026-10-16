@@ -218,11 +218,12 @@ class StreamDataParser {
     return streamEncodingUsesVarintRowCount_;
   }
 
-  /// Returns true when Row/FlatMap null streams contain real nulls, forcing
-  /// this batch to be deserialized via the per-batch barrier path. Always
-  /// false for versions without a flags byte. Only valid after initialize().
-  bool requiresNullBarrier() const {
-    return requiresNullBarrier_;
+  /// Returns true when this batch must be deserialized independently, either
+  /// for native Hybrid FlatMap layout or for Row/FlatMap null streams with
+  /// real nulls. Always false for versions without a flags byte. Only valid
+  /// after initialize().
+  bool requiredBarrier() const {
+    return requiredBarrier_;
   }
 
   /// Releases owned kTablet stream payload buffers after a decode run consumes
@@ -251,9 +252,9 @@ class StreamDataParser {
 
   // Serialization version read from the first byte of the current blob.
   SerializationVersion version_{SerializationVersion::kSerialization};
-  // True when Row/FlatMap null streams contain real nulls (read from the header
-  // flags byte). Defaults false for versions without a flags byte.
-  bool requiresNullBarrier_{false};
+  // True when the current batch must be decoded independently (read from the
+  // header flags byte). Defaults false for versions without a flags byte.
+  bool requiredBarrier_{false};
   // Encoding stream row-count format read from the serialization header.
   bool streamEncodingUsesVarintRowCount_{true};
   // True when kTablet streams retain their storage chunk framing.

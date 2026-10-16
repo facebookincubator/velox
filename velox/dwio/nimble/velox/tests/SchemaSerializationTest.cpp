@@ -107,7 +107,7 @@ TEST(SchemaSerializationTest, hybridFlatMapMetadataRoundTripsThroughSchema) {
   EXPECT_EQ(decodedMetadata.groups[2].groupId, HybridFlatMap::kDefaultGroupId);
   EXPECT_TRUE(decodedMetadata.groups[2].groupKeys.empty());
 
-  EXPECT_EQ(serialized->nodes()->Get(2)->kind(), serialization::Kind_String);
+  EXPECT_EQ(serialized->nodes()->Get(2)->kind(), serialization::Kind_Bool);
   EXPECT_EQ(serialized->nodes()->Get(3)->kind(), serialization::Kind_Bool);
   const auto schema = deserializer.deserialize(serializedSchema);
 
@@ -118,7 +118,8 @@ TEST(SchemaSerializationTest, hybridFlatMapMetadataRoundTripsThroughSchema) {
   EXPECT_EQ(hybridFlatMap.groupAt(0).groupId, 0);
   EXPECT_EQ(hybridFlatMap.groupAt(0).groupKeys, groupKeys);
   EXPECT_EQ(
-      hybridFlatMap.groupAt(0).keyDescriptor.scalarKind(), ScalarKind::String);
+      hybridFlatMap.groupAt(0).keyPresenceDescriptor.scalarKind(),
+      ScalarKind::Bool);
   EXPECT_EQ(
       hybridFlatMap.groupAt(0).inMapDescriptor.scalarKind(), ScalarKind::Bool);
   EXPECT_EQ(
@@ -168,8 +169,10 @@ TEST(SchemaSerializationTest, hybridFlatMapKeyKindsRoundTrip) {
     ASSERT_TRUE(schema->isHybridFlatMap());
     EXPECT_EQ(schema->asHybridFlatMap().keyScalarKind(), keyKind);
     EXPECT_EQ(
-        schema->asHybridFlatMap().defaultGroup().keyDescriptor.scalarKind(),
-        keyKind);
+        schema->asHybridFlatMap()
+            .defaultGroup()
+            .keyPresenceDescriptor.scalarKind(),
+        ScalarKind::Bool);
   }
 }
 
@@ -240,7 +243,7 @@ TEST(SchemaSerializationTest, hybridFlatMapRejectsMalformedFlatMetadata) {
       encodeSchemaWithMetadataAttribute(emptyMetadata);
   NIMBLE_ASSERT_THROW(
       SchemaDeserializer::deserialize(schemaWithEmptyMetadata),
-      "Hybrid FlatMap requires at least two groups");
+      "Hybrid FlatMap requires at least 1 group(s)");
 
   NIMBLE_ASSERT_THROW(
       HybridFlatMap::deserialize(

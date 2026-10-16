@@ -51,6 +51,14 @@ void assertEqualVectors(
 /// Verify that 'vector' is copyable, by copying all rows.
 void assertCopyableVector(const VectorPtr& vector);
 
+/// Returns 'input' with its base map converted to a FlatMapVector, keeping any
+/// dictionary or constant wrapping. Other encodings are returned as is.
+VectorPtr withFlatMapBase(const VectorPtr& input);
+
+/// Returns 'input' with its base map converted to a MapVector, keeping any
+/// dictionary or constant wrapping. Other encodings are returned as is.
+VectorPtr withMapBase(const VectorPtr& input);
+
 class VectorTestBase {
  protected:
   VectorTestBase() = default;
@@ -201,6 +209,13 @@ class VectorTestBase {
       const std::initializer_list<T>& data,
       const TypePtr& type = CppToType<T>::create()) {
     return vectorMaker_.flatVector<T>(data, type);
+  }
+
+  /// Returns a flat vector containing values from zero through 'size - 1'.
+  template <typename T>
+  FlatVectorPtr<EvalType<T>> makeFlatIdentityVector(vector_size_t size) {
+    return makeFlatVector<T>(
+        size, [](auto row) { return static_cast<T>(row); });
   }
 
   template <typename T>

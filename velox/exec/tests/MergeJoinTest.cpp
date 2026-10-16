@@ -880,9 +880,8 @@ TEST_F(MergeJoinTest, numDrivers) {
               core::JoinType::kInner)
           .planNode();
 
-  auto task = AssertQueryBuilder(plan, duckDbQueryRunner_)
-                  .maxDrivers(5)
-                  .assertResults("SELECT 2, 2");
+  auto task = AssertQueryBuilder(plan).maxDrivers(5).assertResults(
+      {Variant(2), Variant(2)});
 
   // We have two pipelines in the task and each must have 1 driver.
   EXPECT_EQ(2, task->numTotalDrivers());

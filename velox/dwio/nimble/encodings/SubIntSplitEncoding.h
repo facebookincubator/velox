@@ -42,6 +42,7 @@
 #include "velox/dwio/nimble/encodings/subintsplit/SectionTable.h"
 #include "velox/dwio/nimble/encodings/subintsplit/SplitBoundaries.h"
 #include "velox/dwio/nimble/encodings/subintsplit/SplitSelector.h"
+#include "velox/dwio/nimble/encodings/subintsplit/TuningConfig.h"
 
 // SubIntSplitEncoding: decomposes each value in a 32- or 64-bit integer stream
 // into bit-range sub-streams, selects an optimal encoding for each sub-stream
@@ -76,7 +77,9 @@ class SubIntSplitEncoding
       velox::memory::MemoryPool& pool,
       std::string_view data,
       std::function<void*(uint32_t)> stringBufferFactory,
-      const Encoding::Options& options = {});
+      const Encoding::Options& options = {},
+      const subintsplit::TuningConfig& tuning =
+          subintsplit::kDefaultTuningConfig);
 
   void reset() final;
   void skip(uint32_t rowCount) final;
@@ -100,7 +103,9 @@ class SubIntSplitEncoding
       EncodingSelection<physicalType>& selection,
       std::span<const physicalType> values,
       Buffer& buffer,
-      const Encoding::Options& options = {});
+      const Encoding::Options& options = {},
+      const subintsplit::TuningConfig& tuning =
+          subintsplit::kDefaultTuningConfig);
 
   /// Encodes one candidate form. `flags` goes into the header byte and records
   /// whether `values` are raw or zigzag deltas.
@@ -109,7 +114,9 @@ class SubIntSplitEncoding
       std::span<const physicalType> values,
       Buffer& buffer,
       const Encoding::Options& options,
-      uint8_t flags);
+      uint8_t flags,
+      const subintsplit::TuningConfig& tuning =
+          subintsplit::kDefaultTuningConfig);
 
   std::string debugString(int offset) const final;
 
@@ -141,7 +148,7 @@ class SubIntSplitEncoding
   static std::vector<subintsplit::SectionPlan> planSections(
       EncodingSelection<physicalType>& selection,
       std::span<const physicalType> values,
-      const Encoding::Options& options);
+      const subintsplit::TuningConfig& tuning);
 
   // Assembles the prefix, the section headers and the section payloads into
   // `buffer`.
@@ -193,9 +200,10 @@ SubIntSplitEncoding<T>::SubIntSplitEncoding(
     velox::memory::MemoryPool& pool,
     std::string_view data,
     std::function<void*(uint32_t)> stringBufferFactory,
-    const Encoding::Options& options)
+    const Encoding::Options& options,
+    const subintsplit::TuningConfig& tuning)
     : TypedEncoding<T, physicalType>{pool, data, options},
-      sections_{pool, options.subIntSplitDecodeChunkSize},
+      sections_{pool, tuning.decodeChunkSize},
       decodeBuf_{&pool},
       pendingBuf_{&pool} {
   NIMBLE_CHECK_FILE(
@@ -345,16 +353,19 @@ void SubIntSplitEncoding<T>::readWithVisitor(
       std::is_integral_v<OutputType> && std::is_integral_v<physicalType>;
 
   // Fast path: bulk-decode for integral 4/8-byte physical types extracted into
-  // the reader with a compatible (at-least-as-wide integral) output type.
+  // the reader or an opted-in hook with a compatible (at-least-as-wide
+  // integral) output type.
   // Float/double fall through here (kIsFluidCast is false for them) and use the
   // slow path, which applies castFromPhysicalType. The runtime useFastPath
   // check additionally requires a deterministic filter, AVX2, and the bulk path
   // being enabled with null+filter/hook compatibility.
   if constexpr (
       kIsSuitableWidth &&
-      std::is_same_v<
-          typename V::Extract,
-          velox::dwio::common::ExtractToReader> &&
+      (std::is_same_v<
+           typename V::Extract,
+           velox::dwio::common::ExtractToReader> ||
+       (V::kHasHook && !V::kHasFilter &&
+        detail::hookAllowsBulkFastPath<typename V::HookType>())) &&
       kIsFluidCast) {
     auto* nulls = visitor.reader().rawNullsInReadRange();
     if (velox::dwio::common::useFastPath(visitor, nulls)) {
@@ -451,36 +462,8 @@ void SubIntSplitEncoding<T>::bulkScan(
     return;
   }
 
-  // processFixedWidthRun handles scatter (null gaps), filter evaluation, and
-  // hook forwarding. For non-hook paths it operates in place on the reader's
-  // rawValues; for hooks, values stays as the staged buffer.
-  if constexpr (!V::kHasHook) {
-    values = reinterpret_cast<OutputType*>(visitor.reader().rawValues());
-  }
-
-  auto numValues = visitor.reader().numValues();
-  int32_t* filterHits = nullptr;
-  if constexpr (V::kHasFilter) {
-    filterHits = visitor.outputRows(numSelected) - numValues;
-  }
-
-  velox::dwio::common::
-      processFixedWidthRun<OutputType, V::kFilterOnly, kScatter, V::dense>(
-          velox::RowSet(selectedRows, numSelected),
-          0,
-          numSelected,
-          scatterRows,
-          values,
-          filterHits,
-          numValues,
-          visitor.filter(),
-          visitor.hook());
-
-  if constexpr (!V::kHasHook) {
-    // Filter: count passing rows; no filter: all rows produce values.
-    visitor.addNumValues(
-        V::kHasFilter ? numValues - visitor.reader().numValues() : numRows);
-  }
+  detail::applyFixedWidthRun<kScatter>(
+      visitor, selectedRows, numSelected, scatterRows, values, numRows);
   visitor.setRowIndex(visitor.numRows());
 }
 
@@ -488,7 +471,7 @@ template <typename T>
 std::vector<subintsplit::SectionPlan> SubIntSplitEncoding<T>::planSections(
     EncodingSelection<physicalType>& selection,
     std::span<const physicalType> values,
-    const Encoding::Options& options) {
+    const subintsplit::TuningConfig& tuning) {
   constexpr int kBits = static_cast<int>(sizeof(physicalType) * 8);
 
   const auto mode =
@@ -504,28 +487,11 @@ std::vector<subintsplit::SectionPlan> SubIntSplitEncoding<T>::planSections(
     return std::move(parsed.value());
   }
 
-  auto samplerConfig = subintsplit::defaultSamplerConfig();
-  if (options.subIntSplitPlannerMaxSamples > 0) {
-    samplerConfig.maxSamples = options.subIntSplitPlannerMaxSamples;
-  }
   std::vector<uint64_t> samples;
-  subintsplit::sampleIntoU64<physicalType>(values, samples, samplerConfig);
+  subintsplit::sampleIntoU64<physicalType>(values, samples, tuning.sampler);
 
-  auto selectorConfig = subintsplit::defaultSelectorConfig();
-  selectorConfig.decodeCostBitsPerValue =
-      options.subIntSplitDecodeCostBitsPerValue;
-  if (options.subIntSplitBoundaryPruneThreshold >= 0.0) {
-    selectorConfig.boundaryPruneThreshold =
-        options.subIntSplitBoundaryPruneThreshold;
-  }
-  selectorConfig.maxCandidateBoundaries =
-      options.subIntSplitMaxCandidateBoundaries;
-  selectorConfig.maxSectionWidth =
-      static_cast<int>(options.subIntSplitMaxSectionWidth);
-  selectorConfig.frequencyMetricsMaxWidth =
-      static_cast<int>(options.subIntSplitFrequencyMetricsMaxWidth);
   return subintsplit::selectSplits(
-             samples, kBits, values.size(), selectorConfig)
+             samples, kBits, values.size(), tuning.selector)
       .sections;
 }
 
@@ -581,12 +547,13 @@ std::string_view SubIntSplitEncoding<T>::encodeImpl(
     std::span<const physicalType> values,
     Buffer& buffer,
     const Encoding::Options& options,
-    uint8_t flags) {
+    uint8_t flags,
+    const subintsplit::TuningConfig& tuning) {
   if (values.empty()) {
     NIMBLE_INCOMPATIBLE_ENCODING("SubIntSplitEncoding cannot be empty.");
   }
 
-  const auto sections = planSections(selection, values, options);
+  const auto sections = planSections(selection, values, tuning);
   NIMBLE_CHECK(
       !sections.empty(), "SubIntSplitEncoding: selector returned no sections");
 
@@ -629,16 +596,28 @@ std::string_view SubIntSplitEncoding<T>::encode(
     EncodingSelection<physicalType>& selection,
     std::span<const physicalType> values,
     Buffer& buffer,
-    const Encoding::Options& options) {
+    const Encoding::Options& options,
+    const subintsplit::TuningConfig& tuning) {
   if (!options.subIntSplitDeltaPreTransform || values.size() < 2) {
-    return encodeImpl(selection, values, buffer, options, /*flags=*/0);
+    return encodeImpl(
+        selection,
+        values,
+        buffer,
+        options,
+        /*flags=*/0,
+        tuning);
   }
 
   // Encode both forms and keep the smaller, so the pre-transform can never
   // regress a stream it does not suit -- InterleavedCounters, for instance,
   // is worse under delta because interleaved shards break monotonicity.
-  const std::string_view plain =
-      encodeImpl(selection, values, buffer, options, /*flags=*/0);
+  const std::string_view plain = encodeImpl(
+      selection,
+      values,
+      buffer,
+      options,
+      /*flags=*/0,
+      tuning);
 
   Vector<physicalType> residuals{&buffer.getMemoryPool(), values.size()};
   subintsplit::encodeDeltas<physicalType>(
@@ -649,7 +628,8 @@ std::string_view SubIntSplitEncoding<T>::encode(
       std::span<const physicalType>(residuals.data(), residuals.size()),
       buffer,
       options,
-      subintsplit::kFlagDelta);
+      subintsplit::kFlagDelta,
+      tuning);
 
   return delta.size() < plain.size() ? delta : plain;
 }

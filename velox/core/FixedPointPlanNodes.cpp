@@ -291,6 +291,45 @@ int32_t countExchanges(const PlanNode* node) {
   return numExchanges;
 }
 
+// Returns a node in 'node' that reads splits, or null.
+// - Exchanges are left to the chain checks: the loop wires the one that links
+//   a plan to its predecessor.
+// - An index lookup reads splits for its lookup side only if the connector
+//   asks for them.
+// - A nested FixedPointNode gets its peers from this loop, but nothing feeds
+//   its initial plans.  It validates its own per-iteration plans.
+const PlanNode* findSplitSource(const PlanNode* node) {
+  if (node->is<ExchangeNode>()) {
+    return nullptr;
+  }
+  if (const auto* fixedPoint = node->as<FixedPointNode>()) {
+    for (const auto& declaration : fixedPoint->stateDeclarations()) {
+      if (declaration->initialPlan() == nullptr) {
+        continue;
+      }
+      if (const auto* found =
+              findSplitSource(declaration->initialPlan().get())) {
+        return found;
+      }
+    }
+    return nullptr;
+  }
+  const auto* lookupJoin = node->as<IndexLookupJoinNode>();
+  if (node->requiresSplits() ||
+      (lookupJoin != nullptr && lookupJoin->needsIndexSplit())) {
+    return node;
+  }
+  for (const auto& source : node->sources()) {
+    if (lookupJoin != nullptr && source == lookupJoin->lookupSource()) {
+      continue;
+    }
+    if (const auto* found = findSplitSource(source.get())) {
+      return found;
+    }
+  }
+  return nullptr;
+}
+
 void validatePlanChain(
     const std::vector<PlanNodePtr>& plans,
     std::string_view what,
@@ -338,6 +377,18 @@ void validatePlanChain(
           what,
           i);
     }
+    // The loop feeds splits only to its initial plans and to the Exchange that
+    // links a plan to its predecessor; any other split source would wait for
+    // splits forever.
+    const auto* splitSource = findSplitSource(root);
+    VELOX_USER_CHECK_NULL(
+        splitSource,
+        "FixedPointNode: only an initial plan can read splits; other plans "
+        "must read their rows from state: {} {}, {} {}",
+        what,
+        i,
+        splitSource->name(),
+        splitSource->id());
     const std::string rootName =
         root != nullptr ? std::string(root->name()) : "nothing";
     if (i + 1 == numPlans) {
@@ -520,16 +571,22 @@ void FixedPointNode::resolveAndValidateStateReferences() const {
           join->stateName());
       const auto& entrySchema = entry->schema();
       const auto numKeys = static_cast<int32_t>(entry->keyColumns().size());
-      // Keys-first contract: the probe input's leading key columns must occupy
-      // the same channels and share the type of the hash table's build keys.
-      for (int32_t channel = 0; channel < numKeys; ++channel) {
+      // Probe key i names the probe column matched against build key i, which
+      // is column i of the hash table (keys first).
+      for (int32_t key = 0; key < numKeys; ++key) {
+        const auto& probeKey = join->probeKeys()[key];
+        const auto probeChannel = probeType->getChildIdxIfExists(probeKey);
         VELOX_USER_CHECK(
-            probeType->childAt(channel)->equivalent(
-                *entrySchema->childAt(channel)),
-            "FixedPointNode: StateHashJoin probe key column type at channel {} "
-            "must match the hash table build key type for entry: {}",
-            channel,
-            join->stateName());
+            probeChannel.has_value(),
+            "FixedPointNode: StateHashJoin probe key is not a probe input "
+            "column: {}",
+            probeKey);
+        VELOX_USER_CHECK(
+            probeType->childAt(*probeChannel)
+                ->equivalent(*entrySchema->childAt(key)),
+            "FixedPointNode: StateHashJoin probe key type must match the hash "
+            "table build key type: {}",
+            probeKey);
       }
       for (int32_t channel = 0; channel < numProbe; ++channel) {
         VELOX_USER_CHECK(

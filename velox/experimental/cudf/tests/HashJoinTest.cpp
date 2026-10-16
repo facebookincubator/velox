@@ -35,6 +35,7 @@
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/VectorTestUtil.h"
+#include "velox/type/tests/utils/CustomTypesForTesting.h"
 #include "velox/vector/VectorPrinter.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 
@@ -188,6 +189,119 @@ TEST_F(HashJoinTest, countStarOverFullJoinWithZeroColumnOutput) {
 
   auto expected = makeRowVector({makeFlatVector<int64_t>({7})});
   AssertQueryBuilder(plan).assertResults(expected);
+}
+
+TEST_F(HashJoinTest, rightJoinNullPadsIntervalDayTime) {
+  auto probe = makeRowVector(
+      {"p_key", "p_interval"},
+      {makeFlatVector<int64_t>({1}),
+       makeFlatVector<int64_t>({86'400'000}, INTERVAL_DAY_TIME())});
+  auto build = makeRowVector({"b_key"}, {makeFlatVector<int64_t>({2})});
+  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan = PlanBuilder(idGenerator)
+                  .values({probe})
+                  .hashJoin(
+                      {"p_key"},
+                      {"b_key"},
+                      PlanBuilder(idGenerator).values({build}).planNode(),
+                      "",
+                      {"p_interval", "b_key"},
+                      core::JoinType::kRight)
+                  .planNode();
+  auto expected = makeRowVector(
+      {"p_interval", "b_key"},
+      {makeNullableFlatVector<int64_t>({std::nullopt}, INTERVAL_DAY_TIME()),
+       makeFlatVector<int64_t>({2})});
+
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+TEST_F(HashJoinTest, rightJoinNullPadsRowWithArray) {
+  auto payload = makeRowVector(
+      {"x", "items"},
+      {makeFlatVector<int64_t>({10}), makeArrayVector<int32_t>({{1, 2}})});
+  auto probe = makeRowVector(
+      {"p_key", "payload"}, {makeFlatVector<int64_t>({1}), payload});
+  auto build = makeRowVector({"b_key"}, {makeFlatVector<int64_t>({2})});
+  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan = PlanBuilder(idGenerator)
+                  .values({probe})
+                  .hashJoin(
+                      {"p_key"},
+                      {"b_key"},
+                      PlanBuilder(idGenerator).values({build}).planNode(),
+                      "",
+                      {"payload", "b_key"},
+                      core::JoinType::kRight)
+                  .planNode();
+  // Child values are placeholders; only the null parent ROW is compared.
+  auto expectedPayload = makeRowVector(
+      {"x", "items"},
+      {makeFlatVector<int64_t>({0}), makeArrayVector<int32_t>({{}})},
+      [](auto /*row*/) { return true; });
+  auto expected = makeRowVector(
+      {"payload", "b_key"}, {expectedPayload, makeFlatVector<int64_t>({2})});
+
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+TEST_F(HashJoinTest, rightJoinNullPadsArrayOfVarbinary) {
+  auto probe = makeRowVector(
+      {"p_key", "payload"},
+      {makeFlatVector<int64_t>({1}),
+       makeArrayVector<StringView>({{"x"_sv}}, VARBINARY())});
+  auto build = makeRowVector({"b_key"}, {makeFlatVector<int64_t>({2})});
+  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan = PlanBuilder(idGenerator)
+                  .values({probe})
+                  .hashJoin(
+                      {"p_key"},
+                      {"b_key"},
+                      PlanBuilder(idGenerator).values({build}).planNode(),
+                      "",
+                      {"payload", "b_key"},
+                      core::JoinType::kRight)
+                  .planNode();
+  auto expected = makeRowVector(
+      {"payload", "b_key"},
+      {makeAllNullArrayVector(1, VARBINARY()), makeFlatVector<int64_t>({2})});
+
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+TEST_F(HashJoinTest, unsupportedTypeProjectedOutBeforeHashJoin) {
+  auto probe = makeRowVector({"p_key"}, {makeFlatVector<int64_t>({1, 2, 3})});
+  auto build = makeRowVector(
+      {"b_key", "marker"},
+      {makeFlatVector<int64_t>({2, 3, 4}),
+       makeMapVector<int64_t, int64_t>(
+           {{{20, 200}}, {{30, 300}}, {{40, 400}}})});
+  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto buildSource =
+      PlanBuilder(idGenerator).values({build}).project({"b_key"}).planNode();
+  auto plan = PlanBuilder(idGenerator)
+                  .values({probe})
+                  .hashJoin(
+                      {"p_key"},
+                      {"b_key"},
+                      buildSource,
+                      "",
+                      {"p_key"},
+                      core::JoinType::kInner)
+                  .planNode();
+
+  std::shared_ptr<Task> task;
+  auto result = AssertQueryBuilder(plan)
+                    .config(cudf_velox::CudfConfig::kCudfAllowCpuFallback, true)
+                    .copyResults(pool(), task);
+  auto expected = makeRowVector({"p_key"}, {makeFlatVector<int64_t>({2, 3})});
+  facebook::velox::test::assertEqualVectors(expected, result);
+
+  const auto operatorStats = toOperatorStats(task->taskStats());
+  EXPECT_EQ(operatorStats.count("HashBuild"), 1);
+  EXPECT_EQ(operatorStats.count("HashProbe"), 1);
+  EXPECT_EQ(operatorStats.count("CudfHashJoinBuild"), 0);
+  EXPECT_EQ(operatorStats.count("CudfHashJoinProbe"), 0);
 }
 
 TEST_P(MultiThreadedHashJoinTest, bigintArray) {
@@ -6091,7 +6205,7 @@ TEST_F(HashJoinTest, DISABLED_dynamicFiltersPushDownThroughAgg) {
   // Create probe data
   std::vector<RowVectorPtr> probeVectors{makeRowVector({
       makeFlatVector<int32_t>(numRowsProbe, [&](auto row) { return row - 10; }),
-      makeFlatVector<int64_t>(numRowsProbe, folly::identity),
+      makeFlatIdentityVector<int64_t>(numRowsProbe),
   })};
   std::shared_ptr<TempFilePath> probeFile = TempFilePath::create();
   writeToFile(probeFile->getPath(), probeVectors);
@@ -6166,8 +6280,8 @@ TEST_F(HashJoinTest, DISABLED_noDynamicFiltersPushDownThroughRightJoin) {
   std::vector<RowVectorPtr> rightProbe = {makeRowVector(
       {"aa", "bb"},
       {
-          makeFlatVector<int64_t>(10, folly::identity),
-          makeFlatVector<int64_t>(10, folly::identity),
+          makeFlatIdentityVector<int64_t>(10),
+          makeFlatIdentityVector<int64_t>(10),
       })};
   auto file = TempFilePath::create();
   writeToFile(file->getPath(), rightProbe);
@@ -8523,7 +8637,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, probeSpillOnWaitForPeers) {
         }
         injectedSpillOnce = true;
         EXPECT_EQ(
-            dynamic_cast<HashProbe*>(op)->testingState(),
+            op->as<HashProbe>()->testingState(),
             ProbeOperatorState::kWaitForPeers);
         testingRunArbitration(op->pool());
       }));
@@ -9643,7 +9757,7 @@ DEBUG_ONLY_TEST_F(HashJoinTest, hashTableCleanupAfterProbeFinish) {
       "facebook::velox::exec::Driver::runInternal::getOutput",
       std::function<void(Operator*)>([&](Operator* op) {
         if (probeOp == nullptr && op->operatorType() == "HashProbe") {
-          probeOp = dynamic_cast<HashProbe*>(op);
+          probeOp = op->as<HashProbe>();
         }
       }));
 

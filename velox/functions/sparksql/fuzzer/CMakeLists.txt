@@ -76,51 +76,55 @@ add_custom_command(
   VERBATIM
 )
 
-add_library(
-  velox_spark_query_runner
-  ${PROTO_SRCS}
-  ${GRPC_SRCS}
-  SparkQueryRunner.cpp
-  SparkQueryRunnerToSqlPlanNodeVisitor.cpp
-  # Headers listed as sources (not FILE_SET) because they include generated
-  # proto files that only exist after the custom_command runs.
-  SparkQueryRunner.h
-  SparkQueryRunnerToSqlPlanNodeVisitor.h
-)
+# The Spark query runner writes and reads Parquet files, so it and the tests
+# built on top of it are only available when Parquet support is enabled.
+if(VELOX_ENABLE_PARQUET)
+  add_library(
+    velox_spark_query_runner
+    ${PROTO_SRCS}
+    ${GRPC_SRCS}
+    SparkQueryRunner.cpp
+    SparkQueryRunnerToSqlPlanNodeVisitor.cpp
+    # Headers listed as sources (not FILE_SET) because they include generated
+    # proto files that only exist after the custom_command runs.
+    SparkQueryRunner.h
+    SparkQueryRunnerToSqlPlanNodeVisitor.h
+  )
 
-target_include_directories(velox_spark_query_runner PUBLIC ${PROJECT_BINARY_DIR}/spark/connect/)
+  target_include_directories(velox_spark_query_runner PUBLIC ${PROJECT_BINARY_DIR}/spark/connect/)
 
-target_link_libraries(
-  velox_spark_query_runner
-  velox_dwio_arrow_parquet_writer
-  velox_common_fuzzer_util
-  velox_fuzzer_util
-  velox_exec_test_lib
-  velox_arrow_bridge
-  gRPC::grpc++
-  gRPC::grpc
-  protobuf::libprotobuf
-  arrow
-)
+  target_link_libraries(
+    velox_spark_query_runner
+    velox_dwio_arrow_parquet_writer
+    velox_common_fuzzer_util
+    velox_fuzzer_util
+    velox_exec_test_lib
+    velox_arrow_bridge
+    gRPC::grpc++
+    gRPC::grpc
+    protobuf::libprotobuf
+    arrow
+  )
 
-add_executable(spark_aggregation_fuzzer_test SparkAggregationFuzzerTest.cpp)
+  add_executable(spark_aggregation_fuzzer_test SparkAggregationFuzzerTest.cpp)
 
-target_link_libraries(
-  spark_aggregation_fuzzer_test
-  velox_aggregation_fuzzer
-  velox_aggregation_fuzzer_base
-  velox_functions_spark_aggregates
-  velox_dwio_parquet_writer
-  velox_spark_query_runner
-  velox_fuzzer_util
-  velox_window
-  velox_vector_test_lib
-  GTest::gtest
-  GTest::gtest_main
-)
+  target_link_libraries(
+    spark_aggregation_fuzzer_test
+    velox_aggregation_fuzzer
+    velox_aggregation_fuzzer_base
+    velox_functions_spark_aggregates
+    velox_dwio_parquet_writer
+    velox_spark_query_runner
+    velox_fuzzer_util
+    velox_window
+    velox_vector_test_lib
+    GTest::gtest
+    GTest::gtest_main
+  )
 
-if(${VELOX_BUILD_TESTING})
-  add_subdirectory(tests)
+  if(${VELOX_BUILD_TESTING})
+    add_subdirectory(tests)
+  endif()
 endif()
 
 velox_add_library(

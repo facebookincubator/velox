@@ -426,6 +426,7 @@ void registerCountDistinctAggregate(
                 "Unexpected type {}", TypeKindName::toName(typeKind));
         }
       },
+      {.ignoreNullInputs = true},
       withCompanionFunctions,
       overwrite);
 }

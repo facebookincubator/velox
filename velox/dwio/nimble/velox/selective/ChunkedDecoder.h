@@ -64,12 +64,14 @@ class ChunkedDecoder {
       velox::memory::MemoryPool* pool,
       bool stringDecoderZeroCopy = false,
       velox::dwio::common::DecodingStats* decodingStats = nullptr,
-      DictionaryAlphabetLoader dictionaryAlphabetLoader = nullptr)
+      DictionaryAlphabetLoader dictionaryAlphabetLoader = nullptr,
+      bool dictionaryAwareReads = false)
       : input_{std::move(input)},
         pool_{pool},
         decodeValuesWithNulls_{decodeValuesWithNulls},
         encodingFactory_(encodingFactory),
         stringDecoderZeroCopy_{stringDecoderZeroCopy},
+        dictionaryAwareReads_{dictionaryAwareReads},
         streamIndex_{std::move(streamIndex)},
         streamRowCount_{
             streamIndex_ ? std::optional<uint32_t>(streamIndex_->rowCount())
@@ -130,6 +132,7 @@ class ChunkedDecoder {
     const auto numRows = visitor.numRows();
     ReadWithVisitorParams params{};
     params.numScanned = readOffset;
+    params.dictionaryAwareReads = dictionaryAwareReads_;
     // readOffset > 0 means a single read range is being decoded in segments
     // across multiple readWithVisitor calls (e.g. the dict→flat
     // abandon-dictionary fallback resuming at the abandoned chunk boundary), so
@@ -902,6 +905,7 @@ class ChunkedDecoder {
   const bool decodeValuesWithNulls_;
   const EncodingFactory* const encodingFactory_;
   const bool stringDecoderZeroCopy_{false};
+  const bool dictionaryAwareReads_{false};
   // Optional stream index for accelerating skip operations
   const std::shared_ptr<index::StreamIndex> streamIndex_;
   // Total row count in the stream, set from stream index if available.

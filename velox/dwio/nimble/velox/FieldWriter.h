@@ -24,9 +24,11 @@
 #include "velox/dwio/common/TypeWithId.h"
 #include "velox/dwio/nimble/common/Buffer.h"
 #include "velox/dwio/nimble/velox/BufferGrowthPolicy.h"
+#include "velox/dwio/nimble/velox/HybridFlatMap.h"
 #include "velox/dwio/nimble/velox/NimbleConfig.h"
 #include "velox/dwio/nimble/velox/OrderedRanges.h"
 #include "velox/dwio/nimble/velox/SchemaBuilder.h"
+#include "velox/dwio/nimble/velox/SchemaUtils.h"
 #include "velox/dwio/nimble/velox/StreamData.h"
 #include "velox/dwio/nimble/velox/stats/ColumnStatistics.h"
 #include "velox/dwio/nimble/velox/stats/ColumnStatsUtils.h"
@@ -164,6 +166,10 @@ class FieldWriterContext {
     return flatMapNodes_.contains(nodeId);
   }
 
+  inline bool hasHybridFlatMapNodeId(uint32_t nodeId) const {
+    return hybridFlatMaps_.contains(nodeId);
+  }
+
   /// Registers a flat map node by ID, optionally with predefined keys.
   /// Empty set means dynamic key discovery; non-empty set means predefined
   /// keys in sorted order.
@@ -171,6 +177,10 @@ class FieldWriterContext {
     NIMBLE_CHECK(
         flatMapNodes_.find(nodeId) == flatMapNodes_.end(),
         "Flat map column already set for node {}",
+        nodeId);
+    NIMBLE_CHECK(
+        !hasHybridFlatMapNodeId(nodeId),
+        "Map node {} is already configured as a hybrid FlatMap",
         nodeId);
     flatMapNodes_[nodeId] = std::move(keys);
   }
@@ -189,7 +199,29 @@ class FieldWriterContext {
     flatMapNodes_.reserve(size);
   }
 
-  /// Returns the set of flat map node IDs.
+  /// Registers the logical grouping for a Hybrid FlatMap node.
+  void addHybridFlatMapNode(uint32_t nodeId, const HybridFlatMap& hybridMap) {
+    NIMBLE_CHECK(
+        !hasFlatMapNodeId(nodeId),
+        "Map node {} is already configured as a FlatMap",
+        nodeId);
+    const bool uniqueNode = hybridFlatMaps_.emplace(nodeId, hybridMap).second;
+    NIMBLE_CHECK(
+        uniqueNode, "Hybrid FlatMap grouping already set for node {}", nodeId);
+  }
+
+  /// Returns the logical grouping registered for a Hybrid FlatMap node.
+  HybridFlatMap* hybridFlatMapNode(uint32_t nodeId) {
+    auto it = hybridFlatMaps_.find(nodeId);
+    return it == hybridFlatMaps_.end() ? nullptr : &it->second;
+  }
+
+  inline void reserveHybridFlatMapNodes(size_t size) {
+    hybridFlatMaps_.reserve(size);
+  }
+
+  /// Returns regular FlatMap node IDs used by file-writer raw-size accounting.
+  /// Hybrid FlatMap is serialized-value-only and is intentionally excluded.
   inline folly::F14FastSet<uint32_t> flatMapNodeIds() const {
     folly::F14FastSet<uint32_t> ids;
     ids.reserve(flatMapNodes_.size());
@@ -400,7 +432,8 @@ class FieldWriterContext {
   void wrapSharedStatsCollector(
       const std::shared_ptr<const velox::dwio::common::TypeWithId>& type,
       bool shared) {
-    shared = shared || hasFlatMapNodeId(type->id());
+    shared = shared || hasFlatMapNodeId(type->id()) ||
+        hasHybridFlatMapNodeId(type->id());
     if (shared) {
       statsCollectors_[type->id()] = SharedStatisticsCollector::wrap(
           std::move(statsCollectors_[type->id()]));
@@ -499,6 +532,7 @@ class FieldWriterContext {
   SchemaBuilder schemaBuilder_;
 
   folly::F14FastMap<uint32_t, std::set<std::string>> flatMapNodes_;
+  folly::F14FastMap<uint32_t, HybridFlatMap> hybridFlatMaps_;
   folly::F14FastSet<uint32_t> dictionaryArrayNodeIds_;
   folly::F14FastSet<uint32_t> deduplicatedMapNodeIds_;
   bool ignoreTopLevelNulls_{false};
@@ -707,7 +741,8 @@ class FieldWriterContext {
             // getRawSizeFromVector which already includes children's sizes.
             // TODO(huamengjiang): fix the behavior of deduplicated stats for
             // flatmaps when properly supporting them.
-            if (hasFlatMapNodeId(type->id())) {
+            if (hasFlatMapNodeId(type->id()) ||
+                hasHybridFlatMapNodeId(type->id())) {
               dedupedStatsCollector->addLogicalSize(
                   childStatsCollector->getLogicalSize());
             }

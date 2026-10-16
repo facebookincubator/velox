@@ -208,6 +208,11 @@ uint32_t EncodingViewDecoder::next(
   return numNonNulls;
 }
 
+uint32_t EncodingViewDecoder::remainingRows() {
+  NIMBLE_CHECK_LE(nextRow_, encodingView_->rowCount());
+  return encodingView_->rowCount() - nextRow_;
+}
+
 uint32_t EncodingViewDecoder::scatterNext(
     uint32_t count,
     void* output,

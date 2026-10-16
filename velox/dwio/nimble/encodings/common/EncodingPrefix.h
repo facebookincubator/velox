@@ -31,12 +31,36 @@
 
 namespace facebook::nimble {
 
+namespace encoding {
+
+/// Reads one byte, advancing data on success and rejecting truncation.
+uint8_t readByte(std::string_view& data);
+
+/// Reads a little-endian uint16, advancing data on success and rejecting
+/// truncation. The input does not need to be aligned.
+uint16_t readUint16(std::string_view& data);
+
+/// Reads a uint32 varint, advancing data on success and rejecting truncation
+/// and overflow, including a continuation bit on the fifth byte.
+uint32_t readVarint32(std::string_view& data);
+
+/// Reads bytes prefixed by a uint32 varint length. Returns a view into the
+/// input and advances data only after validating the complete payload.
+std::string_view readLengthPrefixedBytes(std::string_view& data);
+
+} // namespace encoding
+
 struct EncodingPrefix {
   static constexpr int kEncodingTypeOffset = 0;
   static constexpr int kDataTypeOffset = 1;
   static constexpr int kRowCountOffset = 2;
   /// Prefix size for the fixed (non-varint) row count format.
   static constexpr int kFixedPrefixSize = 6;
+
+  /// Validates and consumes a complete prefix, returning its bytes for the
+  /// accessors below. Rejects truncation and row-count varint overflow before
+  /// advancing data; encoding and data type IDs are left to the caller.
+  static std::string_view consume(std::string_view& data, bool useVarint);
 
   static void serialize(
       EncodingType encodingType,
