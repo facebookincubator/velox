@@ -20,9 +20,9 @@
 #include <exception>
 
 #include "velox/common/base/VeloxException.h"
-#include "velox/functions/lib/string/StringImpl.h"
 #include "velox/functions/sparksql/SparkQueryConfig.h"
 #include "velox/functions/sparksql/TimestampUtils.h"
+#include "velox/functions/sparksql/specialforms/SparkCastStringTrim.h"
 #include "velox/type/TimestampConversion.h"
 #include "velox/type/Type.h"
 #include "velox/type/tz/TimeZoneMap.h"
@@ -167,7 +167,7 @@ Expected<int32_t> SparkCastHooks::castStringToDate(
   //   "1970-01-01 123"
   //   "1970-01-01 (BC)"
   return util::fromDateString(
-      removeWhiteSpaces(dateString), util::ParseMode::kSparkCast);
+      removeWhiteSpaces(dateString, *DATE()), util::ParseMode::kSparkCast);
 }
 
 Expected<int64_t> SparkCastHooks::castStringToTime(
@@ -192,11 +192,10 @@ Expected<double> SparkCastHooks::castStringToDouble(
   return util::Converter<TypeKind::DOUBLE>::tryCast(data);
 }
 
-StringView SparkCastHooks::removeWhiteSpaces(const StringView& view) const {
-  StringView output;
-  stringImpl::trimUnicodeWhiteSpace<true, true, StringView, StringView>(
-      output, view);
-  return output;
+StringView SparkCastHooks::removeWhiteSpaces(
+    const StringView& view,
+    const Type& toType) const {
+  return trimStringForCast(view, toType);
 }
 
 void SparkCastHooks::castDateTimestampToGMT(

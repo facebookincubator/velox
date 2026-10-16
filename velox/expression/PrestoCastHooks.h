@@ -58,7 +58,8 @@ class PrestoCastHooks : public CastHooks {
   Expected<double> castStringToDouble(const StringView& data) const override;
 
   // Returns the input as is.
-  StringView removeWhiteSpaces(const StringView& view) const override;
+  StringView removeWhiteSpaces(const StringView& view, const Type& toType)
+      const override;
 
   // Returns cast options following 'isLegacyCast' and session timezone.
   const TimestampToStringOptions& timestampToStringOptions() const override;
