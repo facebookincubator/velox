@@ -271,6 +271,23 @@ TEST(FilterTest, createHugeintValuesEmpty) {
   EXPECT_FALSE(filter->testInt128(0));
 }
 
+TEST(FilterTest, hugeintValuesUsingHashTableRange) {
+  const auto value1 = HugeInt::build(1, 17);
+  const auto value2 = HugeInt::build(3, 17);
+  auto filter = createHugeintValues({value1, value2}, false);
+
+  EXPECT_FALSE(filter->testInt128Range(0, value1 - 1, false));
+  EXPECT_TRUE(filter->testInt128Range(value1, value1, false));
+  EXPECT_FALSE(filter->testInt128Range(value1 + 1, value1 + 1, false));
+  EXPECT_TRUE(filter->testInt128Range(value1 + 1, value2 - 1, false));
+  EXPECT_TRUE(filter->testInt128Range(value2, value2 + 1, false));
+  EXPECT_FALSE(filter->testInt128Range(value2 + 1, value2 + 2, true));
+
+  filter = createHugeintValues({value1, value2}, true);
+  EXPECT_TRUE(filter->testInt128Range(value2 + 1, value2 + 2, true));
+  EXPECT_FALSE(filter->testInt128Range(value2 + 1, value2 + 2, false));
+}
+
 TEST(FilterTest, mergeWithHugeintValuesUsingHashTable) {
   auto valueAt = [](uint64_t highBits) {
     return HugeInt::build(highBits, /*lowBits=*/42);

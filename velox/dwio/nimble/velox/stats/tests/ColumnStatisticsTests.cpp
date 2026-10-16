@@ -344,7 +344,8 @@ TEST_F(ColumnStatisticsTests, toCommonStatisticsIntegral) {
   EXPECT_EQ(common->getSize().value(), 500);
 
   auto* intStats =
-      dynamic_cast<velox::dwio::common::IntegerColumnStatistics*>(common.get());
+      dynamic_cast<velox::dwio::common::IntegerColumnStatistics<>*>(
+          common.get());
   ASSERT_NE(intStats, nullptr);
   ASSERT_TRUE(intStats->getMinimum().has_value());
   EXPECT_EQ(intStats->getMinimum().value(), -50);
@@ -362,7 +363,8 @@ TEST_F(ColumnStatisticsTests, toCommonStatisticsIntegralNoMinMax) {
   EXPECT_FALSE(common->hasNull().value());
 
   auto* intStats =
-      dynamic_cast<velox::dwio::common::IntegerColumnStatistics*>(common.get());
+      dynamic_cast<velox::dwio::common::IntegerColumnStatistics<>*>(
+          common.get());
   ASSERT_NE(intStats, nullptr);
   EXPECT_EQ(intStats->getMinimum(), std::nullopt);
   EXPECT_EQ(intStats->getMaximum(), std::nullopt);
@@ -454,7 +456,8 @@ TEST_F(ColumnStatisticsTests, toCommonStatisticsDefault) {
 
   // Should not cast to any typed subclass.
   EXPECT_EQ(
-      dynamic_cast<velox::dwio::common::IntegerColumnStatistics*>(common.get()),
+      dynamic_cast<velox::dwio::common::IntegerColumnStatistics<>*>(
+          common.get()),
       nullptr);
   EXPECT_EQ(
       dynamic_cast<velox::dwio::common::DoubleColumnStatistics*>(common.get()),
@@ -478,7 +481,8 @@ TEST_F(ColumnStatisticsTests, toCommonStatisticsDeduplicated) {
 
   // Should produce base ColumnStatistics, not IntegerColumnStatistics.
   EXPECT_EQ(
-      dynamic_cast<velox::dwio::common::IntegerColumnStatistics*>(common.get()),
+      dynamic_cast<velox::dwio::common::IntegerColumnStatistics<>*>(
+          common.get()),
       nullptr);
 }
 
