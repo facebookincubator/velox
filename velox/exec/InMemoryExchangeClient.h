@@ -88,6 +88,8 @@ class InMemoryExchangeClient
 
   void close() override;
 
+  void abort() override;
+
   folly::F14FastMap<std::string, RuntimeMetric> stats() const override;
 
   std::string toString() const override;
@@ -164,8 +166,9 @@ class InMemoryExchangeClient
         sources_.size() == 1;
   }
 
-  // Implements close() so the destructor does not call a virtual method.
-  void closeImpl();
+  // Implements close() and abort() so the destructor does not call a virtual
+  // method.
+  void closeImpl(bool abort);
 
   folly::F14FastMap<std::string, RuntimeMetric> collectStatsLocked() const;
 

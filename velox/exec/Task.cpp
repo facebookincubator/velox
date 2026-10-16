@@ -2969,6 +2969,21 @@ ContinueFuture Task::terminate(TaskState terminalState) {
   taskCompletionNotifier.notify();
   stateChangeNotifier.notify();
 
+  // Abort exchange sources before closing drivers so source-specific cleanup
+  // can unblock any driver waiting for exchange teardown.
+  if (terminalState != TaskState::kFinished) {
+    for (auto& exchangeClient : exchangeClients) {
+      if (exchangeClient != nullptr) {
+        try {
+          exchangeClient->abort();
+        } catch (const std::exception& ex) {
+          LOG(ERROR) << "Exchange client threw from abort() during termination "
+                     << "of task " << taskId_ << ": " << ex.what();
+        }
+      }
+    }
+  }
+
   // Get the stats and free the resources of Drivers that were not on
   // thread.
   for (auto& driver : offThreadDrivers) {

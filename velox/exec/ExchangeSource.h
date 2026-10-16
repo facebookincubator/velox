@@ -104,6 +104,11 @@ class ExchangeSource : public std::enable_shared_from_this<ExchangeSource> {
   /// once it received enough data.
   virtual void close() = 0;
 
+  /// Aborts the exchange source after task failure or cancellation.
+  virtual void abort() {
+    close();
+  }
+
   // Returns runtime statistics. ExchangeSource is expected to report
   // background CPU time by including a runtime metric named
   // Operator::kBackgroundCpuTimeNanos.

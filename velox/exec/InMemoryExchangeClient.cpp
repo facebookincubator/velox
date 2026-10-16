@@ -194,10 +194,14 @@ void InMemoryExchangeClient::noMoreRemoteTasks() {
 }
 
 void InMemoryExchangeClient::close() {
-  closeImpl();
+  closeImpl(/*abort=*/false);
 }
 
-void InMemoryExchangeClient::closeImpl() {
+void InMemoryExchangeClient::abort() {
+  closeImpl(/*abort=*/true);
+}
+
+void InMemoryExchangeClient::closeImpl(bool abort) {
   std::vector<std::shared_ptr<ExchangeSource>> sources;
   std::queue<ProducingSource> producingSources;
   std::queue<std::shared_ptr<ExchangeSource>> emptySources;
@@ -219,7 +223,11 @@ void InMemoryExchangeClient::closeImpl() {
 
   // Outside of mutex.
   for (auto& source : sources) {
-    source->close();
+    if (abort) {
+      source->abort();
+    } else {
+      source->close();
+    }
   }
   queue_->close();
 }
@@ -469,7 +477,7 @@ InMemoryExchangeClient::pickupSingleSourceToRequestLocked() {
 }
 
 InMemoryExchangeClient::~InMemoryExchangeClient() {
-  closeImpl();
+  closeImpl(/*abort=*/false);
 }
 
 std::string InMemoryExchangeClient::toString() const {
