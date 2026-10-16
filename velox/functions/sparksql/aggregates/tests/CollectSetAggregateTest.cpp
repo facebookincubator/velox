@@ -413,6 +413,31 @@ TEST_F(CollectSetAggregateTest, respectNullsGlobal) {
       {expected});
 }
 
+// The partial companion function, collect_set_partial, also respects the
+// constant ignoreNulls argument.
+TEST_F(CollectSetAggregateTest, respectNullsPartialCompanion) {
+  auto data = makeRowVector({
+      makeNullableFlatVector<int32_t>({1, std::nullopt, 2, std::nullopt, 1}),
+  });
+
+  auto plan = exec::test::PlanBuilder()
+                  .values({data})
+                  .singleAggregation({}, {"collect_set_partial(c0, false)"})
+                  .project({"spark_array_sort(a0)"})
+                  .planNode();
+  assertQuery(
+      plan,
+      makeRowVector(
+          {makeNullableArrayVector<int32_t>({{1, 2, std::nullopt}})}));
+
+  plan = exec::test::PlanBuilder()
+             .values({data})
+             .singleAggregation({}, {"collect_set_partial(c0, true)"})
+             .project({"spark_array_sort(a0)"})
+             .planNode();
+  assertQuery(plan, makeRowVector({makeArrayVector<int32_t>({{1, 2}})}));
+}
+
 TEST_F(CollectSetAggregateTest, respectNullsGroupBy) {
   auto data = makeRowVector({
       makeFlatVector<int16_t>({1, 1, 2, 2, 2, 1, 2, 1, 2, 1}),
