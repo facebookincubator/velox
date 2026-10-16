@@ -911,6 +911,41 @@ TEST_F(DateTimeFunctionsTest, nextDay) {
   EXPECT_EQ(nextDay("2015-07-23", ""), std::nullopt);
 }
 
+TEST_F(DateTimeFunctionsTest, nextDayAnsi) {
+  enableAnsiMode();
+  const auto startDates =
+      makeNullableFlatVector<int32_t>({parseDate("2015-07-23")}, DATE());
+  const auto nextDay = [&](const std::string& dayOfWeek) {
+    return evaluateOnce<int32_t>(
+        fmt::format("next_day(c0, '{}')", dayOfWeek),
+        makeRowVector({startDates}));
+  };
+  const auto nextDayNonConstant = [&](const std::string& dayOfWeek) {
+    return evaluateOnce<int32_t>(
+        "next_day(c0, c1)",
+        makeRowVector(
+            {startDates, makeNullableFlatVector<std::string>({dayOfWeek})}));
+  };
+
+  // A valid day of week is not affected.
+  EXPECT_EQ(nextDay("Mon"), parseDate("2015-07-27"));
+  EXPECT_EQ(nextDayNonConstant("Mon"), parseDate("2015-07-27"));
+
+  // An invalid day of week throws, with a constant or non-constant argument.
+  VELOX_ASSERT_USER_THROW(nextDay("xx"), "Illegal input for day of week: xx");
+  VELOX_ASSERT_USER_THROW(
+      nextDayNonConstant("xx"), "Illegal input for day of week: xx");
+  VELOX_ASSERT_USER_THROW(nextDay(""), "Illegal input for day of week: ");
+
+  // A NULL start date returns NULL without an error.
+  EXPECT_EQ(
+      evaluateOnce<int32_t>(
+          "next_day(c0, 'xx')",
+          makeRowVector(
+              {makeNullableFlatVector<int32_t>({std::nullopt}, DATE())})),
+      std::nullopt);
+}
+
 TEST_F(DateTimeFunctionsTest, getTimestamp) {
   const auto getTimestamp = [&](const std::optional<StringView>& dateString,
                                 const std::string& format) {
