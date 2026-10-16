@@ -15,15 +15,55 @@
  */
 #include "velox/dwio/nimble/velox/stats/ColumnStatistics.h"
 
+#include <bit>
+#include <cmath>
 #include <optional>
 #include <utility>
 
+#include "velox/common/base/XxHashInline.h"
+#include "velox/common/hyperloglog/DenseHll.h"
+#include "velox/common/hyperloglog/SparseHll.h"
+#include "velox/common/memory/HashStringAllocator.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/velox/stats/ColumnStatsUtils.h"
+#include "velox/functions/lib/HllAccumulator.h"
 
 namespace facebook::nimble {
 
 namespace {
+
+// Storage-agnostic HLL accumulator: values are pre-hashed with XXH64 (the
+// HllAsFinalResult=false path) and fed via insertHash, so the element type
+// parameter is irrelevant.
+using HllAcc = velox::common::hll::
+    HllAccumulator<int64_t, false, velox::HashStringAllocator>;
+
+// 2^11 = 2048 buckets (~2.3% standard error), matching the DWRF writers. HLLs
+// with different bucket counts cannot be merged.
+constexpr int8_t kHllIndexBitLength = 11;
+
+// Hashes match the Java DWRF writers (XxHash64.hash(long) over the value
+// widened to 64 bits, floats via floatToIntBits / doubleToLongBits with
+// canonical NaN) so sketches from either format merge without NDV drift.
+uint64_t hllHashLong(int64_t value) {
+  return XXH64(&value, sizeof(value), 0);
+}
+
+template <typename T>
+uint64_t hllHash(T value) {
+  if constexpr (std::is_integral_v<T>) {
+    return hllHashLong(static_cast<int64_t>(value));
+  } else if constexpr (std::is_same_v<T, float>) {
+    const int32_t bits =
+        std::isnan(value) ? 0x7fc00000 : std::bit_cast<int32_t>(value);
+    return hllHashLong(bits);
+  } else {
+    static_assert(std::is_same_v<T, double>);
+    return hllHashLong(
+        std::isnan(value) ? int64_t{0x7ff8000000000000}
+                          : std::bit_cast<int64_t>(value));
+  }
+}
 
 template <typename T>
 void addFloatingPointValuesScalar(
@@ -77,8 +117,46 @@ StatType ColumnStatistics::getType() const {
 }
 
 std::unique_ptr<ColumnStatistics> ColumnStatistics::clone() const {
-  return std::make_unique<ColumnStatistics>(
+  auto cloned = std::make_unique<ColumnStatistics>(
       getValueCount(), getNullCount(), getLogicalSize(), getPhysicalSize());
+  cloned->ndvSketch_ = ndvSketch_;
+  return cloned;
+}
+
+std::optional<int64_t> ColumnStatistics::getNdvCardinality() const {
+  const auto& sketch = getNdvSketch();
+  if (!sketch.has_value()) {
+    return std::nullopt;
+  }
+  const char* data = sketch->data();
+  namespace hll = velox::common::hll;
+  if (hll::SparseHlls::canDeserialize(data)) {
+    return hll::SparseHlls::cardinality(data);
+  }
+  if (hll::DenseHlls::canDeserialize(data)) {
+    return hll::DenseHlls::cardinality(data);
+  }
+  return std::nullopt;
+}
+
+/* static */ std::optional<std::string> ColumnStatistics::mergeNdvSketches(
+    const std::optional<std::string>& lhs,
+    const std::optional<std::string>& rhs,
+    velox::memory::MemoryPool* pool) {
+  if (!lhs.has_value()) {
+    return rhs;
+  }
+  if (!rhs.has_value()) {
+    return lhs;
+  }
+  velox::HashStringAllocator allocator{pool};
+  auto accumulator = HllAcc::deserialize(lhs->data(), &allocator);
+  accumulator->mergeWith(
+      velox::StringView{rhs->data(), static_cast<int32_t>(rhs->size())},
+      &allocator);
+  std::string merged(static_cast<size_t>(accumulator->serializedSize()), '\0');
+  accumulator->serialize(merged.data());
+  return merged;
 }
 
 std::unique_ptr<velox::dwio::common::ColumnStatistics>
@@ -88,12 +166,13 @@ ColumnStatistics::toCommonStatistics() const {
   const auto rawSize = std::make_optional<uint64_t>(getLogicalSize());
   const auto size = std::make_optional<uint64_t>(getPhysicalSize());
 
+  std::unique_ptr<velox::dwio::common::ColumnStatistics> result;
   switch (getType()) {
     case StatType::INTEGRAL: {
       const auto* intStats = as<const IntegralStatistics>();
       NIMBLE_DCHECK(
           intStats != nullptr, "Failed to cast to IntegralStatistics");
-      return std::make_unique<velox::dwio::common::IntegerColumnStatistics>(
+      result = std::make_unique<velox::dwio::common::IntegerColumnStatistics>(
           valueCount,
           hasNull,
           rawSize,
@@ -101,12 +180,13 @@ ColumnStatistics::toCommonStatistics() const {
           intStats->getMin(),
           intStats->getMax(),
           std::nullopt);
+      break;
     }
     case StatType::FLOATING_POINT: {
       const auto* fpStats = as<const FloatingPointStatistics>();
       NIMBLE_DCHECK(
           fpStats != nullptr, "Failed to cast to FloatingPointStatistics");
-      return std::make_unique<velox::dwio::common::DoubleColumnStatistics>(
+      result = std::make_unique<velox::dwio::common::DoubleColumnStatistics>(
           valueCount,
           hasNull,
           rawSize,
@@ -114,11 +194,12 @@ ColumnStatistics::toCommonStatistics() const {
           fpStats->getMin(),
           fpStats->getMax(),
           std::nullopt);
+      break;
     }
     case StatType::STRING: {
       const auto* strStats = as<const StringStatistics>();
       NIMBLE_DCHECK(strStats != nullptr, "Failed to cast to StringStatistics");
-      return std::make_unique<velox::dwio::common::StringColumnStatistics>(
+      result = std::make_unique<velox::dwio::common::StringColumnStatistics>(
           valueCount,
           hasNull,
           rawSize,
@@ -126,14 +207,19 @@ ColumnStatistics::toCommonStatistics() const {
           strStats->getMin(),
           strStats->getMax(),
           std::nullopt);
+      break;
     }
     case StatType::DEFAULT:
     case StatType::DEDUPLICATED:
+      result = std::make_unique<velox::dwio::common::ColumnStatistics>(
+          valueCount, hasNull, rawSize, size);
       break;
   }
 
-  return std::make_unique<velox::dwio::common::ColumnStatistics>(
-      valueCount, hasNull, rawSize, size);
+  if (const auto cardinality = getNdvCardinality()) {
+    result->setNumDistinct(*cardinality);
+  }
+  return result;
 }
 
 StringStatistics::StringStatistics(
@@ -160,13 +246,15 @@ StatType StringStatistics::getType() const {
 }
 
 std::unique_ptr<ColumnStatistics> StringStatistics::clone() const {
-  return std::make_unique<StringStatistics>(
+  auto cloned = std::make_unique<StringStatistics>(
       getValueCount(),
       getNullCount(),
       getLogicalSize(),
       getPhysicalSize(),
       getMin(),
       getMax());
+  cloned->setNdvSketch(ndvSketch_);
+  return cloned;
 }
 
 IntegralStatistics::IntegralStatistics(
@@ -193,13 +281,15 @@ StatType IntegralStatistics::getType() const {
 }
 
 std::unique_ptr<ColumnStatistics> IntegralStatistics::clone() const {
-  return std::make_unique<IntegralStatistics>(
+  auto cloned = std::make_unique<IntegralStatistics>(
       getValueCount(),
       getNullCount(),
       getLogicalSize(),
       getPhysicalSize(),
       getMin(),
       getMax());
+  cloned->setNdvSketch(ndvSketch_);
+  return cloned;
 }
 
 FloatingPointStatistics::FloatingPointStatistics(
@@ -226,13 +316,15 @@ StatType FloatingPointStatistics::getType() const {
 }
 
 std::unique_ptr<ColumnStatistics> FloatingPointStatistics::clone() const {
-  return std::make_unique<FloatingPointStatistics>(
+  auto cloned = std::make_unique<FloatingPointStatistics>(
       getValueCount(),
       getNullCount(),
       getLogicalSize(),
       getPhysicalSize(),
       getMin(),
       getMax());
+  cloned->setNdvSketch(ndvSketch_);
+  return cloned;
 }
 
 DeduplicatedColumnStatistics::DeduplicatedColumnStatistics(
@@ -268,6 +360,20 @@ uint64_t DeduplicatedColumnStatistics::getPhysicalSize() const {
   return baseStatistics_ ? baseStatistics_->getPhysicalSize() : 0;
 }
 
+const std::optional<std::string>& DeduplicatedColumnStatistics::getNdvSketch()
+    const {
+  return baseStatistics_ ? baseStatistics_->getNdvSketch() : ndvSketch_;
+}
+
+void DeduplicatedColumnStatistics::setNdvSketch(
+    std::optional<std::string> sketch) {
+  if (baseStatistics_ != nullptr) {
+    baseStatistics_->setNdvSketch(std::move(sketch));
+    return;
+  }
+  ndvSketch_ = std::move(sketch);
+}
+
 uint64_t DeduplicatedColumnStatistics::getDedupedCount() const {
   return dedupedCount_;
 }
@@ -300,6 +406,44 @@ const ColumnStatistics* DeduplicatedColumnStatistics::getBaseStatistics()
 StatisticsCollector::StatisticsCollector()
     : stats_{std::make_unique<ColumnStatistics>()} {}
 
+StatisticsCollector::~StatisticsCollector() = default;
+
+void StatisticsCollector::enableHll(velox::memory::MemoryPool* pool) {
+  hllPool_ = pool;
+  resetHll();
+}
+
+void StatisticsCollector::resetHll() {
+  hllDirty_ = false;
+  // Destroy the accumulator before its backing allocator: the HLL holds
+  // allocator-owned storage, so releasing the allocator first would leave the
+  // accumulator's destructor accessing freed memory.
+  hll_.reset();
+  hllAllocator_.reset();
+  if (hllPool_ == nullptr) {
+    return;
+  }
+  hllAllocator_ = std::make_unique<velox::HashStringAllocator>(hllPool_);
+  hll_ = std::make_unique<HllAcc>(kHllIndexBitLength, hllAllocator_.get());
+}
+
+void StatisticsCollector::insertHllHash(uint64_t hash) {
+  if (hll_) {
+    hll_->insertHash(hash);
+    hllDirty_ = true;
+  }
+}
+
+void StatisticsCollector::flushHll() const {
+  if (!hllDirty_) {
+    return;
+  }
+  std::string serialized(static_cast<size_t>(hll_->serializedSize()), '\0');
+  hll_->serialize(serialized.data());
+  stats_->setNdvSketch(std::move(serialized));
+  hllDirty_ = false;
+}
+
 uint64_t StatisticsCollector::getValueCount() const {
   return stats_->getValueCount();
 }
@@ -321,10 +465,12 @@ StatType StatisticsCollector::getType() const {
 }
 
 ColumnStatistics* StatisticsCollector::getStatsView() {
+  flushHll();
   return stats_.get();
 }
 
 const ColumnStatistics* StatisticsCollector::getStatsView() const {
+  flushHll();
   return stats_.get();
 }
 
@@ -351,26 +497,47 @@ void StatisticsCollector::merge(const StatisticsCollector& other) {
   stats_->nullCount_ += otherStats->getNullCount();
   stats_->logicalSize_ += otherStats->getLogicalSize();
   stats_->physicalSize_ += otherStats->getPhysicalSize();
+  if (hll_ && other.hll_) {
+    hll_->mergeWith(*other.hll_);
+    hllDirty_ = true;
+  }
 }
 
 void StatisticsCollector::reset() {
   stats_ = std::make_unique<ColumnStatistics>();
+  resetHll();
 }
 
 /* static */ std::unique_ptr<StatisticsCollector> StatisticsCollector::create(
-    const std::shared_ptr<const velox::dwio::common::TypeWithId>& type) {
+    const std::shared_ptr<const velox::dwio::common::TypeWithId>& type,
+    velox::memory::MemoryPool* hllPool) {
   switch (type->type()->kind()) {
     case velox::TypeKind::TINYINT:
     case velox::TypeKind::SMALLINT:
     case velox::TypeKind::INTEGER:
-    case velox::TypeKind::BIGINT:
-      return std::make_unique<IntegralStatisticsCollector>();
+    case velox::TypeKind::BIGINT: {
+      auto collector = std::make_unique<IntegralStatisticsCollector>();
+      if (hllPool != nullptr) {
+        collector->enableHll(hllPool);
+      }
+      return collector;
+    }
     case velox::TypeKind::REAL:
-    case velox::TypeKind::DOUBLE:
-      return std::make_unique<FloatingPointStatisticsCollector>();
+    case velox::TypeKind::DOUBLE: {
+      auto collector = std::make_unique<FloatingPointStatisticsCollector>();
+      if (hllPool != nullptr) {
+        collector->enableHll(hllPool);
+      }
+      return collector;
+    }
     case velox::TypeKind::VARCHAR:
-    case velox::TypeKind::VARBINARY:
-      return std::make_unique<StringStatisticsCollector>();
+    case velox::TypeKind::VARBINARY: {
+      auto collector = std::make_unique<StringStatisticsCollector>();
+      if (hllPool != nullptr) {
+        collector->enableHll(hllPool);
+      }
+      return collector;
+    }
     case velox::TypeKind::BOOLEAN:
     case velox::TypeKind::TIMESTAMP:
     case velox::TypeKind::HUGEINT:
@@ -411,10 +578,17 @@ void IntegralStatisticsCollector::addValues(std::span<T> values) {
   if (!stats->max_.has_value() || max > *stats->max_) {
     stats->max_ = max;
   }
+
+  if (hll_) {
+    for (const auto& value : values) {
+      insertHllHash(hllHash(value));
+    }
+  }
 }
 
 void IntegralStatisticsCollector::reset() {
   stats_ = std::make_unique<IntegralStatistics>();
+  resetHll();
 }
 
 void IntegralStatisticsCollector::merge(const StatisticsCollector& other) {
@@ -470,6 +644,13 @@ void FloatingPointStatisticsCollector::addValues(std::span<T> values) {
   }
 
   auto* stats = floatingPointStats();
+
+  if (hll_) {
+    for (const auto& value : values) {
+      insertHllHash(hllHash(value));
+    }
+  }
+
   const auto minMax = findMinMax(values);
   if (!minMax.has_value()) {
     addFloatingPointValuesScalar(stats->min_, stats->max_, values);
@@ -487,6 +668,7 @@ void FloatingPointStatisticsCollector::addValues(std::span<T> values) {
 
 void FloatingPointStatisticsCollector::reset() {
   stats_ = std::make_unique<FloatingPointStatistics>();
+  resetHll();
 }
 
 void FloatingPointStatisticsCollector::merge(const StatisticsCollector& other) {
@@ -552,10 +734,17 @@ void StringStatisticsCollector::addValues(std::span<std::string_view> values) {
   } else if (minMax.max > *stats->max_) {
     stats->max_->assign(minMax.max);
   }
+
+  if (hll_) {
+    for (const auto& value : values) {
+      insertHllHash(XXH64(value.data(), value.size(), 0));
+    }
+  }
 }
 
 void StringStatisticsCollector::reset() {
   stats_ = std::make_unique<StringStatistics>();
+  resetHll();
 }
 
 void StringStatisticsCollector::merge(const StatisticsCollector& other) {
@@ -602,12 +791,15 @@ DeduplicatedStatisticsCollector::wrap(
 
 ColumnStatistics* DeduplicatedStatisticsCollector::getStatsView() {
   NIMBLE_DCHECK_NOT_NULL(baseCollector_);
+  // Brings the wrapped collector's NDV sketch up to date.
+  baseCollector_->getStatsView();
   // Return this as DeduplicatedColumnStatistics to resolve diamond ambiguity.
   return stats_.get();
 }
 
 const ColumnStatistics* DeduplicatedStatisticsCollector::getStatsView() const {
   NIMBLE_DCHECK_NOT_NULL(baseCollector_);
+  std::as_const(*baseCollector_).getStatsView();
   return stats_.get();
 }
 

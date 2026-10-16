@@ -31,6 +31,15 @@
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
 #include "velox/dwio/nimble/velox/SchemaReader.h"
 
+namespace facebook::velox {
+class HashStringAllocator;
+} // namespace facebook::velox
+
+namespace facebook::velox::common::hll {
+template <typename T, bool HllAsFinalResult, typename TAllocator>
+struct HllAccumulator;
+} // namespace facebook::velox::common::hll
+
 namespace facebook::nimble {
 
 enum class StatType : uint8_t {
@@ -80,6 +89,31 @@ class ColumnStatistics {
   std::unique_ptr<velox::dwio::common::ColumnStatistics> toCommonStatistics()
       const;
 
+  /// Returns the serialized per-column HyperLogLog (NDV) sketch, in Presto HLL
+  /// wire format (SparseV2 / DenseV2). Present only when NDV stats collection
+  /// is enabled (WriterOptions::enableNdvStats) and the column is a scalar kind
+  /// that supports it. Mergeable across stripes and files.
+  virtual const std::optional<std::string>& getNdvSketch() const {
+    return ndvSketch_;
+  }
+
+  /// Replaces the serialized NDV sketch.
+  virtual void setNdvSketch(std::optional<std::string> sketch) {
+    ndvSketch_ = std::move(sketch);
+  }
+
+  /// Returns the approximate distinct-value count decoded from the sketch, or
+  /// nullopt when no sketch is present.
+  std::optional<int64_t> getNdvCardinality() const;
+
+  /// Merges two serialized HLL sketches. Returns nullopt if both are empty, the
+  /// present one if exactly one is set, and their union otherwise. 'pool' backs
+  /// the transient HLL allocator.
+  static std::optional<std::string> mergeNdvSketches(
+      const std::optional<std::string>& lhs,
+      const std::optional<std::string>& rhs,
+      velox::memory::MemoryPool* pool);
+
   template <typename T>
   T* as() {
     static_assert(std::is_base_of_v<ColumnStatistics, T>);
@@ -100,6 +134,7 @@ class ColumnStatistics {
   uint64_t nullCount_{0};
   uint64_t logicalSize_{0};
   std::atomic_uint64_t physicalSize_{0};
+  std::optional<std::string> ndvSketch_;
 };
 
 class StringStatistics : public ColumnStatistics {
@@ -204,6 +239,10 @@ class DeduplicatedColumnStatistics : public virtual ColumnStatistics {
   uint64_t getLogicalSize() const override;
   uint64_t getPhysicalSize() const override;
 
+  // The NDV sketch lives on the wrapped base statistics, like the base metrics.
+  const std::optional<std::string>& getNdvSketch() const override;
+  void setNdvSketch(std::optional<std::string> sketch) override;
+
   uint64_t getDedupedCount() const;
   uint64_t getDedupedLogicalSize() const;
 
@@ -242,11 +281,21 @@ class StatisticsCollector {
   // We do not create stats collectors recursively. Instead, we traverse
   // the schema tree and build the stats collector for each node. We can
   // then lay out the stats collectors in a vector in schema traversal order.
+  // When 'hllPool' is non-null, scalar collectors additionally accumulate a
+  // per-column HyperLogLog (NDV) sketch backed by that pool.
   static std::unique_ptr<StatisticsCollector> create(
-      const std::shared_ptr<const velox::dwio::common::TypeWithId>& type);
+      const std::shared_ptr<const velox::dwio::common::TypeWithId>& type,
+      velox::memory::MemoryPool* hllPool);
 
   StatisticsCollector();
-  virtual ~StatisticsCollector() = default;
+  // Out-of-lined because the HllAccumulator member is only forward-declared
+  // here; the destructor needs its complete type, defined in the .cpp.
+  virtual ~StatisticsCollector();
+
+  /// Enables per-column HyperLogLog (NDV) accumulation, allocating a sketch
+  /// backed by 'pool'. Only the scalar collectors (integral, floating-point,
+  /// string) feed values into the sketch.
+  void enableHll(velox::memory::MemoryPool* pool);
 
   virtual uint64_t getValueCount() const;
   virtual uint64_t getNullCount() const;
@@ -254,8 +303,8 @@ class StatisticsCollector {
   virtual uint64_t getPhysicalSize() const;
   virtual StatType getType() const;
 
-  // Returns a view of the underlying ColumnStatistics.
-  // Caller can cast to specific type using as<T>().
+  // Returns a view of the underlying ColumnStatistics, with the NDV sketch
+  // brought up to date. Caller can cast to specific type using as<T>().
   virtual ColumnStatistics* getStatsView();
   virtual const ColumnStatistics* getStatsView() const;
 
@@ -288,8 +337,36 @@ class StatisticsCollector {
   virtual void merge(const StatisticsCollector& other);
   virtual void reset();
 
+  /// Returns true when HLL (NDV) accumulation is enabled on this collector.
+  bool hllEnabled() const {
+    return hll_ != nullptr;
+  }
+
  protected:
+  // Recreates an empty HLL accumulator, preserving the enabled state.
+  void resetHll();
+
+  // Feeds a pre-hashed value into the HLL sketch and marks the serialized
+  // sketch stale. No-op if HLL is disabled.
+  void insertHllHash(uint64_t hash);
+
+  // Writes the accumulator into stats_ if values arrived since the last write.
+  // Serializing once per read rather than per batch keeps the write path
+  // cheap; the sketch is only read when statistics are snapshotted.
+  void flushHll() const;
+
   std::unique_ptr<ColumnStatistics> stats_;
+  // Backs hllAllocator_; null when NDV collection is disabled.
+  velox::memory::MemoryPool* hllPool_{nullptr};
+  // Owns the accumulator's storage, so it must outlive hll_.
+  std::unique_ptr<velox::HashStringAllocator> hllAllocator_;
+  // Accumulates value hashes; null when NDV collection is disabled.
+  std::unique_ptr<
+      velox::common::hll::
+          HllAccumulator<int64_t, false, velox::HashStringAllocator>>
+      hll_;
+  // True when hll_ holds values not yet serialized into stats_.
+  mutable bool hllDirty_{false};
 };
 
 class IntegralStatisticsCollector : public StatisticsCollector {
