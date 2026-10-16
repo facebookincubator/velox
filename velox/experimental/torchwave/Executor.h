@@ -74,6 +74,16 @@ struct LaunchDebugInfo {
 struct StepEvents {
   int32_t sequenceNumber{0};
   int32_t stepIdx{0};
+  /// Value each stream writes to its completion counter when the step's work
+  /// on it is done. Increases across executions, so a counter left over from an
+  /// earlier run never reads as done. 0 when completion counters are off.
+  int64_t ticket{0};
+  /// Whether the step put work on the wave stream / the torch stream, i.e.
+  /// whether its completion on that stream has to be waited for.
+  bool usesWave{false};
+  bool usesTorch{false};
+  /// Device address of the run's completion counters, or null when off.
+  void* counters{nullptr};
   EventP waveBegin;
   EventP waveDone;
   EventP standaloneBegin;
@@ -202,6 +212,47 @@ struct WaveThreadInfo {
 /// Returns the thread-local WaveThreadInfo for the current thread.
 const WaveThreadInfo& waveThreadInfo();
 
+/// Sets WaveConfig::get().trace from within this translation unit, so callers
+/// (e.g. the pybind extension) reach the exact WaveConfig singleton instance
+/// the executor reads at run time -- a plain wave_config().trace assignment
+/// made in another TU can hit a duplicated inline-static instance and not take
+/// effect.
+void setWaveTrace(int32_t trace);
+
+/// Returns WaveConfig::get().trace as seen by the executor's TU.
+int32_t getWaveTrace();
+
+/// Set WaveConfig flags on the exact singleton the executor's TU reads (same
+/// rationale as setWaveTrace: avoids a duplicated inline-static instance).
+void setFreeIntermediates(bool on);
+void setEnableAllocGroup(bool on);
+void setEnableConcatAllocGroup(bool on);
+void setEnableLifetimeAllocGroup(bool on);
+void setAutoAdjustCost(bool on);
+void setIsCg(bool on);
+void setTwMad(bool on);
+void setSinglePassSelect(bool on);
+void setFoldSharedChains(bool on);
+void setOrderBlocksByCost(bool on);
+void setPartitionLaunches(bool on);
+void setMaxLaunchWaves(int32_t waves);
+void setLaunchSkewThreshold(double skew);
+void setMinBlockUs(double us);
+void setKernelCacheDir(const std::string& dir);
+void setAllStandalone(bool on);
+void setBlockSize(int32_t blockSize);
+void setEnableReuse(bool on);
+void setElideClones(bool on);
+void setStepLastUse(bool on);
+void setSyncEachStep(bool on);
+void setDeferD2h(bool on);
+void setRunAhead(bool on);
+void setMaxDelayedFree(int64_t bytes);
+void setDuplicateMetadata(bool on);
+void setDonateBuffers(bool on);
+void setDonationCarryBytes(int64_t bytes);
+void setPerOpStandaloneTiming(bool on);
+
 /// Lifecycle of a step's kernel outputs, used to bundle intermediate freeing
 /// with wave-stream syncs (see WaveConfig::freeIntermediates).
 enum class ExecutionStage {
@@ -320,6 +371,26 @@ struct StepVectors {
   /// Blocks the previous execution actually ran, so a step that measured well
   /// can be held to what already worked.
   int32_t measuredBlocks{0};
+
+  /// Clocks of the slowest block of the previous execution. With measuredUtil
+  /// it says how much time the step's blocks spent waiting on that one, which
+  /// is the most a rebalanced grid could save. 0 until measured.
+  int64_t measuredMaxClocks{0};
+
+  /// Kernel makespan this step last measured as a single launch: the slowest
+  /// block's clocks. 0 until measured unsplit.
+  int64_t unsplitMakespanClocks{0};
+
+  /// Set once a split of this step measured no better than the single launch
+  /// by WaveConfig::launchSplitMinUs. The packer's plan is only as good as the
+  /// costs it is built from, and a split serializes its launches, so a split
+  /// the hardware says lost is not tried again.
+  bool splitRejected{false};
+
+  /// Set when a split ran before the step was ever measured as one launch, so
+  /// there is nothing to judge it against. The next execution runs it whole to
+  /// get that measurement.
+  bool measureUnsplit{false};
 
   /// Used by makeGrid (internal temporaries).
   std::vector<float> costs;
@@ -539,6 +610,19 @@ struct ExecutionState {
   /// these are carried forward rather than indexed by step.
   facebook::velox::wave::Event* lastWaveDone{nullptr};
   facebook::velox::wave::Event* lastStandaloneDone{nullptr};
+
+  /// The completion events each stream last waited on. Waiting on the same
+  /// event again orders nothing new, so WaveConfig::skipRepeatedWaits skips it.
+  facebook::velox::wave::Event* torchWaitedFor{nullptr};
+  facebook::velox::wave::Event* waveWaitedFor{nullptr};
+
+  /// Two int64 completion counters in host-mapped memory, [0] for the wave
+  /// stream and [1] for the torch stream (WaveConfig::completionCounters). Each
+  /// stream writes a step's ticket after the step's work, so the host checks
+  /// completion with a load instead of a cudaEventQuery.
+  std::shared_ptr<volatile int64_t> completionHost;
+  void* completionDevice{nullptr};
+  int64_t lastTicket{0};
 
   /// Index into stepEvents of the oldest step not yet advanced to kSynced.
   /// advanceCompletedStages resumes from here, so the sweep costs one query per
@@ -790,6 +874,25 @@ StepEvents& newStepEvents(ExecutionState& state, int32_t seq, int32_t stepIdx);
 /// Returns every event held by 'state' to its pool. Must run only after the
 /// streams that recorded them have been waited on, so no event is recycled
 /// while still pending.
+/// Records the step's completion event for one stream ('wave' or the torch
+/// stream) and, with WaveConfig::completionCounters, enqueues the counter write
+/// behind it.
+void recordStepDone(
+    StepEvents& events,
+    facebook::velox::wave::Stream& stream,
+    bool wave);
+
+/// True once all of the step's work is complete, from the counters when they
+/// are on and from the events otherwise. Does not block.
+bool stepDone(const ExecutionState& state, const StepEvents& events);
+
+/// Makes 'stream' wait on 'event', unless it already waited on that event and
+/// WaveConfig::skipRepeatedWaits is set. 'waitedFor' is the stream's record.
+void waitOnce(
+    facebook::velox::wave::Event* event,
+    facebook::velox::wave::Stream& stream,
+    facebook::velox::wave::Event*& waitedFor);
+
 void releaseStepEvents(ExecutionState& state);
 
 /// Executes a single node via its OpKernel with tracing and error logging.
@@ -920,6 +1023,14 @@ class WaveGraphExecutor : public nativert::GraphExecutorBase {
   /// callers that have inputs but no frame (e.g. TorchWaveModel::run).
   std::vector<c10::IValue> runInputs(std::vector<c10::IValue> inputs);
 
+  /// Like runInputs but reuses a single held device frame across calls instead
+  /// of getting/returning a pooled frame each time: weights and constants stay
+  /// resident (set once) and only the user inputs are refilled per call. The
+  /// graph re-executes over the held frame, so stale intermediates are simply
+  /// overwritten. Single-threaded fast path (one in-flight call at a time),
+  /// e.g. for latency benchmarks; use runInputs() for concurrent callers.
+  std::vector<c10::IValue> runInputsReuse(std::vector<c10::IValue> inputs);
+
   /// Returns a frame from the pool, creating one if needed.
   std::unique_ptr<nativert::ExecutionFrame> getFrame();
 
@@ -987,6 +1098,10 @@ class WaveGraphExecutor : public nativert::GraphExecutorBase {
 
   /// Pool of device-side ExecutionFrames with persistent tensors on GPU.
   std::unique_ptr<Pool<nativert::ExecutionFrame>> framePool_;
+
+  /// Single held frame for runInputsReuse(): persistent tensors stay resident,
+  /// only user inputs are refilled each call. Not thread-safe.
+  std::unique_ptr<nativert::ExecutionFrame> reuseFrame_;
 
   uint64_t frameGeneration_{0};
 

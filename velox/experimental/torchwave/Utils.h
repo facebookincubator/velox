@@ -360,8 +360,16 @@ void forEachSortedAttribute(NodeCP node, Func&& func) {
     if (isSkippedAttribute(attr.name, meta)) {
       continue;
     }
-    if (std::holds_alternative<nativert::None>(attr.value) && meta &&
-        meta->isPresenceTemplateParam(attr.name)) {
+    // A None attribute carries no value, so it gets no slot in the constant
+    // area. listConstants already emits nothing for one; yielding it here
+    // anyway made collectAttrOffsets reserve a slot that listConstants never
+    // fills, so numConstants exceeded the constants actually emitted. This was
+    // reachable only for an argument not declared a presence template param,
+    // where fillConstantIndices used to abort before the mismatch could show
+    // up -- which is every optional argument the Dynamo backend materializes
+    // as an explicit None (repeat_interleave's 'dim' and 'output_size',
+    // searchsorted's 'side' and 'sorter').
+    if (std::holds_alternative<nativert::None>(attr.value)) {
       continue;
     }
     sorted.push_back(&attr);

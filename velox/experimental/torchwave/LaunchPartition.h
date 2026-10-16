@@ -83,9 +83,20 @@ struct GridOp {
   /// they must be co-resident in one launch and the op may not be split
   /// across two.
   bool hasBarrier{false};
+
+  /// Blocks per SM this op would rather run at, or 0 for unspecified. Carried
+  /// from Launch::blocksPerSm, which reads WaveConfig::preferBlocksPerSm by
+  /// opcode. Ops with different values never share a launch, and a launch of
+  /// ops that share a non-zero value is capped at numSMs times it instead of
+  /// numSMs times the occupancy their shared memory allows.
+  int32_t blocksPerSm{0};
 };
 
 /// One kernel launch of a step, over a contiguous range of the step's blocks.
+/// Nanoseconds one thread-block clock tick is worth. The performance report
+/// converts block clocks to microseconds with the same figure.
+constexpr double kNsPerBlockClock = 0.7;
+
 struct LaunchSegment {
   /// Index into the step's block array where this launch starts.
   int32_t firstBlock{0};
@@ -177,8 +188,20 @@ struct PartitionParams {
   /// wave the block array is reserved for.
   int32_t maxWaves{3};
 
-  /// GridStats::skew at and above which a step is worth splitting.
+  /// GridStats::skew at and above which a step that has not been measured yet
+  /// is worth splitting. Measured steps use minSavingUs instead.
   float skewThreshold{1.3f};
+
+  /// GPU microseconds a split must be able to save for a measured step to be
+  /// split. A skew ratio says nothing about whether the split pays for its
+  /// serialized launches: 2x on a 10 us step is noise, 1.2x on a 2 ms step is
+  /// worth having.
+  float minSavingUs{30.0f};
+
+  /// Time the blocks of the step's previous execution spent idle behind the
+  /// slowest one, (1 - util) x its clocks, in microseconds. This is the most
+  /// any rebalancing can win. Negative until the step has been measured.
+  double measuredIdleUs{-1};
 
   /// Cost a block must be worth for the packer to open one, so a split does
   /// not produce blocks too short to be worth scheduling. 0 falls back to an

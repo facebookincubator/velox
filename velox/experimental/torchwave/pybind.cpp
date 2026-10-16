@@ -19,6 +19,7 @@
 #include <pybind11/stl.h>
 #include <torch/csrc/utils/pybind.h>
 
+#include "velox/experimental/torchwave/Executor.h"
 #include "velox/experimental/torchwave/Model.h"
 #include "velox/experimental/torchwave/Registry.h"
 #include "velox/experimental/torchwave/WaveConfig.h"
@@ -36,7 +37,8 @@ namespace {
 // scalar, everything else to a tensor. Returns the output tensors.
 std::vector<at::Tensor> runOptionalTensors(
     torch::wave::TorchWaveModel& self,
-    const py::sequence& inputs) {
+    const py::sequence& inputs,
+    bool reuse) {
   std::vector<c10::IValue> ivalues;
   ivalues.reserve(inputs.size());
   for (const auto& item : inputs) {
@@ -54,7 +56,9 @@ std::vector<at::Tensor> runOptionalTensors(
       ivalues.emplace_back(py::cast<at::Tensor>(item));
     }
   }
-  return torch::wave::outputsToTensors(self.run(std::move(ivalues)));
+  auto outputs =
+      reuse ? self.runReuse(std::move(ivalues)) : self.run(std::move(ivalues));
+  return torch::wave::outputsToTensors(std::move(outputs));
 }
 
 } // namespace
@@ -64,13 +68,34 @@ PYBIND11_MODULE(_torchwave, m) {
 
   py::class_<torch::wave::WaveConfig>(m, "WaveConfig")
       .def_readwrite("block_size", &torch::wave::WaveConfig::blockSize)
-      .def_readwrite("all_standalone", &torch::wave::WaveConfig::allStandalone);
+      .def_readwrite("all_standalone", &torch::wave::WaveConfig::allStandalone)
+      .def_readwrite("is_cg", &torch::wave::WaveConfig::isCg)
+      .def_readwrite("trace", &torch::wave::WaveConfig::trace)
+      .def_readwrite("enable_reuse", &torch::wave::WaveConfig::enableReuse)
+      .def_readwrite(
+          "kernel_cache_dir", &torch::wave::WaveConfig::kernelCacheDir);
 
   // Whole-graph alternative to an AOTInductor model container: load() compiles
   // a packaged .pt2 and run() executes it on the GPU.
   py::class_<torch::wave::TorchWaveModel>(m, "TorchWaveModel")
-      .def("run", &runOptionalTensors, py::arg("inputs"))
-      .def("__call__", &runOptionalTensors, py::arg("inputs"));
+      .def(
+          "run",
+          [](torch::wave::TorchWaveModel& self, const py::sequence& inputs) {
+            return runOptionalTensors(self, inputs, /*reuse=*/false);
+          },
+          py::arg("inputs"))
+      .def(
+          "run_reuse",
+          [](torch::wave::TorchWaveModel& self, const py::sequence& inputs) {
+            return runOptionalTensors(self, inputs, /*reuse=*/true);
+          },
+          py::arg("inputs"))
+      .def(
+          "__call__",
+          [](torch::wave::TorchWaveModel& self, const py::sequence& inputs) {
+            return runOptionalTensors(self, inputs, /*reuse=*/false);
+          },
+          py::arg("inputs"));
 
   m.def(
       "load",
@@ -86,6 +111,19 @@ PYBIND11_MODULE(_torchwave, m) {
         return torch::wave::WaveConfig::get();
       },
       py::return_value_policy::reference);
+
+  // Per-op timing/perf report from the most recent run on this thread,
+  // populated when the executor's trace has the kTiming (16) bit set.
+  m.def("last_perf_report", []() {
+    return torch::wave::waveThreadInfo().perfReport;
+  });
+
+  // Set/get the trace bits on the exact WaveConfig instance the executor reads
+  // (setWaveTrace/getWaveTrace live in the executor's TU, avoiding a duplicated
+  // inline-static WaveConfig::get() instance that a wave_config().trace write
+  // from this TU could hit instead).
+  m.def("set_trace", &torch::wave::setWaveTrace, py::arg("trace"));
+  m.def("get_trace", &torch::wave::getWaveTrace);
 
   m.def(
       "register_elementwise_op",
