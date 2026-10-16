@@ -1201,6 +1201,8 @@ void SharedArbitrator::checkedGrow(
     uint64_t growBytes,
     uint64_t reservationBytes) {
   const auto ret = participant->grow(growBytes, reservationBytes);
+  // A growth rejection may happen when the participant has overused its
+  // capacity during arbitration, and the growth doesn't cover the overuse.
   if (!ret) {
     VELOX_FAIL(
         "Failed to grow memory pool {} with {} and commit {} used reservation, memory pool stats:\n{}\n{}",
