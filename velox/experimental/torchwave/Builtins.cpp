@@ -1247,12 +1247,16 @@ bool insertSelfCloneForInPlace(
 // a float/double/int32/int64 self dtype. Inserts a clone of self and
 // retargets; clone-elision drops the clone when self is dead and keeps it when
 // src shares a base with self (accumulating in place would read partially
-// updated values). Returns false to leave the node as the eager standalone op.
+// updated values). 'inPlace' is the aten scatter_add_ form, which already
+// writes self: no clone is inserted, so self must be contiguous and a src or
+// index that may share self's storage leaves the node standalone instead.
+// Returns false to leave the node as the eager standalone op.
 bool tryFuseScatter(
     NodeCP node,
     ValueTypes& types,
     WaveGraph& waveGraph,
-    bool accumulate) {
+    bool accumulate,
+    bool inPlace) {
   int64_t scatterDim = constIntArg(node, "dim").value_or(0);
   if (hasDynamicArg(node, "dim") || (scatterDim != 0 && scatterDim != 1)) {
     return false;
@@ -1306,11 +1310,25 @@ bool tryFuseScatter(
       return false;
     }
   }
-  if (!insertSelfCloneForInPlace(
-          node,
-          types,
-          waveGraph,
-          accumulate ? "scatter_add_clone" : "scatter_clone")) {
+  if (inPlace) {
+    // tw.scatter_add takes self as a whole dense tensor, which is what the
+    // functional form's clone provides; a strided view of self is not written
+    // through.
+    if (types.contiguity(inputAt(node, 0)) != Contiguity::kContiguous) {
+      return false;
+    }
+    auto* selfRoot = elidableStorageRoot(inputAt(node, 0));
+    for (const size_t ordinal : {1, 2}) {
+      auto* root = elidableStorageRoot(inputAt(node, ordinal));
+      if (!selfRoot || !root || root == selfRoot) {
+        return false;
+      }
+    }
+  } else if (!insertSelfCloneForInPlace(
+                 node,
+                 types,
+                 waveGraph,
+                 accumulate ? "scatter_add_clone" : "scatter_clone")) {
     return false;
   }
   const_cast<nativert::Node*>(node)->setTarget(
@@ -1386,6 +1404,16 @@ void registerBuiltins() {
   MetadataBuilder("torch.ops.aten.div_.Tensor")
       .elementwise()
       .costFunction(divCost)
+      .registerOp();
+  // In-place copy_(self, src). Non-functionalized graphs keep column writes
+  // (`dst[:, k].copy_(src)`) in this form instead of select_scatter + copy.
+  // self is written through its own strides and src is read through its own,
+  // so either side may be a strided view; a broadcastable src (size-1 dims, an
+  // aten.expand) takes the stride-0 leaf path, and the value is converted to
+  // self's dtype.
+  MetadataBuilder("torch.ops.aten.copy_.default")
+      .elementwise()
+      .ignoreAttrs({"non_blocking"})
       .registerOp();
 
   // In-place (Tensor, Scalar). Same __*_ device functions; the scalar operand
@@ -2486,6 +2514,8 @@ void registerBuiltins() {
                 auto* newNode = graph->createNode(
                     "tw.index_select", {{"self", self}, {"index", idxVal}});
                 newNode->addAttribute({"dim", static_cast<int64_t>(dim)});
+                newNode->addAttribute(
+                    {"rank", static_cast<int64_t>(sourceRank)});
                 graph->insertBefore(newNode, const_cast<nativert::Node*>(node));
                 auto* newOutput = waveGraph.newTensorValue(
                     newNode, "index_select", types.types[selfId]->dtype());
@@ -2739,7 +2769,10 @@ void registerBuiltins() {
         // templateAttrs, keeps index_selects along different dims as distinct
         // ops. That prevents an op for one dim from being reused for another,
         // which would make indexSelectReserve read the wrong (formal) dim.
-        .templateAttrs({"dim"})
+        // 'rank' (self's rank, -1 if unknown) is set by the rewrites that
+        // create this node; as a template argument it gives the coordinate loop
+        // a constant trip count.
+        .templateAttrs({"dim", "rank"})
         .registerOp();
   }
 
@@ -2757,13 +2790,16 @@ void registerBuiltins() {
                  .contiguity = Contiguity::kContiguous}};
           })
       .maybeReplace(
-          [](NodeCP node, ValueTypes& /*types*/, WaveGraph& /*waveGraph*/)
+          [](NodeCP node, ValueTypes& types, WaveGraph& /*waveGraph*/)
               -> std::vector<std::pair<ValueCP, ValueCP>> {
             if (hasDynamicArg(node, "dim") ||
                 !constIntArg(node, "dim").has_value()) {
               return {};
             }
-            const_cast<nativert::Node*>(node)->setTarget("tw.index_select");
+            auto* mutableNode = const_cast<nativert::Node*>(node);
+            mutableNode->addAttribute(
+                {"rank", static_cast<int64_t>(types.rank(inputAt(node, 0)))});
+            mutableNode->setTarget("tw.index_select");
             return {};
           })
       .registerOp();
@@ -4646,6 +4682,8 @@ void registerBuiltins() {
             // size(input, dim)). It is a template parameter of the device func,
             // so the flatten-to-1D case (dim=None) is encoded as -1.
             finalNode->addAttribute({"dim", dim.value_or(-1)});
+            finalNode->addAttribute(
+                {"rank", static_cast<int64_t>(types.rank(input))});
             auto* resultOutput = waveGraph.newTensorValue(
                 finalNode, "repeat_result", inputDtype);
             return {{node->outputs()[0], resultOutput}};
@@ -4833,8 +4871,9 @@ void registerBuiltins() {
       .sharedDecls({{"uint32_t", "size"}})
       .typeTemplateParams({0})
       // The interleave axis is a compile-time parameter of the kernel: it
-      // cannot be recovered on device from the shapes alone.
-      .templateAttrs({"dim"})
+      // cannot be recovered on device from the shapes alone. rank is input's
+      // rank, set by the aten.repeat_interleave rewrite.
+      .templateAttrs({"dim", "rank"})
       .hasBarrier()
       .hasBlockSizeTemplateParam()
       .multiBlockReturnBarrier()
@@ -5590,7 +5629,12 @@ void registerBuiltins() {
           [](NodeCP node,
              ValueTypes& types,
              WaveGraph& waveGraph) -> std::vector<std::pair<ValueCP, ValueCP>> {
-            tryFuseScatter(node, types, waveGraph, /*accumulate=*/false);
+            tryFuseScatter(
+                node,
+                types,
+                waveGraph,
+                /*accumulate=*/false,
+                /*inPlace=*/false);
             return {};
           })
       .registerOp();
@@ -5725,7 +5769,35 @@ void registerBuiltins() {
         .maybeReplace(
             [](NodeCP node, ValueTypes& types, WaveGraph& waveGraph)
                 -> std::vector<std::pair<ValueCP, ValueCP>> {
-              tryFuseScatter(node, types, waveGraph, /*accumulate=*/true);
+              tryFuseScatter(
+                  node,
+                  types,
+                  waveGraph,
+                  /*accumulate=*/true,
+                  /*inPlace=*/false);
+              return {};
+            })
+        .registerOp();
+    // scatter_add_: the in-place form kept by non-functionalized graphs. Same
+    // fusion conditions as scatter_add plus a contiguous self, retargeted to
+    // tw.scatter_add on self directly; the result aliases self.
+    MetadataBuilder("torch.ops.aten.scatter_add_.default")
+        .sizeOrdinal({0})
+        .isStandalone()
+        .mutatesArg(0)
+        .indicesArg(1)
+        .valuesArg(2)
+        .dimAttr("dim")
+        .outputConstraints(viewOfFirstArgConstraint)
+        .maybeReplace(
+            [](NodeCP node, ValueTypes& types, WaveGraph& waveGraph)
+                -> std::vector<std::pair<ValueCP, ValueCP>> {
+              tryFuseScatter(
+                  node,
+                  types,
+                  waveGraph,
+                  /*accumulate=*/true,
+                  /*inPlace=*/true);
               return {};
             })
         .registerOp();
