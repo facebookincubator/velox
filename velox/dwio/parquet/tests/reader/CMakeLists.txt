@@ -93,6 +93,7 @@ target_link_libraries(
   velox_dwio_parquet_reader_test
   velox_dwio_parquet_common
   velox_dwio_parquet_reader_benchmark_lib
+  velox_presto_types
   velox_link_libs
 )
 
