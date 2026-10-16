@@ -61,6 +61,34 @@ struct ThrowsRuntimeErrorOnEvenInputFunction {
   }
 };
 
+class FailingReferenceQueryRunner : public exec::test::ReferenceQueryRunner {
+ public:
+  explicit FailingReferenceQueryRunner(memory::MemoryPool* pool)
+      : ReferenceQueryRunner(pool) {}
+
+  RunnerType runnerType() const override {
+    return RunnerType::kVeloxQueryRunner;
+  }
+
+  const std::unordered_map<std::string, fuzzer::DataSpec>&
+  aggregationFunctionDataSpecs() const override {
+    static const std::unordered_map<std::string, fuzzer::DataSpec> kDataSpecs{};
+    return kDataSpecs;
+  }
+
+  std::optional<std::string> toSql(const core::PlanNodePtr& /*plan*/) override {
+    return std::nullopt;
+  }
+
+  std::pair<
+      std::optional<std::multiset<std::vector<variant>>>,
+      exec::test::ReferenceQueryErrorCode>
+  execute(const core::PlanNodePtr& /*plan*/) override {
+    return {
+        std::nullopt, exec::test::ReferenceQueryErrorCode::kReferenceQueryFail};
+  }
+};
+
 void removeDirecrtoryIfExist(
     std::shared_ptr<filesystems::FileSystem>& localFs,
     const std::string& folderPath) {
@@ -181,6 +209,23 @@ TEST_F(ExpressionVerifierUnitTest, emptyActiveRowsWithReferenceRunner) {
   EXPECT_EQ(
       states[0],
       ExpressionVerifier::VerificationState::kVerifiedAgainstReference);
+}
+
+TEST_F(ExpressionVerifierUnitTest, referenceOnlyFailureWithoutSql) {
+  auto referenceRunner =
+      std::make_shared<FailingReferenceQueryRunner>(pool_.get());
+  ExpressionVerifier verifier{&execCtx_, {}, referenceRunner};
+
+  auto data = makeRowVector({makeFlatVector<int32_t>({1, 2, 3})});
+  auto plan = parseExpression("c0", asRowType(data->type()));
+
+  VELOX_ASSERT_THROW(
+      verifier.verify(
+          {plan},
+          {{data, SelectivityVector(data->size())}},
+          nullptr,
+          /*canThrow=*/false),
+      "Reference path throws for query: -- Project[project]");
 }
 
 } // namespace facebook::velox::test

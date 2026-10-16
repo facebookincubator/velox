@@ -456,7 +456,9 @@ ExpressionVerifier::verify(
                   auto referenceSql =
                       referenceQueryRunner_->toSql(projectionPlan);
                   VELOX_FAIL(
-                      "Reference path throws for query: {}", *referenceSql);
+                      "Reference path throws for query: {}",
+                      referenceSql.value_or(
+                          projectionPlan->toString(true, true)));
                 }
               }
             }
