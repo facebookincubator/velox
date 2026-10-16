@@ -124,6 +124,7 @@ target_link_libraries(
   nimble_vector_index_fb
   velox_buffer
   velox_memory
+  velox_time
   velox_type
   velox_vector
   FAISS::faiss
