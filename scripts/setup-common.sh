@@ -56,6 +56,18 @@ function install_folly {
   if [[ ${VELOX_BUILD_SHARED} != "ON" ]]; then
     FOLLY_FLAGS+=(-DGFLAGS_SHARED=FALSE)
   fi
+  local OS
+  OS=$(uname)
+  if [[ $OS == "Darwin" ]]; then
+    ABSOLUTE_SCRIPTDIR=$(realpath "$SCRIPT_DIR")
+    (
+      cd "${DEPENDENCY_DIR}/folly" || exit 1
+      PATCH_FILE="$ABSOLUTE_SCRIPTDIR/../CMake/resolve_dependency_modules/folly/folly-macos.patch"
+      # Skip applying the patch if it is already applied.
+      git apply --reverse --check "$PATCH_FILE" 2>/dev/null ||
+        git apply "$PATCH_FILE"
+    )
+  fi
   cmake_install_dir folly "${FOLLY_FLAGS[@]}"
 }
 
