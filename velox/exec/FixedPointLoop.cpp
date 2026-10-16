@@ -83,7 +83,7 @@ void clearTaskStats(FixedPointChainExecutionStats& chain) {
 // this returns at once for it while its loop keeps running; see the
 // cancellation TODO on FixedPointLoop.  Runs while an error unwinds, so it logs
 // a failure to abort instead of throwing.
-void abortAndWait(const std::vector<std::shared_ptr<exec::Task>>& tasks) {
+void abortAndWait(const std::vector<exec::TaskPtr>& tasks) {
   std::vector<ContinueFuture> futures;
   futures.reserve(tasks.size());
   for (const auto& task : tasks) {
@@ -102,8 +102,7 @@ void abortAndWait(const std::vector<std::shared_ptr<exec::Task>>& tasks) {
 // Waits for each of 'tasks' to finish without holding a thread.  If one fails,
 // aborts the rest and rethrows its error.  Callers pass a named vector: GCC 11
 // fails to compile a braced list in a co_await operand.
-folly::coro::Task<void> awaitTasks(
-    std::vector<std::shared_ptr<exec::Task>> tasks) {
+folly::coro::Task<void> awaitTasks(std::vector<exec::TaskPtr> tasks) {
   for (const auto& task : tasks) {
     co_await task->taskCompletionFuture();
     if (auto error = task->error()) {
@@ -221,16 +220,20 @@ FixedPointLoop::FixedPointLoop(
 
   // One worker per output partition of whichever chain shuffles -- the body,
   // the convergence sequence, or a fixed point nested in either (see
-  // FixedPointNode::numWorkers).
+  // FixedPointNode::numWorkers).  A fixed point that does not shuffle may run
+  // as any number of tasks, each an independent loop over the rows its initial
+  // plans read for its destination.
   const auto& plans = node_->plans();
   numWorkers_ = node_->numWorkers();
-  VELOX_CHECK_LT(
-      workerIndex_,
-      numWorkers_,
-      "Worker destination out of range; create exactly {} FixedPointLoops "
-      "with destinations 0..{}",
-      numWorkers_,
-      numWorkers_ - 1);
+  if (numWorkers_ > 1) {
+    VELOX_CHECK_LT(
+        workerIndex_,
+        numWorkers_,
+        "Worker destination out of range; create exactly {} FixedPointLoops "
+        "with destinations 0..{}",
+        numWorkers_,
+        numWorkers_ - 1);
+  }
 
   // Every id a caller may address a split to.  The fixed point itself takes a
   // peer worker's remote split; everything else is a split-requiring source in
@@ -280,9 +283,8 @@ void FixedPointLoop::addSplit(
   // A RemoteConnectorSplit on the FixedPointNode itself names a peer worker
   // for this loop's shuffle; its per-iteration producer location is derived by
   // producerLocation.  Every other split is read by a specific plan node --
-  // a TableScan in an initial plan or the trailing plan, or an Exchange in the
-  // trailing plan -- and goes to the sub-task running it, held until that
-  // sub-task exists.
+  // a TableScan or an Exchange in an initial plan or the trailing plan -- and
+  // goes to the sub-task running it, held until that sub-task exists.
   if (split.hasConnectorSplit()) {
     if (const auto* remoteSplit =
             split.connectorSplit->as<exec::RemoteConnectorSplit>()) {
@@ -699,7 +701,7 @@ void FixedPointLoop::appendOutput(const std::string& stateEntry) {
 }
 
 void FixedPointLoop::routeSplits(
-    const std::shared_ptr<exec::Task>& task,
+    const exec::TaskPtr& task,
     const core::PlanNodeId& sourceId) {
   std::lock_guard<std::mutex> l(splitsMutex_);
   const bool complete = splitsComplete_.contains(sourceId);
@@ -901,45 +903,8 @@ folly::coro::Task<TaskStats> FixedPointLoop::consumePlan(
 }
 
 void FixedPointLoop::feedInitSplits(
-    const std::shared_ptr<exec::Task>& task,
+    const exec::TaskPtr& task,
     const core::PlanNodePtr& plan) {
-  // An Exchange source reads the upstream producer the coordinator launched and
-  // named via options_.upstreamExchangeUri (keyed by the Exchange node id); the
-  // worker pulls its own partition by task destination.
-  if (auto exchangeId = findExchangeNodeId(plan)) {
-    VELOX_CHECK(
-        options_.upstreamExchangeUri,
-        "Initial plan reads via Exchange {}; the coordinator must set "
-        "FixedPointOptions::upstreamExchangeUri",
-        *exchangeId);
-    // This branch feeds the Exchange and nothing else, so a connector split the
-    // coordinator also assigned has no source to go to.  Fail rather than drop
-    // it silently, which would just produce missing rows.
-    {
-      // Scoped to this plan's own source.  nodeSplits_ is task-wide and
-      // legitimately holds other initial plans' splits -- a fixed point may mix
-      // an Exchange-fed state with a scanned one -- so only a split addressed
-      // to this Exchange is a mistake.
-      std::lock_guard<std::mutex> l(splitsMutex_);
-      auto it = nodeSplits_.find(*exchangeId);
-      VELOX_USER_CHECK(
-          it == nodeSplits_.end() || it->second.empty(),
-          "Initial plan reads via Exchange {}, whose upstream comes from "
-          "FixedPointOptions::upstreamExchangeUri, but the coordinator also "
-          "assigned it {} connector splits",
-          *exchangeId,
-          it->second.size());
-    }
-    task->addSplit(
-        *exchangeId,
-        exec::Split(
-            std::make_shared<exec::RemoteConnectorSplit>(
-                options_.upstreamExchangeUri(*exchangeId))));
-    task->noMoreSplits(*exchangeId);
-    return;
-  }
-  // Any other split source (e.g. a TableScan) reads the coordinator-assigned
-  // source splits; a local source (e.g. Values) needs none.
   folly::F14FastSet<core::PlanNodeId> sourceIds;
   collectSplitTargets(plan, node_.get(), sourceIds);
   // Splits are held under the id of the node that reads them, so each source
@@ -1012,7 +977,7 @@ folly::coro::Task<std::vector<RowVectorPtr>> FixedPointLoop::runParallelChain(
   // worker's partition.  Each producer is created under the task id from
   // producerLocation() -- a pure function of (this worker's task id, iteration,
   // plan) -- so a peer can address it knowing only this worker's task id.
-  std::vector<std::shared_ptr<exec::Task>> tasks;
+  std::vector<exec::TaskPtr> tasks;
   tasks.reserve(plans.size());
   const auto planDrivers = distributeDriverBudget(
       iterationDrivers(), plans.size(), singleDriverLastPlan);
