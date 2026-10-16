@@ -29,6 +29,9 @@
 namespace facebook::velox::functions::sparksql {
 namespace {
 
+constexpr int32_t kMinSupportedScale{-400};
+constexpr int32_t kMaxSupportedScale{400};
+
 template <typename TResult, typename TInput, typename Policy>
 class DecimalRoundFunction;
 
@@ -101,8 +104,18 @@ class DecimalRoundOps {
         name);
     const auto* value =
         constant->value()->asUnchecked<ConstantVector<int32_t>>();
-    return value->isNullAt(0) ? std::nullopt
-                              : std::optional<int32_t>(value->valueAt(0));
+    if (value->isNullAt(0)) {
+      return std::nullopt;
+    }
+    const auto scale = value->valueAt(0);
+    VELOX_USER_CHECK(
+        scale >= kMinSupportedScale && scale <= kMaxSupportedScale,
+        "Scale must be in [{}, {}]: {}({}).",
+        kMinSupportedScale,
+        kMaxSupportedScale,
+        name,
+        scale);
+    return scale;
   }
 
   template <typename Policy>

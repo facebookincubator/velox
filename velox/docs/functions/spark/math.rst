@@ -139,8 +139,9 @@ Mathematical Functions
     errors per row.
 
     Shares scale validation and result typing with :spark:func:`decimal_round`.
-    The full INTEGER scale range is supported with widened scale arithmetic,
-    without clamping or constructing enormous powers of ten.
+    Non-NULL scales must be in the inclusive range [-400, 400]. Out-of-range
+    scales raise a user error during expression construction, regardless of
+    ANSI mode; ``try`` does not catch this construction-time error.
     For example, rounding DECIMAL(38,38) 0.1 to scale -1 returns 10, not zero.
     When the quantum is outside the result precision, positive nonzero inputs
     raise an error; negative inputs and zero return zero.
@@ -165,8 +166,8 @@ Mathematical Functions
       to the nearest 10^|n| can produce a value one digit wider.
 
     See https://github.com/apache/spark/blob/v4.1.1/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/mathExpressions.scala.
-    Extreme scales follow the mathematical native contract rather than JVM
-    resource exceptions or overflowing INTEGER metadata arithmetic.
+    The native scale bounds are a compatibility restriction, not a claim
+    that Spark rejects every scale outside this interval.
 
     Examples (type annotations for clarity, not executable SQL)::
 
