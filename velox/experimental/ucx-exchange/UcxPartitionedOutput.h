@@ -20,7 +20,10 @@
 #include "velox/experimental/cudf/vector/CudfVector.h"
 #include "velox/experimental/ucx-exchange/UcxOutputQueueManager.h"
 
+#include <rmm/resource_ref.hpp>
 #include <cuda/stream>
+
+#include <optional>
 
 namespace facebook::velox::ucx_exchange {
 
@@ -127,6 +130,9 @@ class UcxPartitionedOutput : public exec::Operator,
       cudf::table_view tableView,
       cuda::stream_ref stream);
 
+  rmm::device_async_resource_ref exchangeOutputMemoryResource() const;
+
+  std::optional<rmm::device_async_resource_ref> exchangeOutputMemoryResource_;
   const std::weak_ptr<UcxOutputQueueManager> queueManager_;
   std::vector<column_index_t> partitionKeyIndices_;
   const size_t numPartitions_;
