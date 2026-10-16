@@ -754,6 +754,16 @@ TEST_F(ProbabilityTest, invPoissonCDF) {
   EXPECT_EQ(
       std::numeric_limits<int32_t>::max(),
       invPoissonCDF(1.8819579427461317E18, 0.659094));
+  // Boost's discrete quantile loops one floating point step at a time, which
+  // does not finish for some lambda above 2^53.
+  EXPECT_EQ(std::numeric_limits<int32_t>::max(), invPoissonCDF(1e16, 0.98));
+  EXPECT_EQ(std::numeric_limits<int32_t>::max(), invPoissonCDF(1e18, 0.5));
+  EXPECT_EQ(std::numeric_limits<int32_t>::max(), invPoissonCDF(1e40, 0.98));
+  // The quantile exceeds INT32_MAX for every p > 0 well below that, even for a
+  // tiny p, on both sides of the cutoff.
+  EXPECT_EQ(std::numeric_limits<int32_t>::max(), invPoissonCDF(3e9, 1e-300));
+  EXPECT_EQ(std::numeric_limits<int32_t>::max(), invPoissonCDF(1e10, 1e-300));
+  EXPECT_EQ(0, invPoissonCDF(1e18, 0));
 
   EXPECT_EQ(std::nullopt, invPoissonCDF(std::nullopt, 0.5));
   EXPECT_EQ(std::nullopt, invPoissonCDF(0.5, std::nullopt));
