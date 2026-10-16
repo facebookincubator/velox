@@ -3175,11 +3175,6 @@ ColumnOrView FunctionExpression::eval(
   }
 
   if (function_) {
-    // CudfFunction implementations operate on plain cuDF columns and assume
-    // each input has its expression's declared type, so finalize every child: a
-    // child whose cuDF result type differs (e.g. INT16 from
-    // extract_datetime_component for a BIGINT year()) is cast before the
-    // function sees it.
     std::vector<ColumnOrView> subexprResults;
     subexprResults.reserve(subexpressions_.size());
 
@@ -3196,6 +3191,11 @@ ColumnOrView FunctionExpression::eval(
     const bool maskBranches = operandIndex.size() == subexpressions_.size() &&
         !operandIndex.empty() && operandIndex.front() == 0;
 
+    // CudfFunction implementations operate on plain cuDF columns and assume
+    // each input has its expression's declared type, so finalize every child: a
+    // child whose cuDF result type differs (e.g. INT16 from
+    // extract_datetime_component for a BIGINT year()) is cast before the
+    // function sees it.
     if (maskBranches) {
       // Branches are materialized over every row before copy_if_else selects,
       // so a fail-fast kernel in one would abort the batch over rows the
@@ -3234,10 +3234,11 @@ ColumnOrView FunctionExpression::eval(
 
     auto result = function_->eval(subexprResults, stream, mr);
     if (finalize) {
-      const auto requestedType = cudf_velox::veloxToCudfDataType(expr_->type());
+      const auto requestedType =
+          cudf_velox::tryVeloxToCudfDataType(expr_->type());
       auto resultView = asView(result);
-      if (resultView.type() != requestedType) {
-        return cudf::cast(resultView, requestedType, stream, mr);
+      if (requestedType && resultView.type() != *requestedType) {
+        return cudf::cast(resultView, *requestedType, stream, mr);
       }
     }
     return result;
