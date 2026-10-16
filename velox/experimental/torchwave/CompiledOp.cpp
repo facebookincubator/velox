@@ -542,10 +542,6 @@ int32_t targetBlockCount(
 
 namespace {
 
-// Nanoseconds one thread-block clock tick is worth. The performance report
-// converts block clocks to microseconds with the same figure.
-constexpr double kNsPerBlockClock = 0.7;
-
 // The step's ops as the launch layout sees them: cost and block cap from the
 // pass above, occupancy and splittability from the op itself.
 std::vector<GridOp> describeGridOps(
@@ -592,6 +588,12 @@ PartitionParams partitionParams(const StepVectors& sv) {
   return PartitionParams{
       .maxWaves = config.maxLaunchWaves,
       .skewThreshold = config.launchSkewThreshold,
+      .minSavingUs = config.launchSplitMinUs,
+      .measuredIdleUs = sv.splitRejected || sv.measureUnsplit ? 0.0
+          : sv.measuredMaxClocks > 0
+          ? static_cast<double>(sv.measuredMaxClocks) *
+              (1.0 - sv.measuredUtil) * kNsPerBlockClock / 1000.0
+          : -1.0,
       .minBlockCost = minBlockCost(sv),
       .measuredUtil = sv.measuredUtil,
       .measuredBlocks = sv.measuredBlocks};
@@ -779,29 +781,30 @@ int32_t makeGrid(
   // For cooperative grids, cap total blocks at what the GPU can run
   // concurrently.
   if (sv.isCgGrid && totalAssigned > targetBlocks) {
-    // Trim excess blocks from launches with the most blocks first,
-    // preserving the proportional allocation for small launches.
+    // Trim one block at a time from the launch that loses least by it: the one
+    // whose per-block cost stays lowest with a block fewer. Trimming the
+    // launches with the most blocks instead levels them regardless of cost; on
+    // a step where 251 one-block copies took half the wave, that cut a 3.9M
+    // element gather to the 34 blocks of ops with a third of its work.
     while (totalAssigned > targetBlocks) {
-      int32_t before = totalAssigned;
-      // Find the current max block count.
-      int32_t maxVal = 1;
+      int32_t best = -1;
+      float bestLat = 0;
       for (size_t i = 0; i < launches.size(); ++i) {
-        maxVal = std::max(maxVal, sv.numBlocksPerLaunch[i]);
-      }
-      if (maxVal <= 1) {
-        break;
-      }
-      // Remove one block from all launches at the max level.
-      for (size_t i = 0; i < launches.size() && totalAssigned > targetBlocks;
-           ++i) {
-        if (sv.numBlocksPerLaunch[i] == maxVal) {
-          --sv.numBlocksPerLaunch[i];
-          --totalAssigned;
+        const int32_t blocks = sv.numBlocksPerLaunch[i];
+        if (blocks <= 1) {
+          continue;
+        }
+        const float lat = sv.costs[i] / static_cast<float>(blocks - 1);
+        if (best < 0 || lat < bestLat) {
+          best = static_cast<int32_t>(i);
+          bestLat = lat;
         }
       }
-      if (totalAssigned == before) {
+      if (best < 0) {
         break;
       }
+      --sv.numBlocksPerLaunch[best];
+      --totalAssigned;
     }
   }
 
@@ -3167,9 +3170,20 @@ void CompositeInvocation::sizeForUnreadyOperands(
   // kernel's concrete static input shapes (TensorMeta is available without
   // materialization). numElements only drives the grid; the kernel loops to the
   // true size on device, so an over-estimate is safe (surplus blocks
-  // early-out).
+  // early-out). An under-estimate is not: a static shape is only a placeholder
+  // for a dynamically sized input, so an input already in the frame counts at
+  // its actual size. A concat fill clone whose band is not carved yet reads a
+  // 3M-element input through a formal typed at 256 elements, and sized from the
+  // formal it ran on one block.
   if (data.numElements == 0 && WaveConfig::get().isCg.value_or(false)) {
     int64_t staticNumElements = 0;
+    for (size_t k = 0; k < numOpInputs; ++k) {
+      const auto& iv = frame.getIValue(data.actualInputs[k]);
+      if (iv.isTensor()) {
+        staticNumElements =
+            std::max<int64_t>(staticNumElements, iv.toTensor().numel());
+      }
+    }
     for (const auto* tensorMeta : launch.op->inputTypes()) {
       if (tensorMeta != nullptr && !tensorMeta->hasSymbolicShape()) {
         int64_t numElements = 1;
@@ -4402,7 +4416,7 @@ void CompositeInvocation::execute(ExecutionState& state) {
       auto& stepEvents = newStepEvents(state, sequenceNumber_, stepIdx);
       if (sv.hasGpuStandalones) {
         if (state.lastWaveDone != nullptr) {
-          state.lastWaveDone->wait(torchStream());
+          waitOnce(state.lastWaveDone, torchStream(), state.torchWaitedFor);
         }
         if (doEventTiming) {
           stepEvents.standaloneBegin->record(torchStream());
@@ -4417,7 +4431,7 @@ void CompositeInvocation::execute(ExecutionState& state) {
           *state.standaloneStats,
           doTiming);
       if (sv.hasGpuStandalones) {
-        stepEvents.standaloneDone->record(torchStream());
+        recordStepDone(stepEvents, torchStream(), /*wave=*/false);
         state.lastStandaloneDone = stepEvents.standaloneDone.get();
       }
       if (doTiming) {
@@ -4573,7 +4587,7 @@ void CompositeInvocation::execute(ExecutionState& state) {
         // step N-1's kernel -- not on this step's, which is exactly what lets
         // the two overlap.
         if (state.lastWaveDone != nullptr) {
-          state.lastWaveDone->wait(torchStream());
+          waitOnce(state.lastWaveDone, torchStream(), state.torchWaitedFor);
         }
         if (doEventTiming) {
           stepEvents.standaloneBegin->record(torchStream());
@@ -4586,7 +4600,7 @@ void CompositeInvocation::execute(ExecutionState& state) {
             *state.standaloneIndices,
             *state.standaloneStats,
             doTiming);
-        stepEvents.standaloneDone->record(torchStream());
+        recordStepDone(stepEvents, torchStream(), /*wave=*/false);
         state.lastStandaloneDone = stepEvents.standaloneDone.get();
         if (doTiming) {
           standaloneElapsed = elapsed(tStandalone);
@@ -4600,7 +4614,7 @@ void CompositeInvocation::execute(ExecutionState& state) {
     // not block; the wait is enqueued before waveBegin is recorded so that
     // event marks the real start of GPU work (see the kernel-less path above).
     if (state.lastStandaloneDone != nullptr) {
-      state.lastStandaloneDone->wait(*state.stream);
+      waitOnce(state.lastStandaloneDone, *state.stream, state.waveWaitedFor);
     }
     if (doEventTiming) {
       stepEvents.waveBegin->record(*state.stream);
@@ -5145,7 +5159,7 @@ void CompositeInvocation::executeAllocGroups(ExecutionState& state) {
       auto& stepEvents = newStepEvents(state, sequenceNumber_, stepIdx);
       if (sv.hasGpuStandalones) {
         if (state.lastWaveDone != nullptr) {
-          state.lastWaveDone->wait(torchStream());
+          waitOnce(state.lastWaveDone, torchStream(), state.torchWaitedFor);
         }
         if (doEventTiming) {
           stepEvents.standaloneBegin->record(torchStream());
@@ -5160,7 +5174,7 @@ void CompositeInvocation::executeAllocGroups(ExecutionState& state) {
           *state.standaloneStats,
           doTiming);
       if (sv.hasGpuStandalones) {
-        stepEvents.standaloneDone->record(torchStream());
+        recordStepDone(stepEvents, torchStream(), /*wave=*/false);
         state.lastStandaloneDone = stepEvents.standaloneDone.get();
       }
       if (doTiming) {
@@ -5297,7 +5311,7 @@ void CompositeInvocation::executeAllocGroups(ExecutionState& state) {
       }
       if (!sv.standalones.empty()) {
         if (state.lastWaveDone != nullptr) {
-          state.lastWaveDone->wait(torchStream());
+          waitOnce(state.lastWaveDone, torchStream(), state.torchWaitedFor);
         }
         if (doEventTiming) {
           stepEvents.standaloneBegin->record(torchStream());
@@ -5310,7 +5324,7 @@ void CompositeInvocation::executeAllocGroups(ExecutionState& state) {
             *state.standaloneIndices,
             *state.standaloneStats,
             doTiming);
-        stepEvents.standaloneDone->record(torchStream());
+        recordStepDone(stepEvents, torchStream(), /*wave=*/false);
         state.lastStandaloneDone = stepEvents.standaloneDone.get();
         if (doTiming) {
           standaloneElapsed = elapsed(tStandalone);
@@ -5320,7 +5334,7 @@ void CompositeInvocation::executeAllocGroups(ExecutionState& state) {
     };
 
     if (state.lastStandaloneDone != nullptr) {
-      state.lastStandaloneDone->wait(*state.stream);
+      waitOnce(state.lastStandaloneDone, *state.stream, state.waveWaitedFor);
     }
     if (doEventTiming) {
       stepEvents.waveBegin->record(*state.stream);
@@ -5666,7 +5680,7 @@ void CompositeInvocation::launch(
     // The debug path already syncs after every block; just close the event
     // chain so the ordering edges stay consistent with the normal path.
     if (events != nullptr) {
-      events->waveDone->record(*stream);
+      recordStepDone(*events, *stream, /*wave=*/true);
     }
 
     if (betweenLaunchAndSync) {
@@ -5705,7 +5719,7 @@ void CompositeInvocation::launch(
       // completion rather than the host's observation of it, and so the
       // ordering edge is established as early as possible.
       if (events != nullptr) {
-        events->waveDone->record(*stream);
+        recordStepDone(*events, *stream, /*wave=*/true);
       }
       if (betweenLaunchAndSync) {
         betweenLaunchAndSync();
@@ -5718,7 +5732,7 @@ void CompositeInvocation::launch(
       }
     } else {
       if (events != nullptr) {
-        events->waveDone->record(*stream);
+        recordStepDone(*events, *stream, /*wave=*/true);
       }
       if (betweenLaunchAndSync) {
         betweenLaunchAndSync();

@@ -179,6 +179,10 @@ DEFINE_bool(
     true,
     "With --enable_reuse, run the pre-partition read-only clone elision pass");
 DEFINE_bool(
+    recognize_disjoint_copies,
+    true,
+    "Merge copies into the columns of one tensor into a single copy of the stacked sources");
+DEFINE_bool(
     free_intermediates,
     true,
     "Release each ProjectNode's last-use value tensors right after its composite invocation executes, instead of at end-of-graph");
@@ -196,8 +200,16 @@ DEFINE_bool(
     "Do not wait for a step's device-to-host transfer at the step that issues it; parse its pinned buffer at the first later step that reads one of the returned values");
 DEFINE_bool(
     run_ahead,
-    false,
+    true,
     "Drop the host stream waits that are not a real data or memory dependency (the per-node default-stream drain), so the host can queue steps arbitrarily far ahead of the device");
+DEFINE_bool(
+    completion_counters,
+    false,
+    "Check step completion through host-mapped counters the streams write, instead of cudaEventQuery");
+DEFINE_bool(
+    skip_repeated_waits,
+    true,
+    "Skip a stream wait on a completion event the stream already waited on");
 DEFINE_int64(
     max_delayed_free,
     1LL << 30,
@@ -285,7 +297,11 @@ DEFINE_int32(
 DEFINE_double(
     launch_skew_threshold,
     1.3,
-    "Step makespan over that of a perfectly balanced, fully occupied one, at and above which --partition_launches splits a step");
+    "Step makespan over that of a perfectly balanced, fully occupied one, at and above which --partition_launches splits a step that has not been measured yet");
+DEFINE_double(
+    launch_split_min_us,
+    30.0,
+    "GPU microseconds of block idle time, measured on the step's previous execution, at and above which --partition_launches splits the step");
 DEFINE_double(
     min_block_us,
     100.0,
@@ -306,6 +322,15 @@ DEFINE_bool(
 namespace torch::wave {
 
 using Clock = std::chrono::high_resolution_clock;
+
+namespace {
+// Waits for all device work before a timed section starts. Filling the frame
+// clones the inputs on the device, and without the wait the timer would also
+// count the tail of that copy, which is the harness's work, not the model's.
+void syncBeforeTiming() {
+  cudaDeviceSynchronize();
+}
+} // namespace
 
 std::string getDataFilePath(
     const std::string& baseDir,
@@ -743,11 +768,14 @@ void ExecutorTestBase::SetUpTestSuite() {
   WaveConfig::get().serializeStandalones = FLAGS_serialize_standalones;
   WaveConfig::get().enableReuse = FLAGS_enable_reuse;
   WaveConfig::get().elideClones = FLAGS_elide_clones;
+  WaveConfig::get().recognizeDisjointCopies = FLAGS_recognize_disjoint_copies;
   WaveConfig::get().freeIntermediates = FLAGS_free_intermediates;
   WaveConfig::get().stepLastUse = FLAGS_step_last_use;
   WaveConfig::get().syncEachStep = FLAGS_sync_each_step;
   WaveConfig::get().deferD2h = FLAGS_defer_d2h;
   WaveConfig::get().runAhead = FLAGS_run_ahead;
+  WaveConfig::get().skipRepeatedWaits = FLAGS_skip_repeated_waits;
+  WaveConfig::get().completionCounters = FLAGS_completion_counters;
   WaveConfig::get().maxDelayedFree = FLAGS_max_delayed_free;
   WaveConfig::get().duplicateMetadata = FLAGS_duplicate_metadata;
   WaveConfig::get().configPerOp = FLAGS_config_per_op;
@@ -771,6 +799,8 @@ void ExecutorTestBase::SetUpTestSuite() {
   WaveConfig::get().maxLaunchWaves = FLAGS_max_launch_waves;
   WaveConfig::get().launchSkewThreshold =
       static_cast<float>(FLAGS_launch_skew_threshold);
+  WaveConfig::get().launchSplitMinUs =
+      static_cast<float>(FLAGS_launch_split_min_us);
   WaveConfig::get().minBlockUs = static_cast<float>(FLAGS_min_block_us);
   WaveConfig::get().quantumGrid = FLAGS_quantum_grid;
   // Read by registerBuiltins(), which initialize() calls below.
@@ -960,6 +990,7 @@ RunTiming ExecutorTestBase::runSerialOnDevice(
 
   fillFrameInputs(graph, *frame, std::move(deviceInputs));
 
+  syncBeforeTiming();
   auto start = Clock::now();
   auto outputs = executor.executeWithPrefilledFrame(*frame);
   auto executeUs = std::chrono::duration_cast<std::chrono::microseconds>(
@@ -1066,6 +1097,7 @@ RunTiming ExecutorTestBase::runWave(
         static_cast<int32_t>(graph.numValues()));
   }
 
+  syncBeforeTiming();
   auto waveStart = Clock::now();
   auto waveOutputs = waveExec.executeWithPrefilledFrame(*pooledFrame);
   auto waveUs = std::chrono::duration_cast<std::chrono::microseconds>(
@@ -1264,6 +1296,7 @@ void ExecutorTestBase::runTestWithFixture(
     // Initial run: fill frame, execute, verify.
     fillWaveFrame(graph, *pooledFrame, deviceInputs);
 
+    syncBeforeTiming();
     auto waveStart = Clock::now();
     auto waveOutputs = waveExec.executeWithPrefilledFrame(*pooledFrame);
     auto waveColdUs = std::chrono::duration_cast<std::chrono::microseconds>(
@@ -1286,6 +1319,7 @@ void ExecutorTestBase::runTestWithFixture(
     for (int i = 0; i < repeats; ++i) {
       fillWaveFrame(graph, *pooledFrame, deviceInputs);
 
+      syncBeforeTiming();
       auto start = Clock::now();
       waveExec.executeWithPrefilledFrame(*pooledFrame);
       auto us = std::chrono::duration_cast<std::chrono::microseconds>(
@@ -1313,8 +1347,8 @@ void ExecutorTestBase::runTestWithFixture(
     LOG(INFO) << displayName << " wave H2D: cold=" << dataMovUs << " us";
     LOG(INFO) << displayName << " wave (" << repeats
               << " repeats): min=" << waveMin << " avg=" << waveSum / repeats
-              << " p90=" << waveP90 << " max=" << waveMax
-              << " us (cold=" << waveColdUs << " us)";
+              << " median=" << waveTimes[repeats / 2] << " p90=" << waveP90
+              << " max=" << waveMax << " us (cold=" << waveColdUs << " us)";
 
     for (size_t li = 0; li < lastDebugInfo.size(); ++li) {
       const auto& blocks = lastDebugInfo[li];

@@ -92,12 +92,16 @@ std::string WaveConfig::toString() const {
   addBool("serializeStandalones", &WaveConfig::serializeStandalones);
   addBool("enableReuse", &WaveConfig::enableReuse);
   addBool("elideClones", &WaveConfig::elideClones);
+  addBool("recognizeDisjointCopies", &WaveConfig::recognizeDisjointCopies);
+  addBool("skipRepeatedWaits", &WaveConfig::skipRepeatedWaits);
+  addBool("completionCounters", &WaveConfig::completionCounters);
   addBool("scanOutputReturnBarrier", &WaveConfig::scanOutputReturnBarrier);
   addBool("freeIntermediates", &WaveConfig::freeIntermediates);
   addBool("inputContiguous", &WaveConfig::inputContiguous);
   addBool("cseCompute", &WaveConfig::cseCompute);
   addBool("cseViews", &WaveConfig::cseViews);
   addBool("decomposeLists", &WaveConfig::decomposeLists);
+  addBool("twMad", &WaveConfig::twMad);
   addBool("metadataGetterStandalone", &WaveConfig::metadataGetterStandalone);
   addBool("concatOperandsInPlace", &WaveConfig::concatOperandsInPlace);
   addBool("foldSharedChains", &WaveConfig::foldSharedChains);
@@ -119,6 +123,7 @@ std::string WaveConfig::toString() const {
   addBool("partitionLaunches", &WaveConfig::partitionLaunches);
   addInt("maxLaunchWaves", &WaveConfig::maxLaunchWaves);
   addFloat("launchSkewThreshold", &WaveConfig::launchSkewThreshold);
+  addFloat("launchSplitMinUs", &WaveConfig::launchSplitMinUs);
   addFloat("minBlockUs", &WaveConfig::minBlockUs);
   addBool("singlePassSelect", &WaveConfig::singlePassSelect);
   addBool("singlePass", &WaveConfig::singlePass);

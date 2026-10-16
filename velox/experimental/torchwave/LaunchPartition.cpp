@@ -650,6 +650,9 @@ bool shouldPartition(const GridStats& stats, const PartitionParams& params) {
   if (stats.numOps < 2 || stats.totalCost <= 0) {
     return false;
   }
+  if (params.measuredIdleUs >= 0) {
+    return params.measuredIdleUs >= params.minSavingUs;
+  }
   if (stats.skew >= params.skewThreshold) {
     return true;
   }
