@@ -16,6 +16,7 @@
 
 #include <gmock/gmock.h>
 
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/File.h"
 #include "velox/common/io/IoStatistics.h"
 #include "velox/common/testutil/TempFilePath.h"
@@ -240,12 +241,13 @@ TEST_F(TextReaderTest, readRangesWithSkipRows) {
 
   EXPECT_THAT(
       readIds(2, 0, 5 * bytesPerRow), testing::ElementsAre(13, 14, 15, 16));
-  EXPECT_THAT(
-      readIds(2, 5 * bytesPerRow, 5 * bytesPerRow),
-      testing::ElementsAre(17, 18, 19, 20, 21));
-  EXPECT_THAT(
-      readIds(2, 10 * bytesPerRow, 5 * bytesPerRow),
-      testing::ElementsAre(22, 23, 24, 25));
+
+  // With more than 1 header line, a later split can start inside the header
+  // lines, so splits that do not start at offset 0 are rejected.
+  const std::string error =
+      "Splits of a text file with more than 1 header line must start at offset 0";
+  VELOX_ASSERT_USER_THROW(readIds(2, 5 * bytesPerRow, 5 * bytesPerRow), error);
+  VELOX_ASSERT_USER_THROW(readIds(2, 5, 45), error);
 }
 
 TEST_F(TextReaderTest, headerAndCustomNullString) {
