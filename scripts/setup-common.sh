@@ -61,12 +61,12 @@ function install_folly {
 
 function install_fizz {
   wget_and_untar https://github.com/facebookincubator/fizz/archive/refs/tags/"${FB_OS_VERSION}".tar.gz fizz
-  cmake_install_dir fizz/fizz -DBUILD_TESTS=OFF
+  cmake_install_dir fizz/fizz -DBUILD_TESTS=OFF -DCMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE}"
 }
 
 function install_fast_float {
   wget_and_untar https://github.com/fastfloat/fast_float/archive/refs/tags/"${FAST_FLOAT_VERSION}".tar.gz fast_float
-  cmake_install_dir fast_float -DBUILD_TESTS=OFF
+  cmake_install_dir fast_float -DBUILD_TESTS=OFF -DCMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE}"
 }
 
 # Only required for VELOX_ENABLE_NIMBLE=ON. Both the runtime library and the
@@ -112,14 +112,23 @@ function install_openzl {
 
 function install_wangle {
   wget_and_untar https://github.com/facebook/wangle/archive/refs/tags/"${FB_OS_VERSION}".tar.gz wangle
-  cmake_install_dir wangle/wangle -DBUILD_TESTS=OFF
+  cmake_install_dir wangle/wangle -DBUILD_TESTS=OFF -DCMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE}"
 }
 
 function install_mvfst {
   wget_and_untar https://github.com/facebook/mvfst/archive/refs/tags/"${FB_OS_VERSION}".tar.gz mvfst
-  cmake_install_dir mvfst -DBUILD_TESTS=OFF
+  cmake_install_dir mvfst -DBUILD_TESTS=OFF -DCMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE}"
 }
 
+# Note, switching to an explicit release build with static libraries causes a build break with undefined
+# symbols. The release mode uses different optimization flags and creates symbols that don't get pulled
+# in properly from the archive.
+# For example, this error can occur durign Velox build time:
+# relocation R_X86_64_PC32 against undefined hidden symbol
+#`_ZTCN6apache6thrift9transport19TTransportExceptionE0_NS0_17TLibraryExceptionE' can not be used when
+# making a shared object
+#
+# Review if this is still a problem when we update FBOS the next time.
 function install_fbthrift {
   wget_and_untar https://github.com/facebook/fbthrift/archive/refs/tags/"${FB_OS_VERSION}".tar.gz fbthrift
   cmake_install_dir fbthrift -Denable_tests=OFF -DBUILD_TESTS=OFF -DBUILD_SHARED_LIBS=OFF
@@ -160,7 +169,7 @@ function install_protobuf {
   install_abseil
 
   wget_and_untar https://github.com/protocolbuffers/protobuf/releases/download/v"${PROTOBUF_VERSION}"/protobuf-all-"${PROTOBUF_VERSION}".tar.gz protobuf
-  cmake_install_dir protobuf -Dprotobuf_BUILD_TESTS=OFF -Dprotobuf_ABSL_PROVIDER=package
+  cmake_install_dir protobuf -Dprotobuf_BUILD_TESTS=OFF -Dprotobuf_ABSL_PROVIDER=package -DCMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE}"
 }
 
 function install_grpc {
