@@ -19,8 +19,8 @@
 #include <folly/Synchronized.h>
 #include <folly/container/F14Map.h>
 #include <folly/container/F14Set.h>
+#include <folly/coro/Task.h>
 
-#include <condition_variable>
 #include <optional>
 
 #include "velox/core/FixedPointPlanNodes.h"
@@ -83,15 +83,6 @@ struct NestedFixedPoint {
   /// the trailing sub-task names itself through subTaskId(), as it does when
   /// nothing reads it remotely.
   std::string trailingTaskId;
-
-  /// Set only when the sub-task's fragment consumes the enclosing loop's
-  /// shuffle: the id of the Exchange in the trailing plan that loop assigns
-  /// splits to.  Those splits arrive after the sub-task has already started, so
-  /// the trailing plan cannot just take whatever has shown up -- it waits for
-  /// the enclosing loop's noMoreSplits, or it would read a still-empty Exchange
-  /// and silently produce nothing.  Empty means no enclosing shuffle feeds this
-  /// fragment.
-  core::PlanNodeId trailingExchangeId;
 
   /// When false, a fragment containing a FixedPointNode compiles to an ordinary
   /// Driver pipeline instead of dispatching to a FixedPointLoop -- which is
@@ -233,19 +224,10 @@ struct FixedPointOptions {
 
   /// Runs the iteration loop of a FixedPointLoop started with start().
   /// Required in parallel mode; unused in serial mode, which runs the loop on
-  /// the caller's thread via next().  Two requirements, both deadlocks if
-  /// broken:
-  ///
-  ///  - It MUST NOT be the query executor.  The loop blocks waiting on the
-  ///    sub-tasks it creates, whose drivers run on the query executor, so a
-  ///    loop holding a query executor thread starves the very sub-tasks it
-  ///    waits for -- and with one such loop per thread, nothing progresses.
-  ///  - It MUST have a thread for every peer worker of the same fixed point
-  ///    that runs concurrently.  Peers barrier with each other each iteration
-  ///    (one's shuffle producer feeds the others' consumers), so a peer whose
-  ///    loop is still queued blocks the peers that are running.
-  ///
-  /// Sizing it for the largest concurrent fixed point satisfies both.
+  /// the caller's thread via next().  A loop suspends while its sub-tasks run,
+  /// so one thread serves any number of loops, nested or peers.  It MUST NOT be
+  /// the query executor: on failure, a loop blocks until the sub-tasks it
+  /// aborts finish, and their drivers run on the query executor.
   folly::Executor* orchestrationExecutor{nullptr};
 
   /// Maximum number of drivers for the plans a parallel loop runs after
@@ -393,23 +375,23 @@ class FixedPointLoop {
   //
   // Phase 1: creates the persistent state and seeds each declared entry from
   // its initial plan.
-  void initialize();
+  folly::coro::Task<void> initialize();
 
   // Phase 2: runs one iteration's plans, writing the result back into the
   // output state entry.  'iteration' must strictly increase -- it is encoded
   // into the sub-task ids that form the cross-worker barrier.
-  void runIteration(int32_t iteration);
+  folly::coro::Task<void> runIteration(int32_t iteration);
 
   // Returns true if the convergence criterion signals convergence; false when
   // there is no criterion.  Evaluated over this worker's local state: either
   // the last iteration's delta was empty (stopWhenDeltaEmpty) or the
   // convergence sequence produced true.
-  bool converged();
+  folly::coro::Task<bool> converged();
 
   // Phase 3: materializes the fixed point's output -- the output state entry's
   // final contents, or the trailing plan run over it -- into the output buffer
   // that next() streams.
-  void finalize();
+  folly::coro::Task<void> finalize();
 
   // True when the last iteration wrote no rows into the output state entry.
   // Read only for a ConvergenceConfig with stopWhenDeltaEmpty.
@@ -432,19 +414,25 @@ class FixedPointLoop {
   // converged() loop (bounded by maxIterations) + finalize().  Called by next()
   // and start().  An engine that wants to own the loop drives the public phase
   // methods instead.
-  void run();
+  folly::coro::Task<void> run();
+
+  // Runs the loop, then hands its output to the owner's consumer, honoring
+  // back-pressure.  The parallel counterpart of next().
+  folly::coro::Task<void> runAndDeliver();
 
   // Runs the trailing (non-fixed-point) nodes -- the plan above the
   // FixedPointNode -- over the loop's output state, buffering their result. The
   // FixedPointNode leaf reads the output state entry (via its operator
   // translator); the sub-task is built without re-dispatching to a
   // FixedPointLoop.
-  // Waits for the enclosing loop to finish assigning the trailing plan's
-  // Exchange splits, then hands them to 'task', the sub-task running it.
-  // A no-op unless an enclosing loop's shuffle feeds this fragment.
-  void feedTrailingSplits(exec::Task& task);
+  folly::coro::Task<void> runTrailingPlan();
 
-  void runTrailingPlan();
+  // Gives 'task' the splits held for 'sourceId' and forwards later ones to it
+  // as they arrive, through noMoreSplits. A serial loop requires the splits to
+  // be complete, since its caller cannot add splits while the loop runs.
+  void routeSplits(
+      const std::shared_ptr<exec::Task>& task,
+      const core::PlanNodeId& sourceId);
 
   // Options for a sub-task this loop creates: the coordinator's hooks, plus a
   // fresh NestedFixedPoint naming this loop as the parent.  The nesting state
@@ -454,14 +442,14 @@ class FixedPointLoop {
 
   // Phase 1: runs each state's initial plan and stores this worker's shard,
   // recording each plan into 'initializationPlans'.
-  void initializeState(
+  folly::coro::Task<void> initializeState(
       std::vector<FixedPointPlanExecutionStats>& initializationPlans);
 
   // Builds a join hash table once from its initial plan and stores it.  Each
   // output driver of the initial plan fills its own table as rows arrive, and
   // the tables are merged at the end, in parallel on the query executor for a
   // large table.  Returns the initial plan's statistics.
-  FixedPointPlanExecutionStats buildHashTable(
+  folly::coro::Task<FixedPointPlanExecutionStats> buildHashTable(
       const core::HashTableStateDeclaration& declaration);
 
   // Runs this worker's column of per-plan sub-tasks over the chain 'plans' for
@@ -474,7 +462,7 @@ class FixedPointLoop {
   // iteration.  The plans run concurrently and share iterationDrivers();
   // 'singleDriverLastPlan' keeps the last one at one driver.  Records the run
   // into 'stats'.
-  std::vector<RowVectorPtr> runParallelChain(
+  folly::coro::Task<std::vector<RowVectorPtr>> runParallelChain(
       const std::vector<core::PlanNodePtr>& plans,
       size_t planIndexOffset,
       int32_t iteration,
@@ -503,8 +491,8 @@ class FixedPointLoop {
   // the plan's split source (TableScan files or an Exchange upstream) when it
   // has one.  Used for the initial plans (with the parent maxDrivers) and, in
   // serial mode, the body and convergence plans.
-  DrainedPlan drainPlan(
-      const core::PlanNodePtr& plan,
+  folly::coro::Task<DrainedPlan> drainPlan(
+      core::PlanNodePtr plan,
       memory::MemoryPool* pool,
       uint32_t maxDrivers);
 
@@ -513,17 +501,19 @@ class FixedPointLoop {
   // per output driver in parallel mode, a single one on the calling thread in
   // serial mode.  Returns the sub-task's
   // statistics.
-  TaskStats consumePlan(
-      const core::PlanNodePtr& plan,
+  folly::coro::Task<TaskStats> consumePlan(
+      core::PlanNodePtr plan,
       uint32_t maxDrivers,
-      const exec::ConsumerSupplier& consumerSupplier);
+      exec::ConsumerSupplier consumerSupplier);
 
   // Feeds 'plan's split source on 'task': an Exchange source reads the upstream
   // producer named by options_.upstreamExchangeUri (keyed by the Exchange node
   // id);
   // any other split source (e.g. a TableScan) reads the coordinator-assigned
   // source splits.  No-op when the plan has no split source (e.g. Values).
-  void feedInitSplits(exec::Task& task, const core::PlanNodePtr& plan);
+  void feedInitSplits(
+      const std::shared_ptr<exec::Task>& task,
+      const core::PlanNodePtr& plan);
 
   // Label for an internal sub-task of this worker that no peer addresses (an
   // initial, convergence, serial-body, last-in-chain, or trailing sub-task).
@@ -587,18 +577,21 @@ class FixedPointLoop {
   std::mutex splitsMutex_;
   std::vector<std::string> peerParentIds_;
 
-  // Every other coordinator-assigned split, keyed by the plan node that reads
-  // it: an initial plan's TableScan, or an Exchange in the trailing plan that
-  // an enclosing loop feeds.  Keyed rather than pooled so two initial plans
-  // that each scan a table receive only their own splits.
+  // Every other coordinator-assigned split that arrived before the sub-task
+  // reading it started, keyed by the plan node that reads it: a TableScan in an
+  // initial plan or in the trailing plan, or an Exchange in the trailing plan
+  // that an enclosing loop feeds.  Keyed rather than pooled so two initial
+  // plans that each scan a table receive only their own splits.
   folly::F14FastMap<core::PlanNodeId, std::vector<exec::Split>> nodeSplits_;
 
+  // The sub-task that reads each such node, until its noMoreSplits.  Weak, so
+  // a sub-task that failed or was cancelled is not kept alive.
+  folly::F14FastMap<core::PlanNodeId, std::weak_ptr<exec::Task>>
+      splitConsumers_;
+
   // Nodes the coordinator (or an enclosing loop) has finished assigning splits
-  // to.  runTrailingPlan waits on 'trailingSplitsCv_' for its Exchange to
-  // appear here before running, since an enclosing loop assigns splits only
-  // after starting this task.  Guarded by splitsMutex_, as is nodeSplits_.
+  // to.  Guarded by splitsMutex_, as are nodeSplits_ and splitConsumers_.
   folly::F14FastSet<core::PlanNodeId> splitsComplete_;
-  std::condition_variable trailingSplitsCv_;
 
   // Stable pool for persistent state, independent of sub-task pools.
   std::shared_ptr<memory::MemoryPool> statePool_;
@@ -650,6 +643,10 @@ class FixedPointLoop {
   // split would be filed under an id nothing ever reads, and the query would
   // return nothing rather than fail.
   folly::F14FastSet<core::PlanNodeId> splitTargets_;
+
+  // The trailing plan's split sources: a TableScan above the fixed point, or
+  // the Exchange an enclosing loop's shuffle feeds.
+  folly::F14FastSet<core::PlanNodeId> trailingSplitSources_;
 };
 
 } // namespace facebook::velox::exec

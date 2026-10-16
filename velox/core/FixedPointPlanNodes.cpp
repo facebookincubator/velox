@@ -55,8 +55,7 @@ RowTypePtr outputEntrySchema(
     const std::vector<StateDeclarationPtr>& declarations,
     const std::string& name) {
   for (const auto& declaration : declarations) {
-    auto vector =
-        std::dynamic_pointer_cast<const VectorStateDeclaration>(declaration);
+    const auto* vector = declaration->as<VectorStateDeclaration>();
     if (vector != nullptr && vector->name() == name) {
       return vector->schema();
     }
@@ -627,16 +626,14 @@ void FixedPointNode::resolveAndValidateStateReferences() const {
         "FixedPointNode: initial plan must not read state (it runs in Phase 1 "
         "before state is populated) for entry: {}",
         declaration->name());
-    if (const auto* vector =
-            dynamic_cast<const VectorStateDeclaration*>(declaration.get())) {
+    if (const auto* vector = declaration->as<VectorStateDeclaration>()) {
       VELOX_USER_CHECK(
           initialPlan->outputType()->equivalent(*vector->schema()),
           "FixedPointNode: initial plan output must match the vector state "
           "entry schema for entry: {}",
           vector->name());
     } else if (
-        const auto* hashTable =
-            dynamic_cast<const HashTableStateDeclaration*>(declaration.get())) {
+        const auto* hashTable = declaration->as<HashTableStateDeclaration>()) {
       VELOX_USER_CHECK(
           initialPlan->outputType()->equivalent(*hashTable->schema()),
           "FixedPointNode: initial plan output must match the hash table state "

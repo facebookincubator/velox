@@ -34,6 +34,7 @@
 #include "velox/exec/Operator.h"
 #include "velox/exec/Split.h"
 #include "velox/exec/Task.h"
+#include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/LocalExchangeSource.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -49,6 +50,7 @@ using core::HashTableStateDeclaration;
 using core::PlanNodePtr;
 using core::StateDeclarationPtr;
 using core::VectorStateDeclaration;
+using exec::test::AssertQueryBuilder;
 using exec::test::PlanBuilder;
 
 std::vector<std::pair<int64_t, int64_t>> readRows(TaskCursor& cursor) {
@@ -127,11 +129,10 @@ class FixedPointTest : public exec::test::HiveConnectorTestBase {
   }
 
   // Runs the iteration loops, kept off the query executor the sub-tasks'
-  // drivers run on.  Needs a thread per concurrently blocked loop, which with
-  // nesting is peers x nesting depth, not just peers (see
-  // FixedPointOptions::orchestrationExecutor).
+  // drivers run on.  One thread serves every loop, nested or peer: a loop
+  // suspends while its sub-tasks run.
   static folly::Executor* orchestrationExecutor() {
-    static auto executor = std::make_shared<folly::CPUThreadPoolExecutor>(16);
+    static auto executor = std::make_shared<folly::CPUThreadPoolExecutor>(1);
     return executor.get();
   }
 
@@ -459,18 +460,30 @@ class FixedPointTest : public exec::test::HiveConnectorTestBase {
   std::vector<std::pair<int64_t, int64_t>> runViaTrailing(
       const core::PlanNodePtr& plan,
       exec::Task::ExecutionMode mode) {
-    auto queryCtx = core::QueryCtx::create(cpuExecutor_.get());
-    auto cursor = TaskCursor::create({
-        .planNode = plan,
-        .queryCtx =
-            mode == exec::Task::ExecutionMode::kParallel ? queryCtx : nullptr,
-        .copyResult = false,
-        .serialExecution = mode == exec::Task::ExecutionMode::kSerial,
-        .fixedPointOptions = &localOptions(),
-    });
+    auto cursor = makeCursor(plan, mode);
     auto rows = readRows(*cursor);
     std::sort(rows.begin(), rows.end());
     return rows;
+  }
+
+  // Returns a split that reads 'file' through the Hive connector.
+  exec::Split hiveSplit(const std::shared_ptr<test::TempFilePath>& file) {
+    return exec::Split(makeHiveConnectorSplit(file->getPath()));
+  }
+
+  // Returns a cursor that runs 'plan' in 'mode' once read.
+  std::unique_ptr<TaskCursor> makeCursor(
+      const core::PlanNodePtr& plan,
+      exec::Task::ExecutionMode mode) {
+    const bool serial = mode == exec::Task::ExecutionMode::kSerial;
+    return TaskCursor::create({
+        .planNode = plan,
+        .queryCtx =
+            serial ? nullptr : core::QueryCtx::create(cpuExecutor_.get()),
+        .copyResult = false,
+        .serialExecution = serial,
+        .fixedPointOptions = &localOptions(),
+    });
   }
 
   // Runs 'plan' in parallel with up to 'maxDrivers' drivers per pipeline and
@@ -1975,9 +1988,7 @@ TEST_F(FixedPointTest, initialPlanTableScan) {
   // each key: key 0 -> 1+2 = 3, key 1 -> 10+20 = 30.
   auto initSplitsFor = [&](int32_t worker)
       -> std::vector<std::pair<core::PlanNodeId, exec::Split>> {
-    return {
-        {scanId,
-         exec::Split(makeHiveConnectorSplit(filePaths[worker]->getPath()))}};
+    return {{scanId, hiveSplit(filePaths[worker])}};
   };
 
   std::vector<std::pair<int64_t, int64_t>> expected{{0, 3}, {1, 30}};
@@ -2059,10 +2070,8 @@ TEST_F(FixedPointTest, twoScannedInitialPlans) {
   auto initSplitsFor = [&](int32_t /*worker*/)
       -> std::vector<std::pair<core::PlanNodeId, exec::Split>> {
     return {
-        {valsScanId,
-         exec::Split(makeHiveConnectorSplit(filePaths[0]->getPath()))},
-        {stepsScanId,
-         exec::Split(makeHiveConnectorSplit(filePaths[1]->getPath()))}};
+        {valsScanId, hiveSplit(filePaths[0])},
+        {stepsScanId, hiveSplit(filePaths[1])}};
   };
 
   // val walks 1 -> 11 -> 21 in steps of delta=10, so both states were seeded
@@ -2162,9 +2171,7 @@ TEST_F(FixedPointTest, initialPlanMixesExchangeAndScan) {
 
   auto initSplitsFor = [&](int32_t worker)
       -> std::vector<std::pair<core::PlanNodeId, exec::Split>> {
-    return {
-        {stepsScanId,
-         exec::Split(makeHiveConnectorSplit(filePaths[worker]->getPath()))}};
+    return {{stepsScanId, hiveSplit(filePaths[worker])}};
   };
 
   // key 0: 1+2 = 3, plus its step 100 -> 103.  key 1: 10+20 = 30, plus 200.
@@ -3104,6 +3111,183 @@ TEST_F(FixedPointTest, trailingNodes) {
   EXPECT_EQ(runViaTrailing(plan, exec::Task::ExecutionMode::kSerial), expected);
   EXPECT_EQ(
       runViaTrailing(plan, exec::Task::ExecutionMode::kParallel), expected);
+}
+
+// A trailing plan that reads a table: the task holds the scan's splits until
+// they are complete, then hands them to the trailing plan.
+TEST_F(FixedPointTest, trailingTableScan) {
+  auto schema = ROW({"k", "v"}, BIGINT());
+
+  auto filePaths = makeFilePaths(1);
+  writeToFile(
+      filePaths[0]->getPath(),
+      makeRowVector(
+          {"tk", "w"},
+          {makeFlatVector<int64_t>({0, 1}), makeFlatVector<int64_t>({7, 8})}));
+
+  core::PlanNodeId scanId;
+  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan = PlanBuilder(idGenerator)
+                  .fixedPoint(
+                      std::make_shared<VectorStateDeclaration>(
+                          "vals",
+                          schema,
+                          PlanBuilder(idGenerator)
+                              .values({makeRowVector(
+                                  {"k", "v"},
+                                  {makeFlatVector<int64_t>({0}),
+                                   makeFlatVector<int64_t>({0})})})
+                              .planNode(),
+                          /*append=*/true),
+                      PlanBuilder(idGenerator)
+                          .stateSource("vals", schema)
+                          .project({"k", "v + 1 AS v"})
+                          .filter("v < 3"),
+                      ConvergenceConfig{
+                          .maxIterations = 10, .stopWhenDeltaEmpty = true})
+                  .hashJoin(
+                      {"k"},
+                      {"tk"},
+                      PlanBuilder(idGenerator)
+                          .tableScan(ROW({"tk", "w"}, BIGINT()))
+                          .capturePlanNodeId(scanId)
+                          .planNode(),
+                      "",
+                      {"w", "v"})
+                  .planNode();
+
+  // The loop outputs the seed (0, 0) and one row per iteration, (0, 1) and
+  // (0, 2). The table maps k = 0 to w = 7.
+  auto expected = makeRowVector({
+      makeFlatVector<int64_t>({7, 7, 7}),
+      makeFlatVector<int64_t>({0, 1, 2}),
+  });
+
+  for (const bool serial : {true, false}) {
+    SCOPED_TRACE(serial ? "serial" : "parallel");
+    AssertQueryBuilder(plan)
+        .serialExecution(serial)
+        .fixedPointOptions(&localOptions())
+        .split(scanId, hiveSplit(filePaths[0]))
+        .assertResults(expected);
+  }
+}
+
+// A fixed point whose initial plan joins another fixed point with a table, and
+// the inner fixed point reads a table too: the outer loop passes both scans'
+// splits to the task running the inner one.
+TEST_F(FixedPointTest, nestedInitialPlanTableScan) {
+  auto schema = ROW({"k", "v"}, BIGINT());
+
+  auto filePaths = makeFilePaths(2);
+  writeToFile(
+      filePaths[0]->getPath(),
+      makeRowVector(
+          {"k", "v"},
+          {makeFlatVector<int64_t>({0}), makeFlatVector<int64_t>({0})}));
+  writeToFile(
+      filePaths[1]->getPath(),
+      makeRowVector({"tk"}, {makeFlatVector<int64_t>({0})}));
+
+  core::PlanNodeId scanId;
+  core::PlanNodeId joinScanId;
+  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto inner = PlanBuilder(idGenerator)
+                   .fixedPoint(
+                       std::make_shared<VectorStateDeclaration>(
+                           "inner",
+                           schema,
+                           PlanBuilder(idGenerator)
+                               .tableScan(schema)
+                               .capturePlanNodeId(scanId)
+                               .planNode(),
+                           /*append=*/true),
+                       PlanBuilder(idGenerator)
+                           .stateSource("inner", schema)
+                           .project({"k", "v + 1 AS v"})
+                           .filter("v < 3"),
+                       ConvergenceConfig{
+                           .maxIterations = 10, .stopWhenDeltaEmpty = true})
+                   .hashJoin(
+                       {"k"},
+                       {"tk"},
+                       PlanBuilder(idGenerator)
+                           .tableScan(ROW("tk", BIGINT()))
+                           .capturePlanNodeId(joinScanId)
+                           .planNode(),
+                       "",
+                       {"k", "v"})
+                   .planNode();
+  auto plan = PlanBuilder(idGenerator)
+                  .fixedPoint(
+                      std::make_shared<VectorStateDeclaration>(
+                          "outer", schema, inner, /*append=*/true),
+                      PlanBuilder(idGenerator)
+                          .stateSource("outer", schema)
+                          .project({"k", "v + 10 AS v"})
+                          .filter("v < 20"),
+                      ConvergenceConfig{
+                          .maxIterations = 10, .stopWhenDeltaEmpty = true})
+                  .planNode();
+
+  // The inner loop counts the table's v = 0 up to 2; the outer loop adds 10 to
+  // each once.
+  auto expected = makeRowVector({
+      makeFlatVector<int64_t>({0, 0, 0, 0, 0, 0}),
+      makeFlatVector<int64_t>({0, 1, 2, 10, 11, 12}),
+  });
+
+  for (const bool serial : {true, false}) {
+    SCOPED_TRACE(serial ? "serial" : "parallel");
+    AssertQueryBuilder(plan)
+        .serialExecution(serial)
+        .fixedPointOptions(&localOptions())
+        .split(scanId, hiveSplit(filePaths[0]))
+        .split(joinScanId, hiveSplit(filePaths[1]))
+        .assertResults(expected);
+  }
+}
+
+// An initial plan over a table with no splits seeds an empty state. A serial
+// loop runs only once each source's splits are complete.
+TEST_F(FixedPointTest, initialPlanSplitsComplete) {
+  auto schema = ROW({"k", "v"}, BIGINT());
+
+  core::PlanNodeId scanId;
+  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan = PlanBuilder(idGenerator)
+                  .fixedPoint(
+                      std::make_shared<VectorStateDeclaration>(
+                          "vals",
+                          schema,
+                          PlanBuilder(idGenerator)
+                              .tableScan(schema)
+                              .capturePlanNodeId(scanId)
+                              .planNode()),
+                      PlanBuilder(idGenerator)
+                          .stateSource("vals", schema)
+                          .project({"k", "v + 1 AS v"})
+                          .filter("v < 3"),
+                      ConvergenceConfig{
+                          .maxIterations = 10, .stopWhenDeltaEmpty = true})
+                  .planNode();
+
+  for (const bool serial : {true, false}) {
+    SCOPED_TRACE(serial ? "serial" : "parallel");
+    AssertQueryBuilder(plan)
+        .serialExecution(serial)
+        .fixedPointOptions(&localOptions())
+        .splits(scanId, std::vector<exec::Split>{})
+        .assertEmptyResults();
+  }
+
+  auto cursor = makeCursor(plan, exec::Task::ExecutionMode::kSerial);
+  VELOX_ASSERT_USER_THROW(
+      readRows(*cursor),
+      fmt::format(
+          "A serial fixed point runs only once each source's splits are "
+          "complete; call noMoreSplits before next(): {}",
+          scanId));
 }
 
 // A fixed point nested inside another one's body: the shape Hierarchical

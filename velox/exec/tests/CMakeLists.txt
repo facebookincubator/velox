@@ -520,7 +520,7 @@ target_link_libraries(
   GTest::gtest_main
 )
 
-add_executable(velox_fixed_point_test FixedPointTest.cpp)
+add_executable(velox_fixed_point_test FixedPointTest.cpp Main.cpp)
 add_test(
   NAME velox_fixed_point_test
   COMMAND velox_fixed_point_test
@@ -533,7 +533,6 @@ target_link_libraries(
   velox_core
   GTest::gmock
   GTest::gtest
-  GTest::gtest_main
 )
 
 velox_add_library(velox_aggregate_registry_util INTERFACE HEADERS AggregateRegistryTestUtil.h)
