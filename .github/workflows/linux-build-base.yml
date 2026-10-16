@@ -242,7 +242,7 @@ jobs:
       - name: Ccache after
         run: ccache -s
 
-      - uses: apache/infrastructure-actions/stash/save@3354c1565d4b0e335b78a76aedd82153a9e144d4
+      - uses: apache/infrastructure-actions/stash/save@b1b1ab191498302581efdef55279706f79249c0e
         with:
           path: ${{ env.CCACHE_DIR }}
           key: ccache-linux-adapters-${{ inputs.use-clang && 'clang' || 'gcc' }}
@@ -711,7 +711,7 @@ jobs:
         run: |
           ccache -vs
 
-      - uses: apache/infrastructure-actions/stash/save@3354c1565d4b0e335b78a76aedd82153a9e144d4
+      - uses: apache/infrastructure-actions/stash/save@b1b1ab191498302581efdef55279706f79249c0e
         with:
           path: ${{ env.CCACHE_DIR }}
           key: ccache-ubuntu-debug-default-${{ inputs.use-clang && 'clang' || 'gcc' }}
@@ -901,7 +901,7 @@ jobs:
         run: |
           ccache -vs
 
-      - uses: apache/infrastructure-actions/stash/save@3354c1565d4b0e335b78a76aedd82153a9e144d4
+      - uses: apache/infrastructure-actions/stash/save@b1b1ab191498302581efdef55279706f79249c0e
         with:
           path: ${{ env.CCACHE_DIR }}
           key: ccache-fedora-debug-default-gcc
@@ -1078,7 +1078,7 @@ jobs:
       - name: Ccache after
         run: ccache -s
 
-      - uses: apache/infrastructure-actions/stash/save@3354c1565d4b0e335b78a76aedd82153a9e144d4
+      - uses: apache/infrastructure-actions/stash/save@b1b1ab191498302581efdef55279706f79249c0e
         with:
           path: ${{ env.CCACHE_DIR }}
           key: ccache-asan-ubsan-adapters

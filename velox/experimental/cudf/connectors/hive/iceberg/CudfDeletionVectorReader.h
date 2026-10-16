@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include "velox/common/config/Config.h"
 #include "velox/common/file/File.h"
 #include "velox/connectors/hive/iceberg/DeletionVectorReader.h"
 #include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
@@ -49,8 +50,11 @@ namespace facebook::velox::cudf_velox::connector::hive::iceberg {
 ///   or 12347).
 class CudfDeletionVectorReader {
  public:
-  explicit CudfDeletionVectorReader(
-      const velox::connector::hive::iceberg::IcebergDeleteFile& dvFile);
+  /// @param dvFile Deletion vector file metadata.
+  /// @param connectorConfig Config for resolving the Puffin file's filesystem.
+  CudfDeletionVectorReader(
+      const velox::connector::hive::iceberg::IcebergDeleteFile& dvFile,
+      std::shared_ptr<const config::ConfigBase> connectorConfig);
 
   ~CudfDeletionVectorReader() = default;
   CudfDeletionVectorReader(CudfDeletionVectorReader&&) noexcept = default;
@@ -103,6 +107,9 @@ class CudfDeletionVectorReader {
 
   // Deletion vector file metadata.
   const velox::connector::hive::iceberg::IcebergDeleteFile dvFile_;
+
+  // Connector configuration for resolving the Puffin file's filesystem.
+  const std::shared_ptr<const config::ConfigBase> connectorConfig_;
 
   // Whether the bitmap has been loaded from the file.
   bool loaded_{false};

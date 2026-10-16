@@ -652,8 +652,8 @@ void CudfIcebergSplitReader::setupDeleteFileReaders(
   }
 
   if (deletionVectorFile_ != nullptr) {
-    deletionVectorReader_ =
-        std::make_unique<CudfDeletionVectorReader>(*deletionVectorFile_);
+    deletionVectorReader_ = std::make_unique<CudfDeletionVectorReader>(
+        *deletionVectorFile_, hiveConfig_->config());
   }
 }
 

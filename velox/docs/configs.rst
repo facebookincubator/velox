@@ -290,12 +290,28 @@ Generic Configuration
      - Floor the RPC flow\-control congestion window may shrink to under overload in the RPC operator.
        Default 1, which never fully stalls dispatch. The controller clamps this to the range
        [1, maxWindow].
+   * - rpc.congestion.batch_start_window
+     - integer
+     - 0
+     - Initial per\-driver BATCH RPC congestion window. 0 keeps the built\-in default of 2.
+       Positive values are clamped to [minWindow, maxWindow]. PER_ROW always starts at its ceiling.
+       Size at or below the backend's measured concurrency knee: starting above it seeds the
+       unloaded\-RTT baseline with queueing delay, leaving only explicit overload errors to shrink
+       the window.
    * - rpc.congestion.step_coef
      - double
      - 1.0
      - Multiplier on the RPC congestion window's sqrt(window) additive\-increase headroom. Default 1.0
        is the plain sqrt headroom; lower values converge tighter at small windows. The controller
        clamps this to be non\-negative.
+   * - rpc.congestion.async_growth_max_window
+     - integer
+     - 0
+     - Cap for per\-driver BATCH window growth on clean completions that carry no usable latency
+       sample (MetaGen async\-job batches). 0 (default) disables the growth, keeping the legacy
+       pinned start window. Positive values let the window discover capacity additively up to the
+       cap; size at or below the backend's measured concurrency knee (16 is a conservative start).
+       Clamped to [minWindow, maxWindow].
 
 
 Expression Evaluation Configuration

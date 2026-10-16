@@ -407,6 +407,7 @@ void CudfHiveDataSource::convertSplit(std::shared_ptr<ConnectorSplit> split) {
 }
 
 void CudfHiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
+  ensureCudaContextForThread();
   // Virtual method for class-specific conversion of the split
   convertSplit(split);
 
@@ -421,8 +422,10 @@ void CudfHiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
     return;
   }
 
-  if (hasDecimalSubfieldFilter_) {
-    const auto& fileMetadatas = cudfSplitReader_->readFileMetadatas();
+  // An empty split has no footer to build the filter from.
+  if (hasDecimalSubfieldFilter_ and
+      not cudfSplitReader_->fileMetaDatas().empty()) {
+    const auto& fileMetadatas = cudfSplitReader_->fileMetaDatas();
     const auto readerFilterType = getTableRowType();
     const HiveConfig hiveConfig(cudfHiveConfig_->config());
     const auto fileColumnNamesReadAsLowerCase =
@@ -443,6 +446,11 @@ void CudfHiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
     cudfSplitReader_->setPushdownFilter(&filter);
   }
   cudfSplitReader_->prepareSplit(runtimeStats_);
+
+  // An ignored missing file leaves nothing to read.
+  if (cudfSplitReader_->emptySplit()) {
+    return;
+  }
 
   // Check if preloaded splits should start pre-fetching the first pass of
   // column chunks.
@@ -473,6 +481,7 @@ void CudfHiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
 }
 
 void CudfHiveDataSource::setFromDataSource(std::unique_ptr<DataSource> source) {
+  ensureCudaContextForThread();
   auto* preparedSource = checkedPointerCast<CudfHiveDataSource>(source.get());
 
   split_ = std::move(preparedSource->split_);
@@ -521,10 +530,11 @@ std::optional<RowVectorPtr> CudfHiveDataSource::next(
     velox::ContinueFuture& /* future */) {
   VELOX_CHECK_NOT_NULL(split_, "No split present. Call addSplit() first.");
   VELOX_CHECK_NOT_NULL(cudfSplitReader_, "No split to process.");
-  if (remainingFilterRejectsAllRows_) {
+  if (remainingFilterRejectsAllRows_ or cudfSplitReader_->emptySplit()) {
     cudfSplitReader_->resetSplit();
     return nullptr;
   }
+  ensureCudaContextForThread();
   auto chunkOpt = cudfSplitReader_->next(size);
   if (!chunkOpt.has_value()) {
     cudfSplitReader_->resetSplit();
