@@ -22,6 +22,7 @@
 #include <folly/lang/Bits.h>
 
 #include "velox/common/base/Exceptions.h"
+#include "velox/common/base/RuntimeMetrics.h"
 #include "velox/common/config/Config.h"
 #include "velox/common/encode/Base64.h"
 #include "velox/connectors/hive/FileConfig.h"
@@ -1123,6 +1124,14 @@ uint64_t IcebergSplitReader::next(uint64_t size, VectorPtr& output) {
       : nullptr;
 
   auto rowsScanned = baseRowReader_->next(actualSize, output, &mutation);
+
+  // Count each position once across overlapping position deletes and DVs.
+  // Equality deletes count only the surviving rows they subsequently remove.
+  if (mutation.deletedRows && rowsScanned > 0) {
+    addThreadLocalRuntimeStat(
+        "icebergDeletedRows",
+        RuntimeCounter(bits::countBits(mutation.deletedRows, 0, rowsScanned)));
+  }
 
   auto* pool = connectorQueryCtx_->memoryPool();
 

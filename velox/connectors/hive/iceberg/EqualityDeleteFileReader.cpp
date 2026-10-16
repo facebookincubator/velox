@@ -17,6 +17,7 @@
 #include "velox/connectors/hive/iceberg/EqualityDeleteFileReader.h"
 
 #include "velox/common/base/BitUtil.h"
+#include "velox/common/base/RuntimeMetrics.h"
 #include "velox/connectors/hive/BufferedInputBuilder.h"
 #include "velox/connectors/hive/HiveConnectorUtil.h"
 #include "velox/connectors/hive/iceberg/IcebergGeometryConverter.h"
@@ -336,6 +337,7 @@ void EqualityDeleteFileReader::applyDeletes(
   }
 
   auto* bitmap = deleteBitmap->asMutable<uint8_t>();
+  int64_t numDeleted = 0;
 
   // For each row in the output, compute its hash and probe the delete set.
   for (vector_size_t i = 0; i < output->size(); ++i) {
@@ -352,10 +354,12 @@ void EqualityDeleteFileReader::applyDeletes(
       auto& entry = it->second;
       if (equalRows(output, i, deleteRows_[entry.batchIndex], entry.rowIndex)) {
         bits::setBit(bitmap, i);
+        ++numDeleted;
         break;
       }
     }
   }
+  addThreadLocalRuntimeStat("icebergDeletedRows", RuntimeCounter(numDeleted));
 }
 
 const std::vector<column_index_t>&
