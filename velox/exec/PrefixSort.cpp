@@ -136,6 +136,20 @@ compareByWord(uint64_t* left, uint64_t* right, int32_t bytes) {
   return 0;
 }
 
+// Compares the normalized keys of two prefix entries with the key size known
+// at compile time.
+template <int32_t kNumKeyWords>
+FOLLY_ALWAYS_INLINE int compareKeyWords(const char* left, const char* right) {
+  const auto* leftWords = reinterpret_cast<const uint64_t*>(left);
+  const auto* rightWords = reinterpret_cast<const uint64_t*>(right);
+  for (auto i = 0; i < kNumKeyWords; ++i) {
+    if (leftWords[i] != rightWords[i]) {
+      return leftWords[i] > rightWords[i] ? 1 : -1;
+    }
+  }
+  return 0;
+}
+
 } // namespace
 
 // static.
@@ -254,24 +268,26 @@ FOLLY_ALWAYS_INLINE int PrefixSort::compareAllNormalizedKeys(
       (uint64_t*)left, (uint64_t*)right, sortLayout_.normalizedBufferSize);
 }
 
-int PrefixSort::comparePartNormalizedKeys(char* left, char* right) {
-  int result = compareAllNormalizedKeys(left, right);
-  if (result != 0) {
-    return result;
-  }
-
-  // If prefixes are equal, compare the remaining sort keys with rowContainer.
+int PrefixSort::compareNonPrefixKeys(char* left, char* right) {
   char* leftRow = getRowAddrFromPrefixBuffer(left);
   char* rightRow = getRowAddrFromPrefixBuffer(right);
   for (auto i = sortLayout_.nonPrefixSortStartIndex; i < sortLayout_.numKeys;
        ++i) {
-    result = rowContainer_->compare(
-        leftRow, rightRow, i, sortLayout_.compareFlags[i]);
-    if (result != 0) {
+    if (const auto result = rowContainer_->compare(
+            leftRow, rightRow, i, sortLayout_.compareFlags[i])) {
       return result;
     }
   }
-  return result;
+  return 0;
+}
+
+int PrefixSort::comparePartNormalizedKeys(char* left, char* right) {
+  const int result = compareAllNormalizedKeys(left, right);
+  if (result != 0) {
+    return result;
+  }
+  // If prefixes are equal, compare the remaining sort keys with rowContainer.
+  return compareNonPrefixKeys(left, right);
 }
 
 PrefixSort::PrefixSort(
@@ -349,12 +365,82 @@ uint64_t PrefixSort::maxRequiredBytes() const {
   const auto numRows = rowContainer_->numRows();
   const auto numPages =
       memory::AllocationTraits::numPages(numRows * sortLayout_.entrySize);
+  const auto prefixBufferSize = memory::AllocationTraits::pageBytes(numPages);
+
+  if (isFixedSizeSort()) {
+    // Fixed size sort uses a stack array and does not allocate a swap buffer.
+    return prefixBufferSize;
+  }
+
   // Prefix data size + swap buffer size.
-  return memory::AllocationTraits::pageBytes(numPages) +
+  return prefixBufferSize +
       pool_->preferredSize(
           checkedPlus<size_t>(
               sortLayout_.entrySize, AlignedBuffer::kPaddedSize)) +
       2 * pool_->alignment();
+}
+
+// Sorts the prefix buffer with the entry size fixed at compile time, so that
+// entry comparison and entry swap become straight line code. 'kNumKeyWords' is
+// the normalized key size in 8 byte words.
+template <int32_t kNumKeyWords>
+void PrefixSort::sortFixedSizeEntries(char* prefixBuffer, uint64_t numRows) {
+  const auto entrySize = sortLayout_.entrySize;
+  VELOX_CHECK_EQ(entrySize, (kNumKeyWords + 1) * sizeof(uint64_t));
+  prefixsort::PrefixSortRunnerBase<kNumKeyWords + 1> sortRunner(entrySize);
+  auto* prefixBufferEnd = prefixBuffer + numRows * entrySize;
+  if (needsTieBreak()) {
+    sortRunner.quickSort(
+        prefixBuffer, prefixBufferEnd, [&](char* lhs, char* rhs) {
+          const auto result = compareKeyWords<kNumKeyWords>(lhs, rhs);
+          return result != 0 ? result : compareNonPrefixKeys(lhs, rhs);
+        });
+  } else {
+    sortRunner.quickSort(
+        prefixBuffer, prefixBufferEnd, [&](char* lhs, char* rhs) {
+          return compareKeyWords<kNumKeyWords>(lhs, rhs);
+        });
+  }
+}
+
+void PrefixSort::sortPrefixBuffer(char* prefixBuffer, uint64_t numRows) {
+  if (isFixedSizeSort()) {
+#define VELOX_FIXED_SIZE_SORT_CASE(numWords)               \
+  case numWords:                                           \
+    sortFixedSizeEntries<numWords>(prefixBuffer, numRows); \
+    return;
+
+    switch (numKeyWords()) {
+      VELOX_FIXED_SIZE_SORT_CASE(1)
+      VELOX_FIXED_SIZE_SORT_CASE(2)
+      VELOX_FIXED_SIZE_SORT_CASE(3)
+      VELOX_FIXED_SIZE_SORT_CASE(4)
+      VELOX_FIXED_SIZE_SORT_CASE(5)
+      VELOX_FIXED_SIZE_SORT_CASE(6)
+      VELOX_FIXED_SIZE_SORT_CASE(7)
+      VELOX_FIXED_SIZE_SORT_CASE(8)
+      VELOX_FIXED_SIZE_SORT_CASE(9)
+      default:
+        VELOX_UNREACHABLE();
+    }
+#undef VELOX_FIXED_SIZE_SORT_CASE
+  }
+
+  const auto entrySize = sortLayout_.entrySize;
+  const auto swapBuffer = AlignedBuffer::allocate<char>(entrySize, pool_);
+  PrefixSortRunner sortRunner(entrySize, swapBuffer->asMutable<char>());
+  auto* prefixBufferEnd = prefixBuffer + numRows * entrySize;
+  if (needsTieBreak()) {
+    sortRunner.quickSort(
+        prefixBuffer, prefixBufferEnd, [&](char* lhs, char* rhs) {
+          return comparePartNormalizedKeys(lhs, rhs);
+        });
+  } else {
+    sortRunner.quickSort(
+        prefixBuffer, prefixBufferEnd, [&](char* lhs, char* rhs) {
+          return compareAllNormalizedKeys(lhs, rhs);
+        });
+  }
 }
 
 void PrefixSort::sortInternal(
@@ -376,31 +462,15 @@ void PrefixSort::sortInternal(
     extractRowAndEncodePrefixKeys(rows[i], prefixBuffer + entrySize * i);
   }
 
-  // Sort rows with the normalized prefix keys.
-  {
-    const auto swapBuffer = AlignedBuffer::allocate<char>(entrySize, pool_);
-    PrefixSortRunner sortRunner(entrySize, swapBuffer->asMutable<char>());
-    auto* prefixBufferStart = prefixBuffer;
-    auto* prefixBufferEnd = prefixBuffer + numRows * entrySize;
-    if (sortLayout_.numNormalizedKeys > 0) {
-      addThreadLocalRuntimeStat(
-          PrefixSort::kNumPrefixSortKeys,
-          RuntimeCounter(
-              sortLayout_.numNormalizedKeys, RuntimeCounter::Unit::kNone));
-    }
-    if (sortLayout_.hasNonNormalizedKey ||
-        sortLayout_.nonPrefixSortStartIndex < sortLayout_.numNormalizedKeys) {
-      sortRunner.quickSort(
-          prefixBufferStart, prefixBufferEnd, [&](char* lhs, char* rhs) {
-            return comparePartNormalizedKeys(lhs, rhs);
-          });
-    } else {
-      sortRunner.quickSort(
-          prefixBufferStart, prefixBufferEnd, [&](char* lhs, char* rhs) {
-            return compareAllNormalizedKeys(lhs, rhs);
-          });
-    }
+  if (sortLayout_.numNormalizedKeys > 0) {
+    addThreadLocalRuntimeStat(
+        PrefixSort::kNumPrefixSortKeys,
+        RuntimeCounter(
+            sortLayout_.numNormalizedKeys, RuntimeCounter::Unit::kNone));
   }
+
+  // Sort rows with the normalized prefix keys.
+  sortPrefixBuffer(prefixBuffer, numRows);
 
   // Output sorted row addresses.
   for (auto i = 0; i < rows.size(); ++i) {

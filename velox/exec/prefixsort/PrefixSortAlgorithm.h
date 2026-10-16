@@ -16,6 +16,7 @@
 #pragma once
 
 #include <cstdint>
+#include <cstring>
 #include <functional>
 #include <memory>
 
@@ -113,12 +114,30 @@ class PrefixSortIterator {
 /// Provides methods (mostly required by the sort
 /// algorithm) for PrefixSort. Maintains the buffer for swap operations and
 /// some necessary context information such as entrySize.
-class PrefixSortRunner {
+///
+/// 'kEntryWords' is the entry size in 8 byte words when it is known at compile
+/// time, or 0 when it is only known at runtime. A compile time size lets an
+/// entry swap happen through registers instead of a variable length copy via
+/// 'swapBuffer', which is a large part of the sort cost.
+template <int32_t kEntryWords = 0>
+class PrefixSortRunnerBase {
  public:
-  /// @param swapBuffer The buffer must be at least entrySize bytes long.
-  PrefixSortRunner(uint64_t entrySize, char* swapBuffer)
+  /// @param swapBuffer The buffer must be at least entrySize bytes long. Only
+  /// needed when 'kEntryWords' is 0.
+  PrefixSortRunnerBase(uint64_t entrySize, char* swapBuffer)
       : entrySize_(entrySize), swapBuffer_(swapBuffer) {
-    VELOX_CHECK_NOT_NULL(swapBuffer_);
+    if constexpr (kEntryWords == 0) {
+      VELOX_CHECK_NOT_NULL(swapBuffer_);
+    } else {
+      VELOX_CHECK_EQ(entrySize, kEntryWords * sizeof(uint64_t));
+    }
+  }
+
+  /// Constructs a runner for a compile time entry size, which needs no swap
+  /// buffer.
+  explicit PrefixSortRunnerBase(uint64_t entrySize)
+      : PrefixSortRunnerBase(entrySize, nullptr) {
+    static_assert(kEntryWords > 0);
   }
 
   // Within quickSort, when the input data length < kSmallSort, use insert-sort
@@ -162,9 +181,16 @@ class PrefixSortRunner {
   FOLLY_ALWAYS_INLINE void swap(
       const detail::PrefixSortIterator& lhs,
       const detail::PrefixSortIterator& rhs) const {
-    simd::memcpy(swapBuffer_, *lhs, entrySize_);
-    simd::memcpy(*lhs, *rhs, entrySize_);
-    simd::memcpy(*rhs, swapBuffer_, entrySize_);
+    if constexpr (kEntryWords > 0) {
+      uint64_t buffer[kEntryWords];
+      std::memcpy(buffer, *lhs, sizeof(buffer));
+      std::memcpy(*lhs, *rhs, sizeof(buffer));
+      std::memcpy(*rhs, buffer, sizeof(buffer));
+    } else {
+      simd::memcpy(swapBuffer_, *lhs, entrySize_);
+      simd::memcpy(*lhs, *rhs, entrySize_);
+      simd::memcpy(*rhs, swapBuffer_, entrySize_);
+    }
   }
 
   FOLLY_ALWAYS_INLINE void rangeSwap(
@@ -334,4 +360,8 @@ class PrefixSortRunner {
   const uint64_t entrySize_;
   char* const swapBuffer_;
 };
+
+/// Runner for entries whose size is only known at runtime.
+using PrefixSortRunner = PrefixSortRunnerBase<0>;
+
 } // namespace facebook::velox::exec::prefixsort
