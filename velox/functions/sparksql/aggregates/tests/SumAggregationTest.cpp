@@ -780,5 +780,75 @@ TEST_F(SumAggregationTest, abandonPartialAggregation) {
       0);
 }
 
+TEST_F(SumAggregationTest, abandonPartialMergeWithAndWithoutMask) {
+  constexpr vector_size_t kBatchSize = 100;
+  constexpr vector_size_t kNumRows = 3 * kBatchSize;
+  std::vector<RowVectorPtr> data;
+  for (auto batch = 0; batch < 3; ++batch) {
+    data.push_back(makeRowVector(
+        {"k", "v", "m"},
+        {makeFlatVector<int64_t>(
+             kBatchSize, [&](auto row) { return batch * kBatchSize + row; }),
+         makeRowVector(
+             {makeFlatVector<int128_t>(
+                  kBatchSize,
+                  [&](auto row) { return batch * kBatchSize + row + 1; },
+                  nullptr,
+                  DECIMAL(20, 1)),
+              makeFlatVector<bool>(kBatchSize, [](auto) { return false; })}),
+         makeFlatVector<bool>(kBatchSize, [&](auto row) {
+           return batch < 2 || row % 2 == 0;
+         })}));
+  }
+
+  for (const bool hasMask : {false, true}) {
+    SCOPED_TRACE(hasMask);
+    core::PlanNodeId partialNodeId;
+    auto plan = PlanBuilder()
+                    .values(data)
+                    .partialAggregation(
+                        {"k"},
+                        {"spark_sum_merge(v)"},
+                        hasMask ? std::vector<std::string>{"m"}
+                                : std::vector<std::string>{})
+                    .capturePlanNodeId(partialNodeId)
+                    .planNode();
+    auto expected = makeRowVector(
+        {makeFlatVector<int64_t>(kNumRows, folly::identity),
+         makeRowVector(
+             {makeFlatVector<int128_t>(
+                  kNumRows,
+                  [&](auto row) {
+                    return hasMask && row >= 2 * kBatchSize && row % 2 != 0
+                        ? 0
+                        : row + 1;
+                  },
+                  nullptr,
+                  DECIMAL(20, 1)),
+              makeFlatVector<bool>(kNumRows, [&](auto row) {
+                return hasMask && row >= 2 * kBatchSize && row % 2 != 0;
+              })})});
+
+    auto task =
+        AssertQueryBuilder(plan)
+            .maxDrivers(1)
+            .config(core::QueryConfig::kAbandonPartialAggregationMinRows, "1")
+            .config(core::QueryConfig::kAbandonPartialAggregationMinPct, "0")
+            .assertResults(expected);
+    const auto stats = exec::toPlanStats(task->taskStats());
+    EXPECT_GT(
+        stats.at(partialNodeId)
+            .customStats.at("abandonedPartialAggregationRows")
+            .sum,
+        0);
+    const auto& customStats = stats.at(partialNodeId).customStats;
+    if (hasMask) {
+      EXPECT_EQ(customStats.count("toIntermediateFastPathCalls"), 0);
+    } else {
+      EXPECT_GT(customStats.at("toIntermediateFastPathCalls").sum, 0);
+    }
+  }
+}
+
 } // namespace
 } // namespace facebook::velox::functions::aggregate::sparksql::test

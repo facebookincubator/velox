@@ -30,7 +30,7 @@ class AverageAggregate
   explicit AverageAggregate(TypePtr resultType)
       : AverageAggregateBase<TInput, TAccumulator, TResult>(resultType) {}
 
-  bool supportsToIntermediate() const override {
+  bool supportsToIntermediate(bool /*hasMask*/) const override {
     return true;
   }
 

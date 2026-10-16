@@ -37,7 +37,7 @@ class MapAggAggregate : public MapAggregateBase<K, AccumulatorType> {
     return false;
   }
 
-  bool supportsToIntermediate() const override {
+  bool supportsToIntermediate(bool /*hasMask*/) const override {
     return true;
   }
 
