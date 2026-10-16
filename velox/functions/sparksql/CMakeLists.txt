@@ -83,6 +83,7 @@ velox_add_library(
   FormatNumber.h
   FormatString.h
   GetJsonObject.h
+  GetTimestamp.h
   Hash.h
   In.h
   InitcapFunction.h
@@ -108,6 +109,7 @@ velox_add_library(
   TimestampUtils.h
   ToJson.h
   ToPrettyString.h
+  ToTimestampNtz.h
   UnBase64Function.h
   UnscaledValueFunction.h
   Uuid.h
