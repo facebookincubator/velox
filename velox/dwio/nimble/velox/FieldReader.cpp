@@ -19,6 +19,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <numeric>
+#include <type_traits>
 
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/common/Types.h"
@@ -435,7 +436,14 @@ T* verifyVectorState(velox::VectorPtr& vector) {
   // else (e.g. ref count of 1 recursively). Use BaseVector::reusable
   // from Velox to check this.
   if (vector != nullptr) {
-    auto* casted = vector->as<T>();
+    T* casted{nullptr};
+    if constexpr (std::is_same_v<T, velox::ArrayVector>) {
+      casted = vector->encoding() == velox::VectorEncoding::Simple::ARRAY
+          ? vector->asUnchecked<T>()
+          : nullptr;
+    } else {
+      casted = vector->as<T>();
+    }
     if ((casted != nullptr) && velox::BaseVector::recursivelyReusable(vector)) {
       return casted;
     }

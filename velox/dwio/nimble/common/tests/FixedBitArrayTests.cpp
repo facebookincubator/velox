@@ -13,9 +13,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include <algorithm>
 #include <cstring>
 #include <memory>
+#include <vector>
 
 #include "fmt/format.h"
 #include "folly/Benchmark.h"
@@ -356,6 +359,69 @@ TEST(FixedBitArrayTests, bulkGet64WithBaselineZeroBaseline) {
     for (int i = 0; i < elementCount; ++i) {
       ASSERT_EQ(bulkValues[i], fixedBitArray.get(i))
           << "bitWidth: " << bitWidth << ", i: " << i;
+    }
+  }
+}
+
+TEST(FixedBitArrayTests, bulkRead64FromUnalignedInputBase) {
+  constexpr uint64_t kNumValues = 192;
+  constexpr uint64_t kCanary = 0xdeadbeefcafefeedULL;
+  for (int bitWidth = 1; bitWidth <= 64; ++bitWidth) {
+    const uint64_t mask =
+        bitWidth == 64 ? ~uint64_t{0} : (uint64_t{1} << bitWidth) - 1;
+    std::vector<uint64_t> values(kNumValues);
+    for (uint64_t row = 0; row < kNumValues; ++row) {
+      values[row] = (row * 0x9e3779b97f4a7c15ULL) & mask;
+      if (row % 4 == 0) {
+        values[row] = 0;
+      } else if (row % 4 == 1) {
+        values[row] = mask;
+      }
+    }
+    for (const uint64_t padding : {1, 3, 7}) {
+      std::vector<char> buffer(
+          padding + nimble::FixedBitArray::bufferSize(kNumValues, bitWidth), 0);
+      auto* packedBytes = buffer.data() + padding;
+      // Pack independently of FixedBitArray's write implementation.
+      for (uint64_t row = 0; row < kNumValues; ++row) {
+        for (int bit = 0; bit < bitWidth; ++bit) {
+          if ((values[row] >> bit) & 1) {
+            velox::bits::setBit(packedBytes, row * bitWidth + bit);
+          }
+        }
+      }
+      nimble::FixedBitArray packed(packedBytes, bitWidth);
+      for (const uint64_t baseline :
+           {uint64_t{0}, uint64_t{0xfffffffffffffff0}}) {
+        for (const uint64_t start :
+             {0, 1, 2, 3, 4, 5, 6, 7, 37, 63, 64, 191, 192}) {
+          for (const uint64_t length :
+               {0,  1,  2,  3,  4,  5,  6,  7,  8,   9,   10,  11,
+                12, 13, 14, 15, 24, 63, 64, 65, 127, 128, 129, 192}) {
+            if (length > kNumValues - start) {
+              continue;
+            }
+            SCOPED_TRACE(
+                fmt::format(
+                    "width={} padding={} start={} length={} baseline={}",
+                    bitWidth,
+                    padding,
+                    start,
+                    length,
+                    baseline));
+            std::vector<uint64_t> expected(length + 2, kCanary);
+            std::transform(
+                values.begin() + start,
+                values.begin() + start + length,
+                expected.begin() + 1,
+                [baseline](uint64_t value) { return value + baseline; });
+            std::vector<uint64_t> output(length + 2, kCanary);
+            packed.bulkGetWithBaseline(
+                start, length, output.data() + 1, baseline);
+            EXPECT_THAT(output, testing::ElementsAreArray(expected));
+          }
+        }
+      }
     }
   }
 }
