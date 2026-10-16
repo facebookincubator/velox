@@ -987,6 +987,18 @@ class ReaderOptions : public io::ReaderOptions {
     loadClusterIndex_ = value;
   }
 
+  /// Cluster index implementation to load. Empty selects the format's default.
+  /// A file written with a different implementation has no index under this
+  /// name, so it opens without one rather than silently reading the wrong
+  /// index. Only effective when loadClusterIndex() is also true.
+  const std::string& clusterIndexName() const {
+    return clusterIndexName_;
+  }
+
+  void setClusterIndexName(std::string value) {
+    clusterIndexName_ = std::move(value);
+  }
+
   /// Whether to eagerly preload all per-partition metadata and decode all
   /// per-partition key streams during file open. Only effective when
   /// loadClusterIndex() is also true. Implies pinning so preloaded chunks
@@ -1081,6 +1093,7 @@ class ReaderOptions : public io::ReaderOptions {
   bool pinIndex_{false};
   bool cacheData_{true};
   bool loadClusterIndex_{false};
+  std::string clusterIndexName_;
   bool preloadIndex_{false};
   bool verifyStreamChecksums_{false};
   bool loadChunkStats_{true};

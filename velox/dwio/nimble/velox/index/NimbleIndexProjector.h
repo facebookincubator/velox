@@ -149,6 +149,10 @@ class NimbleIndexProjector {
     /// as the new lowerKey with the original upperKey). When unset, no resume
     /// keys are produced even if a limit truncated the results.
     bool needResumeKey{false};
+    /// Index-specific options applied before reading row data. Null selects
+    /// a key-only lookup. Per-range options follow the request's key-bound
+    /// order; the index validates their type and count.
+    std::shared_ptr<const index::IndexLookup::LookupOptions> lookupOptions;
   };
 
   /// Request for a batch of index lookups.

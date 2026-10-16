@@ -19,6 +19,7 @@
 #include <algorithm>
 #include <numeric>
 #include <shared_mutex>
+#include <typeinfo>
 
 #include "folly/json/json.h"
 #include "velox/common/testutil/TestValue.h"
@@ -306,6 +307,15 @@ void ClusterIndexBase::resolvePartitionBounds(
   }
 }
 
+void ClusterIndexBase::validateLookupOptions(
+    const LookupRequest& request) const {
+  const auto& options = request.options();
+  NIMBLE_USER_CHECK(
+      typeid(options) == typeid(LookupOptions),
+      "Lookup options are not supported by index type: {}",
+      type());
+}
+
 IndexLookup::LookupResult ClusterIndexBase::buildLookupResult(
     const LookupOptions& options,
     const std::vector<RowRange>& partitionRowRanges) const {
@@ -416,6 +426,7 @@ void ClusterIndexBase::partitionRangeLookups(
 
 IndexLookup::LookupResult ClusterIndexBase::lookup(
     const LookupRequest& request) const {
+  validateLookupOptions(request);
   std::vector<PartitionLookup> partitionLookups;
   std::vector<RowRange> partitionRowRanges;
   lookupPartitions(request, partitionLookups, partitionRowRanges);

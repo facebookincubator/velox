@@ -177,10 +177,15 @@ class ClusterIndexBase : public IndexLookup {
   // enforced).
   void preloadIndex();
 
+  // Rejects unsupported options before partition metadata or key data is read.
+  // Plain options permit a key-only lookup even against a weighted index.
+  // Ignoring an unsupported extension would silently return a wider range
+  // than the caller asked for, so it must be rejected.
+  // Subclasses validate the options they support and their request-level shape.
+  virtual void validateLookupOptions(const LookupRequest& request) const;
+
   // Builds the flat LookupResult from partitionRowRanges. Subclasses override
-  // this to apply their own narrowing. The base implementation rejects any
-  // lookup extension it is handed, because ignoring one would silently return
-  // a wider range than the caller asked for.
+  // this to apply their own narrowing after lookup options have been validated.
   virtual LookupResult buildLookupResult(
       const LookupOptions& options,
       const std::vector<RowRange>& partitionRowRanges) const;
