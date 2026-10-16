@@ -93,14 +93,17 @@ folly::Executor* fillExecutor() {
 }
 
 // Threads that copy a range to the GPU, each through its own pinned buffer.
-// The thread count is cudf.kvikio_cache_threads, kept low to limit pinned
+// The thread count is cudf.kvikio_cache_copy_threads, kept low to limit pinned
 // memory. A copy thread waits for a remote read only for the part of a range
 // that the async data cache cannot hold.
 folly::Executor* copyExecutor() {
   static auto* executor = [] {
-    const auto threads = CudfConfig::getInstance().kvikioCacheThreads;
+    const auto threads = CudfConfig::getInstance().kvikioCacheCopyThreads;
     VELOX_USER_CHECK_GT(
-        threads, 0, "{} must be positive", CudfConfig::kCudfKvikioCacheThreads);
+        threads,
+        0,
+        "{} must be positive",
+        CudfConfig::kCudfKvikioCacheCopyThreads);
     return new folly::CPUThreadPoolExecutor(
         threads, std::make_shared<folly::NamedThreadFactory>("CudfCacheCopy"));
   }();

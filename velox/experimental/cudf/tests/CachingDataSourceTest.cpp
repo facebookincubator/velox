@@ -224,7 +224,7 @@ class CachingDataSourceTest : public testing::Test {
   static void SetUpTestSuite() {
     // The executors are created once per process: 2 copy threads and 8 fill
     // threads for all tests.
-    CudfConfig::getInstance().kvikioCacheThreads = 2;
+    CudfConfig::getInstance().kvikioCacheCopyThreads = 2;
     setenv("KVIKIO_REMOTE_IO_MAX_CONCURRENT_REQUESTS", "8", 1);
   }
 
