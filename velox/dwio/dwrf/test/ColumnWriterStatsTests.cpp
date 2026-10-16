@@ -102,11 +102,16 @@ void verifyStats(
   }
 
   // Verify Stride Stats.
+  auto projectedNodes = std::make_shared<BitSet>(0);
+  for (auto nodeId = 0;
+       nodeId < rowReader.getReader().footer().statisticsSize();
+       ++nodeId) {
+    projectedNodes->insert(nodeId);
+  }
   StripeStreamsImpl streams{
       std::make_shared<StripeReadState>(
           rowReader.readerBaseShared(), std::move(stripeMetadata)),
-      &rowReader.getColumnSelector(),
-      nullptr,
+      projectedNodes,
       rowReader.rowReaderOptions(),
       stripeInfo.offset(),
       static_cast<int64_t>(stripeInfo.numberOfRows()),

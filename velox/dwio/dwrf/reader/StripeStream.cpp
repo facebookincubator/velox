@@ -159,29 +159,11 @@ StripeStreamsBase::getIntDictionaryInitializerForNode(
 void StripeStreamsImpl::loadStreams() {
   const auto& stripeFooter = *readState_->stripeMetadata->footer;
 
-  if (selector_) {
-    // HACK!!!
-    //
-    // Column selector filters based on requested schema (ie, table schema),
-    // while we need filter based on file schema. As a result we cannot call
-    // shouldReadNode directly. Instead, build projected nodes set based on node
-    // id from file schema. Column selector should really be fixed to handle
-    // file schema properly.
-    VELOX_CHECK_NULL(projectedNodes_);
-    projectedNodes_ = std::make_shared<BitSet>(0);
-    auto expected = selector_->getSchemaWithId();
-    auto actual = readState_->readerBase->schemaWithId();
-    findProjectedNodes(
-        *projectedNodes_, *expected, *actual, [&](uint32_t node) {
-          return selector_->shouldReadNode(node);
-        });
-  }
-
   const auto addStreamDwrf = [&](const proto::Stream& stream, auto& offset) {
     if (stream.has_offset()) {
       offset = stream.offset();
     }
-    if (projectedNodes_->contains(stream.node())) {
+    if (!projectedNodes_ || projectedNodes_->contains(stream.node())) {
       streams_.insert_or_assign(stream, StreamInformationImpl{offset, stream});
     }
 
@@ -190,7 +172,7 @@ void StripeStreamsImpl::loadStreams() {
 
   const auto addStreamOrc = [&](const proto::orc::Stream& stream,
                                 auto& offset) {
-    if (projectedNodes_->contains(stream.column())) {
+    if (!projectedNodes_ || projectedNodes_->contains(stream.column())) {
       streams_.insert_or_assign(stream, StreamInformationImpl{offset, stream});
     }
 

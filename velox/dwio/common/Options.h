@@ -341,16 +341,6 @@ class RowReaderOptions {
     return eagerFirstStripeLoad_;
   }
 
-  /// For flat map, return flat vector representation
-  bool returnFlatVector() const {
-    return returnFlatVector_;
-  }
-
-  /// For flat map, request that flat vector representation is used
-  void setReturnFlatVector(bool value) {
-    returnFlatVector_ = value;
-  }
-
   /// Requests that the selected type be projected.
   void setProjectSelectedType(bool value) {
     projectSelectedType_ = value;
@@ -411,23 +401,6 @@ class RowReaderOptions {
   void setMetadataFilter(
       std::shared_ptr<velox::common::MetadataFilter> metadataFilter) {
     metadataFilter_ = std::move(metadataFilter);
-  }
-
-  void setFlatmapNodeIdsAsStruct(
-      std::unordered_map<uint32_t, std::vector<std::string>>
-          flatmapNodeIdsAsStruct) {
-    VELOX_CHECK(
-        std::all_of(
-            flatmapNodeIdsAsStruct.cbegin(),
-            flatmapNodeIdsAsStruct.cend(),
-            [](const auto& kv) { return !kv.second.empty(); }),
-        "To use struct encoding for flatmap, keys to project must be specified");
-    flatmapNodeIdAsStruct_ = std::move(flatmapNodeIdsAsStruct);
-  }
-
-  const std::unordered_map<uint32_t, std::vector<std::string>>&
-  mapColumnIdAsStruct() const {
-    return flatmapNodeIdAsStruct_;
   }
 
   void setPreserveFlatMapsInMemory(bool preserveFlatMapsInMemory) {
@@ -631,16 +604,12 @@ class RowReaderOptions {
   uint64_t dataLength_;
   bool preloadStripe_;
   bool projectSelectedType_;
-  bool returnFlatVector_ = false;
   size_t parallelUnitLoadCount_ = 0;
   ErrorTolerance errorTolerance_;
   std::shared_ptr<ColumnSelector> selector_;
   RowTypePtr requestedType_;
   std::shared_ptr<velox::common::ScanSpec> scanSpec_{nullptr};
   std::shared_ptr<velox::common::MetadataFilter> metadataFilter_;
-
-  // Node id for map column to a list of keys to be projected as a struct.
-  std::unordered_map<uint32_t, std::vector<std::string>> flatmapNodeIdAsStruct_;
 
   // Whether to generate FlatMapVectors when reading flat maps from the file. By
   // default, converts flat maps in the file to MapVectors.
