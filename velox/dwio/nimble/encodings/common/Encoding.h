@@ -27,6 +27,8 @@
 #include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
 #include "velox/dwio/nimble/encodings/common/EncodingType.h"
 
+#include <bit>
+#include <limits>
 #include <memory>
 #include <string_view>
 #include <type_traits>
@@ -403,6 +405,45 @@ class Encoding {
   const uint32_t prefixSize_;
 };
 
+namespace detail {
+
+// Expand the dense prefix into set positions in [begin, end), leaving unset
+// positions untouched. Descending writes preserve overlapping source values.
+// Byte bitmaps need no alignment or padding; word bitmaps must store every
+// word intersecting the range.
+template <typename T, typename BitmapWord>
+void scatterDenseValuesBackward(
+    T* values,
+    const BitmapWord* bitmap,
+    uint32_t numValues,
+    uint32_t begin,
+    uint32_t end) {
+  static_assert(std::is_unsigned_v<BitmapWord>);
+  constexpr uint32_t kBitsPerWord = std::numeric_limits<BitmapWord>::digits;
+  uint32_t remaining = numValues;
+  while (remaining > 0) {
+    NIMBLE_DCHECK_GT(end, begin);
+    const auto wordIndex = (end - 1) / kBitsPerWord;
+    auto selected = static_cast<BitmapWord>(
+        bitmap[wordIndex] & velox::bits::lowMask((end - 1) % kBitsPerWord + 1));
+    if (wordIndex == begin / kBitsPerWord) {
+      selected &= ~velox::bits::lowMask(begin % kBitsPerWord);
+    }
+    while (selected != 0) {
+      const auto bit = std::bit_width(selected) - 1;
+      const auto destination = wordIndex * kBitsPerWord + bit - begin;
+      if (destination == remaining - 1) {
+        return;
+      }
+      values[destination] = values[--remaining];
+      selected &= ~(BitmapWord{1} << bit);
+    }
+    end = wordIndex * kBitsPerWord;
+  }
+}
+
+} // namespace detail
+
 // The TypedEncoding<physicalType> class exposes the same interface as the base
 // Encoding class but provides common typed implementation for some apis exposed
 // by the Encoding class. T means semantic data type, physicalType means data
@@ -456,20 +497,14 @@ class TypedEncoding : public Encoding {
     velox::bits::BitmapBuilder nullBits{nullBitmap, offset + scatterCount};
     nullBits.copy(*scatterOutputBitmap, offset, offset + scatterCount);
 
-    // Scatter backward
-    uint32_t pos = offset + scatterCount - 1;
-    physicalType* output =
-        static_cast<physicalType*>(buffer) + scatterCount - 1;
-    const physicalType* source =
-        static_cast<physicalType*>(buffer) + rowCount - 1;
-    while (output != source) {
-      if (scatterOutputBitmap->test(pos)) {
-        *output = *source;
-        --source;
-      }
-      --output;
-      --pos;
-    }
+    // The dense prefix and sparse output overlap. Descending positions keep
+    // unread source values intact; bitmap storage need not be word-aligned.
+    detail::scatterDenseValuesBackward(
+        static_cast<physicalType*>(buffer),
+        static_cast<const uint8_t*>(scatterOutputBitmap->bits()),
+        rowCount,
+        offset,
+        offset + scatterCount);
 
     return rowCount;
   }

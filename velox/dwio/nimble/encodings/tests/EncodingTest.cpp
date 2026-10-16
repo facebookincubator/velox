@@ -17,6 +17,7 @@
 #include <glog/logging.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include <cstring>
 #include <memory>
 #include <set>
 #include <span>
@@ -131,6 +132,74 @@ TEST(EncodingPrefixTest, readsEncodingType) {
     EXPECT_EQ(
         nimble::EncodingPrefix::encodingType(data),
         nimble::EncodingType::SharedDictionary);
+  }
+}
+
+TEST(EncodingScatterTest, exactByteBitmapAndOffsets) {
+  auto pool = velox::memory::deprecatedAddDefaultLeafMemoryPool();
+  nimble::Buffer buffer{*pool};
+  constexpr uint64_t kSentinel = 0xabcdef;
+  for (const uint32_t size : {7, 65, 129}) {
+    for (const uint32_t offset : {0, 1, 7, 9}) {
+      for (const uint32_t pattern : {0, 1, 2, 3}) {
+        SCOPED_TRACE(fmt::format("{}:{}:{}", size, offset, pattern));
+        const auto end = offset + size;
+        const auto bytes = velox::bits::nbytes(end);
+        auto storage = std::make_unique<uint8_t[]>(bytes + 1);
+        auto* scatter = storage.get() + 1;
+        std::memset(scatter, 0xff, bytes);
+        nimble::Vector<uint64_t> values{pool.get()};
+        std::vector<uint32_t> positions;
+        for (uint32_t i = 0; i < size; ++i) {
+          const bool present = pattern == 1 || (pattern == 2 && i % 11 == 2) ||
+              (pattern == 3 && (i < 3 || i % 3 == 0));
+          if (present) {
+            positions.push_back(offset + i);
+            values.push_back(7 + 17 * values.size());
+          } else {
+            scatter[(offset + i) / 8] &= ~(1U << ((offset + i) % 8));
+          }
+        }
+        const uint32_t count = values.size();
+        if (values.empty()) {
+          values.push_back(7);
+        }
+        const auto encoded =
+            nimble::test::Encoder<nimble::TrivialEncoding<uint64_t>>::encode(
+                buffer, values);
+        nimble::TrivialEncoding<uint64_t> encoding{*pool, encoded, nullptr};
+        std::vector<uint64_t> output(end + 1, kSentinel);
+        std::vector<uint8_t> nulls(bytes, 0xa5);
+        velox::bits::Bitmap bitmap{scatter, end};
+        uint32_t nullCalls = 0;
+        EXPECT_EQ(
+            encoding.materializeNullable(
+                count,
+                output.data(),
+                [&]() {
+                  ++nullCalls;
+                  return nulls.data();
+                },
+                &bitmap,
+                offset),
+            count);
+        EXPECT_EQ(nullCalls, count == size ? 0 : 1);
+        for (uint32_t i = 0; i < count; ++i) {
+          EXPECT_EQ(output[positions[i]], values[i]);
+        }
+        for (uint32_t i = 0; i < offset; ++i) {
+          EXPECT_EQ(output[i], kSentinel);
+          EXPECT_EQ(
+              velox::bits::isBitSet(nulls.data(), i), (0xa5 >> (i % 8)) & 1);
+        }
+        EXPECT_EQ(output[end], kSentinel);
+        if (count != size) {
+          for (uint32_t i = offset; i < end; ++i) {
+            EXPECT_EQ(velox::bits::isBitSet(nulls.data(), i), bitmap.test(i));
+          }
+        }
+      }
+    }
   }
 }
 
@@ -767,21 +836,22 @@ TYPED_TEST(EncodingTest, materialize) {
           nimble::Vector<E> buffer(this->pool_.get(), rowCount);
 
           encoding->materialize(rowCount, buffer.data());
-          for (int i = 0; i < rowCount; ++i) {
-            ASSERT_EQ(buffer[i], data[i]) << "i: " << i;
-          }
+          ASSERT_THAT(buffer, testing::ElementsAreArray(data));
 
           encoding->reset();
           const int firstBlock = rowCount / 2;
           encoding->materialize(firstBlock, buffer.data());
-          for (int i = 0; i < firstBlock; ++i) {
-            ASSERT_EQ(buffer[i], data[i]);
-          }
+          ASSERT_THAT(
+              (std::span<const E>{
+                  buffer.data(), static_cast<size_t>(firstBlock)}),
+              testing::ElementsAreArray(
+                  data.begin(), data.begin() + firstBlock));
           const int secondBlock = rowCount - firstBlock;
           encoding->materialize(secondBlock, buffer.data());
-          for (int i = 0; i < secondBlock; ++i) {
-            ASSERT_EQ(buffer[i], data[firstBlock + i]);
-          }
+          ASSERT_THAT(
+              (std::span<const E>{
+                  buffer.data(), static_cast<size_t>(secondBlock)}),
+              testing::ElementsAreArray(data.begin() + firstBlock, data.end()));
 
           encoding->reset();
           for (int i = 0; i < rowCount; ++i) {
@@ -799,9 +869,10 @@ TYPED_TEST(EncodingTest, materialize) {
               break;
             }
             encoding->materialize(len, buffer.data());
-            for (int j = 0; j < len; ++j) {
-              ASSERT_EQ(data[start + j], buffer[j]);
-            }
+            ASSERT_THAT(
+                (std::span<const E>{buffer.data(), static_cast<size_t>(len)}),
+                testing::ElementsAreArray(
+                    data.begin() + start, data.begin() + start + len));
           }
 
           const uint32_t offset = folly::Random::rand32(rng) % data.size();
@@ -810,9 +881,10 @@ TYPED_TEST(EncodingTest, materialize) {
           encoding->reset();
           encoding->skip(offset);
           encoding->materialize(length, buffer.data());
-          for (uint32_t i = 0; i < length; ++i) {
-            ASSERT_EQ(buffer[i], data[offset + i]);
-          }
+          ASSERT_THAT(
+              (std::span<const E>{buffer.data(), length}),
+              testing::ElementsAreArray(
+                  data.begin() + offset, data.begin() + offset + length));
         }
       }
     }

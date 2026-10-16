@@ -319,22 +319,8 @@ uint32_t NullableEncoding<T>::contiguousRead(
   // Expand backward to avoid overwriting dense source values. Iterating set
   // bits keeps work proportional to non-null rows; the destinations are not
   // contiguous enough for SIMD stores.
-  uint32_t sourceIndex = nonNullCount;
-  const uint32_t remainingBits = rowCount % 64;
-  for (auto wordIndex = numWords; wordIndex > 0;) {
-    --wordIndex;
-    uint64_t word = nonNullBits[wordIndex];
-    if (wordIndex + 1 == numWords && remainingBits != 0) {
-      word &= (uint64_t{1} << remainingBits) - 1;
-    }
-    while (word != 0) {
-      const uint32_t bit = 63 - __builtin_clzll(word);
-      const uint32_t outputIndex = wordIndex * 64 + bit;
-      output[outputIndex] = output[--sourceIndex];
-      word ^= uint64_t{1} << bit;
-    }
-  }
-  NIMBLE_CHECK_EQ(sourceIndex, 0);
+  detail::scatterDenseValuesBackward(
+      output, nonNullBits, nonNullCount, 0, rowCount);
   return nonNullCount;
 }
 

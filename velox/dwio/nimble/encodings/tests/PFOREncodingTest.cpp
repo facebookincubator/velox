@@ -195,6 +195,41 @@ TYPED_TEST(PFOREncodingTest, sparseOutliers) {
   }
 }
 
+TEST(PFOREncodingBufferPoolTest, noExceptionsLeavesScratchBuffersAvailable) {
+  using Value = uint32_t;
+  using EncodingType = PFOREncoding<Value>;
+  auto pool = velox::memory::deprecatedAddDefaultLeafMemoryPool();
+  velox::BufferPool bufferPool{velox::BufferPool::kDefaultCapacity};
+  for (uint32_t i = 0; i < 2; ++i) {
+    Vector<Value> scratch{pool.get()};
+    scratch.resize(32);
+    bufferPool.release(scratch.releaseBuffer());
+  }
+  const Encoding::Options options{.bufferPool = &bufferPool};
+  std::function<void*(uint32_t)> stringBufferFactory;
+
+  for (const auto constant : {false, true}) {
+    SCOPED_TRACE(constant);
+    Vector<Value> input{pool.get()};
+    for (uint32_t i = 0; i < 200; ++i) {
+      input.push_back(constant ? 7 : 100 + i % 64);
+    }
+    Buffer encodeBuffer{*pool};
+    const auto encoded = Encoder<EncodingType>::encode(encodeBuffer, input);
+    ASSERT_EQ(readPforWireInfo(encoded, false).numExceptions, 0);
+    const auto numAllocs = pool->stats().numAllocs;
+    {
+      EncodingType encoding{*pool, encoded, stringBufferFactory, options};
+      EXPECT_EQ(bufferPool.size(), 2);
+      std::vector<Value> output(input.size());
+      encoding.materialize(static_cast<uint32_t>(input.size()), output.data());
+      EXPECT_EQ(output, (std::vector<Value>{input.begin(), input.end()}));
+      EXPECT_EQ(pool->stats().numAllocs, numAllocs);
+    }
+    EXPECT_EQ(bufferPool.size(), 2);
+  }
+}
+
 TEST(PFOREncodingBufferPoolTest, reusesExceptionBuffers) {
   using Value = uint64_t;
   using EncodingType = PFOREncoding<Value>;

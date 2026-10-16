@@ -18,6 +18,7 @@
 #include <cstring>
 #include <string>
 #include "folly/Random.h"
+#include "velox/buffer/BufferPool.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/dwio/nimble/common/Buffer.h"
 #include "velox/dwio/nimble/common/FixedBitArray.h"
@@ -135,6 +136,31 @@ TYPED_TEST(FixedBitWidthEncodingTest, serializeThenDeserialize) {
   for (uint32_t i = 0; i < 10; ++i) {
     EXPECT_EQ(result[i], values[i]) << "index " << i;
   }
+}
+
+TYPED_TEST(FixedBitWidthEncodingTest, materializePreservesUnusedPoolBuffer) {
+  velox::BufferPool bufferPool{32};
+  auto scratch =
+      velox::AlignedBuffer::allocate<uint32_t>(64, this->pool_.get());
+  auto* scratchIdentity = scratch.get();
+  bufferPool.release(std::move(scratch));
+  const nimble::Encoding::Options options{
+      .useVarintRowCount = TypeParam::useVarint, .bufferPool = &bufferPool};
+  auto values = this->toVector({0, 1, 2, 3, 4, 5, 6, 7});
+  auto encoding = this->createEncoding(values, options);
+  EXPECT_EQ(bufferPool.size(), 1);
+  std::vector<uint32_t> output(values.size());
+  encoding->materialize(values.size(), output.data());
+  EXPECT_EQ(output, std::vector<uint32_t>(values.begin(), values.end()));
+  EXPECT_EQ(bufferPool.size(), 1);
+  encoding->reset();
+  encoding->skip(2);
+  encoding->materialize(3, output.data());
+  EXPECT_EQ(output[0], 2);
+  EXPECT_EQ(output[2], 4);
+  encoding.reset();
+  EXPECT_EQ(bufferPool.size(), 1);
+  EXPECT_EQ(bufferPool.get().get(), scratchIdentity);
 }
 
 TYPED_TEST(
