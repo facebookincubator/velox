@@ -1294,13 +1294,12 @@ void RPCOperator::recordErrorKind(velox::rpc::RPCErrorKind kind) {
     case velox::rpc::RPCErrorKind::kBackendError:
       ++numErrorsBackend_;
       break;
+    case velox::rpc::RPCErrorKind::kInvalidRequest:
+      ++numErrorsInvalidRequest_;
+      break;
     case velox::rpc::RPCErrorKind::kNone:
     case velox::rpc::RPCErrorKind::kNullInput:
     case velox::rpc::RPCErrorKind::kEmptyResponse:
-    // A rejected request is a permanent client-side error, not a congestion
-    // signal, so it is not counted among the overload kinds above (it is
-    // tracked separately via a dedicated invalid-request counter).
-    case velox::rpc::RPCErrorKind::kInvalidRequest:
       break;
     case velox::rpc::RPCErrorKind::kUnset:
     case velox::rpc::RPCErrorKind::kInternalError:
@@ -1454,6 +1453,10 @@ void RPCOperator::recordRuntimeStats() {
   if (numErrorsBackend_ > 0) {
     lockedStats->addRuntimeStat(
         kRpcErrorKindBackendError, RuntimeCounter(numErrorsBackend_));
+  }
+  if (numErrorsInvalidRequest_ > 0) {
+    lockedStats->addRuntimeStat(
+        kRpcErrorKindInvalidRequest, RuntimeCounter(numErrorsInvalidRequest_));
   }
   if (numErrorsInternal_ > 0) {
     lockedStats->addRuntimeStat(

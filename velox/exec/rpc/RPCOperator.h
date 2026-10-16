@@ -143,6 +143,8 @@ class RPCOperator : public exec::Operator {
   static inline const std::string kRpcErrorKindTimeout{"rpcErrorKindTimeout"};
   static inline const std::string kRpcErrorKindBackendError{
       "rpcErrorKindBackendError"};
+  static inline const std::string kRpcErrorKindInvalidRequest{
+      "rpcErrorKindInvalidRequest"};
   static inline const std::string kRpcErrorKindInternal{"rpcErrorKindInternal"};
   // Shared rate-limiter stats, refreshed on every stats() call.
   static inline const std::string kRpcRateLimiterCap{"rpcRateLimiterCap"};
@@ -392,6 +394,7 @@ class RPCOperator : public exec::Operator {
   int64_t numErrorsRateLimited_{0};
   int64_t numErrorsTimeout_{0};
   int64_t numErrorsBackend_{0};
+  int64_t numErrorsInvalidRequest_{0};
   // Rows that failed because something here broke -- an invariant tripped, or
   // a response was returned with no outcome set -- rather than because the
   // backend refused. Tracked apart from the backend error count.
