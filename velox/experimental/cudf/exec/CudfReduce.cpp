@@ -342,8 +342,8 @@ cudf_velox::DecimalSumStateColumns mergeSerializedDecimalSumState(
     cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   auto const sumAgg = cudf::make_sum_aggregation<cudf::reduce_aggregation>();
-  auto sumAndCount =
-      cudf_velox::deserializeDecimalSumState(inputCol, scale, stream);
+  auto sumAndCount = cudf_velox::deserializeDecimalSumState(
+      inputCol, scale, stream, get_temp_mr());
   auto sumScalar = cudf::reduce(
       sumAndCount.sum->view(),
       *sumAgg,
@@ -433,8 +433,8 @@ std::unique_ptr<cudf::column> reduceFinalDecimalSumFromSerializedColumn(
     rmm::device_async_resource_ref mr) {
   validateIntermediateColumnType(inputCol);
   auto scale = getDecimalPrecisionScale(*outputType).second;
-  auto sumAndCount =
-      cudf_velox::deserializeDecimalSumState(inputCol, scale, stream);
+  auto sumAndCount = cudf_velox::deserializeDecimalSumState(
+      inputCol, scale, stream, get_temp_mr());
   return singleOrRawDecimalSumWithCast(
       sumAndCount.sum->view(), outputType, stream, mr);
 }
