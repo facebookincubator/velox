@@ -96,7 +96,7 @@ Binary Functions
 
     Left pads ``binary`` to ``size`` bytes with ``padbinary``.
     If ``size`` is less than the length of ``binary``, the result is
-    truncated to ``size`` characters. ``size`` must not be negative
+    truncated to ``size`` bytes. ``size`` must not be negative
     and ``padbinary`` must be non-empty. ``size`` has a maximum value of 1 MiB.
     In the case of ``size`` being smaller than the length of ``binary``,
     ``binary`` will be truncated from the right to fit the ``size``.
@@ -115,7 +115,7 @@ Binary Functions
 
     Right pads ``binary`` to ``size`` bytes with ``padbinary``.
     If ``size`` is less than the length of ``binary``, the result is
-    truncated to ``size`` characters. ``size`` must not be negative
+    truncated to ``size`` bytes. ``size`` must not be negative
     and ``padbinary`` must be non-empty. ``size`` has a maximum value of 1 MiB.
     In the case of ``size`` being smaller than the length of ``binary``,
     ``binary`` will be truncated from the right to fit the ``size``.
