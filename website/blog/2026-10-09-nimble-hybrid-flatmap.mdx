@@ -1,0 +1,237 @@
+---
+slug: nimble-hybrid-flatmap
+title: "Hybrid FlatMap: Group-Level Feature Projection in Nimble"
+authors: [shanhao, xiaoxmeng, huamengjiang]
+tags: [tech-blog, nimble, performance]
+---
+
+## Introduction
+
+Machine learning training data often stores features in wide maps. A single
+map column can hold thousands of feature IDs per row, while each model reads
+only a sparse subset of them. Different models read different subsets, and
+those subsets overlap. A serving layer that streams this data to trainers has
+to project the requested features out of every batch it returns.
+
+Nimble's FlatMap layout, called Full FlatMap in this post, makes that
+projection precise by giving every key its own streams, but thousands of small
+streams add encoding, framing, and schema overhead that can be a large share of
+a small batch. Hybrid FlatMap partitions a map's keys into disjoint groups of
+features that are usually read together. All keys in a group share one set of
+streams, and the server projects each group on its own by passing its encoded
+streams through unchanged.
+
+This article explains the Hybrid FlatMap layout and its two-stage projection,
+then compares it with Full FlatMap.
+
+<!-- truncate -->
+
+## The problem: wide maps, sparse and overlapping reads
+
+A projection request names a map column and the feature IDs a model needs.
+Full FlatMap gives every key its own `inMap` stream and value subtree, so the
+server answers a request by forwarding the requested keys' encoded streams as
+zero-copy slices.
+
+On wide maps with small batches, that per-key layout has costs:
+
+- Every key adds its own streams and schema entries, so encoding, framing, and
+  schema overhead grow with the number of keys.
+- Many small streams compress less effectively than fewer large ones.
+- The server parses a schema with a separate stream subtree for every key when
+  it projects a batch.
+
+Hybrid FlatMap keeps the zero-copy projection of Full FlatMap and moves the
+projection unit from a single key to a group of keys. Compared with Full
+FlatMap, grouping features has three effects:
+
+- **Better encoding efficiency.** Larger encoding units amortize per-stream
+  encoding overhead and compress better.
+- **Less metadata.** Keys in a group share streams, so a column carries fewer
+  streams and schema entries. This matters most for small batches, where
+  auxiliary metadata can be a large share of the payload.
+- **Cheaper projection.** The server parses a smaller schema and forwards fewer
+  streams per response.
+
+The trade-off is coarser selection: a request transfers every key in each
+group it selects.
+
+## The Hybrid FlatMap layout
+
+Hybrid FlatMap is a map encoding in the Nimble serializer. Callers enable it
+per top-level `MAP` column through
+[`SerializerOptions::hybridFlatMapColumns`](https://github.com/facebookincubator/velox/blob/main/velox/dwio/nimble/serializer/Options.h).
+Each column is split into disjoint key groups:
+
+- **Configured groups** list the keys that belong together, for example
+  features that the same models usually request.
+- **The reserved Default group** receives every key outside the configured
+  groups.
+
+Every group has its own `keyPresence` and key-major `inMap` streams and its
+own value subtree, shared by all of its keys. The schema stores each group's
+key list, `groupKeys`, once. Configured keys are stored in sorted string order,
+and Default keys appear in the order the writer first sees them.
+
+<figure style={{textAlign: 'center'}}>
+  <img
+    src="/img/nimble-hybrid-flatmap-serialization.png"
+    alt="Four input rows, a group spec that maps keys 1 and 2 to G0, keys 3 and 4 to G1, and every other key to Default, and the resulting map row presence, keyPresence, inMap, and value streams for each group."
+    width="95%"
+  />
+  <figcaption>
+    <em>
+      The writer turns row-major maps into group-major streams. Keys outside
+      the configured groups go to the Default group.
+    </em>
+  </figcaption>
+</figure>
+
+### Physical streams
+
+- **Map row presence:** one bit per input row. `0` means the whole map is null.
+  Null rows appear only in this stream. The writer emits this stream only when
+  the batch has a null map.
+- **`keyPresence`:** one bit per group key. `1` means the key occurs somewhere
+  in the batch.
+- **`inMap`:** for each present key, one contiguous range of bits with one bit
+  per non-null map row.
+- **Values:** dense values for the `1` bits in `inMap`, in the same key-major
+  order.
+
+In the example above, key `4` is configured in `G1` but absent from the batch,
+so its `keyPresence` bit is `0` and it has no `inMap` range. A group writes
+streams only when at least one of its keys is present in the batch. The writer
+reorders values into key-major order through a dictionary view over the input
+map, which reorders indices and leaves the values in place.
+
+## Two-stage projection
+
+Projection is split between the server that stores the data and the client
+that decodes it.
+
+<figure style={{textAlign: 'center'}}>
+  <img
+    src="/img/nimble-hybrid-flatmap-projection.svg"
+    alt="A client sends a map column and feature IDs to the server. The Nimble Projector maps the keys to groups using the serialized schema and forwards the selected group streams as zero-copy slices. The client passes the same keys to its Nimble Deserializer, which decodes the groups into a Velox MapVector."
+    width="95%"
+  />
+  <figcaption>
+    <em>
+      The server selects whole groups and forwards their encoded streams. The
+      client decodes them and keeps only the requested keys.
+    </em>
+  </figcaption>
+</figure>
+
+### Server: group projection
+
+The
+[`Projector`](https://github.com/facebookincubator/velox/blob/main/velox/dwio/nimble/serializer/Projector.h)
+maps each requested key to its group using the serialized schema. The
+serializer appends each new Default key to that schema, so a schema taken after
+a batch is written lists every key the batch holds. The projector
+binary-searches the sorted keys of configured groups and looks up Default keys
+in a hash set. It then deduplicates the selected groups and adds their encoded
+stream ranges to the response as zero-copy slices, leaving every value encoded.
+
+A requested key that the schema lists selects its group, even when the batch
+holds no value for it. In the example, a request for the absent key `4` would
+select `G1`, because `G1` lists key `4`. The projector selects groups only for
+keys that the schema lists, which include every key the batch holds. When all
+of a column's requested keys are outside the schema, the column projects as a
+Default group with an empty key list and no streams. It decodes as empty maps,
+and null rows stay null.
+
+The projected schema keeps only the selected groups and renumbers their
+streams from zero, so the client decodes responses with the projected schema
+alone.
+
+### Client: exact-key filtering
+
+A selected group can hold companion keys: keys outside the request that share
+the group with a requested key. The client passes the same feature IDs to the
+deserializer as map-key subfields, such as `features[2]`. The deserializer
+then decodes each group that holds a requested key and drops the companion
+keys. It transposes the remaining key-major data into row-major order to build
+a Velox `MapVector`. A client that omits key subfields gets every key in the
+response.
+
+Using the example above, a request for keys `2` and `99` works as follows:
+
+- **Server group projection** keeps map row presence and drops `G1`. It keeps
+  `G0` (keys `1` and `2`) and the Default group (keys `99` and `100`) whole, so
+  companion keys `1` and `100` stay in the response.
+- **Client exact-key filtering** keeps keys `2` and `99` and removes `1` and
+  `100`. The server already pruned `G1`, so the client receives and decodes only
+  `G0` and the Default group.
+
+| Row | Original map | After server projection | After client filtering |
+| --- | --- | --- | --- |
+| `r0` | `{1:10, 2:20, 3:30, 99:990}` | `{1:10, 2:20, 99:990}` | `{2:20, 99:990}` |
+| `r1` | `{2:21, 99:991, 100:1001}` | `{2:21, 99:991, 100:1001}` | `{2:21, 99:991}` |
+| `r2` | `{1:12, 3:32, 100:1002}` | `{1:12, 100:1002}` | `{}` |
+| `r3` | `null` | `null` | `null` |
+
+## Trade-offs and current limits
+
+- A group is the smallest projection unit. Requesting one key transfers and
+  decodes the rest of its group before the client filters it out, so the
+  grouping should follow how keys are read together.
+- Hybrid FlatMap supports top-level `MAP` columns with signed integer or string
+  keys. It is available only in the Nimble serializer.
+- Values are key-major within a batch, so the reader decodes each batch that
+  contains a Hybrid FlatMap column separately. The serializer sets a flag in
+  the batch that tells the reader to do so.
+- Projection selects whole values: a subfield that reaches into a value, such
+  as `features[2].x`, is rejected. Full FlatMap columns can be read as
+  structs; Hybrid FlatMap columns are read as maps.
+- [`StreamSlicer`](/blog/nimble-stream-slicing) cannot yet row-slice Hybrid
+  FlatMap streams.
+
+## Results
+
+We compared Full FlatMap and Hybrid FlatMap on the same data and the
+same projection requests.
+
+The benchmark used:
+
+- Eight feature datasets from a snapshot of production training data.
+- The first 20 batches of each dataset.
+- 109 saved projection requests, weighted by how often readers issue them.
+
+We report the geometric mean across datasets so that each dataset carries
+equal weight. Every projection was validated against the expected decoded
+output. The benchmark runs in one process and excludes network transfer and
+caching.
+
+| Metric | Hybrid FlatMap vs. Full FlatMap |
+| --- | --- |
+| Storage size | Smaller |
+| Projection size | Smaller |
+| Server CPU time | Much lower |
+| Client CPU time | About the same |
+
+- **Storage size and projection size.** Shared group streams cut encoding and
+  metadata overhead, which outweighs the companion keys that whole groups
+  carry.
+- **Server CPU time.** The server parses a smaller schema, because Full FlatMap
+  keeps a separate stream subtree for every key while Hybrid FlatMap keeps one
+  per group. It also forwards fewer streams per response.
+- **Client CPU time.** The client decodes whole groups, then drops companion
+  keys and transposes key-major data. That work costs about as much as
+  decoding Full FlatMap's per-key streams.
+
+Results vary by dataset. On some datasets, Hybrid FlatMap had a larger
+projection size, more server CPU time, or more client CPU time than Full
+FlatMap. The outcome depends on how well the groups match the requests.
+
+## Summary
+
+Hybrid FlatMap serves sparse, overlapping feature requests from wide maps by
+projecting groups of keys that are read together. Compared with Full FlatMap,
+grouping lowers storage size, projection size, and server CPU time. Client CPU
+time stays about the same. The server forwards the selected groups' encoded
+streams as zero-copy slices. A client that passes the requested keys to the
+deserializer filters exact keys while decoding. The cost is coarser selection,
+so the grouping should follow how keys are read together.
