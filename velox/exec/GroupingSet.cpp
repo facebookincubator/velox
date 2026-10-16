@@ -28,8 +28,6 @@ constexpr CompareFlags kEqualFlags =
     CompareFlags::equality(CompareFlags::NullHandlingMode::kNullAsValue);
 constexpr const char* kFirstSpillColumnName = "__isFirstSpill";
 
-// Appends a trailing BOOLEAN column identifying rows from the first call to
-// spill().
 RowTypePtr aggregationInputSpillType(const RowTypePtr& rowType) {
   auto names = rowType->names();
   names.push_back(kFirstSpillColumnName);
@@ -1151,7 +1149,8 @@ void GroupingSet::spill() {
                 spillConfig_->numPartitionBits)),
         sortingKeys,
         spillConfig_,
-        spillStats_);
+        spillStats_,
+        isDistinct());
   }
   // Spilling may execute on multiple partitions in parallel, and
   // HashStringAllocator is not thread safe. If any aggregations
@@ -1714,17 +1713,20 @@ AggregationInputSpiller::AggregationInputSpiller(
     const HashBitRange& hashBitRange,
     const std::vector<SpillSortKey>& sortingKeys,
     const common::SpillConfig* spillConfig,
-    exec::SpillStats* spillStats)
+    exec::SpillStats* spillStats,
+    bool appendFirstSpillFlag)
     : SpillerBase(
           container,
-          aggregationInputSpillType(rowType),
+          appendFirstSpillFlag ? aggregationInputSpillType(rowType)
+                               : std::move(rowType),
           hashBitRange,
           sortingKeys,
           std::numeric_limits<uint64_t>::max(),
           spillConfig->maxSpillRunRows,
           std::nullopt,
           spillConfig,
-          spillStats) {}
+          spillStats),
+      appendFirstSpillFlag_(appendFirstSpillFlag) {}
 
 AggregationOutputSpiller::AggregationOutputSpiller(
     RowContainer* container,
@@ -1751,9 +1753,11 @@ void AggregationInputSpiller::extractSpill(
     folly::Range<char**> rows,
     RowVectorPtr& result) {
   SpillerBase::extractSpill(rows, result);
-  result->childAt(result->childrenSize() - 1) =
-      std::make_shared<ConstantVector<bool>>(
-          result->pool(), rows.size(), false, BOOLEAN(), bool{isFirstSpill_});
+  if (appendFirstSpillFlag_) {
+    result->childAt(result->childrenSize() - 1) =
+        std::make_shared<ConstantVector<bool>>(
+            result->pool(), rows.size(), false, BOOLEAN(), bool{isFirstSpill_});
+  }
 }
 
 void AggregationOutputSpiller::spill(const RowContainerIterator& startRowIter) {

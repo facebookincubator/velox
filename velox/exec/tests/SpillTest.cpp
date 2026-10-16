@@ -517,11 +517,16 @@ class SpillTest : public ::testing::TestWithParam<uint32_t>,
       spillConfig.fileCreateConfig = "";
       std::unique_ptr<TreeOfLosers<SpillMergeStream>> merge =
           spillPartition.createOrderedReader(spillConfig, pool(), &spillStats_);
+      std::unordered_map<uint32_t, const SpillMergeStream*> streamsById;
       int numReadBatches = 0;
       // We expect all the rows in dense increasing order.
       for (auto i = 0; i < numBatches * numRowsPerBatch; ++i) {
         auto stream = merge->next();
         ASSERT_NE(nullptr, stream);
+        // Different streams must have unique IDs.
+        const auto [it, _] = streamsById.emplace(stream->id(), stream);
+        ASSERT_EQ(it->second, stream)
+            << "Duplicate stream ID: " << stream->id();
         bool isLastBatch = false;
         if (values_[i].has_value()) {
           ASSERT_EQ(

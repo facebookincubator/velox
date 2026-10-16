@@ -484,7 +484,8 @@ class AggregationInputSpiller : public SpillerBase {
       const HashBitRange& hashBitRange,
       const std::vector<SpillSortKey>& sortingKeys,
       const common::SpillConfig* spillConfig,
-      exec::SpillStats* spillStats);
+      exec::SpillStats* spillStats,
+      bool appendFirstSpillFlag = false);
 
   void spill();
 
@@ -499,6 +500,9 @@ class AggregationInputSpiller : public SpillerBase {
     return true;
   }
 
+  // Whether to append a trailing BOOLEAN column identifying rows from the first
+  // spill.
+  const bool appendFirstSpillFlag_;
   bool isFirstSpill_{true};
 };
 

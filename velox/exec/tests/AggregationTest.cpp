@@ -5395,12 +5395,10 @@ TEST_F(AggregationTest, duplicateKeysWithSpillingAndPreMerge) {
 // output. The second and third spills are smaller and will be pre-merged.
 TEST_F(AggregationTest, distinctWithSpillingAndPreMerge) {
   const std::vector<RowVectorPtr> inputs{
-      makeRowVector({makeFlatVector<int64_t>(
-          100, [](vector_size_t row) { return row; })}),
-      makeRowVector({makeFlatVector<int64_t>(
-          1, [](vector_size_t /* row */) { return 100; })}),
-      makeRowVector({makeFlatVector<int64_t>(
-          1, [](vector_size_t /* row */) { return 101; })}),
+      makeRowVector(
+          {makeFlatVector<int64_t>(100, [](auto row) { return row; })}),
+      makeRowVector({makeFlatVector<int64_t>({100})}),
+      makeRowVector({makeFlatVector<int64_t>({101})}),
   };
   createDuckDbTable(inputs);
 
