@@ -1,0 +1,38 @@
+Stage 5 parallel dynamic-SAS ThreadSanitizer validation
+Date: 2026-07-22
+Base SHA: 06dec49a333b7e39f73a49ba9dd2c4ee12e4fd4e
+Status: PASS
+
+Configuration
+- Clang/Compiler-rt 20.1.2.
+- Separate Debug TSAN build tree.
+- -O1 -fsanitize=thread -fno-omit-frame-pointer.
+- TSAN_OPTIONS=halt_on_error=1:abort_on_error=1.
+- Bundled Folly compiled under matching flags.
+- Every test process launched through setarch x86_64 -R.
+
+Final complete suites
+- velox_abfs_test: 42 of 42 passed.
+- velox_abfs_registration_test: 25 of 25 passed.
+- velox_abfs_stage1_transport_test: 59 of 59 passed.
+- velox_abfs_stage2_runtime_test: 28 of 28 passed.
+- Complete CTest elapsed: 89.48 seconds.
+
+Focused auth lifecycle matrix
+The following five tests passed 100 in-process repetitions:
+- AuthRefreshSharesOneCallbackForSameKey
+- AuthRefreshCancellationPreservesOtherWaiter
+- AuthRefreshDropsUnstartedCancelledKey
+- AuthRefreshShutdownWaitsForExecutingCallback
+- AuthRefreshCompletionRacesCancellationAndShutdown
+
+Focused dynamic and file-lifetime matrix
+The following four tests passed 100 in-process repetitions:
+- asyncClientSharesForcedRefresh
+- asyncClientFansOutProviderFailure
+- dynamicSasDestructionDuringRefreshIsSafe
+- dynamicSasCallerCancellationDuringRefresh
+
+Covered race surfaces include queueing, keyed in-flight state, waiter removal,
+callback completion, result fan-out, cancellation, shutdown, client recreation,
+and file/runtime teardown. No ThreadSanitizer race was reported.

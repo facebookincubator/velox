@@ -1,0 +1,37 @@
+Stage 5 parallel dynamic-SAS source integrity
+Date: 2026-07-22
+Base SHA: 06dec49a333b7e39f73a49ba9dd2c4ee12e4fd4e
+Status: PASS
+
+Validated source SHA-256
+1d4138a35f6be01a28601255b21118571363c0853253f3f3555592ef6ac95c48  velox/connectors/hive/storage_adapters/abfs/AbfsAsyncRuntime.h
+051ace2b571f133e44b1d9ac20c3152d20ccdd5e7ffe4719e172de2eaee0d940  velox/connectors/hive/storage_adapters/abfs/AbfsAsyncRuntime.cpp
+c57c5931da8447a9e10247f40dd7aa06531e08f77a58483083e068b9c1bda534  velox/connectors/hive/storage_adapters/abfs/AbfsFileSystem.cpp
+6f6759735b76ba347024efaaf19096f4e36a3f5c1b366a7c89343d0263ac5ec9  velox/connectors/hive/storage_adapters/abfs/AbfsReadFile.cpp
+13b30801d416044646a62caa5a1f330460dedfb31eef295a49b0ed9392e0c6ab  velox/connectors/hive/storage_adapters/abfs/AzureClientProvider.h
+6e39d8d02c810e463ff5e696c402ebbe4ec60ee4edd42b2ba81b4771d18872ca  velox/connectors/hive/storage_adapters/abfs/AzureClientProviderFactories.h
+ee24eb17b4dede9aa6c1a45833d93d23fd86392d662f12a59ce2db6b34f663c8  velox/connectors/hive/storage_adapters/abfs/AzureClientProviderFactories.cpp
+a5c43beac12e80bce404a89e8b316b186d97e287b92996d128abf7d062b161d9  velox/connectors/hive/storage_adapters/abfs/DynamicSasTokenClientProvider.h
+a14b9933875302dc0b58e2b8dcef5e9f1d632bfac93fee568224320a870697ea  velox/connectors/hive/storage_adapters/abfs/DynamicSasTokenClientProvider.cpp
+36431bbdaf6e9707169b822ea48c9978b9a4c6ce85599d65d4d7fec145292f98  velox/connectors/hive/storage_adapters/abfs/tests/AbfsAsyncRuntimeTest.cpp
+a40bb4253fb6cf1cc982a389b61c707f43fe901deba3d923f90bc5b11d3312bb  velox/connectors/hive/storage_adapters/abfs/tests/AbfsFileSystemTest.cpp
+6be00b392e1f6fbb1046dbf13d3315f4daae14dd4e5873c67833d005157ef3bf  velox/connectors/hive/storage_adapters/abfs/tests/AzureClientProviderFactoriesTest.cpp
+d5f105142a0711823d48c2f7925c76fbb1b74b1526618682234c8701b1b2fa4c  velox/connectors/hive/storage_adapters/abfs/tests/DynamicSasTokenClientProviderTest.cpp
+
+Checks
+- Repository-pinned clang-format 21.1.2 dry-run with warnings as errors: PASS.
+- Git diff whitespace check in the Velox worktree: PASS.
+- Git diff whitespace check in the nested Azure SDK worktree: PASS.
+- LF-only and final-newline checks for all 13 Stage 5 source files: PASS.
+- Windows staging and WSL execution copies byte-identical: PASS.
+- Editor diagnostics for all 13 changed source files: clean.
+- Stage 5 source changes outside the ABFS adapter directory: 0.
+- Existing local Azure retry prototype preserved without Stage 5 edits: PASS.
+- Base SHA unchanged: PASS.
+
+Frozen Stage 0 benchmark CMake block, LF-normalized SHA-256
+7b4af22ec2ddc0dcb812dc9d59edceb48262f31b9594a8a4453e1e230ba50e0d
+
+Retry safety gates
+- fs.azure.async-read.disable-retries-for-test remains required: PASS.
+- fiberOptions.Retry.MaxRetries remains 0: PASS.

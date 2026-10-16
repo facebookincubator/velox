@@ -1,0 +1,36 @@
+Stage 3 C3 ThreadSanitizer validation
+Date: 2026-07-21
+Base SHA: 06dec49a333b7e39f73a49ba9dd2c4ee12e4fd4e
+Status: PASS
+
+Configuration
+- Clang/Compiler-rt 20.1.2.
+- Separate Debug build tree.
+- -O1 -fsanitize=thread -fno-omit-frame-pointer.
+- TSAN_OPTIONS=halt_on_error=1:abort_on_error=1.
+- Bundled Folly compiled under matching TSAN flags.
+- Each binary launched through setarch x86_64 -R for WSL mapping
+  compatibility.
+
+Complete suites
+- velox_abfs_test: 32 of 32 passed.
+- velox_abfs_registration_test: 25 of 25 passed.
+- velox_abfs_stage1_transport_test: 59 of 59 passed.
+- velox_abfs_stage2_runtime_test: 12 of 12 passed.
+- No ThreadSanitizer race report remains.
+
+Focused C3 matrix
+Eight tests covering contiguous scatter, all-null discard, transport/timeout
+and short-body errors, fragmented bodies, runtime-thread rejection, file
+lifetime, and concurrency above runtime thread count passed 100 in-process
+repetitions.
+
+Finding and repair
+The first complete C3 TSAN run found a test-only race in
+AbfsFileSystemTest.multipleThreadsWithReadFile. Ten workers captured one local
+random engine and distribution by reference while choosing stagger delays.
+Delay selection now occurs serially before each thread starts, and the worker
+captures only its selected integer delay. A separate helper generator is also
+thread-local. The focused multithreaded test, complete TSAN suites, 100-repeat
+C3 matrix, final ASAN gates, and ordinary suites pass after the repair.
+Production behavior did not change for this finding.
