@@ -34,6 +34,7 @@ velox_link_libraries(
 add_subdirectory(common)
 add_subdirectory(catalog)
 add_subdirectory(dwrf)
+add_subdirectory(json)
 add_subdirectory(orc)
 add_subdirectory(parquet)
 add_subdirectory(text)
