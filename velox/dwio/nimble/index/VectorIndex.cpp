@@ -211,7 +211,8 @@ void searchHnswIndex(
     faiss::idx_t maxNumNeighbors,
     float* scores,
     faiss::idx_t* labels,
-    FaissRowSelection& rowSelection) {
+    FaissRowSelection& rowSelection,
+    velox::CpuWallTiming& searchTiming) {
   NIMBLE_USER_CHECK_GT(
       hnswSearchDepth, 0, "HNSW search depth must be positive");
   const auto effectiveSearchDepth =
@@ -229,6 +230,7 @@ void searchHnswIndex(
   rowSelection.applyTo(searchParameters);
   // FAISS updates process-global HNSW statistics during search.
   const auto hnswSearchLock = hnswSearchGuard().wlock();
+  velox::CpuWallTimer timer{searchTiming};
   index.search(
       numQueries,
       queryVectors,
@@ -263,7 +265,8 @@ void searchIvfIndex(
     faiss::idx_t maxNumNeighbors,
     float* scores,
     faiss::idx_t* labels,
-    FaissRowSelection& rowSelection) {
+    FaissRowSelection& rowSelection,
+    VectorIndex::SearchStats& stats) {
   const auto* quantizer =
       velox::checkedPointerCast<const faiss::IndexFlat>(index.quantizer);
   NIMBLE_USER_CHECK_GT(
@@ -290,41 +293,28 @@ void searchIvfIndex(
   // IVF search first finds the nearest coarse partitions, then scans vectors
   // assigned to those partitions. Keeping the stages explicit lets the second
   // pass use request-local statistics instead of FAISS's process-global state.
-  quantizer->search(
-      numQueries,
-      queryVectors,
-      numProbes,
-      centroidScores.data(),
-      partitionLabels.data(),
-      searchParameters.quantizer_params);
+  {
+    velox::CpuWallTimer timer{stats.routingTiming};
+    quantizer->search(
+        numQueries,
+        queryVectors,
+        numProbes,
+        centroidScores.data(),
+        partitionLabels.data(),
+        searchParameters.quantizer_params);
+  }
 
   // Pass request-local statistics to implementations that support them to
   // avoid FAISS's process-global indexIVF_stats during concurrent searches.
   // FastScan does not populate IndexIVFStats.
-  //
-  // TODO: Aggregate per-search FAISS statistics in VectorIndex for
-  // observability.
   faiss::IndexIVFStats searchStats;
-  auto* searchStatsPtr =
-      indexType == VectorIndexType::kIvfRaBitQFastScan ? nullptr : &searchStats;
-  index.search_preassigned(
-      numQueries,
-      queryVectors,
-      maxNumNeighbors,
-      partitionLabels.data(),
-      centroidScores.data(),
-      scores,
-      labels,
-      /*store_pairs=*/false,
-      &searchParameters,
-      searchStatsPtr);
-
-  const auto numResultSlots =
-      static_cast<size_t>(numQueries) * static_cast<size_t>(maxNumNeighbors);
-  if (requiresUnboundedFallback &&
-      std::find(labels, labels + numResultSlots, -1) !=
-          labels + numResultSlots) {
-    searchParameters.max_codes = 0;
+  const auto supportsSearchStats =
+      indexType != VectorIndexType::kIvfRaBitQFastScan;
+  // Reuse one stats object so a fallback reports the aggregate work performed
+  // by both native searches.
+  auto* searchStatsPtr = supportsSearchStats ? &searchStats : nullptr;
+  const auto searchPreassigned = [&] {
+    velox::CpuWallTimer timer{stats.searchTiming};
     index.search_preassigned(
         numQueries,
         queryVectors,
@@ -336,6 +326,23 @@ void searchIvfIndex(
         /*store_pairs=*/false,
         &searchParameters,
         searchStatsPtr);
+  };
+  searchPreassigned();
+
+  const auto numResultSlots =
+      static_cast<size_t>(numQueries) * static_cast<size_t>(maxNumNeighbors);
+  if (requiresUnboundedFallback &&
+      std::find(labels, labels + numResultSlots, -1) !=
+          labels + numResultSlots) {
+    searchParameters.max_codes = 0;
+    searchPreassigned();
+  }
+  if (supportsSearchStats) {
+    stats.ivf = VectorIndex::IvfSearchStats{
+        .numPartitionsScanned = searchStats.nlist,
+        .numDistanceComputations = searchStats.ndis,
+        .numHeapUpdates = searchStats.nheap_updates,
+    };
   }
 }
 
@@ -365,7 +372,8 @@ void searchFaissIndex(
     faiss::idx_t maxNumNeighbors,
     float* scores,
     faiss::idx_t* labels,
-    FaissRowSelection& rowSelection) {
+    FaissRowSelection& rowSelection,
+    VectorIndex::SearchStats& stats) {
   if (isIvfIndexType(indexType)) {
     NIMBLE_USER_CHECK(
         searchOptions.kind() == VectorIndex::SearchOptions::Kind::kIvf,
@@ -386,7 +394,8 @@ void searchFaissIndex(
         maxNumNeighbors,
         scores,
         labels,
-        rowSelection);
+        rowSelection,
+        stats);
     return;
   }
 
@@ -406,7 +415,8 @@ void searchFaissIndex(
       maxNumNeighbors,
       scores,
       labels,
-      rowSelection);
+      rowSelection,
+      stats.searchTiming);
 }
 
 // Validates metadata before allocating or deserializing a FAISS index.
@@ -714,8 +724,11 @@ VectorIndex::~VectorIndex() = default;
 
 VectorIndex::SearchResults::SearchResults(
     std::vector<SearchResult> results,
-    std::vector<size_t> resultOffsets)
-    : results_{std::move(results)}, resultOffsets_{std::move(resultOffsets)} {
+    std::vector<size_t> resultOffsets,
+    SearchStats stats)
+    : results_{std::move(results)},
+      resultOffsets_{std::move(resultOffsets)},
+      stats_{std::move(stats)} {
   NIMBLE_CHECK_GT(
       resultOffsets_.size(), 1, "Search result must contain query offsets");
   NIMBLE_CHECK_EQ(
@@ -731,6 +744,8 @@ VectorIndex::SearchResults::SearchResults(
         resultOffsets_[queryIndex + 1],
         "Search result offsets must be monotonic");
   }
+  stats_.numQueries = numQueries();
+  stats_.numResults = totalNumResults();
 }
 
 size_t VectorIndex::SearchResults::numQueries() const {
@@ -748,6 +763,10 @@ VectorIndex::SearchResults::results(size_t queryIndex) const& {
       results_.data() + resultOffsets_[queryIndex],
       results_.data() + resultOffsets_[queryIndex + 1],
   };
+}
+
+const VectorIndex::SearchStats& VectorIndex::SearchResults::stats() const {
+  return stats_;
 }
 
 VectorIndex::SearchResults VectorIndex::search(
@@ -794,6 +813,7 @@ VectorIndex::SearchResults VectorIndex::search(
   std::vector<float> scores(numResultSlots);
   std::vector<faiss::idx_t> labels(numResultSlots);
 
+  SearchStats searchStats;
   searchFaissIndex(
       *faissIndex_,
       indexType_,
@@ -803,7 +823,8 @@ VectorIndex::SearchResults VectorIndex::search(
       maxNumNeighbors,
       scores.data(),
       labels.data(),
-      rowSelection);
+      rowSelection,
+      searchStats);
 
   std::vector<size_t> resultOffsets(numQueries + 1, 0);
   for (size_t queryIndex = 0; queryIndex < numQueries; ++queryIndex) {
@@ -839,8 +860,8 @@ VectorIndex::SearchResults VectorIndex::search(
     }
   }
 
-  auto searchResults =
-      SearchResults{std::move(results), std::move(resultOffsets)};
+  auto searchResults = SearchResults{
+      std::move(results), std::move(resultOffsets), std::move(searchStats)};
   NIMBLE_CHECK_EQ(searchResults.numQueries(), config.numQueries);
   return searchResults;
 }

@@ -20,6 +20,7 @@
 #include <cmath>
 #include <cstring>
 #include <limits>
+#include <optional>
 #include <set>
 #include <span>
 
@@ -367,14 +368,21 @@ struct DecodedVectorColumn {
   velox::DecodedVector decodedArrays;
   const velox::ArrayVector& arrayVector;
   velox::DecodedVector decodedElements;
+  std::optional<velox::vector_size_t> contiguousElementsOffset;
 };
 
-// Validates one decoded vector column and returns its new value count.
+// Validates one decoded vector column, records its contiguous input span, and
+// returns its new value count.
 size_t validateVectors(
     velox::vector_size_t numRows,
     uint64_t fileRowOffset,
     const VectorIndexConfig& config,
-    const DecodedVectorColumn& input) {
+    DecodedVectorColumn& input) {
+  input.contiguousElementsOffset.reset();
+  bool contiguous = input.decodedArrays.isIdentityMapping() &&
+      input.decodedElements.isIdentityMapping();
+  velox::vector_size_t firstElementOffset{0};
+  int64_t expectedElementOffset{0};
   for (velox::vector_size_t rowOffset = 0; rowOffset < numRows; ++rowOffset) {
     const auto row = fileRowOffset + static_cast<uint64_t>(rowOffset);
     if (input.decodedArrays.mayHaveNulls()) {
@@ -391,6 +399,14 @@ size_t validateVectors(
         config.dimensions,
         "Vector dimension mismatch at row: {}",
         row);
+    if (contiguous) {
+      if (rowOffset == 0) {
+        firstElementOffset = offset;
+        expectedElementOffset = offset;
+      }
+      contiguous = offset == expectedElementOffset;
+      expectedElementOffset = static_cast<int64_t>(offset) + size;
+    }
     if (input.decodedElements.mayHaveNulls()) {
       for (velox::vector_size_t i = 0; i < size; ++i) {
         NIMBLE_USER_CHECK(
@@ -399,6 +415,9 @@ size_t validateVectors(
             row);
       }
     }
+  }
+  if (contiguous) {
+    input.contiguousElementsOffset = firstElementOffset;
   }
 
   const auto numVectors = fileRowOffset + static_cast<uint64_t>(numRows);
@@ -420,12 +439,35 @@ void appendVectors(
     const VectorIndexConfig& config,
     const DecodedVectorColumn& input,
     velox::Buffer& output) {
+  const auto numValues = static_cast<size_t>(numRows) * config.dimensions;
+  if (numValues == 0) {
+    return;
+  }
   auto* outputData = output.asMutable<float>();
   NIMBLE_CHECK_NOT_NULL(outputData);
   const std::span<float> outputValues{
       outputData, output.size() / sizeof(float)};
   const auto outputStart =
       static_cast<size_t>(fileRowOffset) * config.dimensions;
+  NIMBLE_CHECK_LE(outputStart, outputValues.size());
+  NIMBLE_CHECK_LE(numValues, outputValues.size() - outputStart);
+  const auto outputBatch = outputValues.subspan(outputStart, numValues);
+  // Validation sets this offset only when both decoded mappings are identity
+  // mappings and all row element ranges form a single contiguous span.
+  if (input.contiguousElementsOffset.has_value()) {
+    const auto* contiguousInputData = input.decodedElements.data<float>();
+    NIMBLE_CHECK_NOT_NULL(contiguousInputData);
+    const std::span<const float> inputValues{
+        contiguousInputData,
+        static_cast<size_t>(input.arrayVector.elements()->size())};
+    const auto inputStart =
+        static_cast<size_t>(input.contiguousElementsOffset.value());
+    NIMBLE_CHECK_LE(inputStart, inputValues.size());
+    NIMBLE_CHECK_LE(numValues, inputValues.size() - inputStart);
+    const auto inputBatch = inputValues.subspan(inputStart, numValues);
+    std::copy(inputBatch.begin(), inputBatch.end(), outputBatch.begin());
+    return;
+  }
   for (velox::vector_size_t rowOffset = 0; rowOffset < numRows; ++rowOffset) {
     const auto arrayRow = input.decodedArrays.index(rowOffset);
     const auto offset = input.arrayVector.offsetAt(arrayRow);
