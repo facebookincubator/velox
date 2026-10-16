@@ -39,10 +39,14 @@ void registerSparkArrayFunctions(const std::string& prefix) {
   VELOX_REGISTER_VECTOR_FUNCTION(udf_reduce, prefix + "aggregate");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_constructor, prefix + "array");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_contains, prefix + "array_contains");
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_array_distinct, prefix + "array_distinct");
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_array_except, prefix + "array_except");
+  // Spark returns -0.0 as 0.0 and every NaN as the canonical NaN in the
+  // results of array set operations.
   VELOX_REGISTER_VECTOR_FUNCTION(
-      udf_array_intersect, prefix + "array_intersect");
+      udf_array_distinct_normalize_floating_point, prefix + "array_distinct");
+  VELOX_REGISTER_VECTOR_FUNCTION(
+      udf_array_except_normalize_floating_point, prefix + "array_except");
+  VELOX_REGISTER_VECTOR_FUNCTION(
+      udf_array_intersect_normalize_floating_point, prefix + "array_intersect");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_array_position, prefix + "array_position");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_zip, prefix + "arrays_zip");
   VELOX_REGISTER_VECTOR_FUNCTION(udf_any_match, prefix + "exists");

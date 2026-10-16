@@ -84,7 +84,13 @@ General Aggregate Functions
 
     Returns an array consisting of all unique values from the input ``x`` elements.
     When ``ignoreNulls`` is ``true``, null inputs are excluded and an all-null
-    input returns an empty array. NaN values are considered distinct.
+    input returns an empty array.
+
+    -0.0 and 0.0 are treated as equal, and so are all NaNs. Floating-point
+    values in the result, including nested ones, are returned in canonical
+    form: -0.0 as 0.0 and every NaN as the canonical NaN. This matches Spark
+    4.2 and later. Spark 4.1 and earlier keep duplicate NaNs and return -0.0
+    as is.
 
     When ``ignoreNulls`` is set to ``false`` (RESPECT NULLS), null values are
     included in the result set. In this mode, an all-null input produces an
