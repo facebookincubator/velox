@@ -24,6 +24,7 @@
 
 #include <folly/ScopeGuard.h>
 #include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
+#include "velox/dwio/nimble/encodings/subintsplit/Format.h"
 #include "velox/dwio/nimble/encodings/views/EncodingViewFactory.h"
 
 namespace facebook::nimble {
@@ -47,8 +48,13 @@ class SubIntSplitEncodingView final : public TypedEncodingView<T> {
 
     const char* position = data.data() + this->dataOffset_;
     const auto numSections = encoding::read<uint8_t>(position);
-    // Skip the reserved section-order byte.
-    encoding::read<uint8_t>(position);
+    // Every flag changes how the sections map back to values, and this view
+    // interprets none of them. createEncodingView sends delta streams to
+    // DecodedFallbackEncodingView instead.
+    const auto flags = encoding::read<uint8_t>(position);
+    NIMBLE_CHECK_FILE(
+        flags == 0,
+        fmt::format("Unsupported SubIntSplit view header flags: {}", flags));
     NIMBLE_CHECK_GT(numSections, 0);
 
     struct SerializedSection {
