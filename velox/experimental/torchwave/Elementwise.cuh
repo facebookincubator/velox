@@ -607,6 +607,15 @@ __device__ inline T __clamp_(T& a1, TLo lo, THi hi) {
   return a1;
 }
 
+// copy_(self, src): self's previous value is never read, so unlike the
+// arithmetic variants this is a pure store. src arrives already broadcast to
+// self's shape by the leaf indexing and is converted to self's dtype.
+template <typename T, typename T2>
+__device__ inline T __copy_(T& a1, T2 a2) {
+  a1 = static_cast<T>(a2);
+  return a1;
+}
+
 // NaN/Inf replacement.
 
 template <typename T>
@@ -709,6 +718,11 @@ __device__ inline T __arange_start(int64_t idx, T start) {
 template <typename T>
 __device__ inline T __arange(int64_t idx) {
   return __arange_start<T>(idx, T(0));
+}
+
+template <typename T>
+__device__ inline T __arange_start_step(int64_t idx, T start, T step) {
+  return start + static_cast<T>(idx) * step;
 }
 
 // Shape query.
@@ -1243,7 +1257,12 @@ __device__ void __indexgather(
 // (see ATen native/cuda/IndexKernel.cu). 'source' and 'index' are whole tensors
 // read at computed offsets (so they carry randomAccess and are materialized
 // before this op). An out-of-range index is reported like __index_elt_*.
-template <typename T, int32_t kDim>
+//
+// kRank is source's rank when it is known at compile time, else -1. With a
+// known rank the coordinate loop has a constant trip count and every
+// coordinate is consumed as it is decomposed, so nothing is held in a
+// rank-indexed array (which the compiler would place in local memory).
+template <typename T, int32_t kDim, int32_t kRank>
 __device__ inline T __index_select(
     uint32_t idx,
     Tensor* source,
@@ -1251,30 +1270,51 @@ __device__ inline T __index_select(
     Tensor* out,
     BlockInfo& block) {
   int32_t dim = kDim < 0 ? kDim + source->rank : kDim;
-  // Decompose the logical output index into per-dim coordinates using the
-  // enclosing expression's output shape (innermost dim first). out->sizes[]
-  // hold out's own-dims magic dividers innermost-first (sizes[i] divides by
-  // out->dims[rank-1-i]); force-initialized in the block prologue.
-  int32_t coord[kMaxDims];
-  uint32_t rem = idx;
-  for (int i = 0; i < out->rank; ++i) {
-    unsigned int q, r;
-    out->sizes[i].divmod(rem, q, r);
-    coord[out->rank - 1 - i] = static_cast<int32_t>(r);
-    rem = q;
-  }
-  int32_t dimOffset = out->rank - source->rank;
   // int64 offset (like ATen's IndexKernel) so coord*stride accumulation does
   // not overflow for large tensors.
   int64_t offset = 0;
   int32_t pos = 0;
-  for (int d = 0; d < source->rank; ++d) {
-    int32_t oDimSize = d == dim ? index->dims[0] : source->dims[d];
-    int32_t c = oDimSize == 1 ? 0 : coord[d + dimOffset];
-    if (d == dim) {
-      pos = c;
-    } else {
-      offset += static_cast<int64_t>(c) * source->strides[d];
+  if constexpr (kRank > 0) {
+    // Output dim (out->rank - 1 - i) lines up with source dim (kRank - 1 - i)
+    // under right alignment. out->sizes[i] divides by out->dims[rank-1-i],
+    // innermost first; force-initialized in the block prologue.
+    uint32_t rem = idx;
+#pragma unroll
+    for (int32_t i = 0; i < kRank; ++i) {
+      unsigned int q, r;
+      out->sizes[i].divmod(rem, q, r);
+      rem = q;
+      const int32_t d = kRank - 1 - i;
+      const int32_t oDimSize = d == dim ? index->dims[0] : source->dims[d];
+      const int32_t c = oDimSize == 1 ? 0 : static_cast<int32_t>(r);
+      if (d == dim) {
+        pos = c;
+      } else {
+        offset += static_cast<int64_t>(c) * source->strides[d];
+      }
+    }
+  } else {
+    // Decompose the logical output index into per-dim coordinates using the
+    // enclosing expression's output shape (innermost dim first). out->sizes[]
+    // hold out's own-dims magic dividers innermost-first (sizes[i] divides by
+    // out->dims[rank-1-i]); force-initialized in the block prologue.
+    int32_t coord[kMaxDims];
+    uint32_t rem = idx;
+    for (int i = 0; i < out->rank; ++i) {
+      unsigned int q, r;
+      out->sizes[i].divmod(rem, q, r);
+      coord[out->rank - 1 - i] = static_cast<int32_t>(r);
+      rem = q;
+    }
+    int32_t dimOffset = out->rank - source->rank;
+    for (int d = 0; d < source->rank; ++d) {
+      int32_t oDimSize = d == dim ? index->dims[0] : source->dims[d];
+      int32_t c = oDimSize == 1 ? 0 : coord[d + dimOffset];
+      if (d == dim) {
+        pos = c;
+      } else {
+        offset += static_cast<int64_t>(c) * source->strides[d];
+      }
     }
   }
   // 'pos' comes from decomposing the enclosing expression's output index, so a

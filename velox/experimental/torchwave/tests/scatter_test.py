@@ -215,6 +215,43 @@ class ScatterAddTestPreproc(nn.Module):
         return out0, out1
 
 
+class ScatterAddInPlaceTestPreproc(nn.Module):
+    """Exercises aten.scatter_add_, the in-place form a non-functionalized export
+    keeps. torchwave retargets it to tw.scatter_add on self directly, with no
+    clone. Source values are integral so the atomic accumulation is exact in any
+    order.
+      - out0: dim 0 into an intermediate.
+      - out1: dim 1 into an intermediate.
+      - out2: dim 0 into a column view, so self is strided.
+      - out3: int64 counts accumulated into zeros, the shape the ROO preproc
+        produces.
+    """
+
+    def forward(
+        self,
+        a0: Tensor,
+        a1: Tensor,
+        idx0: Tensor,
+        src0: Tensor,
+        b0: Tensor,
+        idx1: Tensor,
+        src1: Tensor,
+        col_idx: Tensor,
+        col_src: Tensor,
+        count_idx: Tensor,
+        count_src: Tensor,
+    ) -> tuple[Tensor, Tensor, Tensor, Tensor]:
+        out0 = a0 + a1
+        out0.scatter_add_(0, idx0, src0)
+        out1 = b0 * 2.0
+        out1.scatter_add_(1, idx1, src1)
+        out2 = a0 * 2.0
+        out2[:, 1].scatter_add_(0, col_idx, col_src)
+        out3 = torch.zeros(16, dtype=torch.int64, device=count_src.device)
+        out3.scatter_add_(0, count_idx, count_src)
+        return out0, out1, out2, out3
+
+
 class ScatterAddCgConsumerTestPreproc(nn.Module):
     """Repro for the cooperative-grid failure on the ROO preproc: a fused
     tw.scatter_add whose src/index are far larger than the tensor it accumulates
