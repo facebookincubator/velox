@@ -319,11 +319,11 @@ TEST_F(FromJsonTest, nestedComplexType) {
           {"b"},
           {makeRowVector(
               {"d1", "e1"},
-              {makeFlatVector<int64_t>({1, 2, 3}),
+              {makeNullableFlatVector<int64_t>({1, std::nullopt, 3}),
                makeNullableFlatVector<int32_t>({3, 4, std::nullopt})})})});
   auto rowInput = makeFlatVector<std::string>(
       {R"({"a": {"b": {"d1": 1, "e1": 3, "e1": 4}}})", // Duplicate keys.
-       R"({"a": {"b": {"D1": 2, "e1": 4}}})", // Key case insensitive.
+       R"({"a": {"b": {"D1": 2, "e1": 4}}})", // Key case sensitive.
        R"({"a": {"b": {"d1": 3, "f3": 3}}})"}); // Key not in schema.
   testFromJson(rowInput, rowVector);
 
