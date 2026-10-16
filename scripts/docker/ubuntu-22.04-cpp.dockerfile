@@ -47,9 +47,11 @@ COPY scripts /velox/scripts/
 COPY CMake/resolve_dependency_modules/arrow/cmake-compatibility.patch /
 COPY CMake/resolve_dependency_modules/arrow/arrow-testing-boost.patch /
 COPY CMake/resolve_dependency_modules/openzl/openzl-cxx-standard.patch /
+COPY CMake/resolve_dependency_modules/folly/folly-sve-neonq-reinterpret.patch /
 
 ENV VELOX_ARROW_CMAKE_PATCH="/cmake-compatibility.patch /arrow-testing-boost.patch" \
     VELOX_OPENZL_CMAKE_PATCH="/openzl-cxx-standard.patch" \
+    VELOX_FOLLY_SVE_PATCH="/folly-sve-neonq-reinterpret.patch" \
     UV_TOOL_BIN_DIR=/usr/local/bin \
     UV_INSTALL_DIR=/usr/local/bin
 
