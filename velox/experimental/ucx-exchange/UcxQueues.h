@@ -166,14 +166,15 @@ class UcxOutputQueue : public std::enable_shared_from_this<UcxOutputQueue> {
   /// exists, the queue manager can create an unitialized queue just for the
   /// sake of storing the callback notification. The queue is then initialized
   /// later properly, and eventually the callback fires.
+  /// @param outputFinished True if all destinations were deleted before init.
   /// @return True, if initialization was successful, i.e. the queue wasn't
   /// already initialized.
   bool initialize(
       std::shared_ptr<exec::Task> task,
       uint32_t numDestinations,
       uint32_t numDrivers,
-      core::PartitionedOutputNode::Kind kind =
-          core::PartitionedOutputNode::Kind::kPartitioned);
+      core::PartitionedOutputNode::Kind kind,
+      bool& outputFinished);
 
   core::PartitionedOutputNode::Kind kind() const {
     return kind_;
@@ -237,8 +238,8 @@ class UcxOutputQueue : public std::enable_shared_from_this<UcxOutputQueue> {
   /// for 'destination' return empty results.
   void deleteResults(int destination);
 
-  /// Continues any possibly waiting producers. Called when the producer task
-  /// has an error or is cancelled.
+  /// Releases the Task and queued data and wakes waiting producers/consumers.
+  /// In-flight sends retain their own buffers until transport completion.
   void terminate();
 
   std::string toString();
@@ -308,6 +309,10 @@ class UcxOutputQueue : public std::enable_shared_from_this<UcxOutputQueue> {
 
   // Reference to the task that owns this UcxQueue.
   std::shared_ptr<exec::Task> task_{nullptr};
+
+  // A retained server handle must not revive a queue after task removal.
+  // Protected by mutex_.
+  bool terminated_{false};
 
   // The output mode (partitioned, broadcast, etc.)
   core::PartitionedOutputNode::Kind kind_{

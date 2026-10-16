@@ -17,6 +17,7 @@
 
 #include <cudf/column/column.hpp>
 #include <cudf/column/column_factories.hpp>
+#include <cudf/null_mask.hpp>
 #include <cudf/strings/detail/utilities.hpp>
 #include <cudf/strings/strings_column_view.hpp>
 #include <cudf/utilities/memory_resource.hpp>
@@ -204,7 +205,7 @@ std::unique_ptr<cudf::column> make_numeric_column_from_vector(
       cudf::data_type{cudf::type_to_id<T>()}, // e.g. cudf::type_id::FLOAT64
       num_rows,
       std::move(data),
-      rmm::device_buffer{}, // no null mask
+      cudf::create_null_mask(0, cudf::mask_state::UNALLOCATED), // no null mask
       0); // no nulls
 }
 
@@ -271,7 +272,7 @@ std::unique_ptr<cudf::column> make_strings_column_from_host(
       std::move(offsets_col),
       std::move(chars_buffer),
       0, // null_count
-      rmm::device_buffer{}); // null mask
+      cudf::create_null_mask(0, cudf::mask_state::UNALLOCATED)); // null mask
 }
 
 std::unique_ptr<cudf::table> makeTable(

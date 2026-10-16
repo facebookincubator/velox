@@ -19,6 +19,8 @@
 #include <cudf/contiguous_split.hpp>
 #include <folly/String.h>
 #include <folly/Uri.h>
+#include <folly/executors/InlineExecutor.h>
+#include <folly/futures/Future.h>
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/ucx-exchange/IntraNodeTransferRegistry.h"
@@ -28,6 +30,9 @@ using namespace facebook::velox::exec;
 namespace facebook::velox::ucx_exchange {
 
 namespace {
+// Bounds response draining after the consumer has stopped reading.
+constexpr std::chrono::seconds kCloseTimeout{1};
+
 const folly::F14FastMap<UcxExchangeSource::ReceiverState, std::string_view>&
 receiverStateNames() {
   static const folly::F14FastMap<
@@ -107,9 +112,36 @@ std::shared_ptr<UcxExchangeSource> UcxExchangeSource::create(
 
 void UcxExchangeSource::process() {
   if (closed_) {
-    // Driver thread called closed
-    cleanUp();
-    return;
+    const auto state = getState();
+    if (closeDeadlineExpired_.load(std::memory_order_acquire)) {
+      // Best effort even if handshake sending has not completed. Keep any
+      // unfinished transport buffers in deferred cleanup; do not close an
+      // endpoint shared with other exchanges.
+      sendDestinationCancellation();
+      setState(ReceiverState::Done);
+      cleanUp();
+      return;
+    }
+    if (state == ReceiverState::WaitingForHandshakeComplete) {
+      // Finish sending the handshake before cancelling its destination.
+      if (endpointRef_ && endpointRef_->endpoint_->isAlive()) {
+        return;
+      }
+      setState(ReceiverState::Done);
+      cleanUp();
+      return;
+    }
+    if (state != ReceiverState::Created) {
+      sendDestinationCancellation();
+      if (state == ReceiverState::WaitingForHandshakeResponse && endpointRef_ &&
+          endpointRef_->endpoint_->isAlive()) {
+        // Let an ordinary reply finish, within the same deadline as the send.
+        return;
+      }
+      setState(ReceiverState::Done);
+      cleanUp();
+      return;
+    }
   }
 
   switch (state_) {
@@ -208,6 +240,9 @@ void UcxExchangeSource::cleanUp() {
   // buffers they reference (via their arg shared_ptr) stay alive until
   // UCX has fully processed any in-flight operations.
   if (communicator_) {
+    if (handshakeRequest_) {
+      communicator_->deferRequestCleanup(std::move(handshakeRequest_));
+    }
     if (request_) {
       communicator_->deferRequestCleanup(std::move(request_));
     }
@@ -215,6 +250,9 @@ void UcxExchangeSource::cleanUp() {
       communicator_->deferRequestCleanup(std::move(req));
     }
     completedRequests_.clear();
+    if (cancellationRequest_) {
+      communicator_->deferRequestCleanup(std::move(cancellationRequest_));
+    }
   }
 
   if (endpointRef_) {
@@ -224,6 +262,22 @@ void UcxExchangeSource::cleanUp() {
   if (communicator_) {
     communicator_->unregister(getSelfPtr());
   }
+}
+
+void UcxExchangeSource::onEndpointClosed() {
+  if (!closed_.exchange(true, std::memory_order_acq_rel) && !atEnd_) {
+    queue_->setError(
+        fmt::format(
+            "UCX endpoint closed before end of stream from {}:{} for {}",
+            host_,
+            port_,
+            partitionKey_.toString()));
+  }
+  // No receive may be pending when backpressure pauses this source.
+  // Endpoint loss must therefore be reported before delivering the end marker.
+  deliverEndMarker();
+  setState(ReceiverState::Done);
+  communicator_->addToWorkQueue(getSelfPtr());
 }
 
 void UcxExchangeSource::close() {
@@ -237,7 +291,7 @@ void UcxExchangeSource::close() {
   bool desired = true;
   if (!closed_.compare_exchange_strong(
           expected, desired, std::memory_order_acq_rel)) {
-    return; // already closed.
+    return;
   }
 
   VLOG(1) << toString() << " UcxExchangeSource::close called.";
@@ -245,9 +299,45 @@ void UcxExchangeSource::close() {
   // Guarantee the end marker is delivered before transitioning to Done.
   deliverEndMarker();
 
-  // Let the Communicator progress thread do the actual clean-up.
-  setState(ReceiverState::Done);
+  // Bound the entire close, including a handshake send stalled during wireup.
+  // The Timekeeper and driver threads never mutate receiver state: its logging
+  // and cleanup use fields owned by the communicator thread.
+  std::weak_ptr<UcxExchangeSource> weak = weak_from_this();
+  folly::futures::sleep(kCloseTimeout)
+      .via(&folly::InlineExecutor::instance())
+      .thenTry([weak](auto&& /*result*/) {
+        if (auto source = weak.lock();
+            source && source->getState() != ReceiverState::Done) {
+          source->closeDeadlineExpired_.store(true, std::memory_order_release);
+          source->communicator_->addToWorkQueue(source);
+        }
+      });
   communicator_->addToWorkQueue(getSelfPtr());
+}
+
+void UcxExchangeSource::sendDestinationCancellation() {
+  if (atEnd_ || !endpointRef_ || !endpointRef_->endpoint_->isAlive() ||
+      cancellationRequest_) {
+    return;
+  }
+
+  auto cancellation = std::make_shared<uint8_t>(0);
+  cancellationRequest_ =
+      endpointRef_->endpoint_
+          ->tagSendBuilder(
+              cancellation.get(),
+              sizeof(*cancellation),
+              ucxx::Tag{getDestinationCancellationTag(partitionKeyHash_)})
+          .callbackFunction(
+              [key = partitionKey_.toString()](
+                  ucs_status_t status, std::shared_ptr<void> /*arg*/) {
+                if (status != UCS_OK) {
+                  VLOG(1) << "Failed to cancel UCX destination " << key << ": "
+                          << ucs_status_string(status);
+                }
+              })
+          .callbackData(cancellation)
+          .build();
 }
 
 void UcxExchangeSource::resumeFromBackpressure() {
@@ -360,24 +450,23 @@ void UcxExchangeSource::sendHandshake() {
       communicator_->kAmCallbackOwner, communicator_->kAmCallbackId);
   // Use weak_ptr to prevent use-after-free if close() is called during callback
   std::weak_ptr<UcxExchangeSource> weak = weak_from_this();
-  if (request_) {
-    completedRequests_.push_back(std::move(request_));
-  }
   // Pass handshakeReq as the callback arg to keep the send buffer alive until
-  // the async amSend completes. UCXX stores it as shared_ptr<void> but the
+  // the handshake send completes. UCXX stores it as shared_ptr<void> but the
   // type-erased deleter still calls ~HandshakeMsg correctly.
-  request_ = endpointRef_->endpoint_->amSend(
-      handshakeReq.get(),
-      sizeof(*handshakeReq),
-      UCS_MEMORY_TYPE_HOST,
-      info,
-      false,
-      [weak](ucs_status_t status, std::shared_ptr<void> arg) {
-        if (auto self = weak.lock()) {
-          self->onHandshake(status, arg);
-        }
-      },
-      handshakeReq);
+  handshakeRequest_ =
+      endpointRef_->endpoint_
+          ->amSendBuilder(
+              handshakeReq.get(), sizeof(*handshakeReq), UCS_MEMORY_TYPE_HOST)
+          .receiverCallbackInfo(info)
+          .callbackFunction(
+              [weak](ucs_status_t status, std::shared_ptr<void> arg) {
+                if (auto self = weak.lock()) {
+                  self->onHandshake(status, arg);
+                }
+              })
+          .callbackData(handshakeReq)
+          .build();
+  // An inline callback can post the response receive in request_ independently.
 }
 
 void UcxExchangeSource::onHandshake(
@@ -388,12 +477,8 @@ void UcxExchangeSource::onHandshake(
   // transmitted). The parameter exists only because UCXX uses it as a lifetime
   // handle; letting it go out of scope releases the send buffer.
 
-  // Check if close() was called - avoid processing if we're shutting down
-  if (closed_.load(std::memory_order_acquire)) {
-    VLOG(3) << toString() << " onHandshake called after close, ignoring";
-    deliverEndMarker();
-    return;
-  }
+  // Complete the handshake even after close() so the producer can receive
+  // the destination cancellation.
   // Guard against replayed callbacks from UCP wireup replay.
   if (getState() != ReceiverState::WaitingForHandshakeComplete) {
     VLOG(2) << toString() << " onHandshake called in state "
@@ -408,7 +493,9 @@ void UcxExchangeSource::onHandshake(
         partitionKey_.toString(),
         ucs_status_string(status));
     VLOG(0) << errorMsg;
-    queue_->setError(errorMsg);
+    if (!closed_.load(std::memory_order_acquire)) {
+      queue_->setError(errorMsg);
+    }
     deliverEndMarker();
     setState(ReceiverState::Done);
     communicator_->addToWorkQueue(getSelfPtr());
@@ -419,6 +506,9 @@ void UcxExchangeSource::onHandshake(
         ReceiverState::WaitingForHandshakeComplete,
         ReceiverState::WaitingForHandshakeResponse);
     receiveHandshakeResponse();
+    if (closed_.load(std::memory_order_acquire)) {
+      communicator_->addToWorkQueue(getSelfPtr());
+    }
   }
 }
 
@@ -437,18 +527,20 @@ void UcxExchangeSource::getMetadata() {
   if (request_) {
     completedRequests_.push_back(std::move(request_));
   }
-  request_ = endpointRef_->endpoint_->tagRecv(
-      reinterpret_cast<void*>(metadataReq->data()),
-      kMaxMetaBufSize,
-      ucxx::Tag{metadataTag},
-      ucxx::TagMaskFull,
-      false,
-      [weak](ucs_status_t status, std::shared_ptr<void> arg) {
-        if (auto self = weak.lock()) {
-          self->onMetadata(status, arg);
-        }
-      },
-      metadataReq);
+  request_ = endpointRef_->endpoint_
+                 ->tagRecvBuilder(
+                     reinterpret_cast<void*>(metadataReq->data()),
+                     kMaxMetaBufSize,
+                     ucxx::Tag{metadataTag},
+                     ucxx::TagMaskFull)
+                 .callbackFunction(
+                     [weak](ucs_status_t status, std::shared_ptr<void> arg) {
+                       if (auto self = weak.lock()) {
+                         self->onMetadata(status, arg);
+                       }
+                     })
+                 .callbackData(metadataReq)
+                 .build();
 }
 
 void UcxExchangeSource::onMetadata(
@@ -551,19 +643,20 @@ void UcxExchangeSource::onMetadata(
     if (request_) {
       completedRequests_.push_back(std::move(request_));
     }
-    request_ = endpointRef_->endpoint_->tagRecv(
-        ptr->dataBuf->data(),
-        ptr->metadata.dataSizeBytes,
-        ucxx::Tag{dataTag},
-        ucxx::TagMaskFull,
-        false,
-        [weak](ucs_status_t status, std::shared_ptr<void> arg) {
-          if (auto self = weak.lock()) {
-            self->onData(status, arg);
-          }
-        },
-        ptr // DataAndMetadata
-    );
+    request_ = endpointRef_->endpoint_
+                   ->tagRecvBuilder(
+                       ptr->dataBuf->data(),
+                       ptr->metadata.dataSizeBytes,
+                       ucxx::Tag{dataTag},
+                       ucxx::TagMaskFull)
+                   .callbackFunction(
+                       [weak](ucs_status_t status, std::shared_ptr<void> arg) {
+                         if (auto self = weak.lock()) {
+                           self->onData(status, arg);
+                         }
+                       })
+                   .callbackData(ptr)
+                   .build();
   }
 }
 
@@ -639,30 +732,26 @@ void UcxExchangeSource::receiveHandshakeResponse() {
   if (request_) {
     completedRequests_.push_back(std::move(request_));
   }
-  request_ = endpointRef_->endpoint_->tagRecv(
-      responseBuffer.get(),
-      sizeof(*responseBuffer),
-      ucxx::Tag{responseTag},
-      ucxx::TagMaskFull,
-      false,
-      [weak](ucs_status_t status, std::shared_ptr<void> arg) {
-        if (auto self = weak.lock()) {
-          self->onHandshakeResponse(status, arg);
-        }
-      },
-      responseBuffer);
+  request_ = endpointRef_->endpoint_
+                 ->tagRecvBuilder(
+                     responseBuffer.get(),
+                     sizeof(*responseBuffer),
+                     ucxx::Tag{responseTag},
+                     ucxx::TagMaskFull)
+                 .callbackFunction(
+                     [weak](ucs_status_t status, std::shared_ptr<void> arg) {
+                       if (auto self = weak.lock()) {
+                         self->onHandshakeResponse(status, arg);
+                       }
+                     })
+                 .callbackData(responseBuffer)
+                 .build();
 }
 
 void UcxExchangeSource::onHandshakeResponse(
     ucs_status_t status,
     std::shared_ptr<void> arg) {
-  // Check if close() was called - avoid processing if we're shutting down
-  if (closed_.load(std::memory_order_acquire)) {
-    VLOG(3) << toString()
-            << " onHandshakeResponse called after close, ignoring";
-    deliverEndMarker();
-    return;
-  }
+  // A response may arrive while a closed source drains the handshake.
   // Guard against replayed callbacks from UCP wireup replay.
   if (getState() != ReceiverState::WaitingForHandshakeResponse) {
     VLOG(2) << toString() << " onHandshakeResponse called in state "
@@ -678,7 +767,9 @@ void UcxExchangeSource::onHandshakeResponse(
         partitionKey_.toString(),
         ucs_status_string(status));
     VLOG(0) << errorMsg;
-    queue_->setError(errorMsg);
+    if (!closed_.load(std::memory_order_acquire)) {
+      queue_->setError(errorMsg);
+    }
     deliverEndMarker();
     setState(ReceiverState::Done);
     communicator_->addToWorkQueue(getSelfPtr());
