@@ -175,6 +175,7 @@ set(
   velox_hive_connector
   velox_memory
   velox_serialization
+  velox_simple_aggregate
   velox_test_util
   velox_type
   velox_type_test_lib
@@ -367,6 +368,7 @@ add_library(
   velox_simple_aggregate
   SimpleAverageAggregate.cpp
   SimpleArrayAggAggregate.cpp
+  SimpleConstantForwardingAggregate.cpp
   SimpleVariadicArrayAggAggregate.cpp
   SimpleVariadicSumAggregate.cpp
 )
