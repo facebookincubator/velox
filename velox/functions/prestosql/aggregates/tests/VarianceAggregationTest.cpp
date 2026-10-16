@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/exec/Aggregate.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
 
@@ -58,6 +59,22 @@ class VarianceAggregationTest : public AggregationTestBase {
       "var_pop",
       "var_samp"};
 };
+
+TEST_F(VarianceAggregationTest, accumulatorAlignment) {
+  // RowContainer rounds the accumulator offset up to this alignment. The
+  // accumulator holds an int64_t count and doubles, so it needs 8.
+  core::QueryConfig config{{}};
+  for (const auto* aggrName : aggrNames_) {
+    SCOPED_TRACE(aggrName);
+    auto function = exec::Aggregate::create(
+        aggrName,
+        core::AggregationNode::Step::kSingle,
+        {BIGINT()},
+        DOUBLE(),
+        config);
+    EXPECT_EQ(function->accumulatorAlignmentSize(), 8);
+  }
+}
 
 TEST_F(VarianceAggregationTest, varianceConst) {
   // Have two row vectors at least as it triggers different code paths.
