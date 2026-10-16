@@ -129,7 +129,7 @@ jobs:
           ccache -vs
 
       - name: Save ccache"
-        uses: apache/infrastructure-actions/stash/save@3354c1565d4b0e335b78a76aedd82153a9e144d4
+        uses: apache/infrastructure-actions/stash/save@b1b1ab191498302581efdef55279706f79249c0e
         with:
           path: ccache
           key: ccache-benchmark
