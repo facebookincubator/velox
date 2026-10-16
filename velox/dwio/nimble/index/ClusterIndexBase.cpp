@@ -310,6 +310,8 @@ void ClusterIndexBase::resolvePartitionBounds(
 void ClusterIndexBase::validateLookupOptions(
     const LookupRequest& request) const {
   const auto& options = request.options();
+  // Require the exact base type: accepting derived options here would discard
+  // index-specific constraints, such as a weight budget.
   NIMBLE_USER_CHECK(
       typeid(options) == typeid(LookupOptions),
       "Lookup options are not supported by index type: {}",
