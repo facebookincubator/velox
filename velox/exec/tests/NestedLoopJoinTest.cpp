@@ -14,8 +14,12 @@
  * limitations under the License.
  */
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
+#include "velox/common/testutil/TestValue.h"
 #include "velox/core/PlanNode.h"
 #include "velox/exec/NestedLoopJoinBuild.h"
+#include "velox/exec/Operator.h"
+#include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/BackpressureTestNode.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
@@ -26,6 +30,7 @@
 namespace facebook::velox::exec::test {
 namespace {
 
+using facebook::velox::common::testutil::TempDirectoryPath;
 using facebook::velox::test::assertEqualVectors;
 
 class NestedLoopJoinTest : public HiveConnectorTestBase {
@@ -56,6 +61,76 @@ class NestedLoopJoinTest : public HiveConnectorTestBase {
 
   void setJoinTypes(std::vector<core::JoinType> joinTypes) {
     joinTypes_ = std::move(joinTypes);
+  }
+
+  std::vector<RowVectorPtr> makeSpillProbeVectors() {
+    return {
+        makeRowVector({"t0"}, {makeFlatVector<int64_t>({0, 1, 2, 3})}),
+        makeRowVector({"t0"}, {makeFlatVector<int64_t>({4, 5, 9})})};
+  }
+
+  std::vector<RowVectorPtr> makeSpillBuildVectors() {
+    return {
+        makeRowVector({"u0"}, {makeFlatVector<int64_t>({-1, 0})}),
+        makeRowVector({"u0"}, {makeFlatVector<int64_t>({2, 4})}),
+        makeRowVector({"u0"}, {makeFlatVector<int64_t>({6, 8})}),
+        makeRowVector({"u0"}, {makeFlatVector<int64_t>({9, 10})})};
+  }
+
+  core::PlanNodePtr makeSpillJoinPlan(
+      const std::vector<RowVectorPtr>& probeVectors,
+      const std::vector<RowVectorPtr>& buildVectors,
+      const std::string& joinCondition,
+      const std::vector<std::string>& outputLayout,
+      core::JoinType joinType) {
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    auto buildPlan = PlanBuilder(planNodeIdGenerator)
+                         .values(buildVectors)
+                         .localPartition({buildKeyName_})
+                         .planNode();
+
+    auto probePlan = PlanBuilder(planNodeIdGenerator)
+                         .values(probeVectors)
+                         .localPartition({probeKeyName_});
+    return probePlan
+        .nestedLoopJoin(buildPlan, joinCondition, outputLayout, joinType)
+        .planNode();
+  }
+
+  void assertSpillQuery(
+      const core::PlanNodePtr& plan,
+      const std::string& duckDbSql,
+      uint64_t expectedSpilledRows,
+      bool joinSpillEnabled = true) {
+    const auto spillDirectory = TempDirectoryPath::create();
+    std::atomic<bool> reclaimed{false};
+    // Reclaim one non-empty driver; the build barrier must spill its peers.
+    SCOPED_TESTVALUE_SET(
+        "facebook::velox::exec::Driver::runInternal::noMoreInput",
+        std::function<void(Operator*)>([&](Operator* build) {
+          if (build->operatorType() != "NestedLoopJoinBuild" ||
+              !build->canReclaim() ||
+              build->stats().rlock()->inputPositions == 0 ||
+              reclaimed.exchange(true)) {
+            return;
+          }
+          memory::MemoryReclaimer::Stats stats;
+          build->reclaim(0, stats);
+        }));
+
+    auto task =
+        AssertQueryBuilder(plan, duckDbQueryRunner_)
+            .spillDirectory(spillDirectory->getPath())
+            .config(core::QueryConfig::kSpillEnabled, true)
+            .config(core::QueryConfig::kJoinSpillEnabled, joinSpillEnabled)
+            .config(core::QueryConfig::kMaxOutputBatchRows, "4")
+            .config(core::QueryConfig::kPreferredOutputBatchRows, "4")
+            .maxDrivers(4)
+            .assertResults(duckDbSql);
+
+    const auto stats = toOperatorStats(task->taskStats());
+    ASSERT_EQ(stats.at("NestedLoopJoinBuild").spilledRows, expectedSpilledRows);
+    ASSERT_EQ(reclaimed.load(), expectedSpilledRows > 0);
   }
 
   RowVectorPtr makeOutputOrderProbeVector() {
@@ -1076,6 +1151,163 @@ TEST_F(NestedLoopJoinTest, leftSemiJoinWithNullsAndFilter) {
   auto result = builder.copyResults(pool());
 
   assertEqualVectors(expected, result);
+}
+
+DEBUG_ONLY_TEST_F(NestedLoopJoinTest, spillReplay) {
+  std::vector<RowVectorPtr> buildVectors;
+  for (auto i = 0; i < 16; ++i) {
+    buildVectors.push_back(makeRowVector(
+        {"payload"}, {makeFlatVector<std::string>(64, [i](auto row) {
+          return fmt::format("{}:{}:{}", i, row, std::string(4'096, 'x'));
+        })}));
+  }
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan =
+      PlanBuilder(planNodeIdGenerator)
+          .values({makeRowVector({makeFlatVector<int64_t>({1})})})
+          .nestedLoopJoin(
+              PlanBuilder(planNodeIdGenerator).values(buildVectors).planNode(),
+              {"payload"})
+          .planNode();
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Driver::runInternal::addInput",
+      std::function<void(Operator*)>([](Operator* build) {
+        if (build->operatorType() == "NestedLoopJoinBuild" &&
+            build->stats().rlock()->inputVectors == 2) {
+          testingRunArbitration(build->pool());
+        }
+      }));
+  const auto spillDirectory = TempDirectoryPath::create();
+  auto task = AssertQueryBuilder(plan)
+                  .spillDirectory(spillDirectory->getPath())
+                  .config(core::QueryConfig::kSpillEnabled, true)
+                  .config(core::QueryConfig::kJoinSpillEnabled, true)
+                  .config(core::QueryConfig::kMaxSpillFileSize, "1")
+                  .config(core::QueryConfig::kSpillWriteBufferSize, "0")
+                  .maxDrivers(1)
+                  .assertResults(buildVectors);
+  const auto stats = toOperatorStats(task->taskStats());
+  const auto& buildStats = stats.at("NestedLoopJoinBuild");
+  ASSERT_EQ(buildStats.spilledFiles, buildVectors.size());
+  // Replay buffers must stay bounded as the number of spill files grows.
+  ASSERT_LT(
+      stats.at("NestedLoopJoinProbe").memoryStats.peakTotalMemoryReservation,
+      buildStats.spilledBytes);
+}
+
+DEBUG_ONLY_TEST_F(NestedLoopJoinTest, spillJoins) {
+  const auto probeVectors = makeSpillProbeVectors();
+  const auto buildVectors = makeSpillBuildVectors();
+  createDuckDbTable("t", probeVectors);
+  createDuckDbTable("u", buildVectors);
+
+  struct {
+    core::JoinType joinType;
+    std::string joinCondition;
+    std::vector<std::string> outputLayout;
+    std::string duckDbSql;
+  } testSettings[] = {
+      {core::JoinType::kInner,
+       "t0 < u0 AND u0 < 8",
+       {"t0", "u0"},
+       "SELECT t0, u0 FROM t JOIN u ON t.t0 < u.u0 AND u.u0 < 8"},
+      {core::JoinType::kInner, "", {"t0", "u0"}, "SELECT t0, u0 FROM t, u"},
+      {core::JoinType::kLeft,
+       "t0 = u0",
+       {"t0", "u0"},
+       "SELECT t0, u0 FROM t LEFT JOIN u ON t.t0 = u.u0"},
+      {core::JoinType::kRight,
+       "t0 = u0",
+       {"t0", "u0"},
+       "SELECT t0, u0 FROM t RIGHT JOIN u ON t.t0 = u.u0"},
+      {core::JoinType::kFull,
+       "t0 = u0",
+       {"t0", "u0"},
+       "SELECT t0, u0 FROM t FULL JOIN u ON t.t0 = u.u0"},
+      {core::JoinType::kLeftSemiProject,
+       "t0 = u0",
+       {"t0", "match"},
+       "SELECT t0, EXISTS(SELECT 1 FROM u WHERE t.t0 = u.u0) FROM t"},
+      {core::JoinType::kLeftSemiFilter,
+       "t0 = u0",
+       {"t0"},
+       "SELECT t0 FROM t WHERE EXISTS(SELECT 1 FROM u WHERE t.t0 = u.u0)"},
+      {core::JoinType::kAnti,
+       "t0 = u0",
+       {"t0"},
+       "SELECT t0 FROM t WHERE NOT EXISTS(SELECT 1 FROM u WHERE t.t0 = u.u0)"},
+  };
+
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(testData.duckDbSql);
+    assertSpillQuery(
+        makeSpillJoinPlan(
+            probeVectors,
+            buildVectors,
+            testData.joinCondition,
+            testData.outputLayout,
+            testData.joinType),
+        testData.duckDbSql,
+        8);
+  }
+}
+
+DEBUG_ONLY_TEST_F(NestedLoopJoinTest, spillEmptyInput) {
+  {
+    SCOPED_TRACE("empty build");
+    const auto probeVectors = makeSpillProbeVectors();
+    const std::vector<RowVectorPtr> buildVectors = {
+        makeRowVector({"u0"}, {makeFlatVector<int64_t>({})})};
+    createDuckDbTable("t", probeVectors);
+    createDuckDbTable("u", buildVectors);
+
+    assertSpillQuery(
+        makeSpillJoinPlan(
+            probeVectors,
+            buildVectors,
+            "t0 = u0",
+            {"t0", "u0"},
+            core::JoinType::kLeft),
+        "SELECT t0, u0 FROM t LEFT JOIN u ON t.t0 = u.u0",
+        0);
+  }
+
+  {
+    SCOPED_TRACE("empty probe");
+    const std::vector<RowVectorPtr> probeVectors = {
+        makeRowVector({"t0"}, {makeFlatVector<int64_t>({})})};
+    const auto buildVectors = makeSpillBuildVectors();
+    createDuckDbTable("t", probeVectors);
+    createDuckDbTable("u", buildVectors);
+
+    assertSpillQuery(
+        makeSpillJoinPlan(
+            probeVectors,
+            buildVectors,
+            "t0 = u0",
+            {"t0", "u0"},
+            core::JoinType::kRight),
+        "SELECT t0, u0 FROM t RIGHT JOIN u ON t.t0 = u.u0",
+        8);
+  }
+}
+
+DEBUG_ONLY_TEST_F(NestedLoopJoinTest, spillDisabled) {
+  const auto probeVectors = makeSpillProbeVectors();
+  const auto buildVectors = makeSpillBuildVectors();
+  createDuckDbTable("t", probeVectors);
+  createDuckDbTable("u", buildVectors);
+
+  assertSpillQuery(
+      makeSpillJoinPlan(
+          probeVectors,
+          buildVectors,
+          "t0 = u0",
+          {"t0", "u0"},
+          core::JoinType::kInner),
+      "SELECT t0, u0 FROM t JOIN u ON t.t0 = u.u0",
+      0,
+      /*joinSpillEnabled=*/false);
 }
 
 TEST_F(NestedLoopJoinTest, mergeBuildVectorsOverflow) {
