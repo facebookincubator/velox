@@ -693,14 +693,19 @@ int32_t makeGrid(
     const std::function<int32_t(int32_t)>& occupancyFor) {
   const int32_t blockSize = WaveConfig::get().blockSize;
 
+  auto unitCost = [&](size_t i) {
+    return WaveConfig::get().uniformCost ? 1.0f
+                                         : launches[i].launch->op->unitCost();
+  };
+
   // Compute cost per launch: numElements * unitCost * costAdjustFactor.
   sv.costs.resize(launches.size());
   float totalCost = 0;
   for (size_t i = 0; i < launches.size(); ++i) {
     float adjust =
         launches[i].costAdjustFactor > 0 ? launches[i].costAdjustFactor : 1.0f;
-    sv.costs[i] = static_cast<float>(launches[i].numElements) *
-        launches[i].launch->op->unitCost() * adjust;
+    sv.costs[i] =
+        static_cast<float>(launches[i].numElements) * unitCost(i) * adjust;
     totalCost += sv.costs[i];
   }
 
@@ -720,7 +725,7 @@ int32_t makeGrid(
     }
     float adjust =
         launches[i].costAdjustFactor > 0 ? launches[i].costAdjustFactor : 1.0f;
-    float costPerInput = launches[i].launch->op->unitCost() * adjust;
+    float costPerInput = unitCost(i) * adjust;
     int32_t elementsPerBlock =
         blockSize * elementsPerThreadForCost(costPerInput);
     sv.maxBlocks[i] = static_cast<int32_t>(
@@ -5670,7 +5675,26 @@ void CompositeInvocation::launch(
   } else {
     stream->hostToDeviceAsync(deviceBase, pinnedBase, h2dBytes);
     for (const auto& segment : segments) {
-      launchSegment(segment);
+      if (!WaveConfig::get().launchPerOp) {
+        launchSegment(segment);
+        continue;
+      }
+      // An op's blocks are contiguous in the step's block array, so each run
+      // of one launch index is one op.  A barrier op's blocks stay together
+      // in their run, which keeps them in one launch.
+      const int32_t segmentEnd = segment.firstBlock + segment.numBlocks;
+      for (int32_t runStart = segment.firstBlock; runStart < segmentEnd;) {
+        int32_t runEnd = runStart + 1;
+        while (runEnd < segmentEnd &&
+               sv.launchIndices.at(runEnd) == sv.launchIndices.at(runStart)) {
+          ++runEnd;
+        }
+        LaunchSegment opSegment = segment;
+        opSegment.firstBlock = runStart;
+        opSegment.numBlocks = runEnd - runStart;
+        launchSegment(opSegment);
+        runStart = runEnd;
+      }
     }
     if (returnBegin >= 0) {
       stream->deviceToHostAsync(

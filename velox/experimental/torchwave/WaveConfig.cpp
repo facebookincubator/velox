@@ -86,6 +86,10 @@ std::string WaveConfig::toString() const {
   addBool("kernelLineInfo", &WaveConfig::kernelLineInfo);
   addBool("debugSingleOps", &WaveConfig::debugSingleOps);
   addBool("autoAdjustCost", &WaveConfig::autoAdjustCost);
+  addBool("uniformCost", &WaveConfig::uniformCost);
+  addBool("launchPerOp", &WaveConfig::launchPerOp);
+  addBool("dedupProjectOps", &WaveConfig::dedupProjectOps);
+  addBool("serializeStandalones", &WaveConfig::serializeStandalones);
   addBool("enableReuse", &WaveConfig::enableReuse);
   addBool("elideClones", &WaveConfig::elideClones);
   addBool("scanOutputReturnBarrier", &WaveConfig::scanOutputReturnBarrier);

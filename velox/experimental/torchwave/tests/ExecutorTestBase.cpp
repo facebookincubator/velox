@@ -154,6 +154,23 @@ DEFINE_bool(
     "Adjust per-op cost multipliers after each execution based on actual thread block clocks. Defaults to WaveConfig's own default, which this flag assigns unconditionally: a different default here would silently override the engine's");
 
 DEFINE_bool(
+    uniform_cost,
+    false,
+    "Ablation: share a step's blocks by element count alone, ignoring each op's declared unit cost");
+DEFINE_bool(
+    launch_per_op,
+    false,
+    "Ablation: launch each op of a step on its own instead of all of a step's ops in one launch");
+DEFINE_bool(
+    dedup_project_ops,
+    true,
+    "Reuse one compiled ProjectOperation for structurally identical subgraphs of a node. False is an ablation that compiles each separately");
+DEFINE_bool(
+    serialize_standalones,
+    false,
+    "Ablation: wait for the torch stream after every standalone that does device work, so standalones stop overlapping the wave kernels");
+
+DEFINE_bool(
     enable_reuse,
     true,
     "Reuse a value's buffer in place when an op is its unique last use (turn copying ops into in-place ops)");
@@ -720,6 +737,10 @@ void ExecutorTestBase::SetUpTestSuite() {
   WaveConfig::get().kernelLineInfo = FLAGS_kernel_line_info;
   WaveConfig::get().debugSingleOps = FLAGS_debug_single_ops;
   WaveConfig::get().autoAdjustCost = FLAGS_auto_adjust_cost;
+  WaveConfig::get().uniformCost = FLAGS_uniform_cost;
+  WaveConfig::get().launchPerOp = FLAGS_launch_per_op;
+  WaveConfig::get().dedupProjectOps = FLAGS_dedup_project_ops;
+  WaveConfig::get().serializeStandalones = FLAGS_serialize_standalones;
   WaveConfig::get().enableReuse = FLAGS_enable_reuse;
   WaveConfig::get().elideClones = FLAGS_elide_clones;
   WaveConfig::get().freeIntermediates = FLAGS_free_intermediates;
