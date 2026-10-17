@@ -2320,18 +2320,17 @@ bool registerBuiltinFunctions(const std::string& prefix) {
            .argumentType("boolean")
            .build()});
 
-  registerCudfFunction(
-      "is_null",
-      [](const std::string&,
-         const core::TypedExprPtr& expr,
-         memory::MemoryPool*) {
-        return std::make_shared<IsNullFunction>(expr);
-      },
-      {FunctionSignatureBuilder()
-           .typeVariable("T")
-           .returnType("boolean")
-           .argumentType("T")
-           .build()});
+  registerCudfFunctions({"is_null", prefix + "isnull"},
+                        [](const std::string&,
+                           const core::TypedExprPtr& expr,
+                           memory::MemoryPool*) {
+                          return std::make_shared<IsNullFunction>(expr);
+                        },
+                        {FunctionSignatureBuilder()
+                             .typeVariable("T")
+                             .returnType("boolean")
+                             .argumentType("T")
+                             .build()});
 
   registerCudfFunction(
       "isnotnull",

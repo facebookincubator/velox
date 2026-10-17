@@ -206,6 +206,7 @@ const std::unordered_map<std::string, Op> prestoUnaryOps = {
 const std::unordered_map<std::string, Op> sparkUnaryOps = {
     {"not", Op::NOT},
     {"is_null", Op::IS_NULL},
+    {"isnull", Op::IS_NULL},
     // Trigonometric functions
     {"sin", Op::SIN},
     {"cos", Op::COS},
