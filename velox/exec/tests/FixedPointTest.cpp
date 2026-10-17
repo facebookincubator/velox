@@ -3392,6 +3392,67 @@ TEST_F(FixedPointTest, trailingTableScan) {
   }
 }
 
+// A fixed point whose body and convergence plans are one plan each shuffles
+// nothing, so it runs in parallel without FixedPointOptions::producerLocation.
+TEST_F(FixedPointTest, parallelWithoutProducerLocation) {
+  FixedPointOptions options = localOptions();
+  options.producerLocation = nullptr;
+
+  // 0 -> 1 -> 2 -> 3: converges at val 3.
+  auto expected = makeRowVector({
+      makeFlatVector<int64_t>({0}),
+      makeFlatVector<int64_t>({3}),
+  });
+  AssertQueryBuilder(countingNode())
+      .fixedPointOptions(&options)
+      .assertResults(expected);
+}
+
+// A split sent again with the sequence id it had is ignored, as for any scan,
+// when the scan is in a fixed point's initial plan.
+TEST_F(FixedPointTest, resentInitialPlanSplit) {
+  auto schema = ROW({"k", "v"}, BIGINT());
+  auto data = makeRowVector(
+      schema->names(),
+      {
+          makeFlatVector<int64_t>({0, 1}),
+          makeFlatVector<int64_t>({7, 8}),
+      });
+  auto filePaths = makeFilePaths(1);
+  writeToFile(filePaths[0]->getPath(), data);
+
+  core::PlanNodeId scanId;
+  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan = PlanBuilder(idGenerator)
+                  .fixedPoint(
+                      std::make_shared<VectorStateDeclaration>(
+                          "vals",
+                          schema,
+                          PlanBuilder(idGenerator)
+                              .tableScan(schema)
+                              .capturePlanNodeId(scanId)
+                              .planNode()),
+                      PlanBuilder(idGenerator)
+                          .stateSource("vals", schema)
+                          .project({"k", "v"}),
+                      ConvergenceConfig::withMaxIterations(1))
+                  .planNode();
+
+  auto task = makeTask(plan, exec::Task::ExecutionMode::kSerial, "resent");
+  EXPECT_TRUE(task->addSplitWithSequence(
+      scanId, hiveSplit(filePaths[0]), /*sequenceId=*/1));
+  task->setMaxSplitSequenceId(scanId, /*maxSequenceId=*/1);
+  EXPECT_FALSE(task->addSplitWithSequence(
+      scanId, hiveSplit(filePaths[0]), /*sequenceId=*/1));
+  task->noMoreSplits(scanId);
+
+  std::vector<RowVectorPtr> results;
+  while (auto batch = task->next()) {
+    results.push_back(batch);
+  }
+  test::assertEqualResults({data}, results);
+}
+
 // A fixed point whose initial plan joins another fixed point with a table, and
 // the inner fixed point reads a table too: the outer loop passes both scans'
 // splits to the task running the inner one.

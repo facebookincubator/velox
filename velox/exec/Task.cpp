@@ -1780,6 +1780,11 @@ void Task::setMaxSplitSequenceId(
     const core::PlanNodeId& planNodeId,
     long maxSequenceId) {
   std::lock_guard<std::timed_mutex> l(mutex_);
+  if (fixedPoint_ != nullptr && fixedPoint_->takesSplits(planNodeId)) {
+    auto [it, _] = fixedPointMaxSequenceIds_.emplace(planNodeId, -1);
+    it->second = std::max(it->second, maxSequenceId);
+    return;
+  }
   if (isRunningLocked()) {
     auto& splitsState = getPlanNodeSplitsStateLocked(planNodeId);
     // We could have been sent an old split again, so only change max id, when
@@ -1802,6 +1807,18 @@ bool Task::addSplitWithSequence(
     exec::Split&& split,
     long sequenceId) {
   RECORD_METRIC_VALUE(kMetricTaskSplitsCount, 1);
+  if (fixedPoint_ != nullptr && fixedPoint_->takesSplits(planNodeId)) {
+    // A split sent again is ignored, as for the task's own nodes below.
+    {
+      std::lock_guard<std::timed_mutex> l(mutex_);
+      const auto it = fixedPointMaxSequenceIds_.find(planNodeId);
+      if (it != fixedPointMaxSequenceIds_.end() && sequenceId <= it->second) {
+        return false;
+      }
+    }
+    fixedPoint_->addSplit(planNodeId, std::move(split));
+    return true;
+  }
   std::vector<ContinuePromise> promises;
   bool added = false;
   bool isTaskRunning;

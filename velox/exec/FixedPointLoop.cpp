@@ -852,9 +852,12 @@ folly::coro::Task<std::vector<RowVectorPtr>> FixedPointLoop::runParallelChain(
         subOptions.nested->peerAddresses.push_back(
             nestedAddress(peer, iteration, planIndexOffset + p));
       }
-      const auto createId =
-          producerLocation(workerAddress(), iteration, planIndexOffset + p)
-              .taskId;
+      // The plans of a chain are joined only by shuffle. A chain of one plan
+      // has no peer reading its output, so its sub-task is internal.
+      const auto createId = plans.size() == 1
+          ? subTaskId()
+          : producerLocation(workerAddress(), iteration, planIndexOffset + p)
+                .taskId;
       // The last plan produces the rows written back to the output state entry;
       // collect them through a consumer.  Earlier plans shuffle to the next via
       // PartitionedOutput and need no consumer.
