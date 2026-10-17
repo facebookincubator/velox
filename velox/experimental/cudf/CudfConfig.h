@@ -65,6 +65,9 @@ struct CudfConfig {
   static constexpr const char* kUcxExchangeLogLevel{"cudf.exchange_log_level"};
   static constexpr const char* kUcxPartitionedOutputBatchRows{
       "cudf.partitioned_output_batch_rows"};
+  /// Query configuration key for selecting UCX exchange compression.
+  static constexpr const char* kUcxExchangeCompression{
+      "cudf.exchange_compression"};
   /// Query session configs for the cuDF Operators.
   static constexpr const char* kCudfTopNBatchSize{"cudf.topk_batch_size"};
 
@@ -120,6 +123,10 @@ struct CudfConfig {
   /// is reached, avoiding pathologically small exchange chunks. Set to 0 to
   /// disable accumulation.
   int64_t partitionedOutputBatchRows{10'000};
+
+  /// Compression mode used by UCX exchange output unless a query overrides it
+  /// with kUcxExchangeCompression.
+  std::string exchangeCompression{"none"};
 
   /// Memory resource for cuDF.
   /// Possible values are (cuda, pool, async, arena, managed, managed_pool).
