@@ -394,21 +394,24 @@ let the limiter recover.</p></td>
 <td><p>The unit completed cleanly; let the limiter recover without feeding its
 latency to the gradient window. In BATCH mode, when
 <code class="docutils literal notranslate"><span class="pre">rpc.congestion.async_growth_max_window</span></code> is set, it also grows the
-driver window additively on completion count and skips training the
-shared service horizon. With the default 0 the window stays pinned
-and the horizon trains as before.</p></td>
+driver window additively on completion count. The shared limiter still
+learns a service horizon for fractional admission pacing. With the
+default 0, overload may shrink the driver window, but clean completions
+do not grow it back.</p></td>
 </tr>
 <tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">kOverloaded</span></code></p></td>
 <td><p>The backend shed load — rate limited, or timed out under pressure.
 Applies multiplicative decrease to both controllers.</p></td>
 </tr>
 <tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">kNonOverloadError</span></code></p></td>
-<td><p>The unit failed without explicit evidence of overload. Neither
-controller reacts because reducing concurrency would not address this
-signal.</p></td>
+<td><p>The unit failed without explicit evidence of overload. The driver
+window does not react because reducing concurrency would not address
+this signal. A completed BATCH flush still reports its units and
+duration to the shared limiter.</p></td>
 </tr>
 <tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">kNone</span></code></p></td>
-<td><p>Nothing to evaluate.</p></td>
+<td><p>Nothing for the driver window to evaluate. A completed BATCH flush still
+participates in shared accounting.</p></td>
 </tr>
 </tbody>
 </table>
@@ -430,12 +433,15 @@ shared decrease for the admission epoch, and releases the shared lease.</p></li>
 <code class="docutils literal notranslate"><span class="pre">kSuccess</span></code> feeds round-trip time to the per-driver window and recovers
 shared admission; <code class="docutils literal notranslate"><span class="pre">kSuccessNoLatency</span></code> recovers shared admission without
 training the gradient, and, when <code class="docutils literal notranslate"><span class="pre">rpc.congestion.async_growth_max_window</span></code>
-is set, also skips shared-horizon training and grows the BATCH driver
-window additively on completion count (with the default 0 the horizon
-trains as before); a recorded canonical overload shrinks the driver window without
-repeating the shared decrease; a function-specific <code class="docutils literal notranslate"><span class="pre">kOverloaded</span></code> verdict
-shrinks both controllers; the other verdicts leave both controllers
-unchanged.</p></li>
+is set, grows the BATCH driver window additively on completion count. The
+shared limiter independently learns the observed service horizon for
+fractional pacing. A recorded canonical overload shrinks the driver window
+without repeating the shared decrease; a function-specific <code class="docutils literal notranslate"><span class="pre">kOverloaded</span></code>
+verdict shrinks both controllers; the other verdicts leave the driver
+window unchanged. Every completed BATCH flush still reports its reserved
+units and observed duration to epoch-guarded shared accounting. After a
+canonical overload, a stale success may update the service horizon but
+cannot recover shared capacity.</p></li>
 </ol>
 </section>
 <section id="retries-and-error-handling">

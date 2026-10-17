@@ -308,10 +308,10 @@ Generic Configuration
      - integer
      - 0
      - Cap for per\-driver BATCH window growth on clean completions that carry no usable latency
-       sample (MetaGen async\-job batches). 0 (default) disables the growth, keeping the legacy
-       pinned start window. Positive values let the window discover capacity additively up to the
-       cap; size at or below the backend's measured concurrency knee (16 is a conservative start).
-       Clamped to [minWindow, maxWindow].
+       sample. 0 (default) disables recovery growth: overload may shrink the window, and clean
+       completions do not grow it back toward the start. Positive values let the window discover
+       capacity additively up to the cap. A positive value below the effective BATCH start window
+       is raised to that start. The congestion max window remains the overall ceiling.
 
 
 Expression Evaluation Configuration
