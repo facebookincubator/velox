@@ -25,6 +25,7 @@
 #include "velox/common/base/Status.h"
 #include "velox/functions/Macros.h"
 #include "velox/functions/lib/ToHex.h"
+#include "velox/functions/sparksql/Pmod.h"
 #include "velox/functions/sparksql/SparkQueryConfig.h"
 
 namespace facebook::velox::functions::sparksql {
@@ -127,39 +128,33 @@ struct RemainderFunction {
   bool ansiEnabled_ = false;
 };
 
+/// Computes primitive PMOD using the query's ANSI mode at initialization.
 template <typename T>
-struct PModIntFunction {
+struct PmodFunction {
   template <typename TInput>
-  FOLLY_ALWAYS_INLINE bool call(TInput& result, const TInput a, const TInput n)
-#if defined(__has_feature)
-#if __has_feature(__address_sanitizer__)
-      __attribute__((__no_sanitize__("signed-integer-overflow")))
-#endif
-#endif
-  {
-    TInput r;
-    bool notNull = RemainderFunction<T>().call(r, a, n);
-    if (!notNull) {
-      return false;
-    }
-
-    result = (r > 0) ? r : (r + n) % n;
-    return true;
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& config,
+      const TInput* /*dividend*/,
+      const TInput* /*divisor*/) {
+    ansiEnabled_ = SparkQueryConfig{config}.ansiEnabled();
   }
-};
 
-template <typename T>
-struct PModFloatFunction {
   template <typename TInput>
   FOLLY_ALWAYS_INLINE bool
-  call(TInput& result, const TInput a, const TInput n) {
-    if (UNLIKELY(n == (TInput)0)) {
+  call(TInput& result, const TInput dividend, const TInput divisor) {
+    if (UNLIKELY(divisor == 0)) {
+      if (ansiEnabled_) {
+        VELOX_USER_FAIL("Division by zero");
+      }
       return false;
     }
-    TInput r = fmod(a, n);
-    result = (r > 0) ? r : fmod(r + n, n);
+    result = computePmod(dividend, divisor);
     return true;
   }
+
+ private:
+  bool ansiEnabled_ = false;
 };
 
 template <typename T>
