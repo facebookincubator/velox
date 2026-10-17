@@ -489,7 +489,7 @@ class AggregationInputSpiller : public SpillerBase {
       const std::vector<SpillSortKey>& sortingKeys,
       const common::SpillConfig* spillConfig,
       exec::SpillStats* spillStats,
-      bool appendFirstSpillFlag = false);
+      bool appendFirstSpillFlag);
 
   void spill();
 

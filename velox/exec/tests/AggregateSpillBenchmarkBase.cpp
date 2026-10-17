@@ -161,7 +161,8 @@ std::unique_ptr<SpillerBase> AggregateSpillBenchmarkBase::makeSpiller() {
                 spillConfig.startPartitionBit + spillConfig.numPartitionBits)},
         sortingKeys,
         &spillConfig,
-        &spillStats_);
+        &spillStats_,
+        false);
   } else {
     VELOX_CHECK_EQ(spillerType_, AggregationOutputSpiller::kType);
     // TODO: Add config flag to control the max spill rows.

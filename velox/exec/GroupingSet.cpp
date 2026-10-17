@@ -28,7 +28,7 @@ constexpr CompareFlags kEqualFlags =
     CompareFlags::equality(CompareFlags::NullHandlingMode::kNullAsValue);
 constexpr const char* kFirstSpillColumnName = "__isFirstSpill";
 
-RowTypePtr aggregationInputSpillType(const RowTypePtr& rowType) {
+RowTypePtr appendFirstSpillColumn(const RowTypePtr& rowType) {
   auto names = rowType->names();
   names.push_back(kFirstSpillColumnName);
   auto types = rowType->children();
@@ -1755,7 +1755,7 @@ AggregationInputSpiller::AggregationInputSpiller(
     bool appendFirstSpillFlag)
     : SpillerBase(
           container,
-          appendFirstSpillFlag ? aggregationInputSpillType(rowType)
+          appendFirstSpillFlag ? appendFirstSpillColumn(rowType)
                                : std::move(rowType),
           hashBitRange,
           sortingKeys,

@@ -672,7 +672,8 @@ class SpillerTest : public exec::test::RowContainerTestBase {
           hashBits_,
           sortingKeys,
           &spillConfig_,
-          spillStats_.wlock().operator->());
+          spillStats_.wlock().operator->(),
+          false);
     } else if (type_ == SpillerType::AGGREGATION_OUTPUT) {
       spiller_ = std::make_unique<AggregationOutputSpiller>(
           rowContainer_.get(),
