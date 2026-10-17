@@ -140,6 +140,36 @@ uint64_t SerializedPageFileWriter::flush() {
   return writtenBytes;
 }
 
+folly::Range<const vector_size_t*> SerializedPageFileWriter::estimateRowSizes(
+    const RowVectorPtr& rows,
+    const folly::Range<IndexRange*>& indices) {
+  vector_size_t numRows = 0;
+  for (const auto& range : indices) {
+    numRows += range.size;
+  }
+  if (numRows > rowSize_.size()) {
+    rowNumbers_.resize(numRows);
+    rowSize_.resize(numRows);
+    sizePointers_.resize(numRows);
+    std::iota(sizePointers_.begin(), sizePointers_.end(), rowSize_.data());
+  }
+
+  vector_size_t rowIndex = 0;
+  for (const auto& range : indices) {
+    for (vector_size_t offset = 0; offset < range.size; ++offset) {
+      rowNumbers_[rowIndex++] = range.begin + offset;
+    }
+  }
+  std::fill(rowSize_.begin(), rowSize_.begin() + numRows, 0);
+  Scratch scratch;
+  serde_->estimateSerializedSize(
+      rows.get(),
+      folly::Range(rowNumbers_.data(), numRows),
+      sizePointers_.data(),
+      scratch);
+  return folly::Range<const vector_size_t*>(rowSize_.data(), numRows);
+}
+
 uint64_t SerializedPageFileWriter::write(
     const RowVectorPtr& rows,
     const folly::Range<IndexRange*>& indices) {
@@ -170,46 +200,20 @@ uint64_t SerializedPageFileWriter::write(
     }
     writtenBytes += flush();
   } else {
-    vector_size_t numRows = 0;
-    for (const auto& range : indices) {
-      numRows += range.size;
-    }
-    if (numRows > rowSize_.size()) {
-      rowNumbers_.resize(numRows);
-      rowSize_.resize(numRows);
-      sizePointers_.resize(numRows);
-      for (vector_size_t i = 0; i < numRows; ++i) {
-        sizePointers_[i] = &rowSize_[i];
-      }
-    }
-
-    vector_size_t rowIndex = 0;
-    for (const auto& range : indices) {
-      for (vector_size_t offset = 0; offset < range.size; ++offset) {
-        rowNumbers_[rowIndex++] = range.begin + offset;
-      }
-    }
-    std::fill(rowSize_.begin(), rowSize_.begin() + numRows, 0);
-    Scratch scratch;
-    serde_->estimateSerializedSize(
-        rows.get(),
-        folly::Range(rowNumbers_.data(), numRows),
-        sizePointers_.data(),
-        scratch);
-
+    const auto rowSizes = estimateRowSizes(rows, indices);
     uint64_t bufferedSize = batch_ == nullptr ? 0 : batch_->size();
-    rowIndex = 0;
+    vector_size_t rowIndex = 0;
     for (const auto& range : indices) {
       vector_size_t chunkBegin = range.begin;
       vector_size_t chunkSize = 0;
       uint64_t chunkBytes = 0;
       if (range.size > 0 && bufferedSize > 0 &&
-          bufferedSize + rowSize_[rowIndex] > writeBufferSize_) {
+          bufferedSize + rowSizes[rowIndex] > writeBufferSize_) {
         writtenBytes += flush();
         bufferedSize = 0;
       }
       for (vector_size_t offset = 0; offset < range.size; ++offset) {
-        const auto rowSize = rowSize_[rowIndex++];
+        const auto rowSize = rowSizes[rowIndex++];
         if (chunkSize > 0 &&
             bufferedSize + chunkBytes + rowSize > writeBufferSize_) {
           append(chunkBegin, chunkSize);

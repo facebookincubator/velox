@@ -34,7 +34,8 @@ using namespace facebook::velox::test;
 using namespace facebook::velox::serializer;
 using namespace facebook::velox::common::testutil;
 
-constexpr uint64_t kLargeTargetFileSize = 1 << 20; // 1MB
+constexpr uint64_t kKB = 1 << 10;
+constexpr uint64_t kMB = 1 << 20;
 
 enum class SerdeType { kPresto, kCompactRow, kUnsafeRow };
 
@@ -129,26 +130,6 @@ class SerializedPageFileTest : public ::testing::TestWithParam<TestParams>,
   common::CompressionKind compressionKind_;
 };
 
-class PageSizeTrackingWriter : public SerializedPageFileWriter {
- public:
-  using SerializedPageFileWriter::SerializedPageFileWriter;
-
-  const std::vector<uint64_t>& pageSizes() const {
-    return pageSizes_;
-  }
-
- protected:
-  void updateWriteStats(
-      uint64_t writtenBytes,
-      uint64_t /* flushTimeNs */,
-      uint64_t /* fileWriteTimeNs */) override {
-    pageSizes_.push_back(writtenBytes);
-  }
-
- private:
-  std::vector<uint64_t> pageSizes_;
-};
-
 TEST_P(SerializedPageFileTest, serializedPageFileBasic) {
   const std::string pathPrefix = getTestFilePath();
   const uint32_t kFileId = 123;
@@ -204,7 +185,7 @@ TEST_P(SerializedPageFileTest, serializedPageFileMultipleWrites) {
 
 TEST_P(SerializedPageFileTest, serializedPageFileWriterBasicOperations) {
   const std::string pathPrefix = getTestFilePath();
-  const uint64_t kTargetFileSize = kLargeTargetFileSize;
+  const uint64_t kTargetFileSize = kMB;
   const uint64_t kWriteBufferSize = 512;
   const uint32_t kRowCount = 100;
 
@@ -241,7 +222,7 @@ TEST_P(SerializedPageFileTest, serializedPageFileWriterBasicOperations) {
 }
 
 TEST_P(SerializedPageFileTest, serializedPageFileWriterMultipleBatches) {
-  const uint64_t kTargetFileSize = 1024; // Increased target size
+  const uint64_t kTargetFileSize = kKB; // Increased target size
   const uint64_t kWriteBufferSize = 512; // Smaller buffer to force more flushes
   const uint32_t kNumWrites = 30; // Fewer writes but larger data
   const uint32_t kRowsPerBatch = 100; // More rows to generate more data
@@ -277,7 +258,7 @@ TEST_P(SerializedPageFileTest, serializedPageFileWriterMultipleBatches) {
 
 TEST_P(SerializedPageFileTest, serializedPageFileWriterFinishMultipleTimes) {
   const std::string pathPrefix = getTestFilePath();
-  const uint64_t kTargetFileSize = kLargeTargetFileSize;
+  const uint64_t kTargetFileSize = kMB;
   const uint64_t kWriteBufferSize = 512;
   const uint32_t kRowCount = 10;
 
@@ -305,9 +286,9 @@ TEST_P(SerializedPageFileTest, serializedPageFileWriterFinishMultipleTimes) {
 }
 
 TEST_P(SerializedPageFileTest, serializedPageRoundTripBasic) {
-  constexpr uint64_t kTargetFileSize = kLargeTargetFileSize;
+  constexpr uint64_t kTargetFileSize = kMB;
   constexpr uint64_t kWriteBufferSize = 512;
-  constexpr uint64_t kReadBufferSize = 1024;
+  constexpr uint64_t kReadBufferSize = kKB;
 
   const std::string pathPrefix = getTestFilePath();
   auto writeOptions = createSerdeOptions();
@@ -356,9 +337,29 @@ TEST_P(SerializedPageFileTest, serializedPageRoundTripBasic) {
       originalVector, fuzzer::mergeRowVectors(readVectors, pool()));
 }
 
+class PageSizeTrackingWriter : public SerializedPageFileWriter {
+ public:
+  using SerializedPageFileWriter::SerializedPageFileWriter;
+
+  const std::vector<uint64_t>& pageSizes() const {
+    return pageSizes_;
+  }
+
+ protected:
+  void updateWriteStats(
+      uint64_t writtenBytes,
+      uint64_t /* flushTimeNs */,
+      uint64_t /* fileWriteTimeNs */) override {
+    pageSizes_.push_back(writtenBytes);
+  }
+
+ private:
+  std::vector<uint64_t> pageSizes_;
+};
+
 TEST_P(SerializedPageFileTest, writeBufferSizeBoundsEachPage) {
-  constexpr uint64_t kTargetFileSize = kLargeTargetFileSize;
-  constexpr uint64_t kWriteBufferSize = 1 << 10;
+  constexpr uint64_t kTargetFileSize = kMB;
+  constexpr uint64_t kWriteBufferSize = kKB;
   constexpr int32_t kNumRows = 100;
 
   std::vector<std::string> values(kNumRows, "small");
@@ -449,7 +450,7 @@ TEST_P(SerializedPageFileTest, roundTripWithComplexTypes) {
     GTEST_SKIP() << "UnsafeRow does not support complex nested types";
   }
 
-  const uint64_t kTargetFileSize = 1024; // Small to encourage multiple files
+  const uint64_t kTargetFileSize = kKB; // Small to encourage multiple files
   const uint64_t kWriteBufferSize = 256;
   const uint64_t kReadBufferSize = 512;
   const uint64_t kNumWrites = 20;
@@ -513,7 +514,7 @@ TEST_P(SerializedPageFileTest, roundTripWithComplexTypes) {
 }
 TEST_P(SerializedPageFileTest, emptyBatches) {
   const std::string pathPrefix = getTestFilePath();
-  const uint64_t kTargetFileSize = 1024;
+  const uint64_t kTargetFileSize = kKB;
   const uint64_t kWriteBufferSize = 512;
 
   SerializedPageFileWriter writer(

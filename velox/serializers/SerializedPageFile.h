@@ -124,8 +124,11 @@ class SerializedPageFileWriter {
 
   virtual ~SerializedPageFileWriter() = default;
 
-  /// Adds 'rows' for the positions in 'indices' into 'this'.
-  /// Returns the size to write.
+  /// Appends the rows selected by 'indices', splitting them into pages based on
+  /// per-row serialized size estimates. Each page stays within
+  /// 'writeBufferSize' unless a single row exceeds the limit. A
+  /// 'writeBufferSize' of 0 flushes after each call. Returns the actual bytes
+  /// written by flushes during this call, excluding data that remains buffered.
   uint64_t write(
       const RowVectorPtr& rows,
       const folly::Range<IndexRange*>& indices);
@@ -173,6 +176,12 @@ class SerializedPageFileWriter {
   // target file size limit, then it first closes the current one and then
   // creates a new one. 'currentFile_' points to the current open file.
   SerializedPageFile* ensureFile();
+
+  // Returns per-row serialized size estimates in the order selected by
+  // 'indices'. The returned range is valid until the next call to this helper.
+  folly::Range<const vector_size_t*> estimateRowSizes(
+      const RowVectorPtr& rows,
+      const folly::Range<IndexRange*>& indices);
 
   const std::string pathPrefix_;
   const uint64_t targetFileSize_;
