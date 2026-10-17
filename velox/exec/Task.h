@@ -409,12 +409,8 @@ class Task : public std::enable_shared_from_this<Task> {
   /// yet.
   uint64_t timeSinceTerminationMs() const;
 
-  /// Returns the number of task output streams. An ordinary task has one per
-  /// output driver; a task running a fixed-point loop has one.
+  /// Returns the number of task output streams, one per output driver.
   uint32_t numOutputDrivers() const {
-    if (fixedPoint_ != nullptr) {
-      return 1;
-    }
     return numDrivers(getOutputPipelineId());
   }
 
@@ -900,10 +896,9 @@ class Task : public std::enable_shared_from_this<Task> {
   /// Returns the list of running tasks from velox runtime.
   static std::vector<std::shared_ptr<Task>> getRunningTasks();
 
-  /// The fixed point running this fragment, or nullptr when it runs as an
-  /// ordinary Driver pipeline.  Test-only: nothing in production reaches past
-  /// the Task API, which already delegates to the loop.
-  FixedPointLoop* testingFixedPoint() const {
+  /// The loop running the FixedPointNode leaf of this task's plan, or nullptr
+  /// when the plan has none.
+  FixedPointLoop* fixedPoint() const {
     return fixedPoint_.get();
   }
 

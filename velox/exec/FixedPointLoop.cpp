@@ -173,21 +173,7 @@ core::FixedPointNodePtr findFixedPointNode(const core::PlanNodePtr& node) {
 } // namespace
 
 // static
-bool FixedPointLoop::claims(
-    const core::PlanFragment& planFragment,
-    const FixedPointOptions* fixedPointOptions) {
-  // A caller can ask for the ordinary Driver pipeline over a plan this would
-  // otherwise claim; that is how this loop runs a sub-task over its own
-  // fragment without recursing.
-  if (fixedPointOptions != nullptr && fixedPointOptions->nested.has_value() &&
-      !fixedPointOptions->nested->dispatch) {
-    return false;
-  }
-  // Any plan containing a FixedPointNode (as its single leaf), including one
-  // with trailing downstream nodes above it.  (When such a loop runs its
-  // trailing sub-task over the same fragment it calls Task::create with
-  // NestedFixedPoint::dispatch=false, so that sub-task is a plain Task whose
-  // FixedPointNode leaf reads the output state -- no recursion.)
+bool FixedPointLoop::claims(const core::PlanFragment& planFragment) {
   return findFixedPointNode(planFragment.planNode) != nullptr;
 }
 
@@ -208,14 +194,11 @@ FixedPointLoop::FixedPointLoop(
       options_.iterationMaxDrivers,
       1,
       "FixedPointOptions::iterationMaxDrivers must be at least 1");
-  // The trailing sub-task reuses this fragment, so each split group would
-  // re-read the whole output state.
+  // Each split group of the owning task's pipeline would re-read the whole
+  // output state.
   VELOX_USER_CHECK(
       !owner_->planFragment().isGroupedExecution(),
       "A fixed point does not support grouped execution");
-  // Trailing nodes are present when the fragment root is not the
-  // FixedPointNode.
-  hasTrailing_ = owner_->planFragment().planNode.get() != node_.get();
   workerIndex_ = owner_->destination();
 
   // One worker per output partition of whichever chain shuffles -- the body,
@@ -235,15 +218,10 @@ FixedPointLoop::FixedPointLoop(
         numWorkers_ - 1);
   }
 
-  // Every id a caller may address a split to.  The fixed point itself takes a
-  // peer worker's remote split; everything else is a split-requiring source in
-  // a plan this loop feeds -- an initial plan's scan or exchange, or the
-  // trailing plan's scan or the exchange an enclosing loop feeds.  The body and
-  // convergence chains wire their own exchanges, so their ids are not here.
-  collectSplitTargets(
-      owner_->planFragment().planNode, node_.get(), trailingSplitSources_);
-
-  splitTargets_ = trailingSplitSources_;
+  // Every id this loop takes splits for.  The fixed point itself takes a peer
+  // worker's remote split; everything else is a split-requiring source in an
+  // initial plan.  The body and convergence chains wire their own exchanges,
+  // so their ids are not here.
   splitTargets_.insert(node_->id());
 
   for (const auto& declaration : node_->stateDeclarations()) {
@@ -282,10 +260,8 @@ void FixedPointLoop::addSplit(
 
   // A RemoteConnectorSplit on the FixedPointNode itself names a peer worker
   // for this loop's shuffle; its per-iteration producer location is derived by
-  // producerLocation.  Every other split is read by a specific plan node --
-  // a TableScan in an initial plan or the trailing plan, or an Exchange in the
-  // trailing plan -- and goes to the sub-task running it, held until that
-  // sub-task exists.
+  // producerLocation.  Every other split is read by a source in an initial plan
+  // and goes to the sub-task running it, held until that sub-task exists.
   if (split.hasConnectorSplit()) {
     if (const auto* remoteSplit =
             split.connectorSplit->as<exec::RemoteConnectorSplit>()) {
@@ -302,13 +278,6 @@ void FixedPointLoop::addSplit(
       "A connector split must be addressed to the plan node that reads it -- "
       "an initial plan's TableScan, say -- not to the fixed point itself, "
       "which cannot tell which source it was meant for");
-
-  // The driver path rejects an id that takes no splits; do the same here rather
-  // than file the split where nothing will read it and return an empty result.
-  VELOX_USER_CHECK(
-      splitTargets_.contains(planNodeId),
-      "Plan node takes no splits: {}",
-      planNodeId);
 
   if (auto it = splitConsumers_.find(planNodeId); it != splitConsumers_.end()) {
     if (auto task = it->second.lock()) {
@@ -336,98 +305,54 @@ void FixedPointLoop::noMoreSplits(const core::PlanNodeId& planNodeId) {
   // The fixed point's own peer splits are captured eagerly in addSplit().
 }
 
-RowVectorPtr FixedPointLoop::next(ContinueFuture* /*future*/) {
-  switch (phase_) {
-    case Phase::kCreated:
-      // Mark failed before rethrowing rather than after: a throw part-way
-      // through leaves the state half-written, and a retried next() must not
-      // re-seed it and rebuild hash tables on top of a half-finished run.
-      try {
-        folly::coro::blocking_wait(run());
-      } catch (...) {
-        phase_ = Phase::kFailed;
-        throw;
-      }
-      break;
-    case Phase::kFinalized:
-      break;
-    case Phase::kFailed:
-      VELOX_FAIL("The fixed point failed on an earlier call and cannot resume");
-    case Phase::kInitialized:
-    case Phase::kIterating:
-      // run() drives these phases synchronously inside next(), and Task rejects
-      // next() on a parallel task, so no caller can observe a mid-run phase.
-      VELOX_UNREACHABLE("Fixed point observed mid-run by next()");
+void FixedPointLoop::runSerially() {
+  if (phase_ == Phase::kFailed) {
+    VELOX_FAIL("The fixed point failed on an earlier call and cannot resume");
   }
-  while (current_ < outputBuffer_.size()) {
-    auto batch = outputBuffer_[current_++];
-    if (batch != nullptr && batch->size() > 0) {
-      return batch;
-    }
+  VELOX_CHECK(
+      phase_ == Phase::kCreated,
+      "runSerially() cannot run a fixed point that has already been driven");
+  try {
+    folly::coro::blocking_wait(run());
+  } catch (...) {
+    // A throw part-way through leaves the state half-written.
+    phase_ = Phase::kFailed;
+    finished_.setValue();
+    throw;
   }
-  return nullptr;
 }
 
 void FixedPointLoop::start(
     uint32_t maxDrivers,
-    uint32_t /*concurrentSplitGroups*/,
-    std::function<void(std::exception_ptr)> onComplete) {
+    std::function<void(std::exception_ptr)> onError) {
   // Task::start() already rejected a serial task before delegating here.
   maxDrivers_ = maxDrivers;
-  // Parallel execution: run the loop asynchronously on the orchestration
-  // executor so start() returns immediately (Task::start's contract), deliver
-  // this worker's shard to the consumer (as a driver pipeline's CallbackSink
-  // would), and drive the task to a terminal state so
-  // owner_->taskCompletionFuture() / owner_->error() behave as for a
-  // driver-based task.  run() is the same coroutine the serial path waits on;
-  // here it suspends while its sub-tasks run on the query executor.
+  // Run the loop asynchronously on the orchestration executor so start()
+  // returns immediately (Task::start's contract).  run() is the same coroutine
+  // runSerially() waits on; here it suspends while its sub-tasks run on the
+  // query executor.
   auto* executor = options_.orchestrationExecutor;
   VELOX_CHECK_NOT_NULL(
       executor,
       "Parallel FixedPointLoop requires "
       "FixedPointOptions::orchestrationExecutor, an executor separate from "
       "the query executor its sub-tasks run on");
-  // The owning task keeps this loop alive for its whole run:
-  // the task owns it, so holding a shared_ptr to the owner is what
-  // shared_from_this() did before this was a Task itself.
   VELOX_USER_CHECK(
       phase_ == Phase::kCreated,
       "start() cannot run a fixed point that has already been driven");
+  // The owning task keeps this loop alive for its whole run.
   auto ownerHandle = owner_->shared_from_this();
-  folly::coro::co_withExecutor(
-      folly::getKeepAliveToken(executor), runAndDeliver())
-      .start([this, ownerHandle, onComplete = std::move(onComplete)](
+  folly::coro::co_withExecutor(folly::getKeepAliveToken(executor), run())
+      .start([this, ownerHandle, onError = std::move(onError)](
                  folly::Try<void>&& result) {
         if (result.hasException()) {
           phase_ = Phase::kFailed;
-          onComplete(result.exception().to_exception_ptr());
-        } else {
-          onComplete(nullptr);
+          // Fail the task before waking its FixedPointNode leaf, so the task
+          // reports the loop's error.
+          onError(result.exception().to_exception_ptr());
+          finished_.setValue();
         }
       });
-}
-
-folly::coro::Task<void> FixedPointLoop::runAndDeliver() {
-  co_await run();
-  auto supplier = owner_->consumerSupplier();
-  Consumer consumer = supplier ? supplier() : nullptr;
-  if (consumer == nullptr) {
-    co_return;
-  }
-  for (const auto& batch : outputBuffer_) {
-    if (batch == nullptr || batch->size() == 0) {
-      continue;
-    }
-    ContinueFuture future = ContinueFuture::makeEmpty();
-    const auto reason = consumer(batch, /*drained=*/false, &future);
-    // Honor back-pressure: a blocked consumer returns a future that resolves
-    // when it can take more (as a Driver would wait on it).
-    if (reason != exec::BlockingReason::kNotBlocked && future.valid()) {
-      co_await std::move(future);
-    }
-  }
-  // Signal end of data, mirroring CallbackSink::close().
-  consumer(nullptr, /*drained=*/false, /*future=*/nullptr);
 }
 
 folly::coro::Task<void> FixedPointLoop::run() {
@@ -460,12 +385,6 @@ folly::coro::Task<void> FixedPointLoop::initialize() {
       phase_ == Phase::kCreated,
       "initialize() must run once, before any other phase");
   const auto start = std::chrono::steady_clock::now();
-
-  // Output batches are copied into a leaf child of the task pool (the task's
-  // own pool is an aggregate pool and cannot allocate directly); it outlives
-  // the loop so the batches streamed by next() stay valid for the task's
-  // lifetime.
-  outputPool_ = owner_->pool()->addLeafChild("fixedpoint.output");
 
   // converged() inspects only this worker's local shard.  With more than one
   // worker, every worker must reach the same verdict on the same iteration or
@@ -500,21 +419,14 @@ folly::coro::Task<void> FixedPointLoop::finalize() {
   VELOX_CHECK(
       phase_ == Phase::kInitialized || phase_ == Phase::kIterating,
       "finalize() must follow initialize()");
-  const auto start = std::chrono::steady_clock::now();
-  // Emit the output.  Without trailing nodes, it is the final contents of the
-  // output state entry (output shaping such as a recursive CTE's UNION ALL is
-  // the plan's responsibility, e.g. accumulating into an append-mode output
-  // entry).  With trailing nodes above the FixedPointNode, run them over that
-  // state and emit their result.
-  if (hasTrailing_) {
-    co_await runTrailingPlan();
-  } else {
-    appendOutput(node_->outputStateEntry());
-  }
-  executionStats_.wlock()->finalizationNanos = elapsedNanos(start);
-  // A next() after this -- including one after a parallel run -- streams the
-  // buffered output instead of running the loop again.
+  // The output is the final contents of the output state entry, which the
+  // owning task's pipeline reads (output shaping such as a recursive CTE's
+  // UNION ALL is the plan's responsibility, e.g. accumulating into an
+  // append-mode output entry).
   phase_ = Phase::kFinalized;
+  succeeded_ = true;
+  finished_.setValue();
+  co_return;
 
   // The state pool is intentionally NOT released here.  A sub-task driver can
   // still be tearing down asynchronously after its
@@ -545,7 +457,7 @@ folly::coro::Task<void> FixedPointLoop::initializeState(
       // shuffle (Exchange); drainPlan feeds the coordinator-assigned source
       // splits and runs it in this worker's execution mode.
       auto [batches, taskStats] = co_await drainPlan(
-          vector->initialPlan(), outputPool_.get(), maxDrivers_);
+          vector->initialPlan(), statePool_.get(), maxDrivers_);
       state_->setVector(vector->name(), batches);
       initializationPlans.push_back({
           .maxDrivers = maxDrivers_,
@@ -693,14 +605,6 @@ folly::coro::Task<FixedPointPlanExecutionStats> FixedPointLoop::buildHashTable(
       .maxDrivers = numDrivers, .taskStats = std::move(taskStats)};
 }
 
-void FixedPointLoop::appendOutput(const std::string& stateEntry) {
-  for (const auto& batch : state_->getVector(stateEntry)) {
-    if (batch != nullptr && batch->size() > 0) {
-      outputBuffer_.push_back(copyRowVector(batch, outputPool_.get()));
-    }
-  }
-}
-
 void FixedPointLoop::routeSplits(
     const exec::TaskPtr& task,
     const core::PlanNodeId& sourceId) {
@@ -730,102 +634,10 @@ FixedPointOptions FixedPointLoop::subTaskOptions() {
   FixedPointOptions subOptions = options_;
   // Rebuilt rather than inherited: the enclosing nesting state describes where
   // *this* loop sits, and handing it down would give the sub-task an address
-  // and a trailing id belonging to the level above.
+  // belonging to the level above.
   subOptions.nested.emplace();
   subOptions.nested->parent = this;
   return subOptions;
-}
-
-folly::coro::Task<void> FixedPointLoop::runTrailingPlan() {
-  // Sub-tasks run over this same fragment, so they must not recurse into
-  // another FixedPointLoop (NestedFixedPoint::dispatch=false); the
-  // FixedPointNode leaf instead compiles to a state-reading operator (see the
-  // operator translator).
-  auto trailingOptions = subTaskOptions();
-  trailingOptions.nested->dispatch = false;
-  // The enclosing loop sets trailingTaskId when this fragment is one of its
-  // shuffle producers: the PartitionedOutput runs here, in the trailing
-  // sub-task, so this is the id its consumers are wired to.
-  std::string trailingTaskId = nested_.trailingTaskId;
-  if (trailingTaskId.empty()) {
-    trailingTaskId = subTaskId();
-  }
-  if (executionMode_ == exec::Task::ExecutionMode::kSerial) {
-    // An empty ConsumerSupplier selects the supplier overload; the trailing
-    // plan's output is drained via next() below.
-    auto task = exec::Task::create(
-        trailingTaskId,
-        owner_->planFragment(),
-        /*destination=*/workerIndex_,
-        owner_->queryCtx(),
-        exec::Task::ExecutionMode::kSerial,
-        exec::ConsumerSupplier{},
-        /*memoryArbitrationPriority=*/0,
-        /*spillDiskOpts=*/std::nullopt,
-        /*onError=*/nullptr,
-        &trailingOptions);
-    SCOPE_FAIL {
-      abortAndWait({task});
-    };
-    // The FixedPointNode is a split source when the body shuffles; in the
-    // trailing sub-task it is read as state, so close its (empty) split source.
-    if (node_->requiresSplits()) {
-      task->noMoreSplits(node_->id());
-    }
-    for (const auto& sourceId : trailingSplitSources_) {
-      routeSplits(task, sourceId);
-    }
-    while (auto batch = task->next()) {
-      outputBuffer_.push_back(copyRowVector(batch, outputPool_.get()));
-    }
-    executionStats_.wlock()->trailingPlan = FixedPointPlanExecutionStats{
-        .maxDrivers = 1,
-        .taskStats = task->taskStats(),
-    };
-    co_return;
-  }
-
-  // The trailing plan re-shuffles; run it in parallel and collect through a
-  // consumer (guarded, as it runs on the sub-task's driver thread).
-  std::mutex mutex;
-  auto consumer =
-      [&](RowVectorPtr batch, bool /*drained*/, ContinueFuture* /*future*/) {
-        if (batch != nullptr && batch->size() > 0) {
-          auto copy = copyRowVector(batch, outputPool_.get());
-          std::lock_guard<std::mutex> l(mutex);
-          outputBuffer_.push_back(std::move(copy));
-        }
-        return exec::BlockingReason::kNotBlocked;
-      };
-  auto task = exec::Task::create(
-      trailingTaskId,
-      owner_->planFragment(),
-      /*destination=*/workerIndex_,
-      owner_->queryCtx(),
-      exec::Task::ExecutionMode::kParallel,
-      ConsumerSupplier{[consumer]() -> Consumer { return consumer; }},
-      /*memoryArbitrationPriority=*/0,
-      /*spillDiskOpts=*/std::nullopt,
-      /*onError=*/nullptr,
-      &trailingOptions);
-  {
-    SCOPE_FAIL {
-      abortAndWait({task});
-    };
-    task->start(iterationDrivers());
-    if (node_->requiresSplits()) {
-      task->noMoreSplits(node_->id());
-    }
-    for (const auto& sourceId : trailingSplitSources_) {
-      routeSplits(task, sourceId);
-    }
-  }
-  std::vector<std::shared_ptr<exec::Task>> tasks{task};
-  co_await awaitTasks(std::move(tasks));
-  executionStats_.wlock()->trailingPlan = FixedPointPlanExecutionStats{
-      .maxDrivers = iterationDrivers(),
-      .taskStats = task->taskStats(),
-  };
 }
 
 folly::coro::Task<FixedPointLoop::DrainedPlan> FixedPointLoop::drainPlan(
@@ -1040,23 +852,9 @@ folly::coro::Task<std::vector<RowVectorPtr>> FixedPointLoop::runParallelChain(
         subOptions.nested->peerAddresses.push_back(
             nestedAddress(peer, iteration, planIndexOffset + p));
       }
-      const auto producerId =
+      const auto createId =
           producerLocation(workerAddress(), iteration, planIndexOffset + p)
               .taskId;
-      auto createId = producerId;
-      if (findFixedPointNode(plans[p]) != nullptr) {
-        // This plan nests a fixed point, so its sub-task is a FixedPointLoop
-        // and the plan's own nodes run in that task's trailing sub-task.  Both
-        // ends of this loop's shuffle therefore have to be redirected there.
-        //
-        // Producing: only the trailing sub-task can carry the id peers read, so
-        // the wrapper takes a derived one -- sharing would collide on the
-        // per-task memory pool.
-        if (plans[p]->is<core::PartitionedOutputNode>()) {
-          createId = fmt::format("{}.fp", producerId);
-          subOptions.nested->trailingTaskId = producerId;
-        }
-      }
       // The last plan produces the rows written back to the output state entry;
       // collect them through a consumer.  Earlier plans shuffle to the next via
       // PartitionedOutput and need no consumer.

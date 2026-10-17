@@ -20,6 +20,7 @@
 #include <folly/container/F14Map.h>
 #include <folly/container/F14Set.h>
 #include <folly/coro/Task.h>
+#include <folly/futures/SharedPromise.h>
 
 #include <optional>
 
@@ -74,28 +75,13 @@ struct NestedFixedPoint {
   /// level appends its own suffix.
   WorkerAddress workerAddress;
   std::vector<WorkerAddress> peerAddresses;
-
-  /// When the sub-task's fragment ends in a PartitionedOutput, the enclosing
-  /// loop's consumers read the id it created the sub-task under -- but the
-  /// PartitionedOutput actually runs in that sub-task's own trailing sub-task,
-  /// so that one must carry the id.  The enclosing loop therefore creates the
-  /// sub-task under a derived id and puts the id peers read here.  Empty means
-  /// the trailing sub-task names itself through subTaskId(), as it does when
-  /// nothing reads it remotely.
-  std::string trailingTaskId;
-
-  /// When false, a fragment containing a FixedPointNode compiles to an ordinary
-  /// Driver pipeline instead of dispatching to a FixedPointLoop -- which is
-  /// what a loop asks for when it runs its trailing sub-task over its own
-  /// fragment and must not recurse into itself.
-  bool dispatch{true};
 };
 
 /// Experimental and subject to change, like FixedPointExecutionStats.
 /// Statistics of one sub-task a fixed point ran.
 struct FixedPointPlanExecutionStats {
   /// Index of the plan in the body plans followed by the convergence plans; 0
-  /// for an initial or trailing plan.
+  /// for an initial plan.
   size_t planIndex{0};
 
   /// Driver limit the sub-task was started with.
@@ -174,12 +160,6 @@ struct FixedPointExecutionStats {
   /// three iterations and the latest one keep their sub-tasks' TaskStats; the
   /// others keep empty TaskStats.
   std::vector<FixedPointIterationExecutionStats> iterations{};
-
-  /// Time to produce the output, including the trailing plan.
-  uint64_t finalizationNanos{0};
-
-  /// The trailing plan, when the fragment has one.
-  std::optional<FixedPointPlanExecutionStats> trailingPlan{};
 };
 
 /// Hooks a coordinator passes to Task::create for a plan containing a
@@ -209,7 +189,7 @@ struct FixedPointOptions {
       producerLocation;
 
   /// Returns the task id for an internal sub-task this worker creates -- an
-  /// initial, convergence, serial-body, or trailing sub-task that no peer reads
+  /// initial, convergence, or serial-body sub-task that no peer reads
   /// -- from the worker's task id and a per-worker counter (for uniqueness).
   /// Required: the fixed point creates no task ids itself.
   std::function<std::string(const std::string& workerTaskId, int64_t counter)>
@@ -224,14 +204,15 @@ struct FixedPointOptions {
 
   /// Runs the iteration loop of a FixedPointLoop started with start().
   /// Required in parallel mode; unused in serial mode, which runs the loop on
-  /// the caller's thread via next().  A loop suspends while its sub-tasks run,
-  /// so one thread serves any number of loops, nested or peers.  It MUST NOT be
-  /// the query executor: on failure, a loop blocks until the sub-tasks it
-  /// aborts finish, and their drivers run on the query executor.
+  /// the caller's thread inside the owning task's first next().  A loop
+  /// suspends while its sub-tasks run, so one thread serves any number of
+  /// loops, nested or peers.  It MUST NOT be the query executor: on failure, a
+  /// loop blocks until the sub-tasks it aborts finish, and their drivers run on
+  /// the query executor.
   folly::Executor* orchestrationExecutor{nullptr};
 
   /// Maximum number of drivers for the plans a parallel loop runs after
-  /// initialization: the body, convergence and trailing plans.  Must not exceed
+  /// initialization: the body and convergence plans.  Must not exceed
   /// the parent task's maxDrivers.  A loop nested in a plan gets that plan's
   /// share of the budget as its own iterationMaxDrivers.  The plans of one body
   /// or convergence chain run at the same time and share this budget, each
@@ -247,40 +228,37 @@ struct FixedPointOptions {
   std::optional<NestedFixedPoint> nested;
 };
 
-/// Runs a plan containing a FixedPointNode as its single leaf, optionally with
-/// trailing (non-fixed-point) nodes above it.  Instead of a Driver pipeline it
-/// orchestrates the iteration's sub-tasks itself -- above the Operator layer,
-/// at task scope (the loop runs once per task, not once per driver) -- which
-/// keeps task orchestration out of operators and bounds the parallelism.
+/// Runs the iterations of the FixedPointNode leaf of its owning task's plan.
+/// Instead of a Driver pipeline it orchestrates the iteration's sub-tasks
+/// itself -- above the Operator layer, at task scope (the loop runs once per
+/// task, not once per driver) -- which keeps task orchestration out of
+/// operators and bounds the parallelism.
 ///
 /// One FixedPointLoop is one worker: its owning task's destination is the
 /// worker / shard index.  A shuffling fixed point runs as N peer tasks; the
 /// coordinator creates them like any partitioned stage (via Task::create) and
 /// wires their shuffle topology with remote splits.  A fixed point that does
 /// not shuffle may also run as several tasks, each an independent loop over
-/// the rows its initial plans read.  Drive via Task::next().
+/// the rows its initial plans read.
 ///
 /// It orchestrates ordinary Tasks rather than being another kind of Task: the
-/// per-iteration sub-tasks it creates are plain driver-based tasks, and it is
-/// composed into its owning Task, which delegates start(), next(),
-/// addSplit() and noMoreSplits() to it.
+/// per-iteration sub-tasks it creates are plain driver-based tasks.  The
+/// owning task runs its own plan as a Driver pipeline, in which the
+/// FixedPointNode leaf waits for the loop to finish and then reads the output
+/// state entry.  The nodes above the leaf, including a PartitionedOutput, run
+/// in that pipeline like in any task.
 ///
 /// What the owning Task's API means for a fixed point:
 ///
-///  - start() / next() are the two ways in, and the execution mode picks which:
-///    parallel runs the loop on the orchestration executor, serial runs it on
-///    the caller's thread inside the first next().  Task checks the mode before
-///    delegating, so the wrong one fails rather than half-runs.
-///  - taskCompletionFuture() resolves when the loop has finished and the task
-///    has reached a terminal state -- on the parallel path when the loop's
-///    completion callback fires, on the serial path when next() has been
-///    drained to nullptr.  error() then carries whatever the loop threw.
-///  - addSplit() takes only the splits the loop itself routes: a peer worker's
-///    remote split on the FixedPointNode, an initial plan's source splits, or
-///    an enclosing loop's trailing Exchange splits.  Any other plan node id is
-///    rejected.
-///  - taskStats() covers none of the work -- see the TODO below.  The
-///    experimental Task::fixedPointExecutionStats() reports it instead.
+///  - start() starts the loop on the orchestration executor alongside the
+///    task's drivers; serial next() runs the loop on the caller's thread before
+///    its first batch.
+///  - addSplit() hands the loop the splits it routes -- a peer worker's remote
+///    split on the FixedPointNode, or an initial plan's source splits -- and
+///    the task's own drivers every other split.
+///  - A failed loop fails the task.
+///  - taskStats() covers the task's own pipeline.  The experimental
+///    Task::fixedPointExecutionStats() reports the loop's sub-tasks.
 ///
 /// TODO: Cancellation does not reach the loop.  Task::requestCancel(),
 /// requestAbort() and requestPause() move the owning task to a terminal state
@@ -295,21 +273,11 @@ struct FixedPointOptions {
 /// output to the enclosing loop or read its state.  Wiring this up requires the
 /// loop to retain handles to the sub-tasks it is running; today they are local
 /// to the phase that creates them.
-///
-/// TODO: taskStats() on the owning task reports no drivers and no operator
-/// stats, because all the work happens in sub-tasks.  Their TaskStats are kept
-/// in FixedPointExecutionStats instead.  Folding them into the owning task's
-/// TaskStats needs a way to merge per-iteration pipelines, whose pipelineStats
-/// are indexed by a pipeline id that is only unique within a single task.
 class FixedPointLoop {
  public:
-  /// Whether 'planFragment' contains a FixedPointNode as its leaf, whether or
-  /// not trailing nodes sit above it.  Task::create consults this to decide
-  /// whether to build a loop for the fragment instead of compiling it into a
-  /// Driver pipeline.
-  static bool claims(
-      const core::PlanFragment& planFragment,
-      const FixedPointOptions* fixedPointOptions);
+  /// Whether 'planFragment' contains a FixedPointNode as its leaf. Task::create
+  /// consults this to decide whether to build a loop for the fragment.
+  static bool claims(const core::PlanFragment& planFragment);
 
   /// 'owner' is the fully constructed Task this loop runs the fragment for; it
   /// owns the loop and so outlives it.
@@ -321,35 +289,42 @@ class FixedPointLoop {
     return owner_;
   }
 
+  /// Whether splits for 'planNodeId' go to this loop: the FixedPointNode, whose
+  /// splits name peer workers, or a source in an initial plan.
+  bool takesSplits(const core::PlanNodeId& planNodeId) const {
+    return splitTargets_.contains(planNodeId);
+  }
+
   /// Captures the coordinator-assigned splits -- a peer worker's task id for
-  /// the body shuffle, or the initial plan's source splits -- rather than
-  /// feeding a Driver pipeline.
+  /// the body shuffle, or the initial plan's source splits.
   void addSplit(const core::PlanNodeId& planNodeId, exec::Split&& split);
 
   void noMoreSplits(const core::PlanNodeId& planNodeId);
 
-  /// Runs the whole fixed point on the first call, then streams this worker's
-  /// shard one batch per call (nullptr when exhausted).
-  RowVectorPtr next(ContinueFuture* future);
+  /// Serial execution: runs the whole fixed point on the caller's thread.
+  void runSerially();
 
-  /// Parallel execution: runs the loop asynchronously on the query executor and
-  /// delivers this worker's shard to the task's consumer, completing via
-  /// taskCompletionFuture() (as a coordinator running the fixed point as a
-  /// parallel stage would).  Use next() for serial, in-process driving.
-  /// 'maxDrivers' is used for the Phase-1 initial plans, which read real
-  /// sources (TableScan/Exchange) that parallelize naturally.  The body,
-  /// convergence and trailing plans run with up to
+  /// Parallel execution: runs the loop asynchronously on the orchestration
+  /// executor.  'maxDrivers' is used for the Phase-1 initial plans, which read
+  /// real sources (TableScan/Exchange) that parallelize naturally.  The body
+  /// and convergence plans run with up to
   /// FixedPointOptions::iterationMaxDrivers drivers, which must not exceed
-  /// 'maxDrivers'.
-  /// 'onComplete' runs on the orchestration executor when the loop finishes:
-  /// with a null exception on success, or the one it failed with.  The owning
-  /// Task uses it to reach a terminal state, which keeps terminate() private to
-  /// Task -- the loop decides when the work is done, not what that means for
-  /// the task's state machine.
+  /// 'maxDrivers'.  'onError' runs on the orchestration executor if the loop
+  /// fails.
   void start(
       uint32_t maxDrivers,
-      uint32_t concurrentSplitGroups,
-      std::function<void(std::exception_ptr)> onComplete);
+      std::function<void(std::exception_ptr)> onError);
+
+  /// Resolves when the loop has finished, successfully or not.
+  ContinueFuture finishedFuture() {
+    return finished_.getSemiFuture();
+  }
+
+  /// True once the loop has finished successfully, so the output state entry
+  /// holds its final contents.
+  bool succeeded() const {
+    return succeeded_;
+  }
 
   /// Number of iterations the loop ran (converged early or hit maxIterations).
   int64_t iterations() const {
@@ -372,8 +347,8 @@ class FixedPointLoop {
   }
 
  private:
-  // The three phases run() composes, in order.  Private: next() and start() are
-  // the only ways to drive a fixed point.
+  // The three phases run() composes, in order.  Private: runSerially() and
+  // start() are the only ways to drive a fixed point.
   //
   // Phase 1: creates the persistent state and seeds each declared entry from
   // its initial plan.
@@ -390,9 +365,8 @@ class FixedPointLoop {
   // convergence sequence produced true.
   folly::coro::Task<bool> converged();
 
-  // Phase 3: materializes the fixed point's output -- the output state entry's
-  // final contents, or the trailing plan run over it -- into the output buffer
-  // that next() streams.
+  // Phase 3: marks the output state entry final and resolves
+  // finishedFuture().
   folly::coro::Task<void> finalize();
 
   // True when the last iteration wrote no rows into the output state entry.
@@ -412,22 +386,9 @@ class FixedPointLoop {
       int32_t iteration,
       size_t planIndex) const;
 
-  // The generic in-Velox driver: composes initialize() + the runIteration() /
-  // converged() loop (bounded by maxIterations) + finalize().  Called by next()
-  // and start().  An engine that wants to own the loop drives the public phase
-  // methods instead.
+  // Composes initialize() + the runIteration() / converged() loop (bounded by
+  // maxIterations) + finalize().  Called by runSerially() and start().
   folly::coro::Task<void> run();
-
-  // Runs the loop, then hands its output to the owner's consumer, honoring
-  // back-pressure.  The parallel counterpart of next().
-  folly::coro::Task<void> runAndDeliver();
-
-  // Runs the trailing (non-fixed-point) nodes -- the plan above the
-  // FixedPointNode -- over the loop's output state, buffering their result. The
-  // FixedPointNode leaf reads the output state entry (via its operator
-  // translator); the sub-task is built without re-dispatching to a
-  // FixedPointLoop.
-  folly::coro::Task<void> runTrailingPlan();
 
   // Gives 'task' the splits held for 'sourceId' and forwards later ones to it
   // as they arrive, through noMoreSplits. A serial loop requires the splits to
@@ -437,7 +398,7 @@ class FixedPointLoop {
   // Options for a sub-task this loop creates: the coordinator's hooks, plus a
   // fresh NestedFixedPoint naming this loop as the parent.  The nesting state
   // is rebuilt per sub-task rather than inherited, so a sub-task never picks up
-  // an address or trailing id belonging to the loop above it.
+  // an address belonging to the loop above it.
   FixedPointOptions subTaskOptions();
 
   // Phase 1: runs each state's initial plan and stores this worker's shard,
@@ -473,10 +434,6 @@ class FixedPointLoop {
   // Driver budget for the plans run after initialization; see
   // FixedPointOptions::iterationMaxDrivers.
   uint32_t iterationDrivers() const;
-
-  // Appends a copy (in outputPool_) of the named Vector state entry to the
-  // output buffer.
-  void appendOutput(const std::string& stateEntry);
 
   // The output of a sub-task drainPlan ran, and the sub-task's statistics.
   struct DrainedPlan {
@@ -514,7 +471,7 @@ class FixedPointLoop {
   void feedInitSplits(const exec::TaskPtr& task, const core::PlanNodePtr& plan);
 
   // Label for an internal sub-task of this worker that no peer addresses (an
-  // initial, convergence, serial-body, last-in-chain, or trailing sub-task).
+  // initial, convergence, serial-body, or last-in-chain sub-task).
   std::string subTaskId();
 
   // This worker's shuffle address, and its peers'.  A top-level worker uses
@@ -554,14 +511,10 @@ class FixedPointLoop {
   // The parent task's maxDrivers (from start()), used for the Phase-1 initial
   // plans -- they read real sources (TableScan / Exchange / upstream) that
   // parallelize naturally -- and as a cap on iterationDrivers().  Serial mode
-  // (next()) is always single-driver, so this stays 1.
+  // (runSerially()) is always single-driver, so this stays 1.
   uint32_t maxDrivers_{1};
 
   core::FixedPointNodePtr node_;
-
-  // True when the plan has trailing nodes above the FixedPointNode (the
-  // fragment root is not the FixedPointNode itself).
-  bool hasTrailing_{false};
 
   int32_t workerIndex_{0};
   int32_t numWorkers_{1};
@@ -576,9 +529,8 @@ class FixedPointLoop {
   std::vector<std::string> peerParentIds_;
 
   // Every other coordinator-assigned split that arrived before the sub-task
-  // reading it started, keyed by the plan node that reads it: a TableScan in an
-  // initial plan or in the trailing plan, or an Exchange in the trailing plan
-  // that an enclosing loop feeds.  Keyed rather than pooled so two initial
+  // reading it started, keyed by the plan node that reads it: a TableScan or
+  // an Exchange in an initial plan.  Keyed rather than pooled so two initial
   // plans that each scan a table receive only their own splits.
   folly::F14FastMap<core::PlanNodeId, std::vector<exec::Split>> nodeSplits_;
 
@@ -595,11 +547,6 @@ class FixedPointLoop {
   std::shared_ptr<memory::MemoryPool> statePool_;
   std::shared_ptr<PersistentState> state_;
 
-  // Leaf pool holding the output batches (outputBuffer_).  The task's own
-  // pool() is an aggregate pool and cannot allocate; this leaf child can, and
-  // lives as long as the task so the streamed batches stay valid.
-  std::shared_ptr<memory::MemoryPool> outputPool_;
-
   int64_t subTaskCounter_{0};
   int64_t iterations_{0};
 
@@ -607,24 +554,22 @@ class FixedPointLoop {
   // executionStats() from any thread.
   folly::Synchronized<FixedPointExecutionStats> executionStats_;
 
-  // Output rows, copied into outputPool_, emitted one batch per next() (or
-  // pushed to the consumer by start()).
-  std::vector<RowVectorPtr> outputBuffer_;
-  size_t current_{0};
+  // Resolved when the loop finishes, successfully or not.
+  folly::SharedPromise<folly::Unit> finished_;
+  std::atomic_bool succeeded_{false};
 
-  // Where the loop is in the phase sequence.  next() reads it to decide whether
-  // to run the loop, drain the buffered output, or refuse; run() checks each
-  // transition, because getting the order wrong is silent -- initialize() twice
-  // re-seeds the state mid-run, and runIteration() first reads state that was
-  // never created.
+  // Where the loop is in the phase sequence.  run() checks each transition,
+  // because getting the order wrong is silent -- initialize() twice re-seeds
+  // the state mid-run, and runIteration() first reads state that was never
+  // created.
   enum class Phase {
-    // Nothing run yet.  next() and start() run the whole loop from here.
+    // Nothing run yet.  runSerially() and start() run the whole loop from here.
     kCreated,
     // initialize() done; runIteration(), converged() or finalize() may follow.
     kInitialized,
     // At least one runIteration() done.
     kIterating,
-    // finalize() done: the output is buffered and next() may drain it.
+    // finalize() done: the output state entry is final.
     kFinalized,
     // A run threw.  The state is half-written, so nothing may run again.
     kFailed,
@@ -641,10 +586,6 @@ class FixedPointLoop {
   // split would be filed under an id nothing ever reads, and the query would
   // return nothing rather than fail.
   folly::F14FastSet<core::PlanNodeId> splitTargets_;
-
-  // The trailing plan's split sources: a TableScan above the fixed point, or
-  // the Exchange an enclosing loop's shuffle feeds.
-  folly::F14FastSet<core::PlanNodeId> trailingSplitSources_;
 };
 
 } // namespace facebook::velox::exec

@@ -184,8 +184,9 @@ void buildSplitStates(
   // node and may use splits for processing.
   if (planNode->sources().empty()) {
     // Not all leaf nodes require splits. ValuesNode doesn't. Check if this plan
-    // node requires splits.
-    if (planNode->requiresSplits()) {
+    // node requires splits.  A FixedPointNode's splits go to its loop, and as
+    // the pipeline's leaf it reads loop state.
+    if (planNode->requiresSplits() && !planNode->is<core::FixedPointNode>()) {
       splitStateMap[planNode->id()].sourceIsTableScan =
           (dynamic_cast<const core::TableScanNode*>(planNode) != nullptr);
     }
@@ -412,13 +413,12 @@ std::shared_ptr<Task> Task::create(
     std::function<void(std::exception_ptr)> onError,
     const FixedPointOptions* fixedPointOptions) {
   VELOX_CHECK_NOT_NULL(planFragment.planNode);
-  // A plan containing a FixedPointNode runs as a schedule of sub-tasks rather
-  // than a Driver pipeline.  The loop is built after the Task so it can hold
-  // its owner -- which outlives it -- and before init(), which skips compiling
-  // drivers when there is one.  Note the owner is constructed but not yet
-  // initialized here: pool() is assigned in init(), below.
-  const bool isFixedPoint =
-      FixedPointLoop::claims(planFragment, fixedPointOptions);
+  // A plan containing a FixedPointNode runs the node's iterations as a
+  // schedule of sub-tasks, and the rest of the plan as this task's Driver
+  // pipeline.  The loop is built after the Task so it can hold its owner --
+  // which outlives it.  Note the owner is constructed but not yet initialized
+  // here: pool() is assigned in init(), below.
+  const bool isFixedPoint = FixedPointLoop::claims(planFragment);
   // An enclosing loop names itself here when it creates a sub-task, so the
   // link is fixed before anything can observe the task.
   FixedPointLoop* const parentFixedPoint =
@@ -564,12 +564,6 @@ void Task::init(std::optional<common::SpillDiskOptions>&& spillDiskOpts) {
   setSpillDiskConfig(std::move(spillDiskOpts));
 
   if (mode_ != Task::ExecutionMode::kSerial) {
-    return;
-  }
-
-  if (fixedPoint_ != nullptr) {
-    // The fixed point runs this plan itself as a schedule of sub-tasks; do not
-    // compile it into a Driver pipeline.
     return;
   }
 
@@ -1034,24 +1028,19 @@ bool Task::supportSerialExecutionMode() const {
 }
 
 RowVectorPtr Task::next(ContinueFuture* future) {
-  if (fixedPoint_ != nullptr) {
+  if (fixedPoint_ != nullptr && !fixedPoint_->succeeded()) {
     // Same invariant as the driver path below: next() is the serial API.
     checkExecutionMode(ExecutionMode::kSerial);
-    RowVectorPtr batch;
+    // The pipeline's FixedPointNode leaf reads the loop's output, so the loop
+    // runs first.
     try {
-      batch = fixedPoint_->next(future);
+      fixedPoint_->runSerially();
     } catch (...) {
-      // No driver reports the failure for a fixed point, so record it here;
-      // state() and error() then read as they would for a driver-based task.
+      // No driver reports the loop's failure, so record it here; state() and
+      // error() then read as they would for a driver-based task.
       setError(std::current_exception());
       throw;
     }
-    if (batch == nullptr) {
-      // Drained.  Nothing else moves the task off kRunning on this path, so
-      // taskCompletionFuture() would never resolve.
-      terminate(TaskState::kFinished);
-    }
-    return batch;
   }
   recordBatchStartTime();
 
@@ -1179,15 +1168,11 @@ void Task::start(uint32_t maxDrivers, uint32_t concurrentSplitGroups) {
     // Same invariant as the driver path below: start() is the parallel API.
     checkExecutionMode(ExecutionMode::kParallel);
     try {
+      // The pipeline's FixedPointNode leaf waits for the loop to finish; the
+      // loop fails the task if it fails.
       fixedPoint_->start(
-          maxDrivers,
-          concurrentSplitGroups,
-          [self = shared_from_this()](std::exception_ptr error) {
-            if (error != nullptr) {
-              self->setError(error);
-            } else {
-              self->terminate(TaskState::kFinished);
-            }
+          maxDrivers, [self = shared_from_this()](std::exception_ptr error) {
+            self->setError(error);
           });
     } catch (...) {
       // The loop rejected the start before it could schedule anything -- a
@@ -1196,7 +1181,6 @@ void Task::start(uint32_t maxDrivers, uint32_t concurrentSplitGroups) {
       setError(std::current_exception());
       throw;
     }
-    return;
   }
   facebook::velox::process::ThreadDebugInfo threadDebugInfo{
       queryCtx()->queryId(), taskId_, nullptr};
@@ -1857,9 +1841,8 @@ bool Task::addSplitWithSequence(
 
 void Task::addSplit(const core::PlanNodeId& planNodeId, exec::Split&& split) {
   RECORD_METRIC_VALUE(kMetricTaskSplitsCount, 1);
-  if (fixedPoint_ != nullptr) {
-    // The loop routes the split to whichever sub-task consumes it; there
-    // is no driver source operator to deliver it to.
+  if (fixedPoint_ != nullptr && fixedPoint_->takesSplits(planNodeId)) {
+    // The loop routes the split to whichever of its sub-tasks consumes it.
     fixedPoint_->addSplit(planNodeId, std::move(split));
     return;
   }
@@ -1987,7 +1970,7 @@ void Task::noMoreSplitsForGroup(
 }
 
 void Task::noMoreSplits(const core::PlanNodeId& planNodeId) {
-  if (fixedPoint_ != nullptr) {
+  if (fixedPoint_ != nullptr && fixedPoint_->takesSplits(planNodeId)) {
     fixedPoint_->noMoreSplits(planNodeId);
     return;
   }
