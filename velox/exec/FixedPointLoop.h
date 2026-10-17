@@ -216,9 +216,9 @@ struct FixedPointOptions {
       subTaskId;
 
   /// Returns the exchange URI of the upstream producer feeding an initial
-  /// plan's Exchange, keyed by that Exchange's plan node id.  Required when an
-  /// initial plan reads its shard through an Exchange (the coordinator launches
-  /// the upstream); unused otherwise.
+  /// plan's Exchange, keyed by that Exchange's plan node id.  Optional: when
+  /// unset, the coordinator instead adds a remote split to the Exchange for
+  /// each upstream task, as it does for an Exchange outside a fixed point.
   std::function<std::string(const core::PlanNodeId& exchangeNodeId)>
       upstreamExchangeUri;
 
@@ -256,7 +256,9 @@ struct FixedPointOptions {
 /// One FixedPointLoop is one worker: its owning task's destination is the
 /// worker / shard index.  A shuffling fixed point runs as N peer tasks; the
 /// coordinator creates them like any partitioned stage (via Task::create) and
-/// wires their shuffle topology with remote splits.  Drive via Task::next().
+/// wires their shuffle topology with remote splits.  A fixed point that does
+/// not shuffle may also run as several tasks, each an independent loop over
+/// the rows its initial plans read.  Drive via Task::next().
 ///
 /// It orchestrates ordinary Tasks rather than being another kind of Task: the
 /// per-iteration sub-tasks it creates are plain driver-based tasks, and it is
@@ -430,9 +432,7 @@ class FixedPointLoop {
   // Gives 'task' the splits held for 'sourceId' and forwards later ones to it
   // as they arrive, through noMoreSplits. A serial loop requires the splits to
   // be complete, since its caller cannot add splits while the loop runs.
-  void routeSplits(
-      const std::shared_ptr<exec::Task>& task,
-      const core::PlanNodeId& sourceId);
+  void routeSplits(const exec::TaskPtr& task, const core::PlanNodeId& sourceId);
 
   // Options for a sub-task this loop creates: the coordinator's hooks, plus a
   // fresh NestedFixedPoint naming this loop as the parent.  The nesting state
@@ -511,9 +511,7 @@ class FixedPointLoop {
   // id);
   // any other split source (e.g. a TableScan) reads the coordinator-assigned
   // source splits.  No-op when the plan has no split source (e.g. Values).
-  void feedInitSplits(
-      const std::shared_ptr<exec::Task>& task,
-      const core::PlanNodePtr& plan);
+  void feedInitSplits(const exec::TaskPtr& task, const core::PlanNodePtr& plan);
 
   // Label for an internal sub-task of this worker that no peer addresses (an
   // initial, convergence, serial-body, last-in-chain, or trailing sub-task).
