@@ -5213,6 +5213,69 @@ TEST_F(WriterTest, vectorizedStatsDropStringMinMaxOverLengthLimit) {
   EXPECT_EQ(nameStats->getMax(), std::nullopt);
 }
 
+TEST_F(WriterTest, ndvStatsWritten) {
+  velox::test::VectorMaker vectorMaker{leafPool_.get()};
+
+  // 1000 rows with 500 distinct values, so NDV is meaningfully below the row
+  // count.
+  constexpr int kSize = 1000;
+  auto vector = vectorMaker.rowVector(
+      {"int_col"},
+      {
+          vectorMaker.flatVector<int64_t>(
+              kSize, [](auto i) { return i % 500; }),
+      });
+
+  auto readColumnStats = [&](bool enableNdvStats) {
+    std::string file;
+    auto writeFile = std::make_unique<velox::InMemoryWriteFile>(&file);
+    nimble::WriterOptions writerOptions{};
+    writerOptions.enableVectorizedStats = true;
+    writerOptions.enableNdvStats = enableNdvStats;
+    nimble::Writer writer(
+        vector->type(), std::move(writeFile), *rootPool_, writerOptions);
+    writer.write(vector);
+    writer.close();
+
+    auto readFile = std::make_shared<velox::InMemoryReadFile>(file);
+    nimble::TabletReader::Options readerOptions =
+        makeTestTabletOptions(leafPool_.get());
+    readerOptions.preloadOptionalSections = {
+        std::string(facebook::nimble::kVectorizedStatsSection)};
+    auto tablet = facebook::nimble::TabletReader::create(
+        readFile, leafPool_.get(), readerOptions);
+    auto statsSection =
+        tablet->loadOptionalSection(readerOptions.preloadOptionalSections[0]);
+    EXPECT_TRUE(statsSection.has_value());
+    auto fileStats = nimble::VectorizedFileStats::deserialize(
+        statsSection->content(), *leafPool_);
+    EXPECT_NE(fileStats, nullptr);
+    auto nimbleType = nimble::convertToNimbleType(*vector->type());
+    return fileStats->toColumnStatistics(vector->type(), nimbleType);
+  };
+
+  // enableNdvStats = true: the int column (col 1) carries a sketch whose
+  // cardinality is within HLL error bounds of the true distinct count (500).
+  {
+    auto columnStats = readColumnStats(/*enableNdvStats=*/true);
+    ASSERT_EQ(columnStats.size(), 2); // root, int
+    ASSERT_TRUE(columnStats[1]->getNdvCardinality().has_value());
+    const auto intCard = columnStats[1]->getNdvCardinality().value();
+    EXPECT_GE(intCard, 450); // 500 +/- 10%
+    EXPECT_LE(intCard, 550);
+    // Root ROW column has no sketch.
+    EXPECT_FALSE(columnStats[0]->getNdvSketch().has_value());
+  }
+
+  // Default-off: no sketch is emitted for any column.
+  {
+    auto columnStats = readColumnStats(/*enableNdvStats=*/false);
+    ASSERT_EQ(columnStats.size(), 2);
+    EXPECT_FALSE(columnStats[0]->getNdvSketch().has_value());
+    EXPECT_FALSE(columnStats[1]->getNdvSketch().has_value());
+  }
+}
+
 struct ChunkFlushPolicyTestCase {
   const size_t batchCount{20};
   const bool enableChunking{true};

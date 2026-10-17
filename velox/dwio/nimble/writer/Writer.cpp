@@ -121,6 +121,7 @@ class WriterContext : public FieldWriterContext {
     stringBufferGrowthPolicy_ = this->options_.makeStringBufferGrowthPolicy();
     ignoreTopLevelNulls_ = options_.ignoreTopLevelNulls;
     disableSharedStringBuffers_ = options_.disableSharedStringBuffers;
+    enableNdvStats_ = options_.enableStatsCollection && options_.enableNdvStats;
     maxFlatMapKeys_ = options_.maxFlatMapKeys;
   }
 

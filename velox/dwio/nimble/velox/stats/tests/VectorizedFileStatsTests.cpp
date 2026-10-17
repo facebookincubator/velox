@@ -18,6 +18,7 @@
 
 #include "velox/common/memory/Memory.h"
 #include "velox/dwio/nimble/common/Buffer.h"
+#include "velox/dwio/nimble/common/tests/GTestUtils.h"
 #include "velox/dwio/nimble/velox/SchemaUtils.h"
 #include "velox/dwio/nimble/velox/stats/ColumnStatistics.h"
 #include "velox/dwio/nimble/velox/stats/VectorizedStatistics.h"
@@ -951,4 +952,143 @@ TEST_F(VectorizedFileStatsTests, schemaBasedRoundTripAllFloatingPointTypes) {
   auto* actualDoubleStat = roundTrippedStats[2]->as<FloatingPointStatistics>();
   ASSERT_NE(actualDoubleStat, nullptr);
   expectFloatingPointStatisticsEqual(doubleStat, *actualDoubleStat);
+}
+
+// Format "golden" round trip for NDV: build an IntegralStatistics carrying a
+// real HLL sketch, serialize the vectorized stats section, deserialize it, and
+// assert the sketch bytes survive verbatim and decode to the same cardinality.
+// Also asserts the NDV_SKETCH stream is sparse: the row (default) column with
+// no sketch round-trips with no sketch.
+TEST_F(VectorizedFileStatsTests, RoundTripNdvStats) {
+  auto schema = velox::ROW(
+      {{"int_col", velox::BIGINT()}, {"string_col", velox::VARCHAR()}});
+  auto nimbleType = convertToNimbleType(*schema);
+
+  // Produce a genuine sketch via the integral collector.
+  IntegralStatisticsCollector intCollector;
+  intCollector.enableHll(leafPool_.get());
+  std::vector<int64_t> intValues;
+  intValues.reserve(700);
+  for (int64_t i = 0; i < 700; ++i) {
+    intValues.push_back(i);
+  }
+  intCollector.addValues(std::span<int64_t>(intValues));
+  const auto& intSketch = intCollector.getStatsView()->getNdvSketch();
+  ASSERT_TRUE(intSketch.has_value());
+
+  // And one for the string column.
+  StringStatisticsCollector strCollector;
+  strCollector.enableHll(leafPool_.get());
+  std::vector<std::string> owner;
+  owner.reserve(250);
+  std::vector<std::string_view> strValues;
+  strValues.reserve(250);
+  for (int64_t i = 0; i < 250; ++i) {
+    owner.push_back("s" + std::to_string(i));
+    strValues.emplace_back(owner.back());
+  }
+  strCollector.addValues(std::span<std::string_view>(strValues));
+  const auto& strSketch = strCollector.getStatsView()->getNdvSketch();
+  ASSERT_TRUE(strSketch.has_value());
+
+  // Schema order: row (default, no sketch), int (sketch), string (sketch).
+  ColumnStatistics rowStat(1000, 0, 20000, 10000);
+  IntegralStatistics intStat(700, 0, 5600, 2800, 0, 699);
+  intStat.setNdvSketch(intSketch);
+  StringStatistics stringStat(250, 0, 1000, 500, "s0", "s99");
+  stringStat.setNdvSketch(strSketch);
+
+  std::vector<ColumnStatistics*> originalStats{&rowStat, &intStat, &stringStat};
+
+  VectorizedFileStats fileStats(originalStats, leafPool_.get());
+  nimble::Buffer buffer(*leafPool_);
+  auto serialized = fileStats.serialize(buffer);
+  ASSERT_FALSE(serialized.empty());
+
+  auto deserialized = VectorizedFileStats::deserialize(serialized, *leafPool_);
+  ASSERT_NE(deserialized, nullptr);
+  auto roundTrippedStats = deserialized->toColumnStatistics(schema, nimbleType);
+  ASSERT_EQ(roundTrippedStats.size(), 3);
+
+  // Row column: sparse NDV stream leaves it with no sketch.
+  EXPECT_FALSE(roundTrippedStats[0]->getNdvSketch().has_value());
+
+  // Integral column: sketch bytes are byte-identical and decode equally.
+  ASSERT_TRUE(roundTrippedStats[1]->getNdvSketch().has_value());
+  EXPECT_EQ(roundTrippedStats[1]->getNdvSketch(), intSketch);
+  ASSERT_TRUE(roundTrippedStats[1]->getNdvCardinality().has_value());
+  EXPECT_EQ(
+      roundTrippedStats[1]->getNdvCardinality(), intStat.getNdvCardinality());
+
+  // String column: same.
+  ASSERT_TRUE(roundTrippedStats[2]->getNdvSketch().has_value());
+  EXPECT_EQ(roundTrippedStats[2]->getNdvSketch(), strSketch);
+  ASSERT_TRUE(roundTrippedStats[2]->getNdvCardinality().has_value());
+  EXPECT_EQ(
+      roundTrippedStats[2]->getNdvCardinality(),
+      stringStat.getNdvCardinality());
+}
+
+// When no column carries a sketch, no NDV_SKETCH stream is emitted and the
+// round trip is byte-stable (verifies the default-off path adds nothing).
+TEST_F(VectorizedFileStatsTests, NoNdvStreamWhenNoSketch) {
+  auto schema = velox::ROW({{"int_col", velox::BIGINT()}});
+  auto nimbleType = convertToNimbleType(*schema);
+
+  ColumnStatistics rowStat(100, 0, 800, 400);
+  IntegralStatistics intStat(100, 0, 800, 400, 0, 99);
+  std::vector<ColumnStatistics*> originalStats{&rowStat, &intStat};
+
+  VectorizedFileStats fileStats(originalStats, leafPool_.get());
+  nimble::Buffer buffer(*leafPool_);
+  auto serialized = fileStats.serialize(buffer);
+
+  auto deserialized = VectorizedFileStats::deserialize(serialized, *leafPool_);
+  ASSERT_NE(deserialized, nullptr);
+  auto roundTrippedStats = deserialized->toColumnStatistics(schema, nimbleType);
+  ASSERT_EQ(roundTrippedStats.size(), 2);
+  EXPECT_FALSE(roundTrippedStats[0]->getNdvSketch().has_value());
+  EXPECT_FALSE(roundTrippedStats[1]->getNdvSketch().has_value());
+  EXPECT_FALSE(roundTrippedStats[1]->getNdvCardinality().has_value());
+}
+
+// The NDV stream is raw bytes so non-Nimble readers can parse it: a uint32
+// row count, then per row a uint32 length (0xFFFFFFFF when absent) and the
+// sketch bytes, all little-endian.
+TEST_F(VectorizedFileStatsTests, NdvStreamLayout) {
+  NdvSketchVectorizedStatistic stat(leafPool_.get());
+  stat.append(std::nullopt);
+  stat.append(std::string_view{"ab"});
+  stat.append(std::string_view{""});
+
+  nimble::Buffer buffer(*leafPool_);
+  const auto serialized = stat.serialize({}, buffer);
+
+  const std::string expected{
+      "\x03\x00\x00\x00"
+      "\xFF\xFF\xFF\xFF"
+      "\x02\x00\x00\x00"
+      "ab"
+      "\x00\x00\x00\x00",
+      18};
+  EXPECT_EQ(serialized, expected);
+
+  NdvSketchVectorizedStatistic roundTripped(leafPool_.get());
+  roundTripped.deserializeFrom(serialized, *leafPool_);
+  EXPECT_EQ(roundTripped.valueAt(0), std::nullopt);
+  EXPECT_EQ(roundTripped.valueAt(1), std::optional<std::string_view>{"ab"});
+  EXPECT_EQ(roundTripped.valueAt(2), std::optional<std::string_view>{""});
+}
+
+TEST_F(VectorizedFileStatsTests, NdvStreamRejectsTruncatedSketch) {
+  // One row whose length says 5 bytes but only 2 follow.
+  const std::string truncated{
+      "\x01\x00\x00\x00"
+      "\x05\x00\x00\x00"
+      "ab",
+      10};
+  NdvSketchVectorizedStatistic stat(leafPool_.get());
+  NIMBLE_ASSERT_FILE_THROW(
+      stat.deserializeFrom(truncated, *leafPool_),
+      "Truncated NDV stream sketch.");
 }

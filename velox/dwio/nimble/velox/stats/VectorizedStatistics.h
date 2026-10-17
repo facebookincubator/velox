@@ -47,6 +47,10 @@ enum class StatStreamType : uint8_t {
   STRING_MAX,
   DEDUPLICATED_VALUE_COUNT,
   DEDUPLICATED_LOGICAL_SIZE,
+  // Per-column serialized HyperLogLog (NDV) sketch. Opaque bytes, indexed by
+  // global column position (like VALUE_COUNT), sparse (absent for columns
+  // without a sketch). Emitted only when NDV stats collection is enabled.
+  NDV_SKETCH,
 };
 
 // The encoding like layout for each type of column stat
@@ -112,11 +116,45 @@ class TypedVectorizedStatistic : public VectorizedStatistic {
   nimble::Vector<T> values_;
 };
 
+// The string specializations copy string bytes into owned buffers so the
+// stored views outlive the caller's data.
+template <>
+void TypedVectorizedStatistic<std::string_view>::append(
+    std::optional<std::string_view> value);
+template <>
+void TypedVectorizedStatistic<std::string_view>::deserializeFrom(
+    std::string_view payload,
+    velox::memory::MemoryPool& pool);
+
 using DefaultVectorizedStatistics = TypedVectorizedStatistic<uint64_t>;
 using IntegralVectorizedStatistics = TypedVectorizedStatistic<int64_t>;
 using FloatingPointVectorizedStatistics = TypedVectorizedStatistic<double>;
 using StringVectorizedStatistics = TypedVectorizedStatistic<std::string_view>;
 using DeduplicatedVectorizedStatistics = TypedVectorizedStatistic<uint64_t>;
+
+/// Holds the NDV_SKETCH stream. The sketches are stored as raw bytes instead of
+/// a Nimble encoding so that readers outside Nimble (e.g. the Java stats
+/// publisher) can extract them without Nimble's decoders. HLL sketches are
+/// already compact, so encoding gains little.
+///
+/// Layout, little-endian: uint32 row count, then per row a uint32 byte length
+/// (kAbsent for a column without a sketch) followed by that many bytes.
+class NdvSketchVectorizedStatistic : public StringVectorizedStatistics {
+ public:
+  /// Length marker for a column that carries no sketch.
+  static constexpr uint32_t kAbsent{0xFFFF'FFFF};
+
+  explicit NdvSketchVectorizedStatistic(velox::memory::MemoryPool* pool)
+      : StringVectorizedStatistics{pool} {}
+
+  std::string_view serialize(
+      const EncodingSelectionPolicyCreator& encodingSelectionPolicyCreator,
+      nimble::Buffer& buffer) override;
+
+  void deserializeFrom(
+      std::string_view payload,
+      velox::memory::MemoryPool& pool) override;
+};
 
 class VectorizedFileStats {
  public:

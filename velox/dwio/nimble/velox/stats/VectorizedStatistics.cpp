@@ -41,7 +41,7 @@ void TypedVectorizedStatistic<T>::append(std::optional<T> value) {
 // The base template would create dangling string_views when passed temporary
 // strings, so we need to copy the string data to a persistent buffer.
 template <>
-inline void TypedVectorizedStatistic<std::string_view>::append(
+void TypedVectorizedStatistic<std::string_view>::append(
     std::optional<std::string_view> value) {
   if (value.has_value()) {
     isValid_.emplace_back(true);
@@ -142,7 +142,7 @@ void TypedVectorizedStatistic<T>::deserializeFrom(
 // Template specialization for string_view to copy string data
 // so it persists after encoding goes out of scope
 template <>
-inline void TypedVectorizedStatistic<std::string_view>::deserializeFrom(
+void TypedVectorizedStatistic<std::string_view>::deserializeFrom(
     std::string_view payload,
     velox::memory::MemoryPool& pool) {
   auto encoding = EncodingFactory().create(
@@ -196,6 +196,55 @@ inline void TypedVectorizedStatistic<std::string_view>::deserializeFrom(
   }
 }
 
+std::string_view NdvSketchVectorizedStatistic::serialize(
+    const EncodingSelectionPolicyCreator& /*encodingSelectionPolicyCreator*/,
+    nimble::Buffer& buffer) {
+  uint64_t totalLength = sizeof(uint32_t) * (1 + isValid_.size());
+  for (const auto& sketch : values_) {
+    totalLength += sketch.size();
+  }
+  auto* writeBuf = buffer.reserve(totalLength);
+  auto* pos = writeBuf;
+  encoding::writeUint32(static_cast<uint32_t>(isValid_.size()), pos);
+  size_t valueIdx = 0;
+  for (size_t i = 0; i < isValid_.size(); ++i) {
+    if (!isValid_[i]) {
+      encoding::writeUint32(kAbsent, pos);
+      continue;
+    }
+    const auto sketch = values_[valueIdx++];
+    NIMBLE_CHECK_LT(sketch.size(), kAbsent);
+    encoding::writeUint32(static_cast<uint32_t>(sketch.size()), pos);
+    encoding::writeBytes(sketch, pos);
+  }
+  NIMBLE_CHECK_EQ(pos - writeBuf, totalLength);
+  return std::string_view{writeBuf, totalLength};
+}
+
+void NdvSketchVectorizedStatistic::deserializeFrom(
+    std::string_view payload,
+    velox::memory::MemoryPool& /*pool*/) {
+  const auto* pos = payload.data();
+  const auto* end = payload.data() + payload.size();
+  const auto remaining = [&]() { return static_cast<size_t>(end - pos); };
+  NIMBLE_CHECK_FILE_LE(
+      sizeof(uint32_t), payload.size(), "Truncated NDV stream.");
+  const auto rowCount = encoding::readUint32(pos);
+  for (uint32_t i = 0; i < rowCount; ++i) {
+    NIMBLE_CHECK_FILE_LE(
+        sizeof(uint32_t), remaining(), "Truncated NDV stream length.");
+    const auto length = encoding::readUint32(pos);
+    if (length == kAbsent) {
+      append(std::nullopt);
+      continue;
+    }
+    NIMBLE_CHECK_FILE_LE(length, remaining(), "Truncated NDV stream sketch.");
+    append(std::string_view{pos, length});
+    pos += length;
+  }
+  NIMBLE_CHECK_FILE_EQ(remaining(), 0, "Trailing bytes in NDV stream.");
+}
+
 /* static */ std::unique_ptr<VectorizedStatistic> VectorizedStatistic::create(
     StatStreamType streamType,
     velox::memory::MemoryPool* pool) {
@@ -225,6 +274,10 @@ inline void TypedVectorizedStatistic<std::string_view>::deserializeFrom(
       stat = std::make_unique<TypedVectorizedStatistic<std::string_view>>(pool);
       break;
     }
+    case StatStreamType::NDV_SKETCH: {
+      stat = std::make_unique<NdvSketchVectorizedStatistic>(pool);
+      break;
+    }
     default:
       return nullptr;
   }
@@ -250,7 +303,16 @@ std::vector<StatStreamType> VectorizedFileStats::collateStatStreamTypes(
     auto statType = stat->getType();
     statTypes_.insert(statType);
   }
-  return getStatStreamTypes();
+  auto statStreamTypes = getStatStreamTypes();
+  // NDV sketches are orthogonal to StatType (any scalar kind may carry one),
+  // so they are collated separately and indexed by global column position.
+  for (const auto& stat : columnStats) {
+    if (stat->getNdvSketch().has_value()) {
+      statStreamTypes.push_back(StatStreamType::NDV_SKETCH);
+      break;
+    }
+  }
+  return statStreamTypes;
 }
 
 std::vector<StatStreamType> VectorizedFileStats::getStatStreamTypes() const {
@@ -340,6 +402,17 @@ void VectorizedFileStats::addColumnStat(ColumnStatistics* stat) {
       ->as<DefaultVectorizedStatistics>()
       ->append(stat->getPhysicalSize());
 
+  // NDV sketch is indexed by global column position, so append once per column
+  // (nullopt when the column has no sketch) to stay aligned with VALUE_COUNT.
+  if (auto ndvStreamIt = statStreams_.find(StatStreamType::NDV_SKETCH);
+      ndvStreamIt != statStreams_.end()) {
+    std::optional<std::string_view> sketch;
+    if (stat->getNdvSketch().has_value()) {
+      sketch = std::string_view{*stat->getNdvSketch()};
+    }
+    ndvStreamIt->second->as<StringVectorizedStatistics>()->append(sketch);
+  }
+
   // Add type-specific stats
   switch (stat->getType()) {
     case StatType::DEFAULT: {
@@ -417,7 +490,7 @@ std::string_view VectorizedFileStats::serialize(nimble::Buffer& buffer) {
   totalLength += sizeof(uint16_t);
 
   // Calculate bit width needed for stat stream types
-  // StatStreamType values are 0-11, so 4 bits is enough
+  // StatStreamType values are 0-12, so 4 bits is enough
   constexpr int kStatStreamTypeBitWidth = 4;
   const auto statStreamCount = static_cast<uint8_t>(statStreams_.size());
 
@@ -543,6 +616,9 @@ VectorizedFileStats::VectorizedFileStats(
         case StatStreamType::DEDUPLICATED_VALUE_COUNT:
         case StatStreamType::DEDUPLICATED_LOGICAL_SIZE:
           statTypes_.insert(StatType::DEDUPLICATED);
+          break;
+        case StatStreamType::NDV_SKETCH:
+          // Orthogonal to StatType; carried directly on ColumnStatistics.
           break;
       }
     }
@@ -700,6 +776,15 @@ void traverseSchema(
   NIMBLE_CHECK(nullCount.has_value());
   NIMBLE_CHECK(logicalSize.has_value());
   NIMBLE_CHECK(physicalSize.has_value());
+  std::optional<std::string> ndvSketch;
+  if (auto ndvStreamIt = statStreams.find(StatStreamType::NDV_SKETCH);
+      ndvStreamIt != statStreams.end()) {
+    if (auto sketch =
+            ndvStreamIt->second->as<StringVectorizedStatistics>()->valueAt(
+                statIdx)) {
+      ndvSketch = std::string{sketch.value()};
+    }
+  }
   switch (schema->kind()) {
     case velox::TypeKind::TINYINT:
     case velox::TypeKind::SMALLINT:
@@ -855,6 +940,12 @@ void traverseSchema(
       NIMBLE_UNSUPPORTED(
           fmt::format("Unsupported schema kind: {}.", schema->kind()));
     }
+  }
+  // Attach the per-column NDV sketch (if any) to this node's own stats. Set
+  // by global position (statIdx), so it lands on the node rather than a child
+  // appended during ROW/ARRAY/MAP recursion above.
+  if (ndvSketch.has_value()) {
+    columnStats[statIdx]->setNdvSketch(std::move(ndvSketch));
   }
 }
 

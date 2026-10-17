@@ -91,6 +91,11 @@ struct WriterOptions {
   /// Enable vectorized stats for applicable schema shapes.
   bool enableVectorizedStats{true};
 
+  /// Enable per-column NDV (distinct value count) statistics via a HyperLogLog
+  /// sketch accumulated during writing and serialized into the vectorized stats
+  /// section. Has no effect unless enableStatsCollection is also true.
+  bool enableNdvStats{false};
+
   /// Longest string min/max, in bytes, kept in vectorized stats. Longer values
   /// are written as absent, matching the DWRF writer's default limit.
   uint32_t vectorizedStatsStringLengthLimit{64};
