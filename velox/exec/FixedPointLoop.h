@@ -203,6 +203,29 @@ struct FixedPointOptions {
   std::function<std::string(const core::PlanNodeId& exchangeNodeId)>
       upstreamExchangeUri;
 
+  /// A verdict plan (ConvergenceConfig::verdict) runs only on worker 0, the
+  /// task whose destination is 0.  Worker 0 reports each iteration's verdict
+  /// through 'publishVerdict', and every other worker of the loop receives it
+  /// through 'awaitVerdict', so all of them stop on the same iteration.  The
+  /// coordinator carries the verdict between workers; a FixedPointLoop has no
+  /// transport of its own.  Both are required for a verdict plan in parallel
+  /// mode.
+  ///
+  /// 'self' is the caller's address.  The coordinator finds worker 0 of the
+  /// caller's loop: the peer whose task has destination 0.  For a nested loop,
+  /// every peer's address is its root task's address extended by the same
+  /// suffix, so worker 0's address is worker 0's root with the caller's
+  /// suffix.
+  std::function<
+      void(const WorkerAddress& self, int32_t iteration, bool converged)>
+      publishVerdict;
+
+  /// Resolves to the verdict worker 0 published for 'iteration', or fails when
+  /// worker 0 fails, which fails the caller's loop.
+  std::function<
+      folly::SemiFuture<bool>(const WorkerAddress& self, int32_t iteration)>
+      awaitVerdict;
+
   /// Runs the iteration loop of a FixedPointLoop started with start().
   /// Required in parallel mode; unused in serial mode, which runs the loop on
   /// the caller's thread inside the owning task's first next().  A loop
@@ -220,8 +243,8 @@ struct FixedPointOptions {
   /// getting at least one driver.  With more than one driver these plans follow
   /// ordinary Velox multi-driver semantics, so an aggregation that must see
   /// every row needs a local exchange in front of it.  The last convergence
-  /// plan always runs single-driver, because it must produce one verdict row
-  /// per worker.  The default of 1 runs all of them single-driver.
+  /// plan always runs single-driver, because it must produce a single verdict
+  /// row.  The default of 1 runs all of them single-driver.
   uint32_t iterationMaxDrivers{1};
 
   /// Set by an enclosing FixedPointLoop on the sub-tasks it creates; left empty
@@ -424,12 +447,15 @@ class FixedPointLoop {
   // iteration.  The plans run concurrently and share iterationDrivers();
   // 'singleDriverLastPlan' keeps the last one at one driver.  Records the run
   // into 'stats'.
+  // 'runLastPlan' false skips the last plan on this worker; the chain's other
+  // plans still run and feed the peers that run it.
   folly::coro::Task<std::vector<RowVectorPtr>> runParallelChain(
       const std::vector<core::PlanNodePtr>& plans,
       size_t planIndexOffset,
       int32_t iteration,
       memory::MemoryPool* pool,
       bool singleDriverLastPlan,
+      bool runLastPlan,
       FixedPointChainExecutionStats& stats);
 
   // Driver budget for the plans run after initialization; see
@@ -516,6 +542,10 @@ class FixedPointLoop {
   uint32_t maxDrivers_{1};
 
   core::FixedPointNodePtr node_;
+
+  // The convergence plans in the order they run: the node's convergence
+  // 'plans', then its 'verdict' plan, when set.
+  std::vector<core::PlanNodePtr> convergencePlans_;
 
   int32_t workerIndex_{0};
   int32_t numWorkers_{1};
