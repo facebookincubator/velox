@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <optional>
 #include <span>
+#include "velox/common/base/SimdUtil.h"
 #include "velox/dwio/nimble/common/Buffer.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/encodings/common/Encoding.h"
@@ -85,8 +86,64 @@ class ConstantEncodingBase
 
   template <typename DecoderVisitor>
   void readWithVisitor(DecoderVisitor& visitor, ReadWithVisitorParams& params) {
+    auto* nulls = visitor.reader().rawNullsInReadRange();
+    if (velox::dwio::common::useFastPath(visitor, nulls)) {
+      detail::readWithVisitorFast(*this, visitor, params, nulls);
+      return;
+    }
     detail::readWithVisitorSlow(
         visitor, params, nullptr, [&] { return value_; });
+  }
+
+  /// Reads the selected rows of a chunk in which every row holds 'value_'. The
+  /// filter is evaluated once and its verdict applies to every selected row, so
+  /// a failing chunk is skipped without touching the rows and a passing chunk
+  /// is filled in bulk. Invoked through 'detail::readWithVisitorFast'.
+  template <bool kScatter, typename V>
+  void bulkScan(
+      V& visitor,
+      vector_size_t /*currentRow*/,
+      const vector_size_t* selectedRows,
+      vector_size_t numSelected,
+      const vector_size_t* scatterRows) {
+    using DataType = typename V::DataType;
+    using ValueType = detail::ValueType<DataType>;
+    constexpr bool kScatterValues = kScatter && !V::kHasFilter && !V::kHasHook;
+    const auto data = detail::castFromPhysicalType<DataType>(value_);
+    bool pass = true;
+    if constexpr (V::kHasFilter) {
+      pass = velox::common::applyFilter(visitor.filter(), data);
+    }
+    const auto numRows = visitor.numRows() - visitor.rowIndex();
+    ValueType* values{nullptr};
+    vector_size_t numHits{0};
+    vector_size_t numValues{0};
+    if (pass) {
+      if constexpr (V::kHasFilter) {
+        const auto* rows = kScatter ? scatterRows : selectedRows;
+        std::copy(rows, rows + numSelected, visitor.outputRows(numSelected));
+        numHits = numSelected;
+      }
+      if constexpr (!V::kFilterOnly) {
+        values = detail::mutableValues<ValueType>(visitor, numRows);
+        // Scattered values also fill the slots of null rows, which the null
+        // bitmap masks.
+        numValues = kScatterValues ? numRows : numSelected;
+        velox::simd::simdFill(
+            values,
+            detail::dataToValue(visitor, data),
+            static_cast<uint32_t>(numValues));
+      }
+    }
+    visitor.setRowIndex(visitor.numRows());
+    if constexpr (V::kHasHook) {
+      if (pass) {
+        NIMBLE_DCHECK_EQ(numValues, numSelected, "");
+        visitor.hook().addValues(scatterRows, values, numSelected);
+      }
+    } else {
+      visitor.addNumValues(V::kFilterOnly ? numHits : numValues);
+    }
   }
 
   bool dictionaryEnabled() const override {
