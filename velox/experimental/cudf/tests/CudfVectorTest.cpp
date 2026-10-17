@@ -14,9 +14,11 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
 #include "velox/common/base/Exceptions.h"
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
 #include <cudf/contiguous_split.hpp>
@@ -227,27 +229,111 @@ TEST_F(CudfVectorTest, rebindOwnedTableDeallocationStream) {
   EXPECT_EQ(resource.lastDeallocationStream(), targetStream.value());
 }
 
+TEST_F(CudfVectorTest, ownedTableDestructionUsesConsumerStream) {
+  TestCudaStream allocationStream;
+  TestCudaStream consumerStream;
+  RecordingAsyncDeviceResource resource;
+
+  auto table = makeTable(
+      allocationStream.view(),
+      rmm::to_device_async_resource_ref_checked(&resource));
+  allocationStream.view().sync();
+
+  // The table's buffers were allocated on allocationStream, but downstream
+  // operators read the vector on consumerStream. Dropping the vector must
+  // order the free after that work.
+  auto vector = std::make_shared<CudfVector>(
+      pool_.get(),
+      ROW({"c0"}, {INTEGER()}),
+      table->num_rows(),
+      std::move(table),
+      consumerStream.view());
+  resource.reset();
+
+  vector.reset();
+
+  EXPECT_GT(resource.deallocationCount(), 0);
+  EXPECT_EQ(resource.lastDeallocationStream(), consumerStream.value());
+}
+
+TEST_F(CudfVectorTest, packedTableDestructionUsesConsumerStream) {
+  TestCudaStream allocationStream;
+  TestCudaStream consumerStream;
+  RecordingAsyncDeviceResource resource;
+  auto packedTable = makePackedTable(allocationStream.view(), resource);
+
+  // Model the intra-node UCX path: the producer allocated the packed buffer on
+  // its own stream, and the consumer wraps it with a different stream on which
+  // downstream operators read it. Dropping the vector must order the free after
+  // that work.
+  auto vector = std::make_shared<CudfVector>(
+      pool_.get(),
+      ROW({"c0"}, {INTEGER()}),
+      packedTable->table.num_rows(),
+      std::move(packedTable),
+      consumerStream.view());
+  resource.reset();
+
+  vector.reset();
+
+  EXPECT_EQ(resource.deallocationCount(), 1);
+  EXPECT_EQ(resource.lastDeallocationStream(), consumerStream.value());
+}
+
 TEST_F(CudfVectorTest, rebindPackedTableDeallocationStream) {
   TestCudaStream allocationStream;
   TestCudaStream targetStream;
   RecordingAsyncDeviceResource resource;
   auto packedTable = makePackedTable(allocationStream.view(), resource);
 
-  // Model the intra-node UCX path: the packed buffer was allocated on
-  // allocationStream, but downstream work is associated with targetStream.
-  // The CudfVector logical stream is already targetStream, but the packed
-  // buffer's deallocation stream is still allocationStream. rebindStream must
-  // update the packed buffer even when stream_ already matches targetStream.
+  // Rebinding after construction must move the packed buffer's deallocation
+  // to the new consumer stream.
   auto vector = std::make_shared<CudfVector>(
       pool_.get(),
       ROW({"c0"}, {INTEGER()}),
       packedTable->table.num_rows(),
       std::move(packedTable),
-      targetStream.view());
+      allocationStream.view());
   resource.reset();
 
   ASSERT_TRUE(vector->rebindStream(targetStream.view()));
+  EXPECT_EQ(vector->stream().get(), targetStream.value());
   vector.reset();
+
+  EXPECT_EQ(resource.deallocationCount(), 1);
+  EXPECT_EQ(resource.lastDeallocationStream(), targetStream.value());
+}
+
+TEST_F(CudfVectorTest, orderDeallocationsRejectsReleasedInput) {
+  TestCudaStream allocationStream;
+  TestCudaStream targetStream;
+  RecordingAsyncDeviceResource resource;
+  auto mr = rmm::to_device_async_resource_ref_checked(&resource);
+
+  auto makeVector = [&]() {
+    auto table = makeTable(allocationStream.view(), mr);
+    return std::make_shared<CudfVector>(
+        pool_.get(),
+        ROW({"c0"}, {INTEGER()}),
+        table->num_rows(),
+        std::move(table),
+        allocationStream.view());
+  };
+  auto released = makeVector();
+  auto retained = makeVector();
+  allocationStream.view().sync();
+  auto releasedTable = released->release();
+  resource.reset();
+
+  // The released input comes first, so the check must not skip rebinding the
+  // inputs after it.
+  std::vector<CudfVectorPtr> inputs{released, retained};
+  VELOX_ASSERT_THROW(
+      orderCudfVectorDeallocationsAfterStream(inputs, targetStream.view()),
+      "Cannot rebind a released CudfVector");
+
+  inputs.clear();
+  retained.reset();
 
   EXPECT_GT(resource.deallocationCount(), 0);
   EXPECT_EQ(resource.lastDeallocationStream(), targetStream.value());
@@ -277,6 +363,41 @@ TEST_F(CudfVectorTest, packedTableReleaseUsesMaterializationStream) {
   targetStream.view().sync();
   EXPECT_EQ(materialized->num_columns(), 1);
   EXPECT_EQ(materialized->num_rows(), 4);
+}
+
+TEST_F(CudfVectorTest, ownedTableRejectsUseAfterRelease) {
+  TestCudaStream stream;
+  auto table =
+      makeTable(stream.view(), cudf::get_current_device_resource_ref());
+  stream.view().sync();
+  CudfVector vector(
+      pool_.get(),
+      ROW({"c0"}, {INTEGER()}),
+      table->num_rows(),
+      std::move(table),
+      stream.view());
+
+  auto released = vector.release();
+
+  VELOX_ASSERT_THROW(vector.release(), "CudfVector was already released");
+  VELOX_ASSERT_THROW(vector.getTableView(), "CudfVector was already released");
+}
+
+TEST_F(CudfVectorTest, packedTableRejectsUseAfterRelease) {
+  TestCudaStream stream;
+  RecordingAsyncDeviceResource resource;
+  auto packedTable = makePackedTable(stream.view(), resource);
+  CudfVector vector(
+      pool_.get(),
+      ROW({"c0"}, {INTEGER()}),
+      packedTable->table.num_rows(),
+      std::move(packedTable),
+      stream.view());
+
+  auto materialized = vector.release();
+
+  VELOX_ASSERT_THROW(vector.release(), "CudfVector was already released");
+  VELOX_ASSERT_THROW(vector.getTableView(), "CudfVector was already released");
 }
 
 } // namespace
