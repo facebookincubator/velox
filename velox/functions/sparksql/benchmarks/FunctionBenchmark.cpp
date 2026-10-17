@@ -17,8 +17,9 @@
 #include <folly/Benchmark.h>
 #include <folly/init/Init.h>
 #include <functions/FunctionRegistry.h>
+#include <iostream>
 
-#include "velox/benchmarks/ExpressionBenchmarkBuilder.h"
+#include "velox/functions/lib/benchmarks/TrimBenchmark.h"
 #include "velox/functions/sparksql/registration/Register.h"
 
 using namespace facebook::velox;
@@ -47,6 +48,8 @@ BENCHMARK(get_function_signatures_1000) {
 int main(int argc, char** argv) {
   folly::Init init(&argc, &argv);
   memory::MemoryManager::initialize(memory::MemoryManager::Options{});
+  FunctionBenchmark benchmark;
+  functions::test::addTrimBenchmarks(__FILE__, benchmark, "spark");
   folly::runBenchmarks();
   return 0;
 }
