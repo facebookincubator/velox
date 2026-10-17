@@ -243,7 +243,7 @@ class IcebergSplitReader : public FileSplitReader {
   // Resolved once per split in prepareSplit() from 'readerOutputType_', which
   // mirrors the Iceberg column assignments, so next() pays nothing for tables
   // without a geometry column. The Iceberg connector is the sole owner of the
-  // WKB -> internal-geometry conversion; see IcebergGeometryConverter.h.
+  // WKB -> internal-geometry conversion; see IcebergGeospatialConverter.h.
   std::vector<column_index_t> geospatialOutputChannels_;
   // Whether the reader appends a row-number column, the source of the file
   // positions for _row_id and $target_table_row_id.

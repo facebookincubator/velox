@@ -109,7 +109,7 @@ class EqualityDeleteFileReader {
       const RowVectorPtr& row) const;
 
   // Re-encodes any geometry or geography equality-delete column of
-  // 'deleteRows' from the file's ISO WKB into Velox's internal geometry
+  // 'deleteRows' from the file's ISO WKB into Velox's internal geospatial
   // encoding, so the delete keys hash in the same logical encoding as the
   // already-converted base rows they are probed with. No-op when no equality
   // column is geospatial.

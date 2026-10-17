@@ -15,7 +15,7 @@
  */
 #pragma once
 
-#include <string>
+#include <string_view>
 
 #include "velox/functions/prestosql/types/GeometryType.h"
 #include "velox/functions/prestosql/types/SphericalGeographyType.h"
@@ -56,16 +56,10 @@
 ///   * Gluten/Spark Parquet reads are byte-for-byte unaffected.
 namespace facebook::velox::connector::hive::iceberg {
 
-/// True when 'type' is an Iceberg geospatial type, i.e. GEOMETRY() or
-/// SPHERICAL_GEOGRAPHY().
-inline bool isGeospatialType(const TypePtr& type) {
-  return isGeometryType(type) || isSphericalGeographyType(type);
-}
-
-/// True when 'type' is a geospatial type or transitively contains one, i.e.
-/// when the file bytes of a column of this type are, somewhere, WKB. Cheap and
-/// used to decide, once per split, whether any conversion work is needed at
-/// all.
+/// True when 'type' is GEOMETRY() or SPHERICAL_GEOGRAPHY(), or transitively
+/// contains one, i.e. when the file bytes of a column of this type are,
+/// somewhere, WKB. Cheap and used to decide, once per split, whether any
+/// conversion work is needed at all.
 ///
 /// Defined inline here rather than in IcebergGeospatialConverter.cpp on
 /// purpose: that translation unit is only compiled when VELOX_ENABLE_GEO is ON
@@ -78,10 +72,10 @@ inline bool isGeospatialType(const TypePtr& type) {
 /// VELOX_ENABLE_GEO=OFF build. The function is a pure type predicate with no
 /// GEOS dependency, so keeping it in the header costs nothing.
 inline bool containsGeospatial(const TypePtr& type) {
-  if (isGeospatialType(type)) {
+  if (isGeometryType(type) || isSphericalGeographyType(type)) {
     return true;
   }
-  for (auto i = 0; i < type->size(); ++i) {
+  for (uint32_t i = 0; i < type->size(); ++i) {
     if (containsGeospatial(type->childAt(i))) {
       return true;
     }
@@ -137,7 +131,7 @@ VectorPtr convertIcebergGeospatial(
     const TypePtr& targetType,
     const SelectivityVector& rows,
     memory::MemoryPool* pool,
-    const std::string& columnPath);
+    std::string_view columnPath);
 
 /// Convenience overload for the table-scan case, where every position of
 /// 'input' is live.
@@ -145,6 +139,6 @@ VectorPtr convertIcebergGeospatial(
     const VectorPtr& input,
     const TypePtr& targetType,
     memory::MemoryPool* pool,
-    const std::string& columnPath);
+    std::string_view columnPath);
 
 } // namespace facebook::velox::connector::hive::iceberg

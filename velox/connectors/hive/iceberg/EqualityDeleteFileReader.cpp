@@ -168,9 +168,9 @@ EqualityDeleteFileReader::EqualityDeleteFileReader(
   // Iceberg geometry and geography support in this connector is Parquet-only,
   // and an equality delete file carries its own format independent of the base
   // data file. The WKB re-encoding below is format-agnostic, but no non-Parquet
-  // geometry fixture exists to verify it against, so refuse rather than convert
-  // values from an unverified path. This mirrors the base-file check in
-  // IcebergSplitReader::prepareSplit().
+  // geometry or geography fixture exists to verify it against, so refuse rather
+  // than convert values from an unverified path. This mirrors the base-file
+  // check in IcebergSplitReader::prepareSplit().
   for (size_t i = 0; i < equalityColumnTypes_.size(); ++i) {
     if (containsGeospatial(equalityColumnTypes_[i])) {
       VELOX_USER_CHECK_EQ(
@@ -276,10 +276,10 @@ EqualityDeleteFileReader::EqualityDeleteFileReader(
     // A geometry or geography equality-delete column arrives from the delete
     // file as the ISO WKB the Iceberg spec mandates, but the base rows this set
     // is probed with have already been re-encoded into Velox's internal
-    // geometry encoding by IcebergSplitReader. Hashing the two representations
-    // would never collide, so geometry equality deletes would silently never
-    // match. Re-encode the delete keys with the same converter the base path
-    // uses, so both sides hash the same logical encoding.
+    // geometry or geography encoding by IcebergSplitReader. Hashing the two
+    // representations would never collide, so geometry equality deletes would
+    // silently never match. Re-encode the delete keys with the same converter
+    // the base path uses, so both sides hash the same logical encoding.
     convertGeospatialColumns(rowOutput);
 
     size_t batchIndex = deleteRows_.size();

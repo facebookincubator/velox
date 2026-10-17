@@ -25,6 +25,7 @@
 #define USE_UNSTABLE_GEOS_CPP_API 1
 #include <geos/geom/CoordinateFilter.h>
 #include <geos/io/WKBReader.h>
+#include <geos/util/GEOSException.h>
 
 #include "velox/common/geospatial/GeometrySerde.h"
 #include "velox/vector/ComplexVector.h"
@@ -42,6 +43,12 @@ struct GeospatialKind {
   // Whether coordinates must be WGS84 longitude/latitude.
   bool sphericalCoordinates;
 };
+
+// True when 'type' is GEOMETRY() or SPHERICAL_GEOGRAPHY() itself, i.e. a leaf
+// whose file bytes are WKB.
+bool isGeospatialType(const TypePtr& type) {
+  return isGeometryType(type) || isSphericalGeographyType(type);
+}
 
 constexpr GeospatialKind kGeometryKind{"geometry", "GEOMETRY", false};
 constexpr GeospatialKind kGeographyKind{
@@ -126,7 +133,7 @@ class WkbHeaderValidator {
   WkbHeaderValidator(
       StringView wkb,
       const GeospatialKind& kind,
-      const std::string& columnPath)
+      std::string_view columnPath)
       : wkb_{wkb}, kind_{kind}, columnPath_{columnPath} {}
 
   void validate() {
@@ -284,17 +291,18 @@ class WkbHeaderValidator {
   // forms. A member copy owns its inline bytes for the validator's lifetime.
   const StringView wkb_;
   const GeospatialKind& kind_;
-  const std::string& columnPath_;
+  std::string_view columnPath_;
   uint64_t position_{0};
 };
 
-// Rejects payloads that Velox's two-dimensional, SRID-less GEOMETRY cannot
-// represent faithfully, rather than silently dropping dimensions. Every nested
-// header is checked, not just the outermost one; see WkbHeaderValidator.
+// Rejects payloads that Velox's two-dimensional, SRID-less GEOMETRY or
+// SPHERICAL_GEOGRAPHY cannot represent faithfully, rather than silently
+// dropping dimensions. Every nested header is checked, not just the outermost
+// one; see WkbHeaderValidator.
 void validateIsoWkb(
     StringView wkb,
     const GeospatialKind& kind,
-    const std::string& columnPath) {
+    std::string_view columnPath) {
   VELOX_USER_CHECK_GE(
       wkb.size(),
       kWkbHeaderLength,
@@ -313,7 +321,7 @@ void validateIsoWkb(
 // empty point, which WKB encodes as NaN ordinates, has no coordinates to visit.
 class SphericalCoordinateValidator : public geos::geom::CoordinateFilter {
  public:
-  explicit SphericalCoordinateValidator(const std::string& columnPath)
+  explicit SphericalCoordinateValidator(std::string_view columnPath)
       : columnPath_{columnPath} {}
 
   void filter_ro(const geos::geom::Coordinate* coordinate) override {
@@ -341,7 +349,7 @@ class SphericalCoordinateValidator : public geos::geom::CoordinateFilter {
     return value >= min && value <= max;
   }
 
-  const std::string& columnPath_;
+  std::string_view columnPath_;
 };
 
 // Parses one WKB value and appends Velox's internal geometry encoding to
@@ -351,19 +359,22 @@ void wkbToVeloxGeometry(
     geos::io::WKBReader& wkbReader,
     std::string& out,
     const GeospatialKind& kind,
-    const std::string& columnPath) {
+    std::string_view columnPath) {
   validateIsoWkb(wkb, kind, columnPath);
   std::unique_ptr<geos::geom::Geometry> geometry;
   try {
     geometry = wkbReader.read(
         reinterpret_cast<const unsigned char*>(wkb.data()), wkb.size());
-  } catch (const std::exception& e) {
+  } catch (const geos::util::GEOSException& e) {
+    // Only a GEOS parse failure means the payload is invalid. Anything else,
+    // e.g. std::bad_alloc, is not the payload's fault and must propagate as is.
     VELOX_USER_FAIL(
         "Invalid well-known binary (WKB) in Iceberg {} column '{}': {}",
         kind.columnKind,
         columnPath,
         e.what());
   }
+  VELOX_CHECK_NOT_NULL(geometry);
   // Z and M are already rejected by validateIsoWkb(), so only the ranges of
   // Presto's to_spherical_geography remain to be checked. Its geometry kind
   // check needs no counterpart: every kind WKB can encode passes it.
@@ -386,7 +397,7 @@ VectorPtr convertGeospatialLeaf(
     const TypePtr& targetType,
     const SelectivityVector& rows,
     memory::MemoryPool* pool,
-    const std::string& columnPath) {
+    std::string_view columnPath) {
   const auto& kind =
       isSphericalGeographyType(targetType) ? kGeographyKind : kGeometryKind;
   const auto size = input->size();
@@ -473,7 +484,7 @@ VectorPtr convertIcebergGeospatial(
     const TypePtr& targetType,
     const SelectivityVector& rows,
     memory::MemoryPool* pool,
-    const std::string& columnPath) {
+    std::string_view columnPath) {
   VELOX_CHECK_NOT_NULL(input);
   VELOX_CHECK(containsGeospatial(targetType));
 
@@ -545,7 +556,7 @@ VectorPtr convertIcebergGeospatial(
           columnPath);
       const auto& rowType = targetType->asRow();
       std::vector<VectorPtr> children = row->children();
-      for (auto i = 0; i < rowType.size(); ++i) {
+      for (uint32_t i = 0; i < rowType.size(); ++i) {
         if (containsGeospatial(rowType.childAt(i))) {
           // A row's children are positionally aligned with the row itself, so
           // the live rows carry over unchanged.
@@ -635,7 +646,7 @@ VectorPtr convertIcebergGeospatial(
     const VectorPtr& input,
     const TypePtr& targetType,
     memory::MemoryPool* pool,
-    const std::string& columnPath) {
+    std::string_view columnPath) {
   SelectivityVector allRows(input->size());
   return convertIcebergGeospatial(input, targetType, allRows, pool, columnPath);
 }
