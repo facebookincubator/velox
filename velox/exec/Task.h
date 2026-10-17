@@ -1556,6 +1556,11 @@ class Task : public std::enable_shared_from_this<Task> {
   // nodes that expect splits.
   std::unordered_map<core::PlanNodeId, SplitsState> splitsStates_;
 
+  // The highest sequence id of the splits passed to 'fixedPoint_', by node,
+  // for the nodes it takes splits for. Plays the role of
+  // SplitsState::maxSequenceId for those nodes.
+  std::unordered_map<core::PlanNodeId, long> fixedPointMaxSequenceIds_;
+
   // Promises that are fulfilled when the task is completed (terminated).
   std::vector<ContinuePromise> taskCompletionPromises_;
 

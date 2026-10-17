@@ -189,8 +189,9 @@ struct FixedPointOptions {
       producerLocation;
 
   /// Returns the task id for an internal sub-task this worker creates -- an
-  /// initial, convergence, or serial-body sub-task that no peer reads
-  /// -- from the worker's task id and a per-worker counter (for uniqueness).
+  /// initial, convergence, serial-body, or one-plan parallel-body sub-task
+  /// that no peer reads -- from the worker's task id and a per-worker counter
+  /// (for uniqueness).
   /// Required: the fixed point creates no task ids itself.
   std::function<std::string(const std::string& workerTaskId, int64_t counter)>
       subTaskId;
