@@ -77,6 +77,7 @@ option(
   "Enable Velox tests. This will enable all other build options automatically."
   ON
 )
+option(VELOX_BUILD_STATUS_TEST "Build standalone status tests without the full test suite." OFF)
 option(
   VELOX_BUILD_MINIMAL
   "Build a minimal set of components only. This will override other build options."
@@ -412,8 +413,7 @@ endif()
 # Required so velox code can be used in a dynamic library
 set(CMAKE_POSITION_INDEPENDENT_CODE TRUE)
 
-# For C++20 support we need GNU GCC11 (or later versions) or Clang/AppleClang 15
-# (or later versions) to get support for the used features.
+# C++20 requires GCC 11+, Clang/AppleClang 15+, or MSVC 19.30+.
 if(
   NOT
     (
@@ -429,6 +429,11 @@ if(
           )
           AND CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 15
         )
+      OR
+        (
+          CMAKE_CXX_COMPILER_ID STREQUAL "MSVC"
+          AND CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 19.30
+        )
     )
 )
   message(
@@ -437,24 +442,29 @@ if(
   )
 endif()
 
-execute_process(
-  COMMAND
-    bash -c
-    "( source ${CMAKE_CURRENT_SOURCE_DIR}/scripts/setup-helper-functions.sh && echo -n $(get_cxx_flags $ENV{CPU_TARGET}))"
-  OUTPUT_VARIABLE SCRIPT_CXX_FLAGS
-  RESULT_VARIABLE COMMAND_STATUS
-)
+if(NOT MSVC)
+  execute_process(
+    COMMAND
+      bash -c
+      "( source ${CMAKE_CURRENT_SOURCE_DIR}/scripts/setup-helper-functions.sh && echo -n $(get_cxx_flags $ENV{CPU_TARGET}))"
+    OUTPUT_VARIABLE SCRIPT_CXX_FLAGS
+    RESULT_VARIABLE COMMAND_STATUS
+  )
 
-if(COMMAND_STATUS EQUAL "1")
-  message(FATAL_ERROR "Unable to determine compiler flags!")
+  if(COMMAND_STATUS EQUAL "1")
+    message(FATAL_ERROR "Unable to determine compiler flags!")
+  endif()
+  message("Setting CMAKE_CXX_FLAGS=${SCRIPT_CXX_FLAGS}")
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${SCRIPT_CXX_FLAGS}")
 endif()
-message("Setting CMAKE_CXX_FLAGS=${SCRIPT_CXX_FLAGS}")
+if(WIN32)
+  add_compile_definitions(GLOG_NO_ABBREVIATED_SEVERITIES NOMINMAX)
+endif()
 
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${SCRIPT_CXX_FLAGS}")
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DUSE_VELOX_COMMON_BASE")
 
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DHAS_UNCAUGHT_EXCEPTIONS")
-if(${CMAKE_SYSTEM_PROCESSOR} MATCHES "aarch64")
+if(${CMAKE_SYSTEM_PROCESSOR} MATCHES "aarch64" AND NOT MSVC)
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsigned-char")
 endif()
 
@@ -471,7 +481,10 @@ if("${MAX_LINK_JOBS}")
   set(CMAKE_JOB_POOL_LINK link_job_pool)
 endif()
 
-if(ENABLE_ALL_WARNINGS)
+if(ENABLE_ALL_WARNINGS AND MSVC)
+  string(APPEND CMAKE_CXX_FLAGS " /W4")
+endif()
+if(ENABLE_ALL_WARNINGS AND NOT MSVC)
   if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     set(
       KNOWN_COMPILER_SPECIFIC_WARNINGS
@@ -830,7 +843,7 @@ find_package(double-conversion 3.1.5 REQUIRED)
 include_directories(SYSTEM velox)
 include_directories(SYSTEM velox/external)
 
-if(NOT VELOX_DISABLE_GOOGLETEST)
+if(NOT VELOX_DISABLE_GOOGLETEST OR VELOX_BUILD_STATUS_TEST)
   velox_set_source(GTest)
   velox_resolve_dependency(GTest)
   set(VELOX_GTEST_INCUDE_DIR "${gtest_SOURCE_DIR}/include" PARENT_SCOPE)
@@ -839,12 +852,16 @@ endif()
 velox_set_source(xsimd)
 velox_resolve_dependency(xsimd 10.0.0)
 
-velox_set_source(stemmer)
-velox_resolve_dependency(stemmer)
+if(NOT WIN32 OR VELOX_ENABLE_PRESTO_FUNCTIONS)
+  velox_set_source(stemmer)
+  velox_resolve_dependency(stemmer)
+endif()
 
 if(VELOX_BUILD_TESTING)
   set(BUILD_TESTING ON)
   include(CTest) # include after project() but before add_subdirectory()
+elseif(VELOX_BUILD_STATUS_TEST)
+  enable_testing()
 endif()
 
 include_directories(.)
@@ -852,7 +869,11 @@ include_directories(.)
 # Adding this down here prevents warnings in dependencies from stopping the
 # build
 if("${TREAT_WARNINGS_AS_ERRORS}")
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror")
+  if(MSVC)
+    string(APPEND CMAKE_CXX_FLAGS " /WX")
+  else()
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror")
+  endif()
 endif()
 
 # Enable the ASAN and UBSAN sanitzers for Clang 20 and above.
@@ -930,4 +951,11 @@ if(VELOX_ENABLE_NIMBLE)
   endif()
 endif()
 
+if(MSVC)
+  add_compile_options(
+    $<$<COMPILE_LANGUAGE:CXX>:/Zc:preprocessor>
+    $<$<COMPILE_LANGUAGE:CXX>:/Zc:__cplusplus>
+    $<$<COMPILE_LANGUAGE:CXX>:/permissive->
+  )
+endif()
 add_subdirectory(velox)

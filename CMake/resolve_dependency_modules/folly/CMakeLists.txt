@@ -31,8 +31,19 @@ velox_resolve_dependency_url(FOLLY)
 
 message(STATUS "Building Folly from source")
 
+set(folly_patches ${CMAKE_CURRENT_LIST_DIR}/folly-no-export.patch)
+if(WIN32)
+  list(APPEND folly_patches ${CMAKE_CURRENT_LIST_DIR}/folly-windows.patch)
+  if(NOT gflags_SOURCE STREQUAL "BUNDLED")
+    list(PREPEND folly_patches --exclude=CMake/folly-deps.cmake)
+  endif()
+endif()
+
 if(gflags_SOURCE STREQUAL "BUNDLED")
   set(glog_patch && git apply ${CMAKE_CURRENT_LIST_DIR}/folly-gflags-glog.patch)
+  if(WIN32)
+    set(glog_patch "")
+  endif()
   # Together with the patch applied above prevents folly from test compiling a
   # snippet to find the right namespace (which would fail because gflags isn't
   # built yet)
@@ -44,7 +55,7 @@ FetchContent_Declare(
   folly
   URL ${VELOX_FOLLY_SOURCE_URL}
   URL_HASH ${VELOX_FOLLY_BUILD_SHA256_CHECKSUM}
-  PATCH_COMMAND git apply ${CMAKE_CURRENT_LIST_DIR}/folly-no-export.patch ${glog_patch}
+  PATCH_COMMAND git apply ${folly_patches} ${glog_patch}
   OVERRIDE_FIND_PACKAGE
   SYSTEM
   EXCLUDE_FROM_ALL
@@ -52,10 +63,15 @@ FetchContent_Declare(
 
 set(BUILD_SHARED_LIBS ${VELOX_BUILD_SHARED})
 
-# Enable INT128 support
-set(FOLLY_HAVE_INT128_T ON)
+# Let Folly probe for native 128-bit integers on Windows.
+if(NOT WIN32)
+  set(FOLLY_HAVE_INT128_T ON)
+endif()
 
 FetchContent_MakeAvailable(folly)
+if(WIN32)
+  target_link_libraries(folly_deps INTERFACE Boost::headers)
+endif()
 
 if(gflags_SOURCE STREQUAL "BUNDLED")
   add_dependencies(folly glog::glog gflags::gflags fmt::fmt)

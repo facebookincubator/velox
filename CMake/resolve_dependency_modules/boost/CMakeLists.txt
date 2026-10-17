@@ -50,6 +50,9 @@ FetchContent_Declare(
 )
 
 # Configure the file before adding the header only libs
+if(WIN32)
+  set(BOOST_INCLUDE_LIBRARIES ${BOOST_COMPONENTS} ${BOOST_OPTIONAL_COMPONENTS})
+endif()
 configure_file(
   ${CMAKE_CURRENT_LIST_DIR}/FindBoost.cmake.in
   ${CMAKE_CURRENT_LIST_DIR}/FindBoost.cmake
@@ -74,6 +77,20 @@ list(APPEND BOOST_INCLUDE_LIBRARIES ${BOOST_HEADER_ONLY})
 list(REMOVE_ITEM BOOST_INCLUDE_LIBRARIES headers)
 set(BUILD_SHARED_LIBS OFF)
 FetchContent_MakeAvailable(Boost)
+
+if(WIN32 AND MSVC AND TARGET boost_context AND BOOST_CONTEXT_ASSEMBLER STREQUAL "masm")
+  # Generic ASM can claim .asm before Boost enables MASM. VS then omits the files.
+  get_target_property(context_sources boost_context SOURCES)
+  foreach(source IN LISTS context_sources)
+    if(source MATCHES "\\.asm$")
+      set_source_files_properties(
+        "${boost_context_SOURCE_DIR}/${source}"
+        DIRECTORY "${boost_context_SOURCE_DIR}"
+        PROPERTIES LANGUAGE ASM_MASM
+      )
+    endif()
+  endforeach()
+endif()
 
 list(TRANSFORM BOOST_HEADER_ONLY PREPEND Boost::)
 target_link_libraries(boost_headers INTERFACE ${BOOST_HEADER_ONLY})

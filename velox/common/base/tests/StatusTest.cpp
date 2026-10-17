@@ -17,7 +17,9 @@
 #include "velox/common/base/Status.h"
 #include <gtest/gtest.h>
 #include <sstream>
+#ifndef VELOX_STATUS_TEST_ONLY
 #include "velox/common/base/Exceptions.h"
+#endif
 #include "velox/common/base/tests/GTestUtils.h"
 
 namespace facebook::velox::test {
@@ -108,6 +110,7 @@ TEST(StatusTest, testAbort) {
   ASSERT_DEATH(a.abort(), "");
 }
 
+#ifndef VELOX_STATUS_TEST_ONLY
 Status returnIf(bool cond) {
   VELOX_RETURN_IF(cond, Status::Invalid("error"));
   return Status::OK();
@@ -226,6 +229,7 @@ TEST(StatusTest, statusMacrosSkipDetails) {
   Status status = Status::OK();
   ASSERT_EQ(returnNotNull(&status), Status::UserError());
 }
+#endif
 
 Expected<int> modulo(int a, int b) {
   if (b == 0) {
