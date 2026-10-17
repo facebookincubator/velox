@@ -564,13 +564,18 @@ void PageReader::prepareDictionary(const PageHeader& pageHeader) {
           values[i] = parquetValues[i];
         }
       } else if (type_->type()->isTimestamp()) {
-        VELOX_DCHECK_EQ(parquetType, thrift::Type::INT64);
+        VELOX_DCHECK(
+            parquetType == thrift::Type::INT32 ||
+            parquetType == thrift::Type::INT64);
         auto values = dictionary_.values->asMutable<int128_t>();
-        auto parquetValues = dictionary_.values->asMutable<int64_t>();
+        const auto* parquetValues = dictionary_.values->as<char>();
         for (auto i = dictionary_.numValues - 1; i >= 0; --i) {
           // Expand the Parquet type length values to Velox type length.
           // We start from the end to allow in-place expansion.
-          values[i] = parquetValues[i];
+          const auto* value = parquetValues + i * typeSize;
+          values[i] = parquetType == thrift::Type::INT32
+              ? folly::loadUnaligned<int32_t>(value)
+              : folly::loadUnaligned<int64_t>(value);
         }
       }
       break;
