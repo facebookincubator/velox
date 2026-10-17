@@ -279,6 +279,16 @@ class CompactRowSerializerTest : public ::testing::Test,
   bool microBatchDeserialize_;
 };
 
+// Exercise unaligned row headers through both append paths under UBSan.
+TEST_P(CompactRowSerializerTest, unalignedRowHeaders) {
+  // Four rows produce ranges {0, 1}, {1, 2}, {3, 1}, exercising an
+  // unaligned header in both the multi-row and final single-row paths.
+  auto data = makeRowVector({makeFlatVector<int16_t>({1, 2, 3, 4})});
+  row::CompactRow compactRow(data);
+  ASSERT_NE((compactRow.rowSize(0) + sizeof(TRowSize)) % alignof(TRowSize), 0);
+  testRoundTrip(data);
+}
+
 TEST_P(CompactRowSerializerTest, fuzz) {
   const auto rowType = ROW({
       BOOLEAN(),
