@@ -43,6 +43,7 @@ class SpatialJoinBridge;
 class SplitListener;
 
 class FixedPointLoop;
+struct FixedPointExecutionStats;
 struct FixedPointOptions;
 
 /// Runs one plan fragment.  By default it compiles the fragment into a
@@ -371,6 +372,13 @@ class Task : public std::enable_shared_from_this<Task> {
   /// structure.
   TaskStats taskStats() const;
 
+  /// Experimental: the returned struct may change without notice, so projects
+  /// outside Velox should not depend on it yet.  Returns a snapshot of the
+  /// execution statistics of the fixed point this task runs, or std::nullopt
+  /// when it runs none.  Callable at any time, including while the fixed point
+  /// runs and after it fails.
+  std::optional<FixedPointExecutionStats> fixedPointExecutionStats() const;
+
   /// Information about an operator call that helps debugging stuck calls.
   struct OpCallInfo {
     size_t durationMs;
@@ -401,12 +409,8 @@ class Task : public std::enable_shared_from_this<Task> {
   /// yet.
   uint64_t timeSinceTerminationMs() const;
 
-  /// Returns the number of task output streams. An ordinary task has one per
-  /// output driver; a task running a fixed-point loop has one.
+  /// Returns the number of task output streams, one per output driver.
   uint32_t numOutputDrivers() const {
-    if (fixedPoint_ != nullptr) {
-      return 1;
-    }
     return numDrivers(getOutputPipelineId());
   }
 
@@ -596,33 +600,60 @@ class Task : public std::enable_shared_from_this<Task> {
   /// 'pipelineId' in this task.
   std::vector<Operator*> findPeerOperators(int pipelineId, Operator* caller);
 
-  /// Synchronizes completion of an Operator across Drivers of 'this'.
+  /// Synchronizes arrival of an Operator across Drivers of 'this'.
   /// 'planNodeId' identifies the Operator within all Operators/pipelines of
-  /// 'this'.  Each Operator instance calls this once. All but the last get a
-  /// false return value and 'future' is set to a future the caller should block
-  /// on. At this point the caller should go off thread as in any blocking
-  /// situation.  The last to call gets a true return value and 'peers' is set
-  /// to all Drivers except 'caller'. 'promises' corresponds pairwise to
-  /// 'peers'. Realizing the promise will continue the peer. This effects a
-  /// synchronization barrier between Drivers of a pipeline inside one worker.
-  /// This is used for example for multithreaded hash join build to ensure all
-  /// build threads are completed before allowing the probe pipeline to proceed.
+  /// 'this'. Each participating Operator instance calls this once per barrier
+  /// round. All but the last get a false return value and 'future' is set to a
+  /// future the caller should block on. At this point the caller should go off
+  /// thread as in any blocking situation. The last to call gets a true return
+  /// value and 'peers' is set to all Drivers except 'caller'. 'promises'
+  /// corresponds pairwise to 'peers'. Realizing the promise will continue the
+  /// peer. This effects a synchronization barrier between Drivers of a pipeline
+  /// inside one worker. This is used for example for multithreaded hash join
+  /// build to ensure all build threads are completed before allowing the probe
+  /// pipeline to proceed.
   /// Throws a cancelled error if 'this' is in an error state.
   ///
   /// NOTE: if 'future' is null, then the caller doesn't intend to wait for the
-  /// other peers to finish. The function won't set its promise and record it in
+  /// other peers to arrive. The function won't set its promise and record it in
   /// peers. This is used in scenario that the caller only needs to know whether
   /// it is the last one to reach the barrier.
   ///
   /// NOTE: The last peer (the one that got 'true' returned and a bunch of
   /// promises) is responsible for promises' fulfillment even in case of an
   /// exception!
+  bool allPeersArrived(
+      const core::PlanNodeId& planNodeId,
+      Driver* caller,
+      ContinueFuture* future,
+      std::vector<ContinuePromise>& promises,
+      std::vector<std::shared_ptr<Driver>>& peers);
+
+  /// Backward-compatible name for 'allPeersArrived'. New callers should use
+  /// 'allPeersArrived'.
   bool allPeersFinished(
       const core::PlanNodeId& planNodeId,
       Driver* caller,
       ContinueFuture* future,
       std::vector<ContinuePromise>& promises,
       std::vector<std::shared_ptr<Driver>>& peers);
+
+  /// Same as 'allPeersArrived', but also marks 'caller' as finished after the
+  /// current barrier, excluding it from subsequent barriers for this plan node
+  /// and pipeline. The caller still participates in the current barrier and
+  /// must not call again.
+  bool allPeersArrivedAndFinishPeer(
+      const core::PlanNodeId& planNodeId,
+      Driver* caller,
+      ContinueFuture* future,
+      std::vector<ContinuePromise>& promises,
+      std::vector<std::shared_ptr<Driver>>& peers);
+
+  /// Marks 'caller' as finished and excludes it from subsequent barriers for
+  /// 'planNodeId'. The caller must have completed the current barrier already.
+  void finishPeerFromBarrier(
+      const core::PlanNodeId& planNodeId,
+      Driver* caller);
 
   /// Adds HashJoinBridge's for all the specified plan node IDs.
   void addHashJoinBridgesLocked(
@@ -865,10 +896,9 @@ class Task : public std::enable_shared_from_this<Task> {
   /// Returns the list of running tasks from velox runtime.
   static std::vector<std::shared_ptr<Task>> getRunningTasks();
 
-  /// The fixed point running this fragment, or nullptr when it runs as an
-  /// ordinary Driver pipeline.  Test-only: nothing in production reaches past
-  /// the Task API, which already delegates to the loop.
-  FixedPointLoop* testingFixedPoint() const {
+  /// The loop running the FixedPointNode leaf of this task's plan, or nullptr
+  /// when the plan has none.
+  FixedPointLoop* fixedPoint() const {
     return fixedPoint_.get();
   }
 
@@ -977,6 +1007,16 @@ class Task : public std::enable_shared_from_this<Task> {
 
   // Recursive helper for 'allSplitsConsumed()' method.
   bool allSplitsConsumedHelper(const core::PlanNode* planNode) const;
+
+  // Implements the peer barrier APIs above. If 'finishPeer' is true, the caller
+  // participates in the current round and is excluded from subsequent rounds.
+  bool allPeersArrivedImpl(
+      const core::PlanNodeId& planNodeId,
+      Driver* caller,
+      bool finishPeer,
+      ContinueFuture* future,
+      std::vector<ContinuePromise>& promises,
+      std::vector<std::shared_ptr<Driver>>& peers);
 
   // Remove the spill directory, if the Task was creating it for potential
   // spilling.
@@ -1516,6 +1556,11 @@ class Task : public std::enable_shared_from_this<Task> {
   // nodes that expect splits.
   std::unordered_map<core::PlanNodeId, SplitsState> splitsStates_;
 
+  // The highest sequence id of the splits passed to 'fixedPoint_', by node,
+  // for the nodes it takes splits for. Plays the role of
+  // SplitsState::maxSequenceId for those nodes.
+  std::unordered_map<core::PlanNodeId, long> fixedPointMaxSequenceIds_;
+
   // Promises that are fulfilled when the task is completed (terminated).
   std::vector<ContinuePromise> taskCompletionPromises_;
 
@@ -1626,6 +1671,8 @@ class Task : public std::enable_shared_from_this<Task> {
 
   std::vector<std::unique_ptr<SplitListener>> splitListeners_;
 };
+
+using TaskPtr = std::shared_ptr<Task>;
 
 /// Listener invoked on task completion.
 class TaskListener {

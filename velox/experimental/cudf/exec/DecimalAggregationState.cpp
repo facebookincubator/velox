@@ -31,17 +31,45 @@
 
 namespace facebook::velox::cudf_velox {
 
+DecimalSumStateColumns reduceDecimal64SumCount(
+    const cudf::column_view& input,
+    numeric::scale_type outputScale,
+    cuda::stream_ref stream,
+    rmm::device_async_resource_ref mr) {
+  DecimalSumStateColumns result;
+  auto const sumMaskState = input.size() == input.null_count()
+      ? cudf::mask_state::ALL_NULL
+      : cudf::mask_state::UNALLOCATED;
+  result.sum = cudf::make_fixed_width_column(
+      cudf::data_type{cudf::type_id::DECIMAL128, outputScale},
+      1,
+      sumMaskState,
+      stream,
+      mr);
+  result.count = cudf::make_fixed_width_column(
+      cudf::data_type{cudf::type_id::INT64},
+      1,
+      cudf::mask_state::UNALLOCATED,
+      stream,
+      mr);
+  detail::reduceDecimal64SumCount(
+      input,
+      result.sum->mutable_view(),
+      result.count->mutable_view(),
+      stream,
+      get_temp_mr());
+  return result;
+}
+
 DecimalSumStateColumns deserializeDecimalSumState(
     const cudf::column_view& stateCol,
     int32_t scale,
-    cuda::stream_ref stream) {
+    cuda::stream_ref stream,
+    rmm::device_async_resource_ref mr) {
   VELOX_CHECK(
       stateCol.type().id() == cudf::type_id::STRING,
       "Decimal sum state requires STRING/VARBINARY column (type is {})",
       cudf::type_to_name(stateCol.type()));
-  // The decoded sum/count columns are consumed by the next groupby/reduce and
-  // never leave the operator and should use the temporary memory resource.
-  auto const mr = get_temp_mr();
   auto numRows = stateCol.size();
   if (numRows == 0) {
     DecimalSumStateColumns empty;
@@ -130,10 +158,12 @@ DecimalSumStateColumns deserializeDecimalSumState(
       alignof(int64_t));
 
   if (stateCol.nullable()) {
-    auto nullMask = cudf::copy_bitmask(stateCol, stream, mr);
+    auto nullMask = cudf::copy_bitmask(
+        stateCol, stream, cudf::memory_resources{mr, get_temp_mr()});
     auto nullCount = stateCol.null_count();
     sumCol->set_null_mask(std::move(nullMask), nullCount);
-    auto countMask = cudf::copy_bitmask(stateCol, stream, mr);
+    auto countMask = cudf::copy_bitmask(
+        stateCol, stream, cudf::memory_resources{mr, get_temp_mr()});
     countCol->set_null_mask(std::move(countMask), nullCount);
   }
 

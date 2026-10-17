@@ -24,6 +24,7 @@
 
 #include <gtest/gtest.h>
 
+#include "velox/dwio/nimble/common/tests/GTestUtils.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
 
@@ -40,6 +41,23 @@ std::vector<RowRange> makeRandomRanges(uint32_t rowCount, std::mt19937& rng) {
     const auto end = row + length;
     ranges.emplace_back(row, end);
     row = std::min<uint32_t>(rowCount, end + static_cast<uint32_t>(rng() % 8));
+  }
+  return ranges;
+}
+
+// Builds ordered, disjoint ranges long enough to span many null runs.
+std::vector<RowRange> makeWideRandomRanges(
+    uint32_t rowCount,
+    std::mt19937& rng) {
+  std::vector<RowRange> ranges;
+  uint32_t row =
+      static_cast<uint32_t>(rng() % std::min<uint32_t>(rowCount, 64));
+  while (row < rowCount) {
+    const auto maxLength = std::min<uint32_t>(rowCount - row, 700);
+    const uint32_t length{1 + static_cast<uint32_t>(rng() % maxLength)};
+    const auto end = row + length;
+    ranges.emplace_back(row, end);
+    row = std::min<uint32_t>(rowCount, end + static_cast<uint32_t>(rng() % 64));
   }
   return ranges;
 }
@@ -64,9 +82,23 @@ class NullableEncodingViewTest : public EncodingViewTest {
         std::nullopt);
     const auto encoded = EncodingFactory::encodeNullable<int64_t>(
         std::move(policy), nonNullValues, isNonNull, *buffer_);
-    return createEncodingView(encoded, pool_.get());
+    auto view = createEncodingView(encoded, pool_.get());
+    return view;
   }
 };
+
+TEST_F(NullableEncodingViewTest, requiresNonNullRowsForSingleValueReads) {
+  auto view = makeView({10, std::nullopt, 12, std::nullopt});
+  int64_t value{0};
+  view->readAt(2, &value);
+  EXPECT_EQ(value, 12);
+  for (const uint32_t index : {1, 3}) {
+    SCOPED_TRACE(index);
+    NIMBLE_ASSERT_THROW(
+        view->readAt(index, &value),
+        "Nullable EncodingView physical reads require a non-null row");
+  }
+}
 
 TEST_F(NullableEncodingViewTest, readsMixedRows) {
   auto view = makeView({10, std::nullopt, 12, 13, std::nullopt, 15});
@@ -148,6 +180,129 @@ TEST_F(NullableEncodingViewTest, readsNonNullRangesAfterNulls) {
   EXPECT_TRUE(nullIndices.empty());
 }
 
+TEST_F(NullableEncodingViewTest, readsRangesWithoutNulls) {
+  auto view = makeView({10, 11, 12, 13, 14, 15});
+  const std::array<RowRange, 3> ranges{{{0, 2}, {2, 3}, {4, 6}}};
+  std::array<int64_t, 5> output{};
+  std::vector<uint32_t> nullIndices;
+
+  const auto numNonNulls = view->read(
+      ranges,
+      [&](uint32_t outputIndex) { nullIndices.push_back(outputIndex); },
+      output.data());
+
+  EXPECT_EQ(numNonNulls, 5);
+  EXPECT_EQ(output, (std::array<int64_t, 5>{10, 11, 12, 14, 15}));
+  EXPECT_TRUE(nullIndices.empty());
+
+  int64_t value{0};
+  view->readAt(3, &value);
+  EXPECT_EQ(value, 13);
+
+  const std::array<uint32_t, 3> indices{5, 0, 3};
+  std::array<int64_t, 3> indexedOutput{};
+  EXPECT_EQ(
+      view->read(
+          indices,
+          [&](uint32_t outputIndex) { nullIndices.push_back(outputIndex); },
+          indexedOutput.data()),
+      indices.size());
+  EXPECT_EQ(indexedOutput, (std::array<int64_t, 3>{15, 10, 13}));
+  EXPECT_TRUE(nullIndices.empty());
+}
+
+TEST_F(NullableEncodingViewTest, readsRangesWithOnlyNulls) {
+  auto view =
+      makeView({std::nullopt, std::nullopt, std::nullopt, std::nullopt});
+  const std::array<RowRange, 2> ranges{{{0, 1}, {2, 4}}};
+  std::array<int64_t, 3> output{-1, -1, -1};
+  std::vector<uint32_t> nullIndices;
+
+  const auto numNonNulls = view->read(
+      ranges,
+      [&](uint32_t outputIndex) { nullIndices.push_back(outputIndex); },
+      output.data());
+
+  EXPECT_EQ(numNonNulls, 0);
+  EXPECT_EQ(output, (std::array<int64_t, 3>{0, 0, 0}));
+  EXPECT_EQ(nullIndices, (std::vector<uint32_t>{0, 1, 2}));
+}
+
+TEST_F(NullableEncodingViewTest, readsRangesAroundSelectedNulls) {
+  auto view =
+      makeView({10, std::nullopt, 12, std::nullopt, std::nullopt, 15, 16, 17});
+  // Rows 2 and 5 start where the previous run ends in the compact child, but a
+  // selected null separates them in the output.
+  const std::array<RowRange, 4> ranges{{{0, 2}, {2, 3}, {3, 5}, {5, 8}}};
+  std::array<int64_t, 8> output{-1, -1, -1, -1, -1, -1, -1, -1};
+  std::vector<uint32_t> nullIndices;
+
+  const auto numNonNulls = view->read(
+      ranges,
+      [&](uint32_t outputIndex) { nullIndices.push_back(outputIndex); },
+      output.data());
+
+  EXPECT_EQ(numNonNulls, 5);
+  EXPECT_EQ(output, (std::array<int64_t, 8>{10, 0, 12, 0, 0, 15, 16, 17}));
+  EXPECT_EQ(nullIndices, (std::vector<uint32_t>{1, 3, 4}));
+}
+
+TEST_F(NullableEncodingViewTest, readsLongRunsAroundSelectedNulls) {
+  // Few nulls leave long runs of non-null rows.
+  const auto isNullRow = [](uint32_t row) {
+    return row == 5 || row == 20 || row == 21 || row == 40;
+  };
+  std::vector<std::optional<int64_t>> rows;
+  for (uint32_t row{0}; row < 64; ++row) {
+    rows.push_back(
+        isNullRow(row)
+            ? std::nullopt
+            : std::optional<int64_t>{static_cast<int64_t>(row) * 10});
+  }
+  // Row 6 starts where the run ending at row 4 ends in the compact child, but
+  // the selected null at row 5 separates them in the output. Rows 10, 38 and 44
+  // continue the previous run in both. Rows 20 and 21 form a range of nulls,
+  // and row 40 starts a range with both nulls and non-nulls.
+  const std::vector<RowRange> ranges{
+      {0, 6},
+      {6, 10},
+      {10, 12},
+      {20, 22},
+      {22, 38},
+      {38, 40},
+      {40, 44},
+      {44, 46},
+      {60, 64},
+  };
+  std::vector<std::optional<int64_t>> expected;
+  for (const auto& range : ranges) {
+    expected.insert(
+        expected.end(),
+        rows.begin() + range.startRow,
+        rows.begin() + range.endRow);
+  }
+  std::vector<int64_t> output(expected.size(), -1);
+  std::vector<bool> isNull(expected.size(), false);
+
+  const auto numNonNulls = makeView(rows)->read(
+      ranges,
+      [&](uint32_t outputIndex) { isNull[outputIndex] = true; },
+      output.data());
+
+  std::vector<std::optional<int64_t>> actual;
+  for (size_t i{0}; i < output.size(); ++i) {
+    actual.push_back(
+        isNull[i] ? std::nullopt : std::optional<int64_t>{output[i]});
+  }
+  EXPECT_EQ(actual, expected);
+  EXPECT_EQ(
+      numNonNulls,
+      static_cast<uint32_t>(std::count_if(
+          expected.begin(), expected.end(), [](const auto& value) {
+            return value.has_value();
+          })));
+}
+
 TEST_F(NullableEncodingViewTest, readsRandomRanges) {
   constexpr uint32_t kSeed{1'384'921};
   std::mt19937 rng{kSeed};
@@ -195,6 +350,59 @@ TEST_F(NullableEncodingViewTest, readsRandomRanges) {
             expected.begin(), expected.end(), [](const auto& value) {
               return value.has_value();
             })));
+  }
+}
+
+TEST_F(NullableEncodingViewTest, readsWideRandomRanges) {
+  constexpr uint32_t kSeed{7'204'113};
+  std::mt19937 rng{kSeed};
+  // Null rates in thousandths: none, sparse, mixed, dense and all.
+  for (const uint32_t nullsPerThousand : {0, 2, 40, 120, 500, 950, 1'000}) {
+    for (uint32_t iteration{0}; iteration < 8; ++iteration) {
+      SCOPED_TRACE(
+          ::testing::Message()
+          << "seed=" << kSeed << ", nullsPerThousand=" << nullsPerThousand
+          << ", iteration=" << iteration);
+      const uint32_t rowCount{1 + static_cast<uint32_t>(rng() % 4'096)};
+      std::vector<std::optional<int64_t>> rows;
+      rows.reserve(rowCount);
+      for (uint32_t row{0}; row < rowCount; ++row) {
+        rows.push_back(
+            rng() % 1'000 < nullsPerThousand
+                ? std::nullopt
+                : std::optional<int64_t>{static_cast<int64_t>(rng())});
+      }
+      const auto ranges = makeWideRandomRanges(rowCount, rng);
+      std::vector<std::optional<int64_t>> expected;
+      for (const auto& range : ranges) {
+        expected.insert(
+            expected.end(),
+            rows.begin() + range.startRow,
+            rows.begin() + range.endRow);
+      }
+      std::vector<int64_t> output(expected.size(), -1);
+      std::vector<bool> isNull(expected.size(), false);
+      auto view = makeView(rows);
+
+      const auto numNonNulls = view->read(
+          ranges,
+          [&](uint32_t outputIndex) { isNull[outputIndex] = true; },
+          output.data());
+
+      std::vector<std::optional<int64_t>> actual;
+      actual.reserve(output.size());
+      for (size_t i{0}; i < output.size(); ++i) {
+        actual.push_back(
+            isNull[i] ? std::nullopt : std::optional<int64_t>{output[i]});
+      }
+      EXPECT_EQ(actual, expected);
+      EXPECT_EQ(
+          numNonNulls,
+          static_cast<uint32_t>(std::count_if(
+              expected.begin(), expected.end(), [](const auto& value) {
+                return value.has_value();
+              })));
+    }
   }
 }
 

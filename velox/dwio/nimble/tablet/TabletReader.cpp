@@ -219,6 +219,7 @@ TabletReader::TabletReader(
             .ioOptions = &ioOptions_,
             .fileHandle = cacheEnabled ? options.fileHandle : nullptr,
             .cache = cacheEnabled ? options.cache : nullptr,
+            .maxCacheEntrySize = options.maxCacheEntrySize,
             // preloadIndex requires pinIndex; auto-promote so the caller only
             // needs to flip one knob.
             .pinIndex = options.pinIndex || options.preloadIndex,
@@ -250,7 +251,7 @@ TabletReader::TabletReader(
           [this](const std::string& columnName) {
             return loadVectorIndex(columnName);
           },
-          /*pinEntries=*/true},
+          options.pinIndex},
       chunkStatsCache_{
           [this](uint32_t stripeGroupIndex) {
             return loadChunkStatsGroup(stripeGroupIndex);
@@ -930,34 +931,61 @@ std::shared_ptr<ChunkStatsGroup> TabletReader::createChunkStatsGroup(
 
 TabletReader::StripeGroupMetadata TabletReader::loadStripeGroupMetadata(
     uint32_t stripeGroupIndex) const {
+  auto groups =
+      loadStripeGroupMetadata(std::span<const uint32_t>{&stripeGroupIndex, 1});
+  NIMBLE_CHECK_EQ(groups.size(), 1);
+  return std::move(groups.front());
+}
+
+std::vector<TabletReader::StripeGroupMetadata>
+TabletReader::loadStripeGroupMetadata(
+    std::span<const uint32_t> stripeGroupIndices) const {
   const auto* footer = footerRoot(*footer_);
-  const auto groupSection =
-      toMetadataSection(footer->stripe_groups()->Get(stripeGroupIndex));
-
-  const bool hasChunkStats = this->hasChunkStats(stripeGroupIndex);
-
   std::vector<MetadataSection> sections;
-  sections.emplace_back(groupSection);
-  if (hasChunkStats) {
-    sections.emplace_back(chunkStats_->groupMetadata(stripeGroupIndex));
+  sections.reserve(2 * stripeGroupIndices.size());
+  for (const auto stripeGroupIndex : stripeGroupIndices) {
+    sections.push_back(
+        toMetadataSection(footer->stripe_groups()->Get(stripeGroupIndex)));
+    if (hasChunkStats(stripeGroupIndex)) {
+      sections.push_back(chunkStats_->groupMetadata(stripeGroupIndex));
+    }
   }
-
-  auto results = metadataInput_->load(sections);
-
-  auto groupMetadata = std::make_unique<MetadataBuffer>(std::move(*results[0]));
-
-  StripeGroupMetadata result;
-  result.stripeGroup = std::make_shared<StripeGroup>(
-      stripeGroupIndex, *stripes_, std::move(groupMetadata), pool_);
-  if (hasChunkStats) {
-    auto chunkStatsMetadata =
-        std::make_unique<MetadataBuffer>(std::move(*results[1]));
-    result.chunkStats = createChunkStatsGroup(
-        result.stripeGroup->firstStripe(),
-        result.stripeGroup->stripeCount(),
-        std::move(chunkStatsMetadata));
+  auto buffers = metadataInput_->load(sections);
+  size_t bufferIndex{0};
+  std::vector<StripeGroupMetadata> groups;
+  groups.reserve(stripeGroupIndices.size());
+  for (const auto stripeGroupIndex : stripeGroupIndices) {
+    auto& group = groups.emplace_back();
+    auto metadata =
+        std::make_unique<MetadataBuffer>(std::move(*buffers[bufferIndex++]));
+    group.stripeGroup = std::make_shared<StripeGroup>(
+        stripeGroupIndex, *stripes_, std::move(metadata), pool_);
+    if (hasChunkStats(stripeGroupIndex)) {
+      auto chunkMetadata =
+          std::make_unique<MetadataBuffer>(std::move(*buffers[bufferIndex++]));
+      group.chunkStats = createChunkStatsGroup(
+          group.stripeGroup->firstStripe(),
+          group.stripeGroup->stripeCount(),
+          std::move(chunkMetadata));
+    }
   }
-  return result;
+  return groups;
+}
+
+TabletReader::StripeGroupMetadata TabletReader::cacheStripeGroupMetadata(
+    uint32_t stripeGroupIndex,
+    StripeGroupMetadata metadata) const {
+  StripeGroupMetadata cached;
+  cached.stripeGroup = stripeGroupCache_.getOrCreate(
+      stripeGroupIndex,
+      [&metadata](uint32_t) { return std::move(metadata.stripeGroup); });
+  if (hasChunkStats(stripeGroupIndex)) {
+    cached.chunkStats = chunkStatsCache_.getOrCreate(
+        stripeGroupIndex,
+        [&metadata](uint32_t) { return std::move(metadata.chunkStats); });
+  }
+  checkStreamChecksumsPresent(*cached.stripeGroup, stripeGroupIndex);
+  return cached;
 }
 
 uint32_t TabletReader::streamOffset(
@@ -1028,25 +1056,69 @@ StripeIdentifier TabletReader::stripeIdentifier(uint32_t stripeIndex) const {
         hasChunkStats ? chunkStats(stripeGroupIndex) : nullptr};
   }
 
-  // At least one is not cached — use coalesced loading.
-  auto loaded = loadStripeGroupMetadata(stripeGroupIndex);
+  auto metadata = cacheStripeGroupMetadata(
+      stripeGroupIndex, loadStripeGroupMetadata(stripeGroupIndex));
+  return StripeIdentifier{
+      stripeIndex,
+      std::move(metadata.stripeGroup),
+      std::move(metadata.chunkStats)};
+}
 
-  // Inject into caches using custom builder that returns the already-loaded
-  // objects. This ensures the cache holds the reference.
-  auto cachedStripeGroup = stripeGroupCache_.getOrCreate(
-      stripeGroupIndex,
-      [&loaded](uint32_t) { return std::move(loaded.stripeGroup); });
+std::vector<StripeIdentifier> TabletReader::stripeIdentifiers(
+    uint32_t stripeOffset,
+    uint32_t numStripes) const {
+  NIMBLE_CHECK_LE(stripeOffset, stripeCount_, "Stripe index out of bounds");
+  NIMBLE_CHECK_LE(
+      numStripes,
+      stripeCount_ - stripeOffset,
+      "Stripe load range exceeds the tablet");
+  NIMBLE_CHECK_GT(numStripes, 0);
 
-  std::shared_ptr<ChunkStatsGroup> cachedChunkStats;
-  if (hasChunkStats) {
-    cachedChunkStats = chunkStatsCache_.getOrCreate(
-        stripeGroupIndex,
-        [&loaded](uint32_t) { return std::move(loaded.chunkStats); });
+  std::vector<uint32_t> groupIndices;
+  std::vector<size_t> groupSlots;
+  groupSlots.reserve(numStripes);
+  for (uint32_t i{0}; i < numStripes; ++i) {
+    const auto groupIndex = stripeGroupIndex(stripeOffset + i);
+    if (groupIndices.empty() || groupIndices.back() != groupIndex) {
+      groupIndices.push_back(groupIndex);
+    }
+    groupSlots.push_back(groupIndices.size() - 1);
   }
 
-  checkStreamChecksumsPresent(*cachedStripeGroup, stripeGroupIndex);
-  return StripeIdentifier{
-      stripeIndex, std::move(cachedStripeGroup), std::move(cachedChunkStats)};
+  std::vector<StripeGroupMetadata> groups(groupIndices.size());
+  std::vector<uint32_t> missingGroups;
+  std::vector<size_t> missingSlots;
+  for (size_t i{0}; i < groupIndices.size(); ++i) {
+    const auto groupIndex = groupIndices[i];
+    const bool needsChunkStats = hasChunkStats(groupIndex);
+    if (stripeGroupCache_.hasCacheEntry(groupIndex) &&
+        (!needsChunkStats || chunkStatsCache_.hasCacheEntry(groupIndex))) {
+      groups[i].stripeGroup = stripeGroup(groupIndex);
+      if (needsChunkStats) {
+        groups[i].chunkStats = chunkStats(groupIndex);
+      }
+      checkStreamChecksumsPresent(*groups[i].stripeGroup, groupIndex);
+    } else {
+      missingGroups.push_back(groupIndex);
+      missingSlots.push_back(i);
+    }
+  }
+  if (!missingGroups.empty()) {
+    auto loaded = loadStripeGroupMetadata(missingGroups);
+    for (size_t i{0}; i < loaded.size(); ++i) {
+      groups[missingSlots[i]] =
+          cacheStripeGroupMetadata(missingGroups[i], std::move(loaded[i]));
+    }
+  }
+
+  std::vector<StripeIdentifier> identifiers;
+  identifiers.reserve(numStripes);
+  for (uint32_t i{0}; i < numStripes; ++i) {
+    const auto& metadata = groups[groupSlots[i]];
+    identifiers.emplace_back(
+        stripeOffset + i, metadata.stripeGroup, metadata.chunkStats);
+  }
+  return identifiers;
 }
 
 void TabletReader::checkStreamChecksumsPresent(

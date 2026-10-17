@@ -29,8 +29,12 @@
 #include <faiss/IndexIVFFlat.h>
 #include <faiss/IndexIVFPQ.h>
 #include <faiss/IndexIVFRaBitQ.h>
+#ifndef DISABLE_META_INTERNAL_FAISS_IVF_RABITQ_FAST_SCAN
+#include <faiss/IndexIVFRaBitQFastScan.h>
+#endif
 #include <faiss/IndexScalarQuantizer.h>
 #include <faiss/impl/IDSelector.h>
+#include <faiss/impl/io.h>
 #include <faiss/impl/zerocopy_io.h>
 #include <faiss/index_io.h>
 #include <flatbuffers/flatbuffers.h>
@@ -56,8 +60,30 @@ namespace {
 // single-query batch remains single-threaded.
 constexpr int kIvfParallelModeQueries{3};
 
-// Deserializes one FAISS index from caller-owned zero-copy storage.
-std::unique_ptr<faiss::Index> readFaissIndex(std::string_view serializedIndex) {
+// Returns whether deserialization creates views into the serialized input.
+bool usesZeroCopyReader(VectorIndexType indexType) {
+  switch (indexType) {
+    case VectorIndexType::kIvfFlat:
+    case VectorIndexType::kIvfSq8:
+    case VectorIndexType::kIvfPq:
+    case VectorIndexType::kIvfRaBitQ:
+    case VectorIndexType::kHnswSq8:
+      return true;
+    case VectorIndexType::kIvfRaBitQFastScan:
+      // FastScan requires aligned, owning BlockInvertedLists.
+      // TODO: Add aligned zero-copy BlockInvertedLists deserialization in
+      // FAISS, then use the zero-copy reader for FastScan.
+      return false;
+    default:
+      NIMBLE_UNREACHABLE(
+          "Unsupported vector index type: {}", static_cast<int>(indexType));
+  }
+}
+
+// Wrapping the source prevents FAISS from creating views into serialized data.
+std::unique_ptr<faiss::Index> readFaissIndex(
+    std::string_view serializedIndex,
+    VectorIndexType indexType) {
   NIMBLE_CHECK_FILE(
       !serializedIndex.empty(), "FAISS index data must not be empty");
   // Upstream FAISS takes a mutable pointer but does not modify the input.
@@ -65,6 +91,10 @@ std::unique_ptr<faiss::Index> readFaissIndex(std::string_view serializedIndex) {
       reinterpret_cast<const uint8_t*>(serializedIndex.data()));
   faiss::ZeroCopyIOReader reader(serializedData, serializedIndex.size());
   try {
+    if (!usesZeroCopyReader(indexType)) {
+      faiss::BufferedIOReader copyingReader{&reader};
+      return std::unique_ptr<faiss::Index>(faiss::read_index(&copyingReader));
+    }
     return std::unique_ptr<faiss::Index>(faiss::read_index(&reader));
   } catch (const std::exception& error) {
     NIMBLE_FILE_FAIL("Failed to deserialize FAISS index: {}", error.what());
@@ -83,6 +113,13 @@ bool checkIndexType(const faiss::Index& index, VectorIndexType indexType) {
       return dynamic_cast<const faiss::IndexIVFPQ*>(&index) != nullptr;
     case VectorIndexType::kIvfRaBitQ:
       return dynamic_cast<const faiss::IndexIVFRaBitQ*>(&index) != nullptr;
+    case VectorIndexType::kIvfRaBitQFastScan:
+#ifndef DISABLE_META_INTERNAL_FAISS_IVF_RABITQ_FAST_SCAN
+      return dynamic_cast<const faiss::IndexIVFRaBitQFastScan*>(&index) !=
+          nullptr;
+#else
+      return false;
+#endif
     case VectorIndexType::kHnswSq8:
       return dynamic_cast<const faiss::IndexHNSWSQ*>(&index) != nullptr;
     default:
@@ -174,7 +211,8 @@ void searchHnswIndex(
     faiss::idx_t maxNumNeighbors,
     float* scores,
     faiss::idx_t* labels,
-    FaissRowSelection& rowSelection) {
+    FaissRowSelection& rowSelection,
+    velox::CpuWallTiming& searchTiming) {
   NIMBLE_USER_CHECK_GT(
       hnswSearchDepth, 0, "HNSW search depth must be positive");
   const auto effectiveSearchDepth =
@@ -192,6 +230,7 @@ void searchHnswIndex(
   rowSelection.applyTo(searchParameters);
   // FAISS updates process-global HNSW statistics during search.
   const auto hnswSearchLock = hnswSearchGuard().wlock();
+  velox::CpuWallTimer timer{searchTiming};
   index.search(
       numQueries,
       queryVectors,
@@ -217,6 +256,7 @@ bool configureEnsureTopKFull(
 // Searches an IVF index without updating FAISS process-global statistics.
 void searchIvfIndex(
     const faiss::IndexIVF& index,
+    VectorIndexType indexType,
     faiss::idx_t numQueries,
     uint32_t requestedNumProbes,
     uint64_t maxCodes,
@@ -225,7 +265,8 @@ void searchIvfIndex(
     faiss::idx_t maxNumNeighbors,
     float* scores,
     faiss::idx_t* labels,
-    FaissRowSelection& rowSelection) {
+    FaissRowSelection& rowSelection,
+    VectorIndex::SearchStats& stats) {
   const auto* quantizer =
       velox::checkedPointerCast<const faiss::IndexFlat>(index.quantizer);
   NIMBLE_USER_CHECK_GT(
@@ -252,38 +293,28 @@ void searchIvfIndex(
   // IVF search first finds the nearest coarse partitions, then scans vectors
   // assigned to those partitions. Keeping the stages explicit lets the second
   // pass use request-local statistics instead of FAISS's process-global state.
-  quantizer->search(
-      numQueries,
-      queryVectors,
-      numProbes,
-      centroidScores.data(),
-      partitionLabels.data(),
-      searchParameters.quantizer_params);
+  {
+    velox::CpuWallTimer timer{stats.partitionAssignmentTiming};
+    quantizer->search(
+        numQueries,
+        queryVectors,
+        numProbes,
+        centroidScores.data(),
+        partitionLabels.data(),
+        searchParameters.quantizer_params);
+  }
 
-  // Pass request-local statistics to avoid FAISS's process-global
-  // indexIVF_stats, which is not safe for concurrent searches.
-  //
-  // TODO: Aggregate per-search FAISS statistics in VectorIndex for
-  // observability.
+  // Pass request-local statistics to implementations that support them to
+  // avoid FAISS's process-global indexIVF_stats during concurrent searches.
+  // FastScan does not populate IndexIVFStats.
   faiss::IndexIVFStats searchStats;
-  index.search_preassigned(
-      numQueries,
-      queryVectors,
-      maxNumNeighbors,
-      partitionLabels.data(),
-      centroidScores.data(),
-      scores,
-      labels,
-      /*store_pairs=*/false,
-      &searchParameters,
-      &searchStats);
-
-  const auto numResultSlots =
-      static_cast<size_t>(numQueries) * static_cast<size_t>(maxNumNeighbors);
-  if (requiresUnboundedFallback &&
-      std::find(labels, labels + numResultSlots, -1) !=
-          labels + numResultSlots) {
-    searchParameters.max_codes = 0;
+  const auto supportsSearchStats =
+      indexType != VectorIndexType::kIvfRaBitQFastScan;
+  // Reuse one stats object so a fallback reports the aggregate work performed
+  // by both native searches.
+  auto* searchStatsPtr = supportsSearchStats ? &searchStats : nullptr;
+  const auto searchPreassigned = [&] {
+    velox::CpuWallTimer timer{stats.searchTiming};
     index.search_preassigned(
         numQueries,
         queryVectors,
@@ -294,7 +325,24 @@ void searchIvfIndex(
         labels,
         /*store_pairs=*/false,
         &searchParameters,
-        &searchStats);
+        searchStatsPtr);
+  };
+  searchPreassigned();
+
+  const auto numResultSlots =
+      static_cast<size_t>(numQueries) * static_cast<size_t>(maxNumNeighbors);
+  if (requiresUnboundedFallback &&
+      std::find(labels, labels + numResultSlots, -1) !=
+          labels + numResultSlots) {
+    searchParameters.max_codes = 0;
+    searchPreassigned();
+  }
+  if (supportsSearchStats) {
+    stats.ivf = VectorIndex::IvfSearchStats{
+        .numPartitionsScanned = searchStats.nlist,
+        .numDistanceComputations = searchStats.ndis,
+        .numHeapUpdates = searchStats.nheap_updates,
+    };
   }
 }
 
@@ -307,6 +355,7 @@ bool isIvfIndexType(VectorIndexType indexType) {
     case VectorIndexType::kIvfSq8:
     case VectorIndexType::kIvfPq:
     case VectorIndexType::kIvfRaBitQ:
+    case VectorIndexType::kIvfRaBitQFastScan:
       return true;
   }
   NIMBLE_UNREACHABLE(
@@ -323,7 +372,8 @@ void searchFaissIndex(
     faiss::idx_t maxNumNeighbors,
     float* scores,
     faiss::idx_t* labels,
-    FaissRowSelection& rowSelection) {
+    FaissRowSelection& rowSelection,
+    VectorIndex::SearchStats& stats) {
   if (isIvfIndexType(indexType)) {
     NIMBLE_USER_CHECK(
         searchOptions.kind() == VectorIndex::SearchOptions::Kind::kIvf,
@@ -335,6 +385,7 @@ void searchFaissIndex(
         velox::checkedPointerCast<const faiss::IndexIVF>(&index);
     searchIvfIndex(
         *ivfIndex,
+        indexType,
         numQueries,
         ivfSearchOptions->numProbes,
         ivfSearchOptions->maxCodes,
@@ -343,7 +394,8 @@ void searchFaissIndex(
         maxNumNeighbors,
         scores,
         labels,
-        rowSelection);
+        rowSelection,
+        stats);
     return;
   }
 
@@ -363,7 +415,8 @@ void searchFaissIndex(
       maxNumNeighbors,
       scores,
       labels,
-      rowSelection);
+      rowSelection,
+      stats.searchTiming);
 }
 
 // Validates metadata before allocating or deserializing a FAISS index.
@@ -509,6 +562,7 @@ struct VectorIndexDirectory::InputState {
             .ioOptions = ioOptions.get(),
             .fileHandle = sourceOptions.fileHandle,
             .cache = sourceOptions.cache,
+            .maxCacheEntrySize = sourceOptions.maxCacheEntrySize,
             .pinIndex = sourceOptions.pinIndex,
             .preloadIndex = sourceOptions.preloadIndex,
         } {
@@ -637,8 +691,13 @@ VectorIndex::VectorIndex(
       metric_{metadata.metric},
       indexType_{metadata.indexType},
       numVectors_{metadata.numVectors},
-      indexData_{std::move(indexData)},
-      faissIndex_{readFaissIndex(serializedIndex)} {
+      faissIndex_{readFaissIndex(serializedIndex, indexType_)},
+      indexData_{std::move(indexData)} {
+  // Copying readers own their decoded data and no longer need the serialized
+  // backing storage after construction.
+  if (!usesZeroCopyReader(indexType_)) {
+    indexData_.reset();
+  }
   NIMBLE_CHECK_FILE_EQ(
       faissIndex_->d,
       static_cast<int>(dimensions_),
@@ -665,8 +724,11 @@ VectorIndex::~VectorIndex() = default;
 
 VectorIndex::SearchResults::SearchResults(
     std::vector<SearchResult> results,
-    std::vector<size_t> resultOffsets)
-    : results_{std::move(results)}, resultOffsets_{std::move(resultOffsets)} {
+    std::vector<size_t> resultOffsets,
+    SearchStats stats)
+    : results_{std::move(results)},
+      resultOffsets_{std::move(resultOffsets)},
+      stats_{std::move(stats)} {
   NIMBLE_CHECK_GT(
       resultOffsets_.size(), 1, "Search result must contain query offsets");
   NIMBLE_CHECK_EQ(
@@ -682,6 +744,8 @@ VectorIndex::SearchResults::SearchResults(
         resultOffsets_[queryIndex + 1],
         "Search result offsets must be monotonic");
   }
+  stats_.numQueries = numQueries();
+  stats_.numResults = totalNumResults();
 }
 
 size_t VectorIndex::SearchResults::numQueries() const {
@@ -699,6 +763,10 @@ VectorIndex::SearchResults::results(size_t queryIndex) const& {
       results_.data() + resultOffsets_[queryIndex],
       results_.data() + resultOffsets_[queryIndex + 1],
   };
+}
+
+const VectorIndex::SearchStats& VectorIndex::SearchResults::stats() const {
+  return stats_;
 }
 
 VectorIndex::SearchResults VectorIndex::search(
@@ -745,6 +813,7 @@ VectorIndex::SearchResults VectorIndex::search(
   std::vector<float> scores(numResultSlots);
   std::vector<faiss::idx_t> labels(numResultSlots);
 
+  SearchStats searchStats;
   searchFaissIndex(
       *faissIndex_,
       indexType_,
@@ -754,7 +823,8 @@ VectorIndex::SearchResults VectorIndex::search(
       maxNumNeighbors,
       scores.data(),
       labels.data(),
-      rowSelection);
+      rowSelection,
+      searchStats);
 
   std::vector<size_t> resultOffsets(numQueries + 1, 0);
   for (size_t queryIndex = 0; queryIndex < numQueries; ++queryIndex) {
@@ -790,8 +860,8 @@ VectorIndex::SearchResults VectorIndex::search(
     }
   }
 
-  auto searchResults =
-      SearchResults{std::move(results), std::move(resultOffsets)};
+  auto searchResults = SearchResults{
+      std::move(results), std::move(resultOffsets), std::move(searchStats)};
   NIMBLE_CHECK_EQ(searchResults.numQueries(), config.numQueries);
   return searchResults;
 }

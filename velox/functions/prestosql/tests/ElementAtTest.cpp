@@ -527,31 +527,6 @@ TEST_F(ElementAtTest, flatMapTestConstantWrapped) {
                makeFlatVector<int32_t>({1, 2})})));
 }
 
-// Returns 'input' with its base FlatMapVector converted to a MapVector, keeping
-// any dictionary or constant wrapping.
-VectorPtr withMapBase(const VectorPtr& input) {
-  switch (input->encoding()) {
-    case VectorEncoding::Simple::FLAT_MAP:
-      return input->as<FlatMapVector>()->toMapVector();
-    case VectorEncoding::Simple::DICTIONARY:
-      return BaseVector::wrapInDictionary(
-          input->nulls(),
-          input->wrapInfo(),
-          input->size(),
-          withMapBase(input->valueVector()));
-    case VectorEncoding::Simple::CONSTANT:
-      if (input->valueVector() == nullptr) {
-        return input;
-      }
-      return BaseVector::wrapInConstant(
-          input->size(),
-          input->wrappedIndex(0),
-          withMapBase(input->valueVector()));
-    default:
-      return input;
-  }
-}
-
 // Evaluates 'expression' over flat maps and over the same maps as MapVectors,
 // and checks that both give the same result or both fail.
 TEST_F(ElementAtTest, fuzzFlatMap) {
@@ -590,7 +565,7 @@ TEST_F(ElementAtTest, fuzzFlatMap) {
 
         // Flat map input, possibly wrapped, and the same maps as MapVectors.
         auto input = fuzzer.fuzz(MAP(keyType, valueType));
-        auto mapInput = withMapBase(input);
+        auto mapInput = test::withMapBase(input);
         const auto size = input->size();
 
         // Keys of the flat map, used to pick keys the map has.

@@ -127,6 +127,7 @@ std::shared_ptr<HiveIcebergSplit> IcebergSplitBuilder::build() const {
       columnMappingMode_,
       changelogSplitInfo_);
   split->physicalFilePath = physicalFilePath_;
+  split->partitionEnforcedFieldIds = partitionEnforcedFieldIds_;
   return split;
 }
 } // namespace facebook::velox::connector::hive::iceberg

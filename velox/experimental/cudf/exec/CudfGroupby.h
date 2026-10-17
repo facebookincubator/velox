@@ -47,7 +47,11 @@ struct StreamingGroupbyAggregator {
   // positions in the prepared streaming_groupby input table.
   virtual void prepareInput(
       cudf::table_view input,
-      std::vector<cudf::column_view>& preparedColumns) = 0;
+      std::vector<cudf::column_view>& preparedColumns,
+      cuda::stream_ref stream) = 0;
+
+  // Release prepared temporaries after their last use has been enqueued.
+  virtual void releaseInput() {}
 
   // Appends requests using the positions recorded by prepareInput() and records
   // their result positions.
@@ -87,6 +91,13 @@ struct GroupbyAggregator {
 
   virtual std::unique_ptr<cudf::column> makeOutputColumn(
       std::vector<cudf::groupby::aggregation_result>& results,
+      cuda::stream_ref stream,
+      rmm::device_async_resource_ref mr) = 0;
+
+  // Finalizes the kIntermediate state column, which must hold exactly one
+  // already-merged state per grouping key. Does not regroup.
+  virtual std::unique_ptr<cudf::column> finalize(
+      std::unique_ptr<cudf::column> state,
       cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) = 0;
 
@@ -195,6 +206,11 @@ class CudfGroupby : public CudfOperatorBase {
       cuda::stream_ref stream,
       rmm::device_async_resource_ref mr);
 
+  // Converts the merged per-key states in 'bufferedResult_' to final output
+  // without regrouping. Keeps key columns as-is.
+  CudfVectorPtr finalizeGroupedStates(
+      std::vector<std::unique_ptr<GroupbyAggregator>>& aggregators);
+
   CudfVectorPtr releaseAndResetBufferedResult();
 
   bool initializeStreamingGroupby(
@@ -202,7 +218,9 @@ class CudfGroupby : public CudfOperatorBase {
       const std::vector<VectorPtr>& constants,
       const std::vector<std::optional<uint32_t>>& maskChannels);
 
-  cudf::table_view makeStreamingGroupbyInputView(cudf::table_view input);
+  cudf::table_view makeStreamingGroupbyInputView(
+      cudf::table_view input,
+      cuda::stream_ref stream);
 
   std::unique_ptr<cudf::groupby::streaming_groupby> createStreamingGroupby(
       size_t capacity);

@@ -109,6 +109,17 @@ buildIcebergHandleByName(
   return handleByName;
 }
 
+// True for the types whose identity partition value, as Java Iceberg encodes
+// it in the split ('value.toString()', DATE as days since the epoch), parses
+// back to the column value. TIMESTAMP arrives as epoch microseconds and binary
+// types as Base64, so those, and custom types built on these kinds, are read
+// from the data file instead.
+bool hasSplitEncodablePartitionValue(const Type& type) {
+  return type.equivalent(*BOOLEAN()) || type.equivalent(*INTEGER()) ||
+      type.equivalent(*BIGINT()) || type.equivalent(*VARCHAR()) ||
+      type.isDate();
+}
+
 /// Returns true if a delete/update file should be skipped based on sequence
 /// number conflict resolution. Per the Iceberg spec (V2+):
 ///   - Equality deletes apply when deleteSeqNum > dataSeqNum (i.e., skip when
@@ -175,7 +186,8 @@ IcebergSplitReader::IcebergSplitReader(
     FileHandleFactory* const fileHandleFactory,
     folly::Executor* executor,
     const std::shared_ptr<common::ScanSpec>& scanSpec,
-    std::shared_ptr<ColumnHandleMap> columnHandles)
+    std::shared_ptr<ColumnHandleMap> columnHandles,
+    IcebergScanSpecState* scanSpecState)
     : FileSplitReader(
           icebergSplit,
           tableHandle,
@@ -189,6 +201,8 @@ IcebergSplitReader::IcebergSplitReader(
           fileHandleFactory,
           executor,
           scanSpec),
+      scanSpecState_(
+          scanSpecState != nullptr ? scanSpecState : &ownScanSpecState_),
       icebergSplit_(icebergSplit),
       baseReadOffset_(0),
       splitOffset_(0),
@@ -308,6 +322,8 @@ void IcebergSplitReader::prepareSplit(
     std::shared_ptr<common::MetadataFilter> metadataFilter,
     dwio::common::RuntimeStats& runtimeStats,
     const folly::F14FastMap<std::string, std::string>& fileReadOps) {
+  clearSplitConstants();
+
   // The file schema extension and createReader() below read
   // 'readerOutputType_'.
   projectFilterOnlyFilledColumns();
@@ -418,6 +434,7 @@ void IcebergSplitReader::prepareSplit(
   }
 
   configureEqualityDeleteColumns();
+  configureIdentityPartitionColumns();
 
   firstRowId_ = std::nullopt;
   if (auto it = icebergSplit_->infoColumns.find(
@@ -530,6 +547,7 @@ void IcebergSplitReader::prepareSplit(
   // Needs the output indexes above; the pruning and row reader below read the
   // filters.
   configurePostReadFilters();
+  configurePartitionEnforcedFilters();
 
   if (checkIfSplitIsEmpty(runtimeStats)) {
     VELOX_CHECK(emptySplit_);
@@ -753,6 +771,53 @@ void IcebergSplitReader::configurePostReadFilters() {
   scanSpec_->resetCachedValues(false);
 }
 
+void IcebergSplitReader::configurePartitionEnforcedFilters() {
+  partitionEnforcedColumns_.clear();
+  const auto& enforcedFieldIds = icebergSplit_->partitionEnforcedFieldIds;
+  const auto handleByName = enforcedFieldIds.empty()
+      ? std::unordered_map<std::string, const IcebergColumnHandle*>{}
+      : buildIcebergHandleByName(columnHandles_.get(), tableHandle_.get());
+  for (const auto& childSpec : scanSpec_->children()) {
+    const auto& name = childSpec->fieldName();
+    if (name == IcebergMetadataColumn::kRowIdColumnName ||
+        name == IcebergMetadataColumn::kLastUpdatedSequenceNumberColumnName ||
+        name == IcebergMetadataColumn::kTargetTableRowIdColumnName) {
+      continue;
+    }
+    bool enforced{false};
+    const IcebergColumnHandle* handle{nullptr};
+    if (const auto it = handleByName.find(name); it != handleByName.end()) {
+      handle = it->second;
+      enforced = enforcedFieldIds.contains(handle->field().fieldId) &&
+          !scanSpecState_->dynamicFilterColumns.contains(name);
+    }
+    childSpec->setFilterEnabled(!enforced);
+    if (!enforced) {
+      continue;
+    }
+    partitionEnforcedColumns_.insert(name);
+    // A disabled filter is not evaluated, but the reader still decodes the
+    // column. Projections, the remaining filter and equality deletes project
+    // the columns they read.
+    if (!childSpec->projectOut() && childSpec->readFromFile()) {
+      childSpec->setConstantValue(
+          BaseVector::createNullConstant(
+              handle->dataType(), 1, connectorQueryCtx_->memoryPool()));
+      scanSpecState_->splitConstantColumns.insert(name);
+    }
+  }
+  scanSpec_->resetCachedValues(false);
+}
+
+void IcebergSplitReader::enableFilterForDynamicFilter(
+    const std::string& columnName) {
+  if (partitionEnforcedColumns_.erase(columnName) == 0) {
+    return;
+  }
+  scanSpec_->childByName(columnName)->setFilterEnabled(true);
+  scanSpec_->resetCachedValues(false);
+}
+
 void IcebergSplitReader::markRowsFailingPostReadFilters(
     const RowVector& output,
     uint64_t* rowsToRemove) {
@@ -876,6 +941,59 @@ void IcebergSplitReader::configureEqualityDeleteColumns() {
     // Keeps 'adaptColumns' from clearing the constant when the file also
     // carries the column: the value must come from the partition metadata.
     equalityAugmentedPartitionColumns_.insert(extraNames[i]);
+  }
+}
+
+void IcebergSplitReader::clearSplitConstants() {
+  for (const auto& name : scanSpecState_->splitConstantColumns) {
+    if (auto* childSpec = scanSpec_->childByName(name)) {
+      childSpec->setConstantValue(nullptr);
+    }
+  }
+  scanSpecState_->splitConstantColumns.clear();
+}
+
+void IcebergSplitReader::configureIdentityPartitionColumns() {
+  const auto& identityPartitionKeys = icebergSplit_->identityPartitionKeys;
+  if (identityPartitionKeys.empty()) {
+    return;
+  }
+
+  const auto handleByName =
+      buildIcebergHandleByName(columnHandles_.get(), tableHandle_.get());
+  const bool readTimestampAsLocalTime =
+      fileConfig_->readTimestampPartitionValueAsLocalTime(
+          connectorQueryCtx_->sessionProperties());
+  for (const auto& childSpec : scanSpec_->children()) {
+    const auto& name = childSpec->fieldName();
+    // 'configureEqualityDeleteColumns' already set the same value.
+    if (equalityAugmentedPartitionColumns_.contains(name)) {
+      continue;
+    }
+    const auto handleIt = handleByName.find(name);
+    if (handleIt == handleByName.end()) {
+      continue;
+    }
+    // Keyed by field ID rather than name so a renamed column still matches,
+    // and a transformed partition field is never substituted.
+    const auto valueIt =
+        identityPartitionKeys.find(handleIt->second->field().fieldId);
+    if (valueIt == identityPartitionKeys.end()) {
+      continue;
+    }
+    const auto& type = handleIt->second->dataType();
+    if (!hasSplitEncodablePartitionValue(*type)) {
+      continue;
+    }
+    // Iceberg stores DATE partition values as days since the epoch.
+    childSpec->setConstantValue(newConstantFromString(
+        type,
+        valueIt->second,
+        connectorQueryCtx_->memoryPool(),
+        readTimestampAsLocalTime,
+        type->isDate()));
+    identityPartitionColumns_.insert(name);
+    scanSpecState_->splitConstantColumns.insert(name);
   }
 }
 
@@ -1211,6 +1329,11 @@ std::vector<TypePtr> IcebergSplitReader::adaptColumns(
           // column. Leave the constant in place; the column type entry for
           // the file column index stays as the file type so Velox does not
           // try to bind this output channel to a file read.
+          continue;
+        }
+        if (identityPartitionColumns_.contains(fieldName)) {
+          // Identity partition value set by
+          // 'configureIdentityPartitionColumns'; same reasoning as above.
           continue;
         }
         if (!firstRowId_.has_value() &&

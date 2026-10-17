@@ -849,6 +849,31 @@ TEST_F(EncodingSizeEstimationTest, pforEstimateVsActualSize) {
       << actualSize;
 }
 
+TEST_F(EncodingSizeEstimationTest, pforEstimateWithoutExceptions) {
+  using Est = detail::EncodingSizeEstimation<uint32_t>;
+  std::vector<uint32_t> varying;
+  for (uint32_t row = 0; row < 200; ++row) {
+    varying.push_back(100 + row % 64);
+  }
+  for (const auto& data : {std::vector<uint32_t>(100, 42), varying}) {
+    SCOPED_TRACE(data.size());
+    const auto stats = Statistics<uint32_t>::create(data);
+    const auto estimated = Est::estimateSize(
+        EncodingType::PFOR,
+        static_cast<uint32_t>(data.size()),
+        stats,
+        Encoding::Options{});
+    ASSERT_TRUE(estimated.has_value());
+
+    nimble::Buffer buffer{*pool_};
+    const auto encoded =
+        nimble::test::Encoder<nimble::PFOREncoding<uint32_t>>::encode(
+            buffer,
+            nimble::Vector<uint32_t>(pool_.get(), data.begin(), data.end()));
+    EXPECT_EQ(estimated.value(), encoded.size());
+  }
+}
+
 TEST_F(EncodingSizeEstimationTest, simdForBitpackEstimateVsActualSize) {
   verifySimdForBitpackEstimateVsActualSize<uint8_t>();
   verifySimdForBitpackEstimateVsActualSize<uint16_t>();

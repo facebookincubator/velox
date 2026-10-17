@@ -881,8 +881,12 @@ class QueryConfig {
 
   /// The number of local parallel table writer operators per task for
   /// partitioned writes. If not set, use "task_writer_count". No default.
-  static constexpr const char* kTaskPartitionedWriterCount =
-      "task_partitioned_writer_count";
+  VELOX_QUERY_CONFIG_PROPERTY(
+      kTaskPartitionedWriterCount,
+      "task_partitioned_writer_count",
+      std::optional<uint32_t>,
+      std::optional<uint32_t>{},
+      "The number of local parallel table writer operators per task for partitioned writes. If not set, use \"task_writer_count\".")
 
   /// If true, finish the hash probe on an empty build table for a specific set
   /// of hash joins.
@@ -1454,6 +1458,20 @@ class QueryConfig {
       1000,
       "Batch size threshold for zero-copy in MarkSorted operator.")
 
+  /// Initial per-driver BATCH RPC congestion window (RPCOperator).
+  VELOX_QUERY_CONFIG(
+      kRpcCongestionBatchStartWindow,
+      rpcCongestionBatchStartWindow,
+      "rpc.congestion.batch_start_window",
+      int64_t,
+      0,
+      "Initial per-driver BATCH RPC congestion window. 0 keeps the built-in "
+      "default of 2. Positive values are clamped to [minWindow, maxWindow]. "
+      "PER_ROW always starts at its ceiling. Size at or below the backend's "
+      "measured concurrency knee: starting above it seeds the unloaded-RTT "
+      "baseline with queueing delay, leaving only explicit overload errors "
+      "to shrink the window.")
+
   /// Floor the RPC congestion window may shrink to under overload
   /// (RPCOperator).
   VELOX_QUERY_CONFIG(
@@ -1491,6 +1509,21 @@ class QueryConfig {
       "adaptive limiter shrinks concurrency only under overload. With "
       "admission-controlled dispatch this ceiling now actually bounds in-flight "
       "rows, so it must be sized for the backend's healthy concurrency.")
+
+  /// Cap for BATCH driver-window growth on clean no-latency completions.
+  VELOX_QUERY_CONFIG(
+      kRpcCongestionAsyncGrowthMaxWindow,
+      rpcCongestionAsyncGrowthMaxWindow,
+      "rpc.congestion.async_growth_max_window",
+      int64_t,
+      0,
+      "Cap for per-driver BATCH congestion-window growth on clean completions "
+      "that carry no usable latency sample. 0 (default) disables recovery "
+      "growth: overload may shrink the window, and clean completions do not "
+      "grow it back toward the start. "
+      "Positive values let the window discover capacity additively up to the "
+      "cap. A positive value below the effective BATCH start window is raised "
+      "to that start. The congestion max window remains the overall ceiling.")
 
   /// Enables AIMD adaptation of each backend's rate-limit capacity.
   VELOX_QUERY_CONFIG(

@@ -55,8 +55,7 @@ RowTypePtr outputEntrySchema(
     const std::vector<StateDeclarationPtr>& declarations,
     const std::string& name) {
   for (const auto& declaration : declarations) {
-    auto vector =
-        std::dynamic_pointer_cast<const VectorStateDeclaration>(declaration);
+    const auto* vector = declaration->as<VectorStateDeclaration>();
     if (vector != nullptr && vector->name() == name) {
       return vector->schema();
     }
@@ -291,6 +290,45 @@ int32_t countExchanges(const PlanNode* node) {
   return numExchanges;
 }
 
+// Returns a node in 'node' that reads splits, or null.
+// - Exchanges are left to the chain checks: the loop wires the one that links
+//   a plan to its predecessor.
+// - An index lookup reads splits for its lookup side only if the connector
+//   asks for them.
+// - A nested FixedPointNode gets its peers from this loop, but nothing feeds
+//   its initial plans.  It validates its own per-iteration plans.
+const PlanNode* findSplitSource(const PlanNode* node) {
+  if (node->is<ExchangeNode>()) {
+    return nullptr;
+  }
+  if (const auto* fixedPoint = node->as<FixedPointNode>()) {
+    for (const auto& declaration : fixedPoint->stateDeclarations()) {
+      if (declaration->initialPlan() == nullptr) {
+        continue;
+      }
+      if (const auto* found =
+              findSplitSource(declaration->initialPlan().get())) {
+        return found;
+      }
+    }
+    return nullptr;
+  }
+  const auto* lookupJoin = node->as<IndexLookupJoinNode>();
+  if (node->requiresSplits() ||
+      (lookupJoin != nullptr && lookupJoin->needsIndexSplit())) {
+    return node;
+  }
+  for (const auto& source : node->sources()) {
+    if (lookupJoin != nullptr && source == lookupJoin->lookupSource()) {
+      continue;
+    }
+    if (const auto* found = findSplitSource(source.get())) {
+      return found;
+    }
+  }
+  return nullptr;
+}
+
 void validatePlanChain(
     const std::vector<PlanNodePtr>& plans,
     std::string_view what,
@@ -338,6 +376,18 @@ void validatePlanChain(
           what,
           i);
     }
+    // The loop feeds splits only to its initial plans and to the Exchange that
+    // links a plan to its predecessor; any other split source would wait for
+    // splits forever.
+    const auto* splitSource = findSplitSource(root);
+    VELOX_USER_CHECK_NULL(
+        splitSource,
+        "FixedPointNode: only an initial plan can read splits; other plans "
+        "must read their rows from state: {} {}, {} {}",
+        what,
+        i,
+        splitSource->name(),
+        splitSource->id());
     const std::string rootName =
         root != nullptr ? std::string(root->name()) : "nothing";
     if (i + 1 == numPlans) {
@@ -576,16 +626,14 @@ void FixedPointNode::resolveAndValidateStateReferences() const {
         "FixedPointNode: initial plan must not read state (it runs in Phase 1 "
         "before state is populated) for entry: {}",
         declaration->name());
-    if (const auto* vector =
-            dynamic_cast<const VectorStateDeclaration*>(declaration.get())) {
+    if (const auto* vector = declaration->as<VectorStateDeclaration>()) {
       VELOX_USER_CHECK(
           initialPlan->outputType()->equivalent(*vector->schema()),
           "FixedPointNode: initial plan output must match the vector state "
           "entry schema for entry: {}",
           vector->name());
     } else if (
-        const auto* hashTable =
-            dynamic_cast<const HashTableStateDeclaration*>(declaration.get())) {
+        const auto* hashTable = declaration->as<HashTableStateDeclaration>()) {
       VELOX_USER_CHECK(
           initialPlan->outputType()->equivalent(*hashTable->schema()),
           "FixedPointNode: initial plan output must match the hash table state "

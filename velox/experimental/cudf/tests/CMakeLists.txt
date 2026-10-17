@@ -139,6 +139,26 @@ velox_add_cudf_test(
   TIMEOUT 3000
 )
 
+# Decimal arithmetic on the device. gpu_shadows/ must precede the Velox root,
+# and --diag-error=20011 fails the build on host-only calls from device code.
+velox_add_cudf_test(
+  NAME velox_cudf_decimal_arithmetic_device_test
+  SOURCES DecimalArithmeticDeviceTest.cu
+  LIBS cudf::cudf Folly::folly
+)
+set_target_properties(velox_cudf_decimal_arithmetic_device_test PROPERTIES CUDA_STANDARD 20)
+target_include_directories(
+  velox_cudf_decimal_arithmetic_device_test
+  BEFORE
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../functions/gpu_shadows
+)
+target_compile_options(
+  velox_cudf_decimal_arithmetic_device_test
+  PRIVATE
+    $<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr>
+    $<$<COMPILE_LANGUAGE:CUDA>:--diag-error=20011>
+)
+
 velox_add_cudf_test(
   NAME velox_cudf_enforce_single_row_test
   SOURCES Main.cpp EnforceSingleRowTest.cpp
@@ -271,7 +291,7 @@ velox_add_cudf_test(
 velox_add_cudf_test(
   NAME velox_cudf_subfield_filter_ast_test
   SOURCES Main.cpp SubfieldFilterAstTest.cpp
-  LIBS ${CUDF_TEST_DEFAULT_LIBS}
+  LIBS ${CUDF_TEST_DEFAULT_LIBS} velox_cudf_iceberg_connector
 )
 
 velox_add_cudf_test(
@@ -304,7 +324,7 @@ velox_add_cudf_test(
 velox_add_cudf_test(
   NAME velox_cudf_tocudf_selection_test
   SOURCES Main.cpp ToCudfSelectionTest.cpp
-  LIBS ${CUDF_TEST_DEFAULT_LIBS} velox_vector_fuzzer
+  LIBS ${CUDF_TEST_DEFAULT_LIBS} velox_vector_fuzzer gmock
 )
 
 velox_add_cudf_test(

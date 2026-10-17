@@ -104,6 +104,18 @@ TEST_F(QueryConfigTest, taskWriterCountConfig) {
   }
 }
 
+TEST_F(QueryConfigTest, taskPartitionedWriterCountRegistered) {
+  const config::ConfigProperty* found = nullptr;
+  for (const auto& property : QueryConfig::registeredProperties()) {
+    if (property.name == QueryConfig::kTaskPartitionedWriterCount) {
+      found = &property;
+    }
+  }
+  ASSERT_NE(found, nullptr);
+  EXPECT_EQ(found->type, config::ConfigPropertyType::kInteger);
+  EXPECT_FALSE(found->defaultValue.has_value());
+}
+
 TEST_F(QueryConfigTest, enableExpressionEvaluationCacheConfig) {
   std::shared_ptr<memory::MemoryPool> rootPool{
       memory::memoryManager()->addRootPool()};

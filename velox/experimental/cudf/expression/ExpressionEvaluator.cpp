@@ -2239,7 +2239,11 @@ class RowConstructorFunction : public CudfFunction {
         outputSize,
         std::move(children),
         0,
-        cudf::create_null_mask(0, cudf::mask_state::UNALLOCATED, stream, mr),
+        cudf::create_null_mask(
+            0,
+            cudf::mask_state::UNALLOCATED,
+            stream,
+            cudf::memory_resources{mr, get_temp_mr()}),
         stream,
         mr);
   }
@@ -3033,7 +3037,8 @@ std::string exprRegistryName(const core::TypedExprPtr& expr) {
 std::shared_ptr<FunctionExpression> FunctionExpression::create(
     const core::TypedExprPtr& expr,
     const RowTypePtr& inputRowSchema,
-    memory::MemoryPool* pool) {
+    memory::MemoryPool* pool,
+    const core::QueryConfig& config) {
   auto node = std::make_shared<FunctionExpression>();
   node->expr_ = expr;
   node->inputRowSchema_ = inputRowSchema;
@@ -3077,7 +3082,7 @@ std::shared_ptr<FunctionExpression> FunctionExpression::create(
         // string ops).  Field references are handled as leaf
         // FunctionExpressions.
         node->subexpressions_.push_back(
-            createCudfExpression(input, inputRowSchema, pool));
+            createCudfExpression(input, inputRowSchema, pool, config));
       }
     }
   }
@@ -3249,8 +3254,12 @@ MaskedInputs maskInputRows(
       masks.push_back(input.null_mask());
       beginBits.push_back(0);
     }
-    auto [combined, nullCount] =
-        cudf::bitmask_and(masks, beginBits, input.size(), stream, mr);
+    auto [combined, nullCount] = cudf::bitmask_and(
+        masks,
+        beginBits,
+        input.size(),
+        stream,
+        cudf::memory_resources{mr, get_temp_mr()});
     std::vector<cudf::column_view> children;
     children.reserve(input.num_children());
     for (cudf::size_type child = 0; child < input.num_children(); ++child) {
@@ -3615,11 +3624,12 @@ bool canExprRunOnGpu(
 std::shared_ptr<CudfExpression> createCudfExpression(
     const core::TypedExprPtr& expr,
     const RowTypePtr& inputRowSchema,
-    memory::MemoryPool* pool) {
+    memory::MemoryPool* pool,
+    const core::QueryConfig& config) {
   const auto* best = findBestEvaluator(expr);
   VELOX_CHECK_NOT_NULL(
       best, "No cuDF expression evaluator can handle: {}", expr->toString());
-  return best->create(expr, inputRowSchema, pool);
+  return best->create(expr, inputRowSchema, pool, config);
 }
 
 void unregisterFunctions() {

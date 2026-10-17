@@ -15,9 +15,13 @@
  */
 #include "velox/exec/FixedPointLoop.h"
 
+#include <folly/coro/BlockingWait.h>
+
 #include <folly/ScopeGuard.h>
 
 #include <algorithm>
+#include <chrono>
+#include <limits>
 #include <mutex>
 
 #include "velox/core/PlanFragment.h"
@@ -25,6 +29,7 @@
 #include "velox/exec/Driver.h"
 #include "velox/exec/Exchange.h"
 #include "velox/exec/HashTable.h"
+#include "velox/exec/OperatorUtils.h"
 #include "velox/exec/RowContainer.h"
 #include "velox/exec/Split.h"
 #include "velox/exec/VectorHasher.h"
@@ -48,6 +53,29 @@ RowVectorPtr copyRowVector(
   return target;
 }
 
+uint64_t elapsedNanos(std::chrono::steady_clock::time_point start) {
+  return std::chrono::duration_cast<std::chrono::nanoseconds>(
+             std::chrono::steady_clock::now() - start)
+      .count();
+}
+
+uint64_t countRows(const std::vector<RowVectorPtr>& batches) {
+  uint64_t numRows{0};
+  for (const auto& batch : batches) {
+    numRows += batch->size();
+  }
+  return numRows;
+}
+
+// Iterations whose sub-task TaskStats are kept, besides the latest one.
+constexpr size_t kNumLeadingDetailedIterations{3};
+
+void clearTaskStats(FixedPointChainExecutionStats& chain) {
+  for (auto& plan : chain.plans) {
+    plan.taskStats = TaskStats{};
+  }
+}
+
 // Aborts 'tasks' and waits until none of their drivers is on a thread. A failed
 // task resolves its completion future while drivers that are on thread keep
 // running, and those drivers can still call a consumer that writes into the
@@ -55,7 +83,7 @@ RowVectorPtr copyRowVector(
 // this returns at once for it while its loop keeps running; see the
 // cancellation TODO on FixedPointLoop.  Runs while an error unwinds, so it logs
 // a failure to abort instead of throwing.
-void abortAndWait(const std::vector<std::shared_ptr<exec::Task>>& tasks) {
+void abortAndWait(const std::vector<exec::TaskPtr>& tasks) {
   std::vector<ContinueFuture> futures;
   futures.reserve(tasks.size());
   for (const auto& task : tasks) {
@@ -71,59 +99,61 @@ void abortAndWait(const std::vector<std::shared_ptr<exec::Task>>& tasks) {
   }
 }
 
-// Returns the id of the first ExchangeNode found in the plan, if any.
-std::optional<core::PlanNodeId> findExchangeNodeId(
-    const core::PlanNodePtr& node) {
-  if (std::dynamic_pointer_cast<const core::ExchangeNode>(node) != nullptr) {
-    return node->id();
-  }
-  for (const auto& source : node->sources()) {
-    if (auto id = findExchangeNodeId(source)) {
-      return id;
+// Waits for each of 'tasks' to finish without holding a thread.  If one fails,
+// aborts the rest and rethrows its error.  Callers pass a named vector: GCC 11
+// fails to compile a braced list in a co_await operand.
+folly::coro::Task<void> awaitTasks(std::vector<exec::TaskPtr> tasks) {
+  for (const auto& task : tasks) {
+    co_await task->taskCompletionFuture();
+    if (auto error = task->error()) {
+      abortAndWait(tasks);
+      std::rethrow_exception(error);
     }
   }
+}
+
+// Returns the id of the first ExchangeNode found in the plan, if any.
+std::optional<core::PlanNodeId> findExchangeNodeId(
+    const core::PlanNodePtr& plan) {
+  if (const auto* exchange = core::PlanNode::findFirstNode(
+          plan.get(), [](const core::PlanNode* node) {
+            return node->is<core::ExchangeNode>();
+          })) {
+    return exchange->id();
+  }
+
   return std::nullopt;
 }
 
-// Collects the ids of every split-requiring source node in the plan (e.g.
-// TableScan or Exchange).  An initial plan whose source needs splits (reads a
-// table or receives a shuffle) has one; a local source (Values) has none.
-void collectSplitSourceNodeIds(
-    const core::PlanNodePtr& node,
-    std::vector<core::PlanNodeId>& ids) {
-  if (node->requiresSplits()) {
-    ids.push_back(node->id());
-    return;
-  }
-  for (const auto& source : node->sources()) {
-    collectSplitSourceNodeIds(source, ids);
-  }
-}
-
-// Collects the ids of every split-requiring node in the plan.  Unlike
-// collectSplitSourceNodeIds this does not stop at the first one: a fragment can
-// hold both the FixedPointNode (itself a split source when the body shuffles)
-// and a trailing Exchange above it.
+// Collects the ids of the split sources in the plan, such as a TableScan or an
+// Exchange.  A fixed point nested in the plan, other than 'self', contributes
+// the sources of its initial plans: the task running it passes their splits
+// on.  A fixed point's own id is not collected.
 void collectSplitTargets(
     const core::PlanNodePtr& node,
+    const core::PlanNode* self,
     folly::F14FastSet<core::PlanNodeId>& ids) {
-  if (node->requiresSplits()) {
+  if (const auto* fixedPoint = node->as<FixedPointNode>()) {
+    if (fixedPoint != self) {
+      for (const auto& declaration : fixedPoint->stateDeclarations()) {
+        if (declaration->initialPlan() != nullptr) {
+          collectSplitTargets(declaration->initialPlan(), self, ids);
+        }
+      }
+    }
+  } else if (node->requiresSplits()) {
     ids.insert(node->id());
   }
   for (const auto& source : node->sources()) {
-    collectSplitTargets(source, ids);
+    collectSplitTargets(source, self, ids);
   }
-}
-
-bool rootIsPartitionedOutput(const core::PlanNodePtr& node) {
-  return std::dynamic_pointer_cast<const core::PartitionedOutputNode>(node) !=
-      nullptr;
 }
 
 // A plan must run in parallel mode if it sends partitioned output or consumes
 // from an exchange; serial Task::next() rejects both.
 bool planNeedsParallel(const core::PlanNodePtr& node) {
-  return rootIsPartitionedOutput(node) || findExchangeNodeId(node).has_value();
+  return node->is<core::PartitionedOutputNode>() ||
+      findExchangeNodeId(node).has_value();
 }
 
 // Returns the FixedPointNode in 'node's plan tree (the single leaf of the
@@ -143,21 +173,7 @@ core::FixedPointNodePtr findFixedPointNode(const core::PlanNodePtr& node) {
 } // namespace
 
 // static
-bool FixedPointLoop::claims(
-    const core::PlanFragment& planFragment,
-    const FixedPointOptions* fixedPointOptions) {
-  // A caller can ask for the ordinary Driver pipeline over a plan this would
-  // otherwise claim; that is how this loop runs a sub-task over its own
-  // fragment without recursing.
-  if (fixedPointOptions != nullptr && fixedPointOptions->nested.has_value() &&
-      !fixedPointOptions->nested->dispatch) {
-    return false;
-  }
-  // Any plan containing a FixedPointNode (as its single leaf), including one
-  // with trailing downstream nodes above it.  (When such a loop runs its
-  // trailing sub-task over the same fragment it calls Task::create with
-  // NestedFixedPoint::dispatch=false, so that sub-task is a plain Task whose
-  // FixedPointNode leaf reads the output state -- no recursion.)
+bool FixedPointLoop::claims(const core::PlanFragment& planFragment) {
   return findFixedPointNode(planFragment.planNode) != nullptr;
 }
 
@@ -178,39 +194,40 @@ FixedPointLoop::FixedPointLoop(
       options_.iterationMaxDrivers,
       1,
       "FixedPointOptions::iterationMaxDrivers must be at least 1");
-  // The trailing sub-task reuses this fragment, so each split group would
-  // re-read the whole output state.
+  // Each split group of the owning task's pipeline would re-read the whole
+  // output state.
   VELOX_USER_CHECK(
       !owner_->planFragment().isGroupedExecution(),
       "A fixed point does not support grouped execution");
-  // Trailing nodes are present when the fragment root is not the
-  // FixedPointNode.
-  hasTrailing_ = owner_->planFragment().planNode.get() != node_.get();
   workerIndex_ = owner_->destination();
 
   // One worker per output partition of whichever chain shuffles -- the body,
   // the convergence sequence, or a fixed point nested in either (see
-  // FixedPointNode::numWorkers).
+  // FixedPointNode::numWorkers).  A fixed point that does not shuffle may run
+  // as any number of tasks, each an independent loop over the rows its initial
+  // plans read for its destination.
   const auto& plans = node_->plans();
   numWorkers_ = node_->numWorkers();
-  VELOX_CHECK_LT(
-      workerIndex_,
-      numWorkers_,
-      "Worker destination out of range; create exactly {} FixedPointLoops "
-      "with destinations 0..{}",
-      numWorkers_,
-      numWorkers_ - 1);
+  if (numWorkers_ > 1) {
+    VELOX_CHECK_LT(
+        workerIndex_,
+        numWorkers_,
+        "Worker destination out of range; create exactly {} FixedPointLoops "
+        "with destinations 0..{}",
+        numWorkers_,
+        numWorkers_ - 1);
+  }
 
-  // Every id a caller may address a split to.  The fixed point itself takes a
-  // peer worker's remote split; everything else is a split-requiring source in
-  // a plan this loop feeds -- an initial plan's scan or exchange, or the
-  // trailing plan's exchange when an enclosing loop feeds it.  The body and
-  // convergence chains wire their own exchanges, so their ids are not here.
+  // Every id this loop takes splits for.  The fixed point itself takes a peer
+  // worker's remote split; everything else is a split-requiring source in an
+  // initial plan.  The body and convergence chains wire their own exchanges,
+  // so their ids are not here.
   splitTargets_.insert(node_->id());
-  collectSplitTargets(owner_->planFragment().planNode, splitTargets_);
+
   for (const auto& declaration : node_->stateDeclarations()) {
     if (declaration->initialPlan() != nullptr) {
-      collectSplitTargets(declaration->initialPlan(), splitTargets_);
+      collectSplitTargets(
+          declaration->initialPlan(), node_.get(), splitTargets_);
     }
   }
 
@@ -240,142 +257,113 @@ void FixedPointLoop::addSplit(
   // A coordinator may add splits from several threads, so guard the captured
   // lists; the base takes its own lock for the same reason.
   std::lock_guard<std::mutex> l(splitsMutex_);
+
   // A RemoteConnectorSplit on the FixedPointNode itself names a peer worker
   // for this loop's shuffle; its per-iteration producer location is derived by
-  // producerLocation.  Every other split is read by a specific plan node --
-  // an initial plan's TableScan, or an Exchange in the trailing plan -- and is
-  // held under that node's id until the sub-task running it exists.
-  auto remoteSplit = std::dynamic_pointer_cast<exec::RemoteConnectorSplit>(
-      split.connectorSplit);
-  if (remoteSplit != nullptr && planNodeId == node_->id()) {
-    peerParentIds_.push_back(remoteSplit->taskId);
-    return;
+  // producerLocation.  Every other split is read by a source in an initial plan
+  // and goes to the sub-task running it, held until that sub-task exists.
+  if (split.hasConnectorSplit()) {
+    if (const auto* remoteSplit =
+            split.connectorSplit->as<exec::RemoteConnectorSplit>()) {
+      if (planNodeId == node_->id()) {
+        peerParentIds_.push_back(remoteSplit->taskId);
+        return;
+      }
+    }
   }
+
   VELOX_USER_CHECK_NE(
       planNodeId,
       node_->id(),
       "A connector split must be addressed to the plan node that reads it -- "
       "an initial plan's TableScan, say -- not to the fixed point itself, "
       "which cannot tell which source it was meant for");
-  // The driver path rejects an id that takes no splits; do the same here rather
-  // than file the split where nothing will read it and return an empty result.
-  VELOX_USER_CHECK(
-      splitTargets_.contains(planNodeId),
-      "Plan node takes no splits: {}",
-      planNodeId);
+
+  if (auto it = splitConsumers_.find(planNodeId); it != splitConsumers_.end()) {
+    if (auto task = it->second.lock()) {
+      task->addSplit(planNodeId, std::move(split));
+    }
+    return;
+  }
+
   nodeSplits_[planNodeId].push_back(std::move(split));
 }
 
 void FixedPointLoop::noMoreSplits(const core::PlanNodeId& planNodeId) {
   if (planNodeId != node_->id()) {
-    // Whoever assigns a node's splits is done with it; runTrailingPlan waits
-    // for this before running a trailing plan an enclosing loop feeds.
-    {
-      std::lock_guard<std::mutex> l(splitsMutex_);
-      splitsComplete_.insert(planNodeId);
+    std::lock_guard<std::mutex> l(splitsMutex_);
+    splitsComplete_.insert(planNodeId);
+    if (auto it = splitConsumers_.find(planNodeId);
+        it != splitConsumers_.end()) {
+      if (auto task = it->second.lock()) {
+        task->noMoreSplits(planNodeId);
+      }
+      splitConsumers_.erase(it);
     }
-    trailingSplitsCv_.notify_all();
     return;
   }
   // The fixed point's own peer splits are captured eagerly in addSplit().
 }
 
-RowVectorPtr FixedPointLoop::next(ContinueFuture* /*future*/) {
-  switch (phase_) {
-    case Phase::kCreated:
-      // Mark failed before rethrowing rather than after: a throw part-way
-      // through leaves the state half-written, and a retried next() must not
-      // re-seed it and rebuild hash tables on top of a half-finished run.
-      try {
-        run();
-      } catch (...) {
-        phase_ = Phase::kFailed;
-        throw;
-      }
-      break;
-    case Phase::kFinalized:
-      break;
-    case Phase::kFailed:
-      VELOX_FAIL("The fixed point failed on an earlier call and cannot resume");
-    case Phase::kInitialized:
-    case Phase::kIterating:
-      // run() drives these phases synchronously inside next(), and Task rejects
-      // next() on a parallel task, so no caller can observe a mid-run phase.
-      VELOX_UNREACHABLE("Fixed point observed mid-run by next()");
+void FixedPointLoop::runSerially() {
+  if (phase_ == Phase::kFailed) {
+    VELOX_FAIL("The fixed point failed on an earlier call and cannot resume");
   }
-  while (current_ < outputBuffer_.size()) {
-    auto batch = outputBuffer_[current_++];
-    if (batch != nullptr && batch->size() > 0) {
-      return batch;
-    }
+  VELOX_CHECK(
+      phase_ == Phase::kCreated,
+      "runSerially() cannot run a fixed point that has already been driven");
+  try {
+    folly::coro::blocking_wait(run());
+  } catch (...) {
+    // A throw part-way through leaves the state half-written.
+    phase_ = Phase::kFailed;
+    finished_.setValue();
+    throw;
   }
-  return nullptr;
 }
 
 void FixedPointLoop::start(
     uint32_t maxDrivers,
-    uint32_t /*concurrentSplitGroups*/,
-    std::function<void(std::exception_ptr)> onComplete) {
+    std::function<void(std::exception_ptr)> onError) {
   // Task::start() already rejected a serial task before delegating here.
   maxDrivers_ = maxDrivers;
-  // Parallel execution: run the loop asynchronously on the orchestration
-  // executor so start() returns immediately (Task::start's contract), deliver
-  // this worker's shard to the consumer (as a driver pipeline's CallbackSink
-  // would), and drive the task to a terminal state so
-  // owner_->taskCompletionFuture() / owner_->error() behave as for a
-  // driver-based task.  run() itself is unchanged from the serial path; it
-  // creates the per-iteration sub-tasks on this same QueryCtx, whose drivers
-  // run on the query executor -- which is why the loop must not occupy a thread
-  // of that executor itself (see FixedPointOptions::orchestrationExecutor).
+  // Run the loop asynchronously on the orchestration executor so start()
+  // returns immediately (Task::start's contract).  run() is the same coroutine
+  // runSerially() waits on; here it suspends while its sub-tasks run on the
+  // query executor.
   auto* executor = options_.orchestrationExecutor;
   VELOX_CHECK_NOT_NULL(
       executor,
       "Parallel FixedPointLoop requires "
       "FixedPointOptions::orchestrationExecutor, an executor separate from "
       "the query executor its sub-tasks run on");
-  // The owning task keeps this loop alive for its whole run:
-  // the task owns it, so holding a shared_ptr to the owner is what
-  // shared_from_this() did before this was a Task itself.
   VELOX_USER_CHECK(
       phase_ == Phase::kCreated,
       "start() cannot run a fixed point that has already been driven");
+  // The owning task keeps this loop alive for its whole run.
   auto ownerHandle = owner_->shared_from_this();
-  executor->add([this, ownerHandle, onComplete = std::move(onComplete)]() {
-    try {
-      run();
-      auto supplier = owner_->consumerSupplier();
-      Consumer consumer = supplier ? supplier() : nullptr;
-      if (consumer != nullptr) {
-        for (const auto& batch : outputBuffer_) {
-          if (batch == nullptr || batch->size() == 0) {
-            continue;
-          }
-          ContinueFuture future = ContinueFuture::makeEmpty();
-          const auto reason = consumer(batch, /*drained=*/false, &future);
-          // Honor back-pressure: a blocked consumer returns a future that
-          // resolves when it can take more (as a Driver would wait on it).
-          if (reason != exec::BlockingReason::kNotBlocked && future.valid()) {
-            std::move(future).wait();
-          }
+  folly::coro::co_withExecutor(folly::getKeepAliveToken(executor), run())
+      .start([this, ownerHandle, onError = std::move(onError)](
+                 folly::Try<void>&& result) {
+        if (result.hasException()) {
+          phase_ = Phase::kFailed;
+          // Fail the task before waking its FixedPointNode leaf, so the task
+          // reports the loop's error.
+          onError(result.exception().to_exception_ptr());
+          finished_.setValue();
         }
-        // Signal end of data, mirroring CallbackSink::close().
-        consumer(nullptr, /*drained=*/false, /*future=*/nullptr);
-      }
-      onComplete(nullptr);
-    } catch (...) {
-      phase_ = Phase::kFailed;
-      onComplete(std::current_exception());
-    }
-  });
+      });
 }
 
-void FixedPointLoop::run() {
-  initialize();
+folly::coro::Task<void> FixedPointLoop::run() {
+  co_await initialize();
 
   bool hasConverged = false;
   for (int32_t iteration = 0; iteration < node_->maxIterations(); ++iteration) {
-    runIteration(iteration);
-    if (converged()) {
+    co_await runIteration(iteration);
+    const bool iterationConverged = co_await converged();
+    executionStats_.wlock()->iterations.back().converged = iterationConverged;
+    if (iterationConverged) {
       hasConverged = true;
       break;
     }
@@ -389,20 +377,14 @@ void FixedPointLoop::run() {
       "Fixed point did not converge within {} iterations",
       node_->maxIterations());
 
-  finalize();
+  co_await finalize();
 }
 
-void FixedPointLoop::initialize() {
+folly::coro::Task<void> FixedPointLoop::initialize() {
   VELOX_CHECK(
       phase_ == Phase::kCreated,
       "initialize() must run once, before any other phase");
-  const auto queryId = owner_->queryCtx()->queryId();
-
-  // Output batches are copied into a leaf child of the task pool (the task's
-  // own pool is an aggregate pool and cannot allocate directly); it outlives
-  // the loop so the batches streamed by next() stay valid for the task's
-  // lifetime.
-  outputPool_ = owner_->pool()->addLeafChild("fixedpoint.output");
+  const auto start = std::chrono::steady_clock::now();
 
   // converged() inspects only this worker's local shard.  With more than one
   // worker, every worker must reach the same verdict on the same iteration or
@@ -423,27 +405,28 @@ void FixedPointLoop::initialize() {
   // parentFixedPoint() link set when they are created -- no global or QueryCtx
   // registry.
 
-  initializeState();
+  std::vector<FixedPointPlanExecutionStats> initializationPlans;
+  co_await initializeState(initializationPlans);
+  {
+    auto stats = executionStats_.wlock();
+    stats->initializationNanos = elapsedNanos(start);
+    stats->initializationPlans = std::move(initializationPlans);
+  }
   phase_ = Phase::kInitialized;
 }
 
-void FixedPointLoop::finalize() {
+folly::coro::Task<void> FixedPointLoop::finalize() {
   VELOX_CHECK(
       phase_ == Phase::kInitialized || phase_ == Phase::kIterating,
       "finalize() must follow initialize()");
-  // Emit the output.  Without trailing nodes, it is the final contents of the
-  // output state entry (output shaping such as a recursive CTE's UNION ALL is
-  // the plan's responsibility, e.g. accumulating into an append-mode output
-  // entry).  With trailing nodes above the FixedPointNode, run them over that
-  // state and emit their result.
-  if (hasTrailing_) {
-    runTrailingPlan();
-  } else {
-    appendOutput(node_->outputStateEntry());
-  }
-  // A next() after this -- including one after a parallel run -- streams the
-  // buffered output instead of running the loop again.
+  // The output is the final contents of the output state entry, which the
+  // owning task's pipeline reads (output shaping such as a recursive CTE's
+  // UNION ALL is the plan's responsibility, e.g. accumulating into an
+  // append-mode output entry).
   phase_ = Phase::kFinalized;
+  succeeded_ = true;
+  finished_.setValue();
+  co_return;
 
   // The state pool is intentionally NOT released here.  A sub-task driver can
   // still be tearing down asynchronously after its
@@ -457,10 +440,10 @@ void FixedPointLoop::finalize() {
   // would deadlock.)
 }
 
-void FixedPointLoop::initializeState() {
+folly::coro::Task<void> FixedPointLoop::initializeState(
+    std::vector<FixedPointPlanExecutionStats>& initializationPlans) {
   for (const auto& declaration : node_->stateDeclarations()) {
-    if (auto vector = std::dynamic_pointer_cast<const VectorStateDeclaration>(
-            declaration)) {
+    if (const auto* vector = declaration->as<VectorStateDeclaration>()) {
       // Register the entry's append mode (from the declaration) so writing it
       // accumulates or replaces accordingly.
       state_->declareVector(vector->name(), vector->append());
@@ -468,35 +451,44 @@ void FixedPointLoop::initializeState() {
         state_->setVector(vector->name(), {});
         continue;
       }
+
       // The initial plan produces this worker's pre-partitioned shard, stored
       // as-is.  Its source may be local (Values), a table (TableScan) or a
       // shuffle (Exchange); drainPlan feeds the coordinator-assigned source
       // splits and runs it in this worker's execution mode.
-      state_->setVector(
-          vector->name(),
-          drainPlan(vector->initialPlan(), outputPool_.get(), maxDrivers_));
+      auto [batches, taskStats] = co_await drainPlan(
+          vector->initialPlan(), statePool_.get(), maxDrivers_);
+      state_->setVector(vector->name(), batches);
+      initializationPlans.push_back({
+          .maxDrivers = maxDrivers_,
+          .taskStats = std::move(taskStats),
+      });
       continue;
     }
-    if (auto hashTable =
-            std::dynamic_pointer_cast<const HashTableStateDeclaration>(
-                declaration)) {
-      buildHashTable(*hashTable);
+
+    if (const auto* hashTable = declaration->as<HashTableStateDeclaration>()) {
+      initializationPlans.push_back(co_await buildHashTable(*hashTable));
       continue;
     }
+
     VELOX_UNREACHABLE(
         "Unknown state declaration type: {}", declaration->name());
   }
 }
 
-void FixedPointLoop::buildHashTable(
-    const HashTableStateDeclaration& declaration) {
+namespace {
+
+// Creates an empty join table for 'declaration', owning its own key hashers.
+std::unique_ptr<BaseHashTable> createHashTable(
+    const HashTableStateDeclaration& declaration,
+    const core::QueryConfig& queryConfig,
+    memory::MemoryPool* pool) {
   const auto& schema = declaration.schema();
   const auto& keyColumns = declaration.keyColumns();
   const auto numKeys = static_cast<int32_t>(keyColumns.size());
 
-  // Prototype requirement: key columns are the leading columns, so a build
-  // input column index equals its RowContainer column index (keys first, then
-  // dependents).
+  // Key columns are the leading columns, so a build input column index equals
+  // its RowContainer column index (keys first, then dependents).
   std::vector<std::unique_ptr<exec::VectorHasher>> hashers;
   hashers.reserve(numKeys);
   std::vector<TypePtr> dependentTypes;
@@ -512,189 +504,170 @@ void FixedPointLoop::buildHashTable(
       dependentTypes.push_back(schema->childAt(channel));
     }
   }
-
-  auto table = exec::HashTable<true>::createForJoin(
+  return exec::HashTable<true>::createForJoin(
       std::move(hashers),
       dependentTypes,
       /*allowDuplicates=*/true,
       /*hasProbedFlag=*/false,
       /*hasCountFlag=*/false,
-      /*minTableSizeForParallelJoinBuild=*/1'000,
-      state_->pool());
+      queryConfig.minTableRowsForParallelJoinBuild(),
+      pool);
+}
 
-  auto buildPool = owner_->pool()->addLeafChild("fixedpoint.hashbuild");
-  auto batches =
-      drainPlan(declaration.initialPlan(), buildPool.get(), maxDrivers_);
-  auto* rowContainer = table->rows();
-  // With allowDuplicates the container chains same-key rows through a
-  // next-link; it must start null on each new row so chain insertion is
-  // well-formed.
-  const auto nextOffset = rowContainer->nextOffset();
-  for (const auto& batch : batches) {
-    std::vector<DecodedVector> decoded;
-    decoded.reserve(batch->childrenSize());
-    for (const auto& child : batch->children()) {
-      decoded.emplace_back(*child);
-    }
-    for (vector_size_t row = 0; row < batch->size(); ++row) {
-      // The table's keys are not nullable, so a NULL key would be stored as
-      // the value under it and match probe keys equal to that value.
-      if (std::any_of(
-              decoded.begin(), decoded.begin() + numKeys, [&](const auto& key) {
-                return key.isNullAt(row);
-              })) {
-        continue;
-      }
-      char* newRow = rowContainer->newRow();
-      if (nextOffset > 0) {
-        *reinterpret_cast<char**>(newRow + nextOffset) = nullptr;
-      }
-      for (int32_t column = 0; column < static_cast<int32_t>(decoded.size());
-           ++column) {
-        rowContainer->store(decoded[column], row, newRow, column);
-      }
-    }
+// Adds 'batch' to 'table' as HashBuild::addInput does for an inner join.  Rows
+// with a null key are dropped, since they match nothing.
+void addToHashTable(const RowVector& batch, BaseHashTable& table) {
+  auto& hashers = table.hashers();
+  SelectivityVector activeRows(batch.size());
+  for (auto& hasher : hashers) {
+    hasher->decode(
+        *batch.childAt(hasher->channel())->loadedVector(), activeRows);
   }
+  deselectRowsWithNulls(hashers, activeRows);
+  if (!activeRows.hasSelections()) {
+    return;
+  }
+
+  const auto numKeys = hashers.size();
+  std::vector<DecodedVector> dependents;
+  dependents.reserve(batch.childrenSize() - numKeys);
+  for (auto column = numKeys; column < batch.childrenSize(); ++column) {
+    dependents.emplace_back(*batch.childAt(column)->loadedVector(), activeRows);
+  }
+  auto* rows = table.rows();
+  // With allowDuplicates the container chains same-key rows through a
+  // next-link, which must start null on each new row.
+  const auto nextOffset = rows->nextOffset();
+  activeRows.applyToSelected([&](vector_size_t row) {
+    char* newRow = rows->newRow();
+    if (nextOffset > 0) {
+      *reinterpret_cast<char**>(newRow + nextOffset) = nullptr;
+    }
+    for (auto i = 0; i < numKeys; ++i) {
+      rows->store(hashers[i]->decodedVector(), row, newRow, i);
+    }
+    for (auto i = 0; i < dependents.size(); ++i) {
+      rows->store(dependents[i], row, newRow, numKeys + i);
+    }
+  });
+}
+
+} // namespace
+
+folly::coro::Task<FixedPointPlanExecutionStats> FixedPointLoop::buildHashTable(
+    const HashTableStateDeclaration& declaration) {
+  const auto& queryCtx = *owner_->queryCtx();
+  std::mutex partsMutex;
+  std::vector<std::unique_ptr<BaseHashTable>> parts;
+  // One table per output driver; HashTable merges at most 255 tables.
+  const auto numDrivers =
+      std::min<uint32_t>(maxDrivers_, std::numeric_limits<uint8_t>::max());
+  auto taskStats = co_await consumePlan(
+      declaration.initialPlan(), numDrivers, [&]() -> exec::Consumer {
+        auto part = createHashTable(
+            declaration, queryCtx.queryConfig(), state_->pool());
+        auto* rawPart = part.get();
+        {
+          std::lock_guard<std::mutex> l(partsMutex);
+          parts.push_back(std::move(part));
+        }
+        return [rawPart](
+                   RowVectorPtr batch,
+                   bool /*drained*/,
+                   ContinueFuture* /*future*/) {
+          if (batch != nullptr && batch->size() > 0) {
+            addToHashTable(*batch, *rawPart);
+          }
+          return exec::BlockingReason::kNotBlocked;
+        };
+      });
+
+  VELOX_CHECK(!parts.empty());
+  auto table = std::move(parts.front());
+  std::vector<std::unique_ptr<BaseHashTable>> otherTables(
+      std::make_move_iterator(parts.begin() + 1),
+      std::make_move_iterator(parts.end()));
   table->prepareJoinTable(
-      {}, exec::BaseHashTable::kNoSpillInputStartPartitionBit, 1'000'000);
+      std::move(otherTables),
+      exec::BaseHashTable::kNoSpillInputStartPartitionBit,
+      /*vectorHasherMaxNumDistinct=*/1'000'000,
+      /*dropDuplicates=*/false,
+      queryCtx.executor());
 
   state_->setHashTable(
       declaration.name(),
       HashTableEntry{
           std::shared_ptr<exec::BaseHashTable>(std::move(table)),
-          schema,
-          numKeys,
+          declaration.schema(),
+          static_cast<int32_t>(declaration.keyColumns().size()),
       });
+  co_return FixedPointPlanExecutionStats{
+      .maxDrivers = numDrivers, .taskStats = std::move(taskStats)};
 }
 
-void FixedPointLoop::appendOutput(const std::string& stateEntry) {
-  for (const auto& batch : state_->getVector(stateEntry)) {
-    if (batch != nullptr && batch->size() > 0) {
-      outputBuffer_.push_back(copyRowVector(batch, outputPool_.get()));
+void FixedPointLoop::routeSplits(
+    const exec::TaskPtr& task,
+    const core::PlanNodeId& sourceId) {
+  std::lock_guard<std::mutex> l(splitsMutex_);
+  const bool complete = splitsComplete_.contains(sourceId);
+  if (executionMode_ == exec::Task::ExecutionMode::kSerial) {
+    VELOX_USER_CHECK(
+        complete,
+        "A serial fixed point runs only once each source's splits are "
+        "complete; call noMoreSplits before next(): {}",
+        sourceId);
+  }
+  if (auto it = nodeSplits_.find(sourceId); it != nodeSplits_.end()) {
+    for (auto& split : it->second) {
+      task->addSplit(sourceId, std::move(split));
     }
+    nodeSplits_.erase(it);
   }
-}
-
-void FixedPointLoop::feedTrailingSplits(exec::Task& task) {
-  if (nested_.trailingExchangeId.empty()) {
-    return;
+  if (complete) {
+    task->noMoreSplits(sourceId);
+  } else {
+    splitConsumers_[sourceId] = task;
   }
-  const auto& exchangeId = nested_.trailingExchangeId;
-  std::vector<exec::Split> splits;
-  {
-    // The enclosing loop starts this task before assigning the splits, so they
-    // may not have arrived yet; running the trailing plan now would read an
-    // empty Exchange and emit nothing.  Wait for its noMoreSplits.
-    std::unique_lock<std::mutex> l(splitsMutex_);
-    trailingSplitsCv_.wait(
-        l, [&] { return splitsComplete_.count(exchangeId) > 0; });
-    auto it = nodeSplits_.find(exchangeId);
-    if (it != nodeSplits_.end()) {
-      splits = std::move(it->second);
-      nodeSplits_.erase(it);
-    }
-  }
-  for (auto& split : splits) {
-    task.addSplit(exchangeId, std::move(split));
-  }
-  task.noMoreSplits(exchangeId);
 }
 
 FixedPointOptions FixedPointLoop::subTaskOptions() {
   FixedPointOptions subOptions = options_;
   // Rebuilt rather than inherited: the enclosing nesting state describes where
   // *this* loop sits, and handing it down would give the sub-task an address
-  // and a trailing id belonging to the level above.
+  // belonging to the level above.
   subOptions.nested.emplace();
   subOptions.nested->parent = this;
   return subOptions;
 }
 
-void FixedPointLoop::runTrailingPlan() {
-  // Sub-tasks run over this same fragment, so they must not recurse into
-  // another FixedPointLoop (NestedFixedPoint::dispatch=false); the
-  // FixedPointNode leaf instead compiles to a state-reading operator (see the
-  // operator translator).
-  auto trailingOptions = subTaskOptions();
-  trailingOptions.nested->dispatch = false;
-  // The enclosing loop sets trailingTaskId when this fragment is one of its
-  // shuffle producers: the PartitionedOutput runs here, in the trailing
-  // sub-task, so this is the id its consumers are wired to.
-  std::string trailingTaskId = nested_.trailingTaskId;
-  if (trailingTaskId.empty()) {
-    trailingTaskId = subTaskId();
-  }
-  if (executionMode_ == exec::Task::ExecutionMode::kSerial) {
-    // An empty ConsumerSupplier selects the supplier overload; the trailing
-    // plan's output is drained via next() below.
-    auto task = exec::Task::create(
-        trailingTaskId,
-        owner_->planFragment(),
-        /*destination=*/workerIndex_,
-        owner_->queryCtx(),
-        exec::Task::ExecutionMode::kSerial,
-        exec::ConsumerSupplier{},
-        /*memoryArbitrationPriority=*/0,
-        /*spillDiskOpts=*/std::nullopt,
-        /*onError=*/nullptr,
-        &trailingOptions);
-    // The FixedPointNode is a split source when the body shuffles; in the
-    // trailing sub-task it is read as state, so close its (empty) split source.
-    if (node_->requiresSplits()) {
-      task->noMoreSplits(node_->id());
-    }
-    feedTrailingSplits(*task);
-    while (auto batch = task->next()) {
-      outputBuffer_.push_back(copyRowVector(batch, outputPool_.get()));
-    }
-    return;
-  }
-
-  // The trailing plan re-shuffles; run it in parallel and collect through a
-  // consumer (guarded, as it runs on the sub-task's driver thread).
-  std::mutex mutex;
-  auto consumer =
-      [&](RowVectorPtr batch, bool /*drained*/, ContinueFuture* /*future*/) {
-        if (batch != nullptr && batch->size() > 0) {
-          auto copy = copyRowVector(batch, outputPool_.get());
-          std::lock_guard<std::mutex> l(mutex);
-          outputBuffer_.push_back(std::move(copy));
-        }
-        return exec::BlockingReason::kNotBlocked;
-      };
-  auto task = exec::Task::create(
-      trailingTaskId,
-      owner_->planFragment(),
-      /*destination=*/workerIndex_,
-      owner_->queryCtx(),
-      exec::Task::ExecutionMode::kParallel,
-      ConsumerSupplier{[consumer]() -> Consumer { return consumer; }},
-      /*memoryArbitrationPriority=*/0,
-      /*spillDiskOpts=*/std::nullopt,
-      /*onError=*/nullptr,
-      &trailingOptions);
-  SCOPE_FAIL {
-    abortAndWait({task});
-  };
-  task->start(iterationDrivers());
-  if (node_->requiresSplits()) {
-    task->noMoreSplits(node_->id());
-  }
-  feedTrailingSplits(*task);
-  auto future = task->taskCompletionFuture();
-  std::move(future).wait();
-  if (auto error = task->error()) {
-    std::rethrow_exception(error);
-  }
-}
-
-std::vector<RowVectorPtr> FixedPointLoop::drainPlan(
-    const core::PlanNodePtr& plan,
+folly::coro::Task<FixedPointLoop::DrainedPlan> FixedPointLoop::drainPlan(
+    core::PlanNodePtr plan,
     memory::MemoryPool* pool,
     uint32_t maxDrivers) {
   std::vector<RowVectorPtr> batches;
+  std::mutex mutex;
+  auto taskStats =
+      co_await consumePlan(plan, maxDrivers, [&]() -> exec::Consumer {
+        return [&](RowVectorPtr batch,
+                   bool /*drained*/,
+                   ContinueFuture* /*future*/) {
+          if (batch != nullptr && batch->size() > 0) {
+            auto copy = copyRowVector(batch, pool);
+            std::lock_guard<std::mutex> l(mutex);
+            batches.push_back(std::move(copy));
+          }
+          return exec::BlockingReason::kNotBlocked;
+        };
+      });
+  co_return DrainedPlan{std::move(batches), std::move(taskStats)};
+}
+
+folly::coro::Task<TaskStats> FixedPointLoop::consumePlan(
+    core::PlanNodePtr plan,
+    uint32_t maxDrivers,
+    exec::ConsumerSupplier consumerSupplier) {
+  const auto subOptions = subTaskOptions();
   if (executionMode_ == exec::Task::ExecutionMode::kSerial) {
-    const auto subOptions = subTaskOptions();
     auto task = exec::Task::create(
         subTaskId(),
         core::PlanFragment{plan},
@@ -706,65 +679,52 @@ std::vector<RowVectorPtr> FixedPointLoop::drainPlan(
         /*spillDiskOpts=*/std::nullopt,
         /*onError=*/nullptr,
         &subOptions);
-    feedInitSplits(*task, plan);
+    SCOPE_FAIL {
+      abortAndWait({task});
+    };
+    feedInitSplits(task, plan);
+    auto consumer = consumerSupplier();
     while (auto batch = task->next()) {
-      batches.push_back(copyRowVector(batch, pool));
+      consumer(std::move(batch), /*drained=*/false, /*future=*/nullptr);
     }
-    return batches;
+    co_return task->taskStats();
   }
 
-  // Parallel: start on the executor and collect through a consumer (guarded, as
-  // it runs on the sub-task's driver thread).  The sub-task's pool is released
-  // on completion, so each batch is copied into 'pool'.
-  std::mutex mutex;
-  auto consumer =
-      [&](RowVectorPtr batch, bool /*drained*/, ContinueFuture* /*future*/) {
-        if (batch != nullptr && batch->size() > 0) {
-          auto copy = copyRowVector(batch, pool);
-          std::lock_guard<std::mutex> l(mutex);
-          batches.push_back(std::move(copy));
-        }
-        return exec::BlockingReason::kNotBlocked;
-      };
-  const auto subOptions = subTaskOptions();
+  // The supplier gives each output driver its own consumer, called on that
+  // driver's thread.
   auto task = exec::Task::create(
       subTaskId(),
       core::PlanFragment{plan},
       /*destination=*/workerIndex_,
       owner_->queryCtx(),
       exec::Task::ExecutionMode::kParallel,
-      consumer,
+      consumerSupplier,
       /*memoryArbitrationPriority=*/0,
       /*spillDiskOpts=*/std::nullopt,
       /*onError=*/nullptr,
       &subOptions);
-  SCOPE_FAIL {
-    abortAndWait({task});
-  };
-  task->start(maxDrivers);
-  feedInitSplits(*task, plan);
-  auto future = task->taskCompletionFuture();
-  std::move(future).wait();
-  if (auto error = task->error()) {
-    std::rethrow_exception(error);
+  {
+    SCOPE_FAIL {
+      abortAndWait({task});
+    };
+    task->start(maxDrivers);
+    feedInitSplits(task, plan);
   }
-  return batches;
+  std::vector<std::shared_ptr<exec::Task>> tasks{task};
+  co_await awaitTasks(std::move(tasks));
+  co_return task->taskStats();
 }
 
 void FixedPointLoop::feedInitSplits(
-    exec::Task& task,
+    const exec::TaskPtr& task,
     const core::PlanNodePtr& plan) {
-  // splitsMutex_ is taken per lookup below, not held across the addSplit calls
-  // into the sub-task.
-  // An Exchange source reads the upstream producer the coordinator launched and
-  // named via options_.upstreamExchangeUri (keyed by the Exchange node id); the
-  // worker pulls its own partition by task destination.
-  if (auto exchangeId = findExchangeNodeId(plan)) {
-    VELOX_CHECK(
-        options_.upstreamExchangeUri,
-        "Initial plan reads via Exchange {}; the coordinator must set "
-        "FixedPointOptions::upstreamExchangeUri",
-        *exchangeId);
+  // With options_.upstreamExchangeUri set, an Exchange source reads the one
+  // upstream producer it names (keyed by the Exchange node id); the worker
+  // pulls its own partition by task destination.  Without it, the Exchange
+  // reads the remote splits the coordinator addresses to it, one per upstream
+  // task, like any other split source below.
+  auto exchangeId = findExchangeNodeId(plan);
+  if (exchangeId.has_value() && options_.upstreamExchangeUri) {
     // This branch feeds the Exchange and nothing else, so a connector split the
     // coordinator also assigned has no source to go to.  Fail rather than drop
     // it silently, which would just produce missing rows.
@@ -783,40 +743,24 @@ void FixedPointLoop::feedInitSplits(
           *exchangeId,
           it->second.size());
     }
-    task.addSplit(
+    task->addSplit(
         *exchangeId,
         exec::Split(
             std::make_shared<exec::RemoteConnectorSplit>(
                 options_.upstreamExchangeUri(*exchangeId))));
-    task.noMoreSplits(*exchangeId);
+    task->noMoreSplits(*exchangeId);
     return;
   }
-  // Any other split source (e.g. a TableScan) reads the coordinator-assigned
-  // source splits; a local source (e.g. Values) needs none.
-  std::vector<core::PlanNodeId> sourceIds;
-  collectSplitSourceNodeIds(plan, sourceIds);
-  if (sourceIds.empty()) {
-    return;
-  }
+  // Any other split source (a TableScan, or an Exchange without the hook)
+  // reads the coordinator-assigned splits; a local source (e.g. Values) needs
+  // none.
+  folly::F14FastSet<core::PlanNodeId> sourceIds;
+  collectSplitTargets(plan, node_.get(), sourceIds);
   // Splits are held under the id of the node that reads them, so each source
   // takes only its own: several sources in one initial plan, or several initial
   // plans that each scan a table, no longer share one list.
   for (const auto& sourceId : sourceIds) {
-    std::vector<exec::Split> splits;
-    {
-      std::lock_guard<std::mutex> l(splitsMutex_);
-      auto it = nodeSplits_.find(sourceId);
-      VELOX_USER_CHECK(
-          it != nodeSplits_.end() && !it->second.empty(),
-          "Initial plan source {} requires splits; the coordinator must assign "
-          "them to that node (e.g. a TableScan file split)",
-          sourceId);
-      splits = it->second;
-    }
-    for (auto& split : splits) {
-      task.addSplit(sourceId, std::move(split));
-    }
-    task.noMoreSplits(sourceId);
+    routeSplits(task, sourceId);
   }
 }
 
@@ -861,12 +805,14 @@ uint32_t FixedPointLoop::iterationDrivers() const {
 // supporting barriers (HashJoin/Exchange/PartitionedOutput do not), and there
 // is no DriverFactory-injection path.  The near-term mitigation is hash-table
 // reuse via HashTable persistent state; full reuse needs Velox core support.
-std::vector<RowVectorPtr> FixedPointLoop::runParallelChain(
+folly::coro::Task<std::vector<RowVectorPtr>> FixedPointLoop::runParallelChain(
     const std::vector<core::PlanNodePtr>& plans,
     size_t planIndexOffset,
     int32_t iteration,
     memory::MemoryPool* pool,
-    bool singleDriverLastPlan) {
+    bool singleDriverLastPlan,
+    FixedPointChainExecutionStats& stats) {
+  const auto chainStart = std::chrono::steady_clock::now();
   const size_t lastPlan = plans.size() - 1;
 
   // The last plan's output -- this iteration's rows for the output state entry,
@@ -880,137 +826,132 @@ std::vector<RowVectorPtr> FixedPointLoop::runParallelChain(
   // worker's partition.  Each producer is created under the task id from
   // producerLocation() -- a pure function of (this worker's task id, iteration,
   // plan) -- so a peer can address it knowing only this worker's task id.
-  std::vector<std::shared_ptr<exec::Task>> tasks;
+  std::vector<exec::TaskPtr> tasks;
   tasks.reserve(plans.size());
-  // Also covers a throw while later tasks are still being created or wired.
-  SCOPE_FAIL {
-    abortAndWait(tasks);
-  };
-  // A plan may itself contain a FixedPointNode, whose sub-task becomes a nested
-  // FixedPointLoop.  It cannot address peers by task id, so hand it the
-  // worker addresses extended by the (iteration, plan) this loop is running --
-  // every peer extends its own the same way, so the nested loops find each
-  // other.
-  const auto peers = peerAddresses();
   const auto planDrivers = distributeDriverBudget(
       iterationDrivers(), plans.size(), singleDriverLastPlan);
-  for (size_t p = 0; p < plans.size(); ++p) {
-    auto subOptions = subTaskOptions();
-    // A loop nested in this plan runs its iterations within the plan's share.
-    subOptions.iterationMaxDrivers = planDrivers[p];
-    subOptions.nested->workerAddress =
-        nestedAddress(workerAddress(), iteration, planIndexOffset + p);
-    subOptions.nested->peerAddresses.reserve(peers.size());
-    for (const auto& peer : peers) {
-      subOptions.nested->peerAddresses.push_back(
-          nestedAddress(peer, iteration, planIndexOffset + p));
-    }
-    const auto producerId =
-        producerLocation(workerAddress(), iteration, planIndexOffset + p)
-            .taskId;
-    auto createId = producerId;
-    if (findFixedPointNode(plans[p]) != nullptr) {
-      // This plan nests a fixed point, so its sub-task is a FixedPointLoop
-      // and the plan's own nodes run in that task's trailing sub-task.  Both
-      // ends of this loop's shuffle therefore have to be redirected there.
-      //
-      // Producing: only the trailing sub-task can carry the id peers read, so
-      // the wrapper takes a derived one -- sharing would collide on the
-      // per-task memory pool.
-      if (rootIsPartitionedOutput(plans[p])) {
-        createId = fmt::format("{}.fp", producerId);
-        subOptions.nested->trailingTaskId = producerId;
+  {
+    // Also covers a throw while later tasks are still being created or wired.
+    SCOPE_FAIL {
+      abortAndWait(tasks);
+    };
+    // A plan may itself contain a FixedPointNode, whose sub-task becomes a
+    // nested FixedPointLoop.  It cannot address peers by task id, so hand it
+    // the worker addresses extended by the (iteration, plan) this loop is
+    // running -- every peer extends its own the same way, so the nested loops
+    // find each other.
+    const auto peers = peerAddresses();
+    for (size_t p = 0; p < plans.size(); ++p) {
+      auto subOptions = subTaskOptions();
+      // A loop nested in this plan runs its iterations within the plan's share.
+      subOptions.iterationMaxDrivers = planDrivers[p];
+      subOptions.nested->workerAddress =
+          nestedAddress(workerAddress(), iteration, planIndexOffset + p);
+      subOptions.nested->peerAddresses.reserve(peers.size());
+      for (const auto& peer : peers) {
+        subOptions.nested->peerAddresses.push_back(
+            nestedAddress(peer, iteration, planIndexOffset + p));
       }
-      // Consuming: the Exchange this loop feeds below lives in the trailing
-      // plan, so name it for the nested task to route the splits to.
-      if (p > 0) {
-        auto exchangeId = findExchangeNodeId(plans[p]);
-        VELOX_CHECK(
-            exchangeId.has_value(),
-            "Non-first plan in a parallel chain must start with an Exchange");
-        subOptions.nested->trailingExchangeId = *exchangeId;
+      // The plans of a chain are joined only by shuffle. A chain of one plan
+      // has no peer reading its output, so its sub-task is internal.
+      const auto createId = plans.size() == 1
+          ? subTaskId()
+          : producerLocation(workerAddress(), iteration, planIndexOffset + p)
+                .taskId;
+      // The last plan produces the rows written back to the output state entry;
+      // collect them through a consumer.  Earlier plans shuffle to the next via
+      // PartitionedOutput and need no consumer.
+      if (p == lastPlan) {
+        auto consumer = [&](RowVectorPtr batch,
+                            bool /*drained*/,
+                            ContinueFuture* /*future*/) {
+          if (batch != nullptr && batch->size() > 0) {
+            const auto copyStart = std::chrono::steady_clock::now();
+            auto copy = copyRowVector(batch, pool);
+            const auto copyNanos = elapsedNanos(copyStart);
+            std::lock_guard<std::mutex> l(outputMutex);
+            output.push_back(std::move(copy));
+            stats.outputCopyNanos += copyNanos;
+          }
+          return exec::BlockingReason::kNotBlocked;
+        };
+        tasks.push_back(
+            exec::Task::create(
+                createId,
+                core::PlanFragment{plans[p]},
+                /*destination=*/workerIndex_,
+                owner_->queryCtx(),
+                exec::Task::ExecutionMode::kParallel,
+                consumer,
+                /*memoryArbitrationPriority=*/0,
+                /*spillDiskOpts=*/std::nullopt,
+                /*onError=*/nullptr,
+                &subOptions));
+      } else {
+        tasks.push_back(
+            exec::Task::create(
+                createId,
+                core::PlanFragment{plans[p]},
+                /*destination=*/workerIndex_,
+                owner_->queryCtx(),
+                exec::Task::ExecutionMode::kParallel,
+                exec::ConsumerSupplier{},
+                /*memoryArbitrationPriority=*/0,
+                /*spillDiskOpts=*/std::nullopt,
+                /*onError=*/nullptr,
+                &subOptions));
       }
     }
-    // The last plan produces the rows written back to the output state entry;
-    // collect them through a consumer.  Earlier plans shuffle to the next via
-    // PartitionedOutput and need no consumer.
-    if (p == lastPlan) {
-      auto consumer = [&](RowVectorPtr batch,
-                          bool /*drained*/,
-                          ContinueFuture* /*future*/) {
-        if (batch != nullptr && batch->size() > 0) {
-          auto copy = copyRowVector(batch, pool);
-          std::lock_guard<std::mutex> l(outputMutex);
-          output.push_back(std::move(copy));
-        }
-        return exec::BlockingReason::kNotBlocked;
-      };
-      tasks.push_back(
-          exec::Task::create(
-              createId,
-              core::PlanFragment{plans[p]},
-              /*destination=*/workerIndex_,
-              owner_->queryCtx(),
-              exec::Task::ExecutionMode::kParallel,
-              consumer,
-              /*memoryArbitrationPriority=*/0,
-              /*spillDiskOpts=*/std::nullopt,
-              /*onError=*/nullptr,
-              &subOptions));
-    } else {
-      tasks.push_back(
-          exec::Task::create(
-              createId,
-              core::PlanFragment{plans[p]},
-              /*destination=*/workerIndex_,
-              owner_->queryCtx(),
-              exec::Task::ExecutionMode::kParallel,
-              exec::ConsumerSupplier{},
-              /*memoryArbitrationPriority=*/0,
-              /*spillDiskOpts=*/std::nullopt,
-              /*onError=*/nullptr,
-              &subOptions));
-    }
-  }
 
-  // One sub-task per plan: the split wiring below indexes tasks by plan index.
-  VELOX_CHECK_EQ(tasks.size(), plans.size());
-  for (size_t p = 0; p < tasks.size(); ++p) {
-    tasks[p]->start(planDrivers[p]);
-  }
-
-  // Wire each consumer plan's Exchange to plan p-1's producer of every peer the
-  // coordinator named, reaching each by the exchange URI producerLocation()
-  // derives from that peer's task id.  A peer's producer is created by the
-  // peer's task; the Exchange polls until it registers (peers run concurrently,
-  // near lockstep).
-  for (size_t p = 1; p < plans.size(); ++p) {
-    auto exchangeId = findExchangeNodeId(plans[p]);
-    VELOX_CHECK(
-        exchangeId.has_value(),
-        "Non-first plan in a parallel chain must start with an Exchange");
-    for (const auto& peer : peerAddresses()) {
-      tasks[p]->addSplit(
-          *exchangeId,
-          exec::Split(
-              std::make_shared<exec::RemoteConnectorSplit>(
-                  producerLocation(peer, iteration, planIndexOffset + p - 1)
-                      .exchangeUri)));
+    // One sub-task per plan: the split wiring below indexes tasks by plan
+    // index.
+    VELOX_CHECK_EQ(tasks.size(), plans.size());
+    stats.taskCreationNanos = elapsedNanos(chainStart);
+    const auto taskStartBegin = std::chrono::steady_clock::now();
+    for (size_t p = 0; p < tasks.size(); ++p) {
+      tasks[p]->start(planDrivers[p]);
     }
-    tasks[p]->noMoreSplits(*exchangeId);
+    stats.taskStartNanos = elapsedNanos(taskStartBegin);
+
+    // Wire each consumer plan's Exchange to plan p-1's producer of every peer
+    // the coordinator named, reaching each by the exchange URI
+    // producerLocation() derives from that peer's task id.  A peer's producer
+    // is created by the peer's task; the Exchange polls until it registers
+    // (peers run concurrently, near lockstep).
+    const auto wiringStart = std::chrono::steady_clock::now();
+    for (size_t p = 1; p < plans.size(); ++p) {
+      auto exchangeId = findExchangeNodeId(plans[p]);
+      VELOX_CHECK(
+          exchangeId.has_value(),
+          "Non-first plan in a parallel chain must start with an Exchange");
+      for (const auto& peer : peerAddresses()) {
+        tasks[p]->addSplit(
+            *exchangeId,
+            exec::Split(
+                std::make_shared<exec::RemoteConnectorSplit>(
+                    producerLocation(peer, iteration, planIndexOffset + p - 1)
+                        .exchangeUri)));
+      }
+      tasks[p]->noMoreSplits(*exchangeId);
+    }
+    stats.exchangeWiringNanos = elapsedNanos(wiringStart);
   }
 
   // Waiting on every task is an implicit cross-worker barrier: a producer task
   // finishes only once all the consumers wired to it have drained their
   // partition, so no worker advances to the next iteration until all peers in
   // the topology have shuffled.
-  for (auto& task : tasks) {
-    auto future = task->taskCompletionFuture();
-    std::move(future).wait();
-    if (auto error = task->error()) {
-      std::rethrow_exception(error);
-    }
+  const auto waitStart = std::chrono::steady_clock::now();
+  co_await awaitTasks(tasks);
+  stats.plans.reserve(tasks.size());
+  for (size_t p = 0; p < tasks.size(); ++p) {
+    stats.plans.push_back({
+        .planIndex = planIndexOffset + p,
+        .maxDrivers = planDrivers[p],
+        .taskStats = tasks[p]->taskStats(),
+    });
   }
+  stats.taskCompletionWaitNanos = elapsedNanos(waitStart);
 
   // Deliberately do NOT wait on these sub-tasks' owner_->taskDeletionFuture()
   // here.  A producer sub-task (PartitionedOutput) is read by peer workers, so
@@ -1018,10 +959,12 @@ std::vector<RowVectorPtr> FixedPointLoop::runParallelChain(
   // against the peer.  Their persistent-state references are instead kept safe
   // by the state pool living for the whole FixedPointLoop lifetime (it is
   // released in the destructor, not eagerly in run()).
-  return output;
+  stats.outputRows = countRows(output);
+  stats.totalNanos = elapsedNanos(chainStart);
+  co_return output;
 }
 
-void FixedPointLoop::runIteration(int32_t iteration) {
+folly::coro::Task<void> FixedPointLoop::runIteration(int32_t iteration) {
   VELOX_CHECK(
       phase_ == Phase::kInitialized || phase_ == Phase::kIterating,
       "runIteration() must follow initialize()");
@@ -1034,6 +977,8 @@ void FixedPointLoop::runIteration(int32_t iteration) {
       lastIteration_);
   lastIteration_ = iteration;
   phase_ = Phase::kIterating;
+  const auto iterationStart = std::chrono::steady_clock::now();
+  FixedPointIterationExecutionStats iterationStats{.iteration = iteration};
   // The last plan produces this iteration's rows; the framework writes them
   // back into the output state entry, appending or replacing per its
   // declaration.  A scratch pool holds the captured rows until writeVector
@@ -1048,15 +993,24 @@ void FixedPointLoop::runIteration(int32_t iteration) {
   // calling thread.
   std::vector<RowVectorPtr> output;
   if (executionMode_ == exec::Task::ExecutionMode::kParallel) {
-    output = runParallelChain(
+    output = co_await runParallelChain(
         node_->plans(),
         /*planIndexOffset=*/0,
         iteration,
         scratchPool.get(),
-        /*singleDriverLastPlan=*/false);
+        /*singleDriverLastPlan=*/false,
+        iterationStats.body);
   } else {
-    output =
-        drainPlan(node_->plans().front(), scratchPool.get(), /*maxDrivers=*/1);
+    const auto bodyStart = std::chrono::steady_clock::now();
+    auto drained = co_await drainPlan(
+        node_->plans().front(), scratchPool.get(), /*maxDrivers=*/1);
+    output = std::move(drained.batches);
+    iterationStats.body.totalNanos = elapsedNanos(bodyStart);
+    iterationStats.body.outputRows = countRows(output);
+    iterationStats.body.plans.push_back({
+        .maxDrivers = 1,
+        .taskStats = std::move(drained.taskStats),
+    });
   }
   // An empty delta is the terminal state of a semi-naive recursion, and it is
   // free to observe here -- stopWhenDeltaEmpty reads it instead of running a
@@ -1066,11 +1020,25 @@ void FixedPointLoop::runIteration(int32_t iteration) {
     numDeltaRows += rows->size();
   }
   lastDeltaEmpty_ = numDeltaRows == 0;
+  const auto writeStart = std::chrono::steady_clock::now();
   state_->writeVector(node_->outputStateEntry(), output);
+  iterationStats.stateWriteNanos = elapsedNanos(writeStart);
+  iterationStats.totalNanos = elapsedNanos(iterationStart);
+  {
+    auto stats = executionStats_.wlock();
+    if (stats->iterations.size() > kNumLeadingDetailedIterations) {
+      auto& previous = stats->iterations.back();
+      clearTaskStats(previous.body);
+      if (previous.convergence.has_value()) {
+        clearTaskStats(*previous.convergence);
+      }
+    }
+    stats->iterations.push_back(std::move(iterationStats));
+  }
   ++iterations_;
 }
 
-bool FixedPointLoop::converged() {
+folly::coro::Task<bool> FixedPointLoop::converged() {
   VELOX_CHECK(
       phase_ == Phase::kInitialized || phase_ == Phase::kIterating,
       "converged() must follow initialize()");
@@ -1078,11 +1046,11 @@ bool FixedPointLoop::converged() {
   if (config.stopWhenDeltaEmpty) {
     // The node validated that this is a non-shuffling fixed point, so the
     // local delta is the whole delta and no peer is waiting on this worker.
-    return lastDeltaEmpty_;
+    co_return lastDeltaEmpty_;
   }
   if (config.plans.empty()) {
     // No convergence sequence: the loop is bounded only by maxIterations.
-    return false;
+    co_return false;
   }
   auto convergencePool = owner_->pool()->addLeafChild(
       fmt::format("fixedpoint.convergence.{}", iterations_));
@@ -1092,16 +1060,33 @@ bool FixedPointLoop::converged() {
   // that has nowhere to go in the body.  Its producers are indexed after the
   // body's so their per-iteration ids do not collide.
   std::vector<RowVectorPtr> rows;
+  FixedPointChainExecutionStats convergenceStats;
   if (executionMode_ == exec::Task::ExecutionMode::kParallel) {
-    rows = runParallelChain(
+    rows = co_await runParallelChain(
         config.plans,
         /*planIndexOffset=*/node_->plans().size(),
         static_cast<int32_t>(iterations_),
         convergencePool.get(),
-        /*singleDriverLastPlan=*/true);
+        /*singleDriverLastPlan=*/true,
+        convergenceStats);
   } else {
-    rows = drainPlan(
+    const auto convergenceStart = std::chrono::steady_clock::now();
+    auto drained = co_await drainPlan(
         config.plans.front(), convergencePool.get(), /*maxDrivers=*/1);
+    rows = std::move(drained.batches);
+    convergenceStats.totalNanos = elapsedNanos(convergenceStart);
+    convergenceStats.outputRows = countRows(rows);
+    convergenceStats.plans.push_back({
+        .planIndex = node_->plans().size(),
+        .maxDrivers = 1,
+        .taskStats = std::move(drained.taskStats),
+    });
+  }
+  {
+    auto stats = executionStats_.wlock();
+    auto& iterationStats = stats->iterations.back();
+    iterationStats.totalNanos += convergenceStats.totalNanos;
+    iterationStats.convergence = std::move(convergenceStats);
   }
   // The last convergence plan is contracted (and validated at node
   // construction) to produce exactly one BOOLEAN column.  The row count is a
@@ -1130,10 +1115,14 @@ bool FixedPointLoop::converged() {
         !flag->isNullAt(0),
         "The convergence criterion produced a NULL verdict; it must be TRUE or "
         "FALSE");
-    return flag->valueAt(0);
+    co_return flag->valueAt(0);
   }
   // No rows means an empty terminal state, which is converged by definition.
-  return true;
+  co_return true;
+}
+
+FixedPointExecutionStats FixedPointLoop::executionStats() const {
+  return *executionStats_.rlock();
 }
 
 WorkerAddress FixedPointLoop::workerAddress() const {

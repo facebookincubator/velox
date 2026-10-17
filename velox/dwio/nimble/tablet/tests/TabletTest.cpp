@@ -829,6 +829,90 @@ class TabletCacheTest : public TabletTest {};
 
 // --- TabletTest parameterized tests ---
 
+TEST_P(TabletTest, batchStripeIdentifiers) {
+  constexpr uint32_t kNumStripes{4};
+  constexpr uint32_t kStreamBytes{10};
+  readerOptions_ = std::make_unique<velox::io::ReaderOptions>(pool_.get());
+  readerOptions_->setDataIoStats(dataIoStats_);
+  readerOptions_->setMetadataIoStats(metadataIoStats_);
+  readerOptions_->setIndexIoStats(indexIoStats_);
+  readerOptions_->setMaxCoalesceDistance(1 << 20);
+  readerOptions_->setMaxCoalesceBytes(1 << 20);
+  for (const auto flushThreshold :
+       {uint32_t{1}, std::numeric_limits<uint32_t>::max()}) {
+    SCOPED_TRACE(flushThreshold);
+    std::string file;
+    velox::InMemoryWriteFile writeFile(&file);
+    auto writer = nimble::TabletWriter::create(
+        &writeFile,
+        *pool_,
+        {.metadataFlushThreshold = flushThreshold,
+         .metadataCompressionThreshold = std::numeric_limits<uint32_t>::max(),
+         .streamDeduplicationEnabled = false,
+         .enableChunkStats = true,
+         .chunkStatsMinAvgChunks = 0});
+    nimble::Buffer buffer{*pool_};
+    for (uint32_t i{0}; i < kNumStripes; ++i) {
+      SCOPED_TRACE(i);
+      writer->writeStripe(
+          100,
+          {nimble::index::test::createStream(
+              buffer,
+              {.offset = 0,
+               .chunks = {{.rowCount = 100, .size = kStreamBytes + i}}})});
+    }
+    writer->close();
+    writeFile.close();
+
+    for (const bool loadChunkStats : {false, true}) {
+      SCOPED_TRACE(loadChunkStats);
+      nimble::TabletReader::Options options;
+      options.loadChunkStats = loadChunkStats;
+      auto tablet = createTabletReader(file, options);
+      const auto readsBefore = metadataIoStats_->read().count();
+      const auto stripes = tablet->stripeIdentifiers(1, kNumStripes - 1);
+      ASSERT_EQ(stripes.size(), kNumStripes - 1);
+      for (uint32_t i{0}; i < stripes.size(); ++i) {
+        SCOPED_TRACE(i);
+        EXPECT_EQ(stripes[i].stripeId(), i + 1);
+        EXPECT_EQ(tablet->streamSize(stripes[i], 0), kStreamBytes + i + 1);
+        EXPECT_EQ(stripes[i].chunkStats() != nullptr, loadChunkStats);
+      }
+      if (flushThreshold == 1) {
+        EXPECT_NE(stripes[0].stripeGroup(), stripes[1].stripeGroup());
+        if (!expectHasCache()) {
+          EXPECT_EQ(metadataIoStats_->read().count() - readsBefore, 1);
+        }
+      } else {
+        EXPECT_EQ(stripes[0].stripeGroup(), stripes[1].stripeGroup());
+      }
+
+      const auto readsAfter = metadataIoStats_->read().count();
+      const auto cached = tablet->stripeIdentifiers(1, kNumStripes - 1);
+      ASSERT_EQ(cached.size(), stripes.size());
+      for (uint32_t i{0}; i < stripes.size(); ++i) {
+        SCOPED_TRACE(i);
+        EXPECT_EQ(cached[i].stripeGroup(), stripes[i].stripeGroup());
+        EXPECT_EQ(cached[i].chunkStats(), stripes[i].chunkStats());
+      }
+      EXPECT_EQ(metadataIoStats_->read().count(), readsAfter);
+      try {
+        tablet->stripeIdentifiers(kNumStripes, 0);
+        FAIL() << "Expected a non-zero stripe-count check failure";
+      } catch (const nimble::NimbleException& exception) {
+        EXPECT_EQ(exception.failingExpression(), "numStripes > 0");
+      }
+      NIMBLE_ASSERT_THROW(
+          tablet->stripeIdentifiers(kNumStripes + 1, 0),
+          "Stripe index out of bounds");
+      NIMBLE_ASSERT_THROW(
+          tablet->stripeIdentifiers(kNumStripes - 1, 2),
+          "Stripe load range exceeds the tablet");
+      EXPECT_EQ(metadataIoStats_->read().count(), readsAfter);
+    }
+  }
+}
+
 TEST_P(TabletTest, emptyWrite) {
   // Creating an Nimble file without writing any stripes
   test(/* stripes */ {});
@@ -1138,7 +1222,7 @@ TEST_P(TabletTest, vectorIndex) {
       numCacheInsertionsBeforeLoad = cacheStats.numNew;
     }
 
-    const auto vectorIndex = tablet->vectorIndex("embedding");
+    auto vectorIndex = tablet->vectorIndex("embedding");
     if (!withVectorIndex) {
       EXPECT_EQ(vectorIndex, nullptr);
       EXPECT_EQ(indexIoStats_->rawBytesRead(), indexBytesBeforeLoad);
@@ -1201,7 +1285,33 @@ TEST_P(TabletTest, vectorIndex) {
       EXPECT_EQ(warmCacheStats.numEntries, warmCacheStatsBeforeLoad.numEntries);
       EXPECT_EQ(warmCacheStats.numNew, warmCacheStatsBeforeLoad.numNew);
       EXPECT_GT(warmCacheStats.numHit, warmCacheStatsBeforeLoad.numHit);
+
+      nimble::TabletReader::Options boundedCacheOptions;
+      boundedCacheOptions.maxCacheEntrySize = 1;
+      const auto boundedCacheTablet =
+          createTabletReader(file, std::move(boundedCacheOptions));
+      const auto indexBytesBeforeBypass = indexIoStats_->rawBytesRead();
+      const auto indexCacheHitsBeforeBypass = indexIoStats_->ramHit().count();
+      ASSERT_NE(boundedCacheTablet->vectorIndex("embedding"), nullptr);
+      EXPECT_GT(indexIoStats_->rawBytesRead(), indexBytesBeforeBypass);
+      EXPECT_EQ(indexIoStats_->ramHit().count(), indexCacheHitsBeforeBypass);
     }
+
+    const std::weak_ptr<const nimble::index::VectorIndex> weakVectorIndex{
+        vectorIndex};
+    vectorIndex.reset();
+    EXPECT_TRUE(weakVectorIndex.expired());
+
+    nimble::TabletReader::Options pinnedOptions;
+    pinnedOptions.pinIndex = true;
+    const auto pinnedTablet =
+        createTabletReader(file, std::move(pinnedOptions));
+    auto pinnedVectorIndex = pinnedTablet->vectorIndex("embedding");
+    ASSERT_NE(pinnedVectorIndex, nullptr);
+    const std::weak_ptr<const nimble::index::VectorIndex> weakPinnedVectorIndex{
+        pinnedVectorIndex};
+    pinnedVectorIndex.reset();
+    EXPECT_FALSE(weakPinnedVectorIndex.expired());
   }
 }
 

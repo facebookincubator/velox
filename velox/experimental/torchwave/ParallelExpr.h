@@ -37,6 +37,18 @@ namespace torch::wave {
 /// escape as graph outputs, then merges the identical ones that remain.
 int64_t elideReadOnlyClones(nativert::Graph& graph, const ValueTypes& types);
 
+/// Merges copy_(select(T, dim, i), src_i) for i = 0..k-1 into one
+/// copy_(slice(T, dim, 0, k), stack([src_0 .. src_k-1], dim)). Each copy
+/// mutates T, so the slice of T feeding the next one is ordered after it, and k
+/// copies become a chain of 3k partition layers; the columns are disjoint, so
+/// the one merged copy writes the same values. Applies when the sources are
+/// expands to the same sizes and nothing between the first and last copy reads
+/// or writes T or writes a source. Call before normalizeAndAnnotateGraph, so
+/// the new nodes get their defaults like any other. Gated on
+/// WaveConfig::recognizeDisjointCopies by the caller. Returns the number of
+/// copies merged away.
+int64_t rewriteDisjointCopies(nativert::Graph& graph, WaveGraph& waveGraph);
+
 /// Merges nodes that compute the same value from the same operands, to a
 /// fixpoint: merging two nodes can make their consumers congruent in turn. Only
 /// pure nodes participate -- nothing that writes, reads a buffer written

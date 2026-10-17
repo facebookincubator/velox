@@ -455,7 +455,15 @@ class TabletReader {
   /// group was written. May be less than the final schema's node count.
   uint32_t streamCount(const StripeIdentifier& stripe) const;
 
+  /// Loads the metadata identifying one stripe.
   StripeIdentifier stripeIdentifier(uint32_t stripeIndex) const;
+
+  /// Loads metadata for consecutive stripes, coalescing uncached stripe-group
+  /// and chunk-stat sections. Returns identifiers in stripe order.
+  /// Requires a non-zero stripe count.
+  std::vector<StripeIdentifier> stripeIdentifiers(
+      uint32_t stripeOffset,
+      uint32_t numStripes) const;
 
   /// Returns whether any value stream uses a file or external dictionary.
   bool hasFileOrExternalDictionaries() const;
@@ -594,6 +602,15 @@ class TabletReader {
   // MetadataInput.
   StripeGroupMetadata loadStripeGroupMetadata(uint32_t stripeGroupIndex) const;
 
+  // Loads all missing groups in one metadata I/O plan, preserving input order.
+  std::vector<StripeGroupMetadata> loadStripeGroupMetadata(
+      std::span<const uint32_t> stripeGroupIndices) const;
+
+  // Keeps loaded group and chunk metadata in their respective caches.
+  StripeGroupMetadata cacheStripeGroupMetadata(
+      uint32_t stripeGroupIndex,
+      StripeGroupMetadata metadata) const;
+
   // Optional sections.
   //
   // Parses optional sections metadata from footer into optionalSections_ map.
@@ -689,7 +706,7 @@ class TabletReader {
 
   // Describes available indexes without materializing their FAISS data.
   std::unique_ptr<index::VectorIndexDirectory> vectorIndexDirectory_;
-  // Keeps immutable indexes strongly cached for the reader lifetime.
+  // Caches immutable indexes according to the configured pinning policy.
   mutable MetadataCache<std::string, const index::VectorIndex>
       vectorIndexCache_;
 

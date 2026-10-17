@@ -50,6 +50,16 @@ class StateDeclaration : public ISerializable {
   /// printing (FixedPointNode::addDetails).
   virtual std::string toString() const = 0;
 
+  template <typename T>
+  bool is() const {
+    return dynamic_cast<const T*>(this) != nullptr;
+  }
+
+  template <typename T>
+  const T* as() const {
+    return dynamic_cast<const T*>(this);
+  }
+
  protected:
   StateDeclaration(std::string name, PlanNodePtr initialPlan)
       : name_{std::move(name)}, initialPlan_{std::move(initialPlan)} {}
