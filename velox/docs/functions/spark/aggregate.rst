@@ -126,6 +126,22 @@ General Aggregate Functions
 
     Returns the first non-null value of `x`.
 
+.. spark:function:: histogram_numeric(x, integer) -> array(row(x x, y double))
+
+    Computes an approximate numeric histogram with at most ``numBins`` bins.
+    ``numBins`` must be a non-null constant INTEGER of at least 2. Null input
+    values are ignored. Empty and all-null input returns null.
+
+    Supported input and center types are TINYINT, SMALLINT, INTEGER, BIGINT,
+    REAL, DOUBLE, DECIMAL, DATE, TIMESTAMP, TIMESTAMP_UTC, and
+    INTERVAL_YEAR_MONTH. Decimal centers that exceed the input precision are
+    returned as null while retaining the corresponding height.
+
+    Results can vary with input order and aggregation-tree shape. See Spark's
+    `histogram_numeric documentation
+    <https://spark.apache.org/docs/latest/api/sql/index.html#histogram_numeric>`_
+    for the function semantics.
+
 .. spark:function:: kurtosis(x) -> double
 
     Returns the Pearson's kurtosis of all input values. When the count of `x` is not empty,

@@ -25,12 +25,15 @@ add_executable(
   CollectSetAggregateTest.cpp
   CovarianceAggregatesTest.cpp
   FirstAggregateTest.cpp
+  HistogramNumericAggregateTest.cpp
+  HistogramNumericTypesTest.cpp
   LastAggregateTest.cpp
   Main.cpp
   MinMaxAggregationTest.cpp
   MinMaxByAggregationTest.cpp
   ModeAggregateTest.cpp
   RegrReplacementAggregationTest.cpp
+  SparkNumericHistogramTest.cpp
   SumAggregationTest.cpp
   VarianceAggregationTest.cpp
 )
@@ -49,6 +52,7 @@ target_link_libraries(
   velox_hive_connector
   velox_vector_fuzzer
   gflags::gflags
+  GTest::gmock
   GTest::gtest
   GTest::gtest_main
 )
