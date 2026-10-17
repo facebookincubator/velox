@@ -39,10 +39,9 @@ namespace facebook::velox::exec::rpc {
 /// variance (e.g. variable LLM output length) because only queueing lifts the
 /// fastest request in a window.
 ///
-/// Units that complete without a usable latency sample (MetaGen async-job
-/// batches, whose queue-dominated elapsed time must not train the gradient)
-/// grow the window through onCleanUnits instead: +1 per evidence window of
-/// clean completions, so a no-latency path still discovers capacity.
+/// Units that complete without a usable latency sample grow the window through
+/// onCleanUnits instead: +1 per evidence window of clean completions, so a
+/// no-latency path still discovers capacity when explicitly enabled.
 ///
 /// The window is carried as a double and reported as its floor. That is load
 /// bearing, not a style choice: one recomputation changes the window by
@@ -152,14 +151,14 @@ class CongestionController {
   /// count, so a trickle of rejections cannot ratchet the window up.
   void onCleanUnits(int64_t numUnits);
 
-  /// Caps additive growth on clean no-latency completions, independent of
-  /// maxWindow_. Non-positive leaves growth bounded by maxWindow_ only; set it
-  /// to bound async-job discovery for a deployment whose knee is known.
+  /// Enables and caps additive growth on clean no-latency completions,
+  /// independent of maxWindow_. Non-positive disables this growth; set a
+  /// positive value to bound discovery for a deployment whose knee is known.
   void setCleanMaxWindow(int64_t cleanMaxWindow) {
     cleanMaxWindow_ = std::max<int64_t>(0, cleanMaxWindow);
   }
 
-  /// Returns the clean-growth cap (0 when unset).
+  /// Returns the clean-growth cap (0 when disabled).
   int64_t cleanMaxWindow() const {
     return cleanMaxWindow_;
   }
@@ -195,8 +194,7 @@ class CongestionController {
   int64_t numWindowSamples_{0};
   // Clean completions banked toward the next +1; reset by onError().
   int64_t cleanUnits_{0};
-  // Independent ceiling for clean-unit growth; 0 (default) leaves growth
-  // bounded by maxWindow_ only.
+  // Independent ceiling for clean-unit growth; 0 disables this growth.
   int64_t cleanMaxWindow_{0};
 
   // Count of window-shrink events (onError halving + gradient shrinks).

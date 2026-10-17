@@ -236,7 +236,9 @@ class RPCState {
   /// queueing delay, leaving only explicit overload errors to shrink it.
   /// @param asyncGrowthMaxWindow Cap for BATCH window growth on clean
   /// no-latency completions (default 0 = growth disabled). Positive values let
-  /// the window discover capacity additively up to the cap.
+  /// the window discover capacity additively up to the cap. A positive value
+  /// below the effective BATCH start window is raised to that start, and
+  /// maxWindow remains the overall ceiling.
   void setStreamingMode(
       RPCStreamingMode mode,
       int64_t minWindow = 1,
@@ -250,12 +252,12 @@ class RPCState {
 
   /// Set both the starting limit and the ceiling to maxWindow, overriding the
   /// per-mode default chosen in setStreamingMode(). This yields a fixed window
-  /// only while no samples/errors/clean completions are fed: onUnitError still
-  /// halves it, onUnitSample still grows it via the sqrt headroom, and
-  /// onUnitCleanCompletions still grows it additively. That no-feed case is
-  /// the deterministic window the unit tests rely on. Must be called AFTER
-  /// setStreamingMode(), which always resets the window. Tests only; production
-  /// relies on the per-mode defaults.
+  /// only while no samples/errors are fed: onUnitError still halves it and
+  /// onUnitSample still grows it via the sqrt headroom. Clean-completion growth
+  /// is disabled because this resets its cap to zero. That no-feed case is the
+  /// deterministic window the unit tests rely on. Must be called AFTER
+  /// setStreamingMode(), which always resets the window. Tests only;
+  /// production relies on the per-mode defaults.
   void setMaxWindow(int64_t maxWindow);
 
   // ===== Input batch storage =====
@@ -448,12 +450,6 @@ class RPCState {
   /// gradient cannot see. Ignored unless an async-growth cap was configured
   /// via setStreamingMode (0 disables the growth). Thread-safe.
   void onUnitCleanCompletions(int64_t numUnits);
-
-  /// True when clean no-latency completions grow the BATCH window: BATCH mode
-  /// with a positive async-growth cap. The operator uses this to keep the
-  /// companion horizon skip behind the same gate, so default-off preserves
-  /// legacy paced-admission behavior. Thread-safe.
-  bool cleanGrowthEnabled() const;
 
   /// Return a consistent snapshot of all operator-visible state under a single
   /// lock acquisition. Thread-safe.
