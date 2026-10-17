@@ -18,6 +18,7 @@
 
 #include <utility>
 
+#include "velox/connectors/hive/FileScanState.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/HiveConnectorUtil.h"
@@ -77,20 +78,7 @@ std::vector<column_index_t> HiveDataSource::setupBucketConversion() {
     readerOutputType_ = ROW(std::move(names), std::move(types));
   }
   if (rebuildScanSpec) {
-    auto newScanSpec = makeScanSpec(
-        readerOutputType_,
-        subfields_,
-        filters_,
-        /*indexColumns=*/{},
-        tableHandle_->dataColumns(),
-        partitionKeys_,
-        infoColumns_,
-        specialColumns_,
-        fileConfig_->readStatsBasedFilterReorderDisabled(
-            connectorQueryCtx_->sessionProperties()),
-        pool_);
-    newScanSpec->moveAdaptationFrom(*scanSpec_);
-    scanSpec_ = std::move(newScanSpec);
+    resetScanSpec();
   }
   return bucketChannels;
 }
@@ -140,7 +128,7 @@ std::unique_ptr<FileSplitReader> HiveDataSource::createSplitReader() {
   return std::make_unique<HiveSplitReader>(
       hiveSplit,
       tableHandle_,
-      &partitionKeys_,
+      &fileScanSpec_->partitionKeys(),
       connectorQueryCtx_,
       fileConfig_,
       readerOutputType_,
@@ -150,9 +138,9 @@ std::unique_ptr<FileSplitReader> HiveDataSource::createSplitReader() {
       fileHandleFactory_,
       ioExecutor_,
       scanSpec_,
-      &infoColumns_,
+      &fileScanSpec_->infoColumns(),
       std::move(bucketChannels),
-      /*subfieldFiltersForValidation=*/&filters_);
+      /*subfieldFiltersForValidation=*/&fileScanState_->filters);
 }
 
 std::unordered_map<std::string, RuntimeMetric>

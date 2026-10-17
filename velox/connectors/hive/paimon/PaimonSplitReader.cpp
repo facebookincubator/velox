@@ -123,6 +123,9 @@ void PaimonSplitReader::finishFileSplitReader() {
   VELOX_CHECK_LT(currentFileIndex_, fileSplits_.size());
   VELOX_CHECK_NOT_NULL(baseReader_);
   VELOX_CHECK_NOT_NULL(baseRowReader_);
+  // Archive this file before destroying its reader. Snapshots combine these
+  // completed-file statistics with those of the currently active reader.
+  FileSplitReader::updateRuntimeStats(*runtimeStats_);
   ++currentFileIndex_;
   baseReader_ = nullptr;
   baseRowReader_ = nullptr;
