@@ -21,6 +21,7 @@
 #include "velox/functions/sparksql/DecimalCeil.h"
 #include "velox/functions/sparksql/Factorial.h"
 #include "velox/functions/sparksql/Rand.h"
+#include "velox/functions/sparksql/Round.h"
 
 namespace facebook::velox::functions::sparksql {
 
@@ -64,16 +65,24 @@ void registerMathFunctions(const std::string& prefix) {
   registerBinaryFloatingPoint<PModFloatFunction>({prefix + "pmod"});
   registerFunction<PowerFunction, double, double, double>({prefix + "power"});
   registerFunction<RIntFunction, double, double>({prefix + "rint"});
-  registerUnaryNumeric<RoundFunction>({prefix + "round"});
-  registerFunction<RoundFunction, int8_t, int8_t, int32_t>({prefix + "round"});
-  registerFunction<RoundFunction, int16_t, int16_t, int32_t>(
+  registerUnaryIntegral<functions::RoundFunction>({prefix + "round"});
+  registerUnaryFloatingPoint<sparksql::FloatingPointRoundFunction>(
       {prefix + "round"});
-  registerFunction<RoundFunction, int32_t, int32_t, int32_t>(
+  registerFunction<functions::RoundFunction, int8_t, int8_t, int32_t>(
       {prefix + "round"});
-  registerFunction<RoundFunction, int64_t, int64_t, int32_t>(
+  registerFunction<functions::RoundFunction, int16_t, int16_t, int32_t>(
       {prefix + "round"});
-  registerFunction<RoundFunction, double, double, int32_t>({prefix + "round"});
-  registerFunction<RoundFunction, float, float, int32_t>({prefix + "round"});
+  registerFunction<functions::RoundFunction, int32_t, int32_t, int32_t>(
+      {prefix + "round"});
+  registerFunction<functions::RoundFunction, int64_t, int64_t, int32_t>(
+      {prefix + "round"});
+  registerFunction<
+      sparksql::FloatingPointRoundFunction,
+      double,
+      double,
+      int32_t>({prefix + "round"});
+  registerFunction<sparksql::FloatingPointRoundFunction, float, float, int32_t>(
+      {prefix + "round"});
   registerFunction<UnHexFunction, Varbinary, Varchar>({prefix + "unhex"});
   // In Spark only long, double, and decimal have ceil/floor
   registerFunction<sparksql::CeilFunction, int64_t, int64_t>({prefix + "ceil"});
