@@ -2721,6 +2721,17 @@ bool registerBuiltinFunctions(const std::string& prefix) {
   // regular comparison operators
   //
 
+  const auto decimalComparisonSignature =
+      FunctionSignatureBuilder()
+          .integerVariable("a_precision")
+          .integerVariable("a_scale")
+          .integerVariable("b_precision")
+          .integerVariable("b_scale")
+          .returnType("boolean")
+          .argumentType("decimal(a_precision, a_scale)")
+          .argumentType("decimal(b_precision, b_scale)")
+          .build();
+
   const std::vector<exec::FunctionSignaturePtr> comparisonSignatures{
       FunctionSignatureBuilder()
           .returnType("boolean")
@@ -2742,15 +2753,7 @@ bool registerBuiltinFunctions(const std::string& prefix) {
           .argumentType("date")
           .argumentType("date")
           .build(),
-      FunctionSignatureBuilder()
-          .integerVariable("a_precision")
-          .integerVariable("a_scale")
-          .integerVariable("b_precision")
-          .integerVariable("b_scale")
-          .returnType("boolean")
-          .argumentType("decimal(a_precision, a_scale)")
-          .argumentType("decimal(b_precision, b_scale)")
-          .build()};
+      decimalComparisonSignature};
 
   auto registerComparisonOp = [&](const std::vector<std::string>& aliases,
                                   cudf::binary_operator op) {
@@ -2780,6 +2783,54 @@ bool registerBuiltinFunctions(const std::string& prefix) {
       {prefix + "greaterthan", prefix + "gt"}, cudf::binary_operator::GREATER);
   registerComparisonOp(
       {prefix + "lessthan", prefix + "lt"}, cudf::binary_operator::LESS);
+
+  auto canCompareDecimals = [](const core::TypedExprPtr& expr) {
+    if (expr->inputs().size() != 2 ||
+        expr->type()->kind() != TypeKind::BOOLEAN) {
+      return false;
+    }
+    const auto& left = expr->inputs()[0];
+    const auto& right = expr->inputs()[1];
+    if (!left->type()->isDecimal() || !right->type()->isDecimal() ||
+        (left->isConstantKind() && right->isConstantKind())) {
+      return false;
+    }
+
+    const auto [leftPrecision, leftScale] =
+        getDecimalPrecisionScale(*left->type());
+    const auto [rightPrecision, rightScale] =
+        getDecimalPrecisionScale(*right->type());
+    const auto commonScale = std::max(leftScale, rightScale);
+    const auto maxPrecision =
+        left->type()->isLongDecimal() || right->type()->isLongDecimal()
+        ? LongDecimalType::kMaxPrecision
+        : ShortDecimalType::kMaxPrecision;
+    // Comparisons align scales in the widest input storage type. Only accept
+    // types whose complete value ranges fit after that rescaling.
+    return leftPrecision + commonScale - leftScale <= maxPrecision &&
+        rightPrecision + commonScale - rightScale <= maxPrecision;
+  };
+  for (const auto& [name, op] :
+       std::vector<std::pair<std::string, cudf::binary_operator>>{
+           {"decimal_equalto", cudf::binary_operator::EQUAL},
+           {"decimal_notequalto", cudf::binary_operator::NOT_EQUAL},
+           {"decimal_lessthan", cudf::binary_operator::LESS},
+           {"decimal_lessthanorequal", cudf::binary_operator::LESS_EQUAL},
+           {"decimal_greaterthan", cudf::binary_operator::GREATER},
+           {"decimal_greaterthanorequal",
+            cudf::binary_operator::GREATER_EQUAL}}) {
+    registerCudfFunction(
+        prefix + name,
+        [op](
+            const std::string&,
+            const core::TypedExprPtr& expr,
+            memory::MemoryPool* pool) {
+          return std::make_shared<BinaryFunction>(expr, op, pool);
+        },
+        {decimalComparisonSignature},
+        /*overwrite=*/true,
+        canCompareDecimals);
+  }
 
   //
   // regular unary operators
@@ -3342,6 +3393,39 @@ std::unordered_set<std::string> referencedInputFields(
 
 namespace {
 
+// Floating-to-integral and floating-to-decimal constant folding uses CPU casts
+// that differ from Spark at rounding and saturation boundaries.
+bool containsConstantFloatingNumericCast(
+    const core::TypedExprPtr& expr,
+    core::QueryCtx* queryCtx,
+    memory::MemoryPool* pool) {
+  if (expr->isCallKind() && expr->inputs().size() == 1 &&
+      (expr->type()->isDecimal() || expr->type()->isTinyint() ||
+       expr->type()->isSmallint() || expr->type()->isInteger() ||
+       expr->type()->isBigint()) &&
+      expr->asUnchecked<core::CallTypedExpr>()->name().ends_with(
+          "spark_legacy_cast")) {
+    const auto& input = expr->inputs()[0];
+    if (input->type()->isReal() || input->type()->isDouble()) {
+      const auto optimizedInput = queryCtx != nullptr && pool != nullptr
+          ? expression::optimize(input, queryCtx, pool)
+          : input;
+      if (optimizedInput->isConstantKind()) {
+        LOG_FALLBACK(
+            "Constant Spark floating-point casts to integral or decimal "
+            "types require Spark-side folding");
+        return true;
+      }
+    }
+  }
+  for (const auto& input : expr->inputs()) {
+    if (containsConstantFloatingNumericCast(input, queryCtx, pool)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 // True if the expression tree contains a timezone-sensitive date_trunc call.
 // date_trunc on a timestamp needs the session timezone when
 // adjust_timestamp_to_session_timezone is enabled, which cuDF cannot honor, so
@@ -3388,6 +3472,9 @@ bool canExprRunOnGpu(
     const core::TypedExprPtr& expr,
     core::QueryCtx* queryCtx,
     memory::MemoryPool* pool) {
+  if (containsConstantFloatingNumericCast(expr, queryCtx, pool)) {
+    return false;
+  }
   // Optimize (constant fold and rewrite) so the support check sees the same
   // form the operator compiles: operators optimize with their own pool before
   // compiling, folding e.g. cast(<literal> as DECIMAL) into a plain decimal
