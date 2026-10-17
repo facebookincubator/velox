@@ -16,8 +16,10 @@
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/CudfConversion.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
+#include "velox/experimental/cudf/tests/utils/CustomComparisonKeys.h"
 
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/exec/OperatorType.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -180,6 +182,23 @@ TEST_F(TopNTest, multipleKeys) {
   createDuckDbTable(vectors);
 
   testTwoKeys(vectors, "c0", "c1", 200);
+}
+
+// cuDF would rank the zone key between two encodings of one instant where
+// Velox ranks 'id', so TopN must stay on the CPU.
+TEST_F(TopNTest, customComparisonKeyFallsBackToCpu) {
+  cudf_velox::test_utils::CustomComparisonKeys keys(pool());
+  auto data = keys.makeRows(2);
+
+  for (const auto& key : {"k ASC NULLS LAST", "k DESC NULLS FIRST"}) {
+    SCOPED_TRACE(key);
+    keys.assertFallsBackToCpuInOrder(
+        PlanBuilder()
+            .values({data})
+            .topN({key, "id ASC NULLS LAST"}, 3, false)
+            .planNode(),
+        exec::OperatorType::kTopN);
+  }
 }
 
 TEST_F(TopNTest, compaction) {

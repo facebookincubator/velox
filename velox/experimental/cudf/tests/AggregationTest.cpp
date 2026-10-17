@@ -20,9 +20,11 @@
 #include "velox/experimental/cudf/exec/CudfGroupby.h"
 #include "velox/experimental/cudf/exec/PrestoAggregateFunctions.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
+#include "velox/experimental/cudf/tests/utils/CustomComparisonKeys.h"
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
+#include "velox/exec/OperatorType.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
@@ -555,6 +557,37 @@ TEST_F(AggregationTest, allKeyTypes) {
       op,
       "SELECT c0, c1, c2, c3, c4, c5, sum(c6) FROM tmp "
       " GROUP BY c0, c1, c2, c3, c4, c5");
+}
+
+// cuDF would group the two zone encodings of one instant apart, so group-by
+// and distinct must stay on the CPU.
+TEST_F(AggregationTest, customComparisonKeyFallsBackToCpu) {
+  cudf_velox::test_utils::CustomComparisonKeys keys(pool());
+  auto data = keys.makeRows(2);
+
+  struct TestCase {
+    std::string name;
+    core::PlanNodePtr plan;
+  };
+  const std::vector<TestCase> testCases = {
+      {"groupBy",
+       PlanBuilder()
+           .values({data})
+           .singleAggregation({"k"}, {"count(id)", "sum(id)"})
+           .planNode()},
+      {"partialFinalGroupBy",
+       PlanBuilder()
+           .values({data})
+           .partialAggregation({"k"}, {"count(id)", "sum(id)"})
+           .finalAggregation()
+           .planNode()},
+      {"distinct",
+       PlanBuilder().values({data}).singleAggregation({"k"}, {}).planNode()},
+  };
+  for (const auto& testCase : testCases) {
+    SCOPED_TRACE(testCase.name);
+    keys.assertFallsBackToCpu(testCase.plan, exec::OperatorType::kAggregation);
+  }
 }
 
 TEST_F(AggregationTest, ignoreNullKeys) {
