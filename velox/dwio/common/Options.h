@@ -223,6 +223,15 @@ struct TableParameter {
   /// string.
   static constexpr const char* kSerializationNullFormat =
       "serialization.null.format";
+  /// If present and "true", the reader prefetches the lazily loaded columns
+  /// of the scan (projected, no pushdown filter) only once a row passed the
+  /// scan's filters, instead of together with their row group. Set per scan
+  /// by the engine that builds the table handle; absent means eager. Splits
+  /// where no row passes the filters then never read those columns; once
+  /// needed, a column is prefetched for the row groups already buffered and
+  /// with every following row group. Ignored for scans without a filter.
+  static constexpr const char* kDeferLazyColumnPrefetch =
+      "defer.lazy.column.prefetch";
 };
 
 /// Implicit row number column to be added.  This column will be removed in the
@@ -599,6 +608,20 @@ class RowReaderOptions {
     return lazyColumnIo_;
   }
 
+  /// If true, columns the reader produces as LazyVectors are not enqueued
+  /// with their row group until the scan shows they are needed: a row passed
+  /// the filters (RowReader::hintLazyColumnsNeeded()) or the column was read.
+  /// Set per scan from the table parameter
+  /// TableParameter::kDeferLazyColumnPrefetch, see
+  /// connector::hive::configureRowReaderOptions().
+  bool deferLazyColumnPrefetch() const {
+    return deferLazyColumnPrefetch_;
+  }
+
+  void setDeferLazyColumnPrefetch(bool defer) {
+    deferLazyColumnPrefetch_ = defer;
+  }
+
   void setLazyColumnIo(bool lazyColumnIo) {
     lazyColumnIo_ = lazyColumnIo;
   }
@@ -697,6 +720,7 @@ class RowReaderOptions {
   bool nimbleDictionaryAwareReads_{false};
   // Defers I/O for projected columns without pushdown or remaining filters.
   bool lazyColumnIo_{false};
+  bool deferLazyColumnPrefetch_{false};
   folly::F14FastSet<std::string> remainingFilterColumns_;
   bool collectColumnCpuMetrics_{false};
 };
