@@ -19,6 +19,8 @@
 #include "velox/experimental/cudf/exec/CudfHashJoin.h"
 #include "velox/experimental/cudf/exec/CudfNestedLoopJoin.h"
 #include "velox/experimental/cudf/exec/CudfOperator.h"
+#include "velox/experimental/cudf/exec/CudfPlanNodeTranslator.h"
+#include "velox/experimental/cudf/exec/CudfPlanNodes.h"
 #include "velox/experimental/cudf/exec/GpuCapabilities.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/OperatorAdapters.h"
@@ -317,6 +319,16 @@ bool CompileState::compile(bool allowCpuFallback) {
 struct CudfDriverAdapter {
   // Call operator needed by DriverAdapter
   bool operator()(const exec::DriverFactory& factory, exec::Driver& driver) {
+    if (std::any_of(
+            factory.planNodes.begin(),
+            factory.planNodes.end(),
+            [](const auto& node) {
+              return std::dynamic_pointer_cast<const CudfPlanNode>(node) !=
+                  nullptr;
+            })) {
+      return false;
+    }
+
     const auto& queryConfig = driver.driverCtx()->queryConfig();
     const auto allowCpuFallback = queryConfig.get<bool>(
         CudfConfig::kCudfAllowCpuFallback,
@@ -385,6 +397,7 @@ void registerCudf() {
 
   exec::Operator::registerOperator(
       std::make_unique<CudfHashJoinBridgeTranslator>());
+  exec::Operator::registerOperator(std::make_unique<CudfPlanNodeTranslator>());
   exec::Operator::registerOperator(
       std::make_unique<CudfNestedLoopJoinBridgeTranslator>());
   CudfDriverAdapter cda;
