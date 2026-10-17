@@ -599,6 +599,83 @@ Vector<std::string_view> dictionaryStringData(
   return data;
 }
 
+std::string encodeNullableView(uint32_t nullsPerThousand) {
+  Vector<int64_t> nonNullValues{benchmarkPool().get()};
+  Vector<bool> isNonNull{benchmarkPool().get(), kRows};
+  std::mt19937 generator{7'204'113};
+  for (uint32_t row{0}; row < kRows; ++row) {
+    isNonNull[row] = generator() % 1'000 >= nullsPerThousand;
+    if (isNonNull[row]) {
+      nonNullValues.push_back(static_cast<int64_t>(row) * 17 + 3);
+    }
+  }
+  auto policy = std::make_unique<ManualEncodingSelectionPolicy<int64_t>>(
+      std::vector<std::pair<EncodingType, float>>{{EncodingType::Trivial, 1.0}},
+      CompressionOptions{},
+      std::nullopt);
+  Buffer buffer{*benchmarkPool()};
+  const auto encoded = EncodingFactory::encodeNullable<int64_t>(
+      std::move(policy), nonNullValues, isNonNull, buffer);
+  return {encoded.data(), encoded.size()};
+}
+
+unsigned readNullableRanges(
+    uint32_t nullsPerThousand,
+    uint32_t rangeSize,
+    unsigned iterations) {
+  folly::BenchmarkSuspender suspender;
+  const auto encoded = encodeNullableView(nullsPerThousand);
+  const auto view = createEncodingView(encoded, benchmarkPool().get());
+  std::vector<RowRange> ranges;
+  uint32_t numRows{0};
+  for (uint32_t row{0}; row < kRows; row += 2 * rangeSize) {
+    ranges.emplace_back(row, std::min(row + rangeSize, kRows));
+    numRows += ranges.back().numRows();
+  }
+  Vector<int64_t> output{benchmarkPool().get(), numRows};
+  suspender.dismiss();
+  for (unsigned iteration{0}; iteration < iterations; ++iteration) {
+    const auto numNonNulls = view->read(ranges, [](uint32_t) {}, output.data());
+    folly::doNotOptimizeAway(numNonNulls);
+    folly::doNotOptimizeAway(output.data());
+  }
+  suspender.rehire();
+  return iterations;
+}
+
+unsigned createNullableViews(uint32_t nullsPerThousand, unsigned iterations) {
+  folly::BenchmarkSuspender suspender;
+  const auto encoded = encodeNullableView(nullsPerThousand);
+  suspender.dismiss();
+  for (unsigned iteration{0}; iteration < iterations; ++iteration) {
+    const auto view = createEncodingView(encoded, benchmarkPool().get());
+    folly::doNotOptimizeAway(view.get());
+  }
+  suspender.rehire();
+  return iterations;
+}
+
+void registerNullableViewBenchmarks() {
+  for (const uint32_t nullsPerThousand :
+       {0, 2, 10, 40, 120, 250, 330, 500, 950, 1'000}) {
+    folly::addBenchmark(
+        __FILE__,
+        fmt::format("nullableViewCreate_nulls{}", nullsPerThousand),
+        [nullsPerThousand](unsigned iterations) {
+          return createNullableViews(nullsPerThousand, iterations);
+        });
+    for (const uint32_t rangeSize : {16, 1'024}) {
+      folly::addBenchmark(
+          __FILE__,
+          fmt::format(
+              "nullableViewRange{}_nulls{}", rangeSize, nullsPerThousand),
+          [nullsPerThousand, rangeSize](unsigned iterations) {
+            return readNullableRanges(nullsPerThousand, rangeSize, iterations);
+          });
+    }
+  }
+}
+
 #define VIEW_BENCHMARK(Name, Type, EncodedExpr, PositionsExpr)   \
   BENCHMARK(Name, iters) {                                       \
     std::string encoded;                                         \
@@ -1391,5 +1468,6 @@ MATERIALIZE_BENCHMARK(
 int main(int argc, char** argv) {
   folly::Init init(&argc, &argv);
   facebook::velox::memory::MemoryManager::initialize({});
+  registerNullableViewBenchmarks();
   folly::runBenchmarks();
 }
