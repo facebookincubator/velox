@@ -839,17 +839,12 @@ void RPCOperator::recordCongestion(
         static_cast<int64_t>(roundTripTimesNs.size()));
   }
 
-  // No-latency successes skip time-based estimates only on the gated
-  // clean-growth path: with growth disabled they train the shared service
-  // horizon exactly as before, so default-off preserves legacy paced-admission
-  // behavior. When growth is enabled, queue-dominated elapsed times must not
-  // train it — feeding them would pace admissions at queue-time pace after an
-  // overload. updateServiceHorizonLocked ignores non-positive samples, so zero
-  // skips the horizon update while unit growth proceeds.
-  const bool skipHorizon =
-      signal == AsyncRPCFunction::CongestionSignal::kSuccessNoLatency &&
-      state_->cleanGrowthEnabled();
-  int64_t serviceHorizonNs = (skipHorizon || roundTripTimesNs.empty())
+  // The shared limiter needs a service-horizon sample for fractional pacing
+  // even when the driver-local latency gradient cannot use the elapsed time.
+  // Keep these two learning signals independent: kSuccessNoLatency may grow
+  // the local BATCH window by completion count while the shared limiter learns
+  // the observed service duration.
+  int64_t serviceHorizonNs = roundTripTimesNs.empty()
       ? 0
       : *std::min_element(roundTripTimesNs.begin(), roundTripTimesNs.end());
   for (const auto& [overloadEpoch, successUnits] : successUnitsByEpoch) {

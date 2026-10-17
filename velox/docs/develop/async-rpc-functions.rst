@@ -348,18 +348,21 @@ independently reduce the per-driver gradient window.
      - The unit completed cleanly; let the limiter recover without feeding its
        latency to the gradient window. In BATCH mode, when
        ``rpc.congestion.async_growth_max_window`` is set, it also grows the
-       driver window additively on completion count and skips training the
-       shared service horizon. With the default 0 the window stays pinned
-       and the horizon trains as before.
+       driver window additively on completion count. The shared limiter still
+       learns a service horizon for fractional admission pacing. With the
+       default 0, overload may shrink the driver window, but clean completions
+       do not grow it back.
    * - ``kOverloaded``
      - The backend shed load — rate limited, or timed out under pressure.
        Applies multiplicative decrease to both controllers.
    * - ``kNonOverloadError``
-     - The unit failed without explicit evidence of overload. Neither
-       controller reacts because reducing concurrency would not address this
-       signal.
+     - The unit failed without explicit evidence of overload. The driver
+       window does not react because reducing concurrency would not address
+       this signal. A completed BATCH flush still reports its units and
+       duration to the shared limiter.
    * - ``kNone``
-     - Nothing to evaluate.
+     - Nothing for the driver window to evaluate. A completed BATCH flush still
+       participates in shared accounting.
 
 The distinction matters: a majority of rows failing on bad input is not a reason
 to throttle against a healthy backend. For the same reason, a function on a
@@ -380,12 +383,15 @@ Putting it together, for each unit the operator:
    ``kSuccess`` feeds round-trip time to the per-driver window and recovers
    shared admission; ``kSuccessNoLatency`` recovers shared admission without
    training the gradient, and, when ``rpc.congestion.async_growth_max_window``
-   is set, also skips shared-horizon training and grows the BATCH driver
-   window additively on completion count (with the default 0 the horizon
-   trains as before); a recorded canonical overload shrinks the driver window without
-   repeating the shared decrease; a function-specific ``kOverloaded`` verdict
-   shrinks both controllers; the other verdicts leave both controllers
-   unchanged.
+   is set, grows the BATCH driver window additively on completion count. The
+   shared limiter independently learns the observed service horizon for
+   fractional pacing. A recorded canonical overload shrinks the driver window
+   without repeating the shared decrease; a function-specific ``kOverloaded``
+   verdict shrinks both controllers; the other verdicts leave the driver
+   window unchanged. Every completed BATCH flush still reports its reserved
+   units and observed duration to epoch-guarded shared accounting. After a
+   canonical overload, a stale success may update the service horizon but
+   cannot recover shared capacity.
 
 Retries and error handling
 --------------------------

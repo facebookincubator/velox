@@ -1720,9 +1720,10 @@ TEST_F(
 
   EXPECT_EQ(limiter.stats().capacity, 5);
   EXPECT_EQ(limiter.stats().limitMilli, 5'657);
-  // Growth enabled: no-latency successes skip horizon training, so the shared
-  // horizon stays at the bootstrap (kBootstrapServiceHorizonNanos).
-  EXPECT_EQ(limiter.stats().serviceHorizonNanos, 1'000'000'000);
+  // Driver-local growth and shared pacing learn from separate evidence: clean
+  // completion count grows the BATCH window, while elapsed service duration
+  // still trains the shared limiter's horizon.
+  EXPECT_NE(limiter.stats().serviceHorizonNanos, 1'000'000'000);
   const auto planStats = toPlanStats(task->taskStats());
   const auto& customStats = planStats.at(plan->id()).customStats;
   EXPECT_EQ(customStats.count(RPCOperator::kRpcBaselineRttNanos), 0);
