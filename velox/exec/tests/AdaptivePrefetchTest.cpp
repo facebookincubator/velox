@@ -47,6 +47,10 @@ TEST(AdaptivePrefetchTest, fastIterationsProduceHighLookAhead) {
   EXPECT_LE(lookAhead, 32);
 }
 
+TEST(AdaptivePrefetchTest, zeroElapsedTimeClampsToMax) {
+  EXPECT_EQ(AdaptivePrefetch::computeLookAhead(0), 32);
+}
+
 TEST(AdaptivePrefetchTest, returnsZeroNearEnd) {
   AdaptivePrefetch prefetch(20);
   int zeroCount = 0;
