@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include <bit>
 #include <bitset>
 #include <cmath>
 #include <limits>
@@ -26,8 +27,70 @@
 #include "velox/functions/Macros.h"
 #include "velox/functions/lib/ToHex.h"
 #include "velox/functions/sparksql/SparkQueryConfig.h"
+#include "velox/type/DecimalArithmetic.h"
 
 namespace facebook::velox::functions::sparksql {
+
+/// Rounds integral values using HALF_UP and the session's overflow policy.
+template <typename TExec>
+struct IntegralRoundFunction {
+  template <typename T>
+  void initialize(
+      const std::vector<TypePtr>& inputTypes,
+      const core::QueryConfig& config,
+      const T* value) {
+    initialize(inputTypes, config, value, nullptr);
+  }
+
+  template <typename T>
+  void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& config,
+      const T* /*value*/,
+      const int32_t* /*scale*/) {
+    ansiEnabled_ = SparkQueryConfig{config}.ansiEnabled();
+  }
+
+  template <typename T>
+  FOLLY_ALWAYS_INLINE Status
+  call(T& result, const T& value, const int32_t scale = 0) {
+    if (scale >= 0) {
+      result = value;
+      return Status::OK();
+    }
+    const auto digitsToDrop = -static_cast<int64_t>(scale);
+    if (digitsToDrop > std::numeric_limits<T>::digits10 + 1) {
+      result = 0;
+      return Status::OK();
+    }
+
+    // The divisor is at most 10^19, so division and rounding fit in int128_t.
+    const auto divisor = DecimalArithmetic::kPowersOfTen[digitsToDrop];
+    int128_t rounded;
+    DecimalArithmetic::divideWithRoundUp<int128_t, T, int128_t>(
+        rounded, value, divisor, false, 0, 0);
+    rounded *= divisor;
+    if (ansiEnabled_ &&
+        (rounded < std::numeric_limits<T>::min() ||
+         rounded > std::numeric_limits<T>::max())) {
+      if (threadSkipErrorDetails()) {
+        return Status::UserError();
+      }
+      return Status::UserError(
+          "Arithmetic overflow: round({}, {})",
+          static_cast<int64_t>(value),
+          scale);
+    }
+
+    // Unsigned conversion followed by bit_cast gives Java's two's-complement
+    // narrowing without signed overflow.
+    result = std::bit_cast<T>(static_cast<std::make_unsigned_t<T>>(rounded));
+    return Status::OK();
+  }
+
+ private:
+  bool ansiEnabled_{false};
+};
 
 // The abs implementation is used for primitive types except for decimal type.
 template <typename TExec>
