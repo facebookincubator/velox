@@ -290,6 +290,23 @@ arrayAscNullLargest() {
   };
 }
 
+inline std::vector<std::optional<
+    std::vector<std::optional<std::vector<std::optional<int32_t>>>>>>
+arrayAscTopNullLargestNestedNullSmallest() {
+  using A = std::vector<std::optional<int32_t>>;
+  return std::vector<std::optional<std::vector<std::optional<A>>>>{
+      common::testutil::optionalEmpty,
+      {{std::nullopt, std::nullopt}},
+      {{A({1, 3}), A({1, 3, 5}), A({2, 1})}},
+      {{A({1, 3}), A({2, 1}), std::nullopt}},
+      {{A({}),
+        A({std::nullopt, 6}),
+        A({std::nullopt, 8}),
+        A({3, std::nullopt}),
+        std::nullopt}},
+  };
+}
+
 inline NestedVector<std::vector<std::pair<int32_t, std::optional<int32_t>>>>
 mapInput() {
   using M = std::vector<std::pair<int32_t, std::optional<int32_t>>>;
@@ -361,6 +378,17 @@ inline NestedVector<variant> rowAscNullLargest() {
       {nullRow, nullRow},
       {variant::row({1, "blue"}), variant::row({2, "red"}), nullRow},
       {variant::row({1, "green"}), variant::row({nullInt, "red"})},
+  };
+}
+
+inline NestedVector<variant> rowAscTopNullLargestNestedNullSmallest() {
+  variant nullRow = variant(TypeKind::ROW);
+  variant nullInt = variant(TypeKind::INTEGER);
+  return NestedVector<variant>{
+      {},
+      {nullRow, nullRow},
+      {variant::row({1, "blue"}), variant::row({2, "red"}), nullRow},
+      {variant::row({nullInt, "red"}), variant::row({1, "green"})},
   };
 }
 } // namespace facebook::velox::functions::sparksql

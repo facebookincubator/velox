@@ -226,12 +226,25 @@ void registerArrayFunctions(const std::string& prefix) {
   exec::registerStatefulVectorFunction(
       prefix + "array_sort_desc", arraySortDescSignatures(), makeArraySortDesc);
   exec::registerStatefulVectorFunction(
+      prefix + "$internal$array_sort_comparator",
+      arraySortComparatorSignatures(),
+      makeArraySortComparatorAsc);
+  exec::registerStatefulVectorFunction(
+      prefix + "$internal$array_sort_comparator_desc",
+      arraySortComparatorSignatures(),
+      makeArraySortComparatorDesc);
+  exec::registerStatefulVectorFunction(
       prefix + "sort_array", sortArraySignatures(), makeSortArray);
 
   auto checker = std::make_shared<SparkSimpleComparisonChecker>();
   expression::ExprRewriteRegistry::instance().registerRewrite(
       [prefix, checker](const auto& expr) {
-        return rewriteArraySortCall(prefix, expr, checker);
+        return rewriteArraySortCall(
+            prefix,
+            expr,
+            checker,
+            {.supportsArbitraryComparatorResults = true,
+             .rejectNullSortKeys = true});
       });
   exec::registerStatefulVectorFunction(
       prefix + "array_repeat",
