@@ -16,8 +16,8 @@ velox_add_library(velox_dwio_text_reader TextReader.cpp HEADERS TextReader.h)
 
 velox_link_libraries(
   velox_dwio_text_reader
+  velox_common_text
   velox_type_fbhive
   velox_dwio_common_compression
-  velox_encode
   fmt::fmt
 )
