@@ -19,6 +19,7 @@
 #include <atomic>
 #include <thread>
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/testutil/TestValue.h"
 #include "velox/exec/DefaultOutputBufferManager.h"
 #include "velox/exec/Task.h"
 #include "velox/exec/tests/utils/LocalExchangeSource.h"
@@ -194,6 +195,38 @@ TEST_P(InMemoryExchangeClientTest, nonVeloxCreateExchangeSourceException) {
       "Task ID: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.");
 
   client->close();
+}
+
+DEBUG_ONLY_TEST_P(InMemoryExchangeClientTest, abortSources) {
+  const std::string taskId{"local://abort-source"};
+  auto task = makeTask(taskId);
+  bufferManager_->initializeTask(
+      task, core::PartitionedOutputNode::Kind::kPartitioned, 100, 16);
+
+  std::atomic_bool abortCalled{false};
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::test::LocalExchangeSource::abort",
+      std::function<void(void*)>(
+          [&](void* /* unused */) { abortCalled = true; }));
+
+  auto client = std::make_shared<InMemoryExchangeClient>(
+      "abort-client",
+      17,
+      InMemoryExchangeClient::kDefaultMaxQueuedBytes,
+      1,
+      0,
+      pool(),
+      executor(),
+      /*requestDataSizesMaxWaitSec=*/10,
+      /*skipRequestDataSizeWithSingleSource=*/false,
+      /*lazyFetching=*/true);
+  client->addRemoteTaskId(taskId);
+
+  client->abort();
+
+  EXPECT_TRUE(abortCalled);
+  task->requestCancel();
+  bufferManager_->removeTask(taskId);
 }
 
 TEST_P(InMemoryExchangeClientTest, stats) {

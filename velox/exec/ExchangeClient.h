@@ -53,6 +53,12 @@ class ExchangeClient {
   /// Releases the producers and unblocks consumers. Idempotent. Must not throw.
   virtual void close() = 0;
 
+  /// Aborts producers after task failure or cancellation. Idempotent. Must not
+  /// throw. The default preserves existing close behavior.
+  virtual void abort() {
+    close();
+  }
+
   /// Returns runtime statistics aggregated across all producers.
   /// Implementations are expected to report background CPU time as a metric
   /// named Operator::kBackgroundCpuTimeNanos.

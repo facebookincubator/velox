@@ -526,6 +526,7 @@ struct TestExchangeClientCallbacks {
   std::function<void(std::string_view remoteTaskId)> onAddRemoteTaskId{};
   std::function<void()> onNoMoreRemoteTasks{};
   std::function<void()> onClose{};
+  std::function<void()> onAbort{};
 };
 
 class TestExchangeClient : public ExchangeClient {
@@ -548,6 +549,12 @@ class TestExchangeClient : public ExchangeClient {
   void close() override {
     if (callbacks_.onClose != nullptr) {
       callbacks_.onClose();
+    }
+  }
+
+  void abort() override {
+    if (callbacks_.onAbort != nullptr) {
+      callbacks_.onAbort();
     }
   }
 
@@ -1193,11 +1200,12 @@ TEST_F(TaskTest, customExchangeTransportContext) {
 }
 
 TEST_F(TaskTest, abortToleratesThrowingExchangeClient) {
-  // Exceptions from close() or noMoreRemoteTasks() must not interrupt
+  // Exceptions from abort() or noMoreRemoteTasks() must not interrupt
   // termination or strand waiters.
-  for (const bool throwOnClose : {true, false}) {
+  for (const bool throwOnAbort : {true, false}) {
     SCOPED_TRACE(
-        throwOnClose ? "close() throws" : "noMoreRemoteTasks() throws");
+        throwOnAbort ? "abort() throws" : "noMoreRemoteTasks() throws");
+    bool abortCalled{false};
     const std::string transportKind{"throwing-exchange"};
     auto queryRegistry = ExchangeTransportRegistry::create();
     auto queryCtx = core::QueryCtx::create(driverExecutor_.get());
@@ -1206,12 +1214,16 @@ TEST_F(TaskTest, abortToleratesThrowingExchangeClient) {
     queryRegistry->insert(
         transportKind,
         ExchangeTransportEntry::make<TestExchangeClient>(
-            [throwOnClose](const ExchangeClientContext&) {
+            [throwOnAbort, &abortCalled](const ExchangeClientContext&) {
               auto fail = [] { throw std::runtime_error("transport failure"); };
               TestExchangeClientCallbacks callbacks;
-              if (throwOnClose) {
-                callbacks.onClose = fail;
-              } else {
+              callbacks.onAbort = [&abortCalled, throwOnAbort, fail] {
+                abortCalled = true;
+                if (throwOnAbort) {
+                  fail();
+                }
+              };
+              if (!throwOnAbort) {
                 callbacks.onNoMoreRemoteTasks = fail;
               }
               return std::make_shared<TestExchangeClient>(std::move(callbacks));
@@ -1246,6 +1258,7 @@ TEST_F(TaskTest, abortToleratesThrowingExchangeClient) {
 
     EXPECT_NO_THROW(task->requestAbort().wait());
     EXPECT_EQ(task->state(), TaskState::kAborted);
+    EXPECT_TRUE(abortCalled);
   }
 }
 

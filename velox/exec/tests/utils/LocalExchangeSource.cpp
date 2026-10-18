@@ -209,6 +209,12 @@ class LocalExchangeSource : public exec::ExchangeSource {
     buffers->deleteResults(remoteTaskId_, destination_);
   }
 
+  void abort() override {
+    common::testutil::TestValue::adjust(
+        "facebook::velox::exec::test::LocalExchangeSource::abort", this);
+    close();
+  }
+
   folly::F14FastMap<std::string, RuntimeMetric> metrics() const override {
     return {
         {"localExchangeSource.numPages", RuntimeMetric(numPages_)},
