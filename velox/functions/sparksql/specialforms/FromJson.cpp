@@ -27,6 +27,7 @@
 #include "velox/functions/lib/string/StringCore.h"
 #include "velox/functions/lib/string/StringImpl.h"
 #include "velox/functions/prestosql/json/SIMDJsonUtil.h"
+#include "velox/functions/sparksql/TimestampUtils.h"
 #include "velox/type/DecimalUtil.h"
 #include "velox/type/TimestampConversion.h"
 #include "velox/type/tz/TimeZoneMap.h"
@@ -478,17 +479,17 @@ struct ExtractJsonTypeImpl {
 
   // Casts a JSON value to a timestamp following the semantics of Spark's JSON
   // parser when no 'timestampFormat' option is provided:
-  // - A string is parsed with the same rules as CAST(VARCHAR AS TIMESTAMP).
-  //   Strings without an explicit time zone are interpreted in the session
-  //   time zone. If parsing fails and the string contains "GMT", Spark's legacy
-  //   fallback removes it and parses the string again.
-  // - An integer is interpreted as the number of seconds since the epoch.
+  // - TIMESTAMP strings without an explicit time zone use the session time
+  //   zone. Its legacy fallback removes "GMT" and tries parsing again.
+  // - TIMESTAMP_UTC strings must not contain a time zone.
+  // - Integers are seconds since the epoch for TIMESTAMP only.
   // - Any other JSON value cannot be converted and results in NULL.
   static simdjson::error_code castJsonToTimestamp(
       Input value,
       exec::GenericWriter& writer,
       const tz::TimeZone* sessionTimeZone) {
     SIMDJSON_ASSIGN_OR_RAISE(auto type, value.type());
+    const bool timestampUtc = writer.type()->equivalent(*TIMESTAMP_UTC());
     switch (type) {
       case simdjson::ondemand::json_type::string: {
         std::string_view s;
@@ -502,7 +503,7 @@ struct ExtractJsonTypeImpl {
         const std::string_view str(trimmed.data(), trimmed.size());
         auto parsed = util::fromTimestampWithTimezoneString(
             str.data(), str.size(), util::TimestampParseMode::kSparkCast);
-        if (parsed.hasError() &&
+        if (!timestampUtc && parsed.hasError() &&
             stringImpl::stringPosition</*isAscii=*/true>(str, kGMT, 1) > 0) {
           // Try again after cleaning up the legacy timestamp string by
           // removing the "GMT" string.
@@ -512,41 +513,57 @@ struct ExtractJsonTypeImpl {
           parsed = util::fromTimestampWithTimezoneString(
               cleaned.data(), size, util::TimestampParseMode::kSparkCast);
         }
-        if (parsed.hasError()) {
+        if (parsed.hasError() ||
+            (timestampUtc &&
+             (parsed.value().timeZone || parsed.value().offsetMillis))) {
           return simdjson::INCORRECT_TYPE;
         }
-        // Like CAST, adjust to the session time zone only for TIMESTAMP. For
-        // TIMESTAMP_UTC the parsed fields are stored as-is.
-        if (writer.type()->equivalent(*TIMESTAMP_UTC())) {
+        if (timestampUtc) {
           writer.castTo<Timestamp>() = parsed.value().timestamp;
         } else {
-          writer.castTo<Timestamp>() = util::fromParsedTimestampWithTimeZone(
-              parsed.value(), sessionTimeZone);
+          auto parsedTimestamp = parsed.value();
+          const auto* zone = parsedTimestamp.timeZone
+              ? parsedTimestamp.timeZone
+              : (parsedTimestamp.offsetMillis ? nullptr : sessionTimeZone);
+          if (zone) {
+            toGMTWithGapCorrection(parsedTimestamp.timestamp, *zone);
+            writer.castTo<Timestamp>() = parsedTimestamp.timestamp;
+          } else {
+            writer.castTo<Timestamp>() = util::fromParsedTimestampWithTimeZone(
+                parsedTimestamp, sessionTimeZone);
+          }
         }
         return simdjson::SUCCESS;
       }
       case simdjson::ondemand::json_type::number: {
+        if (timestampUtc) {
+          return simdjson::INCORRECT_TYPE;
+        }
         SIMDJSON_ASSIGN_OR_RAISE(auto num, value.get_number());
         if (num.get_number_type() !=
             simdjson::ondemand::number_type::signed_integer) {
           return simdjson::INCORRECT_TYPE;
         }
-        // Spark interprets an integer as seconds since the epoch. Saturate on
-        // overflow, like CAST(BIGINT AS TIMESTAMP).
-        constexpr int64_t kMaxSeconds = std::numeric_limits<int64_t>::max() /
-            Timestamp::kMicrosecondsInSecond;
-        constexpr int64_t kMinSeconds = std::numeric_limits<int64_t>::min() /
-            Timestamp::kMicrosecondsInSecond;
+        // Spark's signed 64-bit multiplication wraps on overflow.
         const int64_t seconds = num.get_int64();
-        int64_t micros;
-        if (seconds > kMaxSeconds) {
-          micros = std::numeric_limits<int64_t>::max();
-        } else if (seconds < kMinSeconds) {
-          micros = std::numeric_limits<int64_t>::min();
-        } else {
-          micros = seconds * Timestamp::kMicrosecondsInSecond;
+        constexpr __int128_t kModulus = __int128_t{1} << 64;
+        __int128_t micros = (static_cast<__int128_t>(seconds) *
+                             Timestamp::kMicrosecondsInSecond) %
+            kModulus;
+        if (micros < std::numeric_limits<int64_t>::min()) {
+          micros += kModulus;
+        } else if (micros > std::numeric_limits<int64_t>::max()) {
+          micros -= kModulus;
         }
-        writer.castTo<Timestamp>() = Timestamp::fromMicrosNoError(micros);
+        const auto wrappedMicros = static_cast<int64_t>(micros);
+        auto wholeSeconds = wrappedMicros / Timestamp::kMicrosecondsInSecond;
+        auto remainingMicros = wrappedMicros % Timestamp::kMicrosecondsInSecond;
+        if (remainingMicros < 0) {
+          --wholeSeconds;
+          remainingMicros += Timestamp::kMicrosecondsInSecond;
+        }
+        writer.castTo<Timestamp>() =
+            Timestamp(wholeSeconds, remainingMicros * 1'000);
         return simdjson::SUCCESS;
       }
       default:
@@ -712,9 +729,9 @@ struct ExtractJsonTypeImpl {
 /// - Map: Keys must be `VARCHAR` type.
 /// - Row: Partial parsing is supported, but JSON arrays cannot be parsed into a
 /// ROW type.
-/// - Timestamp: Strings are parsed like CAST(VARCHAR AS TIMESTAMP), using the
-/// session time zone when no time zone is given; integers are seconds since
-/// the epoch. Other values return `NULL`.
+/// - Timestamp: Strings without a time zone use the session time zone;
+/// integers are seconds since the epoch. TIMESTAMP_UTC accepts only strings
+/// without a time zone. Other values return `NULL`.
 template <TypeKind kind>
 class FromJsonFunction final : public exec::VectorFunction {
  public:
