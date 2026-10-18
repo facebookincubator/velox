@@ -16,6 +16,7 @@
 
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/connectors/hive/CachingDataSource.h"
+#include "velox/experimental/cudf/memory/PinnedMemoryAllocator.h"
 
 #include "velox/common/caching/FileIds.h"
 
@@ -34,6 +35,7 @@
 #include <folly/executors/thread_factory/NamedThreadFactory.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cstdlib>
 #include <cstring>
 #include <future>
@@ -60,11 +62,12 @@
 //     it, or 2 GiB or more, the most an entry can hold): do a remote read of
 //     the rest of the range without the async data cache.
 //
-// Device reads copy each piece from host memory into a pinned buffer, then to
-// the GPU. device_read_async() uses two thread pools: a fill thread brings the
-// range into the async data cache, waiting for its remote reads, then a copy
-// thread copies it to the GPU. The returned future is ready once the bytes are
-// in GPU memory.
+// Device reads copy pinned cache entries directly to the GPU, retaining their
+// pins until completion. Other entries use a pinned staging buffer.
+// device_read_async() uses two thread pools: a fill thread brings the range
+// into the async data cache, waiting for its remote reads, then a copy thread
+// copies it to the GPU. The returned future is ready once the bytes are in GPU
+// memory.
 
 namespace facebook::velox::cudf_velox::connector::hive {
 namespace {
@@ -193,6 +196,50 @@ struct DeviceRead {
   int device;
 };
 
+// Ownership of direct-copy sources travels from the copy thread to the
+// caller's completion fence. Cache eviction cannot recycle these entries
+// while any submitted copy may still read them.
+struct SubmittedDeviceRead {
+  size_t bytes{0};
+  std::vector<cache::CachePin> sources;
+};
+
+struct DeviceReadCompletion {
+  std::future<SubmittedDeviceRead> submitted;
+  DeviceRead read;
+  std::shared_ptr<std::atomic<bool>> published;
+
+  DeviceReadCompletion(
+      std::future<SubmittedDeviceRead> future,
+      DeviceRead deviceRead,
+      std::shared_ptr<std::atomic<bool>> dispatched)
+      : submitted(std::move(future)),
+        read(deviceRead),
+        published(std::move(dispatched)) {}
+  DeviceReadCompletion(DeviceReadCompletion&&) = default;
+  DeviceReadCompletion(const DeviceReadCompletion&) = delete;
+
+  ~DeviceReadCompletion() {
+    if (submitted.valid() && published->load()) {
+      try {
+        get();
+      } catch (...) {
+        // Abandoned futures cannot report an error. Submission and completion
+        // failure paths have already fenced any outstanding CUDA work.
+      }
+    }
+  }
+
+  static size_t finish(SubmittedDeviceRead result, const DeviceRead& read) {
+    waitForStream(read.stream, read.device);
+    return result.bytes;
+  }
+
+  size_t get() {
+    return finish(submitted.get(), read);
+  }
+};
+
 // Holds the KvikIO source and does the reads. Async work keeps it alive, since
 // cuDF may destroy the CachingDataSource before that work finishes.
 class Reader {
@@ -274,25 +321,26 @@ class Reader {
   }
 
   // Queues the GPU copies of the cached pieces in 'pins', from cacheRange(),
-  // then reads the rest of the range without the cache. Returns the number of
-  // bytes queued.
-  size_t copyRangeToGpu(
+  // then reads the rest of the range without the cache. The result retains
+  // direct-copy sources until the caller fences the stream.
+  SubmittedDeviceRead copyRangeToGpu(
       std::vector<cache::CachePin> pins,
       const DeviceRead& read) {
     const rmm::cuda_set_device_raii onDevice{rmm::cuda_device_id{read.device}};
-    size_t queued = 0;
+    SubmittedDeviceRead result;
+    auto& queued = result.bytes;
     try {
       for (auto& pin : pins) {
         const auto pieceBytes = pieceSize(pin, read.bytes - queued);
         copyCachedPieceToGpu(
-            std::move(pin), pieceBytes, read.dst + queued, read);
+            std::move(pin), pieceBytes, read.dst + queued, read, result);
         queued += pieceBytes;
       }
       if (queued < read.bytes) {
         queued += copyUncachedToGpu(
             read.offset + queued, read.bytes - queued, read.dst + queued, read);
       }
-      return queued;
+      return result;
     } catch (...) {
       // Wait for the copies already queued before rethrowing.
       waitForStream(read.stream, read.device);
@@ -419,13 +467,34 @@ class Reader {
     }
   }
 
-  // Queues the GPU copy of 'bytes' bytes of a cached piece, through this
-  // thread's pinned buffer.
-  static void copyCachedPieceToGpu(
+  // Retain pinned entries before enqueueing direct copies. Tiny entries and
+  // entries from other allocators use the existing staging buffer.
+  void copyCachedPieceToGpu(
       cache::CachePin pin,
       size_t bytes,
       uint8_t* dst,
-      const DeviceRead& read) {
+      const DeviceRead& read,
+      SubmittedDeviceRead& result) {
+    auto* entry = pin.checkedEntry();
+    if (entry->isShared() &&
+        entry->size() >= cache::AsyncDataCacheEntry::kTinyDataSize &&
+        dynamic_cast<PinnedMemoryAllocator*>(cache_->allocator()) != nullptr) {
+      const auto ranges = entry->dataRanges(bytes);
+      result.sources.push_back(std::move(pin));
+      size_t copied = 0;
+      for (const auto& range : ranges) {
+        CUDF_CUDA_TRY(cudaMemcpyAsync(
+            dst + copied,
+            range.data(),
+            range.size(),
+            cudaMemcpyHostToDevice,
+            read.stream.get()));
+        copied += range.size();
+      }
+      count("cudfCacheSharedPinnedAcquisitions");
+      countBytes("cudfCacheSharedPinnedH2DBytes", copied);
+      return;
+    }
     auto& buffer = pinnedBuffer(read.device);
     copyFromEntry(pin, bytes, buffer.reserve(bytes));
     // The bytes are in the pinned buffer. The cache may evict the entry.
@@ -521,38 +590,45 @@ class CachingDataSource final : public cudf::io::datasource {
     VELOX_CHECK_NOT_NULL(dst);
     const DeviceRead read{offset, bytes, dst, stream, deviceOf(stream)};
     // Ready once the copy thread has queued every GPU copy of the read.
-    auto copiesQueuedPromise = std::make_shared<std::promise<size_t>>();
+    auto copiesQueuedPromise =
+        std::make_shared<std::promise<SubmittedDeviceRead>>();
     auto copiesQueued = copiesQueuedPromise->get_future();
 
-    // Put the range in the cache on a fill thread, then copy it to the GPU on
-    // a copy thread.
-    fillExecutor()->add([reader = reader_, read, copiesQueuedPromise] {
-      try {
-        auto pins = reader->cacheRange(read.offset, read.bytes);
-        copyExecutor()->add([reader,
-                             read,
-                             copiesQueuedPromise,
-                             pins = std::move(pins)]() mutable {
-          try {
-            copiesQueuedPromise->set_value(
-                reader->copyRangeToGpu(std::move(pins), read));
-          } catch (...) {
-            copiesQueuedPromise->set_exception(std::current_exception());
-          }
-        });
-      } catch (...) {
-        copiesQueuedPromise->set_exception(std::current_exception());
-      }
-    });
-
-    // Return a future whose get() waits until the bytes are in GPU memory.
-    return std::async(
+    auto published = std::make_shared<std::atomic<bool>>(false);
+    // Prepare the destination/source lifetime fence before dispatching work.
+    // If creating this future fails, nothing has been enqueued yet.
+    auto completion = std::async(
         std::launch::deferred,
-        [copiesQueued = std::move(copiesQueued), read]() mutable {
-          const auto bytes = copiesQueued.get();
-          waitForStream(read.stream, read.device);
-          return bytes;
+        [completion = DeviceReadCompletion(
+             std::move(copiesQueued), read, published)]() mutable {
+          return completion.get();
         });
+    published->store(true);
+    try {
+      // Fill threads perform I/O; copy threads enqueue the GPU transfers.
+      fillExecutor()->add([reader = reader_, read, copiesQueuedPromise] {
+        try {
+          auto pins = reader->cacheRange(read.offset, read.bytes);
+          copyExecutor()->add([reader,
+                               read,
+                               copiesQueuedPromise,
+                               pins = std::move(pins)]() mutable {
+            try {
+              copiesQueuedPromise->set_value(
+                  reader->copyRangeToGpu(std::move(pins), read));
+            } catch (...) {
+              copiesQueuedPromise->set_exception(std::current_exception());
+            }
+          });
+        } catch (...) {
+          copiesQueuedPromise->set_exception(std::current_exception());
+        }
+      });
+    } catch (...) {
+      copiesQueuedPromise->set_exception(std::current_exception());
+      throw;
+    }
+    return completion;
   }
 
   size_t device_read(
@@ -567,10 +643,9 @@ class CachingDataSource final : public cudf::io::datasource {
     VELOX_CHECK_NOT_NULL(dst);
     const DeviceRead read{offset, bytes, dst, stream, deviceOf(stream)};
     // Runs on the caller's thread, not on the two pools.
-    const auto queued =
-        reader_->copyRangeToGpu(reader_->cacheRange(offset, bytes), read);
-    waitForStream(read.stream, read.device);
-    return queued;
+    return DeviceReadCompletion::finish(
+        reader_->copyRangeToGpu(reader_->cacheRange(offset, bytes), read),
+        read);
   }
 
   std::unique_ptr<buffer>

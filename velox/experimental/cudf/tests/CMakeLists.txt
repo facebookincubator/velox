@@ -122,7 +122,10 @@ velox_add_cudf_test(
 velox_add_cudf_test(
   NAME velox_cudf_caching_datasource_test
   SOURCES Main.cpp CachingDataSourceTest.cpp
-  LIBS ${CUDF_TEST_DEFAULT_LIBS} velox_cudf_hive_connector
+  LIBS
+    ${CUDF_TEST_DEFAULT_LIBS}
+    velox_cudf_hive_connector
+    velox_cudf_pinned_memory
 )
 
 velox_add_cudf_test(

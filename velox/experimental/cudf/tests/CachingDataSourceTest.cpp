@@ -16,6 +16,7 @@
 
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/connectors/hive/CachingDataSource.h"
+#include "velox/experimental/cudf/memory/PinnedMemoryAllocator.h"
 
 #include "velox/common/caching/FileIds.h"
 #include "velox/common/caching/SsdCache.h"
@@ -260,7 +261,7 @@ class CachingDataSourceTest : public testing::Test {
     }
   }
 
-  std::shared_ptr<memory::MallocAllocator> allocator_ =
+  std::shared_ptr<memory::MemoryAllocator> allocator_ =
       std::make_shared<memory::MallocAllocator>(
           memory::MemoryAllocator::Options{
               .capacity = 16 << 20,
@@ -271,6 +272,159 @@ class CachingDataSourceTest : public testing::Test {
   std::shared_ptr<IoStats> stats_ = std::make_shared<IoStats>();
   const std::string path_ = "s3://test/caching-datasource";
 };
+
+class PinnedCachingDataSourceTest : public CachingDataSourceTest {
+ protected:
+  void SetUp() override {
+    resetPinnedCache(64 << 20);
+  }
+
+  void TearDown() override {
+    cache_->shutdown();
+  }
+
+  void resetPinnedCache(uint64_t capacity) {
+    cache_->shutdown();
+    cache_.reset();
+    allocator_ = std::make_shared<PinnedMemoryAllocator>(
+        PinnedMemoryAllocator::Options{capacity, 0});
+    cache_ = cache::AsyncDataCache::create(allocator_.get());
+  }
+};
+
+TEST_F(PinnedCachingDataSourceTest, directMissHitAndSynchronousOverloads) {
+  fillPattern(8192);
+  auto input = source();
+  rmm::cuda_stream stream;
+  rmm::device_buffer destination(
+      4096, stream, cudf::get_current_device_resource_ref());
+  auto* dst = static_cast<uint8_t*>(destination.data());
+  EXPECT_EQ(input->device_read_async(19, 4096, dst, stream).get(), 4096);
+  EXPECT_EQ(input->device_read(19, 4096, dst, stream), 4096);
+  auto owned = input->device_read(19, 4096, stream);
+  EXPECT_EQ(fromDevice(dst, 4096), read_->data.substr(19, 4096));
+  EXPECT_EQ(
+      fromDevice(owned->data(), owned->size()), read_->data.substr(19, 4096));
+  EXPECT_EQ(read_->reads, 1);
+  const auto metrics = stats_->stats();
+  EXPECT_EQ(metrics.at("cudfCacheSharedPinnedH2DBytes").sum, 3 * 4096);
+  EXPECT_EQ(metrics.at("cudfCacheSharedPinnedAcquisitions").sum, 3);
+}
+
+TEST_F(PinnedCachingDataSourceTest, pageRunsAndSmallerReadsUseDirectCopies) {
+  // Seed page runs as another cache consumer would, then request shorter and
+  // full ranges through the KvikIO wrapper.
+  fillPattern(257 * 4096);
+  StringIdLease file(fileIds(), path_);
+  auto pin = cache_->findOrCreate({file.id(), 0}, read_->data.size(), false);
+  auto* entry = pin.checkedEntry();
+  ASSERT_FALSE(entry->hasContiguousData());
+  ASSERT_GT(entry->dataRanges(read_->data.size()).size(), 1);
+  size_t offset = 0;
+  for (const auto& range : entry->dataRanges(read_->data.size())) {
+    std::memcpy(range.data(), read_->data.data() + offset, range.size());
+    offset += range.size();
+  }
+  entry->setExclusiveToShared();
+  pin.clear();
+  auto input = source();
+  rmm::cuda_stream stream;
+  auto slice = input->device_read(0, 4096, stream);
+  auto whole = input->device_read(0, read_->data.size(), stream);
+  EXPECT_EQ(
+      fromDevice(slice->data(), slice->size()), read_->data.substr(0, 4096));
+  EXPECT_EQ(fromDevice(whole->data(), whole->size()), read_->data);
+  EXPECT_EQ(read_->reads, 0);
+  EXPECT_EQ(
+      stats_->stats().at("cudfCacheSharedPinnedH2DBytes").sum,
+      4096 + read_->data.size());
+}
+
+TEST_F(PinnedCachingDataSourceTest, tinyEntriesUseStagingWithoutRefetch) {
+  auto input = source();
+  input->host_read(0, 32);
+  rmm::cuda_stream stream;
+  auto result = input->device_read(0, 32, stream);
+  EXPECT_EQ(
+      fromDevice(result->data(), result->size()), read_->data.substr(0, 32));
+  EXPECT_EQ(read_->reads, 1);
+  EXPECT_EQ(stats_->stats().count("cudfCacheSharedPinnedH2DBytes"), 0);
+}
+
+TEST_F(PinnedCachingDataSourceTest, completionAndDiscardRetainCachePins) {
+  for (bool discard : {false, true}) {
+    SCOPED_TRACE(discard);
+    stats_ = std::make_shared<IoStats>();
+    auto input = source();
+    input->host_read(0, read_->data.size());
+    rmm::cuda_stream stream;
+    rmm::device_buffer destination(
+        read_->data.size(), stream, cudf::get_current_device_resource_ref());
+    auto* dst = static_cast<uint8_t*>(destination.data());
+    StreamGate gate;
+    CUDF_CUDA_TRY(cudaLaunchHostFunc(stream.value(), waitForStreamGate, &gate));
+    auto pending = input->device_read_async(0, read_->data.size(), dst, stream);
+    input.reset();
+    auto completion = std::async(
+        std::launch::async, [pending = std::move(pending), discard]() mutable {
+          if (discard) {
+            pending = {};
+          } else {
+            pending.get();
+          }
+        });
+    auto release = folly::makeGuard([&] { gate.release.set_value(); });
+    const bool copied = waitUntil([&] {
+      return stats_->stats().contains("cudfCacheSharedPinnedAcquisitions");
+    });
+    EXPECT_TRUE(copied);
+    cache_->clear();
+    EXPECT_GT(cache_->refreshStats().numEntries, 0);
+    EXPECT_EQ(completion.wait_for(0s), std::future_status::timeout);
+    gate.release.set_value();
+    release.dismiss();
+    completion.get();
+    EXPECT_EQ(fromDevice(dst, read_->data.size()), read_->data);
+    cache_->clear();
+    EXPECT_EQ(cache_->refreshStats().numEntries, 0);
+    EXPECT_EQ(allocator_->numAllocated(), 0);
+  }
+}
+
+TEST_F(PinnedCachingDataSourceTest, failingUncachedSuffixFencesDirectPrefix) {
+  resetPinnedCache(1 << 20);
+  fillPattern(2 << 20);
+  auto input = source();
+  input->host_read(0, 4096);
+  // The suffix cannot fit in this cache, so its remote read runs after the
+  // direct prefix copy is enqueued. Fail that read while the copy is blocked.
+  read_->failRead = true;
+  rmm::cuda_stream stream;
+  rmm::device_buffer destination(
+      read_->data.size(), stream, cudf::get_current_device_resource_ref());
+  auto* dst = static_cast<uint8_t*>(destination.data());
+  StreamGate gate;
+  CUDF_CUDA_TRY(cudaLaunchHostFunc(stream.value(), waitForStreamGate, &gate));
+  auto pending = input->device_read_async(0, read_->data.size(), dst, stream);
+  auto completion =
+      std::async(std::launch::async, [pending = std::move(pending)]() mutable {
+        EXPECT_THROW(pending.get(), VeloxRuntimeError);
+      });
+  auto release = folly::makeGuard([&] { gate.release.set_value(); });
+  EXPECT_TRUE(waitUntil([&] {
+    return stats_->stats().contains("cudfCacheSharedPinnedAcquisitions");
+  }));
+  cache_->clear();
+  EXPECT_GT(cache_->refreshStats().numEntries, 0);
+  EXPECT_EQ(completion.wait_for(0s), std::future_status::timeout);
+  gate.release.set_value();
+  release.dismiss();
+  completion.get();
+  EXPECT_EQ(fromDevice(dst, 4096), read_->data.substr(0, 4096));
+  cache_->clear();
+  EXPECT_EQ(cache_->refreshStats().numEntries, 0);
+  EXPECT_EQ(allocator_->numAllocated(), 0);
+}
 
 TEST_F(CachingDataSourceTest, asyncFillsExceedCopyThreadsAndStayBounded) {
   constexpr size_t kRequests = 24;

@@ -28,7 +28,11 @@ add_library(
 
 target_link_libraries(
   velox_cudf_hive_connector
-  PRIVATE velox_common_io velox_dwio_common velox_hive_connector
+  PRIVATE
+    velox_common_io
+    velox_dwio_common
+    velox_hive_connector
+    velox_cudf_pinned_memory
   PUBLIC cudf::cudf nvtx3::nvtx3-cpp velox_cudf_expression
 )
 
