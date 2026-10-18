@@ -1291,7 +1291,29 @@ TEST_P(AsyncDataCacheTest, staleEntry) {
   ASSERT_EQ(stats.numEntries, 1);
   ASSERT_EQ(stats.numHit, 1);
 
+  // A caller that can assemble one read from several consecutive cache entries
+  // may consume this entry as a valid prefix instead of invalidating and
+  // reloading it.
+  const auto beforePrefix = cache_->refreshStats();
+  auto prefixPin = cache_->findOrCreate(
+      key,
+      2 * size,
+      /*contiguous=*/false,
+      &wait,
+      CacheEntrySizePolicy::kAllowSmaller);
+  ASSERT_FALSE(prefixPin.empty());
+  ASSERT_TRUE(wait.isReady());
+  ASSERT_FALSE(prefixPin.entry()->isExclusive());
+  ASSERT_EQ(prefixPin.entry()->size(), size);
+  prefixPin.clear();
+  stats = cache_->refreshStats();
+  ASSERT_EQ(stats.numEntries, 1);
+  auto delta = stats - beforePrefix;
+  ASSERT_EQ(delta.numStales, 0);
+  ASSERT_EQ(delta.numHit, 1);
+
   // Stale cache access with large cache size.
+  const auto beforeStale = cache_->refreshStats();
   auto stalePin =
       cache_->findOrCreate(key, 2 * size, /*contiguous=*/false, &wait);
   ASSERT_FALSE(stalePin.empty());
@@ -1299,9 +1321,10 @@ TEST_P(AsyncDataCacheTest, staleEntry) {
   ASSERT_TRUE(stalePin.entry()->isExclusive());
   stalePin.entry()->setExclusiveToShared();
   stats = cache_->refreshStats();
-  ASSERT_EQ(stats.numStales, 1);
   ASSERT_EQ(stats.numEntries, 1);
-  ASSERT_EQ(stats.numHit, 1);
+  delta = stats - beforeStale;
+  ASSERT_EQ(delta.numStales, 1);
+  ASSERT_EQ(delta.numHit, 0);
 }
 
 TEST_P(AsyncDataCacheTest, shrinkCache) {

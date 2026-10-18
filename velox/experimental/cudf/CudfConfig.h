@@ -65,6 +65,8 @@ struct CudfConfig {
   static constexpr const char* kUcxExchangeLogLevel{"cudf.exchange_log_level"};
   static constexpr const char* kUcxPartitionedOutputBatchRows{
       "cudf.partitioned_output_batch_rows"};
+  static constexpr const char* kCudfKvikioCacheCopyThreads{
+      "cudf.kvikio_cache_copy_threads"};
   /// Query session configs for the cuDF Operators.
   static constexpr const char* kCudfTopNBatchSize{"cudf.topk_batch_size"};
 
@@ -120,6 +122,10 @@ struct CudfConfig {
   /// is reached, avoiding pathologically small exchange chunks. Set to 0 to
   /// disable accumulation.
   int64_t partitionedOutputBatchRows{10'000};
+
+  /// Threads that copy KvikIO data from the async data cache to the GPU. One
+  /// pool for the whole process, created by the first cached GPU read.
+  int32_t kvikioCacheCopyThreads{16};
 
   /// Memory resource for cuDF.
   /// Possible values are (cuda, pool, async, arena, managed, managed_pool).

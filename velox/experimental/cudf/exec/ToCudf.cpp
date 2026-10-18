@@ -514,6 +514,10 @@ void CudfConfig::initialize(
     partitionedOutputBatchRows =
         folly::to<int64_t>(config[kUcxPartitionedOutputBatchRows]);
   }
+  if (config.find(kCudfKvikioCacheCopyThreads) != config.end()) {
+    kvikioCacheCopyThreads =
+        folly::to<int32_t>(config[kCudfKvikioCacheCopyThreads]);
+  }
   if (config.find(kCudfLogFallback) != config.end()) {
     logFallback = folly::to<bool>(config[kCudfLogFallback]);
   }
