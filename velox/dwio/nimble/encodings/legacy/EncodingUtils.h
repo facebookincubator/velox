@@ -23,12 +23,16 @@
 #include "velox/dwio/nimble/encodings/HuffmanEncoding.h"
 #include "velox/dwio/nimble/encodings/PFOREncoding.h"
 #include "velox/dwio/nimble/encodings/SimdForBitpackEncoding.h"
-// SubIntSplit integration commented out (disabled):
-/*
+// SubIntSplit, FOR and FrequencyPartition are experimental. Builds with
+// NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS can write them, so the legacy read path
+// dispatches them in those builds too.
 #ifdef NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
 #include "velox/dwio/nimble/encodings/SubIntSplitEncoding.h"
 #endif
-*/
+#ifdef NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
+#include "velox/dwio/nimble/encodings/ForEncoding.h"
+#include "velox/dwio/nimble/encodings/FrequencyPartitionEncoding.h"
+#endif
 #include "velox/dwio/nimble/encodings/common/EncodingUtils.h"
 #include "velox/dwio/nimble/encodings/legacy/ConstantEncoding.h"
 #include "velox/dwio/nimble/encodings/legacy/DeltaEncoding.h"
@@ -181,8 +185,8 @@ auto encodingTypeDispatchNonString(Encoding& encoding, F&& f) {
             "ALP encoding only supports float and double data types, got {}.",
             encoding.dataType());
       }
-    // SubIntSplit integration commented out (disabled):
-    /*
+      // Experimental: dispatched only in NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
+      // builds.
 #ifdef NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
     case EncodingType::SubIntSplit:
       if constexpr (isNumericType<T>() && (sizeof(T) == 4 || sizeof(T) == 8)) {
@@ -192,7 +196,24 @@ auto encodingTypeDispatchNonString(Encoding& encoding, F&& f) {
         NIMBLE_UNREACHABLE("{}", encoding.dataType());
       }
 #endif
-    */
+      // Experimental: dispatched only in NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
+      // builds.
+#ifdef NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
+    case EncodingType::FOR:
+      if constexpr (std::is_integral_v<T> && !std::is_same_v<T, bool>) {
+        return f(static_cast<::facebook::nimble::ForEncoding<T>&>(encoding));
+      } else {
+        NIMBLE_UNREACHABLE(toString(encoding.dataType()));
+      }
+    case EncodingType::FrequencyPartition:
+      if constexpr (!std::is_same_v<T, bool>) {
+        return f(
+            static_cast<::facebook::nimble::FrequencyPartitionEncoding<T>&>(
+                encoding));
+      } else {
+        NIMBLE_UNREACHABLE(toString(encoding.dataType()));
+      }
+#endif
     default:
       NIMBLE_UNSUPPORTED("{}", encoding.encodingType());
   }
