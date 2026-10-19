@@ -47,6 +47,7 @@
 #include "velox/exec/tests/utils/LocalExchangeSource.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/expression/ExprToSubfieldFilter.h"
+#include "velox/type/TimestampConversion.h"
 #include "velox/type/Type.h"
 #include "velox/type/tests/SubfieldFiltersBuilder.h"
 
@@ -154,6 +155,21 @@ class TableScanTest : public virtual CudfHiveConnectorTestBase {
 
   Split makeCudfHiveSplit(std::string path, int64_t splitWeight = 0) {
     return Split(makeCudfHiveConnectorSplit(std::move(path), splitWeight));
+  }
+
+  // Returns a split of 'filePath' that carries 'partitionKeys'.
+  static std::shared_ptr<facebook::velox::connector::ConnectorSplit>
+  makePartitionedSplit(
+      const std::string& filePath,
+      const std::unordered_map<std::string, std::optional<std::string>>&
+          partitionKeys) {
+    auto builder = hive::HiveConnectorSplitBuilder(filePath)
+                       .connectorId(kCudfHiveConnectorId)
+                       .fileFormat(dwio::common::FileFormat::PARQUET);
+    for (const auto& [name, value] : partitionKeys) {
+      builder.partitionKey(name, value);
+    }
+    return builder.build();
   }
 
   std::shared_ptr<Task> assertQuery(
@@ -909,6 +925,459 @@ TEST_F(TableScanTest, columnAliases) {
                 .endTableScan()
                 .planNode();
   assertQuery(op, {filePath}, "SELECT c0 FROM tmp");
+}
+
+// Partition keys are not in the data file: the scan materializes each from
+// the split's partition value, typed per its column handle, wherever the
+// output puts it.
+TEST_F(TableScanTest, partitionedTable) {
+  auto rowType = ROW({"c0", "c1"}, {BIGINT(), DOUBLE()});
+  auto vectors = makeVectors(10, 1'000, rowType);
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), vectors);
+  createDuckDbTable(vectors);
+
+  const auto scan =
+      [&](const RowTypePtr& outputType,
+          const facebook::velox::connector::ColumnHandleMap& assignments) {
+        return PlanBuilder(pool_.get())
+            .startTableScan()
+            .connectorId(kCudfHiveConnectorId)
+            .outputType(outputType)
+            .assignments(assignments)
+            .endTableScan()
+            .planNode();
+      };
+
+  // Scans a split in the partition 'partitionValue' of a key of
+  // 'partitionType', expecting 'expectedValueSql' for the key. A split is
+  // consumed by the task it is added to, so each scan gets its own.
+  const auto assertPartitionedScan =
+      [&](const TypePtr& partitionType,
+          const std::optional<std::string>& partitionValue,
+          const std::string& expectedValueSql) {
+        SCOPED_TRACE(
+            fmt::format(
+                "{} key {}",
+                partitionType->toString(),
+                partitionValue.value_or("null")));
+        const auto makeSplit = [&]() {
+          return makePartitionedSplit(
+              filePath->getPath(), {{"pkey", partitionValue}});
+        };
+        const facebook::velox::connector::ColumnHandleMap assignments = {
+            {"pkey",
+             HiveConnectorTestBase::partitionKey("pkey", partitionType)},
+            {"c0", HiveConnectorTestBase::regularColumn("c0", BIGINT())},
+            {"c1", HiveConnectorTestBase::regularColumn("c1", DOUBLE())}};
+
+        // The key at every output position.
+        assertQuery(
+            scan(
+                ROW({"pkey", "c0", "c1"}, {partitionType, BIGINT(), DOUBLE()}),
+                assignments),
+            makeSplit(),
+            fmt::format("SELECT {}, c0, c1 FROM tmp", expectedValueSql));
+        assertQuery(
+            scan(
+                ROW({"c0", "pkey", "c1"}, {BIGINT(), partitionType, DOUBLE()}),
+                assignments),
+            makeSplit(),
+            fmt::format("SELECT c0, {}, c1 FROM tmp", expectedValueSql));
+        assertQuery(
+            scan(
+                ROW({"c0", "c1", "pkey"}, {BIGINT(), DOUBLE(), partitionType}),
+                assignments),
+            makeSplit(),
+            fmt::format("SELECT c0, c1, {} FROM tmp", expectedValueSql));
+        // The key alone: nothing is read from the file but its row count.
+        assertQuery(
+            scan(ROW({"pkey"}, {partitionType}), assignments),
+            makeSplit(),
+            fmt::format("SELECT {} FROM tmp", expectedValueSql));
+      };
+
+  // A value is parsed per the key's type.
+  assertPartitionedScan(VARCHAR(), "2020-11-01", "'2020-11-01'");
+  assertPartitionedScan(BIGINT(), "123456789123456789", "'123456789123456789'");
+  assertPartitionedScan(INTEGER(), "123456789", "'123456789'");
+  assertPartitionedScan(SMALLINT(), "1", "'1'");
+  assertPartitionedScan(TINYINT(), "1", "'1'");
+  assertPartitionedScan(BOOLEAN(), "0", "'0'");
+  assertPartitionedScan(REAL(), "3.5", "'3.5'");
+  assertPartitionedScan(DOUBLE(), "3.5", "'3.5'");
+  assertPartitionedScan(
+      DECIMAL(10, 2), "1234.56", "CAST(1234.56 AS DECIMAL(10, 2))");
+  assertPartitionedScan(DATE(), "2023-10-27", "'2023-10-27'");
+  // A NULL value, whatever the type.
+  for (const auto& type :
+       std::vector<TypePtr>{VARCHAR(), BIGINT(), DATE(), TIMESTAMP()}) {
+    assertPartitionedScan(type, std::nullopt, "null");
+  }
+
+  {
+    // A DATE value is a count of days since the epoch when its handle says so.
+    SCOPED_TRACE("days since epoch");
+    const facebook::velox::connector::ColumnHandleMap assignments = {
+        {"pkey",
+         std::make_shared<hive::HiveColumnHandle>(
+             "pkey",
+             hive::HiveColumnHandle::ColumnType::kPartitionKey,
+             DATE(),
+             DATE(),
+             std::vector<common::Subfield>{},
+             hive::HiveColumnHandle::ColumnParseParameters{
+                 hive::HiveColumnHandle::ColumnParseParameters::
+                     kDaysSinceEpoch})},
+        {"c0", HiveConnectorTestBase::regularColumn("c0", BIGINT())}};
+    assertQuery(
+        scan(ROW({"pkey", "c0"}, {DATE(), BIGINT()}), assignments),
+        makePartitionedSplit(filePath->getPath(), {{"pkey", "19657"}}),
+        "SELECT '2023-10-27', c0 FROM tmp");
+  }
+
+  {
+    // A TIMESTAMP value is local time or UTC, as the session says.
+    SCOPED_TRACE("local time");
+    const std::string partitionValue = "2023-10-27 00:12:35";
+    auto plan = scan(
+        ROW({"pkey", "c0"}, {TIMESTAMP(), BIGINT()}),
+        {{"pkey", HiveConnectorTestBase::partitionKey("pkey", TIMESTAMP())},
+         {"c0", HiveConnectorTestBase::regularColumn("c0", BIGINT())}});
+    const auto utcTimestamp =
+        util::fromTimestampString(
+            StringView(partitionValue), util::TimestampParseMode::kPrestoCast)
+            .thenOrThrow(folly::identity, [&](const Status& status) {
+              VELOX_USER_FAIL("{}", status.message());
+            });
+    auto localTimestamp = utcTimestamp;
+    localTimestamp.toGMT(Timestamp::defaultTimezone());
+    for (const auto& [asLocalTime, expected] :
+         {std::pair{false, utcTimestamp}, std::pair{true, localTimestamp}}) {
+      AssertQueryBuilder(plan, duckDbQueryRunner_)
+          .connectorSessionProperty(
+              kCudfHiveConnectorId,
+              hive::HiveConfig::kReadTimestampPartitionValueAsLocalTimeSession,
+              asLocalTime ? "true" : "false")
+          .splits({makePartitionedSplit(
+              filePath->getPath(), {{"pkey", partitionValue}})})
+          .assertResults(
+              fmt::format("SELECT '{}', c0 FROM tmp", expected.toString()));
+    }
+  }
+
+  {
+    // An output name need not be the key's name, a key may be projected under
+    // several names, and a key the split carries but no handle requests is
+    // ignored.
+    SCOPED_TRACE("alias");
+    const auto makeSplit = [&]() {
+      return makePartitionedSplit(filePath->getPath(), {{"ds", "2021-12-02"}});
+    };
+    assertQuery(
+        scan(
+            ROW({"a", "ds_alias"}, {BIGINT(), VARCHAR()}),
+            {{"a", HiveConnectorTestBase::regularColumn("c0", BIGINT())},
+             {"ds_alias",
+              HiveConnectorTestBase::partitionKey("ds", VARCHAR())}}),
+        makeSplit(),
+        "SELECT c0, '2021-12-02' FROM tmp");
+    assertQuery(
+        scan(
+            ROW({"ds_alias", "a", "ds"}, {VARCHAR(), BIGINT(), VARCHAR()}),
+            {{"a", HiveConnectorTestBase::regularColumn("c0", BIGINT())},
+             {"ds_alias", HiveConnectorTestBase::partitionKey("ds", VARCHAR())},
+             {"ds", HiveConnectorTestBase::partitionKey("ds", VARCHAR())}}),
+        makeSplit(),
+        "SELECT '2021-12-02', c0, '2021-12-02' FROM tmp");
+    assertQuery(
+        scan(
+            ROW({"a"}, {BIGINT()}),
+            {{"a", HiveConnectorTestBase::regularColumn("c0", BIGINT())}}),
+        makeSplit(),
+        "SELECT c0 FROM tmp");
+  }
+}
+
+// A pushed-down filter on a partition key is decided once per split from the
+// split's partition value: a split it rejects is skipped without being read.
+TEST_F(TableScanTest, partitionKeyFilter) {
+  auto rowType = ROW({"c0", "c1"}, {BIGINT(), DOUBLE()});
+  auto vectors = makeVectors(5, 1'000, rowType);
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), vectors);
+  createDuckDbTable(vectors);
+
+  using PartitionKeys =
+      std::unordered_map<std::string, std::optional<std::string>>;
+  // The same file in the partitions 'a', 'b' and NULL. A split is consumed by
+  // the task it is added to, so each scan gets fresh ones.
+  std::vector<PartitionKeys> partitions = {
+      PartitionKeys{{"ds", "a"}},
+      PartitionKeys{{"ds", "b"}},
+      PartitionKeys{{"ds", std::nullopt}}};
+  const auto makeSplits = [&]() {
+    std::vector<std::shared_ptr<facebook::velox::connector::ConnectorSplit>>
+        splits;
+    for (const auto& partition : partitions) {
+      splits.push_back(makePartitionedSplit(filePath->getPath(), partition));
+    }
+    return splits;
+  };
+  facebook::velox::connector::ColumnHandleMap assignments = {
+      {"c0", HiveConnectorTestBase::regularColumn("c0", BIGINT())},
+      {"ds", HiveConnectorTestBase::partitionKey("ds", VARCHAR())}};
+
+  // Scans the partitions with 'filter' on the key, checking the rows and how
+  // many splits were skipped. The table schema lists the file columns only.
+  const auto assertFilteredScan = [&](std::unique_ptr<common::Filter> filter,
+                                      const RowTypePtr& outputType,
+                                      const std::string& expectedSql,
+                                      int64_t expectedSkippedSplits) {
+    auto plan = PlanBuilder(pool_.get())
+                    .startTableScan()
+                    .outputType(outputType)
+                    .tableHandle(makeTableHandle(
+                        "parquet_table",
+                        rowType,
+                        common::test::SubfieldFiltersBuilder()
+                            .add("ds", std::move(filter))
+                            .build()))
+                    .assignments(assignments)
+                    .endTableScan()
+                    .planNode();
+    auto task = OperatorTestBase::assertQuery(plan, makeSplits(), expectedSql);
+    EXPECT_EQ(
+        getTableScanRuntimeStat(task, "skippedSplits"), expectedSkippedSplits);
+    EXPECT_EQ(
+        getTableScanRuntimeStat(task, "processedSplits"),
+        static_cast<int64_t>(partitions.size()) - expectedSkippedSplits);
+  };
+
+  {
+    SCOPED_TRACE("ds = 'a'");
+    assertFilteredScan(
+        std::make_unique<common::BytesValues>(
+            std::vector<std::string>{"a"}, false),
+        ROW({"c0", "ds"}, {BIGINT(), VARCHAR()}),
+        "SELECT c0, 'a' FROM tmp",
+        2);
+  }
+  {
+    SCOPED_TRACE("ds IS NULL");
+    assertFilteredScan(
+        std::make_unique<common::IsNull>(),
+        ROW({"c0", "ds"}, {BIGINT(), VARCHAR()}),
+        "SELECT c0, null FROM tmp",
+        2);
+  }
+  {
+    // The key need not be projected.
+    SCOPED_TRACE("ds IS NOT NULL");
+    assertFilteredScan(
+        std::make_unique<common::IsNotNull>(),
+        ROW({"c0"}, {BIGINT()}),
+        "SELECT c0 FROM tmp UNION ALL SELECT c0 FROM tmp",
+        1);
+  }
+  {
+    SCOPED_TRACE("ds = 'b' OR ds IS NULL");
+    assertFilteredScan(
+        std::make_unique<common::BytesValues>(
+            std::vector<std::string>{"b"}, true),
+        ROW({"c0"}, {BIGINT()}),
+        "SELECT c0 FROM tmp UNION ALL SELECT c0 FROM tmp",
+        1);
+  }
+  {
+    // A key the split does not carry is NULL.
+    SCOPED_TRACE("missing key");
+    partitions = {PartitionKeys{}};
+    assertFilteredScan(
+        std::make_unique<common::IsNull>(),
+        ROW({"c0"}, {BIGINT()}),
+        "SELECT c0 FROM tmp",
+        0);
+    assertFilteredScan(
+        std::make_unique<common::BytesValues>(
+            std::vector<std::string>{"a"}, false),
+        ROW({"c0"}, {BIGINT()}),
+        "SELECT c0 FROM tmp WHERE false",
+        1);
+  }
+  {
+    // A typed key with a range filter: ds > DATE '2020-09-01' over day counts.
+    SCOPED_TRACE("date range");
+    partitions = {
+        PartitionKeys{{"ds", "19657"}}, PartitionKeys{{"ds", "18000"}}};
+    assignments["ds"] = std::make_shared<hive::HiveColumnHandle>(
+        "ds",
+        hive::HiveColumnHandle::ColumnType::kPartitionKey,
+        DATE(),
+        DATE(),
+        std::vector<common::Subfield>{},
+        hive::HiveColumnHandle::ColumnParseParameters{
+            hive::HiveColumnHandle::ColumnParseParameters::kDaysSinceEpoch});
+    assertFilteredScan(
+        std::make_unique<common::BigintRange>(
+            18506, std::numeric_limits<int64_t>::max(), false),
+        ROW({"c0", "ds"}, {BIGINT(), DATE()}),
+        "SELECT c0, '2023-10-27' FROM tmp",
+        1);
+  }
+  {
+    // A key only the filter references comes with the table handle's filter
+    // column handles.
+    SCOPED_TRACE("filter column handle");
+    partitions = {PartitionKeys{{"ds", "a"}}, PartitionKeys{{"ds", "b"}}};
+    auto tableHandle = std::make_shared<hive::HiveTableHandle>(
+        kCudfHiveConnectorId,
+        "parquet_table",
+        common::test::SubfieldFiltersBuilder()
+            .add(
+                "ds",
+                std::make_unique<common::BytesValues>(
+                    std::vector<std::string>{"a"}, false))
+            .build(),
+        nullptr,
+        rowType,
+        std::vector<std::string>{},
+        std::unordered_map<std::string, std::string>{},
+        std::vector<hive::HiveColumnHandlePtr>{
+            HiveConnectorTestBase::partitionKey("ds", VARCHAR())});
+    auto plan =
+        PlanBuilder(pool_.get())
+            .startTableScan()
+            .outputType(ROW({"c0"}, {BIGINT()}))
+            .tableHandle(tableHandle)
+            .assignments(
+                {{"c0", HiveConnectorTestBase::regularColumn("c0", BIGINT())}})
+            .endTableScan()
+            .planNode();
+    auto task =
+        OperatorTestBase::assertQuery(plan, makeSplits(), "SELECT c0 FROM tmp");
+    EXPECT_EQ(getTableScanRuntimeStat(task, "skippedSplits"), 1);
+  }
+  {
+    // The decision on a split prepared ahead of time carries over to the
+    // driver that adopts it.
+    SCOPED_TRACE("preloaded splits");
+    partitions.clear();
+    for (int i = 0; i < 3; ++i) {
+      partitions.insert(
+          partitions.end(),
+          {PartitionKeys{{"ds", "a"}},
+           PartitionKeys{{"ds", "b"}},
+           PartitionKeys{{"ds", std::nullopt}}});
+    }
+    assignments["ds"] = HiveConnectorTestBase::partitionKey("ds", VARCHAR());
+    auto plan = PlanBuilder(pool_.get())
+                    .startTableScan()
+                    .outputType(ROW({"c0", "ds"}, {BIGINT(), VARCHAR()}))
+                    .tableHandle(makeTableHandle(
+                        "parquet_table",
+                        rowType,
+                        common::test::SubfieldFiltersBuilder()
+                            .add(
+                                "ds",
+                                std::make_unique<common::BytesValues>(
+                                    std::vector<std::string>{"a"}, false))
+                            .build()))
+                    .assignments(assignments)
+                    .endTableScan()
+                    .singleAggregation({"ds"}, {"count(1)"})
+                    .planNode();
+    auto task = AssertQueryBuilder(plan, duckDbQueryRunner_)
+                    .config(core::QueryConfig::kMaxSplitPreloadPerDriver, "4")
+                    .splits(makeSplits())
+                    .assertResults("SELECT 'a', 3 * count(*) FROM tmp");
+    EXPECT_EQ(getTableScanRuntimeStat(task, "skippedSplits"), 6);
+    EXPECT_EQ(getTableScanRuntimeStat(task, "processedSplits"), 3);
+  }
+}
+
+// The remaining filter sees a partition key as a constant column of the split,
+// whether or not the key is projected and whether or not a file column is
+// read along with it.
+TEST_F(TableScanTest, partitionKeyRemainingFilter) {
+  auto rowType = ROW({"c0", "c1"}, {BIGINT(), DOUBLE()});
+  auto vectors = makeVectors(5, 1'000, rowType);
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), vectors);
+  createDuckDbTable(vectors);
+
+  // The same file in the partitions 'a' and 'bb'. A split is consumed by the
+  // task it is added to, so each scan gets fresh ones.
+  const auto makeSplits = [&]() {
+    return std::vector<
+        std::shared_ptr<facebook::velox::connector::ConnectorSplit>>{
+        makePartitionedSplit(filePath->getPath(), {{"ds", "a"}}),
+        makePartitionedSplit(filePath->getPath(), {{"ds", "bb"}})};
+  };
+  const facebook::velox::connector::ColumnHandleMap assignments = {
+      {"c0", HiveConnectorTestBase::regularColumn("c0", BIGINT())},
+      {"c1", HiveConnectorTestBase::regularColumn("c1", DOUBLE())},
+      {"ds", HiveConnectorTestBase::partitionKey("ds", VARCHAR())}};
+  // The filter is parsed against the table schema, which lists the key here.
+  const auto dataColumns =
+      ROW({"c0", "c1", "ds"}, {BIGINT(), DOUBLE(), VARCHAR()});
+
+  const auto assertFilteredScan = [&](const RowTypePtr& outputType,
+                                      const std::string& remainingFilter,
+                                      const std::string& expectedSql,
+                                      int64_t expectedSkippedSplits) {
+    SCOPED_TRACE(remainingFilter);
+    auto plan = PlanBuilder(pool_.get())
+                    .startTableScan()
+                    .connectorId(kCudfHiveConnectorId)
+                    .outputType(outputType)
+                    .dataColumns(dataColumns)
+                    .assignments(assignments)
+                    .remainingFilter(remainingFilter)
+                    .endTableScan()
+                    .planNode();
+    auto task = OperatorTestBase::assertQuery(plan, makeSplits(), expectedSql);
+    EXPECT_EQ(
+        getTableScanRuntimeStat(task, "skippedSplits"), expectedSkippedSplits);
+  };
+
+  // A filter over the key and a file column runs after the read, with the key
+  // projected or not.
+  assertFilteredScan(
+      ROW({"c0", "ds"}, {BIGINT(), VARCHAR()}),
+      "ds = 'a' OR c0 > 500",
+      "SELECT c0, 'a' FROM tmp UNION ALL "
+      "SELECT c0, 'bb' FROM tmp WHERE c0 > 500",
+      0);
+  assertFilteredScan(
+      ROW({"c1"}, {DOUBLE()}),
+      "ds = 'a' OR c0 > 500",
+      "SELECT c1 FROM tmp UNION ALL SELECT c1 FROM tmp WHERE c0 > 500",
+      0);
+  // A comparison of the key alone is decided per split.
+  assertFilteredScan(
+      ROW({"c0"}, {BIGINT()}), "ds = 'bb'", "SELECT c0 FROM tmp", 1);
+  // Any other filter on the key alone runs over the materialized key, even
+  // when no file column is read.
+  assertFilteredScan(
+      ROW({"c0"}, {BIGINT()}), "length(ds) = 2", "SELECT c0 FROM tmp", 0);
+  assertFilteredScan(
+      ROW({"ds"}, {VARCHAR()}), "length(ds) = 2", "SELECT 'bb' FROM tmp", 0);
+}
+
+// A split round-trips through its serialized form with its partition keys,
+// NULL ones included.
+TEST_F(TableScanTest, partitionedSplitSerde) {
+  auto split = CudfHiveConnectorSplitBuilder("/path/to/file.parquet")
+                   .infoColumn("$file_size", "123")
+                   .partitionKey("ds", "2021-12-02")
+                   .partitionKey("region", std::nullopt)
+                   .build();
+  auto copy = cudf_velox::connector::hive::CudfHiveConnectorSplit::create(
+      split->serialize());
+  EXPECT_EQ(copy->filePath, split->filePath);
+  EXPECT_EQ(copy->infoColumns, split->infoColumns);
+  EXPECT_EQ(copy->partitionKeys, split->partitionKeys);
 }
 
 TEST_F(TableScanTest, filterPushdown) {
