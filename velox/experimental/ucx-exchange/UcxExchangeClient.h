@@ -31,9 +31,7 @@ namespace facebook::velox::ucx_exchange {
 /// serialized pages. The UcxExchange operator is registered together with this
 /// client in exec::ExchangeTransportRegistry, so it always knows the concrete
 /// client type and reaches the data plane directly.
-class UcxExchangeClient
-    : public exec::ExchangeClient,
-      public std::enable_shared_from_this<UcxExchangeClient> {
+class UcxExchangeClient : public exec::ExchangeClient {
  public:
   /// Flow control limit on the number of elements buffered in the queue.
   static constexpr int32_t kDefaultMaxQueuedColumns = 32;
@@ -92,9 +90,6 @@ class UcxExchangeClient
   std::vector<std::shared_ptr<UcxExchangeSource>> sources_;
   // Guarded by queue_->mutex().
   bool closed_{false};
-
-  // Total number of packed columns in flight.
-  int64_t totalPendingColumns_{0};
 
   // Diagnostic counters for progress and flow control.
   int64_t totalDequeued_{0};
