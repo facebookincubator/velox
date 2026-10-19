@@ -176,22 +176,16 @@ class BatchedStreamDecoder : public Decoder {
   }
 
   // Returns the `StreamData` for the current segment, creating it lazily
-  // on first access. `stringBuffers` is where any string content decoded
-  // out of this segment will be pushed; caller retains ownership.
-  //
-  // On a cache hit (a prior `skip` already built the encoding using our
-  // scratch vector), transfer any buffers the skip path pushed into
-  // `skipStringBuffers_` into the caller's vector so the output takes
-  // shared ownership before the end-of-run `clear()` drops our scratch,
-  // then redirect the encoding's factory target for lazy string
-  // encodings whose future page allocations must land in the caller's
-  // vector, not ours.
-  serde::StreamData& ensureStreamData(
-      std::vector<velox::BufferPtr>& stringBuffers);
+  // on first access backed by `encodingStringBuffers_`.
+  serde::StreamData& ensureStreamData();
 
   // Advances to the next segment. ensureStreamData() will create StreamData for
   // the new segment before decoding it.
   void advanceSegment();
+
+  // Appends cached encoding buffer refs to the caller's vector to guarantee
+  // lifetime.
+  void attachEncodingBuffers(std::vector<velox::BufferPtr>& stringBuffers);
 
   // Fills the in-map output for rows `[rowOffset, gapEndRow)` where
   // `gapEndRow = min(rowOffset + rowCount, next stream segment's startRow)`.
@@ -237,33 +231,26 @@ class BatchedStreamDecoder : public Decoder {
       uint32_t offset,
       uint32_t count,
       const std::function<void*()>& getOutputNulls,
-      const velox::bits::Bitmap* scatterOutputBitmap,
-      std::vector<velox::BufferPtr>& stringBuffers);
+      const velox::bits::Bitmap* scatterOutputBitmap);
 
   // Skips up to `numRows` rows from the segment at `streamSegmentIndex_`.
   // Advances `streamSegmentIndex_` past the segment when its remaining
   // rows fit inside `numRows`; otherwise leaves the cursor mid-segment.
   // Returns the number of rows actually skipped (never more than
   // `numRows`, may be less if the segment has fewer remaining).
-  uint32_t skipSegment(
-      uint32_t numRows,
-      std::vector<velox::BufferPtr>& stringBuffers);
+  uint32_t skipSegment(uint32_t numRows);
 
   // Skips `numRows` rows for non-in-map columns (dense scalars, FlatMap
   // value / scattered columns). Walks `streamSegments_` from the current
   // cursor, consuming each segment fully until `numRows` are covered.
-  void skipEncoded(
-      uint32_t numRows,
-      std::vector<velox::BufferPtr>& stringBuffers);
+  void skipEncoded(uint32_t numRows);
 
   // Skips `numRows` rows for FlatMap in-map streams. Alternates between
   // presence-gap regions (advance `presentSegmentIndex_` via
   // `advanceInMapPresentSegmentIndex`) and encoded segments (advance via
   // `skipSegment`), mirroring the read-side control flow in
   // `inMapRead` but writing nothing.
-  void skipInMap(
-      uint32_t numRows,
-      std::vector<velox::BufferPtr>& stringBuffers);
+  void skipInMap(uint32_t numRows);
 
   // Advances `presentSegmentIndex_` past every presence segment fully
   // contained in `[..., targetRow]` (i.e. `segment.endRow <= targetRow`).
@@ -335,13 +322,10 @@ class BatchedStreamDecoder : public Decoder {
   // 0 in `clear()`.
   uint32_t currentRow_{0};
 
-  // Backing storage for `ensureStreamData` when called from `skip*`.
-  // Some string encodings allocate their content buffers into this vector
-  // at construction time and keep `string_view`s into them; the vector
-  // must outlive the encoding that references it, so it lives with the
-  // decoder and is cleared inside `clear()` AFTER `streamData_` (and
-  // hence the encoding) is destroyed.
-  std::vector<velox::BufferPtr> skipStringBuffers_;
+  // Decoder-owned storage for the cached encoding's string buffers,
+  // keeping its string_views alive across next() calls. Read paths drain
+  // into the caller's stringBuffers at segment boundaries.
+  std::vector<velox::BufferPtr> encodingStringBuffers_;
 };
 
 } // namespace facebook::nimble
