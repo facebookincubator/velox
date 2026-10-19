@@ -161,13 +161,16 @@ returns null.</p>
 <span class="sig-name descname"><span class="pre">to_json</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">jsonObject</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">jsonString</span></span></span><a class="headerlink" href="#to_json" title="Link to this definition">¶</a></dt>
 <dd><p>Converts a JSON object (ROW, ARRAY, or MAP) into a JSON string.</p>
 <p>Supported primitive types are: BOOLEAN, TINYINT, SMALLINT, INTEGER, BIGINT,
-REAL, DOUBLE, DECIMAL, DATE, TIMESTAMP, VARCHAR, and VARBINARY. ROW, ARRAY,
-and MAP can be nested.</p>
+REAL, DOUBLE, DECIMAL, DATE, TIMESTAMP, TIMESTAMP_UTC, VARCHAR, and VARBINARY.
+ROW, ARRAY, and MAP can be nested.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">to_json</span><span class="p">(</span><span class="n">named_struct</span><span class="p">(</span><span class="s1">'c0'</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="s1">'c1'</span><span class="p">,</span> <span class="s1">'a'</span><span class="p">));</span> <span class="o">--</span> <span class="p">{</span><span class="s2">"c0"</span><span class="p">:</span><span class="mi">1</span><span class="p">,</span><span class="s2">"c1"</span><span class="p">:</span><span class="s2">"a"</span><span class="p">}</span>
 <span class="n">SELECT</span> <span class="n">to_json</span><span class="p">(</span><span class="n">ARRAY</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">));</span> <span class="o">--</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">]</span>
 <span class="n">SELECT</span> <span class="n">to_json</span><span class="p">(</span><span class="n">MAP</span><span class="p">(</span><span class="s1">'x'</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="s1">'y'</span><span class="p">,</span> <span class="mi">2</span><span class="p">));</span> <span class="o">--</span> <span class="p">{</span><span class="s2">"x"</span><span class="p">:</span><span class="mi">1</span><span class="p">,</span><span class="s2">"y"</span><span class="p">:</span><span class="mi">2</span><span class="p">}</span>
 </pre></div>
 </div>
+<p>TIMESTAMP_UTC (Spark’s TIMESTAMP_NTZ) values retain their local date and
+time, using the format <code class="docutils literal notranslate"><span class="pre">yyyy-MM-dd'T'HH:mm:ss.SSS</span></code> without a timezone
+offset. Session and function timezone settings do not affect these values.</p>
 <p>The current implementation has following limitations.</p>
 <ul>
 <li><p>Does not support user provided options.</p>
