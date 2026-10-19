@@ -588,14 +588,6 @@ TEST_F(IcebergInsertTest, changedWriteDefaultAcrossInserts) {
   const auto rowType =
       ROW({"id", "amount", "country"}, {BIGINT(), DOUBLE(), VARCHAR()});
 
-  auto omittedCountryRow = [&](int64_t id, double amount) {
-    return makeRowVector(
-        rowType->names(),
-        {makeFlatVector<int64_t>({id}),
-         makeFlatVector<double>({amount}),
-         makeNullableFlatVector<std::string>({std::nullopt})});
-  };
-
   // INSERT 1: write-default = 'IN', two rows.
   icebergAddInputWithDefault(
       rowType,
