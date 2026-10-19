@@ -92,14 +92,8 @@ void registerUcxTransports() {
           // A merge exchange receives over UCX exactly like a plain one: this
           // slot is non-null only to say that the transport can carry a merge
           // exchange at all, which is what exec::Task and LocalPlanner check.
-          //
-          // It deliberately does not build the sort that a merge needs.
-          // UcxExchangeClient multiplexes every source into one queue, so the
-          // per-source orderings exec::MergeExchange relies on are gone by the
-          // time the rows arrive and the merged result has to be sorted
-          // instead. That sort is described by UcxExchangeAdapter in the cuDF
-          // driver-adaptation pass, where DriverFactory::replaceOperators
-          // splices it in and renumbers the driver's operator ids.
+          // The sort a merge needs is added by UcxExchangeAdapter in
+          // OperatorAdapters.cpp, which explains why.
           [](int32_t operatorId,
              exec::DriverCtx* ctx,
              const std::shared_ptr<const core::ExchangeNode>& node,
