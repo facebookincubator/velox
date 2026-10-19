@@ -114,9 +114,8 @@ velox_link_libraries(
 velox_add_library(velox_status Status.cpp HEADERS Status.h)
 velox_link_libraries(velox_status PUBLIC fmt::fmt Folly::folly PRIVATE glog::glog)
 
-if(VELOX_BUILD_STATUS_TEST)
+if("status" IN_LIST VELOX_SELECTED_TEST_COMPONENTS)
   add_executable(velox_status_test tests/StatusTest.cpp)
-  target_compile_definitions(velox_status_test PRIVATE VELOX_STATUS_TEST_ONLY)
   target_link_libraries(velox_status_test PRIVATE velox_status GTest::gtest_main)
   add_test(NAME velox_status_test COMMAND velox_status_test)
 endif()

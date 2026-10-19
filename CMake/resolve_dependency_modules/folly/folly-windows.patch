@@ -11,6 +11,10 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+#
+# TODO: Remove the FixedString.h hunk after
+# https://github.com/facebook/folly/pull/2726 is merged and Velox's pinned
+# Folly version includes the fix. Keep the dependency-discovery hunks below.
 --- a/folly/FixedString.h
 +++ b/folly/FixedString.h
 @@ -2848,6 +2848,6 @@
