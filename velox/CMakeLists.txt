@@ -84,6 +84,13 @@ if(VELOX_ENABLE_WAVE OR VELOX_ENABLE_CUDF)
     # transports and compiles with VELOX_ENABLE_UCX_EXCHANGE; otherwise that
     # registration is compiled out and no plan can select the UCX transport.
     if(VELOX_ENABLE_UCX_EXCHANGE)
+      # ucxx is fetched only by cudf.cmake, which a preinstalled cuDF skips.
+      if(NOT cudf_SOURCE STREQUAL "BUNDLED")
+        message(
+          FATAL_ERROR
+          "VELOX_ENABLE_UCX_EXCHANGE=ON requires a cuDF that Velox builds from source (cudf_SOURCE=BUNDLED), but cudf_SOURCE is ${cudf_SOURCE}."
+        )
+      endif()
       add_subdirectory(experimental/ucx-exchange)
     endif()
   endif()

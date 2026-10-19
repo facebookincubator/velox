@@ -63,13 +63,14 @@ set(
 set(VELOX_cudf_SOURCE_URL "https://github.com/rapidsai/cudf/archive/${VELOX_cudf_COMMIT}.tar.gz")
 velox_resolve_dependency_url(cudf)
 
-# Probe for a system UCX install, to pick the default for
-# VELOX_ENABLE_UCX_EXCHANGE below. velox_ucx_exchange runs its own
-# find_package(ucx REQUIRED); this probe only decides the default and fails the
-# configure before cuDF is fetched when the option is on without UCX.
-find_library(UCX_LIBRARY NAMES ucp)
-find_path(UCX_INCLUDE_DIR NAMES ucp/api/ucp.h)
-if(UCX_LIBRARY AND UCX_INCLUDE_DIR)
+# Probe for a system UCX, to pick the default for VELOX_ENABLE_UCX_EXCHANGE
+# below and to fail the configure before cuDF is fetched when the option is on
+# without UCX. It is the lookup ucxx and velox_ucx_exchange make later, for
+# UCX's CMake package, so the probe succeeds exactly when they will. GLOBAL
+# creates ucx::ucp as a global target here: ucxx reuses that target and would
+# otherwise try to make it global from its own directory, which CMake rejects.
+find_package(ucx QUIET GLOBAL)
+if(ucx_FOUND)
   set(UCX_FOUND TRUE)
 else()
   set(UCX_FOUND FALSE)
@@ -86,7 +87,7 @@ endif()
 # every subdirectory sees it.
 option(
   VELOX_ENABLE_UCX_EXCHANGE
-  "Build the experimental UCX GPU exchange transport. Requires a system UCX install."
+  "Build the experimental UCX GPU exchange transport. Requires a system UCX with its CMake package."
   ${UCX_FOUND}
 )
 
@@ -94,12 +95,12 @@ if(VELOX_ENABLE_UCX_EXCHANGE)
   if(NOT UCX_FOUND)
     message(
       FATAL_ERROR
-      "VELOX_ENABLE_UCX_EXCHANGE=ON but no system UCX was found (need libucp and ucp/api/ucp.h)."
+      "VELOX_ENABLE_UCX_EXCHANGE=ON but no system UCX was found (need UCX's CMake package, ucx-config.cmake; set ucx_DIR to its directory if it is not on the search path). Install UCX or pass -DVELOX_ENABLE_UCX_EXCHANGE=OFF."
     )
   endif()
   message(
     STATUS
-    "UCX exchange enabled with ${UCX_LIBRARY} (headers: ${UCX_INCLUDE_DIR}) -- ucxx will be fetched"
+    "UCX exchange enabled with UCX ${ucx_VERSION} from ${ucx_DIR} -- ucxx will be fetched"
   )
   # ucxx commit f3e85e5 from 2026-10-14 (main branch)
   set(VELOX_ucxx_VERSION 0.53)
