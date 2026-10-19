@@ -186,6 +186,11 @@ are summarized below.
 - Avoid default arguments when all callers can pass values explicitly.
 - Never use `friend`, `FRIEND_TEST`, or any friend declarations. If a test needs access to private members, redesign the API or test through public methods instead.
 
+### Pitfalls Tests Rarely Catch
+
+- Measure durations, timeouts and deadlines with `steady_clock` (`folly::stop_watch` for an interval; `MicrosecondWallTimer` / `NanosecondWallTimer` in `velox/common/time/Timer.h` to add a scope's duration to a counter; `SteadyTime::now<Duration>()` when the start must be stored as a plain integer, such as in an atomic). `system_clock` and `EpochTime` can step backward; use them only for absolute timestamps.
+- Convert epoch seconds to calendar time with `Timestamp::epochToCalendarUtc()`. `gmtime` is not thread-safe, and glibc's `gmtime_r` serializes threads on a global lock.
+
 ### Tests
 
 - Place new tests next to related existing tests, not at the end of the file. Group tests by topic (e.g., place `tryCast` next to `types`, `notBetween` next to `ifClause` which uses `between`).
