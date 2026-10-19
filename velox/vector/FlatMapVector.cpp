@@ -14,11 +14,14 @@
  * limitations under the License.
  */
 
+#include <numeric>
+
 #include <folly/hash/Hash.h>
 
 #include "velox/vector/FlatMapVector.h"
 
 #include "velox/vector/DecodedVector.h"
+#include "velox/vector/FlatVector.h"
 #include "velox/vector/SimpleVector.h"
 
 namespace facebook::velox {
@@ -257,6 +260,88 @@ std::vector<column_index_t> FlatMapVector::getKeyChannels(
   return getKeyChannelsImpl(rows, keys, [&](vector_size_t index) {
     return keyIndex().find(*distinctKeys_, *keys.base(), index);
   });
+}
+
+namespace {
+
+// Returns a flat vector with the values of the flat vector `values` and
+// `nulls` as its nulls, sharing the buffers of `values`.
+template <TypeKind kKind>
+VectorPtr
+flatWithNulls(const BaseVector& values, BufferPtr nulls, vector_size_t size) {
+  using T = typename TypeTraits<kKind>::NativeType;
+  const auto& flat = *values.asUnchecked<FlatVector<T>>();
+  return std::make_shared<FlatVector<T>>(
+      flat.pool(),
+      flat.type(),
+      std::move(nulls),
+      size,
+      flat.values(),
+      std::vector<BufferPtr>(flat.stringBuffers()));
+}
+
+} // namespace
+
+// An in-map bit is set when the row contains the key, the same convention as
+// a null bit for a non-null row, so the in-map buffer can serve as nulls.
+VectorPtr FlatMapVector::projectChannel(column_index_t channel) const {
+  const auto& values = mapValuesAt(channel);
+  const auto* rawInMap = rawInMapsAt(channel);
+  const auto* rawMapNulls = rawNulls();
+
+  // The key is in every row and no map is null: return the values as they are.
+  if (rawInMap == nullptr && rawMapNulls == nullptr) {
+    return values;
+  }
+
+  // The projection is a view over the values, so new buffers come from their
+  // pool.
+  auto* pool = values->pool();
+
+  // Nulls for the rows whose map is null or lacks the key. Either buffer
+  // serves as is when it is the only source of nulls.
+  BufferPtr nulls;
+  bool ownsNulls = false;
+  if (rawMapNulls == nullptr) {
+    nulls = inMapsAt(channel);
+  } else if (rawInMap == nullptr) {
+    nulls = nulls_;
+  } else {
+    nulls = allocateNulls(size(), pool);
+    bits::andBits(
+        nulls->asMutable<uint64_t>(), rawMapNulls, rawInMap, 0, size());
+    ownsNulls = true;
+  }
+
+  // Flat values: share their buffers in a new flat vector, also keeping their
+  // own nulls, which are combined into the buffer above when it is new.
+  if (values->isFlatEncoding()) {
+    if (values->rawNulls() != nullptr) {
+      if (ownsNulls) {
+        bits::andBits(
+            nulls->asMutable<uint64_t>(), values->rawNulls(), 0, size());
+      } else {
+        auto combined = allocateNulls(size(), pool);
+        bits::andBits(
+            combined->asMutable<uint64_t>(),
+            values->rawNulls(),
+            nulls->as<uint64_t>(),
+            0,
+            size());
+        nulls = std::move(combined);
+      }
+    }
+    return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH_ALL(
+        flatWithNulls, values->typeKind(), *values, std::move(nulls), size());
+  }
+
+  // Other encodings: wrap the values in a dictionary with these nulls and
+  // identity indices.
+  BufferPtr indices = allocateIndices(size(), pool);
+  auto* rawIndices = indices->asMutable<vector_size_t>();
+  std::iota(rawIndices, rawIndices + size(), 0);
+  return BaseVector::wrapInDictionary(
+      std::move(nulls), std::move(indices), size(), values);
 }
 
 vector_size_t FlatMapVector::sizeAt(vector_size_t index) const {

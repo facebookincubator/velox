@@ -335,7 +335,9 @@ TEST_F(ElementAtTest, flatMapKeyNotInMap) {
       "{1: 30, 2: 300}",
   });
   // Row 1 does not contain key 2, but give it a non-null value for it anyway.
-  input->projectKey(int64_t{2})->asFlatVector<int32_t>()->set(1, 200);
+  input->mapValuesAt(input->getKeyChannel(int64_t{2}).value())
+      ->asFlatVector<int32_t>()
+      ->set(1, 200);
   // Key 1 is in every row, which can also be expressed with no in-map buffer.
   input->inMapsAt(input->getKeyChannel(int64_t{1}).value()) = nullptr;
 
