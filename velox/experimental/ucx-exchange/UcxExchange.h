@@ -64,8 +64,10 @@ class UcxExchange : public SourceOperator, public cudf_velox::NvtxHelper {
   // This is a no-op except when called from driver 0.
   // Fetches splits from the task until there are no more splits or task returns
   // a future that will be complete when more splits arrive. Records split
-  // stats. Sets "noMoreSplits_" if the task returns not blocked without a
-  // split, this is the end-of-splits signal.
+  // stats, and for a merge exchange also passes the splits and the end of
+  // splits to exchangeClient_ (see forwardsSplits_). Sets "noMoreSplits_" if
+  // the task returns not blocked without a split, this is the end-of-splits
+  // signal.
   void getSplits(ContinueFuture* future);
 
   // Converts the cudf packed table into a CudfVector.
@@ -90,6 +92,13 @@ class UcxExchange : public SourceOperator, public cudf_velox::NvtxHelper {
 
   // See planNodeBoundary().
   const core::PlanNode::Boundary planNodeBoundary_;
+
+  // True for a MergeExchangeNode. The Task passes remote splits to the
+  // exchange client of every other exchange node, but not of a merge exchange,
+  // whose CPU operator fetches through clients of its own. This operator reads
+  // the Task's client, so for a merge exchange it passes them on itself. A
+  // merge exchange runs single-threaded, so driver 0 is the only reader.
+  const bool forwardsSplits_;
 
   bool noMoreSplits_ = false;
 

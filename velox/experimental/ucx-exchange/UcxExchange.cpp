@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/experimental/ucx-exchange/UcxExchange.h"
+#include "velox/common/Casts.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
 using facebook::velox::exec::Operator;
@@ -50,7 +51,8 @@ UcxExchange::UcxExchange(
       planNodeBoundary_{
           planNode->is<core::MergeExchangeNode>()
               ? core::PlanNode::Boundary::kInput
-              : core::PlanNode::Boundary::kBoth} {
+              : core::PlanNode::Boundary::kBoth},
+      forwardsSplits_{planNode->is<core::MergeExchangeNode>()} {
   VELOX_CHECK_NOT_NULL(
       ucxExchangeClient,
       "UCX exchange client is null, plan node: {}",
@@ -92,6 +94,11 @@ void UcxExchange::getSplits(ContinueFuture* future) {
     }
 
     if (split.hasConnectorSplit()) {
+      if (forwardsSplits_) {
+        exchangeClient_->addRemoteTaskId(
+            checkedPointerCast<RemoteConnectorSplit>(split.connectorSplit)
+                ->taskId);
+      }
       ++stats_.wlock()->numSplits;
       // check for more splits.
       continue;
@@ -99,6 +106,9 @@ void UcxExchange::getSplits(ContinueFuture* future) {
 
     // not blocked but also no connector split.
     // we've reached the end.
+    if (forwardsSplits_) {
+      exchangeClient_->noMoreRemoteTasks();
+    }
     noMoreSplits_ = true;
     return;
   }
