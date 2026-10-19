@@ -702,7 +702,7 @@ if(
   # with the pin satisfies the compat check in both the SYSTEM and
   # BUNDLED resolution paths.
   velox_set_source(Protobuf)
-  velox_resolve_dependency(Protobuf 26.1 CONFIG REQUIRED)
+  velox_resolve_dependency(Protobuf 31.1 CONFIG REQUIRED)
   include_directories(${Protobuf_INCLUDE_DIRS})
 endif()
 

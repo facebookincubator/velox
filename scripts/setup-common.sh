@@ -196,18 +196,6 @@ function install_abseil {
   fi
   VELOX_ABSEIL_INSTALLED=1
   wget_and_untar https://github.com/abseil/abseil-cpp/archive/refs/tags/"${ABSEIL_VERSION}".tar.gz abseil-cpp
-  local OS
-  OS=$(uname)
-  if [[ $OS == "Darwin" ]]; then
-    ABSOLUTE_SCRIPTDIR=$(realpath "$SCRIPT_DIR")
-    (
-      cd "${DEPENDENCY_DIR}/abseil-cpp" || exit 1
-      PATCH_FILE="$ABSOLUTE_SCRIPTDIR/../CMake/resolve_dependency_modules/absl/absl-macos.patch"
-      # Skip applying the patch if it is already applied.
-      git apply --reverse --check "$PATCH_FILE" 2>/dev/null ||
-        git apply "$PATCH_FILE"
-    )
-  fi
   cmake_install_dir abseil-cpp \
     -DABSL_BUILD_TESTING=OFF \
     -DCMAKE_CXX_STANDARD=17 \
