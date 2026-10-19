@@ -106,6 +106,35 @@ TEST_P(IndexScanCursorTest, loadsSelectedStripesLazily) {
   folly::coro::blockingWait(cursor->co_reset());
 }
 
+TEST_P(IndexScanCursorTest, collectsTimingsOnlyWhenEnabled) {
+  writeResumeKeyTestData(/*rowsPerBatch=*/4, /*numBatches=*/3);
+  const auto rowType = ROW({{"key", BIGINT()}, {"value", INTEGER()}});
+  for (const bool collectTimings : {true, false}) {
+    SCOPED_TRACE(collectTimings);
+    NimbleIterator::Options options;
+    options.collectTimings = collectTimings;
+    auto cursor = makeCursor(options);
+    folly::coro::blockingWait(
+        cursor->co_seek(makeRangeLookup(rowType, {"key"}, 2, 10)));
+    folly::coro::blockingWait(cursor->co_nextStripe(2));
+    const auto stats = cursor->stats();
+    EXPECT_EQ(stats.numReadStripes, 1);
+    if (collectTimings) {
+      EXPECT_GT(stats.lookupTiming.count, 0);
+      EXPECT_GT(stats.scanTiming.count, 0);
+    } else {
+      for (const auto& timing :
+           {stats.lookupTiming,
+            stats.prepareTiming,
+            stats.scanTiming,
+            stats.projectionTiming}) {
+        EXPECT_EQ(timing, velox::CpuWallTiming{});
+      }
+    }
+    folly::coro::blockingWait(cursor->co_reset());
+  }
+}
+
 TEST_P(IndexScanCursorTest, createsKeysWithinTheActiveRange) {
   writeResumeKeyTestData(/*rowsPerBatch=*/4, /*numBatches=*/3);
   const auto rowType = ROW({{"key", BIGINT()}, {"value", INTEGER()}});

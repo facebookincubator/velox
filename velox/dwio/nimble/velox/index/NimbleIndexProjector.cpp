@@ -19,6 +19,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <optional>
 #include <utility>
 
 #include "folly/ScopeGuard.h"
@@ -39,6 +40,32 @@ namespace facebook::nimble {
 using namespace facebook::velox; // NOLINT(google-build-using-namespace)
 
 namespace {
+
+// Measures the CPU and wall time of its scope like velox::DeltaCpuWallTimer.
+// Skips the clock reads when 'enabled' is false, because the thread CPU clock
+// is a system call.
+template <typename F>
+class OptionalCpuWallTimer {
+ public:
+  OptionalCpuWallTimer(bool enabled, F&& func) : func_{std::move(func)} {
+    if (enabled) {
+      stopWatch_.emplace();
+    }
+  }
+
+  ~OptionalCpuWallTimer() {
+    if (stopWatch_.has_value()) {
+      func_(stopWatch_->elapsed());
+    }
+  }
+
+  OptionalCpuWallTimer(const OptionalCpuWallTimer&) = delete;
+  OptionalCpuWallTimer& operator=(const OptionalCpuWallTimer&) = delete;
+
+ private:
+  std::optional<velox::DeltaCpuWallTimeStopWatch> stopWatch_;
+  F func_;
+};
 
 bool hasProjectedHybridFlatMaps(const NimbleTypeProjection& projection) {
   const auto& root = projection.nimbleType->asRow();
@@ -98,6 +125,10 @@ void NimbleIndexProjector::recordStatsTiming(
     velox::CpuWallTiming Stats::* field,
     const velox::CpuWallTiming& timing) {
   updateStats([field, &timing](Stats& stats) { (stats.*field).add(timing); });
+}
+
+void NimbleIndexProjector::setTimingEnabled(bool enabled) {
+  timingEnabled_ = enabled;
 }
 
 NimbleIndexProjector::Stats NimbleIndexProjector::stats() const {
@@ -348,9 +379,10 @@ NimbleIndexProjector::co_projectRows(
   };
   loadStripes(request, options);
   NIMBLE_CHECK_NOT_NULL(streamReader_);
-  velox::DeltaCpuWallTimer timer{[this](const velox::CpuWallTiming& timing) {
-    recordStatsTiming(&Stats::projectionTiming, timing);
-  }};
+  OptionalCpuWallTimer timer{
+      timingEnabled_, [this](const velox::CpuWallTiming& timing) {
+        recordStatsTiming(&Stats::projectionTiming, timing);
+      }};
   RowProjectionResult result;
   result.responses.resize(ctx_.numRequests);
 
@@ -430,9 +462,10 @@ NimbleIndexProjector::co_projectRows(
 std::vector<StripeSelection> NimbleIndexProjector::lookup(
     const velox::serializer::EncodedKeyBounds& bounds) {
   NIMBLE_CHECK_NULL(ctx_.request, "Cannot look up rows during a projection");
-  velox::DeltaCpuWallTimer timer{[this](const velox::CpuWallTiming& timing) {
-    recordStatsTiming(&Stats::lookupTiming, timing);
-  }};
+  OptionalCpuWallTimer timer{
+      timingEnabled_, [this](const velox::CpuWallTiming& timing) {
+        recordStatsTiming(&Stats::lookupTiming, timing);
+      }};
   const auto result = clusterIndex().lookup(
       index::IndexLookup::LookupRequest::rangeScan({bounds}));
   NIMBLE_CHECK_EQ(result.size(), 1);
@@ -481,9 +514,10 @@ NimbleIndexProjector::loadStripeStreams(
 
   std::vector<StripeIdentifier> stripes;
   {
-    velox::DeltaCpuWallTimer timer{[this](const velox::CpuWallTiming& timing) {
-      recordStatsTiming(&Stats::prepareTiming, timing);
-    }};
+    OptionalCpuWallTimer timer{
+        timingEnabled_, [this](const velox::CpuWallTiming& timing) {
+          recordStatsTiming(&Stats::prepareTiming, timing);
+        }};
     stripes = tablet_->stripeIdentifiers(stripeOffset, numStripes);
     NIMBLE_CHECK_EQ(stripes.size(), numStripes);
     for (uint32_t i{0}; i < numStripes; ++i) {
@@ -497,9 +531,10 @@ NimbleIndexProjector::loadStripeStreams(
   }
   loadStripeStreams();
 
-  velox::DeltaCpuWallTimer timer{[this](const velox::CpuWallTiming& timing) {
-    recordStatsTiming(&Stats::projectionTiming, timing);
-  }};
+  OptionalCpuWallTimer timer{
+      timingEnabled_, [this](const velox::CpuWallTiming& timing) {
+        recordStatsTiming(&Stats::projectionTiming, timing);
+      }};
   std::vector<facebook::nimble::ProjectedStripe> result;
   result.reserve(numStripes);
   for (uint32_t i{0}; i < numStripes; ++i) {
@@ -592,9 +627,10 @@ void NimbleIndexProjector::setResumeKey(
 }
 
 void NimbleIndexProjector::prepareStripes() {
-  velox::DeltaCpuWallTimer timer{[this](const velox::CpuWallTiming& timing) {
-    recordStatsTiming(&Stats::prepareTiming, timing);
-  }};
+  OptionalCpuWallTimer timer{
+      timingEnabled_, [this](const velox::CpuWallTiming& timing) {
+        recordStatsTiming(&Stats::prepareTiming, timing);
+      }};
   uint64_t totalRows{0};
   uint64_t totalBytes{0};
   const auto maxRowsPerRequest = ctx_.options->maxRowsPerRequest;
@@ -792,9 +828,10 @@ RowRange NimbleIndexProjector::stripeRowRange(
 }
 
 void NimbleIndexProjector::lookupStripes() {
-  velox::DeltaCpuWallTimer timer{[this](const velox::CpuWallTiming& timing) {
-    recordStatsTiming(&Stats::lookupTiming, timing);
-  }};
+  OptionalCpuWallTimer timer{
+      timingEnabled_, [this](const velox::CpuWallTiming& timing) {
+        recordStatsTiming(&Stats::lookupTiming, timing);
+      }};
 
   const auto result = clusterIndex_->lookup(
       index::IndexLookup::LookupRequest::rangeScan(ctx_.request->keyBounds));
@@ -950,9 +987,10 @@ void NimbleIndexProjector::loadStripeStreams() {
   if (numPlannedStripes == 0) {
     return;
   }
-  velox::DeltaCpuWallTimer timer{[this](const velox::CpuWallTiming& timing) {
-    recordStatsTiming(&Stats::scanTiming, timing);
-  }};
+  OptionalCpuWallTimer timer{
+      timingEnabled_, [this](const velox::CpuWallTiming& timing) {
+        recordStatsTiming(&Stats::scanTiming, timing);
+      }};
 
   uint32_t totalStreams = 0;
   for (const auto numStreams : ctx_.plan.numStreams) {
@@ -1025,9 +1063,10 @@ void NimbleIndexProjector::loadStripeStreams() {
 
 NimbleIndexProjector::SerializedResult
 NimbleIndexProjector::processStripeStreams() {
-  velox::DeltaCpuWallTimer timer{[this](const velox::CpuWallTiming& timing) {
-    recordStatsTiming(&Stats::projectionTiming, timing);
-  }};
+  OptionalCpuWallTimer timer{
+      timingEnabled_, [this](const velox::CpuWallTiming& timing) {
+        recordStatsTiming(&Stats::projectionTiming, timing);
+      }};
   SerializedResult result;
   result.responses.resize(ctx_.numRequests);
   ctx_.packedStripes.resize(ctx_.plan.stripeIndices.size());

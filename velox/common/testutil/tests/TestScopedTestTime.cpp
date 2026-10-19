@@ -31,70 +31,70 @@ DEBUG_ONLY_TEST(TestScopedTestTime, testSetCurrentTimeMs) {
   {
     ScopedTestTime scopedTestTime;
     scopedTestTime.setCurrentTestTimeMs(1);
-    ASSERT_EQ(getCurrentTimeMs(), 1);
-    ASSERT_EQ(getCurrentTimeMicro(), 1000);
+    ASSERT_EQ(EpochTime::now<std::chrono::milliseconds>(), 1);
+    ASSERT_EQ(EpochTime::now<std::chrono::microseconds>(), 1000);
     scopedTestTime.setCurrentTestTimeMs(2);
-    ASSERT_EQ(getCurrentTimeMs(), 2);
-    ASSERT_EQ(getCurrentTimeMicro(), 2000);
+    ASSERT_EQ(EpochTime::now<std::chrono::milliseconds>(), 2);
+    ASSERT_EQ(EpochTime::now<std::chrono::microseconds>(), 2000);
   }
 
   // This should be the actual time, so we don't know what it is, but it
   // shouldn't be equal to the overridden value.
-  ASSERT_NE(getCurrentTimeMs(), 2);
-  ASSERT_NE(getCurrentTimeMicro(), 2000);
+  ASSERT_NE(EpochTime::now<std::chrono::milliseconds>(), 2);
+  ASSERT_NE(EpochTime::now<std::chrono::microseconds>(), 2000);
 }
 
 DEBUG_ONLY_TEST(TestScopedTestTime, testSetCurrentTimeMicro) {
   {
     ScopedTestTime scopedTestTime;
     scopedTestTime.setCurrentTestTimeMicro(1000);
-    ASSERT_EQ(getCurrentTimeMs(), 1);
-    ASSERT_EQ(getCurrentTimeMicro(), 1000);
+    ASSERT_EQ(EpochTime::now<std::chrono::milliseconds>(), 1);
+    ASSERT_EQ(EpochTime::now<std::chrono::microseconds>(), 1000);
     scopedTestTime.setCurrentTestTimeMicro(2000);
-    ASSERT_EQ(getCurrentTimeMs(), 2);
-    ASSERT_EQ(getCurrentTimeMicro(), 2000);
+    ASSERT_EQ(EpochTime::now<std::chrono::milliseconds>(), 2);
+    ASSERT_EQ(EpochTime::now<std::chrono::microseconds>(), 2000);
   }
 
   // This should be the actual time, so we don't know what it is, but it
   // shouldn't be equal to the overridden value.
-  ASSERT_NE(getCurrentTimeMs(), 2);
-  ASSERT_NE(getCurrentTimeMicro(), 2000);
+  ASSERT_NE(EpochTime::now<std::chrono::milliseconds>(), 2);
+  ASSERT_NE(EpochTime::now<std::chrono::microseconds>(), 2000);
 }
 
 DEBUG_ONLY_TEST(TestScopedTestTime, testSetCurrentTimeNano) {
   {
     ScopedTestTime scopedTestTime;
     scopedTestTime.setCurrentTestTimeNano(1000);
-    ASSERT_EQ(getCurrentTimeMicro(), 1);
-    ASSERT_EQ(getCurrentTimeNano(), 1000);
+    ASSERT_EQ(EpochTime::now<std::chrono::microseconds>(), 1);
+    ASSERT_EQ(EpochTime::now<std::chrono::nanoseconds>(), 1000);
     scopedTestTime.setCurrentTestTimeNano(2000);
-    ASSERT_EQ(getCurrentTimeMicro(), 2);
-    ASSERT_EQ(getCurrentTimeNano(), 2000);
+    ASSERT_EQ(EpochTime::now<std::chrono::microseconds>(), 2);
+    ASSERT_EQ(EpochTime::now<std::chrono::nanoseconds>(), 2000);
   }
 
   // This should be the actual time, so we don't know what it is, but it
   // shouldn't be equal to the overridden value.
-  ASSERT_NE(getCurrentTimeMicro(), 2);
-  ASSERT_NE(getCurrentTimeNano(), 2000);
+  ASSERT_NE(EpochTime::now<std::chrono::microseconds>(), 2);
+  ASSERT_NE(EpochTime::now<std::chrono::nanoseconds>(), 2000);
 }
 
 DEBUG_ONLY_TEST(TestScopedTestTime, multipleScopedTestTimes) {
   {
     ScopedTestTime scopedTestTime;
     scopedTestTime.setCurrentTestTimeMs(1);
-    ASSERT_EQ(getCurrentTimeMs(), 1);
-    ASSERT_EQ(getCurrentTimeMicro(), 1000);
+    ASSERT_EQ(EpochTime::now<std::chrono::milliseconds>(), 1);
+    ASSERT_EQ(EpochTime::now<std::chrono::microseconds>(), 1000);
   }
 
   {
     ScopedTestTime scopedTestTime;
     // The previous scoped test time should have been cleared.
-    ASSERT_NE(getCurrentTimeMs(), 1);
-    ASSERT_NE(getCurrentTimeMicro(), 1000);
+    ASSERT_NE(EpochTime::now<std::chrono::milliseconds>(), 1);
+    ASSERT_NE(EpochTime::now<std::chrono::microseconds>(), 1000);
 
     scopedTestTime.setCurrentTestTimeMs(1);
-    ASSERT_EQ(getCurrentTimeMs(), 1);
-    ASSERT_EQ(getCurrentTimeMicro(), 1000);
+    ASSERT_EQ(EpochTime::now<std::chrono::milliseconds>(), 1);
+    ASSERT_EQ(EpochTime::now<std::chrono::microseconds>(), 1000);
 
     // Trying to create another ScopedTestTime with one already in scope should
     // fail.

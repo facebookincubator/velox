@@ -251,6 +251,7 @@ IndexScanCursor::IndexScanCursor(
       prefetchExecutor_{options.prefetchExecutor},
       maxPrefetchStripes_{options.maxPrefetchStripes} {
   NIMBLE_CHECK_LE(projector_->numRows(), std::numeric_limits<uint32_t>::max());
+  projector_->setTimingEnabled(options.collectTimings);
 }
 
 IndexScanCursor::~IndexScanCursor() {

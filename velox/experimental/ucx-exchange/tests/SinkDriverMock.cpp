@@ -122,9 +122,16 @@ void SinkDriverMock::addSplits(
   for (auto& split : splits) {
     VLOG(3) << "Adding split to planNode: " << planNode->id()
             << " to sink driver for task " << task_->taskId();
+    // The task is not started, so forward the split to the client as a
+    // started task would.
+    exchangeClient_->addRemoteTaskId(
+        std::dynamic_pointer_cast<exec::RemoteConnectorSplit>(
+            split.connectorSplit)
+            ->taskId);
     task_->addSplit(planNode->id(), std::move(split));
   }
   task_->noMoreSplits(planNode->id());
+  exchangeClient_->noMoreRemoteTasks();
 }
 
 } // namespace facebook::velox::ucx_exchange
