@@ -413,12 +413,28 @@ function install_gcs_sdk_cpp {
   cmake_install_dir json \
     -DJSON_BuildTests=OFF
 
+  # opentelemetry-cpp is a hard dependency of google-cloud-cpp 3.x's common
+  # library. The ENABLE "-feature" exclusion only drops service-level targets;
+  # google/cloud/internal/opentelemetry*.cc is unconditionally compiled into
+  # google_cloud_cpp_common and includes <opentelemetry/*> headers. See
+  # google-cloud-cpp doc/packaging.md for the recommended cmake flags below.
+  wget_and_untar https://github.com/open-telemetry/opentelemetry-cpp/archive/refs/tags/v"${OPENTELEMETRY_CPP_VERSION}".tar.gz opentelemetry-cpp
+  cmake_install_dir opentelemetry-cpp \
+    -DCMAKE_CXX_STANDARD=17 \
+    -DBUILD_SHARED_LIBS=OFF \
+    -DWITH_EXAMPLES=OFF \
+    -DWITH_STL=CXX17 \
+    -DBUILD_TESTING=OFF \
+    -DOPENTELEMETRY_INSTALL=ON \
+    -DOPENTELEMETRY_ABI_VERSION_NO=2
+
   # google-cloud-cpp
   # google_cloud_cpp_enable_deps() unconditionally pulls in opentelemetry,
-  # monitoring, and trace alongside the user-requested features. We only
-  # need storage for the GCS adapter, and we do not install opentelemetry-cpp,
-  # so subtract those meta-features via the "-feature" syntax that
-  # google-cloud-cpp supports.
+  # monitoring, and trace service libraries alongside the user-requested
+  # features. We only need storage for the GCS adapter, so subtract those
+  # service libs via the "-feature" syntax. The opentelemetry integration
+  # inside google_cloud_cpp_common still links against the opentelemetry-cpp
+  # install above.
   wget_and_untar https://github.com/googleapis/google-cloud-cpp/archive/refs/tags/v"${GOOGLE_CLOUD_CPP_VERSION}".tar.gz google-cloud-cpp
   cmake_install_dir google-cloud-cpp \
     -DGOOGLE_CLOUD_CPP_ENABLE_EXAMPLES=OFF \

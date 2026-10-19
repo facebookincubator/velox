@@ -66,6 +66,10 @@ ABSEIL_VERSION="20250512.1"
 GRPC_VERSION="1.76.0"
 CRC32_VERSION="1.1.2"
 NLOHMAN_JSON_VERSION="3.11.3"
+# opentelemetry-cpp is a required dependency of google-cloud-cpp 3.x's common
+# library (unconditional, no CMake switch to disable). Version pinned to what
+# google-cloud-cpp 3.11.0's doc/packaging.md recommends.
+OPENTELEMETRY_CPP_VERSION="1.24.0"
 GOOGLE_CLOUD_CPP_VERSION="3.11.0"
 HADOOP_VERSION="3.3.6"
 AZURE_SDK_VERSION="12.8.0"
