@@ -968,6 +968,39 @@ void collectElementwiseLeaves(
 // tensor inputs, so collectElementwiseLeaves finds no leaf to size the fused
 // subtree from; their extent lives in the `size` attribute instead and must be
 // broadcast into the output shape.
+// The length of an aten.arange whose bounds are all attributes. Its size has
+// no `size` attribute, so a fused consumer learns it only from here.
+std::optional<int64_t> constantArangeExtent(NodeCP node) {
+  const auto& target = node->target();
+  const bool hasStart = target == "torch.ops.aten.arange.start" ||
+      target == "torch.ops.aten.arange.start_step";
+  if (!hasStart && target != "torch.ops.aten.arange.default") {
+    return std::nullopt;
+  }
+  auto intAttr = [&](const char* name,
+                     int64_t missing) -> std::optional<int64_t> {
+    const auto* attr = node->tryGetAttribute(name);
+    if (attr == nullptr) {
+      return node->tryGetInput(name) ? std::nullopt
+                                     : std::optional<int64_t>(missing);
+    }
+    if (const auto* value = std::get_if<int64_t>(&attr->value)) {
+      return *value;
+    }
+    return std::nullopt;
+  };
+  const auto start = hasStart ? intAttr("start", 0) : std::optional<int64_t>(0);
+  const auto end = intAttr("end", 0);
+  const auto step = intAttr("step", 1);
+  if (!start || !end || !step || *step == 0) {
+    return std::nullopt;
+  }
+  const auto span = *end - *start;
+  const auto size =
+      *step > 0 ? (span + *step - 1) / *step : (span + *step + 1) / *step;
+  return std::max<int64_t>(size, 0);
+}
+
 void collectFactorySizes(
     NodeCP node,
     const std::unordered_set<ValueCP>& subgraphInputs,
@@ -990,6 +1023,9 @@ void collectFactorySizes(
             input.value->type().kind() == nativert::Type::Kind::Tensor;
       });
   if (isFactory) {
+    if (auto extent = constantArangeExtent(node)) {
+      constShapes.push_back({static_cast<Dim>(*extent)});
+    }
     if (const auto* sizeAttr = node->tryGetAttribute("size")) {
       if (std::holds_alternative<std::vector<int64_t>>(sizeAttr->value)) {
         const auto& sz = std::get<std::vector<int64_t>>(sizeAttr->value);
