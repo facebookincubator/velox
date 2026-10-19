@@ -18,7 +18,9 @@
 #include <boost/lexical_cast.hpp>
 #include <boost/uuid/uuid_generators.hpp>
 #include <boost/uuid/uuid_io.hpp>
+#include <algorithm>
 #include <exception>
+#include <random>
 #include <string>
 
 #include <folly/Conv.h>
@@ -1348,12 +1350,56 @@ bool Task::createAndStartDrivers(uint32_t concurrentSplitGroups) {
   return true;
 }
 
+namespace {
+const std::string& remoteTaskId(const exec::Split& split) {
+  return checkedPointerCast<RemoteConnectorSplit>(split.connectorSplit)->taskId;
+}
+
+// Remote splits and 'no more splits' a node received before the task created
+// its exchange client.
+struct PendingExchangeSplits {
+  std::shared_ptr<ExchangeClient> client;
+  std::vector<std::string> remoteTaskIds;
+  bool noMoreSplits{false};
+
+  static PendingExchangeSplits from(const SplitsState& splitsState) {
+    std::vector<std::string> remoteTaskIds;
+    for (const auto& [groupId, store] : splitsState.groupSplitsStores) {
+      for (const auto& split : store->queuedSplits()) {
+        remoteTaskIds.push_back(remoteTaskId(split));
+      }
+    }
+    // Consumer tasks receive the same splits in the same order. Shuffle so they
+    // fetch from different producers first.
+    std::shuffle(
+        remoteTaskIds.begin(),
+        remoteTaskIds.end(),
+        std::default_random_engine{std::random_device{}()});
+    return PendingExchangeSplits{
+        .client = splitsState.exchangeClient,
+        .remoteTaskIds = std::move(remoteTaskIds),
+        .noMoreSplits = splitsState.noMoreSplits,
+    };
+  }
+
+  void forward() const {
+    for (const auto& id : remoteTaskIds) {
+      client->addRemoteTaskId(id);
+    }
+    if (noMoreSplits) {
+      client->noMoreRemoteTasks();
+    }
+  }
+};
+} // namespace
+
 bool Task::initializePartitionOutput() {
   TestValue::adjust(
       "facebook::velox::exec::Task::initializePartitionOutput", this);
-  std::shared_ptr<const core::PartitionedOutputNode> partitionedOutputNode{
-      nullptr};
+  core::PartitionedOutputNodePtr partitionedOutputNode;
   int numOutputDrivers{0};
+  std::vector<PendingExchangeSplits> pendingExchangeSplits;
+  std::unique_lock<std::mutex> exchangeSplitsLock(exchangeSplitsMutex_);
   {
     std::unique_lock<std::timed_mutex> l(mutex_);
     if (!isRunningLocked()) {
@@ -1395,7 +1441,19 @@ bool Task::initializePartitionOutput() {
             folly::to<int32_t>(factory->numDrivers));
       }
     }
+
+    for (const auto& [nodeId, splitsState] : splitsStates_) {
+      if (splitsState.exchangeClient != nullptr) {
+        pendingExchangeSplits.push_back(
+            PendingExchangeSplits::from(splitsState));
+      }
+    }
   }
+
+  for (const auto& pending : pendingExchangeSplits) {
+    pending.forward();
+  }
+  exchangeSplitsLock.unlock();
 
   if (partitionedOutputNode != nullptr) {
     VELOX_CHECK(hasPartitionedOutput());
@@ -1802,6 +1860,26 @@ void Task::onAddSplit(
   }
 }
 
+namespace {
+// Forwards 'split' to 'client', if set. Returns the error if the client
+// throws. The caller must then fail the task: the split is already in the
+// split store, and the client may have recorded the remote task before
+// failing, so the split cannot be retried.
+std::exception_ptr forwardRemoteSplit(
+    ExchangeClient* client,
+    const exec::Split& split) {
+  if (client == nullptr) {
+    return nullptr;
+  }
+  try {
+    client->addRemoteTaskId(remoteTaskId(split));
+  } catch (const std::exception&) {
+    return std::current_exception();
+  }
+  return nullptr;
+}
+} // namespace
+
 bool Task::addSplitWithSequence(
     const core::PlanNodeId& planNodeId,
     exec::Split&& split,
@@ -1823,6 +1901,8 @@ bool Task::addSplitWithSequence(
   bool added = false;
   bool isTaskRunning;
   bool shouldLogSplit = false;
+  std::shared_ptr<ExchangeClient> exchangeClient;
+  std::unique_lock<std::mutex> exchangeSplitsLock(exchangeSplitsMutex_);
   {
     std::lock_guard<std::timed_mutex> l(mutex_);
     isTaskRunning = isRunningLocked();
@@ -1835,16 +1915,23 @@ bool Task::addSplitWithSequence(
         shouldLogSplit = true;
         addSplitLocked(splitsState, split, promises);
         added = true;
+        exchangeClient = splitsState.exchangeClient;
       }
     }
   }
 
+  const auto forwardError = forwardRemoteSplit(exchangeClient.get(), split);
+  exchangeSplitsLock.unlock();
+
   for (auto& promise : promises) {
     promise.setValue();
   }
+  if (forwardError != nullptr) {
+    setError(forwardError);
+  }
 
   if (!isTaskRunning) {
-    // Safe because 'split' is moved away above only if 'isTaskRunning'.
+    // Safe because 'split' is only read above.
     // @lint-ignore CLANGTIDY bugprone-use-after-move
     addRemoteSplit(planNodeId, split);
   }
@@ -1866,21 +1953,31 @@ void Task::addSplit(const core::PlanNodeId& planNodeId, exec::Split&& split) {
   bool isTaskRunning;
   bool shouldLogSplit = false;
   std::vector<ContinuePromise> promises;
+  std::shared_ptr<ExchangeClient> exchangeClient;
+  std::unique_lock<std::mutex> exchangeSplitsLock(exchangeSplitsMutex_);
   {
     std::lock_guard<std::timed_mutex> l(mutex_);
     isTaskRunning = isRunningLocked();
     if (isTaskRunning) {
       shouldLogSplit = true;
-      addSplitLocked(getPlanNodeSplitsStateLocked(planNodeId), split, promises);
+      auto& splitsState = getPlanNodeSplitsStateLocked(planNodeId);
+      addSplitLocked(splitsState, split, promises);
+      exchangeClient = splitsState.exchangeClient;
     }
   }
+
+  const auto forwardError = forwardRemoteSplit(exchangeClient.get(), split);
+  exchangeSplitsLock.unlock();
 
   for (auto& promise : promises) {
     promise.setValue();
   }
+  if (forwardError != nullptr) {
+    setError(forwardError);
+  }
 
   if (!isTaskRunning) {
-    // Safe because 'split' is moved away above only if 'isTaskRunning'.
+    // Safe because 'split' is only read above.
     // @lint-ignore CLANGTIDY bugprone-use-after-move
     addRemoteSplit(planNodeId, split);
   }
@@ -1895,11 +1992,8 @@ void Task::addRemoteSplit(
     const exec::Split& split) {
   if (split.hasConnectorSplit()) {
     if (exchangeClientByPlanNode_.count(planNodeId)) {
-      auto remoteSplit =
-          std::dynamic_pointer_cast<RemoteConnectorSplit>(split.connectorSplit);
-      VELOX_CHECK(remoteSplit, "Wrong type of split");
       exchangeClientByPlanNode_[planNodeId]->addRemoteTaskId(
-          remoteSplit->taskId);
+          remoteTaskId(split));
     }
   }
 }
@@ -1994,6 +2088,7 @@ void Task::noMoreSplits(const core::PlanNodeId& planNodeId) {
   std::vector<ContinuePromise> splitPromises;
   bool allFinished;
   std::shared_ptr<ExchangeClient> exchangeClient;
+  std::unique_lock<std::mutex> exchangeSplitsLock(exchangeSplitsMutex_);
   {
     std::lock_guard<std::timed_mutex> l(mutex_);
 
@@ -2036,17 +2131,17 @@ void Task::noMoreSplits(const core::PlanNodeId& planNodeId) {
 
     allFinished = checkNoMoreSplitGroupsLocked();
 
-    if (!isRunningLocked()) {
-      exchangeClient = getExchangeClientLocked(planNodeId);
-    }
-  }
-
-  for (auto& promise : splitPromises) {
-    promise.setValue();
+    exchangeClient = isRunningLocked() ? splitsState.exchangeClient
+                                       : getExchangeClientLocked(planNodeId);
   }
 
   if (exchangeClient != nullptr) {
     exchangeClient->noMoreRemoteTasks();
+  }
+  exchangeSplitsLock.unlock();
+
+  for (auto& promise : splitPromises) {
+    promise.setValue();
   }
 
   if (allFinished) {
@@ -2986,12 +3081,7 @@ ContinueFuture Task::terminate(TaskState terminalState) {
 
   for (auto& exchangeClient : exchangeClients) {
     if (exchangeClient != nullptr) {
-      try {
-        exchangeClient->close();
-      } catch (const std::exception& ex) {
-        LOG(ERROR) << "Exchange client threw from close() during termination "
-                   << "of task " << taskId_ << ": " << ex.what();
-      }
+      exchangeClient->close();
     }
   }
 
@@ -3005,8 +3095,12 @@ ContinueFuture Task::terminate(TaskState terminalState) {
   std::
       unordered_map<core::PlanNodeId, std::pair<std::vector<exec::Split>, bool>>
           remainingRemoteSplits;
+  folly::F14FastSet<std::shared_ptr<connector::ConnectorSplit>>
+      preloadingSplits;
   {
     std::lock_guard<std::timed_mutex> l(mutex_);
+    preloadingSplits.swap(preloadingSplits_);
+
     // Collect all the join bridges to clear them.
     for (auto& splitGroupState : splitGroupStates_) {
       for (auto& pair : splitGroupState.second.bridges) {
@@ -3064,12 +3158,7 @@ ContinueFuture Task::terminate(TaskState terminalState) {
       }
     }
     if (splits.second) {
-      try {
-        client->noMoreRemoteTasks();
-      } catch (const std::exception& ex) {
-        LOG(ERROR) << "Exchange client threw from noMoreRemoteTasks() during "
-                   << "termination of task " << taskId_ << ": " << ex.what();
-      }
+      client->noMoreRemoteTasks();
     }
   }
 
@@ -3085,10 +3174,9 @@ ContinueFuture Task::terminate(TaskState terminalState) {
     bridge->cancel();
   }
 
-  for (auto split : preloadingSplits_) {
+  for (const auto& split : preloadingSplits) {
     split->dataSource->close();
   }
-  preloadingSplits_.clear();
 
   for (auto& barrierPromise : barrierPromises) {
     barrierPromise.setValue();
@@ -4061,6 +4149,13 @@ void Task::createExchangeClientLocked(
   exchangeClients_[pipelineId] = std::move(client);
   exchangeTransportEntries_[pipelineId] = std::move(entry);
   exchangeClientByPlanNode_.emplace(planNodeId, exchangeClients_[pipelineId]);
+  // MergeExchange fetches through clients of its own. A node that takes no
+  // splits has nothing to forward.
+  if (!planNode->is<core::MergeExchangeNode>()) {
+    if (auto it = splitsStates_.find(planNodeId); it != splitsStates_.end()) {
+      it->second.exchangeClient = exchangeClients_[pipelineId];
+    }
+  }
 }
 
 std::shared_ptr<ExchangeClient> Task::getExchangeClientLocked(

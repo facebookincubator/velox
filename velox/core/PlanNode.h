@@ -221,7 +221,9 @@ class PlanNode : public ISerializable {
   /// Returns true if this is a leaf plan node and corresponding operator
   /// requires an ExchangeClient to retrieve data. For instance, TableScanNode
   /// is a leaf node that doesn't require an ExchangeClient. But ExchangeNode is
-  /// a leaf node that requires an ExchangeClient.
+  /// a leaf node that requires an ExchangeClient. Except for MergeExchangeNode,
+  /// the task forwards the node's splits, which must be RemoteConnectorSplits,
+  /// to the client.
   virtual bool requiresExchangeClient() const {
     return false;
   }
