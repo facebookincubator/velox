@@ -671,6 +671,7 @@ class SpillerTest : public exec::test::RowContainerTestBase {
           rowType_,
           hashBits_,
           sortingKeys,
+          false,
           &spillConfig_,
           spillStats_.wlock().operator->());
     } else if (type_ == SpillerType::AGGREGATION_OUTPUT) {

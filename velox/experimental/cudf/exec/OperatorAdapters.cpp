@@ -39,6 +39,7 @@
 #include "velox/experimental/cudf/exec/OperatorAdapters.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/cudf/exec/Validation.h"
+#include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 #ifdef VELOX_ENABLE_UCX_EXCHANGE
 #include "velox/experimental/ucx-exchange/UcxExchange.h"
@@ -72,6 +73,38 @@
 #include "velox/exec/Window.h"
 
 namespace facebook::velox::cudf_velox {
+
+namespace {
+
+bool containsCustomComparison(const TypePtr& type) {
+  if (type->providesCustomComparison()) {
+    return true;
+  }
+  for (size_t i = 0; i < type->size(); ++i) {
+    if (containsCustomComparison(type->childAt(i))) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool containsCustomComparison(const core::TypedExprPtr& expression) {
+  if (containsCustomComparison(expression->type())) {
+    return true;
+  }
+  return std::any_of(
+      expression->inputs().begin(),
+      expression->inputs().end(),
+      [](const auto& input) { return containsCustomComparison(input); });
+}
+
+bool subtreeHasUnsupportedType(const core::PlanNodePtr& root) {
+  return core::PlanNode::findFirstNode(root.get(), [](const auto* node) {
+           return !isTypeSupportedByCudf(node->outputType());
+         }) != nullptr;
+}
+
+} // namespace
 
 /// OperatorAdapterRegistry Implementation
 OperatorAdapterRegistry& OperatorAdapterRegistry::getInstance() {
@@ -390,6 +423,26 @@ class CudfHashJoinBaseAdapter : public OperatorAdapter {
         return false;
       }
     }
+
+    // Reject if any join source has types that cuDF cannot represent.
+    // The probe and build pipelines are compiled independently by ToCudf,
+    // so one side may reject GPU execution (e.g. due to unsupported types)
+    // while the other does not. This check prevents a bridge mismatch
+    // where CudfHashJoinProbe waits for a CudfHashJoinBridge that
+    // CudfHashJoinBuild never populates because it stayed on CPU.
+    if (std::any_of(
+            joinPlanNode->sources().begin(),
+            joinPlanNode->sources().end(),
+            [](const auto& source) {
+              return subtreeHasUnsupportedType(source);
+            })) {
+      LOG_FALLBACK(
+          "HashJoin source has column types unsupported by cuDF, "
+          "PlanNode id: {}",
+          planNode->id());
+      return false;
+    }
+
     return true;
   }
 };
@@ -494,6 +547,13 @@ class CudfNestedLoopJoinBaseAdapter : public OperatorAdapter {
 
     // Check if join condition can be evaluated on GPU
     if (joinPlanNode->joinCondition()) {
+      if (containsCustomComparison(joinPlanNode->joinCondition())) {
+        LOG_FALLBACK(
+            "NestedLoopJoin condition has custom comparison semantics, "
+            "PlanNode id: {}",
+            planNode->id());
+        return false;
+      }
       if (!canExprRunOnGpu(
               joinPlanNode->joinCondition(),
               ctx->task->queryCtx().get(),
@@ -504,6 +564,22 @@ class CudfNestedLoopJoinBaseAdapter : public OperatorAdapter {
         return false;
       }
     }
+
+    // Reject if any join source has types that cuDF cannot represent.
+    // See comment in CudfHashJoinBaseAdapter::canRunOnGPU.
+    if (std::any_of(
+            joinPlanNode->sources().begin(),
+            joinPlanNode->sources().end(),
+            [](const auto& source) {
+              return subtreeHasUnsupportedType(source);
+            })) {
+      LOG_FALLBACK(
+          "NestedLoopJoin source has column types unsupported by cuDF, "
+          "PlanNode id: {}",
+          planNode->id());
+      return false;
+    }
+
     return true;
   }
 };
@@ -754,14 +830,15 @@ class LocalPartitionAdapter : public OperatorAdapter {
     auto localPartitionPlanNode =
         std::dynamic_pointer_cast<const core::LocalPartitionNode>(planNode);
     bool canRun = canHandle(op) && localPartitionPlanNode &&
-        CudfLocalPartition::shouldReplace(localPartitionPlanNode);
+        CudfLocalPartition::shouldReplace(localPartitionPlanNode) &&
+        !subtreeHasUnsupportedType(localPartitionPlanNode);
     if (!canRun) {
       LOG_FALLBACK(
           "LocalPartitionAdapter {}, PlanNode id: {}",
           !canHandle(op) ? "operator is not LocalPartition"
               : !localPartitionPlanNode
               ? "planNode is not LocalPartitionNode"
-              : "CudfLocalPartition::shouldReplace returned false",
+              : "partition spec or source types are unsupported by cuDF",
           planNode->id());
     }
     return canRun;
@@ -818,13 +895,14 @@ class LocalExchangeAdapter : public OperatorAdapter {
     auto localPartitionPlanNode =
         std::dynamic_pointer_cast<const core::LocalPartitionNode>(planNode);
     bool canRun = localPartitionPlanNode &&
-        CudfLocalPartition::shouldReplace(localPartitionPlanNode);
+        CudfLocalPartition::shouldReplace(localPartitionPlanNode) &&
+        !subtreeHasUnsupportedType(localPartitionPlanNode);
     if (!canRun) {
       LOG_FALLBACK(
           "LocalExchangeAdapter {}, PlanNode id: {}",
           !localPartitionPlanNode
               ? "planNode is not LocalPartitionNode"
-              : "CudfLocalPartition::shouldReplace returned false",
+              : "partition spec or source types are unsupported by cuDF",
           planNode->id());
     }
     return canRun;
@@ -1035,7 +1113,8 @@ class CallbackSinkAdapter : public OperatorAdapter {
       exec::DriverCtx* /*ctx*/) const override {
     auto supported = planNode &&
         std::dynamic_pointer_cast<const core::LocalMergeNode>(planNode) !=
-            nullptr;
+            nullptr &&
+        !subtreeHasUnsupportedType(planNode);
     if (!supported) {
       LOG_FALLBACK(
           "CallbackSink operator not supported on cuDF, PlanNode id: {}",
@@ -1080,7 +1159,8 @@ class LocalMergeAdapter : public OperatorAdapter {
       exec::DriverCtx* /*ctx*/) const override {
     return planNode &&
         std::dynamic_pointer_cast<const core::LocalMergeNode>(planNode) !=
-        nullptr;
+        nullptr &&
+        !subtreeHasUnsupportedType(planNode);
   }
 
   bool acceptsGpuInput() const override {

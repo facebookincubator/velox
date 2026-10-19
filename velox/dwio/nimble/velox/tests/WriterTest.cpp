@@ -1007,8 +1007,6 @@ void testAlpE2EWriterSelection(
     std::string file;
     auto writeFile = std::make_unique<velox::InMemoryWriteFile>(&file);
     nimble::WriterOptions options;
-    // Explicit child candidates control ALP selection with this option enabled.
-    options.allowNestedAlpSelection = true;
     using ReadFactors = std::vector<std::pair<nimble::EncodingType, float>>;
     std::optional<ReadFactors> nestedEncodingReadFactors;
     if (enableNestedAlp) {
@@ -1069,7 +1067,6 @@ TEST_F(WriterTest, buildEncodingOptionsPropagatesEncodingOptions) {
     const nimble::WriterOptions options;
     const auto encodingOptions = options.buildEncodingOptions();
     EXPECT_FALSE(encodingOptions.fixedBitWidthUseExactBits);
-    EXPECT_FALSE(encodingOptions.allowNestedAlpSelection);
 
     // The delta pre-transform ships disabled. Assert the flag's own default
     // too, so lowering the bar to enabling it fails here rather than silently
@@ -1081,21 +1078,14 @@ TEST_F(WriterTest, buildEncodingOptionsPropagatesEncodingOptions) {
 
   for (const auto useExactBits : {false, true}) {
     SCOPED_TRACE(fmt::format("useExactBits={}", useExactBits));
-    for (const auto allowNestedAlpSelection : {false, true}) {
-      SCOPED_TRACE(
-          fmt::format("allowNestedAlpSelection={}", allowNestedAlpSelection));
-      nimble::WriterOptions options;
-      options.fsstCompressionTargetRatio = 0.42;
-      options.fixedBitWidthUseExactBits = useExactBits;
-      options.allowNestedAlpSelection = allowNestedAlpSelection;
+    nimble::WriterOptions options;
+    options.fsstCompressionTargetRatio = 0.42;
+    options.fixedBitWidthUseExactBits = useExactBits;
 
-      const auto encodingOptions = options.buildEncodingOptions();
+    const auto encodingOptions = options.buildEncodingOptions();
 
-      EXPECT_DOUBLE_EQ(encodingOptions.fsstCompressionTargetRatio, 0.42);
-      EXPECT_EQ(encodingOptions.fixedBitWidthUseExactBits, useExactBits);
-      EXPECT_EQ(
-          encodingOptions.allowNestedAlpSelection, allowNestedAlpSelection);
-    }
+    EXPECT_DOUBLE_EQ(encodingOptions.fsstCompressionTargetRatio, 0.42);
+    EXPECT_EQ(encodingOptions.fixedBitWidthUseExactBits, useExactBits);
   }
 }
 
@@ -5502,6 +5492,79 @@ TEST_F(WriterTest, eagerChunkingSurvivesTransientPressure) {
       << "capped=" << capped << " uncapped=" << uncapped;
 }
 
+TEST_F(WriterTest, clusterIndexRejectsTopLevelNulls) {
+  auto type = velox::ROW({"key"}, {velox::INTEGER()});
+  velox::test::VectorMaker vectorMaker{leafPool_.get()};
+  auto nulls = velox::AlignedBuffer::allocate<bool>(1, leafPool_.get());
+  velox::bits::setNull(nulls->asMutable<uint64_t>(), 0, true);
+  auto key = vectorMaker.flatVector<int32_t>(1, [](auto /*row*/) { return 1; });
+  velox::VectorPtr input = std::make_shared<velox::RowVector>(
+      leafPool_.get(), type, nulls, 1, std::vector<velox::VectorPtr>{key});
+
+  for (const bool ignoreTopLevelNulls : {false, true}) {
+    SCOPED_TRACE(ignoreTopLevelNulls);
+    auto clusterIndexConfig =
+        nimble::index::ClusterIndexConfigBuilder{}
+            .withKeyColumns({"key"})
+            .withSortOrders({nimble::SortOrder{.ascending = true}})
+            .withEnforceKeyOrder(true)
+            .build();
+    nimble::WriterOptions options;
+    options.clusterIndexConfig = std::move(clusterIndexConfig);
+    options.ignoreTopLevelNulls = ignoreTopLevelNulls;
+
+    std::string file;
+    nimble::Writer writer(
+        type,
+        std::make_unique<velox::InMemoryWriteFile>(&file),
+        *rootPool_,
+        std::move(options));
+    NIMBLE_ASSERT_THROW(
+        writer.write(input),
+        "Cluster-indexed Nimble files cannot contain top-level null rows");
+  }
+}
+
+TEST_F(WriterTest, retainsTopLevelNullsAcrossBatches) {
+  velox::test::VectorMaker vectorMaker{leafPool_.get()};
+  auto firstBatch =
+      vectorMaker.rowVector({"c1"}, {vectorMaker.flatVector<int32_t>({1, 2})});
+  firstBatch->setNull(0, true);
+  const auto nonNullBatch =
+      vectorMaker.rowVector({"c1"}, {vectorMaker.flatVector<int32_t>({3, 4})});
+  auto lastBatch =
+      vectorMaker.rowVector({"c1"}, {vectorMaker.flatVector<int32_t>({5, 6})});
+  lastBatch->setNull(1, true);
+
+  std::string file;
+  nimble::Writer writer(
+      firstBatch->type(),
+      std::make_unique<velox::InMemoryWriteFile>(&file),
+      *rootPool_,
+      nimble::WriterOptions{});
+  writer.write(firstBatch);
+  writer.write(nonNullBatch);
+  writer.write(lastBatch);
+  writer.close();
+
+  auto readFile = std::make_shared<velox::InMemoryReadFile>(file);
+  auto tablet = nimble::TabletReader::create(
+      readFile, leafPool_.get(), makeTestTabletOptions(leafPool_.get()));
+  EXPECT_TRUE(tablet->properties().hasTopLevelNulls());
+  auto expected = vectorMaker.rowVector(
+      {"c1"}, {vectorMaker.flatVector<int32_t>({1, 2, 3, 4, 5, 6})});
+  expected->setNull(0, true);
+  expected->setNull(5, true);
+  nimble::BatchReader reader(readFile.get(), *leafPool_);
+  velox::VectorPtr output;
+  ASSERT_TRUE(reader.next(expected->size(), output));
+  ASSERT_EQ(output->size(), expected->size());
+  for (velox::vector_size_t row{0}; row < expected->size(); ++row) {
+    SCOPED_TRACE(row);
+    EXPECT_TRUE(output->equalValueAt(expected.get(), row, row));
+  }
+}
+
 TEST_F(WriterTest, ignoreTopLevelNulls) {
   auto seed = folly::randomNumberSeed();
   LOG(INFO) << "seed: " << seed;
@@ -5514,6 +5577,7 @@ TEST_F(WriterTest, ignoreTopLevelNulls) {
   for (auto i = 0; i < kSize; ++i) {
     velox::bits::setBit(rawNulls, i, folly::Random::oneIn(2, rng));
   }
+  velox::bits::setNull(rawNulls, 0, true);
   auto vector =
       vectorMaker.flatVector<int32_t>(kSize, [](auto row) { return row; });
   velox::VectorPtr rowVector = std::make_shared<velox::RowVector>(
@@ -5523,27 +5587,40 @@ TEST_F(WriterTest, ignoreTopLevelNulls) {
       kSize,
       std::vector<velox::VectorPtr>{vector});
 
-  auto verify =
-      [](auto& pool, const auto& input, const auto& expected, auto options) {
-        std::string file;
-        auto writeFile = std::make_unique<velox::InMemoryWriteFile>(&file);
-        nimble::Writer writer(
-            input->type(), std::move(writeFile), pool, std::move(options));
-        writer.write(input);
-        writer.close();
+  auto verify = [](auto& pool,
+                   const auto& input,
+                   const auto& expected,
+                   auto options,
+                   bool expectedHasTopLevelNulls) {
+    std::string file;
+    auto writeFile = std::make_unique<velox::InMemoryWriteFile>(&file);
+    nimble::Writer writer(
+        input->type(), std::move(writeFile), pool, std::move(options));
+    writer.write(input);
+    writer.close();
 
-        velox::InMemoryReadFile readFile(file);
-        nimble::BatchReader reader(&readFile, pool);
-        velox::VectorPtr output;
-        reader.next(expected->size(), output);
-        ASSERT_EQ(output->size(), expected->size());
-        for (auto i = 0; i < kSize; ++i) {
-          ASSERT_TRUE(output->equalValueAt(expected.get(), i, i));
-        }
-      };
+    auto readFile = std::make_shared<velox::InMemoryReadFile>(file);
+    auto tablet = nimble::TabletReader::create(
+        readFile, &pool, makeTestTabletOptions(&pool));
+    EXPECT_EQ(
+        tablet->properties().hasTopLevelNulls(), expectedHasTopLevelNulls);
+
+    nimble::BatchReader reader(readFile.get(), pool);
+    velox::VectorPtr output;
+    reader.next(expected->size(), output);
+    ASSERT_EQ(output->size(), expected->size());
+    for (auto i = 0; i < kSize; ++i) {
+      ASSERT_TRUE(output->equalValueAt(expected.get(), i, i));
+    }
+  };
 
   // Write with top level nulls
-  verify(*leafPool_, rowVector, rowVector, nimble::WriterOptions{});
+  verify(
+      *leafPool_,
+      rowVector,
+      rowVector,
+      nimble::WriterOptions{},
+      /*expectedHasTopLevelNulls=*/true);
 
   // Write ignoring top level nulls with flat input
   {
@@ -5559,7 +5636,8 @@ TEST_F(WriterTest, ignoreTopLevelNulls) {
         expected,
         nimble::WriterOptions{
             .ignoreTopLevelNulls = true,
-        });
+        },
+        /*expectedHasTopLevelNulls=*/false);
   }
 
   // Write ignoring top level nulls with encoded input
@@ -5584,7 +5662,8 @@ TEST_F(WriterTest, ignoreTopLevelNulls) {
         expected,
         nimble::WriterOptions{
             .ignoreTopLevelNulls = true,
-        });
+        },
+        /*expectedHasTopLevelNulls=*/false);
   }
 }
 
@@ -8268,6 +8347,58 @@ TEST_F(WriterTest, compactRowCountEncodingIsPersistedAsFileFeature) {
     auto tablet = nimble::TabletReader::create(
         readFile, leafPool_.get(), makeTestTabletOptions(leafPool_.get()));
     EXPECT_EQ(tablet->properties().compactRowCountEncoding(), enabled);
+  }
+}
+
+// Stream checksums are declared as a stream trailer, where current readers look
+// for them. has_stream_checksums, the flag readers that predate trailers check,
+// stays unset in both stripe-group layouts, so those readers read the file
+// unverified instead of looking for checksum arrays it does not have.
+TEST_F(WriterTest, streamChecksumsArePersistedAsStreamTrailer) {
+  auto type = velox::ROW({{"c0", velox::BIGINT()}});
+  velox::test::VectorMaker vectorMaker{leafPool_.get()};
+  auto batch = vectorMaker.rowVector(
+      {"c0"}, {vectorMaker.flatVector<int64_t>({1, 2, 3, 4})});
+
+  for (const auto layout :
+       {nimble::StripeGroup::EncodingLayout::kRaw,
+        nimble::StripeGroup::EncodingLayout::kStreamMajor}) {
+    for (const bool enabled : {false, true}) {
+      SCOPED_TRACE(
+          fmt::format(
+              "layout={} enableStreamChecksums={}",
+              nimble::toString(layout),
+              enabled));
+      std::string file;
+      auto writeFile = std::make_unique<velox::InMemoryWriteFile>(&file);
+      nimble::WriterOptions options;
+      options.enableStreamChecksums = enabled;
+      options.experimentalStripeGroupEncodingLayout = layout;
+      nimble::Writer writer(
+          type, std::move(writeFile), *rootPool_, std::move(options));
+      writer.write(batch);
+      writer.close();
+
+      auto readFile = std::make_shared<velox::InMemoryReadFile>(file);
+      auto tablet = nimble::TabletReader::create(
+          readFile, leafPool_.get(), makeTestTabletOptions(leafPool_.get()));
+      EXPECT_FALSE(tablet->properties().hasStreamChecksums());
+      ASSERT_EQ(tablet->stripeCount(), 1);
+      EXPECT_FALSE(
+          tablet->stripeIdentifier(0).stripeGroup()->hasStreamChecksums());
+      if (enabled) {
+        EXPECT_EQ(
+            tablet->properties().streamTrailerLayout().fields(),
+            (std::vector<nimble::StreamTrailerField>{
+                {nimble::StreamTrailerFieldKind::kChecksum32, 4}}));
+      } else {
+        EXPECT_TRUE(tablet->properties().streamTrailerLayout().empty());
+
+        // Nothing else is set, so the writer leaves the section out.
+        EXPECT_FALSE(tablet->hasOptionalSection(
+            std::string(nimble::kPropertiesSection)));
+      }
+    }
   }
 }
 

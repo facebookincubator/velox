@@ -113,7 +113,8 @@ TEST_F(AggregateCompanionRegistryTest, basic) {
           core::AggregationNode::Step::kPartial,
           {BIGINT()},
           ARRAY(BIGINT()),
-          config)
+          config,
+          /*constantInputs=*/{})
           ->isReducing());
 
   checkAggregateSignaturesCount("aggregateFunc1_partial", 2);

@@ -1386,23 +1386,21 @@ std::unique_ptr<exec::Aggregate> createAggregateFunction(
   auto intermediateType =
       exec::resolveIntermediateType(functionName, inputTypes);
   core::QueryConfig queryConfig({config});
+  // Pass constant inputs so aggregates can read constant arguments at
+  // initialization time (e.g., ignoreNulls flag for collect_set).
+  std::vector<VectorPtr> constantInputs(rawInputs.size());
+  for (size_t i = 0; i < rawInputs.size(); ++i) {
+    if (rawInputs[i] && rawInputs[i]->isConstantEncoding()) {
+      constantInputs[i] = rawInputs[i];
+    }
+  }
   auto func = exec::Aggregate::create(
       functionName,
       core::AggregationNode::Step::kSingle,
       inputTypes,
       finalType,
-      queryConfig);
-  // Pass constant inputs so aggregates can read constant arguments at
-  // initialization time (e.g., ignoreNulls flag for collect_set).
-  if (!rawInputs.empty()) {
-    std::vector<VectorPtr> constantInputs(rawInputs.size());
-    for (size_t i = 0; i < rawInputs.size(); ++i) {
-      if (rawInputs[i] && rawInputs[i]->isConstantEncoding()) {
-        constantInputs[i] = rawInputs[i];
-      }
-    }
-    func->setConstantInputs(constantInputs);
-  }
+      queryConfig,
+      constantInputs);
   func->setAllocator(&allocator);
   func->setOffsets(kOffset, 0, 1, 0, 2, kRowSizeOffset);
 
@@ -1793,7 +1791,8 @@ uint32_t aggregateAndReadRowSize(
       core::AggregationNode::Step::kSingle,
       std::vector<TypePtr>{valueType, comparisons->type()},
       valueType,
-      queryConfig);
+      queryConfig,
+      /*constantInputs=*/{});
 
   HashStringAllocator stringAllocator{pool};
   fn->setAllocator(&stringAllocator);

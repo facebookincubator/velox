@@ -64,7 +64,6 @@ class FixedBitWidthEncoding final
 
   ~FixedBitWidthEncoding() override {
     this->releaseBuffer(uncompressedData_);
-    this->releaseVectorBuffer(buffer_);
   }
 
   void reset() final;
@@ -145,7 +144,6 @@ class FixedBitWidthEncoding final
   FixedBitArray fixedBitArray_;
   uint32_t row_ = 0;
   velox::BufferPtr uncompressedData_;
-  Vector<physicalType> buffer_;
 };
 
 //
@@ -158,8 +156,7 @@ FixedBitWidthEncoding<T>::FixedBitWidthEncoding(
     std::string_view data,
     std::function<void*(uint32_t)> /* stringBufferFactory */,
     const Encoding::Options& options)
-    : TypedEncoding<T, physicalType>{pool, data, options},
-      buffer_(this->template getVectorBuffer<physicalType>()) {
+    : TypedEncoding<T, physicalType>{pool, data, options} {
   auto pos = data.data() + this->dataOffset();
   auto compressionType = static_cast<CompressionType>(encoding::readChar(pos));
   baseline_ = encoding::read<const physicalType>(pos);
@@ -209,15 +206,18 @@ void FixedBitWidthEncoding<T>::readWithVisitor(
   constexpr bool kIsFluidCast = sizeof(OutputType) >= sizeof(physicalType) &&
       std::is_integral_v<OutputType> && std::is_integral_v<physicalType>;
   // Fast path: use bulk scan for 4-byte and 8-byte integral types.
-  // Compile-time: type constraints (FBW physical type, ExtractToReader,
-  // compatible integral output type at least as wide as the physical type).
+  // Compile-time: type constraints (FBW physical type, reader extraction or
+  // an opted-in hook, compatible integral output type at least as wide as the
+  // physical type).
   // Runtime (useFastPath): deterministic filter, AVX2, bulk path enabled,
   // null+filter/hook compatibility.
   if constexpr (
       kIsSuitableWidth &&
-      std::is_same_v<
-          typename V::Extract,
-          velox::dwio::common::ExtractToReader> &&
+      (std::is_same_v<
+           typename V::Extract,
+           velox::dwio::common::ExtractToReader> ||
+       (V::kHasHook && !V::kHasFilter &&
+        detail::hookAllowsBulkFastPath<typename V::HookType>())) &&
       kIsFluidCast) {
     auto* nulls = visitor.reader().rawNullsInReadRange();
     if (velox::dwio::common::useFastPath(visitor, nulls)) {
@@ -277,10 +277,11 @@ void FixedBitWidthEncoding<T>::bulkScan(
     if constexpr (isFourByteIntegralType<physicalType>()) {
       // 4-byte path: use the optimized template-unrolled bulk decode.
       if constexpr (kSameSize) {
-        buffer_.resize(numSelected);
         fixedBitArray_.bulkGetWithBaseline(
-            selectedRows[0] + offset, numSelected, buffer_.data(), baseline_);
-        std::memcpy(values, buffer_.data(), numSelected * sizeof(physicalType));
+            selectedRows[0] + offset,
+            numSelected,
+            reinterpret_cast<physicalType*>(values),
+            baseline_);
       } else if constexpr (kIsUpcast) {
         static_assert(isEightByteIntegralType<OutputType>());
         // Read the 4-byte-width values directly into the wider 8-byte output in

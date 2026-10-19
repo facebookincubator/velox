@@ -68,6 +68,13 @@ ifdef CUDA_FLAGS
 CMAKE_FLAGS += -DCMAKE_CUDA_FLAGS="$(CUDA_FLAGS)"
 endif
 
+# Set to "ON" to build with cuDF, as `make cudf` does.
+# scripts/setup-centos-adapters.sh reads the same variable to install what
+# cuDF needs.
+ifeq ($(VELOX_ENABLE_CUDF),ON)
+CMAKE_FLAGS += -DVELOX_ENABLE_CUDF=ON $(EXTRA_CMAKE_CUDA_FLAGS)
+endif
+
 # Use Ninja if available. If Ninja is used, pass through parallelism control flags.
 USE_NINJA ?= 1
 ifeq ($(USE_NINJA), 1)

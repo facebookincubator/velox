@@ -24,6 +24,7 @@
 #include "velox/experimental/cudf/exec/OperatorAdapters.h"
 #include "velox/experimental/cudf/exec/PrestoAggregateFunctions.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
+#include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/expression/AstExpression.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/expression/JitExpression.h"
@@ -96,6 +97,7 @@ bool CompileState::compile(bool allowCpuFallback) {
   // Cached operator properties including adapter pointer.
   struct OperatorProperties : OperatorAdapter::Properties {
     const OperatorAdapter* adapter = nullptr;
+    core::PlanNodePtr planNode;
   };
 
   auto getOperatorProperties =
@@ -103,12 +105,10 @@ bool CompileState::compile(bool allowCpuFallback) {
         OperatorProperties props;
         auto adapter = registry.findAdapter(op);
         props.adapter = adapter;
-        if (adapter) {
-          auto planNode = resolveOperatorPlanNode(op);
-          if (planNode) {
-            static_cast<OperatorAdapter::Properties&>(props) =
-                adapter->properties(op, planNode, ctx);
-          }
+        props.planNode = resolveOperatorPlanNode(op);
+        if (adapter && props.planNode) {
+          static_cast<OperatorAdapter::Properties&>(props) =
+              adapter->properties(op, props.planNode, ctx);
         }
         if (isAnyOf<CudfOperator>(op)) {
           // CudfOperator is always fully GPU compatible
@@ -116,6 +116,13 @@ bool CompileState::compile(bool allowCpuFallback) {
           props.canRunOnGPU = true;
           props.acceptsGpuInput = true;
           props.producesGpuOutput = true;
+        }
+        // Reject operators whose output types cannot be represented in cuDF.
+        if (props.planNode &&
+            !isTypeSupportedByCudf(props.planNode->outputType())) {
+          props.canRunOnGPU = false;
+          props.acceptsGpuInput = false;
+          props.producesGpuOutput = false;
         }
         return props;
       };
@@ -129,6 +136,13 @@ bool CompileState::compile(bool allowCpuFallback) {
       getOperatorProperties);
 
   int32_t operatorsOffset = 0;
+  // When an operator's input types are unsupported by cuDF, all subsequent
+  // operators in the pipeline must also stay on CPU.
+  // TODO: This is conservative — once set, it never resets, so a later
+  // operator whose inputs drop the unsupported column will still stay on CPU.
+  // Resuming GPU once types are supported again requires coordinated backend
+  // selection across joins and local exchanges.
+  bool skipGpuReplacement = false;
   for (int32_t operatorIndex = 0; operatorIndex < operators.size();
        ++operatorIndex) {
     std::vector<std::unique_ptr<exec::Operator>> replaceOp;
@@ -148,12 +162,34 @@ bool CompileState::compile(bool allowCpuFallback) {
 
     auto id = oper->operatorId();
 
-    auto planNode = resolveOperatorPlanNode(oper);
+    const auto& planNode = thisOpProps.planNode;
 
-    if (previousOperatorIsNotGpu and thisOpProps.acceptsGpuInput and planNode) {
-      replaceOp.push_back(
-          std::make_unique<CudfFromVelox>(
-              id, planNode->outputType(), ctx, planNode->id() + "-from-velox"));
+    if (!skipGpuReplacement and previousOperatorIsNotGpu and
+        thisOpProps.acceptsGpuInput and planNode) {
+      // Check that the previous operator's output types can be converted to
+      // cuDF.  If not, skip both the CudfFromVelox insertion and the current
+      // operator's GPU replacement so the whole pipeline stays on CPU.
+      const auto& prevPlanNode = opProps[operatorIndex - 1].planNode;
+      if (prevPlanNode && isTypeSupportedByCudf(prevPlanNode->outputType())) {
+        // CudfFromVelox converts the batches of the CPU operator before
+        // 'oper', so it takes that operator's output type. That operator may
+        // already have been replaced, so its plan node comes from 'opProps',
+        // which was filled before any replacement.
+        //
+        // 'planNode' cannot provide the type: its output type is what 'oper'
+        // produces, and its first source is not always the input of 'oper'.
+        // For HashBuild, 'planNode' is the HashJoinNode, whose output type is
+        // the join result and whose first source is the probe side. The
+        // build-side batches come from the second source.
+        replaceOp.push_back(
+            std::make_unique<CudfFromVelox>(
+                id,
+                prevPlanNode->outputType(),
+                ctx,
+                planNode->id() + "-from-velox"));
+      } else {
+        skipGpuReplacement = true;
+      }
     }
     if (not replaceOp.empty()) {
       // from-velox only, because need to inserted before current operator.
@@ -175,7 +211,8 @@ bool CompileState::compile(bool allowCpuFallback) {
 
     if (adapter) {
       keepOperator = adapter->keepOperator();
-      const bool canUseGpuPath = planNode && thisOpProps.canRunOnGPU;
+      const bool canUseGpuPath =
+          planNode && thisOpProps.canRunOnGPU && !skipGpuReplacement;
       if (canUseGpuPath) {
         // canRunOnGPU() controls whether createReplacements() is called;
         // keepOperator() determines whether returned operators replace or
@@ -210,7 +247,7 @@ bool CompileState::compile(bool allowCpuFallback) {
       }
     }
 
-    if (thisOpProps.producesGpuOutput and
+    if (thisOpProps.producesGpuOutput and !skipGpuReplacement and
         (nextOperatorIsNotGpu or isLastOperatorOfTask) and planNode) {
       replaceOp.push_back(
           std::make_unique<CudfToVelox>(
@@ -281,23 +318,20 @@ bool CompileState::compile(bool allowCpuFallback) {
 }
 
 struct CudfDriverAdapter {
-  CudfDriverAdapter(bool allowCpuFallback)
-      : allowCpuFallback_{allowCpuFallback} {}
-
   // Call operator needed by DriverAdapter
   bool operator()(const exec::DriverFactory& factory, exec::Driver& driver) {
-    if (!driver.driverCtx()->queryConfig().get<bool>(
+    const auto& queryConfig = driver.driverCtx()->queryConfig();
+    const auto allowCpuFallback = queryConfig.get<bool>(
+        CudfConfig::kCudfAllowCpuFallback,
+        CudfConfig::getInstance().allowCpuFallback);
+    if (!queryConfig.get<bool>(
             CudfConfig::kCudfEnabled, CudfConfig::getInstance().enabled) &&
-        allowCpuFallback_) {
+        allowCpuFallback) {
       return false;
     }
     auto state = CompileState(factory, driver);
-    auto res = state.compile(allowCpuFallback_);
-    return res;
+    return state.compile(allowCpuFallback);
   }
-
- private:
-  bool allowCpuFallback_;
 };
 
 static bool isCudfRegistered = false;
@@ -356,7 +390,7 @@ void registerCudf() {
       std::make_unique<CudfHashJoinBridgeTranslator>());
   exec::Operator::registerOperator(
       std::make_unique<CudfNestedLoopJoinBridgeTranslator>());
-  CudfDriverAdapter cda{CudfConfig::getInstance().allowCpuFallback};
+  CudfDriverAdapter cda;
   exec::DriverAdapter cudfAdapter{kCudfAdapterName, {}, cda};
   exec::DriverFactory::registerAdapter(cudfAdapter);
 

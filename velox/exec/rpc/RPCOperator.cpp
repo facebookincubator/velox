@@ -49,16 +49,16 @@ RPCOperator::RPCOperator(
           std::make_shared<RPCState>(operatorCtx_->pool()->shared_from_this())),
       dispatchBatchSize_(rpcNode_->dispatchBatchSize()) {
   // Configure RPCState with the streaming mode and the congestion-window
-  // tunables. The two knobs are registered QueryConfig properties
-  // (rpc.congestion.min_window / rpc.congestion.step_coef) with safe defaults,
-  // so they can be retuned via SET SESSION / configerator with no code change;
-  // unset means the controller's defaults (floor 1, headroom 1.0x).
+  // tunables. They are registered QueryConfig properties with safe defaults,
+  // so they can be retuned without a code change.
   const auto& queryConfig = driverCtx->queryConfig();
   state_->setStreamingMode(
       rpcNode_->streamingMode(),
       queryConfig.rpcCongestionMinWindow(),
       queryConfig.rpcCongestionStepCoef(),
-      queryConfig.rpcCongestionMaxWindow());
+      queryConfig.rpcCongestionMaxWindow(),
+      queryConfig.rpcCongestionBatchStartWindow(),
+      queryConfig.rpcCongestionAsyncGrowthMaxWindow());
 }
 
 RPCOperator::~RPCOperator() {
@@ -829,8 +829,21 @@ void RPCOperator::recordCongestion(
     }
   } else if (signal == AsyncRPCFunction::CongestionSignal::kSuccess) {
     state_->onUnitSamples(roundTripTimesNs);
+  } else if (signal == AsyncRPCFunction::CongestionSignal::kSuccessNoLatency) {
+    // No usable latency (async-job queue time dominates), so the gradient gets
+    // nothing — but clean completions still prove capacity. Grow on completion
+    // count; on the batch path there is one measured round trip per completed
+    // flush, i.e. one unit per completed batch. RPCState ignores this in
+    // PER_ROW mode, whose window is shrink-only by design.
+    state_->onUnitCleanCompletions(
+        static_cast<int64_t>(roundTripTimesNs.size()));
   }
 
+  // The shared limiter needs a service-horizon sample for fractional pacing
+  // even when the driver-local latency gradient cannot use the elapsed time.
+  // Keep these two learning signals independent: kSuccessNoLatency may grow
+  // the local BATCH window by completion count while the shared limiter learns
+  // the observed service duration.
   int64_t serviceHorizonNs = roundTripTimesNs.empty()
       ? 0
       : *std::min_element(roundTripTimesNs.begin(), roundTripTimesNs.end());
@@ -1276,13 +1289,12 @@ void RPCOperator::recordErrorKind(velox::rpc::RPCErrorKind kind) {
     case velox::rpc::RPCErrorKind::kBackendError:
       ++numErrorsBackend_;
       break;
+    case velox::rpc::RPCErrorKind::kInvalidRequest:
+      ++numErrorsInvalidRequest_;
+      break;
     case velox::rpc::RPCErrorKind::kNone:
     case velox::rpc::RPCErrorKind::kNullInput:
     case velox::rpc::RPCErrorKind::kEmptyResponse:
-    // A rejected request is a permanent client-side error, not a congestion
-    // signal, so it is not counted among the overload kinds above (it is
-    // tracked separately via a dedicated invalid-request counter).
-    case velox::rpc::RPCErrorKind::kInvalidRequest:
       break;
     case velox::rpc::RPCErrorKind::kUnset:
     case velox::rpc::RPCErrorKind::kInternalError:
@@ -1436,6 +1448,10 @@ void RPCOperator::recordRuntimeStats() {
   if (numErrorsBackend_ > 0) {
     lockedStats->addRuntimeStat(
         kRpcErrorKindBackendError, RuntimeCounter(numErrorsBackend_));
+  }
+  if (numErrorsInvalidRequest_ > 0) {
+    lockedStats->addRuntimeStat(
+        kRpcErrorKindInvalidRequest, RuntimeCounter(numErrorsInvalidRequest_));
   }
   if (numErrorsInternal_ > 0) {
     lockedStats->addRuntimeStat(

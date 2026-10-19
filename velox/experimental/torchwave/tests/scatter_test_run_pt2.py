@@ -18,6 +18,7 @@ import os
 import torch
 from velox.experimental.torchwave.tests.scatter_test import (
     ScatterAddCgConsumerTestPreproc,
+    ScatterAddInPlaceTestPreproc,
     ScatterAddTestPreproc,
     ScatterSrcTestPreproc,
     ScatterTestPreproc,
@@ -194,6 +195,44 @@ def main() -> None:
     add_pt2 = os.path.join(output_dir, "scatter_add_test.pt2")
     torch.export.save(add_ep, add_pt2)
     print(f"scatter_add: {len(add_ep.graph.nodes)} nodes -> {add_pt2}")
+
+    # scatter_add_ in place. Exported without run_decompositions so the
+    # aten.scatter_add_ survives; the assert guards against an export that
+    # functionalizes it.
+    zcol_idx = torch.arange(40, dtype=torch.int64) % yr0
+    zcol_src = torch.arange(40, dtype=torch.float32) + 2000.0
+    zcount_idx = torch.arange(300, dtype=torch.int64) % 16
+    zcount_src = torch.arange(300, dtype=torch.int64) % 5
+    inplace_inputs = (
+        ya0,
+        ya1,
+        yidx0,
+        ysrc0,
+        yb0,
+        yidx1,
+        yb1 * 3.0,
+        zcol_idx,
+        zcol_src,
+        zcount_idx,
+        zcount_src,
+    )
+    inplace_module = ScatterAddInPlaceTestPreproc()
+    inplace_results = [
+        o.clone() for o in inplace_module(*(t.clone() for t in inplace_inputs))
+    ]
+    torch.save(
+        inplace_results,
+        os.path.join(output_dir, "scatter_add_inplace_test_results.pt"),
+    )
+    with torch.no_grad():
+        inplace_ep = torch.export.export(
+            inplace_module, tuple(t.clone() for t in inplace_inputs), strict=False
+        )
+    inplace_targets = [str(n.target) for n in inplace_ep.graph.nodes]
+    assert inplace_targets.count("aten.scatter_add_.default") == 4, inplace_targets
+    inplace_pt2 = os.path.join(output_dir, "scatter_add_inplace_test.pt2")
+    torch.export.save(inplace_ep, inplace_pt2)
+    print(f"scatter_add_: {len(inplace_ep.graph.nodes)} nodes -> {inplace_pt2}")
 
     # scatter_add feeding an elementwise consumer under a cooperative grid. The
     # accumulator is [S] while src/index are [N] (N = 16 * S), so a consumer

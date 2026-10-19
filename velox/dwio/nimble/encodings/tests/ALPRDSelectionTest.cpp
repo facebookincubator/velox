@@ -374,6 +374,99 @@ TYPED_TEST(ALPRDSelectionTest, estimatesIndependentlyOfWriterCandidates) {
   }
 }
 
+TYPED_TEST(ALPRDSelectionTest, dictionaryEstimateUsesConfiguredFloatAlphabet) {
+  using T = typename TestFixture::T;
+  using PhysicalType = typename TestFixture::PhysicalType;
+  this->options_.fixedBitWidthUseExactBits = true;
+  const ReadFactors factors{
+      {EncodingType::Dictionary, 1}, {EncodingType::Trivial, 0.6}};
+  for (auto encodingType : {EncodingType::ALP, EncodingType::ALPRD}) {
+    SCOPED_TRACE(encodingType);
+    auto alphabet = this->makeValues(1'024, 2);
+    if (encodingType == EncodingType::ALP) {
+      for (uint32_t i = 0; i < alphabet.size(); ++i) {
+        alphabet[i] = std::bit_cast<PhysicalType>(
+            static_cast<T>(static_cast<int32_t>(i) - 512) / 100);
+      }
+    }
+    auto values = alphabet;
+    values.insert(values.end(), alphabet.begin(), alphabet.end());
+    for (bool enableAlphabetEncoding : {false, true}) {
+      SCOPED_TRACE(enableAlphabetEncoding);
+      ReadFactors nested{
+          {EncodingType::Constant, 1},
+          {EncodingType::Trivial, 1},
+          {EncodingType::FixedBitWidth, 1},
+      };
+      if (enableAlphabetEncoding) {
+        nested.emplace_back(encodingType, 1);
+      }
+      const auto selected = this->select(values, factors, nested);
+      EXPECT_EQ(
+          selected.encodingType,
+          enableAlphabetEncoding ? EncodingType::Dictionary
+                                 : EncodingType::Trivial);
+      const auto encoded = this->encode(values, this->policy(factors, nested));
+      EXPECT_EQ(EncodingPrefix::encodingType(encoded), selected.encodingType);
+      if (enableAlphabetEncoding) {
+        const auto layout =
+            EncodingLayoutCapture::capture(encoded, this->options_);
+        ASSERT_EQ(layout.encodingType(), EncodingType::Dictionary);
+        EXPECT_EQ(layout.child(0)->encodingType(), encodingType);
+      }
+      this->check(encoded, values);
+    }
+  }
+}
+
+TYPED_TEST(ALPRDSelectionTest, rleEstimateUsesConfiguredFloatRunValues) {
+  using T = typename TestFixture::T;
+  using PhysicalType = typename TestFixture::PhysicalType;
+  this->options_.fixedBitWidthUseExactBits = true;
+  const ReadFactors factors{
+      {EncodingType::RLE, 1}, {EncodingType::Trivial, 0.4}};
+  for (auto encodingType : {EncodingType::ALP, EncodingType::ALPRD}) {
+    SCOPED_TRACE(encodingType);
+    auto runValues = this->makeValues(1'024, 2);
+    if (encodingType == EncodingType::ALP) {
+      for (uint32_t i = 0; i < runValues.size(); ++i) {
+        runValues[i] = std::bit_cast<PhysicalType>(
+            static_cast<T>(static_cast<int32_t>(i) - 512) / 100);
+      }
+    }
+    std::vector<PhysicalType> values;
+    values.reserve(2 * runValues.size());
+    for (auto value : runValues) {
+      values.push_back(value);
+      values.push_back(value);
+    }
+    for (bool enableRunValueEncoding : {false, true}) {
+      SCOPED_TRACE(enableRunValueEncoding);
+      ReadFactors nested{
+          {EncodingType::Constant, 1},
+          {EncodingType::Trivial, 1},
+          {EncodingType::FixedBitWidth, 1},
+      };
+      if (enableRunValueEncoding) {
+        nested.emplace_back(encodingType, 1);
+      }
+      const auto selected = this->select(values, factors, nested);
+      EXPECT_EQ(
+          selected.encodingType,
+          enableRunValueEncoding ? EncodingType::RLE : EncodingType::Trivial);
+      const auto encoded = this->encode(values, this->policy(factors, nested));
+      EXPECT_EQ(EncodingPrefix::encodingType(encoded), selected.encodingType);
+      if (enableRunValueEncoding) {
+        const auto layout =
+            EncodingLayoutCapture::capture(encoded, this->options_);
+        ASSERT_EQ(layout.encodingType(), EncodingType::RLE);
+        EXPECT_EQ(layout.child(1)->encodingType(), encodingType);
+      }
+      this->check(encoded, values);
+    }
+  }
+}
+
 TYPED_TEST(ALPRDSelectionTest, nestedSelectionUsesOnlyConfiguredCandidates) {
   using T = typename TestFixture::T;
   using PhysicalType = typename TestFixture::PhysicalType;
@@ -397,32 +490,28 @@ TYPED_TEST(ALPRDSelectionTest, nestedSelectionUsesOnlyConfiguredCandidates) {
               EncodingIdentifiers::MainlyConstant::OtherValues,
           },
       };
-  for (auto allowNestedAlpSelection : {false, true}) {
-    SCOPED_TRACE(allowNestedAlpSelection);
-    this->options_.allowNestedAlpSelection = allowNestedAlpSelection;
-    for (const auto& [parent, nestedIdentifier] : valueChildren) {
-      SCOPED_TRACE(toString(parent));
-      for (const auto& nestedCandidates :
-           {ReadFactors{},
-            ReadFactors{{EncodingType::ALP, 1}},
-            ReadFactors{{EncodingType::ALPRD, 1}},
-            ReadFactors{{EncodingType::ALP, 1}, {EncodingType::ALPRD, 1}}}) {
-        auto parentPolicy = this->policy({{parent, 1}}, nestedCandidates);
-        auto nestedPolicy =
-            parentPolicy->template create<T>(parent, nestedIdentifier);
-        auto& typedPolicy =
-            static_cast<ManualEncodingSelectionPolicy<T>&>(*nestedPolicy);
-        const auto selected =
-            typedPolicy.select(values, statistics, this->options_);
-        if (nestedCandidates.empty()) {
-          // The legacy option must not turn an empty candidate list into ALP.
-          EXPECT_EQ(selected.encodingType, EncodingType::Trivial);
-        } else {
-          EXPECT_THAT(
-              nestedCandidates,
-              ::testing::Contains(
-                  ::testing::Pair(selected.encodingType, ::testing::_)));
-        }
+  for (const auto& [parent, nestedIdentifier] : valueChildren) {
+    SCOPED_TRACE(toString(parent));
+    for (const auto& nestedCandidates :
+         {ReadFactors{},
+          ReadFactors{{EncodingType::ALP, 1}},
+          ReadFactors{{EncodingType::ALPRD, 1}},
+          ReadFactors{{EncodingType::ALP, 1}, {EncodingType::ALPRD, 1}}}) {
+      SCOPED_TRACE(::testing::PrintToString(nestedCandidates));
+      auto parentPolicy = this->policy({{parent, 1}}, nestedCandidates);
+      auto nestedPolicy =
+          parentPolicy->template create<T>(parent, nestedIdentifier);
+      auto& typedPolicy =
+          static_cast<ManualEncodingSelectionPolicy<T>&>(*nestedPolicy);
+      const auto selected =
+          typedPolicy.select(values, statistics, this->options_);
+      if (nestedCandidates.empty()) {
+        EXPECT_EQ(selected.encodingType, EncodingType::Trivial);
+      } else {
+        EXPECT_THAT(
+            nestedCandidates,
+            ::testing::Contains(
+                ::testing::Pair(selected.encodingType, ::testing::_)));
       }
     }
   }

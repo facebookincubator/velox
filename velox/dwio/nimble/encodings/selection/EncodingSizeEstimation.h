@@ -18,6 +18,7 @@
 #include <glog/logging.h>
 #include <optional>
 #include <span>
+#include <utility>
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/common/Types.h"
 #include "velox/dwio/nimble/encodings/ALPEncoding.h"
@@ -53,9 +54,16 @@ struct EncodingSizeEstimation {
       const EncodingType encodingType,
       const size_t entryCount,
       const Statistics<physicalType>& statistics,
-      const Encoding::Options& options) {
+      const Encoding::Options& options,
+      std::span<const std::pair<EncodingType, float>>
+          nestedEncodingReadFactors = {}) {
     if constexpr (isNumericType<physicalType>()) {
-      return estimateNumericSize(encodingType, entryCount, statistics, options);
+      return estimateNumericSize(
+          encodingType,
+          entryCount,
+          statistics,
+          options,
+          nestedEncodingReadFactors);
     } else if constexpr (isBoolType<physicalType>()) {
       return estimateBoolSize(encodingType, entryCount, statistics, options);
     } else if constexpr (isStringType<physicalType>()) {
@@ -71,9 +79,12 @@ struct EncodingSizeEstimation {
       const EncodingType encodingType,
       std::span<const physicalType> values,
       const Statistics<physicalType>& statistics,
-      const Encoding::Options& options) {
+      const Encoding::Options& options,
+      std::span<const std::pair<EncodingType, float>>
+          nestedEncodingReadFactors = {}) {
     if constexpr (isNumericType<physicalType>()) {
-      return estimateNumericSize(encodingType, values, statistics, options);
+      return estimateNumericSize(
+          encodingType, values, statistics, options, nestedEncodingReadFactors);
     } else if constexpr (isBoolType<physicalType>()) {
       return estimateBoolSize(encodingType, values, statistics, options);
     } else if constexpr (isStringType<physicalType>()) {
@@ -89,7 +100,9 @@ struct EncodingSizeEstimation {
       const EncodingType encodingType,
       const uint64_t entryCount,
       const Statistics<physicalType>& statistics,
-      const Encoding::Options& options) {
+      const Encoding::Options& options,
+      std::span<const std::pair<EncodingType, float>>
+          nestedEncodingReadFactors) {
     switch (encodingType) {
       case EncodingType::Constant: {
         return std::nullopt;
@@ -113,10 +126,11 @@ struct EncodingSizeEstimation {
         // candidate. DictionaryEncoding::estimateSize already supports
         // usePerBlockStats + blockSize params.
         return DictionaryEncoding<T>::estimateSize(
-            entryCount, statistics, options);
+            entryCount, statistics, options, nestedEncodingReadFactors);
       }
       case EncodingType::RLE: {
-        return RLEEncoding<T>::estimateSize(entryCount, statistics, options);
+        return RLEEncoding<T>::estimateSize(
+            entryCount, statistics, options, nestedEncodingReadFactors);
       }
       case EncodingType::Varint: {
         // Note: the condition below actually support floating point numbers as
@@ -161,7 +175,9 @@ struct EncodingSizeEstimation {
       const EncodingType encodingType,
       std::span<const physicalType> values,
       const Statistics<physicalType>& statistics,
-      const Encoding::Options& options) {
+      const Encoding::Options& options,
+      std::span<const std::pair<EncodingType, float>>
+          nestedEncodingReadFactors) {
     switch (encodingType) {
       case EncodingType::Constant: {
         return ConstantEncoding<T>::estimateSize(values, statistics, options);
@@ -208,7 +224,11 @@ struct EncodingSizeEstimation {
       }
       default: {
         return estimateNumericSize(
-            encodingType, values.size(), statistics, options);
+            encodingType,
+            values.size(),
+            statistics,
+            options,
+            nestedEncodingReadFactors);
       }
     }
   }

@@ -152,6 +152,25 @@ struct WaveConfig {
   // actual thread block clock distribution.
   bool autoAdjustCost{true};
 
+  // Ablation knobs.  Each switches one optimization off so its contribution
+  // can be measured by comparing runtimes; none is meant for production use.
+
+  // If true, share a step's blocks among its ops by element count alone,
+  // ignoring each op's declared unit cost.
+  bool uniformCost{false};
+
+  // If true, launch each op of a step on its own instead of putting all of a
+  // step's ops in one kernel launch.
+  bool launchPerOp{false};
+
+  // If false, compile every structurally identical subgraph of a node
+  // separately instead of reusing the first one's ProjectOperation.
+  bool dedupProjectOps{true};
+
+  // If true, wait for the torch stream after every standalone that does
+  // device work, so standalones stop overlapping the wave kernels.
+  bool serializeStandalones{false};
+
   // If true, reuse a value's buffer in place when an op is its unique last use
   // (turning copying ops into in-place ops), and drop clones that no consumer
   // needs. On by default.
@@ -161,6 +180,12 @@ struct WaveConfig {
   // when enableReuse is set; separated from it so the pass can be A/B'd against
   // the post-partition in-place rewrite alone.
   bool elideClones{true};
+
+  // If true, merge copies into the columns 0..k-1 of one tensor into a single
+  // copy of the stacked sources (rewriteDisjointCopies). Each copy mutates the
+  // target, which otherwise orders every copy after the previous one and cuts
+  // the graph into three partition layers per copy. On by default.
+  bool recognizeDisjointCopies{true};
 
   // Force a launch boundary after a multi-block (non-cooperative) scan so every
   // cross-block consumer of its output reads a fully materialized buffer from a
@@ -211,8 +236,18 @@ struct WaveConfig {
   // only freed once its own completion events have been observed, so the drain
   // costs a host stall per node and buys nothing. Needs deferD2h to be of any
   // use -- otherwise every transfer still stops the host at its producing step.
-  // Off by default.
-  bool runAhead{false};
+  // On by default.
+  bool runAhead{true};
+
+  // If true, a stream does not wait again on a completion event it already
+  // waited on: stream order already puts everything after it. On by default.
+  bool skipRepeatedWaits{true};
+
+  // If true, each stream writes a step's ticket to a host-mapped counter after
+  // the step's work, and the host checks step completion by reading the
+  // counters instead of calling cudaEventQuery on the step's events. Off by
+  // default: the counter write is an API call of its own and measured no gain.
+  bool completionCounters{false};
 
   // Ceiling, in bytes, on how much freeable memory may sit in already-issued
   // but not yet completed steps. Running ahead delays every free until the
@@ -291,6 +326,11 @@ struct WaveConfig {
   // op's grid covering all of them. Also folds a chain of such ops where the
   // op supports it. On by default; the switch is for A/B against the list form.
   bool decomposeLists{true};
+
+  // Replace the sparsenn fused_datafm_merge_and_dedup_by_reference with the
+  // TorchWave CUDA variant (the "_tw" operator) when the graph is prepared for
+  // wave. The _tw operator must be registered before the graph compiles.
+  bool twMad{false};
 
   // If true, a metadata getter (aten.sym_size.int / aten.sym_numel.default)
   // that is not a subexpression of a single fusable consumer runs as a
@@ -413,8 +453,13 @@ struct WaveConfig {
   int32_t maxLaunchWaves{3};
 
   // GridStats::skew (the step's makespan over a perfectly balanced, fully
-  // occupied one) at and above which partitionLaunches splits a step.
+  // occupied one) at and above which partitionLaunches splits a step that has
+  // not been measured yet.
   float launchSkewThreshold{1.3f};
+
+  // GPU microseconds of block idle time, measured on the step's previous
+  // execution, at and above which partitionLaunches splits the step.
+  float launchSplitMinUs{30.0f};
 
   // Microseconds of GPU time a block should be worth before the packer opens
   // one. Converted to cost units with the thread-block clocks the previous

@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <bit>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <numeric>
 #include <random>
@@ -39,6 +40,7 @@
 #include "velox/dwio/nimble/encodings/DictionaryEncoding.h"
 #include "velox/dwio/nimble/encodings/FixedBitWidthEncoding.h"
 #include "velox/dwio/nimble/encodings/ForEncoding.h"
+#include "velox/dwio/nimble/encodings/FsstEncoding.h"
 #include "velox/dwio/nimble/encodings/HuffmanEncoding.h"
 #include "velox/dwio/nimble/encodings/MainlyConstantEncoding.h"
 #include "velox/dwio/nimble/encodings/PFOREncoding.h"
@@ -85,6 +87,19 @@ std::string encodeWithSelection(
       makeDefaultPolicy(TypeTraits<T>::dataType)};
   Buffer buffer{*benchmarkPool()};
   auto encoded = EncodingT::encode(selection, values, buffer, options);
+  return {encoded.data(), encoded.size()};
+}
+
+std::string encodeFsstString(const Vector<std::string_view>& data) {
+  auto values = std::span<const std::string_view>{data.data(), data.size()};
+  auto selection = EncodingSelection<std::string_view>{
+      EncodingSelectionResult{.encodingType = EncodingType::Fsst},
+      Statistics<std::string_view>::create(values),
+      makeDefaultPolicy(DataType::String)};
+  Buffer buffer{*benchmarkPool()};
+  const Encoding::Options options{
+      .fsstCompressionTargetRatio = std::numeric_limits<double>::max()};
+  const auto encoded = FsstEncoding::encode(selection, values, buffer, options);
   return {encoded.data(), encoded.size()};
 }
 
@@ -584,6 +599,83 @@ Vector<std::string_view> dictionaryStringData(
   return data;
 }
 
+std::string encodeNullableView(uint32_t nullsPerThousand) {
+  Vector<int64_t> nonNullValues{benchmarkPool().get()};
+  Vector<bool> isNonNull{benchmarkPool().get(), kRows};
+  std::mt19937 generator{7'204'113};
+  for (uint32_t row{0}; row < kRows; ++row) {
+    isNonNull[row] = generator() % 1'000 >= nullsPerThousand;
+    if (isNonNull[row]) {
+      nonNullValues.push_back(static_cast<int64_t>(row) * 17 + 3);
+    }
+  }
+  auto policy = std::make_unique<ManualEncodingSelectionPolicy<int64_t>>(
+      std::vector<std::pair<EncodingType, float>>{{EncodingType::Trivial, 1.0}},
+      CompressionOptions{},
+      std::nullopt);
+  Buffer buffer{*benchmarkPool()};
+  const auto encoded = EncodingFactory::encodeNullable<int64_t>(
+      std::move(policy), nonNullValues, isNonNull, buffer);
+  return {encoded.data(), encoded.size()};
+}
+
+unsigned readNullableRanges(
+    uint32_t nullsPerThousand,
+    uint32_t rangeSize,
+    unsigned iterations) {
+  folly::BenchmarkSuspender suspender;
+  const auto encoded = encodeNullableView(nullsPerThousand);
+  const auto view = createEncodingView(encoded, benchmarkPool().get());
+  std::vector<RowRange> ranges;
+  uint32_t numRows{0};
+  for (uint32_t row{0}; row < kRows; row += 2 * rangeSize) {
+    ranges.emplace_back(row, std::min(row + rangeSize, kRows));
+    numRows += ranges.back().numRows();
+  }
+  Vector<int64_t> output{benchmarkPool().get(), numRows};
+  suspender.dismiss();
+  for (unsigned iteration{0}; iteration < iterations; ++iteration) {
+    const auto numNonNulls = view->read(ranges, [](uint32_t) {}, output.data());
+    folly::doNotOptimizeAway(numNonNulls);
+    folly::doNotOptimizeAway(output.data());
+  }
+  suspender.rehire();
+  return iterations;
+}
+
+unsigned createNullableViews(uint32_t nullsPerThousand, unsigned iterations) {
+  folly::BenchmarkSuspender suspender;
+  const auto encoded = encodeNullableView(nullsPerThousand);
+  suspender.dismiss();
+  for (unsigned iteration{0}; iteration < iterations; ++iteration) {
+    const auto view = createEncodingView(encoded, benchmarkPool().get());
+    folly::doNotOptimizeAway(view.get());
+  }
+  suspender.rehire();
+  return iterations;
+}
+
+void registerNullableViewBenchmarks() {
+  for (const uint32_t nullsPerThousand :
+       {0, 2, 10, 40, 120, 250, 330, 500, 950, 1'000}) {
+    folly::addBenchmark(
+        __FILE__,
+        fmt::format("nullableViewCreate_nulls{}", nullsPerThousand),
+        [nullsPerThousand](unsigned iterations) {
+          return createNullableViews(nullsPerThousand, iterations);
+        });
+    for (const uint32_t rangeSize : {16, 1'024}) {
+      folly::addBenchmark(
+          __FILE__,
+          fmt::format(
+              "nullableViewRange{}_nulls{}", rangeSize, nullsPerThousand),
+          [nullsPerThousand, rangeSize](unsigned iterations) {
+            return readNullableRanges(nullsPerThousand, rangeSize, iterations);
+          });
+    }
+  }
+}
+
 #define VIEW_BENCHMARK(Name, Type, EncodedExpr, PositionsExpr)   \
   BENCHMARK(Name, iters) {                                       \
     std::string encoded;                                         \
@@ -808,6 +900,43 @@ BENCHMARK(View_TrivialStringEager_Clustered130, iters) {
     view = createEncodingView(encoded, benchmarkPool().get());
   }
   readPositionsWithView<std::string_view>(*view, positions, iters);
+}
+
+BENCHMARK(View_FsstString_Sorted130, iters) {
+  std::vector<std::string> backing;
+  std::string encoded;
+  std::vector<uint32_t> positions;
+  std::unique_ptr<EncodingView> view;
+  BENCHMARK_SUSPEND {
+    encoded = encodeFsstString(stringData(backing));
+    positions = sortedRandomPositions(kRows);
+    view = createEncodingView(encoded, benchmarkPool().get());
+  }
+  readPositionsWithView<std::string_view>(*view, positions, iters);
+}
+
+BENCHMARK(BatchView_FsstString_Sorted130, iters) {
+  std::vector<std::string> backing;
+  std::string encoded;
+  std::vector<uint32_t> positions;
+  std::unique_ptr<EncodingView> view;
+  BENCHMARK_SUSPEND {
+    encoded = encodeFsstString(stringData(backing));
+    positions = sortedRandomPositions(kRows);
+    view = createEncodingView(encoded, benchmarkPool().get());
+  }
+  readPositionsBatchWithView<std::string_view>(*view, positions, iters);
+}
+
+BENCHMARK(RangeView_FsstString_Range1024, iters) {
+  std::vector<std::string> backing;
+  std::string encoded;
+  std::unique_ptr<EncodingView> view;
+  BENCHMARK_SUSPEND {
+    encoded = encodeFsstString(stringData(backing));
+    view = createEncodingView(encoded, benchmarkPool().get());
+  }
+  readRangesWithView<std::string_view>(*view, iters);
 }
 
 VIEW_BENCHMARK(
@@ -1339,5 +1468,6 @@ MATERIALIZE_BENCHMARK(
 int main(int argc, char** argv) {
   folly::Init init(&argc, &argv);
   facebook::velox::memory::MemoryManager::initialize({});
+  registerNullableViewBenchmarks();
   folly::runBenchmarks();
 }
