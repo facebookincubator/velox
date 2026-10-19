@@ -29,6 +29,8 @@
 #include <utility>
 #include <vector>
 
+#include <folly/stop_watch.h>
+
 #include "velox/common/base/Counters.h"
 #include "velox/common/base/StatsReporter.h"
 #include "velox/core/PlanNode.h"
@@ -314,9 +316,11 @@ void InMemoryExchangeClient::request(std::vector<RequestSpec>&& requestSpecs) {
     std::move(future)
         .via(executor_)
         .thenValue(
-            [self, spec = std::move(spec), sendTimeMs = getCurrentTimeMs()](
+            [self,
+             spec = std::move(spec),
+             requestWatch = folly::stop_watch<std::chrono::milliseconds>()](
                 ExchangeSource::Response&& response) {
-              const auto requestTimeMs = getCurrentTimeMs() - sendTimeMs;
+              const auto requestTimeMs = requestWatch.elapsed().count();
               if (spec.maxBytes == 0) {
                 RECORD_HISTOGRAM_METRIC_VALUE(
                     kMetricExchangeDataSizeTimeMs, requestTimeMs);

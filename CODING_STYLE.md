@@ -617,6 +617,28 @@ defines it; CMake and every open-source build see the new API alone.
 #endif // VELOX_ENABLE_BACKWARD_COMPATIBILITY
 ```
 
+## Pitfalls Tests Rarely Catch
+
+These rules prevent failures that appear only under particular timing or load,
+so a passing test suite says little about them.
+
+* **Measure intervals with a steady clock.** Durations, timeouts and deadlines
+  use `std::chrono::steady_clock`. Measure an interval with
+  `folly::stop_watch`. `MicrosecondWallTimer` / `NanosecondWallTimer` in
+  `velox/common/time/Timer.h` add the duration of a scope to a counter. When
+  the start of an interval must be stored as a plain integer, such as in an
+  atomic, read it with `SteadyTime::now<Duration>()`. `system_clock` and
+  `EpochTime` follow the OS wall clock, which time synchronization can step
+  backward at any moment, so the difference of two readings can be negative.
+  Use them only for absolute timestamps, such as a task's start time.
+* **Convert epoch seconds to calendar time with
+  `Timestamp::epochToCalendarUtc()`.** `gmtime` returns a pointer to shared
+  static storage and is not thread-safe
+  ([#5029](https://github.com/facebookincubator/velox/issues/5029)). In glibc,
+  `gmtime_r` takes a global lock in `__tz_convert`, which serializes threads
+  under high concurrency
+  ([#6801](https://github.com/facebookincubator/velox/issues/6801)).
+
 ## Tests
 
 * **Each test file should have one test suite with a matching name.** E.g.,
