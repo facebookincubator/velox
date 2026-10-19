@@ -206,7 +206,10 @@ std::unique_ptr<cudf::column> make_numeric_column_from_vector(
       num_rows,
       std::move(data),
       cudf::create_null_mask(
-          0, cudf::mask_state::UNALLOCATED, stream, mr), // no null mask
+          0,
+          cudf::mask_state::UNALLOCATED,
+          stream,
+          cudf::memory_resources{mr, mr}), // no null mask
       0); // no nulls
 }
 
@@ -273,7 +276,13 @@ std::unique_ptr<cudf::column> make_strings_column_from_host(
       std::move(offsets_col),
       std::move(chars_buffer),
       0, // null_count
-      cudf::create_null_mask(0, cudf::mask_state::UNALLOCATED)); // null mask
+      cudf::create_null_mask(
+          0,
+          cudf::mask_state::UNALLOCATED,
+          cudf::get_default_stream(),
+          cudf::memory_resources{
+              cudf::get_current_device_resource_ref(),
+              cudf::get_current_device_resource_ref()})); // null mask
 }
 
 std::unique_ptr<cudf::table> makeTable(

@@ -74,7 +74,9 @@ std::unique_ptr<cudf::column> BaseTableGenerator::makeNumericColumn(
           0,
           cudf::mask_state::UNALLOCATED,
           stream,
-          cudf::get_current_device_resource_ref()), // no null mask
+          cudf::memory_resources{
+              cudf::get_current_device_resource_ref(),
+              cudf::get_current_device_resource_ref()}), // no null mask
       0); // no nulls
 }
 
@@ -160,7 +162,13 @@ std::unique_ptr<cudf::column> BaseTableGenerator::makeStringsColumn(
       std::move(offsetsCol),
       std::move(charsBuffer),
       0, // null_count
-      cudf::create_null_mask(0, cudf::mask_state::UNALLOCATED)); // null mask
+      cudf::create_null_mask(
+          0,
+          cudf::mask_state::UNALLOCATED,
+          cudf::get_default_stream(),
+          cudf::memory_resources{
+              cudf::get_current_device_resource_ref(),
+              cudf::get_current_device_resource_ref()})); // null mask
 }
 
 std::unique_ptr<cudf::column> BaseTableGenerator::makeStructColumn(
@@ -170,7 +178,13 @@ std::unique_ptr<cudf::column> BaseTableGenerator::makeStructColumn(
       numRows,
       std::move(children),
       0, // null_count
-      cudf::create_null_mask(0, cudf::mask_state::UNALLOCATED)); // null_mask
+      cudf::create_null_mask(
+          0,
+          cudf::mask_state::UNALLOCATED,
+          cudf::get_default_stream(),
+          cudf::memory_resources{
+              cudf::get_current_device_resource_ref(),
+              cudf::get_current_device_resource_ref()})); // null_mask
 }
 
 template <typename T>

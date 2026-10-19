@@ -494,7 +494,8 @@ void UcxPartitionedOutput::replicateNullsAndAnyThenPartition(
     auto maskView = replicateMask->mutable_view();
     const auto trueScalar =
         cudf::numeric_scalar<bool>(true, true, stream, get_temp_mr());
-    cudf::fill_in_place(maskView, 0, 1, trueScalar, stream);
+    cudf::fill_in_place(
+        maskView, 0, 1, trueScalar, stream, cudf::memory_resources{mr, mr});
   }
 
   // apply_retention_mask keeps the true rows and apply_deletion_mask keeps the
