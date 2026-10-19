@@ -350,14 +350,7 @@ class FixedPointTest : public exec::test::HiveConnectorTestBase {
       const FixedPointOptions& baseOptions = localOptions()) {
     const int32_t numWorkers = workers.value_or(numWorkersOf(plan));
     const auto fixedPointNodeId = plan->id();
-    // The in-process exchange's data-size probe waits up to
-    // request_data_sizes_max_wait_sec (default 10s) when a partition is empty
-    // (e.g. a hash shuffle that leaves one worker's partition empty), which
-    // otherwise dominates these tests' runtime.  Use a short wait.
-    auto queryCtx = core::QueryCtx::create(
-        cpuExecutor_.get(),
-        core::QueryConfig{
-            {{core::QueryConfig::kRequestDataSizesMaxWaitSec, "1"}}});
+    auto queryCtx = core::QueryCtx::create(cpuExecutor_.get());
 
     // Upstream producer task feeding the workers' initial plans.  Its
     // partitioned output is read (by partition = worker destination) by each
@@ -393,7 +386,9 @@ class FixedPointTest : public exec::test::HiveConnectorTestBase {
     }
     if (!options.awaitVerdict) {
       options.awaitVerdict = [verdicts, verdictKey](
-                                 const WorkerAddress& self, int32_t iteration) {
+                                 const WorkerAddress& self,
+                                 int32_t iteration,
+                                 folly::CancellationToken /*cancel*/) {
         return (*verdicts->wlock())[verdictKey(self, iteration)]
             .getSemiFuture();
       };
@@ -432,13 +427,13 @@ class FixedPointTest : public exec::test::HiveConnectorTestBase {
     // d's initial-plan source splits (e.g. a TableScan file split), forwarded
     // verbatim; an Exchange initial plan instead uses
     // options.upstreamExchangeUri.
+    //
+    // In parallel mode the peers arrive once every loop has initialized, as
+    // they may from a coordinator that schedules them after starting the
+    // tasks: the first iteration must wait for them.
     if (plan->as<FixedPointNode>()->requiresSplits()) {
-      for (int32_t d = 0; d < numWorkers; ++d) {
-        for (int32_t e = 0; e < numWorkers; ++e) {
-          cursors[d]->task()->addSplit(
-              fixedPointNodeId, remoteSplit(cursors[e]->task()));
-        }
-        if (initSplitsFor != nullptr) {
+      if (initSplitsFor != nullptr) {
+        for (int32_t d = 0; d < numWorkers; ++d) {
           // Addressed to the node that reads them, not to the fixed point:
           // that is how a fixed point with several scanned initial plans keeps
           // each one's splits apart.
@@ -446,6 +441,20 @@ class FixedPointTest : public exec::test::HiveConnectorTestBase {
             cursors[d]->task()->addSplit(sourceId, std::move(split));
             cursors[d]->task()->noMoreSplits(sourceId);
           }
+        }
+      }
+      if (mode == exec::Task::ExecutionMode::kParallel) {
+        for (auto& cursor : cursors) {
+          cursor->start();
+        }
+        for (auto& cursor : cursors) {
+          waitForInitialization(*cursor->task());
+        }
+      }
+      for (int32_t d = 0; d < numWorkers; ++d) {
+        for (int32_t e = 0; e < numWorkers; ++e) {
+          cursors[d]->task()->addSplit(
+              fixedPointNodeId, remoteSplit(cursors[e]->task()));
         }
         cursors[d]->task()->noMoreSplits(fixedPointNodeId);
       }
@@ -492,6 +501,20 @@ class FixedPointTest : public exec::test::HiveConnectorTestBase {
       results.push_back({std::move(perWorker[d]), fixedPoint->iterations()});
     }
     return results;
+  }
+
+  // Waits until the loop of 'task' has run its initial plans, or fails after
+  // 10 seconds.
+  static void waitForInitialization(exec::Task& task) {
+    const auto deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (task.fixedPoint()->executionStats().initializationNanos == 0) {
+      VELOX_CHECK(
+          task.isRunning() && std::chrono::steady_clock::now() < deadline,
+          "Fixed point did not initialize: {}",
+          task.taskId());
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
   }
 
   // Unions every worker's shard rows into (col0, col1) BIGINT pairs.
@@ -1700,7 +1723,8 @@ TEST_F(FixedPointTest, verdictUnavailable) {
 
   auto options = localOptions();
   options.awaitVerdict = [](const WorkerAddress& /*self*/,
-                            int32_t /*iteration*/) {
+                            int32_t /*iteration*/,
+                            folly::CancellationToken /*cancel*/) {
     return folly::makeSemiFuture<bool>(
         std::runtime_error("Worker 0 is unreachable"));
   };
@@ -2186,10 +2210,7 @@ TEST_F(FixedPointTest, partitionedOutputAboveLoop) {
 // A fixed point that does not shuffle runs as several independent tasks, each
 // a loop over the partition its initial plan reads for its destination.
 TEST_F(FixedPointTest, independentTasks) {
-  auto queryCtx = core::QueryCtx::create(
-      cpuExecutor_.get(),
-      core::QueryConfig{
-          {{core::QueryConfig::kRequestDataSizesMaxWaitSec, "1"}}});
+  auto queryCtx = core::QueryCtx::create(cpuExecutor_.get());
 
   auto schema = ROW({"key", "val"}, BIGINT());
   auto seed = makeRowVector(
@@ -3290,6 +3311,55 @@ DEBUG_ONLY_TEST_F(FixedPointTest, failedBodyPlanStopsChainFirst) {
   EXPECT_FALSE(held->ownerStoppedFirst);
   VELOX_ASSERT_THROW(
       std::rethrow_exception(task->error()), "Injected producer failure");
+}
+
+// A worker whose peers never arrive stops waiting for them once its task is
+// aborted: the loop ends and releases the task.
+TEST_F(FixedPointTest, abortWhileWaitingForPeers) {
+  auto schema = ROW({"key", "val"}, BIGINT());
+  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto node =
+      PlanBuilder(idGenerator)
+          .fixedPoint(
+              {std::make_shared<VectorStateDeclaration>(
+                  "values",
+                  schema,
+                  PlanBuilder(idGenerator)
+                      .values({makeKeyValueRow(0, 1)})
+                      .planNode())},
+              {PlanBuilder(idGenerator)
+                   .stateSource("values", schema)
+                   .partitionedOutput({"key"}, 2)
+                   .planNode(),
+               PlanBuilder(idGenerator).exchange(schema, "Presto").planNode()},
+              ConvergenceConfig::withMaxIterations(3),
+              /*outputStateEntry=*/"values")
+          .planNode();
+
+  auto queryCtx = core::QueryCtx::create(cpuExecutor_.get());
+  auto task = exec::Task::create(
+      fmt::format("local://fixedpoint-no-peers-{}", queryCtx->queryId()),
+      core::PlanFragment{node},
+      /*destination=*/0,
+      queryCtx,
+      exec::Task::ExecutionMode::kParallel,
+      exec::Consumer{},
+      /*memoryArbitrationPriority=*/0,
+      /*spillDiskOpts=*/std::nullopt,
+      /*onError=*/nullptr,
+      &localOptions());
+  task->start(/*maxDrivers=*/1);
+  waitForInitialization(*task);
+
+  std::weak_ptr<exec::Task> released = task;
+  task->requestAbort().wait();
+  task.reset();
+  const auto deadline =
+      std::chrono::steady_clock::now() + std::chrono::seconds(10);
+  while (!released.expired() && std::chrono::steady_clock::now() < deadline) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  ASSERT_TRUE(released.expired());
 }
 
 // A split addressed to a node that reads none is a coordinator bug, rejected as
@@ -4407,7 +4477,7 @@ TEST_F(FixedPointTest, convergenceMustProduceOneRow) {
 // a recursion can practically go.  Disabled because it is a measurement, not an
 // assertion; run it with
 //
-//   buck2 run @fbcode//mode/opt fbcode//velox/exec/tests:velox_fixed_point_test
+//   buck2 run @fbcode//mode/opt fbcode//velox/exec/tests:fixed_point
 //   \
 //     -- --gtest_filter='*perIterationCost' --gtest_also_run_disabled_tests
 //

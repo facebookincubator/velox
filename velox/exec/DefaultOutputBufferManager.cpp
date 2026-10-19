@@ -111,7 +111,24 @@ void DefaultOutputBufferManager::acknowledge(
 void DefaultOutputBufferManager::deleteResults(
     const std::string& taskId,
     int destination) {
-  if (auto buffer = getBufferIfExists(taskId)) {
+  auto buffer =
+      buffers_.withLock([&](auto& buffers) -> std::shared_ptr<OutputBuffer> {
+        if (auto it = buffers.find(taskId); it != buffers.end()) {
+          return it->second;
+        }
+        // The consumer is done before the producer started.
+        if (auto held = heldRequests_.find(taskId);
+            held != heldRequests_.end()) {
+          std::erase_if(held->second, [&](const auto& request) {
+            return request.destination == destination;
+          });
+          if (held->second.empty()) {
+            heldRequests_.erase(held);
+          }
+        }
+        return nullptr;
+      });
+  if (buffer != nullptr) {
     buffer->deleteResults(destination);
   }
 }
@@ -130,24 +147,77 @@ bool DefaultOutputBufferManager::getData(
   return false;
 }
 
+namespace {
+
+template <typename HeldRequests>
+void dropInactive(HeldRequests& heldRequests) {
+  for (auto it = heldRequests.begin(); it != heldRequests.end();) {
+    std::erase_if(
+        it->second, [](const auto& request) { return !request.activeCheck(); });
+    it = it->second.empty() ? heldRequests.erase(it) : std::next(it);
+  }
+}
+
+} // namespace
+
+void DefaultOutputBufferManager::getDataWhenCreated(
+    const std::string& taskId,
+    int destination,
+    uint64_t maxBytes,
+    int64_t sequence,
+    DataAvailableCallback notify,
+    DataConsumerActiveCheckCallback activeCheck) {
+  VELOX_CHECK_NOT_NULL(activeCheck);
+  auto buffer =
+      buffers_.withLock([&](auto& buffers) -> std::shared_ptr<OutputBuffer> {
+        if (auto it = buffers.find(taskId); it != buffers.end()) {
+          return it->second;
+        }
+        dropInactive(heldRequests_);
+        heldRequests_[taskId].push_back(
+            {destination, maxBytes, sequence, notify, activeCheck});
+        return nullptr;
+      });
+  if (buffer != nullptr) {
+    buffer->getData(destination, maxBytes, sequence, notify, activeCheck);
+  }
+}
+
 void DefaultOutputBufferManager::initializeTask(
     std::shared_ptr<Task> task,
     core::PartitionedOutputNode::Kind kind,
     int numDestinations,
     int numDrivers,
     const std::string& /*transportOptions*/) {
-  const auto& taskId = task->taskId();
+  const auto taskId = task->taskId();
 
+  std::shared_ptr<OutputBuffer> buffer;
+  std::vector<HeldRequest> heldRequests;
   buffers_.withLock([&](auto& buffers) {
     auto it = buffers.find(taskId);
     if (it == buffers.end()) {
-      buffers[taskId] = std::make_shared<OutputBuffer>(
+      buffer = std::make_shared<OutputBuffer>(
           std::move(task), kind, numDestinations, numDrivers);
+      buffers[taskId] = buffer;
     } else {
       VELOX_FAIL(
           "Registering an output buffer for pre-existing taskId {}", taskId);
     }
+    if (auto held = heldRequests_.find(taskId); held != heldRequests_.end()) {
+      heldRequests = std::move(held->second);
+      heldRequests_.erase(held);
+    }
   });
+  for (auto& request : heldRequests) {
+    if (request.activeCheck()) {
+      buffer->getData(
+          request.destination,
+          request.maxBytes,
+          request.sequence,
+          std::move(request.notify),
+          std::move(request.activeCheck));
+    }
+  }
 }
 
 bool DefaultOutputBufferManager::updateOutputBuffers(

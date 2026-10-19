@@ -244,11 +244,15 @@ int32_t FixedPointNode::numWorkers() const {
   return workers;
 }
 
-bool FixedPointNode::requiresSplits() const {
+bool FixedPointNode::readsPeers() const {
   // Either chain can be the shuffling one -- a convergence sequence that
   // reduces across workers needs peers just as a shuffling body does.
-  if (chainRequiresSplits(plans_) ||
-      chainRequiresSplits(allConvergencePlans(convergenceConfig_))) {
+  return chainRequiresSplits(plans_) ||
+      chainRequiresSplits(allConvergencePlans(convergenceConfig_));
+}
+
+bool FixedPointNode::requiresSplits() const {
+  if (readsPeers()) {
     return true;
   }
   for (const auto& declaration : stateDeclarations_) {

@@ -420,6 +420,10 @@ class FixedPointNode : public PlanNode {
   /// fully local fixed point needs no splits.
   bool requiresSplits() const override;
 
+  /// True when the body or the convergence sequence shuffles, so every worker
+  /// reads its peers' output: the coordinator names each peer with a split.
+  bool readsPeers() const;
+
   /// Number of workers this fixed point runs as: one per output partition of
   /// whichever chain shuffles -- the body or the convergence sequence.  1 when
   /// neither does.  A nested FixedPointNode does not widen the enclosing loop

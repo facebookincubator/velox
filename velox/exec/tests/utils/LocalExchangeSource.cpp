@@ -62,12 +62,15 @@ class LocalExchangeSource : public exec::ExchangeSource {
     VELOX_CHECK(requestPending_);
     auto requestedSequence = sequence_;
     auto self = shared_from_this();
+    // True until the request gets its result or times out.
+    auto active = std::make_shared<std::atomic_bool>(true);
     // Since this lambda may outlive 'this', we need to capture a
     // shared_ptr to the current object (self).
-    auto resultCallback = [self, requestedSequence, buffers, this](
+    auto resultCallback = [self, requestedSequence, buffers, active, this](
                               std::vector<std::unique_ptr<folly::IOBuf>> data,
                               int64_t sequence,
                               std::vector<int64_t> remainingBytes) {
+      *active = false;
       {
         std::lock_guard<std::mutex> l(mutex_);
         // This function is called either for a result or timeout. Only the
@@ -165,8 +168,15 @@ class LocalExchangeSource : public exec::ExchangeSource {
       return future;
     }
 
-    buffers->getData(
-        remoteTaskId_, destination_, maxBytes, sequence_, resultCallback);
+    // The producer may not have started yet: a fixed point's peers read each
+    // other's producers in the same iteration.
+    buffers->getDataWhenCreated(
+        remoteTaskId_,
+        destination_,
+        maxBytes,
+        sequence_,
+        resultCallback,
+        [active]() { return active->load(); });
 
     return future;
   }
