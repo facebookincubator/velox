@@ -286,15 +286,19 @@ class Task : public std::enable_shared_from_this<Task> {
   /// duplicate.
   /// Note, that this method does NOT update max split sequence id.
   /// Returns true if split was added, false if it was ignored.
-  /// Note that, the operation is silently ignored if Task is not running.
+  /// A remote split for a node with an exchange client goes to the client
+  /// right away, or when the task starts if added before that. The task fails
+  /// if the client rejects it, and start() throws if that happens at start.
+  /// If the task is not running, a remote split goes to the client so it can
+  /// release the remote task, and other splits are ignored.
   bool addSplitWithSequence(
       const core::PlanNodeId& planNodeId,
       exec::Split&& split,
       long sequenceId);
 
   /// Adds split for a source operator corresponding to plan node with
-  /// specified ID. Does not require sequential id.
-  /// Note that, the operation is silently ignored if Task is not running.
+  /// specified ID. Does not require sequential id. Remote splits are handled
+  /// as in addSplitWithSequence().
   void addSplit(const core::PlanNodeId& planNodeId, exec::Split&& split);
 
   /// We mark that for the given group there would be no more splits coming.
@@ -1394,11 +1398,19 @@ class Task : public std::enable_shared_from_this<Task> {
   std::exception_ptr exception_ = nullptr;
   mutable std::timed_mutex mutex_;
 
+  // Held by addSplit(), addSplitWithSequence(), noMoreSplits() and the start of
+  // the task while they update split stores and forward remote splits and
+  // 'no more splits' to the exchange clients, so a client receives them in the
+  // same order as the store. Held across the client calls, and acquired before
+  // 'mutex_'.
+  std::mutex exchangeSplitsMutex_;
+
   // Exchange clients. One per pipeline / source. Null for pipelines, which
   // don't need it.
   //
   // NOTE: there can be only one exchange client for a given pipeline ID, and
-  // the exchange clients are also referenced by 'exchangeClientByPlanNode_'.
+  // the exchange clients are also referenced by 'exchangeClientByPlanNode_'
+  // and by the plan nodes' SplitsState::exchangeClient.
   // Hence, exchange clients can be indexed either by pipeline ID or by plan
   // node ID.
   std::vector<std::shared_ptr<ExchangeClient>> exchangeClients_;

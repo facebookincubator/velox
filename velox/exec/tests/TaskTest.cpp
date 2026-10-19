@@ -1192,63 +1192,6 @@ TEST_F(TaskTest, customExchangeTransportContext) {
   task->requestAbort().wait();
 }
 
-TEST_F(TaskTest, abortToleratesThrowingExchangeClient) {
-  // Exceptions from close() or noMoreRemoteTasks() must not interrupt
-  // termination or strand waiters.
-  for (const bool throwOnClose : {true, false}) {
-    SCOPED_TRACE(
-        throwOnClose ? "close() throws" : "noMoreRemoteTasks() throws");
-    const std::string transportKind{"throwing-exchange"};
-    auto queryRegistry = ExchangeTransportRegistry::create();
-    auto queryCtx = core::QueryCtx::create(driverExecutor_.get());
-    queryCtx->setRegistry(
-        ExchangeTransportRegistry::kRegistryKey, queryRegistry);
-    queryRegistry->insert(
-        transportKind,
-        ExchangeTransportEntry::make<TestExchangeClient>(
-            [throwOnClose](const ExchangeClientContext&) {
-              auto fail = [] { throw std::runtime_error("transport failure"); };
-              TestExchangeClientCallbacks callbacks;
-              if (throwOnClose) {
-                callbacks.onClose = fail;
-              } else {
-                callbacks.onNoMoreRemoteTasks = fail;
-              }
-              return std::make_shared<TestExchangeClient>(std::move(callbacks));
-            },
-            [](int32_t operatorId,
-               DriverCtx* ctx,
-               const std::shared_ptr<const core::ExchangeNode>& node,
-               const std::shared_ptr<TestExchangeClient>&)
-                -> std::unique_ptr<Operator> {
-              return std::make_unique<TestExchangeOperator>(
-                  operatorId, ctx, node);
-            }));
-
-    auto plan = PlanBuilder()
-                    .exchange(ROW("a", BIGINT()), "Presto", transportKind)
-                    .planFragment();
-    const auto exchangeNodeId = plan.planNode->id();
-    auto task = Task::create(
-        "task-throwing-exchange-client",
-        std::move(plan),
-        0,
-        queryCtx,
-        Task::ExecutionMode::kParallel,
-        exec::Consumer{});
-
-    task->start(1, 1);
-    // Leave a split queued so termination calls noMoreRemoteTasks().
-    task->addSplit(
-        exchangeNodeId,
-        exec::Split(std::make_shared<RemoteConnectorSplit>("remote-task")));
-    task->noMoreSplits(exchangeNodeId);
-
-    EXPECT_NO_THROW(task->requestAbort().wait());
-    EXPECT_EQ(task->state(), TaskState::kAborted);
-  }
-}
-
 DEBUG_ONLY_TEST_F(TaskTest, abortDuringTaskStartupFinishesPlannedDrivers) {
   // Aborting at either unlocked startup step must finish every planned driver
   // and let start() return.

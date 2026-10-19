@@ -404,6 +404,7 @@ bool TableScan::getSplit() {
     if (preparedDataSource == nullptr) {
       // There must be a cancellation.
       VELOX_CHECK(operatorCtx_->task()->isCancelled());
+      needNewSplit_ = true;
       return false;
     }
     stats_.wlock()->addRuntimeStat(
