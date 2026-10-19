@@ -303,6 +303,38 @@ TEST_P(NimbleIndexProjectorTest, projectorLooksUpStripeSelections) {
   EXPECT_EQ(dataIoStats_->read().count(), 0);
 }
 
+TEST_P(NimbleIndexProjectorTest, collectsNoTimingsWhenDisabled) {
+  writeResumeKeyTestData(/*rowsPerBatch=*/4, /*numBatches=*/3);
+  const auto rowType = ROW({"key", "value"}, {BIGINT(), INTEGER()});
+  std::vector<Subfield> projectedSubfields;
+  projectedSubfields.emplace_back("value");
+  for (const bool timingEnabled : {true, false}) {
+    SCOPED_TRACE(timingEnabled);
+    auto projector = createProjector(projectedSubfields);
+    projector->setTimingEnabled(timingEnabled);
+    const auto bounds = makeRangeLookup(rowType, {"key"}, 2, 10);
+    NimbleIndexProjector::Request request;
+    request.keyBounds = {bounds};
+    projector->projectStreams(request, {});
+    projector->lookup(bounds);
+    projector->loadStripeStreams(/*stripeOffset=*/0, /*numStripes=*/1);
+
+    const auto stats = projector->stats();
+    EXPECT_GT(stats.numReadStripes, 0);
+    for (const auto& timing :
+         {stats.lookupTiming,
+          stats.prepareTiming,
+          stats.scanTiming,
+          stats.projectionTiming}) {
+      if (timingEnabled) {
+        EXPECT_GT(timing.count, 0);
+      } else {
+        EXPECT_EQ(timing, velox::CpuWallTiming{});
+      }
+    }
+  }
+}
+
 TEST_P(NimbleIndexProjectorTest, projectorLoadsContiguousStripeStreams) {
   constexpr uint32_t kRowsPerStripe{4};
   constexpr uint32_t kNumStripes{3};
