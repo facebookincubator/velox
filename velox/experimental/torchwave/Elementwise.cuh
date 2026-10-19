@@ -720,6 +720,11 @@ __device__ inline T __arange(int64_t idx) {
   return __arange_start<T>(idx, T(0));
 }
 
+template <typename T>
+__device__ inline T __arange_start_step(int64_t idx, T start, T step) {
+  return start + static_cast<T>(idx) * step;
+}
+
 // Shape query.
 
 __device__ inline int64_t __sym_size(Tensor* self, int64_t dim) {
