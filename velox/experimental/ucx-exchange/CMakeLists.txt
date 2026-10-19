@@ -45,7 +45,10 @@ configure_file(
 
 add_library(velox_ucx_exchange OBJECT ${UCX_EXCHANGE_SOURCES})
 
-target_include_directories(velox_ucx_exchange PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
+# Communicator.cpp includes the generated header by its full path,
+# velox/experimental/ucx-exchange/UcxExchangeModules.h, which resolves from
+# the build tree's root.
+target_include_directories(velox_ucx_exchange PRIVATE ${PROJECT_BINARY_DIR})
 
 find_package(ucx REQUIRED)
 
