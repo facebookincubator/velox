@@ -107,6 +107,12 @@ class Config : public velox::config::ConfigBase {
   // @lint-ignore CLANGTIDY facebook-hte-NonPodStaticDeclaration
   static Entry<const std::vector<std::string>> FSST_COLUMNS;
 
+  /// Subfield paths whose INTEGER, BIGINT, REAL or DOUBLE value streams use
+  /// SubIntSplit. Uses the same path syntax and schema filtering as
+  /// FSST_COLUMNS. Explicit encoding layouts take precedence.
+  // @lint-ignore CLANGTIDY facebook-hte-NonPodStaticDeclaration
+  static Entry<const std::vector<std::string>> SUBINTSPLIT_COLUMNS;
+
   /// Selects and tunes the writer flush policy via a comma-separated
   /// "key:value" spec whose "type" key chooses the policy. An absent key keeps
   /// the standard size-based behavior. Test-only types: "type:test_per_batch"
