@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConfig.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConnector.h"
 #include "velox/experimental/cudf/connectors/hive/CudfHiveConnectorSplit.h"
@@ -1124,6 +1125,86 @@ TEST_F(TableScanTest, partitionedTable) {
             {{"a", HiveConnectorTestBase::regularColumn("c0", BIGINT())}}),
         makeSplit(),
         "SELECT c0 FROM tmp");
+  }
+}
+
+// A TIMESTAMP partition key takes the type the reader gives file timestamps,
+// whatever unit cuDF expressions default to, so an expression can combine the
+// two.
+TEST_F(TableScanTest, partitionTimestampMixedWithFileTimestamp) {
+  auto& config = CudfConfig::getInstance();
+  const auto originalUnit = config.timestampUnit;
+  SCOPE_EXIT {
+    config.timestampUnit = originalUnit;
+  };
+
+  auto input = makeRowVector(
+      {"flag", "file_ts"},
+      {makeFlatVector<bool>({true, false}),
+       makeFlatVector<Timestamp>(
+           {Timestamp(1'700'000'000, 0), Timestamp(1'700'000'001, 0)})});
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), input);
+  const auto outputType =
+      ROW({"flag", "file_ts", "partition_ts"},
+          {BOOLEAN(), TIMESTAMP(), TIMESTAMP()});
+  const auto fileValues = makeRowVector({input->childAt(1)});
+  const auto caseValues = makeRowVector({makeFlatVector<Timestamp>(
+      {Timestamp(1'577'836'800, 0), Timestamp(1'700'000'001, 0)})});
+
+  // Projects 'projection' over the file and partition timestamps of a split
+  // in the partition 'partitionValue', expecting 'expected'.
+  const auto check = [&](const std::string& projection,
+                         const std::optional<std::string>& partitionValue,
+                         const RowVectorPtr& expected) {
+    SCOPED_TRACE(projection);
+    auto plan =
+        PlanBuilder(pool_.get())
+            .startTableScan()
+            .connectorId(kCudfHiveConnectorId)
+            .outputType(outputType)
+            .assignments(
+                {{"flag",
+                  HiveConnectorTestBase::regularColumn("flag", BOOLEAN())},
+                 {"file_ts",
+                  HiveConnectorTestBase::regularColumn("file_ts", TIMESTAMP())},
+                 {"partition_ts",
+                  HiveConnectorTestBase::partitionKey(
+                      "partition_ts", TIMESTAMP())}})
+            .endTableScan()
+            .project({projection})
+            .planNode();
+    AssertQueryBuilder(plan, duckDbQueryRunner_)
+        .connectorSessionProperty(
+            kCudfHiveConnectorId,
+            hive::HiveConfig::kReadTimestampPartitionValueAsLocalTimeSession,
+            "false")
+        .splits({makePartitionedSplit(
+            filePath->getPath(), {{"partition_ts", partitionValue}})})
+        .assertResults(expected);
+  };
+
+  // The reader's timestamp type is pinned to a unit distinct from both default
+  // units below, so each scan proves the key follows the reader rather than a
+  // fixed unit. The setting takes the enumerator's integer value.
+  resetCudfHiveConnector(
+      std::make_shared<config::ConfigBase>(
+          std::unordered_map<std::string, std::string>{
+              {cudf_velox::connector::hive::CudfHiveConfig::kTimestampType,
+               std::to_string(
+                   static_cast<int32_t>(
+                       cudf::type_id::TIMESTAMP_MICROSECONDS))}}));
+  for (const auto& [unit, label] :
+       {std::pair{cudf::type_id::TIMESTAMP_MILLISECONDS, "ms default unit"},
+        std::pair{cudf::type_id::TIMESTAMP_NANOSECONDS, "ns default unit"}}) {
+    SCOPED_TRACE(label);
+    config.timestampUnit = unit;
+    check("file_ts", std::nullopt, fileValues);
+    check("coalesce(partition_ts, file_ts)", std::nullopt, fileValues);
+    check(
+        "CASE WHEN flag THEN partition_ts ELSE file_ts END",
+        "2020-01-01 00:00:00",
+        caseValues);
   }
 }
 

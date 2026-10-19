@@ -175,7 +175,8 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
   bool partitionKeyFiltersAcceptSplit() const;
 
   // Returns the current split's partition key values as scalars, in
-  // 'partitionKeyNames_' order, each parsed per its key's type.
+  // 'partitionKeyNames_' order, each parsed per its key's type. A TIMESTAMP
+  // value takes the type the split reader gives file timestamps.
   std::vector<std::unique_ptr<cudf::scalar>> makePartitionKeyScalars(
       cuda::stream_ref stream) const;
 
