@@ -1858,8 +1858,11 @@ class CudfRegistration {
       previousOutputMr_;
 };
 
-// A producer task id paired with the batches its Values node emits.
-using TaskShuffleProducer = std::pair<std::string, std::vector<RowVectorPtr>>;
+// A producer Task and the batches its Values node emits.
+struct TaskShuffleProducer {
+  std::string taskId;
+  std::vector<RowVectorPtr> batches;
+};
 
 // Sums the row counts of 'batches'.
 vector_size_t totalRows(const std::vector<RowVectorPtr>& batches) {
@@ -1879,7 +1882,7 @@ std::vector<std::shared_ptr<exec::Task>> startTaskShuffleProducers(
   std::vector<std::shared_ptr<exec::Task>> producerTasks;
   for (const auto& producer : producers) {
     auto plan = exec::test::PlanBuilder()
-                    .values(producer.second)
+                    .values(producer.batches)
                     .partitionedOutput(
                         /*keys=*/{},
                         /*numPartitions=*/1,
@@ -1887,7 +1890,7 @@ std::vector<std::shared_ptr<exec::Task>> startTaskShuffleProducers(
                         taskShuffleSerdeKind(),
                         transportKind)
                     .planFragment();
-    auto task = makeTaskShuffleTask(producer.first, std::move(plan), nullptr);
+    auto task = makeTaskShuffleTask(producer.taskId, std::move(plan), nullptr);
     task->start(1);
     producerTasks.push_back(std::move(task));
   }
@@ -1968,13 +1971,15 @@ std::vector<TaskShuffleProducer> makeInterleavedProducers(
   std::vector<TaskShuffleProducer> producers;
   producers.reserve(numProducers);
   for (int i = 0; i < numProducers; ++i) {
-    producers.emplace_back(
-        taskIdPrefix + std::to_string(i),
-        std::vector<RowVectorPtr>{makeTaskShuffleBatch(
-            pool,
-            /*firstValue=*/i,
-            /*stride=*/numProducers,
-            numRowsPerProducer)});
+    producers.push_back(
+        TaskShuffleProducer{
+            taskIdPrefix + std::to_string(i),
+            {makeTaskShuffleBatch(
+                pool,
+                /*firstValue=*/i,
+                /*stride=*/numProducers,
+                numRowsPerProducer)},
+        });
   }
   return producers;
 }
@@ -1985,7 +1990,7 @@ std::vector<RowVectorPtr> allBatchesOf(
   std::vector<RowVectorPtr> batches;
   for (const auto& producer : producers) {
     batches.insert(
-        batches.end(), producer.second.begin(), producer.second.end());
+        batches.end(), producer.batches.begin(), producer.batches.end());
   }
   return batches;
 }
@@ -2027,7 +2032,7 @@ std::vector<RowVectorPtr> runTaskShuffle(
   startedTasks.add(consumerTask);
   consumerTask->start(numConsumerDrivers);
   for (const auto& producer : producers) {
-    consumerTask->addSplit(consumerNodeId, splitFor(producer.first));
+    consumerTask->addSplit(consumerNodeId, splitFor(producer.taskId));
   }
   consumerTask->noMoreSplits(consumerNodeId);
 
@@ -2384,7 +2389,7 @@ TEST_F(
   startedTasks.add(sorterTask);
   sorterTask->start(1);
   for (const auto& producer : producers) {
-    sorterTask->addSplit(mergeNodeId, remoteSplit(producer.first, 0));
+    sorterTask->addSplit(mergeNodeId, remoteSplit(producer.taskId, 0));
   }
   sorterTask->noMoreSplits(mergeNodeId);
 
