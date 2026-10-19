@@ -87,18 +87,21 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
   std::unordered_map<std::string, RuntimeMetric> getRuntimeStats() override;
 
  protected:
-  /// Which component turns the partition keys of a split into columns.
+  // Indicates the component that turns the partition keys of a split into
+  // columns.
   enum class PartitionKeySource {
-    /// The data source. Partition key columns are left out of the split
-    /// reader's projection: pushed-down filters on them are tested once per
-    /// split against the split's partition value, and the columns are
-    /// materialized as constants after the read.
+    // Partition key columns are left out of the split reader's projection:
+    // pushed-down filters on them are tested once per split against the
+    // split's partition value, and the columns are materialized as constants
+    // after the read.
     kDataSource,
-    /// The split reader. Partition key columns stay in its projection, for
-    /// table formats whose readers resolve them per data file.
+    // Partition key columns stay in the split reader's projection, for table
+    // formats whose readers resolve them per data file.
     kSplitReader,
   };
 
+  // Same as the public constructor, with 'partitionKeySource' choosing which
+  // component resolves partition keys.
   CudfHiveDataSource(
       const RowTypePtr& outputType,
       const ConnectorTableHandlePtr& tableHandle,
@@ -171,8 +174,13 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
   // split.
   bool partitionKeyFiltersAcceptSplit() const;
 
+  // Returns the current split's partition key values as scalars, in
+  // 'partitionKeyNames_' order, each parsed per its key's type.
+  std::vector<std::unique_ptr<cudf::scalar>> makePartitionKeyScalars(
+      cuda::stream_ref stream) const;
+
   // Returns the materialized partition key columns of the current split, each
-  // a constant column of 'numRows' rows, in 'partitionKeyNames_' order.
+  // a constant column of 'numRows' rows built from 'partitionKeyScalars_'.
   std::vector<std::unique_ptr<cudf::column>> makePartitionKeyColumns(
       cudf::size_type numRows,
       cuda::stream_ref stream,
@@ -252,6 +260,11 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
   // decides for the whole split, so none is compiled into the reader's
   // filter.
   common::SubfieldFilters partitionKeyFilters_;
+
+  // The current split's partition key values as scalars, in
+  // 'partitionKeyNames_' order. Built once per split in addSplit(); next()
+  // expands each into a constant column per batch.
+  std::vector<std::unique_ptr<cudf::scalar>> partitionKeyScalars_;
 
   // Whether a partition key filter rejected the current split, which then has
   // no split reader.

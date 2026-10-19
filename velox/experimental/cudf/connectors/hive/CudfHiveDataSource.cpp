@@ -549,6 +549,7 @@ void CudfHiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
   ensureCudaContextForThread();
   // Virtual method for class-specific conversion of the split
   convertSplit(split);
+  partitionKeyScalars_.clear();
 
   // A partition key filter the split fails rejects every row of it, so open
   // nothing.
@@ -596,6 +597,10 @@ void CudfHiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
   if (cudfSplitReader_->emptySplit()) {
     return;
   }
+
+  // Parse the split's partition values once, on the stream next() expands
+  // them into columns on.
+  partitionKeyScalars_ = makePartitionKeyScalars(cudfSplitReader_->stream());
 
   // Check if preloaded splits should start pre-fetching the first pass of
   // column chunks.
@@ -654,6 +659,7 @@ void CudfHiveDataSource::setFromDataSource(std::unique_ptr<DataSource> source) {
   pushdownFilterTree_ = std::move(preparedSource->pushdownFilterTree_);
 
   cudfSplitReader_ = std::move(preparedSource->cudfSplitReader_);
+  partitionKeyScalars_ = std::move(preparedSource->partitionKeyScalars_);
 
   // A split a partition key filter rejected has no reader.
   if (!splitSkipped_) {
@@ -888,39 +894,41 @@ bool CudfHiveDataSource::partitionKeyFiltersAcceptSplit() const {
   return true;
 }
 
+std::vector<std::unique_ptr<cudf::scalar>>
+CudfHiveDataSource::makePartitionKeyScalars(cuda::stream_ref stream) const {
+  const bool timestampValueAsLocalTime =
+      readTimestampPartitionValueAsLocalTime();
+  std::vector<std::unique_ptr<cudf::scalar>> scalars;
+  scalars.reserve(partitionKeyNames_.size());
+  for (const auto& name : partitionKeyNames_) {
+    const auto& partitionKey = partitionKeys_.at(name);
+    const auto constant = newConstantFromString(
+        partitionKey.type,
+        partitionKeyValue(name),
+        pool_,
+        timestampValueAsLocalTime,
+        partitionKey.dateValueDaysSinceEpoch);
+    scalars.push_back(makeScalarFromConstantExpr(
+        std::make_shared<core::ConstantTypedExpr>(constant),
+        pool_,
+        std::nullopt,
+        stream));
+  }
+  return scalars;
+}
+
 std::vector<std::unique_ptr<cudf::column>>
 CudfHiveDataSource::makePartitionKeyColumns(
     cudf::size_type numRows,
     cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) const {
-  const bool timestampValueAsLocalTime =
-      readTimestampPartitionValueAsLocalTime();
+  VELOX_CHECK_EQ(
+      partitionKeyScalars_.size(),
+      partitionKeyNames_.size(),
+      "The partition key scalars of the split are missing");
   std::vector<std::unique_ptr<cudf::column>> columns;
-  columns.reserve(partitionKeyNames_.size());
-  for (const auto& name : partitionKeyNames_) {
-    const auto& partitionKey = partitionKeys_.at(name);
-    const auto value = partitionKeyValue(name);
-    VectorPtr constant;
-    try {
-      constant = newConstantFromString(
-          partitionKey.type,
-          value,
-          pool_,
-          timestampValueAsLocalTime,
-          partitionKey.dateValueDaysSinceEpoch);
-    } catch (const std::exception& e) {
-      VELOX_USER_FAIL(
-          "Bad partition value. Column: {}, type: {}, value: {}, error: {}",
-          name,
-          partitionKey.type->toString(),
-          value.value_or("<null>"),
-          e.what());
-    }
-    const auto scalar = makeScalarFromConstantExpr(
-        std::make_shared<core::ConstantTypedExpr>(constant),
-        pool_,
-        std::nullopt,
-        stream);
+  columns.reserve(partitionKeyScalars_.size());
+  for (const auto& scalar : partitionKeyScalars_) {
     columns.push_back(
         cudf::make_column_from_scalar(*scalar, numRows, stream, mr));
   }

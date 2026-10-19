@@ -1016,6 +1016,34 @@ TEST_F(TableScanTest, partitionedTable) {
   }
 
   {
+    // A split read in several batches carries the key in each of them.
+    SCOPED_TRACE("several batches");
+    auto plan = scan(
+        ROW({"pkey", "c0", "c1"}, {VARCHAR(), BIGINT(), DOUBLE()}),
+        {{"pkey", HiveConnectorTestBase::partitionKey("pkey", VARCHAR())},
+         {"c0", HiveConnectorTestBase::regularColumn("c0", BIGINT())},
+         {"c1", HiveConnectorTestBase::regularColumn("c1", DOUBLE())}});
+    auto task = AssertQueryBuilder(plan, duckDbQueryRunner_)
+                    .connectorSessionProperty(
+                        kCudfHiveConnectorId,
+                        cudf_velox::connector::hive::CudfHiveConfig::
+                            kMaxChunkReadLimitSession,
+                        "8192")
+                    .connectorSessionProperty(
+                        kCudfHiveConnectorId,
+                        cudf_velox::connector::hive::CudfHiveConfig::
+                            kMaxPassReadLimitSession,
+                        "32768")
+                    .splits({makePartitionedSplit(
+                        filePath->getPath(), {{"pkey", "a"}})})
+                    .assertResults("SELECT 'a', c0, c1 FROM tmp");
+    const auto planStats = toPlanStats(task->taskStats());
+    EXPECT_GT(
+        planStats.at(plan->id()).operatorStatsFor("TableScan").outputVectors,
+        1);
+  }
+
+  {
     // A DATE value is a count of days since the epoch when its handle says so.
     SCOPED_TRACE("days since epoch");
     const facebook::velox::connector::ColumnHandleMap assignments = {
