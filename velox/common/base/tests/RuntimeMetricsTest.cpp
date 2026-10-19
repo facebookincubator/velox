@@ -117,6 +117,25 @@ TEST_F(RuntimeMetricsTest, mergeCounter) {
       "Unit mismatch for runtime stat");
 }
 
+TEST_F(RuntimeMetricsTest, counterAggregationPolicy) {
+  ConcurrentRuntimeStatWriter writer;
+  const RuntimeCounter counter(
+      10,
+      RuntimeCounter::Unit::kBytes,
+      RuntimeCounter::AggregationKind::kPerOperator);
+  writer.addRuntimeStat("bytes", counter);
+  writer.addRuntimeStat("bytes", counter);
+
+  const auto stats = writer.runtimeStats();
+  const auto& metric = stats.at("bytes");
+  EXPECT_EQ(metric.aggregation, RuntimeCounter::AggregationKind::kPerOperator);
+  testMetric(metric, 20, 2, 10, 10);
+  VELOX_ASSERT_THROW(
+      writer.addRuntimeStat(
+          "bytes", RuntimeCounter(1, RuntimeCounter::Unit::kBytes)),
+      "Aggregation policy mismatch for runtime stat");
+}
+
 class SetThreadLocalRuntimeStatTest : public testing::Test {};
 
 TEST_F(SetThreadLocalRuntimeStatTest, singleMetric) {

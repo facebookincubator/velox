@@ -51,7 +51,8 @@ class UnitLoaderStats {
     auto locked = stats_.wlock();
     auto it = locked->find(name);
     if (it == locked->end()) {
-      auto [ptr, inserted] = locked->emplace(name, RuntimeMetric(counter.unit));
+      auto [ptr, inserted] = locked->emplace(
+          name, RuntimeMetric(counter.unit, counter.aggregation));
       VELOX_CHECK(inserted);
       ptr->second.addValue(counter.value);
     } else {

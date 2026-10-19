@@ -586,6 +586,34 @@ TEST_F(OperatorUtilsTest, addOperatorRuntimeStats) {
   ASSERT_EQ(stats[std::string(statsName)].min, 100);
 }
 
+TEST_F(OperatorUtilsTest, aggregateOperatorRuntimeStats) {
+  for (const auto* name :
+       {"format.metric", "ioWaitWallNanos", "blockedTestWallNanos"}) {
+    for (const auto aggregation :
+         {RuntimeCounter::AggregationKind::kPerEvent,
+          RuntimeCounter::AggregationKind::kPerOperator}) {
+      const bool aggregate =
+          aggregation == RuntimeCounter::AggregationKind::kPerOperator;
+      SCOPED_TRACE(fmt::format("{} aggregate={}", name, aggregate));
+      std::unordered_map<std::string, RuntimeMetric> stats;
+      addOperatorRuntimeStats(
+          name,
+          RuntimeCounter(100, RuntimeCounter::Unit::kNanos, aggregation),
+          stats);
+      addOperatorRuntimeStats(
+          name,
+          RuntimeCounter(200, RuntimeCounter::Unit::kNanos, aggregation),
+          stats);
+      aggregateOperatorRuntimeStats(stats);
+      const auto& metric = stats.at(name);
+      EXPECT_EQ(metric.sum, 300);
+      EXPECT_EQ(metric.count, aggregate ? 1 : 2);
+      EXPECT_EQ(metric.min, aggregate ? 300 : 100);
+      EXPECT_EQ(metric.max, aggregate ? 300 : 200);
+    }
+  }
+}
+
 TEST_F(OperatorUtilsTest, setOperatorRuntimeStats) {
   std::unordered_map<std::string, RuntimeMetric> stats;
   constexpr std::string_view statsName{"stats"};
