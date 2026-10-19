@@ -301,6 +301,12 @@ class NimbleIndexProjector {
   /// snapshots with counter and timing updates.
   Stats stats() const;
 
+  /// Enables or disables the CPU and wall clock reads that fill the timings of
+  /// stats(). Reading the thread CPU clock is a system call, so a point lookup
+  /// spends about 3 us on these reads. Disabled timings keep their current
+  /// values. Enabled by default.
+  void setTimingEnabled(bool enabled);
+
  private:
   // Applies a synchronous counter or timing update under the TSan guard.
   template <typename Update>
@@ -600,6 +606,8 @@ class NimbleIndexProjector {
   // it. Zero otherwise, so unverified reads load exactly the stream's bytes.
   uint32_t streamTrailerSize_{0};
   uint32_t streamTrailerChecksumOffset_{0};
+  // Whether the stats timings read the CPU and wall clocks.
+  bool timingEnabled_{true};
   // Scratch allocations shared by successive EncodingView decodes. The
   // projector is single-threaded, matching BufferPool's ownership contract.
   velox::BufferPool encodingBufferPool_{velox::BufferPool::kDefaultCapacity};
