@@ -1792,6 +1792,69 @@ class TaskShuffleResults {
 // over waitForTaskCompletion's 1s default.
 constexpr uint64_t kTaskShuffleMaxWaitMicros = 60'000'000;
 
+// TODO: Remove. Temporary CI diagnostic for the T4-only merge-test timeout.
+// Logs each driver's blocking state and every operator's row counts, so the
+// log shows whether the rows or the end of stream stopped short of CudfOrderBy.
+void dumpTaskStateForDiagnosis(const exec::Task& task) {
+  LOG(ERROR) << "[MERGE-DIAG] " << task.toString();
+  const auto stats = task.taskStats();
+  for (size_t pipeline = 0; pipeline < stats.pipelineStats.size(); ++pipeline) {
+    for (const auto& op : stats.pipelineStats[pipeline].operatorStats) {
+      LOG(ERROR) << "[MERGE-DIAG] task=" << task.taskId()
+                 << " pipeline=" << pipeline << " op=" << op.operatorId << ":"
+                 << op.operatorType << " inputRows=" << op.inputPositions
+                 << " inputVectors=" << op.inputVectors
+                 << " outputRows=" << op.outputPositions
+                 << " outputVectors=" << op.outputVectors
+                 << " addInputCalls=" << op.addInputTiming.count
+                 << " getOutputCalls=" << op.getOutputTiming.count
+                 << " finishCalls=" << op.finishTiming.count
+                 << " isBlockedCalls=" << op.isBlockedTiming.count
+                 << " blockedWallMs=" << op.blockedWallNanos / 1'000'000;
+    }
+  }
+}
+
+// TODO: Remove with dumpTaskStateForDiagnosis(). Turns on the ucx-exchange
+// modules' VLOG(2) output, which logs each source completing and the exchange
+// queue reaching its end, for the lifetime of the object.
+class MergeDiagnosisLogging {
+ public:
+  // VLOG output is INFO, which glog writes to stderr, and so to the CI log,
+  // only when the stderr threshold allows it.
+  MergeDiagnosisLogging() : previousStderrThreshold_(FLAGS_stderrthreshold) {
+    FLAGS_stderrthreshold = google::GLOG_INFO;
+    for (const char* module : kMergeDiagnosisModules) {
+      google::SetVLOGLevel(module, 2);
+    }
+  }
+
+  ~MergeDiagnosisLogging() {
+    for (const char* module : kMergeDiagnosisModules) {
+      google::SetVLOGLevel(module, 0);
+    }
+    FLAGS_stderrthreshold = previousStderrThreshold_;
+  }
+
+  MergeDiagnosisLogging(const MergeDiagnosisLogging&) = delete;
+  MergeDiagnosisLogging& operator=(const MergeDiagnosisLogging&) = delete;
+
+ private:
+  const int32_t previousStderrThreshold_;
+
+  static constexpr const char* kMergeDiagnosisModules[] = {
+      "UcxExchange",
+      "UcxExchangeClient",
+      "UcxExchangeQueue",
+      "UcxExchangeSource",
+      "UcxExchangeServer",
+      "UcxQueues",
+      "UcxOutputQueueManager",
+      "UcxPartitionedOutput",
+      "IntraNodeTransferRegistry",
+  };
+};
+
 // Cancels the Tasks a case started, and waits for their drivers to stop, when
 // it goes out of scope. A case that bails out early -- a failed ASSERT or
 // VELOX_CHECK -- would otherwise leave producers blocked in the process-wide
@@ -2031,11 +2094,15 @@ std::vector<RowVectorPtr> runTaskShuffle(
   }
   consumerTask->noMoreSplits(consumerNodeId);
 
-  VELOX_CHECK(
-      exec::test::waitForTaskCompletion(
-          consumerTask.get(), kTaskShuffleMaxWaitMicros),
-      "Consumer task did not complete for transport: {}",
-      transportKind);
+  if (!exec::test::waitForTaskCompletion(
+          consumerTask.get(), kTaskShuffleMaxWaitMicros)) {
+    dumpTaskStateForDiagnosis(*consumerTask);
+    for (const auto& task : producerTasks) {
+      dumpTaskStateForDiagnosis(*task);
+    }
+    VELOX_FAIL(
+        "Consumer task did not complete for transport: {}", transportKind);
+  }
   for (const auto& task : producerTasks) {
     VELOX_CHECK(
         exec::test::waitForTaskCompletion(
@@ -2239,6 +2306,7 @@ TEST_F(UcxExchangeFocusedTest, zeroColumnPayloadKeepsItsRowCount) {
 // substitution, and the shape of the resulting operator pipeline, since that is
 // where the expansion and the renumbering are observable.
 TEST_F(UcxExchangeFocusedTest, mergeExchangeOverUcxIsGloballyOrdered) {
+  MergeDiagnosisLogging diagnosisLogging;
   registerSerdes();
   const auto taskPrefix = getUniqueTaskPrefix();
 
@@ -2342,6 +2410,7 @@ TEST_F(UcxExchangeFocusedTest, mergeExchangeOverUcxIsGloballyOrdered) {
 TEST_F(
     UcxExchangeFocusedTest,
     mergeExchangeOverUcxNumbersOperatorsConsecutively) {
+  MergeDiagnosisLogging diagnosisLogging;
   registerSerdes();
   const auto taskPrefix = getUniqueTaskPrefix();
   const auto ucx = std::string{core::TransportKind::kUcx};
@@ -2403,10 +2472,15 @@ TEST_F(
   drainTask->addSplit(drainNodeId, remoteSplit(sorterTaskId, 0));
   drainTask->noMoreSplits(drainNodeId);
 
-  ASSERT_TRUE(
-      exec::test::waitForTaskCompletion(
-          drainTask.get(), kTaskShuffleMaxWaitMicros))
-      << "Drain task did not complete";
+  if (!exec::test::waitForTaskCompletion(
+          drainTask.get(), kTaskShuffleMaxWaitMicros)) {
+    dumpTaskStateForDiagnosis(*drainTask);
+    dumpTaskStateForDiagnosis(*sorterTask);
+    for (const auto& task : producerTasks) {
+      dumpTaskStateForDiagnosis(*task);
+    }
+    FAIL() << "Drain task did not complete";
+  }
   ASSERT_TRUE(
       exec::test::waitForTaskCompletion(
           sorterTask.get(), kTaskShuffleMaxWaitMicros))
