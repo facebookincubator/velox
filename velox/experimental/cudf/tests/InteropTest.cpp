@@ -18,6 +18,12 @@
 
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
+#include <cudf/column/column_factories.hpp>
+#include <cudf/strings/strings_column_view.hpp>
+#include <cudf/types.hpp>
+
+#include <rmm/device_buffer.hpp>
+
 using namespace facebook::velox;
 using namespace facebook::velox::test;
 using namespace facebook::velox::cudf_velox;
@@ -124,6 +130,53 @@ TEST_F(InteropTest, varbinary) {
       {"c0"},
       {makeFlatVector<StringView>({"binary\x00data"_sv, "more"_sv, ""_sv})});
   roundTrip(input);
+}
+
+// A cuDF strings column whose offsets are INT64 (what cuDF produces for columns
+// larger than 2 GB) is exported to Arrow as "U" (large string). Make sure it is
+// restored as VARBINARY with the offsets read at their real width.
+TEST_F(InteropTest, varbinaryLargeOffsets) {
+  auto stream = cudf::get_default_stream();
+  auto mr = cudf::get_current_device_resource_ref();
+
+  const std::vector<std::string> values = {
+      std::string("binary\0data", 11), "more", "", "a longer binary value"};
+  std::string chars;
+  std::vector<int64_t> offsets{0};
+  for (const auto& value : values) {
+    chars += value;
+    offsets.push_back(static_cast<int64_t>(chars.size()));
+  }
+
+  auto offsetsColumn = std::make_unique<cudf::column>(
+      cudf::data_type{cudf::type_id::INT64},
+      static_cast<cudf::size_type>(offsets.size()),
+      rmm::device_buffer(
+          offsets.data(), offsets.size() * sizeof(int64_t), stream, mr),
+      cuda::device_buffer<std::byte>(stream, mr, 0, cuda::no_init),
+      0);
+  auto stringsColumn = cudf::make_strings_column(
+      static_cast<cudf::size_type>(values.size()),
+      std::move(offsetsColumn),
+      rmm::device_buffer(chars.data(), chars.size(), stream, mr),
+      0,
+      cuda::device_buffer<std::byte>(stream, mr, 0, cuda::no_init));
+  ASSERT_EQ(
+      cudf::strings_column_view(stringsColumn->view()).offsets().type().id(),
+      cudf::type_id::INT64);
+
+  std::vector<std::unique_ptr<cudf::column>> columns;
+  columns.push_back(std::move(stringsColumn));
+  cudf::table table(std::move(columns));
+
+  std::vector<StringView> views(values.begin(), values.end());
+  auto expected =
+      makeRowVector({"c0"}, {makeFlatVector<StringView>(views, VARBINARY())});
+  auto result = cudf_velox::with_arrow::toVeloxColumn(
+      table.view(), pool_.get(), expected->type(), stream, mr);
+  stream.sync();
+
+  test::assertEqualVectors(expected, result);
 }
 
 // ========== With nulls ==========
