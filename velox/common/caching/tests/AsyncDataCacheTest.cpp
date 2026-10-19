@@ -1291,10 +1291,47 @@ TEST_P(AsyncDataCacheTest, staleEntry) {
   ASSERT_EQ(stats.numEntries, 1);
   ASSERT_EQ(stats.numHit, 1);
 
-  // A caller that can assemble one read from several consecutive cache entries
-  // may consume this entry as a valid prefix instead of invalidating and
-  // reloading it.
-  const auto beforePrefix = cache_->refreshStats();
+  // Stale cache access with large cache size.
+  auto stalePin =
+      cache_->findOrCreate(key, 2 * size, /*contiguous=*/false, &wait);
+  ASSERT_FALSE(stalePin.empty());
+  ASSERT_TRUE(wait.isReady());
+  ASSERT_TRUE(stalePin.entry()->isExclusive());
+  stalePin.entry()->setExclusiveToShared();
+  stats = cache_->refreshStats();
+  ASSERT_EQ(stats.numStales, 1);
+  ASSERT_EQ(stats.numEntries, 1);
+  ASSERT_EQ(stats.numHit, 1);
+}
+
+TEST_P(AsyncDataCacheTest, cacheEntrySizePolicy) {
+  constexpr uint64_t kRamBytes = 1UL << 30;
+  initializeCache(kRamBytes, 0, 0);
+  StringIdLease file(fileIds(), std::string_view("cacheEntrySizePolicy"));
+  const uint64_t size = 200;
+  folly::SemiFuture<bool> wait(false);
+  RawFileCacheKey key{file.id(), 1000};
+
+  // A miss creates an exclusive entry of the requested size.
+  auto before = cache_->refreshStats();
+  auto pin = cache_->findOrCreate(
+      key,
+      size,
+      /*contiguous=*/false,
+      &wait,
+      CacheEntrySizePolicy::kAllowSmaller);
+  ASSERT_FALSE(pin.empty());
+  ASSERT_TRUE(wait.isReady());
+  ASSERT_TRUE(pin.entry()->isExclusive());
+  ASSERT_EQ(pin.entry()->size(), size);
+  pin.entry()->setExclusiveToShared();
+  pin.clear();
+  auto delta = cache_->refreshStats() - before;
+  ASSERT_EQ(delta.numHit, 0);
+  ASSERT_EQ(delta.numStales, 0);
+
+  // kAllowSmaller returns a shorter entry as a shared prefix and counts a hit.
+  before = cache_->refreshStats();
   auto prefixPin = cache_->findOrCreate(
       key,
       2 * size,
@@ -1306,25 +1343,46 @@ TEST_P(AsyncDataCacheTest, staleEntry) {
   ASSERT_FALSE(prefixPin.entry()->isExclusive());
   ASSERT_EQ(prefixPin.entry()->size(), size);
   prefixPin.clear();
-  stats = cache_->refreshStats();
+  auto stats = cache_->refreshStats();
   ASSERT_EQ(stats.numEntries, 1);
-  auto delta = stats - beforePrefix;
-  ASSERT_EQ(delta.numStales, 0);
+  delta = stats - before;
   ASSERT_EQ(delta.numHit, 1);
+  ASSERT_EQ(delta.numStales, 0);
 
-  // Stale cache access with large cache size.
-  const auto beforeStale = cache_->refreshStats();
-  auto stalePin =
-      cache_->findOrCreate(key, 2 * size, /*contiguous=*/false, &wait);
+  // kAllowSmaller with a request that fits the entry is an ordinary hit.
+  before = cache_->refreshStats();
+  auto exactPin = cache_->findOrCreate(
+      key,
+      size,
+      /*contiguous=*/false,
+      &wait,
+      CacheEntrySizePolicy::kAllowSmaller);
+  ASSERT_FALSE(exactPin.empty());
+  ASSERT_FALSE(exactPin.entry()->isExclusive());
+  ASSERT_EQ(exactPin.entry()->size(), size);
+  exactPin.clear();
+  delta = cache_->refreshStats() - before;
+  ASSERT_EQ(delta.numHit, 1);
+  ASSERT_EQ(delta.numStales, 0);
+
+  // kRequireAtLeast treats the same shorter entry as stale and replaces it.
+  before = cache_->refreshStats();
+  auto stalePin = cache_->findOrCreate(
+      key,
+      2 * size,
+      /*contiguous=*/false,
+      &wait,
+      CacheEntrySizePolicy::kRequireAtLeast);
   ASSERT_FALSE(stalePin.empty());
   ASSERT_TRUE(wait.isReady());
   ASSERT_TRUE(stalePin.entry()->isExclusive());
+  ASSERT_EQ(stalePin.entry()->size(), 2 * size);
   stalePin.entry()->setExclusiveToShared();
   stats = cache_->refreshStats();
   ASSERT_EQ(stats.numEntries, 1);
-  delta = stats - beforeStale;
-  ASSERT_EQ(delta.numStales, 1);
+  delta = stats - before;
   ASSERT_EQ(delta.numHit, 0);
+  ASSERT_EQ(delta.numStales, 1);
 }
 
 TEST_P(AsyncDataCacheTest, shrinkCache) {
