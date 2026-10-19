@@ -415,12 +415,27 @@ std::shared_ptr<Task> Task::create(
     std::function<void(std::exception_ptr)> onError,
     const FixedPointOptions* fixedPointOptions) {
   VELOX_CHECK_NOT_NULL(planFragment.planNode);
+
   // A plan containing a FixedPointNode runs the node's iterations as a
   // schedule of sub-tasks, and the rest of the plan as this task's Driver
-  // pipeline.  The loop is built after the Task so it can hold its owner --
-  // which outlives it.  Note the owner is constructed but not yet initialized
-  // here: pool() is assigned in init(), below.
-  const bool isFixedPoint = FixedPointLoop::claims(planFragment);
+  // pipeline. The loop is built after the Task so it can hold its owner --
+  // which outlives it.
+  //
+  // Note the owner is constructed but not yet initialized here: pool() is
+  // assigned in init(), below. Every FixedPointNode leaf reads its task's one
+  // loop, so a plan has at most one. The walk visits every node to find a
+  // second one.
+  const core::FixedPointNode* fixedPoint = nullptr;
+  core::PlanNode::findFirstNode(
+      planFragment.planNode.get(), [&](const core::PlanNode* node) {
+        if (const auto* candidate = node->as<core::FixedPointNode>()) {
+          VELOX_USER_CHECK_NULL(
+              fixedPoint, "A plan fragment can run at most one FixedPointNode");
+          fixedPoint = candidate;
+        }
+        return false;
+      });
+
   // An enclosing loop names itself here when it creates a sub-task, so the
   // link is fixed before anything can observe the task.
   FixedPointLoop* const parentFixedPoint =
@@ -437,9 +452,9 @@ std::shared_ptr<Task> Task::create(
       memoryArbitrationPriority,
       std::move(onError),
       parentFixedPoint));
-  if (isFixedPoint) {
-    task->fixedPoint_ =
-        std::make_unique<FixedPointLoop>(task.get(), fixedPointOptions);
+  if (fixedPoint != nullptr) {
+    task->fixedPoint_ = std::make_unique<FixedPointLoop>(
+        task.get(), *fixedPoint, fixedPointOptions);
   }
   task->init(std::move(spillDiskOpts));
   task->addToTaskList();
@@ -1166,24 +1181,6 @@ void Task::recordBatchEndTime() {
 }
 
 void Task::start(uint32_t maxDrivers, uint32_t concurrentSplitGroups) {
-  if (fixedPoint_ != nullptr) {
-    // Same invariant as the driver path below: start() is the parallel API.
-    checkExecutionMode(ExecutionMode::kParallel);
-    try {
-      // The pipeline's FixedPointNode leaf waits for the loop to finish; the
-      // loop fails the task if it fails.
-      fixedPoint_->start(
-          maxDrivers, [self = shared_from_this()](std::exception_ptr error) {
-            self->setError(error);
-          });
-    } catch (...) {
-      // The loop rejected the start before it could schedule anything -- a
-      // missing orchestration executor, say.  Without this the task would stay
-      // kRunning for ever with no error recorded.
-      setError(std::current_exception());
-      throw;
-    }
-  }
   facebook::velox::process::ThreadDebugInfo threadDebugInfo{
       queryCtx()->queryId(), taskId_, nullptr};
   facebook::velox::process::ScopedThreadDebugInfo scopedInfo(threadDebugInfo);
@@ -1216,6 +1213,15 @@ void Task::start(uint32_t maxDrivers, uint32_t concurrentSplitGroups) {
                    << " was terminated while starting: " << errorMessage();
       finishUnstartedDrivers();
       return;
+    }
+    // After the drivers: createAndStartDrivers requires an empty task pool, and
+    // the loop allocates from it.  The pipeline's FixedPointNode leaf waits for
+    // the loop to finish; the loop fails the task if it fails.
+    if (fixedPoint_ != nullptr) {
+      fixedPoint_->start(
+          maxDrivers, [self = shared_from_this()](std::exception_ptr error) {
+            self->setError(error);
+          });
     }
   } catch (const std::exception&) {
     if (isRunning()) {

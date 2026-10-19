@@ -13,7 +13,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include <folly/Synchronized.h>
+#include <folly/container/F14Map.h>
 #include <folly/executors/CPUThreadPoolExecutor.h>
+#include <folly/futures/SharedPromise.h>
 #include <folly/synchronization/Baton.h>
 #include <gmock/gmock.h>
 
@@ -25,6 +28,7 @@
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/testutil/TestValue.h"
+#include "velox/connectors/hive/HiveConnector.h"
 #include "velox/core/FixedPointPlanNodes.h"
 #include "velox/core/PlanFragment.h"
 #include "velox/core/QueryCtx.h"
@@ -32,6 +36,7 @@
 #include "velox/exec/Exchange.h"
 #include "velox/exec/FixedPointLoop.h"
 #include "velox/exec/Operator.h"
+#include "velox/exec/PartitionFunction.h"
 #include "velox/exec/Split.h"
 #include "velox/exec/Task.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
@@ -39,6 +44,7 @@
 #include "velox/exec/tests/utils/LocalExchangeSource.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/TestIndexStorageConnector.h"
+#include "velox/type/Filter.h"
 
 namespace facebook::velox::exec {
 namespace {
@@ -107,17 +113,42 @@ class ModuloPartitionFunctionSpec : public core::PartitionFunctionSpec {
     obj["name"] = "ModuloPartitionFunctionSpec";
     return obj;
   }
+
+  static core::PartitionFunctionSpecPtr deserialize(
+      const folly::dynamic& /*obj*/,
+      void* /*context*/) {
+    return std::make_shared<ModuloPartitionFunctionSpec>();
+  }
 };
 
 class FixedPointTest : public exec::test::HiveConnectorTestBase {
  protected:
   void SetUp() override {
     HiveConnectorTestBase::SetUp();
+    // runWorkers gives each worker its own copy of the plan, through serde.
+    Type::registerSerDe();
+    common::Filter::registerSerDe();
+    connector::hive::HiveConnector::registerSerDe();
+    core::PlanNode::registerSerDe();
+    core::ITypedExpr::registerSerDe();
+    exec::registerPartitionFunctionSerDe();
+    DeserializationWithContextRegistryForSharedPtr().Register(
+        "ModuloPartitionFunctionSpec",
+        ModuloPartitionFunctionSpec::deserialize);
     // Route local:// task ids to the in-process exchange source so
     // PartitionedOutput -> Exchange works without networking.
     exec::ExchangeSource::factories().clear();
     exec::ExchangeSource::registerFactory(
         exec::test::createLocalExchangeSource);
+  }
+
+  // The base TearDown drains the executor it owns before checking for leaked
+  // memory; drain the one the tasks here run on as well, since exchange and
+  // scan work queued on it can still hold task memory after the tasks are gone.
+  void TearDown() override {
+    exec::test::waitForAllTasksToBeDeleted();
+    cpuExecutor_->join();
+    HiveConnectorTestBase::TearDown();
   }
 
   // Number of top-level worker tasks for 'node': the partition count of the
@@ -167,6 +198,41 @@ class FixedPointTest : public exec::test::HiveConnectorTestBase {
     return options;
   }
 
+  // A one-row vector (key, val).
+  RowVectorPtr makeKeyValueRow(int64_t key, int64_t val) {
+    return makeRowVector(
+        {"key", "val"},
+        {makeFlatVector<int64_t>({key}), makeFlatVector<int64_t>({val})});
+  }
+
+  // Convergence with one verdict for every worker: each worker aggregates its
+  // rows of state "values", and worker 0 sums the results as 'total' and stops
+  // the loop when 'condition' holds.
+  //
+  // @param idGenerator Generates the ids of the plans' nodes.
+  // @param schema The schema of state "values".
+  // @param partial An aggregate over a worker's rows of "values" that produces
+  // one BIGINT, e.g. "sum(val)" or "count(*)".
+  // @param condition A boolean expression over 'total', e.g. "total >= 16".
+  static ConvergenceConfig sumVerdict(
+      const std::shared_ptr<core::PlanNodeIdGenerator>& idGenerator,
+      const RowTypePtr& schema,
+      std::string_view partial,
+      std::string_view condition) {
+    return ConvergenceConfig::globalVerdict(
+        {PlanBuilder(idGenerator)
+             .stateSource("values", schema)
+             .singleAggregation({}, {std::string(partial)})
+             .partitionedOutput({}, 1)
+             .planNode()},
+        PlanBuilder(idGenerator)
+            .exchange(ROW("a0", BIGINT()), "Presto")
+            .singleAggregation({}, {"sum(a0) AS total"})
+            .project({std::string(condition)})
+            .planNode(),
+        /*maxIterations=*/100);
+  }
+
   // A single-worker, non-shuffling fixed point: seed val=0, increment each
   // iteration, converge at val=3.  For tests about the Task contract rather
   // than about a particular plan shape.
@@ -189,19 +255,19 @@ class FixedPointTest : public exec::test::HiveConnectorTestBase {
     return PlanBuilder(idGenerator)
         .fixedPoint(
             std::make_shared<VectorStateDeclaration>(
-                "vals",
+                "values",
                 schema,
                 PlanBuilder(idGenerator).values({seed}).planNode()),
             PlanBuilder(idGenerator)
-                .stateSource("vals", schema)
+                .stateSource("values", schema)
                 .project({"key AS next_key", "val + 1 AS next_val"}),
             ConvergenceConfig::converging(
                 PlanBuilder(idGenerator)
-                    .stateSource("vals", schema)
+                    .stateSource("values", schema)
                     .project({fmt::format("val >= {} AS converged", target)})
                     .planNode(),
                 maxIterations),
-            /*outputStateEntry=*/"vals")
+            /*outputStateEntry=*/"values")
         .planNode();
   }
 
@@ -250,8 +316,6 @@ class FixedPointTest : public exec::test::HiveConnectorTestBase {
     return task;
   }
 
-  using NodeFactory = std::function<core::PlanNodePtr(int32_t)>;
-
   // One worker's result: its shard rows and the number of iterations its loop
   // ran (read from the worker's FixedPointLoop).
   struct WorkerRun {
@@ -260,29 +324,32 @@ class FixedPointTest : public exec::test::HiveConnectorTestBase {
   };
 
   // Drives a fixed point as N peer top-level worker tasks, the way a
-  // coordinator launches shuffle fragments.  'makeWorkerNode(d)' builds worker
-  // d's node: the same plans for every worker, but its own pre-partitioned seed
-  // (the operator never shards; the coordinator partitions the input).  N is
-  // taken from worker 0's first plan.  The coordinator (this method) decides
-  // the shuffle topology and distributes it via remote splits on the parent
-  // tasks; here it chooses all-to-all (every worker reads every worker,
-  // including itself).  If 'upstreamPlan' is set, the coordinator also launches
-  // an upstream producer task (with the deterministic upstream id) so that a
-  // worker's Exchange-based initial plan receives its shard from it via
-  // shuffle.  If 'initSplitsFor' is set, the coordinator assigns worker d the
-  // source splits it returns (e.g. a TableScan's file split) — its initial plan
-  // reads its shard from them.  Workers run concurrently (each on its own
-  // thread) and rendezvous through the shuffle.  Returns each worker's shard
-  // rows and iteration count.
+  // coordinator launches shuffle fragments.  As in a distributed run, every
+  // worker gets its own copy of 'plan', through serde, and reads its own input
+  // from its splits.  N is taken from the plan's first shuffle.  The
+  // coordinator (this method) decides the shuffle topology and distributes it
+  // via remote splits on the parent tasks; here it chooses all-to-all (every
+  // worker reads every worker, including itself).  If 'upstreamPlan' is set,
+  // the coordinator also launches an upstream producer task (with the
+  // deterministic upstream id) so that a worker's Exchange-based initial plan
+  // receives its shard from it via shuffle.  If 'initSplitsFor' is set, the
+  // coordinator assigns worker d the source splits it returns (e.g. a
+  // TableScan's file split) — its initial plan reads its shard from them.
+  // Workers run concurrently (each on its own thread) and rendezvous through
+  // the shuffle.  Returns each worker's shard rows and iteration count.
+  //
+  // 'workers' overrides the worker count the plan implies, for a loop that no
+  // body shuffle gives a width.  'baseOptions' replaces localOptions().
   std::vector<WorkerRun> runWorkers(
-      const NodeFactory& makeWorkerNode,
+      const core::PlanNodePtr& plan,
       exec::Task::ExecutionMode mode,
       const PlanBuilder* upstreamPlan = nullptr,
       const std::function<std::vector<std::pair<core::PlanNodeId, exec::Split>>(
-          int32_t)>& initSplitsFor = nullptr) {
-    auto node0 = makeWorkerNode(0);
-    const int32_t numWorkers = numWorkersOf(node0);
-    const auto fixedPointNodeId = node0->id();
+          int32_t)>& initSplitsFor = nullptr,
+      std::optional<int32_t> workers = std::nullopt,
+      const FixedPointOptions& baseOptions = localOptions()) {
+    const int32_t numWorkers = workers.value_or(numWorkersOf(plan));
+    const auto fixedPointNodeId = plan->id();
     // The in-process exchange's data-size probe waits up to
     // request_data_sizes_max_wait_sec (default 10s) when a partition is empty
     // (e.g. a hash shuffle that leaves one worker's partition empty), which
@@ -307,7 +374,30 @@ class FixedPointTest : public exec::test::HiveConnectorTestBase {
     // defaults): localOptions() supplies the producer ids and internal sub-task
     // ids in the in-process scheme; add the upstream's task id when an initial
     // plan reads via Exchange.
-    auto options = localOptions();
+    auto options = baseOptions;
+    // Carries each loop's verdict from worker 0 to its peers.  Every loop of
+    // this run has the same worker 0, so its nesting suffix names it.
+    auto verdicts = std::make_shared<folly::Synchronized<
+        folly::F14NodeMap<std::string, folly::SharedPromise<bool>>>>();
+    auto verdictKey = [](const WorkerAddress& self, int32_t iteration) {
+      return fmt::format(
+          "{}#{}", self.address.substr(self.rootTaskId.size()), iteration);
+    };
+    if (!options.publishVerdict) {
+      options.publishVerdict = [verdicts, verdictKey](
+                                   const WorkerAddress& self,
+                                   int32_t iteration,
+                                   bool converged) {
+        (*verdicts->wlock())[verdictKey(self, iteration)].setValue(converged);
+      };
+    }
+    if (!options.awaitVerdict) {
+      options.awaitVerdict = [verdicts, verdictKey](
+                                 const WorkerAddress& self, int32_t iteration) {
+        return (*verdicts->wlock())[verdictKey(self, iteration)]
+            .getSemiFuture();
+      };
+    }
     if (upstream != nullptr) {
       options.upstreamExchangeUri =
           [id = upstream->taskId()](const core::PlanNodeId&) { return id; };
@@ -318,8 +408,10 @@ class FixedPointTest : public exec::test::HiveConnectorTestBase {
 
     std::vector<std::unique_ptr<exec::TaskCursor>> cursors;
     cursors.reserve(numWorkers);
+    const auto serializedPlan = plan->serialize();
     for (int32_t d = 0; d < numWorkers; ++d) {
-      auto node = (d == 0) ? node0 : makeWorkerNode(d);
+      auto node =
+          ISerializable::deserialize<core::PlanNode>(serializedPlan, pool());
       cursors.push_back(
           TaskCursor::create({
               .planNode = std::move(node),
@@ -340,7 +432,7 @@ class FixedPointTest : public exec::test::HiveConnectorTestBase {
     // d's initial-plan source splits (e.g. a TableScan file split), forwarded
     // verbatim; an Exchange initial plan instead uses
     // options.upstreamExchangeUri.
-    if (node0->requiresSplits()) {
+    if (plan->as<FixedPointNode>()->requiresSplits()) {
       for (int32_t d = 0; d < numWorkers; ++d) {
         for (int32_t e = 0; e < numWorkers; ++e) {
           cursors[d]->task()->addSplit(
@@ -415,27 +507,18 @@ class FixedPointTest : public exec::test::HiveConnectorTestBase {
   // Runs the workers in 'mode' and returns the union of their shard rows as
   // (col0, col1) BIGINT pairs.
   std::vector<std::pair<int64_t, int64_t>> runViaTask(
-      const NodeFactory& makeWorkerNode,
+      const core::PlanNodePtr& plan,
       exec::Task::ExecutionMode mode) {
-    return unionRows(runWorkers(makeWorkerNode, mode));
+    return unionRows(runWorkers(plan, mode));
   }
 
   // Same, but with an upstream producer task feeding the workers' initial plans
   // through shuffle.
   std::vector<std::pair<int64_t, int64_t>> runViaTask(
-      const NodeFactory& makeWorkerNode,
+      const core::PlanNodePtr& plan,
       const PlanBuilder& upstreamPlan,
       exec::Task::ExecutionMode mode) {
-    return unionRows(runWorkers(makeWorkerNode, mode, &upstreamPlan));
-  }
-
-  // Convenience overload: every worker runs the same node (used for N=1 tests,
-  // and shuffles where replicating the seed is acceptable).
-  std::vector<std::pair<int64_t, int64_t>> runViaTask(
-      const core::PlanNodePtr& node,
-      exec::Task::ExecutionMode mode) {
-    return runViaTask(
-        [&](int32_t /*worker*/) -> core::PlanNodePtr { return node; }, mode);
+    return unionRows(runWorkers(plan, mode, &upstreamPlan));
   }
 
   // Runs a non-shuffling fixed point under BOTH parent modes and asserts each
@@ -454,14 +537,66 @@ class FixedPointTest : public exec::test::HiveConnectorTestBase {
         << "parallel parent";
   }
 
-  // Like runViaTask, but tags each row with its worker's iteration count as a
-  // third column (col0, col1, iterations), so a test can verify the loop ran
-  // the expected number of iterations.
-  std::vector<std::tuple<int64_t, int64_t, int64_t>> runViaTaskWithIterations(
-      const NodeFactory& makeWorkerNode,
-      exec::Task::ExecutionMode mode) {
+  // Runs 'plan' in parallel on one worker per entry of 'data'.  The plan's
+  // state starts from its one TableScan, in an initial plan; worker d scans
+  // 'data[d]'.
+  std::vector<WorkerRun> runOnWorkers(
+      const core::PlanNodePtr& plan,
+      const std::vector<RowVectorPtr>& data,
+      const FixedPointOptions& options = localOptions()) {
+    const auto numWorkers = static_cast<int32_t>(data.size());
+    // A plan that shuffles is built for a number of workers; peers that never
+    // start would hang the rest.
+    const auto width = numWorkersOf(plan);
+    VELOX_CHECK(
+        width == 1 || width == numWorkers,
+        "The plan shuffles across {} workers, but there is data for {}",
+        width,
+        numWorkers);
+    const auto* scan = findInitialPlanScan(*plan->as<FixedPointNode>());
+    auto files = makeFilePaths(numWorkers);
+    for (size_t i = 0; i < data.size(); ++i) {
+      writeToFile(files[i]->getPath(), data[i]);
+    }
+    return runWorkers(
+        plan,
+        exec::Task::ExecutionMode::kParallel,
+        /*upstreamPlan=*/nullptr,
+        [&](int32_t worker)
+            -> std::vector<std::pair<core::PlanNodeId, exec::Split>> {
+          return {{scan->id(), hiveSplit(files[worker])}};
+        },
+        numWorkers,
+        options);
+  }
+
+  // The one TableScan in 'fixedPoint's initial plans.
+  static const core::PlanNode* findInitialPlanScan(
+      const FixedPointNode& fixedPoint) {
+    const core::PlanNode* scan{nullptr};
+    for (const auto& declaration : fixedPoint.stateDeclarations()) {
+      if (declaration->initialPlan() == nullptr) {
+        continue;
+      }
+      const auto* found = core::PlanNode::findFirstNode(
+          declaration->initialPlan().get(), [](const core::PlanNode* node) {
+            return node->is<core::TableScanNode>();
+          });
+      if (found != nullptr) {
+        VELOX_CHECK_NULL(scan, "Expected one TableScan in the initial plans");
+        scan = found;
+      }
+    }
+    VELOX_CHECK_NOT_NULL(scan, "Expected a TableScan in an initial plan");
+    return scan;
+  }
+
+  // Tags each worker's rows with its iteration count, as (col0, col1,
+  // iterations).
+  static std::vector<std::tuple<int64_t, int64_t, int64_t>> withIterations(
+      const std::vector<WorkerRun>& runs) {
     std::vector<std::tuple<int64_t, int64_t, int64_t>> rows;
-    for (const auto& worker : runWorkers(makeWorkerNode, mode)) {
+    for (const auto& worker : runs) {
       for (const auto& [key, value] : worker.rows) {
         rows.emplace_back(key, value, worker.iterations);
       }
@@ -563,7 +698,13 @@ TEST_F(FixedPointTest, recursiveCte) {
   // terminated at the empty frontier (a wrong convergence would diverge or
   // hit maxIterations).
   std::vector<std::pair<int64_t, int64_t>> expected{
-      {1, 0}, {2, 1}, {3, 2}, {5, 2}, {4, 3}, {6, 4}};
+      {1, 0},
+      {2, 1},
+      {3, 2},
+      {5, 2},
+      {4, 3},
+      {6, 4},
+  };
   expectBothModes(
       PlanBuilder(idGenerator)
           .fixedPoint(
@@ -627,7 +768,13 @@ TEST_F(FixedPointTest, whenDeltaEmptyRecursiveCte) {
        makeFlatVector<int64_t>({2, 3, 5, 4, 6})});
 
   std::vector<std::pair<int64_t, int64_t>> expected{
-      {1, 0}, {2, 1}, {3, 2}, {5, 2}, {4, 3}, {6, 4}};
+      {1, 0},
+      {2, 1},
+      {3, 2},
+      {5, 2},
+      {4, 3},
+      {6, 4},
+  };
   expectBothModes(
       PlanBuilder(idGenerator)
           .fixedPoint(
@@ -720,7 +867,13 @@ TEST_F(FixedPointTest, recursiveCteHashTableReuse) {
   auto body = bodyBuilder.planNode();
 
   std::vector<std::pair<int64_t, int64_t>> expected{
-      {1, 0}, {2, 1}, {3, 2}, {5, 2}, {4, 3}, {6, 4}};
+      {1, 0},
+      {2, 1},
+      {3, 2},
+      {5, 2},
+      {4, 3},
+      {6, 4},
+  };
   expectBothModes(
       PlanBuilder(idGenerator)
           .fixedPoint(
@@ -959,7 +1112,9 @@ TEST_F(FixedPointTest, hashTableStateDropsNullKeys) {
   auto probeSchema = ROW({"key", "tag"}, BIGINT());
   auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
 
-  const std::vector<std::pair<int64_t, int64_t>> expected{{1, 10}};
+  const std::vector<std::pair<int64_t, int64_t>> expected{
+      {1, 10},
+  };
   expectBothModes(
       PlanBuilder(idGenerator)
           .fixedPoint(
@@ -1064,7 +1219,10 @@ TEST_F(FixedPointTest, shuffleBetweenSubplans) {
       });
 
   // 8 -> 4 -> 2 -> 1 -> 0 halvings converge to all-zero values.
-  std::vector<std::pair<int64_t, int64_t>> expected{{0, 0}, {1, 0}};
+  std::vector<std::pair<int64_t, int64_t>> expected{
+      {0, 0},
+      {1, 0},
+  };
   EXPECT_THAT(
       runViaTask(
           PlanBuilder(idGenerator)
@@ -1116,7 +1274,10 @@ TEST_F(FixedPointTest, shuffleDuringIteration) {
 
   // Each iteration divides by four (two halvings):
   //   (8, 12) -> (2, 3) -> (0, 0).
-  std::vector<std::pair<int64_t, int64_t>> expected{{0, 0}, {1, 0}};
+  std::vector<std::pair<int64_t, int64_t>> expected{
+      {0, 0},
+      {1, 0},
+  };
   EXPECT_THAT(
       runViaTask(
           PlanBuilder(idGenerator)
@@ -1176,7 +1337,7 @@ TEST_F(FixedPointTest, shuffleByKey) {
 
   // key=0 sums to 3 ({1, 2}); key=1 sums to 30 ({10, 20}).  Each worker's shard
   // holds some rows of each key, so neither can aggregate a key alone.
-  std::vector<RowVectorPtr> seeds{
+  std::vector<RowVectorPtr> shards{
       makeRowVector(
           schema->names(),
           {
@@ -1190,39 +1351,39 @@ TEST_F(FixedPointTest, shuffleByKey) {
               makeFlatVector<int64_t>({2, 20}),
           })};
 
-  // Builds worker d's node: the same plans for every worker, but its own
-  // pre-partitioned shard as the seed.  Plan 0 partitions this worker's shard
-  // by key into two partitions (the partition count, 2, is the worker count);
-  // plan 1 reads this worker's partition from the wired peers, sums each key,
-  // and writes this worker's shard back.
-  auto makeWorkerNode = [&](int32_t worker) -> core::PlanNodePtr {
-    auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-
-    // No convergence plan: the loop runs exactly maxIterations times.
-    return PlanBuilder(idGenerator)
-        .fixedPoint(
-            {std::make_shared<VectorStateDeclaration>(
-                "vals",
-                schema,
-                PlanBuilder(idGenerator).values({seeds[worker]}).planNode())},
-            {PlanBuilder(idGenerator)
-                 .stateSource("vals", schema)
-                 .partitionedOutput({"key"}, 2)
-                 .planNode(),
-             PlanBuilder(idGenerator)
-                 .exchange(schema, "Presto")
-                 .singleAggregation({"key"}, {"sum(val)"})
-                 .project({"key", "a0 AS val"})
-                 .planNode()},
-            ConvergenceConfig::withMaxIterations(3),
-            /*outputStateEntry=*/"vals")
-        .planNode();
-  };
+  // Plan 0 partitions this worker's shard by key into two partitions (the
+  // partition count, 2, is the worker count); plan 1 reads this worker's
+  // partition from the wired peers, sums each key, and writes this worker's
+  // shard back.
+  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  // No convergence plan: the loop runs exactly maxIterations times.
+  auto plan =
+      PlanBuilder(idGenerator)
+          .fixedPoint(
+              {std::make_shared<VectorStateDeclaration>(
+                  "values",
+                  schema,
+                  PlanBuilder(idGenerator).tableScan(schema).planNode())},
+              {PlanBuilder(idGenerator)
+                   .stateSource("values", schema)
+                   .partitionedOutput({"key"}, 2)
+                   .planNode(),
+               PlanBuilder(idGenerator)
+                   .exchange(schema, "Presto")
+                   .singleAggregation({"key"}, {"sum(val)"})
+                   .project({"key", "a0 AS val"})
+                   .planNode()},
+              ConvergenceConfig::withMaxIterations(3),
+              /*outputStateEntry=*/"values")
+          .planNode();
 
   // After every iteration the by-key sums are stable: key 0 -> 3, key 1 -> 30.
-  std::vector<std::pair<int64_t, int64_t>> expected{{0, 3}, {1, 30}};
+  std::vector<std::pair<int64_t, int64_t>> expected{
+      {0, 3},
+      {1, 30},
+  };
   EXPECT_THAT(
-      runViaTask(makeWorkerNode, exec::Task::ExecutionMode::kParallel),
+      unionRows(runOnWorkers(plan, shards)),
       testing::UnorderedElementsAreArray(expected));
 }
 
@@ -1238,60 +1399,45 @@ TEST_F(FixedPointTest, shuffleByKey) {
 // in lockstep.
 TEST_F(FixedPointTest, convergenceTwoWorkers) {
   auto schema = ROW({"key", "val"}, BIGINT());
-  auto moduloSpec = std::make_shared<ModuloPartitionFunctionSpec>();
 
-  // Pre-partitioned, balanced seeds: worker 0 owns key 0, worker 1 owns key 1
-  // (matching key % 2).  Both start at 8.
-  std::vector<RowVectorPtr> seeds{
-      makeRowVector(
-          schema->names(),
-          {
-              makeFlatVector<int64_t>({0}),
-              makeFlatVector<int64_t>({8}),
-          }),
-      makeRowVector(
-          schema->names(),
-          {
-              makeFlatVector<int64_t>({1}),
-              makeFlatVector<int64_t>({8}),
-          })};
-
-  auto makeWorkerNode = [&](int32_t worker) -> core::PlanNodePtr {
-    auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-
-    return PlanBuilder(idGenerator)
-        .fixedPoint(
-            {std::make_shared<VectorStateDeclaration>(
-                "vals",
-                schema,
-                PlanBuilder(idGenerator).values({seeds[worker]}).planNode())},
-            {// Plan 0 (produce): partition by key % 2 (stable: each key stays
-             // on its worker).  Plan 1 (consume): sum each key and halve it.
-             PlanBuilder(idGenerator)
-                 .stateSource("vals", schema)
-                 .partitionedOutput(
-                     {"key"}, 2, /*replicateNullsAndAny=*/false, moduloSpec)
-                 .planNode(),
-             PlanBuilder(idGenerator)
-                 .exchange(schema, "Presto")
-                 .singleAggregation({"key"}, {"sum(val)"})
-                 .project({"key", "a0 / 2 AS val"})
-                 .planNode()},
-            ConvergenceConfig::converging(
-                // Converge when this worker's shard has decayed to <= 1.
-                // Globally consistent here because both keys decay in lockstep.
-                // The threshold is 1 (not 0) so the converged result (value 1)
-                // differs from the max-iterations result (value 0), proving the
-                // loop actually stopped on convergence.
-                PlanBuilder(idGenerator)
-                    .stateSource("vals", schema)
-                    .singleAggregation({}, {"sum(val)"})
-                    .project({"a0 <= 1 AS converged"})
-                    .planNode(),
-                100),
-            /*outputStateEntry=*/"vals")
-        .planNode();
-  };
+  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan =
+      PlanBuilder(idGenerator)
+          .fixedPoint(
+              {std::make_shared<VectorStateDeclaration>(
+                  "values",
+                  schema,
+                  PlanBuilder(idGenerator).tableScan(schema).planNode())},
+              {// Plan 0 (produce): partition by key % 2 (stable: each key stays
+               // on its worker).  Plan 1 (consume): sum each key and halve it.
+               PlanBuilder(idGenerator)
+                   .stateSource("values", schema)
+                   .partitionedOutput(
+                       {"key"},
+                       2,
+                       /*replicateNullsAndAny=*/false,
+                       std::make_shared<ModuloPartitionFunctionSpec>())
+                   .planNode(),
+               PlanBuilder(idGenerator)
+                   .exchange(schema, "Presto")
+                   .singleAggregation({"key"}, {"sum(val)"})
+                   .project({"key", "a0 / 2 AS val"})
+                   .planNode()},
+              ConvergenceConfig::converging(
+                  // Converge when this worker's shard has decayed to <= 1.
+                  // Globally consistent here because both keys decay in
+                  // lockstep. The threshold is 1 (not 0) so the converged
+                  // result (value 1) differs from the max-iterations result
+                  // (value 0), proving the loop actually stopped on
+                  // convergence.
+                  PlanBuilder(idGenerator)
+                      .stateSource("values", schema)
+                      .singleAggregation({}, {"sum(val)"})
+                      .project({"a0 <= 1 AS converged"})
+                      .planNode(),
+                  100),
+              /*outputStateEntry=*/"values")
+          .planNode();
 
   // 8 -> 4 -> 2 -> 1: converges at value 1 after exactly three iterations.  The
   // third column is each worker's actual loop-iteration count; both must be 3.
@@ -1299,10 +1445,14 @@ TEST_F(FixedPointTest, convergenceTwoWorkers) {
   // decay to 0 -- so value 1 and iteration count 3 (not 0 and 100) confirm the
   // loop stopped on the synchronized convergence verdict.
   std::vector<std::tuple<int64_t, int64_t, int64_t>> expected{
-      {0, 1, 3}, {1, 1, 3}};
+      {0, 1, 3},
+      {1, 1, 3},
+  };
   EXPECT_THAT(
-      runViaTaskWithIterations(
-          makeWorkerNode, exec::Task::ExecutionMode::kParallel),
+      // Pre-partitioned, balanced: worker 0 owns key 0, worker 1 owns key 1
+      // (matching key % 2).  Both start at 8.
+      withIterations(
+          runOnWorkers(plan, {makeKeyValueRow(0, 8), makeKeyValueRow(1, 8)})),
       testing::UnorderedElementsAreArray(expected));
 }
 
@@ -1321,66 +1471,61 @@ TEST_F(FixedPointTest, allReduceOverReplicatedState) {
   constexpr int32_t kNumWorkers{2};
   auto schema = ROW({"key", "val"}, BIGINT());
   auto shuffleType = ROW({"destination", "val"}, BIGINT());
-  auto moduloSpec = std::make_shared<ModuloPartitionFunctionSpec>();
 
-  auto makeWorkerNode = [&](int32_t /*worker*/) -> core::PlanNodePtr {
-    auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-    // Built per worker: one RowVector shared by concurrently running
-    // workers races on the lazy-load memo RowVector::copy() touches.
-    // Every worker starts from the same replicated row.
-    auto seed = makeRowVector(
-        schema->names(),
-        {
-            makeFlatVector<int64_t>({0}),
-            makeFlatVector<int64_t>({1}),
-        });
-    // One row per destination; the cross join below turns a worker's single
-    // contribution into one copy addressed to each peer.
-    auto destinations =
-        makeRowVector({"destination"}, {makeFlatVector<int64_t>({0, 1})});
+  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  // One row per destination; the cross join below turns a worker's single
+  // contribution into one copy addressed to each peer.
+  auto destinations =
+      makeRowVector({"destination"}, {makeFlatVector<int64_t>({0, 1})});
 
-    return PlanBuilder(idGenerator)
-        .fixedPoint(
-            {std::make_shared<VectorStateDeclaration>(
-                "total",
-                schema,
-                PlanBuilder(idGenerator).values({seed}).planNode())},
-            {PlanBuilder(idGenerator)
-                 .stateSource("total", schema)
-                 .nestedLoopJoin(
-                     PlanBuilder(idGenerator).values({destinations}).planNode(),
-                     {"destination", "val"})
-                 .partitionedOutput(
-                     {"destination"},
-                     kNumWorkers,
-                     /*replicateNullsAndAny=*/false,
-                     moduloSpec)
-                 .planNode(),
-             // Sums every peer's contribution: the same total on every worker.
-             PlanBuilder(idGenerator)
-                 .exchange(shuffleType, "Presto")
-                 .singleAggregation({}, {"sum(val)"})
-                 .project({"CAST(0 AS BIGINT) AS key", "a0 AS val"})
-                 .planNode()},
-            ConvergenceConfig::converging(
-                PlanBuilder(idGenerator)
-                    .stateSource("total", schema)
-                    .project({"val >= 8 AS converged"})
-                    .planNode(),
-                100),
-            /*outputStateEntry=*/"total")
-        .planNode();
-  };
+  auto plan =
+      PlanBuilder(idGenerator)
+          .fixedPoint(
+              {std::make_shared<VectorStateDeclaration>(
+                  "total",
+                  schema,
+                  PlanBuilder(idGenerator).tableScan(schema).planNode())},
+              {PlanBuilder(idGenerator)
+                   .stateSource("total", schema)
+                   .nestedLoopJoin(
+                       PlanBuilder(idGenerator)
+                           .values({destinations})
+                           .planNode(),
+                       {"destination", "val"})
+                   .partitionedOutput(
+                       {"destination"},
+                       kNumWorkers,
+                       /*replicateNullsAndAny=*/false,
+                       std::make_shared<ModuloPartitionFunctionSpec>())
+                   .planNode(),
+               // Sums every peer's contribution: the same total on every
+               // worker.
+               PlanBuilder(idGenerator)
+                   .exchange(shuffleType, "Presto")
+                   .singleAggregation({}, {"sum(val)"})
+                   .project({"CAST(0 AS BIGINT) AS key", "a0 AS val"})
+                   .planNode()},
+              ConvergenceConfig::converging(
+                  PlanBuilder(idGenerator)
+                      .stateSource("total", schema)
+                      .project({"val >= 8 AS converged"})
+                      .planNode(),
+                  100),
+              /*outputStateEntry=*/"total")
+          .planNode();
 
   // Each iteration sums both workers' equal values, doubling the replicated
   // total: 1 -> 2 -> 4 -> 8, converging after exactly three iterations.  Both
   // workers must report the same value and the same iteration count -- the
   // property that keeps a replicated fixed point in lockstep.
   std::vector<std::tuple<int64_t, int64_t, int64_t>> expected{
-      {0, 8, 3}, {0, 8, 3}};
+      {0, 8, 3},
+      {0, 8, 3},
+  };
   EXPECT_THAT(
-      runViaTaskWithIterations(
-          makeWorkerNode, exec::Task::ExecutionMode::kParallel),
+      // Every worker starts from the same replicated row.
+      withIterations(
+          runOnWorkers(plan, {makeKeyValueRow(0, 1), makeKeyValueRow(0, 1)})),
       testing::UnorderedElementsAreArray(expected));
 }
 
@@ -1391,79 +1536,38 @@ TEST_F(FixedPointTest, allReduceOverReplicatedState) {
 // iteration just committed, reduced across workers.  It cannot be folded into
 // the body, because the last body plan's output *is* the committed state, so a
 // reducing stage placed after it would replace the state with the scalar.  The
-// convergence sequence therefore chains like the body -- replicate-by-expansion
-// producer, then an Exchange that sums every peer's partial -- and every worker
-// evaluates the same predicate on the same iteration, which is what keeps them
-// in lockstep.
+// convergence sequence therefore gathers every worker's partial to worker 0,
+// which sums them and shares its verdict, so both workers stop on the same
+// iteration.  No body shuffle gives this loop a width, so the test names it.
 TEST_F(FixedPointTest, convergenceShuffle) {
-  constexpr int32_t kNumWorkers{2};
   auto schema = ROW({"key", "val"}, BIGINT());
-  auto shuffleType = ROW({"destination", "partial"}, BIGINT());
-  auto moduloSpec = std::make_shared<ModuloPartitionFunctionSpec>();
 
-  auto makeWorkerNode = [&](int32_t worker) -> core::PlanNodePtr {
-    auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-    // Built per worker: one RowVector shared by concurrently running
-    // workers races on the lazy-load memo RowVector::copy() touches.
-    auto destinations =
-        makeRowVector({"destination"}, {makeFlatVector<int64_t>({0, 1})});
-
-    // Worker 0 starts at 0 and worker 1 at 10, so no local value ever equals
-    // the global sum and a local-only criterion could not agree across workers.
-    auto seed = makeRowVector(
-        schema->names(),
-        {
-            makeFlatVector<int64_t>({worker}),
-            makeFlatVector<int64_t>({worker * 10}),
-        });
-
-    return PlanBuilder(idGenerator)
-        .fixedPoint(
-            std::make_shared<VectorStateDeclaration>(
-                "vals",
-                schema,
-                PlanBuilder(idGenerator).values({seed}).planNode()),
-            PlanBuilder(idGenerator)
-                .stateSource("vals", schema)
-                .project({"key", "val + 1 AS val"}),
-            ConvergenceConfig::converging(
-                {// C0: this worker's partial, replicated to every peer by
-                 // expansion.
-                 PlanBuilder(idGenerator)
-                     .stateSource("vals", schema)
-                     .singleAggregation({}, {"sum(val)"})
-                     .project({"a0 AS partial"})
-                     .nestedLoopJoin(
-                         PlanBuilder(idGenerator)
-                             .values({destinations})
-                             .planNode(),
-                         {"destination", "partial"})
-                     .partitionedOutput(
-                         {"destination"},
-                         kNumWorkers,
-                         /*replicateNullsAndAny=*/false,
-                         moduloSpec)
-                     .planNode(),
-                 // C1: every worker sums every peer's partial and emits the
-                 // same verdict.
-                 PlanBuilder(idGenerator)
-                     .exchange(shuffleType, "Presto")
-                     .singleAggregation({}, {"sum(partial)"})
-                     .project({"a0 >= 16 AS converged"})
-                     .planNode()},
-                100),
-            /*outputStateEntry=*/"vals")
-        .planNode();
-  };
-
+  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan =
+      PlanBuilder(idGenerator)
+          .fixedPoint(
+              std::make_shared<VectorStateDeclaration>(
+                  "values",
+                  schema,
+                  PlanBuilder(idGenerator).tableScan(schema).planNode()),
+              PlanBuilder(idGenerator)
+                  .stateSource("values", schema)
+                  .project({"key", "val + 1 AS val"}),
+              sumVerdict(idGenerator, schema, "sum(val)", "total >= 16"),
+              /*outputStateEntry=*/"values")
+          .planNode();
+  // Worker 0 starts at 0 and worker 1 at 10, so no local value ever equals the
+  // global sum and a local-only criterion could not agree across workers.
   // Values move 0,10 -> 1,11 -> 2,12 -> 3,13; the global sum reaches 16 on the
   // third iteration.  Both workers stop there, on values (3 and 13) that differ
   // from each other and from the total.
   std::vector<std::tuple<int64_t, int64_t, int64_t>> expected{
-      {0, 3, 3}, {1, 13, 3}};
+      {0, 3, 3},
+      {1, 13, 3},
+  };
   EXPECT_THAT(
-      runViaTaskWithIterations(
-          makeWorkerNode, exec::Task::ExecutionMode::kParallel),
+      withIterations(
+          runOnWorkers(plan, {makeKeyValueRow(0, 0), makeKeyValueRow(1, 10)})),
       testing::UnorderedElementsAreArray(expected));
 }
 
@@ -1476,89 +1580,135 @@ TEST_F(FixedPointTest, convergenceShuffle) {
 TEST_F(FixedPointTest, shuffleInBodyAndConvergence) {
   constexpr int32_t kNumWorkers{2};
   auto schema = ROW({"key", "val"}, BIGINT());
-  auto shuffleType = ROW({"destination", "partial"}, BIGINT());
-  auto moduloSpec = std::make_shared<ModuloPartitionFunctionSpec>();
 
+  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan =
+      PlanBuilder(idGenerator)
+          .fixedPoint(
+              {
+                  std::make_shared<VectorStateDeclaration>(
+                      "values",
+                      schema,
+                      PlanBuilder(idGenerator).tableScan(schema).planNode()),
+              },
+              {
+                  // Body: re-partition by key % 2 (each key stays on
+                  // its worker), then halve.
+                  PlanBuilder(idGenerator)
+                      .stateSource("values", schema)
+                      .partitionedOutput(
+                          {"key"},
+                          kNumWorkers,
+                          /*replicateNullsAndAny=*/false,
+                          std::make_shared<ModuloPartitionFunctionSpec>())
+                      .planNode(),
+                  PlanBuilder(idGenerator)
+                      .exchange(schema, "Presto")
+                      .singleAggregation({"key"}, {"sum(val)"})
+                      .project({"key", "a0 / 2 AS val"})
+                      .planNode(),
+              },
+              sumVerdict(idGenerator, schema, "sum(val)", "total <= 2"),
+              /*outputStateEntry=*/"values")
+          .planNode();
   // Worker 0 owns key 0, worker 1 owns key 1; both start at 8.
-  std::vector<RowVectorPtr> seeds{
-      makeRowVector(
-          schema->names(),
-          {
-              makeFlatVector<int64_t>({0}),
-              makeFlatVector<int64_t>({8}),
-          }),
-      makeRowVector(
-          schema->names(),
-          {
-              makeFlatVector<int64_t>({1}),
-              makeFlatVector<int64_t>({8}),
-          })};
-
-  auto makeWorkerNode = [&](int32_t worker) -> core::PlanNodePtr {
-    auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-    // Built per worker: one RowVector shared by concurrently running
-    // workers races on the lazy-load memo RowVector::copy() touches.
-    auto destinations =
-        makeRowVector({"destination"}, {makeFlatVector<int64_t>({0, 1})});
-
-    return PlanBuilder(idGenerator)
-        .fixedPoint(
-            {std::make_shared<VectorStateDeclaration>(
-                "vals",
-                schema,
-                PlanBuilder(idGenerator).values({seeds[worker]}).planNode())},
-            {// Body: re-partition by key % 2 (each key stays on its worker),
-             // then halve.
-             PlanBuilder(idGenerator)
-                 .stateSource("vals", schema)
-                 .partitionedOutput(
-                     {"key"},
-                     kNumWorkers,
-                     /*replicateNullsAndAny=*/false,
-                     moduloSpec)
-                 .planNode(),
-             PlanBuilder(idGenerator)
-                 .exchange(schema, "Presto")
-                 .singleAggregation({"key"}, {"sum(val)"})
-                 .project({"key", "a0 / 2 AS val"})
-                 .planNode()},
-            ConvergenceConfig::converging(
-                {// Convergence: reduce the committed state across workers and
-                 // stop when the global sum reaches 2 (1 per worker).  No
-                 // worker can see that locally.
-                 PlanBuilder(idGenerator)
-                     .stateSource("vals", schema)
-                     .singleAggregation({}, {"sum(val)"})
-                     .project({"a0 AS partial"})
-                     .nestedLoopJoin(
-                         PlanBuilder(idGenerator)
-                             .values({destinations})
-                             .planNode(),
-                         {"destination", "partial"})
-                     .partitionedOutput(
-                         {"destination"},
-                         kNumWorkers,
-                         /*replicateNullsAndAny=*/false,
-                         moduloSpec)
-                     .planNode(),
-                 PlanBuilder(idGenerator)
-                     .exchange(shuffleType, "Presto")
-                     .singleAggregation({}, {"sum(partial)"})
-                     .project({"a0 <= 2 AS converged"})
-                     .planNode()},
-                100),
-            /*outputStateEntry=*/"vals")
-        .planNode();
-  };
-
   // 8 -> 4 -> 2 -> 1 per worker; the global sum reaches 2 after three
   // iterations, and both workers stop on the same one.
   std::vector<std::tuple<int64_t, int64_t, int64_t>> expected{
-      {0, 1, 3}, {1, 1, 3}};
+      {0, 1, 3},
+      {1, 1, 3},
+  };
   EXPECT_THAT(
-      runViaTaskWithIterations(
-          makeWorkerNode, exec::Task::ExecutionMode::kParallel),
+      withIterations(
+          runOnWorkers(plan, {makeKeyValueRow(0, 8), makeKeyValueRow(1, 8)})),
       testing::UnorderedElementsAreArray(expected));
+}
+
+// One row moves to the other worker every iteration, so each worker's delta is
+// empty every other iteration. The loop stops only when neither worker has new
+// rows.
+TEST_F(FixedPointTest, walkAcrossWorkers) {
+  constexpr int32_t kNumWorkers{2};
+  auto schema = ROW({"key", "val"}, BIGINT());
+
+  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan =
+      PlanBuilder(idGenerator)
+          .fixedPoint(
+              {
+                  std::make_shared<VectorStateDeclaration>(
+                      "values",
+                      schema,
+                      PlanBuilder(idGenerator).tableScan(schema).planNode(),
+                      /*append=*/true),
+              },
+              {
+                  PlanBuilder(idGenerator)
+                      .stateSource("values", schema)
+                      .filter("val > 0")
+                      .project({"key + 1 AS key", "val - 1 AS val"})
+                      .partitionedOutput(
+                          {"key"},
+                          kNumWorkers,
+                          /*replicateNullsAndAny=*/false,
+                          std::make_shared<ModuloPartitionFunctionSpec>())
+                      .planNode(),
+                  PlanBuilder(idGenerator)
+                      .exchange(schema, "Presto")
+                      .planNode(),
+              },
+              sumVerdict(idGenerator, schema, "count(*)", "total = 0"),
+              /*outputStateEntry=*/"values")
+          .planNode();
+  // Worker 0 starts the walk at key 0 with a budget of 3.  Worker 1's row has
+  // no budget, so it stays.
+  // (0, 3) on worker 0 -> (1, 2) on worker 1 -> (2, 1) on worker 0 -> (3, 0)
+  // on worker 1; the fourth iteration adds no row, and both workers stop
+  // there.
+  std::vector<std::tuple<int64_t, int64_t, int64_t>> expected{
+      {0, 3, 4},
+      {2, 1, 4},
+      {1, 0, 4},
+      {1, 2, 4},
+      {3, 0, 4},
+  };
+  EXPECT_THAT(
+      withIterations(
+          runOnWorkers(plan, {makeKeyValueRow(0, 3), makeKeyValueRow(1, 0)})),
+      testing::UnorderedElementsAreArray(expected));
+}
+
+// Worker 0 computes the verdict and stops.  A worker that cannot receive the
+// verdict fails with the coordinator's error.
+TEST_F(FixedPointTest, verdictUnavailable) {
+  auto schema = ROW({"key", "val"}, BIGINT());
+
+  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan =
+      PlanBuilder(idGenerator)
+          .fixedPoint(
+              std::make_shared<VectorStateDeclaration>(
+                  "values",
+                  schema,
+                  PlanBuilder(idGenerator).tableScan(schema).planNode()),
+              PlanBuilder(idGenerator)
+                  .stateSource("values", schema)
+                  .project({"key", "val + 1 AS val"}),
+              sumVerdict(idGenerator, schema, "sum(val)", "total >= 0"),
+              /*outputStateEntry=*/"values")
+          .planNode();
+
+  auto options = localOptions();
+  options.awaitVerdict = [](const WorkerAddress& /*self*/,
+                            int32_t /*iteration*/) {
+    return folly::makeSemiFuture<bool>(
+        std::runtime_error("Worker 0 is unreachable"));
+  };
+  VELOX_ASSERT_THROW(
+      runOnWorkers(
+          plan, {makeKeyValueRow(0, 0), makeKeyValueRow(1, 0)}, options),
+      "Failed to receive the convergence verdict from worker 0 for iteration "
+      "0: std::runtime_error: Worker 0 is unreachable");
 }
 
 // A complete KMeans, expressed with ordinary relational nodes -- no imperative
@@ -1724,7 +1874,6 @@ TEST_F(FixedPointTest, kMeansTwoWorkers) {
   // columns) collects the centroid positions.
   auto centroidsType = ROW({"cx", "cy", "slot", "movement"}, BIGINT());
   auto shuffleType = ROW({"destination", "slot", "sx", "sy", "cnt"}, BIGINT());
-  auto moduloSpec = std::make_shared<ModuloPartitionFunctionSpec>();
 
   // The coordinator pre-shards the points: worker 0 owns the cluster near
   // (100, 100), worker 1 the cluster near (800, 800).  Coordinates are scaled
@@ -1745,114 +1894,116 @@ TEST_F(FixedPointTest, kMeansTwoWorkers) {
               makeFlatVector<int64_t>({800, 800, 900}),
           })};
 
-  auto makeWorkerNode = [&](int32_t worker) -> core::PlanNodePtr {
-    auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-    // Built per worker: one RowVector shared by concurrently running
-    // workers races on the lazy-load memo RowVector::copy() touches.
-    // Replicated seeds, identical on every worker; slot 2 again draws no
-    // points.
-    auto centroidRows = makeRowVector(
-        centroidsType->names(),
-        {
-            makeFlatVector<int64_t>({200, 800, 10000}),
-            makeFlatVector<int64_t>({100, 800, 10000}),
-            makeFlatVector<int64_t>({0, 1, 2}),
-            makeFlatVector<int64_t>({0, 0, 0}),
-        });
-    auto destinations =
-        makeRowVector({"destination"}, {makeFlatVector<int64_t>({0, 1})});
+  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  // Replicated seeds, identical on every worker; slot 2 again draws no
+  // points.
+  auto centroidRows = makeRowVector(
+      centroidsType->names(),
+      {
+          makeFlatVector<int64_t>({200, 800, 10000}),
+          makeFlatVector<int64_t>({100, 800, 10000}),
+          makeFlatVector<int64_t>({0, 1, 2}),
+          makeFlatVector<int64_t>({0, 0, 0}),
+      });
+  auto destinations =
+      makeRowVector({"destination"}, {makeFlatVector<int64_t>({0, 1})});
 
-    return PlanBuilder(idGenerator)
-        .fixedPoint(
-            {std::make_shared<VectorStateDeclaration>(
-                 "points",
-                 pointsType,
-                 PlanBuilder(idGenerator)
-                     .values({pointShards[worker]})
-                     .planNode()),
-             std::make_shared<VectorStateDeclaration>(
-                 "centroids",
-                 centroidsType,
-                 PlanBuilder(idGenerator).values({centroidRows}).planNode())},
-            std::vector<core::PlanNodePtr>{
-                // Plan 0: assign this worker's points, reduce to per-slot local
-                // statistics, then replicate them once per destination so every
-                // peer receives them.
-                PlanBuilder(idGenerator)
-                    .stateSource("points", pointsType)
-                    .nestedLoopJoin(
-                        PlanBuilder(idGenerator)
-                            .stateSource("centroids", centroidsType)
-                            .planNode(),
-                        {"point_id", "x", "y", "slot", "cx", "cy"})
-                    .project(
-                        {"point_id",
-                         "x",
-                         "y",
-                         "slot",
-                         "(x - cx) * (x - cx) + (y - cy) * (y - cy) AS d2"})
-                    .singleAggregation(
-                        {"point_id"},
-                        {"min_by(slot, d2) AS slot",
-                         "min(x) AS x",
-                         "min(y) AS y"})
-                    .singleAggregation(
-                        {"slot"},
-                        {"sum(x) AS sx", "sum(y) AS sy", "count(1) AS cnt"})
-                    .nestedLoopJoin(
-                        PlanBuilder(idGenerator)
-                            .values({destinations})
-                            .planNode(),
-                        {"destination", "slot", "sx", "sy", "cnt"})
-                    .partitionedOutput(
-                        {"destination"},
-                        kNumWorkers,
-                        /*replicateNullsAndAny=*/false,
-                        moduloSpec)
-                    .planNode(),
-                // Plan 1: sum every worker's statistics -- the same totals on
-                // each worker -- then install the new centroids, keeping the
-                // old one where a slot drew no points anywhere.
-                PlanBuilder(idGenerator)
-                    .exchange(shuffleType, "Presto")
-                    .singleAggregation(
-                        {"slot"},
-                        {"sum(sx) AS gsx",
-                         "sum(sy) AS gsy",
-                         "sum(cnt) AS gcnt"})
-                    .hashJoin(
-                        {"slot"},
-                        {"old_slot"},
-                        PlanBuilder(idGenerator)
-                            .stateSource("centroids", centroidsType)
-                            .project(
-                                {"slot AS old_slot",
-                                 "cx AS old_cx",
-                                 "cy AS old_cy"})
-                            .planNode(),
-                        "",
-                        {"old_slot", "old_cx", "old_cy", "gsx", "gsy", "gcnt"},
-                        core::JoinType::kRight)
-                    .project(
-                        {"coalesce(gsx / gcnt, old_cx) AS cx",
-                         "coalesce(gsy / gcnt, old_cy) AS cy",
-                         "old_slot AS slot",
-                         "coalesce("
-                         "(gsx / gcnt - old_cx) * (gsx / gcnt - old_cx) + "
-                         "(gsy / gcnt - old_cy) * (gsy / gcnt - old_cy), 0) AS "
-                         "movement"})
-                    .planNode()},
-            ConvergenceConfig::converging(
-                // Exact integer test: no centroid moved.
-                PlanBuilder(idGenerator)
-                    .stateSource("centroids", centroidsType)
-                    .singleAggregation({}, {"max(movement)"})
-                    .project({"a0 = 0 AS converged"})
-                    .planNode(),
-                20),
-            /*outputStateEntry=*/"centroids")
-        .planNode();
-  };
+  auto plan =
+      PlanBuilder(idGenerator)
+          .fixedPoint(
+              {std::make_shared<VectorStateDeclaration>(
+                   "points",
+                   pointsType,
+                   PlanBuilder(idGenerator).tableScan(pointsType).planNode()),
+               std::make_shared<VectorStateDeclaration>(
+                   "centroids",
+                   centroidsType,
+                   PlanBuilder(idGenerator).values({centroidRows}).planNode())},
+              std::vector<core::PlanNodePtr>{
+                  // Plan 0: assign this worker's points, reduce to per-slot
+                  // local
+                  // statistics, then replicate them once per destination so
+                  // every
+                  // peer receives them.
+                  PlanBuilder(idGenerator)
+                      .stateSource("points", pointsType)
+                      .nestedLoopJoin(
+                          PlanBuilder(idGenerator)
+                              .stateSource("centroids", centroidsType)
+                              .planNode(),
+                          {"point_id", "x", "y", "slot", "cx", "cy"})
+                      .project(
+                          {"point_id",
+                           "x",
+                           "y",
+                           "slot",
+                           "(x - cx) * (x - cx) + (y - cy) * (y - cy) AS d2"})
+                      .singleAggregation(
+                          {"point_id"},
+                          {"min_by(slot, d2) AS slot",
+                           "min(x) AS x",
+                           "min(y) AS y"})
+                      .singleAggregation(
+                          {"slot"},
+                          {"sum(x) AS sx", "sum(y) AS sy", "count(1) AS cnt"})
+                      .nestedLoopJoin(
+                          PlanBuilder(idGenerator)
+                              .values({destinations})
+                              .planNode(),
+                          {"destination", "slot", "sx", "sy", "cnt"})
+                      .partitionedOutput(
+                          {"destination"},
+                          kNumWorkers,
+                          /*replicateNullsAndAny=*/false,
+                          std::make_shared<ModuloPartitionFunctionSpec>())
+                      .planNode(),
+                  // Plan 1: sum every worker's statistics -- the same totals on
+                  // each worker -- then install the new centroids, keeping the
+                  // old one where a slot drew no points anywhere.
+                  PlanBuilder(idGenerator)
+                      .exchange(shuffleType, "Presto")
+                      .singleAggregation(
+                          {"slot"},
+                          {"sum(sx) AS gsx",
+                           "sum(sy) AS gsy",
+                           "sum(cnt) AS gcnt"})
+                      .hashJoin(
+                          {"slot"},
+                          {"old_slot"},
+                          PlanBuilder(idGenerator)
+                              .stateSource("centroids", centroidsType)
+                              .project(
+                                  {"slot AS old_slot",
+                                   "cx AS old_cx",
+                                   "cy AS old_cy"})
+                              .planNode(),
+                          "",
+                          {"old_slot",
+                           "old_cx",
+                           "old_cy",
+                           "gsx",
+                           "gsy",
+                           "gcnt"},
+                          core::JoinType::kRight)
+                      .project(
+                          {"coalesce(gsx / gcnt, old_cx) AS cx",
+                           "coalesce(gsy / gcnt, old_cy) AS cy",
+                           "old_slot AS slot",
+                           "coalesce("
+                           "(gsx / gcnt - old_cx) * (gsx / gcnt - old_cx) + "
+                           "(gsy / gcnt - old_cy) * (gsy / gcnt - old_cy), 0) AS "
+                           "movement"})
+                      .planNode()},
+              ConvergenceConfig::converging(
+                  // Exact integer test: no centroid moved.
+                  PlanBuilder(idGenerator)
+                      .stateSource("centroids", centroidsType)
+                      .singleAggregation({}, {"max(movement)"})
+                      .project({"a0 = 0 AS converged"})
+                      .planNode(),
+                  20),
+              /*outputStateEntry=*/"centroids")
+          .planNode();
 
   // Neither worker can reach these alone: worker 0 holds no point near
   // (833, 833) and worker 1 none near (133, 133), so each centroid proves the
@@ -1864,10 +2015,10 @@ TEST_F(FixedPointTest, kMeansTwoWorkers) {
       {833, 833, 2},
       {833, 833, 2},
       {10000, 10000, 2},
-      {10000, 10000, 2}};
+      {10000, 10000, 2},
+  };
   EXPECT_THAT(
-      runViaTaskWithIterations(
-          makeWorkerNode, exec::Task::ExecutionMode::kParallel),
+      withIterations(runOnWorkers(plan, pointShards)),
       testing::UnorderedElementsAreArray(expected));
 }
 
@@ -1891,42 +2042,42 @@ TEST_F(FixedPointTest, initialPlanReceivesShuffle) {
 
   // Every worker runs the same node; its shard arrives from the upstream, not a
   // local seed.
-  auto makeWorkerNode = [&](int32_t /*worker*/) -> core::PlanNodePtr {
-    auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-
-    // No convergence plan: the loop runs a few iterations of peer shuffle.
-    return PlanBuilder(idGenerator)
-        .fixedPoint(
-            {std::make_shared<VectorStateDeclaration>(
-                "vals",
-                schema,
-                // Initial plan: receive this worker's shard via shuffle from
-                // the upstream.
-                PlanBuilder(idGenerator)
-                    .exchange(schema, "Presto")
-                    .planNode())},
-            {// Body: shuffle by key among peers and sum each key (as in
-             // shuffleByKey).
-             PlanBuilder(idGenerator)
-                 .stateSource("vals", schema)
-                 .partitionedOutput({"key"}, 2)
-                 .planNode(),
-             PlanBuilder(idGenerator)
-                 .exchange(schema, "Presto")
-                 .singleAggregation({"key"}, {"sum(val)"})
-                 .project({"key", "a0 AS val"})
-                 .planNode()},
-            ConvergenceConfig::withMaxIterations(3),
-            /*outputStateEntry=*/"vals")
-        .planNode();
-  };
+  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  // No convergence plan: the loop runs a few iterations of peer shuffle.
+  auto plan = PlanBuilder(idGenerator)
+                  .fixedPoint(
+                      {std::make_shared<VectorStateDeclaration>(
+                          "values",
+                          schema,
+                          // Initial plan: receive this worker's shard via
+                          // shuffle from the upstream.
+                          PlanBuilder(idGenerator)
+                              .exchange(schema, "Presto")
+                              .planNode())},
+                      {// Body: shuffle by key among peers and sum each key (as
+                       // in shuffleByKey).
+                       PlanBuilder(idGenerator)
+                           .stateSource("values", schema)
+                           .partitionedOutput({"key"}, 2)
+                           .planNode(),
+                       PlanBuilder(idGenerator)
+                           .exchange(schema, "Presto")
+                           .singleAggregation({"key"}, {"sum(val)"})
+                           .project({"key", "a0 AS val"})
+                           .planNode()},
+                      ConvergenceConfig::withMaxIterations(3),
+                      /*outputStateEntry=*/"values")
+                  .planNode();
 
   // The upstream delivers the seed; the by-key peer shuffle sums each key:
   // key 0 -> 1+2 = 3, key 1 -> 10+20 = 30, regardless of the upstream's split.
-  std::vector<std::pair<int64_t, int64_t>> expected{{0, 3}, {1, 30}};
+  std::vector<std::pair<int64_t, int64_t>> expected{
+      {0, 3},
+      {1, 30},
+  };
   EXPECT_THAT(
       runViaTask(
-          makeWorkerNode,
+          plan,
           // Upstream producer: the full seed, partitioned by key across the
           // workers.
           PlanBuilder().values({seed}).partitionedOutput({"key"}, 2),
@@ -1958,13 +2109,13 @@ TEST_F(FixedPointTest, upstreamSplits) {
   auto plan = PlanBuilder(idGenerator)
                   .fixedPoint(
                       std::make_shared<VectorStateDeclaration>(
-                          "vals",
+                          "values",
                           schema,
                           PlanBuilder(idGenerator)
                               .exchange(schema, "Presto")
                               .capturePlanNodeId(exchangeId)
                               .planNode()),
-                      PlanBuilder(idGenerator).stateSource("vals", schema),
+                      PlanBuilder(idGenerator).stateSource("values", schema),
                       ConvergenceConfig::withMaxIterations(1))
                   .planNode();
 
@@ -1999,11 +2150,11 @@ TEST_F(FixedPointTest, partitionedOutputAboveLoop) {
       PlanBuilder(idGenerator)
           .fixedPoint(
               std::make_shared<VectorStateDeclaration>(
-                  "vals",
+                  "values",
                   schema,
                   PlanBuilder(idGenerator).values({seed}).planNode()),
               PlanBuilder(idGenerator)
-                  .stateSource("vals", schema)
+                  .stateSource("values", schema)
                   .project({"key", "val + 1 AS val"}),
               ConvergenceConfig::withMaxIterations(2))
           .planNode();
@@ -2057,14 +2208,14 @@ TEST_F(FixedPointTest, independentTasks) {
   auto plan = PlanBuilder(idGenerator)
                   .fixedPoint(
                       std::make_shared<VectorStateDeclaration>(
-                          "vals",
+                          "values",
                           schema,
                           PlanBuilder(idGenerator)
                               .exchange(schema, "Presto")
                               .capturePlanNodeId(exchangeId)
                               .planNode()),
                       PlanBuilder(idGenerator)
-                          .stateSource("vals", schema)
+                          .stateSource("values", schema)
                           .project({"key", "val + 1 AS val"}),
                       ConvergenceConfig::withMaxIterations(2))
                   .planNode();
@@ -2123,34 +2274,31 @@ TEST_F(FixedPointTest, initialPlanTableScan) {
   // Every worker runs the same node; its shard comes from the table, not a
   // local seed.
   core::PlanNodeId scanId;
-  auto makeWorkerNode = [&](int32_t /*worker*/) -> core::PlanNodePtr {
-    auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-
-    return PlanBuilder(idGenerator)
-        .fixedPoint(
-            {std::make_shared<VectorStateDeclaration>(
-                "vals",
-                schema,
-                // Initial plan: read this worker's shard from its assigned file
-                // split.
-                PlanBuilder(idGenerator)
-                    .tableScan(schema)
-                    .capturePlanNodeId(scanId)
-                    .planNode())},
-            {// Body: shuffle by key among peers and sum each key.
-             PlanBuilder(idGenerator)
-                 .stateSource("vals", schema)
-                 .partitionedOutput({"key"}, 2)
-                 .planNode(),
-             PlanBuilder(idGenerator)
-                 .exchange(schema, "Presto")
-                 .singleAggregation({"key"}, {"sum(val)"})
-                 .project({"key", "a0 AS val"})
-                 .planNode()},
-            ConvergenceConfig::withMaxIterations(3),
-            /*outputStateEntry=*/"vals")
-        .planNode();
-  };
+  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan = PlanBuilder(idGenerator)
+                  .fixedPoint(
+                      {std::make_shared<VectorStateDeclaration>(
+                          "values",
+                          schema,
+                          // Initial plan: read this worker's shard from its
+                          // assigned file split.
+                          PlanBuilder(idGenerator)
+                              .tableScan(schema)
+                              .capturePlanNodeId(scanId)
+                              .planNode())},
+                      {// Body: shuffle by key among peers and sum each key.
+                       PlanBuilder(idGenerator)
+                           .stateSource("values", schema)
+                           .partitionedOutput({"key"}, 2)
+                           .planNode(),
+                       PlanBuilder(idGenerator)
+                           .exchange(schema, "Presto")
+                           .singleAggregation({"key"}, {"sum(val)"})
+                           .project({"key", "a0 AS val"})
+                           .planNode()},
+                      ConvergenceConfig::withMaxIterations(3),
+                      /*outputStateEntry=*/"values")
+                  .planNode();
 
   // Each worker scans its own file via TableScan; the by-key peer shuffle sums
   // each key: key 0 -> 1+2 = 3, key 1 -> 10+20 = 30.
@@ -2159,10 +2307,13 @@ TEST_F(FixedPointTest, initialPlanTableScan) {
     return {{scanId, hiveSplit(filePaths[worker])}};
   };
 
-  std::vector<std::pair<int64_t, int64_t>> expected{{0, 3}, {1, 30}};
+  std::vector<std::pair<int64_t, int64_t>> expected{
+      {0, 3},
+      {1, 30},
+  };
   EXPECT_THAT(
       unionRows(runWorkers(
-          makeWorkerNode,
+          plan,
           exec::Task::ExecutionMode::kParallel,
           /*upstreamPlan=*/nullptr,
           initSplitsFor)),
@@ -2197,47 +2348,44 @@ TEST_F(FixedPointTest, twoScannedInitialPlans) {
 
   core::PlanNodeId valuesScanId;
   core::PlanNodeId stepsScanId;
-  auto makeWorkerNode = [&](int32_t /*worker*/) -> core::PlanNodePtr {
-    auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-
-    return PlanBuilder(idGenerator)
-        .fixedPoint(
-            {std::make_shared<VectorStateDeclaration>(
-                 "vals",
-                 valuesSchema,
-                 PlanBuilder(idGenerator)
-                     .tableScan(valuesSchema)
-                     .capturePlanNodeId(valuesScanId)
-                     .planNode()),
-             std::make_shared<VectorStateDeclaration>(
-                 "steps",
-                 stepsSchema,
-                 PlanBuilder(idGenerator)
-                     .tableScan(stepsSchema)
-                     .capturePlanNodeId(stepsScanId)
-                     .planNode())},
-            // Each iteration adds the per-key step, which only exists if
-            // 'steps' was seeded from its own file.
-            PlanBuilder(idGenerator)
-                .stateSource("vals", valuesSchema)
-                .hashJoin(
-                    {"key"},
-                    {"skey"},
-                    PlanBuilder(idGenerator)
-                        .stateSource("steps", stepsSchema)
-                        .planNode(),
-                    "",
-                    {"key", "val", "delta"})
-                .project({"key", "val + delta AS val"}),
-            ConvergenceConfig::converging(
-                PlanBuilder(idGenerator)
-                    .stateSource("vals", valuesSchema)
-                    .project({"val >= 21 AS converged"})
-                    .planNode(),
-                100),
-            /*outputStateEntry=*/"vals")
-        .planNode();
-  };
+  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan = PlanBuilder(idGenerator)
+                  .fixedPoint(
+                      {std::make_shared<VectorStateDeclaration>(
+                           "values",
+                           valuesSchema,
+                           PlanBuilder(idGenerator)
+                               .tableScan(valuesSchema)
+                               .capturePlanNodeId(valuesScanId)
+                               .planNode()),
+                       std::make_shared<VectorStateDeclaration>(
+                           "steps",
+                           stepsSchema,
+                           PlanBuilder(idGenerator)
+                               .tableScan(stepsSchema)
+                               .capturePlanNodeId(stepsScanId)
+                               .planNode())},
+                      // Each iteration adds the per-key step, which only exists
+                      // if 'steps' was seeded from its own file.
+                      PlanBuilder(idGenerator)
+                          .stateSource("values", valuesSchema)
+                          .hashJoin(
+                              {"key"},
+                              {"skey"},
+                              PlanBuilder(idGenerator)
+                                  .stateSource("steps", stepsSchema)
+                                  .planNode(),
+                              "",
+                              {"key", "val", "delta"})
+                          .project({"key", "val + delta AS val"}),
+                      ConvergenceConfig::converging(
+                          PlanBuilder(idGenerator)
+                              .stateSource("values", valuesSchema)
+                              .project({"val >= 21 AS converged"})
+                              .planNode(),
+                          100),
+                      /*outputStateEntry=*/"values")
+                  .planNode();
 
   auto initSplitsFor = [&](int32_t /*worker*/)
       -> std::vector<std::pair<core::PlanNodeId, exec::Split>> {
@@ -2248,10 +2396,12 @@ TEST_F(FixedPointTest, twoScannedInitialPlans) {
 
   // val walks 1 -> 11 -> 21 in steps of delta=10, so both states were seeded
   // from the right file.
-  std::vector<std::pair<int64_t, int64_t>> expected{{0, 21}};
+  std::vector<std::pair<int64_t, int64_t>> expected{
+      {0, 21},
+  };
   EXPECT_THAT(
       unionRows(runWorkers(
-          makeWorkerNode,
+          plan,
           exec::Task::ExecutionMode::kParallel,
           /*upstreamPlan=*/nullptr,
           initSplitsFor)),
@@ -2290,54 +2440,57 @@ TEST_F(FixedPointTest, initialPlanMixesExchangeAndScan) {
   auto moduloSpec = std::make_shared<ModuloPartitionFunctionSpec>();
 
   core::PlanNodeId stepsScanId;
-  auto makeWorkerNode = [&](int32_t /*worker*/) -> core::PlanNodePtr {
-    auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-
-    return PlanBuilder(idGenerator)
-        .fixedPoint(
-            {
-                std::make_shared<VectorStateDeclaration>(
-                    "vals",
-                    valuesSchema,
-                    PlanBuilder(idGenerator)
-                        .exchange(valuesSchema, "Presto")
-                        .planNode()),
-                std::make_shared<VectorStateDeclaration>(
-                    "steps",
-                    stepsSchema,
-                    PlanBuilder(idGenerator)
-                        .tableScan(stepsSchema)
-                        .capturePlanNodeId(stepsScanId)
-                        .planNode()),
-            },
-            {
-                PlanBuilder(idGenerator)
-                    .stateSource("vals", valuesSchema)
-                    .partitionedOutput(
-                        {"key"}, 2, /*replicateNullsAndAny=*/false, moduloSpec)
-                    .planNode(),
-                PlanBuilder(idGenerator)
-                    .exchange(valuesSchema, "Presto")
-                    .singleAggregation({"key"}, {"sum(val)"})
-                    .project({"key", "a0 AS val"})
-                    .hashJoin(
-                        {"key"},
-                        {"skey"},
-                        PlanBuilder(idGenerator)
-                            .stateSource("steps", stepsSchema)
-                            .planNode(),
-                        "",
-                        {"key", "val", "delta"})
-                    .project({"key", "val + delta AS val"})
-                    .planNode(),
-            },
-            ConvergenceConfig::withMaxIterations(1),
-            /*outputStateEntry=*/"vals")
-        .planNode();
-  };
+  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan = PlanBuilder(idGenerator)
+                  .fixedPoint(
+                      {
+                          std::make_shared<VectorStateDeclaration>(
+                              "values",
+                              valuesSchema,
+                              PlanBuilder(idGenerator)
+                                  .exchange(valuesSchema, "Presto")
+                                  .planNode()),
+                          std::make_shared<VectorStateDeclaration>(
+                              "steps",
+                              stepsSchema,
+                              PlanBuilder(idGenerator)
+                                  .tableScan(stepsSchema)
+                                  .capturePlanNodeId(stepsScanId)
+                                  .planNode()),
+                      },
+                      {
+                          PlanBuilder(idGenerator)
+                              .stateSource("values", valuesSchema)
+                              .partitionedOutput(
+                                  {"key"},
+                                  2,
+                                  /*replicateNullsAndAny=*/false,
+                                  moduloSpec)
+                              .planNode(),
+                          PlanBuilder(idGenerator)
+                              .exchange(valuesSchema, "Presto")
+                              .singleAggregation({"key"}, {"sum(val)"})
+                              .project({"key", "a0 AS val"})
+                              .hashJoin(
+                                  {"key"},
+                                  {"skey"},
+                                  PlanBuilder(idGenerator)
+                                      .stateSource("steps", stepsSchema)
+                                      .planNode(),
+                                  "",
+                                  {"key", "val", "delta"})
+                              .project({"key", "val + delta AS val"})
+                              .planNode(),
+                      },
+                      ConvergenceConfig::withMaxIterations(1),
+                      /*outputStateEntry=*/"values")
+                  .planNode();
 
   // key 0: 1+2 = 3, plus its step 100 -> 103.  key 1: 10+20 = 30, plus 200.
-  std::vector<std::pair<int64_t, int64_t>> expected{{0, 103}, {1, 230}};
+  std::vector<std::pair<int64_t, int64_t>> expected{
+      {0, 103},
+      {1, 230},
+  };
 
   // Upstream producer feeding the Exchange-backed state.
   auto seed = makeRowVector(
@@ -2351,7 +2504,7 @@ TEST_F(FixedPointTest, initialPlanMixesExchangeAndScan) {
 
   EXPECT_THAT(
       unionRows(runWorkers(
-          makeWorkerNode,
+          plan,
           exec::Task::ExecutionMode::kParallel,
           &upstreamPlan,
           [&](int32_t worker)
@@ -2369,7 +2522,9 @@ TEST_F(FixedPointTest, initialPlanMixesExchangeAndScan) {
 // (key=0, val) and the body increments val each iteration until it reaches 3.
 TEST_F(FixedPointTest, countingLoopBothModes) {
   // 0 -> 1 -> 2 -> 3: converges at val 3.
-  std::vector<std::pair<int64_t, int64_t>> expected{{0, 3}};
+  std::vector<std::pair<int64_t, int64_t>> expected{
+      {0, 3},
+  };
   expectBothModes(countingNode(), expected);
 }
 
@@ -2381,25 +2536,35 @@ TEST_F(FixedPointTest, iterationMaxDriversScalesTheBody) {
   auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   auto plan = PlanBuilder(idGenerator)
                   .fixedPoint(
-                      core::VectorState("vals", schema)
+                      core::VectorState("values", schema)
                           .initial(PlanBuilder(idGenerator)
                                        .values(makeOneRowBatches(4))
                                        .planNode()),
                       PlanBuilder(idGenerator)
-                          .stateSource("vals", schema)
+                          .stateSource("values", schema)
                           .partialAggregation({"key"}, {"count(1) AS val"}),
                       ConvergenceConfig::withMaxIterations(1))
                   .planNode();
 
-  const std::vector<std::pair<int64_t, int64_t>> perDriver{
-      {0, 1}, {0, 1}, {0, 1}, {0, 1}};
-  EXPECT_THAT(
-      runWithDrivers(plan, /*maxDrivers=*/4, /*iterationMaxDrivers=*/4),
-      testing::UnorderedElementsAreArray(perDriver));
-  const std::vector<std::pair<int64_t, int64_t>> singleDriver{{0, 4}};
-  EXPECT_THAT(
-      runWithDrivers(plan, /*maxDrivers=*/4, /*iterationMaxDrivers=*/1),
-      testing::UnorderedElementsAreArray(singleDriver));
+  {
+    const std::vector<std::pair<int64_t, int64_t>> expected{
+        {0, 1},
+        {0, 1},
+        {0, 1},
+        {0, 1},
+    };
+    EXPECT_THAT(
+        runWithDrivers(plan, /*maxDrivers=*/4, /*iterationMaxDrivers=*/4),
+        testing::UnorderedElementsAreArray(expected));
+  }
+  {
+    const std::vector<std::pair<int64_t, int64_t>> expected{
+        {0, 4},
+    };
+    EXPECT_THAT(
+        runWithDrivers(plan, /*maxDrivers=*/4, /*iterationMaxDrivers=*/1),
+        testing::UnorderedElementsAreArray(expected));
+  }
 }
 
 // The plans of a chain run at the same time and share the driver budget: with
@@ -2411,21 +2576,24 @@ TEST_F(FixedPointTest, chainSharesIterationDrivers) {
   auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
 
   const std::vector<std::pair<int64_t, int64_t>> expected{
-      {0, 1}, {0, 1}, {0, 2}};
+      {0, 1},
+      {0, 1},
+      {0, 2},
+  };
   EXPECT_THAT(
       runWithDrivers(
           PlanBuilder(idGenerator)
               .fixedPoint(
                   std::vector<StateDeclarationPtr>{
                       std::make_shared<VectorStateDeclaration>(
-                          "vals",
+                          "values",
                           schema,
                           PlanBuilder(idGenerator)
                               .values(makeOneRowBatches(4))
                               .planNode())},
                   std::vector<core::PlanNodePtr>{
                       PlanBuilder(idGenerator)
-                          .stateSource("vals", schema)
+                          .stateSource("values", schema)
                           .partialAggregation({"key"}, {"count(1) AS val"})
                           .partitionedOutput({}, 1)
                           .planNode(),
@@ -2433,7 +2601,7 @@ TEST_F(FixedPointTest, chainSharesIterationDrivers) {
                           .exchange(schema, "Presto")
                           .planNode()},
                   ConvergenceConfig::withMaxIterations(1),
-                  /*outputStateEntry=*/"vals")
+                  /*outputStateEntry=*/"values")
               .planNode(),
           /*maxDrivers=*/5,
           /*iterationMaxDrivers=*/5),
@@ -2447,21 +2615,25 @@ TEST_F(FixedPointTest, convergenceVerdictStaysSingleDriver) {
   auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
 
   const std::vector<std::pair<int64_t, int64_t>> expected{
-      {0, 0}, {0, 1}, {0, 2}, {0, 3}};
+      {0, 0},
+      {0, 1},
+      {0, 2},
+      {0, 3},
+  };
   EXPECT_THAT(
       runWithDrivers(
           PlanBuilder(idGenerator)
               .fixedPoint(
-                  core::VectorState("vals", schema)
+                  core::VectorState("values", schema)
                       .initial(PlanBuilder(idGenerator)
                                    .values(makeOneRowBatches(4))
                                    .planNode()),
                   PlanBuilder(idGenerator)
-                      .stateSource("vals", schema)
+                      .stateSource("values", schema)
                       .project({"key", "val"}),
                   ConvergenceConfig::converging(
                       PlanBuilder(idGenerator)
-                          .stateSource("vals", schema)
+                          .stateSource("values", schema)
                           .singleAggregation({}, {"count(1)"})
                           .project({"a0 = 4 AS converged"})
                           .planNode(),
@@ -2478,25 +2650,29 @@ TEST_F(FixedPointTest, trailingNodesUseTaskDrivers) {
   auto schema = ROW({"key", "val"}, BIGINT());
   auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
 
-  const std::vector<std::pair<int64_t, int64_t>> perDriver{
-      {0, 1}, {0, 1}, {0, 1}, {0, 1}};
+  const std::vector<std::pair<int64_t, int64_t>> expected{
+      {0, 1},
+      {0, 1},
+      {0, 1},
+      {0, 1},
+  };
   EXPECT_THAT(
       runWithDrivers(
           PlanBuilder(idGenerator)
               .fixedPoint(
-                  core::VectorState("vals", schema)
+                  core::VectorState("values", schema)
                       .initial(PlanBuilder(idGenerator)
                                    .values(makeOneRowBatches(4))
                                    .planNode()),
                   PlanBuilder(idGenerator)
-                      .stateSource("vals", schema)
+                      .stateSource("values", schema)
                       .project({"key", "val"}),
                   ConvergenceConfig::withMaxIterations(1))
               .partialAggregation({"key"}, {"count(1) AS val"})
               .planNode(),
           /*maxDrivers=*/4,
           /*iterationMaxDrivers=*/1),
-      testing::UnorderedElementsAreArray(perDriver));
+      testing::UnorderedElementsAreArray(expected));
 }
 
 // Several drivers probe one hash-table state at once, each with its own
@@ -2633,7 +2809,9 @@ TEST_F(FixedPointTest, nestedFixedPointRunsWithinItsPlansDrivers) {
               /*outputStateEntry=*/"outer")
           .planNode();
 
-  const std::vector<std::pair<int64_t, int64_t>> expected{{0, 3}};
+  const std::vector<std::pair<int64_t, int64_t>> expected{
+      {0, 3},
+  };
   for (uint32_t iterationMaxDrivers : {1, 4}) {
     EXPECT_THAT(
         runWithDrivers(node, /*maxDrivers=*/4, iterationMaxDrivers),
@@ -2708,6 +2886,16 @@ TEST_F(FixedPointTest, groupedExecutionIsRejected) {
           /*onError=*/nullptr,
           &localOptions()),
       "A fixed point does not support grouped execution");
+}
+
+// Every FixedPointNode leaf reads its task's loop, and a task runs one loop.
+TEST_F(FixedPointTest, twoFixedPoints) {
+  auto plan = PlanBuilder()
+                  .localPartitionRoundRobin({countingNode(), countingNode()})
+                  .planNode();
+  VELOX_ASSERT_THROW(
+      makeTask(plan, exec::Task::ExecutionMode::kParallel, "two-loops"),
+      "A plan fragment can run at most one FixedPointNode");
 }
 
 // The contract a coordinator depends on: the owning task reaches a terminal
@@ -2818,7 +3006,14 @@ TEST_F(FixedPointTest, executionStatsBoundDetailedIterations) {
         !iteration.body.plans[0].taskStats.pipelineStats.empty() &&
         !iteration.convergence->plans[0].taskStats.pipelineStats.empty());
   }
-  const std::vector<bool> expected{true, true, true, false, false, true};
+  const std::vector<bool> expected{
+      true,
+      true,
+      true,
+      false,
+      false,
+      true,
+  };
   EXPECT_EQ(detailed, expected);
 }
 
@@ -2831,21 +3026,21 @@ TEST_F(FixedPointTest, executionStatsRecordDrivers) {
                         .fixedPoint(
                             std::vector<StateDeclarationPtr>{
                                 std::make_shared<VectorStateDeclaration>(
-                                    "vals",
+                                    "values",
                                     schema,
                                     PlanBuilder(idGenerator)
                                         .values(makeOneRowBatches(4))
                                         .planNode())},
                             std::vector<core::PlanNodePtr>{
                                 PlanBuilder(idGenerator)
-                                    .stateSource("vals", schema)
+                                    .stateSource("values", schema)
                                     .partitionedOutput({}, 1)
                                     .planNode(),
                                 PlanBuilder(idGenerator)
                                     .exchange(schema, "Presto")
                                     .planNode()},
                             ConvergenceConfig::withMaxIterations(1),
-                            /*outputStateEntry=*/"vals")
+                            /*outputStateEntry=*/"values")
                         .planNode();
 
   auto options = localOptions();
@@ -2881,21 +3076,19 @@ TEST_F(FixedPointTest, executionStatsRecordDrivers) {
 }
 
 // A parallel fixed point needs an orchestration executor separate from the
-// query executor.  Rejecting that throws on the caller's thread, before the
-// loop schedules anything -- so the task has to record the failure itself or it
-// stays kRunning for ever with no error to report.
-TEST_F(FixedPointTest, startWithoutOrchestrationExecutorFails) {
+// query executor.
+TEST_F(FixedPointTest, missingOrchestrationExecutor) {
   FixedPointOptions options = localOptions();
   options.orchestrationExecutor = nullptr;
-  auto task = makeTask(
-      countingNode(),
-      exec::Task::ExecutionMode::kParallel,
-      "no-orchestrator",
-      &options);
-
-  VELOX_ASSERT_THROW(task->start(/*maxDrivers=*/1), "orchestrationExecutor");
-  EXPECT_EQ(task->state(), exec::TaskState::kFailed);
-  EXPECT_NE(task->error(), nullptr);
+  VELOX_ASSERT_THROW(
+      makeTask(
+          countingNode(),
+          exec::Task::ExecutionMode::kParallel,
+          "no-orchestrator",
+          &options),
+      "Parallel FixedPointLoop requires "
+      "FixedPointOptions::orchestrationExecutor, an executor separate from the "
+      "query executor its sub-tasks run on");
 }
 
 // A failing loop reports through the task, not only to the caller.
@@ -2913,21 +3106,21 @@ TEST_F(FixedPointTest, loopFailureReachesTheTask) {
       PlanBuilder(idGenerator)
           .fixedPoint(
               std::make_shared<VectorStateDeclaration>(
-                  "vals",
+                  "values",
                   schema,
                   PlanBuilder(idGenerator).values({seed}).planNode()),
               PlanBuilder(idGenerator)
-                  .stateSource("vals", schema)
+                  .stateSource("values", schema)
                   .project({"key", "val + 1 AS val"}),
               // Never reaches 100 within 2 iterations, so the loop fails the
               // query.
               ConvergenceConfig::converging(
                   PlanBuilder(idGenerator)
-                      .stateSource("vals", schema)
+                      .stateSource("values", schema)
                       .project({"val >= 100 AS converged"})
                       .planNode(),
                   2),
-              /*outputStateEntry=*/"vals")
+              /*outputStateEntry=*/"values")
           .planNode(),
       exec::Task::ExecutionMode::kSerial,
       "loop-failure");
@@ -2983,16 +3176,16 @@ DEBUG_ONLY_TEST_F(FixedPointTest, failedInitialPlanStopsDriversFirst) {
       PlanBuilder(idGenerator)
           .fixedPoint(
               std::make_shared<VectorStateDeclaration>(
-                  "vals",
+                  "values",
                   schema,
                   PlanBuilder(idGenerator)
                       .values({seed}, /*parallelizable=*/true)
                       .planNode()),
               PlanBuilder(idGenerator)
-                  .stateSource("vals", schema)
+                  .stateSource("values", schema)
                   .project({"key", "val + 1 AS val"}),
               ConvergenceConfig::withMaxIterations(1),
-              /*outputStateEntry=*/"vals")
+              /*outputStateEntry=*/"values")
           .planNode(),
       exec::Task::ExecutionMode::kParallel,
       "stop-initial");
@@ -3254,19 +3447,19 @@ TEST_F(FixedPointTest, convergenceVerdictMustNotBeNull) {
           PlanBuilder(idGenerator)
               .fixedPoint(
                   std::make_shared<VectorStateDeclaration>(
-                      "vals",
+                      "values",
                       schema,
                       PlanBuilder(idGenerator).values({seed}).planNode()),
                   PlanBuilder(idGenerator)
-                      .stateSource("vals", schema)
+                      .stateSource("values", schema)
                       .project({"key", "val + 1 AS val"}),
                   ConvergenceConfig::converging(
                       PlanBuilder(idGenerator)
-                          .stateSource("vals", schema)
+                          .stateSource("values", schema)
                           .project({"CAST(NULL AS BOOLEAN) AS converged"})
                           .planNode(),
                       10),
-                  /*outputStateEntry=*/"vals")
+                  /*outputStateEntry=*/"values")
               .planNode(),
           exec::Task::ExecutionMode::kSerial),
       "produced a NULL verdict");
@@ -3290,19 +3483,19 @@ TEST_F(FixedPointTest, trailingNodes) {
       PlanBuilder(idGenerator)
           .fixedPoint(
               std::make_shared<VectorStateDeclaration>(
-                  "vals",
+                  "values",
                   schema,
                   PlanBuilder(idGenerator).values({seed}).planNode()),
               PlanBuilder(idGenerator)
-                  .stateSource("vals", schema)
+                  .stateSource("values", schema)
                   .project({"key", "val + 1 AS val"}),
               ConvergenceConfig::converging(
                   PlanBuilder(idGenerator)
-                      .stateSource("vals", schema)
+                      .stateSource("values", schema)
                       .project({"val >= 3 AS converged"})
                       .planNode(),
                   100),
-              /*outputStateEntry=*/"vals")
+              /*outputStateEntry=*/"values")
           .planNode();
 
   // Trailing Project sitting on top of the fixed point: scale val by 10.
@@ -3348,7 +3541,7 @@ TEST_F(FixedPointTest, trailingTableScan) {
   auto plan = PlanBuilder(idGenerator)
                   .fixedPoint(
                       std::make_shared<VectorStateDeclaration>(
-                          "vals",
+                          "values",
                           schema,
                           PlanBuilder(idGenerator)
                               .values({makeRowVector(
@@ -3360,7 +3553,7 @@ TEST_F(FixedPointTest, trailingTableScan) {
                               .planNode(),
                           /*append=*/true),
                       PlanBuilder(idGenerator)
-                          .stateSource("vals", schema)
+                          .stateSource("values", schema)
                           .project({"k", "v + 1 AS v"})
                           .filter("v < 3"),
                       ConvergenceConfig::whenDeltaEmpty(10))
@@ -3426,14 +3619,14 @@ TEST_F(FixedPointTest, resentInitialPlanSplit) {
   auto plan = PlanBuilder(idGenerator)
                   .fixedPoint(
                       std::make_shared<VectorStateDeclaration>(
-                          "vals",
+                          "values",
                           schema,
                           PlanBuilder(idGenerator)
                               .tableScan(schema)
                               .capturePlanNodeId(scanId)
                               .planNode()),
                       PlanBuilder(idGenerator)
-                          .stateSource("vals", schema)
+                          .stateSource("values", schema)
                           .project({"k", "v"}),
                       ConvergenceConfig::withMaxIterations(1))
                   .planNode();
@@ -3541,14 +3734,14 @@ TEST_F(FixedPointTest, initialPlanSplitsComplete) {
   auto plan = PlanBuilder(idGenerator)
                   .fixedPoint(
                       std::make_shared<VectorStateDeclaration>(
-                          "vals",
+                          "values",
                           schema,
                           PlanBuilder(idGenerator)
                               .tableScan(schema)
                               .capturePlanNodeId(scanId)
                               .planNode()),
                       PlanBuilder(idGenerator)
-                          .stateSource("vals", schema)
+                          .stateSource("values", schema)
                           .project({"k", "v + 1 AS v"})
                           .filter("v < 3"),
                       ConvergenceConfig::whenDeltaEmpty(10))
@@ -3658,82 +3851,81 @@ TEST_F(FixedPointTest, nestedInnerShuffle) {
   constexpr int32_t kNumWorkers{2};
   auto outerSchema = ROW({"key", "val"}, BIGINT());
   auto innerSchema = ROW({"ikey", "ival"}, BIGINT());
-  auto moduloSpec = std::make_shared<ModuloPartitionFunctionSpec>();
 
-  auto makeWorkerNode = [&](int32_t worker) -> core::PlanNodePtr {
-    auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  // Inner loop: shuffles by ikey each iteration, counting ival up to 3.
+  core::PlanNodePtr innerFixedPoint =
+      PlanBuilder(idGenerator)
+          .fixedPoint(
+              {std::make_shared<VectorStateDeclaration>(
+                  "inner",
+                  innerSchema,
+                  // Every worker seeds both keys with 0.  The first shuffle
+                  // sends each key to the worker that owns it, where the zeros
+                  // add up to 0.
+                  PlanBuilder(idGenerator)
+                      .values({makeRowVector(
+                          innerSchema->names(),
+                          {
+                              makeFlatVector<int64_t>({0, 1}),
+                              makeFlatVector<int64_t>({0, 0}),
+                          })})
+                      .planNode())},
+              {PlanBuilder(idGenerator)
+                   .stateSource("inner", innerSchema)
+                   .partitionedOutput(
+                       {"ikey"},
+                       kNumWorkers,
+                       /*replicateNullsAndAny=*/false,
+                       std::make_shared<ModuloPartitionFunctionSpec>())
+                   .planNode(),
+               PlanBuilder(idGenerator)
+                   .exchange(innerSchema, "Presto")
+                   .singleAggregation({"ikey"}, {"sum(ival)"})
+                   .project({"ikey", "a0 + 1 AS ival"})
+                   .planNode()},
+              ConvergenceConfig::converging(
+                  PlanBuilder(idGenerator)
+                      .stateSource("inner", innerSchema)
+                      .project({"ival >= 3 AS converged"})
+                      .planNode(),
+                  100),
+              /*outputStateEntry=*/"inner")
+          .planNode();
 
-    // Inner loop: shuffles by ikey each iteration, counting ival up to 3.
-    auto innerSeed = makeRowVector(
-        innerSchema->names(),
-        {
-            makeFlatVector<int64_t>({worker}),
-            makeFlatVector<int64_t>({0}),
-        });
-    core::PlanNodePtr innerFixedPoint =
-        PlanBuilder(idGenerator)
-            .fixedPoint(
-                {std::make_shared<VectorStateDeclaration>(
-                    "inner",
-                    innerSchema,
-                    PlanBuilder(idGenerator).values({innerSeed}).planNode())},
-                {PlanBuilder(idGenerator)
-                     .stateSource("inner", innerSchema)
-                     .partitionedOutput(
-                         {"ikey"},
-                         kNumWorkers,
-                         /*replicateNullsAndAny=*/false,
-                         moduloSpec)
-                     .planNode(),
-                 PlanBuilder(idGenerator)
-                     .exchange(innerSchema, "Presto")
-                     .singleAggregation({"ikey"}, {"sum(ival)"})
-                     .project({"ikey", "a0 + 1 AS ival"})
-                     .planNode()},
-                ConvergenceConfig::converging(
-                    PlanBuilder(idGenerator)
-                        .stateSource("inner", innerSchema)
-                        .project({"ival >= 3 AS converged"})
-                        .planNode(),
-                    100),
-                /*outputStateEntry=*/"inner")
-            .planNode();
+  // Outer loop: local, adds the inner result to its own value each round.
+  auto plan =
+      PlanBuilder(idGenerator)
+          .fixedPoint(
+              std::make_shared<VectorStateDeclaration>(
+                  "outer",
+                  outerSchema,
+                  PlanBuilder(idGenerator).tableScan(outerSchema).planNode()),
+              PlanBuilder(idGenerator)
+                  .stateSource("outer", outerSchema)
+                  .hashJoin(
+                      {"key"},
+                      {"ikey"},
+                      innerFixedPoint,
+                      "",
+                      {"key", "val", "ival"})
+                  .project({"key", "val + ival AS val"}),
+              ConvergenceConfig::converging(
+                  PlanBuilder(idGenerator)
+                      .stateSource("outer", outerSchema)
+                      .project({"val >= 6 AS converged"})
+                      .planNode(),
+                  100),
+              /*outputStateEntry=*/"outer")
+          .planNode();
 
-    // Outer loop: local, adds the inner result to its own value each round.
-    auto outerSeed = makeRowVector(
-        outerSchema->names(),
-        {
-            makeFlatVector<int64_t>({worker}),
-            makeFlatVector<int64_t>({0}),
-        });
-    return PlanBuilder(idGenerator)
-        .fixedPoint(
-            std::make_shared<VectorStateDeclaration>(
-                "outer",
-                outerSchema,
-                PlanBuilder(idGenerator).values({outerSeed}).planNode()),
-            PlanBuilder(idGenerator)
-                .stateSource("outer", outerSchema)
-                .hashJoin(
-                    {"key"},
-                    {"ikey"},
-                    innerFixedPoint,
-                    "",
-                    {"key", "val", "ival"})
-                .project({"key", "val + ival AS val"}),
-            ConvergenceConfig::converging(
-                PlanBuilder(idGenerator)
-                    .stateSource("outer", outerSchema)
-                    .project({"val >= 6 AS converged"})
-                    .planNode(),
-                100),
-            /*outputStateEntry=*/"outer")
-        .planNode();
+  std::vector<std::pair<int64_t, int64_t>> expected{
+      {0, 6},
+      {1, 6},
   };
-
-  std::vector<std::pair<int64_t, int64_t>> expected{{0, 6}, {1, 6}};
   EXPECT_THAT(
-      runViaTask(makeWorkerNode, exec::Task::ExecutionMode::kParallel),
+      unionRows(
+          runOnWorkers(plan, {makeKeyValueRow(0, 0), makeKeyValueRow(1, 0)})),
       testing::UnorderedElementsAreArray(expected));
 }
 
@@ -3749,97 +3941,97 @@ TEST_F(FixedPointTest, nestedOuterAndInnerShuffle) {
   auto innerSchema = ROW({"ikey", "ival"}, BIGINT());
   auto moduloSpec = std::make_shared<ModuloPartitionFunctionSpec>();
 
-  auto makeWorkerNode = [&](int32_t worker) -> core::PlanNodePtr {
-    auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  // Inner loop: shuffles by ikey, counting ival up to 3.
+  core::PlanNodePtr innerFixedPoint =
+      PlanBuilder(idGenerator)
+          .fixedPoint(
+              {std::make_shared<VectorStateDeclaration>(
+                  "inner",
+                  innerSchema,
+                  // Every worker seeds both keys with 0.  The first shuffle
+                  // sends each key to the worker that owns it, where the zeros
+                  // add up to 0.
+                  PlanBuilder(idGenerator)
+                      .values({makeRowVector(
+                          innerSchema->names(),
+                          {
+                              makeFlatVector<int64_t>({0, 1}),
+                              makeFlatVector<int64_t>({0, 0}),
+                          })})
+                      .planNode())},
+              {PlanBuilder(idGenerator)
+                   .stateSource("inner", innerSchema)
+                   .partitionedOutput(
+                       {"ikey"},
+                       kNumWorkers,
+                       /*replicateNullsAndAny=*/false,
+                       moduloSpec)
+                   .planNode(),
+               PlanBuilder(idGenerator)
+                   .exchange(innerSchema, "Presto")
+                   .singleAggregation({"ikey"}, {"sum(ival)"})
+                   .project({"ikey", "a0 + 1 AS ival"})
+                   .planNode()},
+              ConvergenceConfig::converging(
+                  PlanBuilder(idGenerator)
+                      .stateSource("inner", innerSchema)
+                      .project({"ival >= 3 AS converged"})
+                      .planNode(),
+                  100),
+              /*outputStateEntry=*/"inner")
+          .planNode();
 
-    // Inner loop: shuffles by ikey, counting ival up to 3.
-    auto innerSeed = makeRowVector(
-        innerSchema->names(),
-        {
-            makeFlatVector<int64_t>({worker}),
-            makeFlatVector<int64_t>({0}),
-        });
-    core::PlanNodePtr innerFixedPoint =
-        PlanBuilder(idGenerator)
-            .fixedPoint(
-                {std::make_shared<VectorStateDeclaration>(
-                    "inner",
-                    innerSchema,
-                    PlanBuilder(idGenerator).values({innerSeed}).planNode())},
-                {PlanBuilder(idGenerator)
-                     .stateSource("inner", innerSchema)
-                     .partitionedOutput(
-                         {"ikey"},
-                         kNumWorkers,
-                         /*replicateNullsAndAny=*/false,
-                         moduloSpec)
-                     .planNode(),
-                 PlanBuilder(idGenerator)
-                     .exchange(innerSchema, "Presto")
-                     .singleAggregation({"ikey"}, {"sum(ival)"})
-                     .project({"ikey", "a0 + 1 AS ival"})
-                     .planNode()},
-                ConvergenceConfig::converging(
-                    PlanBuilder(idGenerator)
-                        .stateSource("inner", innerSchema)
-                        .project({"ival >= 3 AS converged"})
-                        .planNode(),
-                    100),
-                /*outputStateEntry=*/"inner")
-            .planNode();
-
-    // Outer loop: adds the inner loop's result to its own value, then shuffles
-    // by key (each key stays on its worker).  The nest sits in the *producing*
-    // plan, so that plan's sub-task runs a FixedPointLoop, and its
-    // PartitionedOutput runs in that sub-task's own pipeline, under the
-    // producer id peers read.
-    auto outerSeed = makeRowVector(
-        outerSchema->names(),
-        {
-            makeFlatVector<int64_t>({worker}),
-            makeFlatVector<int64_t>({0}),
-        });
-    return PlanBuilder(idGenerator)
-        .fixedPoint(
-            {std::make_shared<VectorStateDeclaration>(
-                "outer",
-                outerSchema,
-                PlanBuilder(idGenerator).values({outerSeed}).planNode())},
-            {PlanBuilder(idGenerator)
-                 .stateSource("outer", outerSchema)
-                 .hashJoin(
-                     {"key"},
-                     {"ikey"},
-                     innerFixedPoint,
-                     "",
-                     {"key", "val", "ival"})
-                 .project({"key", "val + ival AS val"})
-                 .partitionedOutput(
-                     {"key"},
-                     kNumWorkers,
-                     /*replicateNullsAndAny=*/false,
-                     moduloSpec)
-                 .planNode(),
-             PlanBuilder(idGenerator)
-                 .exchange(outerSchema, "Presto")
-                 .singleAggregation({"key"}, {"sum(val)"})
-                 .project({"key", "a0 AS val"})
-                 .planNode()},
-            ConvergenceConfig::converging(
-                PlanBuilder(idGenerator)
-                    .stateSource("outer", outerSchema)
-                    .project({"val >= 6 AS converged"})
-                    .planNode(),
-                100),
-            /*outputStateEntry=*/"outer")
-        .planNode();
-  };
+  // Outer loop: adds the inner loop's result to its own value, then shuffles
+  // by key (each key stays on its worker).  The nest sits in the *producing*
+  // plan, so that plan's sub-task runs a FixedPointLoop, and its
+  // PartitionedOutput runs in that sub-task's own pipeline, under the
+  // producer id peers read.
+  auto plan =
+      PlanBuilder(idGenerator)
+          .fixedPoint(
+              {std::make_shared<VectorStateDeclaration>(
+                  "outer",
+                  outerSchema,
+                  PlanBuilder(idGenerator).tableScan(outerSchema).planNode())},
+              {PlanBuilder(idGenerator)
+                   .stateSource("outer", outerSchema)
+                   .hashJoin(
+                       {"key"},
+                       {"ikey"},
+                       innerFixedPoint,
+                       "",
+                       {"key", "val", "ival"})
+                   .project({"key", "val + ival AS val"})
+                   .partitionedOutput(
+                       {"key"},
+                       kNumWorkers,
+                       /*replicateNullsAndAny=*/false,
+                       moduloSpec)
+                   .planNode(),
+               PlanBuilder(idGenerator)
+                   .exchange(outerSchema, "Presto")
+                   .singleAggregation({"key"}, {"sum(val)"})
+                   .project({"key", "a0 AS val"})
+                   .planNode()},
+              ConvergenceConfig::converging(
+                  PlanBuilder(idGenerator)
+                      .stateSource("outer", outerSchema)
+                      .project({"val >= 6 AS converged"})
+                      .planNode(),
+                  100),
+              /*outputStateEntry=*/"outer")
+          .planNode();
 
   // The inner loop yields 3 every outer round, so each worker goes 0 -> 3 -> 6
   // and stops on the second.
-  std::vector<std::pair<int64_t, int64_t>> expected{{0, 6}, {1, 6}};
+  std::vector<std::pair<int64_t, int64_t>> expected{
+      {0, 6},
+      {1, 6},
+  };
   EXPECT_THAT(
-      runViaTask(makeWorkerNode, exec::Task::ExecutionMode::kParallel),
+      unionRows(
+          runOnWorkers(plan, {makeKeyValueRow(0, 0), makeKeyValueRow(1, 0)})),
       testing::UnorderedElementsAreArray(expected));
 }
 
@@ -3854,94 +4046,94 @@ TEST_F(FixedPointTest, nestedInConsumerPlan) {
   auto innerSchema = ROW({"ikey", "ival"}, BIGINT());
   auto moduloSpec = std::make_shared<ModuloPartitionFunctionSpec>();
 
-  auto makeWorkerNode = [&](int32_t worker) -> core::PlanNodePtr {
-    auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  // Inner loop: shuffles by ikey, counting ival up to 3.
+  core::PlanNodePtr innerFixedPoint =
+      PlanBuilder(idGenerator)
+          .fixedPoint(
+              {std::make_shared<VectorStateDeclaration>(
+                  "inner",
+                  innerSchema,
+                  // Every worker seeds both keys with 0.  The first shuffle
+                  // sends each key to the worker that owns it, where the zeros
+                  // add up to 0.
+                  PlanBuilder(idGenerator)
+                      .values({makeRowVector(
+                          innerSchema->names(),
+                          {
+                              makeFlatVector<int64_t>({0, 1}),
+                              makeFlatVector<int64_t>({0, 0}),
+                          })})
+                      .planNode())},
+              {PlanBuilder(idGenerator)
+                   .stateSource("inner", innerSchema)
+                   .partitionedOutput(
+                       {"ikey"},
+                       kNumWorkers,
+                       /*replicateNullsAndAny=*/false,
+                       moduloSpec)
+                   .planNode(),
+               PlanBuilder(idGenerator)
+                   .exchange(innerSchema, "Presto")
+                   .singleAggregation({"ikey"}, {"sum(ival)"})
+                   .project({"ikey", "a0 + 1 AS ival"})
+                   .planNode()},
+              ConvergenceConfig::converging(
+                  PlanBuilder(idGenerator)
+                      .stateSource("inner", innerSchema)
+                      .project({"ival >= 3 AS converged"})
+                      .planNode(),
+                  100),
+              /*outputStateEntry=*/"inner")
+          .planNode();
 
-    // Inner loop: shuffles by ikey, counting ival up to 3.
-    auto innerSeed = makeRowVector(
-        innerSchema->names(),
-        {
-            makeFlatVector<int64_t>({worker}),
-            makeFlatVector<int64_t>({0}),
-        });
-    core::PlanNodePtr innerFixedPoint =
-        PlanBuilder(idGenerator)
-            .fixedPoint(
-                {std::make_shared<VectorStateDeclaration>(
-                    "inner",
-                    innerSchema,
-                    PlanBuilder(idGenerator).values({innerSeed}).planNode())},
-                {PlanBuilder(idGenerator)
-                     .stateSource("inner", innerSchema)
-                     .partitionedOutput(
-                         {"ikey"},
-                         kNumWorkers,
-                         /*replicateNullsAndAny=*/false,
-                         moduloSpec)
-                     .planNode(),
-                 PlanBuilder(idGenerator)
-                     .exchange(innerSchema, "Presto")
-                     .singleAggregation({"ikey"}, {"sum(ival)"})
-                     .project({"ikey", "a0 + 1 AS ival"})
-                     .planNode()},
-                ConvergenceConfig::converging(
-                    PlanBuilder(idGenerator)
-                        .stateSource("inner", innerSchema)
-                        .project({"ival >= 3 AS converged"})
-                        .planNode(),
-                    100),
-                /*outputStateEntry=*/"inner")
-            .planNode();
-
-    // Outer loop: shuffles by key first, then adds the inner loop's result in
-    // the consuming plan.
-    auto outerSeed = makeRowVector(
-        outerSchema->names(),
-        {
-            makeFlatVector<int64_t>({worker}),
-            makeFlatVector<int64_t>({0}),
-        });
-    return PlanBuilder(idGenerator)
-        .fixedPoint(
-            {std::make_shared<VectorStateDeclaration>(
-                "outer",
-                outerSchema,
-                PlanBuilder(idGenerator).values({outerSeed}).planNode())},
-            {PlanBuilder(idGenerator)
-                 .stateSource("outer", outerSchema)
-                 .partitionedOutput(
-                     {"key"},
-                     kNumWorkers,
-                     /*replicateNullsAndAny=*/false,
-                     moduloSpec)
-                 .planNode(),
-             PlanBuilder(idGenerator)
-                 .exchange(outerSchema, "Presto")
-                 .singleAggregation({"key"}, {"sum(val)"})
-                 .project({"key", "a0 AS val"})
-                 .hashJoin(
-                     {"key"},
-                     {"ikey"},
-                     innerFixedPoint,
-                     "",
-                     {"key", "val", "ival"})
-                 .project({"key", "val + ival AS val"})
-                 .planNode()},
-            ConvergenceConfig::converging(
-                PlanBuilder(idGenerator)
-                    .stateSource("outer", outerSchema)
-                    .project({"val >= 6 AS converged"})
-                    .planNode(),
-                100),
-            /*outputStateEntry=*/"outer")
-        .planNode();
-  };
+  // Outer loop: shuffles by key first, then adds the inner loop's result in
+  // the consuming plan.
+  auto plan =
+      PlanBuilder(idGenerator)
+          .fixedPoint(
+              {std::make_shared<VectorStateDeclaration>(
+                  "outer",
+                  outerSchema,
+                  PlanBuilder(idGenerator).tableScan(outerSchema).planNode())},
+              {PlanBuilder(idGenerator)
+                   .stateSource("outer", outerSchema)
+                   .partitionedOutput(
+                       {"key"},
+                       kNumWorkers,
+                       /*replicateNullsAndAny=*/false,
+                       moduloSpec)
+                   .planNode(),
+               PlanBuilder(idGenerator)
+                   .exchange(outerSchema, "Presto")
+                   .singleAggregation({"key"}, {"sum(val)"})
+                   .project({"key", "a0 AS val"})
+                   .hashJoin(
+                       {"key"},
+                       {"ikey"},
+                       innerFixedPoint,
+                       "",
+                       {"key", "val", "ival"})
+                   .project({"key", "val + ival AS val"})
+                   .planNode()},
+              ConvergenceConfig::converging(
+                  PlanBuilder(idGenerator)
+                      .stateSource("outer", outerSchema)
+                      .project({"val >= 6 AS converged"})
+                      .planNode(),
+                  100),
+              /*outputStateEntry=*/"outer")
+          .planNode();
 
   // The inner loop yields 3 every outer round, so each worker goes 0 -> 3 -> 6
   // and stops on the second.
-  std::vector<std::pair<int64_t, int64_t>> expected{{0, 6}, {1, 6}};
+  std::vector<std::pair<int64_t, int64_t>> expected{
+      {0, 6},
+      {1, 6},
+  };
   EXPECT_THAT(
-      runViaTask(makeWorkerNode, exec::Task::ExecutionMode::kParallel),
+      unionRows(
+          runOnWorkers(plan, {makeKeyValueRow(0, 0), makeKeyValueRow(1, 0)})),
       testing::UnorderedElementsAreArray(expected));
 }
 
@@ -4148,19 +4340,19 @@ TEST_F(FixedPointTest, startRequiresParallelMode) {
       PlanBuilder(idGenerator)
           .fixedPoint(
               std::make_shared<VectorStateDeclaration>(
-                  "vals",
+                  "values",
                   schema,
                   PlanBuilder(idGenerator).values({seed}).planNode()),
               PlanBuilder(idGenerator)
-                  .stateSource("vals", schema)
+                  .stateSource("values", schema)
                   .project({"key", "val + 1 AS val"}),
               ConvergenceConfig::converging(
                   PlanBuilder(idGenerator)
-                      .stateSource("vals", schema)
+                      .stateSource("values", schema)
                       .project({"val >= 3 AS converged"})
                       .planNode(),
                   100),
-              /*outputStateEntry=*/"vals")
+              /*outputStateEntry=*/"values")
           .planNode(),
       exec::Task::ExecutionMode::kSerial,
       "serialstart");
@@ -4190,22 +4382,23 @@ TEST_F(FixedPointTest, convergenceMustProduceOneRow) {
           PlanBuilder(idGenerator)
               .fixedPoint(
                   std::make_shared<VectorStateDeclaration>(
-                      "vals",
+                      "values",
                       schema,
                       PlanBuilder(idGenerator).values({seed}).planNode()),
                   PlanBuilder(idGenerator)
-                      .stateSource("vals", schema)
+                      .stateSource("values", schema)
                       .project({"key", "val + 1 AS val"}),
                   ConvergenceConfig::converging(
                       PlanBuilder(idGenerator)
-                          .stateSource("vals", schema)
+                          .stateSource("values", schema)
                           .project({"val >= 3 AS converged"})
                           .planNode(),
                       100),
-                  /*outputStateEntry=*/"vals")
+                  /*outputStateEntry=*/"values")
               .planNode(),
           exec::Task::ExecutionMode::kSerial),
-      "must produce at most one row");
+      "The convergence sequence must produce at most one row; aggregate it "
+      "to a single verdict");
 }
 
 // What one iteration costs when the body does nothing: a Task created, planned,
@@ -4234,14 +4427,14 @@ TEST_F(FixedPointTest, DISABLED_perIterationCost) {
       PlanBuilder(idGenerator)
           .fixedPoint(
               std::make_shared<VectorStateDeclaration>(
-                  "vals",
+                  "values",
                   schema,
                   PlanBuilder(idGenerator).values({seed}).planNode()),
               PlanBuilder(idGenerator)
-                  .stateSource("vals", schema)
+                  .stateSource("values", schema)
                   .project({"key", "val + 1 AS val"}),
               ConvergenceConfig::withMaxIterations(kIterations),
-              /*outputStateEntry=*/"vals")
+              /*outputStateEntry=*/"values")
           .planNode(),
       exec::Task::ExecutionMode::kSerial);
   auto elapsed = std::chrono::steady_clock::now() - start;
@@ -4266,21 +4459,21 @@ TEST_F(FixedPointTest, errorWhenMaxIterationReachedThrows) {
   auto node = PlanBuilder(idGenerator)
                   .fixedPoint(
                       std::make_shared<VectorStateDeclaration>(
-                          "vals",
+                          "values",
                           schema,
                           PlanBuilder(idGenerator).values({seed}).planNode()),
                       // Body increments val; convergence wants val >= 1000,
                       // never reached in 3.
                       PlanBuilder(idGenerator)
-                          .stateSource("vals", schema)
+                          .stateSource("values", schema)
                           .project({"key", "val + 1 AS val"}),
                       ConvergenceConfig::converging(
                           PlanBuilder(idGenerator)
-                              .stateSource("vals", schema)
+                              .stateSource("values", schema)
                               .project({"val >= 1000 AS converged"})
                               .planNode(),
                           3),
-                      /*outputStateEntry=*/"vals")
+                      /*outputStateEntry=*/"values")
                   .planNode();
 
   // val reaches 3 after maxIterations, below the threshold -> the loop fails in

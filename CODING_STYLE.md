@@ -274,6 +274,9 @@ std::shared_ptr<const Payload> payload;
   * `VELOX_CHECK(idx < children_.size());`
 * The former will evaluate and include both expressions values in the
   exception.
+* Use one check per condition. Split `VELOX_CHECK(a && b)` into
+  `VELOX_CHECK(a)` and `VELOX_CHECK(b)`: a failure then names the condition
+  that broke, and each check can use a two-argument form.
 * All macro also provide the following optional features:
   * Specifying error code (error code listed in
     `velox/common/base/VeloxException.h`): 

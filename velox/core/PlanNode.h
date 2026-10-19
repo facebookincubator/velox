@@ -326,6 +326,14 @@ class PlanNode : public ISerializable {
       const PlanNode* root,
       const std::function<bool(const PlanNode* node)>& predicate);
 
+  /// Returns the first node of type T in the tree under 'root', or nullptr.
+  template <typename T>
+  static const T* findFirstNode(const PlanNode* root) {
+    const PlanNode* node = findFirstNode(
+        root, [](const PlanNode* candidate) { return candidate->is<T>(); });
+    return node == nullptr ? nullptr : node->as<T>();
+  }
+
   /// @return PlanNode with matching ID or nullptr if not found.
   static const PlanNode* findNodeById(
       const PlanNode* root,
