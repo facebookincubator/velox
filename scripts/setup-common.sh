@@ -414,10 +414,15 @@ function install_gcs_sdk_cpp {
     -DJSON_BuildTests=OFF
 
   # google-cloud-cpp
+  # google_cloud_cpp_enable_deps() unconditionally pulls in opentelemetry,
+  # monitoring, and trace alongside the user-requested features. We only
+  # need storage for the GCS adapter, and we do not install opentelemetry-cpp,
+  # so subtract those meta-features via the "-feature" syntax that
+  # google-cloud-cpp supports.
   wget_and_untar https://github.com/googleapis/google-cloud-cpp/archive/refs/tags/v"${GOOGLE_CLOUD_CPP_VERSION}".tar.gz google-cloud-cpp
   cmake_install_dir google-cloud-cpp \
     -DGOOGLE_CLOUD_CPP_ENABLE_EXAMPLES=OFF \
-    -DGOOGLE_CLOUD_CPP_ENABLE=storage
+    -DGOOGLE_CLOUD_CPP_ENABLE=storage,-opentelemetry,-monitoring,-trace
 }
 
 function install_azure_storage_sdk_cpp {
