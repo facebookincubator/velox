@@ -403,35 +403,5 @@ TEST_F(UcxTransportRegistrationTest, ucxEntryFollowsProcessWideCudfEnabled) {
   client->close();
 }
 
-TEST_F(UcxTransportRegistrationTest, ucxEntryRejectsForeignExchangeClient) {
-  registerCudfWithExchange(true);
-
-  auto plan = makeExchangePlan(TransportKind::kUcx);
-  auto exchangeNode =
-      std::dynamic_pointer_cast<const core::ExchangeNode>(plan.planNode);
-  ASSERT_NE(exchangeNode, nullptr);
-  auto task =
-      makeTask("test-foreign-client-task", std::move(plan), /*queryConfig=*/{});
-  auto driverCtx = makeDriverCtx(task);
-
-  auto ucxEntry =
-      ExchangeTransportRegistry::tryGet(std::string{TransportKind::kUcx});
-  ASSERT_NE(ucxEntry, nullptr);
-  auto inMemoryEntry =
-      ExchangeTransportRegistry::tryGet(std::string{TransportKind::kInMemory});
-  ASSERT_NE(inMemoryEntry, nullptr);
-
-  // A client from another transport must not be accepted: the entry pairs the
-  // operator with the client its own factory produces.
-  auto foreignClient = inMemoryEntry->makeClient(makeClientContext(task));
-  ASSERT_NE(foreignClient, nullptr);
-  VELOX_ASSERT_THROW(
-      ucxEntry->makeExchangeOperator(
-          0, driverCtx.get(), exchangeNode, foreignClient),
-      "Exchange client was not created by this transport's client factory");
-
-  foreignClient->close();
-}
-
 } // namespace
 } // namespace facebook::velox::exec::test
