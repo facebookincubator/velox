@@ -137,6 +137,7 @@ void CompileCtx::generateIndexToOffset(
       << "    }\n"
       << "  }\n"
       << "  __syncthreads();\n";
+  noteBlockBarrier();
 }
 
 // Generates CUDA code for elementwise operations (result[i] = f(a[i], b[i],
@@ -387,10 +388,14 @@ void CompileCtx::generateElementwise(
   if (numFastPathVars < 1) {
     numFastPathVars = 1;
   }
+  std::vector<std::string> headScratch{"size"};
   for (size_t i = 0; i < numFastPathVars; ++i) {
     op.addSharedDeclaration(
         "  __shared__ uint32_t isFastPath" + std::to_string(i) + ";\n");
+    headScratch.push_back("isFastPath" + std::to_string(i));
   }
+
+  separateSharedScratch(headScratch);
 
   // Generate the head: compute size and fast path flags from tensor leaf
   // inputs only.
@@ -778,6 +783,7 @@ void CompileCtx::generateElementwise(
   }
   // Wait for all warps to finish before size in shared memory is reused.
   code_ << "  __syncthreads();\n";
+  noteBlockBarrier();
 
   // A data-dependent scan output (shapeSetOnDevice, e.g. masked_select) writes
   // its length inside the element loop, at the last element. When the input is

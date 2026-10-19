@@ -2244,6 +2244,7 @@ std::unique_ptr<KernelOperation> CompileCtx::generateFused(const Subgraph& sg) {
   }
   typeTemps_.clear();
   tempNames_.clear();
+  sharedScratchInUse_.clear();
   tempUseLog_.clear();
   helperVarDeps_.clear();
   std::stringstream combined;
@@ -2535,6 +2536,13 @@ void CompileCtx::functionLoop(NodeCP node) {
 
   auto inSpecs = inputSpecs(node);
   auto resultSpecs = outputSpecs(node);
+  const auto call = makeCall(node, inSpecs, resultSpecs);
+  // The loop head rewrites size and rounded from thread 0, and the loop below
+  // reads them in its condition with no barrier after it.
+  auto loopScratch = lastCallSharedScratch_;
+  loopScratch.push_back("size");
+  loopScratch.push_back("rounded");
+  separateSharedScratch(loopScratch);
 
   // Compute size (and optionally rounded) on thread 0, then sync.
   if (meta->hasBarrier) {
@@ -2554,7 +2562,7 @@ void CompileCtx::functionLoop(NodeCP node) {
         << "  __syncthreads();\n"
         << "    for (uint32_t idx = blockInfo.blockInOp * blockDim.x + threadIdx.x; idx < size; idx += blockInfo.numBlocksInOp * blockDim.x) {\n";
   }
-  code_ << "  " << makeCall(node, inSpecs, resultSpecs) << "\n";
+  code_ << "  " << call << "\n";
   code_ << "    }\n";
 }
 
@@ -2620,7 +2628,9 @@ void CompileCtx::fusedCode(NodeCP node, std::vector<ResultSpec>& resultSpecs) {
     std::unordered_set<ValueCP> visited;
     if (isSizeSetInThisOp(viewInput, visited) && !meta->deviceFunc.empty()) {
       auto inSpecs = inputSpecs(node);
-      code_ << "  " << makeCall(node, inSpecs, resultSpecs) << "\n";
+      auto call = makeCall(node, inSpecs, resultSpecs);
+      separateSharedScratch(lastCallSharedScratch_);
+      code_ << "  " << call << "\n";
     }
     placed_.insert(node);
     generatingOp_->allNodes().insert(node);
@@ -2690,7 +2700,9 @@ void CompileCtx::fusedCode(NodeCP node, std::vector<ResultSpec>& resultSpecs) {
       emitBarrier();
       code_ << "  if (blockInfo.blockInOp == 0) {\n";
     }
-    code_ << "  " << makeCall(node, inSpecs, resultSpecs) << "\n";
+    auto call = makeCall(node, inSpecs, resultSpecs);
+    separateSharedScratch(lastCallSharedScratch_);
+    code_ << "  " << call << "\n";
     if (multiBlockSingleOp) {
       code_ << "  }\n";
       emitBarrier();
@@ -2769,6 +2781,7 @@ void CompileCtx::fusedCode(NodeCP node, std::vector<ResultSpec>& resultSpecs) {
   }
 
   auto callStmt = makeCall(node, callInputSpecs, resultSpecs);
+  const auto callScratch = lastCallSharedScratch_;
   if (callNeedsBarrier(node)) {
     emitBarrier();
   }
@@ -2777,6 +2790,7 @@ void CompileCtx::fusedCode(NodeCP node, std::vector<ResultSpec>& resultSpecs) {
     code_ << "  if (blockInfo.blockInOp == 0) {\n";
   }
   if (!subgraphs.empty()) {
+    separateSharedScratch(callScratch);
     // For a data-dependent scan op (masked_select / nonzero) whose size is set
     // on device, pass its output so generateElementwise can zero the length for
     // an empty input before a fused consumer reads it.
@@ -2954,6 +2968,7 @@ std::string CompileCtx::makeCall(
     addInclude(meta->headerFile);
   }
 
+  lastCallSharedScratch_.clear();
   std::stringstream ss;
 
   // Function name.
@@ -3141,6 +3156,7 @@ std::string CompileCtx::makeCall(
     decl += varName;
     decl += ";\n";
     op.addSharedDeclaration(decl);
+    lastCallSharedScratch_.push_back(varName);
     comma();
     ss << varName;
   }
@@ -3167,6 +3183,7 @@ std::string CompileCtx::makeCall(
     dynDecl += varName;
     dynDecl += ";\n";
     op.addSharedDeclaration(dynDecl);
+    lastCallSharedScratch_.push_back(varName);
     comma();
     ss << varName;
   }
@@ -3255,6 +3272,7 @@ void CompileCtx::emitHelperCode(std::string_view text) {
 }
 
 void CompileCtx::emitBarrier() {
+  noteBlockBarrier();
   if (isSingleBlock_) {
     code_ << "  __syncthreads();\n";
     generatingOp_->setAlwaysSingleBlock(true);
@@ -3267,6 +3285,17 @@ void CompileCtx::emitBarrier() {
       preBarrierValues_.insert(output);
     }
   }
+}
+
+void CompileCtx::separateSharedScratch(const std::vector<std::string>& names) {
+  for (const auto& name : names) {
+    if (sharedScratchInUse_.count(name)) {
+      code_ << "  __syncthreads();\n";
+      noteBlockBarrier();
+      break;
+    }
+  }
+  sharedScratchInUse_.insert(names.begin(), names.end());
 }
 
 // Resolves the ordering question for one operand. An input read through a

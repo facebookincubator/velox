@@ -3436,45 +3436,75 @@ void registerBuiltins() {
       .valuesArg(1)
       .registerOp();
 
-  // tw.scatter / tw.scatter_add: fused in-place scatter along 'dim'. Args
-  // mirror aten.scatter.src / aten.scatter_add.default (self, dim, index, src)
-  // so the rewrite retargets the node directly. The loop is sized by 'src' (the
-  // values written, an isRegister leaf), one iteration per src element; 'index'
-  // (same shape as src, checked by the rewrite when both shapes are static) is
-  // read whole to supply the destination coordinate along 'dim'. scatter
-  // overwrites; scatter_add accumulates atomically so duplicate indices sum.
-  // The output aliases self in place (mutatesArg -> aliasSelfId, no
-  // reserveShape); the functional rewrite inserts a clone of self that
-  // clone-elision drops when self is dead.
-  for (const bool accumulate : {false, true}) {
-    MetadataBuilder(
-        std::make_unique<c10::FunctionSchema>(
-            accumulate ? "tw.scatter_add" : "tw.scatter",
-            "",
-            std::vector<c10::Argument>{
-                c10::Argument("self", c10::TensorType::get()),
-                c10::Argument("dim", c10::IntType::get()),
-                c10::Argument("index", c10::TensorType::get()),
-                c10::Argument("src", c10::TensorType::get())},
-            std::vector<c10::Argument>{
-                c10::Argument("output", c10::TensorType::get())}))
-        .elementwiseFunc(accumulate ? "__scatter_add" : "__scatter")
-        .hasIdxArg()
-        .hasOutputArg()
-        .hasBlockInfo()
-        .outputConstraints(viewOfFirstArgConstraint)
-        .argumentMeta(
-            {{.isRegister = false, .wholeTensor = true, .randomAccess = true},
-             {.isRegister = true},
-             {.isRegister = false, .wholeTensor = true, .randomAccess = true},
-             {.isRegister = true}})
-        .returnMeta(
-            {{.isRegister = false, .wholeTensor = true, .randomAccess = true}})
-        .typeTemplateParams({0})
-        .mutatesArg(0)
-        .valuesArg(2)
-        .registerOp();
-  }
+  // tw.scatter: fused in-place scatter along 'dim'. Args mirror
+  // aten.scatter.src (self, dim, index, src) so the rewrite retargets the node
+  // directly. The loop is sized by 'src' (the values written, an isRegister
+  // leaf), one iteration per src element; 'index' (same shape as src, checked
+  // by the rewrite when both shapes are static) is read whole to supply the
+  // destination coordinate along 'dim'. The output aliases self in place
+  // (mutatesArg -> aliasSelfId, no reserveShape); the functional rewrite
+  // inserts a clone of self that clone-elision drops when self is dead.
+  MetadataBuilder(
+      std::make_unique<c10::FunctionSchema>(
+          "tw.scatter",
+          "",
+          std::vector<c10::Argument>{
+              c10::Argument("self", c10::TensorType::get()),
+              c10::Argument("dim", c10::IntType::get()),
+              c10::Argument("index", c10::TensorType::get()),
+              c10::Argument("src", c10::TensorType::get())},
+          std::vector<c10::Argument>{
+              c10::Argument("output", c10::TensorType::get())}))
+      .elementwiseFunc("__scatter")
+      .hasIdxArg()
+      .hasOutputArg()
+      .hasBlockInfo()
+      .outputConstraints(viewOfFirstArgConstraint)
+      .argumentMeta(
+          {{.isRegister = false, .wholeTensor = true, .randomAccess = true},
+           {.isRegister = true},
+           {.isRegister = false, .wholeTensor = true, .randomAccess = true},
+           {.isRegister = true}})
+      .returnMeta(
+          {{.isRegister = false, .wholeTensor = true, .randomAccess = true}})
+      .typeTemplateParams({0})
+      .mutatesArg(0)
+      .valuesArg(2)
+      .registerOp();
+
+  // tw.scatter_add: like tw.scatter but accumulates, so duplicate indices sum.
+  // A block-wide device function (hasBarrier) rather than an elementwise op:
+  // tw_scatter_add warp-aggregates the atomic adds, so every lane of the block
+  // must reach it, also the lanes past the end of the loop. The loop over the
+  // src elements is rounded up to the block size, src is computed only for
+  // lanes in range, and the call is made for all lanes with idx and size.
+  MetadataBuilder(
+      std::make_unique<c10::FunctionSchema>(
+          "tw.scatter_add",
+          "",
+          std::vector<c10::Argument>{
+              c10::Argument("self", c10::TensorType::get()),
+              c10::Argument("dim", c10::IntType::get()),
+              c10::Argument("index", c10::TensorType::get()),
+              c10::Argument("src", c10::TensorType::get())},
+          std::vector<c10::Argument>{
+              c10::Argument("output", c10::TensorType::get())}))
+      .deviceFunc("tw_scatter_add")
+      .headerFile("velox/experimental/torchwave/Elementwise.cuh")
+      .hasBarrier()
+      .sizeOrdinal({2})
+      .outputConstraints(viewOfFirstArgConstraint)
+      .argumentMeta(
+          {{.isRegister = false, .wholeTensor = true, .randomAccess = true},
+           {.isRegister = true},
+           {.isRegister = false, .wholeTensor = true, .randomAccess = true},
+           {.isRegister = true}})
+      .returnMeta(
+          {{.isRegister = false, .wholeTensor = true, .randomAccess = true}})
+      .typeTemplateParams({0})
+      .mutatesArg(0)
+      .valuesArg(2)
+      .registerOp();
 
   // slice_scatter (functional, out-of-place): returns a fresh copy of self with
   // a slice overwritten by src. For dim 0 and dim 1 with a statically-known

@@ -53,6 +53,7 @@ CompiledPlan::KernelView makeKernelView(const Launch& launch) {
     }
     view.numBarriers =
         static_cast<int32_t>(launch.op->barrierCounters().size());
+    view.code = launch.op->code();
   } else if (launch.standalone != nullptr) {
     view.standalone = true;
     view.names.insert(normalizeTarget(launch.standalone->target()));

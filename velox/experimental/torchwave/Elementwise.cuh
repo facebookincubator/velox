@@ -1063,24 +1063,44 @@ __device__ inline T __scatter(
   return T();
 }
 
-// Fused in-place scatter_add along 'dim'. Like __scatter but accumulates with
-// an atomic add, so duplicate destination coordinates sum (scatter_add
-// semantics). The accumulation base is 'out' (a clone of self, or self in place
-// when the clone was elided).
+// Fused in-place scatter_add (tw.scatter_add) as a block-wide device function.
+// Every lane of the block calls it on every iteration of the rounded loop,
+// including lanes past the end (idx >= size), so the warp is converged for the
+// ballot and shuffles; those lanes contribute nothing. When all active lanes
+// of a warp hit one destination, they sum with xor-shuffles and the first
+// active lane does one atomic. Otherwise each active lane does its own. An
+// index sorted into long runs (ROO counts 1.4M elements into 256 bins, runs of
+// thousands) otherwise serializes one atomic per lane on the same address.
 template <typename T>
-__device__ inline T __scatter_add(
-    uint32_t idx,
+__device__ inline void tw_scatter_add(
     Tensor* /*self*/,
     int32_t dim,
     Tensor* index,
     T value,
     Tensor* out,
+    uint32_t idx,
+    uint32_t size,
     BlockInfo& block) {
-  int64_t destOff;
-  if (scatterDestOffset(idx, dim, index, out, block, destOff)) {
+  int64_t destOff = -1;
+  const bool active =
+      idx < size && scatterDestOffset(idx, dim, index, out, block, destOff);
+  const uint32_t activeMask = __ballot_sync(0xffffffff, active);
+  if (activeMask == 0) {
+    return;
+  }
+  const int32_t leader = __ffs(activeMask) - 1;
+  const int64_t leaderOff = __shfl_sync(0xffffffff, destOff, leader);
+  if (__all_sync(0xffffffff, !active || destOff == leaderOff)) {
+    T sum = active ? value : T(0);
+    for (int32_t offset = 16; offset > 0; offset /= 2) {
+      sum += __shfl_xor_sync(0xffffffff, sum, offset);
+    }
+    if ((threadIdx.x & 31) == leader) {
+      scatterAtomicAdd(&storage<T>(out)[leaderOff], sum);
+    }
+  } else if (active) {
     scatterAtomicAdd(&storage<T>(out)[destOff], value);
   }
-  return T();
 }
 
 // Elementwise index gather variants with scalar indices in registers.

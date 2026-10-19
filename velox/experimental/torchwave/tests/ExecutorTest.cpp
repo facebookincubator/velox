@@ -334,6 +334,70 @@ TEST_F(ExecutorTest, doubleCumsumCgTest) {
   runDoubleCumsum();
 }
 
+// Two independent scans feeding one add. In cg both tw.cumsum_cg calls land in
+// one op and share its __shared__ scratch (size, rounded, counter, reduction
+// temps), which each call's thread 0 rewrites on entry. Warps of the same
+// block still testing the first scan's loop bound then read the second scan's
+// size, run past the first input and corrupt the block's partial sums. Nothing
+// orders the two calls across blocks, so the separation is a block barrier,
+// not an opBarrier.
+const char* kTwoCumsumGraph = R"(graph(%x, %y):
+%c1 = torch.ops.aten.cumsum.default(self=%x, dim=0)
+%c2 = torch.ops.aten.cumsum.default(self=%y, dim=0)
+%r = torch.ops.aten.add.Tensor(self=%c1, other=%c2)
+return(%r)
+)";
+
+std::unordered_map<std::string, torch::_export::TensorMeta> twoCumsumMeta() {
+  std::unordered_map<std::string, torch::_export::TensorMeta> meta;
+  for (const auto* name : {"x", "y", "c1", "c2", "r"}) {
+    meta[name] = makeTensorMeta(c10::ScalarType::Long, 1);
+  }
+  return meta;
+}
+
+TEST_F(ExecutorTest, twoCumsumCgScratchTest) {
+  auto resetConfig =
+      folly::makeGuard([] { WaveConfig::get().isCg = std::nullopt; });
+
+  auto plan = compilePlanProgrammatic(
+      nativert::stringToGraph(kTwoCumsumGraph),
+      twoCumsumMeta(),
+      CompiledPlan::Mode::kCG);
+  int32_t sharedOps = 0;
+  for (const auto& node : plan.nodes()) {
+    for (const auto& step : node.steps) {
+      for (const auto& kernel : step.kernels) {
+        const auto first = kernel.code.find("cumsum_cg<");
+        if (first == std::string::npos) {
+          continue;
+        }
+        const auto second = kernel.code.find("cumsum_cg<", first + 1);
+        if (second == std::string::npos) {
+          continue;
+        }
+        ++sharedOps;
+        const auto between = kernel.code.substr(first, second - first);
+        EXPECT_NE(between.find("__syncthreads();"), std::string::npos)
+            << kernel.code;
+      }
+    }
+  }
+  // Fails rather than passes vacuously if the scans stop sharing an op.
+  EXPECT_EQ(sharedOps, 1) << plan.describe();
+
+  WaveConfig::get().isCg = true;
+  auto x = at::arange(100000, at::kLong) % 7;
+  auto y = at::arange(70000, at::kLong) % 5;
+  y = at::cat({y, y.narrow(0, 0, 30000)});
+  auto outputs = runWaveProgrammatic(
+      nativert::stringToGraph(kTwoCumsumGraph), twoCumsumMeta(), {{x, y}});
+  ASSERT_EQ(outputs.size(), 1);
+  auto reference = at::cumsum(x, 0) + at::cumsum(y, 0);
+  EXPECT_TRUE(tensorsMatch(outputs[0], reference))
+      << firstDifference(outputs[0], reference);
+}
+
 // A RANDOM-ACCESS read of a scan's output inside the same cooperative kernel.
 // aten.index.Tensor carries no barrier of its own, and the index is REVERSED,
 // so block 0 reads what the last block wrote: that is what makes a missing
@@ -836,6 +900,32 @@ TEST_F(ExecutorTest, scatterAddInPlaceTest) {
       countLiveClonesAfterOpt(
           getDataFilePath(dataDir(), "data/scatter_add_inplace_test.pt2")),
       0);
+}
+
+// tw.scatter_add on an index sorted into runs, as ROO's per-row counts are. A
+// warp whose active lanes share a destination adds with one atomic, so the run
+// boundaries and the end of the loop are what can go wrong: the runs total 1045
+// elements, so the last warp has 21 active lanes, all inside the final run, and
+// one run boundary falls inside a warp. 'counts' computes src from flags (the
+// operand is evaluated only for lanes in range, the scatter on every lane);
+// 'sums' reads src from memory. Checked on all three grids.
+TEST_F(ExecutorTest, scatterAddRunsTest) {
+  auto resetConfig = folly::makeGuard([] {
+    WaveConfig::get().isCg = std::nullopt;
+    WaveConfig::get().useSingleBlock = std::nullopt;
+  });
+  const std::string pt2 = "data/scatter_add_runs_test.pt2";
+  const std::string results = "data/scatter_add_runs_test_results.pt";
+  WaveConfig::get().useSingleBlock = false;
+  runTest(pt2, results, "multi-block");
+  WaveConfig::get().useSingleBlock = true;
+  runTest(pt2, results, "single-block");
+  WaveConfig::get().useSingleBlock = std::nullopt;
+  WaveConfig::get().isCg = true;
+  runTest(pt2, results, "cg");
+
+  auto plans = compilePlans(pt2);
+  EXPECT_TRUE(plans.multiKernel.fuses({"tw.scatter_add"}));
 }
 
 // A fused tw.scatter_add accumulating [4096] src/index into a [256] tensor,

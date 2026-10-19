@@ -1387,11 +1387,12 @@ void KernelOperation::setOutputs(
         desc.neededOnHost = meta->returnMeta[i].neededOnHost;
         desc.sizeExpr =
             makeSizeExpr(node, subgraphInputs, static_cast<int32_t>(i));
-        // In-place elementwise (Tensor(a!)): the materialized output aliases
+        // In-place elementwise (Tensor(a!)) or a device function that writes
+        // its self in place (tw.scatter_add): the materialized output aliases
         // the mutated self argument, so reserve it as a view of self instead of
         // a fresh buffer (see reserveOutputs). This makes the returned tensor
         // reflect self, including later in-place mutations of self.
-        if (meta->elementwise && i == 0) {
+        if ((meta->elementwise || meta->mutatesArg.has_value()) && i == 0) {
           auto mutated = dataMutatedInputs(node);
           if (!mutated.empty()) {
             desc.aliasSelfId = mutated[0]->id();
