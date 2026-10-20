@@ -66,9 +66,8 @@ int64_t computeAvgRaw(const std::vector<int64_t>& values) {
 
 constexpr int kBitsPerWord = 8 * sizeof(cudf::bitmask_type);
 
-std::pair<cuda::device_buffer<std::byte>, cudf::size_type> makeNullMask(
-    const std::vector<bool>& valid,
-    cuda::stream_ref stream) {
+std::pair<cuda::device_buffer<cudf::bitmask_type>, cudf::size_type>
+makeNullMask(const std::vector<bool>& valid, cuda::stream_ref stream) {
   auto mr = cudf::get_current_device_resource_ref();
   auto numBits = static_cast<cudf::size_type>(valid.size());
   if (numBits == 0) {

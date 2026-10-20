@@ -18,13 +18,20 @@
 #include "velox/experimental/cudf/expression/DecimalExpressionKernelsGpu.h"
 
 #include "velox/common/base/Exceptions.h"
-#include "velox/type/DecimalUtil.h"
 #include "velox/type/Type.h"
 
+#include <cudf/aggregation.hpp>
 #include <cudf/binaryop.hpp>
-#include <cudf/column/column_factories.hpp>
+#include <cudf/fixed_point/math_ops.hpp>
 #include <cudf/null_mask.hpp>
+#include <cudf/reduction.hpp>
+#include <cudf/round.hpp>
+#include <cudf/scalar/scalar_factories.hpp>
 #include <cudf/table/table_view.hpp>
+
+#include <rmm/device_buffer.hpp>
+
+#include <tuple>
 
 namespace facebook::velox::cudf_velox {
 namespace {
@@ -68,31 +75,88 @@ void checkDecimalBinaryOpStatus(
   }
 }
 
-/// Column of \p outputType with \p size rows, all null (e.g. NULL scalar
-/// operand).
-std::unique_ptr<cudf::column> makeAllNullDecimalColumn(
-    cudf::data_type outputType,
-    cudf::size_type size,
-    cuda::stream_ref stream,
-    rmm::device_async_resource_ref mr) {
-  return cudf::make_fixed_width_column(
-      outputType, size, cudf::mask_state::ALL_NULL, stream, mr);
+// Fails before any row is divided if the dividend must be rescaled by more than
+// the maximum precision, as Velox CPU does when it initializes divide. Velox
+// scales count fractional digits, so they are the negated cuDF scales.
+void checkDecimalDivideRescale(
+    cudf::data_type lhsType,
+    cudf::data_type rhsType,
+    cudf::data_type outputType) {
+  auto const aRescale = static_cast<int64_t>(lhsType.scale()) -
+      rhsType.scale() - outputType.scale();
+  VELOX_USER_CHECK_LE(
+      aRescale,
+      LongDecimalType::kMaxPrecision,
+      "{}",
+      decimalOverflowMessage(cudf::binary_operator::DIV));
 }
 
-void checkDecimalDivideTypes(cudf::type_id inType, cudf::type_id outType) {
-  VELOX_CHECK(
-      inType == cudf::type_id::DECIMAL64 || inType == cudf::type_id::DECIMAL128,
-      "Unsupported input type for decimal divide");
-  if (inType == cudf::type_id::DECIMAL64) {
-    VELOX_CHECK(
-        outType == cudf::type_id::DECIMAL64 ||
-            outType == cudf::type_id::DECIMAL128,
-        "Unexpected output type for decimal divide");
-  } else {
-    VELOX_CHECK(
-        outType == cudf::type_id::DECIMAL128,
-        "Unexpected output type for decimal divide");
+std::unique_ptr<cudf::scalar> makeZeroDecimalScalar(
+    cudf::data_type type,
+    cuda::stream_ref stream) {
+  auto const scale = numeric::scale_type{type.scale()};
+  switch (type.id()) {
+    case cudf::type_id::DECIMAL32:
+      return cudf::make_fixed_point_scalar<numeric::decimal32>(
+          0, scale, stream, get_temp_mr());
+    case cudf::type_id::DECIMAL64:
+      return cudf::make_fixed_point_scalar<numeric::decimal64>(
+          0, scale, stream, get_temp_mr());
+    case cudf::type_id::DECIMAL128:
+      return cudf::make_fixed_point_scalar<numeric::decimal128>(
+          0, scale, stream, get_temp_mr());
+    default:
+      VELOX_UNREACHABLE("Decimal divide requires a decimal divisor");
   }
+}
+
+// Returns true if any row of `divisor` that is valid in `activeMask` is zero.
+// A null `activeMask` means every row is active.
+bool hasActiveZeroDivisor(
+    const cudf::column_view& divisor,
+    cudf::bitmask_type const* activeMask,
+    cudf::size_type activeNullCount,
+    cuda::stream_ref stream) {
+  auto const zero = makeZeroDecimalScalar(divisor.type(), stream);
+  auto const isZero = cudf::binary_operation(
+      divisor,
+      *zero,
+      cudf::binary_operator::EQUAL,
+      cudf::data_type{cudf::type_id::BOOL8},
+      stream,
+      get_temp_mr());
+  auto const active = cudf::column_view{
+      isZero->type(),
+      isZero->size(),
+      isZero->view().head(),
+      activeMask,
+      activeNullCount};
+  auto const any = cudf::reduce(
+      active,
+      *cudf::make_any_aggregation<cudf::reduce_aggregation>(),
+      cudf::data_type{cudf::type_id::BOOL8},
+      stream,
+      get_temp_mr());
+  return any->is_valid(stream) &&
+      static_cast<cudf::numeric_scalar<bool> const&>(*any).value(stream);
+}
+
+// cudf::divide_decimal returns null for a row whose inputs are both valid but
+// whose division fails, from a zero divisor or from overflow. Velox fails the
+// batch instead, so any nulls beyond the inputs' own are reported as errors.
+template <typename HasZeroDivisor>
+void checkDecimalDivideResult(
+    const cudf::column& result,
+    cudf::size_type inputNullCount,
+    HasZeroDivisor&& hasZeroDivisor) {
+  if (result.null_count() == inputNullCount) {
+    return;
+  }
+  if (hasZeroDivisor()) {
+    VELOX_USER_FAIL(
+        "{}", decimalDivisionByZeroMessage(cudf::binary_operator::DIV));
+  }
+  VELOX_USER_FAIL("{}", decimalOverflowMessage(cudf::binary_operator::DIV));
 }
 
 } // namespace
@@ -143,155 +207,85 @@ std::unique_ptr<cudf::column> decimalDivide(
     const cudf::column_view& lhs,
     const cudf::column_view& rhs,
     cudf::data_type outputType,
-    int32_t aRescale,
     cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   VELOX_CHECK_EQ(lhs.size(), rhs.size(), "Decimal divide requires equal sizes");
-  // Use VELOX_CHECK (not _EQ) so failed checks do not pass cudf::type_id into
-  // fmt, which has no formatter for that enum.
-  VELOX_CHECK(
-      lhs.type().id() == rhs.type().id(),
-      "Decimal divide requires matching input types");
-  VELOX_CHECK_GE(
-      aRescale, 0, "Decimal divide requires non-negative rescale factor");
-  // Rescale indexes DecimalUtil::kPowersOfTen; same bound as Presto divide
-  // init.
-  VELOX_USER_CHECK_LE(
-      aRescale,
-      LongDecimalType::kMaxPrecision,
-      "{}",
-      decimalOverflowMessage(cudf::binary_operator::DIV));
+  checkDecimalDivideRescale(lhs.type(), rhs.type(), outputType);
 
-  const auto inType = lhs.type().id();
-  const auto outType = outputType.id();
-  checkDecimalDivideTypes(inType, outType);
-
-  // Precompute the null stencil so the kernel never calls set_null.
-  auto [nullMask, nullCount] = cudf::bitmask_and(
-      cudf::table_view({lhs, rhs}),
+  auto result = cudf::divide_decimal(
+      lhs,
+      rhs,
+      outputType,
+      cudf::rounding_method::HALF_UP,
       stream,
       cudf::memory_resources{mr, get_temp_mr()});
-  auto out = cudf::make_fixed_width_column(
-      outputType, lhs.size(), std::move(nullMask), nullCount, stream, mr);
 
-  const __int128_t rescaleFactor = DecimalUtil::kPowersOfTen[aRescale];
-  checkDecimalBinaryOpStatus(
-      detail::decimalDivideColumnColumn(
-          inType,
-          outType,
-          lhs,
-          rhs,
-          out->mutable_view(),
-          rescaleFactor,
-          stream),
-      cudf::binary_operator::DIV);
-
-  return out;
+  // Rows where either input is null are null in the result without failing.
+  auto activeMask = cudf::create_null_mask(
+      0,
+      cudf::mask_state::UNALLOCATED,
+      stream,
+      cudf::memory_resources{get_temp_mr(), get_temp_mr()});
+  cudf::size_type inputNullCount = 0;
+  if (lhs.has_nulls() || rhs.has_nulls()) {
+    std::tie(activeMask, inputNullCount) = cudf::bitmask_and(
+        cudf::table_view({lhs, rhs}),
+        stream,
+        cudf::memory_resources{get_temp_mr(), get_temp_mr()});
+  }
+  checkDecimalDivideResult(*result, inputNullCount, [&] {
+    return hasActiveZeroDivisor(rhs, activeMask.data(), inputNullCount, stream);
+  });
+  return result;
 }
 
 std::unique_ptr<cudf::column> decimalDivide(
     const cudf::column_view& lhs,
     const cudf::scalar& rhs,
     cudf::data_type outputType,
-    int32_t aRescale,
     cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
-  VELOX_CHECK_GE(
-      aRescale, 0, "Decimal divide requires non-negative rescale factor");
-  // Rescale indexes DecimalUtil::kPowersOfTen; same bound as Presto divide
-  // init.
-  VELOX_USER_CHECK_LE(
-      aRescale,
-      LongDecimalType::kMaxPrecision,
-      "{}",
-      decimalOverflowMessage(cudf::binary_operator::DIV));
+  checkDecimalDivideRescale(lhs.type(), rhs.type(), outputType);
 
-  if (!rhs.is_valid(stream)) {
-    return makeAllNullDecimalColumn(outputType, lhs.size(), stream, mr);
-  }
-
-  // The scalar is valid here, so the column's mask is the whole stencil.
-  auto nullMask = cudf::copy_bitmask(
-      lhs, stream, cudf::memory_resources{mr, get_temp_mr()});
-  auto out = cudf::make_fixed_width_column(
+  auto result = cudf::divide_decimal(
+      lhs,
+      rhs,
       outputType,
-      lhs.size(),
-      std::move(nullMask),
-      lhs.null_count(),
+      cudf::rounding_method::HALF_UP,
       stream,
-      mr);
+      cudf::memory_resources{mr, get_temp_mr()});
 
-  auto rhsValue = detail::getDecimalScalarValue(rhs, stream);
-
-  const auto inType = lhs.type().id();
-  const auto outType = outputType.id();
-  checkDecimalDivideTypes(inType, outType);
-
-  checkDecimalBinaryOpStatus(
-      detail::decimalDivideColumnScalar(
-          inType,
-          outType,
-          lhs,
-          rhsValue,
-          out->mutable_view(),
-          DecimalUtil::kPowersOfTen[aRescale],
-          stream),
-      cudf::binary_operator::DIV);
-
-  return out;
+  auto const inputNullCount =
+      rhs.is_valid(stream) ? lhs.null_count() : lhs.size();
+  checkDecimalDivideResult(*result, inputNullCount, [&] {
+    return detail::getDecimalScalarValue(rhs, stream) == 0;
+  });
+  return result;
 }
 
 std::unique_ptr<cudf::column> decimalDivide(
     const cudf::scalar& lhs,
     const cudf::column_view& rhs,
     cudf::data_type outputType,
-    int32_t aRescale,
     cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
-  VELOX_CHECK_GE(
-      aRescale, 0, "Decimal divide requires non-negative rescale factor");
-  // Rescale indexes DecimalUtil::kPowersOfTen; same bound as Presto divide
-  // init.
-  VELOX_USER_CHECK_LE(
-      aRescale,
-      LongDecimalType::kMaxPrecision,
-      "{}",
-      decimalOverflowMessage(cudf::binary_operator::DIV));
+  checkDecimalDivideRescale(lhs.type(), rhs.type(), outputType);
 
-  if (!lhs.is_valid(stream)) {
-    return makeAllNullDecimalColumn(outputType, rhs.size(), stream, mr);
-  }
-
-  // The scalar is valid here, so the column's mask is the whole stencil.
-  auto nullMask = cudf::copy_bitmask(
-      rhs, stream, cudf::memory_resources{mr, get_temp_mr()});
-  auto out = cudf::make_fixed_width_column(
+  auto result = cudf::divide_decimal(
+      lhs,
+      rhs,
       outputType,
-      rhs.size(),
-      std::move(nullMask),
-      rhs.null_count(),
+      cudf::rounding_method::HALF_UP,
       stream,
-      mr);
+      cudf::memory_resources{mr, get_temp_mr()});
 
-  auto lhsValue = detail::getDecimalScalarValue(lhs, stream);
-
-  const auto inType = rhs.type().id();
-  const auto outType = outputType.id();
-  checkDecimalDivideTypes(inType, outType);
-
-  const __int128_t rescaleFactor = DecimalUtil::kPowersOfTen[aRescale];
-  checkDecimalBinaryOpStatus(
-      detail::decimalDivideScalarColumn(
-          inType,
-          outType,
-          lhsValue,
-          rhs,
-          out->mutable_view(),
-          rescaleFactor,
-          stream),
-      cudf::binary_operator::DIV);
-
-  return out;
+  auto const inputNullCount =
+      lhs.is_valid(stream) ? rhs.null_count() : rhs.size();
+  checkDecimalDivideResult(*result, inputNullCount, [&] {
+    return hasActiveZeroDivisor(
+        rhs, rhs.null_mask(), rhs.null_count(), stream);
+  });
+  return result;
 }
 
 } // namespace facebook::velox::cudf_velox

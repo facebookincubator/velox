@@ -135,7 +135,7 @@ void averageRoundDecimalSum(
  * @param mr memory resource for the returned mask.
  * @return {null mask buffer, null count}.
  */
-std::pair<cuda::device_buffer<std::byte>, cudf::size_type>
+std::pair<cuda::device_buffer<cudf::bitmask_type>, cudf::size_type>
 buildStateValidityMask(
     const cudf::column_view& sumCol,
     const cudf::column_view& countCol,
