@@ -160,6 +160,7 @@ are summarized below.
 
 - Use `VELOX_CHECK_*` for internal errors, `VELOX_USER_CHECK_*` for user errors.
 - Prefer two-argument forms: `VELOX_CHECK_LT(idx, size)` over `VELOX_CHECK(idx < size)`.
+- One check per condition: split `VELOX_CHECK(a && b)` into `VELOX_CHECK(a)` and `VELOX_CHECK(b)`. A failure then names the condition that broke, and each check can use a two-argument form.
 - Use `VELOX_FAIL()` / `VELOX_USER_FAIL()` to throw unconditionally.
 - Use `VELOX_UNREACHABLE()` for impossible branches, `VELOX_NYI()` for unimplemented paths.
 - Put runtime information (names, values, types) at the **end** of error messages, after the static description.

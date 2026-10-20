@@ -26,15 +26,14 @@
 
 using namespace facebook;
 
-using EncodingViewTest = nimble::test::EncodingViewTest;
 using RLEEncodingViewTest = nimble::test::EncodingViewTest;
 
-TEST_F(EncodingViewTest, readsRleEncoding) {
+TEST_P(RLEEncodingViewTest, readsRleEncoding) {
   expectReads<nimble::RLEEncoding<int32_t>>(
       makeVector({1, 1, 1, 2, 2, 3, 3, 3, 3, 4}), {9, 0, 4, 5, 8, 2});
 }
 
-TEST_F(RLEEncodingViewTest, readsPhysicalNestedDeltaBlockValues) {
+TEST_P(RLEEncodingViewTest, readsPhysicalNestedDeltaBlockValues) {
   const std::vector<int32_t> values{
       0,
       0,
@@ -116,12 +115,12 @@ TEST_F(RLEEncodingViewTest, readsPhysicalNestedDeltaBlockValues) {
   }
 }
 
-TEST_F(RLEEncodingViewTest, preservesFloatingPointRunValues) {
+TEST_P(RLEEncodingViewTest, preservesFloatingPointRunValues) {
   expectReads<nimble::RLEEncoding<float>>(
       makeVector<float>({1.0F, 1.0F, -0.0F, -0.0F, 2.5F, 2.5F}), {5, 0, 2, 3});
 }
 
-TEST_F(RLEEncodingViewTest, concurrent) {
+TEST_P(RLEEncodingViewTest, concurrent) {
   const auto positions = randomizedPositions(/*seed=*/11);
 
   expectConcurrentReads<nimble::RLEEncoding<int32_t>>(
@@ -129,3 +128,5 @@ TEST_F(RLEEncodingViewTest, concurrent) {
   expectConcurrentReads<nimble::RLEEncoding<bool>>(
       randomRleBool(/*seed=*/13), positions);
 }
+
+INSTANTIATE_ENCODING_VIEW_TEST_SUITE(RLEEncodingViewTest);

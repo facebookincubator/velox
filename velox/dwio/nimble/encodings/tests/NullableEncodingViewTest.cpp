@@ -82,12 +82,13 @@ class NullableEncodingViewTest : public EncodingViewTest {
         std::nullopt);
     const auto encoded = EncodingFactory::encodeNullable<int64_t>(
         std::move(policy), nonNullValues, isNonNull, *buffer_);
-    auto view = createEncodingView(encoded, pool_.get());
-    return view;
+    Encoding::Options options;
+    options.cacheEncodingView = cacheEncodingView();
+    return createEncodingView(encoded, pool_.get(), options);
   }
 };
 
-TEST_F(NullableEncodingViewTest, requiresNonNullRowsForSingleValueReads) {
+TEST_P(NullableEncodingViewTest, requiresNonNullRowsForSingleValueReads) {
   auto view = makeView({10, std::nullopt, 12, std::nullopt});
   int64_t value{0};
   view->readAt(2, &value);
@@ -100,7 +101,7 @@ TEST_F(NullableEncodingViewTest, requiresNonNullRowsForSingleValueReads) {
   }
 }
 
-TEST_F(NullableEncodingViewTest, readsMixedRows) {
+TEST_P(NullableEncodingViewTest, readsMixedRows) {
   auto view = makeView({10, std::nullopt, 12, 13, std::nullopt, 15});
   const std::array<uint32_t, 4> indices{1, 2, 4, 5};
   std::array<int64_t, 4> output{};
@@ -116,7 +117,7 @@ TEST_F(NullableEncodingViewTest, readsMixedRows) {
   EXPECT_EQ(nullIndices, (std::vector<uint32_t>{0, 2}));
 }
 
-TEST_F(NullableEncodingViewTest, readsNonNullRows) {
+TEST_P(NullableEncodingViewTest, readsNonNullRows) {
   auto view = makeView({10, std::nullopt, 12, 13, std::nullopt, 15});
   const std::array<uint32_t, 4> indices{5, 0, 2, 2};
   std::array<int64_t, 4> output{};
@@ -132,7 +133,7 @@ TEST_F(NullableEncodingViewTest, readsNonNullRows) {
   EXPECT_TRUE(nullIndices.empty());
 }
 
-TEST_F(NullableEncodingViewTest, readsNullRows) {
+TEST_P(NullableEncodingViewTest, readsNullRows) {
   auto view = makeView({10, std::nullopt, 12, 13, std::nullopt, 15});
   const std::array<uint32_t, 2> indices{1, 4};
   std::array<int64_t, 2> output{};
@@ -148,7 +149,67 @@ TEST_F(NullableEncodingViewTest, readsNullRows) {
   EXPECT_EQ(nullIndices, (std::vector<uint32_t>{0, 1}));
 }
 
-TEST_F(NullableEncodingViewTest, readsRanges) {
+// Rows far apart make a read span many more rows than it selects, which a view
+// without caching reads through a window for each row or range.
+TEST_P(NullableEncodingViewTest, readsScatteredIndicesAndRanges) {
+  constexpr uint32_t kNumRows{5'000};
+  std::vector<std::optional<int64_t>> rows(kNumRows);
+  for (uint32_t row{0}; row < kNumRows; ++row) {
+    if (row % 3 != 0) {
+      rows[row] = static_cast<int64_t>(row) * 7;
+    }
+  }
+  auto view = makeView(rows);
+
+  const std::vector<uint32_t> indices{4'999, 0, 2'500, 17, 17, 3'001};
+  std::vector<int64_t> indexOutput(indices.size());
+  std::vector<uint32_t> indexNulls;
+  std::vector<int64_t> expectedIndexOutput;
+  std::vector<uint32_t> expectedIndexNulls;
+  for (uint32_t i{0}; i < indices.size(); ++i) {
+    expectedIndexOutput.push_back(rows[indices[i]].value_or(0));
+    if (!rows[indices[i]].has_value()) {
+      expectedIndexNulls.push_back(i);
+    }
+  }
+  const auto numNonNullIndices = view->read(
+      indices,
+      [&](uint32_t outputIndex) { indexNulls.push_back(outputIndex); },
+      indexOutput.data());
+  EXPECT_EQ(
+      numNonNullIndices,
+      indices.size() - static_cast<uint32_t>(expectedIndexNulls.size()));
+  EXPECT_EQ(indexOutput, expectedIndexOutput);
+  EXPECT_EQ(indexNulls, expectedIndexNulls);
+
+  const std::vector<RowRange> ranges{{10, 14}, {2'000, 2'003}, {4'990, 4'996}};
+  std::vector<int64_t> rangeOutput(13);
+  std::vector<uint32_t> rangeNulls;
+  std::vector<int64_t> expectedRangeOutput;
+  std::vector<uint32_t> expectedRangeNulls;
+  uint32_t outputIndex{0};
+  for (const auto& range : ranges) {
+    for (uint32_t row{range.startRow}; row < range.endRow; ++row) {
+      expectedRangeOutput.push_back(rows[row].value_or(0));
+      if (!rows[row].has_value()) {
+        expectedRangeNulls.push_back(outputIndex);
+      }
+      ++outputIndex;
+    }
+  }
+  ASSERT_EQ(expectedRangeOutput.size(), rangeOutput.size());
+  const auto numNonNullRanges = view->read(
+      ranges,
+      [&](uint32_t index) { rangeNulls.push_back(index); },
+      rangeOutput.data());
+  EXPECT_EQ(
+      numNonNullRanges,
+      rangeOutput.size() - static_cast<uint32_t>(expectedRangeNulls.size()));
+  EXPECT_EQ(rangeOutput, expectedRangeOutput);
+  EXPECT_EQ(rangeNulls, expectedRangeNulls);
+}
+
+TEST_P(NullableEncodingViewTest, readsRanges) {
   auto view = makeView({10, std::nullopt, 12, 13, std::nullopt, 15});
   const std::array<RowRange, 2> ranges{{{0, 2}, {4, 6}}};
   std::array<int64_t, 4> output{};
@@ -164,7 +225,7 @@ TEST_F(NullableEncodingViewTest, readsRanges) {
   EXPECT_EQ(nullIndices, (std::vector<uint32_t>{1, 2}));
 }
 
-TEST_F(NullableEncodingViewTest, readsNonNullRangesAfterNulls) {
+TEST_P(NullableEncodingViewTest, readsNonNullRangesAfterNulls) {
   auto view = makeView({10, std::nullopt, 12, 13, std::nullopt, 15});
   const std::array<RowRange, 2> ranges{{{2, 4}, {5, 6}}};
   std::array<int64_t, 3> output{};
@@ -180,7 +241,7 @@ TEST_F(NullableEncodingViewTest, readsNonNullRangesAfterNulls) {
   EXPECT_TRUE(nullIndices.empty());
 }
 
-TEST_F(NullableEncodingViewTest, readsRangesWithoutNulls) {
+TEST_P(NullableEncodingViewTest, readsRangesWithoutNulls) {
   auto view = makeView({10, 11, 12, 13, 14, 15});
   const std::array<RowRange, 3> ranges{{{0, 2}, {2, 3}, {4, 6}}};
   std::array<int64_t, 5> output{};
@@ -211,7 +272,7 @@ TEST_F(NullableEncodingViewTest, readsRangesWithoutNulls) {
   EXPECT_TRUE(nullIndices.empty());
 }
 
-TEST_F(NullableEncodingViewTest, readsRangesWithOnlyNulls) {
+TEST_P(NullableEncodingViewTest, readsRangesWithOnlyNulls) {
   auto view =
       makeView({std::nullopt, std::nullopt, std::nullopt, std::nullopt});
   const std::array<RowRange, 2> ranges{{{0, 1}, {2, 4}}};
@@ -228,7 +289,7 @@ TEST_F(NullableEncodingViewTest, readsRangesWithOnlyNulls) {
   EXPECT_EQ(nullIndices, (std::vector<uint32_t>{0, 1, 2}));
 }
 
-TEST_F(NullableEncodingViewTest, readsRangesAroundSelectedNulls) {
+TEST_P(NullableEncodingViewTest, readsRangesAroundSelectedNulls) {
   auto view =
       makeView({10, std::nullopt, 12, std::nullopt, std::nullopt, 15, 16, 17});
   // Rows 2 and 5 start where the previous run ends in the compact child, but a
@@ -247,7 +308,7 @@ TEST_F(NullableEncodingViewTest, readsRangesAroundSelectedNulls) {
   EXPECT_EQ(nullIndices, (std::vector<uint32_t>{1, 3, 4}));
 }
 
-TEST_F(NullableEncodingViewTest, readsLongRunsAroundSelectedNulls) {
+TEST_P(NullableEncodingViewTest, readsLongRunsAroundSelectedNulls) {
   // Few nulls leave long runs of non-null rows.
   const auto isNullRow = [](uint32_t row) {
     return row == 5 || row == 20 || row == 21 || row == 40;
@@ -303,7 +364,7 @@ TEST_F(NullableEncodingViewTest, readsLongRunsAroundSelectedNulls) {
           })));
 }
 
-TEST_F(NullableEncodingViewTest, readsRandomRanges) {
+TEST_P(NullableEncodingViewTest, readsRandomRanges) {
   constexpr uint32_t kSeed{1'384'921};
   std::mt19937 rng{kSeed};
   for (uint32_t iteration{0}; iteration < 100; ++iteration) {
@@ -353,7 +414,7 @@ TEST_F(NullableEncodingViewTest, readsRandomRanges) {
   }
 }
 
-TEST_F(NullableEncodingViewTest, readsWideRandomRanges) {
+TEST_P(NullableEncodingViewTest, readsWideRandomRanges) {
   constexpr uint32_t kSeed{7'204'113};
   std::mt19937 rng{kSeed};
   // Null rates in thousandths: none, sparse, mixed, dense and all.
@@ -405,6 +466,95 @@ TEST_F(NullableEncodingViewTest, readsWideRandomRanges) {
     }
   }
 }
+
+TEST_P(NullableEncodingViewTest, concurrentReads) {
+  constexpr uint32_t kNumRows{2'048};
+  std::vector<std::optional<int64_t>> rows(kNumRows);
+  for (uint32_t row{0}; row < kNumRows; ++row) {
+    if (row % 5 != 0 && row % 7 != 3) {
+      rows[row] = static_cast<int64_t>(row) * 3;
+    }
+  }
+  const auto view = makeView(rows);
+
+  // Checks that 'output' holds the rows in 'selected', in order, with zeros and
+  // reported nulls at the null rows.
+  const auto matches = [&](const std::vector<uint32_t>& selected,
+                           const std::vector<int64_t>& output,
+                           const std::vector<uint32_t>& nullIndices) {
+    size_t numNulls{0};
+    for (uint32_t i{0}; i < selected.size(); ++i) {
+      const auto& row = rows[selected[i]];
+      if (row.has_value()) {
+        if (output[i] != *row) {
+          return false;
+        }
+        continue;
+      }
+      if (output[i] != 0 || numNulls >= nullIndices.size() ||
+          nullIndices[numNulls++] != i) {
+        return false;
+      }
+    }
+    return numNulls == nullIndices.size();
+  };
+
+  expectConcurrent([&](int threadIndex) {
+    std::mt19937 rng{static_cast<uint32_t>(threadIndex) + 11};
+    for (auto iteration = 0; iteration < 64; ++iteration) {
+      const auto point = static_cast<uint32_t>(rng() % kNumRows);
+      if (rows[point].has_value()) {
+        int64_t value{0};
+        view->readAt(point, &value);
+        if (value != *rows[point]) {
+          return false;
+        }
+      }
+
+      std::vector<uint32_t> indices(16);
+      for (auto& index : indices) {
+        index = static_cast<uint32_t>(rng() % kNumRows);
+      }
+      std::vector<int64_t> output(indices.size());
+      std::vector<uint32_t> nullIndices;
+      view->read(
+          indices,
+          [&](uint32_t outputIndex) { nullIndices.push_back(outputIndex); },
+          output.data());
+      if (!matches(indices, output, nullIndices)) {
+        return false;
+      }
+
+      // Two ordered, disjoint ranges.
+      const auto firstStart = static_cast<uint32_t>(rng() % 1'000);
+      const auto firstLength = 1 + static_cast<uint32_t>(rng() % 64);
+      const auto secondStart =
+          firstStart + firstLength + static_cast<uint32_t>(rng() % 64);
+      const auto secondLength = 1 + static_cast<uint32_t>(rng() % 64);
+      const std::array<RowRange, 2> ranges{
+          RowRange{firstStart, firstStart + firstLength},
+          RowRange{secondStart, secondStart + secondLength}};
+      std::vector<uint32_t> selected;
+      for (const auto& range : ranges) {
+        for (auto row = range.startRow; row < range.endRow; ++row) {
+          selected.push_back(row);
+        }
+      }
+      output.assign(selected.size(), 0);
+      nullIndices.clear();
+      view->read(
+          ranges,
+          [&](uint32_t outputIndex) { nullIndices.push_back(outputIndex); },
+          output.data());
+      if (!matches(selected, output, nullIndices)) {
+        return false;
+      }
+    }
+    return true;
+  });
+}
+
+INSTANTIATE_ENCODING_VIEW_TEST_SUITE(NullableEncodingViewTest);
 
 } // namespace
 } // namespace facebook::nimble::test
