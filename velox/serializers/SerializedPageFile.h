@@ -21,6 +21,7 @@
 #include <memory>
 #include "velox/common/file/File.h"
 #include "velox/common/file/FileInputStream.h"
+#include "velox/common/memory/RawVector.h"
 #include "velox/serializers/VectorStream.h"
 
 namespace facebook::velox::serializer {
@@ -200,8 +201,8 @@ class SerializedPageFileWriter {
   std::vector<SerializedPageFile::FileInfo> finishedFiles_;
 
   // Reused buffers for estimating the serialized size of rows passed to write.
-  std::vector<vector_size_t> rowNumbers_;
-  std::vector<vector_size_t> rowSize_;
+  raw_vector<vector_size_t> rowNumbers_;
+  std::vector<vector_size_t> rowSizes_;
   std::vector<vector_size_t*> sizePointers_;
 };
 

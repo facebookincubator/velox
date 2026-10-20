@@ -147,11 +147,11 @@ folly::Range<const vector_size_t*> SerializedPageFileWriter::estimateRowSizes(
   for (const auto& range : indices) {
     numRows += range.size;
   }
-  if (numRows > rowSize_.size()) {
+  if (numRows > rowSizes_.size()) {
     rowNumbers_.resize(numRows);
-    rowSize_.resize(numRows);
+    rowSizes_.resize(numRows);
     sizePointers_.resize(numRows);
-    std::iota(sizePointers_.begin(), sizePointers_.end(), rowSize_.data());
+    std::iota(sizePointers_.begin(), sizePointers_.end(), rowSizes_.data());
   }
 
   vector_size_t rowIndex = 0;
@@ -160,14 +160,14 @@ folly::Range<const vector_size_t*> SerializedPageFileWriter::estimateRowSizes(
       rowNumbers_[rowIndex++] = range.begin + offset;
     }
   }
-  std::fill(rowSize_.begin(), rowSize_.begin() + numRows, 0);
+  std::fill(rowSizes_.begin(), rowSizes_.begin() + numRows, 0);
   Scratch scratch;
   serde_->estimateSerializedSize(
       rows.get(),
       folly::Range(rowNumbers_.data(), numRows),
       sizePointers_.data(),
       scratch);
-  return folly::Range<const vector_size_t*>(rowSize_.data(), numRows);
+  return folly::Range<const vector_size_t*>(rowSizes_.data(), numRows);
 }
 
 uint64_t SerializedPageFileWriter::write(
