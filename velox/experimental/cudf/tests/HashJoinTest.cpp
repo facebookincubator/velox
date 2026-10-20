@@ -197,42 +197,56 @@ TEST_F(HashJoinTest, countStarOverJoinFilterCastingVarchar) {
   AssertQueryBuilder(plan).assertResults(
       makeRowVector({makeFlatVector<int64_t>({1})}));
 
-  // A CAST keeps the join on the CPU, which casts only the pairs the join
-  // matches; the GPU would cast "x" in the row it never matches and fail.
   auto& config = cudf_velox::CudfConfig::getInstance();
   config.allowCpuFallback = true;
   SCOPE_EXIT {
     config.allowCpuFallback = false;
   };
-  core::PlanNodeId joinId;
-  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  plan = PlanBuilder(planNodeIdGenerator)
-             .values({probe})
-             .hashJoin(
-                 {"k"},
-                 {"u_k"},
-                 PlanBuilder(planNodeIdGenerator).values({build}).planNode(),
-                 "cast(t_val as double) > u_threshold",
-                 {},
-                 core::JoinType::kInner)
-             .capturePlanNodeId(joinId)
-             .partialAggregation({}, {"count(*)"})
-             .finalAggregation()
-             .planNode();
-  std::shared_ptr<Task> task;
-  auto result = AssertQueryBuilder(plan).copyResults(pool(), task);
-  facebook::velox::test::assertEqualVectors(four, result);
-  std::string operatorTypes;
-  for (const auto& pipeline : task->taskStats().pipelineStats) {
-    for (const auto& op : pipeline.operatorStats) {
-      if (op.planNodeId == joinId) {
-        operatorTypes += op.operatorType + " ";
+  // Counts the matches of the join with 'filter', expecting four, and returns
+  // the types of the operators that ran the join.
+  const auto joinOperatorTypes = [&](const std::string& filter) {
+    core::PlanNodeId joinId;
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    auto countPlan =
+        PlanBuilder(planNodeIdGenerator)
+            .values({probe})
+            .hashJoin(
+                {"k"},
+                {"u_k"},
+                PlanBuilder(planNodeIdGenerator).values({build}).planNode(),
+                filter,
+                {},
+                core::JoinType::kInner)
+            .capturePlanNodeId(joinId)
+            .partialAggregation({}, {"count(*)"})
+            .finalAggregation()
+            .planNode();
+    std::shared_ptr<Task> task;
+    auto result = AssertQueryBuilder(countPlan).copyResults(pool(), task);
+    facebook::velox::test::assertEqualVectors(four, result);
+    std::string operatorTypes;
+    for (const auto& pipeline : task->taskStats().pipelineStats) {
+      for (const auto& op : pipeline.operatorStats) {
+        if (op.planNodeId == joinId) {
+          operatorTypes += op.operatorType + " ";
+        }
       }
     }
-  }
+    return operatorTypes;
+  };
+
+  // A CAST keeps the join on the CPU, which casts only the pairs the join
+  // matches; the GPU would cast "x" in the row it never matches and fail.
+  auto operatorTypes = joinOperatorTypes("cast(t_val as double) > u_threshold");
   EXPECT_NE(operatorTypes.find("HashProbe "), std::string::npos)
       << operatorTypes;
   EXPECT_EQ(operatorTypes.find("Cudf"), std::string::npos) << operatorTypes;
+
+  // A cast of a literal folds away before the check and leaves the join on the
+  // GPU.
+  operatorTypes = joinOperatorTypes(
+      "try_cast(t_val as double) > u_threshold * cast('1' as double)");
+  EXPECT_NE(operatorTypes.find("Cudf"), std::string::npos) << operatorTypes;
 }
 
 TEST_F(HashJoinTest, countStarOverLikeFilterSpanningBothSidesJoin) {

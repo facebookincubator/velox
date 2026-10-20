@@ -2800,8 +2800,8 @@ TEST_F(CudfVarcharCastTest, castFromVarcharRunsOnGpu) {
   // On the CPU a CAST error never surfaces on a row the rest of the expression
   // settles without the cast, so a CAST beside another non-constant argument
   // stays on the CPU, whichever argument holds the cast. A TRY_CAST there, a
-  // CAST with only constants beside it and a CAST in a branch of if run on the
-  // GPU.
+  // CAST with only non-null constants beside it and a CAST in a branch of if
+  // run on the GPU.
   const auto twoColumns = ROW({{"c0", VARCHAR()}, {"c1", DOUBLE()}});
   const auto runsOnGpuWith = [&](const std::string& expr) {
     return cudf_velox::canExprRunOnGpu(
@@ -2820,6 +2820,24 @@ TEST_F(CudfVarcharCastTest, castFromVarcharRunsOnGpu) {
   EXPECT_TRUE(runsOnGpuWith("try_cast(c0 as double) > c1"));
   EXPECT_TRUE(runsOnGpu("if(c0 <> '', cast(c0 as bigint), 0)"));
   EXPECT_TRUE(runsOnGpuWith("if(c1 > 0.0, cast(c0 as double), c1)"));
+
+  // A NULL constant beside the cast keeps it on the CPU as well: a default-null
+  // function returns NULL there and drops any error the cast raised. A non-null
+  // constant does not.
+  EXPECT_FALSE(runsOnGpu("cast(null as bigint) + cast(c0 as bigint) > 0"));
+  EXPECT_FALSE(runsOnGpu("cast(c0 as bigint) + cast(null as bigint) > 0"));
+  EXPECT_TRUE(runsOnGpu("cast(c0 as bigint) + 1 > 0"));
+  EXPECT_TRUE(runsOnGpu("1 + cast(c0 as bigint) > 0"));
+
+  // A join filter is optimized before its check, so a cast of a literal folds
+  // away; a CAST of a column keeps the join on the CPU and a TRY_CAST does not.
+  const auto joinFilterRunsOnGpu = [&](const std::string& expr) {
+    return cudf_velox::canJoinFilterRunOnGpu(
+        makeTypedExpr(expr, twoColumns), execCtx_.queryCtx(), execCtx_.pool());
+  };
+  EXPECT_TRUE(joinFilterRunsOnGpu("c1 > cast('1.5' as double)"));
+  EXPECT_FALSE(joinFilterRunsOnGpu("cast(c0 as double) > c1"));
+  EXPECT_TRUE(joinFilterRunsOnGpu("try_cast(c0 as double) > c1"));
 
   // JSON is of VARCHAR kind but has its own cast operator on the CPU.
   const auto jsonRowType = ROW({{"c0", JSON()}});
