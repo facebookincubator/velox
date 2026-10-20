@@ -224,19 +224,23 @@ void DirectBufferedInput::readRegions(
     readRegion(group, prefetch);
     group.clear();
   }
-  if (prefetch && executor_) {
-    for (auto i = 0; i < coalescedLoads_.size(); ++i) {
-      auto& load = coalescedLoads_[i];
-      if (load->state() == CoalescedLoad::State::kPlanned) {
-        AsyncLoadHolder loadHolder{
-            .load = load, .pool = pool_->shared_from_this()};
-        executor_->add([asyncLoad = std::move(loadHolder)]() {
-          VELOX_CHECK_NOT_NULL(asyncLoad.load);
-          asyncLoad.load->loadOrFuture(nullptr);
-        });
-      }
+  if (prefetch) {
+    for (auto& load : coalescedLoads_) {
+      prefetchLoad(load);
     }
   }
+}
+
+void DirectBufferedInput::prefetchLoad(
+    const std::shared_ptr<CoalescedLoad>& load) {
+  if (!executor_ || load->state() != CoalescedLoad::State::kPlanned) {
+    return;
+  }
+  AsyncLoadHolder loadHolder{.load = load, .pool = pool_->shared_from_this()};
+  executor_->add([asyncLoad = std::move(loadHolder)]() {
+    VELOX_CHECK_NOT_NULL(asyncLoad.load);
+    asyncLoad.load->loadOrFuture(nullptr);
+  });
 }
 
 std::shared_ptr<DirectCoalescedLoad> DirectBufferedInput::coalescedLoad(

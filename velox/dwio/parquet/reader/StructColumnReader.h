@@ -17,6 +17,7 @@
 #pragma once
 
 #include <memory>
+#include <optional>
 
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/SelectiveStructColumnReader.h"
@@ -103,6 +104,14 @@ class StructColumnReader : public dwio::common::SelectiveStructColumnReader {
   void enqueueRowGroup(uint32_t index, dwio::common::BufferedInput& input);
 
   bool isRowGroupBuffered(uint32_t index, dwio::common::BufferedInput& input);
+
+  // Root reader only. StreamIdentifier ids of the physical columns under the
+  // top-level children that are produced as LazyVectors (projected, no
+  // filter), the rule SelectiveStructColumnReaderBase::read() applies.
+  // Resolved on first use because isTopLevel is set after construction.
+  const std::vector<int32_t>& lazyColumnStreamIds();
+
+  std::optional<std::vector<int32_t>> lazyColumnStreamIds_;
 
   // Reader subtree used for getting nullability information for 'this'.
   dwio::common::SelectiveColumnReader* repDefSourceReader_{nullptr};

@@ -513,6 +513,15 @@ std::optional<RowVectorPtr> FileDataSource::next(
     }
   }
 
+  // The first batch with rows passing all filters means the lazily loaded
+  // columns will be read. Tell the file's BufferedInput once per split, so an
+  // input that delayed loading those columns starts now instead of on the
+  // first actual read. A no-op for inputs that do not delay anything.
+  if (!lazyColumnsHintSent_) {
+    lazyColumnsHintSent_ = true;
+    splitReader_->hintLazyColumnsNeeded();
+  }
+
   if (outputType_->size() == 0) {
     return exec::wrap(rowsRemaining, remainingIndices, rowVector);
   }
@@ -673,6 +682,7 @@ vector_size_t FileDataSource::evaluateRemainingFilter(RowVectorPtr& rowVector) {
 }
 
 void FileDataSource::resetSplit() {
+  lazyColumnsHintSent_ = false;
   split_.reset();
   splitReader_->resetSplit();
   // Keep readers around to hold adaptation.

@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <folly/ScopeGuard.h>
 #include <folly/init/Init.h>
 #include <algorithm>
 #include <memory>
@@ -33,7 +34,9 @@
 #include "velox/type/tests/SubfieldFiltersBuilder.h"
 #include "velox/type/tz/TimeZoneMap.h"
 
+#include "velox/connectors/hive/BufferedInputBuilder.h" // @manual=//velox/connectors/hive:velox_hive_connector_parquet
 #include "velox/connectors/hive/HiveConfig.h" // @manual=//velox/connectors/hive:velox_hive_connector_parquet
+#include "velox/dwio/common/DirectBufferedInput.h"
 #include "velox/dwio/parquet/writer/Writer.h" // @manual
 
 using namespace facebook::velox;
@@ -2439,6 +2442,216 @@ TEST_F(ParquetTableScanTest, structSkipNulls) {
       .config(core::QueryConfig::kMaxOutputBatchRows, "64")
       .splits(splits)
       .assertResults("SELECT id, s FROM tmp WHERE id >= 200 AND s IS NULL");
+}
+
+namespace {
+
+// What the reader and the connector tell the file's BufferedInput about the
+// lazily loaded columns, across the input and all its clones.
+struct LazyColumnHookCalls {
+  std::vector<std::vector<int32_t>> lazyStreams;
+  int32_t hints{0};
+};
+
+class RecordingBufferedInput : public dwio::common::DirectBufferedInput {
+ public:
+  RecordingBufferedInput(
+      const FileHandle& fileHandle,
+      const dwio::common::ReaderOptions& readerOpts,
+      const connector::ConnectorQueryCtx* connectorQueryCtx,
+      std::shared_ptr<io::IoStatistics> ioStatistics,
+      std::shared_ptr<IoStats> ioStats,
+      folly::Executor* executor,
+      const folly::F14FastMap<std::string, std::string>& fileReadOps,
+      std::shared_ptr<LazyColumnHookCalls> calls)
+      : DirectBufferedInput(
+            fileHandle.file,
+            dwio::common::MetricsLog::voidLog(),
+            fileHandle.uuid,
+            connector::Connector::getTracker(
+                connectorQueryCtx->scanId(),
+                readerOpts.loadQuantum()),
+            fileHandle.groupId,
+            std::move(ioStatistics),
+            std::move(ioStats),
+            executor,
+            readerOpts,
+            fileReadOps),
+        calls_(std::move(calls)) {}
+
+  std::unique_ptr<dwio::common::BufferedInput> clone() const override {
+    return std::unique_ptr<dwio::common::BufferedInput>(
+        new RecordingBufferedInput(
+            input_,
+            fileNum_,
+            tracker_,
+            groupId_,
+            ioStatistics_,
+            ioStats_,
+            executor_,
+            options_,
+            calls_));
+  }
+
+  void setLazyColumnStreams(const std::vector<int32_t>& streamIds) override {
+    calls_->lazyStreams.push_back(streamIds);
+  }
+
+  void hintLazyColumnsNeeded() override {
+    ++calls_->hints;
+  }
+
+ private:
+  RecordingBufferedInput(
+      std::shared_ptr<dwio::common::ReadFileInputStream> input,
+      StringIdLease fileNum,
+      std::shared_ptr<cache::ScanTracker> tracker,
+      StringIdLease groupId,
+      std::shared_ptr<io::IoStatistics> ioStatistics,
+      std::shared_ptr<IoStats> ioStats,
+      folly::Executor* executor,
+      const io::ReaderOptions& readerOptions,
+      std::shared_ptr<LazyColumnHookCalls> calls)
+      : DirectBufferedInput(
+            std::move(input),
+            std::move(fileNum),
+            std::move(tracker),
+            std::move(groupId),
+            std::move(ioStatistics),
+            std::move(ioStats),
+            executor,
+            readerOptions),
+        calls_(std::move(calls)) {}
+
+  const std::shared_ptr<LazyColumnHookCalls> calls_;
+};
+
+class RecordingBufferedInputBuilder : public BufferedInputBuilder {
+ public:
+  explicit RecordingBufferedInputBuilder(
+      std::shared_ptr<LazyColumnHookCalls> calls)
+      : calls_(std::move(calls)) {}
+
+  std::unique_ptr<dwio::common::BufferedInput> create(
+      const FileHandle& fileHandle,
+      const dwio::common::ReaderOptions& readerOpts,
+      const connector::ConnectorQueryCtx* connectorQueryCtx,
+      std::shared_ptr<io::IoStatistics> ioStatistics,
+      std::shared_ptr<IoStats> ioStats,
+      folly::Executor* executor,
+      const folly::F14FastMap<std::string, std::string>& fileReadOps) override {
+    return std::make_unique<RecordingBufferedInput>(
+        fileHandle,
+        readerOpts,
+        connectorQueryCtx,
+        std::move(ioStatistics),
+        std::move(ioStats),
+        executor,
+        fileReadOps,
+        calls_);
+  }
+
+ private:
+  const std::shared_ptr<LazyColumnHookCalls> calls_;
+};
+
+} // namespace
+
+// What the reader and the connector tell the file's BufferedInput about the
+// lazily loaded columns (projected, no filter): the reader names their streams
+// on every row group input, and the connector sends one hint per split once a
+// row passed all filters. Checks what reaches the input, and that a recording
+// input leaves the results unchanged.
+TEST_F(ParquetTableScanTest, lazyColumnHooks) {
+  // The file must exceed the connector's file preload threshold (8 MB by
+  // default), otherwise it is read whole and no row group input is made.
+  static constexpr int32_t kRowsPerGroup = 20'000;
+  static constexpr int32_t kGroups = 4;
+  std::vector<RowVectorPtr> batches;
+  for (int32_t g = 0; g < kGroups; ++g) {
+    batches.push_back(makeRowVector(
+        {"a", "b", "c"},
+        {makeFlatVector<int64_t>(
+             kRowsPerGroup, [&](auto row) { return g * kRowsPerGroup + row; }),
+         // Incompressible values, so the lazy column's chunks are large and
+         // the file is larger than the preload threshold.
+         makeFlatVector<std::string>(
+             kRowsPerGroup,
+             [&](auto row) {
+               std::string value(160, ' ');
+               uint32_t x = (g * kRowsPerGroup + row) * 2654435761u + 12345;
+               for (auto& ch : value) {
+                 x = x * 1664525u + 1013904223u;
+                 ch = 'a' + (x >> 24) % 26;
+               }
+               return value;
+             }),
+         makeFlatVector<int64_t>(
+             kRowsPerGroup, [&](auto row) { return row % 10; })}));
+  }
+  auto file = TempFilePath::create();
+  dwio::common::WriterOptions writerOptions;
+  writerOptions.flushPolicyFactory =
+      []() -> std::unique_ptr<dwio::common::FlushPolicy> {
+    return std::make_unique<DefaultFlushPolicy>(kRowsPerGroup, 1LL << 30);
+  };
+  writeToParquetFile(
+      file->getPath(),
+      batches,
+      std::move(writerOptions),
+      ParquetWriterOptions{});
+  createDuckDbTable(batches);
+
+  auto rowType = ROW({"a", "b", "c"}, {BIGINT(), VARCHAR(), BIGINT()});
+  const auto defaultBuilder = BufferedInputBuilder::getInstance();
+  auto run = [&](const std::string& filter) {
+    auto calls = std::make_shared<LazyColumnHookCalls>();
+    BufferedInputBuilder::registerBuilder(
+        std::make_shared<RecordingBufferedInputBuilder>(calls));
+    SCOPE_EXIT {
+      BufferedInputBuilder::registerBuilder(defaultBuilder);
+    };
+    // The remaining filter on 'a' makes 'a' a filter column; 'b' and 'c' are
+    // projected without a filter, so the reader produces them lazily.
+    auto tableHandle =
+        makeTableHandle({}, parseExpr(filter, rowType), "hive_table", rowType);
+    auto plan = PlanBuilder()
+                    .startTableScan()
+                    .outputType(rowType)
+                    .tableHandle(tableHandle)
+                    .endTableScan()
+                    .planNode();
+    AssertQueryBuilder(plan, duckDbQueryRunner_)
+        .split(makeSplit(file->getPath()))
+        .assertResults(fmt::format("SELECT a, b, c FROM tmp WHERE {}", filter));
+    return calls;
+  };
+
+  // The filters are not convertible to subfield filters, so no row group is
+  // skipped by statistics.
+  {
+    // Rows pass in every row group.
+    auto calls = run("a % 1000 = 0");
+    // The reader names the lazy columns' streams on every row group input:
+    // the column ordinals of 'b' and 'c'.
+    ASSERT_EQ(calls->lazyStreams.size(), kGroups);
+    for (const auto& streams : calls->lazyStreams) {
+      EXPECT_EQ(streams, (std::vector<int32_t>{1, 2}));
+    }
+    // One hint per split, on the first batch with survivors.
+    EXPECT_EQ(calls->hints, 1);
+  }
+  {
+    // No row passes: the streams are named, the hint never comes.
+    auto calls = run("a % 7 = 100");
+    EXPECT_EQ(calls->lazyStreams.size(), kGroups);
+    EXPECT_EQ(calls->hints, 0);
+  }
+  {
+    // Rows pass only in the last row groups: still exactly one hint.
+    auto calls = run("a >= 50000 AND a % 3 = 0");
+    EXPECT_EQ(calls->hints, 1);
+  }
 }
 
 int main(int argc, char** argv) {
