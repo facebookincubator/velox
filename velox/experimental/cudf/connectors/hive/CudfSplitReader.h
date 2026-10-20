@@ -21,6 +21,7 @@
 #include "velox/experimental/cudf/connectors/hive/CudfSplitReaderByteFetch.h"
 #include "velox/experimental/cudf/exec/NvtxHelper.h"
 
+#include "velox/common/base/Exceptions.h"
 #include "velox/common/io/IoStatistics.h"
 #include "velox/common/io/Options.h"
 #include "velox/connectors/Connector.h"
@@ -150,6 +151,11 @@ class CudfSplitReader : public NvtxHelper {
 
   // Returns whether the session ignores missing files.
   bool ignoreMissingFiles() const;
+
+  // Marks the split empty, dropping its data source and footer metadata, when
+  // 'error' reports a missing file and the session ignores missing files.
+  // Returns whether the split was marked empty.
+  bool skipMissingFile(const VeloxRuntimeError& error);
 
   // Create the parquet reader and select the row group passes to read.
   void createCudfReader();

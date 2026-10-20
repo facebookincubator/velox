@@ -839,11 +839,8 @@ TEST_F(TableScanTest, directBufferInputRawInputBytes) {
   ASSERT_GT(runtimeStats.at("ioWaitWallNanos").sum, 0);
 }
 
-// The bytes a scan reports come from the file size the split carries, in its
-// properties or in the $file_size info column, and from opening the file when
-// it carries none. The split's size differs from the file's here so that the
-// assertion tells which one the scan reports; both local data paths read the
-// real file whatever the split says.
+// The split's size differs from the file's so that the assertion tells which
+// one the scan reports. Local opens take the size from the file itself.
 TEST_F(TableScanTest, rawInputBytesFromSplitFileSize) {
   using cudf_velox::connector::hive::CudfHiveConfig;
   auto vectors = makeVectors(2, 100);

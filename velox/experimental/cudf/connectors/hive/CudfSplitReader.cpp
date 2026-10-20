@@ -556,6 +556,17 @@ bool CudfSplitReader::ignoreMissingFiles() const {
   return hiveConfig.ignoreMissingFiles(connectorQueryCtx_->sessionProperties());
 }
 
+bool CudfSplitReader::skipMissingFile(const VeloxRuntimeError& error) {
+  if (error.errorCode() != error_code::kFileNotFound or
+      not ignoreMissingFiles()) {
+    return false;
+  }
+  emptySplit_ = true;
+  dataSource_.reset();
+  fileMetaDatas_.clear();
+  return true;
+}
+
 void CudfSplitReader::setupCudfDataSource() {
   if (dataSource_ or emptySplit_) {
     return;
@@ -613,17 +624,14 @@ void CudfSplitReader::setupCudfDataSource() {
         fileHandleKey, &fileProperties, ioStats_ ? ioStats_.get() : nullptr);
     VELOX_CHECK_NOT_NULL(fileHandleCachePtr.get());
   } catch (const VeloxRuntimeError& e) {
-    if (ignoreMissingFiles) {
-      if (e.errorCode() == error_code::kFileNotFound) {
-        emptySplit_ = true;
-        return;
-      }
-      // Rethrow actual filesystem errors only. Unsupported paths may fall back
-      // to KvikIO.
-      if (filesystems::isPathSupportedByRegisteredFileSystems(
-              split_->filePath)) {
-        throw;
-      }
+    if (skipMissingFile(e)) {
+      return;
+    }
+    // Rethrow actual filesystem errors only. Unsupported paths may fall back
+    // to KvikIO.
+    if (ignoreMissingFiles and
+        filesystems::isPathSupportedByRegisteredFileSystems(split_->filePath)) {
+      throw;
     }
     // ABFS blobs can not fall back to KvikIO. Throw the original error.
     if (isAbfsPath(split_->filePath)) {
@@ -752,11 +760,9 @@ CudfSplitReader::fileMetaDatas() {
   try {
     fileMetaDatas_ = cudf::io::read_parquet_footers(sources);
   } catch (const VeloxRuntimeError& e) {
-    // A split that carries the file size opens the file without a request to
-    // the storage, so a missing file first shows at this read.
-    if (e.errorCode() == error_code::kFileNotFound && ignoreMissingFiles()) {
-      emptySplit_ = true;
-      dataSource_.reset();
+    // An open that knows the file size sends no request to the storage, so a
+    // missing file first shows at this read.
+    if (skipMissingFile(e)) {
       return fileMetaDatas_;
     }
     throw;
