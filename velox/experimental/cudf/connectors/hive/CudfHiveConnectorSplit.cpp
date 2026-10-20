@@ -19,6 +19,8 @@
 
 #include <cudf/io/types.hpp>
 
+#include <folly/Conv.h>
+
 #include <string>
 #include <unordered_map>
 
@@ -47,19 +49,39 @@ uint64_t CudfHiveConnectorSplit::size() const {
   return length;
 }
 
+std::optional<int64_t> CudfHiveConnectorSplit::fileSize() const {
+  std::optional<int64_t> fileSize;
+  if (properties.has_value() && properties->fileSize.has_value()) {
+    fileSize = properties->fileSize;
+  } else if (const auto it = infoColumns.find("$file_size");
+             it != infoColumns.end()) {
+    const auto parsed = folly::tryTo<int64_t>(it->second);
+    if (parsed.hasValue()) {
+      fileSize = parsed.value();
+    }
+  }
+  // A negative size from either source is no size.
+  if (fileSize.has_value() && *fileSize < 0) {
+    return std::nullopt;
+  }
+  return fileSize;
+}
+
 CudfHiveConnectorSplit::CudfHiveConnectorSplit(
     const std::string& connectorId,
     const std::string& _filePath,
     uint64_t _start,
     uint64_t _length,
     int64_t _splitWeight,
-    const std::unordered_map<std::string, std::string>& _infoColumns)
+    const std::unordered_map<std::string, std::string>& _infoColumns,
+    std::optional<FileProperties> _properties)
     : facebook::velox::connector::ConnectorSplit(connectorId, _splitWeight),
       filePath(stripFilePrefix(_filePath)),
       start(_start),
       length(_length),
       cudfSourceInfo(std::make_unique<cudf::io::source_info>(filePath)),
-      infoColumns(_infoColumns) {}
+      infoColumns(_infoColumns),
+      properties(std::move(_properties)) {}
 
 // static
 std::shared_ptr<CudfHiveConnectorSplit> CudfHiveConnectorSplit::create(
@@ -75,8 +97,20 @@ std::shared_ptr<CudfHiveConnectorSplit> CudfHiveConnectorSplit::create(
     infoColumns[key.asString()] = value.asString();
   }
 
+  std::optional<FileProperties> properties;
+  const auto& propertiesObj = obj.getDefault("properties", nullptr);
+  if (propertiesObj != nullptr) {
+    properties = FileProperties::create(propertiesObj);
+  }
+
   return std::make_shared<CudfHiveConnectorSplit>(
-      connectorId, filePath, start, length, splitWeight, infoColumns);
+      connectorId,
+      filePath,
+      start,
+      length,
+      splitWeight,
+      infoColumns,
+      std::move(properties));
 }
 
 folly::dynamic CudfHiveConnectorSplit::serialize() const {
@@ -92,6 +126,10 @@ folly::dynamic CudfHiveConnectorSplit::serialize() const {
     infoColumnsObj[key] = value;
   }
   obj["infoColumns"] = infoColumnsObj;
+
+  if (properties.has_value()) {
+    obj["properties"] = properties->serialize();
+  }
 
   return obj;
 }

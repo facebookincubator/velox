@@ -148,6 +148,9 @@ class CudfSplitReader : public NvtxHelper {
   // file is ignored.
   void setupCudfDataSource();
 
+  // Returns whether the session ignores missing files.
+  bool ignoreMissingFiles() const;
+
   // Create the parquet reader and select the row group passes to read.
   void createCudfReader();
 

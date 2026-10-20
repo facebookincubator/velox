@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include "velox/common/caching/FileProperties.h"
 #include "velox/connectors/Connector.h"
 #include "velox/dwio/common/Options.h"
 
@@ -44,16 +45,27 @@ struct CudfHiveConnectorSplit
   /// associated with the CudfHiveConnectorSplit.
   std::unordered_map<std::string, std::string> infoColumns = {};
 
+  /// File properties such as the size, used while opening the file. A known
+  /// size lets an S3 or KvikIO open skip the request for it. Presto's Hive
+  /// splits carry the size in the $file_size info column instead, and
+  /// fileSize() reads either place.
+  std::optional<FileProperties> properties;
+
   CudfHiveConnectorSplit(
       const std::string& connectorId,
       const std::string& _filePath,
       uint64_t _start = 0,
       uint64_t _length = std::numeric_limits<uint64_t>::max(),
       int64_t _splitWeight = 0,
-      const std::unordered_map<std::string, std::string>& _infoColumns = {});
+      const std::unordered_map<std::string, std::string>& _infoColumns = {},
+      std::optional<FileProperties> _properties = std::nullopt);
 
   std::string toString() const override;
   std::string getFileName() const;
+
+  /// Returns the file size when the split carries one, in 'properties' or in
+  /// the $file_size info column.
+  std::optional<int64_t> fileSize() const;
 
   const cudf::io::source_info& getCudfSourceInfo() const {
     return *cudfSourceInfo;
@@ -94,6 +106,11 @@ class CudfHiveConnectorSplitBuilder {
     return *this;
   }
 
+  CudfHiveConnectorSplitBuilder& fileProperties(FileProperties fileProperties) {
+    fileProperties_ = std::move(fileProperties);
+    return *this;
+  }
+
   CudfHiveConnectorSplitBuilder& connectorId(const std::string& connectorId) {
     connectorId_ = connectorId;
     return *this;
@@ -101,7 +118,13 @@ class CudfHiveConnectorSplitBuilder {
 
   std::shared_ptr<CudfHiveConnectorSplit> build() const {
     return std::make_shared<CudfHiveConnectorSplit>(
-        connectorId_, filePath_, start_, length_, splitWeight_, infoColumns_);
+        connectorId_,
+        filePath_,
+        start_,
+        length_,
+        splitWeight_,
+        infoColumns_,
+        fileProperties_);
   }
 
  private:
@@ -111,6 +134,7 @@ class CudfHiveConnectorSplitBuilder {
   std::string connectorId_;
   int64_t splitWeight_{0};
   std::unordered_map<std::string, std::string> infoColumns_ = {};
+  std::optional<FileProperties> fileProperties_;
 };
 
 } // namespace facebook::velox::cudf_velox::connector::hive
