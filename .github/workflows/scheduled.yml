@@ -163,6 +163,8 @@ jobs:
           echo "head_main=$head_main" >> $GITHUB_OUTPUT
 
       - name: Get Function Signature Stash
+        continue-on-error: true
+        timeout-minutes: 30
         uses: apache/infrastructure-actions/stash/restore@3354c1565d4b0e335b78a76aedd82153a9e144d4
         id: get-sig
         with:
@@ -170,6 +172,8 @@ jobs:
           key: function-signatures-${{ steps.get-merge-base.outputs.head_main || github.sha }}
 
       - name: Restore ccache
+        continue-on-error: true
+        timeout-minutes: 30
         uses: apache/infrastructure-actions/stash/restore@3354c1565d4b0e335b78a76aedd82153a9e144d4
         with:
           path: ${{ env.CCACHE_DIR }}
@@ -234,6 +238,8 @@ jobs:
           python3 scripts/ci/signature.py export_aggregates --presto /tmp/signatures/presto_aggregate_signatures_main.json
 
       - name: Save Function Signature Stash
+        continue-on-error: true
+        timeout-minutes: 20
         if: ${{ github.event_name == 'pull_request' && steps.get-sig.outputs.stash-hit != 'true' && steps.sig-paths.outputs.signatures == 'true' }}
         uses: apache/infrastructure-actions/stash/save@b1b1ab191498302581efdef55279706f79249c0e
         with:
@@ -286,6 +292,7 @@ jobs:
         run: ccache -s
 
       - name: Save ccache
+        timeout-minutes: 20
         # see https://github.com/actions/upload-artifact/issues/543
         continue-on-error: true
         if: ${{ github.event_name != 'schedule' }}
@@ -337,6 +344,8 @@ jobs:
           done
 
       - name: Save Function Signature Stash
+        continue-on-error: true
+        timeout-minutes: 20
         if: ${{ github.event_name == 'push' }}
         uses: apache/infrastructure-actions/stash/save@b1b1ab191498302581efdef55279706f79249c0e
         with:
@@ -517,6 +526,8 @@ jobs:
       # binary built from a different commit would compare the contender
       # against the wrong baseline and report phantom regressions.
       - name: Restore baseline LocalRunnerService
+        continue-on-error: true
+        timeout-minutes: 30
         uses: apache/infrastructure-actions/stash/restore@3354c1565d4b0e335b78a76aedd82153a9e144d4
         id: get-baseline
         with:
@@ -524,6 +535,8 @@ jobs:
           key: local-runner-service-${{ env.BASELINE_CACHE_VERSION }}-${{ runner.arch }}-${{ steps.get-merge-base.outputs.head_main }}
 
       - name: Restore ccache
+        continue-on-error: true
+        timeout-minutes: 30
         if: ${{ steps.get-baseline.outputs.stash-hit != 'true' }}
         uses: apache/infrastructure-actions/stash/restore@3354c1565d4b0e335b78a76aedd82153a9e144d4
         with:
@@ -577,6 +590,7 @@ jobs:
         run: ccache -s
 
       - name: Save ccache
+        timeout-minutes: 20
         continue-on-error: true
         if: ${{ steps.get-baseline.outputs.stash-hit != 'true' && github.event_name != 'schedule' }}
         uses: apache/infrastructure-actions/stash/save@b1b1ab191498302581efdef55279706f79249c0e
@@ -585,6 +599,8 @@ jobs:
           key: ccache-baseline-local-runner-centos
 
       - name: Save baseline LocalRunnerService
+        continue-on-error: true
+        timeout-minutes: 20
         if: ${{ steps.get-baseline.outputs.stash-hit != 'true' }}
         uses: apache/infrastructure-actions/stash/save@b1b1ab191498302581efdef55279706f79249c0e
         with:
