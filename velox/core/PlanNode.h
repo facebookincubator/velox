@@ -32,6 +32,9 @@ struct ArrowArrayStream;
 namespace facebook::velox::core {
 
 class PlanNodeVisitor;
+class FixedPointNode;
+class StateSourceNode;
+class StateHashJoinNode;
 class PlanNodeVisitorContext;
 
 using PlanNodeId = std::string;
@@ -6641,6 +6644,15 @@ class PlanNodeVisitor {
       const = 0;
 
   virtual void visit(const MixedUnionNode& node, PlanNodeVisitorContext& ctx)
+      const = 0;
+
+  virtual void visit(const FixedPointNode& node, PlanNodeVisitorContext& ctx)
+      const = 0;
+
+  virtual void visit(const StateSourceNode& node, PlanNodeVisitorContext& ctx)
+      const = 0;
+
+  virtual void visit(const StateHashJoinNode& node, PlanNodeVisitorContext& ctx)
       const = 0;
 
   /// Used to visit custom PlanNodes that extend the set provided by Velox.

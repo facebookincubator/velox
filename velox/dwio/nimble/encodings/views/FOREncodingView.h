@@ -72,10 +72,6 @@ class FOREncodingView final : public TypedEncodingView<T> {
         {pos, bitWidthsSize}, pool, options);
     NIMBLE_CHECK_NOT_NULL(bitWidths);
     NIMBLE_CHECK_EQ(bitWidths->rowCount(), numFrames_);
-    bitWidths_.resize(numFrames_);
-    for (uint32_t frame = 0; frame < numFrames_; ++frame) {
-      bitWidths_[frame] = bitWidths->readAt(frame);
-    }
     pos += bitWidthsSize;
 
     const auto referencesSize = varint::readVarint32(&pos);
@@ -83,48 +79,26 @@ class FOREncodingView final : public TypedEncodingView<T> {
         {pos, referencesSize}, pool, options);
     NIMBLE_CHECK_NOT_NULL(references);
     NIMBLE_CHECK_EQ(references->rowCount(), numFrames_);
-    references_.resize(numFrames_);
-    for (uint32_t frame = 0; frame < numFrames_; ++frame) {
-      references_[frame] = references->readAt(frame);
-    }
     pos += referencesSize;
 
-    bitOffsets_.resize(numFrames_);
     const auto bitOffsetsSize = varint::readVarint32(&pos);
     auto bitOffsets = detail::createTypedEncodingView<uint64_t>(
         {pos, bitOffsetsSize}, pool, options);
     NIMBLE_CHECK_NOT_NULL(bitOffsets);
     NIMBLE_CHECK_EQ(bitOffsets->rowCount(), numFrames_);
-    for (uint32_t frame = 0; frame < numFrames_; ++frame) {
-      bitOffsets_[frame] = bitOffsets->readAt(frame);
-    }
     pos += bitOffsetsSize;
 
     const auto packedDataSize = varint::readVarint32(&pos);
     const auto payload = this->decompressPayload(
         compressionType, DataType::Undefined, {pos, packedDataSize});
-#ifndef NDEBUG
-    // Validate every frame's bit range and compute the minimum payload size.
-    uint64_t requiredBits{0};
-    for (uint32_t frame{0}; frame < numFrames_; ++frame) {
-      const auto bitWidth = bitWidths_[frame];
-      NIMBLE_CHECK_LE(bitWidth, sizeof(physicalType) * 8);
-      const auto frameBits =
-          static_cast<uint64_t>(frameRowCount(frame)) * bitWidth;
-      NIMBLE_CHECK_LE(
-          bitOffsets_[frame],
-          std::numeric_limits<uint64_t>::max() - frameBits,
-          "FOR packed payload bit range overflows");
-      requiredBits = std::max(requiredBits, bitOffsets_[frame] + frameBits);
-    }
-    const auto requiredBytes =
-        requiredBits / 8 + static_cast<uint64_t>(requiredBits % 8 != 0);
-    NIMBLE_CHECK_GE(
-        payload.size(),
-        requiredBytes,
-        "FOR packed payload is shorter than required");
-#endif
     packedData_ = payload.data();
+    packedSize_ = payload.size();
+    if (options.cacheEncodingView) {
+      initializeCached(*bitWidths, *references, *bitOffsets);
+    } else {
+      initializeUncached(
+          std::move(bitWidths), std::move(references), std::move(bitOffsets));
+    }
   }
 
   ~FOREncodingView() override {
@@ -134,6 +108,84 @@ class FOREncodingView final : public TypedEncodingView<T> {
   }
 
  private:
+  // Reads the metadata of every frame once, so that reads need no stream
+  // access, and checks every frame against the packed payload.
+  void initializeCached(
+      const TypedEncodingView<uint8_t>& bitWidths,
+      const TypedEncodingView<physicalType>& references,
+      const TypedEncodingView<uint64_t>& bitOffsets) {
+    bitWidths_.resize(numFrames_);
+    bitWidths.read(0, numFrames_, bitWidths_.data());
+    references_.resize(numFrames_);
+    references.read(0, numFrames_, references_.data());
+    bitOffsets_.resize(numFrames_);
+    bitOffsets.read(0, numFrames_, bitOffsets_.data());
+    for (uint32_t frame{0}; frame < numFrames_; ++frame) {
+      checkFrameBounds(frame, bitWidths_[frame], bitOffsets_[frame]);
+    }
+  }
+
+  // Keeps the metadata streams as views, so that a read touches only the
+  // metadata of its own frame.
+  void initializeUncached(
+      std::unique_ptr<TypedEncodingView<uint8_t>> bitWidths,
+      std::unique_ptr<TypedEncodingView<physicalType>> references,
+      std::unique_ptr<TypedEncodingView<uint64_t>> bitOffsets) {
+    bitWidthsView_ = std::move(bitWidths);
+    referencesView_ = std::move(references);
+    bitOffsetsView_ = std::move(bitOffsets);
+  }
+
+  // Returns whether the view holds the metadata of every frame.
+  bool cachesFrameMetadata() const {
+    return this->options_.cacheEncodingView;
+  }
+
+  // Checks that the packed residuals of a frame lie within the packed payload.
+  // A corrupt stream can declare a bit width or offset that extends past it.
+  void checkFrameBounds(uint32_t frame, uint8_t bitWidth, uint64_t offset)
+      const {
+    NIMBLE_CHECK_FILE_LE(
+        bitWidth,
+        sizeof(physicalType) * 8,
+        "FOR bit width exceeds the value width");
+    const auto frameBits =
+        static_cast<uint64_t>(frameRowCount(frame)) * bitWidth;
+    NIMBLE_CHECK_FILE_LE(
+        offset,
+        std::numeric_limits<uint64_t>::max() - frameBits,
+        "FOR packed payload bit range overflows");
+    const auto requiredBits = offset + frameBits;
+    const auto requiredBytes =
+        requiredBits / 8 + static_cast<uint64_t>(requiredBits % 8 != 0);
+    NIMBLE_CHECK_FILE_GE(
+        packedSize_,
+        requiredBytes,
+        "FOR packed payload is shorter than required");
+  }
+
+  // The metadata of one frame.
+  struct FrameMeta {
+    uint8_t bitWidth;
+    physicalType reference;
+    uint64_t bitOffset;
+  };
+
+  // Returns the metadata of a frame, from the cached arrays or from the
+  // metadata streams otherwise. Checks a frame read from the streams against
+  // the packed payload.
+  FrameMeta frameMetaOf(uint32_t frame) const {
+    if (cachesFrameMetadata()) {
+      return {bitWidths_[frame], references_[frame], bitOffsets_[frame]};
+    }
+    const FrameMeta meta{
+        bitWidthsView_->readAt(frame),
+        referencesView_->readAt(frame),
+        bitOffsetsView_->readAt(frame)};
+    checkFrameBounds(frame, meta.bitWidth, meta.bitOffset);
+    return meta;
+  }
+
   uint32_t frameRowCount(uint32_t frame) const {
     if (frame == numFrames_ - 1) {
       return lastFrameRows_;
@@ -158,10 +210,6 @@ class FOREncodingView final : public TypedEncodingView<T> {
     const auto frame = 1 + (row - firstFrameRows_) / frameSize_;
     NIMBLE_CHECK_LT(frame, numFrames_);
     return frame;
-  }
-
-  uint64_t bitOffset(uint32_t frame) const {
-    return bitOffsets_[frame];
   }
 
   uint64_t byteAlignedResidualAt(uint64_t byteOffset, uint8_t bitWidth) const {
@@ -231,12 +279,11 @@ class FOREncodingView final : public TypedEncodingView<T> {
     NIMBLE_CHECK_LT(index, this->rowCount_);
     const auto frame = frameIndex(index);
     const auto positionInFrame = index - frameRowOffset(frame);
-    const auto bitWidth = bitWidths_[frame];
-    NIMBLE_CHECK_LE(bitWidth, sizeof(physicalType) * 8);
-    const auto residual =
-        residualAt(bitOffset(frame) + positionInFrame * bitWidth, bitWidth);
-    const auto reference = references_[frame];
-    return detail::castFromPhysicalType<T>(addResidual(reference, residual));
+    const auto meta = frameMetaOf(frame);
+    const auto residual = residualAt(
+        meta.bitOffset + positionInFrame * meta.bitWidth, meta.bitWidth);
+    return detail::castFromPhysicalType<T>(
+        addResidual(meta.reference, residual));
   }
 
   void readPhysical(uint32_t offset, uint32_t length, physicalType* output)
@@ -259,13 +306,12 @@ class FOREncodingView final : public TypedEncodingView<T> {
       uint32_t positionInFrame,
       uint32_t length,
       physicalType* output) const {
-    const auto bitWidth = bitWidths_[frame];
-    NIMBLE_CHECK_LE(bitWidth, sizeof(physicalType) * 8);
-    const auto reference = references_[frame];
-    auto rowBitOffset = bitOffset(frame) + positionInFrame * bitWidth;
+    const auto meta = frameMetaOf(frame);
+    auto rowBitOffset = meta.bitOffset + positionInFrame * meta.bitWidth;
     for (uint32_t i = 0; i < length; ++i) {
-      output[i] = addResidual(reference, residualAt(rowBitOffset, bitWidth));
-      rowBitOffset += bitWidth;
+      output[i] =
+          addResidual(meta.reference, residualAt(rowBitOffset, meta.bitWidth));
+      rowBitOffset += meta.bitWidth;
     }
   }
 
@@ -273,10 +319,18 @@ class FOREncodingView final : public TypedEncodingView<T> {
   uint32_t numFrames_{0};
   uint32_t firstFrameRows_{0};
   uint32_t lastFrameRows_{0};
+  // Hold the metadata of every frame. Empty without cacheEncodingView.
   Vector<uint8_t> bitWidths_;
   Vector<physicalType> references_;
   Vector<uint64_t> bitOffsets_;
+  // Read the metadata of one frame at a time. Set only without
+  // cacheEncodingView.
+  std::unique_ptr<TypedEncodingView<uint8_t>> bitWidthsView_;
+  std::unique_ptr<TypedEncodingView<physicalType>> referencesView_;
+  std::unique_ptr<TypedEncodingView<uint64_t>> bitOffsetsView_;
+  // The uncompressed packed residuals of every frame, and their size in bytes.
   const char* packedData_{nullptr};
+  size_t packedSize_{0};
 };
 
 } // namespace facebook::nimble

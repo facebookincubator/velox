@@ -2939,6 +2939,62 @@ TEST_P(TabletTest, stripeGroupMetadataExactBitWidths) {
   EXPECT_LT(roundTripMetadataSize(511), roundTripMetadataSize(1'023));
 }
 
+TEST_P(TabletTest, stripeGroupViewsKeepTheirValues) {
+  // A stripe group reads the offsets and sizes of many stripes, so its views
+  // build and keep their lookup structures. A Varint view keeps every decoded
+  // value.
+  constexpr uint32_t kStripeCount = 4'096;
+  std::vector<uint32_t> streamSizes(kStripeCount);
+  for (uint32_t i = 0; i < kStripeCount; ++i) {
+    streamSizes[i] = 1 + i % 100;
+  }
+  const auto file = writeStreamMajorTablet(
+      *pool_, streamSizes, {{nimble::EncodingType::Varint, 1.0}});
+  const auto layout = nimble::FileLayout::create(
+      std::make_shared<velox::InMemoryReadFile>(file), pool_.get());
+  ASSERT_EQ(layout.stripeGroups.size(), 1);
+  const auto loadSection = [&](const nimble::MetadataSection& section) {
+    return std::make_unique<nimble::MetadataBuffer>(
+        nimble::MetadataBuffer::decompress(
+            std::string_view{file}.substr(section.offset(), section.size()),
+            section.compressionType(),
+            pool_.get()));
+  };
+  const auto stripes = loadSection(layout.stripes);
+  auto stripeGroup = loadSection(layout.stripeGroups[0]);
+
+  const auto* root =
+      flatbuffers::GetRoot<nimble::serialization::StreamMajorStripeGroup>(
+          stripeGroup->content().data());
+  const auto* encodedSizes = root->stream_sizes()->Get(0)->data();
+  // The pool check below needs Varint arrays. Varint was the only candidate,
+  // so the writer picked it. The default candidates (Constant, Trivial,
+  // FixedBitWidth, Dictionary) ignore cacheEncodingView and would keep nothing
+  // in either setting.
+  ASSERT_EQ(
+      nimble::EncodingPrefix::encodingType(
+          std::string_view{
+              reinterpret_cast<const char*>(encodedSizes->data()),
+              encodedSizes->size()}),
+      nimble::EncodingType::Varint);
+
+  // The metadata comes from the fixture pool, so only the views count against
+  // this one. The shared memory manager does not track usage.
+  velox::memory::MemoryManager::Options viewManagerOptions;
+  viewManagerOptions.trackDefaultUsage = true;
+  velox::memory::MemoryManager viewManager{viewManagerOptions};
+  const auto viewPool = viewManager.addLeafPool();
+  const nimble::StripeGroup group{
+      /*stripeGroupIndex=*/0, *stripes, std::move(stripeGroup), viewPool.get()};
+  // A cached Varint view decodes every row into a uint32 vector from its pool,
+  // for the offsets and for the sizes of the one stream. An uncached view
+  // decodes on each read and keeps nothing, so this pool stays empty. That is
+  // how the test notices a group that no longer sets cacheEncodingView.
+  EXPECT_GE(viewPool->usedBytes(), 2ULL * kStripeCount * sizeof(uint32_t));
+  // The cached views return the written sizes.
+  EXPECT_EQ(group.streamSize(7, 0), streamSizes[7]);
+}
+
 // TabletWithIndexTest is a derived test fixture for tablet index related tests.
 // It inherits the memory pool and helper methods from TabletTest.
 class TabletWithIndexTest : public TabletTest {
