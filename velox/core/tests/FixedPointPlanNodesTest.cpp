@@ -419,21 +419,74 @@ TEST_F(FixedPointPlanNodesTest, chainValidation) {
   // coordinator never assigned it.
   {
     auto convergenceSchema = ROW("c", BOOLEAN());
+    auto convergence = ConvergenceConfig::globalVerdict(
+        {shuffleOut(
+             "cp",
+             std::make_shared<StateSourceNode>(
+                 "cs", "n", schema, /*delta=*/false),
+             3,
+             schema),
+         PartitionedOutputNode::single(
+             "cg", schema, "Presto", exchange("ce", schema))},
+        std::make_shared<ProjectNode>(
+            "cv",
+            convergenceSchema->names(),
+            std::vector<TypedExprPtr>{
+                std::make_shared<ConstantTypedExpr>(BOOLEAN(), Variant(true))},
+            exchange("cx", schema)),
+        5);
+    VELOX_ASSERT_USER_THROW(
+        fixedPoint(
+            {shuffleOut("p", stateSource(), 2, schema), exchange("e", schema)},
+            std::move(convergence)),
+        "must shuffle across the same number of workers");
+  }
+
+  // Workers that each decide after a convergence shuffle could disagree, so a
+  // shuffling sequence needs a verdict plan.
+  {
+    auto convergenceSchema = ROW("c", BOOLEAN());
     ConvergenceConfig convergence{
         .plans =
             {shuffleOut(
                  "cp",
                  std::make_shared<StateSourceNode>(
                      "cs", "n", schema, /*delta=*/false),
-                 3,
+                 2,
                  schema),
-             exchange("ce", schema)},
+             std::make_shared<ProjectNode>(
+                 "cv",
+                 convergenceSchema->names(),
+                 std::vector<TypedExprPtr>{std::make_shared<ConstantTypedExpr>(
+                     BOOLEAN(), Variant(true))},
+                 exchange("ce", schema))},
         .maxIterations = 5};
     VELOX_ASSERT_USER_THROW(
+        fixedPoint({stateSource()}, std::move(convergence)),
+        "FixedPointNode: convergence plans that shuffle require a verdict plan; "
+        "use ConvergenceConfig::globalVerdict");
+  }
+
+  // A verdict plan reads every worker's rows, so plans before it must gather
+  // them to the one worker that runs it.
+  {
+    auto convergenceSource =
+        std::make_shared<StateSourceNode>("cs", "n", schema, /*delta=*/false);
+    VELOX_ASSERT_USER_THROW(
         fixedPoint(
-            {shuffleOut("p", stateSource(), 2, schema), exchange("e", schema)},
-            std::move(convergence)),
-        "must shuffle across the same number of workers");
+            {stateSource()},
+            ConvergenceConfig::globalVerdict(
+                {shuffleOut("cp", convergenceSource, 2, schema)},
+                exchange("ce", schema),
+                5)),
+        "FixedPointNode: the convergence plans before a verdict plan must end "
+        "in a PartitionedOutput with one partition");
+    VELOX_ASSERT_USER_THROW(
+        fixedPoint(
+            {stateSource()},
+            ConvergenceConfig::globalVerdict({}, exchange("ce", schema), 5)),
+        "FixedPointNode: a verdict plan requires convergence plans that gather "
+        "to it");
   }
 }
 
@@ -568,8 +621,7 @@ TEST_F(FixedPointPlanNodesTest, nestedInConvergence) {
         "v");
   };
   auto convergenceHosting = [&](const PlanNodePtr& nested) {
-    return std::vector<PlanNodePtr>{
-        beside("cg", verdictSource("cs", "w"), nested)};
+    return beside("cg", verdictSource("cs", "w"), nested);
   };
   auto withVerdictState = [&](std::vector<PlanNodePtr> plans,
                               ConvergenceConfig convergence) {
