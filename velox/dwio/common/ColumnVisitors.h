@@ -16,6 +16,8 @@
 
 #pragma once
 
+#include <folly/lang/Assume.h>
+
 #include "velox/common/base/Portability.h"
 #include "velox/common/base/SimdUtil.h"
 #include "velox/dwio/common/DecoderUtil.h"
@@ -1100,6 +1102,9 @@ class DictionaryColumnVisitor
       }
       if constexpr (std::is_same_v<TFilter, velox::common::IsNotNull>) {
         auto* begin = (scatter ? scatterRows : super::rows_) + super::rowIndex_;
+        // Without this hint, GCC 12 at -O3 reports a false-positive
+        // stringop-overflow warning on the copy below for negative 'numInput'.
+        folly::assume(numInput >= 0);
         std::copy(begin, begin + numInput, filterHits + numValues);
         if constexpr (!super::kFilterOnly) {
           translateByDict(input, numInput, values + numValues);
