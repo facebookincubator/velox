@@ -509,7 +509,8 @@ void SelectiveNimbleIndexReader::initStripeColumnReader(uint32_t stripeIndex) {
         /*nimblePreserveDictionaryEncoding=*/false,
         /*lazyIoColumns=*/nullptr,
         /*lazyColumnIo=*/false,
-        /*dictionaryAwareReads=*/options_.nimbleDictionaryAwareReads());
+        /*dictionaryAwareReads=*/options_.nimbleDictionaryAwareReads(),
+        /*scanFastPath=*/options_.nimbleScanFastPath());
 
     columnReader_ = buildColumnReader(
         fileOutputType_,
