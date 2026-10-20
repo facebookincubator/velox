@@ -21,6 +21,7 @@
 #include <limits>
 #include <span>
 #include <type_traits>
+#include <utility>
 
 #include "velox/dwio/nimble/common/Buffer.h"
 #include "velox/dwio/nimble/common/Varint.h"
@@ -107,6 +108,87 @@ class ALPRDEncodingBase {
       const Encoding::Options& options);
 
  protected:
+  // Bounded child samples and projected counts used to score an ALPRD tree.
+  template <typename PhysicalType>
+  struct ChildSelection {
+    // Defines the dictionary and split used to produce the child samples.
+    Parameters parameters;
+    // Number of rows represented by the sampled main child streams.
+    uint32_t rowCount{0};
+    // Projected number of rows in each full exception child stream.
+    uint32_t exceptionCount{0};
+    // TODO: Revisit memory-pool accounting for bounded child samples.
+    // Sampled dictionary codes for the main child stream.
+    std::vector<uint16_t> codes;
+    // Sampled low-bit parts for the main child stream.
+    std::vector<PhysicalType> rightParts;
+    // Sampled absolute row positions for exception values.
+    std::vector<uint32_t> exceptionPositions;
+    // Sampled high-bit parts for exception values.
+    std::vector<uint16_t> exceptionHighParts;
+  };
+
+  // Splits a bounded representative sample using the same parameters and
+  // decomposition as encode(). Projected counts let selection policies score
+  // the full child streams with their normal encoding models.
+  template <typename PhysicalType>
+  static ChildSelection<PhysicalType> selectAndDecompose(
+      std::span<const PhysicalType> values,
+      const Encoding::Options& options);
+
+  // Adds ALPRD metadata and length prefixes to child serialized sizes.
+  static uint64_t calculateSerializedSize(
+      const Parameters& parameters,
+      uint32_t numRows,
+      uint32_t numExceptions,
+      const std::array<uint64_t, 4>& childEstimatedSizes,
+      const Encoding::Options& options);
+
+  // Splits either every input row (when sampledRows is empty) or the specified
+  // representative rows into the four ALPRD child streams.
+  template <
+      typename PhysicalType,
+      typename Codes,
+      typename RightParts,
+      typename ExceptionPositions,
+      typename ExceptionHighParts>
+  static void decompose(
+      std::span<const PhysicalType> values,
+      const Parameters& parameters,
+      std::span<const uint32_t> sampledRows,
+      Codes& codes,
+      RightParts& rightParts,
+      ExceptionPositions& exceptionPositions,
+      ExceptionHighParts& exceptionHighParts) {
+    NIMBLE_CHECK_LE(values.size(), std::numeric_limits<uint32_t>::max());
+    const uint32_t rowCount = sampledRows.empty()
+        ? static_cast<uint32_t>(values.size())
+        : static_cast<uint32_t>(sampledRows.size());
+    codes.resize(rowCount);
+    rightParts.resize(rowCount);
+    exceptionPositions.resize(0);
+    exceptionHighParts.resize(0);
+    const auto mask = (PhysicalType{1} << parameters.rightBitWidth) - 1;
+    for (uint32_t i = 0; i < rowCount; ++i) {
+      const auto row = sampledRows.empty() ? i : sampledRows[i];
+      const auto value = values[row];
+      rightParts[i] = value & mask;
+      const auto high =
+          static_cast<uint16_t>(value >> parameters.rightBitWidth);
+      uint16_t code = 0;
+      while (code < parameters.dictionarySize &&
+             parameters.dictionary[code] != high) {
+        ++code;
+      }
+      if (code == parameters.dictionarySize) {
+        exceptionPositions.push_back(row);
+        exceptionHighParts.push_back(high);
+        code = 0;
+      }
+      codes[i] = code;
+    }
+  }
+
   /// Creates a child decoder and rejects NULL wrappers within ALPRD streams.
   static std::unique_ptr<Encoding> createChild(
       velox::memory::MemoryPool& pool,
@@ -282,6 +364,87 @@ class ALPRDEncoding final
     return ALPRDEncodingBase::estimateSize(values, values.size(), options);
   }
 
+  /// Estimates ALPRD size using each policy-selected child encoding.
+  static std::optional<uint64_t> estimateSize(
+      EncodingSelectionPolicyBase& selectionPolicy,
+      std::span<const physicalType> values,
+      const Encoding::Options& options) {
+    if (values.empty()) {
+      return std::nullopt;
+    }
+    const auto children = selectAndDecompose<physicalType>(values, options);
+    const auto codes = estimateChildSize(
+        selectionPolicy,
+        EncodingIdentifiers::ALPRD::Codes,
+        std::span<const uint16_t>{children.codes},
+        children.rowCount,
+        options);
+    const auto rightParts = estimateChildSize(
+        selectionPolicy,
+        EncodingIdentifiers::ALPRD::RightParts,
+        std::span<const physicalType>{children.rightParts},
+        children.rowCount,
+        options);
+    if (!codes.has_value() || !rightParts.has_value()) {
+      return std::nullopt;
+    }
+
+    EncodingSelectionResult exceptionPositions{};
+    EncodingSelectionResult exceptionHighParts{};
+    if (!children.exceptionPositions.empty()) {
+      // selectParameters samples the input to choose the split and dictionary;
+      // selectAndDecompose applies them to sampled rows. These two streams
+      // contain sampled exceptions, while exceptionCount projects their count
+      // to the full input. The sampled streams must have matching lengths.
+      NIMBLE_CHECK_EQ(
+          children.exceptionPositions.size(),
+          children.exceptionHighParts.size());
+      std::array<uint32_t, 2> projectedExceptionPositions{};
+      std::span<const uint32_t> exceptionPositionValues =
+          children.exceptionPositions;
+      if (children.exceptionPositions.size() < children.exceptionCount) {
+        // Projected exceptions may span the full row range. Use its endpoints
+        // for conservative position statistics to avoid underestimating size.
+        projectedExceptionPositions = {0, children.rowCount - 1};
+        exceptionPositionValues = projectedExceptionPositions;
+      }
+      const auto estimatedExceptionPositions = estimateChildSize(
+          selectionPolicy,
+          EncodingIdentifiers::ALPRD::ExceptionPositions,
+          exceptionPositionValues,
+          children.exceptionCount,
+          options);
+      // High parts can legitimately be constant, so retain their sampled
+      // statistics. Unseen values may change the writer's encoding choice,
+      // as with other estimates based on sampled values.
+      const auto estimatedExceptionHighParts = estimateChildSize(
+          selectionPolicy,
+          EncodingIdentifiers::ALPRD::ExceptionHighParts,
+          std::span<const uint16_t>{children.exceptionHighParts},
+          children.exceptionCount,
+          options);
+      if (!estimatedExceptionPositions.has_value() ||
+          !estimatedExceptionHighParts.has_value()) {
+        return std::nullopt;
+      }
+      exceptionPositions = estimatedExceptionPositions.value();
+      exceptionHighParts = estimatedExceptionHighParts.value();
+    }
+
+    const std::array<uint64_t, 4> childEstimatedSizes{
+        codes->estimatedSize.value(),
+        rightParts->estimatedSize.value(),
+        exceptionPositions.estimatedSize.value_or(0),
+        exceptionHighParts.estimatedSize.value_or(0),
+    };
+    return ALPRDEncodingBase::calculateSerializedSize(
+        children.parameters,
+        children.rowCount,
+        children.exceptionCount,
+        childEstimatedSizes,
+        options);
+  }
+
   static std::string_view encode(
       EncodingSelection<physicalType>& selection,
       std::span<const physicalType> values,
@@ -298,23 +461,14 @@ class ALPRDEncoding final
     ScopedVector<physicalType> rightParts(rowCount, pool, options.bufferPool);
     ScopedVector<uint32_t> exceptionPositions(0, pool, options.bufferPool);
     ScopedVector<uint16_t> exceptionHighParts(0, pool, options.bufferPool);
-    const auto mask = (physicalType{1} << parameters.rightBitWidth) - 1;
-    for (uint32_t i = 0; i < rowCount; ++i) {
-      rightParts[i] = values[i] & mask;
-      const auto high =
-          static_cast<uint16_t>(values[i] >> parameters.rightBitWidth);
-      uint16_t code = 0;
-      while (code < parameters.dictionarySize &&
-             parameters.dictionary[code] != high) {
-        ++code;
-      }
-      if (code == parameters.dictionarySize) {
-        exceptionPositions.push_back(i);
-        exceptionHighParts.push_back(high);
-        code = 0;
-      }
-      codes[i] = code;
-    }
+    decompose(
+        values,
+        parameters,
+        {},
+        codes,
+        rightParts,
+        exceptionPositions,
+        exceptionHighParts);
     ScopedEncodingBuffer scratch(pool, options.encodingBufferPool);
     std::array<std::string_view, 4> children;
     children[0] = selection.template encodeNested<uint16_t>(
@@ -403,6 +557,30 @@ class ALPRDEncoding final
   }
 
  private:
+  // Uses the same child policy factory as writing. Full child inputs use
+  // normal selection; bounded samples require a policy that can project.
+  template <typename NestedT>
+  static std::optional<EncodingSelectionResult> estimateChildSize(
+      EncodingSelectionPolicyBase& selectionPolicy,
+      NestedEncodingIdentifier identifier,
+      std::span<const NestedT> sampledValues,
+      uint32_t numValues,
+      const Encoding::Options& options) {
+    auto childPolicy = selectionPolicy.template create<NestedT>(
+        EncodingType::ALPRD, identifier);
+    auto* policy =
+        static_cast<EncodingSelectionPolicy<NestedT>*>(childPolicy.get());
+    const auto statistics = Statistics<NestedT>::create(sampledValues);
+    auto result = sampledValues.size() == numValues
+        ? std::optional<EncodingSelectionResult>{policy->select(
+              sampledValues, statistics, options)}
+        : policy->select(sampledValues, statistics, numValues, options);
+    if (!result || !result->estimatedSize) {
+      return std::nullopt;
+    }
+    return result;
+  }
+
   // Native slices retain only the touched data. Already wrapped children use
   // composition because the generic slice factory cannot replay a Slice layout.
   template <typename Child>
