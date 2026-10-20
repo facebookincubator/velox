@@ -981,16 +981,16 @@ RowVectorPtr RPCOperator::getOutput() {
 }
 
 void RPCOperator::endBlockWait() {
-  if (!blockWaitStartNs_.has_value()) {
+  if (!blockWaitWatch_.has_value()) {
     return;
   }
-  const auto elapsed = getCurrentTimeNano() - blockWaitStartNs_.value();
+  const auto elapsed = blockWaitWatch_->elapsed().count();
   if (blockWaitIsBackpressure_) {
     totalBackpressureWaitNanos_ += elapsed;
   } else {
     totalBlockWaitNanos_ += elapsed;
   }
-  blockWaitStartNs_ = std::nullopt;
+  blockWaitWatch_.reset();
 }
 
 exec::BlockingReason RPCOperator::park(
@@ -998,7 +998,7 @@ exec::BlockingReason RPCOperator::park(
     ContinueFuture waitFuture,
     bool isBackpressure) {
   *future = std::move(waitFuture);
-  blockWaitStartNs_ = getCurrentTimeNano();
+  blockWaitWatch_.emplace();
   blockWaitIsBackpressure_ = isBackpressure;
   return exec::BlockingReason::kWaitForRPC;
 }

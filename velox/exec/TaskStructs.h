@@ -35,6 +35,7 @@
 namespace facebook::velox::exec {
 
 class Driver;
+class ExchangeClient;
 class JoinBridge;
 class LocalExchangeMemoryManager;
 class MergeSource;
@@ -130,6 +131,11 @@ class SplitsStore {
   /// any waiters on the splits.
   void addSplit(Split split, std::vector<ContinuePromise>& promises);
 
+  /// Returns the splits added but not yet returned by nextSplit().
+  const std::deque<Split>& queuedSplits() const {
+    return splits_;
+  }
+
   /// Return the number of waiters waiting for new splits.
   int numWaiters() const {
     return promises_.size();
@@ -190,6 +196,12 @@ struct SplitsState {
 
   /// Map split group id -> split store.
   std::unordered_map<uint32_t, std::unique_ptr<SplitsStore>> groupSplitsStores;
+
+  /// Exchange client of a leaf node that requires one, other than a
+  /// MergeExchangeNode. Set when the task creates the client. The task
+  /// forwards remote splits and 'no more splits' to it as they arrive. Null
+  /// for other plan nodes.
+  std::shared_ptr<ExchangeClient> exchangeClient;
 
   /// We need these due to having promises in the structure.
   SplitsState() = default;

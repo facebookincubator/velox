@@ -415,6 +415,8 @@ class Operator : public BaseRuntimeStatWriter {
     return stats_;
   }
 
+  /// Records the time blocked for 'reason' since 'start', a SteadyTime reading
+  /// in microseconds.
   void recordBlockingTime(uint64_t start, BlockingReason reason);
 
   virtual std::string toString() const;

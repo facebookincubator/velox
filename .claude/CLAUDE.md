@@ -160,6 +160,7 @@ are summarized below.
 
 - Use `VELOX_CHECK_*` for internal errors, `VELOX_USER_CHECK_*` for user errors.
 - Prefer two-argument forms: `VELOX_CHECK_LT(idx, size)` over `VELOX_CHECK(idx < size)`.
+- One check per condition: split `VELOX_CHECK(a && b)` into `VELOX_CHECK(a)` and `VELOX_CHECK(b)`. A failure then names the condition that broke, and each check can use a two-argument form.
 - Use `VELOX_FAIL()` / `VELOX_USER_FAIL()` to throw unconditionally.
 - Use `VELOX_UNREACHABLE()` for impossible branches, `VELOX_NYI()` for unimplemented paths.
 - Put runtime information (names, values, types) at the **end** of error messages, after the static description.
@@ -185,6 +186,11 @@ are summarized below.
 - Keep method implementations in `.cpp` except for trivial one-liners.
 - Avoid default arguments when all callers can pass values explicitly.
 - Never use `friend`, `FRIEND_TEST`, or any friend declarations. If a test needs access to private members, redesign the API or test through public methods instead.
+
+### Pitfalls Tests Rarely Catch
+
+- Measure durations, timeouts and deadlines with `steady_clock` (`folly::stop_watch` for an interval; `MicrosecondWallTimer` / `NanosecondWallTimer` in `velox/common/time/Timer.h` to add a scope's duration to a counter; `SteadyTime::now<Duration>()` when the start must be stored as a plain integer, such as in an atomic). `system_clock` and `EpochTime` can step backward; use them only for absolute timestamps.
+- Convert epoch seconds to calendar time with `Timestamp::epochToCalendarUtc()`. `gmtime` is not thread-safe, and glibc's `gmtime_r` serializes threads on a global lock.
 
 ### Tests
 

@@ -499,7 +499,9 @@ std::optional<RowVectorPtr> FileDataSource::next(
 
   if (remainingFilterExprSet_) {
     rowsRemaining = evaluateRemainingFilter(rowVector);
-    VELOX_CHECK_LE(rowsRemaining, rowsScanned);
+    // Bound by the filter input, not rowsScanned: merge-on-read splits
+    // legitimately emit more rows than scanned when deltas insert.
+    VELOX_CHECK_LE(rowsRemaining, rowVector->size());
     if (rowsRemaining == 0) {
       // No rows passed the remaining filter.
       return getEmptyOutput();

@@ -16,15 +16,21 @@
 #pragma once
 
 #include <folly/Synchronized.h>
+#include <folly/container/F14Map.h>
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <memory>
+#include <optional>
+#include <shared_mutex>
 #include <span>
+#include <string>
 #include <string_view>
 #include <vector>
 
 #include "velox/dwio/nimble/encodings/FsstEncoding.h"
 #include "velox/dwio/nimble/encodings/views/EncodingView.h"
+#include "velox/dwio/nimble/encodings/views/EncodingViewFactory.h"
 
 namespace facebook::nimble {
 
@@ -58,9 +64,34 @@ class FsstEncodingView final : public TypedEncodingView<std::string_view> {
       std::span<const uint32_t> indices,
       std::string_view* output) const final;
 
+  // Reads the length of every row once and keeps the compressed offset of every
+  // row, so that reads decode chunks of rows. Checks every length against the
+  // blob.
+  void initializeCached(std::string_view encodedLengths);
+
+  // Keeps the lengths stream as a view and decodes only the strings that reads
+  // ask for, which skips the validation of every length that a cached view
+  // performs.
+  void initializeUncached(std::string_view encodedLengths);
+
+  // Returns whether the view holds the compressed offset of every row and
+  // decodes chunks of rows.
+  bool cachesDecodedChunks() const {
+    return this->options_.cacheEncodingView;
+  }
+
   static std::string_view valueAt(
       const DecodedChunk& chunk,
       uint32_t rowInChunk);
+
+  // Decodes the string of 'row' for a read without cacheEncodingView from its
+  // compressed bytes, which start at 'compressedBegin'. Keeps the string alive
+  // for the lifetime of the view, and returns it again when a row is read
+  // again.
+  std::string_view decodeValue(
+      uint32_t row,
+      uint64_t compressedBegin,
+      uint32_t compressedSize) const;
 
   // Returns a cached chunk, decoding and publishing it on first access.
   std::shared_ptr<const DecodedChunk> getChunk(uint32_t chunkIndex) const;
@@ -81,6 +112,32 @@ class FsstEncodingView final : public TypedEncodingView<std::string_view> {
   // Lazily decoded chunks indexed by chunk number and shared across readers.
   mutable folly::Synchronized<std::vector<std::shared_ptr<const DecodedChunk>>>
       decodedChunks_;
+
+  // Reads the compressed length of one row at a time. Set only for single
+  // access, which keeps no offsets and no chunks.
+  std::unique_ptr<TypedEncodingView<uint32_t>> lengths_;
+
+  // The strings that reads without cacheEncodingView decoded, one for each row
+  // read. Keeps them until the view is destroyed, so that returned views stay
+  // valid, and a row read again decodes nothing.
+  class DecodedStrings {
+   public:
+    // Returns the string of 'row', or nothing if no read has decoded it. Takes
+    // the shared lock.
+    std::optional<std::string_view> find(uint32_t row) const;
+
+    // Keeps 'decoded' as the string of 'row', unless a concurrent read kept one
+    // first, and returns the string that the row has. Takes the exclusive lock.
+    std::string_view add(uint32_t row, std::string decoded);
+
+   private:
+    mutable std::shared_mutex lock_;
+    // Maps a row to the position of its string in 'values_'.
+    folly::F14FastMap<uint32_t, size_t> positions_;
+    // Never moves its strings, so views of them stay valid.
+    std::deque<std::string> values_;
+  };
+  mutable DecodedStrings decodedStrings_;
 };
 
 } // namespace facebook::nimble

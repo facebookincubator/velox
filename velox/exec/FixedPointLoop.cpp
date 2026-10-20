@@ -199,6 +199,13 @@ FixedPointLoop::FixedPointLoop(
   VELOX_USER_CHECK(
       !owner_->planFragment().isGroupedExecution(),
       "A fixed point does not support grouped execution");
+  if (executionMode_ == exec::Task::ExecutionMode::kParallel) {
+    VELOX_CHECK_NOT_NULL(
+        options_.orchestrationExecutor,
+        "Parallel FixedPointLoop requires "
+        "FixedPointOptions::orchestrationExecutor, an executor separate from "
+        "the query executor its sub-tasks run on");
+  }
   workerIndex_ = owner_->destination();
 
   // One worker per output partition of whichever chain shuffles -- the body,
@@ -332,11 +339,6 @@ void FixedPointLoop::start(
   // runSerially() waits on; here it suspends while its sub-tasks run on the
   // query executor.
   auto* executor = options_.orchestrationExecutor;
-  VELOX_CHECK_NOT_NULL(
-      executor,
-      "Parallel FixedPointLoop requires "
-      "FixedPointOptions::orchestrationExecutor, an executor separate from "
-      "the query executor its sub-tasks run on");
   VELOX_USER_CHECK(
       phase_ == Phase::kCreated,
       "start() cannot run a fixed point that has already been driven");
@@ -718,42 +720,6 @@ folly::coro::Task<TaskStats> FixedPointLoop::consumePlan(
 void FixedPointLoop::feedInitSplits(
     const exec::TaskPtr& task,
     const core::PlanNodePtr& plan) {
-  // With options_.upstreamExchangeUri set, an Exchange source reads the one
-  // upstream producer it names (keyed by the Exchange node id); the worker
-  // pulls its own partition by task destination.  Without it, the Exchange
-  // reads the remote splits the coordinator addresses to it, one per upstream
-  // task, like any other split source below.
-  auto exchangeId = findExchangeNodeId(plan);
-  if (exchangeId.has_value() && options_.upstreamExchangeUri) {
-    // This branch feeds the Exchange and nothing else, so a connector split the
-    // coordinator also assigned has no source to go to.  Fail rather than drop
-    // it silently, which would just produce missing rows.
-    {
-      // Scoped to this plan's own source.  nodeSplits_ is task-wide and
-      // legitimately holds other initial plans' splits -- a fixed point may mix
-      // an Exchange-fed state with a scanned one -- so only a split addressed
-      // to this Exchange is a mistake.
-      std::lock_guard<std::mutex> l(splitsMutex_);
-      auto it = nodeSplits_.find(*exchangeId);
-      VELOX_USER_CHECK(
-          it == nodeSplits_.end() || it->second.empty(),
-          "Initial plan reads via Exchange {}, whose upstream comes from "
-          "FixedPointOptions::upstreamExchangeUri, but the coordinator also "
-          "assigned it {} connector splits",
-          *exchangeId,
-          it->second.size());
-    }
-    task->addSplit(
-        *exchangeId,
-        exec::Split(
-            std::make_shared<exec::RemoteConnectorSplit>(
-                options_.upstreamExchangeUri(*exchangeId))));
-    task->noMoreSplits(*exchangeId);
-    return;
-  }
-  // Any other split source (a TableScan, or an Exchange without the hook)
-  // reads the coordinator-assigned splits; a local source (e.g. Values) needs
-  // none.
   folly::F14FastSet<core::PlanNodeId> sourceIds;
   collectSplitTargets(plan, node_.get(), sourceIds);
   // Splits are held under the id of the node that reads them, so each source

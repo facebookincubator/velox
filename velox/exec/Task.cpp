@@ -18,7 +18,9 @@
 #include <boost/lexical_cast.hpp>
 #include <boost/uuid/uuid_generators.hpp>
 #include <boost/uuid/uuid_io.hpp>
+#include <algorithm>
 #include <exception>
+#include <random>
 #include <string>
 
 #include <folly/Conv.h>
@@ -573,7 +575,8 @@ void Task::init(std::optional<common::SpillDiskOptions>&& spillDiskOpts) {
       "Serial execution mode doesn't support delivering results to a "
       "callback");
 
-  taskStats_.executionStartTimeMs = getCurrentTimeMs();
+  taskStats_.executionStartTimeMs = EpochTime::now<std::chrono::milliseconds>();
+  executionStartWatch_.emplace();
   LocalPlanner::plan(
       planFragment_,
       /*consumerSupplier=*/nullptr,
@@ -679,10 +682,9 @@ void Task::removeFromTaskList() {
 }
 
 uint64_t Task::timeSinceStartMsLocked() const {
-  if (taskStats_.executionStartTimeMs == 0UL) {
-    return 0UL;
-  }
-  return getCurrentTimeMs() - taskStats_.executionStartTimeMs;
+  return executionStartWatch_.has_value()
+      ? executionStartWatch_->elapsed().count()
+      : 0;
 }
 
 SplitsState& Task::getPlanNodeSplitsStateLocked(
@@ -1150,38 +1152,20 @@ RowVectorPtr Task::next(ContinueFuture* future) {
 }
 
 void Task::recordBatchStartTime() {
-  if (batchStartTimeMs_.has_value()) {
+  if (batchWatch_.has_value()) {
     return;
   }
-  batchStartTimeMs_ = getCurrentTimeMs();
+  batchWatch_.emplace();
 }
 
 void Task::recordBatchEndTime() {
-  VELOX_CHECK(batchStartTimeMs_.has_value());
+  VELOX_CHECK(batchWatch_.has_value());
   RECORD_METRIC_VALUE(
-      kMetricTaskBatchProcessTimeMs, getCurrentTimeMs() - *batchStartTimeMs_);
-  batchStartTimeMs_.reset();
+      kMetricTaskBatchProcessTimeMs, batchWatch_->elapsed().count());
+  batchWatch_.reset();
 }
 
 void Task::start(uint32_t maxDrivers, uint32_t concurrentSplitGroups) {
-  if (fixedPoint_ != nullptr) {
-    // Same invariant as the driver path below: start() is the parallel API.
-    checkExecutionMode(ExecutionMode::kParallel);
-    try {
-      // The pipeline's FixedPointNode leaf waits for the loop to finish; the
-      // loop fails the task if it fails.
-      fixedPoint_->start(
-          maxDrivers, [self = shared_from_this()](std::exception_ptr error) {
-            self->setError(error);
-          });
-    } catch (...) {
-      // The loop rejected the start before it could schedule anything -- a
-      // missing orchestration executor, say.  Without this the task would stay
-      // kRunning for ever with no error recorded.
-      setError(std::current_exception());
-      throw;
-    }
-  }
   facebook::velox::process::ThreadDebugInfo threadDebugInfo{
       queryCtx()->queryId(), taskId_, nullptr};
   facebook::velox::process::ScopedThreadDebugInfo scopedInfo(threadDebugInfo);
@@ -1199,7 +1183,9 @@ void Task::start(uint32_t maxDrivers, uint32_t concurrentSplitGroups) {
 
     {
       std::unique_lock<std::timed_mutex> l(mutex_);
-      taskStats_.executionStartTimeMs = getCurrentTimeMs();
+      taskStats_.executionStartTimeMs =
+          EpochTime::now<std::chrono::milliseconds>();
+      executionStartWatch_.emplace();
       if (!isRunningLocked()) {
         LOG(WARNING) << "Task " << taskId_
                      << " has already been terminated before start: "
@@ -1214,6 +1200,15 @@ void Task::start(uint32_t maxDrivers, uint32_t concurrentSplitGroups) {
                    << " was terminated while starting: " << errorMessage();
       finishUnstartedDrivers();
       return;
+    }
+    // After the drivers: createAndStartDrivers requires an empty task pool, and
+    // the loop allocates from it.  The pipeline's FixedPointNode leaf waits for
+    // the loop to finish; the loop fails the task if it fails.
+    if (fixedPoint_ != nullptr) {
+      fixedPoint_->start(
+          maxDrivers, [self = shared_from_this()](std::exception_ptr error) {
+            self->setError(error);
+          });
     }
   } catch (const std::exception&) {
     if (isRunning()) {
@@ -1348,12 +1343,56 @@ bool Task::createAndStartDrivers(uint32_t concurrentSplitGroups) {
   return true;
 }
 
+namespace {
+const std::string& remoteTaskId(const exec::Split& split) {
+  return checkedPointerCast<RemoteConnectorSplit>(split.connectorSplit)->taskId;
+}
+
+// Remote splits and 'no more splits' a node received before the task created
+// its exchange client.
+struct PendingExchangeSplits {
+  std::shared_ptr<ExchangeClient> client;
+  std::vector<std::string> remoteTaskIds;
+  bool noMoreSplits{false};
+
+  static PendingExchangeSplits from(const SplitsState& splitsState) {
+    std::vector<std::string> remoteTaskIds;
+    for (const auto& [groupId, store] : splitsState.groupSplitsStores) {
+      for (const auto& split : store->queuedSplits()) {
+        remoteTaskIds.push_back(remoteTaskId(split));
+      }
+    }
+    // Consumer tasks receive the same splits in the same order. Shuffle so they
+    // fetch from different producers first.
+    std::shuffle(
+        remoteTaskIds.begin(),
+        remoteTaskIds.end(),
+        std::default_random_engine{std::random_device{}()});
+    return PendingExchangeSplits{
+        .client = splitsState.exchangeClient,
+        .remoteTaskIds = std::move(remoteTaskIds),
+        .noMoreSplits = splitsState.noMoreSplits,
+    };
+  }
+
+  void forward() const {
+    for (const auto& id : remoteTaskIds) {
+      client->addRemoteTaskId(id);
+    }
+    if (noMoreSplits) {
+      client->noMoreRemoteTasks();
+    }
+  }
+};
+} // namespace
+
 bool Task::initializePartitionOutput() {
   TestValue::adjust(
       "facebook::velox::exec::Task::initializePartitionOutput", this);
-  std::shared_ptr<const core::PartitionedOutputNode> partitionedOutputNode{
-      nullptr};
+  core::PartitionedOutputNodePtr partitionedOutputNode;
   int numOutputDrivers{0};
+  std::vector<PendingExchangeSplits> pendingExchangeSplits;
+  std::unique_lock<std::mutex> exchangeSplitsLock(exchangeSplitsMutex_);
   {
     std::unique_lock<std::timed_mutex> l(mutex_);
     if (!isRunningLocked()) {
@@ -1395,7 +1434,19 @@ bool Task::initializePartitionOutput() {
             folly::to<int32_t>(factory->numDrivers));
       }
     }
+
+    for (const auto& [nodeId, splitsState] : splitsStates_) {
+      if (splitsState.exchangeClient != nullptr) {
+        pendingExchangeSplits.push_back(
+            PendingExchangeSplits::from(splitsState));
+      }
+    }
   }
+
+  for (const auto& pending : pendingExchangeSplits) {
+    pending.forward();
+  }
+  exchangeSplitsLock.unlock();
 
   if (partitionedOutputNode != nullptr) {
     VELOX_CHECK(hasPartitionedOutput());
@@ -1476,9 +1527,9 @@ void Task::resume(std::shared_ptr<Task> self) {
         VELOX_CHECK(!driver->isOnThread() && !driver->isTerminated());
         if (!driver->state().hasBlockingFuture &&
             driver->task()->queryCtx()->isExecutorSupplied()) {
-          if (driver->state().endExecTimeMs != 0) {
+          if (driver->state().offThreadWatch.has_value()) {
             driver->state().totalPauseTimeMs +=
-                getCurrentTimeMs() - driver->state().endExecTimeMs;
+                driver->state().offThreadWatch->elapsed().count();
           }
           // Do not continue a Driver that is blocked on external
           // event. The Driver gets enqueued by the promise realization.
@@ -1802,6 +1853,26 @@ void Task::onAddSplit(
   }
 }
 
+namespace {
+// Forwards 'split' to 'client', if set. Returns the error if the client
+// throws. The caller must then fail the task: the split is already in the
+// split store, and the client may have recorded the remote task before
+// failing, so the split cannot be retried.
+std::exception_ptr forwardRemoteSplit(
+    ExchangeClient* client,
+    const exec::Split& split) {
+  if (client == nullptr) {
+    return nullptr;
+  }
+  try {
+    client->addRemoteTaskId(remoteTaskId(split));
+  } catch (const std::exception&) {
+    return std::current_exception();
+  }
+  return nullptr;
+}
+} // namespace
+
 bool Task::addSplitWithSequence(
     const core::PlanNodeId& planNodeId,
     exec::Split&& split,
@@ -1823,6 +1894,8 @@ bool Task::addSplitWithSequence(
   bool added = false;
   bool isTaskRunning;
   bool shouldLogSplit = false;
+  std::shared_ptr<ExchangeClient> exchangeClient;
+  std::unique_lock<std::mutex> exchangeSplitsLock(exchangeSplitsMutex_);
   {
     std::lock_guard<std::timed_mutex> l(mutex_);
     isTaskRunning = isRunningLocked();
@@ -1835,16 +1908,23 @@ bool Task::addSplitWithSequence(
         shouldLogSplit = true;
         addSplitLocked(splitsState, split, promises);
         added = true;
+        exchangeClient = splitsState.exchangeClient;
       }
     }
   }
 
+  const auto forwardError = forwardRemoteSplit(exchangeClient.get(), split);
+  exchangeSplitsLock.unlock();
+
   for (auto& promise : promises) {
     promise.setValue();
   }
+  if (forwardError != nullptr) {
+    setError(forwardError);
+  }
 
   if (!isTaskRunning) {
-    // Safe because 'split' is moved away above only if 'isTaskRunning'.
+    // Safe because 'split' is only read above.
     // @lint-ignore CLANGTIDY bugprone-use-after-move
     addRemoteSplit(planNodeId, split);
   }
@@ -1866,21 +1946,31 @@ void Task::addSplit(const core::PlanNodeId& planNodeId, exec::Split&& split) {
   bool isTaskRunning;
   bool shouldLogSplit = false;
   std::vector<ContinuePromise> promises;
+  std::shared_ptr<ExchangeClient> exchangeClient;
+  std::unique_lock<std::mutex> exchangeSplitsLock(exchangeSplitsMutex_);
   {
     std::lock_guard<std::timed_mutex> l(mutex_);
     isTaskRunning = isRunningLocked();
     if (isTaskRunning) {
       shouldLogSplit = true;
-      addSplitLocked(getPlanNodeSplitsStateLocked(planNodeId), split, promises);
+      auto& splitsState = getPlanNodeSplitsStateLocked(planNodeId);
+      addSplitLocked(splitsState, split, promises);
+      exchangeClient = splitsState.exchangeClient;
     }
   }
+
+  const auto forwardError = forwardRemoteSplit(exchangeClient.get(), split);
+  exchangeSplitsLock.unlock();
 
   for (auto& promise : promises) {
     promise.setValue();
   }
+  if (forwardError != nullptr) {
+    setError(forwardError);
+  }
 
   if (!isTaskRunning) {
-    // Safe because 'split' is moved away above only if 'isTaskRunning'.
+    // Safe because 'split' is only read above.
     // @lint-ignore CLANGTIDY bugprone-use-after-move
     addRemoteSplit(planNodeId, split);
   }
@@ -1895,11 +1985,8 @@ void Task::addRemoteSplit(
     const exec::Split& split) {
   if (split.hasConnectorSplit()) {
     if (exchangeClientByPlanNode_.count(planNodeId)) {
-      auto remoteSplit =
-          std::dynamic_pointer_cast<RemoteConnectorSplit>(split.connectorSplit);
-      VELOX_CHECK(remoteSplit, "Wrong type of split");
       exchangeClientByPlanNode_[planNodeId]->addRemoteTaskId(
-          remoteSplit->taskId);
+          remoteTaskId(split));
     }
   }
 }
@@ -1994,6 +2081,7 @@ void Task::noMoreSplits(const core::PlanNodeId& planNodeId) {
   std::vector<ContinuePromise> splitPromises;
   bool allFinished;
   std::shared_ptr<ExchangeClient> exchangeClient;
+  std::unique_lock<std::mutex> exchangeSplitsLock(exchangeSplitsMutex_);
   {
     std::lock_guard<std::timed_mutex> l(mutex_);
 
@@ -2036,17 +2124,17 @@ void Task::noMoreSplits(const core::PlanNodeId& planNodeId) {
 
     allFinished = checkNoMoreSplitGroupsLocked();
 
-    if (!isRunningLocked()) {
-      exchangeClient = getExchangeClientLocked(planNodeId);
-    }
-  }
-
-  for (auto& promise : splitPromises) {
-    promise.setValue();
+    exchangeClient = isRunningLocked() ? splitsState.exchangeClient
+                                       : getExchangeClientLocked(planNodeId);
   }
 
   if (exchangeClient != nullptr) {
     exchangeClient->noMoreRemoteTasks();
+  }
+  exchangeSplitsLock.unlock();
+
+  for (auto& promise : splitPromises) {
+    promise.setValue();
   }
 
   if (allFinished) {
@@ -2121,7 +2209,7 @@ ContinueFuture Task::startBarrier(std::string_view comment) {
     return std::move(future);
   }
 
-  barrierStartUs_ = getCurrentTimeMicro();
+  barrierWatch_.reset();
   ++taskStats_.numBarriers;
 
   promises.reserve(leafPlanNodeIds.size());
@@ -2174,10 +2262,8 @@ void Task::endBarrierLocked(std::vector<ContinuePromise>& promises) {
   }
   barrierFinishPromises_.clear();
   barrierRequested_ = false;
-  VELOX_CHECK_GE(getCurrentTimeMicro(), barrierStartUs_);
   RECORD_HISTOGRAM_METRIC_VALUE(
-      kMetricTaskBarrierProcessTimeMs,
-      (getCurrentTimeMicro() - barrierStartUs_) / 1'000);
+      kMetricTaskBarrierProcessTimeMs, barrierWatch_.elapsed().count());
 }
 
 namespace {
@@ -2536,10 +2622,12 @@ bool Task::checkIfFinishedLocked() {
     // the output buffers. Preserve this boundary on subsequent checks so that
     // endTimeMs - executionEndTimeMs measures the output-consumption tail.
     if (taskStats_.executionEndTimeMs == 0) {
-      taskStats_.executionEndTimeMs = getCurrentTimeMs();
+      taskStats_.executionEndTimeMs =
+          EpochTime::now<std::chrono::milliseconds>();
+      executionEndWatch_.emplace();
     }
     if (!hasPartitionedOutput() || partitionedOutputConsumed_) {
-      taskStats_.endTimeMs = getCurrentTimeMs();
+      taskStats_.endTimeMs = EpochTime::now<std::chrono::milliseconds>();
       return true;
     }
   }
@@ -2899,7 +2987,9 @@ ContinueFuture Task::terminate(TaskState terminalState) {
   {
     std::lock_guard<std::timed_mutex> l(mutex_);
     if (taskStats_.executionEndTimeMs == 0) {
-      taskStats_.executionEndTimeMs = getCurrentTimeMs();
+      taskStats_.executionEndTimeMs =
+          EpochTime::now<std::chrono::milliseconds>();
+      executionEndWatch_.emplace();
     }
     if (!isRunningLocked()) {
       return makeFinishFutureLocked("Task::terminate");
@@ -2909,7 +2999,8 @@ ContinueFuture Task::terminate(TaskState terminalState) {
         taskStats_.terminationTimeMs,
         0,
         "Termination time has already been set, this should only happen once.");
-    taskStats_.terminationTimeMs = getCurrentTimeMs();
+    taskStats_.terminationTimeMs = EpochTime::now<std::chrono::milliseconds>();
+    terminationWatch_.emplace();
     if (state_ == TaskState::kCanceled || state_ == TaskState::kAborted) {
       // Construct the exception directly instead of going through VELOX_FAIL to
       // avoid error log when cancellation is expected.
@@ -2986,12 +3077,7 @@ ContinueFuture Task::terminate(TaskState terminalState) {
 
   for (auto& exchangeClient : exchangeClients) {
     if (exchangeClient != nullptr) {
-      try {
-        exchangeClient->close();
-      } catch (const std::exception& ex) {
-        LOG(ERROR) << "Exchange client threw from close() during termination "
-                   << "of task " << taskId_ << ": " << ex.what();
-      }
+      exchangeClient->close();
     }
   }
 
@@ -3005,8 +3091,12 @@ ContinueFuture Task::terminate(TaskState terminalState) {
   std::
       unordered_map<core::PlanNodeId, std::pair<std::vector<exec::Split>, bool>>
           remainingRemoteSplits;
+  folly::F14FastSet<std::shared_ptr<connector::ConnectorSplit>>
+      preloadingSplits;
   {
     std::lock_guard<std::timed_mutex> l(mutex_);
+    preloadingSplits.swap(preloadingSplits_);
+
     // Collect all the join bridges to clear them.
     for (auto& splitGroupState : splitGroupStates_) {
       for (auto& pair : splitGroupState.second.bridges) {
@@ -3064,12 +3154,7 @@ ContinueFuture Task::terminate(TaskState terminalState) {
       }
     }
     if (splits.second) {
-      try {
-        client->noMoreRemoteTasks();
-      } catch (const std::exception& ex) {
-        LOG(ERROR) << "Exchange client threw from noMoreRemoteTasks() during "
-                   << "termination of task " << taskId_ << ": " << ex.what();
-      }
+      client->noMoreRemoteTasks();
     }
   }
 
@@ -3085,10 +3170,9 @@ ContinueFuture Task::terminate(TaskState terminalState) {
     bridge->cancel();
   }
 
-  for (auto split : preloadingSplits_) {
+  for (const auto& split : preloadingSplits) {
     split->dataSource->close();
   }
-  preloadingSplits_.clear();
 
   for (auto& barrierPromise : barrierPromises) {
     barrierPromise.setValue();
@@ -3332,18 +3416,14 @@ uint64_t Task::timeSinceStartMs() const {
 
 uint64_t Task::timeSinceEndMs() const {
   std::lock_guard<std::timed_mutex> l(mutex_);
-  if (taskStats_.executionEndTimeMs == 0UL) {
-    return 0UL;
-  }
-  return getCurrentTimeMs() - taskStats_.executionEndTimeMs;
+  return executionEndWatch_.has_value() ? executionEndWatch_->elapsed().count()
+                                        : 0;
 }
 
 uint64_t Task::timeSinceTerminationMs() const {
   std::lock_guard<std::timed_mutex> l(mutex_);
-  if (taskStats_.terminationTimeMs == 0UL) {
-    return 0UL;
-  }
-  return getCurrentTimeMs() - taskStats_.terminationTimeMs;
+  return terminationWatch_.has_value() ? terminationWatch_->elapsed().count()
+                                       : 0;
 }
 
 Task::DriverCounts Task::driverCounts() const {
@@ -3535,7 +3615,9 @@ folly::dynamic Task::toJson() const {
   obj["numRunningSplitGroups"] = numRunningSplitGroups_;
   obj["partitionedOutputConsumed"] = partitionedOutputConsumed_;
   obj["noMoreOutputBuffers"] = noMoreOutputBuffers_;
-  obj["onThreadSince"] = std::to_string(onThreadSince_);
+  obj["onThreadUs"] = numThreads_ > 0
+      ? SteadyTime::now<std::chrono::microseconds>() - onThreadSince_
+      : 0;
 
   if (exception_) {
     obj["exception"] = errorMessageLocked();
@@ -3765,7 +3847,7 @@ std::string Task::errorMessage() const {
   return errorMessageLocked();
 }
 
-StopReason Task::enter(ThreadState& state, uint64_t nowMicros) {
+StopReason Task::enter(ThreadState& state) {
   TestValue::adjust("facebook::velox::exec::Task::enter", this);
   std::lock_guard<std::timed_mutex> l(mutex_);
   VELOX_CHECK(state.isEnqueued);
@@ -3783,7 +3865,7 @@ StopReason Task::enter(ThreadState& state, uint64_t nowMicros) {
   if (reason == StopReason::kNone) {
     ++numThreads_;
     if (numThreads_ == 1) {
-      onThreadSince_ = nowMicros;
+      onThreadSince_ = SteadyTime::now<std::chrono::microseconds>();
     }
     state.setThread();
     state.hasBlockingFuture = false;
@@ -3944,11 +4026,21 @@ StopReason Task::shouldStop() {
 }
 
 int32_t Task::yieldIfDue(uint64_t startTimeMicros) {
-  if (onThreadSince_ < startTimeMicros) {
+  // Callers compute 'startTimeMicros' from the epoch clock. Recover the time
+  // slice from it and compare on the steady clock, which never goes backward.
+  // A start time at or after now means a zero time slice.
+  const auto nowMicros = EpochTime::now<std::chrono::microseconds>();
+  const auto timeSliceMicros =
+      nowMicros > startTimeMicros ? nowMicros - startTimeMicros : 0;
+  const auto isDue = [&]() {
+    return onThreadSince_ + timeSliceMicros <
+        SteadyTime::now<std::chrono::microseconds>();
+  };
+  if (isDue()) {
     std::lock_guard<std::timed_mutex> l(mutex_);
     // Reread inside the mutex
-    if (onThreadSince_ < startTimeMicros && numThreads_ && !toYield_ &&
-        !terminateRequested_ && !pauseRequested_) {
+    if (isDue() && numThreads_ && !toYield_ && !terminateRequested_ &&
+        !pauseRequested_) {
       toYield_ = numThreads_;
       return numThreads_;
     }
@@ -4061,6 +4153,13 @@ void Task::createExchangeClientLocked(
   exchangeClients_[pipelineId] = std::move(client);
   exchangeTransportEntries_[pipelineId] = std::move(entry);
   exchangeClientByPlanNode_.emplace(planNodeId, exchangeClients_[pipelineId]);
+  // MergeExchange fetches through clients of its own. A node that takes no
+  // splits has nothing to forward.
+  if (!planNode->is<core::MergeExchangeNode>()) {
+    if (auto it = splitsStates_.find(planNodeId); it != splitsStates_.end()) {
+      it->second.exchangeClient = exchangeClients_[pipelineId];
+    }
+  }
 }
 
 std::shared_ptr<ExchangeClient> Task::getExchangeClientLocked(
@@ -4249,7 +4348,7 @@ void Task::DriverBlockingState::setDriverFuture(
     blocked_ = true;
     op_ = driverOp;
     blockingReason_ = blockingReason;
-    blockStartUs_ = getCurrentTimeMicro();
+    blockStartUs_ = SteadyTime::now<std::chrono::microseconds>();
   }
   std::move(driverFuture)
       .via(&folly::InlineExecutor::instance())

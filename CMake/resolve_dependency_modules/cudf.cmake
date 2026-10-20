@@ -63,17 +63,45 @@ set(
 set(VELOX_cudf_SOURCE_URL "https://github.com/rapidsai/cudf/archive/${VELOX_cudf_COMMIT}.tar.gz")
 velox_resolve_dependency_url(cudf)
 
-# Probe for a system UCX install. The variables are used only to gate ucxx
-# fetching below; nothing in Velox links against UCX directly yet.
-find_library(UCX_LIBRARY NAMES ucp)
-find_path(UCX_INCLUDE_DIR NAMES ucp/api/ucp.h)
-if(UCX_LIBRARY AND UCX_INCLUDE_DIR)
+# Probe for a system UCX, to pick the default for VELOX_ENABLE_UCX_EXCHANGE
+# below and to fail the configure before cuDF is fetched when the option is on
+# without UCX. It is the lookup ucxx and velox_ucx_exchange make later, for
+# UCX's CMake package, so the probe succeeds exactly when they will. GLOBAL
+# creates ucx::ucp as a global target here: ucxx reuses that target and would
+# otherwise try to make it global from its own directory, which CMake rejects.
+find_package(ucx QUIET GLOBAL)
+if(ucx_FOUND)
   set(UCX_FOUND TRUE)
 else()
   set(UCX_FOUND FALSE)
 endif()
-if(UCX_FOUND)
-  message(STATUS "Found UCX: ${UCX_LIBRARY} (headers: ${UCX_INCLUDE_DIR}) -- ucxx will be fetched")
+
+# Whether to build the experimental UCX GPU exchange transport
+# (velox/experimental/ucx-exchange) and the cuDF-side registration that selects
+# it. Defaults, on the first configure of a build directory, to whether a system
+# UCX was found; the value is cached after that, so a UCX installed later needs
+# -DVELOX_ENABLE_UCX_EXCHANGE=ON, and -DVELOX_ENABLE_UCX_EXCHANGE=OFF builds
+# without it on a host that has UCX. Declared here, next to the ucxx fetch it
+# controls, rather than with the other options. This file only runs for a
+# bundled cuDF, so the option exists only then; cache variables are global, so
+# every subdirectory sees it.
+option(
+  VELOX_ENABLE_UCX_EXCHANGE
+  "Build the experimental UCX GPU exchange transport. Requires a system UCX with its CMake package."
+  ${UCX_FOUND}
+)
+
+if(VELOX_ENABLE_UCX_EXCHANGE)
+  if(NOT UCX_FOUND)
+    message(
+      FATAL_ERROR
+      "VELOX_ENABLE_UCX_EXCHANGE=ON but no system UCX was found (need UCX's CMake package, ucx-config.cmake; set ucx_DIR to its directory if it is not on the search path). Install UCX or pass -DVELOX_ENABLE_UCX_EXCHANGE=OFF."
+    )
+  endif()
+  message(
+    STATUS
+    "UCX exchange enabled with UCX ${ucx_VERSION} from ${ucx_DIR} -- ucxx will be fetched"
+  )
   # ucxx commit f3e85e5 from 2026-10-14 (main branch)
   set(VELOX_ucxx_VERSION 0.53)
   set(VELOX_ucxx_COMMIT f3e85e580fb4349240917f85f5a6260c7f3b94f6)
@@ -84,7 +112,13 @@ if(UCX_FOUND)
   set(VELOX_ucxx_SOURCE_URL "https://github.com/rapidsai/ucxx/archive/${VELOX_ucxx_COMMIT}.tar.gz")
   velox_resolve_dependency_url(ucxx)
 else()
-  message(STATUS "UCX not found -- ucxx will not be fetched")
+  if(UCX_FOUND)
+    message(
+      STATUS
+      "UCX found, but VELOX_ENABLE_UCX_EXCHANGE is OFF -- pass -DVELOX_ENABLE_UCX_EXCHANGE=ON to build the UCX exchange"
+    )
+  endif()
+  message(STATUS "UCX exchange disabled -- ucxx will not be fetched")
 endif()
 
 # Use block so we don't leak variables
@@ -132,7 +166,11 @@ block(SCOPE_FOR VARIABLES)
     UPDATE_DISCONNECTED 1
   )
 
-  if(UCX_FOUND)
+  FetchContent_MakeAvailable(cudf)
+
+  # cuDF does not use ucxx, and ucxx takes rapids-cmake from the declaration
+  # above, so ucxx is resolved on its own after cuDF.
+  if(VELOX_ENABLE_UCX_EXCHANGE)
     FetchContent_Declare(
       ucxx
       URL ${VELOX_ucxx_SOURCE_URL}
@@ -141,11 +179,6 @@ block(SCOPE_FOR VARIABLES)
       cpp
       UPDATE_DISCONNECTED 1
     )
-  endif()
-
-  FetchContent_MakeAvailable(cudf)
-
-  if(UCX_FOUND)
     FetchContent_MakeAvailable(ucxx)
   endif()
 

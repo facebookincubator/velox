@@ -165,7 +165,8 @@ struct FixedPointExecutionStats {
 /// Hooks a coordinator passes to Task::create for a plan containing a
 /// FixedPointNode, which Task composes a FixedPointLoop into.  A FixedPointLoop
 /// generates no task ids or exchange URIs itself -- the coordinator owns its
-/// addressing protocol and supplies them all through these hooks.
+/// addressing protocol and supplies them through these hooks and the remote
+/// splits it adds.
 struct FixedPointOptions {
   /// Returns where a worker's producer for ('iteration', 'planIndex') lives:
   /// the task id the worker creates it under, and the exchange URI a peer
@@ -195,13 +196,6 @@ struct FixedPointOptions {
   /// Required: the fixed point creates no task ids itself.
   std::function<std::string(const std::string& workerTaskId, int64_t counter)>
       subTaskId;
-
-  /// Returns the exchange URI of the upstream producer feeding an initial
-  /// plan's Exchange, keyed by that Exchange's plan node id.  Optional: when
-  /// unset, the coordinator instead adds a remote split to the Exchange for
-  /// each upstream task, as it does for an Exchange outside a fixed point.
-  std::function<std::string(const core::PlanNodeId& exchangeNodeId)>
-      upstreamExchangeUri;
 
   /// Runs the iteration loop of a FixedPointLoop started with start().
   /// Required in parallel mode; unused in serial mode, which runs the loop on
@@ -464,11 +458,9 @@ class FixedPointLoop {
       uint32_t maxDrivers,
       exec::ConsumerSupplier consumerSupplier);
 
-  // Feeds 'plan's split source on 'task': an Exchange source reads the upstream
-  // producer named by options_.upstreamExchangeUri (keyed by the Exchange node
-  // id);
-  // any other split source (e.g. a TableScan) reads the coordinator-assigned
-  // source splits.  No-op when the plan has no split source (e.g. Values).
+  // Gives 'task' the coordinator-assigned splits of each split source in 'plan'
+  // -- a TableScan, or an Exchange reading an upstream stage.  No-op when the
+  // plan has no split source (e.g. Values).
   void feedInitSplits(const exec::TaskPtr& task, const core::PlanNodePtr& plan);
 
   // Label for an internal sub-task of this worker that no peer addresses (an
@@ -492,8 +484,8 @@ class FixedPointLoop {
       int32_t iteration,
       size_t planIndex);
 
-  // Coordinator-supplied hooks for sub-task id / upstream id generation (see
-  // FixedPointOptions); empty hooks fall back to the fixed point's defaults.
+  // Coordinator-supplied hooks for producer locations and sub-task ids (see
+  // FixedPointOptions).
   FixedPointOptions options_;
 
   // The nesting state an enclosing loop handed down, default-constructed when a

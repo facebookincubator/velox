@@ -1897,6 +1897,25 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
     testImportRowEmpty();
   }
 
+  // Widths 4 and 16 cover inlined and buffer-backed StringViews.
+  void testImportFixedSizeBinary() {
+    for (const int32_t width : {4, 16}) {
+      const std::vector<std::optional<std::string>> values = {
+          std::string(width, 'a'), std::nullopt, std::string(width, 'b')};
+      arrow::FixedSizeBinaryBuilder builder(arrow::fixed_size_binary(width));
+      for (const auto& value : values) {
+        ASSERT_OK(value ? builder.Append(*value) : builder.AppendNull());
+      }
+      std::shared_ptr<arrow::Array> array;
+      ASSERT_OK(builder.Finish(&array));
+
+      VectorPtr vector;
+      toVeloxVector(*array, vector);
+      test::assertEqualVectors(
+          vectorMaker_.flatVectorNullable(values, VARBINARY()), vector);
+    }
+  }
+
  private:
   void toVeloxVector(const arrow::Array& array, VectorPtr& outVector) {
     ArrowSchema schema;
@@ -2247,6 +2266,10 @@ TEST_F(ArrowBridgeArrayImportAsViewerTest, stringview) {
   testImportStringView();
 }
 
+TEST_F(ArrowBridgeArrayImportAsViewerTest, fixedSizeBinary) {
+  testImportFixedSizeBinary();
+}
+
 TEST_F(ArrowBridgeArrayImportAsViewerTest, nullType) {
   testImportNullType(4);
   testImportNullType(-1);
@@ -2364,6 +2387,10 @@ TEST_F(ArrowBridgeArrayImportAsOwnerTest, string64) {
 
 TEST_F(ArrowBridgeArrayImportAsOwnerTest, stringview) {
   testImportStringView();
+}
+
+TEST_F(ArrowBridgeArrayImportAsOwnerTest, fixedSizeBinary) {
+  testImportFixedSizeBinary();
 }
 
 TEST_F(ArrowBridgeArrayImportAsOwnerTest, nullType) {

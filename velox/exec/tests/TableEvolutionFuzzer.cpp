@@ -988,6 +988,16 @@ std::string TableEvolutionFuzzer::quoteIdentifier(std::string_view name) {
   return quoted;
 }
 
+std::vector<std::string> TableEvolutionFuzzer::quoteIdentifiers(
+    const std::vector<std::string>& names) {
+  std::vector<std::string> quoted;
+  quoted.reserve(names.size());
+  for (const auto& name : names) {
+    quoted.push_back(quoteIdentifier(name));
+  }
+  return quoted;
+}
+
 // Only generates aggregations that are eligible for pushdown:
 // - Supported aggregate functions: min, max, bool_and, bool_or
 // - Each column can only be used by at most one aggregate
@@ -1345,32 +1355,6 @@ std::vector<std::string> groupingKeyTypeKinds(
   return typeKindsForColumns(schema, groupingKeys);
 }
 
-std::vector<std::string> aggregationBlockingProjectExpressions(
-    const RowTypePtr& schema,
-    const AggregationConfig& aggregationConfig) {
-  std::vector<std::string> expressions;
-  expressions.reserve(schema->size());
-  for (int i = 0; i < schema->size(); ++i) {
-    const auto& name = schema->nameOf(i);
-    const bool isAggregateInput = std::any_of(
-        aggregationConfig.aggregates.begin(),
-        aggregationConfig.aggregates.end(),
-        [&](const auto& aggregate) {
-          return containsIdentifier(aggregate, name);
-        });
-    if (isAggregateInput) {
-      expressions.push_back(
-          fmt::format(
-              "if({0} is null, cast(null as {1}), {0}) as {0}",
-              name,
-              schema->childAt(i)->toString()));
-    } else {
-      expressions.push_back(name);
-    }
-  }
-  return expressions;
-}
-
 void addTypeEvolution(
     const TypePtr& previous,
     const TypePtr& current,
@@ -1423,6 +1407,34 @@ void addTypeEvolution(
 }
 
 } // namespace
+
+std::vector<std::string>
+TableEvolutionFuzzer::aggregationBlockingProjectExpressions(
+    const RowTypePtr& schema,
+    const AggregationConfig& aggregationConfig) {
+  std::vector<std::string> expressions;
+  expressions.reserve(schema->size());
+  for (int i = 0; i < schema->size(); ++i) {
+    const auto& name = schema->nameOf(i);
+    const bool isAggregateInput = std::any_of(
+        aggregationConfig.aggregates.begin(),
+        aggregationConfig.aggregates.end(),
+        [&](const auto& aggregate) {
+          return containsIdentifier(aggregate, name);
+        });
+    const auto quotedName = quoteIdentifier(name);
+    if (isAggregateInput) {
+      expressions.push_back(
+          fmt::format(
+              "if({0} is null, cast(null as {1}), {0}) as {0}",
+              quotedName,
+              schema->childAt(i)->toString()));
+    } else {
+      expressions.push_back(quotedName);
+    }
+  }
+  return expressions;
+}
 
 void TableEvolutionFuzzer::CoverageAccumulator::addSchemaEvolution(
     const RowTypePtr& previous,
@@ -2795,7 +2807,7 @@ std::unique_ptr<TaskCursor> TableEvolutionFuzzer::makeValuesTask(
       builder.project(aggregationBlockingProjectExpressions(
           projectedSchema, *pushdownConfig.aggregationConfig));
     } else {
-      builder.project(projectedSchema->names());
+      builder.project(quoteIdentifiers(projectedSchema->names()));
     }
   }
   if (pushdownConfig.aggregationConfig.has_value()) {
@@ -2896,13 +2908,7 @@ std::unique_ptr<TaskCursor> TableEvolutionFuzzer::makeScanTask(
     } else {
       // Reachable only when pruned, since the branch above takes every
       // aggregation case, so the pruned schema is the one to project.
-      const auto& projectedNames = projectedSchema->names();
-      std::vector<std::string> projections;
-      projections.reserve(projectedNames.size());
-      for (const auto& name : projectedNames) {
-        projections.push_back(quoteIdentifier(name));
-      }
-      builder.project(projections);
+      builder.project(quoteIdentifiers(projectedSchema->names()));
     }
   }
 

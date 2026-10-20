@@ -40,6 +40,7 @@
 #include "velox/dwio/nimble/encodings/views/SparseBoolEncodingView.h"
 #include "velox/dwio/nimble/encodings/views/SubIntSplitEncodingView.h"
 #include "velox/dwio/nimble/encodings/views/TrivialEncodingView.h"
+#include "velox/dwio/nimble/encodings/views/VarintEncodingView.h"
 
 namespace facebook::nimble {
 namespace detail {
@@ -50,6 +51,12 @@ std::unique_ptr<TypedEncodingView<T>> createTypedEncodingView(
     velox::memory::MemoryPool* pool,
     const Encoding::Options& options) {
   using physicalType = typename TypeTraits<T>::physicalType;
+  if constexpr (std::is_same_v<T, bool>) {
+    NIMBLE_CHECK_FILE_EQ(
+        EncodingPrefix::readDataType(data),
+        DataType::Bool,
+        "A bool encoding view requires a bool stream.");
+  }
   const auto encodingType = EncodingPrefix::encodingType(data);
   switch (encodingType) {
     case EncodingType::Nullable:
@@ -175,6 +182,16 @@ std::unique_ptr<TypedEncodingView<T>> createTypedEncodingView(
           "SubIntSplit encoding only supports 32- and 64-bit numeric data "
           "types, got {}.",
           TypeTraits<T>::dataType);
+    case EncodingType::Varint:
+      if constexpr (
+          isNumericType<physicalType>() &&
+          (sizeof(physicalType) == 4 || sizeof(physicalType) == 8)) {
+        return std::make_unique<VarintEncodingView<T>>(data, pool, options);
+      }
+      NIMBLE_INCOMPATIBLE_ENCODING(
+          "Varint encoding only supports 32- and 64-bit numeric data types, "
+          "got {}.",
+          TypeTraits<T>::dataType);
     case EncodingType::Fsst:
       if constexpr (std::is_same_v<T, std::string_view>) {
         return std::make_unique<FsstEncodingView>(data, pool, options);
@@ -233,6 +250,7 @@ bool supportsEncodingView(EncodingType encodingType) {
       EncodingType::BitRangeSplit,
       EncodingType::BlockBitPacking,
       EncodingType::SubIntSplit,
+      EncodingType::Varint,
       EncodingType::Fsst};
   return std::find(
              kViewableEncodings.begin(),

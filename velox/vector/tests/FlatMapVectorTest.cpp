@@ -297,13 +297,15 @@ TEST_F(FlatMapVectorTest, simple) {
   EXPECT_EQ(flatMapVector->sizeAt(2), 2);
 
   // Validate values of key projections.
-  auto mapValues = flatMapVector->projectKey("a")->as<FlatVector<StringView>>();
+  auto projected = flatMapVector->projectKey("a");
+  auto mapValues = projected->as<FlatVector<StringView>>();
   EXPECT_EQ(mapValues->size(), 3);
   EXPECT_EQ(mapValues->valueAt(0), "1");
   EXPECT_EQ(mapValues->valueAt(1), "This is a test");
   EXPECT_TRUE(mapValues->isNullAt(2)); // not in map is also set to null.
 
-  mapValues = flatMapVector->projectKey("b")->as<FlatVector<StringView>>();
+  projected = flatMapVector->projectKey("b");
+  mapValues = projected->as<FlatVector<StringView>>();
   EXPECT_EQ(mapValues->size(), 3);
   EXPECT_EQ(mapValues->valueAt(0), "2");
   EXPECT_EQ(mapValues->valueAt(1), "This is another test");
@@ -333,6 +335,113 @@ TEST_F(FlatMapVectorTest, simple) {
   EXPECT_TRUE(flatMapVector->isInMap(*channel, 0));
   EXPECT_TRUE(flatMapVector->isInMap(*channel, 1));
   EXPECT_FALSE(flatMapVector->isInMap(*channel, 2));
+}
+
+TEST_F(FlatMapVectorTest, projectKeyNullsRowsWithoutTheKey) {
+  auto flatMap = makeFlatMapVectorFromJson<int32_t, int64_t>({
+      "{1: 10, 2: 20}",
+      "{2: 21}",
+      "{1: 12}",
+      "{3: 30}",
+      "{1: 14}",
+  });
+  const auto channel = *flatMap->getKeyChannel(int32_t{1});
+
+  // Rows 1 and 3 lack the key. The result shares the buffer of the values.
+  auto projected = flatMap->projectKey(int32_t{1});
+  test::assertEqualVectors(
+      makeNullableFlatVector<int64_t>({10, std::nullopt, 12, std::nullopt, 14}),
+      projected);
+  EXPECT_EQ(projected->values(), flatMap->mapValuesAt(channel)->values());
+
+  // A null map row is null even when its in-map bit is set.
+  flatMap->setNull(2, true);
+  ASSERT_TRUE(flatMap->isInMap(channel, 2));
+  test::assertEqualVectors(
+      makeNullableFlatVector<int64_t>(
+          {10, std::nullopt, std::nullopt, std::nullopt, 14}),
+      flatMap->projectKey(int32_t{1}));
+
+  // A key the flat map does not have.
+  EXPECT_EQ(flatMap->projectKey(int32_t{9}), nullptr);
+
+  // A key in every row of maps with nulls shares the nulls of the maps.
+  {
+    auto values = makeFlatVector<int64_t>({0, 1, 2});
+    auto mapNulls = allocateNulls(3, pool());
+    bits::setNull(mapNulls->asMutable<uint64_t>(), 1);
+    auto withNullMaps = std::make_shared<FlatMapVector>(
+        pool(),
+        MAP(INTEGER(), BIGINT()),
+        mapNulls,
+        3,
+        makeFlatVector<int32_t>({1}),
+        std::vector<VectorPtr>{values},
+        std::vector<BufferPtr>{});
+    auto withNullMapsProjected = withNullMaps->projectKey(int32_t{1});
+    test::assertEqualVectors(
+        makeNullableFlatVector<int64_t>({0, std::nullopt, 2}),
+        withNullMapsProjected);
+    EXPECT_EQ(withNullMapsProjected->nulls(), withNullMaps->nulls());
+    EXPECT_EQ(withNullMapsProjected->values(), values->values());
+  }
+
+  // A key in every row of maps without nulls returns its values as they are.
+  auto values = makeFlatVector<int64_t>({0, 1, 2});
+  auto everyRow = std::make_shared<FlatMapVector>(
+      pool(),
+      MAP(INTEGER(), BIGINT()),
+      nullptr,
+      3,
+      makeFlatVector<int32_t>({1}),
+      std::vector<VectorPtr>{values},
+      std::vector<BufferPtr>{});
+  EXPECT_EQ(everyRow->projectKey(int32_t{1}), values);
+
+  // In-map bits, nulls of the maps and nulls of the values all apply: row 1
+  // lacks the key, row 2 is a null map and row 3 has a null value.
+  {
+    auto inMap = AlignedBuffer::allocate<bool>(4, pool(), true);
+    bits::clearBit(inMap->asMutable<uint64_t>(), 1);
+    auto mapNulls = allocateNulls(4, pool());
+    bits::setNull(mapNulls->asMutable<uint64_t>(), 2);
+    auto allNulls = std::make_shared<FlatMapVector>(
+        pool(),
+        MAP(INTEGER(), BIGINT()),
+        mapNulls,
+        4,
+        makeFlatVector<int32_t>({1}),
+        std::vector<VectorPtr>{
+            makeNullableFlatVector<int64_t>({0, 1, 2, std::nullopt})},
+        std::vector<BufferPtr>{inMap});
+    test::assertEqualVectors(
+        makeNullableFlatVector<int64_t>(
+            {0, std::nullopt, std::nullopt, std::nullopt}),
+        allNulls->projectKey(int32_t{1}));
+  }
+
+  // Values with nulls of their own keep them, and values that are not flat are
+  // wrapped in a dictionary. Row 1 lacks the key.
+  auto inMap = AlignedBuffer::allocate<bool>(4, pool(), true);
+  bits::clearBit(inMap->asMutable<uint64_t>(), 1);
+  auto withValues = [&](const VectorPtr& keyValues) {
+    return std::make_shared<FlatMapVector>(
+        pool(),
+        MAP(INTEGER(), keyValues->type()),
+        nullptr,
+        4,
+        makeFlatVector<int32_t>({1}),
+        std::vector<VectorPtr>{keyValues},
+        std::vector<BufferPtr>{inMap});
+  };
+  test::assertEqualVectors(
+      makeNullableFlatVector<int64_t>({0, std::nullopt, std::nullopt, 3}),
+      withValues(makeNullableFlatVector<int64_t>({0, 1, std::nullopt, 3}))
+          ->projectKey(int32_t{1}));
+  test::assertEqualVectors(
+      makeNullableArrayVector<int64_t>({{{0}}, std::nullopt, {{2}}, {{3, 3}}}),
+      withValues(makeArrayVector<int64_t>({{0}, {1}, {2}, {3, 3}}))
+          ->projectKey(int32_t{1}));
 }
 
 TEST_F(FlatMapVectorTest, withNulls) {
