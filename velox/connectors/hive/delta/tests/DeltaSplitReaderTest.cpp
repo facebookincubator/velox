@@ -188,6 +188,80 @@ TEST_F(DeltaSplitReaderTest, twoSplitsMissingToPresentColumn) {
       .assertResults(expected);
 }
 
+// A TIMESTAMP partition value is a wall clock with no zone, so the reader has
+// to choose a zone to read it in. Presto reads it in the session zone when the
+// session asks for timezone adjustment (legacy_timestamp) and takes it as
+// already UTC otherwise -- HiveUtil.parseHiveTimestamp() on the coordinator
+// parses in the session zone under legacy semantics and in UTC without it.
+// Either choice has to come from the query, never from the zone the worker
+// process happens to run in.
+class DeltaTimestampPartitionTest : public DeltaSplitReaderTest,
+                                    public testing::WithParamInterface<bool> {
+ protected:
+  // Reads a single-row file whose 'event_ts' partition value is the wall clock
+  // '2021-09-08 06:11:11', and returns the timestamp the reader produced.
+  Timestamp readPartitionTimestamp(
+      bool adjustTimestampToTimezone,
+      const std::string& sessionTimezone) {
+    auto outputType = ROW({"id", "event_ts"}, {BIGINT(), TIMESTAMP()});
+    auto file =
+        writeParquetFile(makeRowVector({"id"}, {makeFlatVector<int64_t>({1})}));
+    auto split = makeDeltaSplit(
+        file->getPath(),
+        {{"event_ts", std::optional<std::string>{"2021-09-08 06:11:11"}}});
+
+    auto assignments = makeAssignments(outputType, /*partitionIndices=*/{1});
+    auto plan = exec::test::PlanBuilder()
+                    .startTableScan()
+                    .outputType(outputType)
+                    .dataColumns(outputType)
+                    .assignments(assignments)
+                    .endTableScan()
+                    .planNode();
+
+    auto result = exec::test::AssertQueryBuilder(plan)
+                      .config(
+                          core::QueryConfig::kAdjustTimestampToTimezone,
+                          adjustTimestampToTimezone ? "true" : "false")
+                      .config(core::QueryConfig::kSessionTimezone, sessionTimezone)
+                      .split(split)
+                      .copyResults(pool());
+
+    return result->childAt(1)->as<SimpleVector<Timestamp>>()->valueAt(0);
+  }
+};
+
+// Without timezone adjustment the wall clock is the value itself, so the
+// reader must not move it: '2021-09-08 06:11:11' is 06:11:11 UTC whatever zone
+// the session or the worker process is in.
+TEST_P(DeltaTimestampPartitionTest, withoutTimezoneAdjustment) {
+  const std::string sessionTimezone =
+      GetParam() ? "America/Bahia_Banderas" : "Asia/Tokyo";
+  EXPECT_EQ(
+      Timestamp(1'631'081'471, 0),
+      readPartitionTimestamp(
+          /*adjustTimestampToTimezone=*/false, sessionTimezone));
+}
+
+// With timezone adjustment the wall clock is read in the session zone, so it
+// comes back as the instant that renders as 06:11:11 in that zone.
+TEST_P(DeltaTimestampPartitionTest, withTimezoneAdjustment) {
+  // Bahia_Banderas is UTC-5 on 2021-09-08, Tokyo is UTC+9.
+  const bool bahiaBanderas = GetParam();
+  const std::string sessionTimezone =
+      bahiaBanderas ? "America/Bahia_Banderas" : "Asia/Tokyo";
+  const int64_t expectedSeconds = bahiaBanderas ? 1'631'099'471 : 1'631'049'071;
+  EXPECT_EQ(
+      Timestamp(expectedSeconds, 0),
+      readPartitionTimestamp(
+          /*adjustTimestampToTimezone=*/true, sessionTimezone));
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    SessionTimezone,
+    DeltaTimestampPartitionTest,
+    testing::Values(true, false));
+
 // Id-mode split with a column that is not present in the Parquet file must
 // fail rather than null the column. The two legitimate causes of missing-
 // from-file -- schema-evolution add vs. spec-strict id-mode writer that
