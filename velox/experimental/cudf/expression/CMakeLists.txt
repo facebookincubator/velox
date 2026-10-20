@@ -32,6 +32,7 @@ add_library(
   JitExpression.cpp
   NullMask.cpp
   PrestoFunctions.cpp
+  prestosql/ArrayJoinFunction.cpp
   prestosql/DateAddFunction.cpp
   prestosql/DatePlusIntervalFunction.cpp
   SparkFunctions.cpp

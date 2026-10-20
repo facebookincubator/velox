@@ -2284,6 +2284,26 @@ TEST_F(CudfFilterProjectTest, cardinalityAndSplitFused) {
   AssertQueryBuilder(plan).assertResults({expected});
 }
 
+// array_join runs inside CudfFilterProject on an array column; CPU fallback
+// is off, so the GPU has to produce the rows.
+TEST_F(CudfFilterProjectTest, arrayJoin) {
+  using Elements = std::vector<std::optional<std::string>>;
+  auto input = makeRowVector({makeNullableArrayVector<std::string>({
+      Elements{"a", "b", "c"},
+      Elements{},
+      Elements{"", "d"},
+      Elements{"e", std::nullopt},
+      std::nullopt,
+  })});
+  auto plan = PlanBuilder()
+                  .values({input})
+                  .project({"array_join(c0, ', ') AS joined"})
+                  .planNode();
+  auto expected = makeRowVector({makeNullableFlatVector<std::string>(
+      {"a, b, c", "", ", d", "e", std::nullopt})});
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
 TEST_F(CudfFilterProjectTest, negativeSubstr) {
   auto input =
       makeFlatVector<std::string>({"hellobutlonghello", "secondstring"});
@@ -2700,6 +2720,48 @@ class CudfSimpleFilterProjectTest : public cudf_velox::CudfFunctionBaseTest {
     facebook::velox::test::assertEqualVectors(expected, actual);
   }
 };
+
+// Registers the Presto functions on top of the built-in ones for the suite
+// and clears them afterwards, so the registry of the next suite starts clean.
+class CudfPrestoFunctionTest : public CudfSimpleFilterProjectTest {
+ protected:
+  static void SetUpTestCase() {
+    CudfSimpleFilterProjectTest::SetUpTestCase();
+    cudf_velox::registerPrestoFunctions("");
+  }
+
+  static void TearDownTestCase() {
+    cudf_velox::unregisterFunctions();
+    CudfSimpleFilterProjectTest::TearDownTestCase();
+  }
+};
+
+// Every shape of an array row, joined by a plain, an empty and a multi-byte
+// separator, must match the CPU: a null element is skipped, an empty or
+// all-null array joins to an empty string and a null array stays null.
+TEST_F(CudfPrestoFunctionTest, arrayJoinMatchesCpu) {
+  using Elements = std::vector<std::optional<std::string>>;
+  auto rowType = ROW({{"c0", ARRAY(VARCHAR())}});
+  auto input = makeRowVector({makeNullableArrayVector<std::string>({
+      Elements{"a", "b", "c"},
+      Elements{},
+      Elements{"", "d"},
+      Elements{"e", std::nullopt},
+      Elements{std::nullopt, "f"},
+      Elements{std::nullopt},
+      std::nullopt,
+      Elements{"g"},
+      Elements{"h", "", std::nullopt, "i"},
+      Elements{"héllo", std::nullopt, std::nullopt, "longer than twelve bytes"},
+  })});
+  for (const auto* expr :
+       {"array_join(c0, ', ')",
+        "array_join(c0, '')",
+        "array_join(c0, ' — ')"}) {
+    SCOPED_TRACE(expr);
+    assertExpressionMatchesCpu(expr, input, rowType);
+  }
+}
 
 TEST_F(CudfSimpleFilterProjectTest, castToSmallInt) {
   auto castValue = evaluateOnce<int16_t, int32_t>("cast(c0 as smallint)", 12);
