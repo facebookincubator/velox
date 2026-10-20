@@ -283,8 +283,7 @@ bool FileSplitReader::filterOnStats(
           fileSplit_->filePath,
           fileSplit_->partitionKeys,
           *partitionKeys_,
-          fileConfig_->readTimestampPartitionValueAsLocalTime(
-              connectorQueryCtx_->sessionProperties()))) {
+          readTimestampValueAsLocalTime())) {
     ++runtimeStats.processedSplits;
     return true;
   }
@@ -406,11 +405,28 @@ void FileSplitReader::setPartitionValue(
       type,
       value,
       connectorQueryCtx_->memoryPool(),
-      fileConfig_->readTimestampPartitionValueAsLocalTime(
-          connectorQueryCtx_->sessionProperties()),
+      readTimestampValueAsLocalTime(),
       it->second->isPartitionDateValueDaysSinceEpoch(),
-      adjustTimestampToTimezone_ ? sessionTimezone_ : nullptr);
+      timestampValueTimezone());
   spec->setConstantValue(constant);
+}
+
+bool FileSplitReader::readTimestampValueAsLocalTime() const {
+  return fileConfig_->readTimestampPartitionValueAsLocalTime(
+      connectorQueryCtx_->sessionProperties());
+}
+
+const tz::TimeZone* FileSplitReader::timestampValueTimezone() const {
+  if (adjustTimestampToTimezone_) {
+    return sessionTimezone_;
+  }
+  // A query that names its session zone and still turns timezone adjustment
+  // off is saying its timestamps are UTC, so the wall clock is read as UTC --
+  // shifting by UTC leaves it alone. A query that names no session zone has
+  // said nothing about zones, and the value keeps the process-default reading
+  // readTimestampPartitionValueAsLocalTime has always given it.
+  static const tz::TimeZone* kUtc = tz::locateZone("UTC");
+  return sessionTimezone_ != nullptr ? kUtc : nullptr;
 }
 
 } // namespace facebook::velox::connector::hive

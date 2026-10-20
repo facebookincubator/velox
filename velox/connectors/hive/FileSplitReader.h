@@ -181,6 +181,18 @@ class FileSplitReader {
       const std::string& partitionKey,
       const std::optional<std::string>& value) const;
 
+  /// Returns true when a TIMESTAMP partition value holds a local wall clock
+  /// that has to be shifted to UTC, per the connector's
+  /// readTimestampPartitionValueAsLocalTime config. Pair it with
+  /// timestampValueTimezone(), which says which zone that clock is in.
+  bool readTimestampValueAsLocalTime() const;
+
+  /// Returns the zone a local wall clock is read in: the session zone when the
+  /// query asks for timezone adjustment, UTC when it names a session zone and
+  /// does not, and nullptr -- the process default zone -- when the query names
+  /// no session zone at all.
+  const tz::TimeZone* timestampValueTimezone() const;
+
   /// Virtual hook called by configureReaderOptions() to set format-specific
   /// reader options on baseReaderOpts_. The base implementation calls the
   /// generic configureReaderOptions() from FileConnectorUtil. Subclasses
