@@ -122,7 +122,13 @@ class Unnest : public Operator {
     BufferPtr nulls;
     bool identityMapping;
 
-    VectorPtr wrap(const VectorPtr& base, vector_size_t wrapSize) const;
+    // Wraps 'base' in this encoding. Flat copies are allocated from 'pool',
+    // which must be the operator's pool: 'base' can belong to a pool outside
+    // the query.
+    VectorPtr wrap(
+        const VectorPtr& base,
+        vector_size_t wrapSize,
+        memory::MemoryPool* pool) const;
   };
 
   // Invoked by generateOutput above to generate the encoding for the unnested

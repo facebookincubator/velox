@@ -460,7 +460,8 @@ RowVectorPtr Unnest::generateOutput(const RowRange& range) {
     VELOX_CHECK(encoding.has_value());
     outputs[outputColumnIndex++] = encoding->wrap(
         unnestChild(outputColumn.channel, outputColumn.sourceChildIndex),
-        range.numInnerRows);
+        range.numInnerRows,
+        pool());
   }
 
   // 'Ordinality' and 'EmptyUnnestValue' columns are always at the end.
@@ -481,7 +482,8 @@ RowVectorPtr Unnest::generateOutput(const RowRange& range) {
 
 VectorPtr Unnest::UnnestChannelEncoding::wrap(
     const VectorPtr& base,
-    vector_size_t wrapSize) const {
+    vector_size_t wrapSize,
+    memory::MemoryPool* pool) const {
   if (identityMapping) {
     if (wrapSize == base->size()) {
       return base;
@@ -507,7 +509,7 @@ VectorPtr Unnest::UnnestChannelEncoding::wrap(
   //
   // TODO A better fix might be to change expression evaluation (and all other
   // operations) to handle dictionaries with large alphabets efficiently.
-  return BaseVector::copy(*result);
+  return BaseVector::copy(*result, pool);
 }
 
 bool Unnest::isFinished() {
