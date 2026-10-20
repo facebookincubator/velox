@@ -15,9 +15,11 @@
  */
 
 #include "velox/experimental/cudf/CudfConfig.h"
+#include "velox/experimental/cudf/exec/CudfConversion.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 
 #include "velox/exec/OperatorType.h"
+#include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 
@@ -49,6 +51,26 @@ class CudfExpandTest : public HiveConnectorTestBase {
       }
     }
     return false;
+  }
+
+  static void assertExpandStats(
+      const std::shared_ptr<Task>& task,
+      uint64_t inputRows,
+      uint64_t inputBatches,
+      uint64_t numProjections) {
+    size_t numExpandOperators = 0;
+    for (const auto& pipelineStats : task->taskStats().pipelineStats) {
+      for (const auto& operatorStats : pipelineStats.operatorStats) {
+        if (operatorStats.operatorType == "CudfExpand") {
+          ++numExpandOperators;
+          EXPECT_EQ(operatorStats.inputPositions, inputRows);
+          EXPECT_EQ(operatorStats.inputVectors, inputBatches);
+          EXPECT_EQ(operatorStats.outputPositions, inputRows * numProjections);
+          EXPECT_EQ(operatorStats.outputVectors, inputBatches * numProjections);
+        }
+      }
+    }
+    EXPECT_EQ(numExpandOperators, 1);
   }
 
   RowVectorPtr makeRowVectorData(vector_size_t size) {
@@ -238,9 +260,101 @@ TEST_F(CudfExpandTest, multipleBatches) {
                        {"null", "k1", "a", "2"}})
                   .planNode();
 
-  assertQuery(
+  // Values batches are otherwise coalesced into one GPU batch by
+  // CudfFromVelox's default 100,000-row target.
+  auto task = AssertQueryBuilder(plan, duckDbQueryRunner_)
+                  .config(cudf_velox::CudfFromVelox::kGpuBatchSizeRows, "1")
+                  .assertResults(
+                      "SELECT k1, k1, a, 0 FROM tmp "
+                      "UNION ALL SELECT k2, null, a, 1 FROM tmp "
+                      "UNION ALL SELECT null, k1, a, 2 FROM tmp");
+  assertExpandStats(task, 600, 3, 3);
+}
+
+TEST_F(CudfExpandTest, nullableDuplicateColumnsOnLastProjection) {
+  auto data = makeRowVector(
+      {"a", "b"},
+      {makeNullableFlatVector<int64_t>({1, std::nullopt, 3, std::nullopt}),
+       makeNullableFlatVector<std::string>(
+           {"alpha",
+            std::nullopt,
+            "",
+            "a string longer than inline storage"})});
+  createDuckDbTable({data});
+
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .expand(
+                      {{"a as a1",
+                        "null::bigint as a2",
+                        "b as b1",
+                        "null::varchar as b2",
+                        "0 as gid"},
+                       {"a", "a", "b", "b", "1"}})
+                  .planNode();
+
+  // The final projection must copy the first use and move the second use of
+  // each nullable column, preserving both the null mask and string storage.
+  auto task = assertQuery(
       plan,
-      "SELECT k1, k1, a, 0 FROM tmp "
-      "UNION ALL SELECT k2, null, a, 1 FROM tmp "
-      "UNION ALL SELECT null, k1, a, 2 FROM tmp");
+      "SELECT a, null::bigint, b, null::varchar, 0 FROM tmp "
+      "UNION ALL SELECT a, a, b, b, 1 FROM tmp");
+  assertExpandStats(task, 4, 1, 2);
+}
+
+TEST_F(CudfExpandTest, supportedConstantTypes) {
+  auto constants = makeRowVector(
+      {"boolean",
+       "tinyint",
+       "smallint",
+       "integer",
+       "bigint",
+       "real",
+       "double",
+       "varchar",
+       "date",
+       "timestamp",
+       "decimal64",
+       "decimal128"},
+      {makeFlatVector<bool>({true}),
+       makeFlatVector<int8_t>({-7}),
+       makeFlatVector<int16_t>({-1'234}),
+       makeFlatVector<int32_t>({-123'456}),
+       makeFlatVector<int64_t>({-1'234'567'890'123LL}),
+       makeFlatVector<float>({1.25f}),
+       makeFlatVector<double>({-1'234.5}),
+       makeFlatVector<std::string>(
+           {"a constant longer than inline StringView storage"}),
+       makeFlatVector<int32_t>({DATE()->toDays("2026-10-08")}, DATE()),
+       makeFlatVector<Timestamp>({Timestamp(1'234'567'890, 123'456'789)}),
+       makeFlatVector<int64_t>({12'345}, DECIMAL(10, 2)),
+       makeFlatVector<int128_t>(
+           {static_cast<int128_t>(123'456'789'012'345'678LL) * 1'000 + 901},
+           DECIMAL(21, 3))});
+  auto input = makeRowVector({"k"}, {makeFlatVector<int64_t>({1, 2, 3})});
+  auto source = PlanBuilder().values({input}).planNode();
+  std::vector<std::vector<core::TypedExprPtr>> projections(2);
+  for (auto& projection : projections) {
+    projection.push_back(
+        std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "k"));
+  }
+  auto names = std::vector<std::string>{"k"};
+  for (size_t i = 0; i < constants->childrenSize(); ++i) {
+    const auto& value = constants->childAt(i);
+    names.push_back(constants->type()->asRow().nameOf(i));
+    projections[0].push_back(std::make_shared<core::ConstantTypedExpr>(value));
+    projections[1].push_back(
+        std::make_shared<core::ConstantTypedExpr>(
+            value->type(), Variant::null(value->type()->kind())));
+  }
+  auto plan = std::make_shared<core::ExpandNode>(
+      "expand", std::move(projections), std::move(names), source);
+
+  // Compare against CPU Expand to preserve exact decimal scales and
+  // nanosecond timestamp values without DuckDB result conversions.
+  cudf_velox::unregisterCudf();
+  auto expected = AssertQueryBuilder(plan).copyResults(pool());
+  cudf_velox::registerCudf();
+  auto task = AssertQueryBuilder(plan).assertResults(expected);
+  assertExpandStats(task, 3, 1, 2);
 }
