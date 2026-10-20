@@ -185,6 +185,20 @@ class FixedPointTest : public exec::test::HiveConnectorTestBase {
     return options;
   }
 
+  // A one-row vector of two BIGINT columns, (key, val) unless 'names' says
+  // otherwise.
+  RowVectorPtr makeKeyValueRow(
+      int64_t key,
+      int64_t val,
+      const std::vector<std::string>& names = {"key", "val"}) {
+    return makeRowVector(
+        names,
+        {
+            makeFlatVector<int64_t>({key}),
+            makeFlatVector<int64_t>({val}),
+        });
+  }
+
   // A single-worker, non-shuffling fixed point: seed val=0, increment each
   // iteration, converge at val=3.  For tests about the Task contract rather
   // than about a particular plan shape.
@@ -197,12 +211,7 @@ class FixedPointTest : public exec::test::HiveConnectorTestBase {
   core::PlanNodePtr countingNodeTo(int64_t target, int32_t maxIterations) {
     auto schema = ROW({"key", "val"}, BIGINT());
     auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-    auto seed = makeRowVector(
-        schema->names(),
-        {
-            makeFlatVector<int64_t>({0}),
-            makeFlatVector<int64_t>({0}),
-        });
+    auto seed = makeKeyValueRow(0, 0);
 
     return PlanBuilder(idGenerator)
         .fixedPoint(
@@ -341,12 +350,12 @@ class FixedPointTest : public exec::test::HiveConnectorTestBase {
     // d's initial-plan source splits (e.g. a TableScan file split), forwarded
     // verbatim; an initial-plan Exchange gets a remote split naming the
     // upstream task.
+    //
+    // In parallel mode the peers arrive once every loop has initialized, as
+    // they may from a coordinator that schedules them after starting the
+    // tasks: the first iteration must wait for them.
     if (node0->requiresSplits()) {
       for (int32_t d = 0; d < numWorkers; ++d) {
-        for (int32_t e = 0; e < numWorkers; ++e) {
-          cursors[d]->task()->addSplit(
-              fixedPointNodeId, remoteSplit(cursors[e]->task()));
-        }
         if (upstream != nullptr) {
           const auto exchangeId = initialExchangeId(node0);
           cursors[d]->task()->addSplit(exchangeId, remoteSplit(upstream));
@@ -360,6 +369,20 @@ class FixedPointTest : public exec::test::HiveConnectorTestBase {
             cursors[d]->task()->addSplit(sourceId, std::move(split));
             cursors[d]->task()->noMoreSplits(sourceId);
           }
+        }
+      }
+      if (mode == exec::Task::ExecutionMode::kParallel) {
+        for (auto& cursor : cursors) {
+          cursor->start();
+        }
+        for (auto& cursor : cursors) {
+          waitForInitialization(*cursor->task());
+        }
+      }
+      for (int32_t d = 0; d < numWorkers; ++d) {
+        for (int32_t e = 0; e < numWorkers; ++e) {
+          cursors[d]->task()->addSplit(
+              fixedPointNodeId, remoteSplit(cursors[e]->task()));
         }
         cursors[d]->task()->noMoreSplits(fixedPointNodeId);
       }
@@ -406,6 +429,20 @@ class FixedPointTest : public exec::test::HiveConnectorTestBase {
       results.push_back({std::move(perWorker[d]), fixedPoint->iterations()});
     }
     return results;
+  }
+
+  // Waits until the loop of 'task' has run its initial plans, or fails after
+  // 10 seconds.
+  static void waitForInitialization(exec::Task& task) {
+    const auto deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (task.fixedPoint()->executionStats().initializationNanos == 0) {
+      VELOX_CHECK(
+          task.isRunning() && std::chrono::steady_clock::now() < deadline,
+          "Fixed point did not initialize: {}",
+          task.taskId());
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
   }
 
   // Unions every worker's shard rows into (col0, col1) BIGINT pairs.
@@ -516,9 +553,7 @@ class FixedPointTest : public exec::test::HiveConnectorTestBase {
     std::vector<RowVectorPtr> batches;
     batches.reserve(numBatches);
     for (int32_t i = 0; i < numBatches; ++i) {
-      batches.push_back(makeRowVector(
-          {"key", "val"},
-          {makeFlatVector<int64_t>({0}), makeFlatVector<int64_t>({i})}));
+      batches.push_back(makeKeyValueRow(0, i));
     }
     return batches;
   }
@@ -552,12 +587,7 @@ TEST_F(FixedPointTest, recursiveCte) {
   auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
 
   // Base case seed: {(id=1, depth=0)}.
-  auto seed = makeRowVector(
-      schema->names(),
-      {
-          makeFlatVector<int64_t>({1}),
-          makeFlatVector<int64_t>({0}),
-      });
+  auto seed = makeKeyValueRow(1, 0, schema->names());
 
   // Static edges: 1->2, 2->3, 2->5, 3->4, 4->6.
   auto edges = makeRowVector(
@@ -619,12 +649,7 @@ TEST_F(FixedPointTest, whenDeltaEmptyRecursiveCte) {
   auto schema = ROW({"id", "depth"}, BIGINT());
   auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
 
-  auto seed = makeRowVector(
-      schema->names(),
-      {
-          makeFlatVector<int64_t>({1}),
-          makeFlatVector<int64_t>({0}),
-      });
+  auto seed = makeKeyValueRow(1, 0, schema->names());
 
   // Static edges: 1->2, 2->3, 2->5, 3->4, 4->6.
   auto edges = makeRowVector(
@@ -663,12 +688,7 @@ TEST_F(FixedPointTest, whenDeltaEmptyRecursiveCte) {
 TEST_F(FixedPointTest, whenDeltaEmptyFailsWithoutEmptyDelta) {
   auto schema = ROW({"id", "val"}, BIGINT());
   auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  auto seed = makeRowVector(
-      schema->names(),
-      {
-          makeFlatVector<int64_t>({1}),
-          makeFlatVector<int64_t>({1}),
-      });
+  auto seed = makeKeyValueRow(1, 1, schema->names());
 
   VELOX_ASSERT_THROW(
       runViaTask(
@@ -699,12 +719,7 @@ TEST_F(FixedPointTest, recursiveCteHashTableReuse) {
   auto edgesSchema = ROW({"src", "dst"}, BIGINT());
   auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
 
-  auto seed = makeRowVector(
-      schema->names(),
-      {
-          makeFlatVector<int64_t>({1}),
-          makeFlatVector<int64_t>({0}),
-      });
+  auto seed = makeKeyValueRow(1, 0, schema->names());
 
   // Static edges: 1->2, 2->3, 2->5, 3->4, 4->6.
   auto edges = makeRowVector(
@@ -1013,12 +1028,7 @@ TEST_F(FixedPointTest, hashTableStateDropsNullKeys) {
 TEST_F(FixedPointTest, serialModeRejectsShuffle) {
   auto schema = ROW({"id", "val"}, BIGINT());
   auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  auto seed = makeRowVector(
-      schema->names(),
-      {
-          makeFlatVector<int64_t>({0}),
-          makeFlatVector<int64_t>({1}),
-      });
+  auto seed = makeKeyValueRow(0, 1, schema->names());
 
   // Creating this shuffling body as a serial FixedPointLoop is rejected.
   auto queryCtx = core::QueryCtx::create(cpuExecutor_.get());
@@ -1248,19 +1258,7 @@ TEST_F(FixedPointTest, convergenceTwoWorkers) {
 
   // Pre-partitioned, balanced seeds: worker 0 owns key 0, worker 1 owns key 1
   // (matching key % 2).  Both start at 8.
-  std::vector<RowVectorPtr> seeds{
-      makeRowVector(
-          schema->names(),
-          {
-              makeFlatVector<int64_t>({0}),
-              makeFlatVector<int64_t>({8}),
-          }),
-      makeRowVector(
-          schema->names(),
-          {
-              makeFlatVector<int64_t>({1}),
-              makeFlatVector<int64_t>({8}),
-          })};
+  std::vector<RowVectorPtr> seeds{makeKeyValueRow(0, 8), makeKeyValueRow(1, 8)};
 
   auto makeWorkerNode = [&](int32_t worker) -> core::PlanNodePtr {
     auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
@@ -1334,12 +1332,7 @@ TEST_F(FixedPointTest, allReduceOverReplicatedState) {
     // Built per worker: one RowVector shared by concurrently running
     // workers races on the lazy-load memo RowVector::copy() touches.
     // Every worker starts from the same replicated row.
-    auto seed = makeRowVector(
-        schema->names(),
-        {
-            makeFlatVector<int64_t>({0}),
-            makeFlatVector<int64_t>({1}),
-        });
+    auto seed = makeKeyValueRow(0, 1);
     // One row per destination; the cross join below turns a worker's single
     // contribution into one copy addressed to each peer.
     auto destinations =
@@ -1486,19 +1479,7 @@ TEST_F(FixedPointTest, shuffleInBodyAndConvergence) {
   auto moduloSpec = std::make_shared<ModuloPartitionFunctionSpec>();
 
   // Worker 0 owns key 0, worker 1 owns key 1; both start at 8.
-  std::vector<RowVectorPtr> seeds{
-      makeRowVector(
-          schema->names(),
-          {
-              makeFlatVector<int64_t>({0}),
-              makeFlatVector<int64_t>({8}),
-          }),
-      makeRowVector(
-          schema->names(),
-          {
-              makeFlatVector<int64_t>({1}),
-              makeFlatVector<int64_t>({8}),
-          })};
+  std::vector<RowVectorPtr> seeds{makeKeyValueRow(0, 8), makeKeyValueRow(1, 8)};
 
   auto makeWorkerNode = [&](int32_t worker) -> core::PlanNodePtr {
     auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
@@ -2181,22 +2162,9 @@ TEST_F(FixedPointTest, twoScannedInitialPlans) {
   auto stepsSchema = ROW({"skey", "delta"}, BIGINT());
 
   auto filePaths = makeFilePaths(2);
+  writeToFile(filePaths[0]->getPath(), makeKeyValueRow(0, 1));
   writeToFile(
-      filePaths[0]->getPath(),
-      makeRowVector(
-          valuesSchema->names(),
-          {
-              makeFlatVector<int64_t>({0}),
-              makeFlatVector<int64_t>({1}),
-          }));
-  writeToFile(
-      filePaths[1]->getPath(),
-      makeRowVector(
-          stepsSchema->names(),
-          {
-              makeFlatVector<int64_t>({0}),
-              makeFlatVector<int64_t>({10}),
-          }));
+      filePaths[1]->getPath(), makeKeyValueRow(0, 10, stepsSchema->names()));
 
   core::PlanNodeId valuesScanId;
   core::PlanNodeId stepsScanId;
@@ -2272,21 +2240,9 @@ TEST_F(FixedPointTest, initialPlanMixesExchangeAndScan) {
   // Each worker scans its own per-key step file.
   auto filePaths = makeFilePaths(2);
   writeToFile(
-      filePaths[0]->getPath(),
-      makeRowVector(
-          stepsSchema->names(),
-          {
-              makeFlatVector<int64_t>({0}),
-              makeFlatVector<int64_t>({100}),
-          }));
+      filePaths[0]->getPath(), makeKeyValueRow(0, 100, stepsSchema->names()));
   writeToFile(
-      filePaths[1]->getPath(),
-      makeRowVector(
-          stepsSchema->names(),
-          {
-              makeFlatVector<int64_t>({1}),
-              makeFlatVector<int64_t>({200}),
-          }));
+      filePaths[1]->getPath(), makeKeyValueRow(1, 200, stepsSchema->names()));
 
   // Modulo, not hash: key K must land on worker K, the one whose step file
   // holds skey=K, or the join finds no match.
@@ -2578,12 +2534,7 @@ TEST_F(FixedPointTest, nestedFixedPointRunsWithinItsPlansDrivers) {
   auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
 
   // Inner fixed point: counts ival up to 3, emitting {(0, 3)}.
-  auto innerSeed = makeRowVector(
-      innerSchema->names(),
-      {
-          makeFlatVector<int64_t>({0}),
-          makeFlatVector<int64_t>({0}),
-      });
+  auto innerSeed = makeKeyValueRow(0, 0, innerSchema->names());
   core::PlanNodePtr innerFixedPoint =
       PlanBuilder(idGenerator)
           .fixedPoint(
@@ -2605,12 +2556,7 @@ TEST_F(FixedPointTest, nestedFixedPointRunsWithinItsPlansDrivers) {
 
   // Outer fixed point: val grows by one per iteration, and the convergence
   // plan joins the inner loop's 3, so the loop stops once val reaches 3.
-  auto outerSeed = makeRowVector(
-      outerSchema->names(),
-      {
-          makeFlatVector<int64_t>({0}),
-          makeFlatVector<int64_t>({0}),
-      });
+  auto outerSeed = makeKeyValueRow(0, 0);
   auto node =
       PlanBuilder(idGenerator)
           .fixedPoint(
@@ -2903,12 +2849,7 @@ TEST_F(FixedPointTest, missingOrchestrationExecutor) {
 TEST_F(FixedPointTest, loopFailureReachesTheTask) {
   auto schema = ROW({"key", "val"}, BIGINT());
   auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  auto seed = makeRowVector(
-      schema->names(),
-      {
-          makeFlatVector<int64_t>({0}),
-          makeFlatVector<int64_t>({0}),
-      });
+  auto seed = makeKeyValueRow(0, 0);
 
   auto task = makeTask(
       PlanBuilder(idGenerator)
@@ -3011,12 +2952,7 @@ DEBUG_ONLY_TEST_F(FixedPointTest, loopStartsAfterDrivers) {
 DEBUG_ONLY_TEST_F(FixedPointTest, failedInitialPlanStopsDriversFirst) {
   auto schema = ROW({"key", "val"}, BIGINT());
   auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  auto seed = makeRowVector(
-      schema->names(),
-      {
-          makeFlatVector<int64_t>({0}),
-          makeFlatVector<int64_t>({0}),
-      });
+  auto seed = makeKeyValueRow(0, 0);
 
   auto task = makeTask(
       PlanBuilder(idGenerator)
@@ -3066,12 +3002,7 @@ DEBUG_ONLY_TEST_F(FixedPointTest, failedInitialPlanStopsDriversFirst) {
 DEBUG_ONLY_TEST_F(FixedPointTest, failedBodyPlanStopsChainFirst) {
   auto schema = ROW({"id", "val"}, BIGINT());
   auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  auto batch = makeRowVector(
-      schema->names(),
-      {
-          makeFlatVector<int64_t>({0}),
-          makeFlatVector<int64_t>({1}),
-      });
+  auto batch = makeKeyValueRow(0, 1, schema->names());
   auto node =
       PlanBuilder(idGenerator)
           .fixedPoint(
@@ -3136,6 +3067,44 @@ DEBUG_ONLY_TEST_F(FixedPointTest, failedBodyPlanStopsChainFirst) {
   EXPECT_FALSE(held->ownerStoppedFirst);
   VELOX_ASSERT_THROW(
       std::rethrow_exception(task->error()), "Injected producer failure");
+}
+
+// A worker whose peers never arrive stops waiting for them once its task is
+// aborted: the loop ends and releases the task.
+TEST_F(FixedPointTest, abortWhileWaitingForPeers) {
+  auto schema = ROW({"key", "val"}, BIGINT());
+  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto node =
+      PlanBuilder(idGenerator)
+          .fixedPoint(
+              {std::make_shared<VectorStateDeclaration>(
+                  "values",
+                  schema,
+                  PlanBuilder(idGenerator)
+                      .values({makeKeyValueRow(0, 1)})
+                      .planNode())},
+              {PlanBuilder(idGenerator)
+                   .stateSource("values", schema)
+                   .partitionedOutput({"key"}, 2)
+                   .planNode(),
+               PlanBuilder(idGenerator).exchange(schema, "Presto").planNode()},
+              ConvergenceConfig::withMaxIterations(3),
+              /*outputStateEntry=*/"values")
+          .planNode();
+
+  auto task = makeTask(node, exec::Task::ExecutionMode::kParallel, "no-peers");
+  task->start(/*maxDrivers=*/1);
+  waitForInitialization(*task);
+
+  std::weak_ptr<exec::Task> released = task;
+  task->requestAbort().wait();
+  task.reset();
+  const auto deadline =
+      std::chrono::steady_clock::now() + std::chrono::seconds(10);
+  while (!released.expired() && std::chrono::steady_clock::now() < deadline) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  ASSERT_TRUE(released.expired());
 }
 
 // A split addressed to a node that reads none is a coordinator bug, rejected as
@@ -3281,12 +3250,7 @@ TEST_F(FixedPointTest, stepTableScan) {
 TEST_F(FixedPointTest, convergenceVerdictMustNotBeNull) {
   auto schema = ROW({"key", "val"}, BIGINT());
   auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  auto seed = makeRowVector(
-      schema->names(),
-      {
-          makeFlatVector<int64_t>({0}),
-          makeFlatVector<int64_t>({0}),
-      });
+  auto seed = makeKeyValueRow(0, 0);
 
   VELOX_ASSERT_THROW(
       runViaTask(
@@ -3318,12 +3282,7 @@ TEST_F(FixedPointTest, trailingNodes) {
   auto schema = ROW({"key", "val"}, BIGINT());
   auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
 
-  auto seed = makeRowVector(
-      schema->names(),
-      {
-          makeFlatVector<int64_t>({0}),
-          makeFlatVector<int64_t>({0}),
-      });
+  auto seed = makeKeyValueRow(0, 0);
 
   auto fixedPoint =
       PlanBuilder(idGenerator)
@@ -3390,12 +3349,7 @@ TEST_F(FixedPointTest, trailingTableScan) {
                           "vals",
                           schema,
                           PlanBuilder(idGenerator)
-                              .values({makeRowVector(
-                                  schema->names(),
-                                  {
-                                      makeFlatVector<int64_t>({0}),
-                                      makeFlatVector<int64_t>({0}),
-                                  })})
+                              .values({makeKeyValueRow(0, 0, schema->names())})
                               .planNode(),
                           /*append=*/true),
                       PlanBuilder(idGenerator)
@@ -3499,14 +3453,7 @@ TEST_F(FixedPointTest, nestedInitialPlanTableScan) {
   auto schema = ROW({"k", "v"}, BIGINT());
 
   auto filePaths = makeFilePaths(2);
-  writeToFile(
-      filePaths[0]->getPath(),
-      makeRowVector(
-          schema->names(),
-          {
-              makeFlatVector<int64_t>({0}),
-              makeFlatVector<int64_t>({0}),
-          }));
+  writeToFile(filePaths[0]->getPath(), makeKeyValueRow(0, 0, schema->names()));
   writeToFile(
       filePaths[1]->getPath(),
       makeRowVector({"tk"}, {makeFlatVector<int64_t>({0})}));
@@ -3627,12 +3574,7 @@ TEST_F(FixedPointTest, nestedFixedPoint) {
   auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
 
   // Inner fixed point: counts ival up to 3, emitting {(0, 3)}.
-  auto innerSeed = makeRowVector(
-      innerSchema->names(),
-      {
-          makeFlatVector<int64_t>({0}),
-          makeFlatVector<int64_t>({0}),
-      });
+  auto innerSeed = makeKeyValueRow(0, 0, innerSchema->names());
 
   core::PlanNodePtr innerFixedPoint =
       PlanBuilder(idGenerator)
@@ -3655,12 +3597,7 @@ TEST_F(FixedPointTest, nestedFixedPoint) {
 
   // Outer fixed point: each iteration adds the inner loop's result to val,
   // reaching 3 then 6.
-  auto outerSeed = makeRowVector(
-      outerSchema->names(),
-      {
-          makeFlatVector<int64_t>({0}),
-          makeFlatVector<int64_t>({0}),
-      });
+  auto outerSeed = makeKeyValueRow(0, 0);
 
   expectBothModes(
       PlanBuilder(idGenerator)
@@ -3703,12 +3640,7 @@ TEST_F(FixedPointTest, nestedInnerShuffle) {
     auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
 
     // Inner loop: shuffles by ikey each iteration, counting ival up to 3.
-    auto innerSeed = makeRowVector(
-        innerSchema->names(),
-        {
-            makeFlatVector<int64_t>({worker}),
-            makeFlatVector<int64_t>({0}),
-        });
+    auto innerSeed = makeKeyValueRow(worker, 0, innerSchema->names());
     core::PlanNodePtr innerFixedPoint =
         PlanBuilder(idGenerator)
             .fixedPoint(
@@ -3739,12 +3671,7 @@ TEST_F(FixedPointTest, nestedInnerShuffle) {
             .planNode();
 
     // Outer loop: local, adds the inner result to its own value each round.
-    auto outerSeed = makeRowVector(
-        outerSchema->names(),
-        {
-            makeFlatVector<int64_t>({worker}),
-            makeFlatVector<int64_t>({0}),
-        });
+    auto outerSeed = makeKeyValueRow(worker, 0);
     return PlanBuilder(idGenerator)
         .fixedPoint(
             std::make_shared<VectorStateDeclaration>(
@@ -3792,12 +3719,7 @@ TEST_F(FixedPointTest, nestedOuterAndInnerShuffle) {
     auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
 
     // Inner loop: shuffles by ikey, counting ival up to 3.
-    auto innerSeed = makeRowVector(
-        innerSchema->names(),
-        {
-            makeFlatVector<int64_t>({worker}),
-            makeFlatVector<int64_t>({0}),
-        });
+    auto innerSeed = makeKeyValueRow(worker, 0, innerSchema->names());
     core::PlanNodePtr innerFixedPoint =
         PlanBuilder(idGenerator)
             .fixedPoint(
@@ -3832,12 +3754,7 @@ TEST_F(FixedPointTest, nestedOuterAndInnerShuffle) {
     // plan, so that plan's sub-task runs a FixedPointLoop, and its
     // PartitionedOutput runs in that sub-task's own pipeline, under the
     // producer id peers read.
-    auto outerSeed = makeRowVector(
-        outerSchema->names(),
-        {
-            makeFlatVector<int64_t>({worker}),
-            makeFlatVector<int64_t>({0}),
-        });
+    auto outerSeed = makeKeyValueRow(worker, 0);
     return PlanBuilder(idGenerator)
         .fixedPoint(
             {std::make_shared<VectorStateDeclaration>(
@@ -3897,12 +3814,7 @@ TEST_F(FixedPointTest, nestedInConsumerPlan) {
     auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
 
     // Inner loop: shuffles by ikey, counting ival up to 3.
-    auto innerSeed = makeRowVector(
-        innerSchema->names(),
-        {
-            makeFlatVector<int64_t>({worker}),
-            makeFlatVector<int64_t>({0}),
-        });
+    auto innerSeed = makeKeyValueRow(worker, 0, innerSchema->names());
     core::PlanNodePtr innerFixedPoint =
         PlanBuilder(idGenerator)
             .fixedPoint(
@@ -3934,12 +3846,7 @@ TEST_F(FixedPointTest, nestedInConsumerPlan) {
 
     // Outer loop: shuffles by key first, then adds the inner loop's result in
     // the consuming plan.
-    auto outerSeed = makeRowVector(
-        outerSchema->names(),
-        {
-            makeFlatVector<int64_t>({worker}),
-            makeFlatVector<int64_t>({0}),
-        });
+    auto outerSeed = makeKeyValueRow(worker, 0);
     return PlanBuilder(idGenerator)
         .fixedPoint(
             {std::make_shared<VectorStateDeclaration>(
@@ -3992,12 +3899,7 @@ TEST_F(FixedPointTest, nestedInConsumerPlan) {
 TEST_F(FixedPointTest, validatesPlanStructure) {
   auto schema = ROW({"id", "val"}, BIGINT());
   auto idGen = std::make_shared<core::PlanNodeIdGenerator>();
-  auto seed = makeRowVector(
-      schema->names(),
-      {
-          makeFlatVector<int64_t>({0}),
-          makeFlatVector<int64_t>({0}),
-      });
+  auto seed = makeKeyValueRow(0, 0, schema->names());
 
   auto makeNode = [&](std::vector<core::PlanNodePtr> plans) {
     return PlanBuilder(idGen)
@@ -4176,12 +4078,7 @@ TEST_F(FixedPointTest, whenDeltaEmptyRejectsShuffle) {
 TEST_F(FixedPointTest, startRequiresParallelMode) {
   auto schema = ROW({"key", "val"}, BIGINT());
   auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  auto seed = makeRowVector(
-      schema->names(),
-      {
-          makeFlatVector<int64_t>({0}),
-          makeFlatVector<int64_t>({0}),
-      });
+  auto seed = makeKeyValueRow(0, 0);
 
   auto task = makeTask(
       PlanBuilder(idGenerator)
@@ -4253,21 +4150,15 @@ TEST_F(FixedPointTest, convergenceMustProduceOneRow) {
 // a recursion can practically go.  Disabled because it is a measurement, not an
 // assertion; run it with
 //
-//   buck2 run @fbcode//mode/opt fbcode//velox/exec/tests:velox_fixed_point_test
-//   \
-//     -- --gtest_filter='*perIterationCost' --gtest_also_run_disabled_tests
+//   buck2 run @fbcode//mode/opt fbcode//velox/exec/tests:fixed_point -- \
+//     --gtest_filter='*perIterationCost' --gtest_also_run_disabled_tests
 //
 // and use mode/opt: a sanitized build reports ~40x this.
 TEST_F(FixedPointTest, DISABLED_perIterationCost) {
   auto schema = ROW({"key", "val"}, BIGINT());
   constexpr int32_t kIterations = 2000;
   auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  auto seed = makeRowVector(
-      schema->names(),
-      {
-          makeFlatVector<int64_t>({0}),
-          makeFlatVector<int64_t>({0}),
-      });
+  auto seed = makeKeyValueRow(0, 0);
   auto start = std::chrono::steady_clock::now();
   auto rows = runViaTask(
       PlanBuilder(idGenerator)
@@ -4295,12 +4186,7 @@ TEST_F(FixedPointTest, DISABLED_perIterationCost) {
 TEST_F(FixedPointTest, errorWhenMaxIterationReachedThrows) {
   auto schema = ROW({"key", "val"}, BIGINT());
   auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  auto seed = makeRowVector(
-      schema->names(),
-      {
-          makeFlatVector<int64_t>({0}),
-          makeFlatVector<int64_t>({0}),
-      });
+  auto seed = makeKeyValueRow(0, 0);
 
   auto node = PlanBuilder(idGenerator)
                   .fixedPoint(
