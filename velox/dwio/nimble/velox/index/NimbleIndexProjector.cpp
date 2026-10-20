@@ -41,32 +41,6 @@ using namespace facebook::velox; // NOLINT(google-build-using-namespace)
 
 namespace {
 
-// Measures the CPU and wall time of its scope like velox::DeltaCpuWallTimer.
-// Skips the clock reads when 'enabled' is false, because the thread CPU clock
-// is a system call.
-template <typename F>
-class OptionalCpuWallTimer {
- public:
-  OptionalCpuWallTimer(bool enabled, F&& func) : func_{std::move(func)} {
-    if (enabled) {
-      stopWatch_.emplace();
-    }
-  }
-
-  ~OptionalCpuWallTimer() {
-    if (stopWatch_.has_value()) {
-      func_(stopWatch_->elapsed());
-    }
-  }
-
-  OptionalCpuWallTimer(const OptionalCpuWallTimer&) = delete;
-  OptionalCpuWallTimer& operator=(const OptionalCpuWallTimer&) = delete;
-
- private:
-  std::optional<velox::DeltaCpuWallTimeStopWatch> stopWatch_;
-  F func_;
-};
-
 bool hasProjectedHybridFlatMaps(const NimbleTypeProjection& projection) {
   const auto& root = projection.nimbleType->asRow();
   for (size_t i = 0; i < root.childrenCount(); ++i) {
@@ -475,6 +449,18 @@ std::vector<StripeSelection> NimbleIndexProjector::lookup(
       1,
       "Cluster index returned multiple ranges for one stream scan");
   return lookup(ranges.empty() ? RowRange{} : ranges.front());
+}
+
+std::vector<StripeSelection> NimbleIndexProjector::lookup(
+    std::string encodedKey) {
+  // The successor of a key is the key followed by a zero byte.
+  auto successor = encodedKey;
+  successor.push_back('\0');
+  return lookup(
+      velox::serializer::EncodedKeyBounds{
+          .lowerKey = std::move(encodedKey),
+          .upperKey = std::move(successor),
+      });
 }
 
 std::vector<StripeSelection> NimbleIndexProjector::lookup(

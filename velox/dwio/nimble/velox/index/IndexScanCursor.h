@@ -66,15 +66,22 @@ class IndexScanCursor final {
 
   /// Resolves the encoded key bounds and starts stripe loading. Returns the
   /// selected file-row bounds for the iterator to navigate, or nullopt on a
-  /// miss.
-  folly::coro::Task<std::optional<RowRange>> co_seek(
-      velox::serializer::EncodedKeyBounds bounds);
+  /// miss. Blocks until the prefetch of the previous scan stops.
+  std::optional<RowRange> seek(
+      const velox::serializer::EncodedKeyBounds& bounds);
 
-  /// Starts a scan at the first file row.
-  folly::coro::Task<std::optional<RowRange>> co_seekToFirst();
+  /// Resolves the rows whose key equals the encoded key and starts stripe
+  /// loading. Returns the selected file-row bounds, or nullopt on a miss.
+  /// Blocks until the prefetch of the previous scan stops.
+  std::optional<RowRange> seek(std::string encodedKey);
 
-  /// Clears the active scan and its outstanding prefetch.
-  folly::coro::Task<void> co_reset();
+  /// Starts a scan at the first file row. Blocks until the prefetch of the
+  /// previous scan stops.
+  std::optional<RowRange> seekToFirst();
+
+  /// Clears the active scan and its outstanding prefetch. Blocks until the
+  /// prefetch stops.
+  void reset();
 
   /// Returns the projected schema used to decode stripe streams.
   std::shared_ptr<const Type> projectedNimbleType() const;
@@ -121,6 +128,9 @@ class IndexScanCursor final {
   const folly::Executor::KeepAlive<> prefetchExecutor_;
   // Maximum number of stripe streams queued ahead of the consumer.
   const uint32_t maxPrefetchStripes_;
+  // Whether the encoding views of the scan build their lookup structures when
+  // they are created.
+  const bool cacheEncodingView_;
   // Contiguous file-row range selected by the active key bounds.
   std::optional<RowRange> range_;
   // Selects contiguous stripes and file rows for the active scan. Empty means
