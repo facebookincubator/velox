@@ -22,6 +22,7 @@
 #include "velox/experimental/cudf/exec/CudfBatchConcat.h"
 #include "velox/experimental/cudf/exec/CudfDistinct.h"
 #include "velox/experimental/cudf/exec/CudfEnforceSingleRow.h"
+#include "velox/experimental/cudf/exec/CudfExpand.h"
 #include "velox/experimental/cudf/exec/CudfFilterProject.h"
 #include "velox/experimental/cudf/exec/CudfGroupId.h"
 #include "velox/experimental/cudf/exec/CudfGroupby.h"
@@ -47,6 +48,7 @@
 #include "velox/exec/AssignUniqueId.h"
 #include "velox/exec/CallbackSink.h"
 #include "velox/exec/EnforceSingleRow.h"
+#include "velox/exec/Expand.h"
 #include "velox/exec/FilterProject.h"
 #include "velox/exec/GroupId.h"
 #include "velox/exec/HashAggregation.h"
@@ -1316,6 +1318,56 @@ class GroupIdAdapter : public OperatorAdapter {
   }
 };
 
+/// ExpandAdapter - Replaces with CudfExpand
+class ExpandAdapter : public OperatorAdapter {
+ public:
+  ExpandAdapter() : OperatorAdapter("Expand") {}
+
+  bool canHandle(const exec::Operator* op) const override {
+    return op->is<exec::Expand>();
+  }
+
+  bool canRunOnGPU(
+      const exec::Operator* /*op*/,
+      const core::PlanNodePtr& planNode,
+      exec::DriverCtx* /*ctx*/) const override {
+    auto expandNode =
+        std::dynamic_pointer_cast<const core::ExpandNode>(planNode);
+    if (!expandNode) {
+      return false;
+    }
+    std::string reason;
+    if (!CudfExpand::canRunOnGPU(*expandNode, &reason)) {
+      LOG_FALLBACK("{}, PlanNode id: {}", reason, planNode->id());
+      return false;
+    }
+    return true;
+  }
+
+  bool acceptsGpuInput() const override {
+    return true;
+  }
+
+  bool producesGpuOutput() const override {
+    return true;
+  }
+
+  std::vector<std::unique_ptr<exec::Operator>> createReplacements(
+      const exec::Operator* /*op*/,
+      const core::PlanNodePtr& planNode,
+      exec::DriverCtx* ctx,
+      int32_t operatorId) const override {
+    auto expandPlanNode =
+        std::dynamic_pointer_cast<const core::ExpandNode>(planNode);
+    VELOX_CHECK_NOT_NULL(expandPlanNode);
+
+    std::vector<std::unique_ptr<exec::Operator>> result;
+    result.push_back(
+        std::make_unique<CudfExpand>(operatorId, ctx, expandPlanNode));
+    return result;
+  }
+};
+
 /// Registration Function
 void registerAllOperatorAdapters() {
   auto& registry = OperatorAdapterRegistry::getInstance();
@@ -1342,6 +1394,7 @@ void registerAllOperatorAdapters() {
   registry.registerAdapter(std::make_unique<MarkDistinctAdapter>());
   registry.registerAdapter(std::make_unique<EnforceSingleRowAdapter>());
   registry.registerAdapter(std::make_unique<GroupIdAdapter>());
+  registry.registerAdapter(std::make_unique<ExpandAdapter>());
   registry.registerAdapter(std::make_unique<ValuesAdapter>());
   registry.registerAdapter(std::make_unique<CallbackSinkAdapter>());
   registry.registerAdapter(std::make_unique<PartitionedOutputAdapter>());

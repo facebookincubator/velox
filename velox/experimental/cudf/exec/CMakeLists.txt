@@ -21,6 +21,7 @@ add_library(
   CudfConversion.cpp
   CudfDistinct.cpp
   CudfEnforceSingleRow.cpp
+  CudfExpand.cpp
   CudfFilterProject.cpp
   CudfGroupId.cpp
   CudfGroupby.cpp
