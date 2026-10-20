@@ -16,6 +16,9 @@
 #pragma once
 
 #include <algorithm>
+#include <bit>
+#include <cstdint>
+#include <cstring>
 #include <type_traits>
 
 #include "velox/common/base/BitUtil.h"
@@ -23,6 +26,7 @@
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
 #include "velox/dwio/nimble/encodings/views/EncodingView.h"
+#include "velox/dwio/nimble/encodings/views/EncodingViewFactory.h"
 
 namespace facebook::nimble {
 
@@ -89,6 +93,28 @@ class TrivialEncodingView<bool> final : public TypedEncodingView<bool> {
         "Unexpected Trivial bool view end.");
   }
 
+  /// Counts the set bits of the bitmap a word at a time, without reading rows.
+  uint32_t count(uint32_t end, bool value) const final {
+    this->checkReadRange(end, 0);
+    const auto* bytes = reinterpret_cast<const uint8_t*>(bitmap_);
+    uint32_t numSet{0};
+    uint32_t row{0};
+    for (; row + 64 <= end; row += 64) {
+      // The bitmap may not be aligned to a word.
+      uint64_t word;
+      std::memcpy(&word, bytes + row / 8, sizeof(word));
+      numSet += std::popcount(word);
+    }
+    if (row < end) {
+      // Reads the bytes of the last word, which holds fewer than 64 rows, and
+      // keeps its first rows. The first row of a byte is its lowest bit.
+      uint64_t word{0};
+      std::memcpy(&word, bytes + row / 8, (end - row + 7) / 8);
+      numSet += std::popcount(word & ((1ULL << (end - row)) - 1));
+    }
+    return value ? numSet : end - numSet;
+  }
+
  private:
   bool readTypedAt(uint32_t index) const final {
     NIMBLE_CHECK_LT(index, this->rowCount_);
@@ -123,25 +149,19 @@ class TrivialEncodingView<std::string_view> final
     const auto compressionType =
         static_cast<CompressionType>(encoding::readChar(pos));
     const auto lengthsSize = encoding::readUint32(pos);
-    auto noStringBufferFactory = [](uint32_t) -> void* { return nullptr; };
-    auto lengths = EncodingFactory().create(
-        *this->pool_, {pos, lengthsSize}, noStringBufferFactory, options);
-    NIMBLE_CHECK_NOT_NULL(lengths);
-
-    offsets_.resize(this->rowCount_ + 1);
-    offsets_[0] = 0;
-    lengths->materialize(this->rowCount_, offsets_.data() + 1);
-    for (uint32_t i = 0; i < this->rowCount_; ++i) {
-      offsets_[i + 1] += offsets_[i];
-    }
+    const std::string_view encodedLengths{pos, lengthsSize};
     pos += lengthsSize;
     const auto payload = this->decompressPayload(
         compressionType,
         DataType::String,
         {pos, static_cast<size_t>(data.data() + data.size() - pos)});
     blob_ = payload.data();
-    NIMBLE_CHECK_EQ(
-        offsets_.back(), payload.size(), "Unexpected Trivial string view end.");
+    blobSize_ = payload.size();
+    if (options.cacheEncodingView) {
+      initializeCached(encodedLengths);
+    } else {
+      initializeUncached(encodedLengths);
+    }
   }
 
   ~TrivialEncodingView() override {
@@ -149,23 +169,98 @@ class TrivialEncodingView<std::string_view> final
   }
 
  private:
+  // Reads the length of every row once and keeps the offset of every row, so
+  // that reads need no stream access.
+  void initializeCached(std::string_view encodedLengths) {
+    auto noStringBufferFactory = [](uint32_t) -> void* { return nullptr; };
+    auto lengths = EncodingFactory().create(
+        *this->pool_, encodedLengths, noStringBufferFactory, this->options_);
+    NIMBLE_CHECK_NOT_NULL(lengths);
+    offsets_.resize(this->rowCount_ + 1);
+    offsets_[0] = 0;
+    lengths->materialize(this->rowCount_, offsets_.data() + 1);
+    for (uint32_t i = 0; i < this->rowCount_; ++i) {
+      offsets_[i + 1] += offsets_[i];
+    }
+    NIMBLE_CHECK_EQ(
+        offsets_.back(), blobSize_, "Unexpected Trivial string view end.");
+  }
+
+  // Keeps the lengths stream as a view and derives the offset of each read from
+  // it.
+  void initializeUncached(std::string_view encodedLengths) {
+    lengths_ = detail::createTypedEncodingView<uint32_t>(
+        encodedLengths, this->pool_, this->options_);
+    NIMBLE_CHECK_NOT_NULL(lengths_);
+    NIMBLE_CHECK_EQ(
+        lengths_->rowCount(),
+        this->rowCount_,
+        "Trivial string lengths must match the row count.");
+  }
+
+  // Returns whether the view holds the offset of every row.
+  bool cachesOffsets() const {
+    return this->options_.cacheEncodingView;
+  }
+
   std::string_view readTypedAt(uint32_t index) const final {
     NIMBLE_CHECK_LT(index, this->rowCount_);
-    return {blob_ + offsets_[index], offsets_[index + 1] - offsets_[index]};
+    if (cachesOffsets()) {
+      return {blob_ + offsets_[index], offsets_[index + 1] - offsets_[index]};
+    }
+    return valueAfter(lengths_->sum(0, index), index);
   }
 
   void readPhysical(uint32_t offset, uint32_t length, std::string_view* output)
       const final {
     this->checkReadRange(offset, length);
+    if (cachesOffsets()) {
+      for (uint32_t i = 0; i < length; ++i) {
+        output[i] = {
+            blob_ + offsets_[offset + i],
+            offsets_[offset + i + 1] - offsets_[offset + i]};
+      }
+      return;
+    }
+    // Sums the lengths before the range once and then walks the range.
+    auto begin = lengths_->sum(0, offset);
     for (uint32_t i = 0; i < length; ++i) {
-      output[i] = {
-          blob_ + offsets_[offset + i],
-          offsets_[offset + i + 1] - offsets_[offset + i]};
+      output[i] = valueAfter(begin, offset + i);
+      begin += output[i].size();
     }
   }
 
+  void readPhysicalAt(
+      std::span<const uint32_t> indices,
+      std::string_view* output) const final {
+    if (cachesOffsets()) {
+      TypedEncodingView<std::string_view>::readPhysicalAt(indices, output);
+      return;
+    }
+    // Sums the lengths once for all indices, not once for each of them.
+    ScopedVector<uint64_t> begins{
+        indices.size(), this->pool_, this->options_.bufferPool};
+    lengths_->sum(indices, begins.data());
+    for (size_t i = 0; i < indices.size(); ++i) {
+      output[i] = valueAfter(begins[i], indices[i]);
+    }
+  }
+
+  // Returns the string of a row that starts 'begin' bytes into the blob.
+  std::string_view valueAfter(uint64_t begin, uint32_t row) const {
+    const auto size = lengths_->readAt(row);
+    NIMBLE_CHECK_LE(
+        begin + size, blobSize_, "Trivial string exceeds its payload.");
+    return {blob_ + begin, size};
+  }
+
+  // The concatenated string bytes, and their size in bytes.
   const char* blob_{nullptr};
+  size_t blobSize_{0};
+  // Holds the offset of every row. Empty without cacheEncodingView.
   Vector<uint32_t> offsets_;
+  // Reads the length of one row at a time. Set only without cacheEncodingView.
+  std::unique_ptr<TypedEncodingView<uint32_t>> lengths_;
 };
 
 } // namespace facebook::nimble
