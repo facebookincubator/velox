@@ -820,8 +820,8 @@ TEST_F(DateTimeFunctionsTest, hourTimestampWithTimezoneGmtFallback) {
 }
 
 TEST_F(DateTimeFunctionsTest, hourTimestampWithTimezoneLegacyDefault) {
-  // Legacy mode must not resolve the unused invalid session zone.
-  setQueryTimeZone("Not/AZone");
+  // Legacy mode reads each value's embedded zone, not the session zone.
+  setQueryTimeZone("Asia/Tokyo");
   const auto hourTimestampWithTimezone =
       [&](std::optional<TimestampWithTimezone> timestampWithTimezone) {
         return evaluateOnce<int64_t>(
@@ -1242,7 +1242,7 @@ TEST_F(DateTimeFunctionsTest, timestampWithTimeZonePlusIntervalDayTime) {
 TEST_F(
     DateTimeFunctionsTest,
     timestampWithTimeZoneIntervalDayTimeIgnoresSessionZone) {
-  useSessionZoneForRendering("Not/AZone");
+  useSessionZoneForRendering("Asia/Tokyo");
   auto input = makeRowVector({
       makeTimestampWithTimeZoneVector(0, "UTC"),
       makeNullableFlatVector<int64_t>({1'000}, INTERVAL_DAY_TIME()),
@@ -2271,7 +2271,7 @@ TEST_F(DateTimeFunctionsTest, millisecondTimestampWithTimezone) {
       20,
       millisecondTimestampWithTimezone(TimestampWithTimezone(-980, "+05:30")));
 
-  useSessionZoneForRendering("Not/AZone");
+  useSessionZoneForRendering("Asia/Tokyo");
   EXPECT_EQ(
       123,
       millisecondTimestampWithTimezone(
@@ -2917,7 +2917,7 @@ TEST_F(DateTimeFunctionsTest, dateTruncTimestampWithTimezoneSessionZone) {
 TEST_F(
     DateTimeFunctionsTest,
     dateTruncSecondTimestampWithTimezoneIgnoresSessionZone) {
-  useSessionZoneForRendering("Not/AZone");
+  useSessionZoneForRendering("Asia/Tokyo");
   const auto timestampWithTimezone =
       TimestampWithTimezone::pack(TimestampWithTimezone(1'234, "+05:30"));
   const auto expected =
@@ -3630,7 +3630,7 @@ TEST_F(DateTimeFunctionsTest, dateAddHourTimestampWithTimezoneFallback) {
 TEST_F(
     DateTimeFunctionsTest,
     dateAddSubdayTimestampWithTimezoneIgnoresSessionZone) {
-  useSessionZoneForRendering("Not/AZone");
+  useSessionZoneForRendering("Asia/Tokyo");
   const auto timestampWithTimezone =
       TimestampWithTimezone::pack(TimestampWithTimezone(0, "+05:30"));
 
@@ -3648,13 +3648,6 @@ TEST_F(
               makeNullableFlatVector<std::string>({"hour"}, VARCHAR()),
               makeTimestampWithTimeZoneVector(0, "+05:30"),
           })));
-
-  VELOX_ASSERT_THROW(
-      evaluateOnce<int64_t>(
-          "date_add('day', 1, c0)",
-          TIMESTAMP_WITH_TIME_ZONE(),
-          timestampWithTimezone),
-      "Unknown time zone");
 }
 
 TEST_F(DateTimeFunctionsTest, dateAddTime) {
@@ -4422,7 +4415,7 @@ TEST_F(DateTimeFunctionsTest, dateDiffTimestampWithTimezoneSessionZone) {
 TEST_F(
     DateTimeFunctionsTest,
     dateDiffSubdayTimestampWithTimezoneIgnoresSessionZone) {
-  useSessionZoneForRendering("Not/AZone");
+  useSessionZoneForRendering("Asia/Tokyo");
   const auto from =
       TimestampWithTimezone::pack(TimestampWithTimezone(0, "+05:30"));
   const auto to =
@@ -6354,7 +6347,7 @@ TEST_F(DateTimeFunctionsTest, timeZoneMinute) {
 TEST_F(
     DateTimeFunctionsTest,
     timestampWithTimezoneOffsetAccessorsIgnoreSessionZone) {
-  useSessionZoneForRendering("Not/AZone");
+  useSessionZoneForRendering("Asia/Tokyo");
 
   const auto evaluateOffset = [&](const char* expression,
                                   const char* timeZone) {
@@ -6936,7 +6929,7 @@ TEST_F(DateTimeFunctionsTest, toIso8601TimestampWithTimezoneLegacyDefault) {
 }
 
 TEST_F(DateTimeFunctionsTest, atTimezoneTest) {
-  useSessionZoneForRendering("Not/AZone");
+  useSessionZoneForRendering("Asia/Tokyo");
 
   const auto at_timezone = [&](std::optional<int64_t> timestampWithTimezone,
                                std::optional<std::string> targetTimezone) {

@@ -56,6 +56,104 @@ TEST_F(QueryConfigTest, invalidConfig) {
       "session 'session_timezone' set with invalid value 'invalid'");
 }
 
+TEST_F(QueryConfigTest, invalidValueFailsOnlyOnAccess) {
+  QueryConfig config{{
+      {QueryConfig::kMaxSpillLevel, "abc"},
+      {QueryConfig::kPreferredOutputBatchRows, "-1"},
+      {QueryConfig::kQueryMaxMemoryPerNode, "10XB"},
+      {QueryConfig::kSpillEnabled, "true"},
+  }};
+
+  // Each access rethrows the error kept at construction.
+  for (int32_t i = 0; i < 2; ++i) {
+    VELOX_ASSERT_USER_THROW(
+        config.maxSpillLevel(),
+        "Invalid value for query config max_spill_level: abc");
+  }
+  VELOX_ASSERT_USER_THROW(
+      config.preferredOutputBatchRows(),
+      "Invalid value for query config preferred_output_batch_rows: -1");
+  VELOX_ASSERT_USER_THROW(
+      config.queryMaxMemoryPerNode(),
+      "Invalid value for query config query_max_memory_per_node: 10XB");
+  EXPECT_TRUE(config.spillEnabled());
+}
+
+TEST_F(QueryConfigTest, accessorsDoNotReadUnderlyingConfig) {
+  // Counts lookups of the wrapped config.
+  class CountingConfig : public config::IConfig {
+   public:
+    explicit CountingConfig(std::unordered_map<std::string, std::string> values)
+        : values_{std::move(values)} {}
+
+    std::unordered_map<std::string, std::string> rawConfigsCopy()
+        const override {
+      return values_;
+    }
+
+    int32_t numAccesses() const {
+      return numAccesses_;
+    }
+
+   private:
+    std::optional<std::string> access(const std::string& key) const override {
+      ++numAccesses_;
+      if (auto it = values_.find(key); it != values_.end()) {
+        return it->second;
+      }
+      return std::nullopt;
+    }
+
+    const std::unordered_map<std::string, std::string> values_;
+    mutable int32_t numAccesses_{0};
+  };
+
+  auto countingConfig = std::make_shared<CountingConfig>(
+      std::unordered_map<std::string, std::string>{
+          {QueryConfig::kPreferredOutputBatchBytes, "1024"},
+          {QueryConfig::kPreferredOutputBatchRows, "100"},
+          {QueryConfig::kQueryMaxMemoryPerNode, "1MB"},
+      });
+  const QueryConfig config{QueryConfig::ConfigTag{}, countingConfig};
+  const int32_t numAccessesAfterConstruction = countingConfig->numAccesses();
+
+  for (int32_t i = 0; i < 10; ++i) {
+    EXPECT_EQ(config.preferredOutputBatchBytes(), 1024);
+    EXPECT_EQ(config.preferredOutputBatchRows(), 100);
+    EXPECT_EQ(config.queryMaxMemoryPerNode(), 1UL << 20);
+    EXPECT_EQ(config.maxOutputBatchRows(), 10'000);
+    EXPECT_FALSE(config.spillEnabled());
+    EXPECT_EQ(config.taskPartitionedWriterCount(), 4);
+  }
+  EXPECT_EQ(countingConfig->numAccesses(), numAccessesAfterConstruction);
+
+  // Generic lookups by key still go to the wrapped config.
+  EXPECT_EQ(
+      config.get<uint64_t>(QueryConfig::kPreferredOutputBatchBytes, 0), 1024);
+  EXPECT_EQ(countingConfig->numAccesses(), numAccessesAfterConstruction + 1);
+}
+
+TEST_F(QueryConfigTest, testingOverrideConfigUnsafe) {
+  QueryConfig config{{{QueryConfig::kMaxSpillLevel, "2"}}};
+  EXPECT_EQ(config.maxSpillLevel(), 2);
+  EXPECT_EQ(config.preferredOutputBatchRows(), 1024);
+
+  config.testingOverrideConfigUnsafe({
+      {QueryConfig::kPreferredOutputBatchRows, "10"},
+  });
+  EXPECT_EQ(config.maxSpillLevel(), 1);
+  EXPECT_EQ(config.preferredOutputBatchRows(), 10);
+  EXPECT_EQ(config.rawConfigsCopy().size(), 1);
+
+  VELOX_ASSERT_USER_THROW(
+      config.testingOverrideConfigUnsafe({
+          {QueryConfig::kSessionTimezone, "invalid"},
+      }),
+      "session 'session_timezone' set with invalid value 'invalid'");
+  // A rejected override leaves the config unchanged.
+  EXPECT_EQ(config.preferredOutputBatchRows(), 10);
+}
+
 TEST_F(QueryConfigTest, taskWriterCountConfig) {
   struct {
     std::optional<int> numWriterCounter;
