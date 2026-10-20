@@ -340,6 +340,10 @@ class TableEvolutionFuzzer {
   /// be quoted to survive the round trip.
   static std::string quoteIdentifier(std::string_view name);
 
+  /// Returns 'names' with each one quoted by quoteIdentifier.
+  static std::vector<std::string> quoteIdentifiers(
+      const std::vector<std::string>& names);
+
   /// Generates a pushdown-eligible aggregation over the columns of 'schema'
   /// that are absent from 'filteredColumns'. Returns nullopt when no column is
   /// eligible. Grouping keys and aggregate operands are quoted identifiers.
@@ -372,6 +376,13 @@ class TableEvolutionFuzzer {
   static std::vector<std::string> projectedColumnNames(
       const RowTypePtr& schema,
       const folly::F14FastSet<std::string>& droppedColumns);
+
+  /// Returns one project expression per column of 'schema' that passes the
+  /// column through, wrapping each aggregate input of 'aggregationConfig' in a
+  /// null-preserving 'if' so the aggregation cannot be pushed into the scan.
+  static std::vector<std::string> aggregationBlockingProjectExpressions(
+      const RowTypePtr& schema,
+      const AggregationConfig& aggregationConfig);
 
   /// Drains each of 'cursors' on 'executor' and returns each cursor's rows, in
   /// order. If any cursor fails, waits for the others to finish, then rethrows
