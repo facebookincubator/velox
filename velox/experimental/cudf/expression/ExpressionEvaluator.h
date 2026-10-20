@@ -133,6 +133,11 @@ bool registerBuiltinFunctions(const std::string& prefix);
 
 void unregisterFunctions();
 
+/// Turns the GPU cast from VARCHAR on or off. CastFunction parses strings with
+/// Presto's rules, so registerPrestoFunctions() turns it on and
+/// registerSparkFunctions() off; unregisterFunctions() turns it off as well.
+void setCastFromVarcharEnabled(bool enabled);
+
 class CudfExpression {
  public:
   virtual ~CudfExpression() = default;
@@ -214,6 +219,16 @@ std::shared_ptr<CudfExpression> createCudfExpression(
 ///             typically the operator's own pool.
 bool canExprRunOnGpu(
     const core::TypedExprPtr& expr,
+    core::QueryCtx* queryCtx,
+    memory::MemoryPool* pool);
+
+/// Plan-time GPU eligibility for a join filter: canExprRunOnGpu(), and no CAST
+/// from VARCHAR. The GPU precomputes such a cast over every row of a side,
+/// where the CPU casts only the pairs the join matches, so a string that spells
+/// no value in a row the join never matches would fail only on the GPU. A
+/// TRY_CAST gives NULL instead and is fine.
+bool canJoinFilterRunOnGpu(
+    const core::TypedExprPtr& filter,
     core::QueryCtx* queryCtx,
     memory::MemoryPool* pool);
 

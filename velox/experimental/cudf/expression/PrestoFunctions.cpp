@@ -128,6 +128,8 @@ class SubstrFunction : public CudfFunction {
 void registerPrestoFunctions(const std::string& prefix) {
   using exec::FunctionSignatureBuilder;
 
+  // The GPU cast from VARCHAR follows Presto's rules.
+  setCastFromVarcharEnabled(true);
   registerPrestoArrayAccessFunctions(prefix);
 
   registerCudfFunctions(

@@ -157,6 +157,84 @@ TEST_F(HashJoinTest, countStarOverNonAstFilteredJoinWithZeroColumnOutput) {
   AssertQueryBuilder(plan).assertResults(expected);
 }
 
+// Join filters that cast VARCHAR to a number, the shape of
+// TRY_CAST(r.result AS DOUBLE) > d.threshold. The AST has no cast from
+// strings, so each side's cast is precomputed by CastFunction over the whole
+// side, which is why a TRY_CAST runs on the GPU and a CAST stays on the CPU.
+TEST_F(HashJoinTest, countStarOverJoinFilterCastingVarchar) {
+  // The GPU cast from VARCHAR follows Presto's rules and is on in a session
+  // with the Presto functions registered.
+  cudf_velox::registerPrestoFunctions(
+      cudf_velox::CudfConfig::getInstance().functionNamePrefix);
+
+  auto probe = makeRowVector(
+      {"k", "t_val"},
+      {makeFlatVector<int32_t>({1, 2, 2, 3, 3}),
+       makeNullableFlatVector<std::string>(
+           {"x", " 6", "2.5", "-1e1", std::nullopt})});
+  auto build = makeRowVector(
+      {"u_k", "u_threshold", "u_val"},
+      {makeFlatVector<int32_t>({2, 2, 3, 4}),
+       makeFlatVector<double>({2.0, 5.0, -20.0, 1.0}),
+       makeFlatVector<std::string>({"5.5", "+7", "-10", "1"})});
+  const auto four = makeRowVector({makeFlatVector<int64_t>({4})});
+
+  // Matches: (k=2, " 6") x 2.0 and 5.0; (k=2, "2.5") x 2.0; (k=3, "-1e1") x
+  // -20.0. NULL never passes, and "x" sits in a row the join never matches.
+  auto plan = countStarOverZeroColumnHashJoinPlan(
+      probe,
+      build,
+      core::JoinType::kInner,
+      "try_cast(t_val as double) > u_threshold");
+  AssertQueryBuilder(plan).assertResults(four);
+
+  // Both sides cast; only " 6" > "5.5" passes.
+  plan = countStarOverZeroColumnHashJoinPlan(
+      probe,
+      build,
+      core::JoinType::kInner,
+      "try_cast(t_val as real) > try_cast(u_val as real)");
+  AssertQueryBuilder(plan).assertResults(
+      makeRowVector({makeFlatVector<int64_t>({1})}));
+
+  // A CAST keeps the join on the CPU, which casts only the pairs the join
+  // matches; the GPU would cast "x" in the row it never matches and fail.
+  auto& config = cudf_velox::CudfConfig::getInstance();
+  config.allowCpuFallback = true;
+  SCOPE_EXIT {
+    config.allowCpuFallback = false;
+  };
+  core::PlanNodeId joinId;
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  plan = PlanBuilder(planNodeIdGenerator)
+             .values({probe})
+             .hashJoin(
+                 {"k"},
+                 {"u_k"},
+                 PlanBuilder(planNodeIdGenerator).values({build}).planNode(),
+                 "cast(t_val as double) > u_threshold",
+                 {},
+                 core::JoinType::kInner)
+             .capturePlanNodeId(joinId)
+             .partialAggregation({}, {"count(*)"})
+             .finalAggregation()
+             .planNode();
+  std::shared_ptr<Task> task;
+  auto result = AssertQueryBuilder(plan).copyResults(pool(), task);
+  facebook::velox::test::assertEqualVectors(four, result);
+  std::string operatorTypes;
+  for (const auto& pipeline : task->taskStats().pipelineStats) {
+    for (const auto& op : pipeline.operatorStats) {
+      if (op.planNodeId == joinId) {
+        operatorTypes += op.operatorType + " ";
+      }
+    }
+  }
+  EXPECT_NE(operatorTypes.find("HashProbe "), std::string::npos)
+      << operatorTypes;
+  EXPECT_EQ(operatorTypes.find("Cudf"), std::string::npos) << operatorTypes;
+}
+
 TEST_F(HashJoinTest, countStarOverLikeFilterSpanningBothSidesJoin) {
   // The LIKE value comes from the probe side and the pattern comes from the
   // build side, so this cross-side, non-AST-supported filter should exercise

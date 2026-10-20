@@ -27,9 +27,11 @@
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
+#include "velox/functions/prestosql/types/JsonType.h"
 #include "velox/parse/TypeResolver.h"
 #include "velox/type/Time.h"
 
+#include <fmt/format.h>
 #include <folly/ScopeGuard.h>
 
 #include <atomic>
@@ -2699,6 +2701,50 @@ class CudfSimpleFilterProjectTest : public cudf_velox::CudfFunctionBaseTest {
     auto actual = evaluate(makeTypedExpr(expr, rowType), input);
     facebook::velox::test::assertEqualVectors(expected, actual);
   }
+
+  // Checks that the GPU agrees with the CPU on CAST and TRY_CAST to 'target'
+  // of a VARCHAR column holding 'values'.
+  void assertCastFromVarcharMatchesCpu(
+      const std::string& target,
+      const std::vector<std::optional<std::string>>& values) {
+    const auto rowType = ROW({{"c0", VARCHAR()}});
+    const auto input =
+        makeRowVector({makeNullableFlatVector<std::string>(values)});
+    assertExpressionMatchesCpu(
+        fmt::format("cast(c0 as {})", target), input, rowType);
+    assertExpressionMatchesCpu(
+        fmt::format("try_cast(c0 as {})", target), input, rowType);
+  }
+
+  // Checks that no string in 'values' is a 'target' value: CAST fails on the
+  // CPU and on the GPU with an error naming the string, and TRY_CAST gives
+  // NULL on both.
+  void assertCastFromVarcharRejects(
+      const std::string& target,
+      const std::vector<std::string>& values) {
+    const auto rowType = ROW({{"c0", VARCHAR()}});
+    const auto castExpr = fmt::format("cast(c0 as {})", target);
+    const auto targetName =
+        makeTypedExpr(castExpr, rowType)->type()->toString();
+    for (const auto& value : values) {
+      SCOPED_TRACE(value);
+      const auto input = makeRowVector({makeFlatVector<std::string>({value})});
+      const auto message =
+          fmt::format("Cannot cast VARCHAR '{}' to {}.", value, targetName);
+      auto exprSet = compileExpression(castExpr, rowType);
+      VELOX_ASSERT_USER_THROW(
+          functions::test::FunctionBaseTest::evaluate(*exprSet, input),
+          message);
+      VELOX_ASSERT_USER_THROW(
+          evaluate(makeTypedExpr(castExpr, rowType), input), message);
+    }
+    assertExpressionMatchesCpu(
+        fmt::format("try_cast(c0 as {})", target),
+        makeRowVector({makeNullableFlatVector<std::string>(
+            std::vector<std::optional<std::string>>(
+                values.begin(), values.end()))}),
+        rowType);
+  }
 };
 
 TEST_F(CudfSimpleFilterProjectTest, castToSmallInt) {
@@ -2707,6 +2753,344 @@ TEST_F(CudfSimpleFilterProjectTest, castToSmallInt) {
   auto tryCast =
       evaluateOnce<int16_t, int32_t>("try_cast(c0 as smallint)", -214);
   EXPECT_EQ(tryCast, -214);
+}
+
+// The GPU cast from VARCHAR follows Presto's rules and is on in a session
+// with the Presto functions registered.
+class CudfVarcharCastTest : public CudfSimpleFilterProjectTest {
+ protected:
+  void SetUp() override {
+    CudfSimpleFilterProjectTest::SetUp();
+    cudf_velox::registerPrestoFunctions(
+        cudf_velox::CudfConfig::getInstance().functionNamePrefix);
+  }
+};
+
+// A cast from VARCHAR runs on the GPU for the targets CastFunction parses and
+// stays on the CPU for the others.
+TEST_F(CudfVarcharCastTest, castFromVarcharRunsOnGpu) {
+  const auto rowType = ROW({{"c0", VARCHAR()}});
+  const auto runsOnGpu = [&](const std::string& expr) {
+    return cudf_velox::canExprRunOnGpu(
+        makeTypedExpr(expr, rowType), execCtx_.queryCtx(), execCtx_.pool());
+  };
+  for (const auto* target :
+       {"tinyint",
+        "smallint",
+        "integer",
+        "bigint",
+        "real",
+        "double",
+        "boolean"}) {
+    SCOPED_TRACE(target);
+    EXPECT_TRUE(runsOnGpu(fmt::format("cast(c0 as {})", target)));
+    EXPECT_TRUE(runsOnGpu(fmt::format("try_cast(c0 as {})", target)));
+    EXPECT_TRUE(runsOnGpu(fmt::format("cast(c0 as {}) is null", target)));
+  }
+  for (const auto* target :
+       {"date", "timestamp", "decimal(10, 2)", "interval day to second"}) {
+    SCOPED_TRACE(target);
+    EXPECT_FALSE(runsOnGpu(fmt::format("cast(c0 as {})", target)));
+  }
+  // A cast of a constant folds to a literal unless it fails; a failing one is
+  // left to the CPU, which raises its error.
+  EXPECT_TRUE(runsOnGpu("cast('1.5' as real)"));
+  EXPECT_FALSE(runsOnGpu("cast('abc' as real)"));
+
+  // On the CPU a CAST error never surfaces on a row the rest of the expression
+  // settles without the cast, so a CAST beside another non-constant argument
+  // stays on the CPU, whichever argument holds the cast. A TRY_CAST there, a
+  // CAST with only constants beside it and a CAST in a branch of if run on the
+  // GPU.
+  const auto twoColumns = ROW({{"c0", VARCHAR()}, {"c1", DOUBLE()}});
+  const auto runsOnGpuWith = [&](const std::string& expr) {
+    return cudf_velox::canExprRunOnGpu(
+        makeTypedExpr(expr, twoColumns), execCtx_.queryCtx(), execCtx_.pool());
+  };
+  EXPECT_FALSE(runsOnGpu("c0 <> '' and cast(c0 as integer) > 0"));
+  EXPECT_FALSE(runsOnGpu("cast(c0 as integer) > 0 or c0 = ''"));
+  EXPECT_FALSE(
+      runsOnGpu("coalesce(try_cast(c0 as integer), cast(c0 as integer))"));
+  EXPECT_FALSE(runsOnGpuWith("cast(c0 as double) > c1"));
+  EXPECT_FALSE(runsOnGpuWith("cast(c0 as double) + c1 > 0.0"));
+  EXPECT_FALSE(runsOnGpuWith("if(cast(c0 as boolean), c1, 0.0)"));
+  EXPECT_TRUE(runsOnGpu("cast(c0 as double) > 0.0"));
+  EXPECT_TRUE(runsOnGpu("cast(c0 as double) is null"));
+  EXPECT_TRUE(runsOnGpu("c0 <> '' and try_cast(c0 as integer) > 0"));
+  EXPECT_TRUE(runsOnGpuWith("try_cast(c0 as double) > c1"));
+  EXPECT_TRUE(runsOnGpu("if(c0 <> '', cast(c0 as bigint), 0)"));
+  EXPECT_TRUE(runsOnGpuWith("if(c1 > 0.0, cast(c0 as double), c1)"));
+
+  // JSON is of VARCHAR kind but has its own cast operator on the CPU.
+  const auto jsonRowType = ROW({{"c0", JSON()}});
+  for (const auto* target : {"bigint", "double", "boolean"}) {
+    SCOPED_TRACE(target);
+    EXPECT_FALSE(
+        cudf_velox::canExprRunOnGpu(
+            makeTypedExpr(fmt::format("cast(c0 as {})", target), jsonRowType),
+            execCtx_.queryCtx(),
+            execCtx_.pool()));
+  }
+
+  // legacy_cast selects rules CastFunction does not implement.
+  auto legacyQueryCtx = core::QueryCtx::create(
+      nullptr, core::QueryConfig({{core::QueryConfig::kLegacyCast, "true"}}));
+  EXPECT_FALSE(
+      cudf_velox::canExprRunOnGpu(
+          makeTypedExpr("cast(c0 as integer)", rowType),
+          legacyQueryCtx.get(),
+          execCtx_.pool()));
+}
+
+TEST_F(CudfVarcharCastTest, castFromVarcharToIntegral) {
+  // An optional sign and digits, around which Velox trims ASCII whitespace and
+  // control characters.
+  const std::vector<std::optional<std::string>> values = {
+      "7",
+      "-8",
+      "+5",
+      "0",
+      "-0",
+      "00012",
+      "127",
+      "-128",
+      " 12 ",
+      "\t7\n",
+      "\x01"
+      "9"
+      "\x1f",
+      std::nullopt};
+  for (const auto* target : {"tinyint", "smallint", "integer", "bigint"}) {
+    SCOPED_TRACE(target);
+    assertCastFromVarcharMatchesCpu(target, values);
+  }
+  assertCastFromVarcharMatchesCpu("smallint", {"128", "32767", "-32768"});
+  assertCastFromVarcharMatchesCpu(
+      "integer", {"32768", "2147483647", "-2147483648"});
+  assertCastFromVarcharMatchesCpu(
+      "bigint", {"2147483648", "9223372036854775807", "-9223372036854775808"});
+
+  // Fractions and exponents, other characters, nothing but whitespace, and
+  // anything non-ASCII, Unicode spaces included.
+  const std::vector<std::string> rejected = {
+      "1.5",
+      "1.",
+      "1e3",
+      "abc",
+      "",
+      " ",
+      "12abc",
+      "1 2",
+      "+",
+      "-",
+      "++5",
+      "0x1A",
+      "1,000",
+      "1_000",
+      "\u00a0"
+      "12",
+      "\u2003"
+      "42"
+      "\u2029",
+      "１２",
+      "12 "
+      "\x80",
+      "12\t"
+      "\x80",
+      "12 "
+      "\x80"
+      " "};
+  for (const auto* target : {"tinyint", "smallint", "integer", "bigint"}) {
+    SCOPED_TRACE(target);
+    assertCastFromVarcharRejects(target, rejected);
+  }
+  // Out of range, including a magnitude that begins with the type's minimum.
+  assertCastFromVarcharRejects("tinyint", {"128", "-129", "-1280", "-1281"});
+  assertCastFromVarcharRejects("smallint", {"32768", "-32769", "-327681"});
+  assertCastFromVarcharRejects(
+      "integer", {"2147483648", "-2147483649", "-21474836481"});
+  assertCastFromVarcharRejects(
+      "bigint",
+      {"9223372036854775808", "-9223372036854775809", "-92233720368547758081"});
+}
+
+TEST_F(CudfVarcharCastTest, castFromVarcharToFloatingPoint) {
+  // Decimal and scientific literals with the ASCII whitespace Presto skips
+  // around them, the exact spellings Infinity and NaN, and values beyond the
+  // range of the type.
+  const std::vector<std::optional<std::string>> values = {
+      "1.5",
+      "-2",
+      "0",
+      "-0",
+      "+5",
+      "1.",
+      ".5",
+      "+.5",
+      "1.e2",
+      "007.5",
+      "0.1",
+      "2.675",
+      "123456.789",
+      "1e3",
+      "1E3",
+      "1e-3",
+      "1.25E+2",
+      "-100",
+      " 1.5 ",
+      "\t2\n",
+      "\x1c"
+      "3"
+      "\x1f",
+      "1e400",
+      "-1e400",
+      "1e-400",
+      "Infinity",
+      "+Infinity",
+      "-Infinity",
+      "NaN",
+      "+NaN",
+      "-NaN",
+      std::nullopt};
+  assertCastFromVarcharMatchesCpu("real", values);
+  assertCastFromVarcharMatchesCpu("double", values);
+  // Beyond the range of REAL.
+  assertCastFromVarcharMatchesCpu("real", {"1.7E308", "4e38", "-4e38"});
+
+  // Other spellings of infinity and NaN, letters, missing digits, and the
+  // control characters and Unicode spaces that only the integral cast trims.
+  const std::vector<std::string> rejected = {
+      "abc",
+      "",
+      " ",
+      "1.2f",
+      "1.2d",
+      "1.2.3",
+      "1e",
+      "1e+",
+      "e5",
+      ".e5",
+      ".",
+      "+",
+      "-",
+      "+-1",
+      "0x1A",
+      "1,000",
+      "1_000",
+      "1 2",
+      "12abc",
+      "inf",
+      "-inf",
+      "Inf",
+      "infinity",
+      "INFINITY",
+      "InfiNiTy",
+      "nan",
+      "NAN",
+      "\u00a0"
+      "1.5",
+      "\x01"
+      "1.5",
+      "\u2003"
+      "1.5",
+      "１.５",
+      "1.5 "
+      "\x80",
+      "1.5\t"
+      "\x80"};
+  assertCastFromVarcharRejects("real", rejected);
+  assertCastFromVarcharRejects("double", rejected);
+}
+
+// CAST names the first string, in row order, that spells no value.
+TEST_F(CudfVarcharCastTest, castFromVarcharNamesFirstOffendingRow) {
+  const auto rowType = ROW({{"c0", VARCHAR()}});
+  const auto input = makeRowVector({makeNullableFlatVector<std::string>(
+      {"1", std::nullopt, "abc", "xyz", "0"})});
+  for (const auto& [target, name] :
+       {std::pair{"double", "DOUBLE"},
+        std::pair{"bigint", "BIGINT"},
+        std::pair{"boolean", "BOOLEAN"}}) {
+    SCOPED_TRACE(target);
+    const auto castExpr = fmt::format("cast(c0 as {})", target);
+    const auto message = fmt::format("Cannot cast VARCHAR 'abc' to {}.", name);
+    auto exprSet = compileExpression(castExpr, rowType);
+    VELOX_ASSERT_USER_THROW(
+        functions::test::FunctionBaseTest::evaluate(*exprSet, input), message);
+    VELOX_ASSERT_USER_THROW(
+        evaluate(makeTypedExpr(castExpr, rowType), input), message);
+  }
+}
+
+// A CAST in a branch of if is evaluated on the rows the condition selects, so
+// a string that spells no value elsewhere does not fail it.
+TEST_F(CudfVarcharCastTest, castFromVarcharUnderIf) {
+  const auto rowType = ROW({{"c0", VARCHAR()}});
+  const auto input = makeRowVector(
+      {makeNullableFlatVector<std::string>({"1", "x", std::nullopt, "3", ""})});
+  assertExpressionMatchesCpu(
+      "if(c0 <> 'x' and c0 <> '', cast(c0 as bigint), 0)", input, rowType);
+  assertExpressionMatchesCpu(
+      "if(c0 = 'x' or c0 = '', 0, cast(c0 as bigint))", input, rowType);
+}
+
+TEST_F(CudfVarcharCastTest, castFromVarcharToBoolean) {
+  // t, f, 1, 0, true and false in any case; nothing is trimmed.
+  assertCastFromVarcharMatchesCpu(
+      "boolean",
+      {"t",
+       "T",
+       "f",
+       "F",
+       "1",
+       "0",
+       "true",
+       "TRUE",
+       "True",
+       "tRuE",
+       "false",
+       "FALSE",
+       "False",
+       std::nullopt});
+  assertCastFromVarcharRejects(
+      "boolean",
+      {" true",
+       "true ",
+       "tru",
+       "truee",
+       "yes",
+       "no",
+       "on",
+       "off",
+       "y",
+       "n",
+       "2",
+       "-1",
+       "01",
+       "",
+       "nan"});
+}
+
+// A cast from VARCHAR inside an expression the AST evaluates is precomputed by
+// CastFunction, since the AST has no cast from strings.
+TEST_F(CudfVarcharCastTest, castFromVarcharInsideAstExpression) {
+  const auto rowType = ROW({{"c0", VARCHAR()}, {"c1", DOUBLE()}});
+  const auto input = makeRowVector(
+      {makeNullableFlatVector<std::string>(
+           {"1.5", "-2", "0", "1e3", std::nullopt, "x"}),
+       makeFlatVector<double>({1.0, -3.0, 0.5, 999.0, 2.0, 3.0})});
+  assertExpressionMatchesCpu("try_cast(c0 as double) < 0.0", input, rowType);
+  assertExpressionMatchesCpu("try_cast(c0 as double) > c1", input, rowType);
+  assertExpressionMatchesCpu("try_cast(c0 as double) + c1", input, rowType);
+  assertExpressionMatchesCpu("try_cast(c0 as bigint) < 0", input, rowType);
+  assertExpressionMatchesCpu(
+      "try_cast(c0 as real) is null and c1 > 0.0", input, rowType);
+
+  const auto valid = makeRowVector(
+      {makeNullableFlatVector<std::string>({"1.5", "-2", std::nullopt, "1e3"}),
+       makeFlatVector<double>({1.0, -3.0, 0.5, 999.0})});
+  assertExpressionMatchesCpu("cast(c0 as double) < 0.0", valid, rowType);
+  assertExpressionMatchesCpu("cast(c0 as double) > c1", valid, rowType);
 }
 
 TEST_F(CudfSimpleFilterProjectTest, rowConstructorAndDereference) {
