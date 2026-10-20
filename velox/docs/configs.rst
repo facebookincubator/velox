@@ -371,6 +371,14 @@ Expression Evaluation Configuration
      - bool
      - false
      - This flag makes the Row conversion to by applied in a way that the casting row field are matched by name instead of position.
+   * - cast_string_to_floating_point_lenient_inf_nan
+     - bool
+     - false
+     - If true, casting a VARCHAR to REAL or DOUBLE with Presto semantics also accepts the C-style spellings of the
+       special floating-point values: ``inf``, ``infinity`` and ``nan`` in any letter case, with an optional leading
+       sign. By default only the Presto spellings ``Infinity`` and ``NaN`` are accepted, in exactly that letter case.
+       This deviates from Presto; enable it to cast data whose writer printed the values the way glibc, Python and
+       numpy do. Spark CAST and casts from JSON are not affected.
    * - expression.max_array_size_in_reduce
      - integer
      - 100000
