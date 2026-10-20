@@ -30,22 +30,22 @@ set(
 )
 velox_resolve_dependency_url(rapids_cmake)
 
-# rmm commit 7e29fc0 from 2026-10-15 (main branch)
+# rmm commit 9d84148 from 2026-10-19 (main branch)
 set(VELOX_rmm_VERSION 26.12)
-set(VELOX_rmm_COMMIT 7e29fc098edc5d4d8f186c0da2be277410839a05)
+set(VELOX_rmm_COMMIT 9d8414834dd331a0e5449329b458d4c2ffee58eb)
 set(
   VELOX_rmm_BUILD_SHA256_CHECKSUM
-  e1cb8d9f3483bebaea805817182da1b9a2c315a2cd71dd6496d0577381fec5b8
+  e2190bed6538b46f5c4087b2309d61130005fb8b67c78868b9512f788ab03741
 )
 set(VELOX_rmm_SOURCE_URL "https://github.com/rapidsai/rmm/archive/${VELOX_rmm_COMMIT}.tar.gz")
 velox_resolve_dependency_url(rmm)
 
-# kvikio commit 90b116c from 2026-10-13 (main branch)
+# kvikio commit 5c2b975 from 2026-10-20 (main branch)
 set(VELOX_kvikio_VERSION 26.12)
-set(VELOX_kvikio_COMMIT 90b116c67316eedd6b561c0ac7bcdfd09e536be9)
+set(VELOX_kvikio_COMMIT 5c2b9755b182de46e5838c6a5aabf5899a2938b2)
 set(
   VELOX_kvikio_BUILD_SHA256_CHECKSUM
-  df6e4ad41b956a6fa9378aed901f85daafac7c521d913661da8d7fc477d9e0aa
+  aa3f85fe42463044a3e7212d8cea615ed1bf3b7991d802d6c404dd9c68627a31
 )
 set(
   VELOX_kvikio_SOURCE_URL
@@ -53,12 +53,12 @@ set(
 )
 velox_resolve_dependency_url(kvikio)
 
-# cudf commit c9086e0 from 2026-10-15 (main branch)
+# cudf commit 44275e5 from 2026-10-20 (44275e571a5f56ce2da1a9819de8054d3a7a972a branch)
 set(VELOX_cudf_VERSION 26.12 CACHE STRING "cudf version")
-set(VELOX_cudf_COMMIT c9086e0afbf0cb11194a12bb2233b80139eabd09)
+set(VELOX_cudf_COMMIT 44275e571a5f56ce2da1a9819de8054d3a7a972a)
 set(
   VELOX_cudf_BUILD_SHA256_CHECKSUM
-  65c4df018b62ced84ebd74235f70abd053fbcae342e2eb720bc0571023dba72f
+  811fd6b39134d7e76367e3f4d4a58009df40eb08696b0479aed51ce8476f2896
 )
 set(VELOX_cudf_SOURCE_URL "https://github.com/rapidsai/cudf/archive/${VELOX_cudf_COMMIT}.tar.gz")
 velox_resolve_dependency_url(cudf)
@@ -74,12 +74,12 @@ else()
 endif()
 if(UCX_FOUND)
   message(STATUS "Found UCX: ${UCX_LIBRARY} (headers: ${UCX_INCLUDE_DIR}) -- ucxx will be fetched")
-  # ucxx commit f3e85e5 from 2026-10-14 (main branch)
+  # ucxx commit 86378fa from 2026-10-20 (main branch)
   set(VELOX_ucxx_VERSION 0.53)
-  set(VELOX_ucxx_COMMIT f3e85e580fb4349240917f85f5a6260c7f3b94f6)
+  set(VELOX_ucxx_COMMIT 86378fa658b8d9601cf3640de8f9354baca36d6d)
   set(
     VELOX_ucxx_BUILD_SHA256_CHECKSUM
-    63c5f8a9e7a84bab932b52d1dad82619c684a0383b3318914eba029d9b2fa9cd
+    0c8de5bd7676188ca7e6727a0005fdc7465145defda70d3b0d3a284e9a65473f
   )
   set(VELOX_ucxx_SOURCE_URL "https://github.com/rapidsai/ucxx/archive/${VELOX_ucxx_COMMIT}.tar.gz")
   velox_resolve_dependency_url(ucxx)
