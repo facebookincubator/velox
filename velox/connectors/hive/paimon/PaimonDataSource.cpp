@@ -83,4 +83,15 @@ std::unique_ptr<FileSplitReader> PaimonDataSource::createSplitReader() {
       scanSpec_);
 }
 
+void PaimonDataSource::setFromDataSource(
+    std::unique_ptr<DataSource> sourceUnique) {
+  auto* source = checkedPointerCast<PaimonDataSource>(sourceUnique.get());
+  paimonSplit_ = std::move(source->paimonSplit_);
+  FileDataSource::setFromDataSource(std::move(sourceUnique));
+  // Files are opened lazily after takeover, when the previous owner of the
+  // borrowed runtimeStats pointer has already been destroyed.
+  checkedPointerCast<PaimonSplitReader>(splitReader_.get())
+      ->setRuntimeStats(runtimeStats_);
+}
+
 } // namespace facebook::velox::connector::hive::paimon

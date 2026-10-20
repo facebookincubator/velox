@@ -61,6 +61,7 @@ SourceDriverMock::SourceDriverMock(
             operatorId,
             driverCtxs_.back().get(),
             partitionedOutputNode,
+            /*eagerFlush=*/false,
             UcxOutputQueueManager::getInstanceRef()));
   }
 }

@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/core/FixedPointPlanNodes.h"
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/core/Expressions.h"
@@ -603,6 +604,35 @@ TEST_F(FixedPointPlanNodesTest, nestedInConvergence) {
             std::move(convergence)),
         "nested in convergence plan 0");
   }
+}
+
+// A declaration without an initial plan adds no plan.
+TEST_F(FixedPointPlanNodesTest, nestedPlans) {
+  auto initial = std::make_shared<ValuesNode>(
+      "i",
+      std::vector<RowVectorPtr>{
+          makeRowVector({"x"}, {makeFlatVector<int64_t>({1})})});
+  auto body = stateSource("b", "n");
+  auto convergence = std::make_shared<ProjectNode>(
+      "c",
+      std::vector<std::string>{"converged"},
+      std::vector<TypedExprPtr>{
+          std::make_shared<ConstantTypedExpr>(BOOLEAN(), Variant(true))},
+      stateSource("cs", "n"));
+  FixedPointNode node(
+      "fp",
+      std::vector<StateDeclarationPtr>{
+          std::make_shared<VectorStateDeclaration>(
+              "n", schema_, initial, /*append=*/true),
+          std::make_shared<VectorStateDeclaration>(
+              "m", schema_, /*initialPlan=*/nullptr, /*append=*/true)},
+      {body},
+      ConvergenceConfig::converging(convergence, /*maxIterations=*/5),
+      "n");
+
+  EXPECT_THAT(
+      node.nestedPlans(),
+      testing::UnorderedElementsAre(initial, body, convergence));
 }
 
 } // namespace

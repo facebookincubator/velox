@@ -1166,24 +1166,6 @@ void Task::recordBatchEndTime() {
 }
 
 void Task::start(uint32_t maxDrivers, uint32_t concurrentSplitGroups) {
-  if (fixedPoint_ != nullptr) {
-    // Same invariant as the driver path below: start() is the parallel API.
-    checkExecutionMode(ExecutionMode::kParallel);
-    try {
-      // The pipeline's FixedPointNode leaf waits for the loop to finish; the
-      // loop fails the task if it fails.
-      fixedPoint_->start(
-          maxDrivers, [self = shared_from_this()](std::exception_ptr error) {
-            self->setError(error);
-          });
-    } catch (...) {
-      // The loop rejected the start before it could schedule anything -- a
-      // missing orchestration executor, say.  Without this the task would stay
-      // kRunning for ever with no error recorded.
-      setError(std::current_exception());
-      throw;
-    }
-  }
   facebook::velox::process::ThreadDebugInfo threadDebugInfo{
       queryCtx()->queryId(), taskId_, nullptr};
   facebook::velox::process::ScopedThreadDebugInfo scopedInfo(threadDebugInfo);
@@ -1218,6 +1200,15 @@ void Task::start(uint32_t maxDrivers, uint32_t concurrentSplitGroups) {
                    << " was terminated while starting: " << errorMessage();
       finishUnstartedDrivers();
       return;
+    }
+    // After the drivers: createAndStartDrivers requires an empty task pool, and
+    // the loop allocates from it.  The pipeline's FixedPointNode leaf waits for
+    // the loop to finish; the loop fails the task if it fails.
+    if (fixedPoint_ != nullptr) {
+      fixedPoint_->start(
+          maxDrivers, [self = shared_from_this()](std::exception_ptr error) {
+            self->setError(error);
+          });
     }
   } catch (const std::exception&) {
     if (isRunning()) {

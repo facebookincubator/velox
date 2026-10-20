@@ -363,6 +363,9 @@ class FixedPointNode : public PlanNode {
     return kEmptySources;
   }
 
+  void accept(const PlanNodeVisitor& visitor, PlanNodeVisitorContext& context)
+      const override;
+
   std::string_view name() const override {
     return "FixedPoint";
   }
@@ -374,6 +377,11 @@ class FixedPointNode : public PlanNode {
   const std::vector<PlanNodePtr>& plans() const {
     return plans_;
   }
+
+  /// Every plan this fixed point runs: the state declarations' initial plans,
+  /// the body plans and the convergence plans.  A fixed point has no sources,
+  /// so these are the only plans under it.
+  std::vector<PlanNodePtr> nestedPlans() const;
 
   int32_t maxIterations() const {
     return convergenceConfig_.maxIterations;
@@ -398,6 +406,10 @@ class FixedPointNode : public PlanNode {
   /// source (a TableScan's file splits, or an Exchange's upstream task).  A
   /// fully local fixed point needs no splits.
   bool requiresSplits() const override;
+
+  /// True when the body or the convergence sequence shuffles, so every worker
+  /// reads its peers' output: the coordinator names each peer with a split.
+  bool readsPeers() const;
 
   /// Number of workers this fixed point runs as: one per output partition of
   /// whichever chain shuffles -- the body or the convergence sequence.  1 when
@@ -478,6 +490,9 @@ class StateSourceNode : public PlanNode {
     return kEmptySources;
   }
 
+  void accept(const PlanNodeVisitor& visitor, PlanNodeVisitorContext& context)
+      const override;
+
   std::string_view name() const override {
     return "StateSource";
   }
@@ -544,6 +559,9 @@ class StateHashJoinNode : public PlanNode {
   const std::vector<PlanNodePtr>& sources() const override {
     return sources_;
   }
+
+  void accept(const PlanNodeVisitor& visitor, PlanNodeVisitorContext& context)
+      const override;
 
   std::string_view name() const override {
     return "StateHashJoin";

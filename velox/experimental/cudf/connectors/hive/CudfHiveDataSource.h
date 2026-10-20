@@ -87,6 +87,31 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
   std::unordered_map<std::string, RuntimeMetric> getRuntimeStats() override;
 
  protected:
+  // Indicates the component that turns the partition keys of a split into
+  // columns.
+  enum class PartitionKeySource {
+    // Partition key columns are left out of the split reader's projection:
+    // pushed-down filters on them are tested once per split against the
+    // split's partition value, and the columns are materialized as constants
+    // after the read.
+    kDataSource,
+    // Partition key columns stay in the split reader's projection, for table
+    // formats whose readers resolve them per data file.
+    kSplitReader,
+  };
+
+  // Same as the public constructor, with 'partitionKeySource' choosing which
+  // component resolves partition keys.
+  CudfHiveDataSource(
+      const RowTypePtr& outputType,
+      const ConnectorTableHandlePtr& tableHandle,
+      const ColumnHandleMap& columnHandles,
+      facebook::velox::FileHandleFactory* fileHandleFactory,
+      folly::Executor* executor,
+      const ConnectorQueryCtx* connectorQueryCtx,
+      const std::shared_ptr<CudfHiveConfig>& cudfHiveConfig,
+      PartitionKeySource partitionKeySource);
+
   // Virtual method to create a `CudfSplitReader` or subclass for the data
   // source.
   virtual std::unique_ptr<CudfSplitReader> createCudfSplitReader();
@@ -126,8 +151,48 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
   bool hasDecimalSubfieldFilter_{false};
 
  private:
+  // A partition key the data source resolves from the split.
+  struct PartitionKey {
+    TypePtr type;
+    // Whether a DATE value is a count of days since the epoch rather than an
+    // ISO date.
+    bool dateValueDaysSinceEpoch;
+  };
+
   // Construct and cache a RowTypePtr for the table column names and types.
   const RowTypePtr getTableRowType();
+
+  // Returns the type of a column read from the file or materialized by the
+  // data source, by table column name.
+  const TypePtr& columnType(const std::string& name) const;
+
+  // Returns the current split's value of a partition key. A key the split
+  // does not carry reads as NULL.
+  std::optional<std::string> partitionKeyValue(const std::string& name) const;
+
+  // Returns whether every pushed-down partition key filter accepts the current
+  // split.
+  bool partitionKeyFiltersAcceptSplit() const;
+
+  // Returns the current split's partition key values as scalars, in
+  // 'partitionKeyNames_' order, each parsed per its key's type. A TIMESTAMP
+  // value takes the type the split reader gives file timestamps.
+  std::vector<std::unique_ptr<cudf::scalar>> makePartitionKeyScalars(
+      cuda::stream_ref stream) const;
+
+  // Returns the materialized partition key columns of the current split, each
+  // a constant column of 'numRows' rows built from 'partitionKeyScalars_'.
+  std::vector<std::unique_ptr<cudf::column>> makePartitionKeyColumns(
+      cudf::size_type numRows,
+      cuda::stream_ref stream,
+      rmm::device_async_resource_ref mr) const;
+
+  // Returns whether TIMESTAMP partition values are read as local time.
+  bool readTimestampPartitionValueAsLocalTime() const;
+
+  // Counts the current split as skipped without opening it.
+  void recordSkippedSplit();
+
   RowTypePtr cachedTableRowType_{};
 
   memory::MemoryPool* const pool_;
@@ -167,8 +232,44 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
   cudf::ast::tree pushdownFilterTree_;
 
   // The table handle's subfield filters, merged with the ones extracted from
-  // its remaining filter.
+  // its remaining filter, except the ones on partition keys the data source
+  // resolves, which are kept in 'partitionKeyFilters_'.
   common::SubfieldFilters subfieldFilters_;
+
+  const PartitionKeySource partitionKeySource_;
+
+  // Table column name of each output column, in 'outputType_' order.
+  std::vector<std::string> outputSourceNames_;
+
+  // Types of the output and materialized columns, by table column name.
+  std::unordered_map<std::string, TypePtr> columnTypes_;
+
+  // Row type of what the split reader returns: 'readColumnNames_' with their
+  // types.
+  RowTypePtr readerOutputType_;
+
+  // Partition keys the data source resolves from the split, by table column
+  // name.
+  std::unordered_map<std::string, PartitionKey> partitionKeys_;
+
+  // The partition keys materialized as columns, those of the output and of
+  // the remaining filter, in the order they follow the read columns in the
+  // table the remaining filter sees.
+  std::vector<std::string> partitionKeyNames_;
+
+  // Pushed-down filters on partition keys the data source resolves. Each
+  // decides for the whole split, so none is compiled into the reader's
+  // filter.
+  common::SubfieldFilters partitionKeyFilters_;
+
+  // The current split's partition key values as scalars, in
+  // 'partitionKeyNames_' order. Built once per split in addSplit(); next()
+  // expands each into a constant column per batch.
+  std::vector<std::unique_ptr<cudf::scalar>> partitionKeyScalars_;
+
+  // Whether a partition key filter rejected the current split, which then has
+  // no split reader.
+  bool splitSkipped_{false};
 };
 
 } // namespace facebook::velox::cudf_velox::connector::hive
