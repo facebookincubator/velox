@@ -14,7 +14,7 @@
 cmake_minimum_required(VERSION 3.28)
 
 if(DEFINED TEST_CASE)
-  include("${CMAKE_CURRENT_LIST_DIR}/../VeloxTestComponents.cmake")
+  include("${CMAKE_CURRENT_LIST_DIR}/../../CMake/VeloxUtils.cmake")
   set(VELOX_BUILD_TESTING OFF)
   set(VELOX_MONO_LIBRARY OFF)
   set(available_components status vector)

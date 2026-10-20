@@ -233,7 +233,6 @@ else()
   endif()
 endif()
 
-include(VeloxTestComponents)
 velox_configure_test_components(status)
 
 if(${VELOX_ENABLE_BENCHMARKS})

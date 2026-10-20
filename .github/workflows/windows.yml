@@ -87,7 +87,7 @@ jobs:
 
       - name: Configure
         run: |
-          cmake -P CMake/tests/VeloxTestComponentsTest.cmake
+          cmake -P tests/windows/VeloxTestComponents.cmake
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cmake -S . -B _build/release -G "Visual Studio 17 2022" -A x64 -T v143 `
             -DCMAKE_BUILD_TYPE=Release `
