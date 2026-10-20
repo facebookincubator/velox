@@ -109,6 +109,10 @@ struct ReadWithVisitorParams {
   // When true, DictionaryEncoding uses a fused DictionaryColumnVisitor
   // instead of the two-pass DictionaryIndicesHook fallback.
   bool dictionaryAwareReads{false};
+
+  // When true, encodings use the scan fast path instead of the
+  // per-row slow path.
+  bool scanFastPath{false};
 };
 
 class Encoding {
