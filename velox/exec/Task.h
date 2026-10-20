@@ -46,6 +46,7 @@ class SplitListener;
 class FixedPointLoop;
 struct FixedPointExecutionStats;
 struct FixedPointOptions;
+struct NestedFixedPoint;
 
 /// Runs one plan fragment.  By default it compiles the fragment into a
 /// Driver/Operator pipeline and executes that.  A fragment containing a
@@ -95,6 +96,8 @@ class Task : public std::enable_shared_from_this<Task> {
   /// execution fails.
   /// @param fixedPointOptions Coordinator-supplied hooks for a plan containing
   /// a FixedPointNode, or nullptr for none.  Ignored for any other plan.
+  /// @param nested Set only by a FixedPointLoop on a sub-task it creates, to
+  /// name itself and the sub-task's place in the loop.  Callers leave it null.
   static std::shared_ptr<Task> create(
       const std::string& taskId,
       core::PlanFragment planFragment,
@@ -105,7 +108,8 @@ class Task : public std::enable_shared_from_this<Task> {
       int32_t memoryArbitrationPriority = 0,
       std::optional<common::SpillDiskOptions> spillDiskOpts = std::nullopt,
       std::function<void(std::exception_ptr)> onError = nullptr,
-      const FixedPointOptions* fixedPointOptions = nullptr);
+      const FixedPointOptions* fixedPointOptions = nullptr,
+      const NestedFixedPoint* nested = nullptr);
 
   static std::shared_ptr<Task> create(
       const std::string& taskId,
@@ -117,7 +121,8 @@ class Task : public std::enable_shared_from_this<Task> {
       int32_t memoryArbitrationPriority = 0,
       std::optional<common::SpillDiskOptions> spillDiskOpts = std::nullopt,
       std::function<void(std::exception_ptr)> onError = nullptr,
-      const FixedPointOptions* fixedPointOptions = nullptr);
+      const FixedPointOptions* fixedPointOptions = nullptr,
+      const NestedFixedPoint* nested = nullptr);
 
   /// Convenience function for shortening a Presto taskId. To be used
   /// in debugging messages and listings.
@@ -196,9 +201,9 @@ class Task : public std::enable_shared_from_this<Task> {
 
   /// The fixed point whose schedule created this task as one of its
   /// per-iteration sub-tasks, or nullptr when nothing did.  Set once at
-  /// construction from FixedPointOptions::nested, so a running task cannot be
-  /// re-pointed; the fixed-point state operators walk it outward to find the
-  /// loop that declares the entry they read.  It outlives this task.
+  /// construction from the 'nested' argument of create(), so a running task
+  /// cannot be re-pointed; the fixed-point state operators walk it outward to
+  /// find the loop that declares the entry they read.  It outlives this task.
   FixedPointLoop* parentFixedPoint() const {
     return parentFixedPoint_;
   }
