@@ -282,8 +282,7 @@ std::unique_ptr<cudf::column> decimalDivide(
   auto const inputNullCount =
       lhs.is_valid(stream) ? rhs.null_count() : rhs.size();
   checkDecimalDivideResult(*result, inputNullCount, [&] {
-    return hasActiveZeroDivisor(
-        rhs, rhs.null_mask(), rhs.null_count(), stream);
+    return hasActiveZeroDivisor(rhs, rhs.null_mask(), rhs.null_count(), stream);
   });
   return result;
 }
