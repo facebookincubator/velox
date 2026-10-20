@@ -51,6 +51,12 @@ class ExceptionContextProperties {
   virtual ~ExceptionContextProperties() = default;
 };
 
+#ifdef _WIN32
+#define VELOX_DETAIL_ERROR_STRING(value) folly::makeFixedString(value)
+#else
+#define VELOX_DETAIL_ERROR_STRING(value) value##_fs
+#endif
+
 namespace error_source {
 using namespace folly::string_literals;
 
@@ -58,19 +64,21 @@ using namespace folly::string_literals;
 /// or an unsupported pattern of use are classified with source USER. Examples
 /// of errors in this category include syntax errors, unavailable names or
 /// objects.
-inline constexpr auto kErrorSourceUser = "USER"_fs;
+inline constexpr auto kErrorSourceUser = VELOX_DETAIL_ERROR_STRING("USER");
 
 /// Errors where the root cause of the problem is an unexpected internal state
 /// in the system.
-inline constexpr auto kErrorSourceRuntime = "RUNTIME"_fs;
+inline constexpr auto kErrorSourceRuntime =
+    VELOX_DETAIL_ERROR_STRING("RUNTIME");
 
 /// Errors where the root cause of the problem is some unreliable aspect of the
 /// system are classified with source SYSTEM.
-inline constexpr auto kErrorSourceSystem = "SYSTEM"_fs;
+inline constexpr auto kErrorSourceSystem = VELOX_DETAIL_ERROR_STRING("SYSTEM");
 
 /// Errors where the root cause of the problem is some external dependency (e.g.
 /// storage)
-inline constexpr auto kErrorSourceExternal = "EXTERNAL"_fs;
+inline constexpr auto kErrorSourceExternal =
+    VELOX_DETAIL_ERROR_STRING("EXTERNAL");
 } // namespace error_source
 
 namespace error_code {
@@ -79,75 +87,94 @@ using namespace folly::string_literals;
 ///====================== User Error Codes ======================:
 
 /// A generic user error code
-inline constexpr auto kGenericUserError = "GENERIC_USER_ERROR"_fs;
+inline constexpr auto kGenericUserError =
+    VELOX_DETAIL_ERROR_STRING("GENERIC_USER_ERROR");
 
 /// An error raised when an argument verification fails
-inline constexpr auto kInvalidArgument = "INVALID_ARGUMENT"_fs;
+inline constexpr auto kInvalidArgument =
+    VELOX_DETAIL_ERROR_STRING("INVALID_ARGUMENT");
 
 /// An error raised when a requested operation is not supported.
-inline constexpr auto kUnsupported = "UNSUPPORTED"_fs;
+inline constexpr auto kUnsupported = VELOX_DETAIL_ERROR_STRING("UNSUPPORTED");
 
 /// Arithmetic errors - underflow, overflow, divide by zero etc.
-inline constexpr auto kArithmeticError = "ARITHMETIC_ERROR"_fs;
+inline constexpr auto kArithmeticError =
+    VELOX_DETAIL_ERROR_STRING("ARITHMETIC_ERROR");
 
 /// An error raised when types are not compatible
-inline constexpr auto kSchemaMismatch = "SCHEMA_MISMATCH"_fs;
+inline constexpr auto kSchemaMismatch =
+    VELOX_DETAIL_ERROR_STRING("SCHEMA_MISMATCH");
 
 ///====================== Runtime Error Codes ======================:
 
 /// An error raised when the current state of a component is invalid.
-inline constexpr auto kInvalidState = "INVALID_STATE"_fs;
+inline constexpr auto kInvalidState =
+    VELOX_DETAIL_ERROR_STRING("INVALID_STATE");
 
 /// An error raised when unreachable code point was executed.
-inline constexpr auto kUnreachableCode = "UNREACHABLE_CODE"_fs;
+inline constexpr auto kUnreachableCode =
+    VELOX_DETAIL_ERROR_STRING("UNREACHABLE_CODE");
 
 /// An error raised when a requested operation is not yet supported.
-inline constexpr auto kNotImplemented = "NOT_IMPLEMENTED"_fs;
+inline constexpr auto kNotImplemented =
+    VELOX_DETAIL_ERROR_STRING("NOT_IMPLEMENTED");
 
 /// An error raised when memory pool exceeds limits.
-inline constexpr auto kMemCapExceeded = "MEM_CAP_EXCEEDED"_fs;
+inline constexpr auto kMemCapExceeded =
+    VELOX_DETAIL_ERROR_STRING("MEM_CAP_EXCEEDED");
 
 /// An error raised when memory request failed due to arbitration failures. This
 /// is normally caused by insufficient global memory resource.
-inline constexpr auto kMemArbitrationFailure = "MEM_ARBITRATION_FAILURE"_fs;
+inline constexpr auto kMemArbitrationFailure =
+    VELOX_DETAIL_ERROR_STRING("MEM_ARBITRATION_FAILURE");
 
 /// An error raised when memory pool is aborted.
-inline constexpr auto kMemAborted = "MEM_ABORTED"_fs;
+inline constexpr auto kMemAborted = VELOX_DETAIL_ERROR_STRING("MEM_ABORTED");
 
 /// An error raised when memory arbitration times out.
-inline constexpr auto kMemArbitrationTimeout = "MEM_ARBITRATION_TIMEOUT"_fs;
+inline constexpr auto kMemArbitrationTimeout =
+    VELOX_DETAIL_ERROR_STRING("MEM_ARBITRATION_TIMEOUT");
 
 /// Error caused by memory allocation failure (inclusive of allocator memory cap
 /// exceeded).
-inline constexpr auto kMemAllocError = "MEM_ALLOC_ERROR"_fs;
+inline constexpr auto kMemAllocError =
+    VELOX_DETAIL_ERROR_STRING("MEM_ALLOC_ERROR");
 
 /// Error caused by failing to allocate cache buffer space for IO.
-inline constexpr auto kNoCacheSpace = "NO_CACHE_SPACE"_fs;
+inline constexpr auto kNoCacheSpace =
+    VELOX_DETAIL_ERROR_STRING("NO_CACHE_SPACE");
 
 /// An error raised when spill bytes exceeds limits.
-inline constexpr auto kSpillLimitExceeded = "SPILL_LIMIT_EXCEEDED"_fs;
+inline constexpr auto kSpillLimitExceeded =
+    VELOX_DETAIL_ERROR_STRING("SPILL_LIMIT_EXCEEDED");
 
 /// An error raised to indicate any general failure happened during spilling.
-inline constexpr auto kGenericSpillFailure = "GENERIC_SPILL_FAILURE"_fs;
+inline constexpr auto kGenericSpillFailure =
+    VELOX_DETAIL_ERROR_STRING("GENERIC_SPILL_FAILURE");
 
 /// An error raised when trace bytes exceeds limits.
-inline constexpr auto kTraceLimitExceeded = "TRACE_LIMIT_EXCEEDED"_fs;
+inline constexpr auto kTraceLimitExceeded =
+    VELOX_DETAIL_ERROR_STRING("TRACE_LIMIT_EXCEEDED");
 
 /// Errors indicating file read corruptions.
-inline constexpr auto kFileCorruption = "FILE_CORRUPTION"_fs;
+inline constexpr auto kFileCorruption =
+    VELOX_DETAIL_ERROR_STRING("FILE_CORRUPTION");
 
 /// Errors indicating file not found.
-inline constexpr auto kFileNotFound = "FILE_NOT_FOUND"_fs;
+inline constexpr auto kFileNotFound =
+    VELOX_DETAIL_ERROR_STRING("FILE_NOT_FOUND");
 
 /// We do not know how to classify it yet.
-inline constexpr auto kUnknown = "UNKNOWN"_fs;
+inline constexpr auto kUnknown = VELOX_DETAIL_ERROR_STRING("UNKNOWN");
 
 /// VeloxRuntimeErrors due to unsupported input values such as unicode input to
 /// cast-varchar-to-integer. This kind of errors is allowed in expression
 /// fuzzer.
 inline constexpr auto kUnsupportedInputUncatchable =
-    "UNSUPPORTED_INPUT_UNCATCHABLE"_fs;
+    VELOX_DETAIL_ERROR_STRING("UNSUPPORTED_INPUT_UNCATCHABLE");
 } // namespace error_code
+
+#undef VELOX_DETAIL_ERROR_STRING
 
 class VeloxException : public std::exception {
  public:

@@ -68,10 +68,11 @@ testable, without adding another C++ macro or CMake boolean per test.
 tests link the combined Velox library. The Windows workflow keeps its existing
 OFF setting so building the status tests does not build all configured modules.
 
-The status component uses the same `StatusTest.cpp` source on all platforms.
-Exception-dependent status cases live with the other exception tests in the
-existing `ExceptionTest.cpp`; the full `velox_base_test` suite retains all cases.
-The Windows gate runs all selected status unit tests without skips. The shared
+The status component builds the unmodified `StatusTest.cpp` source on all
+platforms and links `velox_exception` for the exception-dependent cases. All ten
+existing status tests remain in their original source file; none are moved,
+excluded, disabled, or skipped to make the Windows build pass. The full
+`velox_base_test` suite and `ExceptionTest.cpp` remain unchanged. The shared
 selector is defined in `CMake/VeloxUtils.cmake`; its behavior is checked with
 `cmake -P tests/windows/VeloxTestComponents.cmake`.
 

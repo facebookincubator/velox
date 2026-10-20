@@ -16,8 +16,13 @@
 
 #pragma once
 
+#ifdef _WIN32
+#include <folly/portability/PThread.h>
+#include <folly/portability/SysTypes.h>
+#else
 #include <pthread.h>
 #include <sys/types.h>
+#endif
 #include <cstdint>
 #include <string>
 #include <vector>

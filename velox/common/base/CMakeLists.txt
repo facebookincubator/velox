@@ -116,7 +116,10 @@ velox_link_libraries(velox_status PUBLIC fmt::fmt Folly::folly PRIVATE glog::glo
 
 if("status" IN_LIST VELOX_SELECTED_TEST_COMPONENTS)
   add_executable(velox_status_test tests/StatusTest.cpp)
-  target_link_libraries(velox_status_test PRIVATE velox_status GTest::gtest_main)
+  target_link_libraries(
+    velox_status_test
+    PRIVATE velox_status velox_exception GTest::gtest_main
+  )
   add_test(NAME velox_status_test COMMAND velox_status_test)
 endif()
 

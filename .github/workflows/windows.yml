@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-# Start Windows support with MSVC and the standalone status library/tests.
+# Start Windows support with MSVC and the complete status test suite.
 # Windows Clang support is deferred to a later stage.
 # Configure and build failures remain failures; no fork-specific patches are applied.
 name: Windows MSVC
@@ -133,10 +133,10 @@ jobs:
             2>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\velox-tests.log"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           [xml]$results = Get-Content "$env:RUNNER_TEMP\velox-status-tests.xml" -Raw
-          if ([int]$results.testsuites.tests -eq 0 -or
+          if ([int]$results.testsuites.tests -lt 10 -or
               [int]$results.testsuites.disabled -ne 0 -or
               $results.SelectNodes('//testcase/skipped').Count -ne 0) {
-            throw "The enabled status tests must run without skips."
+            throw "All ten existing status tests must run without disabled or skipped cases."
           }
 
       - name: Upload build and test logs

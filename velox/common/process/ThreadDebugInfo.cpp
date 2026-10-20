@@ -19,7 +19,15 @@
 #include <folly/debugging/symbolizer/SignalHandler.h>
 #include <glog/logging.h>
 
+#ifdef _WIN32
+#include <folly/portability/Unistd.h>
+#endif
+
 namespace facebook::velox::process {
+#ifdef _WIN32
+using folly::fileops::write;
+#endif
+
 thread_local const ThreadDebugInfo* threadDebugInfo = nullptr;
 
 // Flag to ensure that printCurrentQueryId() only invokes the callback in
