@@ -16,6 +16,8 @@
 #include "velox/exec/FixedPointLoop.h"
 
 #include <folly/coro/BlockingWait.h>
+#include <folly/executors/InlineExecutor.h>
+#include <folly/futures/Future.h>
 
 #include <folly/ScopeGuard.h>
 
@@ -170,6 +172,34 @@ core::FixedPointNodePtr findFixedPointNode(const core::PlanNodePtr& node) {
   return nullptr;
 }
 
+// Waits for 'future', which the coordinator or a peer resolves, until
+// 'ended' is requested: once the task ends nothing is bound to resolve it.
+// The callback on 'ended' is unregistered when the wait returns, so waiting
+// leaves nothing behind.
+template <typename T>
+folly::coro::Task<T> awaitWhileRunning(
+    const folly::CancellationToken& ended,
+    folly::SemiFuture<T> future,
+    std::string_view waitingFor,
+    std::string_view taskId) {
+  folly::Promise<folly::Unit> stopped;
+  folly::CancellationCallback onEnded(ended, [&] { stopped.setValue(); });
+  std::vector<folly::SemiFuture<std::optional<T>>> futures;
+  futures.push_back(std::move(future).deferValue([](T value) {
+    return std::optional<T>{std::move(value)};
+  }));
+  futures.push_back(stopped.getSemiFuture().deferValue(
+      [](auto&&) { return std::optional<T>{}; }));
+  auto first = co_await folly::collectAny(std::move(futures));
+  auto value = std::move(first.second).value();
+  VELOX_CHECK(
+      value.has_value(),
+      "The task ended while its fixed point waited for {}: {}",
+      waitingFor,
+      taskId);
+  co_return std::move(*value);
+}
+
 } // namespace
 
 // static
@@ -309,7 +339,7 @@ void FixedPointLoop::noMoreSplits(const core::PlanNodeId& planNodeId) {
     }
     return;
   }
-  // The fixed point's own peer splits are captured eagerly in addSplit().
+  peersComplete_.setValue();
 }
 
 void FixedPointLoop::runSerially() {
@@ -358,7 +388,29 @@ void FixedPointLoop::start(
 }
 
 folly::coro::Task<void> FixedPointLoop::run() {
+  // The handle shares the source's state, so the continuation may outlive this
+  // loop.
+  owner_->taskCompletionFuture()
+      .via(&folly::InlineExecutor::instance())
+      .thenTry([ended = cancellation_](auto&&) mutable {
+        ended.requestCancellation();
+      });
   co_await initialize();
+
+  // A top-level loop whose body or convergence chain shuffles reads from the
+  // peers the coordinator names.
+  if (node_->readsPeers() && nested_.peerAddresses.empty()) {
+    co_await awaitWhileRunning(
+        cancellation_.getToken(),
+        peersComplete_.getSemiFuture(),
+        "its peers",
+        owner_->taskId());
+    std::lock_guard<std::mutex> l(splitsMutex_);
+    VELOX_CHECK_EQ(
+        peerParentIds_.size(),
+        numWorkers_,
+        "A shuffling fixed point needs one peer split per worker");
+  }
 
   bool hasConverged = false;
   for (int32_t iteration = 0; iteration < node_->maxIterations(); ++iteration) {

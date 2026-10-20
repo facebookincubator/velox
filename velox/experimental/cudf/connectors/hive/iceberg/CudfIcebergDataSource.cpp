@@ -46,7 +46,9 @@ CudfIcebergDataSource::CudfIcebergDataSource(
           fileHandleFactory,
           executor,
           connectorQueryCtx,
-          cudfHiveConfig),
+          cudfHiveConfig,
+          // The Iceberg split reader resolves partition columns per data file.
+          PartitionKeySource::kSplitReader),
       hiveConfig_(hiveConfig) {
   const auto recordColumn = [this](const velox_hive::FileColumnHandle& handle) {
     if (handle.columnType() ==

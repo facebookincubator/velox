@@ -21,6 +21,7 @@
 
 #include <folly/Conv.h>
 
+#include <optional>
 #include <string>
 #include <unordered_map>
 
@@ -74,6 +75,8 @@ CudfHiveConnectorSplit::CudfHiveConnectorSplit(
     uint64_t _length,
     int64_t _splitWeight,
     const std::unordered_map<std::string, std::string>& _infoColumns,
+    const std::unordered_map<std::string, std::optional<std::string>>&
+        _partitionKeys,
     std::optional<FileProperties> _properties)
     : facebook::velox::connector::ConnectorSplit(connectorId, _splitWeight),
       filePath(stripFilePrefix(_filePath)),
@@ -81,6 +84,7 @@ CudfHiveConnectorSplit::CudfHiveConnectorSplit(
       length(_length),
       cudfSourceInfo(std::make_unique<cudf::io::source_info>(filePath)),
       infoColumns(_infoColumns),
+      partitionKeys(_partitionKeys),
       properties(std::move(_properties)) {}
 
 // static
@@ -97,6 +101,13 @@ std::shared_ptr<CudfHiveConnectorSplit> CudfHiveConnectorSplit::create(
     infoColumns[key.asString()] = value.asString();
   }
 
+  std::unordered_map<std::string, std::optional<std::string>> partitionKeys;
+  for (const auto& [key, value] : obj["partitionKeys"].items()) {
+    partitionKeys[key.asString()] = value.isNull()
+        ? std::nullopt
+        : std::optional<std::string>(value.asString());
+  }
+
   std::optional<FileProperties> properties;
   const auto& propertiesObj = obj.getDefault("properties", nullptr);
   if (propertiesObj != nullptr) {
@@ -110,6 +121,7 @@ std::shared_ptr<CudfHiveConnectorSplit> CudfHiveConnectorSplit::create(
       length,
       splitWeight,
       infoColumns,
+      partitionKeys,
       std::move(properties));
 }
 
@@ -126,6 +138,13 @@ folly::dynamic CudfHiveConnectorSplit::serialize() const {
     infoColumnsObj[key] = value;
   }
   obj["infoColumns"] = infoColumnsObj;
+
+  folly::dynamic partitionKeysObj = folly::dynamic::object;
+  for (const auto& [key, value] : partitionKeys) {
+    partitionKeysObj[key] =
+        value.has_value() ? folly::dynamic(*value) : folly::dynamic(nullptr);
+  }
+  obj["partitionKeys"] = partitionKeysObj;
 
   if (properties.has_value()) {
     obj["properties"] = properties->serialize();
