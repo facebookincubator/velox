@@ -1,0 +1,132 @@
+/*
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+#include "velox/experimental/ucx-exchange/ExchangeCompressionWire.h"
+
+#include "velox/common/base/Exceptions.h"
+
+#include <algorithm>
+#include <array>
+#include <cstring>
+#include <type_traits>
+#include <utility>
+
+namespace facebook::velox::ucx_exchange {
+namespace {
+
+constexpr std::array<uint8_t, 8> kMagic{'V', 'L', 'X', 'P', 'A', 'C', 'K', 0};
+constexpr uint16_t kVersion = 1;
+constexpr std::size_t kHeaderSize = kMagic.size() + sizeof(kVersion) +
+    sizeof(uint16_t) + sizeof(uint8_t) + 3 * sizeof(uint64_t);
+
+static_assert(kHeaderSize == 37);
+
+template <typename T>
+void appendScalar(std::vector<uint8_t>& output, T value) {
+  static_assert(std::is_trivially_copyable_v<T>);
+  const auto position = output.size();
+  output.resize(position + sizeof(T));
+  std::memcpy(output.data() + position, &value, sizeof(T));
+}
+
+// unwrapExchangePayloadMetadata() checks that the complete fixed-size header
+// is present before calling this function.
+template <typename T>
+T readScalar(const uint8_t*& current) {
+  static_assert(std::is_trivially_copyable_v<T>);
+  T value;
+  std::memcpy(&value, current, sizeof(T));
+  current += sizeof(T);
+  return value;
+}
+
+void checkEnvelopeCodec(ExchangePayloadCodec codec, uint64_t auxiliaryCount) {
+  VELOX_CHECK(
+      codec == ExchangePayloadCodec::kFusedFor ||
+          codec == ExchangePayloadCodec::kCascaded,
+      "Unsupported exchange payload codec: {}",
+      static_cast<uint8_t>(codec));
+  VELOX_CHECK(
+      codec != ExchangePayloadCodec::kCascaded || auxiliaryCount == 0,
+      "Cascaded cannot carry an auxiliary segment count: {}",
+      auxiliaryCount);
+}
+
+} // namespace
+
+std::unique_ptr<std::vector<uint8_t>> wrapExchangePayloadMetadata(
+    std::unique_ptr<std::vector<uint8_t>> cudfMetadata,
+    ExchangePayloadCodec codec,
+    std::size_t logicalDataSize,
+    std::size_t auxiliaryCount) {
+  VELOX_CHECK_NOT_NULL(cudfMetadata);
+  checkEnvelopeCodec(codec, auxiliaryCount);
+
+  auto output = std::make_unique<std::vector<uint8_t>>();
+  output->reserve(kHeaderSize + cudfMetadata->size());
+  output->insert(output->end(), kMagic.begin(), kMagic.end());
+  appendScalar(*output, kVersion);
+  appendScalar(*output, static_cast<uint16_t>(kHeaderSize));
+  appendScalar(*output, static_cast<uint8_t>(codec));
+  appendScalar(*output, static_cast<uint64_t>(logicalDataSize));
+  appendScalar(*output, static_cast<uint64_t>(auxiliaryCount));
+  appendScalar(*output, static_cast<uint64_t>(cudfMetadata->size()));
+  output->insert(output->end(), cudfMetadata->begin(), cudfMetadata->end());
+  return output;
+}
+
+ExchangePayloadMetadata unwrapExchangePayloadMetadata(
+    std::unique_ptr<std::vector<uint8_t>> metadata) {
+  VELOX_CHECK_NOT_NULL(metadata);
+  if (metadata->size() < kMagic.size() ||
+      !std::equal(kMagic.begin(), kMagic.end(), metadata->begin())) {
+    return ExchangePayloadMetadata{std::move(metadata)};
+  }
+
+  VELOX_CHECK_GE(
+      metadata->size(),
+      kHeaderSize,
+      "Truncated exchange compression metadata envelope");
+  const auto* current = metadata->data() + kMagic.size();
+  const auto* end = metadata->data() + metadata->size();
+  const auto version = readScalar<uint16_t>(current);
+  const auto headerSize = readScalar<uint16_t>(current);
+  const auto codecValue = readScalar<uint8_t>(current);
+  const auto logicalDataSize = readScalar<uint64_t>(current);
+  const auto auxiliaryCount = readScalar<uint64_t>(current);
+  const auto cudfMetadataSize = readScalar<uint64_t>(current);
+
+  VELOX_CHECK_EQ(
+      version, kVersion, "Unsupported exchange compression metadata version");
+  VELOX_CHECK_EQ(
+      headerSize, kHeaderSize, "Invalid exchange compression header size");
+  const auto codec = static_cast<ExchangePayloadCodec>(codecValue);
+  checkEnvelopeCodec(codec, auxiliaryCount);
+  VELOX_CHECK_EQ(
+      cudfMetadataSize,
+      static_cast<uint64_t>(end - current),
+      "Invalid exchange cuDF metadata size");
+
+  auto cudfMetadata = std::make_unique<std::vector<uint8_t>>(
+      current, current + static_cast<std::size_t>(cudfMetadataSize));
+  return ExchangePayloadMetadata{
+      std::move(cudfMetadata),
+      codec,
+      static_cast<std::size_t>(logicalDataSize),
+      static_cast<std::size_t>(auxiliaryCount)};
+}
+
+} // namespace facebook::velox::ucx_exchange

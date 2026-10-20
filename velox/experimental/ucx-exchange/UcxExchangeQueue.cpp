@@ -17,6 +17,11 @@
 
 namespace facebook::velox::ucx_exchange {
 
+cudf::table_view PackedTableWithStream::tableView() const {
+  VELOX_CHECK(table || packedTable, "Received cuDF table has no storage");
+  return table ? table->view() : packedTable->table;
+}
+
 void UcxExchangeQueue::noMoreSources() {
   std::vector<ContinuePromise> promises;
   {

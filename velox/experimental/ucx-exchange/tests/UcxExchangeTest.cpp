@@ -67,6 +67,60 @@ using namespace facebook::velox::core;
 
 namespace facebook::velox::ucx_exchange {
 
+namespace {
+
+TEST(ReceivedTableStorageTest, keepsPackedStorage) {
+  auto stream = cudf::get_default_stream();
+  auto input = makeTable(32, UcxTestData::kTestRowType, stream);
+  auto packed = cudf::pack(input->view(), stream);
+  stream.sync();
+  const auto bytes = packed.gpu_data->size();
+  auto view = cudf::unpack(packed);
+  const auto* columnData = view.column(0).head<uint8_t>();
+  auto storage = std::make_unique<cudf::packed_table>(
+      cudf::packed_table{view, std::move(packed)});
+  PackedTableWithStream received(std::move(storage), stream, 32);
+  EXPECT_FALSE(storage);
+  EXPECT_FALSE(received.table);
+  ASSERT_TRUE(received.packedTable);
+  EXPECT_EQ(received.tableView().column(0).head<uint8_t>(), columnData);
+  EXPECT_EQ(received.tableView().num_rows(), 32);
+  EXPECT_EQ(received.numRows, 32);
+  EXPECT_EQ(received.gpuDataSize(), bytes);
+}
+
+TEST(ReceivedTableStorageTest, takesOwningTableWithoutRepacking) {
+  auto stream = cudf::get_default_stream();
+  auto input = makeTable(32, UcxTestData::kTestRowType, stream);
+  stream.sync();
+  const auto* storage = input.get();
+  const auto* columnData = input->view().column(0).head<uint8_t>();
+  PackedTableWithStream received(std::move(input), stream, 1234, 32);
+  EXPECT_FALSE(input);
+  EXPECT_EQ(received.table.get(), storage);
+  EXPECT_FALSE(received.packedTable);
+  EXPECT_EQ(received.tableView().column(0).head<uint8_t>(), columnData);
+  EXPECT_EQ(received.numRows, 32);
+  EXPECT_EQ(received.gpuDataSize(), 1234);
+}
+
+TEST(ReceivedTableStorageTest, preservesProducerRowsForEmptyLayout) {
+  auto input = std::make_unique<cudf::table>();
+  PackedTableWithStream received(
+      std::move(input), cudf::get_default_stream(), 0, 7);
+  EXPECT_EQ(received.tableView().num_columns(), 0);
+  EXPECT_EQ(received.numRows, 7);
+  EXPECT_EQ(received.gpuDataSize(), 0);
+}
+
+TEST(ReceivedTableStorageTest, rejectsMissingStorage) {
+  PackedTableWithStream received;
+  EXPECT_EQ(received.gpuDataSize(), 0);
+  EXPECT_THROW((void)received.tableView(), VeloxRuntimeError);
+}
+
+} // namespace
+
 struct ExchangeTestParams {
   int numSrcDrivers;
   int numDstDrivers;
