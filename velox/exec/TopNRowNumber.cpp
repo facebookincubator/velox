@@ -366,13 +366,18 @@ char* TopNRowNumber::processRowExceedingLimit<
   } else {
     // The new top rank value depends on the number of peers of the top ranking
     // row. If the current row also has the same value as the new top ranking
-    // row then it has to be counted as a peer as well.
+    // row then it has to be counted as a peer as well. If the current row
+    // sorts after the new top ranking rows, it becomes the only top ranking
+    // row and every remaining row ranks before it.
     auto numNewTopRankRows = partition.numTopRankRows();
     topRow = topRows.top();
-    if (comparator_.compare(decodedVectors_, index, topRow) == 0) {
+    const auto result = comparator_.compare(decodedVectors_, index, topRow);
+    if (result == 0) {
       partition.topRank = topRows.size() - numNewTopRankRows + 1;
-    } else {
+    } else if (result < 0) {
       partition.topRank = topRows.size() - numNewTopRankRows + 2;
+    } else {
+      partition.topRank = topRows.size() + 1;
     }
   }
   return newRow;
