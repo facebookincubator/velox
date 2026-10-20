@@ -556,15 +556,10 @@ bool CudfSplitReader::ignoreMissingFiles() const {
   return hiveConfig.ignoreMissingFiles(connectorQueryCtx_->sessionProperties());
 }
 
-bool CudfSplitReader::skipMissingFile(const VeloxRuntimeError& error) {
-  if (error.errorCode() != error_code::kFileNotFound or
-      not ignoreMissingFiles()) {
-    return false;
-  }
+void CudfSplitReader::markSplitEmpty() {
   emptySplit_ = true;
   dataSource_.reset();
   fileMetaDatas_.clear();
-  return true;
 }
 
 void CudfSplitReader::setupCudfDataSource() {
@@ -597,7 +592,7 @@ void CudfSplitReader::setupCudfDataSource() {
       // distinctly.
       if (ignoreMissingFiles and
           e.code() == std::errc::no_such_file_or_directory) {
-        emptySplit_ = true;
+        markSplitEmpty();
         return;
       }
       throw;
@@ -624,14 +619,17 @@ void CudfSplitReader::setupCudfDataSource() {
         fileHandleKey, &fileProperties, ioStats_ ? ioStats_.get() : nullptr);
     VELOX_CHECK_NOT_NULL(fileHandleCachePtr.get());
   } catch (const VeloxRuntimeError& e) {
-    if (skipMissingFile(e)) {
-      return;
-    }
-    // Rethrow actual filesystem errors only. Unsupported paths may fall back
-    // to KvikIO.
-    if (ignoreMissingFiles and
-        filesystems::isPathSupportedByRegisteredFileSystems(split_->filePath)) {
-      throw;
+    if (ignoreMissingFiles) {
+      if (e.errorCode() == error_code::kFileNotFound) {
+        markSplitEmpty();
+        return;
+      }
+      // Rethrow actual filesystem errors only. Unsupported paths may fall back
+      // to KvikIO.
+      if (filesystems::isPathSupportedByRegisteredFileSystems(
+              split_->filePath)) {
+        throw;
+      }
     }
     // ABFS blobs can not fall back to KvikIO. Throw the original error.
     if (isAbfsPath(split_->filePath)) {
@@ -762,7 +760,8 @@ CudfSplitReader::fileMetaDatas() {
   } catch (const VeloxRuntimeError& e) {
     // An open that knows the file size sends no request to the storage, so a
     // missing file first shows at this read.
-    if (skipMissingFile(e)) {
+    if (ignoreMissingFiles() and e.errorCode() == error_code::kFileNotFound) {
+      markSplitEmpty();
       return fileMetaDatas_;
     }
     throw;
