@@ -16,6 +16,7 @@
 
 #include "velox/dwio/nimble/tablet/TabletWriter.h"
 
+#include <folly/container/F14Map.h>
 #include <limits>
 
 #include "velox/dwio/nimble/common/Buffer.h"
@@ -598,8 +599,9 @@ void TabletWriter::writeStripeGroupWithStreamMajorLayout(
   // For each leaf streamId, gather that stream's values across every stripe and
   // encode the resulting stripeCount-length array independently. The per-stream
   // bit width is tight to that stream's value range.
-  std::vector<flatbuffers::Offset<serialization::EncodedStream>> encodedOffsets;
-  std::vector<flatbuffers::Offset<serialization::EncodedStream>> encodedSizes;
+  using EncodedStreamOffset = flatbuffers::Offset<serialization::EncodedStream>;
+  std::vector<EncodedStreamOffset> encodedOffsets;
+  std::vector<EncodedStreamOffset> encodedSizes;
   encodedOffsets.reserve(streamCount);
   encodedSizes.reserve(streamCount);
 
@@ -608,8 +610,11 @@ void TabletWriter::writeStripeGroupWithStreamMajorLayout(
   Encoding::Options encodingOptions;
   encodingOptions.fixedBitWidthUseExactBits = true;
 
-  // Encodes one array, copies it into the flatbuffer, then rewinds the scratch
-  // buffer so peak memory stays bounded to a single stream.
+  // Own the encoded bytes because the scratch buffer is reset after each array.
+  // Keep offsets local to this group so they belong to the same flatbuffer.
+  folly::F14FastMap<std::string, EncodedStreamOffset> encodedStreams;
+
+  // Reset the scratch buffer after each array to bound scratch memory usage.
   Buffer encodingBuffer{*pool_};
   auto encodeStream =
       [&](const std::vector<uint32_t>& values,
@@ -619,13 +624,17 @@ void TabletWriter::writeStripeGroupWithStreamMajorLayout(
             std::span<const uint32_t>(values),
             encodingBuffer,
             encodingOptions);
-        auto encodedStream = serialization::CreateEncodedStream(
-            builder,
-            builder.CreateVector(
-                reinterpret_cast<const uint8_t*>(encoded.data()),
-                encoded.size()));
+        auto [entry, inserted] =
+            encodedStreams.try_emplace(std::string{encoded});
+        if (inserted) {
+          entry->second = serialization::CreateEncodedStream(
+              builder,
+              builder.CreateVector(
+                  reinterpret_cast<const uint8_t*>(encoded.data()),
+                  encoded.size()));
+        }
         encodingBuffer.reset();
-        return encodedStream;
+        return entry->second;
       };
 
   for (uint32_t streamId = 0; streamId < streamCount; ++streamId) {
