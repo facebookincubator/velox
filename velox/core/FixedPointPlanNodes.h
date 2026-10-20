@@ -363,6 +363,9 @@ class FixedPointNode : public PlanNode {
     return kEmptySources;
   }
 
+  void accept(const PlanNodeVisitor& visitor, PlanNodeVisitorContext& context)
+      const override;
+
   std::string_view name() const override {
     return "FixedPoint";
   }
@@ -374,6 +377,11 @@ class FixedPointNode : public PlanNode {
   const std::vector<PlanNodePtr>& plans() const {
     return plans_;
   }
+
+  /// Every plan this fixed point runs: the state declarations' initial plans,
+  /// the body plans and the convergence plans.  A fixed point has no sources,
+  /// so these are the only plans under it.
+  std::vector<PlanNodePtr> nestedPlans() const;
 
   int32_t maxIterations() const {
     return convergenceConfig_.maxIterations;
@@ -482,6 +490,9 @@ class StateSourceNode : public PlanNode {
     return kEmptySources;
   }
 
+  void accept(const PlanNodeVisitor& visitor, PlanNodeVisitorContext& context)
+      const override;
+
   std::string_view name() const override {
     return "StateSource";
   }
@@ -548,6 +559,9 @@ class StateHashJoinNode : public PlanNode {
   const std::vector<PlanNodePtr>& sources() const override {
     return sources_;
   }
+
+  void accept(const PlanNodeVisitor& visitor, PlanNodeVisitorContext& context)
+      const override;
 
   std::string_view name() const override {
     return "StateHashJoin";
