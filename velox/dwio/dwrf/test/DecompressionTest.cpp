@@ -23,8 +23,10 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/dwio/common/InputStream.h"
 #include "velox/dwio/common/compression/Compression.h"
+#include "velox/dwio/common/compression/PagedInputStream.h"
 #include "velox/dwio/dwrf/test/OrcTest.h"
 
+#include <zstd.h>
 #include <cstdio>
 #include <cstring>
 
@@ -1197,4 +1199,106 @@ TEST_F(TestSeek, uncompressedLarge) {
       readSize += size;
     } while (readSize < targetSize);
   }
+}
+
+namespace {
+// Compresses 'data' into one independent ZSTD frame (with a content-size
+// header) and returns the compressed bytes.
+std::string zstdFrame(const std::string& data) {
+  std::string compressed;
+  compressed.resize(::ZSTD_compressBound(data.size()));
+  const size_t n = ::ZSTD_compress(
+      compressed.data(), compressed.size(), data.data(), data.size(), 1);
+  VELOX_CHECK(
+      !::ZSTD_isError(n), "ZSTD_compress failed: {}", ::ZSTD_getErrorName(n));
+  compressed.resize(n);
+  return compressed;
+}
+
+// Compresses 'data' into a ZSTD streaming frame with the content-size field
+// suppressed, so ZSTD_getFrameContentSize() reports ZSTD_CONTENTSIZE_UNKNOWN.
+// Streaming frames in this form are produced by tools that write ZSTD as an
+// opaque stream and keep no record of the uncompressed size.
+std::string zstdStreamingFrame(const std::string& data) {
+  ZSTD_CCtx* cctx = ZSTD_createCCtx();
+  ZSTD_CCtx_setParameter(cctx, ZSTD_c_compressionLevel, 1);
+  ZSTD_CCtx_setParameter(cctx, ZSTD_c_contentSizeFlag, 0);
+  std::string compressed(ZSTD_compressBound(data.size()), '\0');
+  ZSTD_outBuffer out{
+      static_cast<void*>(compressed.data()), compressed.size(), 0};
+  ZSTD_inBuffer in{data.data(), data.size(), 0};
+  while (in.pos < in.size) {
+    const size_t code = ZSTD_compressStream2(cctx, &out, &in, ZSTD_e_continue);
+    VELOX_CHECK(
+        !ZSTD_isError(code),
+        "ZSTD_compressStream2 failed: {}",
+        ZSTD_getErrorName(code));
+  }
+  const size_t code = ZSTD_compressStream2(cctx, &out, &in, ZSTD_e_end);
+  VELOX_CHECK(
+      !ZSTD_isError(code),
+      "ZSTD_compressStream2(end) failed: {}",
+      ZSTD_getErrorName(code));
+  ZSTD_freeCCtx(cctx);
+  compressed.resize(out.pos);
+  return compressed;
+}
+
+// Decodes a raw compressed stream whose compressed bytes are 'data', in the
+// shape the Text reader builds (whole compressed input as one raw block), and
+// returns the full decompressed output. Goes through createDecompressor so it
+// exercises the same stream the reader gets.
+std::string decodeZstdRawStream(
+    facebook::velox::memory::MemoryPool& pool,
+    const std::string& data) {
+  auto input = std::make_unique<SeekableArrayInputStream>(
+      data.data(), data.size(), 1024);
+  auto stream = facebook::velox::dwio::common::compression::createDecompressor(
+      CompressionKind_ZSTD,
+      std::move(input),
+      1 << 20 /*blockSize*/,
+      pool,
+      facebook::velox::dwio::common::compression::CompressionOptions{},
+      "zstd-raw",
+      /*decrypter=*/nullptr,
+      /*useRawDecompression=*/true,
+      data.size());
+
+  std::string decoded;
+  const void* ptr = nullptr;
+  int32_t size = 0;
+  while (stream->Next(&ptr, &size)) {
+    decoded.append(static_cast<const char*>(ptr), size);
+  }
+  return decoded;
+}
+} // namespace
+
+// A raw compressed stream (e.g. a ZSTD-compressed Text/Spark file, or any codec
+// path that hands the whole compressed input to the decompressor via
+// useRawDecompression) may hold several concatenated ZSTD frames. The stream
+// must decode all of them, growing its output buffer as bytes come out, since
+// the total size is not known before decoding. The pre-fix code decoded only
+// the first frame's worth of output and failed with "Destination buffer is too
+// small".
+TEST_F(DecompressionTest, testZstdMultiFrameRawStream) {
+  // Two distinct pieces so a truncated decode is obvious.
+  const std::string part1 = "alpha-beta-gamma-delta-epsilon";
+  const std::string part2 = "omega-psi-phi";
+  const std::string expected = part1 + part2;
+
+  // Build a raw stream whose compressed form is two concatenated ZSTD frames.
+  const std::string data = zstdFrame(part1) + zstdFrame(part2);
+
+  EXPECT_EQ(expected, decodeZstdRawStream(*pool_, data));
+}
+
+// A raw compressed stream may be a streaming ZSTD frame with no content-size
+// header (ZSTD_CONTENTSIZE_UNKNOWN), so no output size can be derived from the
+// headers and the stream must decode it by growing the buffer.
+TEST_F(DecompressionTest, testZstdStreamingFrame) {
+  const std::string expected = "streaming-frame-alpha-beta";
+  const std::string data = zstdStreamingFrame(expected);
+
+  EXPECT_EQ(expected, decodeZstdRawStream(*pool_, data));
 }

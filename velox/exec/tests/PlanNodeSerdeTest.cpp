@@ -113,6 +113,15 @@ class PlanNodeSerdeTest : public testing::Test,
   std::vector<RowVectorPtr> data_;
 };
 
+TEST_F(PlanNodeSerdeTest, nestedAggregations) {
+  // Deep enough that deserializing each source more than once would not finish.
+  auto builder = PlanBuilder().values({data_});
+  for (int i = 0; i < 40; ++i) {
+    builder.singleAggregation({"c0"}, {});
+  }
+  testSerde(builder.planNode());
+}
+
 TEST_F(PlanNodeSerdeTest, aggregation) {
   auto plan = PlanBuilder()
                   .values({data_})

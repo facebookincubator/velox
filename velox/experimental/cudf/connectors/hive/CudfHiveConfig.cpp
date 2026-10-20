@@ -132,15 +132,26 @@ bool CudfHiveConfig::useBufferedInputSession(
       kUseBufferedInputSession, config_->get<bool>(kUseBufferedInput, true));
 }
 
-bool CudfHiveConfig::useExperimentalCudfReader() const {
-  return config_->get<bool>(kUseExperimentalCudfReader, false);
+bool CudfHiveConfig::preloadColumnChunks() const {
+  return config_->get<bool>(kPreloadColumnChunks, false);
 }
 
-bool CudfHiveConfig::useExperimentalCudfReaderSession(
+bool CudfHiveConfig::preloadColumnChunksSession(
     const config::ConfigBase* session) const {
   return session->get<bool>(
-      kUseExperimentalCudfReaderSession,
-      config_->get<bool>(kUseExperimentalCudfReader, false));
+      kPreloadColumnChunksSession,
+      config_->get<bool>(kPreloadColumnChunks, false));
+}
+
+bool CudfHiveConfig::serializeIoRequests() const {
+  return config_->get<bool>(kSerializeIoRequests, false);
+}
+
+bool CudfHiveConfig::serializeIoRequestsSession(
+    const config::ConfigBase* session) const {
+  return session->get<bool>(
+      kSerializeIoRequestsSession,
+      config_->get<bool>(kSerializeIoRequests, false));
 }
 
 bool CudfHiveConfig::immutableFiles() const {

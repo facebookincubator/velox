@@ -27,6 +27,7 @@
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/index/ChunkStatsGroup.h"
 #include "velox/dwio/nimble/index/ClusterIndex.h"
+#include "velox/dwio/nimble/index/HierarchicalClusterIndex.h"
 #include "velox/dwio/nimble/index/IndexConfig.h"
 #include "velox/dwio/nimble/tablet/TabletReader.h"
 #include "velox/dwio/nimble/tablet/TabletWriter.h"
@@ -193,7 +194,7 @@ class ClusterIndexTestHelper {
         pool));
   }
 
-  explicit ClusterIndexTestHelper(const ClusterIndex* clusterIndex)
+  explicit ClusterIndexTestHelper(const ClusterIndexBase* clusterIndex)
       : clusterIndex_(clusterIndex) {}
 
   /// Returns the partition-level statistics for the given partition.
@@ -248,7 +249,7 @@ class ClusterIndexTestHelper {
   }
 
  private:
-  const ClusterIndex* const clusterIndex_;
+  const ClusterIndexBase* const clusterIndex_;
 };
 
 /// Test helper class for ChunkStatsGroup.

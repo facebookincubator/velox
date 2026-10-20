@@ -15,8 +15,8 @@
  */
 
 #include "velox/experimental/cudf/CudfNoDefaults.h"
+#include "velox/experimental/cudf/connectors/hive/BufferedInputDataSource.h"
 #include "velox/experimental/cudf/connectors/hive/CudfSplitReader.h"
-#include "velox/experimental/cudf/connectors/hive/CudfSplitReaderHelpers.h"
 #include "velox/experimental/cudf/connectors/hive/iceberg/CudfEqualityDeleteFileReader.h"
 #include "velox/experimental/cudf/connectors/hive/iceberg/CudfIcebergDeletionHelpers.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
@@ -112,7 +112,10 @@ CudfEqualityDeleteFileReader::CudfEqualityDeleteFileReader(
   // deleteKeyTable_ using cuDF
   if (deleteFile.fileFormat == dwio::common::FileFormat::PARQUET) {
     directReadEqualityDeleteFile(
-        deleteFile, std::move(deleteFileInput), equalityColumnTypes);
+        deleteFile,
+        std::move(deleteFileInput),
+        equalityColumnTypes,
+        deleteReaderOpts.fileColumnNamesReadAsLowerCase());
     return;
   }
 
@@ -163,7 +166,8 @@ CudfEqualityDeleteFileReader::CudfEqualityDeleteFileReader(
 void CudfEqualityDeleteFileReader::directReadEqualityDeleteFile(
     const velox_iceberg::IcebergDeleteFile& deleteFile,
     std::shared_ptr<dwio::common::BufferedInput> bufferedInput,
-    const std::vector<TypePtr>& equalityColumnTypes) {
+    const std::vector<TypePtr>& equalityColumnTypes,
+    bool caseInsensitiveColumnNames) {
   using cudf_velox::connector::hive::BufferedInputDataSource;
 
   // Create a cuDF data source
@@ -179,8 +183,10 @@ void CudfEqualityDeleteFileReader::directReadEqualityDeleteFile(
 
   // Read the equality delete file
   auto options =
-      cudf::io::parquet_reader_options::builder(std::move(sourceInfo)).build();
-  options.set_column_names(equalityColumnNames_);
+      cudf::io::parquet_reader_options::builder(std::move(sourceInfo))
+          .case_sensitive_names(not caseInsensitiveColumnNames)
+          .column_names(equalityColumnNames_)
+          .build();
   auto stream = cudfGlobalStreamPool().get_stream();
   auto mr = get_output_mr();
   deleteKeyTable_ = castDecimalColumnsToVeloxTypes(

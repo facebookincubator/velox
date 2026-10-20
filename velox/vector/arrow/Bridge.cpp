@@ -16,6 +16,7 @@
 
 #include "velox/vector/arrow/Bridge.h"
 
+#include <charconv>
 #include <cstring>
 #include <limits>
 
@@ -811,6 +812,49 @@ VectorPtr createStringFlatVector(
       optionalNullCount(nullCount));
 }
 
+// Every value of a fixed-size binary array is `width` bytes of one data buffer.
+VectorPtr createStringFlatVectorFromFixedSizeBinary(
+    memory::MemoryPool* pool,
+    const TypePtr& type,
+    BufferPtr nulls,
+    const ArrowArray& arrowArray,
+    int32_t width,
+    const WrapInBufferViewFunc& wrapInBufferView) {
+  VELOX_USER_CHECK_EQ(
+      arrowArray.n_buffers,
+      2,
+      "Expecting two buffers as input for fixed-size binary.");
+  const auto length = static_cast<vector_size_t>(arrowArray.length);
+  const auto* values = static_cast<const char*>(arrowArray.buffers[1]);
+  VELOX_USER_CHECK(
+      length == 0 || values != nullptr,
+      "Fixed-size binary values buffer can't be null.");
+
+  BufferPtr stringViews = AlignedBuffer::allocate<StringView>(length, pool);
+  auto* rawStringViews = stringViews->asMutable<StringView>();
+  for (vector_size_t i = 0; i < length; ++i) {
+    rawStringViews[i] =
+        StringView(values + static_cast<int64_t>(i) * width, width);
+  }
+
+  std::vector<BufferPtr> stringViewBuffers;
+  if (length > 0 && !StringView::isInline(width)) {
+    stringViewBuffers.emplace_back(
+        wrapInBufferView(values, static_cast<int64_t>(length) * width));
+  }
+
+  return std::make_shared<FlatVector<StringView>>(
+      pool,
+      type,
+      std::move(nulls),
+      length,
+      stringViews,
+      std::move(stringViewBuffers),
+      SimpleVectorStats<StringView>{},
+      std::nullopt,
+      optionalNullCount(arrowArray.null_count));
+}
+
 // This functions does two things: (a) sets the value of null_count, and (b)
 // the validity buffer (if there is at least one null row).
 void exportValidityBitmap(
@@ -891,22 +935,24 @@ void exportValues(
   const auto& type = vec.type();
   out.n_buffers = 2;
 
-  if (!rows.changed() && isFlatScalarZeroCopy(type, options)) {
-    // Arrow does not allow a nullptr for the values buffer. If the input vector
-    // has no values buffer (all-null case), allocate an empty buffer of size 0.
-    auto values =
-        vec.values() ? vec.values() : AlignedBuffer::allocate<uint8_t>(0, pool);
-    holder.setBuffer(1, values);
+  if (vec.values() && !rows.changed() && isFlatScalarZeroCopy(type, options)) {
+    holder.setBuffer(1, vec.values());
     return;
   }
 
-  // Otherwise we will need a new buffer and copy the data.
+  // Allocate a C Data-compatible values buffer or gather into it.
   auto size = getArrowElementSize(type, options);
   auto values = type->isBoolean()
       ? AlignedBuffer::allocate<bool>(out.length, pool)
       : AlignedBuffer::allocate<uint8_t>(
             checkedMultiply<size_t>(out.length, size), pool);
-  if (type->kind() == TypeKind::TIMESTAMP) {
+  if (!vec.values()) {
+    VELOX_CHECK_EQ(
+        out.null_count,
+        out.length,
+        "Missing values buffer is only supported for all-null vectors.");
+    std::memset(values->asMutable<uint8_t>(), 0, values->size());
+  } else if (type->kind() == TypeKind::TIMESTAMP) {
     gatherFromTimestampBuffer(vec, rows, options.timestampUnit, *values);
   } else if (
       type->kind() == TypeKind::BIGINT && type->isTime() &&
@@ -1429,6 +1475,21 @@ int32_t parseDecimalBitWidthOrDefault(const std::string_view format) {
   return bitWidth;
 }
 
+// The byte width in a fixed-size binary format string, "w:<width>".
+int32_t parseFixedSizeBinaryWidth(const std::string_view format) {
+  const auto* end = format.data() + format.size();
+  int32_t width = 0;
+  std::from_chars_result result{};
+  if (format.size() > 2 && format[1] == ':') {
+    result = std::from_chars(format.data() + 2, end, width);
+  }
+  VELOX_USER_CHECK(
+      result.ec == std::errc{} && result.ptr == end && width > 0,
+      "Unable to convert '{}' ArrowSchema fixed-size binary format to Velox varbinary",
+      format);
+  return width;
+}
+
 TypePtr parseDecimalFormat(const std::string_view format) {
   try {
     std::string_view::size_type sz;
@@ -1508,6 +1569,11 @@ TypePtr importFromArrowImpl(
     // Same for binary.
     case 'z':
     case 'Z':
+      return VARBINARY();
+
+    // Fixed-size binary also maps to varbinary; the width is not kept.
+    case 'w':
+      parseFixedSizeBinaryWidth(format);
       return VARBINARY();
 
     case 'v':
@@ -2406,6 +2472,16 @@ VectorPtr importFromArrowImpl(
     if (arrowSchema.format[0] == 'v') {
       return createStringFlatVectorFromUtf8View(
           pool, type, nulls, arrowArray, wrapInBufferView);
+    }
+
+    if (arrowSchema.format[0] == 'w') {
+      return createStringFlatVectorFromFixedSizeBinary(
+          pool,
+          type,
+          nulls,
+          arrowArray,
+          parseFixedSizeBinaryWidth(arrowSchema.format),
+          wrapInBufferView);
     }
 
     // Import StringView from Utf8/Binary

@@ -81,11 +81,13 @@ namespace facebook::nimble {
 ///
 /// Binary layout:
 /// - Encoding::kPrefixSize bytes: standard Encoding prefix
+/// - 1 byte: compression type for the concatenated FSST output
 /// - varint: serialized FSST symbol table size
 /// - N bytes: serialized FSST symbol table (~2KB typical)
 /// - varint: lengths encoding size
 /// - M bytes: nested encoding of compressed string lengths
-/// - K bytes: compressed string blob (concatenated FSST-compressed strings)
+/// - K bytes: concatenated FSST output, optionally compressed by the normal
+///   Nimble encoding-layer compression policy
 ///
 /// Only supports std::string_view data type.
 class FsstEncoding final
@@ -99,6 +101,15 @@ class FsstEncoding final
       std::string_view data,
       std::function<void*(uint32_t)> stringBufferFactory,
       const Encoding::Options& options = {});
+
+  ~FsstEncoding() override {
+    this->releaseBuffer(uncompressedBlob_);
+  }
+
+  FsstEncoding(const FsstEncoding&) = delete;
+  FsstEncoding& operator=(const FsstEncoding&) = delete;
+  FsstEncoding(FsstEncoding&&) = delete;
+  FsstEncoding& operator=(FsstEncoding&&) = delete;
 
   void reset() final;
   void skip(uint32_t rowCount) final;
@@ -137,6 +148,38 @@ class FsstEncoding final
       std::vector<std::optional<const EncodingLayout>>& children,
       const Encoding::Options& options = {});
 
+  /// Serialized-format helpers shared with FsstEncodingView.
+  struct Header {
+    /// Secondary compression applied to the concatenated FSST output.
+    CompressionType compressionType{CompressionType::Uncompressed};
+    /// Serialized FSST symbol table.
+    std::string_view symbolTable;
+    /// Nested encoding for per-row compressed string sizes.
+    std::string_view lengths;
+    /// Serialized blob, which may have secondary encoding-layer compression.
+    std::string_view blob;
+  };
+
+  /// Parses the serialized FSST header at offset within encoding.
+  static Header parseHeader(std::string_view encoding, size_t offset);
+
+  /// Validates the common prefix before the base Encoding constructor parses
+  /// it using the unchecked EncodingPrefix helpers.
+  static std::string_view validateEncodedPrefix(
+      std::string_view encoding,
+      const Encoding::Options& options);
+
+  /// Validates a serialized FSST symbol table before calling fsst_import(),
+  /// whose upstream API does not accept an input-buffer length.
+  static void validateSymbolTable(std::string_view symbolTable);
+
+  /// Validates compressed lengths against blob bounds and FSST escape framing.
+  /// Returns the number of compressed bytes covered by lengths.
+  static size_t validateCompressedLengths(
+      std::span<const uint32_t> lengths,
+      std::string_view blob,
+      size_t blobOffset);
+
   std::string debugString(int offset) const final;
 
  private:
@@ -153,17 +196,6 @@ class FsstEncoding final
     char* data;
     // Number of writable bytes in the page.
     size_t capacity;
-  };
-
-  struct Header {
-    // Serialized FSST symbol table.
-    std::string_view symbolTable;
-
-    // Nested encoding for per-row compressed string sizes.
-    std::string_view lengths;
-
-    // Concatenated FSST-compressed string data.
-    std::string_view blob;
   };
 
   struct CompressedValues {
@@ -184,26 +216,6 @@ class FsstEncoding final
     size_t totalCompressedSize{0};
   };
 
-  // Parses the serialized FSST header at offset within encoding.
-  static Header parseHeader(std::string_view encoding, size_t offset);
-
-  // Validates the common prefix before the base Encoding constructor parses
-  // it using the unchecked EncodingPrefix helpers.
-  static std::string_view validateEncodedPrefix(
-      std::string_view encoding,
-      const Encoding::Options& options);
-
-  // Validates a serialized FSST symbol table before calling fsst_import(),
-  // whose upstream API does not accept an input-buffer length.
-  static void validateSymbolTable(std::string_view symbolTable);
-
-  // Validates compressed lengths against blob bounds and FSST escape framing.
-  // Returns the number of compressed bytes covered by lengths.
-  static size_t validateCompressedLengths(
-      std::span<const uint32_t> lengths,
-      std::string_view blob,
-      size_t blobOffset);
-
   // Checks that a sequential read remains within the row range.
   void checkReadRange(uint32_t rowCount, const char* operation) const;
 
@@ -215,7 +227,8 @@ class FsstEncoding final
       std::span<const physicalType> values,
       velox::memory::MemoryPool* pool);
 
-  // Checks whether the final FSST encoding meets the compression target.
+  // Checks whether the native FSST representation meets the compression target
+  // before optional encoding-layer compression is applied.
   static bool meetsCompressionTarget(
       uint64_t uncompressedSize,
       uint64_t encodedSize,
@@ -257,7 +270,8 @@ class FsstEncoding final
   // Nested encoding for compressed string lengths.
   std::unique_ptr<Encoding> lengths_;
 
-  // Compressed string blob and the current byte offset within it.
+  // Unwrapped FSST string blob and the current byte offset within it.
+  velox::BufferPtr uncompressedBlob_;
   std::string_view blob_;
   size_t blobOffset_{0};
 

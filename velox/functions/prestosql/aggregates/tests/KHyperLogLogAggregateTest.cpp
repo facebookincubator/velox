@@ -319,7 +319,7 @@ TEST_F(KHyperLogLogAggregateTest, mergeKHyperLogLog) {
 TEST_F(KHyperLogLogAggregateTest, mergeToIntermediate) {
   constexpr int kSize = 1000;
   auto input = makeRowVector({
-      makeFlatVector<int32_t>(kSize, folly::identity),
+      makeFlatIdentityVector<int32_t>(kSize),
       makeFlatVector<int64_t>(kSize, [](auto /*row*/) { return 1; }),
       makeFlatVector<int64_t>(kSize, [](auto /*row*/) { return 1; }),
   });

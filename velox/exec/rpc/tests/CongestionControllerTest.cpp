@@ -312,6 +312,14 @@ TEST(CongestionControllerTest, shrinkCountTracksTheReportedLimit) {
     }
   }
   EXPECT_EQ(window.numShrinks(), observedDrops);
+  EXPECT_GT(observedDrops, 0);
+  EXPECT_EQ(window.numOverloadShrinks(), 0);
+
+  const int64_t beforeOverload = window.limit();
+  window.onError();
+  EXPECT_LT(window.limit(), beforeOverload);
+  EXPECT_EQ(window.numShrinks(), observedDrops + 1);
+  EXPECT_EQ(window.numOverloadShrinks(), 1);
 }
 
 // A backend that batches internally gets *faster* as concurrency rises until
@@ -337,6 +345,79 @@ TEST(CongestionControllerTest, climbsThroughBatchingKnee) {
     feedWindow(window, rttFor(window.limit()));
   }
   EXPECT_GE(window.limit(), kKnee);
+}
+
+TEST(CongestionControllerTest, growsOnePerCleanWindow) {
+  // No-latency completions grow the window additively without any RTT feed:
+  // one evidence window (kSamplesPerWindow = 8) of clean units lifts 2 -> 3.
+  // A multi-unit call counts each unit.
+  CongestionController window{2, 64};
+  window.setCleanMaxWindow(64);
+  window.onCleanUnits(7);
+  EXPECT_EQ(window.limit(), 2);
+  window.onCleanUnits(1);
+  EXPECT_EQ(window.limit(), 3);
+  window.onCleanUnits(16);
+  EXPECT_EQ(window.limit(), 5);
+}
+
+TEST(CongestionControllerTest, cleanGrowthScalesWithLimit) {
+  // The evidence bar scales with the window: at limit 16 a further +1 needs
+  // 16 clean units, so growth can never outrun evidence.
+  CongestionController window{16, 64};
+  window.setCleanMaxWindow(64);
+  window.onCleanUnits(15);
+  EXPECT_EQ(window.limit(), 16);
+  window.onCleanUnits(1);
+  EXPECT_EQ(window.limit(), 17);
+}
+
+TEST(CongestionControllerTest, errorResetsCleanProgress) {
+  // A throttle is never progress: banked clean units are discarded, so a
+  // trickle of rejections cannot ratchet the window up.
+  CongestionController window{4, 64};
+  window.setCleanMaxWindow(64);
+  window.onCleanUnits(7);
+  window.onError(); // 4 -> 2, progress reset
+  EXPECT_EQ(window.limit(), 2);
+  window.onCleanUnits(7);
+  EXPECT_EQ(window.limit(), 2);
+  window.onCleanUnits(1);
+  EXPECT_EQ(window.limit(), 3);
+}
+
+TEST(CongestionControllerTest, cleanGrowthNeverExceedsMax) {
+  CongestionController window{64, 64};
+  window.setCleanMaxWindow(128);
+  window.onCleanUnits(1'000);
+  EXPECT_EQ(window.limit(), 64);
+}
+
+TEST(CongestionControllerTest, ignoresNonPositiveCleanUnits) {
+  CongestionController window{2, 64};
+  window.setCleanMaxWindow(64);
+  window.onCleanUnits(0);
+  window.onCleanUnits(-3);
+  EXPECT_EQ(window.limit(), 2);
+}
+
+TEST(CongestionControllerTest, cleanGrowthRespectsCleanCap) {
+  // A deployment with a known knee bounds async discovery below maxWindow_.
+  CongestionController window{2, 64};
+  window.setCleanMaxWindow(8);
+  window.onCleanUnits(1'000);
+  EXPECT_EQ(window.limit(), 8);
+}
+
+TEST(CongestionControllerTest, nonPositiveCleanCapDisablesGrowth) {
+  // 0 (default) disables clean growth; negatives clamp to disabled.
+  CongestionController window{2, 8};
+  window.onCleanUnits(1'000);
+  EXPECT_EQ(window.limit(), 2);
+  CongestionController negative{2, 8};
+  negative.setCleanMaxWindow(-5);
+  negative.onCleanUnits(1'000);
+  EXPECT_EQ(negative.limit(), 2);
 }
 
 } // namespace

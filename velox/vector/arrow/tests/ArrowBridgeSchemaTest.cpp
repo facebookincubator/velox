@@ -517,6 +517,7 @@ TEST_F(ArrowBridgeSchemaImportTest, scalar) {
   EXPECT_EQ(*VARCHAR(), *testSchemaImport("U"));
   EXPECT_EQ(*VARBINARY(), *testSchemaImport("z"));
   EXPECT_EQ(*VARBINARY(), *testSchemaImport("Z"));
+  EXPECT_EQ(*VARBINARY(), *testSchemaImport("w:42"));
 
   EXPECT_EQ(*VARCHAR(), *testSchemaImport("vu"));
   EXPECT_EQ(*VARBINARY(), *testSchemaImport("vz"));
@@ -596,7 +597,10 @@ TEST_F(ArrowBridgeSchemaImportTest, unsupported) {
   EXPECT_THROW(testSchemaImport("L"), VeloxUserError);
   EXPECT_THROW(testSchemaImport("e"), VeloxUserError);
 
-  EXPECT_THROW(testSchemaImport("w:42"), VeloxUserError);
+  EXPECT_THROW(testSchemaImport("w"), VeloxUserError);
+  EXPECT_THROW(testSchemaImport("w:"), VeloxUserError);
+  EXPECT_THROW(testSchemaImport("w:0"), VeloxUserError);
+  EXPECT_THROW(testSchemaImport("w:4x"), VeloxUserError);
 
   EXPECT_THROW(testSchemaImport("tdm"), VeloxUserError);
   EXPECT_THROW(testSchemaImport("tDs"), VeloxUserError);

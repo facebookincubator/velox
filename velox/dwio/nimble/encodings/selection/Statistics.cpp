@@ -190,6 +190,21 @@ void Statistics<T, InputType>::populateRepeats(bool collectRunValues) const {
 }
 
 template <typename T, typename InputType>
+void Statistics<T, InputType>::populateIsConstant() const noexcept {
+  // An empty stream is not constant: ConstantEncoding has no value to store,
+  // and its callers reject empty input before reaching here anyway.
+  if (data_.empty()) {
+    isConstant_ = false;
+    return;
+  }
+  const auto& first = data_.front();
+  isConstant_ =
+      std::all_of(data_.begin() + 1, data_.end(), [&first](const auto& value) {
+        return value == first;
+      });
+}
+
+template <typename T, typename InputType>
 void Statistics<T, InputType>::populateMinMax() const {
   if constexpr (nimble::isNumericType<InputType>()) {
     if constexpr (kIntegralMinMaxType<InputType>) {
@@ -419,6 +434,22 @@ template void Statistics<bool>::populateUniques() const;
 template void Statistics<std::string_view>::populateUniques() const;
 template void Statistics<std::string_view, std::string>::populateUniques()
     const;
+
+// populateIsConstant works on all types
+template void Statistics<int8_t>::populateIsConstant() const noexcept;
+template void Statistics<uint8_t>::populateIsConstant() const noexcept;
+template void Statistics<int16_t>::populateIsConstant() const noexcept;
+template void Statistics<uint16_t>::populateIsConstant() const noexcept;
+template void Statistics<int32_t>::populateIsConstant() const noexcept;
+template void Statistics<uint32_t>::populateIsConstant() const noexcept;
+template void Statistics<int64_t>::populateIsConstant() const noexcept;
+template void Statistics<uint64_t>::populateIsConstant() const noexcept;
+template void Statistics<float>::populateIsConstant() const noexcept;
+template void Statistics<double>::populateIsConstant() const noexcept;
+template void Statistics<bool>::populateIsConstant() const noexcept;
+template void Statistics<std::string_view>::populateIsConstant() const noexcept;
+template void Statistics<std::string_view, std::string>::populateIsConstant()
+    const noexcept;
 
 // populateMinMax works on numeric types only
 template void Statistics<int8_t>::populateMinMax() const;

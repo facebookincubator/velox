@@ -50,6 +50,16 @@ class StateDeclaration : public ISerializable {
   /// printing (FixedPointNode::addDetails).
   virtual std::string toString() const = 0;
 
+  template <typename T>
+  bool is() const {
+    return dynamic_cast<const T*>(this) != nullptr;
+  }
+
+  template <typename T>
+  const T* as() const {
+    return dynamic_cast<const T*>(this);
+  }
+
  protected:
   StateDeclaration(std::string name, PlanNodePtr initialPlan)
       : name_{std::move(name)}, initialPlan_{std::move(initialPlan)} {}
@@ -329,6 +339,12 @@ struct ConvergenceConfig {
 /// into it (appending or replacing per its declaration) and emits its final
 /// contents as the node's output; every other state entry is seeded once and
 /// read-only thereafter.
+///
+/// A coordinator may run the body, convergence and trailing plans with several
+/// drivers per worker (exec::FixedPointOptions::iterationMaxDrivers).  Those
+/// plans then follow ordinary multi-driver semantics: an aggregation that must
+/// see all of a worker's rows needs a local exchange in front of it.  The last
+/// convergence plan always runs with one driver.
 class FixedPointNode : public PlanNode {
  public:
   FixedPointNode(
@@ -504,8 +520,8 @@ using StateSourceNodePtr = std::shared_ptr<const StateSourceNode>;
 /// Inner-joins the input (probe) against a HashTable persistent state entry
 /// that is built once and reused across iterations (hash-table reuse). Output
 /// rows are the probe input columns followed by the hash table's dependent
-/// (payload) columns.  The probe input's join key columns must occupy the same
-/// channels as the build key columns (keys-first on both sides).
+/// (payload) columns.  Probe key i names the probe input column matched against
+/// the table's build key i; the table lists its key columns first.
 ///
 /// Only inner join is supported: probe rows with no match are dropped (this is
 /// what gives VLP / recursive CTE its empty-frontier termination).  Supporting

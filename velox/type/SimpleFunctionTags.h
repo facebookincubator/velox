@@ -18,9 +18,11 @@
 /// Tag types naming the argument and return types of simple functions.
 /// SimpleFunctionApi.h maps these onto the runtime type system.
 
+#include <array>
 #include <cstddef>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <tuple>
 #include <type_traits>
 
@@ -176,16 +178,87 @@ struct Array {
 template <typename ELEMENT>
 using ArrayWriterT = Array<ELEMENT>;
 
+/// Holds a string literal for use as a non-type template parameter.
+template <size_t N>
+struct FixedStringLiteral {
+  char value[N]{};
+
+  explicit(false) constexpr FixedStringLiteral(const char (&input)[N]) {
+    for (size_t i = 0; i < N; ++i) {
+      value[i] = input[i];
+    }
+  }
+
+  constexpr std::string_view view() const {
+    return {value, N - 1};
+  }
+};
+
+template <size_t N>
+FixedStringLiteral(const char (&)[N]) -> FixedStringLiteral<N>;
+
+/// Associates a field name with a type in a Row simple-function signature.
+template <FixedStringLiteral Name, typename T>
+struct Field {
+  using type = T;
+  static constexpr std::string_view name = Name.view();
+
+ private:
+  Field() {}
+};
+
+template <typename T>
+struct FieldTraits {
+  using type = T;
+  static constexpr bool hasName = false;
+  static constexpr std::string_view name{""};
+};
+
+template <FixedStringLiteral Name, typename T>
+struct FieldTraits<Field<Name, T>> {
+  using type = T;
+  static constexpr bool hasName = true;
+  static constexpr std::string_view name = Name.view();
+};
+
+template <typename T>
+using FieldType = typename FieldTraits<T>::type;
+
 template <typename... T>
 struct Row {
   template <size_t idx>
-  using type_at = typename std::tuple_element<idx, std::tuple<T...>>::type;
+  using type_at =
+      FieldType<typename std::tuple_element<idx, std::tuple<T...>>::type>;
 
   static const size_t size_ = sizeof...(T);
 
   static_assert(
-      std::conjunction<std::bool_constant<!isVariadicType<T>::value>...>::value,
+      std::conjunction<
+          std::bool_constant<!isVariadicType<FieldType<T>>::value>...>::value,
       "Struct fields cannot be Variadic");
+  static_assert(
+      (FieldTraits<T>::hasName && ...) || (!FieldTraits<T>::hasName && ...),
+      "Struct fields must be either all named or all unnamed");
+  static_assert(
+      ((!FieldTraits<T>::hasName || !FieldTraits<T>::name.empty()) && ...),
+      "Struct field names cannot be empty");
+  static_assert(
+      [] {
+        constexpr std::array<std::string_view, sizeof...(T)> names{
+            FieldTraits<T>::name...};
+        for (size_t i = 0; i < names.size(); ++i) {
+          if (names[i].empty()) {
+            continue;
+          }
+          for (size_t j = i + 1; j < names.size(); ++j) {
+            if (names[i] == names[j]) {
+              return false;
+            }
+          }
+        }
+        return true;
+      }(),
+      "Struct field names must be unique");
 
  private:
   Row() {}

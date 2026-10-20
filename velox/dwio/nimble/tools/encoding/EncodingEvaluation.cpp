@@ -30,6 +30,7 @@
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
 #include "velox/dwio/nimble/serializer/Deserializer.h"
 #include "velox/dwio/nimble/serializer/Serializer.h"
+#include "velox/dwio/nimble/tools/SerializerDumpLib.h"
 #include "velox/dwio/nimble/velox/OrderedRanges.h"
 #include "velox/dwio/nimble/velox/SchemaSerialization.h"
 
@@ -40,7 +41,27 @@ struct ChunkMeasurement {
   uint64_t encodedBytes{};
   uint64_t encodeNanos{};
   uint64_t decodeNanos{};
+  // The encoding the serialized buffer actually carries. Nullopt when the
+  // buffer holds no non-empty stream to read it from.
+  std::optional<nimble::EncodingType> writtenType;
 };
+
+// Reads the encoding the writer settled on for the column's first non-empty
+// stream. Candidates here override a single scalar stream, so that stream is
+// the one the candidate was asking about.
+std::optional<nimble::EncodingType> readWrittenEncodingType(
+    std::shared_ptr<const nimble::Type> schema,
+    std::string_view serialized,
+    velox::memory::MemoryPool* pool) {
+  nimble::tools::SerializationDump dump{schema, pool};
+  dump.addSerialization(serialized);
+  for (const auto& stream : dump.stats().streams) {
+    if (!stream.empty) {
+      return stream.encodingType;
+    }
+  }
+  return std::nullopt;
+}
 
 uint8_t nestedChildrenCount(nimble::EncodingType encodingType) {
   switch (encodingType) {
@@ -145,7 +166,11 @@ ChunkMeasurement evaluateCandidateEncodingOnce(
     deserializer.deserialize(buffer, deserialized);
   }
 
-  return {chunkBytes, encodeTiming.wallNanos, decodeTiming.wallNanos};
+  return {
+      chunkBytes,
+      encodeTiming.wallNanos,
+      decodeTiming.wallNanos,
+      readWrittenEncodingType(schema, serializedBuffers.front(), pool)};
 }
 
 ChunkMeasurement evaluateCandidateEncodingParallel(
@@ -185,12 +210,18 @@ ChunkMeasurement evaluateCandidateEncodingParallel(
     total.encodedBytes += measurement.encodedBytes;
     total.encodeNanos += measurement.encodeNanos;
     total.decodeNanos += measurement.decodeNanos;
+    // Every chunk runs the same candidate over a slice of the same column, so
+    // the first chunk that reports an encoding speaks for all of them.
+    if (!total.writtenType.has_value()) {
+      total.writtenType = measurement.writtenType;
+    }
   }
   return total;
 }
 
 std::optional<EvaluationResult> evaluateCandidateEncoding(
     const CandidateEncoding& candidate,
+    size_t candidateIndex,
     const std::vector<velox::VectorPtr>& vectors,
     const EvaluationOptions& opts,
     velox::memory::MemoryPool* pool,
@@ -198,6 +229,7 @@ std::optional<EvaluationResult> evaluateCandidateEncoding(
   uint64_t encodeNanos{std::numeric_limits<uint64_t>::max()};
   uint64_t decodeNanos{std::numeric_limits<uint64_t>::max()};
   uint64_t encodedBytes{0};
+  std::optional<nimble::EncodingType> writtenType;
 
   for (int32_t iter = 0; iter < opts.iterations; ++iter) {
     try {
@@ -209,6 +241,7 @@ std::optional<EvaluationResult> evaluateCandidateEncoding(
       encodeNanos = std::min(encodeNanos, chunk.encodeNanos);
       decodeNanos = std::min(decodeNanos, chunk.decodeNanos);
       encodedBytes = chunk.encodedBytes;
+      writtenType = chunk.writtenType;
     } catch (const nimble::NimbleUserError& error) {
       if (error.errorCode() != nimble::error_code::IncompatibleEncoding) {
         throw;
@@ -218,10 +251,11 @@ std::optional<EvaluationResult> evaluateCandidateEncoding(
   }
 
   return EvaluationResult{
-      .type = candidate.type,
+      .type = writtenType.value_or(candidate.type),
       .encodedBytes = encodedBytes,
       .encodeNanos = encodeNanos,
       .decodeNanos = decodeNanos,
+      .candidateIndex = candidateIndex,
   };
 }
 
@@ -259,9 +293,9 @@ std::vector<std::optional<EvaluationResult>> evaluateCandidates(
 
   std::vector<std::optional<EvaluationResult>> results;
   results.reserve(candidates.size());
-  for (const auto& candidate : candidates) {
-    results.emplace_back(
-        evaluateCandidateEncoding(candidate, vectors, opts, pool, executor));
+  for (size_t i = 0; i < candidates.size(); ++i) {
+    results.emplace_back(evaluateCandidateEncoding(
+        candidates[i], i, vectors, opts, pool, executor));
   }
   return results;
 }
@@ -315,13 +349,18 @@ nimble::EncodingLayoutTree getOptimalEncoding(
       evaluateCandidates(vectors, candidates, opts, pool, executor);
   auto ranked = rankResults(rawResults, opts.weights);
   NIMBLE_USER_CHECK(!ranked.empty());
-  const auto best = ranked.front().type;
+  const auto& winner = ranked.front();
+  // Prefer the candidate that asked for the encoding actually written, so an
+  // all-common column caches Constant rather than the MainlyConstant that
+  // delegated to it. The written encoding need not be a candidate at all --
+  // a replay that fails falls back to a fresh selection -- so keep the
+  // winning candidate as the answer when nothing declares it.
   for (const auto& candidate : candidates) {
-    if (candidate.type == best) {
+    if (candidate.type == winner.type) {
       return candidate.tree;
     }
   }
-  NIMBLE_UNREACHABLE();
+  return candidates[winner.candidateIndex].tree;
 }
 
 std::vector<CandidateEncoding> buildEncodingCandidates(

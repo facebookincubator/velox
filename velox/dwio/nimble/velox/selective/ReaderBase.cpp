@@ -216,13 +216,25 @@ ReaderBase::ReaderBase(
             if (!statsSection.has_value()) {
               return {};
             }
-            auto stripeStats = VectorizedStripeStats::deserialize(
-                statsSection->content(), *pool_);
-            if (!stripeStats) {
+            // Pruning is an optimization, so a section that cannot be read
+            // costs a full scan rather than the file. This load is not covered
+            // by the pruning killswitch, so a throw here is unrecoverable for
+            // every read of the file.
+            try {
+              auto stripeStats = VectorizedStripeStats::deserialize(
+                  statsSection->content(), *pool_);
+              if (!stripeStats) {
+                return {};
+              }
+              return stripeStats->takeStripeColumnStatistics(
+                  fileSchema_, nimbleSchema_);
+            } catch (const std::exception& e) {
+              LOG(WARNING)
+                  << "Ignoring unreadable Nimble stripe-stats section, "
+                     "falling back to a full scan: "
+                  << e.what();
               return {};
             }
-            return stripeStats->takeStripeColumnStatistics(
-                fileSchema_, nimbleSchema_);
           }()} {}
 
 void LazyInput::load() {

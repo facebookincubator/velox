@@ -310,7 +310,7 @@ TEST_F(HashIndexWriterTest, rejectsNonHashIndexName) {
       std::string{kDenseSortedIndexName},
       std::vector<std::string>{"col1"},
       0.7f,
-      std::nullopt,
+      nullptr,
       0);
   const IndexConfig* configs[] = {config.get()};
   NIMBLE_ASSERT_THROW(

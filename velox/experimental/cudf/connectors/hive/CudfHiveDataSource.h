@@ -34,6 +34,7 @@
 #include <cudf/ast/expressions.hpp>
 
 #include <mutex>
+#include <string_view>
 #include <unordered_set>
 
 namespace facebook::velox::cudf_velox::connector::hive {
@@ -42,6 +43,10 @@ using namespace facebook::velox::connector;
 
 class CudfHiveDataSource : public DataSource, public NvtxHelper {
  public:
+  /// DWIO bytes read, preserved separately from ReadFile bytes.
+  static constexpr std::string_view kDwioStorageReadBytes{
+      "dwio.storageReadBytes"};
+
   CudfHiveDataSource(
       const RowTypePtr& outputType,
       const ConnectorTableHandlePtr& tableHandle,
@@ -52,6 +57,8 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
       const std::shared_ptr<CudfHiveConfig>& CudfHiveConfig);
 
   void addSplit(std::shared_ptr<ConnectorSplit> split) override;
+
+  void setFromDataSource(std::unique_ptr<DataSource> source) override;
 
   void addDynamicFilter(
       column_index_t /*outputChannel*/,
@@ -97,6 +104,11 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
   folly::Executor* const executor_;
   const ConnectorQueryCtx* const connectorQueryCtx_;
 
+  // Carries the session settings the remaining filter is folded and compiled
+  // against. Kept for the data source's lifetime: createCudfExpression borrows
+  // its config, and an evaluator may hold on to it.
+  std::shared_ptr<core::QueryCtx> optimizeQueryCtx_;
+
   // Columns to read.
   std::vector<std::string> readColumnNames_;
 
@@ -106,11 +118,12 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
   // The row type for the data source output, not including filter-only columns.
   const RowTypePtr outputType_;
 
-  bool useExperimentalCudfReader_;
-
   // Cached combined AST filter expression compiled from 'subfieldFilters_',
   // owned by 'subfieldTree_'.
   const cudf::ast::expression* subfieldFilterAst_{nullptr};
+  // Whether any subfield filter targets a decimal column. If so, addSplit()
+  // rebuilds the pushdown AST against each split's Parquet decimal types.
+  bool hasDecimalSubfieldFilter_{false};
 
  private:
   // Construct and cache a RowTypePtr for the table column names and types.
@@ -127,8 +140,13 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
   std::unique_ptr<CudfSplitReader> cudfSplitReader_;
 
   // Optimized remaining-filter expression, or null when there is no remaining
-  // filter. Gates remaining-filter evaluation in next().
+  // filter or it folded to a constant. Gates remaining-filter evaluation in
+  // next().
   core::TypedExprPtr optimizedRemainingFilter_;
+
+  // Whether the remaining filter folded to a constant that no row satisfies,
+  // in which case splits are skipped without opening them.
+  bool remainingFilterRejectsAllRows_{false};
 
   // Compiled cuDF evaluator for the remaining filter, applied post-read in
   // next(). Null when there is no remaining filter.
@@ -142,9 +160,11 @@ class CudfHiveDataSource : public DataSource, public NvtxHelper {
   // Expression evaluator for remaining filter.
   core::ExpressionEvaluator* const expressionEvaluator_;
 
-  // Expression evaluator for subfield filter.
+  // Logical and split-specific physical AST storage for subfield filters.
   std::vector<std::unique_ptr<cudf::scalar>> subfieldScalars_;
   cudf::ast::tree subfieldTree_;
+  std::vector<std::unique_ptr<cudf::scalar>> pushdownFilterScalars_;
+  cudf::ast::tree pushdownFilterTree_;
 
   // The table handle's subfield filters, merged with the ones extracted from
   // its remaining filter.

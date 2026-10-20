@@ -15,11 +15,12 @@
  */
 #include "velox/dwio/nimble/index/ClusterIndexFactory.h"
 
-#include <optional>
-
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/index/ClusterIndex.h"
+#include "velox/dwio/nimble/index/ClusterIndexConfig.h"
 #include "velox/dwio/nimble/index/ClusterIndexWriter.h"
+#include "velox/dwio/nimble/index/HierarchicalClusterIndex.h"
+#include "velox/dwio/nimble/index/HierarchicalClusterIndexWriter.h"
 #include "velox/dwio/nimble/index/IndexConstants.h"
 #include "velox/dwio/nimble/index/IndexFactoryRegistry.h"
 
@@ -56,7 +57,7 @@ class NimbleClusterIndexFactory final : public ClusterIndexFactory {
     return createNimbleIndexKeyEncoder(columns, inputType, sortOrders, pool);
   }
 
-  std::unique_ptr<ClusterIndex> createReader(
+  std::unique_ptr<ClusterIndexBase> createReader(
       Section rootSection,
       velox::memory::MemoryPool* pool,
       const IndexLookup::Options& options) const override {
@@ -64,10 +65,44 @@ class NimbleClusterIndexFactory final : public ClusterIndexFactory {
   }
 };
 
+class NimbleHierarchicalClusterIndexFactory final : public ClusterIndexFactory {
+ public:
+  std::string_view name() const override {
+    return kHierarchicalClusterIndexName;
+  }
+
+  std::unique_ptr<IndexWriter> createWriter(
+      const IndexConfig& config,
+      const velox::TypePtr& inputType,
+      velox::memory::MemoryPool* pool) const override {
+    NIMBLE_USER_CHECK_EQ(config.family, IndexFamily::Cluster);
+    NIMBLE_USER_CHECK_EQ(config.name, name());
+    return HierarchicalClusterIndexWriter::create(config, inputType, pool);
+  }
+
+  std::unique_ptr<IndexKeyEncoder> createKeyEncoder(
+      const std::vector<std::string>& columns,
+      const velox::RowTypePtr& inputType,
+      const std::vector<SortOrder>& sortOrders,
+      velox::memory::MemoryPool* pool) const override {
+    return createNimbleIndexKeyEncoder(columns, inputType, sortOrders, pool);
+  }
+
+  std::unique_ptr<ClusterIndexBase> createReader(
+      Section rootSection,
+      velox::memory::MemoryPool* pool,
+      const IndexLookup::Options& options) const override {
+    return HierarchicalClusterIndex::create(
+        std::move(rootSection), pool, options);
+  }
+};
+
 void ensureBuiltInFactoriesRegistered() {
   static const bool registered = [] {
     factoryRegistry().registerFactory(
         std::make_shared<const NimbleClusterIndexFactory>());
+    factoryRegistry().registerFactory(
+        std::make_shared<const NimbleHierarchicalClusterIndexFactory>());
     return true;
   }();
   (void)registered;

@@ -15,6 +15,7 @@
  */
 #include <gtest/gtest.h>
 #include <algorithm>
+#include <bit>
 #include <limits>
 #include <string_view>
 #include <type_traits>
@@ -621,5 +622,60 @@ TYPED_TEST(StatisticsIntegerTests, buckets) {
   EXPECT_GT(buckets.size(), 0);
   for (auto i = 0; i < buckets.size(); ++i) {
     EXPECT_EQ(expectedBuckets[i], buckets[i]) << "index: " << i;
+  }
+}
+
+// Constancy is the only question ConstantEncoding asks, and it used to be
+// answered by building a unique-value map. The scan has to stop at the first
+// value that differs rather than reading the whole stream.
+TEST(StatisticsTests, isConstantDetectsConstantAndNonConstant) {
+  const std::vector<int64_t> constant(1'000, 7);
+  EXPECT_TRUE(nimble::Statistics<int64_t>::create(constant).isConstant());
+
+  const std::vector<int64_t> single{42};
+  EXPECT_TRUE(nimble::Statistics<int64_t>::create(single).isConstant());
+
+  // Differs only in the last position, so a correct scan still reads it all.
+  std::vector<int64_t> tail(1'000, 7);
+  tail.back() = 8;
+  EXPECT_FALSE(nimble::Statistics<int64_t>::create(tail).isConstant());
+
+  // Differs at the second position, which is where the scan should stop.
+  std::vector<int64_t> head(1'000, 7);
+  head[1] = 8;
+  EXPECT_FALSE(nimble::Statistics<int64_t>::create(head).isConstant());
+}
+
+// isConstant() must agree with the unique count it replaced, on every type
+// ConstantEncoding is selected for.
+TEST(StatisticsTests, isConstantAgreesWithUniqueCounts) {
+  {
+    const std::vector<int64_t> data{5, 5, 5};
+    const auto stats = nimble::Statistics<int64_t>::create(data);
+    EXPECT_EQ(stats.uniqueCounts().value().size() == 1, stats.isConstant());
+  }
+  {
+    // Floating point runs on the physical representation, so constancy is
+    // bit-exact -- which is what the non-ALP encodings require.
+    const std::vector<uint64_t> data{
+        std::bit_cast<uint64_t>(1.5), std::bit_cast<uint64_t>(1.5)};
+    const auto stats = nimble::Statistics<uint64_t>::create(data);
+    EXPECT_EQ(stats.uniqueCounts().value().size() == 1, stats.isConstant());
+  }
+  {
+    constexpr bool kAllTrue[]{true, true, true};
+    const auto stats =
+        nimble::Statistics<bool>::create(std::span<const bool>{kAllTrue});
+    EXPECT_EQ(stats.uniqueCounts().value().size() == 1, stats.isConstant());
+  }
+  {
+    const std::vector<std::string_view> data{"abc", "abc"};
+    const auto stats = nimble::Statistics<std::string_view>::create(data);
+    EXPECT_EQ(stats.uniqueCounts().value().size() == 1, stats.isConstant());
+  }
+  {
+    const std::vector<std::string_view> mixed{"abc", "abd"};
+    const auto stats = nimble::Statistics<std::string_view>::create(mixed);
+    EXPECT_EQ(stats.uniqueCounts().value().size() == 1, stats.isConstant());
   }
 }

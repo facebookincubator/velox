@@ -136,6 +136,12 @@ class AssertQueryBuilder {
   /// when the query runs.
   AssertQueryBuilder& addSplitWithSequence(bool addWithSequence);
 
+  /// Options for running FixedPointNode loops.
+  AssertQueryBuilder& fixedPointOptions(const FixedPointOptions* options) {
+    params_.fixedPointOptions = options;
+    return *this;
+  }
+
   /// Sets the QueryCtx.
   AssertQueryBuilder& queryCtx(const std::shared_ptr<core::QueryCtx>& ctx) {
     params_.queryCtx = ctx;
@@ -194,6 +200,15 @@ class AssertQueryBuilder {
   /// Run the query and compare results with 'expected'.
   std::shared_ptr<Task> assertResults(
       const std::vector<RowVectorPtr>& expected);
+
+  /// Run the query and compare its single-row result with 'expected'.
+  std::shared_ptr<Task> assertResults(std::initializer_list<Variant> expected);
+
+  /// Run the query and compare its single-value result with 'expected'.
+  template <typename T>
+  std::shared_ptr<Task> assertSingleResult(T expected) {
+    return assertResults({Variant(std::move(expected))});
+  }
 
   /// Run the query and test that it returns no results (empty result set).
   std::shared_ptr<Task> assertEmptyResults();

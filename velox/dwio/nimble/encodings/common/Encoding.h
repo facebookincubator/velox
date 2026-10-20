@@ -105,6 +105,10 @@ struct ReadWithVisitorParams {
   // Number of rows scanned so far.  Contains rows scanned in previous chunks
   // during this read call as well.
   vector_size_t numScanned;
+
+  // When true, DictionaryEncoding uses a fused DictionaryColumnVisitor
+  // instead of the two-pass DictionaryIndicesHook fallback.
+  bool dictionaryAwareReads{false};
 };
 
 class Encoding {
@@ -152,11 +156,6 @@ class Encoding {
     /// false, FixedBitWidth and PFOR round to byte or bucket boundaries.
     bool fixedBitWidthUseExactBits{false};
 
-    /// EXPERIMENTATION: Allows ALP to participate in nested floating-point
-    /// encoding selection. False by default; do not enable for production
-    /// until ALP is production-ready.
-    bool allowNestedAlpSelection{false};
-
     /// EXPERIMENTATION: Lets SubIntSplit zigzag-delta the stream before
     /// splitting it into bit ranges, keeping whichever form encodes smaller.
     ///
@@ -188,6 +187,15 @@ class Encoding {
     /// FSST is kept only when its final encoded size is at most this fraction
     /// of the original string bytes.
     double fsstCompressionTargetRatio = 0.6;
+
+    /// Makes an encoding view build and keep the structures that make many
+    /// reads cheap, such as offsets, bitmaps and decoded chunks, when it is
+    /// created. Set it for a view that serves many reads, such as a scan or a
+    /// binary search. When unset, the view builds only what one read needs and
+    /// derives the rest for each read, which suits a view that serves a few
+    /// reads and costs more per read. Both settings return the same values, and
+    /// reads stay thread safe. Other encodings ignore it.
+    bool cacheEncodingView{false};
   };
 
   static constexpr int kEncodingTypeOffset =
@@ -808,6 +816,51 @@ void readWithVisitorFast(
   }
 }
 
+// Post-decode fast path: filters decoded values and routes them to the output.
+//
+// Non-hook paths (ExtractToReader / DropValues):
+//   - Redirects 'values' to the reader's rawValues buffer.
+//   - With filter: SIMD-tests values, compacts passing values and rows.
+//   - Without filter: all rows pass.
+//   - Advances numValues via addNumValues.
+//
+// Hook paths (ExtractToHook / ExtractToGenericHook):
+//   - 'values' stays as the caller's staging buffer (not rawValues).
+//   - Forwards decoded values to hook.addValues().
+//   - Does NOT call addNumValues (hook manages its own output).
+template <bool kScatter, typename T, typename V>
+void applyFixedWidthRun(
+    V& visitor,
+    const vector_size_t* selectedRows,
+    vector_size_t numSelected,
+    const vector_size_t* scatterRows,
+    T* values,
+    vector_size_t numRows) {
+  if constexpr (!V::kHasHook) {
+    values = reinterpret_cast<T*>(visitor.reader().rawValues());
+  }
+  auto numValues = visitor.reader().numValues();
+  int32_t* filterHits = nullptr;
+  if constexpr (V::kHasFilter) {
+    filterHits = visitor.outputRows(numSelected) - numValues;
+  }
+  velox::dwio::common::
+      processFixedWidthRun<T, V::kFilterOnly, kScatter, V::dense>(
+          velox::RowSet(selectedRows, numSelected),
+          0,
+          numSelected,
+          scatterRows,
+          values,
+          filterHits,
+          numValues,
+          visitor.filter(),
+          visitor.hook());
+  if constexpr (!V::kHasHook) {
+    visitor.addNumValues(
+        V::kHasFilter ? numValues - visitor.reader().numValues() : numRows);
+  }
+}
+
 // DataType is the type of DecoderVisitor::DataType.  The corresponding
 // ValueType is the type we store in values buffer of selective column reader.
 template <typename DataType>
@@ -835,6 +888,15 @@ T* mutableValues(const V& visitor, vector_size_t size) {
         visitor.reader().numValues();
   }
   return values;
+}
+
+// Returns whether a hook explicitly opts in to the encoding bulk fast path.
+template <typename Hook>
+constexpr bool hookAllowsBulkFastPath() {
+  if constexpr (requires { Hook::kBulkFastPath; }) {
+    return Hook::kBulkFastPath;
+  }
+  return false;
 }
 
 } // namespace detail

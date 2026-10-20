@@ -149,8 +149,9 @@ class HashIndex : public IndexLookup {
   const std::string_view minKey_;
   const std::string_view maxKey_;
 
-  // Constructed from FlatBuffer data during initialization.
-  const std::unique_ptr<BloomFilter> bloomFilter_;
+  // Constructed from FlatBuffer data during initialization. Null when the
+  // index was written without a bloom filter.
+  const std::unique_ptr<BloomFilterReader> bloomFilter_;
 
   // Partition descriptors and lazily loaded partition data.
   // Always has at least one partition.

@@ -65,6 +65,11 @@ struct CandidateEncoding {
 
 /// Measurement plus normalized ranking metrics for one candidate.
 struct EvaluationResult {
+  /// Encoding the writer actually produced, which is not always the one the
+  /// candidate asked for: an encoder may delegate to a cheaper encoding, as
+  /// MainlyConstant does when every row holds the common value. Ranking on the
+  /// requested type instead would score one encoding twice and leave the tie
+  /// between them to be broken arbitrarily.
   nimble::EncodingType type{};
   uint64_t encodedBytes{};
   uint64_t encodeNanos{};
@@ -73,6 +78,9 @@ struct EvaluationResult {
   double encodeRatio{};
   double decodeRatio{};
   double score{};
+  /// Position of the candidate this measures, so a caller can still reach that
+  /// candidate when 'type' names a different encoding.
+  size_t candidateIndex{};
 };
 
 /// Measures each candidate against the given vectors. Nullopt slot means the

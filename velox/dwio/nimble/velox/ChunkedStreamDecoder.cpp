@@ -175,6 +175,14 @@ uint32_t ChunkedStreamDecoder::next(
   return nonNullCount;
 }
 
+uint32_t ChunkedStreamDecoder::remainingRows() {
+  if (remaining_ == 0 && !stream_->hasNext()) {
+    return 0;
+  }
+  ensureLoaded();
+  return remaining_;
+}
+
 uint32_t ChunkedStreamDecoder::read(
     std::span<const uint32_t> /*rows*/,
     DataType /*dataType*/,
@@ -183,6 +191,16 @@ uint32_t ChunkedStreamDecoder::read(
     std::vector<velox::BufferPtr>& /*stringBuffers*/) {
   NIMBLE_UNSUPPORTED(
       "ChunkedStreamDecoder does not support selective row decoding");
+}
+
+uint32_t ChunkedStreamDecoder::read(
+    std::span<const RowRange> /*ranges*/,
+    DataType /*dataType*/,
+    void* /*output*/,
+    std::function<void*()> /*getOutputNulls*/,
+    std::vector<velox::BufferPtr>& /*stringBuffers*/) {
+  NIMBLE_UNSUPPORTED(
+      "ChunkedStreamDecoder does not support range row decoding");
 }
 
 void ChunkedStreamDecoder::skip(uint32_t count) {

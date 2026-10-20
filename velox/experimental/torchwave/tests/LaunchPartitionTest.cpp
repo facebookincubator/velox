@@ -185,6 +185,27 @@ TEST(LaunchPartitionTest, gateIgnoresABalancedStep) {
                    .has_value());
 }
 
+TEST(LaunchPartitionTest, measuredGateGoesByIdleTime) {
+  // Skewed well past the ratio threshold, but once the step has been measured
+  // only the idle time it measured decides.
+  const std::vector<GridOp> ops = {op(1000, 8), op(10, 8)};
+  const auto stats = gridStats(ops, {1, 1}, smallDevice());
+  ASSERT_GE(stats.skew, PartitionParams{}.skewThreshold);
+
+  PartitionParams params;
+  params.measuredIdleUs = 10;
+  EXPECT_FALSE(shouldPartition(stats, params));
+  params.measuredIdleUs = 40;
+  EXPECT_TRUE(shouldPartition(stats, params));
+
+  // Balanced by the cost model, yet the hardware measured 200 us of idle: the
+  // costs are wrong, and the measurement wins.
+  const std::vector<GridOp> balanced = {op(100, 8), op(100, 8)};
+  const auto balancedStats = gridStats(balanced, {4, 4}, smallDevice());
+  params.measuredIdleUs = 200;
+  EXPECT_TRUE(shouldPartition(balancedStats, params));
+}
+
 TEST(LaunchPartitionTest, gateFiresOnLostOccupancyWithoutSkew) {
   // Balanced, so nothing to rebalance, but the cheap 48 KB op is costing the
   // other two half their occupancy. That alone is worth a split.

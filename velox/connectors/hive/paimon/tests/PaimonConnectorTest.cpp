@@ -15,15 +15,24 @@
  */
 #include "velox/connectors/hive/paimon/PaimonConnector.h"
 
+#include <folly/init/Init.h>
 #include <gtest/gtest.h>
 
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/file/LocalFile.h"
+#include "velox/common/process/ThreadDebugInfo.h"
 #include "velox/connectors/ConnectorRegistry.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/paimon/PaimonConnectorSplit.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/expression/Expr.h"
+
+#ifdef VELOX_ENABLE_NIMBLE
+#include "velox/dwio/nimble/velox/selective/SelectiveNimbleReader.h"
+#include "velox/dwio/nimble/writer/Writer.h"
+#endif
 
 namespace facebook::velox::connector::hive::paimon {
 namespace {
@@ -39,11 +48,114 @@ class PaimonConnectorTest : public exec::test::HiveConnectorTestBase {
     auto connector =
         PaimonConnectorFactory().newConnector(kPaimonConnectorId, config);
     ConnectorRegistry::global().insert(connector->connectorId(), connector);
+#ifdef VELOX_ENABLE_NIMBLE
+    nimble::registerSelectiveNimbleReaderFactory();
+#endif
   }
 
   void TearDown() override {
+#ifdef VELOX_ENABLE_NIMBLE
+    nimble::unregisterSelectiveNimbleReaderFactory();
+#endif
     ConnectorRegistry::global().erase(kPaimonConnectorId);
     HiveConnectorTestBase::TearDown();
+  }
+
+  void testTakeoverRuntimeStats(int fileCount, bool existingStats) {
+    auto queryCtx = core::QueryCtx::create();
+    auto config = std::make_shared<config::ConfigBase>(
+        std::unordered_map<std::string, std::string>{});
+    // Keep the context and all other borrowed inputs alive to isolate the
+    // ownership of runtimeStats during DataSource takeover.
+    auto context = ConnectorQueryCtx::Builder()
+                       .operatorPool(pool())
+                       .connectorPool(rootPool_.get())
+                       .sessionProperties(config.get())
+                       .expressionEvaluator(
+                           std::make_unique<exec::SimpleExpressionEvaluator>(
+                               queryCtx.get(), pool()))
+                       .queryId("PaimonConnectorTest")
+                       .taskId("PaimonConnectorTest")
+                       .planNodeId("scan")
+                       .build();
+    const auto type = ROW({{"c0", BIGINT()}});
+    auto connector = ConnectorRegistry::tryGet(kPaimonConnectorId);
+    auto table = makePaimonTableHandle(type);
+    auto columns = makePaimonColumnHandles(type);
+    auto makeSource = [&] {
+      return connector->createDataSource(type, table, columns, context.get());
+    };
+    auto processedFiles = [](DataSource& source) {
+      auto stats = source.getRuntimeStats();
+      auto it = stats.find("processedSplits");
+      return it == stats.end() ? 0 : it->second.sum;
+    };
+    std::vector<dwio::common::FileFormat> formats{
+        dwio::common::FileFormat::DWRF};
+#ifdef VELOX_ENABLE_NIMBLE
+    formats.push_back(dwio::common::FileFormat::NIMBLE);
+#endif
+    for (auto format : formats) {
+      SCOPED_TRACE(dwio::common::FileFormatName::toName(format));
+      const int firstFile = existingStats ? 1 : 0;
+      auto files = makeFilePaths(firstFile + fileCount);
+      std::vector<std::string> paths;
+      std::vector<RowVectorPtr> inputs;
+      for (int i = 0; i < files.size(); ++i) {
+        paths.push_back(files[i]->getPath());
+        inputs.push_back(
+            makeRowVector({makeFlatVector<int64_t>({10 * i + 1, 10 * i + 2})}));
+        if (format == dwio::common::FileFormat::DWRF) {
+          writeToFile(paths.back(), inputs.back());
+        }
+#ifdef VELOX_ENABLE_NIMBLE
+        else {
+          nimble::Writer writer(
+              type,
+              std::make_unique<LocalWriteFile>(paths.back(), false, false),
+              *pool(),
+              nimble::WriterOptions{});
+          writer.write(inputs.back());
+          writer.close();
+        }
+#endif
+      }
+      auto source = makeSource();
+      auto readFiles = [&](int begin, int count) {
+        ContinueFuture future = ContinueFuture::makeEmpty();
+        for (int i = begin; i < begin + count; ++i) {
+          auto result = source->next(100, future);
+          ASSERT_TRUE(result.has_value());
+          ASSERT_FALSE(future.valid());
+          ASSERT_TRUE(*result);
+          test::assertEqualVectors(inputs[i], *result);
+        }
+        auto result = source->next(100, future);
+        ASSERT_TRUE(result.has_value());
+        ASSERT_FALSE(future.valid());
+        EXPECT_EQ(*result, nullptr);
+      };
+      if (existingStats) {
+        source->addSplit(makePaimonSplit(
+            {paths.front()}, PaimonTableType::kAppendOnly, format));
+        readFiles(0, 1);
+      }
+      ASSERT_EQ(processedFiles(*source), firstFile);
+      auto preloaded = makeSource();
+      preloaded->addSplit(makePaimonSplit(
+          std::vector<std::string>(paths.begin() + firstFile, paths.end()),
+          PaimonTableType::kAppendOnly,
+          format));
+      // Paimon opens even the first file lazily. No file preparation has
+      // occurred when the donor is destroyed by setFromDataSource().
+      ASSERT_EQ(processedFiles(*preloaded), 0);
+      source->setFromDataSource(std::move(preloaded));
+      ASSERT_EQ(preloaded, nullptr);
+      EXPECT_EQ(processedFiles(*source), firstFile);
+      readFiles(firstFile, fileCount);
+      EXPECT_EQ(processedFiles(*source), firstFile + fileCount);
+      EXPECT_EQ(source->getCompletedRows(), 2 * (firstFile + fileCount));
+    }
   }
 
   /// Creates a table handle for the Paimon connector.
@@ -143,6 +255,18 @@ TEST_F(PaimonConnectorTest, connectorFactory) {
 }
 
 // E2E test: read a single file from an append-only Paimon split.
+TEST_F(PaimonConnectorTest, takeoverRuntimeStatsBeforeFirstFile) {
+  testTakeoverRuntimeStats(1, false);
+}
+
+TEST_F(PaimonConnectorTest, takeoverRuntimeStatsAcrossFiles) {
+  testTakeoverRuntimeStats(2, false);
+}
+
+TEST_F(PaimonConnectorTest, takeoverRuntimeStatsAccumulate) {
+  testTakeoverRuntimeStats(2, true);
+}
+
 TEST_F(PaimonConnectorTest, appendOnlySingleFile) {
   auto rowType = ROW({"c0", "c1"}, {BIGINT(), VARCHAR()});
   auto vectors = makeVectors(rowType, 1, 100);
@@ -327,3 +451,10 @@ TEST_F(PaimonConnectorTest, appendOnlyMultipleSplits) {
 
 } // namespace
 } // namespace facebook::velox::connector::hive::paimon
+
+int main(int argc, char** argv) {
+  testing::InitGoogleTest(&argc, argv);
+  facebook::velox::process::addDefaultFatalSignalHandler();
+  folly::Init init(&argc, &argv, false);
+  return RUN_ALL_TESTS();
+}

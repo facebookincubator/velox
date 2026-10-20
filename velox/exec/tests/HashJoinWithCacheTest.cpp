@@ -429,7 +429,7 @@ DEBUG_ONLY_TEST_F(HashJoinWithCacheTest, probeCannotSpillWithCachedTable) {
         if (hashProbeChecked.exchange(true)) {
           return;
         }
-        auto* probe = dynamic_cast<HashProbe*>(op);
+        auto* probe = op->as<HashProbe>();
         ASSERT_NE(probe, nullptr);
         ASSERT_FALSE(probe->canReclaim())
             << "HashProbe should not be reclaimable with cached hash table";
@@ -556,7 +556,7 @@ DEBUG_ONLY_TEST_F(HashJoinWithCacheTest, probeOOMWithCachedTable) {
           return;
         }
 
-        auto* probe = dynamic_cast<HashProbe*>(op);
+        auto* probe = op->as<HashProbe>();
         ASSERT_NE(probe, nullptr);
 
         // Verify that HashProbe cannot reclaim when using cached hash table.
@@ -706,7 +706,7 @@ DEBUG_ONLY_TEST_F(HashJoinWithCacheTest, cachePoolArbitration) {
 // Reproduces a spin-loop bug where non-last drivers of the HashBuild pipeline
 // never reach kFinish when hash table caching is enabled.
 //
-// Root cause: after allPeersFinished() returns false, non-last drivers were
+// Root cause: after allPeersArrived() returns false, non-last drivers were
 // placed in kWaitForBuild state. When they wake from the peers-finished future,
 // isBlocked() enters the kWaitForBuild case and calls
 // receivedCachedHashTable(), which does setRunning() + noMoreInput().
@@ -715,7 +715,7 @@ DEBUG_ONLY_TEST_F(HashJoinWithCacheTest, cachePoolArbitration) {
 // calling isBlocked/getOutput/isFinished in a tight loop, burning CPU until the
 // task is terminated by the probe pipeline completing.
 //
-// Fix (D100200527): in finishHashBuild(), when allPeersFinished() returns false
+// Fix (D100200527): in finishHashBuild(), when allPeersArrived() returns false
 // and hash table caching is enabled, set kWaitForProbe instead of
 // kWaitForBuild. This skips receivedCachedHashTable() and goes directly to
 // postHashBuildProcess() -> kFinish.
@@ -789,7 +789,7 @@ DEBUG_ONLY_TEST_F(HashJoinWithCacheTest, nonLastDriverSpinLoop) {
 
   // Track non-last drivers via the finishHashBuild TestValue. This fires
   // right after setState(kWaitForBuild) for each non-last driver. We verify
-  // the allPeersFinished coordination works (expected count = numDrivers - 1).
+  // the allPeersArrived coordination works (expected count = numDrivers - 1).
   //
   // The spin loop bug was in receivedCachedHashTable(): when non-last drivers
   // woke from the peers-finished future and re-entered isBlocked(), the

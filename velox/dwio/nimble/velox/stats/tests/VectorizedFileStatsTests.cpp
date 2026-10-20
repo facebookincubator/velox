@@ -546,6 +546,43 @@ TEST_F(VectorizedFileStatsTests, stripeStatsRoundTripFlatRow) {
   EXPECT_EQ(secondStripeIdStats->getMax(), 103);
 }
 
+// Applies the string length limit to every stripe's stats.
+TEST_F(VectorizedFileStatsTests, stripeStatsApplyStringStatsLengthLimit) {
+  auto schema = velox::ROW({{"name", velox::VARCHAR()}});
+  auto nimbleType = convertToNimbleType(*schema);
+
+  std::vector<std::vector<std::unique_ptr<ColumnStatistics>>> stripeStats;
+  auto& firstStripe = stripeStats.emplace_back();
+  firstStripe.push_back(std::make_unique<ColumnStatistics>(4, 0, 32, 16));
+  firstStripe.push_back(
+      std::make_unique<StringStatistics>(4, 0, 32, 16, "ab", "cd"));
+  auto& secondStripe = stripeStats.emplace_back();
+  secondStripe.push_back(std::make_unique<ColumnStatistics>(4, 0, 32, 16));
+  secondStripe.push_back(
+      std::make_unique<StringStatistics>(4, 0, 32, 16, "a-long-min", "z"));
+
+  VectorizedStripeStats vectorizedStripeStats(
+      stripeStats,
+      leafPool_.get(),
+      VectorizedFileStats::Options{.stringStatsLengthLimit = 2});
+  nimble::Buffer buffer(*leafPool_);
+  auto deserialized = VectorizedStripeStats::deserialize(
+      vectorizedStripeStats.serialize(buffer), *leafPool_);
+  const auto& roundTrippedStats =
+      deserialized->toStripeColumnStatistics(schema, nimbleType);
+  ASSERT_EQ(roundTrippedStats.size(), 2);
+
+  auto* firstStripeNameStats = roundTrippedStats[0][1]->as<StringStatistics>();
+  ASSERT_NE(firstStripeNameStats, nullptr);
+  EXPECT_EQ(firstStripeNameStats->getMin(), "ab");
+  EXPECT_EQ(firstStripeNameStats->getMax(), "cd");
+
+  auto* secondStripeNameStats = roundTrippedStats[1][1]->as<StringStatistics>();
+  ASSERT_NE(secondStripeNameStats, nullptr);
+  EXPECT_EQ(secondStripeNameStats->getMin(), std::nullopt);
+  EXPECT_EQ(secondStripeNameStats->getMax(), "z");
+}
+
 TEST_F(VectorizedFileStatsTests, schemaBasedRoundTripNestedRow) {
   // Create a nested row schema
   auto schema = velox::ROW(
@@ -707,6 +744,41 @@ TEST_F(VectorizedFileStatsTests, schemaBasedRoundTripWithNulloptMinMax) {
   auto* actualStringStat = roundTrippedStats[3]->as<StringStatistics>();
   ASSERT_NE(actualStringStat, nullptr);
   expectStringStatisticsEqual(stringStat, *actualStringStat);
+}
+
+// Writes a string min/max longer than the limit as absent and keeps one exactly
+// at the limit, leaving counts and sizes unchanged.
+TEST_F(VectorizedFileStatsTests, stringStatsLengthLimitDropsLongMinMax) {
+  auto schema = velox::ROW(
+      {{"at_limit_col", velox::VARCHAR()},
+       {"over_limit_col", velox::VARCHAR()}});
+  auto nimbleType = convertToNimbleType(*schema);
+
+  ColumnStatistics rowStat(10, 0, 100, 50);
+  StringStatistics atLimitStat(10, 1, 40, 20, "abcd", "wxyz");
+  StringStatistics overLimitStat(10, 2, 60, 30, "abc", "wxyz12345");
+  std::vector<ColumnStatistics*> originalStats{
+      &rowStat, &atLimitStat, &overLimitStat};
+
+  VectorizedFileStats fileStats(
+      originalStats,
+      leafPool_.get(),
+      VectorizedFileStats::Options{.stringStatsLengthLimit = 4});
+  nimble::Buffer buffer(*leafPool_);
+  auto deserialized =
+      VectorizedFileStats::deserialize(fileStats.serialize(buffer), *leafPool_);
+  auto roundTrippedStats = deserialized->toColumnStatistics(schema, nimbleType);
+  ASSERT_EQ(roundTrippedStats.size(), 3);
+
+  auto* actualAtLimitStat = roundTrippedStats[1]->as<StringStatistics>();
+  ASSERT_NE(actualAtLimitStat, nullptr);
+  expectStringStatisticsEqual(atLimitStat, *actualAtLimitStat);
+
+  const StringStatistics expectedOverLimitStat(
+      10, 2, 60, 30, "abc", std::nullopt);
+  auto* actualOverLimitStat = roundTrippedStats[2]->as<StringStatistics>();
+  ASSERT_NE(actualOverLimitStat, nullptr);
+  expectStringStatisticsEqual(expectedOverLimitStat, *actualOverLimitStat);
 }
 
 TEST_F(VectorizedFileStatsTests, schemaBasedRoundTripWithTimestamp) {

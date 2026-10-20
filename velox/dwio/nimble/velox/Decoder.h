@@ -22,6 +22,7 @@
 #include "velox/buffer/Buffer.h"
 #include "velox/common/base/BitUtil.h"
 #include "velox/dwio/nimble/common/Types.h"
+#include "velox/dwio/nimble/velox/RowRange.h"
 
 namespace facebook::nimble {
 
@@ -51,11 +52,25 @@ class Decoder {
       std::vector<velox::BufferPtr>& stringBuffers,
       const velox::bits::Bitmap* scatterOutputBitmap = nullptr) = 0;
 
+  /// Returns the number of rows remaining in the encoded chunk at the
+  /// sequential cursor. Loads that chunk lazily when needed and returns zero
+  /// when the stream has no more chunks.
+  virtual uint32_t remainingRows() = 0;
+
   /// Reads absolute source rows densely into `output` without using or
   /// advancing the sequential decode cursor. Empty `rows` returns zero
   /// without touching `output`.
   virtual uint32_t read(
       std::span<const uint32_t> rows,
+      DataType dataType,
+      void* output,
+      std::function<void*()> getOutputNulls,
+      std::vector<velox::BufferPtr>& stringBuffers) = 0;
+
+  /// Reads ordered, disjoint source ranges densely into `output` without using
+  /// or advancing the sequential decode cursor.
+  virtual uint32_t read(
+      std::span<const RowRange> ranges,
       DataType dataType,
       void* output,
       std::function<void*()> getOutputNulls,

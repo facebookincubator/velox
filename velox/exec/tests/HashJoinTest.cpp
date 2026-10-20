@@ -134,6 +134,323 @@ TEST_P(MultiThreadedHashJoinTest, testJoinWithSpillenabledCancellation) {
       .run();
 }
 
+TEST_P(MultiThreadedHashJoinTest, spillEnabledJoinWithPartialLimit) {
+  if (parallelBuildSideRowsEnabled_) {
+    GTEST_SKIP();
+  }
+
+  auto probeVector = makeRowVector(
+      {"t_key"},
+      {makeFlatVector<int64_t>(1'000, [](auto row) { return row; })});
+  auto buildVector = makeRowVector(
+      {"u_key"}, {makeFlatVector<int64_t>(999, [](auto row) { return row; })});
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan =
+      PlanBuilder(planNodeIdGenerator)
+          .values({probeVector})
+          .localPartition({"t_key"})
+          .hashJoin(
+              {"t_key"},
+              {"u_key"},
+              PlanBuilder(planNodeIdGenerator).values({buildVector}).planNode(),
+              "",
+              {"t_key", "match"},
+              core::JoinType::kLeftSemiProject,
+              true)
+          .filter("not(match)")
+          .project({"t_key"})
+          .limit(0, 1, true)
+          .planNode();
+
+  for (const auto injectSpill : {false, true}) {
+    SCOPED_TRACE(fmt::format("injectSpill: {}", injectSpill));
+    TestScopedSpillInjection scopedSpillInjection(injectSpill ? 100 : 0);
+    auto spillDirectory = TempDirectoryPath::create();
+    auto task = AssertQueryBuilder(plan)
+                    .maxDrivers(numDrivers_)
+                    .spillDirectory(spillDirectory->getPath())
+                    .config(core::QueryConfig::kSpillEnabled, "true")
+                    .config(core::QueryConfig::kJoinSpillEnabled, "true")
+                    .config(core::QueryConfig::kMaxSpillLevel, "2")
+                    .config(core::QueryConfig::kSpillWriteBufferSize, "0")
+                    .assertResults(makeRowVector(
+                        {"t_key"}, {makeFlatVector<int64_t>({999})}));
+    if (injectSpill) {
+      ASSERT_GT(taskSpilledStats(*task).first.spilledPartitions, 0);
+    }
+  }
+}
+
+TEST_P(MultiThreadedHashJoinTest, partialLimitClosesLastProber) {
+  if (numDrivers_ == 1) {
+    GTEST_SKIP();
+  }
+
+  auto probeVector = makeRowVector({"t_key"}, {makeFlatVector<int64_t>({-1})});
+  auto buildVector = makeRowVector(
+      {"u_key"},
+      {makeFlatVector<int64_t>(1'000, [](auto row) { return row; })});
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan =
+      PlanBuilder(planNodeIdGenerator)
+          .values({probeVector})
+          .localPartition({"t_key"})
+          .hashJoin(
+              {"t_key"},
+              {"u_key"},
+              PlanBuilder(planNodeIdGenerator).values({buildVector}).planNode(),
+              "",
+              {"u_key"},
+              core::JoinType::kRight)
+          .limit(0, 1, true)
+          .planNode();
+
+  const std::vector<bool> injectSpills = parallelBuildSideRowsEnabled_
+      ? std::vector<bool>{false}
+      : std::vector<bool>{false, true};
+  for (const auto injectSpill : injectSpills) {
+    SCOPED_TRACE(fmt::format("injectSpill: {}", injectSpill));
+    TestScopedSpillInjection scopedSpillInjection(injectSpill ? 100 : 0);
+    AssertQueryBuilder queryBuilder(plan);
+    queryBuilder.maxDrivers(numDrivers_);
+    auto spillDirectory = TempDirectoryPath::create();
+    if (parallelBuildSideRowsEnabled_) {
+      queryBuilder.config(
+          core::QueryConfig::kParallelOutputJoinBuildRowsEnabled, "true");
+    } else {
+      queryBuilder.spillDirectory(spillDirectory->getPath())
+          .config(core::QueryConfig::kSpillEnabled, "true")
+          .config(core::QueryConfig::kJoinSpillEnabled, "true")
+          .config(core::QueryConfig::kMaxSpillLevel, "2")
+          .config(core::QueryConfig::kSpillWriteBufferSize, "0");
+    }
+
+    std::shared_ptr<Task> task;
+    auto result = queryBuilder.copyResults(pool_.get(), task);
+    ASSERT_EQ(result->size(), 1);
+    auto* buildKeys = result->childAt(0)->as<SimpleVector<int64_t>>();
+    ASSERT_FALSE(buildKeys->isNullAt(0));
+    EXPECT_GE(buildKeys->valueAt(0), 0);
+    EXPECT_LT(buildKeys->valueAt(0), 1'000);
+    if (injectSpill) {
+      ASSERT_GT(taskSpilledStats(*task).first.spilledPartitions, 0);
+    }
+  }
+}
+
+TEST_P(MultiThreadedHashJoinTest, partialLimitClosesProbeBeforeBarrier) {
+  if (numDrivers_ == 1) {
+    GTEST_SKIP();
+  }
+
+  constexpr vector_size_t kBatchSize = 10;
+  constexpr vector_size_t kNumBatches = 100;
+  constexpr vector_size_t kNumBuildRows = kBatchSize * kNumBatches;
+  auto buildVector = makeRowVector(
+      {"u_key"},
+      {makeFlatVector<int64_t>(kNumBuildRows, [](auto row) { return row; })});
+
+  struct TestParam {
+    core::JoinType joinType;
+    bool allProbeRowsMatch;
+    bool injectSpill;
+
+    std::string debugString() const {
+      return fmt::format(
+          "joinType: {}, allProbeRowsMatch: {}, injectSpill: {}",
+          core::JoinTypeName::toName(joinType),
+          allProbeRowsMatch,
+          injectSpill);
+    }
+  };
+
+  std::vector<TestParam> testParams{
+      {core::JoinType::kRight, false, false},
+      {core::JoinType::kRight, true, false},
+      {core::JoinType::kFull, false, false},
+      {core::JoinType::kFull, true, false},
+  };
+  if (!parallelBuildSideRowsEnabled_) {
+    testParams.insert(
+        testParams.end(),
+        {
+            {core::JoinType::kRight, false, true},
+            {core::JoinType::kRight, true, true},
+            {core::JoinType::kFull, false, true},
+            {core::JoinType::kFull, true, true},
+        });
+  }
+
+  for (const auto& testParam : testParams) {
+    SCOPED_TRACE(testParam.debugString());
+    std::vector<RowVectorPtr> probeVectors;
+    probeVectors.reserve(kNumBatches);
+    for (vector_size_t batch = 0; batch < kNumBatches; ++batch) {
+      probeVectors.emplace_back(makeRowVector(
+          {"partition_key", "t_key"},
+          {makeConstant<int64_t>(0, kBatchSize),
+           makeFlatVector<int64_t>(kBatchSize, [&](auto row) {
+             const auto key = batch * kBatchSize + row;
+             return testParam.allProbeRowsMatch || key < kBatchSize
+                 ? key
+                 : key + kNumBuildRows;
+           })}));
+    }
+
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    auto plan = PlanBuilder(planNodeIdGenerator)
+                    .values(probeVectors)
+                    // Send all probe input to one driver so that this driver
+                    // closes early while its peers wait at the barrier.
+                    .localPartition({"partition_key"})
+                    .hashJoin(
+                        {"t_key"},
+                        {"u_key"},
+                        PlanBuilder(planNodeIdGenerator)
+                            .values({buildVector})
+                            .planNode(),
+                        "",
+                        {"t_key", "u_key"},
+                        testParam.joinType)
+                    .limit(0, 5, true)
+                    .planNode();
+
+    createDuckDbTable("t", probeVectors);
+    createDuckDbTable("u", {buildVector});
+    const auto fullResults = duckDbQueryRunner_.execute(
+        fmt::format(
+            "SELECT t.t_key, u.u_key FROM t {} JOIN u "
+            "ON t.t_key = u.u_key",
+            testParam.joinType == core::JoinType::kRight ? "RIGHT"
+                                                         : "FULL OUTER"),
+        plan->outputType());
+
+    TestScopedSpillInjection scopedSpillInjection(
+        testParam.injectSpill ? 100 : 0);
+    AssertQueryBuilder queryBuilder(plan);
+    queryBuilder.maxDrivers(numDrivers_);
+    auto spillDirectory = TempDirectoryPath::create();
+    if (parallelBuildSideRowsEnabled_) {
+      queryBuilder.config(
+          core::QueryConfig::kParallelOutputJoinBuildRowsEnabled, "true");
+    } else {
+      queryBuilder.spillDirectory(spillDirectory->getPath())
+          .config(core::QueryConfig::kSpillEnabled, "true")
+          .config(core::QueryConfig::kJoinSpillEnabled, "true")
+          .config(core::QueryConfig::kMaxSpillLevel, "2")
+          .config(core::QueryConfig::kSpillWriteBufferSize, "0");
+    }
+
+    std::shared_ptr<Task> task;
+    auto result = queryBuilder.copyResults(pool_.get(), task);
+    ASSERT_GT(result->size(), 0);
+    ASSERT_LE(result->size(), 5 * numDrivers_);
+
+    auto remainingExpected = fullResults;
+    const auto actualRows = materialize(result);
+    for (vector_size_t row = 0; row < actualRows.size(); ++row) {
+      const auto expectedIt = remainingExpected.find(actualRows[row]);
+      ASSERT_NE(expectedIt, remainingExpected.end())
+          << "Unexpected result row: " << result->toString(row);
+      remainingExpected.erase(expectedIt);
+    }
+
+    if (testParam.injectSpill) {
+      ASSERT_GT(taskSpilledStats(*task).first.spilledPartitions, 0);
+    }
+  }
+}
+
+TEST_P(MultiThreadedHashJoinTest, partialLimitClosesProbeBetweenSpillRounds) {
+  if (numDrivers_ == 1 || parallelBuildSideRowsEnabled_) {
+    GTEST_SKIP();
+  }
+
+  auto probeVector = makeRowVector(
+      {"t_key"},
+      {makeFlatVector<int64_t>(500, [](auto row) { return row * 2; })});
+  auto buildVector = makeRowVector(
+      {"u_key"},
+      {makeFlatVector<int64_t>(1'000, [](auto row) { return row; })});
+  createDuckDbTable("t", {probeVector});
+  createDuckDbTable("u", {buildVector});
+
+  for (const auto joinType :
+       {core::JoinType::kRightAnti,
+        core::JoinType::kRightSemiFilter,
+        core::JoinType::kRightSemiProject}) {
+    SCOPED_TRACE(
+        fmt::format("joinType: {}", core::JoinTypeName::toName(joinType)));
+
+    std::vector<std::string> outputLayout{"u_key"};
+    std::string referenceSql;
+    if (joinType == core::JoinType::kRightAnti) {
+      referenceSql =
+          "SELECT u.u_key FROM u WHERE NOT EXISTS "
+          "(SELECT 1 FROM t WHERE t.t_key = u.u_key)";
+    } else if (joinType == core::JoinType::kRightSemiFilter) {
+      referenceSql =
+          "SELECT u.u_key FROM u WHERE EXISTS "
+          "(SELECT 1 FROM t WHERE t.t_key = u.u_key)";
+    } else {
+      outputLayout.emplace_back("match");
+      referenceSql =
+          "SELECT u.u_key, EXISTS "
+          "(SELECT 1 FROM t WHERE t.t_key = u.u_key) FROM u";
+    }
+
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    auto plan = PlanBuilder(planNodeIdGenerator)
+                    .values({probeVector})
+                    .localPartition({"t_key"})
+                    .hashJoin(
+                        {"t_key"},
+                        {"u_key"},
+                        PlanBuilder(planNodeIdGenerator)
+                            .values({buildVector})
+                            .planNode(),
+                        "",
+                        outputLayout,
+                        joinType)
+                    .limit(0, 5, true)
+                    .planNode();
+    const auto fullResults =
+        duckDbQueryRunner_.execute(referenceSql, plan->outputType());
+
+    TestScopedSpillInjection scopedSpillInjection(100);
+    auto spillDirectory = TempDirectoryPath::create();
+    std::shared_ptr<Task> task;
+    auto result = AssertQueryBuilder(plan)
+                      .maxDrivers(numDrivers_)
+                      .spillDirectory(spillDirectory->getPath())
+                      .config(core::QueryConfig::kSpillEnabled, "true")
+                      .config(core::QueryConfig::kJoinSpillEnabled, "true")
+                      .config(core::QueryConfig::kMaxSpillLevel, "2")
+                      .config(core::QueryConfig::kSpillWriteBufferSize, "0")
+                      .copyResults(pool_.get(), task);
+    ASSERT_GT(result->size(), 0);
+    ASSERT_LE(result->size(), 5 * numDrivers_);
+
+    auto remainingExpected = fullResults;
+    const auto actualRows = materialize(result);
+    for (vector_size_t row = 0; row < actualRows.size(); ++row) {
+      const auto expectedIt = remainingExpected.find(actualRows[row]);
+      ASSERT_NE(expectedIt, remainingExpected.end())
+          << "Unexpected result row: " << result->toString(row);
+      remainingExpected.erase(expectedIt);
+    }
+
+    const auto spillStats = taskSpilledStats(*task);
+    ASSERT_GT(spillStats.first.spilledPartitions, 0);
+    ASSERT_GT(spillStats.second.spilledRows, 0);
+    if (joinType != core::JoinType::kRightAnti) {
+      EXPECT_GT(result->size(), 5);
+    }
+  }
+}
+
 TEST_P(MultiThreadedHashJoinTest, emptyBuild) {
   const std::vector<bool> finishOnEmptys = {false, true};
   for (const auto finishOnEmpty : finishOnEmptys) {

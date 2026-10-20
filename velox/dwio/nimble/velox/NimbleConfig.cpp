@@ -325,11 +325,37 @@ std::map<uint64_t, float> parseGrowthConfigMap(const std::string& str) {
     "nimble.chunking.writer.max.chunk.size",
     kChunkingWriterMaxChunkSize);
 
+/// Chunks a stream once it exceeds the max chunk size, instead of waiting for
+/// the writer to also be under aggregate memory pressure. Changes chunk and
+/// stripe boundaries, so it is opt-in.
+/* static */ Config::Entry<bool> Config::CHUNKING_WRITER_EAGER_CHUNKING(
+    "nimble.chunking.writer.eager.chunking",
+    false);
+
 /// Used in place of CHUNKING_WRITER_MAX_CHUNK_SIZE for large schema tables.
 /* static */ Config::Entry<uint64_t>
     Config::CHUNKING_WRITER_WIDE_SCHEMA_MAX_CHUNK_SIZE(
         "nimble.chunking.writer.wide.schema.max.chunk.size",
         kChunkingWriterWideSchemaMaxChunkSize);
+
+/* static */ Config::Entry<const std::vector<std::string>> Config::FSST_COLUMNS(
+    "nimble.fsst.columns",
+    {},
+    [](const std::vector<std::string>& val) { return folly::join(",", val); },
+    [](const std::string& /* key */, const std::string& val) {
+      return parseVector<std::string>(val);
+    });
+
+/* static */ Config::Entry<const std::vector<std::string>>
+    Config::SUBINTSPLIT_COLUMNS(
+        "nimble.subintsplit.columns",
+        {},
+        [](const std::vector<std::string>& val) {
+          return folly::join(",", val);
+        },
+        [](const std::string& /* key */, const std::string& val) {
+          return parseVector<std::string>(val);
+        });
 
 /* static */ Config::Entry<std::string> Config::FLUSH_POLICY_CONFIG(
     "nimble.flush_policy_config",
@@ -406,6 +432,11 @@ std::map<uint64_t, float> parseGrowthConfigMap(const std::string& str) {
     "nimble.stats.enable_vectorized",
     true);
 
+/* static */ Config::Entry<uint32_t>
+    Config::VECTORIZED_STATS_STRING_LENGTH_LIMIT(
+        "nimble.vectorized.stats.string_length_limit",
+        64);
+
 /* static */ Config::Entry<bool> Config::ENABLE_ENCODING_SELECTION_CACHE(
     "nimble.encoding.enable_selection_cache",
     false);
@@ -454,5 +485,9 @@ std::map<uint64_t, float> parseGrowthConfigMap(const std::string& str) {
 
 /* static */ Config::Entry<bool> Config::SKIP_CONSTANT_FLATMAP_IN_MAP_STREAMS(
     "nimble.flatmap.skip_constant_in_map_streams",
+    false);
+
+/* static */ Config::Entry<bool> Config::ENABLE_STREAM_CHECKSUMS(
+    "nimble.stream_checksums.enabled",
     false);
 } // namespace facebook::nimble

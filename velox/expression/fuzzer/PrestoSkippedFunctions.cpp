@@ -81,8 +81,6 @@ const std::unordered_set<std::string>& prestoSkippedFunctions() {
       // it hits integer overflows when the arguments are very large.
       // https://github.com/facebookincubator/velox/issues/11802
       "inverse_beta_cdf",
-      // https://github.com/facebookincubator/velox/issues/13047
-      "inverse_poisson_cdf",
       "map_subset", // https://github.com/facebookincubator/velox/issues/12654
       // JSON not supported, Real doesn't match exactly, etc.
       "array_join(array(json),varchar) -> varchar",
@@ -200,6 +198,7 @@ const std::unordered_set<std::string>& prestoSkippedFunctionsSOT() {
       "map_update", // Velox-only function, not available in Presto
       "map_trim_values", // Velox-only function, not available in Presto
       "map_subset_key_in_range", // Velox-only function, not available in Presto
+      "at_timezone_convert", // Velox-only function, not available in Presto
       "noisy_empty_approx_set_sfm", // non-deterministic because of privacy.
       // https://github.com/facebookincubator/velox/issues/11034
       "cast(real) -> varchar",
@@ -294,7 +293,6 @@ const std::unordered_set<std::string>& prestoSkippedFunctionsSOT() {
       "subscript", // https://github.com/facebookincubator/velox/issues/12959
       "reduce", // T220595632
       "inverse_binomial_cdf", // https://github.com/facebookincubator/velox/issues/12981
-      "inverse_poisson_cdf", // https://github.com/facebookincubator/velox/issues/12982
       // https://github.com/facebookincubator/velox/issues/13002
       "ceiling",
       "ceil",

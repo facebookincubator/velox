@@ -332,7 +332,8 @@ void CompileState::tryFilterProject(
     RowTypePtr& outputType,
     int32_t& nodeIndex) {
   auto inputType = outputType;
-  auto filterProject = reinterpret_cast<exec::FilterProject*>(op);
+  auto* filterProject = op->as<exec::FilterProject>();
+  VELOX_CHECK_NOT_NULL(filterProject);
   outputType = driverFactory_.planNodes[nodeIndex]->outputType();
   auto data = filterProject->exprsAndProjection();
   auto& identityProjections = filterProject->identityProjections();
@@ -401,14 +402,15 @@ bool CompileState::tryPlanOperator(
     auto* state = newState(StateKind::kHashBuild, node->id(), "");
     step->state = state;
     step->id = atoi(node->id().c_str());
-    step->joinBridge = reinterpret_cast<exec::HashBuild*>(op)->joinBridge();
+    auto* build = op->as<exec::HashBuild>();
+    VELOX_CHECK_NOT_NULL(build);
+    step->joinBridge = build->joinBridge();
     auto& keys = node->rightKeys();
     for (auto i = 0; i < keys.size(); ++i) {
       step->keys.push_back(
           fieldToOperand(*toSubfield(keys[i]->name()), &topScope_));
     }
     auto& rightType = node->sources()[1]->outputType();
-    auto* build = dynamic_cast<exec::HashBuild*>(op);
     for (auto i : build->dependentChannels()) {
       auto& name = rightType->nameOf(i);
       step->dependent.push_back(fieldToOperand(*toSubfield(name), &topScope_));
@@ -419,7 +421,8 @@ bool CompileState::tryPlanOperator(
     // A join build has no output columns.
     segments_.back().outputType = ROW({}, {});
   } else if (name == "HashProbe") {
-    auto* probe = reinterpret_cast<exec::HashProbe*>(op);
+    auto* probe = op->as<exec::HashProbe>();
+    VELOX_CHECK_NOT_NULL(probe);
     auto* node = dynamic_cast<const core::HashJoinNode*>(
         driverFactory_.planNodes[nodeIndex].get());
     VELOX_CHECK_NOT_NULL(node);
@@ -440,7 +443,7 @@ bool CompileState::tryPlanOperator(
     step->expand = expand;
     expand->nthWrap = wrapId_++;
     expand->state = step->state;
-    expand->joinBridge = reinterpret_cast<exec::HashProbe*>(op)->joinBridge();
+    expand->joinBridge = probe->joinBridge();
     expand->planNodeId = node->id();
     expand->id = step->id;
     expand->tableType = exec::HashProbe::makeTableType(

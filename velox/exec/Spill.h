@@ -73,9 +73,9 @@ class SpillMergeStream : public MergeStream {
 
   void pop();
 
-  const RowVector& current() const {
+  const RowVectorPtr& current() const {
     VELOX_CHECK(!closed_);
-    return *rowVector_;
+    return rowVector_;
   }
 
   /// Invoked to get the current row index in 'rowVector_'. If 'isLastRow' is

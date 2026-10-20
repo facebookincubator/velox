@@ -48,12 +48,11 @@ void IndexWriter::validateNoNullKeys(
 }
 
 // static
-void IndexWriter::validateKeyStreamEncodingLayout(
-    const EncodingLayout& layout) {
+void IndexWriter::validateFlatKeyEncodingLayout(const EncodingLayout& layout) {
   NIMBLE_USER_CHECK(
       layout.encodingType() == EncodingType::Prefix ||
           layout.encodingType() == EncodingType::Trivial,
-      "Index key stream only supports Prefix or Trivial encoding, but got: {}",
+      "Unsupported flat key encoding: {}",
       layout.encodingType());
 }
 

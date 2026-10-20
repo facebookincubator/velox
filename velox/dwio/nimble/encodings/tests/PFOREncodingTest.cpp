@@ -16,6 +16,7 @@
 #include "velox/dwio/nimble/encodings/PFOREncoding.h"
 
 #include <fmt/core.h>
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include <limits>
 #include <random>
@@ -116,9 +117,7 @@ class PFOREncodingTest : public ::testing::Test {
 
     std::vector<T> decoded(values.size());
     encoding->materialize(static_cast<uint32_t>(values.size()), decoded.data());
-    for (size_t i = 0; i < values.size(); ++i) {
-      EXPECT_EQ(decoded[i], values[i]) << "mismatch at index " << i;
-    }
+    EXPECT_THAT(decoded, testing::ElementsAreArray(values));
   }
 
   std::shared_ptr<velox::memory::MemoryPool> pool_;
@@ -153,7 +152,7 @@ TYPED_TEST(PFOREncodingTest, readerFactoriesDecodeExistingData) {
     std::vector<T> decoded(values.size());
     encoding->materialize(
         static_cast<uint32_t>(decoded.size()), decoded.data());
-    EXPECT_EQ(decoded, values);
+    EXPECT_THAT(decoded, testing::ElementsAreArray(values));
   }
 }
 
@@ -195,6 +194,41 @@ TYPED_TEST(PFOREncodingTest, sparseOutliers) {
   }
 }
 
+TEST(PFOREncodingBufferPoolTest, noExceptionsLeavesScratchBuffersAvailable) {
+  using Value = uint32_t;
+  using EncodingType = PFOREncoding<Value>;
+  auto pool = velox::memory::deprecatedAddDefaultLeafMemoryPool();
+  velox::BufferPool bufferPool{velox::BufferPool::kDefaultCapacity};
+  for (uint32_t i = 0; i < 2; ++i) {
+    Vector<Value> scratch{pool.get()};
+    scratch.resize(32);
+    bufferPool.release(scratch.releaseBuffer());
+  }
+  const Encoding::Options options{.bufferPool = &bufferPool};
+  std::function<void*(uint32_t)> stringBufferFactory;
+
+  for (const auto constant : {false, true}) {
+    SCOPED_TRACE(constant);
+    Vector<Value> input{pool.get()};
+    for (uint32_t i = 0; i < 200; ++i) {
+      input.push_back(constant ? 7 : 100 + i % 64);
+    }
+    Buffer encodeBuffer{*pool};
+    const auto encoded = Encoder<EncodingType>::encode(encodeBuffer, input);
+    ASSERT_EQ(readPforWireInfo(encoded, false).numExceptions, 0);
+    const auto numAllocs = pool->stats().numAllocs;
+    {
+      EncodingType encoding{*pool, encoded, stringBufferFactory, options};
+      EXPECT_EQ(bufferPool.size(), 2);
+      std::vector<Value> output(input.size());
+      encoding.materialize(static_cast<uint32_t>(input.size()), output.data());
+      EXPECT_THAT(output, testing::ElementsAreArray(input));
+      EXPECT_EQ(pool->stats().numAllocs, numAllocs);
+    }
+    EXPECT_EQ(bufferPool.size(), 2);
+  }
+}
+
 TEST(PFOREncodingBufferPoolTest, reusesExceptionBuffers) {
   using Value = uint64_t;
   using EncodingType = PFOREncoding<Value>;
@@ -227,7 +261,7 @@ TEST(PFOREncodingBufferPoolTest, reusesExceptionBuffers) {
         options};
     std::vector<Value> output(input.size());
     encoding.materialize(static_cast<uint32_t>(input.size()), output.data());
-    EXPECT_EQ(input, output);
+    EXPECT_THAT(output, testing::ElementsAreArray(input));
   };
 
   decodeAndVerify();
@@ -291,8 +325,9 @@ TEST(PFOREncodingBufferPoolTest, sliceReturnsScratchBufferToPool) {
   EncodingType encoding{*pool, sliced, nullptr, options};
   std::vector<Value> output(128);
   encoding.materialize(static_cast<uint32_t>(output.size()), output.data());
-  EXPECT_EQ(
-      output, std::vector<Value>(input.begin() + 17, input.begin() + 17 + 128));
+  EXPECT_THAT(
+      output,
+      testing::ElementsAreArray(input.begin() + 17, input.begin() + 145));
 }
 
 struct PforBitWidthStorageParam {
@@ -348,7 +383,7 @@ TEST_P(PforBitWidthStorageTest, storesExpectedBasePayloadWidth) {
       EncodingFactory().create(*pool, encodedStorage, nullptr, options);
   std::vector<uint32_t> decoded(values.size());
   encoding->materialize(static_cast<uint32_t>(decoded.size()), decoded.data());
-  EXPECT_EQ(decoded, values);
+  EXPECT_THAT(decoded, testing::ElementsAreArray(values));
 }
 
 INSTANTIATE_TEST_SUITE_P(
@@ -411,28 +446,24 @@ TYPED_TEST(PFOREncodingTest, skipAndMaterialize) {
   encoding->reset();
   std::vector<T> chunk(50);
   encoding->materialize(50, chunk.data());
-  for (uint32_t i = 0; i < 50; ++i) {
-    EXPECT_EQ(chunk[i], values[i]);
-  }
+  EXPECT_THAT(
+      chunk, testing::ElementsAreArray(values.begin(), values.begin() + 50));
   encoding->skip(75);
   encoding->materialize(50, chunk.data());
-  for (uint32_t i = 0; i < 50; ++i) {
-    EXPECT_EQ(chunk[i], values[125 + i]) << "i=" << i;
-  }
+  EXPECT_THAT(
+      chunk,
+      testing::ElementsAreArray(values.begin() + 125, values.begin() + 175));
   // 50 read + 75 skip + 50 read + 75 skip + 50 read == 300 == values.size()
   encoding->skip(75);
   encoding->materialize(50, chunk.data());
-  for (uint32_t i = 0; i < 50; ++i) {
-    EXPECT_EQ(chunk[i], values[250 + i]) << "i=" << i;
-  }
+  EXPECT_THAT(
+      chunk, testing::ElementsAreArray(values.begin() + 250, values.end()));
 
   // Reset must restore all cursors so a second pass produces identical output.
   encoding->reset();
   std::vector<T> all(values.size());
   encoding->materialize(static_cast<uint32_t>(values.size()), all.data());
-  for (size_t i = 0; i < values.size(); ++i) {
-    EXPECT_EQ(all[i], values[i]) << "after-reset i=" << i;
-  }
+  EXPECT_THAT(all, testing::ElementsAreArray(values));
 }
 
 TYPED_TEST(PFOREncodingTest, slice) {
@@ -483,9 +514,9 @@ TYPED_TEST(PFOREncodingTest, slice) {
 
       std::vector<T> output(range.length);
       encoding.materialize(range.length, output.data());
-      EXPECT_EQ(
+      EXPECT_THAT(
           output,
-          std::vector<T>(
+          testing::ElementsAreArray(
               values.begin() + range.offset,
               values.begin() + range.offset + range.length));
     }
@@ -639,10 +670,7 @@ class PFOREncodingFuzzerTest : public ::testing::Test {
       std::vector<T> decoded(values.size());
       encoding->materialize(
           static_cast<uint32_t>(values.size()), decoded.data());
-      for (size_t i = 0; i < values.size(); ++i) {
-        ASSERT_EQ(decoded[i], values[i])
-            << "iter=" << iter << " i=" << i << " size=" << numValues;
-      }
+      ASSERT_THAT(decoded, testing::ElementsAreArray(values));
 
       std::uniform_int_distribution<uint32_t> offsetDist(0, numValues - 1);
       const uint32_t sliceOffset = offsetDist(rng);
@@ -658,11 +686,12 @@ class PFOREncodingFuzzerTest : public ::testing::Test {
       PFOREncoding<T> slicedEncoding{*pool_, sliced, nullptr};
       std::vector<T> slicedValues(sliceLength);
       slicedEncoding.materialize(sliceLength, slicedValues.data());
-      for (uint32_t i = 0; i < sliceLength; ++i) {
-        ASSERT_EQ(slicedValues[i], values[sliceOffset + i])
-            << "iter=" << iter << " sliceOffset=" << sliceOffset << " i=" << i
-            << " sliceLength=" << sliceLength;
-      }
+      ASSERT_THAT(
+          slicedValues,
+          testing::ElementsAreArray(
+              values.begin() + sliceOffset,
+              values.begin() + sliceOffset + sliceLength))
+          << "sliceOffset=" << sliceOffset << " sliceLength=" << sliceLength;
 
       // Random skip/materialize sequence.
       encoding->reset();
@@ -682,10 +711,11 @@ class PFOREncodingFuzzerTest : public ::testing::Test {
             std::max<uint32_t>(1, stepDist(rng) % (numValues - cursor + 1));
         std::vector<T> chunk(matCount);
         encoding->materialize(matCount, chunk.data());
-        for (uint32_t i = 0; i < matCount; ++i) {
-          ASSERT_EQ(chunk[i], values[cursor + i])
-              << "iter=" << iter << " cursor=" << cursor << " i=" << i;
-        }
+        ASSERT_THAT(
+            chunk,
+            testing::ElementsAreArray(
+                values.begin() + cursor, values.begin() + cursor + matCount))
+            << "cursor=" << cursor;
         cursor += matCount;
       }
     }
@@ -762,9 +792,10 @@ TYPED_TEST(PFOREncodingTest, sliceWithZeroSourceExceptions) {
 
     std::vector<T> output(100);
     encoding.materialize(100, output.data());
-    for (uint32_t i = 0; i < 100; ++i) {
-      EXPECT_EQ(output[i], valuesVec[10 + i]) << "row " << i;
-    }
+    EXPECT_THAT(
+        output,
+        testing::ElementsAreArray(
+            valuesVec.begin() + 10, valuesVec.begin() + 110));
   }
 }
 
@@ -796,9 +827,10 @@ TYPED_TEST(PFOREncodingTest, sliceEmptyExceptionRange) {
 
     std::vector<T> output(100);
     encoding.materialize(100, output.data());
-    for (uint32_t i = 0; i < 100; ++i) {
-      EXPECT_EQ(output[i], valuesVec[1 + i]) << "row " << i;
-    }
+    EXPECT_THAT(
+        output,
+        testing::ElementsAreArray(
+            valuesVec.begin() + 1, valuesVec.begin() + 101));
   }
 }
 
@@ -893,9 +925,10 @@ TYPED_TEST(PFOREncodingTest, sliceWithTrivialExceptionPositionsFallback) {
     ASSERT_EQ(encoding.rowCount(), 128);
     std::vector<T> output(128);
     encoding.materialize(128, output.data());
-    for (uint32_t i = 0; i < 128; ++i) {
-      EXPECT_EQ(output[i], valuesVec[50 + i]) << "row " << i;
-    }
+    EXPECT_THAT(
+        output,
+        testing::ElementsAreArray(
+            valuesVec.begin() + 50, valuesVec.begin() + 178));
   }
 }
 
@@ -966,9 +999,11 @@ TYPED_TEST(PFOREncodingTest, sliceWithVarintExceptionPositionsFallback) {
     ASSERT_EQ(encoding.rowCount(), kLength);
     std::vector<T> output(kLength);
     encoding.materialize(kLength, output.data());
-    for (uint32_t i = 0; i < kLength; ++i) {
-      EXPECT_EQ(output[i], valuesVec[kOffset + i]) << "row " << i;
-    }
+    EXPECT_THAT(
+        output,
+        testing::ElementsAreArray(
+            valuesVec.begin() + kOffset,
+            valuesVec.begin() + kOffset + kLength));
   }
 }
 

@@ -77,8 +77,9 @@ TEST_F(IndexLookupTest, rangeScanRequest) {
 }
 
 TEST_F(IndexLookupTest, withOptions) {
-  auto request =
-      LookupRequest::pointLookup({"key"}, {.rowRange = RowRange(10, 100)});
+  auto request = LookupRequest::pointLookup(
+      {"key"},
+      std::make_shared<const LookupRequest::Options>(RowRange(10, 100)));
 
   EXPECT_EQ(request.size(), 1);
   EXPECT_TRUE(request.options().rowRange.has_value());

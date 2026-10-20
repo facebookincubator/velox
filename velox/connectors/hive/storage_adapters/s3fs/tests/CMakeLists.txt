@@ -23,6 +23,9 @@ target_link_libraries(
 )
 
 add_executable(velox_s3file_test S3FileSystemTest.cpp S3UtilTest.cpp)
+# Keeps exported branches compatible while the MinIO-to-Silo rename
+# propagates.
+target_compile_definitions(velox_s3file_test PRIVATE minioServer_=siloServer_)
 velox_add_test_headers(velox_s3file_test SiloServer.h S3Test.h)
 add_test(velox_s3file_test velox_s3file_test)
 target_link_libraries(

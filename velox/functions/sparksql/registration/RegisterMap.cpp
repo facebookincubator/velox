@@ -20,7 +20,8 @@
 namespace facebook::velox::functions {
 extern void registerElementAtFunction(
     const std::string& name,
-    bool enableCaching);
+    bool enableCaching,
+    std::string_view defaultOwner = {});
 
 void registerSparkMapFunctions(const std::string& prefix) {
   registerMapFromEntriesFunction(

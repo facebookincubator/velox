@@ -105,7 +105,7 @@ TEST_F(AssignUniqueIdTest, multiBatch) {
   input.reserve(3);
   for (int i = 0; i < 3; ++i) {
     input.push_back(
-        makeRowVector({makeFlatVector<int32_t>(batchSize, folly::identity)}));
+        makeRowVector({makeFlatIdentityVector<int32_t>(batchSize)}));
   }
 
   auto plan = PlanBuilder()
@@ -120,10 +120,9 @@ TEST_F(AssignUniqueIdTest, multiBatch) {
 TEST_F(AssignUniqueIdTest, exceedRequestLimit) {
   vector_size_t requestLimit = 1 << 20L;
   auto input = {
-      makeRowVector(
-          {makeFlatVector<int32_t>(requestLimit - 10, folly::identity)}),
-      makeRowVector({makeFlatVector<int32_t>(100, folly::identity)}),
-      makeRowVector({makeFlatVector<int32_t>(100, folly::identity)}),
+      makeRowVector({makeFlatIdentityVector<int32_t>(requestLimit - 10)}),
+      makeRowVector({makeFlatIdentityVector<int32_t>(100)}),
+      makeRowVector({makeFlatIdentityVector<int32_t>(100)}),
   };
 
   auto plan = PlanBuilder()
@@ -138,8 +137,7 @@ TEST_F(AssignUniqueIdTest, exceedRequestLimit) {
 TEST_F(AssignUniqueIdTest, multiThread) {
   for (int i = 0; i < 3; i++) {
     vector_size_t batchSize = 1000;
-    auto input = {
-        makeRowVector({makeFlatVector<int32_t>(batchSize, folly::identity)})};
+    auto input = {makeRowVector({makeFlatIdentityVector<int32_t>(batchSize)})};
     auto plan = PlanBuilder()
                     .values(input, true)
                     .assignUniqueId()

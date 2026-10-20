@@ -32,6 +32,9 @@ class Aggregate;
 
 class Accumulator {
  public:
+  /// 'destroyFunction' frees the memory the accumulator holds outside each
+  /// group row. May be null when there is nothing to free. Required when
+  /// 'usesExternalMemory' is true.
   Accumulator(
       bool isFixedSize,
       int32_t fixedSize,

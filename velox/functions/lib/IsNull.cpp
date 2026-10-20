@@ -95,8 +95,10 @@ VELOX_DECLARE_VECTOR_FUNCTION_WITH_METADATA(
     exec::VectorFunctionMetadataBuilder().defaultNullBehavior(false).build(),
     std::make_unique<IsNullFunction</*IsNotNUll=*/false>>());
 
-void registerIsNullFunction(const std::string& name) {
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_is_null, name);
+void registerIsNullFunction(
+    const std::string& name,
+    std::string_view defaultOwner) {
+  VELOX_REGISTER_VECTOR_FUNCTION_WITH_OWNER(udf_is_null, name, defaultOwner);
 }
 
 VELOX_DECLARE_VECTOR_FUNCTION_WITH_METADATA(
@@ -105,8 +107,11 @@ VELOX_DECLARE_VECTOR_FUNCTION_WITH_METADATA(
     exec::VectorFunctionMetadataBuilder().defaultNullBehavior(false).build(),
     std::make_unique<IsNullFunction</*IsNotNUll=*/true>>());
 
-void registerIsNotNullFunction(const std::string& name) {
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_is_not_null, name);
+void registerIsNotNullFunction(
+    const std::string& name,
+    std::string_view defaultOwner) {
+  VELOX_REGISTER_VECTOR_FUNCTION_WITH_OWNER(
+      udf_is_not_null, name, defaultOwner);
 }
 
 } // namespace facebook::velox::functions
