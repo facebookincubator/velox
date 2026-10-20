@@ -187,6 +187,15 @@ class Encoding {
     /// FSST is kept only when its final encoded size is at most this fraction
     /// of the original string bytes.
     double fsstCompressionTargetRatio = 0.6;
+
+    /// Makes an encoding view build and keep the structures that make many
+    /// reads cheap, such as offsets, bitmaps and decoded chunks, when it is
+    /// created. Set it for a view that serves many reads, such as a scan or a
+    /// binary search. When unset, the view builds only what one read needs and
+    /// derives the rest for each read, which suits a view that serves a few
+    /// reads and costs more per read. Both settings return the same values, and
+    /// reads stay thread safe. Other encodings ignore it.
+    bool cacheEncodingView{false};
   };
 
   static constexpr int kEncodingTypeOffset =

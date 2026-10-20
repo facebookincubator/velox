@@ -109,6 +109,25 @@ class ModuloPartitionFunctionSpec : public core::PartitionFunctionSpec {
   }
 };
 
+// Returns the id of the Exchange through which an initial plan of the fixed
+// point 'node' reads its upstream.
+core::PlanNodeId initialExchangeId(const core::PlanNodePtr& node) {
+  for (const auto& declaration :
+       node->as<FixedPointNode>()->stateDeclarations()) {
+    if (declaration->initialPlan() == nullptr) {
+      continue;
+    }
+    if (const auto* exchange = core::PlanNode::findFirstNode(
+            declaration->initialPlan().get(),
+            [](const core::PlanNode* planNode) {
+              return planNode->is<core::ExchangeNode>();
+            })) {
+      return exchange->id();
+    }
+  }
+  VELOX_FAIL("No initial plan of the fixed point reads through an Exchange");
+}
+
 class FixedPointTest : public exec::test::HiveConnectorTestBase {
  protected:
   void SetUp() override {
@@ -139,8 +158,7 @@ class FixedPointTest : public exec::test::HiveConnectorTestBase {
   // scheme.  A FixedPointLoop provides no defaults, so the coordinator
   // (here the test) supplies them: producerLocation gives each peer's
   // per-iteration shuffle producer (task id + exchange URI), subTaskId names
-  // this worker's internal sub-tasks.  Callers add upstreamExchangeUri when an
-  // initial plan reads via Exchange.
+  // this worker's internal sub-tasks.
   static const FixedPointOptions& localOptions() {
     static const FixedPointOptions options = [] {
       FixedPointOptions opts;
@@ -267,8 +285,8 @@ class FixedPointTest : public exec::test::HiveConnectorTestBase {
   // the shuffle topology and distributes it via remote splits on the parent
   // tasks; here it chooses all-to-all (every worker reads every worker,
   // including itself).  If 'upstreamPlan' is set, the coordinator also launches
-  // an upstream producer task (with the deterministic upstream id) so that a
-  // worker's Exchange-based initial plan receives its shard from it via
+  // an upstream producer task and adds a remote split for it to each worker's
+  // initial-plan Exchange, so the worker's initial plan receives its shard via
   // shuffle.  If 'initSplitsFor' is set, the coordinator assigns worker d the
   // source splits it returns (e.g. a TableScan's file split) — its initial plan
   // reads its shard from them.  Workers run concurrently (each on its own
@@ -298,19 +316,9 @@ class FixedPointTest : public exec::test::HiveConnectorTestBase {
     exec::TaskPtr upstream;
     if (upstreamPlan != nullptr) {
       // The coordinator names the upstream task (the operator cannot); workers
-      // learn it via options.upstreamExchangeUri below.  "local://" routes it
-      // to the in-process exchange source.
+      // learn it from the remote splits added below.  "local://" routes it to
+      // the in-process exchange source.
       upstream = startUpstreamTask(*upstreamPlan, queryCtx);
-    }
-
-    // The coordinator owns sub-task addressing (the fixed point provides no
-    // defaults): localOptions() supplies the producer ids and internal sub-task
-    // ids in the in-process scheme; add the upstream's task id when an initial
-    // plan reads via Exchange.
-    auto options = localOptions();
-    if (upstream != nullptr) {
-      options.upstreamExchangeUri =
-          [id = upstream->taskId()](const core::PlanNodeId&) { return id; };
     }
 
     // Each worker collects its shard rows into perWorker[d].
@@ -329,7 +337,7 @@ class FixedPointTest : public exec::test::HiveConnectorTestBase {
                   : nullptr,
               .copyResult = false,
               .serialExecution = mode == exec::Task::ExecutionMode::kSerial,
-              .fixedPointOptions = &options,
+              .fixedPointOptions = &localOptions(),
           }));
     }
 
@@ -338,13 +346,18 @@ class FixedPointTest : public exec::test::HiveConnectorTestBase {
     // point derives each peer's per-iteration producer location from its task
     // id via the producerLocation hook.  'initSplitsFor(d)' splits are worker
     // d's initial-plan source splits (e.g. a TableScan file split), forwarded
-    // verbatim; an Exchange initial plan instead uses
-    // options.upstreamExchangeUri.
+    // verbatim; an initial-plan Exchange gets a remote split naming the
+    // upstream task.
     if (node0->requiresSplits()) {
       for (int32_t d = 0; d < numWorkers; ++d) {
         for (int32_t e = 0; e < numWorkers; ++e) {
           cursors[d]->task()->addSplit(
               fixedPointNodeId, remoteSplit(cursors[e]->task()));
+        }
+        if (upstream != nullptr) {
+          const auto exchangeId = initialExchangeId(node0);
+          cursors[d]->task()->addSplit(exchangeId, remoteSplit(upstream));
+          cursors[d]->task()->noMoreSplits(exchangeId);
         }
         if (initSplitsFor != nullptr) {
           // Addressed to the node that reads them, not to the fixed point:
@@ -1875,7 +1888,7 @@ TEST_F(FixedPointTest, kMeansTwoWorkers) {
 // then iterates while shuffling among peers.  The coordinator launches an
 // upstream producer task that emits the full seed and partitions it by key;
 // each worker's initial plan is an Exchange that reads its partition (Phase 1
-// shuffle, fed by a kUpstreamSplitPrefix-tagged split the coordinator adds).
+// shuffle, fed by a remote split the coordinator adds).
 // The workers then iterate, shuffling by key with each other (Phase 2).  This
 // exercises the full path: receive data via shuffle from an upstream task, then
 // iterate while shuffling with each other.
@@ -1934,9 +1947,9 @@ TEST_F(FixedPointTest, initialPlanReceivesShuffle) {
       testing::UnorderedElementsAreArray(expected));
 }
 
-// Initial plan whose Exchange reads several upstream tasks.  Without
-// FixedPointOptions::upstreamExchangeUri, the coordinator adds one remote split
-// per upstream task to the Exchange, as it would outside a fixed point.
+// Initial plan whose Exchange reads several upstream tasks.  The coordinator
+// adds one remote split per upstream task to the Exchange, as it would outside
+// a fixed point.
 TEST_F(FixedPointTest, upstreamSplits) {
   auto schema = ROW({"key", "val"}, BIGINT());
   auto queryCtx = core::QueryCtx::create(cpuExecutor_.get());

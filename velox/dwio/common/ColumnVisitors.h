@@ -1099,8 +1099,11 @@ class DictionaryColumnVisitor
         return;
       }
       if constexpr (std::is_same_v<TFilter, velox::common::IsNotNull>) {
-        auto* begin = (scatter ? scatterRows : super::rows_) + super::rowIndex_;
-        std::copy(begin, begin + numInput, filterHits + numValues);
+        if (numInput > 0) {
+          auto* begin =
+              (scatter ? scatterRows : super::rows_) + super::rowIndex_;
+          std::copy(begin, begin + numInput, filterHits + numValues);
+        }
         if constexpr (!super::kFilterOnly) {
           translateByDict(input, numInput, values + numValues);
         }
