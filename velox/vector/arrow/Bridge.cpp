@@ -2332,6 +2332,8 @@ VectorPtr createShortDecimalVector(
       nullCount);
 }
 
+// Widen Arrow decimal32 values into Velox's 64-bit short-decimal storage.
+// This requires a copy even for viewer imports.
 VectorPtr createShortDecimalVectorFromInt32Decimals(
     memory::MemoryPool* pool,
     const TypePtr& type,
@@ -2339,7 +2341,7 @@ VectorPtr createShortDecimalVectorFromInt32Decimals(
     const int32_t* input,
     vector_size_t length,
     int64_t nullCount) {
-  auto values = AlignedBuffer::allocate<int64_t>(length, pool);
+  auto values = AlignedBuffer::allocate<int64_t>(length, pool, 0);
   auto* rawValues = values->asMutable<int64_t>();
   if (nulls == nullptr) {
     for (vector_size_t i = 0; i < length; ++i) {

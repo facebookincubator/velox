@@ -1516,6 +1516,12 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
           input.begin(), input.end());
       auto expected = vectorMaker_.flatVectorNullable(expectedValues, type);
       facebook::velox::test::assertEqualVectors(expected, actual);
+      const auto* rawValues = actual->asFlatVector<int64_t>()->rawValues();
+      for (vector_size_t i = 0; i < actual->size(); ++i) {
+        if (!input[i].has_value()) {
+          EXPECT_EQ(rawValues[i], 0);
+        }
+      }
     }
   }
 
