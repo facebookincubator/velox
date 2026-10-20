@@ -213,7 +213,7 @@ struct StateValidPredicate {
   }
 };
 
-std::pair<cuda::device_buffer<std::byte>, cudf::size_type>
+std::pair<cuda::device_buffer<cudf::bitmask_type>, cudf::size_type>
 buildStateValidityMaskImpl(
     const cudf::column_view& sumCol,
     const cudf::column_view& countCol,
@@ -468,7 +468,7 @@ void packDecimalSumState(
           sumCol, counts, offsetsView, chars, numRows, stream});
 }
 
-std::pair<cuda::device_buffer<std::byte>, cudf::size_type>
+std::pair<cuda::device_buffer<cudf::bitmask_type>, cudf::size_type>
 buildStateValidityMask(
     const cudf::column_view& sumCol,
     const cudf::column_view& countCol,

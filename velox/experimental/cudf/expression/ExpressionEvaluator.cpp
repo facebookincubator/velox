@@ -2969,7 +2969,7 @@ std::vector<size_t> conditionalOperandIndex(const core::TypedExprPtr& expr) {
 /// Rows where copy_if_else takes the branch chosen by \p takeWhenTrue. It
 /// selects `(valid(i) and condition[i]) ? then : else`, so a null condition row
 /// belongs to the else branch alone.
-cuda::device_buffer<std::byte> makeBranchRowMask(
+cuda::device_buffer<cudf::bitmask_type> makeBranchRowMask(
     const cudf::column_view& condition,
     bool takeWhenTrue,
     cuda::stream_ref stream,
@@ -2999,7 +2999,7 @@ cuda::device_buffer<std::byte> makeBranchRowMask(
 /// result can itself be a view (e.g. a bare field reference).
 struct MaskedInputs {
   std::vector<cudf::column_view> views;
-  std::vector<cuda::device_buffer<std::byte>> masks;
+  std::vector<cuda::device_buffer<cudf::bitmask_type>> masks;
 };
 
 MaskedInputs maskInputRows(
@@ -3049,7 +3049,7 @@ MaskedInputs maskInputRows(
         input.type(),
         input.size(),
         input.head<void>(),
-        reinterpret_cast<const cudf::bitmask_type*>(masked.masks.back().data()),
+        masked.masks.back().data(),
         nullCount,
         0,
         children);
@@ -3108,7 +3108,7 @@ ColumnOrView FunctionExpression::eval(
 
     // Borrowed by the masked views until after function_->eval.
     std::vector<MaskedInputs> branchInputs;
-    std::vector<cuda::device_buffer<std::byte>> branchRowMasks;
+    std::vector<cuda::device_buffer<cudf::bitmask_type>> branchRowMasks;
 
     // Operand 0 is the condition, 1 and 2 the branches. Not positionally
     // aligned with subexpressions_, which omits constant branches.
@@ -3138,11 +3138,7 @@ ColumnOrView FunctionExpression::eval(
             stream,
             mr));
         branchInputs.push_back(maskInputRows(
-            inputColumnViews,
-            reinterpret_cast<const cudf::bitmask_type*>(
-                branchRowMasks.back().data()),
-            stream,
-            mr));
+            inputColumnViews, branchRowMasks.back().data(), stream, mr));
         subexprResults.push_back(
             subexpressions_[branch]->eval(
                 branchInputs.back().views, stream, mr));

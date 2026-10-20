@@ -60,7 +60,7 @@ cudf::size_type countNulls(const std::vector<bool>& valid) {
   return static_cast<cudf::size_type>(nullCount);
 }
 
-cuda::device_buffer<std::byte> makeNullMask(
+cuda::device_buffer<cudf::bitmask_type> makeNullMask(
     const std::vector<bool>& valid,
     cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {

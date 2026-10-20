@@ -221,7 +221,11 @@ std::unique_ptr<cudf::column> decimalDivide(
       cudf::memory_resources{mr, get_temp_mr()});
 
   // Rows where either input is null are null in the result without failing.
-  rmm::device_buffer activeMask{0, stream, get_temp_mr()};
+  auto activeMask = cudf::create_null_mask(
+      0,
+      cudf::mask_state::UNALLOCATED,
+      stream,
+      cudf::memory_resources{get_temp_mr(), get_temp_mr()});
   cudf::size_type inputNullCount = 0;
   if (lhs.has_nulls() || rhs.has_nulls()) {
     std::tie(activeMask, inputNullCount) = cudf::bitmask_and(
@@ -230,11 +234,7 @@ std::unique_ptr<cudf::column> decimalDivide(
         cudf::memory_resources{get_temp_mr(), get_temp_mr()});
   }
   checkDecimalDivideResult(*result, inputNullCount, [&] {
-    return hasActiveZeroDivisor(
-        rhs,
-        static_cast<cudf::bitmask_type const*>(activeMask.data()),
-        inputNullCount,
-        stream);
+    return hasActiveZeroDivisor(rhs, activeMask.data(), inputNullCount, stream);
   });
   return result;
 }
