@@ -35,6 +35,7 @@
 #include <arrow/io/interfaces.h>
 #include <arrow/table.h>
 
+#include <algorithm>
 #include <cstdlib>
 #include <cstring>
 
@@ -131,6 +132,35 @@ cudf::data_type veloxToCudfDataType(const TypePtr& type) {
 
 bool isTypeSupportedByCudf(const TypePtr& type) {
   return tryVeloxToCudfDataType(type).has_value();
+}
+
+bool containsCustomComparison(const TypePtr& type) {
+  if (type->providesCustomComparison()) {
+    return true;
+  }
+  for (uint32_t i = 0; i < type->size(); ++i) {
+    if (containsCustomComparison(type->childAt(i))) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool containsCustomComparison(const core::TypedExprPtr& expression) {
+  if (containsCustomComparison(expression->type())) {
+    return true;
+  }
+  const auto& inputs = expression->inputs();
+  return std::any_of(inputs.begin(), inputs.end(), [](const auto& input) {
+    return containsCustomComparison(input);
+  });
+}
+
+bool containsCustomComparison(
+    const std::vector<core::FieldAccessTypedExprPtr>& keys) {
+  return std::any_of(keys.begin(), keys.end(), [](const auto& key) {
+    return containsCustomComparison(key->type());
+  });
 }
 
 namespace with_arrow {
