@@ -54,6 +54,15 @@ class MapFromEntriesTest : public SparkFunctionBaseTest {
     auto result = evaluate(expr, makeRowVector({input}));
     assertEqualVectors(expected, result);
   }
+
+  // Sets the Spark 'spark.sql.mapKeyDedupPolicy' equivalent query config.
+  // true corresponds to EXCEPTION, false to LAST_WIN.
+  void setThrowExceptionOnDuplicateMapKeys(bool value) {
+    queryCtx_->testingOverrideConfigUnsafe({
+        {core::QueryConfig::kThrowExceptionOnDuplicateMapKeys,
+         value ? "true" : "false"},
+    });
+  }
 };
 } // namespace
 
@@ -159,5 +168,103 @@ TEST_F(MapFromEntriesTest, nullRowEntriesWithSmallerChildren) {
   VELOX_ASSERT_THROW(
       evaluate("map_from_entries(c0)", makeRowVector({arrayVector})),
       "map key cannot be null");
+}
+
+TEST_F(MapFromEntriesTest, duplicateKeysThrow) {
+  setThrowExceptionOnDuplicateMapKeys(true);
+
+  auto rowType = ROW({INTEGER(), INTEGER()});
+  std::vector<std::vector<std::optional<std::tuple<int32_t, int32_t>>>> data = {
+      {{{1, 10}}, {{1, 11}}},
+      {{{2, 22}}},
+  };
+  auto input = makeArrayOfRowVector(data, rowType);
+  VELOX_ASSERT_USER_THROW(
+      evaluate("map_from_entries(c0)", makeRowVector({input})),
+      "Duplicate map keys (1) are not allowed");
+}
+
+TEST_F(MapFromEntriesTest, duplicateKeysLastWin) {
+  setThrowExceptionOnDuplicateMapKeys(false);
+
+  auto rowType = ROW({INTEGER(), INTEGER()});
+  {
+    // A repeated key takes the value of its last occurrence. Distinct keys and
+    // empty arrays are unaffected.
+    std::vector<std::vector<std::optional<std::tuple<int32_t, int32_t>>>> data =
+        {
+            {{{1, 10}}, {{2, 20}}, {{1, 11}}},
+            {{{2, 22}}},
+            {{{3, 30}}, {{3, 31}}, {{3, 32}}},
+            {},
+            {{{4, 40}}, {{5, 50}}, {{4, 41}}, {{5, 51}}},
+        };
+    auto input = makeArrayOfRowVector(data, rowType);
+    auto expected = makeMapVectorFromJson<int32_t, int32_t>({
+        "{1: 11, 2: 20}",
+        "{2: 22}",
+        "{3: 32}",
+        "{}",
+        "{4: 41, 5: 51}",
+    });
+    verifyMapFromEntries(input, expected);
+  }
+  {
+    // A row with a null entry is still null, and does not disturb the
+    // deduplication of its neighbours.
+    std::vector<std::vector<std::optional<std::tuple<int32_t, int32_t>>>> data =
+        {
+            {{{1, 10}}, std::nullopt, {{1, 11}}},
+            {{{1, 10}}, {{1, 11}}},
+        };
+    auto input = makeArrayOfRowVector(data, rowType);
+    auto expected = makeMapVectorFromJson<int32_t, int32_t>({
+        "null",
+        "{1: 11}",
+    });
+    verifyMapFromEntries(input, expected);
+  }
+  {
+    // A null key still fails the row.
+    std::vector<std::vector<variant>> data = {
+        {variant::row({1, 10}),
+         variant::row({variant::null(TypeKind::INTEGER), 0})},
+    };
+    auto input = makeArrayOfRowVector(rowType, data);
+    VELOX_ASSERT_THROW(
+        evaluate("map_from_entries(c0)", makeRowVector({input})),
+        "map key cannot be null");
+  }
+}
+
+TEST_F(MapFromEntriesTest, lastWinPreservesFirstKeyPosition) {
+  setThrowExceptionOnDuplicateMapKeys(false);
+
+  // Map equality ignores entry order, so pin the position through map_keys.
+  auto rowType = ROW({INTEGER(), INTEGER()});
+  std::vector<std::vector<std::optional<std::tuple<int32_t, int32_t>>>> data = {
+      {{{2, 20}}, {{1, 10}}, {{2, 21}}},
+  };
+  auto input = makeArrayOfRowVector(data, rowType);
+  auto result = evaluate<ArrayVector>(
+      "map_keys(map_from_entries(c0))", makeRowVector({input}));
+  assertEqualVectors(makeArrayVector<int32_t>({{2, 1}}), result);
+}
+
+TEST_F(MapFromEntriesTest, lastWinConstantInput) {
+  setThrowExceptionOnDuplicateMapKeys(false);
+
+  auto rowType = ROW({INTEGER(), INTEGER()});
+  std::vector<std::vector<std::optional<std::tuple<int32_t, int32_t>>>> data = {
+      {{{1, 10}}, {{1, 11}}, {{2, 20}}},
+  };
+  auto input =
+      BaseVector::wrapInConstant(3, 0, makeArrayOfRowVector(data, rowType));
+  auto expected = makeMapVectorFromJson<int32_t, int32_t>({
+      "{1: 11, 2: 20}",
+      "{1: 11, 2: 20}",
+      "{1: 11, 2: 20}",
+  });
+  verifyMapFromEntries(input, expected);
 }
 } // namespace facebook::velox::functions::sparksql::test

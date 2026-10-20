@@ -155,6 +155,22 @@ TEST_F(MapFromEntriesTest, duplicateKeys) {
   verifyMapFromEntries({input}, expected, "C0", true);
 }
 
+TEST_F(MapFromEntriesTest, duplicateKeysIgnoreSparkDedupConfig) {
+  // The duplicate key config only applies to the Spark registration. Presto's
+  // map_from_entries always rejects a repeated key.
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kThrowExceptionOnDuplicateMapKeys, "false"}});
+
+  auto rowType = ROW({INTEGER(), INTEGER()});
+  std::vector<std::vector<std::optional<std::tuple<int32_t, int32_t>>>> data = {
+      {{{1, 10}}, {{1, 11}}},
+  };
+  auto input = makeArrayOfRowVector(data, rowType);
+  VELOX_ASSERT_THROW(
+      evaluateExpr("map_from_entries(C0)", {input}),
+      "Duplicate map keys (1) are not allowed");
+}
+
 TEST_F(MapFromEntriesTest, nullValues) {
   auto rowType = ROW({INTEGER(), INTEGER()});
   std::vector<std::vector<variant>> data = {

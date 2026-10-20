@@ -25,7 +25,9 @@ extern void registerElementAtFunction(
 
 void registerSparkMapFunctions(const std::string& prefix) {
   registerMapFromEntriesFunction(
-      prefix + "map_from_entries", /*throwForNull=*/false);
+      prefix + "map_from_entries",
+      /*throwForNull=*/false,
+      /*honorDuplicateKeysConfig=*/true);
   // Spark and Presto share map_filter and transform_values: the lambda
   // expression corresponds to the function body, arguments to the signature.
   VELOX_REGISTER_VECTOR_FUNCTION(udf_map_filter, prefix + "map_filter");

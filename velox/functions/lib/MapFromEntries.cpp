@@ -13,8 +13,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include <map>
 #include <memory>
 
+#include "velox/core/QueryConfig.h"
 #include "velox/expression/EvalCtx.h"
 #include "velox/expression/Expr.h"
 #include "velox/expression/VectorFunction.h"
@@ -30,8 +32,9 @@ static const char* kErrorMessageEntryNotNull = "map entry cannot be null";
 
 class MapFromEntriesFunction : public exec::VectorFunction {
  public:
-  explicit MapFromEntriesFunction(bool throwOnNull)
-      : throwOnNull_(throwOnNull) {}
+  MapFromEntriesFunction(bool throwOnNull, bool throwOnDuplicateKeys)
+      : throwOnNull_(throwOnNull),
+        throwOnDuplicateKeys_(throwOnDuplicateKeys) {}
   void apply(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
@@ -175,6 +178,24 @@ class MapFromEntriesFunction : public exec::VectorFunction {
 
     context.deselectErrors(*remainingRows.get());
 
+    // For Presto, need construct map vector based on input nulls for possible
+    // outer expression like try(). For Spark, use the updated nulls unless it's
+    // empty.
+    if (throwOnNull_ || decodedRowVector->size() == 0) {
+      nulls = inputArray->nulls();
+    }
+
+    if (!throwOnDuplicateKeys_) {
+      return applyLastWin(
+          *remainingRows.get(),
+          inputArray,
+          *decodedRowVector.get(),
+          rowVector,
+          nulls,
+          outputType,
+          context);
+    }
+
     VectorPtr wrappedKeys;
     VectorPtr wrappedValues;
     if (decodedRowVector->isIdentityMapping()) {
@@ -231,12 +252,6 @@ class MapFromEntriesFunction : public exec::VectorFunction {
           rowVector->childAt(1));
     }
 
-    // For Presto, need construct map vector based on input nulls for possible
-    // outer expression like try(). For Spark, use the updated nulls unless it's
-    // empty.
-    if (throwOnNull_ || decodedRowVector->size() == 0) {
-      nulls = inputArray->nulls();
-    }
     auto mapVector = std::make_shared<MapVector>(
         context.pool(),
         outputType,
@@ -251,20 +266,119 @@ class MapFromEntriesFunction : public exec::VectorFunction {
     return mapVector;
   }
 
+  // Builds the result for the LAST_WIN policy. Entries are kept in input order.
+  // A repeated key keeps the position of its first occurrence and takes the
+  // value of its last occurrence, which is how Spark's ArrayBasedMapBuilder
+  // deduplicates. Rows that are null or already failed are left empty.
+  VectorPtr applyLastWin(
+      const SelectivityVector& rows,
+      const ArrayVector* inputArray,
+      const DecodedVector& decodedRowVector,
+      const RowVector* rowVector,
+      const BufferPtr& nulls,
+      const TypePtr& outputType,
+      exec::EvalCtx& context) const {
+    const uint64_t* rawNulls = nulls ? nulls->as<uint64_t>() : nullptr;
+    auto isNullRow = [&](vector_size_t row) {
+      return rawNulls != nullptr && bits::isBitNull(rawNulls, row);
+    };
+
+    vector_size_t maxEntries = 0;
+    rows.applyToSelected([&](vector_size_t row) {
+      if (!isNullRow(row)) {
+        maxEntries += inputArray->sizeAt(row);
+      }
+    });
+
+    BufferPtr offsets = allocateOffsets(rows.end(), context.pool());
+    BufferPtr sizes = allocateSizes(rows.end(), context.pool());
+    BufferPtr keyIndices = allocateIndices(maxEntries, context.pool());
+    BufferPtr valueIndices = allocateIndices(maxEntries, context.pool());
+    auto* rawOffsets = offsets->asMutable<vector_size_t>();
+    auto* rawSizes = sizes->asMutable<vector_size_t>();
+    auto* rawKeyIndices = keyIndices->asMutable<vector_size_t>();
+    auto* rawValueIndices = valueIndices->asMutable<vector_size_t>();
+
+    // Entry slot owned by each distinct key of the current row, keyed by the
+    // index of the key's first occurrence in the key child vector. The
+    // comparator uses the same null handling as BaseVector::equalValueAt, so
+    // equality here matches checkDuplicateKeys.
+    const auto* keys = rowVector->childAt(0).get();
+    auto compareKeys = [keys](vector_size_t lhs, vector_size_t rhs) {
+      return keys->compare(keys, lhs, rhs) < 0;
+    };
+    std::map<vector_size_t, vector_size_t, decltype(compareKeys)> slotByKey(
+        compareKeys);
+
+    vector_size_t numEntries = 0;
+    context.applyToSelectedNoThrow(rows, [&](vector_size_t row) {
+      rawOffsets[row] = numEntries;
+      if (isNullRow(row)) {
+        return;
+      }
+
+      const auto offset = inputArray->offsetAt(row);
+      const auto size = inputArray->sizeAt(row);
+      slotByKey.clear();
+      vector_size_t numDistinctKeys = 0;
+      for (vector_size_t i = 0; i < size; ++i) {
+        // Null entries were handled above: the row is null or has failed, so
+        // every entry here is addressable in the children.
+        const auto entryIndex = decodedRowVector.index(offset + i);
+        const auto [it, inserted] =
+            slotByKey.emplace(entryIndex, numDistinctKeys);
+        if (!inserted) {
+          rawValueIndices[numEntries + it->second] = entryIndex;
+          continue;
+        }
+        rawKeyIndices[numEntries + numDistinctKeys] = entryIndex;
+        rawValueIndices[numEntries + numDistinctKeys] = entryIndex;
+        ++numDistinctKeys;
+      }
+      rawSizes[row] = numDistinctKeys;
+      numEntries += numDistinctKeys;
+    });
+
+    return std::make_shared<MapVector>(
+        context.pool(),
+        outputType,
+        nulls,
+        rows.end(),
+        offsets,
+        sizes,
+        BaseVector::wrapInDictionary(
+            nullptr, keyIndices, numEntries, rowVector->childAt(0)),
+        BaseVector::wrapInDictionary(
+            nullptr, valueIndices, numEntries, rowVector->childAt(1)));
+  }
+
   // If true, throws exception when input is NULL or contains NULL entry
   // (Presto's behavior). Otherwise, returns NULL (Spark's behavior).
   const bool throwOnNull_;
+
+  // If true, throws exception when a key is repeated. Otherwise, the last
+  // value wins (Spark's LAST_WIN policy).
+  const bool throwOnDuplicateKeys_;
 };
 } // namespace
 
 void registerMapFromEntriesFunction(
     const std::string& name,
     bool throwOnNull,
+    bool honorDuplicateKeysConfig,
     std::string_view defaultOwner) {
-  exec::registerVectorFunction(
+  exec::registerStatefulVectorFunction(
       name,
       MapFromEntriesFunction::signatures(),
-      std::make_unique<MapFromEntriesFunction>(throwOnNull),
+      [throwOnNull, honorDuplicateKeysConfig](
+          const std::string& /*name*/,
+          const std::vector<exec::VectorFunctionArg>& /*inputArgs*/,
+          const core::QueryConfig& config) {
+        const bool throwOnDuplicateKeys = !honorDuplicateKeysConfig ||
+            config.throwExceptionOnDuplicateMapKeys();
+        return std::make_shared<MapFromEntriesFunction>(
+            throwOnNull, throwOnDuplicateKeys);
+      },
       {},
       /*overwrite=*/true,
       defaultOwner);
