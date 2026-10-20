@@ -35,6 +35,7 @@
 #include <cudf/io/parquet_schema.hpp>
 #include <cudf/io/types.hpp>
 
+#include <optional>
 #include <span>
 #include <string>
 #include <unordered_set>
@@ -118,6 +119,13 @@ class CudfSplitReader : public NvtxHelper {
   cuda::stream_ref stream() const {
     return stream_;
   }
+
+  /// Returns the type a TIMESTAMP constant takes to combine with the timestamp
+  /// columns this reader produces, which it casts to the connector's
+  /// parquet.reader.timestamp-type. Returns nullopt, which leaves the constant
+  /// in the default timestamp unit, when that type is TIMESTAMP_DAYS: day
+  /// resolution is the cuDF type of a DATE, not one a TIMESTAMP converts to.
+  std::optional<cudf::type_id> constantTimestampType() const;
 
   /// Releases the reader, data source, parquet metadata and any pending
   /// column chunk fetches.

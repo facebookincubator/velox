@@ -390,6 +390,14 @@ void CudfSplitReader::setConnectorQueryCtx(
   connectorQueryCtx_ = connectorQueryCtx;
 }
 
+std::optional<cudf::type_id> CudfSplitReader::constantTimestampType() const {
+  const auto timestampType = cudfHiveConfig_->timestampType().id();
+  if (timestampType == cudf::type_id::TIMESTAMP_DAYS) {
+    return std::nullopt;
+  }
+  return timestampType;
+}
+
 std::optional<CudfSplitReader::TableChunk> CudfSplitReader::readNextChunk() {
   if (noColumnsToRead_) {
     // A Velox vector holds at most `vector_size_t` rows, so the footer row

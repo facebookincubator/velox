@@ -900,14 +900,8 @@ CudfHiveDataSource::makePartitionKeyScalars(cuda::stream_ref stream) const {
       readTimestampPartitionValueAsLocalTime();
   // A TIMESTAMP key takes the type the split reader gives file timestamps
   // rather than the unit cuDF expressions default to, so that an expression
-  // can combine the two. Day resolution is no unit a TIMESTAMP scalar can
-  // take, so the key keeps the default unit when the reader casts timestamps
-  // to days.
-  const auto readerTimestampType = cudfHiveConfig_->timestampType().id();
-  const std::optional<cudf::type_id> timestampType =
-      readerTimestampType == cudf::type_id::TIMESTAMP_DAYS
-      ? std::nullopt
-      : std::optional<cudf::type_id>{readerTimestampType};
+  // can combine the two.
+  const auto timestampType = cudfSplitReader_->constantTimestampType();
   std::vector<std::unique_ptr<cudf::scalar>> scalars;
   scalars.reserve(partitionKeyNames_.size());
   for (const auto& name : partitionKeyNames_) {

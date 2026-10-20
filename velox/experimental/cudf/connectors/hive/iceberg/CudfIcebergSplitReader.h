@@ -209,7 +209,8 @@ class CudfIcebergSplitReader : public CudfSplitReader {
   };
 
   // Builds a cudf scalar for an injected column from its optional string value;
-  // a `nullopt` value yields a typed NULL.
+  // a `nullopt` value yields a typed NULL. A TIMESTAMP column takes the type
+  // the reader gives file timestamps, so an expression can combine the two.
   std::unique_ptr<cudf::scalar> makeInjectedScalar(
       const InjectedColumn& col) const;
 

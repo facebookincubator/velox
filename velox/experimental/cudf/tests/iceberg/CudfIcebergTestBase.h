@@ -40,6 +40,11 @@ class CudfIcebergTestBase : public CudfHiveConnectorTestBase {
   void SetUp() override;
   void TearDown() override;
 
+  /// Replaces the registered cudf iceberg connector with one configured by
+  /// 'config'.
+  void resetCudfIcebergConnector(
+      const std::shared_ptr<const facebook::velox::config::ConfigBase>& config);
+
   /// Creates HiveIcebergSplits pointing to a data file with optional delete
   /// files and sequence number. Uses the cudf iceberg connector ID.
   std::vector<std::shared_ptr<facebook::velox::connector::ConnectorSplit>>
