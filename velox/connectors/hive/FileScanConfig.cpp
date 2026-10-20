@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "velox/connectors/hive/FileScanSpec.h"
+#include "velox/connectors/hive/FileScanConfig.h"
 
 #include <fmt/ranges.h>
 #include "velox/common/Casts.h"
@@ -35,7 +35,7 @@ common::SubfieldFilters cloneFilters(const common::SubfieldFilters& filters) {
 }
 } // namespace
 
-void FileScanSpec::processColumnHandle(const FileColumnHandlePtr& handle) {
+void FileScanConfig::processColumnHandle(const FileColumnHandlePtr& handle) {
   switch (handle->columnType()) {
     case FileColumnHandle::ColumnType::kRegular:
       break;
@@ -54,13 +54,13 @@ void FileScanSpec::processColumnHandle(const FileColumnHandlePtr& handle) {
   }
 }
 
-FileScanSpec::FileScanSpec(
+FileScanConfig::FileScanConfig(
     const RowTypePtr& outputType,
     const FileTableHandlePtr& tableHandle,
     const ColumnHandleMap& assignments,
     const ConnectorQueryCtx* context,
     const std::shared_ptr<FileConfig>& config)
-    : FileScanSpec(
+    : FileScanConfig(
           outputType,
           tableHandle,
           assignments,
@@ -68,7 +68,7 @@ FileScanSpec::FileScanSpec(
           config,
           Options{}) {}
 
-FileScanSpec::FileScanSpec(
+FileScanConfig::FileScanConfig(
     const RowTypePtr& outputType,
     const FileTableHandlePtr& tableHandle,
     const ColumnHandleMap& assignments,
@@ -232,7 +232,7 @@ FileScanSpec::FileScanSpec(
   }
 }
 
-RowTypePtr FileScanSpec::configureExtractionColumns(
+RowTypePtr FileScanConfig::configureExtractionColumns(
     const std::shared_ptr<common::ScanSpec>& scanSpec,
     const RowTypePtr& readerOutputType,
     memory::MemoryPool* pool) const {
@@ -342,20 +342,20 @@ RowTypePtr FileScanSpec::configureExtractionColumns(
   return nullptr;
 }
 
-common::SubfieldFilters FileScanSpec::originalFilters() const {
+common::SubfieldFilters FileScanConfig::originalFilters() const {
   return cloneFilters(originalFilters_);
 }
 
-common::SubfieldFilters FileScanSpec::filters() const {
+common::SubfieldFilters FileScanConfig::filters() const {
   return cloneFilters(filters_);
 }
 
-FileScanState FileScanSpec::newFileScanState(
+FileScanState FileScanConfig::newFileScanState(
     const ConnectorQueryCtx* context) const {
   return newFileScanState(readerOutputType_, subfields_, filters_, context);
 }
 
-FileScanState FileScanSpec::newFileScanState(
+FileScanState FileScanConfig::newFileScanState(
     const RowTypePtr& readerOutputType,
     const Subfields& subfields,
     const common::SubfieldFilters& filters,

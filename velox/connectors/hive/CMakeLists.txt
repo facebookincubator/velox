@@ -34,7 +34,7 @@ velox_add_library(
   FileDataSink.cpp
   FileDataSource.cpp
   FileIndexReader.cpp
-  FileScanSpec.cpp
+  FileScanConfig.cpp
   FileSplitReader.cpp
   HiveConfig.cpp
   HiveConfigProvider.cpp
@@ -61,7 +61,7 @@ velox_add_library(
   FileHandle.h
   FileIndexReader.h
   FileProperties.h
-  FileScanSpec.h
+  FileScanConfig.h
   FileScanState.h
   FileSplitReader.h
   FileTableHandle.h

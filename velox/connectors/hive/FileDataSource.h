@@ -25,7 +25,7 @@
 #include "velox/connectors/Connector.h"
 #include "velox/connectors/hive/FileConnectorSplit.h"
 #include "velox/connectors/hive/FileHandle.h"
-#include "velox/connectors/hive/FileScanSpec.h"
+#include "velox/connectors/hive/FileScanConfig.h"
 #include "velox/connectors/hive/FileSplitReader.h"
 #include "velox/connectors/hive/FileTableHandle.h"
 #include "velox/connectors/hive/HiveConnectorUtil.h"
@@ -90,10 +90,10 @@ class FileDataSource : public DataSource {
       folly::Executor* ioExecutor,
       const ConnectorQueryCtx* connectorQueryCtx,
       const std::shared_ptr<FileConfig>& fileConfig,
-      FileScanSpec::Options options = {});
+      FileScanConfig::Options options = {});
 
   FileDataSource(
-      std::shared_ptr<const FileScanSpec> fileScanSpec,
+      std::shared_ptr<const FileScanConfig> fileScanConfig,
       FileHandleFactory* fileHandleFactory,
       folly::Executor* ioExecutor,
       const ConnectorQueryCtx* connectorQueryCtx,
@@ -151,7 +151,7 @@ class FileDataSource : public DataSource {
 
   // Keep borrowed column demands and validation filters alive until after
   // splitReader_ is destroyed, including takeover of a preloaded reader.
-  std::shared_ptr<const FileScanSpec> fileScanSpec_;
+  std::shared_ptr<const FileScanConfig> fileScanConfig_;
   std::shared_ptr<FileScanState> fileScanState_;
   std::shared_ptr<FileConnectorSplit> split_;
   FileTableHandlePtr tableHandle_;

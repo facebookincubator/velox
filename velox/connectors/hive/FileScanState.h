@@ -26,9 +26,9 @@
 namespace facebook::velox::connector::hive {
 
 /// Mutable connector-internal scan preparation for one active physical reader.
-/// FileScanSpec::newFileScanState() creates an independent instance using the
+/// FileScanConfig::newFileScanState() creates an independent instance using the
 /// reader's context and memory pool. Readers may share an immutable
-/// FileScanSpec, but concurrently active readers must use separate states.
+/// FileScanConfig, but concurrently active readers must use separate states.
 ///
 /// Owns cloned filters and the DWIO ScanSpec that readers adapt with file
 /// constants, filter ordering, and caches. MetadataFilter is bound to this
@@ -37,8 +37,8 @@ namespace facebook::velox::connector::hive {
 ///
 /// FileDataSource owns this state alongside its physical reader and transfers
 /// it during serial takeover of a preloaded data source. Release the reader
-/// before releasing its state and the FileScanSpec backing its borrowed
-/// inputs. This object owns neither the physical reader nor the FileScanSpec
+/// before releasing its state and the FileScanConfig backing its borrowed
+/// inputs. This object owns neither the physical reader nor the FileScanConfig
 /// or query context; sharing a state does not make mutation thread safe.
 struct FileScanState {
   /// Clones of the physical predicates, also used for split validation.

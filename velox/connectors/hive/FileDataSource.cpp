@@ -67,9 +67,9 @@ FileDataSource::FileDataSource(
     folly::Executor* ioExecutor,
     const ConnectorQueryCtx* connectorQueryCtx,
     const std::shared_ptr<FileConfig>& fileConfig,
-    FileScanSpec::Options options)
+    FileScanConfig::Options options)
     : FileDataSource(
-          std::make_shared<const FileScanSpec>(
+          std::make_shared<const FileScanConfig>(
               outputType,
               checkedPointerCast<const FileTableHandle>(tableHandle),
               assignments,
@@ -82,7 +82,7 @@ FileDataSource::FileDataSource(
           fileConfig) {}
 
 FileDataSource::FileDataSource(
-    std::shared_ptr<const FileScanSpec> fileScanSpec,
+    std::shared_ptr<const FileScanConfig> fileScanConfig,
     FileHandleFactory* fileHandleFactory,
     folly::Executor* ioExecutor,
     const ConnectorQueryCtx* connectorQueryCtx,
@@ -92,27 +92,27 @@ FileDataSource::FileDataSource(
       connectorQueryCtx_(connectorQueryCtx),
       fileConfig_(fileConfig),
       pool_(connectorQueryCtx->memoryPool()),
-      fileScanSpec_(std::move(fileScanSpec)),
-      tableHandle_(fileScanSpec_->tableHandle()),
-      readerOutputType_(fileScanSpec_->readerOutputType()),
-      partitionKeys_(fileScanSpec_->partitionKeys()),
-      infoColumns_(fileScanSpec_->infoColumns()),
-      specialColumns_(fileScanSpec_->specialColumns()),
-      subfields_(fileScanSpec_->subfields()),
-      filters_(fileScanSpec_->filters()),
-      extractionColumns_(fileScanSpec_->extractionColumns()),
-      outputType_(fileScanSpec_->outputType()),
+      fileScanConfig_(std::move(fileScanConfig)),
+      tableHandle_(fileScanConfig_->tableHandle()),
+      readerOutputType_(fileScanConfig_->readerOutputType()),
+      partitionKeys_(fileScanConfig_->partitionKeys()),
+      infoColumns_(fileScanConfig_->infoColumns()),
+      specialColumns_(fileScanConfig_->specialColumns()),
+      subfields_(fileScanConfig_->subfields()),
+      filters_(fileScanConfig_->filters()),
+      extractionColumns_(fileScanConfig_->extractionColumns()),
+      outputType_(fileScanConfig_->outputType()),
       expressionEvaluator_(connectorQueryCtx->expressionEvaluator()),
-      columnPostProcessors_(fileScanSpec_->columnPostProcessors()),
-      multiReferencedFields_(fileScanSpec_->multiReferencedFields()),
-      remainingFilterColumns_(fileScanSpec_->remainingFilterColumns()) {
-  if (fileScanSpec_->remainingFilter()) {
+      columnPostProcessors_(fileScanConfig_->columnPostProcessors()),
+      multiReferencedFields_(fileScanConfig_->multiReferencedFields()),
+      remainingFilterColumns_(fileScanConfig_->remainingFilterColumns()) {
+  if (fileScanConfig_->remainingFilter()) {
     remainingFilterExprSet_ =
-        expressionEvaluator_->compile(fileScanSpec_->remainingFilter());
+        expressionEvaluator_->compile(fileScanConfig_->remainingFilter());
   }
-  if (fileScanSpec_->sampleRate() != 1) {
+  if (fileScanConfig_->sampleRate() != 1) {
     randomSkip_ = std::make_shared<random::RandomSkipTracker>(
-        fileScanSpec_->sampleRate());
+        fileScanConfig_->sampleRate());
   }
   resetScanSpec();
   dataIoStats_ = std::make_shared<io::IoStatistics>();
@@ -122,12 +122,13 @@ FileDataSource::FileDataSource(
 
 void FileDataSource::resetScanSpec(bool buildMetadataFilter) {
   VELOX_CHECK_NULL(splitReader_, "Cannot rebuild an active reader scan state");
-  auto state = std::make_shared<FileScanState>(fileScanSpec_->newFileScanState(
-      readerOutputType_,
-      subfields_,
-      filters_,
-      connectorQueryCtx_,
-      buildMetadataFilter));
+  auto state =
+      std::make_shared<FileScanState>(fileScanConfig_->newFileScanState(
+          readerOutputType_,
+          subfields_,
+          filters_,
+          connectorQueryCtx_,
+          buildMetadataFilter));
   if (scanSpec_) {
     state->scanSpec->moveAdaptationFrom(*scanSpec_);
   }
@@ -159,7 +160,7 @@ std::unique_ptr<FileSplitReader> FileDataSource::createSplitReader() {
   return FileSplitReader::create(
       split_,
       tableHandle_,
-      &fileScanSpec_->partitionKeys(),
+      &fileScanConfig_->partitionKeys(),
       connectorQueryCtx_,
       fileConfig_,
       readerOutputType_,
@@ -186,9 +187,9 @@ void FileDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
 
   // Start from logical demands. The previous file may have added reader-only
   // columns or installed constants for missing fields and partition keys.
-  readerOutputType_ = fileScanSpec_->readerOutputType();
-  subfields_ = fileScanSpec_->subfields();
-  extractionColumns_ = fileScanSpec_->extractionColumns();
+  readerOutputType_ = fileScanConfig_->readerOutputType();
+  subfields_ = fileScanConfig_->subfields();
+  extractionColumns_ = fileScanConfig_->extractionColumns();
   resetScanSpec();
   splitReader_ = createSplitReader();
 
@@ -399,9 +400,9 @@ void FileDataSource::setFromDataSource(
   resetOutputIfTypeChanged();
   extractionColumns_ = std::move(source->extractionColumns_);
   source->scanSpec_->moveAdaptationFrom(*scanSpec_);
-  // The reader borrows partition/info handles from the specification and
+  // The reader borrows partition/info handles from the configuration and
   // validation filters from the state. Keep both owners after source dies.
-  fileScanSpec_ = std::move(source->fileScanSpec_);
+  fileScanConfig_ = std::move(source->fileScanConfig_);
   subfields_ = std::move(source->subfields_);
   fileScanState_ = std::move(source->fileScanState_);
   scanSpec_ = std::move(source->scanSpec_);
