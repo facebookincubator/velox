@@ -30,10 +30,6 @@ class CudfLimit : public CudfOperatorBase {
 
   bool needsInput() const override;
 
-  exec::BlockingReason isBlocked(ContinueFuture* /*future*/) override {
-    return exec::BlockingReason::kNotBlocked;
-  }
-
   bool isFinished() override {
     return finished_ || (noMoreInput_ && input_ == nullptr);
   }

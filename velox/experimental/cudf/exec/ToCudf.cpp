@@ -364,20 +364,20 @@ void registerCudf() {
   // only means something relative to the device it will live on.
   initializeGpuCapabilities(contextDevice);
 
-  const std::string mrMode = CudfConfig::getInstance().memoryResource;
-  auto base = cudf_velox::createMemoryResource(
-      mrMode, CudfConfig::getInstance().memoryPercent);
+  const auto& config = CudfConfig::getInstance();
+  const std::string mrMode = config.memoryResource;
+  auto base = cudf_velox::createMemoryResource(mrMode, config.memoryPercent);
   // Wrap the device resource in a statistics adaptor so that
   // cudfAllocatedBytes() can report live device memory.
   statsMr_.emplace(std::move(base));
   mr_ = statsMr_.value();
-  cudf::set_current_device_resource(mr_.value());
+  cudf::set_current_device_resource(
+      cudf_velox::createThreadLocalTemporaryMemoryResource(mr_.value()));
 
-  const auto& outputMrMode = CudfConfig::getInstance().outputMemoryResource;
+  const auto& outputMrMode = config.outputMemoryResource;
   if (!outputMrMode.empty() && outputMrMode != mrMode) {
     outputStatsMr_.emplace(
-        cudf_velox::createMemoryResource(
-            outputMrMode, CudfConfig::getInstance().memoryPercent));
+        cudf_velox::createMemoryResource(outputMrMode, config.memoryPercent));
     output_mr_ = outputStatsMr_.value();
   } else {
     output_mr_ = mr_;
@@ -403,6 +403,13 @@ void registerCudf() {
 }
 
 void unregisterCudf() {
+  if (!tryResetCudfExchangeMemoryResource()) {
+    LOG(WARNING)
+        << "Retaining active or in-use cuDF UCX exchange memory resources; "
+           "they become reclaimable after their queries and packed buffers "
+           "are released";
+  }
+
   // Reset the any_resource copies before the adaptors they were copied from,
   // so that the wrapped upstream resources are released here.
   output_mr_.reset();

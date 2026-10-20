@@ -36,10 +36,6 @@ class CudfGroupId : public CudfOperatorBase {
 
   bool needsInput() const override;
 
-  exec::BlockingReason isBlocked(ContinueFuture* /*future*/) override {
-    return exec::BlockingReason::kNotBlocked;
-  }
-
   bool isFinished() override {
     return noMoreInput_ && inputColumns_.empty();
   }
