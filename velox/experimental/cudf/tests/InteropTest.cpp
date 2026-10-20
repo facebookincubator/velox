@@ -16,9 +16,11 @@
 
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 
+#include "velox/vector/arrow/Abi.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
 #include <cudf/column/column_factories.hpp>
+#include <cudf/interop.hpp>
 #include <cudf/strings/strings_column_view.hpp>
 #include <cudf/types.hpp>
 
@@ -62,6 +64,14 @@ class InteropTest : public ::testing::Test, public VectorTestBase {
 
     // Verify.
     test::assertEqualVectors(input, result);
+  }
+
+  /// Returns the Arrow format cuDF reports for the single-column \p table.
+  static std::string exportedArrowFormat(const cudf::table_view& table) {
+    const std::vector<cudf::column_metadata> metadata{
+        cudf::column_metadata("c0")};
+    auto schema = cudf::to_arrow_schema(table, metadata);
+    return schema->children[0]->format;
   }
 };
 
@@ -168,6 +178,7 @@ TEST_F(InteropTest, varbinaryLargeOffsets) {
   std::vector<std::unique_ptr<cudf::column>> columns;
   columns.push_back(std::move(stringsColumn));
   cudf::table table(std::move(columns));
+  EXPECT_EQ(exportedArrowFormat(table.view()), "U");
 
   std::vector<StringView> views(values.begin(), values.end());
   auto expected =
@@ -177,6 +188,23 @@ TEST_F(InteropTest, varbinaryLargeOffsets) {
   stream.sync();
 
   test::assertEqualVectors(expected, result);
+}
+
+// setArrowFormatBackToVarbinary maps the format cuDF exports for a string
+// column to its binary twin. Pin the exported formats so that a cuDF change
+// fails here with a clear message instead of deep in the importer.
+TEST_F(InteropTest, varbinaryExportedFormat) {
+  auto stream = cudf::get_default_stream();
+  auto mr = cudf::get_current_device_resource_ref();
+
+  auto input = makeRowVector(
+      {"c0"}, {makeFlatVector<StringView>({"a"_sv, "bc"_sv}, VARBINARY())});
+  auto table =
+      cudf_velox::with_arrow::toCudfTable(input, pool_.get(), stream, mr);
+  ASSERT_EQ(
+      cudf::strings_column_view(table->view().column(0)).offsets().type().id(),
+      cudf::type_id::INT32);
+  EXPECT_EQ(exportedArrowFormat(table->view()), "u");
 }
 
 // ========== With nulls ==========
