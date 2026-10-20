@@ -76,6 +76,7 @@ add_library(
   views/FsstEncodingView.cpp
   views/HuffmanEncodingView.h
   views/TrivialEncodingView.h
+  views/VarintEncodingView.h
   views/SparseBoolEncodingView.h
   views/SimdForBitpackEncodingView.h
   views/SubIntSplitEncodingView.h

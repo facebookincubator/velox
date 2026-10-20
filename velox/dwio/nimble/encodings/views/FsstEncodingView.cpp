@@ -17,6 +17,7 @@
 #include "velox/dwio/nimble/encodings/views/FsstEncodingView.h"
 
 #include <algorithm>
+#include <array>
 #include <limits>
 #include <string>
 #include <utility>
@@ -48,9 +49,43 @@ FsstEncodingView::FsstEncodingView(
       header.symbolTable.size(),
       "FSST symbol table import size mismatch.");
 
+  if (header.compressionType == CompressionType::Uncompressed) {
+    blob_ = header.blob;
+  } else {
+    blob_ = this->decompressPayload(
+        header.compressionType, DataType::String, header.blob);
+  }
+
+  if (options.cacheEncodingView) {
+    initializeCached(header.lengths);
+  } else {
+    initializeUncached(header.lengths);
+  }
+}
+
+void FsstEncodingView::initializeUncached(std::string_view encodedLengths) {
+  NIMBLE_CHECK_FILE_EQ(
+      EncodingPrefix::readDataType(encodedLengths),
+      DataType::Uint32,
+      "FSST lengths encoding must contain Uint32 values.");
+  lengths_ = detail::createTypedEncodingView<uint32_t>(
+      encodedLengths, this->pool_, this->options_);
+  NIMBLE_CHECK_NOT_NULL(lengths_);
+  NIMBLE_CHECK_FILE(
+      lengths_->encodingType() != EncodingType::Nullable &&
+          lengths_->encodingType() != EncodingType::Sentinel,
+      "FSST lengths encoding must not be nullable: {}",
+      lengths_->encodingType());
+  NIMBLE_CHECK_FILE_EQ(
+      lengths_->rowCount(),
+      this->rowCount_,
+      "FSST lengths row count does not match the parent encoding.");
+}
+
+void FsstEncodingView::initializeCached(std::string_view encodedLengths) {
   auto noStringBufferFactory = [](uint32_t) -> void* { return nullptr; };
   auto lengthsEncoding = EncodingFactory().create(
-      *this->pool_, header.lengths, noStringBufferFactory, options);
+      *this->pool_, encodedLengths, noStringBufferFactory, this->options_);
   NIMBLE_CHECK_NOT_NULL(lengthsEncoding);
   NIMBLE_CHECK_FILE_EQ(
       lengthsEncoding->dataType(),
@@ -58,18 +93,12 @@ FsstEncodingView::FsstEncodingView(
       "FSST lengths encoding must contain Uint32 values.");
   NIMBLE_CHECK_FILE(
       !lengthsEncoding->isNullable(),
-      "FSST lengths encoding must not be nullable.");
+      "FSST lengths encoding must not be nullable: {}",
+      lengthsEncoding->encodingType());
   NIMBLE_CHECK_FILE_EQ(
       lengthsEncoding->rowCount(),
       this->rowCount_,
       "FSST lengths row count does not match the parent encoding.");
-
-  if (header.compressionType == CompressionType::Uncompressed) {
-    blob_ = header.blob;
-  } else {
-    blob_ = this->decompressPayload(
-        header.compressionType, DataType::String, header.blob);
-  }
 
   std::vector<uint32_t> lengths(this->rowCount_);
   if (!lengths.empty()) {
@@ -93,6 +122,10 @@ FsstEncodingView::FsstEncodingView(
 
 std::string_view FsstEncodingView::readTypedAt(uint32_t index) const {
   NIMBLE_CHECK_LT(index, this->rowCount_);
+  if (!cachesDecodedChunks()) {
+    const auto size = lengths_->readAt(index);
+    return decodeValue(index, lengths_->sum(0, index), size);
+  }
   const auto chunkIndex = index / kRowsPerChunk;
   const auto chunk = getChunk(chunkIndex);
   const auto rowInChunk = index % kRowsPerChunk;
@@ -104,6 +137,18 @@ void FsstEncodingView::readPhysical(
     uint32_t length,
     std::string_view* output) const {
   this->checkReadRange(offset, length);
+  if (!cachesDecodedChunks()) {
+    // Sums the lengths before the range once and then walks the range.
+    ScopedVector<uint32_t> sizes{
+        length, this->pool_, this->options_.bufferPool};
+    lengths_->read(offset, length, sizes.data());
+    auto begin = lengths_->sum(0, offset);
+    for (uint32_t i = 0; i < length; ++i) {
+      output[i] = decodeValue(offset + i, begin, sizes[i]);
+      begin += sizes[i];
+    }
+    return;
+  }
   uint32_t outputOffset{0};
   while (outputOffset < length) {
     const auto row = offset + outputOffset;
@@ -123,11 +168,22 @@ void FsstEncodingView::readPhysical(
 void FsstEncodingView::readPhysicalAt(
     std::span<const uint32_t> indices,
     std::string_view* output) const {
+  if (!cachesDecodedChunks()) {
+    // Sums the lengths once for all indices, not once for each of them.
+    ScopedVector<uint64_t> begins{
+        indices.size(), this->pool_, this->options_.bufferPool};
+    lengths_->sum(indices, begins.data());
+    for (size_t i = 0; i < indices.size(); ++i) {
+      output[i] =
+          decodeValue(indices[i], begins[i], lengths_->readAt(indices[i]));
+    }
+    return;
+  }
   uint32_t cachedChunkIndex = std::numeric_limits<uint32_t>::max();
   std::shared_ptr<const DecodedChunk> cachedChunk;
   for (size_t i = 0; i < indices.size(); ++i) {
     const auto row = indices[i];
-    NIMBLE_CHECK_LT(row, this->rowCount_);
+    NIMBLE_DCHECK_LT(row, this->rowCount_);
     const auto chunkIndex = row / kRowsPerChunk;
     if (chunkIndex != cachedChunkIndex) {
       cachedChunk = getChunk(chunkIndex);
@@ -135,6 +191,67 @@ void FsstEncodingView::readPhysicalAt(
     }
     output[i] = valueAt(*cachedChunk, row % kRowsPerChunk);
   }
+}
+
+std::string_view FsstEncodingView::decodeValue(
+    uint32_t row,
+    uint64_t compressedBegin,
+    uint32_t compressedSize) const {
+  if (const auto decoded = decodedStrings_.find(row); decoded.has_value()) {
+    return *decoded;
+  }
+
+  // Validates only this string because the view skips the whole-chunk
+  // validation that a cached view performs at construction.
+  const std::array<uint32_t, 1> compressedSizes{compressedSize};
+  FsstEncoding::validateCompressedLengths(
+      compressedSizes, blob_, static_cast<size_t>(compressedBegin));
+  std::string decoded;
+  if (compressedSize != 0) {
+    const auto maxDecodedSize =
+        static_cast<size_t>(compressedSize) * kMaxSymbolLength;
+    decoded.resize(maxDecodedSize + 1);
+    const auto decodedSize = nimble_fsst_decompress(
+        &decoder_,
+        compressedSize,
+        reinterpret_cast<const unsigned char*>(blob_.data() + compressedBegin),
+        maxDecodedSize + 1,
+        reinterpret_cast<unsigned char*>(decoded.data()));
+    NIMBLE_CHECK_GT(
+        decodedSize,
+        0,
+        "FSST decompression failed for non-empty compressed string.");
+    NIMBLE_CHECK_FILE_LE(
+        decodedSize,
+        maxDecodedSize,
+        "FSST decompressed string exceeds the maximum expansion bound.");
+    decoded.resize(decodedSize);
+  }
+
+  return decodedStrings_.add(row, std::move(decoded));
+}
+
+std::optional<std::string_view> FsstEncodingView::DecodedStrings::find(
+    uint32_t row) const {
+  const std::shared_lock<std::shared_mutex> guard{lock_};
+  const auto it = positions_.find(row);
+  if (it == positions_.end()) {
+    return std::nullopt;
+  }
+  return values_[it->second];
+}
+
+std::string_view FsstEncodingView::DecodedStrings::add(
+    uint32_t row,
+    std::string decoded) {
+  const std::unique_lock<std::shared_mutex> guard{lock_};
+  // Appending never moves the strings that are already there, so views of them
+  // stay valid for the readers that hold them.
+  const auto [it, inserted] = positions_.try_emplace(row, values_.size());
+  if (inserted) {
+    values_.push_back(std::move(decoded));
+  }
+  return values_[it->second];
 }
 
 std::string_view FsstEncodingView::valueAt(

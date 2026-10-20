@@ -34,10 +34,13 @@
 #include "velox/dwio/nimble/common/Buffer.h"
 #include "velox/dwio/nimble/common/Vector.h"
 #include "velox/dwio/nimble/encodings/ALPEncoding.h"
+#include "velox/dwio/nimble/encodings/ALPRDEncoding.h"
 #include "velox/dwio/nimble/encodings/BitRangeSplitEncoding.h"
 #include "velox/dwio/nimble/encodings/BlockBitPackingEncoding.h"
 #include "velox/dwio/nimble/encodings/ConstantEncoding.h"
+#include "velox/dwio/nimble/encodings/DeltaBlockEncoding.h"
 #include "velox/dwio/nimble/encodings/DictionaryEncoding.h"
+#include "velox/dwio/nimble/encodings/EliasFanoEncoding.h"
 #include "velox/dwio/nimble/encodings/FixedBitWidthEncoding.h"
 #include "velox/dwio/nimble/encodings/ForEncoding.h"
 #include "velox/dwio/nimble/encodings/FsstEncoding.h"
@@ -48,7 +51,9 @@
 #include "velox/dwio/nimble/encodings/SharedDictionaryEncoding.h"
 #include "velox/dwio/nimble/encodings/SimdForBitpackEncoding.h"
 #include "velox/dwio/nimble/encodings/SparseBoolEncoding.h"
+#include "velox/dwio/nimble/encodings/SubIntSplitEncoding.h"
 #include "velox/dwio/nimble/encodings/TrivialEncoding.h"
+#include "velox/dwio/nimble/encodings/VarintEncoding.h"
 #include "velox/dwio/nimble/encodings/benchmarks/BenchmarkUtils.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/common/EncodingLayout.h"
@@ -333,6 +338,145 @@ std::unique_ptr<Encoding> createRegularEncoding(
       *benchmarkPool(), encoded, stringBufferFactory);
 }
 
+// Creates the view of one chunk and reads a single row, as a point lookup does.
+template <typename T>
+void createAndReadWithView(
+    std::string_view encoded,
+    const std::vector<uint32_t>& positions,
+    uint32_t iters,
+    const Encoding::Options& options) {
+  typename TypeTraits<T>::physicalType value;
+  while (iters--) {
+    const auto view =
+        createEncodingView(encoded, benchmarkPool().get(), options);
+    view->readAt(positions[iters % positions.size()], &value);
+    folly::doNotOptimizeAway(value);
+  }
+}
+
+// Creates the encoding of one chunk, skips to a row and reads it.
+template <typename T>
+void createAndReadWithSkip(
+    std::string_view encoded,
+    const std::vector<uint32_t>& positions,
+    uint32_t iters) {
+  std::vector<facebook::velox::BufferPtr> stringBuffers;
+  T value;
+  while (iters--) {
+    // Drops the string buffers of the previous encoding, which no longer
+    // exists.
+    stringBuffers.clear();
+    const auto encoding = createRegularEncoding(encoded, stringBuffers);
+    encoding->skip(positions[iters % positions.size()]);
+    encoding->materialize(1, &value);
+    folly::doNotOptimizeAway(value);
+  }
+}
+
+// Creates the view of one chunk and reads one row that may be null. A nullable
+// view reads through row ranges because readAt() requires a non-null row.
+template <typename T>
+void createAndReadNullableWithView(
+    std::string_view encoded,
+    const std::vector<uint32_t>& positions,
+    uint32_t iters,
+    const Encoding::Options& options) {
+  typename TypeTraits<T>::physicalType value;
+  const std::function<void(uint32_t)> setNull = [](uint32_t) {};
+  while (iters--) {
+    const auto view =
+        createEncodingView(encoded, benchmarkPool().get(), options);
+    const auto row = positions[iters % positions.size()];
+    const RowRange range{row, row + 1};
+    folly::doNotOptimizeAway(
+        view->read(std::span<const RowRange>{&range, 1}, setNull, &value));
+    folly::doNotOptimizeAway(value);
+  }
+}
+
+// Creates the encoding of one chunk, skips to a row and reads it with its null
+// flag.
+template <typename T>
+void createAndReadNullableWithSkip(
+    std::string_view encoded,
+    const std::vector<uint32_t>& positions,
+    uint32_t iters) {
+  std::vector<facebook::velox::BufferPtr> stringBuffers;
+  T value;
+  uint64_t nulls{0};
+  while (iters--) {
+    stringBuffers.clear();
+    const auto encoding = createRegularEncoding(encoded, stringBuffers);
+    encoding->skip(positions[iters % positions.size()]);
+    folly::doNotOptimizeAway(encoding->materializeNullable(
+        1, &value, [&nulls]() -> void* { return &nulls; }));
+    folly::doNotOptimizeAway(value);
+  }
+}
+
+// Reads one row per iteration from a view that was created once.
+template <typename T>
+void readWithReusedView(
+    const EncodingView& view,
+    const std::vector<uint32_t>& positions,
+    uint32_t iters) {
+  typename TypeTraits<T>::physicalType value;
+  while (iters--) {
+    view.readAt(positions[iters % positions.size()], &value);
+    folly::doNotOptimizeAway(value);
+  }
+}
+
+// Reads one row that may be null per iteration from a view that was created
+// once.
+template <typename T>
+void readNullableWithReusedView(
+    const EncodingView& view,
+    const std::vector<uint32_t>& positions,
+    uint32_t iters) {
+  typename TypeTraits<T>::physicalType value;
+  const std::function<void(uint32_t)> setNull = [](uint32_t) {};
+  while (iters--) {
+    const auto row = positions[iters % positions.size()];
+    const RowRange range{row, row + 1};
+    folly::doNotOptimizeAway(
+        view.read(std::span<const RowRange>{&range, 1}, setNull, &value));
+    folly::doNotOptimizeAway(value);
+  }
+}
+
+// Reads one row per iteration from an encoding that was created once, by
+// resetting it and skipping to the row.
+template <typename T>
+void readWithReusedSkip(
+    Encoding& encoding,
+    const std::vector<uint32_t>& positions,
+    uint32_t iters) {
+  T value;
+  while (iters--) {
+    encoding.reset();
+    encoding.skip(positions[iters % positions.size()]);
+    encoding.materialize(1, &value);
+    folly::doNotOptimizeAway(value);
+  }
+}
+
+template <typename T>
+void readNullableWithReusedSkip(
+    Encoding& encoding,
+    const std::vector<uint32_t>& positions,
+    uint32_t iters) {
+  T value;
+  uint64_t nulls{0};
+  while (iters--) {
+    encoding.reset();
+    encoding.skip(positions[iters % positions.size()]);
+    folly::doNotOptimizeAway(encoding.materializeNullable(
+        1, &value, [&nulls]() -> void* { return &nulls; }));
+    folly::doNotOptimizeAway(value);
+  }
+}
+
 class ReadAtOffsetsStringTrivialView {
  public:
   ReadAtOffsetsStringTrivialView(
@@ -479,10 +623,10 @@ class MaterializedRunEndsRLEView {
   Vector<uint32_t> runEnds_;
 };
 
-Vector<uint32_t> dictionaryData() {
+Vector<uint32_t> dictionaryData(uint32_t rows) {
   Vector<uint32_t> data{benchmarkPool().get()};
-  data.resize(kRows);
-  for (uint32_t i = 0; i < kRows; ++i) {
+  data.resize(rows);
+  for (uint32_t i = 0; i < rows; ++i) {
     data[i] = (i * 17) % 53;
   }
   return data;
@@ -500,29 +644,29 @@ Vector<T> floatingDictionaryData() {
 }
 
 template <typename T>
-Vector<T> alpData() {
+Vector<T> alpData(uint32_t rows) {
   Vector<T> data{benchmarkPool().get()};
-  data.resize(kRows);
-  for (uint32_t i = 0; i < kRows; ++i) {
+  data.resize(rows);
+  for (uint32_t i = 0; i < rows; ++i) {
     data[i] = static_cast<T>(static_cast<int32_t>((i * 37) % 2001) - 1000) /
         static_cast<T>(100);
   }
   return data;
 }
 
-Vector<uint32_t> rleData() {
+Vector<uint32_t> rleData(uint32_t rows) {
   Vector<uint32_t> data{benchmarkPool().get()};
-  data.resize(kRows);
-  for (uint32_t i = 0; i < kRows; ++i) {
+  data.resize(rows);
+  for (uint32_t i = 0; i < rows; ++i) {
     data[i] = i / 16;
   }
   return data;
 }
 
-Vector<uint32_t> pforData() {
+Vector<uint32_t> pforData(uint32_t rows) {
   Vector<uint32_t> data{benchmarkPool().get()};
-  data.resize(kRows);
-  for (uint32_t i = 0; i < kRows; ++i) {
+  data.resize(rows);
+  for (uint32_t i = 0; i < rows; ++i) {
     data[i] = i % 127;
     if (i % 97 == 0) {
       data[i] += 10000;
@@ -531,10 +675,10 @@ Vector<uint32_t> pforData() {
   return data;
 }
 
-Vector<uint32_t> huffmanSkewedData() {
+Vector<uint32_t> huffmanSkewedData(uint32_t rows) {
   Vector<uint32_t> data{benchmarkPool().get()};
-  data.resize(kRows);
-  for (uint32_t row = 0; row < kRows; ++row) {
+  data.resize(rows);
+  for (uint32_t row = 0; row < rows; ++row) {
     data[row] = row % 10 == 0 ? 1 + row % 15 : 0;
   }
   return data;
@@ -547,38 +691,40 @@ Vector<uint32_t> huffmanUniformData() {
   return data;
 }
 
-Vector<uint32_t> mainlyConstantData() {
+Vector<uint32_t> mainlyConstantData(uint32_t rows) {
   Vector<uint32_t> data{benchmarkPool().get()};
-  data.resize(kRows, 7);
-  for (uint32_t i = 0; i < kRows; i += 17) {
+  data.resize(rows, 7);
+  for (uint32_t i = 0; i < rows; i += 17) {
     data[i] = i;
   }
   return data;
 }
 
-Vector<uint64_t> bitRangeSplitData() {
+Vector<uint64_t> bitRangeSplitData(uint32_t rows) {
   Vector<uint64_t> data{benchmarkPool().get()};
-  data.resize(kRows);
-  for (uint64_t row{0}; row < kRows; ++row) {
+  data.resize(rows);
+  for (uint64_t row{0}; row < rows; ++row) {
     data[row] = row * 0x9e37'79b9'7f4a'7c15ULL;
   }
   return data;
 }
 
-Vector<bool> boolData() {
+Vector<bool> boolData(uint32_t rows) {
   Vector<bool> data{benchmarkPool().get()};
-  data.resize(kRows);
-  for (uint32_t i = 0; i < kRows; ++i) {
+  data.resize(rows);
+  for (uint32_t i = 0; i < rows; ++i) {
     data[i] = (i % 7) == 0;
   }
   return data;
 }
 
-Vector<std::string_view> stringData(std::vector<std::string>& backing) {
+Vector<std::string_view> stringData(
+    std::vector<std::string>& backing,
+    uint32_t rows) {
   Vector<std::string_view> data{benchmarkPool().get()};
-  data.reserve(kRows);
-  backing.reserve(kRows);
-  for (uint32_t i = 0; i < kRows; ++i) {
+  data.reserve(rows);
+  backing.reserve(rows);
+  for (uint32_t i = 0; i < rows; ++i) {
     backing.push_back(fmt::format("feature-value-{}", i % 251));
     data.push_back(backing.back());
   }
@@ -586,24 +732,28 @@ Vector<std::string_view> stringData(std::vector<std::string>& backing) {
 }
 
 Vector<std::string_view> dictionaryStringData(
-    std::vector<std::string>& backing) {
+    std::vector<std::string>& backing,
+    uint32_t rows) {
   Vector<std::string_view> data{benchmarkPool().get()};
-  data.reserve(kRows);
+  data.reserve(rows);
   backing.reserve(128);
   for (uint32_t i = 0; i < 128; ++i) {
     backing.push_back(fmt::format("dict-value-{}", i));
   }
-  for (uint32_t i = 0; i < kRows; ++i) {
+  for (uint32_t i = 0; i < rows; ++i) {
     data.push_back(backing[(i * 17) % backing.size()]);
   }
   return data;
 }
 
-std::string encodeNullableView(uint32_t nullsPerThousand) {
+std::string encodeNullableView(
+    uint32_t nullsPerThousand,
+    uint32_t rows,
+    const std::optional<CompressionOptions>& compression) {
   Vector<int64_t> nonNullValues{benchmarkPool().get()};
-  Vector<bool> isNonNull{benchmarkPool().get(), kRows};
+  Vector<bool> isNonNull{benchmarkPool().get(), rows};
   std::mt19937 generator{7'204'113};
-  for (uint32_t row{0}; row < kRows; ++row) {
+  for (uint32_t row{0}; row < rows; ++row) {
     isNonNull[row] = generator() % 1'000 >= nullsPerThousand;
     if (isNonNull[row]) {
       nonNullValues.push_back(static_cast<int64_t>(row) * 17 + 3);
@@ -611,7 +761,7 @@ std::string encodeNullableView(uint32_t nullsPerThousand) {
   }
   auto policy = std::make_unique<ManualEncodingSelectionPolicy<int64_t>>(
       std::vector<std::pair<EncodingType, float>>{{EncodingType::Trivial, 1.0}},
-      CompressionOptions{},
+      compression,
       std::nullopt);
   Buffer buffer{*benchmarkPool()};
   const auto encoded = EncodingFactory::encodeNullable<int64_t>(
@@ -624,7 +774,8 @@ unsigned readNullableRanges(
     uint32_t rangeSize,
     unsigned iterations) {
   folly::BenchmarkSuspender suspender;
-  const auto encoded = encodeNullableView(nullsPerThousand);
+  const auto encoded =
+      encodeNullableView(nullsPerThousand, kRows, CompressionOptions{});
   const auto view = createEncodingView(encoded, benchmarkPool().get());
   std::vector<RowRange> ranges;
   uint32_t numRows{0};
@@ -643,9 +794,64 @@ unsigned readNullableRanges(
   return iterations;
 }
 
+// Reads rows spread evenly over a stream through a view without
+// cacheEncodingView. A few rows are cheaper to read one by one, and many rows
+// are cheaper to read through one pass over the stream.
+unsigned readNullableSparseIndices(
+    uint32_t numRows,
+    uint32_t numSelected,
+    unsigned iterations) {
+  folly::BenchmarkSuspender suspender;
+  const auto encoded = encodeNullableView(
+      /*nullsPerThousand=*/100, numRows, CompressionOptions{});
+  const auto view = createEncodingView(encoded, benchmarkPool().get());
+  const auto stride = numRows / numSelected;
+  std::vector<uint32_t> indices(numSelected);
+  for (uint32_t i{0}; i < numSelected; ++i) {
+    indices[i] = i * stride + (i * 7) % stride;
+  }
+  Vector<int64_t> output{benchmarkPool().get(), numSelected};
+  suspender.dismiss();
+  for (unsigned iteration{0}; iteration < iterations; ++iteration) {
+    const auto numNonNulls =
+        view->read(indices, [](uint32_t) {}, output.data());
+    folly::doNotOptimizeAway(numNonNulls);
+    folly::doNotOptimizeAway(output.data());
+  }
+  suspender.rehire();
+  return iterations;
+}
+
+// Reads ranges of 'rangeSize' rows spread evenly over a stream, as above.
+unsigned readNullableSparseRanges(
+    uint32_t numRows,
+    uint32_t numRanges,
+    uint32_t rangeSize,
+    unsigned iterations) {
+  folly::BenchmarkSuspender suspender;
+  const auto encoded = encodeNullableView(
+      /*nullsPerThousand=*/100, numRows, CompressionOptions{});
+  const auto view = createEncodingView(encoded, benchmarkPool().get());
+  const auto stride = numRows / numRanges;
+  std::vector<RowRange> ranges;
+  for (uint32_t i{0}; i < numRanges; ++i) {
+    ranges.emplace_back(i * stride, i * stride + rangeSize);
+  }
+  Vector<int64_t> output{benchmarkPool().get(), numRanges * rangeSize};
+  suspender.dismiss();
+  for (unsigned iteration{0}; iteration < iterations; ++iteration) {
+    const auto numNonNulls = view->read(ranges, [](uint32_t) {}, output.data());
+    folly::doNotOptimizeAway(numNonNulls);
+    folly::doNotOptimizeAway(output.data());
+  }
+  suspender.rehire();
+  return iterations;
+}
+
 unsigned createNullableViews(uint32_t nullsPerThousand, unsigned iterations) {
   folly::BenchmarkSuspender suspender;
-  const auto encoded = encodeNullableView(nullsPerThousand);
+  const auto encoded =
+      encodeNullableView(nullsPerThousand, kRows, CompressionOptions{});
   suspender.dismiss();
   for (unsigned iteration{0}; iteration < iterations; ++iteration) {
     const auto view = createEncodingView(encoded, benchmarkPool().get());
@@ -656,6 +862,35 @@ unsigned createNullableViews(uint32_t nullsPerThousand, unsigned iterations) {
 }
 
 void registerNullableViewBenchmarks() {
+  for (const uint32_t numRows : {4'096, 65'536}) {
+    for (const uint32_t numSelected :
+         {4, 8, 16, 32, 64, 96, 128, 192, 256, 512, 1'024}) {
+      folly::addBenchmark(
+          __FILE__,
+          fmt::format("nullableSparseIndices_rows{}_n{}", numRows, numSelected),
+          [numRows, numSelected](unsigned iterations) {
+            return readNullableSparseIndices(numRows, numSelected, iterations);
+          });
+    }
+    for (const uint32_t rangeSize : {16, 128, 1'024}) {
+      for (const uint32_t numRanges : {2, 4, 8, 16, 32, 64, 128, 256}) {
+        if (numRanges * rangeSize > numRows) {
+          continue;
+        }
+        folly::addBenchmark(
+            __FILE__,
+            fmt::format(
+                "nullableSparseRanges_rows{}_n{}_len{}",
+                numRows,
+                numRanges,
+                rangeSize),
+            [numRows, numRanges, rangeSize](unsigned iterations) {
+              return readNullableSparseRanges(
+                  numRows, numRanges, rangeSize, iterations);
+            });
+      }
+    }
+  }
   for (const uint32_t nullsPerThousand :
        {0, 2, 10, 40, 120, 250, 330, 500, 950, 1'000}) {
     folly::addBenchmark(
@@ -768,14 +1003,14 @@ VIEW_BENCHMARK(
     bool,
     encodeWithSelection<TrivialEncoding<bool>>(
         EncodingType::Trivial,
-        boolData()),
+        boolData(kRows)),
     randomPositions(kRows))
 RANGE_VIEW_BENCHMARK(
     RangeView_TrivialBool_Range1024,
     bool,
     encodeWithSelection<TrivialEncoding<bool>>(
         EncodingType::Trivial,
-        boolData()))
+        boolData(kRows)))
 MATERIALIZE_BENCHMARK(
     Materialize_TrivialUint32_Random130,
     uint32_t,
@@ -788,27 +1023,27 @@ MATERIALIZE_BENCHMARK(
     bool,
     encodeWithSelection<TrivialEncoding<bool>>(
         EncodingType::Trivial,
-        boolData()),
+        boolData(kRows)),
     randomPositions(kRows))
 VIEW_BENCHMARK(
     View_SparseBool_Random130,
     bool,
     encodeWithSelection<SparseBoolEncoding>(
         EncodingType::SparseBool,
-        boolData()),
+        boolData(kRows)),
     randomPositions(kRows))
 RANGE_VIEW_BENCHMARK(
     RangeView_SparseBool_Range1024,
     bool,
     encodeWithSelection<SparseBoolEncoding>(
         EncodingType::SparseBool,
-        boolData()))
+        boolData(kRows)))
 MATERIALIZE_BENCHMARK(
     Materialize_SparseBool_Random130,
     bool,
     encodeWithSelection<SparseBoolEncoding>(
         EncodingType::SparseBool,
-        boolData()),
+        boolData(kRows)),
     randomPositions(kRows))
 
 BENCHMARK(View_TrivialStringEager_Random130, iters) {
@@ -817,7 +1052,7 @@ BENCHMARK(View_TrivialStringEager_Random130, iters) {
   std::vector<uint32_t> positions;
   std::unique_ptr<EncodingView> view;
   BENCHMARK_SUSPEND {
-    encoded = encodeTrivialString(stringData(backing));
+    encoded = encodeTrivialString(stringData(backing, kRows));
     positions = randomPositions(kRows);
     view = createEncodingView(encoded, benchmarkPool().get());
   }
@@ -829,7 +1064,7 @@ BENCHMARK(RangeView_TrivialStringEager_Range1024, iters) {
   std::string encoded;
   std::unique_ptr<EncodingView> view;
   BENCHMARK_SUSPEND {
-    encoded = encodeTrivialString(stringData(backing));
+    encoded = encodeTrivialString(stringData(backing, kRows));
     view = createEncodingView(encoded, benchmarkPool().get());
   }
   readRangesWithView<std::string_view>(*view, iters);
@@ -839,7 +1074,7 @@ BENCHMARK(Construct_TrivialStringOffsets_ReadAt, iters) {
   std::vector<std::string> backing;
   std::string encoded;
   BENCHMARK_SUSPEND {
-    encoded = encodeTrivialString(stringData(backing));
+    encoded = encodeTrivialString(stringData(backing, kRows));
   }
   while (iters--) {
     ReadAtOffsetsStringTrivialView view{
@@ -852,7 +1087,7 @@ BENCHMARK(Construct_TrivialStringOffsets_Materialize, iters) {
   std::vector<std::string> backing;
   std::string encoded;
   BENCHMARK_SUSPEND {
-    encoded = encodeTrivialString(stringData(backing));
+    encoded = encodeTrivialString(stringData(backing, kRows));
   }
   while (iters--) {
     MaterializedOffsetsStringTrivialView view{
@@ -868,7 +1103,7 @@ BENCHMARK(Materialize_TrivialString_Random130, iters) {
   std::vector<facebook::velox::BufferPtr> stringBuffers;
   std::unique_ptr<Encoding> encoding;
   BENCHMARK_SUSPEND {
-    encoded = encodeTrivialString(stringData(backing));
+    encoded = encodeTrivialString(stringData(backing, kRows));
     positions = randomPositions(kRows);
     encoding = createRegularEncoding(encoded, stringBuffers);
   }
@@ -882,7 +1117,7 @@ BENCHMARK(View_TrivialStringEager_Sorted130, iters) {
   std::vector<uint32_t> positions;
   std::unique_ptr<EncodingView> view;
   BENCHMARK_SUSPEND {
-    encoded = encodeTrivialString(stringData(backing));
+    encoded = encodeTrivialString(stringData(backing, kRows));
     positions = sortedRandomPositions(kRows);
     view = createEncodingView(encoded, benchmarkPool().get());
   }
@@ -895,7 +1130,7 @@ BENCHMARK(View_TrivialStringEager_Clustered130, iters) {
   std::vector<uint32_t> positions;
   std::unique_ptr<EncodingView> view;
   BENCHMARK_SUSPEND {
-    encoded = encodeTrivialString(stringData(backing));
+    encoded = encodeTrivialString(stringData(backing, kRows));
     positions = clusteredPositions(kRows);
     view = createEncodingView(encoded, benchmarkPool().get());
   }
@@ -908,7 +1143,7 @@ BENCHMARK(View_FsstString_Sorted130, iters) {
   std::vector<uint32_t> positions;
   std::unique_ptr<EncodingView> view;
   BENCHMARK_SUSPEND {
-    encoded = encodeFsstString(stringData(backing));
+    encoded = encodeFsstString(stringData(backing, kRows));
     positions = sortedRandomPositions(kRows);
     view = createEncodingView(encoded, benchmarkPool().get());
   }
@@ -921,7 +1156,7 @@ BENCHMARK(BatchView_FsstString_Sorted130, iters) {
   std::vector<uint32_t> positions;
   std::unique_ptr<EncodingView> view;
   BENCHMARK_SUSPEND {
-    encoded = encodeFsstString(stringData(backing));
+    encoded = encodeFsstString(stringData(backing, kRows));
     positions = sortedRandomPositions(kRows);
     view = createEncodingView(encoded, benchmarkPool().get());
   }
@@ -933,7 +1168,7 @@ BENCHMARK(RangeView_FsstString_Range1024, iters) {
   std::string encoded;
   std::unique_ptr<EncodingView> view;
   BENCHMARK_SUSPEND {
-    encoded = encodeFsstString(stringData(backing));
+    encoded = encodeFsstString(stringData(backing, kRows));
     view = createEncodingView(encoded, benchmarkPool().get());
   }
   readRangesWithView<std::string_view>(*view, iters);
@@ -984,34 +1219,34 @@ VIEW_BENCHMARK(
     uint32_t,
     encodeWithSelection<MainlyConstantEncoding<uint32_t>>(
         EncodingType::MainlyConstant,
-        mainlyConstantData()),
+        mainlyConstantData(kRows)),
     randomPositions(kRows))
 RANGE_VIEW_BENCHMARK(
     RangeView_MainlyConstantUint32_Range1024,
     uint32_t,
     encodeWithSelection<MainlyConstantEncoding<uint32_t>>(
         EncodingType::MainlyConstant,
-        mainlyConstantData()))
+        mainlyConstantData(kRows)))
 MATERIALIZE_BENCHMARK(
     Materialize_MainlyConstantUint32_Random130,
     uint32_t,
     encodeWithSelection<MainlyConstantEncoding<uint32_t>>(
         EncodingType::MainlyConstant,
-        mainlyConstantData()),
+        mainlyConstantData(kRows)),
     randomPositions(kRows))
 VIEW_BENCHMARK(
     View_DictionaryUint32_Random130,
     uint32_t,
     encodeWithSelection<DictionaryEncoding<uint32_t>>(
         EncodingType::Dictionary,
-        dictionaryData()),
+        dictionaryData(kRows)),
     randomPositions(kRows))
 RANGE_VIEW_BENCHMARK(
     RangeView_DictionaryUint32_Range1024,
     uint32_t,
     encodeWithSelection<DictionaryEncoding<uint32_t>>(
         EncodingType::Dictionary,
-        dictionaryData()))
+        dictionaryData(kRows)))
 VIEW_BENCHMARK(
     View_DictionaryFloat_Random130,
     float,
@@ -1045,7 +1280,7 @@ BENCHMARK(View_DictionaryString_Random130, iters) {
   std::unique_ptr<EncodingView> view;
   BENCHMARK_SUSPEND {
     encoded = encodeWithSelection<DictionaryEncoding<std::string_view>>(
-        EncodingType::Dictionary, dictionaryStringData(backing));
+        EncodingType::Dictionary, dictionaryStringData(backing, kRows));
     positions = randomPositions(kRows);
     view = createEncodingView(encoded, benchmarkPool().get());
   }
@@ -1057,7 +1292,7 @@ BENCHMARK(RangeView_DictionaryString_Range1024, iters) {
   std::unique_ptr<EncodingView> view;
   BENCHMARK_SUSPEND {
     encoded = encodeWithSelection<DictionaryEncoding<std::string_view>>(
-        EncodingType::Dictionary, dictionaryStringData(backing));
+        EncodingType::Dictionary, dictionaryStringData(backing, kRows));
     view = createEncodingView(encoded, benchmarkPool().get());
   }
   readRangesWithView<std::string_view>(*view, iters);
@@ -1067,7 +1302,7 @@ MATERIALIZE_BENCHMARK(
     uint32_t,
     encodeWithSelection<DictionaryEncoding<uint32_t>>(
         EncodingType::Dictionary,
-        dictionaryData()),
+        dictionaryData(kRows)),
     randomPositions(kRows))
 MATERIALIZE_BENCHMARK(
     Materialize_DictionaryFloat_Random130,
@@ -1091,7 +1326,7 @@ BENCHMARK(Materialize_DictionaryString_Random130, iters) {
   std::unique_ptr<Encoding> encoding;
   BENCHMARK_SUSPEND {
     encoded = encodeWithSelection<DictionaryEncoding<std::string_view>>(
-        EncodingType::Dictionary, dictionaryStringData(backing));
+        EncodingType::Dictionary, dictionaryStringData(backing, kRows));
     positions = randomPositions(kRows);
     encoding = createRegularEncoding(encoded, stringBuffers);
   }
@@ -1101,22 +1336,28 @@ BENCHMARK(Materialize_DictionaryString_Random130, iters) {
 VIEW_BENCHMARK(
     View_RLEUint32_Random130,
     uint32_t,
-    encodeWithSelection<RLEEncoding<uint32_t>>(EncodingType::RLE, rleData()),
+    encodeWithSelection<RLEEncoding<uint32_t>>(
+        EncodingType::RLE,
+        rleData(kRows)),
     randomPositions(kRows))
 RANGE_VIEW_BENCHMARK(
     RangeView_RLEUint32_Range1024,
     uint32_t,
-    encodeWithSelection<RLEEncoding<uint32_t>>(EncodingType::RLE, rleData()))
+    encodeWithSelection<RLEEncoding<uint32_t>>(
+        EncodingType::RLE,
+        rleData(kRows)))
 MATERIALIZE_BENCHMARK(
     Materialize_RLEUint32_Random130,
     uint32_t,
-    encodeWithSelection<RLEEncoding<uint32_t>>(EncodingType::RLE, rleData()),
+    encodeWithSelection<RLEEncoding<uint32_t>>(
+        EncodingType::RLE,
+        rleData(kRows)),
     randomPositions(kRows))
 BENCHMARK(Construct_RLERunEnds_ReadAt, iters) {
   std::string encoded;
   BENCHMARK_SUSPEND {
     encoded = encodeWithSelection<RLEEncoding<uint32_t>>(
-        EncodingType::RLE, rleData());
+        EncodingType::RLE, rleData(kRows));
   }
   while (iters--) {
     ReadAtRunEndsRLEView view{
@@ -1128,7 +1369,7 @@ BENCHMARK(Construct_RLERunEnds_Materialize, iters) {
   std::string encoded;
   BENCHMARK_SUSPEND {
     encoded = encodeWithSelection<RLEEncoding<uint32_t>>(
-        EncodingType::RLE, rleData());
+        EncodingType::RLE, rleData(kRows));
   }
   while (iters--) {
     MaterializedRunEndsRLEView view{
@@ -1141,57 +1382,61 @@ VIEW_BENCHMARK(
     float,
     encodeWithSelection<ALPEncoding<float>>(
         EncodingType::ALP,
-        alpData<float>()),
+        alpData<float>(kRows)),
     randomPositions(kRows))
 RANGE_VIEW_BENCHMARK(
     RangeView_ALPFloat_Range1024,
     float,
     encodeWithSelection<ALPEncoding<float>>(
         EncodingType::ALP,
-        alpData<float>()))
+        alpData<float>(kRows)))
 VIEW_BENCHMARK(
     View_ALPDouble_Random130,
     double,
     encodeWithSelection<ALPEncoding<double>>(
         EncodingType::ALP,
-        alpData<double>()),
+        alpData<double>(kRows)),
     randomPositions(kRows))
 RANGE_VIEW_BENCHMARK(
     RangeView_ALPDouble_Range1024,
     double,
     encodeWithSelection<ALPEncoding<double>>(
         EncodingType::ALP,
-        alpData<double>()))
+        alpData<double>(kRows)))
 MATERIALIZE_BENCHMARK(
     Materialize_ALPFloat_Random130,
     float,
     encodeWithSelection<ALPEncoding<float>>(
         EncodingType::ALP,
-        alpData<float>()),
+        alpData<float>(kRows)),
     randomPositions(kRows))
 MATERIALIZE_BENCHMARK(
     Materialize_ALPDouble_Random130,
     double,
     encodeWithSelection<ALPEncoding<double>>(
         EncodingType::ALP,
-        alpData<double>()),
+        alpData<double>(kRows)),
     randomPositions(kRows))
 VIEW_BENCHMARK(
     View_FORUint32_Random130,
     uint32_t,
-    encodeWithSelection<ForEncoding<uint32_t>>(EncodingType::FOR, pforData()),
+    encodeWithSelection<ForEncoding<uint32_t>>(
+        EncodingType::FOR,
+        pforData(kRows)),
     randomPositions(kRows))
 RANGE_VIEW_BENCHMARK(
     RangeView_FORUint32_Range1024,
     uint32_t,
-    encodeWithSelection<ForEncoding<uint32_t>>(EncodingType::FOR, pforData()))
+    encodeWithSelection<ForEncoding<uint32_t>>(
+        EncodingType::FOR,
+        pforData(kRows)))
 BENCHMARK(Materialize_FORUint32_Random130, iters) {
   std::string encoded;
   std::vector<uint32_t> positions;
   std::unique_ptr<ForEncoding<uint32_t>> encoding;
   BENCHMARK_SUSPEND {
     encoded = encodeWithSelection<ForEncoding<uint32_t>>(
-        EncodingType::FOR, pforData());
+        EncodingType::FOR, pforData(kRows));
     positions = randomPositions(kRows);
     encoding = std::make_unique<ForEncoding<uint32_t>>(
         *benchmarkPool(), encoded, nullptr, Encoding::Options{});
@@ -1201,36 +1446,42 @@ BENCHMARK(Materialize_FORUint32_Random130, iters) {
 VIEW_BENCHMARK(
     View_PFORUint32_Random130,
     uint32_t,
-    encodeWithSelection<PFOREncoding<uint32_t>>(EncodingType::PFOR, pforData()),
+    encodeWithSelection<PFOREncoding<uint32_t>>(
+        EncodingType::PFOR,
+        pforData(kRows)),
     randomPositions(kRows))
 RANGE_VIEW_BENCHMARK(
     RangeView_PFORUint32_Range1024,
     uint32_t,
-    encodeWithSelection<PFOREncoding<uint32_t>>(EncodingType::PFOR, pforData()))
+    encodeWithSelection<PFOREncoding<uint32_t>>(
+        EncodingType::PFOR,
+        pforData(kRows)))
 MATERIALIZE_BENCHMARK(
     Materialize_PFORUint32_Random130,
     uint32_t,
-    encodeWithSelection<PFOREncoding<uint32_t>>(EncodingType::PFOR, pforData()),
+    encodeWithSelection<PFOREncoding<uint32_t>>(
+        EncodingType::PFOR,
+        pforData(kRows)),
     randomPositions(kRows))
 VIEW_BENCHMARK(
     View_HuffmanUint32_SkewedRandom130,
     uint32_t,
     encodeWithSelection<HuffmanEncoding<uint32_t>>(
         EncodingType::Huffman,
-        huffmanSkewedData()),
+        huffmanSkewedData(kRows)),
     randomPositions(kRows))
 RANGE_VIEW_BENCHMARK(
     RangeView_HuffmanUint32_SkewedRange1024,
     uint32_t,
     encodeWithSelection<HuffmanEncoding<uint32_t>>(
         EncodingType::Huffman,
-        huffmanSkewedData()))
+        huffmanSkewedData(kRows)))
 MATERIALIZE_BENCHMARK(
     Materialize_HuffmanUint32_SkewedRandom130,
     uint32_t,
     encodeWithSelection<HuffmanEncoding<uint32_t>>(
         EncodingType::Huffman,
-        huffmanSkewedData()),
+        huffmanSkewedData(kRows)),
     randomPositions(kRows))
 VIEW_BENCHMARK(
     View_HuffmanUint32_UniformRandom130,
@@ -1315,28 +1566,28 @@ MATERIALIZE_BENCHMARK(
 VIEW_BENCHMARK(
     View_BitRangeSplitUint64_Random130,
     uint64_t,
-    encodeBitRangeSplit(bitRangeSplitData()),
+    encodeBitRangeSplit(bitRangeSplitData(kRows)),
     randomPositions(kRows))
 BATCH_VIEW_BENCHMARK(
     BatchView_BitRangeSplitUint64_Random130,
     uint64_t,
-    encodeBitRangeSplit(bitRangeSplitData()),
+    encodeBitRangeSplit(bitRangeSplitData(kRows)),
     randomPositions(kRows))
 RANGE_VIEW_BENCHMARK(
     RangeView_BitRangeSplitUint64_Range1024,
     uint64_t,
-    encodeBitRangeSplit(bitRangeSplitData()))
+    encodeBitRangeSplit(bitRangeSplitData(kRows)))
 MATERIALIZE_BENCHMARK(
     Materialize_BitRangeSplitUint64_Random130,
     uint64_t,
-    encodeBitRangeSplit(bitRangeSplitData()),
+    encodeBitRangeSplit(bitRangeSplitData(kRows)),
     randomPositions(kRows))
 BENCHMARK(Materialize_BitRangeSplitUint64_Range1024, iters) {
   std::string encoded;
   std::vector<facebook::velox::BufferPtr> stringBuffers;
   std::unique_ptr<Encoding> encoding;
   BENCHMARK_SUSPEND {
-    encoded = encodeBitRangeSplit(bitRangeSplitData());
+    encoded = encodeBitRangeSplit(bitRangeSplitData(kRows));
     encoding = createRegularEncoding(encoded, stringBuffers);
   }
   readRangesWithMaterialization<uint64_t>(*encoding, iters);
@@ -1344,7 +1595,7 @@ BENCHMARK(Materialize_BitRangeSplitUint64_Range1024, iters) {
 BENCHMARK(Encode_BitRangeSplitUint64_4096, iters) {
   Vector<uint64_t> data{benchmarkPool().get()};
   BENCHMARK_SUSPEND {
-    data = bitRangeSplitData();
+    data = bitRangeSplitData(kRows);
   }
   while (iters--) {
     Buffer buffer{*benchmarkPool()};
@@ -1357,42 +1608,42 @@ VIEW_BENCHMARK(
     uint32_t,
     encodeWithSelection<BlockBitPackingEncoding<uint32_t>>(
         EncodingType::BlockBitPacking,
-        pforData()),
+        pforData(kRows)),
     randomPositions(kRows))
 VIEW_BENCHMARK(
     View_BlockBitPackingUint32_Sorted130,
     uint32_t,
     encodeWithSelection<BlockBitPackingEncoding<uint32_t>>(
         EncodingType::BlockBitPacking,
-        pforData()),
+        pforData(kRows)),
     sortedRandomPositions(kRows))
 VIEW_BENCHMARK(
     View_BlockBitPackingUint32_Clustered130,
     uint32_t,
     encodeWithSelection<BlockBitPackingEncoding<uint32_t>>(
         EncodingType::BlockBitPacking,
-        pforData()),
+        pforData(kRows)),
     clusteredPositions(kRows))
 BATCH_VIEW_BENCHMARK(
     BatchView_BlockBitPackingUint32_Random130,
     uint32_t,
     encodeWithSelection<BlockBitPackingEncoding<uint32_t>>(
         EncodingType::BlockBitPacking,
-        pforData()),
+        pforData(kRows)),
     randomPositions(kRows))
 BATCH_VIEW_BENCHMARK(
     BatchView_BlockBitPackingUint32_Sorted130,
     uint32_t,
     encodeWithSelection<BlockBitPackingEncoding<uint32_t>>(
         EncodingType::BlockBitPacking,
-        pforData()),
+        pforData(kRows)),
     sortedRandomPositions(kRows))
 BATCH_VIEW_BENCHMARK(
     BatchView_BlockBitPackingUint32_Clustered130,
     uint32_t,
     encodeWithSelection<BlockBitPackingEncoding<uint32_t>>(
         EncodingType::BlockBitPacking,
-        pforData()),
+        pforData(kRows)),
     clusteredPositions(kRows))
 SHARED_DICTIONARY_ALPHABET_BENCHMARK(
     SharedDictionary_BBP_Uint32_ScalarRandom130,
@@ -1435,13 +1686,13 @@ RANGE_VIEW_BENCHMARK(
     uint32_t,
     encodeWithSelection<BlockBitPackingEncoding<uint32_t>>(
         EncodingType::BlockBitPacking,
-        pforData()))
+        pforData(kRows)))
 UNALIGNED_RANGE_VIEW_BENCHMARK(
     RangeView_BlockBitPackingUint32_UnalignedRange1024,
     uint32_t,
     encodeWithSelection<BlockBitPackingEncoding<uint32_t>>(
         EncodingType::BlockBitPacking,
-        pforData()))
+        pforData(kRows)))
 UNALIGNED_RANGE_VIEW_BENCHMARK(
     RangeView_BlockBitPackingUint16_UnalignedRange1024,
     uint16_t,
@@ -1453,8 +1704,366 @@ MATERIALIZE_BENCHMARK(
     uint32_t,
     encodeWithSelection<BlockBitPackingEncoding<uint32_t>>(
         EncodingType::BlockBitPacking,
-        pforData()),
+        pforData(kRows)),
     randomPositions(kRows))
+
+constexpr uint32_t kLargeRows = 16'384;
+
+using CreateReadFunction = std::function<void(
+    std::string_view encoded,
+    const std::vector<uint32_t>& positions,
+    uint32_t iterations)>;
+
+using CreateReadViewFunction = std::function<void(
+    std::string_view encoded,
+    const std::vector<uint32_t>& positions,
+    uint32_t iterations,
+    const Encoding::Options& options)>;
+
+// One encoding for the lifecycle of a point lookup: create the reader of an
+// encoded chunk and read one row, once with the encoding view and once with the
+// encoding's skip() and materialize(). The skip variant is empty for an
+// encoding that EncodingFactory cannot create.
+struct CreateReadCase {
+  std::string name;
+  std::function<std::string(uint32_t rows)> encode;
+  CreateReadViewFunction createAndReadWithView;
+  CreateReadFunction createAndReadWithSkip;
+  // Read one row per iteration from a view or an encoding that was created
+  // once, which shows the cost of a read without the cost of creating the
+  // reader.
+  std::function<
+      void(const EncodingView&, const std::vector<uint32_t>&, uint32_t)>
+      readWithReusedView;
+  std::function<void(Encoding&, const std::vector<uint32_t>&, uint32_t)>
+      readWithReusedSkip;
+};
+
+template <typename T>
+CreateReadCase makeCreateReadCase(
+    std::string name,
+    std::function<std::string(uint32_t rows)> encode) {
+  return {
+      std::move(name),
+      std::move(encode),
+      createAndReadWithView<T>,
+      createAndReadWithSkip<T>,
+      readWithReusedView<T>,
+      readWithReusedSkip<T>};
+}
+
+template <typename T>
+CreateReadCase makeNullableCreateReadCase(
+    std::string name,
+    std::function<std::string(uint32_t rows)> encode) {
+  return {
+      std::move(name),
+      std::move(encode),
+      createAndReadNullableWithView<T>,
+      createAndReadNullableWithSkip<T>,
+      readNullableWithReusedView<T>,
+      readNullableWithReusedSkip<T>};
+}
+
+// Encodes a chunk whose reserved value marks 10% of the rows as null.
+std::string encodeSentinelChunk(uint32_t rows) {
+  constexpr uint32_t kSentinel{0xFFFF'FFFFU};
+  constexpr uint32_t kNullPercent{10};
+  Vector<uint32_t> values{benchmarkPool().get(), rows};
+  std::mt19937 generator{1};
+  uint32_t numNulls{0};
+  for (uint32_t row{0}; row < rows; ++row) {
+    const bool isNull = generator() % 100 < kNullPercent;
+    values[row] = isNull ? kSentinel : row + 1;
+    numNulls += isNull ? 1 : 0;
+  }
+
+  const std::span<const uint32_t> physicalValues{values.data(), values.size()};
+  EncodingSelection<uint32_t> selection{
+      EncodingSelectionResult{.encodingType = EncodingType::Trivial},
+      Statistics<uint32_t>::create(physicalValues),
+      makeDefaultPolicy(DataType::Uint32),
+  };
+  Buffer buffer{*benchmarkPool()};
+  const auto child =
+      TrivialEncoding<uint32_t>::encode(selection, physicalValues, buffer);
+  std::string encoded;
+  encoded.resize(
+      EncodingPrefix::serializedSize(rows, /*useVarint=*/false) +
+      2 * sizeof(uint32_t) + child.size() + sizeof(uint32_t));
+  char* position = encoded.data();
+  EncodingPrefix::serialize(
+      EncodingType::Sentinel,
+      DataType::Uint32,
+      rows,
+      /*useVarint=*/false,
+      position);
+  encoding::writeUint32(numNulls, position);
+  encoding::writeUint32(static_cast<uint32_t>(child.size()), position);
+  encoding::writeBytes(child, position);
+  encoding::write<uint32_t>(kSentinel, position);
+  NIMBLE_CHECK_EQ(position, encoded.data() + encoded.size());
+  return encoded;
+}
+
+// Lists every encoding that has an encoding view, with data that suits it.
+const std::vector<CreateReadCase>& createReadCases() {
+  static const std::vector<CreateReadCase> cases = [] {
+    std::vector<CreateReadCase> result;
+    result.push_back(
+        makeCreateReadCase<uint32_t>("Trivial_uint32", [](uint32_t rows) {
+          return encodeWithSelection<TrivialEncoding<uint32_t>>(
+              EncodingType::Trivial, makeRandom<uint32_t>(rows));
+        }));
+    result.push_back(
+        makeCreateReadCase<bool>("Trivial_bool", [](uint32_t rows) {
+          return encodeWithSelection<TrivialEncoding<bool>>(
+              EncodingType::Trivial, boolData(rows));
+        }));
+    result.push_back(
+        makeCreateReadCase<std::string_view>(
+            "Trivial_string", [](uint32_t rows) {
+              std::vector<std::string> backing;
+              return encodeTrivialString(stringData(backing, rows));
+            }));
+    result.push_back(
+        makeCreateReadCase<uint32_t>("Constant_uint32", [](uint32_t rows) {
+          return encodeWithSelection<ConstantEncoding<uint32_t>>(
+              EncodingType::Constant, makeConstant<uint32_t>(42, rows));
+        }));
+    result.push_back(
+        makeCreateReadCase<uint32_t>("FixedBitWidth_uint32", [](uint32_t rows) {
+          return encodeWithSelection<FixedBitWidthEncoding<uint32_t>>(
+              EncodingType::FixedBitWidth, makeNarrow<uint32_t>(10, rows));
+        }));
+    result.push_back(
+        makeCreateReadCase<uint32_t>(
+            "MainlyConstant_uint32", [](uint32_t rows) {
+              return encodeWithSelection<MainlyConstantEncoding<uint32_t>>(
+                  EncodingType::MainlyConstant, mainlyConstantData(rows));
+            }));
+    result.push_back(
+        makeCreateReadCase<uint32_t>("Dictionary_uint32", [](uint32_t rows) {
+          return encodeWithSelection<DictionaryEncoding<uint32_t>>(
+              EncodingType::Dictionary, dictionaryData(rows));
+        }));
+    result.push_back(
+        makeCreateReadCase<std::string_view>(
+            "Dictionary_string", [](uint32_t rows) {
+              std::vector<std::string> backing;
+              return encodeWithSelection<DictionaryEncoding<std::string_view>>(
+                  EncodingType::Dictionary,
+                  dictionaryStringData(backing, rows));
+            }));
+    result.push_back(
+        makeCreateReadCase<uint32_t>("RLE_uint32", [](uint32_t rows) {
+          return encodeWithSelection<RLEEncoding<uint32_t>>(
+              EncodingType::RLE, rleData(rows));
+        }));
+    result.push_back(makeCreateReadCase<bool>("SparseBool", [](uint32_t rows) {
+      return encodeWithSelection<SparseBoolEncoding>(
+          EncodingType::SparseBool, boolData(rows));
+    }));
+    result.push_back(
+        makeCreateReadCase<uint32_t>("FOR_uint32", [](uint32_t rows) {
+          return encodeWithSelection<ForEncoding<uint32_t>>(
+              EncodingType::FOR, pforData(rows));
+        }));
+    result.push_back(
+        makeCreateReadCase<uint32_t>("PFOR_uint32", [](uint32_t rows) {
+          return encodeWithSelection<PFOREncoding<uint32_t>>(
+              EncodingType::PFOR, pforData(rows));
+        }));
+    result.push_back(
+        makeCreateReadCase<uint32_t>("Huffman_uint32", [](uint32_t rows) {
+          return encodeWithSelection<HuffmanEncoding<uint32_t>>(
+              EncodingType::Huffman, huffmanSkewedData(rows));
+        }));
+    result.push_back(
+        makeCreateReadCase<uint32_t>(
+            "SimdForBitpack_uint32", [](uint32_t rows) {
+              return encodeWithSelection<SimdForBitpackEncoding<uint32_t>>(
+                  EncodingType::SimdForBitpack, makeNarrow<uint32_t>(10, rows));
+            }));
+    result.push_back(
+        makeCreateReadCase<uint32_t>(
+            "BlockBitPacking_uint32", [](uint32_t rows) {
+              return encodeWithSelection<BlockBitPackingEncoding<uint32_t>>(
+                  EncodingType::BlockBitPacking, pforData(rows));
+            }));
+    result.push_back(
+        makeCreateReadCase<uint32_t>("DeltaBlock_uint32", [](uint32_t rows) {
+          return encodeWithSelection<DeltaBlockEncoding<uint32_t>>(
+              EncodingType::DeltaBlock, makeIncreasing<uint32_t>(rows));
+        }));
+    result.push_back(
+        makeCreateReadCase<uint32_t>("EliasFano_uint32", [](uint32_t rows) {
+          return encodeWithSelection<EliasFanoEncoding<uint32_t>>(
+              EncodingType::EliasFano, makeIncreasing<uint32_t>(rows));
+        }));
+    result.push_back(
+        makeCreateReadCase<uint64_t>("BitRangeSplit_uint64", [](uint32_t rows) {
+          return encodeBitRangeSplit(bitRangeSplitData(rows));
+        }));
+    result.push_back(
+        makeCreateReadCase<uint64_t>("SubIntSplit_uint64", [](uint32_t rows) {
+          return encodeWithSelection<SubIntSplitEncoding<uint64_t>>(
+              EncodingType::SubIntSplit, makeNarrow<uint64_t>(40, rows));
+        }));
+    result.push_back(
+        makeCreateReadCase<uint32_t>("Varint_uint32", [](uint32_t rows) {
+          return encodeWithSelection<VarintEncoding<uint32_t>>(
+              EncodingType::Varint, makeNarrow<uint32_t>(14, rows));
+        }));
+    result.push_back(
+        makeCreateReadCase<uint64_t>("Varint_uint64", [](uint32_t rows) {
+          return encodeWithSelection<VarintEncoding<uint64_t>>(
+              EncodingType::Varint, makeNarrow<uint64_t>(30, rows));
+        }));
+    result.push_back(makeCreateReadCase<float>("ALP_float", [](uint32_t rows) {
+      return encodeWithSelection<ALPEncoding<float>>(
+          EncodingType::ALP, alpData<float>(rows));
+    }));
+    result.push_back(
+        makeCreateReadCase<double>("ALP_double", [](uint32_t rows) {
+          return encodeWithSelection<ALPEncoding<double>>(
+              EncodingType::ALP, alpData<double>(rows));
+        }));
+    result.push_back(
+        makeCreateReadCase<double>("ALPRD_double", [](uint32_t rows) {
+          Vector<double> data{benchmarkPool().get(), rows};
+          for (uint32_t row{0}; row < rows; ++row) {
+            data[row] = 1.0 + folly::Random::randDouble01();
+          }
+          return encodeWithSelection<ALPRDEncoding<double>>(
+              EncodingType::ALPRD, data);
+        }));
+    result.push_back(
+        makeCreateReadCase<std::string_view>("Fsst_string", [](uint32_t rows) {
+          std::vector<std::string> backing;
+          return encodeFsstString(stringData(backing, rows));
+        }));
+    result.push_back(
+        makeNullableCreateReadCase<int64_t>(
+            "Nullable_int64", [](uint32_t rows) {
+              // Compression would measure decompressing the values instead of
+              // building the view.
+              return encodeNullableView(
+                  /*nullsPerThousand=*/100, rows, /*compression=*/std::nullopt);
+            }));
+    // EncodingFactory has no Sentinel encoding, so only the view reads it.
+    auto sentinelCase = makeNullableCreateReadCase<uint32_t>(
+        "Sentinel_uint32", encodeSentinelChunk);
+    sentinelCase.createAndReadWithSkip = nullptr;
+    sentinelCase.readWithReusedSkip = nullptr;
+    result.push_back(std::move(sentinelCase));
+    return result;
+  }();
+  return cases;
+}
+
+unsigned runCreateRead(
+    const CreateReadCase& testCase,
+    const CreateReadFunction& createAndRead,
+    uint32_t rows,
+    unsigned iterations) {
+  folly::BenchmarkSuspender suspender;
+  const auto encoded = testCase.encode(rows);
+  const auto positions = randomPositions(rows);
+  suspender.dismiss();
+  createAndRead(encoded, positions, iterations);
+  suspender.rehire();
+  return iterations;
+}
+
+// Registers the view with cached encoding views, the view without caching and
+// the skip variant of every case for small and large chunks.
+void registerCreateReadBenchmarks() {
+  for (const uint32_t rows : {kRows, kLargeRows}) {
+    for (const auto& testCase : createReadCases()) {
+      for (const auto& variant :
+           {std::pair{"Cached", true}, std::pair{"Default", false}}) {
+        const auto cacheEncodingView = variant.second;
+        folly::addBenchmark(
+            __FILE__,
+            fmt::format(
+                "CreateRead_{}_{}_{}", variant.first, testCase.name, rows),
+            [&testCase, rows, cacheEncodingView](unsigned iterations) {
+              Encoding::Options options;
+              options.cacheEncodingView = cacheEncodingView;
+              return runCreateRead(
+                  testCase,
+                  [&testCase, &options](
+                      std::string_view encoded,
+                      const std::vector<uint32_t>& positions,
+                      uint32_t numIterations) {
+                    testCase.createAndReadWithView(
+                        encoded, positions, numIterations, options);
+                  },
+                  rows,
+                  iterations);
+            });
+      }
+      if (testCase.createAndReadWithSkip == nullptr) {
+        continue;
+      }
+      folly::addBenchmark(
+          __FILE__,
+          fmt::format("CreateRead_Skip_{}_{}", testCase.name, rows),
+          [&testCase, rows](unsigned iterations) {
+            return runCreateRead(
+                testCase, testCase.createAndReadWithSkip, rows, iterations);
+          });
+    }
+  }
+}
+
+// Registers reads from a view or an encoding that is created once and reused
+// for every read, with cached encoding views, without caching and with skip.
+// The creation is not timed.
+void registerReuseReadBenchmarks() {
+  for (const uint32_t rows : {kRows, kLargeRows}) {
+    for (const auto& testCase : createReadCases()) {
+      for (const auto& variant :
+           {std::pair{"Cached", true}, std::pair{"Default", false}}) {
+        const auto cacheEncodingView = variant.second;
+        folly::addBenchmark(
+            __FILE__,
+            fmt::format("Reuse_{}_{}_{}", variant.first, testCase.name, rows),
+            [&testCase, rows, cacheEncodingView](unsigned iterations) {
+              folly::BenchmarkSuspender suspender;
+              const auto encoded = testCase.encode(rows);
+              const auto positions = randomPositions(rows);
+              Encoding::Options options;
+              options.cacheEncodingView = cacheEncodingView;
+              const auto view =
+                  createEncodingView(encoded, benchmarkPool().get(), options);
+              suspender.dismiss();
+              testCase.readWithReusedView(*view, positions, iterations);
+              suspender.rehire();
+              return iterations;
+            });
+      }
+      if (testCase.readWithReusedSkip == nullptr) {
+        continue;
+      }
+      folly::addBenchmark(
+          __FILE__,
+          fmt::format("Reuse_Skip_{}_{}", testCase.name, rows),
+          [&testCase, rows](unsigned iterations) {
+            folly::BenchmarkSuspender suspender;
+            const auto encoded = testCase.encode(rows);
+            const auto positions = randomPositions(rows);
+            std::vector<facebook::velox::BufferPtr> stringBuffers;
+            const auto encoding = createRegularEncoding(encoded, stringBuffers);
+            suspender.dismiss();
+            testCase.readWithReusedSkip(*encoding, positions, iterations);
+            suspender.rehire();
+            return iterations;
+          });
+    }
+  }
+}
 
 #undef VIEW_BENCHMARK
 #undef BATCH_VIEW_BENCHMARK
@@ -1469,5 +2078,7 @@ int main(int argc, char** argv) {
   folly::Init init(&argc, &argv);
   facebook::velox::memory::MemoryManager::initialize({});
   registerNullableViewBenchmarks();
+  registerCreateReadBenchmarks();
+  registerReuseReadBenchmarks();
   folly::runBenchmarks();
 }

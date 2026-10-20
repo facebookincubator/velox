@@ -27,7 +27,9 @@
 #include "velox/dwio/nimble/common/tests/GTestUtils.h"
 #include "velox/dwio/nimble/encodings/BitRangeSplitEncoding.h"
 #include "velox/dwio/nimble/encodings/FixedBitWidthEncoding.h"
-#include "velox/dwio/nimble/encodings/VarintEncoding.h"
+#include "velox/dwio/nimble/encodings/RLEEncoding.h"
+#include "velox/dwio/nimble/encodings/SparseBoolEncoding.h"
+#include "velox/dwio/nimble/encodings/TrivialEncoding.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/common/EncodingLayout.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
@@ -36,9 +38,11 @@
 
 using namespace facebook;
 
-using EncodingViewTest = nimble::test::EncodingViewTest;
+using EncodingViewFactoryTest = nimble::test::EncodingViewTest;
 
-TEST_F(EncodingViewTest, supportsEncodingViewMatchesViewableEncodingSet) {
+TEST_P(
+    EncodingViewFactoryTest,
+    supportsEncodingViewMatchesViewableEncodingSet) {
   const std::vector<nimble::EncodingType> supportedEncodings{
       nimble::EncodingType::Sentinel,
       nimble::EncodingType::Nullable,
@@ -60,6 +64,7 @@ TEST_F(EncodingViewTest, supportsEncodingViewMatchesViewableEncodingSet) {
       nimble::EncodingType::BitRangeSplit,
       nimble::EncodingType::BlockBitPacking,
       nimble::EncodingType::SubIntSplit,
+      nimble::EncodingType::Varint,
       nimble::EncodingType::Fsst};
   for (const auto encodingType : supportedEncodings) {
     SCOPED_TRACE(fmt::format("encodingType={}", encodingType));
@@ -67,7 +72,6 @@ TEST_F(EncodingViewTest, supportsEncodingViewMatchesViewableEncodingSet) {
   }
 
   const std::vector<nimble::EncodingType> unsupportedEncodings{
-      nimble::EncodingType::Varint,
       nimble::EncodingType::Delta,
       nimble::EncodingType::Prefix,
       nimble::EncodingType::FrequencyPartition,
@@ -78,7 +82,7 @@ TEST_F(EncodingViewTest, supportsEncodingViewMatchesViewableEncodingSet) {
   }
 }
 
-TEST_F(EncodingViewTest, readsNullableEncoding) {
+TEST_P(EncodingViewFactoryTest, readsNullableEncoding) {
   const auto values = makeVector({10, 30, 50});
   const auto nonNulls = makeVector({true, false, true, false, true});
   const std::array<int32_t, 5> expectedValues{10, 0, 30, 0, 50};
@@ -88,6 +92,7 @@ TEST_F(EncodingViewTest, readsNullableEncoding) {
     SCOPED_TRACE(fmt::format("useVarint={}", useVarint));
     const nimble::Encoding::Options options{
         .useVarintRowCount = useVarint,
+        .cacheEncodingView = cacheEncodingView(),
     };
     const auto verify = [&](std::string_view serialized) {
       auto view = nimble::createEncodingView(serialized, pool_.get(), options);
@@ -116,8 +121,9 @@ TEST_F(EncodingViewTest, readsNullableEncoding) {
   }
 }
 
-TEST_F(EncodingViewTest, readsCompressedTrivialEncoding) {
-  const nimble::Encoding::Options options;
+TEST_P(EncodingViewFactoryTest, readsCompressedTrivialEncoding) {
+  const nimble::Encoding::Options options{
+      .cacheEncodingView = cacheEncodingView()};
   nimble::Vector<int32_t> values{pool_.get()};
   for (auto i = 0; i < 4'096; ++i) {
     values.push_back(i % 17);
@@ -136,7 +142,182 @@ TEST_F(EncodingViewTest, readsCompressedTrivialEncoding) {
   }
 }
 
-TEST_F(EncodingViewTest, parsesArbitraryBitRangeSplitBoundaries) {
+TEST_P(EncodingViewFactoryTest, boolViewsCountValuesBefore) {
+  // Mostly-false and mostly-true streams make SparseBool store either value as
+  // the sparse one.
+  struct Pattern {
+    const char* name;
+    bool (*value)(uint32_t row);
+  };
+  const std::vector<Pattern> patterns = {
+      {"mostlyFalse", [](uint32_t row) { return row % 37 == 5; }},
+      {"mostlyTrue", [](uint32_t row) { return row % 37 != 5; }},
+      {"alternating", [](uint32_t row) { return row % 2 == 0; }},
+      {"runs", [](uint32_t row) { return (row / 50) % 2 == 0; }},
+      {"allFalse", [](uint32_t) { return false; }},
+  };
+
+  const auto check = [&]<typename Encoding>(const char* encodingName) {
+    for (const auto& pattern : patterns) {
+      for (const uint32_t numRows : {1U, 64U, 200U, 9'000U}) {
+        SCOPED_TRACE(
+            fmt::format(
+                "encoding={}, pattern={}, numRows={}",
+                encodingName,
+                pattern.name,
+                numRows));
+        nimble::Vector<bool> values{pool_.get()};
+        for (uint32_t row = 0; row < numRows; ++row) {
+          values.push_back(pattern.value(row));
+        }
+        const auto serialized =
+            nimble::test::Encoder<Encoding>::encode(*buffer_, values);
+        const auto view = nimble::detail::createTypedEncodingView<bool>(
+            serialized,
+            pool_.get(),
+            nimble::Encoding::Options{
+                .cacheEncodingView = cacheEncodingView()});
+        ASSERT_EQ(view->rowCount(), numRows);
+
+        // Checks a sample of the end rows when the stream spans several
+        // blocks of the default count.
+        const uint32_t stride = numRows > 1'000 ? 499 : 1;
+        uint32_t numTrue{0};
+        for (uint32_t end = 0; end <= numRows; ++end) {
+          if (end % stride == 0 || end == numRows) {
+            EXPECT_EQ(view->count(end, /*value=*/true), numTrue);
+            EXPECT_EQ(view->count(end, /*value=*/false), end - numTrue);
+          }
+          if (end < numRows) {
+            numTrue += values[end] ? 1 : 0;
+          }
+        }
+        std::vector<char> range(numRows);
+        view->read(0, numRows, reinterpret_cast<bool*>(range.data()));
+        for (uint32_t row = 0; row < numRows; ++row) {
+          EXPECT_EQ(static_cast<bool>(range[row]), values[row]);
+          EXPECT_EQ(view->readAt(row), values[row]);
+        }
+      }
+    }
+  };
+  check.operator()<nimble::SparseBoolEncoding>("SparseBool");
+  check.operator()<nimble::TrivialEncoding<bool>>("Trivial");
+  check.operator()<nimble::RLEEncoding<bool>>("RLE");
+}
+
+TEST_P(EncodingViewFactoryTest, countsIntegerValues) {
+  constexpr uint32_t kNumRows{3'000};
+  nimble::Vector<uint32_t> values{pool_.get()};
+  for (uint32_t row = 0; row < kNumRows; ++row) {
+    values.push_back(row % 7);
+  }
+  const auto serialized =
+      nimble::test::Encoder<nimble::TrivialEncoding<uint32_t>>::encode(
+          *buffer_, values);
+  const auto view = nimble::detail::createTypedEncodingView<uint32_t>(
+      serialized,
+      pool_.get(),
+      nimble::Encoding::Options{.cacheEncodingView = cacheEncodingView()});
+
+  // The rows span several blocks of the default count, so the sampled ends fall
+  // inside blocks and on their edges. The expected count grows by one for each
+  // written row that equals the value.
+  uint32_t numThrees{0};
+  for (uint32_t end = 0; end <= kNumRows; ++end) {
+    if (end % 499 == 0 || end == kNumRows) {
+      SCOPED_TRACE(fmt::format("end={}", end));
+      EXPECT_EQ(view->count(end, /*value=*/3), numThrees);
+    }
+    if (end < kNumRows) {
+      numThrees += values[end] == 3 ? 1 : 0;
+    }
+  }
+
+  // An end past the row count is rejected.
+  NIMBLE_ASSERT_THROW(
+      view->count(kNumRows + 1, /*value=*/3), "(3001 vs. 3000)");
+}
+
+TEST_P(EncodingViewFactoryTest, sumsIntegerValues) {
+  constexpr uint32_t kNumRows{3'000};
+  nimble::Vector<uint32_t> values{pool_.get()};
+  std::vector<uint64_t> sumsBefore{0};
+  for (uint32_t row = 0; row < kNumRows; ++row) {
+    values.push_back(row % 13 + 1);
+    sumsBefore.emplace_back(sumsBefore.back() + values[row]);
+  }
+  const auto serialized =
+      nimble::test::Encoder<nimble::TrivialEncoding<uint32_t>>::encode(
+          *buffer_, values);
+  const auto view = nimble::detail::createTypedEncodingView<uint32_t>(
+      serialized,
+      pool_.get(),
+      nimble::Encoding::Options{.cacheEncodingView = cacheEncodingView()});
+
+  {
+    // The ranges start and end on both sides of a block boundary, and some are
+    // empty.
+    const std::vector<std::pair<uint32_t, uint32_t>> ranges{
+        {0, 0},
+        {5, 5},
+        {0, 1},
+        {1'023, 1'025},
+        {1'024, 2'048},
+        {7, 2'999},
+        {0, kNumRows},
+        {kNumRows, kNumRows}};
+    for (const auto& [begin, end] : ranges) {
+      SCOPED_TRACE(fmt::format("begin={}, end={}", begin, end));
+      // The sums before the two ends were built while writing the values, so
+      // their difference is the sum of the range.
+      EXPECT_EQ(view->sum(begin, end), sumsBefore[end] - sumsBefore[begin]);
+    }
+    // A range that ends before it begins, and one that ends past the row
+    // count, are rejected.
+    NIMBLE_ASSERT_THROW(view->sum(5, 4), "(5 vs. 4)");
+    NIMBLE_ASSERT_THROW(view->sum(0, kNumRows + 1), "(3001 vs. 3000)");
+  }
+
+  {
+    // The indices are unordered and repeated.
+    const std::vector<uint32_t> indices{
+        2'500, 0, 7, 2'500, 1'024, kNumRows, 1'023};
+    std::vector<uint64_t> actual(indices.size());
+    view->sum(indices, actual.data());
+    // Each result is the sum before its index, in the order the indices were
+    // given, although the view reads the rows once in ascending order.
+    std::vector<uint64_t> expected;
+    expected.reserve(indices.size());
+    for (const auto index : indices) {
+      expected.emplace_back(sumsBefore[index]);
+    }
+    EXPECT_EQ(actual, expected);
+
+    // An index past the row count is rejected.
+    const std::vector<uint32_t> pastRowCount{kNumRows + 1};
+    NIMBLE_ASSERT_THROW(
+        view->sum(pastRowCount, actual.data()), "(3001 vs. 3000)");
+  }
+}
+
+TEST_P(EncodingViewFactoryTest, rejectsNonBoolStreamAsBoolView) {
+  nimble::Vector<int32_t> values{pool_.get()};
+  for (int32_t row = 0; row < 10; ++row) {
+    values.push_back(row);
+  }
+  const auto serialized =
+      nimble::test::Encoder<nimble::TrivialEncoding<int32_t>>::encode(
+          *buffer_, values);
+  NIMBLE_ASSERT_THROW(
+      nimble::detail::createTypedEncodingView<bool>(
+          serialized,
+          pool_.get(),
+          nimble::Encoding::Options{.cacheEncodingView = cacheEncodingView()}),
+      "A bool encoding view requires a bool stream.");
+}
+
+TEST_P(EncodingViewFactoryTest, parsesArbitraryBitRangeSplitBoundaries) {
   const auto sections =
       nimble::detail::BitRangeSplitEncodingBase::parseSections(
           "0-12;13-46;47-63", /*physicalBits=*/64);
@@ -163,7 +344,7 @@ TEST_F(EncodingViewTest, parsesArbitraryBitRangeSplitBoundaries) {
       "Invalid BitRangeSplit range config");
 }
 
-TEST_F(EncodingViewTest, readsSubIntSplitEncoding) {
+TEST_P(EncodingViewFactoryTest, readsSubIntSplitEncoding) {
   const std::vector<uint64_t> values{
       0x299aff8ca62b0001,
       0x299be75117820001,
@@ -214,7 +395,8 @@ TEST_F(EncodingViewTest, readsSubIntSplitEncoding) {
           std::string(nimble::subintsplit::kSplitBoundariesConfigKey)),
       "0-15;16-58;59-63");
 
-  auto view = nimble::createEncodingView(encoded, pool_.get());
+  auto view = nimble::createEncodingView(
+      encoded, pool_.get(), {.cacheEncodingView = cacheEncodingView()});
   EXPECT_EQ(view->rowCount(), values.size());
   for (uint32_t row{0}; row < values.size(); ++row) {
     uint64_t actual{0};
@@ -230,7 +412,7 @@ TEST_F(EncodingViewTest, readsSubIntSplitEncoding) {
       (std::vector<uint64_t>{values[3], values[0], values[2], values[2]}));
 }
 
-TEST_F(EncodingViewTest, readsConfigurableBitRangeSplitSections) {
+TEST_P(EncodingViewFactoryTest, readsConfigurableBitRangeSplitSections) {
   const std::vector<uint64_t> values{
       0x299aff8ca62b0001,
       0x299be75117820001,
@@ -283,7 +465,8 @@ TEST_F(EncodingViewTest, readsConfigurableBitRangeSplitSections) {
         static_cast<uint32_t>(values.size()), materialized.data());
     EXPECT_EQ(materialized, values);
 
-    auto view = nimble::createEncodingView(encoded, pool_.get());
+    auto view = nimble::createEncodingView(
+        encoded, pool_.get(), {.cacheEncodingView = cacheEncodingView()});
     const std::vector<uint32_t> indices{3, 0, 2, 2};
     std::vector<uint64_t> actual(indices.size());
     view->readAt(indices, actual.data());
@@ -293,7 +476,7 @@ TEST_F(EncodingViewTest, readsConfigurableBitRangeSplitSections) {
   }
 }
 
-TEST_F(EncodingViewTest, rejectsInvalidBitRangeSplitConfig) {
+TEST_P(EncodingViewFactoryTest, rejectsInvalidBitRangeSplitConfig) {
   const std::vector<uint64_t> values{1, 2, 3, 4};
   const nimble::EncodingSelectionPolicyCreator policyCreator =
       [](nimble::DataType dataType)
@@ -327,7 +510,7 @@ TEST_F(EncodingViewTest, rejectsInvalidBitRangeSplitConfig) {
       "not contiguous");
 }
 
-TEST_F(EncodingViewTest, readsNestedBitRangeSplitSections) {
+TEST_P(EncodingViewFactoryTest, readsNestedBitRangeSplitSections) {
   const std::vector<uint64_t> values{
       0x299aff8ca62b0001,
       0x299be75117820001,
@@ -374,7 +557,8 @@ TEST_F(EncodingViewTest, readsNestedBitRangeSplitSections) {
       static_cast<uint32_t>(values.size()), materialized.data());
   EXPECT_EQ(materialized, values);
 
-  auto view = nimble::createEncodingView(encoded, pool_.get());
+  auto view = nimble::createEncodingView(
+      encoded, pool_.get(), {.cacheEncodingView = cacheEncodingView()});
   const std::vector<uint32_t> indices{3, 0, 2, 2};
   std::vector<uint64_t> actual(indices.size());
   view->readAt(indices, actual.data());
@@ -383,19 +567,22 @@ TEST_F(EncodingViewTest, readsNestedBitRangeSplitSections) {
       (std::vector<uint64_t>{values[3], values[0], values[2], values[2]}));
 }
 
-TEST_F(EncodingViewTest, rejectsVarintEncoding) {
-  const nimble::Encoding::Options options;
-  const auto values = makeVector({10, 11, 12, 1000, 1001});
-  auto serialized =
-      nimble::test::Encoder<nimble::VarintEncoding<int32_t>>::encode(
-          *buffer_, values, nimble::CompressionType::Uncompressed, options);
+TEST_P(EncodingViewFactoryTest, rejectsVarintWithSmallDataType) {
+  const nimble::Encoding::Options options{
+      .cacheEncodingView = cacheEncodingView()};
+  std::string serialized(nimble::EncodingPrefix::kFixedPrefixSize, 0);
+  char* pos = serialized.data();
+  nimble::encoding::writeChar(
+      static_cast<char>(nimble::EncodingType::Varint), pos);
+  nimble::encoding::writeChar(static_cast<char>(nimble::DataType::Int16), pos);
+  nimble::encoding::writeUint32(/*value=*/1, pos);
 
   NIMBLE_ASSERT_THROW(
       nimble::createEncodingView(serialized, pool_.get(), options),
-      "Varint does not support EncodingView");
+      "Varint encoding only supports 32- and 64-bit numeric data types");
 }
 
-TEST_F(EncodingViewTest, rejectsUnsupportedEncodingTypes) {
+TEST_P(EncodingViewFactoryTest, rejectsUnsupportedEncodingTypes) {
   const std::vector<std::pair<nimble::EncodingType, nimble::DataType>>
       unsupportedEncodings{
           {nimble::EncodingType::Delta, nimble::DataType::Int32},
@@ -403,7 +590,8 @@ TEST_F(EncodingViewTest, rejectsUnsupportedEncodingTypes) {
           {nimble::EncodingType::FrequencyPartition, nimble::DataType::Uint32},
       };
 
-  const nimble::Encoding::Options options;
+  const nimble::Encoding::Options options{
+      .cacheEncodingView = cacheEncodingView()};
   for (const auto& [encodingType, dataType] : unsupportedEncodings) {
     SCOPED_TRACE(fmt::format("encodingType={}", encodingType));
     std::string serialized(nimble::EncodingPrefix::kFixedPrefixSize, 0);
@@ -418,8 +606,9 @@ TEST_F(EncodingViewTest, rejectsUnsupportedEncodingTypes) {
   }
 }
 
-TEST_F(EncodingViewTest, rejectsUnsupportedDataType) {
-  const nimble::Encoding::Options options;
+TEST_P(EncodingViewFactoryTest, rejectsUnsupportedDataType) {
+  const nimble::Encoding::Options options{
+      .cacheEncodingView = cacheEncodingView()};
   std::string serialized(nimble::EncodingPrefix::kFixedPrefixSize, 0);
   serialized[nimble::EncodingPrefix::kEncodingTypeOffset] =
       static_cast<char>(nimble::EncodingType::Trivial);
@@ -431,8 +620,9 @@ TEST_F(EncodingViewTest, rejectsUnsupportedDataType) {
       "does not support EncodingView");
 }
 
-TEST_F(EncodingViewTest, rejectsFixedBitWidthWithNonNumericDataType) {
-  const nimble::Encoding::Options options;
+TEST_P(EncodingViewFactoryTest, rejectsFixedBitWidthWithNonNumericDataType) {
+  const nimble::Encoding::Options options{
+      .cacheEncodingView = cacheEncodingView()};
   std::string serialized(nimble::EncodingPrefix::kFixedPrefixSize, 0);
   serialized[nimble::EncodingPrefix::kEncodingTypeOffset] =
       static_cast<char>(nimble::EncodingType::FixedBitWidth);
@@ -443,3 +633,5 @@ TEST_F(EncodingViewTest, rejectsFixedBitWidthWithNonNumericDataType) {
       nimble::createEncodingView(serialized, pool_.get(), options),
       "FixedBitWidth encoding should not be selected for non-numeric data types");
 }
+
+INSTANTIATE_ENCODING_VIEW_TEST_SUITE(EncodingViewFactoryTest);
