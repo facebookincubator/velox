@@ -738,6 +738,16 @@ floating-point number. Casting from invalid input values throws.</p>
 <span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">'nan'</span> <span class="k">as</span> <span class="n">real</span><span class="p">);</span> <span class="o">--</span> <span class="n">Invalid</span> <span class="n">argument</span>
 </pre></div>
 </div>
+<p>With the <a class="reference internal" href="../../configs.html"><span class="doc">cast_string_to_floating_point_lenient_inf_nan</span></a>
+configuration property set to true, the C-style spellings <code class="docutils literal notranslate"><span class="pre">inf</span></code>, <code class="docutils literal notranslate"><span class="pre">infinity</span></code>
+and <code class="docutils literal notranslate"><span class="pre">nan</span></code> are accepted as well, in any letter case and with an optional sign.
+This deviates from Presto, which rejects them.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">'inf'</span> <span class="k">as</span> <span class="n">real</span><span class="p">);</span> <span class="o">--</span> <span class="n">Infinity</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">'-INF'</span> <span class="k">as</span> <span class="n">double</span><span class="p">);</span> <span class="o">--</span> <span class="o">-</span><span class="n">Infinity</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">'infinity'</span> <span class="k">as</span> <span class="n">real</span><span class="p">);</span> <span class="o">--</span> <span class="n">Infinity</span>
+<span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">'nan'</span> <span class="k">as</span> <span class="n">double</span><span class="p">);</span> <span class="o">--</span> <span class="n">NaN</span>
+</pre></div>
+</div>
 <p>Below cases are supported in Presto, but throw in Velox.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">'1.2f'</span> <span class="k">as</span> <span class="n">real</span><span class="p">);</span> <span class="o">--</span> <span class="mf">1.2</span>
 <span class="n">SELECT</span> <span class="n">cast</span><span class="p">(</span><span class="s1">'1.2f'</span> <span class="k">as</span> <span class="n">double</span><span class="p">);</span> <span class="o">--</span> <span class="mf">1.2</span>
