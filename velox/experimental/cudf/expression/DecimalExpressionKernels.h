@@ -30,16 +30,15 @@ namespace facebook::velox::cudf_velox {
 /**
  * @brief Element-wise decimal division of two columns.
  *
- * Runs the GPU divide into outputType. Nulls are propagated via a host-side
- * bitmask_and stencil before the kernel runs. A zero divisor fails the batch
+ * Divides with cudf::divide_decimal into outputType, rounding half away from
+ * zero. The operands and the output may each be DECIMAL64 or DECIMAL128, with
+ * any scale. A null operand gives a null result. A zero divisor fails the batch
  * with "Division by zero"; arithmetic overflow fails with "Decimal overflow in
- * divide".
+ * divide". Division by zero takes precedence when a batch has both.
  *
- * @param lhs Left-hand decimal operand column (DECIMAL64 or DECIMAL128).
- * @param rhs Right-hand decimal operand column (same type as lhs).
- * @param outputType Output decimal type including precision and scale.
- * @param aRescale Fixed-point scale adjustment (Velox passes outScale -
- * lhsScale + rhsScale), used inside the kernel as a power-of-ten factor.
+ * @param lhs Left-hand decimal operand column.
+ * @param rhs Right-hand decimal operand column.
+ * @param outputType Output decimal type and scale.
  * @param stream CUDA stream for GPU execution.
  * @param mr Memory resource for output allocation.
  * @return Column containing the divided decimal values.
@@ -48,22 +47,18 @@ std::unique_ptr<cudf::column> decimalDivide(
     const cudf::column_view& lhs,
     const cudf::column_view& rhs,
     cudf::data_type outputType,
-    int32_t aRescale,
     cuda::stream_ref stream,
     rmm::device_async_resource_ref mr);
 
 /**
  * @brief Element-wise decimal division of a column by a scalar.
  *
- * If the scalar is invalid, returns an all-null column of outputType;
- * otherwise lhs nulls are copied into the output stencil before the kernel. A
- * zero divisor fails the batch with "Division by zero".
+ * If the scalar is invalid, returns an all-null column of outputType. Errors
+ * follow the column-column overload.
  *
  * @param lhs Left-hand decimal operand column.
  * @param rhs Right-hand decimal operand scalar.
- * @param outputType Output decimal type including precision and scale.
- * @param aRescale Fixed-point scale adjustment (Velox passes outScale -
- * lhsScale + rhsScale), used inside the kernel as a power-of-ten factor.
+ * @param outputType Output decimal type and scale.
  * @param stream CUDA stream for GPU execution.
  * @param mr Memory resource for output allocation.
  * @return Column containing the divided decimal values.
@@ -72,22 +67,18 @@ std::unique_ptr<cudf::column> decimalDivide(
     const cudf::column_view& lhs,
     const cudf::scalar& rhs,
     cudf::data_type outputType,
-    int32_t aRescale,
     cuda::stream_ref stream,
     rmm::device_async_resource_ref mr);
 
 /**
  * @brief Element-wise decimal division of a scalar by a column.
  *
- * Invalid lhs yields all-null output; otherwise rhs nulls are copied into the
- * output stencil before the kernel. A zero divisor fails the batch with
- * "Division by zero".
+ * If the scalar is invalid, returns an all-null column of outputType. Errors
+ * follow the column-column overload.
  *
  * @param lhs Left-hand decimal operand scalar.
  * @param rhs Right-hand decimal operand column.
- * @param outputType Output decimal type including precision and scale.
- * @param aRescale Fixed-point scale adjustment (Velox passes outScale -
- * lhsScale + rhsScale), used inside the kernel as a power-of-ten factor.
+ * @param outputType Output decimal type and scale.
  * @param stream CUDA stream for GPU execution.
  * @param mr Memory resource for output allocation.
  * @return Column containing the divided decimal values.
@@ -96,7 +87,6 @@ std::unique_ptr<cudf::column> decimalDivide(
     const cudf::scalar& lhs,
     const cudf::column_view& rhs,
     cudf::data_type outputType,
-    int32_t aRescale,
     cuda::stream_ref stream,
     rmm::device_async_resource_ref mr);
 
