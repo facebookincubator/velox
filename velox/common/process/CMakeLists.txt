@@ -28,19 +28,11 @@ velox_add_library(
   TraceHistory.h
 )
 
-if(WIN32)
-  velox_link_libraries(
-    velox_process
-    PUBLIC velox_flag_definitions Folly::folly
-    PRIVATE fmt::fmt gflags::gflags xsimd
-  )
-else()
-  velox_link_libraries(
-    velox_process
-    PUBLIC velox_file velox_flag_definitions Folly::folly
-    PRIVATE fmt::fmt gflags::gflags
-  )
-endif()
+velox_link_libraries(
+  velox_process
+  PUBLIC velox_file velox_flag_definitions Folly::folly
+  PRIVATE fmt::fmt gflags::gflags
+)
 
 # Profiler need not be part of the core Velox library
 add_library(velox_profiler OBJECT Profiler.cpp)
@@ -50,9 +42,6 @@ target_link_libraries(
   PUBLIC velox_flag_definitions Folly::folly
   PRIVATE fmt::fmt gflags::gflags glog::glog
 )
-if(WIN32)
-  target_link_libraries(velox_profiler PUBLIC velox_file)
-endif()
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)

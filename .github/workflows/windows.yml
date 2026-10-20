@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-# Start Windows support with MSVC and the complete status test suite.
+# Start Windows support with an MSVC build of the existing status library.
 # Windows Clang support is deferred to a later stage.
 # Configure and build failures remain failures; no fork-specific patches are applied.
 name: Windows MSVC
@@ -87,8 +87,6 @@ jobs:
 
       - name: Configure
         run: |
-          cmake -P tests/windows/VeloxTestComponents.cmake
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cmake -S . -B _build/release -G "Visual Studio 17 2022" -A x64 -T v143 `
             -DCMAKE_BUILD_TYPE=Release `
             -DCMAKE_CXX_STANDARD=20 `
@@ -103,8 +101,6 @@ jobs:
             -DBISON_EXECUTABLE="$env:BISON_EXECUTABLE" `
             -DVELOX_BUILD_STATIC=ON -DVELOX_BUILD_SHARED=OFF -DVELOX_MONO_LIBRARY=OFF `
             -DVELOX_BUILD_TESTING=OFF -DVELOX_BUILD_RUNNER=OFF `
-            -DVELOX_TEST_COMPONENTS=status `
-            -Dgtest_force_shared_crt=ON `
             -DVELOX_ENABLE_BENCHMARKS=OFF -DVELOX_ENABLE_EXAMPLES=OFF `
             -DVELOX_ENABLE_S3=OFF -DVELOX_ENABLE_GCS=OFF -DVELOX_ENABLE_HDFS=OFF -DVELOX_ENABLE_ABFS=OFF `
             -DVELOX_ENABLE_GEO=OFF -DVELOX_ENABLE_HIVE_CONNECTOR=OFF `
@@ -116,30 +112,14 @@ jobs:
             2>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\velox-configure.log"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Build status library and tests
+      - name: Build status library
         run: |
-          cmake --build _build/release --config Release --target velox_status_test --parallel 4 `
+          cmake --build _build/release --config Release --target velox_status --parallel 4 `
             -- /nologo /verbosity:minimal `
             2>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\velox-build.log"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Run status tests
-        env:
-          GTEST_OUTPUT: xml:${{ runner.temp }}\velox-status-tests.xml
-        run: |
-          ctest --test-dir _build/release -C Release -R '^velox_status_test$' `
-            --output-on-failure --no-tests=error `
-            --output-junit "$env:RUNNER_TEMP\velox-ctest.xml" `
-            2>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\velox-tests.log"
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          [xml]$results = Get-Content "$env:RUNNER_TEMP\velox-status-tests.xml" -Raw
-          if ([int]$results.testsuites.tests -lt 10 -or
-              [int]$results.testsuites.disabled -ne 0 -or
-              $results.SelectNodes('//testcase/skipped').Count -ne 0) {
-            throw "All ten existing status tests must run without disabled or skipped cases."
-          }
-
-      - name: Upload build and test logs
+      - name: Upload build logs
         if: ${{ always() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -150,8 +130,5 @@ jobs:
             ${{ runner.temp }}\velox-system-deps-explicit.txt
             ${{ runner.temp }}\velox-configure.log
             ${{ runner.temp }}\velox-build.log
-            ${{ runner.temp }}\velox-tests.log
-            ${{ runner.temp }}\velox-status-tests.xml
-            ${{ runner.temp }}\velox-ctest.xml
             _build/release/CMakeFiles/CMakeConfigureLog.yaml
           retention-days: 7

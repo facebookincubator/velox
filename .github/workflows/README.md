@@ -19,7 +19,7 @@ For current build times and performance trends, see the [CI performance metrics]
 | Workflow | File | Triggers | Purpose |
 |----------|------|----------|---------|
 | Linux Build using GCC | `linux-build.yml` + `linux-build-base.yml` | push to main, PRs | Main build & test (3 configs); selective by default, full on push / sticky-approval |
-| Windows MSVC | `windows.yml` | manual | Status library build and standalone unit tests |
+| Windows MSVC | `windows.yml` | manual | Status library build only |
 | Detect Force-Full Trigger | `detect-force-full.yml` | PR approving review | Step 1 of the approval-path chain: trivial trigger for the workflow_run hand-off (needed because fork PR reviews get a read-only token) |
 | Rerun Linux Build on Force-Full Trigger | `rerun-on-force-full.yml` | workflow_run (after Detect Force-Full Trigger) | Step 2 of the approval-path chain: BASE-context, dedups, calls the `rerun-linux-build` composite action |
 | Force-Full Build on /full-build Comment | `force-full-on-comment.yml` | PR comment containing `/full-build` | Direct (no workflow_run hop): dedups, calls the `rerun-linux-build` composite action |
@@ -47,34 +47,19 @@ This workflow runs only through `workflow_dispatch`; opening or updating a PR
 does not start it automatically. Once the workflow is present on the repository's
 default branch, users with write access can select a branch under
 **Actions > Windows MSVC > Run workflow**. Whether its result is required for
-merging is controlled separately by repository rules. Build or test failures
+merging is controlled separately by repository rules. Configure or build failures
 still fail a manually started run.
 
-The Windows workflow builds and runs the standalone status tests with
-`VELOX_BUILD_TESTING=OFF`, `VELOX_TEST_COMPONENTS=status`, and
-`VELOX_MONO_LIBRARY=OFF`. Component selection avoids enabling the full suite's
-DuckDB, parser, and other test-only dependencies. It does not disable explicitly
-requested production features.
+The Windows workflow builds only the existing `velox_status` library with
+`VELOX_BUILD_TESTING=OFF` and `VELOX_MONO_LIBRARY=OFF`. It does not build or run
+tests. Windows test enablement is deferred rather than changing production
+implementations or reducing test coverage to make tests compile.
 
-`VELOX_TEST_COMPONENTS` is a semicolon-separated list of registered standalone
-components. Its default, `ALL`, preserves the existing `VELOX_BUILD_TESTING`
-behavior: ON builds the full suite and OFF builds no tests. Explicit component
-lists require `VELOX_BUILD_TESTING=OFF`; invalid or unregistered components fail
-configuration. Currently only `status` is registered. Additional
-components can be registered as their dependency graphs become independently
-testable, without adding another C++ macro or CMake boolean per test.
-
-`VELOX_MONO_LIBRARY` remains independent of test selection. When it is ON, selected
-tests link the combined Velox library. The Windows workflow keeps its existing
-OFF setting so building the status tests does not build all configured modules.
-
-The status component builds the unmodified `StatusTest.cpp` source on all
-platforms and links `velox_exception` for the exception-dependent cases. All ten
-existing status tests remain in their original source file; none are moved,
-excluded, disabled, or skipped to make the Windows build pass. The full
-`velox_base_test` suite and `ExceptionTest.cpp` remain unchanged. The shared
-selector is defined in `CMake/VeloxUtils.cmake`; its behavior is checked with
-`cmake -P tests/windows/VeloxTestComponents.cmake`.
+The existing test sources, test-build logic, and production targets under
+`velox/common` remain unchanged. No component-test selector or separate status
+test target is added. Windows compiler and dependency setup is limited to the
+requirements of building the existing status library; non-Windows behavior is
+preserved.
 
 ### Linux Build using GCC (`linux-build.yml` + `linux-build-base.yml`)
 

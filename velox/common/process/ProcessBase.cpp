@@ -19,15 +19,7 @@
 #include <limits.h>
 #include <stdlib.h>
 #include <time.h>
-#ifdef _WIN32
-#include <folly/portability/Time.h>
-#include <folly/portability/Windows.h>
-#include <cerrno>
-#include <filesystem>
-#include <system_error>
-#else
 #include <unistd.h>
-#endif
 
 #include <folly/CpuId.h>
 #include <folly/FileUtil.h>
@@ -49,23 +41,6 @@ namespace process {
  * Current executable's name.
  */
 std::string getAppName() {
-#ifdef _WIN32
-  std::wstring buffer(MAX_PATH, L'\0');
-  for (;;) {
-    const auto size = GetModuleFileNameW(
-        nullptr, buffer.data(), folly::to<DWORD>(buffer.size()));
-    if (size == 0) {
-      throw std::system_error(
-          GetLastError(), std::system_category(), "GetModuleFileNameW");
-    }
-    if (size < buffer.size()) {
-      buffer.resize(size);
-      const auto path = std::filesystem::path(buffer).u8string();
-      return {path.begin(), path.end()};
-    }
-    buffer.resize(buffer.size() * 2);
-  }
-#else
   const char* result = getenv("_");
   if (result) {
     return result;
@@ -83,22 +58,12 @@ std::string getAppName() {
   }
 
   return "";
-#endif
 }
 
 /**
  * This machine's name.
  */
 std::string getHostName() {
-#ifdef _WIN32
-  char hostbuf[256];
-  DWORD size = sizeof(hostbuf);
-  if (!GetComputerNameExA(ComputerNameDnsHostname, hostbuf, &size)) {
-    throw std::system_error(
-        GetLastError(), std::system_category(), "GetComputerNameExA");
-  }
-  return {hostbuf, size};
-#else
   char hostbuf[_POSIX_HOST_NAME_MAX + 1] = {0};
   if (gethostname(hostbuf, _POSIX_HOST_NAME_MAX + 1) < 0) {
     return "";
@@ -109,18 +74,13 @@ std::string getHostName() {
     hostbuf[_POSIX_HOST_NAME_MAX] = '\0';
     return hostbuf;
   }
-#endif
 }
 
 /**
  * Process identifier.
  */
 pid_t getProcessId() {
-#ifdef _WIN32
-  return _getpid();
-#else
   return getpid();
-#endif
 }
 
 /**
@@ -134,27 +94,13 @@ pthread_t getThreadId() {
  * Get current working directory.
  */
 std::string getCurrentDirectory() {
-#ifdef _WIN32
-  const auto path = std::filesystem::current_path().u8string();
-  return {path.begin(), path.end()};
-#else
   char buf[PATH_MAX];
   return getcwd(buf, PATH_MAX);
-#endif
 }
 
 uint64_t threadCpuNanos() {
   timespec ts;
-#ifdef _WIN32
-  if (clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ts) != 0) {
-    throw std::system_error(
-        errno,
-        std::generic_category(),
-        "clock_gettime(CLOCK_THREAD_CPUTIME_ID)");
-  }
-#else
   clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ts);
-#endif
   return ts.tv_sec * 1'000'000'000 + ts.tv_nsec;
 }
 

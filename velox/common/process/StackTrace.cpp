@@ -32,13 +32,6 @@
 #include <folly/String.h>
 #include <folly/debugging/symbolizer/StackTrace.h>
 
-#ifdef _WIN32
-#include <folly/portability/Windows.h>
-#include <folly/system/ThreadId.h>
-#include <filesystem>
-#include <stdexcept>
-#endif
-
 #include "velox/common/process/ProcessBase.h"
 
 #ifdef __linux__
@@ -76,18 +69,6 @@ void StackTrace::create(int32_t skipFrames) {
   const int32_t kDefaultSkipFrameAdjust = 2; // ::create(), ::StackTrace()
   const int32_t kMaxFrames = 75;
 
-#ifdef _WIN32
-  void* frames[kMaxFrames];
-  const auto framecount = CaptureStackBackTrace(0, kMaxFrames, frames, nullptr);
-  if (framecount == 0) {
-    throw std::runtime_error("CaptureStackBackTrace returned no frames");
-  }
-  const auto skipped = std::clamp<int64_t>(
-      static_cast<int64_t>(skipFrames) + kDefaultSkipFrameAdjust,
-      0,
-      framecount);
-  btPtrs_.assign(frames + skipped, frames + framecount);
-#else
   btPtrs_.clear();
   uintptr_t btPtrs[kMaxFrames];
   ssize_t framecount = folly::symbolizer::getStackTrace(btPtrs, kMaxFrames);
@@ -102,7 +83,6 @@ void StackTrace::create(int32_t skipFrames) {
   for (int32_t i = skipFrames; i < framecount; i++) {
     btPtrs_.push_back(reinterpret_cast<void*>(btPtrs[i]));
   }
-#endif
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -150,11 +130,7 @@ std::string StackTrace::log(
   msg += "Host: " + getHostName();
   msg += "\nProcessID: " + pid;
   msg += "\nThreadID: " +
-#ifdef _WIN32
-      folly::to<std::string>(folly::getCurrentThreadID());
-#else
       folly::to<std::string>(reinterpret_cast<uintptr_t>(getThreadId()));
-#endif
   msg += "\nName: " + getAppName();
   msg += "\nType: ";
   if (errorType) {
@@ -166,17 +142,8 @@ std::string StackTrace::log(
   msg += toString();
   msg += "\n";
 
-#ifdef _WIN32
-  const auto tracePath =
-      std::filesystem::temp_directory_path() / ("stacktrace." + pid + ".log");
-  const auto path = tracePath.u8string();
-  std::string tracefn(path.begin(), path.end());
-  std::ofstream f(tracePath);
-  f.exceptions(std::ios::failbit | std::ios::badbit);
-#else
   std::string tracefn = "/tmp/stacktrace." + pid + ".log";
   std::ofstream f(tracefn.c_str());
-#endif
   if (f) {
     f << msg;
     f.close();
@@ -207,9 +174,7 @@ inline std::string translateFrameImpl(void* addressPtr) {
 #endif
 
 std::string StackTrace::translateFrame(void* addressPtr, bool /*lineNumbers*/) {
-#ifdef _WIN32
-  return fmt::format("0x{:x}", reinterpret_cast<uintptr_t>(addressPtr));
-#elif VELOX_HAS_SYMBOLIZER
+#if VELOX_HAS_SYMBOLIZER
   return folly::fibers::runInMainContext(
       [addressPtr]() { return translateFrameImpl(addressPtr); });
 #else
