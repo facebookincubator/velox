@@ -324,6 +324,58 @@ TEST_P(EqualityDeleteFileReaderTestP, equalityDeleteColumnAddedBySecondSplit) {
   assertEqualResults({expected}, {result});
 }
 
+// Each split starts with the same logical projection, but equality deletes
+// can put a different type into the same auxiliary output channel.
+TEST_P(EqualityDeleteFileReaderTestP, equalityColumnsChangeBetweenSplits) {
+  const auto tableType =
+      ROW({{"id", BIGINT()}, {"tag", VARCHAR()}, {"value", VARCHAR()}});
+  const auto outputType = ROW("value", VARCHAR());
+  const auto idDeleteFile = writeDataFileP(
+      {makeRowVector({"id"}, {makeFlatVector<int64_t>({1})})}, {1});
+  const auto tagDeleteFile = writeDataFileP(
+      {makeRowVector({"tag"}, {makeFlatVector<std::string>({"remove"})})}, {2});
+  const std::vector<IcebergDeleteFile> deletes{
+      makeDeleteFile(idDeleteFile->getPath(), {1}, GetParam().format, 1),
+      makeDeleteFile(tagDeleteFile->getPath(), {2}, GetParam().format, 1)};
+
+  std::vector<std::shared_ptr<common::testutil::TempFilePath>> files;
+  std::vector<std::shared_ptr<ConnectorSplit>> splits;
+  for (int file = 0; file < 3; ++file) {
+    files.push_back(writeDataFileP(
+        {makeRowVector(
+            {"id", "tag", "value"},
+            {makeFlatVector<int64_t>(
+                 3, [file](auto row) { return 3 * file + row; }),
+             makeFlatVector<std::string>({"keep", "remove", "keep"}),
+             makeFlatVector<std::string>(
+                 3,
+                 [file](auto row) {
+                   return std::to_string(3 * file + row);
+                 })})},
+        {1, 2, 3}));
+    auto fileSplits = makeSplitsP(
+        files.back()->getPath(),
+        file < 2 ? std::vector<IcebergDeleteFile>{deletes[file]}
+                 : std::vector<IcebergDeleteFile>{});
+    splits.insert(splits.end(), fileSplits.begin(), fileSplits.end());
+  }
+
+  const auto expected = makeRowVector(
+      {"value"},
+      {makeFlatVector<std::string>({"0", "2", "3", "5", "6", "7", "8"})});
+  const auto plan = makeIcebergTableScanPlan(outputType, tableType);
+  for (const auto& preload : {"0", "2"}) {
+    SCOPED_TRACE(preload);
+    auto result =
+        AssertQueryBuilder(plan)
+            .splits(splits)
+            .maxDrivers(1)
+            .config(core::QueryConfig::kMaxSplitPreloadPerDriver, preload)
+            .copyResults(pool());
+    assertEqualResults({expected}, {result});
+  }
+}
+
 // A split whose byte range starts past the last stripe or row group: nothing
 // is read, so no reader tree is built for the delete column.
 TEST_P(EqualityDeleteFileReaderTestP, equalityDeleteSplitCoveringNoRows) {

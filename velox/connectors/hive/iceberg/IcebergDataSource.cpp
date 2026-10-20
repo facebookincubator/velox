@@ -16,6 +16,7 @@
 
 #include "velox/connectors/hive/iceberg/IcebergDataSource.h"
 
+#include "velox/connectors/hive/FileScanState.h"
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/connectors/hive/iceberg/IcebergConnector.h"
 #include "velox/connectors/hive/iceberg/IcebergSplit.h"
@@ -165,7 +166,7 @@ std::unique_ptr<FileSplitReader> IcebergDataSource::createSplitReader() {
     return std::make_unique<IcebergChangelogSplitReader>(
         icebergSplit,
         tableHandle_,
-        &partitionKeys_,
+        &fileScanSpec_->partitionKeys(),
         connectorQueryCtx_,
         fileConfig_,
         *changelogScanContext_,
@@ -176,7 +177,7 @@ std::unique_ptr<FileSplitReader> IcebergDataSource::createSplitReader() {
         ioExecutor_,
         readerOutputType_,
         *columnHandles_,
-        &filters_,
+        &fileScanState_->filters,
         &changelogDynamicFilters_);
   }
 
@@ -184,7 +185,7 @@ std::unique_ptr<FileSplitReader> IcebergDataSource::createSplitReader() {
   return std::make_unique<IcebergSplitReader>(
       icebergSplit,
       tableHandle_,
-      &partitionKeys_,
+      &fileScanSpec_->partitionKeys(),
       connectorQueryCtx_,
       fileConfig_,
       readerOutputType_,

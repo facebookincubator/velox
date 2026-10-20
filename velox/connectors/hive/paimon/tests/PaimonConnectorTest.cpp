@@ -449,6 +449,98 @@ TEST_F(PaimonConnectorTest, appendOnlyMultipleSplits) {
       .assertResults(expected);
 }
 
+TEST_F(PaimonConnectorTest, scanRetainsStateAcrossFiles) {
+  auto queryCtx = core::QueryCtx::create();
+  auto config = std::make_shared<config::ConfigBase>(
+      std::unordered_map<std::string, std::string>{});
+  const auto makeContext = [&] {
+    return ConnectorQueryCtx::Builder()
+        .operatorPool(pool())
+        .connectorPool(rootPool_.get())
+        .sessionProperties(config.get())
+        .expressionEvaluator(
+            std::make_unique<exec::SimpleExpressionEvaluator>(
+                queryCtx.get(), pool()))
+        .queryId("PaimonConnectorTest")
+        .taskId("PaimonConnectorTest")
+        .planNodeId("scan")
+        .build();
+  };
+  auto context = makeContext();
+  auto connector = ConnectorRegistry::tryGet(kPaimonConnectorId);
+  const auto outputType = ROW({{"c0", BIGINT()}, {"p", BIGINT()}});
+  const auto makeSource = [&](ConnectorQueryCtx* readerContext) {
+    return connector->createDataSource(
+        outputType,
+        makePaimonTableHandle(
+            outputType, {}, parseExpr("c0 % 2 = 0", outputType)),
+        {{"c0", regularColumn("c0", BIGINT())},
+         {"p", partitionKey("p", BIGINT())}},
+        readerContext);
+  };
+  const std::vector<RowVectorPtr> inputs{
+      makeRowVector({makeFlatVector<int64_t>({1, 2})}),
+      makeRowVector({makeFlatVector<int64_t>({3, 4})})};
+  std::vector<dwio::common::FileFormat> formats{dwio::common::FileFormat::DWRF};
+#ifdef VELOX_ENABLE_NIMBLE
+  formats.push_back(dwio::common::FileFormat::NIMBLE);
+#endif
+  for (const auto format : formats) {
+    SCOPED_TRACE(dwio::common::FileFormatName::toName(format));
+    const auto files = makeFilePaths(2);
+    for (int i = 0; i < files.size(); ++i) {
+      if (format == dwio::common::FileFormat::DWRF) {
+        writeToFile(files[i]->getPath(), inputs[i]);
+      }
+#ifdef VELOX_ENABLE_NIMBLE
+      else {
+        nimble::Writer writer(
+            inputs[i]->type(),
+            std::make_unique<LocalWriteFile>(files[i]->getPath(), false, false),
+            *pool(),
+            nimble::WriterOptions{});
+        writer.write(inputs[i]);
+        writer.close();
+      }
+#endif
+    }
+    auto source = makeSource(context.get());
+    source->addDynamicFilter(
+        0, std::make_shared<common::BigintRange>(2, 4, false));
+    source->addSplit(makePaimonSplit(
+        {files[0]->getPath(), files[1]->getPath()},
+        PaimonTableType::kAppendOnly,
+        format,
+        {{"p", "7"}}));
+
+    std::vector<RowVectorPtr> batches;
+    ContinueFuture future = ContinueFuture::makeEmpty();
+    while (true) {
+      auto result = source->next(2, future);
+      ASSERT_TRUE(result.has_value());
+      ASSERT_FALSE(future.valid());
+      if (!*result) {
+        break;
+      }
+      (*result)->loadedVector();
+      batches.push_back(std::move(*result));
+    }
+    EXPECT_EQ(source->getCompletedRows(), 4);
+    // Preserve the existing physical-file preparation count.
+    EXPECT_EQ(source->getRuntimeStats().at("processedSplits").sum, 2);
+    source.reset();
+    ASSERT_EQ(batches.size(), 2);
+    test::assertEqualVectors(
+        makeRowVector(
+            {makeFlatVector<int64_t>({2}), makeFlatVector<int64_t>({7})}),
+        batches[0]);
+    test::assertEqualVectors(
+        makeRowVector(
+            {makeFlatVector<int64_t>({4}), makeFlatVector<int64_t>({7})}),
+        batches[1]);
+  }
+}
+
 } // namespace
 } // namespace facebook::velox::connector::hive::paimon
 

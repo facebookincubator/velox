@@ -25,6 +25,7 @@
 #include "velox/connectors/Connector.h"
 #include "velox/connectors/hive/FileConnectorSplit.h"
 #include "velox/connectors/hive/FileHandle.h"
+#include "velox/connectors/hive/FileScanSpec.h"
 #include "velox/connectors/hive/FileSplitReader.h"
 #include "velox/connectors/hive/FileTableHandle.h"
 #include "velox/connectors/hive/HiveConnectorUtil.h"
@@ -88,6 +89,14 @@ class FileDataSource : public DataSource {
       FileHandleFactory* fileHandleFactory,
       folly::Executor* ioExecutor,
       const ConnectorQueryCtx* connectorQueryCtx,
+      const std::shared_ptr<FileConfig>& fileConfig,
+      FileScanSpec::Options options = {});
+
+  FileDataSource(
+      std::shared_ptr<const FileScanSpec> fileScanSpec,
+      FileHandleFactory* fileHandleFactory,
+      folly::Executor* ioExecutor,
+      const ConnectorQueryCtx* connectorQueryCtx,
       const std::shared_ptr<FileConfig>& fileConfig);
 
   void addSplit(std::shared_ptr<ConnectorSplit> split) override;
@@ -130,12 +139,20 @@ class FileDataSource : public DataSource {
  protected:
   virtual std::unique_ptr<FileSplitReader> createSplitReader();
 
+  /// Rebuilds the state after changing physical column demands, before a
+  /// reader is created. Keeps metadata filtering bound to the new ScanSpec.
+  void resetScanSpec(bool buildMetadataFilter = true);
+
   FileHandleFactory* const fileHandleFactory_;
   folly::Executor* const ioExecutor_;
   const ConnectorQueryCtx* const connectorQueryCtx_;
   const std::shared_ptr<FileConfig> fileConfig_;
   memory::MemoryPool* const pool_;
 
+  // Keep borrowed column demands and validation filters alive until after
+  // splitReader_ is destroyed, including takeover of a preloaded reader.
+  std::shared_ptr<const FileScanSpec> fileScanSpec_;
+  std::shared_ptr<FileScanState> fileScanState_;
   std::shared_ptr<FileConnectorSplit> split_;
   FileTableHandlePtr tableHandle_;
   std::shared_ptr<common::ScanSpec> scanSpec_;
@@ -196,14 +213,9 @@ class FileDataSource : public DataSource {
   dwio::common::RuntimeStats runtimeStats_;
 
  private:
-  // Configure extraction columns on the ScanSpec and build
-  // readerProducedType_.  Called from the constructor after scanSpec_ is
-  // created.
-  void configureExtractionColumns();
+  void applyDynamicFilters();
 
-  /// Adds the information from column handle to the corresponding fields in
-  /// this object.
-  void processColumnHandle(const FileColumnHandlePtr& handle);
+  void resetOutputIfTypeChanged();
 
   /// Evaluates remainingFilter_ on the specified vector. Returns number of rows
   /// passed. Populates filterEvalCtx_.selectedIndices and selectedBits if only
@@ -227,7 +239,6 @@ class FileDataSource : public DataSource {
   const RowTypePtr outputType_;
   core::ExpressionEvaluator* const expressionEvaluator_;
 
-  std::vector<common::Subfield> remainingFilterSubfields_;
   /// Optional post-processors for each output column, collected from
   /// HiveColumnHandle::postProcessor(). Applied after reading and filtering to
   /// transform column values. Indexed by output column position.
@@ -246,6 +257,11 @@ class FileDataSource : public DataSource {
   folly::F14FastSet<std::string> remainingFilterColumns_;
 
   std::shared_ptr<random::RandomSkipTracker> randomSkip_;
+
+  // Dynamic filters must survive rebuilding the per-file ScanSpec. The
+  // driver supplies the cumulative filter for each output channel.
+  folly::F14FastMap<column_index_t, std::shared_ptr<common::Filter>>
+      dynamicFilters_;
 
   /// Reusable memory for remaining filter evaluation.
   VectorPtr filterResult_;
