@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include <folly/CancellationToken.h>
 #include <folly/Executor.h>
 #include <folly/Synchronized.h>
 #include <folly/container/F14Map.h>
@@ -255,19 +256,14 @@ struct FixedPointOptions {
 ///  - taskStats() covers the task's own pipeline.  The experimental
 ///    Task::fixedPointExecutionStats() reports the loop's sub-tasks.
 ///
-/// TODO: Cancellation does not reach the loop.  Task::requestCancel(),
-/// requestAbort() and requestPause() move the owning task to a terminal state
-/// and resolve its completion future, but the loop keeps creating sub-tasks
-/// until it converges or exhausts maxIterations.  A top-level loop holds a
-/// reference to its owner for its whole run, so nothing crashes, but the work
-/// continues after the coordinator believes the query is dead, the state pools
-/// stay unreclaimable while it does, and peers of a partially cancelled
-/// shuffling fixed point lose the producer they barrier on each iteration.  A
-/// nested loop is worse off: when its enclosing loop fails, that loop aborts
-/// the nested loop's task and unwinds, while the nested loop can still deliver
-/// output to the enclosing loop or read its state.  Wiring this up requires the
-/// loop to retain handles to the sub-tasks it is running; today they are local
-/// to the phase that creates them.
+/// In parallel mode, when the owning task ends -- requestCancel(),
+/// requestAbort(), or a failure -- the loop stops at its next wait: it aborts
+/// the sub-tasks it is running, waits for them, and fails.  The loop waits on
+/// its sub-tasks and its peers, so it stops within one step of the work it was
+/// doing.  A serial loop runs to completion inside the caller's next().  A
+/// nested loop holds the enclosing loop's task, so the state it reads outlives
+/// a failed enclosing loop until the nested loop stops.  requestPause() does
+/// not end the task, and the loop keeps running through a pause.
 class FixedPointLoop {
  public:
   /// Whether 'planFragment' contains a FixedPointNode as its leaf. Task::create
@@ -492,6 +488,11 @@ class FixedPointLoop {
   // coordinator created this task directly.
   NestedFixedPoint nested_;
 
+  // The task of the enclosing loop, for a nested loop.  Holding it keeps the
+  // enclosing loop and the state this loop's sub-tasks read alive after the
+  // enclosing loop fails and unwinds, until this loop stops.
+  std::shared_ptr<exec::Task> enclosingTask_;
+
   // This worker's execution mode (from construction).  Every sub-task inherits
   // it: serial drains on the calling thread, parallel runs on the executor.  A
   // serial fixed point therefore cannot run a shuffling body (rejected in the
@@ -520,6 +521,14 @@ class FixedPointLoop {
   // several threads, and the loop reads them once it starts.
   std::mutex splitsMutex_;
   std::vector<std::string> peerParentIds_;
+
+  // Resolved by noMoreSplits() on the fixed point itself, once the coordinator
+  // has named every peer. The first iteration waits for it.
+  folly::SharedPromise<folly::Unit> peersComplete_;
+
+  // Requested once the owning task ends: the loop stops waiting on its peers,
+  // which then no longer need to arrive.
+  folly::CancellationSource cancellation_;
 
   // Every other coordinator-assigned split that arrived before the sub-task
   // reading it started, keyed by the plan node that reads it: a TableScan or

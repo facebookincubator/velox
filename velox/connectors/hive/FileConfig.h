@@ -116,6 +116,15 @@ class FileConfig {
       false,
       "Enable dictionary-aware reads for Nimble dictionary-encoded columns.")
   VELOX_HIVE_CONFIG_LEGACY(
+      kNimbleScanFastPathSession,
+      kNimbleScanFastPath,
+      nimbleScanFastPath,
+      "nimble_scan_fast_path",
+      "nimble.scan-fast-path",
+      bool,
+      false,
+      "Route Nimble encodings through the scan fast path.")
+  VELOX_HIVE_CONFIG_LEGACY(
       kNimbleLazyColumnIoSession,
       kNimbleLazyColumnIo,
       nimbleLazyColumnIo,

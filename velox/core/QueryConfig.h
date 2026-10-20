@@ -247,6 +247,22 @@ class QueryConfig {
       false,
       "Match Row fields by name instead of position in CAST.")
 
+  /// If true, CAST from VARCHAR to REAL or DOUBLE with Presto semantics also
+  /// accepts the C-style spellings of the special floating-point values:
+  /// "inf", "infinity" and "nan" in any letter case, with an optional leading
+  /// sign. By default only the Presto spellings "Infinity" and "NaN" are
+  /// accepted, in exactly that letter case. This deviates from Presto; enable
+  /// it to cast data whose writer printed the values the way glibc, Python and
+  /// numpy do. Spark CAST and casts from JSON are not affected.
+  VELOX_QUERY_CONFIG(
+      kCastStringToFloatingPointLenientInfNan,
+      isCastStringToFloatingPointLenientInfNan,
+      "cast_string_to_floating_point_lenient_inf_nan",
+      bool,
+      false,
+      "Accept 'inf', 'infinity' and 'nan' in any letter case in CAST from "
+      "VARCHAR to REAL or DOUBLE with Presto semantics.")
+
   /// Reduce() function will throw an error if encountered an array of size
   /// greater than this.
   VELOX_QUERY_CONFIG(

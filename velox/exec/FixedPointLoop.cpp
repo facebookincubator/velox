@@ -16,6 +16,8 @@
 #include "velox/exec/FixedPointLoop.h"
 
 #include <folly/coro/BlockingWait.h>
+#include <folly/executors/InlineExecutor.h>
+#include <folly/futures/Future.h>
 
 #include <folly/ScopeGuard.h>
 
@@ -79,10 +81,10 @@ void clearTaskStats(FixedPointChainExecutionStats& chain) {
 // Aborts 'tasks' and waits until none of their drivers is on a thread. A failed
 // task resolves its completion future while drivers that are on thread keep
 // running, and those drivers can still call a consumer that writes into the
-// caller's frame.  A task that runs a nested fixed point has no drivers, so
-// this returns at once for it while its loop keeps running; see the
-// cancellation TODO on FixedPointLoop.  Runs while an error unwinds, so it logs
-// a failure to abort instead of throwing.
+// caller's frame.  For a task that runs a nested fixed point, this waits for
+// the drivers above it; its loop stops at its own next wait, holding the
+// caller's task alive until then.  Runs while an error unwinds, so it logs a
+// failure to abort instead of throwing.
 void abortAndWait(const std::vector<exec::TaskPtr>& tasks) {
   std::vector<ContinueFuture> futures;
   futures.reserve(tasks.size());
@@ -96,19 +98,6 @@ void abortAndWait(const std::vector<exec::TaskPtr>& tasks) {
   }
   for (auto& future : futures) {
     std::move(future).wait();
-  }
-}
-
-// Waits for each of 'tasks' to finish without holding a thread.  If one fails,
-// aborts the rest and rethrows its error.  Callers pass a named vector: GCC 11
-// fails to compile a braced list in a co_await operand.
-folly::coro::Task<void> awaitTasks(std::vector<exec::TaskPtr> tasks) {
-  for (const auto& task : tasks) {
-    co_await task->taskCompletionFuture();
-    if (auto error = task->error()) {
-      abortAndWait(tasks);
-      std::rethrow_exception(error);
-    }
   }
 }
 
@@ -170,6 +159,56 @@ core::FixedPointNodePtr findFixedPointNode(const core::PlanNodePtr& node) {
   return nullptr;
 }
 
+// Waits for 'future', which the coordinator or a peer resolves, until
+// 'ended' is requested: once the task ends nothing is bound to resolve it.
+// The callback on 'ended' is unregistered when the wait returns, so waiting
+// leaves nothing behind.
+template <typename T>
+folly::coro::Task<T> awaitWhileRunning(
+    const folly::CancellationToken& ended,
+    folly::SemiFuture<T> future,
+    std::string_view waitingFor,
+    std::string_view taskId) {
+  folly::Promise<folly::Unit> stopped;
+  folly::CancellationCallback onEnded(ended, [&] { stopped.setValue(); });
+  std::vector<folly::SemiFuture<std::optional<T>>> futures;
+  futures.push_back(std::move(future).deferValue([](T value) {
+    return std::optional<T>{std::move(value)};
+  }));
+  futures.push_back(stopped.getSemiFuture().deferValue(
+      [](auto&&) { return std::optional<T>{}; }));
+  auto first = co_await folly::collectAny(std::move(futures));
+  auto value = std::move(first.second).value();
+  VELOX_CHECK(
+      value.has_value(),
+      "The task ended while its fixed point waited for {}: {}",
+      waitingFor,
+      taskId);
+  co_return std::move(*value);
+}
+
+// Waits for each of 'tasks' to finish without holding a thread.  If one fails,
+// or 'ended' is requested first, aborts the rest and rethrows the error.
+// Callers pass a named vector: GCC 11 fails to compile a braced list in a
+// co_await operand.
+folly::coro::Task<void> awaitTasks(
+    std::vector<exec::TaskPtr> tasks,
+    const folly::CancellationToken& ended,
+    std::string_view taskId) {
+  for (const auto& task : tasks) {
+    auto finished = co_await folly::coro::co_awaitTry(awaitWhileRunning(
+        ended, task->taskCompletionFuture(), "its sub-tasks", taskId));
+    if (finished.hasException()) {
+      abortAndWait(tasks);
+      finished.throwUnlessValue();
+    }
+    if (auto error = task->error()) {
+      abortAndWait(tasks);
+      std::rethrow_exception(error);
+    }
+  }
+}
+
 } // namespace
 
 // static
@@ -184,6 +223,10 @@ FixedPointLoop::FixedPointLoop(
           fixedPointOptions != nullptr ? *fixedPointOptions
                                        : FixedPointOptions{}),
       nested_(options_.nested.value_or(NestedFixedPoint{})),
+      enclosingTask_(
+          nested_.parent != nullptr
+              ? nested_.parent->owner()->shared_from_this()
+              : nullptr),
       executionMode_(owner->executionMode()),
       owner_(owner) {
   VELOX_CHECK_NOT_NULL(owner_);
@@ -309,7 +352,7 @@ void FixedPointLoop::noMoreSplits(const core::PlanNodeId& planNodeId) {
     }
     return;
   }
-  // The fixed point's own peer splits are captured eagerly in addSplit().
+  peersComplete_.setValue();
 }
 
 void FixedPointLoop::runSerially() {
@@ -358,7 +401,29 @@ void FixedPointLoop::start(
 }
 
 folly::coro::Task<void> FixedPointLoop::run() {
+  // The handle shares the source's state, so the continuation may outlive this
+  // loop.
+  owner_->taskCompletionFuture()
+      .via(&folly::InlineExecutor::instance())
+      .thenTry([ended = cancellation_](auto&&) mutable {
+        ended.requestCancellation();
+      });
   co_await initialize();
+
+  // A top-level loop whose body or convergence chain shuffles reads from the
+  // peers the coordinator names.
+  if (node_->readsPeers() && nested_.peerAddresses.empty()) {
+    co_await awaitWhileRunning(
+        cancellation_.getToken(),
+        peersComplete_.getSemiFuture(),
+        "its peers",
+        owner_->taskId());
+    std::lock_guard<std::mutex> l(splitsMutex_);
+    VELOX_CHECK_EQ(
+        peerParentIds_.size(),
+        numWorkers_,
+        "A shuffling fixed point needs one peer split per worker");
+  }
 
   bool hasConverged = false;
   for (int32_t iteration = 0; iteration < node_->maxIterations(); ++iteration) {
@@ -713,7 +778,8 @@ folly::coro::Task<TaskStats> FixedPointLoop::consumePlan(
     feedInitSplits(task, plan);
   }
   std::vector<std::shared_ptr<exec::Task>> tasks{task};
-  co_await awaitTasks(std::move(tasks));
+  co_await awaitTasks(
+      std::move(tasks), cancellation_.getToken(), owner_->taskId());
   co_return task->taskStats();
 }
 
@@ -908,7 +974,7 @@ folly::coro::Task<std::vector<RowVectorPtr>> FixedPointLoop::runParallelChain(
   // partition, so no worker advances to the next iteration until all peers in
   // the topology have shuffled.
   const auto waitStart = std::chrono::steady_clock::now();
-  co_await awaitTasks(tasks);
+  co_await awaitTasks(tasks, cancellation_.getToken(), owner_->taskId());
   stats.plans.reserve(tasks.size());
   for (size_t p = 0; p < tasks.size(); ++p) {
     stats.plans.push_back({

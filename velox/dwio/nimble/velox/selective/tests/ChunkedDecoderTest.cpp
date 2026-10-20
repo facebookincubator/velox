@@ -35,6 +35,7 @@
 #include "velox/dwio/nimble/velox/ChunkedStreamWriter.h"
 
 #include <folly/executors/IOThreadPoolExecutor.h>
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 namespace facebook::nimble {
@@ -1453,6 +1454,65 @@ TEST_F(ChunkedDecoderDataTest, fuzzer) {
       }
     }
   }
+}
+
+// Verifies that passing scanFastPath=true to the ChunkedDecoder constructor
+// does not break data reads and that the flag is forwarded to
+// ReadWithVisitorParams (tested indirectly through correct decoding).
+TEST_P(ChunkedDecoderDataTest, scanFastPathPropagation) {
+  auto [streamData, chunkInfos] =
+      encodeChunkedStream<uint32_t>({{10, 20, 30}, {40, 50}});
+  auto streamIndex = createTestStreamIndex(chunkInfos);
+
+  ChunkedDecoder decoder(
+      std::make_unique<dwio::common::SeekableArrayInputStream>(
+          streamData.data(), streamData.size()),
+      streamIndex,
+      /*decodeValuesWithNulls=*/false,
+      &encodingFactory(),
+      pool_.get(),
+      /*stringDecoderZeroCopy=*/false,
+      /*decodingStats=*/nullptr,
+      /*dictionaryAlphabetLoader=*/nullptr,
+      /*dictionaryAwareReads=*/false,
+      /*scanFastPath=*/true);
+
+  std::vector<int32_t> result(5);
+  decoder.nextIndices(result.data(), 5, nullptr);
+  EXPECT_THAT(result, testing::ElementsAre(10, 20, 30, 40, 50));
+}
+
+// Same as above but with nullable data to exercise the decodeNullable path.
+TEST_P(ChunkedDecoderDataTest, scanFastPathWithNullable) {
+  auto [streamData, chunkInfos] = encodeNullableChunkedStream<uint32_t>(
+      {{1, std::nullopt, 3}, {std::nullopt, 5}});
+  auto streamIndex = createTestStreamIndex(chunkInfos);
+
+  ChunkedDecoder decoder(
+      std::make_unique<dwio::common::SeekableArrayInputStream>(
+          streamData.data(), streamData.size()),
+      streamIndex,
+      /*decodeValuesWithNulls=*/false,
+      &encodingFactory(),
+      pool_.get(),
+      /*stringDecoderZeroCopy=*/false,
+      /*decodingStats=*/nullptr,
+      /*dictionaryAlphabetLoader=*/nullptr,
+      /*dictionaryAwareReads=*/false,
+      /*scanFastPath=*/true);
+
+  std::vector<uint64_t> nullBits(1, velox::bits::kNotNull64);
+  std::vector<uint32_t> result(5);
+  decoder.decodeNullable(nullBits.data(), result.data(), 5, nullptr);
+
+  EXPECT_TRUE(velox::bits::isBitSet(nullBits.data(), 0));
+  EXPECT_FALSE(velox::bits::isBitSet(nullBits.data(), 1));
+  EXPECT_TRUE(velox::bits::isBitSet(nullBits.data(), 2));
+  EXPECT_FALSE(velox::bits::isBitSet(nullBits.data(), 3));
+  EXPECT_TRUE(velox::bits::isBitSet(nullBits.data(), 4));
+  EXPECT_EQ(result[0], 1);
+  EXPECT_EQ(result[2], 3);
+  EXPECT_EQ(result[4], 5);
 }
 
 TEST_P(ChunkedDecoderDataTest, ensureLoadedAndAccessors) {
