@@ -1515,6 +1515,47 @@ TEST_P(
   ASSERT_FALSE(bufferManager_->updateNumDrivers("test.0.2", 1));
 }
 
+// A request for a task whose buffer does not exist yet is served once the
+// buffer is created, unless its consumer stopped waiting or deleted its
+// results.
+TEST_F(DefaultOutputBufferManagerTest, getDataWhenCreated) {
+  const auto unreachable = [](std::vector<std::unique_ptr<folly::IOBuf>>,
+                              int64_t,
+                              std::vector<int64_t>) { VELOX_UNREACHABLE(); };
+  int64_t numPages{-1};
+  bufferManager_->getDataWhenCreated(
+      "t0",
+      0,
+      1'000'000'000,
+      0,
+      [&](std::vector<std::unique_ptr<folly::IOBuf>> pages,
+          int64_t /*sequence*/,
+          std::vector<int64_t> /*remainingBytes*/) { numPages = pages.size(); },
+      [] { return true; });
+  bufferManager_->getDataWhenCreated(
+      "t1", 0, 1'000'000'000, 0, unreachable, [] { return false; });
+  bufferManager_->getDataWhenCreated(
+      "t2", 0, 1'000'000'000, 0, unreachable, [] { return true; });
+  bufferManager_->deleteResults("t2", 0);
+
+  initializeTask(
+      "t0", rowType_, PartitionedOutputNode::Kind::kPartitioned, 1, 1);
+  ASSERT_EQ(-1, numPages);
+  enqueue("t0", rowType_, 10);
+  ASSERT_EQ(1, numPages);
+  noMoreData("t0");
+  fetchEndMarker("t0", 0, 1);
+  bufferManager_->removeTask("t0");
+
+  for (const auto* taskId : {"t1", "t2"}) {
+    initializeTask(
+        taskId, rowType_, PartitionedOutputNode::Kind::kPartitioned, 1, 1);
+    noMoreData(taskId);
+    fetchEndMarker(taskId, 0, 0);
+    bufferManager_->removeTask(taskId);
+  }
+}
+
 TEST_P(
     DefaultOutputBufferManagerWithDifferentSerdeKindsTest,
     updateBrodcastBufferOnFailedTask) {

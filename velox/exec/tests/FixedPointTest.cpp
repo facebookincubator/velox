@@ -301,14 +301,7 @@ class FixedPointTest : public exec::test::HiveConnectorTestBase {
     auto node0 = makeWorkerNode(0);
     const int32_t numWorkers = numWorkersOf(node0);
     const auto fixedPointNodeId = node0->id();
-    // The in-process exchange's data-size probe waits up to
-    // request_data_sizes_max_wait_sec (default 10s) when a partition is empty
-    // (e.g. a hash shuffle that leaves one worker's partition empty), which
-    // otherwise dominates these tests' runtime.  Use a short wait.
-    auto queryCtx = core::QueryCtx::create(
-        cpuExecutor_.get(),
-        core::QueryConfig{
-            {{core::QueryConfig::kRequestDataSizesMaxWaitSec, "1"}}});
+    auto queryCtx = core::QueryCtx::create(cpuExecutor_.get());
 
     // Upstream producer task feeding the workers' initial plans.  Its
     // partitioned output is read (by partition = worker destination) by each
@@ -2048,10 +2041,7 @@ TEST_F(FixedPointTest, partitionedOutputAboveLoop) {
 // A fixed point that does not shuffle runs as several independent tasks, each
 // a loop over the partition its initial plan reads for its destination.
 TEST_F(FixedPointTest, independentTasks) {
-  auto queryCtx = core::QueryCtx::create(
-      cpuExecutor_.get(),
-      core::QueryConfig{
-          {{core::QueryConfig::kRequestDataSizesMaxWaitSec, "1"}}});
+  auto queryCtx = core::QueryCtx::create(cpuExecutor_.get());
 
   auto schema = ROW({"key", "val"}, BIGINT());
   auto seed = makeRowVector(
