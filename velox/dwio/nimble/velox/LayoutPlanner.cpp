@@ -13,10 +13,29 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
+// Plans the physical order of streams in a stripe. Readers address streams by
+// id, so changing this order affects locality rather than file semantics.
+//
+//   column names --------> resolved top-level columns ----+
+//                                                       |
+//   FlatMap features ----> validated feature orders -----+--> priority offsets
+//                                                              |
+//   schema tree ----------> schema-order offsets ---------------+---> layout
+//                                                                    root
+//                                                                    priority
+//                                                                    remainder
+//
+// Streams already emitted by a priority offset are removed before the schema
+// remainder is appended. Empty configuration therefore preserves schema order.
+
 #include "velox/dwio/nimble/velox/LayoutPlanner.h"
 #include <algorithm>
 #include <cstdint>
+#include <string>
+#include <string_view>
 
+#include "folly/container/F14Map.h"
 #include "velox/common/Casts.h"
 
 namespace facebook::nimble {
@@ -96,98 +115,196 @@ void appendAllNestedStreams(
   }
 }
 
+// References a validated feature-order entry owned by the planner options.
+struct OrderedFlatMap {
+  size_t ordinal;
+  const std::vector<int64_t>& features;
+};
+
+// Retains feature orders that refer to top-level FlatMap columns.
+std::vector<OrderedFlatMap> validFlatMapFeatureOrders(
+    const RowTypeBuilder& root,
+    const std::vector<std::tuple<size_t, std::vector<int64_t>>>&
+        flatMapFeatureOrder) {
+  std::vector<OrderedFlatMap> orderedFlatMaps;
+  orderedFlatMaps.reserve(flatMapFeatureOrder.size());
+  for (const auto& [ordinal, features] : flatMapFeatureOrder) {
+    if (ordinal >= root.childrenCount()) {
+      LOG(WARNING)
+          << "Column ordinal " << ordinal
+          << " for feature ordering is out of range. Top-level row has "
+          << root.childrenCount() << " columns.";
+      continue;
+    }
+
+    if (root.childAt(ordinal).kind() != Kind::FlatMap) {
+      LOG(WARNING) << "Column '" << root.nameAt(ordinal)
+                   << "' for feature ordering is not a flat map.";
+      continue;
+    }
+
+    orderedFlatMaps.push_back({.ordinal = ordinal, .features = features});
+  }
+  return orderedFlatMaps;
+}
+
+// Appends a FlatMap header followed by each configured feature's streams.
+void appendOrderedFeatures(
+    const FlatMapTypeBuilder& flatMap,
+    const std::vector<int64_t>& features,
+    std::vector<offset_size>& offsets) {
+  offsets.push_back(flatMap.nullsDescriptor().offset());
+
+  folly::F14FastMap<std::string, offset_size> flatMapNamedOrdinals;
+  flatMapNamedOrdinals.reserve(flatMap.childrenCount());
+  for (auto i = 0; i < flatMap.childrenCount(); ++i) {
+    flatMapNamedOrdinals.insert({flatMap.nameAt(i), i});
+  }
+
+  for (const auto& feature : features) {
+    auto it = flatMapNamedOrdinals.find(folly::to<std::string>(feature));
+    if (it == flatMapNamedOrdinals.end()) {
+      continue;
+    }
+
+    auto ordinal = it->second;
+    auto& inMapDescriptor = flatMap.inMapDescriptorAt(ordinal);
+    offsets.push_back(inMapDescriptor.offset());
+    appendAllNestedStreams(flatMap.childAt(ordinal), offsets);
+  }
+}
+
+// Appends all feature orders for a column and reports whether one was found.
+bool appendFeatureOrdersOf(
+    const RowTypeBuilder& root,
+    size_t ordinal,
+    const std::vector<OrderedFlatMap>& orderedFlatMaps,
+    std::vector<offset_size>& offsets) {
+  bool found{false};
+  for (const auto& orderedFlatMap : orderedFlatMaps) {
+    if (orderedFlatMap.ordinal == ordinal) {
+      appendOrderedFeatures(
+          root.childAt(ordinal).asFlatMap(), orderedFlatMap.features, offsets);
+      found = true;
+    }
+  }
+  return found;
+}
+
+// Resolves unique column names to top-level ordinals in configured order.
+std::vector<size_t> resolveColumnOrder(
+    const RowTypeBuilder& root,
+    const std::vector<std::string>& columnOrder,
+    std::vector<std::string>& unknownNames) {
+  if (columnOrder.empty()) {
+    return {};
+  }
+
+  folly::F14FastMap<std::string_view, size_t> ordinalsByName;
+  ordinalsByName.reserve(root.childrenCount());
+  for (size_t i = 0; i < root.childrenCount(); ++i) {
+    ordinalsByName.emplace(root.nameAt(i), i);
+  }
+
+  std::vector<bool> seen(root.childrenCount());
+  std::vector<size_t> ordinals;
+  ordinals.reserve(columnOrder.size());
+  for (const auto& name : columnOrder) {
+    const auto it = ordinalsByName.find(name);
+    if (it == ordinalsByName.end()) {
+      unknownNames.push_back(name);
+      continue;
+    }
+    if (!seen.at(it->second)) {
+      seen.at(it->second) = true;
+      ordinals.push_back(it->second);
+    }
+  }
+  return ordinals;
+}
+
 } // namespace
+
+DefaultLayoutPlanner::DefaultLayoutPlanner(
+    const SchemaBuilder* schemaBuilder,
+    LayoutPlannerOptions options)
+    : schemaBuilder_{*velox::checkedNotNull(schemaBuilder)},
+      options_{std::move(options)} {}
 
 DefaultLayoutPlanner::DefaultLayoutPlanner(
     const SchemaBuilder* schemaBuilder,
     const std::optional<std::vector<std::tuple<size_t, std::vector<int64_t>>>>&
         flatMapFeatureOrder)
-    : schemaBuilder_{velox::checkedNotNull(schemaBuilder)},
-      flatMapFeatureOrder_{
-          flatMapFeatureOrder.has_value()
-              ? std::move(flatMapFeatureOrder.value())
-              : std::vector<std::tuple<size_t, std::vector<int64_t>>>{}} {}
+    : DefaultLayoutPlanner{schemaBuilder, [&] {
+                             LayoutPlannerOptions options;
+                             if (flatMapFeatureOrder.has_value()) {
+                               options.flatMapFeatureOrder =
+                                   *flatMapFeatureOrder;
+                             }
+                             return options;
+                           }()} {}
+
+const std::vector<size_t>& DefaultLayoutPlanner::resolvedColumnOrder(
+    const RowTypeBuilder& root) {
+  if (resolvedRoot_ == &root &&
+      resolvedChildrenCount_ == root.childrenCount()) {
+    return orderedColumns_;
+  }
+
+  std::vector<std::string> unknownNames;
+  orderedColumns_ =
+      resolveColumnOrder(root, options_.columnOrder, unknownNames);
+  for (const auto& name : unknownNames) {
+    LOG(WARNING) << "Column '" << name
+                 << "' for column ordering is not a top-level column.";
+  }
+  isOrderedColumn_.assign(root.childrenCount(), false);
+  for (const auto ordinal : orderedColumns_) {
+    isOrderedColumn_[ordinal] = true;
+  }
+  resolvedRoot_ = &root;
+  resolvedChildrenCount_ = root.childrenCount();
+  return orderedColumns_;
+}
 
 std::vector<Stream> DefaultLayoutPlanner::getLayout(
     std::vector<Stream>&& streams) {
-  const auto& type = schemaBuilder_->root();
+  const auto& type = schemaBuilder_.root();
   NIMBLE_CHECK_EQ(
       type->kind(),
       Kind::Row,
       "Layout planner requires row as the schema root.");
   auto& root = type->asRow();
 
-  // Layout logic:
-  // 1. Root stream (Row nulls) is always first
-  // 2. Later, all flat maps included in config are layed out.
-  //    For each map, we layout all the features included in the config for
-  //    that map, in the order they appeared in the config. For each feature, we
-  //    first add its in-map stream and then all the value streams for that
-  //    feature (if the value is a complex type, we add all the nested streams
-  //    for this complex type together).
-  // 3. We then layout all the other "leftover" streams, in "schema order". This
-  //    guarantees that all "related" streams are next to each other.
-  //    Leftover streams include all streams belonging to other columns, and all
-  //    flat map features not included in the config.
+  const auto orderedFlatMaps =
+      validFlatMapFeatureOrders(root, options_.flatMapFeatureOrder);
+  const auto& orderedColumns = resolvedColumnOrder(root);
 
-  // This vector is going to hold all the ordered flat-map streams contained in
-  // the config
-  std::vector<offset_size> orderedFlatMapOffsets;
-  orderedFlatMapOffsets.reserve(flatMapFeatureOrder_.size() * 3);
+  std::vector<offset_size> priorityOffsets;
+  priorityOffsets.reserve(
+      orderedColumns.size() + options_.flatMapFeatureOrder.size() * 3);
 
-  for (const auto& flatMapFeatures : flatMapFeatureOrder_) {
-    if (std::get<0>(flatMapFeatures) >= root.childrenCount()) {
-      LOG(WARNING)
-          << "Column ordinal " << std::get<0>(flatMapFeatures)
-          << " for feature ordering is out of range. Top-level row has "
-          << root.childrenCount() << " columns.";
-      continue;
-    }
-
-    auto& column = root.childAt(std::get<0>(flatMapFeatures));
-
-    if (column.kind() != Kind::FlatMap) {
-      LOG(WARNING) << "Column '" << root.nameAt(std::get<0>(flatMapFeatures))
-                   << "' for feature ordering is not a flat map.";
-      continue;
-    }
-
-    auto& flatMap = column.asFlatMap();
-
-    // For each flat map, first we push the flat map nulls stream.
-    orderedFlatMapOffsets.push_back(flatMap.nullsDescriptor().offset());
-
-    // Build a lookup table from feature name to its schema offset.
-    std::unordered_map<std::string, offset_size> flatMapNamedOrdinals;
-    flatMapNamedOrdinals.reserve(flatMap.childrenCount());
-    for (auto i = 0; i < flatMap.childrenCount(); ++i) {
-      flatMapNamedOrdinals.insert({flatMap.nameAt(i), i});
-    }
-
-    // Add feature's inMap stream along with all its nested streams to the
-    // ordered stream list.
-    for (const auto& feature : std::get<1>(flatMapFeatures)) {
-      auto it = flatMapNamedOrdinals.find(folly::to<std::string>(feature));
-      if (it == flatMapNamedOrdinals.end()) {
-        continue;
-      }
-
-      auto ordinal = it->second;
-      auto& inMapDescriptor = flatMap.inMapDescriptorAt(ordinal);
-      orderedFlatMapOffsets.push_back(inMapDescriptor.offset());
-      appendAllNestedStreams(flatMap.childAt(ordinal), orderedFlatMapOffsets);
+  for (const auto ordinal : orderedColumns) {
+    if (!appendFeatureOrdersOf(
+            root, ordinal, orderedFlatMaps, priorityOffsets)) {
+      appendAllNestedStreams(root.childAt(ordinal), priorityOffsets);
     }
   }
 
-  // This vector is going to hold all the streams, ordered  based on schema
-  // order. This will include streams that already appear in the
-  // 'orderedFlatMapOffsets'. Later, while laying out the final stream oder,
-  // we'll de-dup these streams.
-  std::vector<offset_size> orderedAllOffsets;
-  appendAllNestedStreams(root, orderedAllOffsets);
+  for (const auto& orderedFlatMap : orderedFlatMaps) {
+    if (!orderedColumns.empty() && isOrderedColumn_[orderedFlatMap.ordinal]) {
+      continue;
+    }
+    appendOrderedFeatures(
+        root.childAt(orderedFlatMap.ordinal).asFlatMap(),
+        orderedFlatMap.features,
+        priorityOffsets);
+  }
 
-  // Build a lookup table from type builders to their streams.
-  std::unordered_map<uint32_t, Stream*> offsetsToStreams;
+  std::vector<offset_size> schemaOffsets;
+  appendAllNestedStreams(root, schemaOffsets);
+
+  folly::F14FastMap<uint32_t, Stream*> offsetsToStreams;
   offsetsToStreams.reserve(streams.size());
   std::transform(
       streams.begin(),
@@ -212,28 +329,19 @@ std::vector<Stream> DefaultLayoutPlanner::getLayout(
       return;
     }
     const auto dictionaryStreamOffset =
-        schemaBuilder_->sharedDictionaryStreamOffset(offset);
+        schemaBuilder_.sharedDictionaryStreamOffset(offset);
     if (dictionaryStreamOffset.has_value()) {
       tryAppendStream(dictionaryStreamOffset.value());
     }
   };
 
-  // At this point we have ordered all the type builders, so now we are going to
-  // try and find matching streams for each type builder and append them to the
-  // final ordered stream list.
-
-  // First add the root's null stream
   appendStream(root.nullsDescriptor().offset());
 
-  // Then, add all ordered flat maps
-  for (auto offset : orderedFlatMapOffsets) {
+  for (const auto offset : priorityOffsets) {
     appendStream(offset);
   }
 
-  // Then add all remaining streams in the schema order.
-  // 'tryAppendStream' will de-dup streams that were already added in previous
-  // steps.
-  for (auto offset : orderedAllOffsets) {
+  for (const auto offset : schemaOffsets) {
     appendStream(offset);
   }
 
