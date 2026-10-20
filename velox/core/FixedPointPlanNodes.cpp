@@ -252,6 +252,39 @@ int32_t FixedPointNode::numWorkers() const {
   return workers;
 }
 
+void FixedPointNode::accept(
+    const PlanNodeVisitor& visitor,
+    PlanNodeVisitorContext& context) const {
+  visitor.visit(*this, context);
+}
+
+void StateSourceNode::accept(
+    const PlanNodeVisitor& visitor,
+    PlanNodeVisitorContext& context) const {
+  visitor.visit(*this, context);
+}
+
+void StateHashJoinNode::accept(
+    const PlanNodeVisitor& visitor,
+    PlanNodeVisitorContext& context) const {
+  visitor.visit(*this, context);
+}
+
+std::vector<PlanNodePtr> FixedPointNode::nestedPlans() const {
+  std::vector<PlanNodePtr> result;
+  for (const auto& declaration : stateDeclarations_) {
+    if (declaration->initialPlan() != nullptr) {
+      result.push_back(declaration->initialPlan());
+    }
+  }
+  result.insert(result.end(), plans_.begin(), plans_.end());
+  result.insert(
+      result.end(),
+      convergenceConfig_.plans.begin(),
+      convergenceConfig_.plans.end());
+  return result;
+}
+
 bool FixedPointNode::readsPeers() const {
   // Either chain can be the shuffling one -- a convergence sequence that
   // reduces across workers needs peers just as a shuffling body does.
