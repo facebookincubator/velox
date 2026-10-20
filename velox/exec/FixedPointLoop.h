@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include <folly/CancellationToken.h>
 #include <folly/Executor.h>
 #include <folly/Synchronized.h>
 #include <folly/container/F14Map.h>
@@ -520,6 +521,14 @@ class FixedPointLoop {
   // several threads, and the loop reads them once it starts.
   std::mutex splitsMutex_;
   std::vector<std::string> peerParentIds_;
+
+  // Resolved by noMoreSplits() on the fixed point itself, once the coordinator
+  // has named every peer. The first iteration waits for it.
+  folly::SharedPromise<folly::Unit> peersComplete_;
+
+  // Requested once the owning task ends: the loop stops waiting on its peers,
+  // which then no longer need to arrive.
+  folly::CancellationSource cancellation_;
 
   // Every other coordinator-assigned split that arrived before the sub-task
   // reading it started, keyed by the plan node that reads it: a TableScan or
