@@ -520,7 +520,7 @@ target_link_libraries(
   GTest::gtest_main
 )
 
-add_executable(velox_fixed_point_test FixedPointTest.cpp Main.cpp)
+add_executable(velox_fixed_point_test FixedPointTest.cpp FixedPointVerdictsTest.cpp Main.cpp)
 add_test(
   NAME velox_fixed_point_test
   COMMAND velox_fixed_point_test
