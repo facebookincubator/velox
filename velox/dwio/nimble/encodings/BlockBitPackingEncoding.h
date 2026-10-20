@@ -857,16 +857,10 @@ void BlockBitPackingEncoding<T>::readWithVisitor(
   // and the scatter path (used for nullable columns) calls it.
   constexpr bool kCanUseFastPath =
       (kIsWideType || (kIsNarrowType && !V::kHasFilter && !V::kHasHook));
-  if constexpr (
-      kCanUseFastPath &&
-      (std::is_same_v<
-           typename V::Extract,
-           velox::dwio::common::ExtractToReader> ||
-       (V::kHasHook && !V::kHasFilter &&
-        detail::hookAllowsBulkFastPath<typename V::HookType>())) &&
-      kIsFluidCast) {
+  if constexpr (kCanUseFastPath && kIsFluidCast) {
     auto* nulls = visitor.reader().rawNullsInReadRange();
-    if (velox::dwio::common::useFastPath(visitor, nulls) &&
+    if ((detail::bulkFastPathByDefault<V>() || params.scanFastPath) &&
+        velox::dwio::common::useFastPath(visitor, nulls) &&
         (kIsWideType || nulls == nullptr)) {
       detail::readWithVisitorFast(*this, visitor, params, nulls);
       return;
