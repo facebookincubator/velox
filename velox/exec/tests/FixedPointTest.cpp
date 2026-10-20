@@ -3069,9 +3069,10 @@ DEBUG_ONLY_TEST_F(FixedPointTest, failedBodyPlanStopsChainFirst) {
       std::rethrow_exception(task->error()), "Injected producer failure");
 }
 
-// A worker whose peers never arrive stops waiting for them once its task is
-// aborted: the loop ends and releases the task.
-TEST_F(FixedPointTest, abortWhileWaitingForPeers) {
+// Aborting a task stops its loop wherever it waits, and the loop releases the
+// task: while it waits for its peers, and while it waits on an iteration's
+// sub-tasks.
+TEST_F(FixedPointTest, abortReleasesTask) {
   auto schema = ROW({"key", "val"}, BIGINT());
   auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   auto node =
@@ -3092,19 +3093,41 @@ TEST_F(FixedPointTest, abortWhileWaitingForPeers) {
               /*outputStateEntry=*/"values")
           .planNode();
 
-  auto task = makeTask(node, exec::Task::ExecutionMode::kParallel, "no-peers");
-  task->start(/*maxDrivers=*/1);
-  waitForInitialization(*task);
+  auto abortAndExpectReleased = [](exec::TaskPtr task) {
+    std::weak_ptr<exec::Task> released = task;
+    task->requestAbort().wait();
+    task.reset();
+    const auto deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (!released.expired() && std::chrono::steady_clock::now() < deadline) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    ASSERT_TRUE(released.expired());
+  };
 
-  std::weak_ptr<exec::Task> released = task;
-  task->requestAbort().wait();
-  task.reset();
-  const auto deadline =
-      std::chrono::steady_clock::now() + std::chrono::seconds(10);
-  while (!released.expired() && std::chrono::steady_clock::now() < deadline) {
-    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  // The peers never arrive.
+  {
+    auto task =
+        makeTask(node, exec::Task::ExecutionMode::kParallel, "no-peers");
+    task->start(/*maxDrivers=*/1);
+    waitForInitialization(*task);
+    abortAndExpectReleased(std::move(task));
   }
-  ASSERT_TRUE(released.expired());
+
+  // The second peer never starts, so the iteration's sub-tasks wait for it.
+  {
+    auto task =
+        makeTask(node, exec::Task::ExecutionMode::kParallel, "missing-peer");
+    task->start(/*maxDrivers=*/1);
+    task->addSplit(node->id(), remoteSplit(task));
+    task->addSplit(
+        node->id(),
+        exec::Split(
+            std::make_shared<exec::RemoteConnectorSplit>("local://missing")));
+    task->noMoreSplits(node->id());
+    waitForInitialization(*task);
+    abortAndExpectReleased(std::move(task));
+  }
 }
 
 // A split addressed to a node that reads none is a coordinator bug, rejected as
