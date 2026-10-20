@@ -18,6 +18,7 @@
 
 #include "velox/connectors/hive/FileTableHandle.h"
 #include "velox/connectors/hive/HiveConnectorUtil.h"
+#include "velox/expression/Expr.h"
 
 namespace facebook::velox::connector::hive {
 
@@ -36,9 +37,10 @@ struct FileScanState;
 /// expression are included in the reader's input requirements.
 ///
 /// The DWIO common::ScanSpec is a mutable tree describing how one physical
-/// reader accesses columns. newFileScanState() creates a fresh tree, cloned
-/// filters, extraction configuration, and an optional MetadataFilter for each
-/// reader. The overload accepting physical column demands supports additions
+/// reader accesses columns. newFileScanState() creates a fresh tree, a separate
+/// predicate map, extraction configuration, and an optional MetadataFilter for
+/// each reader. Published filter payloads are shared and must not be mutated.
+/// The overload accepting physical column demands supports additions
 /// such as Hive bucket conversion columns. File-specific constants, filter
 /// adaptation, and other reader mutations remain local to that FileScanState.
 /// The caller owns each returned state; this configuration stores no state
@@ -68,6 +70,23 @@ class FileScanConfig {
   using Subfields =
       folly::F14FastMap<std::string, std::vector<const common::Subfield*>>;
   using ColumnHandles = std::unordered_map<std::string, FileColumnHandlePtr>;
+
+  /// Keeps the preparation expression outside the immutable configuration.
+  /// The first data source must consume it using the same query context;
+  /// other data sources sharing the configuration compile their own ExprSet.
+  struct Prepared {
+    std::shared_ptr<const FileScanConfig> config;
+    std::unique_ptr<exec::ExprSet> remainingFilterExprSet;
+    const ConnectorQueryCtx* context{nullptr};
+  };
+
+  static Prepared prepare(
+      const RowTypePtr& outputType,
+      const FileTableHandlePtr& tableHandle,
+      const ColumnHandleMap& assignments,
+      const ConnectorQueryCtx* context,
+      const std::shared_ptr<FileConfig>& config,
+      Options options);
 
   /// Prepares a configuration using the default Options.
   FileScanConfig(
@@ -122,6 +141,7 @@ class FileScanConfig {
   const core::TypedExprPtr& remainingFilter() const {
     return remainingFilter_;
   }
+  /// Returns separate predicate maps sharing the published, read-only filters.
   common::SubfieldFilters originalFilters() const;
   common::SubfieldFilters filters() const;
   const Subfields& subfields() const {
@@ -153,6 +173,15 @@ class FileScanConfig {
   }
 
  private:
+  FileScanConfig(
+      const RowTypePtr& outputType,
+      const FileTableHandlePtr& tableHandle,
+      const ColumnHandleMap& assignments,
+      const ConnectorQueryCtx* context,
+      const std::shared_ptr<FileConfig>& config,
+      Options options,
+      std::unique_ptr<exec::ExprSet>* preparedExprSet);
+
   void processColumnHandle(const FileColumnHandlePtr& handle);
   RowTypePtr configureExtractionColumns(
       const std::shared_ptr<common::ScanSpec>& scanSpec,
@@ -164,7 +193,6 @@ class FileScanConfig {
   const ColumnHandleMap assignments_;
   const bool disableStatsBasedFilterReorder_;
   RowTypePtr readerOutputType_;
-  common::SubfieldFilters originalFilters_;
   common::SubfieldFilters filters_;
   core::TypedExprPtr remainingFilter_;
   double sampleRate_;

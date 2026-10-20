@@ -26,14 +26,34 @@
 
 namespace facebook::velox::connector::hive {
 namespace {
-common::SubfieldFilters cloneFilters(const common::SubfieldFilters& filters) {
+common::SubfieldFilters copyFilters(const common::SubfieldFilters& filters) {
   common::SubfieldFilters copy;
   for (const auto& [subfield, filter] : filters) {
-    copy.emplace(subfield.clone(), filter->clone());
+    copy.emplace(subfield.clone(), filter);
   }
   return copy;
 }
 } // namespace
+
+FileScanConfig::Prepared FileScanConfig::prepare(
+    const RowTypePtr& outputType,
+    const FileTableHandlePtr& tableHandle,
+    const ColumnHandleMap& assignments,
+    const ConnectorQueryCtx* context,
+    const std::shared_ptr<FileConfig>& config,
+    Options options) {
+  Prepared prepared;
+  prepared.context = context;
+  prepared.config = std::shared_ptr<const FileScanConfig>(new FileScanConfig(
+      outputType,
+      tableHandle,
+      assignments,
+      context,
+      config,
+      options,
+      &prepared.remainingFilterExprSet));
+  return prepared;
+}
 
 void FileScanConfig::processColumnHandle(const FileColumnHandlePtr& handle) {
   switch (handle->columnType()) {
@@ -75,6 +95,23 @@ FileScanConfig::FileScanConfig(
     const ConnectorQueryCtx* context,
     const std::shared_ptr<FileConfig>& config,
     Options options)
+    : FileScanConfig(
+          outputType,
+          tableHandle,
+          assignments,
+          context,
+          config,
+          options,
+          nullptr) {}
+
+FileScanConfig::FileScanConfig(
+    const RowTypePtr& outputType,
+    const FileTableHandlePtr& tableHandle,
+    const ColumnHandleMap& assignments,
+    const ConnectorQueryCtx* context,
+    const std::shared_ptr<FileConfig>& config,
+    Options options,
+    std::unique_ptr<exec::ExprSet>* preparedExprSet)
     : outputType_(outputType),
       tableHandle_(tableHandle),
       assignments_(assignments),
@@ -138,8 +175,7 @@ FileScanConfig::FileScanConfig(
     checkColumnNameLowerCase(tableHandle_->remainingFilter());
   }
 
-  originalFilters_ = cloneFilters(tableHandle_->subfieldFilters());
-  filters_ = cloneFilters(originalFilters_);
+  filters_ = copyFilters(tableHandle_->subfieldFilters());
   remainingFilter_ = options.extractRemainingFilter
       ? extractFiltersFromRemainingFilter(
             tableHandle_->remainingFilter(),
@@ -194,6 +230,9 @@ FileScanConfig::FileScanConfig(
         // column and append the subfield
         subfields_[name].push_back(&subfield);
       }
+    }
+    if (preparedExprSet) {
+      *preparedExprSet = std::move(remainingFilterExprSet);
     }
   }
 
@@ -343,11 +382,11 @@ RowTypePtr FileScanConfig::configureExtractionColumns(
 }
 
 common::SubfieldFilters FileScanConfig::originalFilters() const {
-  return cloneFilters(originalFilters_);
+  return copyFilters(tableHandle_->subfieldFilters());
 }
 
 common::SubfieldFilters FileScanConfig::filters() const {
-  return cloneFilters(filters_);
+  return copyFilters(filters_);
 }
 
 FileScanState FileScanConfig::newFileScanState(
@@ -362,7 +401,7 @@ FileScanState FileScanConfig::newFileScanState(
     const ConnectorQueryCtx* context,
     bool buildMetadataFilter) const {
   FileScanState state;
-  state.filters = cloneFilters(filters);
+  state.filters = copyFilters(filters);
   state.scanSpec = makeScanSpec(
       readerOutputType,
       subfields,

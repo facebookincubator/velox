@@ -99,6 +99,13 @@ class FileDataSource : public DataSource {
       const ConnectorQueryCtx* connectorQueryCtx,
       const std::shared_ptr<FileConfig>& fileConfig);
 
+  FileDataSource(
+      FileScanConfig::Prepared prepared,
+      FileHandleFactory* fileHandleFactory,
+      folly::Executor* ioExecutor,
+      const ConnectorQueryCtx* connectorQueryCtx,
+      const std::shared_ptr<FileConfig>& fileConfig);
+
   void addSplit(std::shared_ptr<ConnectorSplit> split) override;
 
   std::optional<RowVectorPtr> next(uint64_t size, velox::ContinueFuture& future)
@@ -141,7 +148,10 @@ class FileDataSource : public DataSource {
 
   /// Rebuilds the state after changing physical column demands, before a
   /// reader is created. Keeps metadata filtering bound to the new ScanSpec.
-  void resetScanSpec(bool buildMetadataFilter = true);
+  /// Ordinary splits preserve nested selectivity for unchanged logical fields.
+  void resetScanSpec(
+      bool buildMetadataFilter = true,
+      bool preserveSelectivity = false);
 
   FileHandleFactory* const fileHandleFactory_;
   folly::Executor* const ioExecutor_;

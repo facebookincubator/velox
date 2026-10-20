@@ -32,6 +32,15 @@ namespace facebook::velox::connector::hive {
 
 namespace {
 
+void copySelectivity(common::ScanSpec& scanSpec, common::ScanSpec& previous) {
+  scanSpec.selectivity() = previous.selectivity();
+  for (const auto& child : scanSpec.children()) {
+    if (auto* previousChild = previous.childByName(child->fieldName())) {
+      copySelectivity(*child, *previousChild);
+    }
+  }
+}
+
 void addOperationStatsToRuntimeStats(
     io::IoStatistics& ioStats,
     std::unordered_map<std::string, RuntimeMetric>& res) {
@@ -69,7 +78,7 @@ FileDataSource::FileDataSource(
     const std::shared_ptr<FileConfig>& fileConfig,
     FileScanConfig::Options options)
     : FileDataSource(
-          std::make_shared<const FileScanConfig>(
+          FileScanConfig::prepare(
               outputType,
               checkedPointerCast<const FileTableHandle>(tableHandle),
               assignments,
@@ -87,12 +96,25 @@ FileDataSource::FileDataSource(
     folly::Executor* ioExecutor,
     const ConnectorQueryCtx* connectorQueryCtx,
     const std::shared_ptr<FileConfig>& fileConfig)
+    : FileDataSource(
+          FileScanConfig::Prepared{std::move(fileScanConfig), nullptr, nullptr},
+          fileHandleFactory,
+          ioExecutor,
+          connectorQueryCtx,
+          fileConfig) {}
+
+FileDataSource::FileDataSource(
+    FileScanConfig::Prepared prepared,
+    FileHandleFactory* fileHandleFactory,
+    folly::Executor* ioExecutor,
+    const ConnectorQueryCtx* connectorQueryCtx,
+    const std::shared_ptr<FileConfig>& fileConfig)
     : fileHandleFactory_(fileHandleFactory),
       ioExecutor_(ioExecutor),
       connectorQueryCtx_(connectorQueryCtx),
       fileConfig_(fileConfig),
       pool_(connectorQueryCtx->memoryPool()),
-      fileScanConfig_(std::move(fileScanConfig)),
+      fileScanConfig_(std::move(prepared.config)),
       tableHandle_(fileScanConfig_->tableHandle()),
       readerOutputType_(fileScanConfig_->readerOutputType()),
       partitionKeys_(fileScanConfig_->partitionKeys()),
@@ -104,9 +126,13 @@ FileDataSource::FileDataSource(
       outputType_(fileScanConfig_->outputType()),
       expressionEvaluator_(connectorQueryCtx->expressionEvaluator()),
       columnPostProcessors_(fileScanConfig_->columnPostProcessors()),
+      remainingFilterExprSet_(std::move(prepared.remainingFilterExprSet)),
       multiReferencedFields_(fileScanConfig_->multiReferencedFields()),
       remainingFilterColumns_(fileScanConfig_->remainingFilterColumns()) {
-  if (fileScanConfig_->remainingFilter()) {
+  VELOX_CHECK(
+      !prepared.context || prepared.context == connectorQueryCtx,
+      "Prepared expression must use the data source query context");
+  if (fileScanConfig_->remainingFilter() && !remainingFilterExprSet_) {
     remainingFilterExprSet_ =
         expressionEvaluator_->compile(fileScanConfig_->remainingFilter());
   }
@@ -120,7 +146,9 @@ FileDataSource::FileDataSource(
   ioStats_ = std::make_shared<IoStats>();
 }
 
-void FileDataSource::resetScanSpec(bool buildMetadataFilter) {
+void FileDataSource::resetScanSpec(
+    bool buildMetadataFilter,
+    bool preserveSelectivity) {
   VELOX_CHECK_NULL(splitReader_, "Cannot rebuild an active reader scan state");
   auto state =
       std::make_shared<FileScanState>(fileScanConfig_->newFileScanState(
@@ -130,7 +158,13 @@ void FileDataSource::resetScanSpec(bool buildMetadataFilter) {
           connectorQueryCtx_,
           buildMetadataFilter));
   if (scanSpec_) {
-    state->scanSpec->moveAdaptationFrom(*scanSpec_);
+    if (preserveSelectivity) {
+      // Logical field types are unchanged. Keep cross-file filter statistics,
+      // including nested fields, but not constants or other reader-local state.
+      copySelectivity(*state->scanSpec, *scanSpec_);
+    } else {
+      state->scanSpec->moveAdaptationFrom(*scanSpec_);
+    }
   }
   fileScanState_ = std::move(state);
   scanSpec_ = fileScanState_->scanSpec;
@@ -141,7 +175,7 @@ void FileDataSource::resetScanSpec(bool buildMetadataFilter) {
 
 void FileDataSource::applyDynamicFilters() {
   for (const auto& [channel, filter] : dynamicFilters_) {
-    scanSpec_->getChildByChannel(channel).setFilter(filter->clone());
+    scanSpec_->getChildByChannel(channel).setFilter(filter);
   }
   scanSpec_->resetCachedValues(true);
 }
@@ -190,7 +224,7 @@ void FileDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
   readerOutputType_ = fileScanConfig_->readerOutputType();
   subfields_ = fileScanConfig_->subfields();
   extractionColumns_ = fileScanConfig_->extractionColumns();
-  resetScanSpec();
+  resetScanSpec(/*buildMetadataFilter=*/true, /*preserveSelectivity=*/true);
   splitReader_ = createSplitReader();
 
   // Split reader subclasses may need to use the reader options in prepareSplit
@@ -313,9 +347,9 @@ std::optional<RowVectorPtr> FileDataSource::next(
 void FileDataSource::addDynamicFilter(
     column_index_t outputChannel,
     const std::shared_ptr<common::Filter>& filter) {
-  dynamicFilters_[outputChannel] = filter->clone();
+  dynamicFilters_[outputChannel] = filter;
   auto& fieldSpec = scanSpec_->getChildByChannel(outputChannel);
-  fieldSpec.setFilter(filter->clone());
+  fieldSpec.setFilter(filter);
   scanSpec_->resetCachedValues(true);
   if (splitReader_) {
     splitReader_->resetFilterCaches();
@@ -399,7 +433,27 @@ void FileDataSource::setFromDataSource(
   readerProducedType_ = std::move(source->readerProducedType_);
   resetOutputIfTypeChanged();
   extractionColumns_ = std::move(source->extractionColumns_);
+  // Match moveAdaptationFrom: nonconstant fields receive the destination's
+  // filter, while constant fields keep the preloaded filter. Remember that
+  // exact selection when rebuilding the adopted state for later files.
+  for (auto it = source->dynamicFilters_.begin();
+       it != source->dynamicFilters_.end();) {
+    const auto channel = it->first;
+    if (!source->scanSpec_->getChildByChannel(channel).isConstant() &&
+        !scanSpec_->getChildByChannel(channel).isConstant()) {
+      it = source->dynamicFilters_.erase(it);
+    } else {
+      ++it;
+    }
+  }
+  for (const auto& [channel, filter] : dynamicFilters_) {
+    if (!source->scanSpec_->getChildByChannel(channel).isConstant() &&
+        !scanSpec_->getChildByChannel(channel).isConstant()) {
+      source->dynamicFilters_[channel] = filter;
+    }
+  }
   source->scanSpec_->moveAdaptationFrom(*scanSpec_);
+  dynamicFilters_ = std::move(source->dynamicFilters_);
   // The reader borrows partition/info handles from the configuration and
   // validation filters from the state. Keep both owners after source dies.
   fileScanConfig_ = std::move(source->fileScanConfig_);

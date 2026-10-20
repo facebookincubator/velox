@@ -39,6 +39,7 @@ using exec::test::TempFilePath;
 class InspectableFileDataSource : public FileDataSource {
  public:
   using FileDataSource::FileDataSource;
+  using FileDataSource::remainingFilterExprSet;
 
   const auto& scanState() const {
     return fileScanState_;
@@ -56,6 +57,25 @@ class InspectableFileDataSource : public FileDataSource {
     readerOutputType_ = ROW(std::move(names), std::move(types));
     resetScanSpec();
   }
+};
+
+class CountingExpressionEvaluator : public exec::SimpleExpressionEvaluator {
+ public:
+  CountingExpressionEvaluator(
+      core::QueryCtx* queryCtx,
+      memory::MemoryPool* pool,
+      int* compilations)
+      : SimpleExpressionEvaluator(queryCtx, pool),
+        compilations_(compilations) {}
+
+  std::unique_ptr<exec::ExprSet> compile(
+      const core::TypedExprPtr& expression) override {
+    ++*compilations_;
+    return SimpleExpressionEvaluator::compile(expression);
+  }
+
+ private:
+  int* const compilations_;
 };
 
 class FileDataSourceTest : public HiveConnectorTestBase {
@@ -79,15 +99,23 @@ class FileDataSourceTest : public HiveConnectorTestBase {
   }
 
   std::unique_ptr<ConnectorQueryCtx> makeContext(
-      memory::MemoryPool* pool = nullptr) {
+      memory::MemoryPool* pool = nullptr,
+      int* compilations = nullptr,
+      const config::ConfigBase* session = nullptr) {
     pool = pool ? pool : pool_.get();
+    std::unique_ptr<core::ExpressionEvaluator> evaluator;
+    if (compilations) {
+      evaluator = std::make_unique<CountingExpressionEvaluator>(
+          queryCtx_.get(), pool, compilations);
+    } else {
+      evaluator = std::make_unique<exec::SimpleExpressionEvaluator>(
+          queryCtx_.get(), pool);
+    }
     return ConnectorQueryCtx::Builder()
         .operatorPool(pool)
         .connectorPool(pool)
-        .sessionProperties(config_.get())
-        .expressionEvaluator(
-            std::make_unique<exec::SimpleExpressionEvaluator>(
-                queryCtx_.get(), pool))
+        .sessionProperties(session ? session : config_.get())
+        .expressionEvaluator(std::move(evaluator))
         .queryId("FileDataSourceTest")
         .taskId("FileDataSourceTest")
         .planNodeId("scan")
@@ -360,7 +388,7 @@ TEST_F(FileDataSourceTest, fileScanConfigCreatesIndependentMetadataAndFilters) {
   ASSERT_NE(
       firstField->metadataFilterNodeAt(0),
       secondField->metadataFilterNodeAt(0));
-  ASSERT_NE(firstField->filter(), secondField->filter());
+  ASSERT_EQ(firstField->filter(), secondField->filter());
   firstField->setConstantValue<int64_t>(99, BIGINT(), pool_.get());
   firstField->setFilter(std::make_shared<common::BigintRange>(90, 100, false));
   ASSERT_FALSE(secondField->isConstant());
@@ -382,6 +410,194 @@ TEST_F(FileDataSourceTest, fileScanConfigCreatesIndependentMetadataAndFilters) {
       before->scanSpec->childByName("c0")->metadataFilterNodeAt(0),
       after->scanSpec->childByName("c0")->metadataFilterNodeAt(0));
   ASSERT_FALSE(fileScanConfig->readerOutputType()->containsChild("extra"));
+}
+
+TEST_F(FileDataSourceTest, remainingFilterCompiledOncePerDataSource) {
+  const auto table =
+      makeTableHandle({}, parseExpr("c0 % 2 = 1", type_), "test", type_);
+  for (bool extract : {true, false}) {
+    SCOPED_TRACE(extract);
+    int compilations = 0;
+    auto context = makeContext(nullptr, &compilations);
+    InspectableFileDataSource first(
+        type_,
+        table,
+        assignments_,
+        &fileFactory_,
+        nullptr,
+        context.get(),
+        hiveConfig_,
+        FileScanConfig::Options{extract});
+    ASSERT_EQ(compilations, 1);
+    ASSERT_TRUE(first.remainingFilterExprSet());
+    InspectableFileDataSource second(
+        type_,
+        table,
+        assignments_,
+        &fileFactory_,
+        nullptr,
+        context.get(),
+        hiveConfig_,
+        FileScanConfig::Options{extract});
+    EXPECT_EQ(compilations, 2);
+    EXPECT_NE(first.remainingFilterExprSet(), second.remainingFilterExprSet());
+    EXPECT_NE(
+        first.remainingFilterExprSet()->expr(0),
+        second.remainingFilterExprSet()->expr(0));
+  }
+}
+
+TEST_F(FileDataSourceTest, preparedFileScanConfigHasIndependentExpressions) {
+  auto firstPool = rootPool_->addLeafChild("prepared-reader");
+  auto secondPool = rootPool_->addLeafChild("shared-config-reader");
+  int firstCompilations = 0;
+  int secondCompilations = 0;
+  auto firstContext = makeContext(firstPool.get(), &firstCompilations);
+  auto secondContext = makeContext(secondPool.get(), &secondCompilations);
+  const auto table =
+      makeTableHandle({}, parseExpr("c0 % 2 = 1", type_), "test", type_);
+  auto prepared = FileScanConfig::prepare(
+      type_, table, assignments_, firstContext.get(), hiveConfig_, {});
+  auto config = prepared.config;
+  const auto* preparedExprSet = prepared.remainingFilterExprSet.get();
+  ASSERT_TRUE(preparedExprSet);
+  ASSERT_EQ(firstCompilations, 1);
+  InspectableFileDataSource first(
+      std::move(prepared),
+      &fileFactory_,
+      nullptr,
+      firstContext.get(),
+      hiveConfig_);
+  InspectableFileDataSource second(
+      config, &fileFactory_, nullptr, secondContext.get(), hiveConfig_);
+  EXPECT_EQ(firstCompilations, 1);
+  EXPECT_EQ(secondCompilations, 1);
+  EXPECT_EQ(first.configuration(), second.configuration());
+  EXPECT_EQ(first.remainingFilterExprSet(), preparedExprSet);
+  EXPECT_NE(first.remainingFilterExprSet(), second.remainingFilterExprSet());
+  EXPECT_NE(
+      first.remainingFilterExprSet()->expr(0),
+      second.remainingFilterExprSet()->expr(0));
+  EXPECT_NE(
+      first.remainingFilterExprSet()->execCtx(),
+      second.remainingFilterExprSet()->execCtx());
+
+  auto file = writeScanFile(
+      makeRowVector({makeFlatVector<int64_t>({1, 2, 3})}),
+      dwio::common::FileFormat::DWRF);
+  first.addSplit(makeHiveConnectorSplit(file->getPath()));
+  second.addSplit(makeHiveConnectorSplit(file->getPath()));
+  expectValues(next(first, 2), {1});
+  expectValues(next(second), {1, 3});
+  expectValues(next(first, 2), {3});
+  EXPECT_EQ(next(first), nullptr);
+  EXPECT_EQ(next(second), nullptr);
+
+  auto mismatched = FileScanConfig::prepare(
+      type_, table, assignments_, firstContext.get(), hiveConfig_, {});
+  VELOX_ASSERT_THROW(
+      InspectableFileDataSource(
+          std::move(mismatched),
+          &fileFactory_,
+          nullptr,
+          secondContext.get(),
+          hiveConfig_),
+      "Prepared expression must use the data source query context");
+}
+
+TEST_F(FileDataSourceTest, preparedExpressionPreservesColumnDemands) {
+  const auto type =
+      ROW({{"c0", BIGINT()}, {"c1", ARRAY(BIGINT())}, {"c2", BIGINT()}});
+  const auto outputType = ROW({{"c0", BIGINT()}, {"c2", BIGINT()}});
+  const ColumnHandleMap assignments{
+      {"c0", regularColumn("c0", BIGINT())},
+      {"c2", regularColumn("c2", BIGINT())}};
+  const auto prepare = [&](const std::string& expression) {
+    return FileScanConfig::prepare(
+        outputType,
+        makeTableHandle({}, parseExpr(expression, type), "test", type),
+        assignments,
+        context_.get(),
+        hiveConfig_,
+        FileScanConfig::Options{false});
+  };
+
+  auto lambda = prepare("cardinality(filter(c1, c0 -> c0 % 2 = 0)) > 0");
+  EXPECT_EQ(lambda.config->remainingFilterColumns().size(), 1);
+  EXPECT_TRUE(lambda.config->remainingFilterColumns().contains("c1"));
+  ASSERT_EQ(lambda.config->subfields().at("c1").size(), 1);
+  EXPECT_EQ(*lambda.config->subfields().at("c1")[0], common::Subfield("c1"));
+
+  auto subscript = prepare("c1[2] % 2 = 1");
+  ASSERT_EQ(subscript.config->subfields().at("c1").size(), 1);
+  EXPECT_EQ(
+      *subscript.config->subfields().at("c1")[0], common::Subfield("c1[2]"));
+
+  auto conditional =
+      prepare("c0 % 2 = 1 AND if(c2 > 0, c1[2] % 2 = 0, c1[2] % 3 = 0)");
+  EXPECT_EQ(
+      conditional.config->multiReferencedFields(),
+      (std::vector<column_index_t>{1}));
+  EXPECT_EQ(conditional.config->remainingFilterColumns().size(), 3);
+}
+
+TEST_F(FileDataSourceTest, publishedFiltersSharedAcrossScanStates) {
+  auto filter =
+      std::make_shared<common::BigintValuesUsingBloomFilter>(8'000'000, false);
+  const std::vector<int64_t> values{10, 25, 75};
+  // Build the payload before publishing it. Readers only replace references.
+  for (auto value : values) {
+    filter->insert(value);
+  }
+  auto file = writeScanFile(
+      makeRowVector({makeFlatVector<int64_t>(values)}),
+      dwio::common::FileFormat::DWRF);
+  const common::Subfield field("c0");
+  for (bool dynamic : {false, true}) {
+    SCOPED_TRACE(dynamic);
+    common::SubfieldFilters filters;
+    if (!dynamic) {
+      filters.emplace(field.clone(), filter);
+    }
+    const auto table =
+        makeTableHandle(std::move(filters), nullptr, "test", type_);
+    std::vector<std::unique_ptr<InspectableFileDataSource>> sources;
+    for (int i = 0; i < 8; ++i) {
+      auto source = std::make_unique<InspectableFileDataSource>(
+          type_,
+          table,
+          assignments_,
+          &fileFactory_,
+          nullptr,
+          context_.get(),
+          hiveConfig_);
+      if (dynamic) {
+        source->addDynamicFilter(0, filter);
+      } else {
+        EXPECT_EQ(source->configuration()->originalFilters().at(field), filter);
+        EXPECT_EQ(source->configuration()->filters().at(field), filter);
+        EXPECT_EQ(source->getFilters()->at(field), filter);
+        EXPECT_EQ(source->scanState()->filters.at(field), filter);
+      }
+      for (int split = 0; split < 2; ++split) {
+        source->addSplit(makeHiveConnectorSplit(file->getPath()));
+        EXPECT_EQ(
+            source->scanState()->scanSpec->childByName("c0")->filter(),
+            filter.get());
+        expectValues(next(*source), values);
+        EXPECT_EQ(next(*source), nullptr);
+      }
+      sources.push_back(std::move(source));
+    }
+    sources.front()->scanState()->scanSpec->childByName("c0")->setFilter(
+        std::make_shared<common::BigintRange>(20, 30, false));
+    EXPECT_EQ(
+        sources.back()->scanState()->scanSpec->childByName("c0")->filter(),
+        filter.get());
+    if (!dynamic) {
+      EXPECT_EQ(sources.front()->configuration()->filters().at(field), filter);
+    }
+  }
 }
 
 TEST_F(FileDataSourceTest, extractionRemainingFilterMetadata) {
@@ -666,6 +882,183 @@ TEST_F(FileDataSourceTest, newFileStatePreservesDynamicFiltersAndOwnership) {
   }
 }
 
+TEST_F(FileDataSourceTest, nestedSelectivitySurvivesOrdinarySplits) {
+  const auto session = std::make_shared<config::ConfigBase>(
+      std::unordered_map<std::string, std::string>{
+          {FileConfig::kUseColumnNamesSession, "true"}});
+  auto context = makeContext(nullptr, nullptr, session.get());
+  const auto nestedType = ROW({{"a", BIGINT()}, {"b", BIGINT()}});
+  const auto rowType = ROW({{"s", nestedType}});
+  const auto type = ROW({{"r", rowType}});
+  const ColumnHandleMap assignments{{"r", regularColumn("r", rowType)}};
+  const auto values =
+      makeFlatVector<int64_t>(100, [](auto row) { return row; });
+  const auto input = makeRowVector(
+      {"r"},
+      {makeRowVector({"s"}, {makeRowVector({"a", "b"}, {values, values})})});
+  common::SubfieldFilters filters;
+  filters.emplace(
+      common::Subfield("r.s.a"),
+      std::make_shared<common::BigintRange>(1, 99, false));
+  filters.emplace(
+      common::Subfield("r.s.b"),
+      std::make_shared<common::BigintRange>(0, 99, false));
+  const auto table = makeTableHandle(std::move(filters), nullptr, "test", type);
+  for (bool disableReorder : {false, true}) {
+    SCOPED_TRACE(disableReorder);
+    const auto config = std::make_shared<config::ConfigBase>(
+        std::unordered_map<std::string, std::string>{
+            {HiveConfig::kReadStatsBasedFilterReorderDisabled,
+             disableReorder ? "true" : "false"}});
+    const auto hiveConfig = std::make_shared<HiveConfig>(config);
+    for (auto format : fileFormats()) {
+      SCOPED_TRACE(dwio::common::FileFormatName::toName(format));
+      auto file = writeScanFile(input, format);
+      auto missing = writeScanFile(
+          makeRowVector({"other"}, {makeFlatVector<int64_t>({1})}), format);
+      InspectableFileDataSource source(
+          type,
+          table,
+          assignments,
+          &fileFactory_,
+          nullptr,
+          context.get(),
+          hiveConfig);
+      const auto add = [&](const auto& path) {
+        source.addSplit(HiveConnectorSplitBuilder(path->getPath())
+                            .connectorId(kHiveConnectorId)
+                            .fileFormat(format)
+                            .build());
+      };
+      const auto field = [&]() {
+        return source.scanState()
+            ->scanSpec->childByName("r")
+            ->childByName("s")
+            ->childByName("a");
+      };
+      add(file);
+      auto result = next(source, 100);
+      ASSERT_TRUE(result);
+      EXPECT_EQ(result->size(), 99);
+      result->loadedVector();
+      const auto before = field()->selectivity();
+      ASSERT_GT(before.numIn(), 0);
+      ASSERT_EQ(next(source), nullptr);
+      add(file);
+      EXPECT_EQ(field()->selectivity().numIn(), before.numIn());
+      EXPECT_EQ(field()->selectivity().numOut(), before.numOut());
+      EXPECT_EQ(
+          field()->selectivity().timeToDropValue(), before.timeToDropValue());
+      EXPECT_EQ(field()->statsBasedFilterReorderDisabled(), disableReorder);
+      while (auto batch = next(source, 100)) {
+        batch->loadedVector();
+      }
+      const auto accumulated = field()->selectivity().numIn();
+      add(missing);
+      EXPECT_TRUE(source.scanState()->scanSpec->childByName("r")->isConstant());
+      while (auto batch = next(source)) {
+        EXPECT_EQ(batch->size(), 0);
+      }
+      add(file);
+      EXPECT_FALSE(
+          source.scanState()->scanSpec->childByName("r")->isConstant());
+      EXPECT_EQ(field()->selectivity().numIn(), accumulated);
+      while (auto batch = next(source, 100)) {
+        batch->loadedVector();
+      }
+    }
+  }
+}
+
+TEST_F(FileDataSourceTest, takeoverRetainsSelectedDynamicFilter) {
+  const auto session = std::make_shared<config::ConfigBase>(
+      std::unordered_map<std::string, std::string>{
+          {FileConfig::kUseColumnNamesSession, "true"}});
+  auto context = makeContext(nullptr, nullptr, session.get());
+  const auto tableType = ROW({{"c0", BIGINT()}, {"c1", BIGINT()}});
+  const auto table = makeTableHandle({}, nullptr, "test", tableType);
+  const auto makeSource = [&]() {
+    return std::make_unique<InspectableFileDataSource>(
+        type_,
+        table,
+        assignments_,
+        &fileFactory_,
+        nullptr,
+        context.get(),
+        hiveConfig_);
+  };
+  const auto receiverFilter =
+      std::make_shared<common::BigintRange>(0, 100, false);
+  const auto donorFilter = std::make_shared<common::BigintRange>(20, 30, false);
+  for (auto format : fileFormats()) {
+    SCOPED_TRACE(dwio::common::FileFormatName::toName(format));
+    auto missing = writeScanFile(
+        makeRowVector({"c1"}, {makeFlatVector<int64_t>({1})}), format);
+    auto present = writeScanFile(
+        makeRowVector({makeFlatVector<int64_t>({10, 25, 75})}), format);
+    const auto add = [&](auto& source, const auto& file) {
+      source.addSplit(HiveConnectorSplitBuilder(file->getPath())
+                          .connectorId(kHiveConnectorId)
+                          .fileFormat(format)
+                          .build());
+    };
+    for (bool receiverConstant : {false, true}) {
+      for (bool donorConstant : {false, true}) {
+        SCOPED_TRACE(receiverConstant);
+        SCOPED_TRACE(donorConstant);
+        auto receiver = makeSource();
+        receiver->addDynamicFilter(0, receiverFilter);
+        if (receiverConstant) {
+          add(*receiver, missing);
+          ASSERT_EQ(next(*receiver), nullptr);
+        }
+        auto donor = makeSource();
+        donor->addDynamicFilter(0, donorFilter);
+        add(*donor, donorConstant ? missing : present);
+        receiver->setFromDataSource(std::move(donor));
+        const bool keepDonor = receiverConstant || donorConstant;
+        const auto* expectedFilter =
+            keepDonor ? donorFilter.get() : receiverFilter.get();
+        EXPECT_EQ(
+            receiver->scanState()->scanSpec->childByName("c0")->filter(),
+            expectedFilter);
+        if (!donorConstant) {
+          expectValues(
+              next(*receiver),
+              keepDonor ? std::vector<int64_t>{25}
+                        : std::vector<int64_t>{10, 25, 75});
+        }
+        EXPECT_EQ(next(*receiver), nullptr);
+        add(*receiver, present);
+        EXPECT_EQ(
+            receiver->scanState()->scanSpec->childByName("c0")->filter(),
+            expectedFilter);
+        expectValues(
+            next(*receiver),
+            keepDonor ? std::vector<int64_t>{25}
+                      : std::vector<int64_t>{10, 25, 75});
+        EXPECT_EQ(next(*receiver), nullptr);
+      }
+    }
+    // A constant donor with no dynamic filter does not acquire the receiver's
+    // filter through moveAdaptationFrom, nor should later splits acquire it.
+    auto receiver = makeSource();
+    receiver->addDynamicFilter(0, donorFilter);
+    auto donor = makeSource();
+    add(*donor, missing);
+    receiver->setFromDataSource(std::move(donor));
+    auto result = next(*receiver);
+    ASSERT_TRUE(result);
+    ASSERT_EQ(result->size(), 1);
+    result->loadedVector();
+    EXPECT_TRUE(result->childAt(0)->isNullAt(0));
+    EXPECT_EQ(next(*receiver), nullptr);
+    add(*receiver, present);
+    expectValues(next(*receiver), {10, 25, 75});
+    EXPECT_EQ(next(*receiver), nullptr);
+  }
+}
+
 TEST_F(FileDataSourceTest, dynamicFilterOnPreloadedEmptyRange) {
   auto file = writeScanFile(
       makeRowVector({makeFlatVector<int64_t>({1, 2, 3})}),
@@ -744,6 +1137,8 @@ TEST_F(FileDataSourceTest, takeoverPreservesInputsAndDynamicFilters) {
                      .build();
     auto preloadContext = makeContext();
     auto preloaded = makeSource(preloadContext.get());
+    preloaded->addDynamicFilter(
+        2, std::make_shared<common::BigintRange>(1, 1, false));
     preloaded->addSplit(split);
     preloaded->addDynamicFilter(
         0, std::make_shared<common::BigintRange>(2, 18, false));
@@ -754,8 +1149,8 @@ TEST_F(FileDataSourceTest, takeoverPreservesInputsAndDynamicFilters) {
     auto source = makeSource(context_.get());
     source->addDynamicFilter(
         0, std::make_shared<common::BigintRange>(5, 15, false));
-    // The preloaded partition is already constant. Preserve the existing
-    // adaptation behavior here and apply the filter when opening later splits.
+    // The preloaded partition is already constant and retains its own filter,
+    // including when opening later splits.
     source->addDynamicFilter(
         2, std::make_shared<common::BigintRange>(1, 1, false));
     source->setFromDataSource(std::move(preloaded));

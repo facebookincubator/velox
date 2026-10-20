@@ -30,8 +30,8 @@ namespace facebook::velox::connector::hive {
 /// reader's context and memory pool. Readers may share an immutable
 /// FileScanConfig, but concurrently active readers must use separate states.
 ///
-/// Owns cloned filters and the DWIO ScanSpec that readers adapt with file
-/// constants, filter ordering, and caches. MetadataFilter is bound to this
+/// Owns a separate predicate map and the DWIO ScanSpec that readers adapt with
+/// file constants, filter ordering, and caches. MetadataFilter is bound to this
 /// exact tree; changes to physical column demands require rebuilding the state
 /// so metadata filtering and extraction continue to describe the same inputs.
 ///
@@ -41,7 +41,8 @@ namespace facebook::velox::connector::hive {
 /// inputs. This object owns neither the physical reader nor the FileScanConfig
 /// or query context; sharing a state does not make mutation thread safe.
 struct FileScanState {
-  /// Clones of the physical predicates, also used for split validation.
+  /// Physical predicates, also used for split validation. Published filter
+  /// payloads are shared; replacing a predicate does not mutate other states.
   common::SubfieldFilters filters;
 
   /// Mutable column access tree for the physical reader.
