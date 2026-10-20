@@ -199,6 +199,13 @@ FixedPointLoop::FixedPointLoop(
   VELOX_USER_CHECK(
       !owner_->planFragment().isGroupedExecution(),
       "A fixed point does not support grouped execution");
+  if (executionMode_ == exec::Task::ExecutionMode::kParallel) {
+    VELOX_CHECK_NOT_NULL(
+        options_.orchestrationExecutor,
+        "Parallel FixedPointLoop requires "
+        "FixedPointOptions::orchestrationExecutor, an executor separate from "
+        "the query executor its sub-tasks run on");
+  }
   workerIndex_ = owner_->destination();
 
   // One worker per output partition of whichever chain shuffles -- the body,
@@ -332,11 +339,6 @@ void FixedPointLoop::start(
   // runSerially() waits on; here it suspends while its sub-tasks run on the
   // query executor.
   auto* executor = options_.orchestrationExecutor;
-  VELOX_CHECK_NOT_NULL(
-      executor,
-      "Parallel FixedPointLoop requires "
-      "FixedPointOptions::orchestrationExecutor, an executor separate from "
-      "the query executor its sub-tasks run on");
   VELOX_USER_CHECK(
       phase_ == Phase::kCreated,
       "start() cannot run a fixed point that has already been driven");

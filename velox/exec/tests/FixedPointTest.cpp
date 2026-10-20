@@ -2894,21 +2894,19 @@ TEST_F(FixedPointTest, executionStatsRecordDrivers) {
 }
 
 // A parallel fixed point needs an orchestration executor separate from the
-// query executor.  Rejecting that throws on the caller's thread, before the
-// loop schedules anything -- so the task has to record the failure itself or it
-// stays kRunning for ever with no error to report.
-TEST_F(FixedPointTest, startWithoutOrchestrationExecutorFails) {
+// query executor.
+TEST_F(FixedPointTest, missingOrchestrationExecutor) {
   FixedPointOptions options = localOptions();
   options.orchestrationExecutor = nullptr;
-  auto task = makeTask(
-      countingNode(),
-      exec::Task::ExecutionMode::kParallel,
-      "no-orchestrator",
-      &options);
-
-  VELOX_ASSERT_THROW(task->start(/*maxDrivers=*/1), "orchestrationExecutor");
-  EXPECT_EQ(task->state(), exec::TaskState::kFailed);
-  EXPECT_NE(task->error(), nullptr);
+  VELOX_ASSERT_THROW(
+      makeTask(
+          countingNode(),
+          exec::Task::ExecutionMode::kParallel,
+          "no-orchestrator",
+          &options),
+      "Parallel FixedPointLoop requires "
+      "FixedPointOptions::orchestrationExecutor, an executor separate from the "
+      "query executor its sub-tasks run on");
 }
 
 // A failing loop reports through the task, not only to the caller.
@@ -2975,6 +2973,44 @@ void holdUntilStopped(exec::Task& owner, HeldDriver& held) {
   owner.taskCompletionFuture().wait(std::chrono::seconds(1));
   held.ownerStoppedFirst = !owner.isRunning();
   held.done.post();
+}
+
+// createAndStartDrivers requires an empty task pool, and the loop allocates
+// from it, so the task starts the loop after its drivers. The loop schedules
+// itself on the orchestration executor, which counts what it runs.
+DEBUG_ONLY_TEST_F(FixedPointTest, loopStartsAfterDrivers) {
+  class CountingExecutor : public folly::Executor {
+   public:
+    explicit CountingExecutor(folly::Executor* executor)
+        : executor_(executor) {}
+
+    void add(folly::Func func) override {
+      ++count;
+      executor_->add(std::move(func));
+    }
+
+    std::atomic_int32_t count{0};
+
+   private:
+    folly::Executor* const executor_;
+  };
+
+  CountingExecutor executor(orchestrationExecutor());
+  FixedPointOptions options = localOptions();
+  options.orchestrationExecutor = &executor;
+
+  std::atomic_int32_t countAtDrivers{-1};
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Task::createAndStartDrivers",
+      std::function<void(exec::Task*)>([&](exec::Task* task) {
+        if (task->fixedPoint() != nullptr) {
+          countAtDrivers = executor.count.load();
+        }
+      }));
+  AssertQueryBuilder(countingNode())
+      .fixedPointOptions(&options)
+      .copyResults(pool());
+  EXPECT_EQ(countAtDrivers, 0);
 }
 
 // A failed sub-task resolves its completion future while its other drivers can
