@@ -101,6 +101,24 @@ TEST_F(IcebergNimbleInsertTest, roundTrip) {
   test(rowType, 0.2);
 }
 
+// The Java coordinator stamps the commit message's fileFormat onto the Iceberg
+// DataFile via FileFormat.toIceberg(), which has a first-class NIMBLE value.
+// Reporting "ORC" would record NIMBLE files as ORC in the manifest.
+TEST_F(IcebergNimbleInsertTest, commitMessageFormat) {
+  const auto outputDirectory = TempDirectoryPath::create();
+  const auto vectors =
+      createTestData(ROW({"c1", "c2"}, {BIGINT(), VARCHAR()}), 2, 100);
+  const auto commitTasks =
+      createDataSinkAndAppendData(vectors, outputDirectory->getPath())->close();
+
+  ASSERT_FALSE(commitTasks.empty());
+  for (const auto& task : commitTasks) {
+    const auto taskJson = folly::parseJson(task);
+    ASSERT_TRUE(taskJson.count("fileFormat"));
+    EXPECT_EQ(taskJson["fileFormat"].asString(), "NIMBLE");
+  }
+}
+
 // Builds an Iceberg column handle with an explicit field-id tree, used to drive
 // reads whose requested schema differs from the written schema.
 std::shared_ptr<const connector::ColumnHandle> makeIcebergColumnHandle(
