@@ -387,7 +387,8 @@ std::shared_ptr<Task> Task::create(
     int32_t memoryArbitrationPriority,
     std::optional<common::SpillDiskOptions> spillDiskOpts,
     std::function<void(std::exception_ptr)> onError,
-    const FixedPointOptions* fixedPointOptions) {
+    const FixedPointOptions* fixedPointOptions,
+    const NestedFixedPoint* nested) {
   return Task::create(
       taskId,
       std::move(planFragment),
@@ -399,7 +400,8 @@ std::shared_ptr<Task> Task::create(
       memoryArbitrationPriority,
       std::move(spillDiskOpts),
       std::move(onError),
-      fixedPointOptions);
+      fixedPointOptions,
+      nested);
 }
 
 // static
@@ -413,20 +415,34 @@ std::shared_ptr<Task> Task::create(
     int32_t memoryArbitrationPriority,
     std::optional<common::SpillDiskOptions> spillDiskOpts,
     std::function<void(std::exception_ptr)> onError,
-    const FixedPointOptions* fixedPointOptions) {
+    const FixedPointOptions* fixedPointOptions,
+    const NestedFixedPoint* nested) {
   VELOX_CHECK_NOT_NULL(planFragment.planNode);
+
   // A plan containing a FixedPointNode runs the node's iterations as a
   // schedule of sub-tasks, and the rest of the plan as this task's Driver
-  // pipeline.  The loop is built after the Task so it can hold its owner --
-  // which outlives it.  Note the owner is constructed but not yet initialized
-  // here: pool() is assigned in init(), below.
-  const bool isFixedPoint = FixedPointLoop::claims(planFragment);
+  // pipeline. The loop is built after the Task so it can hold its owner --
+  // which outlives it.
+  //
+  // Note the owner is constructed but not yet initialized here: pool() is
+  // assigned in init(), below. Every FixedPointNode leaf reads its task's one
+  // loop, so a plan has at most one. The walk visits every node to find a
+  // second one.
+  const core::FixedPointNode* fixedPoint = nullptr;
+  core::PlanNode::findFirstNode(
+      planFragment.planNode.get(), [&](const core::PlanNode* node) {
+        if (const auto* candidate = node->as<core::FixedPointNode>()) {
+          VELOX_USER_CHECK_NULL(
+              fixedPoint, "A plan fragment can run at most one FixedPointNode");
+          fixedPoint = candidate;
+        }
+        return false;
+      });
+
   // An enclosing loop names itself here when it creates a sub-task, so the
   // link is fixed before anything can observe the task.
   FixedPointLoop* const parentFixedPoint =
-      (fixedPointOptions != nullptr && fixedPointOptions->nested.has_value())
-      ? fixedPointOptions->nested->parent
-      : nullptr;
+      nested != nullptr ? nested->parent : nullptr;
   auto task = std::shared_ptr<Task>(new Task(
       taskId,
       std::move(planFragment),
@@ -437,9 +453,9 @@ std::shared_ptr<Task> Task::create(
       memoryArbitrationPriority,
       std::move(onError),
       parentFixedPoint));
-  if (isFixedPoint) {
-    task->fixedPoint_ =
-        std::make_unique<FixedPointLoop>(task.get(), fixedPointOptions);
+  if (fixedPoint != nullptr) {
+    task->fixedPoint_ = std::make_unique<FixedPointLoop>(
+        task.get(), *fixedPoint, fixedPointOptions, nested);
   }
   task->init(std::move(spillDiskOpts));
   task->addToTaskList();

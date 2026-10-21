@@ -64,6 +64,7 @@ class IndexScanCursorTest : public NimbleIndexProjectorTest {
   // a token left in the test's own options would block joining the executor.
   std::shared_ptr<detail::IndexScanCursor> makeCursor(
       NimbleIterator::Options options = {}) {
+    options.cacheEncodingView = GetParam().cacheEncodingView;
     std::vector<Subfield> subfields;
     subfields.emplace_back("value");
     return detail::IndexScanCursor::create(createProjector(subfields), options);
@@ -84,8 +85,7 @@ TEST_P(IndexScanCursorTest, loadsSelectedStripesLazily) {
   writeResumeKeyTestData(/*rowsPerBatch=*/4, /*numBatches=*/3);
   const auto rowType = ROW({{"key", BIGINT()}, {"value", INTEGER()}});
   auto cursor = makeCursor();
-  const auto range = folly::coro::blockingWait(
-      cursor->co_seek(makeRangeLookup(rowType, {"key"}, 2, 10)));
+  const auto range = cursor->seek(makeRangeLookup(rowType, {"key"}, 2, 10));
   EXPECT_EQ(range, std::optional<RowRange>(RowRange{2, 10}));
   EXPECT_EQ(cursor->stats().numReadStripes, 0);
   EXPECT_EQ(dataIoStats_->read().count(), 0);
@@ -103,7 +103,7 @@ TEST_P(IndexScanCursorTest, loadsSelectedStripesLazily) {
   EXPECT_EQ(stripeIndices, (std::vector<uint32_t>{0, 1, 2}));
   EXPECT_EQ(cursor->stats().numReadStripes, 3);
   EXPECT_EQ(cursor->stats().numOutputRows, 8);
-  folly::coro::blockingWait(cursor->co_reset());
+  cursor->reset();
 }
 
 TEST_P(IndexScanCursorTest, collectsTimingsOnlyWhenEnabled) {
@@ -114,8 +114,7 @@ TEST_P(IndexScanCursorTest, collectsTimingsOnlyWhenEnabled) {
     NimbleIterator::Options options;
     options.collectTimings = collectTimings;
     auto cursor = makeCursor(options);
-    folly::coro::blockingWait(
-        cursor->co_seek(makeRangeLookup(rowType, {"key"}, 2, 10)));
+    cursor->seek(makeRangeLookup(rowType, {"key"}, 2, 10));
     folly::coro::blockingWait(cursor->co_nextStripe(2));
     const auto stats = cursor->stats();
     EXPECT_EQ(stats.numReadStripes, 1);
@@ -131,7 +130,7 @@ TEST_P(IndexScanCursorTest, collectsTimingsOnlyWhenEnabled) {
         EXPECT_EQ(timing, velox::CpuWallTiming{});
       }
     }
-    folly::coro::blockingWait(cursor->co_reset());
+    cursor->reset();
   }
 }
 
@@ -139,8 +138,7 @@ TEST_P(IndexScanCursorTest, createsKeysWithinTheActiveRange) {
   writeResumeKeyTestData(/*rowsPerBatch=*/4, /*numBatches=*/3);
   const auto rowType = ROW({{"key", BIGINT()}, {"value", INTEGER()}});
   auto cursor = makeCursor();
-  folly::coro::blockingWait(
-      cursor->co_seek(makeRangeLookup(rowType, {"key"}, 2, 10)));
+  cursor->seek(makeRangeLookup(rowType, {"key"}, 2, 10));
 
   auto keys = cursor->keyCursor(5);
   for (int64_t row{5}; row < 10; ++row) {
@@ -152,7 +150,7 @@ TEST_P(IndexScanCursorTest, createsKeysWithinTheActiveRange) {
   }
   EXPECT_FALSE(keys->hasNext());
   EXPECT_EQ(cursor->stats().numReadStripes, 0);
-  folly::coro::blockingWait(cursor->co_reset());
+  cursor->reset();
 }
 
 TEST_P(IndexScanCursorTest, rejectsRowsOutsideTheActiveScan) {
@@ -164,8 +162,7 @@ TEST_P(IndexScanCursorTest, rejectsRowsOutsideTheActiveScan) {
       "No index scan is active");
   NIMBLE_ASSERT_THROW(cursor->keyCursor(0), "No index scan is active");
 
-  folly::coro::blockingWait(
-      cursor->co_seek(makeRangeLookup(rowType, {"key"}, 2, 10)));
+  cursor->seek(makeRangeLookup(rowType, {"key"}, 2, 10));
   for (const uint32_t row : {1U, 10U, std::numeric_limits<uint32_t>::max()}) {
     SCOPED_TRACE(row);
     NIMBLE_ASSERT_THROW(
@@ -174,7 +171,7 @@ TEST_P(IndexScanCursorTest, rejectsRowsOutsideTheActiveScan) {
     NIMBLE_ASSERT_THROW(
         cursor->keyCursor(row), "Row is outside the active scan");
   }
-  folly::coro::blockingWait(cursor->co_reset());
+  cursor->reset();
   NIMBLE_ASSERT_THROW(cursor->keyCursor(2), "No index scan is active");
 }
 
@@ -182,20 +179,15 @@ TEST_P(IndexScanCursorTest, clearsMissesAndSupportsReseek) {
   writeResumeKeyTestData(/*rowsPerBatch=*/4, /*numBatches=*/3);
   const auto rowType = ROW({{"key", BIGINT()}, {"value", INTEGER()}});
   auto cursor = makeCursor();
-  EXPECT_FALSE(
-      folly::coro::blockingWait(
-          cursor->co_seek(makeRangeLookup(rowType, {"key"}, 50, 60))));
+  EXPECT_FALSE(cursor->seek(makeRangeLookup(rowType, {"key"}, 50, 60)));
   NIMBLE_ASSERT_THROW(cursor->keyCursor(0), "No index scan is active");
 
-  EXPECT_EQ(
-      folly::coro::blockingWait(cursor->co_seekToFirst()),
-      std::optional<RowRange>(RowRange{0, 12}));
+  EXPECT_EQ(cursor->seekToFirst(), std::optional<RowRange>(RowRange{0, 12}));
   {
     const auto stripe = folly::coro::blockingWait(cursor->co_nextStripe(0));
     EXPECT_EQ(stripe.selection.selectedRowRange(), RowRange(0, 4));
   }
-  folly::coro::blockingWait(
-      cursor->co_seek(makeRangeLookup(rowType, {"key"}, 6, 11)));
+  cursor->seek(makeRangeLookup(rowType, {"key"}, 6, 11));
   {
     const auto stripe = folly::coro::blockingWait(cursor->co_nextStripe(6));
     EXPECT_EQ(stripe.selection.selectedRowRange(), RowRange(6, 8));
@@ -204,7 +196,7 @@ TEST_P(IndexScanCursorTest, clearsMissesAndSupportsReseek) {
     const auto stripe = folly::coro::blockingWait(cursor->co_nextStripe(8));
     EXPECT_EQ(stripe.selection.selectedRowRange(), RowRange(8, 11));
   }
-  folly::coro::blockingWait(cursor->co_reset());
+  cursor->reset();
   EXPECT_EQ(cursor->stats().numReadStripes, 3);
   EXPECT_EQ(cursor->stats().numOutputRows, 9);
 }
@@ -216,13 +208,13 @@ TEST_P(IndexScanCursorTest, skipsQueuedPrefetchStripes) {
   options.prefetchExecutor = folly::getKeepAliveToken(*executor);
   options.maxPrefetchStripes = 3;
   auto cursor = makeCursor(options);
-  folly::coro::blockingWait(cursor->co_seekToFirst());
+  cursor->seekToFirst();
   {
     const auto stripe = folly::coro::blockingWait(cursor->co_nextStripe(8));
     EXPECT_EQ(stripe.selection.stripeIndex, 2);
     EXPECT_EQ(stripe.selection.selectedRowRange(), RowRange(8, 12));
   }
-  folly::coro::blockingWait(cursor->co_reset());
+  cursor->reset();
   EXPECT_EQ(cursor->stats().numReadStripes, 3);
   EXPECT_EQ(cursor->stats().numSkippedStripes, 2);
   EXPECT_EQ(cursor->stats().numOutputRows, 4);
@@ -235,7 +227,7 @@ TEST_P(IndexScanCursorTest, zeroStripeLimitKeepsLoadsOnDemand) {
   options.prefetchExecutor = folly::getKeepAliveToken(*executor);
   options.maxPrefetchStripes = 0;
   auto cursor = makeCursor(options);
-  folly::coro::blockingWait(cursor->co_seekToFirst());
+  cursor->seekToFirst();
   EXPECT_EQ(cursor->stats().numReadStripes, 0);
   {
     const auto stripe = folly::coro::blockingWait(cursor->co_nextStripe(8));
@@ -243,7 +235,7 @@ TEST_P(IndexScanCursorTest, zeroStripeLimitKeepsLoadsOnDemand) {
   }
   EXPECT_EQ(cursor->stats().numReadStripes, 1);
   EXPECT_EQ(cursor->stats().numSkippedStripes, 0);
-  folly::coro::blockingWait(cursor->co_reset());
+  cursor->reset();
 }
 
 TEST_P(IndexScanCursorTest, returnsSchemaAndCallerScratchOptions) {
@@ -271,6 +263,7 @@ TEST_P(IndexScanCursorTest, returnsSchemaAndCallerScratchOptions) {
       const auto options = cursor->encodingOptions(bufferPool);
       EXPECT_EQ(options.bufferPool, bufferPool);
       EXPECT_EQ(options.useVarintRowCount, compactRowCount);
+      EXPECT_EQ(options.cacheEncodingView, GetParam().cacheEncodingView);
     }
   }
 }
@@ -295,11 +288,11 @@ TEST_P(IndexScanCursorTest, releasesSelectiveReaderStripeOwnership) {
     readerBase.reset();
     selectiveStreams.setStripe(0);
     auto cursor = makeCursor();
-    folly::coro::blockingWait(cursor->co_seekToFirst());
+    cursor->seekToFirst();
     const auto projected = folly::coro::blockingWait(cursor->co_nextStripe(0));
     EXPECT_EQ(projected.selection.selectedRowRange(), RowRange(0, 4));
     EXPECT_FALSE(owner.expired());
-    folly::coro::blockingWait(cursor->co_reset());
+    cursor->reset();
   }
   EXPECT_TRUE(owner.expired());
 }
@@ -310,14 +303,38 @@ TEST_P(IndexScanCursorTest, seeksFirstMiddleAndLastPoints) {
   auto cursor = makeCursor();
   for (const uint32_t row : {0, 5, 11}) {
     SCOPED_TRACE(row);
-    const auto range = folly::coro::blockingWait(
-        cursor->co_seek(makePointLookup(rowType, {"key"}, row)));
+    const auto range = cursor->seek(makePointLookup(rowType, {"key"}, row));
     EXPECT_EQ(range, std::optional<RowRange>(RowRange{row, row + 1}));
     const auto stripe = folly::coro::blockingWait(cursor->co_nextStripe(row));
     EXPECT_EQ(stripe.selection.stripeIndex, row / 4);
     EXPECT_EQ(stripe.selection.selectedRowRange(), RowRange(row, row + 1));
-    folly::coro::blockingWait(cursor->co_reset());
+    cursor->reset();
   }
+}
+
+TEST_P(IndexScanCursorTest, seeksKeys) {
+  writeResumeKeyTestData(/*rowsPerBatch=*/4, /*numBatches=*/3);
+  const auto rowType = ROW({{"key", BIGINT()}, {"value", INTEGER()}});
+  auto cursor = makeCursor();
+  for (const uint32_t row : {0, 5, 11}) {
+    SCOPED_TRACE(row);
+    const auto range =
+        cursor->seek(*makePointLookup(rowType, {"key"}, row).lowerKey);
+    EXPECT_EQ(range, std::optional<RowRange>(RowRange{row, row + 1}));
+    const auto stripe = folly::coro::blockingWait(cursor->co_nextStripe(row));
+    EXPECT_EQ(stripe.selection.stripeIndex, row / 4);
+    EXPECT_EQ(stripe.selection.selectedRowRange(), RowRange(row, row + 1));
+    cursor->reset();
+  }
+
+  // A key without rows is a miss, and the cursor seeks again afterwards.
+  EXPECT_EQ(
+      cursor->seek(*makePointLookup(rowType, {"key"}, 1'000).lowerKey),
+      std::nullopt);
+  EXPECT_EQ(
+      cursor->seek(*makePointLookup(rowType, {"key"}, 7).lowerKey),
+      std::optional<RowRange>(RowRange{7, 8}));
+  cursor->reset();
 }
 
 TEST_P(IndexScanCursorTest, handlesUnboundedAndEmptyKeyRanges) {
@@ -325,27 +342,18 @@ TEST_P(IndexScanCursorTest, handlesUnboundedAndEmptyKeyRanges) {
   const auto rowType = ROW({{"key", BIGINT()}, {"value", INTEGER()}});
   auto cursor = makeCursor();
   NIMBLE_ASSERT_THROW(
-      folly::coro::blockingWait(
-          cursor->co_seek(velox::serializer::EncodedKeyBounds{})),
+      cursor->seek(velox::serializer::EncodedKeyBounds{}),
       "At least one of lowerKey or upperKey must be set");
-  EXPECT_EQ(
-      folly::coro::blockingWait(cursor->co_seekToFirst()),
-      std::optional<RowRange>(RowRange{0, 12}));
+  EXPECT_EQ(cursor->seekToFirst(), std::optional<RowRange>(RowRange{0, 12}));
   auto lowerOnly = makePointLookup(rowType, {"key"}, 5);
   lowerOnly.upperKey.reset();
-  EXPECT_EQ(
-      folly::coro::blockingWait(cursor->co_seek(lowerOnly)),
-      std::optional<RowRange>(RowRange{5, 12}));
+  EXPECT_EQ(cursor->seek(lowerOnly), std::optional<RowRange>(RowRange{5, 12}));
   auto upperOnly = makePointLookup(rowType, {"key"}, 5);
   upperOnly.lowerKey.reset();
-  EXPECT_EQ(
-      folly::coro::blockingWait(cursor->co_seek(upperOnly)),
-      std::optional<RowRange>(RowRange{0, 6}));
-  EXPECT_FALSE(
-      folly::coro::blockingWait(
-          cursor->co_seek(makeRangeLookup(rowType, {"key"}, 5, 5))));
-  folly::coro::blockingWait(cursor->co_reset());
-  folly::coro::blockingWait(cursor->co_reset());
+  EXPECT_EQ(cursor->seek(upperOnly), std::optional<RowRange>(RowRange{0, 6}));
+  EXPECT_FALSE(cursor->seek(makeRangeLookup(rowType, {"key"}, 5, 5)));
+  cursor->reset();
+  cursor->reset();
 }
 
 TEST_P(IndexScanCursorTest, rejectsConsumedAndBackwardStripesWithoutDequeuing) {
@@ -358,7 +366,7 @@ TEST_P(IndexScanCursorTest, rejectsConsumedAndBackwardStripesWithoutDequeuing) {
       options.prefetchExecutor = folly::getKeepAliveToken(*executor);
     }
     auto cursor = makeCursor(options);
-    folly::coro::blockingWait(cursor->co_seekToFirst());
+    cursor->seekToFirst();
     {
       const auto stripe = folly::coro::blockingWait(cursor->co_nextStripe(4));
       EXPECT_EQ(stripe.selection.stripeIndex, 1);
@@ -376,7 +384,7 @@ TEST_P(IndexScanCursorTest, rejectsConsumedAndBackwardStripesWithoutDequeuing) {
     NIMBLE_ASSERT_THROW(
         folly::coro::blockingWait(cursor->co_nextStripe(8)),
         "No selected stripes remain");
-    folly::coro::blockingWait(cursor->co_reset());
+    cursor->reset();
   }
 }
 
@@ -389,7 +397,7 @@ TEST_P(IndexScanCursorTest, boundsPrefetchForAllLimitModes) {
     options.prefetchExecutor = folly::getKeepAliveToken(*executor);
     options.maxPrefetchStripes = limit;
     auto cursor = makeCursor(options);
-    folly::coro::blockingWait(cursor->co_seekToFirst());
+    cursor->seekToFirst();
     std::promise<void> producerPaused;
     auto paused = producerPaused.get_future();
     executor->add([&] { producerPaused.set_value(); });
@@ -399,7 +407,7 @@ TEST_P(IndexScanCursorTest, boundsPrefetchForAllLimitModes) {
       const auto stripe = folly::coro::blockingWait(cursor->co_nextStripe(23));
       EXPECT_EQ(stripe.selection.selectedRowRange(), RowRange(23, 24));
     }
-    folly::coro::blockingWait(cursor->co_reset());
+    cursor->reset();
     EXPECT_EQ(cursor->stats().numReadStripes, limit == 0 ? 1 : 6);
     EXPECT_EQ(cursor->stats().numSkippedStripes, limit == 0 ? 0 : 5);
   }
@@ -408,14 +416,14 @@ TEST_P(IndexScanCursorTest, boundsPrefetchForAllLimitModes) {
 TEST_P(IndexScanCursorTest, retainsLoadedStorageAcrossResetAndReseek) {
   writeResumeKeyTestData(/*rowsPerBatch=*/4, /*numBatches=*/3);
   auto cursor = makeCursor();
-  folly::coro::blockingWait(cursor->co_seekToFirst());
+  cursor->seekToFirst();
   auto retained = folly::coro::blockingWait(cursor->co_nextStripe(0));
   std::vector<std::string> expected;
   for (const auto stream : retained.streams) {
     expected.emplace_back(stream);
   }
-  folly::coro::blockingWait(cursor->co_reset());
-  folly::coro::blockingWait(cursor->co_seekToFirst());
+  cursor->reset();
+  cursor->seekToFirst();
   {
     const auto stripe = folly::coro::blockingWait(cursor->co_nextStripe(8));
     EXPECT_EQ(stripe.selection.stripeIndex, 2);
@@ -425,7 +433,7 @@ TEST_P(IndexScanCursorTest, retainsLoadedStorageAcrossResetAndReseek) {
     actual.emplace_back(stream);
   }
   EXPECT_EQ(actual, expected);
-  folly::coro::blockingWait(cursor->co_reset());
+  cursor->reset();
 }
 
 TEST_P(IndexScanCursorTest, preservesRowsWithAbsentProjectedStreams) {
@@ -447,7 +455,7 @@ TEST_P(IndexScanCursorTest, preservesRowsWithAbsentProjectedStreams) {
     subfields.emplace_back("features[\"missing\"]");
     auto cursor =
         detail::IndexScanCursor::create(createProjector(subfields), options);
-    folly::coro::blockingWait(cursor->co_seekToFirst());
+    cursor->seekToFirst();
     for (const uint32_t row : {0, 4, 8}) {
       SCOPED_TRACE(row);
       const auto stripe = folly::coro::blockingWait(cursor->co_nextStripe(row));
@@ -455,7 +463,7 @@ TEST_P(IndexScanCursorTest, preservesRowsWithAbsentProjectedStreams) {
       EXPECT_EQ(stripe.dataHandle, nullptr);
       EXPECT_THAT(stripe.streams, ::testing::Each(::testing::IsEmpty()));
     }
-    folly::coro::blockingWait(cursor->co_reset());
+    cursor->reset();
     EXPECT_EQ(cursor->stats().numReadStripes, 0);
     EXPECT_EQ(cursor->stats().numOutputRows, 12);
     EXPECT_EQ(dataIoStats_->read().count(), 0);
@@ -495,7 +503,7 @@ TEST_P(IndexScanCursorTest, retriesAfterConsumerCancellation) {
     if (pendingStripe.valid()) {
       pendingStripe.wait();
     }
-    folly::coro::blockingWait(cursor->co_reset());
+    cursor->reset();
     cursor.reset();
     executor->join();
   });
@@ -504,7 +512,7 @@ TEST_P(IndexScanCursorTest, retriesAfterConsumerCancellation) {
     resume.wait();
   });
   ASSERT_EQ(busy.wait_for(std::chrono::seconds{5}), std::future_status::ready);
-  folly::coro::blockingWait(cursor->co_seekToFirst());
+  cursor->seekToFirst();
   pendingStripe = std::async(std::launch::async, [&] {
     consumerStarted.set_value();
     return folly::coro::blockingWait(
@@ -541,7 +549,7 @@ TEST_P(IndexScanCursorTest, stopsPrefetchWhenDestroyedWithAFullQueue) {
   options.prefetchExecutor = folly::getKeepAliveToken(*executor);
   options.maxPrefetchStripes = 1;
   auto cursor = makeCursor(std::move(options));
-  folly::coro::blockingWait(cursor->co_seekToFirst());
+  cursor->seekToFirst();
   std::promise<void> producerPaused;
   auto paused = producerPaused.get_future();
   executor->add([&] { producerPaused.set_value(); });
@@ -558,7 +566,7 @@ TEST_P(IndexScanCursorTest, joinsAfterCleanupSchedulingFailure) {
   NimbleIterator::Options options;
   options.prefetchExecutor = folly::getKeepAliveToken(*executor);
   auto cursor = makeCursor(std::move(options));
-  folly::coro::blockingWait(cursor->co_seekToFirst());
+  cursor->seekToFirst();
   {
     const auto stripe = folly::coro::blockingWait(cursor->co_nextStripe(0));
     EXPECT_EQ(stripe.selection.stripeIndex, 0);
@@ -601,20 +609,20 @@ DEBUG_ONLY_TEST_P(
           std::function<void(std::atomic_bool*)>([](std::atomic_bool* stopped) {
             stopped->store(true, std::memory_order_release);
           }));
-      folly::coro::blockingWait(cursor->co_seekToFirst());
+      cursor->seekToFirst();
       std::promise<void> producerFinished;
       auto finished = producerFinished.get_future();
       executor->add([&] { producerFinished.set_value(); });
       finished.wait();
       EXPECT_EQ(cursor->stats().numReadStripes, 0);
-      folly::coro::blockingWait(cursor->co_reset());
+      cursor->reset();
     }
-    folly::coro::blockingWait(cursor->co_seekToFirst());
+    cursor->seekToFirst();
     {
       const auto stripe = folly::coro::blockingWait(cursor->co_nextStripe(0));
       EXPECT_EQ(stripe.selection.stripeIndex, 0);
     }
-    folly::coro::blockingWait(cursor->co_reset());
+    cursor->reset();
   }
 }
 
@@ -637,7 +645,7 @@ DEBUG_ONLY_TEST_P(IndexScanCursorTest, preservesTerminalLoadFailureUntilReset) {
         "facebook::nimble::DirectDataInput::allocateBuffer",
         std::function<void(uint64_t*)>(
             [](uint64_t*) { NIMBLE_FAIL("injected cursor load failure"); }));
-    folly::coro::blockingWait(cursor->co_seekToFirst());
+    cursor->seekToFirst();
     for (int attempt{0}; attempt < 2; ++attempt) {
       SCOPED_TRACE(attempt);
       NIMBLE_ASSERT_THROW(
@@ -645,14 +653,14 @@ DEBUG_ONLY_TEST_P(IndexScanCursorTest, preservesTerminalLoadFailureUntilReset) {
           "injected cursor load failure");
     }
     EXPECT_EQ(dataIoStats_->read().count(), 0);
-    folly::coro::blockingWait(cursor->co_reset());
+    cursor->reset();
   }
-  folly::coro::blockingWait(cursor->co_seekToFirst());
+  cursor->seekToFirst();
   {
     const auto stripe = folly::coro::blockingWait(cursor->co_nextStripe(0));
     EXPECT_EQ(stripe.selection.stripeIndex, 0);
   }
-  folly::coro::blockingWait(cursor->co_reset());
+  cursor->reset();
 }
 
 DEBUG_ONLY_TEST_P(IndexScanCursorTest, retriesSynchronousLoadAfterFailure) {
@@ -665,7 +673,7 @@ DEBUG_ONLY_TEST_P(IndexScanCursorTest, retriesSynchronousLoadAfterFailure) {
     }
   });
   auto cursor = makeCursor();
-  folly::coro::blockingWait(cursor->co_seekToFirst());
+  cursor->seekToFirst();
   {
     SCOPED_TESTVALUE_SET(
         "facebook::nimble::DirectDataInput::allocateBuffer",
@@ -682,7 +690,7 @@ DEBUG_ONLY_TEST_P(IndexScanCursorTest, retriesSynchronousLoadAfterFailure) {
   EXPECT_EQ(stripe.selection.selectedRowRange(), RowRange(0, 4));
   EXPECT_EQ(cursor->stats().numOutputRows, 4);
   EXPECT_EQ(dataIoStats_->read().count(), 1);
-  folly::coro::blockingWait(cursor->co_reset());
+  cursor->reset();
 }
 
 DEBUG_ONLY_TEST_P(IndexScanCursorTest, preservesSkippedStatsAfterCancellation) {
@@ -718,7 +726,7 @@ DEBUG_ONLY_TEST_P(IndexScanCursorTest, preservesSkippedStatsAfterCancellation) {
     if (pendingStripe.valid()) {
       pendingStripe.wait();
     }
-    folly::coro::blockingWait(cursor->co_reset());
+    cursor->reset();
     cursor.reset();
     executor->join();
   });
@@ -730,7 +738,7 @@ DEBUG_ONLY_TEST_P(IndexScanCursorTest, preservesSkippedStatsAfterCancellation) {
           continuation.wait();
         }
       }));
-  folly::coro::blockingWait(cursor->co_seekToFirst());
+  cursor->seekToFirst();
   pendingStripe = std::async(std::launch::async, [&] {
     return folly::coro::blockingWait(
         folly::coro::co_awaitTry(
@@ -752,7 +760,7 @@ DEBUG_ONLY_TEST_P(IndexScanCursorTest, preservesSkippedStatsAfterCancellation) {
   release();
   const auto stripe = folly::coro::blockingWait(cursor->co_nextStripe(4));
   EXPECT_EQ(stripe.selection.selectedRowRange(), RowRange(4, 8));
-  folly::coro::blockingWait(cursor->co_reset());
+  cursor->reset();
   EXPECT_EQ(cursor->stats().numSkippedStripes, 1);
   EXPECT_EQ(cursor->stats().numOutputRows, 4);
 }
@@ -782,7 +790,7 @@ DEBUG_ONLY_TEST_P(
             NIMBLE_FAIL("injected second stripe failure");
           }
         }));
-    folly::coro::blockingWait(cursor->co_seekToFirst());
+    cursor->seekToFirst();
     {
       const auto stripe = folly::coro::blockingWait(cursor->co_nextStripe(0));
       EXPECT_EQ(stripe.selection.stripeIndex, 0);
@@ -794,14 +802,14 @@ DEBUG_ONLY_TEST_P(
         folly::coro::blockingWait(cursor->co_nextStripe(4)),
         "injected second stripe failure");
     EXPECT_EQ(cursor->stats().numReadStripes, 1);
-    folly::coro::blockingWait(cursor->co_reset());
+    cursor->reset();
   }
-  folly::coro::blockingWait(cursor->co_seekToFirst());
+  cursor->seekToFirst();
   {
     const auto stripe = folly::coro::blockingWait(cursor->co_nextStripe(4));
     EXPECT_EQ(stripe.selection.stripeIndex, 1);
   }
-  folly::coro::blockingWait(cursor->co_reset());
+  cursor->reset();
 }
 
 DEBUG_ONLY_TEST_P(IndexScanCursorTest, resetJoinsAnInFlightLoad) {
@@ -837,7 +845,7 @@ DEBUG_ONLY_TEST_P(IndexScanCursorTest, resetJoinsAnInFlightLoad) {
     if (resetTask.valid()) {
       resetTask.wait();
     }
-    folly::coro::blockingWait(cursor->co_reset());
+    cursor->reset();
     cursor.reset();
     executor->join();
   });
@@ -848,12 +856,12 @@ DEBUG_ONLY_TEST_P(IndexScanCursorTest, resetJoinsAnInFlightLoad) {
           loadStarted.set_value();
           continuation.wait();
         }));
-    folly::coro::blockingWait(cursor->co_seekToFirst());
+    cursor->seekToFirst();
     ASSERT_EQ(
         started.wait_for(std::chrono::seconds{5}), std::future_status::ready);
     resetTask = std::async(std::launch::async, [&] {
       resetStarted.set_value();
-      folly::coro::blockingWait(cursor->co_reset());
+      cursor->reset();
     });
     ASSERT_EQ(
         resetting.wait_for(std::chrono::seconds{5}), std::future_status::ready);
@@ -865,12 +873,12 @@ DEBUG_ONLY_TEST_P(IndexScanCursorTest, resetJoinsAnInFlightLoad) {
   }
   NIMBLE_ASSERT_THROW(cursor->keyCursor(0), "No index scan is active");
   EXPECT_EQ(dataIoStats_->read().count(), 1);
-  folly::coro::blockingWait(cursor->co_seekToFirst());
+  cursor->seekToFirst();
   {
     const auto stripe = folly::coro::blockingWait(cursor->co_nextStripe(4));
     EXPECT_EQ(stripe.selection.stripeIndex, 1);
   }
-  folly::coro::blockingWait(cursor->co_reset());
+  cursor->reset();
 }
 
 TEST_P(IndexScanCursorTest, stopsBeforeQueuedProducerStarts) {
@@ -901,7 +909,7 @@ TEST_P(IndexScanCursorTest, stopsBeforeQueuedProducerStarts) {
   NimbleIterator::Options options;
   options.prefetchExecutor = folly::getKeepAliveToken(*executor);
   cursor = makeCursor(std::move(options));
-  folly::coro::blockingWait(cursor->co_seekToFirst());
+  cursor->seekToFirst();
   EXPECT_EQ(cursor->stats().numReadStripes, 0);
   cursor.reset();
   release();
@@ -942,7 +950,7 @@ DEBUG_ONLY_TEST_P(IndexScanCursorTest, reportsStatsDuringAnInFlightLoad) {
     if (statsTask.valid()) {
       statsTask.wait();
     }
-    folly::coro::blockingWait(cursor->co_reset());
+    cursor->reset();
     cursor.reset();
     executor->join();
   });
@@ -952,7 +960,7 @@ DEBUG_ONLY_TEST_P(IndexScanCursorTest, reportsStatsDuringAnInFlightLoad) {
         loadStarted.set_value();
         continuation.wait();
       }));
-  folly::coro::blockingWait(cursor->co_seekToFirst());
+  cursor->seekToFirst();
   ASSERT_EQ(
       started.wait_for(std::chrono::seconds{5}), std::future_status::ready);
   statsTask = std::async(std::launch::async, [&] {
@@ -969,7 +977,7 @@ DEBUG_ONLY_TEST_P(IndexScanCursorTest, reportsStatsDuringAnInFlightLoad) {
   EXPECT_GT(partialStats.numPlannedBytes, 0);
   EXPECT_EQ(dataIoStats_->read().count(), 0);
   release();
-  folly::coro::blockingWait(cursor->co_reset());
+  cursor->reset();
   const auto stats = cursor->stats();
   EXPECT_EQ(stats.numReadStripes, 1);
   EXPECT_GT(stats.numPlannedBytes, 0);
@@ -979,13 +987,8 @@ DEBUG_ONLY_TEST_P(IndexScanCursorTest, reportsStatsDuringAnInFlightLoad) {
 INSTANTIATE_TEST_SUITE_P(
     AllCacheParams,
     IndexScanCursorTest,
-    ::testing::ValuesIn(IndexScanCursorTest::getTestParams()),
-    [](const ::testing::TestParamInfo<TestParam>& info) {
-      return fmt::format(
-          "cacheMeta{}_pin{}",
-          info.param.cacheMetadata ? "On" : "Off",
-          info.param.pinMetadata ? "On" : "Off");
-    });
+    ::testing::ValuesIn(IndexScanCursorTest::getIteratorTestParams()),
+    IndexScanCursorTest::iteratorTestParamName);
 
 } // namespace facebook::nimble::test
 

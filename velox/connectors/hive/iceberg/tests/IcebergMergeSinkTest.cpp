@@ -31,11 +31,13 @@ namespace {
 using IMS = IcebergMergeSink;
 
 // Two target table columns: id BIGINT and name VARCHAR.
-// The row_id ROW carries (file_path VARCHAR, pos BIGINT) — the inner two
-// fields the DV sub-sink actually consumes. Extra trailing Iceberg row id
-// fields (spec_id, partition_data) are intentionally omitted to keep the
-// test small; the merge sink tolerates them when present.
-const RowTypePtr kRowIdType = ROW({"file_path", "pos"}, {VARCHAR(), BIGINT()});
+// The row_id ROW is the Iceberg row id Presto's
+// getMergeTargetTableRowIdColumnHandle produces.
+const RowTypePtr kRowIdType = ROW(
+    {{"file_path", VARCHAR()},
+     {"pos", BIGINT()},
+     {"spec_id", INTEGER()},
+     {"partition_data", VARCHAR()}});
 
 // Composite-sink input schema as produced by Layer 1's
 // IcebergMergeProcessor: target cols, then operation, then row_id, then
@@ -102,9 +104,34 @@ class IcebergMergeSinkTest : public IcebergTestBase {
         /*rowIdChannel=*/3);
   }
 
-  // Builds a RowVector matching kMergeInputType from parallel vectors. Use
-  // std::nullopt for null cells. operation bytes are passed directly so
-  // tests can include invalid bytes to exercise error paths.
+  // Builds a row_id column of kRowIdType. 'partitionData' fills every row's
+  // partition_data field ("" for unpartitioned tables).
+  VectorPtr makeRowId(
+      const std::vector<std::optional<std::string>>& filePaths,
+      const std::vector<std::optional<int64_t>>& positions,
+      const std::string& partitionData) {
+    const auto numRows = static_cast<vector_size_t>(positions.size());
+    auto* pool = opPool_.get();
+    velox::test::VectorMaker maker(pool);
+    return std::make_shared<RowVector>(
+        pool,
+        kRowIdType,
+        /*nulls=*/nullptr,
+        numRows,
+        std::vector<VectorPtr>{
+            maker.flatVectorNullable<StringView>(toStringViews(filePaths)),
+            maker.flatVectorNullable<int64_t>(positions),
+            maker.flatVector<int32_t>(
+                numRows, [](vector_size_t /*row*/) { return 0; }),
+            maker.flatVector<StringView>(numRows, [&](vector_size_t /*row*/) {
+              return StringView(partitionData);
+            })});
+  }
+
+  // Builds a RowVector matching kMergeInputType from parallel vectors for an
+  // unpartitioned table. Use std::nullopt for null cells. operation bytes are
+  // passed directly so tests can include invalid bytes to exercise error
+  // paths.
   RowVectorPtr makeInput(
       const std::vector<std::optional<int64_t>>& ids,
       const std::vector<std::optional<std::string>>& names,
@@ -112,6 +139,20 @@ class IcebergMergeSinkTest : public IcebergTestBase {
       const std::vector<std::optional<std::string>>& filePaths,
       const std::vector<std::optional<int64_t>>& positions,
       const std::vector<int8_t>& insertFromUpdate) {
+    return makePartitionedInput(
+        ids, names, operations, filePaths, positions, insertFromUpdate, "");
+  }
+
+  // Same as makeInput, with 'partitionData' as every row's row-id
+  // partition_data.
+  RowVectorPtr makePartitionedInput(
+      const std::vector<std::optional<int64_t>>& ids,
+      const std::vector<std::optional<std::string>>& names,
+      const std::vector<int8_t>& operations,
+      const std::vector<std::optional<std::string>>& filePaths,
+      const std::vector<std::optional<int64_t>>& positions,
+      const std::vector<int8_t>& insertFromUpdate,
+      const std::string& partitionData) {
     const auto numRows = operations.size();
     auto* pool = opPool_.get();
     velox::test::VectorMaker maker(pool);
@@ -119,17 +160,7 @@ class IcebergMergeSinkTest : public IcebergTestBase {
     auto idCol = maker.flatVectorNullable<int64_t>(ids);
     auto nameCol = maker.flatVectorNullable<StringView>(toStringViews(names));
     auto opCol = maker.flatVector<int8_t>(operations);
-
-    auto filePathCol =
-        maker.flatVectorNullable<StringView>(toStringViews(filePaths));
-    auto posCol = maker.flatVectorNullable<int64_t>(positions);
-    auto rowIdCol = std::make_shared<RowVector>(
-        pool,
-        kRowIdType,
-        /*nulls=*/nullptr,
-        numRows,
-        std::vector<VectorPtr>{filePathCol, posCol});
-
+    auto rowIdCol = makeRowId(filePaths, positions, partitionData);
     auto insertFromUpdateCol = maker.flatVector<int8_t>(insertFromUpdate);
 
     return std::make_shared<RowVector>(
@@ -272,6 +303,41 @@ TEST_F(IcebergMergeSinkTest, mixedBatchProducesBothKinds) {
 
   EXPECT_EQ(countContent(messages, "DATA"), 1u);
   EXPECT_EQ(countContent(messages, "POSITION_DELETES"), 1u);
+}
+
+// UPDATE-as-MERGE on a partitioned table: the DELETE half must carry the
+// row id's partition_data into the puffin commit message, because the Java
+// commit path requires partitionDataJson for partitioned tables.
+TEST_F(IcebergMergeSinkTest, partitionedDeleteEmitsPartitionDataJson) {
+  auto tempDir = TempDirectoryPath::create();
+  auto sink = makeSink(tempDir->getPath());
+
+  const std::string dataFile = tempDir->getPath() + "/ds=2024-01-03/p.parquet";
+  const std::string partitionJson = R"({"partitionValues":["2024-01-03"]})";
+  auto input = makePartitionedInput(
+      /*ids=*/{std::nullopt, 5},
+      /*names=*/{std::nullopt, {std::string("new")}},
+      /*operations=*/
+      {IMS::kDeleteOperationNumber, IMS::kInsertOperationNumber},
+      /*filePaths=*/{{dataFile}, std::nullopt},
+      /*positions=*/{4, std::nullopt},
+      /*insertFromUpdate=*/{0, 1},
+      partitionJson);
+
+  sink->appendData(input);
+  EXPECT_TRUE(sink->finish());
+  const auto messages = sink->close();
+
+  std::vector<folly::dynamic> deletes;
+  for (const auto& message : messages) {
+    auto parsed = folly::parseJson(message);
+    if (parsed[kContentKey].asString() == "POSITION_DELETES") {
+      deletes.push_back(std::move(parsed));
+    }
+  }
+  ASSERT_EQ(deletes.size(), 1u);
+  EXPECT_EQ(deletes[0]["referencedDataFile"].asString(), dataFile);
+  EXPECT_EQ(deletes[0]["partitionDataJson"].asString(), partitionJson);
 }
 
 TEST_F(IcebergMergeSinkTest, emptyBatchProducesNoCommitMessages) {
@@ -440,16 +506,10 @@ TEST_F(IcebergMergeSinkTest, dataInputTypeNamesComeFromHandleNotSource) {
       std::vector<StringView>{StringView("a"), StringView("b")});
   auto opCol = maker.flatVector<int8_t>(std::vector<int8_t>{
       IMS::kInsertOperationNumber, IMS::kInsertOperationNumber});
-  auto filePathCol = maker.flatVectorNullable<StringView>(
-      std::vector<std::optional<StringView>>{std::nullopt, std::nullopt});
-  auto posCol = maker.flatVectorNullable<int64_t>(
-      std::vector<std::optional<int64_t>>{std::nullopt, std::nullopt});
-  auto rowIdCol = std::make_shared<RowVector>(
-      pool,
-      kRowIdType,
-      /*nulls=*/nullptr,
-      2,
-      std::vector<VectorPtr>{filePathCol, posCol});
+  auto rowIdCol = makeRowId(
+      /*filePaths=*/{std::nullopt, std::nullopt},
+      /*positions=*/{std::nullopt, std::nullopt},
+      /*partitionData=*/"");
   auto insertFromUpdateCol =
       maker.flatVector<int8_t>(std::vector<int8_t>{0, 0});
   auto input = std::make_shared<RowVector>(
