@@ -16,6 +16,8 @@
 
 #pragma once
 
+#include <folly/stop_watch.h>
+
 #include <atomic>
 #include <memory>
 #include <optional>
@@ -439,8 +441,9 @@ class RPCOperator : public exec::Operator {
   // scheduling, so this needs generous headroom.
   static constexpr auto kBatchRpcTimeout = std::chrono::milliseconds(3'600'000);
 
-  // Block wait time tracking for runtime stats.
-  std::optional<uint64_t> blockWaitStartNs_;
+  // Block wait time tracking for runtime stats. Started when the operator
+  // parks and reset when the wait ends.
+  std::optional<folly::stop_watch<std::chrono::nanoseconds>> blockWaitWatch_;
   bool blockWaitIsBackpressure_{false};
   uint64_t totalBlockWaitNanos_{0};
   uint64_t totalBackpressureWaitNanos_{0};

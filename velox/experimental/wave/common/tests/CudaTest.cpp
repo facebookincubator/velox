@@ -19,6 +19,7 @@
 #include <cuda_runtime.h> // @manual
 #include <folly/executors/CPUThreadPoolExecutor.h>
 #include <folly/init/Init.h>
+#include <folly/stop_watch.h>
 #include <gtest/gtest.h>
 #include "velox/buffer/Buffer.h"
 #include "velox/common/base/AsyncSource.h"
@@ -605,7 +606,7 @@ class RoundtripThread {
   };
 
   void run(RoundtripStats& stats) {
-    stats.startMicros = getCurrentTimeMicro();
+    stats.startMicros = SteadyTime::now<std::chrono::microseconds>();
     for (auto counter = 0; counter < stats.numOps; ++counter) {
       int32_t position = 0;
       bool done = false;
@@ -828,7 +829,7 @@ class RoundtripThread {
         }
       }
     }
-    stats.endMicros = getCurrentTimeMicro();
+    stats.endMicros = SteadyTime::now<std::chrono::microseconds>();
   }
 
   FOLLY_NOINLINE void addOneCpu(int32_t size, int32_t repeat) {
@@ -1109,7 +1110,7 @@ class CudaTest : public testing::Test {
     std::vector<int64_t> delay;
     delay.reserve(numStreams * (numOps + 2));
 
-    auto start = getCurrentTimeMicro();
+    const folly::stop_watch<std::chrono::microseconds> watch;
     for (auto i = 0; i < numStreams; ++i) {
       streams.push_back(std::make_unique<TestStream>());
       ints.push_back(
@@ -1124,7 +1125,7 @@ class CudaTest : public testing::Test {
     }
     for (auto i = 0; i < numStreams; ++i) {
       streams[i]->addCallback([&]() {
-        auto d = getCurrentTimeMicro() - start;
+        auto d = watch.elapsed().count();
         {
           std::lock_guard<std::mutex> l(mutex);
           delay.push_back(d);
@@ -1144,7 +1145,7 @@ class CudaTest : public testing::Test {
         streams[i]->incOne(ints[i], opSize);
         if (counter == 0 || counter >= firstNotify) {
           streams[i]->addCallback([&]() {
-            auto d = getCurrentTimeMicro() - start;
+            auto d = watch.elapsed().count();
             {
               std::lock_guard<std::mutex> l(mutex);
               delay.push_back(d);
@@ -1177,7 +1178,7 @@ class CudaTest : public testing::Test {
         data += increment;
       }
       ASSERT_EQ(0, simd::toBitMask(error));
-      delay.push_back(getCurrentTimeMicro() - start);
+      delay.push_back(watch.elapsed().count());
     }
     for (auto i = 0; i < numStreams; ++i) {
       allocator_->free(ints[i], sizeof(int32_t) * opSize);
@@ -1325,7 +1326,7 @@ class CudaTest : public testing::Test {
       RunStats& stats) {
     std::vector<std::thread> threads;
     threads.reserve(numThreads);
-    auto start = getCurrentTimeMicro();
+    const folly::stop_watch<std::chrono::microseconds> watch;
     processedBytes_ = 0;
     batchIndex_ = 0;
     auto factory = [mode]() { return makeWork(mode); };
@@ -1349,7 +1350,7 @@ class CudaTest : public testing::Test {
       thread.join();
     }
 
-    auto time = getCurrentTimeMicro() - start;
+    auto time = watch.elapsed().count();
     float gbs = (processedBytes_ / 1024.0) / time;
     std::cout << time << "us " << gbs << " GB/s"
               << " res clks=" << stats.resultClocks << std::endl;

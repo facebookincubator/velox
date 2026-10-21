@@ -17,6 +17,7 @@
 #include "velox/dwio/nimble/encodings/FsstEncoding.h"
 
 #include <algorithm>
+#include <array>
 #include <limits>
 #include <random>
 #include <span>
@@ -147,11 +148,33 @@ class FsstEncodingViewTest : public EncodingViewTest {
     return rebuildFsst(sections, sections.symbolTable, sections.lengths, blob);
   }
 
+  // Rejects at construction, with or without caching.
   void expectMalformedView(
       std::string_view malformed,
       const char* expectedMessage) {
     NIMBLE_ASSERT_THROW(
-        createEncodingView(malformed, pool_.get()), expectedMessage);
+        createEncodingView(
+            malformed, pool_.get(), {.cacheEncodingView = cacheEncodingView()}),
+        expectedMessage);
+  }
+
+  // A cached view validates the whole blob when the view is created. A view
+  // without caching validates each string when a read reaches it.
+  void expectMalformedBlob(
+      std::string_view malformed,
+      const char* expectedMessage) {
+    if (cacheEncodingView()) {
+      NIMBLE_ASSERT_THROW(
+          createEncodingView(
+              malformed, pool_.get(), {.cacheEncodingView = true}),
+          expectedMessage);
+      return;
+    }
+    auto view = createEncodingView(
+        malformed, pool_.get(), {.cacheEncodingView = false});
+    std::vector<std::string_view> output(view->rowCount());
+    NIMBLE_ASSERT_THROW(
+        view->read(0, view->rowCount(), output.data()), expectedMessage);
   }
 
   Encoding::Options forceFsstOptions() const {
@@ -196,7 +219,7 @@ class FsstEncodingViewTest : public EncodingViewTest {
   }
 };
 
-TEST_F(FsstEncodingViewTest, readsAcrossLazyChunkBoundaries) {
+TEST_P(FsstEncodingViewTest, readsAcrossLazyChunkBoundaries) {
   std::vector<std::string> storage;
   auto values = makeValues(storage, 2'051);
   const std::vector<uint32_t> positions{
@@ -207,7 +230,7 @@ TEST_F(FsstEncodingViewTest, readsAcrossLazyChunkBoundaries) {
       values, positions, forceFsstOptions(), CompressionType::Lz4);
 }
 
-TEST_F(FsstEncodingViewTest, supportsConcurrentReadsAcrossChunks) {
+TEST_P(FsstEncodingViewTest, supportsConcurrentReadsAcrossChunks) {
   std::vector<std::string> storage;
   auto values = makeValues(storage, 2'048);
   std::mt19937 rng{42};
@@ -222,7 +245,44 @@ TEST_F(FsstEncodingViewTest, supportsConcurrentReadsAcrossChunks) {
   expectConcurrentReads<FsstEncoding>(values, positions, forceFsstOptions());
 }
 
-TEST_F(FsstEncodingViewTest, rejectsMalformedMetadata) {
+TEST_P(FsstEncodingViewTest, returnedStringsStayValidAcrossReads) {
+  std::vector<std::string> storage;
+  auto values = makeValues(storage, 256);
+  const auto encoded = encodeFsst(values);
+  const auto view = createEncodingView(
+      encoded, pool_.get(), {.cacheEncodingView = cacheEncodingView()});
+  std::string_view first;
+  view->readAt(17, &first);
+  // Callers such as MainlyConstant fill one output from several reads of a
+  // view, so a string must outlive the reads that follow it, including a read
+  // of its own row.
+  for (uint32_t row = 0; row < values.size(); ++row) {
+    std::string_view value;
+    view->readAt(row, &value);
+    EXPECT_EQ(value, values[row]);
+  }
+  EXPECT_EQ(first, values[17]);
+  // A row read again returns the same bytes, so the view decoded it once.
+  std::string_view again;
+  view->readAt(17, &again);
+  EXPECT_EQ(first.data(), again.data());
+}
+
+TEST_P(FsstEncodingViewTest, readsScatteredAndRepeatedIndices) {
+  std::vector<std::string> storage;
+  auto values = makeValues(storage, 256);
+  const auto encoded = encodeFsst(values);
+  const std::vector<uint32_t> indices{255, 3, 130, 3, 0, 200, 255};
+  const auto view = createEncodingView(
+      encoded, pool_.get(), {.cacheEncodingView = cacheEncodingView()});
+  std::vector<std::string_view> output(indices.size());
+  view->readAt(indices, output.data());
+  for (size_t i = 0; i < indices.size(); ++i) {
+    EXPECT_EQ(output[i], values[indices[i]]) << "index " << indices[i];
+  }
+}
+
+TEST_P(FsstEncodingViewTest, rejectsMalformedMetadata) {
   std::vector<std::string> storage;
   auto values = makeValues(storage, 256);
   const auto encoded = encodeFsst(values);
@@ -258,10 +318,10 @@ TEST_F(FsstEncodingViewTest, rejectsMalformedMetadata) {
   const auto nullableEncoding = rebuildFsst(
       sections, sections.symbolTable, nullableLengths, sections.blob);
   expectMalformedView(
-      nullableEncoding, "FSST lengths encoding must not be nullable.");
+      nullableEncoding, "FSST lengths encoding must not be nullable: Nullable");
 }
 
-TEST_F(FsstEncodingViewTest, rejectsMalformedBlob) {
+TEST_P(FsstEncodingViewTest, rejectsMalformedBlob) {
   std::vector<std::string> storage;
   auto values = makeValues(storage, 256);
   const auto encoded = encodeFsst(values);
@@ -275,27 +335,33 @@ TEST_F(FsstEncodingViewTest, rejectsMalformedBlob) {
   const auto oversizedLengths = encodeTrivialChild<uint32_t>(lengths);
   const auto oversizedEncoding = rebuildFsst(
       sections, sections.symbolTable, oversizedLengths, sections.blob);
-  expectMalformedView(
+  expectMalformedBlob(
       oversizedEncoding, "FSST compressed length exceeds the remaining blob.");
 
   std::string blobWithTrailingByte{sections.blob};
   blobWithTrailingByte.push_back('\0');
   const auto trailingBlobEncoding = rebuildFsst(
       sections, sections.symbolTable, sections.lengths, blobWithTrailingByte);
-  expectMalformedView(
-      trailingBlobEncoding,
-      "FSST compressed lengths do not match the blob size.");
+  // Only a cached view checks every length against the blob size.
+  if (cacheEncodingView()) {
+    NIMBLE_ASSERT_THROW(
+        createEncodingView(
+            trailingBlobEncoding, pool_.get(), {.cacheEncodingView = true}),
+        "FSST compressed lengths do not match the blob size.");
+  }
 }
 
-TEST_F(FsstEncodingViewTest, rejectsIncompleteEscapeInBlob) {
+TEST_P(FsstEncodingViewTest, rejectsIncompleteEscapeInBlob) {
   std::vector<std::string> storage;
   auto values = makeValues(storage, 256);
   const auto encoded = encodeFsst(values);
   ASSERT_EQ(EncodingPrefix::encodingType(encoded), EncodingType::Fsst);
   const auto malformed = buildIncompleteEscapeEncoding(splitFsst(encoded), 0);
-  expectMalformedView(
+  expectMalformedBlob(
       malformed, "FSST compressed string ends with an incomplete escape code.");
 }
+
+INSTANTIATE_ENCODING_VIEW_TEST_SUITE(FsstEncodingViewTest);
 
 } // namespace
 } // namespace facebook::nimble::test

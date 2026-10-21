@@ -364,7 +364,7 @@ std::optional<CudfSplitReader::TableChunk> CudfSplitReader::next(
   VELOX_NVTX_OPERATOR_FUNC_RANGE();
 
   // Record start time before reading chunk
-  auto startTimeUs = getCurrentTimeMicro();
+  auto startTimeUs = SteadyTime::now<std::chrono::microseconds>();
 
   auto chunkOpt = readNextChunk();
   if (!chunkOpt.has_value()) {
@@ -836,7 +836,7 @@ void CudfSplitReader::totalScanTimeCalculator(void* userData) {
       static_cast<TotalScanTimeCallbackData*>(userData);
 
   // Record end time in callback
-  auto endTimeUs = getCurrentTimeMicro();
+  auto endTimeUs = SteadyTime::now<std::chrono::microseconds>();
 
   // Calculate elapsed time in microseconds and convert to nanoseconds
   auto elapsedUs = endTimeUs - data->startTimeUs;

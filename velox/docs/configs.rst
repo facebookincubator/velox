@@ -308,10 +308,10 @@ Generic Configuration
      - integer
      - 0
      - Cap for per\-driver BATCH window growth on clean completions that carry no usable latency
-       sample (MetaGen async\-job batches). 0 (default) disables the growth, keeping the legacy
-       pinned start window. Positive values let the window discover capacity additively up to the
-       cap; size at or below the backend's measured concurrency knee (16 is a conservative start).
-       Clamped to [minWindow, maxWindow].
+       sample. 0 (default) disables recovery growth: overload may shrink the window, and clean
+       completions do not grow it back toward the start. Positive values let the window discover
+       capacity additively up to the cap. A positive value below the effective BATCH start window
+       is raised to that start. The congestion max window remains the overall ceiling.
 
 
 Expression Evaluation Configuration
@@ -371,6 +371,14 @@ Expression Evaluation Configuration
      - bool
      - false
      - This flag makes the Row conversion to by applied in a way that the casting row field are matched by name instead of position.
+   * - cast_string_to_floating_point_lenient_inf_nan
+     - bool
+     - false
+     - If true, casting a VARCHAR to REAL or DOUBLE with Presto semantics also accepts the C-style spellings of the
+       special floating-point values: ``inf``, ``infinity`` and ``nan`` in any letter case, with an optional leading
+       sign. By default only the Presto spellings ``Infinity`` and ``NaN`` are accepted, in exactly that letter case.
+       This deviates from Presto; enable it to cast data whose writer printed the values the way glibc, Python and
+       numpy do. Spark CAST and casts from JSON are not affected.
    * - expression.max_array_size_in_reduce
      - integer
      - 100000

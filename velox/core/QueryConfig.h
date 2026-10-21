@@ -247,6 +247,22 @@ class QueryConfig {
       false,
       "Match Row fields by name instead of position in CAST.")
 
+  /// If true, CAST from VARCHAR to REAL or DOUBLE with Presto semantics also
+  /// accepts the C-style spellings of the special floating-point values:
+  /// "inf", "infinity" and "nan" in any letter case, with an optional leading
+  /// sign. By default only the Presto spellings "Infinity" and "NaN" are
+  /// accepted, in exactly that letter case. This deviates from Presto; enable
+  /// it to cast data whose writer printed the values the way glibc, Python and
+  /// numpy do. Spark CAST and casts from JSON are not affected.
+  VELOX_QUERY_CONFIG(
+      kCastStringToFloatingPointLenientInfNan,
+      isCastStringToFloatingPointLenientInfNan,
+      "cast_string_to_floating_point_lenient_inf_nan",
+      bool,
+      false,
+      "Accept 'inf', 'infinity' and 'nan' in any letter case in CAST from "
+      "VARCHAR to REAL or DOUBLE with Presto semantics.")
+
   /// Reduce() function will throw an error if encountered an array of size
   /// greater than this.
   VELOX_QUERY_CONFIG(
@@ -1518,11 +1534,12 @@ class QueryConfig {
       int64_t,
       0,
       "Cap for per-driver BATCH congestion-window growth on clean completions "
-      "that carry no usable latency sample (MetaGen async-job batches). 0 "
-      "(default) disables the growth, keeping the legacy pinned start window. "
+      "that carry no usable latency sample. 0 (default) disables recovery "
+      "growth: overload may shrink the window, and clean completions do not "
+      "grow it back toward the start. "
       "Positive values let the window discover capacity additively up to the "
-      "cap; size at or below the backend's measured concurrency knee (16 is a "
-      "conservative start). Clamped to [minWindow, maxWindow].")
+      "cap. A positive value below the effective BATCH start window is raised "
+      "to that start. The congestion max window remains the overall ceiling.")
 
   /// Enables AIMD adaptation of each backend's rate-limit capacity.
   VELOX_QUERY_CONFIG(

@@ -16,6 +16,7 @@
 #include <gtest/gtest.h>
 
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/core/FixedPointPlanNodes.h"
 #include "velox/core/PlanConsistencyChecker.h"
 #include "velox/parse/PlanNodeIdGenerator.h"
 
@@ -347,6 +348,27 @@ TEST_F(PlanConsistencyCheckerTest, hashJoin) {
         PlanConsistencyChecker::check(joinNode),
         "Duplicate join condition: \"a\" = \"c\"");
   }
+}
+
+// The checker checks the plans a fixed point runs.
+TEST_F(PlanConsistencyCheckerTest, fixedPoint) {
+  const auto schema = ROW("x", BIGINT());
+  auto body = std::make_shared<FilterNode>(
+      nextId(),
+      Col(BOOLEAN(), "missing"),
+      std::make_shared<StateSourceNode>(
+          nextId(), "n", schema, /*delta=*/false));
+  auto fixedPoint = std::make_shared<FixedPointNode>(
+      nextId(),
+      std::vector<StateDeclarationPtr>{std::make_shared<VectorStateDeclaration>(
+          "n", schema, /*initialPlan=*/nullptr, /*append=*/false)},
+      std::vector<PlanNodePtr>{body},
+      ConvergenceConfig{
+          .maxIterations = 1, .errorWhenMaxIterationReached = false},
+      "n");
+
+  VELOX_ASSERT_THROW(
+      PlanConsistencyChecker::check(fixedPoint), "Field not found: missing");
 }
 
 TEST_F(PlanConsistencyCheckerTest, nestedLoopJoin) {

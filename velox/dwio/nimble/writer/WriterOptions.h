@@ -255,6 +255,12 @@ struct WriterOptions {
   /// are not addressable as literal names through this interface.
   std::vector<std::string> fsstEncodingSubfields{};
 
+  /// INTEGER, BIGINT, REAL and DOUBLE value streams pinned to SubIntSplit.
+  /// Paths use the same syntax as fsstEncodingSubfields. Cluster-index keys,
+  /// duplicate targets and shared dictionary collisions are rejected.
+  /// Explicit encodingLayoutTree entries take precedence.
+  std::vector<std::string> subIntSplitEncodingSubfields{};
+
   /// Compression settings to be used when encoding and compressing data streams
   CompressionOptions compressionOptions{};
 

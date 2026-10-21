@@ -86,6 +86,12 @@ class NimbleIterator {
 
     /// Selects the serialized row format. Batch iterators ignore this option.
     OutputRowFormat rowFormat{std::string{kCompactRowFormat}};
+
+    /// Reads the CPU and wall clocks around index lookups, plan building and
+    /// stripe loads to fill the timings of Stats. Reading the thread CPU clock
+    /// is a system call, so a point lookup spends about 3 us on it. The
+    /// timings stay at zero when this is false.
+    bool collectTimings{true};
   };
 
   /// Creates an iterator that serializes one selected row at a time.

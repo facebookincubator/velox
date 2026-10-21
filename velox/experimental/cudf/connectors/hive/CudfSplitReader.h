@@ -272,6 +272,7 @@ class CudfSplitReader : public NvtxHelper {
   bool emptySplit_{false};
 
   struct TotalScanTimeCallbackData {
+    // SteadyTime reading in microseconds when the chunk read started.
     uint64_t startTimeUs;
     std::shared_ptr<io::IoStatistics> ioStatistics;
   };
