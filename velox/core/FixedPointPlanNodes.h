@@ -435,8 +435,10 @@ class FixedPointNode : public PlanNode {
   /// fully local fixed point needs no splits.
   bool requiresSplits() const override;
 
-  /// True when the body or the convergence sequence shuffles, so every worker
-  /// reads its peers' output: the coordinator names each peer with a split.
+  /// True when the body or the convergence sequence shuffles, or a loop nested
+  /// in an initial plan reads its peers, so every worker reads its peers'
+  /// output: the application names the workers with a FixedPointSplit (see
+  /// velox/exec/FixedPointSplit.h).
   bool readsPeers() const;
 
   /// Number of workers this fixed point runs as: one per output partition of

@@ -19,6 +19,7 @@
 #include <folly/container/F14Map.h>
 #include <folly/futures/SharedPromise.h>
 #include <functional>
+#include <map>
 #include <string>
 
 #include "velox/exec/FixedPointOptions.h"
@@ -28,9 +29,8 @@ namespace facebook::velox::exec {
 /// Holds the latest convergence verdict of each fixed point loop, for an
 /// application that carries verdicts from worker 0 to its peers in memory:
 /// FixedPointOptions::publishVerdict on worker 0 publishes into it, and
-/// awaitVerdict on every other worker gets from it. Every worker names the loop
-/// by worker 0's FixedPointOptions::LoopAddress, which a peer derives from its
-/// own (see FixedPointOptions::publishVerdict).
+/// awaitVerdict on every other worker gets from it. Both hooks receive worker
+/// 0's FixedPointOptions::LoopAddress, which keys the verdict.
 ///
 ///   FixedPointVerdicts verdicts;
 ///   verdicts.publish(workerZero, iteration, converged);  // On worker 0.
@@ -52,9 +52,8 @@ class FixedPointVerdicts {
       const FixedPointOptions::LoopAddress& workerZero,
       int32_t iteration);
 
-  /// Drops the verdicts of the loops in worker 0's top-level task
-  /// 'rootTaskId'.
-  void erase(const std::string& rootTaskId);
+  /// Drops the verdicts of the loops whose worker 0 is 'worker'.
+  void erase(const std::string& worker);
 
  private:
   struct Verdict {
@@ -69,10 +68,10 @@ class FixedPointVerdicts {
       int32_t iteration,
       const std::function<void(folly::SharedPromise<bool>&)>& action);
 
-  // Worker 0's root task id to the latest verdict of each of its loops, by
-  // address.
-  folly::Synchronized<
-      folly::F14FastMap<std::string, folly::F14FastMap<std::string, Verdict>>>
+  // Worker 0's name to the latest verdict of each of its loops, by nesting.
+  folly::Synchronized<folly::F14FastMap<
+      std::string,
+      std::map<std::vector<FixedPointOptions::NestingStep>, Verdict>>>
       verdicts_;
 };
 

@@ -81,6 +81,8 @@ class IcebergMergeSink : public DataSink {
   /// ROW<file_path VARCHAR, pos BIGINT, spec_id INTEGER,
   /// partition_data VARCHAR>. Forwarded unchanged to the DV sub-sink, which
   /// emits partition_data as the delete file's partition.
+  /// @param insertFromUpdateChannel Index of the TINYINT column that is 1 on
+  /// the INSERT half of an UPDATE and 0 otherwise.
   IcebergMergeSink(
       RowTypePtr inputType,
       IcebergInsertTableHandlePtr insertTableHandle,
@@ -90,9 +92,14 @@ class IcebergMergeSink : public DataSink {
       const IcebergConfigPtr& icebergConfig,
       std::vector<column_index_t> targetColumnChannels,
       column_index_t operationChannel,
-      column_index_t rowIdChannel);
+      column_index_t rowIdChannel,
+      column_index_t insertFromUpdateChannel);
 
   void appendData(RowVectorPtr input) override;
+
+  /// Counts each UPDATE once, as its DELETE half: rows tagged
+  /// insert_from_update are excluded.
+  vector_size_t numChangedRows(const RowVector& input) const override;
 
   bool finish() override;
 
@@ -146,6 +153,7 @@ class IcebergMergeSink : public DataSink {
   const std::vector<column_index_t> targetColumnChannels_;
   const column_index_t operationChannel_;
   const column_index_t rowIdChannel_;
+  const column_index_t insertFromUpdateChannel_;
   const RowTypePtr dataInputType_;
   const RowTypePtr deletionVectorInputType_;
 

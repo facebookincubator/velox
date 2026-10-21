@@ -30,7 +30,22 @@ std::string planNodeMessage(VeloxException::Type /*exceptionType*/, void* arg) {
 
 class Checker : public PlanNodeVisitor {
  public:
-  explicit Checker(PlanNodeId rootId) : rootId_{std::move(rootId)} {}
+  // Records every id it visits in 'ids', which the checkers of a plan and of
+  // the plans nested in it share.
+  Checker(PlanNodeId rootId, folly::F14FastSet<PlanNodeId>& ids)
+      : rootId_{std::move(rootId)}, ids_{ids} {}
+
+  // Checks 'plan', a whole plan or one nested in a FixedPointNode.
+  static void checkPlan(
+      const PlanNodePtr& plan,
+      folly::F14FastSet<PlanNodeId>& ids) {
+    ExceptionContextSetter exceptionContext(
+        {planNodeMessage, (void*)plan.get()});
+    PlanNodeVisitorContext ctx;
+    Checker checker{plan->id(), ids};
+    checker.recordId(*plan);
+    plan->accept(checker, ctx);
+  }
 
   void visit(const AggregationNode& node, PlanNodeVisitorContext& ctx)
       const override {
@@ -298,7 +313,7 @@ class Checker : public PlanNodeVisitor {
     // A fixed point has no sources: it runs nested plans, each a plan of its
     // own.
     for (const auto& plan : node.nestedPlans()) {
-      PlanConsistencyChecker::check(plan);
+      checkPlan(plan, ids_);
     }
   }
 
@@ -321,8 +336,14 @@ class Checker : public PlanNodeVisitor {
     for (auto& source : node->sources()) {
       ExceptionContextSetter exceptionContext(
           {planNodeMessage, (void*)source.get()});
+      recordId(*source);
       source->accept(*this, ctx);
     }
+  }
+
+  void recordId(const PlanNode& node) const {
+    VELOX_USER_CHECK(
+        ids_.insert(node.id()).second, "Duplicate plan node id: {}", node.id());
   }
 
   // Verify that output column names are not empty and unique.
@@ -387,13 +408,13 @@ class Checker : public PlanNodeVisitor {
   // ProjectNode, which may have user-specified aliases that are empty or
   // duplicated.
   const PlanNodeId rootId_;
+
+  folly::F14FastSet<PlanNodeId>& ids_;
 };
 } // namespace
 
 void PlanConsistencyChecker::check(const core::PlanNodePtr& plan) {
-  ExceptionContextSetter exceptionContext({planNodeMessage, (void*)plan.get()});
-  PlanNodeVisitorContext ctx;
-  Checker checker{plan->id()};
-  plan->accept(checker, ctx);
+  folly::F14FastSet<PlanNodeId> ids;
+  Checker::checkPlan(plan, ids);
 }
 }; // namespace facebook::velox::core
