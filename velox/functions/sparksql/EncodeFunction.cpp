@@ -24,6 +24,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 #include <unicode/ucnv.h>
@@ -146,6 +147,19 @@ Status unmappableCharacter(const StringView& charset) {
       std::string(charset.data(), charset.size()));
 }
 
+// Java maps these aliases to Windows-1252, but ICU's IBM1252 converter uses a
+// different table and ICU does not recognize cp5348.
+std::string_view canonicalJavaWindows1252(const StringView& charset) {
+  static constexpr std::string_view kNames[] = {
+      "windows-1252", "cp1252", "ibm1252", "ibm-1252", "cp5348"};
+  for (const auto& name : kNames) {
+    if (equalsIgnoreCase(charset, name)) {
+      return "windows-1252";
+    }
+  }
+  return {};
+}
+
 // Returns the canonical Java name for aliases omitted by ICU.
 std::string_view canonicalSpecialJavaCharset(const StringView& requestedName) {
   static constexpr std::string_view kIbm300Names[] = {
@@ -184,7 +198,8 @@ bool isJavaCharset(const StringView& requestedName, const char* canonicalName) {
     }
   }
 
-  if (!canonicalSpecialJavaCharset(requestedName).empty()) {
+  if (!canonicalSpecialJavaCharset(requestedName).empty() ||
+      !canonicalJavaWindows1252(requestedName).empty()) {
     return true;
   }
 
@@ -598,28 +613,38 @@ std::string_view javaSubstitutionBytes(
   return "?";
 }
 
-void writeJavaSubstitutionBytes(
-    const void* context,
-    UConverterFromUnicodeArgs* args,
-    const UChar* /*codeUnits*/,
-    int32_t /*length*/,
-    UChar32 /*codePoint*/,
-    UConverterCallbackReason reason,
-    UErrorCode* error) {
-  if (reason > UCNV_IRREGULAR) {
-    return;
-  }
-  const auto substitution = *static_cast<const std::string_view*>(context);
-  *error = U_ZERO_ERROR;
-  ucnv_cbFromUWriteBytes(
-      args,
-      substitution.data(),
-      static_cast<int32_t>(substitution.size()),
-      0,
-      error);
-}
+enum class LegacyCharsetMappings {
+  kDefault,
+  kWindows1252,
+  kWindows31j,
+};
 
-std::vector<UChar> toUtf16(const StringView& input) {
+// Preserve MS932 encoder-only mappings and ASCII controls using the ICU
+// characters that encode to the same bytes as OpenJDK.
+constexpr std::array<std::pair<char32_t, char32_t>, 15>
+    kWindows31jCodePointMappings{{
+        {0x001A, 0x001C},
+        {0x001C, 0x007F},
+        {0x007F, 0x001A},
+        {0x00A2, 0xFFE0},
+        {0x00A3, 0xFFE1},
+        {0x00A5, 0x005C},
+        {0x00AB, 0x226A},
+        {0x00AC, 0xFFE2},
+        {0x00AF, 0xFFE3},
+        {0x00B5, 0x03BC},
+        {0x00B7, 0x30FB},
+        {0x00B8, 0xFF0C},
+        {0x00BB, 0x226B},
+        {0x203E, 0x007E},
+        {0x3094, 0x30F4},
+    }};
+
+Expected<std::vector<UChar>> toUtf16(
+    const StringView& input,
+    const StringView& charset,
+    LegacyCharsetMappings mappings,
+    bool replaceUnmappable) {
   std::vector<UChar> utf16;
   utf16.reserve(input.size());
   size_t inputPosition{0};
@@ -627,6 +652,29 @@ std::vector<UChar> toUtf16(const StringView& input) {
     char32_t codePoint;
     inputPosition +=
         decodeCodePoint(input.data(), input.size(), inputPosition, codePoint);
+    const bool unmappable =
+        (mappings == LegacyCharsetMappings::kWindows1252 &&
+         (codePoint == 0x0081 || codePoint == 0x008D || codePoint == 0x008F ||
+          codePoint == 0x0090 || codePoint == 0x009D)) ||
+        (mappings == LegacyCharsetMappings::kWindows31j && codePoint == 0xF86F);
+    if (unmappable) {
+      if (!replaceUnmappable) {
+        return folly::makeUnexpected(unmappableCharacter(charset));
+      }
+      codePoint = '?';
+    }
+    if (mappings == LegacyCharsetMappings::kWindows31j) {
+      const auto it = std::lower_bound(
+          kWindows31jCodePointMappings.begin(),
+          kWindows31jCodePointMappings.end(),
+          codePoint,
+          [](const auto& mapping, char32_t value) {
+            return mapping.first < value;
+          });
+      if (it != kWindows31jCodePointMappings.end() && it->first == codePoint) {
+        codePoint = it->second;
+      }
+    }
     if (codePoint <= 0xFFFF) {
       utf16.push_back(static_cast<UChar>(codePoint));
     } else {
@@ -807,115 +855,6 @@ Status encodeJisDoubleByte(
   return Status::OK();
 }
 
-Status encodeLegacy(
-    exec::StringWriter& result,
-    const StringView& input,
-    const StringView& charset,
-    bool replaceUnmappable) {
-  if (input.empty()) {
-    result.resize(0);
-    return Status::OK();
-  }
-
-  const std::string charsetName{charset.data(), charset.size()};
-  const char* converterName =
-      isJavaShiftJis(charset) ? "ibm-943_P130-1999" : charsetName.c_str();
-  std::string_view callbackSubstitution;
-  UErrorCode error{U_ZERO_ERROR};
-  std::unique_ptr<UConverter, decltype(&ucnv_close)> converter{
-      ucnv_open(converterName, &error), &ucnv_close};
-  // resolveCharset() already validated that the charset opens, but a
-  // user-provided name must never trigger a fatal check here, so degrade
-  // gracefully to a catchable user error.
-  if (U_FAILURE(error)) {
-    return Status::UserError("encode: unsupported charset '{}'", charsetName);
-  }
-
-  if (replaceUnmappable) {
-    UErrorCode nameError{U_ZERO_ERROR};
-    const char* canonicalName = ucnv_getName(converter.get(), &nameError);
-    if (U_FAILURE(nameError) || canonicalName == nullptr) {
-      return Status::UserError("encode: unsupported charset '{}'", charsetName);
-    }
-    callbackSubstitution = javaSubstitutionBytes(charset, canonicalName);
-    error = U_ZERO_ERROR;
-    const bool writesRawSubstitution = callbackSubstitution != "?";
-    ucnv_setFromUCallBack(
-        converter.get(),
-        writesRawSubstitution ? writeJavaSubstitutionBytes
-                              : UCNV_FROM_U_CALLBACK_SUBSTITUTE,
-        writesRawSubstitution ? &callbackSubstitution : nullptr,
-        nullptr,
-        nullptr,
-        &error);
-    if (U_FAILURE(error)) {
-      return Status::UserError("encode: unsupported charset '{}'", charsetName);
-    }
-    UErrorCode substError{U_ZERO_ERROR};
-    if (isJapaneseIso2022(canonicalName)) {
-      // Java uses JIS bytes 21 29. Set the corresponding Unicode character so
-      // ICU emits the required ISO-2022 shift sequences around the replacement.
-      const UChar substitution = 0xFF1F;
-      ucnv_setSubstString(converter.get(), &substitution, 1, &substError);
-    } else if (
-        !writesRawSubstitution && ucnv_getMinCharSize(converter.get()) == 1) {
-      ucnv_setSubstChars(
-          converter.get(),
-          callbackSubstitution.data(),
-          static_cast<int8_t>(callbackSubstitution.size()),
-          &substError);
-    }
-    if (U_FAILURE(substError)) {
-      return Status::UserError("encode: unsupported charset '{}'", charsetName);
-    }
-  } else {
-    error = U_ZERO_ERROR;
-    ucnv_setFromUCallBack(
-        converter.get(),
-        UCNV_FROM_U_CALLBACK_STOP,
-        nullptr,
-        nullptr,
-        nullptr,
-        &error);
-    if (U_FAILURE(error)) {
-      return Status::UserError("encode: unsupported charset '{}'", charsetName);
-    }
-  }
-
-  const auto utf16 = toUtf16(input);
-  const auto* utf16Data = utf16.empty() ? nullptr : utf16.data();
-  error = U_ZERO_ERROR;
-  const auto outputSize = ucnv_fromUChars(
-      converter.get(),
-      nullptr,
-      0,
-      utf16Data,
-      static_cast<int32_t>(utf16.size()),
-      &error);
-  if (error != U_BUFFER_OVERFLOW_ERROR && U_FAILURE(error)) {
-    return unmappableCharacter(charset);
-  }
-
-  result.resize(outputSize);
-  if (outputSize == 0) {
-    return Status::OK();
-  }
-  error = U_ZERO_ERROR;
-  ucnv_resetFromUnicode(converter.get());
-  const auto bytesWritten = ucnv_fromUChars(
-      converter.get(),
-      result.data(),
-      outputSize,
-      utf16Data,
-      static_cast<int32_t>(utf16.size()),
-      &error);
-  if (U_FAILURE(error)) {
-    return unmappableCharacter(charset);
-  }
-  VELOX_CHECK_EQ(bytesWritten, outputSize);
-  return Status::OK();
-}
-
 Status encodeUtf8(exec::StringWriter& result, const StringView& input) {
   size_t outputSize{0};
   size_t position{0};
@@ -1043,6 +982,184 @@ Status encodeUtf32(
 
 } // namespace
 
+class LegacyCharsetEncoderState {
+ public:
+  LegacyCharsetEncoderState(const StringView& charset, bool replaceUnmappable)
+      : replaceUnmappable_{replaceUnmappable}, status_{initialize(charset)} {}
+
+  Status encode(
+      exec::StringWriter& result,
+      const StringView& input,
+      const StringView& charset) {
+    VELOX_RETURN_NOT_OK(status_);
+    ucnv_resetFromUnicode(converter_.get());
+    if (input.empty()) {
+      result.resize(0);
+      return Status::OK();
+    }
+
+    auto utf16Result = toUtf16(input, charset, mappings_, replaceUnmappable_);
+    if (utf16Result.hasError()) {
+      return utf16Result.error();
+    }
+    const auto& utf16 = utf16Result.value();
+    UErrorCode error{U_ZERO_ERROR};
+    const auto outputSize = ucnv_fromUChars(
+        converter_.get(),
+        nullptr,
+        0,
+        utf16.data(),
+        static_cast<int32_t>(utf16.size()),
+        &error);
+    if (error != U_BUFFER_OVERFLOW_ERROR && U_FAILURE(error)) {
+      return unmappableCharacter(charset);
+    }
+    result.resize(outputSize);
+    if (outputSize == 0) {
+      return Status::OK();
+    }
+    error = U_ZERO_ERROR;
+    ucnv_resetFromUnicode(converter_.get());
+    const auto bytesWritten = ucnv_fromUChars(
+        converter_.get(),
+        result.data(),
+        outputSize,
+        utf16.data(),
+        static_cast<int32_t>(utf16.size()),
+        &error);
+    if (U_FAILURE(error)) {
+      return unmappableCharacter(charset);
+    }
+    VELOX_CHECK_EQ(bytesWritten, outputSize);
+    return Status::OK();
+  }
+
+ private:
+  Status initialize(const StringView& charset) {
+    const std::string charsetName{charset.data(), charset.size()};
+    const auto windows1252 = canonicalJavaWindows1252(charset);
+    const char* converterName = !windows1252.empty() ? windows1252.data()
+        : isJavaShiftJis(charset)                    ? "ibm-943_P130-1999"
+                                                     : charsetName.c_str();
+    UErrorCode error{U_ZERO_ERROR};
+    converter_.reset(ucnv_open(converterName, &error));
+    if (U_FAILURE(error)) {
+      return Status::UserError("encode: unsupported charset '{}'", charsetName);
+    }
+    const char* canonicalName = ucnv_getName(converter_.get(), &error);
+    if (U_FAILURE(error) || canonicalName == nullptr) {
+      return Status::UserError("encode: unsupported charset '{}'", charsetName);
+    }
+    if (!windows1252.empty()) {
+      mappings_ = LegacyCharsetMappings::kWindows1252;
+    }
+    for (const auto* name :
+         {"windows-31j", "windows-932", "MS932", "csWindows31J"}) {
+      if (equalsIgnoreCase(charset, name)) {
+        mappings_ = LegacyCharsetMappings::kWindows31j;
+        break;
+      }
+    }
+    if (replaceUnmappable_) {
+      callbackSubstitution_ = javaSubstitutionBytes(charset, canonicalName);
+    }
+    error = U_ZERO_ERROR;
+    ucnv_setFromUCallBack(
+        converter_.get(), onUnmappable, this, nullptr, nullptr, &error);
+    if (U_FAILURE(error)) {
+      return Status::UserError("encode: unsupported charset '{}'", charsetName);
+    }
+    if (replaceUnmappable_) {
+      if (isJapaneseIso2022(canonicalName)) {
+        // Preserve Java's JIS replacement bytes and the required shift state.
+        const UChar substitution = 0xFF1F;
+        ucnv_setSubstString(converter_.get(), &substitution, 1, &error);
+      } else if (
+          callbackSubstitution_ == "?" &&
+          ucnv_getMinCharSize(converter_.get()) == 1) {
+        ucnv_setSubstChars(converter_.get(), "?", 1, &error);
+      }
+      if (U_FAILURE(error)) {
+        return Status::UserError(
+            "encode: unsupported charset '{}'", charsetName);
+      }
+    }
+    return Status::OK();
+  }
+
+  static void onUnmappable(
+      const void* context,
+      UConverterFromUnicodeArgs* args,
+      const UChar* /*codeUnits*/,
+      int32_t /*length*/,
+      UChar32 /*codePoint*/,
+      UConverterCallbackReason reason,
+      UErrorCode* error) {
+    if (reason > UCNV_IRREGULAR) {
+      return;
+    }
+    const auto& encoder =
+        *static_cast<const LegacyCharsetEncoderState*>(context);
+    // ICU's standard callbacks silently skip unmappable default-ignorable
+    // characters. Java reports or replaces them like other unmappable input.
+    if (!encoder.replaceUnmappable_) {
+      return;
+    }
+    *error = U_ZERO_ERROR;
+    if (encoder.callbackSubstitution_ != "?") {
+      ucnv_cbFromUWriteBytes(
+          args,
+          encoder.callbackSubstitution_.data(),
+          static_cast<int32_t>(encoder.callbackSubstitution_.size()),
+          0,
+          error);
+    } else {
+      ucnv_cbFromUWriteSub(args, 0, error);
+    }
+  }
+
+  bool replaceUnmappable_;
+  std::string_view callbackSubstitution_;
+  LegacyCharsetMappings mappings_{LegacyCharsetMappings::kDefault};
+  std::unique_ptr<UConverter, decltype(&ucnv_close)> converter_{
+      nullptr,
+      &ucnv_close};
+  Status status_;
+};
+
+namespace {
+
+Status encodeLegacy(
+    exec::StringWriter& result,
+    const StringView& input,
+    const StringView& charset,
+    bool replaceUnmappable) {
+  if (input.empty()) {
+    result.resize(0);
+    return Status::OK();
+  }
+  LegacyCharsetEncoderState state{charset, replaceUnmappable};
+  return state.encode(result, input, charset);
+}
+
+} // namespace
+
+LegacyCharsetEncoder::LegacyCharsetEncoder(
+    const StringView& charset,
+    bool replaceUnmappable)
+    : state_{std::make_unique<LegacyCharsetEncoderState>(
+          charset,
+          replaceUnmappable)} {}
+
+LegacyCharsetEncoder::~LegacyCharsetEncoder() = default;
+
+Status LegacyCharsetEncoder::encode(
+    exec::StringWriter& result,
+    const StringView& input,
+    const StringView& charset) {
+  return state_->encode(result, input, charset);
+}
+
 CharsetType resolveCharset(const StringView& charset, bool legacyJavaCharsets) {
   if (equalsIgnoreCase(charset, "UTF-8")) {
     return CharsetType::kUtf8;
@@ -1135,8 +1252,11 @@ CharsetType resolveCharset(const StringView& charset, bool legacyJavaCharsets) {
   if (charsetName.find('\0') != std::string::npos) {
     return CharsetType::kUnsupported;
   }
+  const auto windows1252 = canonicalJavaWindows1252(charset);
+  const char* converterName =
+      windows1252.empty() ? charsetName.c_str() : windows1252.data();
   std::unique_ptr<UConverter, decltype(&ucnv_close)> converter{
-      ucnv_open(charsetName.c_str(), &error), &ucnv_close};
+      ucnv_open(converterName, &error), &ucnv_close};
   if (U_FAILURE(error)) {
     return CharsetType::kUnsupported;
   }

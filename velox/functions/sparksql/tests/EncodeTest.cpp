@@ -18,6 +18,7 @@
 #include <gmock/gmock.h>
 #include <unicode/ucnv.h>
 #include <string_view>
+#include <utility>
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/sparksql/SparkQueryConfig.h"
@@ -383,6 +384,203 @@ TEST_F(EncodeTest, legacyCharsetCodingErrorAction) {
 
   enableLegacyCharsetsAndCodingErrorAction();
   EXPECT_EQ(encode("\xE3\x81\x82", "windows-1252"), "?");
+}
+
+TEST_F(EncodeTest, legacyJavaCharacterMappings) {
+  // Expected bytes and unmappable characters come from OpenJDK's MS1252 and
+  // MS932 encoder tables, including their encoder-only mappings.
+  for (const bool replaceUnmappable : {false, true}) {
+    queryCtx_->testingOverrideConfigUnsafe({
+        {SparkQueryConfig::qualify(SparkQueryConfig::kLegacyJavaCharsets),
+         "true"},
+        {SparkQueryConfig::qualify(SparkQueryConfig::kLegacyCodingErrorAction),
+         replaceUnmappable ? "true" : "false"},
+    });
+    for (const auto* name :
+         {"windows-1252", "cp1252", "ibm1252", "ibm-1252", "cp5348"}) {
+      SCOPED_TRACE(name);
+      SCOPED_TRACE(replaceUnmappable);
+      for (const auto* input :
+           {"\xC2\x80",
+            "\xC2\x81",
+            "\xC2\x8D",
+            "\xC2\x8F",
+            "\xC2\x90",
+            "\xC2\x9D"}) {
+        if (replaceUnmappable) {
+          EXPECT_EQ(encode(input, name), "?");
+        } else {
+          VELOX_ASSERT_USER_THROW(
+              encode(input, name),
+              "encode: input contains a character that cannot be encoded");
+        }
+      }
+      EXPECT_THAT(
+          encodeBytes("\xE2\x82\xAC\xC2\xA0", name), ElementsAre(0x80, 0xA0));
+    }
+    for (const auto* name :
+         {"windows-31j", "MS932", "windows-932", "csWindows31J"}) {
+      SCOPED_TRACE(name);
+      SCOPED_TRACE(replaceUnmappable);
+      EXPECT_THAT(
+          encodeBytes("\xC2\xA5\xE2\x80\xBE", name), ElementsAre(0x5C, 0x7E));
+      EXPECT_THAT(
+          encodeBytes("\xE3\x81\x82\xC2\xA5\xE2\x80\xBE\xE3\x81\x84", name),
+          ElementsAre(0x82, 0xA0, 0x5C, 0x7E, 0x82, 0xA2));
+      EXPECT_THAT(encodeBytes("\\~", name), ElementsAre(0x5C, 0x7E));
+      EXPECT_EQ(encode("\x1A\x1C\x7F", name), "\x1A\x1C\x7F");
+      EXPECT_EQ(
+          encode(
+              "\xC2\xA2\xC2\xA3\xC2\xAB\xC2\xAC\xC2\xAF\xC2\xB5\xC2\xB7"
+              "\xC2\xB8\xC2\xBB\xE3\x82\x94",
+              name),
+          "\x81\x91\x81\x92\x81\xE1\x81\xCA\x81\x50\x83\xCA\x81\x45"
+          "\x81\x43\x81\xE2\x83\x94");
+      if (replaceUnmappable) {
+        EXPECT_EQ(encode("\xEF\xA1\xAF", name), "?");
+      } else {
+        VELOX_ASSERT_USER_THROW(
+            encode("\xEF\xA1\xAF", name),
+            "encode: input contains a character that cannot be encoded");
+      }
+    }
+  }
+}
+
+TEST_F(EncodeTest, legacyUnmappableIgnorableCharacters) {
+  for (const bool replaceUnmappable : {false, true}) {
+    queryCtx_->testingOverrideConfigUnsafe({
+        {SparkQueryConfig::qualify(SparkQueryConfig::kLegacyJavaCharsets),
+         "true"},
+        {SparkQueryConfig::qualify(SparkQueryConfig::kLegacyCodingErrorAction),
+         replaceUnmappable ? "true" : "false"},
+    });
+    for (const auto* name : {"windows-1252", "windows-31j", "ISO-2022-JP"}) {
+      SCOPED_TRACE(name);
+      SCOPED_TRACE(replaceUnmappable);
+      for (const auto* input :
+           {"\xCD\x8F",
+            "\xE2\x80\x8D",
+            "\xEF\xB8\x8F",
+            "\xEF\xBB\xBF",
+            "\xF0\x9B\xB2\xA0",
+            "\xF3\xA0\x80\x80",
+            "\xF3\xA0\xBF\xBF"}) {
+        if (replaceUnmappable) {
+          const auto expected = std::string(name) == "ISO-2022-JP"
+              ? "\x1B\x24\x42\x21\x29\x1B\x28\x42"
+              : "?";
+          EXPECT_EQ(encode(input, name), expected);
+        } else {
+          VELOX_ASSERT_USER_THROW(
+              encode(input, name),
+              "encode: input contains a character that cannot be encoded");
+        }
+      }
+    }
+  }
+}
+
+TEST_F(EncodeTest, constantAndPerRowLegacyMappings) {
+  const std::vector<std::string> inputs{
+      "A",
+      "\xC2\x81",
+      "\xC2\xA5",
+      "\xE2\x80\xBE",
+      "\xE2\x80\x8D",
+      "",
+      "B",
+      "\xE2\x82\xAC",
+      "\xC2\x80"};
+  const std::array<std::pair<const char*, bool>, 9> charsets{{
+      {"windows-1252", false},
+      {"cp1252", false},
+      {"ibm1252", false},
+      {"ibm-1252", false},
+      {"cp5348", false},
+      {"windows-31j", true},
+      {"MS932", true},
+      {"windows-932", true},
+      {"csWindows31J", true},
+  }};
+  for (const bool replaceUnmappable : {false, true}) {
+    queryCtx_->testingOverrideConfigUnsafe({
+        {SparkQueryConfig::qualify(SparkQueryConfig::kLegacyJavaCharsets),
+         "true"},
+        {SparkQueryConfig::qualify(SparkQueryConfig::kLegacyCodingErrorAction),
+         replaceUnmappable ? "true" : "false"},
+    });
+    for (const auto& [name, windows31j] : charsets) {
+      SCOPED_TRACE(name);
+      SCOPED_TRACE(replaceUnmappable);
+      const auto data = makeRowVector(
+          {makeFlatVector<std::string>(inputs),
+           makeFlatVector<std::string>(
+               std::vector<std::string>(inputs.size(), name))});
+      auto constant = evaluate<SimpleVector<StringView>>(
+          fmt::format("try(encode(c0, '{}'))", name), data);
+      auto perRow =
+          evaluate<SimpleVector<StringView>>("try(encode(c0, c1))", data);
+      const std::optional<std::string> unmappable = replaceUnmappable
+          ? std::make_optional<std::string>("?")
+          : std::nullopt;
+      const auto expected = makeNullableFlatVector<std::string>(
+          {"A",
+           unmappable,
+           windows31j ? "\\" : "\xA5",
+           windows31j ? std::make_optional<std::string>("~") : unmappable,
+           unmappable,
+           "",
+           "B",
+           windows31j ? unmappable : std::make_optional<std::string>("\x80"),
+           unmappable},
+          VARBINARY());
+      facebook::velox::test::assertEqualVectors(expected, constant);
+      facebook::velox::test::assertEqualVectors(expected, perRow);
+    }
+  }
+}
+
+TEST_F(EncodeTest, constantLegacyCharsetState) {
+  enableLegacyJavaCharsets();
+  const auto input = makeRowVector({makeFlatVector<std::string>(
+      {"\xC2\x81", "A", "", "\xE2\x82\xAC", "\xF0\x9F\x98\x80", "B"})});
+  auto result = evaluate<SimpleVector<StringView>>(
+      "try(encode(c0, 'windows-1252'))", input);
+  EXPECT_TRUE(result->isNullAt(0));
+  EXPECT_EQ(result->valueAt(1).str(), "A");
+  EXPECT_EQ(result->valueAt(2).str(), "");
+  EXPECT_EQ(result->valueAt(3).str(), "\x80");
+  EXPECT_TRUE(result->isNullAt(4));
+  EXPECT_EQ(result->valueAt(5).str(), "B");
+
+  enableLegacyCharsetsAndCodingErrorAction();
+  result =
+      evaluate<SimpleVector<StringView>>("encode(c0, 'windows-1252')", input);
+  EXPECT_EQ(result->valueAt(0).str(), "?");
+  EXPECT_EQ(result->valueAt(1).str(), "A");
+  EXPECT_EQ(result->valueAt(2).str(), "");
+  EXPECT_EQ(result->valueAt(3).str(), "\x80");
+  EXPECT_EQ(result->valueAt(4).str(), "?");
+  EXPECT_EQ(result->valueAt(5).str(), "B");
+
+  const auto japanese = makeRowVector({makeFlatVector<std::string>(
+      {"\xE3\x81\x82", "\xF0\x9F\x98\x80", "", "A", "\xE3\x81\x84"})});
+  result =
+      evaluate<SimpleVector<StringView>>("encode(c0, 'ISO-2022-JP')", japanese);
+  EXPECT_EQ(result->valueAt(0).str(), "\x1B\x24\x42\x24\x22\x1B\x28\x42");
+  EXPECT_EQ(result->valueAt(1).str(), "\x1B\x24\x42\x21\x29\x1B\x28\x42");
+  EXPECT_EQ(result->valueAt(2).str(), "");
+  EXPECT_EQ(result->valueAt(3).str(), "A");
+  EXPECT_EQ(result->valueAt(4).str(), "\x1B\x24\x42\x24\x24\x1B\x28\x42");
+
+  result =
+      evaluate<SimpleVector<StringView>>("encode(c0, 'x-IBM930')", japanese);
+  EXPECT_EQ(result->valueAt(0).str(), "\x0E\x44\x81\x0F");
+  EXPECT_EQ(result->valueAt(1).str(), "\x6F");
+  EXPECT_EQ(result->valueAt(2).str(), "");
+  EXPECT_EQ(result->valueAt(3).str(), "\xC1");
+  EXPECT_EQ(result->valueAt(4).str(), "\x0E\x44\x82\x0F");
 }
 
 TEST_F(EncodeTest, legacyCharsetSpecificReplacement) {
