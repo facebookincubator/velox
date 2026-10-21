@@ -198,8 +198,9 @@ bool CudfHiveConfig::writev2PageHeadersSession(
 }
 
 std::optional<cudf::type_id> constantTimestampType(
-    const CudfHiveConfig& config) {
-  const auto timestampType = config.timestampType().id();
+    const CudfHiveConfig& config,
+    const config::ConfigBase* session) {
+  const auto timestampType = config.timestampTypeSession(session).id();
   if (timestampType == cudf::type_id::TIMESTAMP_DAYS) {
     return std::nullopt;
   }

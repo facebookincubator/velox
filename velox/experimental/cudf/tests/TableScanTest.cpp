@@ -1152,6 +1152,13 @@ TEST_F(TableScanTest, partitionTimestampMixedWithFileTimestamp) {
   const auto caseValues = makeRowVector({makeFlatVector<Timestamp>(
       {Timestamp(1'577'836'800, 0), Timestamp(1'700'000'001, 0)})});
 
+  // The reader's timestamp type is pinned through the session to a unit
+  // distinct from both default units below, so each scan proves the key
+  // follows the reader rather than a fixed unit. The setting takes the
+  // enumerator's integer value.
+  const auto readerTimestampType = std::to_string(
+      static_cast<int32_t>(cudf::type_id::TIMESTAMP_MICROSECONDS));
+
   // Projects 'projection' over the file and partition timestamps of a split
   // in the partition 'partitionValue', expecting 'expected'.
   const auto check = [&](const std::string& projection,
@@ -1179,21 +1186,15 @@ TEST_F(TableScanTest, partitionTimestampMixedWithFileTimestamp) {
             kCudfHiveConnectorId,
             hive::HiveConfig::kReadTimestampPartitionValueAsLocalTimeSession,
             "false")
+        .connectorSessionProperty(
+            kCudfHiveConnectorId,
+            cudf_velox::connector::hive::CudfHiveConfig::kTimestampTypeSession,
+            readerTimestampType)
         .splits({makePartitionedSplit(
             filePath->getPath(), {{"partition_ts", partitionValue}})})
         .assertResults(expected);
   };
 
-  // The reader's timestamp type is pinned to a unit distinct from both default
-  // units below, so each scan proves the key follows the reader rather than a
-  // fixed unit. The setting takes the enumerator's integer value.
-  resetCudfHiveConnector(
-      std::make_shared<config::ConfigBase>(
-          std::unordered_map<std::string, std::string>{
-              {cudf_velox::connector::hive::CudfHiveConfig::kTimestampType,
-               std::to_string(
-                   static_cast<int32_t>(
-                       cudf::type_id::TIMESTAMP_MICROSECONDS))}}));
   for (const auto& [unit, label] :
        {std::pair{cudf::type_id::TIMESTAMP_MILLISECONDS, "ms default unit"},
         std::pair{cudf::type_id::TIMESTAMP_NANOSECONDS, "ns default unit"}}) {

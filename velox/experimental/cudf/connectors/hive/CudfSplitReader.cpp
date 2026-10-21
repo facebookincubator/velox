@@ -676,7 +676,8 @@ void CudfSplitReader::setupReaderOptions() {
           .allow_mismatched_pq_schemas(
               cudfHiveConfig_->isAllowMismatchedCudfHiveSchemasSession(
                   sessionProperties))
-          .timestamp_type(cudfHiveConfig_->timestampType())
+          .timestamp_type(
+              cudfHiveConfig_->timestampTypeSession(sessionProperties))
           // cuDF currently only folds ASCII letters, unlike the CPU reader's
           // UTF-8 folding, so non-ASCII names (rare case) that differ in case
           // do not match.

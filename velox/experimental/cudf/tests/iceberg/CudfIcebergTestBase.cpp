@@ -60,17 +60,6 @@ void CudfIcebergTestBase::TearDown() {
   CudfHiveConnectorTestBase::TearDown();
 }
 
-void CudfIcebergTestBase::resetCudfIcebergConnector(
-    const std::shared_ptr<const facebook::velox::config::ConfigBase>& config) {
-  facebook::velox::connector::ConnectorRegistry::global().erase(
-      kCudfIcebergConnectorId);
-  connector::hive::iceberg::CudfIcebergConnectorFactory factory;
-  auto icebergConnector =
-      factory.newConnector(kCudfIcebergConnectorId, config, ioExecutor_.get());
-  facebook::velox::connector::ConnectorRegistry::global().insert(
-      icebergConnector->connectorId(), icebergConnector);
-}
-
 std::vector<std::shared_ptr<facebook::velox::connector::ConnectorSplit>>
 CudfIcebergTestBase::makeIcebergSplits(
     const std::string& dataFilePath,

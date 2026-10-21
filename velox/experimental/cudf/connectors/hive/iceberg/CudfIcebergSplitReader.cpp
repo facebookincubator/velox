@@ -881,8 +881,10 @@ std::unique_ptr<cudf::scalar> CudfIcebergSplitReader::makeInjectedScalar(
     return cudf_velox::makeScalarFromConstantExpr(
         std::make_shared<core::ConstantTypedExpr>(constant),
         connectorQueryCtx_->memoryPool(),
-        col.veloxType->isTimestamp() ? constantTimestampType(cudfHiveConfig())
-                                     : std::nullopt,
+        col.veloxType->isTimestamp()
+            ? constantTimestampType(
+                  cudfHiveConfig(), connectorQueryCtx_->sessionProperties())
+            : std::nullopt,
         stream_);
   } catch (const std::exception& e) {
     VELOX_USER_FAIL(

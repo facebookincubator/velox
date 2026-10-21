@@ -901,7 +901,8 @@ CudfHiveDataSource::makePartitionKeyScalars(cuda::stream_ref stream) const {
   // A TIMESTAMP key takes the type the split reader gives file timestamps
   // rather than the unit cuDF expressions default to, so that an expression
   // can combine the two.
-  const auto timestampType = constantTimestampType(*cudfHiveConfig_);
+  const auto timestampType = constantTimestampType(
+      *cudfHiveConfig_, connectorQueryCtx_->sessionProperties());
   std::vector<std::unique_ptr<cudf::scalar>> scalars;
   scalars.reserve(partitionKeyNames_.size());
   for (const auto& name : partitionKeyNames_) {
