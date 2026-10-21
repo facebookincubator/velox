@@ -2611,8 +2611,10 @@ TEST_F(ParquetTableScanTest, lazyColumnHooks) {
     SCOPE_EXIT {
       BufferedInputBuilder::registerBuilder(defaultBuilder);
     };
-    // The remaining filter on 'a' makes 'a' a filter column; 'b' and 'c' are
-    // projected without a filter, so the reader produces them lazily.
+    // The filter is a remaining filter, evaluated by the connector on the
+    // reader's output, so none of the columns carries a pushed-down filter
+    // and the reader produces all three as LazyVectors. The connector loads
+    // 'a' for the remaining filter; 'b' and 'c' only for surviving rows.
     auto tableHandle =
         makeTableHandle({}, parseExpr(filter, rowType), "hive_table", rowType);
     auto plan = PlanBuilder()
@@ -2633,10 +2635,10 @@ TEST_F(ParquetTableScanTest, lazyColumnHooks) {
     // Rows pass in every row group.
     auto calls = run("a % 1000 = 0");
     // The reader names the lazy columns' streams on every row group input:
-    // the column ordinals of 'b' and 'c'.
+    // the column ordinals of 'a', 'b' and 'c'.
     ASSERT_EQ(calls->lazyStreams.size(), kGroups);
     for (const auto& streams : calls->lazyStreams) {
-      EXPECT_EQ(streams, (std::vector<int32_t>{1, 2}));
+      EXPECT_EQ(streams, (std::vector<int32_t>{0, 1, 2}));
     }
     // One hint per split, on the first batch with survivors.
     EXPECT_EQ(calls->hints, 1);
