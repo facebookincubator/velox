@@ -137,8 +137,9 @@ class FileDataSource : public DataSource {
   const std::shared_ptr<FileConfig> fileConfig_;
   memory::MemoryPool* const pool_;
 
-  // Keep the state and its borrowed validation filters alive until after the
-  // reader is destroyed, including takeover of a preloaded data source.
+  // Heap allocation keeps the validation filter map's address stable when
+  // ownership moves. Declare before splitReader_ so the reader is destroyed
+  // first.
   std::unique_ptr<FileScanState> fileScanState_;
   std::shared_ptr<FileConnectorSplit> split_;
   FileTableHandlePtr tableHandle_;

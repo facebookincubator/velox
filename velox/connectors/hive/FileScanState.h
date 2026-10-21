@@ -26,10 +26,6 @@
 namespace facebook::velox::connector::hive {
 
 /// Scan state owned by a FileDataSource and reused across its splits.
-/// FileDataSource::setFromDataSource() transfers it with the preloaded reader.
-///
-/// The state must outlive readers borrowing its filters. Transferring it must
-/// preserve the address of the filter map.
 struct FileScanState {
   /// Filters from the table handle and extracted from the remaining expression,
   /// also used for split validation. Filter objects can be shared with the table
