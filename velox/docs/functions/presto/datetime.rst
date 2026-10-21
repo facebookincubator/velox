@@ -92,6 +92,12 @@ Date and Time Functions
     Returns the same instant as ``timestamp with time zone``, tagged with
     ``zone``.
 
+.. function:: at_timezone(timestamp, zone) -> timestamp with time zone
+    :noindex:
+
+    Interprets ``timestamp`` as ``CAST(timestamp AS TIMESTAMP WITH TIME ZONE)``
+    does and tags the resulting instant with ``zone``.
+
 .. function:: at_timezone(time with time zone, zone) -> time with time zone
     :noindex:
 

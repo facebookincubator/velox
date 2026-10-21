@@ -1498,6 +1498,53 @@ struct AtTimezoneFunction {
   }
 };
 
+/// Tags a TIMESTAMP instant with the target zone. When timestamp adjustment is
+/// disabled, first interprets the TIMESTAMP as a wall clock in the session
+/// zone.
+template <typename T>
+struct AtTimezoneFromTimestampFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  // Session zone used to interpret local input timestamps.
+  const tz::TimeZone* sessionTimeZone_{nullptr};
+
+  // Cached target zone ID when the zone argument is constant.
+  std::optional<int64_t> targetTimezoneID_;
+
+  // Whether input timestamps already represent UTC instants.
+  bool adjustTimestampToTimezone_{false};
+
+  // Caches query semantics and a constant target zone.
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& config,
+      const arg_type<Timestamp>* /*timestamp*/,
+      const arg_type<Varchar>* timezone) {
+    sessionTimeZone_ = getSessionTimeZone(config);
+    adjustTimestampToTimezone_ = config.adjustTimestampToTimezone();
+    if (timezone != nullptr) {
+      targetTimezoneID_ = tz::getTimeZoneID(
+          std::string_view(timezone->data(), timezone->size()));
+    }
+  }
+
+  // Matches a TIMESTAMP-to-TIMESTAMP WITH TIME ZONE cast before retagging the
+  // resulting instant with the target zone.
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
+      out_type<TimestampWithTimezone>& result,
+      const arg_type<Timestamp>& timestamp,
+      const arg_type<Varchar>& timezone) {
+    auto instant = timestamp;
+    if (!adjustTimestampToTimezone_) {
+      instant.toGMT(*sessionTimeZone_);
+    }
+    const auto targetTimezoneID = targetTimezoneID_.has_value()
+        ? targetTimezoneID_.value()
+        : tz::getTimeZoneID(std::string_view(timezone.data(), timezone.size()));
+    result = pack(instant.toMillis(), targetTimezoneID);
+  }
+};
+
 /// Converts a TIMESTAMP WITH TIME ZONE to the wall clock read in the target
 /// zone, dropping the zone. The zone the input carries is ignored; only its
 /// instant is used.

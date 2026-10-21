@@ -200,6 +200,16 @@ TEST_F(DateTimeFunctionsTest, parseDatetimeSignatures) {
       1, signatures.count("(varchar,varchar) -> timestamp with time zone"));
 }
 
+TEST_F(DateTimeFunctionsTest, atTimezoneSignatures) {
+  EXPECT_EQ(
+      getSignatureStrings("at_timezone"),
+      (std::unordered_set<std::string>{
+          "(time with time zone,varchar) -> time with time zone",
+          "(timestamp,varchar) -> timestamp with time zone",
+          "(timestamp with time zone,varchar) -> timestamp with time zone",
+      }));
+}
+
 TEST_F(DateTimeFunctionsTest, dayOfXxxSignatures) {
   for (const auto& name : {"day", "day_of_month"}) {
     SCOPED_TRACE(name);
@@ -7126,6 +7136,52 @@ TEST_F(DateTimeFunctionsTest, atTimezoneConvertDstTransitions) {
   // Resolve overlaps to the earlier instant and normalize gaps forward.
   EXPECT_EQ(toIso8601("2020-10-25 02:30:00"), "2020-10-25T02:30:00.000+02:00");
   EXPECT_EQ(toIso8601("2020-03-29 02:30:00"), "2020-03-29T03:30:00.000+02:00");
+}
+
+TEST_F(DateTimeFunctionsTest, atTimezoneFromTimestamp) {
+  auto timestampData = makeRowVector({
+      makeFlatVector<Timestamp>({
+          parseTimestamp("2024-01-01 00:00:00"),
+          parseTimestamp("2020-11-01 01:30:00"),
+      }),
+      makeFlatVector<std::string>(2, [](auto) { return "America/New_York"; }),
+  });
+  auto gapData = makeRowVector({
+      makeFlatVector<Timestamp>({parseTimestamp("2020-03-08 02:30:00")}),
+      makeFlatVector<std::string>({"America/New_York"}),
+  });
+
+  for (const auto adjustTimestampToTimezone : {false, true}) {
+    SCOPED_TRACE(
+        fmt::format("adjustTimestampToTimezone={}", adjustTimestampToTimezone));
+    queryCtx_->testingOverrideConfigUnsafe({
+        {core::QueryConfig::kSessionTimezone, "America/Los_Angeles"},
+        {core::QueryConfig::kAdjustTimestampToTimezone,
+         adjustTimestampToTimezone ? "true" : "false"},
+    });
+
+    auto actual = evaluate("at_timezone(c0, c1)", timestampData);
+    auto expected = evaluate(
+        "at_timezone(CAST(c0 AS TIMESTAMP WITH TIME ZONE), c1)", timestampData);
+    VELOX_EXPECT_EQ_TYPES(actual->type(), TIMESTAMP_WITH_TIME_ZONE());
+    assertEqualVectors(expected, actual);
+
+    actual = evaluate("at_timezone(c0, 'America/New_York')", timestampData);
+    expected = evaluate(
+        "at_timezone(CAST(c0 AS TIMESTAMP WITH TIME ZONE), "
+        "'America/New_York')",
+        timestampData);
+    assertEqualVectors(expected, actual);
+
+    if (!adjustTimestampToTimezone) {
+      VELOX_ASSERT_THROW(
+          evaluate("at_timezone(c0, c1)", gapData), "is in a gap");
+      VELOX_ASSERT_THROW(
+          evaluate(
+              "at_timezone(CAST(c0 AS TIMESTAMP WITH TIME ZONE), c1)", gapData),
+          "is in a gap");
+    }
+  }
 }
 
 TEST_F(DateTimeFunctionsTest, atTimezoneConvertTimeWithTimezoneTest) {
