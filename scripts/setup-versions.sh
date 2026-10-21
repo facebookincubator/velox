@@ -66,6 +66,10 @@ ABSEIL_VERSION="20250512.1"
 GRPC_VERSION="1.76.0"
 CRC32_VERSION="1.1.2"
 NLOHMAN_JSON_VERSION="3.11.3"
+# google-cloud-cpp 3.11.0 requires libcurl >= 8.7.1 for its REST transport.
+# CentOS 9's system libcurl is 7.76.1, so build the minimum documented version
+# from source. See google-cloud-cpp doc/packaging.md.
+CURL_VERSION="8.7.1"
 # opentelemetry-cpp is a required dependency of google-cloud-cpp 3.x's common
 # library (unconditional, no CMake switch to disable). Version pinned to what
 # google-cloud-cpp 3.11.0's doc/packaging.md recommends.
