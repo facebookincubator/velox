@@ -72,12 +72,14 @@ struct ParseUrlFunction {
     cache_.setMaxCompiledRegexes(config.exprMaxCompiledRegexes());
     ansiEnabled_ = SparkQueryConfig{config}.ansiEnabled();
 
-    // A constant URL is parsed once here; the parsed views point into the
-    // constant vector's string buffer, which outlives every call.
+    // A constant URL is copied into owned storage and parsed once here;
+    // the adapter passes a stack-local value to initialize, and a short
+    // URL's bytes live inside that value (StringView inline storage), so
+    // views into it would dangle after initialize returns.
     if (urlStr) {
+      constUrlStorage_ = std::string(urlStr->data(), urlStr->size());
       constUrl_ = ParsedUrl{};
-      if (!parseUrl(
-              std::string_view(urlStr->data(), urlStr->size()), *constUrl_)) {
+      if (!parseUrl(constUrlStorage_, *constUrl_)) {
         constUrl_.reset();
         constUrlInvalid_ = true;
       }
@@ -134,13 +136,16 @@ struct ParseUrlFunction {
     // with the same message in both shapes.
     const re2::RE2* pattern = nullptr;
     if (constKey_.has_value()) {
+      // Compile once, valid or not, and validate on every use: an invalid
+      // pattern is cached too, so each affected row fails with the error
+      // without recompiling, and no row silently degrades to null.
       if (constPattern_ == nullptr) {
         constPattern_ = std::make_unique<re2::RE2>(buildQueryPattern(keyValue));
-        VELOX_USER_CHECK(
-            constPattern_->ok(),
-            "invalid regular expression:{}",
-            constPattern_->error());
       }
+      VELOX_USER_CHECK(
+          constPattern_->ok(),
+          "invalid regular expression:{}",
+          constPattern_->error());
       pattern = constPattern_.get();
     } else {
       const std::string queryPattern = buildQueryPattern(keyValue);
@@ -357,7 +362,11 @@ struct ParseUrlFunction {
 
   // The parse of a constant URL, or an empty optional after initialize()
   // when the constant URL is invalid. Unset when the URL is not constant.
+  // The views point into constUrlStorage_.
   std::optional<ParsedUrl> constUrl_;
+
+  // Owned copy of the constant URL.
+  std::string constUrlStorage_;
   bool constUrlInvalid_ = false;
 
   // Scratch space for parsing a non-constant URL, reused across calls;
