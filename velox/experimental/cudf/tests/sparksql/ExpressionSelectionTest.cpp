@@ -113,6 +113,7 @@ TEST_F(CudfSparkExpressionSelectionTest, isNull) {
     SCOPED_TRACE(prefix);
     config.functionNamePrefix = prefix;
     registerBuiltinFunctions(prefix);
+    registerSparkFunctions(prefix);
     for (const auto& type : std::vector<TypePtr>{INTEGER(), DECIMAL(18, 2)}) {
       SCOPED_TRACE(type->toString());
       auto inputType = ROW({{"value", type}});
@@ -132,6 +133,42 @@ TEST_F(CudfSparkExpressionSelectionTest, isNull) {
       } else {
         ASSERT_NE(dynamic_cast<JitExpression*>(evaluator.get()), nullptr);
       }
+    }
+  }
+}
+
+TEST_F(CudfSparkExpressionSelectionTest, isNullDialectRegistration) {
+  for (const std::string prefix : {"", "test_"}) {
+    SCOPED_TRACE(prefix);
+    auto check = [&](const std::string& name, bool expected) {
+      SCOPED_TRACE(name);
+      auto expression = std::make_shared<core::CallTypedExpr>(
+          BOOLEAN(),
+          std::vector<core::TypedExprPtr>{
+              std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "value")},
+          name);
+      EXPECT_EQ(FunctionExpression::canEvaluate(expression), expected);
+      EXPECT_EQ(
+          createCudfFunction(name, expression, pool_.get()) != nullptr,
+          expected);
+    };
+
+    unregisterFunctions();
+    registerBuiltinFunctions(prefix);
+    check(prefix + "isnull", false);
+    check("is_null", false);
+
+    unregisterFunctions();
+    registerSparkFunctions(prefix);
+    check(prefix + "isnull", true);
+    check("is_null", false);
+
+    unregisterFunctions();
+    registerPrestoFunctions(prefix);
+    check(prefix + "isnull", false);
+    check("is_null", true);
+    if (!prefix.empty()) {
+      check(prefix + "is_null", false);
     }
   }
 }
