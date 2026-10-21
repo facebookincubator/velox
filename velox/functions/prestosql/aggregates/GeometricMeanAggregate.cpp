@@ -139,7 +139,7 @@ void registerGeometricMeanAggregate(
                 inputType->toString());
         }
       },
-      {.orderSensitive = false},
+      {.orderSensitive = false, .ignoreNullInputs = true},
       withCompanionFunctions,
       overwrite);
 }

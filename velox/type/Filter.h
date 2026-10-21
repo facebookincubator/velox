@@ -830,6 +830,14 @@ class BigintRange final : public Filter {
     return isSingleValue_;
   }
 
+  bool lowerUnbounded() const {
+    return lower_ == std::numeric_limits<int64_t>::min();
+  }
+
+  bool upperUnbounded() const {
+    return upper_ == std::numeric_limits<int64_t>::max();
+  }
+
   std::unique_ptr<Filter> mergeWith(const Filter* other) const final;
 
   std::string toString() const override {
@@ -962,6 +970,17 @@ class HugeintRange final : public Filter {
     }
 
     return !(min > upper_ || max < lower_);
+  }
+
+  // A narrower integral column may be read as a long decimal, which leaves the
+  // physical value as the decimal's unscaled value. Widening it to int128 is
+  // exact, so the int128 tests answer the int64 forms.
+  bool testInt64(int64_t value) const final {
+    return testInt128(value);
+  }
+
+  bool testInt64Range(int64_t min, int64_t max, bool hasNull) const final {
+    return testInt128Range(min, max, hasNull);
   }
 
   int128_t lower() const {

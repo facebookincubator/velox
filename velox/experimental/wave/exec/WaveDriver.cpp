@@ -331,15 +331,13 @@ WaveDriver::WaveDriver(
   pipelines_.front().canAdvance = true;
 }
 
-bool WaveDriver::shouldYield(
-    exec::StopReason taskStopReason,
-    size_t startTimeMs) const {
+bool WaveDriver::shouldYield(exec::StopReason taskStopReason) const {
   // Checks task-level yield signal, driver-level yield signal and table scan
   // output processing time limit.
   return taskStopReason == exec::StopReason::kYield ||
       operatorCtx()->driverCtx()->driver->shouldYield() ||
       ((getOutputTimeLimitMs_ != 0) &&
-       (getCurrentTimeMs() - startTimeMs) >= getOutputTimeLimitMs_);
+       getOutputWatch_.elapsed().count() >= getOutputTimeLimitMs_);
 }
 
 RowVectorPtr WaveDriver::getOutput() {
@@ -347,7 +345,7 @@ RowVectorPtr WaveDriver::getOutput() {
     return nullptr;
   }
   barrier_->enter();
-  startTimeMs_ = getCurrentTimeMs();
+  getOutputWatch_.reset();
   [[maybe_unused]] auto guard = folly::makeGuard([&]() { barrier_->leave(); });
   int32_t last = pipelines_.size() - 1;
   try {
@@ -410,7 +408,7 @@ RowVectorPtr WaveDriver::getOutput() {
 }
 
 bool WaveDriver::maybeWaitForPeers() {
-  if (operatorCtx_->task()->numDrivers(operatorCtx_->driver()) == 1) {
+  if (operatorCtx_->numPeers() == 0) {
     return false;
   }
   if (barrier_->stateMap().states.empty()) {
@@ -418,21 +416,17 @@ bool WaveDriver::maybeWaitForPeers() {
   }
   TR("wait_for_peers\n");
   std::vector<ContinuePromise> promises;
-  std::vector<std::shared_ptr<exec::Driver>> peers;
+  std::vector<std::shared_ptr<exec::Operator>> peerOperators;
 
-  if (!operatorCtx_->task()->allPeersFinished(
-          planNodeId(),
-          operatorCtx_->driver(),
-          &blockingFuture_,
-          promises,
-          peers)) {
+  if (!operatorCtx_->allPeersArrived(
+          &blockingFuture_, promises, peerOperators)) {
     blockingReason_ = exec::BlockingReason::kYield;
     return true;
   }
 
   // Realize the promises so that the other Drivers (which were not
   // the last to finish) can continue from the barrier.
-  peers.clear();
+  peerOperators.clear();
   for (auto& promise : promises) {
     promise.setValue();
   }
@@ -623,8 +617,7 @@ Advance WaveDriver::advance(int pipelineIdx) {
   for (;;) {
     const exec::StopReason taskStopReason =
         operatorCtx()->driverCtx()->task->shouldStop();
-    if (shouldStop(taskStopReason) ||
-        shouldYield(taskStopReason, startTimeMs_)) {
+    if (shouldStop(taskStopReason) || shouldYield(taskStopReason)) {
       blockingReason_ = exec::BlockingReason::kYield;
       blockingFuture_ = ContinueFuture{folly::Unit{}};
       // A point for test code injection.

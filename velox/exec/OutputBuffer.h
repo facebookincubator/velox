@@ -15,6 +15,8 @@
  */
 #pragma once
 
+#include <folly/stop_watch.h>
+
 #include "velox/common/base/Portability.h"
 #include "velox/core/PlanNode.h"
 #include "velox/exec/ExchangeQueue.h"
@@ -360,9 +362,9 @@ class OutputBuffer {
   int numFinalAcknowledges_ = 0;
   tsan_atomic<bool> atEnd_{false};
 
-  // Time since last change in bufferedBytes_. Used to compute total time data
-  // is buffered. Ignored if bufferedBytes_ is zero.
-  uint64_t bufferStartMs_;
+  // Restarted at each change in bufferedBytes_. Used to compute total time
+  // data is buffered. Ignored if bufferedBytes_ is zero.
+  folly::stop_watch<std::chrono::milliseconds> bufferWatch_;
 
   // Total time data is buffered as bytes * time.
   double totalBufferedBytesMs_;

@@ -330,7 +330,7 @@ TEST_F(PlanBuilderTest, filter) {
 }
 
 TEST_F(PlanBuilderTest, commitStrategyParameter) {
-  auto data = makeRowVector({makeFlatVector<int64_t>(10, folly::identity)});
+  auto data = makeRowVector({makeFlatIdentityVector<int64_t>(10)});
   auto directory = "/some/test/directory";
 
   // Lambda to create a plan with given commitStrategy and verify it
@@ -425,7 +425,7 @@ TEST_F(PlanBuilderTest, indexLookupJoinBuilder) {
 }
 
 TEST_F(PlanBuilderTest, insertTableHandleParameter) {
-  auto data = makeRowVector({makeFlatVector<int64_t>(10, folly::identity)});
+  auto data = makeRowVector({makeFlatIdentityVector<int64_t>(10)});
   auto directory = "/some/test/directory";
 
   auto rowType = ROW({"c0", "c1", "c2"}, {BIGINT(), INTEGER(), SMALLINT()});

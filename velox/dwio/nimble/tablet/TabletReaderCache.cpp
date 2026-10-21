@@ -17,6 +17,8 @@
 #include "velox/dwio/nimble/tablet/TabletReaderCache.h"
 
 #include <fmt/format.h>
+#include <folly/Singleton.h>
+#include <folly/Synchronized.h>
 #include <glog/logging.h>
 
 #include "velox/common/base/BitUtil.h"
@@ -26,6 +28,42 @@
 #include "velox/dwio/nimble/velox/SchemaUtils.h"
 
 namespace facebook::nimble {
+
+namespace {
+void checkOptions(const TabletReaderCache::Options& options) {
+  NIMBLE_CHECK_NOT_NULL(options.executor);
+  NIMBLE_CHECK(
+      velox::bits::isPowerOfTwo(options.numShards),
+      fmt::format(
+          "numShards must be a power of 2, but got: {}", options.numShards));
+  // An observer that is told about creation but never about release has no way
+  // to know an entry is gone. Anything it keyed on the entry -- a registry of
+  // live tablets, say -- is left holding a pointer to freed memory.
+  NIMBLE_CHECK(
+      (options.onCreate == nullptr) == (options.onRelease == nullptr),
+      "TabletReaderCache onCreate and onRelease must be set together");
+}
+
+folly::Synchronized<std::optional<TabletReaderCache::Options>>& savedOptions() {
+  static folly::Synchronized<std::optional<TabletReaderCache::Options>> options;
+  return options;
+}
+
+TabletReaderCache* createInstance() {
+  const auto options = savedOptions().copy();
+  NIMBLE_CHECK(
+      options.has_value(),
+      "TabletReaderCache::initialize() must be called before getInstance()");
+  return new TabletReaderCache(*options);
+}
+
+// Closing a file the cache holds can need another folly singleton. folly
+// destroys its singletons at exit in reverse creation order, so the cache
+// closes its files while every singleton created before it still exists.
+// Creating it on the first getInstance() rather than in initialize() extends
+// that to the singletons created in between.
+const folly::Singleton<TabletReaderCache> singleton{createInstance};
+} // namespace
 
 CachedTabletReader::CachedTabletReader(
     std::shared_ptr<TabletReader> tablet,
@@ -81,8 +119,15 @@ TabletReaderCache::Generator::operator()(
     const Properties* properties,
     void* /*stats*/) {
   NIMBLE_CHECK_NOT_NULL(properties);
+  return std::make_unique<std::shared_ptr<CachedTabletReader>>(
+      create(filename, *properties));
+}
+
+std::shared_ptr<CachedTabletReader> TabletReaderCache::Generator::create(
+    const std::string& filename,
+    const Properties& properties) const {
   const auto shardIdx = std::hash<std::string>{}(filename)&shardMask_;
-  auto options = properties->tabletOptions;
+  auto options = properties.tabletOptions;
   // The caller's ioOptions are replaced here, so its metadata/index statistics
   // never see this tablet's IO. Keeping the pair on the entry lets a lifetime
   // observer reach it instead.
@@ -94,7 +139,7 @@ TabletReaderCache::Generator::operator()(
   ioOptions.setIOExecutor(executor_);
   options.ioOptions = std::move(ioOptions);
   auto tablet = TabletReader::create(
-      properties->readFile, pools_[shardIdx].get(), options);
+      properties.readFile, pools_[shardIdx].get(), options);
   auto section = tablet->loadOptionalSection(
       std::string(kSchemaSection), /*keepCache=*/true);
   NIMBLE_CHECK(section.has_value(), "Schema section not found in tablet");
@@ -114,41 +159,35 @@ TabletReaderCache::Generator::operator()(
   if (onCreate_ != nullptr) {
     onCreate_(*entry);
   }
-  return std::make_unique<std::shared_ptr<CachedTabletReader>>(
-      std::move(entry));
+  return entry;
 }
 
-TabletReaderCache::Factory TabletReaderCache::createFactory(
-    const Options& opts) {
-  NIMBLE_CHECK_NOT_NULL(opts.executor);
-  NIMBLE_CHECK(
-      velox::bits::isPowerOfTwo(opts.numShards),
-      fmt::format(
-          "numShards must be a power of 2, but got: {}", opts.numShards));
-  // An observer that is told about creation but never about release has no way
-  // to know an entry is gone. Anything it keyed on the entry -- a registry of
-  // live tablets, say -- is left holding a pointer to freed memory.
-  NIMBLE_CHECK(
-      (opts.onCreate == nullptr) == (opts.onRelease == nullptr),
-      "TabletReaderCache onCreate and onRelease must be set together");
+TabletReaderCache::Generator TabletReaderCache::createGenerator(
+    const Options& options) {
+  checkOptions(options);
 
   std::vector<std::shared_ptr<velox::memory::MemoryPool>> pools;
-  pools.reserve(opts.numShards);
-  for (uint32_t i = 0; i < opts.numShards; ++i) {
+  pools.reserve(options.numShards);
+  for (uint32_t i = 0; i < options.numShards; ++i) {
     pools.push_back(
         velox::memory::memoryManager()->addLeafPool(
             fmt::format("tablet_reader_cache_{}", i)));
   }
+  return Generator(
+      std::move(pools), options.executor, options.onCreate, options.onRelease);
+}
 
+TabletReaderCache::Factory TabletReaderCache::createFactory(
+    const Options& options,
+    const Generator& generator) {
   auto cache = std::make_unique<TabletReaderCache::LRUCache>(
-      opts.maxEntries, opts.expireDurationMs);
-  auto generator = std::make_unique<TabletReaderCache::Generator>(
-      std::move(pools), opts.executor, opts.onCreate, opts.onRelease);
-  return Factory(std::move(cache), std::move(generator));
+      options.maxEntries, options.expireDurationMs);
+  return Factory(std::move(cache), std::make_unique<Generator>(generator));
 }
 
 TabletReaderCache::TabletReaderCache(const Options& options)
-    : factory_{createFactory(options)} {
+    : generator_{createGenerator(options)},
+      factory_{createFactory(options, generator_)} {
   LOG(INFO) << "TabletReaderCache created: " << options.toString();
 }
 
@@ -160,6 +199,12 @@ std::shared_ptr<CachedTabletReader> TabletReaderCache::get(
   // cache pin momentary; the entry stays alive through the returned pointer.
   auto cached = factory_.generate(readFile->getName(), &properties);
   return *cached;
+}
+
+std::shared_ptr<CachedTabletReader> TabletReaderCache::create(
+    const std::shared_ptr<velox::ReadFile>& readFile,
+    const TabletReader::Options& tabletOptions) const {
+  return generator_.create(readFile->getName(), {readFile, tabletOptions});
 }
 
 velox::SimpleLRUCacheStats TabletReaderCache::stats() {
@@ -175,44 +220,25 @@ std::shared_ptr<CachedTabletReader> TabletReaderCache::testingGet(
   return *cached;
 }
 
-namespace {
-struct SingletonState {
-  ~SingletonState() {
-    delete instance.load(std::memory_order_acquire);
-  }
-
-  std::atomic<TabletReaderCache*> instance{nullptr};
-  std::mutex mutex;
-};
-
-SingletonState& singletonState() {
-  static SingletonState state;
-  return state;
-}
-} // namespace
-
 void TabletReaderCache::initialize(const Options& options) {
-  auto& state = singletonState();
-  std::lock_guard<std::mutex> lock(state.mutex);
-  NIMBLE_CHECK_NULL(
-      state.instance.load(std::memory_order_acquire),
+  checkOptions(options);
+  auto saved = savedOptions().wlock();
+  NIMBLE_CHECK(
+      !saved->has_value(),
       "TabletReaderCache::initialize() must only be called once");
-  state.instance.store(
-      new TabletReaderCache(options), std::memory_order_release);
+  *saved = options;
 }
 
 TabletReaderCache& TabletReaderCache::getInstance() {
-  auto* instance = singletonState().instance.load(std::memory_order_acquire);
+  const auto instance = folly::Singleton<TabletReaderCache>::try_get();
   NIMBLE_CHECK_NOT_NULL(
-      instance,
-      "TabletReaderCache::initialize() must be called before getInstance()");
+      instance, "TabletReaderCache was destroyed by the singleton teardown");
   return *instance;
 }
 
 void TabletReaderCache::testingReset() {
-  auto& state = singletonState();
-  std::lock_guard<std::mutex> lock(state.mutex);
-  delete state.instance.exchange(nullptr, std::memory_order_acq_rel);
+  folly::Singleton<TabletReaderCache>::make_mock(createInstance);
+  savedOptions().wlock()->reset();
 }
 
 } // namespace facebook::nimble

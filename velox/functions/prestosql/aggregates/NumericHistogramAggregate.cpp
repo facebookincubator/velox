@@ -591,6 +591,7 @@ void registerNumericHistogramAggregate(
           }
         }
       },
+      {.ignoreNullInputs = true},
       withCompanionFunctions,
       overwrite);
 }

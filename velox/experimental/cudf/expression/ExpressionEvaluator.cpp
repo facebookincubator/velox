@@ -45,6 +45,7 @@
 #include <cudf/fixed_point/fixed_point.hpp>
 #include <cudf/hashing.hpp>
 #include <cudf/lists/count_elements.hpp>
+#include <cudf/null_mask.hpp>
 #include <cudf/reduction.hpp>
 #include <cudf/replace.hpp>
 #include <cudf/round.hpp>
@@ -185,6 +186,22 @@ std::unique_ptr<cudf::scalar> castDecimalScalar(
       numeric::scale_type{targetType.scale()},
       stream,
       mr);
+}
+
+int32_t getDecimalPrecision(const TypePtr& type) {
+  if (type->isShortDecimal()) {
+    return type->asShortDecimal().precision();
+  }
+  if (type->isLongDecimal()) {
+    return type->asLongDecimal().precision();
+  }
+  VELOX_FAIL("Expected decimal type, got {}", type->toString());
+}
+
+bool isCheckedDecimalArithmeticOp(cudf::binary_operator op) {
+  return op == cudf::binary_operator::ADD || op == cudf::binary_operator::SUB ||
+      op == cudf::binary_operator::MUL || op == cudf::binary_operator::MOD ||
+      op == cudf::binary_operator::DIV;
 }
 
 /// Materialise a ConstantTypedExpr to a VectorPtr.
@@ -606,6 +623,9 @@ class BinaryFunction : public CudfFunction {
       cudf::binary_operator op,
       memory::MemoryPool* pool)
       : op_(op), type_(cudf_velox::veloxToCudfDataType(expr->type())) {
+    if (cudf::is_fixed_point(type_) && isCheckedDecimalArithmeticOp(op_)) {
+      decimalPrecision_ = getDecimalPrecision(expr->type());
+    }
     VELOX_CHECK_EQ(
         expr->inputs().size(), 2, "binary function expects exactly 2 inputs");
     if (expr->inputs()[0]->isConstantKind()) {
@@ -695,41 +715,16 @@ class BinaryFunction : public CudfFunction {
       if (cudf::is_fixed_point(type_)) {
         if (op_ == cudf::binary_operator::ADD ||
             op_ == cudf::binary_operator::SUB ||
+            op_ == cudf::binary_operator::MUL ||
             op_ == cudf::binary_operator::MOD) {
-          std::unique_ptr<cudf::column> lhsCast;
-          std::unique_ptr<cudf::column> rhsCast;
-          if (lhsView.type() != type_) {
-            lhsCast = cudf::cast(lhsView, type_, stream, mr);
-            lhsView = lhsCast->view();
-          }
-          if (rhsView.type() != type_) {
-            rhsCast = cudf::cast(rhsView, type_, stream, mr);
-            rhsView = rhsCast->view();
-          }
+          // Operands keep their own storage width and scale: the
+          // overflow-checked kernel dispatches on the lhs, rhs and output
+          // widths independently and rescales ADD/SUB/MOD operands to the
+          // output scale itself, so both conversions stay inside the fail-fast
+          // path instead of an unchecked cudf::cast here.
           // @TODO Check for divide-by-zero as in the DECIMAL case above?
-          return cudf::binary_operation(
-              lhsView, rhsView, op_, type_, stream, mr);
-        }
-        if (op_ == cudf::binary_operator::MUL) {
-          std::unique_ptr<cudf::column> lhsCast;
-          std::unique_ptr<cudf::column> rhsCast;
-          if (type_.id() == cudf::type_id::DECIMAL128) {
-            if (lhsView.type().id() == cudf::type_id::DECIMAL64) {
-              auto castType = cudf::data_type{
-                  cudf::type_id::DECIMAL128, lhsView.type().scale()};
-              lhsCast = cudf::cast(lhsView, castType, stream, mr);
-              lhsView = lhsCast->view();
-            }
-            if (rhsView.type().id() == cudf::type_id::DECIMAL64) {
-              auto castType = cudf::data_type{
-                  cudf::type_id::DECIMAL128, rhsView.type().scale()};
-              rhsCast = cudf::cast(rhsView, castType, stream, mr);
-              rhsView = rhsCast->view();
-            }
-          }
-          // @TODO Check for divide-by-zero as in the DECIMAL case above?
-          return cudf::binary_operation(
-              lhsView, rhsView, op_, type_, stream, mr);
+          return decimalBinaryOperation(
+              lhsView, rhsView, op_, type_, decimalPrecision_, stream, mr);
         }
       }
       // @TODO Check for divide-by-zero as in the DECIMAL case above?
@@ -786,43 +781,12 @@ class BinaryFunction : public CudfFunction {
       if (cudf::is_fixed_point(type_)) {
         if (op_ == cudf::binary_operator::ADD ||
             op_ == cudf::binary_operator::SUB ||
+            op_ == cudf::binary_operator::MUL ||
             op_ == cudf::binary_operator::MOD) {
-          std::unique_ptr<cudf::column> lhsCast;
-          if (lhsView.type() != type_) {
-            lhsCast = cudf::cast(lhsView, type_, stream, mr);
-            lhsView = lhsCast->view();
-          }
-          if (right_->type() != type_) {
-            auto rhsScalar = castDecimalScalar(*right_, type_, stream, mr);
-            return cudf::binary_operation(
-                lhsView, *rhsScalar, op_, type_, stream, mr);
-          }
-          return cudf::binary_operation(
-              lhsView, *right_, op_, type_, stream, mr);
-        }
-        if (op_ == cudf::binary_operator::MUL) {
-          std::unique_ptr<cudf::column> lhsCast;
-          std::unique_ptr<cudf::scalar> rhsScalar;
-          if (type_.id() == cudf::type_id::DECIMAL128) {
-            if (lhsView.type().id() == cudf::type_id::DECIMAL64) {
-              auto castType = cudf::data_type{
-                  cudf::type_id::DECIMAL128, lhsView.type().scale()};
-              lhsCast = cudf::cast(lhsView, castType, stream, mr);
-              lhsView = lhsCast->view();
-            }
-            if (right_->type().id() == cudf::type_id::DECIMAL64) {
-              auto castType = cudf::data_type{
-                  cudf::type_id::DECIMAL128, right_->type().scale()};
-              rhsScalar = castDecimalScalar(*right_, castType, stream, mr);
-            }
-          }
-          return cudf::binary_operation(
-              lhsView,
-              rhsScalar ? *rhsScalar : *right_,
-              op_,
-              type_,
-              stream,
-              mr);
+          // Operand widths and scales are handled by the checked kernel (see
+          // the column/column path above).
+          return decimalBinaryOperation(
+              lhsView, *right_, op_, type_, decimalPrecision_, stream, mr);
         }
       }
       return cudf::binary_operation(
@@ -876,37 +840,12 @@ class BinaryFunction : public CudfFunction {
     if (cudf::is_fixed_point(type_)) {
       if (op_ == cudf::binary_operator::ADD ||
           op_ == cudf::binary_operator::SUB ||
+          op_ == cudf::binary_operator::MUL ||
           op_ == cudf::binary_operator::MOD) {
-        std::unique_ptr<cudf::column> rhsCast;
-        if (rhsView.type() != type_) {
-          rhsCast = cudf::cast(rhsView, type_, stream, mr);
-          rhsView = rhsCast->view();
-        }
-        if (left_->type() != type_) {
-          auto lhsScalar = castDecimalScalar(*left_, type_, stream, mr);
-          return cudf::binary_operation(
-              *lhsScalar, rhsView, op_, type_, stream, mr);
-        }
-        return cudf::binary_operation(*left_, rhsView, op_, type_, stream, mr);
-      }
-      if (op_ == cudf::binary_operator::MUL) {
-        std::unique_ptr<cudf::column> rhsCast;
-        std::unique_ptr<cudf::scalar> lhsScalar;
-        if (type_.id() == cudf::type_id::DECIMAL128) {
-          if (rhsView.type().id() == cudf::type_id::DECIMAL64) {
-            auto castType = cudf::data_type{
-                cudf::type_id::DECIMAL128, rhsView.type().scale()};
-            rhsCast = cudf::cast(rhsView, castType, stream, mr);
-            rhsView = rhsCast->view();
-          }
-          if (left_->type().id() == cudf::type_id::DECIMAL64) {
-            auto castType = cudf::data_type{
-                cudf::type_id::DECIMAL128, left_->type().scale()};
-            lhsScalar = castDecimalScalar(*left_, castType, stream, mr);
-          }
-        }
-        return cudf::binary_operation(
-            lhsScalar ? *lhsScalar : *left_, rhsView, op_, type_, stream, mr);
+        // Operand widths and scales are handled by the checked kernel (see the
+        // column/column path above).
+        return decimalBinaryOperation(
+            *left_, rhsView, op_, type_, decimalPrecision_, stream, mr);
       }
     }
     return cudf::binary_operation(*left_, rhsView, op_, type_, stream, mr);
@@ -915,6 +854,7 @@ class BinaryFunction : public CudfFunction {
  private:
   const cudf::binary_operator op_;
   const cudf::data_type type_;
+  int32_t decimalPrecision_{0};
   std::unique_ptr<cudf::scalar> left_;
   std::unique_ptr<cudf::scalar> right_;
 };
@@ -1241,6 +1181,35 @@ class GreatestLeastFunction : public CudfFunction {
   std::unique_ptr<cudf::scalar> foldedScalar_;
   std::vector<size_t> order_;
 };
+
+namespace {
+
+bool supportsImplicitNullElse(const TypePtr& type) {
+  // Interval constant scalars differ from the cuDF storage type used for the
+  // implicit null ELSE.
+  if (type->isIntervalYearMonth() || type->isIntervalDayTime()) {
+    return false;
+  }
+  switch (type->kind()) {
+    case TypeKind::BOOLEAN:
+    case TypeKind::TINYINT:
+    case TypeKind::SMALLINT:
+    case TypeKind::INTEGER:
+    case TypeKind::BIGINT:
+    case TypeKind::REAL:
+    case TypeKind::DOUBLE:
+    case TypeKind::VARCHAR:
+    case TypeKind::VARBINARY:
+    case TypeKind::TIMESTAMP:
+      return true;
+    case TypeKind::HUGEINT:
+      return type->isDecimal();
+    default:
+      return false;
+  }
+}
+
+} // namespace
 
 class SwitchFunction : public CudfFunction {
  public:
@@ -2160,7 +2129,16 @@ class RowConstructorFunction : public CudfFunction {
 
     VELOX_CHECK_EQ(nextInputColumnIndex, inputColumns.size());
     return cudf::make_structs_column(
-        outputSize, std::move(children), 0, rmm::device_buffer{}, stream, mr);
+        outputSize,
+        std::move(children),
+        0,
+        cudf::create_null_mask(
+            0,
+            cudf::mask_state::UNALLOCATED,
+            stream,
+            cudf::memory_resources{mr, get_temp_mr()}),
+        stream,
+        mr);
   }
 
  private:
@@ -2668,7 +2646,7 @@ bool registerBuiltinFunctions(const std::string& prefix) {
       /*overwrite=*/true,
       [](const core::TypedExprPtr& expr) {
         return !expr->inputs()[0]->isConstantKind() &&
-            canMakeCudfDefaultScalar(expr->type());
+            supportsImplicitNullElse(expr->type());
       });
   registerCudfFunctions(
       {"switch", "if"},
@@ -2952,7 +2930,8 @@ std::string exprRegistryName(const core::TypedExprPtr& expr) {
 std::shared_ptr<FunctionExpression> FunctionExpression::create(
     const core::TypedExprPtr& expr,
     const RowTypePtr& inputRowSchema,
-    memory::MemoryPool* pool) {
+    memory::MemoryPool* pool,
+    const core::QueryConfig& config) {
   auto node = std::make_shared<FunctionExpression>();
   node->expr_ = expr;
   node->inputRowSchema_ = inputRowSchema;
@@ -2996,7 +2975,7 @@ std::shared_ptr<FunctionExpression> FunctionExpression::create(
         // string ops).  Field references are handled as leaf
         // FunctionExpressions.
         node->subexpressions_.push_back(
-            createCudfExpression(input, inputRowSchema, pool));
+            createCudfExpression(input, inputRowSchema, pool, config));
       }
     }
   }
@@ -3041,6 +3020,124 @@ std::unique_ptr<cudf::column> FunctionExpression::makeStructChildColumn(
       },
       structColumn);
 }
+
+namespace {
+
+/// True for the special forms registered as SwitchFunction.
+bool isConditionalFunction(const core::TypedExprPtr& expr) {
+  if (expr->kind() != core::ExprKind::kCall) {
+    return false;
+  }
+  const auto& name = expr->asUnchecked<core::CallTypedExpr>()->name();
+  return name == "switch" || name == "if";
+}
+
+/// Maps each entry of subexpressions_ back to its expr_->inputs() index.
+/// create() drops constant children, so `if(c, x, 1)` yields {0, 1}.
+std::vector<size_t> conditionalOperandIndex(const core::TypedExprPtr& expr) {
+  std::vector<size_t> indices;
+  indices.reserve(expr->inputs().size());
+  for (size_t input = 0; input < expr->inputs().size(); ++input) {
+    const auto& child = expr->inputs()[input];
+    if (!child->isConstantKind() && !child->isInputKind()) {
+      indices.push_back(input);
+    }
+  }
+  return indices;
+}
+
+/// Rows where copy_if_else takes the branch chosen by \p takeWhenTrue. It
+/// selects `(valid(i) and condition[i]) ? then : else`, so a null condition row
+/// belongs to the else branch alone.
+cuda::device_buffer<std::byte> makeBranchRowMask(
+    const cudf::column_view& condition,
+    bool takeWhenTrue,
+    cuda::stream_ref stream,
+    rmm::device_async_resource_ref mr) {
+  // bools_to_mask clears false and null alike, already the then branch's set.
+  if (takeWhenTrue) {
+    auto [mask, unusedUnsetCount] = cudf::bools_to_mask(condition, stream, mr);
+    return std::move(*mask);
+  }
+  // The else branch also owns the null rows, and NOT maps null to null.
+  auto negated =
+      cudf::unary_operation(condition, cudf::unary_operator::NOT, stream, mr);
+  std::unique_ptr<cudf::column> elseCondition;
+  if (negated->view().has_nulls()) {
+    const cudf::numeric_scalar<bool> nullsTakeElse(true, true, stream, mr);
+    elseCondition =
+        cudf::replace_nulls(negated->view(), nullsTakeElse, stream, mr);
+  }
+  auto [mask, unusedUnsetCount] = cudf::bools_to_mask(
+      elseCondition ? elseCondition->view() : negated->view(), stream, mr);
+  return std::move(*mask);
+}
+
+/// Views over \p inputs' data with \p rowMask ANDed into every null mask, so a
+/// branch subtree sees the rows its conditional discards as null. The masks
+/// travel with the views because the views only borrow them, and a subtree
+/// result can itself be a view (e.g. a bare field reference).
+struct MaskedInputs {
+  std::vector<cudf::column_view> views;
+  std::vector<cuda::device_buffer<std::byte>> masks;
+};
+
+MaskedInputs maskInputRows(
+    const std::vector<cudf::column_view>& inputs,
+    const cudf::bitmask_type* rowMask,
+    cuda::stream_ref stream,
+    rmm::device_async_resource_ref mr) {
+  MaskedInputs masked;
+  masked.views.reserve(inputs.size());
+  masked.masks.reserve(inputs.size());
+  for (const auto& input : inputs) {
+    if (input.size() == 0) {
+      masked.views.push_back(input);
+      continue;
+    }
+    // rowMask is indexed from row 0, so a view carrying its own offset would
+    // read it out of step, so the branch would see the rows the conditional
+    // discards: the abort this masking exists to prevent. No operator hands
+    // one down today, because those that slice (CudfLimit, CudfTopN,
+    // CudfLocalPartition) each materialize into a fresh cudf::table, so
+    // CudfVector columns start at offset 0. Fail here rather than mask the
+    // wrong rows if that ever changes; the fix is to teach this function to
+    // apply the offset.
+    VELOX_CHECK_EQ(
+        input.offset(),
+        0,
+        "Non-zero column_view offset not yet supported in branch masking");
+    std::vector<const cudf::bitmask_type*> masks{rowMask};
+    std::vector<cudf::size_type> beginBits{0};
+    if (input.nullable()) {
+      masks.push_back(input.null_mask());
+      beginBits.push_back(0);
+    }
+    auto [combined, nullCount] = cudf::bitmask_and(
+        masks,
+        beginBits,
+        input.size(),
+        stream,
+        cudf::memory_resources{mr, get_temp_mr()});
+    std::vector<cudf::column_view> children;
+    children.reserve(input.num_children());
+    for (cudf::size_type child = 0; child < input.num_children(); ++child) {
+      children.push_back(input.child(child));
+    }
+    masked.masks.push_back(std::move(combined));
+    masked.views.emplace_back(
+        input.type(),
+        input.size(),
+        input.head<void>(),
+        reinterpret_cast<const cudf::bitmask_type*>(masked.masks.back().data()),
+        nullCount,
+        0,
+        children);
+  }
+  return masked;
+}
+
+} // namespace
 
 ColumnOrView FunctionExpression::eval(
     std::vector<cudf::column_view> inputColumnViews,
@@ -3089,8 +3186,51 @@ ColumnOrView FunctionExpression::eval(
     std::vector<ColumnOrView> subexprResults;
     subexprResults.reserve(subexpressions_.size());
 
-    for (const auto& subexpr : subexpressions_) {
-      subexprResults.push_back(subexpr->eval(inputColumnViews, stream, mr));
+    // Borrowed by the masked views until after function_->eval.
+    std::vector<MaskedInputs> branchInputs;
+    std::vector<cuda::device_buffer<std::byte>> branchRowMasks;
+
+    // Operand 0 is the condition, 1 and 2 the branches. Not positionally
+    // aligned with subexpressions_, which omits constant branches.
+    const auto operandIndex = isConditionalFunction(expr_)
+        ? conditionalOperandIndex(expr_)
+        : std::vector<size_t>{};
+
+    const bool maskBranches = operandIndex.size() == subexpressions_.size() &&
+        !operandIndex.empty() && operandIndex.front() == 0;
+
+    if (maskBranches) {
+      // Branches are materialized over every row before copy_if_else selects,
+      // so a fail-fast kernel in one would abort the batch over rows the
+      // conditional discards. Hand each branch inputs whose null mask excludes
+      // the rows it does not supply; the kernels already skip null rows. Velox
+      // CPU narrows a SelectivityVector per branch instead.
+      auto condition = subexpressions_[0]->eval(inputColumnViews, stream, mr);
+      const auto conditionView = asView(condition);
+      subexprResults.push_back(std::move(condition));
+
+      branchInputs.reserve(subexpressions_.size() - 1);
+      branchRowMasks.reserve(subexpressions_.size() - 1);
+      for (size_t branch = 1; branch < subexpressions_.size(); ++branch) {
+        branchRowMasks.push_back(makeBranchRowMask(
+            conditionView,
+            /*takeWhenTrue=*/operandIndex[branch] == 1,
+            stream,
+            mr));
+        branchInputs.push_back(maskInputRows(
+            inputColumnViews,
+            reinterpret_cast<const cudf::bitmask_type*>(
+                branchRowMasks.back().data()),
+            stream,
+            mr));
+        subexprResults.push_back(
+            subexpressions_[branch]->eval(
+                branchInputs.back().views, stream, mr));
+      }
+    } else {
+      for (const auto& subexpr : subexpressions_) {
+        subexprResults.push_back(subexpr->eval(inputColumnViews, stream, mr));
+      }
     }
 
     auto result = function_->eval(subexprResults, stream, mr);
@@ -3137,9 +3277,9 @@ bool FunctionExpression::canEvaluate(const core::TypedExprPtr& expr) {
     if (srcType == nullptr || dstType == nullptr) {
       return false;
     }
-    auto src = cudf_velox::veloxToCudfDataType(srcType);
-    auto dst = cudf_velox::veloxToCudfDataType(dstType);
-    return cudf::is_supported_cast(src, dst);
+    auto src = cudf_velox::tryVeloxToCudfDataType(srcType);
+    auto dst = cudf_velox::tryVeloxToCudfDataType(dstType);
+    return src && dst && cudf::is_supported_cast(*src, *dst);
   }
 
   auto& registry = getCudfFunctionRegistry();
@@ -3263,11 +3403,12 @@ bool canExprRunOnGpu(
 std::shared_ptr<CudfExpression> createCudfExpression(
     const core::TypedExprPtr& expr,
     const RowTypePtr& inputRowSchema,
-    memory::MemoryPool* pool) {
+    memory::MemoryPool* pool,
+    const core::QueryConfig& config) {
   const auto* best = findBestEvaluator(expr);
   VELOX_CHECK_NOT_NULL(
       best, "No cuDF expression evaluator can handle: {}", expr->toString());
-  return best->create(expr, inputRowSchema, pool);
+  return best->create(expr, inputRowSchema, pool, config);
 }
 
 void unregisterFunctions() {

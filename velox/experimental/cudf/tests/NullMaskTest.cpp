@@ -28,6 +28,7 @@
 #include <cudf/utilities/memory_resource.hpp>
 
 #include <rmm/device_buffer.hpp>
+#include <rmm/mr/per_device_resource.hpp>
 
 #include <cuda_runtime_api.h>
 
@@ -59,13 +60,13 @@ cudf::size_type countNulls(const std::vector<bool>& valid) {
   return static_cast<cudf::size_type>(nullCount);
 }
 
-rmm::device_buffer makeNullMask(
+cuda::device_buffer<std::byte> makeNullMask(
     const std::vector<bool>& valid,
     cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   auto size = checkedSize(valid);
-  auto nullMask =
-      cudf::create_null_mask(size, cudf::mask_state::ALL_NULL, stream, mr);
+  auto nullMask = cudf::create_null_mask(
+      size, cudf::mask_state::ALL_NULL, stream, cudf::memory_resources{mr, mr});
   std::vector<cudf::bitmask_type> hostMask(cudf::num_bitmask_words(size), 0);
   for (cudf::size_type i = 0; i < size; ++i) {
     if (valid[i]) {

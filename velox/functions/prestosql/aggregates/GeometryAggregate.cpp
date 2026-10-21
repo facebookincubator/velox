@@ -192,6 +192,7 @@ void registerConvexHullAggregate(
             exec::SimpleAggregateAdapter<ConvexHullAggregate<Geometry>>>(
             step, argTypes, resultType);
       },
+      {.ignoreNullInputs = true},
       true /*registerCompanionFunctions*/,
       overwrite);
 }
@@ -332,6 +333,7 @@ void registerGeometryUnionAggregate(
             exec::SimpleAggregateAdapter<GeometryUnionAggregate<Geometry>>>(
             step, argTypes, resultType);
       },
+      {.ignoreNullInputs = true},
       true /*registerCompanionFunctions*/,
       overwrite);
 }

@@ -168,14 +168,15 @@ TEST_P(LocalPartitionTestParametrized, gather) {
            .singleAggregation({}, {"count(1)", "min(c0)", "max(c0)"})
            .planNode();
 
-  AssertQueryBuilder queryBuilder(op, duckDbQueryRunner_);
+  AssertQueryBuilder queryBuilder(op);
   applyTestParameters(queryBuilder);
   for (auto i = 0; i < filePaths.size(); ++i) {
     queryBuilder.split(
         scanNodeIds[i], makeHiveConnectorSplit(filePaths[i]->getPath()));
   }
 
-  task = queryBuilder.assertResults("SELECT 300, -71, 152");
+  task =
+      queryBuilder.assertResults({Variant(300LL), Variant(-71), Variant(152)});
 
   verifyExchangeSourceOperatorStats(
       task,
@@ -269,7 +270,7 @@ TEST_P(LocalPartitionTestParametrized, partition) {
 TEST_F(LocalPartitionTest, planNodeStats) {
   // A LocalPartition node is implemented by two operators sharing its plan node
   // id: the LocalPartition producer and the LocalExchange consumer.
-  auto data = makeRowVector({makeFlatVector<int32_t>(100, folly::identity)});
+  auto data = makeRowVector({makeFlatIdentityVector<int32_t>(100)});
 
   auto plan = PlanBuilder().values({data}).localPartition({"c0"}).planNode();
 
@@ -508,9 +509,10 @@ TEST_F(LocalPartitionTest, maxBufferSizeGather) {
                 .singleAggregation({}, {"count(1)", "min(c0)", "max(c0)"})
                 .planNode();
 
-  auto task = AssertQueryBuilder(op, duckDbQueryRunner_)
-                  .config(core::QueryConfig::kMaxLocalExchangeBufferSize, "100")
-                  .assertResults("SELECT 2100, -71, 228");
+  auto task =
+      AssertQueryBuilder(op)
+          .config(core::QueryConfig::kMaxLocalExchangeBufferSize, "100")
+          .assertResults({Variant(2'100LL), Variant(-71), Variant(228)});
 
   verifyExchangeSourceOperatorStats(task, 2100, 21, 1);
 }
@@ -630,8 +632,8 @@ TEST_F(LocalPartitionTest, blockingOnLocalExchangeQueue) {
       10240, [](auto row) { return row / 10; });
   // Make a small flat vector of one row and roughly 8 bytes that is
   // smaller than the localExchangeBufferSize.
-  auto smallInput = vectorMaker_.rowVector(
-      {"c0"}, {makeFlatVector<int64_t>(1, folly::identity)});
+  auto smallInput =
+      vectorMaker_.rowVector({"c0"}, {makeFlatIdentityVector<int64_t>(1)});
   // Make a small dictionary vector of one row with a base vector larger than
   // the localExchangeBufferSize.
   auto dictionaryInput = vectorMaker_.rowVector(

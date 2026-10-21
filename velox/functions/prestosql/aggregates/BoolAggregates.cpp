@@ -210,7 +210,9 @@ std::vector<exec::AggregateRegistrationResult> registerBool(
             inputType->kindName());
         return std::make_unique<T>();
       },
-      {.ignoreDuplicates = true, .orderSensitive = false},
+      {.ignoreDuplicates = true,
+       .orderSensitive = false,
+       .ignoreNullInputs = true},
       withCompanionFunctions,
       overwrite);
 }

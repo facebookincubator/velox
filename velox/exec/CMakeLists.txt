@@ -34,6 +34,7 @@ velox_add_library(
   ExchangeQueue.cpp
   ExchangeSink.cpp
   ExchangeSource.cpp
+  ExchangeTransportRegistry.cpp
   FileExchangeFormat.cpp
   FileExchangeSink.cpp
   FileExchangeSource.cpp
@@ -45,6 +46,8 @@ velox_add_library(
   FilterProject.cpp
   FixedPointLoop.cpp
   FixedPointOperators.cpp
+  FixedPointSplit.cpp
+  FixedPointVerdicts.cpp
   GroupId.cpp
   GroupingSet.cpp
   HashAggregation.cpp
@@ -143,9 +146,11 @@ velox_add_library(
   Exchange.h
   ExchangeClient.h
   InMemoryExchangeClient.h
+  ExchangeFactory.h
   ExchangeQueue.h
   ExchangeSink.h
   ExchangeSource.h
+  ExchangeTransportRegistry.h
   Expand.h
   FileExchangeFormat.h
   FileExchangeSink.h
@@ -153,6 +158,9 @@ velox_add_library(
   FilterProject.h
   FixedPointLoop.h
   FixedPointOperators.h
+  FixedPointSplit.h
+  FixedPointOptions.h
+  FixedPointVerdicts.h
   GroupId.h
   GroupingSet.h
   HashAggregation.h
@@ -276,7 +284,7 @@ endif()
 
 velox_add_library(velox_cursor Cursor.cpp HEADERS Cursor.h)
 
-velox_link_libraries(velox_cursor velox_core velox_exception velox_expression)
+velox_link_libraries(velox_cursor velox_core velox_exception velox_expression Folly::folly)
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(fuzzer)

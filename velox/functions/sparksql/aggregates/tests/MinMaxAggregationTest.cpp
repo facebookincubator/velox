@@ -450,7 +450,7 @@ TEST_F(MinMaxAggregationTest, partialCompanionAbandonPartialAggregation) {
         {"k", "v"},
         {makeFlatVector<int64_t>(
              kBatchSize, [&](auto row) { return batch * kBatchSize + row; }),
-         makeFlatVector<int64_t>(kBatchSize, folly::identity)}));
+         makeFlatIdentityVector<int64_t>(kBatchSize)}));
   }
   createDuckDbTable(data);
 

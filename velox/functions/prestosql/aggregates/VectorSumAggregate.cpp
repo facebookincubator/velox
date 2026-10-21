@@ -211,6 +211,7 @@ void registerVectorSumAggregate(
                 TypeKindName::toName(elementTypeKind));
         }
       },
+      {.ignoreNullInputs = true},
       withCompanionFunctions,
       overwrite);
 }

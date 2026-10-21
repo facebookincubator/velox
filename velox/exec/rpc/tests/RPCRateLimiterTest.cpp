@@ -35,14 +35,22 @@
 
 #include "velox/exec/rpc/RPCRateLimiter.h"
 
+#include <folly/futures/ManualTimekeeper.h>
 #include <gtest/gtest.h>
 
 #include <atomic>
+#include <chrono>
+#include <stdexcept>
+#include <system_error>
 #include <thread>
 #include <vector>
 
+#include "velox/common/testutil/TestValue.h"
+
 namespace facebook::velox::exec::rpc {
 namespace {
+
+using namespace std::chrono_literals;
 
 // RPCRateLimiter takes a whole Config per backend. These helpers amend one
 // field group at a time so each test states only the setting it cares about.
@@ -60,7 +68,7 @@ void setCeiling(const std::string& admissionKey, int64_t ceiling) {
 void setAdaptive(
     const std::string& admissionKey,
     bool enabled,
-    int64_t floor,
+    double floor,
     double decreaseFactor) {
   auto& limiter = limiterFor(admissionKey);
   auto config = limiter.config();
@@ -70,8 +78,94 @@ void setAdaptive(
   limiter.configure(config);
 }
 
+class ManualPacingClock {
+ public:
+  std::chrono::steady_clock::time_point now() const {
+    return now_;
+  }
+
+  folly::Timekeeper* timekeeper() {
+    return &timekeeper_;
+  }
+
+  template <typename Rep, typename Period>
+  void advance(std::chrono::duration<Rep, Period> duration) {
+    now_ += std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+        duration);
+    timekeeper_.advance(duration);
+  }
+
+ private:
+  std::chrono::steady_clock::time_point now_{};
+  folly::ManualTimekeeper timekeeper_;
+};
+
+class ThrowingTimekeeper final : public folly::Timekeeper {
+ public:
+  [[noreturn]] folly::SemiFuture<folly::Unit> after(
+      folly::HighResDuration /* duration */) override {
+    throw std::runtime_error("timer scheduling failed");
+  }
+};
+
+class FailOncePacingClock final : public folly::Timekeeper {
+ public:
+  std::chrono::steady_clock::time_point now() const {
+    return now_;
+  }
+
+  folly::SemiFuture<folly::Unit> after(
+      folly::HighResDuration duration) override {
+    if (!firstTimerScheduled_) {
+      firstTimerScheduled_ = true;
+      return firstTimer_.getSemiFuture();
+    }
+    return timekeeper_.after(duration);
+  }
+
+  void failFirstTimer() {
+    firstTimer_.setException(std::runtime_error("timer failed"));
+  }
+
+  template <typename Rep, typename Period>
+  void advance(std::chrono::duration<Rep, Period> duration) {
+    now_ += std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+        duration);
+    timekeeper_.advance(duration);
+  }
+
+ private:
+  std::chrono::steady_clock::time_point now_{};
+  folly::ManualTimekeeper timekeeper_;
+  folly::Promise<folly::Unit> firstTimer_;
+  bool firstTimerScheduled_{false};
+};
+
+std::shared_ptr<RPCRateLimiter> makePacingLimiter(
+    std::string admissionKey,
+    ManualPacingClock& clock) {
+  return std::make_shared<RPCRateLimiter>(
+      std::move(admissionKey),
+      [&clock] { return clock.now(); },
+      clock.timekeeper());
+}
+
+void enableFractionalLimit(RPCRateLimiter& limiter, double minimumLimit) {
+  limiter.configure(
+      RPCRateLimiter::Config{
+          .adaptive = true,
+          .ceiling = 2,
+          .floor = minimumLimit,
+          .decreaseFactor = 0.5,
+      });
+}
+
 class RPCRateLimiterTest : public testing::Test {
  protected:
+  static void SetUpTestSuite() {
+    common::testutil::TestValue::enable();
+  }
+
   void SetUp() override {
     RPCRateLimiterRegistry::global().testingReset();
   }
@@ -93,6 +187,24 @@ TEST_F(RPCRateLimiterTest, acquireAndRelease) {
   EXPECT_EQ(limiterFor(backend).stats().pending, 0);
 }
 
+TEST_F(RPCRateLimiterTest, tokenReleaseSurvivesSynchronizationFailure) {
+  auto& limiter = limiterFor("test.backend");
+
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::rpc::RPCRateLimiter::release",
+      std::function<void(RPCRateLimiter*)>([](RPCRateLimiter* limiter) {
+        if (limiter != nullptr) {
+          throw std::system_error(std::make_error_code(std::errc::owner_dead));
+        }
+      }));
+
+  {
+    auto token = limiter.acquire();
+    EXPECT_EQ(limiter.stats().pending, 1);
+  }
+  EXPECT_EQ(limiter.stats().pending, 0);
+}
+
 TEST_F(RPCRateLimiterTest, multipleAcquires) {
   const std::string backend = "test.backend";
 
@@ -100,6 +212,89 @@ TEST_F(RPCRateLimiterTest, multipleAcquires) {
   auto token2 = limiterFor(backend).acquire();
   auto token3 = limiterFor(backend).acquire();
   EXPECT_EQ(limiterFor(backend).stats().pending, 3);
+}
+
+TEST_F(RPCRateLimiterTest, admissionLeaseCompletesExactlyOnce) {
+  auto limiter = std::make_shared<RPCRateLimiter>("test.lease");
+  limiter->configure(
+      RPCRateLimiter::Config{
+          .adaptive = true,
+          .ceiling = 4,
+          .floor = 1,
+          .decreaseFactor = 0.5,
+      });
+  auto tokens = limiter->tryAcquireUpTo(1);
+  ASSERT_EQ(tokens.size(), 1);
+  auto lease = limiter->makeLease(std::move(tokens));
+
+  EXPECT_TRUE(lease->completeAndRelease(true).sharedOverloadHandled);
+  EXPECT_EQ(limiter->stats().capacity, 2);
+  EXPECT_EQ(limiter->stats().pending, 0);
+  EXPECT_FALSE(lease->completeAndRelease(true).sharedOverloadHandled);
+  lease->release();
+  EXPECT_EQ(limiter->stats().capacity, 2);
+  EXPECT_EQ(limiter->stats().pending, 0);
+}
+
+TEST_F(
+    RPCRateLimiterTest,
+    canonicalOverloadCoalescesWithinEpochAndShrinksNextEpoch) {
+  auto limiter = std::make_shared<RPCRateLimiter>("test.overload-epochs");
+  limiter->configure(
+      RPCRateLimiter::Config{
+          .adaptive = true,
+          .ceiling = 1'000'000,
+          .floor = 0.01,
+          .decreaseFactor = 0.5,
+      });
+
+  auto tokens = limiter->tryAcquireUpTo(2);
+  ASSERT_EQ(tokens.size(), 2);
+  auto firstLease = limiter->makeLease(std::move(tokens.at(0)));
+  auto secondLease = limiter->makeLease(std::move(tokens.at(1)));
+
+  const auto firstCompletion = firstLease->completeAndRelease(true);
+  EXPECT_TRUE(firstCompletion.sharedOverloadHandled);
+  EXPECT_EQ(limiter->stats().limitMilli, 100'000);
+
+  const auto secondCompletion = secondLease->completeAndRelease(true);
+  EXPECT_TRUE(secondCompletion.sharedOverloadHandled);
+  EXPECT_EQ(secondCompletion.overloadEpoch, firstCompletion.overloadEpoch);
+  EXPECT_EQ(limiter->stats().limitMilli, 100'000);
+
+  auto nextTokens = limiter->tryAcquireUpTo(1);
+  ASSERT_EQ(nextTokens.size(), 1);
+  auto nextLease = limiter->makeLease(std::move(nextTokens.at(0)));
+  const auto nextCompletion = nextLease->completeAndRelease(true);
+  EXPECT_TRUE(nextCompletion.sharedOverloadHandled);
+  EXPECT_NE(nextCompletion.overloadEpoch, firstCompletion.overloadEpoch);
+  EXPECT_EQ(limiter->stats().limitMilli, 50'000);
+  EXPECT_EQ(limiter->stats().lowWaterLimitMilli, 50'000);
+}
+
+TEST_F(RPCRateLimiterTest, configAmendDoesNotSuppressCanonicalOverload) {
+  auto limiter = std::make_shared<RPCRateLimiter>("test.amended-overload");
+  limiter->configure(
+      RPCRateLimiter::Config{
+          .adaptive = true,
+          .ceiling = 8,
+          .floor = 1,
+          .decreaseFactor = 0.5,
+      });
+
+  auto tokens = limiter->tryAcquireUpTo(2);
+  ASSERT_EQ(tokens.size(), 2);
+  auto firstLease = limiter->makeLease(std::move(tokens.at(0)));
+  auto secondLease = limiter->makeLease(std::move(tokens.at(1)));
+
+  limiter->amend([](RPCRateLimiter::Config& config) { config.ceiling = 16; });
+  EXPECT_EQ(limiter->stats().limitMilli, 16'000);
+
+  EXPECT_TRUE(firstLease->completeAndRelease(true).sharedOverloadHandled);
+  EXPECT_EQ(limiter->stats().limitMilli, 8'000);
+
+  EXPECT_TRUE(secondLease->completeAndRelease(true).sharedOverloadHandled);
+  EXPECT_EQ(limiter->stats().limitMilli, 8'000);
 }
 
 // admitOrWait() answers "can you take work now, and if not, what do I wait on?"
@@ -121,10 +316,10 @@ TEST_F(RPCRateLimiterTest, concurrentInitializersDoNotMixConfigurations) {
   // so a mixture is detectable.
   struct Policy {
     int64_t ceiling;
-    int64_t floor;
+    double floor;
   };
   auto policyFor = [](int i) -> Policy {
-    return {static_cast<int64_t>(100 * (i + 1)), static_cast<int64_t>(i + 1)};
+    return {static_cast<int64_t>(100 * (i + 1)), static_cast<double>(i + 1)};
   };
 
   std::atomic<bool> go{false};
@@ -209,7 +404,7 @@ TEST_F(RPCRateLimiterTest, backpressureReliefOnRelease) {
   EXPECT_EQ(limiterFor(backend).stats().pending, 0);
 }
 
-TEST_F(RPCRateLimiterTest, fifoWaiterNotification) {
+TEST_F(RPCRateLimiterTest, integerWaitersRetryAdmissionOnRelease) {
   const std::string backend = "test.backend";
   setCeiling(backend, 1);
 
@@ -221,16 +416,31 @@ TEST_F(RPCRateLimiterTest, fifoWaiterNotification) {
   ASSERT_FALSE(admission1.wait.isReady());
   ASSERT_FALSE(admission2.wait.isReady());
 
-  // Release token — only first waiter should be notified (FIFO).
+  // Notifications carry no reservation. Wake every waiter so one abandoned
+  // future cannot consume the only notification and strand live work.
   token = RPCRateLimiter::Token();
   EXPECT_TRUE(admission1.wait.isReady());
-  EXPECT_FALSE(admission2.wait.isReady());
-
-  // Acquire and release again — second waiter should be notified.
-  {
-    auto token2 = limiterFor(backend).acquire();
-  }
   EXPECT_TRUE(admission2.wait.isReady());
+
+  auto firstGrant = limiterFor(backend).tryAcquireUpTo(1);
+  auto secondGrant = limiterFor(backend).tryAcquireUpTo(1);
+  EXPECT_EQ(firstGrant.size() + secondGrant.size(), 1);
+}
+
+TEST_F(RPCRateLimiterTest, abandonedIntegerWaiterDoesNotStrandLiveWaiter) {
+  const std::string backend = "test.backend";
+  setCeiling(backend, 1);
+  auto token = limiterFor(backend).acquire();
+
+  {
+    auto abandoned = limiterFor(backend).admitOrWait();
+    ASSERT_FALSE(abandoned.admitted);
+  }
+  auto live = limiterFor(backend).admitOrWait();
+  ASSERT_FALSE(live.admitted);
+
+  token = RPCRateLimiter::Token();
+  EXPECT_TRUE(live.wait.isReady());
 }
 
 TEST_F(RPCRateLimiterTest, perBackendIsolation) {
@@ -504,6 +714,32 @@ TEST_F(RPCRateLimiterTest, adaptiveMultiplicativeDecrease) {
   EXPECT_EQ(limiterFor(backend).stats().capacity, 4);
 }
 
+TEST_F(RPCRateLimiterTest, adaptiveStartsBelowLargeHardLimit) {
+  auto limiter = std::make_shared<RPCRateLimiter>("test.large-hard-limit");
+  limiter->configure(
+      RPCRateLimiter::Config{
+          .adaptive = true,
+          .ceiling = 1'000'000,
+          .floor = 0.01,
+          .decreaseFactor = 0.5,
+      });
+
+  const auto initial = limiter->stats();
+  EXPECT_EQ(initial.capacity, 200);
+  EXPECT_EQ(initial.lowWaterCapacity, 200);
+  EXPECT_EQ(initial.limitMilli, 200'000);
+  EXPECT_EQ(initial.lowWaterLimitMilli, 200'000);
+  EXPECT_EQ(initial.hardLimit, 1'000'000);
+
+  auto granted = limiter->tryAcquireUpTo(1'000'000);
+  EXPECT_EQ(granted.size(), 200);
+  granted.clear();
+
+  limiter->onOutcome(RPCRateLimiter::Outcome::kSuccess, 400);
+  EXPECT_EQ(limiter->stats().capacity, 201);
+  EXPECT_EQ(limiter->stats().limitMilli, 201'990);
+}
+
 TEST_F(RPCRateLimiterTest, adaptiveFlooredAtMinLimit) {
   const std::string backend = "test.backend";
   setCeiling(backend, 16);
@@ -516,7 +752,447 @@ TEST_F(RPCRateLimiterTest, adaptiveFlooredAtMinLimit) {
   EXPECT_EQ(limiterFor(backend).stats().capacity, 4);
 }
 
-TEST_F(RPCRateLimiterTest, adaptiveRecoveryScalesWithSuccesses) {
+TEST_F(RPCRateLimiterTest, fractionalLimitUsesLearnedServiceHorizon) {
+  ManualPacingClock clock;
+  auto limiter = makePacingLimiter("test.fractional.backend", clock);
+  limiter->configure(
+      RPCRateLimiter::Config{
+          .adaptive = true,
+          .ceiling = 2,
+          .floor = 0.25,
+          .decreaseFactor = 0.5,
+      });
+
+  limiter->onOutcome(
+      RPCRateLimiter::Outcome::kSuccess,
+      1,
+      std::chrono::duration_cast<std::chrono::nanoseconds>(100ms).count());
+  limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0, 0);
+  limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0, 0);
+  limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0, 0);
+  EXPECT_EQ(limiter->stats().limitMilli, 250);
+  EXPECT_EQ(limiter->stats().serviceHorizonNanos, 100'000'000);
+
+  auto wait = limiter->admitOrWait();
+  ASSERT_FALSE(wait.admitted);
+  clock.advance(399ms);
+  EXPECT_FALSE(wait.wait.isReady());
+  clock.advance(1ms);
+  EXPECT_TRUE(wait.wait.isReady());
+}
+
+TEST_F(RPCRateLimiterTest, staleSuccessUpdatesHorizonWithoutGrowingWindow) {
+  ManualPacingClock clock;
+  auto limiter = makePacingLimiter("test.stale-horizon", clock);
+  enableFractionalLimit(*limiter, 0.25);
+
+  auto granted = limiter->tryAcquireUpTo(1);
+  ASSERT_EQ(granted.size(), 1);
+  const auto staleEpoch = granted.front().overloadEpoch();
+  granted.clear();
+  limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  ASSERT_EQ(limiter->stats().limitMilli, 500);
+
+  auto wait = limiter->admitOrWait();
+  ASSERT_FALSE(wait.admitted);
+  limiter->onSuccessForEpoch(
+      staleEpoch,
+      1,
+      std::chrono::duration_cast<std::chrono::nanoseconds>(100ms).count());
+
+  EXPECT_EQ(limiter->stats().limitMilli, 500);
+  EXPECT_EQ(limiter->stats().serviceHorizonNanos, 100'000'000);
+  clock.advance(199ms);
+  EXPECT_FALSE(wait.wait.isReady());
+  clock.advance(1ms);
+  EXPECT_TRUE(wait.wait.isReady());
+}
+
+TEST_F(RPCRateLimiterTest, timerSchedulingFailureFailsEveryWaiter) {
+  ThrowingTimekeeper timekeeper;
+  auto limiter = std::make_shared<RPCRateLimiter>(
+      "test.throwing-timekeeper",
+      [] { return std::chrono::steady_clock::time_point{}; },
+      &timekeeper);
+  enableFractionalLimit(*limiter, 0.25);
+  limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+
+  auto first = limiter->admitOrWait();
+  auto second = limiter->admitOrWait();
+  ASSERT_FALSE(first.admitted);
+  ASSERT_FALSE(second.admitted);
+  ASSERT_TRUE(first.wait.isReady());
+  ASSERT_TRUE(second.wait.isReady());
+  EXPECT_THROW(std::move(first.wait).get(), std::runtime_error);
+  EXPECT_THROW(std::move(second.wait).get(), std::runtime_error);
+}
+
+TEST_F(RPCRateLimiterTest, timerFailureAllowsLaterWaiterToRearm) {
+  FailOncePacingClock clock;
+  auto limiter = std::make_shared<RPCRateLimiter>(
+      "test.recovering-timekeeper", [&clock] { return clock.now(); }, &clock);
+  enableFractionalLimit(*limiter, 0.25);
+  limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+
+  auto first = limiter->admitOrWait();
+  auto second = limiter->admitOrWait();
+  ASSERT_FALSE(first.admitted);
+  ASSERT_FALSE(second.admitted);
+  EXPECT_FALSE(first.wait.isReady());
+  EXPECT_FALSE(second.wait.isReady());
+
+  clock.failFirstTimer();
+  ASSERT_TRUE(first.wait.isReady());
+  ASSERT_TRUE(second.wait.isReady());
+  EXPECT_THROW(std::move(first.wait).get(), std::runtime_error);
+  EXPECT_THROW(std::move(second.wait).get(), std::runtime_error);
+
+  auto retry = limiter->admitOrWait();
+  ASSERT_FALSE(retry.admitted);
+  clock.advance(1'999ms);
+  EXPECT_FALSE(retry.wait.isReady());
+  clock.advance(1ms);
+  EXPECT_TRUE(retry.wait.isReady());
+  EXPECT_EQ(limiter->tryAcquireUpTo(1).size(), 1);
+}
+
+TEST_F(RPCRateLimiterTest, pacedAdmissionEnforcesDeadlineAndSingleFlight) {
+  ManualPacingClock clock;
+  auto limiter = makePacingLimiter("test.paced.backend", clock);
+  enableFractionalLimit(*limiter, 0.25);
+
+  limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  EXPECT_EQ(limiter->stats().capacity, 1);
+  EXPECT_EQ(limiter->stats().limitMilli, 1'000);
+
+  limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  EXPECT_EQ(limiter->stats().limitMilli, 500);
+  EXPECT_EQ(limiter->available(), 0);
+
+  auto timerWait = limiter->admitOrWait();
+  ASSERT_FALSE(timerWait.admitted);
+  EXPECT_FALSE(timerWait.wait.isReady());
+  clock.advance(1'999ms);
+  EXPECT_FALSE(timerWait.wait.isReady());
+  clock.advance(1ms);
+  EXPECT_TRUE(timerWait.wait.isReady());
+
+  auto firstGrant = limiter->tryAcquireUpTo(10);
+  ASSERT_EQ(firstGrant.size(), 1);
+  EXPECT_EQ(limiter->stats().pending, 1);
+  EXPECT_EQ(limiter->available(), 0);
+
+  clock.advance(2s);
+  auto concurrencyWait = limiter->admitOrWait();
+  ASSERT_FALSE(concurrencyWait.admitted);
+  EXPECT_FALSE(concurrencyWait.wait.isReady());
+
+  firstGrant.clear();
+  EXPECT_TRUE(concurrencyWait.wait.isReady());
+  EXPECT_TRUE(limiter->admitOrWait().admitted);
+  auto secondGrant = limiter->tryAcquireUpTo(10);
+  EXPECT_EQ(secondGrant.size(), 1);
+}
+
+TEST_F(RPCRateLimiterTest, simultaneousPacingWakeupsGrantOneUnit) {
+  ManualPacingClock clock;
+  auto limiter = makePacingLimiter("test.paced.backend", clock);
+  enableFractionalLimit(*limiter, 0.25);
+  limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+
+  auto firstWait = limiter->admitOrWait();
+  auto secondWait = limiter->admitOrWait();
+  ASSERT_FALSE(firstWait.admitted);
+  ASSERT_FALSE(secondWait.admitted);
+
+  clock.advance(2s);
+  EXPECT_TRUE(firstWait.wait.isReady());
+  EXPECT_TRUE(secondWait.wait.isReady());
+
+  auto firstGrant = limiter->tryAcquireUpTo(1);
+  auto secondGrant = limiter->tryAcquireUpTo(1);
+  EXPECT_EQ(firstGrant.size(), 1);
+  EXPECT_TRUE(secondGrant.empty());
+  EXPECT_EQ(limiter->stats().peakPending, 1);
+}
+
+TEST_F(RPCRateLimiterTest, losingPacedWaiterRearmsOnWinnerRelease) {
+  ManualPacingClock clock;
+  auto limiter = makePacingLimiter("test.paced.requeue", clock);
+  enableFractionalLimit(*limiter, 0.25);
+  limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+
+  auto firstWait = limiter->admitOrWait();
+  auto secondWait = limiter->admitOrWait();
+  ASSERT_FALSE(firstWait.admitted);
+  ASSERT_FALSE(secondWait.admitted);
+
+  clock.advance(2s);
+  ASSERT_TRUE(firstWait.wait.isReady());
+  ASSERT_TRUE(secondWait.wait.isReady());
+
+  auto winner = limiter->tryAcquireUpTo(1);
+  ASSERT_EQ(winner.size(), 1);
+  EXPECT_TRUE(limiter->tryAcquireUpTo(1).empty());
+
+  auto loser = limiter->admitOrWait();
+  ASSERT_FALSE(loser.admitted);
+  EXPECT_FALSE(loser.wait.isReady());
+  winner.clear();
+  clock.advance(1'999ms);
+  EXPECT_FALSE(loser.wait.isReady());
+  clock.advance(1ms);
+  EXPECT_TRUE(loser.wait.isReady());
+  EXPECT_EQ(limiter->tryAcquireUpTo(1).size(), 1);
+}
+
+TEST_F(RPCRateLimiterTest, fractionalLimitBacksOffAndRecoversToOne) {
+  ManualPacingClock clock;
+  auto limiter = makePacingLimiter("test.paced.backend", clock);
+  enableFractionalLimit(*limiter, 0.25);
+
+  limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  EXPECT_EQ(limiter->stats().limitMilli, 1'000);
+  limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  EXPECT_EQ(limiter->stats().limitMilli, 500);
+  limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  EXPECT_EQ(limiter->stats().limitMilli, 250);
+  EXPECT_EQ(limiter->stats().lowWaterLimitMilli, 250);
+
+  limiter->onOutcome(RPCRateLimiter::Outcome::kSuccess, 1);
+  EXPECT_EQ(limiter->stats().limitMilli, 500);
+  limiter->onOutcome(RPCRateLimiter::Outcome::kSuccess, 1);
+  EXPECT_EQ(limiter->stats().limitMilli, 1'000);
+  EXPECT_EQ(limiter->stats().capacity, 1);
+  EXPECT_EQ(limiter->stats().lowWaterLimitMilli, 250);
+}
+
+TEST_F(RPCRateLimiterTest, fractionalLimitRecoversWithCeilingOne) {
+  ManualPacingClock clock;
+  auto limiter = makePacingLimiter("test.paced.ceiling-one", clock);
+  limiter->configure(
+      RPCRateLimiter::Config{
+          .adaptive = true,
+          .ceiling = 1,
+          .floor = 0.25,
+          .decreaseFactor = 0.5,
+      });
+
+  limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  EXPECT_EQ(limiter->stats().limitMilli, 500);
+  limiter->onOutcome(RPCRateLimiter::Outcome::kSuccess, 1);
+  EXPECT_EQ(limiter->stats().limitMilli, 1'000);
+  EXPECT_EQ(limiter->stats().capacity, 1);
+}
+
+TEST_F(RPCRateLimiterTest, pacingDisabledStopsAtIntegerFloor) {
+  ManualPacingClock clock;
+  auto limiter = makePacingLimiter("test.unpaced.backend", clock);
+  limiter->configure(
+      RPCRateLimiter::Config{
+          .adaptive = true,
+          .ceiling = 2,
+          .floor = 1,
+          .decreaseFactor = 0.5,
+      });
+
+  limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  EXPECT_EQ(limiter->stats().capacity, 1);
+  EXPECT_EQ(limiter->stats().limitMilli, 1'000);
+  EXPECT_TRUE(limiter->admitOrWait().admitted);
+}
+
+TEST_F(RPCRateLimiterTest, disablingAdaptiveModeExitsPacing) {
+  ManualPacingClock clock;
+  auto limiter = makePacingLimiter("test.paced.backend", clock);
+  enableFractionalLimit(*limiter, 0.25);
+  limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  ASSERT_EQ(limiter->stats().limitMilli, 500);
+
+  auto config = limiter->config();
+  config.adaptive = false;
+  limiter->configure(config);
+
+  EXPECT_EQ(limiter->stats().limitMilli, 2'000);
+  EXPECT_EQ(limiter->stats().capacity, 2);
+  EXPECT_TRUE(limiter->admitOrWait().admitted);
+}
+
+TEST_F(RPCRateLimiterTest, reenablingAdaptivePreservesLifetimeLowWater) {
+  ManualPacingClock clock;
+  auto limiter = makePacingLimiter("test.paced.toggle", clock);
+  enableFractionalLimit(*limiter, 0.25);
+  limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  ASSERT_EQ(limiter->stats().lowWaterLimitMilli, 500);
+
+  auto config = limiter->config();
+  config.adaptive = false;
+  limiter->configure(config);
+  config.adaptive = true;
+  limiter->configure(config);
+
+  EXPECT_EQ(limiter->stats().limitMilli, 2'000);
+  EXPECT_EQ(limiter->stats().lowWaterLimitMilli, 500);
+}
+
+TEST_F(RPCRateLimiterTest, canceledPacedWaiterDoesNotStrandNextWaiter) {
+  ManualPacingClock clock;
+  auto limiter = makePacingLimiter("test.paced.backend", clock);
+  enableFractionalLimit(*limiter, 0.25);
+  limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  clock.advance(2s);
+  auto tokens = limiter->tryAcquireUpTo(1);
+  ASSERT_EQ(tokens.size(), 1);
+
+  {
+    auto abandoned = limiter->admitOrWait();
+    ASSERT_FALSE(abandoned.admitted);
+  }
+  auto live = limiter->admitOrWait();
+  ASSERT_FALSE(live.admitted);
+
+  clock.advance(2s);
+  tokens.clear();
+  EXPECT_TRUE(live.wait.isReady());
+}
+
+TEST_F(RPCRateLimiterTest, pacedAdmissionRemainsSingleFlightAfterCeilingGrows) {
+  ManualPacingClock clock;
+  auto limiter = makePacingLimiter("test.paced.ceiling-growth", clock);
+  limiter->configure(
+      RPCRateLimiter::Config{
+          .adaptive = true,
+          .ceiling = 1,
+          .floor = 0.25,
+          .decreaseFactor = 0.5,
+      });
+  limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  clock.advance(2s);
+  auto tokens = limiter->tryAcquireUpTo(1);
+  ASSERT_EQ(tokens.size(), 1);
+
+  auto config = limiter->config();
+  config.ceiling = 4;
+  limiter->configure(config);
+  clock.advance(2s);
+
+  auto blocked = limiter->admitOrWait();
+  EXPECT_FALSE(blocked.admitted);
+  EXPECT_FALSE(blocked.wait.isReady());
+  EXPECT_TRUE(limiter->tryAcquireUpTo(1).empty());
+  tokens.clear();
+  EXPECT_TRUE(blocked.wait.isReady());
+}
+
+TEST_F(RPCRateLimiterTest, fractionalLimitIncreaseReschedulesEarlierWake) {
+  ManualPacingClock clock;
+  auto limiter = makePacingLimiter("test.paced.backend", clock);
+  enableFractionalLimit(*limiter, 0.1);
+  limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  auto wait = limiter->admitOrWait();
+  ASSERT_FALSE(wait.admitted);
+
+  limiter->onOutcome(RPCRateLimiter::Outcome::kSuccess, 1);
+  ASSERT_EQ(limiter->stats().limitMilli, 500);
+  clock.advance(2s);
+  EXPECT_TRUE(wait.wait.isReady());
+}
+
+TEST_F(RPCRateLimiterTest, pacingUsesAdmissionStartForNextDeadline) {
+  ManualPacingClock clock;
+  auto limiter = makePacingLimiter("test.paced.backend", clock);
+  enableFractionalLimit(*limiter, 0.25);
+
+  auto tokens = limiter->tryAcquireUpTo(1);
+  ASSERT_EQ(tokens.size(), 1);
+  clock.advance(10s);
+  limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  tokens.clear();
+
+  EXPECT_TRUE(limiter->admitOrWait().admitted);
+}
+
+TEST_F(RPCRateLimiterTest, pacingSupportsOneRequestPerHundredSeconds) {
+  ManualPacingClock clock;
+  auto limiter = makePacingLimiter("test.paced.backend", clock);
+  enableFractionalLimit(*limiter, 0.01);
+
+  limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  for (int i = 0; i < 7; ++i) {
+    limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  }
+  ASSERT_EQ(limiter->stats().limitMilli, 10);
+
+  auto wait = limiter->admitOrWait();
+  ASSERT_FALSE(wait.admitted);
+  clock.advance(99'999ms);
+  EXPECT_FALSE(wait.wait.isReady());
+  clock.advance(1ms);
+  EXPECT_TRUE(wait.wait.isReady());
+}
+
+TEST_F(RPCRateLimiterTest, fractionalLimitDecreaseInvalidatesEarlierWake) {
+  ManualPacingClock clock;
+  auto limiter = makePacingLimiter("test.paced.backend", clock);
+  enableFractionalLimit(*limiter, 0.25);
+  limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  auto wait = limiter->admitOrWait();
+  ASSERT_FALSE(wait.admitted);
+
+  limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  ASSERT_EQ(limiter->stats().limitMilli, 250);
+  clock.advance(2s);
+  EXPECT_FALSE(wait.wait.isReady());
+  clock.advance(2s);
+  EXPECT_TRUE(wait.wait.isReady());
+}
+
+TEST_F(RPCRateLimiterTest, leavingPacingWakesWaitersImmediately) {
+  ManualPacingClock clock;
+  auto limiter = makePacingLimiter("test.paced.backend", clock);
+  enableFractionalLimit(*limiter, 0.25);
+  limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  auto wait = limiter->admitOrWait();
+  ASSERT_FALSE(wait.admitted);
+
+  limiter->onOutcome(RPCRateLimiter::Outcome::kSuccess, 1);
+
+  EXPECT_EQ(limiter->stats().limitMilli, 1'000);
+  EXPECT_TRUE(wait.wait.isReady());
+}
+
+TEST_F(RPCRateLimiterTest, outstandingTimerDoesNotExtendLimiterLifetime) {
+  ManualPacingClock clock;
+  auto limiter = makePacingLimiter("test.paced.backend", clock);
+  enableFractionalLimit(*limiter, 0.25);
+  limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  auto wait = limiter->admitOrWait();
+  ASSERT_FALSE(wait.admitted);
+  std::weak_ptr<RPCRateLimiter> weakLimiter = limiter;
+
+  limiter.reset();
+  EXPECT_TRUE(weakLimiter.expired());
+  clock.advance(2s);
+}
+
+TEST_F(
+    RPCRateLimiterTest,
+    adaptiveRecoveryIsAdditiveAboveOneAndClampsAtHardLimit) {
   const std::string backend = "test.backend";
   setCeiling(backend, 16);
   setAdaptive(backend, true, 1, 0.5);
@@ -525,14 +1201,65 @@ TEST_F(RPCRateLimiterTest, adaptiveRecoveryScalesWithSuccesses) {
       RPCRateLimiter::Outcome::kOverload, 0); // 16 -> 8
   ASSERT_EQ(limiterFor(backend).stats().capacity, 8);
 
-  // A tiny drain recovers by the +1 floor (step = max(1, 1/8)).
+  // One successful unit contributes one unit of squared-window credit.
   limiterFor(backend).onOutcome(RPCRateLimiter::Outcome::kSuccess, 1);
-  EXPECT_EQ(limiterFor(backend).stats().capacity, 9);
+  EXPECT_EQ(limiterFor(backend).stats().capacity, 8);
+  EXPECT_EQ(limiterFor(backend).stats().limitMilli, 8'124);
 
-  // A large drain recovers proportionally (step = successes/cap) and, on
-  // reaching the ceiling, clears the adaptive state so the static cap governs.
+  // A large drain reaches the ceiling and clears the adaptive state so the
+  // static cap governs.
   limiterFor(backend).onOutcome(RPCRateLimiter::Outcome::kSuccess, 1'000);
   EXPECT_EQ(limiterFor(backend).stats().capacity, 16);
+  EXPECT_EQ(limiterFor(backend).stats().limitMilli, 16'000);
+
+  limiterFor(backend).onOutcome(RPCRateLimiter::Outcome::kSuccess, 1'000);
+  EXPECT_EQ(limiterFor(backend).stats().capacity, 16);
+  EXPECT_EQ(limiterFor(backend).stats().limitMilli, 16'000);
+}
+
+TEST_F(RPCRateLimiterTest, adaptiveRecoveryIsInvariantToCompletionGrouping) {
+  const RPCRateLimiter::Config config{
+      .adaptive = true,
+      .ceiling = 1'000,
+      .floor = 1,
+      .decreaseFactor = 0.5,
+  };
+  auto grouped = std::make_shared<RPCRateLimiter>("grouped-successes");
+  auto individual = std::make_shared<RPCRateLimiter>("individual-successes");
+  grouped->configure(config);
+  individual->configure(config);
+  grouped->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  individual->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+
+  constexpr int64_t kSuccessfulUnits = 400;
+  grouped->onOutcome(RPCRateLimiter::Outcome::kSuccess, kSuccessfulUnits);
+  for (int64_t i = 0; i < kSuccessfulUnits; ++i) {
+    individual->onOutcome(RPCRateLimiter::Outcome::kSuccess, 1);
+  }
+
+  EXPECT_NEAR(grouped->stats().limitMilli, individual->stats().limitMilli, 1);
+  EXPECT_EQ(grouped->stats().capacity, individual->stats().capacity);
+}
+
+TEST_F(RPCRateLimiterTest, fractionalRecoveryIsInvariantToCompletionGrouping) {
+  ManualPacingClock groupedClock;
+  ManualPacingClock individualClock;
+  auto grouped = makePacingLimiter("grouped-fractional", groupedClock);
+  auto individual = makePacingLimiter("individual-fractional", individualClock);
+  enableFractionalLimit(*grouped, 0.25);
+  enableFractionalLimit(*individual, 0.25);
+  for (int i = 0; i < 3; ++i) {
+    grouped->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+    individual->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  }
+
+  grouped->onOutcome(RPCRateLimiter::Outcome::kSuccess, 3);
+  for (int i = 0; i < 3; ++i) {
+    individual->onOutcome(RPCRateLimiter::Outcome::kSuccess, 1);
+  }
+
+  EXPECT_NEAR(grouped->stats().limitMilli, individual->stats().limitMilli, 1);
+  EXPECT_EQ(grouped->stats().capacity, individual->stats().capacity);
 }
 
 TEST_F(RPCRateLimiterTest, adaptiveShrinkReducesAdmission) {

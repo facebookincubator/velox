@@ -42,6 +42,13 @@ class SparseBoolEncodingView final : public TypedEncodingView<bool> {
         indices_->readAt(indices_->rowCount() - 1), this->rowCount_);
   }
 
+  /// Counts by a binary search of the sparse indices, without reading rows.
+  uint32_t count(uint32_t end, bool value) const final {
+    this->checkReadRange(end, 0);
+    const auto numSparseRows = lowerBoundSparseIndex(end);
+    return value == sparseValue_ ? numSparseRows : end - numSparseRows;
+  }
+
  private:
   inline uint32_t lowerBoundSparseIndex(uint32_t index) const {
     uint32_t begin{0};

@@ -497,8 +497,10 @@ std::string_view NullableEncoding<T>::encodeNullable(
 
   auto* pool = &buffer.getMemoryPool();
   ScopedEncodingBuffer scopedBuffer{pool, options.encodingBufferPool};
-  std::string_view serializedValues =
-      selection.template encodeNested<physicalType>(
+  // Preserve physical layouts unless the policy opts in to floating-point
+  // selection. Explicit ALP/ALPRD layouts also retain their logical type.
+  const auto serializedValues =
+      selection.template encodeNested<physicalType, T>(
           EncodingIdentifiers::Nullable::Data,
           values,
           scopedBuffer.get(),

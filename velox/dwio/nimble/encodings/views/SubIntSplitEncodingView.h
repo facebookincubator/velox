@@ -74,7 +74,8 @@ class SubIntSplitEncodingView final : public TypedEncodingView<T> {
     sections_.reserve(numSections);
     for (const auto& serialized : serializedSections) {
       NIMBLE_CHECK_LE(
-          serialized.encodedSize, static_cast<size_t>(data.end() - position));
+          serialized.encodedSize,
+          static_cast<size_t>(data.data() + data.size() - position));
       auto view = createEncodingView(
           {position, serialized.encodedSize}, this->pool_, options);
       NIMBLE_CHECK_EQ(view->rowCount(), this->rowCount_);
@@ -89,7 +90,7 @@ class SubIntSplitEncodingView final : public TypedEncodingView<T> {
       });
       position += serialized.encodedSize;
     }
-    NIMBLE_CHECK_EQ(position, data.end());
+    NIMBLE_CHECK_EQ(position, data.data() + data.size());
   }
 
  private:

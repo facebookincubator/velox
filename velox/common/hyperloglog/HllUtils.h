@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include <bit>
 #include <cmath>
 #include <vector>
 #include "velox/common/base/Exceptions.h"
@@ -46,7 +47,7 @@ inline void checkMaxStandardError(double error) {
 
 inline int8_t toIndexBitLength(double maxStandardError) {
   int buckets = std::ceil(1.0816 / (maxStandardError * maxStandardError));
-  return 8 * sizeof(int) - __builtin_clz(buckets - 1);
+  return std::bit_width(static_cast<unsigned>(buckets - 1));
 }
 
 /// Returns first 'indexBitLength' bits of a hash.
@@ -59,7 +60,7 @@ inline uint32_t computeIndex(uint64_t hash, int indexBitLength) {
 inline int numberOfLeadingZeros(uint64_t hash, int indexBitLength) {
   // Place a 1 in the LSB to preserve the original number of leading zeros if
   // the hash happens to be 0.
-  return __builtin_clzl(
+  return std::countl_zero(
       (hash << indexBitLength) | (1L << (indexBitLength - 1)));
 }
 

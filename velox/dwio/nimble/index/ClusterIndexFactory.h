@@ -28,7 +28,7 @@
 
 namespace facebook::nimble::index {
 
-class ClusterIndex;
+class ClusterIndexBase;
 
 class ClusterIndexFactory {
  public:
@@ -47,7 +47,7 @@ class ClusterIndexFactory {
       const std::vector<SortOrder>& sortOrders,
       velox::memory::MemoryPool* pool) const = 0;
 
-  virtual std::unique_ptr<ClusterIndex> createReader(
+  virtual std::unique_ptr<ClusterIndexBase> createReader(
       Section rootSection,
       velox::memory::MemoryPool* pool,
       const IndexLookup::Options& options) const = 0;

@@ -59,11 +59,17 @@ class TableEvolutionFuzzer {
     int64_t skippedSplitBytes{0};
     int64_t skippedStrides{0};
     int64_t processedStrides{0};
+    // Tracks chunk-level pruning. Conditional row totals include only queries
+    // where chunk statistics skipped at least one row.
+    int64_t chunkSkippedRows{0};
+    int64_t processedRows{0};
+    int64_t numQueriesWithChunkSkipping{0};
+    int64_t processedRowsWithChunkSkipping{0};
 
     int64_t numStripeLoads{0};
     int64_t numIndexFilterConversions{0};
-    int64_t numStringDictionaryEncodingPreserved{0};
-    int64_t numStringDictionaryEncodingAbandoned{0};
+    /// Format-specific runtime stats collected by the fuzzer driver.
+    std::map<std::string, int64_t, std::less<>> customRuntimeStats;
     int64_t numQueriesWithValueHook{0};
     uint64_t numValuesLoadedToValueHook{0};
     int64_t numQueriesWithRemainingFilterEvaluation{0};
@@ -240,6 +246,17 @@ class TableEvolutionFuzzer {
     std::vector<dwio::common::FileFormat> formats;
     memory::MemoryPool* pool;
 
+    /// Columns that a format-specific driver needs in every generated table.
+    /// These are appended after the randomly generated columns and before any
+    /// columns required by a generated remaining filter.
+    std::vector<std::pair<std::string, TypePtr>> additionalColumns;
+
+    /// Rewrites a freshly fuzzed, flattened batch before sizing, writing, or
+    /// retaining it for the in-memory oracle. The row offset is within the
+    /// current file and the seed identifies the current fuzzer iteration.
+    std::function<void(const RowVectorPtr&, uint64_t, uint64_t)>
+        dataBatchMutator;
+
     /// Returns extra writer serde params to merge for one file, or none when
     /// unset. Called once per written file with the file's format and the
     /// fuzzer rng, so a driver can exercise format-specific write options,
@@ -264,10 +281,20 @@ class TableEvolutionFuzzer {
     /// Set to e.g. 0.1 for format-specific fuzzers that need null coverage.
     double nullRatio = 0;
 
+    /// Runtime stat keys to collect from operator stats into
+    /// ScanPlanCoverage::customRuntimeStats. Format-specific drivers populate
+    /// this so the generic fuzzer collects the stats without knowing what they
+    /// mean.
+    std::vector<std::string_view> customRuntimeStatKeys;
+
     /// Observes one attempted query while its correlated file, plan, feature,
     /// execution, and verification details are available. Called before an
     /// execution or verification failure is rethrown.
     std::function<void(const QueryCoverage&)> queryCoverageObserver;
+
+    /// Validates all files produced by one run before scans begin. Called once
+    /// with a deduplicated list. Exceptions fail the run.
+    std::function<void(const std::vector<InputFile>&)> generatedFilesValidator;
 
     /// Logs file-format-specific metrics within comprehensive coverage
     /// reports. Unset when the caller has no additional metrics.
@@ -307,6 +334,24 @@ class TableEvolutionFuzzer {
   static const std::vector<dwio::common::FileFormat> parseFileFormats(
       std::string input);
 
+  /// Returns 'name' as a double-quoted SQL identifier, doubling any embedded
+  /// quote. Column names reach the parser inside expression strings, so a name
+  /// that collides with a keyword or does not lex as a bare identifier has to
+  /// be quoted to survive the round trip.
+  static std::string quoteIdentifier(std::string_view name);
+
+  /// Returns 'names' with each one quoted by quoteIdentifier.
+  static std::vector<std::string> quoteIdentifiers(
+      const std::vector<std::string>& names);
+
+  /// Generates a pushdown-eligible aggregation over the columns of 'schema'
+  /// that are absent from 'filteredColumns'. Returns nullopt when no column is
+  /// eligible. Grouping keys and aggregate operands are quoted identifiers.
+  static std::optional<AggregationConfig> generateAggregationConfig(
+      const RowTypePtr& schema,
+      FuzzerGenerator& rng,
+      const std::unordered_set<std::string>& filteredColumns);
+
   /// Returns true if 'columnName' is referenced by 'aggregationConfig's
   /// grouping keys or aggregate expressions.
   static bool isColumnUsedByAggregation(
@@ -332,6 +377,24 @@ class TableEvolutionFuzzer {
       const RowTypePtr& schema,
       const folly::F14FastSet<std::string>& droppedColumns);
 
+  /// Returns one project expression per column of 'schema' that passes the
+  /// column through, wrapping each aggregate input of 'aggregationConfig' in a
+  /// null-preserving 'if' so the aggregation cannot be pushed into the scan.
+  static std::vector<std::string> aggregationBlockingProjectExpressions(
+      const RowTypePtr& schema,
+      const AggregationConfig& aggregationConfig);
+
+  /// Drains each of 'cursors' on 'executor' and returns each cursor's rows, in
+  /// order. If any cursor fails, waits for the others to finish, then rethrows
+  /// the error of the first failed cursor in 'cursors'. With OOM injection
+  /// enabled, an injected OOM ends a cursor early with the rows read so far.
+  /// When this returns, 'executor' holds no reference to any cursor, so the
+  /// caller holds the last reference to every task and can destroy the tasks
+  /// before the memory pools their plans reference.
+  static std::vector<std::vector<RowVectorPtr>> runTaskCursors(
+      const std::vector<std::shared_ptr<TaskCursor>>& cursors,
+      folly::Executor& executor);
+
   void run();
 
   /// Runs the same query shapes as run(), but against 'inputFile'.
@@ -346,7 +409,11 @@ class TableEvolutionFuzzer {
   /// Remaining filters are not generated: the expression fuzzer invents columns
   /// and relies on schema evolution to add them, which a fixed file schema
   /// cannot accommodate.
-  void runOnInputFile(const InputFile& inputFile);
+  ///
+  /// Returns false, having done nothing, when the file carries no columns or no
+  /// rows. Neither is a finding, and neither becomes one on a retry, so a
+  /// caller looping to a deadline should stop rather than call again.
+  bool runOnInputFile(const InputFile& inputFile);
 
   const CoverageAccumulator& coverageStats() const {
     return coverageStats_;

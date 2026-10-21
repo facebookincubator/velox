@@ -15,6 +15,8 @@
  */
 #pragma once
 
+#include <folly/stop_watch.h>
+
 #include "velox/common/base/TreeOfLosers.h"
 #include "velox/exec/Exchange.h"
 #include "velox/exec/MergeSource.h"
@@ -88,16 +90,16 @@ class Merge : public SourceOperator {
  private:
   // Tracks the internal execution stats for a merge operator.
   struct Stats {
-    // The time point that a merge operator starts reading from the streaming
-    // source.
-    uint64_t streamingSourceReadStartTimeUs{0};
-    // The time point that a merge operator finishes read from the streaming
-    // source. This includes the time that writes to the spilled source for
-    // recursive merge when spilling is enabled for local merge.
-    uint64_t streamingSourceReadEndTimeUs{0};
-    // The time point that a merge operator finishes read from the spilled
-    // source. This only applies when spilling is enabled for local merge.
-    uint64_t spilledSourceReadEndTimeUs{0};
+    // Restarted in initialize(), when the merge operator starts reading from
+    // the streaming source, and at the end of each read phase.
+    folly::stop_watch<std::chrono::nanoseconds> readWatch;
+    // The time the merge operator spends reading from the streaming source.
+    // This includes the time that writes to the spilled source for recursive
+    // merge when spilling is enabled for local merge.
+    std::optional<uint64_t> streamingSourceReadNanos;
+    // The time the merge operator spends reading from the spilled source. This
+    // only applies when spilling is enabled for local merge.
+    std::optional<uint64_t> spilledSourceReadNanos;
   };
   void recordMergeStats();
 

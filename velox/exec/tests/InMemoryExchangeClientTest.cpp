@@ -340,9 +340,9 @@ TEST_P(InMemoryExchangeClientTest, smallPage) {
 
 TEST_P(InMemoryExchangeClientTest, largeSinglePage) {
   auto data = {
-      makeRowVector({makeFlatVector<int64_t>(10000, folly::identity)}),
+      makeRowVector({makeFlatIdentityVector<int64_t>(10000)}),
       // second page is >1% of total payload size
-      makeRowVector({makeFlatVector<int64_t>(150, folly::identity)}),
+      makeRowVector({makeFlatIdentityVector<int64_t>(150)}),
   };
   auto client = std::make_shared<InMemoryExchangeClient>(
       "test",
@@ -1026,7 +1026,7 @@ TEST_P(
     skipRequestDataSizeNotTriggeredWithMultipleSources) {
   // Test that optimization is NOT triggered with multiple sources
 
-  auto data = makeRowVector({makeFlatVector<int64_t>(100, folly::identity)});
+  auto data = makeRowVector({makeFlatIdentityVector<int64_t>(100)});
   auto page = test::toSerializedPage(data, serdeKind_, bufferManager_, pool());
 
   // Client with optimization ENABLED but multiple sources
@@ -1174,6 +1174,43 @@ TEST_P(InMemoryExchangeClientTest, hasNoMoreSourcesApi) {
   queue->noMoreSources();
 
   EXPECT_TRUE(queue->hasNoMoreSources());
+}
+
+// A source that closes after its request starts, but before the request is
+// held for a producer that does not exist yet, ends up holding no request: one
+// would keep the closed source alive.
+DEBUG_ONLY_TEST_P(InMemoryExchangeClientTest, requestRacingClose) {
+  auto client = std::make_shared<InMemoryExchangeClient>(
+      "local://request-racing-close",
+      0,
+      1 << 20,
+      1,
+      kDefaultMinExchangeOutputBatchBytes,
+      pool(),
+      executor());
+
+  std::weak_ptr<ExchangeSource> source;
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::test::LocalExchangeSource::request",
+      std::function<void(ExchangeSource*)>([&](ExchangeSource* requesting) {
+        source = requesting->shared_from_this();
+        client->close();
+      }));
+  client->addRemoteTaskId("local://request-racing-close-producer");
+  client->noMoreRemoteTasks();
+  bool atEnd;
+  ContinueFuture future;
+  client->next(1, 1, &atEnd, &future);
+  // The hook ran, and the client still holds the source.
+  ASSERT_FALSE(source.expired());
+  client.reset();
+
+  const auto deadline =
+      std::chrono::steady_clock::now() + std::chrono::seconds(10);
+  while (!source.expired() && std::chrono::steady_clock::now() < deadline) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  ASSERT_TRUE(source.expired());
 }
 
 VELOX_INSTANTIATE_TEST_SUITE_P(

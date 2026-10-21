@@ -181,7 +181,7 @@ class VectorSaverTest : public testing::Test, public VectorTestBase {
     testRoundTrip(BaseVector::create(CppToType<T>::create(), 0, pool()));
 
     // Long vector.
-    testRoundTrip(makeFlatVector<T>(10'000, [](auto row) { return row; }));
+    testRoundTrip(makeFlatIdentityVector<T>(10'000));
 
     // Long vector with nulls.
     testRoundTrip(
@@ -672,7 +672,7 @@ TEST_F(VectorSaverTest, dictionaryBigint) {
       makeNulls(100, nullEvery(7)),
       makeIndicesInReverse(100),
       100,
-      makeFlatVector<int64_t>(100, [](auto row) { return row; }));
+      makeFlatIdentityVector<int64_t>(100));
   testRoundTrip(data);
 
   data = wrapInDictionary(
@@ -681,7 +681,7 @@ TEST_F(VectorSaverTest, dictionaryBigint) {
           makeNulls(100, nullEvery(7)),
           makeIndicesInReverse(100),
           100,
-          makeFlatVector<int64_t>(100, [](auto row) { return row; })));
+          makeFlatIdentityVector<int64_t>(100)));
   testRoundTrip(data);
 
   // All-nulls dictionary vector over empty base vector.

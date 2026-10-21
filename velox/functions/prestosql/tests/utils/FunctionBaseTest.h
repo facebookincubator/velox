@@ -54,6 +54,13 @@ class FunctionBaseTest : public testing::Test,
     });
   }
 
+  void setCastStringToFloatingPointLenientInfNan(bool value) {
+    queryCtx_->testingOverrideConfigUnsafe({
+        {core::QueryConfig::kCastStringToFloatingPointLenientInfNan,
+         std::to_string(value)},
+    });
+  }
+
   void setTimezone(const std::string& value) {
     queryCtx_->testingOverrideConfigUnsafe({
         {core::QueryConfig::kSessionTimezone, value},
@@ -123,7 +130,7 @@ class FunctionBaseTest : public testing::Test,
   /// multiple times, the returned statistics will contain values aggregated
   /// across all calls. Statistics will be missing for functions and
   /// special forms that didn't get evaluated.
-  std::pair<VectorPtr, std::unordered_map<std::string, exec::ExprStats>>
+  std::pair<VectorPtr, folly::F14FastMap<std::string, exec::ExprStats>>
   evaluateWithStats(
       const std::string& expression,
       const RowVectorPtr& data,

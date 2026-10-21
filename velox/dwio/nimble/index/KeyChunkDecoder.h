@@ -15,13 +15,14 @@
  */
 #pragma once
 
+#include <functional>
 #include <memory>
 #include <vector>
 
 #include "velox/buffer/Buffer.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/dwio/common/SeekableInputStream.h"
-#include "velox/dwio/nimble/index/KeyEncoding.h"
+#include "velox/dwio/nimble/index/KeyReader.h"
 
 namespace facebook::nimble::index {
 
@@ -30,17 +31,22 @@ struct DecodedKeyChunk {
   // Zero-copy path: stream kept alive so its buffer backs the encoding.
   std::unique_ptr<velox::dwio::common::SeekableInputStream> dataStream;
 
-  // Thread-safe random-access key store (seek/get/materialize).
-  std::unique_ptr<KeyEncoding> encoding;
+  // Thread-safe random-access reader over the decoded key payload.
+  std::unique_ptr<KeyReader> reader;
 
   std::vector<velox::BufferPtr> stringBuffers;
 };
 
+using KeyReaderFactory = std::function<std::unique_ptr<KeyReader>(
+    std::string_view,
+    std::function<void*(uint32_t)>,
+    velox::memory::MemoryPool*)>;
+
 /// Decodes a key chunk from an input stream. Reads the chunk header, validates
-/// compression and encoding type, and creates the encoding. Handles both
+/// compression and payload layout, and creates the reader. Handles both
 /// contiguous (zero-copy) and multi-buffer reads.
 ///
-/// Returns a shared_ptr so the encoding's string allocator lambda (which
+/// Returns a shared_ptr so the reader's string allocator lambda (which
 /// captures a pointer to the DecodedKeyChunk) remains valid when the caller
 /// moves or reassigns the shared_ptr.
 ///
@@ -54,9 +60,11 @@ struct DecodedKeyChunk {
 ///        affecting the returned DecodedKeyChunk. Callers that don't want
 ///        cross-call reuse can pass a local BufferPtr that goes out of
 ///        scope after the call.
+/// Decodes a key chunk and constructs its reader with `readerFactory`.
 std::shared_ptr<DecodedKeyChunk> decodeKeyChunk(
     std::unique_ptr<velox::dwio::common::SeekableInputStream> inputStream,
-    velox::memory::MemoryPool& pool,
-    velox::BufferPtr& dataBuffer);
+    const KeyReaderFactory& readerFactory,
+    velox::BufferPtr& dataBuffer,
+    velox::memory::MemoryPool* pool);
 
 } // namespace facebook::nimble::index

@@ -127,6 +127,27 @@ void Optimizer::optimizeGraph(nativert::Graph* graph) {
     }
     visitValue(output);
   }
+
+  // Everything that can reach partitioning has to be rewritten by now. The
+  // walk above only covers what the graph outputs reach, but optimizeNode
+  // runs again per kernel variant, after partitioning, and its recursion can
+  // reach a node the walk missed. A maybeReplace firing that late leaves the
+  // partition holding the original, and an op whose metadata exists only to
+  // host maybeReplace has no device function of its own -- it contributes a
+  // block that writes nothing, and its consumers read an unwritten buffer.
+  // Snapshot first: a rewrite appends the nodes it creates.
+  std::vector<const nativert::Node*> remaining;
+  remaining.reserve(graph->nodes().size());
+  for (const auto& node : graph->nodes()) {
+    remaining.push_back(&node);
+  }
+  for (const auto* node : remaining) {
+    for (auto* output : node->outputs()) {
+      if (output != nullptr) {
+        visitValue(output);
+      }
+    }
+  }
 }
 
 void Optimizer::optimizeNode(const nativert::Node* node) {

@@ -30,6 +30,7 @@
 #include "velox/dwio/nimble/common/Buffer.h"
 #include "velox/dwio/nimble/common/Types.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
+#include "velox/dwio/nimble/velox/HybridFlatMap.h"
 #include "velox/dwio/nimble/writer/EncodingLayoutTree.h"
 
 #include <set>
@@ -169,6 +170,21 @@ struct SerializerOptions {
   /// the set will cause an error during serialization.
   folly::F14FastMap<std::string, std::set<std::string>> flatMapColumns{};
 
+  /// Opt-in Hybrid FlatMap grouping for MapVector-backed MAP input. Configured
+  /// group keys are stored in schema metadata; Default has no schema keys.
+  /// Every block carries its observed typed keys, key-major in-map bits, and
+  /// values in one complete value subtree per group. Default is required and
+  /// may be the only group, in which case it holds every key.
+  folly::F14FastMap<std::string, HybridFlatMap> hybridFlatMapColumns{};
+
+  /// Omits all-false Hybrid FlatMap in-map and key-presence streams from
+  /// serialized values. All-true in-map streams stay explicit so the reader
+  /// can derive each batch's row count. All-true key-presence streams stay
+  /// explicit so later Default-group keys do not appear in earlier batches.
+  /// Disabled by default for compatibility with readers that require explicit
+  /// metadata streams.
+  bool skipConstantHybridFlatMapMetadataStreams{false};
+
   /// Factory for creating encoding selection policies.
   /// Used by encoded serializer writes.
   /// When encodingLayoutTree is specified, used as fallback for streams or
@@ -221,6 +237,13 @@ struct SerializerOptions {
 };
 
 struct DeserializerOptions {
+  /// Read-only compatibility knob for the removed legacy headerless format:
+  ///   [rowCount:u32][size_0:u32][stream_0]...[size_N:u32][stream_N]. Streams
+  ///   hold raw values, optionally compressed. Every other format starts with
+  ///   a version byte, so the caller must set this true only for blobs known
+  ///   to predate the header.
+  bool legacyHeaderless{false};
+
   /// Output type for deserializing flatmap columns as struct (ROW).
   /// When provided, each top-level flatmap column whose corresponding field in
   /// outputType is ROW will be deserialized as a struct instead of a map. The

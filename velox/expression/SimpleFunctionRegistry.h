@@ -166,6 +166,8 @@ class SimpleFunctionRegistry {
     const TypePtr type_;
   };
 
+  /// Returns the function 'name' resolves to for 'argTypes', or nullopt if no
+  /// signature binds 'argTypes' as is. Priority chooses among several matches.
   std::optional<ResolvedSimpleFunction> resolveFunction(
       const std::string& name,
       const std::vector<TypePtr>& argTypes) const {
@@ -174,6 +176,11 @@ class SimpleFunctionRegistry {
         name, argTypes, false, coercions, TypeCoercer::defaults());
   }
 
+  /// Like resolveFunction, but when no signature binds 'argTypes' as is,
+  /// applies coercions from 'coercer' and picks the lowest total coercion cost,
+  /// with priority breaking cost ties. On success, sets 'coercions' to one
+  /// entry per argument: the target type, or null where the argument binds
+  /// as is.
   std::optional<ResolvedSimpleFunction> resolveFunctionWithCoercions(
       const std::string& name,
       const std::vector<TypePtr>& argTypes,

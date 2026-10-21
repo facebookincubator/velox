@@ -135,7 +135,7 @@ class ConcatFilesSpillMergeStreamTest : public OperatorTestBase {
       bool isEndOfBatch = false;
       while (outputRow + outputSize < output->size()) {
         SpillMergeStream* stream = spillMerger->next();
-        spillSources[outputSize] = &stream->current();
+        spillSources[outputSize] = stream->current().get();
         spillSourceRows[outputSize] = stream->currentIndex(&isEndOfBatch);
         ++outputSize;
         if (FOLLY_UNLIKELY(isEndOfBatch)) {

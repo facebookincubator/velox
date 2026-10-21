@@ -46,7 +46,6 @@
 #include "velox/expression/rpc/AsyncRPCFunction.h"
 
 #include <folly/futures/Promise.h>
-#include <folly/synchronization/CallOnce.h>
 #include <gtest/gtest.h>
 
 #include "velox/common/base/tests/GTestUtils.h"
@@ -65,8 +64,20 @@ namespace {
 
 class RPCStateTest : public testing::Test {
  protected:
+  static void SetUpTestSuite() {
+    if (!memory::MemoryManager::testInstance()) {
+      memory::MemoryManager::initialize({});
+    }
+  }
+
+  static std::shared_ptr<memory::MemoryPool> testPool() {
+    static auto root = memory::memoryManager()->addRootPool("rpcStateTest");
+    static auto pool = root->addLeafChild("leaf");
+    return pool;
+  }
+
   void SetUp() override {
-    state_ = std::make_shared<RPCState>();
+    state_ = std::make_shared<RPCState>(testPool());
   }
 
   /// Polls a condition with short waits until it becomes true or timeout.
@@ -84,6 +95,70 @@ class RPCStateTest : public testing::Test {
 
   std::shared_ptr<RPCState> state_;
 };
+
+TEST_F(RPCStateTest, configuresBatchCongestionStartWindow) {
+  {
+    state_->setStreamingMode(RPCStreamingMode::kBatch);
+    EXPECT_EQ(state_->operatorSnapshot().windowLimit, 2);
+  }
+  {
+    state_->setStreamingMode(RPCStreamingMode::kPerRow);
+    EXPECT_EQ(state_->operatorSnapshot().windowLimit, 100);
+  }
+  {
+    state_->setStreamingMode(
+        RPCStreamingMode::kBatch,
+        /*minWindow=*/1,
+        /*stepCoef=*/1.0,
+        /*maxWindow=*/64,
+        /*batchStartWindow=*/8);
+    EXPECT_EQ(state_->operatorSnapshot().windowLimit, 8);
+  }
+  {
+    state_->setStreamingMode(
+        RPCStreamingMode::kPerRow,
+        /*minWindow=*/1,
+        /*stepCoef=*/1.0,
+        /*maxWindow=*/64,
+        /*batchStartWindow=*/8);
+    EXPECT_EQ(state_->operatorSnapshot().windowLimit, 64);
+  }
+  {
+    state_->setStreamingMode(
+        RPCStreamingMode::kBatch,
+        /*minWindow=*/4,
+        /*stepCoef=*/1.0,
+        /*maxWindow=*/64,
+        /*batchStartWindow=*/2);
+    EXPECT_EQ(state_->operatorSnapshot().windowLimit, 4);
+  }
+  {
+    state_->setStreamingMode(
+        RPCStreamingMode::kBatch,
+        /*minWindow=*/1,
+        /*stepCoef=*/1.0,
+        /*maxWindow=*/4,
+        /*batchStartWindow=*/8);
+    EXPECT_EQ(state_->operatorSnapshot().windowLimit, 4);
+  }
+  VELOX_ASSERT_THROW(
+      state_->setStreamingMode(
+          RPCStreamingMode::kBatch,
+          /*minWindow=*/1,
+          /*stepCoef=*/1.0,
+          /*maxWindow=*/64,
+          /*batchStartWindow=*/-1),
+      "must be non-negative");
+  VELOX_ASSERT_THROW(
+      state_->setStreamingMode(
+          RPCStreamingMode::kBatch,
+          /*minWindow=*/1,
+          /*stepCoef=*/1.0,
+          /*maxWindow=*/64,
+          /*batchStartWindow=*/8,
+          /*asyncGrowthMaxWindow=*/-1),
+      "async growth max window must be non-negative");
+}
 
 // ========== PER_ROW mode tests ==========
 
@@ -114,6 +189,486 @@ TEST_F(RPCStateTest, basicAddAndClaim) {
   ASSERT_TRUE(claimedRow.has_value());
   EXPECT_EQ(claimedRow->rowId, 42);
   EXPECT_EQ(responseAs<TextPayload>(claimedRow->response).text, "test result");
+}
+
+TEST_F(RPCStateTest, claimReportsIdleWithoutCreatingAWaiter) {
+  state_->setStreamingMode(RPCStreamingMode::kPerRow);
+  ContinueFuture waitFuture{ContinueFuture::makeEmpty()};
+  std::optional<RPCState::ReadyRow> claimedRow;
+
+  EXPECT_EQ(
+      state_->tryClaimOrWait(&waitFuture, &claimedRow),
+      RPCState::ClaimResult::kIdle);
+  EXPECT_FALSE(waitFuture.valid());
+  EXPECT_FALSE(claimedRow.has_value());
+}
+
+TEST_F(RPCStateTest, completedRowReleasesAdmissionBeforeDriverOutput) {
+  state_->setStreamingMode(RPCStreamingMode::kPerRow);
+  auto limiter = std::make_shared<RPCRateLimiter>("test.row.admission");
+  limiter->configure(RPCRateLimiter::Config{.ceiling = 1});
+  auto tokens = limiter->tryAcquireUpTo(1);
+  ASSERT_EQ(tokens.size(), 1);
+  auto admissionLease = limiter->makeLease(std::move(tokens.front()));
+
+  auto [promise, future] = folly::makePromiseContract<RPCResponse>();
+  state_->addPendingRow(
+      state_,
+      42,
+      RPCState::RowLocation{0, 0},
+      std::move(future),
+      std::move(admissionLease));
+  promise.setValue(RPCResponse{});
+  waitFor([&]() { return state_->numInFlight() == 0; });
+
+  ContinueFuture waitFuture{ContinueFuture::makeEmpty()};
+  std::optional<RPCState::ReadyRow> claimedRow;
+  ASSERT_EQ(
+      state_->tryClaimOrWait(&waitFuture, &claimedRow),
+      RPCState::ClaimResult::kClaimed);
+  ASSERT_TRUE(claimedRow.has_value());
+  EXPECT_EQ(limiter->stats().pending, 0);
+  EXPECT_FALSE(claimedRow->sharedOverloadHandled);
+  EXPECT_TRUE(claimedRow->admissionEpoch.has_value());
+}
+
+TEST_F(RPCStateTest, completedOverloadBacksOffBeforeReleasingAdmission) {
+  state_->setStreamingMode(RPCStreamingMode::kPerRow);
+  auto limiter = std::make_shared<RPCRateLimiter>("test.row.overload");
+  limiter->configure(
+      RPCRateLimiter::Config{
+          .adaptive = true,
+          .ceiling = 2,
+          .floor = 1,
+          .decreaseFactor = 0.5,
+      });
+  auto tokens = limiter->tryAcquireUpTo(1);
+  ASSERT_EQ(tokens.size(), 1);
+
+  auto [promise, future] = folly::makePromiseContract<RPCResponse>();
+  state_->addPendingRow(
+      state_,
+      42,
+      RPCState::RowLocation{0, 0},
+      std::move(future),
+      limiter->makeLease(std::move(tokens.front())));
+  promise.setValue(
+      RPCResponse::failed(
+          42, velox::rpc::RPCErrorKind::kRateLimited, "overloaded"));
+  waitFor([&]() { return state_->numInFlight() == 0; });
+
+  EXPECT_EQ(limiter->stats().pending, 0);
+  EXPECT_EQ(limiter->stats().capacity, 1);
+  ContinueFuture waitFuture{ContinueFuture::makeEmpty()};
+  std::optional<RPCState::ReadyRow> claimedRow;
+  ASSERT_EQ(
+      state_->tryClaimOrWait(&waitFuture, &claimedRow),
+      RPCState::ClaimResult::kClaimed);
+  ASSERT_TRUE(claimedRow.has_value());
+  EXPECT_TRUE(claimedRow->sharedOverloadHandled);
+  EXPECT_TRUE(claimedRow->admissionEpoch.has_value());
+}
+
+TEST_F(RPCStateTest, completedRowMemoryIsAccountedUntilReleased) {
+  auto root = memory::memoryManager()->addRootPool("rpcResponseAccounting");
+  auto pool = root->addLeafChild("leaf");
+  auto state = std::make_shared<RPCState>(pool);
+  state->setStreamingMode(RPCStreamingMode::kPerRow);
+  const auto baseline = pool->stats();
+
+  auto [promise, future] = folly::makePromiseContract<RPCResponse>();
+  state->addPendingRow(
+      state, 42, RPCState::RowLocation{0, 0}, std::move(future));
+
+  RPCResponse response;
+  response.rowId = 42;
+  response.setPayload(makeTextPayload(std::string(4096, 'x')));
+  const auto retainedBytes = response.retainedBytes();
+  ASSERT_GT(retainedBytes, 0);
+  promise.setValue(std::move(response));
+
+  waitFor([&]() { return state->numInFlight() == 0; });
+  EXPECT_EQ(pool->usedBytes(), baseline.usedBytes + retainedBytes);
+  EXPECT_EQ(pool->stats().numExternalAllocs, baseline.numExternalAllocs + 1);
+
+  ContinueFuture waitFuture{ContinueFuture::makeEmpty()};
+  std::optional<RPCState::ReadyRow> claimedRow;
+  ASSERT_EQ(
+      state->tryClaimOrWait(&waitFuture, &claimedRow),
+      RPCState::ClaimResult::kClaimed);
+  ASSERT_TRUE(claimedRow.has_value());
+  EXPECT_EQ(claimedRow->charge.bytes(), retainedBytes);
+  EXPECT_EQ(pool->usedBytes(), baseline.usedBytes + retainedBytes);
+
+  claimedRow.reset();
+  EXPECT_EQ(pool->usedBytes(), baseline.usedBytes);
+  EXPECT_EQ(pool->stats().numExternalFrees, baseline.numExternalFrees + 1);
+}
+
+TEST_F(RPCStateTest, completedBatchMemoryIsAccountedUntilReleased) {
+  auto root = memory::memoryManager()->addRootPool("rpcBatchAccounting");
+  auto pool = root->addLeafChild("leaf");
+  auto state = std::make_shared<RPCState>(pool);
+  state->setStreamingMode(RPCStreamingMode::kBatch);
+  const auto baseline = pool->stats();
+
+  auto [promise, future] =
+      folly::makePromiseContract<std::vector<RPCResponse>>();
+  state->addPendingBatch(state, std::move(future), {}, /*admissionUnits=*/1);
+
+  std::vector<RPCResponse> responses(2);
+  responses[0].setPayload(makeTextPayload(std::string(2048, 'a')));
+  responses[1].setPayload(makeTextPayload(std::string(4096, 'b')));
+  const auto retainedBytes =
+      responses[0].retainedBytes() + responses[1].retainedBytes();
+  promise.setValue(std::move(responses));
+
+  std::optional<RPCState::ReadyBatch> readyBatch;
+  waitFor([&]() {
+    readyBatch = state->tryPollReady();
+    return readyBatch.has_value();
+  });
+  ASSERT_TRUE(readyBatch.has_value());
+  EXPECT_EQ(readyBatch->charge.bytes(), retainedBytes);
+  EXPECT_EQ(pool->usedBytes(), baseline.usedBytes + retainedBytes);
+  EXPECT_EQ(pool->stats().numExternalAllocs, baseline.numExternalAllocs + 1);
+
+  readyBatch.reset();
+  EXPECT_EQ(pool->usedBytes(), baseline.usedBytes);
+  EXPECT_EQ(pool->stats().numExternalFrees, baseline.numExternalFrees + 1);
+}
+
+TEST_F(RPCStateTest, completedBatchReleasesAdmissionBeforeDriverOutput) {
+  state_->setStreamingMode(RPCStreamingMode::kBatch);
+  auto limiter = std::make_shared<RPCRateLimiter>("test.batch.admission");
+  limiter->configure(RPCRateLimiter::Config{.ceiling = 1});
+  auto reserved = limiter->tryAcquireUpTo(1);
+  ASSERT_EQ(reserved.size(), 1);
+  auto admissionLease = limiter->makeLease(std::move(reserved));
+
+  auto [promise, future] =
+      folly::makePromiseContract<std::vector<RPCResponse>>();
+  state_->addPendingBatch(
+      state_,
+      std::move(future),
+      {},
+      /*admissionUnits=*/1,
+      std::move(admissionLease));
+  promise.setValue(std::vector<RPCResponse>(1));
+
+  std::optional<RPCState::ReadyBatch> readyBatch;
+  waitFor([&]() {
+    readyBatch = state_->tryPollReady();
+    return readyBatch.has_value();
+  });
+  EXPECT_EQ(limiter->stats().pending, 0);
+  EXPECT_FALSE(readyBatch->sharedOverloadHandled);
+  EXPECT_TRUE(readyBatch->admissionEpoch.has_value());
+}
+
+TEST_F(RPCStateTest, completedBatchOverloadBacksOffBeforeDriverOutput) {
+  state_->setStreamingMode(RPCStreamingMode::kBatch);
+  auto limiter = std::make_shared<RPCRateLimiter>("test.batch.overload");
+  limiter->configure(
+      RPCRateLimiter::Config{
+          .adaptive = true,
+          .ceiling = 2,
+          .floor = 1,
+          .decreaseFactor = 0.5,
+      });
+  auto reserved = limiter->tryAcquireUpTo(1);
+  ASSERT_EQ(reserved.size(), 1);
+
+  auto [promise, future] =
+      folly::makePromiseContract<std::vector<RPCResponse>>();
+  state_->addPendingBatch(
+      state_,
+      std::move(future),
+      {},
+      /*admissionUnits=*/1,
+      limiter->makeLease(std::move(reserved)));
+  std::vector<RPCResponse> responses;
+  responses.push_back(
+      RPCResponse::failed(
+          42, velox::rpc::RPCErrorKind::kRateLimited, "overloaded"));
+  promise.setValue(std::move(responses));
+
+  std::optional<RPCState::ReadyBatch> readyBatch;
+  waitFor([&]() {
+    readyBatch = state_->tryPollReady();
+    return readyBatch.has_value();
+  });
+  ASSERT_TRUE(readyBatch.has_value());
+  EXPECT_EQ(limiter->stats().pending, 0);
+  EXPECT_EQ(limiter->stats().capacity, 1);
+  EXPECT_TRUE(readyBatch->sharedOverloadHandled);
+  EXPECT_TRUE(readyBatch->admissionEpoch.has_value());
+}
+
+TEST_F(RPCStateTest, closeReleasesQueuedPayloadAndIgnoresLateCompletion) {
+  auto root = memory::memoryManager()->addRootPool("rpcCloseAccounting");
+  auto pool = root->addLeafChild("leaf");
+  const auto baseline = pool->usedBytes();
+
+  auto state = std::make_shared<RPCState>(pool);
+  state->setStreamingMode(RPCStreamingMode::kPerRow);
+  auto [readyPromise, readyFuture] = folly::makePromiseContract<RPCResponse>();
+  state->addPendingRow(
+      state, 1, RPCState::RowLocation{0, 0}, std::move(readyFuture));
+  RPCResponse readyResponse;
+  readyResponse.setPayload(makeTextPayload(std::string(4096, 'x')));
+  readyPromise.setValue(std::move(readyResponse));
+  waitFor([&]() { return state->numInFlight() == 0; });
+  EXPECT_GT(pool->usedBytes(), baseline);
+
+  state->close();
+  EXPECT_EQ(pool->usedBytes(), baseline);
+  state->close();
+
+  auto lateState = std::make_shared<RPCState>(pool);
+  lateState->setStreamingMode(RPCStreamingMode::kPerRow);
+  auto [latePromise, lateFuture] = folly::makePromiseContract<RPCResponse>();
+  lateState->addPendingRow(
+      lateState, 2, RPCState::RowLocation{0, 0}, std::move(lateFuture));
+  lateState->close();
+  RPCResponse lateResponse;
+  lateResponse.setPayload(makeTextPayload(std::string(4096, 'y')));
+  latePromise.setValue(std::move(lateResponse));
+  waitFor([&]() { return lateState->numInFlight() == 0; });
+  EXPECT_EQ(pool->usedBytes(), baseline);
+}
+
+TEST_F(RPCStateTest, closeReleasesPerRowAndBatchAdmission) {
+  auto rowLimiter = std::make_shared<RPCRateLimiter>("test.close.row");
+  rowLimiter->configure(RPCRateLimiter::Config{.ceiling = 1});
+  auto rowTokens = rowLimiter->tryAcquireUpTo(1);
+  ASSERT_EQ(rowTokens.size(), 1);
+  auto rowLease = rowLimiter->makeLease(std::move(rowTokens.front()));
+
+  auto rowState = std::make_shared<RPCState>(testPool());
+  rowState->setStreamingMode(RPCStreamingMode::kPerRow);
+  auto [rowPromise, rowFuture] = folly::makePromiseContract<RPCResponse>();
+  rowState->addPendingRow(
+      rowState,
+      1,
+      RPCState::RowLocation{0, 0},
+      std::move(rowFuture),
+      std::move(rowLease));
+  ASSERT_EQ(rowLimiter->stats().pending, 1);
+
+  rowState->close();
+  EXPECT_EQ(rowLimiter->stats().pending, 0);
+  rowPromise.setValue(RPCResponse{});
+  waitFor([&]() { return rowState->numInFlight() == 0; });
+  EXPECT_EQ(rowLimiter->stats().pending, 0);
+
+  auto batchLimiter = std::make_shared<RPCRateLimiter>("test.close.batch");
+  batchLimiter->configure(RPCRateLimiter::Config{.ceiling = 1});
+  auto batchTokens = batchLimiter->tryAcquireUpTo(1);
+  ASSERT_EQ(batchTokens.size(), 1);
+  auto admissionLease = batchLimiter->makeLease(std::move(batchTokens));
+
+  auto batchState = std::make_shared<RPCState>(testPool());
+  batchState->setStreamingMode(RPCStreamingMode::kBatch);
+  auto [batchPromise, batchFuture] =
+      folly::makePromiseContract<std::vector<RPCResponse>>();
+  batchState->addPendingBatch(
+      batchState,
+      std::move(batchFuture),
+      {},
+      /*admissionUnits=*/1,
+      std::move(admissionLease));
+  ASSERT_EQ(batchLimiter->stats().pending, 1);
+
+  batchState->close();
+  EXPECT_EQ(batchLimiter->stats().pending, 0);
+  batchPromise.setValue(std::vector<RPCResponse>(1));
+  EXPECT_EQ(batchLimiter->stats().pending, 0);
+}
+
+TEST_F(RPCStateTest, closeReleasesReadyBatchAndIgnoresLateBatch) {
+  auto root = memory::memoryManager()->addRootPool("rpcBatchCloseAccounting");
+  auto pool = root->addLeafChild("leaf");
+  const auto baseline = pool->usedBytes();
+
+  auto state = std::make_shared<RPCState>(pool);
+  state->setStreamingMode(RPCStreamingMode::kBatch);
+  auto [readyPromise, readyFuture] =
+      folly::makePromiseContract<std::vector<RPCResponse>>();
+  state->addPendingBatch(
+      state, std::move(readyFuture), {}, /*admissionUnits=*/1);
+  std::vector<RPCResponse> readyResponses(1);
+  readyResponses[0].setPayload(makeTextPayload(std::string(4096, 'x')));
+  readyPromise.setValue(std::move(readyResponses));
+  waitFor(
+      [&]() { return state->operatorSnapshot().numCompletionsSignaled == 1; });
+  EXPECT_GT(pool->usedBytes(), baseline);
+
+  state->close();
+  EXPECT_EQ(pool->usedBytes(), baseline);
+
+  auto lateState = std::make_shared<RPCState>(pool);
+  lateState->setStreamingMode(RPCStreamingMode::kBatch);
+  auto [latePromise, lateFuture] =
+      folly::makePromiseContract<std::vector<RPCResponse>>();
+  lateState->addPendingBatch(
+      lateState, std::move(lateFuture), {}, /*admissionUnits=*/1);
+  lateState->close();
+  std::vector<RPCResponse> lateResponses(1);
+  lateResponses[0].setPayload(makeTextPayload(std::string(4096, 'y')));
+  latePromise.setValue(std::move(lateResponses));
+  waitFor([&]() {
+    return lateState->operatorSnapshot().numCompletionsSignaled == 1;
+  });
+  EXPECT_EQ(pool->usedBytes(), baseline);
+}
+
+TEST_F(RPCStateTest, payloadAccountingFailureFailsTheQuery) {
+  auto root = memory::memoryManager()->addRootPool(
+      "rpcResponseAccountingLimit", /*maxCapacity=*/1024);
+  auto pool = root->addLeafChild("leaf");
+  auto state = std::make_shared<RPCState>(pool);
+  state->setStreamingMode(RPCStreamingMode::kPerRow);
+
+  auto [promise, future] = folly::makePromiseContract<RPCResponse>();
+  state->addPendingRow(
+      state, 1, RPCState::RowLocation{0, 0}, std::move(future));
+  RPCResponse response;
+  response.setPayload(makeTextPayload(std::string(4096, 'x')));
+  promise.setValue(std::move(response));
+  waitFor([&]() { return state->numInFlight() == 0; });
+
+  state->setNoMoreInput();
+  VELOX_ASSERT_THROW(state->isFinished(), "were dropped under memory");
+  EXPECT_EQ(pool->usedBytes(), 0);
+}
+
+TEST_F(RPCStateTest, batchAccountingFailureWakesWithAnError) {
+  auto root = memory::memoryManager()->addRootPool(
+      "rpcBatchAccountingLimit", /*maxCapacity=*/1024);
+  auto pool = root->addLeafChild("leaf");
+  auto state = std::make_shared<RPCState>(pool);
+  state->setStreamingMode(RPCStreamingMode::kBatch);
+
+  auto [promise, future] =
+      folly::makePromiseContract<std::vector<RPCResponse>>();
+  state->addPendingBatch(state, std::move(future), {}, /*admissionUnits=*/1);
+  std::vector<RPCResponse> responses(1);
+  responses[0].setPayload(makeTextPayload(std::string(4096, 'x')));
+  promise.setValue(std::move(responses));
+  std::optional<RPCState::ReadyBatch> readyBatch;
+  waitFor([&]() {
+    readyBatch = state->tryPollReady();
+    return readyBatch.has_value();
+  });
+  ASSERT_TRUE(readyBatch.has_value());
+  EXPECT_TRUE(readyBatch->error.has_value());
+  EXPECT_EQ(readyBatch->charge.bytes(), 0);
+  EXPECT_EQ(pool->usedBytes(), 0);
+}
+
+TEST_F(RPCStateTest, errorMessageMemoryIsAccounted) {
+  auto root = memory::memoryManager()->addRootPool("rpcErrorAccounting");
+  auto pool = root->addLeafChild("leaf");
+  auto state = std::make_shared<RPCState>(pool);
+  state->setStreamingMode(RPCStreamingMode::kPerRow);
+
+  auto [promise, future] = folly::makePromiseContract<RPCResponse>();
+  state->addPendingRow(
+      state, 1, RPCState::RowLocation{0, 0}, std::move(future));
+  std::string message;
+  message.reserve(4096);
+  message.resize(101, 'e');
+  const auto retainedBytes = static_cast<int64_t>(message.capacity());
+  RPCResponse response;
+  response.setError(
+      velox::rpc::RPCErrorKind::kBackendError, std::move(message));
+  promise.setValue(std::move(response));
+  waitFor([&]() { return state->numInFlight() == 0; });
+  EXPECT_EQ(pool->usedBytes(), retainedBytes);
+
+  auto readyRow = state->tryClaimReady();
+  ASSERT_TRUE(readyRow.has_value());
+  readyRow.reset();
+  EXPECT_EQ(pool->usedBytes(), 0);
+}
+
+TEST_F(RPCStateTest, claimedChargeOutlivesStateCloseWithoutDoubleFree) {
+  auto root = memory::memoryManager()->addRootPool("rpcClaimedAccounting");
+  auto pool = root->addLeafChild("leaf");
+  auto state = std::make_shared<RPCState>(pool);
+
+  auto charge = state->chargePayloadBytes(4096);
+  EXPECT_EQ(pool->usedBytes(), 4096);
+
+  state->close();
+  EXPECT_EQ(pool->usedBytes(), 4096);
+
+  charge = RPCState::PayloadMemoryCharge{};
+  EXPECT_EQ(pool->usedBytes(), 0);
+}
+
+TEST_F(RPCStateTest, closeRacingRowCompletionLeavesNoCharge) {
+  auto root = memory::memoryManager()->addRootPool("rpcCloseRaceAccounting");
+  auto pool = root->addLeafChild("leaf");
+  const auto baseline = pool->usedBytes();
+
+  for (int32_t i = 0; i < 100; ++i) {
+    auto state = std::make_shared<RPCState>(pool);
+    state->setStreamingMode(RPCStreamingMode::kPerRow);
+    auto [promise, future] = folly::makePromiseContract<RPCResponse>();
+    state->addPendingRow(
+        state, i, RPCState::RowLocation{0, i}, std::move(future));
+
+    std::atomic<bool> start{false};
+    // Moved into an init-capture rather than captured by reference: a
+    // structured binding cannot be captured before Clang 16.
+    std::thread completer([&start, p = std::move(promise)]() mutable {
+      while (!start.load(std::memory_order_acquire)) {
+      }
+      RPCResponse response;
+      response.setPayload(makeTextPayload(std::string(4096, 'x')));
+      p.setValue(std::move(response));
+    });
+    start.store(true, std::memory_order_release);
+    state->close();
+    completer.join();
+    waitFor([&]() { return state->numInFlight() == 0; });
+    EXPECT_EQ(pool->usedBytes(), baseline) << "iteration " << i;
+  }
+}
+
+TEST_F(RPCStateTest, closeRacingBatchCompletionLeavesNoCharge) {
+  auto root =
+      memory::memoryManager()->addRootPool("rpcBatchCloseRaceAccounting");
+  auto pool = root->addLeafChild("leaf");
+  const auto baseline = pool->usedBytes();
+
+  for (int32_t i = 0; i < 100; ++i) {
+    auto state = std::make_shared<RPCState>(pool);
+    state->setStreamingMode(RPCStreamingMode::kBatch);
+    auto [promise, future] =
+        folly::makePromiseContract<std::vector<RPCResponse>>();
+    state->addPendingBatch(state, std::move(future), {}, /*admissionUnits=*/1);
+
+    std::atomic<bool> start{false};
+    // Moved into an init-capture rather than captured by reference: a
+    // structured binding cannot be captured before Clang 16.
+    std::thread completer([&start, p = std::move(promise)]() mutable {
+      while (!start.load(std::memory_order_acquire)) {
+      }
+      std::vector<RPCResponse> responses(1);
+      responses[0].setPayload(makeTextPayload(std::string(4096, 'x')));
+      p.setValue(std::move(responses));
+    });
+    start.store(true, std::memory_order_release);
+    state->close();
+    completer.join();
+    waitFor([&]() {
+      return state->operatorSnapshot().numCompletionsSignaled == 1;
+    });
+    EXPECT_EQ(pool->usedBytes(), baseline) << "iteration " << i;
+  }
 }
 
 TEST_F(RPCStateTest, addAndClaimDirect) {
@@ -387,9 +942,6 @@ TEST_F(RPCStateTest, inputBatchStorageAndRelease) {
 // close() must therefore drop the vectors itself, on the driver thread, and
 // not rely on the reference count reaching zero in time.
 TEST_F(RPCStateTest, releaseAllInputBatchesDropsVectorsWhileStateIsStillHeld) {
-  // This binary does not stand up a MemoryManager; do it once for this test.
-  static folly::once_flag initOnce;
-  folly::call_once(initOnce, [] { memory::MemoryManager::initialize({}); });
   auto pool = memory::memoryManager()->addLeafPool("releaseAllInputBatches");
   VectorPtr vector = BaseVector::create(BIGINT(), 8, pool.get());
 
@@ -706,6 +1258,139 @@ TEST_F(RPCStateTest, batchWindowGrowsViaGradientSamples) {
   }
 }
 
+TEST_F(RPCStateTest, batchWindowGrowsOnCleanCompletions) {
+  // BATCH async-job successes carry no usable latency, so they grow the
+  // window additively on completion count: 8 clean units lift 2 -> 3.
+  state_->setStreamingMode(
+      RPCStreamingMode::kBatch,
+      /*minWindow=*/1,
+      /*stepCoef=*/1.0,
+      /*maxWindow=*/0,
+      /*batchStartWindow=*/0,
+      /*asyncGrowthMaxWindow=*/64);
+  EXPECT_EQ(state_->operatorSnapshot().windowLimit, 2);
+  state_->onUnitCleanCompletions(7);
+  EXPECT_EQ(state_->operatorSnapshot().windowLimit, 2);
+  state_->onUnitCleanCompletions(1);
+  EXPECT_EQ(state_->operatorSnapshot().windowLimit, 3);
+}
+
+TEST_F(RPCStateTest, perRowWindowIgnoresCleanCompletions) {
+  // PER_ROW windows start at their ceiling and must only shrink: clean
+  // completions and the BATCH-only cap must not affect them.
+  state_->setStreamingMode(
+      RPCStreamingMode::kPerRow,
+      /*minWindow=*/1,
+      /*stepCoef=*/1.0,
+      /*maxWindow=*/0,
+      /*batchStartWindow=*/0,
+      /*asyncGrowthMaxWindow=*/-1);
+  EXPECT_EQ(state_->operatorSnapshot().windowLimit, 100);
+  // Shrink first: at the ceiling the test cannot tell a missing BATCH-only
+  // check from a working one, since the window cannot grow past it anyway.
+  state_->onUnitError();
+  EXPECT_EQ(state_->operatorSnapshot().windowLimit, 50);
+  state_->onUnitCleanCompletions(1'000);
+  EXPECT_EQ(state_->operatorSnapshot().windowLimit, 50);
+}
+
+TEST_F(RPCStateTest, cleanCompletionsRespectMaxWindow) {
+  // Growth stops at maxWindow_ even with a higher clean cap configured.
+  state_->setStreamingMode(
+      RPCStreamingMode::kBatch,
+      /*minWindow=*/1,
+      /*stepCoef=*/1.0,
+      /*maxWindow=*/8,
+      /*batchStartWindow=*/0,
+      /*asyncGrowthMaxWindow=*/64);
+  state_->onUnitCleanCompletions(1'000);
+  EXPECT_EQ(state_->operatorSnapshot().windowLimit, 8);
+}
+
+TEST_F(RPCStateTest, cleanGrowthDisabledByDefault) {
+  // async_growth_max_window defaults to 0: clean completions are ignored and
+  // the BATCH window does not recover after overload.
+  state_->setStreamingMode(
+      RPCStreamingMode::kBatch,
+      /*minWindow=*/1,
+      /*stepCoef=*/1.0,
+      /*maxWindow=*/64,
+      /*batchStartWindow=*/8);
+  state_->onUnitError();
+  EXPECT_EQ(state_->operatorSnapshot().windowLimit, 4);
+  state_->onUnitCleanCompletions(1'000);
+  EXPECT_EQ(state_->operatorSnapshot().windowLimit, 4);
+}
+
+TEST_F(RPCStateTest, cleanGrowthRespectsAsyncCap) {
+  // The async-growth cap binds below maxWindow_.
+  state_->setStreamingMode(
+      RPCStreamingMode::kBatch,
+      /*minWindow=*/1,
+      /*stepCoef=*/1.0,
+      /*maxWindow=*/0,
+      /*batchStartWindow=*/0,
+      /*asyncGrowthMaxWindow=*/8);
+  state_->onUnitCleanCompletions(1'000);
+  EXPECT_EQ(state_->operatorSnapshot().windowLimit, 8);
+}
+
+TEST_F(RPCStateTest, cleanGrowthCapMayEqualEffectiveStart) {
+  state_->setStreamingMode(
+      RPCStreamingMode::kBatch,
+      /*minWindow=*/1,
+      /*stepCoef=*/1.0,
+      /*maxWindow=*/64,
+      /*batchStartWindow=*/8,
+      /*asyncGrowthMaxWindow=*/8);
+  state_->onUnitCleanCompletions(1'000);
+  EXPECT_EQ(state_->operatorSnapshot().windowLimit, 8);
+}
+
+TEST_F(RPCStateTest, cleanGrowthCapUsesClampedEffectiveStart) {
+  state_->setStreamingMode(
+      RPCStreamingMode::kBatch,
+      /*minWindow=*/1,
+      /*stepCoef=*/1.0,
+      /*maxWindow=*/4,
+      /*batchStartWindow=*/8,
+      /*asyncGrowthMaxWindow=*/4);
+  EXPECT_EQ(state_->operatorSnapshot().windowLimit, 4);
+  state_->onUnitError();
+  EXPECT_EQ(state_->operatorSnapshot().windowLimit, 2);
+  state_->onUnitCleanCompletions(1'000);
+  EXPECT_EQ(state_->operatorSnapshot().windowLimit, 4);
+}
+
+TEST_F(RPCStateTest, cleanGrowthCapBelowStartClampsToStart) {
+  state_->setStreamingMode(
+      RPCStreamingMode::kBatch,
+      /*minWindow=*/1,
+      /*stepCoef=*/1.0,
+      /*maxWindow=*/64,
+      /*batchStartWindow=*/8,
+      /*asyncGrowthMaxWindow=*/7);
+  EXPECT_EQ(state_->operatorSnapshot().windowLimit, 8);
+  state_->onUnitError();
+  EXPECT_EQ(state_->operatorSnapshot().windowLimit, 4);
+  state_->onUnitCleanCompletions(1'000);
+  EXPECT_EQ(state_->operatorSnapshot().windowLimit, 8);
+}
+
+TEST_F(RPCStateTest, cleanGrowthCapAboveStartAllowsRecovery) {
+  state_->setStreamingMode(
+      RPCStreamingMode::kBatch,
+      /*minWindow=*/1,
+      /*stepCoef=*/1.0,
+      /*maxWindow=*/64,
+      /*batchStartWindow=*/8,
+      /*asyncGrowthMaxWindow=*/16);
+  state_->onUnitError();
+  EXPECT_EQ(state_->operatorSnapshot().windowLimit, 4);
+  state_->onUnitCleanCompletions(1'000);
+  EXPECT_EQ(state_->operatorSnapshot().windowLimit, 16);
+}
+
 TEST_F(RPCStateTest, setMaxWindowOverridesModeDefault) {
   // setMaxWindow (called after setStreamingMode) overrides the per-mode default
   // ceiling: 4 in-flight batches would backpressure at the default 2, not at 5.
@@ -835,7 +1520,7 @@ TEST_F(RPCStateTest, batchWaiterNotOrphanedByCompletionDrainRace) {
   // via the completionTimeNs guard), never orphaned.
   constexpr int kIterations = 500;
   for (int iter = 0; iter < kIterations; ++iter) {
-    auto state = std::make_shared<RPCState>();
+    auto state = std::make_shared<RPCState>(testPool());
     state->setStreamingMode(RPCStreamingMode::kBatch);
     state->setMaxWindow(1); // the completing batch is the last in flight
 
@@ -888,7 +1573,7 @@ TEST_F(RPCStateTest, batchWaiterNotOrphanedByCompletionDrainRace) {
 // would hand the query fewer rows than it was given and call that success,
 // which nothing downstream can detect -- so the finish path must fail instead.
 TEST_F(RPCStateTest, droppedRowFailsRatherThanShorteningTheResult) {
-  auto state = std::make_shared<RPCState>();
+  auto state = std::make_shared<RPCState>(testPool());
   state->testingDropCompletedRow();
   state->setNoMoreInput();
 
@@ -901,7 +1586,7 @@ TEST_F(RPCStateTest, droppedRowFailsRatherThanShorteningTheResult) {
 // Both out-params are required. Stating the precondition keeps a null from
 // becoming a segfault deep inside the claim path.
 TEST_F(RPCStateTest, claimRejectsNullOutParams) {
-  auto state = std::make_shared<RPCState>();
+  auto state = std::make_shared<RPCState>(testPool());
   ContinueFuture future{ContinueFuture::makeEmpty()};
   std::optional<RPCState::ReadyRow> claimed;
 
@@ -916,7 +1601,7 @@ TEST_F(RPCStateTest, claimRejectsNullOutParams) {
 // tryClaimOrWait(), so it would otherwise report a clean finish over a short
 // result. Both terminal paths have to answer the same way.
 TEST_F(RPCStateTest, droppedRowAlsoFailsTheDrainFinishCheck) {
-  auto state = std::make_shared<RPCState>();
+  auto state = std::make_shared<RPCState>(testPool());
   state->testingDropCompletedRow();
   state->setNoMoreInput();
 
@@ -926,7 +1611,7 @@ TEST_F(RPCStateTest, droppedRowAlsoFailsTheDrainFinishCheck) {
 // Without a drop the same finish path is an ordinary completion, so the check
 // above cannot be satisfied by simply never finishing.
 TEST_F(RPCStateTest, finishesNormallyWhenNoRowWasDropped) {
-  auto state = std::make_shared<RPCState>();
+  auto state = std::make_shared<RPCState>(testPool());
   state->setNoMoreInput();
 
   ContinueFuture future{ContinueFuture::makeEmpty()};

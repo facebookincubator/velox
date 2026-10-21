@@ -42,7 +42,27 @@ class S3FileSystemTest : public S3Test {
     filesystems::finalizeS3();
   }
 
+  // Writes the test data to an S3 object and opens it for read.
+  std::unique_ptr<ReadFile> openTestFile() {
+    const char* bucketName = "data";
+    const char* file = "test.txt";
+    const auto s3File = s3URI(bucketName, file);
+    addBucket(bucketName);
+    s3fs_ = std::make_unique<S3FileSystem>(bucketName, siloServer_->s3Config());
+    const auto pool = memory::memoryManager()->addLeafPool("S3FileSystemTest");
+    {
+      auto writeFile =
+          s3fs_->openFileForWrite(s3File, {{}, pool.get(), std::nullopt});
+      writeData(writeFile.get());
+      writeFile->close();
+    }
+    return s3fs_->openFileForRead(s3File);
+  }
+
   std::string_view kLogLocation_ = "/tmp/foobar/";
+  // Owns the S3 client that the file from openTestFile() reads through, so it
+  // must outlive that file.
+  std::unique_ptr<S3FileSystem> s3fs_;
 };
 
 class MyCredentialsProvider : public Aws::Auth::AWSCredentialsProvider {
@@ -53,6 +73,26 @@ class MyCredentialsProvider : public Aws::Auth::AWSCredentialsProvider {
     return Aws::Auth::AWSCredentials();
   }
 };
+
+// Returns a preadv range of 'size' bytes that are skipped rather than read.
+folly::Range<char*> gap(size_t size) {
+  return {nullptr, size};
+}
+
+// Reads the first and last 5 bytes of the test data in one preadv call, with
+// everything between them as a gap.
+void readHeadAndTail(const ReadFile& readFile, const FileIoContext& context) {
+  char head[5];
+  char tail[5];
+  ASSERT_EQ(
+      readFile.preadv(
+          0,
+          {{head, sizeof(head)}, gap(5 + kOneMB), {tail, sizeof(tail)}},
+          context),
+      15 + kOneMB);
+  EXPECT_EQ(std::string_view(head, sizeof(head)), "aaaaa");
+  EXPECT_EQ(std::string_view(tail, sizeof(tail)), "ddddd");
+}
 
 } // namespace
 
@@ -76,6 +116,45 @@ TEST_F(S3FileSystemTest, writeAndRead) {
   }
   auto readFile = s3fs.openFileForRead(s3File);
   readData(readFile.get());
+}
+
+TEST_F(S3FileSystemTest, preadvStagesInCallerPool) {
+  const auto readFile = openTestFile();
+  const auto pool =
+      memory::memoryManager()->addRootPool()->addLeafChild("leaf");
+  FileIoContext context;
+  context.pool = pool.get();
+
+  // A single range is read straight into its buffer, so nothing is staged.
+  char single[10];
+  ASSERT_EQ(
+      readFile->preadv(0, {{single, sizeof(single)}}, context), sizeof(single));
+  EXPECT_EQ(std::string_view(single, sizeof(single)), "aaaaabbbbb");
+  EXPECT_EQ(pool->peakBytes(), 0);
+
+  // Ranges split by a gap are read as one span staged in the caller's pool,
+  // which is released before preadv returns.
+  readHeadAndTail(*readFile, context);
+  EXPECT_GE(pool->peakBytes(), 15 + kOneMB);
+  EXPECT_EQ(pool->usedBytes(), 0);
+}
+
+TEST_F(S3FileSystemTest, preadvStagesWithoutPool) {
+  readHeadAndTail(*openTestFile(), FileIoContext{});
+}
+
+TEST_F(S3FileSystemTest, preadvStagesSingleGap) {
+  const auto readFile = openTestFile();
+  const auto pool =
+      memory::memoryManager()->addRootPool()->addLeafChild("leaf");
+  FileIoContext context;
+  context.pool = pool.get();
+
+  // A single range with no buffer has nowhere to read into, so it is staged in
+  // the caller's pool like any gap.
+  ASSERT_EQ(readFile->preadv(0, {gap(15 + kOneMB)}, context), 15 + kOneMB);
+  EXPECT_GE(pool->peakBytes(), 15 + kOneMB);
+  EXPECT_EQ(pool->usedBytes(), 0);
 }
 
 TEST_F(S3FileSystemTest, invalidCredentialsConfig) {

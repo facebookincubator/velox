@@ -1359,7 +1359,8 @@ TypePtr ReaderBase::convertType(
             isCompatibleRequestedType,
             kTypeMappingErrorFmtStr,
             "TIME MICRO UTC",
-            requestedType->toString());
+            requestedType->toString(),
+            *schemaElement.name());
         return TIME_MICRO_UTC();
       }
 

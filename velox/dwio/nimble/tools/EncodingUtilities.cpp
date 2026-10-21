@@ -21,6 +21,7 @@
 #include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
 #include "velox/dwio/nimble/encodings/common/EncodingUtils.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelection.h"
+#include "velox/dwio/nimble/encodings/subintsplit/Format.h"
 
 namespace facebook::nimble::tools {
 namespace {
@@ -68,6 +69,7 @@ void extractCompressionType(
     case EncodingType::MainlyConstant:
     case EncodingType::Prefix:
     case EncodingType::ALP:
+    case EncodingType::ALPRD:
     case EncodingType::Fsst:
     case EncodingType::PFOR:
     case EncodingType::SimdForBitpack:
@@ -141,9 +143,6 @@ void traverseEncodings(
     case EncodingType::DeltaBlock:
     case EncodingType::EliasFano:
     case EncodingType::SimdForBitpack:
-    // SubIntSplit integration is disabled; treat it as having no nested
-    // encoding to traverse.
-    case EncodingType::SubIntSplit:
     // The wrapped encoding is carried verbatim rather than as a nested
     // stream, so there is nothing to traverse into here.
     case EncodingType::Slice: {
@@ -167,6 +166,49 @@ void traverseEncodings(
                 useVarintRowCount,
                 visitor);
           });
+      break;
+    }
+    case EncodingType::SubIntSplit: {
+      const char* position = stream.data() + dataOffset;
+      const auto streamHeader = subintsplit::readStreamHeader(position);
+      std::vector<subintsplit::SectionHeader> sectionHeaders;
+      sectionHeaders.reserve(streamHeader.numSections);
+      for (uint8_t section{0}; section < streamHeader.numSections; ++section) {
+        sectionHeaders.push_back(subintsplit::readSectionHeader(position));
+      }
+      for (uint8_t section{0}; section < streamHeader.numSections; ++section) {
+        const auto& header = sectionHeaders[section];
+        traverseEncodings(
+            {position, header.encodedSize},
+            level + 1,
+            section,
+            "Bits" + std::to_string(header.range.bitStart) + "-" +
+                std::to_string(header.range.bitEnd),
+            useVarintRowCount,
+            visitor);
+        position += header.encodedSize;
+      }
+      break;
+    }
+    case EncodingType::ALPRD: {
+      Encoding::Options options;
+      options.useVarintRowCount = useVarintRowCount;
+      const auto metadata = ALPRDEncodingBase::readMetadata(stream, options);
+      const std::array<const char*, 4> names{
+          "Codes",
+          "RightParts",
+          "ExceptionPositions",
+          "ExceptionHighParts",
+      };
+      for (uint8_t i = 0; i < metadata.childrenCount(); ++i) {
+        traverseEncodings(
+            metadata.children[i],
+            level + 1,
+            i,
+            names[i],
+            useVarintRowCount,
+            visitor);
+      }
       break;
     }
     case EncodingType::ALP: {

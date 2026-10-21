@@ -25,8 +25,8 @@ on:
       is-full-mode:
         description: >
           When true, run the full set of build jobs (adapters, ubuntu-debug,
-          fedora-debug, cudf-tests). When false, only adpaters job runs and
-          uses cmake-targets to do a selective build.
+          fedora-debug, cudf-tests). When false, only adapters and
+          ubuntu-debug run, and both use cmake-targets to build selectively.
           Default true preserves prior behavior for callers that do not opt
           into selective builds.
         default: true
@@ -34,9 +34,9 @@ on:
         type: boolean
       cmake-targets:
         description: >
-          Space-separated cmake target list for the adapters job's selective
-          build. Empty = full build, non-empty = selective
-          (builds only the listed targets).
+          Space-separated cmake target list for the selective builds in the
+          adapters and ubuntu-debug jobs. Empty = full build, non-empty =
+          selective (builds only the listed targets).
         default: ''
         required: false
         type: string
@@ -95,6 +95,16 @@ jobs:
           else
             echo "run_clang_tidy=false" >> "$GITHUB_OUTPUT"
           fi
+
+  # Does no work. It runs only in full runs, so rerun-linux-build checks
+  # it to tell whether a run was full. That action finds it by the name
+  # "Full build mode", so rename both together.
+  full-mode-marker:
+    if: ${{ inputs.is-full-mode }}
+    runs-on: 4-core-ubuntu
+    name: Full build mode
+    steps:
+      - run: echo "This run is a full build."
 
   adapters:
     name: Linux release with adapters
@@ -159,7 +169,10 @@ jobs:
             # Install basic deps with GCC. Some deps have problems (e.g. folly missing atomic lib).
             USE_CLANG=false bash /setup-centos9.sh
 
-            bash /setup-centos-adapters.sh
+            # cmake-flags.sh decides whether this build enables cuDF, and with
+            # it whether the adapters setup also installs UCX.
+            BUILD_PROFILE=adapters USE_CLANG="${USE_CLANG}" source "${GITHUB_WORKSPACE}/.github/scripts/cmake-flags.sh"
+            VELOX_ENABLE_CUDF="${VELOX_ENABLE_CUDF}" bash /setup-centos-adapters.sh
 
             cd /
             rm -rf /tmp/build # cleanup to avoid issues with disk space
@@ -232,7 +245,7 @@ jobs:
       - name: Ccache after
         run: ccache -s
 
-      - uses: apache/infrastructure-actions/stash/save@3354c1565d4b0e335b78a76aedd82153a9e144d4
+      - uses: apache/infrastructure-actions/stash/save@b1b1ab191498302581efdef55279706f79249c0e
         with:
           path: ${{ env.CCACHE_DIR }}
           key: ccache-linux-adapters-${{ inputs.use-clang && 'clang' || 'gcc' }}
@@ -321,7 +334,7 @@ jobs:
           python ./scripts/checks/run-clang-tidy.py -p $BUILD_PATH --commit $RANGE --exclude-dir breeze/ $FILES
 
       - name: Check cuDF Changes
-        uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # v3.0.2
+        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
         id: changes
         # Skip in selective mode — the cuDF test binaries this and the
         # following steps prepare are only consumed by the cudf-tests
@@ -331,16 +344,23 @@ jobs:
           filters: |
             cudf:
               - 'velox/experimental/cudf/**'
+              - 'velox/experimental/ucx-exchange/**'
               - 'CMake/resolve_dependency_modules/cudf.cmake'
 
       - name: Copy Shared Libraries for cuDF Test Binaries
         if: ${{ inputs.is-full-mode && ! inputs.use-clang && steps.changes.outputs.cudf && always() }}
         env:
           CUDF_DIR: _build/release/velox/experimental/cudf
+          UCX_EXCHANGE_DIR: _build/release/velox/experimental/ucx-exchange
         run: |
           mkdir -p "$CUDF_DIR/cudf-libs"
+          # The ucx-exchange tests are only built when cuDF is built with UCX.
+          test_dirs=("$CUDF_DIR/tests")
+          if [[ -d "$UCX_EXCHANGE_DIR/tests" ]]; then
+            test_dirs+=("$UCX_EXCHANGE_DIR/tests")
+          fi
           deps=$(
-            find "$CUDF_DIR/tests" -name "velox_cudf_*" -type f -executable |
+            find "${test_dirs[@]}" \( -name "velox_cudf_*" -o -name ucx_exchange_test \) -type f -executable |
             xargs ldd 2>/dev/null |
             sed -n 's/[^\/]*\(\/[^ ]*\) .*/\1/p' |
             grep -vE '^/(lib|usr/lib|lib64)/(libcuda|librt\.so|libm\.so|libstdc\+\+\.so|ld-linux-x86-64\.so|libc\.so)' |
@@ -374,6 +394,13 @@ jobs:
               exit 1
             fi
           )
+          # UCX loads its transports (CUDA, TCP, shared memory, ...) at run
+          # time from the ucx/ directory next to libucs, so ldd does not list
+          # them. Ship that directory next to the copy of libucs.
+          ucs=$(grep -m 1 '/libucs\.so' <<< "$deps" || true)
+          if [[ -n $ucs ]]; then
+            cp -r "$(dirname "$ucs")/ucx" "$CUDF_DIR/cudf-libs/"
+          fi
           tar -cvf "$CUDF_DIR/cudf-libs.tar" -C "$CUDF_DIR" cudf-libs
 
       - name: Upload cuDF Test Binaries
@@ -387,6 +414,9 @@ jobs:
             _build/release/velox/experimental/cudf/tests/velox_cudf_*
             _build/release/velox/experimental/cudf/tests/**/CTestTestfile.cmake
             _build/release/velox/experimental/cudf/cudf-libs.tar
+            velox/experimental/ucx-exchange/tests/CMakeLists.txt
+            _build/release/velox/experimental/ucx-exchange/tests/ucx_exchange_test
+            _build/release/velox/experimental/ucx-exchange/tests/CTestTestfile.cmake
           retention-days: ${{ env.RETENTION }}
 
   adapters-build-status:
@@ -449,9 +479,10 @@ jobs:
     runs-on: 4-core-ubuntu-gpu-t4
     needs: adapters
     if: ${{ inputs.is-full-mode && ! inputs.use-clang && needs.adapters.outputs.cudf-changes == 'true' && needs.adapters.result == 'success' && always() }}
-    timeout-minutes: 30
+    timeout-minutes: 45
     env:
       CUDF_DIR: _build/release/velox/experimental/cudf
+      UCX_EXCHANGE_DIR: _build/release/velox/experimental/ucx-exchange
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -474,15 +505,21 @@ jobs:
           nvidia-smi
 
       - name: Download cuDF Test Binaries
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: cudftestbinaries
 
       - name: Adapt Downloaded Files
+        id: adapt
         run: |
+          # The ucx-exchange tests are only built when cuDF is built with UCX.
+          test_dirs=("$CUDF_DIR/tests")
+          if [[ -d "$UCX_EXCHANGE_DIR/tests" ]]; then
+            test_dirs+=("$UCX_EXCHANGE_DIR/tests")
+          fi
           # Change hardcoded workspace path in every CTestTestfile.cmake to
           # the runner workspace.
-          mapfile -t ctest_files < <(find "$CUDF_DIR/tests" -name CTestTestfile.cmake)
+          mapfile -t ctest_files < <(find "${test_dirs[@]}" -name CTestTestfile.cmake)
           if [[ ${#ctest_files[@]} -eq 0 ]]; then
             echo "Error: no CTestTestfile.cmake files found under $CUDF_DIR/tests"
             exit 1
@@ -491,9 +528,9 @@ jobs:
             sed -i "s|/__w/velox/velox|${GITHUB_WORKSPACE}|g" "$f"
             echo "Patched: $f"
           done
-          if grep -rq '/__w/velox/velox' "$CUDF_DIR/tests" --include=CTestTestfile.cmake; then
+          if grep -rq '/__w/velox/velox' "${test_dirs[@]}" --include=CTestTestfile.cmake; then
             echo "Error: Some CTestTestfile.cmake files still reference /__w/velox/velox after patching:"
-            grep -rl '/__w/velox/velox' "$CUDF_DIR/tests" --include=CTestTestfile.cmake
+            grep -rl '/__w/velox/velox' "${test_dirs[@]}" --include=CTestTestfile.cmake
             exit 1
           fi
           grep -h "Source directory" "${ctest_files[@]}" || true
@@ -503,10 +540,20 @@ jobs:
           # ldfconfig causes system wide changes. Since we are copying some system libraries from
           # the build machine, we need to use patchelf to add the copied libraries path only to
           # the test executables.
-          for exe in $CUDF_DIR/tests/velox_cudf_*; do
-            patchelf --force-rpath --set-rpath '$ORIGIN/../cudf-libs' "$exe"
+          for exe in $CUDF_DIR/tests/velox_cudf_* $UCX_EXCHANGE_DIR/tests/ucx_exchange_test; do
+            [[ -f $exe ]] || continue
+            libs=$(realpath --relative-to="$(dirname "$exe")" "$CUDF_DIR/cudf-libs")
+            patchelf --force-rpath --set-rpath "\$ORIGIN/$libs" "$exe"
             chmod +x "$exe"
             ls -l "$exe"
+          done
+          # The UCX libraries find each other through a RUNPATH that points at
+          # the build image's install prefix, and an executable's RPATH does not
+          # apply to the dependencies of a library that has its own RUNPATH.
+          for lib in $CUDF_DIR/cudf-libs/libuc[mpst].so.*; do
+            if [[ -f $lib && ! -L $lib ]]; then
+              patchelf --set-rpath '$ORIGIN' "$lib"
+            fi
           done
 
       - name: Run cuDF Tests
@@ -514,29 +561,25 @@ jobs:
           cd $CUDF_DIR/tests/
           ctest --output-on-failure
 
+      - name: Run UCX Exchange Tests
+        # Runs even when the cuDF tests fail.
+        if: ${{ !cancelled() && steps.adapt.outcome == 'success' && hashFiles('_build/release/velox/experimental/ucx-exchange/tests/ucx_exchange_test') != '' }}
+        run: |
+          cd "$UCX_EXCHANGE_DIR/tests"
+          ctest --output-on-failure
+
   ubuntu-debug:
     runs-on: 32-core-ubuntu
     container: ghcr.io/facebookincubator/velox-dev:ubuntu-22.04
-    # Full-mode only — selective coverage pre-approval comes from the
-    # adapters job. Ubuntu debug is part of the post-approval / on-push
-    # full-coverage suite (catches debug-only assertions and validates
-    # against system Ubuntu deps).
-    #
-    # CONTRACT: the job display name below ("Ubuntu debug with system
-    # dependencies") is matched by .github/actions/rerun-linux-build/
-    # action.yml's `find_run` step via the regex
-    # `^Build with GCC / Ubuntu debug` to detect whether an existing
-    # Linux Build run is already in full mode (skipped → selective;
-    # anything else → full). If you rename this job, update that regex
-    # — otherwise the rerun-skip optimization will silently break and
-    # the action will fall back to "always rerun", wasting CI minutes
-    # on duplicate full builds triggered by approvals / /full-build
-    # comments on PRs whose builds are already in full mode.
-    if: ${{ inputs.is-full-mode && github.repository == 'facebookincubator/velox' }}
+    # Runs in both modes. It is the only Linux debug build, and
+    # DEBUG_ONLY_TEST tests run only in debug builds.
+    if: ${{ github.repository == 'facebookincubator/velox' }}
     name: Ubuntu debug with system dependencies
     env:
       CCACHE_DIR: ${{ github.workspace }}/ccache
       USE_CLANG: ${{ inputs.use-clang && 'true' || 'false' }}
+      # Targets to build. Empty means build everything.
+      BUILD_TARGETS: ${{ inputs.cmake-targets }}
     outputs:
       build-outcome: ${{ steps.build.outcome }}
       build-failure-details: ${{ steps.build-errors.outputs.build-failure-details }}
@@ -638,6 +681,7 @@ jobs:
           # find_package(OpenMP) to define it, so a SYSTEM resolution
           # fails the configure.
           faiss_SOURCE: BUNDLED
+          LibXml2_SOURCE: BUNDLED
           # Use BUNDLED gflags to provide PIC static gflags for .so plugins.
           # The container's folly is built with -DGFLAGS_SHARED=FALSE so its
           # exported config references gflags_static which BUNDLED gflags provides.
@@ -661,7 +705,35 @@ jobs:
              export gflags_SOURCE=SYSTEM;
           fi
           export EXTRA_CMAKE_FLAGS="${CMAKE_FLAGS[*]}"
-          make debug 2>&1 | tee /tmp/build-output.log
+
+          # Configure and build in two steps, so the targets can be
+          # checked in between.
+          make cmake BUILD_DIR=debug BUILD_TYPE=Debug 2>&1 \
+            | tee /tmp/build-output.log
+
+          targets=()
+          if [[ -n "$BUILD_TARGETS" ]]; then
+            # The plan can name targets this build does not have, such as
+            # the cloud adapter tests. Ninja fails on any unknown target,
+            # so drop them.
+            ninja -C _build/debug -t targets all \
+              | sed -n 's/^\([A-Za-z0-9_+.-]*\): phony$/\1/p' \
+              | sort -u > available-targets.txt
+            read -ra planned <<< "$BUILD_TARGETS"
+            for target in "${planned[@]}"; do
+              if grep -qxF "$target" available-targets.txt; then
+                targets+=("$target")
+              fi
+            done
+            echo "plan targets : $BUILD_TARGETS"
+            echo "building     : ${targets[*]:-<none matched, building everything>}"
+            # The test step reads this to run only what was built.
+            echo "BUILD_TARGETS=${targets[*]}" >> "$GITHUB_ENV"
+          fi
+
+          # Empty TARGETS builds everything.
+          make build BUILD_DIR=debug TARGETS="${targets[*]}" 2>&1 \
+            | tee -a /tmp/build-output.log
 
       - name: Extract build errors
         id: build-errors
@@ -683,7 +755,7 @@ jobs:
         run: |
           ccache -vs
 
-      - uses: apache/infrastructure-actions/stash/save@3354c1565d4b0e335b78a76aedd82153a9e144d4
+      - uses: apache/infrastructure-actions/stash/save@b1b1ab191498302581efdef55279706f79249c0e
         with:
           path: ${{ env.CCACHE_DIR }}
           key: ccache-ubuntu-debug-default-${{ inputs.use-clang && 'clang' || 'gcc' }}
@@ -695,7 +767,20 @@ jobs:
         run: |
           ulimit -n 65536
           cd _build/debug
-          ctest -j 24 --timeout 1800 --output-on-failure --no-tests=error \
+          # In selective mode, run only the tests that were built. Allow
+          # zero tests there, since a change may build none.
+          CTEST_FILTER=()
+          if [[ -n "$BUILD_TARGETS" ]]; then
+            regex_targets="$(
+              printf '%s\n' $BUILD_TARGETS |
+                sed -e 's/[][(){}.^$*+?|\\]/\\&/g' |
+                paste -sd '|' -
+            )"
+            CTEST_FILTER=(-R "^(${regex_targets})$")
+          else
+            CTEST_FILTER=(--no-tests=error)
+          fi
+          ctest -j 24 --timeout 1800 --output-on-failure "${CTEST_FILTER[@]}" \
             --output-junit test-results.xml 2>&1 | tee /tmp/ctest-output.log
 
       - name: Retry Flaky Tests
@@ -716,10 +801,7 @@ jobs:
           fi
 
   ubuntu-debug-build-status:
-    # Skip when ubuntu-debug is skipped (selective mode) — otherwise
-    # this would post a misleading "passed" status for a job that
-    # didn't run.
-    if: ${{ inputs.is-full-mode && always() }}
+    if: always()
     needs: ubuntu-debug
     runs-on: 4-core-ubuntu
     name: "BUILD: Ubuntu debug with system dependencies"
@@ -745,7 +827,7 @@ jobs:
           if-no-files-found: ignore
 
   ubuntu-debug-test-status:
-    if: ${{ inputs.is-full-mode && always() }}
+    if: always()
     needs: ubuntu-debug
     runs-on: 4-core-ubuntu
     name: "TEST: Ubuntu debug with system dependencies"
@@ -847,6 +929,7 @@ jobs:
         env:
           VELOX_DEPENDENCY_SOURCE: SYSTEM
           faiss_SOURCE: BUNDLED
+          LibXml2_SOURCE: BUNDLED
           simdjson_SOURCE: BUNDLED
           gRPC_SOURCE: SYSTEM
           MAKEFLAGS: NUM_THREADS=32 MAX_HIGH_MEM_JOBS=8 MAX_LINK_JOBS=6
@@ -862,7 +945,7 @@ jobs:
         run: |
           ccache -vs
 
-      - uses: apache/infrastructure-actions/stash/save@3354c1565d4b0e335b78a76aedd82153a9e144d4
+      - uses: apache/infrastructure-actions/stash/save@b1b1ab191498302581efdef55279706f79249c0e
         with:
           path: ${{ env.CCACHE_DIR }}
           key: ccache-fedora-debug-default-gcc
@@ -1039,7 +1122,7 @@ jobs:
       - name: Ccache after
         run: ccache -s
 
-      - uses: apache/infrastructure-actions/stash/save@3354c1565d4b0e335b78a76aedd82153a9e144d4
+      - uses: apache/infrastructure-actions/stash/save@b1b1ab191498302581efdef55279706f79249c0e
         with:
           path: ${{ env.CCACHE_DIR }}
           key: ccache-asan-ubsan-adapters

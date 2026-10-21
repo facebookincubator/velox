@@ -107,7 +107,7 @@ class TestClusterIndexFactory final : public ClusterIndexFactory {
         .createKeyEncoder(columns, inputType, sortOrders, pool);
   }
 
-  std::unique_ptr<ClusterIndex> createReader(
+  std::unique_ptr<ClusterIndexBase> createReader(
       Section rootSection,
       velox::memory::MemoryPool* pool,
       const IndexLookup::Options& options) const override {
@@ -484,6 +484,9 @@ TEST_F(IndexFactoryTest, customFactoriesEndToEnd) {
 
 TEST_F(IndexFactoryTest, builtInClusterFactoryIsRegistered) {
   EXPECT_EQ(clusterIndexFactory(kClusterIndexName).name(), kClusterIndexName);
+  EXPECT_EQ(
+      clusterIndexFactory(kHierarchicalClusterIndexName).name(),
+      kHierarchicalClusterIndexName);
 }
 
 TEST_F(IndexFactoryTest, builtInDenseFactoriesAreRegistered) {

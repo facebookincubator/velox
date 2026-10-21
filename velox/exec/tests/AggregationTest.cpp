@@ -610,6 +610,140 @@ TEST_F(AggregationTest, global) {
       "max(15), max(c1), max(c2), max(c3), max(c4), max(c5), sum(1) FROM tmp");
 }
 
+TEST_F(AggregationTest, combineGlobalPartial) {
+  core::PlanNodeId partialAggregationId;
+  auto makePlan = [&](std::initializer_list<VectorPtr> input,
+                      const std::vector<std::string>& aggregates) {
+    PlanBuilder builder;
+    builder.values({makeRowVector(input)}, /*parallelizable=*/true)
+        .partialAggregation({}, aggregates)
+        .capturePlanNodeId(partialAggregationId)
+        .localPartition({})
+        .finalAggregation();
+    return builder;
+  };
+
+  auto run = [&](const PlanBuilder& builder,
+                 std::initializer_list<Variant> expected) {
+    auto task = AssertQueryBuilder(builder.planNode())
+                    .maxDrivers(4)
+                    .assertResults(expected);
+    const auto planStats = toPlanStats(task->taskStats());
+    const auto& stats = planStats.at(partialAggregationId);
+    EXPECT_EQ(stats.numDrivers, 4);
+    return stats.outputRows;
+  };
+
+  {
+    SCOPED_TRACE("fixed-width state");
+    EXPECT_EQ(
+        1,
+        run(makePlan(
+                {makeFlatVector<int64_t>({1, 2, 3, 4})},
+                {"sum(c0)", "count(c0)"}),
+            {Variant(int64_t{40}), Variant(int64_t{16})}));
+  }
+
+  {
+    SCOPED_TRACE("fixed-width state over empty input");
+    EXPECT_EQ(
+        1,
+        run(makePlan({makeFlatVector<int64_t>({})}, {"sum(c0)", "count(c0)"}),
+            {Variant::null(TypeKind::BIGINT), Variant(int64_t{0})}));
+  }
+
+  {
+    SCOPED_TRACE("compacting variable-width state");
+    const auto value = std::string(1'024, 'a');
+    EXPECT_EQ(
+        1,
+        run(makePlan(
+                {makeFlatIdentityVector<int64_t>(100),
+                 makeConstant(value, 100)},
+                {"min(c1)", "sum(c0)"}),
+            {Variant(value), Variant(int64_t{19'800})}));
+  }
+
+  {
+    const auto maps = makeMapVector<int64_t, int64_t>(
+        100,
+        [](auto /*row*/) { return 1; },
+        [](auto row) { return row; },
+        [](auto row) { return row; });
+    for (const auto& [aggregate, expectedCardinality] :
+         std::vector<std::pair<std::string, int64_t>>{
+             {"array_agg(c0)", 400},
+             {"set_agg(c0)", 100},
+             {"map_agg(c0, c0)", 100},
+             {"multimap_agg(c0, c0)", 100},
+             {"map_union(c1)", 100},
+             {"map_union_sum(c1)", 100},
+         }) {
+      SCOPED_TRACE(aggregate);
+      EXPECT_EQ(
+          4,
+          run(makePlan(
+                  {makeFlatIdentityVector<int64_t>(100), maps}, {aggregate})
+                  .project({"cardinality(a0)"}),
+              {Variant(expectedCardinality)}));
+    }
+  }
+
+  {
+    SCOPED_TRACE("mixed reducing and non-reducing states");
+    EXPECT_EQ(
+        4,
+        run(makePlan(
+                {makeFlatIdentityVector<int64_t>(100)},
+                {"sum(c0)", "array_agg(c0)"})
+                .project({"a0", "cardinality(a1)"}),
+            {Variant(int64_t{19'800}), Variant(int64_t{400})}));
+  }
+
+  {
+    SCOPED_TRACE("peer-specific intermediate metadata");
+    // Each driver sees a constant buckets argument, but the values differ
+    // across drivers. Combining partial states must preserve the global
+    // constant-argument validation and reject the query.
+    auto plan =
+        PlanBuilder()
+            .values({makeRowVector({
+                makeFlatVector<int64_t>({1, 2, 3, 4}),
+                makeConstant<int64_t>(1, 4),
+                makeConstant<int64_t>(31, 4),
+            })})
+            .localPartitionRoundRobinRow()
+            .partialAggregation({}, {"approx_most_frequent(c0, c1, c2)"})
+            .localPartition({})
+            .finalAggregation()
+            .planNode();
+    VELOX_ASSERT_THROW(
+        AssertQueryBuilder(plan).maxDrivers(4).copyResults(pool()),
+        "Buckets argument must be constant for all input rows");
+  }
+}
+
+DEBUG_ONLY_TEST_F(AggregationTest, combineGlobalPartialWithTaskAbort) {
+  // Aborting the task closes the drivers waiting for the last one to merge
+  // their states. The merge must not read a closed peer.
+  auto plan = PlanBuilder()
+                  .values(
+                      {makeRowVector({makeFlatVector<int64_t>({1, 2, 3, 4})})},
+                      /*parallelizable=*/true)
+                  .partialAggregation({}, {"sum(c0)"})
+                  .localPartition({})
+                  .finalAggregation()
+                  .planNode();
+
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::HashAggregation::combineGlobalPartialAggregation",
+      std::function<void(Operator*)>(
+          [](Operator* op) { op->operatorCtx()->task()->requestAbort(); }));
+
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(plan).maxDrivers(4).copyResults(pool()), "Aborted");
+}
+
 TEST_F(AggregationTest, manyGlobalAggregations) {
   // Test a query with a large number of global aggregations.
   // Global aggregations have a separate code path that does not use a
@@ -1267,6 +1401,202 @@ TEST_F(AggregationTest, spillAll) {
         stats[0].operatorStats[1].spilledPartitions, 1 << numPartitionBits);
     // Verifies all the rows have been spilled.
     ASSERT_EQ(stats[0].operatorStats[1].spilledRows, numDistincts);
+    OperatorTestBase::deleteTaskAndCheckSpillDirectory(task);
+  }
+}
+
+TEST_F(AggregationTest, spillWithCappedMergeFiles) {
+  // Every batch repeats the same grouping keys and spilling is forced after
+  // each batch, so each key ends up in every spill file. Capping the merge way
+  // makes SpillPartition::createOrderedReader pre-merge the files, and a
+  // pre-merged file does hold the same key twice within one stream, because
+  // merging concatenates without combining equal keys.
+  // The merge compares keys across streams only, so without the consumer
+  // checking the key itself the repeat ends a group early and one group is
+  // emitted as two.
+  constexpr int32_t kNumBatches = 40;
+  constexpr int32_t kNumKeys = 50;
+
+  std::vector<RowVectorPtr> inputs;
+  inputs.reserve(kNumBatches);
+  for (auto batch = 0; batch < kNumBatches; ++batch) {
+    inputs.push_back(makeRowVector(
+        {makeFlatVector<int64_t>(kNumKeys, [](auto row) { return row; }),
+         makeFlatVector<int64_t>(kNumKeys, [](auto) { return 1; })}));
+  }
+
+  core::PlanNodeId aggregationNodeId;
+  const auto plan = PlanBuilder()
+                        .values(inputs)
+                        .singleAggregation({"c0"}, {"sum(c1)"})
+                        .capturePlanNodeId(aggregationNodeId)
+                        .planNode();
+
+  const auto expected = makeRowVector(
+      {makeFlatVector<int64_t>(kNumKeys, [](auto row) { return row; }),
+       makeFlatVector<int64_t>(
+           kNumKeys, [kNumBatches](auto) { return kNumBatches; })});
+
+  // 'numMaxMergeFiles' 0 disables the cap and merges every file in one pass,
+  // which is the behaviour the capped path has to match. An output batch
+  // smaller than the group count makes a batch fill up mid-merge, which is
+  // where the merge returns leaving the current element unconsumed and then
+  // re-reads it without popping.
+  // The cap has to be kMaxOutputBatchRows: Operator::outputBatchRows() only
+  // consults kPreferredOutputBatchRows when the row size is unknown, and here
+  // it is not.
+  struct {
+    uint32_t numMaxMergeFiles;
+    std::string maxOutputBatchRows;
+    bool expectsMultipleBatches;
+  } testCases[] = {
+      {0, "10000", false},
+      {4, "10000", false},
+      {4, "10", true},
+  };
+
+  for (const auto& testCase : testCases) {
+    const auto numMaxMergeFiles = testCase.numMaxMergeFiles;
+    SCOPED_TRACE(
+        fmt::format(
+            "numMaxMergeFiles: {}, maxOutputBatchRows: {}",
+            numMaxMergeFiles,
+            testCase.maxOutputBatchRows));
+
+    auto spillDirectory = TempDirectoryPath::create();
+    TestScopedSpillInjection scopedSpillInjection(100);
+    auto task =
+        AssertQueryBuilder(plan)
+            .spillDirectory(spillDirectory->getPath())
+            .config(QueryConfig::kSpillEnabled, true)
+            .config(QueryConfig::kAggregationSpillEnabled, true)
+            .config(QueryConfig::kSpillNumPartitionBits, "0")
+            .config(
+                QueryConfig::kSpillNumMaxMergeFiles,
+                std::to_string(numMaxMergeFiles))
+            .config(
+                QueryConfig::kMaxOutputBatchRows, testCase.maxOutputBatchRows)
+            .maxDrivers(1)
+            .assertResults(expected);
+
+    // The pre-merge path is only taken when a partition holds more than
+    // 'numMaxMergeFiles' files, so guard against the test passing because
+    // nothing spilled.
+    const auto planStats = toPlanStats(task->taskStats());
+    const auto& stats = planStats.at(aggregationNodeId);
+    ASSERT_GT(stats.spilledFiles, 4);
+    ASSERT_EQ(stats.spilledPartitions, 1);
+    // A batch boundary mid-merge is what makes the merge return with the
+    // current element unconsumed, so confirm the cap actually split the
+    // output rather than silently doing nothing.
+    if (testCase.expectsMultipleBatches) {
+      ASSERT_GT(stats.outputVectors, 1);
+    } else {
+      ASSERT_EQ(stats.outputVectors, 1);
+    }
+    OperatorTestBase::deleteTaskAndCheckSpillDirectory(task);
+  }
+}
+
+TEST_F(AggregationTest, distinctSpillWithCappedMergeFiles) {
+  // Same setup as 'spillWithCappedMergeFiles' but for the distinct path, which
+  // reads the pre-merged files through nextWithEquals() as well.
+  constexpr int32_t kNumBatches = 40;
+  constexpr int32_t kNumKeys = 10'000;
+
+  std::vector<RowVectorPtr> inputs;
+  inputs.reserve(kNumBatches);
+  for (auto batch = 0; batch < kNumBatches; ++batch) {
+    inputs.push_back(makeRowVector(
+        {makeFlatVector<int64_t>(kNumKeys, [](auto row) { return row; })}));
+  }
+
+  core::PlanNodeId aggregationNodeId;
+  const auto plan = PlanBuilder()
+                        .values(inputs)
+                        .singleAggregation({"c0"}, {})
+                        .capturePlanNodeId(aggregationNodeId)
+                        .planNode();
+
+  const auto expected = makeRowVector(
+      {makeFlatVector<int64_t>(kNumKeys, [](auto row) { return row; })});
+
+  for (const uint32_t numMaxMergeFiles : {0, 4}) {
+    SCOPED_TRACE(fmt::format("numMaxMergeFiles: {}", numMaxMergeFiles));
+
+    auto spillDirectory = TempDirectoryPath::create();
+    TestScopedSpillInjection scopedSpillInjection(100);
+    auto task = AssertQueryBuilder(plan)
+                    .spillDirectory(spillDirectory->getPath())
+                    .config(QueryConfig::kSpillEnabled, true)
+                    .config(QueryConfig::kAggregationSpillEnabled, true)
+                    .config(QueryConfig::kSpillNumPartitionBits, "2")
+                    .config(QueryConfig::kMaxSpillRunRows, "4096")
+                    .config(
+                        QueryConfig::kSpillNumMaxMergeFiles,
+                        std::to_string(numMaxMergeFiles))
+                    .maxDrivers(1)
+                    .assertResults(expected);
+
+    const auto planStats = toPlanStats(task->taskStats());
+    const auto& stats = planStats.at(aggregationNodeId);
+    ASSERT_GT(stats.spilledFiles, 4);
+    ASSERT_EQ(stats.spilledPartitions, 4);
+    ASSERT_GT(
+        stats.customStats.at(std::string(Operator::kSpillRuns)).sum,
+        kNumBatches);
+    OperatorTestBase::deleteTaskAndCheckSpillDirectory(task);
+  }
+}
+
+TEST_F(AggregationTest, distinctSpillWithCappedMergeFilesSparseKeys) {
+  // 'distinctSpillWithCappedMergeFiles' repeats every key in every batch, so
+  // every spill file holds every key and a key that a pre-merged file repeats
+  // is still reported equal against some other stream. Here each key spans only
+  // a few consecutive batches, so after pre-merging a key can sit twice inside
+  // one stream and appear in no other, which is what
+  // TreeOfLosers::nextWithEquals() cannot report.
+  constexpr int32_t kNumBatches = 40;
+  constexpr int32_t kKeysPerBatch = 8;
+  constexpr int32_t kNumKeys = kNumBatches + kKeysPerBatch - 1;
+
+  std::vector<RowVectorPtr> inputs;
+  inputs.reserve(kNumBatches);
+  for (auto batch = 0; batch < kNumBatches; ++batch) {
+    inputs.push_back(makeRowVector({makeFlatVector<int64_t>(
+        kKeysPerBatch, [batch](auto row) { return batch + row; })}));
+  }
+
+  core::PlanNodeId aggregationNodeId;
+  const auto plan = PlanBuilder()
+                        .values(inputs)
+                        .singleAggregation({"c0"}, {})
+                        .capturePlanNodeId(aggregationNodeId)
+                        .planNode();
+
+  const auto expected = makeRowVector(
+      {makeFlatVector<int64_t>(kNumKeys, [](auto row) { return row; })});
+
+  for (const uint32_t numMaxMergeFiles : {0, 2, 3, 4}) {
+    SCOPED_TRACE(fmt::format("numMaxMergeFiles: {}", numMaxMergeFiles));
+
+    auto spillDirectory = TempDirectoryPath::create();
+    TestScopedSpillInjection scopedSpillInjection(100);
+    auto task = AssertQueryBuilder(plan)
+                    .spillDirectory(spillDirectory->getPath())
+                    .config(QueryConfig::kSpillEnabled, true)
+                    .config(QueryConfig::kAggregationSpillEnabled, true)
+                    .config(QueryConfig::kSpillNumPartitionBits, "0")
+                    .config(
+                        QueryConfig::kSpillNumMaxMergeFiles,
+                        std::to_string(numMaxMergeFiles))
+                    .maxDrivers(1)
+                    .assertResults(expected);
+
+    const auto planStats = toPlanStats(task->taskStats());
+    const auto& stats = planStats.at(aggregationNodeId);
+    ASSERT_GT(stats.spilledFiles, 4);
+    ASSERT_EQ(stats.spilledPartitions, 1);
     OperatorTestBase::deleteTaskAndCheckSpillDirectory(task);
   }
 }
@@ -3872,6 +4202,18 @@ TEST_F(AggregationTest, distinctWithConstantInput) {
   assertQuery(
       plan, "SELECT c0, sum(DISTINCT 1), count(c1) FROM tmp GROUP BY c0");
 
+  // All-constant distinct inputs together with an accumulator that uses
+  // external memory.
+  plan = PlanBuilder()
+             .values({data})
+             .project({"c0", "cast(c0 as varchar) as name"})
+             .singleAggregation({"c0"}, {"sum(DISTINCT 3)", "arbitrary(name)"})
+             .planNode();
+
+  assertQuery(
+      plan,
+      "SELECT c0, sum(DISTINCT 3), arbitrary(CAST(c0 AS VARCHAR)) FROM tmp GROUP BY c0");
+
   // Global aggregation with constant distinct input.
   plan = PlanBuilder()
              .values({data})
@@ -5345,5 +5687,48 @@ TEST_F(
           .config(QueryConfig::kMaxExtendedPartialAggregationMemory, "4096")
           .copyResults(pool());
   EXPECT_EQ(result->size(), totalRows);
+}
+
+// Regression test for duplicate keys with spilling merge enabled:
+// The first spill file contains 100 aggregate states. The next two files
+// each contain one state for key 100, pre-merge combines them into one stream
+// containing consecutive duplicate keys: [100, 100].
+TEST_F(AggregationTest, duplicateKeysWithSpillingAndPreMerge) {
+  const std::vector<RowVectorPtr> inputs{
+      makeRowVector({
+          makeFlatVector<int64_t>(100, [](vector_size_t row) { return row; }),
+          makeFlatVector<int64_t>(
+              100, [](vector_size_t /* row */) { return 1; }),
+      }),
+      makeRowVector({
+          makeFlatVector<int64_t>(
+              1, [](vector_size_t /* row */) { return 100; }),
+          makeFlatVector<int64_t>(1, [](vector_size_t /* row */) { return 1; }),
+      }),
+      makeRowVector({
+          makeFlatVector<int64_t>(
+              1, [](vector_size_t /* row */) { return 100; }),
+          makeFlatVector<int64_t>(1, [](vector_size_t /* row */) { return 1; }),
+      }),
+  };
+  createDuckDbTable(inputs);
+
+  const auto spillDirectory = exec::test::TempDirectoryPath::create();
+  TestScopedSpillInjection scopedSpillInjection(100);
+  AssertQueryBuilder(duckDbQueryRunner_)
+      .spillDirectory(spillDirectory->getPath())
+      .config(QueryConfig::kSpillEnabled, true)
+      .config(QueryConfig::kAggregationSpillEnabled, true)
+      // Force a batch boundary at the transition from key 99 to key 100.
+      .config(QueryConfig::kMaxOutputBatchRows, "100")
+      .config(QueryConfig::kSpillNumPartitionBits, "0")
+      .config(QueryConfig::kSpillNumMaxMergeFiles, "2")
+      .maxDrivers(1)
+      .plan(
+          PlanBuilder()
+              .values(inputs)
+              .singleAggregation({"c0"}, {"sum(c1)"})
+              .planNode())
+      .assertResults("SELECT c0, sum(c1) FROM tmp GROUP BY c0");
 }
 } // namespace facebook::velox::exec::test

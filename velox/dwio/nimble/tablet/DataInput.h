@@ -81,6 +81,11 @@ class DataInput {
 
   virtual ~DataInput() = default;
 
+  /// Returns whether loaded regions are served from a cache that retains them
+  /// across loads. Callers use it to decide whether supplying the whole-group
+  /// region to startGroup() is worth computing.
+  virtual bool cached() const = 0;
+
   /// Pre-allocate internal storage for 'numRegions' enqueued reads.
   /// Avoids reallocation during enqueue().
   virtual void reserve(uint32_t numRegions) = 0;
@@ -139,6 +144,10 @@ class DirectDataInput : public DataInput {
   };
 
   DirectDataInput(velox::ReadFile* file, const Options& options);
+
+  bool cached() const override {
+    return false;
+  }
 
   void reserve(uint32_t numRegions) override;
 
@@ -278,6 +287,10 @@ class CachedDataInput final : public DataInput {
 
   /// Constructs a grouped cache reader for `file`.
   CachedDataInput(velox::ReadFile* file, const Options& options);
+
+  bool cached() const override {
+    return true;
+  }
 
   /// Reserves storage for the requested stream regions.
   void reserve(uint32_t numRegions) override;

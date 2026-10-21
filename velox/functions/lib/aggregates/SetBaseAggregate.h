@@ -229,6 +229,12 @@ class SetAggAggregate
 
   explicit SetAggAggregate(const TypePtr& resultType) : Base(resultType) {}
 
+  bool isReducing() const override {
+    // Duplicate values are expected to be rare, so state generally grows with
+    // input cardinality.
+    return false;
+  }
+
   bool supportsToIntermediate() const override {
     return true;
   }

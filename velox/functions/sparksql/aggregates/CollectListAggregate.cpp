@@ -42,6 +42,9 @@ class CollectListAggregate {
   /// behavior can only be achieved when the default-null behavior is disabled.
   static constexpr bool default_null_behavior_ = false;
 
+  // Retains one element for each non-null input row.
+  static constexpr bool is_reducing_ = false;
+
   // Whether null input values should be ignored. Defaults to true.
   // NOTE: toIntermediate() was intentionally removed because it is static and
   // cannot access the runtime ignoreNulls_ config. Without it, partial

@@ -41,8 +41,10 @@ class Type;
 // Decoder for one logical stream assembled from per-batch segments.
 class BatchedStreamDecoder : public Decoder {
  public:
+  /// Copies the required metadata from `type`; the decoder does not retain a
+  /// reference to it.
   BatchedStreamDecoder(
-      const Type* type,
+      const Type& type,
       bool isInMapStream,
       size_t bufferPoolCapacity,
       velox::memory::MemoryPool* pool);
@@ -53,6 +55,8 @@ class BatchedStreamDecoder : public Decoder {
       std::function<void*()> getOutputNulls,
       std::vector<velox::BufferPtr>& stringBuffers,
       const velox::bits::Bitmap* scatterOutputBitmap = nullptr) override;
+
+  uint32_t remainingRows() override;
 
   uint32_t read(
       std::span<const uint32_t> rows,
@@ -84,7 +88,8 @@ class BatchedStreamDecoder : public Decoder {
   // top-level row where the batch begins in the concatenated run; it's
   // read back by FlatMap in-map reads to detect and fill gaps when
   // earlier batches omitted the stream. Other streams just concatenate
-  // in payload order.
+  // in payload order. `legacyHeaderless` is true for raw streams of the
+  // removed legacy headerless format.
   //
   // The segment is stored as raw bytes. The encoding is constructed
   // lazily by `ensureStreamData` the first time this segment is decoded.
@@ -95,12 +100,14 @@ class BatchedStreamDecoder : public Decoder {
   void addBatch(
       uint32_t startRow,
       std::string_view data,
+      bool legacyHeaderless,
       bool streamEncodingUsesVarintRowCount) {
     NIMBLE_CHECK(!data.empty(), "Physical stream segment must be non-empty");
     streamSegments_.emplace_back(
         StreamSegment{
             .startRow = startRow,
             .data = data,
+            .legacyHeaderless = legacyHeaderless,
             .streamEncodingUsesVarintRowCount =
                 streamEncodingUsesVarintRowCount});
   }
@@ -150,6 +157,8 @@ class BatchedStreamDecoder : public Decoder {
     // streams to detect gaps when decoding across multiple chunks.
     uint32_t startRow;
     std::string_view data;
+    // True for raw streams of the removed legacy headerless format.
+    bool legacyHeaderless;
     bool streamEncodingUsesVarintRowCount;
   };
 
@@ -167,22 +176,16 @@ class BatchedStreamDecoder : public Decoder {
   }
 
   // Returns the `StreamData` for the current segment, creating it lazily
-  // on first access. `stringBuffers` is where any string content decoded
-  // out of this segment will be pushed; caller retains ownership.
-  //
-  // On a cache hit (a prior `skip` already built the encoding using our
-  // scratch vector), transfer any buffers the skip path pushed into
-  // `skipStringBuffers_` into the caller's vector so the output takes
-  // shared ownership before the end-of-run `clear()` drops our scratch,
-  // then redirect the encoding's factory target for lazy string
-  // encodings whose future page allocations must land in the caller's
-  // vector, not ours.
-  serde::StreamData& ensureStreamData(
-      std::vector<velox::BufferPtr>& stringBuffers);
+  // on first access backed by `encodingStringBuffers_`.
+  serde::StreamData& ensureStreamData();
 
   // Advances to the next segment. ensureStreamData() will create StreamData for
   // the new segment before decoding it.
   void advanceSegment();
+
+  // Appends cached encoding buffer refs to the caller's vector to guarantee
+  // lifetime.
+  void attachEncodingBuffers(std::vector<velox::BufferPtr>& stringBuffers);
 
   // Fills the in-map output for rows `[rowOffset, gapEndRow)` where
   // `gapEndRow = min(rowOffset + rowCount, next stream segment's startRow)`.
@@ -216,38 +219,38 @@ class BatchedStreamDecoder : public Decoder {
       uint32_t outputOffset,
       void* output);
 
+  // Copies raw values of a legacy headerless stream segment to dense output.
+  serde::StreamData::DecodeResult readLegacyHeaderlessSegment(
+      serde::StreamData& streamData,
+      void* output,
+      uint32_t offset,
+      uint32_t count);
+
   serde::StreamData::DecodeResult readSegment(
       void* output,
       uint32_t offset,
       uint32_t count,
       const std::function<void*()>& getOutputNulls,
-      const velox::bits::Bitmap* scatterOutputBitmap,
-      std::vector<velox::BufferPtr>& stringBuffers);
+      const velox::bits::Bitmap* scatterOutputBitmap);
 
   // Skips up to `numRows` rows from the segment at `streamSegmentIndex_`.
   // Advances `streamSegmentIndex_` past the segment when its remaining
   // rows fit inside `numRows`; otherwise leaves the cursor mid-segment.
   // Returns the number of rows actually skipped (never more than
   // `numRows`, may be less if the segment has fewer remaining).
-  uint32_t skipSegment(
-      uint32_t numRows,
-      std::vector<velox::BufferPtr>& stringBuffers);
+  uint32_t skipSegment(uint32_t numRows);
 
   // Skips `numRows` rows for non-in-map columns (dense scalars, FlatMap
   // value / scattered columns). Walks `streamSegments_` from the current
   // cursor, consuming each segment fully until `numRows` are covered.
-  void skipEncoded(
-      uint32_t numRows,
-      std::vector<velox::BufferPtr>& stringBuffers);
+  void skipEncoded(uint32_t numRows);
 
   // Skips `numRows` rows for FlatMap in-map streams. Alternates between
   // presence-gap regions (advance `presentSegmentIndex_` via
   // `advanceInMapPresentSegmentIndex`) and encoded segments (advance via
   // `skipSegment`), mirroring the read-side control flow in
   // `inMapRead` but writing nothing.
-  void skipInMap(
-      uint32_t numRows,
-      std::vector<velox::BufferPtr>& stringBuffers);
+  void skipInMap(uint32_t numRows);
 
   // Advances `presentSegmentIndex_` past every presence segment fully
   // contained in `[..., targetRow]` (i.e. `segment.endRow <= targetRow`).
@@ -282,18 +285,23 @@ class BatchedStreamDecoder : public Decoder {
       std::vector<velox::BufferPtr>& stringBuffers);
 
   // --- Const members (set at construction, never modified) ---
-  const Type* const type_;
+  const Kind typeKind_;
   velox::memory::MemoryPool* const pool_;
   // True when this decoder reads a FlatMap child in-map presence stream rather
   // than the FlatMap value/null stream.
   const bool isInMapStream_;
   // Cached from type at construction to avoid per-call dispatch.
+  const ScalarKind scalarKind_;
   const uint32_t typeStorageWidth_;
   // Pool for encoding scratch buffers (e.g. MainlyConstant's isCommon and
   // otherValues buffers). Persists across reset()/addBatch() cycles so buffers
   // are reused instead of being allocated/freed through MemoryPool each time.
   // Null when buffer pooling is disabled via DeserializerOptions.
   const std::unique_ptr<velox::BufferPool> bufferPool_;
+  // Decompression buffer reused across StreamData lifetimes. Persists across
+  // reset()/addBatch() cycles so the buffer capacity is reused instead of
+  // freed and re-allocated on each segment transition.
+  velox::BufferPtr decompressionBuffer_;
 
   // --- Stream decode state (cleared by reset()) ---
   size_t streamSegmentIndex_{0};
@@ -314,13 +322,10 @@ class BatchedStreamDecoder : public Decoder {
   // 0 in `clear()`.
   uint32_t currentRow_{0};
 
-  // Backing storage for `ensureStreamData` when called from `skip*`.
-  // Some string encodings allocate their content buffers into this vector
-  // at construction time and keep `string_view`s into them; the vector
-  // must outlive the encoding that references it, so it lives with the
-  // decoder and is cleared inside `clear()` AFTER `streamData_` (and
-  // hence the encoding) is destroyed.
-  std::vector<velox::BufferPtr> skipStringBuffers_;
+  // Decoder-owned storage for the cached encoding's string buffers,
+  // keeping its string_views alive across next() calls. Read paths drain
+  // into the caller's stringBuffers at segment boundaries.
+  std::vector<velox::BufferPtr> encodingStringBuffers_;
 };
 
 } // namespace facebook::nimble

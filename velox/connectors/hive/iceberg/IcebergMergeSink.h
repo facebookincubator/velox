@@ -77,9 +77,10 @@ class IcebergMergeSink : public DataSink {
   /// inner data sink will see exactly these columns. The set must match the
   /// `inputColumns()` count on `insertTableHandle`.
   /// @param operationChannel Index of the TINYINT operation column.
-  /// @param rowIdChannel Index of the row id ROW column (must be a ROW
-  /// type whose first two fields are file_path VARCHAR and pos BIGINT —
-  /// extra trailing fields are tolerated and ignored).
+  /// @param rowIdChannel Index of the Iceberg row id column,
+  /// ROW<file_path VARCHAR, pos BIGINT, spec_id INTEGER,
+  /// partition_data VARCHAR>. Forwarded unchanged to the DV sub-sink, which
+  /// emits partition_data as the delete file's partition.
   IcebergMergeSink(
       RowTypePtr inputType,
       IcebergInsertTableHandlePtr insertTableHandle,
@@ -111,10 +112,9 @@ class IcebergMergeSink : public DataSink {
       const BufferPtr& insertIndices,
       vector_size_t insertSize) const;
 
-  // Builds a narrow DV-sub-sink batch (one row per delete-tagged input row)
-  // by extracting the first two children of the row_id ROW field
-  // (file_path, pos) and dictionary-wrapping each using the pre-computed
-  // `deleteIndices` buffer. Returned RowVector has type
+  // Builds a single-column DV-sub-sink batch (one row per delete-tagged
+  // input row) by dictionary-wrapping the row_id ROW column with the
+  // pre-computed `deleteIndices` buffer. Returned RowVector has type
   // `deletionVectorInputType_`.
   RowVectorPtr makeDeleteBatch(
       const RowVectorPtr& input,
@@ -139,11 +139,6 @@ class IcebergMergeSink : public DataSink {
       const RowTypePtr& inputType,
       const std::vector<column_index_t>& targetColumnChannels,
       const IcebergInsertTableHandle& insertTableHandle);
-
-  // The 2-column ROW type the DV sub-sink consumes: (file_path VARCHAR,
-  // pos BIGINT). Validated against the first two children of the row_id
-  // ROW at construction time.
-  static RowTypePtr makeDeletionVectorInputType();
 
   const RowTypePtr inputType_;
   const IcebergInsertTableHandlePtr insertTableHandle_;

@@ -97,7 +97,7 @@ class SortedIndex : public IndexLookup {
   // Returns the row offset (number of entries before this chunk).
   uint32_t rowOffset(uint32_t chunkIdx) const;
 
-  // Loads a chunk and creates the encoding without materializing entries.
+  // Loads a chunk and creates its reader without materializing entries.
   std::shared_ptr<DecodedKeyChunk> loadChunk(uint32_t chunkIdx) const;
 
   // Extracts the key prefix (without row ID suffix) from a composite entry.

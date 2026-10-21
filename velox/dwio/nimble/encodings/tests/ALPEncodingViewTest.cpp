@@ -23,10 +23,9 @@
 
 using namespace facebook;
 
-using EncodingViewTest = nimble::test::EncodingViewTest;
 using ALPEncodingViewTest = nimble::test::EncodingViewTest;
 
-TEST_F(EncodingViewTest, readsAlpEncoding) {
+TEST_P(ALPEncodingViewTest, readsAlpEncoding) {
   expectReads<nimble::ALPEncoding<float>>(
       makeVector<float>({-12.5F, -1.25F, 0.0F, 1.25F, 12.5F}), {4, 0, 2, 1, 3});
   expectReads<nimble::ALPEncoding<double>>(
@@ -36,7 +35,7 @@ TEST_F(EncodingViewTest, readsAlpEncoding) {
       {1, 2, 0});
 }
 
-TEST_F(ALPEncodingViewTest, concurrent) {
+TEST_P(ALPEncodingViewTest, concurrent) {
   const auto positions = randomizedPositions(/*seed=*/14);
 
   expectConcurrentReads<nimble::ALPEncoding<float>>(
@@ -44,3 +43,5 @@ TEST_F(ALPEncodingViewTest, concurrent) {
   expectConcurrentReads<nimble::ALPEncoding<double>>(
       randomAlpData<double>(/*seed=*/16), positions);
 }
+
+INSTANTIATE_ENCODING_VIEW_TEST_SUITE(ALPEncodingViewTest);

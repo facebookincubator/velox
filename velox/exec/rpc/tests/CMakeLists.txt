@@ -78,6 +78,7 @@ add_executable(velox_rpc_rate_limiter_test RPCRateLimiterTest.cpp)
 target_link_libraries(
   velox_rpc_rate_limiter_test
   velox_rpc_rate_limiter
+  velox_test_util
   GTest::gtest
   GTest::gtest_main
   Folly::folly

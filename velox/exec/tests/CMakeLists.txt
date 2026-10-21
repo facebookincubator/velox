@@ -153,6 +153,7 @@ set(
   AsyncConnectorTest.cpp
   VectorWindowPartitionTest.cpp
   FileExchangeTest.cpp
+  CursorTest.cpp
 )
 
 set(
@@ -174,6 +175,7 @@ set(
   velox_hive_connector
   velox_memory
   velox_serialization
+  velox_simple_aggregate
   velox_test_util
   velox_type
   velox_type_test_lib
@@ -341,6 +343,7 @@ target_link_libraries(
   velox_vector_fuzzer
   GTest::gtest
   GTest::gtest_main
+  GTest::gmock
 )
 
 add_test(
@@ -365,6 +368,7 @@ add_library(
   velox_simple_aggregate
   SimpleAverageAggregate.cpp
   SimpleArrayAggAggregate.cpp
+  SimpleConstantForwardingAggregate.cpp
   SimpleVariadicArrayAggAggregate.cpp
   SimpleVariadicSumAggregate.cpp
 )
@@ -463,7 +467,21 @@ add_test(
   COMMAND velox_adaptive_prefetch_test
   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
 )
-target_link_libraries(velox_adaptive_prefetch_test GTest::gtest GTest::gtest_main)
+target_link_libraries(velox_adaptive_prefetch_test Folly::folly GTest::gtest GTest::gtest_main)
+
+add_executable(velox_exchange_transport_registry_test ExchangeTransportRegistryTest.cpp)
+add_test(
+  NAME velox_exchange_transport_registry_test
+  COMMAND velox_exchange_transport_registry_test
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
+target_link_libraries(
+  velox_exchange_transport_registry_test
+  velox_exec
+  GTest::gtest
+  GTest::gtest_main
+  GTest::gmock
+)
 
 add_executable(velox_output_transport_registry_test OutputTransportRegistryTest.cpp)
 add_test(
@@ -502,7 +520,7 @@ target_link_libraries(
   GTest::gtest_main
 )
 
-add_executable(velox_fixed_point_test FixedPointTest.cpp)
+add_executable(velox_fixed_point_test FixedPointTest.cpp FixedPointVerdictsTest.cpp Main.cpp)
 add_test(
   NAME velox_fixed_point_test
   COMMAND velox_fixed_point_test
@@ -513,8 +531,8 @@ target_link_libraries(
   velox_exec
   velox_exec_test_lib
   velox_core
+  GTest::gmock
   GTest::gtest
-  GTest::gtest_main
 )
 
 velox_add_library(velox_aggregate_registry_util INTERFACE HEADERS AggregateRegistryTestUtil.h)

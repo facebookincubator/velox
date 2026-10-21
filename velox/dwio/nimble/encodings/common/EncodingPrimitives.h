@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
+#include <span>
 #include <string_view>
 
 #include "folly/io/IOBuf.h"
@@ -133,6 +134,13 @@ inline char readChar(const char*& pos) {
 
 inline uint32_t readUint32(const char*& pos) {
   return read<uint32_t>(pos);
+}
+
+/// Reads uint32 values written by writeUint32, advancing `pos`.
+inline void readUint32s(const char*& pos, std::span<uint32_t> values) {
+  for (auto& value : values) {
+    value = readUint32(pos);
+  }
 }
 
 inline uint64_t readUint64(const char*& pos) {

@@ -890,4 +890,22 @@ TEST(StreamDataUtilTest, isAllTrueBoolStream) {
   EXPECT_FALSE(isAllTrueBoolStream(std::string_view("\0\0", 2)));
 }
 
+TEST(StreamDataUtilTest, isAllFalseBoolStream) {
+  // All-false.
+  EXPECT_TRUE(isAllFalseBoolStream(std::string_view("\0\0\0", 3)));
+  EXPECT_TRUE(isAllFalseBoolStream(std::string_view("\0", 1)));
+
+  // All-true.
+  EXPECT_FALSE(isAllFalseBoolStream(std::string_view("\1\1\1", 3)));
+  EXPECT_FALSE(isAllFalseBoolStream(std::string_view("\1", 1)));
+
+  // Mixed, with the true byte at either end.
+  EXPECT_FALSE(isAllFalseBoolStream(std::string_view("\1\0", 2)));
+  EXPECT_FALSE(isAllFalseBoolStream(std::string_view("\0\1", 2)));
+  EXPECT_FALSE(isAllFalseBoolStream(std::string_view("\1\0\1", 3)));
+
+  // Empty streams are constant but do not represent all-false metadata.
+  EXPECT_FALSE(isAllFalseBoolStream(""));
+}
+
 } // namespace facebook::nimble

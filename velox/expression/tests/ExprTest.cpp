@@ -176,7 +176,7 @@ class ExprTest : public testing::Test, public VectorTestBase {
 
   std::pair<
       std::vector<VectorPtr>,
-      std::unordered_map<std::string, exec::ExprStats>>
+      folly::F14FastMap<std::string, exec::ExprStats>>
   evaluateMultipleWithStats(
       const std::vector<std::string>& texts,
       const RowVectorPtr& input,
@@ -199,13 +199,13 @@ class ExprTest : public testing::Test, public VectorTestBase {
     return evaluateMultiple({text}, input)[0];
   }
 
-  std::pair<VectorPtr, std::unordered_map<std::string, exec::ExprStats>>
+  std::pair<VectorPtr, folly::F14FastMap<std::string, exec::ExprStats>>
   evaluateWithStats(const std::string& expression, const RowVectorPtr& input) {
     auto exprSet = compileExpression(expression, asRowType(input->type()));
     return evaluateWithStats(exprSet.get(), input);
   }
 
-  std::pair<VectorPtr, std::unordered_map<std::string, exec::ExprStats>>
+  std::pair<VectorPtr, folly::F14FastMap<std::string, exec::ExprStats>>
   evaluateWithStats(
       exec::ExprSet* exprSetPtr,
       const RowVectorPtr& input,
@@ -2158,6 +2158,35 @@ TEST_P(ParameterizedExprTest, ifWithConstant) {
   EXPECT_EQ(true, result->as<ConstantVector<bool>>()->valueAt(0));
 }
 
+TEST_P(ParameterizedExprTest, ifMixesFlatMapAndMap) {
+  auto flatMap = makeFlatMapVector<int64_t, int64_t>({
+      {{1, 10}},
+      {{1, 11}},
+      {{1, 12}},
+  });
+  auto map = makeMapVector<int64_t, int64_t>({
+      {{2, 20}},
+      {{2, 21}},
+      {{2, 22}},
+  });
+  auto input =
+      makeRowVector({makeFlatVector<bool>({true, false, true}), flatMap, map});
+
+  auto expected = makeMapVector<int64_t, int64_t>({
+      {{1, 10}},
+      {{2, 21}},
+      {{1, 12}},
+  });
+  assertEqualVectors(expected, evaluate("if(c0, c1, c2)", input));
+
+  expected = makeMapVector<int64_t, int64_t>({
+      {{2, 20}},
+      {{1, 11}},
+      {{2, 22}},
+  });
+  assertEqualVectors(expected, evaluate("if(c0, c2, c1)", input));
+}
+
 // Make sure that switch do set nulls for rows that are not evaluated by the
 // switch due to a throw.
 TEST_P(ParameterizedExprTest, switchSetNullsForThrowIndices) {
@@ -4014,7 +4043,7 @@ TEST_P(ParameterizedExprTest, addNulls) {
   // so it is valid.  We need to handle this situation when propagating nulls
   // from parent to child.
   {
-    auto a = makeFlatVector<int64_t>(kSize - 1, folly::identity);
+    auto a = makeFlatIdentityVector<int64_t>(kSize - 1);
     auto b = makeArrayVector<int64_t>(
         kSize - 1, [](auto) { return 1; }, [](auto i) { return i; });
     auto row = std::make_shared<RowVector>(
@@ -4206,7 +4235,7 @@ TEST_P(ParameterizedExprTest, mapKeysAndValues) {
       vectorSize,
       makeIndices(vectorSize, folly::identity),
       makeIndices(vectorSize, [](auto /* row */) { return 1; }),
-      makeFlatVector<int64_t>(vectorSize, folly::identity),
+      makeFlatIdentityVector<int64_t>(vectorSize),
       makeFlatVector<int64_t>(vectorSize, [](auto i) { return 10 * i; }));
   auto input = makeRowVector({mapVector});
   auto exprSet = compileMultiple(
@@ -5344,7 +5373,7 @@ TEST_P(ParameterizedExprTest, evaluatesArgumentsOnNonIncreasingSelection) {
         }));
   };
   constexpr int kSize = 300;
-  auto c0 = makeFlatVector<int64_t>(kSize, folly::identity);
+  auto c0 = makeFlatIdentityVector<int64_t>(kSize);
 
   {
     SCOPED_TRACE("No eager loading for AND clauses");

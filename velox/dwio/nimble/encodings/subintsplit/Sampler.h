@@ -21,11 +21,19 @@
 #include <span>
 #include <vector>
 
-// Stream sampler for the SubIntSplit DP planner.
-//
-// Writes into a caller-supplied std::vector<uint64_t> so the allocation can be
-// reused across multiple encode() calls or DP iterations. Values are stored as
-// uint64_t (physical bit pattern, zero-extended for <64-bit types).
+/// Stream sampler for the SubIntSplit DP planner.
+///
+/// Writes into a caller-supplied std::vector<uint64_t> so the allocation can be
+/// reused across multiple encode() calls or DP iterations. Values are stored as
+/// uint64_t (physical bit pattern, zero-extended for <64-bit types).
+///
+/// Planner context:
+///
+///   full value stream -> [block-stratified sample] -> SplitSelector
+///
+/// Sampling is deterministic and bounded. Contiguous windows retain local run
+/// behavior, while zero-extension keeps physical bit positions stable across
+/// 32-bit and 64-bit inputs.
 
 namespace facebook::nimble::subintsplit {
 
