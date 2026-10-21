@@ -30,6 +30,7 @@
 #include "velox/connectors/hive/iceberg/IcebergGeometryConverter.h"
 #include "velox/connectors/hive/iceberg/IcebergMetadataColumns.h"
 #include "velox/connectors/hive/iceberg/IcebergSessionCredentials.h"
+#include "velox/connectors/hive/iceberg/IcebergSessionFileReadOps.h"
 #include "velox/connectors/hive/iceberg/IcebergSplit.h"
 #include "velox/dwio/common/BufferUtil.h"
 #include "velox/exec/OperatorUtils.h"
@@ -328,31 +329,38 @@ void IcebergSplitReader::prepareSplit(
   // 'readerOutputType_'.
   projectFilterOnlyFilledColumns();
 
-  // Forward per-query delegated credentials into fileReadOps so delegated-auth
-  // filesystems authorize the read as the caller rather than the service
-  // identity. The session-property keys carrying the credentials are named by
-  // the connector's "hive.session-credential-keys" config; it is empty by
-  // default, so a stock deployment forwards nothing and the deployment-specific
-  // credential name stays out of the connector. Mirrors the write path
-  // (IcebergConnector::withSessionCredentials) via the shared
-  // 'sessionCredentials'. No-op for non-delegated reads.
+  // Forward two sets of session properties into fileReadOps. The connector
+  // config names the keys of each set; both lists are empty by default, so a
+  // stock deployment forwards nothing and deployment-specific names stay out of
+  // the connector. Both sets override an entry with the same key in
+  // 'fileReadOps'.
+  // - Delegated credentials ("hive.session-credential-keys") let a
+  //   delegated-auth filesystem authorize the read as the caller rather than
+  //   the service identity. The write path forwards the same set
+  //   (IcebergConnector::withSessionCredentials).
+  // - File-read ops ("hive.session-file-read-op-keys") are request metadata,
+  //   such as usage-attribution tags, and reach reads only.
   const auto* sessionProperties = connectorQueryCtx_ != nullptr
       ? connectorQueryCtx_->sessionProperties()
       : nullptr;
-  const auto credentials = sessionCredentials(
-      fileConfig_ != nullptr ? fileConfig_->config().get() : nullptr,
-      sessionProperties);
-  // Only copy fileReadOps when there are credentials to fold in; the common
-  // (non-delegated) read path passes the original map through unchanged.
+  const auto* connectorConfig =
+      fileConfig_ != nullptr ? fileConfig_->config().get() : nullptr;
+  auto forwarded = sessionFileReadOps(connectorConfig, sessionProperties);
+  for (auto& [key, value] :
+       sessionCredentials(connectorConfig, sessionProperties)) {
+    forwarded.insert_or_assign(key, std::move(value));
+  }
+  // Only copy fileReadOps when there is something to fold in; the common read
+  // path passes the original map through unchanged.
   folly::F14FastMap<std::string, std::string> mergedFileReadOps;
-  if (!credentials.empty()) {
+  if (!forwarded.empty()) {
     mergedFileReadOps = fileReadOps;
-    for (const auto& [key, value] : credentials) {
-      mergedFileReadOps[key] = value;
+    for (auto& [key, value] : forwarded) {
+      mergedFileReadOps.insert_or_assign(key, std::move(value));
     }
   }
   const auto& effectiveFileReadOps =
-      credentials.empty() ? fileReadOps : mergedFileReadOps;
+      forwarded.empty() ? fileReadOps : mergedFileReadOps;
   // For NIMBLE splits, switch the reader to Iceberg field-id-based column
   // resolution. The NIMBLE per-SchemaNode `attributes` slot carries
   // `iceberg.id` keys stamped on the write path; the NIMBLE reader uses

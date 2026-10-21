@@ -16,148 +16,21 @@
 
 #include <gtest/gtest.h>
 
-#include "velox/common/file/FileSystems.h"
 #include "velox/common/testutil/TempFilePath.h"
 #include "velox/connectors/ConnectorRegistry.h"
 #include "velox/connectors/hive/iceberg/IcebergConnector.h"
 #include "velox/connectors/hive/iceberg/IcebergSessionCredentials.h"
 #include "velox/connectors/hive/iceberg/tests/IcebergTestBase.h"
+#include "velox/connectors/hive/iceberg/tests/RecordingFileSystem.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 
 namespace facebook::velox::connector::hive::iceberg {
 namespace {
 
-using filesystems::DirectoryOptions;
-using filesystems::FileOptions;
-using filesystems::FileSystem;
-using filesystems::getFileSystem;
-using filesystems::registerFileSystem;
-
-// FileSystem wrapper that records the FileOptions::fileReadOps of every
-// openFileForRead call and otherwise delegates to the underlying real file
-// system. Used to observe that a per-query session credential reaches the
-// FileSystem boundary. Paths are prefixed with scheme() and delegated to the
-// local file system after stripping the prefix.
-class RecordingFileSystem : public FileSystem {
- public:
-  explicit RecordingFileSystem(std::shared_ptr<const config::ConfigBase> config)
-      : FileSystem(std::move(config)) {}
-
-  static std::string scheme() {
-    return "recording:";
-  }
-
-  std::string name() const override {
-    return "RecordingFS";
-  }
-
-  std::string_view extractPath(std::string_view path) const override {
-    return path.find(scheme()) == 0 ? path.substr(scheme().length()) : path;
-  }
-
-  std::unique_ptr<ReadFile> openFileForRead(
-      std::string_view path,
-      const FileOptions& options = {}) override {
-    {
-      std::lock_guard<std::mutex> l(mutex_);
-      capturedReadOps_.push_back(options.fileReadOps);
-    }
-    const std::string delegated{extractPath(path)};
-    return delegate(delegated)->openFileForRead(delegated, options);
-  }
-
-  std::unique_ptr<WriteFile> openFileForWrite(
-      std::string_view path,
-      const FileOptions& options = {}) override {
-    const std::string delegated{extractPath(path)};
-    return delegate(delegated)->openFileForWrite(delegated, options);
-  }
-
-  void remove(std::string_view path) override {
-    const std::string delegated{extractPath(path)};
-    delegate(delegated)->remove(delegated);
-  }
-
-  void rename(
-      std::string_view oldPath,
-      std::string_view newPath,
-      bool overwrite) override {
-    const std::string from{extractPath(oldPath)};
-    const std::string to{extractPath(newPath)};
-    delegate(from)->rename(from, to, overwrite);
-  }
-
-  bool exists(std::string_view path) override {
-    const std::string delegated{extractPath(path)};
-    return delegate(delegated)->exists(delegated);
-  }
-
-  bool isDirectory(std::string_view path) const override {
-    const std::string delegated{extractPath(path)};
-    return delegate(delegated)->isDirectory(delegated);
-  }
-
-  std::vector<std::string> list(std::string_view path) override {
-    const std::string delegated{extractPath(path)};
-    return delegate(delegated)->list(delegated);
-  }
-
-  void mkdir(std::string_view path, const DirectoryOptions& options = {})
-      override {
-    const std::string delegated{extractPath(path)};
-    delegate(delegated)->mkdir(delegated, options);
-  }
-
-  void rmdir(std::string_view path) override {
-    const std::string delegated{extractPath(path)};
-    delegate(delegated)->rmdir(delegated);
-  }
-
-  void clear() {
-    std::lock_guard<std::mutex> l(mutex_);
-    capturedReadOps_.clear();
-  }
-
-  // Returns the recorded value for 'key' across all openFileForRead calls, or
-  // std::nullopt if no call carried it.
-  std::optional<std::string> readOpValue(const std::string& key) {
-    std::lock_guard<std::mutex> l(mutex_);
-    for (const auto& ops : capturedReadOps_) {
-      const auto it = ops.find(key);
-      if (it != ops.end()) {
-        return it->second;
-      }
-    }
-    return std::nullopt;
-  }
-
- private:
-  static std::shared_ptr<FileSystem> delegate(const std::string& path) {
-    return getFileSystem(path, nullptr);
-  }
-
-  mutable std::mutex mutex_;
-  std::vector<folly::F14FastMap<std::string, std::string>> capturedReadOps_{};
-};
-
-std::shared_ptr<RecordingFileSystem> recordingFileSystem() {
-  static auto fs = std::make_shared<RecordingFileSystem>(nullptr);
-  return fs;
-}
-
-void registerRecordingFileSystem() {
-  static folly::once_flag once;
-  folly::call_once(once, [] {
-    registerFileSystem(
-        [](std::string_view path) {
-          return path.find(RecordingFileSystem::scheme()) == 0;
-        },
-        [](std::shared_ptr<const config::ConfigBase>, std::string_view) {
-          return recordingFileSystem();
-        });
-  });
-}
+using test::RecordingFileSystem;
+using test::recordingFileSystem;
+using test::registerRecordingFileSystem;
 
 // Session-property key naming the credential and the connector config that
 // declares it as forwardable.

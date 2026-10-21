@@ -30,6 +30,7 @@ set(
   IcebergMergeSink.cpp
   IcebergPartitionName.cpp
   IcebergSessionCredentials.cpp
+  IcebergSessionFileReadOps.cpp
   IcebergSplit.cpp
   IcebergSplitReader.cpp
   IcebergStatsCollector.cpp
@@ -79,6 +80,7 @@ velox_add_library(
   IcebergParquetStatsCollector.h
   IcebergPartitionName.h
   IcebergSessionCredentials.h
+  IcebergSessionFileReadOps.h
   IcebergSplit.h
   IcebergSplitReader.h
   IcebergStatsCollector.h

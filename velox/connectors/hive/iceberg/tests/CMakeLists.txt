@@ -82,6 +82,7 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
     IcebergConnectorTest.cpp
     IcebergInsertTest.cpp
     IcebergSessionCredentialsE2ETest.cpp
+    IcebergSessionFileReadOpsE2ETest.cpp
     IcebergTestBase.cpp
     Main.cpp
     PartitionNameTest.cpp
@@ -90,7 +91,7 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
     TransformE2ETest.cpp
     TransformTest.cpp
   )
-  velox_add_test_headers(velox_hive_iceberg_insert_test IcebergTestBase.h)
+  velox_add_test_headers(velox_hive_iceberg_insert_test IcebergTestBase.h RecordingFileSystem.h)
 
   add_test(velox_hive_iceberg_insert_test velox_hive_iceberg_insert_test)
 
@@ -152,6 +153,21 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
 
   target_link_libraries(
     velox_hive_iceberg_session_credentials_test
+    velox_hive_iceberg_splitreader
+    velox_common_config
+    GTest::gmock
+    GTest::gtest
+    GTest::gtest_main
+  )
+
+  add_executable(velox_hive_iceberg_session_file_read_ops_test IcebergSessionFileReadOpsTest.cpp)
+  add_test(
+    velox_hive_iceberg_session_file_read_ops_test
+    velox_hive_iceberg_session_file_read_ops_test
+  )
+
+  target_link_libraries(
+    velox_hive_iceberg_session_file_read_ops_test
     velox_hive_iceberg_splitreader
     velox_common_config
     GTest::gmock
