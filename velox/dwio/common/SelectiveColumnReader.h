@@ -348,11 +348,10 @@ class SelectiveColumnReader {
 
     anyNulls_ = true;
     bits::setNull(rawResultNulls_, numValues_);
-    // Set the default value at the nominal width of the reader but calculate
-    // the index based on the actual width of the data. These may differ for
-    // integer and dictionary readers.
+    // Zero the slot at the actual width of the data, which may be narrower than
+    // T for integer and dictionary readers.
     auto* valuesAsChar = reinterpret_cast<char*>(rawValues_);
-    *reinterpret_cast<T*>(valuesAsChar + valueSize_ * numValues_) = T();
+    std::memset(valuesAsChar + valueSize_ * numValues_, 0, valueSize_);
     ++numValues_;
   }
 
