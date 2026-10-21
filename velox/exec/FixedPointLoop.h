@@ -43,18 +43,17 @@ struct NestedFixedPoint {
   /// loop's persistent state by walking Task::parentFixedPoint() outward.
   FixedPointLoop* parent{nullptr};
 
-  /// A shuffling fixed point addresses its producers by worker: its own
-  /// through 'workerAddress', a peer's through the matching entry of
-  /// 'peerAddresses'.  For a top-level worker those are just task ids -- its
-  /// own, and its peers' as named by the coordinator's remote splits.  A
-  /// nested fixed point cannot use task ids: its own comes from subTaskId()
-  /// and is worker-local, so a peer could never derive it.  The enclosing loop
-  /// therefore hands down addresses extended by the (iteration, planIndex) it
-  /// is running, which every peer extends identically because they are in
-  /// lockstep on the same iteration of the same plan.  Nesting composes: each
-  /// level appends its own suffix.
-  FixedPointOptions::LoopAddress workerAddress;
-  std::vector<FixedPointOptions::LoopAddress> peerAddresses;
+  /// The workers the nested loop runs on, by destination: the enclosing
+  /// loop's, or worker 0 alone for a loop nested in a verdict plan.
+  std::vector<std::string> workers;
+
+  /// The enclosing loop's nesting.  The nested loop appends a step naming
+  /// itself and 'iteration'.
+  std::vector<FixedPointOptions::NestingStep> nesting;
+
+  /// The enclosing loop's iteration that runs the sub-task; 0 for an initial
+  /// plan.
+  int32_t iteration{0};
 };
 
 /// Experimental and subject to change, like FixedPointExecutionStats.
@@ -154,11 +153,11 @@ struct FixedPointExecutionStats {
 ///
 /// One FixedPointLoop is one worker: its owning task's destination is the
 /// worker / shard index.  A fixed point that reads its peers
-/// (FixedPointNode::readsPeers()) runs as N peer tasks; the coordinator creates
+/// (FixedPointNode::readsPeers()) runs as N peer tasks; the application creates
 /// them like any partitioned stage (via Task::create) and names every worker to
-/// each of them with remote splits.  A fixed point that reads no peers may also
-/// run as several tasks, each an independent loop over the rows its initial
-/// plans read.
+/// each of them with a FixedPointSplit.  A fixed point that reads no peers may
+/// also run as several tasks, each an independent loop over the rows its
+/// initial plans read.
 ///
 /// It orchestrates ordinary Tasks rather than being another kind of Task: the
 /// per-iteration sub-tasks it creates are plain driver-based tasks.  The
@@ -172,8 +171,8 @@ struct FixedPointExecutionStats {
 ///  - start() starts the loop on the orchestration executor alongside the
 ///    task's drivers; serial next() runs the loop on the caller's thread before
 ///    its first batch.
-///  - addSplit() hands the loop the splits it routes -- a peer worker's remote
-///    split on the FixedPointNode, or an initial plan's source splits -- and
+///  - addSplit() hands the loop the splits it routes -- the FixedPointSplit
+///    on the FixedPointNode, or an initial plan's source splits -- and
 ///    the task's own drivers every other split.
 ///  - A failed loop fails the task.
 ///  - taskStats() covers the task's own pipeline.  The experimental
@@ -193,8 +192,8 @@ class FixedPointLoop {
   /// 'owner' is the fully constructed Task this loop runs the fragment for; it
   /// owns the loop and so outlives it. 'node' is the FixedPointNode in the
   /// owner's plan fragment.
-  /// 'fixedPointOptions' may be null: a fixed point that needs no hooks -- a
-  /// serial one, say -- leaves them empty.
+  /// 'fixedPointOptions' supplies the hooks; the constructor checks that the
+  /// ones this fixed point needs are set.
   FixedPointLoop(
       exec::Task* owner,
       const core::FixedPointNode& node,
@@ -206,13 +205,13 @@ class FixedPointLoop {
   }
 
   /// Whether splits for 'planNodeId' go to this loop: the FixedPointNode, whose
-  /// splits name peer workers, or a source in an initial plan.
+  /// split names the workers, or a source in an initial plan.
   bool takesSplits(const core::PlanNodeId& planNodeId) const {
     return splitTargets_.contains(planNodeId);
   }
 
-  /// Captures the coordinator-assigned splits -- a peer's name for the body or
-  /// convergence shuffle, or the initial plan's source splits.
+  /// Captures the application's splits -- the FixedPointSplit naming the
+  /// workers, or an initial plan's source splits.
   void addSplit(const core::PlanNodeId& planNodeId, exec::Split&& split);
 
   void noMoreSplits(const core::PlanNodeId& planNodeId);
@@ -289,33 +288,28 @@ class FixedPointLoop {
   // Read only for a ConvergenceConfig with stopWhenDeltaEmpty.
   bool lastDeltaEmpty_{false};
 
-  // Returns where the producer for 'worker' (this worker's task id or a peer's
-  // name from its peer split), 'iteration', and 'planIndex' lives, via
-  // options_.producerLocation (which the coordinator must set for a shuffling
-  // fixed point).  This worker creates its own producers under '.taskId' and
-  // reaches peers' producers via
-  // '.exchangeUri'; a peer is reachable because the location is a pure function
-  // of (peer name, iteration, plan), with no shared registry.  The ids MUST
-  // encode the iteration, or the per-iteration cross-worker barrier desyncs and
-  // deadlocks.
-  FixedPointOptions::ProducerLocation producerLocation(
-      const FixedPointOptions::LoopAddress& worker,
-      int32_t iteration,
-      size_t planIndex) const;
-
   // Composes initialize() + the runIteration() / converged() loop (bounded by
   // maxIterations) + finalize().  Called by runSerially() and start().
   folly::coro::Task<void> run();
+
+  // Waits for the FixedPointSplit naming the workers of a top-level loop that
+  // reads its peers, and checks it.  Called before the first plan that needs
+  // the workers: the first iteration, or an initial plan hosting a nested
+  // loop (see consumePlan()).  The other initial plans run while the
+  // application names the workers.
+  folly::coro::Task<void> awaitWorkers();
 
   // Gives 'task' the splits held for 'sourceId' and forwards later ones to it
   // as they arrive, through noMoreSplits. A serial loop requires the splits to
   // be complete, since its caller cannot add splits while the loop runs.
   void routeSplits(const exec::TaskPtr& task, const core::PlanNodeId& sourceId);
 
-  // Nesting state for a sub-task this loop creates, naming this loop as the
-  // parent.  It is rebuilt per sub-task rather than inherited, so a sub-task
-  // never picks up an address belonging to the loop above it.
-  NestedFixedPoint subTaskNesting();
+  // Nesting state for a sub-task this loop creates in 'iteration' (0 for an
+  // initial plan), naming this loop as the parent.  A loop nested in the
+  // sub-task runs on 'workers'.
+  NestedFixedPoint subTaskNesting(
+      int32_t iteration,
+      std::vector<std::string> workers);
 
   // Phase 1: runs each state's initial plan and stores this worker's shard,
   // recording each plan into 'initializationPlans'.
@@ -331,12 +325,11 @@ class FixedPointLoop {
 
   // Runs this worker's column of per-plan sub-tasks over the chain 'plans' for
   // 'iteration', wiring each consumer plan's Exchange to the previous-plan
-  // producer of every peer worker named by the coordinator's splits.  Returns
-  // the last plan's output copied into 'pool'.  Serves both chains a fixed
-  // point runs: 'planIndexOffset' is added to the plan index passed to
-  // producerLocation, so the body's producers (offset 0) and the convergence
-  // sequence's (offset node_->plans().size()) get distinct ids in the same
-  // iteration.  The plans this worker runs share iterationDrivers().
+  // producer of every worker.  Returns the last plan's output copied into
+  // 'pool'.  Serves both chains a fixed point runs: 'planIndexOffset' is added
+  // to the plan index in the statistics, so the body's plans (offset 0) and the
+  // convergence sequence's (offset node_->plans().size()) are told apart.  The
+  // plans this worker runs share iterationDrivers().
   // 'producesVerdict' says the last plan produces the convergence verdict, a
   // single row, so it runs on one driver of its own, outside the budget.
   // 'runLastPlan' false skips the last plan on this worker; the chain's other
@@ -367,19 +360,21 @@ class FixedPointLoop {
   // executor with 'maxDrivers' drivers and collects through a consumer.  Feeds
   // the plan's split source (TableScan files or an Exchange upstream) when it
   // has one.  Used for the initial plans (with the parent maxDrivers) and, in
-  // serial mode, the body and convergence plans.
+  // serial mode, the body and convergence plans.  'iteration' is 0 for an
+  // initial plan.
   folly::coro::Task<DrainedPlan> drainPlan(
       core::PlanNodePtr plan,
+      int32_t iteration,
       memory::MemoryPool* pool,
       uint32_t maxDrivers);
 
   // Runs 'plan' as a sub-task in this worker's execution mode and feeds its
   // split source, handing its output to consumers from 'consumerSupplier': one
   // per output driver in parallel mode, a single one on the calling thread in
-  // serial mode.  Returns the sub-task's
-  // statistics.
+  // serial mode.  Returns the sub-task's statistics.
   folly::coro::Task<TaskStats> consumePlan(
       core::PlanNodePtr plan,
+      int32_t iteration,
       uint32_t maxDrivers,
       exec::ConsumerSupplier consumerSupplier);
 
@@ -392,25 +387,10 @@ class FixedPointLoop {
   // initial, convergence, serial-body, or last-in-chain sub-task).
   std::string subTaskId();
 
-  // This worker's shuffle address, and its peers'.  A top-level worker uses
-  // task ids: its own, and the peers' the coordinator named through remote
-  // splits.  A nested one uses the addresses its enclosing loop handed down
-  // (see FixedPointOptions::workerAddress).
-  FixedPointOptions::LoopAddress workerAddress() const;
-  std::vector<FixedPointOptions::LoopAddress> peerAddresses();
+  // The address of this loop on the worker at 'destination'.
+  FixedPointOptions::LoopAddress address(int32_t destination) const;
 
-  // The address a sub-task running plan 'planIndex' of this loop's chain at
-  // 'iteration' presents to its own peers.  Only the address deepens; the root
-  // task id is carried through, since the sub-task runs in the same process.
-  // Every peer derives the same suffix, which is what lets nested loops
-  // shuffle.
-  static FixedPointOptions::LoopAddress nestedAddress(
-      const FixedPointOptions::LoopAddress& worker,
-      int32_t iteration,
-      size_t planIndex);
-
-  // Coordinator-supplied hooks for producer locations and sub-task ids (see
-  // FixedPointOptions).
+  // The application's hooks (see FixedPointOptions).
   FixedPointOptions options_;
 
   // The nesting state an enclosing loop handed down, default-constructed when a
@@ -447,21 +427,33 @@ class FixedPointLoop {
   int32_t workerIndex_{0};
   int32_t numWorkers_{1};
 
-  // Task ids of the peer workers this worker reads from each body shuffle, and
-  // the initial plan's source splits, captured from the coordinator's splits
-  // via addSplit().  A peer's producer location is derived from its task id by
-  // producerLocation(), so naming the peer here suffices.  Guarded by
-  // splitsMutex_ while the coordinator is still adding: it may do so from
-  // several threads, and the loop reads them once it starts.
+  // Guards the splits an application adds, from several threads perhaps,
+  // until the loop reads them.
   std::mutex splitsMutex_;
-  std::vector<std::string> peerParentIds_;
 
-  // Resolved by noMoreSplits() on the fixed point itself, once the coordinator
-  // has named every peer. The first iteration waits for it.
-  folly::SharedPromise<folly::Unit> peersComplete_;
+  // The workers this loop runs on, by destination: from the FixedPointSplit
+  // of a top-level loop, taken by awaitWorkers(), or from the enclosing loop.
+  // Empty for a top-level loop that reads no peers.  Written only on the
+  // loop's thread, before any plan reads it.
+  std::vector<std::string> workers_;
+
+  // Where this loop sits within its worker (see
+  // FixedPointOptions::LoopAddress).
+  std::vector<FixedPointOptions::NestingStep> nesting_;
+
+  // Resolved by noMoreSplits() on the fixed point itself (see
+  // awaitWorkers()).
+  folly::SharedPromise<folly::Unit> workersComplete_;
+
+  // The workers the FixedPointSplit names, from addSplit(), which an
+  // application may call from any thread.  Guarded by splitsMutex_.
+  std::optional<std::vector<std::string>> splitWorkers_;
+
+  // Set once awaitWorkers() has received and checked the workers.
+  bool workersReady_{false};
 
   // Requested once the owning task ends: the loop stops waiting on its peers
-  // and the coordinator, which then no longer need to answer.
+  // and the application, which then no longer need to answer.
   folly::CancellationSource cancellation_;
 
   // Every other coordinator-assigned split that arrived before the sub-task
