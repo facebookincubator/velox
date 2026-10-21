@@ -2602,6 +2602,36 @@ TEST_F(CudfFilterProjectTest, switchWithoutElseNestedTypes) {
   facebook::velox::test::assertEqualVectors(cpuResult, fallbackResult);
 }
 
+// cast_string_to_floating_point_lenient_inf_nan admits inf and nan in any
+// letter case. CastFunction parses the Presto spellings only, so the project
+// runs on the CPU under the config.
+TEST_F(CudfFilterProjectTest, castFromVarcharLenientInfNanFallsBackToCpu) {
+  auto& config = cudf_velox::CudfConfig::getInstance();
+  const auto previousFallback = config.allowCpuFallback;
+  SCOPE_EXIT {
+    config.allowCpuFallback = previousFallback;
+  };
+  config.allowCpuFallback = true;
+
+  auto data = makeRowVector(
+      {makeFlatVector<std::string>({"inf", "-Infinity", "nan", "1.5"})});
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .project({"cast(c0 as double) AS result"})
+                  .planNode();
+  VELOX_ASSERT_USER_THROW(
+      AssertQueryBuilder(plan).copyResults(pool()),
+      "Cannot cast VARCHAR 'inf' to DOUBLE.");
+
+  constexpr double kInfinity = std::numeric_limits<double>::infinity();
+  auto expected = makeRowVector({makeFlatVector<double>(
+      {kInfinity, -kInfinity, std::numeric_limits<double>::quiet_NaN(), 1.5})});
+  AssertQueryBuilder(plan)
+      .config(
+          core::QueryConfig::kCastStringToFloatingPointLenientInfNan, "true")
+      .assertResults(expected);
+}
+
 TEST_F(CudfFilterProjectTest, greatestLeastAllColumns) {
   auto data = makeRowVector({
       makeFlatVector<double>({1.0, 5.0, -3.0}),
@@ -2872,6 +2902,24 @@ TEST_F(CudfVarcharCastTest, castFromVarcharRunsOnGpu) {
           makeTypedExpr("cast(c0 as integer)", rowType),
           legacyQueryCtx.get(),
           execCtx_.pool()));
+
+  // cast_string_to_floating_point_lenient_inf_nan admits spellings of infinity
+  // and NaN that CastFunction rejects; it changes only the casts to REAL and
+  // DOUBLE.
+  auto lenientQueryCtx = core::QueryCtx::create(
+      nullptr,
+      core::QueryConfig(
+          {{core::QueryConfig::kCastStringToFloatingPointLenientInfNan,
+            "true"}}));
+  const auto runsOnGpuLenient = [&](const std::string& expr) {
+    return cudf_velox::canExprRunOnGpu(
+        makeTypedExpr(expr, rowType), lenientQueryCtx.get(), execCtx_.pool());
+  };
+  EXPECT_FALSE(runsOnGpuLenient("cast(c0 as real)"));
+  EXPECT_FALSE(runsOnGpuLenient("cast(c0 as double)"));
+  EXPECT_FALSE(runsOnGpuLenient("try_cast(c0 as double) is null"));
+  EXPECT_TRUE(runsOnGpuLenient("cast(c0 as integer)"));
+  EXPECT_TRUE(runsOnGpuLenient("try_cast(c0 as boolean)"));
 }
 
 TEST_F(CudfVarcharCastTest, castFromVarcharToIntegral) {

@@ -211,9 +211,10 @@ std::shared_ptr<CudfExpression> createCudfExpression(
 /// same form the operator compiles at runtime; e.g. cast(<literal> as DECIMAL)
 /// folds to a plain decimal constant that the structural check accepts, rather
 /// than a live decimal-target cast that it would reject. Then applies the
-/// query-context-dependent timezone fallback (a timezone-sensitive date_trunc
-/// under adjust_timestamp_to_session_timezone must stay on CPU) and a
-/// structural support check on the optimized expression. When
+/// query-context-dependent fallbacks (a timezone-sensitive date_trunc under
+/// adjust_timestamp_to_session_timezone, and a cast from VARCHAR under
+/// legacy_cast or cast_string_to_floating_point_lenient_inf_nan, must stay on
+/// CPU) and a structural support check on the optimized expression. When
 /// `queryCtx` or `pool` is null, skips optimization and checks `expr` directly.
 /// \param pool Leaf pool used for constant folding during optimization,
 ///             typically the operator's own pool.

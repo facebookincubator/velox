@@ -3822,14 +3822,19 @@ bool requiresCpuForTimezone(
   return false;
 }
 
-// Returns true if the tree casts from VARCHAR.
-bool containsCastFromVarchar(const core::TypedExprPtr& expr) {
+// Returns true if the tree casts from VARCHAR; with 'floatingPointOnly', if it
+// casts from VARCHAR to REAL or DOUBLE.
+bool containsCastFromVarchar(
+    const core::TypedExprPtr& expr,
+    bool floatingPointOnly) {
   if (expr->isCastKind() && !expr->inputs().empty() &&
-      expr->inputs()[0]->type()->isVarchar()) {
+      expr->inputs()[0]->type()->isVarchar() &&
+      (!floatingPointOnly || expr->type()->isReal() ||
+       expr->type()->isDouble())) {
     return true;
   }
   for (const auto& input : expr->inputs()) {
-    if (containsCastFromVarchar(input)) {
+    if (containsCastFromVarchar(input, floatingPointOnly)) {
       return true;
     }
   }
@@ -3837,16 +3842,28 @@ bool containsCastFromVarchar(const core::TypedExprPtr& expr) {
 }
 
 // Returns true if 'expr' must stay on the CPU because it casts from VARCHAR
-// while the session's legacy_cast selects rules CastFunction does not
-// implement. False when 'queryCtx' is null or the config is off.
-bool requiresCpuForLegacyCast(
+// while a session config selects rules CastFunction does not implement:
+// legacy_cast, for every target, and
+// cast_string_to_floating_point_lenient_inf_nan, which admits inf, infinity
+// and nan in any letter case, for REAL and DOUBLE. False when 'queryCtx' is
+// null or both configs are off.
+bool requiresCpuForCastConfig(
     const core::TypedExprPtr& expr,
     core::QueryCtx* queryCtx) {
-  if (queryCtx == nullptr || !queryCtx->queryConfig().isLegacyCast()) {
+  if (queryCtx == nullptr) {
     return false;
   }
-  if (containsCastFromVarchar(expr)) {
+  const auto& config = queryCtx->queryConfig();
+  if (config.isLegacyCast() &&
+      containsCastFromVarchar(expr, /*floatingPointOnly=*/false)) {
     LOG_FALLBACK("A cast from VARCHAR stays on the CPU under legacy_cast");
+    return true;
+  }
+  if (config.isCastStringToFloatingPointLenientInfNan() &&
+      containsCastFromVarchar(expr, /*floatingPointOnly=*/true)) {
+    LOG_FALLBACK(
+        "A cast from VARCHAR to REAL or DOUBLE stays on the CPU under "
+        "cast_string_to_floating_point_lenient_inf_nan");
     return true;
   }
   return false;
@@ -3869,7 +3886,7 @@ bool canOptimizedExprRunOnGpu(
     const core::TypedExprPtr& checked,
     core::QueryCtx* queryCtx) {
   return !requiresCpuForTimezone(checked, queryCtx) &&
-      !requiresCpuForLegacyCast(checked, queryCtx) &&
+      !requiresCpuForCastConfig(checked, queryCtx) &&
       canBeEvaluatedByCudf(checked);
 }
 
