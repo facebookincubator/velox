@@ -824,10 +824,14 @@ std::unique_ptr<nativert::ExecutionFrame> WaveGraphExecutor::getFrame() {
   return framePool_->get();
 }
 
+void WaveGraphExecutor::resetFrame(nativert::ExecutionFrame& frame) {
+  frame.clearNonPersistentValues();
+  ++frameGeneration_;
+}
+
 void WaveGraphExecutor::returnFrame(
     std::unique_ptr<nativert::ExecutionFrame> frame) {
-  frame->clearNonPersistentValues();
-  ++frameGeneration_;
+  resetFrame(*frame);
   framePool_->put(std::move(frame));
 }
 
@@ -1592,10 +1596,14 @@ void WaveGraphExecutor::executeWave(
   // Verify the assumption here and fail loudly rather than produce silently
   // wrong results.
   if (WaveConfig::get().inputContiguous) {
-    for (const auto* value : graph_.values()) {
-      if (value == nullptr || value->producer() != nullptr) {
-        continue;
+    folly::call_once(producerlessOnce_, [&] {
+      for (const auto* value : graph_.values()) {
+        if (value != nullptr && value->producer() == nullptr) {
+          producerlessValues_.push_back(value);
+        }
       }
+    });
+    for (const auto* value : producerlessValues_) {
       const auto& iv = frame.getIValue(value->id());
       if (iv.isTensor()) {
         const auto& tensor = iv.toTensor();
