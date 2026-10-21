@@ -25,11 +25,12 @@ namespace facebook::velox::exec {
 namespace {
 
 // A verdict reaches a peer whether the peer asks before or after worker 0
-// publishes it, and each loop of worker 0's task has its own verdict.
+// publishes it, and each loop of worker 0 has its own verdict.
 TEST(FixedPointVerdictsTest, publishAndGet) {
   FixedPointVerdicts verdicts;
-  const FixedPointOptions::LoopAddress loop{"w0", "w0"};
-  const FixedPointOptions::LoopAddress nestedLoop{"w0", "w0/it0.p1"};
+  const FixedPointOptions::LoopAddress loop{"w0", {}};
+  const FixedPointOptions::LoopAddress nestedLoop{
+      "w0", {{.planNodeId = "1", .iteration = 0}}};
 
   auto early = verdicts.get(loop, 0);
   ASSERT_FALSE(early.isReady());
@@ -44,7 +45,7 @@ TEST(FixedPointVerdictsTest, publishAndGet) {
 // and asking for an earlier one fails.
 TEST(FixedPointVerdictsTest, latestIteration) {
   FixedPointVerdicts verdicts;
-  const FixedPointOptions::LoopAddress loop{"w0", "w0"};
+  const FixedPointOptions::LoopAddress loop{"w0", {}};
 
   verdicts.publish(loop, 0, false);
   auto next = verdicts.get(loop, 1);
@@ -57,11 +58,11 @@ TEST(FixedPointVerdictsTest, latestIteration) {
       "Fixed point verdict requested for an earlier iteration: w0");
 }
 
-// Erasing worker 0's task drops the verdicts of all its loops.
+// Erasing worker 0 drops the verdicts of all its loops.
 TEST(FixedPointVerdictsTest, erase) {
   FixedPointVerdicts verdicts;
-  const FixedPointOptions::LoopAddress loop{"w0", "w0"};
-  const FixedPointOptions::LoopAddress otherTask{"w1", "w1"};
+  const FixedPointOptions::LoopAddress loop{"w0", {}};
+  const FixedPointOptions::LoopAddress otherTask{"w1", {}};
 
   verdicts.publish(loop, 3, true);
   verdicts.publish(otherTask, 3, true);

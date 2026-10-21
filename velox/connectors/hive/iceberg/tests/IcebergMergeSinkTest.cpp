@@ -23,6 +23,8 @@
 #include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
 #include "velox/connectors/hive/iceberg/tests/IcebergTestBase.h"
 #include "velox/dwio/parquet/RegisterParquetWriter.h"
+#include "velox/exec/tests/utils/AssertQueryBuilder.h"
+#include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
 
 namespace facebook::velox::connector::hive::iceberg::test {
@@ -101,7 +103,8 @@ class IcebergMergeSinkTest : public IcebergTestBase {
         getIcebergConfig(),
         /*targetColumnChannels=*/std::vector<column_index_t>{0, 1},
         /*operationChannel=*/2,
-        /*rowIdChannel=*/3);
+        /*rowIdChannel=*/3,
+        /*insertFromUpdateChannel=*/4);
   }
 
   // Builds a row_id column of kRowIdType. 'partitionData' fills every row's
@@ -340,6 +343,52 @@ TEST_F(IcebergMergeSinkTest, partitionedDeleteEmitsPartitionDataJson) {
   EXPECT_EQ(deletes[0]["partitionDataJson"].asString(), partitionJson);
 }
 
+// The TableWriter's row count must count an UPDATE once, although it reaches
+// the sink as a DELETE plus an INSERT tagged insert_from_update.
+TEST_F(IcebergMergeSinkTest, tableWriterCountsUpdateOnce) {
+  auto tempDir = TempDirectoryPath::create();
+  const std::string dataFile = tempDir->getPath() + "/u.parquet";
+  // One INSERT, one DELETE, and one UPDATE fanned out to DELETE + INSERT.
+  auto input = makeInput(
+      /*ids=*/{1, std::nullopt, std::nullopt, 3},
+      /*names=*/
+      {{std::string("a")}, std::nullopt, std::nullopt, {std::string("c")}},
+      /*operations=*/
+      {IMS::kInsertOperationNumber,
+       IMS::kDeleteOperationNumber,
+       IMS::kDeleteOperationNumber,
+       IMS::kInsertOperationNumber},
+      /*filePaths=*/{std::nullopt, {dataFile}, {dataFile}, std::nullopt},
+      /*positions=*/{std::nullopt, 1, 2, std::nullopt},
+      /*insertFromUpdate=*/{0, 0, 0, 1});
+
+  const auto plan = exec::test::PlanBuilder()
+                        .values({input})
+                        .tableWrite(
+                            tempDir->getPath(),
+                            /*partitionBy=*/{},
+                            /*bucketCount=*/0,
+                            /*bucketedBy=*/{},
+                            /*sortBy=*/{},
+                            dwio::common::FileFormat::PARQUET,
+                            /*aggregates=*/{},
+                            kIcebergConnectorId,
+                            /*serdeParameters=*/{},
+                            /*options=*/nullptr,
+                            /*outputFileName=*/"",
+                            common::CompressionKind_ZSTD,
+                            kMergeInputType,
+                            /*ensureFiles=*/false,
+                            CommitStrategy::kNoCommit,
+                            makeMergeHandle(tempDir->getPath()))
+                        .project({"rows"})
+                        .filter("rows IS NOT NULL")
+                        .planNode();
+
+  exec::test::AssertQueryBuilder(plan).assertResults(
+      makeRowVector({makeFlatVector<int64_t>({3})}));
+}
+
 TEST_F(IcebergMergeSinkTest, emptyBatchProducesNoCommitMessages) {
   auto tempDir = TempDirectoryPath::create();
   auto sink = makeSink(tempDir->getPath());
@@ -494,7 +543,8 @@ TEST_F(IcebergMergeSinkTest, dataInputTypeNamesComeFromHandleNotSource) {
       getIcebergConfig(),
       /*targetColumnChannels=*/std::vector<column_index_t>{0, 1},
       /*operationChannel=*/2,
-      /*rowIdChannel=*/3);
+      /*rowIdChannel=*/3,
+      /*insertFromUpdateChannel=*/4);
 
   // Build an input vector with the same positional schema; the sink should
   // still successfully write the insert batch by matching by channel
@@ -524,6 +574,40 @@ TEST_F(IcebergMergeSinkTest, dataInputTypeNamesComeFromHandleNotSource) {
   EXPECT_TRUE(sink->finish());
   auto messages = sink->close();
   EXPECT_EQ(countContent(messages, "DATA"), 1u);
+}
+
+// numChangedRows reads the insert_from_update channel, so a misconfigured
+// channel must be rejected when the sink is built.
+TEST_F(IcebergMergeSinkTest, insertFromUpdateChannelIsValidated) {
+  auto tempDir = TempDirectoryPath::create();
+  const auto makeSinkWith = [&](const RowTypePtr& inputType,
+                                column_index_t insertFromUpdateChannel) {
+    return std::make_unique<IcebergMergeSink>(
+        inputType,
+        makeMergeHandle(tempDir->getPath()),
+        connectorQueryCtx_.get(),
+        CommitStrategy::kNoCommit,
+        getHiveConfig(),
+        getIcebergConfig(),
+        /*targetColumnChannels=*/std::vector<column_index_t>{0, 1},
+        /*operationChannel=*/2,
+        /*rowIdChannel=*/3,
+        insertFromUpdateChannel);
+  };
+
+  VELOX_ASSERT_THROW(
+      makeSinkWith(kMergeInputType, /*insertFromUpdateChannel=*/5),
+      "insertFromUpdateChannel out of range");
+
+  const RowTypePtr bigintFlagType =
+      ROW({"id", "name", "operation", "row_id", "insert_from_update"},
+          {BIGINT(), VARCHAR(), TINYINT(), kRowIdType, BIGINT()});
+  VELOX_ASSERT_THROW(
+      makeSinkWith(bigintFlagType, /*insertFromUpdateChannel=*/4),
+      "insert_from_update column must be TINYINT");
+
+  EXPECT_NE(
+      makeSinkWith(kMergeInputType, /*insertFromUpdateChannel=*/4), nullptr);
 }
 
 // VELOX_ENABLE_PARQUET guard removed: rely on the iceberg_connector

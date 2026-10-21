@@ -38,8 +38,8 @@ folly::SemiFuture<bool> FixedPointVerdicts::get(
   return verdict;
 }
 
-void FixedPointVerdicts::erase(const std::string& rootTaskId) {
-  verdicts_.wlock()->erase(rootTaskId);
+void FixedPointVerdicts::erase(const std::string& worker) {
+  verdicts_.wlock()->erase(worker);
 }
 
 void FixedPointVerdicts::withVerdict(
@@ -47,15 +47,15 @@ void FixedPointVerdicts::withVerdict(
     int32_t iteration,
     const std::function<void(folly::SharedPromise<bool>&)>& action) {
   auto locked = verdicts_.wlock();
-  auto& loops = (*locked)[workerZero.rootTaskId];
+  auto& loops = (*locked)[workerZero.worker];
   auto [it, inserted] =
-      loops.try_emplace(workerZero.address, Verdict{iteration, {}});
+      loops.try_emplace(workerZero.nesting, Verdict{iteration, {}});
   auto& verdict = it->second;
   VELOX_CHECK_LE(
       verdict.iteration,
       iteration,
       "Fixed point verdict requested for an earlier iteration: {}",
-      workerZero.address);
+      workerZero.worker);
   if (verdict.iteration < iteration) {
     verdict = Verdict{iteration, {}};
   }
