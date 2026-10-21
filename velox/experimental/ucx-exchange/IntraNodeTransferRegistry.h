@@ -23,7 +23,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
-#include <unordered_set>
+#include <unordered_map>
 
 #include "velox/vector/TypeAliases.h"
 
@@ -55,6 +55,9 @@ struct IntraNodeTransferResult {
   /// report its own row count.
   vector_size_t numRows{0};
   bool atEnd{false}; // True if this is the end-of-stream marker
+  /// Why the producer ended before sending all its output; set only with
+  /// 'atEnd'.
+  std::optional<std::string> producerError;
 };
 
 /// @brief Entry in the intra-node transfer registry containing the data and
@@ -66,6 +69,8 @@ struct IntraNodeTransferEntry {
   vector_size_t numRows{
       0}; // Logical rows in 'data'; see IntraNodeTransferResult.
   bool atEnd{false}; // True if this is the end-of-stream marker
+  /// See IntraNodeTransferResult.
+  std::optional<std::string> producerError;
   std::promise<void> retrievedPromise; // Server waits on this after publishing
   std::mutex entryMutex;
   bool ready{false}; // True when data is ready to retrieve
@@ -97,18 +102,22 @@ class IntraNodeTransferRegistry {
   /// @param data The packed_columns data to share (nullptr for atEnd)
   /// @param numRows Logical rows in 'data'; 0 for atEnd
   /// @param atEnd True if this is the end-of-stream marker
+  /// @param producerError Why the producer ended before sending all its
+  /// output; set only with 'atEnd'
   /// @return A future that completes when source has retrieved the data
   [[nodiscard]] std::future<void> publish(
       const IntraNodeTransferKey& key,
       std::shared_ptr<cudf::packed_columns> data,
       vector_size_t numRows,
-      bool atEnd);
+      bool atEnd,
+      std::optional<std::string> producerError);
 
   /// @brief Non-blocking poll for intra-node transfer data.
   /// Returns immediately whether data is available or not.
   /// @param key The unique key identifying this transfer
   /// @return nullopt if not ready, or IntraNodeTransferResult if ready.
-  ///         Data is nullptr when atEnd is true.
+  ///         Data is nullptr when atEnd is true. For a cancelled task the
+  ///         result is atEnd with the producerError given to cancelTask().
   [[nodiscard]] std::optional<IntraNodeTransferResult> poll(
       const IntraNodeTransferKey& key);
 
@@ -116,12 +125,17 @@ class IntraNodeTransferRegistry {
   /// Called when a producing task is removed. Subsequent poll() calls for
   /// this taskId will return an atEnd result instead of nullopt.
   /// @param taskId The task to cancel
-  void cancelTask(std::string_view taskId);
+  /// @param producerError Why the producer ended before sending all its
+  /// output, or nullopt if it sent everything. The first reason recorded for
+  /// a task wins.
+  void cancelTask(
+      std::string_view taskId,
+      std::optional<std::string> producerError);
 
-  /// @brief Remove a task from the cancelled set.
-  /// Called when a task ID is (re)initialized, so that the cancelledTasks_
-  /// set does not grow unboundedly across queries.
-  /// @param taskId The task to clear from the cancelled set
+  /// @brief Remove a task from the cancelled tasks.
+  /// Called when a task ID is (re)initialized, so that the cancelled tasks
+  /// do not grow unboundedly across queries.
+  /// @param taskId The task to clear from the cancelled tasks
   void clearCancelledTask(std::string_view taskId);
 
  private:
@@ -129,7 +143,8 @@ class IntraNodeTransferRegistry {
 
   std::map<IntraNodeTransferKey, std::shared_ptr<IntraNodeTransferEntry>>
       registry_;
-  std::unordered_set<std::string> cancelledTasks_;
+  // Cancelled tasks and the producerError each was cancelled with.
+  std::unordered_map<std::string, std::optional<std::string>> cancelledTasks_;
   std::mutex mutex_;
 };
 

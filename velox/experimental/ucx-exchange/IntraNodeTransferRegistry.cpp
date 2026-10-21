@@ -33,7 +33,8 @@ std::future<void> IntraNodeTransferRegistry::publish(
     const IntraNodeTransferKey& key,
     std::shared_ptr<cudf::packed_columns> data,
     vector_size_t numRows,
-    bool atEnd) {
+    bool atEnd,
+    std::optional<std::string> producerError) {
   std::shared_ptr<IntraNodeTransferEntry> entry;
   std::future<void> future;
   bool entryExisted;
@@ -77,6 +78,7 @@ std::future<void> IntraNodeTransferRegistry::publish(
     entry->data = std::move(data);
     entry->numRows = numRows;
     entry->atEnd = atEnd;
+    entry->producerError = std::move(producerError);
     entry->ready = true;
     // Get the future while holding the lock to avoid race with consumer
     future = entry->retrievedPromise.get_future();
@@ -98,11 +100,15 @@ std::optional<IntraNodeTransferResult> IntraNodeTransferRegistry::poll(
     std::lock_guard<std::mutex> lock(mutex_);
 
     // Check if this task has been cancelled (producer removed).
-    if (cancelledTasks_.count(key.taskId)) {
+    if (auto cancelled = cancelledTasks_.find(key.taskId);
+        cancelled != cancelledTasks_.end()) {
       VLOG(2) << "[INTRA-REG] poll cancelled: task=" << key.taskId
               << " dest=" << key.destination << " seq=" << key.sequenceNumber;
       return IntraNodeTransferResult{
-          .data = nullptr, .numRows = 0, .atEnd = true};
+          .data = nullptr,
+          .numRows = 0,
+          .atEnd = true,
+          .producerError = cancelled->second};
     }
 
     auto it = registry_.find(key);
@@ -133,6 +139,7 @@ std::optional<IntraNodeTransferResult> IntraNodeTransferRegistry::poll(
     result.data = std::move(entry->data);
     result.numRows = entry->numRows;
     result.atEnd = entry->atEnd;
+    result.producerError = std::move(entry->producerError);
 
     // Fulfill the promise to notify the server while still holding entry lock
     entry->retrievedPromise.set_value();
@@ -152,12 +159,14 @@ std::optional<IntraNodeTransferResult> IntraNodeTransferRegistry::poll(
   return result;
 }
 
-void IntraNodeTransferRegistry::cancelTask(std::string_view taskId) {
+void IntraNodeTransferRegistry::cancelTask(
+    std::string_view taskId,
+    std::optional<std::string> producerError) {
   std::vector<std::shared_ptr<IntraNodeTransferEntry>> entriesToFulfill;
 
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    cancelledTasks_.insert(std::string{taskId});
+    cancelledTasks_.try_emplace(std::string{taskId}, std::move(producerError));
 
     // Clean up any existing registry entries for this task so servers
     // waiting on the retrieved-promise don't hang.

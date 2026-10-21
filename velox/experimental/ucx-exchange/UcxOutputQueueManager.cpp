@@ -179,7 +179,8 @@ void UcxOutputQueueManager::removeTask(const std::string& taskId) {
   }
   // Notify the intra-node registry so that any sources polling for this
   // task get an atEnd result instead of spinning forever.
-  IntraNodeTransferRegistry::getInstance()->cancelTask(taskId);
+  IntraNodeTransferRegistry::getInstance()->cancelTask(
+      taskId, /*producerError=*/std::nullopt);
 }
 
 std::shared_ptr<UcxOutputQueue> UcxOutputQueueManager::getQueueIfExists(

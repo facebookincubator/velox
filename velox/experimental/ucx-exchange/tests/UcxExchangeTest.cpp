@@ -28,15 +28,18 @@
 #include <gtest/gtest.h>
 #include <rmm/device_buffer.hpp>
 #include <chrono>
+#include <cstring>
 #include <future>
 #include <memory>
 #include <sstream>
 #include <vector>
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/memory/MemoryPool.h"
 #include "velox/core/QueryConfig.h"
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 #include "velox/experimental/ucx-exchange/Communicator.h"
+#include "velox/experimental/ucx-exchange/IntraNodeTransferRegistry.h"
 #include "velox/experimental/ucx-exchange/UcxExchangeProtocol.h"
 #include "velox/experimental/ucx-exchange/UcxOutputQueueManager.h"
 #include "velox/experimental/ucx-exchange/tests/SinkDriverMock.h"
@@ -201,6 +204,148 @@ TEST(UcxExchangeQueueTest, closeResetsSize) {
   queue.close();
   EXPECT_EQ(queue.size(), 0);
   EXPECT_TRUE(queue.empty());
+}
+
+// An end-of-stream message from a producer that ended early carries the reason,
+// so the consumer can fail instead of booking the stream as complete.
+TEST(UcxExchangeProtocolTest, metadataRoundTripsProducerError) {
+  MetadataMsg message;
+  message.dataSizeBytes = 0;
+  message.numRows = 0;
+  message.atEnd = true;
+  message.producerError = "Injected producer failure";
+
+  auto [buffer, size] = message.serialize();
+  EXPECT_EQ(size, message.getSerializedSize());
+
+  const auto decoded = MetadataMsg::deserializeMetadataMsg(buffer.get());
+  EXPECT_TRUE(decoded.atEnd);
+  EXPECT_EQ(
+      decoded.producerError,
+      std::optional<std::string>("Injected producer failure"));
+}
+
+TEST(UcxExchangeProtocolTest, metadataWithoutProducerErrorDecodesNone) {
+  MetadataMsg message;
+  message.dataSizeBytes = 0;
+  message.numRows = 0;
+  message.atEnd = true;
+
+  auto [buffer, size] = message.serialize();
+  EXPECT_EQ(size, message.getSerializedSize());
+
+  const auto decoded = MetadataMsg::deserializeMetadataMsg(buffer.get());
+  EXPECT_TRUE(decoded.atEnd);
+  EXPECT_EQ(decoded.producerError, std::nullopt);
+}
+
+// A task can fail with an empty message. The consumer must still fail, so an
+// empty reason is an error and not the absence of one.
+TEST(UcxExchangeProtocolTest, metadataRoundTripsEmptyProducerError) {
+  MetadataMsg message;
+  message.dataSizeBytes = 0;
+  message.numRows = 0;
+  message.atEnd = true;
+  message.producerError = "";
+
+  auto [buffer, size] = message.serialize();
+  EXPECT_EQ(size, message.getSerializedSize());
+
+  const auto decoded = MetadataMsg::deserializeMetadataMsg(buffer.get());
+  EXPECT_EQ(decoded.producerError, std::optional<std::string>(""));
+}
+
+// The producer error is the last field: a signed length, -1 when there is no
+// error, followed by that many bytes of text.
+TEST(UcxExchangeProtocolTest, producerErrorIsLengthPrefixedLastField) {
+  MetadataMsg message;
+  message.dataSizeBytes = 0;
+  message.numRows = 0;
+  message.atEnd = true;
+
+  auto [cleanBuffer, cleanSize] = message.serialize();
+  WireErrorLengthType cleanLength = 0;
+  std::memcpy(
+      &cleanLength,
+      cleanBuffer.get() + cleanSize - sizeof(cleanLength),
+      sizeof(cleanLength));
+  EXPECT_EQ(cleanLength, -1);
+
+  const std::string reason{"Injected producer failure"};
+  message.producerError = reason;
+  auto [errorBuffer, errorSize] = message.serialize();
+  EXPECT_EQ(errorSize, cleanSize + reason.size());
+  EXPECT_EQ(
+      std::string(
+          reinterpret_cast<const char*>(errorBuffer.get()) + errorSize -
+              reason.size(),
+          reason.size()),
+      reason);
+}
+
+// Only the last message of a stream can say why the stream ended.
+TEST(UcxExchangeProtocolTest, producerErrorRequiresEndOfStream) {
+  MetadataMsg message;
+  message.dataSizeBytes = 0;
+  message.numRows = 0;
+  message.atEnd = false;
+  message.producerError = "Injected producer failure";
+
+  VELOX_ASSERT_THROW(message.serialize(), "producerError");
+}
+
+// An intra-node consumer of a producer that was removed early learns the
+// reason, as a remote consumer does from MetadataMsg.
+TEST(IntraNodeTransferRegistryTest, cancelledTaskReportsProducerError) {
+  auto registry = IntraNodeTransferRegistry::getInstance();
+  const std::string taskId{"registryCancelledWithError"};
+  registry->cancelTask(taskId, "Injected producer failure");
+
+  const auto result =
+      registry->poll({taskId, /*destination=*/0, /*sequenceNumber=*/0});
+  ASSERT_TRUE(result.has_value());
+  EXPECT_TRUE(result->atEnd);
+  EXPECT_EQ(result->data, nullptr);
+  EXPECT_EQ(
+      result->producerError,
+      std::optional<std::string>("Injected producer failure"));
+  registry->clearCancelledTask(taskId);
+}
+
+// A producer removed after it sent all its output ends its stream cleanly.
+TEST(IntraNodeTransferRegistryTest, cancelledFinishedTaskEndsCleanly) {
+  auto registry = IntraNodeTransferRegistry::getInstance();
+  const std::string taskId{"registryCancelledFinished"};
+  registry->cancelTask(taskId, /*producerError=*/std::nullopt);
+
+  const auto result =
+      registry->poll({taskId, /*destination=*/0, /*sequenceNumber=*/0});
+  ASSERT_TRUE(result.has_value());
+  EXPECT_TRUE(result->atEnd);
+  EXPECT_EQ(result->data, nullptr);
+  EXPECT_EQ(result->producerError, std::nullopt);
+  registry->clearCancelledTask(taskId);
+}
+
+TEST(IntraNodeTransferRegistryTest, publishedEndMarkerCarriesProducerError) {
+  auto registry = IntraNodeTransferRegistry::getInstance();
+  const IntraNodeTransferKey key{
+      "registryPublishedError", /*destination=*/0, /*sequenceNumber=*/0};
+  auto retrieved = registry->publish(
+      key,
+      nullptr,
+      /*numRows=*/0,
+      /*atEnd=*/true,
+      "Injected producer failure");
+
+  const auto result = registry->poll(key);
+  ASSERT_TRUE(result.has_value());
+  EXPECT_TRUE(result->atEnd);
+  EXPECT_EQ(
+      result->producerError,
+      std::optional<std::string>("Injected producer failure"));
+  EXPECT_EQ(
+      retrieved.wait_for(std::chrono::seconds(0)), std::future_status::ready);
 }
 
 TEST_P(UcxExchangeTest, basicTest) {

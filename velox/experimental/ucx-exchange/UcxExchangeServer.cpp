@@ -282,7 +282,11 @@ void UcxExchangeServer::sendData() {
       // dataPtr_ is already a shared_ptr, pass directly to share ownership.
       intraNodeRetrieveFuture_ =
           IntraNodeTransferRegistry::getInstance()->publish(
-              key, dataPtr_, dataNumRows_, /*atEnd=*/false);
+              key,
+              dataPtr_,
+              dataNumRows_,
+              /*atEnd=*/false,
+              /*producerError=*/std::nullopt);
       dataPtr_.reset();
       dataNumRows_ = 0;
       intraNodeAtEndPublished_ = false;
@@ -301,7 +305,11 @@ void UcxExchangeServer::sendData() {
           partitionKey_.taskId, partitionKey_.destination, sequenceNumber_};
       intraNodeRetrieveFuture_ =
           IntraNodeTransferRegistry::getInstance()->publish(
-              key, nullptr, /*numRows=*/0, /*atEnd=*/true);
+              key,
+              nullptr,
+              /*numRows=*/0,
+              /*atEnd=*/true,
+              /*producerError=*/std::nullopt);
       intraNodeAtEndPublished_ = true;
 
       queueMgr_->deleteResults(partitionKey_.taskId, partitionKey_.destination);
