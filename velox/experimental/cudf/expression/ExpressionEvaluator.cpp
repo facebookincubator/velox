@@ -811,10 +811,14 @@ class CastFunction : public CudfFunction {
 
     if (isTryCast_) {
       // The rows that spell no value become NULL. bools_to_mask() clears a
-      // false and a null alike, so a null input stays NULL as well.
+      // false and a null alike, so a null input stays NULL as well. A count
+      // of zero means every input row spelled a value, and 'values' stays as
+      // it is.
       auto [nullMask, nullCount] =
           cudf::bools_to_mask(valid->view(), stream, mr);
-      values->set_null_mask(std::move(*nullMask), nullCount);
+      if (nullCount > 0) {
+        values->set_null_mask(std::move(*nullMask), nullCount);
+      }
       return values;
     }
 
