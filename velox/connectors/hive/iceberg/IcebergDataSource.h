@@ -19,6 +19,7 @@
 
 #include "velox/connectors/hive/HiveDataSource.h"
 #include "velox/connectors/hive/iceberg/IcebergChangelogSplitReader.h"
+#include "velox/connectors/hive/iceberg/IcebergSplitReader.h"
 
 namespace facebook::velox::connector::hive::iceberg {
 
@@ -59,6 +60,11 @@ class IcebergDataSource : public HiveDataSource {
       column_index_t outputChannel,
       const std::shared_ptr<common::Filter>& filter) override;
 
+  /// Adopts a preloaded split. A dynamic filter that arrived after 'source'
+  /// prepared its split reached only this data source, so the filters the
+  /// split disabled as partition-enforced are re-enabled for those columns.
+  void setFromDataSource(std::unique_ptr<DataSource> sourceUnique) override;
+
  protected:
   /// Creates an IcebergSplitReader (regular) or IcebergChangelogSplitReader
   /// (changelog) depending on the table handle's isChangelogQuery() flag.
@@ -80,6 +86,9 @@ class IcebergDataSource : public HiveDataSource {
   /// Passed by pointer into each IcebergChangelogSplitReader so that filters
   /// injected by HashProbe at runtime are applied during split-level skipping.
   common::SubfieldFilters changelogDynamicFilters_;
+
+  /// State the split readers share across splits, passed to each by pointer.
+  IcebergScanSpecState scanSpecState_;
 };
 
 } // namespace facebook::velox::connector::hive::iceberg

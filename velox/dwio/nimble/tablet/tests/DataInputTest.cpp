@@ -77,8 +77,19 @@ class DataInputTest : public ::testing::Test {
   }
 
   void SetUp() override {
+    velox::ThreadLocalIoUringReader::testingClear();
+    velox::IoUringReader::setOptions({
+        .submissionQueueDepth = 8,
+        .completionQueueDepth = 8,
+        .registeredFileSlots = 8,
+    });
     pool_ = velox::memory::memoryManager()->addLeafPool("DataInputTest");
     ioStats_ = std::make_shared<velox::io::IoStatistics>();
+  }
+
+  void TearDown() override {
+    velox::ThreadLocalIoUringReader::testingClear();
+    velox::IoUringReader::setOptions(velox::IoUringReader::Options{});
   }
 
   std::unique_ptr<velox::InMemoryReadFile> createFile(

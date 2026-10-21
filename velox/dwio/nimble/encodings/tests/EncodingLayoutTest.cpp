@@ -17,6 +17,7 @@
 #include <gtest/gtest.h>
 #include "velox/dwio/nimble/common/Buffer.h"
 
+#include <fmt/format.h>
 #include "velox/dwio/nimble/common/tests/GTestUtils.h"
 #ifdef NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
 #include "velox/dwio/nimble/encodings/subintsplit/SplitBoundaries.h"
@@ -25,6 +26,7 @@
 #include "velox/dwio/nimble/encodings/SharedDictionaryEncoding.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
+#include "velox/dwio/nimble/encodings/tests/EncodingLayoutTestHelper.h"
 #include "velox/dwio/nimble/encodings/tests/SharedDictionaryEncodingTestUtils.h"
 #include "velox/dwio/nimble/tools/EncodingUtilities.h"
 
@@ -564,15 +566,14 @@ TEST(EncodingLayoutTests, replayDictionaryRejectsEmpty) {
       "Dictionary encoding cannot be used with 0 rows.");
 }
 
-TEST(
-    EncodingLayoutTests,
-    replayMainlyConstantDictionaryRejectsEmptyOtherValues) {
+TEST(EncodingLayoutTests, replayMainlyConstantDictionaryOnAllCommonData) {
   // Replay a MainlyConstant whose OtherValues stream is a nested Dictionary.
-  // When every value equals the common value, OtherValues is empty, so the
-  // nested Dictionary replay has nothing to encode -- the data shape that made
-  // fuzzMainlyConstantDictionaryVector flake. The empty inner Dictionary must
-  // reject with an incompatible-encoding error (propagated out of the
-  // MainlyConstant encode) instead of aborting, so the writer can retry.
+  // When every value equals the common value, OtherValues is empty -- the data
+  // shape that made fuzzMainlyConstantDictionaryVector flake. MainlyConstant
+  // now falls back to ConstantEncoding for that input, so the empty inner
+  // Dictionary is never reached. Previously this surfaced as "Dictionary
+  // encoding cannot be used with 0 rows." and depended on the writer retrying
+  // without the captured layout.
   nimble::EncodingLayout mainlyConstant{
       nimble::EncodingType::MainlyConstant,
       {},
@@ -600,9 +601,13 @@ TEST(
 
   // All values identical -> MainlyConstant OtherValues stream is empty.
   std::vector<uint32_t> data(64, 7);
-  NIMBLE_ASSERT_THROW(
-      encodeAndCapture<uint32_t>(std::move(mainlyConstant), data),
-      "Dictionary encoding cannot be used with 0 rows.");
+  const auto captured =
+      encodeAndCapture<uint32_t>(std::move(mainlyConstant), data);
+
+  // The replay produced a ConstantEncoding, so the captured layout describes
+  // Constant with no children rather than the requested MainlyConstant tree.
+  EXPECT_EQ(captured.encodingType(), nimble::EncodingType::Constant);
+  EXPECT_EQ(captured.childrenCount(), 0);
 }
 
 TEST(EncodingLayoutTests, rle) {
@@ -696,6 +701,56 @@ TEST(EncodingLayoutTests, nullable) {
       expected.child(nimble::EncodingIdentifiers::Nullable::Data),
       actual.first,
       /*compressionMayBeRedirected=*/false);
+}
+
+namespace {
+
+// Encodes 'data' with createNullableFromCustomLayout, using a Constant layout
+// for the non-null values, then reads every row back.
+template <typename T>
+void testNullableCustomLayout(const std::vector<std::optional<T>>& data) {
+  auto pool = velox::memory::deprecatedAddDefaultLeafMemoryPool();
+  nimble::Buffer buffer{*pool};
+  auto encoding = nimble::createNullableFromCustomLayout<T>(
+      nimble::ConstantEnc{}, data, *pool, buffer);
+
+  ASSERT_TRUE(encoding->isNullable());
+  ASSERT_EQ(nimble::TypeTraits<T>::dataType, encoding->dataType());
+  ASSERT_EQ(data.size(), encoding->rowCount());
+
+  // Null rows materialize as the default value.
+  std::vector<T> expected;
+  expected.reserve(data.size());
+  for (const auto& value : data) {
+    expected.push_back(value.value_or(T{}));
+  }
+  std::vector<T> actual(data.size());
+  encoding->materialize(static_cast<uint32_t>(data.size()), actual.data());
+  ASSERT_EQ(expected, actual);
+
+  const auto numNonNull =
+      std::count_if(data.begin(), data.end(), [](const auto& value) {
+        return value.has_value();
+      });
+  // The non-null values are encoded as the physical type of T.
+  using PhysicalType = typename nimble::TypeTraits<T>::physicalType;
+  const auto expectedChild = fmt::format(
+      "non-null child:\n    {}<{}> rowCount={}",
+      nimble::toString(nimble::EncodingType::Constant),
+      nimble::toString(nimble::TypeTraits<PhysicalType>::dataType),
+      numNonNull);
+  ASSERT_NE(std::string::npos, encoding->debugString().find(expectedChild))
+      << encoding->debugString();
+}
+
+} // namespace
+
+TEST(EncodingLayoutTests, nullableCustomLayout) {
+  // Covers uint32_t, which is its own physical type, and int64_t and double,
+  // which both map to uint64_t.
+  testNullableCustomLayout<uint32_t>({7, std::nullopt, 7, 7, std::nullopt});
+  testNullableCustomLayout<int64_t>({-7, std::nullopt, -7, -7, std::nullopt});
+  testNullableCustomLayout<double>({2.5, std::nullopt, 2.5, 2.5, std::nullopt});
 }
 
 #ifdef NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS

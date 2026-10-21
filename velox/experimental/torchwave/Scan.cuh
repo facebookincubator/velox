@@ -820,8 +820,10 @@ repeatInterleaveSegment(const int32_t* prefix, int32_t nSeg, int32_t pos) {
 // sum back to size(input, dim) (any zero repeat balanced by a larger one) no
 // dimension changes length and the search finds nothing. prefix is the
 // inclusive prefix sum of the (per-segment) repeats. T is the element type of
-// input and output.
-template <int32_t kBlockSize, typename T, int32_t kDim>
+// input and output. kRank is input's rank when known at compile time, else -1;
+// a known rank unrolls the coordinate loops so div[] and coord[] stay in
+// registers instead of local memory.
+template <int32_t kBlockSize, typename T, int32_t kDim, int32_t kRank>
 __device__ void repeat_interleave_final(
     Tensor* input,
     Tensor* prefix,
@@ -849,9 +851,12 @@ __device__ void repeat_interleave_final(
   // index-calculator init. Non-flatten decomposes the output index; flatten
   // decomposes the flattened source index (to honor a strided source).
   const Tensor* decomp = flatten ? input : output;
+  // Non-flatten output has input's rank, so one rank serves every loop below.
+  const int32_t rank = kRank >= 0 ? kRank : decomp->rank;
   IntDivider div[kMaxDims];
-  for (int i = 0; i < decomp->rank; ++i) {
-    div[i].init(static_cast<unsigned int>(decomp->dims[decomp->rank - 1 - i]));
+#pragma unroll
+  for (int i = 0; i < rank; ++i) {
+    div[i].init(static_cast<unsigned int>(decomp->dims[rank - 1 - i]));
   }
   // The output is not necessarily a buffer of its own: fused as the operand
   // producer of a cat or stack, it is the slice of the concatenation this
@@ -869,12 +874,13 @@ __device__ void repeat_interleave_final(
           repeatInterleaveSegment(pfx, nSeg, static_cast<int32_t>(lin));
       uint32_t rem = static_cast<uint32_t>(seg);
       int64_t offset = 0;
-      for (int i = 0; i < input->rank; ++i) {
+#pragma unroll
+      for (int i = 0; i < rank; ++i) {
         unsigned int quotient, remainder;
         div[i].divmod(rem, quotient, remainder);
         rem = quotient;
-        offset += static_cast<int64_t>(remainder) *
-            input->strides[input->rank - 1 - i];
+        offset +=
+            static_cast<int64_t>(remainder) * input->strides[rank - 1 - i];
       }
       // Flattening always produces a rank-1 output, so its slice is a single
       // strided run and the position maps through one stride.
@@ -884,22 +890,25 @@ __device__ void repeat_interleave_final(
     } else {
       int32_t coord[kMaxDims];
       uint32_t rem = lin;
-      for (int i = 0; i < output->rank; ++i) {
+#pragma unroll
+      for (int i = 0; i < rank; ++i) {
         unsigned int quotient, remainder;
         div[i].divmod(rem, quotient, remainder);
-        coord[output->rank - 1 - i] = static_cast<int32_t>(remainder);
+        coord[rank - 1 - i] = static_cast<int32_t>(remainder);
         rem = quotient;
       }
       int32_t seg = repeatInterleaveSegment(pfx, nSeg, coord[dim]);
       int64_t offset = 0;
-      for (int d = 0; d < input->rank; ++d) {
+#pragma unroll
+      for (int d = 0; d < rank; ++d) {
         int32_t axisCoord = (d == dim) ? seg : coord[d];
         offset += static_cast<int64_t>(axisCoord) * input->strides[d];
       }
       int64_t outOffset = lin;
       if (!outContiguous) {
         outOffset = 0;
-        for (int d = 0; d < output->rank; ++d) {
+#pragma unroll
+        for (int d = 0; d < rank; ++d) {
           outOffset += static_cast<int64_t>(coord[d]) * output->strides[d];
         }
       }
@@ -910,7 +919,7 @@ __device__ void repeat_interleave_final(
 
 // Multi-block variant of repeat_interleave_final with an op barrier at the
 // end for cooperative/multi-kernel grids.
-template <int32_t kBlockSize, typename T, int32_t kDim>
+template <int32_t kBlockSize, typename T, int32_t kDim, int32_t kRank>
 __device__ void repeat_interleave_final_cg(
     Tensor* input,
     Tensor* prefix,
@@ -919,7 +928,7 @@ __device__ void repeat_interleave_final_cg(
     uint32_t& size,
     int32_t bar0,
     BlockInfo& block) {
-  repeat_interleave_final<kBlockSize, T, kDim>(
+  repeat_interleave_final<kBlockSize, T, kDim, kRank>(
       input, prefix, total, output, size, block);
   opBarrier(block, bar0);
 }

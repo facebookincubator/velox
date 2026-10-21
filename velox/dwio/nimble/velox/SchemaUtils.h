@@ -69,7 +69,9 @@ struct ProjectedHybridFlatMap {
   /// Source Hybrid FlatMap. It must outlive this projection plan.
   const HybridFlatMapType* source;
 
-  /// Selected group indices in source-schema order.
+  /// Selected group indices in source-schema order. Empty when every requested
+  /// key is in no group; the column then projects as a keyless Default group
+  /// that maps to no source stream.
   std::vector<size_t> groupIndices;
 };
 
@@ -106,7 +108,10 @@ struct NimbleTypeProjection {
 
 /// Builds a projected Nimble schema and its source-stream mapping. A projected
 /// Hybrid FlatMap contains only selected physical groups and compacts their
-/// descriptors into the response-local stream namespace.
+/// descriptors into the response-local stream namespace. A requested key in no
+/// group selects no group; a column with no selected group holds a keyless
+/// Default group whose streams map to no source stream, so non-null rows decode
+/// as empty maps and null rows stay null.
 NimbleTypeProjection buildProjectedNimbleType(
     const Type* type,
     const std::vector<velox::common::Subfield>& projectedSubfields);

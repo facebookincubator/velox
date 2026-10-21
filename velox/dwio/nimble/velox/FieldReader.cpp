@@ -5420,6 +5420,11 @@ struct HybridFlatMapGroupReaderParams {
   // Creates the reader for the group's shared value stream.
   std::unique_ptr<FieldReaderFactory> valueReader;
 
+  // Reports value-stream presence for readers that reuse decoders across
+  // batches. It may be empty until createReader() infers it from the fixed
+  // decoder map for standalone readers.
+  std::function<bool()> hasValueStreams;
+
   // Contains keys named by the feature selector.
   folly::F14FastSet<std::string> selectedKeys;
 
@@ -5445,10 +5450,13 @@ class HybridFlatMapGroupReader {
       const HybridFlatMapType::Group& group,
       Decoder* keyPresenceDecoder,
       Decoder* inMapDecoder,
+      std::function<bool()> hasValueStreams,
       std::unique_ptr<FieldReader> valueReader,
       velox::memory::MemoryPool* pool)
-      : keyPresenceDecoder_{keyPresenceDecoder},
+      : pool_{velox::checkedNotNull(pool)},
+        keyPresenceDecoder_{keyPresenceDecoder},
         inMapDecoder_{inMapDecoder},
+        hasValueStreams_{std::move(hasValueStreams)},
         selectedKeys_{parameters.selectedKeys},
         selectionMode_{parameters.selectionMode},
         keys_{schemaKeys(group, pool)},
@@ -5462,11 +5470,6 @@ class HybridFlatMapGroupReader {
     if (loaded_) {
       co_return;
     }
-    NIMBLE_CHECK_FILE_EQ(
-        inMapDecoder_ == nullptr,
-        keyPresenceDecoder_ == nullptr,
-        "Hybrid FlatMap key-presence and in-map streams must be present "
-        "together.");
     loaded_ = true;
 
     const auto readMetadataChunk =
@@ -5504,37 +5507,53 @@ class HybridFlatMapGroupReader {
       readMetadataChunk(inMapDecoder_, inMap_, "in-map");
     }
 
-    if (keyPresence_.empty()) {
-      NIMBLE_CHECK_FILE(
-          inMap_.empty(),
-          "Hybrid FlatMap group has in-map rows without key presence.");
+    const bool hasValueStreams = hasValueStreams_();
+
+    // The writer omits all-false in-map metadata. With no value streams, the
+    // group therefore has no entries in this batch, even if key presence was
+    // retained to preserve the schema prefix.
+    if (inMap_.empty() && !hasValueStreams) {
+      keyPresence_.clear();
       co_return;
+    }
+
+    if (keyPresence_.empty()) {
+      // An omitted key-presence stream with in-map rows applies to all schema
+      // keys. All-false metadata is omitted only when the group is empty.
+      keyPresence_.resize(keys_.size(), true);
     }
 
     NIMBLE_CHECK_FILE_LE(
         keyPresence_.size(),
         keys_.size(),
         "Hybrid FlatMap key-presence count exceeds schema key count.");
-    const auto presentKeyCount = static_cast<uint32_t>(
+    const auto numPresentKeys = static_cast<uint32_t>(
         std::count(keyPresence_.begin(), keyPresence_.end(), true));
-    const auto inMapCount = static_cast<uint32_t>(inMap_.size());
-    if (presentKeyCount == 0) {
+    if (numPresentKeys == 0) {
       NIMBLE_CHECK_FILE(
           inMap_.empty(),
           "Hybrid FlatMap group has in-map rows without present keys.");
+      NIMBLE_CHECK_FILE(
+          !hasValueStreams,
+          "Hybrid FlatMap group has value streams without present keys.");
       keyPresence_.clear();
       co_return;
     }
+    NIMBLE_CHECK_FILE(
+        !inMap_.empty(),
+        "Hybrid FlatMap group with present keys is missing in-map rows.");
+    const auto numInMap = static_cast<uint32_t>(inMap_.size());
     NIMBLE_CHECK_FILE_EQ(
-        inMapCount % presentKeyCount,
+        numInMap % numPresentKeys,
         0,
-        "Hybrid FlatMap in-map count is not divisible by present key count.");
-    nonNullRowCount_ = inMapCount / presentKeyCount;
+        "Hybrid FlatMap in-map count is not divisible by present key "
+        "count.");
+    nonNullRowCount_ = numInMap / numPresentKeys;
 
-    valueIndices_.assign(inMapCount, kAbsentHybridFlatMapValueIndex);
+    valueIndices_.assign(numInMap, kAbsentHybridFlatMapValueIndex);
     selectedKeyIndices_.reserve(
         selectionMode_ == SelectionMode::Include ? selectedKeys_.size()
-                                                 : presentKeyCount);
+                                                 : numPresentKeys);
     velox::vector_size_t numValues{0};
     uint32_t presentKeyIndex{0};
     for (uint32_t schemaKeyIndex = 0; schemaKeyIndex < keyPresence_.size();
@@ -5573,11 +5592,16 @@ class HybridFlatMapGroupReader {
           keyName);
       ++presentKeyIndex;
     }
-    NIMBLE_CHECK_FILE_EQ(presentKeyIndex, presentKeyCount);
+    NIMBLE_CHECK_FILE_EQ(presentKeyIndex, numPresentKeys);
 
     NIMBLE_CHECK_NOT_NULL(valueReader_, "Missing hybrid FlatMap value reader.");
-    co_await valueReader_->co_next(
-        numValues, values_, /*scatterBitmap=*/nullptr);
+    if (!hasValueStreams) {
+      values_ = velox::BaseVector::createNullConstant(
+          valueReader_->type(), numValues, pool_);
+    } else {
+      co_await valueReader_->co_next(
+          numValues, values_, /*scatterBitmap=*/nullptr);
+    }
     NIMBLE_CHECK_EQ(
         values_->size(), numValues, "Hybrid FlatMap value count mismatch.");
     co_return;
@@ -5693,12 +5717,14 @@ class HybridFlatMapGroupReader {
     return keys_[index];
   }
 
-  // Non-owning decoder for the schema-ordered key-presence bitmap. It is null
-  // exactly when inMapDecoder_ is null.
+  // Allocates implicit null values for metadata-only groups.
+  velox::memory::MemoryPool* const pool_;
+  // Non-owning decoder for the schema-ordered key-presence bitmap.
   Decoder* const keyPresenceDecoder_;
-  // Non-owning decoder for key-major row-presence bits. It is null exactly
-  // when keyPresenceDecoder_ is null.
+  // Non-owning decoder for key-major row-presence bits.
   Decoder* const inMapDecoder_;
+  // Reads this group's batch-local value-stream presence.
+  const std::function<bool()> hasValueStreams_;
   // Requested feature names interpreted according to selectionMode_.
   const folly::F14FastSet<std::string> selectedKeys_;
   // Controls whether selectedKeys_ is an inclusion or exclusion set. An empty
@@ -5962,12 +5988,28 @@ class HybridFlatMapFieldReaderFactory final : public FieldReaderFactory {
     hybridGroupReaders.reserve(hybridGroupParams_.size());
     for (auto& parameters : hybridGroupParams_) {
       const auto& group = parameters.group.get();
+      auto hasValueStreams = std::move(parameters.hasValueStreams);
+      if (!hasValueStreams) {
+        // Standalone readers have a fixed decoder map, so infer stream
+        // presence from its offsets. Deserializer supplies the batch-aware
+        // callback because it reuses decoders across batches.
+        const bool valueStreamsPresent = visitPresenceStreamOffsets(
+            *group.valueType,
+            [&](offset_size offset) { return decoders.contains(offset); });
+        hasValueStreams = [valueStreamsPresent]() {
+          return valueStreamsPresent;
+        };
+      }
+      NIMBLE_CHECK_NOT_NULL(
+          hasValueStreams,
+          "Missing Hybrid FlatMap value-stream presence callback.");
       hybridGroupReaders.push_back(
           std::make_unique<HybridFlatMapGroupReader<T>>(
               parameters,
               group,
               getDecoder(decoders, group.keyPresenceDescriptor),
               getDecoder(decoders, group.inMapDescriptor),
+              std::move(hasValueStreams),
               parameters.valueReader->createReader(decoders),
               pool_));
     }
@@ -6664,10 +6706,17 @@ std::unique_ptr<FieldReaderFactory> createHybridFlatMapFieldReaderFactory(
         level + 1,
         nullptr,
         pool);
+    std::function<bool()> hasValueStreams;
+    if (parameters.hybridFlatMapValueStreamsPresent) {
+      const auto inMapOffset = group.inMapDescriptor.offset();
+      hasValueStreams = [callback = parameters.hybridFlatMapValueStreamsPresent,
+                         inMapOffset]() { return callback(inMapOffset); };
+    }
     hybridGroupParams.push_back(
         HybridFlatMapGroupReaderParams{
             .group = group,
             .valueReader = std::move(valueReader),
+            .hasValueStreams = std::move(hasValueStreams),
             .selectedKeys = selectedKeys,
             .selectionMode = selectionMode,
         });

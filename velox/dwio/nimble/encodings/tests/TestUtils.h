@@ -19,6 +19,7 @@
 #include <optional>
 
 #include "velox/dwio/nimble/encodings/ALPEncoding.h"
+#include "velox/dwio/nimble/encodings/ALPRDEncoding.h"
 #include "velox/dwio/nimble/encodings/BlockBitPackingEncoding.h"
 #include "velox/dwio/nimble/encodings/ConstantEncoding.h"
 #include "velox/dwio/nimble/encodings/DeltaBlockEncoding.h"
@@ -28,11 +29,13 @@
 #include "velox/dwio/nimble/encodings/FixedBitWidthEncoding.h"
 #include "velox/dwio/nimble/encodings/ForEncoding.h"
 #include "velox/dwio/nimble/encodings/FrequencyPartitionEncoding.h"
+#include "velox/dwio/nimble/encodings/FsstEncoding.h"
 #include "velox/dwio/nimble/encodings/HuffmanEncoding.h"
 #include "velox/dwio/nimble/encodings/MainlyConstantEncoding.h"
 #include "velox/dwio/nimble/encodings/NullableEncoding.h"
 #include "velox/dwio/nimble/encodings/PFOREncoding.h"
 #include "velox/dwio/nimble/encodings/RLEEncoding.h"
+#include "velox/dwio/nimble/encodings/SentinelEncoding.h"
 #include "velox/dwio/nimble/encodings/SimdForBitpackEncoding.h"
 #include "velox/dwio/nimble/encodings/SparseBoolEncoding.h"
 #ifdef NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
@@ -53,6 +56,12 @@ template <typename T>
 struct EncodingTypeTraits<nimble::ALPEncoding<T>> {
   static constexpr inline nimble::EncodingType encodingType =
       nimble::EncodingType::ALP;
+};
+
+template <typename T>
+struct EncodingTypeTraits<nimble::ALPRDEncoding<T>> {
+  static constexpr inline nimble::EncodingType encodingType =
+      nimble::EncodingType::ALPRD;
 };
 
 template <typename T>
@@ -109,6 +118,12 @@ struct EncodingTypeTraits<nimble::ForEncoding<T>> {
       nimble::EncodingType::FOR;
 };
 
+template <>
+struct EncodingTypeTraits<nimble::FsstEncoding> {
+  static constexpr inline nimble::EncodingType encodingType =
+      nimble::EncodingType::Fsst;
+};
+
 template <typename T>
 struct EncodingTypeTraits<nimble::HuffmanEncoding<T>> {
   static constexpr inline nimble::EncodingType encodingType =
@@ -125,6 +140,12 @@ template <typename T>
 struct EncodingTypeTraits<nimble::RLEEncoding<T>> {
   static constexpr inline nimble::EncodingType encodingType =
       nimble::EncodingType::RLE;
+};
+
+template <typename T>
+struct EncodingTypeTraits<nimble::SentinelEncoding<T>> {
+  static constexpr inline nimble::EncodingType encodingType =
+      nimble::EncodingType::Sentinel;
 };
 
 template <>
@@ -350,11 +371,20 @@ class Encoder {
       const std::function<void*(uint32_t)>& stringBufferFactory,
       CompressionType compressionType = CompressionType::Uncompressed,
       const nimble::Encoding::Options& options = {}) {
-    return std::make_unique<E>(
-        buffer.getMemoryPool(),
-        encode(buffer, values, compressionType, options),
-        stringBufferFactory,
-        options);
+    // encode() may legitimately emit a different, cheaper encoding for some
+    // inputs (e.g. MainlyConstant falls back to Constant when every row is the
+    // common value, as slice() already does for an all-common range), so
+    // construct E only when that is what was actually written. Experimental
+    // encodings are not all registered with EncodingFactory, so the direct
+    // construction stays the default.
+    const auto encoded = encode(buffer, values, compressionType, options);
+    if (EncodingPrefix::encodingType(encoded) ==
+        EncodingTypeTraits<E>::encodingType) {
+      return std::make_unique<E>(
+          buffer.getMemoryPool(), encoded, stringBufferFactory, options);
+    }
+    return EncodingFactory{options}.create(
+        buffer.getMemoryPool(), encoded, stringBufferFactory);
   }
 
   static std::unique_ptr<nimble::Encoding> createNullableEncoding(

@@ -109,7 +109,17 @@ void IcebergDataSource::addDynamicFilter(
     const std::shared_ptr<common::Filter>& filter) {
   if (!changelogScanContext_.has_value()) {
     // Regular (non-changelog) query: delegate to the base implementation which
-    // sets the filter on scanSpec_ for the row reader to consume.
+    // sets the filter on scanSpec_ for the row reader to consume. The current
+    // split may have disabled the column's filter as partition-enforced.
+    const auto& columnName =
+        scanSpec_->getChildByChannel(outputChannel).fieldName();
+    scanSpecState_.dynamicFilterColumns.insert(columnName);
+    if (splitReader_ != nullptr) {
+      auto* icebergSplitReader =
+          dynamic_cast<IcebergSplitReader*>(splitReader_.get());
+      VELOX_CHECK_NOT_NULL(icebergSplitReader);
+      icebergSplitReader->enableFilterForDynamicFilter(columnName);
+    }
     FileDataSource::addDynamicFilter(outputChannel, filter);
     return;
   }
@@ -184,7 +194,33 @@ std::unique_ptr<FileSplitReader> IcebergDataSource::createSplitReader() {
       fileHandleFactory_,
       ioExecutor_,
       scanSpec_,
-      columnHandles_);
+      columnHandles_,
+      &scanSpecState_);
+}
+
+void IcebergDataSource::setFromDataSource(
+    std::unique_ptr<DataSource> sourceUnique) {
+  auto* source = checkedPointerCast<IcebergDataSource>(sourceUnique.get());
+  // The constants belong to the scan spec this data source adopts.
+  scanSpecState_.splitConstantColumns =
+      std::move(source->scanSpecState_.splitConstantColumns);
+  scanSpecState_.dynamicFilterColumns.insert(
+      source->scanSpecState_.dynamicFilterColumns.begin(),
+      source->scanSpecState_.dynamicFilterColumns.end());
+  HiveDataSource::setFromDataSource(std::move(sourceUnique));
+
+  auto* icebergSplitReader =
+      dynamic_cast<IcebergSplitReader*>(splitReader_.get());
+  VELOX_CHECK_NOT_NULL(icebergSplitReader);
+  icebergSplitReader->setScanSpecState(&scanSpecState_);
+  if (scanSpecState_.dynamicFilterColumns.empty()) {
+    return;
+  }
+  for (const auto& columnName : scanSpecState_.dynamicFilterColumns) {
+    icebergSplitReader->enableFilterForDynamicFilter(columnName);
+  }
+  scanSpec_->resetCachedValues(true);
+  splitReader_->resetFilterCaches();
 }
 
 } // namespace facebook::velox::connector::hive::iceberg

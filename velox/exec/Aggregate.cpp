@@ -294,10 +294,15 @@ std::unique_ptr<Aggregate> Aggregate::create(
     core::AggregationNode::Step step,
     const std::vector<TypePtr>& argTypes,
     const TypePtr& resultType,
-    const core::QueryConfig& config) {
+    const core::QueryConfig& config,
+    const std::vector<VectorPtr>& constantInputs) {
   // Lookup the function in the new registry first.
   if (auto func = getAggregateFunctionEntry(name)) {
-    return func->factory(step, argTypes, resultType, config);
+    auto aggregate = func->factory(step, argTypes, resultType, config);
+    if (!constantInputs.empty()) {
+      aggregate->setConstantInputs(constantInputs);
+    }
+    return aggregate;
   }
 
   VELOX_USER_FAIL("Aggregate function not registered: {}", name);

@@ -1541,6 +1541,19 @@ TEST_F(RowContainerTest, alignment) {
   }
 }
 
+TEST_F(RowContainerTest, externalMemoryAccumulatorRequiresDestroyFunction) {
+  VELOX_ASSERT_THROW(
+      Accumulator(
+          true, // isFixedSize
+          8, // fixedSize
+          true, // usesExternalMemory
+          1, // alignment
+          nullptr, // spillType
+          [](auto, auto) { VELOX_UNREACHABLE(); },
+          nullptr),
+      "An accumulator that uses external memory requires a destroy function.");
+}
+
 // Verify comparison of fringe float values
 TEST_F(RowContainerTest, equalAndCompareFloat) {
   testEqualAndCompareRowContainerTypeFloat<float>(REAL());

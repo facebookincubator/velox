@@ -292,28 +292,47 @@ costs one unit per row.
   (``velox/exec/rpc/RPCRateLimiter.h``), one instance per admission key,
   obtained from the process-scoped ``RPCRateLimiterRegistry`` and keyed by
   ``admissionKey()``:
-  an AIMD limit shared across every driver hitting that backend —
-  multiplicative decrease on overload, additive increase on success. Distinct
-  admission keys adapt independently; functions returning the same key,
-  including ``""``, share one controller. The worker properties are
+  an adaptive limit shared across every driver hitting that backend —
+  multiplicative decrease on overload, doubling recovery below one, and
+  additive increase at or above one. Distinct admission keys adapt
+  independently; functions returning the same key, including ``""``, share
+  one controller. The worker properties are
   ``rpc.ratelimiter.adaptive_enabled``, ``rpc.ratelimiter.min_limit``,
   ``rpc.ratelimiter.decrease_factor``, and
   ``rpc.ratelimiter.max_limit`` (see :doc:`/configs`).
 
-  Despite the name it bounds *concurrency*, not a rate: capacity is a semaphore
-  over in-flight units. The class, configuration, and runtime-stat names retain
-  the historical "rate limiter" terminology.
+  At limits of at least one, capacity bounds concurrent in-flight units. Below
+  one, the limiter admits one unit at a time and spaces admission starts using
+  the smoothed successful RPC duration. The class and configuration names
+  retain the historical "rate limiter" terminology.
 
 Each admission key is configured by the first query that reaches it. Adaptive
-control defaults to enabled with a ceiling of 200, floor of 50, and decrease
-factor of 0.5. A positive ``rpc.ratelimiter.max_limit`` overrides the function's
-``configuredCeiling()``; ``0`` defers to the function. When both values are
-zero, the built-in ceiling is 20.
+control defaults to enabled with a legacy ceiling of 200, an integral session
+floor of 50, and a decrease factor of 0.5. Setting
+``rpc.ratelimiter.min_limit`` to ``0`` delegates the floor to
+``configuredAdaptiveFloor()``. The legacy ``rpc.ratelimiter.max_limit`` keeps
+its original behavior during mixed-version rollout. A non-negative
+``rpc.ratelimiter.hard_limit`` supersedes it: zero adds no session ceiling and
+a positive value is combined with ``configuredCeiling()`` using the smaller
+positive value. Minus one, the default, retains legacy behavior. Functions that
+share an admission key must declare the same stable floor and ceiling. Later
+queries cannot reconfigure an initialized key until the worker restarts.
 
-``evaluateCongestion()`` returns one of five verdicts. ``kOverloaded`` is the
-only verdict that directly applies multiplicative decrease to both controllers;
-a ``kSuccess`` latency sample may independently reduce the per-driver gradient
-window.
+With ``rpc.ratelimiter.hard_limit=0`` and no function ceiling,
+``rpcRateLimiterHardLimit`` is 1,000,000 while the current and lifetime
+low-water windows start at 200. A low-water value of 200 therefore does not
+prove overload. With a decrease factor of 0.5, overloads from successive
+admission epochs move the window from 200 to 100 to 50; completions admitted in
+the same epoch coalesce after the first decrease. If the function floor permits
+fractional pacing, successive overload epochs can move the window from 1 to 0.5
+to 0.25. Healthy completions never shrink the window: they recover 0.25 to 0.5
+to 1 before additive growth resumes, clamped at the hard limit.
+
+``evaluateCongestion()`` returns one of five verdicts. Canonical typed overload
+backs off shared admission at completion time before its lease is released; the
+driver later consumes the recorded marker to back off its local window without
+applying the shared decrease twice. A ``kSuccess`` latency sample may
+independently reduce the per-driver gradient window.
 
 .. list-table::
    :widths: 22 58
@@ -327,16 +346,23 @@ window.
        let the limiter recover.
    * - ``kSuccessNoLatency``
      - The unit completed cleanly; let the limiter recover without feeding its
-       latency to the gradient window.
+       latency to the gradient window. In BATCH mode, when
+       ``rpc.congestion.async_growth_max_window`` is set, it also grows the
+       driver window additively on completion count. The shared limiter still
+       learns a service horizon for fractional admission pacing. With the
+       default 0, overload may shrink the driver window, but clean completions
+       do not grow it back.
    * - ``kOverloaded``
      - The backend shed load — rate limited, or timed out under pressure.
        Applies multiplicative decrease to both controllers.
    * - ``kNonOverloadError``
-     - The unit failed without explicit evidence of overload. Neither
-       controller reacts because reducing concurrency would not address this
-       signal.
+     - The unit failed without explicit evidence of overload. The driver
+       window does not react because reducing concurrency would not address
+       this signal. A completed BATCH flush still reports its units and
+       duration to the shared limiter.
    * - ``kNone``
-     - Nothing to evaluate.
+     - Nothing for the driver window to evaluate. A completed BATCH flush still
+       participates in shared accounting.
 
 The distinction matters: a majority of rows failing on bad input is not a reason
 to throttle against a healthy backend. For the same reason, a function on a
@@ -351,10 +377,21 @@ Putting it together, for each unit the operator:
 #. **Admits** it only when *both* the per-driver window and the per-backend
    limiter have headroom; otherwise it waits.
 #. **Dispatches** it under a per-unit timeout.
-#. **On completion**, obtains the function's verdict. ``kSuccess`` feeds the
-   round-trip time to the per-driver window and recovers shared admission;
-   ``kSuccessNoLatency`` only recovers shared admission; ``kOverloaded`` shrinks
-   both controllers; the other verdicts leave them unchanged.
+#. **On completion**, classifies canonical typed overload, applies at most one
+   shared decrease for the admission epoch, and releases the shared lease.
+#. **On driver consumption**, obtains the function's aggregate verdict.
+   ``kSuccess`` feeds round-trip time to the per-driver window and recovers
+   shared admission; ``kSuccessNoLatency`` recovers shared admission without
+   training the gradient, and, when ``rpc.congestion.async_growth_max_window``
+   is set, grows the BATCH driver window additively on completion count. The
+   shared limiter independently learns the observed service horizon for
+   fractional pacing. A recorded canonical overload shrinks the driver window
+   without repeating the shared decrease; a function-specific ``kOverloaded``
+   verdict shrinks both controllers; the other verdicts leave the driver
+   window unchanged. Every completed BATCH flush still reports its reserved
+   units and observed duration to epoch-guarded shared accounting. After a
+   canonical overload, a stale success may update the service horizon but
+   cannot recover shared capacity.
 
 Retries and error handling
 --------------------------
@@ -363,9 +400,10 @@ Retry policy belongs to the function or transport; implementations may apply
 bounded retry backoff. The ``RPCOperator`` independently enforces a per-unit
 timeout and runs the flow control above. Terminal rate-limit and timeout
 failures may become ``kOverloaded``; other backend and transport failures
-normally become ``kNonOverloadError``. Framework failures are handled below.
-Only an overload verdict causes admission backoff. This keeps request-level
-reliability separate from cluster-level flow control.
+normally become ``kNonOverloadError``. Framework failures are handled below. A
+canonical typed overload or a function-specific ``kOverloaded`` verdict causes
+admission backoff. This keeps request-level reliability separate from
+cluster-level flow control.
 
 Classified row failures reach ``buildOutput()``, where the function applies its
 configured policy by emitting null or error output, or by failing the query.

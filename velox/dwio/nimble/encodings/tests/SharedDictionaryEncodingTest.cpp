@@ -825,12 +825,18 @@ TEST_F(SharedDictionaryEncodingTest, alphabetEstimateUsesSelectionEstimate) {
       reinterpret_cast<const PhysicalType*>(values.data()), values.size()};
   const auto statistics = Statistics<PhysicalType>::create(physicalValues);
   const Encoding::Options options;
+  ManualEncodingSelectionPolicy<int32_t> policy{
+      {{EncodingType::FixedBitWidth, 1.0f}}, std::nullopt, std::nullopt};
 
   const auto estimate = SharedDictionaryAlphabet::estimateSize<int32_t>(
       values, std::array{EncodingType::FixedBitWidth}, options);
   const auto expectedEstimate =
       detail::EncodingSizeEstimation<int32_t>::estimateSize(
-          EncodingType::FixedBitWidth, physicalValues, statistics, options);
+          policy,
+          EncodingType::FixedBitWidth,
+          physicalValues,
+          statistics,
+          options);
 
   ASSERT_TRUE(expectedEstimate.has_value());
   EXPECT_EQ(estimate, expectedEstimate.value());
@@ -845,12 +851,14 @@ TEST_F(
       reinterpret_cast<const PhysicalType*>(values.data()), values.size()};
   const auto statistics = Statistics<PhysicalType>::create(physicalValues);
   const Encoding::Options options;
+  ManualEncodingSelectionPolicy<int32_t> policy{
+      {{EncodingType::Trivial, 1.0f}}, std::nullopt, std::nullopt};
 
   const auto estimate = SharedDictionaryAlphabet::estimateSize<int32_t>(
       values, std::array{EncodingType::ALP}, options);
   const auto expectedEstimate =
       detail::EncodingSizeEstimation<int32_t>::estimateSize(
-          EncodingType::Trivial, physicalValues, statistics, options);
+          policy, EncodingType::Trivial, physicalValues, statistics, options);
 
   ASSERT_TRUE(expectedEstimate.has_value());
   EXPECT_EQ(estimate, expectedEstimate.value());

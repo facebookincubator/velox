@@ -35,6 +35,7 @@
 namespace facebook::velox::exec {
 
 class Driver;
+class ExchangeClient;
 class JoinBridge;
 class LocalExchangeMemoryManager;
 class MergeSource;
@@ -59,13 +60,18 @@ FOLLY_ALWAYS_INLINE std::ostream& operator<<(
 }
 
 struct BarrierState {
-  int32_t numRequested;
+  /// Tracks the number of peers that have entered the current barrier round.
+  uint32_t numRequested{0};
+  /// Tracks the number of unfinished peers expected in the current round.
+  uint32_t numPeers{0};
+  /// Identifies the pipeline that owns this barrier.
+  std::optional<uint32_t> pipelineId;
+  /// Holds drivers waiting at the current barrier round.
   std::vector<std::shared_ptr<Driver>> drivers;
-  /// Promises given to non-last peer drivers that the last driver will collect
-  /// all hashtables from the peers and assembles them into one (HashBuilder
-  /// operator does that). After the last drier done its work, the promises are
-  /// fulfilled and the non-last drivers can continue.
-  std::vector<ContinuePromise> allPeersFinishedPromises;
+  /// Promises given to non-last peer drivers. After the last driver completes
+  /// the barrier's coordinated work, the promises are fulfilled and the
+  /// non-last drivers can continue.
+  std::vector<ContinuePromise> allPeersArrivedPromises;
 };
 
 using ConnectorSplitPreloadFunc =
@@ -124,6 +130,11 @@ class SplitsStore {
   /// `promises` should be set by caller (potentially outside a lock), to notify
   /// any waiters on the splits.
   void addSplit(Split split, std::vector<ContinuePromise>& promises);
+
+  /// Returns the splits added but not yet returned by nextSplit().
+  const std::deque<Split>& queuedSplits() const {
+    return splits_;
+  }
 
   /// Return the number of waiters waiting for new splits.
   int numWaiters() const {
@@ -186,6 +197,12 @@ struct SplitsState {
   /// Map split group id -> split store.
   std::unordered_map<uint32_t, std::unique_ptr<SplitsStore>> groupSplitsStores;
 
+  /// Exchange client of a leaf node that requires one, other than a
+  /// MergeExchangeNode. Set when the task creates the client. The task
+  /// forwards remote splits and 'no more splits' to it as they arrive. Null
+  /// for other plan nodes.
+  std::shared_ptr<ExchangeClient> exchangeClient;
+
   /// We need these due to having promises in the structure.
   SplitsState() = default;
   SplitsState(SplitsState const&) = delete;
@@ -209,8 +226,18 @@ struct SplitGroupState {
   /// This map will contain all other custom bridges.
   std::unordered_map<core::PlanNodeId, std::shared_ptr<JoinBridge>>
       customBridges;
-  /// Holds states for Task::allPeersFinished.
+  /// Holds states for Task::allPeersArrived.
   std::unordered_map<core::PlanNodeId, BarrierState> barriers;
+  /// Tracks the number of operators that won't participate in future barriers,
+  /// keyed by plan node ID and pipeline ID.
+  ///
+  /// NOTE: 'pipelineId' is needed here even though build and probe barriers
+  /// alternate. Unlike the per-round barrier state, the finished count persists
+  /// across spill rounds. Both pipelines share the same 'planNodeId', so keying
+  /// only by 'planNodeId' would let a finished probe reduce the next build
+  /// barrier's expected peer count, causing it to complete too early.
+  std::unordered_map<core::PlanNodeId, std::unordered_map<uint32_t, uint32_t>>
+      finishedBarrierPeers;
 
   /// Map of merge sources keyed on LocalMergeNode plan node ID.
   std::
@@ -250,6 +277,7 @@ struct SplitGroupState {
       bridges.clear();
       customBridges.clear();
       barriers.clear();
+      finishedBarrierPeers.clear();
     }
     localMergeSources.clear();
     mergeJoinSources.clear();
