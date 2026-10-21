@@ -158,7 +158,7 @@ class Aggregate {
   // @param indices Indices into 'groups' of the new entries.
   virtual void initializeNewGroups(
       char** groups,
-      folly::Range<const vector_size_t*> indices) {
+      folly::Range<const vector_size_t*> indices) final {
     initializeNewGroupsInternal(groups, indices);
 
     for (auto index : indices) {
