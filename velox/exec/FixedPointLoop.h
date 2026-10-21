@@ -45,11 +45,11 @@ struct NestedFixedPoint {
 
   /// The workers the nested loop runs on, by destination: the enclosing
   /// loop's, or worker 0 alone for a loop nested in a verdict plan.
-  std::vector<std::string> workers;
+  std::vector<std::string> workers{};
 
   /// The enclosing loop's nesting.  The nested loop appends a step naming
   /// itself and 'iteration'.
-  std::vector<FixedPointOptions::NestingStep> nesting;
+  std::vector<FixedPointOptions::NestingStep> nesting{};
 
   /// The enclosing loop's iteration that runs the sub-task; 0 for an initial
   /// plan.
