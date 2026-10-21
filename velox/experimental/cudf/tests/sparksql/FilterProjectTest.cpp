@@ -182,13 +182,13 @@ TEST_F(CudfFilterProjectTest, isNull) {
       }
       auto result = evaluator->eval(
           tableViewToColumnViews(table->view()), stream, resource);
-      auto actual =
-          with_arrow::toVeloxColumn(cudf::table_view({asView(result)}),
-                                    pool_.get(),
-                                    ROW({{"c0", BOOLEAN()}}),
-                                    "",
-                                    stream,
-                                    resource);
+      auto actual = with_arrow::toVeloxColumn(
+          cudf::table_view({asView(result)}),
+          pool_.get(),
+          ROW({{"c0", BOOLEAN()}}),
+          "",
+          stream,
+          resource);
       velox::test::assertEqualVectors(expected, actual->childAt(0));
     }
     velox::test::assertEqualVectors(expected, evaluate(expression, data));
