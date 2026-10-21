@@ -19,64 +19,71 @@
 #include <folly/Executor.h>
 #include <folly/futures/Future.h>
 
+#include <compare>
 #include <functional>
+#include <memory>
 #include <string>
+#include <vector>
+
+namespace facebook::velox::connector {
+struct ConnectorSplit;
+} // namespace facebook::velox::connector
 
 namespace facebook::velox::exec {
 
-/// Hooks a coordinator passes to Task::create for a plan containing a
-/// FixedPointNode.  The fixed point generates no task ids or exchange URIs
-/// itself -- the coordinator owns its addressing protocol and supplies them
-/// through these hooks and the remote splits it adds.
+/// Hooks an application passes to Task::create for a plan containing a
+/// FixedPointNode.  The fixed point generates no task ids and reaches no
+/// worker by itself: the application names the workers of a loop with a
+/// FixedPointSplit and supplies the rest through these hooks.
 struct FixedPointOptions {
-  /// Where a producer sub-task lives: the bare task id it is created under (for
-  /// Task::create and its output buffer) and the exchange URI a consumer
-  /// reaches it through (a RemoteConnectorSplit -> ExchangeSource, selected by
-  /// scheme). In-process the two are the same string; a distributed
-  /// coordinator's URI also embeds the producer's endpoint, e.g.
-  /// "thrift://{host:port}/{taskId}".
-  struct ProducerLocation {
-    /// Task id the producer is created under.
-    std::string taskId;
-    /// Exchange URI a consumer reaches the producer through.
-    std::string exchangeUri;
+  /// One level of nesting: the id of the nested FixedPointNode, and the
+  /// iteration of the enclosing loop that runs it.  The iteration is 0 for a
+  /// loop nested in an initial plan, which runs once.
+  struct NestingStep {
+    std::string planNodeId;
+    int32_t iteration;
+
+    auto operator<=>(const NestingStep& other) const = default;
   };
 
-  /// Identifies one loop of one worker.  'rootTaskId' names the worker's
-  /// top-level task, and so the process it runs in -- nesting never relocates
-  /// execution, so a nested loop shares its root's endpoint.  'address' locates
-  /// the loop within that task: equal to 'rootTaskId' for a top-level fixed
-  /// point, and 'rootTaskId' followed by a suffix per nesting level below it.
+  /// Identifies one loop of one worker.  'worker' is the application's name
+  /// for the worker, from the top-level loop's FixedPointSplit.  'nesting'
+  /// locates the loop within the worker: empty for a top-level fixed point, one
+  /// step per enclosing loop, outermost first.  Every worker runs a copy of the
+  /// same plan, so the loops of one worker and of its peers that run in
+  /// lockstep have equal nesting.
   struct LoopAddress {
-    std::string rootTaskId;
-    std::string address;
+    std::string worker;
+    std::vector<NestingStep> nesting;
   };
 
-  /// Returns where a worker's producer for ('iteration', 'planIndex') lives:
-  /// the task id the worker creates it under, and the exchange URI a peer
-  /// consumer reaches it through.  Required for a shuffling fixed point (one
-  /// whose plans chain by Exchange).  The ids MUST encode the iteration:
-  /// per-iteration sub-tasks are re-created each round, so reusing the previous
-  /// round's ids desynchronizes the cross-worker barrier and deadlocks.
-  ///
-  /// The loop calls this for its own worker and for each peer.  For its own,
-  /// 'worker.rootTaskId' is its task id, and the loop creates the producer
-  /// under the returned '.taskId'.  For a peer, it is the name the coordinator
-  /// gave that peer in its peer split, and the loop reads the producer at the
-  /// returned '.exchangeUri'.  The coordinator keeps the two consistent: the
-  /// producer a worker creates is the one its peers reach.  An endpoint lookup
-  /// keys on 'worker.rootTaskId', and the returned id must be unique in
-  /// 'worker.address'.
-  std::function<ProducerLocation(
-      const LoopAddress& worker,
+  /// Returns the task id under which this worker creates the producer whose
+  /// root is the PartitionedOutput 'planNodeId', in 'iteration' of the loop at
+  /// 'self'.  Required for a fixed point whose plans chain by shuffle.  The id
+  /// MUST encode the iteration: producers are re-created every iteration, and
+  /// an id reused across iterations lets a consumer read a stale producer.
+  std::function<std::string(
+      const LoopAddress& self,
       int32_t iteration,
-      size_t planIndex)>
-      producerLocation;
+      const std::string& planNodeId)>
+      producerTaskId;
 
-  /// Returns the task id for an internal sub-task this worker creates -- an
-  /// initial, convergence, serial-body, or one-plan parallel-body sub-task
-  /// that no peer reads -- from the worker's task id and a per-worker counter
-  /// (for uniqueness).
+  /// Returns the split through which a consumer reads its partition of the
+  /// producer whose root is 'planNodeId', created by 'peer' in 'iteration'. The
+  /// split is added to the consumer's Exchange, so the application returns
+  /// whatever split its ExchangeSource expects.  Required with
+  /// 'producerTaskId'.  The two hooks must agree: the split
+  /// producerSplit(peer, i, id) returns reads the task that 'peer' created
+  /// under producerTaskId(peer, i, id).
+  std::function<std::shared_ptr<connector::ConnectorSplit>(
+      const LoopAddress& peer,
+      int32_t iteration,
+      const std::string& planNodeId)>
+      producerSplit;
+
+  /// Returns the task id for a sub-task this worker creates that no peer reads
+  /// -- an initial plan, a serial body, or the last plan of a chain -- from
+  /// the worker's task id and a per-worker counter (for uniqueness).
   /// Required: the fixed point creates no task ids itself.
   std::function<std::string(const std::string& workerTaskId, int64_t counter)>
       subTaskId;
@@ -84,36 +91,34 @@ struct FixedPointOptions {
   /// A verdict plan (ConvergenceConfig::verdict) runs only on worker 0, the
   /// task whose destination is 0.  Worker 0 reports each iteration's verdict
   /// through 'publishVerdict', and every other worker of the loop receives it
-  /// through 'awaitVerdict', so all of them stop on the same iteration.  The
-  /// coordinator carries the verdict between workers; the fixed point has no
-  /// transport of its own.  Both are required for a verdict plan in parallel
-  /// mode.
+  /// through 'awaitVerdict', so all of them stop on the same iteration.
   ///
-  /// A coordinator can rely on:
+  /// The application carries the verdict between workers; the fixed point has
+  /// no transport of its own.  The transport the application's shuffles already
+  /// use between workers can carry it: worker 0 already reaches every worker
+  /// through it, and a worker's failure surfaces there as it does for the
+  /// shuffles.  Both are required for a verdict plan in parallel mode.
+  ///
+  /// Both hooks receive worker 0's address, so an application keys verdicts on
+  /// it directly.  An application can rely on:
   ///  - Worker 0 publishes each iteration's verdict once, in order.
   ///  - It publishes iteration t+1 only after every worker has received t, so
   ///    holding the latest verdict of each loop is enough.
   ///  - Both hooks run on the orchestration executor, which serves every loop,
   ///    so neither may block.
-  ///
-  /// 'self' is the caller's address.  The coordinator finds worker 0 of the
-  /// caller's loop: the peer whose task has destination 0.  For a nested loop,
-  /// every peer's address is its root task's address extended by the same
-  /// suffix, so worker 0's address is worker 0's root with the caller's
-  /// suffix.
   std::function<
-      void(const LoopAddress& self, int32_t iteration, bool converged)>
+      void(const LoopAddress& workerZero, int32_t iteration, bool converged)>
       publishVerdict;
 
   /// Resolves to the verdict worker 0 published for 'iteration'.  Worker 0
   /// publishes nothing when it fails, so once any worker of the query fails,
-  /// the coordinator must, within bounded time, fail a pending or later call or
-  /// end the caller's task, as aborting the query's tasks does.  A failed call
-  /// fails the caller's loop.  The loop stops waiting once its own task ends;
-  /// 'cancel' is then requested, so an implementation that polls for the
+  /// the application must, within bounded time, fail a pending or later call
+  /// or end the caller's task, as aborting the query's tasks does.  A failed
+  /// call fails the caller's loop.  The loop stops waiting once its own task
+  /// ends; 'cancel' is then requested, so an implementation that polls for the
   /// verdict stops.
   std::function<folly::SemiFuture<bool>(
-      const LoopAddress& self,
+      const LoopAddress& workerZero,
       int32_t iteration,
       folly::CancellationToken cancel)>
       awaitVerdict;

@@ -182,6 +182,22 @@ int32_t nestedWorkers(const PlanNodePtr& node) {
   return workers;
 }
 
+// Whether a fixed point nested in 'node' reads its peers.
+bool nestedReadsPeers(const PlanNodePtr& node) {
+  if (node == nullptr) {
+    return false;
+  }
+  if (const auto* fixedPoint = node->as<FixedPointNode>()) {
+    return fixedPoint->readsPeers();
+  }
+  for (const auto& source : node->sources()) {
+    if (nestedReadsPeers(source)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 // Whether a plan chain makes the fixed point need coordinator-assigned peer
 // splits: its first plan shuffles out, or any plan of it contains a node that
 // consumes splits.  Without this a shuffling chain would report
@@ -277,9 +293,18 @@ std::vector<PlanNodePtr> FixedPointNode::nestedPlans() const {
 
 bool FixedPointNode::readsPeers() const {
   // Either chain can be the shuffling one -- a convergence sequence that
-  // reduces across workers needs peers just as a shuffling body does.
-  return chainRequiresSplits(plans_) ||
-      chainRequiresSplits(allConvergencePlans(convergenceConfig_));
+  // reduces across workers needs peers just as a shuffling body does.  A loop
+  // nested in an initial plan runs on this loop's workers too.
+  if (chainRequiresSplits(plans_) ||
+      chainRequiresSplits(allConvergencePlans(convergenceConfig_))) {
+    return true;
+  }
+  for (const auto& declaration : stateDeclarations_) {
+    if (nestedReadsPeers(declaration->initialPlan())) {
+      return true;
+    }
+  }
+  return false;
 }
 
 bool FixedPointNode::requiresSplits() const {
