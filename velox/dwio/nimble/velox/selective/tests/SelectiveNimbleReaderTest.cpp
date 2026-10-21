@@ -5212,6 +5212,59 @@ TEST_F(SmallFilePreloadTest, preloadAttributesSingleReadToData) {
   EXPECT_EQ(dataStats->rawBytesRead(), nimbleFile.size());
 }
 
+// Records the file options passed to every pread.
+class FileOptsRecordingReadFile : public InMemoryReadFile {
+ public:
+  using InMemoryReadFile::InMemoryReadFile;
+
+  std::string_view pread(
+      uint64_t offset,
+      uint64_t length,
+      void* buf,
+      const FileIoContext& context = {}) const override {
+    fileOpts_.push_back(context.fileOpts);
+    return InMemoryReadFile::pread(offset, length, buf, context);
+  }
+
+  const std::vector<folly::F14FastMap<std::string, std::string>>& fileOpts()
+      const {
+    return fileOpts_;
+  }
+
+ private:
+  mutable std::vector<folly::F14FastMap<std::string, std::string>> fileOpts_;
+};
+
+TEST_F(SmallFilePreloadTest, preloadKeepsFileReadOps) {
+  auto input = makeRowVector({makeFlatIdentityVector<int64_t>(500)});
+  auto nimbleFile = test::createNimbleFile(*rootPool_, input);
+  ASSERT_LE(nimbleFile.size(), 8 << 20);
+
+  auto readFile = std::make_shared<FileOptsRecordingReadFile>(nimbleFile);
+  const folly::F14FastMap<std::string, std::string> fileReadOps{
+      {"key", "value"},
+  };
+  auto bufferedInput = std::make_unique<dwio::common::BufferedInput>(
+      readFile,
+      *pool(),
+      dwio::common::MetricsLog::voidLog(),
+      /*stats=*/nullptr,
+      /*ioStats=*/nullptr,
+      dwio::common::BufferedInput::kMaxMergeDistance,
+      /*wsVRLoad=*/std::nullopt,
+      fileReadOps);
+  dwio::common::ReaderOptions options(pool());
+  options.setFilePreloadThreshold(nimbleFile.size() + 1);
+
+  dwio::common::getReaderFactory(dwio::common::FileFormat::NIMBLE)
+      ->createReader(std::move(bufferedInput), options);
+
+  const std::vector<folly::F14FastMap<std::string, std::string>> expected{
+      fileReadOps,
+  };
+  EXPECT_EQ(readFile->fileOpts(), expected);
+}
+
 // Preload must skip when a cache is present, else it bypasses the data cache.
 TEST_F(SmallFilePreloadTest, cachePresentSkipsPreload) {
   auto input = makeRowVector({
