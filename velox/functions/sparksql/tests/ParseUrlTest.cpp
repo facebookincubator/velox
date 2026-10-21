@@ -607,6 +607,41 @@ TEST_F(ParseUrlTest, ansiMode) {
           std::optional<std::string>("http://h/p")));
 }
 
+// Pins that a short, valid, constant URL (whose StringView bytes live in
+// the adapter's stack-local value during initialize) still parses
+// correctly across rows: the constant-URL cache must not hold views into
+// that dead stack storage.
+TEST_F(ParseUrlTest, shortConstantUrl) {
+  // 'http://h/p?a=1' is 15 bytes, past StringView's 12-byte inline range;
+  // 'http://h/p' is 10 bytes, inside it. Both must work.
+  const auto constUrlPart = [&](const std::string& url,
+                                const std::string& part) {
+    return evaluateOnce<std::string>(
+        fmt::format("parse_url('{}', c0)", url),
+        std::optional<std::string>(part));
+  };
+  EXPECT_EQ("h", constUrlPart("http://h/p?a=1", "HOST"));
+  EXPECT_EQ("/p", constUrlPart("http://h/p?a=1", "PATH"));
+  // The inline-storage URL is the case the review flagged.
+  EXPECT_EQ("h", constUrlPart("http://h/p", "HOST"));
+  EXPECT_EQ("/p", constUrlPart("http://h/p", "PATH"));
+  EXPECT_EQ("http", constUrlPart("http://h/p", "PROTOCOL"));
+
+  // A multi-row run over the same instance: a constant URL with a
+  // non-constant part column.
+  const auto result = evaluate<SimpleVector<StringView>>(
+      "parse_url('http://h/p', c0)",
+      makeRowVector({makeNullableFlatVector<StringView>(
+          std::vector<std::optional<StringView>>{
+              "HOST", "PATH", "PROTOCOL"})}));
+  EXPECT_FALSE(result->isNullAt(0));
+  EXPECT_EQ("h", std::string(result->valueAt(0)));
+  EXPECT_FALSE(result->isNullAt(1));
+  EXPECT_EQ("/p", std::string(result->valueAt(1)));
+  EXPECT_FALSE(result->isNullAt(2));
+  EXPECT_EQ("http", std::string(result->valueAt(2)));
+}
+
 // Pins that an empty URL, which a non-null column value represents as a
 // StringView with data() == nullptr, still yields its components: the
 // empty string is a valid relative reference with a present-but-empty
@@ -768,6 +803,28 @@ TEST_F(ParseUrlTest, plainKeyFastPath) {
                makeNullableFlatVector<StringView>(std::move(keys))})));
 }
 
+// Pins that an invalid constant key fails the query even when an earlier
+// call of the same function instance already attempted the compilation:
+// a failed compilation must never be published to the pattern cache, or
+// later calls would silently yield nulls instead of the error.
+TEST_F(ParseUrlTest, invalidConstantKeyFailsEveryBatch) {
+  // Two separate evaluations share nothing, so run one evaluation whose
+  // first row already triggers the compile error; the exception must
+  // surface rather than degrade to null results.
+  VELOX_ASSERT_THROW(
+      evaluateOnce<std::string>(
+          "parse_url(c0, 'QUERY', 'a[')",
+          std::optional<std::string>("http://h/p?a=1")),
+      "invalid regular expression");
+  // A second evaluation on the same expression shape must fail the same
+  // way, proving the failure is not a once-per-instance event that later
+  // calls skip.
+  VELOX_ASSERT_THROW(
+      evaluateOnce<std::string>(
+          "parse_url(c0, 'QUERY', 'a[')",
+          std::optional<std::string>("http://h/p?b=2")),
+      "invalid regular expression");
+}
 // Pins that the key is a regex fragment, not a literal: no escaping.
 TEST_F(ParseUrlTest, regexMetacharacterKey) {
   // '.' matches any character, so 'a.b' hits 'aXb=1'.
