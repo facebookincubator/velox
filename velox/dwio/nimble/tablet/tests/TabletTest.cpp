@@ -2639,6 +2639,91 @@ TEST_P(TabletTest, writeStripeGroupUnknownLayoutThrows) {
   EXPECT_ANY_THROW(tabletWriter->close());
 }
 
+TEST_P(TabletTest, stripeGroupMetadataSharesIdenticalEncodings) {
+  constexpr uint32_t kNumStripes{8};
+  for (const bool compressMetadata : {false, true}) {
+    SCOPED_TRACE(fmt::format("compressMetadata={}", compressMetadata));
+    std::string file;
+    velox::InMemoryWriteFile writeFile{&file};
+    auto writer = nimble::TabletWriter::create(
+        &writeFile,
+        *pool_,
+        {.metadataFlushThreshold = 80,
+         .metadataCompressionThreshold =
+             compressMetadata ? 0 : std::numeric_limits<uint32_t>::max(),
+         .streamDeduplicationEnabled = false,
+         .stripeGroupEncodingLayout =
+             nimble::StripeGroup::EncodingLayout::kStreamMajor});
+    nimble::Buffer buffer{*pool_};
+    for (uint32_t stripeIndex{0}; stripeIndex < kNumStripes; ++stripeIndex) {
+      const uint32_t size{64 + stripeIndex};
+      std::vector<nimble::Stream> streams;
+      for (const uint32_t streamId : {0, 1, 3}) {
+        streams.push_back(createDistinctStream(
+            buffer,
+            streamId,
+            static_cast<uint8_t>(streamId),
+            {{.rowCount = 10, .size = streamId == 3 ? 2 * size : size}}));
+      }
+      writer->writeStripe(10, std::move(streams));
+    }
+    writer->close();
+    writeFile.close();
+
+    const auto layout = nimble::FileLayout::create(
+        std::make_shared<velox::InMemoryReadFile>(file), pool_.get());
+    ASSERT_GE(layout.stripeGroups.size(), 2);
+    ASSERT_LT(layout.stripeGroups.size(), kNumStripes);
+    for (const auto& section : layout.stripeGroups) {
+      EXPECT_EQ(
+          section.compressionType(),
+          compressMetadata ? nimble::CompressionType::Zstd
+                           : nimble::CompressionType::Uncompressed);
+      const auto metadata = nimble::MetadataBuffer::decompress(
+          std::string_view{file}.substr(section.offset(), section.size()),
+          section.compressionType(),
+          pool_.get());
+      const auto* group =
+          flatbuffers::GetRoot<nimble::serialization::StreamMajorStripeGroup>(
+              metadata->as<char>());
+      ASSERT_EQ(group->stream_count(), 4);
+      const auto* sizes = group->stream_sizes();
+      const auto* offsets = group->stream_offsets();
+      ASSERT_NE(sizes, nullptr);
+      ASSERT_NE(offsets, nullptr);
+      ASSERT_EQ(sizes->size(), 4);
+      ASSERT_EQ(offsets->size(), 4);
+      ASSERT_GT(group->stripe_count(), 1);
+      // Equal size arrays share storage even when their stream offsets differ.
+      EXPECT_EQ(sizes->Get(0), sizes->Get(1));
+      EXPECT_NE(sizes->Get(0), sizes->Get(3));
+      // An absent stream's zero offsets and sizes share the same encoding.
+      EXPECT_EQ(offsets->Get(2), sizes->Get(2));
+    }
+
+    const auto readFile =
+        std::make_shared<nimble::testing::InMemoryTrackableReadFile>(
+            file, false);
+    const auto tablet =
+        createTabletReader(readFile, nimble::TabletReader::Options{});
+    EXPECT_EQ(
+        tablet->checksum(),
+        nimble::TabletReader::calculateChecksum(*pool_, readFile.get()));
+    for (uint32_t stripeIndex{0}; stripeIndex < kNumStripes; ++stripeIndex) {
+      const uint32_t size{64 + stripeIndex};
+      const auto stripe = tablet->stripeIdentifier(stripeIndex);
+      std::vector<uint32_t> sizes;
+      std::vector<uint32_t> offsets;
+      for (uint32_t streamId{0}; streamId < 4; ++streamId) {
+        sizes.push_back(tablet->streamSize(stripe, streamId));
+        offsets.push_back(tablet->streamOffset(stripe, streamId));
+      }
+      EXPECT_THAT(sizes, testing::ElementsAre(size, size, 0, 2 * size));
+      EXPECT_THAT(offsets, testing::ElementsAre(0, size, 0, 2 * size));
+    }
+  }
+}
+
 TEST_P(TabletTest, stripeGroupEncodingLayoutsMultipleGroups) {
   // A tiny metadataFlushThreshold forces the writer to flush many stripe
   // groups, so groups after the first have firstStripeIndex_ != 0. This
