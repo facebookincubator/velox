@@ -2570,7 +2570,7 @@ TEST_F(ParquetTableScanTest, lazyColumnHooks) {
   std::vector<RowVectorPtr> batches;
   for (int32_t g = 0; g < kGroups; ++g) {
     batches.push_back(makeRowVector(
-        {"a", "b", "c"},
+        {"a", "b", "c", "d"},
         {makeFlatVector<int64_t>(
              kRowsPerGroup, [&](auto row) { return g * kRowsPerGroup + row; }),
          // Incompressible values, so the lazy column's chunks are large and
@@ -2587,7 +2587,15 @@ TEST_F(ParquetTableScanTest, lazyColumnHooks) {
                return value;
              }),
          makeFlatVector<int64_t>(
-             kRowsPerGroup, [&](auto row) { return row % 10; })}));
+             kRowsPerGroup, [&](auto row) { return row % 10; }),
+         // A nested column: its leaves must all be reported.
+         makeRowVector(
+             {"x", "y"},
+             {makeFlatVector<int64_t>(
+                  kRowsPerGroup, [&](auto row) { return row % 7; }),
+              makeFlatVector<std::string>(kRowsPerGroup, [&](auto row) {
+                return std::to_string(row % 3);
+              })})}));
   }
   auto file = TempFilePath::create();
   dwio::common::WriterOptions writerOptions;
@@ -2602,57 +2610,96 @@ TEST_F(ParquetTableScanTest, lazyColumnHooks) {
       ParquetWriterOptions{});
   createDuckDbTable(batches);
 
-  auto rowType = ROW({"a", "b", "c"}, {BIGINT(), VARCHAR(), BIGINT()});
+  auto rowType = ROW(
+      {"a", "b", "c", "d"},
+      {BIGINT(), VARCHAR(), BIGINT(), ROW({"x", "y"}, {BIGINT(), VARCHAR()})});
   const auto defaultBuilder = BufferedInputBuilder::getInstance();
-  auto run = [&](const std::string& filter) {
+  // 'remainingFilter' is evaluated by the connector on the reader's output,
+  // 'subfieldFilters' are pushed down into the reader, 'duckDbFilter' is the
+  // SQL equivalent. 'numSplits' reads the same file that many times.
+  auto run = [&](const std::string& remainingFilter,
+                 const std::string& duckDbFilter,
+                 common::SubfieldFilters subfieldFilters = {},
+                 int32_t numSplits = 1) {
     auto calls = std::make_shared<LazyColumnHookCalls>();
     BufferedInputBuilder::registerBuilder(
         std::make_shared<RecordingBufferedInputBuilder>(calls));
     SCOPE_EXIT {
       BufferedInputBuilder::registerBuilder(defaultBuilder);
     };
-    // The filter is a remaining filter, evaluated by the connector on the
-    // reader's output, so none of the columns carries a pushed-down filter
-    // and the reader produces all three as LazyVectors. The connector loads
-    // 'a' for the remaining filter; 'b' and 'c' only for surviving rows.
-    auto tableHandle =
-        makeTableHandle({}, parseExpr(filter, rowType), "hive_table", rowType);
+    auto tableHandle = makeTableHandle(
+        std::move(subfieldFilters),
+        remainingFilter.empty() ? nullptr : parseExpr(remainingFilter, rowType),
+        "hive_table",
+        rowType);
     auto plan = PlanBuilder()
                     .startTableScan()
                     .outputType(rowType)
                     .tableHandle(tableHandle)
                     .endTableScan()
                     .planNode();
+    std::vector<std::shared_ptr<connector::ConnectorSplit>> splits;
+    std::string sql;
+    for (int32_t i = 0; i < numSplits; ++i) {
+      splits.push_back(makeSplit(file->getPath()));
+      sql += (i == 0 ? "" : " UNION ALL ") +
+          fmt::format("SELECT a, b, c, d FROM tmp WHERE {}", duckDbFilter);
+    }
     AssertQueryBuilder(plan, duckDbQueryRunner_)
-        .split(makeSplit(file->getPath()))
-        .assertResults(fmt::format("SELECT a, b, c FROM tmp WHERE {}", filter));
+        .splits(splits)
+        .assertResults(sql);
     return calls;
   };
 
   // The filters are not convertible to subfield filters, so no row group is
   // skipped by statistics.
+  // Leaf column ordinals in the file: a=0, b=1, c=2, d.x=3, d.y=4.
   {
-    // Rows pass in every row group.
-    auto calls = run("a % 1000 = 0");
-    // The reader names the lazy columns' streams on every row group input:
-    // the column ordinals of 'a', 'b' and 'c'.
+    // A remaining filter is evaluated by the connector on the reader's output,
+    // so no column carries a pushed-down filter and the reader produces all of
+    // them as LazyVectors, 'a' included. The connector loads 'a' for the
+    // filter; the others only for surviving rows. Rows pass in every row group.
+    auto calls = run("a % 1000 = 0", "a % 1000 = 0");
+    // The reader names the lazy columns' streams on every row group input,
+    // nested leaves included.
     ASSERT_EQ(calls->lazyStreams.size(), kGroups);
     for (const auto& streams : calls->lazyStreams) {
-      EXPECT_EQ(streams, (std::vector<int32_t>{0, 1, 2}));
+      EXPECT_EQ(streams, (std::vector<int32_t>{0, 1, 2, 3, 4}));
     }
     // One hint per split, on the first batch with survivors.
     EXPECT_EQ(calls->hints, 1);
   }
   {
+    // A pushed-down filter makes 'a' a filter column: not lazy. Values from
+    // every row group, so statistics skip none of them.
+    auto calls = run(
+        "",
+        "a IN (5, 20005, 40005, 60005)",
+        common::test::singleSubfieldFilter(
+            "a", common::createBigintValues({5, 20005, 40005, 60005}, false)));
+    ASSERT_EQ(calls->lazyStreams.size(), kGroups);
+    for (const auto& streams : calls->lazyStreams) {
+      EXPECT_EQ(streams, (std::vector<int32_t>{1, 2, 3, 4}));
+    }
+    EXPECT_EQ(calls->hints, 1);
+  }
+  {
     // No row passes: the streams are named, the hint never comes.
-    auto calls = run("a % 7 = 100");
+    auto calls = run("a % 7 = 100", "a % 7 = 100");
     EXPECT_EQ(calls->lazyStreams.size(), kGroups);
     EXPECT_EQ(calls->hints, 0);
   }
   {
     // Rows pass only in the last row groups: still exactly one hint.
-    auto calls = run("a >= 50000 AND a % 3 = 0");
+    auto calls = run("a >= 50000 AND a % 3 = 0", "a >= 50000 AND a % 3 = 0");
     EXPECT_EQ(calls->hints, 1);
+  }
+  {
+    // The hint is per split: two splits of the same file give two hints and
+    // name the streams for every row group of each.
+    auto calls = run("a % 1000 = 0", "a % 1000 = 0", {}, 2);
+    EXPECT_EQ(calls->lazyStreams.size(), 2 * kGroups);
+    EXPECT_EQ(calls->hints, 2);
   }
 }
 
