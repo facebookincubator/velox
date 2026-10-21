@@ -114,7 +114,9 @@ std::unique_ptr<velox::dwio::common::BufferedInput> maybePreloadInput(
   velox::dwio::common::ReadFileInputStream(
       readFile,
       velox::dwio::common::MetricsLog::voidLog(),
-      options.dataIoStats().get())
+      options.dataIoStats().get(),
+      /*ioStats=*/nullptr,
+      input->getInputStream()->fileIoContext().fileOpts)
       .read(
           buffer->asMutable<char>(),
           fileSize,
