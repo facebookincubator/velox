@@ -15,6 +15,7 @@
  */
 
 #include "velox/experimental/cudf/CudfNoDefaults.h"
+#include "velox/experimental/cudf/connectors/hive/CudfHiveConfig.h"
 #include "velox/experimental/cudf/connectors/hive/iceberg/CudfDeletionVectorReader.h"
 #include "velox/experimental/cudf/connectors/hive/iceberg/CudfIcebergDeletionHelpers.h"
 #include "velox/experimental/cudf/connectors/hive/iceberg/CudfIcebergFilterTransform.h"
@@ -880,7 +881,8 @@ std::unique_ptr<cudf::scalar> CudfIcebergSplitReader::makeInjectedScalar(
     return cudf_velox::makeScalarFromConstantExpr(
         std::make_shared<core::ConstantTypedExpr>(constant),
         connectorQueryCtx_->memoryPool(),
-        col.veloxType->isTimestamp() ? constantTimestampType() : std::nullopt,
+        col.veloxType->isTimestamp() ? constantTimestampType(cudfHiveConfig())
+                                     : std::nullopt,
         stream_);
   } catch (const std::exception& e) {
     VELOX_USER_FAIL(
