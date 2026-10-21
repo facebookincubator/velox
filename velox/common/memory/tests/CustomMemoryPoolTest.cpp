@@ -297,8 +297,13 @@ TEST_F(CustomMemoryPoolTest, deviceReclaimerSpillsToHostSibling) {
   ASSERT_NE(hostResource, nullptr);
   auto hostPool = manager->addCustomRootPool("q-spill.host", hostResource);
 
-  auto deviceResource =
-      makeResource("device", [hostPool](const ReclaimerContext&) {
+  MemoryAllocator::Options deviceAllocatorOptions;
+  deviceAllocatorOptions.capacity = 1L << 30;
+  auto deviceResource = std::make_shared<CustomMemoryResource>(
+      "device",
+      std::make_shared<MallocAllocator>(deviceAllocatorOptions),
+      MemoryArbitrator::create({}),
+      [hostPool](const ReclaimerContext&) {
         return SpillToSiblingReclaimer::create(hostPool);
       });
 
