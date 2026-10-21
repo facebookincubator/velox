@@ -17,6 +17,7 @@
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 
 using namespace std::string_literals;
+using facebook::velox::test::assertEqualVectors;
 
 namespace facebook::velox::functions {
 namespace {
@@ -271,6 +272,83 @@ TEST_F(TrimFunctionsTest, rtrim) {
   EXPECT_EQ("\xFF\xFF", rtrim("\xFF\xFF"));
 }
 
+TEST_F(TrimFunctionsTest, asciiEncodings) {
+  for (const std::string function : {"trim", "ltrim", "rtrim"}) {
+    const auto expression = fmt::format("{}(c0)", function);
+    const bool left = function != "rtrim";
+    const bool right = function != "ltrim";
+    for (auto length : {10, 12, 13, 64, 256}) {
+      SCOPED_TRACE(fmt::format("{} length {}", expression, length));
+      const std::string body(length, 'a');
+      const std::string shortened(length - 2, 'b');
+      auto input = makeNullableFlatVector<std::string>(
+          {body,
+           left ? (right ? " " + shortened + " " : "  " + shortened)
+                : shortened + "  ",
+           "",
+           std::string(length, ' '),
+           std::nullopt,
+           " " + body,
+           body + " ",
+           "\t" + body + "\n"});
+      auto expected = makeNullableFlatVector<std::string>(
+          {body,
+           shortened,
+           "",
+           "",
+           std::nullopt,
+           left ? body : " " + body,
+           right ? body : body + " ",
+           (left ? "" : "\t") + body + (right ? "" : "\n")});
+      const auto check = [&](const VectorPtr& encodedInput,
+                             const VectorPtr& encodedExpected) {
+        const auto data = makeRowVector({encodedInput});
+        assertEqualVectors(encodedExpected, evaluate(expression, data));
+        SelectivityVector rows(encodedInput->size(), false);
+        rows.setValid(0, true);
+        rows.setValid(1, true);
+        rows.setValid(4, true);
+        rows.updateBounds();
+        assertEqualVectors(
+            encodedExpected, evaluate(expression, data, rows), rows);
+      };
+      check(input, expected);
+      auto indices =
+          makeIndices(16, [](vector_size_t row) { return (row * 3 + 1) % 8; });
+      check(
+          wrapInDictionary(indices, 16, input),
+          wrapInDictionary(indices, 16, expected));
+      for (auto row : {0, 1, 4}) {
+        check(
+            BaseVector::wrapInConstant(8, row, input),
+            BaseVector::wrapInConstant(8, row, expected));
+      }
+    }
+  }
+}
+
+TEST_F(TrimFunctionsTest, asciiStringLifetime) {
+  for (const std::string function : {"trim", "ltrim", "rtrim"}) {
+    SCOPED_TRACE(function);
+    VectorPtr result;
+    std::weak_ptr<BaseVector> inputReference;
+    {
+      auto input = makeFlatVector<std::string>(
+          {std::string(64, 'a'), "  " + std::string(256, 'b') + "  "});
+      inputReference = input;
+      result =
+          evaluate(fmt::format("{}(c0)", function), makeRowVector({input}));
+    }
+    ASSERT_TRUE(inputReference.expired());
+    ASSERT_FALSE(result->as<FlatVector<StringView>>()->stringBuffers().empty());
+    const auto expected = makeFlatVector<std::string>(
+        {std::string(64, 'a'),
+         (function == "rtrim" ? "  " : "") + std::string(256, 'b') +
+             (function == "ltrim" ? "  " : "")});
+    assertEqualVectors(expected, result);
+  }
+}
+
 TEST_F(TrimFunctionsTest, trimCustomCharacters) {
   const auto trim = [&](const std::string& input, const std::string& chars) {
     return evaluateOnce<std::string>(
@@ -315,6 +393,17 @@ TEST_F(TrimFunctionsTest, trimCustomCharacters) {
   EXPECT_EQ("", trim("banana", "nba"));
   EXPECT_EQ("anana", trim("banana", "bn"));
   EXPECT_EQ("anana", trim("banana", "nb"));
+
+  for (auto length : {10, 12, 13, 64, 256}) {
+    SCOPED_TRACE(length);
+    const std::string body(length, 'a');
+    EXPECT_EQ(body, trim(body, "x"));
+    EXPECT_EQ(body, ltrim(body, "x"));
+    EXPECT_EQ(body, rtrim(body, "x"));
+    EXPECT_EQ(body, trim("xx" + body + "xx", "x"));
+    EXPECT_EQ(body, ltrim("xx" + body, "x"));
+    EXPECT_EQ(body, rtrim(body + "xx", "x"));
+  }
 }
 
 } // namespace

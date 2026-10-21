@@ -526,7 +526,12 @@ trimAscii(TOutString& output, const TInString& input, TShouldTrim shouldTrim) {
       curPos--;
     }
   }
-  output.setNoCopy(StringView(start, curPos - start + 1));
+  const auto outputSize = curPos - start + 1;
+  if (static_cast<size_t>(outputSize) == input.size()) {
+    output.setNoCopy(input);
+    return;
+  }
+  output.setNoCopy(StringView(start, outputSize));
 }
 
 template <
