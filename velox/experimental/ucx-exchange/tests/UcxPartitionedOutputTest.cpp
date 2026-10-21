@@ -246,7 +246,8 @@ class UcxPartitionedOutputTest : public testing::Test {
           [&payload](
               std::shared_ptr<cudf::packed_columns> data,
               vector_size_t /*numRows*/,
-              std::vector<int64_t> /*remainingBytes*/) {
+              std::vector<int64_t> /*remainingBytes*/,
+              std::optional<std::string> /*producerError*/) {
             payload = std::move(data);
           });
       // A null payload is the end-of-stream marker.
@@ -368,7 +369,8 @@ TEST_F(UcxPartitionedOutputTest, preservesColumnLessOutputRowCounts) {
           [&payload, &payloadRows](
               std::shared_ptr<cudf::packed_columns> data,
               vector_size_t numRows,
-              std::vector<int64_t> /*remainingBytes*/) {
+              std::vector<int64_t> /*remainingBytes*/,
+              std::optional<std::string> /*producerError*/) {
             payload = std::move(data);
             payloadRows = numRows;
           });
