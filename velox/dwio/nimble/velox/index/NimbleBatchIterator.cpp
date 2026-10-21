@@ -59,25 +59,28 @@ class NimbleBatchIterator final : public NimbleIterator {
 
   ~NimbleBatchIterator() override = default;
 
-  folly::coro::Task<void> co_seek(
-      velox::serializer::EncodedKeyBounds bounds) override {
+  void seek(const velox::serializer::EncodedKeyBounds& bounds) override {
     resetState();
-    setRowRange(co_await cursor_->co_seek(std::move(bounds)));
+    setRowRange(cursor_->seek(bounds));
   }
 
-  folly::coro::Task<void> co_seekToFirst() override {
+  void seek(std::string encodedKey) override {
     resetState();
-    setRowRange(co_await cursor_->co_seekToFirst());
+    setRowRange(cursor_->seek(std::move(encodedKey)));
   }
 
-  folly::coro::Task<void> co_reset() override {
+  void seekToFirst() override {
     resetState();
-    co_await cursor_->co_reset();
+    setRowRange(cursor_->seekToFirst());
   }
 
-  folly::coro::Task<void> co_nextRow() override {
+  void reset() override {
+    resetState();
+    cursor_->reset();
+  }
+
+  void nextRow() override {
     NIMBLE_UNSUPPORTED("Batch iterator cannot produce serialized row output");
-    co_return;
   }
 
   folly::coro::Task<bool> co_nextBatch(velox::RowVectorPtr& output) override {
@@ -95,7 +98,10 @@ class NimbleBatchIterator final : public NimbleIterator {
     // TODO: Benchmark Deserializer batch decoding against StreamReader's
     // encoding views.
     {
-      velox::CpuWallTimer timer{materializationTiming_};
+      velox::OptionalCpuWallTimer timer{
+          options_.collectTimings, [this](const velox::CpuWallTiming& timing) {
+            materializationTiming_.add(timing);
+          }};
       velox::VectorPtr decodedRows{std::move(output)};
       SCOPE_EXIT {
         output =
@@ -103,13 +109,17 @@ class NimbleBatchIterator final : public NimbleIterator {
       };
       co_await streamReader_->co_next(numRows, decodedRows);
     }
+    numMaterializedRows_ += numRows;
     advanceRows(numRows);
     co_return true;
   }
 
-  folly::coro::Task<std::string_view> co_value() override {
+  void prepareValue() override {
     NIMBLE_UNSUPPORTED("Batch iterator does not expose serialized row values");
-    co_return std::string_view{};
+  }
+
+  std::string_view value() override {
+    NIMBLE_UNSUPPORTED("Batch iterator does not expose serialized row values");
   }
 
   std::string_view key() const override {
@@ -122,12 +132,13 @@ class NimbleBatchIterator final : public NimbleIterator {
 
   NimbleIterator::Stats stats() const override {
     auto result = cursor_->stats();
+    result.numMaterializedRows = numMaterializedRows_;
     result.materializationTiming = materializationTiming_;
     return result;
   }
 
  private:
-  // Invalidates row navigation before asynchronous seek or reset can fail.
+  // Invalidates row navigation before a seek or reset can fail.
   void resetState() {
     clearStripe();
     setRowRange(std::nullopt);
@@ -184,6 +195,8 @@ class NimbleBatchIterator final : public NimbleIterator {
   const std::unique_ptr<StreamReader> streamReader_;
   // Keeps the current stripe streams alive while they are decoded.
   std::optional<ProjectedStripe> stripeStreams_;
+  // Counts the rows decoded into output batches.
+  uint64_t numMaterializedRows_{0};
   // Tracks vector decoding time separately from stripe projection time.
   velox::CpuWallTiming materializationTiming_{};
 };

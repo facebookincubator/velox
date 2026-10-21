@@ -58,15 +58,21 @@ using core::VectorStateDeclaration;
 using exec::test::AssertQueryBuilder;
 using exec::test::PlanBuilder;
 
+// Appends the rows of 'result' to 'rows' as (col0, col1) BIGINT pairs.
+void appendRows(
+    const RowVector& result,
+    std::vector<std::pair<int64_t, int64_t>>& rows) {
+  auto first = result.childAt(0)->as<SimpleVector<int64_t>>();
+  auto second = result.childAt(1)->as<SimpleVector<int64_t>>();
+  for (vector_size_t i = 0; i < result.size(); ++i) {
+    rows.emplace_back(first->valueAt(i), second->valueAt(i));
+  }
+}
+
 std::vector<std::pair<int64_t, int64_t>> readRows(TaskCursor& cursor) {
   std::vector<std::pair<int64_t, int64_t>> rows;
   while (cursor.moveNext()) {
-    const auto& result = cursor.current();
-    auto first = result->childAt(0)->as<SimpleVector<int64_t>>();
-    auto second = result->childAt(1)->as<SimpleVector<int64_t>>();
-    for (vector_size_t i = 0; i < result->size(); ++i) {
-      rows.emplace_back(first->valueAt(i), second->valueAt(i));
-    }
+    appendRows(*cursor.current(), rows);
   }
   return rows;
 }
@@ -449,7 +455,7 @@ class FixedPointTest : public exec::test::HiveConnectorTestBase {
               .queryCtx = mode == exec::Task::ExecutionMode::kParallel
                   ? queryCtx
                   : nullptr,
-              .copyResult = false,
+              .copyResult = true,
               .serialExecution = mode == exec::Task::ExecutionMode::kSerial,
               .fixedPointOptions = &options,
           }));
@@ -700,18 +706,19 @@ class FixedPointTest : public exec::test::HiveConnectorTestBase {
       uint32_t iterationMaxDrivers) {
     auto options = localOptions();
     options.iterationMaxDrivers = iterationMaxDrivers;
-    auto cursor = TaskCursor::create({
-        .planNode = plan,
-        .maxDrivers = maxDrivers,
-        .queryCtx = core::QueryCtx::create(cpuExecutor_.get()),
-        .copyResult = false,
-        .fixedPointOptions = &options,
-    });
-    if (plan->requiresSplits()) {
-      cursor->task()->addSplit(plan->id(), remoteSplit(cursor->task()));
-      cursor->task()->noMoreSplits(plan->id());
-    }
-    auto rows = readRows(*cursor);
+    const auto result =
+        AssertQueryBuilder(plan)
+            .maxDrivers(maxDrivers)
+            .fixedPointOptions(&options)
+            .beforeTaskStart([&](exec::Task& task) {
+              if (plan->requiresSplits()) {
+                task.addSplit(plan->id(), remoteSplit(task.taskId()));
+                task.noMoreSplits(plan->id());
+              }
+            })
+            .copyResults(pool());
+    std::vector<std::pair<int64_t, int64_t>> rows;
+    appendRows(*result, rows);
     return rows;
   }
 
@@ -3246,24 +3253,25 @@ TEST_F(FixedPointTest, executionStatsRecordDrivers) {
 
   auto options = localOptions();
   options.iterationMaxDrivers = 5;
-  auto cursor = TaskCursor::create({
-      .planNode = PlanBuilder(idGenerator)
-                      .addNode([&](const core::PlanNodeId& /*id*/,
-                                   const core::PlanNodePtr& /*input*/) {
-                        return fixedPoint;
-                      })
-                      .project({"key", "val"})
-                      .planNode(),
-      .maxDrivers = 5,
-      .queryCtx = core::QueryCtx::create(cpuExecutor_.get()),
-      .copyResult = false,
-      .fixedPointOptions = &options,
-  });
-  cursor->task()->addSplit(fixedPoint->id(), remoteSplit(cursor->task()));
-  cursor->task()->noMoreSplits(fixedPoint->id());
-  EXPECT_THAT(readRows(*cursor), testing::SizeIs(4));
+  std::shared_ptr<exec::Task> task;
+  const auto result =
+      AssertQueryBuilder(PlanBuilder(idGenerator)
+                             .addNode([&](const core::PlanNodeId& /*id*/,
+                                          const core::PlanNodePtr& /*input*/) {
+                               return fixedPoint;
+                             })
+                             .project({"key", "val"})
+                             .planNode())
+          .maxDrivers(5)
+          .fixedPointOptions(&options)
+          .beforeTaskStart([&](exec::Task& task) {
+            task.addSplit(fixedPoint->id(), remoteSplit(task.taskId()));
+            task.noMoreSplits(fixedPoint->id());
+          })
+          .copyResults(pool(), task);
+  EXPECT_EQ(4, result->size());
 
-  auto stats = cursor->task()->fixedPointExecutionStats();
+  auto stats = task->fixedPointExecutionStats();
   ASSERT_TRUE(stats.has_value());
   ASSERT_THAT(stats->iterations, testing::SizeIs(1));
   const auto& plans = stats->iterations[0].body.plans;
@@ -3273,7 +3281,7 @@ TEST_F(FixedPointTest, executionStatsRecordDrivers) {
   EXPECT_EQ(plans[1].maxDrivers, 2);
   EXPECT_EQ(plans[1].taskStats.numTotalDrivers, 2);
   // The Project above the fixed point runs in the task's own pipeline.
-  EXPECT_EQ(cursor->task()->taskStats().numTotalDrivers, 5);
+  EXPECT_EQ(task->taskStats().numTotalDrivers, 5);
 }
 
 // A parallel fixed point needs an orchestration executor separate from the
@@ -4086,12 +4094,11 @@ TEST_F(FixedPointTest, initialPlanSplitsComplete) {
 
   auto cursor = TaskCursor::create({
       .planNode = plan,
-      .copyResult = false,
       .serialExecution = true,
       .fixedPointOptions = &localOptions(),
   });
   VELOX_ASSERT_USER_THROW(
-      readRows(*cursor),
+      cursor->moveNext(),
       fmt::format(
           "A serial fixed point runs only once each source's splits are "
           "complete; call noMoreSplits before next(): {}",

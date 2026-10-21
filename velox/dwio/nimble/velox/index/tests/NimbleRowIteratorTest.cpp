@@ -16,6 +16,7 @@
 
 #include "velox/dwio/nimble/velox/index/tests/NimbleIndexTestBase.h"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <future>
@@ -26,10 +27,10 @@
 #include <gtest/gtest.h>
 
 #include <folly/ScopeGuard.h>
-#include <folly/coro/BlockingWait.h>
 #include <folly/coro/Timeout.h>
 #include <folly/executors/CPUThreadPoolExecutor.h>
 
+#include "velox/buffer/BufferPool.h"
 #include "velox/dwio/nimble/common/ChunkHeader.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/common/tests/GTestUtils.h"
@@ -111,6 +112,64 @@ TEST_P(NimbleRowIteratorTest, rowIteratorLazilyMaterializesAfterSkippingRows) {
   const auto* values = actual->childAt(0)->asFlatVector<int32_t>();
   ASSERT_NE(values, nullptr);
   EXPECT_EQ(values->valueAt(0), 60);
+}
+
+TEST_P(NimbleRowIteratorTest, rowIteratorLoadsEachStripeOnce) {
+  constexpr int32_t kRowsPerStripe{4};
+  constexpr int32_t kNumStripes{3};
+  writeResumeKeyTestData(kRowsPerStripe, kNumStripes);
+
+  std::vector<Subfield> projectedSubfields;
+  projectedSubfields.emplace_back("value");
+  TestNimbleIterator iterator{
+      createRowIterator(projectedSubfields, NimbleIterator::Options{})};
+  iterator.seekToFirst();
+  EXPECT_EQ(iterator.stats().numReadStripes, 0);
+
+  for (int32_t row{0}; row < kRowsPerStripe * kNumStripes; ++row) {
+    SCOPED_TRACE(row);
+    ASSERT_TRUE(iterator.valid());
+    // Preparing the value loads the stripe, and value() on its own does too.
+    if (row % 2 == 0) {
+      iterator.prepareValue();
+      EXPECT_EQ(iterator.stats().numReadStripes, row / kRowsPerStripe + 1);
+    }
+    const auto serialized = iterator.value();
+    const auto actual = velox::row::CompactRow::deserialize(
+        {serialized}, ROW("value", INTEGER()), leafPool_.get());
+    const auto expected = vectorMaker_->rowVector(
+        {"value"}, {vectorMaker_->flatVector<int32_t>({row * 10})});
+    expectVectorRows(actual, expected);
+    EXPECT_EQ(iterator.value(), serialized);
+    EXPECT_EQ(iterator.stats().numReadStripes, row / kRowsPerStripe + 1);
+    iterator.next();
+  }
+
+  EXPECT_FALSE(iterator.valid());
+}
+
+TEST_P(NimbleRowIteratorTest, rowIteratorSerializesLargeStripes) {
+  constexpr int32_t kRowsPerStripe{3'000};
+  constexpr int32_t kNumStripes{2};
+  writeResumeKeyTestData(kRowsPerStripe, kNumStripes);
+
+  std::vector<Subfield> projectedSubfields;
+  projectedSubfields.emplace_back("value");
+  TestNimbleIterator iterator{
+      createRowIterator(projectedSubfields, NimbleIterator::Options{})};
+  iterator.seekToFirst();
+
+  for (int32_t row{0}; row < kRowsPerStripe * kNumStripes; ++row) {
+    ASSERT_TRUE(iterator.valid());
+    const auto actual = velox::row::CompactRow::deserialize(
+        {iterator.value()}, ROW("value", INTEGER()), leafPool_.get());
+    const auto* values = actual->childAt(0)->asFlatVector<int32_t>();
+    ASSERT_NE(values, nullptr);
+    ASSERT_EQ(values->valueAt(0), row * 10) << "row " << row;
+    iterator.next();
+  }
+  EXPECT_FALSE(iterator.valid());
+  EXPECT_EQ(iterator.stats().numReadStripes, kNumStripes);
 }
 
 TEST_P(
@@ -203,12 +262,12 @@ TEST_P(NimbleRowIteratorTest, rowIteratorCountsSkippedPrefetchStripes) {
         .maxPrefetchStripes = 6,
     };
     auto iterator = createRowIterator(projectedSubfields, options);
-    folly::coro::blockingWait(iterator->co_seekToFirst());
+    iterator->seekToFirst();
     for (uint32_t row = 0; row < 8; ++row) {
       SCOPED_TRACE(row);
-      folly::coro::blockingWait(iterator->co_nextRow());
+      iterator->nextRow();
     }
-    const auto value = folly::coro::blockingWait(iterator->co_value());
+    const auto value = iterator->value();
     const auto actual = velox::row::CompactRow::deserialize(
         {value}, ROW("value", INTEGER()), leafPool_.get());
     const auto expected = vectorMaker_->rowVector(
@@ -216,12 +275,12 @@ TEST_P(NimbleRowIteratorTest, rowIteratorCountsSkippedPrefetchStripes) {
     velox::test::assertEqualVectors(expected, actual);
     EXPECT_EQ(iterator->stats().numSkippedStripes, prefetch ? 2 : 0);
 
-    folly::coro::blockingWait(iterator->co_reset());
+    iterator->reset();
     EXPECT_EQ(iterator->stats().numSkippedStripes, prefetch ? 2 : 0);
-    folly::coro::blockingWait(iterator->co_seekToFirst());
-    folly::coro::blockingWait(iterator->co_value());
+    iterator->seekToFirst();
+    iterator->value();
     EXPECT_EQ(iterator->stats().numSkippedStripes, prefetch ? 2 : 0);
-    folly::coro::blockingWait(iterator->co_reset());
+    iterator->reset();
   }
 }
 
@@ -235,25 +294,31 @@ TEST_P(NimbleRowIteratorTest, rowIteratorSupportsCustomOutputFormat) {
       rowFormat,
       [](const velox::RowVectorPtr&,
          velox::vector_size_t,
+         velox::vector_size_t numRows,
          velox::memory::MemoryPool* pool,
-         velox::BufferPtr& output) {
+         velox::BufferPool*,
+         NimbleIterator::SerializedRows& output) {
         constexpr std::string_view kSerializedValue{"custom"};
-        if (output == nullptr) {
-          output = velox::AlignedBuffer::allocate<char>(
-              kSerializedValue.size(), pool);
+        output.buffer = velox::AlignedBuffer::allocate<char>(
+            kSerializedValue.size() * numRows, pool);
+        auto* outputBytes = output.buffer->asMutable<char>();
+        output.offsets.assign(1, 0);
+        for (velox::vector_size_t row{0}; row < numRows; ++row) {
+          std::copy(
+              kSerializedValue.begin(),
+              kSerializedValue.end(),
+              outputBytes + output.offsets.back());
+          output.offsets.push_back(
+              output.offsets.back() + kSerializedValue.size());
         }
-        output->setSize(kSerializedValue.size());
-        auto* outputBytes = output->asMutable<char>();
-        for (std::size_t i{0}; i < kSerializedValue.size(); ++i) {
-          outputBytes[i] = kSerializedValue[i];
-        }
-        return kSerializedValue.size();
       });
   auto options = NimbleIterator::Options{};
   options.rowFormat = rowFormat;
   TestNimbleIterator iterator{createRowIterator(projectedSubfields, options)};
   iterator.seekToFirst();
 
+  EXPECT_EQ(iterator.value(), "custom");
+  iterator.next();
   EXPECT_EQ(iterator.value(), "custom");
 }
 
@@ -269,30 +334,162 @@ TEST_P(NimbleRowIteratorTest, rowIteratorSupportsEmptyCustomOutput) {
       [numSerializerCalls](
           const velox::RowVectorPtr&,
           velox::vector_size_t,
+          velox::vector_size_t numRows,
           velox::memory::MemoryPool*,
-          velox::BufferPtr&) {
+          velox::BufferPool*,
+          NimbleIterator::SerializedRows& output) {
         numSerializerCalls->fetch_add(1, std::memory_order_relaxed);
-        return std::size_t{0};
+        output.offsets.assign(numRows + 1, 0);
       });
   auto options = NimbleIterator::Options{};
   options.rowFormat = rowFormat;
   TestNimbleIterator iterator{createRowIterator(projectedSubfields, options)};
   iterator.seekToFirst();
 
-  EXPECT_TRUE(iterator.value().empty());
-  EXPECT_TRUE(iterator.value().empty());
+  // All four rows of the first stripe come from one serializer call.
+  for (int32_t row{0}; row < 4; ++row) {
+    EXPECT_TRUE(iterator.value().empty());
+    EXPECT_TRUE(iterator.value().empty());
+    iterator.next();
+  }
   EXPECT_EQ(numSerializerCalls->load(std::memory_order_relaxed), 1);
+}
+
+TEST_P(
+    NimbleRowIteratorTest,
+    rowIteratorRecyclesSerializedRowsThroughBufferPool) {
+  writeResumeKeyTestData(/*rowsPerBatch=*/4, /*numBatches=*/3);
+
+  std::vector<Subfield> projectedSubfields;
+  projectedSubfields.emplace_back("value");
+  velox::BufferPool bufferPool{velox::BufferPool::kDefaultCapacity};
+  NimbleIterator::Options options;
+  options.bufferPool = &bufferPool;
+  {
+    TestNimbleIterator iterator{createRowIterator(projectedSubfields, options)};
+    iterator.seekToFirst();
+    iterator.value();
+    EXPECT_EQ(bufferPool.size(), 0);
+
+    // The next stripe returns the buffer to the pool and takes it again.
+    for (int32_t row{0}; row < 4; ++row) {
+      iterator.next();
+    }
+    iterator.value();
+    EXPECT_EQ(bufferPool.size(), 0);
+  }
+  // The destroyed iterator returned its buffer.
+  EXPECT_EQ(bufferPool.size(), 1);
+
+  {
+    TestNimbleIterator iterator{createRowIterator(projectedSubfields, options)};
+    iterator.seekToFirst();
+    EXPECT_EQ(bufferPool.size(), 1);
+    iterator.value();
+    EXPECT_EQ(bufferPool.size(), 0);
+  }
+  EXPECT_EQ(bufferPool.size(), 1);
+}
+
+TEST_P(NimbleRowIteratorTest, rowIteratorMaterializesOnlySelectedRows) {
+  constexpr int32_t kRowsPerStripe{4};
+  constexpr int32_t kNumStripes{3};
+  writeResumeKeyTestData(kRowsPerStripe, kNumStripes);
+
+  const auto rowType = ROW({{"key", BIGINT()}, {"value", INTEGER()}});
+  std::vector<Subfield> projectedSubfields;
+  projectedSubfields.emplace_back("value");
+
+  {
+    // An exact range decodes and serializes only its row.
+    TestNimbleIterator iterator{
+        createRowIterator(projectedSubfields, NimbleIterator::Options{})};
+    iterator.seek(makePointLookup(rowType, {"key"}, 6));
+    EXPECT_EQ(iterator.stats().numMaterializedRows, 0);
+    iterator.value();
+    EXPECT_EQ(iterator.stats().numMaterializedRows, 1);
+    EXPECT_EQ(iterator.stats().numReadStripes, 1);
+  }
+
+  {
+    // A range without an upper bound decodes the rest of every stripe it
+    // reaches.
+    auto bounds = makePointLookup(rowType, {"key"}, 6);
+    bounds.upperKey.reset();
+    TestNimbleIterator iterator{
+        createRowIterator(projectedSubfields, NimbleIterator::Options{})};
+    iterator.seek(bounds);
+    iterator.value();
+    EXPECT_EQ(iterator.stats().numMaterializedRows, 2);
+    for (int32_t row{6}; row < kRowsPerStripe * kNumStripes; ++row) {
+      iterator.value();
+      iterator.next();
+    }
+    EXPECT_EQ(iterator.stats().numMaterializedRows, 2 + kRowsPerStripe);
+  }
+}
+
+TEST_P(NimbleRowIteratorTest, rowIteratorTimesMaterializationOnlyWhenEnabled) {
+  writeResumeKeyTestData(/*rowsPerBatch=*/4, /*numBatches=*/3);
+  std::vector<Subfield> projectedSubfields;
+  projectedSubfields.emplace_back("value");
+
+  for (const bool collectTimings : {true, false}) {
+    SCOPED_TRACE(collectTimings);
+    NimbleIterator::Options options;
+    options.collectTimings = collectTimings;
+    TestNimbleIterator iterator{createRowIterator(projectedSubfields, options)};
+    iterator.seekToFirst();
+    EXPECT_EQ(iterator.stats().materializationTiming, velox::CpuWallTiming{});
+    iterator.value();
+    const auto timing = iterator.stats().materializationTiming;
+    if (collectTimings) {
+      EXPECT_EQ(timing.count, 1);
+    } else {
+      EXPECT_EQ(timing, velox::CpuWallTiming{});
+    }
+  }
+}
+
+TEST_P(NimbleRowIteratorTest, rowIteratorSeeksPoint) {
+  constexpr int32_t kRowsPerStripe{4};
+  constexpr int32_t kNumStripes{3};
+  writeResumeKeyTestData(kRowsPerStripe, kNumStripes);
+
+  const auto rowType = ROW({{"key", BIGINT()}, {"value", INTEGER()}});
+  std::vector<Subfield> projectedSubfields;
+  projectedSubfields.emplace_back("value");
+
+  TestNimbleIterator iterator{
+      createRowIterator(projectedSubfields, NimbleIterator::Options{})};
+  // The first row, a row inside a stripe and the last row.
+  for (const int64_t key : {0, 6, 11}) {
+    SCOPED_TRACE(key);
+    const auto bounds = makePointLookup(rowType, {"key"}, key);
+    TestNimbleIterator rangeIterator{
+        createRowIterator(projectedSubfields, NimbleIterator::Options{})};
+    rangeIterator.seek(bounds);
+
+    iterator.seek(*bounds.lowerKey);
+    ASSERT_TRUE(iterator.valid());
+    EXPECT_EQ(iterator.rowNumber(), key);
+    EXPECT_EQ(iterator.key(), rangeIterator.key());
+    EXPECT_EQ(iterator.value(), rangeIterator.value());
+    iterator.next();
+    EXPECT_FALSE(iterator.valid());
+  }
+  // Only the rows of the keys are decoded.
+  EXPECT_EQ(iterator.stats().numMaterializedRows, 3);
+
+  // A key without rows leaves the iterator invalid.
+  iterator.seek(*makePointLookup(rowType, {"key"}, 1'000).lowerKey);
+  EXPECT_FALSE(iterator.valid());
 }
 
 INSTANTIATE_TEST_SUITE_P(
     AllCacheParams,
     NimbleRowIteratorTest,
-    ::testing::ValuesIn(NimbleRowIteratorTest::getTestParams()),
-    [](const ::testing::TestParamInfo<TestParam>& info) {
-      return fmt::format(
-          "cacheMeta{}_pin{}",
-          info.param.cacheMetadata ? "On" : "Off",
-          info.param.pinMetadata ? "On" : "Off");
-    });
+    ::testing::ValuesIn(NimbleRowIteratorTest::getIteratorTestParams()),
+    NimbleRowIteratorTest::iteratorTestParamName);
 
 } // namespace facebook::nimble::test
