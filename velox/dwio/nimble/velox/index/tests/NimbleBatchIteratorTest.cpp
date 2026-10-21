@@ -111,6 +111,25 @@ TEST_P(NimbleBatchIteratorTest, batchIteratorStopsAtStripeBoundaries) {
       batchSizes,
       std::vector<velox::vector_size_t>(kNumStripes, kRowsPerStripe));
   EXPECT_EQ(iterator.stats().numReadStripes, kNumStripes);
+  EXPECT_EQ(iterator.stats().numMaterializedRows, kRowsPerStripe * kNumStripes);
+}
+
+TEST_P(NimbleBatchIteratorTest, batchIteratorRejectsRowAccess) {
+  writeResumeKeyTestData(/*rowsPerBatch=*/4, /*numBatches=*/3);
+
+  std::vector<Subfield> projectedSubfields;
+  projectedSubfields.emplace_back("value");
+  TestNimbleIterator iterator{
+      createBatchIterator(projectedSubfields, NimbleIterator::Options{})};
+  iterator.seekToFirst();
+
+  NIMBLE_ASSERT_THROW(
+      iterator.next(), "Batch iterator cannot produce serialized row output");
+  NIMBLE_ASSERT_THROW(
+      iterator.prepareValue(),
+      "Batch iterator does not expose serialized row values");
+  NIMBLE_ASSERT_THROW(
+      iterator.value(), "Batch iterator does not expose serialized row values");
 }
 
 TEST_P(NimbleBatchIteratorTest, batchIteratorSlicesStripeStreams) {
@@ -180,7 +199,7 @@ TEST_P(NimbleBatchIteratorTest, batchIteratorRetainsStringBatchesAcrossScans) {
   auto iterator = createBatchIterator(
       projectedSubfields,
       NimbleIterator::Options{.outputBatchRows = kOutputBatchRows});
-  folly::coro::blockingWait(iterator->co_seekToFirst());
+  iterator->seekToFirst();
 
   RowVectorPtr output;
   ASSERT_TRUE(folly::coro::blockingWait(iterator->co_nextBatch(output)));
@@ -197,11 +216,10 @@ TEST_P(NimbleBatchIteratorTest, batchIteratorRetainsStringBatchesAcrossScans) {
   EXPECT_EQ(nextRow, kNumRows);
   EXPECT_EQ(output, nullptr);
 
-  folly::coro::blockingWait(
-      iterator->co_seek(makeRangeLookup(rowType, {"key"}, 4, 6)));
+  iterator->seek(makeRangeLookup(rowType, {"key"}, 4, 6));
   ASSERT_TRUE(folly::coro::blockingWait(iterator->co_nextBatch(output)));
   velox::test::assertEqualVectors(expected->slice(4, 2), output);
-  folly::coro::blockingWait(iterator->co_reset());
+  iterator->reset();
   EXPECT_FALSE(iterator->valid());
   EXPECT_FALSE(folly::coro::blockingWait(iterator->co_nextBatch(output)));
   EXPECT_EQ(output, nullptr);
@@ -235,6 +253,60 @@ TEST_P(NimbleBatchIteratorTest, batchIteratorSeeksToFinalRowByKey) {
   EXPECT_EQ(values->valueAt(0), 70);
   EXPECT_FALSE(iterator.next(batch));
   EXPECT_EQ(iterator.stats().numReadStripes, 1);
+}
+
+TEST_P(NimbleBatchIteratorTest, batchIteratorSeeksPoint) {
+  writeResumeKeyTestData(/*rowsPerBatch=*/4, /*numBatches=*/2);
+  const auto rowType = ROW({{"key", BIGINT()}, {"value", INTEGER()}});
+
+  std::vector<Subfield> projectedSubfields;
+  projectedSubfields.emplace_back("value");
+  TestNimbleIterator iterator{createBatchIterator(
+      projectedSubfields,
+      NimbleIterator::Options{
+          .outputBatchRows = 3,
+      })};
+
+  iterator.seek(*makePointLookup(rowType, {"key"}, 7).lowerKey);
+  EXPECT_EQ(iterator.rowNumber(), 7);
+  velox::RowVectorPtr batch;
+  ASSERT_TRUE(iterator.next(batch));
+  const auto* values = batch->childAt(0)->asFlatVector<int32_t>();
+  ASSERT_NE(values, nullptr);
+  EXPECT_EQ(batch->size(), 1);
+  EXPECT_EQ(values->valueAt(0), 70);
+  EXPECT_FALSE(iterator.next(batch));
+  EXPECT_EQ(iterator.stats().numMaterializedRows, 1);
+
+  // A key without rows leaves the iterator invalid.
+  iterator.seek(*makePointLookup(rowType, {"key"}, 1'000).lowerKey);
+  EXPECT_FALSE(iterator.valid());
+}
+
+TEST_P(
+    NimbleBatchIteratorTest,
+    batchIteratorTimesMaterializationOnlyWhenEnabled) {
+  writeResumeKeyTestData(/*rowsPerBatch=*/4, /*numBatches=*/2);
+  std::vector<Subfield> projectedSubfields;
+  projectedSubfields.emplace_back("value");
+
+  for (const bool collectTimings : {true, false}) {
+    SCOPED_TRACE(collectTimings);
+    NimbleIterator::Options options;
+    options.collectTimings = collectTimings;
+    TestNimbleIterator iterator{
+        createBatchIterator(projectedSubfields, options)};
+    iterator.seekToFirst();
+    EXPECT_EQ(iterator.stats().materializationTiming, velox::CpuWallTiming{});
+    velox::RowVectorPtr batch;
+    ASSERT_TRUE(iterator.next(batch));
+    const auto timing = iterator.stats().materializationTiming;
+    if (collectTimings) {
+      EXPECT_EQ(timing.count, 1);
+    } else {
+      EXPECT_EQ(timing, velox::CpuWallTiming{});
+    }
+  }
 }
 
 TEST_P(NimbleBatchIteratorTest, batchIteratorReadsAheadAndReseeks) {
@@ -306,8 +378,7 @@ TEST_P(NimbleBatchIteratorTest, emptySeekWithConfiguredPrefetch) {
           .prefetchExecutor = folly::getKeepAliveToken(*executor),
           .maxPrefetchStripes = 3,
       });
-  folly::coro::blockingWait(
-      iterator->co_seek(makeRangeLookup(rowType, {"key"}, 50, 60)));
+  iterator->seek(makeRangeLookup(rowType, {"key"}, 50, 60));
   EXPECT_FALSE(iterator->valid());
   EXPECT_EQ(iterator->stats().numReadStripes, 0);
   EXPECT_EQ(iterator->stats().numSkippedStripes, 0);
@@ -315,11 +386,11 @@ TEST_P(NimbleBatchIteratorTest, emptySeekWithConfiguredPrefetch) {
   EXPECT_FALSE(folly::coro::blockingWait(iterator->co_nextBatch(output)));
   EXPECT_EQ(output, nullptr);
 
-  folly::coro::blockingWait(iterator->co_seekToFirst());
+  iterator->seekToFirst();
   ASSERT_TRUE(folly::coro::blockingWait(iterator->co_nextBatch(output)));
   EXPECT_EQ(output->size(), 4);
   EXPECT_EQ(iterator->stats().numSkippedStripes, 0);
-  folly::coro::blockingWait(iterator->co_reset());
+  iterator->reset();
 }
 
 TEST_P(NimbleBatchIteratorTest, batchIteratorBoundsReadAheadByStripeCount) {
@@ -505,12 +576,7 @@ TEST_P(
 INSTANTIATE_TEST_SUITE_P(
     AllCacheParams,
     NimbleBatchIteratorTest,
-    ::testing::ValuesIn(NimbleBatchIteratorTest::getTestParams()),
-    [](const ::testing::TestParamInfo<TestParam>& info) {
-      return fmt::format(
-          "cacheMeta{}_pin{}",
-          info.param.cacheMetadata ? "On" : "Off",
-          info.param.pinMetadata ? "On" : "Off");
-    });
+    ::testing::ValuesIn(NimbleBatchIteratorTest::getIteratorTestParams()),
+    NimbleBatchIteratorTest::iteratorTestParamName);
 
 } // namespace facebook::nimble::test

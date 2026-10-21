@@ -99,8 +99,8 @@ IcebergDeletionVectorSink::IcebergDeletionVectorSink(
   // and may prepend passthrough columns (e.g. a data/partition column), so the
   // input can be ROW<id, $row_id:ROW<...>> — not a bare 2-column page. Detect
   // the row-id by locating the ROW-typed column whose first two fields are
-  // (VARCHAR file_path, BIGINT pos). Fall back to the legacy two flat columns
-  // (file_path, pos) produced by IcebergMergeSink::makeDeleteBatch.
+  // (VARCHAR file_path, BIGINT pos). IcebergMergeSink forwards the same
+  // row-id ROW. Fall back to the legacy two flat columns (file_path, pos).
   const auto isRowIdStruct = [](const TypePtr& type) {
     return type->isRow() && type->asRow().size() >= kExpectedChannelCount &&
         type->asRow().childAt(kFilePathChannel)->isVarchar() &&
@@ -215,10 +215,9 @@ void IcebergDeletionVectorSink::appendData(RowVectorPtr input) {
     VELOX_USER_CHECK(
         !decodedPosition.isNullAt(i), "Null pos in DELETE input row");
     const auto pathSlice = decodedFilePath.valueAt<StringView>(i);
-    // Legacy flat layout carries no partition: the merge-sink delete batch
-    // projects only (file_path, pos). Partitioned writes through this path
-    // omit partitionDataJson, and the Java commit side rejects them loudly
-    // for partitioned tables (matching prior behavior).
+    // The legacy flat layout carries no partition. Partitioned writes through
+    // this path omit partitionDataJson, and the Java commit side rejects them
+    // for partitioned tables.
     PerFileState& state = findOrCreatePerFile(
         std::string(pathSlice.data(), pathSlice.size()), /*partitionData=*/"");
     state.writer.addDeletedPosition(decodedPosition.valueAt<int64_t>(i));
