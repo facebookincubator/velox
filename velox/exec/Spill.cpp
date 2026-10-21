@@ -923,7 +923,7 @@ void SpillPartitionFunction::partition(
   partitionIds.resize(size);
 
   for (auto i = 0; i < size; ++i) {
-    partitionIds[i] = lookup_.partition(hashes_[i]);
+    partitionIds[i] = lookup_.partition(spillHash(hashes_[i]));
   }
 }
 

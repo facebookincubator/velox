@@ -123,7 +123,7 @@ bool SpillerBase::fillSpillRuns(RowContainerIterator* iterator) {
         // TODO: consider to cache the hash bits in row container so we only
         // need to calculate them once.
         const auto partitionNum =
-            isSinglePartition ? 0 : bits_.partition(hashes[i]);
+            isSinglePartition ? 0 : bits_.partition(spillHash(hashes[i]));
         VELOX_DCHECK_GE(partitionNum, 0);
         // TODO: Fully integrate nested spill id into spiller partitioning,
         // replacing integer based partitioning.
