@@ -227,6 +227,12 @@ class NimbleIndexProjector {
   std::vector<StripeSelection> lookup(
       const velox::serializer::EncodedKeyBounds& bounds);
 
+  /// Resolves the rows whose key equals the encoded key into stripe selections,
+  /// in stripe order. Returns an empty vector for a miss. The rows of a key can
+  /// span chunks and stripes, so this looks up the range from the key to its
+  /// successor, the key followed by a zero byte. The caller owns scan progress.
+  std::vector<StripeSelection> lookup(std::string encodedKey);
+
   /// Resolves a file-level row range into stripe selections.
   /// Returns an empty vector for an empty range.
   std::vector<StripeSelection> lookup(const RowRange& rowRange);

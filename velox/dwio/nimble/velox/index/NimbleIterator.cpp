@@ -22,13 +22,11 @@
 
 namespace facebook::nimble {
 
-bool NimbleIterator::hasCurrentRow() const {
-  return rowRange_.has_value() && row_ < rowRange_->endRow;
-}
-
-uint32_t NimbleIterator::currentRow() const {
-  NIMBLE_CHECK(hasCurrentRow(), "Iterator is not positioned on a row");
-  return row_;
+std::string_view NimbleIterator::SerializedRows::row(std::size_t index) const {
+  const auto begin = offsets[index];
+  return std::string_view{
+      buffer == nullptr ? nullptr : buffer->as<char>() + begin,
+      offsets[index + 1] - begin};
 }
 
 void NimbleIterator::setRowRange(std::optional<RowRange> rowRange) {
