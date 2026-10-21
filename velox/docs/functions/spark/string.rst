@@ -183,11 +183,6 @@ String Functions
     Returns the leftmost length characters from the ``string``.
     If ``length`` is less or equal than 0 the result is an empty string.
 
-.. spark:function:: right(string, length) -> string
-
-    Returns the rightmost ``length`` characters from ``string``.
-    If ``length`` is less than or equal to 0, the result is an empty string.
-
 .. spark:function:: length(string) -> integer
 
     Returns the length of ``string`` in characters.
@@ -384,6 +379,11 @@ String Functions
 .. spark:function:: reverse(string) -> varchar
 
     Returns input string with characters in reverse order.
+
+.. spark:function:: right(string, length) -> string
+
+    Returns the rightmost ``length`` characters from ``string``.
+    If ``length`` is less than or equal to 0, the result is an empty string.
 
 .. spark:function:: rpad(string, len, pad) -> string
 
