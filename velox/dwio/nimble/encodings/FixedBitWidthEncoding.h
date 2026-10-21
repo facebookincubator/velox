@@ -206,21 +206,14 @@ void FixedBitWidthEncoding<T>::readWithVisitor(
   constexpr bool kIsFluidCast = sizeof(OutputType) >= sizeof(physicalType) &&
       std::is_integral_v<OutputType> && std::is_integral_v<physicalType>;
   // Fast path: use bulk scan for 4-byte and 8-byte integral types.
-  // Compile-time: type constraints (FBW physical type, reader extraction or
-  // an opted-in hook, compatible integral output type at least as wide as the
-  // physical type).
-  // Runtime (useFastPath): deterministic filter, AVX2, bulk path enabled,
-  // null+filter/hook compatibility.
-  if constexpr (
-      kIsSuitableWidth &&
-      (std::is_same_v<
-           typename V::Extract,
-           velox::dwio::common::ExtractToReader> ||
-       (V::kHasHook && !V::kHasFilter &&
-        detail::hookAllowsBulkFastPath<typename V::HookType>())) &&
-      kIsFluidCast) {
+  // Compile-time: type constraints (FBW physical type, compatible integral
+  // output type at least as wide as the physical type). Runtime: scanFastPath
+  // unless bulkFastPathByDefault, then useFastPath (deterministic filter,
+  // AVX2, bulk path enabled, null+filter/hook compatibility).
+  if constexpr (kIsSuitableWidth && kIsFluidCast) {
     auto* nulls = visitor.reader().rawNullsInReadRange();
-    if (velox::dwio::common::useFastPath(visitor, nulls)) {
+    if ((detail::bulkFastPathByDefault<V>() || params.scanFastPath) &&
+        velox::dwio::common::useFastPath(visitor, nulls)) {
       detail::readWithVisitorFast(*this, visitor, params, nulls);
       return;
     }

@@ -309,6 +309,28 @@ std::vector<TestParam> NimbleIndexProjectorTestBase::getTestParams() {
   return params;
 }
 
+std::vector<TestParam> NimbleIndexProjectorTestBase::getIteratorTestParams() {
+  std::vector<TestParam> params;
+  for (const auto& readerParam : getTestParams()) {
+    for (bool cacheEncodingView : {false, true}) {
+      params.push_back(
+          {readerParam.cacheMetadata,
+           readerParam.pinMetadata,
+           cacheEncodingView});
+    }
+  }
+  return params;
+}
+
+std::string NimbleIndexProjectorTestBase::iteratorTestParamName(
+    const ::testing::TestParamInfo<TestParam>& info) {
+  return fmt::format(
+      "cacheMeta{}_pin{}_cacheView{}",
+      info.param.cacheMetadata ? "On" : "Off",
+      info.param.pinMetadata ? "On" : "Off",
+      info.param.cacheEncodingView ? "On" : "Off");
+}
+
 void NimbleIndexProjectorTestBase::corruptProjectedStreams() {
   corruptStripe0Streams([](const TabletReader::StreamMetadata& location) {
     return location.size / 2;

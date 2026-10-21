@@ -54,6 +54,7 @@ const std::vector<config::ConfigProperty>& QueryConfig::registeredProperties() {
     // Cast.
     VELOX_REGISTER_QUERY_CONFIG(kLegacyCast);
     VELOX_REGISTER_QUERY_CONFIG(kCastMatchStructByName);
+    VELOX_REGISTER_QUERY_CONFIG(kCastStringToFloatingPointLenientInfNan);
 
     // Local exchange.
     VELOX_REGISTER_QUERY_CONFIG(kMaxLocalExchangeBufferSize);

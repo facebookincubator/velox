@@ -363,11 +363,11 @@ DEBUG_ONLY_TEST_P(NimbleIteratorTest, indexIteratorReportsStatsDuringPrefetch) {
     if (pendingStats.valid()) {
       pendingStats.wait();
     }
-    folly::coro::blockingWait(iterator->co_reset());
+    iterator->reset();
     iterator.reset();
     executor->join();
   });
-  folly::coro::blockingWait(iterator->co_seekToFirst());
+  iterator->seekToFirst();
   ASSERT_EQ(
       loadStartedFuture.wait_for(std::chrono::seconds{5}),
       std::future_status::ready);
@@ -387,7 +387,7 @@ DEBUG_ONLY_TEST_P(NimbleIteratorTest, indexIteratorReportsStatsDuringPrefetch) {
   EXPECT_EQ(dataIoStats_->read().count(), 0);
 
   releaseLoad();
-  folly::coro::blockingWait(iterator->co_reset());
+  iterator->reset();
   const auto completedStats = iterator->stats();
   EXPECT_GT(completedStats.numPlannedBytes, 0);
   EXPECT_EQ(completedStats.numReadStripes, 1);
@@ -412,7 +412,7 @@ TEST_P(NimbleIteratorTest, indexIteratorCancelsPrefetchOnDestruction) {
           ? createRowIterator(projectedSubfields, options)
           : createBatchIterator(projectedSubfields, options);
     }
-    folly::coro::blockingWait(iterator->co_seekToFirst());
+    iterator->seekToFirst();
 
     auto producerPaused = std::make_shared<std::promise<void>>();
     auto producerPausedFuture = producerPaused->get_future();
@@ -464,12 +464,12 @@ DEBUG_ONLY_TEST_P(NimbleIteratorTest, indexIteratorCancelsPrefetchBeforeLoad) {
             stopped->store(true, std::memory_order_release);
           }));
       auto cleanup = folly::makeGuard([&] {
-        folly::coro::blockingWait(iterator->co_reset());
+        iterator->reset();
         iterator.reset();
         executor->join();
       });
 
-      folly::coro::blockingWait(iterator->co_seekToFirst());
+      iterator->seekToFirst();
       std::promise<void> producerDone;
       auto producerDoneFuture = producerDone.get_future();
       executor->add([&] { producerDone.set_value(); });
@@ -533,7 +533,7 @@ DEBUG_ONLY_TEST_P(
       executor->join();
     });
 
-    folly::coro::blockingWait(iterator->co_seekToFirst());
+    iterator->seekToFirst();
     ASSERT_EQ(
         producerPausedFuture.wait_for(std::chrono::seconds{5}),
         std::future_status::ready);
@@ -603,7 +603,7 @@ DEBUG_ONLY_TEST_P(NimbleIteratorTest, indexIteratorCancelsPrefetchDuringLoad) {
       executor->join();
     });
 
-    folly::coro::blockingWait(iterator->co_seekToFirst());
+    iterator->seekToFirst();
     ASSERT_EQ(
         loadStartedFuture.wait_for(std::chrono::seconds{5}),
         std::future_status::ready);
@@ -652,30 +652,24 @@ TEST_P(NimbleIteratorTest, indexIteratorRepeatsPrefetchLoadErrors) {
               std::move(projector), leafPool_.get(), options)
         : NimbleIterator::createBatchIterator(
               std::move(projector), leafPool_.get(), options);
-    folly::coro::blockingWait(iterator->co_seekToFirst());
-    const auto materialize = [&]() -> folly::coro::Task<void> {
+    iterator->seekToFirst();
+    const auto materialize = [&] {
       if (serializedRows) {
-        co_await iterator->co_value();
-        co_return;
+        iterator->value();
+        return;
       }
       velox::RowVectorPtr output;
-      co_await iterator->co_nextBatch(output);
+      folly::coro::blockingWait(
+          folly::coro::timeoutNoDiscard(
+              iterator->co_nextBatch(output), std::chrono::seconds{5}));
     };
 
-    NIMBLE_ASSERT_THROW(
-        folly::coro::blockingWait(
-            folly::coro::timeoutNoDiscard(
-                materialize(), std::chrono::seconds{5})),
-        "Stream checksum mismatch");
+    NIMBLE_ASSERT_THROW(materialize(), "Stream checksum mismatch");
     const auto numDataReads = dataIoStats_->read().count();
-    NIMBLE_ASSERT_THROW(
-        folly::coro::blockingWait(
-            folly::coro::timeoutNoDiscard(
-                materialize(), std::chrono::seconds{5})),
-        "Stream checksum mismatch");
+    NIMBLE_ASSERT_THROW(materialize(), "Stream checksum mismatch");
     EXPECT_EQ(dataIoStats_->read().count(), numDataReads);
     EXPECT_EQ(iterator->rowNumber(), 0);
-    folly::coro::blockingWait(iterator->co_reset());
+    iterator->reset();
   }
 }
 
@@ -707,13 +701,8 @@ TEST_P(NimbleIteratorTest, commonIteratorInterfaceNavigatesBothFlavors) {
 INSTANTIATE_TEST_SUITE_P(
     AllCacheParams,
     NimbleIteratorTest,
-    ::testing::ValuesIn(NimbleIteratorTest::getTestParams()),
-    [](const ::testing::TestParamInfo<TestParam>& info) {
-      return fmt::format(
-          "cacheMeta{}_pin{}",
-          info.param.cacheMetadata ? "On" : "Off",
-          info.param.pinMetadata ? "On" : "Off");
-    });
+    ::testing::ValuesIn(NimbleIteratorTest::getIteratorTestParams()),
+    NimbleIteratorTest::iteratorTestParamName);
 
 } // namespace facebook::nimble::test
 

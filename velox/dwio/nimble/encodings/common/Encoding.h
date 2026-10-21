@@ -109,6 +109,10 @@ struct ReadWithVisitorParams {
   // When true, DictionaryEncoding uses a fused DictionaryColumnVisitor
   // instead of the two-pass DictionaryIndicesHook fallback.
   bool dictionaryAwareReads{false};
+
+  // When true, encodings use the scan fast path instead of the
+  // per-row slow path.
+  bool scanFastPath{false};
 };
 
 class Encoding {
@@ -897,6 +901,18 @@ constexpr bool hookAllowsBulkFastPath() {
     return Hook::kBulkFastPath;
   }
   return false;
+}
+
+// Returns whether visitor 'V' takes the encoding bulk fast path while
+// ReadWithVisitorParams::scanFastPath is off: reads that extract into the
+// reader, and hooks without a filter that opt in through kBulkFastPath.
+template <typename V>
+constexpr bool bulkFastPathByDefault() {
+  return std::is_same_v<
+             typename V::Extract,
+             velox::dwio::common::ExtractToReader> ||
+      (V::kHasHook && !V::kHasFilter &&
+       hookAllowsBulkFastPath<typename V::HookType>());
 }
 
 } // namespace detail
