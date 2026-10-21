@@ -1436,12 +1436,10 @@ std::vector<TypePtr> IcebergSplitReader::adaptColumns(
           auto columnType = tableSchema->findChild(fieldName);
           if (it != handleByName.end() &&
               it->second->initialDefaultValue().has_value()) {
-            childSpec->setConstantValue(newConstantFromString(
+            childSpec->setConstantValue(newIcebergDefaultValueConstant(
                 columnType,
                 it->second->initialDefaultValue().value(),
-                connectorQueryCtx_->memoryPool(),
-                /*isLocalTimestamp=*/false,
-                /*isDaysSinceEpoch=*/false));
+                connectorQueryCtx_->memoryPool()));
           } else {
             // Fall back to NULL if no default value.
             VELOX_CHECK_NOT_NULL(
