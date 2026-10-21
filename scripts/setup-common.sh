@@ -413,6 +413,21 @@ function install_gcs_sdk_cpp {
   cmake_install_dir json \
     -DJSON_BuildTests=OFF
 
+  # libcurl -- google-cloud-cpp 3.11.0's REST transport requires >= 8.7.1,
+  # which is newer than the libcurl that ships with CentOS 9 and some
+  # manylinux images. Build from source so CMake's find_package(CURL) in
+  # google-cloud-cpp resolves against our INSTALL_PREFIX.
+  local CURL_VERSION_UNDERSCORE
+  CURL_VERSION_UNDERSCORE=$(echo "${CURL_VERSION}" | tr '.' '_')
+  wget_and_untar \
+    "https://github.com/curl/curl/releases/download/curl-${CURL_VERSION_UNDERSCORE}/curl-${CURL_VERSION}.tar.gz" curl
+  cmake_install_dir curl \
+    -DCURL_USE_OPENSSL=ON \
+    -DBUILD_TESTING=OFF \
+    -DBUILD_CURL_EXE=OFF \
+    -DCURL_DISABLE_LDAP=ON \
+    -DCURL_DISABLE_LDAPS=ON
+
   # opentelemetry-cpp is a hard dependency of google-cloud-cpp 3.x's common
   # library. The ENABLE "-feature" exclusion only drops service-level targets;
   # google/cloud/internal/opentelemetry*.cc is unconditionally compiled into
