@@ -342,44 +342,35 @@ bool containsFailingCastFromVarchar(const core::TypedExprPtr& expr) {
 // on rows the CPU settles without it. On the CPU a CAST error never surfaces
 // on such a row: and and or hold the error and clear it on any row another
 // argument decides (ConjunctExpr::finalizeErrors), coalesce evaluates a later
-// argument only on the rows still null, and a default-null function skips the
+// argument only on the rows still null, a default-null function skips the
 // rows where another argument is NULL (Expr::removeSureNulls and
-// evalArgsDefaultNulls). The GPU evaluates every argument over every row, and
+// evalArgsDefaultNulls), and if and switch evaluate a branch only on the rows
+// its condition selects. The GPU evaluates every argument over every row, and
 // CastFunction raises on any string that spells no value, so a CAST beside
 // another non-constant argument, or beside a NULL constant, keeps the tree on
-// the CPU. if and switch hand a branch its inputs with the rows it does not
-// own nulled, so only a cast in their condition counts here; a cast of a value
-// a branch computes from such a nulled input, as in if(c0 is null, 0,
-// cast(coalesce(c0, 'x') as bigint)), still raises on those rows
+// the CPU. A CAST in a branch of if or switch stays there too: the evaluator
+// hands a branch its inputs with the other rows nulled, which spares a cast
+// whose input stays NULL on those rows, such as a cast of a column, but not
+// one whose input a branch fills in, as in if(c0 is null, 0,
+// cast(coalesce(c0, 'x') as bigint)).
+// TODO: Let a cast in a branch run on the GPU once the evaluator skips those
+// rows instead of nulling their inputs
 // (https://github.com/facebookincubator/velox/issues/19677).
 bool castFromVarcharNeedsCpu(const core::TypedExprPtr& expr) {
   if (!expr->isCallKind()) {
     return false;
   }
-  const auto& inputs = expr->inputs();
   size_t nonConstantOrNullInputs{0};
-  for (const auto& input : inputs) {
+  for (const auto& input : expr->inputs()) {
     nonConstantOrNullInputs += !input->isConstantKind() ||
         input->asUnchecked<core::ConstantTypedExpr>()->isNull();
   }
-  if (nonConstantOrNullInputs < 2) {
-    return false;
-  }
-  const auto& name = expr->asUnchecked<core::CallTypedExpr>()->name();
-  if (name == "if" || name == "switch") {
-    return containsFailingCastFromVarchar(inputs[0]);
-  }
-  for (const auto& input : inputs) {
-    if (containsFailingCastFromVarchar(input)) {
-      return true;
-    }
-  }
-  return false;
+  return nonConstantOrNullInputs >= 2 && containsFailingCastFromVarchar(expr);
 }
 
 // Recursive, context-free check that some cuDF evaluator supports every node in
 // the expression tree. canExprRunOnGpu wraps this with expression optimization
-// and the timezone fallback.
+// and the session-dependent fallbacks.
 bool canBeEvaluatedByCudf(const core::TypedExprPtr& expr) {
   ensureBuiltinExpressionEvaluatorsRegistered();
 

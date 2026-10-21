@@ -2799,9 +2799,9 @@ TEST_F(CudfVarcharCastTest, castFromVarcharRunsOnGpu) {
 
   // On the CPU a CAST error never surfaces on a row the rest of the expression
   // settles without the cast, so a CAST beside another non-constant argument
-  // stays on the CPU, whichever argument holds the cast. A TRY_CAST there, a
-  // CAST with only non-null constants beside it and a CAST in a branch of if
-  // run on the GPU.
+  // stays on the CPU, whichever argument holds the cast, a branch of if or
+  // switch included. A TRY_CAST there and a CAST with only non-null constants
+  // beside it run on the GPU.
   const auto twoColumns = ROW({{"c0", VARCHAR()}, {"c1", DOUBLE()}});
   const auto runsOnGpuWith = [&](const std::string& expr) {
     return cudf_velox::canExprRunOnGpu(
@@ -2814,12 +2814,26 @@ TEST_F(CudfVarcharCastTest, castFromVarcharRunsOnGpu) {
   EXPECT_FALSE(runsOnGpuWith("cast(c0 as double) > c1"));
   EXPECT_FALSE(runsOnGpuWith("cast(c0 as double) + c1 > 0.0"));
   EXPECT_FALSE(runsOnGpuWith("if(cast(c0 as boolean), c1, 0.0)"));
+  EXPECT_FALSE(runsOnGpu("if(c0 <> '', cast(c0 as bigint), 0)"));
+  EXPECT_FALSE(runsOnGpuWith("if(c1 > 0.0, cast(c0 as double), c1)"));
+  EXPECT_FALSE(
+      runsOnGpu("if(c0 is null, 0, cast(coalesce(c0, 'x') as bigint))"));
+  // DuckDB's parser turns a CASE with one WHEN into if, so the switch node is
+  // built by hand.
+  const auto parsedIf =
+      makeTypedExpr("if(c0 = '', 0, cast(c0 as bigint))", rowType);
+  EXPECT_FALSE(
+      cudf_velox::canExprRunOnGpu(
+          std::make_shared<core::CallTypedExpr>(
+              parsedIf->type(), parsedIf->inputs(), "switch"),
+          execCtx_.queryCtx(),
+          execCtx_.pool()));
   EXPECT_TRUE(runsOnGpu("cast(c0 as double) > 0.0"));
   EXPECT_TRUE(runsOnGpu("cast(c0 as double) is null"));
+  EXPECT_TRUE(runsOnGpu("if(cast(c0 as boolean), 1, 0)"));
   EXPECT_TRUE(runsOnGpu("c0 <> '' and try_cast(c0 as integer) > 0"));
   EXPECT_TRUE(runsOnGpuWith("try_cast(c0 as double) > c1"));
-  EXPECT_TRUE(runsOnGpu("if(c0 <> '', cast(c0 as bigint), 0)"));
-  EXPECT_TRUE(runsOnGpuWith("if(c1 > 0.0, cast(c0 as double), c1)"));
+  EXPECT_TRUE(runsOnGpu("if(c0 <> '', try_cast(c0 as bigint), 0)"));
 
   // A NULL constant beside the cast keeps it on the CPU as well: a default-null
   // function returns NULL there and drops any error the cast raised. A non-null
@@ -3040,8 +3054,10 @@ TEST_F(CudfVarcharCastTest, castFromVarcharNamesFirstOffendingRow) {
   }
 }
 
-// A CAST in a branch of if is evaluated on the rows the condition selects, so
-// a string that spells no value elsewhere does not fail it.
+// The evaluator hands a branch of if its inputs with the other rows nulled, so
+// a cast of a column in a branch raises on no string the condition excludes.
+// The validator keeps such an if on the CPU all the same, see
+// castFromVarcharRunsOnGpu.
 TEST_F(CudfVarcharCastTest, castFromVarcharUnderIf) {
   const auto rowType = ROW({{"c0", VARCHAR()}});
   const auto input = makeRowVector(
