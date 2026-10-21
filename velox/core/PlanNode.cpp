@@ -538,7 +538,7 @@ PlanNodePtr AggregationNode::create(const folly::dynamic& obj, void* context) {
       obj.count("mayRetainInput")
           ? std::optional<bool>(obj["mayRetainInput"].asBool())
           : std::nullopt,
-      deserializeSingleSource(obj, context));
+      std::move(source));
 }
 
 namespace {

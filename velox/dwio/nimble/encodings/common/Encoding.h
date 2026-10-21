@@ -109,6 +109,10 @@ struct ReadWithVisitorParams {
   // When true, DictionaryEncoding uses a fused DictionaryColumnVisitor
   // instead of the two-pass DictionaryIndicesHook fallback.
   bool dictionaryAwareReads{false};
+
+  // When true, encodings use the scan fast path instead of the
+  // per-row slow path.
+  bool scanFastPath{false};
 };
 
 class Encoding {
@@ -156,11 +160,6 @@ class Encoding {
     /// false, FixedBitWidth and PFOR round to byte or bucket boundaries.
     bool fixedBitWidthUseExactBits{false};
 
-    /// Legacy experimental option for floating-point normalization and
-    /// policy-free nested ALP size estimates. Does not enable encoding
-    /// candidates; configure ALP explicitly in the selection policy.
-    bool allowNestedAlpSelection{false};
-
     /// EXPERIMENTATION: Lets SubIntSplit zigzag-delta the stream before
     /// splitting it into bit ranges, keeping whichever form encodes smaller.
     ///
@@ -192,6 +191,15 @@ class Encoding {
     /// FSST is kept only when its final encoded size is at most this fraction
     /// of the original string bytes.
     double fsstCompressionTargetRatio = 0.6;
+
+    /// Makes an encoding view build and keep the structures that make many
+    /// reads cheap, such as offsets, bitmaps and decoded chunks, when it is
+    /// created. Set it for a view that serves many reads, such as a scan or a
+    /// binary search. When unset, the view builds only what one read needs and
+    /// derives the rest for each read, which suits a view that serves a few
+    /// reads and costs more per read. Both settings return the same values, and
+    /// reads stay thread safe. Other encodings ignore it.
+    bool cacheEncodingView{false};
   };
 
   static constexpr int kEncodingTypeOffset =
@@ -884,6 +892,27 @@ T* mutableValues(const V& visitor, vector_size_t size) {
         visitor.reader().numValues();
   }
   return values;
+}
+
+// Returns whether a hook explicitly opts in to the encoding bulk fast path.
+template <typename Hook>
+constexpr bool hookAllowsBulkFastPath() {
+  if constexpr (requires { Hook::kBulkFastPath; }) {
+    return Hook::kBulkFastPath;
+  }
+  return false;
+}
+
+// Returns whether visitor 'V' takes the encoding bulk fast path while
+// ReadWithVisitorParams::scanFastPath is off: reads that extract into the
+// reader, and hooks without a filter that opt in through kBulkFastPath.
+template <typename V>
+constexpr bool bulkFastPathByDefault() {
+  return std::is_same_v<
+             typename V::Extract,
+             velox::dwio::common::ExtractToReader> ||
+      (V::kHasHook && !V::kHasFilter &&
+       hookAllowsBulkFastPath<typename V::HookType>());
 }
 
 } // namespace detail

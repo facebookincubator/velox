@@ -194,6 +194,27 @@ String Functions
         SELECT format_number(2.5, 0); -- '2' (HALF_EVEN rounds to even)
         SELECT format_number(123, -1); -- NULL
 
+.. spark:function:: format_string(format, arguments...) -> varchar
+
+    Formats the arguments using a subset of Java's printf-style syntax.
+    ``printf`` is an alias for ``format_string`` and supports the same syntax.
+    See `Spark's format_string documentation
+    <https://spark.apache.org/docs/latest/api/sql/index.html#format_string>`_
+    for the canonical function behavior.
+    ``%%`` produces a literal percent sign. Bare ``%s`` accepts VARCHAR,
+    BOOLEAN, TINYINT, SMALLINT, INTEGER, and BIGINT arguments. The ``%d``,
+    ``%o``, ``%x``, and ``%X`` conversions accept integral arguments.
+    ``%d`` supports the ``-``, ``+``, space, and ``0`` flags; ``%o``, ``%x``,
+    and ``%X`` support ``-`` and ``0``. A width up to 1,048,576 is supported,
+    but precision, argument indexes, and other conversions or flags raise an
+    error.
+
+    A NULL format returns NULL without evaluating the remaining arguments.
+    NULL arguments render as ``null`` (or ``NULL`` for ``%X``). ::
+
+        SELECT format_string('id=%04d', 42); -- 'id=0042'
+        SELECT format_string('%s: %x', 'value', 255); -- 'value: ff'
+
 .. spark:function:: initcap(string) -> varchar
 
    The ``initcap`` function converts the first character of each word to uppercase
@@ -327,6 +348,16 @@ String Functions
         SELECT mask(NULL); -- NULL
         SELECT mask('AbCD123-@$#', NULL, NULL, NULL, NULL); -- "AbCD123-@$#"
 
+.. spark:function:: octet_length(string/binary) -> integer
+
+    Returns the byte length of the specified string or binary value.
+    For strings, this is the UTF-8 encoded byte count (not character count).
+    See the `Spark documentation
+    <https://spark.apache.org/docs/3.5.0/api/sql/index.html#octet_length>`_. ::
+
+        SELECT octet_length('hello'); -- 5
+        SELECT octet_length('€'); -- 3
+
 .. spark:function:: overlay(input, replace, pos, len) -> same as input
 
     Replace a substring of ``input`` starting at ``pos`` character with ``replace`` and
@@ -346,6 +377,10 @@ String Functions
         SELECT overlay('Spark SQL', 'ANSI ', 7, 0); -- "Spark ANSI SQL"
         SELECT overlay('Spark SQL', 'tructured', 2, 4); -- "Structured SQL"
         SELECT overlay('Spark SQL', '_', -6, 3); -- "_Sql"
+
+.. spark:function:: printf(format, arguments...) -> varchar
+
+    Alias for :spark:func:`format_string`.
 
 .. spark:function:: randstr(length, seed) -> varchar
 
@@ -491,14 +526,17 @@ String Functions
     Returns a map by splitting ``string`` into entries with ``entryDelimiter`` and splitting
     each entry into key/value with ``keyValueDelimiter``.
     ``entryDelimiter`` and ``keyValueDelimiter`` must be constant strings with single ascii
-    character. Allows ``keyValueDelimiter`` not found when splitting an entry. Throws exception
-    when duplicate map keys are found for single row's result, consistent with Spark's default
-    behavior. ::
+    character. Allows ``keyValueDelimiter`` not found when splitting an entry, in which case the
+    whole entry is the key and the value is NULL. When a key is repeated within a single row's
+    result, the behavior depends on the ``throw_exception_on_duplicate_map_keys`` configuration
+    property: if true, throws; otherwise the last value wins and the key keeps the position of its
+    first occurrence. ::
 
         SELECT str_to_map('a:1,b:2,c:3', ',', ':'); -- {"a":"1","b":"2","c":"3"}
         SELECT str_to_map('a', ',', ':'); -- {"a":NULL}
         SELECT str_to_map('', ',', ':'); -- {"":NULL}
         SELECT str_to_map('a:1,b:2,c:3', ',', ','); -- {"a:1":NULL,"b:2":NULL,"c:3":NULL}
+        SELECT str_to_map('a:1,b:2,a:3', ',', ':'); -- {"a":"3","b":"2"} (throws if the property is true)
 
 .. spark:function:: substring(string, start) -> varchar
 

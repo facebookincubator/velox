@@ -16,6 +16,7 @@
 
 #include "velox/core/PlanConsistencyChecker.h"
 #include "velox/common/base/Exceptions.h"
+#include "velox/core/FixedPointPlanNodes.h"
 
 namespace facebook::velox::core {
 
@@ -288,6 +289,25 @@ class Checker : public PlanNodeVisitor {
   }
 
   void visit(const WindowNode& node, PlanNodeVisitorContext& ctx)
+      const override {
+    visitSources(&node, ctx);
+  }
+
+  void visit(const FixedPointNode& node, PlanNodeVisitorContext& ctx)
+      const override {
+    // A fixed point has no sources: it runs nested plans, each a plan of its
+    // own.
+    for (const auto& plan : node.nestedPlans()) {
+      PlanConsistencyChecker::check(plan);
+    }
+  }
+
+  void visit(const StateSourceNode& node, PlanNodeVisitorContext& ctx)
+      const override {
+    visitSources(&node, ctx);
+  }
+
+  void visit(const StateHashJoinNode& node, PlanNodeVisitorContext& ctx)
       const override {
     visitSources(&node, ctx);
   }

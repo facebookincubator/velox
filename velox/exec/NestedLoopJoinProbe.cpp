@@ -810,7 +810,7 @@ void NestedLoopJoinProbe::beginBuildMismatch() {
   // this code will survive and move on to process build mismatches.
   std::vector<ContinuePromise> promises;
   std::vector<std::shared_ptr<Operator>> peerOperators;
-  if (!operatorCtx_->allPeersFinished(&future_, promises, peerOperators)) {
+  if (!operatorCtx_->allPeersArrived(&future_, promises, peerOperators)) {
     VELOX_CHECK(future_.valid());
     setState(ProbeOperatorState::kWaitForPeers);
     return;

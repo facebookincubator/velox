@@ -495,6 +495,139 @@ TEST_F(ExecutorTest, copyOverlapTest) {
   EXPECT_FALSE(plans.multiKernel.fuses({"aten.copy.default"}));
 }
 
+// In-place aten.copy_, as a non-functionalized export keeps it, for each
+// pairing of contiguous and strided source and destination: whole tensor,
+// transposed source, column destination, and column to column chained over
+// four columns. copy_ is an in-place elementwise that writes self through its
+// strides and reads src through its own, so every write fuses; the transpose
+// and the column selects stay host-side views it reads through.
+TEST_F(ExecutorTest, copyInPlaceLayoutTest) {
+  runTest(
+      "data/copy_inplace_layout_test.pt2",
+      "data/copy_inplace_layout_test_results.pt");
+
+  auto plans = compilePlans("data/copy_inplace_layout_test.pt2");
+  EXPECT_TRUE(
+      plans.multiKernel.fuses({"aten.copy_.default", "aten.mul.Scalar"}));
+  EXPECT_TRUE(
+      plans.multiKernel.fuses({"aten.copy_.default", "aten.select.int"}));
+  EXPECT_FALSE(plans.multiKernel.standalone("aten.copy_.default"));
+}
+
+// In-place aten.copy_ whose source broadcasts (a size-1 dim, an aten.expand of
+// one element) or converts (int64 into a float column), and a shift by one
+// that reads a clone of the buffer it writes. The clone is a required snapshot
+// because its base is overwritten afterwards, so it must survive and be fully
+// written before copy_ reads it.
+TEST_F(ExecutorTest, copyInPlaceConvertTest) {
+  runTest(
+      "data/copy_inplace_convert_test.pt2",
+      "data/copy_inplace_convert_test_results.pt");
+
+  auto plans = compilePlans("data/copy_inplace_convert_test.pt2");
+  EXPECT_TRUE(
+      plans.multiKernel.fuses({"aten.copy_.default", "aten.expand.default"}));
+  EXPECT_FALSE(plans.multiKernel.standalone("aten.copy_.default"));
+}
+
+// Column copies into one target, the shape the ROO preproc graph uses to fill a
+// ones_like column by column. Each copy_ mutates the target, so without
+// WaveConfig::recognizeDisjointCopies every copy is ordered after the previous
+// one and the graph splits into a chain of layers. The rewrite merges them into
+// one copy_ of a stack of the sources. Two graphs:
+//   merged   four copies into columns 0..3, the target read only after them
+//   blocked  the same with a read of the target between the second and third
+//            copy, which must keep the copies apart
+// Each runs with the flag on and off and is checked against ATen.
+TEST_F(ExecutorTest, disjointColumnCopiesTest) {
+  constexpr int32_t kRows = 512;
+  constexpr int32_t kCols = 4;
+  auto graphString = [&](bool readBetween) {
+    std::string str = "graph(%x, %s):\n";
+    str += "%t = torch.ops.aten.ones_like.default(self=%x)\n";
+    str += "%s2 = torch.ops.aten.mul.Scalar(self=%s, other=2)\n";
+    for (int32_t i = 0; i < kCols; ++i) {
+      str += fmt::format(
+          "%sl{0} = torch.ops.aten.slice.Tensor(self=%t, dim=0, start=0, "
+          "end=9223372036854775807)\n"
+          "%d{0} = torch.ops.aten.select.int(self=%sl{0}, dim=1, index={0})\n"
+          "%c{0} = torch.ops.aten.select.int(self=%s2, dim=1, index={0})\n"
+          "%e{0} = torch.ops.aten.expand.default(self=%c{0}, size=[{1}])\n"
+          "%w{0} = torch.ops.aten.copy_.default(self=%d{0}, src=%e{0})\n",
+          i,
+          kRows);
+      if (readBetween && i == 1) {
+        str += "%mid = torch.ops.aten.mul.Tensor(self=%t, other=%x)\n";
+      }
+    }
+    str += "%o = torch.ops.aten.add.Tensor(self=%t, other=%x)\n";
+    str += readBetween ? "return(%o, %mid)\n" : "return(%o)\n";
+    return str;
+  };
+  auto meta = [&] {
+    std::unordered_map<std::string, torch::_export::TensorMeta> m;
+    for (const auto* name : {"x", "s", "t", "s2", "o", "mid"}) {
+      m[name] = makeTensorMeta(c10::ScalarType::Float, 2);
+    }
+    for (int32_t i = 0; i < kCols; ++i) {
+      m[fmt::format("sl{}", i)] = makeTensorMeta(c10::ScalarType::Float, 2);
+      for (const auto* prefix : {"d", "c", "e", "w"}) {
+        m[fmt::format("{}{}", prefix, i)] =
+            makeTensorMeta(c10::ScalarType::Float, 1);
+      }
+    }
+    return m;
+  }();
+  // copy_ nodes left after the executor has compiled the graph.
+  auto countCopies = [&](const std::string& str) {
+    auto graph = nativert::stringToGraph(str);
+    graph->setTensorValuesMeta(meta);
+    setGraphDevice(graph.get(), /*isCuda=*/true);
+    auto ctx = std::make_unique<ModelContext>();
+    ctx->weights = std::make_shared<nativert::Weights>(graph.get());
+    ctx->graph = std::move(graph);
+    WaveGraphExecutor exec(std::move(ctx));
+    int32_t copies = 0;
+    for (const auto& node : exec.graph().nodes()) {
+      copies += node.target() == "torch.ops.aten.copy_.default" ? 1 : 0;
+    }
+    return copies;
+  };
+
+  auto x = at::arange(kRows * kCols, at::kFloat).reshape({kRows, kCols}) / 7;
+  auto s = at::arange(kRows * kCols, at::kFloat).reshape({kRows, kCols}) * 3;
+  // Every column of the target is overwritten, so it ends up as 2 * s.
+  auto filled = s * 2;
+  auto halfFilled = at::ones_like(x);
+  halfFilled.narrow(1, 0, 2).copy_(filled.narrow(1, 0, 2));
+
+  const bool saved = WaveConfig::get().recognizeDisjointCopies;
+  SCOPE_EXIT {
+    WaveConfig::get().recognizeDisjointCopies = saved;
+  };
+  for (const bool readBetween : {false, true}) {
+    const auto str = graphString(readBetween);
+    for (const bool recognize : {true, false}) {
+      SCOPED_TRACE(
+          fmt::format("readBetween={} recognize={}", readBetween, recognize));
+      WaveConfig::get().recognizeDisjointCopies = recognize;
+      EXPECT_EQ(countCopies(str), recognize && !readBetween ? 1 : kCols);
+
+      auto outputs =
+          runWaveProgrammatic(nativert::stringToGraph(str), meta, {{x, s}});
+      ASSERT_EQ(outputs.size(), readBetween ? 2 : 1);
+      auto expected = filled + x;
+      EXPECT_TRUE(tensorsMatch(outputs[0], expected))
+          << firstDifference(outputs[0], expected);
+      if (readBetween) {
+        auto expectedMid = halfFilled * x;
+        EXPECT_TRUE(tensorsMatch(outputs[1], expectedMid))
+            << firstDifference(outputs[1], expectedMid);
+      }
+    }
+  }
+}
+
 // slice_scatter on 2-D tensors along dim 0 and dim 1 with a runtime (symint)
 // start, step > 1, lowered to a clone + fused in-place tw.slice_scatter_.
 TEST_F(ExecutorTest, scatterTest) {
@@ -684,6 +817,25 @@ TEST_F(ExecutorTest, scatterAddTest) {
   EXPECT_EQ(liveClones, 1)
       << "expected one surviving clone: out1's clone kept because src shares a "
          "base with self; out0's clone elided (dead base, independent src)";
+}
+
+// aten.scatter_add_, the in-place form a non-functionalized export keeps, along
+// dim 0 and dim 1 and as int64 counts into zeros. These are retargeted to
+// tw.scatter_add on self itself, with no clone of self inserted. The fourth
+// writes into a strided column view, which tw.scatter_add does not write
+// through, so it stays the eager standalone and must still be correct.
+TEST_F(ExecutorTest, scatterAddInPlaceTest) {
+  runTest(
+      "data/scatter_add_inplace_test.pt2",
+      "data/scatter_add_inplace_test_results.pt");
+
+  auto plans = compilePlans("data/scatter_add_inplace_test.pt2");
+  EXPECT_TRUE(plans.multiKernel.fuses({"tw.scatter_add"}));
+  EXPECT_TRUE(plans.multiKernel.standalone("aten.scatter_add_.default"));
+  EXPECT_EQ(
+      countLiveClonesAfterOpt(
+          getDataFilePath(dataDir(), "data/scatter_add_inplace_test.pt2")),
+      0);
 }
 
 // A fused tw.scatter_add accumulating [4096] src/index into a [256] tensor,

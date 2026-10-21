@@ -22,6 +22,8 @@
 
 #include <stdint.h>
 
+#include <fmt/ranges.h>
+
 namespace facebook::velox::functions::sparksql::test {
 namespace {
 
@@ -254,6 +256,24 @@ TEST_F(MapTest, tenKeyValuePairs) {
       expectedMap);
 }
 
+TEST_F(MapTest, manyKeyValuePairs) {
+  constexpr int32_t kNumPairs{11};
+  std::vector<VectorPtr> args;
+  std::vector<std::string> names;
+  std::vector<std::pair<int32_t, std::optional<double>>> entries;
+  for (int32_t i{0}; i < kNumPairs; ++i) {
+    args.push_back(makeFlatVector<int32_t>({i}));
+    args.push_back(makeFlatVector<double>({i * 0.5}));
+    names.push_back(fmt::format("c{}", 2 * i));
+    names.push_back(fmt::format("c{}", 2 * i + 1));
+    entries.emplace_back(i, i * 0.5);
+  }
+  testMap(
+      fmt::format("map({})", fmt::join(names, ", ")),
+      args,
+      makeMapVector<int32_t, double>({entries}));
+}
+
 TEST_F(MapTest, errorCases) {
   auto inputVectorInt64 = makeNullableFlatVector<int64_t>({1, 2, 3});
   auto inputVectorDouble = makeNullableFlatVector<double>({4.0, 5.0, 6.0});
@@ -267,21 +287,7 @@ TEST_F(MapTest, errorCases) {
   testMapFails(
       "map(c0, c1, c2)",
       {inputVectorInt64, inputVectorDouble, inputVectorInt64},
-      "Scalar function signature is not supported: map(BIGINT, DOUBLE, BIGINT)");
-
-  // Test with 22 arguments (11 pairs) - exceeds the maximum of 10 key-value
-  // pairs supported by the map function.
-  testMapFails(
-      "map(c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15, c16, c17, c18, c19, c20, c21)",
-      {inputVectorDouble, inputVectorDouble, inputVectorDouble,
-       inputVectorDouble, inputVectorDouble, inputVectorDouble,
-       inputVectorDouble, inputVectorDouble, inputVectorDouble,
-       inputVectorDouble, inputVectorDouble, inputVectorDouble,
-       inputVectorDouble, inputVectorDouble, inputVectorDouble,
-       inputVectorDouble, inputVectorDouble, inputVectorDouble,
-       inputVectorDouble, inputVectorDouble, inputVectorDouble,
-       inputVectorDouble},
-      "Scalar function signature is not supported: map(DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE)");
+      "Map function must take an even number of arguments");
 
   // Types of args.
   testMapFails(
@@ -290,14 +296,14 @@ TEST_F(MapTest, errorCases) {
        inputVectorDouble,
        inputVectorDouble,
        inputVectorDouble},
-      "Scalar function signature is not supported: map(BIGINT, DOUBLE, DOUBLE, DOUBLE)");
+      "All the key arguments in Map function must be the same!");
   testMapFails(
       "map(c0, c1, c2, c3)",
       {inputVectorDouble,
        inputVectorInt64,
        inputVectorDouble,
        inputVectorDouble},
-      "Scalar function signature is not supported: map(DOUBLE, BIGINT, DOUBLE, DOUBLE)");
+      "All the value arguments in Map function must be the same!");
 
   testMapFails(
       "map(c0, c1)",

@@ -39,7 +39,8 @@ CudfOrderBy::CudfOrderBy(
           nvtx3::rgb{64, 224, 208}, // Turquoise
           NvtxMethodFlag::kAll,
           std::nullopt,
-          orderByNode) {
+          orderByNode),
+      planNodeBoundary_{core::PlanNode::Boundary::kBoth} {
   initializeSortKeys(orderByNode->sortingKeys(), orderByNode->sortingOrders());
 }
 
@@ -56,7 +57,8 @@ CudfOrderBy::CudfOrderBy(
           nvtx3::rgb{64, 224, 208}, // Turquoise
           NvtxMethodFlag::kAll,
           std::nullopt,
-          mergeExchangeNode) {
+          mergeExchangeNode),
+      planNodeBoundary_{core::PlanNode::Boundary::kOutput} {
   initializeSortKeys(
       mergeExchangeNode->sortingKeys(), mergeExchangeNode->sortingOrders());
 }
@@ -126,8 +128,14 @@ RowVectorPtr CudfOrderBy::doGetOutput() {
 
 void CudfOrderBy::doClose() {
   Operator::close();
-  // Release stored inputs
-  // Release cudf memory resources
+  // Release stored inputs. close() can run before noMoreInput() (task
+  // cancellation), in which case inputs_ still holds CudfVectors and this
+  // clear is real work. After noMoreInput(), inputs_ was std::exchange'd
+  // away and this is a no-op.
+  //
+  // outputTable_ is allocated by sort_by_key on the same stream its kernels
+  // run on; rmm frees on the allocation stream, so the drop is already
+  // ordered behind the sort. No host sync.
   inputs_.clear();
   outputTable_.reset();
 }

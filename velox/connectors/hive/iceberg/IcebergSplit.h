@@ -19,6 +19,7 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -52,6 +53,12 @@ struct HiveIcebergSplit : public connector::hive::HiveConnectorSplit {
   /// every partition field under its derived 'PartitionField.name()' and
   /// therefore cannot prove a transform is identity.
   std::unordered_map<int32_t, std::optional<std::string>> identityPartitionKeys;
+
+  /// Field IDs of the columns whose table-scan filter this file's partition
+  /// values already satisfy for every row, under any partition transform. The
+  /// reader skips evaluating those filters for this split. Empty means every
+  /// filter is evaluated.
+  std::unordered_set<int32_t> partitionEnforcedFieldIds;
 
   /// Changelog split information. Present when this split represents a
   /// changelog table query; contains the operation type, ordinal, and snapshot
@@ -168,6 +175,13 @@ class IcebergSplitBuilder {
     return *this;
   }
 
+  /// See 'HiveIcebergSplit::partitionEnforcedFieldIds'.
+  IcebergSplitBuilder& partitionEnforcedFieldIds(
+      std::unordered_set<int32_t> fieldIds) {
+    partitionEnforcedFieldIds_ = std::move(fieldIds);
+    return *this;
+  }
+
   IcebergSplitBuilder& columnMappingMode(dwio::common::ColumnMappingMode mode) {
     columnMappingMode_ = mode;
     return *this;
@@ -193,6 +207,7 @@ class IcebergSplitBuilder {
   int64_t dataSequenceNumber_{0};
   std::unordered_map<int32_t, std::optional<std::string>>
       identityPartitionKeys_;
+  std::unordered_set<int32_t> partitionEnforcedFieldIds_;
   std::optional<dwio::common::ColumnMappingMode> columnMappingMode_;
   std::optional<ChangelogSplitInfo> changelogSplitInfo_;
 };

@@ -1080,6 +1080,24 @@ TEST_F(RPCOperatorTest, localOnlyPerRowPayloadMemoryIsAccounted) {
   EXPECT_GT(memoryStats.cumulativeExternalBytes, 0);
 }
 
+TEST_F(RPCOperatorTest, invalidRequestRowsAreCountedByErrorKind) {
+  DeferredAdmissionRPCFunction::reset();
+  auto input = makeRowVector(
+      {"prompt"}, {makeFlatVector<StringView>({"live prompt", "local error"})});
+  auto plan = makeRPCNode(
+      PlanBuilder().values({input}).planNode(),
+      {"prompt"},
+      "deferred_admission_rpc");
+
+  std::shared_ptr<Task> task;
+  AssertQueryBuilder(plan).maxDrivers(1).copyResults(pool(), task);
+
+  const auto planStats = toPlanStats(task->taskStats());
+  const auto& customStats = planStats.at(plan->id()).customStats;
+  ASSERT_EQ(customStats.count(RPCOperator::kRpcErrorKindInvalidRequest), 1);
+  EXPECT_EQ(customStats.at(RPCOperator::kRpcErrorKindInvalidRequest).sum, 1);
+}
+
 TEST_F(RPCOperatorTest, localOnlyBatchPreservesPendingAdmittedRows) {
   DeferredAdmissionBatchRPCFunction::reset();
   std::vector<RowVectorPtr> inputs{
@@ -1655,7 +1673,7 @@ TEST_F(
     RPCOperatorTest,
     batchSuccessWithoutLatencyRecoversLimiterWithoutRttSample) {
   constexpr int64_t kCeiling = 8;
-  constexpr int64_t kRows = 8;
+  constexpr int64_t kRows = 16;
 
   auto& limiter = RPCRateLimiterRegistry::global().get("");
   limiter.initializeOnce([](RPCRateLimiter::Config& config) {
@@ -1669,22 +1687,115 @@ TEST_F(
 
   auto input = makeRowVector(
       {"prompt"},
-      {makeFlatVector<StringView>({"0", "1", "2", "3", "4", "5", "6", "7"})});
+      {makeFlatVector<StringView>({
+          "0",
+          "1",
+          "2",
+          "3",
+          "4",
+          "5",
+          "6",
+          "7",
+          "8",
+          "9",
+          "10",
+          "11",
+          "12",
+          "13",
+          "14",
+          "15",
+      })});
   auto plan = makeBatchRPCNode(
       PlanBuilder().values({input}).planNode(),
       {"prompt"},
       "no_latency_success_batch_rpc",
-      /*dispatchBatchSize=*/1);
+      /*dispatchBatchSize=*/2);
   std::shared_ptr<exec::Task> task;
+  auto result =
+      AssertQueryBuilder(plan)
+          .maxDrivers(1)
+          .config(core::QueryConfig::kRpcCongestionAsyncGrowthMaxWindow, "64")
+          .copyResults(pool(), task);
+  ASSERT_EQ(result->size(), kRows);
+
+  EXPECT_EQ(limiter.stats().capacity, 5);
+  EXPECT_EQ(limiter.stats().limitMilli, 5'657);
+  // Driver-local growth and shared pacing learn from separate evidence: clean
+  // completion count grows the BATCH window, while elapsed service duration
+  // still trains the shared limiter's horizon.
+  EXPECT_NE(limiter.stats().serviceHorizonNanos, 1'000'000'000);
+  const auto planStats = toPlanStats(task->taskStats());
+  const auto& customStats = planStats.at(plan->id()).customStats;
+  EXPECT_EQ(customStats.count(RPCOperator::kRpcBaselineRttNanos), 0);
+  auto statSum = [&](const std::string& key) -> int64_t {
+    auto it = customStats.find(key);
+    return it == customStats.end() ? -1 : it->second.sum;
+  };
+  // 16 rows at 2 per batch complete as 8 flushes: 8 clean units lift the
+  // BATCH window 2 -> 3. Without the NoLatency branch it would stay at 2;
+  // counting rows instead of flushes would reach 4.
+  EXPECT_EQ(statSum(RPCOperator::kRpcCongestionWindowFinal), 3);
+}
+
+TEST_F(
+    RPCOperatorTest,
+    batchSuccessWithoutLatencyTrainsHorizonWhenGrowthDisabled) {
+  constexpr int64_t kCeiling = 8;
+  constexpr int64_t kRows = 16;
+
+  auto& limiter = RPCRateLimiterRegistry::global().get("");
+  limiter.initializeOnce([](RPCRateLimiter::Config& config) {
+    config.ceiling = kCeiling;
+    config.adaptive = true;
+    config.floor = 1;
+    config.decreaseFactor = 0.5;
+  });
+  limiter.onOutcome(RPCRateLimiter::Outcome::kOverload, /*units=*/0);
+  ASSERT_EQ(limiter.stats().capacity, 4);
+
+  auto input = makeRowVector(
+      {"prompt"},
+      {makeFlatVector<StringView>({
+          "0",
+          "1",
+          "2",
+          "3",
+          "4",
+          "5",
+          "6",
+          "7",
+          "8",
+          "9",
+          "10",
+          "11",
+          "12",
+          "13",
+          "14",
+          "15",
+      })});
+  auto plan = makeBatchRPCNode(
+      PlanBuilder().values({input}).planNode(),
+      {"prompt"},
+      "no_latency_success_batch_rpc",
+      /*dispatchBatchSize=*/2);
+  std::shared_ptr<exec::Task> task;
+  // No async-growth cap: the default 0 disables clean growth.
   auto result =
       AssertQueryBuilder(plan).maxDrivers(1).copyResults(pool(), task);
   ASSERT_EQ(result->size(), kRows);
 
   EXPECT_EQ(limiter.stats().capacity, 5);
-  EXPECT_EQ(limiter.stats().limitMilli, 5'657);
   const auto planStats = toPlanStats(task->taskStats());
   const auto& customStats = planStats.at(plan->id()).customStats;
-  EXPECT_EQ(customStats.count(RPCOperator::kRpcBaselineRttNanos), 0);
+  auto statSum = [&](const std::string& key) -> int64_t {
+    auto it = customStats.find(key);
+    return it == customStats.end() ? -1 : it->second.sum;
+  };
+  // Growth disabled: legacy behavior end to end — the BATCH window stays
+  // pinned at its start, and the no-latency round trips still train the
+  // shared service horizon instead of leaving it at the bootstrap.
+  EXPECT_EQ(statSum(RPCOperator::kRpcCongestionWindowFinal), 2);
+  EXPECT_NE(limiter.stats().serviceHorizonNanos, 1'000'000'000);
 }
 
 // The low-water capacity lands on every query, not only the ones where the

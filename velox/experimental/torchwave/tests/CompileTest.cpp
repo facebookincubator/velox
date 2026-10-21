@@ -509,6 +509,46 @@ return(%r)
   EXPECT_NE(waveGraph, nullptr);
 }
 
+// The partitioner and the optimizer disagree about what a graph output
+// reaches, and an op caught in the gap is scheduled without being rewritten.
+// makeParallelNodes walks from the output node through args(), which
+// computeSideEffectEdges has augmented with an ordering edge to every mutation
+// of a base the outputs touch. Optimizer::visitValue walks plain inputs(), so
+// a chain hanging off a mutation edge is covered but never visited: here the
+// outputs are %live and the pre-mutation %sink, and neither reaches %ri
+// through inputs() alone.
+//
+// repeat_interleave's metadata exists only to host maybeReplace, so it carries
+// no device function. Left un-rewritten in the partition it contributes a
+// block that writes nothing, and its consumers read an unwritten buffer. On
+// the ads ROO preproc graph this stranded 1 of 11 repeat_interleaves, and 1292
+// of 2797 nodes sit on the wrong side of the same gap.
+TEST_F(CompileTest, nodeReachedOnlyByMutationEdgeIsRewritten) {
+  auto f = [] { return makeTensorMeta(c10::ScalarType::Float, 1); };
+  std::unordered_map<std::string, torch::_export::TensorMeta> meta = {
+      {"a", f()},
+      {"b", f()},
+      {"sink", f()},
+      {"repeats", makeTensorMeta(c10::ScalarType::Long, 1)},
+      {"live", f()},
+      {"ri", f()},
+      {"cp", f()}};
+  const char* graphStr = R"(graph(%a, %b, %sink, %repeats):
+%live = torch.ops.aten.add.Tensor(self=%a, other=%b)
+%ri = torch.ops.aten.repeat_interleave.self_Tensor(self=%a, repeats=%repeats)
+%cp = torch.ops.aten.copy_.default(self=%sink, src=%ri)
+return(%live, %sink)
+)";
+
+  auto waveGraph = compileGraphString(graphStr, meta);
+  ASSERT_NE(waveGraph, nullptr);
+
+  EXPECT_TRUE(checkGenerated("repeat_interleave_final", *waveGraph))
+      << "the rewritten op is missing from the generated kernels";
+  EXPECT_FALSE(checkGenerated("repeat_interleave\\.self_Tensor", *waveGraph))
+      << "the original op reached the generated kernels un-rewritten";
+}
+
 // The allocation-group plan is settled while the graph compiles, not on its
 // first execution. Every decision the plan carries is expressed as a (node,
 // step) pair of the compiled grids, and the concat carve pass has to read those

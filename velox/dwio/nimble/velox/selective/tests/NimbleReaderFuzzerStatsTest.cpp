@@ -38,11 +38,22 @@ TEST(NimbleReaderFuzzerStatsTest, updates) {
 
   updateStringDictionaryEncodingPreserved();
   updateStringDictionaryEncodingAbandoned();
+  updateSmallintDictionaryAwareReads();
+  updateIntegerDictionaryAwareReads();
+  updateIntegerDictionaryAwareReads();
+  updateBigintDictionaryAwareReads();
+  updateRealDictionaryAwareReads();
+  updateDoubleDictionaryAwareReads();
 
   const auto stats = writer.runtimeStats();
 #ifdef NIMBLE_READER_FUZZER_STATS_ENABLED
   EXPECT_EQ(stats.at(std::string(kStringDictionaryEncodingPreserved)).sum, 1);
   EXPECT_EQ(stats.at(std::string(kStringDictionaryEncodingAbandoned)).sum, 1);
+  EXPECT_EQ(stats.at(std::string(kSmallintDictionaryAwareReads)).sum, 1);
+  EXPECT_EQ(stats.at(std::string(kIntegerDictionaryAwareReads)).sum, 2);
+  EXPECT_EQ(stats.at(std::string(kBigintDictionaryAwareReads)).sum, 1);
+  EXPECT_EQ(stats.at(std::string(kRealDictionaryAwareReads)).sum, 1);
+  EXPECT_EQ(stats.at(std::string(kDoubleDictionaryAwareReads)).sum, 1);
 #else
   EXPECT_THAT(stats, testing::IsEmpty());
 #endif
