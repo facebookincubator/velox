@@ -100,6 +100,25 @@ However, unpacking/converting a TimestampWithTimezone into an absolute time
 definition requires a
 `timezone conversion <https://github.com/facebookincubator/velox/blob/main/velox/functions/prestosql/DateTimeFunctions.h#L74-L84>`_.
 
+TimestampWithTimezone Function Invariants
+-----------------------------------------
+
+A TimestampWithTimezone value represents an instant plus a time-zone label.
+Equality compares the instant and ignores the label. When
+``use_session_timezone_for_timestamp_with_timezone`` is enabled, deterministic
+date-time functions must therefore render the instant in the session zone so
+that equal inputs produce equal results. Functions that report the stored zone
+itself, such as ``timezone_hour`` and ``timezone_minute``, are exceptions.
+
+Implicit coercion must not change a function's result. If a value of type ``T``
+coerces to type ``U``, calling a function through an overload for ``T`` must
+produce the same value as casting to ``U`` and calling the ``U`` overload.
+
+When ``adjust_timestamp_to_session_timezone`` is disabled, ``TIMESTAMP`` holds
+a wall clock rather than a UTC instant. Existing ``to_unixtime`` and field
+extraction functions do not yet satisfy the coercion invariant for all such
+values, including wall clocks skipped by daylight-saving transitions.
+
 Conversions Across Timezones
 ----------------------------
 

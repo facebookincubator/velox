@@ -354,6 +354,12 @@ void registerSimpleFunctions(
       Varchar>({prefix + "at_timezone"}, {}, true, defaultOwner);
 
   registerFunction<
+      AtTimezoneFromTimestampFunction,
+      TimestampWithTimezone,
+      Timestamp,
+      Varchar>({prefix + "at_timezone"}, {}, true, defaultOwner);
+
+  registerFunction<
       AtTimezoneTimeWithTimezoneFunction,
       TimeWithTimezone,
       TimeWithTimezone,
