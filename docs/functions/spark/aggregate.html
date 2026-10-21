@@ -45,6 +45,55 @@
 <section id="general-aggregate-functions">
 <h2>General Aggregate Functions<a class="headerlink" href="#general-aggregate-functions" title="Link to this heading">¶</a></h2>
 <dl class="spark function">
+<dt class="sig sig-object spark" id="approx_percentile">
+<span class="sig-name descname"><span class="pre">approx_percentile</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">percentage</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">x]</span></span></span><a class="headerlink" href="#approx_percentile" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the approximate percentile of <code class="docutils literal notranslate"><span class="pre">x</span></code> at the given <code class="docutils literal notranslate"><span class="pre">percentage</span></code>, using the
+default accuracy of 10000. <code class="docutils literal notranslate"><span class="pre">percentage</span></code> must be a constant between 0 and 1, inclusive,
+and must not be NULL. A <code class="docutils literal notranslate"><span class="pre">percentage</span></code> of 0 returns the minimum value and 1 returns the
+maximum value. Supported types for <code class="docutils literal notranslate"><span class="pre">x</span></code> are TINYINT, SMALLINT, INTEGER, BIGINT, REAL and
+DOUBLE. NULL values of <code class="docutils literal notranslate"><span class="pre">x</span></code> are ignored. Returns NULL if there are no non-NULL input
+values.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">approx_percentile</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="mf">0.5</span><span class="p">)</span> <span class="n">FROM</span> <span class="p">(</span><span class="n">VALUES</span> <span class="p">(</span><span class="mi">1</span><span class="p">),</span> <span class="p">(</span><span class="mi">2</span><span class="p">),</span> <span class="p">(</span><span class="mi">3</span><span class="p">),</span> <span class="p">(</span><span class="mi">4</span><span class="p">),</span> <span class="p">(</span><span class="mi">5</span><span class="p">))</span> <span class="n">AS</span> <span class="n">t</span><span class="p">(</span><span class="n">x</span><span class="p">);</span> <span class="o">--</span> <span class="mi">3</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="spark function">
+<dt class="sig sig-object spark">
+<span class="sig-name descname"><span class="pre">approx_percentile</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">percentage</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">accuracy</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">x]</span></span></span></dt>
+<dd><blockquote>
+<div><p>Like <code class="docutils literal notranslate"><span class="pre">approx_percentile(x,</span> <span class="pre">percentage)</span></code> with an explicit <code class="docutils literal notranslate"><span class="pre">accuracy</span></code>. <code class="docutils literal notranslate"><span class="pre">accuracy</span></code> is a
+constant positive INTEGER and must not be NULL. 1/<code class="docutils literal notranslate"><span class="pre">accuracy</span></code> is the relative error of
+the approximation, so a larger value gives a more precise result at the cost of more
+memory. Spark’s default is 10000.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">approx_percentile</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="mf">0.5</span><span class="p">,</span> <span class="mi">100</span><span class="p">)</span> <span class="n">FROM</span> <span class="p">(</span><span class="n">VALUES</span> <span class="p">(</span><span class="mi">1</span><span class="p">),</span> <span class="p">(</span><span class="mi">2</span><span class="p">),</span> <span class="p">(</span><span class="mi">3</span><span class="p">),</span> <span class="p">(</span><span class="mi">4</span><span class="p">),</span> <span class="p">(</span><span class="mi">5</span><span class="p">))</span> <span class="n">AS</span> <span class="n">t</span><span class="p">(</span><span class="n">x</span><span class="p">);</span> <span class="o">--</span> <span class="mi">3</span>
+</pre></div>
+</div>
+</div></blockquote>
+</dd></dl>
+
+<dl class="spark function">
+<dt class="sig sig-object spark">
+<span class="sig-name descname"><span class="pre">approx_percentile</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="pre">x,</span> <span class="pre">percentages)</span> <span class="pre">-&gt;</span> <span class="pre">array([same</span> <span class="pre">as</span> <span class="pre">x]</span></em><span class="sig-paren">)</span></dt>
+<dd><blockquote>
+<div><p>Returns an array holding the approximate percentile of <code class="docutils literal notranslate"><span class="pre">x</span></code> for each element of
+<code class="docutils literal notranslate"><span class="pre">percentages</span></code>, in the same order. <code class="docutils literal notranslate"><span class="pre">percentages</span></code> must be a constant, non-empty array
+whose elements are between 0 and 1, inclusive, and not NULL.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">approx_percentile</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">array</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mf">0.5</span><span class="p">,</span> <span class="mi">1</span><span class="p">))</span> <span class="n">FROM</span> <span class="p">(</span><span class="n">VALUES</span> <span class="p">(</span><span class="mi">1</span><span class="p">),</span> <span class="p">(</span><span class="mi">2</span><span class="p">),</span> <span class="p">(</span><span class="mi">3</span><span class="p">),</span> <span class="p">(</span><span class="mi">4</span><span class="p">),</span> <span class="p">(</span><span class="mi">5</span><span class="p">))</span> <span class="n">AS</span> <span class="n">t</span><span class="p">(</span><span class="n">x</span><span class="p">);</span> <span class="o">--</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">5</span><span class="p">]</span>
+</pre></div>
+</div>
+</div></blockquote>
+</dd></dl>
+
+<dl class="spark function">
+<dt class="sig sig-object spark">
+<span class="sig-name descname"><span class="pre">approx_percentile</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="pre">x,</span> <span class="pre">percentages,</span> <span class="pre">accuracy)</span> <span class="pre">-&gt;</span> <span class="pre">array([same</span> <span class="pre">as</span> <span class="pre">x]</span></em><span class="sig-paren">)</span></dt>
+<dd><blockquote>
+<div><p>Like <code class="docutils literal notranslate"><span class="pre">approx_percentile(x,</span> <span class="pre">percentages)</span></code> with an explicit <code class="docutils literal notranslate"><span class="pre">accuracy</span></code>.</p>
+</div></blockquote>
+</dd></dl>
+
+<dl class="spark function">
 <dt class="sig sig-object spark" id="avg">
 <span class="sig-name descname"><span class="pre">avg</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">double</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">decimal</span></span></span><a class="headerlink" href="#avg" title="Link to this definition">¶</a></dt>
 <dd><p>Returns the average (arithmetic mean) of all non-null input values.
@@ -370,6 +419,7 @@ When the count of <cite>x</cite> is greater than or equal to 2, a non-null outpu
     <ul>
 <li><a class="reference internal" href="#">Aggregate Functions</a><ul>
 <li><a class="reference internal" href="#general-aggregate-functions">General Aggregate Functions</a><ul>
+<li><a class="reference internal" href="#approx_percentile"><code class="docutils literal notranslate"><span class="pre">approx_percentile()</span></code></a></li>
 <li><a class="reference internal" href="#avg"><code class="docutils literal notranslate"><span class="pre">avg()</span></code></a></li>
 <li><a class="reference internal" href="#bit_xor"><code class="docutils literal notranslate"><span class="pre">bit_xor()</span></code></a></li>
 <li><a class="reference internal" href="#bitmap_construct_agg"><code class="docutils literal notranslate"><span class="pre">bitmap_construct_agg()</span></code></a></li>
