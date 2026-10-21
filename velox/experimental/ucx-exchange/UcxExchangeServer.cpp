@@ -251,6 +251,11 @@ void UcxExchangeServer::close() {
   communicator_->unregister(getSelfPtr());
 }
 
+void UcxExchangeServer::onEndpointClosed(std::string_view reason) {
+  VLOG(1) << toString() << " endpoint closed: " << reason;
+  close();
+}
+
 std::string UcxExchangeServer::toString() {
   std::stringstream out;
   out << "[ExSrv " << partitionKey_.toString() << " - " << sequenceNumber_

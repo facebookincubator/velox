@@ -22,6 +22,7 @@
 #include <cudf/structs/structs_column_view.hpp>
 #include <cudf/table/table.hpp>
 #include <cudf/types.hpp>
+#include <fmt/format.h>
 #include <folly/Executor.h>
 #include <folly/ScopeGuard.h>
 #include <folly/synchronization/EventCount.h>
@@ -1133,6 +1134,112 @@ uint64_t drainToEnd(
 }
 
 } // namespace
+
+// A producer whose connection closes before it sent all its output must fail
+// its consumer. The close reaches the consumer through
+// EndpointRef::closeAndDrainCommunicators(), as when the producer's worker
+// dies; treating it as a clean end of stream would drop the rest of the rows.
+TEST_F(UcxExchangeFocusedTest, endpointClosedMidStreamFailsConsumer) {
+  const std::string taskPrefix = getUniqueTaskPrefix();
+  const std::string srcTaskId = taskPrefix + "endpointClosedSrc";
+  const std::string sinkTaskId = taskPrefix + "endpointClosedSink";
+  const int partitionId = 0;
+
+  auto rowType = UcxTestData::kTestRowType;
+  auto srcTask = createSourceTask(srcTaskId, pool_, rowType);
+  queueManager()->initializeTask(
+      srcTask,
+      core::PartitionedOutputNode::Kind::kPartitioned,
+      /*numDestinations=*/1,
+      /*numDrivers=*/1);
+  // Removes the producer even when an assertion ends the case early: the
+  // process-wide queue manager would otherwise keep its Task until static
+  // destruction, after the memory manager it allocates from is gone.
+  auto removeProducer = folly::makeGuard([&]() {
+    srcTask->requestAbort().wait();
+    queueManager()->removeTask(srcTaskId);
+  });
+  // One page, and no noMoreData(): the producer is still running.
+  queueManager()->enqueue(
+      srcTaskId, partitionId, makePackedColumns(100), /*numRows=*/100);
+
+  core::PlanNodeId exchangeNodeId;
+  auto sinkTask =
+      createExchangeTask(sinkTaskId, rowType, partitionId, exchangeNodeId);
+  auto exchangeClient = std::make_shared<UcxExchangeClient>(
+      sinkTask->taskId(), sinkTask->destination(), /*numberOfConsumers=*/1);
+  auto split = remoteSplit(srcTaskId, partitionId);
+  exchangeClient->addRemoteTaskId(
+      std::dynamic_pointer_cast<exec::RemoteConnectorSplit>(
+          split.connectorSplit)
+          ->taskId);
+  exchangeClient->noMoreRemoteTasks();
+
+  auto driverCtx = std::make_shared<DriverCtx>(
+      sinkTask,
+      /*driverId=*/0,
+      /*pipelineId=*/0,
+      kUngroupedGroupId,
+      /*partitionId=*/0);
+  UcxExchange exchange(
+      0, driverCtx.get(), sinkTask->planFragment().planNode, exchangeClient);
+
+  EXPECT_EQ(
+      drainToEnd(exchange, /*maxRows=*/100, std::chrono::seconds(30)), 100);
+
+  // Close the consumer's connection to the producer the way a dead peer does.
+  auto communicator = Communicator::getInstance();
+  auto endpoint = communicator->assocEndpointRef(
+      nullptr, HostPort{"127.0.0.1", communicator->getListenerPort()});
+  ASSERT_NE(endpoint, nullptr);
+  communicator->deferEndpointCleanup(endpoint);
+
+  VELOX_ASSERT_THROW(
+      drainToEnd(
+          exchange,
+          /*maxRows=*/std::numeric_limits<uint64_t>::max(),
+          std::chrono::seconds(30)),
+      "Connection to producer closed before it sent all its data");
+  exchange.close();
+}
+
+// A producer the consumer cannot connect to must fail the consumer, rather than
+// end its stream as if the producer had sent nothing. The host name below is
+// rejected by getaddrinfo locally, without a DNS round trip, so endpoint
+// creation fails at once.
+TEST_F(UcxExchangeFocusedTest, unresolvableProducerHostFailsConsumer) {
+  const std::string taskPrefix = getUniqueTaskPrefix();
+  const std::string sinkTaskId = taskPrefix + "unreachableSink";
+
+  core::PlanNodeId exchangeNodeId;
+  auto sinkTask = createExchangeTask(
+      sinkTaskId, UcxTestData::kTestRowType, /*partitionId=*/0, exchangeNodeId);
+  auto exchangeClient = std::make_shared<UcxExchangeClient>(
+      sinkTask->taskId(), sinkTask->destination(), /*numberOfConsumers=*/1);
+  const auto url = fmt::format(
+      "http://bad_host!:{}/v1/task/{}/results/0",
+      UcxExchangeTestEnvironment::splitUrlPort(),
+      taskPrefix + "unreachableProducer");
+  exchangeClient->addRemoteTaskId(url);
+  exchangeClient->noMoreRemoteTasks();
+
+  auto driverCtx = std::make_shared<DriverCtx>(
+      sinkTask,
+      /*driverId=*/0,
+      /*pipelineId=*/0,
+      kUngroupedGroupId,
+      /*partitionId=*/0);
+  UcxExchange exchange(
+      0, driverCtx.get(), sinkTask->planFragment().planNode, exchangeClient);
+
+  VELOX_ASSERT_THROW(
+      drainToEnd(
+          exchange,
+          /*maxRows=*/std::numeric_limits<uint64_t>::max(),
+          std::chrono::seconds(30)),
+      "Failed to connect to producer");
+  exchange.close();
+}
 
 // An intra-node consumer reads a page from IntraNodeTransferRegistry some time
 // after its server took the page from the producer's queue. A producer removed

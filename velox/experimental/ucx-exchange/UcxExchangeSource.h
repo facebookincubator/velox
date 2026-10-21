@@ -103,6 +103,11 @@ class UcxExchangeSource
   /// once it received enough data.
   void close();
 
+  /// @brief Fails this source unless its producer already sent the end of its
+  /// stream: the rest of the producer's data can no longer arrive. A source
+  /// that saw the end closes cleanly.
+  void onEndpointClosed(std::string_view reason) override;
+
   /// @brief Marks this source as registered with the exchange queue.
   /// Must be called after addSourceLocked() increments numSources_ for this
   /// source. Without this, deliverEndMarker() will not enqueue the nullptr
@@ -275,7 +280,7 @@ class UcxExchangeSource
   const std::shared_ptr<UcxExchangeQueue> queue_{nullptr};
   std::atomic<bool> closed_{false};
   // Set when the producer's end of stream is received. Read and written only
-  // on the Communicator thread.
+  // on the Communicator thread, which onEndpointClosed() relies on.
   bool atEnd_{false};
 
   /// @brief Guards exactly-once delivery of the nullptr end-of-stream marker.

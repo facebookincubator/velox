@@ -114,22 +114,37 @@ void UcxExchangeSource::process() {
 
   switch (state_) {
     case ReceiverState::Created: {
-      // Get the endpoint.
+      // Get the endpoint. Creating it throws when the address does not
+      // resolve; the exception must not leave the Communicator thread.
       HostPort hp{host_, port_};
       std::shared_ptr<UcxExchangeSource> selfPtr = getSelfPtr();
-      auto epRef = communicator_->assocEndpointRef(selfPtr, hp);
-      if (epRef) {
-        setEndpoint(epRef);
-        setStateIf(
-            ReceiverState::Created, ReceiverState::WaitingForHandshakeComplete);
-        sendHandshake();
-      } else {
-        // connection failed.
-        VLOG(0) << toString() << " Failed to connect to " << host_ << ":"
-                << std::to_string(port_);
-        deliverEndMarker();
-        setState(ReceiverState::Done);
+      std::shared_ptr<EndpointRef> epRef;
+      try {
+        epRef = communicator_->assocEndpointRef(selfPtr, hp);
+      } catch (const std::exception& e) {
+        failSource(
+            fmt::format(
+                "Failed to connect to producer, host {}:{}, task {}: {}",
+                host_,
+                port_,
+                partitionKey_.toString(),
+                e.what()));
+        break;
       }
+      if (epRef == nullptr) {
+        failSource(
+            fmt::format(
+                "Failed to connect to producer, host {}:{}, task {}: {}",
+                host_,
+                port_,
+                partitionKey_.toString(),
+                "no endpoint"));
+        break;
+      }
+      setEndpoint(epRef);
+      setStateIf(
+          ReceiverState::Created, ReceiverState::WaitingForHandshakeComplete);
+      sendHandshake();
       communicator_->addToWorkQueue(getSelfPtr());
     } break;
     case ReceiverState::WaitingForHandshakeComplete:
@@ -248,6 +263,23 @@ void UcxExchangeSource::close() {
   // Let the Communicator progress thread do the actual clean-up.
   setState(ReceiverState::Done);
   communicator_->addToWorkQueue(getSelfPtr());
+}
+
+void UcxExchangeSource::onEndpointClosed(std::string_view reason) {
+  if (closed_.load(std::memory_order_acquire)) {
+    return;
+  }
+  if (atEnd_) {
+    close();
+    return;
+  }
+  failSource(
+      fmt::format(
+          "Connection to producer closed before it sent all its data, host {}:{}, task {}: {}",
+          host_,
+          port_,
+          partitionKey_.toString(),
+          reason));
 }
 
 void UcxExchangeSource::resumeFromBackpressure() {

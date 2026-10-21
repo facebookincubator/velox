@@ -66,7 +66,12 @@ class UcxExchangeServer
 
   void process() override;
 
-  void close() override;
+  /// @brief Stops serving this partition and releases its UCXX requests.
+  /// Idempotent.
+  void close();
+
+  /// @brief Closes the server: the consumer it served is gone.
+  void onEndpointClosed(std::string_view reason) override;
 
   std::string toString();
 
