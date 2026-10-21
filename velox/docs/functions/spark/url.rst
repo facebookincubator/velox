@@ -52,8 +52,10 @@ Extraction Functions
 
     Extracts a part from ``url``. ``part`` must be one of (case-sensitive):
     ``PROTOCOL``, ``HOST``, ``PATH``, ``REF``, ``AUTHORITY``, ``FILE``,
-    ``USERINFO``, ``QUERY``. Returns ``NULL`` if ``url`` is invalid or the
-    requested part is absent.
+    ``USERINFO``, ``QUERY``. Returns ``NULL`` if the requested part is
+    absent. An invalid ``url`` returns ``NULL`` unless ANSI mode is enabled
+    (``spark.sql.ansi.enabled``), in which case the query fails with an
+    error.
 
     .. code-block::
 
@@ -64,7 +66,9 @@ Extraction Functions
 
     Extracts the value of ``key`` from the query string of ``url``. Only
     valid when ``part`` is ``'QUERY'``. ``key`` is interpreted as a regular
-    expression fragment.
+    expression fragment. As with the two-argument form, an invalid ``url``
+    returns ``NULL`` unless ANSI mode is enabled, in which case the query
+    fails with an error.
 
     Note: ``key`` is compiled with RE2. For non-constant keys, each distinct
     pattern is compiled at most once per function instance, and the number of
