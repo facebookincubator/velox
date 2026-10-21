@@ -19,6 +19,7 @@
 #include <folly/coro/FutureUtil.h>
 #include <folly/executors/InlineExecutor.h>
 #include <folly/futures/Future.h>
+#include <folly/lang/Bits.h>
 #include <folly/stop_watch.h>
 
 #include <folly/ScopeGuard.h>
@@ -651,7 +652,8 @@ void addToHashTable(const RowVector& batch, BaseHashTable& table) {
   activeRows.applyToSelected([&](vector_size_t row) {
     char* newRow = rows->newRow();
     if (nextOffset > 0) {
-      *reinterpret_cast<char**>(newRow + nextOffset) = nullptr;
+      folly::storeUnaligned<char*>(
+          newRow + nextOffset, static_cast<char*>(nullptr));
     }
     for (auto i = 0; i < numKeys; ++i) {
       rows->store(hashers[i]->decodedVector(), row, newRow, i);
