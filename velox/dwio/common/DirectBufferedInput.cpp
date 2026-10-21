@@ -224,7 +224,7 @@ void DirectBufferedInput::readRegions(
     readRegion(group, prefetch);
     group.clear();
   }
-  if (prefetch) {
+  if (prefetch && executor_) {
     for (auto& load : coalescedLoads_) {
       prefetchLoad(load);
     }
