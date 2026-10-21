@@ -17,6 +17,7 @@
 #include "velox/connectors/hive/iceberg/IcebergMergeSink.h"
 
 #include "velox/common/base/Exceptions.h"
+#include "velox/vector/DecodedVector.h"
 #include "velox/vector/FlatVector.h"
 
 namespace facebook::velox::connector::hive::iceberg {
@@ -152,13 +153,15 @@ IcebergMergeSink::IcebergMergeSink(
     const IcebergConfigPtr& icebergConfig,
     std::vector<column_index_t> targetColumnChannels,
     column_index_t operationChannel,
-    column_index_t rowIdChannel)
+    column_index_t rowIdChannel,
+    column_index_t insertFromUpdateChannel)
     : inputType_(std::move(inputType)),
       insertTableHandle_(std::move(insertTableHandle)),
       connectorQueryCtx_(connectorQueryCtx),
       targetColumnChannels_(std::move(targetColumnChannels)),
       operationChannel_(operationChannel),
       rowIdChannel_(rowIdChannel),
+      insertFromUpdateChannel_(insertFromUpdateChannel),
       dataInputType_(projectDataInputType(
           inputType_,
           targetColumnChannels_,
@@ -176,9 +179,16 @@ IcebergMergeSink::IcebergMergeSink(
       operationChannel_, inputType_->size(), "operationChannel out of range");
   VELOX_USER_CHECK_LT(
       rowIdChannel_, inputType_->size(), "rowIdChannel out of range");
+  VELOX_USER_CHECK_LT(
+      insertFromUpdateChannel_,
+      inputType_->size(),
+      "insertFromUpdateChannel out of range");
   VELOX_USER_CHECK(
       inputType_->childAt(operationChannel_)->isTinyint(),
       "operation column must be TINYINT");
+  VELOX_USER_CHECK(
+      inputType_->childAt(insertFromUpdateChannel_)->isTinyint(),
+      "insert_from_update column must be TINYINT");
   VELOX_USER_CHECK(
       inputType_->childAt(rowIdChannel_)->isRow(),
       "row_id column must be a ROW type");
@@ -320,6 +330,18 @@ void IcebergMergeSink::appendData(RowVectorPtr input) {
     deletionVectorSink_->appendData(
         makeDeleteBatch(input, deleteIndices, numDeletes));
   }
+}
+
+vector_size_t IcebergMergeSink::numChangedRows(const RowVector& input) const {
+  DecodedVector insertFromUpdate(*input.childAt(insertFromUpdateChannel_));
+  vector_size_t numChanged{0};
+  for (vector_size_t i = 0; i < input.size(); ++i) {
+    if (insertFromUpdate.isNullAt(i) ||
+        insertFromUpdate.valueAt<int8_t>(i) == 0) {
+      ++numChanged;
+    }
+  }
+  return numChanged;
 }
 
 bool IcebergMergeSink::finish() {
