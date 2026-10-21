@@ -25,18 +25,16 @@
 
 namespace facebook::velox::connector::hive {
 
-/// Mutable scan preparation owned by a FileDataSource. Serial splits reuse
-/// this state and its ScanSpec, rebuilding the tree only when their physical
-/// column requirements change. Different data sources own separate states.
+/// Scan state owned by a FileDataSource and reused across its splits.
+/// FileDataSource::setFromDataSource() transfers it with the preloaded reader.
 ///
-/// A preloaded reader and its state are transferred together so borrowed
-/// validation filters keep their address after the original source is gone.
-/// The reader must be released before its state. This object does not own the
-/// reader, column handles, query context, or remaining-filter ExprSet.
+/// The state must outlive readers borrowing its filters. Transferring it must
+/// preserve the address of the filter map.
 struct FileScanState {
-  /// Original and extracted subfield predicates, also used for split
-  /// validation. Dynamic filters are installed on scanSpec, not in this map.
-  /// Published filter payloads are shared and must not be mutated in place.
+  /// Filters from the table handle and extracted from the remaining expression,
+  /// also used for split validation. Filter objects can be shared with the table
+  /// handle and other data sources and must not be modified in place.
+  /// Dynamic filters are added to scanSpec, not to this map.
   common::SubfieldFilters filters;
 
   /// Mutable column access tree, including file constants, filters, and
