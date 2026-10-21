@@ -16,6 +16,7 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -48,6 +49,29 @@ enum class CharsetType : uint8_t {
 /// Resolves a charset name using Spark's configured charset scope.
 CharsetType resolveCharset(const StringView& charset, bool legacyJavaCharsets);
 
+/// Owns the converter and its callback configuration.
+class LegacyCharsetEncoderState;
+
+/// Reuses an ICU converter and its Java-compatible callback configuration.
+class LegacyCharsetEncoder {
+ public:
+  /// Configures the converter without throwing charset errors from
+  /// initialize().
+  LegacyCharsetEncoder(const StringView& charset, bool replaceUnmappable);
+
+  ~LegacyCharsetEncoder();
+
+  /// Resets conversion state and encodes one row, reporting setup errors here.
+  Status encode(
+      exec::StringWriter& result,
+      const StringView& input,
+      const StringView& charset);
+
+ private:
+  /// Owns the converter and the stable storage used by its callback.
+  std::unique_ptr<LegacyCharsetEncoderState> state_;
+};
+
 /// Encodes input using the selected charset and Spark coding-error behavior.
 Status encode(
     exec::StringWriter& result,
@@ -74,6 +98,10 @@ struct EncodeFunction {
     if (charset != nullptr) {
       charsetType_ = detail::resolveCharset(*charset, legacyJavaCharsets_);
       isConstantCharset_ = true;
+      if (charsetType_ == detail::CharsetType::kLegacy) {
+        legacyEncoder_ = std::make_unique<detail::LegacyCharsetEncoder>(
+            *charset, legacyCodingErrorAction_);
+      }
     }
   }
 
@@ -89,11 +117,17 @@ struct EncodeFunction {
           "encode: unsupported charset '{}'",
           std::string(charset.data(), charset.size()));
     }
+    if (legacyEncoder_ != nullptr) {
+      return legacyEncoder_->encode(result, input, charset);
+    }
     return detail::encode(
         result, input, charset, type, legacyCodingErrorAction_);
   }
 
  private:
+  // Retains converter setup for a constant legacy charset across rows.
+  std::unique_ptr<detail::LegacyCharsetEncoder> legacyEncoder_;
+
   // Stores the charset resolved from a constant argument.
   detail::CharsetType charsetType_{detail::CharsetType::kUnsupported};
 
