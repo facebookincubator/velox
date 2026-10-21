@@ -155,6 +155,17 @@ class HashJoinBridge : public JoinBridge {
     unclaimedRowContainerId_.store(0);
   }
 
+  /// Records that a HashProbe closed before consuming all probe input. Build
+  /// rows without a recorded match cannot be treated as unmatched afterwards.
+  void setProbeFinishedEarly() {
+    probeFinishedEarly_.store(true);
+  }
+
+  /// Returns true if any HashProbe closed before consuming all probe input.
+  bool probeFinishedEarly() const {
+    return probeFinishedEarly_.load();
+  }
+
  private:
   void appendSpilledHashTablePartitionsLocked(
       SpillPartitionSet&& spillPartitionSet);
@@ -201,6 +212,10 @@ class HashJoinBridge : public JoinBridge {
   // in parallel, drivers call getAndIncrementClaimedRowContainerId() to ensure
   // the row containers they process do not overlap with each other.
   std::atomic_int unclaimedRowContainerId_{0};
+
+  // Records whether any HashProbe closed before consuming all probe input. It
+  // remains true across all spill restoration rounds once set.
+  std::atomic_bool probeFinishedEarly_{false};
 
   friend test::HashJoinBridgeTestHelper;
 };

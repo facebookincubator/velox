@@ -112,7 +112,8 @@ TEST_F(QDigestAggTest, metadata) {
       core::AggregationNode::Step::kSingle,
       {BIGINT()},
       QDIGEST(BIGINT()),
-      config);
+      config,
+      /*constantInputs=*/{});
   EXPECT_FALSE(function->isFixedSize());
   EXPECT_FALSE(function->accumulatorUsesExternalMemory());
   EXPECT_EQ(function->accumulatorAlignmentSize(), 8);

@@ -17,12 +17,15 @@
 #include <optional>
 
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/testutil/RandomSeed.h"
 #include "velox/expression/Expr.h"
 #include "velox/functions/lib/SubscriptUtil.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/vector/BaseVector.h"
+#include "velox/vector/FlatMapVector.h"
 #include "velox/vector/SelectivityVector.h"
+#include "velox/vector/fuzzer/VectorFuzzer.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::functions::test;
@@ -33,6 +36,25 @@ namespace {
 class ElementAtTest : public FunctionBaseTest {
  protected:
   static const vector_size_t kVectorSize{1'000};
+
+  // Calls element_at on `args` directly, so a wrapped map reaches it as is
+  // instead of being peeled, and rows with a null map are not removed.
+  VectorPtr applyElementAt(std::vector<VectorPtr> args) {
+    core::QueryConfig config({});
+    auto function = exec::getVectorFunction(
+        "element_at",
+        {args[0]->type(), args[1]->type()},
+        {nullptr, args[1]->isConstantEncoding() ? args[1] : nullptr},
+        config);
+    exec::ExprSet exprSet({}, &execCtx_);
+    auto inputRows = makeRowVector({});
+    exec::EvalCtx evalCtx(&execCtx_, &exprSet, inputRows.get());
+    SelectivityVector rows(args[0]->size());
+    VectorPtr result;
+    function->apply(
+        rows, args, args[0]->type()->asMap().valueType(), evalCtx, result);
+    return result;
+  }
 
   template <typename T>
   void testElementAt(
@@ -325,6 +347,198 @@ TEST_F(ElementAtTest, flatMapTest) {
                    4, 3, makeFlatVector<int32_t>({1, 2, 3, 4}))})));
 }
 
+TEST_F(ElementAtTest, flatMapConstantKeyDictionary) {
+  auto base = makeFlatMapVectorFromJson<int64_t, int32_t>({
+      "{1: 10, 2: 20}",
+      "{2: 21}",
+      "{1: 12}",
+      "{1: 13, 2: 23}",
+  });
+
+  // Reversed rows, with a null added on row 0.
+  auto nulls = allocateNulls(4, pool());
+  bits::setNull(nulls->asMutable<uint64_t>(), 0);
+  test::assertEqualVectors(
+      makeNullableFlatVector<int32_t>({std::nullopt, 12, std::nullopt, 10}),
+      applyElementAt(
+          {BaseVector::wrapInDictionary(
+               nulls, makeIndicesInReverse(4), 4, base),
+           makeConstant<int64_t>(1, 4)}));
+}
+
+TEST_F(ElementAtTest, flatMapPerRowKeyNullMaps) {
+  // Row 3 is a null map, although its in-map bits for both keys are set.
+  auto base = makeFlatMapVectorFromJson<int64_t, int32_t>({
+      "{1: 10, 2: 20}",
+      "{2: 21}",
+      "{1: 12}",
+      "{1: 13, 2: 23}",
+  });
+  base->setNull(3, true);
+  test::assertEqualVectors(
+      makeNullableFlatVector<int32_t>(
+          {20, std::nullopt, std::nullopt, std::nullopt}),
+      applyElementAt({base, makeFlatVector<int64_t>({2, 1, 2, 1})}));
+
+  // Reversed rows, with a null added on row 0.
+  auto nulls = allocateNulls(4, pool());
+  bits::setNull(nulls->asMutable<uint64_t>(), 0);
+  test::assertEqualVectors(
+      makeNullableFlatVector<int32_t>({std::nullopt, 12, 21, 20}),
+      applyElementAt(
+          {BaseVector::wrapInDictionary(
+               nulls, makeIndicesInReverse(4), 4, base),
+           makeFlatVector<int64_t>({1, 1, 2, 2})}));
+}
+
+TEST_F(ElementAtTest, flatMapPerRowKeyDictionaryValues) {
+  // The values of key 1 are dictionary-encoded: rows 0 to 3 read 103 to 100.
+  auto inMap = AlignedBuffer::allocate<bool>(4, pool(), true);
+  bits::clearBit(inMap->asMutable<uint64_t>(), 2);
+  auto flatMap = std::make_shared<FlatMapVector>(
+      pool(),
+      MAP(BIGINT(), BIGINT()),
+      nullptr,
+      4,
+      makeFlatVector<int64_t>({1, 2}),
+      std::vector<VectorPtr>{
+          wrapInDictionary(
+              makeIndicesInReverse(4),
+              makeFlatVector<int64_t>({100, 101, 102, 103})),
+          makeFlatVector<int64_t>({20, 21, 22, 23})},
+      std::vector<BufferPtr>{inMap, nullptr});
+  test::assertEqualVectors(
+      makeNullableFlatVector<int64_t>({103, 21, std::nullopt, 100}),
+      evaluate(
+          "element_at(c0, c1)",
+          makeRowVector({flatMap, makeFlatVector<int64_t>({1, 2, 1, 1})})));
+}
+
+TEST_F(ElementAtTest, flatMapPerRowKeyNullKeys) {
+  // Rows with a null key are not passed to the function, which then sees only
+  // some of the rows.
+  auto flatMap = makeFlatMapVectorFromJson<int64_t, int32_t>({
+      "{1: 10, 2: 20}",
+      "{1: 11, 2: 21}",
+      "{1: 12, 2: 22}",
+      "{1: 13, 2: 23}",
+  });
+  test::assertEqualVectors(
+      makeNullableFlatVector<int32_t>({10, std::nullopt, 22, std::nullopt}),
+      evaluate(
+          "element_at(c0, c1)",
+          makeRowVector(
+              {flatMap,
+               makeNullableFlatVector<int64_t>(
+                   {1, std::nullopt, 2, std::nullopt})})));
+}
+
+TEST_F(ElementAtTest, flatMapKeyNotInMap) {
+  auto input = makeFlatMapVectorFromJson<int64_t, int32_t>({
+      "{1: 10, 2: null}",
+      "{1: 20}",
+      "{1: 30, 2: 300}",
+  });
+  // Row 1 does not contain key 2, but give it a non-null value for it anyway.
+  input->mapValuesAt(input->getKeyChannel(int64_t{2}).value())
+      ->asFlatVector<int32_t>()
+      ->set(1, 200);
+  // Key 1 is in every row, which can also be expressed with no in-map buffer.
+  input->inMapsAt(input->getKeyChannel(int64_t{1}).value()) = nullptr;
+
+  test::assertEqualVectors(
+      makeFlatVector<int32_t>({10, 20, 30}),
+      evaluate("element_at(c0, 1)", makeRowVector({input})));
+  test::assertEqualVectors(
+      makeNullableFlatVector<int32_t>({std::nullopt, std::nullopt, 300}),
+      evaluate("element_at(c0, 2)", makeRowVector({input})));
+  test::assertEqualVectors(
+      makeNullableFlatVector<int32_t>({std::nullopt, 300}),
+      evaluate("element_at(c0, 2)", makeRowVector({input->slice(1, 2)})));
+
+  // Dictionary-wrapped map.
+  test::assertEqualVectors(
+      makeNullableFlatVector<int32_t>({300, std::nullopt, std::nullopt}),
+      evaluate(
+          "element_at(c0, 2)",
+          makeRowVector({wrapInDictionary(makeIndices({2, 1, 0}), input)})));
+
+  // Key that varies per row.
+  test::assertEqualVectors(
+      makeNullableFlatVector<int32_t>({std::nullopt, std::nullopt, 30}),
+      evaluate(
+          "element_at(c0, c1)",
+          makeRowVector({input, makeFlatVector<int64_t>({2, 2, 1})})));
+
+  // Map values of key 2 without nulls, and dictionary-encoded.
+  const auto channel = input->getKeyChannel(int64_t{2}).value();
+  for (const auto& values : std::vector<VectorPtr>{
+           makeFlatVector<int32_t>({100, 200, 300}),
+           wrapInDictionary(
+               makeIndices({2, 1, 0}),
+               makeFlatVector<int32_t>({300, 200, 100}))}) {
+    input->mapValuesAt(channel) = values;
+    auto result = evaluate("element_at(c0, 2)", makeRowVector({input}));
+    test::assertEqualVectors(
+        makeNullableFlatVector<int32_t>({100, std::nullopt, 300}), result);
+    EXPECT_EQ(result->encoding(), values->encoding());
+  }
+}
+
+TEST_F(ElementAtTest, flatMapPerRowKey) {
+  auto varcharKeys = makeFlatMapVectorFromJson<std::string, std::string>({
+      R"({"a": "a0", "b": "b0"})",
+      R"({"a": "a1", "c": "c1"})",
+      R"({"b": "b2"})",
+      R"({"a": "a3", "b": "b3", "c": "c3"})",
+      R"({"a": "a4"})",
+  });
+  test::assertEqualVectors(
+      makeNullableFlatVector<std::string>(
+          {"b0", "a1", std::nullopt, "c3", std::nullopt}),
+      evaluate(
+          "element_at(c0, c1)",
+          makeRowVector(
+              {varcharKeys,
+               makeFlatVector<std::string>({"b", "a", "a", "c", "d"})})));
+
+  // Rows of the same key are copied together.
+  auto integerKeys = makeFlatMapVectorFromJson<int32_t, int64_t>({
+      "{1:10, 2:20}",
+      "{1:11, 2:21}",
+      "{1:12}",
+      "{1:13, 2:23}",
+      "{1:14, 2:24}",
+  });
+  test::assertEqualVectors(
+      makeNullableFlatVector<int64_t>({20, 11, std::nullopt, 23, 14}),
+      evaluate(
+          "element_at(c0, c1)",
+          makeRowVector(
+              {integerKeys, makeFlatVector<int32_t>({2, 1, 2, 2, 1})})));
+
+  // Keys with custom comparison: same instant in different time zones.
+  auto timestampKeys = std::make_shared<FlatMapVector>(
+      pool(),
+      MAP(TIMESTAMP_WITH_TIME_ZONE(), BIGINT()),
+      nullptr,
+      2,
+      makeFlatVector<int64_t>(
+          {pack(1000, 0), pack(2000, 0)}, TIMESTAMP_WITH_TIME_ZONE()),
+      std::vector<VectorPtr>{
+          makeFlatVector<int64_t>({10, 11}), makeFlatVector<int64_t>({20, 21})},
+      std::vector<BufferPtr>{});
+  test::assertEqualVectors(
+      makeNullableFlatVector<int64_t>({20, std::nullopt}),
+      evaluate(
+          "element_at(c0, c1)",
+          makeRowVector(
+              {timestampKeys,
+               makeFlatVector<int64_t>(
+                   {pack(2000, 5), pack(3000, 0)},
+                   TIMESTAMP_WITH_TIME_ZONE())})));
+}
+
 TEST_F(ElementAtTest, flatMapTestDictionaryWrapped) {
   vector_size_t size = 4, halved = 2;
 
@@ -472,6 +686,94 @@ TEST_F(ElementAtTest, flatMapTestConstantWrapped) {
           makeRowVector(
               {BaseVector::wrapInConstant(2, 0, base),
                makeFlatVector<int32_t>({1, 2})})));
+}
+
+// Evaluates 'expression' over flat maps and over the same maps as MapVectors,
+// and checks that both give the same result or both fail.
+TEST_F(ElementAtTest, fuzzFlatMap) {
+  VectorFuzzer::Options options;
+  options.allowFlatMapVector = true;
+  options.flatMapRatio = 1.0;
+  options.nullRatio = 0.1;
+  const auto seed = common::testutil::getRandomSeed(42);
+  VectorFuzzer fuzzer(options, pool(), seed);
+  fuzzer::FuzzerGenerator rng(seed);
+
+  auto evaluateOrError =
+      [&](const std::string& expression,
+          const RowVectorPtr& data) -> std::pair<VectorPtr, std::string> {
+    try {
+      return {evaluate(expression, data), ""};
+    } catch (const VeloxException& e) {
+      return {nullptr, e.message()};
+    }
+  };
+
+  const std::vector<TypePtr> keyTypes = {
+      INTEGER(), BIGINT(), VARCHAR(), SMALLINT()};
+  const std::vector<TypePtr> valueTypes = {
+      BIGINT(), VARCHAR(), ARRAY(INTEGER())};
+  constexpr int kNumIterations = 20;
+  for (const auto& keyType : keyTypes) {
+    for (const auto& valueType : valueTypes) {
+      for (int i = 0; i < kNumIterations; ++i) {
+        SCOPED_TRACE(
+            fmt::format(
+                "key={} value={} i={}",
+                keyType->toString(),
+                valueType->toString(),
+                i));
+
+        // Flat map input, possibly wrapped, and the same maps as MapVectors.
+        auto input = fuzzer.fuzz(MAP(keyType, valueType));
+        auto mapInput = test::withMapBase(input);
+        const auto size = input->size();
+
+        // Keys of the flat map, used to pick keys the map has.
+        DecodedVector decoded(*input);
+        VectorPtr distinctKeys;
+        if (const auto* flatMap = decoded.base()->as<FlatMapVector>()) {
+          distinctKeys = flatMap->distinctKeys();
+        }
+        auto pickKey = [&]() -> std::optional<vector_size_t> {
+          if (distinctKeys == nullptr || distinctKeys->size() == 0 ||
+              folly::Random::oneIn(2, rng)) {
+            return std::nullopt;
+          }
+          return folly::Random::rand32(distinctKeys->size(), rng);
+        };
+
+        // A constant key, and a key per row with nulls.
+        VectorPtr constantKey;
+        if (auto index = pickKey()) {
+          constantKey = BaseVector::wrapInConstant(size, *index, distinctKeys);
+        } else {
+          constantKey = fuzzer.fuzzConstant(keyType, size);
+        }
+        auto perRowKey = fuzzer.fuzzFlat(keyType, size);
+        for (vector_size_t row = 0; row < size; ++row) {
+          if (auto index = pickKey()) {
+            perRowKey->copy(distinctKeys.get(), row, *index, 1);
+          }
+        }
+
+        // Compare both forms of the function for both kinds of keys.
+        for (const auto& key : {constantKey, perRowKey}) {
+          for (const auto* expression : {"element_at(c0, c1)", "c0[c1]"}) {
+            SCOPED_TRACE(expression);
+            auto [expected, expectedError] =
+                evaluateOrError(expression, makeRowVector({mapInput, key}));
+            auto [actual, actualError] =
+                evaluateOrError(expression, makeRowVector({input, key}));
+            ASSERT_EQ(expectedError, actualError);
+            if (expected != nullptr) {
+              test::assertEqualVectors(expected, actual);
+            }
+          }
+        }
+      }
+    }
+  }
 }
 
 TEST_F(ElementAtTest, arrayWithDictionaryElements) {

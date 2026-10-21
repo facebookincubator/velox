@@ -1129,8 +1129,13 @@ RowTypePtr GroupingSet::makeSpillType() const {
   auto rows = table_->rows();
   auto types = rows->keyTypes();
 
-  for (const auto& accumulator : rows->accumulators()) {
-    types.push_back(accumulator.spillType());
+  if (isDistinct()) {
+    VELOX_CHECK(rows->accumulators().empty());
+    types.push_back(BOOLEAN());
+  } else {
+    for (const auto& accumulator : rows->accumulators()) {
+      types.push_back(accumulator.spillType());
+    }
   }
 
   std::vector<std::string> names;
@@ -1166,7 +1171,6 @@ void GroupingSet::spill() {
   VELOX_CHECK_NULL(outputSpiller_);
   if (inputSpiller_ == nullptr) {
     VELOX_DCHECK(pool_->trackUsage());
-    VELOX_CHECK(numDistinctSpillFilesPerPartition_.empty());
     const auto sortingKeys = SpillState::makeSortingKeys(
         std::vector<CompareFlags>(rows->keyTypes().size()));
     inputSpiller_ = std::make_unique<AggregationInputSpiller>(
@@ -1178,6 +1182,7 @@ void GroupingSet::spill() {
                 spillConfig_->startPartitionBit +
                 spillConfig_->numPartitionBits)),
         sortingKeys,
+        isDistinct(),
         spillConfig_,
         spillStats_);
   }
@@ -1187,18 +1192,6 @@ void GroupingSet::spill() {
   // Freeze the HashStringAllocator to make it effectively immutable and
   // guarantee we don't accidentally enter an unsafe situation.
   rows->stringAllocator().freezeAndExecute([&]() { inputSpiller_->spill(); });
-  if (isDistinct() && numDistinctSpillFilesPerPartition_.empty()) {
-    size_t totalNumDistinctSpilledFiles{0};
-    const auto maxPartitions = 1 << spillConfig_->numPartitionBits;
-    numDistinctSpillFilesPerPartition_.resize(maxPartitions, 0);
-    for (int partition = 0; partition < maxPartitions; ++partition) {
-      numDistinctSpillFilesPerPartition_[partition] =
-          inputSpiller_->state().numFinishedFiles(SpillPartitionId(partition));
-      totalNumDistinctSpilledFiles +=
-          numDistinctSpillFilesPerPartition_[partition];
-    }
-    VELOX_CHECK_GT(totalNumDistinctSpilledFiles, 0);
-  }
   if (sortedAggregations_) {
     sortedAggregations_->clear();
   }
@@ -1425,9 +1418,6 @@ bool GroupingSet::mergeNextWithoutAggregates(
   VELOX_CHECK(isDistinct());
   VELOX_CHECK_NULL(outputSpiller_);
   VELOX_CHECK_NOT_NULL(inputSpiller_);
-  VELOX_CHECK_EQ(
-      numDistinctSpillFilesPerPartition_.size(),
-      1 << spillConfig_->numPartitionBits);
   VELOX_CHECK(pool_ == result->pool());
 
   // We are looping over sorted rows produced by tree-of-losers. We logically
@@ -1437,10 +1427,6 @@ bool GroupingSet::mergeNextWithoutAggregates(
   // result at the end of the run (when we know for sure whether the run
   // contains a row from the distinct streams).
   //
-  // NOTE: the distinct stream refers to the stream that contains the spilled
-  // distinct hash table. A distinct stream contains rows which has already
-  // been output as distinct before we trigger spilling. A distinct stream id is
-  // less than 'numDistinctSpillFilesPerPartition_'.
   bool newDistinct{true};
   int32_t numOutputRows{0};
   int32_t outputSize{0};
@@ -1516,8 +1502,7 @@ bool GroupingSet::mergeNextWithoutAggregates(
     if (!sameKey) {
       newDistinct = true;
     }
-    if (stream->id() <
-        numDistinctSpillFilesPerPartition_[outputSpillPartition_]) {
+    if (alreadyEmitted(*stream)) {
       newDistinct = false;
     }
     // Update only after handling the previous run: until this point,
@@ -1558,6 +1543,13 @@ void GroupingSet::initializeRow(SpillMergeStream& stream, char* row) {
     sortedAggregations_->initializeNewGroups(
         &row, folly::Range<const vector_size_t*>(&zero, 1));
   }
+}
+
+bool GroupingSet::alreadyEmitted(SpillMergeStream& stream) const {
+  const auto& decoded =
+      stream.decoded(static_cast<int32_t>(keyChannels_.size()));
+  const auto index = stream.currentIndex();
+  return !decoded.isNullAt(index) && decoded.valueAt<bool>(index);
 }
 
 void GroupingSet::extractSpillResult(const RowVectorPtr& result) {
@@ -1764,6 +1756,7 @@ AggregationInputSpiller::AggregationInputSpiller(
     RowTypePtr rowType,
     const HashBitRange& hashBitRange,
     const std::vector<SpillSortKey>& sortingKeys,
+    bool spillEmittedFlag,
     const common::SpillConfig* spillConfig,
     exec::SpillStats* spillStats)
     : SpillerBase(
@@ -1775,7 +1768,8 @@ AggregationInputSpiller::AggregationInputSpiller(
           spillConfig->maxSpillRunRows,
           std::nullopt,
           spillConfig,
-          spillStats) {}
+          spillStats),
+      spillEmittedFlag_(spillEmittedFlag) {}
 
 AggregationOutputSpiller::AggregationOutputSpiller(
     RowContainer* container,
@@ -1795,6 +1789,23 @@ AggregationOutputSpiller::AggregationOutputSpiller(
 
 void AggregationInputSpiller::spill() {
   SpillerBase::spill(nullptr);
+  emitted_ = false;
+}
+
+void AggregationInputSpiller::extractSpill(
+    folly::Range<char**> rows,
+    RowVectorPtr& resultPtr) {
+  SpillerBase::extractSpill(rows, resultPtr);
+  if (spillEmittedFlag_) {
+    resultPtr->childAt(
+        static_cast<column_index_t>(container_->keyTypes().size())) =
+        std::make_shared<ConstantVector<bool>>(
+            memory::spillMemoryPool(),
+            resultPtr->size(),
+            false,
+            BOOLEAN(),
+            bool(emitted_));
+  }
 }
 
 void AggregationOutputSpiller::spill(const RowContainerIterator& startRowIter) {

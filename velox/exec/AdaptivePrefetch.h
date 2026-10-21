@@ -24,11 +24,12 @@ namespace facebook::velox::exec {
 /// Adaptive prefetch look-ahead for loops with random memory accesses where
 /// the working set exceeds CPU cache. Measures per-iteration latency during
 /// initial iterations, then returns a fixed look-ahead for the remainder.
+/// 'Clock' is a std::chrono clock that times the measurement iterations.
+template <typename Clock = std::chrono::steady_clock>
 class AdaptivePrefetch {
  public:
   explicit AdaptivePrefetch(int32_t numIterations)
-      : numIterations_(numIterations),
-        start_(std::chrono::steady_clock::now()) {}
+      : numIterations_(numIterations), start_(Clock::now()) {}
 
   /// Returns look-ahead distance, or 0 when too close to the end.
   int32_t lookAhead() {
@@ -51,8 +52,13 @@ class AdaptivePrefetch {
 
   void computeLookAhead() {
     auto elapsedNs = std::chrono::duration_cast<std::chrono::nanoseconds>(
-                         std::chrono::steady_clock::now() - start_)
+                         Clock::now() - start_)
                          .count();
+    // Too short for the clock to resolve, which the formula maps to the max.
+    if (elapsedNs <= 0) {
+      lookAhead_ = kMaxLookAhead;
+      return;
+    }
     lookAhead_ = std::clamp(
         static_cast<int32_t>(
             kCoefficient * kAssumedDramLatencyNs * kMeasurementIterations /
@@ -64,7 +70,7 @@ class AdaptivePrefetch {
   int32_t numIterations_;
   int32_t iteration_{0};
   int32_t lookAhead_{kMinLookAhead};
-  std::chrono::steady_clock::time_point start_;
+  typename Clock::time_point start_;
 };
 
 } // namespace facebook::velox::exec

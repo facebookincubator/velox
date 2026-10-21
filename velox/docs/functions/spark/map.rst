@@ -103,6 +103,19 @@ Map Functions
         SELECT size(NULL, true); -- -1 (Spark ANSI mode disabled)
         SELECT size(NULL, false); -- NULL (e.g. Spark ANSI mode enabled)
 
+.. spark:function:: transform_keys(map(K1,V), func) -> map(K2,V)
+
+    Returns a map that applies ``func`` to each entry of ``map`` and transforms
+    the keys. Values are left unchanged. Throws if ``func`` returns a NULL key. Array and
+    row keys may contain nested NULL values. When ``func`` returns the same key for more than
+    one entry, the behavior depends on the ``throw_exception_on_duplicate_map_keys``
+    configuration property: if true, throws; otherwise the last value wins and the key keeps
+    the position of its first occurrence. ::
+
+        SELECT transform_keys(map(1, 'a', 2, 'b'), (k, v) -> k + 10); -- {11 -> 'a', 12 -> 'b'}
+        SELECT transform_keys(map(1, 'a', 2, 'b', 3, 'c'), (k, v) -> k % 2); -- {1 -> 'c', 0 -> 'b'} (LAST_WIN behavior)
+        SELECT transform_keys(map(1, 'a', 2, 'b', 3, 'c'), (k, v) -> k % 2); -- "Duplicate map key (1) was found" (EXCEPTION behavior)
+
 .. spark:function:: transform_values(map(K,V1), func) -> map(K,V2)
 
     Returns a map that applies ``func`` to each entry of ``map`` and transforms

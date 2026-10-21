@@ -14,8 +14,11 @@
  * limitations under the License.
  */
 
+#include <bit>
 #include <cmath>
 #include <cstdint>
+
+#include <gmock/gmock.h>
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/sparksql/tests/SparkFunctionBaseTest.h"
@@ -41,14 +44,6 @@ class MapFromArraysTest : public SparkFunctionBaseTest {
     VELOX_ASSERT_USER_THROW(
         evaluate("map_from_arrays(c0, c1)", makeRowVector({keys, values})),
         errorMessage);
-  }
-
-  // Sets the Spark 'spark.sql.mapKeyDedupPolicy' equivalent query config.
-  void setThrowExceptionOnDuplicateMapKeys(bool value) {
-    queryCtx_->testingOverrideConfigUnsafe({
-        {core::QueryConfig::kThrowExceptionOnDuplicateMapKeys,
-         value ? "true" : "false"},
-    });
   }
 };
 
@@ -630,18 +625,78 @@ TEST_F(MapFromArraysTest, stringKeys) {
 TEST_F(MapFromArraysTest, floatingPointKeys) {
   setThrowExceptionOnDuplicateMapKeys(false);
 
-  // Pins the equality the deduplication inherits from BaseVector: NaNs are
-  // equal to each other, and negative zero is equal to positive zero. Spark
-  // instead keys on Double.equals and treats -0.0 as distinct from 0.0; that
-  // divergence is Velox-wide and tracked separately.
+  // Spark looks up top-level keys with Java's Double.equals: NaNs are equal to
+  // each other, and negative zero is distinct from positive zero.
   constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
   auto keys = makeArrayVector<double>({{0.0, -0.0, kNaN, kNaN, 1.5}});
   auto values = makeArrayVectorFromJson<int64_t>({"[1, 2, 3, 4, 5]"});
   auto expected = makeMapVector(
       {0},
-      makeFlatVector<double>({0.0, kNaN, 1.5}),
-      makeFlatVector<int64_t>({2, 4, 5}));
+      makeFlatVector<double>({0.0, -0.0, kNaN, 1.5}),
+      makeFlatVector<int64_t>({1, 2, 4, 5}));
   testMapFromArrays(keys, values, expected);
+  EXPECT_THAT(
+      elementBitPatterns(evaluate(
+          "map_keys(map_from_arrays(c0, c1))", makeRowVector({keys, values}))),
+      testing::ElementsAre(
+          std::bit_cast<uint64_t>(0.0),
+          std::bit_cast<uint64_t>(-0.0),
+          std::bit_cast<uint64_t>(kNaN),
+          std::bit_cast<uint64_t>(1.5)));
+}
+
+TEST_F(MapFromArraysTest, throwPolicyFloatingPointKeys) {
+  setThrowExceptionOnDuplicateMapKeys(true);
+
+  {
+    auto keys = makeArrayVector<double>({{0.0, -0.0}});
+    auto values = makeArrayVectorFromJson<int64_t>({"[1, 2]"});
+    auto expected = makeMapVector(
+        {0},
+        makeFlatVector<double>({0.0, -0.0}),
+        makeFlatVector<int64_t>({1, 2}));
+    testMapFromArrays(keys, values, expected);
+    EXPECT_THAT(
+        elementBitPatterns(evaluate(
+            "map_keys(map_from_arrays(c0, c1))",
+            makeRowVector({keys, values}))),
+        testing::ElementsAre(
+            std::bit_cast<uint64_t>(0.0), std::bit_cast<uint64_t>(-0.0)));
+  }
+
+  {
+    constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
+    auto keys = makeArrayVector<double>({{kNaN, kNaN}});
+    auto values = makeArrayVectorFromJson<int64_t>({"[1, 2]"});
+    testMapFromArraysFails(keys, values, "Duplicate map key (NaN) was found.");
+  }
+}
+
+TEST_F(MapFromArraysTest, constantEncodedFloatingPointKeys) {
+  setThrowExceptionOnDuplicateMapKeys(false);
+
+  constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
+  auto keys = BaseVector::wrapInConstant(
+      2, 0, makeArrayVector<double>({{0.0, -0.0, kNaN, kNaN}}));
+  auto values = makeArrayVectorFromJson<int64_t>({
+      "[1, 2, 3, 4]",
+      "[5, 6, 7, 8]",
+  });
+  auto expected = makeMapVector(
+      {0, 3},
+      makeFlatVector<double>({0.0, -0.0, kNaN, 0.0, -0.0, kNaN}),
+      makeFlatVector<int64_t>({1, 2, 4, 5, 6, 8}));
+  testMapFromArrays(keys, values, expected);
+  EXPECT_THAT(
+      elementBitPatterns(evaluate(
+          "map_keys(map_from_arrays(c0, c1))", makeRowVector({keys, values}))),
+      testing::ElementsAre(
+          std::bit_cast<uint64_t>(0.0),
+          std::bit_cast<uint64_t>(-0.0),
+          std::bit_cast<uint64_t>(kNaN),
+          std::bit_cast<uint64_t>(0.0),
+          std::bit_cast<uint64_t>(-0.0),
+          std::bit_cast<uint64_t>(kNaN)));
 }
 
 } // namespace

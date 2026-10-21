@@ -346,6 +346,17 @@ std::map<uint64_t, float> parseGrowthConfigMap(const std::string& str) {
       return parseVector<std::string>(val);
     });
 
+/* static */ Config::Entry<const std::vector<std::string>>
+    Config::SUBINTSPLIT_COLUMNS(
+        "nimble.subintsplit.columns",
+        {},
+        [](const std::vector<std::string>& val) {
+          return folly::join(",", val);
+        },
+        [](const std::string& /* key */, const std::string& val) {
+          return parseVector<std::string>(val);
+        });
+
 /* static */ Config::Entry<std::string> Config::FLUSH_POLICY_CONFIG(
     "nimble.flush_policy_config",
     "");
@@ -420,6 +431,11 @@ std::map<uint64_t, float> parseGrowthConfigMap(const std::string& str) {
 /* static */ Config::Entry<bool> Config::ENABLE_VECTORIZED_STATS(
     "nimble.stats.enable_vectorized",
     true);
+
+/* static */ Config::Entry<uint32_t>
+    Config::VECTORIZED_STATS_STRING_LENGTH_LIMIT(
+        "nimble.vectorized.stats.string_length_limit",
+        64);
 
 /* static */ Config::Entry<bool> Config::ENABLE_ENCODING_SELECTION_CACHE(
     "nimble.encoding.enable_selection_cache",

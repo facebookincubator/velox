@@ -646,8 +646,8 @@ TEST_F(ThrottlerTest, fuzz) {
           cacheTTLMs));
   auto* instance = Throttler::instance();
 
-  const auto seed = getCurrentTimeMs();
-  LOG(INFO) << "Random seed: " << getCurrentTimeMs();
+  const auto seed = EpochTime::now<std::chrono::milliseconds>();
+  LOG(INFO) << "Random seed: " << EpochTime::now<std::chrono::milliseconds>();
 
   const int numDirectories = 4096;
   std::vector<std::string> directories;
