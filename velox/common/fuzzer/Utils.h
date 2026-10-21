@@ -83,6 +83,19 @@ RowTypePtr randRowType(
 struct DataSpec {
   bool includeNaN;
   bool includeInfinity;
+  /// Draws negative infinity for REAL and DOUBLE.
+  bool includeNegativeInfinity{false};
+  /// Draws 0.0 and -0.0 for REAL and DOUBLE.
+  bool includeSignedZeros{false};
+  /// Draws REAL and DOUBLE NaNs other than the canonical quiet NaN: the
+  /// negative quiet NaN, and quiet and signaling NaNs of either sign with
+  /// random nonzero payloads.
+  bool includeNonCanonicalNaN{false};
+  /// Draws the largest finite, smallest normal and smallest subnormal REAL and
+  /// DOUBLE magnitudes and random subnormals, each of either sign.
+  bool includeExtremes{false};
+  /// Negates half of the REAL and DOUBLE values otherwise drawn from [0, 1).
+  bool includeNegative{false};
 };
 
 enum class FuzzerTimestampPrecision : int8_t {
@@ -120,6 +133,12 @@ inline int64_t rand(FuzzerGenerator& rng, DataSpec /*dataSpec*/) {
   return boost::random::uniform_int_distribution<int64_t>()(rng);
 }
 
+/// Draws the REAL and DOUBLE values of the DataSpec flags other than
+/// includeNaN and includeInfinity, each 5% of the time, and otherwise a value
+/// in [0, 1).
+template <typename T>
+T randFloatingPoint(FuzzerGenerator& rng, DataSpec dataSpec);
+
 template <>
 inline double rand(FuzzerGenerator& rng, DataSpec dataSpec) {
   if (dataSpec.includeNaN && coinToss(rng, 0.05)) {
@@ -130,7 +149,7 @@ inline double rand(FuzzerGenerator& rng, DataSpec dataSpec) {
     return std::numeric_limits<double>::infinity();
   }
 
-  return boost::random::uniform_01<double>()(rng);
+  return randFloatingPoint<double>(rng, dataSpec);
 }
 
 template <>
@@ -143,7 +162,7 @@ inline float rand(FuzzerGenerator& rng, DataSpec dataSpec) {
     return std::numeric_limits<float>::infinity();
   }
 
-  return boost::random::uniform_01<float>()(rng);
+  return randFloatingPoint<float>(rng, dataSpec);
 }
 
 template <>
