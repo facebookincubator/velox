@@ -19,7 +19,6 @@ For current build times and performance trends, see the [CI performance metrics]
 | Workflow | File | Triggers | Purpose |
 |----------|------|----------|---------|
 | Linux Build using GCC | `linux-build.yml` + `linux-build-base.yml` | push to main, PRs | Main build & test (3 configs); selective by default, full on push / sticky-approval |
-| Windows MSVC | `windows.yml` | manual | Status library build only |
 | Detect Force-Full Trigger | `detect-force-full.yml` | PR approving review | Step 1 of the approval-path chain: trivial trigger for the workflow_run hand-off (needed because fork PR reviews get a read-only token) |
 | Rerun Linux Build on Force-Full Trigger | `rerun-on-force-full.yml` | workflow_run (after Detect Force-Full Trigger) | Step 2 of the approval-path chain: BASE-context, dedups, calls the `rerun-linux-build` composite action |
 | Force-Full Build on /full-build Comment | `force-full-on-comment.yml` | PR comment containing `/full-build` | Direct (no workflow_run hop): dedups, calls the `rerun-linux-build` composite action |
@@ -38,28 +37,9 @@ For current build times and performance trends, see the [CI performance metrics]
 | Update Documentation | `docs.yml` | push (docs changes), PRs | Sphinx docs + GitHub Pages |
 | Collect Build Metrics | `build-metrics.yml` | PRs, daily, manual | Binary size tracking (disabled) |
 | Ubuntu Bundled Deps | `ubuntu-bundled-deps.yml` | nightly, manual, PRs (dep scripts) | Build-from-source validation |
+| Windows MSVC | `windows.yml` | manual | [Experimental](https://github.com/facebookincubator/velox/issues/6274) |
 
 ## Core Build & Test
-
-### Windows MSVC (`windows.yml`)
-
-This workflow runs only through `workflow_dispatch`; opening or updating a PR
-does not start it automatically. Once the workflow is present on the repository's
-default branch, users with write access can select a branch under
-**Actions > Windows MSVC > Run workflow**. Whether its result is required for
-merging is controlled separately by repository rules. Configure or build failures
-still fail a manually started run.
-
-The Windows workflow builds only the existing `velox_status` library with
-`VELOX_BUILD_TESTING=OFF` and `VELOX_MONO_LIBRARY=OFF`. It does not build or run
-tests. Windows test enablement is deferred rather than changing production
-implementations or reducing test coverage to make tests compile.
-
-The existing test sources, test-build logic, and production targets under
-`velox/common` remain unchanged. No component-test selector or separate status
-test target is added. Windows compiler and dependency setup is limited to the
-requirements of building the existing status library; non-Windows behavior is
-preserved.
 
 ### Linux Build using GCC (`linux-build.yml` + `linux-build-base.yml`)
 
@@ -220,3 +200,15 @@ All build workflows use ccache for compiler output caching, persisted across run
 ### Concurrency
 
 Most workflows use concurrency groups keyed on `workflow + repository + branch/SHA` to automatically cancel in-progress runs when new commits are pushed to the same branch, avoiding wasted CI resources.
+
+## Experimental
+
+### Windows MSVC (`windows.yml`)
+
+Builds `velox_status` in Release mode with MSVC on Windows x64 and uploads
+configure and build logs. Tests are disabled. Windows support is tracked in
+[#6274](https://github.com/facebookincubator/velox/issues/6274).
+
+Runs manually through `workflow_dispatch`. Once the workflow is on the default
+branch, users with write access can choose a branch under
+**Actions > Windows MSVC > Run workflow**.

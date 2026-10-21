@@ -12,9 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-# Start Windows support with an MSVC build of the existing status library.
-# Windows Clang support is deferred to a later stage.
-# Configure and build failures remain failures; no fork-specific patches are applied.
+# Experimental Windows x64 build of the status library.
 name: Windows MSVC
 
 on:
@@ -73,7 +71,7 @@ jobs:
         run: |
           $conda = Join-Path $env:CONDA "Scripts\conda.exe"
           $prefix = Join-Path $env:RUNNER_TEMP "velox-system-deps"
-          # Use the upstream ICU version without a custom Windows source build.
+          # Match the ICU version pinned by Velox's dependency recipe.
           & $conda create --yes --no-default-packages --prefix $prefix `
             --override-channels --channel conda-forge openssl libevent "double-conversion>=3.1.5" "icu=72.1" `
             2>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\velox-system-deps.log"
@@ -81,7 +79,7 @@ jobs:
           & $conda list --prefix $prefix --explicit |
             Tee-Object -FilePath "$env:RUNNER_TEMP\velox-system-deps-explicit.txt"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          # Do not activate Conda: main's dependency recipes remain in control.
+          # Expose system libraries without activating Conda's compiler environment.
           "VELOX_SYSTEM_PREFIX=$prefix\Library" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "$prefix\Library\bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
 

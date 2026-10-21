@@ -441,7 +441,10 @@ if(
   )
 endif()
 
-if(NOT MSVC)
+set(VELOX_WARNINGS_AS_ERRORS_FLAG -Werror)
+if(WIN32)
+  include(VeloxWindows)
+else()
   execute_process(
     COMMAND
       bash -c
@@ -455,9 +458,6 @@ if(NOT MSVC)
   endif()
   message("Setting CMAKE_CXX_FLAGS=${SCRIPT_CXX_FLAGS}")
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${SCRIPT_CXX_FLAGS}")
-endif()
-if(WIN32)
-  add_compile_definitions(GLOG_NO_ABBREVIATED_SEVERITIES NOMINMAX)
 endif()
 
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DUSE_VELOX_COMMON_BASE")
@@ -480,21 +480,21 @@ if("${MAX_LINK_JOBS}")
   set(CMAKE_JOB_POOL_LINK link_job_pool)
 endif()
 
-if(ENABLE_ALL_WARNINGS AND MSVC)
-  string(APPEND CMAKE_CXX_FLAGS " /W4")
-endif()
-if(ENABLE_ALL_WARNINGS AND NOT MSVC)
-  if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-    set(
-      KNOWN_COMPILER_SPECIFIC_WARNINGS
-      "-Wno-range-loop-analysis \
+if(ENABLE_ALL_WARNINGS)
+  if(MSVC)
+    string(APPEND CMAKE_CXX_FLAGS " ${VELOX_WINDOWS_ALL_WARNINGS_FLAG}")
+  else()
+    if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+      set(
+        KNOWN_COMPILER_SPECIFIC_WARNINGS
+        "-Wno-range-loop-analysis \
          -Wno-mismatched-tags \
          -Wno-nullability-completeness"
-    )
-  elseif(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-    set(
-      KNOWN_COMPILER_SPECIFIC_WARNINGS
-      "-Wno-implicit-fallthrough \
+      )
+    elseif(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+      set(
+        KNOWN_COMPILER_SPECIFIC_WARNINGS
+        "-Wno-implicit-fallthrough \
          -Wno-class-memaccess \
          -Wno-comment \
          -Wno-int-in-bool-context \
@@ -504,29 +504,30 @@ if(ENABLE_ALL_WARNINGS AND NOT MSVC)
          -Wno-unused-result \
          -Wno-format-overflow \
          -Wno-strict-aliasing"
-    )
-    # Avoid compiler bug for GCC 12.2.1
-    # https://gcc.gnu.org/bugzilla/show_bug.cgi?id=105329
-    if(CMAKE_CXX_COMPILER_VERSION VERSION_EQUAL "12.2.1")
-      string(APPEND KNOWN_COMPILER_SPECIFIC_WARNINGS " -Wno-restrict")
+      )
+      # Avoid compiler bug for GCC 12.2.1
+      # https://gcc.gnu.org/bugzilla/show_bug.cgi?id=105329
+      if(CMAKE_CXX_COMPILER_VERSION VERSION_EQUAL "12.2.1")
+        string(APPEND KNOWN_COMPILER_SPECIFIC_WARNINGS " -Wno-restrict")
+      endif()
+      if(CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL "14.0.0")
+        string(APPEND KNOWN_COMPILER_SPECIFIC_WARNINGS " -Wno-error=template-id-cdtor")
+        string(APPEND KNOWN_COMPILER_SPECIFIC_WARNINGS " -Wno-overloaded-virtual")
+        string(APPEND KNOWN_COMPILER_SPECIFIC_WARNINGS " -Wno-error=tautological-compare")
+      endif()
     endif()
-    if(CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL "14.0.0")
-      string(APPEND KNOWN_COMPILER_SPECIFIC_WARNINGS " -Wno-error=template-id-cdtor")
-      string(APPEND KNOWN_COMPILER_SPECIFIC_WARNINGS " -Wno-overloaded-virtual")
-      string(APPEND KNOWN_COMPILER_SPECIFIC_WARNINGS " -Wno-error=tautological-compare")
-    endif()
-  endif()
 
-  set(
-    KNOWN_WARNINGS
-    "-Wno-unused \
+    set(
+      KNOWN_WARNINGS
+      "-Wno-unused \
        -Wno-unused-parameter \
        -Wno-sign-compare \
        -Wno-ignored-qualifiers \
        ${KNOWN_COMPILER_SPECIFIC_WARNINGS}"
-  )
+    )
 
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra ${KNOWN_WARNINGS}")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra ${KNOWN_WARNINGS}")
+  endif()
 endif()
 
 if(VELOX_ENABLE_WAVE OR VELOX_ENABLE_CUDF)
@@ -851,7 +852,7 @@ endif()
 velox_set_source(xsimd)
 velox_resolve_dependency(xsimd 10.0.0)
 
-if(NOT WIN32 OR VELOX_ENABLE_PRESTO_FUNCTIONS)
+if(VELOX_ENABLE_PRESTO_FUNCTIONS)
   velox_set_source(stemmer)
   velox_resolve_dependency(stemmer)
 endif()
@@ -866,11 +867,7 @@ include_directories(.)
 # Adding this down here prevents warnings in dependencies from stopping the
 # build
 if("${TREAT_WARNINGS_AS_ERRORS}")
-  if(MSVC)
-    string(APPEND CMAKE_CXX_FLAGS " /WX")
-  else()
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror")
-  endif()
+  string(APPEND CMAKE_CXX_FLAGS " ${VELOX_WARNINGS_AS_ERRORS_FLAG}")
 endif()
 
 # Enable the ASAN and UBSAN sanitzers for Clang 20 and above.
@@ -948,11 +945,5 @@ if(VELOX_ENABLE_NIMBLE)
   endif()
 endif()
 
-if(MSVC)
-  add_compile_options(
-    $<$<COMPILE_LANGUAGE:CXX>:/Zc:preprocessor>
-    $<$<COMPILE_LANGUAGE:CXX>:/Zc:__cplusplus>
-    $<$<COMPILE_LANGUAGE:CXX>:/permissive->
-  )
-endif()
+add_compile_options(${VELOX_WINDOWS_COMPILE_OPTIONS})
 add_subdirectory(velox)
