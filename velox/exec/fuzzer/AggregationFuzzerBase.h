@@ -101,6 +101,10 @@ class AggregationFuzzerBase {
   struct PlanWithSplits {
     core::PlanNodePtr plan;
     std::vector<exec::Split> splits;
+
+    /// When true, runs this plan once without spilling and compares its result
+    /// with the first plan's result directly, bypassing custom verifiers.
+    bool verifyResultExactly{false};
   };
 
   struct FunctionsStats {
