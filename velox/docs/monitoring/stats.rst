@@ -193,6 +193,15 @@ corresponding wall time when parallel encoding is enabled.
      - nanos
      - CPU time spent selecting encodings. This is a subset of
        ``nimble.encodingCpuNanos``.
+   * - nimble.encodingSelectionCacheReplayCount
+     -
+     - Number of chunks that replayed a cached encoding layout instead of
+       running a fresh encoding selection.
+   * - nimble.encodingSelectionCacheFallbackCount
+     -
+     - Number of those replays that failed and fell back to a fresh encoding
+       selection. Interpret against ``nimble.encodingSelectionCacheReplayCount``:
+       a fallback count carries no meaning without its denominator.
    * - nimble.rowsPerStripe
      -
      - Distribution of row counts per stripe. The metric count is the number
