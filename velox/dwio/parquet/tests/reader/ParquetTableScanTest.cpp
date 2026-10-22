@@ -2657,14 +2657,15 @@ TEST_F(ParquetTableScanTest, lazyColumnHooks) {
   {
     // A remaining filter is evaluated by the connector on the reader's output,
     // so no column carries a pushed-down filter and the reader produces all of
-    // them as LazyVectors, 'a' included. The connector loads 'a' for the
-    // filter; the others only for surviving rows. Rows pass in every row group.
+    // them as LazyVectors, 'a' included. The connector reads 'a' for the
+    // filter in every row group though, so 'a' is not reported as lazy; the
+    // others are loaded only for surviving rows. Rows pass in every row group.
     auto calls = run("a % 1000 = 0", "a % 1000 = 0");
     // The reader names the lazy columns' streams on every row group input,
     // nested leaves included.
     ASSERT_EQ(calls->lazyStreams.size(), kGroups);
     for (const auto& streams : calls->lazyStreams) {
-      EXPECT_EQ(streams, (std::vector<int32_t>{0, 1, 2, 3, 4}));
+      EXPECT_EQ(streams, (std::vector<int32_t>{1, 2, 3, 4}));
     }
     // One hint per split, on the first batch with survivors.
     EXPECT_EQ(calls->hints, 1);

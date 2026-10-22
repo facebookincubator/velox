@@ -16,6 +16,8 @@
 
 #pragma once
 
+#include <folly/container/F14Set.h>
+
 #include <memory>
 #include <optional>
 
@@ -86,6 +88,14 @@ class StructColumnReader : public dwio::common::SelectiveStructColumnReader {
       const dwio::common::StatsContext&,
       dwio::common::FormatData::FilterRowGroupsResult&) const override;
 
+  /// Root reader only. Columns the connector reads for its remaining filter
+  /// (RowReaderOptions::remainingFilterColumns()). They are produced as
+  /// LazyVectors like the projected columns but read in every row group, so
+  /// their streams are not reported to the BufferedInput as lazy.
+  void setRemainingFilterColumns(folly::F14FastSet<std::string> columns) {
+    remainingFilterColumns_ = std::move(columns);
+  }
+
  private:
   struct SyntheticRepDefSource;
 
@@ -112,6 +122,7 @@ class StructColumnReader : public dwio::common::SelectiveStructColumnReader {
   const std::vector<int32_t>& lazyColumnStreamIds();
 
   std::optional<std::vector<int32_t>> lazyColumnStreamIds_;
+  folly::F14FastSet<std::string> remainingFilterColumns_;
 
   // Reader subtree used for getting nullability information for 'this'.
   dwio::common::SelectiveColumnReader* repDefSourceReader_{nullptr};

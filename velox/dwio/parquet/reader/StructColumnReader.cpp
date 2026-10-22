@@ -354,10 +354,13 @@ const std::vector<int32_t>& StructColumnReader::lazyColumnStreamIds() {
     }
     const auto* childSpec = child->scanSpec();
     // Same condition as SelectiveStructColumnReaderBase::read() uses to
-    // produce the child as a LazyVector instead of reading it eagerly.
+    // produce the child as a LazyVector instead of reading it eagerly, minus
+    // the columns the remaining filter reads in every row group (the rule the
+    // selective Nimble reader applies to produce lazy children).
     if (generateLazyChildren() && child->isTopLevel() &&
         childSpec->projectOut() && !childSpec->hasFilter() &&
-        !childSpec->isConstant()) {
+        !childSpec->isConstant() &&
+        remainingFilterColumns_.count(childSpec->fieldName()) == 0) {
       collectLeafColumns(child->fileType(), *lazyColumnStreamIds_);
     }
   }
