@@ -97,6 +97,8 @@ endif()
   endif()
   set(ARROW_LIBDIR ${ARROW_PREFIX}/install/lib)
 
+  # Update VELOX_GTEST_VERSION in ../gtest.cmake to match
+  # ARROW_GTEST_BUILD_VERSION in this version's cpp/thirdparty/versions.txt.
   set(VELOX_ARROW_BUILD_VERSION 26.0.0)
   set(
     VELOX_ARROW_BUILD_SHA256_CHECKSUM
