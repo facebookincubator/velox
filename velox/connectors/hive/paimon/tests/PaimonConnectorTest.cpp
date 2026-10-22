@@ -1047,26 +1047,26 @@ TEST_F(PaimonConnectorTest, queryValidationBeforeFileOpen) {
           table,
           makePaimonColumnHandles(ROW({{"id", BIGINT()}})),
           context.get()),
-      "Paimon output channel type does not match column handle");
+      "File scan output type does not match column handle: 'id'");
   const auto idColumns = makePaimonColumnHandles(ROW({{"id", BIGINT()}}));
   VELOX_ASSERT_USER_THROW(
       connector->createDataSource(
           ROW({{"missing", BIGINT()}}), table, idColumns, context.get()),
-      "Missing Paimon output assignment 'missing'");
+      "ColumnHandle is missing for output column: missing");
   VELOX_ASSERT_USER_THROW(
       connector->createDataSource(
           ROW({{"id", BIGINT()}, {"id", BIGINT()}}),
           table,
           idColumns,
           context.get()),
-      "Duplicate Paimon output channel name 'id'");
+      "Duplicate file scan output column 'id'");
   VELOX_ASSERT_USER_THROW(
       connector->createDataSource(
           ROW({{"id", BIGINT()}}),
           table,
           {{"id", idColumns.at("id")}, {"alias", idColumns.at("id")}},
           context.get()),
-      "Paimon regular column 'id' cannot map to multiple assignments; use a projection");
+      "Cannot map from same table column to different outputs in table scan; a project node should be used instead: id");
   const auto requiredColumn = [&](const common::Subfield& path) {
     std::vector<common::Subfield> subfields;
     subfields.push_back(path.clone());
@@ -1079,11 +1079,9 @@ TEST_F(PaimonConnectorTest, queryValidationBeforeFileOpen) {
   };
   for (const auto& path : {"missing", "id.value", "p"}) {
     SCOPED_TRACE(path);
-    const auto message = std::string_view(path) == "missing"
-        ? "Unknown Paimon field: missing"
-        : (std::string_view(path) == "id.value"
-               ? "ROW required in Paimon path id.value"
-               : "Paimon required subfield does not match column name");
+    const auto message = std::string_view(path) == "id.value"
+        ? "ROW required in Paimon path id.value"
+        : "Required subfield does not match column name";
     VELOX_ASSERT_USER_THROW(
         connector->createDataSource(
             ROW({{"id", BIGINT()}}),
@@ -1138,6 +1136,64 @@ TEST_F(PaimonConnectorTest, queryValidationBeforeFileOpen) {
       makeSource(
           BIGINT(), "id", FileColumnHandle::ColumnType::kRegular, BIGINT()),
       nullptr);
+  for (const auto& condition : {"p is null", "length(p) = 0"}) {
+    SCOPED_TRACE(condition);
+    const auto filteredTable = makePaimonTableHandle(
+        rowType, {}, parseExpr(condition, rowType), {"p"});
+    const auto message = std::string_view(condition) == "p is null"
+        ? "File scan filter-only column 'p' is missing from table data columns and column handles"
+        : "Paimon partition condition requires a partition column handle: 'p'";
+    VELOX_ASSERT_USER_THROW(
+        connector->createDataSource(
+            ROW({{"id", BIGINT()}}), filteredTable, idColumns, context.get()),
+        message);
+    const ColumnHandleMap columns{
+        {"id", idColumns.at("id")},
+        {"p",
+         std::make_shared<HiveColumnHandle>(
+             "p",
+             FileColumnHandle::ColumnType::kPartitionKey,
+             VARCHAR(),
+             VARCHAR())}};
+    EXPECT_NE(
+        connector->createDataSource(
+            ROW({{"id", BIGINT()}}), filteredTable, columns, context.get()),
+        nullptr);
+    const auto filterColumnTable = std::make_shared<PaimonTableHandle>(
+        kPaimonConnectorId,
+        table->name(),
+        table->schema(),
+        PaimonTableHandle::ReadProfile::kSameSchemaAppendBatch,
+        common::SubfieldFilters{},
+        parseExpr(condition, rowType),
+        std::vector<FileColumnHandlePtr>{
+            std::static_pointer_cast<const FileColumnHandle>(columns.at("p"))});
+    EXPECT_NE(
+        connector->createDataSource(
+            ROW({{"id", BIGINT()}}),
+            filterColumnTable,
+            idColumns,
+            context.get()),
+        nullptr);
+  }
+  for (const auto* option :
+       {FileConfig::kIgnoreMissingFilesSession,
+        FileConfig::kFileColumnNamesReadAsLowerCaseSession}) {
+    SCOPED_TRACE(option);
+    const auto session = std::make_shared<config::ConfigBase>(
+        std::unordered_map<std::string, std::string>{{option, "true"}});
+    auto optionContext = queryContextBuilder(queryCtx.get())
+                             .sessionProperties(session.get())
+                             .build();
+    const auto message =
+        std::string_view(option) == FileConfig::kIgnoreMissingFilesSession
+        ? "Paimon same-schema append profile does not support ignore_missing_files"
+        : "Paimon same-schema append profile does not support lower-case file mapping";
+    VELOX_ASSERT_USER_THROW(
+        connector->createDataSource(
+            ROW({{"id", BIGINT()}}), table, idColumns, optionContext.get()),
+        message);
+  }
   EXPECT_EQ(fileSystem->openedFiles, 0);
 }
 
@@ -1451,7 +1507,7 @@ TEST_F(PaimonConnectorTest, requiresPaimonTableHandle) {
           nullptr,
           context.get(),
           std::make_shared<PaimonConfig>(config)),
-      "Missing Paimon table handle");
+      "Missing file table handle");
   const auto tableHandle = std::make_shared<HiveTableHandle>(
       kPaimonConnectorId,
       "paimon_table",

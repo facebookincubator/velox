@@ -112,12 +112,11 @@ void validateFilterType(const TypePtr& type, const common::Filter& filter) {
       type->toString());
 }
 
-std::unordered_set<std::string> validateExpression(
+void validateExpression(
     const PaimonSchema& schema,
     const core::TypedExprPtr& expression) {
-  std::unordered_set<std::string> columns;
   if (!expression) {
-    return columns;
+    return;
   }
   VELOX_USER_CHECK(
       expression->type() && expression->type()->isBoolean(),
@@ -144,7 +143,6 @@ std::unordered_set<std::string> validateExpression(
       TypePtr expected;
       if (field->isInputColumn()) {
         expected = columnType(schema, field->name());
-        columns.insert(field->name());
         if (!field->inputs().empty()) {
           const auto& input = field->inputs().front();
           VELOX_USER_CHECK(
@@ -190,7 +188,6 @@ std::unordered_set<std::string> validateExpression(
       pending.push_back(input.get());
     }
   }
-  return columns;
 }
 
 RowTypePtr deriveDataColumns(const PaimonSchemaPtr& schema) {
@@ -456,73 +453,9 @@ void PaimonTableHandle::validateColumn(const FileColumnHandle& column) const {
       "Paimon same-schema append profile does not support column extractions or callbacks");
   for (const auto& path : column.requiredSubfields()) {
     subfieldType(*schema_, path);
-    VELOX_USER_CHECK_EQ(
-        path.path().front()->as<common::Subfield::NestedField>()->name(),
-        column.name(),
-        "Paimon required subfield does not match column name");
     VELOX_USER_CHECK(
         common::Subfield(path.toString()) == path,
         "Paimon FileColumnHandle required subfields must round-trip by name");
-  }
-}
-
-void PaimonTableHandle::validateQuery(
-    const RowTypePtr& outputType,
-    const ColumnHandleMap& assignments) const {
-  validateReadProfile();
-  VELOX_USER_CHECK_NOT_NULL(outputType, "Missing Paimon output type");
-  std::unordered_set<std::string> partitionColumns;
-  std::unordered_set<std::string> assignedColumns;
-  const auto validateHandle = [&](const ColumnHandlePtr& handle) {
-    VELOX_USER_CHECK_NOT_NULL(handle, "Missing Paimon column handle");
-    const auto* column = dynamic_cast<const FileColumnHandle*>(handle.get());
-    VELOX_USER_CHECK_NOT_NULL(
-        column, "Paimon requires FileColumnHandle inputs");
-    validateColumn(*column);
-    if (column->isPartitionKey()) {
-      partitionColumns.insert(column->name());
-    }
-    return column;
-  };
-  for (const auto& [alias, handle] : assignments) {
-    const auto* column = validateHandle(handle);
-    VELOX_USER_CHECK(
-        assignedColumns.insert(column->name()).second ||
-            column->isPartitionKey(),
-        "Paimon regular column '{}' cannot map to multiple assignments; use a projection",
-        column->name());
-  }
-  for (const auto& handle : filterColumnHandles_) {
-    validateHandle(handle);
-  }
-  std::unordered_set<std::string> outputNames;
-  for (column_index_t i = 0; i < outputType->size(); ++i) {
-    const auto& alias = outputType->nameOf(i);
-    VELOX_USER_CHECK(
-        outputNames.insert(alias).second,
-        "Duplicate Paimon output channel name '{}'",
-        alias);
-    const auto it = assignments.find(alias);
-    VELOX_USER_CHECK(
-        it != assignments.end(),
-        "Missing Paimon output assignment '{}'",
-        alias);
-    const auto* column = static_cast<const FileColumnHandle*>(it->second.get());
-    VELOX_USER_CHECK(
-        *outputType->childAt(i) == *column->dataType(),
-        "Paimon output channel type does not match column handle: '{}'",
-        alias);
-  }
-  auto conditionColumns = validateExpression(*schema_, remainingFilter_);
-  for (const auto& [path, filter] : subfieldFilters_) {
-    conditionColumns.insert(
-        path.path().front()->as<common::Subfield::NestedField>()->name());
-  }
-  for (const auto& name : conditionColumns) {
-    VELOX_USER_CHECK(
-        !isPartitionColumn(*schema_, name) || partitionColumns.count(name),
-        "Paimon partition condition requires a partition column handle: '{}'",
-        name);
   }
 }
 

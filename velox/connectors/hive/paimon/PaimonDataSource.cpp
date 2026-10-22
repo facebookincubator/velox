@@ -22,28 +22,6 @@
 #include "velox/dwio/common/ReaderFactory.h"
 
 namespace facebook::velox::connector::hive::paimon {
-namespace {
-
-const std::shared_ptr<const PaimonTableHandle>& validateTableInput(
-    const RowTypePtr& outputType,
-    const std::shared_ptr<const PaimonTableHandle>& handle,
-    const ColumnHandleMap& assignments,
-    const ConnectorQueryCtx* context,
-    const std::shared_ptr<PaimonConfig>& config) {
-  VELOX_USER_CHECK_NOT_NULL(handle, "Missing Paimon table handle");
-  VELOX_CHECK_NOT_NULL(context);
-  VELOX_CHECK_NOT_NULL(config);
-  handle->validateQuery(outputType, assignments);
-  VELOX_USER_CHECK(
-      !config->ignoreMissingFiles(context->sessionProperties()),
-      "Paimon same-schema append profile does not support ignore_missing_files");
-  VELOX_USER_CHECK(
-      !config->isFileColumnNamesReadAsLowerCase(context->sessionProperties()),
-      "Paimon same-schema append profile does not support lower-case file mapping");
-  return handle;
-}
-
-} // namespace
 
 PaimonDataSource::PaimonDataSource(
     const RowTypePtr& outputType,
@@ -55,18 +33,35 @@ PaimonDataSource::PaimonDataSource(
     const std::shared_ptr<PaimonConfig>& paimonConfig)
     : FileDataSource(
           outputType,
-          validateTableInput(
-              outputType,
-              tableHandle,
-              assignments,
-              connectorQueryCtx,
-              paimonConfig),
+          tableHandle,
           assignments,
           fileHandleFactory,
           ioExecutor,
           connectorQueryCtx,
           paimonConfig),
-      paimonTableHandle_(tableHandle) {}
+      paimonTableHandle_(tableHandle) {
+  paimonTableHandle_->validateReadProfile();
+  for (const auto& [_, handle] : assignments) {
+    paimonTableHandle_->validateColumn(
+        *static_cast<const FileColumnHandle*>(handle.get()));
+  }
+  const auto& schema = *paimonTableHandle_->schema();
+  for (auto id : schema.partitionKeys()) {
+    const auto& name =
+        schema.rowType()->nameOf(schema.fieldIndexPath(id).front());
+    VELOX_USER_CHECK(
+        !scanSpec_->childByName(name) || partitionKeys_.count(name),
+        "Paimon partition condition requires a partition column handle: '{}'",
+        name);
+  }
+  VELOX_USER_CHECK(
+      !paimonConfig->ignoreMissingFiles(connectorQueryCtx->sessionProperties()),
+      "Paimon same-schema append profile does not support ignore_missing_files");
+  VELOX_USER_CHECK(
+      !paimonConfig->isFileColumnNamesReadAsLowerCase(
+          connectorQueryCtx->sessionProperties()),
+      "Paimon same-schema append profile does not support lower-case file mapping");
+}
 
 void PaimonDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
   auto paimonSplit = checkedPointerCast<PaimonConnectorSplit>(split);

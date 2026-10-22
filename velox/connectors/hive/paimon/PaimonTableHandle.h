@@ -105,11 +105,12 @@ class PaimonTableHandle final : public FileTableHandle {
   /// split has no file schema IDs, so this cannot verify file schema identity.
   void validateSplit(const PaimonConnectorSplit& split) const;
 
-  /// Validates the executable profile and existing name-based query metadata
-  /// before the common scan prepares or compiles its conditions.
-  void validateQuery(
-      const RowTypePtr& outputType,
-      const ColumnHandleMap& assignments) const;
+  /// Checks whether the table definition fits the same-schema append read
+  /// profile.
+  void validateReadProfile() const;
+
+  /// Checks a column against the fixed schema and partition declarations.
+  void validateColumn(const FileColumnHandle& column) const;
 
   /// Checks the decoded footer's ordered names and types before adaptation.
   /// Physical partition columns may all be present or all omitted; optional
@@ -128,9 +129,6 @@ class PaimonTableHandle final : public FileTableHandle {
   static void registerSerDe();
 
  private:
-  void validateReadProfile() const;
-  void validateColumn(const FileColumnHandle& column) const;
-
   const std::string tableName_;
   const std::string dbName_;
   const PaimonSchemaPtr schema_;

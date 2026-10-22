@@ -257,9 +257,9 @@ TEST_F(PaimonTableHandleTest, splitValidation) {
 
 TEST_F(PaimonTableHandleTest, executableProfile) {
   const auto good = schema({})->serialize();
-  table(PaimonSchema::create(good))->validateQuery(ROW({}), {});
+  table(PaimonSchema::create(good))->validateReadProfile();
   VELOX_ASSERT_USER_THROW(
-      table()->validateQuery(ROW({}), {}),
+      table()->validateReadProfile(),
       "Paimon same-schema append profile does not support primary-key tables");
   for (const auto& key :
        {"type",
@@ -271,11 +271,11 @@ TEST_F(PaimonTableHandleTest, executableProfile) {
     auto wire = good;
     wire["options"].erase(key);
     VELOX_ASSERT_USER_THROW(
-        table(PaimonSchema::create(wire))->validateQuery(ROW({}), {}),
+        table(PaimonSchema::create(wire))->validateReadProfile(),
         "Missing explicit Paimon profile option");
     wire["options"][key] = "unsupported";
     VELOX_ASSERT_USER_THROW(
-        table(PaimonSchema::create(wire))->validateQuery(ROW({}), {}),
+        table(PaimonSchema::create(wire))->validateReadProfile(),
         "Paimon same-schema append profile requires");
   }
   for (const auto& key :
@@ -289,7 +289,7 @@ TEST_F(PaimonTableHandleTest, executableProfile) {
     auto wire = good;
     wire["options"][key] = "unverified";
     VELOX_ASSERT_USER_THROW(
-        table(PaimonSchema::create(wire))->validateQuery(ROW({}), {}),
+        table(PaimonSchema::create(wire))->validateReadProfile(),
         fmt::format(
             "Paimon same-schema append profile does not support option '{}'",
             key));
@@ -298,24 +298,24 @@ TEST_F(PaimonTableHandleTest, executableProfile) {
     auto wire = good;
     wire["options"]["bucket"] = value;
     VELOX_ASSERT_USER_THROW(
-        table(PaimonSchema::create(wire))->validateQuery(ROW({}), {}),
+        table(PaimonSchema::create(wire))->validateReadProfile(),
         "Unsupported Paimon append bucket option");
   }
   auto wire = good;
   wire["options"]["file.format"] = "avro";
   VELOX_ASSERT_USER_THROW(
-      table(PaimonSchema::create(wire))->validateQuery(ROW({}), {}),
+      table(PaimonSchema::create(wire))->validateReadProfile(),
       "Unsupported Paimon schema file.format");
   wire = good;
   wire["options"]["row-tracking.enabled"] = "true";
-  table(PaimonSchema::create(wire))->validateQuery(ROW({}), {});
+  table(PaimonSchema::create(wire))->validateReadProfile();
   wire["options"]["row-tracking.enabled"] = "unknown";
   VELOX_ASSERT_USER_THROW(
-      table(PaimonSchema::create(wire))->validateQuery(ROW({}), {}),
+      table(PaimonSchema::create(wire))->validateReadProfile(),
       "Paimon profile requires explicit boolean 'row-tracking.enabled'");
   wire["options"].erase("row-tracking.enabled");
   VELOX_ASSERT_USER_THROW(
-      table(PaimonSchema::create(wire))->validateQuery(ROW({}), {}),
+      table(PaimonSchema::create(wire))->validateReadProfile(),
       "Paimon profile requires explicit boolean 'row-tracking.enabled'");
   const auto queryOptions = std::make_shared<PaimonTableHandle>(
       "test-paimon",
@@ -328,7 +328,7 @@ TEST_F(PaimonTableHandleTest, executableProfile) {
       std::unordered_map<std::string, std::string>{
           {"skip.header.line.count", "1"}});
   VELOX_ASSERT_USER_THROW(
-      queryOptions->validateQuery(ROW({}), {}),
+      queryOptions->validateReadProfile(),
       "Paimon same-schema append profile does not support query options");
 }
 
@@ -411,21 +411,6 @@ TEST_F(PaimonTableHandleTest, conditionValidation) {
                       schema({})->rowType())},
               "test_predicate")),
       "Paimon remaining filter must access input columns by name");
-  common::SubfieldFilters partitionFilter;
-  partitionFilter.emplace(
-      common::Subfield("p"), std::make_unique<common::IsNull>());
-  const auto handle = makeHandle(std::move(partitionFilter), nullptr);
-  VELOX_ASSERT_USER_THROW(
-      handle->validateQuery(ROW({}), {}),
-      "Paimon partition condition requires a partition column handle: 'p'");
-  handle->validateQuery(
-      ROW({}),
-      {{"p",
-        std::make_shared<HiveColumnHandle>(
-            "p",
-            FileColumnHandle::ColumnType::kPartitionKey,
-            VARCHAR(),
-            VARCHAR())}});
 }
 
 TEST_F(PaimonTableHandleTest, invalidDefinition) {
