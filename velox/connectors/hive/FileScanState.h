@@ -28,8 +28,8 @@ namespace facebook::velox::connector::hive {
 /// Scan state owned by a FileDataSource and reused across its splits.
 struct FileScanState {
   /// Filters from the table handle and extracted from the remaining expression,
-  /// also used for split validation. Filter objects can be shared with the table
-  /// handle and other data sources and must not be modified in place.
+  /// also used for split validation. Filter objects can be shared with the
+  /// table handle and other data sources and must not be modified in place.
   /// Dynamic filters are added to scanSpec, not to this map.
   common::SubfieldFilters filters;
 
