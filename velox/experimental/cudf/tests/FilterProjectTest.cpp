@@ -1428,6 +1428,25 @@ TEST_F(CudfFilterProjectTest, dateTruncGroupByOrderBy) {
   assertPlanMatchesVelox(plan);
 }
 
+TEST_F(CudfFilterProjectTest, extractComponentsAsFunctionInputs) {
+  // cuDF extracts datetime components as INT16 (INT32 for week and
+  // year_of_week), while the Presto functions return BIGINT. Each projection
+  // nests an extract next to a BIGINT input, so the extracted column must be
+  // cast to its declared type before copy_if_else (IF) or replace_nulls
+  // (COALESCE) sees it.
+  auto vectors = makeTimestampExtractVectors();
+  const std::vector<std::string> projections{
+      "if(event_id % 2 = 0, year(event_ts), 0) AS year_or_zero",
+      "if(event_id % 2 = 0, month(event_date), 0) AS month_or_zero",
+      "if(event_id % 2 = 0, day_of_year(event_ts), cast(event_id AS BIGINT)) AS doy_or_id",
+      "if(event_id % 2 = 0, quarter(event_date), cast(event_id AS BIGINT)) AS quarter_or_id",
+      "if(event_id % 2 = 0, week(event_ts), 0) AS week_or_zero",
+      "if(event_id % 2 = 0, year_of_week(event_ts), 0) AS year_of_week_or_zero",
+      "coalesce(year(event_ts), year(event_date), 0) AS any_year"};
+
+  assertProjectMatchesVelox(vectors, projections);
+}
+
 TEST_F(CudfFilterProjectTest, extractTimestampComponents) {
   auto vectors = makeTimestampExtractVectors();
   const std::vector<std::string> projections{

@@ -3199,13 +3199,19 @@ ColumnOrView FunctionExpression::eval(
     const bool maskBranches = operandIndex.size() == subexpressions_.size() &&
         !operandIndex.empty() && operandIndex.front() == 0;
 
+    // CudfFunction implementations operate on plain cuDF columns and assume
+    // each input has its expression's declared type, so finalize every child: a
+    // child whose cuDF result type differs (e.g. INT16 from
+    // extract_datetime_component for a BIGINT year()) is cast before the
+    // function sees it.
     if (maskBranches) {
       // Branches are materialized over every row before copy_if_else selects,
       // so a fail-fast kernel in one would abort the batch over rows the
       // conditional discards. Hand each branch inputs whose null mask excludes
       // the rows it does not supply; the kernels already skip null rows. Velox
       // CPU narrows a SelectivityVector per branch instead.
-      auto condition = subexpressions_[0]->eval(inputColumnViews, stream, mr);
+      auto condition = subexpressions_[0]->eval(
+          inputColumnViews, stream, mr, /*finalize=*/true);
       const auto conditionView = asView(condition);
       subexprResults.push_back(std::move(condition));
 
@@ -3225,20 +3231,22 @@ ColumnOrView FunctionExpression::eval(
             mr));
         subexprResults.push_back(
             subexpressions_[branch]->eval(
-                branchInputs.back().views, stream, mr));
+                branchInputs.back().views, stream, mr, /*finalize=*/true));
       }
     } else {
       for (const auto& subexpr : subexpressions_) {
-        subexprResults.push_back(subexpr->eval(inputColumnViews, stream, mr));
+        subexprResults.push_back(
+            subexpr->eval(inputColumnViews, stream, mr, /*finalize=*/true));
       }
     }
 
     auto result = function_->eval(subexprResults, stream, mr);
     if (finalize) {
-      const auto requestedType = cudf_velox::veloxToCudfDataType(expr_->type());
+      const auto requestedType =
+          cudf_velox::tryVeloxToCudfDataType(expr_->type());
       auto resultView = asView(result);
-      if (resultView.type() != requestedType) {
-        return cudf::cast(resultView, requestedType, stream, mr);
+      if (requestedType && resultView.type() != *requestedType) {
+        return cudf::cast(resultView, *requestedType, stream, mr);
       }
     }
     return result;
