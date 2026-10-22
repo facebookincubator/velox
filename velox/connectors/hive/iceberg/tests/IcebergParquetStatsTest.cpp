@@ -763,9 +763,9 @@ TEST_F(IcebergParquetStatsTest, partitionedTableWithNulls) {
            nullEvery(11))});
   const auto& fileStats =
       writeDataAndGetAllStats(rowVector, partitionTransforms);
-  int32_t totalIntNulls = 0;
-  int32_t totalDateNulls = 0;
-  int32_t totalVarcharNulls = 0;
+  int64_t totalIntNulls = 0;
+  int64_t totalDateNulls = 0;
+  int64_t totalVarcharNulls = 0;
   int32_t totalRecords = 0;
 
   constexpr int32_t intColId = 1;
@@ -776,15 +776,18 @@ TEST_F(IcebergParquetStatsTest, partitionedTableWithNulls) {
     totalRecords += stats->numRecords;
     // Add null counts if present.
     if (stats->columnStats.contains(intColId)) {
-      totalIntNulls += stats->columnStats.at(intColId).nullValueCount;
+      totalIntNulls +=
+          stats->columnStats.at(intColId).nullValueCount.value_or(0);
     }
 
     if (stats->columnStats.contains(dateColId)) {
-      totalDateNulls += stats->columnStats.at(dateColId).nullValueCount;
+      totalDateNulls +=
+          stats->columnStats.at(dateColId).nullValueCount.value_or(0);
     }
 
     if (stats->columnStats.contains(varcharColId)) {
-      totalVarcharNulls += stats->columnStats.at(varcharColId).nullValueCount;
+      totalVarcharNulls +=
+          stats->columnStats.at(varcharColId).nullValueCount.value_or(0);
     }
   }
 
