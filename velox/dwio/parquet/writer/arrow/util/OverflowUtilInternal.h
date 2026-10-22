@@ -34,8 +34,7 @@
 #include "arrow/util/windows_fixup.h"
 // clang-format on.
 
-namespace arrow {
-namespace internal {
+namespace facebook::velox::parquet::arrow::internal {
 
 // Define functions AddWithOverflow, SubtractWithOverflow, MultiplyWithOverflow.
 // with the signature `bool(T u, T v, T* out)` where T is an integer type.
@@ -117,5 +116,4 @@ SignedInt safeLeftShift(SignedInt u, Shift shift) {
   return static_cast<SignedInt>(static_cast<UnsignedInt>(u) << shift);
 }
 
-} // namespace internal
-} // namespace arrow
+} // namespace facebook::velox::parquet::arrow::internal

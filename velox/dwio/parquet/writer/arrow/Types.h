@@ -645,13 +645,14 @@ constexpr int64_t kMillisecondsPerDay = kSecondsPerDay * INT64_C(1000);
 constexpr int64_t kMicrosecondsPerDay = kMillisecondsPerDay * INT64_C(1000);
 constexpr int64_t kNanosecondsPerDay = kMicrosecondsPerDay * INT64_C(1000);
 
-MANUALLY_ALIGNED_STRUCT(1) Int96 {
+struct __attribute__((__packed__)) Int96 {
   uint32_t value[3];
 };
-STRUCT_END(Int96, 12);
+static_assert(sizeof(Int96) == 12, "compiler breaks packing rules");
 
 inline bool operator==(const Int96& left, const Int96& right) {
-  return std::equal(left.value, left.value + 3, right.value);
+  return left.value[0] == right.value[0] && left.value[1] == right.value[1] &&
+      left.value[2] == right.value[2];
 }
 
 static inline std::string byteArrayToString(const ByteArray& a) {
@@ -708,7 +709,7 @@ static inline int64_t int96GetSeconds(const Int96& i96) {
 
 static inline std::string int96ToString(const Int96& a) {
   std::ostringstream result;
-  std::copy(a.value, a.value + 3, std::ostream_iterator<uint32_t>(result, " "));
+  result << a.value[0] << " " << a.value[1] << " " << a.value[2] << " ";
   return result.str();
 }
 

@@ -37,9 +37,13 @@ if(VELOX_ENABLE_ARROW)
     -DARROW_WITH_ZLIB=ON
     -DARROW_WITH_ZSTD=ON
     -DARROW_JEMALLOC=OFF
+    -DARROW_MIMALLOC=OFF
     -DARROW_SIMD_LEVEL=NONE
     -DARROW_RUNTIME_SIMD_LEVEL=NONE
     -DARROW_WITH_UTF8PROC=OFF
+    # Arrow requires a newer xsimd than Velox uses. Arrow uses xsimd only
+    # internally, so we can use the bundled xsimd for Arrow.
+    -Dxsimd_SOURCE=BUNDLED
     -DARROW_TESTING=ON
     -DCMAKE_INSTALL_LIBDIR=lib
     -DCMAKE_INSTALL_PREFIX=${ARROW_PREFIX}/install
@@ -49,20 +53,54 @@ if(VELOX_ENABLE_ARROW)
     -DBOOST_ROOT=${BOOST_ROOT}
     -DBoost_NO_BOOST_CMAKE=TRUE
     -DCMAKE_POLICY_VERSION_MINIMUM=3.5
-    # Remove with Arrow upgrade to Arrow 20.
-    -DARROW_CXXFLAGS=-Wno-documentation
     # Arrow inherits the CMake build type from Velox. So a Debug build turns
     # on additional warnings that can cause the build to fail
     # (e.g. deprecated-literal-operator in Apple Clang 21).
     # The SYSTEM version of Arrow is always a Release build.
     -DBUILD_WARNING_LEVEL=PRODUCTION
+    # Always bundle uriparser so that libarrow_bundled_dependencies.a exists.
+    -Duriparser_SOURCE=BUNDLED
   )
+  # Arrow must use the simdjson that Velox uses.
+  set(ARROW_DEPENDS)
+  if(simdjson_SOURCE STREQUAL "SYSTEM")
+    list(APPEND ARROW_CMAKE_ARGS -Dsimdjson_SOURCE=SYSTEM -Dsimdjson_DIR=${simdjson_DIR})
+  else()
+    # Velox builds simdjson in this build tree but doesn't install it. Generate
+    # a CMake package for it so that Arrow can use it as the system simdjson.
+    set(ARROW_SIMDJSON_DIR ${CMAKE_CURRENT_BINARY_DIR}/simdjson)
+    file(
+      GENERATE OUTPUT
+      ${ARROW_SIMDJSON_DIR}/simdjsonConfig.cmake
+      CONTENT
+        [=[
+if(NOT TARGET simdjson::simdjson)
+  add_library(simdjson::simdjson UNKNOWN IMPORTED)
+  set_target_properties(
+    simdjson::simdjson
+    PROPERTIES
+      IMPORTED_LOCATION "$<TARGET_FILE:simdjson>"
+      INTERFACE_INCLUDE_DIRECTORIES "$<TARGET_PROPERTY:simdjson,INTERFACE_INCLUDE_DIRECTORIES>"
+      INTERFACE_COMPILE_DEFINITIONS "$<TARGET_PROPERTY:simdjson,INTERFACE_COMPILE_DEFINITIONS>"
+  )
+endif()
+]=]
+    )
+    include(CMakePackageConfigHelpers)
+    write_basic_package_version_file(
+      ${ARROW_SIMDJSON_DIR}/simdjsonConfigVersion.cmake
+      VERSION ${VELOX_SIMDJSON_VERSION}
+      COMPATIBILITY SameMajorVersion
+    )
+    list(APPEND ARROW_CMAKE_ARGS -Dsimdjson_SOURCE=SYSTEM -Dsimdjson_DIR=${ARROW_SIMDJSON_DIR})
+    list(APPEND ARROW_DEPENDS simdjson)
+  endif()
   set(ARROW_LIBDIR ${ARROW_PREFIX}/install/lib)
 
-  set(VELOX_ARROW_BUILD_VERSION 18.0.0)
+  set(VELOX_ARROW_BUILD_VERSION 26.0.0)
   set(
     VELOX_ARROW_BUILD_SHA256_CHECKSUM
-    9c473f2c9914c59ab571761c9497cf0e5cfd3ea335f7782ccc6121f5cb99ae9b
+    d895810bdeb84b1fa3491c5b6985c190fd02b8ecfaa0952cd68125b4d2e70902
   )
   set(
     VELOX_ARROW_SOURCE_URL
@@ -78,10 +116,11 @@ if(VELOX_ENABLE_ARROW)
     URL_HASH ${VELOX_ARROW_BUILD_SHA256_CHECKSUM}
     SOURCE_SUBDIR cpp
     CMAKE_ARGS ${ARROW_CMAKE_ARGS}
-    BUILD_BYPRODUCTS ${ARROW_LIBDIR}/libarrow.a ${ARROW_LIBDIR}/libarrow_testing.a
-    PATCH_COMMAND
-      patch -p1 -i ${CMAKE_CURRENT_LIST_DIR}/cmake-compatibility.patch && patch -p1 -i
-      ${CMAKE_CURRENT_LIST_DIR}/arrow-testing-boost.patch
+    DEPENDS ${ARROW_DEPENDS}
+    BUILD_BYPRODUCTS
+      ${ARROW_LIBDIR}/libarrow.a
+      ${ARROW_LIBDIR}/libarrow_bundled_dependencies.a
+      ${ARROW_LIBDIR}/libarrow_testing.a
   )
 
   add_library(arrow STATIC IMPORTED GLOBAL)
@@ -95,15 +134,13 @@ if(VELOX_ENABLE_ARROW)
     PROPERTIES INTERFACE_INCLUDE_DIRECTORIES ${ARROW_PREFIX}/install/include
   )
   set_target_properties(arrow PROPERTIES IMPORTED_LOCATION ${ARROW_LIBDIR}/libarrow.a)
-  set_property(TARGET arrow PROPERTY INTERFACE_LINK_LIBRARIES ${RE2})
-  # Mirror the path-based interface dep from CMake/FindArrow.cmake — see
-  # the SYSTEM-arrow comment there for the ODR-violation rationale that
-  # forces us to use ${ARROW_LIBDIR}/libarrow.a (path) instead of the
-  # `arrow` target name.
+  target_link_libraries(
+    arrow
+    INTERFACE ${RE2} ${ARROW_LIBDIR}/libarrow_bundled_dependencies.a simdjson::simdjson
+  )
   set_target_properties(
     arrow_testing
-    PROPERTIES
-      IMPORTED_LOCATION ${ARROW_LIBDIR}/libarrow_testing.a
-      INTERFACE_LINK_LIBRARIES ${ARROW_LIBDIR}/libarrow.a
+    PROPERTIES IMPORTED_LOCATION ${ARROW_LIBDIR}/libarrow_testing.a
   )
+  target_link_libraries(arrow_testing INTERFACE arrow)
 endif()

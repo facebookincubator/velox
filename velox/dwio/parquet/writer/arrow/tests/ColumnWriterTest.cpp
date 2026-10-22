@@ -950,7 +950,8 @@ TEST(TestColumnWriter, repeatedListsUpdateSpacedBug) {
   std::shared_ptr<Buffer> validBits;
   ASSERT_OK_AND_ASSIGN(
       validBits,
-      ::arrow::internal::BytesToBits({1, 1, 0, 1, 1, 1, 0, 1, 1, 1, 0, 1, 1}));
+      ::arrow::internal::BytesToBits(
+          std::vector<uint8_t>{1, 1, 0, 1, 1, 1, 0, 1, 1, 1, 0, 1, 1}));
 
   // Valgrind will warn about out of bounds access into def_levels_data.
   typedWriter->writeBatchSpaced(

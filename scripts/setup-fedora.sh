@@ -80,10 +80,10 @@ function install_velox_deps {
   run_and_time install_fbthrift
   run_and_time install_duckdb
   run_and_time install_stemmer
-  run_and_time install_arrow
   run_and_time install_xsimd    # to new in fedora repos
   run_and_time install_simdjson # to new in fedora repos
-  run_and_time install_geos     # to new in fedora repos
+  run_and_time install_arrow
+  run_and_time install_geos # to new in fedora repos
   run_and_time install_s2geometry
   run_and_time install_faiss
 }

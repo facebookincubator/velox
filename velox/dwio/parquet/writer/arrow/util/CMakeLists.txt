@@ -28,6 +28,7 @@ velox_add_library(
   Crc32.h
   Hashing.h
   OverflowUtilInternal.h
+  Spaced.h
   VisitArrayInline.h
   safe-math.h
 )

@@ -19,8 +19,7 @@ SCRIPT_DIR=$(dirname "${BASH_SOURCE[0]}")
 source "$SCRIPT_DIR"/setup-helper-functions.sh
 source "$SCRIPT_DIR"/setup-versions.sh
 
-VELOX_BUILD_SHARED=${VELOX_BUILD_SHARED:-"OFF"}        #Build folly and gflags shared for use in libvelox.so.
-VELOX_ARROW_CMAKE_PATCH=${VELOX_ARROW_CMAKE_PATCH:-""} # avoid error due to +u
+VELOX_BUILD_SHARED=${VELOX_BUILD_SHARED:-"OFF"} #Build folly and gflags shared for use in libvelox.so.
 VELOX_OPENZL_CMAKE_PATCH=${VELOX_OPENZL_CMAKE_PATCH:-""}
 CMAKE_BUILD_TYPE="${BUILD_TYPE:-Release}"
 DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)}
@@ -266,24 +265,7 @@ function install_simdjson {
 function install_arrow {
   wget_and_untar https://github.com/apache/arrow/archive/apache-arrow-"${ARROW_VERSION}".tar.gz arrow
   (
-    # Can be removed after an upgrade to Arrow 20.0.0
-    if [ -z "$VELOX_ARROW_CMAKE_PATCH" ]; then
-      # We need to set a different path when building the Dockerfile.
-      ABSOLUTE_SCRIPTDIR=$(realpath "$SCRIPT_DIR")
-
-      VELOX_ARROW_CMAKE_PATCH="$ABSOLUTE_SCRIPTDIR/../CMake/resolve_dependency_modules/arrow/arrow-testing-boost.patch"
-      VELOX_ARROW_CMAKE_PATCH+=" $ABSOLUTE_SCRIPTDIR/../CMake/resolve_dependency_modules/arrow/cmake-compatibility.patch"
-    fi
-
     cd "$DEPENDENCY_DIR"/arrow || exit 1
-    for patch in $VELOX_ARROW_CMAKE_PATCH; do
-      # Try patch command first (handles line number offsets), fall back to git apply
-      if command -v patch >/dev/null 2>&1; then
-        patch -p1 -i "$patch" || exit 1
-      else
-        git apply "$patch" || exit 1
-      fi
-    done
     # Presto needs this for Arrow Flight
     if [[ -n $EXTRA_ARROW_PATCH ]]; then
       git apply "$EXTRA_ARROW_PATCH" || exit 1
@@ -297,9 +279,11 @@ function install_arrow {
     -DARROW_WITH_ZLIB=ON \
     -DARROW_WITH_ZSTD=ON \
     -DARROW_JEMALLOC=OFF \
+    -DARROW_MIMALLOC=OFF \
     -DARROW_SIMD_LEVEL=NONE \
     -DARROW_RUNTIME_SIMD_LEVEL=NONE \
     -DARROW_WITH_UTF8PROC=OFF \
+    -Dxsimd_SOURCE=BUNDLED \
     -DARROW_TESTING=ON \
     -DCMAKE_INSTALL_PREFIX="$INSTALL_PREFIX" \
     -DCMAKE_BUILD_TYPE=Release \

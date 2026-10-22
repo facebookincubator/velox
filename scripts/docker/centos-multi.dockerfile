@@ -47,8 +47,6 @@ COPY scripts/setup-helper-functions.sh /
 COPY scripts/setup-versions.sh /
 COPY scripts/setup-common.sh /
 COPY scripts/setup-centos9.sh /
-COPY CMake/resolve_dependency_modules/arrow/arrow-testing-boost.patch /
-COPY CMake/resolve_dependency_modules/arrow/cmake-compatibility.patch /
 COPY CMake/resolve_dependency_modules/openzl/openzl-cxx-standard.patch /
 
 ARG VELOX_BUILD_SHARED=ON
@@ -74,13 +72,8 @@ ENV UV_TOOL_BIN_DIR=/usr/local/bin \
     INSTALL_PREFIX=/deps
 
 # CMake 4.0 removed support for cmake minimums of <=3.5 and will fail
-# builds, CMAKE_POLICY_VERSION_MINIMUM and cmake-compatibility.path
-# override it.
-# Apache Arrow 18.0.0 has a problem that Boost isn't detected when
-# ARROW_TESTING=ON is only used:
-# https://github.com/apache/arrow/pull/45424
+# builds, CMAKE_POLICY_VERSION_MINIMUM overrides it.
 ENV CMAKE_POLICY_VERSION_MINIMUM="3.5" \
-    VELOX_ARROW_CMAKE_PATCH="/arrow-testing-boost.patch /cmake-compatibility.patch" \
     VELOX_OPENZL_CMAKE_PATCH="/openzl-cxx-standard.patch"
 
 # Ensure libraries installed to INSTALL_PREFIX are found at runtime (e.g.

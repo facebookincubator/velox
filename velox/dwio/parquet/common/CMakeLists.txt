@@ -37,6 +37,7 @@ velox_link_libraries(
   velox_type
   velox_dwio_common
   velox_dwio_common_compression
+  velox_fastpforlib
   arrow
   fmt::fmt
   Folly::folly
