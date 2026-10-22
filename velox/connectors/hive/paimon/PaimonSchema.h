@@ -50,10 +50,13 @@ struct PaimonTypeMetadata {
   static PaimonTypeMetadata create(const folly::dynamic& obj);
 };
 
-/// A normalized table schema with stable DataField identities. 'schemaVersion'
-/// identifies the source schema JSON format (1-3). Options are retained exactly
-/// as supplied; callers prepare version-specific defaults before construction.
-/// Type support here describes the model, not a reader's execution capability.
+/// Immutable, versioned table definition based on the Paimon spec, combining a
+/// Velox RowType with schemaId, stable field IDs, logical types/nullability,
+/// primary and partition keys, and options. Target and historical schemas share
+/// this representation so future evolution mapping can resolve historical
+/// schemas by schemaId from file metadata, then map stable field IDs without
+/// requiring IDs in data files. This model is a foundation for schema
+/// evolution; cross-schema reading is not implemented yet.
 class PaimonSchema {
  public:
   static constexpr int32_t kSerdeVersion = 1;
@@ -77,6 +80,8 @@ class PaimonSchema {
   int64_t schemaId() const {
     return schemaId_;
   }
+  /// Source schema JSON format version (1-3), independent of schemaId and wire
+  /// version. Callers normalize version-specific option defaults before use.
   int32_t schemaVersion() const {
     return schemaVersion_;
   }
