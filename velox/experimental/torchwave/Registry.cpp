@@ -604,6 +604,11 @@ MetadataBuilder& MetadataBuilder::hasOutputArg(bool val) {
   return *this;
 }
 
+MetadataBuilder& MetadataBuilder::hasOwnOutputArg(bool val) {
+  ensureElementwise().hasOwnOutputArg = val;
+  return *this;
+}
+
 MetadataBuilder& MetadataBuilder::isScalarElementwise(bool val) {
   md_.isScalarElementwise = val;
   return *this;
