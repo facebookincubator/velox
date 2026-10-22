@@ -825,7 +825,8 @@ void NimbleIndexProjector::lookupStripes() {
       }};
 
   const auto result = clusterIndex_->lookup(
-      index::IndexLookup::LookupRequest::rangeScan(ctx_.request->keyBounds));
+      index::IndexLookup::LookupRequest::rangeScan(
+          ctx_.request->keyBounds, ctx_.options->lookupOptions));
 
   struct ResolvedRequest {
     uint32_t requestIndex;
