@@ -76,10 +76,6 @@ void AggregateCompanionFunctionBase::setConstantInputs(
   fn_->setConstantInputs(constantInputs);
 }
 
-void AggregateCompanionFunctionBase::destroy(folly::Range<char**> groups) {
-  fn_->destroy(groups);
-}
-
 void AggregateCompanionFunctionBase::destroyInternal(
     folly::Range<char**> groups) {
   fn_->destroy(groups);

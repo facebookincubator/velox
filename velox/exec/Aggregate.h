@@ -318,7 +318,7 @@ class Aggregate {
 
   // Frees any out of line storage for the accumulator in
   // 'groups' and marks the aggregate as uninitialized.
-  virtual void destroy(folly::Range<char**> groups) {
+  virtual void destroy(folly::Range<char**> groups) final {
     destroyInternal(groups);
 
     for (auto* group : groups) {
