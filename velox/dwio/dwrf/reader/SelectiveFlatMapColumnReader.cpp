@@ -186,6 +186,13 @@ std::vector<KeyNode<T>> getKeyNodes(
             key, sequence, std::move(reader), std::move(inMapDecoder));
       });
 
+  if (const auto& callback = params.flatMapContext().keySelectionCallback) {
+    callback({
+        .totalKeys = processed.size(),
+        .selectedKeys = keyNodes.size(),
+    });
+  }
+
   VLOG(1) << "[Flat-Map] Initialized a flat-map column reader for node "
           << fileType->id() << ", keys=" << keyNodes.size()
           << ", streams=" << streams;
