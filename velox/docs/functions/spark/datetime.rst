@@ -456,7 +456,7 @@ These functions support TIMESTAMP and DATE input types.
         SELECT timestamp_seconds(float(3.4028235E+38)); -- '+294247-01-10 04:00:54.775807'
         SELECT timestamp_seconds(float('nan')); -- NULL
 
-.. spark:function:: to_timestamp_ntz(timestamp_str[, fmt]) -> timestamp_ntz
+.. spark:function:: to_timestamp_ntz(timestamp_str[, fmt]) -> timestamp_utc
 
     Parses ``timestamp_str`` following the same rules as ``CAST(timestamp_str AS
     TIMESTAMP_NTZ)``. A timezone suffix in the input is accepted but discarded;
@@ -466,7 +466,8 @@ These functions support TIMESTAMP and DATE input types.
     If ``fmt`` is provided, ``timestamp_str`` is parsed according to the
     specified format instead, following Spark's
     `Datetime patterns
-    <https://spark.apache.org/docs/latest/sql-ref-datetime-pattern.html>`_. ::
+    <https://spark.apache.org/docs/latest/sql-ref-datetime-pattern.html>`_.
+    ``spark.legacy_date_formatter`` is ignored. ::
 
         SELECT to_timestamp_ntz('2016-12-31 00:12:00'); -- timestamp_ntz '2016-12-31 00:12:00'
         SELECT to_timestamp_ntz('2016-12-31 00:12:00+08:00'); -- timestamp_ntz '2016-12-31 00:12:00'

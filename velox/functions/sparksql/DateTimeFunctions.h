@@ -39,7 +39,7 @@ Expected<std::shared_ptr<DateTimeFormatter>> getDateTimeFormatter(
       return buildSimpleDateTimeFormatter(format, /*lenient=*/true);
     default:
       return buildJodaDateTimeFormatter(
-          std::string_view(format.data(), format.size()));
+          std::string_view(format.data(), format.size()), type);
   }
 }
 
@@ -49,15 +49,16 @@ Expected<std::shared_ptr<DateTimeFormatter>> getDateTimeFormatter(
 //
 // @param format The format string to be used for initializing the formatter.
 // @param legacyFormatter Whether legacy formatter is used.
+// @param nonLegacyType Formatter type to use when legacyFormatter is false.
 // @return A shared pointer to a DateTimeFormatter. If the formatter
 // initialization fails and the legacy formatter is used, nullptr is returned.
 inline std::shared_ptr<DateTimeFormatter> initializeFormatter(
     const std::string_view format,
-    bool legacyFormatter) {
+    bool legacyFormatter,
+    DateTimeFormatterType nonLegacyType = DateTimeFormatterType::JODA) {
   auto formatter = detail::getDateTimeFormatter(
       std::string_view(format),
-      legacyFormatter ? DateTimeFormatterType::STRICT_SIMPLE
-                      : DateTimeFormatterType::JODA);
+      legacyFormatter ? DateTimeFormatterType::STRICT_SIMPLE : nonLegacyType);
   // When legacy formatter is used, returns nullptr for invalid format;
   // otherwise, throws a user error.
   if (formatter.hasError()) {
@@ -981,9 +982,9 @@ struct SecondsToTimestampFunction {
       const double secondsD = static_cast<double>(seconds);
 
       if (secondsD >= kMaxSecondsD) {
-        result = Timestamp(kMaxSeconds, kMaxNanoseconds);
+        result = Timestamp(kSparkMaxTimestampSeconds, kSparkMaxTimestampNanos);
       } else if (secondsD <= kMinSecondsD) {
-        result = Timestamp(kMinSeconds, kMinNanoseconds);
+        result = Timestamp(kSparkMinTimestampSeconds, kSparkMinTimestampNanos);
       } else {
         // Scale to microseconds and truncate toward zero.
         const double microsD = secondsD * Timestamp::kMicrosecondsInSecond;
@@ -1014,12 +1015,6 @@ struct SecondsToTimestampFunction {
       kMaxMicrosD / Timestamp::kMicrosecondsInSecond;
   static constexpr double kMinSecondsD =
       kMinMicrosD / Timestamp::kMicrosecondsInSecond;
-
-  // Cutoff values are based on Java's Long.MAX_VALUE and Long.MIN_VALUE.
-  static constexpr int64_t kMaxSeconds = 9223372036854LL;
-  static constexpr int64_t kMaxNanoseconds = 775807000LL;
-  static constexpr int64_t kMinSeconds = -9223372036855LL;
-  static constexpr int64_t kMinNanoseconds = 224192000LL;
 };
 
 template <typename T>
