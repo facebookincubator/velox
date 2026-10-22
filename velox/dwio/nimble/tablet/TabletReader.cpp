@@ -86,6 +86,9 @@ TabletReader::Options TabletReader::configureOptions(
       std::string(kVectorizedStatsSection),
       std::string(kStripeStatsSection)};
   tabletOptions.loadClusterIndex = options.loadClusterIndex();
+  if (!options.clusterIndexName().empty()) {
+    tabletOptions.clusterIndexName = options.clusterIndexName();
+  }
   tabletOptions.preloadIndex = options.preloadIndex();
   tabletOptions.loadChunkStats = options.loadChunkStats();
   if (tabletOptions.loadChunkStats) {

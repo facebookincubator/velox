@@ -162,6 +162,16 @@ class NimbleIndexProjector {
     /// as the new lowerKey with the original upperKey). When unset, no resume
     /// keys are produced even if a limit truncated the results.
     bool needResumeKey{false};
+    /// When set, every stream this call reads from storage is checked against
+    /// the checksum recorded in its stripe group, and a mismatch fails the
+    /// call. Asking for this on a file that records no checksums fails the
+    /// call; a file recording a checksum type this binary cannot build is
+    /// rejected earlier, when the projector is created.
+    bool verifyStreamChecksums{false};
+    /// Index-specific options applied before reading row data. Null selects
+    /// a key-only lookup. Per-range options follow the request's key-bound
+    /// order; the index validates their type and count.
+    std::shared_ptr<const index::IndexLookup::LookupOptions> lookupOptions;
   };
 
   /// Request for a batch of index lookups.
