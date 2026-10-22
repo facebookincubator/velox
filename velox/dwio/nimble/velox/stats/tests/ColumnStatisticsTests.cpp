@@ -16,6 +16,7 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <numeric>
 #include <optional>
 #include <random>
 #include <span>
@@ -23,7 +24,10 @@
 
 #include <gtest/gtest.h>
 
+#include "velox/common/hyperloglog/SparseHll.h"
+#include "velox/common/memory/Memory.h"
 #include "velox/dwio/nimble/velox/stats/ColumnStatistics.h"
+#include "velox/dwio/nimble/velox/stats/ColumnStatsUtils.h"
 
 using namespace facebook;
 using namespace facebook::nimble;
@@ -1119,4 +1123,359 @@ TEST_F(StatisticsCollectorTests, deduplicatedStatisticsCollectorMerge) {
       dedupCollector1.getBaseCollector()->getValueCount(),
       270); // (100-10) + (200-20)
   EXPECT_EQ(dedupCollector1.getBaseCollector()->getNullCount(), 30);
+}
+
+// NDV / HyperLogLog tests. These require a memory pool to back the HLL
+// accumulator, so they live in their own fixture. HLL is approximate; with
+// 2048 buckets the standard error is ~2.3%, so cardinality assertions
+// use a generous +/-10% band.
+class NdvStatisticsCollectorTests : public ::testing::Test {
+ protected:
+  static void SetUpTestCase() {
+    velox::memory::initializeMemoryManager(
+        velox::memory::MemoryManager::Options{});
+  }
+
+  void SetUp() override {
+    rootPool_ = velox::memory::memoryManager()->addRootPool("ndv_root");
+    leafPool_ = rootPool_->addLeafChild("ndv_leaf");
+  }
+
+  // Asserts 'actual' is within +/-10% of 'expected' (min band of 1).
+  static void expectCardinalityNear(int64_t expected, int64_t actual) {
+    const auto tolerance = std::max<int64_t>(1, expected / 10);
+    EXPECT_GE(actual, expected - tolerance);
+    EXPECT_LE(actual, expected + tolerance);
+  }
+
+  std::shared_ptr<velox::memory::MemoryPool> rootPool_;
+  std::shared_ptr<velox::memory::MemoryPool> leafPool_;
+};
+
+TEST_F(NdvStatisticsCollectorTests, DisabledByDefault) {
+  IntegralStatisticsCollector collector;
+  EXPECT_FALSE(collector.hllEnabled());
+  std::vector<int64_t> values = {1, 2, 3, 4, 5};
+  collector.addValues(std::span<int64_t>(values));
+  EXPECT_FALSE(collector.getStatsView()->getNdvSketch().has_value());
+  EXPECT_FALSE(collector.getStatsView()->getNdvCardinality().has_value());
+}
+
+TEST_F(NdvStatisticsCollectorTests, IntegralCardinality) {
+  IntegralStatisticsCollector collector;
+  collector.enableHll(leafPool_.get());
+  ASSERT_TRUE(collector.hllEnabled());
+
+  constexpr int64_t kDistinct = 1000;
+  std::vector<int64_t> values;
+  values.reserve(kDistinct * 2);
+  // Each distinct value appears twice; NDV must count it once.
+  for (int64_t i = 0; i < kDistinct; ++i) {
+    values.push_back(i);
+    values.push_back(i);
+  }
+  collector.addValues(std::span<int64_t>(values));
+
+  const auto* stats = collector.getStatsView();
+  ASSERT_TRUE(stats->getNdvSketch().has_value());
+  ASSERT_TRUE(stats->getNdvCardinality().has_value());
+  expectCardinalityNear(kDistinct, stats->getNdvCardinality().value());
+}
+
+TEST_F(NdvStatisticsCollectorTests, IntegralCardinalityAcrossBatches) {
+  IntegralStatisticsCollector collector;
+  collector.enableHll(leafPool_.get());
+
+  std::vector<int64_t> firstBatch;
+  firstBatch.reserve(400);
+  for (int64_t i = 0; i < 400; ++i) {
+    firstBatch.push_back(i);
+  }
+  collector.addValues(std::span<int64_t>(firstBatch));
+
+  // Overlapping batch: only 200 new distinct values (400..599).
+  std::vector<int64_t> secondBatch;
+  secondBatch.reserve(600 - 200);
+  for (int64_t i = 200; i < 600; ++i) {
+    secondBatch.push_back(i);
+  }
+  collector.addValues(std::span<int64_t>(secondBatch));
+
+  const auto card = collector.getStatsView()->getNdvCardinality();
+  ASSERT_TRUE(card.has_value());
+  expectCardinalityNear(600, card.value());
+}
+
+TEST_F(NdvStatisticsCollectorTests, FloatingPointCardinality) {
+  FloatingPointStatisticsCollector collector;
+  collector.enableHll(leafPool_.get());
+
+  constexpr int64_t kDistinct = 800;
+  std::vector<double> values;
+  values.reserve(kDistinct);
+  for (int64_t i = 0; i < kDistinct; ++i) {
+    values.push_back(static_cast<double>(i) + 0.5);
+  }
+  collector.addValues(std::span<double>(values));
+
+  const auto card = collector.getStatsView()->getNdvCardinality();
+  ASSERT_TRUE(card.has_value());
+  expectCardinalityNear(kDistinct, card.value());
+}
+
+TEST_F(NdvStatisticsCollectorTests, StringCardinality) {
+  StringStatisticsCollector collector;
+  collector.enableHll(leafPool_.get());
+
+  constexpr int64_t kDistinct = 500;
+  std::vector<std::string> owner;
+  owner.reserve(kDistinct);
+  std::vector<std::string_view> values;
+  values.reserve(kDistinct);
+  for (int64_t i = 0; i < kDistinct; ++i) {
+    owner.push_back("value_" + std::to_string(i));
+    values.emplace_back(owner.back());
+  }
+  collector.addValues(std::span<std::string_view>(values));
+
+  const auto card = collector.getStatsView()->getNdvCardinality();
+  ASSERT_TRUE(card.has_value());
+  expectCardinalityNear(kDistinct, card.value());
+}
+
+TEST_F(NdvStatisticsCollectorTests, SketchSurvivesClone) {
+  IntegralStatisticsCollector collector;
+  collector.enableHll(leafPool_.get());
+  std::vector<int64_t> values;
+  values.reserve(300);
+  for (int64_t i = 0; i < 300; ++i) {
+    values.push_back(i);
+  }
+  collector.addValues(std::span<int64_t>(values));
+
+  auto cloned = collector.getStatsView()->clone();
+  ASSERT_TRUE(cloned->getNdvSketch().has_value());
+  EXPECT_EQ(cloned->getNdvSketch(), collector.getStatsView()->getNdvSketch());
+  ASSERT_TRUE(cloned->getNdvCardinality().has_value());
+  expectCardinalityNear(300, cloned->getNdvCardinality().value());
+}
+
+// A deduplicated column reports the sketch of the statistics it wraps, the same
+// way it reports their value and null counts.
+TEST_F(NdvStatisticsCollectorTests, DeduplicatedStatsExposeBaseSketch) {
+  auto baseCollector = std::make_unique<IntegralStatisticsCollector>();
+  baseCollector->enableHll(leafPool_.get());
+  std::vector<int64_t> values(250);
+  std::iota(values.begin(), values.end(), 0);
+  baseCollector->addValues(std::span<int64_t>(values));
+
+  auto dedupCollector =
+      DeduplicatedStatisticsCollector::wrap(std::move(baseCollector));
+  const auto* dedupStats = dedupCollector->getStatsView();
+  const auto& baseSketch =
+      dedupCollector->getBaseCollector()->getStatsView()->getNdvSketch();
+
+  ASSERT_TRUE(baseSketch.has_value());
+  EXPECT_EQ(dedupStats->getNdvSketch(), baseSketch);
+  ASSERT_TRUE(dedupStats->getNdvCardinality().has_value());
+  expectCardinalityNear(250, dedupStats->getNdvCardinality().value());
+  EXPECT_EQ(
+      dedupStats->toCommonStatistics()->numDistinct(),
+      dedupStats->getNdvCardinality());
+
+  auto cloned = dedupStats->clone();
+  EXPECT_EQ(cloned->getNdvSketch(), baseSketch);
+}
+
+// Setting a sketch on a deduplicated column stores it on the wrapped
+// statistics, which is how the vectorized stats reader attaches it.
+TEST_F(NdvStatisticsCollectorTests, DeduplicatedStatsSetSketchOnBase) {
+  IntegralStatisticsCollector source;
+  source.enableHll(leafPool_.get());
+  std::vector<int64_t> values(120);
+  std::iota(values.begin(), values.end(), 0);
+  source.addValues(std::span<int64_t>(values));
+  const auto& sketch = source.getStatsView()->getNdvSketch();
+  ASSERT_TRUE(sketch.has_value());
+
+  IntegralStatistics base;
+  DeduplicatedColumnStatistics dedupStats(&base, 0, 0);
+  dedupStats.setNdvSketch(sketch);
+
+  EXPECT_EQ(base.getNdvSketch(), sketch);
+  EXPECT_EQ(dedupStats.getNdvSketch(), sketch);
+}
+
+// The serialized sketch reflects every batch added, including batches added
+// after an earlier read of the statistics.
+TEST_F(NdvStatisticsCollectorTests, SketchReflectsBatchesAfterRead) {
+  StringStatisticsCollector collector;
+  collector.enableHll(leafPool_.get());
+  std::vector<std::string> owner;
+  owner.reserve(400);
+  for (int64_t i = 0; i < 400; ++i) {
+    owner.push_back("v" + std::to_string(i));
+  }
+  std::vector<std::string_view> first(owner.begin(), owner.begin() + 200);
+  std::vector<std::string_view> second(owner.begin() + 200, owner.end());
+
+  collector.addValues(std::span<std::string_view>(first));
+  const auto afterFirst = collector.getStatsView()->getNdvCardinality();
+  ASSERT_TRUE(afterFirst.has_value());
+  expectCardinalityNear(200, afterFirst.value());
+
+  collector.addValues(std::span<std::string_view>(second));
+  const auto afterSecond = collector.getStatsView()->getNdvCardinality();
+  ASSERT_TRUE(afterSecond.has_value());
+  expectCardinalityNear(400, afterSecond.value());
+}
+
+TEST_F(NdvStatisticsCollectorTests, ResetClearsSketch) {
+  IntegralStatisticsCollector collector;
+  collector.enableHll(leafPool_.get());
+  std::vector<int64_t> values = {1, 2, 3};
+  collector.addValues(std::span<int64_t>(values));
+  ASSERT_TRUE(collector.getStatsView()->getNdvSketch().has_value());
+
+  collector.reset();
+  EXPECT_FALSE(collector.getStatsView()->getNdvSketch().has_value());
+  // Still enabled after reset: accumulating again produces a sketch.
+  EXPECT_TRUE(collector.hllEnabled());
+  collector.addValues(std::span<int64_t>(values));
+  EXPECT_TRUE(collector.getStatsView()->getNdvSketch().has_value());
+}
+
+TEST_F(NdvStatisticsCollectorTests, MergeAcrossCollectors) {
+  IntegralStatisticsCollector a;
+  a.enableHll(leafPool_.get());
+  std::vector<int64_t> aValues;
+  aValues.reserve(500);
+  for (int64_t i = 0; i < 500; ++i) {
+    aValues.push_back(i);
+  }
+  a.addValues(std::span<int64_t>(aValues));
+
+  IntegralStatisticsCollector b;
+  b.enableHll(leafPool_.get());
+  std::vector<int64_t> bValues;
+  // 300 overlap (200..499) + 200 new (500..699) => union 700.
+  for (int64_t i = 200; i < 700; ++i) {
+    bValues.push_back(i);
+  }
+  b.addValues(std::span<int64_t>(bValues));
+
+  a.merge(b);
+  const auto card = a.getStatsView()->getNdvCardinality();
+  ASSERT_TRUE(card.has_value());
+  expectCardinalityNear(700, card.value());
+}
+
+TEST_F(NdvStatisticsCollectorTests, MergeNdvSketchesHelper) {
+  IntegralStatisticsCollector a;
+  a.enableHll(leafPool_.get());
+  std::vector<int64_t> aValues;
+  aValues.reserve(400);
+  for (int64_t i = 0; i < 400; ++i) {
+    aValues.push_back(i);
+  }
+  a.addValues(std::span<int64_t>(aValues));
+
+  IntegralStatisticsCollector b;
+  b.enableHll(leafPool_.get());
+  std::vector<int64_t> bValues;
+  bValues.reserve(900 - 400);
+  for (int64_t i = 400; i < 900; ++i) {
+    bValues.push_back(i);
+  }
+  b.addValues(std::span<int64_t>(bValues));
+
+  const auto& lhs = a.getStatsView()->getNdvSketch();
+  const auto& rhs = b.getStatsView()->getNdvSketch();
+  ASSERT_TRUE(lhs.has_value());
+  ASSERT_TRUE(rhs.has_value());
+
+  auto merged = ColumnStatistics::mergeNdvSketches(lhs, rhs, leafPool_.get());
+  ASSERT_TRUE(merged.has_value());
+
+  ColumnStatistics mergedStats;
+  mergedStats.setNdvSketch(std::move(merged));
+  ASSERT_TRUE(mergedStats.getNdvCardinality().has_value());
+  // Disjoint sets 0..399 and 400..899 => union 900.
+  expectCardinalityNear(900, mergedStats.getNdvCardinality().value());
+
+  // One-sided merges return the present operand.
+  EXPECT_EQ(
+      ColumnStatistics::mergeNdvSketches(lhs, std::nullopt, leafPool_.get()),
+      lhs);
+  EXPECT_EQ(
+      ColumnStatistics::mergeNdvSketches(std::nullopt, rhs, leafPool_.get()),
+      rhs);
+  EXPECT_FALSE(
+      ColumnStatistics::mergeNdvSketches(
+          std::nullopt, std::nullopt, leafPool_.get())
+          .has_value());
+}
+
+// Sketches must use the DWRF writers' 2048 buckets: HLLs with different bucket
+// counts cannot be merged.
+TEST_F(NdvStatisticsCollectorTests, SketchUses2048Buckets) {
+  IntegralStatisticsCollector collector;
+  collector.enableHll(leafPool_.get());
+  std::vector<int64_t> values = {1, 2, 3};
+  collector.addValues(std::span<int64_t>(values));
+
+  const auto& sketch = collector.getStatsView()->getNdvSketch();
+  ASSERT_TRUE(sketch.has_value());
+  ASSERT_TRUE(velox::common::hll::SparseHlls::canDeserialize(sketch->data()));
+  EXPECT_EQ(
+      1 << velox::common::hll::SparseHlls::deserializeIndexBitLength(
+          sketch->data()),
+      2048);
+}
+
+// Integers hash as 64-bit longs (like DWRF), so the same values produce the
+// same sketch regardless of column width.
+TEST_F(NdvStatisticsCollectorTests, IntegralSketchIndependentOfWidth) {
+  std::vector<int32_t> narrow;
+  std::vector<int64_t> wide;
+  for (int32_t i = -200; i < 300; ++i) {
+    narrow.push_back(i);
+    wide.push_back(i);
+  }
+
+  IntegralStatisticsCollector narrowCollector;
+  narrowCollector.enableHll(leafPool_.get());
+  narrowCollector.addValues(std::span<int32_t>(narrow));
+  IntegralStatisticsCollector wideCollector;
+  wideCollector.enableHll(leafPool_.get());
+  wideCollector.addValues(std::span<int64_t>(wide));
+
+  ASSERT_TRUE(narrowCollector.getStatsView()->getNdvSketch().has_value());
+  EXPECT_EQ(
+      narrowCollector.getStatsView()->getNdvSketch(),
+      wideCollector.getStatsView()->getNdvSketch());
+}
+
+// NaNs with different payloads are one distinct value, as with Java's
+// floatToIntBits / doubleToLongBits.
+TEST_F(NdvStatisticsCollectorTests, NanPayloadsCountOnce) {
+  std::vector<double> doubles = {
+      std::numeric_limits<double>::quiet_NaN(),
+      -std::numeric_limits<double>::quiet_NaN(),
+      std::numeric_limits<double>::signaling_NaN(),
+      1.0};
+  FloatingPointStatisticsCollector doubleCollector;
+  doubleCollector.enableHll(leafPool_.get());
+  doubleCollector.addValues(std::span<double>(doubles));
+  EXPECT_EQ(doubleCollector.getStatsView()->getNdvCardinality(), 2);
+
+  std::vector<float> floats = {
+      std::numeric_limits<float>::quiet_NaN(),
+      -std::numeric_limits<float>::quiet_NaN(),
+      std::numeric_limits<float>::signaling_NaN(),
+      1.0f};
+  FloatingPointStatisticsCollector floatCollector;
+  floatCollector.enableHll(leafPool_.get());
+  floatCollector.addValues(std::span<float>(floats));
+  EXPECT_EQ(floatCollector.getStatsView()->getNdvCardinality(), 2);
 }

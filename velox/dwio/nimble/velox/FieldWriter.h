@@ -423,7 +423,9 @@ class FieldWriterContext {
 
   void createStatsCollector(
       const std::shared_ptr<const velox::dwio::common::TypeWithId>& type) {
-    statsCollectors_.emplace_back(StatisticsCollector::create(type));
+    statsCollectors_.emplace_back(
+        StatisticsCollector::create(
+            type, enableNdvStats_ ? bufferMemoryPool_.get() : nullptr));
     for (const auto& child : type->getChildren()) {
       createStatsCollector(child);
     }
@@ -537,6 +539,10 @@ class FieldWriterContext {
   folly::F14FastSet<uint32_t> deduplicatedMapNodeIds_;
   bool ignoreTopLevelNulls_{false};
   bool disableSharedStringBuffers_{false};
+  // When true, scalar stats collectors accumulate a per-column HyperLogLog
+  // (NDV) sketch. Mirrors WriterOptions::enableNdvStats; set by the
+  // writer during setup.
+  bool enableNdvStats_{false};
   uint32_t maxFlatMapKeys_{kDefaultMaxFlatMapKeys};
 
   std::unique_ptr<InputBufferGrowthPolicy> inputBufferGrowthPolicy_;
@@ -628,7 +634,7 @@ class FieldWriterContext {
     }
   }
 
-  static void mergeColumnStats(
+  void mergeColumnStats(
       ColumnStatistics& target,
       const ColumnStatistics& source) {
     NIMBLE_CHECK(
@@ -660,6 +666,11 @@ class FieldWriterContext {
     target.nullCount_ += source.getNullCount();
     target.logicalSize_ += source.getLogicalSize();
     target.physicalSize_ += source.getPhysicalSize();
+    target.setNdvSketch(
+        ColumnStatistics::mergeNdvSketches(
+            target.getNdvSketch(),
+            source.getNdvSketch(),
+            bufferMemoryPool_.get()));
     switch (target.getType()) {
       case StatType::INTEGRAL:
         mergeMinMax<IntegralStatistics>(target, source);

@@ -4656,6 +4656,50 @@ TEST_P(SelectiveNimbleReaderTest, columnStatisticsString) {
   EXPECT_EQ(strStats->getMaximum().value(), "cherry");
 }
 
+// Verifies columnStatistics exposes NDV (numDistinct) when enableNdvStats is
+// on, within HLL error bounds of the true distinct count.
+TEST_P(SelectiveNimbleReaderTest, columnStatisticsNdv) {
+  constexpr int kSize = 1000;
+  // 500 distinct values across 1000 rows.
+  auto input = makeRowVector({
+      makeFlatVector<int64_t>(kSize, [](auto i) { return i % 500; }),
+  });
+  WriterOptions writerOptions;
+  writerOptions.enableVectorizedStats = true;
+  writerOptions.enableNdvStats = true;
+  auto fileContent = test::createNimbleFile(*rootPool(), input, writerOptions);
+  auto scanSpec = std::make_shared<common::ScanSpec>("root");
+  scanSpec->addAllChildFields(*input->type());
+  auto readers =
+      makeReaders(input, fileContent, scanSpec, this->stringDecoderZeroCopy());
+
+  auto stats = readers.reader->columnStatistics(1);
+  ASSERT_NE(stats, nullptr);
+  ASSERT_TRUE(stats->numDistinct().has_value());
+  const auto ndv = stats->numDistinct().value();
+  EXPECT_GE(ndv, 450); // 500 +/- 10%
+  EXPECT_LE(ndv, 550);
+}
+
+// Verifies NDV is unset by default (enableNdvStats defaults to false).
+TEST_P(SelectiveNimbleReaderTest, columnStatisticsNdvDisabledByDefault) {
+  constexpr int kSize = 100;
+  auto input = makeRowVector({
+      makeFlatVector<int64_t>(kSize, [](auto i) { return i % 50; }),
+  });
+  WriterOptions writerOptions;
+  writerOptions.enableVectorizedStats = true;
+  auto fileContent = test::createNimbleFile(*rootPool(), input, writerOptions);
+  auto scanSpec = std::make_shared<common::ScanSpec>("root");
+  scanSpec->addAllChildFields(*input->type());
+  auto readers =
+      makeReaders(input, fileContent, scanSpec, this->stringDecoderZeroCopy());
+
+  auto stats = readers.reader->columnStatistics(1);
+  ASSERT_NE(stats, nullptr);
+  EXPECT_FALSE(stats->numDistinct().has_value());
+}
+
 // Verifies columnStatistics returns nullptr for out-of-range indices and
 // returns base ColumnStatistics for the root ROW column.
 TEST_P(SelectiveNimbleReaderTest, columnStatisticsOutOfRange) {
