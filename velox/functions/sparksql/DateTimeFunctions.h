@@ -39,7 +39,7 @@ Expected<std::shared_ptr<DateTimeFormatter>> getDateTimeFormatter(
       return buildSimpleDateTimeFormatter(format, /*lenient=*/true);
     default:
       return buildJodaDateTimeFormatter(
-          std::string_view(format.data(), format.size()));
+          std::string_view(format.data(), format.size()), type);
   }
 }
 
@@ -49,15 +49,16 @@ Expected<std::shared_ptr<DateTimeFormatter>> getDateTimeFormatter(
 //
 // @param format The format string to be used for initializing the formatter.
 // @param legacyFormatter Whether legacy formatter is used.
+// @param nonLegacyType Formatter type to use when legacyFormatter is false.
 // @return A shared pointer to a DateTimeFormatter. If the formatter
 // initialization fails and the legacy formatter is used, nullptr is returned.
 inline std::shared_ptr<DateTimeFormatter> initializeFormatter(
     const std::string_view format,
-    bool legacyFormatter) {
+    bool legacyFormatter,
+    DateTimeFormatterType nonLegacyType = DateTimeFormatterType::JODA) {
   auto formatter = detail::getDateTimeFormatter(
       std::string_view(format),
-      legacyFormatter ? DateTimeFormatterType::STRICT_SIMPLE
-                      : DateTimeFormatterType::JODA);
+      legacyFormatter ? DateTimeFormatterType::STRICT_SIMPLE : nonLegacyType);
   // When legacy formatter is used, returns nullptr for invalid format;
   // otherwise, throws a user error.
   if (formatter.hasError()) {

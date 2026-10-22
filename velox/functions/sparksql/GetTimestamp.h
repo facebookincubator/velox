@@ -21,8 +21,7 @@
 
 namespace facebook::velox::functions::sparksql {
 
-/// Backs get_timestamp (Timestamp) and to_timestamp_ntz's 2-arg form
-/// (TimestampUtc).
+/// Backs get_timestamp (Timestamp) and to_timestamp_ntz (TimestampUtc).
 template <typename T, typename TTimestamp>
 struct GetTimestampFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
@@ -45,7 +44,7 @@ struct GetTimestampFunction {
     }
     if (format != nullptr) {
       auto formatter = detail::initializeFormatter(
-          std::string_view(*format), legacyFormatter_);
+          std::string_view(*format), legacyFormatter_, kFormatterType);
       if (formatter) {
         formatter_ = formatter;
       } else {
@@ -64,7 +63,7 @@ struct GetTimestampFunction {
     }
     if (!isConstantTimeFormat_) {
       auto formatter = detail::initializeFormatter(
-          std::string_view(format), legacyFormatter_);
+          std::string_view(format), legacyFormatter_, kFormatterType);
       if (formatter) {
         formatter_ = formatter;
       } else {
@@ -81,6 +80,13 @@ struct GetTimestampFunction {
     if constexpr (std::is_same_v<TTimestamp, Timestamp>) {
       toGMTWithGapCorrection(
           (*dateTimeResult).timestamp, *getTimeZone(*dateTimeResult));
+    } else {
+      // Spark never catches overflow here, regardless of ANSI mode.
+      const auto& timestamp = (*dateTimeResult).timestamp;
+      if (timestamp < Timestamp::minMicros() ||
+          timestamp > Timestamp::maxMicros()) {
+        VELOX_USER_FAIL("Timestamp out of range: {}", timestamp.toString());
+      }
     }
     result = (*dateTimeResult).timestamp;
     return true;
@@ -88,8 +94,15 @@ struct GetTimestampFunction {
 
  private:
   const tz::TimeZone* getTimeZone(const DateTimeResult& result) const {
+    // If timezone was not parsed, fallback to the session timezone. If there's
+    // no session timezone, fallback to 0 (GMT).
     return result.timezone ? result.timezone : sessionTimeZone_;
   }
+
+  static constexpr DateTimeFormatterType kFormatterType =
+      std::is_same_v<TTimestamp, TimestampUtc>
+      ? DateTimeFormatterType::SPARK_ISO
+      : DateTimeFormatterType::JODA;
 
   std::shared_ptr<DateTimeFormatter> formatter_{nullptr};
   bool isConstantTimeFormat_{false};
