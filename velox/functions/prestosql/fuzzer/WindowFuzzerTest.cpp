@@ -137,6 +137,9 @@ int main(int argc, char** argv) {
       "noisy_approx_distinct_sfm",
       "noisy_approx_set_sfm_from_index_and_zeros",
       "reservoir_sample",
+      // The reservoir-sampling signatures are randomized. Skip lists are
+      // name-based, so the deterministic histogram signature is skipped too.
+      "differential_entropy",
       // https://github.com/facebookincubator/velox/issues/13547
       "merge",
       // https://github.com/facebookincubator/velox/issues/14423
