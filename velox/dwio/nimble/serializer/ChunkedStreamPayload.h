@@ -22,6 +22,14 @@
 
 namespace facebook::nimble::serde {
 
+/// Removes the header and decompresses a stream containing exactly one chunk.
+/// Returns a zero-copy input view for an uncompressed chunk; compressed output
+/// is backed by `outputBuffer` and remains valid for its lifetime.
+/// Fails if the input does not contain exactly one complete chunk.
+std::string_view stripSingleChunkHeader(
+    std::string_view streamData,
+    Buffer& outputBuffer);
+
 /// Removes chunk headers and decompresses chunk payloads. Returns a zero-copy
 /// input view for one uncompressed chunk; other views are backed by
 /// `outputBuffer` and remain valid for its lifetime.
