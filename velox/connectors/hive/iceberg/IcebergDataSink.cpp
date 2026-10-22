@@ -527,6 +527,11 @@ std::vector<std::string> IcebergDataSink::commitMessage() const {
           toManifestFormatString(icebergInsertTableHandle_->storageFormat()),
           icebergInsertTableHandle_->writeKind() ==
               IcebergInsertTableHandle::WriteKind::kDeletionVector);
+      const auto& splitOffsets = dataFileStats_[i][fileIdx]->splitOffsets;
+      if (!splitOffsets.empty()) {
+        commitData["splitOffsets"] =
+            folly::dynamic::array(splitOffsets.begin(), splitOffsets.end());
+      }
       if (!commitPartitionValue_.empty() &&
           !commitPartitionValue_[i].isNull()) {
         commitData["partitionDataJson"] = folly::toJson(
