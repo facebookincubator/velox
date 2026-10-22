@@ -331,35 +331,6 @@ PaimonTableType PaimonTableHandle::tableType() const {
                                         : PaimonTableType::kPrimaryKey;
 }
 
-bool PaimonTableHandle::hasSameTableDefinition(
-    const PaimonTableHandle& other) const {
-  return connectorId() == other.connectorId() &&
-      tableName_ == other.tableName_ && dbName_ == other.dbName_ &&
-      (schema_ == other.schema_ || *schema_ == *other.schema_);
-}
-
-bool PaimonTableHandle::hasSameScanConditions(
-    const PaimonTableHandle& other) const {
-  if (readProfile_ != other.readProfile_ ||
-      queryOptions_ != other.queryOptions_ ||
-      sampleRate_ != other.sampleRate_ ||
-      static_cast<bool>(remainingFilter_) !=
-          static_cast<bool>(other.remainingFilter_) ||
-      (remainingFilter_ && remainingFilter_ != other.remainingFilter_ &&
-       !(*remainingFilter_ == *other.remainingFilter_)) ||
-      subfieldFilters_.size() != other.subfieldFilters_.size()) {
-    return false;
-  }
-  for (const auto& [path, filter] : subfieldFilters_) {
-    const auto it = other.subfieldFilters_.find(path);
-    if (it == other.subfieldFilters_.end() ||
-        (filter != it->second && !filter->testingEquals(*it->second))) {
-      return false;
-    }
-  }
-  return true;
-}
-
 void PaimonTableHandle::validateReadProfile() const {
   // TODO: Extend read profiles as primary-key, deletion-vector, data-evolution
   // and thin-file readers implement their required row and layout semantics.
@@ -515,12 +486,6 @@ void PaimonTableHandle::validateFileSchema(const RowTypePtr& fileType) const {
            *fileType->childAt(expectedType->size()) == *BIGINT() &&
            *fileType->childAt(expectedType->size() + 1) == *BIGINT()),
       "Paimon file layout contradicts same-schema append profile");
-}
-
-void PaimonTableHandle::validateDynamicFilter(
-    const TypePtr& type,
-    const common::Filter& filter) const {
-  validateFilterType(type, filter);
 }
 
 void PaimonTableHandle::validateSplit(const PaimonConnectorSplit& split) const {

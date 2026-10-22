@@ -40,13 +40,8 @@ class PaimonDataSource : public FileDataSource {
 
   void addSplit(std::shared_ptr<ConnectorSplit> split) override;
 
-  /// Takes over prepared, unread split state for the same table and query.
-  /// The recipient must be idle; active scan cursor transfer is not supported.
+  /// Takes over a prepared, unread split from the same scan while idle.
   void setFromDataSource(std::unique_ptr<DataSource> sourceUnique) override;
-
-  void addDynamicFilter(
-      column_index_t outputChannel,
-      const std::shared_ptr<common::Filter>& filter) override;
 
  protected:
   /// Creates a PaimonSplitReader with all data files from the Paimon split.

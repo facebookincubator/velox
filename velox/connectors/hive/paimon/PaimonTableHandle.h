@@ -68,14 +68,6 @@ class PaimonTableHandle final : public FileTableHandle {
   /// Derived from the schema's primary key declaration.
   PaimonTableType tableType() const;
 
-  /// Compares table identity and the complete fixed schema, not scan
-  /// conditions.
-  bool hasSameTableDefinition(const PaimonTableHandle& other) const;
-
-  /// Compares logical filters, sampling, profile and query options. Column
-  /// assignments are checked by the data source.
-  bool hasSameScanConditions(const PaimonTableHandle& other) const;
-
   const common::SubfieldFilters& subfieldFilters() const override {
     return subfieldFilters_;
   }
@@ -120,10 +112,6 @@ class PaimonTableHandle final : public FileTableHandle {
   /// trailing tracking columns are accepted only when row tracking is enabled.
   /// Requires a table definition accepted by validateReadProfile().
   void validateFileSchema(const RowTypePtr& fileType) const;
-
-  /// Rejects filter kinds incompatible with the validated output channel type.
-  void validateDynamicFilter(const TypePtr& type, const common::Filter& filter)
-      const;
 
   std::string toString() const override;
   folly::dynamic serialize() const override;

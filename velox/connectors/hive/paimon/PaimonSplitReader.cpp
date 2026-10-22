@@ -73,7 +73,6 @@ void PaimonSplitReader::prepareSplit(
 }
 
 uint64_t PaimonSplitReader::next(uint64_t size, VectorPtr& output) {
-  startedReading_ = true;
   while (ensureFileSplitReader()) {
     const auto rowsRead = FileSplitReader::next(size, output);
     if (rowsRead > 0) {

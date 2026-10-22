@@ -68,11 +68,6 @@ class PaimonSplitReader : public FileSplitReader {
     runtimeStats_ = &runtimeStats;
   }
 
-  /// Whether next() has been called, including calls that reach EOF.
-  bool startedReading() const {
-    return startedReading_;
-  }
-
  protected:
   void configureBaseReaderOptions() override;
 
@@ -103,7 +98,6 @@ class PaimonSplitReader : public FileSplitReader {
 
   // Index of the next data file to open.
   size_t currentFileIndex_{0};
-  bool startedReading_{false};
 
   // Saved from prepareSplit() for re-use when advancing to subsequent files.
   std::shared_ptr<common::MetadataFilter> metadataFilter_;

@@ -133,7 +133,6 @@ TEST_F(PaimonTableHandleTest, roundTrip) {
   const auto copy = ISerializable::deserialize<PaimonTableHandle>(obj);
   ASSERT_NE(copy, nullptr);
   EXPECT_EQ(copy->serialize(), obj);
-  EXPECT_TRUE(copy->hasSameTableDefinition(*original));
   EXPECT_EQ(*copy->schema(), *original->schema());
   EXPECT_EQ(copy->tableParameters(), queryOptions);
   EXPECT_EQ(copy->schema()->options().at("file.format"), "nimble");
@@ -145,17 +144,6 @@ TEST_F(PaimonTableHandleTest, roundTrip) {
   EXPECT_EQ(copy->sampleRate(), 0.5);
   EXPECT_FALSE(obj.count("dataColumns"));
   EXPECT_FALSE(obj.count("tableType"));
-
-  const auto differentName = std::make_shared<PaimonTableHandle>(
-      "test-paimon", "other", original->schema(), kReadProfile);
-  EXPECT_FALSE(original->hasSameTableDefinition(*differentName));
-  auto changedSchema = original->schema()->serialize();
-  changedSchema["metadata"]["children"][0]["nullable"] = true;
-  const auto differentDefinition = table(PaimonSchema::create(changedSchema));
-  EXPECT_EQ(
-      differentDefinition->schema()->schemaId(),
-      original->schema()->schemaId());
-  EXPECT_FALSE(table()->hasSameTableDefinition(*differentDefinition));
 }
 
 TEST_F(PaimonTableHandleTest, structuredFilterPaths) {

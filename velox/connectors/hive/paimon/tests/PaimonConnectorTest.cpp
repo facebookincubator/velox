@@ -716,8 +716,12 @@ TEST_F(PaimonConnectorTest, tableHandleFiltersAndProjection) {
                       ->createDataSource(
                           outputType, tableHandle, assignments, context.get());
     source->addSplit(split);
+    // TableScan supplies cumulative static and dynamic conditions.
+    const common::BigintRange dynamicFilter(4, 5, false);
     source->addDynamicFilter(
-        0, std::make_shared<common::BigintRange>(4, 5, false));
+        0,
+        source->getFilters()->at(common::Subfield("id"))->mergeWith(
+            &dynamicFilter));
     ContinueFuture future = ContinueFuture::makeEmpty();
     auto result = source->next(100, future);
     ASSERT_TRUE(result.has_value());
@@ -850,12 +854,6 @@ TEST_F(PaimonConnectorTest, dynamicFilterAndEmptyFiles) {
     ASSERT_TRUE(first.has_value());
     ASSERT_TRUE(*first);
     test::assertEqualVectors(input, *first);
-    VELOX_ASSERT_USER_THROW(
-        source->addDynamicFilter(
-            0,
-            std::make_shared<common::BytesRange>(
-                "a", false, false, "z", false, false, false)),
-        "is not supported for target type BIGINT");
     source->addDynamicFilter(
         0, std::make_shared<common::BigintRange>(2, 2, false));
     auto second = source->next(100, future);
@@ -969,18 +967,6 @@ TEST_F(PaimonConnectorTest, tableValidationBeforeFileOpen) {
           good,
           false)),
       "Paimon same-schema append profile requires rawConvertible=true");
-  EXPECT_EQ(fileSystem->openedFiles, 0);
-  orc::unregisterOrcReaderFactory();
-  VELOX_ASSERT_USER_THROW(
-      source->addSplit(makePaimonSplit(
-          {path},
-          PaimonTableType::kAppendOnly,
-          dwio::common::FileFormat::ORC,
-          good)),
-      fmt::format(
-          "No Paimon reader factory for file format {}",
-          dwio::common::FileFormatName::toName(dwio::common::FileFormat::ORC)));
-  orc::registerOrcReaderFactory();
   EXPECT_EQ(fileSystem->openedFiles, 0);
 
   source->addSplit(makeSplit(PaimonTableType::kAppendOnly, good));
@@ -1140,13 +1126,15 @@ TEST_F(PaimonConnectorTest, queryValidationBeforeFileOpen) {
     SCOPED_TRACE(condition);
     const auto filteredTable = makePaimonTableHandle(
         rowType, {}, parseExpr(condition, rowType), {"p"});
-    const auto message = std::string_view(condition) == "p is null"
-        ? "File scan filter-only column 'p' is missing from table data columns and column handles"
-        : "Paimon partition condition requires a partition column handle: 'p'";
-    VELOX_ASSERT_USER_THROW(
-        connector->createDataSource(
-            ROW({{"id", BIGINT()}}), filteredTable, idColumns, context.get()),
-        message);
+    if (std::string_view(condition) == "p is null") {
+      VELOX_ASSERT_USER_THROW(
+          connector->createDataSource(
+              ROW({{"id", BIGINT()}}),
+              filteredTable,
+              idColumns,
+              context.get()),
+          "File scan filter-only column 'p' is missing from table data columns and column handles");
+    }
     const ColumnHandleMap columns{
         {"id", idColumns.at("id")},
         {"p",
@@ -1185,16 +1173,18 @@ TEST_F(PaimonConnectorTest, queryValidationBeforeFileOpen) {
     auto optionContext = queryContextBuilder(queryCtx.get())
                              .sessionProperties(session.get())
                              .build();
-    const auto message =
-        std::string_view(option) == FileConfig::kIgnoreMissingFilesSession
-        ? "Paimon same-schema append profile does not support ignore_missing_files; "
-          "missing snapshot files must fail instead of returning incomplete results"
-        : "Paimon same-schema append profile does not support lower-case file "
-          "mapping; the current reader requires exact names from the fixed schema";
-    VELOX_ASSERT_USER_THROW(
-        connector->createDataSource(
-            ROW({{"id", BIGINT()}}), table, idColumns, optionContext.get()),
-        message);
+    if (std::string_view(option) == FileConfig::kIgnoreMissingFilesSession) {
+      VELOX_ASSERT_USER_THROW(
+          connector->createDataSource(
+              ROW({{"id", BIGINT()}}), table, idColumns, optionContext.get()),
+          "Paimon same-schema append profile does not support ignore_missing_files; "
+          "missing snapshot files must fail instead of returning incomplete results");
+    } else {
+      EXPECT_NE(
+          connector->createDataSource(
+              ROW({{"id", BIGINT()}}), table, idColumns, optionContext.get()),
+          nullptr);
+    }
   }
   EXPECT_EQ(fileSystem->openedFiles, 0);
 }
@@ -1341,7 +1331,7 @@ TEST_F(PaimonConnectorTest, taskCancellationAndLimit) {
   }
 }
 
-TEST_F(PaimonConnectorTest, takeoverPreservesTableDefinition) {
+TEST_F(PaimonConnectorTest, takeoverPreparedSplit) {
   auto queryCtx = core::QueryCtx::create();
   const auto config = std::make_shared<config::ConfigBase>(
       std::unordered_map<std::string, std::string>{});
@@ -1356,70 +1346,15 @@ TEST_F(PaimonConnectorTest, takeoverPreservesTableDefinition) {
     return connector->createDataSource(rowType, handle, columns, context.get());
   };
   auto source = makeSource(table);
-  auto changedSchema = table->schema()->serialize();
-  changedSchema["metadata"]["children"][0]["fieldId"] = 99;
-  const auto differentTable = std::make_shared<PaimonTableHandle>(
-      kPaimonConnectorId,
-      table->name(),
-      PaimonSchema::create(changedSchema),
-      PaimonTableHandle::ReadProfile::kSameSchemaAppendBatch);
-  VELOX_ASSERT_THROW(
-      source->setFromDataSource(makeSource(differentTable)),
-      "Paimon takeover must preserve the fixed table definition");
-  common::SubfieldFilters filters;
-  filters.emplace(
-      common::Subfield("id"), std::make_unique<common::IsNotNull>());
-  const auto filteredTable = makePaimonTableHandle(rowType, std::move(filters));
-  VELOX_ASSERT_USER_THROW(
-      source->setFromDataSource(makeSource(filteredTable)),
-      "Paimon takeover must preserve scan conditions and query columns");
-  const auto differentCondition =
-      makePaimonTableHandle(rowType, {}, parseExpr("id % 2 = 0", rowType));
-  VELOX_ASSERT_USER_THROW(
-      source->setFromDataSource(makeSource(differentCondition)),
-      "Paimon takeover must preserve scan conditions and query columns");
-  VELOX_ASSERT_USER_THROW(
-      source->setFromDataSource(connector->createDataSource(
-          ROW({{"alias", BIGINT()}}),
-          table,
-          {{"alias", columns.at("id")}},
-          context.get())),
-      "Paimon takeover must preserve scan conditions and query columns");
-  VELOX_ASSERT_USER_THROW(
-      source->setFromDataSource(makeSource(table)),
-      "Paimon takeover requires a prepared split");
   const auto copy =
       ISerializable::deserialize<PaimonTableHandle>(table->serialize());
   auto preloaded = makeSource(copy);
   const auto paths = makeFilePaths(1);
   const auto input = makeRowVector({"id"}, {makeFlatVector<int64_t>({5, 6})});
   writeToFile(paths[0]->getPath(), input);
-  auto alreadyRead = makeSource(table);
-  alreadyRead->addSplit(makePaimonSplit({paths[0]->getPath()}));
-  ContinueFuture future = ContinueFuture::makeEmpty();
-  ASSERT_TRUE(alreadyRead->next(1, future).has_value());
-  VELOX_ASSERT_USER_THROW(
-      source->setFromDataSource(std::move(alreadyRead)),
-      "Paimon takeover does not support an already-read donor; only prepared, "
-      "unread split state can be transferred");
-  auto busyRecipient = makeSource(table);
-  busyRecipient->addSplit(makePaimonSplit({paths[0]->getPath()}));
-  auto preparedDonor = makeSource(table);
-  preparedDonor->addSplit(makePaimonSplit({paths[0]->getPath()}));
-  VELOX_ASSERT_USER_THROW(
-      busyRecipient->setFromDataSource(std::move(preparedDonor)),
-      "Paimon takeover requires an idle recipient");
-  auto finishedDonor = makeSource(table);
-  finishedDonor->addSplit(makePaimonSplit({paths[0]->getPath()}));
-  ASSERT_TRUE(finishedDonor->next(100, future).has_value());
-  auto finished = finishedDonor->next(100, future);
-  ASSERT_TRUE(finished.has_value());
-  ASSERT_EQ(*finished, nullptr);
-  VELOX_ASSERT_USER_THROW(
-      source->setFromDataSource(std::move(finishedDonor)),
-      "Paimon takeover requires a prepared split");
   preloaded->addSplit(makePaimonSplit({paths[0]->getPath()}));
   source->setFromDataSource(std::move(preloaded));
+  ContinueFuture future = ContinueFuture::makeEmpty();
   auto result = source->next(100, future);
   ASSERT_TRUE(result.has_value());
   ASSERT_TRUE(*result);
