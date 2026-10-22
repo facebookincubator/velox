@@ -238,7 +238,7 @@ class MakeRowFroMapTest : public testing::Test, public test::VectorTestBase {
       return std::nullopt;
     };
     // Verify expected values
-    rows.applyToSelected([&](auto row) {
+    rows.applyToSelected([&](vector_size_t row) {
       // Check for top-level nulls if allowed
       if (options.allowTopLevelNulls && !options.replaceNulls &&
           decodedInput.isNullAt(row)) {
@@ -247,9 +247,10 @@ class MakeRowFroMapTest : public testing::Test, public test::VectorTestBase {
       }
       // For every projected key, find the corresponding value in the original
       // map and verify its correctly set in the result.
-      for (int64_t key : {1, 2}) {
+      for (column_index_t field = 0; field < 2; ++field) {
+        const int64_t key = field + 1;
         auto valueIdx = findValueIdx(row, key);
-        auto child = result->as<RowVector>()->childAt(key - 1);
+        auto child = result->as<RowVector>()->childAt(field);
         if (valueIdx.has_value() && !mapValues->isNullAt(valueIdx.value())) {
           ASSERT_TRUE(!child->isNullAt(row));
           if (child->type()->kind() == TypeKind::OPAQUE) {
@@ -335,7 +336,6 @@ class MakeRowFroMapTest : public testing::Test, public test::VectorTestBase {
                 createSelectivityVector(testCase->size(), selectedRowsStr);
             options.replaceNulls = replaceNulls;
             options.allowTopLevelNulls = allowTopLevelNulls;
-            std::optional<exec::EvalCtx> evalCtx;
             if (useEvalCtx) {
               exec::EvalCtx evalCtx(
                   execCtx_.get(), &dummyExprSet, dummyRowVector.get());
@@ -365,12 +365,79 @@ class MakeRowFroMapTest : public testing::Test, public test::VectorTestBase {
 TEST_F(MakeRowFroMapTest, basic) {
   EXPECT_EQ(NonPOD::alive, 0);
   auto testCases = makeTestCases();
-  for (auto& testCase : testCases) {
-    executeTestCase(testCase);
-    break;
-  }
+  executeTestCase(testCases.front());
   testCases.clear();
   EXPECT_EQ(NonPOD::alive, 0);
+}
+
+TEST_F(MakeRowFroMapTest, flatMap) {
+  auto flatMap = makeFlatMapVectorFromJson<int64_t, int64_t>({
+      "{1:10, 2:20, 3:30}",
+      "{2:21, 4:40}",
+      "{1:null, 2:22}",
+      "{4:40}",
+      "{1:15}",
+      "{}",
+      "null",
+  });
+  MakeRowFromMapOptions options{
+      .keysToProject = makeFlatVector<int64_t>({1, 2, 5}),
+      .outputFieldNames = {"key1", "key2", "key5"},
+      .replaceNulls = false,
+      .allowTopLevelNulls = false,
+      .throwOnDuplicateKeys = false};
+  SelectivityVector rows(flatMap->size());
+
+  auto expected = makeRowVector(
+      options.outputFieldNames,
+      {makeNullableFlatVector<int64_t>(
+           {10,
+            std::nullopt,
+            std::nullopt,
+            std::nullopt,
+            15,
+            std::nullopt,
+            std::nullopt}),
+       makeNullableFlatVector<int64_t>(
+           {20,
+            21,
+            22,
+            std::nullopt,
+            std::nullopt,
+            std::nullopt,
+            std::nullopt}),
+       makeAllNullFlatVector<int64_t>(flatMap->size())});
+  test::assertEqualVectors(
+      expected, toRowVector<TypeKind::BIGINT>(*flatMap, options, rows));
+
+  const auto reverseIndices = makeIndicesInReverse(flatMap->size());
+  const auto wrappedFlatMap = BaseVector::wrapInDictionary(
+      nullptr, reverseIndices, flatMap->size(), flatMap);
+  const auto wrappedExpected = BaseVector::wrapInDictionary(
+      nullptr, reverseIndices, expected->size(), expected);
+  test::assertEqualVectors(
+      wrappedExpected,
+      toRowVector<TypeKind::BIGINT>(*wrappedFlatMap, options, rows));
+
+  options.allowTopLevelNulls = true;
+  expected = makeRowVector(
+      options.outputFieldNames,
+      {expected->childAt(0), expected->childAt(1), expected->childAt(2)},
+      [](vector_size_t row) { return row == 6; });
+  test::assertEqualVectors(
+      expected, toRowVector<TypeKind::BIGINT>(*flatMap, options, rows));
+
+  options.replaceNulls = true;
+  options.allowTopLevelNulls = false;
+  expected = makeRowVector(
+      options.outputFieldNames,
+      {makeFlatVector<int64_t>({10, 0, 0, 0, 15, 0, 0}),
+       makeFlatVector<int64_t>({20, 21, 22, 0, 0, 0, 0}),
+       makeFlatVector<int64_t>({0, 0, 0, 0, 0, 0, 0})});
+  exec::EvalCtx evalCtx(execCtx_.get(), &dummyExprSet, dummyRowVector.get());
+  test::assertEqualVectors(
+      expected,
+      toRowVector<TypeKind::BIGINT>(*flatMap, options, rows, &evalCtx));
 }
 
 TEST_F(MakeRowFroMapTest, unknownTypeValues) {
