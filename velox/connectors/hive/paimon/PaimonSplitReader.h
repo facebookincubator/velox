@@ -17,12 +17,13 @@
 
 #include "velox/connectors/hive/FileSplitReader.h"
 #include "velox/connectors/hive/paimon/PaimonConnectorSplit.h"
+#include "velox/connectors/hive/paimon/PaimonTableHandle.h"
 
 namespace facebook::velox::connector::hive::paimon {
 
 /// Sequential multi-file reader for rawConvertible Paimon splits. Files are
-/// opened lazily and advanced through EOF or legal empty files. With a
-/// PaimonTableHandle, the physical footer is checked against the fixed schema
+/// opened lazily and advanced through EOF or legal empty files. The required
+/// PaimonTableHandle checks the physical footer against the fixed schema
 /// before column adaptation; split values supply the partition constants.
 /// Deletion vectors and changelog files are rejected before reading.
 class PaimonSplitReader : public FileSplitReader {
@@ -34,7 +35,7 @@ class PaimonSplitReader : public FileSplitReader {
   PaimonSplitReader(
       const std::shared_ptr<const FileConnectorSplit>& fileSplit,
       std::shared_ptr<const PaimonConnectorSplit> paimonSplit,
-      const FileTableHandlePtr& tableHandle,
+      const std::shared_ptr<const PaimonTableHandle>& tableHandle,
       const std::unordered_map<std::string, FileColumnHandlePtr>* partitionKeys,
       const ConnectorQueryCtx* connectorQueryCtx,
       const std::shared_ptr<const FileConfig>& fileConfig,
@@ -75,6 +76,8 @@ class PaimonSplitReader : public FileSplitReader {
   void configureBaseReaderOptions() override;
 
  private:
+  const std::shared_ptr<const PaimonTableHandle> paimonTableHandle_;
+
   // Builds a FileConnectorSplit from a PaimonDataFile.
   std::shared_ptr<FileConnectorSplit> makeFileConnectorSplit(
       const PaimonDataFile& dataFile) const;

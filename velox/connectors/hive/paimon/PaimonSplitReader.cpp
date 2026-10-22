@@ -17,6 +17,7 @@
 
 #include <limits>
 
+#include "velox/common/Casts.h"
 #include "velox/connectors/hive/paimon/PaimonTableHandle.h"
 
 namespace facebook::velox::connector::hive::paimon {
@@ -24,7 +25,7 @@ namespace facebook::velox::connector::hive::paimon {
 PaimonSplitReader::PaimonSplitReader(
     const std::shared_ptr<const FileConnectorSplit>& fileSplit,
     std::shared_ptr<const PaimonConnectorSplit> paimonSplit,
-    const FileTableHandlePtr& tableHandle,
+    const std::shared_ptr<const PaimonTableHandle>& tableHandle,
     const std::unordered_map<std::string, FileColumnHandlePtr>* partitionKeys,
     const ConnectorQueryCtx* connectorQueryCtx,
     const std::shared_ptr<const FileConfig>& fileConfig,
@@ -38,8 +39,7 @@ PaimonSplitReader::PaimonSplitReader(
     : FileSplitReader(
           fileSplit,
           tableHandle,
-          tableHandle->as<PaimonTableHandle>() ? &ownedPartitionKeys_
-                                               : partitionKeys,
+          &ownedPartitionKeys_,
           connectorQueryCtx,
           fileConfig,
           readerOutputType,
@@ -49,31 +49,11 @@ PaimonSplitReader::PaimonSplitReader(
           fileHandleFactory,
           executor,
           scanSpec),
-      ownedPartitionKeys_(
-          tableHandle->as<PaimonTableHandle>()
-              ? *partitionKeys
-              : std::unordered_map<std::string, FileColumnHandlePtr>{}),
+      paimonTableHandle_(checkedNotNull(tableHandle)),
+      ownedPartitionKeys_(*checkedNotNull(partitionKeys)),
       paimonSplit_(std::move(paimonSplit)) {
-  if (const auto* table = tableHandle_->as<PaimonTableHandle>()) {
-    table->validateSplit(*paimonSplit_);
-  }
-  // Validate all data files upfront.
-  for (const auto& dataFile : paimonSplit_->dataFiles()) {
-    VELOX_CHECK(
-        !dataFile.deletionFile.has_value(),
-        "Paimon deletion vector reading is not yet implemented. "
-        "File '{}' has a deletion vector with {} deleted rows.",
-        dataFile.path,
-        dataFile.deletionFile.has_value() ? dataFile.deletionFile->cardinality
-                                          : 0);
-    VELOX_CHECK_EQ(
-        dataFile.type,
-        PaimonDataFile::Type::kData,
-        "Paimon changelog file reading is not yet supported. "
-        "File '{}' has type {}.",
-        dataFile.path,
-        dataFile.type);
-  }
+  VELOX_CHECK_NOT_NULL(paimonSplit_);
+  paimonTableHandle_->validateSplit(*paimonSplit_);
 
   // Build FileConnectorSplits for all data files so we can switch between
   // them during multi-file iteration.
@@ -117,24 +97,18 @@ bool PaimonSplitReader::ensureFileSplitReader() {
     // Point to the current file.
     fileSplit_ = fileSplits_[currentFileIndex_];
 
-    if (const auto* table = tableHandle_->as<PaimonTableHandle>()) {
-      createReader();
-      VELOX_USER_CHECK_NOT_NULL(baseReader_, "Missing Paimon file reader");
-      table->validateFileSchema(baseReader_->rowType());
-      auto rowType = getAdaptedRowType();
-      if (!checkIfSplitIsEmpty(*runtimeStats_)) {
-        createRowReader(metadataFilter_, std::move(rowType), std::nullopt);
-      }
-    } else {
-      FileSplitReader::prepareSplit(metadataFilter_, *runtimeStats_);
+    createReader();
+    VELOX_USER_CHECK_NOT_NULL(baseReader_, "Missing Paimon file reader");
+    paimonTableHandle_->validateFileSchema(baseReader_->rowType());
+    auto rowType = getAdaptedRowType();
+    if (!checkIfSplitIsEmpty(*runtimeStats_)) {
+      createRowReader(metadataFilter_, std::move(rowType), std::nullopt);
     }
     if (!emptySplit_) {
       return true;
     }
-    if (tableHandle_->as<PaimonTableHandle>()) {
-      baseReader_.reset();
-      emptySplit_ = false;
-    }
+    baseReader_.reset();
+    emptySplit_ = false;
     ++currentFileIndex_;
   }
   return false; // All files exhausted.
@@ -152,16 +126,13 @@ void PaimonSplitReader::finishFileSplitReader() {
 
 void PaimonSplitReader::configureBaseReaderOptions() {
   FileSplitReader::configureBaseReaderOptions();
-  if (tableHandle_->as<PaimonTableHandle>()) {
-    // Preserve footer names so a contradictory file cannot be renamed into
-    // the target schema by positional mapping before validation.
-    baseReaderOpts_.setColumnMappingMode(
-        dwio::common::ColumnMappingMode::kName);
-    // Some readers use the requested schema to convert footer types. Inspect
-    // the physical schema first; the ScanSpec still carries the target types.
-    baseReaderOpts_.setFileSchema(nullptr);
-    baseReaderOpts_.setAllowEmptyFile(false);
-  }
+  // Preserve footer names so a contradictory file cannot be renamed into
+  // the target schema by positional mapping before validation.
+  baseReaderOpts_.setColumnMappingMode(dwio::common::ColumnMappingMode::kName);
+  // Some readers use the requested schema to convert footer types. Inspect
+  // the physical schema first; the ScanSpec still carries the target types.
+  baseReaderOpts_.setFileSchema(nullptr);
+  baseReaderOpts_.setAllowEmptyFile(false);
 }
 
 std::shared_ptr<FileConnectorSplit> PaimonSplitReader::makeFileConnectorSplit(

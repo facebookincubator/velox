@@ -467,8 +467,7 @@ namespace facebook::velox::connector::hive::paimon {
 ///
 /// Table-wide schema and key declarations belong to PaimonTableHandle, not
 /// this split. The explicit handle validates table type and partition names
-/// before reading. Legacy HiveTableHandle inputs remain supported by the
-/// existing rawConvertible scan path.
+/// before reading.
 class PaimonConnectorSplit : public connector::ConnectorSplit {
  public:
   /// @param connectorId Connector identifier.

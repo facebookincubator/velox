@@ -26,6 +26,7 @@
 #include "velox/connectors/ConnectorRegistry.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/paimon/PaimonConnectorSplit.h"
+#include "velox/connectors/hive/paimon/PaimonDataSource.h"
 #include "velox/connectors/hive/paimon/PaimonTableHandle.h"
 #include "velox/dwio/common/tests/utils/DataFiles.h"
 #include "velox/dwio/orc/reader/OrcReader.h"
@@ -340,21 +341,10 @@ class PaimonConnectorTest : public exec::test::HiveConnectorTestBase {
       const RowTypePtr& outputType,
       const RowTypePtr& dataColumns = nullptr,
       common::SubfieldFilters subfieldFilters = {},
-      const core::TypedExprPtr& remainingFilter = nullptr,
-      bool legacyHandle = false) {
+      const core::TypedExprPtr& remainingFilter = nullptr) {
     const auto rowType = dataColumns ? dataColumns : outputType;
-    ConnectorTableHandlePtr tableHandle;
-    if (legacyHandle) {
-      tableHandle = std::make_shared<HiveTableHandle>(
-          kPaimonConnectorId,
-          "paimon_table",
-          std::move(subfieldFilters),
-          remainingFilter,
-          rowType);
-    } else {
-      tableHandle = makePaimonTableHandle(
-          rowType, std::move(subfieldFilters), remainingFilter);
-    }
+    const auto tableHandle = makePaimonTableHandle(
+        rowType, std::move(subfieldFilters), remainingFilter);
     auto assignments =
         makePaimonColumnHandles(dataColumns ? dataColumns : outputType);
     return exec::test::PlanBuilder()
@@ -1317,19 +1307,6 @@ TEST_F(PaimonConnectorTest, takeoverPreservesTableDefinition) {
   VELOX_ASSERT_THROW(
       source->setFromDataSource(makeSource(differentTable)),
       "Paimon takeover must preserve the fixed table definition");
-  const auto legacyTable = std::make_shared<HiveTableHandle>(
-      kPaimonConnectorId,
-      "paimon_table",
-      common::SubfieldFilters{},
-      nullptr,
-      rowType);
-  VELOX_ASSERT_THROW(
-      source->setFromDataSource(makeSource(legacyTable)),
-      "Paimon takeover must preserve the fixed table definition");
-  auto legacySource = makeSource(legacyTable);
-  VELOX_ASSERT_THROW(
-      legacySource->setFromDataSource(makeSource(table)),
-      "Paimon takeover must preserve the fixed table definition");
   common::SubfieldFilters filters;
   filters.emplace(
       common::Subfield("id"), std::make_unique<common::IsNotNull>());
@@ -1450,35 +1427,64 @@ TEST_F(PaimonConnectorTest, takeoverPartitionHandlesAndDynamicFilters) {
   }
 }
 
-TEST_F(PaimonConnectorTest, legacyHiveHandles) {
+TEST_F(PaimonConnectorTest, requiresPaimonTableHandle) {
   const auto rowType = ROW({{"id", BIGINT()}});
-  const auto input =
-      makeRowVector({"id"}, {makeFlatVector<int64_t>({1, 2, 3})});
-  const auto files = makeFilePaths(1);
-  writeToFile(files[0]->getPath(), input);
+  const auto columns = makePaimonColumnHandles(rowType);
+  const auto connector = ConnectorRegistry::tryGet(kPaimonConnectorId);
+  auto queryCtx = core::QueryCtx::create();
+  const auto config = std::make_shared<config::ConfigBase>(
+      std::unordered_map<std::string, std::string>{});
+  auto context = queryContextBuilder(queryCtx.get())
+                     .sessionProperties(config.get())
+                     .build();
+  const auto fileSystem = validationFileSystem();
+  fileSystem->openedFiles = 0;
+  VELOX_ASSERT_USER_THROW(
+      connector->createDataSource(rowType, nullptr, columns, context.get()),
+      "Missing Paimon table handle");
+  VELOX_ASSERT_USER_THROW(
+      PaimonDataSource(
+          rowType,
+          nullptr,
+          columns,
+          nullptr,
+          nullptr,
+          context.get(),
+          std::make_shared<PaimonConfig>(config)),
+      "Missing Paimon table handle");
   const auto tableHandle = std::make_shared<HiveTableHandle>(
       kPaimonConnectorId,
       "paimon_table",
       common::SubfieldFilters{},
       nullptr,
       rowType);
+  VELOX_ASSERT_USER_THROW(
+      connector->createDataSource(rowType, tableHandle, columns, context.get()),
+      "Paimon connector requires PaimonTableHandle");
   const auto plan = exec::test::PlanBuilder()
                         .startTableScan()
                         .connectorId(kPaimonConnectorId)
                         .outputType(rowType)
                         .tableHandle(tableHandle)
-                        .assignments(makePaimonColumnHandles(rowType))
+                        .assignments(columns)
                         .endTableScan()
                         .planNode();
   for (auto tableType :
        {PaimonTableType::kAppendOnly, PaimonTableType::kPrimaryKey}) {
+    SCOPED_TRACE(fmt::format("table type {}", tableType));
     const auto split = makePaimonSplit(
-        {files[0]->getPath()}, tableType, dwio::common::FileFormat::DWRF);
-    exec::test::AssertQueryBuilder(plan).split(split).assertResults(input);
+        {"paimon-table-test:/not-opened"},
+        tableType,
+        dwio::common::FileFormat::DWRF);
+    VELOX_ASSERT_USER_THROW(
+        exec::test::AssertQueryBuilder(plan).split(split).copyResults(pool()),
+        "Paimon connector requires PaimonTableHandle");
+    exec::test::waitForAllTasksToBeDeleted();
   }
+  EXPECT_EQ(fileSystem->openedFiles, 0);
 }
 
-// Verify that non-rawConvertible splits trigger NYI (merge-on-read).
+// The append profile requires rawConvertible splits.
 TEST_F(PaimonConnectorTest, rejectsNonRawConvertible) {
   auto rowType = ROW({"c0"}, {BIGINT()});
   auto vectors = makeVectors(rowType, 1, 10);
@@ -1500,56 +1506,26 @@ TEST_F(PaimonConnectorTest, rejectsNonRawConvertible) {
       "Paimon same-schema append profile requires rawConvertible=true");
 }
 
-// E2E test: primary-key table with rawConvertible=true reads successfully.
-// When fully compacted (rawConvertible), primary-key tables can be read
-// the same way as append-only — each file is independent, no merge needed.
-TEST_F(PaimonConnectorTest, primaryKeyRawConvertible) {
-  auto rowType = ROW({"c0"}, {BIGINT()});
-  auto vectors = makeVectors(rowType, 1, 10);
-
-  auto filePaths = makeFilePaths(1);
-  writeToFile(filePaths[0]->getPath(), vectors);
-
-  auto split = makePaimonSplit(
-      {filePaths[0]->getPath()},
-      PaimonTableType::kPrimaryKey,
-      dwio::common::FileFormat::DWRF);
-
-  auto plan = makePaimonScanPlan(
-      rowType,
-      /*dataColumns=*/nullptr,
-      /*subfieldFilters=*/{},
-      /*remainingFilter=*/nullptr,
-      /*legacyHandle=*/true);
-
-  exec::test::AssertQueryBuilder(plan).split(split).assertResults(vectors);
-}
-
-// Verify that primary-key table with rawConvertible=false triggers NYI.
-TEST_F(PaimonConnectorTest, rejectsPrimaryKeyNonRawConvertible) {
-  auto rowType = ROW({"c0"}, {BIGINT()});
-  auto vectors = makeVectors(rowType, 1, 10);
-
-  auto filePaths = makeFilePaths(1);
-  writeToFile(filePaths[0]->getPath(), vectors);
-
-  auto split = makePaimonSplit(
-      {filePaths[0]->getPath()},
-      PaimonTableType::kPrimaryKey,
-      dwio::common::FileFormat::DWRF,
-      /*partitionKeys=*/{},
-      /*rawConvertible=*/false);
-
-  auto plan = makePaimonScanPlan(
-      rowType,
-      /*dataColumns=*/nullptr,
-      /*subfieldFilters=*/{},
-      /*remainingFilter=*/nullptr,
-      /*legacyHandle=*/true);
-
-  VELOX_ASSERT_THROW(
-      exec::test::AssertQueryBuilder(plan).split(split).copyResults(pool()),
-      "Paimon merge-on-read is not yet implemented");
+// A PK split cannot bypass the append table definition, even when Raw.
+TEST_F(PaimonConnectorTest, rejectsPrimaryKeySplits) {
+  const auto rowType = ROW({"c0"}, {BIGINT()});
+  const auto plan = makePaimonScanPlan(rowType);
+  const auto fileSystem = validationFileSystem();
+  fileSystem->openedFiles = 0;
+  for (auto rawConvertible : {true, false}) {
+    SCOPED_TRACE(rawConvertible);
+    const auto split = makePaimonSplit(
+        {"paimon-table-test:/not-opened"},
+        PaimonTableType::kPrimaryKey,
+        dwio::common::FileFormat::DWRF,
+        /*partitionKeys=*/{},
+        rawConvertible);
+    VELOX_ASSERT_USER_THROW(
+        exec::test::AssertQueryBuilder(plan).split(split).copyResults(pool()),
+        "Paimon split table type does not match table schema");
+    exec::test::waitForAllTasksToBeDeleted();
+  }
+  EXPECT_EQ(fileSystem->openedFiles, 0);
 }
 
 // E2E test: multiple splits each with multiple files.

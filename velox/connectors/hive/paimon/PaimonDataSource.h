@@ -17,6 +17,7 @@
 
 #include "velox/connectors/hive/FileDataSource.h"
 #include "velox/connectors/hive/paimon/PaimonConfig.h"
+#include "velox/connectors/hive/paimon/PaimonTableHandle.h"
 
 namespace facebook::velox::connector::hive::paimon {
 
@@ -24,14 +25,13 @@ class PaimonConnectorSplit;
 
 /// Paimon-specific data source that extends FileDataSource.
 ///
-/// PaimonTableHandle supplies an explicit fixed table schema and validates
-/// the same-schema append batch profile and query metadata. Legacy
-/// FileTableHandle inputs retain the existing Raw behavior.
+/// Requires PaimonTableHandle to validate the fixed table schema,
+/// same-schema append batch profile and query metadata.
 class PaimonDataSource : public FileDataSource {
  public:
   PaimonDataSource(
       const RowTypePtr& outputType,
-      const ConnectorTableHandlePtr& tableHandle,
+      const std::shared_ptr<const PaimonTableHandle>& tableHandle,
       const ColumnHandleMap& assignments,
       FileHandleFactory* fileHandleFactory,
       folly::Executor* ioExecutor,
@@ -52,6 +52,8 @@ class PaimonDataSource : public FileDataSource {
   std::unique_ptr<FileSplitReader> createSplitReader() override;
 
  private:
+  const std::shared_ptr<const PaimonTableHandle> paimonTableHandle_;
+
   // The original Paimon split. Stored so createSplitReader() can access
   // the full list of data files.
   std::shared_ptr<PaimonConnectorSplit> paimonSplit_;

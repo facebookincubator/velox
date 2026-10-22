@@ -15,6 +15,7 @@
  */
 #include "velox/connectors/hive/paimon/PaimonConnector.h"
 
+#include "velox/connectors/hive/TableHandle.h"
 #include "velox/connectors/hive/paimon/PaimonDataSource.h"
 #include "velox/connectors/hive/paimon/PaimonTableHandle.h"
 
@@ -33,15 +34,17 @@ std::unique_ptr<DataSource> PaimonConnector::createDataSource(
     const ColumnHandleMap& columnHandles,
     ConnectorQueryCtx* connectorQueryCtx) {
   VELOX_USER_CHECK_NOT_NULL(tableHandle, "Missing Paimon table handle");
-  if (tableHandle->as<PaimonTableHandle>()) {
-    VELOX_USER_CHECK_EQ(
-        tableHandle->connectorId(),
-        connectorId(),
-        "Paimon table handle connector does not match connector instance");
-  }
+  const auto paimonTableHandle =
+      std::dynamic_pointer_cast<const PaimonTableHandle>(tableHandle);
+  VELOX_USER_CHECK_NOT_NULL(
+      paimonTableHandle, "Paimon connector requires PaimonTableHandle");
+  VELOX_USER_CHECK_EQ(
+      paimonTableHandle->connectorId(),
+      connectorId(),
+      "Paimon table handle connector does not match connector instance");
   return std::make_unique<PaimonDataSource>(
       outputType,
-      tableHandle,
+      paimonTableHandle,
       columnHandles,
       &fileHandleFactory_,
       ioExecutor_,
@@ -69,7 +72,7 @@ std::shared_ptr<IndexSource> PaimonConnector::createIndexSource(
 }
 
 void PaimonConnector::registerSerDe() {
-  HiveConnector::registerSerDe();
+  HiveColumnHandle::registerSerDe();
   PaimonConnectorSplit::registerSerDe();
   PaimonTableHandle::registerSerDe();
 }

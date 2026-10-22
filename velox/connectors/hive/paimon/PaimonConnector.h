@@ -32,7 +32,8 @@ class PaimonConnector final : public HiveConnector {
       std::shared_ptr<const config::ConfigBase> config,
       folly::Executor* ioExecutor);
 
-  /// Creates PaimonDataSource for reading from Paimon tables.
+  /// Creates PaimonDataSource. Requires a PaimonTableHandle belonging to this
+  /// connector instance.
   std::unique_ptr<DataSource> createDataSource(
       const RowTypePtr& outputType,
       const ConnectorTableHandlePtr& tableHandle,
@@ -63,7 +64,7 @@ class PaimonConnector final : public HiveConnector {
       const ColumnHandleMap& columnHandles,
       ConnectorQueryCtx* connectorQueryCtx) override;
 
-  /// Registers Paimon table/split serde and the legacy Hive handles. Type,
+  /// Registers Paimon table/split serde and the reused HiveColumnHandle. Type,
   /// Filter and expression serde are registered by the query plan owner.
   static void registerSerDe();
 
