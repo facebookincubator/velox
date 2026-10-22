@@ -352,7 +352,8 @@ HiveConnectorTestBase::makeHiveInsertTableHandle(
     const std::unordered_map<std::string, std::string>& serdeParameters,
     const std::shared_ptr<dwio::common::WriterOptions>& writerOptions,
     const bool ensureFiles,
-    const std::unordered_map<std::string, std::string>& storageParameters) {
+    const std::unordered_map<std::string, std::string>& storageParameters,
+    const bool inputSortedOnPartitionAndBucketKeys) {
   std::vector<std::shared_ptr<const connector::hive::HiveColumnHandle>>
       columnHandles;
   std::vector<std::string> bucketedBy;
@@ -412,7 +413,8 @@ HiveConnectorTestBase::makeHiveInsertTableHandle(
       writerOptions,
       ensureFiles,
       std::make_shared<const connector::hive::HiveInsertFileNameGenerator>(),
-      storageParameters);
+      storageParameters,
+      inputSortedOnPartitionAndBucketKeys);
 }
 
 std::shared_ptr<connector::hive::HiveColumnHandle>
