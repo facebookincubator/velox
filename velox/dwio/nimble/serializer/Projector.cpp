@@ -20,6 +20,7 @@
 
 #include <algorithm>
 #include <numeric>
+#include <tuple>
 
 #include "folly/io/Cursor.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
@@ -99,21 +100,6 @@ inline void setHeaderFlags(
       outputRequiredBarrier,
       streamEncodingUsesVarintRowCount,
       /*streamHasChunkHeader=*/false);
-}
-
-inline void updateRequiredBarrier(
-    bool inputRequiredBarrier,
-    bool hasProjectedHybridFlatMaps,
-    uint32_t streamSize,
-    const std::vector<bool>& rowOrFlatMapNullStreams,
-    size_t outputStreamIdx,
-    bool& outputRequiredBarrier) {
-  if (!inputRequiredBarrier || streamSize == 0) {
-    return;
-  }
-  NIMBLE_DCHECK_LT(outputStreamIdx, rowOrFlatMapNullStreams.size());
-  outputRequiredBarrier |=
-      hasProjectedHybridFlatMaps || rowOrFlatMapNullStreams[outputStreamIdx];
 }
 
 // Forward declaration for recursive calls from per-type helpers.
@@ -352,6 +338,39 @@ Projector::Options upgradeReadOnlyProjectVersion(Projector::Options options) {
   return options;
 }
 
+// Validates the input schema and, for schema evolution, renames its columns to
+// match 'projectType' when set.
+std::shared_ptr<const Type> resolveInputSchema(
+    std::shared_ptr<const Type> inputSchema,
+    const velox::TypePtr& projectType) {
+  NIMBLE_CHECK_NOT_NULL(inputSchema, "Input schema cannot be null");
+  NIMBLE_CHECK(
+      inputSchema->isRow(),
+      "Input schema must be a RowType, got: {}",
+      inputSchema->kind());
+  if (projectType == nullptr) {
+    return inputSchema;
+  }
+  return updateColumnNames(inputSchema, *projectType);
+}
+
+// Validates 'projectSubfields' and builds the projected schema along with its
+// input stream mapping.
+NimbleTypeProjection buildProjection(
+    const Type& inputSchema,
+    const std::vector<Subfield>& projectSubfields) {
+  NIMBLE_CHECK(!projectSubfields.empty(), "Must project at least one subfield");
+  for (const auto& subfield : projectSubfields) {
+    NIMBLE_CHECK(subfield.valid(), "Invalid subfield: {}", subfield.toString());
+  }
+  auto projection = buildProjectedNimbleType(&inputSchema, projectSubfields);
+  NIMBLE_CHECK_EQ(
+      projection.streamOffsets.size(),
+      projection.rowOrFlatMapNullStreams.size(),
+      "Projected stream indices and decode-barrier stream mask must align");
+  return projection;
+}
+
 } // namespace
 
 Projector::Projector(
@@ -359,53 +378,66 @@ Projector::Projector(
     const std::vector<Subfield>& projectSubfields,
     velox::memory::MemoryPool* pool,
     Options options)
-    : pool_(pool),
-      options_(upgradeReadOnlyProjectVersion(std::move(options))),
-      inputSchema_(std::move(inputSchema)) {
+    : pool_{pool},
+      options_{upgradeReadOnlyProjectVersion(std::move(options))},
+      inputSchema_{
+          resolveInputSchema(std::move(inputSchema), options_.projectType)},
+      projection_{buildProjection(*inputSchema_, projectSubfields)},
+      inputStreamsSorted_{std::is_sorted(
+          projection_.streamOffsets.begin(),
+          projection_.streamOffsets.end())},
+      hasProjectedHybridFlatMaps_{selectsHybridGroup(projection_)},
+      sortedStreamMappings_{[this] {
+        std::vector<StreamMapping> mappings;
+        if (inputStreamsSorted_) {
+          return mappings;
+        }
+        mappings.reserve(projection_.streamOffsets.size());
+        for (size_t i = 0; i < projection_.streamOffsets.size(); ++i) {
+          mappings.emplace_back(projection_.streamOffsets[i], i);
+        }
+        std::sort(
+            mappings.begin(),
+            mappings.end(),
+            [](const auto& lhs, const auto& rhs) {
+              return lhs.inputStreamIdx < rhs.inputStreamIdx;
+            });
+        return mappings;
+      }()} {
   NIMBLE_CHECK_NOT_NULL(pool_, "Memory pool cannot be null");
-  NIMBLE_CHECK_NOT_NULL(inputSchema_, "Input schema cannot be null");
-  NIMBLE_CHECK(
-      inputSchema_->isRow(),
-      "Input schema must be a RowType, got: {}",
-      inputSchema_->kind());
-  NIMBLE_CHECK(!projectSubfields.empty(), "Must project at least one subfield");
   NIMBLE_CHECK(
       options_.projectVersion == SerializationVersion::kProjection,
       "Projection output version must be kProjection. Got: {}",
       options_.projectVersion);
-
-  // Update inputSchema_ with projectType names for schema evolution.
-  if (options_.projectType) {
-    inputSchema_ = updateColumnNames(inputSchema_, *options_.projectType);
-  }
-
-  for (const auto& subfield : projectSubfields) {
-    NIMBLE_CHECK(subfield.valid(), "Invalid subfield: {}", subfield.toString());
-  }
-
-  projection_ = buildProjectedNimbleType(inputSchema_.get(), projectSubfields);
-  NIMBLE_CHECK_EQ(
-      projection_.streamOffsets.size(),
-      projection_.rowOrFlatMapNullStreams.size(),
-      "Projected stream indices and decode-barrier stream mask must align");
-  hasProjectedHybridFlatMaps_ = selectsHybridGroup(projection_);
-
-  inputStreamsSorted_ = std::is_sorted(
-      projection_.streamOffsets.begin(), projection_.streamOffsets.end());
-
-  if (!inputStreamsSorted_) {
-    sortedStreamMappings_.reserve(projection_.streamOffsets.size());
-    for (size_t i = 0; i < projection_.streamOffsets.size(); ++i) {
-      sortedStreamMappings_.push_back({projection_.streamOffsets[i], i});
-    }
-    std::sort(
-        sortedStreamMappings_.begin(),
-        sortedStreamMappings_.end(),
-        [](const auto& lhs, const auto& rhs) {
-          return lhs.inputStreamIdx < rhs.inputStreamIdx;
-        });
-  }
 }
+
+struct Projector::ProjectionContext {
+  // Serialized input. The output chain references its memory zero-copy.
+  const folly::IOBuf& input;
+  const SerializationVersion inputVersion;
+
+  // --- Decoded input header and sparse stream trailer ---
+  bool inputRequiredBarrier{false};
+  // Byte offset of the first stream in a contiguous input.
+  size_t dataOffset{0};
+  // Read position in a chained input. Advanced past the header, then through
+  // the stream bytes.
+  folly::io::Cursor cursor{&input};
+  // Sparse (streamIndices, streamSizes) trailer in input stream order.
+  std::vector<uint32_t> streamIndices;
+  std::vector<uint32_t> streamSizes;
+
+  // --- Projected output ---
+  // Output header followed by the projected stream bytes. The trailer is
+  // appended by buildProjectedOutput().
+  std::unique_ptr<folly::IOBuf> output;
+  // Offset of the flags byte in the output header.
+  size_t flagsOffset{0};
+  // Projected stream sizes, parallel to output stream indices. Size-zero
+  // streams stay zero and are omitted by the trailer writer.
+  std::vector<uint32_t> outputStreamSizes;
+  bool outputRequiredBarrier{false};
+};
 
 namespace {
 
@@ -431,6 +463,20 @@ SerializationVersion getAndValidateInputVersion(const folly::IOBuf& input) {
 
 } // namespace
 
+void Projector::recordOutputStream(
+    size_t outputStreamIdx,
+    uint32_t streamSize,
+    ProjectionContext& context) const {
+  NIMBLE_DCHECK_LT(outputStreamIdx, context.outputStreamSizes.size());
+  // NOLINTNEXTLINE(facebook-hte-ParameterUncheckedArrayBounds)
+  context.outputStreamSizes[outputStreamIdx] = streamSize;
+  if (!context.inputRequiredBarrier || streamSize == 0) {
+    return;
+  }
+  context.outputRequiredBarrier |= hasProjectedHybridFlatMaps_ ||
+      projection_.rowOrFlatMapNullStreams[outputStreamIdx];
+}
+
 // Projects selected streams from a contiguous IOBuf into the output chain.
 // Streams are output in the order of selectedStreamIndices (output stream
 // order), which may differ from sorted input order for interleaved schemas
@@ -440,25 +486,17 @@ SerializationVersion getAndValidateInputVersion(const folly::IOBuf& input) {
 // output entries that are contiguous in the input into a single zero-copy
 // IOBuf clone to minimize IOBuf allocations. The input IOBuf must outlive the
 // output chain.
-// static
-std::vector<uint32_t> Projector::projectStreamsContiguousUnsorted(
-    const folly::IOBuf& input,
-    size_t dataOffset,
-    const std::vector<uint32_t>& streamIndices,
-    const std::vector<uint32_t>& streamSizes,
-    const std::vector<uint32_t>& selectedStreamIndices,
-    bool inputRequiredBarrier,
-    bool hasProjectedHybridFlatMaps,
-    const std::vector<bool>& rowOrFlatMapNullStreams,
-    bool& outputRequiredBarrier,
-    std::unique_ptr<folly::IOBuf>& output) {
-  std::vector<uint32_t> outputSizes(selectedStreamIndices.size(), 0);
+void Projector::projectStreamsContiguousUnsorted(
+    ProjectionContext& context) const {
+  const auto& streamIndices = context.streamIndices;
+  const auto& streamSizes = context.streamSizes;
+  const auto& selectedStreamIndices = projection_.streamOffsets;
 
   // Precompute byte offset of each sparse pair (input-order prefix sum of
   // sizes). streamOffsets[sparsePosition] is the byte offset of
   // streamIndices[sparsePosition] within input.
   std::vector<size_t> streamOffsets(streamIndices.size());
-  size_t offset = dataOffset;
+  size_t offset = context.dataOffset;
   for (size_t sparsePosition = 0; sparsePosition < streamIndices.size();
        ++sparsePosition) {
     // NOLINTBEGIN(facebook-hte-LocalUncheckedArrayBounds)
@@ -475,17 +513,17 @@ std::vector<uint32_t> Projector::projectStreamsContiguousUnsorted(
     if (numRunBytes == 0) {
       return;
     }
-    auto buf = input.cloneOne();
+    auto buf = context.input.cloneOne();
     buf->trimStart(runStart);
     buf->trimEnd(buf->length() - numRunBytes);
-    output->appendToChain(std::move(buf));
+    context.output->appendToChain(std::move(buf));
     numRunBytes = 0;
   };
 
   // Walk selectedStreamIndices in output order; binary-search sparse
   // streamIndices for each. Selected streams absent from the sparse trailer or
-  // present with size 0 keep outputSizes at 0 and contribute zero bytes, so
-  // they can sit inside a run without breaking byte-contiguity for the next
+  // present with size 0 keep their output size at 0 and contribute zero bytes,
+  // so they can sit inside a run without breaking byte-contiguity for the next
   // present selected stream.
   for (size_t i = 0; i < selectedStreamIndices.size(); ++i) {
     const auto inputStreamIdx = selectedStreamIndices[i];
@@ -498,15 +536,8 @@ std::vector<uint32_t> Projector::projectStreamsContiguousUnsorted(
     // NOLINTBEGIN(facebook-hte-LocalUncheckedArrayBounds)
     const auto streamSize = streamSizes[sparsePosition];
     const auto streamOffset = streamOffsets[sparsePosition];
-    outputSizes[i] = streamSize;
     // NOLINTEND(facebook-hte-LocalUncheckedArrayBounds)
-    updateRequiredBarrier(
-        inputRequiredBarrier,
-        hasProjectedHybridFlatMaps,
-        streamSize,
-        rowOrFlatMapNullStreams,
-        i,
-        outputRequiredBarrier);
+    recordOutputStream(i, streamSize, context);
     if (numRunBytes > 0 && streamOffset == runStart + numRunBytes) {
       numRunBytes += streamSize;
     } else {
@@ -516,28 +547,18 @@ std::vector<uint32_t> Projector::projectStreamsContiguousUnsorted(
     }
   }
   flushRun();
-
-  return outputSizes;
 }
 
 // Fast path for projectStreamsContiguousUnsorted when inputStreamIndices are
 // sorted (no FlatMap key reordering). Single forward two-pointer merge over
 // the sparse (streamIndices, streamSizes) trailer and selectedStreamIndices.
-// static
-std::vector<uint32_t> Projector::projectStreamsContiguousSorted(
-    const folly::IOBuf& input,
-    size_t dataOffset,
-    const std::vector<uint32_t>& streamIndices,
-    const std::vector<uint32_t>& streamSizes,
-    const std::vector<uint32_t>& selectedStreamIndices,
-    bool inputRequiredBarrier,
-    bool hasProjectedHybridFlatMaps,
-    const std::vector<bool>& rowOrFlatMapNullStreams,
-    bool& outputRequiredBarrier,
-    std::unique_ptr<folly::IOBuf>& output) {
-  std::vector<uint32_t> outputSizes(selectedStreamIndices.size(), 0);
+void Projector::projectStreamsContiguousSorted(
+    ProjectionContext& context) const {
+  const auto& streamIndices = context.streamIndices;
+  const auto& streamSizes = context.streamSizes;
+  const auto& selectedStreamIndices = projection_.streamOffsets;
 
-  size_t currentOffset = dataOffset;
+  size_t currentOffset = context.dataOffset;
 
   // Track the start offset and byte count of a contiguous run.
   size_t runStart = 0;
@@ -548,10 +569,10 @@ std::vector<uint32_t> Projector::projectStreamsContiguousSorted(
       return;
     }
     // Zero-copy: clone the input and trim to the run's sub-range.
-    auto buf = input.cloneOne();
+    auto buf = context.input.cloneOne();
     buf->trimStart(runStart);
     buf->trimEnd(buf->length() - numRunBytes);
-    output->appendToChain(std::move(buf));
+    context.output->appendToChain(std::move(buf));
     numRunBytes = 0;
   };
 
@@ -561,8 +582,8 @@ std::vector<uint32_t> Projector::projectStreamsContiguousSorted(
          selectedPosition < selectedStreamIndices.size()) {
     if (selectedStreamIndices[selectedPosition] <
         streamIndices[sparsePosition]) {
-      // Selected stream absent from sparse trailer (size 0); outputSizes
-      // already 0.
+      // Selected stream absent from sparse trailer (size 0); its output size
+      // is already 0.
       ++selectedPosition;
       continue;
     }
@@ -578,14 +599,7 @@ std::vector<uint32_t> Projector::projectStreamsContiguousSorted(
     // Match.
     // NOLINTBEGIN(facebook-hte-LocalUncheckedArrayBounds)
     const auto streamSize = streamSizes[sparsePosition];
-    outputSizes[selectedPosition] = streamSize;
-    updateRequiredBarrier(
-        inputRequiredBarrier,
-        hasProjectedHybridFlatMaps,
-        streamSize,
-        rowOrFlatMapNullStreams,
-        selectedPosition,
-        outputRequiredBarrier);
+    recordOutputStream(selectedPosition, streamSize, context);
     if (numRunBytes > 0 && currentOffset == runStart + numRunBytes) {
       numRunBytes += streamSize;
     } else {
@@ -599,37 +613,28 @@ std::vector<uint32_t> Projector::projectStreamsContiguousSorted(
     ++selectedPosition;
   }
   flushRun();
-
-  return outputSizes;
 }
 
 // Fast path for projectStreamsChainedUnsorted when inputStreamIndices are
 // sorted (no FlatMap key reordering). Two-pointer merge over the sparse
 // (streamIndices, streamSizes) trailer and selectedStreamIndices, with run
 // merging for contiguous-in-input selected streams.
-// static
-std::vector<uint32_t> Projector::projectStreamsChainedSorted(
-    folly::io::Cursor& cursor,
-    const std::vector<uint32_t>& streamIndices,
-    const std::vector<uint32_t>& streamSizes,
-    const std::vector<uint32_t>& selectedStreamIndices,
-    bool inputRequiredBarrier,
-    bool hasProjectedHybridFlatMaps,
-    const std::vector<bool>& rowOrFlatMapNullStreams,
-    bool& outputRequiredBarrier,
-    std::unique_ptr<folly::IOBuf>& output) {
-  std::vector<uint32_t> outputSizes(selectedStreamIndices.size(), 0);
+void Projector::projectStreamsChainedSorted(ProjectionContext& context) const {
+  const auto& streamIndices = context.streamIndices;
+  const auto& streamSizes = context.streamSizes;
+  const auto& selectedStreamIndices = projection_.streamOffsets;
+  auto& cursor = context.cursor;
 
   // Track how many contiguous selected stream bytes we can merge.
   size_t numRunBytes = 0;
 
-  auto flushRun = [&](std::unique_ptr<folly::IOBuf>& out) {
+  auto flushRun = [&]() {
     if (numRunBytes == 0) {
       return;
     }
     std::unique_ptr<folly::IOBuf> buf;
     cursor.clone(buf, numRunBytes);
-    out->appendToChain(std::move(buf));
+    context.output->appendToChain(std::move(buf));
     numRunBytes = 0;
   };
 
@@ -639,8 +644,8 @@ std::vector<uint32_t> Projector::projectStreamsChainedSorted(
          selectedPosition < selectedStreamIndices.size()) {
     if (selectedStreamIndices[selectedPosition] <
         streamIndices[sparsePosition]) {
-      // Selected stream absent from sparse trailer (size 0); outputSizes
-      // already 0.
+      // Selected stream absent from sparse trailer (size 0); its output size
+      // is already 0.
       ++selectedPosition;
       continue;
     }
@@ -650,7 +655,7 @@ std::vector<uint32_t> Projector::projectStreamsChainedSorted(
       // cursor. Flush is required for cursor correctness: cursor.skip moves
       // the cursor forward, so we must clone the pending run bytes (which
       // sit at the cursor's current position) before skipping past them.
-      flushRun(output);
+      flushRun();
       cursor.skip(streamSizes[sparsePosition]);
       ++sparsePosition;
       continue;
@@ -658,22 +663,13 @@ std::vector<uint32_t> Projector::projectStreamsChainedSorted(
     // Match: accumulate into the current run.
     // NOLINTBEGIN(facebook-hte-LocalUncheckedArrayBounds)
     const auto streamSize = streamSizes[sparsePosition];
-    outputSizes[selectedPosition] = streamSize;
-    updateRequiredBarrier(
-        inputRequiredBarrier,
-        hasProjectedHybridFlatMaps,
-        streamSize,
-        rowOrFlatMapNullStreams,
-        selectedPosition,
-        outputRequiredBarrier);
+    recordOutputStream(selectedPosition, streamSize, context);
     numRunBytes += streamSize;
     // NOLINTEND(facebook-hte-LocalUncheckedArrayBounds)
     ++sparsePosition;
     ++selectedPosition;
   }
-  flushRun(output);
-
-  return outputSizes;
+  flushRun();
 }
 
 // Projects selected streams from a chained IOBuf via cursor.
@@ -682,18 +678,11 @@ std::vector<uint32_t> Projector::projectStreamsChainedSorted(
 // with the sorted-by-input mapping; merges contiguous-in-input runs that are
 // also adjacent in output order into single zero-copy clones, then sorts and
 // chains by output index.
-// static
-std::vector<uint32_t> Projector::projectStreamsChainedUnsorted(
-    folly::io::Cursor& cursor,
-    const std::vector<uint32_t>& streamIndices,
-    const std::vector<uint32_t>& streamSizes,
-    const std::vector<StreamMapping>& sortedStreamMappings,
-    bool inputRequiredBarrier,
-    bool hasProjectedHybridFlatMaps,
-    const std::vector<bool>& rowOrFlatMapNullStreams,
-    bool& outputRequiredBarrier,
-    std::unique_ptr<folly::IOBuf>& output) {
-  std::vector<uint32_t> outputSizes(sortedStreamMappings.size(), 0);
+void Projector::projectStreamsChainedUnsorted(
+    ProjectionContext& context) const {
+  const auto& streamIndices = context.streamIndices;
+  const auto& streamSizes = context.streamSizes;
+  auto& cursor = context.cursor;
 
   // Holds the extracted IOBuf for one or more merged output streams.
   struct OutputStreamBuffer {
@@ -704,14 +693,14 @@ std::vector<uint32_t> Projector::projectStreamsChainedUnsorted(
   };
 
   std::vector<OutputStreamBuffer> outputStreamBufs;
-  outputStreamBufs.reserve(sortedStreamMappings.size());
+  outputStreamBufs.reserve(sortedStreamMappings_.size());
 
   size_t sparsePosition = 0;
   size_t mappingPosition = 0;
   while (sparsePosition < streamIndices.size() &&
-         mappingPosition < sortedStreamMappings.size()) {
+         mappingPosition < sortedStreamMappings_.size()) {
     const auto wantInputStreamIdx =
-        sortedStreamMappings[mappingPosition].inputStreamIdx;
+        sortedStreamMappings_[mappingPosition].inputStreamIdx;
     if (wantInputStreamIdx < streamIndices[sparsePosition]) {
       // Selected input stream absent from sparse trailer (size 0).
       ++mappingPosition;
@@ -727,29 +716,22 @@ std::vector<uint32_t> Projector::projectStreamsChainedUnsorted(
     // Match: try to extend a run while consecutive in input AND adjacent in
     // output AND present in sparse.
     const auto runOutputStreamIdx =
-        sortedStreamMappings[mappingPosition].outputStreamIdx;
+        sortedStreamMappings_[mappingPosition].outputStreamIdx;
     size_t numRunBytes = 0;
     size_t numRunStreams = 0;
     while (
-        mappingPosition + numRunStreams < sortedStreamMappings.size() &&
+        mappingPosition + numRunStreams < sortedStreamMappings_.size() &&
         sparsePosition + numRunStreams < streamIndices.size() &&
         streamIndices[sparsePosition + numRunStreams] ==
             streamIndices[sparsePosition] + numRunStreams &&
-        sortedStreamMappings[mappingPosition + numRunStreams].inputStreamIdx ==
+        sortedStreamMappings_[mappingPosition + numRunStreams].inputStreamIdx ==
             streamIndices[sparsePosition] + numRunStreams &&
-        sortedStreamMappings[mappingPosition + numRunStreams].outputStreamIdx ==
-            runOutputStreamIdx + numRunStreams) {
+        sortedStreamMappings_[mappingPosition + numRunStreams]
+                .outputStreamIdx == runOutputStreamIdx + numRunStreams) {
       // NOLINTBEGIN(facebook-hte-LocalUncheckedArrayBounds)
       const auto streamSize = streamSizes[sparsePosition + numRunStreams];
       const auto outputStreamIdx = runOutputStreamIdx + numRunStreams;
-      outputSizes[outputStreamIdx] = streamSize;
-      updateRequiredBarrier(
-          inputRequiredBarrier,
-          hasProjectedHybridFlatMaps,
-          streamSize,
-          rowOrFlatMapNullStreams,
-          outputStreamIdx,
-          outputRequiredBarrier);
+      recordOutputStream(outputStreamIdx, streamSize, context);
       numRunBytes += streamSize;
       // NOLINTEND(facebook-hte-LocalUncheckedArrayBounds)
       ++numRunStreams;
@@ -772,163 +754,98 @@ std::vector<uint32_t> Projector::projectStreamsChainedUnsorted(
         return lhs.outputStreamIdx < rhs.outputStreamIdx;
       });
   for (auto& streamBuf : outputStreamBufs) {
-    output->appendToChain(std::move(streamBuf.buf));
+    context.output->appendToChain(std::move(streamBuf.buf));
   }
-  return outputSizes;
 }
 
-folly::IOBuf Projector::buildProjectedOutput(
-    const std::vector<uint32_t>& outputStreamSizes,
-    std::unique_ptr<folly::IOBuf> output) const {
+folly::IOBuf Projector::buildProjectedOutput(ProjectionContext& context) const {
+  setHeaderFlags(
+      *context.output,
+      context.flagsOffset,
+      context.outputRequiredBarrier,
+      /*streamEncodingUsesVarintRowCount=*/true);
   IOBufSection trailer(
       detail::estimateTrailerSize(
           options_.projectVersion,
-          outputStreamSizes.size(),
+          context.outputStreamSizes.size(),
           options_.streamIndicesEncodingType,
           options_.streamSizesEncodingType));
   detail::writeTrailer(
-      outputStreamSizes,
+      context.outputStreamSizes,
       options_.streamIndicesEncodingType,
       options_.streamSizesEncodingType,
       trailer);
-  output->appendToChain(std::move(trailer).build());
-  return std::move(*output);
+  context.output->appendToChain(std::move(trailer).build());
+  return std::move(*context.output);
 }
 
 folly::IOBuf Projector::project(const folly::IOBuf& input) const {
-  const auto inputVersion = getAndValidateInputVersion(input);
-
-  if (!input.isChained()) {
-    return projectContiguous(input, inputVersion);
+  ProjectionContext context{
+      .input = input, .inputVersion = getAndValidateInputVersion(input)};
+  if (input.isChained()) {
+    projectChained(context);
+  } else {
+    projectContiguous(context);
   }
-  return projectChained(input, inputVersion);
+  return buildProjectedOutput(context);
 }
 
-folly::IOBuf Projector::projectContiguous(
-    const folly::IOBuf& input,
-    SerializationVersion inputVersion) const {
-  const auto* data = reinterpret_cast<const char*>(input.data());
-  // Skip version byte (already validated and passed in).
+void Projector::projectContiguous(ProjectionContext& context) const {
+  const auto* data = reinterpret_cast<const char*>(context.input.data());
+  // Skip version byte (already validated).
   const auto* pos = data + sizeof(uint8_t);
   const uint32_t rowCount = varint::readVarint32(&pos);
-  const auto inputFlags = readHeaderFlags(pos, inputVersion);
-  const bool inputRequiredBarrier = inputFlags.requiredBarrier;
-
-  IOBufSection header(
-      estimateSerializationHeaderSize(options_.projectVersion, rowCount));
-  const auto flagsOffset =
-      writeSerializationHeader(header, options_.projectVersion, rowCount);
-  auto output = std::move(header).build();
-
-  // Dispatch on input version: legacy kLegacyCompact blobs are read via the
-  // frozen legacy reader (normalized to sparse pairs internally); all newer
-  // versions use the new two-array sparse trailer reader.
-  auto [streamIndices, streamSizes] = usesLegacyTrailer(inputVersion)
-      ? legacy::readLegacyTrailerStreamMetadata(input)
-      : detail::readTrailerStreamMetadata(input);
+  context.inputRequiredBarrier =
+      readRequiredBarrierFlag(pos, context.inputVersion);
+  context.dataOffset = static_cast<size_t>(pos - data);
+  prepareProjection(rowCount, context);
 
   // Extract selected streams as zero-copy sub-range clones.
-  const auto dataOffset = static_cast<size_t>(pos - data);
-  bool outputRequiredBarrier{false};
-  NIMBLE_CHECK_FILE(
-      !hasProjectedHybridFlatMaps_ || inputRequiredBarrier,
-      "Hybrid FlatMap input must carry a required barrier");
-  outputRequiredBarrier |= hasProjectedHybridFlatMaps_;
-  std::vector<uint32_t> outputStreamSizes;
   if (inputStreamsSorted_) {
-    outputStreamSizes = projectStreamsContiguousSorted(
-        input,
-        dataOffset,
-        streamIndices,
-        streamSizes,
-        projection_.streamOffsets,
-        inputRequiredBarrier,
-        hasProjectedHybridFlatMaps_,
-        projection_.rowOrFlatMapNullStreams,
-        outputRequiredBarrier,
-        output);
+    projectStreamsContiguousSorted(context);
   } else {
-    outputStreamSizes = projectStreamsContiguousUnsorted(
-        input,
-        dataOffset,
-        streamIndices,
-        streamSizes,
-        projection_.streamOffsets,
-        inputRequiredBarrier,
-        hasProjectedHybridFlatMaps_,
-        projection_.rowOrFlatMapNullStreams,
-        outputRequiredBarrier,
-        output);
+    projectStreamsContiguousUnsorted(context);
   }
-  setHeaderFlags(
-      *output,
-      flagsOffset,
-      outputRequiredBarrier,
-      /*streamEncodingUsesVarintRowCount=*/true);
-
-  return buildProjectedOutput(outputStreamSizes, std::move(output));
 }
 
-folly::IOBuf Projector::projectChained(
-    const folly::IOBuf& input,
-    SerializationVersion inputVersion) const {
-  folly::io::Cursor cursor(&input);
-  // Skip version byte (already validated and passed in).
+void Projector::projectChained(ProjectionContext& context) const {
+  auto& cursor = context.cursor;
+  // Skip version byte (already validated).
   cursor.skip(sizeof(uint8_t));
   const uint32_t rowCount = readVarint32(cursor);
-  const auto inputFlags = readHeaderFlags(cursor, inputVersion);
-  const bool inputRequiredBarrier = inputFlags.requiredBarrier;
+  context.inputRequiredBarrier =
+      readRequiredBarrierFlag(cursor, context.inputVersion);
+  prepareProjection(rowCount, context);
 
+  // Extract selected streams as zero-copy clones via cursor.
+  if (inputStreamsSorted_) {
+    projectStreamsChainedSorted(context);
+  } else {
+    projectStreamsChainedUnsorted(context);
+  }
+}
+
+void Projector::prepareProjection(uint32_t rowCount, ProjectionContext& context)
+    const {
   IOBufSection header(
       estimateSerializationHeaderSize(options_.projectVersion, rowCount));
-  const auto flagsOffset =
+  context.flagsOffset =
       writeSerializationHeader(header, options_.projectVersion, rowCount);
-  auto output = std::move(header).build();
+  context.output = std::move(header).build();
 
   // Dispatch on input version: legacy kLegacyCompact blobs are read via the
   // frozen legacy reader (normalized to sparse pairs internally); all newer
   // versions use the new two-array sparse trailer reader.
-  auto [streamIndices, streamSizes] = usesLegacyTrailer(inputVersion)
-      ? legacy::readLegacyTrailerStreamMetadata(input)
-      : detail::readTrailerStreamMetadata(input);
+  std::tie(context.streamIndices, context.streamSizes) =
+      usesLegacyTrailer(context.inputVersion)
+      ? legacy::readLegacyTrailerStreamMetadata(context.input)
+      : detail::readTrailerStreamMetadata(context.input);
 
-  // Extract selected streams as zero-copy clones via cursor.
-  bool outputRequiredBarrier{false};
   NIMBLE_CHECK_FILE(
-      !hasProjectedHybridFlatMaps_ || inputRequiredBarrier,
+      !hasProjectedHybridFlatMaps_ || context.inputRequiredBarrier,
       "Hybrid FlatMap input must carry a required barrier");
-  outputRequiredBarrier |= hasProjectedHybridFlatMaps_;
-  std::vector<uint32_t> outputStreamSizes;
-  if (inputStreamsSorted_) {
-    outputStreamSizes = projectStreamsChainedSorted(
-        cursor,
-        streamIndices,
-        streamSizes,
-        projection_.streamOffsets,
-        inputRequiredBarrier,
-        hasProjectedHybridFlatMaps_,
-        projection_.rowOrFlatMapNullStreams,
-        outputRequiredBarrier,
-        output);
-  } else {
-    outputStreamSizes = projectStreamsChainedUnsorted(
-        cursor,
-        streamIndices,
-        streamSizes,
-        sortedStreamMappings_,
-        inputRequiredBarrier,
-        hasProjectedHybridFlatMaps_,
-        projection_.rowOrFlatMapNullStreams,
-        outputRequiredBarrier,
-        output);
-  }
-  setHeaderFlags(
-      *output,
-      flagsOffset,
-      outputRequiredBarrier,
-      /*streamEncodingUsesVarintRowCount=*/true);
-
-  return buildProjectedOutput(outputStreamSizes, std::move(output));
+  context.outputRequiredBarrier = hasProjectedHybridFlatMaps_;
+  context.outputStreamSizes.assign(projection_.streamOffsets.size(), 0);
 }
 
 folly::IOBuf Projector::project(std::string_view input) const {
