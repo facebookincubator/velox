@@ -35,6 +35,7 @@
 #include "velox/dwio/nimble/index/ClusterIndexConfig.h"
 #include "velox/dwio/nimble/serializer/SerializationHeader.h"
 #include "velox/dwio/nimble/serializer/StreamDataParser.h"
+#include "velox/dwio/nimble/tablet/BlockCache.h"
 #include "velox/dwio/nimble/tablet/TabletReader.h"
 #include "velox/dwio/nimble/tablet/TabletReaderCache.h"
 #include "velox/dwio/nimble/velox/HybridFlatMap.h"
@@ -378,6 +379,10 @@ class NimbleIndexProjectorTestBase : public ::testing::Test {
   std::string sinkData_;
   std::unique_ptr<velox::serializer::KeyEncoder> keyEncoder_;
   std::unique_ptr<TabletReaderCache> tabletReaderCache_;
+  // Lazily looked up from the process-wide BlockCache registry the first time
+  // a projector is created with caching enabled. Non-owning; the registry
+  // owns the wrapper and its lifetime matches the backend AsyncDataCache.
+  BlockCache* blockCache_{nullptr};
 
   virtual TestParam currentTestParam() const = 0;
 
