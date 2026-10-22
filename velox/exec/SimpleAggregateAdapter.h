@@ -332,6 +332,14 @@ class SimpleAggregateAdapter : public Aggregate {
       : std::true_type {};
 
   template <typename T, typename = void>
+  struct support_fill_empty_intermediate : std::false_type {};
+
+  template <typename T>
+  struct support_fill_empty_intermediate<
+      T,
+      std::void_t<decltype(&T::fillEmptyIntermediate)>> : std::true_type {};
+
+  template <typename T, typename = void>
   struct support_initialize : std::false_type {};
 
   template <typename T>
@@ -392,6 +400,9 @@ class SimpleAggregateAdapter : public Aggregate {
 
   static constexpr bool support_to_intermediate_ =
       support_to_intermediate<FUNC>::value;
+
+  static constexpr bool support_fill_empty_intermediate_ =
+      support_fill_empty_intermediate<FUNC>::value;
 
   static constexpr bool support_initialize_ = support_initialize<FUNC>::value;
 
@@ -474,6 +485,29 @@ class SimpleAggregateAdapter : public Aggregate {
 
   bool supportsToIntermediate() const override {
     return support_to_intermediate_;
+  }
+
+  bool supportsFillEmptyIntermediate() const override {
+    return support_fill_empty_intermediate_;
+  }
+
+  void fillEmptyIntermediate(const SelectivityVector& rows, VectorPtr& result)
+      const override {
+    if constexpr (support_fill_empty_intermediate_) {
+      using IntermediateType = typename FUNC::IntermediateType;
+      auto* vector =
+          result->as<typename TypeToFlatVector<IntermediateType>::type>();
+      VectorWriter<IntermediateType> writer;
+      writer.init(*vector);
+      rows.applyToSelected([&](vector_size_t row) {
+        writer.setOffset(row);
+        FUNC::fillEmptyIntermediate(writer.current());
+        writer.commit();
+      });
+      writer.finish();
+    } else {
+      VELOX_UNREACHABLE("fillEmptyIntermediate is not supported");
+    }
   }
 
   void toIntermediate(

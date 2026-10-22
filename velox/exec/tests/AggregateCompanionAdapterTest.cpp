@@ -134,6 +134,15 @@ TEST_F(AggregateCompanionRegistryTest, basic) {
       {ARRAY(BIGINT())},
       ARRAY(BIGINT()),
       ARRAY(BIGINT()));
+  EXPECT_FALSE(
+      Aggregate::create(
+          "aggregateFunc1_merge",
+          core::AggregationNode::Step::kSingle,
+          {ARRAY(BIGINT())},
+          ARRAY(BIGINT()),
+          config,
+          /*constantInputs=*/{})
+          ->supportsToIntermediate());
 
   checkAggregateSignaturesCount("aggregateFunc1_merge_extract", 2);
   checkAggregateTypeResolution(
