@@ -509,6 +509,46 @@ return(%r)
   EXPECT_NE(waveGraph, nullptr);
 }
 
+// The partitioner and the optimizer disagree about what a graph output
+// reaches, and an op caught in the gap is scheduled without being rewritten.
+// makeParallelNodes walks from the output node through args(), which
+// computeSideEffectEdges has augmented with an ordering edge to every mutation
+// of a base the outputs touch. Optimizer::visitValue walks plain inputs(), so
+// a chain hanging off a mutation edge is covered but never visited: here the
+// outputs are %live and the pre-mutation %sink, and neither reaches %ri
+// through inputs() alone.
+//
+// repeat_interleave's metadata exists only to host maybeReplace, so it carries
+// no device function. Left un-rewritten in the partition it contributes a
+// block that writes nothing, and its consumers read an unwritten buffer. On
+// the ads ROO preproc graph this stranded 1 of 11 repeat_interleaves, and 1292
+// of 2797 nodes sit on the wrong side of the same gap.
+TEST_F(CompileTest, nodeReachedOnlyByMutationEdgeIsRewritten) {
+  auto f = [] { return makeTensorMeta(c10::ScalarType::Float, 1); };
+  std::unordered_map<std::string, torch::_export::TensorMeta> meta = {
+      {"a", f()},
+      {"b", f()},
+      {"sink", f()},
+      {"repeats", makeTensorMeta(c10::ScalarType::Long, 1)},
+      {"live", f()},
+      {"ri", f()},
+      {"cp", f()}};
+  const char* graphStr = R"(graph(%a, %b, %sink, %repeats):
+%live = torch.ops.aten.add.Tensor(self=%a, other=%b)
+%ri = torch.ops.aten.repeat_interleave.self_Tensor(self=%a, repeats=%repeats)
+%cp = torch.ops.aten.copy_.default(self=%sink, src=%ri)
+return(%live, %sink)
+)";
+
+  auto waveGraph = compileGraphString(graphStr, meta);
+  ASSERT_NE(waveGraph, nullptr);
+
+  EXPECT_TRUE(checkGenerated("repeat_interleave_final", *waveGraph))
+      << "the rewritten op is missing from the generated kernels";
+  EXPECT_FALSE(checkGenerated("repeat_interleave\\.self_Tensor", *waveGraph))
+      << "the original op reached the generated kernels un-rewritten";
+}
+
 // The allocation-group plan is settled while the graph compiles, not on its
 // first execution. Every decision the plan carries is expressed as a (node,
 // step) pair of the compiled grids, and the concat carve pass has to read those
@@ -1133,6 +1173,37 @@ return(%r)
 // grid-wide barrier orders that; the __syncthreads() between two fused
 // expressions covers one block. The operand is marked isRegister like every
 // elementwise argument, which is why the barrier test cannot go by that flag.
+// A boolean-mask index has a known rank: a mask of rank k consumes k source
+// dims and stands for one index dim. Only the extent, the mask's nonzero
+// count, depends on the data.
+TEST_F(CompileTest, boolMaskIndexRank) {
+  std::unordered_map<std::string, torch::_export::TensorMeta> meta = {
+      {"x", makeTensorMeta(c10::ScalarType::Float, 3)},
+      {"m", makeTensorMeta(c10::ScalarType::Bool, 2)},
+      {"y", makeTensorMeta(c10::ScalarType::Float, 2)},
+      {"o1", makeTensorMeta(c10::ScalarType::Float, 2)},
+      {"o2", makeTensorMeta(c10::ScalarType::Float, 1)}};
+  const char* graphStr = R"(graph(%x, %m, %y):
+%l1[] = prim.ListPack(l0=%m)
+%o1 = torch.ops.aten.index.Tensor(self=%x, indices=%l1)
+%l2[] = prim.ListPack(l0=%m)
+%o2 = torch.ops.aten.index.Tensor(self=%y, indices=%l2)
+return(%o1, %o2)
+)";
+
+  auto waveGraph = compileGraphString(graphStr, meta);
+  ASSERT_NE(waveGraph, nullptr);
+  auto rankOf = [&](const char* name) {
+    auto* value = waveGraph->graph()->tryGetValue(name);
+    EXPECT_NE(value, nullptr) << name;
+    return value == nullptr ? -2 : waveGraph->types().rank(value);
+  };
+  // [4,5,6][mask[4,5]] -> [n, 6].
+  EXPECT_EQ(rankOf("o1"), 2);
+  // [4,5][mask[4,5]] -> [n].
+  EXPECT_EQ(rankOf("o2"), 1);
+}
+
 TEST_F(CompileTest, barrierBeforeATransposedLeafOfThisKernel) {
   auto f = [] { return makeTensorMeta(c10::ScalarType::Float, 2); };
   std::unordered_map<std::string, torch::_export::TensorMeta> meta = {

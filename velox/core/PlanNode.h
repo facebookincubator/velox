@@ -32,6 +32,9 @@ struct ArrowArrayStream;
 namespace facebook::velox::core {
 
 class PlanNodeVisitor;
+class FixedPointNode;
+class StateSourceNode;
+class StateHashJoinNode;
 class PlanNodeVisitorContext;
 
 using PlanNodeId = std::string;
@@ -221,7 +224,9 @@ class PlanNode : public ISerializable {
   /// Returns true if this is a leaf plan node and corresponding operator
   /// requires an ExchangeClient to retrieve data. For instance, TableScanNode
   /// is a leaf node that doesn't require an ExchangeClient. But ExchangeNode is
-  /// a leaf node that requires an ExchangeClient.
+  /// a leaf node that requires an ExchangeClient. Except for MergeExchangeNode,
+  /// the task forwards the node's splits, which must be RemoteConnectorSplits,
+  /// to the client.
   virtual bool requiresExchangeClient() const {
     return false;
   }
@@ -323,6 +328,14 @@ class PlanNode : public ISerializable {
   static const PlanNode* findFirstNode(
       const PlanNode* root,
       const std::function<bool(const PlanNode* node)>& predicate);
+
+  /// Returns the first node of type T in the tree under 'root', or nullptr.
+  template <typename T>
+  static const T* findFirstNode(const PlanNode* root) {
+    const PlanNode* node = findFirstNode(
+        root, [](const PlanNode* candidate) { return candidate->is<T>(); });
+    return node == nullptr ? nullptr : node->as<T>();
+  }
 
   /// @return PlanNode with matching ID or nullptr if not found.
   static const PlanNode* findNodeById(
@@ -1192,7 +1205,30 @@ class AggregationNode : public PlanNode {
       const std::vector<Aggregate>& aggregates,
       bool ignoreNullKeys,
       bool noGroupsSpanBatches,
+      std::optional<bool> mayRetainInput,
       PlanNodePtr source);
+
+  AggregationNode(
+      const PlanNodeId& id,
+      Step step,
+      const std::vector<FieldAccessTypedExprPtr>& groupingKeys,
+      const std::vector<FieldAccessTypedExprPtr>& preGroupedKeys,
+      const std::vector<std::string>& aggregateNames,
+      const std::vector<Aggregate>& aggregates,
+      bool ignoreNullKeys,
+      bool noGroupsSpanBatches,
+      PlanNodePtr source)
+      : AggregationNode(
+            id,
+            step,
+            groupingKeys,
+            preGroupedKeys,
+            aggregateNames,
+            aggregates,
+            ignoreNullKeys,
+            noGroupsSpanBatches,
+            /*mayRetainInput=*/std::nullopt,
+            source) {}
 
   /// @param globalGroupingSets Group IDs of the global grouping sets produced
   /// by the preceding GroupId node
@@ -1214,7 +1250,34 @@ class AggregationNode : public PlanNode {
       const std::optional<FieldAccessTypedExprPtr>& groupId,
       bool ignoreNullKeys,
       bool noGroupsSpanBatches,
+      std::optional<bool> mayRetainInput,
       PlanNodePtr source);
+
+  AggregationNode(
+      const PlanNodeId& id,
+      Step step,
+      const std::vector<FieldAccessTypedExprPtr>& groupingKeys,
+      const std::vector<FieldAccessTypedExprPtr>& preGroupedKeys,
+      const std::vector<std::string>& aggregateNames,
+      const std::vector<Aggregate>& aggregates,
+      const std::vector<vector_size_t>& globalGroupingSets,
+      const std::optional<FieldAccessTypedExprPtr>& groupId,
+      bool ignoreNullKeys,
+      bool noGroupsSpanBatches,
+      PlanNodePtr source)
+      : AggregationNode(
+            id,
+            step,
+            groupingKeys,
+            preGroupedKeys,
+            aggregateNames,
+            aggregates,
+            globalGroupingSets,
+            groupId,
+            ignoreNullKeys,
+            noGroupsSpanBatches,
+            /*mayRetainInput=*/std::nullopt,
+            source) {}
 
   class Builder {
    public:
@@ -1231,6 +1294,7 @@ class AggregationNode : public PlanNode {
       groupId_ = other.groupId();
       ignoreNullKeys_ = other.ignoreNullKeys();
       noGroupsSpanBatches_ = other.noGroupsSpanBatches();
+      mayRetainInput_ = other.mayRetainInput();
       VELOX_CHECK_EQ(other.sources().size(), 1);
       source_ = other.sources()[0];
     }
@@ -1286,6 +1350,11 @@ class AggregationNode : public PlanNode {
       return *this;
     }
 
+    Builder& mayRetainInput(std::optional<bool> mayRetainInput) {
+      mayRetainInput_ = mayRetainInput;
+      return *this;
+    }
+
     Builder& source(PlanNodePtr source) {
       source_ = std::move(source);
       return *this;
@@ -1321,6 +1390,7 @@ class AggregationNode : public PlanNode {
           groupId_,
           ignoreNullKeys_.value(),
           noGroupsSpanBatches_,
+          mayRetainInput_,
           source_.value());
     }
 
@@ -1335,6 +1405,7 @@ class AggregationNode : public PlanNode {
     std::optional<FieldAccessTypedExprPtr> groupId_ = kDefaultGroupId;
     std::optional<bool> ignoreNullKeys_;
     bool noGroupsSpanBatches_{false};
+    std::optional<bool> mayRetainInput_;
     std::optional<PlanNodePtr> source_;
   };
 
@@ -1407,6 +1478,25 @@ class AggregationNode : public PlanNode {
     return noGroupsSpanBatches_;
   }
 
+  /// Whether an accumulator is allowed to hold a reference to the input vector
+  /// instead of copying the value out of it. If not set, defaults to
+  /// noGroupsSpanBatches(). This only lifts the operator-level restriction; an
+  /// individual aggregate still opts out when it is sorted or distinct, when
+  /// the step is not raw input, or when the function does not support clustered
+  /// input.
+  ///
+  /// Under noGroupsSpanBatches() the reference is dropped as soon as the
+  /// group's output is produced, which bounds the retention. Setting this to
+  /// true without it means a group pins the whole base vector of every batch
+  /// that fed it until extractValues() runs, and nothing bounds that:
+  /// RowContainer::estimateRowSize() does not measure those bytes, so the
+  /// operator's byte-based output trigger never fires on them. Set it only
+  /// after measuring the retained footprint for the specific plan and input
+  /// shape. It trades memory for CPU and does not affect results.
+  const std::optional<bool>& mayRetainInput() const {
+    return mayRetainInput_;
+  }
+
   std::string_view name() const override {
     return "Aggregation";
   }
@@ -1452,6 +1542,10 @@ class AggregationNode : public PlanNode {
   // the streaming aggregation operator to immediately produce the aggregation
   // result for all the groups in each input batch.
   const bool noGroupsSpanBatches_;
+
+  // Whether accumulators may retain a reference to the input vector. Unset
+  // means follow noGroupsSpanBatches_. See mayRetainInput().
+  const std::optional<bool> mayRetainInput_;
 
   const std::vector<PlanNodePtr> sources_;
   const RowTypePtr outputType_;
@@ -6558,6 +6652,15 @@ class PlanNodeVisitor {
       const = 0;
 
   virtual void visit(const MixedUnionNode& node, PlanNodeVisitorContext& ctx)
+      const = 0;
+
+  virtual void visit(const FixedPointNode& node, PlanNodeVisitorContext& ctx)
+      const = 0;
+
+  virtual void visit(const StateSourceNode& node, PlanNodeVisitorContext& ctx)
+      const = 0;
+
+  virtual void visit(const StateHashJoinNode& node, PlanNodeVisitorContext& ctx)
       const = 0;
 
   /// Used to visit custom PlanNodes that extend the set provided by Velox.

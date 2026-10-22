@@ -139,6 +139,14 @@ generally more efficient, but std::chrono does not handle time zone offsets
 such as ``+09:00``.  Timezone offsets are only supported in the API version
 that takes a timezone ID.
 
+The two directions differ in safety. ``toTimezone()`` takes an absolute point in
+time and reports the wall clock read at a zone, and every point in time has one.
+``toGMT()`` goes the other way, reading a wall clock as being at a zone and
+returning the point in time it names, and some wall clocks name none. On the day
+a zone springs forward the clock jumps past an hour, so a wall clock inside it
+names no point in time and the conversion fails. On the day it falls back the
+same wall clock occurs twice, and the earlier instant is used.
+
 Timezone Database Lookup
 ------------------------
 

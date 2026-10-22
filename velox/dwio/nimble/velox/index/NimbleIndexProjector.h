@@ -16,27 +16,38 @@
 
 #pragma once
 
+#include <folly/coro/Task.h>
 #include <folly/io/IOBuf.h>
 #include <memory>
+#include <mutex>
+#include <optional>
 #include <span>
 #include <string>
 #include <vector>
 
+#include "velox/buffer/BufferPool.h"
+#include "velox/common/base/Exceptions.h"
 #include "velox/common/caching/FileHandle.h"
 #include "velox/common/io/IoStatistics.h"
 #include "velox/common/time/CpuWallTimer.h"
 #include "velox/dwio/nimble/common/Buffer.h"
+#include "velox/dwio/nimble/common/Checksum.h"
 #include "velox/dwio/nimble/index/ClusterIndex.h"
 #include "velox/dwio/nimble/tablet/DataInput.h"
+#include "velox/dwio/nimble/tablet/FileProperties.h"
 #include "velox/dwio/nimble/tablet/TabletReader.h"
 #include "velox/dwio/nimble/tablet/TabletReaderCache.h"
 #include "velox/dwio/nimble/velox/RowRange.h"
 #include "velox/dwio/nimble/velox/SchemaUtils.h"
+#include "velox/dwio/nimble/velox/index/StripeStreams.h"
 #include "velox/serializers/KeyEncoder.h"
 #include "velox/type/Subfield.h"
+#include "velox/vector/ComplexVector.h"
 
 namespace facebook::nimble {
 
+class BlockCache;
+class StreamReader;
 class TabletReaderCache;
 namespace serde {
 class StreamSlicer;
@@ -45,9 +56,10 @@ class StreamSlicer;
 using Subfield = velox::common::Subfield;
 
 /// NimbleIndexProjector takes a batch of index lookup requests (point lookups
-/// or range scans with already-encoded keys) and column projections, uses the
-/// Nimble cluster index to locate relevant stripes and row ranges, then reads
-/// and serializes the projected columns for transport.
+/// or range scans with already-encoded keys) and column projections, then uses
+/// the Nimble cluster index to read the matching stripe rows. Results can be
+/// serialized for transport, decoded into a Velox vector, or supplied as
+/// stripe streams to iterators.
 ///
 /// The output uses kTablet serialization format with a fixed-shape
 /// per-slice header in front of the stripe body+trailer:
@@ -65,7 +77,7 @@ using Subfield = velox::common::Subfield;
 /// clones; only the header node is unique per slice.
 ///
 /// Usage:
-///   auto result = projector.project(request, options);
+///   auto result = projector.projectStreams(request, options);
 ///   for (size_t i = 0; i < result.responses.size(); ++i) {
 ///     const auto& response = result.responses[i];
 ///     for (const auto& slice : response.slices) {
@@ -82,31 +94,45 @@ using Subfield = velox::common::Subfield;
 ///
 /// NOTE: NimbleIndexProjector is not thread-safe. Each thread must use its
 /// own instance.
+/// The caller must keep the memory pool alive through reads and asynchronous
+/// prefetch cleanup.
 class NimbleIndexProjector {
  public:
   /// Destroys the projector and its cached stream slicer.
   ~NimbleIndexProjector();
 
+  /// Creates a projector over the tablet reader entry held by
+  /// `tabletReaderCache` for `fileHandle`.
+  ///
+  /// When `blockCache` is non-null, stripe data reads route through
+  /// `CachedDataInput` against the caller-owned cache; otherwise reads use
+  /// `DirectDataInput` with no caching. The cache must outlive the projector.
+  ///
   // TODO: projectedSubfields currently must match file schema column names.
   // Add table-to-file column name mapping for schema evolution support.
   static std::unique_ptr<NimbleIndexProjector> create(
       TabletReaderCache& tabletReaderCache,
       const velox::FileHandle& fileHandle,
       const std::vector<Subfield>& projectedSubfields,
+      BlockCache* blockCache,
       const velox::dwio::common::ReaderOptions& options);
 
   /// Creates a projector with projection metadata built by the caller.
   /// The projection must have been built from the schema of `tablet`.
+  /// When `blockCache` is non-null, stripe data reads route through
+  /// `CachedDataInput` against the caller-owned cache; otherwise reads use
+  /// `DirectDataInput` with no caching. The cache must outlive the projector.
   static std::unique_ptr<NimbleIndexProjector> create(
       std::shared_ptr<TabletReader> tablet,
       const velox::FileHandle& fileHandle,
       std::shared_ptr<const NimbleTypeProjection> projection,
+      BlockCache* blockCache,
       const velox::dwio::common::ReaderOptions& options);
 
   /// Options for controlling projection behavior.
   ///
   /// The three limits below (maxRows, maxBytes, maxRowsPerRequest) only bound
-  /// how much data a single project() call returns; on their own they never
+  /// how much data a single projection returns; on their own they never
   /// decide whether a resume key is produced. Resume keys are governed solely
   /// by needResumeKey: when it is set, any request whose results were cut short
   /// by one of these limits carries a resume key; when it is unset, no resume
@@ -127,7 +153,8 @@ class NimbleIndexProjector {
     uint64_t maxRowsPerRequest{0};
     /// Maximum tolerated avoidable row overfetch per stripe before stream
     /// slicing is applied. 0.0 slices whenever any overfetch can be removed;
-    /// 1.0 disables slicing.
+    /// 1.0 disables slicing. Hybrid FlatMap projections always retain the
+    /// full stripe because their streams use a key-major layout.
     double maxOverfetchRowsRatio{1.0};
     /// When set, every request whose results were cut short by a limit
     /// (maxRows, maxBytes, or maxRowsPerRequest) is given a resume key so the
@@ -143,8 +170,8 @@ class NimbleIndexProjector {
     std::vector<velox::serializer::EncodedKeyBounds> keyBounds;
   };
 
-  /// Response for a single request.
-  struct Response {
+  /// Serialized output for a single request.
+  struct SerializedResponse {
     /// One self-describing kTablet IOBuf chain per (request × stripe)
     /// intersection. Each entry covers a contiguous row range within one
     /// stripe; the row range is embedded in the chain's header. Empty for
@@ -164,20 +191,72 @@ class NimbleIndexProjector {
     ///
     /// Also embedded in the last slice's per-slice header (when slices
     /// is non-empty) so consumers that hold an IOBuf can recover the key
-    /// without keeping the Response struct around.
+    /// without keeping the SerializedResponse struct around.
     std::optional<std::string> resumeKey;
   };
 
-  /// Result of a project() call.
-  struct Result {
+  /// Result of a projectStreams() call.
+  struct SerializedResult {
     /// One entry per request, in request order.
-    std::vector<Response> responses;
+    std::vector<SerializedResponse> responses;
+  };
+
+  /// Locates one request's rows in RowProjectionResult::values.
+  struct RowProjectionResponse {
+    /// First row for this request in the shared output vector.
+    velox::vector_size_t offset{0};
+    /// Number of rows returned for this request.
+    velox::vector_size_t size{0};
+    /// Encoded continuation key when the request was truncated.
+    std::optional<std::string> resumeKey;
+  };
+
+  /// Holds request-major rows decoded directly into a Velox vector.
+  struct RowProjectionResult {
+    /// Flat projected rows from every request, grouped in request order.
+    velox::RowVectorPtr values;
+    /// One range into `values` per request.
+    std::vector<RowProjectionResponse> responses;
   };
 
   /// Projects the requested columns for the given batch of index lookups.
-  /// Returns one Response per request, in order. Processes all relevant
-  /// stripes internally.
-  Result project(const Request& request, const Options& options);
+  /// Returns one SerializedResponse per request, in order. Processes all
+  /// relevant stripes internally.
+  SerializedResult projectStreams(
+      const Request& request,
+      const Options& options);
+
+  /// Projects rows directly into a Velox vector. Flat scalar projections use
+  /// random-access EncodingView reads when supported. Nested projections use
+  /// the general FieldReader path without serializing an intermediate kTablet
+  /// payload. The request and options must remain alive until the returned
+  /// task completes.
+  folly::coro::Task<RowProjectionResult> co_projectRows(
+      const Request& request,
+      const Options& options);
+
+  /// Resolves key bounds into stripe selections, in stripe order.
+  /// Returns an empty vector for a miss. The caller owns scan progress.
+  std::vector<StripeSelection> lookup(
+      const velox::serializer::EncodedKeyBounds& bounds);
+
+  /// Resolves the rows whose key equals the encoded key into stripe selections,
+  /// in stripe order. Returns an empty vector for a miss. The rows of a key can
+  /// span chunks and stripes, so this looks up the range from the key to its
+  /// successor, the key followed by a zero byte. The caller owns scan progress.
+  std::vector<StripeSelection> lookup(std::string encodedKey);
+
+  /// Resolves a file-level row range into stripe selections.
+  /// Returns an empty vector for an empty range.
+  std::vector<StripeSelection> lookup(const RowRange& rowRange);
+
+  /// Loads projected streams for contiguous full stripes in one I/O batch.
+  /// Returns one entry per stripe, in stripe order, including stripes whose
+  /// projected streams are all absent. The caller applies row selections.
+  /// Requires a non-zero stripe count.
+  std::vector<facebook::nimble::ProjectedStripe> loadStripeStreams(
+      uint32_t stripeOffset,
+      uint32_t numStripes);
 
   /// Returns the projected nimble schema. Preserves encoding-specific types
   /// (ArrayWithOffsets, SlidingWindowMap, FlatMap) from the file schema.
@@ -186,7 +265,22 @@ class NimbleIndexProjector {
     return projection_->nimbleType;
   }
 
-  /// Statistics captured during project().
+  /// Returns the cluster index used to resolve projected key ranges.
+  const ClusterIndexBase& clusterIndex() const {
+    return *velox::checkedNotNull(clusterIndex_);
+  }
+
+  /// Returns the number of rows in the source tablet.
+  uint64_t numRows() const {
+    return tablet_->tabletRowCount();
+  }
+
+  /// Returns the file properties used to configure decoding.
+  const FileProperties& properties() const {
+    return tablet_->properties();
+  }
+
+  /// Statistics captured during projection.
   struct Stats {
     /// Number of stripes read from the tablet.
     uint32_t numReadStripes{0};
@@ -199,8 +293,15 @@ class NimbleIndexProjector {
     /// Total rows in the output result (only the requested row ranges).
     /// The difference numReadRows - numProjectedRows is over-fetched rows.
     uint64_t numProjectedRows{0};
-    /// Total serialized output bytes.
+    /// Total serialized output bytes, projected stream bytes, or retained
+    /// vector bytes.
     uint64_t numOutputBytes{0};
+    /// Projected stream bytes charged against Options::maxBytes: the running
+    /// total that decides where a byte-limited projection stops.
+    uint64_t numPlannedBytes{0};
+    /// Number of projections that stopped with stripes left to read because
+    /// numPlannedBytes reached Options::maxBytes.
+    uint32_t numMaxBytesTruncations{0};
 
     /// Time spent looking up stripes and row ranges via the tablet index.
     velox::CpuWallTiming lookupTiming;
@@ -211,22 +312,38 @@ class NimbleIndexProjector {
     /// Time spent serializing projected streams into kTablet format.
     velox::CpuWallTiming projectionTiming;
 
+    /// Returns a readable summary of counters and timings.
     std::string toString() const;
   };
 
-  /// Returns cumulative statistics across all project() calls.
-  const Stats& stats() const {
-    return stats_;
-  }
+  /// Returns approximate cumulative statistics. TSan builds synchronize
+  /// snapshots with counter and timing updates.
+  Stats stats() const;
+
+  /// Enables or disables the CPU and wall clock reads that fill the timings of
+  /// stats(). Reading the thread CPU clock is a system call, so a point lookup
+  /// spends about 3 us on these reads. Disabled timings keep their current
+  /// values. Enabled by default.
+  void setTimingEnabled(bool enabled);
 
  private:
+  // Applies a synchronous counter or timing update under the TSan guard.
+  template <typename Update>
+  void updateStats(Update&& update);
+
+  // Accumulates one timing sample for the selected statistic.
+  void recordStatsTiming(
+      velox::CpuWallTiming Stats::* field,
+      const velox::CpuWallTiming& timing);
+
   NimbleIndexProjector(
       std::shared_ptr<TabletReader> tablet,
       std::shared_ptr<velox::ReadFile> file,
       std::unique_ptr<DataInput> dataInput,
       std::shared_ptr<const NimbleTypeProjection> projection,
       velox::memory::MemoryPool* pool,
-      std::shared_ptr<velox::io::IoStatistics> ioStats);
+      std::shared_ptr<velox::io::IoStatistics> ioStats,
+      bool verifyStreamChecksums);
 
   // A request index paired with its stripe-relative row range.
   struct StripeRange {
@@ -272,12 +389,12 @@ class NimbleIndexProjector {
     }
   };
 
-  // Initializes per-project() state: stores request/options pointers and
+  // Initializes per-request state: stores request/options pointers and
   // resets running totals.
   void initRequest(const Request& request, const Options& options);
 
-  // Clears all per-project() state set by initRequest(). Invoked on scope
-  // exit so a subsequent project() call starts from a clean slate.
+  // Clears all per-request state set by initRequest(). Invoked on scope
+  // exit so a subsequent projection starts from a clean slate.
   void clearRequest();
 
   // Looks up all requests via the cluster index and maps them to stripes.
@@ -292,17 +409,19 @@ class NimbleIndexProjector {
     std::vector<uint32_t> stripeIndices;
     // Total rows in each planned stripe.
     std::vector<uint32_t> numRows;
-    // Whether each planned stripe needs the Row/FlatMap null-barrier path.
-    std::vector<bool> requiresNullBarriers;
+    // Whether each planned stripe must be decoded independently.
+    std::vector<bool> requiredBarriers;
     // Number of projected streams present in each planned stripe.
     std::vector<uint32_t> numStreams;
     // Total logical bytes across all projected streams in each planned stripe.
     std::vector<uint64_t> projectedBytes;
     // File offsets for stripe stream payloads.
     std::vector<uint64_t> stripeFileOffsets;
+    // Physical bytes spanning all streams in each stripe.
+    std::vector<uint64_t> stripeSizes;
     // Flat reusable storage for all per-stripe projected stream slots. Each
     // stripe occupies projection_->streamOffsets.size() consecutive entries.
-    std::vector<StripeGroup::StreamLocation> projectedStreams;
+    std::vector<StripeGroup::StreamMetadata> projectedStreams;
     // Start offsets into stripeRanges for each planned stripe. The last entry
     // is the total range count.
     std::vector<size_t> stripeRangeOffsets;
@@ -313,7 +432,7 @@ class NimbleIndexProjector {
 
   // Returns this stripe's projected stream slots from the flat ScanPlan
   // storage.
-  std::span<const StripeGroup::StreamLocation> stripeProjectedStreams(
+  std::span<const StripeGroup::StreamMetadata> stripeProjectedStreams(
       size_t stripeOffset) const;
 
   // Returns this stripe's request ranges from the flat ScanPlan storage.
@@ -324,7 +443,7 @@ class NimbleIndexProjector {
   struct StripeStreams {
     uint32_t numStreams{0};
     uint64_t projectedBytes{0};
-    bool requiresNullBarrier{false};
+    bool requiredBarrier{false};
   };
 
   // Locates this stripe's projected streams, staging them at the tail of
@@ -334,6 +453,9 @@ class NimbleIndexProjector {
   // trims any left over.
   StripeStreams locateStripeStreams(uint32_t stripeIndex);
 
+  // Stages projected stream locations from metadata already loaded in a batch.
+  StripeStreams locateStripeStreams(const StripeIdentifier& stripe);
+
   // Appends one stripe to the plan using streams already staged for it by
   // locateStripeStreams().
   void appendStripePlan(
@@ -342,7 +464,8 @@ class NimbleIndexProjector {
       const StripeStreams& streams);
 
   // Computes the stripe-relative body range based on request row ranges and
-  // Options::maxOverfetchRowsRatio.
+  // Options::maxOverfetchRowsRatio. Hybrid FlatMap projections always retain
+  // the full stripe because their physical streams are key-major.
   RowRange stripeRowRangeToPack(size_t stripeOffset) const;
 
   // Records the resume key for a request that reached its maxRowsPerRequest cap
@@ -367,11 +490,34 @@ class NimbleIndexProjector {
 
   // Enqueues all projected streams from ctx_.plan into DataInput and issues a
   // single coalesced load() call.
-  void loadStripes();
+  void loadStripeStreams();
 
-  // Serializes each stripe's loaded streams, builds per-request results,
-  // and finalizes the result.
-  Result processStripes();
+  // Builds serialized responses from the loaded stripe streams.
+  SerializedResult processStripeStreams();
+
+  // Checks one loaded stream against the checksum the file records for it,
+  // throwing when they differ. With stream trailers, `data` ends with the
+  // stream's trailer. Otherwise the checksum comes from the stream's stripe
+  // group, at the stream's position in ctx_.expectedStreamChecksums, which is
+  // `enqueueIndex`: the index DataInput returned from enqueue().
+  void verifyStreamChecksum(uint32_t enqueueIndex, std::string_view data) const;
+
+  // Validates the projected row schema.
+  void validateProjection() const;
+
+  // Builds streamChecksum_, and for files with stream trailers the trailer
+  // members, when `verifyStreamChecksums` is set and the file records
+  // per-stream checksums.
+  void initStreamChecksum(bool verifyStreamChecksums);
+
+  // Resolves the request's stripes and loads their projected streams.
+  void loadStripes(const Request& request, const Options& options);
+
+  // Returns decoding options backed by this projector's scratch pool.
+  Encoding::Options encodingOptions();
+
+  // Creates the schema-derived reader on first use by co_projectRows().
+  void ensureStreamReader();
 
   // Computes per-stripe pack ranges and returns the upper-bound byte estimate
   // used to allocate the sliced-output arena. Returns 0 when no stripe will be
@@ -383,7 +529,7 @@ class NimbleIndexProjector {
       size_t stripeOffset,
       const RowRange& packRange) const;
 
-  // Returns the per-project() sliced-output arena.
+  // Returns the per-request sliced-output arena.
   Buffer& sliceOutputBuffer();
 
   // Transfers sliced-output arena chunks to the shared owner referenced by the
@@ -418,7 +564,7 @@ class NimbleIndexProjector {
   struct PackedStripe {
     folly::IOBuf body;
     RowRange rowRange;
-    bool requiresNullBarrier{false};
+    bool requiredBarrier{false};
     bool streamHasChunkHeader{false};
   };
 
@@ -433,17 +579,16 @@ class NimbleIndexProjector {
       size_t stripeOffset,
       const RowRange& packRange);
 
-  // When Options::needResumeKey is set, attaches resume keys to requests whose
-  // results were cut short: per-request keys from maxRowsPerRequest caps, plus
-  // (on global maxRows/maxBytes truncation) keys for requests that still have
-  // data in an unprocessed stripe. No-op when needResumeKey is unset.
-  void setResumeKeys(Result& result);
+  // When Options::needResumeKey is set, resolves resume keys for requests
+  // whose results were cut short and stores them in ctx_.resumeKeys. No-op
+  // when needResumeKey is unset.
+  void prepareResumeKeys();
 
   // Iterates planned stripes and ctx_.packedStripes to build per-request
   // output slices. Each slice clones the shared stripe body and prepends a
   // per-request header with the row range and (on the last slice of a
   // truncated response) the resume key.
-  void buildResult(Result& result);
+  void buildResult(SerializedResult& result);
 
   inline uint32_t stripeRowCount(uint32_t stripe) const {
     return static_cast<uint32_t>(tablet_->stripeRowCount(stripe));
@@ -453,17 +598,42 @@ class NimbleIndexProjector {
   // rowRangeLimit with the stripe boundaries.
   RowRange stripeRowRange(uint32_t stripe, const RowRange& rowRangeLimit) const;
 
+  // Keeps the source file alive throughout projected stripe loads.
   const std::shared_ptr<velox::ReadFile> file_;
   const std::shared_ptr<TabletReader> tablet_;
   const std::shared_ptr<velox::io::IoStatistics> ioStats_;
+  // Owned by the caller throughout reads and asynchronous cleanup.
   velox::memory::MemoryPool* const pool_;
-  std::unique_ptr<DataInput> dataInput_;
-  const ClusterIndex* const clusterIndex_;
+  const ClusterIndexBase* const clusterIndex_;
   const uint32_t numStripes_{0};
 
   const std::shared_ptr<const NimbleTypeProjection> projection_;
+  // True when every emitted slice must preserve a native HFM batch boundary,
+  // even if the selected group has no physical stream in a stripe.
+  const bool hasProjectedHybridFlatMaps_{false};
   // Reused across stripes; its raw input format is fixed by the tablet.
   const std::unique_ptr<serde::StreamSlicer> streamSlicer_;
+
+  std::unique_ptr<DataInput> dataInput_;
+  // Verifies a stream read from storage against the checksum the file records
+  // for it. Built only when ReaderOptions::verifyStreamChecksums() is set and
+  // the file records per-stream checksums, so null means this projector does
+  // not verify. Stateful, so it relies on this class being single-threaded.
+  std::unique_ptr<Checksum> streamChecksum_;
+  // When verifying a file whose checksums are in stream trailers: the stream
+  // trailer's size, read with every stream, and the checksum's offset within
+  // it. Zero otherwise, so unverified reads load exactly the stream's bytes.
+  uint32_t streamTrailerSize_{0};
+  uint32_t streamTrailerChecksumOffset_{0};
+  // Whether the stats timings read the CPU and wall clocks.
+  bool timingEnabled_{true};
+  // Scratch allocations shared by successive EncodingView decodes. The
+  // projector is single-threaded, matching BufferPool's ownership contract.
+  velox::BufferPool encodingBufferPool_{velox::BufferPool::kDefaultCapacity};
+
+  // Decodes projected rows into Velox vectors. The serialized path does not
+  // need this reader, so it is created on the first co_projectRows() call.
+  std::unique_ptr<StreamReader> streamReader_;
 
   // One range tagged with the tablet stripe it falls in, before grouping.
   // Sorting a vector of these on (tabletStripeIndex, range.requestIndex) is
@@ -474,9 +644,9 @@ class NimbleIndexProjector {
     StripeRange range;
   };
 
-  // Per-project() call state. Set by initRequest(), populated through the
-  // pipeline (lookupStripes → prepareStripes → loadStripes → processStripes),
-  // and reset on return.
+  // Per-request state. Set by initRequest(), populated through the shared
+  // pipeline (lookupStripes → prepareStripes → loadStripeStreams), consumed by
+  // whichever terminal step the caller asked for, and reset on return.
   struct ProjectionContext {
     const Request* request{nullptr};
     const Options* options{nullptr};
@@ -489,7 +659,7 @@ class NimbleIndexProjector {
     // Per-request flag: true once planning has processed a stripe range for
     // the request. Deliberately not "contributed a range to the plan": it is
     // also set when the stripe is dropped for projecting no streams, because
-    // what setResumeKeys() needs to know is whether the request was reached
+    // what prepareResumeKeys() needs to know is whether the request was reached
     // before global truncation, not whether it produced output. Set by
     // prepareStripes(), used by setResumeKeys().
     std::vector<bool> hasProcessedStripeRange;
@@ -498,12 +668,17 @@ class NimbleIndexProjector {
     std::vector<std::optional<std::string>> resumeKeys;
     // Flat array of enqueue indices, logically
     // [stripeOffset * numProjectedStreams + streamIndex]. nullopt for absent
-    // streams. Populated by loadStripes().
+    // streams. Populated by loadStripeStreams().
     std::vector<std::optional<uint32_t>> dataInputIndices;
+    // Expected checksum of each enqueued stream, indexed by the enqueue index
+    // DataInput returns. Appended in enqueue order by loadStripes(). Empty
+    // when checksum verification is off or reads checksums from stream
+    // trailers.
+    std::vector<uint32_t> expectedStreamChecksums;
     // Handle keeping loaded data alive for zero-copy BufferRefs.
     DataInput::Handle dataHandle;
     // Serialized stripe bodies and metadata, one per planned stripe. Populated
-    // by processStripes(), consumed during buildResult().
+    // by processStripeStreams(), consumed during buildResult().
     std::vector<PackedStripe> packedStripes;
     // Per planned stripe row range selected for packing. Full-stripe ranges use
     // zero-copy packing; narrower ranges use StreamSlicer.
@@ -511,13 +686,13 @@ class NimbleIndexProjector {
     // Reusable per-request vectors.
     std::vector<uint64_t> rowsPerRequest;
     // Stripes resolved from the cluster index, collected before grouping into
-    // StripeRanges and reused across project() calls to keep the build
+    // StripeRanges and reused across projection calls to keep the build
     // alloc-free. Holds one entry per (request, stripe) pair, so a stripe
     // repeats once per request that lands in it.
     std::vector<ResolvedStripe> resolvedStripesScratch;
     std::vector<size_t> sliceCounts;
     std::vector<size_t> emittedSlices;
-    // Shared arena for all sliced stream bytes produced by one project() call.
+    // Shared arena for all sliced stream bytes produced by one projection.
     // The arena is transferred into sliceOutputChunks after all sliced stripes
     // have been packed, letting result IOBufs share the same chunk owner.
     std::unique_ptr<Buffer> sliceOutputBuffer;
@@ -558,6 +733,9 @@ class NimbleIndexProjector {
   };
   ProjectionContext ctx_;
 
+  // Guards stats updates and snapshots in TSan builds.
+  mutable std::mutex statsLock_{};
+  // Updated by the thread performing projection work.
   Stats stats_;
 };
 

@@ -20,29 +20,33 @@
 namespace facebook::velox::functions {
 namespace {
 template <typename T>
-inline void registerArrayNGramsFunctions(const std::string& prefix) {
+inline void registerArrayNGramsFunctions(
+    const std::string& prefix,
+    std::string_view defaultOwner) {
   registerFunction<ArrayNGramsFunction, Array<Array<T>>, Array<T>, int32_t>(
-      {prefix + "ngrams"});
+      {prefix + "ngrams"}, {}, true, defaultOwner);
 }
 
 } // namespace
-void registerArrayNGramsFunctions(const std::string& prefix) {
-  registerArrayNGramsFunctions<int8_t>(prefix);
-  registerArrayNGramsFunctions<int16_t>(prefix);
-  registerArrayNGramsFunctions<int32_t>(prefix);
-  registerArrayNGramsFunctions<int64_t>(prefix);
-  registerArrayNGramsFunctions<int128_t>(prefix);
-  registerArrayNGramsFunctions<float>(prefix);
-  registerArrayNGramsFunctions<double>(prefix);
-  registerArrayNGramsFunctions<bool>(prefix);
-  registerArrayNGramsFunctions<Timestamp>(prefix);
-  registerArrayNGramsFunctions<Date>(prefix);
-  registerArrayNGramsFunctions<Varbinary>(prefix);
-  registerArrayNGramsFunctions<Generic<T1>>(prefix);
+void registerArrayNGramsFunctions(
+    const std::string& prefix,
+    std::string_view defaultOwner) {
+  registerArrayNGramsFunctions<int8_t>(prefix, defaultOwner);
+  registerArrayNGramsFunctions<int16_t>(prefix, defaultOwner);
+  registerArrayNGramsFunctions<int32_t>(prefix, defaultOwner);
+  registerArrayNGramsFunctions<int64_t>(prefix, defaultOwner);
+  registerArrayNGramsFunctions<int128_t>(prefix, defaultOwner);
+  registerArrayNGramsFunctions<float>(prefix, defaultOwner);
+  registerArrayNGramsFunctions<double>(prefix, defaultOwner);
+  registerArrayNGramsFunctions<bool>(prefix, defaultOwner);
+  registerArrayNGramsFunctions<Timestamp>(prefix, defaultOwner);
+  registerArrayNGramsFunctions<Date>(prefix, defaultOwner);
+  registerArrayNGramsFunctions<Varbinary>(prefix, defaultOwner);
+  registerArrayNGramsFunctions<Generic<T1>>(prefix, defaultOwner);
   registerFunction<
       ArrayNGramsFunctionString,
       Array<Array<Varchar>>,
       Array<Varchar>,
-      int32_t>({prefix + "ngrams"});
+      int32_t>({prefix + "ngrams"}, {}, true, defaultOwner);
 }
 } // namespace facebook::velox::functions

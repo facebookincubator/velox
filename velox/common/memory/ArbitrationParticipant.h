@@ -18,6 +18,8 @@
 
 #include "velox/common/memory/MemoryArbitrator.h"
 
+#include <folly/stop_watch.h>
+
 #include "velox/common/base/Counters.h"
 #include "velox/common/base/StatsReporter.h"
 #include "velox/common/future/VeloxPromise.h"
@@ -41,11 +43,10 @@ class ArbitrationParticipantTestHelper;
 class ArbitrationOperation;
 class ScopedArbitrationParticipant;
 
-/// Custom lock that keeps track of the time of the ongoing arbitration
-/// operation while waiting for the lock. The lock will identify if it needs to
-/// apply a wait timeout by checking arbitrationCtx thread local variable. If a
-/// local arbitration is ongoing on the current locking thread, timeout will
-/// automatically be applied.
+/// Lock guard that acquires the guarded 'std::timed_mutex' within the given
+/// wait timeout and releases it on destruction. Throws if the lock can't be
+/// acquired within 'timeoutNs'. The caller passes the remaining wait time
+/// budget of its arbitration operation as 'timeoutNs'.
 ///
 /// NOTE: TSAN is incompatible with std::timed_mutex when used with timeout. So
 /// in TSAN build a trivial lock is implemented.
@@ -170,9 +171,7 @@ class ArbitrationParticipant
 
   /// Returns the duration of this arbitration participant since its creation.
   uint64_t durationNs() const {
-    const auto now = getCurrentTimeNano();
-    VELOX_CHECK_GE(now, createTimeNs_);
-    return now - createTimeNs_;
+    return creationWatch_.elapsed().count();
   }
 
   /// Invoked to acquire a shared reference to this arbitration participant
@@ -338,7 +337,7 @@ class ArbitrationParticipant
   MemoryPool* const pool_;
   const Config* const config_;
   const uint64_t maxCapacity_;
-  const uint64_t createTimeNs_;
+  const folly::stop_watch<std::chrono::nanoseconds> creationWatch_;
 
   mutable std::mutex stateLock_;
   bool aborted_{false};

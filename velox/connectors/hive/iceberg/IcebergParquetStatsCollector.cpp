@@ -124,7 +124,8 @@ IcebergDataFileStatisticsPtr IcebergParquetStatsCollector::aggregate(
 
       const auto& columnChunkStats = columnChunk->statistics();
       if (columnChunkStats) {
-        stats.nullValueCount += columnChunkStats->nullCount();
+        stats.nullValueCount =
+            stats.nullValueCount.value_or(0) + columnChunkStats->nullCount();
 
         if (columnChunkStats->hasMinMax() && shouldStoreBounds(fieldId)) {
           auto [it, inserted] = globalMinMaxStats.emplace(

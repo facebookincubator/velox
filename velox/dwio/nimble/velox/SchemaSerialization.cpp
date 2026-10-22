@@ -58,8 +58,7 @@ serialization::Kind nodeToSerializationKind(const SchemaNode* node) {
         case ScalarKind::Binary:
           return serialization::Kind_Binary;
         default:
-          NIMBLE_UNREACHABLE(
-              "Unknown scalar kind {}.", toString(node->scalarKind()));
+          NIMBLE_UNREACHABLE("Unknown scalar kind {}.", node->scalarKind());
       }
     }
     case Kind::TimestampMicroNano:
@@ -104,12 +103,45 @@ serialization::Kind nodeToSerializationKind(const SchemaNode* node) {
           return serialization::Kind_FlatMapBinary;
         default:
           NIMBLE_UNREACHABLE(
-              "Unknown flat map key kind {}.", toString(node->scalarKind()));
+              "Unknown flat map key kind {}.", node->scalarKind());
+      }
+    }
+    case Kind::HybridFlatMap: {
+      switch (node->scalarKind()) {
+        case ScalarKind::Int8:
+          return serialization::Kind_HybridFlatMapInt8;
+        case ScalarKind::UInt8:
+          return serialization::Kind_HybridFlatMapUInt8;
+        case ScalarKind::Int16:
+          return serialization::Kind_HybridFlatMapInt16;
+        case ScalarKind::UInt16:
+          return serialization::Kind_HybridFlatMapUInt16;
+        case ScalarKind::Int32:
+          return serialization::Kind_HybridFlatMapInt32;
+        case ScalarKind::UInt32:
+          return serialization::Kind_HybridFlatMapUInt32;
+        case ScalarKind::Int64:
+          return serialization::Kind_HybridFlatMapInt64;
+        case ScalarKind::UInt64:
+          return serialization::Kind_HybridFlatMapUInt64;
+        case ScalarKind::Float:
+          return serialization::Kind_HybridFlatMapFloat;
+        case ScalarKind::Double:
+          return serialization::Kind_HybridFlatMapDouble;
+        case ScalarKind::Bool:
+          return serialization::Kind_HybridFlatMapBool;
+        case ScalarKind::String:
+          return serialization::Kind_HybridFlatMapString;
+        case ScalarKind::Binary:
+          return serialization::Kind_HybridFlatMapBinary;
+        case ScalarKind::Undefined:
+        default:
+          NIMBLE_UNREACHABLE(
+              "Unknown hybrid flat map key kind {}.", node->scalarKind());
       }
     }
     default:
-
-      NIMBLE_UNREACHABLE("Unknown node kind {}.", toString(node->kind()));
+      NIMBLE_UNREACHABLE("Unknown node kind {}.", node->kind());
   }
 }
 
@@ -180,6 +212,32 @@ std::pair<Kind, ScalarKind> serializationNodeToKind(
       return {Kind::FlatMap, ScalarKind::String};
     case nimble::serialization::Kind_FlatMapBinary:
       return {Kind::FlatMap, ScalarKind::Binary};
+    case nimble::serialization::Kind_HybridFlatMapInt8:
+      return {Kind::HybridFlatMap, ScalarKind::Int8};
+    case nimble::serialization::Kind_HybridFlatMapUInt8:
+      return {Kind::HybridFlatMap, ScalarKind::UInt8};
+    case nimble::serialization::Kind_HybridFlatMapInt16:
+      return {Kind::HybridFlatMap, ScalarKind::Int16};
+    case nimble::serialization::Kind_HybridFlatMapUInt16:
+      return {Kind::HybridFlatMap, ScalarKind::UInt16};
+    case nimble::serialization::Kind_HybridFlatMapInt32:
+      return {Kind::HybridFlatMap, ScalarKind::Int32};
+    case nimble::serialization::Kind_HybridFlatMapUInt32:
+      return {Kind::HybridFlatMap, ScalarKind::UInt32};
+    case nimble::serialization::Kind_HybridFlatMapInt64:
+      return {Kind::HybridFlatMap, ScalarKind::Int64};
+    case nimble::serialization::Kind_HybridFlatMapUInt64:
+      return {Kind::HybridFlatMap, ScalarKind::UInt64};
+    case nimble::serialization::Kind_HybridFlatMapFloat:
+      return {Kind::HybridFlatMap, ScalarKind::Float};
+    case nimble::serialization::Kind_HybridFlatMapDouble:
+      return {Kind::HybridFlatMap, ScalarKind::Double};
+    case nimble::serialization::Kind_HybridFlatMapBool:
+      return {Kind::HybridFlatMap, ScalarKind::Bool};
+    case nimble::serialization::Kind_HybridFlatMapString:
+      return {Kind::HybridFlatMap, ScalarKind::String};
+    case nimble::serialization::Kind_HybridFlatMapBinary:
+      return {Kind::HybridFlatMap, ScalarKind::Binary};
     default:
       NIMBLE_UNSUPPORTED(
           "Unknown schema node kind {}.",
@@ -213,6 +271,7 @@ std::string_view serializeNodes(
       }
       attributes = builder.CreateVector(attrOffsets);
     }
+
     return serialization::CreateSchemaNode(
         builder,
         nodeToSerializationKind(&node),

@@ -53,6 +53,11 @@ class MergeJoin : public Operator {
   static constexpr std::string_view kMatchedLeftRows = "matchedLeftRows";
   /// Number of right rows matched in merge join.
   static constexpr std::string_view kMatchedRightRows = "matchedRightRows";
+  /// Number of left input batches dropped mid-group by
+  /// 'merge_join_stream_left_side'. Zero means no group ever streamed, so the
+  /// left side was retained exactly as it is without the config.
+  static constexpr std::string_view kStreamedLeftBatches =
+      "streamedLeftBatches";
 
   MergeJoin(
       int32_t operatorId,
@@ -182,7 +187,9 @@ class MergeJoin : public Operator {
     std::vector<uint64_t> inputBatchIds;
 
     // Row number in the first batch pointing to the first row with matching
-    // keys.
+    // keys. When the left side is streamed this can also be one past the last
+    // row of that batch, meaning every row of it has been emitted and the
+    // group continues in batches not read yet.
     vector_size_t startRowIndex{0};
 
     // Row number in the last batch pointing to the row just past the row with
@@ -385,6 +392,26 @@ class MergeJoin : public Operator {
   // differences.
   template <bool IsLeft>
   bool advanceMatchImpl();
+
+  // True if the left equal-key group can be consumed incrementally rather than
+  // buffered whole. Requires the right group to be complete first, since every
+  // left row is joined against all of it.
+  //
+  // Inner and left joins consume the left group row by row against the whole
+  // right group, so a left row is dead once emitted. Every other supported
+  // type revisits the left group: right and full joins drive from the right,
+  // and the semi/anti variants decide a left row from the whole group. The
+  // filter path is excluded because joinTracker_ resolves a left row's
+  // no-match output only after the group has been walked.
+  bool canStreamLeftSide() const;
+
+  // Drops the left batch whose rows have all been emitted, keeping the last one
+  // because findEndOfMatch() compares against inputs.back() to extend the
+  // group. The retained batch has no rows outstanding either -- it is a key
+  // anchor, not buffered output. A streamed group therefore holds two batches
+  // at most: that anchor and the one appended since. The caller retires the
+  // cursors first, so no batch index is in flight.
+  void releaseConsumedLeftMatchInputs();
 
   // Handles output generation when only one side of the join has data
   // available. Processes unmatched rows for outer joins when the other side is
@@ -638,6 +665,10 @@ class MergeJoin : public Operator {
   // outputBatchSize_ is fixed at preferredOutputBatchRows_.
   const bool dynamicOutputBatchSizeEnabled_;
 
+  // core::QueryConfig::mergeJoinStreamLeftSide(). Whether streaming actually
+  // applies also depends on the join type and filter; see canStreamLeftSide().
+  const bool streamLeftSideEnabled_;
+
   // Type of join.
   const core::JoinType joinType_;
 
@@ -734,5 +765,11 @@ class MergeJoin : public Operator {
 
   // Stats for tracking matched rows from the right side
   uint64_t matchedRightRows_{0};
+
+  // Counts left input batches dropped by releaseConsumedLeftMatchInputs(),
+  // reported as kStreamedLeftBatches so a caller can tell whether streaming
+  // actually engaged. Output is identical either way, so this is the only
+  // externally visible sign of it.
+  int64_t streamedLeftBatches_{0};
 };
 } // namespace facebook::velox::exec

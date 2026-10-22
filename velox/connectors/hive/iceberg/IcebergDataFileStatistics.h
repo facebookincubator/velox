@@ -46,7 +46,9 @@ struct IcebergDataFileStatistics {
     /// total occurrences of the field across all rows, which is not necessarily
     /// related to the top-level record count.
     int64_t valueCount{0};
-    int64_t nullValueCount{0};
+    /// Unset when the file format cannot tell. Iceberg prunes files whose
+    /// null count is 0 for 'IS NULL', so an unknown count must not read as 0.
+    std::optional<int64_t> nullValueCount;
     std::optional<int64_t> nanValueCount;
     /// Base64 encoded lower bound.
     std::optional<std::string> lowerBound;

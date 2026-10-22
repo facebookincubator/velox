@@ -55,7 +55,7 @@ class CudfIcebergConnector final
   }
 
   bool supportsSplitPreload() const override {
-    return false;
+    return true;
   }
 
  private:

@@ -15,6 +15,7 @@
  */
 #include <gtest/gtest.h>
 
+#include "velox/dwio/nimble/common/tests/GTestUtils.h"
 #include "velox/dwio/nimble/encodings/legacy/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/tests/TestUtils.h"
 #include "velox/dwio/nimble/velox/ChunkedStreamDecoder.h"
@@ -99,6 +100,33 @@ class TestStreamLoader : public nimble::StreamLoader {
   const std::string stream_;
 };
 
+TEST(ChunkedStreamDecoderTest, rejectsSelectedReads) {
+  auto pool = velox::memory::deprecatedAddDefaultLeafMemoryPool();
+  const nimble::MetricsLogger logger;
+  nimble::ChunkedStreamDecoder decoder{
+      *pool,
+      /*stream=*/nullptr,
+      [](velox::memory::MemoryPool&,
+         std::string_view,
+         const std::function<void*(uint32_t)>&) {
+        return std::unique_ptr<nimble::Encoding>{};
+      },
+      /*stringDecoderZeroCopy=*/true,
+      logger};
+  const std::array<uint32_t, 1> rows{0};
+  std::array<int64_t, 1> output{};
+  std::vector<velox::BufferPtr> stringBuffers;
+
+  NIMBLE_ASSERT_THROW(
+      decoder.read(
+          rows,
+          nimble::DataType::Int64,
+          output.data(),
+          /*getOutputNulls=*/nullptr,
+          stringBuffers),
+      "ChunkedStreamDecoder does not support selective row decoding");
+}
+
 template <typename E>
 std::unique_ptr<nimble::StreamLoader> createStream(
     velox::memory::MemoryPool& memoryPool,
@@ -141,6 +169,50 @@ std::unique_ptr<nimble::StreamLoader> createStream(
   }
 
   return std::make_unique<TestStreamLoader>(std::move(stream));
+}
+
+TEST(ChunkedStreamDecoderTest, remainingRowsTracksCurrentChunk) {
+  auto pool = velox::memory::deprecatedAddDefaultLeafMemoryPool();
+  std::vector<nimble::Vector<int32_t>> values;
+  values.emplace_back(pool.get(), 3);
+  values.emplace_back(pool.get(), 2);
+  for (uint32_t i = 0; i < values[0].size(); ++i) {
+    values[0][i] = i;
+  }
+  for (uint32_t i = 0; i < values[1].size(); ++i) {
+    values[1][i] = i + values[0].size();
+  }
+  std::vector<std::optional<nimble::Vector<bool>>> nulls(values.size());
+  auto streamLoader =
+      createStream<nimble::TrivialEncoding<int32_t>>(*pool, values, nulls);
+  nimble::ChunkedStreamDecoder decoder{
+      *pool,
+      std::make_unique<nimble::InMemoryChunkedStream>(
+          *pool, std::move(streamLoader)),
+      [](velox::memory::MemoryPool& pool,
+         std::string_view data,
+         std::function<void*(uint32_t)> stringBufferFactory) {
+        return nimble::legacy::EncodingFactory().create(
+            pool, data, std::move(stringBufferFactory));
+      },
+      /*stringDecoderZeroCopy=*/false,
+      /*metricsLogger=*/{}};
+
+  EXPECT_EQ(decoder.remainingRows(), 3);
+  std::array<int32_t, 2> output{};
+  std::vector<velox::BufferPtr> stringBuffers;
+  EXPECT_EQ(
+      decoder.next(
+          output.size(),
+          output.data(),
+          /*getOutputNulls=*/nullptr,
+          stringBuffers),
+      output.size());
+  EXPECT_EQ(decoder.remainingRows(), 1);
+  decoder.skip(1);
+  EXPECT_EQ(decoder.remainingRows(), 2);
+  decoder.skip(2);
+  EXPECT_EQ(decoder.remainingRows(), 0);
 }
 
 template <typename T>
@@ -279,11 +351,11 @@ void test(
             const auto nonNullCount = decoder.next(
                 outputSize,
                 output.data(),
-                stringBuffers,
                 [&]() {
                   ++count;
                   return outputNulls.data();
                 },
+                stringBuffers,
                 scatterBitmap.has_value() ? &scatterBitmap.value() : nullptr);
 
             LOG(INFO) << "offset: " << offset << ", batchSize: " << batchSize
@@ -352,9 +424,12 @@ void test(
             }
           } else {
             std::vector<T> output(outputSize);
-            const auto actualOutputSize =
-                decoder.next(outputSize, output.data(), stringBuffers);
-            EXPECT_EQ(outputSize, actualOutputSize);
+            const auto actualOutputSize = decoder.next(
+                static_cast<uint32_t>(outputSize),
+                output.data(),
+                /*getOutputNulls=*/nullptr,
+                stringBuffers);
+            EXPECT_EQ(static_cast<uint32_t>(outputSize), actualOutputSize);
 
             for (auto i = 0; i < outputSize; ++i) {
               EXPECT_EQ(getValue(data, offset + i), output[i])

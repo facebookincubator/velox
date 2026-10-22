@@ -84,6 +84,13 @@ class Aggregate {
     return true;
   }
 
+  /// Returns true if the accumulator state is expected to be smaller than its
+  /// input. Aggregates whose state generally grows with input cardinality
+  /// should return false.
+  virtual bool isReducing() const {
+    return true;
+  }
+
   /// Returns true if toIntermediate() is supported.
   virtual bool supportsToIntermediate() const {
     return false;
@@ -93,11 +100,11 @@ class Aggregate {
     setAllocatorInternal(allocator);
   }
 
-  /// Called after construction to pass constant input values to the aggregate.
-  /// Non-constant inputs have null entries in 'constantInputs'. This is called
-  /// before any data is processed, allowing the aggregate to read constant
-  /// arguments (e.g., flags, configuration values) at initialization time
-  /// rather than extracting them from 'args' at runtime.
+  /// Called by Aggregate::create() to pass constant input values to the
+  /// aggregate. Non-constant inputs have null entries in 'constantInputs'. This
+  /// is called before any data is processed, allowing the aggregate to read
+  /// constant arguments (e.g., flags, configuration values) at initialization
+  /// time rather than extracting them from 'args' at runtime.
   ///
   /// Default implementation is a no-op. Override in subclasses that need
   /// access to constant arguments.
@@ -360,13 +367,18 @@ class Aggregate {
   /// result type is step is kFinal. This parameter is redundant since it can be
   /// derived from rawInput types and step. Present for legacy reasons.
   /// @param config Query config.
+  /// @param constantInputs Constant input values, aligned with the aggregate's
+  /// inputs, with null for inputs that are not constant. May be empty if the
+  /// caller has no constant inputs. Passed to setConstantInputs() unless
+  /// empty.
   /// @return An instance of the aggregate function.
   static std::unique_ptr<Aggregate> create(
       const std::string& name,
       core::AggregationNode::Step step,
       const std::vector<TypePtr>& argTypes,
       const TypePtr& resultType,
-      const core::QueryConfig& config);
+      const core::QueryConfig& config,
+      const std::vector<VectorPtr>& constantInputs);
 
  protected:
   virtual void setAllocatorInternal(HashStringAllocator* allocator);
@@ -539,6 +551,12 @@ struct AggregateFunctionMetadata {
   /// True if results of the aggregation depend on the order of inputs. For
   /// example, array_agg is order sensitive while count is not.
   bool orderSensitive{true};
+
+  /// True if, for every registered signature, an input row holding a null in
+  /// any argument leaves the result unchanged. Companion functions inherit the
+  /// value, so setting it also asserts that merging null intermediate results
+  /// leaves the result unchanged.
+  bool ignoreNullInputs{false};
 
   /// Indicates if this is a companion function.
   bool companionFunction{false};

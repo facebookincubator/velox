@@ -15,6 +15,9 @@
  */
 
 #include "velox/dwio/common/DecoderUtil.h"
+
+#include <folly/lang/Bits.h>
+
 #include "velox/common/base/Nulls.h"
 #include "velox/common/base/SimdUtil.h"
 
@@ -34,7 +37,7 @@ uint8_t load8Bits(const uint64_t* bits, int32_t index) {
   uint8_t shift = index & 7;
   uint32_t byte = index >> 3;
   auto asBytes = reinterpret_cast<const uint8_t*>(bits);
-  return (*reinterpret_cast<const int16_t*>(asBytes + byte) >> shift);
+  return (folly::loadUnaligned<int16_t>(asBytes + byte) >> shift);
 }
 
 // Loads 'width' bits starting at bit 'index' in 'bits'. 'width is
@@ -44,7 +47,7 @@ uint64_t loadUpTo56Bits(const uint64_t* bits, int32_t index, int32_t width) {
   uint8_t shift = index & 7;
   uint32_t byte = index >> 3;
   auto asBytes = reinterpret_cast<const uint8_t*>(bits);
-  return (*reinterpret_cast<const uint64_t*>(asBytes + byte) >> shift) &
+  return (folly::loadUnaligned<uint64_t>(asBytes + byte) >> shift) &
       bits::lowMask(width);
 }
 

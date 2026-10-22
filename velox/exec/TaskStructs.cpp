@@ -89,7 +89,8 @@ Split SplitsStore::getSplit(
     taskStats_->runningTableScanSplitWeights +=
         split.connectorSplit->splitWeight;
   }
-  taskStats_->lastSplitStartTimeMs = getCurrentTimeMs();
+  taskStats_->lastSplitStartTimeMs =
+      EpochTime::now<std::chrono::milliseconds>();
   if (taskStats_->firstSplitStartTimeMs == 0) {
     taskStats_->firstSplitStartTimeMs = taskStats_->lastSplitStartTimeMs;
   }

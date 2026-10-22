@@ -27,10 +27,12 @@ namespace facebook::velox::ucx_exchange {
 
 class UcxOutputQueueManager : public exec::OutputBufferManager {
  public:
-  /// Factory method to retrieve a reference to the output queue manager.
-  static std::shared_ptr<UcxOutputQueueManager> getInstanceRef();
+  /// Returns the process-wide output queue manager used by UCX producers and
+  /// exchange servers.
+  static const std::shared_ptr<UcxOutputQueueManager>& getInstanceRef();
 
-  // no constructor to prevent direct instantiation.
+  // Public to match DefaultOutputBufferManager and support direct unit tests.
+  // Production UcxPartitionedOutput operators require getInstanceRef().
   UcxOutputQueueManager() = default;
   // no copy constructor.
   UcxOutputQueueManager(const UcxOutputQueueManager&) = delete;

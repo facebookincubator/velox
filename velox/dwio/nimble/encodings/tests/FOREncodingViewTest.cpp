@@ -18,14 +18,15 @@
 
 #include <gtest/gtest.h>
 
+#include "velox/dwio/nimble/common/tests/GTestUtils.h"
 #include "velox/dwio/nimble/encodings/ForEncoding.h"
+#include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
 
 using namespace facebook;
 
-using EncodingViewTest = nimble::test::EncodingViewTest;
 using FOREncodingViewTest = nimble::test::EncodingViewTest;
 
-TEST_F(EncodingViewTest, readsForEncoding) {
+TEST_P(FOREncodingViewTest, readsForEncoding) {
   expectReads<nimble::ForEncoding<int32_t>>(
       makeVector({100, 101, 102, 103, 5000, 104, 105, 106, -7, -6, -5}),
       {8, 0, 4, 10, 5, 2});
@@ -34,7 +35,62 @@ TEST_F(EncodingViewTest, readsForEncoding) {
       {7, 0, 4, 6, 2});
 }
 
-TEST_F(FOREncodingViewTest, concurrent) {
+TEST_P(FOREncodingViewTest, readsInternallyCompressedPayload) {
+  const auto values = randomPforData(/*seed=*/38);
+  const auto positions = randomizedPositions(/*seed=*/39);
+  for (const auto compressionType :
+       {nimble::CompressionType::Zstd, nimble::CompressionType::MetaInternal}) {
+    SCOPED_TRACE(nimble::toString(compressionType));
+    expectReads<nimble::ForEncoding<uint32_t>>(
+        values, positions, {}, compressionType);
+  }
+}
+
+TEST_P(FOREncodingViewTest, rejectsShortCompressedPayload) {
+  constexpr uint32_t kRowCount = 1'016;
+  nimble::Vector<uint32_t> values{pool_.get(), kRowCount};
+  for (uint32_t i{0}; i < kRowCount; ++i) {
+    values[i] = i % 2;
+  }
+  const auto serialized =
+      nimble::test::Encoder<nimble::ForEncoding<uint32_t>>::encode(
+          *buffer_, values, nimble::CompressionType::Zstd);
+  const auto prefixSize =
+      nimble::EncodingPrefix::serializedSize(kRowCount, /*useVarint=*/false);
+  ASSERT_EQ(
+      static_cast<nimble::CompressionType>(serialized[prefixSize]),
+      nimble::CompressionType::Zstd);
+
+  std::string malformed{serialized};
+  char* position = malformed.data();
+  nimble::EncodingPrefix::serialize(
+      nimble::EncodingType::FOR,
+      nimble::DataType::Uint32,
+      kRowCount + 1,
+      /*useVarint=*/false,
+      position);
+
+  nimble::Encoding::Options options;
+  options.cacheEncodingView = cacheEncodingView();
+  if (cacheEncodingView()) {
+    // A cached view checks every frame when it is created.
+    NIMBLE_ASSERT_THROW(
+        nimble::createEncodingView(malformed, pool_.get(), options),
+        "FOR packed payload is shorter than required");
+    return;
+  }
+
+  // Without caching, a read checks the frame it reaches.
+  const auto view = nimble::createEncodingView(malformed, pool_.get(), options);
+  uint32_t value;
+  NIMBLE_ASSERT_THROW(
+      view->readAt(view->rowCount() - 1, &value),
+      "FOR packed payload is shorter than required");
+}
+
+TEST_P(FOREncodingViewTest, concurrent) {
   expectConcurrentReads<nimble::ForEncoding<uint32_t>>(
       randomPforData(/*seed=*/31), randomizedPositions(/*seed=*/32));
 }
+
+INSTANTIATE_ENCODING_VIEW_TEST_SUITE(FOREncodingViewTest);

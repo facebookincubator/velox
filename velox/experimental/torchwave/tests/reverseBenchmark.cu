@@ -278,8 +278,11 @@ int main(int argc, char** argv) {
   cudaDeviceProp prop;
   CUDA_CHECK(cudaGetDeviceProperties(&prop, device));
   int numSms = prop.multiProcessorCount;
+  int memoryClockRateKhz = 0;
+  CUDA_CHECK(cudaDeviceGetAttribute(
+      &memoryClockRateKhz, cudaDevAttrMemoryClockRate, device));
   // Nominal (theoretical peak) HBM bandwidth: 2 (DDR) * clock(Hz) * bytes/txn.
-  double nominalGbps = 2.0 * static_cast<double>(prop.memoryClockRate) * 1.0e3 *
+  double nominalGbps = 2.0 * static_cast<double>(memoryClockRateKhz) * 1.0e3 *
       (prop.memoryBusWidth / 8) / 1.0e9;
 
   const int64_t kArrayBytes = 4LL * 1024 * 1024 * 1024; // 4 GiB per array.

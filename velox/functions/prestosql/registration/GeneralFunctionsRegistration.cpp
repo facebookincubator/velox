@@ -30,84 +30,103 @@ namespace facebook::velox::functions {
 
 namespace {
 
-void registerFailFunction(const std::vector<std::string>& names) {
-  registerFunction<FailFunction, UnknownValue, Varchar>(names);
-  registerFunction<FailFunction, UnknownValue, int32_t, Varchar>(names);
-  registerFunction<FailFromJsonFunction, UnknownValue, Json>(names);
-  registerFunction<FailFromJsonFunction, UnknownValue, int32_t, Json>(names);
+void registerFailFunction(
+    const std::vector<std::string>& names,
+    std::string_view defaultOwner) {
+  registerFunction<FailFunction, UnknownValue, Varchar>(
+      names, {}, true, defaultOwner);
+  registerFunction<FailFunction, UnknownValue, int32_t, Varchar>(
+      names, {}, true, defaultOwner);
+  registerFunction<FailFromJsonFunction, UnknownValue, Json>(
+      names, {}, true, defaultOwner);
+  registerFunction<FailFromJsonFunction, UnknownValue, int32_t, Json>(
+      names, {}, true, defaultOwner);
 }
 
 template <typename T>
-void registerGreatestLeastFunction(const std::string& prefix) {
+void registerGreatestLeastFunction(
+    const std::string& prefix,
+    std::string_view defaultOwner) {
   registerFunction<ParameterBinder<GreatestFunction, T>, T, T, Variadic<T>>(
-      {prefix + "greatest"});
+      {prefix + "greatest"}, true, defaultOwner);
 
   registerFunction<ParameterBinder<LeastFunction, T>, T, T, Variadic<T>>(
-      {prefix + "least"});
+      {prefix + "least"}, true, defaultOwner);
 }
 
-void registerAllGreatestLeastFunctions(const std::string& prefix) {
-  registerGreatestLeastFunction<bool>(prefix);
-  registerGreatestLeastFunction<int8_t>(prefix);
-  registerGreatestLeastFunction<int16_t>(prefix);
-  registerGreatestLeastFunction<int32_t>(prefix);
-  registerGreatestLeastFunction<int64_t>(prefix);
-  registerGreatestLeastFunction<float>(prefix);
-  registerGreatestLeastFunction<double>(prefix);
-  registerGreatestLeastFunction<Varchar>(prefix);
-  registerGreatestLeastFunction<LongDecimal<P1, S1>>(prefix);
-  registerGreatestLeastFunction<ShortDecimal<P1, S1>>(prefix);
-  registerGreatestLeastFunction<Date>(prefix);
-  registerGreatestLeastFunction<Timestamp>(prefix);
-  registerGreatestLeastFunction<TimestampWithTimezone>(prefix);
-  registerGreatestLeastFunction<IPAddress>(prefix);
-  registerGreatestLeastFunction<Time>(prefix);
-  registerGreatestLeastFunction<TimeWithTimezone>(prefix);
+void registerAllGreatestLeastFunctions(
+    const std::string& prefix,
+    std::string_view defaultOwner) {
+  registerGreatestLeastFunction<bool>(prefix, defaultOwner);
+  registerGreatestLeastFunction<int8_t>(prefix, defaultOwner);
+  registerGreatestLeastFunction<int16_t>(prefix, defaultOwner);
+  registerGreatestLeastFunction<int32_t>(prefix, defaultOwner);
+  registerGreatestLeastFunction<int64_t>(prefix, defaultOwner);
+  registerGreatestLeastFunction<float>(prefix, defaultOwner);
+  registerGreatestLeastFunction<double>(prefix, defaultOwner);
+  registerGreatestLeastFunction<Varchar>(prefix, defaultOwner);
+  registerGreatestLeastFunction<LongDecimal<P1, S1>>(prefix, defaultOwner);
+  registerGreatestLeastFunction<ShortDecimal<P1, S1>>(prefix, defaultOwner);
+  registerGreatestLeastFunction<Date>(prefix, defaultOwner);
+  registerGreatestLeastFunction<Timestamp>(prefix, defaultOwner);
+  registerGreatestLeastFunction<TimestampWithTimezone>(prefix, defaultOwner);
+  registerGreatestLeastFunction<IPAddress>(prefix, defaultOwner);
+  registerGreatestLeastFunction<Time>(prefix, defaultOwner);
+  registerGreatestLeastFunction<TimeWithTimezone>(prefix, defaultOwner);
 }
 } // namespace
 
 extern void registerSubscriptFunction(
     const std::string& name,
-    bool enableCaching);
+    bool enableCaching,
+    std::string_view defaultOwner);
 extern void registerElementAtFunction(
     const std::string& name,
-    bool enableCaching);
+    bool enableCaching,
+    std::string_view defaultOwner);
 
 // Special form functions don't have any prefix.
-void registerAllSpecialFormGeneralFunctions() {
+void registerAllSpecialFormGeneralFunctions(std::string_view defaultOwner) {
   exec::registerFunctionCallToSpecialForms();
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_in, "in");
+  VELOX_REGISTER_VECTOR_FUNCTION_WITH_OWNER(udf_in, "in", defaultOwner);
   registerFunction<
       GenericInPredicateFunction,
       bool,
       Generic<T1>,
-      Variadic<Generic<T1>>>({"in"});
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_concat_row, expression::kRowConstructor);
-  registerIsNullFunction("is_null");
+      Variadic<Generic<T1>>>({"in"}, {}, true, defaultOwner);
+  VELOX_REGISTER_VECTOR_FUNCTION_WITH_OWNER(
+      udf_concat_row, expression::kRowConstructor, defaultOwner);
+  registerIsNullFunction("is_null", defaultOwner);
 }
 
-void registerGeneralFunctions(const std::string& prefix) {
-  registerSubscriptFunction(prefix + "subscript", true);
-  registerElementAtFunction(prefix + "element_at", true);
+void registerGeneralFunctions(
+    const std::string& prefix,
+    std::string_view defaultOwner) {
+  registerSubscriptFunction(prefix + "subscript", true, defaultOwner);
+  registerElementAtFunction(prefix + "element_at", true, defaultOwner);
 
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_transform, prefix + "transform");
-  VELOX_REGISTER_VECTOR_FUNCTION(
-      udf_transform_with_index, prefix + "transform_with_index");
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_reduce, prefix + "reduce");
+  VELOX_REGISTER_VECTOR_FUNCTION_WITH_OWNER(
+      udf_transform, prefix + "transform", defaultOwner);
+  VELOX_REGISTER_VECTOR_FUNCTION_WITH_OWNER(
+      udf_transform_with_index, prefix + "transform_with_index", defaultOwner);
+  VELOX_REGISTER_VECTOR_FUNCTION_WITH_OWNER(
+      udf_reduce, prefix + "reduce", defaultOwner);
   registerReduceRewrites(prefix);
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_array_filter, prefix + "filter");
-  VELOX_REGISTER_VECTOR_FUNCTION(udf_typeof, prefix + "typeof");
+  VELOX_REGISTER_VECTOR_FUNCTION_WITH_OWNER(
+      udf_array_filter, prefix + "filter", defaultOwner);
+  VELOX_REGISTER_VECTOR_FUNCTION_WITH_OWNER(
+      udf_typeof, prefix + "typeof", defaultOwner);
 
-  registerAllGreatestLeastFunctions(prefix);
+  registerAllGreatestLeastFunctions(prefix, defaultOwner);
 
   registerFunction<CardinalityFunction, int64_t, Array<Generic<T1>>>(
-      {prefix + "cardinality"});
+      {prefix + "cardinality"}, {}, true, defaultOwner);
   registerFunction<CardinalityFunction, int64_t, Map<Generic<T1>, Generic<T2>>>(
-      {prefix + "cardinality"});
+      {prefix + "cardinality"}, {}, true, defaultOwner);
 
-  registerFailFunction({prefix + "fail"});
+  registerFailFunction({prefix + "fail"}, defaultOwner);
 
-  registerAllSpecialFormGeneralFunctions();
+  registerAllSpecialFormGeneralFunctions(defaultOwner);
 }
 
 } // namespace facebook::velox::functions

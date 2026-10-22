@@ -13,6 +13,7 @@
 # limitations under the License.
 add_executable(
   nimble_tablet_tests
+  CheckpointTest.cpp
   CompressionTest.cpp
   FilePropertiesTest.cpp
   FileLayoutTest.cpp
@@ -34,6 +35,7 @@ target_link_libraries(
   nimble_common
   nimble_writer
   velox_dwio_common
+  velox_dwio_common_test_utils
   velox_memory
   velox_file
   velox_vector

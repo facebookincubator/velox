@@ -18,6 +18,9 @@
 
 namespace facebook::velox::functions {
 
-void registerMapFunction(const std::string& name, bool allowDuplicateKeys);
+void registerMapFunction(
+    const std::string& name,
+    bool allowDuplicateKeys,
+    std::string_view defaultOwner = {});
 
 } // namespace facebook::velox::functions

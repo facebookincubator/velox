@@ -30,7 +30,6 @@ ArbitrationOperation::ArbitrationOperation(
     uint64_t timeoutNs)
     : requestBytes_(requestBytes),
       timeoutNs_(timeoutNs),
-      createTimeNs_(getCurrentTimeNano()),
       participant_(std::move(participant)) {
   VELOX_CHECK_GT(requestBytes_, 0);
 }
@@ -80,14 +79,12 @@ void ArbitrationOperation::start() {
   VELOX_CHECK_EQ(state_, State::kInit);
   participant_->startArbitration(this);
   setState(ArbitrationOperation::State::kRunning);
-  VELOX_CHECK_EQ(startTimeNs_, 0);
-  startTimeNs_ = getCurrentTimeNano();
+  startTimeNs_ = creationWatch_.elapsed().count();
 }
 
 void ArbitrationOperation::finish() {
   setState(State::kFinished);
-  VELOX_CHECK_EQ(finishTimeNs_, 0);
-  finishTimeNs_ = getCurrentTimeNano();
+  finishTimeNs_ = creationWatch_.elapsed().count();
   participant_->finishArbitration(this);
 }
 
@@ -97,13 +94,9 @@ bool ArbitrationOperation::aborted() const {
 
 uint64_t ArbitrationOperation::executionTimeNs() const {
   if (state_ == State::kFinished) {
-    VELOX_CHECK_GE(finishTimeNs_, createTimeNs_);
-    return finishTimeNs_ - createTimeNs_;
-  } else {
-    const auto currentTimeNs = getCurrentTimeNano();
-    VELOX_CHECK_GE(currentTimeNs, createTimeNs_);
-    return currentTimeNs - createTimeNs_;
+    return finishTimeNs_;
   }
+  return creationWatch_.elapsed().count();
 }
 
 bool ArbitrationOperation::hasTimeout() const {
@@ -135,28 +128,14 @@ void ArbitrationOperation::setGrowTargets() {
 
 ArbitrationOperation::Stats ArbitrationOperation::stats() const {
   VELOX_CHECK_EQ(state_, State::kFinished);
-  VELOX_CHECK_NE(startTimeNs_, 0);
-
-  const uint64_t executionTimeNs = this->executionTimeNs();
-
-  VELOX_CHECK_GE(startTimeNs_, createTimeNs_);
-  const uint64_t localArbitrationWaitTimeNs = startTimeNs_ - createTimeNs_;
-  if (globalArbitrationStartTimeNs_ == 0) {
-    return {
-        localArbitrationWaitTimeNs,
-        finishTimeNs_ - startTimeNs_,
-        0,
-        executionTimeNs};
+  if (!globalArbitrationStartTimeNs_.has_value()) {
+    return {startTimeNs_, finishTimeNs_ - startTimeNs_, 0, finishTimeNs_};
   }
-
-  VELOX_CHECK_GE(globalArbitrationStartTimeNs_, startTimeNs_);
-  const uint64_t localArbitrationExecTimeNs =
-      globalArbitrationStartTimeNs_ - startTimeNs_;
   return {
-      localArbitrationWaitTimeNs,
-      localArbitrationExecTimeNs,
-      finishTimeNs_ - globalArbitrationStartTimeNs_,
-      executionTimeNs};
+      startTimeNs_,
+      *globalArbitrationStartTimeNs_ - startTimeNs_,
+      finishTimeNs_ - *globalArbitrationStartTimeNs_,
+      finishTimeNs_};
 }
 
 std::ostream& operator<<(std::ostream& out, ArbitrationOperation::State state) {

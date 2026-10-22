@@ -23,32 +23,19 @@
 #include <fmt/ranges.h>
 
 #include "flatbuffers/flatbuffers.h"
+#include "velox/common/Casts.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
-#include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/common/EncodingLayout.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
 #include "velox/dwio/nimble/index/IndexConfig.h"
 #include "velox/dwio/nimble/index/IndexConstants.h"
+#include "velox/dwio/nimble/index/KeyChunkBuilder.h"
 #include "velox/dwio/nimble/tablet/SortedIndexGenerated.h"
 #include "velox/dwio/nimble/velox/ChunkedStreamWriter.h"
-#include "velox/dwio/nimble/velox/StreamData.h"
 
 #include "velox/common/base/BitUtil.h"
 
 namespace facebook::nimble::index {
-
-namespace {
-std::unique_ptr<EncodingSelectionPolicy<std::string_view>> createEncodingPolicy(
-    const EncodingLayout& layout) {
-  return std::make_unique<ReplayedEncodingSelectionPolicy<std::string_view>>(
-      layout,
-      CompressionOptions{},
-      [](DataType) -> std::unique_ptr<EncodingSelectionPolicyBase> {
-        return nullptr;
-      });
-}
-
-} // namespace
 
 // static
 uint8_t SortedIndexWriter::rowIdWidth(uint32_t numRows) {
@@ -103,15 +90,20 @@ SortedIndexWriter::CompositeEntries SortedIndexWriter::buildCompositeEntries(
 
   CompositeEntries result;
   result.buffer = velox::AlignedBuffer::allocate<char>(totalBytes, pool_);
-  auto* dest = result.buffer->asMutable<char>();
+  auto* dest = velox::checkedNotNull(result.buffer.get())->asMutable<char>();
 
   result.entries.reserve(entries.size());
   for (const auto& entry : entries) {
-    auto* entryStart = dest;
-    std::memcpy(dest, entry.key.data(), entry.key.size());
-    dest += entry.key.size();
-    for (int8_t shift = (idWidth - 1) * 8; shift >= 0; shift -= 8) {
-      *dest++ = static_cast<char>((entry.row >> shift) & 0xFF);
+    // Save the start before advancing dest so the view covers both the key and
+    // the appended row identifier.
+    auto* entryStart = velox::checkedNotNull(dest);
+    NIMBLE_CHECK(!entry.key.empty(), "Sorted index key must not be empty");
+    std::memcpy(entryStart, entry.key.data(), entry.key.size());
+    dest = entryStart + entry.key.size();
+    for (int32_t shift = (idWidth - 1) * 8; shift >= 0; shift -= 8) {
+      auto* position = velox::checkedNotNull(dest);
+      *position = static_cast<char>((entry.row >> shift) & 0xFF);
+      dest = position + 1;
     }
     result.entries.emplace_back(entryStart, entry.key.size() + idWidth);
   }
@@ -126,7 +118,7 @@ SortedIndexWriter::Options SortedIndexWriter::makeOptions(
       .encodingLayout = sortedIndexConfig.encodingLayout,
       .maxRowsPerKeyChunk = sortedIndexConfig.maxRowsPerKeyChunk,
   };
-  validateKeyStreamEncodingLayout(options.encodingLayout);
+  validateFlatKeyEncodingLayout(options.encodingLayout);
   NIMBLE_USER_CHECK(
       !options.columns.empty(), "Sorted index must have at least one column");
   return options;
@@ -164,7 +156,7 @@ SortedIndexWriter::SortedIndexWriter(
     std::vector<Options> options,
     velox::memory::MemoryPool* pool)
     : indexName_{std::move(indexName)},
-      pool_{pool},
+      pool_{velox::checkedNotNull(pool)},
       keyColumnIndices_{
           getKeyColumnIndices(extractColumnSets(options), inputType)} {
   NIMBLE_CHECK(!options.empty(), "Sorted index configs must not be empty");
@@ -207,12 +199,15 @@ void SortedIndexWriter::write(const velox::VectorPtr& input) {
 
   for (auto& accumulator : accumulators_) {
     if (accumulator.encodingBuffer == nullptr) {
-      accumulator.encodingBuffer = std::make_unique<Buffer>(*pool_);
+      accumulator.encodingBuffer =
+          std::make_unique<Buffer>(*velox::checkedNotNull(pool_));
     }
     std::vector<std::string_view> keys;
-    accumulator.encoder->encode(input, keys, [&accumulator](size_t size) {
-      return accumulator.encodingBuffer->reserve(size);
-    });
+    velox::checkedNotNull(accumulator.encoder.get())
+        ->encode(input, keys, [&accumulator](size_t size) {
+          return velox::checkedNotNull(accumulator.encodingBuffer.get())
+              ->reserve(size);
+        });
     NIMBLE_CHECK_EQ(keys.size(), input->size());
 
     const auto newSize = accumulator.entries.size() + input->size();
@@ -221,7 +216,7 @@ void SortedIndexWriter::write(const velox::VectorPtr& input) {
           std::max(accumulator.entries.size() * 2, newSize));
     }
     for (velox::vector_size_t i = 0; i < input->size(); ++i) {
-      accumulator.entries.emplace_back(IndexEntry{keys[i], numRows_ + i});
+      accumulator.entries.emplace_back(IndexEntry{keys.at(i), numRows_ + i});
     }
   }
 
@@ -254,22 +249,20 @@ void SortedIndexWriter::buildIndex(
   std::vector<std::string_view> chunkKeys;
   chunkKeys.reserve(numChunks);
   std::vector<std::string_view> encodedChunks;
-  Buffer encodingBuffer(*pool_);
+  Buffer encodingBuffer(*velox::checkedNotNull(pool_));
   uint32_t keyStreamOffset = 0;
 
   for (size_t offset = 0; offset < composite.entries.size();) {
     const auto remaining =
         static_cast<uint64_t>(composite.entries.size() - offset);
     const auto numChunkRows = remaining < 2 * maxRows ? remaining : maxRows;
+    NIMBLE_CHECK_LE(numChunkRows, std::numeric_limits<uint32_t>::max());
 
     auto span = std::span<const std::string_view>(
         composite.entries.data() + offset, numChunkRows);
 
-    // Encode chunk using EncodingFactory (Prefix or Trivial).
-    const auto encoded = EncodingFactory::encode<std::string_view>(
-        createEncodingPolicy(accumulator.options.encodingLayout),
-        span,
-        encodingBuffer);
+    const auto encoded = encodeFlatKeys(
+        accumulator.options.encodingLayout, span, encodingBuffer);
     NIMBLE_CHECK(!encoded.empty());
 
     // Wrap with ChunkedStreamWriter.
@@ -281,9 +274,11 @@ void SortedIndexWriter::buildIndex(
     }
 
     // Record chunk metadata.
-    const uint32_t accumulatedRows =
-        chunkRows.empty() ? numChunkRows : chunkRows.back() + numChunkRows;
-    chunkRows.emplace_back(accumulatedRows);
+    const uint64_t accumulatedRows =
+        (chunkRows.empty() ? 0 : chunkRows.at(chunkRows.size() - 1)) +
+        numChunkRows;
+    NIMBLE_CHECK_LE(accumulatedRows, std::numeric_limits<uint32_t>::max());
+    chunkRows.emplace_back(static_cast<uint32_t>(accumulatedRows));
     chunkOffsets.emplace_back(keyStreamOffset);
     chunkKeys.emplace_back(
         extractKey(composite.entries[offset + numChunkRows - 1], idWidth));

@@ -28,6 +28,10 @@ class DummyDicitonaryFunction : public exec::Aggregate {
     return 0;
   }
 
+  bool isReducing() const override {
+    return false;
+  }
+
   void addRawInput(
       char** /*groups*/,
       const SelectivityVector& /*rows*/,

@@ -27,6 +27,7 @@ void CongestionController::onError() {
       std::max<double>(effective_ / 2.0, static_cast<double>(minWindow_));
   if (limit() < prevLimit) {
     ++numShrinks_;
+    ++numOverloadShrinks_;
   }
   // Drop the in-progress sample window so partial pre-overload samples don't
   // contaminate the next gradient computation. baselineRttNs_ is deliberately
@@ -38,6 +39,9 @@ void CongestionController::onError() {
   // into the overload.
   numWindowSamples_ = 0;
   windowMinRttNs_ = 0;
+  // A throttle is never progress: discard banked clean units so post-overload
+  // completions re-prove capacity from scratch.
+  cleanUnits_ = 0;
 }
 
 void CongestionController::onSample(int64_t rttNs) {
@@ -88,6 +92,28 @@ void CongestionController::onSample(int64_t rttNs) {
   baselineRttNs_ = static_cast<int64_t>(
       static_cast<double>(baselineRttNs_) * (1.0 - kBaselineSmoothing) +
       static_cast<double>(observedRttNs) * kBaselineSmoothing);
+}
+
+void CongestionController::onCleanUnits(int64_t numUnits) {
+  if (numUnits <= 0 || cleanMaxWindow_ <= 0) {
+    return;
+  }
+  cleanUnits_ += numUnits;
+  // Evidence bar scales with the window: bigger windows need more clean
+  // completions per +1, so growth can never outrun evidence. Growth stops at
+  // the clean cap (async-job discovery bound) or maxWindow_, whichever binds
+  // first; banked credit is dropped at the ceiling so a later ceiling raise
+  // re-probes from scratch instead of jumping on stale evidence.
+  const int64_t cap = std::min(maxWindow_, cleanMaxWindow_);
+  int64_t threshold = std::max<int64_t>(kSamplesPerWindow, limit());
+  while (cleanUnits_ >= threshold && limit() < cap) {
+    cleanUnits_ -= threshold;
+    effective_ = std::min<double>(effective_ + 1.0, static_cast<double>(cap));
+    threshold = std::max<int64_t>(kSamplesPerWindow, limit());
+  }
+  if (limit() >= cap) {
+    cleanUnits_ = 0;
+  }
 }
 
 } // namespace facebook::velox::exec::rpc

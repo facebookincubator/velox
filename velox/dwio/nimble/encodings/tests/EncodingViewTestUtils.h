@@ -16,6 +16,7 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cstdint>
 #include <initializer_list>
@@ -38,9 +39,31 @@
 
 namespace facebook::nimble::test {
 
-class EncodingViewTest : public ::testing::Test {
+// Names the two instantiations of a view test suite after their cache setting.
+inline std::string cacheEncodingViewParamName(
+    const ::testing::TestParamInfo<bool>& info) {
+  return info.param ? "Cached" : "Uncached";
+}
+
+// Runs every test of 'suite' with the structures of a cached view and without
+// them.
+#define INSTANTIATE_ENCODING_VIEW_TEST_SUITE(suite) \
+  INSTANTIATE_TEST_SUITE_P(                         \
+      CacheEncodingView,                            \
+      suite,                                        \
+      ::testing::Bool(),                            \
+      facebook::nimble::test::cacheEncodingViewParamName)
+
+// The parameter of a view test is whether the view caches its lookup
+// structures, as Encoding::Options::cacheEncodingView does.
+class EncodingViewTest : public ::testing::TestWithParam<bool> {
  protected:
   static constexpr uint32_t kConcurrentRows = 1024;
+
+  // Returns whether this run of the test caches the lookup structures.
+  bool cacheEncodingView() const {
+    return GetParam();
+  }
 
   void SetUp() override {
     pool_ = facebook::velox::memory::deprecatedAddDefaultLeafMemoryPool();
@@ -58,81 +81,136 @@ class EncodingViewTest : public ::testing::Test {
   void expectReads(
       const nimble::Vector<typename Encoding::cppDataType>& values,
       const std::vector<uint32_t>& positions,
-      nimble::Encoding::Options baseOptions = {}) {
+      nimble::Encoding::Options baseOptions = {},
+      nimble::CompressionType compressionType =
+          nimble::CompressionType::Uncompressed) {
     using T = typename Encoding::cppDataType;
     for (const auto useVarint : {false, true}) {
-      SCOPED_TRACE(fmt::format("useVarint={}", useVarint));
-      auto options = baseOptions;
-      options.useVarintRowCount = useVarint;
-      auto serialized = nimble::test::Encoder<Encoding>::encode(
-          *buffer_, values, nimble::CompressionType::Uncompressed, options);
-      auto view = nimble::createEncodingView(serialized, pool_.get(), options);
-      ASSERT_NE(view, nullptr);
-      for (const auto position : positions) {
-        SCOPED_TRACE(fmt::format("position={}", position));
-        T value;
-        view->readAt(position, &value);
-        EXPECT_EQ(value, values[position]);
+      {
+        SCOPED_TRACE(fmt::format("useVarint={}", useVarint));
+        auto options = baseOptions;
+        options.useVarintRowCount = useVarint;
+        options.cacheEncodingView = cacheEncodingView();
+        auto serialized = nimble::test::Encoder<Encoding>::encode(
+            *buffer_, values, compressionType, options);
+        auto view =
+            nimble::createEncodingView(serialized, pool_.get(), options);
+        ASSERT_NE(view, nullptr);
+        for (const auto position : positions) {
+          SCOPED_TRACE(fmt::format("position={}", position));
+          T value;
+          view->readAt(position, &value);
+          EXPECT_EQ(value, values[position]);
+        }
+        const auto rowCount = static_cast<uint32_t>(values.size());
+        expectRangeRead(*view, values, /*offset=*/0, /*length=*/0);
+        expectRangeRead(*view, values, rowCount, /*length=*/0);
+        expectRangeRead(
+            *view, values, /*offset=*/0, std::min<uint32_t>(rowCount, 3));
+        if (rowCount > 0) {
+          const auto tailLength = std::min<uint32_t>(rowCount, 3);
+          expectRangeRead(*view, values, rowCount - tailLength, tailLength);
+        }
+        expectIndexedRead(*view, values, {});
+        expectIndexedRead(*view, values, positions);
+        expectSelectedRead(*view, values, {});
+        expectSelectedRead(*view, values, positions);
       }
-      const auto rowCount = static_cast<uint32_t>(values.size());
-      expectRangeRead(*view, values, /*offset=*/0, /*length=*/0);
-      expectRangeRead(*view, values, rowCount, /*length=*/0);
-      expectRangeRead(
-          *view, values, /*offset=*/0, std::min<uint32_t>(rowCount, 3));
-      if (rowCount > 0) {
-        const auto tailLength = std::min<uint32_t>(rowCount, 3);
-        expectRangeRead(*view, values, rowCount - tailLength, tailLength);
-      }
-      expectIndexedRead(*view, values, {});
-      expectIndexedRead(*view, values, positions);
     }
   }
 
+  // Runs 'body' on several threads at once, and expects every run to return
+  // true. 'body' takes the index of its thread.
+  template <typename Body>
+  void expectConcurrent(Body body) {
+    constexpr auto kThreadCount = 8;
+    std::atomic<bool> failed{false};
+    std::vector<std::thread> threads;
+    threads.reserve(kThreadCount);
+    for (auto threadIndex = 0; threadIndex < kThreadCount; ++threadIndex) {
+      threads.emplace_back([&, threadIndex] {
+        if (!body(threadIndex)) {
+          failed.store(true, std::memory_order_relaxed);
+        }
+      });
+    }
+    for (auto& thread : threads) {
+      thread.join();
+    }
+    EXPECT_FALSE(failed.load(std::memory_order_relaxed));
+  }
+
+  // Reads one view from several threads at once, through every read API that a
+  // view has for streams without nulls: one row, a range, and selected rows.
   template <typename Encoding>
   void expectConcurrentReads(
       const nimble::Vector<typename Encoding::cppDataType>& values,
       const std::vector<uint32_t>& positions,
       nimble::Encoding::Options baseOptions = {}) {
     using T = typename Encoding::cppDataType;
+    using PhysicalType = typename nimble::TypeTraits<T>::physicalType;
     for (const auto useVarint : {false, true}) {
-      SCOPED_TRACE(fmt::format("useVarint={}", useVarint));
-      auto options = baseOptions;
-      options.useVarintRowCount = useVarint;
-      auto serialized = nimble::test::Encoder<Encoding>::encode(
-          *buffer_, values, nimble::CompressionType::Uncompressed, options);
-      auto view = nimble::createEncodingView(serialized, pool_.get(), options);
-      ASSERT_NE(view, nullptr);
+      {
+        SCOPED_TRACE(fmt::format("useVarint={}", useVarint));
+        auto options = baseOptions;
+        options.useVarintRowCount = useVarint;
+        options.cacheEncodingView = cacheEncodingView();
+        auto serialized = nimble::test::Encoder<Encoding>::encode(
+            *buffer_, values, nimble::CompressionType::Uncompressed, options);
+        auto view =
+            nimble::createEncodingView(serialized, pool_.get(), options);
+        ASSERT_NE(view, nullptr);
 
-      constexpr auto kThreadCount = 8;
-      constexpr auto kIterationCount = 64;
-      std::atomic<bool> failed{false};
-      std::vector<std::thread> threads;
-      threads.reserve(kThreadCount);
-      for (auto threadIndex = 0; threadIndex < kThreadCount; ++threadIndex) {
-        threads.emplace_back([&, threadIndex] {
+        constexpr auto kIterationCount = 64;
+        constexpr uint32_t kMaxRangeLength = 64;
+        constexpr size_t kNumSelected = 16;
+        const auto rowCount = static_cast<uint32_t>(values.size());
+        const auto* expected =
+            reinterpret_cast<const PhysicalType*>(values.data());
+        expectConcurrent([&](int threadIndex) {
           std::mt19937 rng{
               positions[threadIndex % positions.size()] + threadIndex};
           std::uniform_int_distribution<size_t> positionIndex{
               0, positions.size() - 1};
+          std::array<PhysicalType, kMaxRangeLength> range{};
+          std::array<uint32_t, kNumSelected> selected{};
+          std::array<PhysicalType, kNumSelected> selectedValues{};
           for (auto iteration = 0; iteration < kIterationCount; ++iteration) {
-            for (size_t read = 0; read < positions.size() / kThreadCount;
-                 ++read) {
+            for (size_t read = 0; read < positions.size() / 8; ++read) {
               const auto position = positions[positionIndex(rng)];
               T value;
               view->readAt(position, &value);
               if (value != values[position]) {
-                failed.store(true, std::memory_order_relaxed);
-                return;
+                return false;
+              }
+            }
+
+            const auto length =
+                1 +
+                static_cast<uint32_t>(
+                    rng() % std::min(kMaxRangeLength, rowCount));
+            const auto offset =
+                static_cast<uint32_t>(rng() % (rowCount - length + 1));
+            view->read(offset, length, range.data());
+            if (!std::equal(
+                    range.begin(), range.begin() + length, expected + offset)) {
+              return false;
+            }
+
+            for (auto& index : selected) {
+              index = positions[positionIndex(rng)];
+            }
+            view->readAt(
+                std::span<const uint32_t>{selected}, selectedValues.data());
+            for (size_t i = 0; i < kNumSelected; ++i) {
+              if (selectedValues[i] != expected[selected[i]]) {
+                return false;
               }
             }
           }
+          return true;
         });
       }
-
-      for (auto& thread : threads) {
-        thread.join();
-      }
-      EXPECT_FALSE(failed.load(std::memory_order_relaxed));
     }
   }
 
@@ -187,6 +265,33 @@ class EncodingViewTest : public ::testing::Test {
           fmt::format("positionIndex={}, position={}", i, positions[i]));
       EXPECT_EQ(actual[i], expected[positions[i]]);
     }
+  }
+
+  template <typename T>
+  void expectSelectedRead(
+      const nimble::EncodingView& view,
+      const nimble::Vector<T>& values,
+      const std::vector<uint32_t>& positions) {
+    SCOPED_TRACE(fmt::format("numPositions={}", positions.size()));
+    using PhysicalType = typename nimble::TypeTraits<T>::physicalType;
+    nimble::Vector<PhysicalType> actual{pool_.get(), positions.size()};
+    bool setNullCalled{false};
+    const auto numNonNulls = view.read(
+        std::span<const uint32_t>{positions.data(), positions.size()},
+        [&](uint32_t) { setNullCalled = true; },
+        actual.data());
+    EXPECT_EQ(numNonNulls, positions.size());
+    EXPECT_FALSE(setNullCalled);
+
+    const auto* expected = reinterpret_cast<const PhysicalType*>(values.data());
+    std::vector<PhysicalType> expectedValues;
+    expectedValues.reserve(positions.size());
+    for (const auto position : positions) {
+      expectedValues.push_back(expected[position]);
+    }
+    EXPECT_EQ(
+        std::vector<PhysicalType>(actual.begin(), actual.end()),
+        expectedValues);
   }
 
   nimble::Vector<int32_t> randomInt32(uint32_t seed) {

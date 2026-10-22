@@ -19,22 +19,40 @@
 
 namespace facebook::velox::functions {
 
-void registerDecimalPlus(const std::string& prefix);
+void registerDecimalPlus(
+    const std::string& prefix,
+    std::string_view defaultOwner = {});
 
-void registerDecimalMinus(const std::string& prefix);
+void registerDecimalMinus(
+    const std::string& prefix,
+    std::string_view defaultOwner = {});
 
-void registerDecimalMultiply(const std::string& prefix);
+void registerDecimalMultiply(
+    const std::string& prefix,
+    std::string_view defaultOwner = {});
 
-void registerDecimalDivide(const std::string& prefix);
+void registerDecimalDivide(
+    const std::string& prefix,
+    std::string_view defaultOwner = {});
 
-void registerDecimalModulus(const std::string& prefix);
+void registerDecimalModulus(
+    const std::string& prefix,
+    std::string_view defaultOwner = {});
 
-void registerDecimalFloor(const std::string& prefix);
+void registerDecimalFloor(
+    const std::string& prefix,
+    std::string_view defaultOwner = {});
 
-void registerDecimalCeil(const std::string& prefix);
+void registerDecimalCeil(
+    const std::string& prefix,
+    std::string_view defaultOwner = {});
 
-void registerDecimalRound(const std::string& prefix);
+void registerDecimalRound(
+    const std::string& prefix,
+    std::string_view defaultOwner = {});
 
-void registerDecimalTruncate(const std::string& prefix);
+void registerDecimalTruncate(
+    const std::string& prefix,
+    std::string_view defaultOwner = {});
 
 } // namespace facebook::velox::functions

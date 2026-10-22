@@ -38,6 +38,11 @@ class EliasFanoEncodingView final : public TypedEncodingView<T> {
     NIMBLE_CHECK_EQ(this->encodingType_, EncodingType::EliasFano);
   }
 
+  /// Returns the first row whose value is at least `value`.
+  uint32_t lowerBound(physicalType value) const {
+    return encoding_.lowerBound(value);
+  }
+
  private:
   T readTypedAt(uint32_t index) const final {
     return encoding_.valueAt(index);

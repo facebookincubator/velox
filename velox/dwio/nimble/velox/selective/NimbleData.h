@@ -39,7 +39,9 @@ class NimbleData : public velox::dwio::common::FormatData {
       bool stringDecoderZeroCopy,
       bool nimblePreserveDictionaryEncoding = false,
       bool lazyColumnIo = false,
-      velox::dwio::common::DecodingStats* decodingStats = nullptr);
+      velox::dwio::common::DecodingStats* decodingStats = nullptr,
+      bool dictionaryAwareReads = false,
+      bool scanFastPath = false);
 
   /// Read internal node nulls. For leaf nodes, we only copy `incomingNulls' if
   /// it exists.
@@ -129,6 +131,8 @@ class NimbleData : public velox::dwio::common::FormatData {
   // Per-column decoding statistics. May be nullptr if column stats collection
   // is disabled.
   velox::dwio::common::DecodingStats* const decodingStats_{nullptr};
+  const bool dictionaryAwareReads_{false};
+  const bool scanFastPath_{false};
 };
 
 class NimbleParams : public velox::dwio::common::FormatParams {
@@ -144,7 +148,9 @@ class NimbleParams : public velox::dwio::common::FormatParams {
       bool preserveFlatMapsInMemory = false,
       bool nimblePreserveDictionaryEncoding = false,
       const folly::F14FastSet<std::string>* lazyIoColumns = nullptr,
-      bool lazyColumnIo = false)
+      bool lazyColumnIo = false,
+      bool dictionaryAwareReads = false,
+      bool scanFastPath = false)
       : FormatParams(pool, stats),
         nimbleType_(nimbleType),
         streams_(&streams),
@@ -154,7 +160,9 @@ class NimbleParams : public velox::dwio::common::FormatParams {
         encodingFactory_(&encodingFactory),
         lazyColumnIo_(lazyColumnIo),
         stringDecoderZeroCopy_{stringDecoderZeroCopy},
-        nimblePreserveDictionaryEncoding_{nimblePreserveDictionaryEncoding} {}
+        nimblePreserveDictionaryEncoding_{nimblePreserveDictionaryEncoding},
+        dictionaryAwareReads_{dictionaryAwareReads},
+        scanFastPath_{scanFastPath} {}
 
   std::unique_ptr<velox::dwio::common::FormatData> toFormatData(
       const std::shared_ptr<const velox::dwio::common::TypeWithId>& /*type*/,
@@ -172,7 +180,9 @@ class NimbleParams : public velox::dwio::common::FormatParams {
         preserveFlatMapsInMemory_,
         nimblePreserveDictionaryEncoding_,
         /*lazyIoColumns=*/nullptr,
-        lazyColumnIo_);
+        lazyColumnIo_,
+        dictionaryAwareReads_,
+        scanFastPath_);
   }
 
   const std::shared_ptr<const Type>& nimbleType() const {
@@ -221,6 +231,14 @@ class NimbleParams : public velox::dwio::common::FormatParams {
     return *encodingFactory_;
   }
 
+  bool dictionaryAwareReads() const {
+    return dictionaryAwareReads_;
+  }
+
+  bool scanFastPath() const {
+    return scanFastPath_;
+  }
+
  private:
   const std::shared_ptr<const Type> nimbleType_;
   StripeStreams* const streams_{nullptr};
@@ -235,6 +253,8 @@ class NimbleParams : public velox::dwio::common::FormatParams {
   ChunkedDecoder* inMapDecoder_{nullptr};
   bool stringDecoderZeroCopy_{false};
   bool nimblePreserveDictionaryEncoding_{false};
+  bool dictionaryAwareReads_{false};
+  bool scanFastPath_{false};
 };
 
 } // namespace facebook::nimble

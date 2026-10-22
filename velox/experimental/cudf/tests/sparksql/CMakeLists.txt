@@ -40,3 +40,9 @@ velox_add_cudf_test(
     gflags::gflags
   TIMEOUT 3000
 )
+
+velox_add_cudf_test(
+  NAME velox_cudf_spark_expression_selection_test
+  SOURCES ExpressionSelectionTest.cpp Main.cpp
+  LIBS ${CUDF_TEST_DEFAULT_LIBS} velox_functions_spark
+)

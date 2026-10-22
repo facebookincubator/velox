@@ -65,6 +65,17 @@ table StripeChunkStatsV2 {
   /// Nimble-encoded null-value counts in the same stream-major order as
   /// stream_chunk_rows.
   stream_chunk_null_counts:EncodedStream;
+  /// Per-stream Nimble-encoded min values for predicate pushdown.
+  /// Size == stream_count (one typed EncodedStream per stream).
+  /// Streams with no usable bounds have empty data.
+  /// The encoding data type matches the stream's physical scalar type.
+  chunk_min_values:[EncodedStream];
+  /// Per-stream Nimble-encoded max values. Same layout as chunk_min_values.
+  chunk_max_values:[EncodedStream];
+  /// Nimble-encoded booleans in stream-major chunk order. True means
+  /// the corresponding entries in chunk_min_values and chunk_max_values are
+  /// valid. Required when min/max arrays are present.
+  chunk_min_max_present:EncodedStream;
 }
 
 /// Root table for the "columnar.chunk.stats" or "columnar.chunk.stats.v2"

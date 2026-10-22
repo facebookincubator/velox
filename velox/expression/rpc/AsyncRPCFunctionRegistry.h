@@ -57,11 +57,6 @@ namespace facebook::velox::exec::rpc {
 ///      Our factory returns shared_ptr<AsyncRPCFunction> with no args;
 ///      initialization happens separately via initialize().
 ///
-///   4. **Stub bridge for discovery**: registerStubs() registers a throwing
-///      VectorFunction per name so the sidecar's /v1/functions endpoint, which
-///      reads the VectorFunction registry, lists them. Deprecated: publish
-///      from functions() instead.
-///
 /// Usage (in function's .cpp file):
 ///   // For a complete example, see velox/exec/rpc/tests/DemoRPCFunction*.
 ///
@@ -75,11 +70,10 @@ class AsyncRPCFunctionRegistry {
   /// Factory function type that creates an AsyncRPCFunction instance.
   using Factory = std::function<std::shared_ptr<AsyncRPCFunction>()>;
 
-  /// Signature list type for stub registration.
+  /// Signature list type for function registration and discovery.
   using Signatures = std::vector<std::shared_ptr<exec::FunctionSignature>>;
 
-  /// Declaration attached to the stub. Read by the sidecar, not by any
-  /// executor: RPC functions run in RPCOperator and never reach the stub.
+  /// Determinism and null behavior published with the function signatures.
   using Metadata = exec::VectorFunctionMetadata;
 
   /// Registers a function factory and the signatures it accepts. Signatures
@@ -96,10 +90,10 @@ class AsyncRPCFunctionRegistry {
       Factory factory,
       Signatures signatures);
 
-  /// Registers a factory, its signatures, and the metadata the stub is declared
-  /// with. Use this when the default declaration is wrong for the function --
-  /// most importantly when a NULL in one argument does not mean a NULL result,
-  /// which the default 'defaultNullBehavior{true}' asserts.
+  /// Registers a factory, its signatures, and its metadata. Use this when the
+  /// default declaration is wrong for the function -- most importantly when a
+  /// NULL in one argument does not mean a NULL result, which the default
+  /// 'defaultNullBehavior{true}' asserts.
   static bool registerFunction(
       const std::string& name,
       Factory factory,
@@ -146,20 +140,6 @@ class AsyncRPCFunctionRegistry {
   /// @param name Function name to look up
   /// @return AsyncRPCFunction instance, or nullptr if not registered
   static std::shared_ptr<AsyncRPCFunction> create(const std::string& name);
-
-  /// Deprecated. Use functions() and publish from it: a stub is a throwing
-  /// VectorFunction in the scalar registry, which exists only because
-  /// /v1/functions reads that registry. Removed once the sidecar publishes
-  /// from functions() instead.
-  ///
-  /// Registers a stub for each registered function under the given namespace
-  /// prefix: namespacePrefix + functionName, e.g.
-  /// "presto.default.fb_llm_inference". Must be called during server startup,
-  /// after config is available.
-  ///
-  /// @param namespacePrefix The catalog.schema with trailing dot (e.g.,
-  /// "presto.default.")
-  static void registerStubs(const std::string& namespacePrefix);
 
   /// Clears all registered functions.
   /// Intended ONLY for unit tests to avoid test contamination.

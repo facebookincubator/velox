@@ -49,6 +49,8 @@ class PaimonDataSource : public FileDataSource {
 
   void addSplit(std::shared_ptr<ConnectorSplit> split) override;
 
+  void setFromDataSource(std::unique_ptr<DataSource> sourceUnique) override;
+
  protected:
   /// Creates a PaimonSplitReader with all data files from the Paimon split.
   /// Called by FileDataSource::addSplit() during split initialization.

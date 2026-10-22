@@ -21,6 +21,7 @@
 
 #include "velox/common/Casts.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
+#include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
 #include "velox/connectors/hive/iceberg/IcebergSplit.h"
 
 namespace facebook::velox::cudf_velox::connector::hive::iceberg {
@@ -45,8 +46,29 @@ CudfIcebergDataSource::CudfIcebergDataSource(
           fileHandleFactory,
           executor,
           connectorQueryCtx,
-          cudfHiveConfig),
-      hiveConfig_(hiveConfig) {}
+          cudfHiveConfig,
+          // The Iceberg split reader resolves partition columns per data file.
+          PartitionKeySource::kSplitReader),
+      hiveConfig_(hiveConfig) {
+  const auto recordColumn = [this](const velox_hive::FileColumnHandle& handle) {
+    if (handle.columnType() ==
+        velox_hive::FileColumnHandle::ColumnType::kPartitionKey) {
+      partitionColumnNames_.insert(handle.name());
+    }
+    if (const auto* icebergHandle =
+            dynamic_cast<const velox_iceberg::IcebergColumnHandle*>(&handle)) {
+      sourceFieldIds_.emplace(
+          icebergHandle->name(), icebergHandle->field().fieldId);
+    }
+  };
+  for (const auto& [_, handle] : columnHandles) {
+    recordColumn(
+        *checkedPointerCast<const velox_hive::FileColumnHandle>(handle));
+  }
+  for (const auto& handle : tableHandle_->filterColumnHandles()) {
+    recordColumn(*handle);
+  }
+}
 
 void CudfIcebergDataSource::convertSplit(
     std::shared_ptr<velox_connector::ConnectorSplit> split) {
@@ -58,11 +80,22 @@ void CudfIcebergDataSource::convertSplit(
   CudfHiveDataSource::convertSplit(split);
 }
 
+void CudfIcebergDataSource::setFromDataSource(
+    std::unique_ptr<velox_connector::DataSource> source) {
+  auto* preparedSource =
+      checkedPointerCast<CudfIcebergDataSource>(source.get());
+
+  icebergSplit_ = std::move(preparedSource->icebergSplit_);
+  CudfHiveDataSource::setFromDataSource(std::move(source));
+}
+
 std::unique_ptr<CudfSplitReader>
 CudfIcebergDataSource::createCudfSplitReader() {
   return std::make_unique<CudfIcebergSplitReader>(
       split_,
       icebergSplit_,
+      partitionColumnNames_,
+      sourceFieldIds_,
       tableHandle_,
       outputType_,
       readColumnNames_,
@@ -73,7 +106,6 @@ CudfIcebergDataSource::createCudfSplitReader() {
       hiveConfig_,
       ioStatistics_,
       ioStats_,
-      useExperimentalCudfReader_,
       subfieldFilterAst_,
       CudfHiveDataSource::getFilters());
 }

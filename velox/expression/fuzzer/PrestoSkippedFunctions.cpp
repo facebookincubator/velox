@@ -81,8 +81,6 @@ const std::unordered_set<std::string>& prestoSkippedFunctions() {
       // it hits integer overflows when the arguments are very large.
       // https://github.com/facebookincubator/velox/issues/11802
       "inverse_beta_cdf",
-      // https://github.com/facebookincubator/velox/issues/13047
-      "inverse_poisson_cdf",
       "map_subset", // https://github.com/facebookincubator/velox/issues/12654
       // JSON not supported, Real doesn't match exactly, etc.
       "array_join(array(json),varchar) -> varchar",
@@ -200,6 +198,7 @@ const std::unordered_set<std::string>& prestoSkippedFunctionsSOT() {
       "map_update", // Velox-only function, not available in Presto
       "map_trim_values", // Velox-only function, not available in Presto
       "map_subset_key_in_range", // Velox-only function, not available in Presto
+      "at_timezone_convert", // Velox-only function, not available in Presto
       "noisy_empty_approx_set_sfm", // non-deterministic because of privacy.
       // https://github.com/facebookincubator/velox/issues/11034
       "cast(real) -> varchar",
@@ -238,7 +237,7 @@ const std::unordered_set<std::string>& prestoSkippedFunctionsSOT() {
       "substr", // https://github.com/facebookincubator/velox/issues/10660
       "cauchy_cdf", // https://github.com/facebookincubator/velox/issues/10976
       "covar_pop", // https://github.com/facebookincubator/velox/issues/10627
-      "lpad", // https://github.com/facebookincubator/velox/issues/10757
+      "lpad", // https://github.com/prestodb/presto/issues/28697
       "format_datetime", // https://github.com/facebookincubator/velox/issues/10779
       "inverse_cauchy_cdf", // https://github.com/facebookincubator/velox/issues/10840
       "array_position", // https://github.com/facebookincubator/velox/issues/10580
@@ -248,7 +247,7 @@ const std::unordered_set<std::string>& prestoSkippedFunctionsSOT() {
       "log2", // https://github.com/facebookincubator/velox/issues/12338
       "bitwise_right_shift", // https://github.com/facebookincubator/velox/issues/12339
       "word_stem", // https://github.com/facebookincubator/velox/issues/12341
-      "rpad", // https://github.com/facebookincubator/velox/issues/12343
+      "rpad", // https://github.com/prestodb/presto/issues/28697
       "to_ieee754_32", // https://github.com/facebookincubator/velox/issues/12345
       "beta_cdf", // https://github.com/facebookincubator/velox/issues/12346
       "wilson_interval_upper", // https://github.com/facebookincubator/velox/issues/12347
@@ -294,7 +293,6 @@ const std::unordered_set<std::string>& prestoSkippedFunctionsSOT() {
       "subscript", // https://github.com/facebookincubator/velox/issues/12959
       "reduce", // T220595632
       "inverse_binomial_cdf", // https://github.com/facebookincubator/velox/issues/12981
-      "inverse_poisson_cdf", // https://github.com/facebookincubator/velox/issues/12982
       // https://github.com/facebookincubator/velox/issues/13002
       "ceiling",
       "ceil",

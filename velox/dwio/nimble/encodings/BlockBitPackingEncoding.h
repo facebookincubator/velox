@@ -857,14 +857,10 @@ void BlockBitPackingEncoding<T>::readWithVisitor(
   // and the scatter path (used for nullable columns) calls it.
   constexpr bool kCanUseFastPath =
       (kIsWideType || (kIsNarrowType && !V::kHasFilter && !V::kHasHook));
-  if constexpr (
-      kCanUseFastPath &&
-      std::is_same_v<
-          typename V::Extract,
-          velox::dwio::common::ExtractToReader> &&
-      kIsFluidCast) {
+  if constexpr (kCanUseFastPath && kIsFluidCast) {
     auto* nulls = visitor.reader().rawNullsInReadRange();
-    if (velox::dwio::common::useFastPath(visitor, nulls) &&
+    if ((detail::bulkFastPathByDefault<V>() || params.scanFastPath) &&
+        velox::dwio::common::useFastPath(visitor, nulls) &&
         (kIsWideType || nulls == nullptr)) {
       detail::readWithVisitorFast(*this, visitor, params, nulls);
       return;
@@ -1029,32 +1025,8 @@ void BlockBitPackingEncoding<T>::bulkScan(
   // with filters/hooks are routed to the slow path by readWithVisitor,
   // so this branch is unreachable for them.
   if constexpr (sizeof(OutputType) >= 4) {
-    if constexpr (!V::kHasHook) {
-      values = reinterpret_cast<OutputType*>(visitor.reader().rawValues());
-    }
-
-    auto numValues = visitor.reader().numValues();
-    int32_t* filterHits = nullptr;
-    if constexpr (V::kHasFilter) {
-      filterHits = visitor.outputRows(numSelected) - numValues;
-    }
-
-    velox::dwio::common::
-        processFixedWidthRun<OutputType, V::kFilterOnly, kScatter, V::dense>(
-            velox::RowSet(selectedRows, numSelected),
-            0,
-            numSelected,
-            scatterRows,
-            values,
-            filterHits,
-            numValues,
-            visitor.filter(),
-            visitor.hook());
-
-    if constexpr (!V::kHasHook) {
-      visitor.addNumValues(
-          V::kHasFilter ? numValues - visitor.reader().numValues() : numRows);
-    }
+    detail::applyFixedWidthRun<kScatter>(
+        visitor, selectedRows, numSelected, scatterRows, values, numRows);
   } else {
     NIMBLE_UNREACHABLE(
         "Narrow-type bulkScan with filter/hook should use the slow path.");

@@ -38,6 +38,26 @@ void updateStringDictionaryEncodingAbandoned() {
   update(kStringDictionaryEncodingAbandoned);
 }
 
+void updateSmallintDictionaryAwareReads() {
+  update(kSmallintDictionaryAwareReads);
+}
+
+void updateIntegerDictionaryAwareReads() {
+  update(kIntegerDictionaryAwareReads);
+}
+
+void updateBigintDictionaryAwareReads() {
+  update(kBigintDictionaryAwareReads);
+}
+
+void updateRealDictionaryAwareReads() {
+  update(kRealDictionaryAwareReads);
+}
+
+void updateDoubleDictionaryAwareReads() {
+  update(kDoubleDictionaryAwareReads);
+}
+
 } // namespace facebook::nimble::fuzzer
 
 #endif

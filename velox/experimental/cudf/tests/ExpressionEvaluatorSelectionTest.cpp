@@ -20,7 +20,6 @@
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/expression/JitExpression.h"
 #include "velox/experimental/cudf/expression/PrestoFunctions.h"
-#include "velox/experimental/cudf/expression/SparkFunctions.h"
 #include "velox/experimental/cudf/tests/utils/ExpressionTestUtil.h"
 
 #include "velox/common/memory/Memory.h"
@@ -28,13 +27,13 @@
 #include "velox/core/QueryCtx.h"
 #include "velox/expression/Expr.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
-#include "velox/functions/sparksql/registration/Register.h"
 #include "velox/type/Type.h"
 
 #include <folly/ScopeGuard.h>
 #include <gtest/gtest.h>
 
 #include <string>
+#include <vector>
 
 using namespace facebook::velox;
 using namespace facebook::velox::cudf_velox;
@@ -46,7 +45,6 @@ class CudfExpressionSelectionTest : public ::testing::Test {
  protected:
   static void SetUpTestCase() {
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
-    facebook::velox::functions::sparksql::registerFunctions();
     facebook::velox::functions::prestosql::registerAllScalarFunctions();
   }
 
@@ -57,7 +55,6 @@ class CudfExpressionSelectionTest : public ::testing::Test {
     cudf_velox::CudfConfig::getInstance().allowCpuFallback = false;
     cudf_velox::registerCudf();
     cudf_velox::registerPrestoFunctions("");
-    cudf_velox::registerSparkFunctions("");
     rowType_ = ROW({
         {"a", BIGINT()},
         {"b", BIGINT()},
@@ -95,7 +92,8 @@ TEST_F(CudfExpressionSelectionTest, astRoot) {
   CudfConfig::getInstance().jitExpressionEnabled = true;
   auto expr =
       optimizeTypedExpr("a + c", rowType_, queryCtx_.get(), execCtx_.get());
-  auto cudfExpr = createCudfExpression(expr, rowType_, pool_.get());
+  auto cudfExpr = createCudfExpression(
+      expr, rowType_, pool_.get(), queryCtx_->queryConfig());
   auto* ast = dynamic_cast<ASTExpression*>(cudfExpr.get());
   auto* jit = dynamic_cast<JitExpression*>(cudfExpr.get());
   ASSERT_TRUE(ast != nullptr || jit != nullptr);
@@ -105,7 +103,8 @@ TEST_F(CudfExpressionSelectionTest, functionRoot) {
   auto expr = optimizeTypedExpr(
       "lower(name)", rowType_, queryCtx_.get(), execCtx_.get());
   ASSERT_TRUE(canExprRunOnGpu(expr, queryCtx_.get(), pool_.get()));
-  auto cudfExpr = createCudfExpression(expr, rowType_, pool_.get());
+  auto cudfExpr = createCudfExpression(
+      expr, rowType_, pool_.get(), queryCtx_->queryConfig());
   auto* functionExpr = dynamic_cast<FunctionExpression*>(cudfExpr.get());
   ASSERT_NE(functionExpr, nullptr);
 }
@@ -125,7 +124,8 @@ TEST_F(CudfExpressionSelectionTest, astTopLevelWithFunctionPrecompute) {
       queryCtx_.get(),
       execCtx_.get());
   ASSERT_TRUE(canExprRunOnGpu(expr, queryCtx_.get(), pool_.get()));
-  auto cudfExpr = createCudfExpression(expr, rowType_, pool_.get());
+  auto cudfExpr = createCudfExpression(
+      expr, rowType_, pool_.get(), queryCtx_->queryConfig());
   auto* ast = dynamic_cast<ASTExpression*>(cudfExpr.get());
   auto* jit = dynamic_cast<JitExpression*>(cudfExpr.get());
   ASSERT_TRUE(ast != nullptr || jit != nullptr);
@@ -135,7 +135,8 @@ TEST_F(CudfExpressionSelectionTest, functionTopLevelWithNestedFunction) {
   auto expr = optimizeTypedExpr(
       "lower(substr(name, 1, 5))", rowType_, queryCtx_.get(), execCtx_.get());
   ASSERT_TRUE(canExprRunOnGpu(expr, queryCtx_.get(), pool_.get()));
-  auto cudfExpr = createCudfExpression(expr, rowType_, pool_.get());
+  auto cudfExpr = createCudfExpression(
+      expr, rowType_, pool_.get(), queryCtx_->queryConfig());
 
   // Top level should be Function
   auto* functionExpr = dynamic_cast<FunctionExpression*>(cudfExpr.get());
@@ -188,7 +189,8 @@ TEST_F(CudfExpressionSelectionTest, nestedRowDereferenceUsesFunctionEvaluator) {
       execCtx_.get());
   ASSERT_TRUE(canExprRunOnGpu(expr, queryCtx_.get(), pool_.get()));
 
-  auto cudfExpr = createCudfExpression(expr, rowType_, pool_.get());
+  auto cudfExpr = createCudfExpression(
+      expr, rowType_, pool_.get(), queryCtx_->queryConfig());
   auto* functionExpr = dynamic_cast<FunctionExpression*>(cudfExpr.get());
   ASSERT_NE(functionExpr, nullptr);
 }
@@ -209,7 +211,10 @@ TEST_F(
       1);
 
   ASSERT_TRUE(canExprRunOnGpu(expr, queryCtx_.get(), pool_.get()));
-  ASSERT_NE(createCudfExpression(expr, rowType_, pool_.get()), nullptr);
+  ASSERT_NE(
+      createCudfExpression(
+          expr, rowType_, pool_.get(), queryCtx_->queryConfig()),
+      nullptr);
 }
 
 TEST_F(
@@ -228,21 +233,10 @@ TEST_F(
       "right");
 
   ASSERT_TRUE(canExprRunOnGpu(expr, queryCtx_.get(), pool_.get()));
-  ASSERT_NE(createCudfExpression(expr, rowType_, pool_.get()), nullptr);
-}
-
-// Disabled because this test segfaults in CI while building the typed
-// not use cudf code.
-TEST_F(CudfExpressionSelectionTest, DISABLED_functionTopLevelWithNestedAst) {
-  auto expr = optimizeTypedExpr(
-      "hash_with_seed(42, add(a, b))",
-      rowType_,
-      queryCtx_.get(),
-      execCtx_.get(),
-      {.parseIntegerAsBigint = false, .functionPrefix = ""});
-  auto cudfExpr = createCudfExpression(expr, rowType_, pool_.get());
-  auto* functionExpr = dynamic_cast<FunctionExpression*>(cudfExpr.get());
-  ASSERT_NE(functionExpr, nullptr);
+  ASSERT_NE(
+      createCudfExpression(
+          expr, rowType_, pool_.get(), queryCtx_->queryConfig()),
+      nullptr);
 }
 
 // Disabled because this test segfaults in CI while building the typed
@@ -345,80 +339,10 @@ TEST_F(CudfExpressionSelectionTest, signatureAllowsColumnPatternLike) {
   ASSERT_FALSE(canExprRunOnGpu(badColumnEscape, queryCtx_.get(), pool_.get()));
 }
 
-TEST_F(CudfExpressionSelectionTest, signatureAllowsColumnArgsStartswith) {
-  // OK: pattern is a constant
-  auto ok = optimizeTypedExpr(
-      "startswith(name, 'ab')", rowType_, queryCtx_.get(), execCtx_.get());
-  ASSERT_TRUE(canExprRunOnGpu(ok, queryCtx_.get(), pool_.get()));
-
-  // OK: null pattern is still a constant and should remain on the cuDF path.
-  auto okNull = optimizeTypedExpr(
-      "startswith(name, cast(null as varchar))",
-      rowType_,
-      queryCtx_.get(),
-      execCtx_.get());
-  ASSERT_TRUE(canExprRunOnGpu(okNull, queryCtx_.get(), pool_.get()));
-
-  // OK: pattern can also come from a column.
-  auto okColumn = optimizeTypedExpr(
-      "startswith(name, name)", rowType_, queryCtx_.get(), execCtx_.get());
-  ASSERT_TRUE(canExprRunOnGpu(okColumn, queryCtx_.get(), pool_.get()));
-}
-
-TEST_F(CudfExpressionSelectionTest, signatureAllowsColumnArgsContains) {
-  // OK: pattern is a constant
-  auto ok = optimizeTypedExpr(
-      "contains(name, 'ab')", rowType_, queryCtx_.get(), execCtx_.get());
-  ASSERT_TRUE(canExprRunOnGpu(ok, queryCtx_.get(), pool_.get()));
-
-  // OK: the input can also be a constant.
-  auto okConstantInput = optimizeTypedExpr(
-      "contains('ab', name)", rowType_, queryCtx_.get(), execCtx_.get());
-  ASSERT_TRUE(canExprRunOnGpu(okConstantInput, queryCtx_.get(), pool_.get()));
-
-  // OK: null pattern is still a constant and should remain on the cuDF path.
-  auto okNull = optimizeTypedExpr(
-      "contains(name, cast(null as varchar))",
-      rowType_,
-      queryCtx_.get(),
-      execCtx_.get());
-  ASSERT_TRUE(canExprRunOnGpu(okNull, queryCtx_.get(), pool_.get()));
-
-  // OK: pattern can also come from a column.
-  auto okColumn = optimizeTypedExpr(
-      "contains(name, name)", rowType_, queryCtx_.get(), execCtx_.get());
-  ASSERT_TRUE(canExprRunOnGpu(okColumn, queryCtx_.get(), pool_.get()));
-}
-
-TEST_F(CudfExpressionSelectionTest, signatureAllowsColumnArgsEndswith) {
-  // OK: pattern is a constant
-  auto ok = optimizeTypedExpr(
-      "endswith(name, 'ab')", rowType_, queryCtx_.get(), execCtx_.get());
-  ASSERT_TRUE(canExprRunOnGpu(ok, queryCtx_.get(), pool_.get()));
-
-  // OK: the input can also be a constant.
-  auto okConstantInput = optimizeTypedExpr(
-      "endswith('ab', name)", rowType_, queryCtx_.get(), execCtx_.get());
-  ASSERT_TRUE(canExprRunOnGpu(okConstantInput, queryCtx_.get(), pool_.get()));
-
-  // OK: null pattern is still a constant and should remain on the cuDF path.
-  auto okNull = optimizeTypedExpr(
-      "endswith(name, cast(null as varchar))",
-      rowType_,
-      queryCtx_.get(),
-      execCtx_.get());
-  ASSERT_TRUE(canExprRunOnGpu(okNull, queryCtx_.get(), pool_.get()));
-
-  // OK: pattern can also come from a column.
-  auto okColumn = optimizeTypedExpr(
-      "endswith(name, name)", rowType_, queryCtx_.get(), execCtx_.get());
-  ASSERT_TRUE(canExprRunOnGpu(okColumn, queryCtx_.get(), pool_.get()));
-}
-
 TEST_F(CudfExpressionSelectionTest, signatureArityAndConstantsSubstr) {
   // The default parser keeps integer literals as BIGINT, which exercises the
-  // existing Presto-compatible `substr` candidate. Spark-specific coverage is
-  // below, using INTEGER literals or INTEGER columns.
+  // Presto-compatible `substr` candidate. The Spark candidate, which takes
+  // INTEGER positions, is covered in tests/sparksql.
 
   // OK: 2-arg substr with constant start
   auto ok2 = optimizeTypedExpr(
@@ -430,31 +354,7 @@ TEST_F(CudfExpressionSelectionTest, signatureArityAndConstantsSubstr) {
       "substr(name, 1, 5)", rowType_, queryCtx_.get(), execCtx_.get());
   ASSERT_TRUE(canExprRunOnGpu(ok3, queryCtx_.get(), pool_.get()));
 
-  // OK: Spark substring registers integer positions and lengths.
-  parse::ParseOptions sparkLiteralOptions;
-  sparkLiteralOptions.parseIntegerAsBigint = false;
-  auto okSparkLiteralArgs = optimizeTypedExpr(
-      "substring(name, 1, 5)",
-      rowType_,
-      queryCtx_.get(),
-      execCtx_.get(),
-      sparkLiteralOptions);
-  ASSERT_TRUE(
-      canExprRunOnGpu(okSparkLiteralArgs, queryCtx_.get(), pool_.get()));
-
-  // OK: Spark substring supports integer start and length columns. This also
-  // verifies that the cuDF `substr` function name routes to Spark semantics
-  // when Spark functions are registered.
-  auto okStartColumn = optimizeTypedExpr(
-      "substr(name, c)", rowType_, queryCtx_.get(), execCtx_.get());
-  ASSERT_TRUE(canExprRunOnGpu(okStartColumn, queryCtx_.get(), pool_.get()));
-
-  auto okStartAndLengthColumns = optimizeTypedExpr(
-      "substring(name, c, c)", rowType_, queryCtx_.get(), execCtx_.get());
-  ASSERT_TRUE(
-      canExprRunOnGpu(okStartAndLengthColumns, queryCtx_.get(), pool_.get()));
-
-  // Bad: Spark substr accepts integer positions, not bigint positions.
+  // Bad: column positions are unsupported for BIGINT.
   auto badBigintStart = optimizeTypedExpr(
       "substr(name, a)", rowType_, queryCtx_.get(), execCtx_.get());
   ASSERT_FALSE(canExprRunOnGpu(badBigintStart, queryCtx_.get(), pool_.get()));
@@ -467,7 +367,7 @@ TEST_F(CudfExpressionSelectionTest, signatureArrayAccess) {
       {"idx_integer", INTEGER()},
   });
 
-  for (const auto& functionName : {"element_at", "subscript", "get"}) {
+  for (const auto& functionName : {"element_at", "subscript"}) {
     SCOPED_TRACE(functionName);
 
     auto bigintExpr = parseAndInferTypedExpr(
@@ -484,75 +384,11 @@ TEST_F(CudfExpressionSelectionTest, signatureArrayAccess) {
   }
 }
 
-TEST_F(CudfExpressionSelectionTest, signatureSparkGetSmallIntegralIndices) {
-  auto arrayRowType = ROW({
-      {"arr", ARRAY(INTEGER())},
-      {"idx_tinyint", TINYINT()},
-      {"idx_smallint", SMALLINT()},
-  });
-
-  auto tinyintExpr = parseAndInferTypedExpr(
-      "get(arr, idx_tinyint)", arrayRowType, execCtx_.get());
-  ASSERT_TRUE(canExprRunOnGpu(tinyintExpr, queryCtx_.get(), pool_.get()));
-
-  auto smallintExpr = parseAndInferTypedExpr(
-      "get(arr, idx_smallint)", arrayRowType, execCtx_.get());
-  ASSERT_TRUE(canExprRunOnGpu(smallintExpr, queryCtx_.get(), pool_.get()));
-}
-
 TEST_F(CudfExpressionSelectionTest, signatureCastsInDivide) {
   // OK: numeric args are castable to double
   auto ok = optimizeTypedExpr(
       "divide(a, b)", rowType_, queryCtx_.get(), execCtx_.get());
   ASSERT_TRUE(canExprRunOnGpu(ok, queryCtx_.get(), pool_.get()));
-}
-
-TEST_F(CudfExpressionSelectionTest, signatureVarargsHashWithSeed) {
-  facebook::velox::functions::sparksql::registerFunctions();
-  // canExprRunOnGpu reads this setting directly; no driver re-registration is
-  // needed.
-  CudfConfig::getInstance().allowCpuFallback = true;
-  SCOPE_EXIT {
-    CudfConfig::getInstance().allowCpuFallback = false;
-  };
-
-  // TODO: Assert TRUE after https://github.com/rapidsai/cudf/issues/21720.
-  // Multi-column hash_with_seed cannot be evaluated by cudf because cudf's
-  // murmurhash3_x86_32 combines columns via hash_combine(h(col0, seed),
-  // h(col1, seed)), while Spark hashes iteratively: h(col1, h(col0, seed)).
-  // The cudf API only accepts a scalar seed, so per-row seeding is not
-  // possible without a custom CUDA kernel.
-  auto multiCol = optimizeTypedExpr(
-      "hash_with_seed(42, a, b)",
-      rowType_,
-      queryCtx_.get(),
-      execCtx_.get(),
-      {.parseIntegerAsBigint = false, .functionPrefix = ""});
-  ASSERT_FALSE(canExprRunOnGpu(multiCol, queryCtx_.get(), pool_.get()));
-
-  // Single-column hash_with_seed is supported (no column combining needed).
-  auto singleCol = optimizeTypedExpr(
-      "hash_with_seed(42, a)",
-      rowType_,
-      queryCtx_.get(),
-      execCtx_.get(),
-      {.parseIntegerAsBigint = false, .functionPrefix = ""});
-  ASSERT_TRUE(canExprRunOnGpu(singleCol, queryCtx_.get(), pool_.get()));
-
-  // Bad: first arg must be constant seed
-  try {
-    auto bad = optimizeTypedExpr(
-        "hash_with_seed(c, b)",
-        rowType_,
-        queryCtx_.get(),
-        execCtx_.get(),
-        {.parseIntegerAsBigint = false, .functionPrefix = ""});
-    // If compilation succeeds, the compiled check must fail.
-    ASSERT_FALSE(canExprRunOnGpu(bad, queryCtx_.get(), pool_.get()));
-  } catch (const VeloxUserError&) {
-    // Treat compile-time validation failure as unsupported.
-    SUCCEED();
-  }
 }
 
 TEST_F(CudfExpressionSelectionTest, signatureTypeVariableCoalesce) {
@@ -697,7 +533,8 @@ TEST_F(CudfExpressionSelectionTest, compilerPureAstNoBoundaries) {
   // A simple arithmetic expression handled entirely by AST should compile
   // successfully.
   auto expr = parseAndInferTypedExpr("a + b", rowType_, execCtx_.get());
-  auto result = createCudfExpression(expr, rowType_, pool_.get());
+  auto result = createCudfExpression(
+      expr, rowType_, pool_.get(), queryCtx_->queryConfig());
   ASSERT_NE(result, nullptr);
 }
 
@@ -713,7 +550,8 @@ TEST_F(CudfExpressionSelectionTest, compilerFunctionBoundaryInAst) {
 
   auto expr = parseAndInferTypedExpr(
       "a + b > cardinality(names)", arrayType, execCtx_.get());
-  auto result = createCudfExpression(expr, arrayType, pool_.get());
+  auto result = createCudfExpression(
+      expr, arrayType, pool_.get(), queryCtx_->queryConfig());
   ASSERT_NE(result, nullptr);
 }
 
@@ -726,7 +564,8 @@ TEST_F(CudfExpressionSelectionTest, compilerOptimizesConstantExpr) {
       expression::optimize(expr, queryCtx_.get(), pool_.get());
   ASSERT_NE(optimized, nullptr);
 
-  auto result = createCudfExpression(optimized, rowType_, pool_.get());
+  auto result = createCudfExpression(
+      optimized, rowType_, pool_.get(), queryCtx_->queryConfig());
   ASSERT_NE(result, nullptr);
 
   // The optimized tree should have a constant child for the folded value.
@@ -743,7 +582,8 @@ TEST_F(CudfExpressionSelectionTest, compilerOptimizesConstantExpr) {
 
 TEST_F(CudfExpressionSelectionTest, compilerSimpleExpressionCompiles) {
   auto expr = parseAndInferTypedExpr("a + b", rowType_, execCtx_.get());
-  auto result = createCudfExpression(expr, rowType_, pool_.get());
+  auto result = createCudfExpression(
+      expr, rowType_, pool_.get(), queryCtx_->queryConfig());
   ASSERT_NE(result, nullptr);
 }
 

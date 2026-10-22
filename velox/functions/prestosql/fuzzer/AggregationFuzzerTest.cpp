@@ -21,6 +21,7 @@
 
 #include "velox/exec/fuzzer/AggregationFuzzerOptions.h"
 #include "velox/exec/fuzzer/AggregationFuzzerRunner.h"
+#include "velox/exec/fuzzer/FuzzerUtil.h"
 #include "velox/exec/fuzzer/PrestoQueryRunner.h"
 #include "velox/exec/fuzzer/TransformResultVerifier.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
@@ -78,6 +79,10 @@ DEFINE_uint32(
     "Timeout in milliseconds for HTTP requests made to reference DB, "
     "such as Presto. Example: --req_timeout_ms=2000");
 
+DEFINE_int64(allocator_capacity, 8L << 30, "Allocator capacity in bytes.");
+
+DEFINE_int64(arbitrator_capacity, 6L << 30, "Arbitrator capacity in bytes.");
+
 // Any change made in the file should be reflected in
 // the FB-internal aggregation fuzzer test too.
 namespace facebook::velox::exec::test {
@@ -130,8 +135,13 @@ int main(int argc, char** argv) {
   facebook::velox::window::prestosql::registerAllWindowFunctions();
   facebook::velox::functions::prestosql::registerInternalFunctions();
   facebook::velox::aggregate::prestosql::registerInternalAggregateFunctions();
-  facebook::velox::memory::MemoryManager::initialize(
-      facebook::velox::memory::MemoryManager::Options{});
+  // Must install a real arbitrator. With the default options the manager gets
+  // a NoopArbitrator, so the test-only spill hooks reach
+  // memory::testingRunArbitration() and reclaim nothing, which leaves hash
+  // aggregation -- the one operator here that spills only under arbitration --
+  // never spilling.
+  facebook::velox::exec::test::setupMemory(
+      FLAGS_allocator_capacity, FLAGS_arbitrator_capacity);
 
   size_t initialSeed = FLAGS_seed == 0 ? std::time(nullptr) : FLAGS_seed;
 

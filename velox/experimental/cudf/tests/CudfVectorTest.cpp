@@ -20,10 +20,12 @@
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
 #include <cudf/contiguous_split.hpp>
+#include <cudf/null_mask.hpp>
 #include <cudf/utilities/error.hpp>
 
 #include <rmm/device_buffer.hpp>
 #include <rmm/mr/cuda_async_memory_resource.hpp>
+#include <rmm/mr/per_device_resource.hpp>
 #include <rmm/resource_ref.hpp>
 
 #include <cuda/memory_resource>
@@ -151,7 +153,11 @@ std::unique_ptr<cudf::table> makeTable(
           cudf::data_type{cudf::type_id::INT32},
           static_cast<cudf::size_type>(values.size()),
           std::move(data),
-          rmm::device_buffer{},
+          cudf::create_null_mask(
+              0,
+              cudf::mask_state::UNALLOCATED,
+              stream,
+              cudf::memory_resources{mr, mr}),
           0));
   return std::make_unique<cudf::table>(std::move(columns));
 }

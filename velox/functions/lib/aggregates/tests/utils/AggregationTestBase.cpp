@@ -60,6 +60,23 @@ struct CompanionFunctions {
   std::string extractFunction;
 };
 
+void testIgnoreNullInputs(
+    const std::function<void(PlanBuilder&)>& makeSource,
+    const std::vector<std::string>& groupingKeys,
+    const std::vector<std::string>& aggregates,
+    const std::vector<std::string>& postAggregationProjections,
+    const std::function<std::shared_ptr<exec::Task>(AssertQueryBuilder&)>&
+        assertResults,
+    const std::unordered_map<std::string, std::string>& config,
+    exec::test::DuckDbQueryRunner& duckDbQueryRunner,
+    memory::MemoryPool* pool);
+
+RowVectorPtr makeNullInput(
+    const std::vector<core::CallTypedExprPtr>& aggregateCalls,
+    const std::vector<std::string>& groupingKeys,
+    const RowVectorPtr& sourceInput,
+    memory::MemoryPool* pool);
+
 } // namespace
 
 std::vector<RowVectorPtr> AggregationTestBase::makeVectors(
@@ -674,6 +691,58 @@ void AggregationTestBase::testAggregationsWithCompanion(
           config);
     }
   }
+
+  bool allFunctionsIgnoreNullInputs{true};
+  for (const auto& functionName : functionNames) {
+    const auto* functionEntry = exec::getAggregateFunctionEntry(functionName);
+    VELOX_CHECK_NOT_NULL(functionEntry);
+    if (!functionEntry->metadata.ignoreNullInputs) {
+      allFunctionsIgnoreNullInputs = false;
+      break;
+    }
+  }
+  if (allFunctionsIgnoreNullInputs) {
+    SCOPED_TRACE("Run merge with null inputs");
+    // Verify that merge-extract companions ignore null intermediate inputs.
+    // Produce real intermediate states from the raw input, add null-bearing
+    // copies, then merge and validate using the original result assertion.
+    PlanBuilder partialBuilder(pool());
+    partialBuilder.values(dataWithExtraGroupingKey);
+    preAggregationProcessing(partialBuilder);
+    partialBuilder
+        .partialAggregation(groupingKeysWithPartialKey, partialAggregates)
+        .finalAggregation();
+    const auto intermediateInput = AssertQueryBuilder(partialBuilder.planNode())
+                                       .configs(config)
+                                       .copyResults(pool());
+
+    PlanBuilder mergeExtractBuilder(pool());
+    mergeExtractBuilder.values({intermediateInput})
+        .singleAggregation(groupingKeys, mergeExtractAggregates);
+    const auto& mergeExtractNode = static_cast<const core::AggregationNode&>(
+        *mergeExtractBuilder.planNode());
+
+    std::vector<core::CallTypedExprPtr> mergeExtractCalls;
+    mergeExtractCalls.reserve(mergeExtractNode.aggregates().size());
+    for (const auto& aggregate : mergeExtractNode.aggregates()) {
+      mergeExtractCalls.push_back(aggregate.call);
+    }
+
+    const auto inputWithNulls = makeNullInput(
+        mergeExtractCalls, groupingKeys, intermediateInput, pool());
+    if (inputWithNulls) {
+      PlanBuilder builder(pool());
+      builder.values({inputWithNulls})
+          .singleAggregation(groupingKeys, mergeExtractAggregates);
+      if (!postAggregationProjections.empty()) {
+        builder.project(postAggregationProjections);
+      }
+
+      AssertQueryBuilder queryBuilder(builder.planNode(), duckDbQueryRunner_);
+      queryBuilder.configs(config);
+      assertResults(queryBuilder);
+    }
+  }
 }
 
 namespace {
@@ -1246,6 +1315,16 @@ void AggregationTestBase::testAggregations(
       assertResults,
       config);
 
+  testIgnoreNullInputs(
+      makeSource,
+      groupingKeys,
+      aggregates,
+      postAggregationProjections,
+      assertResults,
+      config,
+      duckDbQueryRunner_,
+      pool());
+
   if (testIncremental_) {
     SCOPED_TRACE("testIncrementalAggregation");
     testIncrementalAggregation(makeSource, aggregates, config);
@@ -1307,27 +1386,157 @@ std::unique_ptr<exec::Aggregate> createAggregateFunction(
   auto intermediateType =
       exec::resolveIntermediateType(functionName, inputTypes);
   core::QueryConfig queryConfig({config});
+  // Pass constant inputs so aggregates can read constant arguments at
+  // initialization time (e.g., ignoreNulls flag for collect_set).
+  std::vector<VectorPtr> constantInputs(rawInputs.size());
+  for (size_t i = 0; i < rawInputs.size(); ++i) {
+    if (rawInputs[i] && rawInputs[i]->isConstantEncoding()) {
+      constantInputs[i] = rawInputs[i];
+    }
+  }
   auto func = exec::Aggregate::create(
       functionName,
       core::AggregationNode::Step::kSingle,
       inputTypes,
       finalType,
-      queryConfig);
-  // Pass constant inputs so aggregates can read constant arguments at
-  // initialization time (e.g., ignoreNulls flag for collect_set).
-  if (!rawInputs.empty()) {
-    std::vector<VectorPtr> constantInputs(rawInputs.size());
-    for (size_t i = 0; i < rawInputs.size(); ++i) {
-      if (rawInputs[i] && rawInputs[i]->isConstantEncoding()) {
-        constantInputs[i] = rawInputs[i];
-      }
-    }
-    func->setConstantInputs(constantInputs);
-  }
+      queryConfig,
+      constantInputs);
   func->setAllocator(&allocator);
   func->setOffsets(kOffset, 0, 1, 0, 2, kRowSizeOffset);
 
   return func;
+}
+
+// Copies every source row twice. Each even row has one non-grouping column
+// argument of every aggregate set to null in round-robin order, while each odd
+// row preserves the original input.
+RowVectorPtr makeNullInput(
+    const std::vector<core::CallTypedExprPtr>& aggregateCalls,
+    const std::vector<std::string>& groupingKeys,
+    const RowVectorPtr& sourceInput,
+    memory::MemoryPool* pool) {
+  std::vector<std::vector<std::string>> columnArgumentsPerAggregate;
+  columnArgumentsPerAggregate.reserve(aggregateCalls.size());
+  for (const auto& aggregateCall : aggregateCalls) {
+    std::vector<std::string> columnArguments;
+    for (const auto& argument : aggregateCall->inputs()) {
+      if (const auto field = core::TypedExprs::asFieldAccess(argument); field &&
+          std::find(groupingKeys.begin(), groupingKeys.end(), field->name()) ==
+              groupingKeys.end()) {
+        columnArguments.push_back(field->name());
+      }
+    }
+    if (columnArguments.empty()) {
+      return nullptr;
+    }
+    columnArgumentsPerAggregate.push_back(std::move(columnArguments));
+  }
+  if (columnArgumentsPerAggregate.empty() || sourceInput->size() == 0) {
+    return nullptr;
+  }
+
+  const auto size = 2 * sourceInput->size();
+  auto indices = allocateIndices(size, pool);
+  auto* rawIndices = indices->asMutable<vector_size_t>();
+  for (vector_size_t row = 0; row < size; ++row) {
+    rawIndices[row] = row / 2;
+  }
+
+  const auto& sourceType = sourceInput->type()->asRow();
+  auto names = sourceType.names();
+  auto types = sourceType.children();
+  std::vector<VectorPtr> children;
+  children.reserve(sourceInput->childrenSize());
+  for (size_t column = 0; column < sourceInput->childrenSize(); ++column) {
+    BufferPtr nulls;
+    for (vector_size_t row = 0; row < size; ++row) {
+      if (row % 2 == 0) {
+        const auto sourceRow = row / 2;
+        for (const auto& columnArguments : columnArgumentsPerAggregate) {
+          if (columnArguments[sourceRow % columnArguments.size()] ==
+              names[column]) {
+            if (!nulls) {
+              nulls = allocateNulls(size, pool, bits::kNotNull);
+            }
+            bits::setNull(nulls->asMutable<uint64_t>(), row);
+            break;
+          }
+        }
+      }
+    }
+    children.push_back(
+        BaseVector::wrapInDictionary(
+            nulls, indices, size, sourceInput->childAt(column)));
+  }
+
+  return std::make_shared<RowVector>(
+      pool,
+      ROW(std::move(names), std::move(types)),
+      nullptr,
+      size,
+      std::move(children));
+}
+
+void testIgnoreNullInputs(
+    const std::function<void(PlanBuilder&)>& makeSource,
+    const std::vector<std::string>& groupingKeys,
+    const std::vector<std::string>& aggregates,
+    const std::vector<std::string>& postAggregationProjections,
+    const std::function<std::shared_ptr<exec::Task>(AssertQueryBuilder&)>&
+        assertResults,
+    const std::unordered_map<std::string, std::string>& config,
+    exec::test::DuckDbQueryRunner& duckDbQueryRunner,
+    memory::MemoryPool* pool) {
+  PlanBuilder sourceBuilder(pool);
+  makeSource(sourceBuilder);
+  const auto sourceInput = AssertQueryBuilder(sourceBuilder.planNode())
+                               .configs(config)
+                               .copyResults(pool);
+
+  PlanBuilder builder(pool);
+  makeSource(builder);
+  builder.singleAggregation(groupingKeys, aggregates);
+  const auto& aggregationNode =
+      static_cast<const core::AggregationNode&>(*builder.planNode());
+
+  std::vector<core::CallTypedExprPtr> aggregateCalls;
+  aggregateCalls.reserve(aggregationNode.aggregates().size());
+  for (const auto& aggregate : aggregationNode.aggregates()) {
+    const auto& call = aggregate.call;
+    const auto& functionName = call->name();
+    if (functionName.starts_with("$internal$")) {
+      aggregateCalls.clear();
+      break;
+    }
+    const auto* functionEntry = exec::getAggregateFunctionEntry(functionName);
+    VELOX_CHECK_NOT_NULL(functionEntry);
+    if (!functionEntry->metadata.ignoreNullInputs ||
+        aggregate.rawInputTypes.empty()) {
+      aggregateCalls.clear();
+      break;
+    }
+    aggregateCalls.push_back(call);
+  }
+
+  if (aggregateCalls.empty()) {
+    return;
+  }
+
+  const auto nullInput =
+      makeNullInput(aggregateCalls, groupingKeys, sourceInput, pool);
+  if (nullInput) {
+    SCOPED_TRACE("raw input");
+    PlanBuilder actualBuilder(pool);
+    actualBuilder.values({nullInput})
+        .singleAggregation(groupingKeys, aggregates);
+    if (!postAggregationProjections.empty()) {
+      actualBuilder.project(postAggregationProjections);
+    }
+    AssertQueryBuilder queryBuilder(
+        actualBuilder.planNode(), duckDbQueryRunner);
+    queryBuilder.configs(config);
+    assertResults(queryBuilder);
+  }
 }
 
 } // namespace
@@ -1582,7 +1791,8 @@ uint32_t aggregateAndReadRowSize(
       core::AggregationNode::Step::kSingle,
       std::vector<TypePtr>{valueType, comparisons->type()},
       valueType,
-      queryConfig);
+      queryConfig,
+      /*constantInputs=*/{});
 
   HashStringAllocator stringAllocator{pool};
   fn->setAllocator(&stringAllocator);

@@ -116,7 +116,7 @@ std::vector<exec::AggregateRegistrationResult> registerSum(
                 inputType->kindName());
         }
       },
-      {.orderSensitive = false},
+      {.orderSensitive = false, .ignoreNullInputs = true},
       withCompanionFunctions,
       overwrite);
 }

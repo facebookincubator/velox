@@ -68,6 +68,14 @@ struct ElementwiseOp {
   /// index_select know the shape it is iterating over, distinct from its own
   /// (possibly broadcast) output shape.
   bool hasOutputArg{false};
+
+  /// If true, the op's own output tensor is passed after the enclosing
+  /// expression's output (hasOutputArg) and before blockInfo. A fused op that
+  /// decomposes 'idx' into coordinates reads them from its own shape, which
+  /// a reshaping view between it and the expression output does not change.
+  /// Needs sizeFromOutput so the output exists as a shape-only tensor when
+  /// fused.
+  bool hasOwnOutputArg{false};
 };
 
 /// Common cases of determining output size: kNone is a custom function, kMax is
@@ -740,6 +748,7 @@ class MetadataBuilder {
   MetadataBuilder& hasSizeArg(bool val = true);
   MetadataBuilder& hasBlockInfo(bool val = true);
   MetadataBuilder& hasOutputArg(bool val = true);
+  MetadataBuilder& hasOwnOutputArg(bool val = true);
   MetadataBuilder& isScalarElementwise(bool val = true);
 
   Metadata build();

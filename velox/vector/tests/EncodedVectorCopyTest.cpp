@@ -1140,6 +1140,229 @@ TEST_P(EncodedVectorCopyTest, fuzzer) {
   }
 }
 
+TEST_P(EncodedVectorCopyTest, allNullDictionaryOverEmptyBase) {
+  // Every row is null, so the dictionary needs no base rows.
+  auto nulls = allocateNulls(2, pool(), bits::kNull);
+  auto source = BaseVector::wrapInDictionary(
+      nulls,
+      makeIndices({0, 0}),
+      2,
+      makeArrayVector<int64_t>(std::vector<std::vector<int64_t>>{}));
+  VectorPtr target = makeArrayVector<int64_t>({{1}, {2}, {3}});
+  BaseVector::CopyRange range = {0, 1, 2};
+  copy(source, folly::Range(&range, 1), target);
+
+  auto expected = makeNullableArrayVector<int64_t>({
+      {{1}},
+      std::nullopt,
+      std::nullopt,
+  });
+  test::assertEqualVectors(expected, target);
+}
+
+TEST_P(EncodedVectorCopyTest, lazyFlatMapIntoFlatMap) {
+  // Like the fuzzer tests, use lazy sources only when the source is reused.
+  if (!reuseSource()) {
+    GTEST_SKIP();
+  }
+  auto flatMap = vectorMaker_.flatMapVector<int64_t, int64_t>({
+      {{1, 10}},
+      {{2, 20}},
+  });
+  auto source = std::make_shared<LazyVector>(
+      pool(),
+      flatMap->type(),
+      flatMap->size(),
+      std::make_unique<test::SimpleVectorLoader>(
+          [&](RowSet /*rows*/) { return flatMap; }));
+  VectorPtr target = vectorMaker_.flatMapVector<int64_t, int64_t>({
+      {{7, 70}},
+      {{8, 80}},
+      {{9, 90}},
+  });
+  BaseVector::CopyRange range = {0, 1, 2};
+  copy(source, folly::Range(&range, 1), target);
+
+  auto expected = makeMapVector<int64_t, int64_t>({
+      {{7, 70}},
+      {{1, 10}},
+      {{2, 20}},
+  });
+  test::assertEqualVectors(expected, target);
+}
+
+TEST_P(EncodedVectorCopyTest, copyBetweenMapAndFlatMap) {
+  auto flatMap = vectorMaker_.flatMapVector<int64_t, int64_t>({
+      {{1, 100}, {2, 200}},
+      {{3, 300}},
+  });
+  auto map = makeMapVector<int64_t, int64_t>({
+      {{1, 100}, {2, 200}},
+      {{3, 300}},
+  });
+  BaseVector::CopyRange range = {0, 1, 2};
+
+  {
+    SCOPED_TRACE("Flat map into map");
+    VectorPtr target = makeMapVector<int64_t, int64_t>({
+        {{7, 70}},
+        {{8, 80}},
+        {{9, 90}},
+    });
+    copy(flatMap, folly::Range(&range, 1), target);
+    auto expected = makeMapVector<int64_t, int64_t>({
+        {{7, 70}},
+        {{1, 100}, {2, 200}},
+        {{3, 300}},
+    });
+    test::assertEqualVectors(expected, target);
+  }
+
+  {
+    SCOPED_TRACE("Flat map into immutable map");
+    VectorPtr target = makeMapVector<int64_t, int64_t>({
+        {{7, 70}},
+        {{8, 80}},
+        {{9, 90}},
+    });
+    auto immutableTarget = target;
+    copy(flatMap, folly::Range(&range, 1), immutableTarget);
+    auto expected = makeMapVector<int64_t, int64_t>({
+        {{7, 70}},
+        {{1, 100}, {2, 200}},
+        {{3, 300}},
+    });
+    test::assertEqualVectors(expected, immutableTarget);
+  }
+
+  {
+    SCOPED_TRACE("Map into flat map");
+    VectorPtr target = vectorMaker_.flatMapVector<int64_t, int64_t>({
+        {{7, 70}},
+        {{8, 80}},
+        {{9, 90}},
+    });
+    copy(map, folly::Range(&range, 1), target);
+    auto expected = makeMapVector<int64_t, int64_t>({
+        {{7, 70}},
+        {{1, 100}, {2, 200}},
+        {{3, 300}},
+    });
+    test::assertEqualVectors(expected, target);
+  }
+
+  {
+    // The target grows by a row. Its key's values are a dictionary of nulls
+    // over an empty vector, so the indices added by resizing it point past the
+    // end.
+    SCOPED_TRACE("Map into growing flat map with dictionary values");
+    auto type = MAP(BIGINT(), ARRAY(BIGINT()));
+    VectorPtr target = std::make_shared<FlatMapVector>(
+        pool(),
+        type,
+        nullptr,
+        2,
+        makeFlatVector<int64_t>({1}),
+        std::vector<VectorPtr>{BaseVector::wrapInDictionary(
+            allocateNulls(2, pool(), bits::kNull),
+            makeIndices({0, 0}),
+            2,
+            makeArrayVector<int64_t>(std::vector<std::vector<int64_t>>{}))},
+        std::vector<BufferPtr>{nullptr});
+    auto source = makeMapVector(
+        {0}, makeFlatVector<int64_t>({1}), makeArrayVector<int64_t>({{100}}));
+    BaseVector::CopyRange growRange = {0, 2, 1};
+    copy(source, folly::Range(&growRange, 1), target);
+    auto expected = makeMapVector(
+        {0, 1, 2},
+        makeFlatVector<int64_t>({1, 1, 1}),
+        makeNullableArrayVector<int64_t>({
+            std::nullopt,
+            std::nullopt,
+            {{100}},
+        }));
+    test::assertEqualVectors(expected, target);
+  }
+
+  {
+    // A null constant has a MapVector under it.
+    SCOPED_TRACE("Null constant into flat map");
+    VectorPtr target = vectorMaker_.flatMapVector<int64_t, int64_t>({
+        {{7, 70}},
+        {{8, 80}},
+        {{9, 90}},
+    });
+    auto source = BaseVector::createNullConstant(map->type(), 2, pool());
+    copy(source, folly::Range(&range, 1), target);
+    auto expected = makeNullableMapVector<int64_t, int64_t>({
+        {{{7, 70}}},
+        std::nullopt,
+        std::nullopt,
+    });
+    test::assertEqualVectors(expected, target);
+  }
+}
+
+TEST_P(EncodedVectorCopyTest, flatMapVectorCopyIntoSlice) {
+  // Key 1 is in row 1 only, so it has an in-map buffer. Slicing at offset 0
+  // shares that buffer as a view.
+  auto inMap = AlignedBuffer::allocate<bool>(2, pool(), false);
+  bits::setBit(inMap->asMutable<uint64_t>(), 1);
+  auto flatMap = std::make_shared<FlatMapVector>(
+      pool(),
+      MAP(BIGINT(), BIGINT()),
+      nullptr,
+      2,
+      makeFlatVector<int64_t>({1}),
+      std::vector<VectorPtr>{makeFlatVector<int64_t>({0, 11})},
+      std::vector<BufferPtr>{inMap});
+  VectorPtr target = flatMap->slice(0, 2);
+  ASSERT_TRUE(target->as<FlatMapVector>()->inMapsAt(0)->isView());
+
+  auto source = vectorMaker_.flatMapVector<int64_t, int64_t>({
+      {{1, 10}},
+  });
+  BaseVector::CopyRange range = {0, 0, 1};
+  copy(source, folly::Range(&range, 1), target);
+
+  auto expected = makeMapVector<int64_t, int64_t>({
+      {{1, 10}},
+      {{1, 11}},
+  });
+  test::assertEqualVectors(expected, target);
+
+  // The sliced vector is unchanged.
+  auto expectedOriginal = makeMapVector<int64_t, int64_t>({
+      {},
+      {{1, 11}},
+  });
+  test::assertEqualVectors(expectedOriginal, flatMap);
+}
+
+TEST_P(EncodedVectorCopyTest, flatMapVectorCopyIntoKeysInAllRows) {
+  // Key 4 has no in-map buffer, so it is in both rows. The source lacks key
+  // 4, so copying source row 0 removes it from target row 0 only.
+  VectorPtr target = std::make_shared<FlatMapVector>(
+      pool(),
+      MAP(BIGINT(), BIGINT()),
+      nullptr,
+      2,
+      makeFlatVector<int64_t>({4}),
+      std::vector<VectorPtr>{makeFlatVector<int64_t>({40, 41})},
+      std::vector<BufferPtr>{nullptr});
+  auto source = vectorMaker_.flatMapVector<int64_t, int64_t>({
+      {{1, 10}},
+  });
+  BaseVector::CopyRange range = {0, 0, 1};
+  copy(source, folly::Range(&range, 1), target);
+
+  auto expected = makeMapVector<int64_t, int64_t>({
+      {{1, 10}},
+      {{4, 41}},
+  });
+  test::assertEqualVectors(expected, target);
+}
+
 TEST_P(EncodedVectorCopyTest, flatMapImmutableTargetGrow) {
   auto source = vectorMaker_.flatMapVector<int64_t, int64_t>({
       {{3, 300}, {4, 400}},
@@ -1176,18 +1399,22 @@ TEST_P(EncodedVectorCopyTest, flatMapImmutableTargetGrow) {
 TEST_P(EncodedVectorCopyTest, fuzzerFlatMapEncoded) {
   VectorFuzzer::Options fuzzerOptions;
   fuzzerOptions.allowLazyVector = reuseSource();
-  // Requires FlatMapVector to support encoded sources in copyRanges.
-  fuzzerOptions.allowConstantVector = false;
-  fuzzerOptions.allowDictionaryVector = false;
   fuzzerOptions.allowFlatMapVector = true;
-  fuzzerOptions.allowLazyVector = false;
   fuzzerOptions.flatMapRatio = 1.0;
+  // A fuzzed flat map gives each of its 'containerLength' keys a values vector
+  // as long as the map, so nested flat maps grow with containerLength to the
+  // power of the nesting depth.
+  fuzzerOptions.containerLength = 3;
   fuzzerOptions.normalizeMapKeys = false;
   fuzzerOptions.nullRatio = 0.05;
   auto seed = common::testutil::getRandomSeed(42);
   VectorFuzzer fuzzer(fuzzerOptions, pool(), seed);
   fuzzer::FuzzerGenerator rng(seed);
-  constexpr int kNumIterations = 10;
+#ifndef NDEBUG
+  constexpr int kNumIterations = 20;
+#else
+  constexpr int kNumIterations = 1000;
+#endif
   for (int i = 0; i < kNumIterations; ++i) {
     auto type = fuzzer.randType();
     SCOPED_TRACE(fmt::format("i={} type={}", i, type->toString()));

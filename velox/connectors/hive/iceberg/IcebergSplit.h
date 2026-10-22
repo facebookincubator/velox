@@ -19,10 +19,12 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
 #include "velox/connectors/hive/HiveConnectorSplit.h"
+#include "velox/connectors/hive/iceberg/IcebergChangelogSplitInfo.h"
 #include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
 
 namespace facebook::velox::connector::hive::iceberg {
@@ -52,6 +54,17 @@ struct HiveIcebergSplit : public connector::hive::HiveConnectorSplit {
   /// therefore cannot prove a transform is identity.
   std::unordered_map<int32_t, std::optional<std::string>> identityPartitionKeys;
 
+  /// Field IDs of the columns whose table-scan filter this file's partition
+  /// values already satisfy for every row, under any partition transform. The
+  /// reader skips evaluating those filters for this split. Empty means every
+  /// filter is evaluated.
+  std::unordered_set<int32_t> partitionEnforcedFieldIds;
+
+  /// Changelog split information. Present when this split represents a
+  /// changelog table query; contains the operation type, ordinal, and snapshot
+  /// ID that are constant for every row in the split.
+  std::optional<ChangelogSplitInfo> changelogSplitInfo;
+
   HiveIcebergSplit(
       const std::string& connectorId,
       const std::string& filePath,
@@ -70,7 +83,8 @@ struct HiveIcebergSplit : public connector::hive::HiveConnectorSplit {
       const std::unordered_map<int32_t, std::optional<std::string>>&
           identityPartitionKeys = {},
       std::optional<dwio::common::ColumnMappingMode> columnMappingMode =
-          std::nullopt);
+          std::nullopt,
+      std::optional<ChangelogSplitInfo> changelogSplitInfo = std::nullopt);
 
   // For tests only
   HiveIcebergSplit(
@@ -92,7 +106,8 @@ struct HiveIcebergSplit : public connector::hive::HiveConnectorSplit {
       const std::unordered_map<int32_t, std::optional<std::string>>&
           identityPartitionKeys = {},
       std::optional<dwio::common::ColumnMappingMode> columnMappingMode =
-          std::nullopt);
+          std::nullopt,
+      std::optional<ChangelogSplitInfo> changelogSplitInfo = std::nullopt);
 };
 
 /// Builds Iceberg splits with named parameters.
@@ -160,8 +175,20 @@ class IcebergSplitBuilder {
     return *this;
   }
 
+  /// See 'HiveIcebergSplit::partitionEnforcedFieldIds'.
+  IcebergSplitBuilder& partitionEnforcedFieldIds(
+      std::unordered_set<int32_t> fieldIds) {
+    partitionEnforcedFieldIds_ = std::move(fieldIds);
+    return *this;
+  }
+
   IcebergSplitBuilder& columnMappingMode(dwio::common::ColumnMappingMode mode) {
     columnMappingMode_ = mode;
+    return *this;
+  }
+
+  IcebergSplitBuilder& changelogSplitInfo(ChangelogSplitInfo info) {
+    changelogSplitInfo_ = std::move(info);
     return *this;
   }
 
@@ -180,7 +207,9 @@ class IcebergSplitBuilder {
   int64_t dataSequenceNumber_{0};
   std::unordered_map<int32_t, std::optional<std::string>>
       identityPartitionKeys_;
+  std::unordered_set<int32_t> partitionEnforcedFieldIds_;
   std::optional<dwio::common::ColumnMappingMode> columnMappingMode_;
+  std::optional<ChangelogSplitInfo> changelogSplitInfo_;
 };
 
 } // namespace facebook::velox::connector::hive::iceberg

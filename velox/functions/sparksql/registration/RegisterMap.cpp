@@ -20,7 +20,8 @@
 namespace facebook::velox::functions {
 extern void registerElementAtFunction(
     const std::string& name,
-    bool enableCaching);
+    bool enableCaching,
+    std::string_view defaultOwner = {});
 
 void registerSparkMapFunctions(const std::string& prefix) {
   registerMapFromEntriesFunction(
@@ -44,6 +45,7 @@ void registerMapFunctions(const std::string& prefix) {
   VELOX_REGISTER_VECTOR_FUNCTION(udf_map, prefix + "map");
   VELOX_REGISTER_VECTOR_FUNCTION(
       udf_map_from_arrays, prefix + "map_from_arrays");
+  VELOX_REGISTER_VECTOR_FUNCTION(udf_transform_keys, prefix + "transform_keys");
   // This is the semantics of spark.sql.ansi.enabled = false.
   registerElementAtFunction(prefix + "element_at", true);
 }

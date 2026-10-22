@@ -33,6 +33,7 @@
 #include "velox/common/memory/Memory.h"
 #include "velox/common/testutil/TempFilePath.h"
 #include "velox/common/testutil/TestValue.h"
+#include "velox/dwio/nimble/tablet/BlockCache.h"
 
 namespace facebook::nimble {
 namespace {
@@ -77,8 +78,20 @@ class DataInputTest : public ::testing::Test {
   }
 
   void SetUp() override {
+    velox::ThreadLocalIoUringReader::testingClear();
+    velox::IoUringReader::setOptions({
+        .submissionQueueDepth = 8,
+        .completionQueueDepth = 8,
+        .registeredFileSlots = 8,
+    });
     pool_ = velox::memory::memoryManager()->addLeafPool("DataInputTest");
     ioStats_ = std::make_shared<velox::io::IoStatistics>();
+  }
+
+  void TearDown() override {
+    testingResetBlockCache();
+    velox::ThreadLocalIoUringReader::testingClear();
+    velox::IoUringReader::setOptions(velox::IoUringReader::Options{});
   }
 
   std::unique_ptr<velox::InMemoryReadFile> createFile(
@@ -130,6 +143,31 @@ struct CachedLocalReadMode {
 class CachedDataInputLocalFileTest
     : public DataInputTest,
       public ::testing::WithParamInterface<CachedLocalReadMode> {};
+
+TEST_F(DataInputTest, reportsCacheUsage) {
+  auto file = createFile("data");
+  {
+    DirectDataInput input{file.get(), makeOptions()};
+    EXPECT_FALSE(input.cached());
+  }
+
+  auto cache = velox::cache::AsyncDataCache::create(
+      velox::memory::memoryManager()->allocator());
+  auto* dataCache = getBlockCache(cache.get());
+  velox::StringIdLease fileId{
+      velox::fileIds(), "DataInputTest.reportsCacheUsage"};
+  CachedDataInput::Options options{
+      .pool = pool_.get(),
+      .cache = dataCache,
+      .fileId = fileId.id(),
+      .ioStats = ioStats_,
+  };
+  {
+    CachedDataInput input{file.get(), options};
+    EXPECT_TRUE(input.cached());
+  }
+  cache->shutdown();
+}
 
 TEST_P(DataInputParamTest, singleGroup) {
   // Use alignment-friendly size (multiple of 4096).
@@ -326,12 +364,13 @@ TEST_F(DataInputTest, cachesWholeGroups) {
   auto file = createFile(data);
   auto cache = velox::cache::AsyncDataCache::create(
       velox::memory::memoryManager()->allocator());
+  auto* dataCache = getBlockCache(cache.get());
   velox::StringIdLease fileId{
       velox::fileIds(), "CachedDataInputTest.cachesWholeGroups"};
 
   CachedDataInput::Options options{
       .pool = pool_.get(),
-      .cache = cache.get(),
+      .cache = dataCache,
       .fileId = fileId.id(),
       .ioStats = ioStats_,
   };
@@ -377,6 +416,261 @@ TEST_F(DataInputTest, cachesWholeGroups) {
   cache->shutdown();
 }
 
+// The verifier sees each enqueued region's own bytes, not the coalesced read,
+// and sees a duplicate region only once under its canonical index.
+TEST_F(DataInputTest, directDataInputVerifiesEachRegionOnce) {
+  std::string data(4'096, '\0');
+  for (size_t i{0}; i < data.size(); ++i) {
+    data[i] = static_cast<char>(i % 251);
+  }
+  auto file = createFile(data);
+  DirectDataInput input{file.get(), makeOptions()};
+
+  input.reserve(3);
+  input.startGroup();
+  const auto first = input.enqueue(DataInput::Region{180, 80});
+  const auto duplicate = input.enqueue(DataInput::Region{180, 80});
+  const auto second = input.enqueue(DataInput::Region{500, 50});
+
+  std::vector<std::pair<uint32_t, std::string>> seen;
+  auto handle = input.load([&](uint32_t index, std::string_view bytes) {
+    seen.emplace_back(index, std::string{bytes});
+  });
+
+  ASSERT_EQ(seen.size(), 2);
+  EXPECT_EQ(seen[0].first, first);
+  EXPECT_EQ(seen[0].second, data.substr(180, 80));
+  EXPECT_EQ(seen[1].first, second);
+  EXPECT_EQ(seen[1].second, data.substr(500, 50));
+  EXPECT_EQ(input.bufferRef(duplicate).canonicalIndex, first);
+}
+
+TEST_F(DataInputTest, directDataInputPropagatesVerifierFailure) {
+  std::string data(4'096, 'x');
+  auto file = createFile(data);
+  DirectDataInput input{file.get(), makeOptions()};
+
+  input.reserve(1);
+  input.startGroup();
+  input.enqueue(DataInput::Region{0, 128});
+
+  NIMBLE_ASSERT_THROW(
+      input.load([](uint32_t, std::string_view) {
+        NIMBLE_CHECK_FILE(false, "rejected by verifier");
+      }),
+      "rejected by verifier");
+}
+
+// Verification is tied to reading from storage, not to access. A group served
+// from cache must not be re-verified, because its bytes were already checked
+// by whoever loaded them.
+TEST_F(DataInputTest, cachedDataInputVerifiesMissesOnly) {
+  std::string data(4'096, '\0');
+  for (size_t i{0}; i < data.size(); ++i) {
+    data[i] = static_cast<char>(i % 251);
+  }
+  auto file = createFile(data);
+  auto cache = velox::cache::AsyncDataCache::create(
+      velox::memory::memoryManager()->allocator());
+  auto* dataCache = getBlockCache(cache.get());
+  velox::StringIdLease fileId{
+      velox::fileIds(), "CachedDataInputTest.verifiesMissesOnly"};
+
+  CachedDataInput::Options options{
+      .pool = pool_.get(),
+      .cache = dataCache,
+      .fileId = fileId.id(),
+      .ioStats = ioStats_,
+  };
+  {
+    CachedDataInput input{file.get(), options};
+    for (int32_t cycle{0}; cycle < 2; ++cycle) {
+      SCOPED_TRACE(fmt::format("cycle={}", cycle));
+      input.reserve(2);
+      input.startGroup(DataInput::Region{100, 1'000});
+      const auto first = input.enqueue(DataInput::Region{180, 80});
+      input.enqueue(DataInput::Region{500, 50});
+
+      std::vector<std::pair<uint32_t, std::string>> seen;
+      auto handle = input.load([&](uint32_t index, std::string_view bytes) {
+        seen.emplace_back(index, std::string{bytes});
+      });
+
+      if (cycle == 0) {
+        // Cache miss: both regions come off storage and are verified, each
+        // seeing its own slice of the cached group rather than the whole
+        // group region.
+        ASSERT_EQ(seen.size(), 2);
+        EXPECT_EQ(seen[0].first, first);
+        EXPECT_EQ(seen[0].second, data.substr(180, 80));
+        EXPECT_EQ(seen[1].second, data.substr(500, 50));
+      } else {
+        EXPECT_TRUE(seen.empty());
+      }
+
+      handle.reset();
+      input.clear();
+    }
+  }
+  cache->shutdown();
+}
+
+// Rejecting a group must leave nothing behind in the cache: the entry is still
+// held exclusively when the verifier runs, so a failure has to drop it rather
+// than publish unverified bytes for the next reader to hit.
+TEST_F(DataInputTest, cachedDataInputRejectedGroupIsNotCached) {
+  std::string data(4'096, '\0');
+  for (size_t i{0}; i < data.size(); ++i) {
+    data[i] = static_cast<char>(i % 251);
+  }
+  auto file = createFile(data);
+  auto cache = velox::cache::AsyncDataCache::create(
+      velox::memory::memoryManager()->allocator());
+  auto* dataCache = getBlockCache(cache.get());
+  velox::StringIdLease fileId{
+      velox::fileIds(), "CachedDataInputTest.rejectedGroupIsNotCached"};
+
+  CachedDataInput::Options options{
+      .pool = pool_.get(),
+      .cache = dataCache,
+      .fileId = fileId.id(),
+      .ioStats = ioStats_,
+  };
+  {
+    CachedDataInput input{file.get(), options};
+    input.reserve(1);
+    input.startGroup(DataInput::Region{100, 1'000});
+    input.enqueue(DataInput::Region{180, 80});
+    NIMBLE_ASSERT_THROW(
+        input.load([](uint32_t, std::string_view) {
+          NIMBLE_CHECK_FILE(false, "rejected by verifier");
+        }),
+        "rejected by verifier");
+    input.clear();
+  }
+
+  // A second reader must re-read from storage rather than hit a poisoned
+  // entry, and must succeed once the verifier accepts.
+  ioStats_ = std::make_shared<velox::io::IoStatistics>();
+  options.ioStats = ioStats_;
+  {
+    CachedDataInput input{file.get(), options};
+    input.reserve(1);
+    input.startGroup(DataInput::Region{100, 1'000});
+    const auto region = input.enqueue(DataInput::Region{180, 80});
+    size_t verified{0};
+    auto handle = input.load([&](uint32_t, std::string_view bytes) {
+      EXPECT_EQ(bytes, data.substr(180, 80));
+      ++verified;
+    });
+    EXPECT_EQ(verified, 1);
+    EXPECT_EQ(ioStats_->ramHit().count(), 0);
+    EXPECT_EQ(refData(input.bufferRef(region)), data.substr(180, 80));
+    handle.reset();
+    input.clear();
+  }
+  cache->shutdown();
+}
+
+// Under O_DIRECT the read is page-aligned and overreads, and CachedDataInput
+// stages it before copying into the cache entry. The callback must still see
+// exactly the enqueued region's bytes, and must run after that copy.
+TEST_F(DataInputTest, loadCallbackSeesExactBytesUnderDirectIo) {
+  std::string data(16'384, '\0');
+  for (size_t i = 0; i < data.size(); ++i) {
+    data[i] = static_cast<char>(i % 251);
+  }
+
+  {
+    DirectIoInMemoryReadFile file(data);
+    DirectDataInput input{&file, makeOptions()};
+    input.reserve(1);
+    input.startGroup();
+    const auto region = input.enqueue(DataInput::Region{4'100, 200});
+
+    std::vector<std::pair<uint32_t, std::string>> seen;
+    auto handle = input.load([&](uint32_t index, std::string_view bytes) {
+      seen.emplace_back(index, std::string{bytes});
+    });
+    ASSERT_EQ(seen.size(), 1);
+    EXPECT_EQ(seen[0].first, region);
+    EXPECT_EQ(seen[0].second, data.substr(4'100, 200));
+  }
+
+  DirectIoInMemoryReadFile file(data);
+  auto cache = velox::cache::AsyncDataCache::create(
+      velox::memory::memoryManager()->allocator());
+  auto* dataCache = getBlockCache(cache.get());
+  velox::StringIdLease fileId{
+      velox::fileIds(), "CachedDataInputTest.directIoLoadCallback"};
+  CachedDataInput::Options options{
+      .pool = pool_.get(),
+      .cache = dataCache,
+      .fileId = fileId.id(),
+      .ioStats = ioStats_,
+  };
+  {
+    CachedDataInput input{&file, options};
+    input.reserve(1);
+    input.startGroup(DataInput::Region{4'096, 1'024});
+    const auto region = input.enqueue(DataInput::Region{4'100, 200});
+
+    std::vector<std::pair<uint32_t, std::string>> seen;
+    auto handle = input.load([&](uint32_t index, std::string_view bytes) {
+      seen.emplace_back(index, std::string{bytes});
+    });
+    ASSERT_EQ(seen.size(), 1);
+    EXPECT_EQ(seen[0].first, region);
+    EXPECT_EQ(seen[0].second, data.substr(4'100, 200));
+    EXPECT_EQ(refData(input.bufferRef(region)), data.substr(4'100, 200));
+    handle.reset();
+    input.clear();
+  }
+  cache->shutdown();
+}
+
+// Duplicate regions share one physical read, so the callback sees them once,
+// under the canonical index — on the cached path as well as the direct one.
+TEST_F(DataInputTest, cachedDataInputPassesDuplicateRegionsOnce) {
+  std::string data(4'096, '\0');
+  for (size_t i = 0; i < data.size(); ++i) {
+    data[i] = static_cast<char>(i % 251);
+  }
+  auto file = createFile(data);
+  auto cache = velox::cache::AsyncDataCache::create(
+      velox::memory::memoryManager()->allocator());
+  auto* dataCache = getBlockCache(cache.get());
+  velox::StringIdLease fileId{
+      velox::fileIds(), "CachedDataInputTest.duplicateRegionsOnce"};
+  CachedDataInput::Options options{
+      .pool = pool_.get(),
+      .cache = dataCache,
+      .fileId = fileId.id(),
+      .ioStats = ioStats_,
+  };
+  {
+    CachedDataInput input{file.get(), options};
+    input.reserve(3);
+    input.startGroup(DataInput::Region{100, 1'000});
+    const auto first = input.enqueue(DataInput::Region{180, 80});
+    const auto duplicate = input.enqueue(DataInput::Region{180, 80});
+    const auto second = input.enqueue(DataInput::Region{500, 50});
+
+    std::vector<uint32_t> seen;
+    auto handle = input.load([&](uint32_t index, std::string_view bytes) {
+      seen.push_back(index);
+      EXPECT_EQ(
+          bytes, index == second ? data.substr(500, 50) : data.substr(180, 80));
+    });
+
+    EXPECT_EQ(seen, (std::vector<uint32_t>{first, second}));
+    EXPECT_EQ(input.bufferRef(duplicate).canonicalIndex, first);
+    handle.reset();
+    input.clear();
+  }
+  cache->shutdown();
+}
+
 TEST_F(DataInputTest, loadHandlePinsCachedGroups) {
   std::string data(4'096, '\0');
   for (size_t i{0}; i < data.size(); ++i) {
@@ -385,11 +679,12 @@ TEST_F(DataInputTest, loadHandlePinsCachedGroups) {
   auto file = createFile(data);
   auto cache = velox::cache::AsyncDataCache::create(
       velox::memory::memoryManager()->allocator());
+  auto* dataCache = getBlockCache(cache.get());
   velox::StringIdLease fileId{
       velox::fileIds(), "CachedDataInputTest.loadHandlePinsCachedGroups"};
   CachedDataInput::Options options{
       .pool = pool_.get(),
-      .cache = cache.get(),
+      .cache = dataCache,
       .fileId = fileId.id(),
       .ioStats = ioStats_,
   };
@@ -429,11 +724,12 @@ TEST_F(DataInputTest, cacheMissFailureReleasesEntries) {
   }
   auto cache = velox::cache::AsyncDataCache::create(
       velox::memory::memoryManager()->allocator());
+  auto* dataCache = getBlockCache(cache.get());
   velox::StringIdLease fileId{
       velox::fileIds(), "CachedDataInputTest.cacheMissFailureReleasesEntries"};
   CachedDataInput::Options options{
       .pool = pool_.get(),
-      .cache = cache.get(),
+      .cache = dataCache,
       .fileId = fileId.id(),
       .ioStats = ioStats_,
   };
@@ -491,6 +787,7 @@ TEST_P(CachedDataInputLocalFileTest, cachesWholeGroups) {
       readMode.useIoUring);
   auto cache = velox::cache::AsyncDataCache::create(
       velox::memory::memoryManager()->allocator());
+  auto* dataCache = getBlockCache(cache.get());
   velox::StringIdLease fileId{
       velox::fileIds(),
       fmt::format("CachedDataInputLocalFileTest.{}", readMode.name)};
@@ -499,7 +796,7 @@ TEST_P(CachedDataInputLocalFileTest, cachesWholeGroups) {
   constexpr uint64_t kPayloadBytes = 80 + 50 + 100 + 256;
   CachedDataInput::Options options{
       .pool = pool_.get(),
-      .cache = cache.get(),
+      .cache = dataCache,
       .fileId = fileId.id(),
       .ioStats = ioStats_,
   };

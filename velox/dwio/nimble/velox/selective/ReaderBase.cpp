@@ -114,7 +114,9 @@ std::unique_ptr<velox::dwio::common::BufferedInput> maybePreloadInput(
   velox::dwio::common::ReadFileInputStream(
       readFile,
       velox::dwio::common::MetricsLog::voidLog(),
-      options.dataIoStats().get())
+      options.dataIoStats().get(),
+      /*ioStats=*/nullptr,
+      input->getInputStream()->fileIoContext().fileOpts)
       .read(
           buffer->asMutable<char>(),
           fileSize,
@@ -208,7 +210,34 @@ ReaderBase::ReaderBase(
           return {};
         }
         return fileStats->toColumnStatistics(fileSchema_, nimbleSchema_);
-      }()} {}
+      }()},
+      stripeColumnStats_{
+          [&]() -> std::vector<std::vector<std::unique_ptr<ColumnStatistics>>> {
+            auto statsSection =
+                tablet_->loadOptionalSection(std::string(kStripeStatsSection));
+            if (!statsSection.has_value()) {
+              return {};
+            }
+            // Pruning is an optimization, so a section that cannot be read
+            // costs a full scan rather than the file. This load is not covered
+            // by the pruning killswitch, so a throw here is unrecoverable for
+            // every read of the file.
+            try {
+              auto stripeStats = VectorizedStripeStats::deserialize(
+                  statsSection->content(), *pool_);
+              if (!stripeStats) {
+                return {};
+              }
+              return stripeStats->takeStripeColumnStatistics(
+                  fileSchema_, nimbleSchema_);
+            } catch (const std::exception& e) {
+              LOG(WARNING)
+                  << "Ignoring unreadable Nimble stripe-stats section, "
+                     "falling back to a full scan: "
+                  << e.what();
+              return {};
+            }
+          }()} {}
 
 void LazyInput::load() {
   if (!loaded_) {

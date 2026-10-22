@@ -35,7 +35,7 @@ const std::vector<config::ConfigProperty>& QueryConfig::registeredProperties() {
     VELOX_REGISTER_QUERY_CONFIG(kSessionTimezone);
     VELOX_REGISTER_QUERY_CONFIG(kSessionStartTime);
     VELOX_REGISTER_QUERY_CONFIG(kAdjustTimestampToTimezone);
-    VELOX_REGISTER_QUERY_CONFIG(kLegacyTimestampWithTimezone);
+    VELOX_REGISTER_QUERY_CONFIG(kUseSessionTimezoneForTimestampWithTimezone);
 
     // Expression evaluation.
     VELOX_REGISTER_QUERY_CONFIG(kExprEvalSimplified);
@@ -54,6 +54,7 @@ const std::vector<config::ConfigProperty>& QueryConfig::registeredProperties() {
     // Cast.
     VELOX_REGISTER_QUERY_CONFIG(kLegacyCast);
     VELOX_REGISTER_QUERY_CONFIG(kCastMatchStructByName);
+    VELOX_REGISTER_QUERY_CONFIG(kCastStringToFloatingPointLenientInfNan);
 
     // Local exchange.
     VELOX_REGISTER_QUERY_CONFIG(kMaxLocalExchangeBufferSize);
@@ -99,6 +100,7 @@ const std::vector<config::ConfigProperty>& QueryConfig::registeredProperties() {
     VELOX_REGISTER_QUERY_CONFIG(kPreferredOutputBatchRows);
     VELOX_REGISTER_QUERY_CONFIG(kMaxOutputBatchRows);
     VELOX_REGISTER_QUERY_CONFIG(kMergeJoinOutputBatchStartSize);
+    VELOX_REGISTER_QUERY_CONFIG(kMergeJoinStreamLeftSide);
 
     // Table scan.
     VELOX_REGISTER_QUERY_CONFIG(kTableScanGetOutputTimeLimitMs);
@@ -145,6 +147,7 @@ const std::vector<config::ConfigProperty>& QueryConfig::registeredProperties() {
 
     // Task writer.
     VELOX_REGISTER_QUERY_CONFIG(kTaskWriterCount);
+    VELOX_REGISTER_QUERY_CONFIG(kTaskPartitionedWriterCount);
 
     // Hash probe.
     VELOX_REGISTER_QUERY_CONFIG(kHashProbeFinishEarlyOnEmptyBuild);
@@ -260,15 +263,18 @@ const std::vector<config::ConfigProperty>& QueryConfig::registeredProperties() {
     VELOX_REGISTER_QUERY_CONFIG(kMarkSortedZeroCopyThreshold);
 
     // RPC congestion.
+    VELOX_REGISTER_QUERY_CONFIG(kRpcCongestionBatchStartWindow);
     VELOX_REGISTER_QUERY_CONFIG(kRpcCongestionMinWindow);
     VELOX_REGISTER_QUERY_CONFIG(kRpcCongestionStepCoef);
     VELOX_REGISTER_QUERY_CONFIG(kRpcCongestionMaxWindow);
+    VELOX_REGISTER_QUERY_CONFIG(kRpcCongestionAsyncGrowthMaxWindow);
 
     // RPC adaptive rate limiter.
     VELOX_REGISTER_QUERY_CONFIG(kRpcRateLimiterAdaptiveEnabled);
     VELOX_REGISTER_QUERY_CONFIG(kRpcRateLimiterMinLimit);
     VELOX_REGISTER_QUERY_CONFIG(kRpcRateLimiterDecreaseFactor);
     VELOX_REGISTER_QUERY_CONFIG(kRpcRateLimiterMaxLimit);
+    VELOX_REGISTER_QUERY_CONFIG(kRpcRateLimiterHardLimit);
 
 #undef VELOX_REGISTER_QUERY_CONFIG
 

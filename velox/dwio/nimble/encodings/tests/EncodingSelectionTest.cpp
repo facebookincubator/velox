@@ -28,6 +28,7 @@
 using namespace facebook;
 
 namespace {
+
 constexpr uint32_t commonPrefixSize = 6;
 
 nimble::Encoding::Options bitWidthOptions(bool fixedBitWidthUseExactBits) {
@@ -134,19 +135,20 @@ void verifySizeEstimate(
 
   const nimble::Encoding::Options options;
 
-  // Check the serialized uncompressed size
-  auto serialized = nimble::EncodingFactory::encode<T>(
-      std::move(policy), values, buffer, options);
-  auto actualSize = serialized.size();
-  EXPECT_EQ(actualSize, expectedActualSize);
-
   // Check the estimated size
   auto estimatedSize = nimble::detail::EncodingSizeEstimation<T>::estimateSize(
+      *policy,
       encodingTypeForEstimation,
       values,
       nimble::Statistics<T>::create(values),
       options);
   EXPECT_EQ(estimatedSize, expectedEstimatedSize);
+
+  // Check the serialized uncompressed size
+  auto serialized = nimble::EncodingFactory::encode<T>(
+      std::move(policy), values, buffer, options);
+  auto actualSize = serialized.size();
+  EXPECT_EQ(actualSize, expectedActualSize);
 }
 
 template <typename T>
@@ -169,7 +171,7 @@ void verifySelectedEstimate(
   EXPECT_EQ(selection.encodingType, nimble::EncodingType::FixedBitWidth);
   const auto expectedEstimate =
       nimble::detail::EncodingSizeEstimation<T>::estimateSize(
-          selection.encodingType, valueSpan, statistics, options);
+          policy, selection.encodingType, valueSpan, statistics, options);
   ASSERT_TRUE(expectedEstimate.has_value());
   EXPECT_EQ(selection.estimatedSize, expectedEstimate);
 }
@@ -194,6 +196,130 @@ TEST(EncodingSelectionTest, manualSelectionCanReturnFallbackWithoutEstimate) {
 
   EXPECT_EQ(selection.encodingType, nimble::EncodingType::Trivial);
   EXPECT_FALSE(selection.estimatedSize.has_value());
+  EXPECT_FALSE(selection.estimatedCost.has_value());
+}
+
+TEST(EncodingSelectionTest, incompatibleCandidatesDoNotHideValidCandidate) {
+  const std::vector<uint16_t> values{1, 2, 3};
+  const auto statistics = nimble::Statistics<uint16_t>::create(values);
+  for (const auto rejected :
+       {nimble::EncodingType::Constant,
+        nimble::EncodingType::ALPRD,
+        nimble::EncodingType::Varint}) {
+    for (const bool validFirst : {false, true}) {
+      for (const bool withCompression : {false, true}) {
+        SCOPED_TRACE(nimble::toString(rejected));
+        SCOPED_TRACE(validFirst);
+        SCOPED_TRACE(withCompression);
+        std::vector<std::pair<nimble::EncodingType, float>> candidates{
+            {rejected, 0}, {nimble::EncodingType::Trivial, 2}};
+        if (validFirst) {
+          std::swap(candidates[0], candidates[1]);
+        }
+        nimble::ManualEncodingSelectionPolicy<uint16_t> policy{
+            candidates,
+            withCompression
+                ? std::optional<
+                      nimble::CompressionOptions>{nimble::CompressionOptions{}}
+                : std::nullopt,
+            std::nullopt};
+        for (const size_t numValues : {values.size(), size_t{65'536}}) {
+          SCOPED_TRACE(numValues);
+          const auto selected = policy.select(
+              values, statistics, numValues, nimble::Encoding::Options{});
+          ASSERT_TRUE(selected.has_value());
+          EXPECT_EQ(selected->encodingType, nimble::EncodingType::Trivial);
+          ASSERT_TRUE(selected->estimatedSize.has_value());
+          EXPECT_GT(*selected->estimatedSize, 0);
+          EXPECT_EQ(selected->estimatedCost, *selected->estimatedSize * 2);
+        }
+      }
+    }
+  }
+}
+
+TEST(EncodingSelectionTest, incompatibleCandidateFallbackRoundTrips) {
+  std::vector<uint32_t> values(4'096);
+  for (size_t i = 0; i < values.size(); ++i) {
+    values[i] = i % 3;
+  }
+  const auto statistics = nimble::Statistics<uint32_t>::create(values);
+  auto pool = velox::memory::deprecatedAddDefaultLeafMemoryPool();
+  for (const bool withCompression : {false, true}) {
+    for (const bool useVarintRowCount : {false, true}) {
+      SCOPED_TRACE(withCompression);
+      SCOPED_TRACE(useVarintRowCount);
+      nimble::Encoding::Options options;
+      options.useVarintRowCount = useVarintRowCount;
+      auto policy = std::make_unique<
+          nimble::ManualEncodingSelectionPolicy<uint32_t>>(
+          std::vector<std::pair<nimble::EncodingType, float>>{
+              {nimble::EncodingType::Constant, 1},
+              {nimble::EncodingType::ALP, 1},
+              {nimble::EncodingType::ALPRD, 1},
+              {nimble::EncodingType::SparseBool, 1}},
+          withCompression
+              ? std::optional<
+                    nimble::CompressionOptions>{nimble::CompressionOptions{}}
+              : std::nullopt,
+          std::nullopt);
+      EXPECT_FALSE(
+          policy->select(values, statistics, 65'536, options).has_value());
+      const auto selected = policy->select(values, statistics, options);
+      EXPECT_EQ(selected.encodingType, nimble::EncodingType::Trivial);
+      EXPECT_FALSE(selected.estimatedSize.has_value());
+      EXPECT_FALSE(selected.estimatedCost.has_value());
+      ASSERT_TRUE(selected.compressionPolicyFactory);
+      ASSERT_NE(selected.compressionPolicyFactory(), nullptr);
+
+      nimble::Buffer buffer{*pool};
+      const auto serialized = nimble::EncodingFactory::encode<uint32_t>(
+          std::move(policy), values, buffer, options);
+      auto encoding =
+          nimble::EncodingFactory().create(*pool, serialized, nullptr, options);
+      std::vector<uint32_t> decoded(values.size());
+      encoding->materialize(decoded.size(), decoded.data());
+      EXPECT_EQ(decoded, values);
+    }
+  }
+}
+
+// EncodingFactory reads Huffman back through RETURN_ENCODING_BY_INTEGER_TYPE,
+// which rejects floating-point data types. Selection must therefore refuse
+// Huffman for float and double, even though their physical types (uint32_t and
+// uint64_t) are integral. Offering it produces a blob that encodes but cannot
+// be deserialized.
+template <typename T>
+void verifyHuffmanRejectedForFloatingPoint() {
+  // Selection operates on the physical type throughout, which is exactly why
+  // gating on it rather than on T lets floating-point data through.
+  using PhysicalType = typename nimble::TypeTraits<T>::physicalType;
+  const std::vector<T> logicalValues{1.5, 2.5, 1.5, 2.5, 1.5, 2.5};
+  std::vector<PhysicalType> values(logicalValues.size());
+  std::memcpy(
+      values.data(), logicalValues.data(), logicalValues.size() * sizeof(T));
+  const auto valueSpan =
+      std::span<const PhysicalType>{values.data(), values.size()};
+  const auto statistics = nimble::Statistics<PhysicalType>::create(valueSpan);
+  const nimble::Encoding::Options options;
+
+  nimble::ManualEncodingSelectionPolicy<T> policy{
+      {{nimble::EncodingType::Huffman, 1.0}}, std::nullopt, std::nullopt};
+  EXPECT_FALSE(
+      nimble::detail::EncodingSizeEstimation<T>::estimateSize(
+          policy, nimble::EncodingType::Huffman, valueSpan, statistics, options)
+          .has_value());
+
+  // With Huffman as the only candidate, selection must fall back rather than
+  // pick it.
+  const auto selection = policy.select(valueSpan, statistics, options);
+  EXPECT_EQ(selection.encodingType, nimble::EncodingType::Trivial);
+  EXPECT_FALSE(selection.estimatedSize.has_value());
+}
+
+TEST(EncodingSelectionTest, huffmanRejectedForFloatingPoint) {
+  verifyHuffmanRejectedForFloatingPoint<float>();
+  verifyHuffmanRejectedForFloatingPoint<double>();
 }
 
 template <typename T>
@@ -2001,7 +2127,6 @@ TEST(EncodingSelectionFloatSignTest, mixedSignedZeroPreservesBitsWithoutAlp) {
     values[i] = (i % 2 == 0) ? -0.0f : 0.0f;
   }
 
-  // Default options: allowNestedAlpSelection is false (prod/default).
   const nimble::Encoding::Options options;
   auto policy = getRootManualSelectionPolicy<T>();
   auto serialized = nimble::EncodingFactory::encode<T>(
@@ -2021,36 +2146,50 @@ TEST(EncodingSelectionFloatSignTest, mixedSignedZeroPreservesBitsWithoutAlp) {
   }
 }
 
-// Companion: with allowNestedAlpSelection=true, floats are encoded by logical
-// value, so logically-equal ±0.0 are legitimately collapsed into a single
-// canonical ConstantEncoding value. Covers the ALP gate in the on state.
-TEST(EncodingSelectionFloatSignTest, mixedSignedZeroCollapsesWithAlp) {
-  using T = float;
+TEST(EncodingSelectionFloatSignTest, signedZeroPreservesBitsWithAlprd) {
   auto pool = facebook::velox::memory::deprecatedAddDefaultLeafMemoryPool();
-  nimble::Buffer buffer{*pool};
+  const auto verify = [&](auto typeTag) {
+    using T = decltype(typeTag);
+    SCOPED_TRACE(nimble::toString(nimble::TypeTraits<T>::dataType));
+    for (const bool mixedSigns : {false, true}) {
+      SCOPED_TRACE(fmt::format("mixedSigns={}", mixedSigns));
+      nimble::Buffer buffer{*pool};
+      std::vector<T> values(1000);
+      for (size_t row = 0; row < values.size(); ++row) {
+        values[row] = mixedSigns && row % 2 != 0 ? T{0} : T{-0.0};
+      }
 
-  std::vector<T> values(1000);
-  for (auto i = 0; i < values.size(); ++i) {
-    values[i] = (i % 2 == 0) ? -0.0f : 0.0f;
-  }
+      const nimble::Encoding::Options options;
+      auto policy = std::make_unique<nimble::ManualEncodingSelectionPolicy<T>>(
+          std::vector<std::pair<nimble::EncodingType, float>>{
+              {nimble::EncodingType::Constant, 1},
+              {nimble::EncodingType::Trivial, 1},
+              {nimble::EncodingType::ALPRD, 1},
+          },
+          std::nullopt,
+          std::nullopt);
+      const auto serialized = nimble::EncodingFactory::encode<T>(
+          std::move(policy), values, buffer, options);
+      auto encoding = nimble::EncodingFactory().create(
+          *pool,
+          serialized,
+          [](uint32_t) -> void* { return nullptr; },
+          options);
+      EXPECT_EQ(
+          encoding->encodingType(),
+          mixedSigns ? nimble::EncodingType::ALPRD
+                     : nimble::EncodingType::Constant);
 
-  nimble::Encoding::Options options;
-  options.allowNestedAlpSelection = true;
-  auto policy = getRootManualSelectionPolicy<T>();
-  auto serialized = nimble::EncodingFactory::encode<T>(
-      std::move(policy), values, buffer, options);
-
-  auto encoding = nimble::EncodingFactory().create(
-      *pool, serialized, [](uint32_t) -> void* { return nullptr; }, options);
-  EXPECT_EQ(encoding->encodingType(), nimble::EncodingType::Constant);
-
-  nimble::Vector<T> result{pool.get()};
-  result.resize(values.size());
-  encoding->materialize(static_cast<uint32_t>(values.size()), result.data());
-  const auto canonicalBits = asPhysicalType(result[0]);
-  for (auto i = 0; i < values.size(); ++i) {
-    EXPECT_FLOAT_EQ(result[i], 0.0f) << "row " << i;
-    // All values collapse to a single canonical bit pattern under ALP.
-    EXPECT_EQ(asPhysicalType(result[i]), canonicalBits) << "row " << i;
-  }
+      nimble::Vector<T> result{pool.get()};
+      result.resize(values.size());
+      encoding->materialize(
+          static_cast<uint32_t>(values.size()), result.data());
+      for (size_t row = 0; row < values.size(); ++row) {
+        SCOPED_TRACE(row);
+        EXPECT_EQ(asPhysicalType(values[row]), asPhysicalType(result[row]));
+      }
+    }
+  };
+  verify(float{});
+  verify(double{});
 }

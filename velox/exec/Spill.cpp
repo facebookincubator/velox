@@ -47,7 +47,7 @@ void gatherMerge(
   for (auto currentStream = mergeTree.next();
        currentStream != nullptr && totalNumRows + numBatchRows < target->size();
        currentStream = mergeTree.next()) {
-    bufferSources[numBatchRows] = &currentStream->current();
+    bufferSources[numBatchRows] = currentStream->current().get();
     bufferSourceIndices[numBatchRows] =
         currentStream->currentIndex(&endOfBatch);
     ++numBatchRows;
@@ -102,7 +102,7 @@ int32_t SpillMergeStream::compare(const MergeStream& other) const {
   VELOX_CHECK(!closed_);
   const auto& otherStream = static_cast<const SpillMergeStream&>(other);
   const auto& children = rowVector_->children();
-  const auto& otherChildren = otherStream.current().children();
+  const auto& otherChildren = otherStream.current()->children();
   for (const auto& [key, compareFlags] : sortingKeys()) {
     const auto result = children[key]
                             ->compare(
@@ -485,6 +485,16 @@ SpillFileInfo mergeSpillFiles(
   }
   auto resultFiles = writer->finish();
   VELOX_CHECK_EQ(resultFiles.size(), 1);
+  // Remove the source files after the merge is done.
+  for (const auto& fileInfo : files) {
+    try {
+      auto fs = filesystems::getFileSystem(fileInfo.path, nullptr);
+      fs->remove(fileInfo.path);
+    } catch (const std::exception& e) {
+      LOG(WARNING) << "Failed to remove spill file " << fileInfo.path << ": "
+                   << e.what();
+    }
+  }
   return std::move(resultFiles[0]);
 }
 

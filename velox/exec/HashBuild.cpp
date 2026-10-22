@@ -216,7 +216,7 @@ bool HashBuild::receivedCachedHashTable() {
   if (!useHashTableCache() || future_.valid()) {
     return false;
   }
-  // Builder task drivers coordinate via allPeersFinished and should fall
+  // Builder task drivers coordinate via allPeersArrived and should fall
   // through to the kWaitForProbe path in isBlocked(). Only waiter task
   // drivers (different taskId than the builder) should enter here.
   VELOX_CHECK_NOT_NULL(cacheEntry_);
@@ -824,18 +824,17 @@ bool HashBuild::finishHashBuild() {
   pool()->release();
 
   std::vector<ContinuePromise> promises;
-  std::vector<std::shared_ptr<Driver>> peers;
+  std::vector<std::shared_ptr<Operator>> peerOperators;
   // The last Driver to hit HashBuild::finish gathers the data from
   // all build Drivers and hands it over to the probe side. At this
   // point all build Drivers are continued and will free their
-  // state. allPeersFinished is true only for the last Driver of the
+  // state. allPeersArrived is true only for the last Driver of the
   // build pipeline.
-  if (!operatorCtx_->task()->allPeersFinished(
-          planNodeId(), operatorCtx_->driver(), &future_, promises, peers)) {
+  if (!operatorCtx_->allPeersArrived(&future_, promises, peerOperators)) {
     if (useHashTableCache() && !hashTableCacheBuilderTask()) {
       // Waiter task non-last driver: no partial table was built (we used the
       // cached table). Nothing to contribute — finish immediately. Clear the
-      // future since allPeersFinished() set it but we don't need to wait.
+      // future since allPeersArrived() set it but we don't need to wait.
       VELOX_CHECK_NULL(
           table_, "Waiter task should not have built a partial hash table");
       future_ = folly::SemiFuture<folly::Unit>::makeEmpty();
@@ -853,7 +852,7 @@ bool HashBuild::finishHashBuild() {
   SCOPE_EXIT {
     // Realize the promises so that the other Drivers (which were not
     // the last to finish) can continue and finish.
-    peers.clear();
+    peerOperators.clear();
     for (auto& promise : promises) {
       promise.setValue();
     }
@@ -870,15 +869,14 @@ bool HashBuild::finishHashBuild() {
   }
 
   std::vector<HashBuild*> otherBuilds;
-  otherBuilds.reserve(peers.size());
+  otherBuilds.reserve(peerOperators.size());
   uint64_t numRows{0};
   {
     std::lock_guard<std::mutex> l(mutex_);
     numRows += table_->rows()->numRows();
   }
-  for (auto& peer : peers) {
-    auto op = peer->findOperator(planNodeId());
-    HashBuild* build = dynamic_cast<HashBuild*>(op);
+  for (const auto& peer : peerOperators) {
+    auto* build = peer->as<HashBuild>();
     VELOX_CHECK_NOT_NULL(build);
     if (build->joinHasNullKeys_) {
       joinHasNullKeys_ = true;
@@ -901,7 +899,7 @@ bool HashBuild::finishHashBuild() {
   ensureTableFits(numRows);
 
   std::vector<std::unique_ptr<BaseHashTable>> otherTables;
-  otherTables.reserve(peers.size());
+  otherTables.reserve(peerOperators.size());
   SpillPartitionSet spillPartitions;
   for (auto* build : otherBuilds) {
     std::unique_ptr<HashBuildSpiller> spiller;
@@ -1367,7 +1365,7 @@ void HashBuild::reclaim(
       task->findPeerOperators(operatorCtx_->driverCtx()->pipelineId, this);
 
   for (auto* op : operators) {
-    HashBuild* buildOp = dynamic_cast<HashBuild*>(op);
+    auto* buildOp = op->as<HashBuild>();
     VELOX_CHECK_NOT_NULL(buildOp);
     VELOX_CHECK(buildOp->canSpill());
     if (buildOp->nonReclaimableState()) {

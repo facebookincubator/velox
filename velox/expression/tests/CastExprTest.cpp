@@ -60,6 +60,91 @@ class CastExprTest : public functions::test::CastBaseTest {
         createType(kind, {}), variant(kind));
   }
 
+  // Checks CAST and TRY_CAST from VARCHAR to 'typeName' (real or double) with
+  // cast_string_to_floating_point_lenient_inf_nan set: every C-style spelling
+  // of infinity and NaN is accepted, an overflowing number still gives
+  // infinity, and the inputs that fast_float would also parse but Presto
+  // rejects stay rejected.
+  template <typename T>
+  void testLenientInfNanCast(
+      const std::string& typeName,
+      const std::string& typeNameInErrors) {
+    const T kInfinity = std::numeric_limits<T>::infinity();
+    const T kNotANumber = std::numeric_limits<T>::quiet_NaN();
+
+    std::vector<std::optional<std::string>> inputs;
+    std::vector<std::optional<T>> expected;
+    for (const auto& text :
+         {"inf",
+          "Inf",
+          "INF",
+          "+inf",
+          "infinity",
+          "INFINITY",
+          "InfiNiTy",
+          "+infinity",
+          "Infinity",
+          "+Infinity",
+          " inf ",
+          "\tINFINITY\n",
+          "1e400"}) {
+      inputs.push_back(text);
+      expected.push_back(kInfinity);
+    }
+    for (const auto& text :
+         {"-inf",
+          "-INF",
+          "-infinity",
+          "-InfiNiTy",
+          "-Infinity",
+          "  -inf  ",
+          "-1e400"}) {
+      inputs.push_back(text);
+      expected.push_back(-kInfinity);
+    }
+    for (const auto& text :
+         {"nan", "NAN", "nAn", "NaN", "+nan", "-nan", "-NaN", " nan "}) {
+      inputs.push_back(text);
+      expected.push_back(kNotANumber);
+    }
+    testCast<std::string, T>(typeName, inputs, expected);
+    testTryCast<std::string, T>(typeName, inputs, expected);
+    // The same through constant and dictionary encodings.
+    testCast(
+        makeNullableFlatVector<std::string>(inputs),
+        makeNullableFlatVector<T>(expected));
+
+    // Partial words, trailing characters, a space between the sign and the
+    // word, and the nan(n-char-sequence) form are still rejected.
+    const std::vector<std::string> invalid = {
+        "in",
+        "infinit",
+        "infinityy",
+        "inf.",
+        "- inf",
+        "na",
+        "nan.",
+        "nan(1)",
+        "nan()",
+        "nan(ind)",
+        "1.2a",
+        "",
+        "   "};
+    std::vector<std::optional<std::string>> invalidInputs;
+    for (const auto& text : invalid) {
+      testInvalidCast<std::string>(
+          typeName,
+          {text},
+          fmt::format(
+              "Cannot cast VARCHAR '{}' to {}", text, typeNameInErrors));
+      invalidInputs.push_back(text);
+    }
+    testTryCast<std::string, T>(
+        typeName,
+        invalidInputs,
+        std::vector<std::optional<T>>(invalidInputs.size(), std::nullopt));
+  }
+
   template <typename T>
   void testDecimalToFloatCasts() {
     // short to short, scale up.
@@ -1257,6 +1342,38 @@ TEST_F(CastExprTest, primitiveValidCornerCases) {
     testCast<float, std::string>("varchar", {kInf}, {"Infinity"});
     testCast<float, std::string>("varchar", {kNan}, {"NaN"});
   }
+}
+
+TEST_F(CastExprTest, stringToFloatingPointLenientInfNan) {
+  // By default only the Presto spellings "Infinity" and "NaN" are accepted, in
+  // exactly that letter case (see primitiveInvalidCornerCases). The
+  // cast_string_to_floating_point_lenient_inf_nan query config also accepts
+  // the C-style spellings "inf", "infinity" and "nan" in any letter case.
+  setCastStringToFloatingPointLenientInfNan(true);
+  testLenientInfNanCast<float>("real", "REAL");
+  testLenientInfNanCast<double>("double", "DOUBLE");
+
+  // Casts to other types do not change.
+  testInvalidCast<std::string>("bigint", {"inf"}, "Invalid leading character");
+  testInvalidCast<std::string>("integer", {"nan"}, "Invalid leading character");
+  testInvalidCast<std::string>(
+      "boolean", {"nan"}, "Cannot cast VARCHAR 'nan' to BOOLEAN");
+
+  // Switching the config off restores the Presto spellings only.
+  setCastStringToFloatingPointLenientInfNan(false);
+  testInvalidCast<std::string>(
+      "real", {"inf"}, "Cannot cast VARCHAR 'inf' to REAL");
+  testInvalidCast<std::string>(
+      "double", {"nan"}, "Cannot cast VARCHAR 'nan' to DOUBLE");
+  testInvalidCast<std::string>(
+      "double", {"INFINITY"}, "Cannot cast VARCHAR 'INFINITY' to DOUBLE");
+  testTryCast<std::string, double>(
+      "double",
+      {"inf", "nan", "-Infinity", "NaN"},
+      {std::nullopt,
+       std::nullopt,
+       -std::numeric_limits<double>::infinity(),
+       std::numeric_limits<double>::quiet_NaN()});
 }
 
 TEST_F(CastExprTest, truncateVsRound) {
@@ -2770,7 +2887,7 @@ TEST_F(CastExprTest, lazyInput) {
 
 TEST_F(CastExprTest, identicalTypes) {
   auto data = makeRowVector({
-      makeFlatVector<int64_t>(10, folly::identity),
+      makeFlatIdentityVector<int64_t>(10),
   });
   auto result = evaluate("cast(c0 as bigint)", data);
   ASSERT_EQ(result.get(), data->childAt(0).get());

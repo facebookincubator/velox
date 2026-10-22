@@ -113,6 +113,23 @@ class DefaultOutputBufferManager : public OutputBufferManager {
       DataAvailableCallback notify,
       DataConsumerActiveCheckCallback activeCheck = nullptr);
 
+  /// Like getData(), but when the buffer for 'taskId' does not exist yet,
+  /// holds the request and serves it once initializeTask() creates the buffer.
+  /// For a consumer that may ask for a producer before the producer task
+  /// starts, such as a fixed point's peer reading another worker's producer in
+  /// the same iteration. 'activeCheck' is required: a held request is dropped
+  /// once it returns false, e.g. after the consumer's own wait ran out, and
+  /// when the consumer calls deleteResults() for its destination.
+  /// 'activeCheck' may run under this manager's lock, so it must be cheap and
+  /// must not call this manager.
+  void getDataWhenCreated(
+      const std::string& taskId,
+      int destination,
+      uint64_t maxBytes,
+      int64_t sequence,
+      DataAvailableCallback notify,
+      DataConsumerActiveCheckCallback activeCheck);
+
   // Returns a new stream listener if a listener factory has been set.
   std::unique_ptr<OutputStreamListener> newListener() const {
     return listenerFactory_ ? listenerFactory_() : nullptr;
@@ -156,6 +173,19 @@ class DefaultOutputBufferManager : public OutputBufferManager {
       std::unordered_map<std::string, std::shared_ptr<OutputBuffer>>,
       std::mutex>
       buffers_;
+
+  // A getDataWhenCreated() request held until its buffer exists.
+  struct HeldRequest {
+    int destination;
+    uint64_t maxBytes;
+    int64_t sequence;
+    DataAvailableCallback notify;
+    DataConsumerActiveCheckCallback activeCheck;
+  };
+
+  // The held requests by task id. Guarded by the mutex of 'buffers_', so a
+  // request cannot be held after initializeTask() looked for it.
+  std::unordered_map<std::string, std::vector<HeldRequest>> heldRequests_;
 
   std::function<std::unique_ptr<OutputStreamListener>()> listenerFactory_{
       nullptr};

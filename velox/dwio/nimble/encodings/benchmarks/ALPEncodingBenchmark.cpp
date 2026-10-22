@@ -375,22 +375,19 @@ class AlpFileBenchmarkFixture {
 
   std::string write() const {
     nimble::WriterOptions options;
-    options.compressionOptions.compressionType =
-        nimble::CompressionType::Uncompressed;
-    options.encodingSelectionPolicyCreator = [](nimble::DataType dataType) {
-      auto candidates = nimble::ManualEncodingSelectionPolicyFactory::
-          defaultEncodingReadFactors();
-      if (dataType == nimble::DataType::Float ||
-          dataType == nimble::DataType::Double) {
-        candidates = {
-            {EncodingType::ALP, 1.0},
-            {EncodingType::Trivial, 1.0},
-            {EncodingType::FixedBitWidth, 1.0}};
-      }
-      return nimble::ManualEncodingSelectionPolicyFactory{
-          std::move(candidates), std::nullopt}
-          .createPolicy(dataType);
-    };
+    options.encodingSelectionPolicyCreator =
+        [compressionOptions =
+             options.compressionOptions](nimble::DataType dataType) {
+          auto candidates = nimble::ManualEncodingSelectionPolicyFactory::
+              defaultEncodingReadFactors();
+          if (dataType == nimble::DataType::Float ||
+              dataType == nimble::DataType::Double) {
+            candidates.emplace_back(EncodingType::ALP, 1.0);
+          }
+          return nimble::ManualEncodingSelectionPolicyFactory{
+              std::move(candidates), compressionOptions}
+              .createPolicy(dataType);
+        };
     if (FLAGS_force_alp) {
       using StreamLayouts = std::unordered_map<
           nimble::EncodingLayoutTree::StreamIdentifier,

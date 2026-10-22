@@ -20,6 +20,7 @@
 #include <cudf/table/table.hpp>
 #include <cudf/types.hpp>
 #include <folly/Executor.h>
+#include <cuda/stream>
 #include <memory>
 #include <string_view>
 #include <vector>
@@ -112,7 +113,7 @@ std::shared_ptr<facebook::velox::cudf_velox::CudfVector> makeCudfVector(
     size_t numRows,
     facebook::velox::RowTypePtr rowType,
     std::shared_ptr<BaseTableGenerator> tableGenerator,
-    rmm::cuda_stream_view stream);
+    cuda::stream_ref stream);
 
 /// Helper function to create cudf::table for testing.
 /// Creates a table with columns based on the given rowType.
@@ -125,7 +126,7 @@ std::shared_ptr<facebook::velox::cudf_velox::CudfVector> makeCudfVector(
 std::unique_ptr<cudf::table> makeTable(
     std::size_t numRows,
     facebook::velox::RowTypePtr rowType,
-    rmm::cuda_stream_view stream);
+    cuda::stream_ref stream);
 
 /// @brief testing utility for dumping the contents of a string column.
 /// @param str_column_view The string column view to be dumped.
@@ -133,7 +134,7 @@ std::unique_ptr<cudf::table> makeTable(
 std::vector<std::string> getStringCol(
     const cudf::strings_column_view& str_column_view,
     cudf::size_type max_rows,
-    rmm::cuda_stream_view stream);
+    cuda::stream_ref stream);
 
 /// @brief Helper function to create a strings column from a vector of host
 /// strings.
@@ -151,7 +152,7 @@ template <typename T>
 std::vector<T> getColVector(
     const cudf::column_view& column_view,
     cudf::size_type max_rows,
-    rmm::cuda_stream_view stream) {
+    cuda::stream_ref stream) {
   max_rows = column_view.size() < max_rows ? column_view.size() : max_rows;
   const T* ptr_data = column_view.template data<T>();
   auto host_vec = cudf::detail::make_host_vector_async(

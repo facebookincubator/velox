@@ -21,90 +21,97 @@
 namespace facebook::velox::functions {
 
 namespace {
-void registerMathOperators(const std::string& prefix = "") {
-  registerBinaryFloatingPoint<PlusFunction>({prefix + "plus"});
+void registerMathOperators(
+    const std::string& prefix = "",
+    std::string_view defaultOwner = {}) {
+  registerBinaryFloatingPoint<PlusFunction>({prefix + "plus"}, defaultOwner);
   registerFunction<
       PlusFunction,
       IntervalDayTime,
       IntervalDayTime,
-      IntervalDayTime>({prefix + "plus"});
+      IntervalDayTime>({prefix + "plus"}, {}, true, defaultOwner);
   registerFunction<
       PlusFunction,
       IntervalYearMonth,
       IntervalYearMonth,
-      IntervalYearMonth>({prefix + "plus"});
-  registerBinaryFloatingPoint<MinusFunction>({prefix + "minus"});
+      IntervalYearMonth>({prefix + "plus"}, {}, true, defaultOwner);
+  registerBinaryFloatingPoint<MinusFunction>({prefix + "minus"}, defaultOwner);
   registerFunction<
       MinusFunction,
       IntervalDayTime,
       IntervalDayTime,
-      IntervalDayTime>({prefix + "minus"});
+      IntervalDayTime>({prefix + "minus"}, {}, true, defaultOwner);
   registerFunction<
       MinusFunction,
       IntervalYearMonth,
       IntervalYearMonth,
-      IntervalYearMonth>({prefix + "minus"});
-  registerBinaryFloatingPoint<MultiplyFunction>({prefix + "multiply"});
+      IntervalYearMonth>({prefix + "minus"}, {}, true, defaultOwner);
+  registerBinaryFloatingPoint<MultiplyFunction>(
+      {prefix + "multiply"}, defaultOwner);
   registerFunction<MultiplyFunction, IntervalDayTime, IntervalDayTime, int64_t>(
-      {prefix + "multiply"});
+      {prefix + "multiply"}, {}, true, defaultOwner);
   registerFunction<MultiplyFunction, IntervalDayTime, int64_t, IntervalDayTime>(
-      {prefix + "multiply"});
+      {prefix + "multiply"}, {}, true, defaultOwner);
   registerFunction<
       IntervalMultiplyFunction,
       IntervalDayTime,
       IntervalDayTime,
-      double>({prefix + "multiply"});
+      double>({prefix + "multiply"}, {}, true, defaultOwner);
   registerFunction<
       IntervalMultiplyFunction,
       IntervalDayTime,
       double,
-      IntervalDayTime>({prefix + "multiply"});
+      IntervalDayTime>({prefix + "multiply"}, {}, true, defaultOwner);
   registerFunction<
       MultiplyFunction,
       IntervalYearMonth,
       IntervalYearMonth,
-      int32_t>({prefix + "multiply"});
+      int32_t>({prefix + "multiply"}, {}, true, defaultOwner);
   registerFunction<
       MultiplyFunction,
       IntervalYearMonth,
       int32_t,
-      IntervalYearMonth>({prefix + "multiply"});
+      IntervalYearMonth>({prefix + "multiply"}, {}, true, defaultOwner);
   registerFunction<
       IntervalMultiplyFunction,
       IntervalYearMonth,
       IntervalYearMonth,
-      double>({prefix + "multiply"});
+      double>({prefix + "multiply"}, {}, true, defaultOwner);
   registerFunction<
       IntervalMultiplyFunction,
       IntervalYearMonth,
       double,
-      IntervalYearMonth>({prefix + "multiply"});
-  registerBinaryFloatingPoint<DivideFunction>({prefix + "divide"});
+      IntervalYearMonth>({prefix + "multiply"}, {}, true, defaultOwner);
+  registerBinaryFloatingPoint<DivideFunction>(
+      {prefix + "divide"}, defaultOwner);
   registerFunction<
       IntervalDivideFunction,
       IntervalDayTime,
       IntervalDayTime,
-      double>({prefix + "divide"});
+      double>({prefix + "divide"}, {}, true, defaultOwner);
   registerFunction<
       IntervalDivideFunction,
       IntervalYearMonth,
       IntervalYearMonth,
-      double>({prefix + "divide"});
-  registerBinaryFloatingPoint<ModulusFunction>({prefix + "mod"});
-  registerBinaryIntegral<PModIntFunction>({prefix + "pmod"});
-  registerBinaryFloatingPoint<PModFloatFunction>({prefix + "pmod"});
+      double>({prefix + "divide"}, {}, true, defaultOwner);
+  registerBinaryFloatingPoint<ModulusFunction>({prefix + "mod"}, defaultOwner);
+  registerBinaryIntegral<PModIntFunction>({prefix + "pmod"}, defaultOwner);
+  registerBinaryFloatingPoint<PModFloatFunction>(
+      {prefix + "pmod"}, defaultOwner);
 }
 
 } // namespace
 
-void registerMathematicalOperators(const std::string& prefix = "") {
-  registerMathOperators(prefix);
+void registerMathematicalOperators(
+    const std::string& prefix = "",
+    std::string_view defaultOwner = {}) {
+  registerMathOperators(prefix, defaultOwner);
 
-  registerDecimalPlus(prefix);
-  registerDecimalMinus(prefix);
-  registerDecimalMultiply(prefix);
-  registerDecimalDivide(prefix);
-  registerDecimalModulus(prefix);
+  registerDecimalPlus(prefix, defaultOwner);
+  registerDecimalMinus(prefix, defaultOwner);
+  registerDecimalMultiply(prefix, defaultOwner);
+  registerDecimalDivide(prefix, defaultOwner);
+  registerDecimalModulus(prefix, defaultOwner);
 }
 
 } // namespace facebook::velox::functions

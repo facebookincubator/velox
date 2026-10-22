@@ -225,6 +225,7 @@ PrefixArtifactOffsets readPrefixArtifactOffsets(
 }
 
 struct FsstArtifactOffsets {
+  size_t compressionType;
   size_t symbolTableSize;
   size_t symbolTable;
   uint32_t symbolTableBytes;
@@ -236,6 +237,8 @@ struct FsstArtifactOffsets {
 
 FsstArtifactOffsets readFsstArtifactOffsets(std::string_view artifact) {
   const char* cursor = artifact.data() + EncodingPrefix::kFixedPrefixSize;
+  const size_t compressionType = cursor - artifact.data();
+  ++cursor;
   const size_t symbolTableSize = cursor - artifact.data();
   const uint32_t symbolTableBytes = varint::readVarint32(&cursor);
   const size_t symbolTable = cursor - artifact.data();
@@ -245,6 +248,7 @@ FsstArtifactOffsets readFsstArtifactOffsets(std::string_view artifact) {
   const size_t lengths = cursor - artifact.data();
   cursor += lengthsBytes;
   return {
+      .compressionType = compressionType,
       .symbolTableSize = symbolTableSize,
       .symbolTable = symbolTable,
       .symbolTableBytes = symbolTableBytes,
@@ -2210,6 +2214,7 @@ TEST_F(NimbleEncodingRunnerTest, malformedFsstArtifactsAreRejected) {
   for (const size_t size :
        {size_t{0},
         size_t{EncodingPrefix::kFixedPrefixSize - 1},
+        offsets.symbolTableSize,
         offsets.symbolTable - 1,
         offsets.symbolTable + offsets.symbolTableBytes - 1,
         offsets.lengths - 1,
@@ -2233,6 +2238,9 @@ TEST_F(NimbleEncodingRunnerTest, malformedFsstArtifactsAreRejected) {
       wrongRowCount,
       EncodingPrefix::kRowCountOffset,
       runnerConfig.rowCount + 1);
+
+  auto unsupportedCompressionType = reference.encodedArtifact;
+  unsupportedCompressionType[offsets.compressionType] = static_cast<char>(0xff);
 
   auto zeroSymbolTable = reference.encodedArtifact;
   zeroSymbolTable[offsets.symbolTableSize] = 0;
@@ -2356,6 +2364,7 @@ TEST_F(NimbleEncodingRunnerTest, malformedFsstArtifactsAreRejected) {
        {wrongRootEncoding,
         wrongDataType,
         wrongRowCount,
+        unsupportedCompressionType,
         zeroSymbolTable,
         nonCanonicalSymbolTableSize,
         overflowingSymbolTableSize,

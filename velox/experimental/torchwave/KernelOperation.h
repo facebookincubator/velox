@@ -377,6 +377,20 @@ class KernelOperation {
     return ownDimsCalcOffsets_;
   }
 
+  /// Records that the leaf at 'leafOffset' broadcasts against the tensor at
+  /// 'refOffset' instead of its expression's output. A fused scatter's loop
+  /// runs over its source, whose shape is the index's, while the expression
+  /// output is the (larger) destination.
+  void setBroadcastRef(int32_t leafOffset, int32_t refOffset) {
+    broadcastRefs_[leafOffset] = refOffset;
+  }
+
+  /// Leaf param offset -> param offset of the tensor it broadcasts against,
+  /// for leaves that do not broadcast against their expression's output.
+  const folly::F14FastMap<int32_t, int32_t>& broadcastRefs() const {
+    return broadcastRefs_;
+  }
+
   const std::unordered_set<NodeCP>& allNodes() const {
     return allNodes_;
   }
@@ -558,6 +572,9 @@ class KernelOperation {
   // own dims (gather-op output and whole-tensor operands). See
   // ownDimsCalcOffsets().
   std::unordered_set<int32_t> ownDimsCalcOffsets_;
+
+  // See broadcastRefs().
+  folly::F14FastMap<int32_t, int32_t> broadcastRefs_;
 
   std::unordered_set<NodeCP> allNodes_;
 

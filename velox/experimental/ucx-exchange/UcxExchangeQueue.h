@@ -16,9 +16,9 @@
 #pragma once
 
 #include <cudf/contiguous_split.hpp>
-#include <rmm/cuda_stream_view.hpp>
 #include <atomic>
 #include <cinttypes>
+#include <cuda/stream>
 #include <memory>
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/future/VeloxPromise.h"
@@ -31,7 +31,7 @@ namespace facebook::velox::ucx_exchange {
 /// for subsequent operations on the data.
 struct PackedTableWithStream {
   std::unique_ptr<cudf::packed_table> packedTable;
-  rmm::cuda_stream_view stream;
+  cuda::stream_ref stream{cudaStream_t{cudaStreamDefault}};
 
   /// Logical rows in 'packedTable', as reported by the producer. Authoritative:
   /// cudf::table_view::num_rows() derives the count from the columns and so
@@ -43,7 +43,7 @@ struct PackedTableWithStream {
   PackedTableWithStream() = default;
   PackedTableWithStream(
       std::unique_ptr<cudf::packed_table>&& table,
-      rmm::cuda_stream_view s,
+      cuda::stream_ref s,
       vector_size_t numRows)
       : packedTable(std::move(table)), stream(s), numRows(numRows) {}
 

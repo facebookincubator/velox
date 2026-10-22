@@ -15,22 +15,25 @@
  */
 #pragma once
 
+#include <algorithm>
+#include <initializer_list>
 #include <memory>
 #include <string_view>
+#include <vector>
 
 #include "velox/dwio/nimble/common/FeatureGate.h"
 
 namespace facebook::nimble::test {
 
-/// Force-enables one runtime-gated writer feature for the lifetime of this
+/// Force-enables the named runtime-gated features for the lifetime of this
 /// object, restoring the default no-op gate on destruction. Features that
 /// default to off are otherwise unreachable in tests, which register no gate.
-/// A writer resolves its gates once at construction, so this must be created
-/// before the writer under test.
+/// A reader or writer resolves its gates once at construction, so this must be
+/// created before the object under test.
 class ScopedFeatureGate {
  public:
-  explicit ScopedFeatureGate(std::string_view feature) {
-    registerFeatureGate(std::make_shared<EnablingGate>(feature));
+  explicit ScopedFeatureGate(std::initializer_list<std::string_view> features) {
+    registerFeatureGate(std::make_shared<EnablingGate>(features));
   }
 
   ScopedFeatureGate(const ScopedFeatureGate&) = delete;
@@ -41,18 +44,21 @@ class ScopedFeatureGate {
   }
 
  private:
-  // Forces one feature on and leaves every other feature at the value its
-  // caller requested, so enabling one does not perturb the rest.
+  // Forces the named features on and leaves every other feature at the value
+  // its caller requested, so enabling one does not perturb the rest.
   class EnablingGate : public FeatureGate {
    public:
-    explicit EnablingGate(std::string_view feature) : feature_{feature} {}
+    explicit EnablingGate(std::initializer_list<std::string_view> features)
+        : features_{features} {}
 
     bool enabled(std::string_view feature, bool defaultValue) const override {
-      return feature == feature_ || defaultValue;
+      return std::find(features_.begin(), features_.end(), feature) !=
+          features_.end() ||
+          defaultValue;
     }
 
    private:
-    const std::string_view feature_;
+    const std::vector<std::string_view> features_;
   };
 };
 

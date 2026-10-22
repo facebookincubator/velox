@@ -57,6 +57,52 @@ TEST_F(CountIfAggregationTest, countIfConst) {
       "SELECT c0, sum(if(c1, 1, 0)), sum(if(c2, 1, 0)) FROM tmp group by c0");
 }
 
+TEST_F(CountIfAggregationTest, mergeNullIntermediates) {
+  // count_if_partial never emits a null, so a null intermediate reaches the
+  // merge path only through the count_if_merge companion. The nulls are set on
+  // a flat vector that keeps non-zero counts in its values buffer, so a merge
+  // that reads null rows instead of skipping them returns a visibly wrong
+  // count.
+  auto counts = makeFlatVector<int64_t>({10, 100, 5, 1'000, 7});
+  counts->setNull(1, true);
+  counts->setNull(2, true);
+  counts->setNull(4, true);
+  auto input = makeRowVector({
+      makeFlatVector<int64_t>({1, 1, 2, 2, 3}),
+      counts,
+  });
+
+  testAggregations(
+      {input},
+      {"c0"},
+      {"count_if_merge(c1)"},
+      {makeRowVector({
+          makeFlatVector<int64_t>({1, 2, 3}),
+          makeFlatVector<int64_t>({10, 1'000, 0}),
+      })});
+
+  testAggregations(
+      {input},
+      {},
+      {"count_if_merge(c1)"},
+      {makeRowVector({makeFlatVector<int64_t>(std::vector<int64_t>{1'010})})});
+
+  // A null constant intermediate takes the constant-mapping branch.
+  auto constantInput = makeRowVector({
+      makeFlatVector<int64_t>({1, 1, 2}),
+      makeNullConstant(TypeKind::BIGINT, 3),
+  });
+
+  testAggregations(
+      {constantInput},
+      {"c0"},
+      {"count_if_merge(c1)"},
+      {makeRowVector({
+          makeFlatVector<int64_t>({1, 2}),
+          makeFlatVector<int64_t>({0, 0}),
+      })});
+}
+
 TEST_F(CountIfAggregationTest, oneAggregateSingleGroup) {
   // Make two batches of rows: one with nulls; another without.
   auto vectors = {

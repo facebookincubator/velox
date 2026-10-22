@@ -55,9 +55,18 @@ bool AggregateCompanionFunctionBase::isFixedSize() const {
   return fn_->isFixedSize();
 }
 
+bool AggregateCompanionFunctionBase::isReducing() const {
+  return fn_->isReducing();
+}
+
 void AggregateCompanionFunctionBase::setAllocatorInternal(
     HashStringAllocator* allocator) {
   fn_->setAllocator(allocator);
+}
+
+void AggregateCompanionFunctionBase::setConstantInputs(
+    const std::vector<VectorPtr>& constantInputs) {
+  fn_->setConstantInputs(constantInputs);
 }
 
 void AggregateCompanionFunctionBase::destroy(folly::Range<char**> groups) {

@@ -83,17 +83,25 @@ struct FileIoContext {
   /// where caching would waste resources.
   bool cacheable{false};
 
+  /// Pool for scratch memory a read needs only until it returns, such as a
+  /// staging buffer. Supplied per call because one ReadFile can serve many
+  /// queries, and the memory belongs to the query doing the read. Null means
+  /// the file allocates outside any pool.
+  memory::MemoryPool* pool{nullptr};
+
   FileIoContext() = default;
 
   explicit FileIoContext(
       IoStats* stats,
       folly::F14FastMap<std::string, std::string> fileOpts = {},
       std::shared_ptr<FileIoTracer> tracer = nullptr,
-      bool cacheable = false)
+      bool cacheable = false,
+      memory::MemoryPool* pool = nullptr)
       : ioStats(stats),
         fileOpts(std::move(fileOpts)),
         ioTracer(std::move(tracer)),
-        cacheable(cacheable) {}
+        cacheable(cacheable),
+        pool(pool) {}
 };
 
 // A read-only file.  All methods in this object should be thread safe.

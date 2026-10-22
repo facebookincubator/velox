@@ -210,7 +210,7 @@ TEST_F(VariableLengthColumnReaderTest, listSkipAndRead) {
   // 100 rows with a filter on a sibling column to force skipping rows.
   auto c0 = makeArrayVector<int64_t>(
       100, [](auto i) { return 1 + i % 4; }, [](auto j) { return j * 10; });
-  auto c1 = makeFlatVector<int64_t>(100, folly::identity);
+  auto c1 = makeFlatIdentityVector<int64_t>(100);
   auto input = makeRowVector({c0, c1});
   auto scanSpec = std::make_shared<common::ScanSpec>("root");
   scanSpec->addAllChildFields(*input->type());
@@ -344,7 +344,7 @@ TEST_F(VariableLengthColumnReaderTest, mapSkipAndRead) {
       [](auto i) { return 1 + i % 4; },
       [](auto j) { return j; },
       [](auto j) { return j * 100; });
-  auto c1 = makeFlatVector<int64_t>(100, folly::identity);
+  auto c1 = makeFlatIdentityVector<int64_t>(100);
   auto input = makeRowVector({c0, c1});
   auto scanSpec = std::make_shared<common::ScanSpec>("root");
   scanSpec->addAllChildFields(*input->type());

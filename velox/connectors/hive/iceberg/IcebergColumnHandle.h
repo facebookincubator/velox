@@ -38,7 +38,13 @@ class IcebergColumnHandle : public HiveColumnHandle {
       std::vector<common::Subfield> requiredSubfields = {},
       std::optional<std::string> initialDefaultValue = std::nullopt,
       IcebergFieldMetadata icebergMetadata = {},
-      std::function<void(VectorPtr&)> postProcessor = {});
+      std::function<void(VectorPtr&)> postProcessor = {},
+      /// Iceberg V3 write-default value for this column, serialized as a
+      /// string. DATE and TIMESTAMP use ISO form in UTC ("2024-01-15",
+      /// "2024-01-15 10:30:00.000000") rather than the numeric encoding
+      /// partition values use. Set only on columns that carry an Iceberg
+      /// write-default; nullopt otherwise.
+      std::optional<std::string> writeDefaultValue = std::nullopt);
 
   const parquet::ParquetFieldId& field() const;
 
@@ -60,10 +66,15 @@ class IcebergColumnHandle : public HiveColumnHandle {
 
   static void registerSerDe();
 
+  const std::optional<std::string>& writeDefaultValue() const {
+    return writeDefaultValue_;
+  }
+
  private:
   const parquet::ParquetFieldId field_;
   const std::optional<std::string> initialDefaultValue_;
   const IcebergFieldMetadata icebergMetadata_;
+  const std::optional<std::string> writeDefaultValue_;
 };
 
 using IcebergColumnHandlePtr = std::shared_ptr<const IcebergColumnHandle>;

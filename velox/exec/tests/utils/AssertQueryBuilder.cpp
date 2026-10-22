@@ -223,6 +223,17 @@ std::shared_ptr<Task> AssertQueryBuilder::assertResults(
   return cursor->task();
 }
 
+std::shared_ptr<Task> AssertQueryBuilder::assertResults(
+    std::initializer_list<Variant> expected) {
+  auto [cursor, results] = readCursor();
+
+  assertEqualResults(
+      MaterializedRowMultiset{MaterializedRow(expected)},
+      params_.planNode->outputType(),
+      results);
+  return cursor->task();
+}
+
 std::shared_ptr<Task> AssertQueryBuilder::assertEmptyResults() {
   auto [cursor, results] = readCursor();
   test::assertEmptyResults(results);

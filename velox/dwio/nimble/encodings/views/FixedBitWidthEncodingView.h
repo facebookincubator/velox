@@ -37,15 +37,14 @@ class FixedBitWidthEncodingView final : public TypedEncodingView<T> {
     const char* pos = data.data() + this->dataOffset_;
     const auto compressionType =
         static_cast<CompressionType>(encoding::readChar(pos));
-    NIMBLE_CHECK_EQ(
-        compressionType,
-        CompressionType::Uncompressed,
-        "EncodingView does not support compressed FixedBitWidth streams.");
     baseline_ = encoding::read<physicalType>(pos);
     bitWidth_ = static_cast<uint32_t>(encoding::readChar(pos));
-    fixedBitArray_ = FixedBitArray{
-        {pos, static_cast<size_t>(data.data() + data.size() - pos)},
-        static_cast<int>(bitWidth_)};
+    // Match FixedBitWidthEncoding: the packed payload has no scalar data type.
+    const auto payload = this->decompressPayload(
+        compressionType,
+        DataType::Undefined,
+        {pos, static_cast<size_t>(data.data() + data.size() - pos)});
+    fixedBitArray_ = FixedBitArray{payload, static_cast<int>(bitWidth_)};
   }
 
  private:

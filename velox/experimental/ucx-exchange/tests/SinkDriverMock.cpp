@@ -60,7 +60,7 @@ void SinkDriverMock::updateDataValidity(const cudf::table_view& tab) {
     return; // No reference data to check against
   }
 
-  auto stream = rmm::cuda_stream_default;
+  auto stream = cuda::stream_ref{cudaStream_t{cudaStreamDefault}};
 
   // Use the polymorphic verifyTable method
   // Note: For chunk-based verification, we use startRow=0 since each chunk
@@ -122,9 +122,16 @@ void SinkDriverMock::addSplits(
   for (auto& split : splits) {
     VLOG(3) << "Adding split to planNode: " << planNode->id()
             << " to sink driver for task " << task_->taskId();
+    // The task is not started, so forward the split to the client as a
+    // started task would.
+    exchangeClient_->addRemoteTaskId(
+        std::dynamic_pointer_cast<exec::RemoteConnectorSplit>(
+            split.connectorSplit)
+            ->taskId);
     task_->addSplit(planNode->id(), std::move(split));
   }
   task_->noMoreSplits(planNode->id());
+  exchangeClient_->noMoreRemoteTasks();
 }
 
 } // namespace facebook::velox::ucx_exchange

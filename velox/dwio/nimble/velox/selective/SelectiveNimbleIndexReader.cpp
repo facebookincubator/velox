@@ -505,7 +505,12 @@ void SelectiveNimbleIndexReader::initStripeColumnReader(uint32_t stripeIndex) {
         options_.trackRowSize() ? rowSizeTracker_.get() : nullptr,
         *encodingFactory_,
         options_.stringDecoderZeroCopy(),
-        options_.preserveFlatMapsInMemory());
+        options_.preserveFlatMapsInMemory(),
+        /*nimblePreserveDictionaryEncoding=*/false,
+        /*lazyIoColumns=*/nullptr,
+        /*lazyColumnIo=*/false,
+        /*dictionaryAwareReads=*/options_.nimbleDictionaryAwareReads(),
+        /*scanFastPath=*/options_.nimbleScanFastPath());
 
     columnReader_ = buildColumnReader(
         fileOutputType_,

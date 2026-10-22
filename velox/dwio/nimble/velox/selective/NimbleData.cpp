@@ -38,14 +38,18 @@ NimbleData::NimbleData(
     bool stringDecoderZeroCopy,
     bool nimblePreserveDictionaryEncoding,
     bool lazyColumnIo,
-    velox::dwio::common::DecodingStats* decodingStats)
+    velox::dwio::common::DecodingStats* decodingStats,
+    bool dictionaryAwareReads,
+    bool scanFastPath)
     : nimbleType_(nimbleType),
       streams_(&streams),
       pool_(&memoryPool),
       inMapDecoder_(inMapDecoder),
       encodingFactory_(&encodingFactory),
       lazyColumnIo_(lazyColumnIo),
-      decodingStats_(decodingStats) {
+      decodingStats_(decodingStats),
+      dictionaryAwareReads_(dictionaryAwareReads),
+      scanFastPath_(scanFastPath) {
   switch (nimbleType->kind()) {
     case Kind::Scalar:
       // Nulls in scalar types will be decoded along with values.
@@ -181,7 +185,9 @@ ChunkedDecoder NimbleData::makeScalarDecoder() {
       pool_,
       stringDecoderZeroCopy_,
       decodingStats_,
-      streams_->dictionaryAlphabetLoader(streamId));
+      streams_->dictionaryAlphabetLoader(streamId),
+      dictionaryAwareReads_,
+      scanFastPath_);
 }
 
 ChunkedDecoder NimbleData::makeMicrosDecoder() {
@@ -197,7 +203,9 @@ ChunkedDecoder NimbleData::makeMicrosDecoder() {
       pool_,
       stringDecoderZeroCopy_,
       decodingStats_,
-      streams_->dictionaryAlphabetLoader(streamId));
+      streams_->dictionaryAlphabetLoader(streamId),
+      dictionaryAwareReads_,
+      scanFastPath_);
 }
 
 ChunkedDecoder NimbleData::makeNanosDecoder() {
@@ -213,7 +221,9 @@ ChunkedDecoder NimbleData::makeNanosDecoder() {
       pool_,
       stringDecoderZeroCopy_,
       decodingStats_,
-      streams_->dictionaryAlphabetLoader(streamId));
+      streams_->dictionaryAlphabetLoader(streamId),
+      dictionaryAwareReads_,
+      scanFastPath_);
 }
 
 std::unique_ptr<ChunkedDecoder> NimbleData::makeLengthDecoder() {
@@ -245,7 +255,9 @@ std::unique_ptr<ChunkedDecoder> NimbleData::makeDecoder(
       pool_,
       stringDecoderZeroCopy_,
       decodingStats_,
-      streams_->dictionaryAlphabetLoader(descriptor.offset()));
+      streams_->dictionaryAlphabetLoader(descriptor.offset()),
+      dictionaryAwareReads_,
+      scanFastPath_);
 }
 
 std::unique_ptr<velox::dwio::common::FormatData> NimbleParams::toFormatData(
@@ -266,7 +278,9 @@ std::unique_ptr<velox::dwio::common::FormatData> NimbleParams::toFormatData(
       stringDecoderZeroCopy_,
       nimblePreserveDictionaryEncoding_,
       lazyColumnIo_,
-      decodingStats);
+      decodingStats,
+      dictionaryAwareReads_,
+      scanFastPath_);
 }
 
 } // namespace facebook::nimble

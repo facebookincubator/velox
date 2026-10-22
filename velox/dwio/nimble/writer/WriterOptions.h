@@ -59,7 +59,6 @@ struct WriterOptions {
         .useVarintRowCount = experimentalCompactRowCountEncoding,
         .blockBitPackingBlockSize = blockBitPackingBlockSize,
         .fixedBitWidthUseExactBits = fixedBitWidthUseExactBits,
-        .allowNestedAlpSelection = allowNestedAlpSelection,
         .subIntSplitDeltaPreTransform =
             FLAGS_nimble_subintsplit_delta_pretransform,
         .sharedDictionaryAlphabet = {},
@@ -92,6 +91,10 @@ struct WriterOptions {
   /// Enable vectorized stats for applicable schema shapes.
   bool enableVectorizedStats{true};
 
+  /// Longest string min/max, in bytes, kept in vectorized stats. Longer values
+  /// are written as absent, matching the DWRF writer's default limit.
+  uint32_t vectorizedStatsStringLengthLimit{64};
+
   /// Legacy alias for enabling V1 chunk statistics. The writer consumes this
   /// alias before passing the canonical chunk stats options to TabletWriter.
   bool enableChunkIndex{false};
@@ -109,6 +112,10 @@ struct WriterOptions {
   /// skipping.
   float chunkStatsMinAvgChunks{2};
 
+  /// Maximum string or binary value length retained in per-chunk bounds.
+  uint32_t maxChunkStringStatSize{
+      ChunkStatsWriter::Options::kDefaultMaxChunkStringStatSize};
+
   /// NOTE: !!! This is under experimentation and please do not turn on in
   /// production use case !!!
   /// Selects how per-stripe-group stream offsets/sizes are serialized:
@@ -121,7 +128,7 @@ struct WriterOptions {
   /// encoding per-stripe-group stream offsets/sizes (kStreamMajor). Only
   /// encodings with O(1) stateless point access (via EncodingView) are valid.
   /// Empty (default) lets the writer pick its own candidate set (Constant,
-  /// Trivial, FixedBitWidth).
+  /// Trivial, FixedBitWidth, Dictionary).
   std::vector<std::pair<EncodingType, float>>
       experimentalStripeGroupEncodingLayoutReadFactors{};
 
@@ -236,6 +243,24 @@ struct WriterOptions {
   /// encodings, based on history data.
   std::optional<EncodingLayoutTree> encodingLayoutTree{};
 
+  /// Velox subfield paths whose stored VARCHAR value streams prefer FSST.
+  /// Paths identify fields in the input schema and are resolved to the matching
+  /// stored data streams during construction; nested ROW fields use '.', while
+  /// ARRAY elements and MAP values use '[*]'. Targeting a cluster-index key is
+  /// rejected; non-key paths are resolved against the stored schema. A chunk
+  /// that misses FSST's compression target safely falls back to Trivial. FSST
+  /// and its fallback use the writer's normal encoding compression policy.
+  /// Targeting the same value stream with shared dictionary encoding is
+  /// rejected. Field names containing Velox subfield separators such as '.'
+  /// are not addressable as literal names through this interface.
+  std::vector<std::string> fsstEncodingSubfields{};
+
+  /// INTEGER, BIGINT, REAL and DOUBLE value streams pinned to SubIntSplit.
+  /// Paths use the same syntax as fsstEncodingSubfields. Cluster-index keys,
+  /// duplicate targets and shared dictionary collisions are rejected.
+  /// Explicit encodingLayoutTree entries take precedence.
+  std::vector<std::string> subIntSplitEncodingSubfields{};
+
   /// Compression settings to be used when encoding and compressing data streams
   CompressionOptions compressionOptions{};
 
@@ -259,11 +284,6 @@ struct WriterOptions {
   /// FSST is kept only when its final encoded size is at most this fraction of
   /// the original string bytes.
   double fsstCompressionTargetRatio{0.6};
-
-  /// EXPERIMENTATION: Allows ALP to participate in nested floating-point
-  /// encoding selection. False by default; do not enable for production until
-  /// ALP is production-ready.
-  bool allowNestedAlpSelection{false};
 
   /// Maximum number of scratch vector buffers retained by each per-encode-task
   /// scratch pool. 0 disables scratch vector buffer caching. Disabled by
@@ -291,6 +311,13 @@ struct WriterOptions {
   /// compressed.
   std::optional<uint32_t> metadataCompressionThreshold{};
 
+  /// If present, overrides how much estimated stripe group metadata the tablet
+  /// writer accumulates before closing a stripe group. One index partition is
+  /// emitted per stripe group, so lowering this is the only way to produce a
+  /// multi-partition index without writing enough stripes to reach the 8MB
+  /// default.
+  std::optional<uint32_t> metadataFlushThreshold{};
+
   /// When flushing data streams into chunks, streams with raw data size smaller
   /// than this threshold will not be flushed.
   /// Note: this threshold is ignored when it is time to flush a stripe.
@@ -307,6 +334,18 @@ struct WriterOptions {
   /// When the number of schema nodes exceeds this threshold we use
   /// wideSchemaMaxStreamChunkRawSize in place of maxStreamChunkRawSize.
   size_t largeSchemaThreshold{500};
+
+  /// Chunks a stream once it exceeds maxStreamChunkRawSize, rather than only
+  /// when the writer is also under aggregate memory pressure. Off by default:
+  /// it changes chunk boundaries, and therefore stripe boundaries, for every
+  /// writer with chunking enabled.
+  ///
+  /// Without it, maxStreamChunkRawSize is only consulted once shouldChunk()
+  /// reports pressure on the writer's total footprint, so a single stream can
+  /// grow far past the cap. That is costly: a stream buffer grows by ~1.19x
+  /// and holds the old and new allocations across the move, so a regrow
+  /// transiently needs about twice the buffer.
+  bool eagerChunking{false};
 
   /// Number of streams to try chunking between memory pressure evaluations.
   /// Note: this is ignored when it is time to flush a stripe.
@@ -413,6 +452,14 @@ struct WriterOptions {
   bool ignoreTopLevelNulls{false};
 
   bool enableStreamDeduplication{true};
+
+  /// When true, follows each non-empty stream's on-disk bytes with a 4-byte
+  /// checksum of them, so a reader can verify an individual stream without
+  /// reading the whole file. The checksum sits in the stripe data, outside the
+  /// stream's recorded size, and costs no metadata. Readers that predate it
+  /// read such files unverified. The whole-file checksum in the postscript is
+  /// written either way.
+  bool enableStreamChecksums{false};
 
   /// When true, string fields use per-field buffers instead of a shared buffer.
   /// This enables incremental memory reclamation during chunking.

@@ -27,8 +27,10 @@
 #include <vector>
 #include "velox/common/memory/MemoryPool.h"
 #include "velox/core/PlanNode.h"
+#include "velox/exec/ExchangeTransportRegistry.h"
 #include "velox/exec/OutputTransportRegistry.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/experimental/ucx-exchange/UcxExchangeRegistration.h"
 #include "velox/experimental/ucx-exchange/tests/UcxTestHelpers.h"
 
 using namespace facebook::velox::ucx_exchange;
@@ -69,13 +71,13 @@ class UcxOutputQueueManagerTest : public testing::Test {
   }
 
   std::unique_ptr<cudf::packed_columns> makePackedColumns(std::size_t numRows) {
-    rmm::cuda_stream_view stream = rmm::cuda_stream_default;
+    cuda::stream_ref stream = cuda::stream_ref{cudaStream_t{cudaStreamDefault}};
     // Create table directly without going through pack/unpack
     auto table = facebook::velox::ucx_exchange::makeTable(
         numRows, UcxTestData::kTestRowType, stream);
     auto cols = std::make_unique<cudf::packed_columns>(
         cudf::pack(table->view(), stream));
-    stream.synchronize();
+    stream.sync();
     return cols;
   }
 
@@ -321,6 +323,51 @@ TEST_F(UcxOutputQueueManagerTest, implementsOutputBufferManager) {
 
   mgr->removeTask(taskId);
   EXPECT_EQ(mgr->stats(taskId), std::nullopt);
+}
+
+// The output half of the kUcx registration: the entry the manager is published
+// under, and that a second registration replaces rather than rejects.
+TEST_F(UcxOutputQueueManagerTest, registersUcxOutputTransport) {
+  // Start from a clean baseline so this case does not depend on registration
+  // state left behind by other suites in the binary. unregisterAll() re-seeds
+  // the built-in in-memory default, so only kUcx is actually cleared.
+  exec::OutputTransportRegistry::unregisterAll();
+  ASSERT_EQ(
+      exec::OutputTransportRegistry::tryGet(
+          std::string{core::TransportKind::kUcx}),
+      nullptr);
+
+  registerUcxTransports();
+  auto entry = exec::OutputTransportRegistry::tryGet(
+      std::string{core::TransportKind::kUcx});
+  ASSERT_NE(entry, nullptr);
+  EXPECT_EQ(entry->manager, UcxOutputQueueManager::getInstanceRef());
+  EXPECT_TRUE(static_cast<bool>(entry->makeOutputOperator));
+
+  // Idempotent: a second call replaces the entry rather than throwing on the
+  // duplicate key.
+  registerUcxTransports();
+  auto entryAfterSecondCall = exec::OutputTransportRegistry::tryGet(
+      std::string{core::TransportKind::kUcx});
+  ASSERT_NE(entryAfterSecondCall, nullptr);
+  EXPECT_EQ(
+      entryAfterSecondCall->manager, UcxOutputQueueManager::getInstanceRef());
+
+  // unregisterUcxTransports() erases kUcx from both registries and leaves the
+  // in-memory default alone.
+  unregisterUcxTransports();
+  EXPECT_EQ(
+      exec::OutputTransportRegistry::tryGet(
+          std::string{core::TransportKind::kUcx}),
+      nullptr);
+  EXPECT_EQ(
+      exec::ExchangeTransportRegistry::tryGet(
+          std::string{core::TransportKind::kUcx}),
+      nullptr);
+  EXPECT_NE(
+      exec::OutputTransportRegistry::tryGet(
+          std::string{core::TransportKind::kInMemory}),
+      nullptr);
 }
 
 TEST_F(UcxOutputQueueManagerTest, basicPartitioned) {

@@ -24,11 +24,14 @@
 #include <optional>
 #include <vector>
 
+#include <folly/container/F14Map.h>
 #include <folly/futures/Future.h>
 
 #include "velox/common/future/VeloxPromise.h"
+#include "velox/common/memory/MemoryPool.h"
 #include "velox/common/rpc/RPCTypes.h"
 #include "velox/exec/rpc/CongestionController.h"
+#include "velox/exec/rpc/RPCRateLimiter.h"
 #include "velox/vector/BaseVector.h"
 
 namespace facebook::velox::exec::rpc {
@@ -71,6 +74,33 @@ class RPCState {
  public:
   // ===== Data structures =====
 
+  /// Accounts response-retained bytes while the operator owns them.
+  class PayloadMemoryCharge {
+   public:
+    PayloadMemoryCharge() = default;
+    PayloadMemoryCharge(
+        std::shared_ptr<memory::MemoryPool> pool,
+        int64_t bytes);
+    PayloadMemoryCharge(PayloadMemoryCharge&& other) noexcept;
+    PayloadMemoryCharge& operator=(PayloadMemoryCharge&& other) noexcept;
+    PayloadMemoryCharge(const PayloadMemoryCharge&) = delete;
+    PayloadMemoryCharge& operator=(const PayloadMemoryCharge&) = delete;
+    ~PayloadMemoryCharge();
+
+    int64_t bytes() const noexcept {
+      return bytes_;
+    }
+
+   private:
+    // Releases the external-memory charge while retaining pool lifetime.
+    void release() noexcept;
+
+    // Keeps the accounting destination alive through charge release.
+    std::shared_ptr<memory::MemoryPool> pool_;
+    // Stores the amount paired with one external allocation report.
+    int64_t bytes_{0};
+  };
+
   /// Location of a row within an input batch.
   struct RowLocation {
     int32_t batchIndex{0};
@@ -81,19 +111,45 @@ class RPCState {
   struct ReadyRow {
     int64_t rowId{0};
     RowLocation location;
+    /// Accounts external memory retained by response.
+    PayloadMemoryCharge charge;
     RPCResponse response;
+    /// True when completion applied canonical typed-overload backoff to the
+    /// shared limiter before releasing admission. The driver treats this as an
+    /// authoritative overload marker and does not apply shared backoff twice.
+    bool sharedOverloadHandled{false};
+    /// Identifies the limiter epoch under which this RPC was admitted.
+    std::optional<uint64_t> admissionEpoch;
     /// Round-trip latency (nanos) from dispatch to completion, used as the
     /// gradient congestion signal on success.
     int64_t rttNs{0};
   };
 
+  /// Pairs completed responses with their query-pool memory charge.
+  /// The charge remains alive while the responses retain accounted memory.
+  struct CompletedBatch {
+    /// Accounts external memory retained by responses.
+    PayloadMemoryCharge charge;
+    /// Responses produced by one completed batch dispatch.
+    std::vector<RPCResponse> responses;
+    /// True when completion applied canonical typed-overload backoff to the
+    /// shared limiter before releasing admission.
+    bool sharedOverloadHandled{false};
+    /// Identifies the limiter epoch under which this batch was admitted.
+    std::optional<uint64_t> admissionEpoch;
+  };
+
   /// A batch of rows waiting for RPC response.
   struct PendingBatch {
     int64_t batchId;
-    folly::SemiFuture<std::vector<RPCResponse>> future;
+    folly::SemiFuture<CompletedBatch> future;
+    int64_t admissionUnits{1};
+    /// Owns admission until completion-time classification, or until close
+    /// releases an unresolved batch. Ready output never retains admission.
+    std::shared_ptr<RPCRateLimiter::AdmissionLease> admissionLease;
     /// Row locations for mapping responses back to input batch positions.
-    /// Stored at batch level instead of per-row in a map, since callBatch()
-    /// returns responses in the same order as requests.
+    /// Stored at batch level instead of per-row in a map. RPCOperator scatters
+    /// flushBatch() responses into request order before adding the batch.
     std::vector<RowLocation> rowLocations;
     /// Monotonic dispatch time (nanos, steady_clock).
     int64_t dispatchTimeNs{0};
@@ -108,8 +164,17 @@ class RPCState {
   /// A batch with completed RPC responses.
   struct ReadyBatch {
     int64_t batchId{0};
+    /// Accounts external memory retained by responses.
+    PayloadMemoryCharge charge;
     std::vector<RPCResponse> responses;
     std::optional<std::string> error;
+    int64_t admissionUnits{1};
+    /// True when completion applied canonical typed-overload backoff to the
+    /// shared limiter before releasing admission. The driver treats this as an
+    /// authoritative overload marker and does not apply shared backoff twice.
+    bool sharedOverloadHandled{false};
+    /// Identifies the limiter epoch under which this batch was admitted.
+    std::optional<uint64_t> admissionEpoch;
     /// Row locations carried from PendingBatch for response-to-input mapping.
     std::vector<RowLocation> rowLocations;
     /// Round-trip latency (nanos) from dispatch to completion, used as the
@@ -117,13 +182,16 @@ class RPCState {
     int64_t rttNs{0};
   };
 
-  /// Snapshot of all operator-visible state at close() time, captured under a
-  /// single lock acquisition for consistency.
+  /// Snapshot of all operator-visible state, captured under a single lock
+  /// acquisition for consistency. Taken at close() for the final runtime
+  /// stats, and while the operator is running (from an arbitrary thread) so
+  /// RPC progress is observable before the operator finishes.
   struct OperatorSnapshot {
     // Congestion controller.
     int64_t windowLimit{0};
     int64_t baselineRttNs{0};
     int64_t numShrinks{0};
+    int64_t numOverloadShrinks{0};
     int64_t peakInFlight{0};
     // Transport RTT.
     int64_t rttMinNs{0};
@@ -131,9 +199,20 @@ class RPCState {
     int64_t numRttSamples{0};
     // Streaming mode.
     RPCStreamingMode streamingMode{RPCStreamingMode::kPerRow};
+    // Units dispatched but not yet completed.
+    int64_t inFlight{0};
+    // Monotonic count of completions signaled by the RPC transport, bumped
+    // from the completion callbacks (executor threads) rather than from the
+    // driver. A driver parked on kWaitForRPC cannot advance any operator
+    // counter, so this is the only value that moves while a backend is
+    // trickling responses back.
+    int64_t numCompletionsSignaled{0};
   };
 
-  RPCState() = default;
+  explicit RPCState(std::shared_ptr<memory::MemoryPool> pool)
+      : pool_(std::move(pool)) {
+    VELOX_CHECK_NOT_NULL(pool_);
+  }
 
   // ===== Configuration =====
   // These must be called before any dispatch (single-threaded init phase).
@@ -150,11 +229,23 @@ class RPCState {
   /// starting value). 0 keeps the per-mode built-in ceiling (PER_ROW 100, BATCH
   /// 256). Raise it so a high-latency backend can run at high concurrency;
   /// admission-controlled dispatch makes this ceiling bind.
+  /// @param batchStartWindow Initial BATCH congestion window. 0 keeps the
+  /// built-in default of 2. Positive values are clamped to [minWindow,
+  /// maxWindow]. PER_ROW startup is unaffected. Size at or below the
+  /// backend's measured knee: starting above it seeds the baseline with
+  /// queueing delay, leaving only explicit overload errors to shrink it.
+  /// @param asyncGrowthMaxWindow Cap for BATCH window growth on clean
+  /// no-latency completions (default 0 = growth disabled). Positive values let
+  /// the window discover capacity additively up to the cap. A positive value
+  /// below the effective BATCH start window is raised to that start, and
+  /// maxWindow remains the overall ceiling.
   void setStreamingMode(
       RPCStreamingMode mode,
       int64_t minWindow = 1,
       double stepCoef = 1.0,
-      int64_t maxWindow = 0);
+      int64_t maxWindow = 0,
+      int64_t batchStartWindow = 0,
+      int64_t asyncGrowthMaxWindow = 0);
 
   /// Get the current streaming mode.
   RPCStreamingMode streamingMode() const;
@@ -162,10 +253,11 @@ class RPCState {
   /// Set both the starting limit and the ceiling to maxWindow, overriding the
   /// per-mode default chosen in setStreamingMode(). This yields a fixed window
   /// only while no samples/errors are fed: onUnitError still halves it and
-  /// onUnitSample still grows it via the sqrt headroom. That no-feed case is
-  /// the deterministic window the unit tests rely on. Must be called AFTER
-  /// setStreamingMode(), which always resets the window. Tests only; production
-  /// relies on the per-mode defaults.
+  /// onUnitSample still grows it via the sqrt headroom. Clean-completion growth
+  /// is disabled because this resets its cap to zero. That no-feed case is the
+  /// deterministic window the unit tests rely on. Must be called AFTER
+  /// setStreamingMode(), which always resets the window. Tests only;
+  /// production relies on the per-mode defaults.
   void setMaxWindow(int64_t maxWindow);
 
   // ===== Input batch storage =====
@@ -185,7 +277,7 @@ class RPCState {
 
   /// Drop every retained input vector, regardless of activeRowCount.
   ///
-  /// Called from RPCOperator::close() on the driver thread. In-flight RPC
+  /// Called from RPCOperator::close() and ~RPCOperator(). In-flight RPC
   /// callbacks hold a shared_ptr to this object, so it can outlive the
   /// operator, the Task and the query's memory pools. The input vectors were
   /// allocated from upstream operators' pools, so holding them past teardown
@@ -198,6 +290,13 @@ class RPCState {
   /// deposit RPCResponse values and never read flatColumns, which is read
   /// solely by the driver thread when building output.
   void releaseAllInputBatches();
+
+  /// Stops accepting completions and releases all retained resources.
+  /// Idempotent.
+  void close();
+
+  /// Charges externally allocated response bytes against the query pool.
+  [[nodiscard]] PayloadMemoryCharge chargePayloadBytes(int64_t bytes);
 
   // ===== PER_ROW mode API =====
 
@@ -213,21 +312,24 @@ class RPCState {
   /// @param rowId Globally unique row ID for correlation.
   /// @param location Row's location in the stored input batch.
   /// @param future The SemiFuture from client->call().
+  /// @param admissionLease Backend admission held through RPC completion.
   void addPendingRow(
       std::shared_ptr<RPCState> selfPtr,
       int64_t rowId,
       RowLocation location,
-      folly::SemiFuture<RPCResponse> future);
+      folly::SemiFuture<RPCResponse> future,
+      std::shared_ptr<RPCRateLimiter::AdmissionLease> admissionLease = nullptr);
 
-  /// Atomically try to claim a ready row, check finish, or wait. Thread-safe.
-  /// Called from the driver thread in isBlocked().
+  /// Atomically tries to claim a ready row, detect completion, distinguish an
+  /// idle state that only backend admission can advance, or wait for an
+  /// in-flight RPC. Thread-safe. Called from the driver thread in isBlocked().
   ///
   /// All three checks happen under a single lock to prevent TOCTOU races.
   ///
   /// @param[out] future Set to a wait future if kMustWait.
   /// @param[out] claimedRow Set to the claimed row if kClaimed.
-  /// @return kClaimed, kFinished, or kMustWait.
-  enum class ClaimResult { kClaimed, kFinished, kMustWait };
+  /// @return kClaimed, kFinished, kIdle, or kMustWait.
+  enum class ClaimResult { kClaimed, kFinished, kIdle, kMustWait };
   ClaimResult tryClaimOrWait(
       ContinueFuture* future,
       std::optional<ReadyRow>* claimedRow);
@@ -257,14 +359,19 @@ class RPCState {
   /// mutex_ internally.
   ///
   /// @param selfPtr Shared pointer to this RPCState (prevent destruction).
-  /// @param future The SemiFuture from client->callBatch().
+  /// @param future The normalized SemiFuture produced from
+  ///        AsyncRPCFunction::flushBatch().
   /// @param rowLocations Locations mapping each request to its input batch
   ///        position. Stored on the PendingBatch and carried through to
   ///        ReadyBatch, eliminating per-row rowLocations_ map overhead.
+  /// @param admissionUnits Backend concurrency slots reserved for this batch.
+  /// @param admissionLease Backend admission held through RPC completion.
   void addPendingBatch(
       std::shared_ptr<RPCState> selfPtr,
       folly::SemiFuture<std::vector<RPCResponse>> future,
-      std::vector<RowLocation> rowLocations);
+      std::vector<RowLocation> rowLocations,
+      int64_t admissionUnits,
+      std::shared_ptr<RPCRateLimiter::AdmissionLease> admissionLease = nullptr);
 
   /// Atomically try to poll a ready batch, check finish, or wait. Thread-safe.
   /// Called from the driver thread in isBlocked().
@@ -286,6 +393,21 @@ class RPCState {
   // ===== Common =====
 
   /// Signal that no more rows will be dispatched. Thread-safe.
+  /// Fails if any completed row could not be queued. Every terminal path --
+  /// the claim loop and the drain's finish check -- asks this, because a short
+  /// result that reports success is indistinguishable downstream from a
+  /// correct one. Called on the driver thread, where throwing is a query
+  /// error rather than a lost exception.
+  void checkNoDroppedRowsLocked() const;
+
+  /// Simulates a completed row that could not be queued, which is otherwise
+  /// only reachable under a real allocation failure. Used to prove the finish
+  /// path fails rather than returning a short result.
+  void testingDropCompletedRow() {
+    std::lock_guard<std::mutex> l(mutex_);
+    ++droppedRows_;
+  }
+
   void setNoMoreInput();
 
   /// Returns true when all work is complete. Thread-safe.
@@ -318,6 +440,16 @@ class RPCState {
   /// otherwise lock once per row, contending with completion callbacks.
   /// Thread-safe.
   void onUnitSamples(const std::vector<int64_t>& rttNsList);
+
+  /// Report clean completions that carry no usable latency sample (MetaGen
+  /// async-job batches, whose queue-dominated elapsed time must not train the
+  /// gradient). Grows the window additively on completion count instead, so a
+  /// no-latency path still discovers capacity. BATCH only: ignored in PER_ROW
+  /// mode, whose window starts at its ceiling and must only shrink — a
+  /// probing-upward window would ramp into low-latency rate-limit storms the
+  /// gradient cannot see. Ignored unless an async-growth cap was configured
+  /// via setStreamingMode (0 disables the growth). Thread-safe.
+  void onUnitCleanCompletions(int64_t numUnits);
 
   /// Return a consistent snapshot of all operator-visible state under a single
   /// lock acquisition. Thread-safe.
@@ -354,8 +486,18 @@ class RPCState {
   // Input batch storage (shared across PER_ROW and BATCH modes)
   std::vector<InputBatchRef> inputBatches_;
 
+  // Reset by close(). Completion callbacks copy it only while reporting a
+  // charge, so memory arbitration runs without holding mutex_.
+  std::shared_ptr<memory::MemoryPool> pool_;
+  // Rejects completions after close() has detached the operator's resources.
+  bool closed_{false};
+
   // PER_ROW state
   std::deque<ReadyRow> readyRows_;
+  // Owns admission while each per-row RPC is in flight. Completion finalizes
+  // the lease before queuing ReadyRow; close releases unresolved leases.
+  folly::F14FastMap<int64_t, std::shared_ptr<RPCRateLimiter::AdmissionLease>>
+      pendingRowAdmissionLeases_;
 
   // BATCH state
   int64_t nextBatchId_{0};
@@ -371,8 +513,20 @@ class RPCState {
   // against window_.limit().
   int64_t inFlight_{0};
 
+  // Rows that completed but could not be queued, because queueing them threw
+  // under memory pressure. Checked at the finish condition: a short result
+  // that reports success is worse than a failed query, since nothing
+  // downstream can tell the difference.
+  int64_t droppedRows_{0};
+
   // High-water mark of inFlight_ across the lifetime of this RPCState.
   int64_t peakInFlight_{0};
+
+  // Monotonic count of completions signaled by the RPC transport. Bumped from
+  // the completion callbacks, which run on the client's executor threads, so
+  // it keeps advancing while the driver is parked on kWaitForRPC and no
+  // operator counter can move.
+  int64_t numCompletionsSignaled_{0};
 
   // Accumulated RTT measurements across all completed units.
   int64_t rttMinNs_{std::numeric_limits<int64_t>::max()};

@@ -22,44 +22,29 @@
 #include <cudf/structs/structs_column_view.hpp>
 #include <cudf/table/table.hpp>
 #include <cudf/types.hpp>
-#include <cudf/utilities/memory_resource.hpp>
 #include <folly/Executor.h>
-#include <folly/Synchronized.h>
-#include <folly/executors/CPUThreadPoolExecutor.h>
 #include <folly/synchronization/EventCount.h>
-#include <gmock/gmock.h>
 #include <gtest/gtest-param-test.h>
 #include <gtest/gtest.h>
 #include <rmm/device_buffer.hpp>
-#include <algorithm>
 #include <chrono>
-#include <functional>
 #include <future>
-#include <limits>
 #include <memory>
 #include <sstream>
-#include <utility>
 #include <vector>
 #include "velox/common/memory/MemoryPool.h"
 #include "velox/core/QueryConfig.h"
-#include "velox/exec/OutputTransportRegistry.h"
-#include "velox/exec/tests/utils/PlanBuilder.h"
-#include "velox/exec/tests/utils/PortUtil.h"
-#include "velox/exec/tests/utils/QueryAssertions.h"
 #include "velox/experimental/cudf/CudfConfig.h"
-#include "velox/experimental/cudf/exec/ToCudf.h"
-#include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 #include "velox/experimental/ucx-exchange/Communicator.h"
 #include "velox/experimental/ucx-exchange/UcxExchangeProtocol.h"
 #include "velox/experimental/ucx-exchange/UcxOutputQueueManager.h"
 #include "velox/experimental/ucx-exchange/tests/SinkDriverMock.h"
 #include "velox/experimental/ucx-exchange/tests/SourceDriverMock.h"
+#include "velox/experimental/ucx-exchange/tests/UcxExchangeTestBase.h"
 #include "velox/experimental/ucx-exchange/tests/UcxPartitionedOutputMock.h"
 #include "velox/experimental/ucx-exchange/tests/UcxTestData.h"
 #include "velox/experimental/ucx-exchange/tests/UcxTestHelpers.h"
-#include "velox/serializers/PrestoSerializer.h"
-#include "velox/vector/FlatVector.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
@@ -144,101 +129,18 @@ struct ExchangeTestParamsPrinter {
   }
 };
 
-class UcxExchangeTest : public testing::TestWithParam<ExchangeTestParams> {
+class UcxExchangeTest : public UcxExchangeTestBase,
+                        public testing::WithParamInterface<ExchangeTestParams> {
  protected:
-  // Chosen per process in SetUpTestCase() rather than hardcoded. The
-  // communicator opens a listener on this port without address reuse, so two
-  // runs of this binary in quick succession fail the second with
-  // "bind(0.0.0.0:21346) failed: Address already in use" while the first port
-  // is still in TIME_WAIT.
-  static uint16_t communicatorPort_;
-
-  // UcxExchangeSource computes the UCX port as the split URL's port + 3
-  // (UcxExchangeSource.cpp), so remoteSplit() advertises this much below the
-  // communicator's port for the round trip to land back on it.
-  static constexpr int kSplitUrlPortOffset = 3;
-
-  static constexpr auto kUnusedCoordinatorUrl =
-      std::string_view("http://localhost:12345/bla");
-
-  static std::shared_ptr<UcxOutputQueueManager> queueManager_;
-  static std::shared_ptr<std::thread> communicatorThread_;
-  static std::shared_ptr<Communicator> communicator_;
-  static std::atomic<uint32_t> testCounter_;
-
-  // Generate a unique task ID prefix for this test run to avoid collisions
-  // between parametrized tests
-  std::string getUniqueTaskPrefix() {
-    return "t" + std::to_string(testCounter_.fetch_add(1)) + "_";
-  }
-
-  // Get the row type based on the table type from test params
-  facebook::velox::RowTypePtr getRowType(TableType tableType) {
-    if (tableType == TableType::WIDE) {
-      return WideTestTable::kRowType;
-    }
-    return UcxTestData::kTestRowType;
-  }
-
-  // Check if we should skip this test for wide table configurations
-  // Some tests are not yet compatible with WideTestTable
+  // Some tests are not yet compatible with WideTestTable.
   bool shouldSkipWideTable() {
-    ExchangeTestParams p = GetParam();
-    return p.tableType == TableType::WIDE;
+    return GetParam().tableType == TableType::WIDE;
   }
-
-  static void SetUpTestCase() {
-    VLOG(0) << "setup test case, creating queue manager, communicator, etc..";
-    memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
-
-    // UcxExchangeSource derives the UCX port as the split URL's port + 3, and
-    // remoteSplit() advertises communicatorPort_ - 3 to match, so the offset
-    // must stay below the chosen port.
-    const auto freePort = exec::test::getFreePort();
-    ASSERT_GT(freePort, kSplitUrlPortOffset);
-    ASSERT_LE(freePort, std::numeric_limits<uint16_t>::max());
-    communicatorPort_ = static_cast<uint16_t>(freePort);
-
-    queueManager_ = UcxOutputQueueManager::getInstanceRef();
-    ContinueFuture future;
-    communicator_ = facebook::velox::ucx_exchange::Communicator::initAndGet(
-        communicatorPort_, std::string(kUnusedCoordinatorUrl), &future);
-    if (communicator_) {
-      communicatorThread_ = std::make_shared<std::thread>(
-          &facebook::velox::ucx_exchange::Communicator::run,
-          communicator_.get());
-    } else {
-      ADD_FAILURE() << "Communicator initialization failed";
-    }
-    future.wait();
-  }
-
-  static void TearDownTestCase() {
-    communicator_->stop();
-    communicator_.reset();
-    communicatorThread_->join();
-    communicatorThread_.reset();
-  }
-
-  void SetUp() override {
-    VLOG(0) << "creating pool";
-    pool_ = facebook::velox::memory::memoryManager()->addLeafPool(
-        "UcxTestMemoryPool");
-  }
-
-  exec::Split remoteSplit(std::string_view taskId, int partitionId) {
-    std::string remoteUrl = fmt::format(
-        "http://127.0.0.1:{}/v1/task/{}/results/{}",
-        communicatorPort_ - kSplitUrlPortOffset,
-        taskId,
-        partitionId);
-    return exec::Split(
-        std::make_shared<facebook::velox::exec::RemoteConnectorSplit>(
-            remoteUrl));
-  }
-
-  std::shared_ptr<facebook::velox::memory::MemoryPool> pool_;
 };
+
+// Fixture for focused behavioral tests that should run once per process rather
+// than once for every ExchangeTestParams value.
+class UcxExchangeFocusedTest : public UcxExchangeTestBase {};
 
 INSTANTIATE_TEST_SUITE_P(
     UcxExchangeTest,
@@ -328,7 +230,7 @@ TEST_P(UcxExchangeTest, basicTest) {
         createSourceTask(srcTaskId, pool_, UcxTestData::kTestRowType);
 
     // tell the queue manager that a new source task exists.
-    queueManager_->initializeTask(
+    queueManager()->initializeTask(
         srcTask,
         core::PartitionedOutputNode::Kind::kPartitioned,
         p.numPartitions,
@@ -399,7 +301,7 @@ TEST_P(UcxExchangeTest, basicTest) {
 
   // Remove the srcTasks from the queue manager, so queue get freed
   for (const auto& srcTaskId : srcTaskIds) {
-    queueManager_->removeTask(srcTaskId);
+    queueManager()->removeTask(srcTaskId);
   }
 
   VLOG(3) << "- UcxExchangeTest::basicTest";
@@ -437,7 +339,7 @@ TEST_P(UcxExchangeTest, dataIntegrityTest) {
         createSourceTask(srcTaskId, pool_, UcxTestData::kTestRowType);
 
     // tell the queue manager that a new source task exists.
-    queueManager_->initializeTask(
+    queueManager()->initializeTask(
         srcTask,
         core::PartitionedOutputNode::Kind::kPartitioned,
         p.numPartitions,
@@ -501,7 +403,7 @@ TEST_P(UcxExchangeTest, dataIntegrityTest) {
 
   // Remove the srcTasks from the queue manager, so queue get freed
   for (const auto& srcTaskId : srcTaskIds) {
-    queueManager_->removeTask(srcTaskId);
+    queueManager()->removeTask(srcTaskId);
   }
 
   // Check data integrity across all partitions
@@ -557,7 +459,7 @@ TEST_P(UcxExchangeTest, bandwidthTest) {
     // block sending
     auto srcTask = createSourceTask(
         srcTaskId, pool_, UcxTestData::kTestRowType, FOUR_GBYTES * 10);
-    queueManager_->initializeTask(
+    queueManager()->initializeTask(
         srcTask,
         core::PartitionedOutputNode::Kind::kPartitioned,
         p.numPartitions,
@@ -631,7 +533,7 @@ TEST_P(UcxExchangeTest, bandwidthTest) {
 
   // Remove the srcTasks from the queue manager, so queue get freed
   for (const auto& srcTaskId : srcTaskIds) {
-    queueManager_->removeTask(srcTaskId);
+    queueManager()->removeTask(srcTaskId);
   }
 
   VLOG(3) << "- UcxExchangeTest::bandwidth";
@@ -670,7 +572,7 @@ TEST_P(UcxExchangeTest, realPartitionedOutputTest) {
       srcTaskId, pool_, rowType, p.numPartitions, partitionKeys);
 
   // Tell the queue manager that a new source task exists
-  queueManager_->initializeTask(
+  queueManager()->initializeTask(
       srcTask,
       core::PartitionedOutputNode::Kind::kPartitioned,
       p.numPartitions,
@@ -737,7 +639,7 @@ TEST_P(UcxExchangeTest, realPartitionedOutputTest) {
   GTEST_ASSERT_EQ(expectedRows, totalReceivedRows);
 
   // Cleanup
-  queueManager_->removeTask(srcTaskId);
+  queueManager()->removeTask(srcTaskId);
 
   VLOG(3) << "- UcxExchangeTest::realPartitionedOutputTest";
 }
@@ -804,7 +706,7 @@ TEST_P(UcxExchangeTest, realPartitionedOutputDataIntegrityTest) {
 
   // Create per-partition reference data by applying cudf::hash_partition
   // to the source data - same algorithm as UcxPartitionedOutput uses
-  auto stream = rmm::cuda_stream_default;
+  auto stream = cuda::stream_ref{cudaStream_t{cudaStreamDefault}};
   std::vector<std::shared_ptr<BaseTableGenerator>> partitionedDataToVerify(
       p.numPartitions);
 
@@ -834,7 +736,7 @@ TEST_P(UcxExchangeTest, realPartitionedOutputDataIntegrityTest) {
       srcTaskId, pool_, rowType, p.numPartitions, partitionKeys);
 
   // Tell the queue manager that a new source task exists
-  queueManager_->initializeTask(
+  queueManager()->initializeTask(
       srcTask,
       core::PartitionedOutputNode::Kind::kPartitioned,
       p.numPartitions,
@@ -914,7 +816,7 @@ TEST_P(UcxExchangeTest, realPartitionedOutputDataIntegrityTest) {
   }
 
   // Cleanup
-  queueManager_->removeTask(srcTaskId);
+  queueManager()->removeTask(srcTaskId);
 
   VLOG(3) << "- UcxExchangeTest::realPartitionedOutputDataIntegrityTest";
 }
@@ -924,12 +826,7 @@ TEST_P(UcxExchangeTest, realPartitionedOutputDataIntegrityTest) {
 // task-split path, to isolate close behavior after the client is populated.
 // Closing one operator must not close the shared client while another operator
 // still needs to drain data.
-TEST_P(UcxExchangeTest, sharedClientSurvivesOneExchangeClose) {
-  // This test doesn't use parameters - run only for the first param set.
-  if (GetParam() != generateTestParams().front()) {
-    GTEST_SKIP() << "sharedClientSurvivesOneExchangeClose: runs only once";
-  }
-
+TEST_F(UcxExchangeFocusedTest, sharedClientSurvivesOneExchangeClose) {
   const std::string taskPrefix = getUniqueTaskPrefix();
   const std::string srcTaskId = taskPrefix + "sharedClientSrc";
   const std::string sinkTaskId = taskPrefix + "sharedClientSink";
@@ -942,7 +839,7 @@ TEST_P(UcxExchangeTest, sharedClientSurvivesOneExchangeClose) {
 
   auto rowType = UcxTestData::kTestRowType;
   auto srcTask = createSourceTask(srcTaskId, pool_, rowType);
-  queueManager_->initializeTask(
+  queueManager()->initializeTask(
       srcTask,
       core::PartitionedOutputNode::Kind::kPartitioned,
       numPartitions,
@@ -1007,23 +904,13 @@ TEST_P(UcxExchangeTest, sharedClientSurvivesOneExchangeClose) {
 
   EXPECT_EQ(rowsReceived, static_cast<uint64_t>(numChunks) * numRowsPerChunk);
 
-  queueManager_->removeTask(srcTaskId);
+  queueManager()->removeTask(srcTaskId);
 }
 
 // Test that verifies intra-node exchange does not livelock when a producing
 // task is removed while the consumer is polling IntraNodeTransferRegistry.
 // Before the fix: test times out (livelock). After the fix: test passes.
-TEST_P(UcxExchangeTest, intraNodeTaskRemovalLivelock) {
-  // This test doesn't use parameters — run only for the first param set.
-  {
-    ExchangeTestParams p = GetParam();
-    if (p.numSrcDrivers != 1 || p.numDstDrivers != 1 || p.numPartitions != 1 ||
-        p.numChunks != 100 || p.numUpstreamTasks != 1 ||
-        p.tableType != TableType::NARROW) {
-      GTEST_SKIP() << "intraNodeTaskRemovalLivelock: runs only once";
-    }
-  }
-
+TEST_F(UcxExchangeFocusedTest, intraNodeTaskRemovalLivelock) {
   const std::string taskPrefix = getUniqueTaskPrefix();
   const std::string srcTaskId = taskPrefix + "srcProducerNeverSends";
   const std::string sinkTaskId = taskPrefix + "sinkConsumer";
@@ -1033,7 +920,7 @@ TEST_P(UcxExchangeTest, intraNodeTaskRemovalLivelock) {
   // 1. Create and initialize source task but never enqueue any data.
   //    This simulates a producer that gets cancelled before producing.
   auto srcTask = createSourceTask(srcTaskId, pool_, UcxTestData::kTestRowType);
-  queueManager_->initializeTask(
+  queueManager()->initializeTask(
       srcTask,
       core::PartitionedOutputNode::Kind::kPartitioned,
       numPartitions,
@@ -1064,7 +951,7 @@ TEST_P(UcxExchangeTest, intraNodeTaskRemovalLivelock) {
   //    removal. After the fix, the consumer should detect this and stop
   //    polling.
   srcTask->requestAbort();
-  queueManager_->removeTask(srcTaskId);
+  queueManager()->removeTask(srcTaskId);
 
   // 6. Wait for sink to complete with a timeout.
   auto future =
@@ -1090,17 +977,7 @@ TEST_P(UcxExchangeTest, intraNodeTaskRemovalLivelock) {
 // The fix disables intra-node at handshake time for broadcast tasks, falling
 // back to UCXX. This test verifies that broadcast with intra-node enabled
 // completes without crash and delivers correct data.
-TEST_P(UcxExchangeTest, broadcastIntraNodeFallback) {
-  // This test doesn't use parameters — run only for the first param set.
-  {
-    ExchangeTestParams p = GetParam();
-    if (p.numSrcDrivers != 1 || p.numDstDrivers != 1 || p.numPartitions != 1 ||
-        p.numChunks != 100 || p.numUpstreamTasks != 1 ||
-        p.tableType != TableType::NARROW) {
-      GTEST_SKIP() << "broadcastIntraNodeFallback: runs only once";
-    }
-  }
-
+TEST_F(UcxExchangeFocusedTest, broadcastIntraNodeFallback) {
   // Enable intra-node exchange so the Acceptor's broadcast guard is exercised.
   auto& config = cudf_velox::CudfConfig::getInstance();
   const bool origIntraNode = config.intraNodeExchange;
@@ -1115,13 +992,13 @@ TEST_P(UcxExchangeTest, broadcastIntraNodeFallback) {
 
   // Create source task with broadcast mode.
   auto srcTask = createSourceTask(srcTaskId, pool_, UcxTestData::kTestRowType);
-  queueManager_->initializeTask(
+  queueManager()->initializeTask(
       srcTask,
       core::PartitionedOutputNode::Kind::kBroadcast,
       numDestinations,
       numDrivers);
   // Finalize destinations for broadcast.
-  queueManager_->updateOutputBuffers(srcTaskId, numDestinations, true);
+  queueManager()->updateOutputBuffers(srcTaskId, numDestinations, true);
 
   // Create one sink per destination. Each connects to its own destination
   // index.
@@ -1167,7 +1044,7 @@ TEST_P(UcxExchangeTest, broadcastIntraNodeFallback) {
   }
 
   // Cleanup.
-  queueManager_->removeTask(srcTaskId);
+  queueManager()->removeTask(srcTaskId);
   config.intraNodeExchange = origIntraNode;
 }
 
@@ -1179,17 +1056,7 @@ TEST_P(UcxExchangeTest, broadcastIntraNodeFallback) {
 // the placeholder was already created with intra-node enabled.
 // Without a fix, this causes a SIGSEGV when the intra-node source
 // destructively moves gpu_data from the shared packed_columns object.
-TEST_P(UcxExchangeTest, broadcastIntraNodePlaceholderRace) {
-  // This test doesn't use parameters — run only for the first param set.
-  {
-    ExchangeTestParams p = GetParam();
-    if (p.numSrcDrivers != 1 || p.numDstDrivers != 1 || p.numPartitions != 1 ||
-        p.numChunks != 100 || p.numUpstreamTasks != 1 ||
-        p.tableType != TableType::NARROW) {
-      GTEST_SKIP() << "broadcastIntraNodePlaceholderRace: runs only once";
-    }
-  }
-
+TEST_F(UcxExchangeFocusedTest, broadcastIntraNodePlaceholderRace) {
   // Enable intra-node exchange so the race condition can manifest.
   auto& config = cudf_velox::CudfConfig::getInstance();
   const bool origIntraNode = config.intraNodeExchange;
@@ -1233,14 +1100,14 @@ TEST_P(UcxExchangeTest, broadcastIntraNodePlaceholderRace) {
   // Step 3: NOW initialize the task with broadcast mode.
   // This upgrades the placeholder queue to broadcast.
   auto srcTask = createSourceTask(srcTaskId, pool_, UcxTestData::kTestRowType);
-  queueManager_->initializeTask(
+  queueManager()->initializeTask(
       srcTask,
       core::PartitionedOutputNode::Kind::kBroadcast,
       numDestinations,
       numDrivers);
 
   // Step 4: Finalize destinations for broadcast.
-  queueManager_->updateOutputBuffers(srcTaskId, numDestinations, true);
+  queueManager()->updateOutputBuffers(srcTaskId, numDestinations, true);
 
   // Step 5: Create and run the producer.
   auto sourceMock = std::make_shared<UcxPartitionedOutputMock>(
@@ -1262,24 +1129,14 @@ TEST_P(UcxExchangeTest, broadcastIntraNodePlaceholderRace) {
   }
 
   // Cleanup.
-  queueManager_->removeTask(srcTaskId);
+  queueManager()->removeTask(srcTaskId);
   config.intraNodeExchange = origIntraNode;
 }
 
 // Test that UcxPartitionedOutput's batch accumulation correctly merges many
 // small input chunks into fewer, larger output chunks while preserving all rows
 // and data integrity.
-TEST_P(UcxExchangeTest, batchAccumulationTest) {
-  // This test doesn't use parameters — run only for the first param set.
-  {
-    ExchangeTestParams p = GetParam();
-    if (p.numSrcDrivers != 1 || p.numDstDrivers != 1 || p.numPartitions != 1 ||
-        p.numChunks != 100 || p.numUpstreamTasks != 1 ||
-        p.tableType != TableType::NARROW) {
-      GTEST_SKIP() << "batchAccumulationTest: runs only once";
-    }
-  }
-
+TEST_F(UcxExchangeFocusedTest, batchAccumulationTest) {
   const int kTargetRows = UcxPartitionedOutput::kDefaultTargetRowsPerChunk;
 
   // --- Scenario 1: Small chunks that SHOULD be accumulated ---
@@ -1302,7 +1159,7 @@ TEST_P(UcxExchangeTest, batchAccumulationTest) {
 
     auto srcTask =
         createPartitionedOutputTask(srcTaskId, pool_, rowType, numPartitions);
-    queueManager_->initializeTask(
+    queueManager()->initializeTask(
         srcTask,
         core::PartitionedOutputNode::Kind::kPartitioned,
         numPartitions,
@@ -1356,7 +1213,7 @@ TEST_P(UcxExchangeTest, batchAccumulationTest) {
     EXPECT_LT(sinkDriver->numChunksReceived(), static_cast<uint64_t>(numChunks))
         << "Accumulation should reduce chunk count";
 
-    queueManager_->removeTask(srcTaskId);
+    queueManager()->removeTask(srcTaskId);
   }
 
   // --- Scenario 2: Small chunks with a remainder (not evenly divisible) ---
@@ -1378,7 +1235,7 @@ TEST_P(UcxExchangeTest, batchAccumulationTest) {
 
     auto srcTask =
         createPartitionedOutputTask(srcTaskId, pool_, rowType, numPartitions);
-    queueManager_->initializeTask(
+    queueManager()->initializeTask(
         srcTask,
         core::PartitionedOutputNode::Kind::kPartitioned,
         numPartitions,
@@ -1423,7 +1280,7 @@ TEST_P(UcxExchangeTest, batchAccumulationTest) {
     EXPECT_EQ(sinkDriver->numChunksReceived(), expectedOutputChunks)
         << "Remainder chunks should be flushed on noMoreInput";
 
-    queueManager_->removeTask(srcTaskId);
+    queueManager()->removeTask(srcTaskId);
   }
 
   // --- Scenario 3: Large chunks (>= threshold) should NOT be accumulated ---
@@ -1445,7 +1302,7 @@ TEST_P(UcxExchangeTest, batchAccumulationTest) {
 
     auto srcTask =
         createPartitionedOutputTask(srcTaskId, pool_, rowType, numPartitions);
-    queueManager_->initializeTask(
+    queueManager()->initializeTask(
         srcTask,
         core::PartitionedOutputNode::Kind::kPartitioned,
         numPartitions,
@@ -1487,7 +1344,7 @@ TEST_P(UcxExchangeTest, batchAccumulationTest) {
     EXPECT_EQ(sinkDriver->numChunksReceived(), static_cast<uint64_t>(numChunks))
         << "Large chunks should not be accumulated";
 
-    queueManager_->removeTask(srcTaskId);
+    queueManager()->removeTask(srcTaskId);
   }
 
   // --- Scenario 4: Custom threshold via QueryConfig ---
@@ -1515,7 +1372,7 @@ TEST_P(UcxExchangeTest, batchAccumulationTest) {
 
     auto srcTask = createPartitionedOutputTask(
         srcTaskId, pool_, rowType, numPartitions, {}, FOUR_GBYTES, extraConfig);
-    queueManager_->initializeTask(
+    queueManager()->initializeTask(
         srcTask,
         core::PartitionedOutputNode::Kind::kPartitioned,
         numPartitions,
@@ -1561,7 +1418,7 @@ TEST_P(UcxExchangeTest, batchAccumulationTest) {
     EXPECT_EQ(sinkDriver->numChunksReceived(), expectedOutputChunks)
         << "Custom threshold should control accumulation granularity";
 
-    queueManager_->removeTask(srcTaskId);
+    queueManager()->removeTask(srcTaskId);
   }
 }
 
@@ -1571,17 +1428,7 @@ TEST_P(UcxExchangeTest, batchAccumulationTest) {
 // buffer) while UCX was still using it, causing cudaErrorIllegalAddress in
 // ucp_mem_type_unpack.  The fix moves outstanding requests to
 // Communicator::deferredRequests_ so buffers stay alive until UCX finishes.
-TEST_P(UcxExchangeTest, deferredRequestCleanupOnTaskAbort) {
-  // This test doesn't use parameters — run only for the first param set.
-  {
-    ExchangeTestParams p = GetParam();
-    if (p.numSrcDrivers != 1 || p.numDstDrivers != 1 || p.numPartitions != 1 ||
-        p.numChunks != 100 || p.numUpstreamTasks != 1 ||
-        p.tableType != TableType::NARROW) {
-      GTEST_SKIP() << "deferredRequestCleanupOnTaskAbort: runs only once";
-    }
-  }
-
+TEST_F(UcxExchangeFocusedTest, deferredRequestCleanupOnTaskAbort) {
   // Ensure intra-node is disabled so we exercise the UCXX path (tagRecv).
   auto& config = cudf_velox::CudfConfig::getInstance();
   const bool origIntraNode = config.intraNodeExchange;
@@ -1601,7 +1448,7 @@ TEST_P(UcxExchangeTest, deferredRequestCleanupOnTaskAbort) {
 
   // 1. Create and initialize source task with data to send.
   auto srcTask = createSourceTask(srcTaskId, pool_, rowType);
-  queueManager_->initializeTask(
+  queueManager()->initializeTask(
       srcTask,
       core::PartitionedOutputNode::Kind::kPartitioned,
       numPartitions,
@@ -1633,7 +1480,7 @@ TEST_P(UcxExchangeTest, deferredRequestCleanupOnTaskAbort) {
   //    and eventually UcxExchangeSource::cleanUp() which must defer
   //    the request (with its GPU buffer) to Communicator::deferredRequests_.
   srcTask->requestAbort();
-  queueManager_->removeTask(srcTaskId);
+  queueManager()->removeTask(srcTaskId);
 
   // 6. Wait for the sink driver to complete (it should detect the abort
   //    and finish, not crash with cudaErrorIllegalAddress).
@@ -1659,11 +1506,5 @@ TEST_P(UcxExchangeTest, deferredRequestCleanupOnTaskAbort) {
 
   config.intraNodeExchange = origIntraNode;
 }
-
-std::shared_ptr<UcxOutputQueueManager> UcxExchangeTest::queueManager_;
-std::shared_ptr<std::thread> UcxExchangeTest::communicatorThread_;
-std::shared_ptr<Communicator> UcxExchangeTest::communicator_;
-std::atomic<uint32_t> UcxExchangeTest::testCounter_{0};
-uint16_t UcxExchangeTest::communicatorPort_{0};
 
 } // namespace facebook::velox::ucx_exchange

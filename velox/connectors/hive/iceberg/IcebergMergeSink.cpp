@@ -17,6 +17,7 @@
 #include "velox/connectors/hive/iceberg/IcebergMergeSink.h"
 
 #include "velox/common/base/Exceptions.h"
+#include "velox/vector/DecodedVector.h"
 #include "velox/vector/FlatVector.h"
 
 namespace facebook::velox::connector::hive::iceberg {
@@ -36,29 +37,18 @@ const FlatVector<int8_t>* asOperationFlatVector(
   return flat;
 }
 
-// Returns the row_id ROW child. Throws if the row_id column at `channel` is
-// not a RowVector with at least 2 children whose first two field types are
-// VARCHAR and BIGINT (matching the DV sub-sink's input contract).
-const RowVector* asRowIdRowVector(
-    const RowVectorPtr& input,
-    column_index_t channel) {
-  const auto& column = input->childAt(channel);
-  VELOX_USER_CHECK_NOT_NULL(column, "row_id column is null");
-  const auto* rowVector = column->loadedVector()->as<RowVector>();
-  VELOX_USER_CHECK_NOT_NULL(
-      rowVector, "row_id column must be a flat ROW vector");
-  VELOX_USER_CHECK_GE(
-      rowVector->childrenSize(),
-      2,
-      "row_id must have at least 2 fields (file_path, pos), got {}",
-      rowVector->childrenSize());
-  VELOX_USER_CHECK(
-      rowVector->childAt(0)->type()->isVarchar(),
-      "row_id field 0 must be VARCHAR (file_path)");
-  VELOX_USER_CHECK(
-      rowVector->childAt(1)->type()->isBigint(),
-      "row_id field 1 must be BIGINT (pos)");
-  return rowVector;
+// Returns the single-column type the DV sub-sink consumes: the row_id ROW
+// column, unchanged. Passing the whole ROW routes deletes through the DV
+// sink's row-id-struct path, the same path direct DELETE uses, which reads
+// partition_data (field 3) and emits partitionDataJson. The DV sink's
+// constructor validates the ROW's shape.
+RowTypePtr makeDeletionVectorInputType(
+    const RowTypePtr& inputType,
+    column_index_t rowIdChannel) {
+  VELOX_USER_CHECK_LT(
+      rowIdChannel, inputType->size(), "rowIdChannel out of range");
+  return ROW(
+      {inputType->nameOf(rowIdChannel)}, {inputType->childAt(rowIdChannel)});
 }
 
 // Allocates a buffer big enough for `size` row indices. Returned buffer is
@@ -101,8 +91,8 @@ IcebergInsertTableHandlePtr IcebergMergeSink::cloneHandleWithKind(
   // Propagate the existing deletion-vector map so the kDeletionVector sub-sink
   // seeds each new DV with the prior DV's positions on an UPDATE/MERGE that
   // re-touches a data file already carrying a DV. The kData sub-sink ignores
-  // the map. Preserve the original file-name generator too (the default here
-  // would otherwise drop a custom generator).
+  // the map. Preserve the original file-name generator and insertedColumns so
+  // write-default logic fires correctly in the kData sub-sink.
   return std::make_shared<const IcebergInsertTableHandle>(
       std::move(icebergInputs),
       original.locationHandle(),
@@ -112,7 +102,8 @@ IcebergInsertTableHandlePtr IcebergMergeSink::cloneHandleWithKind(
       original.serdeParameters(),
       kind,
       original.existingDeletionVectors(),
-      original.fileNameGenerator());
+      original.fileNameGenerator(),
+      original.insertedColumns());
 }
 
 RowTypePtr IcebergMergeSink::projectDataInputType(
@@ -153,10 +144,6 @@ RowTypePtr IcebergMergeSink::projectDataInputType(
   return ROW(std::move(names), std::move(types));
 }
 
-RowTypePtr IcebergMergeSink::makeDeletionVectorInputType() {
-  return ROW({"file_path", "pos"}, {VARCHAR(), BIGINT()});
-}
-
 IcebergMergeSink::IcebergMergeSink(
     RowTypePtr inputType,
     IcebergInsertTableHandlePtr insertTableHandle,
@@ -166,18 +153,21 @@ IcebergMergeSink::IcebergMergeSink(
     const IcebergConfigPtr& icebergConfig,
     std::vector<column_index_t> targetColumnChannels,
     column_index_t operationChannel,
-    column_index_t rowIdChannel)
+    column_index_t rowIdChannel,
+    column_index_t insertFromUpdateChannel)
     : inputType_(std::move(inputType)),
       insertTableHandle_(std::move(insertTableHandle)),
       connectorQueryCtx_(connectorQueryCtx),
       targetColumnChannels_(std::move(targetColumnChannels)),
       operationChannel_(operationChannel),
       rowIdChannel_(rowIdChannel),
+      insertFromUpdateChannel_(insertFromUpdateChannel),
       dataInputType_(projectDataInputType(
           inputType_,
           targetColumnChannels_,
           *insertTableHandle_)),
-      deletionVectorInputType_(makeDeletionVectorInputType()) {
+      deletionVectorInputType_(
+          makeDeletionVectorInputType(inputType_, rowIdChannel_)) {
   VELOX_USER_CHECK_NOT_NULL(
       insertTableHandle_,
       "IcebergMergeSink requires a non-null insert table handle.");
@@ -189,9 +179,16 @@ IcebergMergeSink::IcebergMergeSink(
       operationChannel_, inputType_->size(), "operationChannel out of range");
   VELOX_USER_CHECK_LT(
       rowIdChannel_, inputType_->size(), "rowIdChannel out of range");
+  VELOX_USER_CHECK_LT(
+      insertFromUpdateChannel_,
+      inputType_->size(),
+      "insertFromUpdateChannel out of range");
   VELOX_USER_CHECK(
       inputType_->childAt(operationChannel_)->isTinyint(),
       "operation column must be TINYINT");
+  VELOX_USER_CHECK(
+      inputType_->childAt(insertFromUpdateChannel_)->isTinyint(),
+      "insert_from_update column must be TINYINT");
   VELOX_USER_CHECK(
       inputType_->childAt(rowIdChannel_)->isRow(),
       "row_id column must be a ROW type");
@@ -253,21 +250,18 @@ RowVectorPtr IcebergMergeSink::makeDeleteBatch(
     const RowVectorPtr& input,
     const BufferPtr& deleteIndices,
     vector_size_t deleteSize) const {
-  const auto* rowIdRowVector = asRowIdRowVector(input, rowIdChannel_);
-  // The DV sink consumes (file_path, pos). The first two children of the
-  // row_id ROW carry exactly these. Extra trailing fields (spec_id,
-  // partition_data on the full Iceberg row id) are tolerated and ignored.
-  auto wrappedFilePath = BaseVector::wrapInDictionary(
-      /*nulls=*/nullptr, deleteIndices, deleteSize, rowIdRowVector->childAt(0));
-  auto wrappedPos = BaseVector::wrapInDictionary(
-      /*nulls=*/nullptr, deleteIndices, deleteSize, rowIdRowVector->childAt(1));
+  const auto& rowId = input->childAt(rowIdChannel_);
+  VELOX_USER_CHECK_NOT_NULL(rowId, "row_id column is null");
   return std::make_shared<RowVector>(
       connectorQueryCtx_->memoryPool(),
       deletionVectorInputType_,
       /*nulls=*/nullptr,
       deleteSize,
-      std::vector<VectorPtr>{
-          std::move(wrappedFilePath), std::move(wrappedPos)});
+      std::vector<VectorPtr>{BaseVector::wrapInDictionary(
+          /*nulls=*/nullptr,
+          deleteIndices,
+          deleteSize,
+          BaseVector::loadedVectorShared(rowId))});
 }
 
 void IcebergMergeSink::appendData(RowVectorPtr input) {
@@ -336,6 +330,18 @@ void IcebergMergeSink::appendData(RowVectorPtr input) {
     deletionVectorSink_->appendData(
         makeDeleteBatch(input, deleteIndices, numDeletes));
   }
+}
+
+vector_size_t IcebergMergeSink::numChangedRows(const RowVector& input) const {
+  DecodedVector insertFromUpdate(*input.childAt(insertFromUpdateChannel_));
+  vector_size_t numChanged{0};
+  for (vector_size_t i = 0; i < input.size(); ++i) {
+    if (insertFromUpdate.isNullAt(i) ||
+        insertFromUpdate.valueAt<int8_t>(i) == 0) {
+      ++numChanged;
+    }
+  }
+  return numChanged;
 }
 
 bool IcebergMergeSink::finish() {

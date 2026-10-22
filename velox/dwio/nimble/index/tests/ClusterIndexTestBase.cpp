@@ -411,7 +411,11 @@ std::shared_ptr<ChunkStatsGroup> ClusterIndexTestBase::createChunkStats(
           pool_.get()));
 
   return ChunkStatsGroup::create(
-      firstStripe, stripeCount, std::move(chunkStatsBuffer));
+      ChunkStatsVersion::kV1,
+      firstStripe,
+      stripeCount,
+      std::move(chunkStatsBuffer),
+      *pool_);
 }
 
 } // namespace facebook::nimble::index::test

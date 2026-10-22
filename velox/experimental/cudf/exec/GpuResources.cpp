@@ -99,17 +99,16 @@ void setCudfContextDevice(int device) {
 }
 
 void ensureCudaContextForThread() {
-  // Create and push the device's primary context on this thread, at most once.
-  static thread_local bool initialized = false;
-  if (initialized) {
-    return;
-  }
-
   // Device is recorded by setCudfContextDevice() from registerCudf().
   VELOX_CHECK_GE(
       cudfContextDevice,
       0,
       "cuDF is not yet registered. Please call registerCudf() first.");
+  static thread_local int threadDevice = -1;
+  if (threadDevice == cudfContextDevice) {
+    return;
+  }
+
   VELOX_CHECK_EQ(
       static_cast<int>(cudaSuccess),
       static_cast<int>(cudaSetDevice(cudfContextDevice)),
@@ -119,12 +118,14 @@ void ensureCudaContextForThread() {
       static_cast<int>(cudaSuccess),
       static_cast<int>(cudaFree(nullptr)),
       "Failed to initialize CUDA context on cuDF worker thread");
+  int boundDevice = -1;
   VELOX_CHECK_EQ(
       static_cast<int>(cudaSuccess),
-      static_cast<int>(cudaGetDevice(&cudfContextDevice)),
+      static_cast<int>(cudaGetDevice(&boundDevice)),
       "Failed to get current CUDA device ordinal");
+  VELOX_CHECK_EQ(boundDevice, cudfContextDevice);
 
-  initialized = true;
+  threadDevice = boundDevice;
 }
 
 cuda::stream_ref getDefaultStreamForCurrentThread() {
@@ -134,9 +135,22 @@ cuda::stream_ref getDefaultStreamForCurrentThread() {
 
 std::optional<cuda::mr::any_resource<cuda::mr::device_accessible>> mr_;
 std::optional<cuda::mr::any_resource<cuda::mr::device_accessible>> output_mr_;
+std::optional<rmm::mr::statistics_resource_adaptor> statsMr_;
+std::optional<rmm::mr::statistics_resource_adaptor> outputStatsMr_;
 
 rmm::device_async_resource_ref get_output_mr() {
   return output_mr_.value();
+}
+
+int64_t cudfAllocatedBytes() {
+  if (!statsMr_.has_value()) {
+    return -1;
+  }
+  int64_t bytes = statsMr_->get_bytes_counter().value;
+  if (outputStatsMr_.has_value()) {
+    bytes += outputStatsMr_->get_bytes_counter().value;
+  }
+  return bytes;
 }
 
 } // namespace facebook::velox::cudf_velox
