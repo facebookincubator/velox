@@ -109,11 +109,8 @@ std::unique_ptr<cudf::column> transformWithTicksPerSecond(
   return std::move(transformed->release().front());
 }
 
-// Repeats fromUnixtime() in velox/functions/prestosql/DateTimeImpl.h to the
-// CPU's millisecond timestamp, then scales it to the unit of the result. The
-// CPU's bounds, Timestamp::kMaxSeconds and kMinSeconds, keep the millisecond
-// arithmetic inside int64. A millisecond outside the range of the unit is
-// returned as an overflow, which cudf::transform raises once the kernel ends.
+// Repeats fromUnixtime() in velox/functions/prestosql/DateTimeImpl.h and
+// scales its millisecond result to the unit.
 // TODO: Reuse fromUnixtime() and toUnixtime() from a compiled kernel once
 // DateTimeImpl.h builds under nvcc (#17266), and drop these copies.
 constexpr std::string_view kFromUnixtimeUdf = R"***(
@@ -153,9 +150,9 @@ __device__ cudf::errc velox_from_unixtime(
 }
 )***";
 
-// Repeats toUnixtime() in velox/functions/prestosql/DateTimeImpl.h: a Velox
-// timestamp holds the floor of its seconds and a non-negative nanosecond
-// part, and the two are added as doubles in that order.
+// Repeats toUnixtime() in velox/functions/prestosql/DateTimeImpl.h: the floor
+// of the seconds plus the non-negative nanoseconds, added as doubles in that
+// order so the result agrees with the CPU to the last bit.
 constexpr std::string_view kToUnixtimeUdf = R"***(
 __device__ void velox_to_unixtime(
     double* out, int64_t ticks, int64_t ticksPerSecond) {
@@ -208,8 +205,7 @@ ColumnOrView FromUnixtimeFunction::eval(
         stream,
         mr);
   } catch (const cudf::evaluation_error&) {
-    // The only error the kernel returns is a millisecond outside the range of
-    // the unit, which converting a Velox timestamp to the unit rejects too.
+    // The kernel's only error is a millisecond outside the range of the unit.
     VELOX_USER_FAIL(
         "from_unixtime result is out of range for the cuDF timestamp unit "
         "set by {}: {}",

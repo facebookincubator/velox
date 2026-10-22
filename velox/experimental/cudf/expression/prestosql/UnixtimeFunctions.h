@@ -26,17 +26,11 @@
 
 namespace facebook::velox::cudf_velox::prestosql {
 
-/// from_unixtime(double) -> TIMESTAMP with the semantics of the Velox CPU
-/// function, whose result is a millisecond timestamp: the whole seconds are
-/// the floor of the input, the fraction rounds to the nearest millisecond
-/// with halves away from zero and rolls a full second into the next one, NaN
-/// gives the epoch, and an input at or past Timestamp::kMaxSeconds or
-/// kMinSeconds, infinity included, takes the extreme millisecond timestamp.
-/// The result then takes the configured cuDF timestamp unit: a millisecond
-/// outside the range of the unit raises a user error, as converting a Velox
-/// timestamp to that unit does, and the seconds unit keeps the floor of the
-/// seconds, as a Velox timestamp converts to it. The forms that return
-/// TIMESTAMP WITH TIME ZONE stay on the CPU.
+/// from_unixtime(double) -> TIMESTAMP with the semantics of the CPU function.
+/// The millisecond result takes the configured cuDF timestamp unit: the
+/// seconds unit keeps the floor of the seconds, and a result past the range of
+/// the microsecond or nanosecond unit raises a user error. The forms that
+/// return TIMESTAMP WITH TIME ZONE stay on the CPU.
 class FromUnixtimeFunction : public CudfFunction {
  public:
   /// Returns true if expr is from_unixtime over a non-constant DOUBLE with a
@@ -60,11 +54,8 @@ class FromUnixtimeFunction : public CudfFunction {
   std::unique_ptr<cudf::numeric_scalar<int64_t>> ticksPerSecond_;
 };
 
-/// to_unixtime(TIMESTAMP) -> DOUBLE with the semantics of the Velox CPU
-/// function: the whole seconds, which are the floor of the timestamp, plus
-/// the nanoseconds of the sub-second part over a billion, added in that
-/// order so the doubles agree to the last bit. The form that takes TIMESTAMP
-/// WITH TIME ZONE stays on the CPU.
+/// to_unixtime(TIMESTAMP) -> DOUBLE with the semantics of the CPU function.
+/// The form that takes TIMESTAMP WITH TIME ZONE stays on the CPU.
 class ToUnixtimeFunction : public CudfFunction {
  public:
   /// Returns true if expr is to_unixtime over a non-constant TIMESTAMP with a

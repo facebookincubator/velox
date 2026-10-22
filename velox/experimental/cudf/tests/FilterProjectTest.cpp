@@ -1468,15 +1468,11 @@ TEST_F(CudfFilterProjectTest, fromUnixtimeMatchesVelox) {
 }
 
 TEST_F(CudfFilterProjectTest, fromUnixtimeBeyondRange) {
-  // The CPU pins an input at or past Timestamp::kMaxSeconds or kMinSeconds,
-  // infinity included, to the extreme millisecond timestamp, which the
-  // millisecond unit holds, so that unit matches the CPU on every row. The
-  // microsecond and nanosecond units hold a narrower range. A row inside it
-  // matches the CPU, and a row past it fails the batch with a user error, as
-  // converting the CPU's timestamp to the unit does. The nanosecond rows sit
-  // on the last millisecond inside the range and the first past it; the
-  // microsecond rows sit a second on either side, since doubles near that
-  // limit are 2 ms apart. 1e10, a date in 2286, is past the nanosecond range.
+  // The millisecond unit holds every CPU result. The microsecond and
+  // nanosecond units hold less: a row inside the range matches the CPU, and a
+  // row past it fails with a user error. The nanosecond rows are the last
+  // millisecond in range and the first past it; the microsecond rows sit a
+  // second on either side, since doubles there are 2 ms apart.
   constexpr double kInfinity = std::numeric_limits<double>::infinity();
   auto& config = cudf_velox::CudfConfig::getInstance();
   const auto originalUnit = config.timestampUnit;
@@ -1639,9 +1635,7 @@ TEST_F(CudfFilterProjectTest, toUnixtimeMatchesVelox) {
 }
 
 TEST_F(CudfFilterProjectTest, toUnixtimeNanosecondFractions) {
-  // Under the nanosecond unit a sub-millisecond fraction reaches the GPU,
-  // and the sum is formed in the CPU's order, so the doubles agree to the
-  // last bit.
+  // Under the nanosecond unit a sub-millisecond fraction reaches the GPU.
   auto& config = cudf_velox::CudfConfig::getInstance();
   const auto originalUnit = config.timestampUnit;
   SCOPE_EXIT {
