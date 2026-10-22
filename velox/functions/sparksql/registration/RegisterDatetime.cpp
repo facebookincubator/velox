@@ -19,7 +19,6 @@
 #include "velox/functions/sparksql/DateTimeFunctions.h"
 #include "velox/functions/sparksql/GetTimestamp.h"
 #include "velox/functions/sparksql/MakeTimestamp.h"
-#include "velox/functions/sparksql/ToTimestampNtz.h"
 
 namespace facebook::velox::functions::sparksql {
 
@@ -122,8 +121,6 @@ void registerDatetimeFunctions(const std::string& prefix) {
   registerFunction<NextDayFunction, Date, Date, Varchar>({prefix + "next_day"});
   registerFunction<GetTimestampWithTimestamp, Timestamp, Varchar, Varchar>(
       {prefix + "get_timestamp"});
-  registerFunction<ToTimestampNtzFunction, TimestampUtc, Varchar>(
-      {prefix + "to_timestamp_ntz"});
   registerFunction<
       GetTimestampWithTimestampUtc,
       TimestampUtc,
