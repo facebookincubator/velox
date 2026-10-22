@@ -156,6 +156,9 @@ velox_add_library(
   FilterProject.h
   FixedPointLoop.h
   FixedPointOperators.h
+  FlatRowCompare.h
+  FlatRowSerde.h
+  FlatRowToVector.h
   GroupId.h
   GroupingSet.h
   HashAggregation.h

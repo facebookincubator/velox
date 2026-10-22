@@ -122,8 +122,7 @@ FOLLY_ALWAYS_INLINE uint32_t serializeRow(
       // count at offset 0, so this is independent of std::string_view's
       // layout.
       std::memset(rowStart + vc.column.offset(), 0, sizeof(std::string_view));
-      *reinterpret_cast<size_t*>(rowStart + vc.column.offset()) =
-          outOfLineSize;
+      *reinterpret_cast<size_t*>(rowStart + vc.column.offset()) = outOfLineSize;
     }
   }
 

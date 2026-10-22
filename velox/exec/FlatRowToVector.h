@@ -133,14 +133,7 @@ FOLLY_ALWAYS_INLINE uint64_t extractColumnFromFlatRow(
     const VectorPtr& result) {
   result->resize(numRows);
   return VELOX_DYNAMIC_TYPE_DISPATCH_ALL(
-      extractFlatColumn,
-      type->kind(),
-      flatRows,
-      numRows,
-      col,
-      type,
-      result,
-      0);
+      extractFlatColumn, type->kind(), flatRows, numRows, col, type, result, 0);
 }
 
 /// Same as above but writes into 'result' starting at 'resultOffset'.
