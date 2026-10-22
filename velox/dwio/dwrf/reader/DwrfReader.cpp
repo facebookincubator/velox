@@ -586,8 +586,10 @@ void DwrfRowReader::readNext(
 }
 
 uint64_t DwrfRowReader::skip(uint64_t numValues) {
-  if (getSelectiveColumnReader()) {
-    return getSelectiveColumnReader()->skip(numValues);
+  if (auto& reader = getSelectiveColumnReader()) {
+    const auto skipped = reader->skip(numValues);
+    reader->setReadOffset(reader->readOffset() + numValues);
+    return skipped;
   } else {
     return getColumnReader()->skip(numValues);
   }

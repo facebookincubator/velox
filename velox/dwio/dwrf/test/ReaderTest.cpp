@@ -2496,6 +2496,35 @@ FlatMapReaderWithKeyFilter createFlatMapReaderWithKeyFilter(
 
 } // namespace
 
+TEST_F(TestReader, seekToRow) {
+  auto batches = createBatches({{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}});
+  auto schema = asRowType(batches.front()->type());
+  auto [writer, reader] =
+      createWriterReader(batches, pool(), dataIoStats_, metadataIoStats_);
+  ASSERT_EQ(reader->getNumberOfStripes(), 1);
+
+  auto scanSpec = std::make_shared<common::ScanSpec>("root");
+  scanSpec->addAllChildFields(*schema);
+  RowReaderOptions options;
+  options.setScanSpec(scanSpec);
+  auto rowReader = reader->createDwrfRowReader(options);
+  auto result = BaseVector::create(schema, 0, pool());
+
+  // Seeking within a stripe must advance the selective reader's read offset
+  // before the next read, including when no rows have been read yet.
+  ASSERT_EQ(rowReader->seekToRow(3), 3);
+  ASSERT_EQ(rowReader->next(2, result), 2);
+  assertEqualVectors(batches.front()->slice(3, 2), result);
+
+  ASSERT_EQ(rowReader->seekToRow(7), 7);
+  ASSERT_EQ(rowReader->next(2, result), 2);
+  assertEqualVectors(batches.front()->slice(7, 2), result);
+
+  ASSERT_EQ(rowReader->next(2, result), 1);
+  assertEqualVectors(batches.front()->slice(9, 1), result);
+  EXPECT_EQ(rowReader->next(2, result), 0);
+}
+
 TEST_F(TestReader, resetFilterCachesWithoutStripeInRange) {
   auto batches = createBatches({{0, 1, 2, 3}});
   auto schema = asRowType(batches.front()->type());
