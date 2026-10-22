@@ -45,6 +45,9 @@ class FeatureGate {
     /// Reader-side: gates stripe-stats stripe pruning in the selective reader.
     static constexpr std::string_view kStripeStatsPruning =
         "stripe_stats_pruning";
+    /// Reader-side: gates reporting NaN as the file-level max of REAL and
+    /// DOUBLE columns, which keeps stats pruning from skipping NaN rows.
+    static constexpr std::string_view kFileStatsNanMax = "file_stats_nan_max";
   };
 
   virtual ~FeatureGate() = default;
