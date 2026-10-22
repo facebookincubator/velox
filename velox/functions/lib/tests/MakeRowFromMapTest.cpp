@@ -448,6 +448,36 @@ TEST_F(MakeRowFroMapTest, encoded) {
   EXPECT_EQ(NonPOD::alive, 0);
 }
 
+TEST_F(MakeRowFroMapTest, wrappedNullMaps) {
+  // Row 1 is a null map, and the dictionary adds a null in row 0.
+  auto map = makeMapVectorFromJson<int64_t, int64_t>({
+      "{1:10, 2:20}",
+      "null",
+      "{1:30}",
+  });
+  auto wrapped = BaseVector::wrapInDictionary(
+      makeNulls({true, false, false, false}),
+      makeIndices({2, 1, 0, 1}),
+      4,
+      map);
+
+  MakeRowFromMapOptions options{
+      .keysToProject = makeFlatVector<int64_t>({1, 2}),
+      .outputFieldNames = {"key1", "key2"},
+      .allowTopLevelNulls = true};
+  SelectivityVector rows(wrapped->size());
+  auto result = toRowVector<TypeKind::BIGINT>(*wrapped, options, rows);
+
+  auto expected = makeRowVector(
+      {"key1", "key2"},
+      {makeNullableFlatVector<int64_t>(
+           {std::nullopt, std::nullopt, 10, std::nullopt}),
+       makeNullableFlatVector<int64_t>(
+           {std::nullopt, std::nullopt, 20, std::nullopt})},
+      [](vector_size_t row) { return row != 2; });
+  test::assertEqualVectors(expected, result);
+}
+
 TEST_F(MakeRowFroMapTest, errorCases) {
   SelectivityVector rows(1);
   auto validMap = makeMapVectorFromJson<int64_t, int64_t>({"{1:1, 2:2, 3:3}"});
