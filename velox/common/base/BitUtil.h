@@ -737,13 +737,8 @@ inline int32_t countLeadingZeros(T word) {
 }
 
 inline uint64_t nextPowerOfTwo(uint64_t size) {
-  // std::bit_ceil is undefined behavior for 0 or for inputs whose result
-  // would not fit in uint64_t (size > 2^63); return 0 for both, matching
-  // this function's historical behavior.
-  if (size == 0 || size > (uint64_t{1} << 63)) {
-    return 0;
-  }
-  return std::bit_ceil(size);
+  const auto maxPowerOfTwo = uint64_t{1} << 63;
+  return size == 0 || size > maxPowerOfTwo ? 0 : std::bit_ceil(size);
 }
 
 constexpr bool isPowerOfTwo(uint64_t size) {
