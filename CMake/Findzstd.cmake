@@ -20,10 +20,43 @@
 # ZSTD_LIBRARIES -  deprecated
 # zstd::zstd will be defined based on CMAKE_FIND_LIBRARY_SUFFIXES priority
 
+# Prefer zstd's own CMake package. It defines zstd::libzstd_shared and
+# zstd::libzstd_static, which other packages such as Arrow link to.
+#
+# This creates a separate scope so any changed variables don't affect
+# the rest of the build.
+block(PROPAGATE zstd_FOUND zstd_VERSION)
+  set(find_package_args)
+  if(zstd_FIND_VERSION)
+    list(APPEND find_package_args ${zstd_FIND_VERSION})
+  endif()
+  # Neither REQUIRED nor a "not found" message is wanted because we fall back to
+  # find_library() below.
+  list(APPEND find_package_args QUIET)
+  find_package(zstd ${find_package_args} CONFIG)
+  # A package that only redirects find_package(zstd), such as one created by
+  # CPM, may define no targets.
+  if(NOT TARGET zstd::libzstd_shared AND NOT TARGET zstd::libzstd_static)
+    set(zstd_FOUND FALSE)
+  endif()
+endblock()
+
+if(zstd_FOUND)
+  if(NOT TARGET zstd::zstd)
+    # Prefer the shared library like find_library() below.
+    if(TARGET zstd::libzstd_shared)
+      add_library(zstd::zstd ALIAS zstd::libzstd_shared)
+    else()
+      add_library(zstd::zstd ALIAS zstd::libzstd_static)
+    endif()
+  endif()
+  return()
+endif()
+
 include(FindPackageHandleStandardArgs)
 include(SelectLibraryConfigurations)
 
-find_library(ZSTD_LIBRARY_RELEASE zstd PATHS $ZSTD_LIBRARYDIR})
+find_library(ZSTD_LIBRARY_RELEASE zstd PATHS ${ZSTD_LIBRARYDIR})
 find_library(ZSTD_LIBRARY_DEBUG zstdd PATHS ${ZSTD_LIBRARYDIR})
 
 find_path(ZSTD_INCLUDE_DIR zstd.h PATHS ${ZSTD_INCLUDEDIR})
