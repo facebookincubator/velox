@@ -2877,6 +2877,57 @@ TEST_P(ReadWithVisitorNonLegacyTest, constantEncodingHookWithRejectingFilter) {
 }
 
 // ===========================================================================
+// Test: A value hook needs the values, so under scanFastPath a column with a
+// hook and an IS NULL filter keeps decoding them instead of reading only its
+// nulls.
+// ===========================================================================
+TEST_P(ReadWithVisitorNonLegacyTest, valueHookKeepsNullFilterOnValueRead) {
+  class CapturingHook final : public ValueHook {
+   public:
+    void addValue(vector_size_t row, int64_t value) final {
+      rows.push_back(row);
+      values.push_back(value);
+    }
+
+    std::vector<vector_size_t> rows;
+    std::vector<int64_t> values;
+  };
+
+  constexpr vector_size_t kRows = 100;
+  auto input = makeRowVector({makeFlatVector<int64_t>(
+      kRows, [](auto row) { return row; }, nullEvery(3))});
+  auto rowType = asRowType(input->type());
+  auto ctx = makeFileContext(input);
+  auto scanSpec = std::make_shared<common::ScanSpec>("root");
+  scanSpec->addAllChildFields(*rowType);
+  CapturingHook hook;
+  auto* childSpec = scanSpec->childByName("c0");
+  childSpec->setFilter(std::make_unique<common::IsNull>());
+  childSpec->setValueHook(&hook);
+  auto root = buildReader(
+      *ctx,
+      rowType,
+      *scanSpec,
+      /*stringDecoderZeroCopy=*/true,
+      /*scanFastPath=*/true);
+  std::vector<vector_size_t> rowVec(kRows);
+  std::iota(rowVec.begin(), rowVec.end(), 0);
+  root->read(0, RowSet(rowVec.data(), rowVec.size()), nullptr);
+
+  // The hook receives every non-null row. A nulls-only read would give it none.
+  std::vector<vector_size_t> expectedRows;
+  for (vector_size_t row = 0; row < kRows; ++row) {
+    if (row % 3 != 0) {
+      expectedRows.push_back(row);
+    }
+  }
+  EXPECT_EQ(hook.rows, expectedRows);
+  EXPECT_EQ(
+      hook.values,
+      std::vector<int64_t>(expectedRows.begin(), expectedRows.end()));
+}
+
+// ===========================================================================
 // Test: Boolean data with BoolValue filter (SparseBoolEncoding)
 // ===========================================================================
 TEST_P(ReadWithVisitorTest, boolWithFilter) {
