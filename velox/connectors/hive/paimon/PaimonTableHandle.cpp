@@ -15,6 +15,7 @@
  */
 #include "velox/connectors/hive/paimon/PaimonTableHandle.h"
 
+#include <algorithm>
 #include <cmath>
 #include <unordered_set>
 
@@ -26,93 +27,14 @@ namespace {
 
 constexpr std::string_view kSameSchemaAppendBatch = "SAME_SCHEMA_APPEND_BATCH";
 
-TypePtr columnType(const PaimonSchema& schema, const std::string& name) {
+column_index_t columnIndex(const PaimonSchema& schema, const std::string& name) {
   const auto index = schema.rowType()->getChildIdxIfExists(name);
   VELOX_USER_CHECK(
       index.has_value(), "Unknown Paimon column '{}' in target schema", name);
-  return schema.rowType()->childAt(*index);
+  return *index;
 }
 
-bool isPartitionColumn(const PaimonSchema& schema, const std::string& name) {
-  for (auto id : schema.partitionKeys()) {
-    if (schema.rowType()->nameOf(schema.fieldIndexPath(id).front()) == name) {
-      return true;
-    }
-  }
-  return false;
-}
-
-TypePtr subfieldType(const PaimonSchema& schema, const common::Subfield& path) {
-  schema.fieldIdPath(path);
-  auto type = columnType(
-      schema, path.path().front()->as<common::Subfield::NestedField>()->name());
-  for (size_t i = 1; i < path.path().size(); ++i) {
-    if (const auto* field =
-            path.path()[i]->as<common::Subfield::NestedField>()) {
-      type = type->asRow().findChild(field->name());
-    } else {
-      type = type->childAt(type->isMap() ? 1 : 0);
-    }
-  }
-  return type;
-}
-
-void validateFilterType(const TypePtr& type, const common::Filter& filter) {
-  using common::FilterKind;
-  bool supported = false;
-  switch (filter.kind()) {
-    case FilterKind::kAlwaysFalse:
-    case FilterKind::kAlwaysTrue:
-    case FilterKind::kIsNull:
-    case FilterKind::kIsNotNull:
-      return;
-    case FilterKind::kBoolValue:
-      supported = type->isBoolean();
-      break;
-    case FilterKind::kBigintRange:
-    case FilterKind::kBigintValuesUsingHashTable:
-    case FilterKind::kBigintValuesUsingBitmask:
-    case FilterKind::kNegatedBigintRange:
-    case FilterKind::kNegatedBigintValuesUsingHashTable:
-    case FilterKind::kNegatedBigintValuesUsingBitmask:
-    case FilterKind::kBigintMultiRange:
-    case FilterKind::kBigintValuesUsingBloomFilter:
-      supported = (type->isInteger() || type->isBigint()) && !type->isDate();
-      break;
-    case FilterKind::kDoubleRange:
-      supported = type->isDouble();
-      break;
-    case FilterKind::kBytesRange:
-    case FilterKind::kNegatedBytesRange:
-    case FilterKind::kBytesValues:
-    case FilterKind::kNegatedBytesValues:
-      supported = type->isVarchar();
-      break;
-    case FilterKind::kMultiRange: {
-      const auto* ranges = dynamic_cast<const common::MultiRange*>(&filter);
-      VELOX_USER_CHECK_NOT_NULL(ranges, "Invalid Paimon MultiRange filter");
-      VELOX_USER_CHECK_GE(
-          ranges->filters().size(),
-          2,
-          "Paimon MultiRange requires at least two filters");
-      for (const auto& range : ranges->filters()) {
-        VELOX_USER_CHECK_NOT_NULL(range, "Missing Paimon range filter");
-        validateFilterType(type, *range);
-      }
-      supported = type->isDouble() || type->isVarchar();
-      break;
-    }
-    default:
-      break;
-  }
-  VELOX_USER_CHECK(
-      supported,
-      "Paimon filter {} is not supported for target type {}",
-      filter.kind(),
-      type->toString());
-}
-
-void validateExpression(
+void validateExpressionColumns(
     const PaimonSchema& schema,
     const core::TypedExprPtr& expression) {
   if (!expression) {
@@ -126,65 +48,25 @@ void validateExpression(
   while (!pending.empty()) {
     const auto* current = pending.back();
     pending.pop_back();
-    VELOX_USER_CHECK_NOT_NULL(current, "Missing Paimon expression input");
     if (!visited.insert(current).second) {
       continue;
     }
-    VELOX_USER_CHECK_NOT_NULL(
-        current->type(), "Missing Paimon expression type");
     // TODO: Validate Lambda column references with argument scope awareness.
     VELOX_USER_CHECK(
         !current->isLambdaKind(),
         "Paimon same-schema append profile does not support Lambda filters; "
         "scope-aware column validation is not implemented yet");
-    VELOX_USER_CHECK(
-        !current->isInputKind(),
-        "Paimon remaining filter must access input columns by name");
     if (const auto* field =
             current->asUnchecked<core::FieldAccessTypedExpr>()) {
-      TypePtr expected;
       if (field->isInputColumn()) {
-        expected = columnType(schema, field->name());
-        if (!field->inputs().empty()) {
-          const auto& input = field->inputs().front();
-          VELOX_USER_CHECK(
-              input && input->isInputKind() && input->type() &&
-                  *input->type() == *schema.rowType(),
-              "Paimon expression input type does not match target schema");
-        }
-      } else {
+        const auto& expected =
+            schema.rowType()->childAt(columnIndex(schema, field->name()));
         VELOX_USER_CHECK(
-            field->inputs().size() == 1 && field->inputs().front(),
-            "Invalid Paimon expression field input");
-        const auto& parent = field->inputs().front()->type();
-        VELOX_USER_CHECK(
-            parent && parent->isRow(),
-            "Paimon field access requires ROW input");
-        const auto index = parent->asRow().getChildIdxIfExists(field->name());
-        VELOX_USER_CHECK(
-            index.has_value(), "Unknown Paimon expression subfield");
-        expected = parent->childAt(*index);
-      }
-      VELOX_USER_CHECK(
-          *field->type() == *expected,
-          "Paimon expression field '{}' type does not match target schema",
-          field->name());
-      if (field->isInputColumn()) {
+            field->type() && *field->type() == *expected,
+            "Paimon expression field '{}' type does not match target schema",
+            field->name());
         continue;
       }
-    } else if (
-        const auto* field =
-            current->asUnchecked<core::DereferenceTypedExpr>()) {
-      VELOX_USER_CHECK(
-          field->inputs().size() == 1 && field->inputs().front(),
-          "Invalid Paimon expression dereference input");
-      const auto& parent = field->inputs().front()->type();
-      VELOX_USER_CHECK(
-          parent && parent->isRow() && field->index() < parent->size(),
-          "Invalid Paimon expression dereference");
-      VELOX_USER_CHECK(
-          *field->type() == *parent->childAt(field->index()),
-          "Paimon expression subfield type does not match target schema");
     }
     for (const auto& input : current->inputs()) {
       pending.push_back(input.get());
@@ -309,20 +191,14 @@ PaimonTableHandle::PaimonTableHandle(
   VELOX_USER_CHECK(
       std::isfinite(sampleRate_) && sampleRate_ > 0 && sampleRate_ <= 1,
       "Paimon sample rate must be finite and in (0, 1]");
-  validateExpression(*schema_, remainingFilter_);
+  validateExpressionColumns(*schema_, remainingFilter_);
   for (const auto& [subfield, filter] : subfieldFilters_) {
-    VELOX_USER_CHECK(subfield.valid(), "Invalid Paimon filter path");
     VELOX_USER_CHECK_NOT_NULL(filter, "Missing Paimon subfield filter");
-    validateFilterType(subfieldType(*schema_, subfield), *filter);
+    schema_->fieldIdPath(subfield);
   }
-  std::unordered_set<std::string> filterColumnNames;
   for (const auto& handle : filterColumnHandles_) {
     VELOX_USER_CHECK_NOT_NULL(handle, "Missing Paimon filter column handle");
     validateColumn(*handle);
-    VELOX_USER_CHECK(
-        filterColumnNames.insert(handle->name()).second,
-        "Duplicate Paimon filter column handle '{}'",
-        handle->name());
   }
 }
 
@@ -365,33 +241,6 @@ void PaimonTableHandle::validateReadProfile() const {
           (tracking->second == "true" || tracking->second == "false"),
       "Paimon profile requires explicit boolean 'row-tracking.enabled'; "
       "provide normalized options because defaults are not resolved by the reader");
-  // TODO: Classify options by read semantics so write-only or planning options
-  // do not unnecessarily block scans. Unclassified options remain rejected.
-  for (const auto& [key, value] : options) {
-    if (key == "file.format") {
-      VELOX_USER_CHECK(
-          value == "nimble" || value == "dwrf" || value == "orc" ||
-              value == "parquet",
-          "Unsupported Paimon schema file.format '{}'; the current reader "
-          "supports nimble, dwrf, orc and parquet",
-          value);
-    } else if (key == "bucket") {
-      const auto parsed = folly::tryTo<int32_t>(value);
-      VELOX_USER_CHECK(
-          parsed.hasValue() && (parsed.value() == -1 || parsed.value() > 0),
-          "Unsupported Paimon append bucket option '{}'",
-          value);
-    } else {
-      VELOX_USER_CHECK(
-          key == "type" || key == "batch-scan-mode" ||
-              key == "deletion-vectors.enabled" ||
-              key == "data-evolution.enabled" || key == "data-file.thin-mode" ||
-              key == "row-tracking.enabled",
-          "Paimon same-schema append profile does not support option '{}'; "
-          "its applicability to the current reader has not been classified",
-          key);
-    }
-  }
   // TODO: Normalize and validate supported query options before applying them
   // to the scan; retaining them in the handle does not implement their effects.
   VELOX_USER_CHECK(
@@ -420,16 +269,17 @@ void PaimonTableHandle::validateReadProfile() const {
 }
 
 void PaimonTableHandle::validateColumn(const FileColumnHandle& column) const {
-  const auto type = columnType(*schema_, column.name());
+  const auto index = columnIndex(*schema_, column.name());
+  const auto& type = schema_->rowType()->childAt(index);
   VELOX_USER_CHECK(
       column.schemaType() && *column.schemaType() == *type,
       "Paimon column schema type does not match target schema: '{}'",
       column.name());
-  VELOX_USER_CHECK(
-      column.dataType() && *column.dataType() == *type,
-      "Paimon column output type does not match target schema: '{}'",
-      column.name());
-  const auto role = isPartitionColumn(*schema_, column.name())
+  const auto id = *schema_->metadata().children[index].fieldId;
+  const auto& partitions = schema_->partitionKeys();
+  const bool partition =
+      std::find(partitions.begin(), partitions.end(), id) != partitions.end();
+  const auto role = partition
       ? FileColumnHandle::ColumnType::kPartitionKey
       : FileColumnHandle::ColumnType::kRegular;
   VELOX_USER_CHECK_EQ(
@@ -437,17 +287,17 @@ void PaimonTableHandle::validateColumn(const FileColumnHandle& column) const {
       role,
       "Paimon column role does not match target schema: '{}'",
       column.name());
-  // TODO: Validate extraction outputs and callback ownership separately from
-  // the schema input type before enabling these FileColumnHandle capabilities.
+  // TODO: Bind extraction outputs and filters separately from schema inputs.
   VELOX_USER_CHECK(
-      column.extractions().empty() && !column.postProcessor(),
-      "Paimon same-schema append profile does not support column extractions "
-      "or callbacks; Paimon validation for these capabilities is not implemented yet");
+      column.extractions().empty(),
+      "Paimon same-schema append profile does not support column extractions; "
+      "extraction input/output binding is not implemented yet");
+  VELOX_USER_CHECK(
+      column.dataType() && *column.dataType() == *type,
+      "Paimon column output type does not match target schema: '{}'",
+      column.name());
   for (const auto& path : column.requiredSubfields()) {
-    subfieldType(*schema_, path);
-    VELOX_USER_CHECK(
-        common::Subfield(path.toString()) == path,
-        "Paimon FileColumnHandle required subfields must round-trip by name");
+    schema_->fieldIdPath(path);
   }
 }
 
@@ -587,6 +437,12 @@ folly::dynamic PaimonTableHandle::serialize() const {
     VELOX_USER_CHECK(
         !handle->postProcessor(),
         "Paimon filter column callbacks cannot be serialized");
+    // TODO: Preserve required-subfield path elements in PaimonColumnHandle wire.
+    for (const auto& path : handle->requiredSubfields()) {
+      VELOX_USER_CHECK(
+          common::Subfield(path.toString()) == path,
+          "Paimon filter column required subfields cannot be serialized by name");
+    }
     obj["filterColumnHandles"].push_back(handle->serialize());
   }
   obj["queryOptions"] = folly::dynamic::object;

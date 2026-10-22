@@ -37,8 +37,9 @@ class PaimonTableHandle final : public FileTableHandle {
   /// options. Execution requires explicit type=table, batch-scan-mode=none,
   /// deletion-vectors.enabled=false, data-evolution.enabled=false,
   /// data-file.thin-mode=false and boolean row-tracking.enabled options.
-  /// Optional bucket and file.format are validated; other schema options and
-  /// nonempty queryOptions are rejected by this profile. No defaults are added.
+  /// Other schema options are retained; bucket routing and file selection
+  /// belong to the caller, and the split supplies the actual file format.
+  /// Nonempty queryOptions are rejected. No defaults are added.
   /// These execution limits describe the current reader, not Paimon table
   /// validity; additional capabilities require their own semantic validation.
   PaimonTableHandle(
@@ -105,6 +106,7 @@ class PaimonTableHandle final : public FileTableHandle {
   void validateReadProfile() const;
 
   /// Checks a column against the fixed schema and partition declarations.
+  /// Output post-processing retains the common FileColumnHandle contract.
   void validateColumn(const FileColumnHandle& column) const;
 
   /// Checks the decoded footer's ordered names and types before adaptation.

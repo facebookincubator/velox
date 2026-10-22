@@ -129,10 +129,11 @@ void validateType(
     const TypePtr& type,
     const PaimonTypeMetadata& metadata,
     bool isField,
-    std::unordered_set<int32_t>& ids,
-    uint32_t depth) {
+    std::vector<column_index_t>& path,
+    std::unordered_map<int32_t, std::vector<column_index_t>>& paths) {
   VELOX_USER_CHECK_NOT_NULL(type, "Missing Paimon field type");
-  VELOX_USER_CHECK_LE(depth, kMaxTypeDepth, "Paimon type nesting is too deep");
+  VELOX_USER_CHECK_LE(
+      path.size(), kMaxTypeDepth, "Paimon type nesting is too deep");
   VELOX_USER_CHECK_EQ(
       metadata.fieldId.has_value(),
       isField,
@@ -144,7 +145,7 @@ void validateType(
         "Invalid Paimon DataField ID: {}",
         id);
     VELOX_USER_CHECK(
-        ids.insert(id).second, "Duplicate Paimon field ID: {}", id);
+        paths.emplace(id, path).second, "Duplicate Paimon field ID: {}", id);
   }
 
   const auto& root = metadata.logicalType;
@@ -232,8 +233,10 @@ void validateType(
       type->size(),
       "Paimon type metadata shape mismatch");
   for (column_index_t i = 0; i < type->size(); ++i) {
+    path.push_back(i);
     validateType(
-        type->childAt(i), metadata.children[i], type->isRow(), ids, depth + 1);
+        type->childAt(i), metadata.children[i], type->isRow(), path, paths);
+    path.pop_back();
   }
 }
 
@@ -263,20 +266,6 @@ PaimonTypeMetadata readMetadata(const folly::dynamic& obj, uint32_t depth) {
   return result;
 }
 
-void indexFields(
-    const PaimonTypeMetadata& metadata,
-    std::vector<column_index_t>& path,
-    std::unordered_map<int32_t, std::vector<column_index_t>>& paths) {
-  if (metadata.fieldId) {
-    paths.emplace(*metadata.fieldId, path);
-  }
-  for (column_index_t i = 0; i < metadata.children.size(); ++i) {
-    path.push_back(i);
-    indexFields(metadata.children[i], path, paths);
-    path.pop_back();
-  }
-}
-
 std::vector<int32_t> readIds(const folly::dynamic& array) {
   VELOX_USER_CHECK(array.isArray(), "Expected Paimon field ID array");
   std::vector<int32_t> ids;
@@ -296,11 +285,6 @@ bool PaimonTypeMetadata::operator==(const PaimonTypeMetadata& other) const {
              other.fieldId,
              other.parameters,
              other.children);
-}
-
-void PaimonTypeMetadata::validate(const TypePtr& type, bool isField) const {
-  std::unordered_set<int32_t> ids;
-  validateType(type, *this, isField, ids, 0);
 }
 
 folly::dynamic PaimonTypeMetadata::serialize() const {
@@ -343,9 +327,8 @@ PaimonSchema::PaimonSchema(
       "Unsupported Paimon schema version: {}",
       schemaVersion_);
   VELOX_USER_CHECK_NOT_NULL(rowType_, "Missing Paimon schema type");
-  metadata_.validate(rowType_, false);
   std::vector<column_index_t> path;
-  indexFields(metadata_, path, fieldIndexPaths_);
+  validateType(rowType_, metadata_, false, path, fieldIndexPaths_);
   const auto validateKeys = [&](const auto& keys, std::string_view label) {
     std::unordered_set<int32_t> unique;
     for (auto id : keys) {
@@ -354,12 +337,13 @@ PaimonSchema::PaimonSchema(
           "Duplicate Paimon {} field ID: {}",
           label,
           id);
+      const auto& fieldPath = fieldIndexPath(id);
       VELOX_USER_CHECK_EQ(
-          fieldIndexPath(id).size(),
+          fieldPath.size(),
           1,
           "Paimon {} must reference top-level fields",
           label);
-      const auto& type = fieldType(id);
+      const auto& type = rowType_->childAt(fieldPath.front());
       VELOX_USER_CHECK(
           !type->isRow() && !type->isArray() && !type->isMap(),
           "Paimon {} must reference scalar fields",

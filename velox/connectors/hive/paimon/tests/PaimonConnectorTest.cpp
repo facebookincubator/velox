@@ -35,6 +35,7 @@
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/expression/Expr.h"
+#include "velox/vector/DecodedVector.h"
 
 #ifdef VELOX_ENABLE_PARQUET
 #include "velox/dwio/parquet/reader/ParquetReader.h"
@@ -729,6 +730,122 @@ TEST_F(PaimonConnectorTest, tableHandleFiltersAndProjection) {
     test::assertEqualVectors(
         makeRowVector({"selected_id"}, {makeFlatVector<int64_t>({4})}),
         *result);
+  }
+}
+
+TEST_F(PaimonConnectorTest, fileScanCapabilitiesWithPaimonTable) {
+  const auto rowType = ROW({{"id", BIGINT()}, {"value", BIGINT()}});
+  const auto input = makeRowVector(
+      {"id", "value"},
+      {makeFlatVector<int64_t>({0, 1, 2, 3}),
+       makeFlatVector<int64_t>({11, 12, 13, 14})});
+  auto schemaWire = makeTableSchema(rowType)->serialize();
+  schemaWire["options"]["write-buffer-size"] = "256 mb";
+  schemaWire["options"]["scan.mode"] = "latest";
+  schemaWire["options"]["bucket"] = "8";
+  schemaWire["options"]["file.format"] = "avro";
+  common::SubfieldFilters filters;
+  filters.emplace(
+      common::Subfield("id"), std::make_unique<common::BoolValue>(true, false));
+  const auto filterColumn = std::make_shared<HiveColumnHandle>(
+      "value", FileColumnHandle::ColumnType::kRegular, BIGINT(), BIGINT());
+  const auto table = std::make_shared<PaimonTableHandle>(
+      kPaimonConnectorId,
+      "paimon_table",
+      PaimonSchema::create(schemaWire),
+      PaimonTableHandle::ReadProfile::kSameSchemaAppendBatch,
+      std::move(filters),
+      parseExpr("value % 2 = 1", rowType),
+      std::vector<FileColumnHandlePtr>{filterColumn, filterColumn});
+  const auto outputType = ROW({{"selected_id", BIGINT()}});
+  const auto makePlan = [&](bool postProcess) {
+    std::function<void(VectorPtr&)> processor;
+    if (postProcess) {
+      processor = [&](VectorPtr& column) {
+        const DecodedVector decoded(*column);
+        column = makeFlatVector<int64_t>(
+            column->size(), [&](vector_size_t row) {
+              return decoded.valueAt<int64_t>(row) + 100;
+            });
+      };
+    }
+    std::vector<common::Subfield> requiredSubfields;
+    requiredSubfields.emplace_back("id");
+    return exec::test::PlanBuilder()
+        .startTableScan()
+        .connectorId(kPaimonConnectorId)
+        .outputType(outputType)
+        .tableHandle(table)
+        .assignments(
+            {{"selected_id",
+              std::make_shared<HiveColumnHandle>(
+                  "id",
+                  FileColumnHandle::ColumnType::kRegular,
+                  BIGINT(),
+                  BIGINT(),
+                  std::move(requiredSubfields),
+                  std::vector<NamedExtraction>{},
+                  HiveColumnHandle::ColumnParseParameters{},
+                  std::move(processor))}})
+        .endTableScan()
+        .planNode();
+  };
+  const auto plan = makePlan(false);
+  const auto copy =
+      ISerializable::deserialize<core::PlanNode>(plan->serialize(), pool());
+  const auto processedPlan = makePlan(true);
+  const auto expected =
+      makeRowVector({"selected_id"}, {makeFlatVector<int64_t>({2, 2})});
+  const auto processedExpected = makeRowVector(
+      {"selected_id"}, {makeFlatVector<int64_t>({102, 102})});
+  for (auto format : fileFormats()) {
+    SCOPED_TRACE(dwio::common::FileFormatName::toName(format));
+    const auto files = makeFilePaths(2);
+    std::vector<std::string> paths;
+    for (const auto& file : files) {
+      writeFile(file->getPath(), input, format);
+      paths.push_back(file->getPath());
+    }
+    const auto split =
+        makePaimonSplit(paths, PaimonTableType::kAppendOnly, format);
+    for (const auto& scan : {plan, copy}) {
+      exec::test::AssertQueryBuilder(scan).split(split).assertResults(expected);
+    }
+    exec::test::AssertQueryBuilder(processedPlan)
+        .maxDrivers(1)
+        .split(split)
+        .assertResults(processedExpected);
+  }
+
+  // This local scan keeps the literal name in the Subfield path elements.
+  const auto literalType = ROW({{"a.b", BIGINT()}});
+  const auto literalInput =
+      makeRowVector({"a.b"}, {makeFlatVector<int64_t>({1, 2})});
+  std::vector<common::Subfield> requiredSubfields;
+  requiredSubfields.push_back(std::move(*common::Subfield::create("a.b")));
+  const auto literalPlan = exec::test::PlanBuilder()
+                               .startTableScan()
+                               .connectorId(kPaimonConnectorId)
+                               .outputType(literalType)
+                               .tableHandle(makePaimonTableHandle(literalType))
+                               .assignments(
+                                   {{"a.b",
+                                     std::make_shared<HiveColumnHandle>(
+                                         "a.b",
+                                         FileColumnHandle::ColumnType::kRegular,
+                                         BIGINT(),
+                                         BIGINT(),
+                                         std::move(requiredSubfields))}})
+                               .endTableScan()
+                               .planNode();
+  for (auto format : fileFormats()) {
+    SCOPED_TRACE(dwio::common::FileFormatName::toName(format));
+    const auto files = makeFilePaths(1);
+    writeFile(files[0]->getPath(), literalInput, format);
+    exec::test::AssertQueryBuilder(literalPlan)
+        .split(makePaimonSplit(
+            {files[0]->getPath()}, PaimonTableType::kAppendOnly, format))
+        .assertResults(literalInput);
   }
 }
 

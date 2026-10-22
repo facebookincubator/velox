@@ -102,7 +102,6 @@ void PaimonDataSource::setFromDataSource(
     const auto* field = scanSpec_->childByName(name);
     if (field && field->filter()) {
       auto* sourceField = source->scanSpec_->childByName(name);
-      VELOX_CHECK_NOT_NULL(sourceField);
       sourceField->setFilter(field->filter()->clone());
     }
   }

@@ -41,12 +41,8 @@ struct PaimonTypeMetadata {
 
   bool operator==(const PaimonTypeMetadata& other) const;
 
-  /// Checks the entire subtree, including unique field IDs and ROW names.
-  /// isField is true only for a ROW child, which must have a DataField ID.
-  void validate(const TypePtr& type, bool isField) const;
-
   folly::dynamic serialize() const;
-  /// Decodes metadata wire; validate() checks it against a Velox type.
+  /// Decodes metadata wire; PaimonSchema validates it against the type tree.
   static PaimonTypeMetadata create(const folly::dynamic& obj);
 };
 

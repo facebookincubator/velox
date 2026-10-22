@@ -34,6 +34,17 @@ class PaimonSchemaTest : public testing::Test {
     Type::registerSerDe();
   }
 
+  static PaimonSchema singleFieldSchema(
+      const TypePtr& type,
+      PaimonTypeMetadata metadata) {
+    metadata.fieldId = 7;
+    return PaimonSchema(
+        0,
+        3,
+        ROW({{"field", type}}),
+        PaimonTypeMetadata{"ROW", false, std::nullopt, {}, {std::move(metadata)}});
+  }
+
   static PaimonSchemaPtr nestedSchema(
       int64_t id = 10,
       int32_t version = 3,
@@ -101,20 +112,12 @@ TEST_F(PaimonSchemaTest, nativeTypesAndLogicalAttributes) {
        {"TIMESTAMP_WITH_LOCAL_TIME_ZONE", false, std::nullopt, {0}}}};
   for (const auto& [type, metadata] : cases) {
     SCOPED_TRACE(metadata.logicalType);
-    metadata.validate(type, false);
     const auto copy = PaimonTypeMetadata::create(metadata.serialize());
     EXPECT_EQ(copy, metadata);
-    copy.validate(type, false);
-    auto field = metadata;
-    field.fieldId = 7;
-    const PaimonSchema schema(
-        0,
-        3,
-        ROW({{"field", type}}),
-        PaimonTypeMetadata{"ROW", false, std::nullopt, {}, {field}});
+    const auto schema = singleFieldSchema(type, copy);
     const auto schemaCopy = PaimonSchema::create(schema.serialize());
     EXPECT_EQ(*schemaCopy->fieldType(7), *type);
-    EXPECT_EQ(schemaCopy->fieldMetadata(7), field);
+    EXPECT_EQ(schemaCopy->fieldMetadata(7), schema.metadata().children[0]);
   }
 }
 
@@ -456,13 +459,15 @@ TEST_F(PaimonSchemaTest, invalidFieldAndContainerMetadata) {
       std::nullopt,
       {},
       {{"BIGINT", true, 1}, {"BIGINT", true, 2}}};
+  const auto makeSchema = [&](const RowTypePtr& type) {
+    return PaimonSchema(0, 3, type, duplicateNames);
+  };
   VELOX_ASSERT_THROW(
-      duplicateNames.validate(ROW({{"a", BIGINT()}, {"a", BIGINT()}}), false),
+      makeSchema(ROW({{"a", BIGINT()}, {"a", BIGINT()}})),
       "Duplicate Paimon field name");
   for (const auto& name : {"", " \t\n", "\t\xe3\x80\x80 \n"}) {
     VELOX_ASSERT_THROW(
-        duplicateNames.validate(
-            ROW({{name, BIGINT()}, {"b", BIGINT()}}), false),
+        makeSchema(ROW({{name, BIGINT()}, {"b", BIGINT()}})),
         "field name must not be empty or blank");
   }
   // All code points recognized by Java Character.isWhitespace.
@@ -472,11 +477,10 @@ TEST_F(PaimonSchemaTest, invalidFieldAndContainerMetadata) {
         0x2008, 0x2009, 0x200a, 0x2028, 0x2029, 0x205f, 0x3000}) {
     SCOPED_TRACE(static_cast<uint32_t>(codePoint));
     VELOX_ASSERT_THROW(
-        duplicateNames.validate(
+        makeSchema(
             ROW(
                 {{folly::codePointToUtf8(codePoint), BIGINT()},
-                 {"b", BIGINT()}}),
-            false),
+                 {"b", BIGINT()}})),
         "field name must not be empty or blank");
   }
   // Nonbreaking spaces, other non-whitespace and range boundaries stay valid.
@@ -485,16 +489,14 @@ TEST_F(PaimonSchemaTest, invalidFieldAndContainerMetadata) {
         0x1681, 0x180e, 0x1fff, 0x2007, 0x200b, 0x2027, 0x202a,
         0x202f, 0x205e, 0x2060, 0x2fff, 0x3001, 0x4e2d, 0x1f600}) {
     SCOPED_TRACE(static_cast<uint32_t>(codePoint));
-    duplicateNames.validate(
+    makeSchema(
         ROW(
             {{" \t" + folly::codePointToUtf8(codePoint) + "\n", BIGINT()},
-             {"b", BIGINT()}}),
-        false);
+             {"b", BIGINT()}}));
   }
   for (const auto& name : {" \xff", " \xe3\x80"}) {
     EXPECT_THROW(
-        duplicateNames.validate(
-            ROW({{name, BIGINT()}, {"b", BIGINT()}}), false),
+        makeSchema(ROW({{name, BIGINT()}, {"b", BIGINT()}})),
         std::exception);
   }
 }
@@ -503,9 +505,11 @@ TEST_F(PaimonSchemaTest, invalidTypesAndParameters) {
   const auto check = [](const TypePtr& type,
                         const PaimonTypeMetadata& metadata,
                         const std::string& error) {
-    VELOX_ASSERT_THROW(metadata.validate(type, false), error);
+    VELOX_ASSERT_THROW(singleFieldSchema(type, metadata), error);
   };
-  check(nullptr, {"BIGINT", true}, "Missing Paimon field type");
+  VELOX_ASSERT_THROW(
+      PaimonSchema(0, 3, nullptr, PaimonTypeMetadata{"ROW", false}),
+      "Missing Paimon schema type");
   check(INTEGER(), {"BIGINT", true}, "does not match Velox type");
   check(DATE(), {"INTEGER", true}, "does not match Velox type");
   check(BIGINT(), {"MULTISET", true}, "Unsupported Paimon logical type");
@@ -587,7 +591,7 @@ TEST_F(PaimonSchemaTest, nestingLimit) {
         "ARRAY", true, std::nullopt, {}, {std::move(metadata)}};
   }
   VELOX_ASSERT_THROW(
-      metadata.validate(type, false), "Paimon type nesting is too deep");
+      singleFieldSchema(type, metadata), "Paimon type nesting is too deep");
   VELOX_ASSERT_THROW(
       PaimonTypeMetadata::create(metadata.serialize()),
       "Paimon type nesting is too deep");

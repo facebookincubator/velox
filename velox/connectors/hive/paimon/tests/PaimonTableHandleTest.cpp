@@ -275,44 +275,24 @@ TEST_F(PaimonTableHandleTest, executableProfile) {
             key,
             good["options"][key].asString()));
   }
-  for (const auto& key :
-       {"scan.mode",
-        "log.scan",
-        "merge-engine",
-        "sequence.field",
-        "file.format.per.level",
-        "scan.ignore-lost-file",
-        "custom"}) {
+  // Write and planning options do not configure an already planned file scan.
+  for (const auto& [key, value] :
+       std::unordered_map<std::string, std::string>{
+           {"scan.mode", "latest"},
+           {"merge-engine", "deduplicate"},
+           {"file.format", "avro"},
+           {"file.format.per.level", "0:avro,3:parquet"},
+           {"bucket", "8"},
+           {"write-buffer-size", "256 mb"},
+           {"custom", "uninterpreted"}}) {
+    SCOPED_TRACE(key);
     auto wire = good;
-    wire["options"][key] = "unverified";
-    VELOX_ASSERT_USER_THROW(
-        table(PaimonSchema::create(wire))->validateReadProfile(),
-        fmt::format(
-            "Paimon same-schema append profile does not support option '{}'; "
-            "its applicability to the current reader has not been classified",
-            key));
-  }
-  auto writerOption = good;
-  writerOption["options"]["write-buffer-size"] = "256 mb";
-  VELOX_ASSERT_USER_THROW(
-      table(PaimonSchema::create(writerOption))->validateReadProfile(),
-      "Paimon same-schema append profile does not support option "
-      "'write-buffer-size'; its applicability to the current reader has not "
-      "been classified");
-  for (const auto& value : {"-2", "0", "2147483648", "unknown"}) {
-    auto wire = good;
-    wire["options"]["bucket"] = value;
-    VELOX_ASSERT_USER_THROW(
-        table(PaimonSchema::create(wire))->validateReadProfile(),
-        "Unsupported Paimon append bucket option");
+    wire["options"][key] = value;
+    const auto handle = table(PaimonSchema::create(wire));
+    handle->validateReadProfile();
+    EXPECT_EQ(handle->schema()->options().at(key), value);
   }
   auto wire = good;
-  wire["options"]["file.format"] = "avro";
-  VELOX_ASSERT_USER_THROW(
-      table(PaimonSchema::create(wire))->validateReadProfile(),
-      "Unsupported Paimon schema file.format 'avro'; the current reader "
-      "supports nimble, dwrf, orc and parquet");
-  wire = good;
   wire["options"]["row-tracking.enabled"] = "true";
   table(PaimonSchema::create(wire))->validateReadProfile();
   wire["options"]["row-tracking.enabled"] = "unknown";
@@ -369,13 +349,10 @@ TEST_F(PaimonTableHandleTest, conditionValidation) {
       common::Subfield("missing"), std::make_unique<common::IsNull>());
   VELOX_ASSERT_USER_THROW(
       makeHandle(std::move(badName), nullptr), "Unknown Paimon field: missing");
-  common::SubfieldFilters badType;
-  badType.emplace(
-      common::Subfield("p"),
-      std::make_unique<common::BigintRange>(1, 9, false));
-  VELOX_ASSERT_USER_THROW(
-      makeHandle(std::move(badType), nullptr),
-      "is not supported for target type VARCHAR");
+  common::SubfieldFilters integralBoolFilter;
+  integralBoolFilter.emplace(
+      common::Subfield("id"), std::make_unique<common::BoolValue>(true, false));
+  EXPECT_NE(makeHandle(std::move(integralBoolFilter), nullptr), nullptr);
   const auto field =
       std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "id");
   const auto expression = std::make_shared<core::CallTypedExpr>(
@@ -406,7 +383,7 @@ TEST_F(PaimonTableHandleTest, conditionValidation) {
       "Paimon same-schema append profile does not support Lambda filters; "
       "scope-aware column validation is not implemented yet");
   for (const auto& inputType :
-       {schema({})->rowType(), ROW({{"id", INTEGER()}})}) {
+       {schema({})->rowType(), ROW({{"id", BIGINT()}})}) {
     const auto explicitInput = std::make_shared<core::CallTypedExpr>(
         BOOLEAN(),
         std::vector<core::TypedExprPtr>{
@@ -415,24 +392,70 @@ TEST_F(PaimonTableHandleTest, conditionValidation) {
                 std::make_shared<core::InputTypedExpr>(inputType),
                 "id")},
         "test_predicate");
-    if (*inputType == *schema({})->rowType()) {
-      EXPECT_NE(makeHandle({}, explicitInput), nullptr);
-    } else {
-      VELOX_ASSERT_USER_THROW(
-          makeHandle({}, explicitInput),
-          "Paimon expression input type does not match target schema");
-    }
+    EXPECT_NE(makeHandle({}, explicitInput), nullptr);
   }
+}
+
+TEST_F(PaimonTableHandleTest, columnValidationAndSerialization) {
+  std::vector<common::Subfield> callbackSubfields;
+  callbackSubfields.emplace_back("id");
+  const auto callbackColumn = std::make_shared<HiveColumnHandle>(
+      "id",
+      FileColumnHandle::ColumnType::kRegular,
+      BIGINT(),
+      BIGINT(),
+      std::move(callbackSubfields),
+      std::vector<NamedExtraction>{},
+      HiveColumnHandle::ColumnParseParameters{},
+      [](VectorPtr&) {});
+  const auto callbackTable = std::make_shared<PaimonTableHandle>(
+      "test-paimon",
+      "orders",
+      schema({}),
+      kReadProfile,
+      common::SubfieldFilters{},
+      nullptr,
+      std::vector<FileColumnHandlePtr>{callbackColumn});
+  callbackTable->validateReadProfile();
   VELOX_ASSERT_USER_THROW(
-      makeHandle(
-          {},
-          std::make_shared<core::CallTypedExpr>(
-              BOOLEAN(),
-              std::vector<core::TypedExprPtr>{
-                  std::make_shared<core::InputTypedExpr>(
-                      schema({})->rowType())},
-              "test_predicate")),
-      "Paimon remaining filter must access input columns by name");
+      callbackTable->serialize(),
+      "Paimon filter column callbacks cannot be serialized");
+
+  const auto literalSchema = std::make_shared<PaimonSchema>(
+      0,
+      3,
+      ROW({{"a.b", BIGINT()}}),
+      PaimonTypeMetadata{"ROW", false, std::nullopt, {}, {{"BIGINT", true, 0}}});
+  std::vector<common::Subfield> requiredSubfields;
+  requiredSubfields.push_back(std::move(*common::Subfield::create("a.b")));
+  const auto literalColumn = std::make_shared<HiveColumnHandle>(
+      "a.b",
+      FileColumnHandle::ColumnType::kRegular,
+      BIGINT(),
+      BIGINT(),
+      std::move(requiredSubfields));
+  const auto literalTable = std::make_shared<PaimonTableHandle>(
+      "test-paimon",
+      "orders",
+      literalSchema,
+      kReadProfile,
+      common::SubfieldFilters{},
+      nullptr,
+      std::vector<FileColumnHandlePtr>{literalColumn});
+  literalTable->validateColumn(*literalColumn);
+  VELOX_ASSERT_USER_THROW(
+      literalTable->serialize(),
+      "Paimon filter column required subfields cannot be serialized by name");
+  std::vector<common::Subfield> invalidSubfields;
+  invalidSubfields.emplace_back("a.b");
+  const HiveColumnHandle invalidPath(
+      "a.b",
+      FileColumnHandle::ColumnType::kRegular,
+      BIGINT(),
+      BIGINT(),
+      std::move(invalidSubfields));
+  VELOX_ASSERT_USER_THROW(
+      literalTable->validateColumn(invalidPath), "Unknown Paimon field: a");
 }
 
 TEST_F(PaimonTableHandleTest, invalidDefinition) {
