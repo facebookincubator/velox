@@ -209,6 +209,7 @@ TEST_F(PaimonTableHandleTest, structuredFilterPaths) {
 
 TEST_F(PaimonTableHandleTest, splitValidation) {
   const auto handle = table(schema({}));
+  handle->validateReadProfile();
   const auto makeSplit = [](PaimonTableType type,
                             const auto& partitions,
                             std::string connectorId = "test-paimon") {

@@ -53,7 +53,6 @@ PaimonSplitReader::PaimonSplitReader(
       ownedPartitionKeys_(*checkedNotNull(partitionKeys)),
       paimonSplit_(std::move(paimonSplit)) {
   VELOX_CHECK_NOT_NULL(paimonSplit_);
-  paimonTableHandle_->validateSplit(*paimonSplit_);
 
   // Build FileConnectorSplits for all data files so we can switch between
   // them during multi-file iteration.

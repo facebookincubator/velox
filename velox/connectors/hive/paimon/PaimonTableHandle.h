@@ -73,7 +73,7 @@ class PaimonTableHandle final : public FileTableHandle {
   bool hasSameTableDefinition(const PaimonTableHandle& other) const;
 
   /// Compares logical filters, sampling, profile and query options. Column
-  /// assignments and partition handles are checked by the data source.
+  /// assignments are checked by the data source.
   bool hasSameScanConditions(const PaimonTableHandle& other) const;
 
   const common::SubfieldFilters& subfieldFilters() const override {
@@ -105,6 +105,7 @@ class PaimonTableHandle final : public FileTableHandle {
   /// Checks connector, table type and the complete set of partition names.
   /// Partition values retain the existing string/NULL encoding. The current
   /// split has no file schema IDs, so this cannot verify file schema identity.
+  /// Requires a table definition accepted by validateReadProfile().
   void validateSplit(const PaimonConnectorSplit& split) const;
 
   /// Checks whether the table definition fits the same-schema append read
@@ -117,6 +118,7 @@ class PaimonTableHandle final : public FileTableHandle {
   /// Checks the decoded footer's ordered names and types before adaptation.
   /// Physical partition columns may all be present or all omitted; optional
   /// trailing tracking columns are accepted only when row tracking is enabled.
+  /// Requires a table definition accepted by validateReadProfile().
   void validateFileSchema(const RowTypePtr& fileType) const;
 
   /// Rejects filter kinds incompatible with the validated output channel type.

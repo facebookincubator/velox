@@ -1402,6 +1402,22 @@ TEST_F(PaimonConnectorTest, takeoverPreservesTableDefinition) {
       source->setFromDataSource(std::move(alreadyRead)),
       "Paimon takeover does not support an already-read donor; only prepared, "
       "unread split state can be transferred");
+  auto busyRecipient = makeSource(table);
+  busyRecipient->addSplit(makePaimonSplit({paths[0]->getPath()}));
+  auto preparedDonor = makeSource(table);
+  preparedDonor->addSplit(makePaimonSplit({paths[0]->getPath()}));
+  VELOX_ASSERT_USER_THROW(
+      busyRecipient->setFromDataSource(std::move(preparedDonor)),
+      "Paimon takeover requires an idle recipient");
+  auto finishedDonor = makeSource(table);
+  finishedDonor->addSplit(makePaimonSplit({paths[0]->getPath()}));
+  ASSERT_TRUE(finishedDonor->next(100, future).has_value());
+  auto finished = finishedDonor->next(100, future);
+  ASSERT_TRUE(finished.has_value());
+  ASSERT_EQ(*finished, nullptr);
+  VELOX_ASSERT_USER_THROW(
+      source->setFromDataSource(std::move(finishedDonor)),
+      "Paimon takeover requires a prepared split");
   preloaded->addSplit(makePaimonSplit({paths[0]->getPath()}));
   source->setFromDataSource(std::move(preloaded));
   auto result = source->next(100, future);
@@ -1484,6 +1500,46 @@ TEST_F(PaimonConnectorTest, takeoverPartitionHandlesAndDynamicFilters) {
       EXPECT_EQ(*end, nullptr);
     }
     EXPECT_EQ(source->getCompletedRows(), 6);
+  }
+
+  const auto unfilteredTable =
+      makePaimonTableHandle(rowType, {}, nullptr, {"p"});
+  const auto outputType = ROW({{"id", BIGINT()}});
+  const ColumnHandleMap idColumns{{"id", columns.at("id")}};
+  const auto files = makeFilePaths(1);
+  writeToFile(files[0]->getPath(), input);
+  for (bool recipientHasUnusedPartition : {false, true}) {
+    for (bool donorHasUnusedPartition : {false, true}) {
+      SCOPED_TRACE(
+          fmt::format(
+              "recipient partition handle {}, donor partition handle {}",
+              recipientHasUnusedPartition,
+              donorHasUnusedPartition));
+      auto recipient = connector->createDataSource(
+          outputType,
+          unfilteredTable,
+          recipientHasUnusedPartition ? columns : idColumns,
+          context.get());
+      auto donor = connector->createDataSource(
+          outputType,
+          unfilteredTable,
+          donorHasUnusedPartition ? columns : idColumns,
+          context.get());
+      donor->addSplit(makePaimonSplit(
+          {files[0]->getPath()},
+          PaimonTableType::kAppendOnly,
+          dwio::common::FileFormat::DWRF,
+          {{"p", "unused"}}));
+      recipient->setFromDataSource(std::move(donor));
+      ContinueFuture future = ContinueFuture::makeEmpty();
+      auto result = recipient->next(100, future);
+      ASSERT_TRUE(result.has_value());
+      ASSERT_TRUE(*result);
+      test::assertEqualVectors(input, *result);
+      auto end = recipient->next(100, future);
+      ASSERT_TRUE(end.has_value());
+      EXPECT_EQ(*end, nullptr);
+    }
   }
 }
 

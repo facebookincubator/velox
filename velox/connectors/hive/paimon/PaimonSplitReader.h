@@ -31,7 +31,8 @@ class PaimonSplitReader : public FileSplitReader {
   /// @param fileSplit FileConnectorSplit for the first data file (set by
   ///        FileDataSource::addSplit before calling createSplitReader).
   /// @param paimonSplit The full Paimon split. PaimonSplitReader builds
-  ///        FileConnectorSplits for all data files internally.
+  ///        FileConnectorSplits for all data files internally. The caller must
+  ///        validate the table read profile and split before construction.
   PaimonSplitReader(
       const std::shared_ptr<const FileConnectorSplit>& fileSplit,
       std::shared_ptr<const PaimonConnectorSplit> paimonSplit,
@@ -50,7 +51,7 @@ class PaimonSplitReader : public FileSplitReader {
   ~PaimonSplitReader() override = default;
 
   /// Saves metadata filter and runtime stats for use by
-  /// ensureFileSplitReader(). File validation is done in the constructor.
+  /// ensureFileSplitReader(). Each footer is validated when its file is opened.
   void prepareSplit(
       std::shared_ptr<common::MetadataFilter> metadataFilter,
       dwio::common::RuntimeStats& runtimeStats,

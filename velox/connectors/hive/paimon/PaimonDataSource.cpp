@@ -121,28 +121,18 @@ void PaimonDataSource::setFromDataSource(
   VELOX_USER_CHECK(
       paimonTableHandle_->hasSameScanConditions(*source->paimonTableHandle_) &&
           *outputType() == *source->outputType() &&
-          *readerOutputType_ == *source->readerOutputType_ &&
-          partitionKeys_.size() == source->partitionKeys_.size(),
+          *readerOutputType_ == *source->readerOutputType_,
       "Paimon takeover must preserve scan conditions and query columns");
-  for (const auto& [name, column] : partitionKeys_) {
-    VELOX_USER_CHECK(
-        source->partitionKeys_.count(name),
-        "Paimon takeover must preserve partition column handles");
-  }
   // Preload transfers a prepared, unread split, never an active scan cursor.
   VELOX_USER_CHECK_NULL(split_, "Paimon takeover requires an idle recipient");
   VELOX_USER_CHECK_NOT_NULL(
-      source->paimonSplit_, "Paimon takeover requires a prepared split");
-  VELOX_USER_CHECK_NOT_NULL(
       source->split_, "Paimon takeover requires a prepared split");
-  VELOX_USER_CHECK_NOT_NULL(
-      source->splitReader_, "Paimon takeover requires a prepared reader");
+  auto* sourceReader =
+      checkedPointerCast<PaimonSplitReader>(source->splitReader_.get());
   VELOX_USER_CHECK(
-      !checkedPointerCast<PaimonSplitReader>(source->splitReader_.get())
-           ->startedReading(),
+      !sourceReader->startedReading(),
       "Paimon takeover does not support an already-read donor; only prepared, "
       "unread split state can be transferred");
-  paimonTableHandle_->validateSplit(*source->paimonSplit_);
   // Common adaptation skips constant columns. A prior split's partition
   // constant must not prevent its current filters from reaching the donor.
   for (const auto& [name, column] : partitionKeys_) {
@@ -157,8 +147,7 @@ void PaimonDataSource::setFromDataSource(
   FileDataSource::setFromDataSource(std::move(sourceUnique));
   // Files are opened lazily after takeover, when the previous owner of the
   // borrowed runtimeStats pointer has already been destroyed.
-  checkedPointerCast<PaimonSplitReader>(splitReader_.get())
-      ->setRuntimeStats(runtimeStats_);
+  sourceReader->setRuntimeStats(runtimeStats_);
 }
 
 void PaimonDataSource::addDynamicFilter(

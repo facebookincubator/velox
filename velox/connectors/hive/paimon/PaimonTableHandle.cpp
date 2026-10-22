@@ -481,7 +481,6 @@ void PaimonTableHandle::validateColumn(const FileColumnHandle& column) const {
 }
 
 void PaimonTableHandle::validateFileSchema(const RowTypePtr& fileType) const {
-  validateReadProfile();
   VELOX_USER_CHECK_NOT_NULL(fileType, "Missing Paimon file schema");
   // TODO: Resolve per-file historical schemas by schema ID and field ID before
   // accepting evolved names, types or layouts instead of this fixed schema.
@@ -533,7 +532,6 @@ void PaimonTableHandle::validateSplit(const PaimonConnectorSplit& split) const {
       split.tableType(),
       tableType(),
       "Paimon split table type does not match table schema");
-  validateReadProfile();
   VELOX_USER_CHECK(
       split.rawConvertible(),
       "Paimon same-schema append profile requires rawConvertible=true");
