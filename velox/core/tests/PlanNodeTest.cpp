@@ -84,6 +84,10 @@ TEST_F(PlanNodeTest, findFirstNode) {
       PlanNode::findFirstNode(project0.get(), [](const PlanNode* node) {
         return node->name() == "Unknown";
       }));
+
+  EXPECT_EQ(
+      tableScan2.get(), PlanNode::findFirstNode<TableScanNode>(project0.get()));
+  EXPECT_EQ(nullptr, PlanNode::findFirstNode<ValuesNode>(project0.get()));
 }
 
 TEST_F(PlanNodeTest, findNodeById) {

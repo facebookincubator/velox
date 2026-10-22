@@ -611,6 +611,77 @@ TEST_P(NimbleIndexProjectorTest, projectsRowsWithCachedData) {
   EXPECT_GT(dataIoStats_->ramHit().count(), ramHitsAfterFirstRead);
 }
 
+// Exercises the BlockCache parameter on NimbleIndexProjector::create directly:
+// without a BlockCache, every projection reads from storage; with one, the
+// second projection hits the cache for the same stripe. This complements
+// projectsRowsWithCachedData, which flows through the test base's
+// cacheData/BlockCache wiring, by verifying the parameter contract itself.
+TEST_P(NimbleIndexProjectorTest, blockCacheParameterControlsCaching) {
+  auto rowType = ROW({"key", "value"}, {BIGINT(), INTEGER()});
+  constexpr vector_size_t kNumRows{100};
+  auto batch = vectorMaker_->rowVector(
+      {"key", "value"},
+      {
+          vectorMaker_->flatVector<int64_t>(
+              kNumRows, [](auto row) { return row; }),
+          vectorMaker_->flatVector<int32_t>(
+              kNumRows, [](auto row) { return row * 10; }),
+      });
+  writeData({batch}, {"key"});
+
+  std::vector<Subfield> subfields;
+  subfields.emplace_back("value");
+  const auto expected = vectorMaker_->rowVector(
+      {"value"}, {vectorMaker_->flatVector<int32_t>(10, [](auto row) {
+        return (row + 10) * 10;
+      })});
+  NimbleIndexProjector::Request request;
+  request.keyBounds = {makeRangeLookup(rowType, {"key"}, 10, 20)};
+
+  // Shared reader options with IO stats and no cacheData flag; the projector's
+  // behavior is driven by the BlockCache argument alone.
+  const auto fileHandle = makeFileHandle();
+  dataIoStats_ = std::make_shared<io::IoStatistics>();
+  metadataIoStats_ = std::make_shared<io::IoStatistics>();
+  indexIoStats_ = std::make_shared<io::IoStatistics>();
+  dwio::common::ReaderOptions readerOptions(leafPool_.get());
+  readerOptions.setFileFormat(dwio::common::FileFormat::NIMBLE);
+  readerOptions.setLoadClusterIndex(true);
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
+  readerOptions.setIndexIoStats(indexIoStats_);
+  readerOptions.setIOExecutor(ioExecutor_);
+  ensureTabletReaderCache();
+
+  // blockCache = nullptr: repeat reads never report ram hits.
+  {
+    auto projector = NimbleIndexProjector::create(
+        *tabletReaderCache_,
+        fileHandle,
+        subfields,
+        /*blockCache=*/nullptr,
+        readerOptions);
+    const auto first = projectRows(*projector, request, {});
+    velox::test::assertEqualVectors(expected, first.values);
+    const auto second = projectRows(*projector, request, {});
+    velox::test::assertEqualVectors(expected, second.values);
+    EXPECT_EQ(dataIoStats_->ramHit().count(), 0);
+  }
+
+  // blockCache != nullptr: the second projection into the same stripe hits.
+  {
+    auto* blockCache = getBlockCache(velox::checkedNotNull(dataCache()));
+    auto projector = NimbleIndexProjector::create(
+        *tabletReaderCache_, fileHandle, subfields, blockCache, readerOptions);
+    const auto first = projectRows(*projector, request, {});
+    velox::test::assertEqualVectors(expected, first.values);
+    const auto ramHitsAfterFirstRead = dataIoStats_->ramHit().count();
+    const auto second = projectRows(*projector, request, {});
+    velox::test::assertEqualVectors(expected, second.values);
+    EXPECT_GT(dataIoStats_->ramHit().count(), ramHitsAfterFirstRead);
+  }
+}
+
 // Through the data cache, a stream's checksum is checked when its stripe is
 // read from storage, before the stripe enters the cache, and later reads are
 // served from the cache. A stripe that fails the check never enters it, so a
@@ -4439,7 +4510,11 @@ TEST_P(NimbleIndexProjectorTest, featureReorderingStorageReads) {
     TabletReaderCache::testingReset();
     ensureTabletReaderCache();
     return NimbleIndexProjector::create(
-        *tabletReaderCache_, fileHandle, subfields, readerOptions);
+        *tabletReaderCache_,
+        fileHandle,
+        subfields,
+        /*blockCache=*/nullptr,
+        readerOptions);
   };
 
   // Part 1: Verify stream adjacency on disk with feature reordering, for each

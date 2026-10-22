@@ -195,7 +195,7 @@ ManualEncodingSelectionPolicyFactory::createPolicy(DataType dataType) const {
       ManualEncodingSelectionPolicy,
       encodingReadFactors_,
       compressionOptions_,
-      std::nullopt,
+      /*identifier=*/std::nullopt,
       nestedEncodingReadFactors_);
 }
 

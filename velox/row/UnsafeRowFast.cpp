@@ -309,12 +309,11 @@ int32_t UnsafeRowFast::arrayRowSize(
     bool fixedWidth) const {
   int32_t nullBytes = alignBits(size);
 
-  int32_t rowSize = kFieldWidth + nullBytes;
+  auto childSize = fixedWidth ? elements.valueBytes() : kFieldWidth;
+  int32_t rowSize = kFieldWidth + nullBytes + alignBytes(size * childSize);
   if (fixedWidth) {
-    return rowSize + size * elements.valueBytes();
+    return rowSize;
   }
-
-  rowSize += size * kFieldWidth;
 
   for (auto i = 0; i < size; ++i) {
     if (!elements.isNullAt(offset + i)) {
@@ -343,7 +342,7 @@ int32_t UnsafeRowFast::serializeAsArray(
 
   auto childSize = fixedWidth ? elements.valueBytes() : kFieldWidth;
 
-  int64_t variableWidthOffset = fixedWidthOffset + size * childSize;
+  int64_t variableWidthOffset = fixedWidthOffset + alignBytes(size * childSize);
 
   if (elements.supportsBulkCopy_) {
     if (elements.decoded_.mayHaveNulls()) {

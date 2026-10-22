@@ -35,6 +35,7 @@
 #include "velox/dwio/nimble/index/ClusterIndexConfig.h"
 #include "velox/dwio/nimble/serializer/SerializationHeader.h"
 #include "velox/dwio/nimble/serializer/StreamDataParser.h"
+#include "velox/dwio/nimble/tablet/BlockCache.h"
 #include "velox/dwio/nimble/tablet/TabletReader.h"
 #include "velox/dwio/nimble/tablet/TabletReaderCache.h"
 #include "velox/dwio/nimble/velox/HybridFlatMap.h"
@@ -70,15 +71,19 @@ class TestNimbleIterator final {
       : iterator_{std::move(iterator)} {}
 
   void seek(const velox::serializer::EncodedKeyBounds& bounds) {
-    folly::coro::blockingWait(iterator_->co_seek(bounds));
+    iterator_->seek(bounds);
+  }
+
+  void seek(std::string encodedKey) {
+    iterator_->seek(std::move(encodedKey));
   }
 
   void seekToFirst() {
-    folly::coro::blockingWait(iterator_->co_seekToFirst());
+    iterator_->seekToFirst();
   }
 
   void next() {
-    folly::coro::blockingWait(iterator_->co_nextRow());
+    iterator_->nextRow();
   }
 
   bool next(velox::RowVectorPtr& output) {
@@ -89,8 +94,12 @@ class TestNimbleIterator final {
     return iterator_->key();
   }
 
+  void prepareValue() {
+    iterator_->prepareValue();
+  }
+
   std::string_view value() {
-    return folly::coro::blockingWait(iterator_->co_value());
+    return iterator_->value();
   }
 
   uint32_t rowNumber() const {
@@ -112,10 +121,15 @@ class TestNimbleIterator final {
 struct TestParam {
   bool cacheMetadata;
   bool pinMetadata;
+  // Applies to the iterators and cursors that the iterator suites create.
+  bool cacheEncodingView{true};
 
   std::string debugString() const {
     return fmt::format(
-        "cacheMetadata={}, pinMetadata={}", cacheMetadata, pinMetadata);
+        "cacheMetadata={}, pinMetadata={}, cacheEncodingView={}",
+        cacheMetadata,
+        pinMetadata,
+        cacheEncodingView);
   }
 };
 
@@ -182,6 +196,14 @@ class NimbleIndexProjectorTestBase : public ::testing::Test {
  public:
   static std::vector<TestParam> getTestParams();
 
+  // Returns getTestParams() with cacheEncodingView set to both values, for the
+  // suites that create iterators and cursors.
+  static std::vector<TestParam> getIteratorTestParams();
+
+  // Names an instance of the iterator suites after its parameters.
+  static std::string iteratorTestParamName(
+      const ::testing::TestParamInfo<TestParam>& info);
+
  protected:
   // Flips a byte inside every stream of stripe 0 of the file currently in
   // sinkData_, so the damage lands in stream payload rather than metadata
@@ -239,11 +261,13 @@ class NimbleIndexProjectorTestBase : public ::testing::Test {
       bool setMetadataIoStats = true,
       bool setIndexIoStats = true);
 
+  // Creates the iterator with the cacheEncodingView of the test parameter.
   template <typename IteratorFactory>
   std::unique_ptr<NimbleIterator> createIterator(
       IteratorFactory iteratorFactory,
       const std::vector<Subfield>& projectedSubfields,
-      const NimbleIterator::Options& options) {
+      NimbleIterator::Options options) {
+    options.cacheEncodingView = currentTestParam().cacheEncodingView;
     auto projector = createProjector(projectedSubfields);
     return iteratorFactory(std::move(projector), leafPool_.get(), options);
   }
@@ -355,6 +379,10 @@ class NimbleIndexProjectorTestBase : public ::testing::Test {
   std::string sinkData_;
   std::unique_ptr<velox::serializer::KeyEncoder> keyEncoder_;
   std::unique_ptr<TabletReaderCache> tabletReaderCache_;
+  // Lazily looked up from the process-wide BlockCache registry the first time
+  // a projector is created with caching enabled. Non-owning; the registry
+  // owns the wrapper and its lifetime matches the backend AsyncDataCache.
+  BlockCache* blockCache_{nullptr};
 
   virtual TestParam currentTestParam() const = 0;
 

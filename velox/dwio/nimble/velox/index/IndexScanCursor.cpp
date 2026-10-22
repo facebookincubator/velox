@@ -249,7 +249,8 @@ IndexScanCursor::IndexScanCursor(
     const NimbleIterator::Options& options)
     : projector_{velox::checkedNotNull(std::move(projector))},
       prefetchExecutor_{options.prefetchExecutor},
-      maxPrefetchStripes_{options.maxPrefetchStripes} {
+      maxPrefetchStripes_{options.maxPrefetchStripes},
+      cacheEncodingView_{options.cacheEncodingView} {
   NIMBLE_CHECK_LE(projector_->numRows(), std::numeric_limits<uint32_t>::max());
   projector_->setTimingEnabled(options.collectTimings);
 }
@@ -286,28 +287,38 @@ IndexScanCursor::~IndexScanCursor() {
   }
 }
 
-folly::coro::Task<std::optional<RowRange>> IndexScanCursor::co_seek(
-    velox::serializer::EncodedKeyBounds bounds) {
-  co_await co_reset();
+std::optional<RowRange> IndexScanCursor::seek(
+    const velox::serializer::EncodedKeyBounds& bounds) {
+  reset();
   setStripeSelections(projector_->lookup(bounds));
   startPrefetch();
-  co_return range_;
+  return range_;
 }
 
-folly::coro::Task<std::optional<RowRange>> IndexScanCursor::co_seekToFirst() {
-  co_await co_reset();
+std::optional<RowRange> IndexScanCursor::seek(std::string encodedKey) {
+  reset();
+  setStripeSelections(projector_->lookup(std::move(encodedKey)));
+  startPrefetch();
+  return range_;
+}
+
+std::optional<RowRange> IndexScanCursor::seekToFirst() {
+  reset();
   setStripeSelections(projector_->lookup(
       RowRange{0, static_cast<uint32_t>(projector_->numRows())}));
   startPrefetch();
-  co_return range_;
+  return range_;
 }
 
-folly::coro::Task<void> IndexScanCursor::co_reset() {
-  co_await co_resetPrefetch();
+void IndexScanCursor::reset() {
+  // Skips the wait for cursors without a running prefetch, such as the ones
+  // that serve point lookups.
+  if (scanPrefetcher_ != nullptr) {
+    folly::coro::blockingWait(co_resetPrefetch());
+  }
   range_.reset();
   stripeSelections_.clear();
   stripeOffset_ = 0;
-  co_return;
 }
 
 void IndexScanCursor::setStripeSelections(
@@ -347,6 +358,7 @@ Encoding::Options IndexScanCursor::encodingOptions(
   return Encoding::Options{
       .useVarintRowCount = projector_->properties().compactRowCountEncoding(),
       .bufferPool = bufferPool,
+      .cacheEncodingView = cacheEncodingView_,
   };
 }
 
