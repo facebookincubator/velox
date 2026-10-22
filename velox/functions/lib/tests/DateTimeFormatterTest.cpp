@@ -467,6 +467,9 @@ TEST_F(JodaDateTimeFormatterTest, parseJodaEra) {
       fromTimestampString("2012-01-01"),
       parseJoda("AD 0 AD 2015 2 2012 AD", "G y G Y y Y G").timestamp);
 
+  // C overwrites the year from Y without clearing isYearOfEra.
+  EXPECT_EQ(fromTimestampString("0-01-01"), parseJoda("1 0", "Y C").timestamp);
+
   // Invalid cases
   EXPECT_THROW(parseJoda("FG", "G"), VeloxUserError);
   EXPECT_THROW(parseJoda("AC", "G"), VeloxUserError);
