@@ -72,8 +72,8 @@ struct CudfHiveConnectorSplit
   std::string toString() const override;
   std::string getFileName() const;
 
-  /// Returns the file size when the split carries one, in 'properties' or in
-  /// the $file_size info column.
+  /// Returns the file size when the split carries a non-negative one, from
+  /// 'properties' first and else from the $file_size info column.
   std::optional<int64_t> fileSize() const;
 
   const cudf::io::source_info& getCudfSourceInfo() const {

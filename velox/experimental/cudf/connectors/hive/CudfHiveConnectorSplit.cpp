@@ -51,21 +51,18 @@ uint64_t CudfHiveConnectorSplit::size() const {
 }
 
 std::optional<int64_t> CudfHiveConnectorSplit::fileSize() const {
-  std::optional<int64_t> fileSize;
-  if (properties.has_value() && properties->fileSize.has_value()) {
-    fileSize = properties->fileSize;
-  } else if (const auto it = infoColumns.find("$file_size");
-             it != infoColumns.end()) {
+  if (properties.has_value() && properties->fileSize.value_or(-1) >= 0) {
+    return properties->fileSize;
+  }
+  // TODO: Drop the $file_size fallback once Prestissimo's Hive split
+  // conversion fills FileProperties::fileSize.
+  if (const auto it = infoColumns.find("$file_size"); it != infoColumns.end()) {
     const auto parsed = folly::tryTo<int64_t>(it->second);
-    if (parsed.hasValue()) {
-      fileSize = parsed.value();
+    if (parsed.hasValue() && parsed.value() >= 0) {
+      return parsed.value();
     }
   }
-  // A negative size from either source is no size.
-  if (fileSize.has_value() && *fileSize < 0) {
-    return std::nullopt;
-  }
-  return fileSize;
+  return std::nullopt;
 }
 
 CudfHiveConnectorSplit::CudfHiveConnectorSplit(

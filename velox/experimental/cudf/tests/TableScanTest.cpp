@@ -1861,6 +1861,28 @@ TEST_F(TableScanTest, splitCarriesFileSize) {
   EXPECT_FALSE(
       CudfHiveConnectorSplit::create(bare->serialize())
           ->properties.has_value());
+
+  // A negative size in the properties is no size, so the info column stands
+  // in for it, and a valid size in the properties wins over the info column.
+  EXPECT_EQ(
+      CudfHiveConnectorSplitBuilder("/data/file.parquet")
+          .fileProperties(FileProperties{.fileSize = -1})
+          .infoColumn("$file_size", "1234")
+          .build()
+          ->fileSize(),
+      1'234);
+  EXPECT_FALSE(CudfHiveConnectorSplitBuilder("/data/file.parquet")
+                   .fileProperties(FileProperties{.fileSize = -1})
+                   .build()
+                   ->fileSize()
+                   .has_value());
+  EXPECT_EQ(
+      CudfHiveConnectorSplitBuilder("/data/file.parquet")
+          .fileProperties(FileProperties{.fileSize = 1'234})
+          .infoColumn("$file_size", "5678")
+          .build()
+          ->fileSize(),
+      1'234);
   for (const auto* notASize : {"", "abc", "-1", "12.5"}) {
     EXPECT_FALSE(CudfHiveConnectorSplitBuilder("/data/file.parquet")
                      .infoColumn("$file_size", notASize)
