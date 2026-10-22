@@ -121,6 +121,8 @@ set(
   TopNRowNumberTest.cpp
   StreamingAggregationTest.cpp
   ContainerRowSerdeTest.cpp
+  FlatRowCompareTest.cpp
+  FlatRowSerdeTest.cpp
   RowContainerTest.cpp
   TopNTest.cpp
   WriterFuzzerUtilTest.cpp
