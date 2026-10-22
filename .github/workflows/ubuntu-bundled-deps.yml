@@ -59,6 +59,8 @@ jobs:
     steps:
 
       - name: Get Ccache Stash
+        continue-on-error: true
+        timeout-minutes: 30
         uses: apache/infrastructure-actions/stash/restore@3354c1565d4b0e335b78a76aedd82153a9e144d4
         with:
           path: ${{ env.CCACHE_DIR }}
@@ -115,6 +117,8 @@ jobs:
           ccache -vs
 
       - uses: apache/infrastructure-actions/stash/save@b1b1ab191498302581efdef55279706f79249c0e
+        continue-on-error: true
+        timeout-minutes: 20
         with:
           path: ${{ env.CCACHE_DIR }}
           key: ccache-ubuntu-debug-bundled-deps
