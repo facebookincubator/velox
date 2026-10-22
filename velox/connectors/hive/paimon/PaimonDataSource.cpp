@@ -18,8 +18,34 @@
 #include "velox/common/Casts.h"
 #include "velox/connectors/hive/paimon/PaimonConnectorSplit.h"
 #include "velox/connectors/hive/paimon/PaimonSplitReader.h"
+#include "velox/connectors/hive/paimon/PaimonTableHandle.h"
+#include "velox/dwio/common/ReaderFactory.h"
 
 namespace facebook::velox::connector::hive::paimon {
+namespace {
+
+const ConnectorTableHandlePtr& validateTableInput(
+    const RowTypePtr& outputType,
+    const ConnectorTableHandlePtr& handle,
+    const ColumnHandleMap& assignments,
+    const ConnectorQueryCtx* context,
+    const std::shared_ptr<PaimonConfig>& config) {
+  VELOX_USER_CHECK_NOT_NULL(handle, "Missing Paimon table handle");
+  VELOX_CHECK_NOT_NULL(context);
+  VELOX_CHECK_NOT_NULL(config);
+  if (const auto* table = handle->as<PaimonTableHandle>()) {
+    table->validateQuery(outputType, assignments);
+    VELOX_USER_CHECK(
+        !config->ignoreMissingFiles(context->sessionProperties()),
+        "Paimon same-schema append profile does not support ignore_missing_files");
+    VELOX_USER_CHECK(
+        !config->isFileColumnNamesReadAsLowerCase(context->sessionProperties()),
+        "Paimon same-schema append profile does not support lower-case file mapping");
+  }
+  return handle;
+}
+
+} // namespace
 
 PaimonDataSource::PaimonDataSource(
     const RowTypePtr& outputType,
@@ -31,7 +57,12 @@ PaimonDataSource::PaimonDataSource(
     const std::shared_ptr<PaimonConfig>& paimonConfig)
     : FileDataSource(
           outputType,
-          tableHandle,
+          validateTableInput(
+              outputType,
+              tableHandle,
+              assignments,
+              connectorQueryCtx,
+              paimonConfig),
           assignments,
           fileHandleFactory,
           ioExecutor,
@@ -39,14 +70,23 @@ PaimonDataSource::PaimonDataSource(
           paimonConfig) {}
 
 void PaimonDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
-  paimonSplit_ = checkedPointerCast<PaimonConnectorSplit>(split);
+  auto paimonSplit = checkedPointerCast<PaimonConnectorSplit>(split);
+  if (const auto* table = tableHandle_->as<PaimonTableHandle>()) {
+    table->validateSplit(*paimonSplit);
+    VELOX_USER_CHECK(
+        dwio::common::hasReaderFactory(paimonSplit->fileFormat()),
+        "No Paimon reader factory for file format {}",
+        dwio::common::FileFormatName::toName(paimonSplit->fileFormat()));
+  }
 
-  if (!paimonSplit_->rawConvertible()) {
+  if (!paimonSplit->rawConvertible()) {
     VELOX_NYI(
         "Paimon merge-on-read is not yet implemented. "
         "Primary-key tables with rawConvertible=false require merge-on-read "
         "to deduplicate records across LSM levels.");
   }
+
+  paimonSplit_ = std::move(paimonSplit);
 
   // Create a FileConnectorSplit for the first data file and delegate to
   // FileDataSource::addSplit(), which calls createSplitReader() to create
@@ -86,12 +126,72 @@ std::unique_ptr<FileSplitReader> PaimonDataSource::createSplitReader() {
 void PaimonDataSource::setFromDataSource(
     std::unique_ptr<DataSource> sourceUnique) {
   auto* source = checkedPointerCast<PaimonDataSource>(sourceUnique.get());
+  const auto* table = tableHandle_->as<PaimonTableHandle>();
+  const auto* sourceTable = source->tableHandle_->as<PaimonTableHandle>();
+  if (table || sourceTable) {
+    VELOX_USER_CHECK(
+        table && sourceTable && table->hasSameTableDefinition(*sourceTable),
+        "Paimon takeover must preserve the fixed table definition");
+    VELOX_USER_CHECK(
+        table->hasSameScanConditions(*sourceTable) &&
+            *outputType() == *source->outputType() &&
+            *readerOutputType_ == *source->readerOutputType_ &&
+            partitionKeys_.size() == source->partitionKeys_.size(),
+        "Paimon takeover must preserve scan conditions and query columns");
+    for (const auto& [name, column] : partitionKeys_) {
+      VELOX_USER_CHECK(
+          source->partitionKeys_.count(name),
+          "Paimon takeover must preserve partition column handles");
+    }
+    VELOX_USER_CHECK_NULL(split_, "Paimon takeover requires an idle recipient");
+    VELOX_USER_CHECK_NOT_NULL(
+        source->paimonSplit_, "Paimon takeover requires a prepared split");
+    VELOX_USER_CHECK_NOT_NULL(
+        source->split_, "Paimon takeover requires a prepared split");
+    VELOX_USER_CHECK_NOT_NULL(
+        source->splitReader_, "Paimon takeover requires a prepared reader");
+    VELOX_USER_CHECK(
+        !checkedPointerCast<PaimonSplitReader>(source->splitReader_.get())
+             ->startedReading(),
+        "Paimon takeover does not support an already-read donor");
+    table->validateSplit(*source->paimonSplit_);
+    // Common adaptation skips constant columns. A prior split's partition
+    // constant must not prevent its current filters from reaching the donor.
+    for (const auto& [name, column] : partitionKeys_) {
+      const auto* field = scanSpec_->childByName(name);
+      if (field && field->filter()) {
+        auto* sourceField = source->scanSpec_->childByName(name);
+        VELOX_CHECK_NOT_NULL(sourceField);
+        sourceField->setFilter(field->filter()->clone());
+      }
+    }
+  }
   paimonSplit_ = std::move(source->paimonSplit_);
   FileDataSource::setFromDataSource(std::move(sourceUnique));
   // Files are opened lazily after takeover, when the previous owner of the
   // borrowed runtimeStats pointer has already been destroyed.
   checkedPointerCast<PaimonSplitReader>(splitReader_.get())
       ->setRuntimeStats(runtimeStats_);
+}
+
+void PaimonDataSource::addDynamicFilter(
+    column_index_t outputChannel,
+    const std::shared_ptr<common::Filter>& filter) {
+  if (const auto* table = tableHandle_->as<PaimonTableHandle>()) {
+    VELOX_USER_CHECK_LT(
+        outputChannel,
+        outputType()->size(),
+        "Invalid Paimon dynamic filter channel");
+    VELOX_USER_CHECK_NOT_NULL(filter, "Missing Paimon dynamic filter");
+    table->validateDynamicFilter(outputType()->childAt(outputChannel), *filter);
+    const auto* existing = scanSpec_->getChildByChannel(outputChannel).filter();
+    if (existing) {
+      FileDataSource::addDynamicFilter(
+          outputChannel, existing->mergeWith(filter.get()));
+      return;
+    }
+  }
+  FileDataSource::addDynamicFilter(outputChannel, filter);
 }
 
 } // namespace facebook::velox::connector::hive::paimon

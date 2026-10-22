@@ -22,6 +22,15 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
     GTest::gtest_main
   )
 
+  add_executable(velox_hive_paimon_table_handle_test PaimonTableHandleTest.cpp)
+  add_test(velox_hive_paimon_table_handle_test velox_hive_paimon_table_handle_test)
+  target_link_libraries(
+    velox_hive_paimon_table_handle_test
+    velox_hive_paimon_table_handle
+    GTest::gtest
+    GTest::gtest_main
+  )
+
   add_executable(velox_hive_paimon_connector_test PaimonConnectorTest.cpp)
   add_test(velox_hive_paimon_connector_test velox_hive_paimon_connector_test)
   target_link_libraries(
@@ -33,6 +42,15 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
     GTest::gtest_main
     GTest::gmock
   )
+
+  if(VELOX_ENABLE_PARQUET)
+    target_compile_definitions(velox_hive_paimon_connector_test PRIVATE VELOX_ENABLE_PARQUET)
+    target_link_libraries(
+      velox_hive_paimon_connector_test
+      velox_dwio_parquet_reader
+      velox_dwio_parquet_writer
+    )
+  endif()
 
   if(VELOX_ENABLE_NIMBLE)
     target_include_directories(

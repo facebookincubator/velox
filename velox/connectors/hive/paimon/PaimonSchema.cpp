@@ -383,6 +383,13 @@ PaimonSchema::PaimonSchema(
   }
 }
 
+bool PaimonSchema::operator==(const PaimonSchema& other) const {
+  return schemaId_ == other.schemaId_ &&
+      schemaVersion_ == other.schemaVersion_ && *rowType_ == *other.rowType_ &&
+      metadata_ == other.metadata_ && partitionKeys_ == other.partitionKeys_ &&
+      primaryKeys_ == other.primaryKeys_ && options_ == other.options_;
+}
+
 const std::vector<column_index_t>& PaimonSchema::fieldIndexPath(
     int32_t fieldId) const {
   const auto it = fieldIndexPaths_.find(fieldId);

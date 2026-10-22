@@ -71,6 +71,9 @@ class PaimonSchema {
       std::vector<int32_t> primaryKeys = {},
       std::unordered_map<std::string, std::string> options = {});
 
+  /// Compares the complete definition, including source version and options.
+  bool operator==(const PaimonSchema& other) const;
+
   int64_t schemaId() const {
     return schemaId_;
   }

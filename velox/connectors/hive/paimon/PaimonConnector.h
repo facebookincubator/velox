@@ -39,6 +39,34 @@ class PaimonConnector final : public HiveConnector {
       const ColumnHandleMap& columnHandles,
       ConnectorQueryCtx* connectorQueryCtx) override;
 
+  bool supportsSplitPreload() const override {
+    return false;
+  }
+
+  bool supportsIndexLookup() const override {
+    return false;
+  }
+
+  /// Paimon writing and index lookup have no execution implementation.
+  std::unique_ptr<DataSink> createDataSink(
+      RowTypePtr inputType,
+      ConnectorInsertTableHandlePtr connectorInsertTableHandle,
+      ConnectorQueryCtx* connectorQueryCtx,
+      CommitStrategy commitStrategy) override;
+
+  std::shared_ptr<IndexSource> createIndexSource(
+      const RowTypePtr& inputType,
+      const std::vector<std::shared_ptr<core::IndexLookupCondition>>&
+          joinConditions,
+      const RowTypePtr& outputType,
+      const ConnectorTableHandlePtr& tableHandle,
+      const ColumnHandleMap& columnHandles,
+      ConnectorQueryCtx* connectorQueryCtx) override;
+
+  /// Registers Paimon table/split serde and the legacy Hive handles. Type,
+  /// Filter and expression serde are registered by the query plan owner.
+  static void registerSerDe();
+
  private:
   const std::shared_ptr<PaimonConfig> paimonConfig_;
 };

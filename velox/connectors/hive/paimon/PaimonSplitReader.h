@@ -20,24 +20,11 @@
 
 namespace facebook::velox::connector::hive::paimon {
 
-/// Reader for rawConvertible Paimon splits. Extends FileSplitReader to handle
-/// Paimon-specific concerns:
-///
-///   - Multi-file iteration: A single Paimon split may contain multiple data
-///     files (one per LSM level in a bucket). This reader iterates through
-///     all files sequentially, transparently advancing to the next file when
-///     the current one is exhausted.
-///
-///   - Deletion vectors: Roaring bitmaps marking deleted row positions within
-///     a data file. Loaded in prepareSplit(), applied in next() via
-///     Mutation.deletedRows (same pattern as IcebergSplitReader). (NYI)
-///
-///   - _rowkind system column: Change type (+I/-U/+U/-D) for changelog files
-///     and input changelog mode. Handled in adaptColumns(). (NYI)
-///
-/// Also serves as the building block for PaimonMergeReader, which composes
-/// multiple PaimonSplitReaders to perform merge-on-read for primary-key
-/// tables with rawConvertible=false.
+/// Sequential multi-file reader for rawConvertible Paimon splits. Files are
+/// opened lazily and advanced through EOF or legal empty files. With a
+/// PaimonTableHandle, the physical footer is checked against the fixed schema
+/// before column adaptation; split values supply the partition constants.
+/// Deletion vectors and changelog files are rejected before reading.
 class PaimonSplitReader : public FileSplitReader {
  public:
   /// @param fileSplit FileConnectorSplit for the first data file (set by
@@ -74,10 +61,18 @@ class PaimonSplitReader : public FileSplitReader {
   /// are exhausted.
   uint64_t next(uint64_t size, VectorPtr& output) override;
 
-  /// Rebinds the borrowed counters when a preloaded data source is adopted.
+  /// Rebinds the borrowed counters when a prepared data source is adopted.
   void setRuntimeStats(dwio::common::RuntimeStats& runtimeStats) {
     runtimeStats_ = &runtimeStats;
   }
+
+  /// Whether next() has been called, including calls that reach EOF.
+  bool startedReading() const {
+    return startedReading_;
+  }
+
+ protected:
+  void configureBaseReaderOptions() override;
 
  private:
   // Builds a FileConnectorSplit from a PaimonDataFile.
@@ -93,6 +88,9 @@ class PaimonSplitReader : public FileSplitReader {
   // currentFileIndex_ so ensureFileSplitReader() opens the next file.
   void finishFileSplitReader();
 
+  // Partition handles must outlive a prepared data source's donor.
+  const std::unordered_map<std::string, FileColumnHandlePtr>
+      ownedPartitionKeys_;
   const std::shared_ptr<const PaimonConnectorSplit> paimonSplit_;
 
   // FileConnectorSplits built from paimonSplit_->dataFiles(), one per file.
@@ -101,6 +99,7 @@ class PaimonSplitReader : public FileSplitReader {
 
   // Index of the next data file to open.
   size_t currentFileIndex_{0};
+  bool startedReading_{false};
 
   // Saved from prepareSplit() for re-use when advancing to subsequent files.
   std::shared_ptr<common::MetadataFilter> metadataFilter_;

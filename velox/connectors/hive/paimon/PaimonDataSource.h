@@ -24,18 +24,9 @@ class PaimonConnectorSplit;
 
 /// Paimon-specific data source that extends FileDataSource.
 ///
-/// Acts as an orchestrator that selects the right reading strategy based on
-/// split properties:
-///
-///   rawConvertible=true (append-only or fully-compacted primary-key):
-///     Creates a PaimonSplitReader that handles multi-file iteration,
-///     deletion vectors, and _rowkind internally. FileDataSource::next()
-///     drives the read loop — no override needed.
-///
-///   rawConvertible=false (primary-key with overlapping keys):
-///     Merge path. A PaimonMergeReader opens all files simultaneously and
-///     performs a sorted merge by primary key, deduplicating by sequence
-///     number. Not yet implemented.
+/// PaimonTableHandle supplies an explicit fixed table schema and validates
+/// the same-schema append batch profile and query metadata. Legacy
+/// FileTableHandle inputs retain the existing Raw behavior.
 class PaimonDataSource : public FileDataSource {
  public:
   PaimonDataSource(
@@ -50,6 +41,10 @@ class PaimonDataSource : public FileDataSource {
   void addSplit(std::shared_ptr<ConnectorSplit> split) override;
 
   void setFromDataSource(std::unique_ptr<DataSource> sourceUnique) override;
+
+  void addDynamicFilter(
+      column_index_t outputChannel,
+      const std::shared_ptr<common::Filter>& filter) override;
 
  protected:
   /// Creates a PaimonSplitReader with all data files from the Paimon split.

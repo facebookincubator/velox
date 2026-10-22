@@ -465,11 +465,10 @@ namespace facebook::velox::connector::hive::paimon {
 /// logical bucket which may contain multiple physical files across LSM-tree
 /// levels.
 ///
-/// NOTE: Table-wide metadata (primary key columns, merge engine, table schema)
-/// is NOT carried in the split. A future PaimonTableHandle (extending
-/// HiveTableHandle) will carry this information, needed for merge-on-read
-/// (key deduplication) and schema evolution. For batch reads of
-/// rawConvertible=true splits, the existing HiveTableHandle suffices.
+/// Table-wide schema and key declarations belong to PaimonTableHandle, not
+/// this split. The explicit handle validates table type and partition names
+/// before reading. Legacy HiveTableHandle inputs remain supported by the
+/// existing rawConvertible scan path.
 class PaimonConnectorSplit : public connector::ConnectorSplit {
  public:
   /// @param connectorId Connector identifier.
