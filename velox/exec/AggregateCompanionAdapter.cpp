@@ -30,6 +30,13 @@ void AggregateCompanionFunctionBase::setOffsetsInternal(
     int32_t initializedByte,
     uint8_t initializedMask,
     int32_t rowSizeOffset) {
+  Aggregate::setOffsetsInternal(
+      offset,
+      nullByte,
+      nullMask,
+      initializedByte,
+      initializedMask,
+      rowSizeOffset);
   fn_->setOffsets(
       offset,
       nullByte,
@@ -69,10 +76,6 @@ void AggregateCompanionFunctionBase::setConstantInputs(
   fn_->setConstantInputs(constantInputs);
 }
 
-void AggregateCompanionFunctionBase::destroy(folly::Range<char**> groups) {
-  fn_->destroy(groups);
-}
-
 void AggregateCompanionFunctionBase::destroyInternal(
     folly::Range<char**> groups) {
   fn_->destroy(groups);
@@ -80,12 +83,6 @@ void AggregateCompanionFunctionBase::destroyInternal(
 
 void AggregateCompanionFunctionBase::clearInternal() {
   fn_->clear();
-}
-
-void AggregateCompanionFunctionBase::initializeNewGroups(
-    char** groups,
-    folly::Range<const vector_size_t*> indices) {
-  fn_->initializeNewGroups(groups, indices);
 }
 
 void AggregateCompanionFunctionBase::initializeNewGroupsInternal(

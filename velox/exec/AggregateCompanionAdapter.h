@@ -42,12 +42,6 @@ class AggregateCompanionFunctionBase : public Aggregate {
   void setConstantInputs(
       const std::vector<VectorPtr>& constantInputs) override final;
 
-  void destroy(folly::Range<char**> groups) override final;
-
-  void initializeNewGroups(
-      char** groups,
-      folly::Range<const vector_size_t*> indices) override final;
-
   void addRawInput(
       char** groups,
       const SelectivityVector& rows,
