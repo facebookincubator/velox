@@ -86,7 +86,7 @@ class GcsFileSystem::Impl {
       auto credentialsProvider =
           getCredentialsProviderByName(tokenProvider.value(), hiveConfig_);
       auto credentials = credentialsProvider->getCredentials(bucket_);
-      options.set<gcs::Oauth2CredentialsOption>(credentials);
+      options.set<gc::UnifiedCredentialsOption>(credentials);
     } else {
       auto endpointOverride = hiveConfig_->gcsEndpoint();
       // Use secure credentials by default.
