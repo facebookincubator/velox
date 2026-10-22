@@ -50,8 +50,6 @@ JSON Functions
 
     * Only supports partial result mode, which requires spark configuration spark.sql.json.enablePartialResults = true.
 
-    * Does not allow single quotes enclosed string, {'a':1}. NULL will be returned.
-
     * Does not support schemas that include a corrupt record column, for example, the Spark function below is not supported. ::
 
         from_json('{"a":1, "b":0.8}', 'a INT, b DOUBLE, _corrupt_record STRING')
