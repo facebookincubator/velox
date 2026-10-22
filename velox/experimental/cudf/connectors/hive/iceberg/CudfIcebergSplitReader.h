@@ -271,6 +271,9 @@ class CudfIcebergSplitReader : public CudfSplitReader {
   // Columns to inject after reading.
   std::vector<InjectedColumn> injectedColumns_;
 
+  // The type an injected TIMESTAMP column takes, resolved once per split.
+  std::optional<cudf::type_id> injectedTimestampType_;
+
   // Whether the filter rejects this split entirely.
   bool skipSplit_{false};
 

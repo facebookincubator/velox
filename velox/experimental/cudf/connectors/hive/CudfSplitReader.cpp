@@ -172,6 +172,16 @@ std::unique_ptr<cudf::table> castDecimalColumnsToVeloxTypes(
   return std::make_unique<cudf::table>(std::move(columns));
 }
 
+std::optional<cudf::type_id> constantTimestampType(
+    const CudfHiveConfig& config,
+    const config::ConfigBase* session) {
+  const auto timestampType = config.timestampTypeSession(session).id();
+  if (timestampType == cudf::type_id::TIMESTAMP_DAYS) {
+    return std::nullopt;
+  }
+  return timestampType;
+}
+
 CudfSplitReader::CudfSplitReader(
     std::shared_ptr<CudfHiveConnectorSplit> split,
     std::shared_ptr<const HiveTableHandle> tableHandle,

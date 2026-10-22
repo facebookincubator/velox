@@ -197,14 +197,4 @@ bool CudfHiveConfig::writev2PageHeadersSession(
       config_->get<bool>(kWritev2PageHeaders, false));
 }
 
-std::optional<cudf::type_id> constantTimestampType(
-    const CudfHiveConfig& config,
-    const config::ConfigBase* session) {
-  const auto timestampType = config.timestampTypeSession(session).id();
-  if (timestampType == cudf::type_id::TIMESTAMP_DAYS) {
-    return std::nullopt;
-  }
-  return timestampType;
-}
-
 } // namespace facebook::velox::cudf_velox::connector::hive

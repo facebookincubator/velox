@@ -183,15 +183,4 @@ class CudfHiveConfig {
  private:
   std::shared_ptr<const config::ConfigBase> config_;
 };
-
-/// Returns the type a TIMESTAMP constant takes to combine with the timestamp
-/// columns the cuDF split reader produces. The reader casts those columns to
-/// the connector's parquet.reader.timestamp-type, or to the session's
-/// parquet.reader.timestamp_type when that is set. Returns nullopt, which
-/// leaves the constant in the default timestamp unit, when that type is
-/// TIMESTAMP_DAYS: day resolution is the cuDF type of a DATE, not one a
-/// TIMESTAMP converts to.
-std::optional<cudf::type_id> constantTimestampType(
-    const CudfHiveConfig& config,
-    const config::ConfigBase* session);
 } // namespace facebook::velox::cudf_velox::connector::hive
