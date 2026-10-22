@@ -15,28 +15,54 @@
 # This creates a separate scope so any changed variables don't affect
 # the rest of the build.
 block(PROPAGATE Arrow_FOUND Arrow_VERSION)
-  set(find_package_args)
+  # The name is prefixed because the Find modules that ArrowConfig.cmake uses
+  # overwrite find_package_args.
+  set(velox_find_package_args)
   if(Arrow_FIND_VERSION)
-    list(APPEND find_package_args ${Arrow_FIND_VERSION})
+    list(APPEND velox_find_package_args ${Arrow_FIND_VERSION})
   endif()
   if(Arrow_FIND_QUIETLY)
-    list(APPEND find_package_args QUIET)
+    list(APPEND velox_find_package_args QUIET)
   endif()
   if(Arrow_FIND_REQUIRED)
-    list(APPEND find_package_args REQUIRED)
+    list(APPEND velox_find_package_args REQUIRED)
   endif()
-  find_package(Arrow ${find_package_args} CONFIG)
-  if(Arrow_FOUND)
-    # ArrowTestingConfig.cmake in Arrow 21 or earlier calls
-    # find_dependency(Arrow) without CONFIG. It calls this file again and causes
-    # an infinite loop: https://github.com/apache/arrow/issues/46386
-    if(Arrow_VERSION VERSION_LESS 22.0.0)
-      set(CMAKE_FIND_PACKAGE_PREFER_CONFIG TRUE)
+  find_package(Arrow ${velox_find_package_args} CONFIG)
+  if(NOT Arrow_FOUND)
+    return()
+  endif()
+  # Arrow built with ARROW_BUILD_STATIC=OFF doesn't define the static targets
+  # that Velox links to.
+  if(NOT TARGET Arrow::arrow_static)
+    if(Arrow_FIND_REQUIRED)
+      message(
+        FATAL_ERROR
+        "Arrow must be built with ARROW_BUILD_STATIC=ON. Target not found: Arrow::arrow_static"
+      )
     endif()
-    find_package(ArrowTesting ${find_package_args} CONFIG)
-    if(NOT ArrowTesting_FOUND)
-      set(Arrow_FOUND FALSE)
+    set(Arrow_FOUND FALSE)
+    return()
+  endif()
+  # ArrowTestingConfig.cmake in Arrow 21 or earlier calls
+  # find_dependency(Arrow) without CONFIG. It calls this file again and causes
+  # an infinite loop: https://github.com/apache/arrow/issues/46386
+  if(Arrow_VERSION VERSION_LESS 22.0.0)
+    set(CMAKE_FIND_PACKAGE_PREFER_CONFIG TRUE)
+  endif()
+  find_package(ArrowTesting ${velox_find_package_args} CONFIG)
+  if(NOT ArrowTesting_FOUND)
+    set(Arrow_FOUND FALSE)
+    return()
+  endif()
+  if(NOT TARGET ArrowTesting::arrow_testing_static)
+    if(Arrow_FIND_REQUIRED)
+      message(
+        FATAL_ERROR
+        "Arrow must be built with ARROW_BUILD_STATIC=ON. Target not found: ArrowTesting::arrow_testing_static"
+      )
     endif()
+    set(Arrow_FOUND FALSE)
+    return()
   endif()
 endblock()
 
