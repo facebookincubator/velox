@@ -210,6 +210,7 @@ class ArrayWriter {
     // No need to commit last written items and innerOffset_ stays the same for
     // the next item.
     length_ = 0;
+    needCommit_ = false;
   }
 
   vector_size_t size() {
@@ -761,6 +762,8 @@ class MapWriter {
     // No need to commit last written items and innerOffset_ stays the same
     // for the next item.
     length_ = 0;
+    keyNeedsCommit_ = false;
+    valueNeedsCommit_ = false;
   }
 
   void commitMostRecentChildItem() {
@@ -1061,6 +1064,10 @@ class GenericWriter {
 
   const TypePtr& type() const {
     return vector_->type();
+  }
+
+  memory::MemoryPool* pool() const {
+    return vector_->pool();
   }
 
   void copy_from(const GenericView& view);

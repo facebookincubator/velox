@@ -62,7 +62,14 @@ JSON Functions
         from_json('{"a":1, "b":0.8}', 'a INT, b DOUBLE, _corrupt_record STRING')
 
     * Conversion failures inside nested ARRAY-of-ROW values return NULL. Spark
-      can throw ``ClassCastException`` for some of these malformed inputs.
+      can throw ``ClassCastException`` or fail the query for some malformed
+      inputs.
+
+    * Recovery from malformed JSON may differ from Spark for parser-specific
+      number artifacts such as ``01``, ``.5``, and ``1.``; field-name
+      realignment after an error; malformed nested values in root maps;
+      malformed values after a conversion error in the same array or map; and
+      invalid escapes inside ignored fields.
 
 .. spark:function:: get_json_object(jsonString, path) -> varchar
 

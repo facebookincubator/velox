@@ -30,11 +30,13 @@
 
 #include "velox/expression/EvalCtx.h"
 #include "velox/expression/SpecialForm.h"
+#include "velox/expression/VectorReaders.h"
 #include "velox/expression/VectorWriters.h"
 #include "velox/functions/lib/Utf8Utils.h"
 #include "velox/functions/lib/string/StringCore.h"
 #include "velox/functions/lib/string/StringImpl.h"
 #include "velox/functions/prestosql/json/SIMDJsonUtil.h"
+#include "velox/functions/sparksql/specialforms/JavaFloatingDecimal.h"
 #include "velox/type/DecimalUtil.h"
 
 using namespace facebook::velox::exec;
@@ -494,142 +496,12 @@ void appendSparkJsonString(
   output.push_back('"');
 }
 
-void appendSparkScientificNotation(
-    std::string_view coefficient,
-    int exponent,
-    std::string& output) {
-  output.append(coefficient);
-  if (coefficient.find('.') == std::string_view::npos) {
-    output.append(".0");
-  } else if (coefficient.back() == '.') {
-    output.push_back('0');
-  }
-  output.push_back('E');
-  fmt::format_to(std::back_inserter(output), "{}", exponent);
-}
+constexpr simdjson::error_code kMalformedAtomError{simdjson::T_ATOM_ERROR};
+constexpr simdjson::error_code kObjectTruncationError{simdjson::F_ATOM_ERROR};
 
-void appendSparkDecimalAsScientific(
-    std::string_view formatted,
-    std::string& output) {
-  const bool negative = formatted.front() == '-';
-  const auto decimalPoint = formatted.find('.');
-  const auto firstDigit = formatted.find_first_not_of("-0.");
-  VELOX_DCHECK_NE(firstDigit, std::string_view::npos);
-
-  const auto integerStart = negative ? 1 : 0;
-  const auto integerEnd =
-      decimalPoint == std::string_view::npos ? formatted.size() : decimalPoint;
-  const int exponent = firstDigit < integerEnd
-      ? static_cast<int>(integerEnd - integerStart - 1)
-      : -static_cast<int>(firstDigit - decimalPoint);
-
-  std::string coefficient;
-  coefficient.reserve(formatted.size() + 1);
-  if (negative) {
-    coefficient.push_back('-');
-  }
-  coefficient.push_back(formatted[firstDigit]);
-  coefficient.push_back('.');
-  for (size_t i = firstDigit + 1; i < formatted.size(); ++i) {
-    if (formatted[i] != '.') {
-      coefficient.push_back(formatted[i]);
-    }
-  }
-  while (coefficient.back() == '0') {
-    coefficient.pop_back();
-  }
-  appendSparkScientificNotation(coefficient, exponent, output);
-}
-
-// Reproduces the JDK 11/17 FloatingDecimal fast path for large integer
-// doubles, whose output can contain more digits than shortest-round-trip
-// formatting.
-bool appendJavaIntegerDouble(double number, std::string& output) {
-  const auto bits = std::bit_cast<uint64_t>(number);
-  const auto exponentBits = (bits >> 52) & 0x7FF;
-  if (exponentBits == 0 || exponentBits == 0x7FF) {
-    return false;
-  }
-
-  const int binaryExponent = static_cast<int>(exponentBits) - 1'023;
-  if (binaryExponent < 54 || binaryExponent > 62) {
-    return false;
-  }
-
-  constexpr uint64_t kSignificandMask{(uint64_t{1} << 52) - 1};
-  const uint64_t significand = (bits & kSignificandMask) | (uint64_t{1} << 52);
-  const uint64_t integer = significand << (binaryExponent - 52);
-  constexpr std::array<int, 9> kInsignificantDigits{0, 0, 0, 0, 1, 1, 1, 2, 2};
-  const int numInsignificantDigits = kInsignificantDigits[binaryExponent - 54];
-  const uint64_t powerOfTen = numInsignificantDigits == 0 ? 1
-      : numInsignificantDigits == 1                       ? 10
-                                                          : 100;
-  uint64_t rounded = integer / powerOfTen;
-  if (powerOfTen > 1 && integer % powerOfTen >= powerOfTen / 2) {
-    ++rounded;
-  }
-
-  std::string digits = fmt::format("{}", rounded);
-  digits.append(numInsignificantDigits, '0');
-  const int decimalExponent = static_cast<int>(digits.size()) - 1;
-  while (digits.size() > 1 && digits.back() == '0') {
-    digits.pop_back();
-  }
-
-  std::string coefficient;
-  coefficient.reserve(digits.size() + 2);
-  if (std::signbit(number)) {
-    coefficient.push_back('-');
-  }
-  coefficient.push_back(digits.front());
-  coefficient.push_back('.');
-  coefficient.append(digits.substr(1));
-  appendSparkScientificNotation(coefficient, decimalExponent, output);
-  return true;
-}
-
-void appendSparkDouble(double number, std::string& output) {
-  if (number == std::numeric_limits<double>::denorm_min()) {
-    output.append("4.9E-324");
-    return;
-  }
-  if (number == -std::numeric_limits<double>::denorm_min()) {
-    output.append("-4.9E-324");
-    return;
-  }
-  if (appendJavaIntegerDouble(number, output)) {
-    return;
-  }
-
-  std::array<char, 32> buffer{};
-  const auto formattedResult =
-      fmt::format_to_n(buffer.data(), buffer.size(), "{}", number);
-  const std::string_view formatted{
-      buffer.data(), static_cast<size_t>(formattedResult.out - buffer.data())};
-  const auto exponentPosition = formatted.find_first_of("eE");
-  if (exponentPosition != std::string_view::npos) {
-    const auto exponent =
-        folly::tryTo<int>(formatted.substr(exponentPosition + 1));
-    VELOX_DCHECK(!exponent.hasError());
-    appendSparkScientificNotation(
-        formatted.substr(0, exponentPosition), exponent.value(), output);
-    return;
-  }
-
-  constexpr double kMinDecimalNotation{0.001};
-  constexpr double kMaxDecimalNotation{10'000'000};
-  const auto absoluteValue = std::abs(number);
-  if (absoluteValue != 0 &&
-      (absoluteValue < kMinDecimalNotation ||
-       absoluteValue >= kMaxDecimalNotation)) {
-    appendSparkDecimalAsScientific(formatted, output);
-    return;
-  }
-
-  output.append(formatted);
-  if (formatted.find('.') == std::string_view::npos) {
-    output.append(".0");
-  }
+bool isSparkSpecialNumber(std::string_view token) {
+  return token == "NaN" || token == "+INF" || token == "+Infinity" ||
+      token == "Infinity" || token == "-INF" || token == "-Infinity";
 }
 
 bool appendSparkSpecialNumber(std::string_view token, std::string& output) {
@@ -657,9 +529,11 @@ simdjson::error_code appendSparkJsonValue(
     case simdjson::ondemand::json_type::string: {
       const auto escapedString =
           trimTrailingJsonWhitespace(value.raw_json_token());
-      SIMDJSON_ASSIGN_OR_RAISE(
-          const auto stringValue, value.get_string(/*allow_replacement=*/true));
-      appendSparkJsonString(escapedString, stringValue, output);
+      const auto stringResult = value.get_string(/*allow_replacement=*/true);
+      if (stringResult.error() != simdjson::SUCCESS) {
+        return kMalformedAtomError;
+      }
+      appendSparkJsonString(escapedString, stringResult.value_unsafe(), output);
       return simdjson::SUCCESS;
     }
     case simdjson::ondemand::json_type::number: {
@@ -668,7 +542,7 @@ simdjson::error_code appendSparkJsonValue(
         return simdjson::SUCCESS;
       }
       if (!isValidJsonNumber(token)) {
-        return simdjson::NUMBER_ERROR;
+        return kMalformedAtomError;
       }
 
       if (token.find_first_of(".eE") == std::string_view::npos) {
@@ -689,7 +563,7 @@ simdjson::error_code appendSparkJsonValue(
         number = castResult.value();
       }
       if (std::isfinite(number)) {
-        appendSparkDouble(number, output);
+        appendJavaDouble(number, output);
       } else {
         const auto stringResult =
             util::Converter<TypeKind::VARCHAR>::tryCast(number);
@@ -703,7 +577,7 @@ simdjson::error_code appendSparkJsonValue(
     case simdjson::ondemand::json_type::boolean: {
       const auto booleanResult = value.get_bool();
       if (booleanResult.error() != simdjson::SUCCESS) {
-        return simdjson::T_ATOM_ERROR;
+        return kMalformedAtomError;
       }
       output.append(booleanResult.value_unsafe() ? "true" : "false");
       return simdjson::SUCCESS;
@@ -718,7 +592,11 @@ simdjson::error_code appendSparkJsonValue(
           output.push_back(',');
         }
         first = false;
-        SIMDJSON_TRY(appendSparkJsonValue(element, output));
+        const auto result = appendSparkJsonValue(element, output);
+        if (result == kMalformedAtomError) {
+          return simdjson::INCORRECT_TYPE;
+        }
+        SIMDJSON_TRY(result);
       }
       output.push_back(']');
       return simdjson::SUCCESS;
@@ -737,21 +615,26 @@ simdjson::error_code appendSparkJsonValue(
         first = false;
         appendSparkJsonString(escapedKey, key, output);
         output.push_back(':');
-        SIMDJSON_TRY(appendSparkJsonValue(field.value(), output));
+        const auto result = appendSparkJsonValue(field.value(), output);
+        if (result == kMalformedAtomError || result == kObjectTruncationError ||
+            result == simdjson::INCORRECT_TYPE) {
+          return kObjectTruncationError;
+        }
+        SIMDJSON_TRY(result);
       }
       output.push_back('}');
       return simdjson::SUCCESS;
     }
     case simdjson::ondemand::json_type::null:
       if (trimTrailingJsonWhitespace(value.raw_json()) != "null") {
-        return simdjson::N_ATOM_ERROR;
+        return kMalformedAtomError;
       }
       output.append("null");
       return simdjson::SUCCESS;
     case simdjson::ondemand::json_type::unknown: {
       const auto token = trimTrailingJsonWhitespace(value.raw_json());
       return appendSparkSpecialNumber(token, output) ? simdjson::SUCCESS
-                                                     : simdjson::INCORRECT_TYPE;
+                                                     : kMalformedAtomError;
     }
   }
   VELOX_UNREACHABLE();
@@ -762,24 +645,31 @@ simdjson::error_code validateJsonValue(JsonInput value) {
   SIMDJSON_ASSIGN_OR_RAISE(const auto type, value.type());
   switch (type) {
     case simdjson::ondemand::json_type::string:
-      return value.get_string(/*allow_replacement=*/true).error();
+      return value.get_string(/*allow_replacement=*/true).error() ==
+              simdjson::SUCCESS
+          ? simdjson::SUCCESS
+          : kMalformedAtomError;
     case simdjson::ondemand::json_type::number: {
       const auto token = trimTrailingJsonWhitespace(value.raw_json());
       std::string ignored;
       return appendSparkSpecialNumber(token, ignored) ||
               isValidJsonNumber(token)
           ? simdjson::SUCCESS
-          : simdjson::NUMBER_ERROR;
+          : kMalformedAtomError;
     }
     case simdjson::ondemand::json_type::boolean:
       return value.get_bool().error() == simdjson::SUCCESS
           ? simdjson::SUCCESS
-          : simdjson::T_ATOM_ERROR;
+          : kMalformedAtomError;
     case simdjson::ondemand::json_type::array: {
       SIMDJSON_ASSIGN_OR_RAISE(auto array, value.get_array());
       for (const auto& elementResult : array) {
         SIMDJSON_ASSIGN_OR_RAISE(auto element, elementResult);
-        SIMDJSON_TRY(validateJsonValue(element));
+        const auto result = validateJsonValue(element);
+        if (result == kMalformedAtomError) {
+          return simdjson::INCORRECT_TYPE;
+        }
+        SIMDJSON_TRY(result);
       }
       return simdjson::SUCCESS;
     }
@@ -788,20 +678,23 @@ simdjson::error_code validateJsonValue(JsonInput value) {
       for (const auto& fieldResult : object) {
         SIMDJSON_ASSIGN_OR_RAISE(auto field, fieldResult);
         SIMDJSON_TRY(field.unescaped_key(/*allow_replacement=*/true).error());
-        SIMDJSON_TRY(validateJsonValue(field.value()));
+        const auto result = validateJsonValue(field.value());
+        if (result == kMalformedAtomError || result == kObjectTruncationError ||
+            result == simdjson::INCORRECT_TYPE) {
+          return kObjectTruncationError;
+        }
+        SIMDJSON_TRY(result);
       }
       return simdjson::SUCCESS;
     }
     case simdjson::ondemand::json_type::null:
       return trimTrailingJsonWhitespace(value.raw_json()) == "null"
           ? simdjson::SUCCESS
-          : simdjson::N_ATOM_ERROR;
+          : kMalformedAtomError;
     case simdjson::ondemand::json_type::unknown: {
       const auto token = trimTrailingJsonWhitespace(value.raw_json());
-      std::string ignored;
-      return appendSparkSpecialNumber(token, ignored)
-          ? simdjson::SUCCESS
-          : simdjson::INCORRECT_TYPE;
+      return isSparkSpecialNumber(token) ? simdjson::SUCCESS
+                                         : kMalformedAtomError;
     }
   }
   VELOX_UNREACHABLE();
@@ -810,6 +703,57 @@ simdjson::error_code validateJsonValue(JsonInput value) {
 bool isConversionError(simdjson::error_code error) {
   return error == simdjson::INCORRECT_TYPE ||
       error == simdjson::NUMBER_OUT_OF_RANGE;
+}
+
+// Preserves the generic container casts used by from_json across a batch.
+void copyParsedJsonValue(
+    exec::GenericWriter& writer,
+    const exec::GenericView& view) {
+  const auto kind = view.kind();
+  if (kind == TypeKind::ARRAY) {
+    auto& output = writer.castTo<Array<Any>>();
+    auto input = view.castTo<Array<Any>>();
+    for (auto element : input) {
+      if (element.has_value()) {
+        copyParsedJsonValue(output.add_item(), element.value());
+      } else {
+        output.add_null();
+      }
+    }
+    return;
+  }
+
+  if (kind == TypeKind::MAP) {
+    auto& output = writer.castTo<Map<Any, Any>>();
+    auto input = view.castTo<Map<Any, Any>>();
+    for (auto [key, value] : input) {
+      if (value.has_value()) {
+        auto [keyWriter, valueWriter] = output.add_item();
+        copyParsedJsonValue(keyWriter, key);
+        copyParsedJsonValue(valueWriter, value.value());
+      } else {
+        auto& keyWriter = output.add_null();
+        copyParsedJsonValue(keyWriter, key);
+      }
+    }
+    return;
+  }
+
+  if (kind == TypeKind::ROW) {
+    auto& output = writer.castTo<DynamicRow>();
+    auto input = view.castTo<DynamicRow>();
+    for (column_index_t i = 0; i < input.size(); ++i) {
+      const auto field = input.at(i);
+      if (field.has_value()) {
+        copyParsedJsonValue(output.get_writer_at(i), field.value());
+      } else {
+        output.set_null_at(i);
+      }
+    }
+    return;
+  }
+
+  writer.copy_from(view);
 }
 
 int64_t floorDivide(int64_t dividend, int64_t divisor) {
@@ -920,7 +864,7 @@ struct ExtractJsonTypeImpl {
     if (type == simdjson::ondemand::json_type::boolean) {
       const auto booleanResult = input.get_bool();
       if (booleanResult.error() != simdjson::SUCCESS) {
-        return simdjson::T_ATOM_ERROR;
+        return kMalformedAtomError;
       }
       if constexpr (kind == TypeKind::BOOLEAN) {
         writer.castTo<bool>() = booleanResult.value_unsafe();
@@ -932,6 +876,39 @@ struct ExtractJsonTypeImpl {
         return simdjson::SUCCESS;
       }
       return simdjson::INCORRECT_TYPE;
+    }
+    if (type == simdjson::ondemand::json_type::string) {
+      bool acceptsString{false};
+      if constexpr (
+          kind == TypeKind::VARCHAR || kind == TypeKind::REAL ||
+          kind == TypeKind::DOUBLE || kind == TypeKind::HUGEINT) {
+        acceptsString = true;
+      } else if constexpr (kind == TypeKind::INTEGER) {
+        acceptsString = writer.type() == DATE();
+      } else if constexpr (kind == TypeKind::BIGINT) {
+        acceptsString = writer.type()->isShortDecimal();
+      }
+      if (!acceptsString) {
+        if (input.get_string(/*allow_replacement=*/true).error() !=
+            simdjson::SUCCESS) {
+          return simdjson::STRING_ERROR;
+        }
+        return simdjson::INCORRECT_TYPE;
+      }
+    }
+    if (type == simdjson::ondemand::json_type::null &&
+        trimTrailingJsonWhitespace(input.raw_json()) != "null") {
+      return kMalformedAtomError;
+    }
+    if (type == simdjson::ondemand::json_type::number) {
+      const auto token = trimTrailingJsonWhitespace(input.raw_json());
+      if (!isValidJsonNumber(token) && !isSparkSpecialNumber(token)) {
+        return kMalformedAtomError;
+      }
+    }
+    if (type == simdjson::ondemand::json_type::unknown &&
+        !isSparkSpecialNumber(trimTrailingJsonWhitespace(input.raw_json()))) {
+      return kMalformedAtomError;
     }
     return KindDispatcher<kind>::apply(
         input, writer, isRoot, jsonRowSchemaInfo, nodeIndex);
@@ -1117,17 +1094,30 @@ struct ExtractJsonTypeImpl {
       SIMDJSON_ASSIGN_OR_RAISE(auto type, value.type());
       if (type == simdjson::ondemand::json_type::array) {
         SIMDJSON_ASSIGN_OR_RAISE(auto array, value.get_array());
+        bool hasConversionError{false};
         for (const auto& elementResult : array) {
           SIMDJSON_ASSIGN_OR_RAISE(auto element, elementResult);
-          SIMDJSON_ASSIGN_OR_RAISE(const auto isNull, element.is_null());
-          SIMDJSON_ASSIGN_OR_RAISE(const auto jsonType, element.type());
-          if (isNull &&
-              trimTrailingJsonWhitespace(element.raw_json()) != "null") {
-            return simdjson::N_ATOM_ERROR;
+          if (hasConversionError) {
+            const auto result = validateJsonValue(element);
+            if (result == kObjectTruncationError) {
+              return result;
+            }
+            if (result == kMalformedAtomError ||
+                result == simdjson::INCORRECT_TYPE) {
+              return kMalformedAtomError;
+            }
+            if (result != simdjson::SUCCESS) {
+              return result;
+            }
+            continue;
           }
-          // If casting to array of JSON, nulls in array elements should become
-          // the JSON text "null".
-          if (isNull) {
+
+          SIMDJSON_ASSIGN_OR_RAISE(const auto jsonType, element.type());
+          if (jsonType == simdjson::ondemand::json_type::null) {
+            if (trimTrailingJsonWhitespace(element.raw_json()) != "null") {
+              hasConversionError = true;
+              continue;
+            }
             writerTyped.add_null();
           } else {
             const auto result = VELOX_DYNAMIC_TYPE_DISPATCH(
@@ -1138,18 +1128,29 @@ struct ExtractJsonTypeImpl {
                 false,
                 jsonRowSchemaInfo,
                 nodeIndex + 1);
-            if (result == simdjson::T_ATOM_ERROR &&
-                jsonType == simdjson::ondemand::json_type::boolean) {
-              return simdjson::INCORRECT_TYPE;
+            if (result == kMalformedAtomError) {
+              if (jsonType == simdjson::ondemand::json_type::array ||
+                  jsonType == simdjson::ondemand::json_type::object) {
+                return result;
+              }
+              hasConversionError = true;
+              continue;
             }
             const bool keepPartialRootStruct = isRoot &&
                 elementType->kind() == TypeKind::ROW &&
                 jsonType == simdjson::ondemand::json_type::object &&
                 isConversionError(result);
+            if (isConversionError(result) && !keepPartialRootStruct) {
+              hasConversionError = true;
+              continue;
+            }
             if (result != simdjson::SUCCESS && !keepPartialRootStruct) {
               return result;
             }
           }
+        }
+        if (hasConversionError) {
+          return simdjson::INCORRECT_TYPE;
         }
       } else if (
           type == simdjson::ondemand::json_type::object &&
@@ -1183,6 +1184,7 @@ struct ExtractJsonTypeImpl {
       auto& writerTyped = writer.castTo<Map<Any, Any>>();
       const auto& valueType = writer.type()->childAt(1);
       SIMDJSON_ASSIGN_OR_RAISE(auto object, value.get_object());
+      bool hasConversionError{false};
       for (const auto& fieldResult : object) {
         SIMDJSON_ASSIGN_OR_RAISE(auto field, fieldResult);
         const auto escapedKey = field.escaped_key();
@@ -1193,15 +1195,23 @@ struct ExtractJsonTypeImpl {
             ? std::string_view(repairedKey)
             : key;
         auto fieldValue = field.value();
-        SIMDJSON_ASSIGN_OR_RAISE(const auto isNull, fieldValue.is_null());
-        SIMDJSON_ASSIGN_OR_RAISE(const auto jsonType, fieldValue.type());
-        if (isNull &&
-            trimTrailingJsonWhitespace(fieldValue.raw_json()) != "null") {
-          return simdjson::N_ATOM_ERROR;
+        if (hasConversionError) {
+          const auto result = validateJsonValue(fieldValue);
+          if (result == simdjson::SUCCESS) {
+            continue;
+          }
+          if (result == kMalformedAtomError ||
+              result == kObjectTruncationError ||
+              result == simdjson::INCORRECT_TYPE) {
+            return kObjectTruncationError;
+          }
+          return result;
         }
-        // If casting to map of JSON values, nulls in map values should become
-        // the JSON text "null".
-        if (isNull) {
+        SIMDJSON_ASSIGN_OR_RAISE(const auto jsonType, fieldValue.type());
+        if (jsonType == simdjson::ondemand::json_type::null) {
+          if (trimTrailingJsonWhitespace(fieldValue.raw_json()) != "null") {
+            return kObjectTruncationError;
+          }
           writerTyped.add_null().castTo<Varchar>().append(sparkKey);
         } else {
           auto writers = writerTyped.add_item();
@@ -1214,20 +1224,25 @@ struct ExtractJsonTypeImpl {
               false,
               jsonRowSchemaInfo,
               nodeIndex + 1);
-          if (result == simdjson::T_ATOM_ERROR &&
-              jsonType == simdjson::ondemand::json_type::boolean) {
-            return simdjson::INCORRECT_TYPE;
+          if (result == kMalformedAtomError ||
+              result == kObjectTruncationError ||
+              result == simdjson::STRING_ERROR) {
+            return kObjectTruncationError;
           }
           const bool keepPartialRootStruct = isRoot &&
               valueType->kind() == TypeKind::ROW &&
               jsonType == simdjson::ondemand::json_type::object &&
               isConversionError(result);
+          if (isConversionError(result) && !keepPartialRootStruct) {
+            hasConversionError = true;
+            continue;
+          }
           if (result != simdjson::SUCCESS && !keepPartialRootStruct) {
             return result;
           }
         }
       }
-      return simdjson::SUCCESS;
+      return hasConversionError ? simdjson::INCORRECT_TYPE : simdjson::SUCCESS;
     }
   };
 
@@ -1276,64 +1291,105 @@ struct ExtractJsonTypeImpl {
               : key;
           const auto fieldIterator = fieldIndices.find(sparkKey);
           if (fieldIterator == fieldIndices.end()) {
-            SIMDJSON_TRY(validateJsonValue(field.value()));
+            const auto result = validateJsonValue(field.value());
+            if ((result == kMalformedAtomError ||
+                 result == kObjectTruncationError ||
+                 result == simdjson::INCORRECT_TYPE) &&
+                !isRoot) {
+              return kObjectTruncationError;
+            }
+            SIMDJSON_TRY(result);
             continue;
           }
 
           const auto index = fieldIterator->second;
           const bool isDuplicate = !isFieldMissing->at(index);
+          const bool useScratchWriter =
+              isDuplicate && rowType.childAt(index)->kind() == TypeKind::ROW;
           if (isDuplicate) {
             writerTyped.overwrite_at(index);
           }
           isFieldMissing->at(index) = false;
           auto fieldValue = field.value();
           SIMDJSON_ASSIGN_OR_RAISE(const auto fieldType, fieldValue.type());
+          const auto truncateCurrentField = [&]() {
+            if (isDuplicate) {
+              if (!useScratchWriter) {
+                writerTyped.discard_at(index);
+              }
+            } else {
+              writerTyped.set_null_at(index);
+            }
+            for (column_index_t i = 0; i < rowType.size(); ++i) {
+              if (isFieldMissing->at(i)) {
+                writerTyped.set_null_at(i);
+              }
+            }
+            return isRoot ? simdjson::SUCCESS : kObjectTruncationError;
+          };
           if (fieldType == simdjson::ondemand::json_type::null) {
             if (trimTrailingJsonWhitespace(fieldValue.raw_json()) != "null") {
-              return simdjson::N_ATOM_ERROR;
+              if (isRoot) {
+                return kMalformedAtomError;
+              }
+              return truncateCurrentField();
             }
             writerTyped.set_null_at(index);
             continue;
           }
 
+          VectorPtr scratchVector;
+          exec::VectorWriter<Any> scratchWriter;
+          exec::GenericWriter* fieldWriter;
+          if (useScratchWriter) {
+            scratchVector =
+                BaseVector::create(rowType.childAt(index), 1, writer.pool());
+            scratchWriter.init(*scratchVector);
+            scratchWriter.setOffset(0);
+            fieldWriter = &scratchWriter.current();
+          } else {
+            fieldWriter = &writerTyped.get_writer_at(index);
+          }
           const auto result = VELOX_DYNAMIC_TYPE_DISPATCH(
               ExtractJsonTypeImpl<simdjson::ondemand::value>::apply,
               rowType.childAt(index)->kind(),
               fieldValue,
-              writerTyped.get_writer_at(index),
+              *fieldWriter,
               false,
               jsonRowSchemaInfo,
               nodeIndices.at(sparkKey));
-          auto effectiveResult = result;
-          if (result == simdjson::T_ATOM_ERROR) {
-            const bool isDirectMalformedBoolean =
-                fieldType == simdjson::ondemand::json_type::boolean;
-            const bool isNestedRowTruncation =
-                rowType.childAt(index)->kind() == TypeKind::ROW &&
-                fieldType == simdjson::ondemand::json_type::object;
-            if (isDirectMalformedBoolean || isNestedRowTruncation) {
-              if (isRoot && isDirectMalformedBoolean) {
-                return result;
-              }
-              if (isDuplicate) {
-                writerTyped.discard_at(index);
-              } else {
-                writerTyped.set_null_at(index);
-              }
-              for (column_index_t i = 0; i < rowType.size(); ++i) {
-                if (isFieldMissing->at(i)) {
-                  writerTyped.set_null_at(i);
-                }
-              }
-              return isRoot ? simdjson::SUCCESS : simdjson::T_ATOM_ERROR;
+          if (useScratchWriter) {
+            if (result == simdjson::SUCCESS) {
+              scratchWriter.commit(true);
+              scratchWriter.finish();
+              DecodedVector decoded(*scratchVector);
+              exec::VectorReader<Any> scratchReader(&decoded);
+              copyParsedJsonValue(
+                  writerTyped.get_writer_at(index), scratchReader[0]);
+            } else {
+              scratchWriter.commit(false);
+              scratchWriter.finish();
             }
-            effectiveResult = simdjson::INCORRECT_TYPE;
           }
-          if (effectiveResult != simdjson::SUCCESS) {
-            if (!isConversionError(effectiveResult)) {
-              return effectiveResult;
+          if (result == kMalformedAtomError ||
+              result == simdjson::STRING_ERROR) {
+            if (isRoot) {
+              return result;
+            }
+            return truncateCurrentField();
+          }
+          if (result == kObjectTruncationError) {
+            return truncateCurrentField();
+          }
+          if (result != simdjson::SUCCESS) {
+            if (!isConversionError(result)) {
+              return result;
             }
             if (isDuplicate) {
+              if (useScratchWriter) {
+                fieldHasConversionError[index] = true;
+                continue;
+              }
               writerTyped.discard_at(index);
             } else {
               writerTyped.set_null_at(index);
@@ -1445,6 +1501,9 @@ struct ExtractJsonTypeImpl {
         const auto numberResult = value.get_number();
         if (numberResult.error() != simdjson::SUCCESS) {
           const auto token = trimTrailingJsonWhitespace(value.raw_json());
+          if (isSparkSpecialNumber(token)) {
+            return simdjson::INCORRECT_TYPE;
+          }
           return isValidJsonNumber(token) ? simdjson::NUMBER_OUT_OF_RANGE
                                           : numberResult.error();
         }
@@ -1605,6 +1664,9 @@ struct ExtractJsonTypeImpl {
       }
       case simdjson::ondemand::json_type::number: {
         s = trimTrailingJsonWhitespace(value.raw_json());
+        if (isSparkSpecialNumber(s)) {
+          return simdjson::INCORRECT_TYPE;
+        }
         if (!isValidJsonNumber(s)) {
           return simdjson::NUMBER_ERROR;
         }
