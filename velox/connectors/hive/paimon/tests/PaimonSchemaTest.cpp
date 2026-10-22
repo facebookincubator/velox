@@ -16,6 +16,7 @@
 #include "velox/connectors/hive/paimon/PaimonSchema.h"
 
 #include <folly/ScopeGuard.h>
+#include <folly/Unicode.h>
 #include <gtest/gtest.h>
 #include <limits>
 
@@ -461,10 +462,22 @@ TEST_F(PaimonSchemaTest, invalidFieldAndContainerMetadata) {
   VELOX_ASSERT_THROW(
       duplicateNames.validate(ROW({{"", BIGINT()}, {"b", BIGINT()}}), false),
       "field name must not be empty");
-  VELOX_ASSERT_THROW(
-      duplicateNames.validate(
-          ROW({{" \t\n", BIGINT()}, {"b", BIGINT()}}), false),
-      "field name must not be empty or blank");
+  for (const auto& name :
+       {std::string(" \t\n"),
+        std::string("\x1c"),
+        folly::codePointToUtf8(0x1680),
+        folly::codePointToUtf8(0x2005),
+        folly::codePointToUtf8(0x3000)}) {
+    VELOX_ASSERT_THROW(
+        duplicateNames.validate(
+            ROW({{name, BIGINT()}, {"b", BIGINT()}}), false),
+        "field name must not be empty or blank");
+  }
+  for (char32_t codePoint : {0x00a0, 0x2007, 0x202f}) {
+    duplicateNames.validate(
+        ROW({{folly::codePointToUtf8(codePoint), BIGINT()}, {"b", BIGINT()}}),
+        false);
+  }
 }
 
 TEST_F(PaimonSchemaTest, invalidTypesAndParameters) {

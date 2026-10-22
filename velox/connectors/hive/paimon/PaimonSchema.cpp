@@ -15,7 +15,7 @@
  */
 #include "velox/connectors/hive/paimon/PaimonSchema.h"
 
-#include <folly/String.h>
+#include <folly/Unicode.h>
 #include <algorithm>
 #include <limits>
 #include <tuple>
@@ -26,6 +26,24 @@ namespace {
 
 constexpr int32_t kSystemFieldIdStart = std::numeric_limits<int32_t>::max() / 2;
 constexpr uint32_t kMaxTypeDepth = 128;
+
+bool isBlankFieldName(const std::string& name) {
+  const auto* position = reinterpret_cast<const unsigned char*>(name.data());
+  const auto* end = position + name.size();
+  while (position < end) {
+    const auto codePoint = folly::utf8ToCodePoint(position, end, false);
+    // Paimon uses Java Character.isWhitespace, which excludes nonbreaking
+    // spaces U+00A0, U+2007 and U+202F.
+    if (!((codePoint >= 0x09 && codePoint <= 0x0d) ||
+          (codePoint >= 0x1c && codePoint <= 0x20) || codePoint == 0x1680 ||
+          (codePoint >= 0x2000 && codePoint <= 0x2006) ||
+          (codePoint >= 0x2008 && codePoint <= 0x200a) || codePoint == 0x2028 ||
+          codePoint == 0x2029 || codePoint == 0x205f || codePoint == 0x3000)) {
+      return false;
+    }
+  }
+  return true;
+}
 
 int32_t readInt32(const folly::dynamic& value) {
   VELOX_USER_CHECK(value.isInt(), "Expected a Paimon integer");
@@ -171,7 +189,7 @@ void validateType(
     std::unordered_set<std::string> names;
     for (const auto& name : type->asRow().names()) {
       VELOX_USER_CHECK(
-          !folly::trimWhitespace(name).empty(),
+          !isBlankFieldName(name),
           "Paimon field name must not be empty or blank");
       VELOX_USER_CHECK(
           names.insert(name).second, "Duplicate Paimon field name: {}", name);
