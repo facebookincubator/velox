@@ -41,6 +41,8 @@ class PaimonConnector final : public HiveConnector {
       ConnectorQueryCtx* connectorQueryCtx) override;
 
   bool supportsSplitPreload() const override {
+    // TODO: Enable automatic preload after validating multi-file preparation,
+    // cancellation and ownership across the asynchronous handoff.
     return false;
   }
 

@@ -39,6 +39,8 @@ class PaimonTableHandle final : public FileTableHandle {
   /// data-file.thin-mode=false and boolean row-tracking.enabled options.
   /// Optional bucket and file.format are validated; other schema options and
   /// nonempty queryOptions are rejected by this profile. No defaults are added.
+  /// These execution limits describe the current reader, not Paimon table
+  /// validity; additional capabilities require their own semantic validation.
   PaimonTableHandle(
       std::string connectorId,
       std::string tableName,

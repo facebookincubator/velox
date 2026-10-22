@@ -1187,8 +1187,10 @@ TEST_F(PaimonConnectorTest, queryValidationBeforeFileOpen) {
                              .build();
     const auto message =
         std::string_view(option) == FileConfig::kIgnoreMissingFilesSession
-        ? "Paimon same-schema append profile does not support ignore_missing_files"
-        : "Paimon same-schema append profile does not support lower-case file mapping";
+        ? "Paimon same-schema append profile does not support ignore_missing_files; "
+          "missing snapshot files must fail instead of returning incomplete results"
+        : "Paimon same-schema append profile does not support lower-case file "
+          "mapping; the current reader requires exact names from the fixed schema";
     VELOX_ASSERT_USER_THROW(
         connector->createDataSource(
             ROW({{"id", BIGINT()}}), table, idColumns, optionContext.get()),
@@ -1269,7 +1271,8 @@ TEST_F(PaimonConnectorTest, rejectsFileSchemaContradictions) {
               "true")
           .split(missing)
           .copyResults(pool()),
-      "Paimon same-schema append profile does not support ignore_missing_files");
+      "Paimon same-schema append profile does not support ignore_missing_files; "
+      "missing snapshot files must fail instead of returning incomplete results");
 }
 
 TEST_F(PaimonConnectorTest, rowTrackingOrdinaryColumns) {
@@ -1397,7 +1400,8 @@ TEST_F(PaimonConnectorTest, takeoverPreservesTableDefinition) {
   ASSERT_TRUE(alreadyRead->next(1, future).has_value());
   VELOX_ASSERT_USER_THROW(
       source->setFromDataSource(std::move(alreadyRead)),
-      "Paimon takeover does not support an already-read donor");
+      "Paimon takeover does not support an already-read donor; only prepared, "
+      "unread split state can be transferred");
   preloaded->addSplit(makePaimonSplit({paths[0]->getPath()}));
   source->setFromDataSource(std::move(preloaded));
   auto result = source->next(100, future);

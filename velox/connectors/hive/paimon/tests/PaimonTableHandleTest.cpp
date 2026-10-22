@@ -260,7 +260,8 @@ TEST_F(PaimonTableHandleTest, executableProfile) {
   table(PaimonSchema::create(good))->validateReadProfile();
   VELOX_ASSERT_USER_THROW(
       table()->validateReadProfile(),
-      "Paimon same-schema append profile does not support primary-key tables");
+      "Paimon same-schema append profile does not support primary-key tables; "
+      "primary-key reading is not implemented yet");
   for (const auto& key :
        {"type",
         "batch-scan-mode",
@@ -272,11 +273,18 @@ TEST_F(PaimonTableHandleTest, executableProfile) {
     wire["options"].erase(key);
     VELOX_ASSERT_USER_THROW(
         table(PaimonSchema::create(wire))->validateReadProfile(),
-        "Missing explicit Paimon profile option");
+        fmt::format(
+            "Missing explicit Paimon profile option '{}'; provide normalized "
+            "options because defaults are not resolved by the reader",
+            key));
     wire["options"][key] = "unsupported";
     VELOX_ASSERT_USER_THROW(
         table(PaimonSchema::create(wire))->validateReadProfile(),
-        "Paimon same-schema append profile requires");
+        fmt::format(
+            "Paimon same-schema append profile requires '{}'='{}'; the current "
+            "reader only implements ordinary same-schema append batch scans",
+            key,
+            good["options"][key].asString()));
   }
   for (const auto& key :
        {"scan.mode",
@@ -291,9 +299,17 @@ TEST_F(PaimonTableHandleTest, executableProfile) {
     VELOX_ASSERT_USER_THROW(
         table(PaimonSchema::create(wire))->validateReadProfile(),
         fmt::format(
-            "Paimon same-schema append profile does not support option '{}'",
+            "Paimon same-schema append profile does not support option '{}'; "
+            "its applicability to the current reader has not been classified",
             key));
   }
+  auto writerOption = good;
+  writerOption["options"]["write-buffer-size"] = "256 mb";
+  VELOX_ASSERT_USER_THROW(
+      table(PaimonSchema::create(writerOption))->validateReadProfile(),
+      "Paimon same-schema append profile does not support option "
+      "'write-buffer-size'; its applicability to the current reader has not "
+      "been classified");
   for (const auto& value : {"-2", "0", "2147483648", "unknown"}) {
     auto wire = good;
     wire["options"]["bucket"] = value;
@@ -305,18 +321,21 @@ TEST_F(PaimonTableHandleTest, executableProfile) {
   wire["options"]["file.format"] = "avro";
   VELOX_ASSERT_USER_THROW(
       table(PaimonSchema::create(wire))->validateReadProfile(),
-      "Unsupported Paimon schema file.format");
+      "Unsupported Paimon schema file.format 'avro'; the current reader "
+      "supports nimble, dwrf, orc and parquet");
   wire = good;
   wire["options"]["row-tracking.enabled"] = "true";
   table(PaimonSchema::create(wire))->validateReadProfile();
   wire["options"]["row-tracking.enabled"] = "unknown";
   VELOX_ASSERT_USER_THROW(
       table(PaimonSchema::create(wire))->validateReadProfile(),
-      "Paimon profile requires explicit boolean 'row-tracking.enabled'");
+      "Paimon profile requires explicit boolean 'row-tracking.enabled'; "
+      "provide normalized options because defaults are not resolved by the reader");
   wire["options"].erase("row-tracking.enabled");
   VELOX_ASSERT_USER_THROW(
       table(PaimonSchema::create(wire))->validateReadProfile(),
-      "Paimon profile requires explicit boolean 'row-tracking.enabled'");
+      "Paimon profile requires explicit boolean 'row-tracking.enabled'; "
+      "provide normalized options because defaults are not resolved by the reader");
   const auto queryOptions = std::make_shared<PaimonTableHandle>(
       "test-paimon",
       "orders",
@@ -329,7 +348,20 @@ TEST_F(PaimonTableHandleTest, executableProfile) {
           {"skip.header.line.count", "1"}});
   VELOX_ASSERT_USER_THROW(
       queryOptions->validateReadProfile(),
-      "Paimon same-schema append profile does not support query options");
+      "Paimon same-schema append profile does not support query options; "
+      "query-option interpretation is not implemented yet");
+  const auto dateSchema = std::make_shared<PaimonSchema>(
+      0,
+      3,
+      ROW({{"date", DATE()}}),
+      PaimonTypeMetadata{"ROW", false, std::nullopt, {}, {{"DATE", true, 0}}},
+      std::vector<int32_t>{},
+      std::vector<int32_t>{},
+      schema({})->options());
+  VELOX_ASSERT_USER_THROW(
+      table(dateSchema)->validateReadProfile(),
+      "Unsupported Paimon same-schema append logical type 'DATE'; the current "
+      "reader is limited to BOOLEAN, INTEGER, BIGINT, DOUBLE and VARCHAR");
 }
 
 TEST_F(PaimonTableHandleTest, conditionValidation) {
@@ -382,7 +414,8 @@ TEST_F(PaimonTableHandleTest, conditionValidation) {
               BOOLEAN(),
               std::vector<core::TypedExprPtr>{lambda},
               "test_predicate")),
-      "Paimon same-schema append profile does not support Lambda filters");
+      "Paimon same-schema append profile does not support Lambda filters; "
+      "scope-aware column validation is not implemented yet");
   for (const auto& inputType :
        {schema({})->rowType(), ROW({{"id", INTEGER()}})}) {
     const auto explicitInput = std::make_shared<core::CallTypedExpr>(

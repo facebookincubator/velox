@@ -56,11 +56,13 @@ PaimonDataSource::PaimonDataSource(
   }
   VELOX_USER_CHECK(
       !paimonConfig->ignoreMissingFiles(connectorQueryCtx->sessionProperties()),
-      "Paimon same-schema append profile does not support ignore_missing_files");
+      "Paimon same-schema append profile does not support ignore_missing_files; "
+      "missing snapshot files must fail instead of returning incomplete results");
   VELOX_USER_CHECK(
       !paimonConfig->isFileColumnNamesReadAsLowerCase(
           connectorQueryCtx->sessionProperties()),
-      "Paimon same-schema append profile does not support lower-case file mapping");
+      "Paimon same-schema append profile does not support lower-case file "
+      "mapping; the current reader requires exact names from the fixed schema");
 }
 
 void PaimonDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
@@ -111,6 +113,8 @@ std::unique_ptr<FileSplitReader> PaimonDataSource::createSplitReader() {
 void PaimonDataSource::setFromDataSource(
     std::unique_ptr<DataSource> sourceUnique) {
   auto* source = checkedPointerCast<PaimonDataSource>(sourceUnique.get());
+  // Reader state is transferred, but the recipient retains its compiled
+  // expressions and output mapping. Both sources must describe the same scan.
   VELOX_USER_CHECK(
       paimonTableHandle_->hasSameTableDefinition(*source->paimonTableHandle_),
       "Paimon takeover must preserve the fixed table definition");
@@ -125,6 +129,7 @@ void PaimonDataSource::setFromDataSource(
         source->partitionKeys_.count(name),
         "Paimon takeover must preserve partition column handles");
   }
+  // Preload transfers a prepared, unread split, never an active scan cursor.
   VELOX_USER_CHECK_NULL(split_, "Paimon takeover requires an idle recipient");
   VELOX_USER_CHECK_NOT_NULL(
       source->paimonSplit_, "Paimon takeover requires a prepared split");
@@ -135,7 +140,8 @@ void PaimonDataSource::setFromDataSource(
   VELOX_USER_CHECK(
       !checkedPointerCast<PaimonSplitReader>(source->splitReader_.get())
            ->startedReading(),
-      "Paimon takeover does not support an already-read donor");
+      "Paimon takeover does not support an already-read donor; only prepared, "
+      "unread split state can be transferred");
   paimonTableHandle_->validateSplit(*source->paimonSplit_);
   // Common adaptation skips constant columns. A prior split's partition
   // constant must not prevent its current filters from reaching the donor.

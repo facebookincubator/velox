@@ -132,9 +132,11 @@ void validateExpression(
     }
     VELOX_USER_CHECK_NOT_NULL(
         current->type(), "Missing Paimon expression type");
+    // TODO: Validate Lambda column references with argument scope awareness.
     VELOX_USER_CHECK(
         !current->isLambdaKind(),
-        "Paimon same-schema append profile does not support Lambda filters");
+        "Paimon same-schema append profile does not support Lambda filters; "
+        "scope-aware column validation is not implemented yet");
     VELOX_USER_CHECK(
         !current->isInputKind(),
         "Paimon remaining filter must access input columns by name");
@@ -359,20 +361,25 @@ bool PaimonTableHandle::hasSameScanConditions(
 }
 
 void PaimonTableHandle::validateReadProfile() const {
+  // TODO: Extend read profiles as primary-key, deletion-vector, data-evolution
+  // and thin-file readers implement their required row and layout semantics.
   VELOX_USER_CHECK(
       tableType() == PaimonTableType::kAppendOnly,
-      "Paimon same-schema append profile does not support primary-key tables");
+      "Paimon same-schema append profile does not support primary-key tables; "
+      "primary-key reading is not implemented yet");
   const auto& options = schema_->options();
   const auto requireOption = [&](const std::string& key,
                                  std::string_view value) {
     const auto it = options.find(key);
     VELOX_USER_CHECK(
         it != options.end(),
-        "Missing explicit Paimon profile option '{}'",
+        "Missing explicit Paimon profile option '{}'; provide normalized "
+        "options because defaults are not resolved by the reader",
         key);
     VELOX_USER_CHECK(
         it->second == value,
-        "Paimon same-schema append profile requires '{}'='{}'",
+        "Paimon same-schema append profile requires '{}'='{}'; the current "
+        "reader only implements ordinary same-schema append batch scans",
         key,
         value);
   };
@@ -385,13 +392,17 @@ void PaimonTableHandle::validateReadProfile() const {
   VELOX_USER_CHECK(
       tracking != options.end() &&
           (tracking->second == "true" || tracking->second == "false"),
-      "Paimon profile requires explicit boolean 'row-tracking.enabled'");
+      "Paimon profile requires explicit boolean 'row-tracking.enabled'; "
+      "provide normalized options because defaults are not resolved by the reader");
+  // TODO: Classify options by read semantics so write-only or planning options
+  // do not unnecessarily block scans. Unclassified options remain rejected.
   for (const auto& [key, value] : options) {
     if (key == "file.format") {
       VELOX_USER_CHECK(
           value == "nimble" || value == "dwrf" || value == "orc" ||
               value == "parquet",
-          "Unsupported Paimon schema file.format '{}'",
+          "Unsupported Paimon schema file.format '{}'; the current reader "
+          "supports nimble, dwrf, orc and parquet",
           value);
     } else if (key == "bucket") {
       const auto parsed = folly::tryTo<int32_t>(value);
@@ -405,19 +416,26 @@ void PaimonTableHandle::validateReadProfile() const {
               key == "deletion-vectors.enabled" ||
               key == "data-evolution.enabled" || key == "data-file.thin-mode" ||
               key == "row-tracking.enabled",
-          "Paimon same-schema append profile does not support option '{}'",
+          "Paimon same-schema append profile does not support option '{}'; "
+          "its applicability to the current reader has not been classified",
           key);
     }
   }
+  // TODO: Normalize and validate supported query options before applying them
+  // to the scan; retaining them in the handle does not implement their effects.
   VELOX_USER_CHECK(
       queryOptions_.empty(),
-      "Paimon same-schema append profile does not support query options");
+      "Paimon same-schema append profile does not support query options; "
+      "query-option interpretation is not implemented yet");
+  // TODO: Extend logical-type support with file mapping, filter and partition
+  // conversion coverage. This whitelist is not a Paimon type-system limit.
   for (const auto& field : schema_->metadata().children) {
     const auto& type = field.logicalType;
     VELOX_USER_CHECK(
         type == "BOOLEAN" || type == "INTEGER" || type == "BIGINT" ||
             type == "DOUBLE" || type == "VARCHAR",
-        "Unsupported Paimon same-schema append logical type '{}'",
+        "Unsupported Paimon same-schema append logical type '{}'; the current "
+        "reader is limited to BOOLEAN, INTEGER, BIGINT, DOUBLE and VARCHAR",
         type);
   }
   for (const auto& name : schema_->rowType()->names()) {
@@ -448,9 +466,12 @@ void PaimonTableHandle::validateColumn(const FileColumnHandle& column) const {
       role,
       "Paimon column role does not match target schema: '{}'",
       column.name());
+  // TODO: Validate extraction outputs and callback ownership separately from
+  // the schema input type before enabling these FileColumnHandle capabilities.
   VELOX_USER_CHECK(
       column.extractions().empty() && !column.postProcessor(),
-      "Paimon same-schema append profile does not support column extractions or callbacks");
+      "Paimon same-schema append profile does not support column extractions "
+      "or callbacks; Paimon validation for these capabilities is not implemented yet");
   for (const auto& path : column.requiredSubfields()) {
     subfieldType(*schema_, path);
     VELOX_USER_CHECK(
@@ -462,6 +483,8 @@ void PaimonTableHandle::validateColumn(const FileColumnHandle& column) const {
 void PaimonTableHandle::validateFileSchema(const RowTypePtr& fileType) const {
   validateReadProfile();
   VELOX_USER_CHECK_NOT_NULL(fileType, "Missing Paimon file schema");
+  // TODO: Resolve per-file historical schemas by schema ID and field ID before
+  // accepting evolved names, types or layouts instead of this fixed schema.
   auto expectedType = dataColumns_;
   for (auto id : schema_->partitionKeys()) {
     if (fileType->containsChild(
@@ -525,11 +548,13 @@ void PaimonTableHandle::validateSplit(const PaimonConnectorSplit& split) const {
   for (const auto& file : split.dataFiles()) {
     VELOX_USER_CHECK(
         !file.deletionFile,
-        "Paimon same-schema append profile does not support deletion vectors");
+        "Paimon same-schema append profile does not support deletion vectors; "
+        "position-based deletion filtering is not implemented yet");
     VELOX_USER_CHECK_EQ(
         file.type,
         PaimonDataFile::Type::kData,
-        "Paimon same-schema append profile requires data files");
+        "Paimon same-schema append profile requires data files; changelog "
+        "reading is not implemented yet");
     VELOX_USER_CHECK_EQ(
         file.level,
         0,
