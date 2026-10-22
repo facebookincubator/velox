@@ -196,6 +196,37 @@ class SelectivityVector {
     updateBounds();
   }
 
+  /// Returns the unselected rows within this vector's size.
+  SelectivityVector complement() const {
+    return complement(size_);
+  }
+
+  /// Returns the unselected rows within 'size'. Rows beyond this vector's size
+  /// are selected; rows beyond 'size' are excluded.
+  SelectivityVector complement(vector_size_t size) const {
+    VELOX_CHECK_GE(size, 0);
+    SelectivityVector result;
+    result.size_ = size;
+    const auto numWords = bits::nwords(size);
+    const auto commonWords = bits::nwords(std::min(size, size_));
+    result.bits_.reserve(numWords);
+    for (uint64_t i = 0; i < commonWords; ++i) {
+      result.bits_.push_back(~bits_[i]);
+    }
+    for (auto i = commonWords; i < numWords; ++i) {
+      result.bits_.push_back(~uint64_t{0});
+    }
+    // Source padding is not part of the selection when extending the size.
+    if (size > size_ && size_ % 64 != 0) {
+      result.bits_[size_ / 64] |= ~bits::lowMask(size_ % 64);
+    }
+    if (size % 64 != 0) {
+      result.bits_.back() &= bits::lowMask(size % 64);
+    }
+    result.updateBounds();
+    return result;
+  }
+
   /**
    * Merges the valid vector of another SelectivityVector by !AND'ing them
    * together. This is used to support logical deletes where
