@@ -33,7 +33,7 @@ class DummyGcsOAuthCredentialsProvider : public GcsOAuthCredentialsProvider {
  public:
   explicit DummyGcsOAuthCredentialsProvider() : GcsOAuthCredentialsProvider() {}
 
-  std::shared_ptr<gcs::oauth2::Credentials> getCredentials(
+  std::shared_ptr<::google::cloud::Credentials> getCredentials(
       const std::string&) override {
     VELOX_FAIL("DummyGcsOAuthCredentialsProvider: Not implemented");
   }
