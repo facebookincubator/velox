@@ -42,6 +42,10 @@ void ChunkedDecoder::ensureSharedDictionaryAlphabet() {
 }
 
 bool ChunkedDecoder::loadNextChunk(const ChunkBoundaryCallback& onChunkLoaded) {
+  // Free the previous chunk first so that it is not alive while the next chunk
+  // is decompressed.
+  encoding_.reset();
+  currentStringBuffers_.clear();
   auto ret = ensureInput(kChunkHeaderSize);
   NIMBLE_CHECK(ret, "Failed to read chunk header");
   const auto [length, compressionType] = readChunkHeader(inputData_);
@@ -72,7 +76,6 @@ bool ChunkedDecoder::loadNextChunk(const ChunkBoundaryCallback& onChunkLoaded) {
   }
   inputData_ += length;
   inputSize_ -= length;
-  currentStringBuffers_.clear();
   // Keep the decompressed buffer alive for the lifetime of the encoding, which
   // may reference it without copying.
   if (FOLLY_UNLIKELY(uncompressedBuffer != nullptr)) {
