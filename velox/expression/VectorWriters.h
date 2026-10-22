@@ -635,7 +635,36 @@ class DynamicRowWriter {
         index,
         childrenVectors_->size());
 
+    childrenWriters_[index]->finalizeNull();
     (*childrenVectors_)[index]->setNull(offset_, true);
+    needCommit_[index] = false;
+  }
+
+  /// Commits the current value so a duplicate field can replace it.
+  void overwrite_at(column_index_t index) {
+    VELOX_USER_CHECK_LT(
+        index,
+        childrenVectors_->size(),
+        "Failed to access the child vector at index {}. Row vector has only {} children.",
+        index,
+        childrenVectors_->size());
+
+    if (needCommit_[index]) {
+      childrenWriters_[index]->commit(true);
+      needCommit_[index] = false;
+    }
+  }
+
+  /// Discards an unfinished replacement and retains the committed value.
+  void discard_at(column_index_t index) {
+    VELOX_USER_CHECK_LT(
+        index,
+        childrenVectors_->size(),
+        "Failed to access the child vector at index {}. Row vector has only {} children.",
+        index,
+        childrenVectors_->size());
+
+    childrenWriters_[index]->finalizeNull();
     needCommit_[index] = false;
   }
 
