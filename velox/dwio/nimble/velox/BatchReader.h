@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include <map>
 #include <optional>
 #include "folly/container/F14Set.h"
 #include "velox/common/file/File.h"
@@ -116,6 +117,10 @@ class BatchReader {
       BatchReadParams params = {});
 
   ~BatchReader();
+  BatchReader(const BatchReader&) = delete;
+  BatchReader& operator=(const BatchReader&) = delete;
+  BatchReader(BatchReader&&) = delete;
+  BatchReader& operator=(BatchReader&&) = delete;
 
   // Returns the estimated row size from the current stripe in bytes.
   uint64_t estimatedRowSize();
@@ -193,6 +198,12 @@ class BatchReader {
 
   uint32_t getCurrentRowInStripe() const;
 
+  // Merges [firstRow, firstRow + rowCount) into the decoded-row intervals.
+  void recordDecodedRows(uint64_t firstRow, uint64_t rowCount);
+
+  // Emits and clears metrics for the current stripe without affecting reads.
+  void logStripeRead() noexcept;
+
   velox::memory::MemoryPool& pool_;
   std::shared_ptr<const TabletReader> tabletReader_;
   std::optional<StripeIdentifier> stripeIdentifier_;
@@ -216,6 +227,11 @@ class BatchReader {
 
   // stripe currently loaded.
   std::optional<uint32_t> loadedStripe_;
+
+  // Read utilization for the current physical stripe load. The interval map
+  // prevents repeated seeks over the same rows from inflating utilization.
+  std::optional<StripeReadMetrics> stripeReadMetrics_;
+  std::map<uint64_t, uint64_t> decodedRowRanges_;
 
   // Row size estimation cache so that for the same stripe no repeated
   // estimation is done.

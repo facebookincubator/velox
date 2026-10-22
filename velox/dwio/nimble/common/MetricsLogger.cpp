@@ -26,6 +26,17 @@ folly::dynamic StripeLoadMetrics::serialize() const {
   return obj;
 }
 
+folly::dynamic StripeReadMetrics::serialize() const {
+  folly::dynamic obj = folly::dynamic::object;
+  obj["stripeIndex"] = stripeIndex;
+  obj["rowsInStripe"] = rowsInStripe;
+  obj["uniqueRowsDecoded"] = uniqueRowsDecoded;
+  obj["streamCount"] = streamCount;
+  obj["totalStreamSize"] = totalStreamSize;
+  obj["estimatedUnusedStreamSize"] = estimatedUnusedStreamSize;
+  return obj;
+}
+
 folly::dynamic StripeFlushMetrics::serialize() const {
   folly::dynamic obj = folly::dynamic::object;
   obj["inputSize"] = inputSize;

@@ -21,15 +21,29 @@ namespace facebook::nimble {
 
 struct StripeLoadMetrics {
   uint32_t stripeIndex;
-  uint32_t rowsInStripe;
+  uint64_t rowsInStripe;
   uint32_t streamCount{0};
-  uint32_t totalStreamSize{0};
-  // TODO: add IO sizes.
+  uint64_t totalStreamSize{0};
 
   // TODO: add encoding summary
 
   size_t cpuUsec;
   size_t wallTimeUsec;
+
+  folly::dynamic serialize() const;
+};
+
+// Summarizes how much of a loaded stripe was materialized before the reader
+// moved to another stripe or was destroyed. Skipped rows are not counted.
+// Estimated unused bytes are row-proportional because compressed bytes are
+// shared by a stream and cannot be attributed exactly to individual rows.
+struct StripeReadMetrics {
+  uint32_t stripeIndex;
+  uint64_t rowsInStripe;
+  uint64_t uniqueRowsDecoded;
+  uint32_t streamCount;
+  uint64_t totalStreamSize;
+  uint64_t estimatedUnusedStreamSize;
 
   folly::dynamic serialize() const;
 };
@@ -90,6 +104,7 @@ class MetricsLogger {
       const std::string& /* errorMessage */) const {}
 
   virtual void logStripeLoad(const StripeLoadMetrics& /* metrics */) const {}
+  virtual void logStripeRead(const StripeReadMetrics& /* metrics */) const {}
   virtual void logStripeFlush(const StripeFlushMetrics& /* metrics */) const {}
   virtual void logFileClose(const FileCloseMetrics& /* metrics */) const {}
   virtual void logCompressionContext(const std::string&) const {}
