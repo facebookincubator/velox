@@ -671,6 +671,8 @@ bool isPlainType(const TypePtr& type) {
 
 // Whether the GPU casts VARCHAR at all: CastFunction follows Presto's rules,
 // so the Presto function registration turns it on and the Spark one off.
+// TODO: Register cast as a special form per dialect in place of this switch
+// (https://github.com/facebookincubator/velox/issues/19748).
 bool castFromVarcharEnabled = false;
 
 // Returns true if CastFunction casts 'sourceType' to 'targetType'.
@@ -777,6 +779,8 @@ class CastFunction : public CudfFunction {
       values = std::move(columns[0]);
       valid = std::move(columns[1]);
     } else if (cudf::is_floating_point(targetCudfType_)) {
+      // TODO: Validate, trim and parse the strings in one kernel
+      // (https://github.com/facebookincubator/velox/issues/19749).
       valid = std::move(
           transformStrings(
               kPrestoFloatingPointValidUdf, input, {boolType}, stream, tempMr)
@@ -3826,25 +3830,6 @@ bool requiresCpuForTimezone(
   return false;
 }
 
-// Returns true if the tree casts from VARCHAR; with 'floatingPointOnly', if it
-// casts from VARCHAR to REAL or DOUBLE.
-bool containsCastFromVarchar(
-    const core::TypedExprPtr& expr,
-    bool floatingPointOnly) {
-  if (expr->isCastKind() && !expr->inputs().empty() &&
-      expr->inputs()[0]->type()->isVarchar() &&
-      (!floatingPointOnly || expr->type()->isReal() ||
-       expr->type()->isDouble())) {
-    return true;
-  }
-  for (const auto& input : expr->inputs()) {
-    if (containsCastFromVarchar(input, floatingPointOnly)) {
-      return true;
-    }
-  }
-  return false;
-}
-
 // Returns true if 'expr' must stay on the CPU because it casts from VARCHAR
 // while a session config selects rules CastFunction does not implement:
 // legacy_cast, for every target, and
@@ -3895,6 +3880,23 @@ bool canOptimizedExprRunOnGpu(
 }
 
 } // namespace
+
+bool containsCastFromVarchar(
+    const core::TypedExprPtr& expr,
+    bool floatingPointOnly) {
+  if (expr->isCastKind() && !expr->inputs().empty() &&
+      expr->inputs()[0]->type()->isVarchar() &&
+      (!floatingPointOnly || expr->type()->isReal() ||
+       expr->type()->isDouble())) {
+    return true;
+  }
+  for (const auto& input : expr->inputs()) {
+    if (containsCastFromVarchar(input, floatingPointOnly)) {
+      return true;
+    }
+  }
+  return false;
+}
 
 bool canExprRunOnGpu(
     const core::TypedExprPtr& expr,

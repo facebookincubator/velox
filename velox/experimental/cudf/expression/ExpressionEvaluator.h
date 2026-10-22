@@ -233,6 +233,12 @@ bool canJoinFilterRunOnGpu(
     core::QueryCtx* queryCtx,
     memory::MemoryPool* pool);
 
+/// Returns true if 'expr' holds a CAST or TRY_CAST from VARCHAR; with
+/// 'floatingPointOnly', one to REAL or DOUBLE.
+bool containsCastFromVarchar(
+    const core::TypedExprPtr& expr,
+    bool floatingPointOnly);
+
 /// Extract the full field path from a field access / dereference chain.
 /// Returns nullopt for non-field expressions.
 std::optional<std::vector<std::string>> extractFieldPath(
