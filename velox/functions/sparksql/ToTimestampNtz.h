@@ -17,6 +17,7 @@
 
 #include "velox/functions/sparksql/AnsiMode.h"
 #include "velox/functions/sparksql/SparkQueryConfig.h"
+#include "velox/functions/sparksql/TimestampUtils.h"
 #include "velox/type/TimestampConversion.h"
 
 namespace facebook::velox::functions::sparksql {
@@ -41,6 +42,13 @@ struct ToTimestampNtzFunction {
         input, util::TimestampParseMode::kSparkCast);
     if (parsed.hasError()) {
       ansiUserFail(ansiEnabled_, "{}", parsed.error().message());
+      return false;
+    }
+    if (!isWithinSparkTimestampRange(parsed.value().timestamp)) {
+      ansiUserFail(
+          ansiEnabled_,
+          "Timestamp out of range: {}",
+          parsed.value().timestamp.toString());
       return false;
     }
     result = parsed.value().timestamp;

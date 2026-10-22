@@ -45,7 +45,7 @@ struct GetTimestampFunction {
     }
     if (format != nullptr) {
       auto formatter = detail::initializeFormatter(
-          std::string_view(*format), legacyFormatter_);
+          std::string_view(*format), legacyFormatter_, kFormatterType);
       if (formatter) {
         formatter_ = formatter;
       } else {
@@ -64,7 +64,7 @@ struct GetTimestampFunction {
     }
     if (!isConstantTimeFormat_) {
       auto formatter = detail::initializeFormatter(
-          std::string_view(format), legacyFormatter_);
+          std::string_view(format), legacyFormatter_, kFormatterType);
       if (formatter) {
         formatter_ = formatter;
       } else {
@@ -81,6 +81,12 @@ struct GetTimestampFunction {
     if constexpr (std::is_same_v<TTimestamp, Timestamp>) {
       toGMTWithGapCorrection(
           (*dateTimeResult).timestamp, *getTimeZone(*dateTimeResult));
+    } else {
+      // Spark never catches overflow here, regardless of ANSI mode.
+      VELOX_USER_CHECK(
+          isWithinSparkTimestampRange((*dateTimeResult).timestamp),
+          "Timestamp out of range: {}",
+          (*dateTimeResult).timestamp.toString());
     }
     result = (*dateTimeResult).timestamp;
     return true;
@@ -90,6 +96,11 @@ struct GetTimestampFunction {
   const tz::TimeZone* getTimeZone(const DateTimeResult& result) const {
     return result.timezone ? result.timezone : sessionTimeZone_;
   }
+
+  static constexpr DateTimeFormatterType kFormatterType =
+      std::is_same_v<TTimestamp, TimestampUtc>
+      ? DateTimeFormatterType::SPARK_ISO
+      : DateTimeFormatterType::JODA;
 
   std::shared_ptr<DateTimeFormatter> formatter_{nullptr};
   bool isConstantTimeFormat_{false};
