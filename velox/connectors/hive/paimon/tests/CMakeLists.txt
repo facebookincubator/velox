@@ -13,6 +13,15 @@
 # limitations under the License.
 
 if(NOT VELOX_DISABLE_GOOGLETEST)
+  add_executable(velox_hive_paimon_schema_test PaimonSchemaTest.cpp)
+  add_test(velox_hive_paimon_schema_test velox_hive_paimon_schema_test)
+  target_link_libraries(
+    velox_hive_paimon_schema_test
+    velox_hive_paimon_schema
+    GTest::gtest
+    GTest::gtest_main
+  )
+
   add_executable(velox_hive_paimon_connector_test PaimonConnectorTest.cpp)
   add_test(velox_hive_paimon_connector_test velox_hive_paimon_connector_test)
   target_link_libraries(
