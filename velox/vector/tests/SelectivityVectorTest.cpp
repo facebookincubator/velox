@@ -175,6 +175,48 @@ TEST(SelectivityVectorTest, deselect) {
   ASSERT_NO_FATAL_FAILURE(assertState(expected, vector));
 }
 
+TEST(SelectivityVectorTest, complement) {
+  for (const auto sourceSize : {0, 1, 63, 64, 65, 130}) {
+    for (const auto targetSize : {0, 1, 63, 64, 65, 129, 130, 131}) {
+      for (const auto pattern : {0, 1, 2}) {
+        SCOPED_TRACE(
+            ::testing::Message()
+            << "sourceSize=" << sourceSize << ", targetSize=" << targetSize
+            << ", pattern=" << pattern);
+        SelectivityVector rows(sourceSize);
+        std::vector<bool> original(sourceSize);
+        for (auto row = 0; row < sourceSize; ++row) {
+          original[row] = pattern == 0 || (pattern == 1 && row % 3 == 0);
+          rows.setValid(row, original[row]);
+        }
+        rows.updateBounds();
+
+        std::vector<bool> expected(targetSize, true);
+        for (auto row = 0; row < std::min(sourceSize, targetSize); ++row) {
+          expected[row] = !original[row];
+        }
+        const auto result = rows.complement(targetSize);
+        assertState(expected, result);
+        assertState(original, rows);
+        EXPECT_EQ(
+            bits::countBits(
+                result.allBits(), targetSize, bits::nwords(targetSize) * 64),
+            0);
+        if (targetSize == sourceSize) {
+          assertState(expected, rows.complement());
+        }
+      }
+    }
+  }
+
+  // setFromBits can shrink the logical size while retaining stale words.
+  SelectivityVector rows(130);
+  const uint64_t words[] = {0, 0};
+  rows.setFromBits(words, 65);
+  assertState(std::vector<bool>(65, true), rows.complement());
+  assertState(std::vector<bool>(131, true), rows.complement(131));
+}
+
 TEST(SelectivityVectorTest, deselectTwice) {
   const size_t vectorSize = 1;
   SelectivityVector vector(vectorSize);
