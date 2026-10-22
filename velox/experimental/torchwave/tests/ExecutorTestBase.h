@@ -149,6 +149,18 @@ class ExecutorTestBase : public ::testing::Test {
       nativert::ExecutionFrame& frame,
       const std::vector<c10::IValue>& deviceInputs);
 
+  /// Resets 'frame' and refills 'deviceInputs' into it, for a second execution
+  /// over a frame an earlier execution already ran on. Both halves are
+  /// required, which is why they are one call: without the reset the run starts
+  /// from the previous execution's outputs, every standalone op is skipped as
+  /// already computed (see nodeOutputsComputed), and the repeat silently
+  /// reports the previous run's results at a fraction of its cost.
+  void refillWaveFrame(
+      WaveGraphExecutor& executor,
+      const nativert::Graph& graph,
+      nativert::ExecutionFrame& frame,
+      const std::vector<c10::IValue>& deviceInputs);
+
   /// Runs a .pt2 model through the WaveGraphExecutor on device.
   /// Verifies outputs match 'expected' and returns timing. If 'alterInputs'
   /// is set, it is called after filling the frame but before execution,

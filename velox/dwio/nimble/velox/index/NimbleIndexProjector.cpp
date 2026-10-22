@@ -176,19 +176,17 @@ void writeTabletTrailer(
 
 std::unique_ptr<DataInput> createDataInput(
     const velox::FileHandle& fileHandle,
-    const velox::dwio::common::ReaderOptions& options) {
-  if (options.cacheData()) {
-    NIMBLE_CHECK_NOT_NULL(
-        options.cache(),
-        "NimbleIndexProjector data caching requires ReaderOptions::cache");
-    CachedDataInput::Options dataInputOptions{
-        .pool = &options.memoryPool(),
-        .cache = options.cache(),
-        .fileId = fileHandle.uuid.id(),
-        .ioStats = options.dataIoStats(),
-    };
+    const velox::dwio::common::ReaderOptions& options,
+    BlockCache* blockCache) {
+  if (blockCache != nullptr) {
     return std::make_unique<CachedDataInput>(
-        fileHandle.file.get(), dataInputOptions);
+        fileHandle.file.get(),
+        CachedDataInput::Options{
+            .pool = &options.memoryPool(),
+            .cache = blockCache,
+            .fileId = fileHandle.uuid.id(),
+            .ioStats = options.dataIoStats(),
+        });
   }
 
   DirectDataInput::Options dataInputOptions;
@@ -210,6 +208,7 @@ std::unique_ptr<NimbleIndexProjector> NimbleIndexProjector::create(
     TabletReaderCache& tabletReaderCache,
     const velox::FileHandle& fileHandle,
     const std::vector<Subfield>& projectedSubfields,
+    BlockCache* blockCache,
     const velox::dwio::common::ReaderOptions& options) {
   validateReaderOptions(options);
   auto cached = tabletReaderCache.get(
@@ -223,13 +222,19 @@ std::unique_ptr<NimbleIndexProjector> NimbleIndexProjector::create(
   // them -- so an entry that retired while this projector was still reading
   // would leave the rest of its IO reported by nobody.
   auto tablet = std::shared_ptr<TabletReader>(cached, cached->tablet().get());
-  return create(std::move(tablet), fileHandle, std::move(projection), options);
+  return create(
+      std::move(tablet),
+      fileHandle,
+      std::move(projection),
+      blockCache,
+      options);
 }
 
 std::unique_ptr<NimbleIndexProjector> NimbleIndexProjector::create(
     std::shared_ptr<TabletReader> tablet,
     const velox::FileHandle& fileHandle,
     std::shared_ptr<const NimbleTypeProjection> projection,
+    BlockCache* blockCache,
     const velox::dwio::common::ReaderOptions& options) {
   validateReaderOptions(options);
   NIMBLE_CHECK_NOT_NULL(tablet);
@@ -237,7 +242,7 @@ std::unique_ptr<NimbleIndexProjector> NimbleIndexProjector::create(
   return std::unique_ptr<NimbleIndexProjector>(new NimbleIndexProjector(
       std::move(tablet),
       fileHandle.file,
-      createDataInput(fileHandle, options),
+      createDataInput(fileHandle, options, blockCache),
       std::move(projection),
       &options.memoryPool(),
       options.dataIoStats(),

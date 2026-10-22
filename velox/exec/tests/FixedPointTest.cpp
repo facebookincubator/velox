@@ -1929,7 +1929,7 @@ TEST_F(FixedPointTest, verdictFailures) {
               .project({"a0 >= 0"})
               .planNode(),
           /*maxIterations=*/100)),
-      "A verdict plan must produce one row");
+      "The convergence sequence must produce exactly one row");
 
   auto options = localOptions();
   options.publishVerdict =
@@ -4865,14 +4865,11 @@ TEST_F(FixedPointTest, startRequiresParallelMode) {
 }
 
 // The node validates that the convergence sequence emits one BOOLEAN *column*,
-// but the row count is a runtime property it cannot see.  A sequence that emits
-// several rows would otherwise decide the loop on whichever batch arrived
-// first, so the task rejects it instead.
+// but the row count is a runtime property it cannot see, so the task rejects a
+// sequence that emits several rows or none.
 TEST_F(FixedPointTest, convergenceMustProduceOneRow) {
   auto schema = ROW({"key", "val"}, BIGINT());
   auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  // Two state rows, and a convergence plan that projects per row rather than
-  // aggregating -- two verdicts for one loop.
   auto seed = makeRowVector(
       schema->names(),
       {
@@ -4880,27 +4877,39 @@ TEST_F(FixedPointTest, convergenceMustProduceOneRow) {
           makeFlatVector<int64_t>({0, 0}),
       });
 
+  auto run = [&](const std::string& filter) {
+    return runViaTask(
+        PlanBuilder(idGenerator)
+            .fixedPoint(
+                std::make_shared<VectorStateDeclaration>(
+                    "values",
+                    schema,
+                    PlanBuilder(idGenerator).values({seed}).planNode()),
+                PlanBuilder(idGenerator)
+                    .stateSource("values", schema)
+                    .project({"key", "val + 1 AS val"}),
+                ConvergenceConfig::converging(
+                    PlanBuilder(idGenerator)
+                        .stateSource("values", schema)
+                        .filter(filter)
+                        .project({"val >= 3 AS converged"})
+                        .planNode(),
+                    100),
+                /*outputStateEntry=*/"values")
+            .planNode(),
+        exec::Task::ExecutionMode::kSerial);
+  };
+
+  // A row per state row: two verdicts for one loop.
   VELOX_ASSERT_THROW(
-      runViaTask(
-          PlanBuilder(idGenerator)
-              .fixedPoint(
-                  std::make_shared<VectorStateDeclaration>(
-                      "values",
-                      schema,
-                      PlanBuilder(idGenerator).values({seed}).planNode()),
-                  PlanBuilder(idGenerator)
-                      .stateSource("values", schema)
-                      .project({"key", "val + 1 AS val"}),
-                  ConvergenceConfig::converging(
-                      PlanBuilder(idGenerator)
-                          .stateSource("values", schema)
-                          .project({"val >= 3 AS converged"})
-                          .planNode(),
-                      100),
-                  /*outputStateEntry=*/"values")
-              .planNode(),
-          exec::Task::ExecutionMode::kSerial),
-      "The convergence sequence must produce at most one row; aggregate it "
+      run("true"),
+      "The convergence sequence must produce exactly one row; aggregate it "
+      "to a single verdict");
+
+  // No row: no verdict.
+  VELOX_ASSERT_THROW(
+      run("val < 0"),
+      "The convergence sequence must produce exactly one row; aggregate it "
       "to a single verdict");
 }
 

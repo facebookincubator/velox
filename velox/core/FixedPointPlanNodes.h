@@ -232,9 +232,9 @@ class HashTableState {
 ///   sum(active) == 0    -> no changes          (CC)
 ///   max(delta) < eps    -> centroids settled   (KMeans)
 ///
-/// When the convergence state entry is empty the plan may emit zero rows; the
-/// framework treats "no output row" as converged (the canonical empty-frontier
-/// terminal state).  maxIterations (a ConvergenceConfig field below) is always
+/// The plan that produces the verdict must produce exactly one non-NULL row, or
+/// the fixed point fails; a global aggregation produces one row even over an
+/// empty state.  maxIterations (a ConvergenceConfig field below) is always
 /// active as a safety bound.
 ///
 /// Multi-worker contract: for a fixed point that runs as N > 1 peers, every
@@ -262,8 +262,8 @@ struct ConvergenceConfig {
 
   /// Runs only on worker 0, after 'plans' run on every worker.  Starts with an
   /// Exchange that reads the rows the last of 'plans' gathered from every
-  /// worker, and produces exactly one BOOLEAN output column, the verdict.
-  /// Worker 0 shares it with the other workers (see
+  /// worker, and produces exactly one row with one BOOLEAN output column, the
+  /// verdict.  Worker 0 shares it with the other workers (see
   /// FixedPointOptions::publishVerdict), so all of them stop on the same
   /// iteration.  Requires non-empty 'plans'.  A fixed point nested in it runs
   /// on worker 0 alone, so it cannot shuffle across workers.
