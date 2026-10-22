@@ -33,9 +33,10 @@ namespace facebook::velox::cudf_velox::prestosql {
 /// gives the epoch, and an input at or past Timestamp::kMaxSeconds or
 /// kMinSeconds, infinity included, takes the extreme millisecond timestamp.
 /// The result then takes the configured cuDF timestamp unit: a millisecond
-/// the unit cannot hold is pinned to the last millisecond it can, and the
-/// seconds unit keeps the floor of the seconds, as a Velox timestamp converts
-/// to it. The forms that return TIMESTAMP WITH TIME ZONE stay on the CPU.
+/// outside the range of the unit raises a user error, as converting a Velox
+/// timestamp to that unit does, and the seconds unit keeps the floor of the
+/// seconds, as a Velox timestamp converts to it. The forms that return
+/// TIMESTAMP WITH TIME ZONE stay on the CPU.
 class FromUnixtimeFunction : public CudfFunction {
  public:
   /// Returns true if expr is from_unixtime over a non-constant DOUBLE with a

@@ -34,6 +34,7 @@
 
 #include <atomic>
 #include <limits>
+#include <string_view>
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
@@ -1469,69 +1470,85 @@ TEST_F(CudfFilterProjectTest, fromUnixtimeMatchesVelox) {
 TEST_F(CudfFilterProjectTest, fromUnixtimeBeyondRange) {
   // The CPU pins an input at or past Timestamp::kMaxSeconds or kMinSeconds,
   // infinity included, to the extreme millisecond timestamp, which the
-  // millisecond unit holds, so that unit matches the CPU on every row. A
-  // finer unit holds a narrower range and pins to the last millisecond it
-  // holds, with 9223372036.0 and -9223372036.5 inside the nanosecond range
-  // and 9223372036.9 and -9223372036.9 just outside it.
+  // millisecond unit holds, so that unit matches the CPU on every row. The
+  // microsecond and nanosecond units hold a narrower range. A row inside it
+  // matches the CPU, and a row past it fails the batch with a user error, as
+  // converting the CPU's timestamp to the unit does. The nanosecond rows sit
+  // on the last millisecond inside the range and the first past it; the
+  // microsecond rows sit a second on either side, since doubles near that
+  // limit are 2 ms apart. 1e10, a date in 2286, is past the nanosecond range.
   constexpr double kInfinity = std::numeric_limits<double>::infinity();
-  auto input = makeRowVector(
-      {"seconds"},
-      {makeFlatVector<double>({
-          kInfinity,
-          -kInfinity,
-          1e300,
-          -1e300,
-          9223372036.0,
-          -9223372036.5,
-          9223372036.9,
-          -9223372036.9,
-      })});
   auto& config = cudf_velox::CudfConfig::getInstance();
   const auto originalUnit = config.timestampUnit;
   SCOPE_EXIT {
     config.timestampUnit = originalUnit;
   };
-
-  config.timestampUnit = cudf::type_id::TIMESTAMP_MILLISECONDS;
-  assertProjectMatchesVelox({input}, {"from_unixtime(seconds) AS ts"});
-
-  auto assertPinned = [&](cudf::type_id unit,
-                          const std::vector<Timestamp>& expectedTimestamps) {
-    SCOPED_TRACE("unit=" + std::to_string(static_cast<int32_t>(unit)));
-    config.timestampUnit = unit;
+  auto makeInput = [&](const std::vector<double>& seconds) {
+    return makeRowVector({"seconds"}, {makeFlatVector<double>(seconds)});
+  };
+  // A null row never reaches the kernel, whatever value its slot holds.
+  auto nullSlotPastRange = makeFlatVector<double>({1e300, 0.0});
+  nullSlotPastRange->setNull(0, true);
+  auto nullRowInput = makeRowVector({"seconds"}, {nullSlotPastRange});
+  auto assertOutOfRange = [&](double seconds, std::string_view unitName) {
+    SCOPED_TRACE(fmt::format("unit={} seconds={}", unitName, seconds));
+    auto input = makeRowVector(
+        {"seconds"},
+        {makeNullableFlatVector<double>({std::nullopt, 0.0, seconds})});
     auto plan = PlanBuilder()
                     .values({input})
                     .project({"from_unixtime(seconds) AS ts"})
                     .planNode();
-    AssertQueryBuilder(plan).assertResults(makeRowVector(
-        {makeFlatVector<Timestamp>(expectedTimestamps, TIMESTAMP())}));
+    VELOX_ASSERT_USER_THROW(
+        AssertQueryBuilder(plan).copyResults(pool()),
+        fmt::format(
+            "from_unixtime result is out of range for the cuDF timestamp "
+            "unit set by cudf.timestamp_unit: {}",
+            unitName));
   };
 
-  const Timestamp maxNanos(9'223'372'036, 854'000'000);
-  const Timestamp minNanos(-9'223'372'037, 146'000'000);
-  assertPinned(
-      cudf::type_id::TIMESTAMP_NANOSECONDS,
-      {maxNanos,
-       minNanos,
-       maxNanos,
-       minNanos,
-       Timestamp(9'223'372'036, 0),
-       Timestamp(-9'223'372'037, 500'000'000),
-       maxNanos,
-       minNanos});
+  config.timestampUnit = cudf::type_id::TIMESTAMP_MILLISECONDS;
+  assertProjectMatchesVelox(
+      {makeInput(
+           {kInfinity,
+            -kInfinity,
+            1e300,
+            -1e300,
+            1e10,
+            9'223'372'036'855.0,
+            -9'223'372'036'855.0}),
+       nullRowInput},
+      {"from_unixtime(seconds) AS ts"});
 
-  const Timestamp maxMicros(9'223'372'036'854, 775'000'000);
-  const Timestamp minMicros(-9'223'372'036'855, 225'000'000);
-  assertPinned(
-      cudf::type_id::TIMESTAMP_MICROSECONDS,
-      {maxMicros,
-       minMicros,
-       maxMicros,
-       minMicros,
-       Timestamp(9'223'372'036, 0),
-       Timestamp(-9'223'372'037, 500'000'000),
-       Timestamp(9'223'372'036, 900'000'000),
-       Timestamp(-9'223'372'037, 100'000'000)});
+  config.timestampUnit = cudf::type_id::TIMESTAMP_MICROSECONDS;
+  assertProjectMatchesVelox(
+      {makeInput({9'223'372'036'854.0, -9'223'372'036'854.0, 1e10}),
+       nullRowInput},
+      {"from_unixtime(seconds) AS ts"});
+  for (const double seconds :
+       {9'223'372'036'855.0,
+        -9'223'372'036'855.0,
+        1e300,
+        -1e300,
+        kInfinity,
+        -kInfinity}) {
+    assertOutOfRange(seconds, "us");
+  }
+
+  config.timestampUnit = cudf::type_id::TIMESTAMP_NANOSECONDS;
+  assertProjectMatchesVelox(
+      {makeInput({9'223'372'036.854, -9'223'372'036.854}), nullRowInput},
+      {"from_unixtime(seconds) AS ts"});
+  for (const double seconds :
+       {9'223'372'036.855,
+        -9'223'372'036.855,
+        1e10,
+        1e300,
+        -1e300,
+        kInfinity,
+        -kInfinity}) {
+    assertOutOfRange(seconds, "ns");
+  }
 }
 
 TEST_F(CudfFilterProjectTest, fromUnixtimeSecondsUnit) {

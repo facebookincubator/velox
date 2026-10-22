@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/expression/AstUtils.h"
@@ -25,8 +26,11 @@
 #include <cudf/column/column_view.hpp>
 #include <cudf/column/scalar_column_view.hpp>
 #include <cudf/transform.hpp>
+#include <cudf/utilities/error.hpp>
 
+#include <algorithm>
 #include <array>
+#include <iterator>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -35,36 +39,36 @@
 namespace facebook::velox::cudf_velox::prestosql {
 namespace {
 
-constexpr std::array<cudf::type_id, 4> kTimestampUnits{
-    cudf::type_id::TIMESTAMP_SECONDS,
-    cudf::type_id::TIMESTAMP_MILLISECONDS,
-    cudf::type_id::TIMESTAMP_MICROSECONDS,
-    cudf::type_id::TIMESTAMP_NANOSECONDS,
+// A cuDF timestamp unit, with the spelling cudf.timestamp_unit takes for it.
+struct TimestampUnit {
+  cudf::type_id type;
+  int64_t ticksPerSecond;
+  std::string_view name;
 };
 
-constexpr std::array<int64_t, 4> kTicksPerSecond{
-    1,
-    1'000,
-    1'000'000,
-    1'000'000'000,
-};
+constexpr std::array<TimestampUnit, 4> kTimestampUnits{{
+    {cudf::type_id::TIMESTAMP_SECONDS, 1, "s"},
+    {cudf::type_id::TIMESTAMP_MILLISECONDS, 1'000, "ms"},
+    {cudf::type_id::TIMESTAMP_MICROSECONDS, 1'000'000, "us"},
+    {cudf::type_id::TIMESTAMP_NANOSECONDS, 1'000'000'000, "ns"},
+}};
 
-// Position of a cuDF timestamp type in kTimestampUnits and kTicksPerSecond.
+// Position of a cuDF timestamp type in kTimestampUnits.
 size_t unitIndex(cudf::data_type type) {
-  for (size_t i = 0; i < kTimestampUnits.size(); ++i) {
-    if (kTimestampUnits[i] == type.id()) {
-      return i;
-    }
-  }
-  VELOX_FAIL(
-      "Unsupported cuDF timestamp type: {}", static_cast<int32_t>(type.id()));
+  const auto unit =
+      std::ranges::find(kTimestampUnits, type.id(), &TimestampUnit::type);
+  VELOX_CHECK(
+      unit != kTimestampUnits.end(),
+      "Unsupported cuDF timestamp type: {}",
+      static_cast<int32_t>(type.id()));
+  return std::ranges::distance(kTimestampUnits.begin(), unit);
 }
 
 std::unique_ptr<cudf::numeric_scalar<int64_t>> makeTicksPerSecondScalar(
-    size_t unit) {
+    int64_t ticksPerSecond) {
   return std::unique_ptr<cudf::numeric_scalar<int64_t>>(
       static_cast<cudf::numeric_scalar<int64_t>*>(
-          makeScalarFromValue<int64_t>(BIGINT(), kTicksPerSecond[unit], false)
+          makeScalarFromValue<int64_t>(BIGINT(), ticksPerSecond, false)
               .release()));
 }
 
@@ -108,14 +112,17 @@ std::unique_ptr<cudf::column> transformWithTicksPerSecond(
 // Repeats fromUnixtime() in velox/functions/prestosql/DateTimeImpl.h to the
 // CPU's millisecond timestamp, then scales it to the unit of the result. The
 // CPU's bounds, Timestamp::kMaxSeconds and kMinSeconds, keep the millisecond
-// arithmetic inside int64.
+// arithmetic inside int64. A millisecond outside the range of the unit is
+// returned as an overflow, which cudf::transform raises once the kernel ends.
+// TODO: Reuse fromUnixtime() and toUnixtime() from a compiled kernel once
+// DateTimeImpl.h builds under nvcc (#17266), and drop these copies.
 constexpr std::string_view kFromUnixtimeUdf = R"***(
-__device__ void velox_from_unixtime(
+__device__ cudf::errc velox_from_unixtime(
     int64_t* out, double unixtime, int64_t ticksPerSecond) {
-  constexpr int64_t kMaxMillis = 9223372036854775807LL;
+  constexpr int64_t kMaxMillis = 9'223'372'036'854'775'807LL;
   constexpr int64_t kMinMillis = -kMaxMillis - 1;
-  constexpr int64_t kMaxSeconds = kMaxMillis / 1000;
-  constexpr int64_t kMinSeconds = kMinMillis / 1000 - 1;
+  constexpr int64_t kMaxSeconds = kMaxMillis / 1'000;
+  constexpr int64_t kMinSeconds = kMinMillis / 1'000 - 1;
   int64_t millis;
   if (isnan(unixtime)) {
     millis = 0;
@@ -125,26 +132,24 @@ __device__ void velox_from_unixtime(
     millis = kMinMillis;
   } else {
     double seconds = floor(unixtime);
-    long long fraction = llround((unixtime - seconds) * 1000.0);
-    if (fraction == 1000) {
+    long long fraction = llround((unixtime - seconds) * 1'000.0);
+    if (fraction == 1'000) {
       seconds += 1.0;
       fraction = 0;
     }
-    millis = static_cast<int64_t>(seconds) * 1000 + fraction;
+    millis = static_cast<int64_t>(seconds) * 1'000 + fraction;
   }
   if (ticksPerSecond == 1) {
-    *out = millis / 1000 - (millis % 1000 < 0 ? 1 : 0);
-    return;
+    *out = millis / 1'000 - (millis % 1'000 < 0 ? 1 : 0);
+    return cudf::errc::SUCCESS;
   }
-  const int64_t ticksPerMilli = ticksPerSecond / 1000;
-  const int64_t maxHeldMillis = kMaxMillis / ticksPerMilli;
-  const int64_t minHeldMillis = kMinMillis / ticksPerMilli;
-  if (millis > maxHeldMillis) {
-    millis = maxHeldMillis;
-  } else if (millis < minHeldMillis) {
-    millis = minHeldMillis;
+  const int64_t ticksPerMilli = ticksPerSecond / 1'000;
+  if (millis > kMaxMillis / ticksPerMilli ||
+      millis < kMinMillis / ticksPerMilli) {
+    return cudf::errc::ARITHMETIC_OVERFLOW;
   }
   *out = millis * ticksPerMilli;
+  return cudf::errc::SUCCESS;
 }
 )***";
 
@@ -160,9 +165,9 @@ __device__ void velox_to_unixtime(
     subSecondTicks += ticksPerSecond;
     seconds -= 1;
   }
-  const int64_t nanos = subSecondTicks * (1000000000LL / ticksPerSecond);
+  const int64_t nanos = subSecondTicks * (1'000'000'000LL / ticksPerSecond);
   double result = static_cast<double>(seconds);
-  result += static_cast<double>(nanos) / 1000000000.0;
+  result += static_cast<double>(nanos) / 1'000'000'000.0;
   *out = result;
 }
 )***";
@@ -185,20 +190,32 @@ FromUnixtimeFunction::FromUnixtimeFunction(
       "from_unixtime expression cannot be evaluated by "
       "prestosql::FromUnixtimeFunction");
   timestampType_ = veloxToCudfDataType(expr->type());
-  ticksPerSecond_ = makeTicksPerSecondScalar(unitIndex(timestampType_));
+  ticksPerSecond_ = makeTicksPerSecondScalar(
+      kTimestampUnits[unitIndex(timestampType_)].ticksPerSecond);
 }
 
 ColumnOrView FromUnixtimeFunction::eval(
     std::vector<ColumnOrView>& inputColumns,
     cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) const {
-  auto ticks = transformWithTicksPerSecond(
-      kFromUnixtimeUdf,
-      asView(inputColumns[0]),
-      *ticksPerSecond_,
-      cudf::data_type{cudf::type_id::INT64},
-      stream,
-      mr);
+  std::unique_ptr<cudf::column> ticks;
+  try {
+    ticks = transformWithTicksPerSecond(
+        kFromUnixtimeUdf,
+        asView(inputColumns[0]),
+        *ticksPerSecond_,
+        cudf::data_type{cudf::type_id::INT64},
+        stream,
+        mr);
+  } catch (const cudf::evaluation_error&) {
+    // The only error the kernel returns is a millisecond outside the range of
+    // the unit, which converting a Velox timestamp to the unit rejects too.
+    VELOX_USER_FAIL(
+        "from_unixtime result is out of range for the cuDF timestamp unit "
+        "set by {}: {}",
+        CudfConfig::kCudfTimestampUnit,
+        kTimestampUnits[unitIndex(timestampType_)].name);
+  }
   // The kernel writes the ticks of timestampType_, so the timestamp column
   // takes over the INT64 buffers as they are.
   const auto numRows = ticks->size();
@@ -228,7 +245,8 @@ ToUnixtimeFunction::ToUnixtimeFunction(
       "to_unixtime expression cannot be evaluated by "
       "prestosql::ToUnixtimeFunction");
   for (size_t unit = 0; unit < kTimestampUnits.size(); ++unit) {
-    ticksPerSecond_[unit] = makeTicksPerSecondScalar(unit);
+    ticksPerSecond_[unit] =
+        makeTicksPerSecondScalar(kTimestampUnits[unit].ticksPerSecond);
   }
 }
 
