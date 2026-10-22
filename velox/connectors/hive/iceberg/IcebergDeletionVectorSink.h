@@ -90,6 +90,9 @@ class IcebergDeletionVectorSink : public DataSink {
   struct PerFileState {
     DeletionVectorWriter writer;
     std::string partitionData;
+    // Spec id of the data file's partition spec, which may predate the
+    // table's current spec.
+    int64_t partitionSpecId{0};
   };
 
  private:
@@ -108,10 +111,12 @@ class IcebergDeletionVectorSink : public DataSink {
   // 'partitionData' is the row-id's partition_data field for the current row;
   // it is recorded on first creation and must agree on later rows for the
   // same file (same data file implies same partition). May be empty for
-  // unpartitioned tables.
+  // unpartitioned tables. 'partitionSpecId' is the data file's spec id,
+  // under the same agreement.
   PerFileState& findOrCreatePerFile(
       const std::string& path,
-      std::string partitionData);
+      std::string partitionData,
+      int64_t partitionSpecId);
 
   // Reads the existing deletion vector for 'dataFile' (as described by the
   // insert handle) and adds its positions to 'state.writer' exactly once.

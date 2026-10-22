@@ -160,6 +160,8 @@ void NimbleIndexProjectorTestBase::TearDown() {
   rootPool_.reset();
   ioExecutor_.reset();
   TabletReaderCache::testingReset();
+  blockCache_ = nullptr;
+  testingResetBlockCache();
 }
 
 RowTypePtr NimbleIndexProjectorTestBase::singleFeatureRowType() {
@@ -446,8 +448,15 @@ NimbleIndexProjectorTestBase::createProjectorWithFileHandle(
       cacheData,
       verifyStreamChecksums);
   ensureTabletReaderCache();
+  if (cacheData && blockCache_ == nullptr) {
+    blockCache_ = getBlockCache(velox::checkedNotNull(dataCache()));
+  }
   return NimbleIndexProjector::create(
-      *tabletReaderCache_, fileHandle, projectedSubfields, readerOptions);
+      *tabletReaderCache_,
+      fileHandle,
+      projectedSubfields,
+      cacheData ? blockCache_ : nullptr,
+      readerOptions);
 }
 
 void NimbleIndexProjectorTestBase::configureReaderOptions(

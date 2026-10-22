@@ -46,6 +46,7 @@
 
 namespace facebook::nimble {
 
+class BlockCache;
 class StreamReader;
 class TabletReaderCache;
 namespace serde {
@@ -100,20 +101,32 @@ class NimbleIndexProjector {
   /// Destroys the projector and its cached stream slicer.
   ~NimbleIndexProjector();
 
+  /// Creates a projector over the tablet reader entry held by
+  /// `tabletReaderCache` for `fileHandle`.
+  ///
+  /// When `blockCache` is non-null, stripe data reads route through
+  /// `CachedDataInput` against the caller-owned cache; otherwise reads use
+  /// `DirectDataInput` with no caching. The cache must outlive the projector.
+  ///
   // TODO: projectedSubfields currently must match file schema column names.
   // Add table-to-file column name mapping for schema evolution support.
   static std::unique_ptr<NimbleIndexProjector> create(
       TabletReaderCache& tabletReaderCache,
       const velox::FileHandle& fileHandle,
       const std::vector<Subfield>& projectedSubfields,
+      BlockCache* blockCache,
       const velox::dwio::common::ReaderOptions& options);
 
   /// Creates a projector with projection metadata built by the caller.
   /// The projection must have been built from the schema of `tablet`.
+  /// When `blockCache` is non-null, stripe data reads route through
+  /// `CachedDataInput` against the caller-owned cache; otherwise reads use
+  /// `DirectDataInput` with no caching. The cache must outlive the projector.
   static std::unique_ptr<NimbleIndexProjector> create(
       std::shared_ptr<TabletReader> tablet,
       const velox::FileHandle& fileHandle,
       std::shared_ptr<const NimbleTypeProjection> projection,
+      BlockCache* blockCache,
       const velox::dwio::common::ReaderOptions& options);
 
   /// Options for controlling projection behavior.

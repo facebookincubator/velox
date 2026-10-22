@@ -199,7 +199,7 @@ void TableWriter::addInput(RowVectorPtr input) {
       input->getNullCount());
 
   dataSink_->appendData(mappedInput);
-  numWrittenRows_ += input->size();
+  numWrittenRows_ += dataSink_->numChangedRows(*mappedInput);
   updateStats(dataSink_->stats());
 
   if (statsCollector_ != nullptr) {

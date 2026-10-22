@@ -36,9 +36,10 @@ namespace {
 constexpr int32_t kFilePathChannel = 0;
 constexpr int32_t kPositionChannel = 1;
 constexpr int32_t kExpectedChannelCount = 2;
-// Index of the partition_data field in the 4-field Iceberg row-id ROW
-// ROW<file_path, pos, spec_id, partition_data>. Only meaningful on the
+// Index of the spec_id and partition_data fields in the 4-field Iceberg row-id
+// ROW ROW<file_path, pos, spec_id, partition_data>. Only meaningful on the
 // row-id-struct path; the legacy flat path carries no partition.
+constexpr int32_t kSpecIdChannel = 2;
 constexpr int32_t kPartitionDataChannel = 3;
 
 // Builds the JSON commit fragment the coordinator consumes for one written
@@ -71,6 +72,12 @@ std::string buildDeletionVectorCommitMessage(
   msg["contentOffset"] = static_cast<int64_t>(contentOffset);
   msg["contentSizeInBytes"] = static_cast<int64_t>(contentLength);
   return folly::toJson(msg);
+}
+
+// Spec id of the table's current partition spec; 0, the default unpartitioned
+// spec id, when the handle has no spec.
+int64_t currentPartitionSpecId(const IcebergInsertTableHandle& handle) {
+  return handle.partitionSpec() ? handle.partitionSpec()->specId : 0;
 }
 
 } // namespace
@@ -173,8 +180,12 @@ void IcebergDeletionVectorSink::appendData(RowVectorPtr input) {
     VELOX_USER_CHECK(
         rowId->childAt(kPartitionDataChannel)->type()->isVarchar(),
         "row-id partition_data field must be VARCHAR");
+    VELOX_USER_CHECK(
+        rowId->childAt(kSpecIdChannel)->type()->isInteger(),
+        "row-id spec_id field must be INTEGER");
     DecodedVector decodedPartitionData(
         *rowId->childAt(kPartitionDataChannel), baseRows);
+    DecodedVector decodedSpecId(*rowId->childAt(kSpecIdChannel), baseRows);
     for (vector_size_t i = 0; i < numRows; ++i) {
       if (decodedRowId.isNullAt(i)) {
         continue;
@@ -195,9 +206,12 @@ void IcebergDeletionVectorSink::appendData(RowVectorPtr input) {
         partitionData =
             std::string(partitionSlice.data(), partitionSlice.size());
       }
+      VELOX_USER_CHECK(
+          !decodedSpecId.isNullAt(row), "Null spec_id in DELETE input row");
       PerFileState& state = findOrCreatePerFile(
           std::string(pathSlice.data(), pathSlice.size()),
-          std::move(partitionData));
+          std::move(partitionData),
+          decodedSpecId.valueAt<int32_t>(row));
       state.writer.addDeletedPosition(decodedPosition.valueAt<int64_t>(row));
     }
     return;
@@ -215,11 +229,14 @@ void IcebergDeletionVectorSink::appendData(RowVectorPtr input) {
     VELOX_USER_CHECK(
         !decodedPosition.isNullAt(i), "Null pos in DELETE input row");
     const auto pathSlice = decodedFilePath.valueAt<StringView>(i);
-    // The legacy flat layout carries no partition. Partitioned writes through
-    // this path omit partitionDataJson, and the Java commit side rejects them
-    // for partitioned tables.
+    // The legacy flat layout carries no partition or spec, so it uses the
+    // table's current spec. Partitioned writes through this path omit
+    // partitionDataJson, and the Java commit side rejects them for
+    // partitioned tables.
     PerFileState& state = findOrCreatePerFile(
-        std::string(pathSlice.data(), pathSlice.size()), /*partitionData=*/"");
+        std::string(pathSlice.data(), pathSlice.size()),
+        /*partitionData=*/"",
+        currentPartitionSpecId(*insertTableHandle_));
     state.writer.addDeletedPosition(decodedPosition.valueAt<int64_t>(i));
   }
 }
@@ -227,7 +244,8 @@ void IcebergDeletionVectorSink::appendData(RowVectorPtr input) {
 IcebergDeletionVectorSink::PerFileState&
 IcebergDeletionVectorSink::findOrCreatePerFile(
     const std::string& path,
-    std::string partitionData) {
+    std::string partitionData,
+    int64_t partitionSpecId) {
   if (auto it = perFileIndex_.find(path); it != perFileIndex_.end()) {
     auto& state = perFile_[it->second].second;
     // Same data file implies same partition; a mismatch is driven by
@@ -238,6 +256,11 @@ IcebergDeletionVectorSink::findOrCreatePerFile(
         partitionData,
         "Conflicting partition_data for data file {}",
         path);
+    VELOX_USER_CHECK_EQ(
+        state.partitionSpecId,
+        partitionSpecId,
+        "Conflicting spec_id for data file {}",
+        path);
     return state;
   }
   const size_t index = perFile_.size();
@@ -245,6 +268,7 @@ IcebergDeletionVectorSink::findOrCreatePerFile(
   perFileIndex_.emplace(path, index);
   PerFileState& state = perFile_.back().second;
   state.partitionData = std::move(partitionData);
+  state.partitionSpecId = partitionSpecId;
   seedFromExistingDeletionVector(state, path);
   return state;
 }
@@ -342,17 +366,11 @@ bool IcebergDeletionVectorSink::finish() {
     numWrittenBytes_ += fileSize;
     numWrittenFiles_ += 1;
 
-    // Use the real partition spec id when the target table is partitioned;
-    // unpartitioned tables (or sinks constructed without a spec) emit 0
-    // (the default unpartitioned spec id).
-    const int64_t partitionSpecId = insertTableHandle_->partitionSpec()
-        ? insertTableHandle_->partitionSpec()->specId
-        : 0;
     commitMessages_.push_back(buildDeletionVectorCommitMessage(
         puffinPath,
         fileSize,
         cardinality,
-        partitionSpecId,
+        entry.second.partitionSpecId,
         entry.first,
         offset,
         length,
