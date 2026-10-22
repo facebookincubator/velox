@@ -31,8 +31,8 @@ namespace facebook::velox::cudf_velox::prestosql {
 /// there as well.
 class ArrayJoinFunction : public CudfFunction {
  public:
-  /// Returns true if expr is array_join over a non-constant array of plain
-  /// VARCHAR elements with a non-null constant VARCHAR separator.
+  /// Returns true if expr, an array_join call that matched the registered
+  /// signature, takes a non-constant array and a non-null constant separator.
   static bool canEvaluate(const core::TypedExprPtr& expr);
 
   ArrayJoinFunction(const core::TypedExprPtr& expr, memory::MemoryPool* pool);

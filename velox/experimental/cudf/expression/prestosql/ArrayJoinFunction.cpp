@@ -27,28 +27,14 @@
 #include <string>
 
 namespace facebook::velox::cudf_velox::prestosql {
-namespace {
-
-// JSON shares the VARCHAR kind, and the CPU unescapes its elements before
-// joining them, so only the plain VARCHAR element type takes the cuDF join.
-// Compared by name, which needs no Presto types dependency and also excludes
-// any other VARCHAR-kind custom type.
-bool isPlainVarchar(const TypePtr& type) {
-  return type->isVarchar() && type->name() == VARCHAR()->name();
-}
-
-} // namespace
 
 bool ArrayJoinFunction::canEvaluate(const core::TypedExprPtr& expr) {
-  if (expr->inputs().size() != 2 || !expr->type()->isVarchar()) {
-    return false;
-  }
-  const auto& array = expr->inputs()[0];
-  if (array->isConstantKind() || !array->type()->isArray() ||
-      !isPlainVarchar(array->type()->childAt(0))) {
-    return false;
-  }
-  return constantVarcharValue(expr->inputs()[1]).has_value();
+  // The registered signature, matched before this runs, fixes the arity and
+  // the argument types, and the CPU resolves array_join to VARCHAR. The
+  // binder matches the array(varchar) element type by name, so a JSON array,
+  // whose elements the CPU unescapes before joining, stays on the CPU.
+  return !expr->inputs()[0]->isConstantKind() &&
+      constantVarcharValue(expr->inputs()[1]).has_value();
 }
 
 ArrayJoinFunction::ArrayJoinFunction(
