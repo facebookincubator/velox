@@ -135,12 +135,23 @@ template <typename T>
 inline int unpack(const uint8_t* in, T* out, int batchSize, int numBits) {
   static_assert(sizeof(T) == 4 || sizeof(T) == 8);
   const int numBlocks = batchSize / 32;
-  for (int i = 0; i < numBlocks; ++i) {
-    // Each block of 32 values uses 'numBits' 32-bit words.
-    fastpforlib::fastunpack(
-        reinterpret_cast<const uint32_t*>(in) + i * numBits,
-        out + i * 32,
-        numBits);
+  // Each block of 32 values uses 'numBits' 32-bit words.
+  if (reinterpret_cast<uintptr_t>(in) % alignof(uint32_t) == 0) {
+    for (int i = 0; i < numBlocks; ++i) {
+      fastpforlib::fastunpack(
+          reinterpret_cast<const uint32_t*>(in) + i * numBits,
+          out + i * 32,
+          numBits);
+    }
+  } else {
+    // fastpforlib reads 'in' as 32-bit words, so copy each block to an aligned
+    // buffer first.
+    uint32_t block[sizeof(T) * 8];
+    const auto blockSize = numBits * sizeof(uint32_t);
+    for (int i = 0; i < numBlocks; ++i) {
+      std::memcpy(block, in + i * blockSize, blockSize);
+      fastpforlib::fastunpack(block, out + i * 32, numBits);
+    }
   }
   return numBlocks * 32;
 }
