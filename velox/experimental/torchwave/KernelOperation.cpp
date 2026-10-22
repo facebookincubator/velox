@@ -1079,6 +1079,116 @@ SizeExpr KernelOperation::makeSizeExpr(
   return result;
 }
 
+namespace {
+
+// A view whose output has its operand's element count, so a launch that covers
+// one covers the other.
+bool keepsElementCount(NodeCP node) {
+  static const folly::F14FastSet<std::string_view> kTargets{
+      "torch.ops.aten.view.default",
+      "torch.ops.aten._unsafe_view.default",
+      "torch.ops.aten.reshape.default",
+      "torch.ops.aten.alias.default",
+      "torch.ops.aten.unsqueeze.default",
+      "torch.ops.aten.squeeze.default",
+      "torch.ops.aten.squeeze.dim",
+      "torch.ops.aten.squeeze.dims",
+      "torch.ops.aten.flatten.using_ints",
+      "torch.ops.aten.unflatten.int",
+      "torch.ops.aten.permute.default",
+      "torch.ops.aten.transpose.int",
+      "torch.ops.aten.t.default"};
+  const auto* meta = Registry::metadata(node->target());
+  return meta != nullptr && meta->viewOfArg.has_value() &&
+      kTargets.count(node->target()) > 0;
+}
+
+// True when the expression rooted at 'node' is elementwise apart from
+// element-count-preserving views and tensor lists between its parts, so its
+// launch covers the broadcast of its leaves.
+bool isElementwiseThroughViews(
+    NodeCP node,
+    const std::unordered_set<ValueCP>& subgraphInputs,
+    std::unordered_set<NodeCP>& visited) {
+  if (!visited.insert(node).second) {
+    return true;
+  }
+  const bool isList = node->target() == "prim.ListPack";
+  const bool isView = keepsElementCount(node);
+  const auto* meta = Registry::metadata(node->target());
+  if (!isList && !isView && (meta == nullptr || !meta->elementwise)) {
+    return false;
+  }
+  const auto& inputs = node->inputs();
+  for (size_t i = 0; i < inputs.size(); ++i) {
+    if (isView && static_cast<int32_t>(i) != *meta->viewOfArg) {
+      continue;
+    }
+    auto* value = inputs[i].value;
+    auto* producer = value->producer();
+    if (subgraphInputs.count(value) || producer == nullptr) {
+      continue;
+    }
+    if (!isElementwiseThroughViews(producer, subgraphInputs, visited)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+void collectCountLeavesOfValue(
+    ValueCP value,
+    const std::unordered_set<ValueCP>& subgraphInputs,
+    std::unordered_set<ValueCP>& seen,
+    std::vector<nativert::ValueId>& leafIds);
+
+// The leaves whose broadcast is the element count of the expression rooted at
+// 'node', walking through the views and lists isElementwiseThroughViews admits.
+// Whole-tensor operands, read at computed offsets, do not size the launch.
+void collectCountLeaves(
+    NodeCP node,
+    const std::unordered_set<ValueCP>& subgraphInputs,
+    std::unordered_set<ValueCP>& seen,
+    std::vector<nativert::ValueId>& leafIds) {
+  const auto* meta = Registry::metadata(node->target());
+  const bool isView = keepsElementCount(node);
+  const auto& inputs = node->inputs();
+  for (size_t i = 0; i < inputs.size(); ++i) {
+    if (isView && static_cast<int32_t>(i) != *meta->viewOfArg) {
+      continue;
+    }
+    const auto* argMeta = argMetaForInput(meta, node, i);
+    if (argMeta != nullptr && argMeta->wholeTensor) {
+      continue;
+    }
+    collectCountLeavesOfValue(inputs[i].value, subgraphInputs, seen, leafIds);
+  }
+}
+
+void collectCountLeavesOfValue(
+    ValueCP value,
+    const std::unordered_set<ValueCP>& subgraphInputs,
+    std::unordered_set<ValueCP>& seen,
+    std::vector<nativert::ValueId>& leafIds) {
+  if (!seen.insert(value).second) {
+    return;
+  }
+  auto* producer = value->producer();
+  if (subgraphInputs.count(value) || producer == nullptr) {
+    leafIds.push_back(value->id());
+    return;
+  }
+  const auto* meta = Registry::metadata(producer->target());
+  if (producer->target() == "prim.ListPack" || keepsElementCount(producer) ||
+      (meta != nullptr && meta->elementwise && !meta->sizeFromOutput)) {
+    collectCountLeaves(producer, subgraphInputs, seen, leafIds);
+    return;
+  }
+  leafIds.push_back(value->id());
+}
+
+} // namespace
+
 SizeExpr KernelOperation::makeDeepSizeExpr() {
   if (expr_) {
     std::unordered_set<NodeCP> ewVisited;
@@ -1094,6 +1204,23 @@ SizeExpr KernelOperation::makeDeepSizeExpr() {
       collectFactorySizes(expr_, inputs_, factoryVisited, constShapes);
       // Multiple operands broadcast against each other; size by the broadcast
       // shape (see makeSizeExpr).
+      SizeExpr expr{SizeShortcut::kMax, std::move(leafIds), {}};
+      expr.broadcast = expr.values.size() > 1;
+      expr.constShapes = std::move(constShapes);
+      return expr;
+    }
+    // Elementwise but for reshaping views and tensor lists between its parts,
+    // e.g. clamp(add(unsqueeze(a), unsqueeze(b))) viewed flat as the index list
+    // of a gather. Sizing such an op by its largest input covers the [R,C,1]
+    // operand of an [R,C,C] broadcast, not the broadcast.
+    std::unordered_set<NodeCP> viewVisited;
+    if (isElementwiseThroughViews(expr_, inputs_, viewVisited)) {
+      std::unordered_set<ValueCP> seen;
+      std::vector<nativert::ValueId> leafIds;
+      collectCountLeaves(expr_, inputs_, seen, leafIds);
+      std::unordered_set<NodeCP> factoryVisited;
+      std::vector<std::vector<Dim>> constShapes;
+      collectFactorySizes(expr_, inputs_, factoryVisited, constShapes);
       SizeExpr expr{SizeShortcut::kMax, std::move(leafIds), {}};
       expr.broadcast = expr.values.size() > 1;
       expr.constShapes = std::move(constShapes);
@@ -1387,11 +1514,12 @@ void KernelOperation::setOutputs(
         desc.neededOnHost = meta->returnMeta[i].neededOnHost;
         desc.sizeExpr =
             makeSizeExpr(node, subgraphInputs, static_cast<int32_t>(i));
-        // In-place elementwise (Tensor(a!)): the materialized output aliases
+        // In-place elementwise (Tensor(a!)) or a device function that writes
+        // its self in place (tw.scatter_add): the materialized output aliases
         // the mutated self argument, so reserve it as a view of self instead of
         // a fresh buffer (see reserveOutputs). This makes the returned tensor
         // reflect self, including later in-place mutations of self.
-        if (meta->elementwise && i == 0) {
+        if ((meta->elementwise || meta->mutatesArg.has_value()) && i == 0) {
           auto mutated = dataMutatedInputs(node);
           if (!mutated.empty()) {
             desc.aliasSelfId = mutated[0]->id();

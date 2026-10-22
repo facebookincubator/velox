@@ -503,6 +503,8 @@ class SpillTest : public ::testing::TestWithParam<uint32_t>,
     ASSERT_EQ(stats.spilledBytes, totalFileBytes);
     ASSERT_EQ(prevGStats.spilledBytes + totalFileBytes, newGStats.spilledBytes);
 
+    const auto numExistingFiles = fs->list(tempDir_->getPath()).size();
+    size_t numFinalFiles{0};
     bool usePreMerge = mergeWayThreshold >= 2;
     for (const auto& partitionId : partitionIds) {
       auto spillFiles = state_->finish(partitionId);
@@ -517,6 +519,7 @@ class SpillTest : public ::testing::TestWithParam<uint32_t>,
       spillConfig.fileCreateConfig = "";
       std::unique_ptr<TreeOfLosers<SpillMergeStream>> merge =
           spillPartition.createOrderedReader(spillConfig, pool(), &spillStats_);
+      numFinalFiles += merge->numStreams();
       int numReadBatches = 0;
       // We expect all the rows in dense increasing order.
       for (auto i = 0; i < numBatches * numRowsPerBatch; ++i) {
@@ -586,9 +589,16 @@ class SpillTest : public ::testing::TestWithParam<uint32_t>,
             finalStats.spillReads,
             succinctNanos(finalStats.spillReadTimeNanos),
             succinctNanos(finalStats.spillDeserializationTimeNanos)));
-    // Verify the spilled files are still there after spill state destruction.
-    for (const auto& spilledFile : spilledFileSet) {
-      ASSERT_TRUE(fs->exists(spilledFile));
+    // Verify pre-merge removes its inputs, including intermediate files,
+    // leaving only the final reader files and files from previous test runs.
+    ASSERT_EQ(
+        fs->list(tempDir_->getPath()).size(),
+        numExistingFiles - spilledFileSet.size() + numFinalFiles);
+    if (!usePreMerge) {
+      // Without pre-merge, all original spill files remain.
+      for (const auto& spilledFile : spilledFileSet) {
+        ASSERT_TRUE(fs->exists(spilledFile));
+      }
     }
     // Verify stats.
     const auto spillFileSizeCount =
