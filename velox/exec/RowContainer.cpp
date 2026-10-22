@@ -1344,4 +1344,35 @@ bool RowComparator::operator()(
     const char* other) {
   return compare(decodedVectors, index, other) < 0;
 }
+
+RowContainerLayout::RowContainerLayout(RowContainer* container)
+    : rowSizeOffset(container->rowSizeOffset()),
+      alignment(container->alignment()) {
+  const auto& types = container->columnTypes();
+  const auto numColumns = static_cast<int32_t>(types.size());
+  rowColumns.reserve(numColumns);
+  for (int32_t i = 0; i < numColumns; ++i) {
+    rowColumns.push_back(container->columnAt(i));
+  }
+
+  for (int32_t i = 0; i < numColumns; ++i) {
+    const auto& type = types[i];
+    VELOX_CHECK(
+        !type->providesCustomComparison(),
+        "Row-based spill does not support type with custom comparison: {}",
+        type->toString());
+    if (!type->isFixedWidth()) {
+      variableColumns.push_back({type->kind(), rowColumns[i]});
+    }
+  }
+
+  // TODO: Support accumulator columns by serializing their out-of-line state
+  // after the variable columns.
+  VELOX_CHECK(
+      container->accumulators().empty(),
+      "Row-based spill serialization does not support accumulators yet");
+
+  serializedFixRowSize =
+      rowSizeOffset > 0 ? rowSizeOffset : container->fixedRowSize();
+}
 } // namespace facebook::velox::exec

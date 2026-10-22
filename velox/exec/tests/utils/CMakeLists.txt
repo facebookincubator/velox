@@ -43,6 +43,7 @@ velox_add_test_headers(
   BackpressureTestNode.h
   ExpressionBuilder.h
   FilterToExpression.h
+  FlatRowTestBase.h
   HashJoinTestBase.h
   HiveConnectorTestBase.h
   IndexLookupJoinTestBase.h

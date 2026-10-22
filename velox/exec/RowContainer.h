@@ -15,6 +15,8 @@
  */
 #pragma once
 
+#include "folly/CPortability.h"
+
 #include "velox/common/memory/HashStringAllocator.h"
 #include "velox/common/memory/MemoryAllocator.h"
 #include "velox/core/PlanNode.h"
@@ -361,6 +363,11 @@ class RowContainer {
   /// The row size excluding any out-of-line stored variable length values.
   int32_t fixedRowSize() const {
     return fixedRowSize_;
+  }
+
+  /// Returns the row alignment in bytes required by this container.
+  int32_t alignment() const {
+    return alignment_;
   }
 
   /// Adds 'rows' to the free rows list and frees any associated variable length
@@ -1952,6 +1959,55 @@ class RowComparator {
  private:
   std::vector<std::pair<column_index_t, core::SortOrder>> keyInfo_;
   RowContainer* rowContainer_;
+};
+
+/// Captures the row memory layout of a RowContainer for use during spill
+/// serialization and deserialization without holding a reference to the
+/// container itself.
+struct RowContainerLayout {
+  explicit RowContainerLayout(RowContainer* container);
+
+  /// Returns the aligned serialized size of a live RowContainer row (fixed
+  /// area plus out-of-line variable bytes). Write-path only: reads the row's
+  /// variable-length size tracker at 'rowSizeOffset'. The deserialized
+  /// flat-row layout excludes that tracker, so do not call this on a
+  /// deserialized row.
+  FOLLY_ALWAYS_INLINE uint32_t serializedSize(const char* row) const {
+    return bits::roundUp(
+        serializedFixRowSize +
+            (rowSizeOffset > 0
+                 ? *reinterpret_cast<const uint32_t*>(row + rowSizeOffset)
+                 : 0),
+        alignment);
+  }
+
+  /// Serialized fixed-area size — the real column data only. Excludes the
+  /// rowSize tracker and next-free pointer that RowContainer::fixedRowSize()
+  /// includes; when variable-width fields exist, 'rowSizeOffset' (the byte
+  /// position where the tracker begins, i.e. end of real column data) is used.
+  int32_t serializedFixRowSize;
+
+  /// Byte offset within a row of the uint32_t variable-length size field, or 0
+  /// if the row has no variable-width fields.
+  int32_t rowSizeOffset;
+
+  /// Row alignment required by the container.
+  int32_t alignment;
+
+  /// Describes one variable-width column for row serialization. Carries the
+  /// TypeKind so the serde can branch on string vs complex without a separate
+  /// flag, and embeds the RowColumn so no dependent lookup into rowColumns is
+  /// needed in the per-row hot loop.
+  struct VariableColumn {
+    TypeKind kind;
+    RowColumn column;
+  };
+
+  /// Variable-width columns in schema order.
+  std::vector<VariableColumn> variableColumns;
+
+  /// Descriptors for every column.
+  std::vector<RowColumn> rowColumns;
 };
 
 } // namespace facebook::velox::exec
