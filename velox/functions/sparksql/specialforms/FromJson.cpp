@@ -17,13 +17,17 @@
 #include "velox/functions/sparksql/specialforms/FromJson.h"
 
 #include <algorithm>
+#include <cmath>
 #include <limits>
 #include <stdexcept>
 #include <utility>
 
+#include <folly/json.h>
+
 #include "velox/expression/EvalCtx.h"
 #include "velox/expression/SpecialForm.h"
 #include "velox/expression/VectorWriters.h"
+#include "velox/functions/lib/Utf8Utils.h"
 #include "velox/functions/lib/string/StringCore.h"
 #include "velox/functions/lib/string/StringImpl.h"
 #include "velox/functions/prestosql/json/SIMDJsonUtil.h"
@@ -33,6 +37,261 @@ using namespace facebook::velox::exec;
 
 namespace facebook::velox::functions::sparksql {
 namespace {
+
+// Trims JSON whitespace that simdjson includes in raw numeric tokens so Spark's
+// numeric fallback semantics see only the token itself.
+std::string_view trimTrailingJsonWhitespace(std::string_view input) {
+  while (!input.empty()) {
+    const auto character = input.back();
+    if (character != ' ' && character != '\t' && character != '\n' &&
+        character != '\r') {
+      break;
+    }
+    input.remove_suffix(1);
+  }
+  return input;
+}
+
+bool isJsonDigit(char character) {
+  return character >= '0' && character <= '9';
+}
+
+bool isValidJsonNumber(std::string_view input) {
+  size_t position{0};
+  if (input.empty()) {
+    return false;
+  }
+  if (input[position] == '-') {
+    if (++position == input.size()) {
+      return false;
+    }
+  }
+
+  if (input[position] == '0') {
+    ++position;
+    if (position < input.size() && isJsonDigit(input[position])) {
+      return false;
+    }
+  } else if (input[position] >= '1' && input[position] <= '9') {
+    while (position < input.size() && isJsonDigit(input[position])) {
+      ++position;
+    }
+  } else {
+    return false;
+  }
+
+  if (position < input.size() && input[position] == '.') {
+    ++position;
+    const auto fractionStart = position;
+    while (position < input.size() && isJsonDigit(input[position])) {
+      ++position;
+    }
+    if (position == fractionStart) {
+      return false;
+    }
+  }
+
+  if (position < input.size() &&
+      (input[position] == 'e' || input[position] == 'E')) {
+    ++position;
+    if (position < input.size() &&
+        (input[position] == '+' || input[position] == '-')) {
+      ++position;
+    }
+    const auto exponentStart = position;
+    while (position < input.size() && isJsonDigit(input[position])) {
+      ++position;
+    }
+    if (position == exponentStart) {
+      return false;
+    }
+  }
+
+  return position == input.size();
+}
+
+// Spark accepts single-quoted JSON strings by default. Detect them cheaply so
+// standard JSON remains allocation-free.
+bool normalizeSingleQuotedJson(std::string_view input, std::string& output) {
+  if (input.find('\'') == std::string_view::npos) {
+    return false;
+  }
+
+  enum class Quote { kNone, kSingle, kDouble };
+
+  Quote quote{Quote::kNone};
+  bool converted{false};
+  output.clear();
+  output.reserve(input.size());
+  for (size_t i = 0; i < input.size(); ++i) {
+    const auto character = input[i];
+    if (quote == Quote::kNone) {
+      if (character == '\'') {
+        output.push_back('"');
+        quote = Quote::kSingle;
+        converted = true;
+      } else {
+        output.push_back(character);
+        if (character == '"') {
+          quote = Quote::kDouble;
+        }
+      }
+      continue;
+    }
+
+    if (quote == Quote::kDouble) {
+      if (character == '\\' && i + 1 < input.size()) {
+        const auto escaped = input[++i];
+        if (escaped == '\'') {
+          output.push_back('\'');
+          converted = true;
+        } else {
+          output.push_back('\\');
+          output.push_back(escaped);
+        }
+      } else {
+        output.push_back(character);
+        if (character == '"') {
+          quote = Quote::kNone;
+        }
+      }
+      continue;
+    }
+
+    if (character == '\\' && i + 1 < input.size()) {
+      const auto escaped = input[++i];
+      if (escaped == '\'') {
+        output.push_back('\'');
+      } else {
+        output.push_back('\\');
+        output.push_back(escaped);
+      }
+    } else if (character == '\'') {
+      output.push_back('"');
+      quote = Quote::kNone;
+    } else if (character == '"') {
+      output.append("\\\"");
+    } else {
+      output.push_back(character);
+    }
+  }
+  return converted && quote == Quote::kNone;
+}
+
+bool appendSparkSpecialNumber(std::string_view token, std::string& output) {
+  if (token == "NaN") {
+    output.append(R"("NaN")");
+    return true;
+  }
+  if (token == "+INF" || token == "+Infinity" || token == "Infinity") {
+    output.append(R"("Infinity")");
+    return true;
+  }
+  if (token == "-INF" || token == "-Infinity") {
+    output.append(R"("-Infinity")");
+    return true;
+  }
+  return false;
+}
+
+template <typename JsonInput>
+simdjson::error_code appendSparkJsonValue(
+    JsonInput value,
+    std::string& output) {
+  SIMDJSON_ASSIGN_OR_RAISE(const auto type, value.type());
+  switch (type) {
+    case simdjson::ondemand::json_type::string: {
+      SIMDJSON_ASSIGN_OR_RAISE(const auto stringValue, value.get_string());
+      folly::json::escapeString(stringValue, output, {});
+      return simdjson::SUCCESS;
+    }
+    case simdjson::ondemand::json_type::number: {
+      const auto token = trimTrailingJsonWhitespace(value.raw_json());
+      if (appendSparkSpecialNumber(token, output)) {
+        return simdjson::SUCCESS;
+      }
+      if (!isValidJsonNumber(token)) {
+        return simdjson::NUMBER_ERROR;
+      }
+
+      if (token.find_first_of(".eE") == std::string_view::npos) {
+        output.append(token == "-0" ? "0" : token);
+        return simdjson::SUCCESS;
+      }
+
+      double number;
+      const auto numberResult = value.get_double();
+      if (numberResult.error() == simdjson::SUCCESS) {
+        number = numberResult.value_unsafe();
+      } else {
+        const auto castResult =
+            util::Converter<TypeKind::DOUBLE>::tryCast(token);
+        if (castResult.hasError()) {
+          return simdjson::NUMBER_ERROR;
+        }
+        number = castResult.value();
+      }
+      const auto stringResult =
+          util::Converter<TypeKind::VARCHAR>::tryCast(number);
+      if (stringResult.hasError()) {
+        return simdjson::NUMBER_ERROR;
+      }
+      if (std::isfinite(number)) {
+        output.append(stringResult.value());
+      } else {
+        folly::json::escapeString(stringResult.value(), output, {});
+      }
+      return simdjson::SUCCESS;
+    }
+    case simdjson::ondemand::json_type::boolean: {
+      SIMDJSON_ASSIGN_OR_RAISE(const auto booleanValue, value.get_bool());
+      output.append(booleanValue ? "true" : "false");
+      return simdjson::SUCCESS;
+    }
+    case simdjson::ondemand::json_type::array: {
+      SIMDJSON_ASSIGN_OR_RAISE(auto array, value.get_array());
+      output.push_back('[');
+      bool first{true};
+      for (const auto& elementResult : array) {
+        SIMDJSON_ASSIGN_OR_RAISE(auto element, elementResult);
+        if (!first) {
+          output.push_back(',');
+        }
+        first = false;
+        SIMDJSON_TRY(appendSparkJsonValue(element, output));
+      }
+      output.push_back(']');
+      return simdjson::SUCCESS;
+    }
+    case simdjson::ondemand::json_type::object: {
+      SIMDJSON_ASSIGN_OR_RAISE(auto object, value.get_object());
+      output.push_back('{');
+      bool first{true};
+      for (const auto& fieldResult : object) {
+        SIMDJSON_ASSIGN_OR_RAISE(auto field, fieldResult);
+        SIMDJSON_ASSIGN_OR_RAISE(auto key, field.unescaped_key(true));
+        if (!first) {
+          output.push_back(',');
+        }
+        first = false;
+        folly::json::escapeString(key, output, {});
+        output.push_back(':');
+        SIMDJSON_TRY(appendSparkJsonValue(field.value(), output));
+      }
+      output.push_back('}');
+      return simdjson::SUCCESS;
+    }
+    case simdjson::ondemand::json_type::null:
+      output.append("null");
+      return simdjson::SUCCESS;
+    case simdjson::ondemand::json_type::unknown: {
+      const auto token = trimTrailingJsonWhitespace(value.raw_json());
+      return appendSparkSpecialNumber(token, output) ? simdjson::SUCCESS
+                                                     : simdjson::INCORRECT_TYPE;
+    }
+  }
+  VELOX_UNREACHABLE();
+}
 
 // Struct to store schema information for a JSON row, used for efficient field
 // lookup and null handling.
@@ -112,13 +371,15 @@ struct ExtractJsonTypeImpl {
             F14FastMap<int64_t, JsonRowSchemaInfo>& /*jsonRowSchemaInfo*/,
         column_index_t /*nodeIndex*/) {
       SIMDJSON_ASSIGN_OR_RAISE(auto type, value.type());
-      std::string_view s;
       if (type == simdjson::ondemand::json_type::string) {
-        SIMDJSON_ASSIGN_OR_RAISE(s, value.get_string());
-      } else {
-        s = value.raw_json();
+        SIMDJSON_ASSIGN_OR_RAISE(const auto stringValue, value.get_string());
+        writer.castTo<Varchar>().append(stringValue);
+        return simdjson::SUCCESS;
       }
-      writer.castTo<Varchar>().append(s);
+
+      std::string stringValue;
+      SIMDJSON_TRY(appendSparkJsonValue(value, stringValue));
+      writer.castTo<Varchar>().append(stringValue);
       return simdjson::SUCCESS;
     }
   };
@@ -255,9 +516,10 @@ struct ExtractJsonTypeImpl {
         SIMDJSON_ASSIGN_OR_RAISE(auto array, value.get_array());
         for (const auto& elementResult : array) {
           SIMDJSON_ASSIGN_OR_RAISE(auto element, elementResult);
+          SIMDJSON_ASSIGN_OR_RAISE(const auto isNull, element.is_null());
           // If casting to array of JSON, nulls in array elements should become
           // the JSON text "null".
-          if (element.is_null()) {
+          if (isNull) {
             writerTyped.add_null();
           } else {
             SIMDJSON_TRY(VELOX_DYNAMIC_TYPE_DISPATCH(
@@ -302,9 +564,11 @@ struct ExtractJsonTypeImpl {
       for (const auto& fieldResult : object) {
         SIMDJSON_ASSIGN_OR_RAISE(auto field, fieldResult);
         SIMDJSON_ASSIGN_OR_RAISE(auto key, field.unescaped_key(true));
+        auto fieldValue = field.value();
+        SIMDJSON_ASSIGN_OR_RAISE(const auto isNull, fieldValue.is_null());
         // If casting to map of JSON values, nulls in map values should become
         // the JSON text "null".
-        if (field.value().is_null()) {
+        if (isNull) {
           writerTyped.add_null().castTo<Varchar>().append(key);
         } else {
           auto writers = writerTyped.add_item();
@@ -312,7 +576,7 @@ struct ExtractJsonTypeImpl {
           SIMDJSON_TRY(VELOX_DYNAMIC_TYPE_DISPATCH(
               ExtractJsonTypeImpl<simdjson::ondemand::value>::apply,
               valueType->kind(),
-              field.value(),
+              fieldValue,
               std::get<1>(writers),
               false,
               jsonRowSchemaInfo,
@@ -351,7 +615,9 @@ struct ExtractJsonTypeImpl {
             continue;
           }
           auto field = fieldResult.value_unsafe();
-          if (!field.value().is_null()) {
+          auto fieldValue = field.value();
+          SIMDJSON_ASSIGN_OR_RAISE(const auto isNull, fieldValue.is_null());
+          if (!isNull) {
             SIMDJSON_ASSIGN_OR_RAISE(key, field.unescaped_key(true));
 
             if (schemaInfo.allFieldsAreAscii) {
@@ -366,7 +632,7 @@ struct ExtractJsonTypeImpl {
               const auto res = VELOX_DYNAMIC_TYPE_DISPATCH(
                   ExtractJsonTypeImpl<simdjson::ondemand::value>::apply,
                   rowType.childAt(index)->kind(),
-                  field.value(),
+                  fieldValue,
                   writerTyped.get_writer_at(index),
                   false,
                   jsonRowSchemaInfo,
@@ -496,17 +762,31 @@ struct ExtractJsonTypeImpl {
   static simdjson::error_code castJsonToFloatingPoint(
       Input value,
       exec::GenericWriter& writer) {
-    auto result = value.get_double();
-    if (result.error() == simdjson::SUCCESS) {
-      auto num = result.value_unsafe();
-      writer.castTo<T>() = num;
-      return simdjson::SUCCESS;
+    SIMDJSON_ASSIGN_OR_RAISE(const auto type, value.type());
+    std::string_view token;
+    if (type == simdjson::ondemand::json_type::string) {
+      SIMDJSON_ASSIGN_OR_RAISE(token, value.get_string());
+    } else if (
+        type == simdjson::ondemand::json_type::number ||
+        type == simdjson::ondemand::json_type::unknown) {
+      token = trimTrailingJsonWhitespace(value.raw_json());
+    } else {
+      return simdjson::INCORRECT_TYPE;
     }
 
-    std::string_view s = value.raw_json_token();
     // Spark support such special floating point with/without quotes:
     // NaN, +INF, +Infinity, Infinity, -INF, -Infinity.
-    if (parseSpecialFloatingStrings<T>(s, writer) == simdjson::SUCCESS) {
+    if (parseSpecialFloatingStrings<T>(token, writer) == simdjson::SUCCESS) {
+      return simdjson::SUCCESS;
+    }
+    if (type != simdjson::ondemand::json_type::number ||
+        !isValidJsonNumber(token)) {
+      return simdjson::NUMBER_ERROR;
+    }
+
+    const auto result = value.get_double();
+    if (result.error() == simdjson::SUCCESS) {
+      writer.castTo<T>() = result.value_unsafe();
       return simdjson::SUCCESS;
     }
 
@@ -518,17 +798,7 @@ struct ExtractJsonTypeImpl {
     // NUMBER_ERROR. However, our expected behavior is to convert such
     // extreme values to -INF or +INF, so we add extra logic here to
     // handle NUMBER_ERROR and perform the conversion.
-    if (s.length() > 0 && s.back() == '.') {
-      // If the number ends with a dot, it is not a valid JSON number,
-      // so we return NUMBER_ERROR.
-      return simdjson::NUMBER_ERROR;
-    }
-    if (s.length() > 1 && s.front() == '0') {
-      // If the number starts with '0' and has more than one character,
-      // it is not a valid JSON number, so we return NUMBER_ERROR.
-      return simdjson::NUMBER_ERROR;
-    }
-    auto castResult = util::Converter<TypeKind::DOUBLE>::tryCast(s);
+    auto castResult = util::Converter<TypeKind::DOUBLE>::tryCast(token);
     if (!castResult.hasError()) {
       writer.castTo<T>() = castResult.value();
       return simdjson::SUCCESS;
@@ -541,6 +811,18 @@ struct ExtractJsonTypeImpl {
       From x,
       exec::GenericWriter& writer) {
     static_assert(std::is_signed_v<From> && std::is_signed_v<To>);
+    if constexpr (std::is_same_v<To, int8_t>) {
+      constexpr From kMin = std::numeric_limits<int8_t>::lowest();
+      constexpr From kMax = std::numeric_limits<uint8_t>::max();
+      if (!(kMin <= x && x <= kMax)) {
+        return simdjson::NUMBER_OUT_OF_RANGE;
+      }
+      const auto wrapped = x > std::numeric_limits<int8_t>::max()
+          ? x - (std::numeric_limits<uint8_t>::max() + 1)
+          : x;
+      writer.castTo<int8_t>() = static_cast<int8_t>(wrapped);
+      return simdjson::SUCCESS;
+    }
     if constexpr (sizeof(To) < sizeof(From)) {
       constexpr From kMin = std::numeric_limits<To>::lowest();
       constexpr From kMax = std::numeric_limits<To>::max();
@@ -558,13 +840,25 @@ struct ExtractJsonTypeImpl {
       exec::GenericWriter& writer) {
     SIMDJSON_ASSIGN_OR_RAISE(auto type, value.type());
     std::string_view s;
+    std::string normalizedString;
     switch (type) {
       case simdjson::ondemand::json_type::string: {
         SIMDJSON_ASSIGN_OR_RAISE(s, value.get_string());
+        if (s.find(',') != std::string_view::npos) {
+          normalizedString = s;
+          normalizedString.erase(
+              std::remove(
+                  normalizedString.begin(), normalizedString.end(), ','),
+              normalizedString.end());
+          s = normalizedString;
+        }
         break;
       }
       case simdjson::ondemand::json_type::number: {
-        s = value.raw_json_token();
+        s = trimTrailingJsonWhitespace(value.raw_json());
+        if (!isValidJsonNumber(s)) {
+          return simdjson::NUMBER_ERROR;
+        }
         break;
       }
       default:
@@ -627,6 +921,39 @@ class FromJsonFunction final : public exec::VectorFunction {
   }
 
  private:
+  // Applies Spark's UTF-8 replacement and single-quote defaults before handing
+  // the input to simdjson.
+  simdjson::simdjson_result<simdjson::ondemand::document> parseJson(
+      const simdjson::padded_string_view& paddedInput,
+      std::string_view input) const {
+    std::string_view sparkInput = input;
+    if (!stringCore::isAscii(input.data(), input.size()) &&
+        !simdjson::validate_utf8(input.data(), input.size())) {
+      repairedInput_.clear();
+      replaceInvalidUTF8Characters(
+          repairedInput_, input.data(), static_cast<int32_t>(input.size()));
+      sparkInput = repairedInput_;
+    }
+
+    if (normalizeSingleQuotedJson(sparkInput, normalizedInput_)) {
+      const auto normalizedSize = normalizedInput_.size();
+      normalizedInput_.resize(normalizedSize + simdjson::SIMDJSON_PADDING);
+      simdjson::padded_string_view normalizedInput(
+          normalizedInput_.data(), normalizedSize, normalizedInput_.size());
+      return simdjsonParse(normalizedInput);
+    }
+
+    if (sparkInput.data() == input.data()) {
+      return simdjsonParse(paddedInput);
+    }
+
+    const auto repairedSize = repairedInput_.size();
+    repairedInput_.resize(repairedSize + simdjson::SIMDJSON_PADDING);
+    simdjson::padded_string_view repairedInput(
+        repairedInput_.data(), repairedSize, repairedInput_.size());
+    return simdjsonParse(repairedInput);
+  }
+
   void parseJsonConstant(
       VectorPtr& input,
       exec::EvalCtx& context,
@@ -638,7 +965,7 @@ class FromJsonFunction final : public exec::VectorFunction {
     writer.init(*flatResult);
     const auto constInput = input->asUnchecked<ConstantVector<StringView>>();
     if (constInput->isNullAt(0)) {
-      context.applyToSelectedNoThrow(rows, [&](auto row) {
+      context.applyToSelectedNoThrow(rows, [&](vector_size_t row) {
         writer.setOffset(row);
         writer.commitNull();
       });
@@ -650,10 +977,16 @@ class FromJsonFunction final : public exec::VectorFunction {
           paddedInput_.data(), constant.size(), paddedInput_.size());
 
       simdjson::ondemand::document jsonDoc;
-      auto error = simdjsonParse(paddedInput).get(jsonDoc);
+      auto error =
+          parseJson(
+              paddedInput, std::string_view(constant.data(), constant.size()))
+              .get(jsonDoc);
 
-      context.applyToSelectedNoThrow(rows, [&](auto row) {
+      context.applyToSelectedNoThrow(rows, [&](vector_size_t row) {
         writer.setOffset(row);
+        if (error == simdjson::SUCCESS) {
+          jsonDoc.rewind();
+        }
         if (error != simdjson::SUCCESS ||
             extractJsonToWriter(jsonDoc, writer, rowSchemaInfoMap_) !=
                 simdjson::SUCCESS) {
@@ -675,7 +1008,7 @@ class FromJsonFunction final : public exec::VectorFunction {
     writer.init(*flatResult);
     auto* inputVector = input->asUnchecked<FlatVector<StringView>>();
     size_t maxSize = 0;
-    rows.applyToSelected([&](auto row) {
+    rows.applyToSelected([&](vector_size_t row) {
       if (inputVector->isNullAt(row)) {
         return;
       }
@@ -683,7 +1016,7 @@ class FromJsonFunction final : public exec::VectorFunction {
       maxSize = std::max(maxSize, input.size());
     });
     paddedInput_.resize(maxSize + simdjson::SIMDJSON_PADDING);
-    context.applyToSelectedNoThrow(rows, [&](auto row) {
+    context.applyToSelectedNoThrow(rows, [&](vector_size_t row) {
       writer.setOffset(row);
       if (inputVector->isNullAt(row)) {
         writer.commitNull();
@@ -694,7 +1027,9 @@ class FromJsonFunction final : public exec::VectorFunction {
       simdjson::padded_string_view paddedInput(
           paddedInput_.data(), input.size(), paddedInput_.size());
       simdjson::ondemand::document doc;
-      auto error = simdjsonParse(paddedInput).get(doc);
+      auto error =
+          parseJson(paddedInput, std::string_view(input.data(), input.size()))
+              .get(doc);
       if (error != simdjson::SUCCESS ||
           extractJsonToWriter(doc, writer, rowSchemaInfoMap_) !=
               simdjson::SUCCESS) {
@@ -763,7 +1098,8 @@ class FromJsonFunction final : public exec::VectorFunction {
       simdjson::ondemand::document& doc,
       exec::VectorWriter<Any>& writer,
       const folly::F14FastMap<int64_t, JsonRowSchemaInfo>& rowSchemaInfoMap) {
-    if (doc.is_null()) {
+    SIMDJSON_ASSIGN_OR_RAISE(const auto isNull, doc.is_null());
+    if (isNull) {
       writer.commitNull();
     } else {
       SIMDJSON_TRY(
@@ -776,6 +1112,10 @@ class FromJsonFunction final : public exec::VectorFunction {
 
   // The buffer with extra bytes for parser::parse(),
   mutable std::string paddedInput_;
+  // Reusable buffer for normalizing Spark's default single-quoted JSON.
+  mutable std::string normalizedInput_;
+  // Reusable buffer for applying Spark's invalid UTF-8 replacement behavior.
+  mutable std::string repairedInput_;
   // Map from row schema tree node index to schema information for JSON rows.
   folly::F14FastMap<int64_t, JsonRowSchemaInfo> rowSchemaInfoMap_;
 };

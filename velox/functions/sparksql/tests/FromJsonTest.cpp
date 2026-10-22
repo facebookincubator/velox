@@ -58,6 +58,40 @@ TEST_F(FromJsonTest, basicMap) {
   testFromJson(input, expected);
 }
 
+TEST_F(FromJsonTest, singleQuotedJson) {
+  auto expected = makeMapVector<std::string, std::string>(
+      {{{"a", "1"}},
+       {{"a", "two"}},
+       {{"a", "it's"}},
+       {{"a", "it's"}},
+       {{"a", "he said \"hi\""}}});
+  auto input = makeFlatVector<std::string>(
+      {R"({'a': '1'})",
+       R"({"a": 'two'})",
+       R"({'a': 'it\'s'})",
+       R"({"a": "it\'s"})",
+       R"({'a': 'he said "hi"'})"});
+  testFromJson(input, expected);
+}
+
+TEST_F(FromJsonTest, invalidUtf8) {
+  const auto invalidJson = std::string(R"({"before)") + "\x80" + R"(after":1})";
+  const auto repairedKey = std::string("before") + "\xef\xbf\xbd" + "after";
+  auto expected = makeMapVector<std::string, int64_t>(
+      {{{repairedKey, 1}}, {{repairedKey, 1}}, {{"valid", 2}}});
+  auto input =
+      makeFlatVector<std::string>({invalidJson, invalidJson, R"({"valid":2})"});
+  testFromJson(input, expected);
+}
+
+TEST_F(FromJsonTest, numericTrailingWhitespace) {
+  auto expected = makeMapVector<std::string, double>(
+      {{{"a", kInfDouble}}, {{"a", -kInfDouble}}, {{"a", kInfDouble}}});
+  auto input = makeFlatVector<std::string>(
+      {R"({"a":1e400 })", "{\"a\":-1e400\n}", "{\"a\":+INF\t}"});
+  testFromJson(input, expected);
+}
+
 TEST_F(FromJsonTest, basicBool) {
   auto expected = makeNullableFlatVector<bool>(
       {true, false, std::nullopt, std::nullopt, std::nullopt});
@@ -72,11 +106,21 @@ TEST_F(FromJsonTest, basicBool) {
 
 TEST_F(FromJsonTest, basicTinyInt) {
   auto expected = makeNullableFlatVector<int8_t>(
-      {1, std::nullopt, std::nullopt, std::nullopt, std::nullopt});
+      {1,
+       std::nullopt,
+       -128,
+       -56,
+       -1,
+       std::nullopt,
+       std::nullopt,
+       std::nullopt});
   auto input = makeFlatVector<std::string>(
       {R"({"a": 1})",
        R"({"a": -129})",
        R"({"a": 128})",
+       R"({"a": 200})",
+       R"({"a": 255})",
+       R"({"a": 256})",
        R"({"a": 1.0})",
        R"({"a": "1"})"});
   testFromJson(input, makeRowVector({"a"}, {expected}));
@@ -216,6 +260,22 @@ TEST_F(FromJsonTest, basicDouble) {
   testFromJson(input, makeRowVector({"a"}, {expected}));
 }
 
+TEST_F(FromJsonTest, malformedFloatingPointNumbers) {
+  auto expected = makeNullableFlatVector<double>(
+      {std::nullopt, std::nullopt, std::nullopt});
+  auto input = makeFlatVector<std::string>(
+      {R"({"a": .5})", R"({"a": +1.5})", R"({"a": -01})"});
+  testFromJson(input, makeRowVector({"a"}, {expected}));
+}
+
+TEST_F(FromJsonTest, malformedDecimalNumbers) {
+  auto expected = makeNullableFlatVector<int64_t>(
+      {std::nullopt, std::nullopt, std::nullopt}, DECIMAL(7, 2));
+  auto input = makeFlatVector<std::string>(
+      {R"({"a": .5})", R"({"a": +1.5})", R"({"a": -01})"});
+  testFromJson(input, makeRowVector({"a"}, {expected}));
+}
+
 TEST_F(FromJsonTest, basicDate) {
   auto expected = makeNullableFlatVector<int32_t>(
       {18809,
@@ -249,9 +309,23 @@ TEST_F(FromJsonTest, basicDate) {
 
 TEST_F(FromJsonTest, basicShortDecimal) {
   auto expected = makeNullableFlatVector<int64_t>(
-      {53210, -100, std::nullopt, std::nullopt}, DECIMAL(7, 2));
+      {53'210,
+       100'050,
+       12'300,
+       12'300,
+       std::nullopt,
+       150,
+       -100,
+       std::nullopt,
+       std::nullopt},
+      DECIMAL(7, 2));
   auto input = makeFlatVector<std::string>(
       {R"({"a": "5.321E2"})",
+       R"({"a": "1,000.50"})",
+       R"({"a": ",,,123"})",
+       R"({"a": "1,2,3"})",
+       R"({"a": ","})",
+       R"({"a": 1.5 })",
        R"({"a": -1})",
        R"({"a": 55555555555555555555.5555})",
        R"({"a": "+1BD"})"});
@@ -275,13 +349,27 @@ TEST_F(FromJsonTest, basicLongDecimal) {
 
 TEST_F(FromJsonTest, basicString) {
   auto expected = makeNullableFlatVector<StringView>(
-      {"1", "2.0", "true", "{\"b\": \"test\"}", "[1, 2]"});
+      {"1",
+       "2.0",
+       "true",
+       R"({"b":"test"})",
+       R"([1,2.0,"a",{"x":true}])",
+       "0",
+       "100.0",
+       R"("Infinity")",
+       R"("NaN")",
+       std::nullopt});
   auto input = makeFlatVector<std::string>(
       {R"({"a": 1})",
-       R"({"a": 2.0})",
+       R"({"a": 2.00})",
        R"({"a": "true"})",
        R"({"a": {"b": "test"}})",
-       R"({"a": [1, 2]})"});
+       R"({"a": [1, 2.00, "\u0061", {"x" : true}]})",
+       R"({"a": -0})",
+       R"({"a": 1e2})",
+       R"({"a": 1e400})",
+       R"({"a": NaN})",
+       R"({"a": null})"});
   testFromJson(input, makeRowVector({"a"}, {expected}));
 }
 
@@ -434,6 +522,24 @@ TEST_F(FromJsonTest, invalidType) {
       testFromJson(input, primitiveTypeOutput), "Unsupported type BIGINT.");
   VELOX_ASSERT_USER_THROW(
       testFromJson(input, mapOutput), "Unsupported type MAP<BIGINT,BIGINT>.");
+}
+
+TEST_F(FromJsonTest, invalidNullLikeTokens) {
+  auto mapInput = makeFlatVector<std::string>(
+      {R"({"a":nan})",
+       R"({"a":nil})",
+       R"({"a":none})",
+       R"({"a":nope})",
+       R"({"a":nullx})"});
+  auto expectedMap = BaseVector::createNullConstant(
+      MAP(VARCHAR(), BIGINT()), mapInput->size(), pool());
+  testFromJson(mapInput, expectedMap);
+
+  auto arrayInput =
+      makeFlatVector<std::string>({R"([1,nil])", R"([nan])", R"([nullx])"});
+  auto expectedArray = BaseVector::createNullConstant(
+      ARRAY(INTEGER()), arrayInput->size(), pool());
+  testFromJson(arrayInput, expectedArray);
 }
 
 TEST_F(FromJsonTest, invalidJson) {
