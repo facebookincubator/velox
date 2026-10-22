@@ -4260,7 +4260,7 @@ folly::dynamic PlanNode::serialize() const {
       serializedSources.push_back(source->serialize());
     }
 
-    obj["sources"] = serializedSources;
+    obj["sources"] = std::move(serializedSources);
   }
 
   return obj;
