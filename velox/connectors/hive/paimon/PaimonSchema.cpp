@@ -21,6 +21,8 @@
 #include <tuple>
 #include <unordered_set>
 
+#include "velox/functions/lib/string/StringImpl.h"
+
 namespace facebook::velox::connector::hive::paimon {
 namespace {
 
@@ -32,13 +34,8 @@ bool isBlankFieldName(const std::string& name) {
   const auto* end = position + name.size();
   while (position < end) {
     const auto codePoint = folly::utf8ToCodePoint(position, end, false);
-    // Paimon uses Java Character.isWhitespace, which excludes nonbreaking
-    // spaces U+00A0, U+2007 and U+202F.
-    if (!((codePoint >= 0x09 && codePoint <= 0x0d) ||
-          (codePoint >= 0x1c && codePoint <= 0x20) || codePoint == 0x1680 ||
-          (codePoint >= 0x2000 && codePoint <= 0x2006) ||
-          (codePoint >= 0x2008 && codePoint <= 0x200a) || codePoint == 0x2028 ||
-          codePoint == 0x2029 || codePoint == 0x205f || codePoint == 0x3000)) {
+    // Matches Paimon's Java Character.isWhitespace semantics.
+    if (!functions::stringImpl::isUnicodeWhiteSpace(codePoint)) {
       return false;
     }
   }

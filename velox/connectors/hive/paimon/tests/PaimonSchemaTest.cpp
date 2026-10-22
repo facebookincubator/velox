@@ -459,24 +459,43 @@ TEST_F(PaimonSchemaTest, invalidFieldAndContainerMetadata) {
   VELOX_ASSERT_THROW(
       duplicateNames.validate(ROW({{"a", BIGINT()}, {"a", BIGINT()}}), false),
       "Duplicate Paimon field name");
-  VELOX_ASSERT_THROW(
-      duplicateNames.validate(ROW({{"", BIGINT()}, {"b", BIGINT()}}), false),
-      "field name must not be empty");
-  for (const auto& name :
-       {std::string(" \t\n"),
-        std::string("\x1c"),
-        folly::codePointToUtf8(0x1680),
-        folly::codePointToUtf8(0x2005),
-        folly::codePointToUtf8(0x3000)}) {
+  for (const auto& name : {"", " \t\n", "\t\xe3\x80\x80 \n"}) {
     VELOX_ASSERT_THROW(
         duplicateNames.validate(
             ROW({{name, BIGINT()}, {"b", BIGINT()}}), false),
         "field name must not be empty or blank");
   }
-  for (char32_t codePoint : {0x00a0, 0x2007, 0x202f}) {
+  // All code points recognized by Java Character.isWhitespace.
+  for (char32_t codePoint :
+       {0x09,   0x0a,   0x0b,   0x0c,   0x0d,   0x1c,   0x1d,   0x1e,   0x1f,
+        0x20,   0x1680, 0x2000, 0x2001, 0x2002, 0x2003, 0x2004, 0x2005, 0x2006,
+        0x2008, 0x2009, 0x200a, 0x2028, 0x2029, 0x205f, 0x3000}) {
+    SCOPED_TRACE(static_cast<uint32_t>(codePoint));
+    VELOX_ASSERT_THROW(
+        duplicateNames.validate(
+            ROW(
+                {{folly::codePointToUtf8(codePoint), BIGINT()},
+                 {"b", BIGINT()}}),
+            false),
+        "field name must not be empty or blank");
+  }
+  // Nonbreaking spaces, other non-whitespace and range boundaries stay valid.
+  for (char32_t codePoint :
+       {0x08,   0x0e,   0x1b,   0x21,   0x85,   0x00a0, 0x167f,
+        0x1681, 0x180e, 0x1fff, 0x2007, 0x200b, 0x2027, 0x202a,
+        0x202f, 0x205e, 0x2060, 0x2fff, 0x3001, 0x4e2d, 0x1f600}) {
+    SCOPED_TRACE(static_cast<uint32_t>(codePoint));
     duplicateNames.validate(
-        ROW({{folly::codePointToUtf8(codePoint), BIGINT()}, {"b", BIGINT()}}),
+        ROW(
+            {{" \t" + folly::codePointToUtf8(codePoint) + "\n", BIGINT()},
+             {"b", BIGINT()}}),
         false);
+  }
+  for (const auto& name : {" \xff", " \xe3\x80"}) {
+    EXPECT_THROW(
+        duplicateNames.validate(
+            ROW({{name, BIGINT()}, {"b", BIGINT()}}), false),
+        std::exception);
   }
 }
 
