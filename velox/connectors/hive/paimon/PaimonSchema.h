@@ -104,6 +104,7 @@ class PaimonSchema {
   const PaimonTypeMetadata& fieldMetadata(int32_t fieldId) const;
   /// Resolves a path rooted at a top-level field. Container subscripts select
   /// the element/value subtree and do not add synthetic DataField IDs.
+  /// Subscript values are interpreted by the scan, not by identity lookup.
   std::vector<int32_t> fieldIdPath(const common::Subfield& subfield) const;
 
   /// Uses self-contained Velox type wire, with an explicit version independent

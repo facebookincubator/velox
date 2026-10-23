@@ -1059,16 +1059,14 @@ TEST_F(PaimonConnectorTest, tableValidationBeforeFileOpen) {
       "Paimon split connector does not match table handle");
   EXPECT_EQ(fileSystem->openedFiles, 0);
 
-  for (const auto& change : {"dv", "changelog", "level"}) {
+  for (const auto& change : {"dv", "changelog"}) {
     SCOPED_TRACE(change);
     auto wire = makeSplit(PaimonTableType::kAppendOnly, good)->serialize();
     if (std::string_view(change) == "dv") {
       wire["dataFiles"][0]["deletionFile"] =
           PaimonDeletionFile{"/dv", 0, 1, 1}.serialize();
-    } else if (std::string_view(change) == "changelog") {
-      wire["dataFiles"][0]["fileType"] = "CHANGELOG";
     } else {
-      wire["dataFiles"][0]["level"] = 1;
+      wire["dataFiles"][0]["fileType"] = "CHANGELOG";
     }
     VELOX_ASSERT_USER_THROW(
         source->addSplit(PaimonConnectorSplit::create(wire)),
@@ -1086,7 +1084,9 @@ TEST_F(PaimonConnectorTest, tableValidationBeforeFileOpen) {
       "Paimon same-schema append profile requires rawConvertible=true");
   EXPECT_EQ(fileSystem->openedFiles, 0);
 
-  source->addSplit(makeSplit(PaimonTableType::kAppendOnly, good));
+  auto dataSplit = makeSplit(PaimonTableType::kAppendOnly, good)->serialize();
+  dataSplit["dataFiles"][0]["level"] = 1;
+  source->addSplit(PaimonConnectorSplit::create(dataSplit));
   ContinueFuture future = ContinueFuture::makeEmpty();
   auto result = source->next(100, future);
   ASSERT_TRUE(result.has_value());
@@ -1096,6 +1096,32 @@ TEST_F(PaimonConnectorTest, tableValidationBeforeFileOpen) {
   auto end = source->next(100, future);
   ASSERT_TRUE(end.has_value());
   EXPECT_EQ(*end, nullptr);
+
+  // Partition strings are converted when the scan binds a constant.
+  const auto numericTable = makePaimonTableHandle(
+      ROW({{"id", BIGINT()}, {"p", INTEGER()}}), {}, nullptr, {"p"});
+  const auto numericColumn = std::make_shared<HiveColumnHandle>(
+      "p", FileColumnHandle::ColumnType::kPartitionKey, INTEGER(), INTEGER());
+  auto numericSource = ConnectorRegistry::tryGet(kPaimonConnectorId)
+                           ->createDataSource(
+                               ROW({{"p", INTEGER()}}),
+                               numericTable,
+                               {{"p", numericColumn}},
+                               context.get());
+  const auto numericFiles = makeFilePaths(1);
+  writeToFile(numericFiles[0]->getPath(), input);
+  const std::string numericPath =
+      "paimon-table-test:" + numericFiles[0]->getPath();
+  const auto openedFiles = fileSystem->openedFiles.load();
+  numericSource->addSplit(makePaimonSplit(
+      {numericPath},
+      PaimonTableType::kAppendOnly,
+      dwio::common::FileFormat::DWRF,
+      std::unordered_map<std::string, std::optional<std::string>>{
+          {"p", "not-an-integer"}}));
+  EXPECT_EQ(fileSystem->openedFiles, openedFiles);
+  EXPECT_THROW(numericSource->next(100, future), std::exception);
+  EXPECT_GT(fileSystem->openedFiles, openedFiles);
 }
 
 TEST_F(PaimonConnectorTest, queryValidationBeforeFileOpen) {
@@ -1200,8 +1226,7 @@ TEST_F(PaimonConnectorTest, queryValidationBeforeFileOpen) {
           {{"id", requiredColumn(common::Subfield("id"))}},
           context.get()),
       nullptr);
-  for (const auto& option :
-       {"primary-key", "data-evolution.enabled", "custom"}) {
+  for (const auto& option : {"primary-key", "data-evolution.enabled"}) {
     SCOPED_TRACE(option);
     auto schemaWire = table->schema()->serialize();
     if (std::string_view(option) == "primary-key") {

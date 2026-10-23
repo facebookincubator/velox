@@ -218,6 +218,11 @@ TEST_F(PaimonTableHandleTest, splitValidation) {
   handle->validateSplit(makeSplit(
       PaimonTableType::kAppendOnly,
       std::unordered_map<std::string, std::optional<std::string>>{{"p", ""}}));
+  auto delegated = makeSplit(PaimonTableType::kAppendOnly, good).serialize();
+  delegated["fileFormat"] = dwio::common::FileFormatName::toName(
+      dwio::common::FileFormat::AVRO);
+  delegated["dataFiles"][0]["level"] = 1;
+  handle->validateSplit(*PaimonConnectorSplit::create(delegated));
   VELOX_ASSERT_THROW(
       handle->validateSplit(makeSplit(PaimonTableType::kPrimaryKey, good)),
       "Paimon split table type does not match table schema");
@@ -566,6 +571,10 @@ TEST_F(PaimonTableHandleTest, malformedWire) {
   obj["subfieldFilters"][0]["subfield"][0]["kind"] = "invalid";
   VELOX_ASSERT_THROW(
       PaimonTableHandle::create(obj, nullptr), "Unknown Paimon path kind");
+  obj = good;
+  obj["subfieldFilters"] = folly::dynamic::array(entry);
+  obj["subfieldFilters"][0]["subfield"] = folly::dynamic::array;
+  EXPECT_THROW(PaimonTableHandle::create(obj, nullptr), VeloxException);
 }
 
 } // namespace

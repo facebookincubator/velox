@@ -96,8 +96,9 @@ class PaimonTableHandle final : public FileTableHandle {
   }
 
   /// Checks connector, table type and the complete set of partition names.
-  /// Partition values retain the existing string/NULL encoding. The current
-  /// split has no file schema IDs, so this cannot verify file schema identity.
+  /// Partition values retain the existing string/NULL encoding and are
+  /// converted when bound to the scan. File format dispatch uses DWIO. The
+  /// current split has no file schema IDs, so this cannot verify file identity.
   /// Requires a table definition accepted by validateReadProfile().
   void validateSplit(const PaimonConnectorSplit& split) const;
 

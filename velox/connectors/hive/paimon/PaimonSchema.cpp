@@ -27,6 +27,7 @@ namespace facebook::velox::connector::hive::paimon {
 namespace {
 
 constexpr int32_t kSystemFieldIdStart = std::numeric_limits<int32_t>::max() / 2;
+// Bound recursive schema decoding independently of Paimon's logical types.
 constexpr uint32_t kMaxTypeDepth = 128;
 
 bool isBlankFieldName(const std::string& name) {
@@ -71,57 +72,21 @@ folly::dynamic serializeType(const TypePtr& type) {
   return obj;
 }
 
-// Validate before Type deserialization, which recursively decodes children and
-// narrows decimal parameters to uint8_t.
+// Bound recursive type decoding and prevent decimal parameter truncation.
 void validateTypeWire(const folly::dynamic& obj, uint32_t depth) {
   VELOX_USER_CHECK_LE(depth, kMaxTypeDepth, "Paimon type nesting is too deep");
   VELOX_USER_CHECK(obj.isObject(), "Expected Paimon Velox type object");
   VELOX_USER_CHECK(
       !obj.count("ref"), "Paimon schema type must be self-contained");
-  VELOX_USER_CHECK(obj.at("type").isString(), "Expected Velox type name");
-  const auto& name = obj.at("type").getString();
-  VELOX_USER_CHECK(
-      obj.at("name").isString() &&
-          obj.at("name").getString() == (name == "DATE" ? "DateType" : "Type"),
-      "Invalid Paimon type serde name");
-  if (name == "DECIMAL") {
-    const auto precision = readInt32(obj.at("precision"));
-    const auto scale = readInt32(obj.at("scale"));
-    VELOX_USER_CHECK(
-        precision >= 1 && precision <= 38 && scale >= 0 && scale <= precision,
-        "Invalid Paimon decimal precision/scale");
+  if (isDecimalName(obj.at("type").asString())) {
+    ISerializable::deserialize<uint8_t>(obj.at("precision"));
+    ISerializable::deserialize<uint8_t>(obj.at("scale"));
   }
-  if (name == "ROW" || name == "ARRAY" || name == "MAP") {
-    const auto& children = obj.at("cTypes");
-    VELOX_USER_CHECK(children.isArray(), "Expected Velox type children array");
-    if (name == "ROW") {
-      VELOX_USER_CHECK(obj.at("names").isArray(), "Expected ROW names array");
-      VELOX_USER_CHECK_EQ(
-          obj.at("names").size(), children.size(), "Paimon ROW shape mismatch");
-      for (const auto& fieldName : obj.at("names")) {
-        VELOX_USER_CHECK(fieldName.isString(), "Expected Paimon field name");
-      }
-    } else {
-      VELOX_USER_CHECK_EQ(
-          children.size(),
-          name == "ARRAY" ? 1 : 2,
-          "Paimon type shape mismatch");
-    }
-    for (const auto& child : children) {
+  if (const auto* children = obj.get_ptr("cTypes")) {
+    VELOX_USER_CHECK(children->isArray(), "Expected Velox type children array");
+    for (const auto& child : *children) {
       validateTypeWire(child, depth + 1);
     }
-  } else {
-    VELOX_USER_CHECK(
-        name == "BOOLEAN" || name == "TINYINT" || name == "SMALLINT" ||
-            name == "INTEGER" || name == "BIGINT" || name == "REAL" ||
-            name == "DOUBLE" || name == "DATE" || name == "VARCHAR" ||
-            name == "VARBINARY" || name == "DECIMAL" || name == "TIMESTAMP",
-        "Unsupported Paimon Velox type: {}",
-        name);
-    VELOX_USER_CHECK(
-        !obj.count("cTypes") ||
-            (obj.at("cTypes").isArray() && obj.at("cTypes").empty()),
-        "Paimon scalar type must not have children");
   }
 }
 
@@ -149,36 +114,8 @@ void validateType(
   }
 
   const auto& root = metadata.logicalType;
-  TypePtr expected;
   size_t parameterCount = 0;
-  if (root == "BOOLEAN") {
-    expected = BOOLEAN();
-  } else if (root == "TINYINT") {
-    expected = TINYINT();
-  } else if (root == "SMALLINT") {
-    expected = SMALLINT();
-  } else if (root == "INTEGER") {
-    expected = INTEGER();
-  } else if (root == "BIGINT") {
-    expected = BIGINT();
-  } else if (root == "FLOAT") {
-    expected = REAL();
-  } else if (root == "DOUBLE") {
-    expected = DOUBLE();
-  } else if (root == "DATE") {
-    expected = DATE();
-  } else if (root == "CHAR" || root == "VARCHAR") {
-    expected = VARCHAR();
-    parameterCount = 1;
-  } else if (root == "BINARY" || root == "VARBINARY") {
-    expected = VARBINARY();
-    parameterCount = 1;
-  } else if (
-      root == "TIMESTAMP_WITHOUT_TIME_ZONE" ||
-      root == "TIMESTAMP_WITH_LOCAL_TIME_ZONE") {
-    expected = TIMESTAMP();
-    parameterCount = 1;
-  } else if (root == "DECIMAL") {
+  if (root == "DECIMAL") {
     VELOX_USER_CHECK(
         type->isDecimal(), "Paimon DECIMAL requires a decimal type");
     parameterCount = 2;
@@ -197,14 +134,36 @@ void validateType(
   } else if (root == "MAP") {
     VELOX_USER_CHECK(type->isMap(), "Paimon MAP requires a MAP type");
   } else {
-    VELOX_UNSUPPORTED("Unsupported Paimon logical type: {}", root);
-  }
-  if (expected) {
+    // Logical aliases share a Velox type; their parameters remain in metadata.
+    static const std::unordered_map<std::string, TypePtr> kScalarTypes{
+        {"BOOLEAN", BOOLEAN()},
+        {"TINYINT", TINYINT()},
+        {"SMALLINT", SMALLINT()},
+        {"INTEGER", INTEGER()},
+        {"BIGINT", BIGINT()},
+        {"FLOAT", REAL()},
+        {"DOUBLE", DOUBLE()},
+        {"DATE", DATE()},
+        {"CHAR", VARCHAR()},
+        {"VARCHAR", VARCHAR()},
+        {"BINARY", VARBINARY()},
+        {"VARBINARY", VARBINARY()},
+        {"TIMESTAMP_WITHOUT_TIME_ZONE", TIMESTAMP()},
+        {"TIMESTAMP_WITH_LOCAL_TIME_ZONE", TIMESTAMP()}};
+    const auto it = kScalarTypes.find(root);
+    if (it == kScalarTypes.end()) {
+      VELOX_UNSUPPORTED("Unsupported Paimon logical type: {}", root);
+    }
+    const auto& expected = it->second;
     VELOX_USER_CHECK(
         *type == *expected,
         "Paimon logical type {} does not match Velox type {}",
         root,
         type->toString());
+    if (expected->isVarchar() || expected->isVarbinary() ||
+        expected->isTimestamp()) {
+      parameterCount = 1;
+    }
   }
   VELOX_USER_CHECK_EQ(
       metadata.parameters.size(),
@@ -423,26 +382,8 @@ std::vector<int32_t> PaimonSchema::fieldIdPath(
           subfield.toString());
       child = *childIndex;
       ids.push_back(*metadata->children[child].fieldId);
-    } else if (type->isArray()) {
-      const auto* subscript = element->as<common::Subfield::LongSubscript>();
-      VELOX_USER_CHECK(
-          element->is(common::SubfieldKind::kAllSubscripts) ||
-              (subscript && subscript->index() > 0),
-          "Invalid ARRAY subscript in Paimon path {}",
-          subfield.toString());
-    } else if (type->isMap()) {
-      const auto& keyType = type->childAt(0);
-      VELOX_USER_CHECK(
-          element->is(common::SubfieldKind::kAllSubscripts) ||
-              (element->is(common::SubfieldKind::kStringSubscript) &&
-               keyType->isVarchar()) ||
-              (element->is(common::SubfieldKind::kLongSubscript) &&
-               (keyType->isTinyint() || keyType->isSmallint() ||
-                keyType->isInteger() || keyType->isBigint()) &&
-               !keyType->isDate() && !keyType->isDecimal()),
-          "Invalid MAP subscript in Paimon path {}",
-          subfield.toString());
-      child = 1;
+    } else if (type->isArray() || type->isMap()) {
+      child = type->isMap() ? 1 : 0;
     } else {
       VELOX_USER_FAIL("Invalid Paimon subfield path: {}", subfield.toString());
     }

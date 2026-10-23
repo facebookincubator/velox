@@ -19,7 +19,6 @@
 #include <cmath>
 #include <unordered_set>
 
-#include "velox/connectors/hive/PartitionValue.h"
 #include "velox/core/Expressions.h"
 
 namespace facebook::velox::connector::hive::paimon {
@@ -123,8 +122,7 @@ folly::dynamic serializeSubfield(const common::Subfield& subfield) {
 }
 
 common::Subfield deserializeSubfield(const folly::dynamic& obj) {
-  VELOX_USER_CHECK(
-      obj.isArray() && !obj.empty(), "Expected Paimon filter path");
+  VELOX_USER_CHECK(obj.isArray(), "Expected Paimon filter path");
   std::vector<std::unique_ptr<common::Subfield::PathElement>> path;
   for (const auto& element : obj) {
     VELOX_USER_CHECK(element.isObject(), "Expected Paimon path element");
@@ -153,9 +151,6 @@ common::Subfield deserializeSubfield(const folly::dynamic& obj) {
       path.push_back(std::make_unique<common::Subfield::AllSubscripts>());
     }
   }
-  VELOX_USER_CHECK(
-      path.front()->is(common::SubfieldKind::kNestedField),
-      "Paimon filter path must start with a field name");
   return common::Subfield(std::move(path));
 }
 
@@ -350,14 +345,6 @@ void PaimonTableHandle::validateSplit(const PaimonConnectorSplit& split) const {
   VELOX_USER_CHECK(
       split.rawConvertible(),
       "Paimon same-schema append profile requires rawConvertible=true");
-  const auto format = split.fileFormat();
-  VELOX_USER_CHECK(
-      format == dwio::common::FileFormat::DWRF ||
-          format == dwio::common::FileFormat::ORC ||
-          format == dwio::common::FileFormat::PARQUET ||
-          format == dwio::common::FileFormat::NIMBLE,
-      "Unsupported Paimon same-schema append file format {}",
-      dwio::common::FileFormatName::toName(format));
   for (const auto& file : split.dataFiles()) {
     VELOX_USER_CHECK(
         !file.deletionFile,
@@ -368,14 +355,6 @@ void PaimonTableHandle::validateSplit(const PaimonConnectorSplit& split) const {
         PaimonDataFile::Type::kData,
         "Paimon same-schema append profile requires data files; changelog "
         "reading is not implemented yet");
-    VELOX_USER_CHECK_EQ(
-        file.level,
-        0,
-        "Paimon same-schema append profile requires level 0 files");
-    VELOX_USER_CHECK_EQ(
-        file.deleteRowCount,
-        0,
-        "Paimon same-schema append profile requires no delete records");
   }
   const auto& partitions = split.partitionKeys();
   VELOX_USER_CHECK_EQ(
@@ -383,22 +362,16 @@ void PaimonTableHandle::validateSplit(const PaimonConnectorSplit& split) const {
       schema_->partitionKeys().size(),
       "Paimon split partition names do not match table schema");
   for (auto id : schema_->partitionKeys()) {
-    const auto& name =
-        schema_->rowType()->nameOf(schema_->fieldIndexPath(id).front());
+    const auto index = schema_->fieldIndexPath(id).front();
+    const auto& name = schema_->rowType()->nameOf(index);
+    const auto it = partitions.find(name);
     VELOX_USER_CHECK(
-        partitions.count(name),
+        it != partitions.end(),
         "Missing Paimon split partition '{}' declared by table schema",
         name);
-    const auto& value = partitions.at(name);
-    if (value) {
-      PartitionValue::fromString(
-          *value,
-          *schema_->fieldType(id),
-          PartitionValue::TimestampMode::kUtc,
-          PartitionValue::DateMode::kIsoString);
-    } else {
+    if (!it->second) {
       VELOX_USER_CHECK(
-          schema_->fieldMetadata(id).nullable,
+          schema_->metadata().children[index].nullable,
           "NULL Paimon partition '{}' is not nullable in target schema",
           name);
     }
