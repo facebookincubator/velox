@@ -86,11 +86,7 @@ foreach(component ${icu_components})
   string(CONCAT ICU_${component}_LIBRARY ${ICU_LIBRARIES} "/libicu" ${component} ".so")
   file(TOUCH ${ICU_${component}_LIBRARY})
   set_target_properties(ICU::${component} PROPERTIES IMPORTED_LOCATION ${ICU_${component}_LIBRARY})
-  # Use target_include_directories() rather than hand-setting a property:
-  # INTERFACE_SYSTEM_INCLUDE_DIRECTORIES is not propagated through
-  # target_link_libraries(), so consumers (re2) never saw the bundled headers
-  # and fell back to the system ICU headers. SYSTEM keeps them out of the
-  # warnings-as-errors build.
+  # Use target_include_directories() so consumers (re2) see the bundled headers
   target_include_directories(ICU::${component} SYSTEM INTERFACE ${ICU_INCLUDE_DIRS})
   target_link_libraries(ICU::ICU INTERFACE ICU::${component})
 endforeach()

@@ -621,12 +621,9 @@ endif()
 # Same gap as Boost::system above, for a different legacy alias: the
 # system-installed FBThrift's exported FBThriftTargets.cmake was baked
 # against a real system Boost, where Boost::boost is find_package(Boost)'s
-# own header-only catch-all target. It only ever shows up in
-# INTERFACE_LINK_LIBRARIES alongside things like fmt::fmt and Folly::folly —
-# never as a compiled dependency — so it carries no symbols of its own and
-# aliasing it to the headers-only target is equivalent. Aliased to
-# boost_headers rather than Boost::headers because CMake refuses to alias an
-# ALIAS target, and Boost::headers is itself `ALIAS boost_headers`.
+# own header-only catch-all target. Aliased to
+# boost_headers rather than Boost::headers because CMake cannot alias an
+# ALIAS target (Boost::headers ALIAS boost_headers)
 if(NOT TARGET Boost::boost)
   add_library(Boost::boost ALIAS boost_headers)
 endif()
