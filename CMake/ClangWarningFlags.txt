@@ -1,0 +1,132 @@
+# Copyright (c) Facebook, Inc. and its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Clang warning flags, copied from the flags that internal Velox builds with,
+# so a change that builds cleanly in fbcode also builds cleanly here. Keep
+# them in sync with these fbcode files, in the same order, because Clang
+# applies the last of two conflicting flags:
+#
+#   fbcode/buck2/platform/cxx/fbcode/flags.bzl
+#   fbcode/buck2/platform/cxx/fbcode/warnings.bzl
+#   fbcode/velox/PACKAGE
+#
+# -Werror comes from TREAT_WARNINGS_AS_ERRORS. Flags that only GCC knows are
+# left out. One flag per line.
+
+# flags.bzl _COMMON_CXX_FLAGS.
+-Wno-error=noexcept-type
+-Wno-error=address-of-packed-member
+-Wno-error=deprecated-declarations
+-Wnon-virtual-dtor
+
+# flags.bzl _COMMON_FLAGS.
+-Wall
+-Wno-comment
+-Wno-deprecated
+-Wno-deprecated-declarations
+-Wno-sign-compare
+-Wno-unused
+-Wunused-label
+-Wunused-result
+-Wno-builtin-macro-redefined
+
+# warnings.bzl CLANG_WARNINGS_TO_ENABLE.
+-Waddress-of-packed-member
+-Waddress
+-Wambiguous-reversed-operator
+-Wbitwise-instead-of-logical
+-Wdangling
+-Wdeprecated-copy-with-user-provided-copy
+-Wdeprecated-dynamic-exception-spec
+-Wdeprecated-implementations
+-Wdeprecated-redundant-constexpr-static-def
+-Wdeprecated-this-capture
+-Wenum-compare
+-Wgcc-compat
+-Wheader-hygiene
+-Wimplicit-fallthrough
+-Wimplicitly-unsigned-literal
+-Wimport-preprocessor-directive-pedantic
+-Wincompatible-function-pointer-types
+-Winfinite-recursion
+-Wmisleading-indentation
+-Wmismatched-tags
+-Wmissing-braces
+-Wmove
+-Wnull-conversion
+-Wpacked-non-pod
+-Wparentheses
+-Wpessimizing-move
+-Wself-assign
+-Wsemicolon-before-method-body
+-Wshift-sign-overflow
+-Wstring-concatenation
+-Wstring-conversion
+-Wthread-safety
+-Wundefined-var-template
+-Wuninitialized-const-reference
+-Wuninitialized
+-Wunreachable-code-fallthrough
+-Wunused-but-set-variable
+-Wunused-const-variable
+-Wunused-exception-parameter
+-Wunused-label
+-Wunused-local-typedef
+-Wunused-value
+-Wunused-variable
+-Wvexing-parse
+
+# warnings.bzl CLANG_WARNINGS_TO_DISABLE.
+-Wno-c++1z-compat
+-Wno-constant-logical-operand
+-Wno-defaulted-function-deleted
+-Wno-error=#warnings
+-Wno-error=backend-plugin
+-Wno-error=conditional-uninitialized
+-Wno-error=constant-conversion
+-Wno-error=deprecated-declarations
+-Wno-error=deprecated-dynamic-exception-spec
+-Wno-error=explicit-specialization-storage-class
+-Wno-error=missing-designated-field-initializers
+-Wno-error=nan-infinity-disabled
+-Wno-error=nontrivial-memcall
+-Wno-error=potentially-evaluated-expression
+-Wno-error=uninitialized-const-pointer
+-Wno-error=unused-const-variable
+-Wno-error=vla-cxx-extension
+-Wno-exceptions
+-Wno-extra-semi-stmt
+-Wno-implicit-const-int-float-conversion
+-Wno-inconsistent-missing-destructor-override
+-Wno-inconsistent-missing-override
+-Wno-nullability-completeness
+-Wno-reorder-init-list
+-Wno-tautological-compare
+-Wno-unknown-warning-option
+-Wno-unreachable-code-aggressive
+-Wno-unused-private-field
+
+# flags.bzl platform Clang flags.
+-Wno-error=pass-failed
+-Wno-missing-exception-spec
+-Wno-reserved-identifier
+
+# velox/PACKAGE.
+-Wunused-exception-parameter
+-Wexceptions
+-Wmissing-field-initializers
+-Wduplicate-enum
+-Wtautological-compare
+-Wunused-but-set-variable
+-Wstring-conversion
