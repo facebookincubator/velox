@@ -278,11 +278,14 @@ class RPCOperator : public exec::Operator {
   // window and the shared admission cap. They must back off together: a
   // rate-limit storm is low-latency, so the latency gradient alone is blind to
   // it and only the error verdict makes the window shrink.
+  // 'overloadedRowsEpoch' is the newest admission epoch among the rows whose
+  // overload the shared limiter already handled.
   void recordCongestion(
       AsyncRPCFunction::CongestionSignal signal,
       const std::vector<int64_t>& roundTripTimesNs,
       const std::vector<std::pair<uint64_t, int64_t>>& successUnitsByEpoch,
-      bool sharedOverloadHandled);
+      bool sharedOverloadHandled,
+      std::optional<uint64_t> overloadedRowsEpoch);
 
   // isBlocked() decomposed. Each returns the reason to hand the driver; the
   // try* helpers return nullopt when the state reports finished, which the
@@ -362,6 +365,12 @@ class RPCOperator : public exec::Operator {
   // Process-scoped controller for admissionKey_, resolved before the first
   // dispatch; outlives this operator.
   RPCRateLimiter* limiter_{nullptr};
+  // From AsyncRPCFunction::shrinkWindowOncePerLimitCut().
+  bool shrinkOncePerLimitCut_{false};
+  // Newest admission epoch whose overloads already halved this driver's
+  // window. An epoch is the span between two decreases of the shared limit;
+  // each row records the epoch it was admitted in.
+  std::optional<uint64_t> windowShrunkForEpoch_;
 
   // Precomputed per-argument sources, in call()->inputs() order. Built once in
   // initialize() by walking the RPC call's argument expressions. A
