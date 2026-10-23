@@ -1500,7 +1500,7 @@ TEST_F(E2EEncryptionTest, readWithoutKey) {
     rowReaderOpts.setScanSpec(scanSpec);
     auto rowReader = reader->createRowReader(rowReaderOpts);
     VectorPtr batch =
-        BaseVector::create(ROW({"a"}, {type->childAt(0)}), 0, leafPool_.get());
+        BaseVector::create(ROW("a", type->childAt(0)), 0, leafPool_.get());
     ASSERT_TRUE(rowReader->next(1, batch));
   }
 
@@ -1508,9 +1508,11 @@ TEST_F(E2EEncryptionTest, readWithoutKey) {
   {
     RowReaderOptions rowReaderOpts;
     auto scanSpec = std::make_shared<facebook::velox::common::ScanSpec>("root");
-    scanSpec->addFieldRecursively("b", *type->childAt(1), 1);
+    scanSpec->addFieldRecursively("b", *type->childAt(1), 0);
     rowReaderOpts.setScanSpec(scanSpec);
-    VELOX_ASSERT_THROW(reader->createRowReader(rowReaderOpts), "");
+    VELOX_ASSERT_THROW(
+        reader->createRowReader(rowReaderOpts),
+        "Failed to access encrypted data");
   }
 }
 
