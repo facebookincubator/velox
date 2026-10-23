@@ -401,7 +401,7 @@ are often stored as <a class="reference external" href="https://en.wikipedia.org
 format and is what the Presto coordinator interprets; it is neither WKT nor WKB.</p>
 <p>An Iceberg v3 <code class="docutils literal notranslate"><span class="pre">geometry</span></code> column is stored on disk as a plain <code class="docutils literal notranslate"><span class="pre">binary</span></code> column holding standard ISO WKB. The Iceberg
 connector, and only the Iceberg connector, re-encodes those bytes into Velox’s internal encoding while reading a split
-(see <code class="docutils literal notranslate"><span class="pre">velox/connectors/hive/iceberg/IcebergGeometryConverter.h</span></code>). The format-generic Parquet, DWRF and ORC readers
+(see <code class="docutils literal notranslate"><span class="pre">velox/connectors/hive/iceberg/IcebergGeospatialConverter.h</span></code>). The format-generic Parquet, DWRF and ORC readers
 never inspect GEOMETRY: they read the column by its physical file type. An unannotated <code class="docutils literal notranslate"><span class="pre">binary</span></code> column, a non-Iceberg
 table, or a file written from an existing Velox GEOMETRY vector is therefore never reinterpreted as WKB.</p>
 <p>This is initial, two-dimensional (XY) support: WKB carrying Z or M coordinates, and extended WKB (EWKB), are rejected
@@ -417,6 +417,13 @@ converts internal encoding to WKB.</p>
 <p>SPHERICALGEOGRAPHY represents a geometry on a spherical model of the Earth. It is internally represented the same
 way as GEOMETRY, but only certain functions are supported.  Moreover, these functions will return values in meters
 as opposed to the units of the coordinate space.</p>
+<p>An Iceberg v3 <code class="docutils literal notranslate"><span class="pre">geography</span></code> column is read as SPHERICALGEOGRAPHY. It holds the same ISO WKB as a <code class="docutils literal notranslate"><span class="pre">geometry</span></code> column
+and takes the same re-encoding, with the same scope: two-dimensional, Parquet only, <code class="docutils literal notranslate"><span class="pre">VELOX_ENABLE_GEO=ON</span></code>, and
+read-only. Iceberg geography coordinates are WGS84 longitude/latitude, so each value is also held to the checks of
+Presto’s <code class="docutils literal notranslate"><span class="pre">to_spherical_geography</span></code>: every longitude must lie in [-180, 180] and every latitude in [-90, 90], and a
+NaN or infinite ordinate is rejected. Empty values are accepted. The connector does not check the column’s CRS or
+edge interpolation algorithm; the engine that maps the Iceberg schema to SPHERICALGEOGRAPHY is expected to accept
+only WGS84 with spherical edges, the semantics SPHERICALGEOGRAPHY models.</p>
 </section>
 <section id="spark-types">
 <h2>Spark Types<a class="headerlink" href="#spark-types" title="Link to this heading">¶</a></h2>
