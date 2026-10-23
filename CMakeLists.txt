@@ -517,6 +517,19 @@ if(ENABLE_ALL_WARNINGS)
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra ${KNOWN_WARNINGS}")
 endif()
 
+# Find zstd before cudf. cudf adds its own zstd with CPM, which redirects later
+# find_package(zstd) calls to a package that defines none of the zstd::*
+# targets.
+if(${VELOX_BUILD_MINIMAL_WITH_DWIO} OR ${VELOX_ENABLE_HIVE_CONNECTOR})
+  # DWIO needs all sorts of stream compression libraries.
+  #
+  # TODO: make these optional and pluggable.
+  find_package(ZLIB REQUIRED)
+  # Use CMake/Findzstd.cmake, which defines zstd::zstd.
+  find_package(zstd MODULE REQUIRED)
+  find_package(Snappy REQUIRED)
+endif()
+
 if(VELOX_ENABLE_WAVE OR VELOX_ENABLE_CUDF)
   enable_language(CUDA)
   # Use same C++ standard throughout
@@ -651,26 +664,6 @@ if(VELOX_ENABLE_COMPRESSION_LZ4)
   find_package(lz4 REQUIRED)
 endif()
 
-if(${VELOX_BUILD_MINIMAL_WITH_DWIO} OR ${VELOX_ENABLE_HIVE_CONNECTOR})
-  # DWIO needs all sorts of stream compression libraries.
-  #
-  # TODO: make these optional and pluggable.
-  find_package(ZLIB REQUIRED)
-  find_package(zstd REQUIRED)
-  find_package(Snappy REQUIRED)
-  # Ensure zstd::zstd target exists - handle different zstd package configurations
-  if(NOT TARGET zstd::zstd)
-    if(TARGET zstd::libzstd_static)
-      add_library(zstd::zstd ALIAS zstd::libzstd_static)
-    elseif(TARGET zstd::libzstd_shared)
-      add_library(zstd::zstd ALIAS zstd::libzstd_shared)
-    else()
-      # Fallback: use Findzstd.cmake to create the target
-      include(Findzstd)
-    endif()
-  endif()
-endif()
-
 velox_set_source(re2)
 velox_resolve_dependency(re2)
 
@@ -694,7 +687,7 @@ if(
 endif()
 
 velox_set_source(simdjson)
-velox_resolve_dependency(simdjson 4.1.0)
+velox_resolve_dependency(simdjson 4.3.0)
 
 # libxml2 backs the Spark XPath functions and is only needed when Spark
 # functions are enabled.

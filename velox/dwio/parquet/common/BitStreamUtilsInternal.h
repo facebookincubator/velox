@@ -21,13 +21,15 @@
 #pragma once
 
 #include <algorithm>
+#include <bit>
 #include <cstdint>
 #include <cstring>
 
 #include "velox/common/base/Exceptions.h"
+#include "velox/dwio/common/Lemire/BitPacking/bitpackinghelpers.h"
 
 #include "arrow/util/bit_util.h"
-#include "arrow/util/bpacking.h"
+#include "arrow/util/endian.h"
 
 namespace facebook::velox::parquet {
 
@@ -125,6 +127,33 @@ inline uint64_t ReadLittleEndianWord(
     memcpy(&leValue, buffer, bytesRemaining);
   }
   return ::arrow::bit_util::FromLittleEndian(leValue);
+}
+
+// Unpacks the largest multiple of 32 values that doesn't exceed 'batchSize'
+// from 'in' to 'out' and returns the number of unpacked values.
+template <typename T>
+inline int unpack(const uint8_t* in, T* out, int batchSize, int numBits) {
+  static_assert(sizeof(T) == 4 || sizeof(T) == 8);
+  const int numBlocks = batchSize / 32;
+  // Each block of 32 values uses 'numBits' 32-bit words.
+  if (reinterpret_cast<uintptr_t>(in) % alignof(uint32_t) == 0) {
+    for (int i = 0; i < numBlocks; ++i) {
+      fastpforlib::fastunpack(
+          reinterpret_cast<const uint32_t*>(in) + i * numBits,
+          out + i * 32,
+          numBits);
+    }
+  } else {
+    // fastpforlib reads 'in' as 32-bit words, so copy each block to an aligned
+    // buffer first.
+    uint32_t block[sizeof(T) * 8];
+    const auto blockSize = numBits * sizeof(uint32_t);
+    for (int i = 0; i < numBlocks; ++i) {
+      std::memcpy(block, in + i * blockSize, blockSize);
+      fastpforlib::fastunpack(block, out + i * 32, numBits);
+    }
+  }
+  return numBlocks * 32;
 }
 
 } // namespace detail
@@ -351,18 +380,16 @@ inline int BitReader::GetBatch(int numBits, T* v, int batchSize) {
   }
 
   if (sizeof(T) == 4) {
-    int numUnpacked = ::arrow::internal::unpack32(
-        reinterpret_cast<const uint32_t*>(buffer + byteOffset),
+    int numUnpacked = detail::unpack(
+        buffer + byteOffset,
         reinterpret_cast<uint32_t*>(v + i),
         batchSize - i,
         numBits);
     i += numUnpacked;
     byteOffset += numUnpacked * numBits / 8;
   } else if (sizeof(T) == 8 && numBits > 32) {
-    // Use unpack64 only if numBits is larger than 32
-    // TODO (ARROW-13677): improve the performance of internal::unpack64
-    // and remove the restriction of numBits
-    int numUnpacked = ::arrow::internal::unpack64(
+    // Unpack to 64-bit values only if numBits is larger than 32.
+    int numUnpacked = detail::unpack(
         buffer + byteOffset,
         reinterpret_cast<uint64_t*>(v + i),
         batchSize - i,
@@ -376,11 +403,8 @@ inline int BitReader::GetBatch(int numBits, T* v, int batchSize) {
     uint32_t unpackBuffer[bufferSize];
     while (i < batchSize) {
       int unpack_size = std::min(bufferSize, batchSize - i);
-      int numUnpacked = ::arrow::internal::unpack32(
-          reinterpret_cast<const uint32_t*>(buffer + byteOffset),
-          unpackBuffer,
-          unpack_size,
-          numBits);
+      int numUnpacked = detail::unpack(
+          buffer + byteOffset, unpackBuffer, unpack_size, numBits);
       if (numUnpacked == 0) {
         break;
       }
@@ -487,7 +511,7 @@ inline bool BitReader::GetVlqInt(uint32_t* v) {
 }
 
 inline bool BitWriter::PutZigZagVlqInt(int32_t v) {
-  uint32_t copyValue = ::arrow::util::SafeCopy<uint32_t>(v);
+  uint32_t copyValue = std::bit_cast<uint32_t>(v);
   copyValue = (copyValue << 1) ^ static_cast<uint32_t>(v >> 31);
   return PutVlqInt(copyValue);
 }
@@ -497,7 +521,7 @@ inline bool BitReader::GetZigZagVlqInt(int32_t* v) {
   if (!GetVlqInt(&u))
     return false;
   u = (u >> 1) ^ (~(u & 1) + 1);
-  *v = ::arrow::util::SafeCopy<int32_t>(u);
+  *v = std::bit_cast<int32_t>(u);
   return true;
 }
 
@@ -531,7 +555,7 @@ inline bool BitReader::GetVlqInt(uint64_t* v) {
 }
 
 inline bool BitWriter::PutZigZagVlqInt(int64_t v) {
-  uint64_t copyValue = ::arrow::util::SafeCopy<uint64_t>(v);
+  uint64_t copyValue = std::bit_cast<uint64_t>(v);
   copyValue = (copyValue << 1) ^ static_cast<uint64_t>(v >> 63);
   return PutVlqInt(copyValue);
 }
@@ -541,7 +565,7 @@ inline bool BitReader::GetZigZagVlqInt(int64_t* v) {
   if (!GetVlqInt(&u))
     return false;
   u = (u >> 1) ^ (~(u & 1) + 1);
-  *v = ::arrow::util::SafeCopy<int64_t>(u);
+  *v = std::bit_cast<int64_t>(u);
   return true;
 }
 

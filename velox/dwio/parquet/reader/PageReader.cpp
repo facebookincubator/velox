@@ -16,6 +16,8 @@
 
 #include "velox/dwio/parquet/reader/PageReader.h"
 
+#include <bit>
+
 #include <snappy.h>
 #include <thrift/lib/cpp2/FieldRef.h>
 #include <zlib.h>
@@ -58,6 +60,11 @@ namespace {
 uint32_t checkedPageSize(int32_t size, const char* name) {
   VELOX_CHECK_GE(size, 0, "Negative {}: {}", name, size);
   return static_cast<uint32_t>(size);
+}
+
+// Returns the number of bits needed to encode levels up to 'maxLevel'.
+int levelBitWidth(int32_t maxLevel) {
+  return static_cast<int>(std::bit_width(static_cast<uint64_t>(maxLevel)));
 }
 } // namespace
 
@@ -362,7 +369,7 @@ void PageReader::prepareDataPageV1(const PageHeader& pageHeader, int64_t row) {
     repeatDecoder_ = std::make_unique<RleDecoder>(
         reinterpret_cast<const uint8_t*>(pageData_),
         repeatLength,
-        ::arrow::bit_util::NumRequiredBits(maxRepeat_));
+        levelBitWidth(maxRepeat_));
 
     pageData_ += repeatLength;
     remainingBytes -= repeatLength;
@@ -383,14 +390,12 @@ void PageReader::prepareDataPageV1(const PageHeader& pageHeader, int64_t row) {
         remainingBytes);
     if (maxDefine_ == 1) {
       defineDecoder_ = std::make_unique<RleBpDecoder>(
-          pageData_,
-          pageData_ + defineLength,
-          ::arrow::bit_util::NumRequiredBits(maxDefine_));
+          pageData_, pageData_ + defineLength, levelBitWidth(maxDefine_));
     }
     wideDefineDecoder_ = std::make_unique<RleDecoder>(
         reinterpret_cast<const uint8_t*>(pageData_),
         defineLength,
-        ::arrow::bit_util::NumRequiredBits(maxDefine_));
+        levelBitWidth(maxDefine_));
     pageData_ += defineLength;
   }
   encodedDataSize_ = pageEnd - pageData_;
@@ -449,7 +454,7 @@ void PageReader::prepareDataPageV2(const PageHeader& pageHeader, int64_t row) {
     repeatDecoder_ = std::make_unique<RleDecoder>(
         reinterpret_cast<const uint8_t*>(pageData_),
         repeatLength,
-        ::arrow::bit_util::NumRequiredBits(maxRepeat_));
+        levelBitWidth(maxRepeat_));
   }
 
   if (maxDefine_ > 0) {
@@ -457,12 +462,12 @@ void PageReader::prepareDataPageV2(const PageHeader& pageHeader, int64_t row) {
       defineDecoder_ = std::make_unique<RleBpDecoder>(
           pageData_ + repeatLength,
           pageData_ + levelsSize,
-          ::arrow::bit_util::NumRequiredBits(maxDefine_));
+          levelBitWidth(maxDefine_));
     }
     wideDefineDecoder_ = std::make_unique<RleDecoder>(
         reinterpret_cast<const uint8_t*>(pageData_ + repeatLength),
         defineLength,
-        ::arrow::bit_util::NumRequiredBits(maxDefine_));
+        levelBitWidth(maxDefine_));
   }
   pageData_ += levelsSize;
   // parquet.thrift uses "7: optional bool is_compressed = true;" but

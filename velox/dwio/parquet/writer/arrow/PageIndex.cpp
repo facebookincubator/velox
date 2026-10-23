@@ -874,7 +874,7 @@ RowGroupIndexReadRange PageIndexReader::determinePageIndexRangesInRowGroup(
     if (indexLocation.has_value()) {
       int64_t indexEnd = 0;
       if (indexLocation->offset < 0 || indexLocation->length <= 0 ||
-          ::arrow::internal::addWithOverflow(
+          internal::addWithOverflow(
               indexLocation->offset, indexLocation->length, &indexEnd)) {
         throw ParquetException(
             "Invalid page index location: offset ",

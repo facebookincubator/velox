@@ -165,7 +165,6 @@ jobs:
             cd /tmp/build
             source /opt/rh/gcc-toolset-12/enable
             bash /setup-centos-adapters.sh configure_dnf_for_cuda
-            export VELOX_ARROW_CMAKE_PATCH="${GITHUB_WORKSPACE}/CMake/resolve_dependency_modules/arrow/arrow-testing-boost.patch ${GITHUB_WORKSPACE}/CMake/resolve_dependency_modules/arrow/cmake-compatibility.patch"
             # Install basic deps with GCC. Some deps have problems (e.g. folly missing atomic lib).
             USE_CLANG=false bash /setup-centos9.sh
 
@@ -620,7 +619,6 @@ jobs:
             mkdir /tmp/build
             cd /tmp/build
 
-            export VELOX_ARROW_CMAKE_PATCH="${GITHUB_WORKSPACE}/velox/CMake/resolve_dependency_modules/arrow/arrow-testing-boost.patch ${GITHUB_WORKSPACE}/velox/CMake/resolve_dependency_modules/arrow/cmake-compatibility.patch"
             USE_CLANG=false bash /setup-ubuntu.sh
 
             cd /
@@ -903,8 +901,6 @@ jobs:
             mkdir /tmp/build
             cd /tmp/build
 
-            # Use absolute path within the container for patches
-            export VELOX_ARROW_CMAKE_PATCH="${GITHUB_WORKSPACE}/velox/CMake/resolve_dependency_modules/arrow/arrow-testing-boost.patch ${GITHUB_WORKSPACE}/velox/CMake/resolve_dependency_modules/arrow/cmake-compatibility.patch"
             # Install basic deps with GCC. Some deps have problems (e.g. folly missing atomic lib).
             USE_CLANG=false bash /setup-fedora.sh
 
@@ -1075,7 +1071,6 @@ jobs:
             cd /tmp/build
             source /opt/rh/gcc-toolset-12/enable
             bash /setup-centos-adapters.sh configure_dnf_for_cuda
-            export VELOX_ARROW_CMAKE_PATCH="${GITHUB_WORKSPACE}/CMake/resolve_dependency_modules/arrow/arrow-testing-boost.patch ${GITHUB_WORKSPACE}/CMake/resolve_dependency_modules/arrow/cmake-compatibility.patch"
             # Install basic deps with GCC. Some deps have problems (e.g. folly missing atomic lib).
             USE_CLANG=false bash /setup-centos9.sh
 

@@ -29,6 +29,7 @@
 #include "arrow/type.h"
 #include "arrow/util/base64.h"
 #include "arrow/util/checked_cast.h"
+#include "arrow/util/config.h"
 #include "arrow/util/key_value_metadata.h"
 #include "arrow/util/string.h"
 #include "arrow/util/value_parsing.h"
@@ -980,7 +981,12 @@ Status getOriginSchema(
   // The original Arrow schema was serialized using the store_schema option.
   // We deserialize it here and use it to inform read options such as
   // dictionary-encoded fields.
+#if ARROW_VERSION_MAJOR >= 25
+  ARROW_ASSIGN_OR_RAISE(
+      auto decoded, ::arrow::util::base64_decode(metadata->value(schemaIndex)));
+#else
   auto decoded = ::arrow::util::base64_decode(metadata->value(schemaIndex));
+#endif
   auto schemaBuf = std::make_shared<Buffer>(decoded);
 
   ::arrow::ipc::DictionaryMemo dictMemo;

@@ -124,9 +124,9 @@ function install_velox_deps {
   run_and_time install_fbthrift
   run_and_time install_duckdb
   run_and_time install_stemmer
-  run_and_time install_arrow
   run_and_time install_xsimd
   run_and_time install_simdjson
+  run_and_time install_arrow
   run_and_time install_geos
   run_and_time install_s2geometry
   run_and_time install_faiss
