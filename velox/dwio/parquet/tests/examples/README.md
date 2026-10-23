@@ -198,6 +198,37 @@ annotation, definition level, repetition level, and compression when useful.
 - Purpose: Tests reading fixed-length binary UUID bytes as VARCHAR when the
   requested file schema asks for VARCHAR.
 
+### `uuid_logical.parquet`, `uuid_logical_dictionary.parquet`
+
+- Metadata: `created_by=parquet-mr-presto`, 6 rows, 1 row group, optional
+  `uuid_field: FIXED_LEN_BYTE_ARRAY(16) (UUID)`, uncompressed. The six values
+  (one of them null) are identical in both files; `uuid_logical.parquet` is
+  PLAIN encoded and `uuid_logical_dictionary.parquet` is RLE_DICTIONARY
+  encoded.
+- Purpose: Tests reading a UUID logical type into hugeint, covering both the
+  direct and the dictionary decode path. Written by Presto's Parquet writer,
+  so the bytes carry Presto's UUID byte order (see `PrestoUuidColumnReader`).
+
+### `uuid_logical_spec.parquet`, `uuid_logical_spec_dictionary.parquet`
+
+- Metadata: `created_by=parquet-cpp-arrow version 25.0.1`, 6 rows, 1 row
+  group, optional `uuid_field: FIXED_LEN_BYTE_ARRAY(16) (UUID)`, uncompressed.
+  Same UUIDs as `uuid_logical.parquet`; `uuid_logical_spec.parquet` is PLAIN
+  encoded and `uuid_logical_spec_dictionary.parquet` is RLE_DICTIONARY
+  encoded.
+- Purpose: Tests that a UUID column from a non-Presto writer, which stores the
+  UUID bytes in the order the Parquet spec prescribes, decodes to the
+  canonical UUID values without Presto's byte-order conversion. Written with
+  pyarrow:
+  ```python
+  storage = pa.array([None if v is None else uuid.UUID(v).bytes for v in vals],
+                     pa.binary(16))
+  table = pa.table(
+      {"uuid_field": pa.ExtensionArray.from_storage(pa.uuid(), storage)})
+  pq.write_table(table, path, use_dictionary=..., compression="none",
+                 store_schema=False)
+  ```
+
 ### `upper.parquet`
 
 - Metadata: `created_by=parquet-mr version 1.12.2`, 2 rows, 1 row group,
