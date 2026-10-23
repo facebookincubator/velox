@@ -15,7 +15,7 @@
  */
 
 #include "velox/functions/sparksql/MightContain.h"
-#include "velox/common/base/BloomFilter.h"
+#include "velox/common/base/SplitBlockBloomFilter.h"
 #include "velox/core/Expressions.h"
 #include "velox/functions/sparksql/tests/SparkFunctionBaseTest.h"
 
@@ -55,15 +55,14 @@ class MightContainTest : public SparkFunctionBaseTest {
   }
 
   std::string getSerializedBloomFilter(int32_t kSize) {
-    BloomFilter bloomFilter;
-    bloomFilter.reset(kSize);
+    std::vector<SplitBlockBloomFilter::Block> blocks(1);
+    SplitBlockBloomFilter bloomFilter(blocks);
     for (auto i = 0; i < kSize; ++i) {
       bloomFilter.insert(folly::hasher<int64_t>()(i));
     }
-    std::string data;
-    data.resize(bloomFilter.serializedSize());
-    bloomFilter.serialize(data.data());
-    return data;
+    return std::string(
+        reinterpret_cast<const char*>(blocks.data()),
+        blocks.size() * sizeof(SplitBlockBloomFilter::Block));
   }
 };
 
