@@ -54,6 +54,7 @@ add_library(
   KeyEncoding.h
   KeyChunkBuilder.h
   KeyChunkDecoder.h
+  KeyComparator.h
   KeyReader.h
   KeyCursor.h
   IndexWriter.h
