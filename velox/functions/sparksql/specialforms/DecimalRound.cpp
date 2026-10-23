@@ -29,6 +29,10 @@
 namespace facebook::velox::functions::sparksql {
 namespace {
 
+// Conservative compatibility policy matching the Spark comparison-test domain.
+// The endpoints stress scales far beyond decimal's 38 digits; 400 is not a
+// numerical limit, and 300 has no different rounding semantics. Spark can
+// evaluate scales outside this interval, so its integrations must fall back.
 constexpr int32_t kMinSupportedScale{-400};
 constexpr int32_t kMaxSupportedScale{400};
 

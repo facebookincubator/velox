@@ -296,6 +296,9 @@ Decimal Special Forms
     overflow. Spark may evaluate scales outside this interval or fail at
     different extreme scales. Callers requiring those cases must use Spark
     rather than this special form.
+    The endpoints were selected for compatibility testing well beyond the
+    maximum decimal precision of 38. The value 400 has no mathematical
+    significance compared with 300 and is not a Spark failure threshold.
 
     ::
 
