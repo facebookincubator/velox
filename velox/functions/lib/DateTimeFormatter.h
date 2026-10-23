@@ -26,6 +26,9 @@ namespace facebook::velox::functions {
 
 enum class DateTimeFormatterType {
   JODA,
+  // Like JODA, but parses fractions at microsecond precision and two-digit
+  // years as 2000 + value, matching Spark.
+  SPARK_ISO,
   MYSQL,
   // Corresponding to java.text.SimpleDateFormat in lenient mode. It is used by
   // the 'date_format', 'from_unixtime', 'unix_timestamp' and
@@ -226,8 +229,10 @@ class DateTimeFormatter {
 Expected<std::shared_ptr<DateTimeFormatter>> buildMysqlDateTimeFormatter(
     const std::string_view& format);
 
+/// `type` must be JODA or SPARK_ISO.
 Expected<std::shared_ptr<DateTimeFormatter>> buildJodaDateTimeFormatter(
-    const std::string_view& format);
+    const std::string_view& format,
+    DateTimeFormatterType type = DateTimeFormatterType::JODA);
 
 Expected<std::shared_ptr<DateTimeFormatter>> buildSimpleDateTimeFormatter(
     const std::string_view& format,
