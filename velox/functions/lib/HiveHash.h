@@ -15,6 +15,8 @@
  */
 #pragma once
 
+#include <bit>
+#include <cmath>
 #include <cstdint>
 #include <memory>
 #include <vector>
@@ -30,9 +32,7 @@
 namespace facebook::velox::functions {
 
 /// Computes Hive-compatible hashes, mirroring the hashCode implementation in
-/// Hive's ObjectInspectorUtils (HIVE-12025). Shared between the Hive
-/// connector's partition function and Spark's `hive_hash` scalar function so
-/// both produce bit-identical bucket assignments.
+/// Hive's ObjectInspectorUtils (HIVE-12025).
 class HiveHash {
  public:
   /// Pools must outlive this instance.
@@ -93,6 +93,7 @@ class HiveHash {
   }
 
   /// Computes the Hive hash of a single non-null value of the given 'kind'.
+  /// Preserves signed zero and canonicalizes NaNs as Java does.
   /// Throws VELOX_UNSUPPORTED for kinds outside the supported primitive set.
   template <TypeKind kind>
   static uint32_t hashOne(typename TypeTraits<kind>::NativeType value);
@@ -166,7 +167,9 @@ inline uint32_t HiveHash::hashOne<TypeKind::INTEGER>(int32_t value) {
 
 template <>
 inline uint32_t HiveHash::hashOne<TypeKind::REAL>(float value) {
-  return static_cast<uint32_t>(*reinterpret_cast<const int32_t*>(&value));
+  // Match Hive's Float.floatToIntBits call in ObjectInspectorUtils.hashCode.
+  // https://github.com/apache/hive/blob/ba83fd7bff/serde/src/java/org/apache/hadoop/hive/serde2/objectinspector/ObjectInspectorUtils.java
+  return std::isnan(value) ? 0x7fc00000U : std::bit_cast<uint32_t>(value);
 }
 
 template <>
@@ -176,7 +179,11 @@ inline uint32_t HiveHash::hashOne<TypeKind::BIGINT>(int64_t value) {
 
 template <>
 inline uint32_t HiveHash::hashOne<TypeKind::DOUBLE>(double value) {
-  return hashInt64(*reinterpret_cast<const int64_t*>(&value));
+  // Match Hive's Double.doubleToLongBits call in ObjectInspectorUtils.hashCode.
+  // https://github.com/apache/hive/blob/ba83fd7bff/serde/src/java/org/apache/hadoop/hive/serde2/objectinspector/ObjectInspectorUtils.java
+  const auto bits = std::isnan(value) ? int64_t{0x7ff8000000000000}
+                                      : std::bit_cast<int64_t>(value);
+  return hashInt64(bits);
 }
 
 template <>
