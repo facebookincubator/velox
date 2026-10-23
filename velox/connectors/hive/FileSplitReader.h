@@ -117,6 +117,10 @@ class FileSplitReader {
 
   virtual uint64_t next(uint64_t size, VectorPtr& output);
 
+  /// A row passed the remaining filter; lazily loaded columns will
+  /// be read. Forwards to the row reader so deferred prefetch starts.
+  void hintLazyColumnsNeeded();
+
   void resetFilterCaches();
 
   bool emptySplit() const;
