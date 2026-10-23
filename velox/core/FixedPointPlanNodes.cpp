@@ -73,7 +73,7 @@ void collectNodes(const PlanNodePtr& root, std::vector<const NodeT*>& out) {
   if (root == nullptr) {
     return;
   }
-  if (const auto* typed = dynamic_cast<const NodeT*>(root.get())) {
+  if (const auto* typed = root->template as<NodeT>()) {
     out.push_back(typed);
   }
   for (const auto& source : root->sources()) {
@@ -87,7 +87,7 @@ const DeclT* findDeclaration(
     const std::vector<StateDeclarationPtr>& declarations,
     const std::string& name) {
   for (const auto& declaration : declarations) {
-    const auto* typed = dynamic_cast<const DeclT*>(declaration.get());
+    const auto* typed = declaration->template as<DeclT>();
     if (typed != nullptr && typed->name() == name) {
       return typed;
     }
@@ -171,8 +171,7 @@ int32_t nestedWorkers(const PlanNodePtr& node) {
   if (node == nullptr) {
     return 1;
   }
-  if (const auto* fixedPoint =
-          dynamic_cast<const FixedPointNode*>(node.get())) {
+  if (const auto* fixedPoint = node->as<FixedPointNode>()) {
     return fixedPoint->numWorkers();
   }
   int32_t workers{1};
@@ -204,9 +203,7 @@ bool nestedReadsPeers(const PlanNodePtr& node) {
 // requiresSplits()==false and deadlock waiting for peers that were never
 // named.
 bool chainRequiresSplits(const std::vector<PlanNodePtr>& plans) {
-  if (!plans.empty() &&
-      std::dynamic_pointer_cast<const core::PartitionedOutputNode>(
-          plans.front()) != nullptr) {
+  if (!plans.empty() && plans.front()->is<core::PartitionedOutputNode>()) {
     return true;
   }
   // Every plan, including the first: containsSplitSource reports any node
@@ -222,17 +219,17 @@ bool chainRequiresSplits(const std::vector<PlanNodePtr>& plans) {
   return false;
 }
 
-// The number of workers a chain shuffles across -- the partition count its
-// first plan's PartitionedOutput writes to -- or 1 when the chain does not
-// shuffle.
+// The number of workers a validated chain shuffles across -- the partition
+// count of its first PartitionedOutput that partitions -- or 1 when none does.
+// Every plan but the last ends with a PartitionedOutput.  A broadcast has one
+// partition and reaches every worker the coordinator names, so it gives the
+// chain no width.
 int32_t chainWorkers(const std::vector<PlanNodePtr>& plans) {
-  if (plans.empty()) {
-    return 1;
-  }
-  if (auto partitioned =
-          std::dynamic_pointer_cast<const core::PartitionedOutputNode>(
-              plans.front())) {
-    return partitioned->numPartitions();
+  for (size_t i = 0; i + 1 < plans.size(); ++i) {
+    const auto* partitioned = plans[i]->as<core::PartitionedOutputNode>();
+    if (!partitioned->isBroadcast()) {
+      return partitioned->numPartitions();
+    }
   }
   return 1;
 }
@@ -334,8 +331,7 @@ int32_t countExchanges(const PlanNode* node) {
   if (node == nullptr) {
     return 0;
   }
-  int32_t numExchanges =
-      dynamic_cast<const core::ExchangeNode*>(node) != nullptr ? 1 : 0;
+  int32_t numExchanges = node->is<core::ExchangeNode>() ? 1 : 0;
   for (const auto& source : node->sources()) {
     numExchanges += countExchanges(source.get());
   }
@@ -403,7 +399,7 @@ void validatePlanChain(
     const auto numExchanges = countExchanges(root);
     if (i == 0) {
       VELOX_USER_CHECK(
-          dynamic_cast<const StateSourceNode*>(leaf) != nullptr,
+          leaf != nullptr && leaf->is<StateSourceNode>(),
           "FixedPointNode: the first {} must start with a StateSourceNode, "
           "but it starts with {}",
           what,
@@ -415,7 +411,7 @@ void validatePlanChain(
           what);
     } else {
       VELOX_USER_CHECK(
-          dynamic_cast<const core::ExchangeNode*>(leaf) != nullptr,
+          leaf != nullptr && leaf->is<core::ExchangeNode>(),
           "FixedPointNode: every non-first {} must start with an Exchange, "
           "but {} {} starts with {}",
           what,
@@ -447,7 +443,7 @@ void validatePlanChain(
         root != nullptr ? std::string(root->name()) : "nothing";
     if (i + 1 == numPlans) {
       VELOX_USER_CHECK(
-          dynamic_cast<const core::PartitionedOutputNode*>(root) == nullptr,
+          !root->is<core::PartitionedOutputNode>(),
           "FixedPointNode: the last {} must produce {}, not shuffle through a "
           "PartitionedOutput, but {} {} ends with {}",
           what,
@@ -457,7 +453,7 @@ void validatePlanChain(
           rootName);
     } else {
       VELOX_USER_CHECK(
-          dynamic_cast<const core::PartitionedOutputNode*>(root) != nullptr,
+          root->is<core::PartitionedOutputNode>(),
           "FixedPointNode: every non-last {} must end with a "
           "PartitionedOutput, but {} {} ends with {}",
           what,
@@ -473,9 +469,8 @@ void validatePlanChain(
   // exchanges are built for peers that were never named.
   const auto workers = chainWorkers(plans);
   for (size_t i = 0; i + 1 < numPlans; ++i) {
-    const auto partitioned =
-        std::dynamic_pointer_cast<const core::PartitionedOutputNode>(plans[i]);
-    if (!lastLinkGathers || i + 2 < numPlans) {
+    const auto* partitioned = plans[i]->as<core::PartitionedOutputNode>();
+    if (!partitioned->isBroadcast() && (!lastLinkGathers || i + 2 < numPlans)) {
       VELOX_USER_CHECK_EQ(
           partitioned->numPartitions(),
           workers,
@@ -484,8 +479,8 @@ void validatePlanChain(
           what,
           i);
     }
-    const auto* exchange = dynamic_cast<const core::ExchangeNode*>(
-        primaryLeaf(plans[i + 1].get()));
+    const auto* exchange =
+        primaryLeaf(plans[i + 1].get())->as<core::ExchangeNode>();
     VELOX_USER_CHECK(
         exchange->outputType()->equivalent(*plans[i]->outputType()),
         "FixedPointNode: the schema a {} shuffles out must match what the next "

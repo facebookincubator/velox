@@ -1547,26 +1547,18 @@ TEST_F(FixedPointTest, convergenceTwoWorkers) {
 
 // An all-reduce built from existing nodes, with REPLICATED (not sharded) state.
 // Every worker holds the same one-row entry.  Each iteration a worker
-// replicates its local contribution once per destination and shuffles it, so
-// every worker receives every peer's contribution and aggregates them into the
-// identical new value -- reduce + broadcast, i.e. an all-reduce, from
-// PartitionedOutput + Exchange + Aggregation alone, with no dedicated reduction
-// node.
+// broadcasts its local contribution, so every worker receives every peer's
+// contribution and aggregates them into the identical new value -- reduce +
+// broadcast, i.e. an all-reduce, from PartitionedOutput + Exchange +
+// Aggregation alone, with no dedicated reduction node.
 //
 // Because the resulting state is identical on every worker, convergence is a
 // purely local test on it and is globally consistent by construction; no
 // cross-worker reduction is needed for the verdict either.
 TEST_F(FixedPointTest, allReduceOverReplicatedState) {
-  constexpr int32_t kNumWorkers{2};
   auto schema = ROW({"key", "val"}, BIGINT());
-  auto shuffleType = ROW({"destination", "val"}, BIGINT());
 
   auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-  // One row per destination; the cross join below turns a worker's single
-  // contribution into one copy addressed to each peer.
-  auto destinations =
-      makeRowVector({"destination"}, {makeFlatVector<int64_t>({0, 1})});
-
   auto plan =
       PlanBuilder(idGenerator)
           .fixedPoint(
@@ -1576,21 +1568,12 @@ TEST_F(FixedPointTest, allReduceOverReplicatedState) {
                   PlanBuilder(idGenerator).tableScan(schema).planNode())},
               {PlanBuilder(idGenerator)
                    .stateSource("total", schema)
-                   .nestedLoopJoin(
-                       PlanBuilder(idGenerator)
-                           .values({destinations})
-                           .planNode(),
-                       {"destination", "val"})
-                   .partitionedOutput(
-                       {"destination"},
-                       kNumWorkers,
-                       /*replicateNullsAndAny=*/false,
-                       std::make_shared<ModuloPartitionFunctionSpec>())
+                   .partitionedOutputBroadcast()
                    .planNode(),
                // Sums every peer's contribution: the same total on every
                // worker.
                PlanBuilder(idGenerator)
-                   .exchange(shuffleType, "Presto")
+                   .exchange(schema, "Presto")
                    .singleAggregation({}, {"sum(val)"})
                    .project({"CAST(0 AS BIGINT) AS key", "a0 AS val"})
                    .planNode()},
@@ -1615,6 +1598,69 @@ TEST_F(FixedPointTest, allReduceOverReplicatedState) {
       // Every worker starts from the same replicated row.
       withIterations(
           runOnWorkers(plan, {makeKeyValueRow(0, 1), makeKeyValueRow(0, 1)})),
+      testing::UnorderedElementsAreArray(expected));
+}
+
+// A reduce-scatter followed by an all-gather, over REPLICATED state.  Every
+// worker holds the same row per key.  Each iteration a worker shuffles its rows
+// to each key's owner, the owner combines them, and broadcasts the result, so
+// every worker ends the iteration with the same rows.  Each key is combined
+// once, by its owner, and every worker receives the owner's rows, which keeps
+// the copies identical.  The body mixes a shuffle across the workers with a
+// broadcast, which reaches every worker the loop runs on.
+TEST_F(FixedPointTest, shuffleThenBroadcast) {
+  constexpr int32_t kNumWorkers{2};
+  auto schema = ROW({"key", "val"}, BIGINT());
+
+  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan =
+      PlanBuilder(idGenerator)
+          .fixedPoint(
+              {std::make_shared<VectorStateDeclaration>(
+                  "totals",
+                  schema,
+                  PlanBuilder(idGenerator).tableScan(schema).planNode())},
+              {PlanBuilder(idGenerator)
+                   .stateSource("totals", schema)
+                   .partitionedOutput(
+                       {"key"},
+                       kNumWorkers,
+                       /*replicateNullsAndAny=*/false,
+                       std::make_shared<ModuloPartitionFunctionSpec>())
+                   .planNode(),
+               // On each key's owner: sums every worker's row for the key.
+               PlanBuilder(idGenerator)
+                   .exchange(schema, "Presto")
+                   .singleAggregation({"key"}, {"sum(val) AS val"})
+                   .partitionedOutputBroadcast()
+                   .planNode(),
+               PlanBuilder(idGenerator).exchange(schema, "Presto").planNode()},
+              ConvergenceConfig::converging(
+                  PlanBuilder(idGenerator)
+                      .stateSource("totals", schema)
+                      .singleAggregation({}, {"min(val) AS val"})
+                      .project({"val >= 8 AS converged"})
+                      .planNode(),
+                  100),
+              /*outputStateEntry=*/"totals")
+          .planNode();
+
+  // Each iteration sums both workers' equal rows for a key, doubling every
+  // total: 1 -> 2 -> 4 -> 8, converging after exactly three iterations.  Every
+  // worker must hold both keys with the same value and report the same
+  // iteration count.
+  std::vector<std::tuple<int64_t, int64_t, int64_t>> expected{
+      {0, 8, 3},
+      {1, 8, 3},
+      {0, 8, 3},
+      {1, 8, 3},
+  };
+  auto start = makeRowVector(
+      {"key", "val"},
+      {makeFlatVector<int64_t>({0, 1}), makeFlatVector<int64_t>({1, 1})});
+  EXPECT_THAT(
+      // Every worker starts from the same replicated rows.
+      withIterations(runOnWorkers(plan, {start, start})),
       testing::UnorderedElementsAreArray(expected));
 }
 
