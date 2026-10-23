@@ -971,19 +971,29 @@ time_zone::~time_zone() = default;
 sys_info
 time_zone::load_sys_info(std::vector<date::transition>::const_iterator i) const
 {
-    using namespace std::chrono;
-    const auto& transitions = __impl_->transitions();
-    assert(!transitions.empty());
-    assert(i != transitions.begin());
+  return load_sys_info(i, true);
+}
 
-    sys_info r;
-    r.begin = i[-1].timepoint;
-    r.end = i != transitions.end() ? i->timepoint :
-                                      date::sys_seconds(date::sys_days(date::year::max()/date::December/31));
-    r.offset = i[-1].info->offset;
-    r.save = i[-1].info->is_dst ? minutes{1} : minutes{0};
+sys_info time_zone::load_sys_info(
+    std::vector<date::transition>::const_iterator i,
+    bool __with_abbreviation) const {
+  using namespace std::chrono;
+  const auto& transitions = __impl_->transitions();
+  assert(!transitions.empty());
+  assert(i != transitions.begin());
+
+  sys_info r;
+  r.begin = i[-1].timepoint;
+  r.end = i != transitions.end()
+      ? i->timepoint
+      : date::sys_seconds(
+            date::sys_days(date::year::max() / date::December / 31));
+  r.offset = i[-1].info->offset;
+  r.save = i[-1].info->is_dst ? minutes{1} : minutes{0};
+  if (__with_abbreviation) {
     r.abbrev = i[-1].info->abbrev;
-    return r;
+  }
+  return r;
 }
 
 [[nodiscard]] sys_info time_zone::__get_info_to_populate_transition(date::sys_seconds __time) const {
@@ -1179,6 +1189,12 @@ time_zone::load_sys_info(std::vector<date::transition>::const_iterator i) const
 }
 
 [[nodiscard]] sys_info time_zone::__get_info(date::sys_seconds __time) const {
+  return __get_info(__time, true);
+}
+
+[[nodiscard]] sys_info time_zone::__get_info(
+    date::sys_seconds __time,
+    bool __with_abbreviation) const {
   const auto& transitions = __impl_->transitions();
   auto iter = upper_bound(transitions.begin(), transitions.end(), __time,
                                      [](const date::sys_seconds& x, const date::transition& t)
@@ -1188,13 +1204,15 @@ time_zone::load_sys_info(std::vector<date::transition>::const_iterator i) const
 
   if (iter == transitions.begin()) {
     return sys_info{
-      date::sys_days(date::year::min()/date::January/1),
-      iter + 1 != transitions.end() ? iter[1].timepoint :
-                                      date::sys_seconds(date::sys_days(date::year::max()/date::December/31)),
-      iter[0].info->offset,
-      iter[0].info->is_dst ? std::chrono::minutes{1} : std::chrono::minutes{0},
-      iter[0].info->abbrev
-    };
+        date::sys_days(date::year::min() / date::January / 1),
+        iter + 1 != transitions.end()
+            ? iter[1].timepoint
+            : date::sys_seconds(
+                  date::sys_days(date::year::max() / date::December / 31)),
+        iter[0].info->offset,
+        iter[0].info->is_dst ? std::chrono::minutes{1}
+                             : std::chrono::minutes{0},
+        __with_abbreviation ? iter[0].info->abbrev : std::string{}};
   }
 
   if (iter == transitions.end() && __impl_->__continuations().back().__has_forever_rules) {
@@ -1234,17 +1252,19 @@ time_zone::load_sys_info(std::vector<date::transition>::const_iterator i) const
     }
 
     return sys_info{
-      currentTransition,
-      nextTransition,
-      continuation.__stdoff + (*currentRule)->__save.__time,
-      std::chrono::duration_cast<std::chrono::minutes>(
-                  (*currentRule)->__save.__time),
-      __format(
-                  continuation, (*currentRule)->__letters, (*currentRule)->__save.__time)
-    };
+        currentTransition,
+        nextTransition,
+        continuation.__stdoff + (*currentRule)->__save.__time,
+        std::chrono::duration_cast<std::chrono::minutes>(
+            (*currentRule)->__save.__time),
+        __with_abbreviation ? __format(
+                                  continuation,
+                                  (*currentRule)->__letters,
+                                  (*currentRule)->__save.__time)
+                            : std::string{}};
   }
 
-  return load_sys_info(iter);
+  return load_sys_info(iter, __with_abbreviation);
 }
 
 // Is the "__local_time" present in "__first" and "__second". If so the
@@ -1299,6 +1319,12 @@ time_zone::load_sys_info(std::vector<date::transition>::const_iterator i) const
 
 [[nodiscard]] local_info time_zone::__get_info(
     date::local_seconds __local_time) const {
+  return __get_info(__local_time, true);
+}
+
+[[nodiscard]] local_info time_zone::__get_info(
+    date::local_seconds __local_time,
+    bool __with_abbreviation) const {
   std::chrono::seconds __local_seconds = __local_time.time_since_epoch();
 
   /* An example of a typical year with a DST switch displayed in local time.
@@ -1330,7 +1356,7 @@ time_zone::load_sys_info(std::vector<date::transition>::const_iterator i) const
   // information available. Assume the offset between system time and local time
   // is 0s. This gives an initial estimate.
   date::sys_seconds __guess{__local_seconds};
-  sys_info __info = __get_info(__guess);
+  sys_info __info = __get_info(__guess, __with_abbreviation);
 
   // At this point the offset can be used to determine an estimate for the local
   // time. Before doing that, determine the offset and validate whether the
@@ -1381,18 +1407,20 @@ time_zone::load_sys_info(std::vector<date::transition>::const_iterator i) const
   if (__sys_time < __info.begin)
     // Case 1 before __info
     return facebook::velox::tzdb::__get_info(
-        __local_time, __get_info(__info.begin - 1s), __info);
+        __local_time,
+        __get_info(__info.begin - 1s, __with_abbreviation),
+        __info);
 
   if (__sys_time >= __info.end)
     // Case 3 after __info
     return facebook::velox::tzdb::__get_info(
-        __local_time, __info, __get_info(__info.end));
+        __local_time, __info, __get_info(__info.end, __with_abbreviation));
 
   // Case 2 in __info
   if (__info.begin != date::sys_days(date::year::min()/date::January/1)) {
     // Case 2.1 Not at the beginning, when not ambiguous the result should test
     // case 2.3.
-    sys_info __prev = __get_info(__info.begin - 1s);
+    sys_info __prev = __get_info(__info.begin - 1s, __with_abbreviation);
     if (__is_ambiguous(__local_time, __prev, __info))
       return {local_info::ambiguous, __prev, __info};
   }
@@ -1403,7 +1431,7 @@ time_zone::load_sys_info(std::vector<date::transition>::const_iterator i) const
 
   // This tests case 2.2 or case 2.3.
   return facebook::velox::tzdb::__get_info(
-      __local_time, __info, __get_info(__info.end));
+      __local_time, __info, __get_info(__info.end, __with_abbreviation));
 }
 
 } // namespace facebook::velox::tzdb
