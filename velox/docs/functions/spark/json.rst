@@ -110,12 +110,16 @@ JSON Functions
     Converts a JSON object (ROW, ARRAY, or MAP) into a JSON string.
 
     Supported primitive types are: BOOLEAN, TINYINT, SMALLINT, INTEGER, BIGINT,
-    REAL, DOUBLE, DECIMAL, DATE, TIMESTAMP, VARCHAR, and VARBINARY. ROW, ARRAY,
-    and MAP can be nested. ::
+    REAL, DOUBLE, DECIMAL, DATE, TIMESTAMP, TIMESTAMP_UTC, VARCHAR, and VARBINARY.
+    ROW, ARRAY, and MAP can be nested. ::
 
         SELECT to_json(named_struct('c0', 1, 'c1', 'a')); -- {"c0":1,"c1":"a"}
         SELECT to_json(ARRAY(1, 2, 3)); -- [1,2,3]
         SELECT to_json(MAP('x', 1, 'y', 2)); -- {"x":1,"y":2}
+
+    TIMESTAMP_UTC (Spark's TIMESTAMP_NTZ) values retain their local date and
+    time, using the format ``yyyy-MM-dd'T'HH:mm:ss.SSS`` without a timezone
+    offset. Session and function timezone settings do not affect these values.
 
     The current implementation has following limitations.
 

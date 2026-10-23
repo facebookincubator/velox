@@ -22,6 +22,7 @@
 #include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/exec/OrderBy.h"
 #include "velox/exec/PlanNodeStats.h"
+#include "velox/exec/tests/SimpleAggregateFunctionsRegistration.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -1633,6 +1634,29 @@ DEBUG_ONLY_TEST_F(WindowTest, nonRowsStreamingWindow) {
       .assertResults(
           "SELECT *, first_value(c1) over (order by c1 rows unbounded preceding), nth_value(c1, 1) over (order by c1 rows unbounded preceding) FROM tmp");
   ASSERT_FALSE(isStreamCreated.load());
+}
+
+TEST_F(WindowTest, aggregateReceivesConstantInputs) {
+  // An aggregate used as a window function receives its constant arguments.
+  // simple_const_fwd adds its constant to every input value.
+  velox::aggregate::registerSimpleConstantForwardingAggregate(
+      "simple_const_fwd");
+
+  auto data = makeRowVector({makeFlatVector<int64_t>({1, 2, 3})});
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .window({"simple_const_fwd(c0, 10) over (order by c0 rows "
+                           "between current row and 1 following)"})
+                  .planNode();
+
+  // Frames: {1, 2} -> 11 + 12, {2, 3} -> 12 + 13, {3} -> 13.
+  auto expected = makeRowVector(
+      {"c0", "w0"},
+      {
+          data->childAt(0),
+          makeFlatVector<int64_t>({23, 25, 13}),
+      });
+  AssertQueryBuilder(plan).assertResults(expected);
 }
 
 TEST_F(WindowTest, missingFunctionSignature) {

@@ -22,15 +22,16 @@
 
 using namespace facebook;
 
-using EncodingViewTest = nimble::test::EncodingViewTest;
 using ConstantEncodingViewTest = nimble::test::EncodingViewTest;
 
-TEST_F(EncodingViewTest, readsConstantEncoding) {
+TEST_P(ConstantEncodingViewTest, readsConstantEncoding) {
   expectReads<nimble::ConstantEncoding<int32_t>>(
       makeVector({7, 7, 7, 7}), {3, 0, 2, 2, 1});
 }
 
-TEST_F(ConstantEncodingViewTest, concurrent) {
+TEST_P(ConstantEncodingViewTest, concurrent) {
   expectConcurrentReads<nimble::ConstantEncoding<int32_t>>(
       constantInt32(/*value=*/42), randomizedPositions(/*seed=*/1));
 }
+
+INSTANTIATE_ENCODING_VIEW_TEST_SUITE(ConstantEncodingViewTest);

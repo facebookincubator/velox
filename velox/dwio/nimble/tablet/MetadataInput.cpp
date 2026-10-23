@@ -207,11 +207,12 @@ std::vector<MetadataInput::IoGroup> MetadataInput::computeIoGroups(
 }
 
 void MetadataInput::executeIoGroups(std::vector<IoGroup>& ioGroups) {
-  std::vector<std::unique_ptr<velox::AsyncSource<folly::Unit>>> asyncIos;
+  // Shared with the executor tasks below, which can outlive this call.
+  std::vector<std::shared_ptr<velox::AsyncSource<folly::Unit>>> asyncIos;
   asyncIos.reserve(ioGroups.size());
   for (const auto& group : ioGroups) {
     asyncIos.emplace_back(
-        std::make_unique<velox::AsyncSource<folly::Unit>>([this, &group]() {
+        std::make_shared<velox::AsyncSource<folly::Unit>>([this, &group]() {
           // Measure at nanosecond resolution so that fast reads still register
           // a non-zero scan time; truncating to microseconds would lose
           // sub-microsecond reads entirely.
@@ -228,14 +229,19 @@ void MetadataInput::executeIoGroups(std::vector<IoGroup>& ioGroups) {
 
   QueryIoLatencyGuard queryIoGuard{ioStats_.get()};
   if (executor_ != nullptr && asyncIos.size() > 1) {
-    for (size_t i = 0; i + 1 < asyncIos.size(); ++i) {
-      executor_->add([&asyncIo = asyncIos[i]]() { asyncIo->prepare(); });
+    // Queues every group but the first. This thread reads the first group
+    // below, which gives the executor time to start the others.
+    for (size_t i = 1; i < asyncIos.size(); ++i) {
+      // move() below reads any group whose task has not started, so a task can
+      // run after this call returns. It then finds its read done and exits
+      // without touching 'group' or this object.
+      executor_->add([asyncIo = asyncIos[i]]() { asyncIo->prepare(); });
     }
   }
   std::exception_ptr error;
-  for (auto& asyncIo : asyncIos) {
+  for (size_t i = 0; i < asyncIos.size(); ++i) {
     try {
-      asyncIo->move();
+      asyncIos[i]->move();
     } catch (...) {
       if (error == nullptr) {
         error = std::current_exception();

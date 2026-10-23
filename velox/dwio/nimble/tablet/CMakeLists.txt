@@ -207,9 +207,13 @@ target_link_libraries(
   Folly::folly
 )
 
+add_library(nimble_block_cache BlockCache.cpp BlockCache.h)
+target_link_libraries(nimble_block_cache nimble_common velox_caching velox_time Folly::folly)
+
 add_library(nimble_data_input DataInput.cpp DataInput.h)
 target_link_libraries(
   nimble_data_input
+  nimble_block_cache
   nimble_common
   velox_memory
   velox_file

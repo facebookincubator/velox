@@ -205,6 +205,8 @@ class SetDigestArgValuesGenerator : public ArgValuesGenerator {
  private:
   std::string functionName_;
 };
+
+#ifdef VELOX_ENABLE_GEO
 /// Generates valid S2 cell ID arguments for s2_cell_* functions.
 /// Picks random face, position, and level to construct valid cell IDs via
 /// S2CellOp::cellIdFromFacePositionLevel. Also constrains the level
@@ -232,6 +234,7 @@ class S2CellTokenArgValuesGenerator : public ArgValuesGenerator {
       FuzzerGenerator& rng,
       ExpressionFuzzerState& state) override;
 };
+#endif // VELOX_ENABLE_GEO
 
 /// Generates arguments for inverse_f_cdf. Reads each argument from an input
 /// column, with degrees of freedom in [0, 1e6] and p in [0, 1]. Boost's F
@@ -240,6 +243,21 @@ class S2CellTokenArgValuesGenerator : public ArgValuesGenerator {
 class InverseFCdfArgValuesGenerator : public ArgValuesGenerator {
  public:
   ~InverseFCdfArgValuesGenerator() override = default;
+
+  std::vector<core::TypedExprPtr> generate(
+      const CallableSignature& signature,
+      const VectorFuzzer::Options& options,
+      FuzzerGenerator& rng,
+      ExpressionFuzzerState& state) override;
+};
+
+/// Generates arguments for Spark levenshtein. Reads each argument from an
+/// input column, with strings of at most 1,000 characters. The distance takes
+/// time proportional to the product of the two lengths, so strings near the
+/// 1 MB limit of functions like lpad take minutes per row.
+class LevenshteinArgValuesGenerator : public ArgValuesGenerator {
+ public:
+  ~LevenshteinArgValuesGenerator() override = default;
 
   std::vector<core::TypedExprPtr> generate(
       const CallableSignature& signature,

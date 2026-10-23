@@ -40,16 +40,20 @@ class NimbleData : public velox::dwio::common::FormatData {
       bool nimblePreserveDictionaryEncoding = false,
       bool lazyColumnIo = false,
       velox::dwio::common::DecodingStats* decodingStats = nullptr,
-      bool dictionaryAwareReads = false);
+      bool dictionaryAwareReads = false,
+      bool scanFastPath = false);
 
   /// Read internal node nulls. For leaf nodes, we only copy `incomingNulls' if
-  /// it exists.
+  /// it exists. A nulls-only read of a scalar column reads its nulls from the
+  /// value stream instead.
   void readNulls(
       velox::vector_size_t numValues,
       const uint64_t* incomingNulls,
       velox::BufferPtr& nulls,
       bool nullsOnly) override;
 
+  /// With nulls-only reads enabled, a nulls-only skip skips the value stream,
+  /// which holds the nulls, and returns 0.
   uint64_t skipNulls(uint64_t numValues, bool nullsOnly) override;
 
   uint64_t skip(uint64_t numValues) final {
@@ -78,6 +82,21 @@ class NimbleData : public velox::dwio::common::FormatData {
   }
 
   ChunkedDecoder makeScalarDecoder();
+
+  /// Enables nulls-only reads through 'decoder', which decodes this scalar
+  /// column's value stream. Takes effect only when:
+  ///
+  /// - scanFastPath is on.
+  /// - The encodings are non-legacy.
+  /// - The column has no in-map stream, which also holds nulls.
+  void setNullsOnlyDecoder(ChunkedDecoder* decoder);
+
+  /// Returns true if nulls-only reads are enabled and 'scanSpec' needs only the
+  /// column's nulls:
+  ///
+  /// - An IS NULL filter.
+  /// - An IS NOT NULL filter on a column whose values are not kept.
+  bool readsNullsOnly(const velox::common::ScanSpec& scanSpec) const;
 
   // Decoders for Timestamps
   ChunkedDecoder makeMicrosDecoder();
@@ -122,6 +141,9 @@ class NimbleData : public velox::dwio::common::FormatData {
   StripeStreams* const streams_;
   velox::memory::MemoryPool* const pool_;
   ChunkedDecoder* const inMapDecoder_;
+  // Decoder of a scalar column's value stream (which holds its nulls), owned by
+  // the column reader. Null when nulls-only reads are disabled.
+  ChunkedDecoder* nullsOnlyDecoder_{nullptr};
   std::unique_ptr<ChunkedDecoder> nullsDecoder_;
   velox::BufferPtr inMap_;
   const EncodingFactory* const encodingFactory_;
@@ -131,6 +153,7 @@ class NimbleData : public velox::dwio::common::FormatData {
   // is disabled.
   velox::dwio::common::DecodingStats* const decodingStats_{nullptr};
   const bool dictionaryAwareReads_{false};
+  const bool scanFastPath_{false};
 };
 
 class NimbleParams : public velox::dwio::common::FormatParams {
@@ -147,7 +170,8 @@ class NimbleParams : public velox::dwio::common::FormatParams {
       bool nimblePreserveDictionaryEncoding = false,
       const folly::F14FastSet<std::string>* lazyIoColumns = nullptr,
       bool lazyColumnIo = false,
-      bool dictionaryAwareReads = false)
+      bool dictionaryAwareReads = false,
+      bool scanFastPath = false)
       : FormatParams(pool, stats),
         nimbleType_(nimbleType),
         streams_(&streams),
@@ -158,7 +182,8 @@ class NimbleParams : public velox::dwio::common::FormatParams {
         lazyColumnIo_(lazyColumnIo),
         stringDecoderZeroCopy_{stringDecoderZeroCopy},
         nimblePreserveDictionaryEncoding_{nimblePreserveDictionaryEncoding},
-        dictionaryAwareReads_{dictionaryAwareReads} {}
+        dictionaryAwareReads_{dictionaryAwareReads},
+        scanFastPath_{scanFastPath} {}
 
   std::unique_ptr<velox::dwio::common::FormatData> toFormatData(
       const std::shared_ptr<const velox::dwio::common::TypeWithId>& /*type*/,
@@ -177,7 +202,8 @@ class NimbleParams : public velox::dwio::common::FormatParams {
         nimblePreserveDictionaryEncoding_,
         /*lazyIoColumns=*/nullptr,
         lazyColumnIo_,
-        dictionaryAwareReads_);
+        dictionaryAwareReads_,
+        scanFastPath_);
   }
 
   const std::shared_ptr<const Type>& nimbleType() const {
@@ -230,6 +256,10 @@ class NimbleParams : public velox::dwio::common::FormatParams {
     return dictionaryAwareReads_;
   }
 
+  bool scanFastPath() const {
+    return scanFastPath_;
+  }
+
  private:
   const std::shared_ptr<const Type> nimbleType_;
   StripeStreams* const streams_{nullptr};
@@ -245,6 +275,7 @@ class NimbleParams : public velox::dwio::common::FormatParams {
   bool stringDecoderZeroCopy_{false};
   bool nimblePreserveDictionaryEncoding_{false};
   bool dictionaryAwareReads_{false};
+  bool scanFastPath_{false};
 };
 
 } // namespace facebook::nimble

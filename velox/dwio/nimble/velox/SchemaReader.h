@@ -22,7 +22,7 @@
 #include <utility>
 #include <vector>
 
-#include "folly/container/F14Set.h"
+#include "folly/container/F14Map.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/velox/SchemaTypes.h"
 
@@ -249,7 +249,9 @@ class HybridFlatMapType : public Type {
     /// Stable group identifier. Default uses HybridFlatMap::kDefaultGroupId.
     uint32_t groupId;
     /// Feature keys in key-presence bitmap order. Default keys are accumulated
-    /// in first-seen order and may be empty before any are observed.
+    /// in first-seen order and may be empty before any are observed. A
+    /// projection whose requested keys are all absent also holds a keyless
+    /// Default group.
     std::vector<std::string> groupKeys;
     /// One bit per schema key; trailing omitted bits are absent.
     StreamDescriptor keyPresenceDescriptor;
@@ -279,13 +281,13 @@ class HybridFlatMapType : public Type {
   /// ordinal, not a group ID.
   const Group& groupAt(size_t index) const;
 
-  /// Returns the reserved Default group. Fails when a projected schema omitted
-  /// Default because it was not selected.
+  /// Returns the reserved Default group. Fails when a projected schema kept
+  /// only configured groups. In a projection whose requested keys are all
+  /// absent, returns a keyless Default group that carries no data.
   const Group& defaultGroup() const;
 
   /// Returns the schema-order index of the group containing `key`, including
-  /// Default. Configured groups are binary searched and Default uses a hash
-  /// set. Returns `std::nullopt` when the schema has not observed it.
+  /// Default. Returns `std::nullopt` when the schema has not observed it.
   std::optional<size_t> findGroup(std::string_view key) const;
 
   /// Returns the common logical value type from the first group.
@@ -295,9 +297,9 @@ class HybridFlatMapType : public Type {
   StreamDescriptor nullsDescriptor_;
   const ScalarKind keyScalarKind_;
   std::vector<Group> groups_;
-  // Views into the Default group's keys in groups_, which never changes after
-  // construction.
-  folly::F14FastSet<std::string_view> defaultGroupKeys_;
+  // Maps views into groups_' keys to schema-order group indices. groups_ never
+  // changes after construction.
+  folly::F14FastMap<std::string_view, size_t> groupIndices_;
 };
 
 class ArrayWithOffsetsType : public Type {

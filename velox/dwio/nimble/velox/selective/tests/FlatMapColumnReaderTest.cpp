@@ -118,7 +118,9 @@ class FlatMapColumnReaderTest : public ::testing::TestWithParam<bool>,
       const std::shared_ptr<common::ScanSpec>& scanSpec,
       bool preserveFlatMapsInMemory = false,
       bool lazyColumnIo = false,
-      const folly::F14FastSet<std::string>& remainingFilterColumns = {}) {
+      const folly::F14FastSet<std::string>& remainingFilterColumns = {},
+      bool stringDecoderZeroCopy = false,
+      bool scanFastPath = false) {
     auto readFile = std::make_shared<InMemoryReadFile>(file);
     auto factory =
         dwio::common::getReaderFactory(dwio::common::FileFormat::NIMBLE);
@@ -136,6 +138,8 @@ class FlatMapColumnReaderTest : public ::testing::TestWithParam<bool>,
     rowOptions.setRequestedType(type);
     rowOptions.setPreserveFlatMapsInMemory(preserveFlatMapsInMemory);
     rowOptions.setLazyColumnIo(lazyColumnIo);
+    rowOptions.setStringDecoderZeroCopy(stringDecoderZeroCopy);
+    rowOptions.setNimbleScanFastPath(scanFastPath);
     if (!remainingFilterColumns.empty()) {
       rowOptions.setRemainingFilterColumns(remainingFilterColumns);
     }
@@ -236,6 +240,96 @@ TEST_P(FlatMapColumnReaderTest, asStructBasic) {
           makeNullableFlatVector<int64_t>({30, 50, std::nullopt}),
       })});
   velox::test::assertEqualVectors(expected, batch);
+}
+
+// Key 1 is in every non-null map, so with skipConstantFlatMapInMapStreams it
+// has no in-map stream, and an IS NULL filter on it reads only the nulls of its
+// value stream, with the map's nulls as the incoming nulls. Without the option
+// the in-map stream exists and the filter decodes the values.
+TEST_P(FlatMapColumnReaderTest, asStructNullFilterOnKeyInEveryRow) {
+  constexpr vector_size_t kSize = 300;
+  const auto isMapNullAt = [](vector_size_t row) { return row % 7 == 0; };
+  const auto isKey1NullAt = [&](vector_size_t row) {
+    return isMapNullAt(row) || row % 3 == 0;
+  };
+  const auto hasKey2At = [&](vector_size_t row) {
+    return !isMapNullAt(row) && row % 2 == 0;
+  };
+  std::vector<
+      std::optional<std::vector<std::pair<int32_t, std::optional<int64_t>>>>>
+      maps;
+  for (vector_size_t row = 0; row < kSize; ++row) {
+    if (isMapNullAt(row)) {
+      maps.emplace_back(std::nullopt);
+      continue;
+    }
+    std::vector<std::pair<int32_t, std::optional<int64_t>>> entries;
+    entries.emplace_back(
+        1, isKey1NullAt(row) ? std::nullopt : std::optional<int64_t>(row));
+    if (hasKey2At(row)) {
+      entries.emplace_back(2, row);
+    }
+    maps.emplace_back(std::move(entries));
+  }
+  auto input = makeRowVector({
+      makeNullableMapVector<int32_t, int64_t>(maps),
+      makeFlatIdentityVector<int64_t>(kSize),
+  });
+  auto file = writeFlatMapFile(input);
+
+  auto outType =
+      ROW({{"c0", ROW({{"1", BIGINT()}, {"2", BIGINT()}})}, {"c1", BIGINT()}});
+  auto scanSpec = std::make_shared<common::ScanSpec>("root");
+  scanSpec->addAllChildFields(*outType);
+  auto* c0 = scanSpec->childByName("c0");
+  c0->setFlatMapAsStruct(true);
+  c0->childByName("1")->setFilter(std::make_unique<common::IsNull>());
+  auto readers = makeReaders(
+      input,
+      file,
+      scanSpec,
+      /*preserveFlatMapsInMemory=*/false,
+      /*lazyColumnIo=*/false,
+      /*remainingFilterColumns=*/{},
+      /*stringDecoderZeroCopy=*/true,
+      /*scanFastPath=*/true);
+
+  auto expected = makeRowVector(
+      {"c0", "c1"},
+      {
+          makeRowVector(
+              {"1", "2"},
+              {
+                  makeFlatVector<int64_t>(
+                      kSize, [](auto row) { return row; }, isKey1NullAt),
+                  makeFlatVector<int64_t>(
+                      kSize,
+                      [](auto row) { return row; },
+                      [&](auto row) { return !hasKey2At(row); }),
+              },
+              isMapNullAt),
+          makeFlatIdentityVector<int64_t>(kSize),
+      });
+  VectorPtr batch = BaseVector::create(outType, 0, pool());
+  vector_size_t expectedRow = 0;
+  vector_size_t numScanned = 0;
+  while (numScanned < kSize) {
+    numScanned += readers.rowReader->next(37, batch);
+    for (vector_size_t i = 0; i < batch->size(); ++i) {
+      while (expectedRow < kSize && !isKey1NullAt(expectedRow)) {
+        ++expectedRow;
+      }
+      ASSERT_LT(expectedRow, kSize);
+      ASSERT_TRUE(batch->equalValueAt(expected.get(), i, expectedRow))
+          << "row " << expectedRow << ": expected "
+          << expected->toString(expectedRow) << " got " << batch->toString(i);
+      ++expectedRow;
+    }
+  }
+  while (expectedRow < kSize) {
+    ASSERT_FALSE(isKey1NullAt(expectedRow)) << "row " << expectedRow;
+    ++expectedRow;
+  }
 }
 
 TEST_P(FlatMapColumnReaderTest, asStructInt8Keys) {

@@ -93,6 +93,7 @@ IcebergDataFileStatisticsPtr IcebergParquetStatsCollector::aggregate(
   auto dataFileStats = std::make_shared<IcebergDataFileStatistics>();
   dataFileStats->numRecords = metadata->numRows();
   const auto numRowGroups = metadata->numRowGroups();
+  dataFileStats->splitOffsets.reserve(numRowGroups);
 
   // Track global min/max statistics for each column across all row groups.
   // Key: Iceberg field ID.
@@ -112,6 +113,7 @@ IcebergDataFileStatisticsPtr IcebergParquetStatsCollector::aggregate(
   std::unordered_set<int32_t> fieldIds;
   for (auto i = 0; i < numRowGroups; ++i) {
     const auto& rowGroup = metadata->rowGroup(i);
+    dataFileStats->splitOffsets.push_back(rowGroup->fileOffset());
 
     for (auto j = 0; j < rowGroup->numColumns(); ++j) {
       const auto& columnChunk = rowGroup->columnChunk(j);
@@ -124,7 +126,8 @@ IcebergDataFileStatisticsPtr IcebergParquetStatsCollector::aggregate(
 
       const auto& columnChunkStats = columnChunk->statistics();
       if (columnChunkStats) {
-        stats.nullValueCount += columnChunkStats->nullCount();
+        stats.nullValueCount =
+            stats.nullValueCount.value_or(0) + columnChunkStats->nullCount();
 
         if (columnChunkStats->hasMinMax() && shouldStoreBounds(fieldId)) {
           auto [it, inserted] = globalMinMaxStats.emplace(

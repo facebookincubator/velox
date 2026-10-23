@@ -25,7 +25,10 @@
 //   repeated runs → RLEEncoding
 //   nullable wrappers → NullableEncoding
 
+#include <cstddef>
+
 #include <gtest/gtest.h>
+#include <bit>
 
 #include "folly/Random.h"
 #include "velox/common/io/IoStatistics.h"
@@ -48,6 +51,7 @@
 #include "velox/dwio/nimble/encodings/legacy/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/legacy/EncodingUtils.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
+#include "velox/dwio/nimble/encodings/subintsplit/SplitBoundaries.h"
 #include "velox/dwio/nimble/encodings/tests/EncodingLayoutTestHelper.h"
 #include "velox/dwio/nimble/encodings/tests/SharedDictionaryEncodingTestUtils.h"
 #include "velox/dwio/nimble/velox/ChunkedStream.h"
@@ -59,6 +63,7 @@
 #include "velox/dwio/nimble/velox/selective/ReaderBase.h"
 #include "velox/dwio/nimble/velox/selective/RowSizeTracker.h"
 #include "velox/dwio/nimble/velox/selective/StringColumnReader.h"
+#include "velox/vector/AggregationHook.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
@@ -98,7 +103,63 @@ class IntegerColumnReaderTestAccessor : public IntegerColumnReader {
   void advanceReadOffset(const RowSet& rows) {
     readOffset_ += rows.back() + 1;
   }
+
+  const BufferPtr& resultNullsForTest() const {
+    return resultNulls();
+  }
 };
+
+// Records integer hook callbacks and counts bulk calls. 'kOptInBulkFastPath'
+// controls whether encodings route this hook through their bulk path without
+// scanFastPath.
+template <bool kOptInBulkFastPath>
+class CapturingIntHook final : public ValueHook {
+ public:
+  static constexpr bool kSkipNulls = true;
+  static constexpr bool kBulkFastPath = kOptInBulkFastPath;
+
+  bool acceptsNulls() const final {
+    return false;
+  }
+
+  void addValue(vector_size_t row, int64_t value) final {
+    rows.push_back(row);
+    values.push_back(value);
+  }
+
+  void addValues(
+      const vector_size_t* inputRows,
+      const int32_t* inputValues,
+      vector_size_t size) final {
+    addBulk(inputRows, inputValues, size);
+  }
+
+  void addValues(
+      const vector_size_t* inputRows,
+      const int64_t* inputValues,
+      vector_size_t size) final {
+    addBulk(inputRows, inputValues, size);
+  }
+
+  std::vector<vector_size_t> rows;
+  std::vector<int64_t> values;
+  uint32_t numBulkCalls{0};
+
+ private:
+  template <typename T>
+  void addBulk(
+      const vector_size_t* inputRows,
+      const T* inputValues,
+      vector_size_t size) {
+    ++numBulkCalls;
+    for (vector_size_t i = 0; i < size; ++i) {
+      addValue(inputRows[i], inputValues[i]);
+    }
+  }
+};
+
+using BulkCapturingIntHook = CapturingIntHook</*kOptInBulkFastPath=*/true>;
+using GenericCapturingIntHook = CapturingIntHook</*kOptInBulkFastPath=*/false>;
 
 // ---------------------------------------------------------------------------
 // Test-only accessor for FloatingPointColumnReader: exposes protected
@@ -323,6 +384,57 @@ std::string_view encodeNullableAlp(
 }
 
 // ---------------------------------------------------------------------------
+// ConstantEncoding test support.
+// ---------------------------------------------------------------------------
+constexpr int64_t kConstantValue{42};
+
+// How a test filters a column whose chunks hold a single value: not at all,
+// with a filter the value passes, or with a filter it fails.
+enum class ConstantFilter { kNone, kPass, kFail };
+
+struct ConstantReadCase {
+  bool nullable;
+  bool sparse;
+  ConstantFilter filter;
+  // Whether the filter accepts nulls. Only matters for nullable data.
+  bool nullAllowed;
+  bool filterOnly;
+};
+
+std::unique_ptr<common::BigintRange> makeConstantRange(
+    ConstantFilter filter,
+    bool nullAllowed) {
+  if (filter == ConstantFilter::kPass) {
+    return std::make_unique<common::BigintRange>(
+        kConstantValue - 2, kConstantValue + 2, nullAllowed);
+  }
+  return std::make_unique<common::BigintRange>(
+      kConstantValue + 1, kConstantValue + 10, nullAllowed);
+}
+
+template <typename T>
+std::unique_ptr<common::Filter> makeConstantColumnFilter(
+    const T& value,
+    const T& otherValue,
+    ConstantFilter filter) {
+  NIMBLE_CHECK(
+      filter != ConstantFilter::kNone, "An unfiltered column has none");
+  const auto& target = filter == ConstantFilter::kPass ? value : otherValue;
+  if constexpr (std::is_floating_point_v<T>) {
+    return std::make_unique<common::FloatingPointRange<T>>(
+        target, false, false, target, false, false, false);
+  } else if constexpr (std::is_same_v<T, StringView>) {
+    return std::make_unique<common::BytesValues>(
+        std::vector<std::string>{target.str()}, false);
+  } else if constexpr (std::is_same_v<T, bool>) {
+    return std::make_unique<common::BoolValue>(target, false);
+  } else {
+    static_assert(std::is_integral_v<T>);
+    return std::make_unique<common::BigintRange>(target, target, false);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Test fixture
 // ---------------------------------------------------------------------------
 // Parameter: true = non-legacy (stringDecoderZeroCopy=true),
@@ -387,6 +499,22 @@ class ReadWithVisitorTest : public ::testing::TestWithParam<bool>,
     }
     return EncodingLayoutCapture::capture(
         chunkedStream.nextChunk(), Encoding::Options{});
+  }
+
+  size_t countFirstColumnChunks(FileContext& ctx) {
+    const auto& childNode =
+        ctx.readerBase->nimbleSchema()->asRow().childAt(0)->asScalar();
+    auto streams = ctx.readerBase->tablet().load(
+        ctx.readerBase->tablet().stripeIdentifier(0),
+        std::vector<uint32_t>{childNode.scalarDescriptor().offset()});
+
+    InMemoryChunkedStream chunkedStream{*pool(), std::move(streams[0])};
+    size_t numChunks{0};
+    while (chunkedStream.hasNext()) {
+      chunkedStream.nextChunk();
+      ++numChunks;
+    }
+    return numChunks;
   }
 
   template <typename T>
@@ -582,13 +710,14 @@ class ReadWithVisitorTest : public ::testing::TestWithParam<bool>,
     }
   }
 
-  template <typename T>
+  template <typename T, bool dense>
   void testAlprdVisitor(
       bool nullable,
       bool filtered,
       bool filterOnly,
       bool useVarint,
-      EncodingType childType) {
+      EncodingType childType,
+      vector_size_t batchSize) {
     SCOPED_TRACE(
         fmt::format(
             "type={} nullable={} filtered={} filterOnly={} varint={} child={}",
@@ -654,12 +783,15 @@ class ReadWithVisitorTest : public ::testing::TestWithParam<bool>,
     ASSERT_EQ(metadata.exceptionCount, exceptionRows.size());
     ASSERT_EQ(metadata.parameters.rightBitWidth, kShift);
 
-    const auto chunkRows = nullable ? kNumValues * 5 / 4 : kNumValues;
+    const auto nullPrefix = dense && nullable ? 256 : 0;
+    const auto chunkRows =
+        nullable ? kNumValues * 5 / 4 + nullPrefix : kNumValues;
     Vector<bool> notNulls(pool(), chunkRows, true);
     std::vector<T> data(chunkRows);
     std::vector<bool> exceptions(chunkRows, false);
     for (vector_size_t row = 0, valueIndex = 0; row < chunkRows; ++row) {
-      notNulls[row] = !nullable || row % 5 != 0;
+      notNulls[row] =
+          !nullable || (row >= nullPrefix && (row - nullPrefix) % 5 != 0);
       if (notNulls[row]) {
         data[row] = values[valueIndex];
         exceptions[row] = std::binary_search(
@@ -718,10 +850,10 @@ class ReadWithVisitorTest : public ::testing::TestWithParam<bool>,
     uint32_t skippedExceptions = 0;
     for (vector_size_t offset = 0; offset < numRows;) {
       SCOPED_TRACE(fmt::format("offset={}", offset));
-      const auto count = std::min<vector_size_t>(1'031, numRows - offset);
+      const auto count = std::min(batchSize, numRows - offset);
       std::vector<vector_size_t> rowNumbers;
       for (vector_size_t row = 0; row < count; ++row) {
-        const bool selected = row % 3 == 1 || row == count - 1;
+        const bool selected = dense || row % 3 == 1 || row == count - 1;
         if (selected) {
           rowNumbers.push_back(row);
         }
@@ -734,7 +866,7 @@ class ReadWithVisitorTest : public ::testing::TestWithParam<bool>,
       const auto read = [&](auto& filter, auto extract) {
         using Filter = std::remove_reference_t<decltype(filter)>;
         using Extract = decltype(extract);
-        DecoderVisitor<T, Filter, Extract, false> visitor(
+        DecoderVisitor<T, Filter, Extract, dense> visitor(
             filter, reader.get(), rows, extract);
         decoder.readWithVisitor(visitor);
         EXPECT_EQ(visitor.rowIndex(), rows.size());
@@ -784,7 +916,11 @@ class ReadWithVisitorTest : public ::testing::TestWithParam<bool>,
       offset += count;
     }
     EXPECT_GT(selectedExceptions, 0);
-    EXPECT_GT(skippedExceptions, 0);
+    if constexpr (dense) {
+      EXPECT_EQ(skippedExceptions, 0);
+    } else {
+      EXPECT_GT(skippedExceptions, 0);
+    }
   }
 
   template <typename FloatType>
@@ -1134,6 +1270,348 @@ class ReadWithVisitorTest : public ::testing::TestWithParam<bool>,
     }
   }
 
+  template <typename T>
+  void testDictionaryAwareFloatingPointReads(
+      EncodingType indicesEncoding,
+      bool upperUnbounded,
+      bool nullable,
+      bool nullAllowed) {
+    using Bits = std::conditional_t<sizeof(T) == 4, uint32_t, uint64_t>;
+    constexpr Bits kNaNBits =
+        sizeof(T) == 4 ? 0x7fc00000ULL : 0x7ff8000000000000ULL;
+    constexpr Bits kSignBit = Bits{1} << (sizeof(T) * 8 - 1);
+    constexpr vector_size_t kRows{257};
+    std::vector<T> data(kRows);
+    for (vector_size_t row = 0; row < kRows; ++row) {
+      switch (row % 19) {
+        case 0:
+          data[row] = std::numeric_limits<T>::quiet_NaN();
+          break;
+        case 1:
+          data[row] = std::numeric_limits<T>::infinity();
+          break;
+        case 2:
+          data[row] = -std::numeric_limits<T>::infinity();
+          break;
+        case 3:
+          data[row] = -T{0};
+          break;
+        case 4:
+          data[row] = std::bit_cast<T>(static_cast<Bits>(kNaNBits | 1));
+          break;
+        case 5:
+          data[row] =
+              std::bit_cast<T>(static_cast<Bits>(kNaNBits | kSignBit | 2));
+          break;
+        default:
+          data[row] = static_cast<T>((row % 19) - 10) / 4;
+      }
+    }
+    auto input = makeRowVector({makeFlatVector<T>(data)});
+    auto rowType = asRowType(input->type());
+    auto context = makeFileContext(input);
+    auto scanSpec = std::make_shared<common::ScanSpec>("root");
+    scanSpec->addAllChildFields(*rowType);
+    scanSpec->childByName("c0")->setFilter(
+        std::make_unique<common::FloatingPointRange<T>>(
+            -1.5, false, false, 1.5, upperUnbounded, false, nullAllowed));
+    auto ownedReader =
+        buildFloatingPointReader<T>(*context, rowType, *scanSpec);
+    auto* reader = ownedReader.get();
+
+    std::vector<vector_size_t> rowNumbers;
+    for (vector_size_t row = 0; row < kRows; row += 3) {
+      rowNumbers.push_back(row);
+    }
+    RowSet rows(rowNumbers.data(), rowNumbers.size());
+    auto nulls =
+        nullable ? allocateNulls(kRows, pool(), bits::kNotNull) : nullptr;
+    std::vector<T> nonNullValues;
+    for (vector_size_t row = 0; row < kRows; ++row) {
+      if (nullable && row % 2 == 0) {
+        bits::setNull(nulls->asMutable<uint64_t>(), row);
+      } else {
+        nonNullValues.push_back(data[row]);
+      }
+    }
+    reader->doPrepareRead(
+        0, rows, nulls != nullptr ? nulls->as<uint64_t>() : nullptr);
+    Buffer buffer(*pool());
+    auto encoding = createFromCustomLayout<T>(
+        DictionaryEnc{
+            TrivialEnc{},
+            EncodingLayout{indicesEncoding, {}, CompressionType::Uncompressed}},
+        nonNullValues,
+        *pool(),
+        buffer);
+    common::FloatingPointRange<T> filter(
+        -1.5, false, false, 1.5, upperUnbounded, false, nullAllowed);
+    dwio::common::ExtractToReader extractValues(reader);
+    DecoderVisitor<
+        T,
+        common::FloatingPointRange<T>,
+        dwio::common::ExtractToReader,
+        /*isDense=*/false>
+        visitor(filter, reader, rows, extractValues);
+    auto params = makeReadWithVisitorParams(visitor, rows, pool());
+    params.dictionaryAwareReads = true;
+    dispatchCallReadWithVisitor(*encoding, visitor, params);
+
+    const auto& cache = reader->scanState().filterCache;
+    ASSERT_EQ(cache.size(), encoding->dictionarySize());
+    for (uint32_t index = 0; index < encoding->dictionarySize(); ++index) {
+      const auto value =
+          *static_cast<const T*>(encoding->dictionaryEntry(index));
+      EXPECT_EQ(
+          cache[index],
+          common::applyFilter(filter, value)
+              ? dwio::common::FilterResult::kSuccess
+              : dwio::common::FilterResult::kFailure);
+    }
+    // Values compare as bit patterns so NaN payloads and signed zeros match
+    // exactly. Null rows compare as nullopt.
+    const auto outputBits = [&] {
+      const auto values = getValues<T>(reader);
+      const auto& resultNulls = reader->resultNullsForTest();
+      std::vector<std::optional<Bits>> result;
+      for (size_t index = 0; index < values.size(); ++index) {
+        const bool isNull = resultNulls != nullptr &&
+            bits::isBitNull(resultNulls->template as<uint64_t>(), index);
+        result.push_back(
+            isNull ? std::nullopt
+                   : std::optional<Bits>(std::bit_cast<Bits>(values[index])));
+      }
+      return result;
+    };
+    const auto expectedBits =
+        [&](const std::vector<vector_size_t>& outputRows) {
+          std::vector<std::optional<Bits>> result;
+          for (const auto row : outputRows) {
+            result.push_back(
+                nullable && row % 2 == 0
+                    ? std::nullopt
+                    : std::optional<Bits>(std::bit_cast<Bits>(data[row])));
+          }
+          return result;
+        };
+
+    std::vector<vector_size_t> expectedRows;
+    for (const auto row : rowNumbers) {
+      if (nullable && row % 2 == 0 ? nullAllowed
+                                   : common::applyFilter(filter, data[row])) {
+        expectedRows.push_back(row);
+      }
+    }
+    const std::vector<vector_size_t> actualRows(
+        reader->outputRows().begin(), reader->outputRows().end());
+    EXPECT_EQ(actualRows, expectedRows);
+    EXPECT_EQ(outputBits(), expectedBits(expectedRows));
+
+    encoding->reset();
+    reader->doPrepareRead(
+        0, rows, nulls != nullptr ? nulls->as<uint64_t>() : nullptr);
+    common::AlwaysTrue noFilter;
+    DecoderVisitor<
+        T,
+        common::AlwaysTrue,
+        dwio::common::ExtractToReader,
+        /*isDense=*/false>
+        projectionVisitor(noFilter, reader, rows, extractValues);
+    auto projectionParams =
+        makeReadWithVisitorParams(projectionVisitor, rows, pool());
+    projectionParams.dictionaryAwareReads = true;
+    dispatchCallReadWithVisitor(*encoding, projectionVisitor, projectionParams);
+
+    EXPECT_EQ(projectionVisitor.rowIndex(), rows.size());
+    EXPECT_EQ(outputBits(), expectedBits(rowNumbers));
+  }
+
+  // Runs testDictionaryAwareFloatingPointReads() over every index encoding,
+  // filter bound and null option.
+  template <typename T>
+  void testDictionaryAwareFloatingPointCases() {
+    for (const auto indicesEncoding :
+         {EncodingType::Trivial, EncodingType::FixedBitWidth}) {
+      SCOPED_TRACE(toString(indicesEncoding));
+      for (const bool upperUnbounded : {false, true}) {
+        SCOPED_TRACE(fmt::format("upperUnbounded={}", upperUnbounded));
+        for (const bool nullable : {false, true}) {
+          SCOPED_TRACE(fmt::format("nullable={}", nullable));
+          for (const bool nullAllowed : {false, true}) {
+            SCOPED_TRACE(fmt::format("nullAllowed={}", nullAllowed));
+            testDictionaryAwareFloatingPointReads<T>(
+                indicesEncoding, upperUnbounded, nullable, nullAllowed);
+          }
+        }
+      }
+    }
+  }
+
+  // Reads a dictionary-encoded integer column with 'indicesLayout' as the index
+  // encoding, and checks output rows, values and null bits. With
+  // 'dictionaryAwareReads' the read takes the dictionary-aware path; without
+  // it, the default path decodes the indices through DictionaryIndicesHook,
+  // which takes the index encoding's bulk path only with 'scanFastPath'.
+  // Covers a BigintRange filter that accepts or rejects nulls, with and
+  // without values, then a projection without a filter. Reads every
+  // 'rowStep'th row, which must be 1 when 'kIsDense' is true.
+  template <typename T, bool kIsDense>
+  void testDictionaryAwareIntegerReads(
+      vector_size_t rowStep,
+      const std::function<bool(vector_size_t)>& isNullAt,
+      const EncodingLayout& indicesLayout,
+      bool dictionaryAwareReads,
+      bool scanFastPath) {
+    constexpr vector_size_t kRows{257};
+    constexpr int64_t kFilterMin{200};
+    constexpr int64_t kFilterMax{800};
+    const auto valueAt = [](vector_size_t row) {
+      return static_cast<T>((row * 9'973) % 1'000);
+    };
+    auto input = makeRowVector({makeFlatVector<T>(kRows, valueAt)});
+    auto rowType = asRowType(input->type());
+    auto context = makeFileContext(input);
+
+    std::vector<vector_size_t> rowNumbers;
+    for (vector_size_t row = 0; row < kRows; row += rowStep) {
+      rowNumbers.push_back(row);
+    }
+    const RowSet rows(rowNumbers.data(), rowNumbers.size());
+    auto nulls = allocateNulls(kRows, pool(), bits::kNotNull);
+    std::vector<T> nonNullValues;
+    for (vector_size_t row = 0; row < kRows; ++row) {
+      if (isNullAt(row)) {
+        bits::setNull(nulls->asMutable<uint64_t>(), row);
+      } else {
+        nonNullValues.push_back(valueAt(row));
+      }
+    }
+    const uint64_t* rawNulls =
+        nonNullValues.size() < kRows ? nulls->as<uint64_t>() : nullptr;
+
+    const auto integerReader = [](dwio::common::SelectiveColumnReader* root) {
+      auto* structReader =
+          dynamic_cast<dwio::common::SelectiveStructColumnReaderBase*>(root);
+      return static_cast<IntegerColumnReaderTestAccessor*>(
+          dynamic_cast<IntegerColumnReader*>(structReader->children()[0]));
+    };
+    const auto expectValues =
+        [&](IntegerColumnReaderTestAccessor* reader,
+            const std::vector<vector_size_t>& outputRows) {
+          const auto values = getValues<T>(reader);
+          ASSERT_EQ(values.size(), outputRows.size());
+          const auto& resultNulls = reader->resultNullsForTest();
+          std::vector<std::optional<T>> expected;
+          std::vector<std::optional<T>> actual;
+          for (size_t index = 0; index < outputRows.size(); ++index) {
+            expected.push_back(
+                isNullAt(outputRows[index])
+                    ? std::nullopt
+                    : std::optional<T>(valueAt(outputRows[index])));
+            const bool isNull = resultNulls != nullptr &&
+                bits::isBitNull(resultNulls->as<uint64_t>(), index);
+            actual.push_back(
+                isNull ? std::nullopt : std::optional<T>(values[index]));
+          }
+          EXPECT_EQ(actual, expected);
+        };
+
+    for (const bool nullAllowed : {false, true}) {
+      SCOPED_TRACE(fmt::format("nullAllowed={}", nullAllowed));
+      std::vector<vector_size_t> expectedRows;
+      for (const auto row : rowNumbers) {
+        if (isNullAt(row)
+                ? nullAllowed
+                : (valueAt(row) >= kFilterMin && valueAt(row) <= kFilterMax)) {
+          expectedRows.push_back(row);
+        }
+      }
+      for (const bool filterOnly : {false, true}) {
+        SCOPED_TRACE(fmt::format("filterOnly={}", filterOnly));
+        auto scanSpec = std::make_shared<common::ScanSpec>("root");
+        scanSpec->addAllChildFields(*rowType);
+        auto* valueSpec = scanSpec->childByName("c0");
+        valueSpec->setFilter(
+            std::make_unique<common::BigintRange>(
+                kFilterMin, kFilterMax, nullAllowed));
+        valueSpec->setProjectOut(!filterOnly);
+        auto root = buildReader(*context, rowType, *scanSpec);
+        auto* reader = integerReader(root.get());
+        ASSERT_NE(reader, nullptr);
+        reader->template doPrepareRead<T>(0, rows, rawNulls);
+
+        Buffer buffer(*pool());
+        auto encoding = createFromCustomLayout<T>(
+            DictionaryEnc{.indices = indicesLayout},
+            nonNullValues,
+            *pool(),
+            buffer);
+        common::BigintRange filter(kFilterMin, kFilterMax, nullAllowed);
+        const auto read = [&](auto extractValues) {
+          DecoderVisitor<
+              T,
+              common::BigintRange,
+              decltype(extractValues),
+              kIsDense>
+              visitor(filter, reader, rows, extractValues);
+          auto params = makeReadWithVisitorParams(visitor, rows, pool());
+          params.dictionaryAwareReads = dictionaryAwareReads;
+          params.scanFastPath = scanFastPath;
+          dispatchCallReadWithVisitor(*encoding, visitor, params);
+          EXPECT_EQ(visitor.rowIndex(), rows.size());
+        };
+        if (filterOnly) {
+          read(dwio::common::DropValues{});
+        } else {
+          read(dwio::common::ExtractToReader(reader));
+        }
+
+        const std::vector<vector_size_t> actualRows(
+            reader->outputRows().begin(), reader->outputRows().end());
+        EXPECT_EQ(actualRows, expectedRows);
+
+        // A filter-only read on the default path leaves numValues to
+        // ChunkedDecoder, which sets it to the output row count after each
+        // chunk.
+        if (dictionaryAwareReads || !filterOnly) {
+          EXPECT_EQ(reader->numValues(), expectedRows.size());
+        }
+        if (!filterOnly) {
+          expectValues(reader, expectedRows);
+        }
+      }
+    }
+
+    SCOPED_TRACE("projection");
+    auto scanSpec = std::make_shared<common::ScanSpec>("root");
+    scanSpec->addAllChildFields(*rowType);
+    auto root = buildReader(*context, rowType, *scanSpec);
+    auto* reader = integerReader(root.get());
+    ASSERT_NE(reader, nullptr);
+    reader->template doPrepareRead<T>(0, rows, rawNulls);
+    Buffer buffer(*pool());
+    auto encoding = createFromCustomLayout<T>(
+        DictionaryEnc{.indices = indicesLayout},
+        nonNullValues,
+        *pool(),
+        buffer);
+    common::AlwaysTrue noFilter;
+    dwio::common::ExtractToReader extractValues(reader);
+    DecoderVisitor<
+        T,
+        common::AlwaysTrue,
+        dwio::common::ExtractToReader,
+        kIsDense>
+        visitor(noFilter, reader, rows, extractValues);
+    auto params = makeReadWithVisitorParams(visitor, rows, pool());
+    params.dictionaryAwareReads = dictionaryAwareReads;
+    params.scanFastPath = scanFastPath;
+    dispatchCallReadWithVisitor(*encoding, visitor, params);
+
+    EXPECT_EQ(visitor.rowIndex(), rows.size());
+    expectValues(reader, rowNumbers);
+  }
+
   template <typename FloatType>
   std::unique_ptr<FloatingPointColumnReaderTestAccessor<FloatType>>
   buildFloatingPointReader(
@@ -1162,7 +1640,8 @@ class ReadWithVisitorTest : public ::testing::TestWithParam<bool>,
       FileContext& ctx,
       const RowTypePtr& rowType,
       common::ScanSpec& scanSpec,
-      bool stringDecoderZeroCopy = false) {
+      bool stringDecoderZeroCopy = false,
+      bool scanFastPath = false) {
     NimbleParams params(
         *pool(),
         ctx.stats,
@@ -1170,7 +1649,13 @@ class ReadWithVisitorTest : public ::testing::TestWithParam<bool>,
         *ctx.streams,
         ctx.rowSizeTracker.get(),
         ctx.encodingFactory,
-        stringDecoderZeroCopy);
+        stringDecoderZeroCopy,
+        /*preserveFlatMapsInMemory=*/false,
+        /*nimblePreserveDictionaryEncoding=*/false,
+        /*lazyIoColumns=*/nullptr,
+        /*lazyColumnIo=*/false,
+        /*dictionaryAwareReads=*/false,
+        scanFastPath);
 
     auto reader = buildColumnReader(
         rowType,
@@ -1310,6 +1795,453 @@ class ReadWithVisitorTest : public ::testing::TestWithParam<bool>,
         Encoding::Options{});
   }
 
+  // Encodes the non-null 'values' with 'layout'. When 'nullable', wraps them in
+  // a Nullable encoding that marks the rows where 'notNulls' is false.
+  std::string_view encodeConstantTestChunk(
+      const EncodingLayout& layout,
+      const std::vector<int64_t>& values,
+      const Vector<bool>& notNulls,
+      bool nullable,
+      Buffer& buffer) {
+    auto policy = std::make_unique<ReplayedEncodingSelectionPolicy<int64_t>>(
+        layout,
+        CompressionOptions{},
+        [](DataType type) -> std::unique_ptr<EncodingSelectionPolicyBase> {
+          UNIQUE_PTR_FACTORY(type, TrivialNestedPolicy);
+        });
+    const auto encoded = EncodingFactory::encode<int64_t>(
+        std::move(policy),
+        std::span<const int64_t>(values.data(), values.size()),
+        buffer);
+    if (!nullable) {
+      return encoded;
+    }
+    const auto encodedNulls = EncodingFactory::encode<bool>(
+        std::make_unique<TrivialNestedPolicy<bool>>(),
+        std::span<const bool>(notNulls.data(), notNulls.size()),
+        buffer);
+    return NullableEncoding<int64_t>::encodeNullable(
+        static_cast<uint32_t>(notNulls.size()), encoded, encodedNulls, buffer);
+  }
+
+  // Layout capture omits a Nullable wrapper, so this checks the encoding of the
+  // non-null values.
+  void expectConstantEncoding(FileContext& ctx) {
+    const auto captured = captureFirstColumnEncoding(ctx);
+    ASSERT_TRUE(captured.has_value());
+    EXPECT_EQ(captured->encodingType(), EncodingType::Constant);
+  }
+
+  // Reads one Constant chunk through readWithVisitor and checks the output
+  // against the input. The cases vary row density, nulls, and the filter.
+  // 'scanFastPath' lets eligible reads take the bulk path.
+  void testConstantEncodingRead(
+      const ConstantReadCase& testCase,
+      bool scanFastPath) {
+    SCOPED_TRACE(
+        fmt::format(
+            "nullable={} sparse={} filter={} nullAllowed={} filterOnly={} "
+            "scanFastPath={}",
+            testCase.nullable,
+            testCase.sparse,
+            static_cast<int>(testCase.filter),
+            testCase.nullAllowed,
+            testCase.filterOnly,
+            scanFastPath));
+    constexpr vector_size_t kRows = 200;
+    const bool filtered = testCase.filter != ConstantFilter::kNone;
+    const auto isNull = [&](vector_size_t row) {
+      return testCase.nullable && row % 7 == 0;
+    };
+
+    // The file only provides the reader that holds the visitor state.
+    auto input = makeRowVector(
+        {makeFlatVector<int64_t>(kRows, [](auto) { return kConstantValue; })});
+    auto rowType = asRowType(input->type());
+    auto ctx = makeFileContext(input);
+    auto scanSpec = std::make_shared<common::ScanSpec>("root");
+    scanSpec->addAllChildFields(*rowType);
+    // As in a production scan, an unfiltered column has no filter in its spec.
+    auto* childSpec = scanSpec->childByName("c0");
+    if (filtered) {
+      childSpec->setFilter(
+          makeConstantRange(testCase.filter, testCase.nullAllowed));
+    }
+    if (testCase.filterOnly) {
+      childSpec->setProjectOut(false);
+    }
+    auto root = buildReader(*ctx, rowType, *scanSpec);
+    auto* structReader =
+        dynamic_cast<dwio::common::SelectiveStructColumnReaderBase*>(
+            root.get());
+    auto* reader = static_cast<IntegerColumnReaderTestAccessor*>(
+        dynamic_cast<IntegerColumnReader*>(structReader->children()[0]));
+    ASSERT_NE(reader, nullptr);
+
+    std::vector<vector_size_t> rowVec;
+    for (vector_size_t row = 0; row < kRows; ++row) {
+      if (!testCase.sparse || row % 3 != 1) {
+        rowVec.push_back(row);
+      }
+    }
+    const RowSet rows(rowVec.data(), rowVec.size());
+    reader->doPrepareRead<int64_t>(0, rows, nullptr);
+
+    std::vector<int64_t> nonNullValues;
+    Vector<bool> notNulls(pool(), kRows, true);
+    for (vector_size_t row = 0; row < kRows; ++row) {
+      notNulls[row] = !isNull(row);
+      if (!isNull(row)) {
+        nonNullValues.push_back(kConstantValue);
+      }
+    }
+    Buffer buffer(*pool());
+    const auto encoded = encodeConstantTestChunk(
+        ConstantEnc{}, nonNullValues, notNulls, testCase.nullable, buffer);
+    auto encoding = EncodingFactory().create(
+        *pool(), encoded, nullptr, Encoding::Options{});
+
+    // A filter that accepts nulls cannot use the bulk path on data with nulls.
+    const bool expectFastPath = process::hasSimd() &&
+        (!filtered || !testCase.nullable || !testCase.nullAllowed);
+    const auto read = [&](auto isDense, auto& filter, auto extract) {
+      using Filter = std::remove_reference_t<decltype(filter)>;
+      using Extract = decltype(extract);
+      DecoderVisitor<int64_t, Filter, Extract, decltype(isDense)::value>
+          visitor(filter, reader, rows, extract);
+      EXPECT_EQ(
+          dwio::common::useFastPath(visitor, testCase.nullable),
+          expectFastPath);
+      auto params = makeReadWithVisitorParams(visitor, rows, pool());
+      params.scanFastPath = scanFastPath;
+      dispatchCallReadWithVisitor(*encoding, visitor, params);
+      EXPECT_EQ(visitor.rowIndex(), rows.size());
+    };
+    const auto dispatch = [&](auto isDense) {
+      if (!filtered) {
+        common::AlwaysTrue filter;
+        read(isDense, filter, dwio::common::ExtractToReader(reader));
+        return;
+      }
+      auto filter = makeConstantRange(testCase.filter, testCase.nullAllowed);
+      if (testCase.filterOnly) {
+        read(isDense, *filter, dwio::common::DropValues{});
+      } else {
+        read(isDense, *filter, dwio::common::ExtractToReader(reader));
+      }
+    };
+    if (testCase.sparse) {
+      dispatch(std::false_type{});
+    } else {
+      dispatch(std::true_type{});
+    }
+
+    std::vector<vector_size_t> expectedRows;
+    for (const auto row : rowVec) {
+      if (!filtered ||
+          (isNull(row) ? testCase.nullAllowed
+                       : testCase.filter == ConstantFilter::kPass)) {
+        expectedRows.push_back(row);
+      }
+    }
+    if (filtered) {
+      ASSERT_EQ(reader->outputRows().size(), expectedRows.size());
+      EXPECT_TRUE(
+          std::equal(
+              expectedRows.begin(),
+              expectedRows.end(),
+              reader->outputRows().begin()));
+    }
+    if (testCase.filterOnly) {
+      return;
+    }
+    ASSERT_EQ(reader->numValues(), expectedRows.size());
+    const auto values = getValues<int64_t>(reader);
+    const auto& nulls = reader->resultNullsForTest();
+    for (vector_size_t i = 0; i < reader->numValues(); ++i) {
+      SCOPED_TRACE(fmt::format("output={} row={}", i, expectedRows[i]));
+      const bool expectNull = isNull(expectedRows[i]);
+      const bool actualNull =
+          nulls && bits::isBitNull(nulls->template as<uint64_t>(), i);
+      ASSERT_EQ(actualNull, expectNull);
+      if (!expectNull) {
+        EXPECT_EQ(values[i], kConstantValue);
+      }
+    }
+  }
+
+  // Reads a stream that alternates Constant and other chunks in batches that
+  // straddle the chunk boundaries. The bulk path starts and ends mid-chunk, so
+  // the reader state it leaves must line up with the chunks around it.
+  // 'scanFastPath' lets eligible reads take the bulk path.
+  void testConstantChunks(
+      bool nullable,
+      bool sparse,
+      bool filtered,
+      bool filterOnly,
+      bool scanFastPath) {
+    SCOPED_TRACE(
+        fmt::format(
+            "nullable={} sparse={} filtered={} filterOnly={} scanFastPath={}",
+            nullable,
+            sparse,
+            filtered,
+            filterOnly,
+            scanFastPath));
+    struct Chunk {
+      vector_size_t numRows;
+      bool constant;
+      int64_t value;
+    };
+    // A constant chunk holds its 'value'. The other chunk holds 100 + row.
+    const std::vector<Chunk> chunks{
+        {70, true, 7}, {60, false, 0}, {90, true, 9}, {80, true, 7}};
+    vector_size_t totalRows{0};
+    std::vector<int64_t> valueAt;
+    for (const auto& chunk : chunks) {
+      totalRows += chunk.numRows;
+      for (vector_size_t i = 0; i < chunk.numRows; ++i) {
+        valueAt.push_back(
+            chunk.constant ? chunk.value
+                           : 100 + static_cast<int64_t>(valueAt.size()));
+      }
+    }
+    const auto isNull = [&](vector_size_t row) {
+      return nullable && row % 5 == 0;
+    };
+    const auto passes = [&](vector_size_t row) {
+      return !filtered || (!isNull(row) && valueAt[row] == 7);
+    };
+
+    Buffer buffer(*pool());
+    const EncodingLayout constantLayout = ConstantEnc{};
+    const EncodingLayout trivialLayout = TrivialEnc{};
+    std::string streamData;
+    vector_size_t chunkBegin{0};
+    for (const auto& chunk : chunks) {
+      std::vector<int64_t> nonNullValues;
+      Vector<bool> notNulls(pool(), chunk.numRows, true);
+      for (vector_size_t i = 0; i < chunk.numRows; ++i) {
+        notNulls[i] = !isNull(chunkBegin + i);
+        if (notNulls[i]) {
+          nonNullValues.push_back(valueAt[chunkBegin + i]);
+        }
+      }
+      const auto encoded = encodeConstantTestChunk(
+          chunk.constant ? constantLayout : trivialLayout,
+          nonNullValues,
+          notNulls,
+          nullable,
+          buffer);
+      const auto offset = streamData.size();
+      streamData.resize(offset + kChunkHeaderSize + encoded.size());
+      auto* position = streamData.data() + offset;
+      writeChunkHeader(
+          static_cast<uint32_t>(encoded.size()),
+          CompressionType::Uncompressed,
+          position);
+      encoding::writeBytes(encoded, position);
+      chunkBegin += chunk.numRows;
+    }
+
+    auto input = makeRowVector({makeFlatVector<int64_t>(
+        totalRows, [&](auto row) { return valueAt[row]; })});
+    auto rowType = asRowType(input->type());
+    auto ctx = makeFileContext(input);
+    auto scanSpec = std::make_shared<common::ScanSpec>("root");
+    scanSpec->addAllChildFields(*rowType);
+    auto* childSpec = scanSpec->childByName("c0");
+    if (filtered) {
+      childSpec->setFilter(std::make_unique<common::BigintRange>(7, 7, false));
+    }
+    if (filterOnly) {
+      childSpec->setProjectOut(false);
+    }
+    auto root = buildReader(
+        *ctx,
+        rowType,
+        *scanSpec,
+        /*stringDecoderZeroCopy=*/true);
+    auto* structReader =
+        dynamic_cast<dwio::common::SelectiveStructColumnReaderBase*>(
+            root.get());
+    auto* reader = static_cast<IntegerColumnReaderTestAccessor*>(
+        dynamic_cast<IntegerColumnReader*>(structReader->children()[0]));
+    ASSERT_NE(reader, nullptr);
+
+    ChunkedDecoder decoder(
+        std::make_unique<dwio::common::SeekableArrayInputStream>(
+            streamData.data(), streamData.size()),
+        nullptr,
+        false,
+        &ctx->encodingFactory,
+        pool(),
+        /*stringDecoderZeroCopy=*/true,
+        /*decodingStats=*/nullptr,
+        /*dictionaryAlphabetLoader=*/nullptr,
+        /*dictionaryAwareReads=*/false,
+        scanFastPath);
+    constexpr vector_size_t kBatchSize{53};
+    for (vector_size_t offset = 0; offset < totalRows; offset += kBatchSize) {
+      SCOPED_TRACE(fmt::format("offset={}", offset));
+      const auto count = std::min(kBatchSize, totalRows - offset);
+      std::vector<vector_size_t> rowVec;
+      for (vector_size_t row = 0; row < count; ++row) {
+        // Sparse reads skip a third of the rows but keep the last one, so the
+        // read offset advances by exactly 'count'.
+        if (!sparse || row % 3 != 1 || row == count - 1) {
+          rowVec.push_back(row);
+        }
+      }
+      const RowSet rows(rowVec.data(), rowVec.size());
+      reader->doPrepareRead<int64_t>(offset, rows, nullptr);
+
+      const auto read = [&](auto isDense, auto& filter, auto extract) {
+        using Filter = std::remove_reference_t<decltype(filter)>;
+        using Extract = decltype(extract);
+        DecoderVisitor<int64_t, Filter, Extract, decltype(isDense)::value>
+            visitor(filter, reader, rows, extract);
+        decoder.readWithVisitor(visitor);
+        EXPECT_EQ(visitor.rowIndex(), rows.size());
+      };
+      const auto dispatch = [&](auto isDense) {
+        if (!filtered) {
+          common::AlwaysTrue filter;
+          read(isDense, filter, dwio::common::ExtractToReader(reader));
+          return;
+        }
+        common::BigintRange filter(7, 7, false);
+        if (filterOnly) {
+          read(isDense, filter, dwio::common::DropValues{});
+        } else {
+          read(isDense, filter, dwio::common::ExtractToReader(reader));
+        }
+      };
+      if (sparse) {
+        dispatch(std::false_type{});
+      } else {
+        dispatch(std::true_type{});
+      }
+      reader->advanceReadOffset(rows);
+
+      std::vector<vector_size_t> expectedRows;
+      for (const auto row : rowVec) {
+        if (passes(offset + row)) {
+          expectedRows.push_back(row);
+        }
+      }
+      if (filtered) {
+        ASSERT_EQ(reader->outputRows().size(), expectedRows.size());
+        EXPECT_TRUE(
+            std::equal(
+                expectedRows.begin(),
+                expectedRows.end(),
+                reader->outputRows().begin()));
+      }
+      if (filterOnly) {
+        continue;
+      }
+      ASSERT_EQ(reader->numValues(), expectedRows.size());
+      const auto values = getValues<int64_t>(reader);
+      const auto& nulls = reader->resultNullsForTest();
+      for (vector_size_t i = 0; i < reader->numValues(); ++i) {
+        const auto row = offset + expectedRows[i];
+        SCOPED_TRACE(fmt::format("output={} row={}", i, row));
+        const bool expectNull = isNull(row);
+        const bool actualNull =
+            nulls && bits::isBitNull(nulls->template as<uint64_t>(), i);
+        ASSERT_EQ(actualNull, expectNull);
+        if (!expectNull) {
+          EXPECT_EQ(values[i], valueAt[row]);
+        }
+      }
+    }
+  }
+
+  // Reads a column whose chunks hold a single value through the non-legacy
+  // reader and checks the output against the input. 'scanFastPath' lets
+  // eligible reads take the bulk path.
+  template <typename T>
+  void testConstantColumn(
+      const T& value,
+      const T& otherValue,
+      bool nullable,
+      ConstantFilter filter,
+      bool scanFastPath) {
+    SCOPED_TRACE(
+        fmt::format(
+            "type={} nullable={} filter={} scanFastPath={}",
+            CppToType<T>::create()->toString(),
+            nullable,
+            static_cast<int>(filter),
+            scanFastPath));
+    constexpr vector_size_t kRows = 300;
+    const auto isNull = [&](vector_size_t row) {
+      return nullable && row % 7 == 0;
+    };
+    auto input = makeRowVector({makeFlatVector<T>(
+        kRows,
+        [&](auto) { return value; },
+        nullable ? nullEvery(7) : std::function<bool(vector_size_t)>{})});
+    auto rowType = asRowType(input->type());
+    auto ctx =
+        makeFileContext(input, makeSingleColumnWriterOptions(ConstantEnc{}));
+    expectConstantEncoding(*ctx);
+
+    // As in a production scan, an unfiltered column has no filter in its spec.
+    auto scanSpec = std::make_shared<common::ScanSpec>("root");
+    scanSpec->addAllChildFields(*rowType);
+    if (filter != ConstantFilter::kNone) {
+      scanSpec->childByName("c0")->setFilter(
+          makeConstantColumnFilter(value, otherValue, filter));
+    }
+    auto root = buildReader(
+        *ctx,
+        rowType,
+        *scanSpec,
+        /*stringDecoderZeroCopy=*/true,
+        scanFastPath);
+    // A row reader finalizes the projection before reading, and lazy loads
+    // report their row sizes to the tracker.
+    ctx->rowSizeTracker->finalizeProjection();
+
+    std::vector<vector_size_t> rowVec(kRows);
+    std::iota(rowVec.begin(), rowVec.end(), 0);
+    root->read(0, RowSet(rowVec.data(), rowVec.size()), nullptr);
+
+    std::vector<vector_size_t> expectedRows;
+    for (vector_size_t row = 0; row < kRows; ++row) {
+      if (filter == ConstantFilter::kNone ||
+          (!isNull(row) && filter == ConstantFilter::kPass)) {
+        expectedRows.push_back(row);
+      }
+    }
+    ASSERT_EQ(root->outputRows().size(), expectedRows.size());
+    EXPECT_TRUE(
+        std::equal(
+            expectedRows.begin(),
+            expectedRows.end(),
+            root->outputRows().begin()));
+    if (expectedRows.empty()) {
+      return;
+    }
+    // An unfiltered column is loaded lazily, as in a production scan.
+    VectorPtr result = BaseVector::create(rowType, 0, pool());
+    root->getValues(root->outputRows(), &result);
+    const auto column =
+        BaseVector::loadedVectorShared(result->as<RowVector>()->childAt(0));
+    ASSERT_EQ(column->size(), expectedRows.size());
+    auto* simple = column->template as<SimpleVector<T>>();
+    for (vector_size_t i = 0; i < column->size(); ++i) {
+      SCOPED_TRACE(fmt::format("output={} row={}", i, expectedRows[i]));
+      const bool expectNull = isNull(expectedRows[i]);
+      ASSERT_EQ(column->isNullAt(i), expectNull);
+      if (!expectNull) {
+        EXPECT_TRUE(simple->valueAt(i) == value);
+      }
+    }
+  }
+
   // Build root reader, get its first child, call read(), return child.
   // Caller inspects outputRows / numValues / rawValues / hasNulls on it.
   dwio::common::SelectiveColumnReader* readColumn(
@@ -1335,6 +2267,259 @@ class ReadWithVisitorTest : public ::testing::TestWithParam<bool>,
   std::vector<T> getValues(dwio::common::SelectiveColumnReader* reader) {
     auto* raw = reinterpret_cast<const T*>(reader->rawValues());
     return std::vector<T>(raw, raw + reader->numValues());
+  }
+
+  // Checks which hooks take the bulk path on a nullable INTEGER column from
+  // 'makeEncoding'. A hook that opts in through kBulkFastPath always does. Any
+  // other hook does only with scanFastPath.
+  template <typename MakeEncoding>
+  void verifyNullableIntHookUsesBulkPath(MakeEncoding&& makeEncoding) {
+    if (!process::hasSimd()) {
+      GTEST_SKIP() << "Bulk hook decoding requires SIMD support";
+    }
+    for (const bool scanFastPath : {false, true}) {
+      SCOPED_TRACE(fmt::format("scanFastPath={}", scanFastPath));
+      verifyNullableIntHook<BulkCapturingIntHook>(makeEncoding, scanFastPath);
+      verifyNullableIntHook<GenericCapturingIntHook>(
+          makeEncoding, scanFastPath);
+    }
+  }
+
+  // Reads a nullable INTEGER column from 'makeEncoding' through 'Hook' and
+  // checks the rows and values the hook receives. The read takes the bulk path
+  // when 'Hook' opts in through kBulkFastPath or 'scanFastPath' is set.
+  template <typename Hook, typename MakeEncoding>
+  void verifyNullableIntHook(MakeEncoding&& makeEncoding, bool scanFastPath) {
+    constexpr vector_size_t kNumRows{257};
+    const auto isNullAt = nullEvery(17);
+    auto input =
+        makeRowVector({makeFlatVector<int32_t>(kNumRows, folly::identity)});
+    auto rowType = asRowType(input->type());
+    auto fileContext = makeFileContext(input);
+    auto scanSpec = std::make_shared<common::ScanSpec>("root");
+    scanSpec->addAllChildFields(*rowType);
+    auto root = buildReader(*fileContext, rowType, *scanSpec);
+
+    auto* structReader =
+        dynamic_cast<dwio::common::SelectiveStructColumnReaderBase*>(
+            root.get());
+    auto* reader = static_cast<IntegerColumnReaderTestAccessor*>(
+        dynamic_cast<IntegerColumnReader*>(structReader->children()[0]));
+    ASSERT_NE(reader, nullptr);
+
+    std::vector<vector_size_t> rowNumbers(kNumRows);
+    std::iota(rowNumbers.begin(), rowNumbers.end(), 0);
+    RowSet rows(rowNumbers.data(), rowNumbers.size());
+    auto nulls = allocateNulls(kNumRows, pool(), bits::kNotNull);
+    for (vector_size_t row = 0; row < kNumRows; ++row) {
+      if (isNullAt(row)) {
+        bits::setNull(nulls->asMutable<uint64_t>(), row);
+      }
+    }
+    reader->doPrepareRead<int32_t>(0, rows, nulls->as<uint64_t>());
+
+    std::vector<int32_t> nonNullValues;
+    std::vector<vector_size_t> expectedRows;
+    std::vector<int64_t> expectedValues;
+    for (vector_size_t row = 0; row < kNumRows; ++row) {
+      if (!isNullAt(row)) {
+        nonNullValues.push_back(row);
+        expectedRows.push_back(row);
+        expectedValues.push_back(row);
+      }
+    }
+    Buffer buffer(*pool());
+    auto encoding = makeEncoding(nonNullValues, buffer);
+
+    common::AlwaysTrue filter;
+    Hook hook;
+    constexpr bool kIsDense = true;
+    DecoderVisitor<
+        int32_t,
+        common::AlwaysTrue,
+        dwio::common::ExtractToHook<Hook>,
+        kIsDense>
+        visitor(filter, reader, rows, dwio::common::ExtractToHook<Hook>(&hook));
+    auto params = makeReadWithVisitorParams(visitor, rows, pool());
+    params.scanFastPath = scanFastPath;
+
+    dispatchCallReadWithVisitor(*encoding, visitor, params);
+
+    const auto& captured = visitor.hook();
+    if (Hook::kBulkFastPath || scanFastPath) {
+      EXPECT_GT(captured.numBulkCalls, 0);
+    } else {
+      EXPECT_EQ(captured.numBulkCalls, 0);
+    }
+    EXPECT_EQ(captured.rows, expectedRows);
+    EXPECT_EQ(captured.values, expectedValues);
+  }
+
+  // Reads a nullable column of type 'T' that spans several chunks, with dense
+  // and with sparse rows, in each way that can take the bulk path:
+  // - A generic hook checks that the bulk path ran and delivered the right
+  //   rows.
+  // - A SUM hook gives every row its own group, so a value delivered with a
+  //   wrong row number lands in another row's group.
+  // - A filter-only read checks the passing rows. A filter that rejects nulls
+  //   keeps the read on the bulk path. A filter that accepts nulls sends chunks
+  //   with nulls down the slow path.
+  // BIGINT values use more than 32 bits, so narrowing one to 32 bits on the way
+  // to the hook changes it.
+  template <typename T>
+  void verifyBulkPathAcrossChunks(const EncodingLayout& valuesLayout) {
+    if (!process::hasSimd()) {
+      GTEST_SKIP() << "The bulk path requires SIMD support";
+    }
+    constexpr vector_size_t kNumRows{4'096};
+    constexpr uint8_t kNullMask{1};
+    const auto isNullAt = nullEvery(17);
+    const auto valueAt = [](vector_size_t row) -> T {
+      if constexpr (std::is_same_v<T, int64_t>) {
+        return (static_cast<T>(row) << 33) + row;
+      } else {
+        return row;
+      }
+    };
+    auto input =
+        makeRowVector({makeFlatVector<T>(kNumRows, valueAt, isNullAt)});
+    SCOPED_TRACE(input->childAt(0)->type()->toString());
+    auto rowType = asRowType(input->type());
+    auto writerOptions = makeSingleColumnWriterOptions(valuesLayout);
+    writerOptions.minStreamChunkRawSize = 1;
+    writerOptions.maxStreamChunkRawSize = 1'024;
+
+    // The capture drops the Nullable wrapper and returns the values layout.
+    {
+      auto fileContext = makeFileContext(input, writerOptions);
+      ASSERT_GT(countFirstColumnChunks(*fileContext), 1);
+      const auto captured = captureFirstColumnEncoding(*fileContext);
+      ASSERT_TRUE(captured.has_value());
+      ASSERT_EQ(captured->encodingType(), valuesLayout.encodingType());
+    }
+
+    // Each read builds its reader over a fresh copy of the file.
+    const auto readWithHook =
+        [&](ValueHook& hook, const std::vector<vector_size_t>& rowNumbers) {
+          auto fileContext = makeFileContext(input, writerOptions);
+          auto scanSpec = std::make_shared<common::ScanSpec>("root");
+          scanSpec->addAllChildFields(*rowType);
+          auto* childSpec = scanSpec->childByName("c0");
+          childSpec->setFilter(std::make_unique<common::AlwaysTrue>());
+          childSpec->setValueHook(&hook);
+          auto root = buildReader(
+              *fileContext,
+              rowType,
+              *scanSpec,
+              /*stringDecoderZeroCopy=*/true,
+              /*scanFastPath=*/true);
+          root->read(0, RowSet(rowNumbers.data(), rowNumbers.size()), nullptr);
+        };
+
+    // Rows 1'000 through 3'000 pass the filter-only reads.
+    const auto lower = valueAt(1'000);
+    const auto upper = valueAt(3'000);
+    const auto readFilterOnly =
+        [&](bool nullAllowed, const std::vector<vector_size_t>& rowNumbers) {
+          auto fileContext = makeFileContext(input, writerOptions);
+          auto scanSpec = std::make_shared<common::ScanSpec>("root");
+          scanSpec->addAllChildFields(*rowType);
+          auto* childSpec = scanSpec->childByName("c0");
+          childSpec->setFilter(
+              std::make_unique<common::BigintRange>(lower, upper, nullAllowed));
+          childSpec->setProjectOut(false);
+          auto root = buildReader(
+              *fileContext,
+              rowType,
+              *scanSpec,
+              /*stringDecoderZeroCopy=*/true,
+              /*scanFastPath=*/true);
+          root->read(0, RowSet(rowNumbers.data(), rowNumbers.size()), nullptr);
+          auto* structReader =
+              dynamic_cast<dwio::common::SelectiveStructColumnReaderBase*>(
+                  root.get());
+          EXPECT_NE(structReader, nullptr);
+          const auto outputRows = structReader->children()[0]->outputRows();
+          return std::vector<vector_size_t>(
+              outputRows.begin(), outputRows.end());
+        };
+
+    for (const vector_size_t rowStep : {1, 3}) {
+      SCOPED_TRACE(fmt::format("rowStep={}", rowStep));
+      std::vector<vector_size_t> rowNumbers;
+      for (vector_size_t row = 0; row < kNumRows; row += rowStep) {
+        rowNumbers.push_back(row);
+      }
+      const auto numPositions = static_cast<vector_size_t>(rowNumbers.size());
+
+      // Hooks identify a row by its position in 'rowNumbers'.
+      std::vector<vector_size_t> expectedPositions;
+      std::vector<int64_t> expectedValues;
+      std::vector<int64_t> expectedSums;
+      for (vector_size_t position = 0; position < numPositions; ++position) {
+        const auto row = rowNumbers[position];
+        expectedSums.push_back(isNullAt(row) ? 0 : valueAt(row));
+        if (!isNullAt(row)) {
+          expectedPositions.push_back(position);
+          expectedValues.push_back(valueAt(row));
+        }
+      }
+
+      {
+        GenericCapturingIntHook hook;
+        readWithHook(hook, rowNumbers);
+        EXPECT_GT(hook.numBulkCalls, 0);
+        EXPECT_EQ(hook.rows, expectedPositions);
+        EXPECT_EQ(hook.values, expectedValues);
+      }
+
+      {
+        struct GroupState {
+          int64_t sum{0};
+          uint8_t nulls{kNullMask};
+        };
+
+        std::vector<GroupState> groupStates(numPositions);
+        std::vector<char*> groups;
+        groups.reserve(numPositions);
+        for (auto& groupState : groupStates) {
+          groups.push_back(reinterpret_cast<char*>(&groupState));
+        }
+        uint64_t numNullGroups = numPositions;
+        aggregate::SumHook<int64_t, false> hook{
+            offsetof(GroupState, sum),
+            offsetof(GroupState, nulls),
+            kNullMask,
+            groups.data(),
+            &numNullGroups};
+        readWithHook(hook, rowNumbers);
+
+        std::vector<int64_t> sums;
+        std::vector<vector_size_t> nonNullPositions;
+        for (vector_size_t position = 0; position < numPositions; ++position) {
+          sums.push_back(groupStates[position].sum);
+          if (groupStates[position].nulls == 0) {
+            nonNullPositions.push_back(position);
+          }
+        }
+        EXPECT_EQ(sums, expectedSums);
+        EXPECT_EQ(nonNullPositions, expectedPositions);
+        EXPECT_EQ(numNullGroups, numPositions - expectedPositions.size());
+      }
+
+      for (const bool nullAllowed : {false, true}) {
+        SCOPED_TRACE(fmt::format("nullAllowed={}", nullAllowed));
+        std::vector<vector_size_t> expectedRows;
+        for (const auto row : rowNumbers) {
+          if (isNullAt(row)
+                  ? nullAllowed
+                  : (valueAt(row) >= lower && valueAt(row) <= upper)) {
+            expectedRows.push_back(row);
+          }
+        }
+        EXPECT_EQ(readFilterOnly(nullAllowed, rowNumbers), expectedRows);
+      }
+    }
   }
 
   const std::shared_ptr<io::IoStatistics> dataIoStats_{
@@ -1522,6 +2707,224 @@ TEST_P(ReadWithVisitorTest, constantEncodingFilterMiss) {
 
   EXPECT_EQ(child->numValues(), 0);
   EXPECT_TRUE(child->outputRows().empty());
+}
+
+// ===========================================================================
+// Test: Constant chunks of each remaining type through the non-legacy reader.
+// The two cases above go through the legacy decoders, so these force the
+// non-legacy ConstantEncoding and check it with and without nulls and with a
+// filter the value passes, fails, or no filter at all.
+// ===========================================================================
+TEST_P(ReadWithVisitorNonLegacyTest, constantEncodingColumnTypes) {
+  for (const bool scanFastPath : {false, true}) {
+    for (const bool nullable : {false, true}) {
+      for (const auto filter :
+           {ConstantFilter::kNone,
+            ConstantFilter::kPass,
+            ConstantFilter::kFail}) {
+        testConstantColumn<int8_t>(7, 8, nullable, filter, scanFastPath);
+        testConstantColumn<int16_t>(7, 8, nullable, filter, scanFastPath);
+        testConstantColumn<int32_t>(7, 8, nullable, filter, scanFastPath);
+        testConstantColumn<float>(2.5F, 7.5F, nullable, filter, scanFastPath);
+        testConstantColumn<double>(2.5, 7.5, nullable, filter, scanFastPath);
+        testConstantColumn<StringView>(
+            StringView("constant-string-longer-than-inline"),
+            StringView("another-string-longer-than-inline"),
+            nullable,
+            filter,
+            scanFastPath);
+        testConstantColumn<bool>(true, false, nullable, filter, scanFastPath);
+      }
+    }
+  }
+}
+
+// ===========================================================================
+// Test: Constant chunk read into a value hook, dense and sparse.
+// ===========================================================================
+TEST_P(ReadWithVisitorNonLegacyTest, constantEncodingHook) {
+  class CapturingHook final : public ValueHook {
+   public:
+    void addValue(vector_size_t row, int64_t value) final {
+      rows.push_back(row);
+      values.push_back(value);
+    }
+
+    void addValues(
+        const vector_size_t* inputRows,
+        const int64_t* inputValues,
+        vector_size_t size) final {
+      ++numBulkCalls;
+      for (vector_size_t i = 0; i < size; ++i) {
+        addValue(inputRows[i], inputValues[i]);
+      }
+    }
+
+    std::vector<vector_size_t> rows;
+    std::vector<int64_t> values;
+    uint32_t numBulkCalls{0};
+  };
+
+  constexpr vector_size_t kRows = 200;
+  for (const bool scanFastPath : {false, true}) {
+    for (const bool sparse : {false, true}) {
+      SCOPED_TRACE(
+          fmt::format("scanFastPath={} sparse={}", scanFastPath, sparse));
+      auto input = makeRowVector({makeFlatVector<int64_t>(
+          kRows, [](auto) { return kConstantValue; })});
+      auto rowType = asRowType(input->type());
+      auto ctx =
+          makeFileContext(input, makeSingleColumnWriterOptions(ConstantEnc{}));
+      expectConstantEncoding(*ctx);
+
+      auto scanSpec = std::make_shared<common::ScanSpec>("root");
+      scanSpec->addAllChildFields(*rowType);
+      CapturingHook hook;
+      auto* childSpec = scanSpec->childByName("c0");
+      childSpec->setFilter(std::make_unique<common::AlwaysTrue>());
+      childSpec->setValueHook(&hook);
+      auto root = buildReader(
+          *ctx,
+          rowType,
+          *scanSpec,
+          /*stringDecoderZeroCopy=*/true,
+          scanFastPath);
+
+      std::vector<vector_size_t> rowVec;
+      for (vector_size_t row = 0; row < kRows; ++row) {
+        if (!sparse || row % 3 != 1) {
+          rowVec.push_back(row);
+        }
+      }
+      root->read(0, RowSet(rowVec.data(), rowVec.size()), nullptr);
+
+      // Hooks receive each row's position in the read set.
+      std::vector<vector_size_t> expectedPositions(rowVec.size());
+      std::iota(expectedPositions.begin(), expectedPositions.end(), 0);
+      EXPECT_EQ(hook.rows, expectedPositions);
+      EXPECT_EQ(
+          hook.values, std::vector<int64_t>(rowVec.size(), kConstantValue));
+      // Only the bulk path hands the hook a batch of values at once.
+      EXPECT_EQ(hook.numBulkCalls > 0, scanFastPath && process::hasSimd());
+    }
+  }
+}
+
+// ===========================================================================
+// Test: A visitor with both a hook and a filter that rejects the Constant
+// chunk's value. The hook receives nothing.
+// ===========================================================================
+TEST_P(ReadWithVisitorNonLegacyTest, constantEncodingHookWithRejectingFilter) {
+  if (!process::hasSimd()) {
+    GTEST_SKIP() << "Bulk path requires SIMD support";
+  }
+
+  class CapturingHook final : public ValueHook {
+   public:
+    void addValue(vector_size_t row, int64_t value) final {
+      rows.push_back(row);
+      values.push_back(value);
+    }
+
+    std::vector<vector_size_t> rows;
+    std::vector<int64_t> values;
+  };
+
+  constexpr vector_size_t kRows = 64;
+  // The file only provides the reader that holds the visitor state.
+  auto input = makeRowVector(
+      {makeFlatVector<int64_t>(kRows, [](auto) { return kConstantValue; })});
+  auto rowType = asRowType(input->type());
+  auto ctx = makeFileContext(input);
+  auto scanSpec = std::make_shared<common::ScanSpec>("root");
+  scanSpec->addAllChildFields(*rowType);
+  auto root = buildReader(*ctx, rowType, *scanSpec);
+  auto* structReader =
+      dynamic_cast<dwio::common::SelectiveStructColumnReaderBase*>(root.get());
+  auto* reader = static_cast<IntegerColumnReaderTestAccessor*>(
+      dynamic_cast<IntegerColumnReader*>(structReader->children()[0]));
+  ASSERT_NE(reader, nullptr);
+
+  std::vector<vector_size_t> rowVec(kRows);
+  std::iota(rowVec.begin(), rowVec.end(), 0);
+  const RowSet rows(rowVec.data(), rowVec.size());
+  reader->doPrepareRead<int64_t>(0, rows, nullptr);
+
+  const std::vector<int64_t> nonNullValues(kRows, kConstantValue);
+  Vector<bool> notNulls(pool(), kRows, true);
+  Buffer buffer(*pool());
+  const auto encoded = encodeConstantTestChunk(
+      ConstantEnc{}, nonNullValues, notNulls, /*nullable=*/false, buffer);
+  auto encoding =
+      EncodingFactory().create(*pool(), encoded, nullptr, Encoding::Options{});
+
+  auto filter = makeConstantRange(ConstantFilter::kFail, /*nullAllowed=*/false);
+  CapturingHook hook;
+  DecoderVisitor<
+      int64_t,
+      common::BigintRange,
+      dwio::common::ExtractToGenericHook,
+      /*isDense=*/true>
+      visitor(*filter, reader, rows, dwio::common::ExtractToGenericHook(&hook));
+  ASSERT_TRUE(dwio::common::useFastPath(visitor, /*hasNulls=*/false));
+  auto params = makeReadWithVisitorParams(visitor, rows, pool());
+  params.scanFastPath = true;
+
+  dispatchCallReadWithVisitor(*encoding, visitor, params);
+
+  EXPECT_EQ(visitor.rowIndex(), rows.size());
+  EXPECT_TRUE(hook.rows.empty());
+}
+
+// ===========================================================================
+// Test: A value hook needs the values, so under scanFastPath a column with a
+// hook and an IS NULL filter keeps decoding them instead of reading only its
+// nulls.
+// ===========================================================================
+TEST_P(ReadWithVisitorNonLegacyTest, valueHookKeepsNullFilterOnValueRead) {
+  class CapturingHook final : public ValueHook {
+   public:
+    void addValue(vector_size_t row, int64_t value) final {
+      rows.push_back(row);
+      values.push_back(value);
+    }
+
+    std::vector<vector_size_t> rows;
+    std::vector<int64_t> values;
+  };
+
+  constexpr vector_size_t kRows = 100;
+  auto input = makeRowVector({makeFlatVector<int64_t>(
+      kRows, [](auto row) { return row; }, nullEvery(3))});
+  auto rowType = asRowType(input->type());
+  auto ctx = makeFileContext(input);
+  auto scanSpec = std::make_shared<common::ScanSpec>("root");
+  scanSpec->addAllChildFields(*rowType);
+  CapturingHook hook;
+  auto* childSpec = scanSpec->childByName("c0");
+  childSpec->setFilter(std::make_unique<common::IsNull>());
+  childSpec->setValueHook(&hook);
+  auto root = buildReader(
+      *ctx,
+      rowType,
+      *scanSpec,
+      /*stringDecoderZeroCopy=*/true,
+      /*scanFastPath=*/true);
+  std::vector<vector_size_t> rowVec(kRows);
+  std::iota(rowVec.begin(), rowVec.end(), 0);
+  root->read(0, RowSet(rowVec.data(), rowVec.size()), nullptr);
+
+  // The hook receives every non-null row. A nulls-only read would give it none.
+  std::vector<vector_size_t> expectedRows;
+  for (vector_size_t row = 0; row < kRows; ++row) {
+    if (row % 3 != 0) {
+      expectedRows.push_back(row);
+    }
+  }
+  EXPECT_EQ(hook.rows, expectedRows);
+  EXPECT_EQ(
+      hook.values,
+      std::vector<int64_t>(expectedRows.begin(), expectedRows.end()));
 }
 
 // ===========================================================================
@@ -2084,12 +3487,60 @@ TEST_P(ReadWithVisitorNonLegacyTest, encodingLevelAlpNullableAcrossChunks) {
   }
 }
 
+TEST_P(ReadWithVisitorTest, alprdDenseExceptions) {
+  for (const bool nullable : {false, true}) {
+    for (const bool useVarint : {false, true}) {
+      if (nullable && useVarint && !useNonLegacy()) {
+        continue;
+      }
+      // Exercise both sides of the cutoff, all-null batches, and a single
+      // visitor crossing a chunk boundary with an existing output prefix.
+      for (const auto batchSize : {127, 128, 129, 1'031, 8'193}) {
+        SCOPED_TRACE(batchSize);
+        for (const auto child :
+             {EncodingType::Trivial, EncodingType::FixedBitWidth}) {
+          testAlprdVisitor<float, true>(
+              nullable, false, false, useVarint, child, batchSize);
+          testAlprdVisitor<double, true>(
+              nullable, false, false, useVarint, child, batchSize);
+        }
+      }
+    }
+  }
+}
+
+TEST_P(ReadWithVisitorTest, alprdDenseFilter) {
+  for (const bool nullable : {false, true}) {
+    for (const bool filterOnly : {false, true}) {
+      for (const auto batchSize : {127, 128, 1'031, 8'193}) {
+        SCOPED_TRACE(batchSize);
+        testAlprdVisitor<float, true>(
+            nullable,
+            true,
+            filterOnly,
+            false,
+            EncodingType::FixedBitWidth,
+            batchSize);
+        testAlprdVisitor<double, true>(
+            nullable,
+            true,
+            filterOnly,
+            false,
+            EncodingType::FixedBitWidth,
+            batchSize);
+      }
+    }
+  }
+}
+
 TEST_P(ReadWithVisitorTest, alprdSparseExceptions) {
   for (const bool useVarint : {false, true}) {
     for (const auto child :
          {EncodingType::Trivial, EncodingType::FixedBitWidth}) {
-      testAlprdVisitor<float>(false, false, false, useVarint, child);
-      testAlprdVisitor<double>(false, false, false, useVarint, child);
+      testAlprdVisitor<float, false>(
+          false, false, false, useVarint, child, 1'031);
+      testAlprdVisitor<double, false>(
+          false, false, false, useVarint, child, 1'031);
     }
   }
 }
@@ -2102,8 +3553,10 @@ TEST_P(ReadWithVisitorTest, alprdNullableSparseExceptions) {
     }
     for (const auto child :
          {EncodingType::Trivial, EncodingType::FixedBitWidth}) {
-      testAlprdVisitor<float>(true, false, false, useVarint, child);
-      testAlprdVisitor<double>(true, false, false, useVarint, child);
+      testAlprdVisitor<float, false>(
+          true, false, false, useVarint, child, 1'031);
+      testAlprdVisitor<double, false>(
+          true, false, false, useVarint, child, 1'031);
     }
   }
 }
@@ -2114,10 +3567,10 @@ TEST_P(ReadWithVisitorTest, alprdSparseFilter) {
       if (nullable && useVarint && !useNonLegacy()) {
         continue;
       }
-      testAlprdVisitor<float>(
-          nullable, true, false, useVarint, EncodingType::FixedBitWidth);
-      testAlprdVisitor<double>(
-          nullable, true, false, useVarint, EncodingType::FixedBitWidth);
+      testAlprdVisitor<float, false>(
+          nullable, true, false, useVarint, EncodingType::FixedBitWidth, 1'031);
+      testAlprdVisitor<double, false>(
+          nullable, true, false, useVarint, EncodingType::FixedBitWidth, 1'031);
     }
   }
 }
@@ -2128,10 +3581,10 @@ TEST_P(ReadWithVisitorTest, alprdSparseFilterOnly) {
       if (nullable && useVarint && !useNonLegacy()) {
         continue;
       }
-      testAlprdVisitor<float>(
-          nullable, true, true, useVarint, EncodingType::FixedBitWidth);
-      testAlprdVisitor<double>(
-          nullable, true, true, useVarint, EncodingType::FixedBitWidth);
+      testAlprdVisitor<float, false>(
+          nullable, true, true, useVarint, EncodingType::FixedBitWidth, 1'031);
+      testAlprdVisitor<double, false>(
+          nullable, true, true, useVarint, EncodingType::FixedBitWidth, 1'031);
     }
   }
 }
@@ -2183,6 +3636,120 @@ TEST_P(ReadWithVisitorNonLegacyTest, columnReaderAlpDenseHook) {
         detail::alp::toPhysical<double>(hook.values[row]),
         detail::alp::toPhysical<double>(data[row]));
   }
+}
+
+TEST_P(
+    ReadWithVisitorNonLegacyTest,
+    columnReaderFixedBitWidthGenericHookNeedsScanFastPath) {
+  constexpr vector_size_t kNumRows{256};
+  auto input =
+      makeRowVector({makeFlatVector<int32_t>(kNumRows, folly::identity)});
+  auto rowType = asRowType(input->type());
+  std::vector<vector_size_t> expectedRows;
+  std::vector<int64_t> expectedValues;
+  expectedRows.reserve(kNumRows);
+  expectedValues.reserve(kNumRows);
+  for (vector_size_t row = 0; row < kNumRows; ++row) {
+    expectedRows.push_back(row);
+    expectedValues.push_back(row);
+  }
+
+  for (const bool scanFastPath : {false, true}) {
+    SCOPED_TRACE(fmt::format("scanFastPath={}", scanFastPath));
+    auto fileContext = makeFileContext(
+        input,
+        makeSingleColumnWriterOptions(
+            EncodingLayout{
+                EncodingType::FixedBitWidth,
+                {},
+                CompressionType::Uncompressed}));
+    auto scanSpec = std::make_shared<common::ScanSpec>("root");
+    scanSpec->addAllChildFields(*rowType);
+    GenericCapturingIntHook hook;
+    auto* childSpec = scanSpec->childByName("c0");
+    childSpec->setFilter(std::make_unique<common::AlwaysTrue>());
+    childSpec->setValueHook(&hook);
+    auto root = buildReader(
+        *fileContext,
+        rowType,
+        *scanSpec,
+        /*stringDecoderZeroCopy=*/true,
+        scanFastPath);
+    readColumn(root.get(), kNumRows);
+
+    if (scanFastPath) {
+      EXPECT_GT(hook.numBulkCalls, 0);
+    } else {
+      EXPECT_EQ(hook.numBulkCalls, 0);
+    }
+    EXPECT_EQ(hook.rows, expectedRows);
+    EXPECT_EQ(hook.values, expectedValues);
+  }
+}
+
+TEST_P(
+    ReadWithVisitorNonLegacyTest,
+    columnReaderFixedBitWidthBulkPathAcrossChunks) {
+  verifyBulkPathAcrossChunks<int32_t>(FixedBitWidthEnc{});
+  verifyBulkPathAcrossChunks<int64_t>(FixedBitWidthEnc{});
+}
+
+TEST_P(
+    ReadWithVisitorNonLegacyTest,
+    columnReaderBlockBitPackingBulkPathAcrossChunks) {
+  verifyBulkPathAcrossChunks<int32_t>(BlockBitPackingEnc{});
+  verifyBulkPathAcrossChunks<int64_t>(BlockBitPackingEnc{});
+}
+
+TEST_P(
+    ReadWithVisitorNonLegacyTest,
+    columnReaderSubIntSplitBulkPathAcrossChunks) {
+  // SubIntSplit replays explicit sections, which must cover every bit of the
+  // physical type.
+  const auto makeLayout =
+      [](const std::vector<subintsplit::SectionPlan>& sections) {
+        return EncodingLayout{
+            EncodingType::SubIntSplit,
+            EncodingLayout::Config{
+                subintsplit::makePreserveSplitConfig(sections)},
+            CompressionType::Uncompressed,
+            std::vector<std::optional<const EncodingLayout>>(sections.size())};
+      };
+  verifyBulkPathAcrossChunks<int32_t>(makeLayout({
+      {.bitStart = 0, .bitEnd = 15},
+      {.bitStart = 16, .bitEnd = 31},
+  }));
+  verifyBulkPathAcrossChunks<int64_t>(makeLayout({
+      {.bitStart = 0, .bitEnd = 15},
+      {.bitStart = 16, .bitEnd = 31},
+      {.bitStart = 32, .bitEnd = 63},
+  }));
+}
+
+TEST_P(
+    ReadWithVisitorNonLegacyTest,
+    encodingLevelFixedBitWidthNullableHookUsesBulkPath) {
+  verifyNullableIntHookUsesBulkPath([&](const auto& values, auto& buffer) {
+    return createFromCustomLayout<int32_t>(
+        FixedBitWidthEnc{}, values, *pool(), buffer);
+  });
+}
+
+TEST_P(
+    ReadWithVisitorNonLegacyTest,
+    encodingLevelBlockBitPackingNullableHookUsesBulkPath) {
+  verifyNullableIntHookUsesBulkPath([&](const auto& values, auto& buffer) {
+    return createFromCustomLayout<int32_t>(
+        BlockBitPackingEnc{}, values, *pool(), buffer);
+  });
+}
+
+TEST_P(
+    ReadWithVisitorNonLegacyTest,
+    encodingLevelSubIntSplitNullableHookUsesBulkPath) {
+  verifyNullableIntHookUsesBulkPath([&](const auto& values, auto& buffer) {
+    return makeSubIntSplitEncoding<int32_t>(values, buffer, *pool());
+  });
 }
 
 TEST_P(
@@ -2398,6 +3965,83 @@ TEST_P(ReadWithVisitorTest, encodingLevelConstantAlwaysTrueDense) {
   auto values = getValues<int64_t>(reader);
   for (int i = 0; i < kRows; ++i) {
     EXPECT_EQ(values[i], 42);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 2a. ConstantEncoding<int64_t> across row density, nulls, and filters
+//     The filter is evaluated once for the chunk, so passing, failing and
+//     filter-only reads each take a different branch of the bulk path.
+// ---------------------------------------------------------------------------
+TEST_P(ReadWithVisitorNonLegacyTest, encodingLevelConstantBulkScan) {
+  if (!process::hasSimd()) {
+    GTEST_SKIP() << "Constant bulk scan requires SIMD support";
+  }
+  // The per-row path must produce the same output as the bulk path.
+  const auto testBothPaths = [&](const ConstantReadCase& testCase) {
+    for (const bool scanFastPath : {false, true}) {
+      testConstantEncodingRead(testCase, scanFastPath);
+    }
+  };
+  for (const bool nullable : {false, true}) {
+    for (const bool sparse : {false, true}) {
+      testBothPaths({
+          .nullable = nullable,
+          .sparse = sparse,
+          .filter = ConstantFilter::kNone,
+          .nullAllowed = false,
+          .filterOnly = false,
+      });
+      for (const auto filter : {ConstantFilter::kPass, ConstantFilter::kFail}) {
+        for (const bool filterOnly : {false, true}) {
+          for (const bool nullAllowed : {false, true}) {
+            if (nullAllowed && !nullable) {
+              continue;
+            }
+            testBothPaths({
+                .nullable = nullable,
+                .sparse = sparse,
+                .filter = filter,
+                .nullAllowed = nullAllowed,
+                .filterOnly = filterOnly,
+            });
+          }
+        }
+      }
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 2b. ConstantEncoding<int64_t> chunks next to other encodings
+// ---------------------------------------------------------------------------
+TEST_P(ReadWithVisitorNonLegacyTest, encodingLevelConstantChunks) {
+  if (!process::hasSimd()) {
+    GTEST_SKIP() << "Constant bulk scan requires SIMD support";
+  }
+  for (const bool scanFastPath : {false, true}) {
+    for (const bool nullable : {false, true}) {
+      for (const bool sparse : {false, true}) {
+        testConstantChunks(
+            nullable,
+            sparse,
+            /*filtered=*/false,
+            /*filterOnly=*/false,
+            scanFastPath);
+        testConstantChunks(
+            nullable,
+            sparse,
+            /*filtered=*/true,
+            /*filterOnly=*/false,
+            scanFastPath);
+        testConstantChunks(
+            nullable,
+            sparse,
+            /*filtered=*/true,
+            /*filterOnly=*/true,
+            scanFastPath);
+      }
+    }
   }
 }
 
@@ -2900,6 +4544,15 @@ TEST_P(ReadWithVisitorTest, encodingLevelDictionaryAlwaysTrueDense) {
   }
 }
 
+TEST_P(ReadWithVisitorNonLegacyTest, encodingLevelDictionaryAwareDense) {
+  testDictionaryAwareIntegerReads<int64_t, /*kIsDense=*/true>(
+      /*rowStep=*/1,
+      [](vector_size_t /*row*/) { return false; },
+      TrivialEnc{},
+      /*dictionaryAwareReads=*/true,
+      /*scanFastPath=*/false);
+}
+
 TEST_P(ReadWithVisitorTest, encodingLevelSharedDictionaryAlwaysTrueDense) {
   if (!useNonLegacy()) {
     GTEST_SKIP() << "SharedDictionaryEncoding requires non-legacy encoding";
@@ -3022,6 +4675,357 @@ TEST_P(ReadWithVisitorTest, encodingLevelDictionaryBigintRangeSparse) {
   for (int i = 0; i < reader->numValues(); ++i) {
     EXPECT_GE(values[i], 15);
     EXPECT_LE(values[i], 35);
+  }
+}
+
+TEST_P(ReadWithVisitorNonLegacyTest, dictionaryAwareReadsReal) {
+  testDictionaryAwareFloatingPointCases<float>();
+}
+
+TEST_P(ReadWithVisitorNonLegacyTest, dictionaryAwareReadsDouble) {
+  testDictionaryAwareFloatingPointCases<double>();
+}
+
+TEST_P(
+    ReadWithVisitorNonLegacyTest,
+    encodingLevelDictionaryIntegerRangeSparseNullable) {
+  for (const auto nullPeriod : {2, 17}) {
+    SCOPED_TRACE(fmt::format("nullPeriod={}", nullPeriod));
+    const auto isNullAt = nullEvery(nullPeriod);
+    {
+      SCOPED_TRACE("SMALLINT");
+      testDictionaryAwareIntegerReads<int16_t, /*kIsDense=*/false>(
+          /*rowStep=*/3,
+          isNullAt,
+          TrivialEnc{},
+          /*dictionaryAwareReads=*/true,
+          /*scanFastPath=*/false);
+    }
+    {
+      SCOPED_TRACE("INTEGER");
+      testDictionaryAwareIntegerReads<int32_t, /*kIsDense=*/false>(
+          /*rowStep=*/3,
+          isNullAt,
+          TrivialEnc{},
+          /*dictionaryAwareReads=*/true,
+          /*scanFastPath=*/false);
+    }
+    {
+      SCOPED_TRACE("BIGINT");
+      testDictionaryAwareIntegerReads<int64_t, /*kIsDense=*/false>(
+          /*rowStep=*/3,
+          isNullAt,
+          TrivialEnc{},
+          /*dictionaryAwareReads=*/true,
+          /*scanFastPath=*/false);
+    }
+  }
+}
+
+// A filter-only read without a filter produces neither rows nor values. The
+// scan spec keeps a filter so the reader reports output rows, not input rows.
+TEST_P(
+    ReadWithVisitorNonLegacyTest,
+    encodingLevelDictionaryAlwaysTrueDropValuesSparse) {
+  constexpr vector_size_t kRows{257};
+  const auto valueAt = [](vector_size_t row) {
+    return static_cast<int64_t>((row % 20) * 10);
+  };
+  auto input = makeRowVector({makeFlatVector<int64_t>(kRows, valueAt)});
+  auto rowType = asRowType(input->type());
+  auto context = makeFileContext(input);
+  auto scanSpec = std::make_shared<common::ScanSpec>("root");
+  scanSpec->addAllChildFields(*rowType);
+  auto* valueSpec = scanSpec->childByName("c0");
+  valueSpec->setFilter(
+      std::make_unique<common::BigintRange>(50, 100, /*nullAllowed=*/false));
+  valueSpec->setProjectOut(false);
+  auto root = buildReader(*context, rowType, *scanSpec);
+  auto* structReader =
+      dynamic_cast<dwio::common::SelectiveStructColumnReaderBase*>(root.get());
+  auto* reader = static_cast<IntegerColumnReaderTestAccessor*>(
+      dynamic_cast<IntegerColumnReader*>(structReader->children()[0]));
+  ASSERT_NE(reader, nullptr);
+
+  std::vector<vector_size_t> rowNumbers;
+  for (vector_size_t row = 0; row < kRows; row += 3) {
+    rowNumbers.push_back(row);
+  }
+  const RowSet rows(rowNumbers.data(), rowNumbers.size());
+  for (const auto nullPeriod : {2, 17}) {
+    SCOPED_TRACE(fmt::format("nullPeriod={}", nullPeriod));
+    const auto isNullAt = nullEvery(nullPeriod);
+    auto nulls = allocateNulls(kRows, pool(), bits::kNotNull);
+    std::vector<int64_t> nonNullValues;
+    for (vector_size_t row = 0; row < kRows; ++row) {
+      if (isNullAt(row)) {
+        bits::setNull(nulls->asMutable<uint64_t>(), row);
+      } else {
+        nonNullValues.push_back(valueAt(row));
+      }
+    }
+    Buffer buffer(*pool());
+    auto encoding = createFromCustomLayout<int64_t>(
+        DictionaryEnc{}, nonNullValues, *pool(), buffer);
+    for (const bool dictionaryAwareReads : {false, true}) {
+      SCOPED_TRACE(
+          fmt::format("dictionaryAwareReads={}", dictionaryAwareReads));
+      encoding->reset();
+      reader->doPrepareRead<int64_t>(0, rows, nulls->as<uint64_t>());
+      common::AlwaysTrue noFilter;
+      DecoderVisitor<
+          int64_t,
+          common::AlwaysTrue,
+          dwio::common::DropValues,
+          /*isDense=*/false>
+          visitor(noFilter, reader, rows, dwio::common::DropValues{});
+      auto params = makeReadWithVisitorParams(visitor, rows, pool());
+      params.dictionaryAwareReads = dictionaryAwareReads;
+
+      dispatchCallReadWithVisitor(*encoding, visitor, params);
+
+      EXPECT_EQ(visitor.rowIndex(), rows.size());
+      EXPECT_TRUE(reader->outputRows().empty());
+      EXPECT_EQ(reader->numValues(), 0);
+    }
+  }
+}
+
+// IS NULL rejects every dictionary value, so only merged nulls reach output.
+TEST_P(ReadWithVisitorNonLegacyTest, encodingLevelDictionaryIsNullSparse) {
+  constexpr vector_size_t kRows{257};
+  const auto valueAt = [](vector_size_t row) {
+    return static_cast<int64_t>((row % 20) * 10);
+  };
+  auto input = makeRowVector({makeFlatVector<int64_t>(kRows, valueAt)});
+  auto rowType = asRowType(input->type());
+  auto context = makeFileContext(input);
+  std::vector<vector_size_t> rowNumbers;
+  for (vector_size_t row = 0; row < kRows; row += 3) {
+    rowNumbers.push_back(row);
+  }
+  const RowSet rows(rowNumbers.data(), rowNumbers.size());
+
+  for (const auto nullPeriod : {2, 17}) {
+    SCOPED_TRACE(fmt::format("nullPeriod={}", nullPeriod));
+    const auto isNullAt = nullEvery(nullPeriod);
+    auto nulls = allocateNulls(kRows, pool(), bits::kNotNull);
+    std::vector<int64_t> nonNullValues;
+    for (vector_size_t row = 0; row < kRows; ++row) {
+      if (isNullAt(row)) {
+        bits::setNull(nulls->asMutable<uint64_t>(), row);
+      } else {
+        nonNullValues.push_back(valueAt(row));
+      }
+    }
+    std::vector<vector_size_t> expectedRows;
+    for (const auto row : rowNumbers) {
+      if (isNullAt(row)) {
+        expectedRows.push_back(row);
+      }
+    }
+
+    for (const bool filterOnly : {false, true}) {
+      SCOPED_TRACE(fmt::format("filterOnly={}", filterOnly));
+      auto scanSpec = std::make_shared<common::ScanSpec>("root");
+      scanSpec->addAllChildFields(*rowType);
+      auto* valueSpec = scanSpec->childByName("c0");
+      valueSpec->setFilter(std::make_unique<common::IsNull>());
+      valueSpec->setProjectOut(!filterOnly);
+      auto root = buildReader(*context, rowType, *scanSpec);
+
+      auto* structReader =
+          dynamic_cast<dwio::common::SelectiveStructColumnReaderBase*>(
+              root.get());
+      auto* reader = static_cast<IntegerColumnReaderTestAccessor*>(
+          dynamic_cast<IntegerColumnReader*>(structReader->children()[0]));
+      ASSERT_NE(reader, nullptr);
+      reader->doPrepareRead<int64_t>(0, rows, nulls->as<uint64_t>());
+
+      Buffer buffer(*pool());
+      auto encoding = createFromCustomLayout<int64_t>(
+          DictionaryEnc{}, nonNullValues, *pool(), buffer);
+      common::IsNull filter;
+      const auto read = [&](auto extractValues) {
+        DecoderVisitor<
+            int64_t,
+            common::IsNull,
+            decltype(extractValues),
+            /*isDense=*/false>
+            visitor(filter, reader, rows, extractValues);
+        auto params = makeReadWithVisitorParams(visitor, rows, pool());
+        params.dictionaryAwareReads = true;
+        dispatchCallReadWithVisitor(*encoding, visitor, params);
+        EXPECT_EQ(visitor.rowIndex(), rows.size());
+      };
+      if (filterOnly) {
+        read(dwio::common::DropValues{});
+      } else {
+        read(dwio::common::ExtractToReader(reader));
+      }
+
+      const std::vector<vector_size_t> actualRows(
+          reader->outputRows().begin(), reader->outputRows().end());
+      EXPECT_EQ(actualRows, expectedRows);
+      EXPECT_EQ(reader->numValues(), expectedRows.size());
+      if (!filterOnly) {
+        const auto& resultNulls = reader->resultNullsForTest();
+        ASSERT_NE(resultNulls, nullptr);
+        for (size_t index = 0; index < expectedRows.size(); ++index) {
+          EXPECT_TRUE(bits::isBitNull(resultNulls->as<uint64_t>(), index));
+        }
+      }
+    }
+  }
+}
+
+TEST_P(
+    ReadWithVisitorNonLegacyTest,
+    encodingLevelDictionaryTrailingNullsAfterValues) {
+  for (const bool alternating : {false, true}) {
+    SCOPED_TRACE(fmt::format("alternating={}", alternating));
+    constexpr vector_size_t kRows{257};
+    constexpr vector_size_t kFirstNull{224};
+    const auto valueAt = [](vector_size_t row) {
+      return static_cast<int64_t>((row * 9'973) % 1'000);
+    };
+    auto input = makeRowVector({makeFlatVector<int64_t>(kRows, valueAt)});
+    auto rowType = asRowType(input->type());
+    auto context = makeFileContext(input);
+    auto scanSpec = std::make_shared<common::ScanSpec>("root");
+    scanSpec->addAllChildFields(*rowType);
+    auto root = buildReader(*context, rowType, *scanSpec);
+
+    auto* structReader =
+        dynamic_cast<dwio::common::SelectiveStructColumnReaderBase*>(
+            root.get());
+    auto* reader = static_cast<IntegerColumnReaderTestAccessor*>(
+        dynamic_cast<IntegerColumnReader*>(structReader->children()[0]));
+    ASSERT_NE(reader, nullptr);
+
+    std::vector<vector_size_t> rowNumbers(kRows);
+    std::iota(rowNumbers.begin(), rowNumbers.end(), 0);
+    RowSet rows(rowNumbers.data(), rowNumbers.size());
+    auto nulls = allocateNulls(kRows, pool(), bits::kNotNull);
+    const auto isNullAt = [&](vector_size_t row) {
+      return row >= kFirstNull || (alternating && row % 2 == 0);
+    };
+    for (vector_size_t row = 0; row < kRows; ++row) {
+      if (isNullAt(row)) {
+        bits::setNull(nulls->asMutable<uint64_t>(), row);
+      }
+    }
+    reader->doPrepareRead<int64_t>(0, rows, nulls->as<uint64_t>());
+
+    std::vector<int64_t> nonNullValues;
+    nonNullValues.reserve(kFirstNull);
+    for (vector_size_t row = 0; row < kFirstNull; ++row) {
+      if (!isNullAt(row)) {
+        nonNullValues.push_back(valueAt(row));
+      }
+    }
+    Buffer buffer(*pool());
+    auto encoding = createFromCustomLayout<int64_t>(
+        DictionaryEnc{}, nonNullValues, *pool(), buffer);
+    common::AlwaysTrue filter;
+    dwio::common::ExtractToReader extractValues(reader);
+    DecoderVisitor<
+        int64_t,
+        common::AlwaysTrue,
+        dwio::common::ExtractToReader,
+        /*isDense=*/true>
+        visitor(filter, reader, rows, extractValues);
+    auto params = makeReadWithVisitorParams(visitor, rows, pool());
+    params.dictionaryAwareReads = true;
+
+    dispatchCallReadWithVisitor(*encoding, visitor, params);
+
+    EXPECT_EQ(visitor.rowIndex(), kRows);
+    ASSERT_EQ(reader->numValues(), kRows);
+    const auto values = getValues<int64_t>(reader);
+    const auto& resultNulls = reader->resultNullsForTest();
+    ASSERT_NE(resultNulls, nullptr);
+    for (vector_size_t row = 0; row < kRows; ++row) {
+      const bool isNull = bits::isBitNull(resultNulls->as<uint64_t>(), row);
+      EXPECT_EQ(isNull, isNullAt(row));
+      if (!isNull) {
+        EXPECT_EQ(values[row], valueAt(row));
+      }
+    }
+  }
+}
+
+TEST_P(
+    ReadWithVisitorNonLegacyTest,
+    encodingLevelDictionaryTrailingNullsAfterValuesFiltered) {
+  for (const bool alternating : {false, true}) {
+    SCOPED_TRACE(fmt::format("alternating={}", alternating));
+    testDictionaryAwareIntegerReads<int64_t, /*kIsDense=*/true>(
+        /*rowStep=*/1,
+        [alternating](vector_size_t row) {
+          return row >= 224 || (alternating && row % 2 == 0);
+        },
+        TrivialEnc{},
+        /*dictionaryAwareReads=*/true,
+        /*scanFastPath=*/false);
+  }
+}
+
+// Varint indices always decode one value at a time, which is the path every
+// index encoding takes on machines without SIMD. Reads run on the default path,
+// which decodes the indices through DictionaryIndicesHook, and on the
+// dictionary-aware path, each with scanFastPath off and on. A SMALLINT read
+// sizes the values buffer for 2-byte values, so the default path must grow it
+// before the bulk index decode stages 4-byte indices there.
+TEST_P(ReadWithVisitorNonLegacyTest, encodingLevelDictionaryIndexEncodings) {
+  // SubIntSplit needs explicit section boundaries, inclusive at both ends, to
+  // replay a layout.
+  const std::vector<subintsplit::SectionPlan> subIntSplitSections{
+      {.bitStart = 0, .bitEnd = 15},
+      {.bitStart = 16, .bitEnd = 31},
+  };
+  const std::vector<std::pair<std::string, EncodingLayout>> indicesLayouts{
+      {"Varint", VarintEnc{}},
+      {"FixedBitWidth", FixedBitWidthEnc{}},
+      {"BlockBitPacking", BlockBitPackingEnc{}},
+      {"SubIntSplit",
+       EncodingLayout{
+           EncodingType::SubIntSplit,
+           EncodingLayout::Config{
+               subintsplit::makePreserveSplitConfig(subIntSplitSections)},
+           CompressionType::Uncompressed,
+           std::vector<std::optional<const EncodingLayout>>(
+               subIntSplitSections.size())}},
+  };
+  for (const auto& [name, indicesLayout] : indicesLayouts) {
+    for (const bool dictionaryAwareReads : {false, true}) {
+      for (const bool scanFastPath : {false, true}) {
+        SCOPED_TRACE(
+            fmt::format(
+                "{}, dictionaryAwareReads={}, scanFastPath={}",
+                name,
+                dictionaryAwareReads,
+                scanFastPath));
+        testDictionaryAwareIntegerReads<int16_t, /*kIsDense=*/false>(
+            /*rowStep=*/3,
+            nullEvery(17),
+            indicesLayout,
+            dictionaryAwareReads,
+            scanFastPath);
+        testDictionaryAwareIntegerReads<int64_t, /*kIsDense=*/false>(
+            /*rowStep=*/3,
+            nullEvery(17),
+            indicesLayout,
+            dictionaryAwareReads,
+            scanFastPath);
+        testDictionaryAwareIntegerReads<int64_t, /*kIsDense=*/true>(
+            /*rowStep=*/1,
+            nullEvery(17),
+            indicesLayout,
+            dictionaryAwareReads,
+            scanFastPath);
+      }
+    }
   }
 }
 

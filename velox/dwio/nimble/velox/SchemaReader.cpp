@@ -356,10 +356,14 @@ HybridFlatMapType::HybridFlatMapType(
       "Hybrid FlatMap key kind is unsupported: {}.",
       keyScalarKind_);
   validateHybridFlatMapGroups(groups_);
+  size_t numKeys{0};
   for (const auto& group : groups_) {
-    if (HybridFlatMap::isDefaultGroup(group.groupId)) {
-      defaultGroupKeys_.reserve(group.groupKeys.size());
-      defaultGroupKeys_.insert(group.groupKeys.begin(), group.groupKeys.end());
+    numKeys += group.groupKeys.size();
+  }
+  groupIndices_.reserve(numKeys);
+  for (size_t i = 0; i < groups_.size(); ++i) {
+    for (const auto& key : groups_[i].groupKeys) {
+      groupIndices_.emplace(key, i);
     }
   }
 }
@@ -392,17 +396,11 @@ const HybridFlatMapType::Group& HybridFlatMapType::defaultGroup() const {
 }
 
 std::optional<size_t> HybridFlatMapType::findGroup(std::string_view key) const {
-  for (size_t i = 0; i < groups_.size(); ++i) {
-    const auto& group = groups_[i];
-    const bool found = HybridFlatMap::isDefaultGroup(group.groupId)
-        ? defaultGroupKeys_.contains(key)
-        : std::binary_search(
-              group.groupKeys.begin(), group.groupKeys.end(), key);
-    if (found) {
-      return i;
-    }
+  const auto iterator = groupIndices_.find(key);
+  if (iterator == groupIndices_.end()) {
+    return std::nullopt;
   }
-  return std::nullopt;
+  return iterator->second;
 }
 
 const Type& HybridFlatMapType::valueType() const {

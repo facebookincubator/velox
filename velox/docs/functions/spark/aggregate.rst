@@ -7,6 +7,41 @@ Aggregate functions operate on a set of values to compute a single result.
 General Aggregate Functions
 ---------------------------
 
+.. spark:function:: approx_percentile(x, percentage) -> [same as x]
+
+    Returns the approximate percentile of ``x`` at the given ``percentage``, using the
+    default accuracy of 10000. ``percentage`` must be a constant between 0 and 1, inclusive,
+    and must not be NULL. A ``percentage`` of 0 returns the minimum value and 1 returns the
+    maximum value. Supported types for ``x`` are TINYINT, SMALLINT, INTEGER, BIGINT, REAL and
+    DOUBLE. NULL values of ``x`` are ignored. Returns NULL if there are no non-NULL input
+    values. ::
+
+        SELECT approx_percentile(x, 0.5) FROM (VALUES (1), (2), (3), (4), (5)) AS t(x); -- 3
+
+.. spark:function:: approx_percentile(x, percentage, accuracy) -> [same as x]
+   :noindex:
+
+    Like ``approx_percentile(x, percentage)`` with an explicit ``accuracy``. ``accuracy`` is a
+    constant positive INTEGER and must not be NULL. 1/``accuracy`` is the relative error of
+    the approximation, so a larger value gives a more precise result at the cost of more
+    memory. Spark's default is 10000. ::
+
+        SELECT approx_percentile(x, 0.5, 100) FROM (VALUES (1), (2), (3), (4), (5)) AS t(x); -- 3
+
+.. spark:function:: approx_percentile(x, percentages) -> array([same as x])
+   :noindex:
+
+    Returns an array holding the approximate percentile of ``x`` for each element of
+    ``percentages``, in the same order. ``percentages`` must be a constant, non-empty array
+    whose elements are between 0 and 1, inclusive, and not NULL. ::
+
+        SELECT approx_percentile(x, array(0, 0.5, 1)) FROM (VALUES (1), (2), (3), (4), (5)) AS t(x); -- [1, 3, 5]
+
+.. spark:function:: approx_percentile(x, percentages, accuracy) -> array([same as x])
+   :noindex:
+
+    Like ``approx_percentile(x, percentages)`` with an explicit ``accuracy``.
+
 .. spark:function:: avg(x) -> double|decimal
 
     Returns the average (arithmetic mean) of all non-null input values.

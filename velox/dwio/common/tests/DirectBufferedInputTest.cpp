@@ -1336,7 +1336,9 @@ TEST_F(DirectBufferedInputTest, readGapTracking) {
         std::move(groupId),
         ioStats,
         nullptr,
-        executor_.get(),
+        // Gaps are recorded synchronously in load(). Without an executor, no
+        // prefetch outlives 'input'.
+        nullptr,
         readerOptions);
 
     for (const auto& region : testCase.regions) {

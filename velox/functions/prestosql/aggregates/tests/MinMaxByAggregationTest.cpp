@@ -1221,7 +1221,8 @@ TEST_F(MinMaxByComplexTypes, rowContainerReservesRowSize) {
           core::AggregationNode::Step::kSingle,
           std::vector<TypePtr>{valueType, BIGINT()},
           valueType,
-          queryConfig);
+          queryConfig,
+          /*constantInputs=*/{});
       std::vector<exec::Accumulator> accumulators;
       accumulators.emplace_back(fn.get(), valueType);
       exec::RowContainer container(

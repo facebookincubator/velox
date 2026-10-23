@@ -16,6 +16,7 @@
 #pragma once
 
 #include <folly/container/IntrusiveList.h>
+#include <folly/stop_watch.h>
 
 #include "velox/common/base/SkewedPartitionBalancer.h"
 #include "velox/core/PlanFragment.h"
@@ -43,7 +44,9 @@ class SpatialJoinBridge;
 class SplitListener;
 
 class FixedPointLoop;
+struct FixedPointExecutionStats;
 struct FixedPointOptions;
+struct NestedFixedPoint;
 
 /// Runs one plan fragment.  By default it compiles the fragment into a
 /// Driver/Operator pipeline and executes that.  A fragment containing a
@@ -93,6 +96,8 @@ class Task : public std::enable_shared_from_this<Task> {
   /// execution fails.
   /// @param fixedPointOptions Coordinator-supplied hooks for a plan containing
   /// a FixedPointNode, or nullptr for none.  Ignored for any other plan.
+  /// @param nested Set only by a FixedPointLoop on a sub-task it creates, to
+  /// name itself and the sub-task's place in the loop.  Callers leave it null.
   static std::shared_ptr<Task> create(
       const std::string& taskId,
       core::PlanFragment planFragment,
@@ -103,7 +108,8 @@ class Task : public std::enable_shared_from_this<Task> {
       int32_t memoryArbitrationPriority = 0,
       std::optional<common::SpillDiskOptions> spillDiskOpts = std::nullopt,
       std::function<void(std::exception_ptr)> onError = nullptr,
-      const FixedPointOptions* fixedPointOptions = nullptr);
+      const FixedPointOptions* fixedPointOptions = nullptr,
+      const NestedFixedPoint* nested = nullptr);
 
   static std::shared_ptr<Task> create(
       const std::string& taskId,
@@ -115,7 +121,8 @@ class Task : public std::enable_shared_from_this<Task> {
       int32_t memoryArbitrationPriority = 0,
       std::optional<common::SpillDiskOptions> spillDiskOpts = std::nullopt,
       std::function<void(std::exception_ptr)> onError = nullptr,
-      const FixedPointOptions* fixedPointOptions = nullptr);
+      const FixedPointOptions* fixedPointOptions = nullptr,
+      const NestedFixedPoint* nested = nullptr);
 
   /// Convenience function for shortening a Presto taskId. To be used
   /// in debugging messages and listings.
@@ -194,9 +201,9 @@ class Task : public std::enable_shared_from_this<Task> {
 
   /// The fixed point whose schedule created this task as one of its
   /// per-iteration sub-tasks, or nullptr when nothing did.  Set once at
-  /// construction from FixedPointOptions::nested, so a running task cannot be
-  /// re-pointed; the fixed-point state operators walk it outward to find the
-  /// loop that declares the entry they read.  It outlives this task.
+  /// construction from the 'nested' argument of create(), so a running task
+  /// cannot be re-pointed; the fixed-point state operators walk it outward to
+  /// find the loop that declares the entry they read.  It outlives this task.
   FixedPointLoop* parentFixedPoint() const {
     return parentFixedPoint_;
   }
@@ -285,15 +292,19 @@ class Task : public std::enable_shared_from_this<Task> {
   /// duplicate.
   /// Note, that this method does NOT update max split sequence id.
   /// Returns true if split was added, false if it was ignored.
-  /// Note that, the operation is silently ignored if Task is not running.
+  /// A remote split for a node with an exchange client goes to the client
+  /// right away, or when the task starts if added before that. The task fails
+  /// if the client rejects it, and start() throws if that happens at start.
+  /// If the task is not running, a remote split goes to the client so it can
+  /// release the remote task, and other splits are ignored.
   bool addSplitWithSequence(
       const core::PlanNodeId& planNodeId,
       exec::Split&& split,
       long sequenceId);
 
   /// Adds split for a source operator corresponding to plan node with
-  /// specified ID. Does not require sequential id.
-  /// Note that, the operation is silently ignored if Task is not running.
+  /// specified ID. Does not require sequential id. Remote splits are handled
+  /// as in addSplitWithSequence().
   void addSplit(const core::PlanNodeId& planNodeId, exec::Split&& split);
 
   /// We mark that for the given group there would be no more splits coming.
@@ -371,6 +382,13 @@ class Task : public std::enable_shared_from_this<Task> {
   /// structure.
   TaskStats taskStats() const;
 
+  /// Experimental: the returned struct may change without notice, so projects
+  /// outside Velox should not depend on it yet.  Returns a snapshot of the
+  /// execution statistics of the fixed point this task runs, or std::nullopt
+  /// when it runs none.  Callable at any time, including while the fixed point
+  /// runs and after it fails.
+  std::optional<FixedPointExecutionStats> fixedPointExecutionStats() const;
+
   /// Information about an operator call that helps debugging stuck calls.
   struct OpCallInfo {
     size_t durationMs;
@@ -401,12 +419,8 @@ class Task : public std::enable_shared_from_this<Task> {
   /// yet.
   uint64_t timeSinceTerminationMs() const;
 
-  /// Returns the number of task output streams. An ordinary task has one per
-  /// output driver; a task running a fixed-point loop has one.
+  /// Returns the number of task output streams, one per output driver.
   uint32_t numOutputDrivers() const {
-    if (fixedPoint_ != nullptr) {
-      return 1;
-    }
     return numDrivers(getOutputPipelineId());
   }
 
@@ -596,33 +610,60 @@ class Task : public std::enable_shared_from_this<Task> {
   /// 'pipelineId' in this task.
   std::vector<Operator*> findPeerOperators(int pipelineId, Operator* caller);
 
-  /// Synchronizes completion of an Operator across Drivers of 'this'.
+  /// Synchronizes arrival of an Operator across Drivers of 'this'.
   /// 'planNodeId' identifies the Operator within all Operators/pipelines of
-  /// 'this'.  Each Operator instance calls this once. All but the last get a
-  /// false return value and 'future' is set to a future the caller should block
-  /// on. At this point the caller should go off thread as in any blocking
-  /// situation.  The last to call gets a true return value and 'peers' is set
-  /// to all Drivers except 'caller'. 'promises' corresponds pairwise to
-  /// 'peers'. Realizing the promise will continue the peer. This effects a
-  /// synchronization barrier between Drivers of a pipeline inside one worker.
-  /// This is used for example for multithreaded hash join build to ensure all
-  /// build threads are completed before allowing the probe pipeline to proceed.
+  /// 'this'. Each participating Operator instance calls this once per barrier
+  /// round. All but the last get a false return value and 'future' is set to a
+  /// future the caller should block on. At this point the caller should go off
+  /// thread as in any blocking situation. The last to call gets a true return
+  /// value and 'peers' is set to all Drivers except 'caller'. 'promises'
+  /// corresponds pairwise to 'peers'. Realizing the promise will continue the
+  /// peer. This effects a synchronization barrier between Drivers of a pipeline
+  /// inside one worker. This is used for example for multithreaded hash join
+  /// build to ensure all build threads are completed before allowing the probe
+  /// pipeline to proceed.
   /// Throws a cancelled error if 'this' is in an error state.
   ///
   /// NOTE: if 'future' is null, then the caller doesn't intend to wait for the
-  /// other peers to finish. The function won't set its promise and record it in
+  /// other peers to arrive. The function won't set its promise and record it in
   /// peers. This is used in scenario that the caller only needs to know whether
   /// it is the last one to reach the barrier.
   ///
   /// NOTE: The last peer (the one that got 'true' returned and a bunch of
   /// promises) is responsible for promises' fulfillment even in case of an
   /// exception!
+  bool allPeersArrived(
+      const core::PlanNodeId& planNodeId,
+      Driver* caller,
+      ContinueFuture* future,
+      std::vector<ContinuePromise>& promises,
+      std::vector<std::shared_ptr<Driver>>& peers);
+
+  /// Backward-compatible name for 'allPeersArrived'. New callers should use
+  /// 'allPeersArrived'.
   bool allPeersFinished(
       const core::PlanNodeId& planNodeId,
       Driver* caller,
       ContinueFuture* future,
       std::vector<ContinuePromise>& promises,
       std::vector<std::shared_ptr<Driver>>& peers);
+
+  /// Same as 'allPeersArrived', but also marks 'caller' as finished after the
+  /// current barrier, excluding it from subsequent barriers for this plan node
+  /// and pipeline. The caller still participates in the current barrier and
+  /// must not call again.
+  bool allPeersArrivedAndFinishPeer(
+      const core::PlanNodeId& planNodeId,
+      Driver* caller,
+      ContinueFuture* future,
+      std::vector<ContinuePromise>& promises,
+      std::vector<std::shared_ptr<Driver>>& peers);
+
+  /// Marks 'caller' as finished and excludes it from subsequent barriers for
+  /// 'planNodeId'. The caller must have completed the current barrier already.
+  void finishPeerFromBarrier(
+      const core::PlanNodeId& planNodeId,
+      Driver* caller);
 
   /// Adds HashJoinBridge's for all the specified plan node IDs.
   void addHashJoinBridgesLocked(
@@ -706,9 +747,8 @@ class Task : public std::enable_shared_from_this<Task> {
   /// Returns kNone if no pause or terminate is requested. The thread count is
   /// incremented if kNone is returned. If something else is returned the
   /// calling thread should unwind and return itself to its pool. If 'this' goes
-  /// from no threads running to one thread running, sets 'onThreadSince_' to
-  /// 'nowMicros'.
-  StopReason enter(ThreadState& state, uint64_t nowMicros = 0);
+  /// from no threads running to one thread running, sets 'onThreadSince_'.
+  StopReason enter(ThreadState& state);
 
   /// Sets the state to terminated. Returns kAlreadyOnThread if the
   /// Driver is running. In this case, the Driver will free resources
@@ -808,8 +848,10 @@ class Task : public std::enable_shared_from_this<Task> {
   }
 
   /// Requests yield if 'this' is running and has had at least one Driver on
-  /// thread since before 'startTimeMicros'. Returns the number of threads in
-  /// 'this' at the time of requesting yield. Returns 0 if yield not requested.
+  /// thread since before 'startTimeMicros', an epoch time such as
+  /// EpochTime::now<std::chrono::microseconds>() minus a time slice. Returns
+  /// the number of threads in 'this' at the time of requesting yield. Returns 0
+  /// if yield not requested.
   int32_t yieldIfDue(uint64_t startTimeMicros);
 
   /// Check if the task is requested to pause. If it is true and 'future' is not
@@ -865,10 +907,9 @@ class Task : public std::enable_shared_from_this<Task> {
   /// Returns the list of running tasks from velox runtime.
   static std::vector<std::shared_ptr<Task>> getRunningTasks();
 
-  /// The fixed point running this fragment, or nullptr when it runs as an
-  /// ordinary Driver pipeline.  Test-only: nothing in production reaches past
-  /// the Task API, which already delegates to the loop.
-  FixedPointLoop* testingFixedPoint() const {
+  /// The loop running the FixedPointNode leaf of this task's plan, or nullptr
+  /// when the plan has none.
+  FixedPointLoop* fixedPoint() const {
     return fixedPoint_.get();
   }
 
@@ -977,6 +1018,16 @@ class Task : public std::enable_shared_from_this<Task> {
 
   // Recursive helper for 'allSplitsConsumed()' method.
   bool allSplitsConsumedHelper(const core::PlanNode* planNode) const;
+
+  // Implements the peer barrier APIs above. If 'finishPeer' is true, the caller
+  // participates in the current round and is excluded from subsequent rounds.
+  bool allPeersArrivedImpl(
+      const core::PlanNodeId& planNodeId,
+      Driver* caller,
+      bool finishPeer,
+      ContinueFuture* future,
+      std::vector<ContinuePromise>& promises,
+      std::vector<std::shared_ptr<Driver>>& peers);
 
   // Remove the spill directory, if the Task was creating it for potential
   // spilling.
@@ -1354,11 +1405,19 @@ class Task : public std::enable_shared_from_this<Task> {
   std::exception_ptr exception_ = nullptr;
   mutable std::timed_mutex mutex_;
 
+  // Held by addSplit(), addSplitWithSequence(), noMoreSplits() and the start of
+  // the task while they update split stores and forward remote splits and
+  // 'no more splits' to the exchange clients, so a client receives them in the
+  // same order as the store. Held across the client calls, and acquired before
+  // 'mutex_'.
+  std::mutex exchangeSplitsMutex_;
+
   // Exchange clients. One per pipeline / source. Null for pipelines, which
   // don't need it.
   //
   // NOTE: there can be only one exchange client for a given pipeline ID, and
-  // the exchange clients are also referenced by 'exchangeClientByPlanNode_'.
+  // the exchange clients are also referenced by 'exchangeClientByPlanNode_'
+  // and by the plan nodes' SplitsState::exchangeClient.
   // Hence, exchange clients can be indexed either by pipeline ID or by plan
   // node ID.
   std::vector<std::shared_ptr<ExchangeClient>> exchangeClients_;
@@ -1433,16 +1492,16 @@ class Task : public std::enable_shared_from_this<Task> {
     Operator* op_{nullptr};
     // Sets to blocking reason 'op_', and cleared when the driver is resumed.
     BlockingReason blockingReason_{BlockingReason::kNotBlocked};
-    // Sets to the time that driver was blocked, and cleared when the driver is
-    // resumed.
+    // SteadyTime reading in microseconds when the driver is blocked. Cleared
+    // when the driver is resumed.
     uint64_t blockStartUs_{0};
     // Promises to fulfill when the driver is unblocked.
     std::vector<std::unique_ptr<ContinuePromise>> promises_;
   };
 
-  // Tracks the task next batch processing start time under serialized execution
-  // mode.
-  std::optional<uint64_t> batchStartTimeMs_{std::nullopt};
+  // Started when the task starts processing the next batch under serialized
+  // execution mode, and reset when the batch ends.
+  std::optional<folly::stop_watch<std::chrono::milliseconds>> batchWatch_;
 
   // Tracks the driver blocking state under serialized execution mode.
   std::vector<std::unique_ptr<DriverBlockingState>> driverBlockingStates_;
@@ -1516,6 +1575,11 @@ class Task : public std::enable_shared_from_this<Task> {
   // nodes that expect splits.
   std::unordered_map<core::PlanNodeId, SplitsState> splitsStates_;
 
+  // The highest sequence id of the splits passed to 'fixedPoint_', by node,
+  // for the nodes it takes splits for. Plays the role of
+  // SplitsState::maxSequenceId for those nodes.
+  std::unordered_map<core::PlanNodeId, long> fixedPointMaxSequenceIds_;
+
   // Promises that are fulfilled when the task is completed (terminated).
   std::vector<ContinuePromise> taskCompletionPromises_;
 
@@ -1527,6 +1591,15 @@ class Task : public std::enable_shared_from_this<Task> {
   std::vector<ContinuePromise> stateChangePromises_;
 
   TaskStats taskStats_;
+
+  // Started alongside taskStats_.executionStartTimeMs, executionEndTimeMs and
+  // terminationTimeMs, which hold wall-clock times for reporting. These
+  // measure the time since each of those points.
+  std::optional<folly::stop_watch<std::chrono::milliseconds>>
+      executionStartWatch_;
+  std::optional<folly::stop_watch<std::chrono::milliseconds>>
+      executionEndWatch_;
+  std::optional<folly::stop_watch<std::chrono::milliseconds>> terminationWatch_;
 
   // Per-pipeline driver lifecycle timing accumulator. For each pipeline, holds
   // a vector of per-driver timing indexed by driver index within the pipeline.
@@ -1585,8 +1658,8 @@ class Task : public std::enable_shared_from_this<Task> {
 
   // If true, indicate this task is under barrier processing.
   std::atomic_bool barrierRequested_{false};
-  // The start time of the current processing barrier.
-  uint64_t barrierStartUs_{0};
+  // Restarted when the current barrier processing starts.
+  folly::stop_watch<std::chrono::milliseconds> barrierWatch_;
   // The number of drivers under barrier processing.
   uint32_t numDriversUnderBarrier_{0};
   // The promises for the futures returned to callers of requestBarrier().
@@ -1594,8 +1667,8 @@ class Task : public std::enable_shared_from_this<Task> {
 
   std::atomic_int32_t toYield_ = 0;
   int32_t numThreads_ = 0;
-  // Microsecond real time when 'this' last went from no threads to
-  // one thread running. Used to decide if continuous run should be
+  // SteadyTime reading in microseconds when 'this' last went from no threads
+  // to one thread running. Used to decide if continuous run should be
   // interrupted by yieldIfDue().
   tsan_atomic<uint64_t> onThreadSince_{0};
   // Promises for the futures returned to callers of requestPause() or
@@ -1626,6 +1699,8 @@ class Task : public std::enable_shared_from_this<Task> {
 
   std::vector<std::unique_ptr<SplitListener>> splitListeners_;
 };
+
+using TaskPtr = std::shared_ptr<Task>;
 
 /// Listener invoked on task completion.
 class TaskListener {
