@@ -24,7 +24,8 @@ namespace facebook::velox::connector::hive::paimon {
 class PaimonConnectorSplit;
 
 /// Adapts Paimon table handles and logical splits to the FileDataSource scan
-/// pipeline. PaimonSplitReader reads the files within each split.
+/// pipeline. Checks Paimon-specific read requirements before passing the
+/// split's files to PaimonSplitReader.
 class PaimonDataSource : public FileDataSource {
  public:
   PaimonDataSource(

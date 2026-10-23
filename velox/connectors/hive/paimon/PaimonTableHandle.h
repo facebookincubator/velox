@@ -20,9 +20,9 @@
 
 namespace facebook::velox::connector::hive::paimon {
 
-/// Fixed table definition and scan conditions for a Paimon file scan.
-/// Uses Velox RowType for names and types, with stable field IDs aligned to
-/// its top-level columns, and exposes scan inputs through FileTableHandle.
+/// Fixed Paimon table definition and scan conditions exposed through
+/// FileTableHandle. Carries the schema version ID and stable field identities
+/// alongside a Velox RowType.
 class PaimonTableHandle final : public FileTableHandle {
  public:
   static constexpr int32_t kSerdeVersion = 1;
@@ -52,14 +52,18 @@ class PaimonTableHandle final : public FileTableHandle {
     return dbName_;
   }
 
+  /// Identifier of the fixed table schema, distinct from a snapshot ID.
   int64_t schemaId() const {
     return schemaId_;
   }
 
+  /// Complete logical table schema, including partition columns.
   const RowTypePtr& rowType() const {
     return rowType_;
   }
 
+  /// Stable Paimon field IDs aligned with rowType()'s top-level columns.
+  /// IDs identify fields independently of their names and positions.
   const std::vector<int32_t>& fieldIds() const {
     return fieldIds_;
   }
@@ -73,6 +77,7 @@ class PaimonTableHandle final : public FileTableHandle {
     return partitionKeys_;
   }
 
+  /// Native table options resolved by the caller, not file-reader parameters.
   const std::unordered_map<std::string, std::string>& options() const {
     return options_;
   }
@@ -94,6 +99,7 @@ class PaimonTableHandle final : public FileTableHandle {
     return dataColumns_;
   }
 
+  /// File-reader parameters; empty for Paimon tables.
   const std::unordered_map<std::string, std::string>& tableParameters()
       const override;
 
