@@ -210,6 +210,7 @@ class ArrayWriter {
     // No need to commit last written items and innerOffset_ stays the same for
     // the next item.
     length_ = 0;
+    needCommit_ = false;
   }
 
   vector_size_t size() {
@@ -761,6 +762,8 @@ class MapWriter {
     // No need to commit last written items and innerOffset_ stays the same
     // for the next item.
     length_ = 0;
+    keyNeedsCommit_ = false;
+    valueNeedsCommit_ = false;
   }
 
   void commitMostRecentChildItem() {
