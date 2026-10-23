@@ -95,7 +95,7 @@ void StreamingAggregation::initialize() {
 
   distinctAggregations_.reserve(aggregates_.size());
   for (auto& aggregate : aggregates_) {
-    if (aggregate.distinct) {
+    if (aggregate.sortingKeys.empty() && aggregate.distinct) {
       distinctAggregations_.emplace_back(
           DistinctAggregations::create({&aggregate}, inputType, pool()));
     } else {
