@@ -45,7 +45,8 @@ namespace cudf {
 
 __attribute__((
     error("cudf default stream argument used. Pass stream explicitly."),
-    noinline)) cuda::stream_ref const get_default_stream();
+    noinline)) cuda::stream_ref const
+get_default_stream();
 
 __attribute__((
     error("cudf default memory resource argument used. Pass mr explicitly."),
@@ -58,13 +59,7 @@ get_current_device_resource_ref();
 
 namespace facebook::velox::cudf_velox {
 
-/// Returns the current device memory resource as an async resource reference.
-/// Equivalent to cudf::get_current_device_resource_ref(), but bypasses the
-/// __attribute__((error)) redeclaration above by calling the underlying RMM
-/// function directly. Use this at call sites where you intentionally want
-/// the current default device memory resource.
-inline rmm::device_async_resource_ref get_temp_mr() {
-  return rmm::mr::get_current_device_resource_ref();
-}
+/// Returns the memory resource designated for temporary allocations.
+rmm::device_async_resource_ref get_temp_mr();
 
 } // namespace facebook::velox::cudf_velox

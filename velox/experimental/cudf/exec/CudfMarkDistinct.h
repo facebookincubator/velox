@@ -62,7 +62,7 @@ class CudfMarkDistinct : public CudfOperatorBase {
     return noMoreInput_ && input_ == nullptr;
   }
 
-  exec::BlockingReason isBlocked(ContinueFuture* /*future*/) override {
+  exec::BlockingReason doIsBlocked(ContinueFuture* /*future*/) override {
     return exec::BlockingReason::kNotBlocked;
   }
 
