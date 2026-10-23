@@ -103,7 +103,7 @@ void addSignatures(
           .returnType(inputType)
           .intermediateType(intermediateType)
           .argumentType(inputType)
-          .argumentType("double")
+          .constantArgumentType("double")
           .build());
   // Signature 2: approx_percentile(T, double, integer) -> T (single percentile,
   // explicit accuracy).
@@ -112,16 +112,16 @@ void addSignatures(
           .returnType(inputType)
           .intermediateType(intermediateType)
           .argumentType(inputType)
-          .argumentType("double")
-          .argumentType("integer")
+          .constantArgumentType("double")
+          .constantArgumentType("integer")
           .build());
   signatures.push_back(
       exec::AggregateFunctionSignatureBuilder()
           .returnType(inputType)
           .intermediateType(intermediateType)
           .argumentType(inputType)
-          .argumentType("double")
-          .argumentType("bigint")
+          .constantArgumentType("double")
+          .constantArgumentType("bigint")
           .build());
   // Signature 3: approx_percentile(T, array(double)) -> array(T) (percentile
   // array, default accuracy).
@@ -131,7 +131,7 @@ void addSignatures(
           .returnType(arrayReturnType)
           .intermediateType(intermediateType)
           .argumentType(inputType)
-          .argumentType("array(double)")
+          .constantArgumentType("array(double)")
           .build());
   // Signature 4: approx_percentile(T, array(double), integer) -> array(T)
   // (percentile array, explicit accuracy).
@@ -140,16 +140,16 @@ void addSignatures(
           .returnType(arrayReturnType)
           .intermediateType(intermediateType)
           .argumentType(inputType)
-          .argumentType("array(double)")
-          .argumentType("integer")
+          .constantArgumentType("array(double)")
+          .constantArgumentType("integer")
           .build());
   signatures.push_back(
       exec::AggregateFunctionSignatureBuilder()
           .returnType(arrayReturnType)
           .intermediateType(intermediateType)
           .argumentType(inputType)
-          .argumentType("array(double)")
-          .argumentType("bigint")
+          .constantArgumentType("array(double)")
+          .constantArgumentType("bigint")
           .build());
 }
 
