@@ -3194,6 +3194,13 @@ ContinueFuture Task::terminate(TaskState terminalState) {
     barrierPromise.setValue();
   }
 
+  // A loop that has not started is abandoned, which releases a driver of the
+  // pipeline's FixedPointNode leaf waiting for it.  The task has already
+  // stopped, so the driver stops.
+  if (fixedPoint_ != nullptr) {
+    fixedPoint_->abandon();
+  }
+
   return makeFinishFuture("Task::terminate");
 }
 
