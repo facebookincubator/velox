@@ -16,6 +16,8 @@
 
 #include "velox/connectors/hive/FileDataSink.h"
 
+#include <folly/stop_watch.h>
+
 #include "velox/common/testutil/TestValue.h"
 #include "velox/exec/OperatorUtils.h"
 
@@ -381,13 +383,13 @@ bool FileDataSink::finish() {
     return true;
   }
 
-  const uint64_t startTimeMs = getCurrentTimeMs();
+  const folly::stop_watch<std::chrono::milliseconds> finishWatch;
   for (auto i = 0; i < writers_.size(); ++i) {
     WRITER_NON_RECLAIMABLE_SECTION_GUARD(i);
     if (!writers_[i]->finish()) {
       return false;
     }
-    if (getCurrentTimeMs() - startTimeMs > sortWriterFinishTimeSliceLimitMs_) {
+    if (finishWatch.elapsed().count() > sortWriterFinishTimeSliceLimitMs_) {
       return false;
     }
   }

@@ -57,7 +57,8 @@ std::unique_ptr<EncodingView> makeStripeGroupView(
   NIMBLE_CHECK_NOT_NULL(fbVec, "Missing encoded payload in stripe group.");
   const std::string_view encoded(
       reinterpret_cast<const char*>(fbVec->data()), fbVec->size());
-  auto view = createEncodingView(encoded, pool);
+  auto view = createEncodingView(
+      encoded, pool, Encoding::Options{.cacheEncodingView = true});
   NIMBLE_CHECK_EQ(
       view->rowCount(),
       expectedRowCount,

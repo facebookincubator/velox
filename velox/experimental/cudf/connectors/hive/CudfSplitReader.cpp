@@ -22,6 +22,7 @@
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 
 #include "velox/common/caching/CacheTTLController.h"
+#include "velox/common/file/FileSystems.h"
 #include "velox/common/time/Timer.h"
 #include "velox/connectors/hive/BufferedInputBuilder.h"
 #include "velox/connectors/hive/FileHandle.h"
@@ -55,6 +56,7 @@
 #include <numeric>
 #include <ranges>
 #include <span>
+#include <system_error>
 #include <tuple>
 #include <utility>
 
@@ -271,14 +273,13 @@ void CudfSplitReader::prepareSplitInternal(
 }
 
 void CudfSplitReader::cacheSchemaFromMetadata() {
-  // Read file metadatas if not already
   fileMetaDatas();
 
   VELOX_CHECK_EQ(
-      fileMetaData_.size(),
+      fileMetaDatas_.size(),
       1,
       "Expected a single parquet footer for the split's data file");
-  const auto& meta = fileMetaData_.front();
+  const auto& meta = fileMetaDatas_.front();
   VELOX_CHECK(not meta.schema.empty(), "Parquet footer schema is empty");
   VELOX_CHECK_GE(meta.num_rows, 0, "Parquet footer reports negative row count");
   std::tie(baseReadOffset_, splitRowCount_) = computeSplitRowRange();
@@ -318,7 +319,7 @@ std::pair<std::size_t, std::size_t> CudfSplitReader::computeSplitRowRange()
 
   std::size_t startRow{0};
   std::size_t numRows{0};
-  for (const auto& rowGroup : fileMetaData_.front().row_groups) {
+  for (const auto& rowGroup : fileMetaDatas_.front().row_groups) {
     VELOX_CHECK(
         not rowGroup.columns.empty(),
         "Parquet footer reports a row group with no column chunks");
@@ -332,14 +333,18 @@ std::pair<std::size_t, std::size_t> CudfSplitReader::computeSplitRowRange()
   return {startRow, numRows};
 }
 
+void CudfSplitReader::setPushdownFilter(const cudf::ast::expression* filter) {
+  VELOX_CHECK_NOT_NULL(filter);
+  pushdownFilterExpr_ = filter;
+  hasSplitSpecificPushdownFilter_ = true;
+}
+
 void CudfSplitReader::prepareSplit(dwio::common::RuntimeStats& runtimeStats) {
-  // Reset existing split and split readers, if any
-  resetSplit();
-
-  // Acquire a stream from the global stream pool
   stream_ = cudfGlobalStreamPool().get_stream();
-
-  // Perform split-specific setup.
+  fileMetaDatas();
+  if (emptySplit_) {
+    return;
+  }
   prepareSplitInternal(runtimeStats);
 
   // Update runtime stats.
@@ -360,7 +365,7 @@ std::optional<CudfSplitReader::TableChunk> CudfSplitReader::next(
   VELOX_NVTX_OPERATOR_FUNC_RANGE();
 
   // Record start time before reading chunk
-  auto startTimeUs = getCurrentTimeMicro();
+  auto startTimeUs = SteadyTime::now<std::chrono::microseconds>();
 
   auto chunkOpt = readNextChunk();
   if (!chunkOpt.has_value()) {
@@ -505,9 +510,10 @@ void CudfSplitReader::resetSplit() {
   splitReader_.reset();
   passState_.reset();
   dataSource_.reset();
-  fileMetaData_.clear();
+  fileMetaDatas_.clear();
   pushdownFilterExpr_ = subfieldFilterAst_;
   hasSplitSpecificPushdownFilter_ = false;
+  emptySplit_ = false;
   fileColumnNames_.clear();
   baseReadOffset_ = 0;
   splitRowCount_ = 0;
@@ -533,7 +539,7 @@ bool CudfSplitReader::hasSplitSpecificPushdownFilter() const {
 
 namespace {
 
-std::unique_ptr<cudf::io::datasource> makeKvikioDataSource(
+std::unique_ptr<cudf::io::datasource> createKvikioDataSource(
     const CudfHiveConnectorSplit& split,
     const std::shared_ptr<IoStats>& ioStats) {
   const auto knownSize = knownKvikioFileSize(split);
@@ -559,7 +565,7 @@ std::unique_ptr<cudf::io::datasource> makeKvikioDataSource(
 } // namespace
 
 void CudfSplitReader::setupCudfDataSource() {
-  if (dataSource_) {
+  if (dataSource_ or emptySplit_) {
     return;
   }
 
@@ -575,11 +581,32 @@ void CudfSplitReader::setupCudfDataSource() {
       CudfHiveConfig::kUseBufferedInput,
       split_->filePath);
 
+  const HiveConfig hiveConfig(cudfHiveConfig_->config());
+  const bool ignoreMissingFiles =
+      hiveConfig.ignoreMissingFiles(connectorQueryCtx_->sessionProperties());
+
+  // Helper to create a KvikIO data source.
+  auto makeKvikioDataSource = [&]() {
+    try {
+      dataSource_ = createKvikioDataSource(*split_, ioStats_);
+    } catch (const std::system_error& e) {
+      // KvikIO preserves errno for local opens only.
+      // TODO: Ignore missing remote files once KvikIO reports them
+      // distinctly.
+      if (ignoreMissingFiles and
+          e.code() == std::errc::no_such_file_or_directory) {
+        emptySplit_ = true;
+        return;
+      }
+      throw;
+    }
+  };
+
   // Use KvikIO data source if we don't want to use the BufferedInput source
   if (not useBufferedInput) {
     VLOG(1) << fmt::format(
         "Using KvikIO data source for file: {}", split_->filePath);
-    dataSource_ = makeKvikioDataSource(*split_, ioStats_);
+    makeKvikioDataSource();
     return;
   }
 
@@ -593,6 +620,18 @@ void CudfSplitReader::setupCudfDataSource() {
         fileHandleKey, &fileProperties, ioStats_ ? ioStats_.get() : nullptr);
     VELOX_CHECK_NOT_NULL(fileHandleCachePtr.get());
   } catch (const VeloxRuntimeError& e) {
+    if (ignoreMissingFiles) {
+      if (e.errorCode() == error_code::kFileNotFound) {
+        emptySplit_ = true;
+        return;
+      }
+      // Rethrow actual filesystem errors only. Unsupported paths may fall back
+      // to KvikIO.
+      if (filesystems::isPathSupportedByRegisteredFileSystems(
+              split_->filePath)) {
+        throw;
+      }
+    }
     // ABFS blobs can not fall back to KvikIO. Throw the original error.
     if (isAbfsPath(split_->filePath)) {
       VELOX_USER_FAIL(
@@ -607,7 +646,7 @@ void CudfSplitReader::setupCudfDataSource() {
     LOG(WARNING) << fmt::format(
         "Failed to generate file handle cache for file. Falling back to KvikIO. Path: {}",
         split_->filePath);
-    dataSource_ = makeKvikioDataSource(*split_, ioStats_);
+    makeKvikioDataSource();
     return;
   }
 
@@ -639,7 +678,7 @@ void CudfSplitReader::setupCudfDataSource() {
     LOG(WARNING) << fmt::format(
         "Failed to create buffered input data source for file. Falling back to the KvikIO. Path: {}",
         split_->filePath);
-    dataSource_ = makeKvikioDataSource(*split_, ioStats_);
+    makeKvikioDataSource();
     return;
   }
   dataSource_ =
@@ -697,13 +736,17 @@ rmm::device_async_resource_ref CudfSplitReader::determineCudfMemoryResource()
   return get_output_mr();
 }
 
-void CudfSplitReader::fileMetaDatas() {
-  if (not fileMetaData_.empty()) {
-    return;
+const std::vector<cudf::io::parquet::FileMetaData>&
+CudfSplitReader::fileMetaDatas() {
+  if (not fileMetaDatas_.empty()) {
+    return fileMetaDatas_;
   }
 
   // Setup the datasource
   setupCudfDataSource();
+  if (emptySplit_) {
+    return fileMetaDatas_;
+  }
 
   // Check that the datasource is set up
   VELOX_CHECK_NOT_NULL(
@@ -713,31 +756,19 @@ void CudfSplitReader::fileMetaDatas() {
   // Wrap the existing datasource without transferring ownership.
   std::vector<std::unique_ptr<cudf::io::datasource>> sources;
   sources.push_back(cudf::io::datasource::create(dataSource_.get()));
-  fileMetaData_ = cudf::io::read_parquet_footers(sources);
+  fileMetaDatas_ = cudf::io::read_parquet_footers(sources);
   VELOX_CHECK_GE(
-      fileMetaData_.size(),
+      fileMetaDatas_.size(),
       1,
       "CudfSplitReader failed to read any parquet metadatas");
-
-  if (pushdownFilterBuilder_) {
-    VELOX_CHECK_EQ(
-        fileMetaData_.size(),
-        1,
-        "Split-specific pushdown filters require exactly one Parquet metadata");
-    pushdownFilterExpr_ = pushdownFilterBuilder_(fileMetaData_.front());
-    VELOX_CHECK_NOT_NULL(
-        pushdownFilterExpr_,
-        "Split-specific pushdown filter builder must return an expression");
-    hasSplitSpecificPushdownFilter_ = true;
-  }
+  return fileMetaDatas_;
 }
 
 void CudfSplitReader::createCudfReader() {
-  // Read file metadatas
   fileMetaDatas();
 
   // Check if we are reading all columns in order
-  const auto& schema = fileMetaData_.front().schema;
+  const auto& schema = fileMetaDatas_.front().schema;
   readAllFileColumns_ = std::ranges::equal(
       schema.front().children_idx, readColumnNames_, {}, [&](auto childIdx) {
         const auto& name = schema[childIdx].name;
@@ -752,7 +783,7 @@ void CudfSplitReader::createCudfReader() {
   // A reader spanning multiple sources also needs the byte range source index
   // map to fetch column chunks from the matching data source.
   VELOX_CHECK_EQ(
-      fileMetaData_.size(),
+      fileMetaDatas_.size(),
       1,
       "cuDF parquet reader supports a single parquet metadata per split");
 
@@ -765,7 +796,7 @@ void CudfSplitReader::createCudfReader() {
 
   // Create a hybrid scan reader over all sources of the split
   splitReader_ = std::make_unique<CudfParquetReader>(
-      std::move(fileMetaData_), readerOptions_);
+      std::move(fileMetaDatas_), readerOptions_);
 
   setupPageIndexes();
 
@@ -831,7 +862,7 @@ void CudfSplitReader::totalScanTimeCalculator(void* userData) {
       static_cast<TotalScanTimeCallbackData*>(userData);
 
   // Record end time in callback
-  auto endTimeUs = getCurrentTimeMicro();
+  auto endTimeUs = SteadyTime::now<std::chrono::microseconds>();
 
   // Calculate elapsed time in microseconds and convert to nanoseconds
   auto elapsedUs = endTimeUs - data->startTimeUs;

@@ -18,14 +18,17 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <numeric>
+#include <vector>
+
 #include "velox/dwio/nimble/encodings/MainlyConstantEncoding.h"
 
 using namespace facebook;
 
-using EncodingViewTest = nimble::test::EncodingViewTest;
 using MainlyConstantEncodingViewTest = nimble::test::EncodingViewTest;
 
-TEST_F(EncodingViewTest, readsMainlyConstantEncoding) {
+TEST_P(MainlyConstantEncodingViewTest, readsMainlyConstantEncoding) {
   expectReads<nimble::MainlyConstantEncoding<int32_t>>(
       makeVector({7, 7, 11, 7, 7, 19, 7, 23, 7}), {8, 0, 2, 5, 7, 3});
   expectReads<nimble::MainlyConstantEncoding<float>>(
@@ -40,7 +43,63 @@ TEST_F(EncodingViewTest, readsMainlyConstantEncoding) {
       {5, 0, 2, 4, 1});
 }
 
-TEST_F(MainlyConstantEncodingViewTest, concurrent) {
+TEST_P(MainlyConstantEncodingViewTest, readsAcrossWordBoundaries) {
+  struct Pattern {
+    const char* name;
+    bool (*isOther)(uint32_t row);
+  };
+  const std::vector<Pattern> patterns = {
+      {"sparse",
+       [](uint32_t row) {
+         return row % 64 == 0 || row % 64 == 63 || row % 11 == 4;
+       }},
+      {"runs", [](uint32_t row) { return (row / 100) % 2 == 1; }},
+      {"alternating", [](uint32_t row) { return row % 2 == 1; }},
+  };
+
+  for (const auto& pattern : patterns) {
+    for (const uint32_t numRows : {2U, 63U, 64U, 65U, 128U, 1'000U}) {
+      SCOPED_TRACE(
+          fmt::format("pattern={}, numRows={}", pattern.name, numRows));
+      nimble::Vector<int32_t> values{pool_.get()};
+      for (uint32_t row = 0; row < numRows; ++row) {
+        const auto isOther = pattern.isOther(row) || row == numRows - 1;
+        values.push_back(isOther ? static_cast<int32_t>(1'000 + row) : 7);
+      }
+      nimble::Encoding::Options options;
+      options.cacheEncodingView = cacheEncodingView();
+      const auto serialized = nimble::test::
+          Encoder<nimble::MainlyConstantEncoding<int32_t>>::encode(
+              *buffer_, values, nimble::CompressionType::Uncompressed, options);
+      const auto view =
+          nimble::createEncodingView(serialized, pool_.get(), options);
+      ASSERT_NE(view, nullptr);
+
+      for (const uint32_t offset :
+           {0U, 1U, 31U, 63U, 64U, 65U, numRows - 1, numRows}) {
+        if (offset > numRows) {
+          continue;
+        }
+        for (const uint32_t length :
+             {0U, 1U, 2U, 63U, 64U, 65U, 130U, numRows}) {
+          if (length > numRows - offset) {
+            continue;
+          }
+          expectRangeRead(*view, values, offset, length);
+        }
+      }
+
+      std::vector<uint32_t> positions(numRows);
+      std::iota(positions.begin(), positions.end(), 0);
+      expectIndexedRead(*view, values, positions);
+      expectSelectedRead(*view, values, positions);
+      std::reverse(positions.begin(), positions.end());
+      expectIndexedRead(*view, values, positions);
+    }
+  }
+}
+
+TEST_P(MainlyConstantEncodingViewTest, concurrent) {
   const auto positions = randomizedPositions(/*seed=*/29);
 
   auto values = constantInt32(5);
@@ -50,3 +109,5 @@ TEST_F(MainlyConstantEncodingViewTest, concurrent) {
   expectConcurrentReads<nimble::MainlyConstantEncoding<int32_t>>(
       values, positions);
 }
+
+INSTANTIATE_ENCODING_VIEW_TEST_SUITE(MainlyConstantEncodingViewTest);

@@ -85,7 +85,7 @@ using velox::dwio::common::TypeWithId;
 
 namespace {
 
-using FsstEncodingNodeIds = folly::F14FastSet<uint32_t>;
+using EncodingNodeIds = folly::F14FastSet<uint32_t>;
 
 } // namespace
 
@@ -93,11 +93,12 @@ namespace detail {
 
 class WriterContext : public FieldWriterContext {
  public:
-  // Writer options normalized for the stored schema, plus resolved FSST stream
+  // Writer options normalized for the stored schema, plus resolved stream
   // node IDs owned by the context that consumes them.
   struct Options {
     WriterOptions writerOptions;
-    FsstEncodingNodeIds fsstEncodingNodeIds;
+    EncodingNodeIds fsstEncodingNodeIds;
+    EncodingNodeIds subIntSplitEncodingNodeIds;
   };
 
   WriterContext(
@@ -109,6 +110,7 @@ class WriterContext : public FieldWriterContext {
             options.writerOptions.vectorDecoderVisitor},
         options_{std::move(options.writerOptions)},
         fsstEncodingNodeIds_{std::move(options.fsstEncodingNodeIds)},
+        subIntSplitEncodingNodeIds_{std::move(options.subIntSplitEncodingNodeIds)},
         hasStripeDictionaryConfig_{hasStripeDictionaryConfig(options_)},
         stripeStatsWriteEnabled_{featureGate()->enabled(
             FeatureGate::FeatureSet::kStripeStatsWrite,
@@ -128,8 +130,12 @@ class WriterContext : public FieldWriterContext {
     return options_;
   }
 
-  const FsstEncodingNodeIds& fsstEncodingNodeIds() const {
+  const EncodingNodeIds& fsstEncodingNodeIds() const {
     return fsstEncodingNodeIds_;
+  }
+
+  const EncodingNodeIds& subIntSplitEncodingNodeIds() const {
+    return subIntSplitEncodingNodeIds_;
   }
 
   // Whether the stripe-stats write path (per-stripe snapshot + merge + section)
@@ -283,7 +289,8 @@ class WriterContext : public FieldWriterContext {
   }
 
   const WriterOptions options_;
-  const FsstEncodingNodeIds fsstEncodingNodeIds_;
+  const EncodingNodeIds fsstEncodingNodeIds_;
+  const EncodingNodeIds subIntSplitEncodingNodeIds_;
   const bool hasStripeDictionaryConfig_;
   const bool stripeStatsWriteEnabled_;
   velox::CpuWallTiming encodingTiming_;
@@ -512,15 +519,20 @@ detail::WriterContext::Options prepareWriterContextOptions(
   }
 
   const bool omitsClusterIndexKeys = omitClusterIndexKeyColumnStorage(options);
-  FsstEncodingNodeIds fsstEncodingNodeIds;
-  if (!options.fsstEncodingSubfields.empty()) {
-    // Resolve against the schema used by field writers so node IDs remain
-    // correct when cluster-index key columns are omitted.
-    auto inputSchema = TypeWithId::create(inputType);
-    const auto storedSchema = omitsClusterIndexKeys
-        ? TypeWithId::create(storedType)
-        : std::move(inputSchema);
-
+  const auto resolveEncodingNodes = [&](const std::vector<std::string>& paths,
+                                        EncodingType encodingType) {
+    EncodingNodeIds nodeIds;
+    if (paths.empty()) {
+      return nodeIds;
+    }
+    NIMBLE_CHECK(
+        encodingType == EncodingType::Fsst ||
+            encodingType == EncodingType::SubIntSplit,
+        "Unsupported targeted encoding: {}.",
+        toString(encodingType));
+    const std::string_view encodingName =
+        encodingType == EncodingType::Fsst ? "FSST" : "SubIntSplit";
+    const auto storedSchema = TypeWithId::create(storedType);
     const index::ClusterIndexConfig* clusterConfig{nullptr};
     if (options.clusterIndexConfig != nullptr) {
       const auto& config = *options.clusterIndexConfig;
@@ -531,9 +543,8 @@ detail::WriterContext::Options prepareWriterContextOptions(
           config.name);
       clusterConfig = &clusterIndexConfig(config);
     }
-
-    fsstEncodingNodeIds.reserve(options.fsstEncodingSubfields.size());
-    for (const auto& fieldPath : options.fsstEncodingSubfields) {
+    nodeIds.reserve(paths.size());
+    for (const auto& fieldPath : paths) {
       const auto subfield = parseValueStreamSubfield(fieldPath);
       if (clusterConfig != nullptr) {
         NIMBLE_USER_CHECK(
@@ -541,26 +552,45 @@ detail::WriterContext::Options prepareWriterContextOptions(
                 clusterConfig->columns.begin(),
                 clusterConfig->columns.end(),
                 subfield.baseName()) == clusterConfig->columns.end(),
-            "FSST subfield '{}' cannot target cluster index key column '{}'.",
+            "{} subfield '{}' cannot target cluster index key column '{}'.",
+            encodingName,
             fieldPath,
             subfield.baseName());
       }
       const auto& node = resolveValueStreamSubfield(*storedSchema, subfield);
+      if (encodingType == EncodingType::Fsst) {
+        NIMBLE_USER_CHECK(
+            node.type()->isVarchar(),
+            "FSST subfield '{}' must resolve to VARCHAR, got {}.",
+            fieldPath,
+            node.type()->toString());
+      } else {
+        NIMBLE_USER_CHECK(
+            node.type()->isInteger() || node.type()->isBigint() ||
+                node.type()->isReal() || node.type()->isDouble(),
+            "SubIntSplit subfield '{}' must resolve to INTEGER, BIGINT, REAL or DOUBLE, got {}.",
+            fieldPath,
+            node.type()->toString());
+      }
       NIMBLE_USER_CHECK(
-          node.type()->isVarchar(),
-          "FSST subfield '{}' must resolve to VARCHAR, got {}.",
-          fieldPath,
-          node.type()->toString());
-      NIMBLE_USER_CHECK(
-          fsstEncodingNodeIds.insert(node.id()).second,
-          "Duplicate FSST subfield configuration for schema node {}: '{}'.",
+          nodeIds.insert(node.id()).second,
+          "Duplicate {} subfield configuration for schema node {}: '{}'.",
+          encodingName,
           node.id(),
           fieldPath);
     }
-  }
+    return nodeIds;
+  };
+  auto fsstEncodingNodeIds =
+      resolveEncodingNodes(options.fsstEncodingSubfields, EncodingType::Fsst);
+  auto subIntSplitEncodingNodeIds = resolveEncodingNodes(
+      options.subIntSplitEncodingSubfields, EncodingType::SubIntSplit);
 
   if (!omitsClusterIndexKeys) {
-    return {std::move(options), std::move(fsstEncodingNodeIds)};
+    return {
+        std::move(options),
+        std::move(fsstEncodingNodeIds),
+        std::move(subIntSplitEncodingNodeIds)};
   }
 
   if (!options.schemaAttributes.empty()) {
@@ -582,7 +612,10 @@ detail::WriterContext::Options prepareWriterContextOptions(
 
   const bool hasFeatureReordering = options.featureReordering.has_value();
   if (!hasFeatureReordering) {
-    return {std::move(options), std::move(fsstEncodingNodeIds)};
+    return {
+        std::move(options),
+        std::move(fsstEncodingNodeIds),
+        std::move(subIntSplitEncodingNodeIds)};
   }
 
   // Field writers and the layout planner are built from storedDataType().
@@ -609,7 +642,10 @@ detail::WriterContext::Options prepareWriterContextOptions(
   }
   options.featureReordering = std::move(remapped);
 
-  return {std::move(options), std::move(fsstEncodingNodeIds)};
+  return {
+      std::move(options),
+      std::move(fsstEncodingNodeIds),
+      std::move(subIntSplitEncodingNodeIds)};
 }
 
 void writeIndexSection(
@@ -1408,6 +1444,7 @@ DictionaryConfigs collectDictionaryConfigs(
     const detail::WriterContext& context) {
   DictionaryConfigs configs;
   const auto& fsstEncodingNodeIds = context.fsstEncodingNodeIds();
+  const auto& subIntSplitEncodingNodeIds = context.subIntSplitEncodingNodeIds();
   const auto& dictionaryEncodingConfig =
       context.options().experimentalSharedDictionaryEncoding;
   if (dictionaryEncodingConfig.empty()) {
@@ -1444,8 +1481,14 @@ DictionaryConfigs collectDictionaryConfigs(
         columnDictionary.fieldPath,
         valueType.type()->toString());
     NIMBLE_USER_CHECK(
-        fsstEncodingNodeIds.find(valueNodeId) == fsstEncodingNodeIds.end(),
+        !fsstEncodingNodeIds.contains(valueNodeId),
         "Targeted FSST and shared dictionary column '{}' resolve to the same "
+        "value stream (schema node {}).",
+        columnDictionary.fieldPath,
+        valueNodeId);
+    NIMBLE_USER_CHECK(
+        !subIntSplitEncodingNodeIds.contains(valueNodeId),
+        "Targeted SubIntSplit and shared dictionary column '{}' resolve to the same "
         "value stream (schema node {}).",
         columnDictionary.fieldPath,
         valueNodeId);
@@ -1485,7 +1528,7 @@ DictionaryConfigs collectDictionaryConfigs(
     const auto& mapValueType = *fieldType.childAt(1);
     for (const auto& flatMapKey : flatMap.keys) {
       const auto& config = flatMapKey.dictionary;
-      if (!fsstEncodingNodeIds.empty()) {
+      if (!fsstEncodingNodeIds.empty() || !subIntSplitEncodingNodeIds.empty()) {
         const TypeWithId* configuredType = &mapValueType;
         if (!flatMapKey.valueSubfield.empty()) {
           const auto valueSubfield =
@@ -1496,9 +1539,17 @@ DictionaryConfigs collectDictionaryConfigs(
         const auto& valueType =
             resolveDictionaryValueType(*configuredType, flatMap.fieldPath);
         NIMBLE_USER_CHECK(
-            fsstEncodingNodeIds.find(valueType.id()) ==
-                fsstEncodingNodeIds.end(),
+            !fsstEncodingNodeIds.contains(valueType.id()),
             "Targeted FSST and shared dictionary flat-map column '{}', key "
+            "{}, value subfield '{}' resolve to the same value stream "
+            "(schema node {}).",
+            flatMap.fieldPath,
+            flatMapKey.key,
+            flatMapKey.valueSubfield,
+            valueType.id());
+        NIMBLE_USER_CHECK(
+            !subIntSplitEncodingNodeIds.contains(valueType.id()),
+            "Targeted SubIntSplit and shared dictionary flat-map column '{}', key "
             "{}, value subfield '{}' resolve to the same value stream "
             "(schema node {}).",
             flatMap.fieldPath,
@@ -1695,8 +1746,26 @@ std::unique_ptr<FieldWriter> createRootFieldWriter(
             nodeId,
             _dictionaryConfigs,
             _flatMapKeyEncodingLayouts);
-        if (context.fsstEncodingNodeIds().find(nodeId) !=
-            context.fsstEncodingNodeIds().end()) {
+        const bool subIntSplit =
+            context.subIntSplitEncodingNodeIds().contains(nodeId);
+        const bool fsst = context.fsstEncodingNodeIds().contains(nodeId);
+        NIMBLE_CHECK(
+            !(subIntSplit && fsst),
+            "A schema node cannot target both FSST and SubIntSplit: {}.",
+            nodeId);
+        if (subIntSplit) {
+          streamContext(type.asScalar().scalarDescriptor())
+              .setEncoding(
+                  EncodingLayout{
+                      EncodingType::SubIntSplit,
+                      {},
+                      context.options().compressionOptions.compressionType,
+                      // At most one section per bit of a 64-bit value. Replay
+                      // requires a slot for every nested section identifier.
+                      std::vector<std::optional<const EncodingLayout>>(64),
+                  });
+        }
+        if (fsst) {
           auto& writerStreamContext =
               streamContext(type.asScalar().scalarDescriptor());
           // Target only the FSST parent. Its blob, nested streams, and Trivial
@@ -2196,7 +2265,30 @@ bool Writer::flushInputBuffers(bool finalize) {
   return anyStripeFlushed;
 }
 
+void Writer::checkTopLevelNulls(const velox::VectorPtr& input) {
+  if (hasTopLevelNulls_) {
+    return;
+  }
+  const auto numRows = input->size();
+  bool batchHasTopLevelNulls{false};
+  const bool mustCheckTopLevelNulls = clusterIndexWriter_ != nullptr ||
+      !context_->options().ignoreTopLevelNulls;
+  if (mustCheckTopLevelNulls && input->mayHaveNulls()) {
+    for (velox::vector_size_t row = 0; row < numRows; ++row) {
+      if (input->isNullAt(row)) {
+        batchHasTopLevelNulls = true;
+        break;
+      }
+    }
+  }
+  NIMBLE_USER_CHECK(
+      clusterIndexWriter_ == nullptr || !batchHasTopLevelNulls,
+      "Cluster-indexed Nimble files cannot contain top-level null rows");
+  hasTopLevelNulls_ = hasTopLevelNulls_ || batchHasTopLevelNulls;
+}
+
 void Writer::writeBatch(const velox::VectorPtr& input) {
+  checkTopLevelNulls(input);
   const auto numRows = input->size();
   const auto storedData = storedDataInput(input);
   {
@@ -2460,7 +2552,7 @@ void Writer::writeProperties(const WriteOptionalSectionFn& writeMetadataFn) {
   auto streamTrailerLayout = tabletWriter_->streamTrailerLayout();
 
   if (!compactRowCountEncoding && !clusterIndexKeyColumnStorageOmitted &&
-      streamTrailerLayout.empty()) {
+      streamTrailerLayout.empty() && !hasTopLevelNulls_) {
     return;
   }
 
@@ -2470,7 +2562,8 @@ void Writer::writeProperties(const WriteOptionalSectionFn& writeMetadataFn) {
           clusterIndexKeyColumnStorageOmitted,
           std::move(clusterIndexKeyColumnsWithOmittedStorage),
           /*hasStreamChecksums=*/false,
-          std::move(streamTrailerLayout)}
+          std::move(streamTrailerLayout),
+          hasTopLevelNulls_}
           .serialize();
   writeMetadataFn(std::string(kPropertiesSection), serialized);
 }
@@ -2856,6 +2949,28 @@ uint32_t Writer::encodingConcurrency(uint32_t streamCount) const {
 
 namespace {
 
+const velox::exec::DriverCtx* getDriverContext() {
+  const auto* driverThreadCtx = velox::exec::driverThreadContext();
+  return driverThreadCtx == nullptr ? nullptr : driverThreadCtx->driverCtx();
+}
+
+// Encoder callbacks run on executor threads while the TableWrite driver waits
+// on the ExecutorBarrier. Memory arbitration started by an encoder allocation
+// must suspend that driver; otherwise arbitration waits on the driver's task
+// while the driver waits on the encoder, and both deadlock. Installing the
+// caller's DriverCtx on the executor thread lets arbitration find and suspend
+// the driver. Returns std::nullopt for a null DriverCtx because
+// ScopedDriverThreadContext installs a context even then, and its driverCtx()
+// fails a non-null check.
+std::optional<velox::exec::ScopedDriverThreadContext>
+maybeSetupScopedDriverContext(const velox::exec::DriverCtx* driverCtx) {
+  if (driverCtx == nullptr) {
+    return std::nullopt;
+  }
+  return std::optional<velox::exec::ScopedDriverThreadContext>{
+      std::in_place, driverCtx};
+}
+
 // Encode tasks are dispatched in fixed-size batches that each wait on their
 // slowest member, so a batch mixing one large stream with small ones leaves
 // most of it idle. Grouping comparable sizes into the same batch keeps the
@@ -2980,10 +3095,7 @@ void Writer::writeStreams() {
           "Encoding executor is required for parallel encoding.");
       const auto orderedIndices = encodeOrder(streamCount);
       std::atomic_uint32_t nextStream{0};
-      const velox::exec::DriverCtx* driverCtx = nullptr;
-      if (const auto* driverThreadCtx = velox::exec::driverThreadContext()) {
-        driverCtx = driverThreadCtx->driverCtx();
-      }
+      const auto* driverCtx = getDriverContext();
       velox::dwio::common::ExecutorBarrier barrier{encodingExecutor};
       for (uint32_t taskId = 0; taskId < concurrency; ++taskId) {
         auto* encodingScratchBufferPool =
@@ -2994,11 +3106,8 @@ void Writer::writeStreams() {
                      taskId,
                      encodingScratchBufferPool,
                      encodingBufferPool]() {
-          std::optional<velox::exec::ScopedDriverThreadContext>
-              scopedDriverThreadContext;
-          if (driverCtx != nullptr) {
-            scopedDriverThreadContext.emplace(driverCtx);
-          }
+          const auto scopedDriverContext =
+              maybeSetupScopedDriverContext(driverCtx);
           velox::common::testutil::TestValue::adjust(
               "facebook::nimble::Writer::parallelEncodeTask",
               const_cast<uint32_t*>(&taskId));
@@ -3400,10 +3509,7 @@ bool Writer::writeChunks(
           "Encoding executor is required for parallel encoding.");
       const auto orderedIndices = encodeOrder(streamIndices);
       std::atomic_uint32_t nextStream{0};
-      const velox::exec::DriverCtx* driverCtx = nullptr;
-      if (const auto* driverThreadCtx = velox::exec::driverThreadContext()) {
-        driverCtx = driverThreadCtx->driverCtx();
-      }
+      const auto* driverCtx = getDriverContext();
       velox::dwio::common::ExecutorBarrier barrier{encodingExecutor};
       for (uint32_t taskId = 0; taskId < concurrency; ++taskId) {
         auto* encodingScratchBufferPool =
@@ -3414,11 +3520,8 @@ bool Writer::writeChunks(
                      taskId,
                      encodingScratchBufferPool,
                      encodingBufferPool] {
-          std::optional<velox::exec::ScopedDriverThreadContext>
-              scopedDriverThreadContext;
-          if (driverCtx != nullptr) {
-            scopedDriverThreadContext.emplace(driverCtx);
-          }
+          const auto scopedDriverContext =
+              maybeSetupScopedDriverContext(driverCtx);
           velox::common::testutil::TestValue::adjust(
               "facebook::nimble::Writer::parallelEncodeTask",
               const_cast<uint32_t*>(&taskId));

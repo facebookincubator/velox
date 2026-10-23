@@ -74,6 +74,11 @@ class PaimonSplitReader : public FileSplitReader {
   /// are exhausted.
   uint64_t next(uint64_t size, VectorPtr& output) override;
 
+  /// Rebinds the borrowed counters when a preloaded data source is adopted.
+  void setRuntimeStats(dwio::common::RuntimeStats& runtimeStats) {
+    runtimeStats_ = &runtimeStats;
+  }
+
  private:
   // Builds a FileConnectorSplit from a PaimonDataFile.
   std::shared_ptr<FileConnectorSplit> makeFileConnectorSplit(

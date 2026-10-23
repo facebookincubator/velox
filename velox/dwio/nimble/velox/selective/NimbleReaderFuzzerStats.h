@@ -24,15 +24,36 @@ inline constexpr std::string_view kStringDictionaryEncodingPreserved =
 inline constexpr std::string_view kStringDictionaryEncodingAbandoned =
     "nimbleStringDictionaryEncodingAbandoned";
 
+inline constexpr std::string_view kSmallintDictionaryAwareReads =
+    "nimbleSmallintDictionaryAwareReads";
+inline constexpr std::string_view kIntegerDictionaryAwareReads =
+    "nimbleIntegerDictionaryAwareReads";
+inline constexpr std::string_view kBigintDictionaryAwareReads =
+    "nimbleBigintDictionaryAwareReads";
+inline constexpr std::string_view kRealDictionaryAwareReads =
+    "nimbleRealDictionaryAwareReads";
+inline constexpr std::string_view kDoubleDictionaryAwareReads =
+    "nimbleDoubleDictionaryAwareReads";
+
 #ifdef NIMBLE_READER_FUZZER_STATS_ENABLED
 
 void updateStringDictionaryEncodingPreserved();
 void updateStringDictionaryEncodingAbandoned();
+void updateSmallintDictionaryAwareReads();
+void updateIntegerDictionaryAwareReads();
+void updateBigintDictionaryAwareReads();
+void updateRealDictionaryAwareReads();
+void updateDoubleDictionaryAwareReads();
 
 #else
 
 static inline void updateStringDictionaryEncodingPreserved() {}
 static inline void updateStringDictionaryEncodingAbandoned() {}
+static inline void updateSmallintDictionaryAwareReads() {}
+static inline void updateIntegerDictionaryAwareReads() {}
+static inline void updateBigintDictionaryAwareReads() {}
+static inline void updateRealDictionaryAwareReads() {}
+static inline void updateDoubleDictionaryAwareReads() {}
 
 #endif
 

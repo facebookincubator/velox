@@ -232,6 +232,8 @@ void configureRowReaderOptions(
         fileConfig->nimblePreserveDictionaryEncoding(sessionProperties));
     rowReaderOptions.setNimbleDictionaryAwareReads(
         fileConfig->nimbleDictionaryAwareReads(sessionProperties));
+    rowReaderOptions.setNimbleScanFastPath(
+        fileConfig->nimbleScanFastPath(sessionProperties));
   }
 }
 

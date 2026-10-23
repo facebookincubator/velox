@@ -14,9 +14,14 @@
  * limitations under the License.
  */
 
+#include <numeric>
+
 #include <folly/hash/Hash.h>
 
 #include "velox/vector/FlatMapVector.h"
+
+#include "velox/vector/DecodedVector.h"
+#include "velox/vector/FlatVector.h"
 #include "velox/vector/SimpleVector.h"
 
 namespace facebook::velox {
@@ -143,6 +148,200 @@ std::optional<column_index_t> FlatMapVector::getKeyChannel(
     const VectorPtr& keysVector,
     vector_size_t index) const {
   return keyIndex().find(*distinctKeys_, *keysVector, index);
+}
+
+namespace {
+
+// Returns the channel of a constant key in every selected row, or kNoChannel
+// when the key is null or the flat map does not have it. 'lookUp(index)' looks
+// up the key at 'index' of the decoded base in the distinct keys.
+template <typename TLookUp>
+std::vector<column_index_t> getConstantKeyChannels(
+    const SelectivityVector& rows,
+    const DecodedVector& keys,
+    const TLookUp& lookUp) {
+  std::vector<column_index_t> channels(rows.end(), FlatMapVector::kNoChannel);
+  if (!rows.hasSelections() || keys.isNullAt(rows.begin())) {
+    return channels;
+  }
+  if (const auto channel = lookUp(keys.index(rows.begin()))) {
+    rows.applyToSelected(
+        [&](vector_size_t row) { channels[row] = channel.value(); });
+  }
+  return channels;
+}
+
+// Returns the channel of each selected row's key, or kNoChannel.
+// 'keyIndex(row)' maps a row to its index in the decoded base and
+// 'isNullAt(row)' tells whether its key is null. Both are inlined, so each
+// combination compiles to a loop without per-row checks of the mapping or
+// of the nulls.
+template <typename TLookUp, typename TKeyIndex, typename TIsNullAt>
+std::vector<column_index_t> getKeyChannelsLoop(
+    const SelectivityVector& rows,
+    const TLookUp& lookUp,
+    const TKeyIndex& keyIndex,
+    const TIsNullAt& isNullAt) {
+  std::vector<column_index_t> channels(rows.end(), FlatMapVector::kNoChannel);
+  rows.applyToSelected([&](vector_size_t row) {
+    if (!isNullAt(row)) {
+      channels[row] = lookUp(keyIndex(row)).value_or(FlatMapVector::kNoChannel);
+    }
+  });
+  return channels;
+}
+
+// Returns the channel of each selected row's key, or kNoChannel, picking the
+// row mapping and the null check once.
+template <typename TLookUp>
+std::vector<column_index_t> getKeyChannelsImpl(
+    const SelectivityVector& rows,
+    const DecodedVector& keys,
+    const TLookUp& lookUp) {
+  if (keys.isConstantMapping()) {
+    return getConstantKeyChannels(rows, keys, lookUp);
+  }
+
+  // Keys that cannot be null skip the null check.
+  auto loop = [&](auto keyIndex) {
+    if (keys.mayHaveNulls()) {
+      return getKeyChannelsLoop(rows, lookUp, keyIndex, [&](vector_size_t row) {
+        return keys.isNullAt(row);
+      });
+    }
+    return getKeyChannelsLoop(
+        rows, lookUp, keyIndex, [](vector_size_t) { return false; });
+  };
+
+  if (keys.isIdentityMapping()) {
+    return loop([](vector_size_t row) { return row; });
+  }
+  return loop([rawIndices = keys.indices()](vector_size_t row) {
+    return rawIndices[row];
+  });
+}
+
+} // namespace
+
+std::vector<column_index_t> FlatMapVector::getKeyChannels(
+    const SelectivityVector& rows,
+    const DecodedVector& keys) const {
+  // Typed lookups for the key types that have one. Keys with custom comparison
+  // take the generic lookup, which compares them the way their type does.
+  if (!keys.base()->type()->providesCustomComparison()) {
+    switch (keys.base()->typeKind()) { // NOLINT(clang-diagnostic-switch-enum)
+      case TypeKind::INTEGER:
+        return getKeyChannelsImpl(
+            rows,
+            keys,
+            [&, rawKeys = keys.data<int32_t>()](vector_size_t index) {
+              return getKeyChannel(rawKeys[index]);
+            });
+      case TypeKind::BIGINT:
+        return getKeyChannelsImpl(
+            rows,
+            keys,
+            [&, rawKeys = keys.data<int64_t>()](vector_size_t index) {
+              return getKeyChannel(rawKeys[index]);
+            });
+      case TypeKind::VARCHAR:
+      case TypeKind::VARBINARY:
+        return getKeyChannelsImpl(
+            rows,
+            keys,
+            [&, rawKeys = keys.data<StringView>()](vector_size_t index) {
+              return getKeyChannel(rawKeys[index]);
+            });
+      default:
+        break;
+    }
+  }
+
+  return getKeyChannelsImpl(rows, keys, [&](vector_size_t index) {
+    return keyIndex().find(*distinctKeys_, *keys.base(), index);
+  });
+}
+
+namespace {
+
+// Returns a flat vector with the values of the flat vector `values` and
+// `nulls` as its nulls, sharing the buffers of `values`.
+template <TypeKind kKind>
+VectorPtr
+flatWithNulls(const BaseVector& values, BufferPtr nulls, vector_size_t size) {
+  using T = typename TypeTraits<kKind>::NativeType;
+  const auto& flat = *values.asUnchecked<FlatVector<T>>();
+  return std::make_shared<FlatVector<T>>(
+      flat.pool(),
+      flat.type(),
+      std::move(nulls),
+      size,
+      flat.values(),
+      std::vector<BufferPtr>(flat.stringBuffers()));
+}
+
+} // namespace
+
+// An in-map bit is set when the row contains the key, the same convention as
+// a null bit for a non-null row, so the in-map buffer can serve as nulls.
+VectorPtr FlatMapVector::projectChannel(column_index_t channel) const {
+  const auto& values = mapValuesAt(channel);
+  const auto* rawInMap = rawInMapsAt(channel);
+  const auto* rawMapNulls = rawNulls();
+
+  // The key is in every row and no map is null: return the values as they are.
+  if (rawInMap == nullptr && rawMapNulls == nullptr) {
+    return values;
+  }
+
+  // The projection is a view over the values, so new buffers come from their
+  // pool.
+  auto* pool = values->pool();
+
+  // Nulls for the rows whose map is null or lacks the key. Either buffer
+  // serves as is when it is the only source of nulls.
+  BufferPtr nulls;
+  bool ownsNulls = false;
+  if (rawMapNulls == nullptr) {
+    nulls = inMapsAt(channel);
+  } else if (rawInMap == nullptr) {
+    nulls = nulls_;
+  } else {
+    nulls = allocateNulls(size(), pool);
+    bits::andBits(
+        nulls->asMutable<uint64_t>(), rawMapNulls, rawInMap, 0, size());
+    ownsNulls = true;
+  }
+
+  // Flat values: share their buffers in a new flat vector, also keeping their
+  // own nulls, which are combined into the buffer above when it is new.
+  if (values->isFlatEncoding()) {
+    if (values->rawNulls() != nullptr) {
+      if (ownsNulls) {
+        bits::andBits(
+            nulls->asMutable<uint64_t>(), values->rawNulls(), 0, size());
+      } else {
+        auto combined = allocateNulls(size(), pool);
+        bits::andBits(
+            combined->asMutable<uint64_t>(),
+            values->rawNulls(),
+            nulls->as<uint64_t>(),
+            0,
+            size());
+        nulls = std::move(combined);
+      }
+    }
+    return VELOX_DYNAMIC_SCALAR_TYPE_DISPATCH_ALL(
+        flatWithNulls, values->typeKind(), *values, std::move(nulls), size());
+  }
+
+  // Other encodings: wrap the values in a dictionary with these nulls and
+  // identity indices.
+  BufferPtr indices = allocateIndices(size(), pool);
+  auto* rawIndices = indices->asMutable<vector_size_t>();
+  std::iota(rawIndices, rawIndices + size(), 0);
+  return BaseVector::wrapInDictionary(
+      std::move(nulls), std::move(indices), size(), values);
 }
 
 vector_size_t FlatMapVector::sizeAt(vector_size_t index) const {

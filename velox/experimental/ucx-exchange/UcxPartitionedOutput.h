@@ -37,6 +37,10 @@ class UcxPartitionedOutput : public exec::Operator,
   // using CudfConfig::kUcxPartitionedOutputBatchRows as the QueryConfig key.
   static constexpr int64_t kDefaultTargetRowsPerChunk = 10'000;
 
+  /// @param eagerFlush Send every batch as soon as it arrives instead of
+  /// waiting for kUcxPartitionedOutputBatchRows rows. LocalPlanner sets it
+  /// below a small partial LIMIT; the partitioned_output_eager_flush session
+  /// property has the same effect.
   /// @param queueManager Output queue manager the partitions are enqueued to.
   /// Comes from the same exec::OutputTransportEntry that builds this operator,
   /// and must be the process-wide instance used by UcxExchangeServer. Held
@@ -45,6 +49,7 @@ class UcxPartitionedOutput : public exec::Operator,
       int32_t operatorId,
       exec::DriverCtx* ctx,
       const std::shared_ptr<const core::PartitionedOutputNode>& planNode,
+      bool eagerFlush,
       const std::shared_ptr<UcxOutputQueueManager>& queueManager);
 
   void addInput(RowVectorPtr input) override;
@@ -163,6 +168,8 @@ class UcxPartitionedOutput : public exec::Operator,
   int64_t pendingRows_{0};
   /// Configured row threshold for flushing (from QueryConfig).
   const int64_t targetRowsPerChunk_;
+  // Flush every batch regardless of targetRowsPerChunk_; see the constructor.
+  const bool eagerFlush_;
 };
 
 } // namespace facebook::velox::ucx_exchange

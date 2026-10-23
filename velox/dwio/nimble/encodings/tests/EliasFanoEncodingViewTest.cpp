@@ -29,7 +29,7 @@ using namespace facebook;
 
 using EliasFanoEncodingViewTest = nimble::test::EncodingViewTest;
 
-TEST_F(EliasFanoEncodingViewTest, readsSignedAndUnsignedValues) {
+TEST_P(EliasFanoEncodingViewTest, readsSignedAndUnsignedValues) {
   expectReads<nimble::EliasFanoEncoding<int64_t>>(
       makeVector<int64_t>({
           std::numeric_limits<int64_t>::min(),
@@ -45,7 +45,7 @@ TEST_F(EliasFanoEncodingViewTest, readsSignedAndUnsignedValues) {
       {6, 0, 2, 3, 5, 1});
 }
 
-TEST_F(EliasFanoEncodingViewTest, lowerBound) {
+TEST_P(EliasFanoEncodingViewTest, lowerBound) {
   const auto values = makeVector<uint64_t>({3, 7, 7, 20});
   const auto serialized =
       nimble::test::Encoder<nimble::EliasFanoEncoding<uint64_t>>::encode(
@@ -69,7 +69,7 @@ TEST_F(EliasFanoEncodingViewTest, lowerBound) {
   }
 }
 
-TEST_F(EliasFanoEncodingViewTest, supportsConcurrentReads) {
+TEST_P(EliasFanoEncodingViewTest, supportsConcurrentReads) {
   nimble::Vector<uint64_t> values{pool_.get()};
   values.reserve(kConcurrentRows);
   uint64_t value{1'000};
@@ -82,7 +82,7 @@ TEST_F(EliasFanoEncodingViewTest, supportsConcurrentReads) {
       values, randomizedPositions(/*seed=*/43));
 }
 
-TEST_F(EliasFanoEncodingViewTest, randomizedReads) {
+TEST_P(EliasFanoEncodingViewTest, randomizedReads) {
   std::mt19937_64 random{44};
   std::uniform_int_distribution<uint32_t> rowCountDistribution{1, 512};
   std::uniform_int_distribution<uint64_t> deltaDistribution{0, 1'000};
@@ -108,3 +108,5 @@ TEST_F(EliasFanoEncodingViewTest, randomizedReads) {
     expectReads<nimble::EliasFanoEncoding<uint64_t>>(values, positions);
   }
 }
+
+INSTANTIATE_ENCODING_VIEW_TEST_SUITE(EliasFanoEncodingViewTest);

@@ -143,6 +143,37 @@ TEST(FilePropertiesTest, roundTripStreamChecksums) {
       FileProperties::deserialize(present.serialize()).hasStreamChecksums());
 }
 
+TEST(FilePropertiesTest, roundTripTopLevelNulls) {
+  FileProperties absent{/*compactRowCountEncoding=*/false,
+                        /*clusterIndexKeyColumnStorageOmitted=*/false,
+                        /*clusterIndexKeyColumnsWithOmittedStorage=*/{}};
+  EXPECT_FALSE(
+      FileProperties::deserialize(absent.serialize()).hasTopLevelNulls());
+
+  FileProperties present{/*compactRowCountEncoding=*/false,
+                         /*clusterIndexKeyColumnStorageOmitted=*/false,
+                         /*clusterIndexKeyColumnsWithOmittedStorage=*/{},
+                         /*hasStreamChecksums=*/false,
+                         /*streamTrailerLayout=*/{},
+                         /*hasTopLevelNulls=*/true};
+  EXPECT_TRUE(
+      FileProperties::deserialize(present.serialize()).hasTopLevelNulls());
+}
+
+TEST(FilePropertiesTest, topLevelNullsCoexistWithStreamTrailers) {
+  FileProperties properties{/*compactRowCountEncoding=*/false,
+                            /*clusterIndexKeyColumnStorageOmitted=*/false,
+                            /*clusterIndexKeyColumnsWithOmittedStorage=*/{},
+                            /*hasStreamChecksums=*/false,
+                            StreamTrailerLayout::defaultLayout(),
+                            /*hasTopLevelNulls=*/true};
+  const auto decoded = FileProperties::deserialize(properties.serialize());
+  EXPECT_TRUE(decoded.hasTopLevelNulls());
+  EXPECT_EQ(
+      decoded.streamTrailerLayout().fields(),
+      properties.streamTrailerLayout().fields());
+}
+
 // A file whose properties section exists only to record stream checksums must
 // still round trip; the writer skips the section entirely when nothing is set.
 TEST(FilePropertiesTest, streamChecksumsCoexistWithOtherProperties) {

@@ -16,6 +16,8 @@
 
 #pragma once
 
+#include <folly/stop_watch.h>
+
 #include <atomic>
 #include <memory>
 #include <optional>
@@ -143,6 +145,8 @@ class RPCOperator : public exec::Operator {
   static inline const std::string kRpcErrorKindTimeout{"rpcErrorKindTimeout"};
   static inline const std::string kRpcErrorKindBackendError{
       "rpcErrorKindBackendError"};
+  static inline const std::string kRpcErrorKindInvalidRequest{
+      "rpcErrorKindInvalidRequest"};
   static inline const std::string kRpcErrorKindInternal{"rpcErrorKindInternal"};
   // Shared rate-limiter stats, refreshed on every stats() call.
   static inline const std::string kRpcRateLimiterCap{"rpcRateLimiterCap"};
@@ -392,6 +396,7 @@ class RPCOperator : public exec::Operator {
   int64_t numErrorsRateLimited_{0};
   int64_t numErrorsTimeout_{0};
   int64_t numErrorsBackend_{0};
+  int64_t numErrorsInvalidRequest_{0};
   // Rows that failed because something here broke -- an invariant tripped, or
   // a response was returned with no outcome set -- rather than because the
   // backend refused. Tracked apart from the backend error count.
@@ -436,8 +441,9 @@ class RPCOperator : public exec::Operator {
   // scheduling, so this needs generous headroom.
   static constexpr auto kBatchRpcTimeout = std::chrono::milliseconds(3'600'000);
 
-  // Block wait time tracking for runtime stats.
-  std::optional<uint64_t> blockWaitStartNs_;
+  // Block wait time tracking for runtime stats. Started when the operator
+  // parks and reset when the wait ends.
+  std::optional<folly::stop_watch<std::chrono::nanoseconds>> blockWaitWatch_;
   bool blockWaitIsBackpressure_{false};
   uint64_t totalBlockWaitNanos_{0};
   uint64_t totalBackpressureWaitNanos_{0};

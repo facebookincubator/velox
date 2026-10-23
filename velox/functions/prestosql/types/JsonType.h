@@ -25,6 +25,8 @@ class JsonType final : public VarcharType {
   JsonType() = default;
 
  public:
+  static std::shared_ptr<const JsonType> create() = delete;
+
   static std::shared_ptr<const JsonType> get() {
     VELOX_CONSTEXPR_SINGLETON JsonType kInstance;
     return {std::shared_ptr<const JsonType>{}, &kInstance};

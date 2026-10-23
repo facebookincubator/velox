@@ -223,10 +223,8 @@ class SimpleAggregateAdapter : public Aggregate {
           std::declval<const TypePtr&>(),
           std::declval<const core::QueryConfig&>()))>> : std::true_type {};
 
-  // Whether the function defines setConstantInputs(). AggregateInfo discovers
-  // constant arguments after the aggregate is constructed and calls
-  // Aggregate::setConstantInputs() once before processing input rows. The
-  // adapter forwards that hook to simple aggregates that opt in.
+  // Whether the function defines setConstantInputs(). If it does, the adapter
+  // forwards Aggregate::setConstantInputs() to it.
   template <typename T, typename = void>
   struct support_set_constant_inputs : std::false_type {};
 

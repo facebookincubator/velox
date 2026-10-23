@@ -16,6 +16,7 @@
 #include "velox/functions/sparksql/Hash.h"
 
 #include <folly/CPortability.h>
+#include <folly/lang/Bits.h>
 
 #include "velox/expression/DecodedArgs.h"
 #include "velox/functions/lib/Murmur3Hash32Base.h"
@@ -27,63 +28,6 @@ namespace facebook::velox::functions::sparksql {
 namespace {
 
 const int32_t kDefaultSeed = 42;
-
-// Computes the hash value of input using the hash function in HashClass.
-template <typename HashClass>
-typename HashClass::ReturnType hashOne(
-    int32_t input,
-    typename HashClass::SeedType seed) {
-  return HashClass::hashInt32(input, seed);
-}
-
-template <typename HashClass>
-typename HashClass::ReturnType hashOne(
-    int64_t input,
-    typename HashClass::SeedType seed) {
-  return HashClass::hashInt64(input, seed);
-}
-
-template <typename HashClass>
-typename HashClass::ReturnType hashOne(
-    float input,
-    typename HashClass::SeedType seed) {
-  return HashClass::hashFloat(input, seed);
-}
-
-template <typename HashClass>
-typename HashClass::ReturnType hashOne(
-    double input,
-    typename HashClass::SeedType seed) {
-  return HashClass::hashDouble(input, seed);
-}
-
-template <typename HashClass>
-typename HashClass::ReturnType hashOne(
-    int128_t input,
-    typename HashClass::SeedType seed) {
-  return HashClass::hashLongDecimal(input, seed);
-}
-
-template <typename HashClass>
-typename HashClass::ReturnType hashOne(
-    Timestamp input,
-    typename HashClass::SeedType seed) {
-  return HashClass::hashTimestamp(input, seed);
-}
-
-template <typename HashClass>
-typename HashClass::ReturnType hashOne(
-    StringView input,
-    typename HashClass::SeedType seed) {
-  return HashClass::hashBytes(input, seed);
-}
-
-template <typename HashClass>
-typename HashClass::ReturnType hashOne(
-    UnknownValue /*input*/,
-    typename HashClass::SeedType seed) {
-  return seed;
-}
 
 template <typename HashClass, TypeKind kind>
 class PrimitiveVectorHasher;
@@ -433,7 +377,7 @@ class Murmur3Hash final : public Murmur3Hash32Base {
     const char* const end = input.data() + input.size();
     uint32_t h1 = seed;
     for (; i <= end - 4; i += 4) {
-      h1 = mixH1(h1, mixK1(*reinterpret_cast<const uint32_t*>(i)));
+      h1 = mixH1(h1, mixK1(folly::loadUnaligned<uint32_t>(i)));
     }
     for (; i != end; ++i) {
       h1 = mixH1(h1, mixK1(*i));

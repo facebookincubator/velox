@@ -18,6 +18,8 @@
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/expression/PrestoFunctions.h"
 
+#include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/testutil/TestValue.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/exec/OperatorType.h"
 #include "velox/exec/PlanNodeStats.h"
@@ -25,6 +27,8 @@
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/type/Time.h"
+
+#include <gmock/gmock.h>
 
 namespace facebook::velox::exec::test {
 
@@ -95,6 +99,18 @@ class ToCudfSelectionTest : public OperatorTestBase {
     for (const auto& pipelineStats : stats.pipelineStats) {
       for (const auto& operatorStats : pipelineStats.operatorStats) {
         if (operatorStats.operatorType == "CudfFilterProject") {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  bool wasCudfHashJoinBuildUsed(const std::shared_ptr<exec::Task>& task) {
+    auto stats = task->taskStats();
+    for (const auto& pipelineStats : stats.pipelineStats) {
+      for (const auto& operatorStats : pipelineStats.operatorStats) {
+        if (operatorStats.operatorType == "CudfHashJoinBuild") {
           return true;
         }
       }
@@ -287,6 +303,135 @@ TEST_F(ToCudfSelectionTest, unsupportedTypeBeforeLocalBoundary) {
         .maxDrivers(2)
         .assertResults(expected);
   }
+}
+
+// CudfFromVelox converts the batches produced by the CPU operator before it,
+// so it must carry that operator's output type, not the type of the GPU
+// operator it feeds.
+DEBUG_ONLY_TEST_F(ToCudfSelectionTest, fromVeloxUsesInputType) {
+  auto input = makeRowVector(
+      {"unit", "amount", "event_date"},
+      {makeFlatVector<std::string>({"day", "week", "month", "year"}),
+       makeFlatVector<int64_t>({1, 2, -1, 13}),
+       makeFlatVector<int32_t>(
+           {DATE()->toDays("2020-01-31"),
+            DATE()->toDays("2020-02-29"),
+            DATE()->toDays("2020-03-01"),
+            DATE()->toDays("2020-12-31")},
+           DATE())});
+
+  // The project falls back to the CPU, and the aggregation runs on the GPU.
+  auto plan =
+      PlanBuilder()
+          .values({input})
+          .project({"date_add(unit, amount, event_date) AS result", "amount"})
+          .singleAggregation({}, {"count(1) AS cnt", "sum(amount) AS total"})
+          .planNode();
+
+  std::vector<TypePtr> fromVeloxTypes;
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::cudf_velox::CudfFromVelox::doGetOutput",
+      std::function<void(RowVectorPtr*)>([&](RowVectorPtr* output) {
+        fromVeloxTypes.push_back((*output)->type());
+      }));
+
+  std::shared_ptr<Task> task;
+  AssertQueryBuilder(plan).config("cudf.enabled", true).countResults(task);
+
+  ASSERT_TRUE(wasDefaultFilterProjectUsed(task));
+  ASSERT_TRUE(wasCudfAggregationUsed(task));
+  ASSERT_FALSE(fromVeloxTypes.empty());
+  const auto expectedType = ROW({"result", "amount"}, {DATE(), BIGINT()});
+  for (const auto& type : fromVeloxTypes) {
+    EXPECT_EQ(type->toString(), expectedType->toString());
+  }
+}
+
+// A join build is fed by the join's second source, so the CudfFromVelox
+// before HashBuild must carry the build-side type, not the join output or the
+// probe type.
+DEBUG_ONLY_TEST_F(ToCudfSelectionTest, fromVeloxUsesBuildSideTypeForJoin) {
+  auto probe = makeRowVector(
+      {"p_key", "p_name"},
+      {makeFlatVector<int64_t>({1, 2, 3, 4}),
+       makeFlatVector<std::string>({"a", "b", "c", "d"})});
+  auto build = makeRowVector(
+      {"unit", "amount", "event_date", "b_key"},
+      {makeFlatVector<std::string>({"day", "week", "month", "year"}),
+       makeFlatVector<int64_t>({1, 2, -1, 13}),
+       makeFlatVector<int32_t>(
+           {DATE()->toDays("2020-01-31"),
+            DATE()->toDays("2020-02-29"),
+            DATE()->toDays("2020-03-01"),
+            DATE()->toDays("2020-12-31")},
+           DATE()),
+       makeFlatVector<int64_t>({1, 2, 3, 4})});
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan =
+      PlanBuilder(planNodeIdGenerator)
+          .values({probe})
+          .hashJoin(
+              {"p_key"},
+              {"b_key"},
+              PlanBuilder(planNodeIdGenerator)
+                  .values({build})
+                  // Falls back to the CPU, so CudfFromVelox feeds HashBuild.
+                  .project({"date_add(unit, amount, event_date) AS d", "b_key"})
+                  .planNode(),
+              "",
+              {"p_name", "d"})
+          .planNode();
+
+  // The build and probe pipelines run on different threads.
+  std::mutex mutex;
+  std::vector<std::string> fromVeloxTypes;
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::cudf_velox::CudfFromVelox::doGetOutput",
+      std::function<void(RowVectorPtr*)>([&](RowVectorPtr* output) {
+        std::lock_guard<std::mutex> lock(mutex);
+        fromVeloxTypes.push_back((*output)->type()->toString());
+      }));
+
+  std::shared_ptr<Task> task;
+  AssertQueryBuilder(plan).config("cudf.enabled", true).countResults(task);
+
+  ASSERT_TRUE(wasDefaultFilterProjectUsed(task));
+  ASSERT_TRUE(wasCudfHashJoinBuildUsed(task));
+
+  const auto buildType = ROW({"d", "b_key"}, {DATE(), BIGINT()})->toString();
+  const auto probeType =
+      ROW({"p_key", "p_name"}, {BIGINT(), VARCHAR()})->toString();
+  EXPECT_THAT(fromVeloxTypes, testing::Contains(buildType));
+  EXPECT_THAT(fromVeloxTypes, testing::Contains(probeType));
+  EXPECT_THAT(
+      fromVeloxTypes, testing::Each(testing::AnyOf(buildType, probeType)));
+}
+
+// A zero-column CPU batch reaches the empty-table branch of CudfFromVelox,
+// which must also carry the input type, not the aggregation's output type.
+DEBUG_ONLY_TEST_F(ToCudfSelectionTest, fromVeloxUsesInputTypeForZeroColumns) {
+  auto input = std::make_shared<RowVector>(
+      pool(), ROW({}, {}), nullptr, 4, std::vector<VectorPtr>{});
+
+  auto plan = PlanBuilder()
+                  .values({input})
+                  .singleAggregation({}, {"count(1) AS cnt"})
+                  .planNode();
+
+  std::vector<std::string> fromVeloxTypes;
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::cudf_velox::CudfFromVelox::doGetOutput",
+      std::function<void(RowVectorPtr*)>([&](RowVectorPtr* output) {
+        fromVeloxTypes.push_back((*output)->type()->toString());
+      }));
+
+  std::shared_ptr<Task> task;
+  AssertQueryBuilder(plan).config("cudf.enabled", true).countResults(task);
+
+  ASSERT_TRUE(wasCudfAggregationUsed(task));
+  ASSERT_THAT(fromVeloxTypes, testing::Not(testing::IsEmpty()));
+  EXPECT_THAT(fromVeloxTypes, testing::Each(ROW({}, {})->toString()));
 }
 
 TEST_F(ToCudfSelectionTest, prestoDateAddTimestampFallsBack) {

@@ -55,8 +55,7 @@ RowTypePtr outputEntrySchema(
     const std::vector<StateDeclarationPtr>& declarations,
     const std::string& name) {
   for (const auto& declaration : declarations) {
-    auto vector =
-        std::dynamic_pointer_cast<const VectorStateDeclaration>(declaration);
+    const auto* vector = declaration->as<VectorStateDeclaration>();
     if (vector != nullptr && vector->name() == name) {
       return vector->schema();
     }
@@ -114,6 +113,15 @@ std::string declarationsToString(
   return folly::join(", ", parts);
 }
 
+// Every convergence plan in the order they run: 'plans', then 'verdict'.
+std::vector<PlanNodePtr> allConvergencePlans(const ConvergenceConfig& config) {
+  auto result = config.plans;
+  if (config.verdict != nullptr) {
+    result.push_back(config.verdict);
+  }
+  return result;
+}
+
 } // namespace
 
 FixedPointNode::FixedPointNode(
@@ -128,31 +136,13 @@ FixedPointNode::FixedPointNode(
       convergenceConfig_{std::move(convergenceConfig)},
       outputStateEntry_{std::move(outputStateEntry)},
       outputType_{outputEntrySchema(stateDeclarations_, outputStateEntry_)} {
-  VELOX_USER_CHECK_GT(
-      convergenceConfig_.maxIterations,
-      0,
-      "FixedPointNode: maxIterations must be positive");
   // Contradictions in the config itself are reported before anything validates
   // the structure they describe, so the message names the contradiction rather
   // than a consequence of it.
-  VELOX_USER_CHECK(
-      !convergenceConfig_.stopWhenDeltaEmpty ||
-          convergenceConfig_.plans.empty(),
-      "FixedPointNode: stopWhenDeltaEmpty and a convergence sequence are "
-      "mutually exclusive; the delta row count is already the verdict");
+  convergenceConfig_.checkConsistency();
   validatePlans();
   validateWorkerCounts();
   resolveAndValidateStateReferences();
-  // errorWhenMaxIterationReached fails the loop when maxIterations is reached
-  // without converging; that is only meaningful with a convergence criterion
-  // (with none the loop never converges, so it would always fail).
-  VELOX_USER_CHECK(
-      !convergenceConfig_.errorWhenMaxIterationReached ||
-          !convergenceConfig_.plans.empty() ||
-          convergenceConfig_.stopWhenDeltaEmpty,
-      "FixedPointNode: errorWhenMaxIterationReached requires a convergence "
-      "criterion; set it false for a fixed-count loop with no convergence "
-      "plan");
   // The delta is the local shard's row count and the framework performs no
   // cross-worker reduction, so a peer's frontier may still be non-empty when
   // this one empties -- stopping then strands the peers reading this worker.
@@ -190,6 +180,22 @@ int32_t nestedWorkers(const PlanNodePtr& node) {
     workers = std::max(workers, nestedWorkers(source));
   }
   return workers;
+}
+
+// Whether a fixed point nested in 'node' reads its peers.
+bool nestedReadsPeers(const PlanNodePtr& node) {
+  if (node == nullptr) {
+    return false;
+  }
+  if (const auto* fixedPoint = node->as<FixedPointNode>()) {
+    return fixedPoint->readsPeers();
+  }
+  for (const auto& source : node->sources()) {
+    if (nestedReadsPeers(source)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 // Whether a plan chain makes the fixed point need coordinator-assigned peer
@@ -236,12 +242,13 @@ int32_t chainWorkers(const std::vector<PlanNodePtr>& plans) {
 int32_t FixedPointNode::numWorkers() const {
   // validateWorkerCounts() rejected any stage that disagrees, so every value
   // here is either one or the single agreed width.
-  int32_t workers =
-      std::max(chainWorkers(plans_), chainWorkers(convergenceConfig_.plans));
+  int32_t workers = std::max(
+      chainWorkers(plans_),
+      chainWorkers(allConvergencePlans(convergenceConfig_)));
   for (const auto& plan : plans_) {
     workers = std::max(workers, nestedWorkers(plan));
   }
-  for (const auto& plan : convergenceConfig_.plans) {
+  for (const auto& plan : allConvergencePlans(convergenceConfig_)) {
     workers = std::max(workers, nestedWorkers(plan));
   }
   // An initial plan can host a nested loop too, and requiresSplits() already
@@ -253,11 +260,55 @@ int32_t FixedPointNode::numWorkers() const {
   return workers;
 }
 
-bool FixedPointNode::requiresSplits() const {
+void FixedPointNode::accept(
+    const PlanNodeVisitor& visitor,
+    PlanNodeVisitorContext& context) const {
+  visitor.visit(*this, context);
+}
+
+void StateSourceNode::accept(
+    const PlanNodeVisitor& visitor,
+    PlanNodeVisitorContext& context) const {
+  visitor.visit(*this, context);
+}
+
+void StateHashJoinNode::accept(
+    const PlanNodeVisitor& visitor,
+    PlanNodeVisitorContext& context) const {
+  visitor.visit(*this, context);
+}
+
+std::vector<PlanNodePtr> FixedPointNode::nestedPlans() const {
+  std::vector<PlanNodePtr> result;
+  for (const auto& declaration : stateDeclarations_) {
+    if (declaration->initialPlan() != nullptr) {
+      result.push_back(declaration->initialPlan());
+    }
+  }
+  result.insert(result.end(), plans_.begin(), plans_.end());
+  const auto convergencePlans = allConvergencePlans(convergenceConfig_);
+  result.insert(result.end(), convergencePlans.begin(), convergencePlans.end());
+  return result;
+}
+
+bool FixedPointNode::readsPeers() const {
   // Either chain can be the shuffling one -- a convergence sequence that
-  // reduces across workers needs peers just as a shuffling body does.
+  // reduces across workers needs peers just as a shuffling body does.  A loop
+  // nested in an initial plan runs on this loop's workers too.
   if (chainRequiresSplits(plans_) ||
-      chainRequiresSplits(convergenceConfig_.plans)) {
+      chainRequiresSplits(allConvergencePlans(convergenceConfig_))) {
+    return true;
+  }
+  for (const auto& declaration : stateDeclarations_) {
+    if (nestedReadsPeers(declaration->initialPlan())) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool FixedPointNode::requiresSplits() const {
+  if (readsPeers()) {
     return true;
   }
   for (const auto& declaration : stateDeclarations_) {
@@ -291,10 +342,52 @@ int32_t countExchanges(const PlanNode* node) {
   return numExchanges;
 }
 
+// Returns a node in 'node' that reads splits, or null.
+// - Exchanges are left to the chain checks: the loop wires the one that links
+//   a plan to its predecessor.
+// - An index lookup reads splits for its lookup side only if the connector
+//   asks for them.
+// - A nested FixedPointNode gets its peers from this loop, but nothing feeds
+//   its initial plans.  It validates its own per-iteration plans.
+const PlanNode* findSplitSource(const PlanNode* node) {
+  if (node->is<ExchangeNode>()) {
+    return nullptr;
+  }
+  if (const auto* fixedPoint = node->as<FixedPointNode>()) {
+    for (const auto& declaration : fixedPoint->stateDeclarations()) {
+      if (declaration->initialPlan() == nullptr) {
+        continue;
+      }
+      if (const auto* found =
+              findSplitSource(declaration->initialPlan().get())) {
+        return found;
+      }
+    }
+    return nullptr;
+  }
+  const auto* lookupJoin = node->as<IndexLookupJoinNode>();
+  if (node->requiresSplits() ||
+      (lookupJoin != nullptr && lookupJoin->needsIndexSplit())) {
+    return node;
+  }
+  for (const auto& source : node->sources()) {
+    if (lookupJoin != nullptr && source == lookupJoin->lookupSource()) {
+      continue;
+    }
+    if (const auto* found = findSplitSource(source.get())) {
+      return found;
+    }
+  }
+  return nullptr;
+}
+
+// 'lastLinkGathers' is true for a convergence sequence with a verdict plan,
+// whose last shuffle gathers every worker's rows to one.
 void validatePlanChain(
     const std::vector<PlanNodePtr>& plans,
     std::string_view what,
-    std::string_view lastPlanProduces) {
+    std::string_view lastPlanProduces,
+    bool lastLinkGathers) {
   const auto numPlans = plans.size();
   for (size_t i = 0; i < numPlans; ++i) {
     VELOX_USER_CHECK_NOT_NULL(
@@ -338,6 +431,18 @@ void validatePlanChain(
           what,
           i);
     }
+    // The loop feeds splits only to its initial plans and to the Exchange that
+    // links a plan to its predecessor; any other split source would wait for
+    // splits forever.
+    const auto* splitSource = findSplitSource(root);
+    VELOX_USER_CHECK_NULL(
+        splitSource,
+        "FixedPointNode: only an initial plan can read splits; other plans "
+        "must read their rows from state: {} {}, {} {}",
+        what,
+        i,
+        splitSource->name(),
+        splitSource->id());
     const std::string rootName =
         root != nullptr ? std::string(root->name()) : "nothing";
     if (i + 1 == numPlans) {
@@ -370,13 +475,15 @@ void validatePlanChain(
   for (size_t i = 0; i + 1 < numPlans; ++i) {
     const auto partitioned =
         std::dynamic_pointer_cast<const core::PartitionedOutputNode>(plans[i]);
-    VELOX_USER_CHECK_EQ(
-        partitioned->numPartitions(),
-        workers,
-        "FixedPointNode: every shuffling {} must partition across the same "
-        "number of workers. Plan: {}",
-        what,
-        i);
+    if (!lastLinkGathers || i + 2 < numPlans) {
+      VELOX_USER_CHECK_EQ(
+          partitioned->numPartitions(),
+          workers,
+          "FixedPointNode: every shuffling {} must partition across the same "
+          "number of workers. Plan: {}",
+          what,
+          i);
+    }
     const auto* exchange = dynamic_cast<const core::ExchangeNode*>(
         primaryLeaf(plans[i + 1].get()));
     VELOX_USER_CHECK(
@@ -397,17 +504,10 @@ void FixedPointNode::validatePlans() const {
   VELOX_USER_CHECK(
       !plans_.empty(), "FixedPointNode requires at least one plan");
   validatePlanChain(
-      plans_, "plan", "the rows written back to the output state entry");
-  // The convergence sequence chains like the body -- reading state, shuffling
-  // between plans -- so the same check applies.  Structure is checked before
-  // validateWorkerCounts() compares widths, so a malformed chain reports the
-  // structural error rather than a worker-count mismatch derived from it.
-  if (!convergenceConfig_.plans.empty()) {
-    validatePlanChain(
-        convergenceConfig_.plans,
-        "convergence plan",
-        "the BOOLEAN convergence verdict");
-  }
+      plans_,
+      "plan",
+      "the rows written back to the output state entry",
+      /*lastLinkGathers=*/false);
 }
 
 void FixedPointNode::validateWorkerCounts() const {
@@ -433,13 +533,13 @@ void FixedPointNode::validateWorkerCounts() const {
     agreedBy = what;
   };
   merge(chainWorkers(plans_), "body");
-  merge(chainWorkers(convergenceConfig_.plans), "convergence");
+  merge(chainWorkers(allConvergencePlans(convergenceConfig_)), "convergence");
   // Named with the index, because a nested loop's width is only traceable to
   // the plan hosting it.
   for (size_t i = 0; i < plans_.size(); ++i) {
     merge(nestedWorkers(plans_[i]), fmt::format("nested in body plan {}", i));
   }
-  const auto& convergencePlans = convergenceConfig_.plans;
+  const auto convergencePlans = allConvergencePlans(convergenceConfig_);
   for (size_t i = 0; i < convergencePlans.size(); ++i) {
     merge(
         nestedWorkers(convergencePlans[i]),
@@ -468,10 +568,9 @@ void FixedPointNode::resolveAndValidateStateReferences() const {
   // Resolve and check every StateSource / StateHashJoin in every body plan and
   // in the convergence plan (which also reads state via a StateSource).
   std::vector<PlanNodePtr> referencingPlans = plans_;
+  const auto convergencePlans = allConvergencePlans(convergenceConfig_);
   referencingPlans.insert(
-      referencingPlans.end(),
-      convergenceConfig_.plans.begin(),
-      convergenceConfig_.plans.end());
+      referencingPlans.end(), convergencePlans.begin(), convergencePlans.end());
   for (const auto& plan : referencingPlans) {
     std::vector<const StateSourceNode*> sources;
     collectNodes<StateSourceNode>(plan, sources);
@@ -576,16 +675,14 @@ void FixedPointNode::resolveAndValidateStateReferences() const {
         "FixedPointNode: initial plan must not read state (it runs in Phase 1 "
         "before state is populated) for entry: {}",
         declaration->name());
-    if (const auto* vector =
-            dynamic_cast<const VectorStateDeclaration*>(declaration.get())) {
+    if (const auto* vector = declaration->as<VectorStateDeclaration>()) {
       VELOX_USER_CHECK(
           initialPlan->outputType()->equivalent(*vector->schema()),
           "FixedPointNode: initial plan output must match the vector state "
           "entry schema for entry: {}",
           vector->name());
     } else if (
-        const auto* hashTable =
-            dynamic_cast<const HashTableStateDeclaration*>(declaration.get())) {
+        const auto* hashTable = declaration->as<HashTableStateDeclaration>()) {
       VELOX_USER_CHECK(
           initialPlan->outputType()->equivalent(*hashTable->schema()),
           "FixedPointNode: initial plan output must match the hash table state "
@@ -602,22 +699,6 @@ void FixedPointNode::resolveAndValidateStateReferences() const {
       "FixedPointNode: last plan output must match the output state entry "
       "schema for entry: {}",
       outputStateEntry_);
-
-  // The convergence sequence's last plan emits exactly one BOOLEAN column, the
-  // verdict.  Its chain structure is checked in validatePlans().
-  if (!convergenceConfig_.plans.empty()) {
-    const auto& convergenceType = convergenceConfig_.plans.back()->outputType();
-    VELOX_USER_CHECK_EQ(
-        convergenceType->size(),
-        1,
-        "FixedPointNode: the convergence plan must produce exactly one output "
-        "column");
-    VELOX_USER_CHECK(
-        convergenceType->childAt(0)->isBoolean(),
-        "FixedPointNode: the convergence plan output column must be BOOLEAN, but"
-        " got: {}",
-        convergenceType->childAt(0)->toString());
-  }
 }
 
 namespace {
@@ -767,17 +848,91 @@ ConvergenceConfig ConvergenceConfig::whenDeltaEmpty(int32_t maxIterations) {
 ConvergenceConfig ConvergenceConfig::converging(
     PlanNodePtr plan,
     int32_t maxIterations) {
-  return converging(std::vector<PlanNodePtr>{std::move(plan)}, maxIterations);
+  return ConvergenceConfig{
+      .plans = {std::move(plan)},
+      .maxIterations = maxIterations,
+      .errorWhenMaxIterationReached = true};
 }
 
 // static
-ConvergenceConfig ConvergenceConfig::converging(
-    std::vector<PlanNodePtr> plans,
+ConvergenceConfig ConvergenceConfig::globalVerdict(
+    std::vector<PlanNodePtr> partials,
+    PlanNodePtr verdict,
     int32_t maxIterations) {
   return ConvergenceConfig{
-      .plans = std::move(plans),
+      .plans = std::move(partials),
+      .verdict = std::move(verdict),
       .maxIterations = maxIterations,
       .errorWhenMaxIterationReached = true};
+}
+
+void ConvergenceConfig::checkConsistency() const {
+  VELOX_USER_CHECK_GT(
+      maxIterations, 0, "FixedPointNode: maxIterations must be positive");
+  const auto convergencePlans = allConvergencePlans(*this);
+  VELOX_USER_CHECK(
+      !stopWhenDeltaEmpty || convergencePlans.empty(),
+      "FixedPointNode: stopWhenDeltaEmpty and a convergence sequence are "
+      "mutually exclusive; the delta row count is already the verdict");
+  VELOX_USER_CHECK(
+      verdict == nullptr || !plans.empty(),
+      "FixedPointNode: a verdict plan requires convergence plans that "
+      "gather to it");
+  // Workers that each decide after a shuffle could disagree; one verdict plan
+  // decides for all of them.
+  VELOX_USER_CHECK(
+      verdict != nullptr || plans.size() <= 1,
+      "FixedPointNode: convergence plans that shuffle require a verdict plan; "
+      "use ConvergenceConfig::globalVerdict");
+  // Reaching maxIterations without converging fails the loop, which is only
+  // meaningful with a convergence criterion: with none the loop never
+  // converges, so it would always fail.
+  VELOX_USER_CHECK(
+      !errorWhenMaxIterationReached || !plans.empty() || stopWhenDeltaEmpty,
+      "FixedPointNode: errorWhenMaxIterationReached requires a convergence "
+      "criterion; set it false for a fixed-count loop with no convergence "
+      "plan");
+  if (convergencePlans.empty()) {
+    return;
+  }
+
+  // The sequence chains like the body -- reading state, shuffling between
+  // plans -- so the same check applies.
+  validatePlanChain(
+      convergencePlans,
+      "convergence plan",
+      "the BOOLEAN convergence verdict",
+      /*lastLinkGathers=*/verdict != nullptr);
+
+  // The verdict plan reads every worker's rows, so they must all reach the one
+  // worker that runs it.
+  if (verdict != nullptr) {
+    static constexpr std::string_view kGatherRequired =
+        "FixedPointNode: the convergence plans before a verdict plan must end "
+        "in a PartitionedOutput with one partition";
+    // validatePlanChain checked that the last of 'plans' ends in a
+    // PartitionedOutput.
+    const auto* gather = plans.back()->as<PartitionedOutputNode>();
+    VELOX_USER_CHECK(gather->isPartitioned(), kGatherRequired);
+    VELOX_USER_CHECK_EQ(gather->numPartitions(), 1, "{}", kGatherRequired);
+    VELOX_USER_CHECK_EQ(
+        nestedWorkers(verdict),
+        1,
+        "FixedPointNode: a fixed point nested in a verdict plan runs on worker 0 "
+        "alone, so it cannot shuffle across workers");
+  }
+
+  const auto& verdictType = convergencePlans.back()->outputType();
+  VELOX_USER_CHECK_EQ(
+      verdictType->size(),
+      1,
+      "FixedPointNode: the convergence plan must produce exactly one output "
+      "column");
+  VELOX_USER_CHECK(
+      verdictType->childAt(0)->isBoolean(),
+      "FixedPointNode: the convergence plan output column must be BOOLEAN, but"
+      " got: {}",
+      verdictType->childAt(0)->toString());
 }
 
 folly::dynamic ConvergenceConfig::serialize() const {
@@ -787,6 +942,9 @@ folly::dynamic ConvergenceConfig::serialize() const {
     serializedPlans.push_back(plan->serialize());
   }
   obj["plans"] = std::move(serializedPlans);
+  if (verdict != nullptr) {
+    obj["verdict"] = verdict->serialize();
+  }
   obj["maxIterations"] = maxIterations;
   obj["errorWhenMaxIterationReached"] = errorWhenMaxIterationReached;
   obj["stopWhenDeltaEmpty"] = stopWhenDeltaEmpty;
@@ -794,13 +952,23 @@ folly::dynamic ConvergenceConfig::serialize() const {
 }
 
 std::string ConvergenceConfig::toString() const {
-  return fmt::format(
-      "maxIterations: {}, errorWhenMaxIterationReached: {}, "
-      "stopWhenDeltaEmpty: {}, convergencePlans: {}",
-      maxIterations,
-      errorWhenMaxIterationReached ? "true" : "false",
-      stopWhenDeltaEmpty ? "true" : "false",
-      plans.size());
+  std::string result = fmt::format("maxIterations: {}", maxIterations);
+  if (stopWhenDeltaEmpty) {
+    result += ", stopWhenDeltaEmpty";
+  }
+  if (!plans.empty()) {
+    result += fmt::format(", convergencePlans: {}", plans.size());
+  }
+  if (verdict != nullptr) {
+    result += ", verdict";
+  }
+  // Without a criterion the flag must be false, so it says something only
+  // when a criterion exists.
+  const bool hasCriterion = stopWhenDeltaEmpty || !plans.empty();
+  if (hasCriterion && !errorWhenMaxIterationReached) {
+    result += ", errorWhenMaxIterationReached: false";
+  }
+  return result;
 }
 
 // static
@@ -810,6 +978,10 @@ ConvergenceConfig ConvergenceConfig::deserialize(
   ConvergenceConfig config;
   for (const auto& plan : obj["plans"]) {
     config.plans.push_back(ISerializable::deserialize<PlanNode>(plan, context));
+  }
+  if (obj.count("verdict")) {
+    config.verdict =
+        ISerializable::deserialize<PlanNode>(obj["verdict"], context);
   }
   config.maxIterations = static_cast<int32_t>(obj["maxIterations"].asInt());
   config.errorWhenMaxIterationReached =
