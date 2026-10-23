@@ -47,6 +47,14 @@ class AverageAggregationTest : public AggregationTestBase {
         {},
         expected,
         /*config*/ {});
+    testAggregationsWithCompanion(
+        input,
+        [](auto&) {},
+        {},
+        {"spark_avg(c0)"},
+        {{input.front()->childAt(0)->type()}},
+        {},
+        expected);
   }
 
   core::PlanNodePtr createMergeExtractDecimal(
@@ -382,6 +390,15 @@ TEST_F(AverageAggregationTest, abandonPartialAggregation) {
              kBatchSize, [](auto row) { return row % 3 != 0; })}));
   }
   createDuckDbTable(data);
+
+  testAggregationsWithCompanion(
+      data,
+      [](auto&) {},
+      {},
+      {"spark_avg(i)", "spark_avg(d)"},
+      {{INTEGER()}, {DOUBLE()}},
+      {},
+      "SELECT avg(i), avg(d) FROM tmp");
 
   core::PlanNodeId partialNodeId;
   auto plan = PlanBuilder()
