@@ -32,19 +32,30 @@
 namespace facebook::velox::functions {
 
 /// Computes Hive-compatible hashes, mirroring the hashCode implementation in
-/// Hive's ObjectInspectorUtils (HIVE-12025).
+/// Hive's ObjectInspectorUtils (HIVE-12025), with optional zero normalization.
 class HiveHash {
  public:
+  /// Controls whether both floating-point signed zeros hash to zero.
+  enum class ZeroMode {
+    /// Preserves signed zero, matching Hive.
+    kPreserve,
+    /// Hashes both signs of zero as zero, matching Spark.
+    kNormalize,
+  };
+
   /// Pools must outlive this instance.
   HiveHash(
       std::vector<std::unique_ptr<std::vector<uint32_t>>>& hashesPool,
       std::vector<std::unique_ptr<SelectivityVector>>& rowsPool,
-      std::vector<std::unique_ptr<DecodedVector>>& decodedVectorsPool)
+      std::vector<std::unique_ptr<DecodedVector>>& decodedVectorsPool,
+      ZeroMode zeroMode = ZeroMode::kPreserve)
       : decodedVectorsPool_(decodedVectorsPool),
         rowsPool_(rowsPool),
-        hashesPool_(hashesPool) {}
+        hashesPool_(hashesPool),
+        zeroMode_(zeroMode) {}
 
   /// Folds selected values into 'hashes' using Hive's recursive hashing rules.
+  /// Applies the instance's zero mode at every nesting depth.
   /// Supports existing Hive hash primitives, arrays, maps, and rows. Nulls
   /// contribute zero. Replaces the accumulator when 'mix' is false; otherwise
   /// combines it as 31 * accumulator + valueHash. Requires 'hashes' to cover
@@ -99,9 +110,10 @@ class HiveHash {
   static uint32_t hashOne(typename TypeTraits<kind>::NativeType value);
 
   /// Folds the Hive hash of every selected row of 'values' into 'hashes',
-  /// treating nulls as hash 0. When 'mix' is false the per-row hash replaces
-  /// the accumulator (first column); otherwise it is combined via mergeHash.
-  template <TypeKind kind>
+  /// treating nulls as hash 0 and applying 'kZeroMode' to floating-point
+  /// values. When 'mix' is false the per-row hash replaces the accumulator
+  /// (first column); otherwise it is combined via mergeHash.
+  template <TypeKind kind, ZeroMode kZeroMode = ZeroMode::kPreserve>
   static void hashPrimitive(
       const DecodedVector& values,
       const SelectivityVector& rows,
@@ -135,6 +147,9 @@ class HiveHash {
 
   // Stores intermediate child hashes at each recursion level.
   std::vector<std::unique_ptr<std::vector<uint32_t>>>& hashesPool_;
+
+  // Controls signed-zero hashing at every nesting depth.
+  ZeroMode zeroMode_;
 };
 
 template <TypeKind kind>
@@ -206,12 +221,27 @@ inline uint32_t HiveHash::hashOne<TypeKind::UNKNOWN>(UnknownValue /*value*/) {
   VELOX_FAIL("Unknown values cannot be non-NULL");
 }
 
-template <TypeKind kind>
+template <TypeKind kind, HiveHash::ZeroMode kZeroMode>
 inline void HiveHash::hashPrimitive(
     const DecodedVector& values,
     const SelectivityVector& rows,
     bool mix,
     std::vector<uint32_t>& hashes) {
+  auto hashRow = [&](auto row) INLINE_LAMBDA -> uint32_t {
+    if (values.isNullAt(row)) {
+      return 0;
+    }
+    const auto value =
+        values.valueAt<typename TypeTraits<kind>::NativeType>(row);
+    if constexpr (
+        (kind == TypeKind::REAL || kind == TypeKind::DOUBLE) &&
+        kZeroMode == ZeroMode::kNormalize) {
+      if (value == 0) {
+        return 0;
+      }
+    }
+    return hashOne<kind>(value);
+  };
   if (rows.isAllSelected()) {
     // The compiler seems to be a little fickle with optimizations.
     // Although rows.applyToSelected should do roughly the same thing, doing
@@ -220,19 +250,11 @@ inline void HiveHash::hashPrimitive(
     // benchmarks.
     vector_size_t numRows = rows.size();
     for (auto i = 0; i < numRows; ++i) {
-      const uint32_t hash = values.isNullAt(i)
-          ? 0
-          : hashOne<kind>(
-                values.valueAt<typename TypeTraits<kind>::NativeType>(i));
-      mergeHash(mix, hash, hashes[i]);
+      mergeHash(mix, hashRow(i), hashes[i]);
     }
   } else {
     rows.applyToSelected([&](auto row) INLINE_LAMBDA {
-      const uint32_t hash = values.isNullAt(row)
-          ? 0
-          : hashOne<kind>(
-                values.valueAt<typename TypeTraits<kind>::NativeType>(row));
-      mergeHash(mix, hash, hashes[row]);
+      mergeHash(mix, hashRow(row), hashes[row]);
     });
   }
 }
