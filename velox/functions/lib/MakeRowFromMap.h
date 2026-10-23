@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#include <cstring>
+
 #include "velox/common/base/Exceptions.h"
 #include "velox/expression/EvalCtx.h"
 #include "velox/vector/BaseVector.h"
@@ -165,6 +167,9 @@ class MakeRowFromMap {
     createKeyToFieldIndexMap(options.keysToProject);
   }
 
+  /// Projects the keys to project of each map in `map` selected in `rows` into
+  /// the fields of a row. As in a vector function, only the rows selected in
+  /// `rows` are defined in the result.
   VectorPtr apply(
       const BaseVector& map,
       const SelectivityVector& rows,
@@ -204,7 +209,21 @@ class MakeRowFromMap {
       exec::EvalCtx* evalCtx) {
     exec::LocalDecodedVector decodedMap(evalCtx);
     decodedMap.get()->decode(vector, rows);
-    auto mapBase = decodedMap->base()->asUnchecked<MapVector>();
+    const auto encoding = decodedMap->base()->encoding();
+    if (encoding == VectorEncoding::Simple::MAP) {
+      return toRowVectorFromMap(vector, *decodedMap.get(), rows, evalCtx);
+    }
+    VELOX_FAIL("Unsupported encoding for a map: {}", encoding);
+  }
+
+  // Projects a map row by row: looks up each entry of each row in the keys to
+  // project, and copies the values found into the fields.
+  VectorPtr toRowVectorFromMap(
+      const BaseVector& vector,
+      DecodedVector& decodedMap,
+      const SelectivityVector& rows,
+      exec::EvalCtx* evalCtx) {
+    auto mapBase = decodedMap.base()->asUnchecked<MapVector>();
     exec::LocalDecodedVector decodedKeys(evalCtx);
     decodedKeys.get()->decode(*mapBase->mapKeys());
     exec::LocalDecodedVector decodedValues(evalCtx);
@@ -216,27 +235,11 @@ class MakeRowFromMap {
 
     std::vector<VectorPtr> children;
     children.reserve(keyToIndex_.size());
-    auto vectorPool = evalCtx ? evalCtx->vectorPool() : nullptr;
     for (size_t i = 0; i < keyToIndex_.size(); ++i) {
-      if (replaceNulls_) {
-        children.push_back(
-            MakeRowFromMapDefaults::createFlat(
-                valueType, outputSize, *mapBase->pool(), vectorPool));
-      } else {
-        children.push_back(
-            vectorPool
-                ? vectorPool->get(valueType, outputSize)
-                : BaseVector::create(valueType, outputSize, mapBase->pool()));
-        auto rawNulls = children.back()->mutableRawNulls();
-        bits::fillBits(rawNulls, 0, outputSize, bits::kNull);
-      }
+      children.push_back(
+          writableField(valueType, outputSize, mapBase->pool(), evalCtx));
     }
-    auto outputNulls =
-        (!replaceNulls_ && allowTopLevelNulls_ && decodedMap->mayHaveNulls())
-        ? allocateNulls(outputSize, mapBase->pool(), bits::kNotNull)
-        : nullptr;
-    auto* rawNulls =
-        outputNulls ? outputNulls->template asMutable<uint64_t>() : nullptr;
+
     std::vector<bool> visited(keyToIndex_.size());
     std::vector<std::vector<BaseVector::CopyRange>> copyRangesFromBase(
         keyToIndex_.size());
@@ -245,8 +248,8 @@ class MakeRowFromMap {
     }
     rows.applyToSelected([&](vector_size_t row) INLINE_LAMBDA {
       std::fill(visited.begin(), visited.end(), false);
-      if (!decodedMap->isNullAt(row)) {
-        auto decodedIndex = decodedMap->index(row);
+      if (!decodedMap.isNullAt(row)) {
+        auto decodedIndex = decodedMap.index(row);
         auto offset = offsets[decodedIndex];
         auto size = sizes[decodedIndex];
         for (auto i = offset; i < offset + size; ++i) {
@@ -281,20 +284,82 @@ class MakeRowFromMap {
                 {decodedValues->index(i), row, 1});
           }
         }
-      } else if (rawNulls) {
-        bits::setNull(rawNulls, row, true);
       }
     });
     for (size_t i = 0; i < children.size(); ++i) {
       children[i]->copyRanges(decodedValues->base(), copyRangesFromBase[i]);
     }
 
-    return std::make_shared<RowVector>(
+    return makeOutput(
         vector.pool(),
-        ROW(outputFieldNames_, valueType),
-        std::move(outputNulls),
+        valueType,
+        makeOutputNulls(decodedMap, rows, mapBase->pool()),
         outputSize,
         std::move(children));
+  }
+
+  // Returns a flat field to copy values into, holding default values, or
+  // nulls, in every row until then.
+  VectorPtr writableField(
+      const TypePtr& type,
+      vector_size_t size,
+      memory::MemoryPool* pool,
+      exec::EvalCtx* evalCtx) const {
+    if (replaceNulls_) {
+      return MakeRowFromMapDefaults::createFlat(
+          type, size, *pool, vectorPool(evalCtx));
+    }
+
+    auto* fieldPool = vectorPool(evalCtx);
+    auto field = fieldPool ? fieldPool->get(type, size)
+                           : BaseVector::create(type, size, pool);
+    bits::fillBits(field->mutableRawNulls(), 0, size, bits::kNull);
+    return field;
+  }
+
+  // Returns the nulls of the output: null rows for null maps when allowed, or
+  // none.
+  BufferPtr makeOutputNulls(
+      DecodedVector& decodedMap,
+      const SelectivityVector& rows,
+      memory::MemoryPool* pool) const {
+    if (replaceNulls_ || !allowTopLevelNulls_ || !decodedMap.mayHaveNulls()) {
+      return nullptr;
+    }
+
+    // Unwrapped maps: their nulls are the null rows.
+    if (decodedMap.isIdentityMapping()) {
+      return decodedMap.base()->nulls();
+    }
+
+    // Wrapped maps: copy the nulls of the rows, as decoded.
+    auto nulls = allocateNulls(rows.end(), pool);
+    std::memcpy(
+        nulls->asMutable<uint64_t>(),
+        decodedMap.nulls(&rows),
+        bits::nbytes(rows.end()));
+    return nulls;
+  }
+
+  // Returns the output row, with one field per key to project.
+  VectorPtr makeOutput(
+      memory::MemoryPool* pool,
+      const TypePtr& valueType,
+      BufferPtr nulls,
+      vector_size_t size,
+      std::vector<VectorPtr> children) const {
+    return std::make_shared<RowVector>(
+        pool,
+        ROW(outputFieldNames_, valueType),
+        std::move(nulls),
+        size,
+        std::move(children));
+  }
+
+  // Returns the vector pool of 'evalCtx', which recycles the vectors of the
+  // fields, if there is one.
+  static VectorPool* vectorPool(exec::EvalCtx* evalCtx) {
+    return evalCtx ? evalCtx->vectorPool() : nullptr;
   }
 
   void ensureValidFieldNames(const std::vector<std::string>& fieldNames) {

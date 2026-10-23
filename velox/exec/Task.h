@@ -47,6 +47,7 @@ class FixedPointLoop;
 struct FixedPointExecutionStats;
 struct FixedPointOptions;
 struct NestedFixedPoint;
+class PersistentState;
 
 /// Runs one plan fragment.  By default it compiles the fragment into a
 /// Driver/Operator pipeline and executes that.  A fragment containing a
@@ -97,7 +98,8 @@ class Task : public std::enable_shared_from_this<Task> {
   /// @param fixedPointOptions Coordinator-supplied hooks for a plan containing
   /// a FixedPointNode, or nullptr for none.  Ignored for any other plan.
   /// @param nested Set only by a FixedPointLoop on a sub-task it creates, to
-  /// name itself and the sub-task's place in the loop.  Callers leave it null.
+  /// give it the loop's state and name the sub-task's place in the loop.
+  /// Callers leave it null.
   static std::shared_ptr<Task> create(
       const std::string& taskId,
       core::PlanFragment planFragment,
@@ -199,13 +201,13 @@ class Task : public std::enable_shared_from_this<Task> {
     return consumerSupplier_;
   }
 
-  /// The fixed point whose schedule created this task as one of its
-  /// per-iteration sub-tasks, or nullptr when nothing did.  Set once at
-  /// construction from the 'nested' argument of create(), so a running task
-  /// cannot be re-pointed; the fixed-point state operators walk it outward to
-  /// find the loop that declares the entry they read.  It outlives this task.
-  FixedPointLoop* parentFixedPoint() const {
-    return parentFixedPoint_;
+  /// The persistent state that the fixed-point state operators of this task
+  /// read: the state of the fixed point that created this task as one of its
+  /// sub-tasks.  nullptr when none did, or once that loop is destroyed, which
+  /// can happen before this task is.  The operators read it when this task
+  /// creates them, in start() or the first next(), which only that loop calls.
+  std::shared_ptr<PersistentState> fixedPointState() const {
+    return fixedPointState_.lock();
   }
 
   /// The threading mode this task was created with.
@@ -962,7 +964,8 @@ class Task : public std::enable_shared_from_this<Task> {
       ConsumerSupplier consumerSupplier,
       int32_t memoryArbitrationPriority = 0,
       std::function<void(std::exception_ptr)> onError = nullptr,
-      FixedPointLoop* parentFixedPoint = nullptr);
+      std::weak_ptr<PersistentState> fixedPointState = {},
+      std::shared_ptr<memory::MemoryPool> fixedPointStatePool = nullptr);
 
   // Invoked to do post-create initialization.
   void init(std::optional<common::SpillDiskOptions>&& spillDiskOpts);
@@ -1445,8 +1448,13 @@ class Task : public std::enable_shared_from_this<Task> {
   // and query context it reaches through are still held.
   std::unique_ptr<FixedPointLoop> fixedPoint_;
 
-  // The fixed point whose schedule created this task, if any.  Outlives it.
-  FixedPointLoop* const parentFixedPoint_;
+  // Weak: the loop that created this task owns the state.
+  const std::weak_ptr<PersistentState> fixedPointState_;
+
+  // The pool of fixedPointState_.  Held so the vectors and hash tables this
+  // task's operators took from the state stay valid after the loop is
+  // destroyed.  Released in ~Task after the drivers.
+  std::shared_ptr<memory::MemoryPool> fixedPointStatePool_;
 
   // The function that is executed when the task encounters its first error,
   // that is, setError() is called for the first time.

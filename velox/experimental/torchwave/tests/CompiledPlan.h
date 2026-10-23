@@ -58,6 +58,13 @@ class CompiledPlan {
     /// Number of intra-kernel ordering barriers in this kernel.
     int32_t numBarriers{0};
 
+    /// Generated device code of the kernel's case, empty for a standalone.
+    std::string code;
+
+    /// True when the launch count is the broadcast of its size leaves rather
+    /// than the largest of them.
+    bool broadcastCount{false};
+
     /// Returns true if the normalized 'op' is one of this kernel's targets.
     bool has(std::string_view op) const;
   };

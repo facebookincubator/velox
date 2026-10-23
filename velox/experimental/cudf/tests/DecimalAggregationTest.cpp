@@ -48,6 +48,7 @@
 
 #include <cstdlib>
 #include <limits>
+#include <map>
 #include <optional>
 #include <type_traits>
 
@@ -1020,6 +1021,49 @@ TEST_F(CudfDecimalTest, decimalPartialSumVarbinaryToVeloxRoundTrip) {
   VELOX_CHECK_NOT_NULL(result);
   ASSERT_GT(result->size(), 0);
   ASSERT_EQ(result->childAt(0)->type()->kind(), TypeKind::VARBINARY);
+}
+
+// A low LIBCUDF_LARGE_STRINGS_THRESHOLD makes cuDF use 64-bit string offsets
+// for the partial sum state, which then has to be imported back into Velox as
+// VARBINARY. This is the path a very large number of groups takes.
+TEST_F(CudfDecimalTest, decimalPartialSumGroupbyLargeOffsetsToVelox) {
+  ScopedEnvVar enableLargeStrings("LIBCUDF_LARGE_STRINGS_ENABLED", "1");
+  ScopedEnvVar threshold("LIBCUDF_LARGE_STRINGS_THRESHOLD", "1");
+  auto stream = cudf::get_default_stream();
+  auto mr = cudf::get_current_device_resource_ref();
+
+  auto input = makeRowVector(
+      {"k", "d"},
+      {
+          makeFlatVector<int32_t>({1, 1, 2, 2, 2, 3}),
+          makeFlatVector<int64_t>(
+              {12345, -2500, 10000, 200, -300, 700}, DECIMAL(12, 2)),
+      });
+
+  auto plan = exec::test::PlanBuilder()
+                  .values({input})
+                  .partialAggregation({"k"}, {"sum(d) AS s"})
+                  .planNode();
+  auto partial =
+      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
+  ASSERT_EQ(partial->size(), 3);
+  ASSERT_EQ(partial->childAt(1)->type()->kind(), TypeKind::VARBINARY);
+
+  // Decode the Velox VARBINARY state and check the per-group sums and counts.
+  auto cudfTable = with_arrow::toCudfTable(partial, pool(), stream, mr);
+  auto sumAndCount =
+      deserializeDecimalSumState(cudfTable->view().column(1), 2, stream, mr);
+  auto keys = copyColumnData<int32_t>(cudfTable->view().column(0), stream);
+  auto sums = copyColumnData<__int128_t>(sumAndCount.sum->view(), stream);
+  auto counts = copyColumnData<int64_t>(sumAndCount.count->view(), stream);
+
+  std::map<int32_t, std::pair<__int128_t, int64_t>> actual;
+  for (size_t i = 0; i < keys.size(); ++i) {
+    actual[keys[i]] = {sums[i], counts[i]};
+  }
+  std::map<int32_t, std::pair<__int128_t, int64_t>> expected = {
+      {1, {9845, 2}}, {2, {9900, 3}}, {3, {700, 1}}};
+  EXPECT_EQ(actual, expected);
 }
 
 TEST_F(CudfDecimalTest, decimalSumPartialFinalEmptyInput) {

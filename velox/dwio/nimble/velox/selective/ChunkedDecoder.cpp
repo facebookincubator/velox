@@ -42,6 +42,10 @@ void ChunkedDecoder::ensureSharedDictionaryAlphabet() {
 }
 
 bool ChunkedDecoder::loadNextChunk(const ChunkBoundaryCallback& onChunkLoaded) {
+  // Free the previous chunk first so that it is not alive while the next chunk
+  // is decompressed.
+  encoding_.reset();
+  currentStringBuffers_.clear();
   auto ret = ensureInput(kChunkHeaderSize);
   NIMBLE_CHECK(ret, "Failed to read chunk header");
   const auto [length, compressionType] = readChunkHeader(inputData_);
@@ -72,7 +76,6 @@ bool ChunkedDecoder::loadNextChunk(const ChunkBoundaryCallback& onChunkLoaded) {
   }
   inputData_ += length;
   inputSize_ -= length;
-  currentStringBuffers_.clear();
   // Keep the decompressed buffer alive for the lifetime of the encoding, which
   // may reference it without copying.
   if (FOLLY_UNLIKELY(uncompressedBuffer != nullptr)) {
@@ -212,6 +215,35 @@ void ChunkedDecoder::nextBools(
     }
     decodeNullable(
         data, nullableValues_->asMutable<uint32_t>(), count, incomingNulls);
+  }
+}
+
+void ChunkedDecoder::nextNulls(
+    uint64_t* nulls,
+    vector_size_t count,
+    const uint64_t* incomingNulls) {
+  TestValue::adjust("facebook::nimble::ChunkedDecoder::nextNulls", this);
+  const auto numValues = incomingNulls == nullptr
+      ? count
+      : static_cast<vector_size_t>(
+            velox::bits::countNonNulls(incomingNulls, 0, count));
+  for (int64_t offset = 0; offset < numValues;) {
+    if (FOLLY_UNLIKELY(remainingValues_ == 0)) {
+      loadNextChunk();
+    }
+    const auto chunkValues = std::min(numValues - offset, remainingValues_);
+    encoding_->readNulls(
+        static_cast<uint32_t>(chunkValues), nulls, static_cast<int>(offset));
+    advancePosition(chunkValues);
+    offset += chunkValues;
+  }
+  if (incomingNulls != nullptr) {
+    velox::bits::scatterBits(
+        numValues,
+        count,
+        reinterpret_cast<char*>(nulls),
+        incomingNulls,
+        reinterpret_cast<char*>(nulls));
   }
 }
 

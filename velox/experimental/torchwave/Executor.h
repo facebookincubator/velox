@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <folly/synchronization/CallOnce.h>
 #include <torch/nativert/executor/GraphExecutorBase.h>
 #include <torch/nativert/executor/Weights.h>
 #include <deque>
@@ -988,6 +989,15 @@ class WaveGraphExecutor : public nativert::GraphExecutorBase {
   /// Returns 'frame' to the pool after clearing non-persistent values.
   void returnFrame(std::unique_ptr<nativert::ExecutionFrame> frame);
 
+  /// Clears 'frame's intermediates and outputs, leaving weights and constants,
+  /// and invalidates the launch caches that resolved against them. Call this
+  /// before refilling the user inputs for a second execution over the same
+  /// frame. Skipping it leaves the previous run's outputs in place, and an
+  /// execution that starts from such a frame skips every standalone op whose
+  /// outputs are already materialized (see nodeOutputsComputed) and reports the
+  /// previous run's results as if it had recomputed them.
+  void resetFrame(nativert::ExecutionFrame& frame);
+
   /// Returns a human-readable error string from the most recent execution.
   /// Checks thread-local debug info for non-zero error lines and maps each
   /// error back to the originating kernel op via the WaveGraph structure.
@@ -1051,6 +1061,12 @@ class WaveGraphExecutor : public nativert::GraphExecutorBase {
   std::unique_ptr<Pool<nativert::ExecutionFrame>> framePool_;
 
   uint64_t frameGeneration_{0};
+
+  /// The graph's producer-less values (model inputs, weights, constants),
+  /// collected once for the input_contiguous check so an execution does not
+  /// walk every value of the graph.
+  std::vector<const nativert::Value*> producerlessValues_;
+  folly::once_flag producerlessOnce_;
 
   int64_t numRefTensorsChecked_{0};
   int64_t numRefNodesChecked_{0};

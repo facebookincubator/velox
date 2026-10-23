@@ -32,24 +32,29 @@
 
 namespace facebook::velox::exec {
 
-class FixedPointLoop;
-
 /// The nesting protocol's internal state, set by an enclosing FixedPointLoop on
 /// a sub-task it creates.  A coordinator never fills this in: it describes
 /// where a sub-task sits inside a loop that is already running, which only that
 /// loop knows.
 struct NestedFixedPoint {
-  /// The loop that created the sub-task.  Its State* operators reach that
-  /// loop's persistent state by walking Task::parentFixedPoint() outward.
-  FixedPointLoop* parent{nullptr};
+  /// The persistent state of the loop that creates the sub-task, which its
+  /// State* operators read when the sub-task creates them (see
+  /// Task::fixedPointState()).  Weak: the loop owns the state, and the
+  /// sub-task can outlive the loop.
+  std::weak_ptr<PersistentState> state{};
+
+  /// The pool of 'state', which the sub-task holds, so the vectors and hash
+  /// tables its operators take from the state stay valid after the loop is
+  /// destroyed.  Null when no loop created the sub-task.
+  std::shared_ptr<memory::MemoryPool> statePool{};
 
   /// The workers the nested loop runs on, by destination: the enclosing
   /// loop's, or worker 0 alone for a loop nested in a verdict plan.
-  std::vector<std::string> workers;
+  std::vector<std::string> workers{};
 
   /// The enclosing loop's nesting.  The nested loop appends a step naming
   /// itself and 'iteration'.
-  std::vector<FixedPointOptions::NestingStep> nesting;
+  std::vector<FixedPointOptions::NestingStep> nesting{};
 
   /// The enclosing loop's iteration that runs the sub-task; 0 for an initial
   /// plan.
@@ -183,10 +188,8 @@ struct FixedPointExecutionStats {
 /// the sub-tasks it is running, waits for them, and fails.  The loop waits on
 /// its sub-tasks, its peers and the verdict, so it stops within one step of the
 /// work it was doing.  A serial loop runs to completion inside the caller's
-/// next().  A nested loop holds the enclosing loop's task, so the state it
-/// reads outlives a failed enclosing loop until the nested loop stops.
-/// requestPause() does not end the task, and the loop keeps running through a
-/// pause.
+/// next().  requestPause() does not end the task, and the loop keeps running
+/// through a pause.
 class FixedPointLoop {
  public:
   /// 'owner' is the fully constructed Task this loop runs the fragment for; it
@@ -199,10 +202,6 @@ class FixedPointLoop {
       const core::FixedPointNode& node,
       const FixedPointOptions* fixedPointOptions,
       const NestedFixedPoint* nested);
-
-  exec::Task* owner() const {
-    return owner_;
-  }
 
   /// Whether splits for 'planNodeId' go to this loop: the FixedPointNode, whose
   /// split names the workers, or a source in an initial plan.
@@ -250,13 +249,9 @@ class FixedPointLoop {
   /// any thread, during the run or after it ends, including after a failure.
   FixedPointExecutionStats executionStats() const;
 
-  /// This worker's persistent state, owned by this loop.  Its sub-tasks'
-  /// StateSource/StateHashJoin operators reach it through
-  /// Task::parentFixedPoint(). Created
-  /// at the start of run() and held for the rest of the task's lifetime (it is
-  /// released in the destructor, not eagerly at loop end, so a sub-task driver
-  /// still tearing down asynchronously cannot outlive the state pool it
-  /// references).  Null before run().
+  /// This worker's persistent state, created at the start of run(); null
+  /// before.  The StateSource/StateHashJoin operators of the sub-tasks the
+  /// loop creates read it when the sub-tasks create them.
   PersistentState* state() const {
     return state_.get();
   }
@@ -305,7 +300,7 @@ class FixedPointLoop {
   void routeSplits(const exec::TaskPtr& task, const core::PlanNodeId& sourceId);
 
   // Nesting state for a sub-task this loop creates in 'iteration' (0 for an
-  // initial plan), naming this loop as the parent.  A loop nested in the
+  // initial plan), with this loop's state and its pool.  A loop nested in the
   // sub-task runs on 'workers'.
   NestedFixedPoint subTaskNesting(
       int32_t iteration,
@@ -393,14 +388,9 @@ class FixedPointLoop {
   // The application's hooks (see FixedPointOptions).
   FixedPointOptions options_;
 
-  // The nesting state an enclosing loop handed down, default-constructed when a
-  // coordinator created this task directly.
+  // The nesting state an enclosing loop handed down, default-constructed, with
+  // no state pool, when a coordinator created this task directly.
   NestedFixedPoint nested_;
-
-  // The task of the enclosing loop, for a nested loop.  Holding it keeps the
-  // enclosing loop and the state this loop's sub-tasks read alive after the
-  // enclosing loop fails and unwinds, until this loop stops.
-  std::shared_ptr<exec::Task> enclosingTask_;
 
   // This worker's execution mode (from construction).  Every sub-task inherits
   // it: serial drains on the calling thread, parallel runs on the executor.  A
@@ -471,8 +461,8 @@ class FixedPointLoop {
   // to.  Guarded by splitsMutex_, as are nodeSplits_ and splitConsumers_.
   folly::F14FastSet<core::PlanNodeId> splitsComplete_;
 
-  // Stable pool for persistent state, independent of sub-task pools.
-  std::shared_ptr<memory::MemoryPool> statePool_;
+  // This worker's persistent state.  Its pool is a leaf of the owning task's
+  // pool, which every sub-task holds.
   std::shared_ptr<PersistentState> state_;
 
   int64_t subTaskCounter_{0};
