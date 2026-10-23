@@ -392,6 +392,86 @@ __device__ void cumsum(
   }
 }
 
+// Row-wise inclusive scan of a 2-D input along dim 1. A block takes whole
+// rows, rows striding over the op's blocks, and carries a row's running total
+// across block-wide iterations in 'counter', as cumsum does. With kSumOnly
+// only each row's total is written, to output[row].
+template <int32_t kBlockSize, typename TIn, typename TOut, bool kSumOnly>
+__device__ void scanRows(
+    Tensor* input,
+    Tensor* output,
+    void* temp,
+    uint32_t& size,
+    uint32_t& rounded,
+    TOut& counter,
+    BlockInfo& block) {
+  if (threadIdx.x == 0) {
+    size = input->dims[1];
+    rounded = roundUpPwr2(size, kBlockSize);
+  }
+  __syncthreads();
+  const int64_t numRows = input->dims[0];
+  TIn* in = storage<TIn>(input);
+  TOut* out = storage<TOut>(output);
+  for (int64_t row = block.blockInOp; row < numRows;
+       row += block.numBlocksInOp) {
+    if (threadIdx.x == 0) {
+      counter = 0;
+    }
+    __syncthreads();
+    for (uint32_t idx = threadIdx.x; idx < rounded; idx += blockDim.x) {
+      TOut val = (idx < size)
+          ? static_cast<TOut>(
+                in[row * input->strides[0] + idx * input->strides[1]])
+          : TOut(0);
+      if (threadIdx.x == 0) {
+        val += counter;
+      }
+      TOut sum = facebook::velox::wave::inclusiveSum<TOut, kBlockSize>(
+          val, nullptr, static_cast<TOut*>(temp));
+      if (!kSumOnly && idx < size) {
+        out[row * output->strides[0] + idx * output->strides[1]] = sum;
+      }
+      if (threadIdx.x == blockDim.x - 1) {
+        counter = sum;
+      }
+      __syncthreads();
+    }
+    if (kSumOnly && threadIdx.x == 0) {
+      out[row * output->strides[0]] = counter;
+    }
+    __syncthreads();
+  }
+}
+
+// cumsum(input, dim=1) of a 2-D input.
+template <int32_t kBlockSize, typename TIn, typename TOut>
+__device__ void cumsum_rows(
+    Tensor* input,
+    Tensor* output,
+    void* temp,
+    uint32_t& size,
+    uint32_t& rounded,
+    TOut& counter,
+    BlockInfo& block) {
+  scanRows<kBlockSize, TIn, TOut, false>(
+      input, output, temp, size, rounded, counter, block);
+}
+
+// sum(input, dim=[1]) of a 2-D input.
+template <int32_t kBlockSize, typename TIn, typename TOut>
+__device__ void sum_rows(
+    Tensor* input,
+    Tensor* output,
+    void* temp,
+    uint32_t& size,
+    uint32_t& rounded,
+    TOut& counter,
+    BlockInfo& block) {
+  scanRows<kBlockSize, TIn, TOut, true>(
+      input, output, temp, size, rounded, counter, block);
+}
+
 // Three-stage cumsum, stage 1: compute per-block sums.
 // TIn is the input element type, TOut is the accumulation type.
 template <int32_t kBlockSize, typename TIn, typename TOut>
