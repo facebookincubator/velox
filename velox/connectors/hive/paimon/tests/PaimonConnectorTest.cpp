@@ -26,7 +26,6 @@
 #include "velox/connectors/ConnectorRegistry.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/paimon/PaimonConnectorSplit.h"
-#include "velox/connectors/hive/paimon/PaimonDataSource.h"
 #include "velox/connectors/hive/paimon/PaimonTableHandle.h"
 #include "velox/dwio/common/tests/utils/DataFiles.h"
 #include "velox/dwio/orc/reader/OrcReader.h"
@@ -991,6 +990,7 @@ TEST_F(PaimonConnectorTest, dynamicFilterAndEmptyFiles) {
     EXPECT_EQ(*end, nullptr);
     EXPECT_EQ(source->getCompletedRows(), 6);
     const auto stats = source->getRuntimeStats();
+    EXPECT_EQ(stats.at("processedSplits").sum, 2);
     EXPECT_EQ(
         source->getRuntimeStats().at("processedSplits").sum,
         stats.at("processedSplits").sum);
@@ -1114,26 +1114,12 @@ TEST_F(PaimonConnectorTest, queryValidationBeforeFileOpen) {
   const auto rowType = ROW({{"id", BIGINT()}, {"p", VARCHAR()}});
   const auto table = makePaimonTableHandle(rowType, {}, nullptr, {"p"});
   const auto connector = ConnectorRegistry::tryGet(kPaimonConnectorId);
-  VELOX_ASSERT_USER_THROW(
-      connector->createDataSource(
-          ROW({{"id", INTEGER()}}),
-          table,
-          makePaimonColumnHandles(ROW({{"id", BIGINT()}})),
-          context.get()),
-      "File scan output type does not match column handle: 'id'");
   const auto idColumns = makePaimonColumnHandles(ROW({{"id", BIGINT()}}));
-  VELOX_ASSERT_USER_THROW(
+  VELOX_ASSERT_THROW(
       connector->createDataSource(
           ROW({{"missing", BIGINT()}}), table, idColumns, context.get()),
       "ColumnHandle is missing for output column: missing");
-  VELOX_ASSERT_USER_THROW(
-      connector->createDataSource(
-          ROW({{"id", BIGINT()}, {"id", BIGINT()}}),
-          table,
-          idColumns,
-          context.get()),
-      "Duplicate file scan output column 'id'");
-  VELOX_ASSERT_USER_THROW(
+  VELOX_ASSERT_THROW(
       connector->createDataSource(
           ROW({{"id", BIGINT()}}),
           table,
@@ -1208,12 +1194,6 @@ TEST_F(PaimonConnectorTest, queryValidationBeforeFileOpen) {
     SCOPED_TRACE(condition);
     const auto filteredTable = makePaimonTableHandle(
         rowType, {}, parseExpr(condition, rowType), {"p"});
-    if (std::string_view(condition) == "p is null") {
-      VELOX_ASSERT_USER_THROW(
-          connector->createDataSource(
-              ROW({{"id", BIGINT()}}), filteredTable, idColumns, context.get()),
-          "File scan filter-only column 'p' is missing from table data columns and column handles");
-    }
     const ColumnHandleMap columns{
         {"id", idColumns.at("id")},
         {"p",
@@ -1417,16 +1397,6 @@ TEST_F(PaimonConnectorTest, requiresPaimonTableHandle) {
   VELOX_ASSERT_USER_THROW(
       connector->createDataSource(rowType, nullptr, columns, context.get()),
       "Missing Paimon table handle");
-  VELOX_ASSERT_USER_THROW(
-      PaimonDataSource(
-          rowType,
-          nullptr,
-          columns,
-          nullptr,
-          nullptr,
-          context.get(),
-          std::make_shared<PaimonConfig>(config)),
-      "Missing file table handle");
   const auto tableHandle = std::make_shared<HiveTableHandle>(
       kPaimonConnectorId,
       "paimon_table",

@@ -34,27 +34,6 @@ namespace facebook::velox::connector::hive {
 
 namespace {
 
-void validateColumnHandle(const FileColumnHandle& handle) {
-  VELOX_USER_CHECK_NOT_NULL(
-      handle.schemaType(),
-      "Missing file column schema type: '{}'",
-      handle.name());
-  VELOX_USER_CHECK_NOT_NULL(
-      handle.dataType(),
-      "Missing file column output type: '{}'",
-      handle.name());
-  for (const auto& subfield : handle.requiredSubfields()) {
-    VELOX_USER_CHECK(
-        subfield.valid(),
-        "Invalid required subfield on file column '{}'",
-        handle.name());
-    VELOX_USER_CHECK_EQ(
-        getColumnName(subfield),
-        handle.name(),
-        "Required subfield does not match column name");
-  }
-}
-
 void addOperationStatsToRuntimeStats(
     io::IoStatistics& ioStats,
     std::unordered_map<std::string, RuntimeMetric>& res) {
@@ -111,30 +90,25 @@ FileDataSource::FileDataSource(
     const std::shared_ptr<FileConfig>& fileConfig)
     : fileHandleFactory_(fileHandleFactory),
       ioExecutor_(ioExecutor),
-      connectorQueryCtx_(checkedNotNull(connectorQueryCtx)),
-      fileConfig_(checkedNotNull(fileConfig)),
-      pool_(connectorQueryCtx_->memoryPool()),
+      connectorQueryCtx_(connectorQueryCtx),
+      fileConfig_(fileConfig),
+      pool_(connectorQueryCtx->memoryPool()),
       fileScanState_(std::make_unique<FileScanState>()),
       outputType_(outputType),
-      expressionEvaluator_(connectorQueryCtx_->expressionEvaluator()) {
-  VELOX_USER_CHECK_NOT_NULL(outputType_, "Missing file scan output type");
-  VELOX_USER_CHECK_NOT_NULL(tableHandle, "Missing file table handle");
+      expressionEvaluator_(connectorQueryCtx->expressionEvaluator()) {
   tableHandle_ = checkedPointerCast<const FileTableHandle>(tableHandle);
 
   folly::F14FastMap<std::string_view, const FileColumnHandle*> columnHandles;
   // Column handles keyed on the table column name.
-  for (const auto& [alias, columnHandle] : assignments) {
-    VELOX_USER_CHECK_NOT_NULL(
-        columnHandle, "Missing file column handle for assignment '{}'", alias);
+  for (const auto& [_, columnHandle] : assignments) {
     auto handle = checkedPointerCast<const FileColumnHandle>(columnHandle);
-    validateColumnHandle(*handle);
     const auto [it, unique] =
         columnHandles.emplace(handle->name(), handle.get());
     if (!unique) {
       // This should not happen normally, but there are cases where we get
       // duplicate assignments for partitioning columns.
       checkColumnHandleConsistent(*handle, *it->second);
-      VELOX_USER_CHECK_EQ(
+      VELOX_CHECK_EQ(
           handle->columnType(),
           FileColumnHandle::ColumnType::kPartitionKey,
           "Cannot map from same table column to different outputs in table scan; a project node should be used instead: {}",
@@ -144,8 +118,6 @@ FileDataSource::FileDataSource(
     processColumnHandle(handle);
   }
   for (auto& handle : tableHandle_->filterColumnHandles()) {
-    VELOX_USER_CHECK_NOT_NULL(handle, "Missing file filter column handle");
-    validateColumnHandle(*handle);
     auto it = columnHandles.find(handle->name());
     if (it != columnHandles.end()) {
       checkColumnHandleConsistent(*handle, *it->second);
@@ -156,15 +128,9 @@ FileDataSource::FileDataSource(
 
   std::vector<std::string> readColumnNames;
   auto readColumnTypes = outputType_->children();
-  folly::F14FastSet<std::string_view> outputNames;
-  for (column_index_t i = 0; i < outputType_->size(); ++i) {
-    const auto& outputName = outputType_->nameOf(i);
-    VELOX_USER_CHECK(
-        outputNames.insert(outputName).second,
-        "Duplicate file scan output column '{}'",
-        outputName);
+  for (const auto& outputName : outputType_->names()) {
     auto it = assignments.find(outputName);
-    VELOX_USER_CHECK(
+    VELOX_CHECK(
         it != assignments.end(),
         "ColumnHandle is missing for output column: {}",
         outputName);
@@ -172,6 +138,10 @@ FileDataSource::FileDataSource(
     auto* handle = static_cast<const FileColumnHandle*>(it->second.get());
     readColumnNames.push_back(handle->name());
     for (auto& subfield : handle->requiredSubfields()) {
+      VELOX_USER_CHECK_EQ(
+          getColumnName(subfield),
+          handle->name(),
+          "Required subfield does not match column name");
       subfields_[handle->name()].push_back(&subfield);
     }
     columnPostProcessors_.push_back(handle->postProcessor());
@@ -185,8 +155,6 @@ FileDataSource::FileDataSource(
   }
 
   for (const auto& [k, v] : tableHandle_->subfieldFilters()) {
-    VELOX_USER_CHECK(k.valid(), "Invalid file scan filter path");
-    VELOX_USER_CHECK_NOT_NULL(v, "Missing file scan subfield filter");
     fileScanState_->filters.emplace(k.clone(), v);
   }
   double sampleRate = tableHandle_->sampleRate();
@@ -249,17 +217,6 @@ FileDataSource::FileDataSource(
 
   readerOutputType_ =
       ROW(std::move(readColumnNames), std::move(readColumnTypes));
-  for (const auto& [subfield, _] : fileScanState_->filters) {
-    const auto& name = getColumnName(subfield);
-    if (!readerOutputType_->containsChild(name) &&
-        !partitionKeys_.count(name) && !infoColumns_.count(name)) {
-      VELOX_USER_CHECK(
-          tableHandle_->dataColumns() &&
-              tableHandle_->dataColumns()->containsChild(name),
-          "File scan filter-only column '{}' is missing from table data columns and column handles",
-          name);
-    }
-  }
   fileScanState_->scanSpec = makeScanSpec(
       readerOutputType_,
       subfields_,
@@ -277,7 +234,7 @@ FileDataSource::FileDataSource(
         *fileScanState_->scanSpec, *remainingFilter, expressionEvaluator_);
   }
 
-  // Validate output types and configure extraction columns.
+  // Detect extraction columns and reconfigure the ScanSpec if needed.
   bool hasExtractions = false;
   readColumnTypes = readerOutputType_->children();
   for (int outputIdx = 0; outputIdx < outputType->size(); ++outputIdx) {
@@ -287,15 +244,6 @@ FileDataSource::FileDataSource(
       continue;
     }
     auto* handle = static_cast<const FileColumnHandle*>(it->second.get());
-    const auto* fieldSpec = fileScanState_->scanSpec->childByName(handle->name());
-    const bool readMapAsStruct = handle->extractions().empty() &&
-        handle->dataType()->isMap() && fieldSpec &&
-        fieldSpec->isFlatMapAsStruct();
-    VELOX_USER_CHECK(
-        outputType->childAt(outputIdx)->equivalent(*handle->dataType()) ||
-            readMapAsStruct,
-        "File scan output type does not match column handle: '{}'",
-        outputName);
     if (!handle->extractions().empty()) {
       // Column has extraction chains.  Read with schemaType from file, then
       // apply extraction post-read.  Extractions and requiredSubfields are

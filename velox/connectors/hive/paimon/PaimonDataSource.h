@@ -41,7 +41,6 @@ class PaimonDataSource : public FileDataSource {
 
   void addSplit(std::shared_ptr<ConnectorSplit> split) override;
 
-  /// Takes over a prepared, unread split from the same scan while idle.
   void setFromDataSource(std::unique_ptr<DataSource> sourceUnique) override;
 
  protected:
