@@ -337,13 +337,16 @@ class FixedPointTest : public exec::test::HiveConnectorTestBase {
   }
 
   // Creates the task 'node' runs as, named after 'label'.  'options' defaults
-  // to the in-process coordinator hooks.
+  // to the in-process coordinator hooks, and 'executor', the query executor, to
+  // cpuExecutor_.
   exec::TaskPtr makeTask(
       const core::PlanNodePtr& node,
       exec::Task::ExecutionMode mode,
       const std::string& label,
-      const FixedPointOptions* options = nullptr) {
-    auto queryCtx = core::QueryCtx::create(cpuExecutor_.get());
+      const FixedPointOptions* options = nullptr,
+      folly::Executor* executor = nullptr) {
+    auto queryCtx = core::QueryCtx::create(
+        executor != nullptr ? executor : cpuExecutor_.get());
     return exec::Task::create(
         fmt::format("local://fixedpoint-{}-{}", label, queryCtx->queryId()),
         core::PlanFragment{node},
@@ -362,6 +365,24 @@ class FixedPointTest : public exec::test::HiveConnectorTestBase {
         /*onError=*/nullptr,
         options != nullptr ? options : &localOptions());
   }
+
+  // Wraps an executor and hands each function added to it, with the wrapped
+  // executor, to a callback, which decides how to run it.
+  class InterceptingExecutor : public folly::Executor {
+   public:
+    InterceptingExecutor(
+        folly::Executor* executor,
+        std::function<void(folly::Func, folly::Executor&)> onAdd)
+        : executor_(executor), onAdd_(std::move(onAdd)) {}
+
+    void add(folly::Func func) override {
+      onAdd_(std::move(func), *executor_);
+    }
+
+   private:
+    folly::Executor* const executor_;
+    const std::function<void(folly::Func, folly::Executor&)> onAdd_;
+  };
 
   // Starts a task running 'plan', a producer whose partitioned output a fixed
   // point's initial plan reads through an Exchange.
@@ -3465,6 +3486,18 @@ void waitFor(folly::Baton<>& baton) {
   }
 }
 
+// Aborts 'task', which does nothing if it has already ended, and expects its
+// loop to end without succeeding and the task to be deleted once released.
+void abortAndExpectReleased(exec::TaskPtr task) {
+  task->requestAbort().wait();
+  EXPECT_TRUE(
+      task->fixedPoint()->finishedFuture().wait(std::chrono::seconds(10)));
+  EXPECT_FALSE(task->fixedPoint()->succeeded());
+  auto deleted = task->taskDeletionFuture();
+  task.reset();
+  EXPECT_TRUE(std::move(deleted).wait(std::chrono::seconds(10)));
+}
+
 // Holds the calling driver on its thread until 'owner' stops running or a
 // second passes, and records whether 'owner' stopped first.
 void holdUntilStopped(exec::Task& owner, HeldDriver& held) {
@@ -3478,23 +3511,12 @@ void holdUntilStopped(exec::Task& owner, HeldDriver& held) {
 // from it, so the task starts the loop after its drivers. The loop schedules
 // itself on the orchestration executor, which counts what it runs.
 DEBUG_ONLY_TEST_F(FixedPointTest, loopStartsAfterDrivers) {
-  class CountingExecutor : public folly::Executor {
-   public:
-    explicit CountingExecutor(folly::Executor* executor)
-        : executor_(executor) {}
-
-    void add(folly::Func func) override {
-      ++count;
-      executor_->add(std::move(func));
-    }
-
-    std::atomic_int32_t count{0};
-
-   private:
-    folly::Executor* const executor_;
-  };
-
-  CountingExecutor executor(orchestrationExecutor());
+  std::atomic_int32_t count{0};
+  InterceptingExecutor executor(
+      orchestrationExecutor(), [&](folly::Func func, folly::Executor& wrapped) {
+        ++count;
+        wrapped.add(std::move(func));
+      });
   FixedPointOptions options = localOptions();
   options.orchestrationExecutor = &executor;
 
@@ -3503,13 +3525,72 @@ DEBUG_ONLY_TEST_F(FixedPointTest, loopStartsAfterDrivers) {
       "facebook::velox::exec::Task::createAndStartDrivers",
       std::function<void(exec::Task*)>([&](exec::Task* task) {
         if (task->fixedPoint() != nullptr) {
-          countAtDrivers = executor.count.load();
+          countAtDrivers = count.load();
         }
       }));
   AssertQueryBuilder(countingNode())
       .fixedPointOptions(&options)
       .copyResults(pool());
   EXPECT_EQ(countAtDrivers, 0);
+}
+
+// A task that ends while its start runs abandons the loop, which resolves its
+// finishedFuture().  A driver of the FixedPointNode leaf can be waiting on that
+// future, holding the task that owns the loop.  The task ends when it is
+// aborted while it starts its drivers, and fails when an enqueue throws after a
+// driver blocked on the loop.
+DEBUG_ONLY_TEST_F(FixedPointTest, unstartedLoopIsAbandoned) {
+  {
+    SCOPED_TRACE("Aborted during start");
+    SCOPED_TESTVALUE_SET(
+        "facebook::velox::exec::Task::createAndStartDrivers",
+        std::function<void(exec::Task*)>(
+            [](exec::Task* startingTask) { startingTask->requestAbort(); }));
+    auto task = makeTask(
+        countingNode(),
+        exec::Task::ExecutionMode::kParallel,
+        "abort-during-start");
+    task->start(/*maxDrivers=*/1);
+    EXPECT_TRUE(task->fixedPoint()->finishedFuture().isReady());
+    abortAndExpectReleased(std::move(task));
+  }
+
+  {
+    SCOPED_TRACE("Enqueue failed after a driver blocked on the loop");
+    // Runs the first driver and fails to enqueue the second.
+    std::atomic_int32_t numAdded{0};
+    folly::Baton<> firstRan;
+    InterceptingExecutor executor(
+        cpuExecutor_.get(), [&](folly::Func func, folly::Executor& wrapped) {
+          const int32_t index = numAdded++;
+          if (index == 1) {
+            VELOX_FAIL("Injected enqueue failure");
+          }
+          if (index == 0) {
+            wrapped.add([&firstRan, run = std::move(func)]() mutable {
+              run();
+              firstRan.post();
+            });
+            return;
+          }
+          wrapped.add(std::move(func));
+        });
+    // Fails the task only once the first driver has blocked on the loop.
+    SCOPED_TESTVALUE_SET(
+        "facebook::velox::exec::Task::setError",
+        std::function<void(exec::Task*)>(
+            [&](exec::Task*) { waitFor(firstRan); }));
+    auto task = makeTask(
+        countingNode(),
+        exec::Task::ExecutionMode::kParallel,
+        "failed-enqueue",
+        /*options=*/nullptr,
+        &executor);
+    VELOX_ASSERT_THROW(
+        task->start(/*maxDrivers=*/2), "Injected enqueue failure");
+    EXPECT_TRUE(task->fixedPoint()->finishedFuture().isReady());
+    abortAndExpectReleased(std::move(task));
+  }
 }
 
 // A failed sub-task resolves its completion future while its other drivers can
@@ -3759,9 +3840,10 @@ DEBUG_ONLY_TEST_F(FixedPointTest, subTaskDriverSuspendsInArbitration) {
           "fixedpoint.body", "fixedpoint.convergence", "fixedpoint.state"));
 }
 
-// Aborting a task stops its loop wherever it waits, and the loop releases the
-// task: while it waits for its workers, and while it waits on an iteration's
-// sub-tasks.
+// Aborting a task stops its loop, or abandons a loop that has not started, and
+// the loop releases the task: before start(), before a serial next(), while
+// start() schedules the loop, while the loop waits for its workers, and while
+// it waits on an iteration's sub-tasks.
 TEST_F(FixedPointTest, abortReleasesTask) {
   auto schema = ROW({"key", "val"}, BIGINT());
   auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
@@ -3783,20 +3865,57 @@ TEST_F(FixedPointTest, abortReleasesTask) {
               /*outputStateEntry=*/"values")
           .planNode();
 
-  auto abortAndExpectReleased = [](exec::TaskPtr task) {
-    std::weak_ptr<exec::Task> released = task;
-    task->requestAbort().wait();
-    task.reset();
-    const auto deadline =
-        std::chrono::steady_clock::now() + std::chrono::seconds(10);
-    while (!released.expired() && std::chrono::steady_clock::now() < deadline) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    }
-    ASSERT_TRUE(released.expired());
-  };
-
-  // The FixedPointSplit never arrives.
   {
+    SCOPED_TRACE("Before start");
+    auto task = makeTask(
+        countingNode(),
+        exec::Task::ExecutionMode::kParallel,
+        "abort-before-start");
+    task->requestAbort().wait();
+    // The loop is abandoned, so start() does not run it.
+    task->start(/*maxDrivers=*/1);
+    abortAndExpectReleased(std::move(task));
+  }
+
+  {
+    SCOPED_TRACE("Serial, before next()");
+    auto task = makeTask(
+        countingNode(),
+        exec::Task::ExecutionMode::kSerial,
+        "abort-before-next");
+    task->requestAbort().wait();
+    VELOX_ASSERT_THROW(
+        task->next(), "The fixed point's task ended before the loop ran");
+    abortAndExpectReleased(std::move(task));
+  }
+
+  {
+    SCOPED_TRACE("While start() schedules the loop");
+    // Aborts 'abortedTask' when the loop schedules its run.
+    std::atomic<exec::Task*> abortedTask{nullptr};
+    InterceptingExecutor executor(
+        orchestrationExecutor(),
+        [&](folly::Func func, folly::Executor& wrapped) {
+          if (auto* task = abortedTask.exchange(nullptr)) {
+            task->requestAbort();
+          }
+          wrapped.add(std::move(func));
+        });
+    FixedPointOptions options = localOptions();
+    options.orchestrationExecutor = &executor;
+    auto task = makeTask(
+        countingNode(),
+        exec::Task::ExecutionMode::kParallel,
+        "abort-while-starting",
+        &options);
+    abortedTask = task.get();
+    task->start(/*maxDrivers=*/1);
+    EXPECT_EQ(task->state(), exec::TaskState::kAborted);
+    abortAndExpectReleased(std::move(task));
+  }
+
+  {
+    SCOPED_TRACE("The FixedPointSplit never arrives");
     auto task =
         makeTask(node, exec::Task::ExecutionMode::kParallel, "no-peers");
     task->start(/*maxDrivers=*/1);
@@ -3804,8 +3923,9 @@ TEST_F(FixedPointTest, abortReleasesTask) {
     abortAndExpectReleased(std::move(task));
   }
 
-  // The second peer never starts, so the iteration's sub-tasks wait for it.
   {
+    SCOPED_TRACE("The second peer never starts");
+    // The iteration's sub-tasks wait for the missing peer.
     auto task =
         makeTask(node, exec::Task::ExecutionMode::kParallel, "missing-peer");
     task->start(/*maxDrivers=*/1);

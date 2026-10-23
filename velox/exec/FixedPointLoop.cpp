@@ -391,18 +391,21 @@ void FixedPointLoop::noMoreSplits(const core::PlanNodeId& planNodeId) {
 }
 
 void FixedPointLoop::runSerially() {
-  if (phase_ == Phase::kFailed) {
+  const Phase phase = leaveCreated(Phase::kStarted);
+  if (phase == Phase::kFailed) {
     VELOX_FAIL("The fixed point failed on an earlier call and cannot resume");
   }
+  if (phase == Phase::kAbandoned) {
+    VELOX_FAIL("The fixed point's task ended before the loop ran");
+  }
   VELOX_CHECK(
-      phase_ == Phase::kCreated,
+      phase == Phase::kCreated,
       "runSerially() cannot run a fixed point that has already been driven");
   try {
     folly::coro::blocking_wait(run());
   } catch (...) {
     // A throw part-way through leaves the state half-written.
-    phase_ = Phase::kFailed;
-    finished_.setValue();
+    finish(Phase::kFailed);
     throw;
   }
 }
@@ -411,28 +414,50 @@ void FixedPointLoop::start(
     uint32_t maxDrivers,
     std::function<void(std::exception_ptr)> onError) {
   // Task::start() already rejected a serial task before delegating here.
+  // The owning task keeps this loop alive for its whole run.  Taken before the
+  // loop leaves kCreated: from then on only the run ends the loop, so nothing
+  // may throw before it is scheduled.
+  auto ownerHandle = owner_->shared_from_this();
+  const Phase phase = leaveCreated(Phase::kStarted);
+  if (phase == Phase::kAbandoned) {
+    return;
+  }
+  VELOX_USER_CHECK(
+      phase == Phase::kCreated,
+      "start() cannot run a fixed point that has already been driven");
   maxDrivers_ = maxDrivers;
   // Run the loop asynchronously on the orchestration executor so start()
   // returns immediately (Task::start's contract).  run() is the same coroutine
   // runSerially() waits on; here it suspends while its sub-tasks run on the
   // query executor.
-  VELOX_USER_CHECK(
-      phase_ == Phase::kCreated,
-      "start() cannot run a fixed point that has already been driven");
-  // The owning task keeps this loop alive for its whole run.
-  auto ownerHandle = owner_->shared_from_this();
   folly::coro::co_withExecutor(
       folly::getKeepAliveToken(options_.orchestrationExecutor), run())
       .start([this, ownerHandle, onError = std::move(onError)](
                  folly::Try<void>&& result) {
         if (result.hasException()) {
-          phase_ = Phase::kFailed;
           // Fail the task before waking its FixedPointNode leaf, so the task
           // reports the loop's error.
           onError(result.exception().to_exception_ptr());
-          finished_.setValue();
+          finish(Phase::kFailed);
         }
       });
+}
+
+void FixedPointLoop::abandon() {
+  if (leaveCreated(Phase::kAbandoned) == Phase::kCreated) {
+    finish(Phase::kAbandoned);
+  }
+}
+
+FixedPointLoop::Phase FixedPointLoop::leaveCreated(Phase next) {
+  Phase phase = Phase::kCreated;
+  phase_.compare_exchange_strong(phase, next);
+  return phase;
+}
+
+void FixedPointLoop::finish(Phase terminal) {
+  phase_ = terminal;
+  finished_.setValue();
 }
 
 folly::coro::Task<void> FixedPointLoop::run() {
@@ -505,7 +530,7 @@ folly::coro::Task<void> FixedPointLoop::awaitWorkers() {
 
 folly::coro::Task<void> FixedPointLoop::initialize() {
   VELOX_CHECK(
-      phase_ == Phase::kCreated,
+      phase_ == Phase::kStarted,
       "initialize() must run once, before any other phase");
   folly::stop_watch<std::chrono::nanoseconds> timer;
 
@@ -538,9 +563,7 @@ folly::coro::Task<void> FixedPointLoop::finalize() {
   // owning task's pipeline reads (output shaping such as a recursive CTE's
   // UNION ALL is the plan's responsibility, e.g. accumulating into an
   // append-mode output entry).
-  phase_ = Phase::kFinalized;
-  succeeded_ = true;
-  finished_.setValue();
+  finish(Phase::kFinalized);
   co_return;
 
   // The state's pool is not released here.  A sub-task can still be tearing

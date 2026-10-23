@@ -229,6 +229,14 @@ class FixedPointLoop {
       uint32_t maxDrivers,
       std::function<void(std::exception_ptr)> onError);
 
+  /// Abandons a loop that has not started and resolves finishedFuture(), which
+  /// a driver of the owning task's FixedPointNode leaf or the application can
+  /// be waiting on; succeeded() stays false.  Called when the owning task ends,
+  /// which it can do before start() or runSerially() runs the loop.  The loop
+  /// then never runs: start() returns at once and runSerially() throws.  Does
+  /// nothing to a loop that has started.
+  void abandon();
+
   /// Resolves when the loop has finished, successfully or not.
   ContinueFuture finishedFuture() {
     return finished_.getSemiFuture();
@@ -237,7 +245,7 @@ class FixedPointLoop {
   /// True once the loop has finished successfully, so the output state entry
   /// holds its final contents.
   bool succeeded() const {
-    return succeeded_;
+    return phase_ == Phase::kFinalized;
   }
 
   /// Number of iterations the loop ran (converged early or hit maxIterations).
@@ -474,15 +482,17 @@ class FixedPointLoop {
 
   // Resolved when the loop finishes, successfully or not.
   folly::SharedPromise<folly::Unit> finished_;
-  std::atomic_bool succeeded_{false};
 
-  // Where the loop is in the phase sequence.  run() checks each transition,
+  // Where the loop is in its lifecycle.  run() checks each transition,
   // because getting the order wrong is silent -- initialize() twice re-seeds
   // the state mid-run, and runIteration() first reads state that was never
-  // created.
+  // created.  start(), runSerially() and abandon() race to leave kCreated
+  // (leaveCreated()), so exactly one of them runs or abandons the loop.
   enum class Phase {
-    // Nothing run yet.  runSerially() and start() run the whole loop from here.
+    // Nothing run yet.
     kCreated,
+    // start() or runSerially() took the loop; initialize() runs next.
+    kStarted,
     // initialize() done; runIteration(), converged() or finalize() may follow.
     kInitialized,
     // At least one runIteration() done.
@@ -491,8 +501,20 @@ class FixedPointLoop {
     kFinalized,
     // A run threw.  The state is half-written, so nothing may run again.
     kFailed,
+    // The owning task ended before the loop started; it never runs.
+    kAbandoned,
   };
-  Phase phase_{Phase::kCreated};
+  // Atomic because abandon() runs on the thread that ends the owning task.
+  std::atomic<Phase> phase_{Phase::kCreated};
+
+  // Moves the loop from kCreated to 'next' unless it has left kCreated
+  // already.  Returns the phase it found, so only the caller that moved the
+  // loop sees kCreated.
+  Phase leaveCreated(Phase next);
+
+  // Ends the loop in the terminal phase 'terminal' and resolves 'finished_'.
+  // The only place the loop ends.
+  void finish(Phase terminal);
 
   // The last iteration passed to runIteration(), so a repeated or decreasing
   // one is rejected: the iteration is encoded into the sub-task ids that form
