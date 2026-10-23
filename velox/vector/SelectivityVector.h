@@ -205,16 +205,10 @@ class SelectivityVector {
   /// are selected; rows beyond 'size' are excluded.
   SelectivityVector complement(vector_size_t size) const {
     VELOX_CHECK_GE(size, 0);
-    SelectivityVector result;
-    result.size_ = size;
-    const auto numWords = bits::nwords(size);
+    SelectivityVector result(size);
     const auto commonWords = bits::nwords(std::min(size, size_));
-    result.bits_.reserve(numWords);
     for (uint64_t i = 0; i < commonWords; ++i) {
-      result.bits_.push_back(~bits_[i]);
-    }
-    for (auto i = commonWords; i < numWords; ++i) {
-      result.bits_.push_back(~uint64_t{0});
+      result.bits_[i] = ~bits_[i];
     }
     // Source padding is not part of the selection when extending the size.
     if (size > size_ && size_ % 64 != 0) {
