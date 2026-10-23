@@ -27,12 +27,18 @@ void HiveHash::hashTyped(
     std::vector<uint32_t>& hashes,
     size_t /* poolIndex */) {
   if constexpr (
-      TypeTraits<kind>::isPrimitiveType && kind != TypeKind::HUGEINT) {
-    hashPrimitive<kind>(values, rows, mix, hashes);
-  } else {
+      !TypeTraits<kind>::isPrimitiveType || kind == TypeKind::HUGEINT) {
     VELOX_UNSUPPORTED(
         "Hive hash doesn't support type: {}", TypeTraits<kind>::name);
   }
+
+  if constexpr (kind == TypeKind::REAL || kind == TypeKind::DOUBLE) {
+    if (zeroMode_ == ZeroMode::kNormalize) {
+      hashPrimitive<kind, ZeroMode::kNormalize>(values, rows, mix, hashes);
+      return;
+    }
+  }
+  hashPrimitive<kind>(values, rows, mix, hashes);
 }
 
 template <>
@@ -146,11 +152,17 @@ void HiveHash::hashTyped<TypeKind::ROW>(
     bool mix,
     std::vector<uint32_t>& hashes,
     size_t poolIndex) {
+  const auto* rowVector = values.base()->as<RowVector>();
+  if (rowVector->childrenSize() == 0) {
+    rows.applyToSelected(
+        [&](auto row) { HiveHash::mergeHash(mix, 0, hashes[row]); });
+    return;
+  }
+
   auto& childDecodedVector = getDecodedVector(poolIndex);
   auto& childRows = getRows(poolIndex);
   auto& childHashes = getHashes(poolIndex);
 
-  const auto* rowVector = values.base()->as<RowVector>();
   childRows.resizeFill(rowVector->size(), false);
   childHashes.resize(rowVector->size());
 
