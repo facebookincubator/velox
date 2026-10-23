@@ -473,12 +473,16 @@ endif()
 
 if(ENABLE_ALL_WARNINGS)
   if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-    set(
-      KNOWN_COMPILER_SPECIFIC_WARNINGS
-      "-Wno-range-loop-analysis \
-         -Wno-mismatched-tags \
-         -Wno-nullability-completeness"
+    # The file explains where these flags come from.
+    set(VELOX_CLANG_WARNING_FLAGS_FILE "${CMAKE_CURRENT_SOURCE_DIR}/CMake/ClangWarningFlags.txt")
+    file(STRINGS "${VELOX_CLANG_WARNING_FLAGS_FILE}" VELOX_CLANG_WARNING_FLAGS REGEX "^-")
+    set_property(
+      DIRECTORY
+      APPEND
+      PROPERTY CMAKE_CONFIGURE_DEPENDS "${VELOX_CLANG_WARNING_FLAGS_FILE}"
     )
+    list(JOIN VELOX_CLANG_WARNING_FLAGS " " VELOX_CLANG_WARNING_FLAGS)
+    string(APPEND CMAKE_CXX_FLAGS " ${VELOX_CLANG_WARNING_FLAGS}")
   elseif(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     set(
       KNOWN_COMPILER_SPECIFIC_WARNINGS
@@ -503,18 +507,18 @@ if(ENABLE_ALL_WARNINGS)
       string(APPEND KNOWN_COMPILER_SPECIFIC_WARNINGS " -Wno-overloaded-virtual")
       string(APPEND KNOWN_COMPILER_SPECIFIC_WARNINGS " -Wno-error=tautological-compare")
     endif()
+
+    set(
+      KNOWN_WARNINGS
+      "-Wno-unused \
+         -Wno-unused-parameter \
+         -Wno-sign-compare \
+         -Wno-ignored-qualifiers \
+         ${KNOWN_COMPILER_SPECIFIC_WARNINGS}"
+    )
+
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra ${KNOWN_WARNINGS}")
   endif()
-
-  set(
-    KNOWN_WARNINGS
-    "-Wno-unused \
-       -Wno-unused-parameter \
-       -Wno-sign-compare \
-       -Wno-ignored-qualifiers \
-       ${KNOWN_COMPILER_SPECIFIC_WARNINGS}"
-  )
-
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra ${KNOWN_WARNINGS}")
 endif()
 
 if(VELOX_ENABLE_WAVE OR VELOX_ENABLE_CUDF)
