@@ -39,7 +39,7 @@
 #include <openssl/sha.h>
 
 #include "velox/common/geospatial/GeometrySerde.h"
-#include "velox/connectors/hive/iceberg/IcebergGeometryConverter.h"
+#include "velox/connectors/hive/iceberg/IcebergGeospatialConverter.h"
 #include "velox/dwio/common/tests/utils/DataFiles.h"
 #include "velox/functions/prestosql/types/GeometryRegistration.h"
 #include "velox/functions/prestosql/types/GeometryType.h"
@@ -201,7 +201,8 @@ TEST_F(IcebergGeometryCrossRuntimeEncodingTest, internalEncodingMatchesGolden) {
   std::vector<std::string> mismatches;
   for (const auto& record : records) {
     auto input = makeVarbinaryVector({record.wkb});
-    auto converted = convertIcebergGeometry(input, GEOMETRY(), pool(), "geom");
+    auto converted =
+        convertIcebergGeospatial(input, GEOMETRY(), pool(), "geom");
     ASSERT_TRUE(isGeometryType(converted->type()));
     const auto actual =
         toHex(converted->asFlatVector<StringView>()->valueAt(0));

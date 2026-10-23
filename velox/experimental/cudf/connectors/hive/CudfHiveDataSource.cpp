@@ -540,6 +540,9 @@ void CudfHiveDataSource::convertSplit(std::shared_ptr<ConnectorSplit> split) {
   for (const auto& [name, value] : hiveSplit->partitionKeys) {
     cudfHiveSplitBuilder.partitionKey(name, value);
   }
+  if (hiveSplit->properties.has_value()) {
+    cudfHiveSplitBuilder.fileProperties(hiveSplit->properties.value());
+  }
   split_ = cudfHiveSplitBuilder.build();
 
   VLOG(1) << "Adding split " << split_->toString();
@@ -613,6 +616,12 @@ void CudfHiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
 
   // TODO: `completedBytes_` should be updated in `next()` as we read more and
   // more table bytes
+  if (const auto fileSize = split_->fileSize()) {
+    completedBytes_ += static_cast<size_t>(*fileSize);
+    return;
+  }
+  // The split does not carry the size, so open the file for it. On S3 the
+  // open costs a HEAD request.
   try {
     const auto fileHandleKey = FileHandleKey{
         .filename = split_->filePath,

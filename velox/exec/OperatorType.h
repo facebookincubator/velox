@@ -33,6 +33,10 @@ struct OperatorType {
   static constexpr std::string_view kExchange = "Exchange";
   static constexpr std::string_view kExpand = "Expand";
   static constexpr std::string_view kFilterProject = "FilterProject";
+  static constexpr std::string_view kFixedPointStateHashJoin =
+      "FixedPointStateHashJoin";
+  static constexpr std::string_view kFixedPointStateSource =
+      "FixedPointStateSource";
   static constexpr std::string_view kGroupId = "GroupId";
   static constexpr std::string_view kHashBuild = "HashBuild";
   static constexpr std::string_view kHashProbe = "HashProbe";
