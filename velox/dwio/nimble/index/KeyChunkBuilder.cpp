@@ -27,8 +27,8 @@
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
 #include "velox/dwio/nimble/index/IndexConstants.h"
 #include "velox/dwio/nimble/index/IndexKeyEncoder.h"
-#include "velox/dwio/nimble/velox/BufferGrowthPolicy.h"
-#include "velox/dwio/nimble/velox/StreamData.h"
+#include "velox/dwio/nimble/writer/BufferGrowthPolicy.h"
+#include "velox/dwio/nimble/writer/StreamData.h"
 
 namespace facebook::nimble::index {
 namespace {
