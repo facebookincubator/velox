@@ -31,7 +31,7 @@
 #include "velox/dwio/nimble/index/IndexConstants.h"
 #include "velox/dwio/nimble/index/KeyChunkBuilder.h"
 #include "velox/dwio/nimble/tablet/SortedIndexGenerated.h"
-#include "velox/dwio/nimble/velox/ChunkedStreamWriter.h"
+#include "velox/dwio/nimble/writer/ChunkedStreamWriter.h"
 
 #include "velox/common/base/BitUtil.h"
 

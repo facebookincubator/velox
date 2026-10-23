@@ -30,7 +30,7 @@
 #include "velox/expression/Expr.h"
 
 #ifdef VELOX_ENABLE_NIMBLE
-#include "velox/dwio/nimble/velox/selective/SelectiveNimbleReader.h"
+#include "velox/dwio/nimble/selective/SelectiveNimbleReader.h"
 #include "velox/dwio/nimble/writer/Writer.h"
 #endif
 
