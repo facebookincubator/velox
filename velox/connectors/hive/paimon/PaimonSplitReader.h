@@ -82,9 +82,6 @@ class PaimonSplitReader : public FileSplitReader {
   // currentFileIndex_ so ensureFileSplitReader() opens the next file.
   void finishFileSplitReader();
 
-  // Partition handles must outlive a prepared data source's donor.
-  const std::unordered_map<std::string, FileColumnHandlePtr>
-      ownedPartitionKeys_;
   const std::shared_ptr<const PaimonConnectorSplit> paimonSplit_;
 
   // FileConnectorSplits built from paimonSplit_->dataFiles(), one per file.

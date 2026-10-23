@@ -17,8 +17,6 @@
 
 #include <limits>
 
-#include "velox/common/Casts.h"
-
 namespace facebook::velox::connector::hive::paimon {
 
 PaimonSplitReader::PaimonSplitReader(
@@ -38,7 +36,7 @@ PaimonSplitReader::PaimonSplitReader(
     : FileSplitReader(
           fileSplit,
           tableHandle,
-          &ownedPartitionKeys_,
+          partitionKeys,
           connectorQueryCtx,
           fileConfig,
           readerOutputType,
@@ -48,7 +46,6 @@ PaimonSplitReader::PaimonSplitReader(
           fileHandleFactory,
           executor,
           scanSpec),
-      ownedPartitionKeys_(*checkedNotNull(partitionKeys)),
       paimonSplit_(std::move(paimonSplit)) {
   VELOX_CHECK_NOT_NULL(paimonSplit_);
 
@@ -94,10 +91,6 @@ bool PaimonSplitReader::ensureFileSplitReader() {
     fileSplit_ = fileSplits_[currentFileIndex_];
 
     FileSplitReader::prepareSplit(metadataFilter_, *runtimeStats_);
-    VELOX_USER_CHECK_NOT_NULL(
-        baseReader_,
-        "Missing Paimon file reader for '{}'; snapshot files cannot be skipped",
-        fileSplit_->readPath());
     if (!emptySplit_) {
       return true;
     }

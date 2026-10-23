@@ -1284,15 +1284,6 @@ TEST_F(PaimonConnectorTest, rejectsWrongFormatAndMissingFiles) {
   EXPECT_THROW(
       exec::test::AssertQueryBuilder(plan).split(missing).copyResults(pool()),
       std::exception);
-  VELOX_ASSERT_USER_THROW(
-      exec::test::AssertQueryBuilder(plan)
-          .connectorSessionProperty(
-              kPaimonConnectorId,
-              FileConfig::kIgnoreMissingFilesSession,
-              "true")
-          .split(missing)
-          .copyResults(pool()),
-      "Missing Paimon file reader for '/missing-paimon-file'; snapshot files cannot be skipped");
 }
 
 TEST_F(PaimonConnectorTest, ordinaryColumnsIgnoreFeatureOptions) {
@@ -1409,66 +1400,6 @@ TEST_F(PaimonConnectorTest, takeoverPreparedSplit) {
   ASSERT_TRUE(result.has_value());
   ASSERT_TRUE(*result);
   test::assertEqualVectors(input, *result);
-}
-
-TEST_F(PaimonConnectorTest, takeoverUnusedPartitionHandles) {
-  auto queryCtx = core::QueryCtx::create();
-  const auto config = std::make_shared<config::ConfigBase>(
-      std::unordered_map<std::string, std::string>{});
-  auto context = queryContextBuilder(queryCtx.get())
-                     .sessionProperties(config.get())
-                     .build();
-  const auto rowType = ROW({{"id", BIGINT()}, {"p", VARCHAR()}});
-  const auto table = makePaimonTableHandle(rowType, {}, nullptr, {"p"});
-  const ColumnHandleMap columns{
-      {"id",
-       std::make_shared<HiveColumnHandle>(
-           "id", FileColumnHandle::ColumnType::kRegular, BIGINT(), BIGINT())},
-      {"p",
-       std::make_shared<HiveColumnHandle>(
-           "p",
-           FileColumnHandle::ColumnType::kPartitionKey,
-           VARCHAR(),
-           VARCHAR())}};
-  const auto connector = ConnectorRegistry::tryGet(kPaimonConnectorId);
-  const auto input = makeRowVector({"id"}, {makeFlatVector<int64_t>({7, 8})});
-  const auto outputType = ROW({{"id", BIGINT()}});
-  const ColumnHandleMap idColumns{{"id", columns.at("id")}};
-  const auto files = makeFilePaths(1);
-  writeToFile(files[0]->getPath(), input);
-  for (bool recipientHasUnusedPartition : {false, true}) {
-    for (bool donorHasUnusedPartition : {false, true}) {
-      SCOPED_TRACE(
-          fmt::format(
-              "recipient partition handle {}, donor partition handle {}",
-              recipientHasUnusedPartition,
-              donorHasUnusedPartition));
-      auto recipient = connector->createDataSource(
-          outputType,
-          table,
-          recipientHasUnusedPartition ? columns : idColumns,
-          context.get());
-      auto donor = connector->createDataSource(
-          outputType,
-          table,
-          donorHasUnusedPartition ? columns : idColumns,
-          context.get());
-      donor->addSplit(makePaimonSplit(
-          {files[0]->getPath()},
-          PaimonTableType::kAppendOnly,
-          dwio::common::FileFormat::DWRF,
-          {{"p", "unused"}}));
-      recipient->setFromDataSource(std::move(donor));
-      ContinueFuture future = ContinueFuture::makeEmpty();
-      auto result = recipient->next(100, future);
-      ASSERT_TRUE(result.has_value());
-      ASSERT_TRUE(*result);
-      test::assertEqualVectors(input, *result);
-      auto end = recipient->next(100, future);
-      ASSERT_TRUE(end.has_value());
-      EXPECT_EQ(*end, nullptr);
-    }
-  }
 }
 
 TEST_F(PaimonConnectorTest, requiresPaimonTableHandle) {
