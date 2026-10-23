@@ -15,7 +15,11 @@
  */
 #include "velox/experimental/ucx-exchange/UcxQueues.h"
 
+#include <fmt/format.h>
 #include <atomic>
+#include <string_view>
+
+#include "velox/common/base/VeloxException.h"
 
 namespace facebook::velox::ucx_exchange {
 
@@ -54,7 +58,16 @@ void UcxDestinationQueue::enqueueBack(
   if (data != nullptr) {
     stats_.recordEnqueue(data.get());
   }
-  queue_.push_back(QueuedPage{std::move(data), numRows});
+  queue_.push_back(QueuedPage{std::move(data), numRows, std::nullopt});
+}
+
+void UcxDestinationQueue::enqueueProducerError(std::string producerError) {
+  // A stream ends once: keep the marker that is already there.
+  if (!queue_.empty() && queue_.back().data == nullptr) {
+    return;
+  }
+  queue_.push_back(
+      QueuedPage{nullptr, /*numRows=*/0, std::move(producerError)});
 }
 
 void UcxDestinationQueue::enqueueFront(
@@ -66,14 +79,16 @@ void UcxDestinationQueue::enqueueFront(
   }
 
   // insert at the front.
-  queue_.push_front(QueuedPage{std::move(data), numRows});
+  queue_.push_front(QueuedPage{std::move(data), numRows, std::nullopt});
 }
 
 UcxDestinationQueue::Data UcxDestinationQueue::getData(
-    UcxDataAvailableCallback notify) {
+    UcxDataAvailableCallback notify,
+    bool intraNode) {
   if (queue_.empty()) {
     // delay notification.
     notify_ = std::move(notify);
+    notifyIntraNode_ = intraNode;
     return {};
   }
 
@@ -81,6 +96,9 @@ UcxDestinationQueue::Data UcxDestinationQueue::getData(
   auto page = std::move(queue_.front());
   queue_.pop_front();
   stats_.recordDequeue(page.data.get());
+  if (intraNode && page.data != nullptr) {
+    ++intraNodePagesInFlight_;
+  }
 
   std::vector<int64_t> remainingBytes;
   remainingBytes.reserve(queue_.size());
@@ -92,7 +110,12 @@ UcxDestinationQueue::Data UcxDestinationQueue::getData(
     }
     remainingBytes.push_back(queue_[i].data->gpu_data->size());
   }
-  return {std::move(page.data), page.numRows, std::move(remainingBytes), true};
+  return {
+      std::move(page.data),
+      page.numRows,
+      std::move(remainingBytes),
+      std::move(page.producerError),
+      true};
 }
 
 void UcxDestinationQueue::deleteResults() {
@@ -111,16 +134,26 @@ UcxDataAvailable UcxDestinationQueue::getAndClearNotify() {
   }
   UcxDataAvailable result;
   result.callback = notify_;
-  auto data = getData(nullptr);
+  auto data = getData(nullptr, notifyIntraNode_);
   result.data = std::move(data.data);
   result.numRows = data.numRows;
   result.remainingBytes = std::move(data.remainingBytes);
+  result.producerError = std::move(data.producerError);
   clearNotify();
   return result;
 }
 
 void UcxDestinationQueue::clearNotify() {
   notify_ = nullptr;
+  notifyIntraNode_ = false;
+}
+
+void UcxDestinationQueue::intraNodePageRetrieved() {
+  // Runs on the Communicator thread, so it must not throw.
+  VELOX_DCHECK_GT(intraNodePagesInFlight_, 0);
+  if (intraNodePagesInFlight_ > 0) {
+    --intraNodePagesInFlight_;
+  }
 }
 
 void UcxDestinationQueue::finish() {
@@ -268,6 +301,19 @@ bool UcxOutputQueue::checkBlocked(ContinueFuture* future) {
 }
 
 void UcxOutputQueue::getData(int destination, UcxDataAvailableCallback notify) {
+  getDataImpl(destination, std::move(notify), /*intraNode=*/false);
+}
+
+void UcxOutputQueue::getIntraNodeData(
+    int destination,
+    UcxDataAvailableCallback notify) {
+  getDataImpl(destination, std::move(notify), /*intraNode=*/true);
+}
+
+void UcxOutputQueue::getDataImpl(
+    int destination,
+    UcxDataAvailableCallback notify,
+    bool intraNode) {
   UcxDestinationQueue::Data data;
   std::vector<ContinuePromise> promises;
   {
@@ -288,13 +334,18 @@ void UcxOutputQueue::getData(int destination, UcxDataAvailableCallback notify) {
       // and concurrent removeTask() can destroy the UcxOutputQueue while
       // the callback is still executing.
       std::weak_ptr<UcxOutputQueue> weakSelf = shared_from_this();
-      data = queue->getData([notify, weakSelf](
-                                std::shared_ptr<cudf::packed_columns> data,
-                                vector_size_t numRows,
-                                std::vector<int64_t> remainingBytes) {
+      auto onData = [notify, weakSelf](
+                        std::shared_ptr<cudf::packed_columns> data,
+                        vector_size_t numRows,
+                        std::vector<int64_t> remainingBytes,
+                        std::optional<std::string> producerError) {
         std::vector<ContinuePromise> promises;
         int64_t bytes = data ? data->gpu_data->size() : -1L;
-        notify(std::move(data), numRows, std::move(remainingBytes));
+        notify(
+            std::move(data),
+            numRows,
+            std::move(remainingBytes),
+            std::move(producerError));
         if (bytes >= 0L) {
           auto self = weakSelf.lock();
           if (!self) {
@@ -309,19 +360,25 @@ void UcxOutputQueue::getData(int destination, UcxDataAvailableCallback notify) {
         for (auto& promise : promises) {
           promise.setValue();
         }
-      });
+      };
+      data = queue->getData(std::move(onData), intraNode);
       if (data.data) {
         // This implies data.immediate and no notify upcall will be done.
         // Need to update the stats here.
         updateStatsWithFreedLocked(data.data->gpu_data->size(), 1L, promises);
       }
     } else {
-      data = UcxDestinationQueue::Data{nullptr, 0, {}, true};
+      data = UcxDestinationQueue::Data{
+          nullptr, 0, {}, discardedOutputErrorLocked(), true};
     }
   }
   // outside lock: If we have data, then return it immediately.
   if (data.immediate) {
-    notify(std::move(data.data), data.numRows, std::move(data.remainingBytes));
+    notify(
+        std::move(data.data),
+        data.numRows,
+        std::move(data.remainingBytes),
+        std::move(data.producerError));
   } else {
     VLOG(2) << "[QUEUE] task=" << (task_ ? task_->taskId() : "n/a")
             << " dest=" << destination
@@ -507,6 +564,9 @@ void UcxOutputQueue::deleteResults(int destination) {
     int64_t packedCols = queue->stats().packedColumnsQueued;
     queue->deleteResults();
     dataAvailable = queue->getAndClearNotify();
+    if (dataAvailable.callback != nullptr && dataAvailable.data == nullptr) {
+      dataAvailable.producerError = discardedOutputErrorLocked();
+    }
     queue->finish();
     queues_[destination] = nullptr;
     isFinished = isFinishedLocked();
@@ -526,26 +586,138 @@ void UcxOutputQueue::deleteResults(int destination) {
   }
 }
 
-void UcxOutputQueue::terminate() {
-  std::vector<UcxDataAvailable> pendingCallbacks;
-  std::vector<ContinuePromise> promises;
+namespace {
+// Upper bound on the producer reason carried to consumers. The reason travels
+// in an end-of-stream message whose metadata buffer is bounded
+// (kMaxMetaBufSize), and it is kept for every removed task.
+constexpr size_t kMaxProducerErrorSize = 4'096;
+
+// The producer task's error without its stack trace and context, which the
+// producer's own failure reports.
+std::string taskErrorMessage(const exec::Task& task) {
+  const auto error = task.error();
+  if (error == nullptr) {
+    return "";
+  }
+  try {
+    std::rethrow_exception(error);
+  } catch (const VeloxException& e) {
+    return e.message();
+  } catch (const std::exception& e) {
+    return e.what();
+  } catch (...) {
+    return "<Unknown exception type>";
+  }
+}
+
+std::string truncateProducerError(std::string reason) {
+  static constexpr std::string_view kTruncated{"...(truncated)"};
+  if (reason.size() > kMaxProducerErrorSize) {
+    reason.resize(kMaxProducerErrorSize - kTruncated.size());
+    reason.append(kTruncated);
+  }
+  return reason;
+}
+} // namespace
+
+void UcxOutputQueue::intraNodePageRetrieved(int destination) {
+  // Runs on the Communicator thread, so it must not throw. A destination that
+  // finished or was deleted no longer holds a count.
+  std::lock_guard<std::mutex> l(mutex_);
+  if (destination < queues_.size() && queues_[destination] != nullptr) {
+    queues_[destination]->intraNodePageRetrieved();
+  }
+}
+
+std::optional<std::string> UcxOutputQueue::discardedOutputErrorLocked() const {
+  // Servers delete a destination's results only after its end marker, so a
+  // deletion before every driver finished is the producer dropping its own
+  // output, as UcxPartitionedOutput does when it runs out of GPU memory.
+  if (atEnd_) {
+    return std::nullopt;
+  }
+  return fmt::format(
+      "Producer task discarded its output before sending all of it. Task: {}",
+      task_ != nullptr ? task_->taskId() : "n/a");
+}
+
+std::optional<std::string> UcxOutputQueue::incompleteOutputError() {
+  std::shared_ptr<exec::Task> task;
+  bool atEnd{false};
+  int64_t undeliveredPackedColumns{0};
   {
     std::lock_guard<std::mutex> l(mutex_);
-    if (task_ && task_->isRunning()) {
-      LOG(WARNING) << "UcxOutputQueue::terminate() called while task "
-                   << task_->taskId() << " is still running";
+    // Removal drops what the live destinations still hold, the intra-node
+    // pages their consumers have not read, and the broadcast pages kept for
+    // destinations that have not arrived, so that output is lost. A remote
+    // page counts as delivered once a server took it from its queue: the send
+    // keeps the page alive until it completes.
+    for (const auto& queue : queues_) {
+      if (queue != nullptr) {
+        undeliveredPackedColumns += queue->stats().packedColumnsQueued +
+            queue->intraNodePagesInFlight();
+      }
     }
-    // Fire all pending getData callbacks with nullptr to signal end-of-stream.
-    // This handles the case where a producer task fails or is cancelled before
-    // noMoreData() is called, preventing consumers from being orphaned.
+    if (kind_ == core::PartitionedOutputNode::Kind::kBroadcast &&
+        !noMoreQueues_) {
+      undeliveredPackedColumns += dataToBroadcast_.size();
+    }
+    atEnd = atEnd_;
+    if (atEnd && undeliveredPackedColumns == 0) {
+      return std::nullopt;
+    }
+    task = task_;
+  }
+  // The task's accessors take its mutex, which must not nest inside 'mutex_'.
+  if (task == nullptr) {
+    return "Producer task ended before initializing its output";
+  }
+  if (atEnd) {
+    return truncateProducerError(
+        fmt::format(
+            "Producer task ended before its consumers received all its output. Task: {}, state: {}, undelivered packed tables: {}, error: {}",
+            task->taskId(),
+            exec::taskStateString(task->state()),
+            undeliveredPackedColumns,
+            taskErrorMessage(*task)));
+  }
+  return truncateProducerError(
+      fmt::format(
+          "Producer task ended before sending all its output. Task: {}, state: {}, error: {}",
+          task->taskId(),
+          exec::taskStateString(task->state()),
+          taskErrorMessage(*task)));
+}
+
+void UcxOutputQueue::terminate(
+    const std::optional<std::string>& producerError) {
+  std::vector<UcxDataAvailable> pendingCallbacks;
+  std::vector<ContinuePromise> promises;
+  std::shared_ptr<exec::Task> task;
+  {
+    std::lock_guard<std::mutex> l(mutex_);
+    task = task_;
+    // Fire all pending getData callbacks with an end marker. This also covers a
+    // producer task that fails or is cancelled before noMoreData(), so that
+    // its consumers are not orphaned; 'producerError' tells them it ended
+    // early.
     for (auto& queue : queues_) {
       if (queue != nullptr) {
-        queue->enqueueBack(nullptr, /*numRows=*/0);
+        if (producerError.has_value()) {
+          queue->enqueueProducerError(*producerError);
+        } else {
+          queue->enqueueBack(nullptr, /*numRows=*/0);
+        }
         pendingCallbacks.push_back(queue->getAndClearNotify());
       }
     }
     // Release any outstanding producer-side promises (blocked on queue-full).
     promises = std::move(promises_);
+  }
+
+  if (task && task->isRunning()) {
+    LOG(WARNING) << "UcxOutputQueue::terminate() called while task "
+                 << task->taskId() << " is still running";
   }
 
   // Fire callbacks outside of mutex to avoid potential deadlocks.

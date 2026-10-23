@@ -24,6 +24,8 @@
 #include <chrono>
 #include <future>
 #include <memory>
+#include <optional>
+#include <string>
 #include <tuple>
 #include "velox/common/EnumDeclare.h"
 #include "velox/common/EnumDefine.h"
@@ -64,7 +66,12 @@ class UcxExchangeServer
 
   void process() override;
 
-  void close() override;
+  /// @brief Stops serving this partition and releases its UCXX requests.
+  /// Idempotent.
+  void close();
+
+  /// @brief Closes the server: the consumer it served is gone.
+  void onEndpointClosed(std::string_view reason) override;
 
   std::string toString();
 
@@ -121,10 +128,13 @@ class UcxExchangeServer
   /// Logical rows in 'dataPtr_', taken from the output queue rather than from
   /// the packed table, which reports zero rows when it has no columns.
   vector_size_t dataNumRows_{0};
-  /// Protects dataPtr_. Must be recursive because sendData() holds the lock
-  /// when calling tagSend(), and for small messages UCX completes inline via
-  /// its fast-completion path, firing the sendComplete() callback on the same
-  /// thread while the lock is still held.
+  /// Set with a null dataPtr_ when the producer ended before sending all its
+  /// output; sent to the source on the end-of-stream message.
+  std::optional<std::string> producerError_;
+  /// Protects dataPtr_, dataNumRows_ and producerError_. Must be recursive
+  /// because sendData() holds the lock when calling tagSend(), and for small
+  /// messages UCX completes inline via its fast-completion path, firing the
+  /// sendComplete() callback on the same thread while the lock is still held.
   std::recursive_mutex dataMutex_;
   std::atomic<bool> closed_{false};
 

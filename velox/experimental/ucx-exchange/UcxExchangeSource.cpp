@@ -114,22 +114,37 @@ void UcxExchangeSource::process() {
 
   switch (state_) {
     case ReceiverState::Created: {
-      // Get the endpoint.
+      // Get the endpoint. Creating it throws when the address does not
+      // resolve; the exception must not leave the Communicator thread.
       HostPort hp{host_, port_};
       std::shared_ptr<UcxExchangeSource> selfPtr = getSelfPtr();
-      auto epRef = communicator_->assocEndpointRef(selfPtr, hp);
-      if (epRef) {
-        setEndpoint(epRef);
-        setStateIf(
-            ReceiverState::Created, ReceiverState::WaitingForHandshakeComplete);
-        sendHandshake();
-      } else {
-        // connection failed.
-        VLOG(0) << toString() << " Failed to connect to " << host_ << ":"
-                << std::to_string(port_);
-        deliverEndMarker();
-        setState(ReceiverState::Done);
+      std::shared_ptr<EndpointRef> epRef;
+      try {
+        epRef = communicator_->assocEndpointRef(selfPtr, hp);
+      } catch (const std::exception& e) {
+        failSource(
+            fmt::format(
+                "Failed to connect to producer, host {}:{}, task {}: {}",
+                host_,
+                port_,
+                partitionKey_.toString(),
+                e.what()));
+        break;
       }
+      if (epRef == nullptr) {
+        failSource(
+            fmt::format(
+                "Failed to connect to producer, host {}:{}, task {}: {}",
+                host_,
+                port_,
+                partitionKey_.toString(),
+                "no endpoint"));
+        break;
+      }
+      setEndpoint(epRef);
+      setStateIf(
+          ReceiverState::Created, ReceiverState::WaitingForHandshakeComplete);
+      sendHandshake();
       communicator_->addToWorkQueue(getSelfPtr());
     } break;
     case ReceiverState::WaitingForHandshakeComplete:
@@ -250,6 +265,23 @@ void UcxExchangeSource::close() {
   communicator_->addToWorkQueue(getSelfPtr());
 }
 
+void UcxExchangeSource::onEndpointClosed(std::string_view reason) {
+  if (closed_.load(std::memory_order_acquire)) {
+    return;
+  }
+  if (atEnd_) {
+    close();
+    return;
+  }
+  failSource(
+      fmt::format(
+          "Connection to producer closed before it sent all its data, host {}:{}, task {}: {}",
+          host_,
+          port_,
+          partitionKey_.toString(),
+          reason));
+}
+
 void UcxExchangeSource::resumeFromBackpressure() {
   bool expected = true;
   if (backpressureActive_.compare_exchange_strong(
@@ -336,6 +368,14 @@ void UcxExchangeSource::deliverEndMarker() {
   enqueue(nullptr);
 }
 
+void UcxExchangeSource::failSource(std::string_view reason) {
+  VLOG(0) << toString() << " " << reason;
+  queue_->setError(reason);
+  deliverEndMarker();
+  setState(ReceiverState::Done);
+  communicator_->addToWorkQueue(getSelfPtr());
+}
+
 void UcxExchangeSource::setEndpoint(std::shared_ptr<EndpointRef> endpointRef) {
   endpointRef_ = std::move(endpointRef);
 }
@@ -408,11 +448,7 @@ void UcxExchangeSource::onHandshake(
         port_,
         partitionKey_.toString(),
         ucs_status_string(status));
-    VLOG(0) << errorMsg;
-    queue_->setError(errorMsg);
-    deliverEndMarker();
-    setState(ReceiverState::Done);
-    communicator_->addToWorkQueue(getSelfPtr());
+    failSource(errorMsg);
   } else {
     VLOG(3) << toString() << "+ onHandshake " << ucs_status_string(status);
     // Now wait for the HandshakeResponse from the server
@@ -478,11 +514,7 @@ void UcxExchangeSource::onMetadata(
         port_,
         partitionKey_.toString(),
         ucs_status_string(status));
-    VLOG(0) << errorMsg;
-    queue_->setError(errorMsg);
-    deliverEndMarker();
-    setState(ReceiverState::Done);
-    communicator_->addToWorkQueue(getSelfPtr());
+    failSource(errorMsg);
   } else {
     VELOX_CHECK_NOT_NULL(arg, "Didn't get metadata");
 
@@ -497,6 +529,17 @@ void UcxExchangeSource::onMetadata(
 
     VLOG(3) << toString()
             << " Datasize bytes == " << ptr->metadata.dataSizeBytes;
+
+    if (ptr->metadata.atEnd && ptr->metadata.producerError.has_value()) {
+      failSource(
+          fmt::format(
+              "Producer failed before sending all its data, host {}:{}, task {}: {}",
+              host_,
+              port_,
+              partitionKey_.toString(),
+              *ptr->metadata.producerError));
+      return;
+    }
 
     if (ptr->metadata.atEnd) {
       // It seems that all data has been transferred
@@ -524,11 +567,7 @@ void UcxExchangeSource::onMetadata(
           cudf::get_current_device_resource_ref());
     } catch (const rmm::bad_alloc& e) {
       VLOG(0) << toString() << " *** RMM  failed to allocate: " << e.what();
-      queue_->setError("Failed to alloc GPU memory"); // Let the operator know
-                                                      // via the queue
-      deliverEndMarker();
-      setState(ReceiverState::Done);
-      communicator_->addToWorkQueue(getSelfPtr());
+      failSource("Failed to alloc GPU memory");
       return;
     }
 
@@ -593,10 +632,8 @@ void UcxExchangeSource::onData(ucs_status_t status, std::shared_ptr<void> arg) {
         port_,
         partitionKey_.toString(),
         ucs_status_string(status));
-    VLOG(0) << toString() << errorMsg;
-    queue_->setError(errorMsg);
-    deliverEndMarker();
-    setState(ReceiverState::Done);
+    failSource(errorMsg);
+    return;
   } else {
     VLOG(3) << toString() << "+ onData " << ucs_status_string(status)
             << " got chunk: " << sequenceNumber_;
@@ -683,11 +720,7 @@ void UcxExchangeSource::onHandshakeResponse(
         port_,
         partitionKey_.toString(),
         ucs_status_string(status));
-    VLOG(0) << errorMsg;
-    queue_->setError(errorMsg);
-    deliverEndMarker();
-    setState(ReceiverState::Done);
-    communicator_->addToWorkQueue(getSelfPtr());
+    failSource(errorMsg);
     return;
   }
 
@@ -731,17 +764,33 @@ void UcxExchangeSource::waitForIntraNodeData() {
   }
 
   intraNodePollCount_ = 0;
-  onIntraNodeData(std::move(result->data), result->numRows, result->atEnd);
+  onIntraNodeData(
+      std::move(result->data),
+      result->numRows,
+      result->atEnd,
+      std::move(result->producerError));
 }
 
 void UcxExchangeSource::onIntraNodeData(
     std::shared_ptr<cudf::packed_columns> data,
     vector_size_t numRows,
-    bool atEnd) {
+    bool atEnd,
+    std::optional<std::string> producerError) {
   // Check if close() was called
   if (closed_.load(std::memory_order_acquire)) {
     VLOG(3) << toString() << " onIntraNodeData called after close, ignoring";
     deliverEndMarker();
+    return;
+  }
+
+  if (atEnd && producerError.has_value()) {
+    failSource(
+        fmt::format(
+            "Producer failed before sending all its data, host {}:{}, task {}: {}",
+            host_,
+            port_,
+            partitionKey_.toString(),
+            *producerError));
     return;
   }
 
@@ -763,11 +812,7 @@ void UcxExchangeSource::onIntraNodeData(
         partitionKey_.taskId,
         partitionKey_.destination,
         sequenceNumber_);
-    VLOG(0) << toString() << " " << errorMsg;
-    queue_->setError(errorMsg);
-    deliverEndMarker();
-    setState(ReceiverState::Done);
-    communicator_->addToWorkQueue(getSelfPtr());
+    failSource(errorMsg);
     return;
   }
 

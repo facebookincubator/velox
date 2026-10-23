@@ -22,21 +22,29 @@
 #include <cudf/structs/structs_column_view.hpp>
 #include <cudf/table/table.hpp>
 #include <cudf/types.hpp>
+#include <fmt/format.h>
 #include <folly/Executor.h>
+#include <folly/ScopeGuard.h>
 #include <folly/synchronization/EventCount.h>
+#include <gmock/gmock.h>
 #include <gtest/gtest-param-test.h>
+#include <gtest/gtest-spi.h>
 #include <gtest/gtest.h>
 #include <rmm/device_buffer.hpp>
 #include <chrono>
+#include <cstring>
 #include <future>
+#include <limits>
 #include <memory>
 #include <sstream>
 #include <vector>
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/memory/MemoryPool.h"
 #include "velox/core/QueryConfig.h"
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 #include "velox/experimental/ucx-exchange/Communicator.h"
+#include "velox/experimental/ucx-exchange/IntraNodeTransferRegistry.h"
 #include "velox/experimental/ucx-exchange/UcxExchangeProtocol.h"
 #include "velox/experimental/ucx-exchange/UcxOutputQueueManager.h"
 #include "velox/experimental/ucx-exchange/tests/SinkDriverMock.h"
@@ -201,6 +209,148 @@ TEST(UcxExchangeQueueTest, closeResetsSize) {
   queue.close();
   EXPECT_EQ(queue.size(), 0);
   EXPECT_TRUE(queue.empty());
+}
+
+// An end-of-stream message from a producer that ended early carries the reason,
+// so the consumer can fail instead of booking the stream as complete.
+TEST(UcxExchangeProtocolTest, metadataRoundTripsProducerError) {
+  MetadataMsg message;
+  message.dataSizeBytes = 0;
+  message.numRows = 0;
+  message.atEnd = true;
+  message.producerError = "Injected producer failure";
+
+  auto [buffer, size] = message.serialize();
+  EXPECT_EQ(size, message.getSerializedSize());
+
+  const auto decoded = MetadataMsg::deserializeMetadataMsg(buffer.get());
+  EXPECT_TRUE(decoded.atEnd);
+  EXPECT_EQ(
+      decoded.producerError,
+      std::optional<std::string>("Injected producer failure"));
+}
+
+TEST(UcxExchangeProtocolTest, metadataWithoutProducerErrorDecodesNone) {
+  MetadataMsg message;
+  message.dataSizeBytes = 0;
+  message.numRows = 0;
+  message.atEnd = true;
+
+  auto [buffer, size] = message.serialize();
+  EXPECT_EQ(size, message.getSerializedSize());
+
+  const auto decoded = MetadataMsg::deserializeMetadataMsg(buffer.get());
+  EXPECT_TRUE(decoded.atEnd);
+  EXPECT_EQ(decoded.producerError, std::nullopt);
+}
+
+// A task can fail with an empty message. The consumer must still fail, so an
+// empty reason is an error and not the absence of one.
+TEST(UcxExchangeProtocolTest, metadataRoundTripsEmptyProducerError) {
+  MetadataMsg message;
+  message.dataSizeBytes = 0;
+  message.numRows = 0;
+  message.atEnd = true;
+  message.producerError = "";
+
+  auto [buffer, size] = message.serialize();
+  EXPECT_EQ(size, message.getSerializedSize());
+
+  const auto decoded = MetadataMsg::deserializeMetadataMsg(buffer.get());
+  EXPECT_EQ(decoded.producerError, std::optional<std::string>(""));
+}
+
+// The producer error is the last field: a signed length, -1 when there is no
+// error, followed by that many bytes of text.
+TEST(UcxExchangeProtocolTest, producerErrorIsLengthPrefixedLastField) {
+  MetadataMsg message;
+  message.dataSizeBytes = 0;
+  message.numRows = 0;
+  message.atEnd = true;
+
+  auto [cleanBuffer, cleanSize] = message.serialize();
+  WireErrorLengthType cleanLength = 0;
+  std::memcpy(
+      &cleanLength,
+      cleanBuffer.get() + cleanSize - sizeof(cleanLength),
+      sizeof(cleanLength));
+  EXPECT_EQ(cleanLength, -1);
+
+  const std::string reason{"Injected producer failure"};
+  message.producerError = reason;
+  auto [errorBuffer, errorSize] = message.serialize();
+  EXPECT_EQ(errorSize, cleanSize + reason.size());
+  EXPECT_EQ(
+      std::string(
+          reinterpret_cast<const char*>(errorBuffer.get()) + errorSize -
+              reason.size(),
+          reason.size()),
+      reason);
+}
+
+// Only the last message of a stream can say why the stream ended.
+TEST(UcxExchangeProtocolTest, producerErrorRequiresEndOfStream) {
+  MetadataMsg message;
+  message.dataSizeBytes = 0;
+  message.numRows = 0;
+  message.atEnd = false;
+  message.producerError = "Injected producer failure";
+
+  VELOX_ASSERT_THROW(message.serialize(), "producerError");
+}
+
+// An intra-node consumer of a producer that was removed early learns the
+// reason, as a remote consumer does from MetadataMsg.
+TEST(IntraNodeTransferRegistryTest, cancelledTaskReportsProducerError) {
+  auto registry = IntraNodeTransferRegistry::getInstance();
+  const std::string taskId{"registryCancelledWithError"};
+  registry->cancelTask(taskId, "Injected producer failure");
+
+  const auto result =
+      registry->poll({taskId, /*destination=*/0, /*sequenceNumber=*/0});
+  ASSERT_TRUE(result.has_value());
+  EXPECT_TRUE(result->atEnd);
+  EXPECT_EQ(result->data, nullptr);
+  EXPECT_EQ(
+      result->producerError,
+      std::optional<std::string>("Injected producer failure"));
+  registry->clearCancelledTask(taskId);
+}
+
+// A producer removed after it sent all its output ends its stream cleanly.
+TEST(IntraNodeTransferRegistryTest, cancelledFinishedTaskEndsCleanly) {
+  auto registry = IntraNodeTransferRegistry::getInstance();
+  const std::string taskId{"registryCancelledFinished"};
+  registry->cancelTask(taskId, /*producerError=*/std::nullopt);
+
+  const auto result =
+      registry->poll({taskId, /*destination=*/0, /*sequenceNumber=*/0});
+  ASSERT_TRUE(result.has_value());
+  EXPECT_TRUE(result->atEnd);
+  EXPECT_EQ(result->data, nullptr);
+  EXPECT_EQ(result->producerError, std::nullopt);
+  registry->clearCancelledTask(taskId);
+}
+
+TEST(IntraNodeTransferRegistryTest, publishedEndMarkerCarriesProducerError) {
+  auto registry = IntraNodeTransferRegistry::getInstance();
+  const IntraNodeTransferKey key{
+      "registryPublishedError", /*destination=*/0, /*sequenceNumber=*/0};
+  auto retrieved = registry->publish(
+      key,
+      nullptr,
+      /*numRows=*/0,
+      /*atEnd=*/true,
+      "Injected producer failure");
+
+  const auto result = registry->poll(key);
+  ASSERT_TRUE(result.has_value());
+  EXPECT_TRUE(result->atEnd);
+  EXPECT_EQ(
+      result->producerError,
+      std::optional<std::string>("Injected producer failure"));
+  EXPECT_EQ(
+      retrieved.wait_for(std::chrono::seconds(0)), std::future_status::ready);
 }
 
 TEST_P(UcxExchangeTest, basicTest) {
@@ -821,6 +971,42 @@ TEST_P(UcxExchangeTest, realPartitionedOutputDataIntegrityTest) {
   VLOG(3) << "- UcxExchangeTest::realPartitionedOutputDataIntegrityTest";
 }
 
+// A consumer that fails in a case that expects success must fail the case.
+// SinkDriverMock drives its exchanges on bare threads and catches what they
+// throw, and the cases that check only dataIsValid() would otherwise pass
+// with rows missing.
+TEST_F(UcxExchangeFocusedTest, sinkDriverMockReportsUnexpectedConsumerError) {
+  const std::string taskPrefix = getUniqueTaskPrefix();
+  const std::string srcTaskId = taskPrefix + "abortedBeforeSink";
+  auto srcTask = createSourceTask(srcTaskId, pool_, UcxTestData::kTestRowType);
+  queueManager()->initializeTask(
+      srcTask,
+      core::PartitionedOutputNode::Kind::kPartitioned,
+      /*numDestinations=*/1,
+      /*numDrivers=*/1);
+  srcTask->requestAbort().wait();
+  queueManager()->removeTask(srcTaskId);
+
+  core::PlanNodeId exchangeNodeId;
+  auto sinkTask = createExchangeTask(
+      taskPrefix + "sink",
+      UcxTestData::kTestRowType,
+      /*partitionId=*/0,
+      exchangeNodeId);
+  auto sinkDriver =
+      std::make_shared<SinkDriverMock>(sinkTask, /*numDrivers=*/1);
+  std::vector<exec::Split> splits;
+  splits.emplace_back(remoteSplit(srcTaskId, /*partitionId=*/0));
+  sinkDriver->addSplits(splits);
+
+  EXPECT_NONFATAL_FAILURE(
+      {
+        sinkDriver->run();
+        sinkDriver->joinThreads();
+      },
+      "Producer failed before sending all its data");
+}
+
 // Focused regression test for shared UcxExchangeClient ownership. This
 // intentionally creates and seeds the client directly, bypassing the normal
 // task-split path, to isolate close behavior after the client is populated.
@@ -907,9 +1093,260 @@ TEST_F(UcxExchangeFocusedTest, sharedClientSurvivesOneExchangeClose) {
   queueManager()->removeTask(srcTaskId);
 }
 
-// Test that verifies intra-node exchange does not livelock when a producing
-// task is removed while the consumer is polling IntraNodeTransferRegistry.
-// Before the fix: test times out (livelock). After the fix: test passes.
+namespace {
+
+// Packs a 'numRows'-row table of UcxTestData::kTestRowType, as a producer would
+// enqueue it.
+std::unique_ptr<cudf::packed_columns> makePackedColumns(vector_size_t numRows) {
+  auto stream = cuda::stream_ref{cudaStream_t{cudaStreamDefault}};
+  auto table = makeTable(numRows, UcxTestData::kTestRowType, stream);
+  auto packed =
+      std::make_unique<cudf::packed_columns>(cudf::pack(table->view(), stream));
+  stream.sync();
+  return packed;
+}
+
+// Drives 'exchange' until it finishes or has returned at least 'maxRows' rows,
+// and returns the rows it read. Fails if a wait for data takes longer than
+// 'maxWait', so that a stream that never ends fails the case instead of
+// hanging the binary.
+uint64_t drainToEnd(
+    UcxExchange& exchange,
+    uint64_t maxRows,
+    std::chrono::seconds maxWait) {
+  uint64_t numRows = 0;
+  while (numRows < maxRows && !exchange.isFinished()) {
+    ContinueFuture future = ContinueFuture::makeEmpty();
+    if (exchange.isBlocked(&future) != BlockingReason::kNotBlocked) {
+      if (!std::move(future).wait(maxWait)) {
+        VELOX_FAIL("Exchange made no progress");
+      }
+      continue;
+    }
+    if (auto result = exchange.getOutput()) {
+      auto cudfResult =
+          std::dynamic_pointer_cast<cudf_velox::CudfVector>(result);
+      VELOX_CHECK_NOT_NULL(cudfResult);
+      numRows += cudfResult->getTableView().num_rows();
+    }
+  }
+  return numRows;
+}
+
+} // namespace
+
+// A producer whose connection closes before it sent all its output must fail
+// its consumer. The close reaches the consumer through
+// EndpointRef::closeAndDrainCommunicators(), as when the producer's worker
+// dies; treating it as a clean end of stream would drop the rest of the rows.
+TEST_F(UcxExchangeFocusedTest, endpointClosedMidStreamFailsConsumer) {
+  const std::string taskPrefix = getUniqueTaskPrefix();
+  const std::string srcTaskId = taskPrefix + "endpointClosedSrc";
+  const std::string sinkTaskId = taskPrefix + "endpointClosedSink";
+  const int partitionId = 0;
+
+  auto rowType = UcxTestData::kTestRowType;
+  auto srcTask = createSourceTask(srcTaskId, pool_, rowType);
+  queueManager()->initializeTask(
+      srcTask,
+      core::PartitionedOutputNode::Kind::kPartitioned,
+      /*numDestinations=*/1,
+      /*numDrivers=*/1);
+  // Removes the producer even when an assertion ends the case early: the
+  // process-wide queue manager would otherwise keep its Task until static
+  // destruction, after the memory manager it allocates from is gone.
+  auto removeProducer = folly::makeGuard([&]() {
+    srcTask->requestAbort().wait();
+    queueManager()->removeTask(srcTaskId);
+  });
+  // One page, and no noMoreData(): the producer is still running.
+  queueManager()->enqueue(
+      srcTaskId, partitionId, makePackedColumns(100), /*numRows=*/100);
+
+  core::PlanNodeId exchangeNodeId;
+  auto sinkTask =
+      createExchangeTask(sinkTaskId, rowType, partitionId, exchangeNodeId);
+  auto exchangeClient = std::make_shared<UcxExchangeClient>(
+      sinkTask->taskId(), sinkTask->destination(), /*numberOfConsumers=*/1);
+  auto split = remoteSplit(srcTaskId, partitionId);
+  exchangeClient->addRemoteTaskId(
+      std::dynamic_pointer_cast<exec::RemoteConnectorSplit>(
+          split.connectorSplit)
+          ->taskId);
+  exchangeClient->noMoreRemoteTasks();
+
+  auto driverCtx = std::make_shared<DriverCtx>(
+      sinkTask,
+      /*driverId=*/0,
+      /*pipelineId=*/0,
+      kUngroupedGroupId,
+      /*partitionId=*/0);
+  UcxExchange exchange(
+      0, driverCtx.get(), sinkTask->planFragment().planNode, exchangeClient);
+
+  EXPECT_EQ(
+      drainToEnd(exchange, /*maxRows=*/100, std::chrono::seconds(30)), 100);
+
+  // Close the consumer's connection to the producer the way a dead peer does.
+  auto communicator = Communicator::getInstance();
+  auto endpoint = communicator->assocEndpointRef(
+      nullptr, HostPort{"127.0.0.1", communicator->getListenerPort()});
+  ASSERT_NE(endpoint, nullptr);
+  communicator->deferEndpointCleanup(endpoint);
+
+  VELOX_ASSERT_THROW(
+      drainToEnd(
+          exchange,
+          /*maxRows=*/std::numeric_limits<uint64_t>::max(),
+          std::chrono::seconds(30)),
+      "Connection to producer closed before it sent all its data");
+  exchange.close();
+}
+
+// A producer the consumer cannot connect to must fail the consumer, rather than
+// end its stream as if the producer had sent nothing. The host name below is
+// rejected by getaddrinfo locally, without a DNS round trip, so endpoint
+// creation fails at once.
+TEST_F(UcxExchangeFocusedTest, unresolvableProducerHostFailsConsumer) {
+  const std::string taskPrefix = getUniqueTaskPrefix();
+  const std::string sinkTaskId = taskPrefix + "unreachableSink";
+
+  core::PlanNodeId exchangeNodeId;
+  auto sinkTask = createExchangeTask(
+      sinkTaskId, UcxTestData::kTestRowType, /*partitionId=*/0, exchangeNodeId);
+  auto exchangeClient = std::make_shared<UcxExchangeClient>(
+      sinkTask->taskId(), sinkTask->destination(), /*numberOfConsumers=*/1);
+  const auto url = fmt::format(
+      "http://bad_host!:{}/v1/task/{}/results/0",
+      UcxExchangeTestEnvironment::splitUrlPort(),
+      taskPrefix + "unreachableProducer");
+  exchangeClient->addRemoteTaskId(url);
+  exchangeClient->noMoreRemoteTasks();
+
+  auto driverCtx = std::make_shared<DriverCtx>(
+      sinkTask,
+      /*driverId=*/0,
+      /*pipelineId=*/0,
+      kUngroupedGroupId,
+      /*partitionId=*/0);
+  UcxExchange exchange(
+      0, driverCtx.get(), sinkTask->planFragment().planNode, exchangeClient);
+
+  VELOX_ASSERT_THROW(
+      drainToEnd(
+          exchange,
+          /*maxRows=*/std::numeric_limits<uint64_t>::max(),
+          std::chrono::seconds(30)),
+      "Failed to connect to producer");
+  exchange.close();
+}
+
+// An intra-node consumer reads a page from IntraNodeTransferRegistry some time
+// after its server took the page from the producer's queue. A producer removed
+// in between drops that page, so its consumer must get every row or fail. The
+// consumer here stops reading: past UcxExchangeSource's backpressure high
+// water mark it stops polling the registry, and the server waits with the
+// producer's last page published but unread.
+TEST_F(UcxExchangeFocusedTest, intraNodeProducerRemovedBeforePageReadFails) {
+  auto& config = cudf_velox::CudfConfig::getInstance();
+  const bool previousIntraNode = config.intraNodeExchange;
+  config.intraNodeExchange = true;
+  auto restoreIntraNode =
+      folly::makeGuard([&]() { config.intraNodeExchange = previousIntraNode; });
+
+  const std::string taskPrefix = getUniqueTaskPrefix();
+  const std::string srcTaskId = taskPrefix + "intraNodeSrc";
+  const int partitionId = 0;
+  // One page more than the consumer queues before it stops polling, so the
+  // last one stays in the registry.
+  const int numPages = UcxExchangeSource::kBackpressureHighWaterMark + 2;
+  const vector_size_t numRowsPerPage = 100;
+
+  auto srcTask = createSourceTask(srcTaskId, pool_, UcxTestData::kTestRowType);
+  queueManager()->initializeTask(
+      srcTask,
+      core::PartitionedOutputNode::Kind::kPartitioned,
+      /*numDestinations=*/1,
+      /*numDrivers=*/1);
+  auto removeProducer = folly::makeGuard([&]() {
+    srcTask->requestAbort().wait();
+    queueManager()->removeTask(srcTaskId);
+  });
+  for (int page = 0; page < numPages; ++page) {
+    queueManager()->enqueue(
+        srcTaskId,
+        partitionId,
+        makePackedColumns(numRowsPerPage),
+        numRowsPerPage);
+  }
+  queueManager()->noMoreData(srcTaskId);
+
+  core::PlanNodeId exchangeNodeId;
+  auto sinkTask = createExchangeTask(
+      taskPrefix + "intraNodeSink",
+      UcxTestData::kTestRowType,
+      partitionId,
+      exchangeNodeId);
+  auto exchangeClient = std::make_shared<UcxExchangeClient>(
+      sinkTask->taskId(), sinkTask->destination(), /*numberOfConsumers=*/1);
+  auto split = remoteSplit(srcTaskId, partitionId);
+  exchangeClient->addRemoteTaskId(
+      std::dynamic_pointer_cast<exec::RemoteConnectorSplit>(
+          split.connectorSplit)
+          ->taskId);
+  exchangeClient->noMoreRemoteTasks();
+  auto driverCtx = std::make_shared<DriverCtx>(
+      sinkTask,
+      /*driverId=*/0,
+      /*pipelineId=*/0,
+      kUngroupedGroupId,
+      /*partitionId=*/0);
+  UcxExchange exchange(
+      0, driverCtx.get(), sinkTask->planFragment().planNode, exchangeClient);
+
+  // Wait until the server has taken every page: the producer's queue is empty
+  // while the consumer has not read the last one.
+  const auto deadline =
+      std::chrono::steady_clock::now() + std::chrono::seconds(30);
+  while (exchangeClient->queue()->size() <
+             UcxExchangeSource::kBackpressureHighWaterMark + 1 ||
+         queueManager()->stats(srcTaskId)->bufferedPages > 0) {
+    ASSERT_LT(std::chrono::steady_clock::now(), deadline)
+        << "Consumer queued " << exchangeClient->queue()->size()
+        << " pages; producer still holds "
+        << queueManager()->stats(srcTaskId)->bufferedPages;
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+
+  srcTask->requestAbort().wait();
+  queueManager()->removeTask(srcTaskId);
+  removeProducer.dismiss();
+
+  uint64_t numRows = 0;
+  std::optional<std::string> error;
+  try {
+    numRows = drainToEnd(
+        exchange,
+        /*maxRows=*/std::numeric_limits<uint64_t>::max(),
+        std::chrono::seconds(30));
+  } catch (const VeloxException& e) {
+    error = e.message();
+  }
+  exchange.close();
+
+  if (numRows != static_cast<uint64_t>(numPages) * numRowsPerPage) {
+    EXPECT_THAT(
+        error,
+        testing::Optional(
+            testing::HasSubstr("Producer failed before sending all its data")))
+        << "Rows received: " << numRows << " of "
+        << static_cast<uint64_t>(numPages) * numRowsPerPage;
+  }
+}
+
+// A producing task removed while its intra-node consumer polls
+// IntraNodeTransferRegistry must stop that consumer with the producer's error,
+// and must not leave it polling forever.
 TEST_F(UcxExchangeFocusedTest, intraNodeTaskRemovalLivelock) {
   const std::string taskPrefix = getUniqueTaskPrefix();
   const std::string srcTaskId = taskPrefix + "srcProducerNeverSends";
@@ -932,6 +1369,7 @@ TEST_F(UcxExchangeFocusedTest, intraNodeTaskRemovalLivelock) {
       sinkTaskId, UcxTestData::kTestRowType, partitionId, exchangeNodeId);
   auto sinkDriver =
       std::make_shared<SinkDriverMock>(sinkTask, /*numDrivers=*/1);
+  sinkDriver->expectError();
 
   // Add split pointing to source task. Since we use a single Communicator,
   // the handshake will resolve to intra-node (same listener IP:port).
@@ -967,7 +1405,10 @@ TEST_F(UcxExchangeFocusedTest, intraNodeTaskRemovalLivelock) {
            << " — intra-node livelock: source stuck polling "
            << "IntraNodeTransferRegistry for cancelled task";
   }
-  // If we get here, the source correctly detected the cancelled task.
+  EXPECT_THAT(
+      sinkDriver->error(),
+      testing::Optional(
+          testing::HasSubstr("Producer failed before sending all its data")));
 }
 
 // Regression test for broadcast + intra-node SIGSEGV.
@@ -1422,12 +1863,12 @@ TEST_F(UcxExchangeFocusedTest, batchAccumulationTest) {
   }
 }
 
-// Regression test: aborting a source task while UCXX tagRecv requests are
-// in-flight must not crash.  Before the deferred-request-cleanup fix,
-// UcxExchangeSource::cleanUp() would destroy the request (and its GPU
-// buffer) while UCX was still using it, causing cudaErrorIllegalAddress in
-// ucp_mem_type_unpack.  The fix moves outstanding requests to
-// Communicator::deferredRequests_ so buffers stay alive until UCX finishes.
+// Aborting a source task while UCXX tagRecv requests are in flight must stop
+// its consumer with the producer's error, and must not crash.
+// UcxExchangeSource::cleanUp() defers outstanding requests to
+// Communicator::deferredRequests_, so their GPU buffers stay alive until UCX
+// is done with them; destroying them earlier fails with
+// cudaErrorIllegalAddress in ucp_mem_type_unpack.
 TEST_F(UcxExchangeFocusedTest, deferredRequestCleanupOnTaskAbort) {
   // Ensure intra-node is disabled so we exercise the UCXX path (tagRecv).
   auto& config = cudf_velox::CudfConfig::getInstance();
@@ -1463,6 +1904,7 @@ TEST_F(UcxExchangeFocusedTest, deferredRequestCleanupOnTaskAbort) {
       createExchangeTask(sinkTaskId, rowType, partitionId, exchangeNodeId);
   auto sinkDriver =
       std::make_shared<SinkDriverMock>(sinkTask, /*numDrivers=*/1);
+  sinkDriver->expectError();
 
   std::vector<exec::Split> splits;
   splits.emplace_back(remoteSplit(srcTaskId, partitionId));
@@ -1493,6 +1935,18 @@ TEST_F(UcxExchangeFocusedTest, deferredRequestCleanupOnTaskAbort) {
     future.wait();
     FAIL() << "Sink driver did not complete within 15s after source abort"
            << " — possible hang in UCXX request cleanup";
+  }
+
+  // The consumer either received every row before the abort or stops with the
+  // producer's error. It never ends cleanly with rows missing.
+  const uint64_t expectedRows =
+      static_cast<uint64_t>(numChunks) * numRowsPerChunk;
+  if (sinkDriver->numRows() != expectedRows) {
+    EXPECT_THAT(
+        sinkDriver->error(),
+        testing::Optional(
+            testing::HasSubstr("Producer failed before sending all its data")))
+        << "Rows received: " << sinkDriver->numRows() << " of " << expectedRows;
   }
 
   // 7. Join source mock threads.

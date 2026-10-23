@@ -20,9 +20,12 @@
 #include <cudf/types.hpp>
 #include <folly/Executor.h>
 #include <folly/synchronization/EventCount.h>
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include <rmm/device_buffer.hpp>
 #include <memory>
+#include <optional>
+#include <string>
 #include <type_traits>
 #include <vector>
 #include "velox/common/memory/MemoryPool.h"
@@ -106,7 +109,8 @@ class UcxOutputQueueManagerTest : public testing::Test {
         [destination, expectedEndMarker, &receivedData](
             std::shared_ptr<cudf::packed_columns> data,
             vector_size_t /*numRows*/,
-            std::vector<int64_t> remainingBytes) {
+            std::vector<int64_t> remainingBytes,
+            std::optional<std::string> /*producerError*/) {
           ASSERT_EQ(expectedEndMarker, data == nullptr)
               << "for destination " << destination;
           receivedData = true;
@@ -120,7 +124,8 @@ class UcxOutputQueueManagerTest : public testing::Test {
     return [destination, &receivedEndMarker](
                std::shared_ptr<cudf::packed_columns> data,
                vector_size_t /*numRows*/,
-               std::vector<int64_t> remainingBytes) {
+               std::vector<int64_t> remainingBytes,
+               std::optional<std::string> /*producerError*/) {
       EXPECT_FALSE(receivedEndMarker) << "for destination " << destination;
       EXPECT_TRUE(data == nullptr) << "for destination " << destination;
       EXPECT_TRUE(remainingBytes.empty());
@@ -155,7 +160,8 @@ class UcxOutputQueueManagerTest : public testing::Test {
     return [destination, &receivedData](
                std::shared_ptr<cudf::packed_columns> data,
                vector_size_t /*numRows*/,
-               std::vector<int64_t> /*remainingBytes*/) {
+               std::vector<int64_t> /*remainingBytes*/,
+               std::optional<std::string> /*producerError*/) {
       EXPECT_FALSE(receivedData) << "for destination " << destination;
       EXPECT_TRUE(data != nullptr) << "for destination " << destination;
       receivedData = true;
@@ -193,7 +199,8 @@ class UcxOutputQueueManagerTest : public testing::Test {
           destination,
           [&](std::shared_ptr<cudf::packed_columns> data,
               vector_size_t /*numRows*/,
-              std::vector<int64_t> /*remainingBytes*/) {
+              std::vector<int64_t> /*remainingBytes*/,
+              std::optional<std::string> /*producerError*/) {
             if (data == nullptr) {
               atEnd = true;
             } else {
@@ -221,7 +228,8 @@ class UcxOutputQueueManagerTest : public testing::Test {
           [&promise](
               std::shared_ptr<cudf::packed_columns> data,
               vector_size_t /*numRows*/,
-              std::vector<int64_t> remainingBytes) {
+              std::vector<int64_t> remainingBytes,
+              std::optional<std::string> /*producerError*/) {
             promise.setValue(
                 Response{std::move(data), std::move(remainingBytes)});
           });
@@ -500,7 +508,8 @@ TEST_F(UcxOutputQueueManagerTest, lateTaskCreation) {
       [&promise](
           std::shared_ptr<cudf::packed_columns> data,
           vector_size_t /*numRows*/,
-          std::vector<int64_t> remainingBytes) {
+          std::vector<int64_t> remainingBytes,
+          std::optional<std::string> /*producerError*/) {
         promise.setValue(Response{std::move(data), std::move(remainingBytes)});
       });
 
@@ -536,7 +545,8 @@ TEST_F(UcxOutputQueueManagerTest, lateTaskCreation) {
         [&promise](
             std::shared_ptr<cudf::packed_columns> data,
             vector_size_t /*numRows*/,
-            std::vector<int64_t> remainingBytes) {
+            std::vector<int64_t> remainingBytes,
+            std::optional<std::string> /*producerError*/) {
           promise.setValue(
               Response{std::move(data), std::move(remainingBytes)});
         });
@@ -603,25 +613,28 @@ TEST_F(UcxOutputQueueManagerTest, multiFetchers) {
   }
 }
 
-// Test BUG B scenario (a): Producer never starts / never calls
-// initializeTask(). getData() creates a stub queue, then removeTask() is
-// called without initializeTask() ever being called. The pending callback
-// must fire with nullptr to unblock the consumer.
+// A producer that never initialized its output and is then removed must still
+// unblock its consumer, and the consumer must learn that the producer ended
+// early: a getData() before initializeTask() leaves a placeholder queue whose
+// callback removeTask() fires.
 TEST_F(UcxOutputQueueManagerTest, callbackFiredOnTerminateBeforeInit) {
   const std::string taskId = "orphanTest";
   queueManager_->removeTask(taskId); // ensure clean state
 
   bool callbackFired = false;
   bool receivedNullptr = false;
+  std::optional<std::string> producerError;
   queueManager_->getData(
       taskId,
       0, // destination
-      [&callbackFired, &receivedNullptr](
+      [&callbackFired, &receivedNullptr, &producerError](
           std::shared_ptr<cudf::packed_columns> data,
           vector_size_t /*numRows*/,
-          std::vector<int64_t> remainingBytes) {
+          std::vector<int64_t> remainingBytes,
+          std::optional<std::string> error) {
         callbackFired = true;
         receivedNullptr = (data == nullptr);
+        producerError = std::move(error);
       });
 
   // Callback should NOT have fired yet (queue is empty, no data).
@@ -634,11 +647,16 @@ TEST_F(UcxOutputQueueManagerTest, callbackFiredOnTerminateBeforeInit) {
   // Callback must have been fired with nullptr.
   EXPECT_TRUE(callbackFired);
   EXPECT_TRUE(receivedNullptr);
+  EXPECT_THAT(
+      producerError,
+      testing::Optional(
+          testing::HasSubstr(
+              "Producer task ended before initializing its output")));
 }
 
-// Test BUG B scenario (b): Producer starts but crashes before noMoreData().
-// initializeTask() was called but noMoreData() was never called.
-// removeTask() must fire pending callbacks with nullptr.
+// A producer that initialized its output but is removed before every driver
+// called noMoreData() must end each destination with its reason, not with a
+// clean end of stream.
 TEST_F(UcxOutputQueueManagerTest, callbackFiredOnTerminateAfterInit) {
   const std::string taskId = "crashTest";
   queueManager_->removeTask(taskId); // ensure clean state
@@ -649,43 +667,386 @@ TEST_F(UcxOutputQueueManagerTest, callbackFiredOnTerminateAfterInit) {
   // Register callbacks on both destinations.
   bool callback0Fired = false;
   bool callback0Nullptr = false;
+  std::optional<std::string> producerError0;
   bool callback1Fired = false;
   bool callback1Nullptr = false;
+  std::optional<std::string> producerError1;
   queueManager_->getData(
       taskId,
       0,
-      [&callback0Fired, &callback0Nullptr](
+      [&callback0Fired, &callback0Nullptr, &producerError0](
           std::shared_ptr<cudf::packed_columns> data,
           vector_size_t /*numRows*/,
-          std::vector<int64_t> remainingBytes) {
+          std::vector<int64_t> remainingBytes,
+          std::optional<std::string> error) {
         callback0Fired = true;
         callback0Nullptr = (data == nullptr);
+        producerError0 = std::move(error);
       });
   queueManager_->getData(
       taskId,
       1,
-      [&callback1Fired, &callback1Nullptr](
+      [&callback1Fired, &callback1Nullptr, &producerError1](
           std::shared_ptr<cudf::packed_columns> data,
           vector_size_t /*numRows*/,
-          std::vector<int64_t> remainingBytes) {
+          std::vector<int64_t> remainingBytes,
+          std::optional<std::string> error) {
         callback1Fired = true;
         callback1Nullptr = (data == nullptr);
+        producerError1 = std::move(error);
       });
 
   // Neither callback should fire yet.
   EXPECT_FALSE(callback0Fired);
   EXPECT_FALSE(callback1Fired);
 
-  // Simulate task failure: abort the task so isRunning() returns false,
-  // which is required by terminate()'s VELOX_CHECK.
+  // Simulate task failure: abort the task, as Task::terminate() does before it
+  // removes the task from the queue manager.
   task->requestAbort().wait();
 
   queueManager_->removeTask(taskId);
 
+  const auto abortedEarly = testing::Optional(
+      testing::AllOf(
+          testing::HasSubstr(
+              "Producer task ended before sending all its output"),
+          testing::HasSubstr("Aborted")));
   EXPECT_TRUE(callback0Fired);
   EXPECT_TRUE(callback0Nullptr);
+  EXPECT_THAT(producerError0, abortedEarly);
   EXPECT_TRUE(callback1Fired);
   EXPECT_TRUE(callback1Nullptr);
+  EXPECT_THAT(producerError1, abortedEarly);
+}
+
+// The coordinator also aborts producers that already sent all their output,
+// for instance after a downstream LIMIT was satisfied. Once their servers took
+// every page, their consumers have everything, so both the end marker queued
+// by noMoreData() and a getData() after removal must stay a clean end of
+// stream.
+TEST_F(UcxOutputQueueManagerTest, removeTaskAfterAllOutputKeepsCleanEndMarker) {
+  const std::string taskId = "finishedThenAborted";
+  auto task = initializeTask(taskId, /*numDestinations=*/1, /*numDrivers=*/1);
+
+  bool endMarkerFired = false;
+  std::optional<std::string> endMarkerError{"not set"};
+  queueManager_->getData(
+      taskId,
+      0,
+      [&endMarkerFired, &endMarkerError](
+          std::shared_ptr<cudf::packed_columns> data,
+          vector_size_t /*numRows*/,
+          std::vector<int64_t> /*remainingBytes*/,
+          std::optional<std::string> error) {
+        EXPECT_EQ(data, nullptr);
+        endMarkerFired = true;
+        endMarkerError = std::move(error);
+      });
+  noMoreData(taskId);
+  EXPECT_TRUE(endMarkerFired);
+  EXPECT_EQ(endMarkerError, std::nullopt);
+
+  task->requestAbort().wait();
+  queueManager_->removeTask(taskId);
+
+  bool lateFired = false;
+  std::optional<std::string> lateError{"not set"};
+  queueManager_->getData(
+      taskId,
+      0,
+      [&lateFired, &lateError](
+          std::shared_ptr<cudf::packed_columns> data,
+          vector_size_t /*numRows*/,
+          std::vector<int64_t> /*remainingBytes*/,
+          std::optional<std::string> error) {
+        EXPECT_EQ(data, nullptr);
+        lateFired = true;
+        lateError = std::move(error);
+      });
+  EXPECT_TRUE(lateFired);
+  EXPECT_EQ(lateError, std::nullopt);
+}
+
+// Removing a task drops whatever its queues still hold. A producer that queued
+// all its output but is aborted before its consumers fetched it has therefore
+// not delivered it, and its consumers must fail rather than end cleanly.
+TEST_F(
+    UcxOutputQueueManagerTest,
+    removeTaskWithUndeliveredOutputReportsProducerError) {
+  const std::string taskId = "queuedThenAborted";
+  auto task = initializeTask(taskId, /*numDestinations=*/1, /*numDrivers=*/1);
+  enqueue(taskId, /*size=*/100);
+  noMoreData(taskId);
+  task->requestAbort().wait();
+  queueManager_->removeTask(taskId);
+
+  bool fired = false;
+  bool receivedNullptr = false;
+  std::optional<std::string> producerError;
+  queueManager_->getData(
+      taskId,
+      0,
+      [&fired, &receivedNullptr, &producerError](
+          std::shared_ptr<cudf::packed_columns> data,
+          vector_size_t /*numRows*/,
+          std::vector<int64_t> /*remainingBytes*/,
+          std::optional<std::string> error) {
+        fired = true;
+        receivedNullptr = (data == nullptr);
+        producerError = std::move(error);
+      });
+  EXPECT_TRUE(fired);
+  EXPECT_TRUE(receivedNullptr);
+  EXPECT_THAT(
+      producerError,
+      testing::Optional(
+          testing::HasSubstr(
+              "Producer task ended before its consumers received all its output")));
+}
+
+// A producer that discards its own queued output before it finished, as
+// UcxPartitionedOutput does when it runs out of GPU memory, must end every
+// waiting and later server's stream with an error. A clean end would book the
+// producer as finished while its rows are gone.
+TEST_F(
+    UcxOutputQueueManagerTest,
+    deleteResultsBeforeAllOutputReportsProducerError) {
+  const std::string taskId = "discardedBeforeEnd";
+  auto task = initializeTask(taskId, /*numDestinations=*/2, /*numDrivers=*/1);
+  enqueue(taskId, /*destination=*/1, /*size=*/100);
+
+  // A server waits on destination 0, which is empty.
+  bool waitingFired = false;
+  std::optional<std::string> waitingError;
+  queueManager_->getData(
+      taskId,
+      0,
+      [&waitingFired, &waitingError](
+          std::shared_ptr<cudf::packed_columns> data,
+          vector_size_t /*numRows*/,
+          std::vector<int64_t> /*remainingBytes*/,
+          std::optional<std::string> error) {
+        EXPECT_EQ(data, nullptr);
+        waitingFired = true;
+        waitingError = std::move(error);
+      });
+  EXPECT_FALSE(waitingFired);
+
+  deleteResults(taskId, 0);
+  deleteResults(taskId, 1);
+
+  EXPECT_TRUE(waitingFired);
+  EXPECT_THAT(
+      waitingError,
+      testing::Optional(
+          testing::HasSubstr(
+              "Producer task discarded its output before sending all of it")));
+
+  // A server that arrives after the discard gets the same error.
+  bool lateFired = false;
+  std::optional<std::string> lateError;
+  queueManager_->getData(
+      taskId,
+      1,
+      [&lateFired, &lateError](
+          std::shared_ptr<cudf::packed_columns> data,
+          vector_size_t /*numRows*/,
+          std::vector<int64_t> /*remainingBytes*/,
+          std::optional<std::string> error) {
+        EXPECT_EQ(data, nullptr);
+        lateFired = true;
+        lateError = std::move(error);
+      });
+  EXPECT_TRUE(lateFired);
+  EXPECT_THAT(
+      lateError,
+      testing::Optional(
+          testing::HasSubstr(
+              "Producer task discarded its output before sending all of it")));
+
+  task->requestAbort().wait();
+  queueManager_->removeTask(taskId);
+}
+
+// An intra-node server takes a page from the producer's queue and later
+// publishes it to IntraNodeTransferRegistry, which drops the page when the
+// producer is removed. The page must count as undelivered from the moment it
+// leaves the queue: removing the producer before the server published it must
+// fail its consumers, even though its queues are empty and every driver
+// finished. Covers a page that was queued before the server asked, which is
+// handed over at once, and one that arrives later, which enqueue() hands over.
+TEST_F(
+    UcxOutputQueueManagerTest,
+    removeTaskDuringIntraNodeHandoffReportsProducerError) {
+  for (const bool queuedBeforeRequest : {true, false}) {
+    SCOPED_TRACE(queuedBeforeRequest ? "immediate" : "deferred");
+    const std::string taskId = queuedBeforeRequest ? "intraNodeHandoffImmediate"
+                                                   : "intraNodeHandoffDeferred";
+    auto task = initializeTask(taskId, /*numDestinations=*/1, /*numDrivers=*/1);
+    if (queuedBeforeRequest) {
+      enqueue(taskId, /*size=*/100);
+      noMoreData(taskId);
+    }
+
+    bool taken = false;
+    queueManager_->getIntraNodeData(
+        taskId,
+        0,
+        [&taken](
+            std::shared_ptr<cudf::packed_columns> data,
+            vector_size_t /*numRows*/,
+            std::vector<int64_t> /*remainingBytes*/,
+            std::optional<std::string> /*error*/) {
+          EXPECT_NE(data, nullptr);
+          taken = true;
+        });
+    if (!queuedBeforeRequest) {
+      enqueue(taskId, /*size=*/100);
+      noMoreData(taskId);
+    }
+    ASSERT_TRUE(taken);
+
+    // The server has the page and has not published it yet.
+    task->requestAbort().wait();
+    queueManager_->removeTask(taskId);
+
+    bool fired = false;
+    std::optional<std::string> producerError;
+    queueManager_->getData(
+        taskId,
+        0,
+        [&fired, &producerError](
+            std::shared_ptr<cudf::packed_columns> data,
+            vector_size_t /*numRows*/,
+            std::vector<int64_t> /*remainingBytes*/,
+            std::optional<std::string> error) {
+          EXPECT_EQ(data, nullptr);
+          fired = true;
+          producerError = std::move(error);
+        });
+    EXPECT_TRUE(fired);
+    EXPECT_THAT(
+        producerError,
+        testing::Optional(
+            testing::HasSubstr(
+                "Producer task ended before its consumers received all its output")));
+  }
+}
+
+// Once the consumer read the page, the producer's output is delivered, and
+// removing it ends the stream cleanly.
+TEST_F(
+    UcxOutputQueueManagerTest,
+    removeTaskAfterIntraNodePageReadKeepsCleanEndMarker) {
+  const std::string taskId = "intraNodePageRead";
+  auto task = initializeTask(taskId, /*numDestinations=*/1, /*numDrivers=*/1);
+  enqueue(taskId, /*size=*/100);
+  noMoreData(taskId);
+  queueManager_->getIntraNodeData(
+      taskId,
+      0,
+      [](std::shared_ptr<cudf::packed_columns> data,
+         vector_size_t /*numRows*/,
+         std::vector<int64_t> /*remainingBytes*/,
+         std::optional<std::string> /*error*/) { EXPECT_NE(data, nullptr); });
+  queueManager_->intraNodePageRetrieved(taskId, /*destination=*/0);
+
+  task->requestAbort().wait();
+  queueManager_->removeTask(taskId);
+
+  bool fired = false;
+  std::optional<std::string> producerError{"not set"};
+  queueManager_->getData(
+      taskId,
+      0,
+      [&fired, &producerError](
+          std::shared_ptr<cudf::packed_columns> data,
+          vector_size_t /*numRows*/,
+          std::vector<int64_t> /*remainingBytes*/,
+          std::optional<std::string> error) {
+        EXPECT_EQ(data, nullptr);
+        fired = true;
+        producerError = std::move(error);
+      });
+  EXPECT_TRUE(fired);
+  EXPECT_EQ(producerError, std::nullopt);
+}
+
+// A broadcast producer keeps its pages for destinations that have not arrived
+// yet. Removing it before the last destination arrived drops those pages, so
+// a destination that arrives later must not see a clean, empty stream.
+TEST_F(
+    UcxOutputQueueManagerTest,
+    removeBroadcastBeforeAllDestinationsReportsProducerError) {
+  const std::string taskId = "broadcastWithBacklog";
+  auto task = initializeTask(
+      taskId,
+      /*numDestinations=*/1,
+      /*numDrivers=*/1,
+      /*cleanup=*/true,
+      core::PartitionedOutputNode::Kind::kBroadcast);
+  enqueue(taskId, 0, 50);
+  noMoreData(taskId);
+  fetch(taskId, 0);
+  fetchEndMarker(taskId, 0);
+
+  task->requestAbort().wait();
+  queueManager_->removeTask(taskId);
+
+  bool fired = false;
+  std::optional<std::string> producerError;
+  queueManager_->getData(
+      taskId,
+      /*destination=*/1,
+      [&fired, &producerError](
+          std::shared_ptr<cudf::packed_columns> data,
+          vector_size_t /*numRows*/,
+          std::vector<int64_t> /*remainingBytes*/,
+          std::optional<std::string> error) {
+        EXPECT_EQ(data, nullptr);
+        fired = true;
+        producerError = std::move(error);
+      });
+  EXPECT_TRUE(fired);
+  EXPECT_THAT(
+      producerError,
+      testing::Optional(
+          testing::HasSubstr(
+              "Producer task ended before its consumers received all its output")));
+}
+
+// A consumer that connects only after its failed producer was removed must
+// learn the reason too, rather than read an empty, complete stream.
+TEST_F(
+    UcxOutputQueueManagerTest,
+    lateGetDataAfterFailedRemovalReportsProducerError) {
+  const std::string taskId = "abortedThenFetched";
+  auto task = initializeTask(taskId, /*numDestinations=*/1, /*numDrivers=*/1);
+  task->requestAbort().wait();
+  queueManager_->removeTask(taskId);
+
+  bool fired = false;
+  bool receivedNullptr = false;
+  std::optional<std::string> producerError;
+  queueManager_->getData(
+      taskId,
+      0,
+      [&fired, &receivedNullptr, &producerError](
+          std::shared_ptr<cudf::packed_columns> data,
+          vector_size_t /*numRows*/,
+          std::vector<int64_t> /*remainingBytes*/,
+          std::optional<std::string> error) {
+        fired = true;
+        receivedNullptr = (data == nullptr);
+        producerError = std::move(error);
+      });
+  EXPECT_TRUE(fired);
+  EXPECT_TRUE(receivedNullptr);
+  EXPECT_THAT(
+      producerError,
+      testing::Optional(
+          testing::HasSubstr(
+              "Producer task ended before sending all its output")));
 }
 
 // --- Broadcast tests ---
