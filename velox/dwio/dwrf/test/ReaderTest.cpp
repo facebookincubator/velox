@@ -2497,11 +2497,13 @@ FlatMapReaderWithKeyFilter createFlatMapReaderWithKeyFilter(
 } // namespace
 
 TEST_F(TestReader, seekToRow) {
-  auto batches = createBatches({{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}});
+  auto batches = createBatches(
+      {{0, 1, 2, 3, 4, 5, 6, 7, 8, 9},
+       {10, 11, 12, 13, 14, 15, 16, 17, 18, 19}});
   auto schema = asRowType(batches.front()->type());
   auto [writer, reader] =
       createWriterReader(batches, pool(), dataIoStats_, metadataIoStats_);
-  ASSERT_EQ(reader->getNumberOfStripes(), 1);
+  ASSERT_EQ(reader->getNumberOfStripes(), 2);
 
   auto scanSpec = std::make_shared<common::ScanSpec>("root");
   scanSpec->addAllChildFields(*schema);
@@ -2520,9 +2522,48 @@ TEST_F(TestReader, seekToRow) {
   ASSERT_EQ(rowReader->next(2, result), 2);
   assertEqualVectors(batches.front()->slice(7, 2), result);
 
+  // Seek into the middle of the second stripe.
+  ASSERT_EQ(rowReader->seekToRow(13), 13);
+  ASSERT_EQ(rowReader->next(2, result), 2);
+  assertEqualVectors(batches.back()->slice(3, 2), result);
+
+  // Seek back to the middle of the first stripe.
+  ASSERT_EQ(rowReader->seekToRow(3), 3);
+  ASSERT_EQ(rowReader->next(2, result), 2);
+  assertEqualVectors(batches.front()->slice(3, 2), result);
+
+  ASSERT_EQ(rowReader->seekToRow(19), 19);
   ASSERT_EQ(rowReader->next(2, result), 1);
-  assertEqualVectors(batches.front()->slice(9, 1), result);
+  assertEqualVectors(batches.back()->slice(9, 1), result);
   EXPECT_EQ(rowReader->next(2, result), 0);
+}
+
+TEST_F(TestReader, seekToRowWithStrideFilter) {
+  // Row groups contain 1, 0 in the first stripe and 0, 1 in the second.
+  auto input = makeRowVector({makeFlatVector<int32_t>(
+      4000, [](auto row) { return row < 1000 || row >= 3000; })});
+  auto config = std::make_shared<Config>();
+  config->set(Config::ROW_INDEX_STRIDE, 1000u);
+  auto [writer, reader] = createWriterReader(
+      {input}, pool(), dataIoStats_, metadataIoStats_, config, [] {
+        return std::make_unique<RowThresholdFlushPolicy>(2000);
+      });
+  ASSERT_EQ(reader->getNumberOfStripes(), 2);
+
+  auto scanSpec = std::make_shared<common::ScanSpec>("root");
+  scanSpec->addAllChildFields(*asRowType(input->type()));
+  scanSpec->childByName("c0")->setFilter(
+      std::make_unique<common::BigintRange>(1, 1, false));
+  RowReaderOptions options;
+  options.setScanSpec(scanSpec);
+  auto rowReader = reader->createDwrfRowReader(options);
+  auto result = BaseVector::create(input->type(), 0, pool());
+  ASSERT_EQ(rowReader->next(2, result), 2);
+
+  // The first stripe's bitmap must not skip matching rows in the second.
+  ASSERT_EQ(rowReader->seekToRow(3000), 3000);
+  ASSERT_EQ(rowReader->next(2, result), 2);
+  assertEqualVectors(input->slice(3000, 2), result);
 }
 
 TEST_F(TestReader, resetFilterCachesWithoutStripeInRange) {
