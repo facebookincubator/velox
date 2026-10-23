@@ -61,6 +61,8 @@
 #include <folly/synchronization/Baton.h>
 #include <folly/synchronization/Latch.h>
 
+#include <functional>
+
 using namespace facebook::velox;
 using namespace facebook::velox::common::testutil;
 using namespace facebook::velox::connector;
@@ -852,6 +854,61 @@ TEST_F(TableScanTest, directBufferInputRawInputBytes) {
   assertStorageReadStats(runtimeStats, filePath->fileSize());
   ASSERT_GT(runtimeStats.at("totalScanTime").sum, 0);
   ASSERT_GT(runtimeStats.at("ioWaitWallNanos").sum, 0);
+}
+
+// The split's size differs from the file's so that the assertion tells which
+// one the scan reports. Local opens take the size from the file itself.
+TEST_F(TableScanTest, rawInputBytesFromSplitFileSize) {
+  using cudf_velox::connector::hive::CudfHiveConfig;
+  auto vectors = makeVectors(2, 100);
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), vectors);
+  createDuckDbTable(vectors);
+  const int64_t fileSize = filePath->fileSize();
+  const int64_t splitFileSize = fileSize + 4'096;
+
+  struct FileSizeSource {
+    std::string name;
+    std::function<void(hive::HiveConnectorSplitBuilder&)> setFileSize;
+    int64_t expectedRawInputBytes;
+  };
+  const std::vector<FileSizeSource> fileSizeSources = {
+      {"none", [](auto&) {}, fileSize},
+      {"$file_size",
+       [&](auto& builder) {
+         builder.infoColumn("$file_size", std::to_string(splitFileSize));
+       },
+       splitFileSize},
+      {"properties",
+       [&](auto& builder) {
+         builder.fileProperties(FileProperties{.fileSize = splitFileSize});
+       },
+       splitFileSize},
+  };
+
+  for (const auto* useBufferedInput : {"true", "false"}) {
+    for (const auto& source : fileSizeSources) {
+      SCOPED_TRACE(
+          fmt::format(
+              "use_buffered_input={} file size from {}",
+              useBufferedInput,
+              source.name));
+      // A scan consumes its split, so every case builds a fresh one.
+      hive::HiveConnectorSplitBuilder builder(filePath->getPath());
+      builder.connectorId(kCudfHiveConnectorId)
+          .fileFormat(dwio::common::FileFormat::PARQUET);
+      source.setFileSize(builder);
+      auto task = AssertQueryBuilder(tableScanNode(), duckDbQueryRunner_)
+                      .connectorSessionProperty(
+                          kCudfHiveConnectorId,
+                          CudfHiveConfig::kUseBufferedInputSession,
+                          useBufferedInput)
+                      .split(builder.build())
+                      .assertResults("SELECT * FROM tmp");
+      EXPECT_EQ(
+          getTableScanStats(task).rawInputBytes, source.expectedRawInputBytes);
+    }
+  }
 }
 
 TEST_P(TableScanTestParameterized, scanOnNonDefaultGpu) {
@@ -1802,6 +1859,67 @@ TEST_F(TableScanTest, splitOffsetAndLength) {
       tableScanNode(),
       makeCudfHiveConnectorSplit(filePath->getPath(), fileSize),
       "SELECT * FROM tmp LIMIT 0");
+}
+
+// A split carries the file size in its properties or, as Presto sends it, in
+// the $file_size info column; both survive a serialization round trip.
+TEST_F(TableScanTest, splitCarriesFileSize) {
+  using cudf_velox::connector::hive::CudfHiveConnectorSplit;
+  auto split =
+      CudfHiveConnectorSplitBuilder("/data/file.parquet")
+          .fileProperties(
+              FileProperties{.fileSize = 1'234, .modificationTime = 5'678})
+          .build();
+  auto copy = CudfHiveConnectorSplit::create(split->serialize());
+  ASSERT_TRUE(copy->properties.has_value());
+  EXPECT_EQ(copy->properties->fileSize, 1'234);
+  EXPECT_EQ(copy->properties->modificationTime, 5'678);
+  EXPECT_EQ(copy->fileSize(), 1'234);
+
+  auto fromInfoColumn = CudfHiveConnectorSplitBuilder("/data/file.parquet")
+                            .infoColumn("$file_size", "1234")
+                            .build();
+  EXPECT_FALSE(fromInfoColumn->properties.has_value());
+  EXPECT_EQ(fromInfoColumn->fileSize(), 1'234);
+  EXPECT_EQ(
+      CudfHiveConnectorSplit::create(fromInfoColumn->serialize())->fileSize(),
+      1'234);
+
+  auto bare = CudfHiveConnectorSplitBuilder("/data/file.parquet").build();
+  EXPECT_FALSE(bare->fileSize().has_value());
+  EXPECT_FALSE(
+      CudfHiveConnectorSplit::create(bare->serialize())
+          ->properties.has_value());
+
+  // A negative size in the properties is no size, so the info column stands
+  // in for it, and a valid size in the properties wins over the info column.
+  EXPECT_EQ(
+      CudfHiveConnectorSplitBuilder("/data/file.parquet")
+          .fileProperties(FileProperties{.fileSize = -1})
+          .infoColumn("$file_size", "1234")
+          .build()
+          ->fileSize(),
+      1'234);
+  EXPECT_FALSE(CudfHiveConnectorSplitBuilder("/data/file.parquet")
+                   .fileProperties(FileProperties{.fileSize = -1})
+                   .build()
+                   ->fileSize()
+                   .has_value());
+  EXPECT_EQ(
+      CudfHiveConnectorSplitBuilder("/data/file.parquet")
+          .fileProperties(FileProperties{.fileSize = 1'234})
+          .infoColumn("$file_size", "5678")
+          .build()
+          ->fileSize(),
+      1'234);
+  for (const auto* notASize : {"", "abc", "-1", "12.5"}) {
+    EXPECT_FALSE(CudfHiveConnectorSplitBuilder("/data/file.parquet")
+                     .infoColumn("$file_size", notASize)
+                     .build()
+                     ->fileSize()
+                     .has_value())
+        << notASize;
+  }
 }
 
 // Verify that a `count(*)` scan with no projected columns returns the correct

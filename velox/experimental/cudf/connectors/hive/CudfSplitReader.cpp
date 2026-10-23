@@ -546,6 +546,32 @@ bool CudfSplitReader::hasSplitSpecificPushdownFilter() const {
   return hasSplitSpecificPushdownFilter_;
 }
 
+namespace {
+
+// Names the split's file for cuDF, with its size when the split carries one,
+// so that a remote open skips the request for the size.
+cudf::io::source_info makeSourceInfo(const CudfHiveConnectorSplit& split) {
+  cudf::io::filepath_source source{.path = split.filePath};
+  if (const auto fileSize = split.fileSize()) {
+    source.size = static_cast<std::size_t>(*fileSize);
+  }
+  return cudf::io::source_info{
+      std::vector<cudf::io::filepath_source>{std::move(source)}};
+}
+
+} // namespace
+
+bool CudfSplitReader::ignoreMissingFiles() const {
+  const HiveConfig hiveConfig(cudfHiveConfig_->config());
+  return hiveConfig.ignoreMissingFiles(connectorQueryCtx_->sessionProperties());
+}
+
+void CudfSplitReader::markSplitEmpty() {
+  emptySplit_ = true;
+  dataSource_.reset();
+  fileMetaDatas_.clear();
+}
+
 void CudfSplitReader::setupCudfDataSource() {
   if (dataSource_ or emptySplit_) {
     return;
@@ -563,23 +589,20 @@ void CudfSplitReader::setupCudfDataSource() {
       CudfHiveConfig::kUseBufferedInput,
       split_->filePath);
 
-  const HiveConfig hiveConfig(cudfHiveConfig_->config());
-  const bool ignoreMissingFiles =
-      hiveConfig.ignoreMissingFiles(connectorQueryCtx_->sessionProperties());
+  const bool ignoreMissingFiles = this->ignoreMissingFiles();
 
   // Helper to create a KvikIO data source.
   auto makeKvikioDataSource = [&]() {
     try {
       dataSource_ = std::move(
-          cudf::io::make_datasources(cudf::io::source_info{split_->filePath})
-              .front());
+          cudf::io::make_datasources(makeSourceInfo(*split_)).front());
     } catch (const std::system_error& e) {
       // KvikIO preserves errno for local opens only.
       // TODO: Ignore missing remote files once KvikIO reports them
       // distinctly.
       if (ignoreMissingFiles and
           e.code() == std::errc::no_such_file_or_directory) {
-        emptySplit_ = true;
+        markSplitEmpty();
         return;
       }
       throw;
@@ -599,14 +622,16 @@ void CudfSplitReader::setupCudfDataSource() {
     const auto fileHandleKey = FileHandleKey{
         .filename = split_->filePath,
         .tokenProvider = connectorQueryCtx_->fsTokenProvider()};
-    auto fileProperties = FileProperties{};
+    auto fileProperties = split_->properties.value_or(FileProperties{});
+    // The size can also come from the $file_size info column.
+    fileProperties.fileSize = split_->fileSize();
     fileHandleCachePtr = fileHandleFactory_->generate(
         fileHandleKey, &fileProperties, ioStats_ ? ioStats_.get() : nullptr);
     VELOX_CHECK_NOT_NULL(fileHandleCachePtr.get());
   } catch (const VeloxRuntimeError& e) {
     if (ignoreMissingFiles) {
       if (e.errorCode() == error_code::kFileNotFound) {
-        emptySplit_ = true;
+        markSplitEmpty();
         return;
       }
       // Rethrow actual filesystem errors only. Unsupported paths may fall back
@@ -741,7 +766,17 @@ CudfSplitReader::fileMetaDatas() {
   // Wrap the existing datasource without transferring ownership.
   std::vector<std::unique_ptr<cudf::io::datasource>> sources;
   sources.push_back(cudf::io::datasource::create(dataSource_.get()));
-  fileMetaDatas_ = cudf::io::read_parquet_footers(sources);
+  try {
+    fileMetaDatas_ = cudf::io::read_parquet_footers(sources);
+  } catch (const VeloxRuntimeError& e) {
+    // An open that knows the file size sends no request to the storage, so a
+    // missing file first shows at this read.
+    if (ignoreMissingFiles() and e.errorCode() == error_code::kFileNotFound) {
+      markSplitEmpty();
+      return fileMetaDatas_;
+    }
+    throw;
+  }
   VELOX_CHECK_GE(
       fileMetaDatas_.size(),
       1,
