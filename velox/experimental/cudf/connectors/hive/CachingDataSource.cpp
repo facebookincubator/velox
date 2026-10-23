@@ -51,8 +51,7 @@
 // Each piece comes from one async data cache entry, looked up by (file, offset
 // of the piece):
 //   - Entry found: copy its bytes. The entry may be shorter than the rest of
-//     the range (CacheEntrySizePolicy::kAllowSmaller). The next piece then
-//     starts where this entry ends.
+//     the range. The next piece then starts where this entry ends.
 //   - No entry: do a remote read of the rest of the range into a new entry,
 //     then copy its bytes.
 //   - Entry being filled by another read: wait for it, then look it up again.
@@ -315,7 +314,7 @@ class Reader {
   }
 
   // How many of the 'wanted' bytes the cache entry in 'pin' holds. An entry
-  // may be shorter than the request (CacheEntrySizePolicy::kAllowSmaller).
+  // may be shorter than the request.
   static size_t pieceSize(const cache::CachePin& pin, size_t wanted) {
     const auto entrySize = pin.checkedEntry()->size();
     VELOX_CHECK_GT(entrySize, 0, "A cache entry must hold at least one byte");
@@ -332,32 +331,32 @@ class Reader {
       size_t offset,
       size_t size,
       folly::SemiFuture<bool>* otherReaderFill) {
+    const cache::RawFileCacheKey key{fileId_.id(), offset};
     cache::CachePin pin;
-    try {
-      pin = cache_->findOrCreate(
-          {fileId_.id(), offset},
-          size,
-          /*contiguous=*/true,
-          otherReaderFill,
-          cache::CacheEntrySizePolicy::kAllowSmaller);
-    } catch (const VeloxRuntimeError& error) {
-      if (error.errorCode() != error_code::kNoCacheSpace) {
-        throw;
+    // An entry exists: find() returns it whatever its size, or an empty pin
+    // while another reader fills it. The entry may be shorter or longer than
+    // 'size'. findOrCreate() would treat a shorter entry as stale and replace
+    // it. It is therefore called only on a miss.
+    if (auto found = cache_->find(key, otherReaderFill)) {
+      pin = std::move(found.value());
+    } else {
+      // Cache miss.
+      try {
+        pin = cache_->findOrCreate(
+            key, size, /*contiguous=*/true, otherReaderFill);
+      } catch (const VeloxRuntimeError& error) {
+        if (error.errorCode() != error_code::kNoCacheSpace) {
+          throw;
+        }
+        // The cache has no room.
+        return {};
       }
-      // The cache has no room.
-      return {};
     }
     if (pin.empty()) {
       // Another reader is filling the entry.
       return pin;
     }
-    auto* entry = pin.checkedEntry();
-    entry->getAndClearFirstUseFlag();
-    if (entry->isExclusive() && !entry->hasContiguousData()) {
-      // KvikIO can only read into one block of memory, and the new entry
-      // is not one block.
-      return {};
-    }
+    pin.checkedEntry()->getAndClearFirstUseFlag();
     return pin;
   }
 

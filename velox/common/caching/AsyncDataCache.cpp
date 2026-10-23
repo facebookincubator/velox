@@ -251,8 +251,7 @@ std::unique_ptr<AsyncDataCacheEntry> CacheShard::getFreeEntryLocked() {
 std::optional<CachePin> CacheShard::lookupLocked(
     RawFileCacheKey key,
     uint64_t size,
-    folly::SemiFuture<bool>* wait,
-    CacheEntrySizePolicy sizePolicy) {
+    folly::SemiFuture<bool>* wait) {
   ++eventCounter_;
   auto it = entryMap_.find(key);
   if (it == entryMap_.end()) {
@@ -267,8 +266,7 @@ std::optional<CachePin> CacheShard::lookupLocked(
     return CachePin{};
   }
   // size=0 (from find()) always passes since entry size is non-negative.
-  if (sizePolicy == CacheEntrySizePolicy::kRequireAtLeast &&
-      foundEntry->size() < size) {
+  if (foundEntry->size() < size) {
     // This can happen if different load quanta apply to access via different
     // connectors. This is not an error but still worth logging.
     VELOX_CACHE_LOG_EVERY_MS(WARNING, 1'000)
@@ -298,12 +296,11 @@ CachePin CacheShard::findOrCreate(
     RawFileCacheKey key,
     uint64_t size,
     bool contiguous,
-    folly::SemiFuture<bool>* wait,
-    CacheEntrySizePolicy sizePolicy) {
+    folly::SemiFuture<bool>* wait) {
   AsyncDataCacheEntry* entryToInit = nullptr;
   {
     std::lock_guard<std::mutex> l(mutex_);
-    auto result = lookupLocked(key, size, wait, sizePolicy);
+    auto result = lookupLocked(key, size, wait);
     if (result.has_value()) {
       return std::move(result.value());
     }
@@ -877,10 +874,9 @@ CachePin AsyncDataCache::findOrCreate(
     RawFileCacheKey key,
     uint64_t size,
     bool contiguous,
-    folly::SemiFuture<bool>* wait,
-    CacheEntrySizePolicy sizePolicy) {
+    folly::SemiFuture<bool>* wait) {
   const int shard = std::hash<RawFileCacheKey>()(key) & shardMask_;
-  return shards_[shard]->findOrCreate(key, size, contiguous, wait, sizePolicy);
+  return shards_[shard]->findOrCreate(key, size, contiguous, wait);
 }
 
 std::optional<CachePin> AsyncDataCache::find(
