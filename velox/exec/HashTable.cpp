@@ -107,6 +107,11 @@ class ProbeState {
     return row_;
   }
 
+  // The row of the first tag match found by firstProbe(), or nullptr.
+  char* group() const {
+    return group_;
+  }
+
   // Use one instruction to make 16 copies of the tag being searched for
   template <typename Table>
   inline void preProbe(const Table& table, uint64_t hash, int32_t row) {
@@ -496,6 +501,11 @@ void HashTable<ignoreNullKeys>::groupProbeWithPrefetch(HashLookup& lookup) {
   const int32_t numProbes = lookup.rows.size();
   const vector_size_t* rows = lookup.rows.data();
   const uint64_t* hashes = lookup.hashes.data();
+  // Prefetch the row tail to overlap the accumulator access with probe work.
+  // Narrow rows (< 64 bytes) are skipped: on x86 microbenchmarks the extra
+  // prefetch there was a net loss.
+  const int32_t rowSize = rows_->fixedRowSize();
+  const bool prefetchRowEnd = rowSize >= 64;
   for (int32_t probeIndex = 0; probeIndex < numProbes;
        probeIndex += kPrefetchSize) {
     const int32_t numStates = std::min(kPrefetchSize, numProbes - probeIndex);
@@ -505,6 +515,11 @@ void HashTable<ignoreNullKeys>::groupProbeWithPrefetch(HashLookup& lookup) {
     }
     for (int32_t i = 0; i < numStates; ++i) {
       states[i].firstProbe<ProbeState::Operation::kInsert>(*this, kKeyOffset);
+      if (prefetchRowEnd) {
+        if (const char* group = states[i].group()) {
+          __builtin_prefetch(group + rowSize - 1);
+        }
+      }
     }
     // Tags loaded by firstProbe() go stale once an earlier state in this
     // window inserts a new group, possibly with the same key.
