@@ -35,6 +35,7 @@
 #include "velox/exec/Driver.h"
 #include "velox/exec/FixedPointSplit.h"
 #include "velox/exec/HashTable.h"
+#include "velox/exec/MemoryReclaimer.h"
 #include "velox/exec/OperatorUtils.h"
 #include "velox/exec/RowContainer.h"
 #include "velox/exec/Split.h"
@@ -59,6 +60,22 @@ RowVectorPtr copyRowVector(
   return target;
 }
 
+// Adds a leaf named 'name' to the pool of 'task', for memory that drivers of
+// the loop's sub-tasks allocate.  When the task's pool has a reclaimer, so does
+// the leaf: one that suspends the allocating driver while it waits for memory
+// arbitration, as Task does for its exchange client pools.  A reclaim of the
+// query waits for the drivers of each task it reclaims to pause, which a driver
+// that is not suspended never does.
+std::shared_ptr<memory::MemoryPool> addSubTaskLeafPool(
+    exec::Task& task,
+    const std::string& name) {
+  auto* pool = task.pool();
+  return pool->addLeafChild(
+      name,
+      /*threadSafe=*/true,
+      pool->reclaimer() != nullptr ? exec::MemoryReclaimer::create() : nullptr);
+}
+
 uint64_t countRows(const std::vector<RowVectorPtr>& batches) {
   uint64_t numRows{0};
   for (const auto& batch : batches) {
@@ -80,9 +97,9 @@ void clearTaskStats(FixedPointChainExecutionStats& chain) {
 // task resolves its completion future while drivers that are on thread keep
 // running, and those drivers can still call a consumer that writes into the
 // caller's frame.  For a task that runs a nested fixed point, this waits for
-// the drivers above it; its loop stops at its own next wait, holding the
-// caller's task alive until then.  Runs while an error unwinds, so it logs a
-// failure to abort instead of throwing.
+// the drivers above it; its loop stops at its own next wait, and the task holds
+// the pool of the caller's state until it is destroyed.  Runs while an error
+// unwinds, so it logs a failure to abort instead of throwing.
 void abortAndWait(const std::vector<exec::TaskPtr>& tasks) {
   std::vector<ContinueFuture> futures;
   futures.reserve(tasks.size());
@@ -204,15 +221,11 @@ FixedPointLoop::FixedPointLoop(
           fixedPointOptions != nullptr ? *fixedPointOptions
                                        : FixedPointOptions{}),
       nested_(nested != nullptr ? *nested : NestedFixedPoint{}),
-      enclosingTask_(
-          nested_.parent != nullptr
-              ? nested_.parent->owner()->shared_from_this()
-              : nullptr),
       executionMode_(owner->executionMode()),
       owner_(owner),
       node_(&node) {
   VELOX_CHECK_NOT_NULL(owner_);
-  if (nested_.parent != nullptr) {
+  if (nested_.statePool != nullptr) {
     workers_ = nested_.workers;
     nesting_ = nested_.nesting;
     nesting_.push_back(
@@ -331,7 +344,7 @@ void FixedPointLoop::addSplit(
           node_->id(),
           "FixedPointSplit addressed to a node other than its FixedPointNode");
       VELOX_USER_CHECK(
-          nested_.parent == nullptr,
+          nested_.statePool == nullptr,
           "FixedPointSplit for a nested fixed point, which runs on the workers "
           "of the loop enclosing it: {}",
           node_->id());
@@ -458,7 +471,7 @@ folly::coro::Task<void> FixedPointLoop::run() {
 folly::coro::Task<void> FixedPointLoop::awaitWorkers() {
   // A nested loop got its workers from the enclosing loop, and a top-level
   // loop that reads no peers needs none.
-  if (workersReady_ || nested_.parent != nullptr || !node_->readsPeers()) {
+  if (workersReady_ || nested_.statePool != nullptr || !node_->readsPeers()) {
     co_return;
   }
   co_await awaitWhileRunning(
@@ -502,16 +515,10 @@ folly::coro::Task<void> FixedPointLoop::initialize() {
   // worker 0, and every worker receives its verdict.  Any other criterion runs
   // on every worker and must read the same value on each: state the body's
   // shuffle keeps identical, e.g. replicated.
-  // Keyed by task id, not by query and worker index: one query may run several
-  // fixed points at the same worker index -- siblings, or one nested inside
-  // another's body -- and this pool is a child of the process-wide root, where
-  // a repeated name is an error.
-  statePool_ = memory::memoryManager()->addLeafPool(
-      fmt::format("fixedpoint.state.{}", owner_->taskId()));
-  state_ = std::make_shared<PersistentState>(statePool_);
-  // The state lives on this task (state_); its sub-tasks reach it via the
-  // parentFixedPoint() link set when they are created -- no global or QueryCtx
-  // registry.
+  state_ = std::make_shared<PersistentState>(
+      addSubTaskLeafPool(*owner_, "fixedpoint.state"));
+  // Each sub-task receives the state and its pool when it is created -- no
+  // global or QueryCtx registry.
 
   std::vector<FixedPointPlanExecutionStats> initializationPlans;
   co_await initializeState(initializationPlans);
@@ -536,16 +543,13 @@ folly::coro::Task<void> FixedPointLoop::finalize() {
   finished_.setValue();
   co_return;
 
-  // The state pool is intentionally NOT released here.  A sub-task driver can
-  // still be tearing down asynchronously after its
-  // owner_->taskCompletionFuture() has resolved, holding persistent-state
-  // vectors; releasing the pool now would race that teardown and trip
-  // ~MemoryPoolImpl.  state_/statePool_ are members released only in the
-  // FixedPointLoop destructor, by which point every sub-task created during
-  // the loop is long gone.  (Waiting on each sub-task's
-  // owner_->taskDeletionFuture() before releasing is not viable: a shuffle
-  // producer is read by peer workers, so a peer must outlive it -- the wait
-  // would deadlock.)
+  // The state's pool is not released here.  A sub-task can still be tearing
+  // down after its taskCompletionFuture() has resolved, and even after this
+  // loop and its task are destroyed, holding vectors and hash tables from the
+  // state.  So each sub-task holds the pool, which goes once the last of this
+  // loop and its sub-tasks is destroyed.  (Waiting on each sub-task's
+  // taskDeletionFuture() instead is not viable: a shuffle producer is read by
+  // peer workers, so a peer must outlive it -- the wait would deadlock.)
 }
 
 folly::coro::Task<void> FixedPointLoop::initializeState(
@@ -567,7 +571,7 @@ folly::coro::Task<void> FixedPointLoop::initializeState(
       auto [batches, taskStats] = co_await drainPlan(
           vector->initialPlan(),
           /*iteration=*/0,
-          statePool_.get(),
+          state_->pool().get(),
           maxDrivers_);
       state_->setVector(vector->name(), batches);
       initializationPlans.push_back({
@@ -680,7 +684,7 @@ folly::coro::Task<FixedPointPlanExecutionStats> FixedPointLoop::buildHashTable(
       numDrivers,
       [&]() -> exec::Consumer {
         auto part = createHashTable(
-            declaration, queryCtx.queryConfig(), state_->pool());
+            declaration, queryCtx.queryConfig(), state_->pool().get());
         auto* rawPart = part.get();
         {
           std::lock_guard<std::mutex> l(partsMutex);
@@ -749,7 +753,8 @@ NestedFixedPoint FixedPointLoop::subTaskNesting(
     int32_t iteration,
     std::vector<std::string> workers) {
   return NestedFixedPoint{
-      .parent = this,
+      .state = state_,
+      .statePool = state_->pool(),
       .workers = std::move(workers),
       .nesting = nesting_,
       .iteration = iteration,
@@ -1060,9 +1065,8 @@ folly::coro::Task<std::vector<RowVectorPtr>> FixedPointLoop::runParallelChain(
   // Deliberately do NOT wait on these sub-tasks' owner_->taskDeletionFuture()
   // here.  A producer sub-task (PartitionedOutput) is read by peer workers, so
   // a peer must outlive it -- waiting for its full teardown would deadlock
-  // against the peer.  Their persistent-state references are instead kept safe
-  // by the state pool living for the whole FixedPointLoop lifetime (it is
-  // released in the destructor, not eagerly in run()).
+  // against the peer.  Each sub-task instead holds the pool of the persistent
+  // state it reads, which therefore outlives the sub-task's teardown.
   stats.outputRows = countRows(output);
   stats.totalNanos = chainTimer.elapsed().count();
   co_return output;
@@ -1087,8 +1091,8 @@ folly::coro::Task<void> FixedPointLoop::runIteration(int32_t iteration) {
   // back into the output state entry, appending or replacing per its
   // declaration.  A scratch pool holds the captured rows until writeVector
   // deep-copies them into the stable state pool.
-  auto scratchPool = owner_->pool()->addLeafChild(
-      fmt::format("fixedpoint.body.{}", iteration));
+  auto scratchPool =
+      addSubTaskLeafPool(*owner_, fmt::format("fixedpoint.body.{}", iteration));
 
   // Every sub-task inherits this task's execution mode (the constructor already
   // rejected a serial fixed point with a shuffling body).  Parallel runs the
@@ -1196,8 +1200,8 @@ folly::coro::Task<bool> FixedPointLoop::converged() {
     co_return false;
   }
 
-  auto convergencePool = owner_->pool()->addLeafChild(
-      fmt::format("fixedpoint.convergence.{}", iterations_));
+  auto convergencePool = addSubTaskLeafPool(
+      *owner_, fmt::format("fixedpoint.convergence.{}", iterations_));
 
   // The sequence runs over the state the iteration just committed, chained by
   // shuffle exactly as the body is -- which is what lets a criterion reduce

@@ -23,6 +23,7 @@
 #include <atomic>
 #include <chrono>
 #include <functional>
+#include <set>
 #include <thread>
 #include <tuple>
 
@@ -36,7 +37,9 @@
 #include "velox/exec/Exchange.h"
 #include "velox/exec/FixedPointLoop.h"
 #include "velox/exec/FixedPointSplit.h"
+#include "velox/exec/MemoryReclaimer.h"
 #include "velox/exec/Operator.h"
+#include "velox/exec/OperatorType.h"
 #include "velox/exec/PartitionFunction.h"
 #include "velox/exec/Split.h"
 #include "velox/exec/Task.h"
@@ -3540,7 +3543,7 @@ DEBUG_ONLY_TEST_F(FixedPointTest, failedInitialPlanStopsDriversFirst) {
   SCOPED_TESTVALUE_SET(
       "facebook::velox::exec::Driver::runInternal::getOutput",
       std::function<void(Operator*)>([task, held](Operator* op) {
-        if (op->operatorType() != "Values") {
+        if (op->operatorType() != OperatorType::kValues) {
           return;
         }
         if (op->operatorCtx()->driverCtx()->driverId == 0) {
@@ -3614,12 +3617,12 @@ DEBUG_ONLY_TEST_F(FixedPointTest, failedBodyPlanStopsChainFirst) {
       "facebook::velox::exec::Driver::runInternal::getOutput",
       std::function<void(Operator*)>(
           [task, held, numProducerBatches](Operator* op) {
-            if (op->operatorType() == "FixedPointStateSource" &&
+            if (op->operatorType() == OperatorType::kFixedPointStateSource &&
                 ++*numProducerBatches == 2) {
               waitFor(held->onThread);
               VELOX_FAIL("Injected producer failure");
             }
-            if (op->operatorType() == "Exchange") {
+            if (op->operatorType() == OperatorType::kExchange) {
               holdUntilStopped(*task, *held);
               VELOX_FAIL("Injected failure of the held consumer");
             }
@@ -3632,6 +3635,128 @@ DEBUG_ONLY_TEST_F(FixedPointTest, failedBodyPlanStopsChainFirst) {
   EXPECT_FALSE(held->ownerStoppedFirst);
   VELOX_ASSERT_THROW(
       std::rethrow_exception(task->error()), "Injected producer failure");
+}
+
+// A sub-task can outlive its loop's task, so the pool of the loop's state must
+// outlive the sub-task.  The body reads two batches through a StateSource, a
+// local exchange and a Limit of one row.  The StateSource is held on its thread
+// before its second read, and the Limit takes its row only then.  A sub-task
+// completes once its output pipeline finishes, so the sub-task, its loop and
+// the loop's task finish while the StateSource still holds the batches.  The
+// StateSource frees them when released, after the loop's task is deleted.
+DEBUG_ONLY_TEST_F(FixedPointTest, stateOutlivesSubTask) {
+  auto schema = ROW({"key", "val"}, BIGINT());
+  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto node = PlanBuilder(idGenerator)
+                  .fixedPoint(
+                      std::make_shared<VectorStateDeclaration>(
+                          "values",
+                          schema,
+                          PlanBuilder(idGenerator)
+                              .values(makeOneRowBatches(2))
+                              .planNode()),
+                      PlanBuilder(idGenerator)
+                          .stateSource("values", schema)
+                          .localGather()
+                          .limit(0, 1, false),
+                      ConvergenceConfig::withMaxIterations(1),
+                      /*outputStateEntry=*/"values")
+                  .planNode();
+
+  struct StateReader {
+    folly::Baton<> held;
+    folly::Baton<> released;
+    std::atomic_int32_t numReads{0};
+  };
+  // Shared with the injection callbacks, which can outlive this test.
+  auto reader = std::make_shared<StateReader>();
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Driver::runInternal::getOutput",
+      std::function<void(Operator*)>([reader](Operator* op) {
+        // The loop's task reads its output through a StateSource too.
+        if (op->operatorType() == OperatorType::kFixedPointStateSource &&
+            op->operatorCtx()->task()->fixedPoint() == nullptr &&
+            ++reader->numReads == 2) {
+          reader->held.post();
+          reader->released.try_wait_for(std::chrono::seconds(10));
+        }
+      }));
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Driver::runInternal::addInput",
+      std::function<void(Operator*)>([reader](Operator* op) {
+        if (op->operatorType() == OperatorType::kLimit) {
+          waitFor(reader->held);
+        }
+      }));
+
+  // Without this query context, the cursor runs the query on an executor of
+  // its own and joins it before returning, which releases the StateSource.
+  auto task = AssertQueryBuilder(node)
+                  .queryCtx(core::QueryCtx::create(cpuExecutor_.get()))
+                  .maxDrivers(1)
+                  .fixedPointOptions(&localOptions())
+                  .assertResults(makeKeyValueRow(0, 0));
+  auto deleted = task->taskDeletionFuture();
+  task.reset();
+  const bool isDeleted = std::move(deleted).wait(std::chrono::seconds(10));
+  reader->released.post();
+  EXPECT_TRUE(isDeleted);
+}
+
+// Drivers of the sub-tasks allocate from pools of the loop's task: the state's
+// pool and each step's scratch pool.  Under a query pool with a reclaimer, a
+// driver that waits for memory arbitration on one of them is suspended, so a
+// reclaim of the query, which waits for the drivers of each task to pause, does
+// not wait for it.  Each sub-task's StateSource enters arbitration on every
+// pool of the loop's task that exists while it reads.
+DEBUG_ONLY_TEST_F(FixedPointTest, subTaskDriverSuspendsInArbitration) {
+  auto queryCtx =
+      core::QueryCtx::Builder()
+          .executor(cpuExecutor_.get())
+          .pool(
+              memory::memoryManager()->addRootPool(
+                  "", memory::kMaxMemory, exec::MemoryReclaimer::create()))
+          .build();
+
+  // The pools entered, by name without the step: "fixedpoint.body.0" is
+  // "fixedpoint.body".
+  folly::Synchronized<std::set<std::string>> loopPools;
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Driver::runInternal::getOutput",
+      std::function<void(Operator*)>([&](Operator* op) {
+        const auto& task = op->operatorCtx()->task();
+        // The loop's task reads its output through a StateSource too.
+        if (op->operatorType() != OperatorType::kFixedPointStateSource ||
+            task->fixedPoint() != nullptr) {
+          return;
+        }
+        const auto& driverState =
+            driverThreadContext()->driverCtx()->driver->state();
+        constexpr std::string_view kPrefix{"fixedpoint."};
+        task->queryCtx()->pool()->visitChildren(
+            [&](memory::MemoryPool* taskPool) {
+              taskPool->visitChildren([&](memory::MemoryPool* pool) {
+                const auto& name = pool->name();
+                if (name.starts_with(kPrefix)) {
+                  memory::MemoryPoolArbitrationSection arbitration(pool);
+                  EXPECT_TRUE(driverState.suspended()) << name;
+                  loopPools.wlock()->insert(
+                      name.substr(0, name.find('.', kPrefix.size())));
+                }
+                return true;
+              });
+              return true;
+            });
+      }));
+
+  AssertQueryBuilder(countingNode())
+      .queryCtx(queryCtx)
+      .fixedPointOptions(&localOptions())
+      .assertResults(makeKeyValueRow(0, 3));
+  EXPECT_THAT(
+      *loopPools.rlock(),
+      testing::ElementsAre(
+          "fixedpoint.body", "fixedpoint.convergence", "fixedpoint.state"));
 }
 
 // Aborting a task stops its loop wherever it waits, and the loop releases the
