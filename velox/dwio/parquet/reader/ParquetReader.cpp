@@ -1109,21 +1109,12 @@ TypePtr ReaderBase::convertType(
       *schemaElement.repetition_type() == thrift::FieldRepetitionType::REPEATED;
   const bool allowNarrowing = parquetReaderOptions_.allowInt32Narrowing();
 
+  // All values in a column with the UNKNOWN annotation are null, and its
+  // physical type carries no meaning, so it can be read as any requested type.
+  // UnknownColumnReader returns nulls of the requested type.
   if (schemaElement.logicalType() &&
       schemaElement.logicalType()->getType() ==
           thrift::LogicalType::Type::UNKNOWN) {
-    VELOX_CHECK(
-        !requestedType ||
-            isCompatible(
-                requestedType,
-                isRepeated,
-                [](const TypePtr& type) {
-                  return type->kind() == TypeKind::UNKNOWN;
-                }),
-        kTypeMappingErrorFmtStr,
-        "UNKNOWN",
-        requestedType->toString(),
-        *schemaElement.name());
     return UNKNOWN();
   }
 
