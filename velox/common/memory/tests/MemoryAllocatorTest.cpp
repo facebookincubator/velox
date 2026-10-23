@@ -1279,6 +1279,69 @@ TEST_P(MemoryAllocatorTest, allocateBytes) {
   ASSERT_TRUE(instance_->checkConsistency());
 }
 
+// Concurrently allocates and frees byte buffers smaller than the reservation
+// threshold (1MB) so that every allocation and free goes through the sharded
+// reservation counter. This stresses the lock-free CAS loops in
+// MallocAllocator::incrementUsageWithReservationFunc /
+// decrementUsageWithReservationFunc (compare_exchange_weak retries and the
+// path where a concurrent free refills a shard while a reservation is in
+// flight), which the single-threaded 'allocateBytes' test cannot reach. When
+// all buffers are freed the local reservations must net out exactly, so
+// 'totalUsedBytes()' returns to zero.
+TEST_P(MemoryAllocatorTest, allocateBytesWithReservationConcurrency) {
+  constexpr int32_t kNumThreads = 32;
+  constexpr int32_t kNumIterationsPerThread = 4'000;
+  constexpr int32_t kMaxLiveAllocsPerThread = 16;
+  // Cap allocation sizes just under the 1MB reservation threshold so that they
+  // stay on the sharded reservation path and frequently cross the per-shard
+  // reserve/release boundaries.
+  constexpr int32_t kMaxAllocBytes = (1 << 20) - 1;
+
+  std::vector<std::thread> threads;
+  threads.reserve(kNumThreads);
+  for (int32_t t = 0; t < kNumThreads; ++t) {
+    threads.emplace_back([&, t]() {
+      folly::Random::DefaultGenerator rng;
+      rng.seed(1234 + t);
+      std::vector<folly::Range<char*>> live;
+      live.reserve(kMaxLiveAllocsPerThread);
+      for (int32_t i = 0; i < kNumIterationsPerThread; ++i) {
+        // Free a random live allocation once we are holding enough of them,
+        // otherwise allocate a new one. This keeps a rolling set of buffers
+        // alive so the shard counters see interleaved reserves and releases.
+        if (live.size() >= kMaxLiveAllocsPerThread ||
+            (!live.empty() && (folly::Random::rand32(rng) & 1))) {
+          const size_t index = folly::Random::rand32(rng) % live.size();
+          instance_->freeBytes(live[index].data(), live[index].size());
+          live[index] = live.back();
+          live.pop_back();
+        } else {
+          const uint32_t bytes =
+              1 + folly::Random::rand32(rng) % kMaxAllocBytes;
+          void* buffer = instance_->allocateBytes(bytes);
+          ASSERT_NE(buffer, nullptr);
+          // Touch the buffer to catch accounting that hands out overlapping
+          // memory.
+          ::memset(buffer, static_cast<char>(t), bytes);
+          live.emplace_back(reinterpret_cast<char*>(buffer), bytes);
+        }
+      }
+      for (auto& range : live) {
+        instance_->freeBytes(range.data(), range.size());
+      }
+    });
+  }
+  for (auto& thread : threads) {
+    thread.join();
+  }
+
+  ASSERT_TRUE(instance_->checkConsistency());
+  ASSERT_EQ(0, instance_->numAllocated());
+  if (!useMmap_) {
+    ASSERT_EQ(0, instance_->totalUsedBytes());
+  }
+}
+
 TEST_P(MemoryAllocatorTest, reallocateBytes) {
   // Test grow: allocate, fill, reallocate larger, verify data preserved.
   {
