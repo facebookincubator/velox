@@ -1642,28 +1642,34 @@ When set to “RequestDependent”, the payload checksum is included based on th
 <td><p>false</p></td>
 <td><p>Utilize the configuration of the environment variables http_proxy, https_proxy, and no_proxy for use with the S3 API.</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">s3.connect-timeout</span></code></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">s3.use-fips</span></code></p></td>
+<td><p>bool</p></td>
+<td></td>
+<td><p>Use AWS FIPS endpoints. When unset, the <code class="docutils literal notranslate"><span class="pre">AWS_USE_FIPS_ENDPOINT</span></code> environment variable decides. Cannot be combined
+with <code class="docutils literal notranslate"><span class="pre">s3.endpoint</span></code>. See <a class="reference internal" href="#fips-endpoints">FIPS Endpoints</a>.</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">s3.connect-timeout</span></code></p></td>
 <td><p>string</p></td>
 <td></td>
 <td><p>Socket connect timeout.</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">s3.socket-timeout</span></code></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">s3.socket-timeout</span></code></p></td>
 <td><p>string</p></td>
 <td></td>
 <td><p>Socket read timeout.</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">s3.max-connections</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">s3.max-connections</span></code></p></td>
 <td><p>integer</p></td>
 <td></td>
 <td><p>Maximum concurrent TCP connections for a single http client.</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">s3.max-attempts</span></code></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">s3.max-attempts</span></code></p></td>
 <td><p>integer</p></td>
 <td></td>
 <td><p>Maximum attempts for connections to a single http client, work together with retry-mode. By default, it’s 3 for standard/adaptive mode
 and 10 for legacy mode.</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">s3.retry-mode</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">s3.retry-mode</span></code></p></td>
 <td><p>string</p></td>
 <td></td>
 <td><p><strong>Allowed values:</strong> “standard”, “adaptive”, “legacy”. By default it’s empty, S3 client will be created with RetryStrategy.
@@ -1671,19 +1677,19 @@ Legacy mode only enables throttled retry for transient errors.
 Standard mode is built on top of legacy mode and has throttled retry enabled for throttling errors apart from transient errors.
 Adaptive retry mode dynamically limits the rate of AWS requests to maximize success rate.</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">s3.aws-credentials-provider</span></code></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">s3.aws-credentials-provider</span></code></p></td>
 <td><p>string</p></td>
 <td></td>
 <td><p>A custom credential provider, if specified, will be used to create the client in favor of other authentication mechanisms.
 The provider must be registered using “registerAWSCredentialsProvider” before it can be used.</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">s3.aws-imds-enabled</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">s3.aws-imds-enabled</span></code></p></td>
 <td><p>bool</p></td>
 <td><p>true</p></td>
 <td><p>AWS Instance Metadata Service (IMDS) is an AWS EC2 instance component used by applications to securely access metadata.
 We must disable it on other instances to avoid high first-time read latency from S3 compatible object storages.</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">s3.min-part-size</span></code></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">s3.min-part-size</span></code></p></td>
 <td><p>string</p></td>
 <td><p>10MB</p></td>
 <td><p>Minimum multi-part upload part size. The smallest allowed value is 5MB. The largest allowed value is 5GB.
@@ -1705,6 +1711,18 @@ explicitly set will override the base <code class="docutils literal notranslate"
 <code class="docutils literal notranslate"><span class="pre">hive.s3.</span></code> prefix follows the same rules (for example
 <code class="docutils literal notranslate"><span class="pre">hive.s3.bucket.velox.endpoint</span></code>).
 These semantics are similar to the <a class="reference external" href="https://hadoop.apache.org/docs/current/hadoop-aws/tools/hadoop-aws/index.html">Apache Hadoop-Aws module</a>.</p>
+</section>
+<section id="fips-endpoints">
+<h4>FIPS Endpoints<a class="headerlink" href="#fips-endpoints" title="Link to this heading">¶</a></h4>
+<p><code class="docutils literal notranslate"><span class="pre">s3.use-fips</span></code> sets <code class="docutils literal notranslate"><span class="pre">useFIPS</span></code> on the AWS SDK client, which then resolves the
+AWS FIPS endpoint for the region. It also applies to the STS calls of
+<code class="docutils literal notranslate"><span class="pre">s3.iam-role</span></code>. When unset, the environment variable <code class="docutils literal notranslate"><span class="pre">AWS_USE_FIPS_ENDPOINT</span></code>
+decides. The AWS SDK rejects FIPS combined with <code class="docutils literal notranslate"><span class="pre">s3.endpoint</span></code>, so requests
+fail with “A custom endpoint cannot be combined with FIPS”. Set
+<code class="docutils literal notranslate"><span class="pre">s3.use-fips=false</span></code> for buckets with a custom endpoint, including an explicit
+AWS FIPS endpoint. Web identity credentials also need <code class="docutils literal notranslate"><span class="pre">AWS_ENDPOINT_URL_STS</span></code>
+set to the STS FIPS host name, such as <code class="docutils literal notranslate"><span class="pre">sts-fips.us-east-1.amazonaws.com</span></code>.
+The CRT uses the value as the host, so a URL with a scheme fails to resolve.</p>
 </section>
 </section>
 <section id="google-cloud-storage-configuration">
@@ -2133,6 +2151,7 @@ Reader options map to <a class="reference external" href="https://docs.rapids.ai
 <li><a class="reference internal" href="#nimble-options-prefix-hive-nimble">Nimble Options (prefix <code class="docutils literal notranslate"><span class="pre">hive.nimble.</span></code>)</a></li>
 <li><a class="reference internal" href="#amazon-s3-configuration"><code class="docutils literal notranslate"><span class="pre">Amazon</span> <span class="pre">S3</span> <span class="pre">Configuration</span></code></a><ul>
 <li><a class="reference internal" href="#bucket-level-configuration">Bucket Level Configuration</a></li>
+<li><a class="reference internal" href="#fips-endpoints">FIPS Endpoints</a></li>
 </ul>
 </li>
 <li><a class="reference internal" href="#google-cloud-storage-configuration"><code class="docutils literal notranslate"><span class="pre">Google</span> <span class="pre">Cloud</span> <span class="pre">Storage</span> <span class="pre">Configuration</span></code></a></li>
