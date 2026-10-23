@@ -362,6 +362,9 @@ class VectorHasher {
 
   // true if no values have been added.
   bool empty() const {
+    if (typeSupportsValueIds() && distinctOverflow_) {
+      return false;
+    }
     const bool hasSeenValue =
         typeKind_ == TypeKind::HUGEINT ? hasHugeintValue_ : hasRange_;
     return !hasSeenValue && numDistinct() == 0;
