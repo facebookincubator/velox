@@ -217,6 +217,7 @@ std::unique_ptr<cudf::column> decimalDivide(
       rhs,
       outputType,
       cudf::rounding_method::HALF_UP,
+      cudf::decimal_intermediate::STANDARD,
       stream,
       cudf::memory_resources{mr, get_temp_mr()});
 
@@ -256,6 +257,7 @@ std::unique_ptr<cudf::column> decimalDivide(
       rhs,
       outputType,
       cudf::rounding_method::HALF_UP,
+      cudf::decimal_intermediate::STANDARD,
       stream,
       cudf::memory_resources{mr, get_temp_mr()});
 
@@ -280,6 +282,7 @@ std::unique_ptr<cudf::column> decimalDivide(
       rhs,
       outputType,
       cudf::rounding_method::HALF_UP,
+      cudf::decimal_intermediate::STANDARD,
       stream,
       cudf::memory_resources{mr, get_temp_mr()});
 
