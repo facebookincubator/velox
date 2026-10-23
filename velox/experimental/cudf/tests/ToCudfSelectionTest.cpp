@@ -556,6 +556,46 @@ TEST_F(ToCudfSelectionTest, prestoDateTruncDateAdjustTimezoneUsesCudf) {
   ASSERT_FALSE(wasDefaultFilterProjectUsed(task));
 }
 
+// A TIMESTAMP cast to VARCHAR runs on the GPU in UTC and falls back to the CPU
+// when the session prints it in its own time zone or in the legacy form.
+TEST_F(ToCudfSelectionTest, castTimestampToVarcharFallsBackToCpu) {
+  auto input = makeRowVector(
+      {"event_ts"},
+      {makeFlatVector<Timestamp>({Timestamp(1'767'314'700, 0)}, TIMESTAMP())});
+
+  auto plan = PlanBuilder()
+                  .values({input})
+                  .project({"cast(event_ts as varchar) AS result"})
+                  .planNode();
+
+  auto cudfTask =
+      AssertQueryBuilder(plan)
+          .config("cudf.enabled", true)
+          .assertResults(makeRowVector(
+              {makeFlatVector<std::string>({"2026-01-02 00:45:00.000"})}));
+  ASSERT_TRUE(wasCudfFilterProjectUsed(cudfTask));
+  ASSERT_FALSE(wasDefaultFilterProjectUsed(cudfTask));
+
+  auto fallbackTask =
+      AssertQueryBuilder(plan)
+          .config("cudf.enabled", true)
+          .config(QueryConfig::kSessionTimezone, "Asia/Kolkata")
+          .config(QueryConfig::kAdjustTimestampToTimezone, "true")
+          .assertResults(makeRowVector(
+              {makeFlatVector<std::string>({"2026-01-02 06:15:00.000"})}));
+  ASSERT_FALSE(wasCudfFilterProjectUsed(fallbackTask));
+  ASSERT_TRUE(wasDefaultFilterProjectUsed(fallbackTask));
+
+  auto legacyTask =
+      AssertQueryBuilder(plan)
+          .config("cudf.enabled", true)
+          .config(QueryConfig::kLegacyCast, "true")
+          .assertResults(makeRowVector(
+              {makeFlatVector<std::string>({"2026-01-02T00:45:00.000"})}));
+  ASSERT_FALSE(wasCudfFilterProjectUsed(legacyTask));
+  ASSERT_TRUE(wasDefaultFilterProjectUsed(legacyTask));
+}
+
 TEST_F(ToCudfSelectionTest, replaceConstantSearchUsesCudf) {
   auto input = makeRowVector(
       {"s"}, {makeFlatVector<std::string>({"2021-01-31", "a-b-c", "abc"})});
