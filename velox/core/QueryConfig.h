@@ -1557,9 +1557,11 @@ class QueryConfig {
       "false to keep a static cap. Unlike the per-driver congestion window, this "
       "coordinates all drivers on the worker and reacts to the rate-limit signal "
       "directly, not to RTT. Recovery doubles a fractional window until one, "
-      "then uses additive increase. The first query to reach a backend fixes "
-      "its policy for the life of the worker process; later queries contribute "
-      "their outcomes to the adaptation but cannot change the setting. ")
+      "then uses additive increase. "
+      "Queries on the default rate-limiter settings share the policy the "
+      "first query to reach a backend fixes for the life of the worker "
+      "process. A query that sets the rate-limiter properties to another "
+      "policy gets a limiter shared only by queries with the same settings.")
 
   /// Legacy integral override for the adaptive congestion-window floor.
   VELOX_QUERY_CONFIG(
@@ -1572,9 +1574,11 @@ class QueryConfig {
       "Positive values preserve the legacy in-flight floor; zero delegates to "
       "the backend policy, which may select a fractional floor and pace "
       "discrete admissions using the learned service horizon. Only used when "
-      "rpc.ratelimiter.adaptive_enabled is true. The first query to reach a "
-      "backend fixes its policy for the life of the worker process; later "
-      "queries contribute outcomes but cannot change it.")
+      "rpc.ratelimiter.adaptive_enabled is true. "
+      "Queries on the default rate-limiter settings share the policy the "
+      "first query to reach a backend fixes for the life of the worker "
+      "process. A query that sets the rate-limiter properties to another "
+      "policy gets a limiter shared only by queries with the same settings.")
 
   /// Multiplicative-decrease factor for the adaptive rate-limit capacity.
   VELOX_QUERY_CONFIG(
@@ -1587,7 +1591,11 @@ class QueryConfig {
       "on overload. Canonical typed overload completions from the same admitted "
       "epoch are coalesced; function-specific aggregate overload verdicts "
       "apply at driver consumption. Default 0.5 (halve). Clamped to "
-      "(0, 1). Only used when rpc.ratelimiter.adaptive_enabled is true. The first query to reach a backend fixes its policy for the life of the worker process; later queries contribute their outcomes to the adaptation but cannot change the setting. ")
+      "(0, 1). Only used when rpc.ratelimiter.adaptive_enabled is true. "
+      "Queries on the default rate-limiter settings share the policy the "
+      "first query to reach a backend fixes for the life of the worker "
+      "process. A query that sets the rate-limiter properties to another "
+      "policy gets a limiter shared only by queries with the same settings.")
 
   /// Legacy ceiling for a backend's rate-limit capacity.
   VELOX_QUERY_CONFIG(
@@ -1603,10 +1611,11 @@ class QueryConfig {
       "against that backend across every driver on the worker; the adaptive "
       "limiter shrinks from here toward rpc.ratelimiter.min_limit under "
       "overload. Superseded by rpc.ratelimiter.hard_limit when that property "
-      "is non-negative. The first "
-      "query to reach a backend fixes its policy for the life of the worker "
-      "process; later queries contribute their outcomes to the adaptation but "
-      "cannot change the setting.")
+      "is non-negative. "
+      "Queries on the default rate-limiter settings share the policy the "
+      "first query to reach a backend fixes for the life of the worker "
+      "process. A query that sets the rate-limiter properties to another "
+      "policy gets a limiter shared only by queries with the same settings.")
 
   /// Versioned hard ceiling for a backend's rate-limit capacity.
   VELOX_QUERY_CONFIG(
