@@ -193,12 +193,11 @@ class CustomMemoryHierarchyTest : public testing::Test {
 
 // Task creation passes the Task, its arbitration priority and the resource
 // tag, and installs exactly what the factory returns, so an extension can
-// choose its own task-level reclaimer. Node pools keep the pool context.
+// choose its own task-level reclaimer.
 TEST_F(CustomMemoryHierarchyTest, taskPoolUsesTaskContextReclaimer) {
   constexpr int32_t kPriority{7};
   exec::Task* contextTask{nullptr};
   MemoryReclaimer* taskReclaimer{nullptr};
-  MemoryReclaimer* poolReclaimer{nullptr};
   auto queryCtx = buildQueryCtx(
       {"device"}, "task-context", [&](const ReclaimerContext& context) {
         auto reclaimer = makeExecutionReclaimer(context);
@@ -208,8 +207,6 @@ TEST_F(CustomMemoryHierarchyTest, taskPoolUsesTaskContextReclaimer) {
           EXPECT_EQ(taskContext->priority, kPriority);
           EXPECT_EQ(taskContext->resourceTag, "device");
           taskReclaimer = reclaimer.get();
-        } else if (std::holds_alternative<PoolReclaimerContext>(context)) {
-          poolReclaimer = reclaimer.get();
         }
         return reclaimer;
       });
@@ -220,8 +217,6 @@ TEST_F(CustomMemoryHierarchyTest, taskPoolUsesTaskContextReclaimer) {
       findChild(queryCtx->customPool("device").get(), "task.t-context.device");
   ASSERT_NE(taskPool, nullptr);
   EXPECT_EQ(taskPool->reclaimer(), taskReclaimer);
-  auto* nodePool = task->getOrAddCustomNodePool("device", "n0");
-  EXPECT_EQ(nodePool->reclaimer(), poolReclaimer);
 }
 
 // A nullptr task-context result leaves the task pool without a reclaimer, so

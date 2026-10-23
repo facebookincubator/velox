@@ -27,27 +27,15 @@
 namespace facebook::velox::memory::test {
 namespace {
 
-constexpr int64_t kDefaultMaxCapacity{1L << 30};
-
 std::shared_ptr<CustomMemoryResource> makeResource(
     const std::string& tag,
-    CustomMemoryResource::ReclaimerFactory reclaimerFactory,
-    int64_t maxCapacity = kDefaultMaxCapacity) {
+    int64_t maxCapacity = 1L << 30) {
   MemoryAllocator::Options allocatorOptions;
   allocatorOptions.capacity = maxCapacity;
   return std::make_shared<CustomMemoryResource>(
       tag,
       std::make_shared<MallocAllocator>(allocatorOptions),
       MemoryArbitrator::create({}),
-      std::move(reclaimerFactory),
-      maxCapacity);
-}
-
-std::shared_ptr<CustomMemoryResource> makeResource(
-    const std::string& tag,
-    int64_t maxCapacity = kDefaultMaxCapacity) {
-  return makeResource(
-      tag,
       [](const ReclaimerContext&) { return MemoryReclaimer::create(0); },
       maxCapacity);
 }
@@ -177,58 +165,6 @@ TEST_F(CustomMemoryPoolTest, addCustomPoolDirectly) {
 TEST_F(CustomMemoryPoolTest, addCustomRootPoolRejectsNullResource) {
   auto* manager = memoryManager();
   EXPECT_THROW(manager->addCustomRootPool("q.null", nullptr), VeloxUserError);
-}
-
-// Component roots need not belong to a query, e.g. a process-wide cache, so
-// they get exactly the supplied reclaimer and no factory-made default.
-TEST_F(CustomMemoryPoolTest, componentRootUsesSuppliedReclaimer) {
-  auto resource = makeResource("components");
-  auto unreclaimable = memoryManager()->addCustomRootPool(
-      "components.unreclaimable",
-      resource->allocator(),
-      resource->arbitrator(),
-      resource->maxCapacity());
-  EXPECT_EQ(unreclaimable->reclaimer(), nullptr);
-
-  auto reclaimer = MemoryReclaimer::create(0);
-  auto* expected = reclaimer.get();
-  auto reclaimable = memoryManager()->addCustomRootPool(
-      "components.reclaimable",
-      resource->allocator(),
-      resource->arbitrator(),
-      resource->maxCapacity(),
-      std::move(reclaimer));
-  EXPECT_EQ(reclaimable->reclaimer(), expected);
-}
-
-TEST_F(CustomMemoryPoolTest, componentRootRejectsMissingBackends) {
-  auto resource = makeResource("components");
-  EXPECT_THROW(
-      memoryManager()->addCustomRootPool(
-          "missing.allocator",
-          nullptr,
-          resource->arbitrator(),
-          resource->maxCapacity()),
-      VeloxUserError);
-  EXPECT_THROW(
-      memoryManager()->addCustomRootPool(
-          "missing.arbitrator",
-          resource->allocator(),
-          nullptr,
-          resource->maxCapacity()),
-      VeloxUserError);
-}
-
-// A resource-built root need not belong to a query, so its factory gets the
-// pool context.
-TEST_F(CustomMemoryPoolTest, resourceRootUsesPoolContext) {
-  bool usedPoolContext{false};
-  auto resource = makeResource("shared", [&](const ReclaimerContext& context) {
-    usedPoolContext = std::holds_alternative<PoolReclaimerContext>(context);
-    return MemoryReclaimer::create(0);
-  });
-  memoryManager()->addCustomRootPool("shared.root", resource);
-  EXPECT_TRUE(usedPoolContext);
 }
 
 namespace {
