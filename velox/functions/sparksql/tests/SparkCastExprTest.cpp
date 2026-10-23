@@ -926,12 +926,28 @@ class SparkCastExprTest : public functions::test::CastBaseTest {
         DATE());
     testCast<std::string, float>(
         "real", {"\n\f\r\t\n\u001F 123.0\u000B\u001C\u001D\u001E"}, {123.0});
+    testCast<std::string, float>(
+        "real",
+        {std::string(
+            "\0"
+            "123.0\0",
+            7)},
+        {123.0});
     testCast<std::string, double>(
         "double", {"\n\f\r\t\n\u001F 123.0\u000B\u001C\u001D\u001E"}, {123.0});
+    testCast<std::string, double>(
+        "double",
+        {std::string(
+            "\0"
+            "123.0\0",
+            7)},
+        {123.0});
     testCast<std::string, Timestamp>(
         "timestamp",
         {"\n\f\r\t\n\u001F 2000-01-01 12:21:56\u000B\u001C\u001D\u001E"},
         {Timestamp(946729316, 0)});
+    testCast<std::string, bool>(
+        "boolean", {std::string("\0true\x7F", 6)}, {true});
     testCast(
         makeFlatVector<StringView>(
             {" 9999999999.99",
@@ -948,6 +964,12 @@ class SparkCastExprTest : public functions::test::CastBaseTest {
              -30000,
              -30000},
             DECIMAL(12, 2)));
+    testCast<std::string, int64_t>(
+        "decimal(12, 2)",
+        {std::string("\0-3E+2\0", 7)},
+        {-30000},
+        VARCHAR(),
+        DECIMAL(12, 2));
   }
 
   void testPrimitiveValidCornerCases() {
@@ -956,6 +978,12 @@ class SparkCastExprTest : public functions::test::CastBaseTest {
       // Valid strings.
       testCast<std::string, int8_t>("tinyint", {"+1"}, {1});
       testCast<std::string, int8_t>("tinyint", {"-1"}, {-1});
+      testCast<std::string, int32_t>(
+          "integer",
+          {std::string("123\0", 4),
+           std::string("\0-456\0", 6),
+           std::string("789\x7F", 4)},
+          {123, -456, 789});
 
       testCast<double, int8_t>("tinyint", {127.1}, {127});
 
@@ -1761,6 +1789,37 @@ class SparkCastExprTest : public functions::test::CastBaseTest {
   }
 
   template <typename T>
+  void testStringCastNoTrimInvalidAcrossModes(
+      const std::string& typeString,
+      const TypePtr& toType,
+      const std::vector<std::optional<std::string>>& values) {
+    setAnsiSupport(true);
+    for (const auto& value : values) {
+      SCOPED_TRACE(value.value_or("<null>"));
+      auto input = makeRowVector(
+          {makeNullableFlatVector<std::string>({value}, VARCHAR())});
+      VELOX_ASSERT_THROW(
+          evaluate(fmt::format("cast(c0 as {})", typeString), input),
+          "Cannot cast");
+    }
+
+    auto input = makeRowVector({makeNullableFlatVector(values, VARCHAR())});
+    auto expected = makeNullableFlatVector<T>(
+        std::vector<std::optional<T>>(values.size(), std::nullopt), toType);
+
+    setAnsiSupport(false);
+    assertEqualVectors(
+        expected, evaluate(fmt::format("cast(c0 as {})", typeString), input));
+
+    for (const auto ansiEnabled : {false, true}) {
+      setAnsiSupport(ansiEnabled);
+      assertEqualVectors(
+          expected,
+          evaluate(fmt::format("try_cast(c0 as {})", typeString), input));
+    }
+  }
+
+  template <typename T>
   void testDecimalToFloatCasts() {
     // short to short, scale up.
     auto shortFlat = makeNullableFlatVector<int64_t>(
@@ -1884,6 +1943,53 @@ TEST_F(SparkCastExprTest, legacyCastModeIgnoresSessionAnsiOn) {
   auto expected =
       makeNullableFlatVector<int32_t>({std::nullopt, 123}, INTEGER());
   assertEqualVectors(expected, result);
+}
+
+TEST_F(SparkCastExprTest, stringCastNoTrimInvalidAcrossModes) {
+  const auto enQuad = std::string("\xE2\x80\x80", 3);
+  const auto leadingEnQuad = [&](const std::string& value) {
+    return enQuad + value;
+  };
+  const auto trailingEnQuad = [&](const std::string& value) {
+    return value + enQuad;
+  };
+  const auto leadingDel = [](const std::string& value) {
+    return std::string("\x7F", 1) + value;
+  };
+  const auto trailingDel = [](const std::string& value) {
+    return value + std::string("\x7F", 1);
+  };
+
+  testStringCastNoTrimInvalidAcrossModes<int32_t>(
+      "integer", INTEGER(), {leadingEnQuad("123"), trailingEnQuad("123")});
+  testStringCastNoTrimInvalidAcrossModes<bool>(
+      "boolean", BOOLEAN(), {leadingEnQuad("true"), trailingEnQuad("true")});
+  testStringCastNoTrimInvalidAcrossModes<int32_t>(
+      "date", DATE(), {leadingEnQuad("2015-03-18")});
+  testStringCastNoTrimInvalidAcrossModes<Timestamp>(
+      "timestamp", TIMESTAMP(), {leadingEnQuad("2015-03-18 12:03:17")});
+
+  testStringCastNoTrimInvalidAcrossModes<float>(
+      "real",
+      REAL(),
+      {leadingDel("1.5"),
+       trailingDel("1.5"),
+       leadingEnQuad("1.5"),
+       trailingEnQuad("1.5")});
+  testStringCastNoTrimInvalidAcrossModes<double>(
+      "double",
+      DOUBLE(),
+      {leadingDel("1.5"),
+       trailingDel("1.5"),
+       leadingEnQuad("1.5"),
+       trailingEnQuad("1.5")});
+  testStringCastNoTrimInvalidAcrossModes<int64_t>(
+      "decimal(12, 2)",
+      DECIMAL(12, 2),
+      {leadingDel("1.23"),
+       trailingDel("1.23"),
+       leadingEnQuad("1.23"),
+       trailingEnQuad("1.23")});
 }
 
 // ============================================================================
@@ -2708,6 +2814,11 @@ TEST_F(SparkCastExprTestAnsiOff, primitiveInvalidCornerCase) {
         "bigint",
         {"abc", "+", "-", "  "},
         {std::nullopt, std::nullopt, std::nullopt, std::nullopt});
+    const auto enQuad = std::string("\xE2\x80\x80", 3);
+    testCast<std::string, int32_t>(
+        "integer",
+        {enQuad + "123", std::string("123") + enQuad},
+        {std::nullopt, std::nullopt});
 
     // Overflow cases.
     testCast<std::string, int8_t>(
@@ -3397,8 +3508,21 @@ TEST_F(SparkCastExprTestAnsiOff, varcharToDecimal) {
 
   // Interior whitespace stays invalid; leading/trailing cases are valid and
   // covered in testVarcharToDecimal().
+  const auto enQuad = std::string("\xE2\x80\x80", 3);
   testCast<std::string, int128_t>(
       "decimal(38, 0)", {"1. 23"}, {std::nullopt}, VARCHAR(), DECIMAL(38, 0));
+  testCast<std::string, int128_t>(
+      "decimal(38, 0)",
+      {std::string("1.23\x7F", 5)},
+      {std::nullopt},
+      VARCHAR(),
+      DECIMAL(38, 0));
+  testCast<std::string, int128_t>(
+      "decimal(38, 0)",
+      {enQuad + "1.23"},
+      {std::nullopt},
+      VARCHAR(),
+      DECIMAL(38, 0));
   testCast<std::string, int64_t>(
       "decimal(12, 2)", {"-3E+ 2"}, {std::nullopt}, VARCHAR(), DECIMAL(12, 2));
 
@@ -3613,6 +3737,18 @@ TEST_F(SparkCastExprTestAnsiOff, stringToRealDoubleInvalidReturnsNull) {
   // Invalid format strings return NULL in legacy (ANSI off) mode. Empty and
   // whitespace-only strings (trimmed to empty) return NULL as well.
   for (const auto& value : invalidStringToRealDoubleInputs()) {
+    SCOPED_TRACE(value);
+    testCast<std::string, float>("real", {value}, {std::nullopt});
+    testCast<std::string, double>("double", {value}, {std::nullopt});
+  }
+  {
+    const std::string value = std::string("1.5\x7F", 4);
+    SCOPED_TRACE(value);
+    testCast<std::string, float>("real", {value}, {std::nullopt});
+    testCast<std::string, double>("double", {value}, {std::nullopt});
+  }
+  {
+    const auto value = std::string("\xE2\x80\x80", 3) + "1.5";
     SCOPED_TRACE(value);
     testCast<std::string, float>("real", {value}, {std::nullopt});
     testCast<std::string, double>("double", {value}, {std::nullopt});
