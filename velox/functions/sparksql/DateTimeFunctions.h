@@ -266,12 +266,6 @@ struct UnixTimestampParseWithFormatFunction
     return true;
   }
 
-  FOLLY_ALWAYS_INLINE void call(
-      int64_t& result,
-      const arg_type<Timestamp>& input) {
-    result = input.getSeconds();
-  }
-
   FOLLY_ALWAYS_INLINE void call(int64_t& result, const arg_type<Date>& input) {
     auto timestamp = Timestamp::fromDate(input);
     toGMTWithGapCorrection(timestamp, *this->sessionTimeZone_);
@@ -293,6 +287,21 @@ struct UnixTimestampParseWithFormatFunction
   bool isConstFormat_{false};
   bool invalidFormat_{false};
   bool legacyFormatter_{false};
+};
+
+// Returns the UNIX timestamp in seconds for a Timestamp or TimestampUtc
+// input, truncating toward zero like Spark.
+template <typename T, typename TTimestamp>
+struct UnixTimestampFromTimestampFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(
+      int64_t& result,
+      const arg_type<TTimestamp>& input) {
+    auto seconds = input.getSeconds();
+    // Spark truncates toward zero; getSeconds() floors for negative timestamps.
+    result = (seconds < 0 && input.getNanos() > 0) ? seconds + 1 : seconds;
+  }
 };
 
 // Parses unix time in seconds to a formatted string.

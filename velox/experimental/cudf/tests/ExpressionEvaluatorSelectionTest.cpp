@@ -28,6 +28,7 @@
 #include "velox/expression/Expr.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
 #include "velox/functions/prestosql/types/JsonType.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/type/Type.h"
 
 #include <folly/ScopeGuard.h>
@@ -411,6 +412,38 @@ TEST_F(CudfExpressionSelectionTest, signatureArrayJoin) {
     SCOPED_TRACE(bad);
     auto expr =
         optimizeTypedExpr(bad, arrayRowType, queryCtx_.get(), execCtx_.get());
+    ASSERT_FALSE(canExprRunOnGpu(expr, queryCtx_.get(), pool_.get()));
+  }
+}
+
+TEST_F(CudfExpressionSelectionTest, signatureUnixtime) {
+  auto unixtimeRowType = ROW({
+      {"seconds", DOUBLE()},
+      {"ts", TIMESTAMP()},
+      {"zoned", TIMESTAMP_WITH_TIME_ZONE()},
+      {"count", BIGINT()},
+  });
+
+  for (const auto* ok :
+       {"from_unixtime(seconds)",
+        "to_unixtime(ts)",
+        "to_unixtime(from_unixtime(seconds))",
+        "from_unixtime(cast(count as double))"}) {
+    SCOPED_TRACE(ok);
+    auto expr =
+        optimizeTypedExpr(ok, unixtimeRowType, queryCtx_.get(), execCtx_.get());
+    ASSERT_TRUE(canExprRunOnGpu(expr, queryCtx_.get(), pool_.get()));
+  }
+
+  // Stays on the CPU: the forms that take or return TIMESTAMP WITH TIME
+  // ZONE.
+  for (const auto* bad :
+       {"from_unixtime(seconds, 'UTC')",
+        "from_unixtime(seconds, 8, 0)",
+        "to_unixtime(zoned)"}) {
+    SCOPED_TRACE(bad);
+    auto expr = optimizeTypedExpr(
+        bad, unixtimeRowType, queryCtx_.get(), execCtx_.get());
     ASSERT_FALSE(canExprRunOnGpu(expr, queryCtx_.get(), pool_.get()));
   }
 }

@@ -21,6 +21,7 @@
 #include "velox/experimental/cudf/expression/prestosql/ArrayJoinFunction.h"
 #include "velox/experimental/cudf/expression/prestosql/DateAddFunction.h"
 #include "velox/experimental/cudf/expression/prestosql/DatePlusIntervalFunction.h"
+#include "velox/experimental/cudf/expression/prestosql/UnixtimeFunctions.h"
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/expression/FunctionSignature.h"
@@ -214,6 +215,34 @@ void registerPrestoFunctions(const std::string& prefix) {
            .build()},
       true,
       DateTruncFunction::canEvaluate);
+
+  registerCudfFunction(
+      prefix + "from_unixtime",
+      [](const std::string&,
+         const core::TypedExprPtr& expr,
+         memory::MemoryPool* pool) {
+        return std::make_shared<prestosql::FromUnixtimeFunction>(expr, pool);
+      },
+      {FunctionSignatureBuilder()
+           .returnType("timestamp")
+           .argumentType("double")
+           .build()},
+      true,
+      prestosql::FromUnixtimeFunction::canEvaluate);
+
+  registerCudfFunction(
+      prefix + "to_unixtime",
+      [](const std::string&,
+         const core::TypedExprPtr& expr,
+         memory::MemoryPool* pool) {
+        return std::make_shared<prestosql::ToUnixtimeFunction>(expr, pool);
+      },
+      {FunctionSignatureBuilder()
+           .returnType("double")
+           .argumentType("timestamp")
+           .build()},
+      true,
+      prestosql::ToUnixtimeFunction::canEvaluate);
 }
 
 } // namespace facebook::velox::cudf_velox

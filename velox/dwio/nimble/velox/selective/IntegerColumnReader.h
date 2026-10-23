@@ -30,7 +30,9 @@ class IntegerColumnReader
       NimbleParams& params,
       velox::common::ScanSpec& scanSpec)
       : SelectiveIntegerColumnReader(requestedType, params, scanSpec, fileType),
-        decoder_(formatData().as<NimbleData>().makeScalarDecoder()) {}
+        decoder_(formatData().as<NimbleData>().makeScalarDecoder()) {
+    formatData().as<NimbleData>().setNullsOnlyDecoder(&decoder_);
+  }
 
   uint64_t skip(uint64_t numValues) override;
 
@@ -49,7 +51,7 @@ class IntegerColumnReader
 
  private:
   bool readsNullsOnly() const final {
-    return false;
+    return formatData().as<NimbleData>().readsNullsOnly(*scanSpec_);
   }
 
   ChunkedDecoder decoder_;

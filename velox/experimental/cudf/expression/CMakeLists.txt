@@ -35,6 +35,7 @@ add_library(
   prestosql/ArrayJoinFunction.cpp
   prestosql/DateAddFunction.cpp
   prestosql/DatePlusIntervalFunction.cpp
+  prestosql/UnixtimeFunctions.cpp
   SparkFunctions.cpp
   sparksql/DateAddFunction.cpp
   sparksql/HashFunction.cpp
