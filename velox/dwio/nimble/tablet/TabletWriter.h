@@ -100,6 +100,10 @@ class TabletWriter {
     // its own candidate set (Constant, Trivial, FixedBitWidth, Dictionary).
     std::vector<std::pair<EncodingType, float>>
         stripeGroupEncodingLayoutReadFactors{};
+    /// When true, identical kStreamMajor offsets or sizes arrays share one
+    /// encoding in the same stripe group.
+    /// Enabling this can increase temporary writer memory.
+    bool stripeGroupMetadataDeduplicationEnabled{false};
     // Callback invoked at stripe group flush boundaries. Used by index
     // writers (e.g., ClusterIndexWriter) to write partition data aligned
     // with stripe groups.
