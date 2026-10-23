@@ -1887,6 +1887,18 @@ INSTANTIATE_TEST_SUITE_P(
             {15 * DecimalUtil::kPowersOfTen[35]},
             {1},
             "Decimal overflow in divide"},
+        // Signed rescale bound for divide: 2e37 * 1e1 = 2e38 fits unsigned
+        // int128 but exceeds the signed max (~1.7e38), which Velox CPU
+        // checkedMultiply<int128_t> rejects even though the quotient
+        // 2e38 / 5 = 4e37 would fit precision 38.
+        DecimalOverflowParam{
+            "divideRescaleSignedInt128",
+            "a / b",
+            DECIMAL(38, 1),
+            DECIMAL(38, 1),
+            {2 * DecimalUtil::kPowersOfTen[37]},
+            {5},
+            "Decimal overflow in divide"},
         // Mixed-scale ADD/SUB/MOD: the scale-0 operand is rescaled to the
         // output scale (10) before the kernel op, and 9e37 * 1e10 = 9e47
         // overflows int128. This exercises the overflow-checked pre-kernel
@@ -2122,6 +2134,27 @@ TEST_F(CudfDecimalTest, decimalDivideNoFalseOverflowAtBoundary) {
   auto gpuResult =
       facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
   facebook::velox::test::assertEqualVectors(cpuResult, gpuResult);
+}
+
+// The rescaled dividend 1.7e37 * 1e1 = 1.7e38 sits just under the signed
+// int128 max (~1.7014e38), so the signed rescale bound must not reject it.
+TEST_F(CudfDecimalTest, decimalDivideRescaleBelowSignedInt128Max) {
+  auto input = makeRowVector(
+      {"a", "b"},
+      {
+          makeFlatVector<int128_t>(
+              {17 * DecimalUtil::kPowersOfTen[36],
+               -17 * DecimalUtil::kPowersOfTen[36]},
+              DECIMAL(38, 1)),
+          makeFlatVector<int128_t>({5, 5}, DECIMAL(38, 1)),
+      });
+  std::vector<RowVectorPtr> vectors = {input};
+
+  assertCpuAndGpuAgree(
+      exec::test::PlanBuilder()
+          .values(vectors)
+          .project({"a / b AS result"})
+          .planNode());
 }
 
 // Exercises scalar-operand overflow on the GPU kernel paths (lhs and rhs).
