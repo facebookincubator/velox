@@ -1495,19 +1495,24 @@ TEST_F(E2EEncryptionTest, readWithoutKey) {
   // reading unencrypted column should not fail
   {
     RowReaderOptions rowReaderOpts;
-    rowReaderOpts.select(
-        std::make_shared<ColumnSelector>(type, std::vector<uint64_t>{0}));
+    auto scanSpec = std::make_shared<facebook::velox::common::ScanSpec>("root");
+    scanSpec->addFieldRecursively("a", *type->childAt(0), 0);
+    rowReaderOpts.setScanSpec(scanSpec);
     auto rowReader = reader->createRowReader(rowReaderOpts);
-    VectorPtr batch;
+    VectorPtr batch =
+        BaseVector::create(ROW("a", type->childAt(0)), 0, leafPool_.get());
     ASSERT_TRUE(rowReader->next(1, batch));
   }
 
   // fail when reading encrypted column
   {
     RowReaderOptions rowReaderOpts;
-    rowReaderOpts.select(
-        std::make_shared<ColumnSelector>(type, std::vector<uint64_t>{1}));
-    VELOX_ASSERT_THROW(reader->createRowReader(rowReaderOpts), "");
+    auto scanSpec = std::make_shared<facebook::velox::common::ScanSpec>("root");
+    scanSpec->addFieldRecursively("b", *type->childAt(1), 0);
+    rowReaderOpts.setScanSpec(scanSpec);
+    VELOX_ASSERT_THROW(
+        reader->createRowReader(rowReaderOpts),
+        "Failed to access encrypted data");
   }
 }
 
