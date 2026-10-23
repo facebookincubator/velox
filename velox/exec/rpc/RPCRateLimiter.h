@@ -239,6 +239,20 @@ class RPCRateLimiter : public std::enable_shared_from_this<RPCRateLimiter> {
   /// divergent request is logged once so the no-op is visible.
   void initializeOnce(const std::function<void(Config&)>& mutate);
 
+  /// Initializes like initializeOnce(), but reports instead of logging: returns
+  /// true when this call configured the backend or the backend already holds
+  /// exactly the settings `mutate` resolves to, and false when an earlier
+  /// query sealed different ones. A sealed configuration is never changed.
+  bool initializeOrMatch(const std::function<void(Config&)>& mutate);
+
+  /// Key for a limiter dedicated to queries whose own settings resolve to
+  /// `config`. Derived from the backend's key so logs still name the backend;
+  /// settings that clamp to the same values map to the same key, so queries
+  /// asking for the same policy share one limiter.
+  static std::string settingsScopedKey(
+      const std::string& admissionKey,
+      const Config& config);
+
   /// The resolved tuning currently in effect.
   Config config() const;
 

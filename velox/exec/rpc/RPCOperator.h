@@ -356,11 +356,13 @@ class RPCOperator : public exec::Operator {
   std::shared_ptr<AsyncRPCFunction> function_;
   bool requiresRowInspectionBeforeAdmission_{true};
 
-  // Operators with the same admission key share rate-limiter capacity.
+  // Operators with the same admission key and rate-limiter policy share
+  // rate-limiter capacity.
   std::string admissionKey_;
 
-  // Process-scoped controller for admissionKey_, resolved before the first
-  // dispatch; outlives this operator.
+  // Process-scoped controller for admissionKey_, or for admissionKey_ and this
+  // query's own rate-limiter settings when the shared controller was sealed
+  // with others. Resolved before the first dispatch; outlives this operator.
   RPCRateLimiter* limiter_{nullptr};
 
   // Precomputed per-argument sources, in call()->inputs() order. Built once in
