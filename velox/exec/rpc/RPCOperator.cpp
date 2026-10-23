@@ -172,16 +172,33 @@ void RPCOperator::initialize() {
   initOutputProjections();
 }
 
+namespace {
+
+// True when the session moves any rate-limiter property off its default: the
+// query asked for a specific policy rather than whichever one the backend runs.
+bool hasRateLimiterSessionOverrides(const core::QueryConfig& queryConfig) {
+  static const core::QueryConfig kDefaults{
+      std::unordered_map<std::string, std::string>{}};
+  return queryConfig.rpcRateLimiterAdaptiveEnabled() !=
+      kDefaults.rpcRateLimiterAdaptiveEnabled() ||
+      queryConfig.rpcRateLimiterMinLimit() !=
+      kDefaults.rpcRateLimiterMinLimit() ||
+      queryConfig.rpcRateLimiterDecreaseFactor() !=
+      kDefaults.rpcRateLimiterDecreaseFactor() ||
+      queryConfig.rpcRateLimiterMaxLimit() !=
+      kDefaults.rpcRateLimiterMaxLimit() ||
+      queryConfig.rpcRateLimiterHardLimit() !=
+      kDefaults.rpcRateLimiterHardLimit();
+}
+
+} // namespace
+
 void RPCOperator::initializeRateLimiter() {
   if (limiter_ != nullptr) {
     return;
   }
 
   admissionKey_ = function_->admissionKey();
-  limiter_ = &RPCRateLimiterRegistry::global().get(admissionKey_);
-  *liveStatsSources_.wlock() = LiveStatsSources{
-      .state = state_, .limiter = limiter_, .function = function_};
-
   const auto& queryConfig = operatorCtx_->driverCtx()->queryConfig();
   const auto sessionFloor = queryConfig.rpcRateLimiterMinLimit();
   const auto legacySessionLimit = queryConfig.rpcRateLimiterMaxLimit();
@@ -192,9 +209,7 @@ void RPCOperator::initializeRateLimiter() {
       legacySessionLimit, 0, "rpc.ratelimiter.max_limit must be non-negative");
   VELOX_USER_CHECK_GE(
       sessionHardLimit, -1, "rpc.ratelimiter.hard_limit must be at least -1");
-  // The first query fixes this shared controller's configuration.
-  // initializeOnce applies the function and session settings atomically.
-  limiter_->initializeOnce(
+  const auto resolvePolicy =
       [this, &queryConfig, sessionFloor, legacySessionLimit, sessionHardLimit](
           RPCRateLimiter::Config& config) {
         config.adaptive = queryConfig.rpcRateLimiterAdaptiveEnabled();
@@ -220,7 +235,28 @@ void RPCOperator::initializeRateLimiter() {
           config.ceiling =
               config.adaptive ? kDefaultAdaptiveHardLimit : kLegacyFixedLimit;
         }
-      });
+      };
+
+  auto& registry = RPCRateLimiterRegistry::global();
+  auto* limiter = &registry.get(admissionKey_);
+  if (!hasRateLimiterSessionOverrides(queryConfig)) {
+    // The first query fixes this shared controller's configuration, and
+    // queries on the default settings run under it. initializeOnce applies the
+    // function and session settings atomically.
+    limiter->initializeOnce(resolvePolicy);
+  } else if (!limiter->initializeOrMatch(resolvePolicy)) {
+    // The shared controller was sealed with a different policy. Running under
+    // it would hold this query to another query's limits, so the query gets a
+    // controller shared only by queries that resolve to the same settings.
+    RPCRateLimiter::Config requested;
+    resolvePolicy(requested);
+    limiter = &registry.get(
+        RPCRateLimiter::settingsScopedKey(admissionKey_, requested));
+    limiter->initializeOnce(resolvePolicy);
+  }
+  limiter_ = limiter;
+  *liveStatsSources_.wlock() = LiveStatsSources{
+      .state = state_, .limiter = limiter_, .function = function_};
 }
 
 bool RPCOperator::needsInput() const {

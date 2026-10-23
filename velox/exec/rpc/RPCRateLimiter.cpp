@@ -23,6 +23,7 @@
 #include <utility>
 #include <vector>
 
+#include <fmt/format.h>
 #include <folly/executors/InlineExecutor.h>
 #include <folly/futures/Future.h>
 
@@ -254,8 +255,28 @@ void RPCRateLimiter::configure(const Config& config) {
 
 void RPCRateLimiter::initializeOnce(
     const std::function<void(Config&)>& mutate) {
+  if (initializeOrMatch(mutate)) {
+    return;
+  }
+  std::lock_guard<std::mutex> l(mutex_);
+  // Per backend, not LOG_FIRST_N: that is process-wide, so the first backend to
+  // take this path would silence the warning for every other one even though
+  // the message names a specific backend.
+  if (!loggedDivergentSettings_) {
+    loggedDivergentSettings_ = true;
+    RPC_RATE_LIMITER_LOG(WARNING)
+        << "admission key " << admissionKey_
+        << " is already initialized; ignoring different settings from a "
+           "later query. One configuration is shared by every query on a "
+           "backend, and it is fixed by the first of them.";
+  }
+}
+
+bool RPCRateLimiter::initializeOrMatch(
+    const std::function<void(Config&)>& mutate) {
   std::vector<ContinuePromise> toNotify;
   std::optional<PacingTimerRequest> timerRequest;
+  bool matches{true};
   {
     std::lock_guard<std::mutex> l(mutex_);
     if (initialized_) {
@@ -265,22 +286,10 @@ void RPCRateLimiter::initializeOnce(
       Config wanted = config_;
       mutate(wanted);
       clampLocked(wanted);
-      if (wanted.adaptive != config_.adaptive ||
-          wanted.floor != config_.floor ||
-          wanted.decreaseFactor != config_.decreaseFactor ||
-          wanted.ceiling != config_.ceiling) {
-        // Per backend, not LOG_FIRST_N: that is process-wide, so the first
-        // backend to take this path would silence the warning for every other
-        // one even though the message names a specific backend.
-        if (!loggedDivergentSettings_) {
-          loggedDivergentSettings_ = true;
-          RPC_RATE_LIMITER_LOG(WARNING)
-              << "admission key " << admissionKey_
-              << " is already initialized; ignoring different settings from a "
-                 "later query. One configuration is shared by every query on a "
-                 "backend, and it is fixed by the first of them.";
-        }
-      }
+      matches = wanted.adaptive == config_.adaptive &&
+          wanted.floor == config_.floor &&
+          wanted.decreaseFactor == config_.decreaseFactor &&
+          wanted.ceiling == config_.ceiling;
     } else {
       applyMutationLocked(mutate);
       timerRequest = collectWakeableLocked(toNotify);
@@ -293,6 +302,21 @@ void RPCRateLimiter::initializeOnce(
   if (timerRequest.has_value()) {
     schedulePacingTimer(timerRequest.value());
   }
+  return matches;
+}
+
+std::string RPCRateLimiter::settingsScopedKey(
+    const std::string& admissionKey,
+    const Config& config) {
+  Config clamped = config;
+  clampLocked(clamped);
+  return fmt::format(
+      "{}#settings:adaptive={},ceiling={},floor={},decrease={}",
+      admissionKey,
+      clamped.adaptive,
+      clamped.ceiling,
+      clamped.floor,
+      clamped.decreaseFactor);
 }
 
 void RPCRateLimiter::testingReset() {
