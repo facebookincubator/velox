@@ -339,7 +339,8 @@ class ChunkedDecoderDataTest : public index::test::ClusterIndexTestBase,
 
   // Encodes integer values into a chunked stream format.
   // Returns the encoded stream data and chunk metadata (row counts and
-  // offsets).
+  // offsets). 'compressionType' compresses each whole chunk;
+  // 'valuesCompressionType' compresses the values inside each encoding.
   struct ChunkInfo {
     uint32_t rowCount;
     uint32_t streamOffset;
@@ -348,7 +349,8 @@ class ChunkedDecoderDataTest : public index::test::ClusterIndexTestBase,
   template <typename T>
   std::pair<std::string, std::vector<ChunkInfo>> encodeChunkedStream(
       const std::vector<std::vector<T>>& chunks,
-      CompressionType compressionType = CompressionType::Uncompressed) {
+      CompressionType compressionType = CompressionType::Uncompressed,
+      CompressionType valuesCompressionType = CompressionType::Uncompressed) {
     Buffer buffer{*pool_};
     std::string streamData;
     std::vector<ChunkInfo> chunkInfos;
@@ -356,7 +358,7 @@ class ChunkedDecoderDataTest : public index::test::ClusterIndexTestBase,
     uint32_t currentOffset = 0;
     for (const auto& chunk : chunks) {
       // Encode each chunk using TrivialEncoding
-      auto encodedChunk = encodeValues<T>(chunk, buffer);
+      auto encodedChunk = encodeValues<T>(chunk, buffer, valuesCompressionType);
 
       // Write chunk using ChunkedStreamWriter
       CompressionParams compressionParams{.type = compressionType};
@@ -431,10 +433,19 @@ class ChunkedDecoderDataTest : public index::test::ClusterIndexTestBase,
   }
 
   template <typename T>
-  std::string_view encodeValues(const std::vector<T>& values, Buffer& buffer) {
+  std::string_view encodeValues(
+      const std::vector<T>& values,
+      Buffer& buffer,
+      CompressionType valuesCompressionType) {
     using physicalType = typename TypeTraits<T>::physicalType;
     EncodingSelectionResult selectionResult{
         .encodingType = EncodingType::Trivial};
+    if (valuesCompressionType != CompressionType::Uncompressed) {
+      selectionResult.compressionPolicyFactory = [valuesCompressionType] {
+        return std::make_unique<ReplayedCompressionPolicy>(
+            valuesCompressionType, CompressionOptions{});
+      };
+    }
     std::span<const physicalType> valuesSpan(
         reinterpret_cast<const physicalType*>(values.data()), values.size());
     Statistics<physicalType> stats =
@@ -830,6 +841,52 @@ TEST_P(ChunkedDecoderDataTest, readsCompressedChunks) {
     expected.insert(expected.end(), chunks[0].size(), kFirstChunkValue);
     expected.insert(expected.end(), chunks[1].size(), kSecondChunkValue);
     EXPECT_EQ(result, expected);
+  }
+}
+
+// Loading a chunk must not keep the previous chunk's decompressed values
+// alive, whether the whole chunk or only the values inside its encoding are
+// compressed.
+TEST_F(ChunkedDecoderDataTest, loadNextChunkReleasesPreviousChunk) {
+  constexpr uint32_t kRowsPerChunk = 128 << 10;
+  constexpr uint64_t kChunkBytes = kRowsPerChunk * sizeof(uint32_t);
+  constexpr uint32_t kFirstChunkValue = 42;
+  constexpr uint32_t kSecondChunkValue = 7;
+  const std::vector<std::vector<uint32_t>> chunks{
+      std::vector<uint32_t>(kRowsPerChunk, kFirstChunkValue),
+      std::vector<uint32_t>(kRowsPerChunk, kSecondChunkValue),
+  };
+  std::vector<int32_t> expected(kRowsPerChunk, kFirstChunkValue);
+  expected.insert(expected.end(), kRowsPerChunk, kSecondChunkValue);
+
+  for (const bool compressValues : {false, true}) {
+    SCOPED_TRACE(fmt::format("compressValues: {}", compressValues));
+    const auto streamData = compressValues
+        ? encodeChunkedStream<uint32_t>(
+              chunks,
+              /*compressionType=*/CompressionType::Uncompressed,
+              /*valuesCompressionType=*/CompressionType::Zstd)
+              .first
+        : encodeChunkedStream<uint32_t>(chunks, CompressionType::Zstd).first;
+    // The chunks must be compressed for the test to cover decompression.
+    ASSERT_LT(streamData.size(), kChunkBytes);
+
+    auto decoderPool =
+        rootPool_->addLeafChild(fmt::format("decoder_{}", compressValues));
+    {
+      ChunkedDecoder decoder(
+          std::make_unique<dwio::common::SeekableArrayInputStream>(
+              streamData.data(), streamData.size()),
+          /*streamIndex=*/nullptr,
+          /*decodeValuesWithNulls=*/false,
+          &encodingFactory(),
+          decoderPool.get());
+      std::vector<int32_t> result(expected.size());
+      decoder.nextIndices(
+          result.data(), static_cast<int64_t>(result.size()), nullptr);
+      EXPECT_EQ(result, expected);
+    }
+    EXPECT_LT(decoderPool->peakBytes(), 2 * kChunkBytes);
   }
 }
 

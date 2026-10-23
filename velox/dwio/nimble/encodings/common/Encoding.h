@@ -295,6 +295,11 @@ class Encoding {
     NIMBLE_NOT_IMPLEMENTED(typeid(*this).name());
   }
 
+  /// Reads the nulls of the next |rowCount| rows into |nulls|, starting at bit
+  /// |begin|, and skips their values without decoding them. Only called by
+  /// nulls-only reads (ChunkedDecoder::nextNulls).
+  virtual void readNulls(uint32_t rowCount, uint64_t* nulls, int begin);
+
   /// Whether this encoding is nullable, i.e. contains any nulls. This property
   /// modifies how engines need to interpret many of the function results, and a
   /// number of functions are only callable if isNullable() returns true.

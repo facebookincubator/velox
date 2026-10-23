@@ -1173,6 +1173,37 @@ return(%r)
 // grid-wide barrier orders that; the __syncthreads() between two fused
 // expressions covers one block. The operand is marked isRegister like every
 // elementwise argument, which is why the barrier test cannot go by that flag.
+// A boolean-mask index has a known rank: a mask of rank k consumes k source
+// dims and stands for one index dim. Only the extent, the mask's nonzero
+// count, depends on the data.
+TEST_F(CompileTest, boolMaskIndexRank) {
+  std::unordered_map<std::string, torch::_export::TensorMeta> meta = {
+      {"x", makeTensorMeta(c10::ScalarType::Float, 3)},
+      {"m", makeTensorMeta(c10::ScalarType::Bool, 2)},
+      {"y", makeTensorMeta(c10::ScalarType::Float, 2)},
+      {"o1", makeTensorMeta(c10::ScalarType::Float, 2)},
+      {"o2", makeTensorMeta(c10::ScalarType::Float, 1)}};
+  const char* graphStr = R"(graph(%x, %m, %y):
+%l1[] = prim.ListPack(l0=%m)
+%o1 = torch.ops.aten.index.Tensor(self=%x, indices=%l1)
+%l2[] = prim.ListPack(l0=%m)
+%o2 = torch.ops.aten.index.Tensor(self=%y, indices=%l2)
+return(%o1, %o2)
+)";
+
+  auto waveGraph = compileGraphString(graphStr, meta);
+  ASSERT_NE(waveGraph, nullptr);
+  auto rankOf = [&](const char* name) {
+    auto* value = waveGraph->graph()->tryGetValue(name);
+    EXPECT_NE(value, nullptr) << name;
+    return value == nullptr ? -2 : waveGraph->types().rank(value);
+  };
+  // [4,5,6][mask[4,5]] -> [n, 6].
+  EXPECT_EQ(rankOf("o1"), 2);
+  // [4,5][mask[4,5]] -> [n].
+  EXPECT_EQ(rankOf("o2"), 1);
+}
+
 TEST_F(CompileTest, barrierBeforeATransposedLeafOfThisKernel) {
   auto f = [] { return makeTensorMeta(c10::ScalarType::Float, 2); };
   std::unordered_map<std::string, torch::_export::TensorMeta> meta = {

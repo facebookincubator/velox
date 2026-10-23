@@ -18,9 +18,11 @@
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/io/IoStatistics.h"
+#include "velox/common/testutil/TestValue.h"
 #include "velox/dwio/common/TypeUtils.h"
 #include "velox/dwio/nimble/common/tests/NimbleFileWriter.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
+#include "velox/dwio/nimble/velox/selective/ChunkedDecoder.h"
 #include "velox/dwio/nimble/writer/FlushPolicy.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
@@ -52,6 +54,7 @@ class ScalarColumnReaderTest : public ::testing::Test,
   static void SetUpTestCase() {
     memory::MemoryManager::testingSetInstance(
         velox::memory::MemoryManager::Options{});
+    common::testutil::TestValue::enable();
     registerSelectiveNimbleReaderFactory();
   }
 
@@ -72,7 +75,8 @@ class ScalarColumnReaderTest : public ::testing::Test,
       const RowVectorPtr& expected,
       const std::string& file,
       const std::shared_ptr<common::ScanSpec>& scanSpec,
-      bool stringDecoderZeroCopy) {
+      bool stringDecoderZeroCopy,
+      bool scanFastPath = false) {
     auto readFile = std::make_shared<InMemoryReadFile>(file);
     auto factory =
         dwio::common::getReaderFactory(dwio::common::FileFormat::NIMBLE);
@@ -89,6 +93,7 @@ class ScalarColumnReaderTest : public ::testing::Test,
     rowOptions.setScanSpec(scanSpec);
     rowOptions.setRequestedType(type);
     rowOptions.setStringDecoderZeroCopy(stringDecoderZeroCopy);
+    rowOptions.setNimbleScanFastPath(scanFastPath);
     readers.rowReader = readers.reader->createRowReader(rowOptions);
     return readers;
   }
@@ -96,12 +101,36 @@ class ScalarColumnReaderTest : public ::testing::Test,
   Readers makeReaders(
       const RowVectorPtr& input,
       const std::shared_ptr<common::ScanSpec>& scanSpec,
-      bool stringDecoderZeroCopy) {
+      bool stringDecoderZeroCopy,
+      bool scanFastPath = false) {
     return makeReaders(
         input,
         test::createNimbleFile(*rootPool(), input),
         scanSpec,
-        stringDecoderZeroCopy);
+        stringDecoderZeroCopy,
+        scanFastPath);
+  }
+
+  // Writes 'input' as one chunk per 'rowsPerChunk' rows in a single stripe.
+  std::string createMultiChunkFile(
+      const RowVectorPtr& input,
+      vector_size_t rowsPerChunk) {
+    std::vector<VectorPtr> chunks;
+    for (vector_size_t offset = 0; offset < input->size();
+         offset += rowsPerChunk) {
+      chunks.push_back(
+          input->slice(offset, std::min(rowsPerChunk, input->size() - offset)));
+    }
+    WriterOptions options;
+    options.enableChunking = true;
+    options.minStreamChunkRawSize = 0;
+    options.flushPolicyFactory = [] {
+      return std::make_unique<LambdaFlushPolicy>(
+          /*flushLambda=*/[](const StripeProgress&) { return false; },
+          /*chunkLambda=*/[](const StripeProgress&) { return true; });
+    };
+    return test::createNimbleFile(
+        *rootPool(), chunks, std::move(options), /*flushAfterWrite=*/false);
   }
 
   // Read with a given readType that may differ from the write type
@@ -110,7 +139,8 @@ class ScalarColumnReaderTest : public ::testing::Test,
       const RowVectorPtr& input,
       const RowTypePtr& readType,
       const std::shared_ptr<common::ScanSpec>& scanSpec,
-      bool stringDecoderZeroCopy) {
+      bool stringDecoderZeroCopy,
+      bool scanFastPath = false) {
     auto file = test::createNimbleFile(*rootPool(), input);
     auto readFile = std::make_shared<InMemoryReadFile>(file);
     auto factory =
@@ -127,6 +157,7 @@ class ScalarColumnReaderTest : public ::testing::Test,
     rowOptions.setScanSpec(scanSpec);
     rowOptions.setRequestedType(readType);
     rowOptions.setStringDecoderZeroCopy(stringDecoderZeroCopy);
+    rowOptions.setNimbleScanFastPath(scanFastPath);
     readers.rowReader = readers.reader->createRowReader(rowOptions);
     return readers;
   }
@@ -616,6 +647,318 @@ TEST_P(ScalarColumnReaderTest, specialFloatValues) {
   // denorm_min
   ASSERT_EQ(
       decoded.valueAt<double>(7), std::numeric_limits<double>::denorm_min());
+}
+
+// ----- Nulls-only reads -----
+
+// IS NULL, and IS NOT NULL on a column that is not projected, need only the
+// nulls. The chunks have some nulls, no nulls, some nulls, and only nulls.
+TEST_P(ScalarColumnReaderTest, nullsOnlyFilter) {
+  const bool stringDecoderZeroCopy = GetParam();
+  constexpr vector_size_t kSize = 400;
+  const auto isNullAt = [](vector_size_t row) {
+    return (row < 100 && row % 3 == 0) ||
+        (row >= 200 && row < 300 && row % 5 == 0) || row >= 300;
+  };
+  const std::vector<VectorPtr> columns = {
+      makeFlatVector<bool>(
+          kSize, [](auto row) { return row % 2 == 0; }, isNullAt),
+      makeFlatVector<int8_t>(
+          kSize, [](auto row) { return static_cast<int8_t>(row); }, isNullAt),
+      makeFlatVector<int16_t>(
+          kSize, [](auto row) { return static_cast<int16_t>(row); }, isNullAt),
+      makeFlatVector<int32_t>(
+          kSize, [](auto row) { return row; }, isNullAt),
+      makeFlatVector<int64_t>(
+          kSize, [](auto row) { return int64_t{row} << 32; }, isNullAt),
+      makeFlatVector<float>(
+          kSize, [](auto row) { return row * 0.5f; }, isNullAt),
+      makeFlatVector<double>(
+          kSize, [](auto row) { return row * 0.25; }, isNullAt),
+  };
+  for (const auto& column : columns) {
+    auto input =
+        makeRowVector({column, makeFlatIdentityVector<int64_t>(kSize)});
+    const auto file = createMultiChunkFile(input, /*rowsPerChunk=*/100);
+    for (const bool isNull : {true, false}) {
+      for (const bool projectOut : {true, false}) {
+        SCOPED_TRACE(
+            column->type()->toString() +
+            (isNull ? " IS NULL" : " IS NOT NULL") +
+            (projectOut ? "" : ", not projected"));
+        auto scanSpec = std::make_shared<common::ScanSpec>("root");
+        scanSpec->addAllChildFields(*input->type());
+        auto* c0 = scanSpec->childByName("c0");
+        if (isNull) {
+          c0->setFilter(std::make_unique<common::IsNull>());
+        } else {
+          c0->setFilter(std::make_unique<common::IsNotNull>());
+        }
+        auto expected = input;
+        if (!projectOut) {
+          c0->setProjectOut(false);
+          c0->setChannel(common::ScanSpec::kNoChannel);
+          scanSpec->childByName("c1")->setChannel(0);
+          expected = makeRowVector({"c1"}, {input->childAt(1)});
+        }
+        auto readers = makeReaders(
+            input,
+            file,
+            scanSpec,
+            stringDecoderZeroCopy,
+            /*scanFastPath=*/true);
+        validateWithFilter(*expected, *readers.rowReader, 37, [&](auto row) {
+          return isNullAt(row) == isNull;
+        });
+      }
+    }
+  }
+}
+
+// The nulls of a struct member include the rows where the struct is null.
+TEST_P(ScalarColumnReaderTest, nullsOnlyFilterInStruct) {
+  const bool stringDecoderZeroCopy = GetParam();
+  auto input = makeRowVector({makeRowVector(
+      {makeFlatVector<int32_t>(
+          300, [](auto row) { return row; }, nullEvery(2))},
+      nullEvery(3))});
+  auto scanSpec = std::make_shared<common::ScanSpec>("root");
+  scanSpec->addAllChildFields(*input->type());
+  scanSpec->childByName("c0")->childByName("c0")->setFilter(
+      std::make_unique<common::IsNull>());
+  auto readers = makeReaders(
+      input,
+      createMultiChunkFile(input, /*rowsPerChunk=*/100),
+      scanSpec,
+      stringDecoderZeroCopy,
+      /*scanFastPath=*/true);
+  validateWithFilter(*input, *readers.rowReader, 37, [](auto row) {
+    return row % 2 == 0 || row % 3 == 0;
+  });
+}
+
+// A nulls-only read keeps the values at the file's width, and getValues widens
+// the null rows to the requested type.
+TEST_P(ScalarColumnReaderTest, nullsOnlyFilterWithEvolution) {
+  const bool stringDecoderZeroCopy = GetParam();
+  constexpr vector_size_t kSize = 300;
+  const std::vector<std::pair<VectorPtr, TypePtr>> columnsAndReadTypes = {
+      {makeFlatVector<int16_t>(
+           kSize,
+           [](auto row) { return static_cast<int16_t>(row); },
+           nullEvery(3)),
+       BIGINT()},
+      {makeFlatVector<int32_t>(
+           kSize, [](auto row) { return row; }, nullEvery(3)),
+       BIGINT()},
+      {makeFlatVector<float>(
+           kSize, [](auto row) { return row * 0.5f; }, nullEvery(3)),
+       DOUBLE()},
+  };
+  for (const auto& [column, readType] : columnsAndReadTypes) {
+    SCOPED_TRACE(column->type()->toString() + " as " + readType->toString());
+    auto input =
+        makeRowVector({column, makeFlatIdentityVector<int64_t>(kSize)});
+    auto rowReadType = ROW({{"c0", readType}, {"c1", BIGINT()}});
+    auto scanSpec = std::make_shared<common::ScanSpec>("root");
+    scanSpec->addAllChildFields(*rowReadType);
+    scanSpec->childByName("c0")->setFilter(std::make_unique<common::IsNull>());
+    auto readers = makeReadersWithEvolution(
+        input,
+        rowReadType,
+        scanSpec,
+        stringDecoderZeroCopy,
+        /*scanFastPath=*/true);
+    auto expected = makeRowVector(
+        {"c0", "c1"},
+        {BaseVector::createNullConstant(readType, kSize, pool()),
+         input->childAt(1)});
+    validateWithFilter(*expected, *readers.rowReader, 37, [](auto row) {
+      return row % 3 == 0;
+    });
+  }
+}
+
+// c0 drops row 3 and the last 3 rows of each batch. c1 then reads a row set
+// with a gap, and skips the dropped tail before its next read, sometimes across
+// a chunk boundary.
+TEST_P(ScalarColumnReaderTest, nullsOnlyFilterSkipsRows) {
+  const bool stringDecoderZeroCopy = GetParam();
+  const auto c0IsNullAt = [](vector_size_t row) {
+    return row % 10 < 7 && row % 10 != 3;
+  };
+  auto input = makeRowVector({
+      makeFlatVector<int64_t>(
+          300, [](auto row) { return row; }, c0IsNullAt),
+      makeFlatVector<int64_t>(
+          300, [](auto row) { return row; }, nullEvery(3)),
+  });
+  auto scanSpec = std::make_shared<common::ScanSpec>("root");
+  scanSpec->addAllChildFields(*input->type());
+  scanSpec->childByName("c0")->setFilter(std::make_unique<common::IsNull>());
+  scanSpec->childByName("c1")->setFilter(std::make_unique<common::IsNull>());
+
+  // Filters of the same kind run in name order, so c0 runs first.
+  scanSpec->disableStatsBasedFilterReorder();
+  auto readers = makeReaders(
+      input,
+      createMultiChunkFile(input, /*rowsPerChunk=*/98),
+      scanSpec,
+      stringDecoderZeroCopy,
+      /*scanFastPath=*/true);
+  validateWithFilter(*input, *readers.rowReader, 10, [&](auto row) {
+    return c0IsNullAt(row) && row % 3 == 0;
+  });
+}
+
+// A dynamic filter can replace a column's filter between batches, so one chunk
+// is read partly through the nulls-only path and partly through the value
+// path. Each read must start where the other left the value stream.
+TEST_P(ScalarColumnReaderTest, nullsOnlyFilterSwitchesMidStripe) {
+  const bool stringDecoderZeroCopy = GetParam();
+  constexpr vector_size_t kSize = 400;
+  constexpr vector_size_t kBatchSize = 37;
+  // The switch lands inside the third chunk, whose nulls make it a
+  // NullableEncoding chunk.
+  constexpr vector_size_t kSwitchRow = 6 * kBatchSize;
+
+  // The chunks have some nulls, no nulls, some nulls, and only nulls.
+  const auto isNullAt = [](vector_size_t row) {
+    return (row < 100 && row % 3 == 0) ||
+        (row >= 200 && row < 300 && row % 5 == 0) || row >= 300;
+  };
+  auto input = makeRowVector({
+      makeFlatVector<int64_t>(
+          kSize, [](auto row) { return row; }, isNullAt),
+      makeFlatIdentityVector<int64_t>(kSize),
+  });
+  const auto file = createMultiChunkFile(input, /*rowsPerChunk=*/100);
+
+  // IS NOT NULL on the unprojected c0 needs only its nulls; the BigintRange
+  // filter needs its values.
+  const auto makeFilter =
+      [](bool nullsOnly) -> std::unique_ptr<common::Filter> {
+    if (nullsOnly) {
+      return std::make_unique<common::IsNotNull>();
+    }
+    return std::make_unique<common::BigintRange>(
+        50, 250, /*nullAllowed=*/false);
+  };
+  const auto passes = [&](vector_size_t row, bool nullsOnly) {
+    return !isNullAt(row) && (nullsOnly || (row >= 50 && row <= 250));
+  };
+  for (const bool nullsOnlyFirst : {true, false}) {
+    SCOPED_TRACE(nullsOnlyFirst ? "nulls-only first" : "values first");
+    auto scanSpec = std::make_shared<common::ScanSpec>("root");
+    scanSpec->addAllChildFields(*input->type());
+    auto* c0 = scanSpec->childByName("c0");
+    c0->setProjectOut(false);
+    c0->setChannel(common::ScanSpec::kNoChannel);
+    scanSpec->childByName("c1")->setChannel(0);
+    c0->setFilter(makeFilter(nullsOnlyFirst));
+    auto readers = makeReaders(
+        input, file, scanSpec, stringDecoderZeroCopy, /*scanFastPath=*/true);
+
+    VectorPtr result = BaseVector::create(ROW("c1", BIGINT()), 0, pool());
+    std::vector<int64_t> actualRows;
+    vector_size_t numScanned = 0;
+    while (numScanned < kSize) {
+      if (numScanned == kSwitchRow) {
+        // Mirrors FileDataSource::addDynamicFilter.
+        c0->setFilter(makeFilter(!nullsOnlyFirst));
+        scanSpec->resetCachedValues(true);
+        readers.rowReader->resetFilterCaches();
+      }
+      numScanned += readers.rowReader->next(kBatchSize, result);
+      auto* c1 = result->asUnchecked<RowVector>()
+                     ->childAt(0)
+                     ->loadedVector()
+                     ->as<SimpleVector<int64_t>>();
+      ASSERT_NE(c1, nullptr);
+      for (vector_size_t i = 0; i < result->size(); ++i) {
+        actualRows.push_back(c1->valueAt(i));
+      }
+    }
+
+    std::vector<int64_t> expectedRows;
+    for (vector_size_t row = 0; row < kSize; ++row) {
+      if (passes(row, (row < kSwitchRow) == nullsOnlyFirst)) {
+        expectedRows.push_back(row);
+      }
+    }
+    EXPECT_EQ(actualRows, expectedRows);
+  }
+}
+
+DEBUG_ONLY_TEST_P(ScalarColumnReaderTest, nullsOnlyFilterSkipsValueDecoding) {
+  const bool stringDecoderZeroCopy = GetParam();
+  int numNullsOnlyReads{0};
+  SCOPED_TESTVALUE_SET(
+      "facebook::nimble::ChunkedDecoder::nextNulls",
+      std::function<void(ChunkedDecoder*)>(
+          [&](ChunkedDecoder*) { ++numNullsOnlyReads; }));
+
+  // One column per reader: ByteColumnReader, IntegerColumnReader and
+  // FloatingPointColumnReader.
+  const std::vector<VectorPtr> columns = {
+      makeFlatVector<bool>(
+          100, [](auto row) { return row % 2 == 0; }, nullEvery(3)),
+      makeFlatVector<int64_t>(
+          100, [](auto row) { return row; }, nullEvery(3)),
+      makeFlatVector<double>(
+          100, [](auto row) { return row * 0.5; }, nullEvery(3)),
+  };
+  for (const auto& column : columns) {
+    SCOPED_TRACE(column->type()->toString());
+    auto input = makeRowVector({column, makeFlatIdentityVector<int64_t>(100)});
+    const auto readsNullsOnly = [&](std::unique_ptr<common::Filter> filter,
+                                    bool projectOut,
+                                    bool scanFastPath) {
+      auto scanSpec = std::make_shared<common::ScanSpec>("root");
+      scanSpec->addAllChildFields(*input->type());
+      auto* c0 = scanSpec->childByName("c0");
+      c0->setFilter(std::move(filter));
+      auto outputType = asRowType(input->type());
+      if (!projectOut) {
+        c0->setProjectOut(false);
+        c0->setChannel(common::ScanSpec::kNoChannel);
+        scanSpec->childByName("c1")->setChannel(0);
+        outputType = ROW("c1", BIGINT());
+      }
+      auto readers =
+          makeReaders(input, scanSpec, stringDecoderZeroCopy, scanFastPath);
+      VectorPtr result = BaseVector::create(outputType, 0, pool());
+      numNullsOnlyReads = 0;
+      readers.rowReader->next(input->size(), result);
+      return numNullsOnlyReads > 0;
+    };
+
+    // Legacy encodings always decode the values.
+    EXPECT_EQ(
+        readsNullsOnly(
+            std::make_unique<common::IsNull>(),
+            /*projectOut=*/true,
+            /*scanFastPath=*/true),
+        stringDecoderZeroCopy);
+    EXPECT_EQ(
+        readsNullsOnly(
+            std::make_unique<common::IsNotNull>(),
+            /*projectOut=*/false,
+            /*scanFastPath=*/true),
+        stringDecoderZeroCopy);
+
+    // A projected column needs its values.
+    EXPECT_FALSE(readsNullsOnly(
+        std::make_unique<common::IsNotNull>(),
+        /*projectOut=*/true,
+        /*scanFastPath=*/true));
+
+    // Nulls-only reads stay off until scanFastPath is on.
+    EXPECT_FALSE(readsNullsOnly(
+        std::make_unique<common::IsNull>(),
+        /*projectOut=*/true,
+        /*scanFastPath=*/false));
+  }
 }
 
 INSTANTIATE_TEST_CASE_P(

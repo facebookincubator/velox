@@ -32,13 +32,18 @@ void IntegerColumnReader::read(
     int64_t offset,
     const RowSet& rows,
     const uint64_t* incomingNulls) {
-  VELOX_WIDTH_DISPATCH(
-      dwio::common::sizeOfIntKind(fileType_->type()->kind()),
-      prepareRead,
-      offset,
-      rows,
-      incomingNulls);
-  readCommon<IntegerColumnReader, false>(rows);
+  const auto width = dwio::common::sizeOfIntKind(fileType_->type()->kind());
+  VELOX_WIDTH_DISPATCH(width, prepareRead, offset, rows, incomingNulls);
+  if (readsNullsOnly()) {
+    VELOX_WIDTH_DISPATCH(
+        width,
+        filterNulls,
+        rows,
+        scanSpec_->filter()->kind() == velox::common::FilterKind::kIsNull,
+        scanSpec_->keepValues());
+  } else {
+    readCommon<IntegerColumnReader, false>(rows);
+  }
   readOffset_ += rows.back() + 1;
 }
 

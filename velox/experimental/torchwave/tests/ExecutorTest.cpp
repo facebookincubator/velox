@@ -334,6 +334,176 @@ TEST_F(ExecutorTest, doubleCumsumCgTest) {
   runDoubleCumsum();
 }
 
+// Two independent scans feeding one add. In cg both tw.cumsum_cg calls land in
+// one op and share its __shared__ scratch (size, rounded, counter, reduction
+// temps), which each call's thread 0 rewrites on entry. Warps of the same
+// block still testing the first scan's loop bound then read the second scan's
+// size, run past the first input and corrupt the block's partial sums. Nothing
+// orders the two calls across blocks, so the separation is a block barrier,
+// not an opBarrier.
+const char* kTwoCumsumGraph = R"(graph(%x, %y):
+%c1 = torch.ops.aten.cumsum.default(self=%x, dim=0)
+%c2 = torch.ops.aten.cumsum.default(self=%y, dim=0)
+%r = torch.ops.aten.add.Tensor(self=%c1, other=%c2)
+return(%r)
+)";
+
+std::unordered_map<std::string, torch::_export::TensorMeta> twoCumsumMeta() {
+  std::unordered_map<std::string, torch::_export::TensorMeta> meta;
+  for (const auto* name : {"x", "y", "c1", "c2", "r"}) {
+    meta[name] = makeTensorMeta(c10::ScalarType::Long, 1);
+  }
+  return meta;
+}
+
+TEST_F(ExecutorTest, twoCumsumCgScratchTest) {
+  auto resetConfig =
+      folly::makeGuard([] { WaveConfig::get().isCg = std::nullopt; });
+
+  auto plan = compilePlanProgrammatic(
+      nativert::stringToGraph(kTwoCumsumGraph),
+      twoCumsumMeta(),
+      CompiledPlan::Mode::kCG);
+  int32_t sharedOps = 0;
+  for (const auto& node : plan.nodes()) {
+    for (const auto& step : node.steps) {
+      for (const auto& kernel : step.kernels) {
+        const auto first = kernel.code.find("cumsum_cg<");
+        if (first == std::string::npos) {
+          continue;
+        }
+        const auto second = kernel.code.find("cumsum_cg<", first + 1);
+        if (second == std::string::npos) {
+          continue;
+        }
+        ++sharedOps;
+        const auto between = kernel.code.substr(first, second - first);
+        EXPECT_NE(between.find("__syncthreads();"), std::string::npos)
+            << kernel.code;
+      }
+    }
+  }
+  // Fails rather than passes vacuously if the scans stop sharing an op.
+  EXPECT_EQ(sharedOps, 1) << plan.describe();
+
+  WaveConfig::get().isCg = true;
+  auto x = at::arange(100000, at::kLong) % 7;
+  auto y = at::arange(70000, at::kLong) % 5;
+  y = at::cat({y, y.narrow(0, 0, 30000)});
+  auto outputs = runWaveProgrammatic(
+      nativert::stringToGraph(kTwoCumsumGraph), twoCumsumMeta(), {{x, y}});
+  ASSERT_EQ(outputs.size(), 1);
+  auto reference = at::cumsum(x, 0) + at::cumsum(y, 0);
+  EXPECT_TRUE(tensorsMatch(outputs[0], reference))
+      << firstDifference(outputs[0], reference);
+}
+
+// A broadcast whose operands reach it through unsqueeze views: [R,C,1] plus
+// [1,1,C] is [R,C,C], the index pattern of the ads id-matching decomposition.
+// The launch must cover R*C*C elements, not the R*C of the larger view base.
+const char* kViewBroadcastGraph = R"(graph(%a, %b):
+%u1 = torch.ops.aten.unsqueeze.default(self=%a, dim=2)
+%u0 = torch.ops.aten.unsqueeze.default(self=%b, dim=0)
+%u2 = torch.ops.aten.unsqueeze.default(self=%u0, dim=0)
+%s = torch.ops.aten.add.Tensor(self=%u1, other=%u2)
+%c = torch.ops.aten.clamp.default(self=%s, min=0, max=100000)
+return(%c)
+)";
+
+std::unordered_map<std::string, torch::_export::TensorMeta>
+viewBroadcastMeta() {
+  std::unordered_map<std::string, torch::_export::TensorMeta> meta;
+  meta["a"] = makeTensorMeta(c10::ScalarType::Long, 2);
+  meta["b"] = makeTensorMeta(c10::ScalarType::Long, 1);
+  meta["u0"] = makeTensorMeta(c10::ScalarType::Long, 2);
+  for (const auto* name : {"u1", "u2", "s", "c"}) {
+    meta[name] = makeTensorMeta(c10::ScalarType::Long, 3);
+  }
+  return meta;
+}
+
+TEST_F(ExecutorTest, viewBroadcastSizingTest) {
+  constexpr int64_t kRows = 1000;
+  constexpr int64_t kCols = 200;
+  auto a = at::arange(kRows * kCols, at::kLong).reshape({kRows, kCols}) % 997;
+  auto b = at::arange(kCols, at::kLong);
+  auto outputs = runWaveProgrammatic(
+      nativert::stringToGraph(kViewBroadcastGraph),
+      viewBroadcastMeta(),
+      {{a, b}});
+  ASSERT_EQ(outputs.size(), 1);
+  auto reference =
+      at::clamp(a.unsqueeze(2) + b.unsqueeze(0).unsqueeze(0), 0, 100000);
+  EXPECT_TRUE(tensorsMatch(outputs[0], reference))
+      << firstDifference(outputs[0], reference);
+}
+
+// The ads id-matching index: clamp(add(unsqueeze(a), unsqueeze(b))) flattened
+// to the index list of a gather from cat(src, zeros). The gather becomes
+// tw.index_elt_one_default with the clamp fused in through the view and the
+// list, so the op's root is a view. Its launch has to cover the [R,C,C]
+// broadcast; sized by its largest input it covered the [R,C,1] side alone.
+const char* kViewBroadcastGatherGraph = R"(graph(%src, %a, %b):
+%z = torch.ops.aten.new_zeros.default(self=%src, size=[1])
+%l[] = prim.ListPack(l0=%src, l1=%z)
+%cat = torch.ops.aten.cat.default(tensors=%l, dim=0)
+%u1 = torch.ops.aten.unsqueeze.default(self=%a, dim=2)
+%u0 = torch.ops.aten.unsqueeze.default(self=%b, dim=0)
+%u2 = torch.ops.aten.unsqueeze.default(self=%u0, dim=0)
+%s = torch.ops.aten.add.Tensor(self=%u1, other=%u2)
+%c = torch.ops.aten.clamp.default(self=%s, min=0, max=300000)
+%f = torch.ops.aten.view.default(self=%c, size=[40000000])
+%il[] = prim.ListPack(l0=%f)
+%g = torch.ops.aten.index.Tensor(self=%cat, indices=%il)
+%o = torch.ops.aten.view.default(self=%g, size=[1000, 40000])
+return(%o)
+)";
+
+TEST_F(ExecutorTest, viewBroadcastGatherSizingTest) {
+  std::unordered_map<std::string, torch::_export::TensorMeta> meta;
+  for (const auto* name : {"src", "z", "cat", "b", "f", "g"}) {
+    meta[name] = makeTensorMeta(c10::ScalarType::Long, 1);
+  }
+  for (const auto* name : {"a", "u0", "o"}) {
+    meta[name] = makeTensorMeta(c10::ScalarType::Long, 2);
+  }
+  for (const auto* name : {"u1", "u2", "s", "c"}) {
+    meta[name] = makeTensorMeta(c10::ScalarType::Long, 3);
+  }
+  auto plan = compilePlanProgrammatic(
+      nativert::stringToGraph(kViewBroadcastGatherGraph),
+      meta,
+      CompiledPlan::Mode::kMultiKernel);
+  int32_t clampKernels = 0;
+  for (const auto& node : plan.nodes()) {
+    for (const auto& step : node.steps) {
+      for (const auto& kernel : step.kernels) {
+        if (kernel.has("aten.clamp.default")) {
+          ++clampKernels;
+          EXPECT_TRUE(kernel.has("tw.index_elt_one_default"))
+              << plan.describe();
+          EXPECT_TRUE(kernel.broadcastCount) << plan.describe();
+        }
+      }
+    }
+  }
+  EXPECT_EQ(clampKernels, 1) << plan.describe();
+
+  auto src = at::arange(300000, at::kLong) % 991;
+  auto a = (at::arange(200000, at::kLong) * 7 % 299800).reshape({1000, 200});
+  auto b = at::arange(200, at::kLong);
+  auto outputs = runWaveProgrammatic(
+      nativert::stringToGraph(kViewBroadcastGatherGraph), meta, {{src, a, b}});
+  ASSERT_EQ(outputs.size(), 1);
+  auto index =
+      at::clamp(a.unsqueeze(2) + b.unsqueeze(0).unsqueeze(0), 0, 300000);
+  auto padded = at::cat({src, at::zeros({1}, at::kLong)});
+  auto reference =
+      padded.index_select(0, index.reshape({-1})).view({1000, 40000});
+  EXPECT_TRUE(tensorsMatch(outputs[0], reference))
+      << firstDifference(outputs[0], reference);
+}
+
 // A RANDOM-ACCESS read of a scan's output inside the same cooperative kernel.
 // aten.index.Tensor carries no barrier of its own, and the index is REVERSED,
 // so block 0 reads what the last block wrote: that is what makes a missing
@@ -838,6 +1008,32 @@ TEST_F(ExecutorTest, scatterAddInPlaceTest) {
       0);
 }
 
+// tw.scatter_add on an index sorted into runs, as ROO's per-row counts are. A
+// warp whose active lanes share a destination adds with one atomic, so the run
+// boundaries and the end of the loop are what can go wrong: the runs total 1045
+// elements, so the last warp has 21 active lanes, all inside the final run, and
+// one run boundary falls inside a warp. 'counts' computes src from flags (the
+// operand is evaluated only for lanes in range, the scatter on every lane);
+// 'sums' reads src from memory. Checked on all three grids.
+TEST_F(ExecutorTest, scatterAddRunsTest) {
+  auto resetConfig = folly::makeGuard([] {
+    WaveConfig::get().isCg = std::nullopt;
+    WaveConfig::get().useSingleBlock = std::nullopt;
+  });
+  const std::string pt2 = "data/scatter_add_runs_test.pt2";
+  const std::string results = "data/scatter_add_runs_test_results.pt";
+  WaveConfig::get().useSingleBlock = false;
+  runTest(pt2, results, "multi-block");
+  WaveConfig::get().useSingleBlock = true;
+  runTest(pt2, results, "single-block");
+  WaveConfig::get().useSingleBlock = std::nullopt;
+  WaveConfig::get().isCg = true;
+  runTest(pt2, results, "cg");
+
+  auto plans = compilePlans(pt2);
+  EXPECT_TRUE(plans.multiKernel.fuses({"tw.scatter_add"}));
+}
+
 // A fused tw.scatter_add accumulating [4096] src/index into a [256] tensor,
 // feeding an elementwise consumer whose operands are all [256]. Forced onto the
 // cooperative grid, where both land in one kernel op: multi-block ends the
@@ -965,6 +1161,280 @@ TEST_F(ExecutorTest, logitTest) {
 // query row searches the matching sorted row.
 TEST_F(ExecutorTest, searchOpsTest) {
   runTest("data/search_ops_test.pt2", "data/search_ops_test_results.pt");
+}
+
+// searchsorted with a rank-3 sorted sequence, each [i, j] row searched by
+// the matching query row, read through a transposed view so the searched
+// dim has a stride other than 1. Both sides, against eager. Programmatic
+// graph, no .pt2.
+TEST_F(ExecutorTest, searchsortedRank3StridedTest) {
+  const char* kGraph = R"(graph(%s, %q):
+%t = torch.ops.aten.transpose.int(self=%s, dim0=1, dim1=2)
+%l = torch.ops.aten.searchsorted.Tensor(sorted_sequence=%t, self=%q)
+%r = torch.ops.aten.searchsorted.Tensor(sorted_sequence=%t, self=%q, side="right")
+return (%l, %r)
+)";
+  std::unordered_map<std::string, torch::_export::TensorMeta> meta;
+  meta["s"] = makeTensorMeta(c10::ScalarType::Long, 3);
+  meta["t"] = makeTensorMeta(c10::ScalarType::Long, 3);
+  meta["q"] = makeTensorMeta(c10::ScalarType::Long, 3);
+  meta["l"] = makeTensorMeta(c10::ScalarType::Long, 3);
+  meta["r"] = makeTensorMeta(c10::ScalarType::Long, 3);
+  // Sorted along dim 1, so the transpose's last dim is sorted with stride 4.
+  auto s = std::get<0>(at::sort(at::randint(0, 100, {3, 50, 4}, at::kLong), 1));
+  auto q = at::randint(-5, 105, {3, 4, 70}, at::kLong);
+  auto outputs =
+      runWaveProgrammatic(nativert::stringToGraph(kGraph), meta, {{s, q}});
+  ASSERT_EQ(outputs.size(), 2);
+  auto t = s.transpose(1, 2);
+  auto left = at::searchsorted(t, q);
+  auto right = at::searchsorted(t, q, /*out_int32=*/false, /*right=*/true);
+  EXPECT_TRUE(tensorsMatch(outputs[0], left))
+      << firstDifference(outputs[0], left);
+  EXPECT_TRUE(tensorsMatch(outputs[1], right))
+      << firstDifference(outputs[1], right);
+}
+
+// Fused aten.gather (tw.gather): dims 0, 1 and -1 at ranks 2 and 3, and the
+// ads id-matching chain eq(gather(sorted, 1, clamp(slice(pos))), vals)
+// viewed to rank 3 and masked, so the gather's index producers fuse into it
+// and a reshaping view sits between it and the expression output. Checks
+// that no gather runs standalone and the results match eager. Programmatic
+// graph, no .pt2.
+TEST_F(ExecutorTest, gatherFusedTest) {
+  const char* kGraph = R"(graph(%a, %i0, %b, %i1, %i2, %srt, %pos, %vals, %m):
+%g0 = torch.ops.aten.gather.default(self=%a, dim=0, index=%i0)
+%g1 = torch.ops.aten.gather.default(self=%b, dim=1, index=%i1)
+%g2 = torch.ops.aten.gather.default(self=%b, dim=-1, index=%i2)
+%sl = torch.ops.aten.slice.Tensor(self=%pos, dim=0, start=0, end=100)
+%cl = torch.ops.aten.clamp.default(self=%sl, max=49)
+%g3 = torch.ops.aten.gather.default(self=%srt, dim=1, index=%cl)
+%e = torch.ops.aten.eq.Tensor(self=%g3, other=%vals)
+%v = torch.ops.aten.view.default(self=%e, size=[100, 30, 40])
+%h = torch.ops.aten.bitwise_and.Tensor(self=%v, other=%m)
+return (%g0, %g1, %g2, %h)
+)";
+  std::unordered_map<std::string, torch::_export::TensorMeta> meta;
+  meta["a"] = makeTensorMeta(c10::ScalarType::Float, 2);
+  meta["i0"] = makeTensorMeta(c10::ScalarType::Long, 2);
+  meta["b"] = makeTensorMeta(c10::ScalarType::Float, 3);
+  meta["i1"] = makeTensorMeta(c10::ScalarType::Long, 3);
+  meta["i2"] = makeTensorMeta(c10::ScalarType::Long, 3);
+  meta["srt"] = makeTensorMeta(c10::ScalarType::Long, 2);
+  meta["pos"] = makeTensorMeta(c10::ScalarType::Long, 2);
+  meta["vals"] = makeTensorMeta(c10::ScalarType::Long, 2);
+  meta["m"] = makeTensorMeta(c10::ScalarType::Bool, 3);
+  for (const char* name : {"sl", "cl", "g3"}) {
+    meta[name] = makeTensorMeta(c10::ScalarType::Long, 2);
+  }
+  meta["g0"] = makeTensorMeta(c10::ScalarType::Float, 2);
+  meta["g1"] = makeTensorMeta(c10::ScalarType::Float, 3);
+  meta["g2"] = makeTensorMeta(c10::ScalarType::Float, 3);
+  meta["e"] = makeTensorMeta(c10::ScalarType::Bool, 2);
+  meta["v"] = makeTensorMeta(c10::ScalarType::Bool, 3);
+  meta["h"] = makeTensorMeta(c10::ScalarType::Bool, 3);
+
+  auto plan = compilePlanProgrammatic(
+      nativert::stringToGraph(kGraph), meta, CompiledPlan::Mode::kMultiKernel);
+  bool sawGather = false;
+  for (const auto& node : plan.nodes()) {
+    for (const auto& step : node.steps) {
+      for (const auto& kernel : step.kernels) {
+        EXPECT_FALSE(kernel.standalone && kernel.has("aten.gather.default"))
+            << plan.describe();
+        if (kernel.has("tw.gather") && kernel.has("aten.clamp.default")) {
+          sawGather = true;
+        }
+      }
+    }
+  }
+  EXPECT_TRUE(sawGather) << plan.describe();
+
+  auto a = at::randn({20, 7});
+  auto i0 = at::randint(0, 20, {15, 7}, at::kLong);
+  auto b = at::randn({4, 9, 6});
+  auto i1 = at::randint(0, 9, {4, 9, 5}, at::kLong);
+  auto i2 = at::randint(0, 6, {4, 9, 5}, at::kLong);
+  auto srt = std::get<0>(at::sort(at::randint(0, 60, {100, 50}, at::kLong), 1));
+  auto pos = at::randint(0, 51, {132, 1200}, at::kLong);
+  auto vals = at::randint(0, 60, {100, 1200}, at::kLong);
+  auto m = at::randint(0, 2, {100, 30, 40}, at::kLong).to(at::kBool);
+  auto outputs = runWaveProgrammatic(
+      nativert::stringToGraph(kGraph),
+      meta,
+      {{a, i0, b, i1, i2, srt, pos, vals, m}});
+  ASSERT_EQ(outputs.size(), 4);
+  std::vector<at::Tensor> expected{
+      at::gather(a, 0, i0),
+      at::gather(b, 1, i1),
+      at::gather(b, -1, i2),
+      at::eq(at::gather(srt, 1, pos.narrow(0, 0, 100).clamp_max(49)), vals)
+              .view({100, 30, 40}) &
+          m};
+  for (size_t i = 0; i < outputs.size(); ++i) {
+    EXPECT_TRUE(tensorsMatch(outputs[i], expected[i]))
+        << i << ": " << firstDifference(outputs[i], expected[i]);
+  }
+}
+
+// A gather whose output broadcasts into a larger expression:
+// add(gather(a, 1, i)[20, 1], x[20, 30]). Against eager in every mode.
+// Programmatic graph, no .pt2.
+TEST_F(ExecutorTest, gatherBroadcastTest) {
+  const char* kGraph = R"(graph(%a, %i, %x):
+%g = torch.ops.aten.gather.default(self=%a, dim=1, index=%i)
+%o = torch.ops.aten.add.Tensor(self=%g, other=%x)
+return (%o)
+)";
+  std::unordered_map<std::string, torch::_export::TensorMeta> meta;
+  meta["a"] = makeTensorMeta(c10::ScalarType::Float, 2);
+  meta["i"] = makeTensorMeta(c10::ScalarType::Long, 2);
+  meta["x"] = makeTensorMeta(c10::ScalarType::Float, 2);
+  meta["g"] = makeTensorMeta(c10::ScalarType::Float, 2);
+  meta["o"] = makeTensorMeta(c10::ScalarType::Float, 2);
+  auto a = at::randn({20, 7});
+  auto i = at::randint(0, 7, {20, 1}, at::kLong);
+  auto x = at::randn({20, 30});
+  auto outputs =
+      runWaveProgrammatic(nativert::stringToGraph(kGraph), meta, {{a, i, x}});
+  ASSERT_EQ(outputs.size(), 1);
+  auto expected = at::gather(a, 1, i) + x;
+  EXPECT_TRUE(tensorsMatch(outputs[0], expected))
+      << firstDifference(outputs[0], expected);
+}
+
+// A gather feeding the source of an in-place scatter into a larger tensor,
+// as in the ads graph. The loop runs over the source, so the gather's own
+// elements, not the scatter output's. Against eager in every mode.
+// Programmatic graph, no .pt2.
+TEST_F(ExecutorTest, gatherIntoScatterTest) {
+  const char* kGraph = R"(graph(%z, %si, %a, %i):
+%c = torch.ops.aten.clone.default(self=%z)
+%g = torch.ops.aten.gather.default(self=%a, dim=1, index=%i)
+%m = torch.ops.aten.mul.Tensor(self=%g, other=%g)
+%o = torch.ops.aten.scatter.src(self=%c, dim=1, index=%si, src=%m)
+return (%o)
+)";
+  std::unordered_map<std::string, torch::_export::TensorMeta> meta;
+  for (const char* name : {"z", "a", "c", "g", "m", "o"}) {
+    meta[name] = makeTensorMeta(c10::ScalarType::Long, 2);
+  }
+  meta["si"] = makeTensorMeta(c10::ScalarType::Long, 2);
+  meta["i"] = makeTensorMeta(c10::ScalarType::Long, 2);
+  auto z = at::zeros({40, 50}, at::kLong);
+  // Distinct targets per row so the scatter result does not depend on order.
+  auto si = std::get<1>(at::sort(at::rand({40, 50}), 1))
+                .narrow(1, 0, 30)
+                .contiguous();
+  auto a = at::randint(0, 1000, {40, 9}, at::kLong);
+  auto i = at::randint(0, 9, {40, 30}, at::kLong);
+  auto outputs = runWaveProgrammatic(
+      nativert::stringToGraph(kGraph), meta, {{z, si, a, i}});
+  ASSERT_EQ(outputs.size(), 1);
+  auto g = at::gather(a, 1, i);
+  auto expected = z.clone().scatter(1, si, g * g);
+  EXPECT_TRUE(tensorsMatch(outputs[0], expected))
+      << firstDifference(outputs[0], expected);
+}
+
+// An in-place scatter whose source broadcasts one of its operands:
+// scatter(clone(z), 1, si, add(a[40, 30], b[40, 1])). The loop runs over the
+// source, so b must be read broadcast against the source's shape. Against
+// eager in every mode. Programmatic graph, no .pt2.
+TEST_F(ExecutorTest, scatterBroadcastSrcTest) {
+  const char* kGraph = R"(graph(%z, %si, %a, %b):
+%c = torch.ops.aten.clone.default(self=%z)
+%s = torch.ops.aten.add.Tensor(self=%a, other=%b)
+%o = torch.ops.aten.scatter.src(self=%c, dim=1, index=%si, src=%s)
+return (%o)
+)";
+  std::unordered_map<std::string, torch::_export::TensorMeta> meta;
+  for (const char* name : {"z", "si", "a", "b", "c", "s", "o"}) {
+    meta[name] = makeTensorMeta(c10::ScalarType::Long, 2);
+  }
+  auto z = at::zeros({40, 50}, at::kLong);
+  auto si = std::get<1>(at::sort(at::rand({40, 50}), 1))
+                .narrow(1, 0, 30)
+                .contiguous();
+  auto a = at::randint(0, 1000, {40, 30}, at::kLong);
+  auto b = at::randint(0, 1000, {40, 1}, at::kLong);
+  auto outputs = runWaveProgrammatic(
+      nativert::stringToGraph(kGraph), meta, {{z, si, a, b}});
+  ASSERT_EQ(outputs.size(), 1);
+  auto expected = z.clone().scatter(1, si, a + b);
+  EXPECT_TRUE(tensorsMatch(outputs[0], expected))
+      << firstDifference(outputs[0], expected);
+}
+
+// TensorMeta with the given static sizes, for rewrites that read them.
+torch::_export::TensorMeta makeSizedTensorMeta(
+    c10::ScalarType dtype,
+    const std::vector<int64_t>& sizes) {
+  auto meta = makeTensorMeta(dtype, static_cast<int64_t>(sizes.size()));
+  std::vector<torch::_export::SymInt> symSizes;
+  for (auto size : sizes) {
+    torch::_export::SymInt dim;
+    dim.set_as_int(size);
+    symSizes.push_back(std::move(dim));
+  }
+  meta.set_sizes(std::move(symSizes));
+  return meta;
+}
+
+// The ads id-matching search pads the sorted rows and the queries with cat
+// and slices the padding rows off the result. The search is row by row, so
+// the padding is dead: the plan must search the unpadded tensors (no cat
+// left) and match eager. Programmatic graph, no .pt2.
+TEST_F(ExecutorTest, searchsortedRowPaddingTest) {
+  const char* kGraph = R"(graph(%s, %q):
+%sp = torch.ops.aten.new_full.default(self=%s, size=[8, 50], fill_value=9223372036854775807)
+%sl[] = prim.ListPack(l0=%s, l1=%sp)
+%sc = torch.ops.aten.cat.default(tensors=%sl)
+%qp = torch.ops.aten.new_zeros.default(self=%q, size=[8, 1200])
+%ql[] = prim.ListPack(l0=%q, l1=%qp)
+%qc = torch.ops.aten.cat.default(tensors=%ql)
+%p = torch.ops.aten.searchsorted.Tensor(sorted_sequence=%sc, self=%qc)
+%ps = torch.ops.aten.slice.Tensor(self=%p, dim=0, start=0, end=100)
+%c = torch.ops.aten.clamp.default(self=%ps, max=49)
+%g = torch.ops.aten.gather.default(self=%s, dim=1, index=%c)
+%e = torch.ops.aten.eq.Tensor(self=%g, other=%q)
+return (%e)
+)";
+  std::unordered_map<std::string, torch::_export::TensorMeta> meta;
+  meta["s"] = makeSizedTensorMeta(c10::ScalarType::Long, {100, 50});
+  meta["sp"] = makeSizedTensorMeta(c10::ScalarType::Long, {8, 50});
+  meta["sc"] = makeSizedTensorMeta(c10::ScalarType::Long, {108, 50});
+  meta["q"] = makeSizedTensorMeta(c10::ScalarType::Long, {100, 1200});
+  meta["qp"] = makeSizedTensorMeta(c10::ScalarType::Long, {8, 1200});
+  meta["qc"] = makeSizedTensorMeta(c10::ScalarType::Long, {108, 1200});
+  meta["p"] = makeSizedTensorMeta(c10::ScalarType::Long, {108, 1200});
+  meta["ps"] = makeSizedTensorMeta(c10::ScalarType::Long, {100, 1200});
+  meta["c"] = makeSizedTensorMeta(c10::ScalarType::Long, {100, 1200});
+  meta["g"] = makeSizedTensorMeta(c10::ScalarType::Long, {100, 1200});
+  meta["e"] = makeSizedTensorMeta(c10::ScalarType::Bool, {100, 1200});
+
+  auto plan = compilePlanProgrammatic(
+      nativert::stringToGraph(kGraph), meta, CompiledPlan::Mode::kMultiKernel);
+  bool sawSearch = false;
+  for (const auto& node : plan.nodes()) {
+    for (const auto& step : node.steps) {
+      for (const auto& kernel : step.kernels) {
+        EXPECT_FALSE(kernel.has("aten.cat.default")) << plan.describe();
+        sawSearch = sawSearch || kernel.has("tw.searchsorted");
+      }
+    }
+  }
+  EXPECT_TRUE(sawSearch) << plan.describe();
+
+  auto s = std::get<0>(at::sort(at::randint(0, 60, {100, 50}, at::kLong), 1));
+  auto q = at::randint(0, 60, {100, 1200}, at::kLong);
+  auto outputs =
+      runWaveProgrammatic(nativert::stringToGraph(kGraph), meta, {{s, q}});
+  ASSERT_EQ(outputs.size(), 1);
+  auto expected =
+      at::eq(at::gather(s, 1, at::searchsorted(s, q).clamp_max(49)), q);
+  EXPECT_TRUE(tensorsMatch(outputs[0], expected))
+      << firstDifference(outputs[0], expected);
 }
 
 TEST_F(ExecutorTest, maskedSelectTest) {
@@ -2590,6 +3060,52 @@ TEST_F(ExecutorTest, elidedCloneInputReferenceFrame) {
   LOG(INFO) << "Reference frame: " << lastRefTensorsChecked_ << " tensors, "
             << lastRefNodesChecked_ << " nodes checked";
   EXPECT_GT(lastRefTensorsChecked_, 0);
+}
+
+// refillWaveFrame must leave a frame an earlier execution ran on holding
+// exactly what it held before that execution: the user inputs and nothing
+// else. An execution that starts from a frame still carrying the previous
+// run's values finds every standalone op's outputs already materialized and
+// skips it (nodeOutputsComputed), so the standalone reports the previous run's
+// result. Nothing else empties the frame with freeIntermediates off, and a
+// repeat over unchanged inputs then still verifies -- the skipped op's stale
+// output is the right answer -- so only the frame state shows the defect.
+// index_put_chain's a -> b -> c -> d -> e chain returns only 'e', which leaves
+// the rest behind as intermediates.
+TEST_F(ExecutorTest, frameReuseResetTest) {
+  const bool savedFree = WaveConfig::get().freeIntermediates;
+  SCOPE_EXIT {
+    WaveConfig::get().freeIntermediates = savedFree;
+  };
+  WaveConfig::get().freeIntermediates = false;
+
+  auto fixture = ModelFixture::load(
+      getDataFilePath(dataDir(), "data/index_put_chain_test.pt2"));
+  ASSERT_NE(fixture, nullptr);
+  setGraphDevice(fixture->model.graph.get(), true);
+
+  WaveGraphExecutor exec(fixture->makeModelContext());
+  auto& graph = exec.graph();
+  const auto numValues = static_cast<int32_t>(graph.numValues());
+
+  auto inputs = loadSampleInputs(*fixture);
+  auto [deviceInputs, dataMovUs] = inputsToDevice(inputs);
+
+  auto frame = exec.getFrame();
+  ASSERT_NE(frame, nullptr);
+  fillWaveFrame(graph, *frame, deviceInputs);
+  const auto beforeFirstRun = snapshotFrame(*frame, numValues);
+
+  exec.executeWithPrefilledFrame(*frame);
+  const auto afterFirstRun = snapshotFrame(*frame, numValues);
+  ASSERT_GT(afterFirstRun.size(), beforeFirstRun.size())
+      << "the fixture must leave intermediates in the frame, or the reset has "
+         "nothing to undo and the test proves nothing";
+
+  refillWaveFrame(exec, graph, *frame, deviceInputs);
+  EXPECT_EQ(snapshotFrame(*frame, numValues), beforeFirstRun);
+
+  exec.returnFrame(std::move(frame));
 }
 
 TEST_F(ExecutorTest, custom) {

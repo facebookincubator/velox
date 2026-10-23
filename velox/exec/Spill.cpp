@@ -485,6 +485,16 @@ SpillFileInfo mergeSpillFiles(
   }
   auto resultFiles = writer->finish();
   VELOX_CHECK_EQ(resultFiles.size(), 1);
+  // Remove the source files after the merge is done.
+  for (const auto& fileInfo : files) {
+    try {
+      auto fs = filesystems::getFileSystem(fileInfo.path, nullptr);
+      fs->remove(fileInfo.path);
+    } catch (const std::exception& e) {
+      LOG(WARNING) << "Failed to remove spill file " << fileInfo.path << ": "
+                   << e.what();
+    }
+  }
   return std::move(resultFiles[0]);
 }
 

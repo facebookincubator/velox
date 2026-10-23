@@ -1008,6 +1008,13 @@ folly::coro::Task<std::vector<RowVectorPtr>> FixedPointLoop::runParallelChain(
       NanosecondWallTimer timer(&stats.taskStartNanos);
       for (size_t p = 0; p < tasks.size(); ++p) {
         tasks[p]->start(planDrivers[p]);
+        // A broadcast buffer finishes only once it knows all its destinations:
+        // every worker of this loop.
+        const auto* output = plans[p]->as<core::PartitionedOutputNode>();
+        if (output != nullptr && output->isBroadcast()) {
+          tasks[p]->updateOutputBuffers(
+              static_cast<int>(workers_.size()), /*noMoreBuffers=*/true);
+        }
       }
     }
 

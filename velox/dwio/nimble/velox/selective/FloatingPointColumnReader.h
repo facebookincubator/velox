@@ -36,7 +36,9 @@ class FloatingPointColumnReader
       velox::common::ScanSpec& scanSpec)
       : Base(requestedType, fileType, params, scanSpec),
         decoder_(
-            this->formatData().template as<NimbleData>().makeScalarDecoder()) {}
+            this->formatData().template as<NimbleData>().makeScalarDecoder()) {
+    this->formatData().template as<NimbleData>().setNullsOnlyDecoder(&decoder_);
+  }
 
   uint64_t skip(uint64_t numValues) final {
     numValues = Base::skip(numValues);
@@ -48,9 +50,18 @@ class FloatingPointColumnReader
       int64_t offset,
       const velox::RowSet& rows,
       const uint64_t* incomingNulls) final {
-    this->template readCommon<
-        FloatingPointColumnReader<TData, TRequested>,
-        false>(offset, rows, incomingNulls);
+    if (readsNullsOnly()) {
+      this->template prepareRead<TData>(offset, rows, incomingNulls);
+      this->template filterNulls<TData>(
+          rows,
+          this->scanSpec_->filter()->kind() ==
+              velox::common::FilterKind::kIsNull,
+          this->scanSpec_->keepValues());
+    } else {
+      this->template readCommon<
+          FloatingPointColumnReader<TData, TRequested>,
+          false>(offset, rows, incomingNulls);
+    }
     this->readOffset_ += rows.back() + 1;
   }
 
@@ -72,7 +83,8 @@ class FloatingPointColumnReader
 
  private:
   bool readsNullsOnly() const final {
-    return false;
+    return this->formatData().template as<NimbleData>().readsNullsOnly(
+        *this->scanSpec_);
   }
 
   ChunkedDecoder decoder_;
