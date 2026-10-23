@@ -407,6 +407,39 @@ TEST_P(UnnestTest, arrayWithoutIdentityMap) {
   }
 }
 
+// Unnest copies dictionary-wrapped output into flat vectors. When the input
+// vectors live in a pool outside the query, the copies must come from the
+// operator's pool.
+TEST_P(UnnestTest, outputAllocatedFromOperatorPool) {
+  auto inputRootPool = memory::memoryManager()->addRootPool("unnestInput");
+  auto inputPool = inputRootPool->addLeafChild("unnestInput");
+  facebook::velox::test::VectorMaker inputMaker(inputPool.get());
+
+  // Arrays of different lengths pad the shorter one with nulls, so the output
+  // encoding is not an identity mapping and Unnest makes a flat copy.
+  auto vector = inputMaker.rowVector({
+      inputMaker.flatVector<int64_t>({1, 2}),
+      inputMaker.arrayVector<int32_t>({{10, 11, 12}, {20}}),
+      inputMaker.arrayVector<int32_t>({{30}, {40, 41}}),
+  });
+  const auto inputPeakBytes = inputPool->peakBytes();
+
+  auto plan =
+      PlanBuilder().values({vector}).unnest({"c0"}, {"c1", "c2"}).planNode();
+  auto expected = makeRowVector({
+      makeFlatVector<int64_t>({1, 1, 1, 2, 2}),
+      makeNullableFlatVector<int32_t>({10, 11, 12, 20, std::nullopt}),
+      makeNullableFlatVector<int32_t>({30, std::nullopt, std::nullopt, 40, 41}),
+  });
+  AssertQueryBuilder(plan)
+      .config(
+          core::QueryConfig::kPreferredOutputBatchRows,
+          std::to_string(batchSize_))
+      .assertResults(expected);
+
+  EXPECT_EQ(inputPool->peakBytes(), inputPeakBytes);
+}
+
 TEST_P(UnnestTest, arrayWithNull) {
   const auto vector = makeRowVector(
       {makeFlatVector<int64_t>(1024, [](auto row) { return row; }),
