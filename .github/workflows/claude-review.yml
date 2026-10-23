@@ -90,7 +90,7 @@ jobs:
       # Step 1: Acknowledge the request (skip for workflow_dispatch)
       - name: Add reaction to comment
         if: github.event_name == 'issue_comment'
-        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           script: |
             await github.rest.reactions.createForIssueComment({
@@ -104,7 +104,7 @@ jobs:
       - name: Detect command type
         id: command
         if: github.event_name == 'issue_comment'
-        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           script: |
             const body = context.payload.comment.body;
@@ -140,7 +140,7 @@ jobs:
       # Step 4: Get PR information
       - name: Get PR details
         id: pr_info
-        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
           # Pass input via env to avoid template injection
           INPUT_PR_NUMBER: ${{ inputs.pr_number }}
@@ -475,7 +475,7 @@ jobs:
       # Step 11: Post response as PR comment (skip if dry_run)
       - name: Post Claude response
         if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.dry_run) }}
-        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
           EXECUTION_FILE: ${{ steps.claude_review.outputs.execution_file }}
           CONCLUSION: ${{ steps.claude_review.outputs.conclusion }}
@@ -590,7 +590,7 @@ jobs:
       # Step 9: Update reaction on completion (only for issue_comment trigger)
       - name: Update reaction on success
         if: success() && github.event_name == 'issue_comment'
-        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           script: |
             await github.rest.reactions.createForIssueComment({
@@ -602,7 +602,7 @@ jobs:
 
       - name: Update reaction on failure
         if: failure() && github.event_name == 'issue_comment'
-        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           script: |
             await github.rest.reactions.createForIssueComment({
@@ -630,7 +630,7 @@ jobs:
 
     steps:
       - name: Post unauthorized notice
-        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           script: |
             await github.rest.issues.createComment({
