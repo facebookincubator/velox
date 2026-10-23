@@ -94,6 +94,8 @@ bool PaimonSplitReader::ensureFileSplitReader() {
     if (!emptySplit_) {
       return true;
     }
+    // Empty preparation may leave a file reader but no row reader. Reset
+    // the per-file state before advancing so the next file is prepared.
     baseReader_.reset();
     emptySplit_ = false;
     ++currentFileIndex_;

@@ -21,9 +21,29 @@
 
 namespace facebook::velox::connector::hive::paimon {
 
-/// Sequential reader for rawConvertible Paimon splits. Opens files lazily,
-/// delegates per-file preparation and reading to FileSplitReader, and advances
-/// past exhausted or skipped files.
+/// Sequential reader for rawConvertible Paimon splits. A logical split may
+/// contain multiple physical files; this reader traverses the supplied file
+/// list and exposes it as one read stream. Traversal is not merge-on-read:
+/// merge-required splits need version reconciliation, not concatenation.
+///
+/// Construction creates a FileConnectorSplit for each file without opening
+/// it. prepareSplit() saves the metadata filter and borrows runtime statistics.
+/// next() lazily calls FileSplitReader::prepareSplit() for the current file,
+/// reads batches, and advances at EOF. Empty or skipped files are bypassed,
+/// and only one file reader is active at a time.
+///
+/// FileSplitReader supplies file I/O, column adaptation, partition constants
+/// and ScanSpec filtering. The same ScanSpec is reused across files, including
+/// dynamic filters. Partition-column handles and runtime statistics are
+/// borrowed from the data source; statistics are rebound on reader takeover.
+///
+/// PaimonDataSource currently supplies same-schema append data and rejects
+/// unsupported table/file semantics before constructing this reader.
+/// TODO: Add historical-schema adaptation when per-file schema metadata is
+/// available.
+/// TODO: Apply deletion vectors using original physical file row positions.
+/// TODO: Add internal-column and row-kind decoding for primary-key and
+/// changelog inputs.
 class PaimonSplitReader : public FileSplitReader {
  public:
   /// @param fileSplit FileConnectorSplit for the first data file.
