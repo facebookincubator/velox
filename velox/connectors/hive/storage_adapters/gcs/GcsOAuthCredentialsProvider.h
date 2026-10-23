@@ -20,8 +20,6 @@
 
 namespace facebook::velox::filesystems {
 
-namespace gcs = ::google::cloud::storage;
-
 /// Interface for providing credentials for Google Cloud Storage (GCS).
 /// Implementations should return a `google::cloud::Credentials` used for
 /// creating the GCS client for a specific bucket via `getCredentials`.
