@@ -779,7 +779,6 @@ void setUpdateScaling(int nTable, DSDGenContext& dsdGenContext) {
       if (result < 0)
         perror("sprintf failed");
       exit(1);
-      break;
     }
   }
 
