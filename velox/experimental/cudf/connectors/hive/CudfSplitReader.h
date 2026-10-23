@@ -59,13 +59,10 @@ std::unique_ptr<cudf::table> castDecimalColumnsToVeloxTypes(
     cuda::stream_ref stream,
     rmm::device_async_resource_ref mr);
 
-/// Returns the type a TIMESTAMP constant takes to combine with the timestamp
-/// columns the cuDF split reader produces. The reader casts those columns to
-/// the connector's parquet.reader.timestamp-type, or to the session's
-/// parquet.reader.timestamp_type when that is set. Returns nullopt, which
-/// leaves the constant in the default timestamp unit, when that type is
-/// TIMESTAMP_DAYS: day resolution is the cuDF type of a DATE, not one a
-/// TIMESTAMP converts to.
+/// Returns the type a TIMESTAMP constant takes to match the split reader's
+/// timestamp columns: the session's timestamp type setting, or the connector's
+/// when the session sets none. Returns nullopt when that setting is
+/// TIMESTAMP_DAYS, a unit no TIMESTAMP scalar can take.
 std::optional<cudf::type_id> constantTimestampType(
     const CudfHiveConfig& config,
     const config::ConfigBase* session);
