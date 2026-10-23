@@ -32,6 +32,11 @@
 namespace facebook::velox::functions::sparksql {
 
 /// Rounds integral values using HALF_UP and the session's overflow policy.
+/// Unlike Spark's JVM evaluator, extreme negative scales return zero without
+/// constructing large powers of ten, and nonnegative scales return the input.
+/// Spark can throw at INTEGER scale extremes, with interpreted and generated
+/// execution differing. Scale columns are a native extension; Spark requires a
+/// foldable scale. Integrations must guard offload to preserve Spark behavior.
 template <typename TExec>
 struct IntegralRoundFunction {
   template <typename T>
