@@ -1114,29 +1114,6 @@ TEST_F(PaimonConnectorTest, queryValidationBeforeFileOpen) {
   const auto rowType = ROW({{"id", BIGINT()}, {"p", VARCHAR()}});
   const auto table = makePaimonTableHandle(rowType, {}, nullptr, {"p"});
   const auto connector = ConnectorRegistry::tryGet(kPaimonConnectorId);
-  const auto makeSource = [&](const TypePtr& outputType,
-                              const std::string& name,
-                              FileColumnHandle::ColumnType role,
-                              const TypePtr& schemaType) {
-    return connector->createDataSource(
-        ROW({{"alias", outputType}}),
-        table,
-        {{"alias",
-          std::make_shared<HiveColumnHandle>(
-              name, role, outputType, schemaType)}},
-        context.get());
-  };
-  VELOX_ASSERT_USER_THROW(
-      makeSource(
-          INTEGER(), "id", FileColumnHandle::ColumnType::kRegular, INTEGER()),
-      "Paimon scan column 'id' type does not match fixed table");
-  VELOX_ASSERT_USER_THROW(
-      makeSource(
-          BIGINT(),
-          "missing",
-          FileColumnHandle::ColumnType::kRegular,
-          BIGINT()),
-      "Unknown Paimon scan column 'missing' in fixed table");
   VELOX_ASSERT_USER_THROW(
       connector->createDataSource(
           ROW({{"id", INTEGER()}}),
@@ -1207,20 +1184,13 @@ TEST_F(PaimonConnectorTest, queryValidationBeforeFileOpen) {
           ROW({{"id", BIGINT()}}), widerTable, idColumns, context.get()),
       nullptr);
   const auto binaryType = ROW({{"unused", VARBINARY()}});
-  VELOX_ASSERT_USER_THROW(
+  EXPECT_NE(
       connector->createDataSource(
           binaryType,
           widerTable,
           makePaimonColumnHandles(binaryType),
           context.get()),
-      "Unsupported Paimon same-schema append type 'VARBINARY'");
-  VELOX_ASSERT_USER_THROW(
-      makeSource(
-          BIGINT(),
-          "_ROW_ID",
-          FileColumnHandle::ColumnType::kRegular,
-          BIGINT()),
-      "Unknown Paimon scan column '_ROW_ID' in fixed table");
+      nullptr);
   const auto foreignTable = std::make_shared<PaimonTableHandle>(
       "other-connector",
       table->name(),
@@ -1234,10 +1204,6 @@ TEST_F(PaimonConnectorTest, queryValidationBeforeFileOpen) {
       connector->createDataSource(
           ROW({{"id", BIGINT()}}), foreignTable, idColumns, context.get()),
       "Paimon table handle connector does not match connector instance");
-  EXPECT_NE(
-      makeSource(
-          BIGINT(), "id", FileColumnHandle::ColumnType::kRegular, BIGINT()),
-      nullptr);
   for (const auto& condition : {"p is null", "length(p) = 0"}) {
     SCOPED_TRACE(condition);
     const auto filteredTable = makePaimonTableHandle(

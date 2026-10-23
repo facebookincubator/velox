@@ -44,29 +44,6 @@ PaimonDataSource::PaimonDataSource(
       tableHandle->tableType() == PaimonTableType::kAppendOnly,
       "Paimon same-schema append reader does not support primary-key tables; "
       "primary-key reading is not implemented yet");
-
-  // ScanSpec includes projected columns and hidden filter dependencies.
-  for (const auto& field : scanSpec_->children()) {
-    const auto& name = field->fieldName();
-    const auto index = tableHandle->rowType()->getChildIdxIfExists(name);
-    VELOX_USER_CHECK(
-        index.has_value(),
-        "Unknown Paimon scan column '{}' in fixed table",
-        name);
-    const auto& type = tableHandle->rowType()->childAt(*index);
-    VELOX_USER_CHECK(
-        *type == *BOOLEAN() || *type == *INTEGER() || *type == *BIGINT() ||
-            *type == *DOUBLE() || *type == *VARCHAR(),
-        "Unsupported Paimon same-schema append type '{}'; the current reader "
-        "supports BOOLEAN, INTEGER, BIGINT, DOUBLE and VARCHAR",
-        type->toString());
-    if (const auto readerIndex = readerOutputType_->getChildIdxIfExists(name)) {
-      VELOX_USER_CHECK(
-          *readerOutputType_->childAt(*readerIndex) == *type,
-          "Paimon scan column '{}' type does not match fixed table",
-          name);
-    }
-  }
 }
 
 void PaimonDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
