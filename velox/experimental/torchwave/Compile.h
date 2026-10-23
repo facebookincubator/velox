@@ -226,6 +226,18 @@ class CompileCtx {
 
   void emitBarrier();
 
+  /// Emits a __syncthreads() before code that uses the __shared__ variables
+  /// 'names' when an earlier call or loop head of the op being generated used
+  /// one of them and no block-wide barrier has been emitted since. Records
+  /// 'names' as in use.
+  void separateSharedScratch(const std::vector<std::string>& names);
+
+  /// Records that a block-wide barrier was just emitted, so no shared variable
+  /// is in use any more.
+  void noteBlockBarrier() {
+    sharedScratchInUse_.clear();
+  }
+
   /// Returns true if 'node' reads any input whose producer ran earlier in the
   /// same kernel (generatingOp_) without an intervening barrier.
   bool callNeedsBarrier(NodeCP node);
@@ -744,6 +756,16 @@ class CompileCtx {
   // randomAccess input whose value is in this set does not need a new
   // barrier because its producer is already separated by one.
   std::unordered_set<ValueCP> preBarrierValues_;
+
+  // Names of the __shared__ variables that device calls and loop heads of the
+  // op being generated have used since the last block-wide barrier. The calls
+  // of one op share these variables (size, rounded, counter, reduction temps),
+  // and a call's thread 0 rewrites them on entry while warps of the previous
+  // call may still be reading them in their loop condition.
+  std::unordered_set<std::string> sharedScratchInUse_;
+
+  // The __shared__ variable names the last makeCall passed to its function.
+  std::vector<std::string> lastCallSharedScratch_;
 
   // Maps variant subgraph copy nodes back to original graph nodes.
   std::unordered_map<NodeCP, NodeCP> variantToOriginal_;

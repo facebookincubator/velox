@@ -30,7 +30,9 @@ class ByteColumnReader
       NimbleParams& params,
       velox::common::ScanSpec& scanSpec)
       : SelectiveByteRleColumnReader(requestedType, fileType, params, scanSpec),
-        decoder_(formatData().as<NimbleData>().makeScalarDecoder()) {}
+        decoder_(formatData().as<NimbleData>().makeScalarDecoder()) {
+    formatData().as<NimbleData>().setNullsOnlyDecoder(&decoder_);
+  }
 
   uint64_t skip(uint64_t numValues) final {
     numValues = SelectiveByteRleColumnReader::skip(numValues);
@@ -42,7 +44,15 @@ class ByteColumnReader
       int64_t offset,
       const velox::RowSet& rows,
       const uint64_t* incomingNulls) final {
-    readCommon<ByteColumnReader, false>(offset, rows, incomingNulls);
+    if (readsNullsOnly()) {
+      prepareRead<int8_t>(offset, rows, incomingNulls);
+      filterNulls<int8_t>(
+          rows,
+          scanSpec_->filter()->kind() == velox::common::FilterKind::kIsNull,
+          scanSpec_->keepValues());
+    } else {
+      readCommon<ByteColumnReader, false>(offset, rows, incomingNulls);
+    }
     readOffset_ += rows.back() + 1;
   }
 
@@ -68,7 +78,7 @@ class ByteColumnReader
 
  private:
   bool readsNullsOnly() const final {
-    return false;
+    return formatData().as<NimbleData>().readsNullsOnly(*scanSpec_);
   }
 
   ChunkedDecoder decoder_;

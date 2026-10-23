@@ -17,6 +17,8 @@
 
 #include <gtest/gtest.h>
 
+#include <cstring>
+
 namespace facebook::velox::functions::iceberg {
 namespace {
 
@@ -43,6 +45,19 @@ TEST(Murmur3Hash32Test, string) {
   EXPECT_EQ(hash(""), 0);
   EXPECT_EQ(hash("Товары"), 1817480714);
   EXPECT_EQ(hash("😀"), -1095487750);
+}
+
+TEST(Murmur3Hash32Test, unalignedInput) {
+  Murmur3Hash32 func;
+  const std::string_view input = "abcdefghijklmnopq";
+  alignas(8) char aligned[32];
+  alignas(8) char unaligned[32];
+  std::memcpy(aligned, input.data(), input.size());
+  std::memcpy(unaligned + 1, input.data(), input.size());
+
+  EXPECT_EQ(
+      func.hashBytes(unaligned + 1, input.size()),
+      func.hashBytes(aligned, input.size()));
 }
 } // namespace
 } // namespace facebook::velox::functions::iceberg

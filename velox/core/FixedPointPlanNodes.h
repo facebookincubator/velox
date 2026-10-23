@@ -232,9 +232,9 @@ class HashTableState {
 ///   sum(active) == 0    -> no changes          (CC)
 ///   max(delta) < eps    -> centroids settled   (KMeans)
 ///
-/// When the convergence state entry is empty the plan may emit zero rows; the
-/// framework treats "no output row" as converged (the canonical empty-frontier
-/// terminal state).  maxIterations (a ConvergenceConfig field below) is always
+/// The plan that produces the verdict must produce exactly one non-NULL row, or
+/// the fixed point fails; a global aggregation produces one row even over an
+/// empty state.  maxIterations (a ConvergenceConfig field below) is always
 /// active as a safety bound.
 ///
 /// Multi-worker contract: for a fixed point that runs as N > 1 peers, every
@@ -262,8 +262,8 @@ struct ConvergenceConfig {
 
   /// Runs only on worker 0, after 'plans' run on every worker.  Starts with an
   /// Exchange that reads the rows the last of 'plans' gathered from every
-  /// worker, and produces exactly one BOOLEAN output column, the verdict.
-  /// Worker 0 shares it with the other workers (see
+  /// worker, and produces exactly one row with one BOOLEAN output column, the
+  /// verdict.  Worker 0 shares it with the other workers (see
   /// FixedPointOptions::publishVerdict), so all of them stop on the same
   /// iteration.  Requires non-empty 'plans'.  A fixed point nested in it runs
   /// on worker 0 alone, so it cannot shuffle across workers.
@@ -444,9 +444,10 @@ class FixedPointNode : public PlanNode {
   /// Number of workers this fixed point runs as: one per output partition of
   /// whichever chain shuffles -- the body, the convergence sequence, or a fixed
   /// point nested in any of its plans.  1 when none does.  A convergence
-  /// sequence that only gathers to worker 0 has one partition, so it leaves
-  /// this at 1, yet the loop reads every peer (see readsPeers()) and runs on as
-  /// many workers as the coordinator names.
+  /// sequence that only gathers to worker 0, or a chain that only broadcasts,
+  /// has one partition, so it leaves this at 1, yet the loop reads every peer
+  /// (see readsPeers()) and runs on as many workers as the coordinator names.
+  /// A broadcast reaches every one of them.
   int32_t numWorkers() const;
 
   folly::dynamic serialize() const override;

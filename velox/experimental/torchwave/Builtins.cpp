@@ -706,6 +706,65 @@ bool hasDynamicArg(NodeCP node, const char* name) {
   return node->tryGetInput(name) != nullptr;
 }
 
+// The first operand of a two-operand cat along dim 0 that produces 'value',
+// with its row count, when that operand has a static shape of rank 2 or
+// more. Nullopt otherwise.
+std::optional<std::pair<nativert::Value*, int64_t>> leadingRowsOfCat(
+    ValueCP value,
+    const ValueTypes& types) {
+  auto* cat = value->producer();
+  if (cat == nullptr || cat->target() != "torch.ops.aten.cat.default" ||
+      hasDynamicArg(cat, "dim")) {
+    return std::nullopt;
+  }
+  const auto* dimAttr = cat->tryGetAttribute("dim");
+  if (dimAttr != nullptr && !std::holds_alternative<int64_t>(dimAttr->value)) {
+    return std::nullopt;
+  }
+  auto* pack = cat->inputs()[0].value->producer();
+  if (pack == nullptr || pack->target() != "prim.ListPack" ||
+      pack->inputs().size() != 2) {
+    return std::nullopt;
+  }
+  auto* first = pack->inputs()[0].value;
+  const auto id = first->id();
+  if (id < 0 || static_cast<size_t>(id) >= types.types.size() ||
+      types.types[id] == nullptr || types.types[id]->hasSymbolicShape() ||
+      types.types[id]->dim() < 2) {
+    return std::nullopt;
+  }
+  const auto rank = types.types[id]->dim();
+  auto dim = dimAttr != nullptr ? std::get<int64_t>(dimAttr->value) : 0;
+  if (dim < 0) {
+    dim += rank;
+  }
+  if (dim != 0) {
+    return std::nullopt;
+  }
+  return std::make_pair(first, types.types[id]->sizes()[0]);
+}
+
+// Whether every use of 'value' is slice(value, dim=0, start=0, end=rows) with
+// unit step, and there is at least one.
+bool onlyLeadingRowsUsed(ValueCP value, int64_t rows, const ValueTypes& types) {
+  if (types.graphOutput(value) || value->users().empty()) {
+    return false;
+  }
+  for (const auto* user : value->users()) {
+    if (user->target() != "torch.ops.aten.slice.Tensor" ||
+        user->inputs().size() != 1 || user->inputs()[0].value != value) {
+      return false;
+    }
+    if (constIntArg(user, "dim").value_or(0) != 0 ||
+        constIntArg(user, "start").value_or(0) != 0 ||
+        constIntArg(user, "step").value_or(1) != 1 ||
+        constIntArg(user, "end") != rows) {
+      return false;
+    }
+  }
+  return true;
+}
+
 // A view-like op (view/slice/...) is materialized as a before-launch host view
 // (OutputDesc::viewNode), which requires every shape argument to be available
 // in the frame when the kernel's outputs are set up. If any argument other than
@@ -2419,9 +2478,9 @@ void registerBuiltins() {
             // broadcastRank(index tensors) + (sourceRank - numIndexed), since
             // each integer index consumes one source dim and the indices
             // broadcast together, while None gaps and trailing dims are kept.
-            // Rank is left unknown when the source rank is unavailable or a
-            // non-integer (boolean-mask) index makes the count data-dependent;
-            // the output is contiguous either way.
+            // A boolean mask of rank k consumes k source dims and stands for
+            // one index dim, its nonzero count: only that extent is
+            // data-dependent, not the rank.
             auto* self = inputAt(node, 0);
             int8_t sourceRank = types.rank(self);
             auto* indices =
@@ -2440,18 +2499,27 @@ void registerBuiltins() {
                 continue;
               }
               auto indexValueId = indexValue->id();
-              bool intIndex = indexValueId >= 0 &&
-                  static_cast<size_t>(indexValueId) < types.types.size() &&
-                  types.types[indexValueId] &&
-                  (types.types[indexValueId]->dtype() == c10::ScalarType::Int ||
-                   types.types[indexValueId]->dtype() == c10::ScalarType::Long);
-              if (!intIndex) {
+              if (indexValueId < 0 ||
+                  static_cast<size_t>(indexValueId) >= types.types.size() ||
+                  !types.types[indexValueId]) {
                 return {{.rank = -1, .contiguity = Contiguity::kContiguous}};
               }
-              ++numIndexed;
-              broadcastRank = std::max(
-                  broadcastRank,
-                  static_cast<int32_t>(types.types[indexValueId]->dim()));
+              const auto indexDtype = types.types[indexValueId]->dtype();
+              const int32_t indexRank = types.rank(indexValue) >= 0
+                  ? types.rank(indexValue)
+                  : static_cast<int32_t>(types.types[indexValueId]->dim());
+              if (indexDtype == c10::ScalarType::Int ||
+                  indexDtype == c10::ScalarType::Long) {
+                ++numIndexed;
+                broadcastRank = std::max(broadcastRank, indexRank);
+              } else if (
+                  indexDtype == c10::ScalarType::Bool ||
+                  indexDtype == c10::ScalarType::Byte) {
+                numIndexed += indexRank;
+                broadcastRank = std::max(broadcastRank, 1);
+              } else {
+                return {{.rank = -1, .contiguity = Contiguity::kContiguous}};
+              }
             }
             int32_t rank = numIndexed == 0 ? sourceRank
                                            : broadcastRank +
@@ -2916,8 +2984,9 @@ void registerBuiltins() {
                  .contiguity = Contiguity::kContiguous}};
           })
       .maybeReplace(
-          [](NodeCP node, ValueTypes& types, WaveGraph& /*waveGraph*/)
-              -> std::vector<std::pair<ValueCP, ValueCP>> {
+          [](NodeCP node,
+             ValueTypes& types,
+             WaveGraph& waveGraph) -> std::vector<std::pair<ValueCP, ValueCP>> {
             // A sorter (optional) is not supported; leave the eager op when one
             // is given as an input value or a non-None attribute.
             if (const auto* sorterInput = node->tryGetInput("sorter")) {
@@ -2940,6 +3009,49 @@ void registerBuiltins() {
                 types.types[sortedId]->dtype() !=
                     types.types[selfId]->dtype()) {
               return {};
+            }
+            // slice(searchsorted(cat(s, sPad), cat(q, qPad)), 0, 0, rows)
+            // with s and q of exactly 'rows' rows: the search is row by row,
+            // so the slice is searchsorted(s, q) and the padding rows are
+            // dead. Search s and q directly so neither cat materializes.
+            auto sortedRows = leadingRowsOfCat(inputAt(node, 0), types);
+            auto selfRows = leadingRowsOfCat(inputAt(node, 1), types);
+            auto* out = node->outputs()[0];
+            if (sortedRows && selfRows &&
+                sortedRows->second == selfRows->second &&
+                onlyLeadingRowsUsed(out, sortedRows->second, types)) {
+              auto* graph = waveGraph.graph();
+              auto* newNode = graph->createNode(
+                  "tw.searchsorted",
+                  {{"sorted_sequence", sortedRows->first},
+                   {"self", selfRows->first}});
+              for (const auto& attr : node->attributes()) {
+                if (const auto* b = std::get_if<bool>(&attr.value)) {
+                  newNode->addAttribute({attr.name, *b});
+                } else if (const auto* i = std::get_if<int64_t>(&attr.value)) {
+                  newNode->addAttribute({attr.name, *i});
+                } else if (
+                    const auto* str = std::get_if<std::string>(&attr.value)) {
+                  newNode->addAttribute({attr.name, *str});
+                } else if (std::holds_alternative<nativert::None>(attr.value)) {
+                  newNode->addAttribute({attr.name, nativert::None()});
+                }
+              }
+              normalizeSearchAttrs(newNode);
+              graph->insertBefore(newNode, const_cast<nativert::Node*>(node));
+              const auto outId = out->id();
+              const auto dtype =
+                  static_cast<size_t>(outId) < types.types.size() &&
+                      types.types[outId] != nullptr
+                  ? types.types[outId]->dtype()
+                  : c10::ScalarType::Long;
+              auto* newOut =
+                  waveGraph.newTensorValue(newNode, "searchsorted", dtype);
+              std::vector<std::pair<ValueCP, ValueCP>> replaced;
+              for (const auto* user : out->users()) {
+                replaced.emplace_back(user->outputs()[0], newOut);
+              }
+              return replaced;
             }
             auto* mutableNode = const_cast<nativert::Node*>(node);
             normalizeSearchAttrs(mutableNode);
@@ -3436,45 +3548,75 @@ void registerBuiltins() {
       .valuesArg(1)
       .registerOp();
 
-  // tw.scatter / tw.scatter_add: fused in-place scatter along 'dim'. Args
-  // mirror aten.scatter.src / aten.scatter_add.default (self, dim, index, src)
-  // so the rewrite retargets the node directly. The loop is sized by 'src' (the
-  // values written, an isRegister leaf), one iteration per src element; 'index'
-  // (same shape as src, checked by the rewrite when both shapes are static) is
-  // read whole to supply the destination coordinate along 'dim'. scatter
-  // overwrites; scatter_add accumulates atomically so duplicate indices sum.
-  // The output aliases self in place (mutatesArg -> aliasSelfId, no
-  // reserveShape); the functional rewrite inserts a clone of self that
-  // clone-elision drops when self is dead.
-  for (const bool accumulate : {false, true}) {
-    MetadataBuilder(
-        std::make_unique<c10::FunctionSchema>(
-            accumulate ? "tw.scatter_add" : "tw.scatter",
-            "",
-            std::vector<c10::Argument>{
-                c10::Argument("self", c10::TensorType::get()),
-                c10::Argument("dim", c10::IntType::get()),
-                c10::Argument("index", c10::TensorType::get()),
-                c10::Argument("src", c10::TensorType::get())},
-            std::vector<c10::Argument>{
-                c10::Argument("output", c10::TensorType::get())}))
-        .elementwiseFunc(accumulate ? "__scatter_add" : "__scatter")
-        .hasIdxArg()
-        .hasOutputArg()
-        .hasBlockInfo()
-        .outputConstraints(viewOfFirstArgConstraint)
-        .argumentMeta(
-            {{.isRegister = false, .wholeTensor = true, .randomAccess = true},
-             {.isRegister = true},
-             {.isRegister = false, .wholeTensor = true, .randomAccess = true},
-             {.isRegister = true}})
-        .returnMeta(
-            {{.isRegister = false, .wholeTensor = true, .randomAccess = true}})
-        .typeTemplateParams({0})
-        .mutatesArg(0)
-        .valuesArg(2)
-        .registerOp();
-  }
+  // tw.scatter: fused in-place scatter along 'dim'. Args mirror
+  // aten.scatter.src (self, dim, index, src) so the rewrite retargets the node
+  // directly. The loop is sized by 'src' (the values written, an isRegister
+  // leaf), one iteration per src element; 'index' (same shape as src, checked
+  // by the rewrite when both shapes are static) is read whole to supply the
+  // destination coordinate along 'dim'. The output aliases self in place
+  // (mutatesArg -> aliasSelfId, no reserveShape); the functional rewrite
+  // inserts a clone of self that clone-elision drops when self is dead.
+  MetadataBuilder(
+      std::make_unique<c10::FunctionSchema>(
+          "tw.scatter",
+          "",
+          std::vector<c10::Argument>{
+              c10::Argument("self", c10::TensorType::get()),
+              c10::Argument("dim", c10::IntType::get()),
+              c10::Argument("index", c10::TensorType::get()),
+              c10::Argument("src", c10::TensorType::get())},
+          std::vector<c10::Argument>{
+              c10::Argument("output", c10::TensorType::get())}))
+      .elementwiseFunc("__scatter")
+      .hasIdxArg()
+      .hasOutputArg()
+      .hasBlockInfo()
+      .outputConstraints(viewOfFirstArgConstraint)
+      .argumentMeta(
+          {{.isRegister = false, .wholeTensor = true, .randomAccess = true},
+           {.isRegister = true},
+           {.isRegister = false, .wholeTensor = true, .randomAccess = true},
+           {.isRegister = true}})
+      .returnMeta(
+          {{.isRegister = false, .wholeTensor = true, .randomAccess = true}})
+      .typeTemplateParams({0})
+      .mutatesArg(0)
+      .valuesArg(2)
+      .registerOp();
+
+  // tw.scatter_add: like tw.scatter but accumulates, so duplicate indices sum.
+  // A block-wide device function (hasBarrier) rather than an elementwise op:
+  // tw_scatter_add warp-aggregates the atomic adds, so every lane of the block
+  // must reach it, also the lanes past the end of the loop. The loop over the
+  // src elements is rounded up to the block size, src is computed only for
+  // lanes in range, and the call is made for all lanes with idx and size.
+  MetadataBuilder(
+      std::make_unique<c10::FunctionSchema>(
+          "tw.scatter_add",
+          "",
+          std::vector<c10::Argument>{
+              c10::Argument("self", c10::TensorType::get()),
+              c10::Argument("dim", c10::IntType::get()),
+              c10::Argument("index", c10::TensorType::get()),
+              c10::Argument("src", c10::TensorType::get())},
+          std::vector<c10::Argument>{
+              c10::Argument("output", c10::TensorType::get())}))
+      .deviceFunc("tw_scatter_add")
+      .headerFile("velox/experimental/torchwave/Elementwise.cuh")
+      .hasBarrier()
+      .sizeOrdinal({2})
+      .outputConstraints(viewOfFirstArgConstraint)
+      .argumentMeta(
+          {{.isRegister = false, .wholeTensor = true, .randomAccess = true},
+           {.isRegister = true},
+           {.isRegister = false, .wholeTensor = true, .randomAccess = true},
+           {.isRegister = true}})
+      .returnMeta(
+          {{.isRegister = false, .wholeTensor = true, .randomAccess = true}})
+      .typeTemplateParams({0})
+      .mutatesArg(0)
+      .valuesArg(2)
+      .registerOp();
 
   // slice_scatter (functional, out-of-place): returns a fresh copy of self with
   // a slice overwritten by src. For dim 0 and dim 1 with a statically-known
@@ -5593,8 +5735,58 @@ void registerBuiltins() {
 
   // --- Gather / scatter / sort / search (eager standalone) ---
 
+  // tw.gather: fused elementwise aten.gather. The output has the index's
+  // shape; each element reads self at its own coordinates with the one along
+  // 'dim' replaced by the index element. 'self' is a whole tensor read at
+  // computed offsets (randomAccess); 'index' is a register input, so its
+  // producers fuse into this op. The output count is the index's, which
+  // sizing reaches through the index alone since whole-tensor operands are
+  // skipped. sizeFromOutput keeps the output as a shape-only tensor when
+  // fused, and hasOwnOutputArg hands it to __gather, which decomposes the
+  // loop index by it. 'dim' and 'rank' are template attributes as in
+  // tw.index_select.
+  {
+    MetadataBuilder(
+        std::make_unique<c10::FunctionSchema>(
+            "tw.gather",
+            "",
+            std::vector<c10::Argument>{
+                c10::Argument("self", c10::TensorType::get()),
+                c10::Argument("index", c10::TensorType::get()),
+                c10::Argument("dim", c10::IntType::get())},
+            std::vector<c10::Argument>{
+                c10::Argument("output", c10::TensorType::get())}))
+        .elementwiseFunc("__gather")
+        .inPlaceIfLastUse(false)
+        .sizeOrdinal({1})
+        .hasIdxArg()
+        .hasSizeArg()
+        .hasOutputArg()
+        .hasOwnOutputArg()
+        .hasBlockInfo()
+        .ignoreAttrs({"sparse_grad"})
+        .outputConstraints(
+            [](NodeCP node,
+               const ValueTypes& types) -> std::vector<ValueConstraint> {
+              return {
+                  {.rank = types.rank(inputAt(node, 1)),
+                   .contiguity = Contiguity::kContiguous}};
+            })
+        .argumentMeta(
+            {{.isRegister = false, .wholeTensor = true, .randomAccess = true},
+             {.isRegister = true},
+             {.isRegister = true}})
+        .returnMeta({{.isRegister = true}})
+        .typeTemplateParams({0})
+        .sizeFromOutput()
+        .templateAttrs({"dim", "rank"})
+        .registerOp();
+  }
+
   // gather: output has the index tensor's shape. dim is a constant attribute,
   // so the node's tensor inputs are [self, index] and index is at position 1.
+  // Retargets to the fused tw.gather when dim is a constant and self and
+  // index have the same known rank; otherwise runs eager.
   MetadataBuilder("torch.ops.aten.gather.default")
       .sizeOrdinal({1})
       .isStandalone()
@@ -5604,6 +5796,22 @@ void registerBuiltins() {
             return {
                 {.rank = types.rank(inputAt(node, 1)),
                  .contiguity = Contiguity::kContiguous}};
+          })
+      .maybeReplace(
+          [](NodeCP node, ValueTypes& types, WaveGraph& /*waveGraph*/)
+              -> std::vector<std::pair<ValueCP, ValueCP>> {
+            if (hasDynamicArg(node, "dim") ||
+                !constIntArg(node, "dim").has_value()) {
+              return {};
+            }
+            const auto rank = types.rank(inputAt(node, 0));
+            if (rank <= 0 || rank != types.rank(inputAt(node, 1))) {
+              return {};
+            }
+            auto* mutableNode = const_cast<nativert::Node*>(node);
+            mutableNode->addAttribute({"rank", static_cast<int64_t>(rank)});
+            mutableNode->setTarget("tw.gather");
+            return {};
           })
       .registerOp();
   // scatter.src(self, dim, index, src): overwrite self along dim at index. For
