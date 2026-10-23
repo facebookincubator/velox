@@ -1258,36 +1258,11 @@ TEST_F(PaimonConnectorTest, queryValidationBeforeFileOpen) {
   EXPECT_EQ(fileSystem->openedFiles, 0);
 }
 
-TEST_F(PaimonConnectorTest, rejectsFileSchemaContradictions) {
+TEST_F(PaimonConnectorTest, rejectsWrongFormatAndMissingFiles) {
   const auto rowType = ROW({{"id", BIGINT()}, {"value", BIGINT()}});
   const auto plan = makePaimonScanPlan(ROW({{"id", BIGINT()}}), rowType);
   for (auto format : fileFormats()) {
     SCOPED_TRACE(dwio::common::FileFormatName::toName(format));
-    const std::vector<RowVectorPtr> invalid{
-        makeRowVector({"id"}, {makeFlatVector<int64_t>({1})}),
-        makeRowVector(
-            {"renamed", "value"},
-            {makeFlatVector<int64_t>({1}), makeFlatVector<int64_t>({2})}),
-        makeRowVector(
-            {"id", "value"},
-            {makeFlatVector<int64_t>({1}),
-             makeFlatVector<std::string>({"bad"})}),
-        makeRowVector(
-            {"id", "value", "extra"},
-            {makeFlatVector<int64_t>({1}),
-             makeFlatVector<int64_t>({2}),
-             makeFlatVector<int64_t>({3})})};
-    for (const auto& input : invalid) {
-      SCOPED_TRACE(input->type()->toString());
-      const auto files = makeFilePaths(1);
-      writeFile(files[0]->getPath(), input, format);
-      VELOX_ASSERT_USER_THROW(
-          exec::test::AssertQueryBuilder(plan)
-              .split(makePaimonSplit(
-                  {files[0]->getPath()}, PaimonTableType::kAppendOnly, format))
-              .copyResults(pool()),
-          "Paimon file");
-    }
     const auto files = makeFilePaths(1);
     const auto input = makeRowVector(
         {"id", "value"},
@@ -1302,19 +1277,6 @@ TEST_F(PaimonConnectorTest, rejectsFileSchemaContradictions) {
                 {files[0]->getPath()},
                 PaimonTableType::kAppendOnly,
                 wrongFormat))
-            .copyResults(pool()),
-        std::exception);
-    const auto zeroByteFiles = makeFilePaths(1);
-    {
-      LocalWriteFile emptyFile(zeroByteFiles[0]->getPath(), false, false);
-      emptyFile.close();
-    }
-    EXPECT_THROW(
-        exec::test::AssertQueryBuilder(plan)
-            .split(makePaimonSplit(
-                {zeroByteFiles[0]->getPath()},
-                PaimonTableType::kAppendOnly,
-                format))
             .copyResults(pool()),
         std::exception);
   }

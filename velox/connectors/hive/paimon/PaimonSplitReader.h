@@ -22,9 +22,9 @@
 namespace facebook::velox::connector::hive::paimon {
 
 /// Sequential multi-file reader for rawConvertible Paimon splits. Files are
-/// opened lazily and advanced through EOF or legal empty files. The required
-/// PaimonTableHandle supplies the fixed schema checked against each footer
-/// before column adaptation; split values supply the partition constants.
+/// opened lazily and prepared through FileSplitReader, advancing through EOF
+/// or empty files. PaimonTableHandle supplies the table definition, and split
+/// values supply the partition constants.
 /// Deletion vectors and changelog files are rejected before reading.
 class PaimonSplitReader : public FileSplitReader {
  public:
@@ -50,8 +50,8 @@ class PaimonSplitReader : public FileSplitReader {
 
   ~PaimonSplitReader() override = default;
 
-  /// Saves metadata filter and runtime stats for use by
-  /// ensureFileSplitReader(). Each footer is validated when its file is opened.
+  /// Saves metadata filter and runtime stats for lazy per-file preparation in
+  /// ensureFileSplitReader().
   void prepareSplit(
       std::shared_ptr<common::MetadataFilter> metadataFilter,
       dwio::common::RuntimeStats& runtimeStats,
@@ -68,12 +68,7 @@ class PaimonSplitReader : public FileSplitReader {
     runtimeStats_ = &runtimeStats;
   }
 
- protected:
-  void configureBaseReaderOptions() override;
-
  private:
-  const std::shared_ptr<const PaimonTableHandle> paimonTableHandle_;
-
   // Builds a FileConnectorSplit from a PaimonDataFile.
   std::shared_ptr<FileConnectorSplit> makeFileConnectorSplit(
       const PaimonDataFile& dataFile) const;
@@ -82,9 +77,6 @@ class PaimonSplitReader : public FileSplitReader {
   // reader is exhausted, advances to the next non-empty file. Returns true
   // if a reader is ready, false when all files are exhausted.
   bool ensureFileSplitReader();
-
-  // Checks the current same-schema physical layout before column adaptation.
-  void checkFileSchema(const RowTypePtr& fileType) const;
 
   // Cleans up the current file reader after it is exhausted and advances
   // currentFileIndex_ so ensureFileSplitReader() opens the next file.

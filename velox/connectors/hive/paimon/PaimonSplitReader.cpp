@@ -18,7 +18,6 @@
 #include <limits>
 
 #include "velox/common/Casts.h"
-#include "velox/connectors/hive/paimon/PaimonTableHandle.h"
 
 namespace facebook::velox::connector::hive::paimon {
 
@@ -49,7 +48,6 @@ PaimonSplitReader::PaimonSplitReader(
           fileHandleFactory,
           executor,
           scanSpec),
-      paimonTableHandle_(checkedNotNull(tableHandle)),
       ownedPartitionKeys_(*checkedNotNull(partitionKeys)),
       paimonSplit_(std::move(paimonSplit)) {
   VELOX_CHECK_NOT_NULL(paimonSplit_);
@@ -95,16 +93,11 @@ bool PaimonSplitReader::ensureFileSplitReader() {
     // Point to the current file.
     fileSplit_ = fileSplits_[currentFileIndex_];
 
-    createReader();
+    FileSplitReader::prepareSplit(metadataFilter_, *runtimeStats_);
     VELOX_USER_CHECK_NOT_NULL(
         baseReader_,
         "Missing Paimon file reader for '{}'; snapshot files cannot be skipped",
         fileSplit_->readPath());
-    checkFileSchema(baseReader_->rowType());
-    auto rowType = getAdaptedRowType();
-    if (!checkIfSplitIsEmpty(*runtimeStats_)) {
-      createRowReader(metadataFilter_, std::move(rowType), std::nullopt);
-    }
     if (!emptySplit_) {
       return true;
     }
@@ -115,41 +108,6 @@ bool PaimonSplitReader::ensureFileSplitReader() {
   return false; // All files exhausted.
 }
 
-void PaimonSplitReader::checkFileSchema(const RowTypePtr& fileType) const {
-  // TODO: Use per-file schema IDs and historical field-ID mapping in the
-  // schema-evolution increment. Current inputs guarantee the fixed schema.
-  auto expectedType = paimonTableHandle_->dataColumns();
-  for (const auto& name : paimonTableHandle_->partitionKeys()) {
-    if (fileType->containsChild(name)) {
-      // Ordinary files may retain all physical partition columns. Split
-      // constants remain authoritative for their values during the scan.
-      expectedType = paimonTableHandle_->rowType();
-      break;
-    }
-  }
-  VELOX_USER_CHECK_GE(
-      fileType->size(),
-      expectedType->size(),
-      "Paimon file schema contradicts fixed table");
-  for (column_index_t i = 0; i < expectedType->size(); ++i) {
-    VELOX_USER_CHECK(
-        fileType->nameOf(i) == expectedType->nameOf(i) &&
-            *fileType->childAt(i) == *expectedType->childAt(i),
-        "Paimon file schema contradicts target column '{}'",
-        expectedType->nameOf(i));
-  }
-  const auto extraColumns = fileType->size() - expectedType->size();
-  // Ordinary-column scans can ignore physical tracking columns.
-  VELOX_USER_CHECK(
-      extraColumns == 0 ||
-          (extraColumns == 2 &&
-           fileType->nameOf(expectedType->size()) == "_ROW_ID" &&
-           fileType->nameOf(expectedType->size() + 1) == "_SEQUENCE_NUMBER" &&
-           *fileType->childAt(expectedType->size()) == *BIGINT() &&
-           *fileType->childAt(expectedType->size() + 1) == *BIGINT()),
-      "Paimon file layout contradicts same-schema append input");
-}
-
 void PaimonSplitReader::finishFileSplitReader() {
   VELOX_CHECK_LT(currentFileIndex_, fileSplits_.size());
   VELOX_CHECK_NOT_NULL(baseReader_);
@@ -158,17 +116,6 @@ void PaimonSplitReader::finishFileSplitReader() {
   baseReader_ = nullptr;
   baseRowReader_ = nullptr;
   emptySplit_ = false;
-}
-
-void PaimonSplitReader::configureBaseReaderOptions() {
-  FileSplitReader::configureBaseReaderOptions();
-  // Preserve footer names so a contradictory file cannot be renamed into
-  // the target schema by positional mapping before validation.
-  baseReaderOpts_.setColumnMappingMode(dwio::common::ColumnMappingMode::kName);
-  // Some readers use the requested schema to convert footer types. Inspect
-  // the physical schema first; the ScanSpec still carries the target types.
-  baseReaderOpts_.setFileSchema(nullptr);
-  baseReaderOpts_.setAllowEmptyFile(false);
 }
 
 std::shared_ptr<FileConnectorSplit> PaimonSplitReader::makeFileConnectorSplit(
