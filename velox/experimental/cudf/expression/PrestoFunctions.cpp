@@ -18,6 +18,7 @@
 #include "velox/experimental/cudf/expression/DateTruncFunction.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/expression/PrestoFunctions.h"
+#include "velox/experimental/cudf/expression/prestosql/ArrayJoinFunction.h"
 #include "velox/experimental/cudf/expression/prestosql/DateAddFunction.h"
 #include "velox/experimental/cudf/expression/prestosql/DatePlusIntervalFunction.h"
 #include "velox/experimental/cudf/expression/prestosql/UnixtimeFunctions.h"
@@ -130,6 +131,21 @@ void registerPrestoFunctions(const std::string& prefix) {
   using exec::FunctionSignatureBuilder;
 
   registerPrestoArrayAccessFunctions(prefix);
+
+  registerCudfFunction(
+      prefix + "array_join",
+      [](const std::string&,
+         const core::TypedExprPtr& expr,
+         memory::MemoryPool* pool) {
+        return std::make_shared<prestosql::ArrayJoinFunction>(expr, pool);
+      },
+      {FunctionSignatureBuilder()
+           .returnType("varchar")
+           .argumentType("array(varchar)")
+           .constantArgumentType("varchar")
+           .build()},
+      true,
+      prestosql::ArrayJoinFunction::canEvaluate);
 
   registerCudfFunctions(
       {prefix + "substr", prefix + "substring"},
