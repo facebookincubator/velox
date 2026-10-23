@@ -17,6 +17,7 @@
 #include "velox/dwio/nimble/tablet/TabletWriter.h"
 
 #include <limits>
+#include <string_view>
 
 #include "velox/dwio/nimble/common/Buffer.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
@@ -191,6 +192,7 @@ struct StreamEqual {
     return true;
   }
 };
+
 } // namespace
 
 void TabletWriter::close() {
@@ -598,6 +600,7 @@ void TabletWriter::writeStripeGroupWithStreamMajorLayout(
   // For each leaf streamId, gather that stream's values across every stripe and
   // encode the resulting stripeCount-length array independently. The per-stream
   // bit width is tight to that stream's value range.
+  // Identical arrays can reuse an existing encoding.
   std::vector<flatbuffers::Offset<serialization::EncodedStream>> encodedOffsets;
   std::vector<flatbuffers::Offset<serialization::EncodedStream>> encodedSizes;
   encodedOffsets.reserve(streamCount);
@@ -609,32 +612,49 @@ void TabletWriter::writeStripeGroupWithStreamMajorLayout(
   encodingOptions.fixedBitWidthUseExactBits = true;
 
   // Encodes one array, copies it into the flatbuffer, then rewinds the scratch
-  // buffer so peak memory stays bounded to a single stream.
+  // buffer for reuse.
   Buffer encodingBuffer{*pool_};
-  auto encodeStream =
-      [&](const std::vector<uint32_t>& values,
-          const std::vector<std::pair<EncodingType, float>>& readFactors) {
-        const auto encoded = EncodingFactory::encode<uint32_t>(
-            makeMetadataEncodingPolicy<uint32_t>(readFactors),
-            std::span<const uint32_t>(values),
-            encodingBuffer,
-            encodingOptions);
-        auto encodedStream = serialization::CreateEncodedStream(
-            builder,
-            builder.CreateVector(
-                reinterpret_cast<const uint8_t*>(encoded.data()),
-                encoded.size()));
-        encodingBuffer.reset();
-        return encodedStream;
-      };
+  auto encodeStream = [&](const std::vector<uint32_t>& values) {
+    const auto encoded = EncodingFactory::encode<uint32_t>(
+        makeMetadataEncodingPolicy<uint32_t>(
+            options_.stripeGroupEncodingLayoutReadFactors),
+        std::span<const uint32_t>(values),
+        encodingBuffer,
+        encodingOptions);
+    const auto encodedStream = serialization::CreateEncodedStream(
+        builder,
+        builder.CreateVector(
+            reinterpret_cast<const uint8_t*>(encoded.data()), encoded.size()));
+    encodingBuffer.reset();
+    return encodedStream;
+  };
+  auto writeMetadataArrays = [&](const auto& encode) {
+    for (uint32_t streamId = 0; streamId < streamCount; ++streamId) {
+      encodedOffsets.push_back(encode(
+          transposeStreamMetadata(streamId, stripeCount, streamOffsets_)));
+      encodedSizes.push_back(
+          encode(transposeStreamMetadata(streamId, stripeCount, streamSizes_)));
+    }
+  };
 
-  for (uint32_t streamId = 0; streamId < streamCount; ++streamId) {
-    encodedOffsets.push_back(encodeStream(
-        transposeStreamMetadata(streamId, stripeCount, streamOffsets_),
-        options_.stripeGroupEncodingLayoutReadFactors));
-    encodedSizes.push_back(encodeStream(
-        transposeStreamMetadata(streamId, stripeCount, streamSizes_),
-        options_.stripeGroupEncodingLayoutReadFactors));
+  if (options_.stripeGroupMetadataDeduplicationEnabled) {
+    // Offsets and sizes have the same type and encoding policy, so identical
+    // arrays can share an entry.
+    // Own the original arrays for equality checks on hash matches.
+    // Keep the raw-key cache local to this stripe-group write.
+    folly::F14FastMap<
+        std::vector<uint32_t>,
+        flatbuffers::Offset<serialization::EncodedStream>>
+        uniqueArrays;
+    writeMetadataArrays([&](std::vector<uint32_t> values) {
+      auto [it, inserted] = uniqueArrays.try_emplace(std::move(values));
+      if (inserted) {
+        it->second = encodeStream(it->first);
+      }
+      return it->second;
+    });
+  } else {
+    writeMetadataArrays(encodeStream);
   }
 
   // Tag the blob with the kStreamMajor file identifier so the reader detects
