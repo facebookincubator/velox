@@ -34,7 +34,9 @@ namespace facebook::velox::cudf_velox {
  * zero. The operands and the output may each be DECIMAL64 or DECIMAL128, with
  * any scale. A null operand gives a null result. A zero divisor fails the batch
  * with "Division by zero"; arithmetic overflow fails with "Decimal overflow in
- * divide". Division by zero takes precedence when a batch has both.
+ * divide". Division by zero takes precedence when a batch has both. A row also
+ * fails as overflow if its dividend, rescaled to the output scale, does not fit
+ * in 128 bits, even when the quotient would.
  *
  * @param lhs Left-hand decimal operand column.
  * @param rhs Right-hand decimal operand column.

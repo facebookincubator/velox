@@ -1224,6 +1224,55 @@ TEST_F(CudfDecimalTest, decimalDivideByZeroGuardedByConditional) {
           .planNode());
 }
 
+// A zero scalar divisor fails only if some row actually reaches the divide, as
+// on the CPU. Rows with a null dividend, and rows a conditional excludes, never
+// do.
+TEST_F(CudfDecimalTest, decimalDivideByZeroScalarNoActiveRows) {
+  auto allNull = makeRowVector(
+      {"a"},
+      {makeNullableFlatVector<int64_t>(
+          {std::nullopt, std::nullopt, std::nullopt}, DECIMAL(10, 2))});
+  std::vector<RowVectorPtr> allNullVectors = {allNull};
+  assertCpuAndGpuAgree(
+      exec::test::PlanBuilder()
+          .values(allNullVectors)
+          .project({"a / CAST('0.00' AS DECIMAL(10, 2)) AS div"})
+          .planNode());
+
+  // q / 0.00 is DECIMAL(7, 2), so the else branch must match for the plan to
+  // bind.
+  auto makeGuardedPlan = [&](const std::vector<std::optional<int32_t>>& g) {
+    auto input = makeRowVector(
+        {"g", "q"},
+        {
+            makeNullableFlatVector<int32_t>(g),
+            makeFlatVector<int64_t>({1000, 2000, 3000}, DECIMAL(5, 2)),
+        });
+    std::vector<RowVectorPtr> vectors = {input};
+    return exec::test::PlanBuilder()
+        .values(vectors)
+        .project({"if(g > 0, q / CAST('0.00' AS DECIMAL(5, 2)), "
+                  "CAST('0.00' AS DECIMAL(7, 2))) AS guarded"})
+        .planNode();
+  };
+
+  // The condition excludes every row, by being false or null.
+  assertCpuAndGpuAgree(makeGuardedPlan({0, -1, std::nullopt}));
+
+  // Row 1 reaches the divide, so both engines fail.
+  auto mixedPlan = makeGuardedPlan({0, 1, std::nullopt});
+  unregisterCudf();
+  VELOX_ASSERT_USER_THROW(
+      facebook::velox::exec::test::AssertQueryBuilder(mixedPlan).copyResults(
+          pool()),
+      "Division by zero");
+  registerCudf();
+  VELOX_ASSERT_USER_THROW(
+      facebook::velox::exec::test::AssertQueryBuilder(mixedPlan).copyResults(
+          pool()),
+      "Division by zero");
+}
+
 TEST_F(CudfDecimalTest, decimalModulo) {
   auto input = makeRowVector(
       {"a", "b"},
