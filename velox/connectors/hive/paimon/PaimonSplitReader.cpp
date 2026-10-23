@@ -97,7 +97,7 @@ bool PaimonSplitReader::ensureFileSplitReader() {
 
     createReader();
     VELOX_USER_CHECK_NOT_NULL(baseReader_, "Missing Paimon file reader");
-    paimonTableHandle_->validateFileSchema(baseReader_->rowType());
+    checkFileSchema(baseReader_->rowType());
     auto rowType = getAdaptedRowType();
     if (!checkIfSplitIsEmpty(*runtimeStats_)) {
       createRowReader(metadataFilter_, std::move(rowType), std::nullopt);
@@ -110,6 +110,41 @@ bool PaimonSplitReader::ensureFileSplitReader() {
     ++currentFileIndex_;
   }
   return false; // All files exhausted.
+}
+
+void PaimonSplitReader::checkFileSchema(const RowTypePtr& fileType) const {
+  // TODO: Use per-file schema IDs and historical field-ID mapping in the
+  // schema-evolution increment. Current inputs guarantee the fixed schema.
+  auto expectedType = paimonTableHandle_->dataColumns();
+  for (const auto& name : paimonTableHandle_->partitionKeys()) {
+    if (fileType->containsChild(name)) {
+      // Ordinary files may retain all physical partition columns. Split
+      // constants remain authoritative for their values during the scan.
+      expectedType = paimonTableHandle_->rowType();
+      break;
+    }
+  }
+  VELOX_USER_CHECK_GE(
+      fileType->size(),
+      expectedType->size(),
+      "Paimon file schema contradicts fixed table");
+  for (column_index_t i = 0; i < expectedType->size(); ++i) {
+    VELOX_USER_CHECK(
+        fileType->nameOf(i) == expectedType->nameOf(i) &&
+            *fileType->childAt(i) == *expectedType->childAt(i),
+        "Paimon file schema contradicts target column '{}'",
+        expectedType->nameOf(i));
+  }
+  const auto extraColumns = fileType->size() - expectedType->size();
+  VELOX_USER_CHECK(
+      extraColumns == 0 ||
+          (paimonTableHandle_->options().at("row-tracking.enabled") == "true" &&
+           extraColumns == 2 &&
+           fileType->nameOf(expectedType->size()) == "_ROW_ID" &&
+           fileType->nameOf(expectedType->size() + 1) == "_SEQUENCE_NUMBER" &&
+           *fileType->childAt(expectedType->size()) == *BIGINT() &&
+           *fileType->childAt(expectedType->size() + 1) == *BIGINT()),
+      "Paimon file layout contradicts same-schema append input");
 }
 
 void PaimonSplitReader::finishFileSplitReader() {

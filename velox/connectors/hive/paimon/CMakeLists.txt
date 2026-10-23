@@ -27,17 +27,13 @@ velox_add_library(
 
 velox_link_libraries(velox_hive_paimon_split velox_connector velox_hive_connector fmt::fmt)
 
-velox_add_library(velox_hive_paimon_schema PaimonSchema.cpp HEADERS PaimonSchema.h)
-
-velox_link_libraries(velox_hive_paimon_schema velox_type)
-
 velox_add_library(velox_hive_paimon_table_handle PaimonTableHandle.cpp HEADERS PaimonTableHandle.h)
 
 velox_link_libraries(
   velox_hive_paimon_table_handle
-  velox_hive_paimon_schema
   velox_hive_paimon_split
   velox_core
+  velox_type
 )
 
 velox_add_library(

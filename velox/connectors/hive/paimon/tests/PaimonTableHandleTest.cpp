@@ -27,9 +27,6 @@ namespace {
 
 class PaimonTableHandleTest : public testing::Test {
  protected:
-  static constexpr auto kReadProfile =
-      PaimonTableHandle::ReadProfile::kSameSchemaAppendBatch;
-
   void SetUp() override {
     Type::registerSerDe();
     common::Filter::registerSerDe();
@@ -38,36 +35,20 @@ class PaimonTableHandleTest : public testing::Test {
     PaimonTableHandle::registerSerDe();
   }
 
-  static PaimonSchemaPtr schema(std::vector<int32_t> primaryKeys = {8, 7}) {
-    return std::make_shared<PaimonSchema>(
-        int64_t{1} << 40,
-        2,
-        ROW({{"id", BIGINT()}, {"p", VARCHAR()}, {"value", BIGINT()}}),
-        PaimonTypeMetadata{
-            "ROW",
-            false,
-            std::nullopt,
-            {},
-            {{"BIGINT", false, 7},
-             {"VARCHAR", true, 8, {100}},
-             {"BIGINT", true, 9}}},
-        std::vector<int32_t>{8},
-        std::move(primaryKeys),
-        std::unordered_map<std::string, std::string>{
-            {"type", "table"},
-            {"batch-scan-mode", "none"},
-            {"deletion-vectors.enabled", "false"},
-            {"data-evolution.enabled", "false"},
-            {"data-file.thin-mode", "false"},
-            {"row-tracking.enabled", "false"},
-            {"file.format", "nimble"},
-            {"bucket", "-1"}});
+  static RowTypePtr rowType() {
+    return ROW({{"id", BIGINT()}, {"p", VARCHAR()}, {"value", BIGINT()}});
   }
 
   static std::shared_ptr<PaimonTableHandle> table(
-      PaimonSchemaPtr tableSchema = schema()) {
+      PaimonTableType type = PaimonTableType::kAppendOnly) {
     return std::make_shared<PaimonTableHandle>(
-        "test-paimon", "orders", std::move(tableSchema), kReadProfile);
+        "test-paimon",
+        "orders",
+        int64_t{1} << 40,
+        rowType(),
+        std::vector<int32_t>{7, 8, 20},
+        type,
+        std::vector<std::string>{"p"});
   }
 };
 
@@ -84,27 +65,36 @@ TEST_F(PaimonTableHandleTest, tableDefinition) {
   EXPECT_EQ(handle->remainingFilter(), nullptr);
   EXPECT_EQ(handle->sampleRate(), 1);
   EXPECT_FALSE(handle->supportsIndexLookup());
-  const auto* paimonTable = handle->as<PaimonTableHandle>();
-  ASSERT_NE(paimonTable, nullptr);
-  EXPECT_EQ(paimonTable->tableType(), PaimonTableType::kPrimaryKey);
-  EXPECT_EQ(paimonTable->schema()->primaryKeys(), (std::vector<int32_t>{8, 7}));
-  EXPECT_EQ(table(schema({}))->tableType(), PaimonTableType::kAppendOnly);
+  const auto* paimon = handle->as<PaimonTableHandle>();
+  ASSERT_NE(paimon, nullptr);
+  EXPECT_EQ(paimon->schemaId(), int64_t{1} << 40);
+  EXPECT_EQ(*paimon->rowType(), *rowType());
+  EXPECT_EQ(paimon->fieldIds(), (std::vector<int32_t>{7, 8, 20}));
+  EXPECT_EQ(paimon->partitionKeys(), (std::vector<std::string>{"p"}));
+  EXPECT_EQ(paimon->tableType(), PaimonTableType::kAppendOnly);
+  // The handle carries table identity. Opening an unsupported reader is a
+  // DataSource decision, not a second table-definition validation framework.
+  EXPECT_EQ(
+      table(PaimonTableType::kPrimaryKey)->tableType(),
+      PaimonTableType::kPrimaryKey);
   EXPECT_EQ(
       handle->toString(),
       "PaimonTableHandle[table orders, schemaId 1099511627776, tableType "
-      "PRIMARY_KEY, readProfile SAME_SCHEMA_APPEND_BATCH, dataColumns "
-      "ROW<id:BIGINT,value:BIGINT>, sampleRate 1]");
+      "APPEND_ONLY, dataColumns ROW<id:BIGINT,value:BIGINT>, sampleRate 1]");
 
-  const auto onlyPartition = std::make_shared<PaimonSchema>(
+  const PaimonTableHandle onlyPartition(
+      "test-paimon",
+      "t",
       0,
-      3,
       ROW({{"p", BIGINT()}}),
-      PaimonTypeMetadata{"ROW", false, std::nullopt, {}, {{"BIGINT", true, 0}}},
-      std::vector<int32_t>{0});
-  EXPECT_EQ(table(onlyPartition)->dataColumns()->size(), 0);
-  const auto empty = std::make_shared<PaimonSchema>(
-      0, 3, ROW({}), PaimonTypeMetadata{"ROW", false});
-  EXPECT_EQ(table(empty)->dataColumns(), empty->rowType());
+      {0},
+      PaimonTableType::kAppendOnly,
+      {"p"});
+  EXPECT_EQ(onlyPartition.dataColumns()->size(), 0);
+  const auto emptyType = ROW({});
+  const PaimonTableHandle empty(
+      "test-paimon", "t", 0, emptyType, {}, PaimonTableType::kAppendOnly);
+  EXPECT_EQ(empty.dataColumns(), emptyType);
 }
 
 TEST_F(PaimonTableHandleTest, roundTrip) {
@@ -112,469 +102,174 @@ TEST_F(PaimonTableHandleTest, roundTrip) {
   filters.emplace(
       common::Subfield("id"),
       std::make_unique<common::BigintRange>(1, 9, false));
-  const auto remainingFilter =
+  const auto remaining =
       std::make_shared<core::ConstantTypedExpr>(BOOLEAN(), Variant(true));
   const auto filterColumn = std::make_shared<HiveColumnHandle>(
       "value", FileColumnHandle::ColumnType::kRegular, BIGINT(), BIGINT());
-  const std::unordered_map<std::string, std::string> queryOptions{
-      {"query-custom", ""}, {"file.format", "orc"}};
-  const auto original = std::make_shared<PaimonTableHandle>(
+  const std::unordered_map<std::string, std::string> options{
+      {"deletion-vectors.enabled", "false"},
+      {"data-evolution.enabled", "false"},
+      {"data-file.thin-mode", "false"},
+      {"row-tracking.enabled", "false"},
+      {"bucket", "8"},
+      {"skip.header.line.count", "1"}};
+  const PaimonTableHandle original(
       "test-paimon",
       "orders",
-      schema(),
-      kReadProfile,
+      int64_t{1} << 40,
+      rowType(),
+      {7, 8, 20},
+      PaimonTableType::kAppendOnly,
+      {"p"},
+      options,
       std::move(filters),
-      remainingFilter,
-      std::vector<FileColumnHandlePtr>{filterColumn},
-      queryOptions,
+      remaining,
+      {filterColumn},
       0.5,
       "analytics");
-  const auto obj = original->serialize();
+  const auto obj = original.serialize();
   const auto copy = ISerializable::deserialize<PaimonTableHandle>(obj);
   ASSERT_NE(copy, nullptr);
   EXPECT_EQ(copy->serialize(), obj);
-  EXPECT_EQ(*copy->schema(), *original->schema());
-  EXPECT_EQ(copy->tableParameters(), queryOptions);
-  EXPECT_EQ(copy->schema()->options().at("file.format"), "nimble");
-  EXPECT_EQ(copy->remainingFilter()->toString(), remainingFilter->toString());
+  EXPECT_EQ(copy->schemaId(), original.schemaId());
+  EXPECT_EQ(*copy->rowType(), *original.rowType());
+  EXPECT_EQ(copy->fieldIds(), original.fieldIds());
+  EXPECT_EQ(copy->partitionKeys(), original.partitionKeys());
+  EXPECT_EQ(copy->tableType(), original.tableType());
+  EXPECT_EQ(copy->options(), options);
+  EXPECT_TRUE(copy->tableParameters().empty());
+  EXPECT_EQ(copy->remainingFilter()->toString(), remaining->toString());
   ASSERT_EQ(copy->filterColumnHandles().size(), 1);
   EXPECT_EQ(
       copy->filterColumnHandles()[0]->toString(), filterColumn->toString());
   EXPECT_EQ(copy->dbName(), "analytics");
   EXPECT_EQ(copy->sampleRate(), 0.5);
   EXPECT_FALSE(obj.count("dataColumns"));
-  EXPECT_FALSE(obj.count("tableType"));
+  EXPECT_FALSE(obj.count("schema"));
+  EXPECT_FALSE(obj.count("readProfile"));
+  EXPECT_FALSE(obj.count("queryOptions"));
 }
 
-TEST_F(PaimonTableHandleTest, structuredFilterPaths) {
+TEST_F(PaimonTableHandleTest, literalFilterNameRoundTrip) {
   common::SubfieldFilters filters;
   filters.emplace(
       std::move(*common::Subfield::create("a.b")),
       std::make_unique<common::IsNotNull>());
-  filters.emplace(common::Subfield("a.b"), std::make_unique<common::IsNull>());
-  filters.emplace(
-      common::Subfield("m[\"key\"].v"), std::make_unique<common::IsNotNull>());
-  filters.emplace(
-      common::Subfield("items[3]"), std::make_unique<common::IsNotNull>());
-  filters.emplace(
-      common::Subfield("items[*]"), std::make_unique<common::IsNotNull>());
-  const auto rowType = ROW(
-      {{"a.b", BIGINT()},
-       {"a", ROW({{"b", BIGINT()}})},
-       {"m", MAP(VARCHAR(), ROW({{"v", BIGINT()}}))},
-       {"items", ARRAY(BIGINT())}});
-  const auto tableSchema = std::make_shared<PaimonSchema>(
-      0,
-      3,
-      rowType,
-      PaimonTypeMetadata{
-          "ROW",
-          false,
-          std::nullopt,
-          {},
-          {{"BIGINT", true, 0},
-           {"ROW", true, 1, {}, {{"BIGINT", true, 2}}},
-           {"MAP",
-            true,
-            3,
-            {},
-            {{"VARCHAR", false, std::nullopt, {100}},
-             {"ROW", true, std::nullopt, {}, {{"BIGINT", true, 4}}}}},
-           {"ARRAY", true, 5, {}, {{"BIGINT", true}}}}});
-  filters.emplace(
-      common::Subfield("m[*].v"), std::make_unique<common::IsNotNull>());
-  const auto original = std::make_shared<PaimonTableHandle>(
-      "test-paimon", "orders", tableSchema, kReadProfile, std::move(filters));
-  const auto copy =
-      ISerializable::deserialize<PaimonTableHandle>(original->serialize());
-  ASSERT_EQ(copy->subfieldFilters().size(), original->subfieldFilters().size());
-  for (const auto& [path, filter] : original->subfieldFilters()) {
-    auto it = copy->subfieldFilters().find(path);
-    ASSERT_NE(it, copy->subfieldFilters().end());
-    EXPECT_EQ(it->second->serialize(), filter->serialize());
-  }
-}
-
-TEST_F(PaimonTableHandleTest, splitValidation) {
-  const auto handle = table(schema({}));
-  handle->validateReadProfile();
-  const auto makeSplit = [](PaimonTableType type,
-                            const auto& partitions,
-                            std::string connectorId = "test-paimon") {
-    PaimonDataFile file;
-    file.path = "/not-opened";
-    return PaimonConnectorSplit(
-        connectorId,
-        1,
-        type,
-        dwio::common::FileFormat::DWRF,
-        std::vector<PaimonDataFile>{file},
-        partitions,
-        std::nullopt);
-  };
-  const std::unordered_map<std::string, std::optional<std::string>> good{
-      {"p", std::nullopt}};
-  handle->validateSplit(makeSplit(PaimonTableType::kAppendOnly, good));
-  handle->validateSplit(makeSplit(
-      PaimonTableType::kAppendOnly,
-      std::unordered_map<std::string, std::optional<std::string>>{{"p", ""}}));
-  auto delegated = makeSplit(PaimonTableType::kAppendOnly, good).serialize();
-  delegated["fileFormat"] = dwio::common::FileFormatName::toName(
-      dwio::common::FileFormat::AVRO);
-  delegated["dataFiles"][0]["level"] = 1;
-  handle->validateSplit(*PaimonConnectorSplit::create(delegated));
-  VELOX_ASSERT_THROW(
-      handle->validateSplit(makeSplit(PaimonTableType::kPrimaryKey, good)),
-      "Paimon split table type does not match table schema");
-  VELOX_ASSERT_THROW(
-      handle->validateSplit(
-          makeSplit(PaimonTableType::kAppendOnly, good, "other")),
-      "Paimon split connector does not match table handle");
-  VELOX_ASSERT_THROW(
-      handle->validateSplit(makeSplit(
-          PaimonTableType::kAppendOnly,
-          std::unordered_map<std::string, std::optional<std::string>>{})),
-      "Paimon split partition names do not match table schema");
-  VELOX_ASSERT_THROW(
-      handle->validateSplit(makeSplit(
-          PaimonTableType::kAppendOnly,
-          std::unordered_map<std::string, std::optional<std::string>>{
-              {"q", "1"}})),
-      "Missing Paimon split partition 'p' declared by table schema");
-  auto notNullable = handle->schema()->serialize();
-  notNullable["metadata"]["children"][1]["nullable"] = false;
-  VELOX_ASSERT_USER_THROW(
-      table(PaimonSchema::create(notNullable))
-          ->validateSplit(makeSplit(PaimonTableType::kAppendOnly, good)),
-      "NULL Paimon partition 'p' is not nullable in target schema");
-}
-
-TEST_F(PaimonTableHandleTest, executableProfile) {
-  const auto good = schema({})->serialize();
-  table(PaimonSchema::create(good))->validateReadProfile();
-  VELOX_ASSERT_USER_THROW(
-      table()->validateReadProfile(),
-      "Paimon same-schema append profile does not support primary-key tables; "
-      "primary-key reading is not implemented yet");
-  for (const auto& key :
-       {"type",
-        "batch-scan-mode",
-        "deletion-vectors.enabled",
-        "data-evolution.enabled",
-        "data-file.thin-mode"}) {
-    SCOPED_TRACE(key);
-    auto wire = good;
-    wire["options"].erase(key);
-    VELOX_ASSERT_USER_THROW(
-        table(PaimonSchema::create(wire))->validateReadProfile(),
-        fmt::format(
-            "Missing explicit Paimon profile option '{}'; provide normalized "
-            "options because defaults are not resolved by the reader",
-            key));
-    wire["options"][key] = "unsupported";
-    VELOX_ASSERT_USER_THROW(
-        table(PaimonSchema::create(wire))->validateReadProfile(),
-        fmt::format(
-            "Paimon same-schema append profile requires '{}'='{}'; the current "
-            "reader only implements ordinary same-schema append batch scans",
-            key,
-            good["options"][key].asString()));
-  }
-  // Write and planning options do not configure an already planned file scan.
-  for (const auto& [key, value] :
-       std::unordered_map<std::string, std::string>{
-           {"scan.mode", "latest"},
-           {"merge-engine", "deduplicate"},
-           {"file.format", "avro"},
-           {"file.format.per.level", "0:avro,3:parquet"},
-           {"bucket", "8"},
-           {"write-buffer-size", "256 mb"},
-           {"custom", "uninterpreted"}}) {
-    SCOPED_TRACE(key);
-    auto wire = good;
-    wire["options"][key] = value;
-    const auto handle = table(PaimonSchema::create(wire));
-    handle->validateReadProfile();
-    EXPECT_EQ(handle->schema()->options().at(key), value);
-  }
-  auto wire = good;
-  wire["options"]["row-tracking.enabled"] = "true";
-  table(PaimonSchema::create(wire))->validateReadProfile();
-  wire["options"]["row-tracking.enabled"] = "unknown";
-  VELOX_ASSERT_USER_THROW(
-      table(PaimonSchema::create(wire))->validateReadProfile(),
-      "Paimon profile requires explicit boolean 'row-tracking.enabled'; "
-      "provide normalized options because defaults are not resolved by the reader");
-  wire["options"].erase("row-tracking.enabled");
-  VELOX_ASSERT_USER_THROW(
-      table(PaimonSchema::create(wire))->validateReadProfile(),
-      "Paimon profile requires explicit boolean 'row-tracking.enabled'; "
-      "provide normalized options because defaults are not resolved by the reader");
-  const auto queryOptions = std::make_shared<PaimonTableHandle>(
+  const PaimonTableHandle original(
       "test-paimon",
       "orders",
-      schema({}),
-      kReadProfile,
-      common::SubfieldFilters{},
-      nullptr,
-      std::vector<FileColumnHandlePtr>{},
-      std::unordered_map<std::string, std::string>{
-          {"skip.header.line.count", "1"}});
-  VELOX_ASSERT_USER_THROW(
-      queryOptions->validateReadProfile(),
-      "Paimon same-schema append profile does not support query options; "
-      "query-option interpretation is not implemented yet");
-  const auto dateSchema = std::make_shared<PaimonSchema>(
       0,
-      3,
-      ROW({{"date", DATE()}}),
-      PaimonTypeMetadata{"ROW", false, std::nullopt, {}, {{"DATE", true, 0}}},
-      std::vector<int32_t>{},
-      std::vector<int32_t>{},
-      schema({})->options());
-  VELOX_ASSERT_USER_THROW(
-      table(dateSchema)->validateReadProfile(),
-      "Unsupported Paimon same-schema append logical type 'DATE'; the current "
-      "reader is limited to BOOLEAN, INTEGER, BIGINT, DOUBLE and VARCHAR");
-}
-
-TEST_F(PaimonTableHandleTest, conditionValidation) {
-  const auto makeHandle = [](common::SubfieldFilters filters,
-                             core::TypedExprPtr expression) {
-    return std::make_shared<PaimonTableHandle>(
-        "test-paimon",
-        "orders",
-        schema({}),
-        kReadProfile,
-        std::move(filters),
-        std::move(expression));
-  };
-  common::SubfieldFilters badName;
-  badName.emplace(
-      common::Subfield("missing"), std::make_unique<common::IsNull>());
-  VELOX_ASSERT_USER_THROW(
-      makeHandle(std::move(badName), nullptr), "Unknown Paimon field: missing");
-  common::SubfieldFilters integralBoolFilter;
-  integralBoolFilter.emplace(
-      common::Subfield("id"), std::make_unique<common::BoolValue>(true, false));
-  EXPECT_NE(makeHandle(std::move(integralBoolFilter), nullptr), nullptr);
-  const auto field =
-      std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "id");
-  const auto expression = std::make_shared<core::CallTypedExpr>(
-      BOOLEAN(), std::vector<core::TypedExprPtr>{field}, "test_predicate");
-  VELOX_ASSERT_USER_THROW(
-      makeHandle({}, expression),
-      "Paimon expression field 'id' type does not match target schema");
-  const auto missing =
-      std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "missing");
-  VELOX_ASSERT_USER_THROW(
-      makeHandle(
-          {},
-          std::make_shared<core::CallTypedExpr>(
-              BOOLEAN(),
-              std::vector<core::TypedExprPtr>{missing},
-              "test_predicate")),
-      "Unknown Paimon column 'missing' in target schema");
-  const auto lambda = std::make_shared<core::LambdaTypedExpr>(
-      ROW({{"id", BIGINT()}}),
-      std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "id"));
-  VELOX_ASSERT_USER_THROW(
-      makeHandle(
-          {},
-          std::make_shared<core::CallTypedExpr>(
-              BOOLEAN(),
-              std::vector<core::TypedExprPtr>{lambda},
-              "test_predicate")),
-      "Paimon same-schema append profile does not support Lambda filters; "
-      "scope-aware column validation is not implemented yet");
-  for (const auto& inputType :
-       {schema({})->rowType(), ROW({{"id", BIGINT()}})}) {
-    const auto explicitInput = std::make_shared<core::CallTypedExpr>(
-        BOOLEAN(),
-        std::vector<core::TypedExprPtr>{
-            std::make_shared<core::FieldAccessTypedExpr>(
-                BIGINT(),
-                std::make_shared<core::InputTypedExpr>(inputType),
-                "id")},
-        "test_predicate");
-    EXPECT_NE(makeHandle({}, explicitInput), nullptr);
-  }
-}
-
-TEST_F(PaimonTableHandleTest, columnValidationAndSerialization) {
-  std::vector<common::Subfield> callbackSubfields;
-  callbackSubfields.emplace_back("id");
-  const auto callbackColumn = std::make_shared<HiveColumnHandle>(
-      "id",
-      FileColumnHandle::ColumnType::kRegular,
-      BIGINT(),
-      BIGINT(),
-      std::move(callbackSubfields),
-      std::vector<NamedExtraction>{},
-      HiveColumnHandle::ColumnParseParameters{},
-      [](VectorPtr&) {});
-  const auto callbackTable = std::make_shared<PaimonTableHandle>(
-      "test-paimon",
-      "orders",
-      schema({}),
-      kReadProfile,
-      common::SubfieldFilters{},
-      nullptr,
-      std::vector<FileColumnHandlePtr>{callbackColumn});
-  callbackTable->validateReadProfile();
-  VELOX_ASSERT_USER_THROW(
-      callbackTable->serialize(),
-      "Paimon filter column callbacks cannot be serialized");
-
-  const auto literalSchema = std::make_shared<PaimonSchema>(
-      0,
-      3,
       ROW({{"a.b", BIGINT()}}),
-      PaimonTypeMetadata{"ROW", false, std::nullopt, {}, {{"BIGINT", true, 0}}});
-  std::vector<common::Subfield> requiredSubfields;
-  requiredSubfields.push_back(std::move(*common::Subfield::create("a.b")));
-  const auto literalColumn = std::make_shared<HiveColumnHandle>(
-      "a.b",
-      FileColumnHandle::ColumnType::kRegular,
-      BIGINT(),
-      BIGINT(),
-      std::move(requiredSubfields));
-  const auto literalTable = std::make_shared<PaimonTableHandle>(
-      "test-paimon",
-      "orders",
-      literalSchema,
-      kReadProfile,
-      common::SubfieldFilters{},
-      nullptr,
-      std::vector<FileColumnHandlePtr>{literalColumn});
-  literalTable->validateColumn(*literalColumn);
-  VELOX_ASSERT_USER_THROW(
-      literalTable->serialize(),
-      "Paimon filter column required subfields cannot be serialized by name");
-  std::vector<common::Subfield> invalidSubfields;
-  invalidSubfields.emplace_back("a.b");
-  const HiveColumnHandle invalidPath(
-      "a.b",
-      FileColumnHandle::ColumnType::kRegular,
-      BIGINT(),
-      BIGINT(),
-      std::move(invalidSubfields));
-  VELOX_ASSERT_USER_THROW(
-      literalTable->validateColumn(invalidPath), "Unknown Paimon field: a");
+      {7},
+      PaimonTableType::kAppendOnly,
+      {},
+      {},
+      std::move(filters));
+  const auto copy =
+      ISerializable::deserialize<PaimonTableHandle>(original.serialize());
+  ASSERT_EQ(copy->subfieldFilters().size(), 1);
+  const auto& path = copy->subfieldFilters().begin()->first;
+  ASSERT_EQ(path.path().size(), 1);
+  EXPECT_EQ(path.baseName(), "a.b");
+  EXPECT_EQ(
+      copy->subfieldFilters().begin()->second->serialize(),
+      original.subfieldFilters().begin()->second->serialize());
 }
 
 TEST_F(PaimonTableHandleTest, invalidDefinition) {
-  VELOX_ASSERT_THROW(table(nullptr), "Missing Paimon table schema");
-  VELOX_ASSERT_THROW(
-      PaimonTableHandle("", "orders", schema(), kReadProfile),
-      "Empty Paimon connector ID");
-  VELOX_ASSERT_THROW(
-      PaimonTableHandle("test-paimon", "", schema(), kReadProfile),
-      "Empty Paimon table name");
+  const auto make = [](RowTypePtr type,
+                       std::vector<int32_t> ids,
+                       std::vector<std::string> partitions = {},
+                       int64_t schemaId = 0,
+                       double sampleRate = 1.0) {
+    return PaimonTableHandle(
+        "test-paimon",
+        "orders",
+        schemaId,
+        std::move(type),
+        std::move(ids),
+        PaimonTableType::kAppendOnly,
+        std::move(partitions),
+        {},
+        {},
+        nullptr,
+        {},
+        sampleRate);
+  };
+  VELOX_ASSERT_USER_THROW(make(nullptr, {}), "Missing Paimon table row type");
+  VELOX_ASSERT_USER_THROW(
+      make(rowType(), {7, 8}),
+      "Paimon field IDs must be aligned to table columns");
+  VELOX_ASSERT_USER_THROW(
+      make(rowType(), {7, -1, 20}), "Paimon field ID must be nonnegative");
+  VELOX_ASSERT_USER_THROW(
+      make(rowType(), {7, 7, 20}), "Duplicate Paimon field ID");
+  VELOX_ASSERT_USER_THROW(
+      make(rowType(), {7, 8, 20}, {"missing"}),
+      "Unknown Paimon partition column 'missing'");
+  VELOX_ASSERT_USER_THROW(
+      make(rowType(), {7, 8, 20}, {"p", "p"}),
+      "Duplicate Paimon partition column 'p'");
+  VELOX_ASSERT_USER_THROW(
+      make(rowType(), {7, 8, 20}, {}, -1),
+      "Paimon schema ID must be nonnegative");
   for (double rate :
        {0.0,
         -1.0,
         1.1,
         std::numeric_limits<double>::infinity(),
         std::numeric_limits<double>::quiet_NaN()}) {
-    VELOX_ASSERT_THROW(
-        PaimonTableHandle(
-            "test-paimon",
-            "orders",
-            schema(),
-            kReadProfile,
-            {},
-            nullptr,
-            {},
-            {},
-            rate),
+    VELOX_ASSERT_USER_THROW(
+        make(rowType(), {7, 8, 20}, {}, 0, rate),
         "Paimon sample rate must be finite and in (0, 1]");
   }
-  VELOX_ASSERT_THROW(
-      PaimonTableHandle(
-          "test-paimon",
-          "orders",
-          schema(),
-          kReadProfile,
-          {},
-          std::make_shared<core::ConstantTypedExpr>(
-              BIGINT(), Variant(int64_t{1}))),
-      "Paimon remaining filter must have BOOLEAN type");
-  VELOX_ASSERT_THROW(
-      PaimonTableHandle(
-          "test-paimon",
-          "orders",
-          schema(),
-          kReadProfile,
-          {},
-          nullptr,
-          {nullptr}),
-      "Missing Paimon filter column handle");
-  common::SubfieldFilters missingFilter;
-  missingFilter.emplace(common::Subfield("id"), nullptr);
-  VELOX_ASSERT_THROW(
-      PaimonTableHandle(
-          "test-paimon",
-          "orders",
-          schema(),
-          kReadProfile,
-          std::move(missingFilter)),
-      "Missing Paimon subfield filter");
 }
 
 TEST_F(PaimonTableHandleTest, malformedWire) {
   const auto good = table()->serialize();
-  for (const auto& key : good.keys()) {
-    auto obj = good;
-    obj.erase(key);
-    EXPECT_THROW(PaimonTableHandle::create(obj, nullptr), std::exception)
-        << key;
-  }
-  for (const folly::dynamic& version :
-       {folly::dynamic(0), folly::dynamic(2), folly::dynamic("1")}) {
-    auto obj = good;
-    obj["version"] = version;
-    VELOX_ASSERT_THROW(
-        PaimonTableHandle::create(obj, nullptr),
-        "Unsupported Paimon table handle wire version");
-  }
   auto obj = good;
-  obj["queryOptions"]["bucket"] = 1;
-  VELOX_ASSERT_THROW(
+  obj["version"] = 2;
+  VELOX_ASSERT_USER_THROW(
       PaimonTableHandle::create(obj, nullptr),
-      "Paimon query options must be strings");
+      "Unsupported Paimon table handle wire version");
   obj = good;
-  obj["schema"]["metadata"]["children"][0]["fieldId"] = 8;
-  VELOX_ASSERT_THROW(
+  obj["fieldIds"][0] = int64_t{1} << 40;
+  EXPECT_THROW(PaimonTableHandle::create(obj, nullptr), VeloxUserError);
+  obj = good;
+  obj["fieldIds"][1] = 7;
+  VELOX_ASSERT_USER_THROW(
       PaimonTableHandle::create(obj, nullptr), "Duplicate Paimon field ID");
   obj = good;
-  obj["filterColumnHandles"] = folly::dynamic::object;
-  VELOX_ASSERT_THROW(
-      PaimonTableHandle::create(obj, nullptr),
-      "Expected Paimon filter column handle array");
-  obj = good;
-  obj["sampleRate"] = "1";
-  VELOX_ASSERT_THROW(
-      PaimonTableHandle::create(obj, nullptr),
-      "Expected Paimon numeric sample rate");
-  obj = good;
-  const folly::dynamic entry = folly::dynamic::object(
-      "subfield",
-      folly::dynamic::array(
-          folly::dynamic::object("kind", "field")("value", "id")))(
-      "filter", common::IsNull().serialize());
-  obj["subfieldFilters"] = folly::dynamic::array(entry, entry);
-  VELOX_ASSERT_THROW(
-      PaimonTableHandle::create(obj, nullptr),
-      "Duplicate Paimon subfield filter");
-  obj["subfieldFilters"] = folly::dynamic::array(entry);
-  obj["subfieldFilters"][0]["subfield"][0]["kind"] = "invalid";
-  VELOX_ASSERT_THROW(
-      PaimonTableHandle::create(obj, nullptr), "Unknown Paimon path kind");
-  obj = good;
-  obj["subfieldFilters"] = folly::dynamic::array(entry);
-  obj["subfieldFilters"][0]["subfield"] = folly::dynamic::array;
-  EXPECT_THROW(PaimonTableHandle::create(obj, nullptr), VeloxException);
+  obj["rowType"] = nullptr;
+  EXPECT_THROW(PaimonTableHandle::create(obj, nullptr), VeloxUserError);
+}
+
+TEST_F(PaimonTableHandleTest, localCallbackIsNotWireState) {
+  const auto column = std::make_shared<HiveColumnHandle>(
+      "id",
+      FileColumnHandle::ColumnType::kRegular,
+      BIGINT(),
+      BIGINT(),
+      std::vector<common::Subfield>{},
+      std::vector<NamedExtraction>{},
+      HiveColumnHandle::ColumnParseParameters{},
+      [](VectorPtr&) {});
+  const PaimonTableHandle handle(
+      "test-paimon",
+      "orders",
+      0,
+      rowType(),
+      {7, 8, 20},
+      PaimonTableType::kAppendOnly,
+      {"p"},
+      {},
+      {},
+      nullptr,
+      {column});
+  EXPECT_TRUE(handle.filterColumnHandles()[0]->postProcessor());
+  VELOX_ASSERT_USER_THROW(
+      handle.serialize(),
+      "Paimon filter column callbacks cannot be serialized");
 }
 
 } // namespace

@@ -17,40 +17,35 @@
 
 #include "velox/connectors/hive/FileTableHandle.h"
 #include "velox/connectors/hive/paimon/PaimonConnectorSplit.h"
-#include "velox/connectors/hive/paimon/PaimonSchema.h"
 
 namespace facebook::velox::connector::hive::paimon {
 
-/// Table definition and scan conditions for the existing Paimon file scan.
-/// The fixed target schema owns field identities, key declarations and
-/// schema-local options. Column handles retain FileColumnHandle semantics;
-/// this handle does not bind query columns or physical files by field ID.
+/// Fixed table definition and conditions for a Paimon file scan. Names and
+/// types use Velox RowType; stable field IDs are stored alongside its top-level
+/// columns, not in a parallel type tree. The current reader uses same-schema
+/// append batch inputs and FileColumnHandle name binding. ID-based query
+/// binding and historical schema mapping are separate increments.
 class PaimonTableHandle final : public FileTableHandle {
  public:
   static constexpr int32_t kSerdeVersion = 1;
 
-  /// The caller guarantees every legacy file has the fixed target schema and
-  /// ordinary append layout and belongs to the supplied batch snapshot.
-  enum class ReadProfile { kSameSchemaAppendBatch };
-
-  /// Stores the complete logical conditions separately from schema-local
-  /// options. Execution requires explicit type=table, batch-scan-mode=none,
-  /// deletion-vectors.enabled=false, data-evolution.enabled=false,
-  /// data-file.thin-mode=false and boolean row-tracking.enabled options.
-  /// Other schema options are retained; bucket routing and file selection
-  /// belong to the caller, and the split supplies the actual file format.
-  /// Nonempty queryOptions are rejected. No defaults are added.
-  /// These execution limits describe the current reader, not Paimon table
-  /// validity; additional capabilities require their own semantic validation.
+  /// rowType includes partition columns; fieldIds follow its column order.
+  /// The caller supplies normalized options and files belonging to the fixed
+  /// schema and batch snapshot. PaimonDataSource checks the current reader's
+  /// supported table semantics; this handle does not parse native schema JSON
+  /// or resolve version-dependent defaults.
   PaimonTableHandle(
       std::string connectorId,
       std::string tableName,
-      PaimonSchemaPtr schema,
-      ReadProfile readProfile,
+      int64_t schemaId,
+      RowTypePtr rowType,
+      std::vector<int32_t> fieldIds,
+      PaimonTableType tableType,
+      std::vector<std::string> partitionKeys = {},
+      std::unordered_map<std::string, std::string> options = {},
       common::SubfieldFilters subfieldFilters = {},
       core::TypedExprPtr remainingFilter = nullptr,
       std::vector<FileColumnHandlePtr> filterColumnHandles = {},
-      std::unordered_map<std::string, std::string> queryOptions = {},
       double sampleRate = 1.0,
       std::string dbName = "");
 
@@ -62,12 +57,31 @@ class PaimonTableHandle final : public FileTableHandle {
     return dbName_;
   }
 
-  const PaimonSchemaPtr& schema() const {
-    return schema_;
+  int64_t schemaId() const {
+    return schemaId_;
   }
 
-  /// Derived from the schema's primary key declaration.
-  PaimonTableType tableType() const;
+  const RowTypePtr& rowType() const {
+    return rowType_;
+  }
+
+  const std::vector<int32_t>& fieldIds() const {
+    return fieldIds_;
+  }
+
+  PaimonTableType tableType() const {
+    return tableType_;
+  }
+
+  /// Ordered partition column names for the complete table, not the query's
+  /// selected partition column handles or split partition values.
+  const std::vector<std::string>& partitionKeys() const {
+    return partitionKeys_;
+  }
+
+  const std::unordered_map<std::string, std::string>& options() const {
+    return options_;
+  }
 
   const common::SubfieldFilters& subfieldFilters() const override {
     return subfieldFilters_;
@@ -81,40 +95,17 @@ class PaimonTableHandle final : public FileTableHandle {
     return sampleRate_;
   }
 
-  /// Schema columns excluding declared partition fields, in schema order.
+  /// Full table columns excluding partitions, derived in table column order.
   const RowTypePtr& dataColumns() const override {
     return dataColumns_;
   }
 
   const std::unordered_map<std::string, std::string>& tableParameters()
-      const override {
-    return queryOptions_;
-  }
+      const override;
 
   std::vector<FileColumnHandlePtr> filterColumnHandles() const override {
     return filterColumnHandles_;
   }
-
-  /// Checks connector, table type and the complete set of partition names.
-  /// Partition values retain the existing string/NULL encoding and are
-  /// converted when bound to the scan. File format dispatch uses DWIO. The
-  /// current split has no file schema IDs, so this cannot verify file identity.
-  /// Requires a table definition accepted by validateReadProfile().
-  void validateSplit(const PaimonConnectorSplit& split) const;
-
-  /// Checks whether the table definition fits the same-schema append read
-  /// profile.
-  void validateReadProfile() const;
-
-  /// Checks a column against the fixed schema and partition declarations.
-  /// Output post-processing retains the common FileColumnHandle contract.
-  void validateColumn(const FileColumnHandle& column) const;
-
-  /// Checks the decoded footer's ordered names and types before adaptation.
-  /// Physical partition columns may all be present or all omitted; optional
-  /// trailing tracking columns are accepted only when row tracking is enabled.
-  /// Requires a table definition accepted by validateReadProfile().
-  void validateFileSchema(const RowTypePtr& fileType) const;
 
   std::string toString() const override;
   folly::dynamic serialize() const override;
@@ -126,12 +117,15 @@ class PaimonTableHandle final : public FileTableHandle {
  private:
   const std::string tableName_;
   const std::string dbName_;
-  const PaimonSchemaPtr schema_;
-  const ReadProfile readProfile_;
+  const int64_t schemaId_;
+  const RowTypePtr rowType_;
+  const std::vector<int32_t> fieldIds_;
+  const PaimonTableType tableType_;
+  const std::vector<std::string> partitionKeys_;
+  const std::unordered_map<std::string, std::string> options_;
   const common::SubfieldFilters subfieldFilters_;
   const core::TypedExprPtr remainingFilter_;
   const std::vector<FileColumnHandlePtr> filterColumnHandles_;
-  const std::unordered_map<std::string, std::string> queryOptions_;
   const double sampleRate_;
   const RowTypePtr dataColumns_;
 };

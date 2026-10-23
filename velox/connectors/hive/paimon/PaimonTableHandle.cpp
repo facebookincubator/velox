@@ -15,86 +15,42 @@
  */
 #include "velox/connectors/hive/paimon/PaimonTableHandle.h"
 
-#include <algorithm>
 #include <cmath>
 #include <unordered_set>
-
-#include "velox/core/Expressions.h"
 
 namespace facebook::velox::connector::hive::paimon {
 namespace {
 
-constexpr std::string_view kSameSchemaAppendBatch = "SAME_SCHEMA_APPEND_BATCH";
-
-column_index_t columnIndex(const PaimonSchema& schema, const std::string& name) {
-  const auto index = schema.rowType()->getChildIdxIfExists(name);
-  VELOX_USER_CHECK(
-      index.has_value(), "Unknown Paimon column '{}' in target schema", name);
-  return *index;
-}
-
-void validateExpressionColumns(
-    const PaimonSchema& schema,
-    const core::TypedExprPtr& expression) {
-  if (!expression) {
-    return;
-  }
-  VELOX_USER_CHECK(
-      expression->type() && expression->type()->isBoolean(),
-      "Paimon remaining filter must have BOOLEAN type");
-  std::vector<const core::ITypedExpr*> pending{expression.get()};
-  std::unordered_set<const core::ITypedExpr*> visited;
-  while (!pending.empty()) {
-    const auto* current = pending.back();
-    pending.pop_back();
-    if (!visited.insert(current).second) {
-      continue;
-    }
-    // TODO: Validate Lambda column references with argument scope awareness.
-    VELOX_USER_CHECK(
-        !current->isLambdaKind(),
-        "Paimon same-schema append profile does not support Lambda filters; "
-        "scope-aware column validation is not implemented yet");
-    if (const auto* field =
-            current->asUnchecked<core::FieldAccessTypedExpr>()) {
-      if (field->isInputColumn()) {
-        const auto& expected =
-            schema.rowType()->childAt(columnIndex(schema, field->name()));
-        VELOX_USER_CHECK(
-            field->type() && *field->type() == *expected,
-            "Paimon expression field '{}' type does not match target schema",
-            field->name());
-        continue;
-      }
-    }
-    for (const auto& input : current->inputs()) {
-      pending.push_back(input.get());
-    }
-  }
-}
-
-RowTypePtr deriveDataColumns(const PaimonSchemaPtr& schema) {
-  VELOX_USER_CHECK_NOT_NULL(schema, "Missing Paimon table schema");
-  if (schema->partitionKeys().empty()) {
-    return schema->rowType();
+RowTypePtr deriveDataColumns(
+    const RowTypePtr& rowType,
+    const std::vector<std::string>& partitionKeys) {
+  VELOX_USER_CHECK_NOT_NULL(rowType, "Missing Paimon table row type");
+  if (partitionKeys.empty()) {
+    return rowType;
   }
   std::unordered_set<column_index_t> partitions;
-  for (auto id : schema->partitionKeys()) {
-    partitions.insert(schema->fieldIndexPath(id).front());
+  for (const auto& name : partitionKeys) {
+    const auto index = rowType->getChildIdxIfExists(name);
+    VELOX_USER_CHECK(
+        index.has_value(), "Unknown Paimon partition column '{}'", name);
+    VELOX_USER_CHECK(
+        partitions.insert(*index).second,
+        "Duplicate Paimon partition column '{}'",
+        name);
   }
   std::vector<std::string> names;
   std::vector<TypePtr> types;
-  for (column_index_t i = 0; i < schema->rowType()->size(); ++i) {
+  for (column_index_t i = 0; i < rowType->size(); ++i) {
     if (!partitions.count(i)) {
-      names.push_back(schema->rowType()->nameOf(i));
-      types.push_back(schema->rowType()->childAt(i));
+      names.push_back(rowType->nameOf(i));
+      types.push_back(rowType->childAt(i));
     }
   }
   return ROW(std::move(names), std::move(types));
 }
 
 // A stringified Subfield cannot distinguish literal dots or brackets in field
-// names from path separators. Preserve the path elements in the handle wire.
+// names from path separators. Preserve the existing scan paths in the wire.
 folly::dynamic serializeSubfield(const common::Subfield& subfield) {
   folly::dynamic path = folly::dynamic::array;
   for (const auto& element : subfield.path()) {
@@ -125,29 +81,21 @@ common::Subfield deserializeSubfield(const folly::dynamic& obj) {
   VELOX_USER_CHECK(obj.isArray(), "Expected Paimon filter path");
   std::vector<std::unique_ptr<common::Subfield::PathElement>> path;
   for (const auto& element : obj) {
-    VELOX_USER_CHECK(element.isObject(), "Expected Paimon path element");
-    const auto& kind = element.at("kind");
-    VELOX_USER_CHECK(kind.isString(), "Expected Paimon path element kind");
-    if (kind.getString() == "field") {
-      VELOX_USER_CHECK(
-          element.at("value").isString(), "Expected Paimon path field name");
+    const auto kind = element.at("kind").asString();
+    if (kind == "field") {
       path.push_back(
           std::make_unique<common::Subfield::NestedField>(
               element.at("value").asString()));
-    } else if (kind.getString() == "long") {
-      VELOX_USER_CHECK(
-          element.at("value").isInt(), "Expected Paimon integer subscript");
+    } else if (kind == "long") {
       path.push_back(
           std::make_unique<common::Subfield::LongSubscript>(
               element.at("value").asInt()));
-    } else if (kind.getString() == "string") {
-      VELOX_USER_CHECK(
-          element.at("value").isString(), "Expected Paimon string subscript");
+    } else if (kind == "string") {
       path.push_back(
           std::make_unique<common::Subfield::StringSubscript>(
               element.at("value").asString()));
     } else {
-      VELOX_USER_CHECK_EQ(kind.getString(), "all", "Unknown Paimon path kind");
+      VELOX_USER_CHECK_EQ(kind, "all", "Unknown Paimon path kind");
       path.push_back(std::make_unique<common::Subfield::AllSubscripts>());
     }
   }
@@ -159,233 +107,60 @@ common::Subfield deserializeSubfield(const folly::dynamic& obj) {
 PaimonTableHandle::PaimonTableHandle(
     std::string connectorId,
     std::string tableName,
-    PaimonSchemaPtr schema,
-    ReadProfile readProfile,
+    int64_t schemaId,
+    RowTypePtr rowType,
+    std::vector<int32_t> fieldIds,
+    PaimonTableType tableType,
+    std::vector<std::string> partitionKeys,
+    std::unordered_map<std::string, std::string> options,
     common::SubfieldFilters subfieldFilters,
     core::TypedExprPtr remainingFilter,
     std::vector<FileColumnHandlePtr> filterColumnHandles,
-    std::unordered_map<std::string, std::string> queryOptions,
     double sampleRate,
     std::string dbName)
     : FileTableHandle(std::move(connectorId)),
       tableName_(std::move(tableName)),
       dbName_(std::move(dbName)),
-      schema_(std::move(schema)),
-      readProfile_(readProfile),
+      schemaId_(schemaId),
+      rowType_(std::move(rowType)),
+      fieldIds_(std::move(fieldIds)),
+      tableType_(tableType),
+      partitionKeys_(std::move(partitionKeys)),
+      options_(std::move(options)),
       subfieldFilters_(std::move(subfieldFilters)),
       remainingFilter_(std::move(remainingFilter)),
       filterColumnHandles_(std::move(filterColumnHandles)),
-      queryOptions_(std::move(queryOptions)),
       sampleRate_(sampleRate),
-      dataColumns_(deriveDataColumns(schema_)) {
-  VELOX_USER_CHECK(!this->connectorId().empty(), "Empty Paimon connector ID");
-  VELOX_USER_CHECK(!tableName_.empty(), "Empty Paimon table name");
-  VELOX_USER_CHECK(
-      readProfile_ == ReadProfile::kSameSchemaAppendBatch,
-      "Unsupported Paimon read profile");
+      dataColumns_(deriveDataColumns(rowType_, partitionKeys_)) {
+  VELOX_USER_CHECK_GE(schemaId_, 0, "Paimon schema ID must be nonnegative");
+  VELOX_USER_CHECK_EQ(
+      fieldIds_.size(),
+      rowType_->size(),
+      "Paimon field IDs must be aligned to table columns");
+  std::unordered_set<int32_t> ids;
+  for (auto id : fieldIds_) {
+    VELOX_USER_CHECK_GE(id, 0, "Paimon field ID must be nonnegative");
+    VELOX_USER_CHECK(ids.insert(id).second, "Duplicate Paimon field ID {}", id);
+  }
   VELOX_USER_CHECK(
       std::isfinite(sampleRate_) && sampleRate_ > 0 && sampleRate_ <= 1,
       "Paimon sample rate must be finite and in (0, 1]");
-  validateExpressionColumns(*schema_, remainingFilter_);
-  for (const auto& [subfield, filter] : subfieldFilters_) {
-    VELOX_USER_CHECK_NOT_NULL(filter, "Missing Paimon subfield filter");
-    schema_->fieldIdPath(subfield);
-  }
-  for (const auto& handle : filterColumnHandles_) {
-    VELOX_USER_CHECK_NOT_NULL(handle, "Missing Paimon filter column handle");
-    validateColumn(*handle);
-  }
 }
 
-PaimonTableType PaimonTableHandle::tableType() const {
-  return schema_->primaryKeys().empty() ? PaimonTableType::kAppendOnly
-                                        : PaimonTableType::kPrimaryKey;
-}
-
-void PaimonTableHandle::validateReadProfile() const {
-  // TODO: Extend read profiles as primary-key, deletion-vector, data-evolution
-  // and thin-file readers implement their required row and layout semantics.
-  VELOX_USER_CHECK(
-      tableType() == PaimonTableType::kAppendOnly,
-      "Paimon same-schema append profile does not support primary-key tables; "
-      "primary-key reading is not implemented yet");
-  const auto& options = schema_->options();
-  const auto requireOption = [&](const std::string& key,
-                                 std::string_view value) {
-    const auto it = options.find(key);
-    VELOX_USER_CHECK(
-        it != options.end(),
-        "Missing explicit Paimon profile option '{}'; provide normalized "
-        "options because defaults are not resolved by the reader",
-        key);
-    VELOX_USER_CHECK(
-        it->second == value,
-        "Paimon same-schema append profile requires '{}'='{}'; the current "
-        "reader only implements ordinary same-schema append batch scans",
-        key,
-        value);
-  };
-  requireOption("type", "table");
-  requireOption("batch-scan-mode", "none");
-  requireOption("deletion-vectors.enabled", "false");
-  requireOption("data-evolution.enabled", "false");
-  requireOption("data-file.thin-mode", "false");
-  const auto tracking = options.find("row-tracking.enabled");
-  VELOX_USER_CHECK(
-      tracking != options.end() &&
-          (tracking->second == "true" || tracking->second == "false"),
-      "Paimon profile requires explicit boolean 'row-tracking.enabled'; "
-      "provide normalized options because defaults are not resolved by the reader");
-  // TODO: Normalize and validate supported query options before applying them
-  // to the scan; retaining them in the handle does not implement their effects.
-  VELOX_USER_CHECK(
-      queryOptions_.empty(),
-      "Paimon same-schema append profile does not support query options; "
-      "query-option interpretation is not implemented yet");
-  // TODO: Extend logical-type support with file mapping, filter and partition
-  // conversion coverage. This whitelist is not a Paimon type-system limit.
-  for (const auto& field : schema_->metadata().children) {
-    const auto& type = field.logicalType;
-    VELOX_USER_CHECK(
-        type == "BOOLEAN" || type == "INTEGER" || type == "BIGINT" ||
-            type == "DOUBLE" || type == "VARCHAR",
-        "Unsupported Paimon same-schema append logical type '{}'; the current "
-        "reader is limited to BOOLEAN, INTEGER, BIGINT, DOUBLE and VARCHAR",
-        type);
-  }
-  for (const auto& name : schema_->rowType()->names()) {
-    VELOX_USER_CHECK(
-        name != "_ROW_ID" && name != "_SEQUENCE_NUMBER" &&
-            name != "_VALUE_KIND" && name != "_LEVEL" && name != "rowkind" &&
-            !name.starts_with("_KEY_"),
-        "Reserved Paimon field name '{}' in target schema",
-        name);
-  }
-}
-
-void PaimonTableHandle::validateColumn(const FileColumnHandle& column) const {
-  const auto index = columnIndex(*schema_, column.name());
-  const auto& type = schema_->rowType()->childAt(index);
-  VELOX_USER_CHECK(
-      column.schemaType() && *column.schemaType() == *type,
-      "Paimon column schema type does not match target schema: '{}'",
-      column.name());
-  const auto id = *schema_->metadata().children[index].fieldId;
-  const auto& partitions = schema_->partitionKeys();
-  const bool partition =
-      std::find(partitions.begin(), partitions.end(), id) != partitions.end();
-  const auto role = partition
-      ? FileColumnHandle::ColumnType::kPartitionKey
-      : FileColumnHandle::ColumnType::kRegular;
-  VELOX_USER_CHECK_EQ(
-      column.columnType(),
-      role,
-      "Paimon column role does not match target schema: '{}'",
-      column.name());
-  // TODO: Bind extraction outputs and filters separately from schema inputs.
-  VELOX_USER_CHECK(
-      column.extractions().empty(),
-      "Paimon same-schema append profile does not support column extractions; "
-      "extraction input/output binding is not implemented yet");
-  VELOX_USER_CHECK(
-      column.dataType() && *column.dataType() == *type,
-      "Paimon column output type does not match target schema: '{}'",
-      column.name());
-  for (const auto& path : column.requiredSubfields()) {
-    schema_->fieldIdPath(path);
-  }
-}
-
-void PaimonTableHandle::validateFileSchema(const RowTypePtr& fileType) const {
-  VELOX_USER_CHECK_NOT_NULL(fileType, "Missing Paimon file schema");
-  // TODO: Resolve per-file historical schemas by schema ID and field ID before
-  // accepting evolved names, types or layouts instead of this fixed schema.
-  auto expectedType = dataColumns_;
-  for (auto id : schema_->partitionKeys()) {
-    if (fileType->containsChild(
-            schema_->rowType()->nameOf(schema_->fieldIndexPath(id).front()))) {
-      // Ordinary Paimon files may retain the physical partition columns.
-      // The split remains authoritative for their values during adaptation.
-      expectedType = schema_->rowType();
-      break;
-    }
-  }
-  VELOX_USER_CHECK_GE(
-      fileType->size(),
-      expectedType->size(),
-      "Paimon file schema contradicts same-schema append profile");
-  for (column_index_t i = 0; i < expectedType->size(); ++i) {
-    VELOX_USER_CHECK(
-        fileType->nameOf(i) == expectedType->nameOf(i) &&
-            *fileType->childAt(i) == *expectedType->childAt(i),
-        "Paimon file schema contradicts target column '{}'",
-        expectedType->nameOf(i));
-  }
-  const auto extraColumns = fileType->size() - expectedType->size();
-  VELOX_USER_CHECK(
-      extraColumns == 0 ||
-          (schema_->options().at("row-tracking.enabled") == "true" &&
-           extraColumns == 2 &&
-           fileType->nameOf(expectedType->size()) == "_ROW_ID" &&
-           fileType->nameOf(expectedType->size() + 1) == "_SEQUENCE_NUMBER" &&
-           *fileType->childAt(expectedType->size()) == *BIGINT() &&
-           *fileType->childAt(expectedType->size() + 1) == *BIGINT()),
-      "Paimon file layout contradicts same-schema append profile");
-}
-
-void PaimonTableHandle::validateSplit(const PaimonConnectorSplit& split) const {
-  VELOX_USER_CHECK_EQ(
-      split.connectorId,
-      connectorId(),
-      "Paimon split connector does not match table handle");
-  VELOX_USER_CHECK_EQ(
-      split.tableType(),
-      tableType(),
-      "Paimon split table type does not match table schema");
-  VELOX_USER_CHECK(
-      split.rawConvertible(),
-      "Paimon same-schema append profile requires rawConvertible=true");
-  for (const auto& file : split.dataFiles()) {
-    VELOX_USER_CHECK(
-        !file.deletionFile,
-        "Paimon same-schema append profile does not support deletion vectors; "
-        "position-based deletion filtering is not implemented yet");
-    VELOX_USER_CHECK_EQ(
-        file.type,
-        PaimonDataFile::Type::kData,
-        "Paimon same-schema append profile requires data files; changelog "
-        "reading is not implemented yet");
-  }
-  const auto& partitions = split.partitionKeys();
-  VELOX_USER_CHECK_EQ(
-      partitions.size(),
-      schema_->partitionKeys().size(),
-      "Paimon split partition names do not match table schema");
-  for (auto id : schema_->partitionKeys()) {
-    const auto index = schema_->fieldIndexPath(id).front();
-    const auto& name = schema_->rowType()->nameOf(index);
-    const auto it = partitions.find(name);
-    VELOX_USER_CHECK(
-        it != partitions.end(),
-        "Missing Paimon split partition '{}' declared by table schema",
-        name);
-    if (!it->second) {
-      VELOX_USER_CHECK(
-          schema_->metadata().children[index].nullable,
-          "NULL Paimon partition '{}' is not nullable in target schema",
-          name);
-    }
-  }
+const std::unordered_map<std::string, std::string>&
+PaimonTableHandle::tableParameters() const {
+  // Native Paimon options are not file-reader parameters such as skip-header.
+  static const std::unordered_map<std::string, std::string> kEmpty;
+  return kEmpty;
 }
 
 std::string PaimonTableHandle::toString() const {
   return fmt::format(
-      "PaimonTableHandle[table {}, schemaId {}, tableType {}, readProfile {}, dataColumns {}, "
+      "PaimonTableHandle[table {}, schemaId {}, tableType {}, dataColumns {}, "
       "sampleRate {}]",
       tableName_,
-      schema_->schemaId(),
-      tableType(),
-      kSameSchemaAppendBatch,
+      schemaId_,
+      tableType_,
       dataColumns_->toString(),
       sampleRate_);
 }
@@ -395,10 +170,18 @@ folly::dynamic PaimonTableHandle::serialize() const {
   obj["version"] = kSerdeVersion;
   obj["tableName"] = tableName_;
   obj["dbName"] = dbName_;
-  obj["schema"] = schema_->serialize();
-  obj["readProfile"] = std::string(kSameSchemaAppendBatch);
+  obj["schemaId"] = schemaId_;
+  obj["rowType"] = rowType_->serialize();
+  obj["fieldIds"] = ISerializable::serialize(fieldIds_);
+  obj["tableType"] = paimonTableTypeString(tableType_);
+  obj["partitionKeys"] = ISerializable::serialize(partitionKeys_);
+  obj["options"] = folly::dynamic::object;
+  for (const auto& [key, value] : options_) {
+    obj["options"][key] = value;
+  }
   obj["subfieldFilters"] = folly::dynamic::array;
   for (const auto& [subfield, filter] : subfieldFilters_) {
+    VELOX_USER_CHECK_NOT_NULL(filter, "Missing Paimon subfield filter");
     obj["subfieldFilters"].push_back(
         folly::dynamic::object("subfield", serializeSubfield(subfield))(
             "filter", filter->serialize()));
@@ -407,20 +190,17 @@ folly::dynamic PaimonTableHandle::serialize() const {
                                             : folly::dynamic(nullptr);
   obj["filterColumnHandles"] = folly::dynamic::array;
   for (const auto& handle : filterColumnHandles_) {
+    VELOX_USER_CHECK_NOT_NULL(handle, "Missing Paimon filter column handle");
     VELOX_USER_CHECK(
         !handle->postProcessor(),
         "Paimon filter column callbacks cannot be serialized");
-    // TODO: Preserve required-subfield path elements in PaimonColumnHandle wire.
+    // FileColumnHandle wire currently stores required subfields as strings.
     for (const auto& path : handle->requiredSubfields()) {
       VELOX_USER_CHECK(
           common::Subfield(path.toString()) == path,
           "Paimon filter column required subfields cannot be serialized by name");
     }
     obj["filterColumnHandles"].push_back(handle->serialize());
-  }
-  obj["queryOptions"] = folly::dynamic::object;
-  for (const auto& [key, value] : queryOptions_) {
-    obj["queryOptions"][key] = value;
   }
   obj["sampleRate"] = sampleRate_;
   return obj;
@@ -429,25 +209,13 @@ folly::dynamic PaimonTableHandle::serialize() const {
 ConnectorTableHandlePtr PaimonTableHandle::create(
     const folly::dynamic& obj,
     void* context) {
-  VELOX_USER_CHECK(obj.isObject(), "Expected Paimon table handle object");
   VELOX_USER_CHECK(
       obj.at("version").isInt() && obj.at("version").asInt() == kSerdeVersion,
       "Unsupported Paimon table handle wire version");
-  for (const auto* key : {"name", "connectorId", "tableName", "dbName"}) {
-    VELOX_USER_CHECK(obj.at(key).isString(), "Expected Paimon string: {}", key);
-  }
-  VELOX_USER_CHECK_EQ(
-      obj.at("name").getString(), "PaimonTableHandle", "Invalid handle name");
-  auto schema = PaimonSchema::create(obj.at("schema"));
-  VELOX_USER_CHECK(
-      obj.at("readProfile").isString() &&
-          obj.at("readProfile").getString() == kSameSchemaAppendBatch,
-      "Unsupported Paimon read profile");
   common::SubfieldFilters filters;
   VELOX_USER_CHECK(
       obj.at("subfieldFilters").isArray(), "Expected Paimon filter array");
   for (const auto& entry : obj.at("subfieldFilters")) {
-    VELOX_USER_CHECK(entry.isObject(), "Expected Paimon filter entry");
     auto path = deserializeSubfield(entry.at("subfield"));
     auto filter =
         ISerializable::deserialize<common::Filter>(entry.at("filter"));
@@ -463,38 +231,32 @@ ConnectorTableHandlePtr PaimonTableHandle::create(
     VELOX_USER_CHECK_NOT_NULL(
         remainingFilter, "Invalid Paimon remaining filter");
   }
-  std::vector<FileColumnHandlePtr> filterColumnHandles;
+  std::vector<FileColumnHandlePtr> filterColumns;
   VELOX_USER_CHECK(
       obj.at("filterColumnHandles").isArray(),
       "Expected Paimon filter column handle array");
   for (const auto& handle : obj.at("filterColumnHandles")) {
-    filterColumnHandles.push_back(
+    filterColumns.push_back(
         ISerializable::deserialize<FileColumnHandle>(handle, context));
   }
-  VELOX_USER_CHECK(
-      obj.at("queryOptions").isObject(),
-      "Expected Paimon query options object");
-  std::unordered_map<std::string, std::string> queryOptions;
-  for (const auto& [key, value] : obj.at("queryOptions").items()) {
-    VELOX_USER_CHECK(
-        key.isString() && value.isString(),
-        "Paimon query options must be strings");
-    queryOptions.emplace(key.asString(), value.asString());
+  std::unordered_map<std::string, std::string> options;
+  for (const auto& [key, value] : obj.at("options").items()) {
+    options.emplace(key.asString(), value.asString());
   }
-  const auto& sampleRate = obj.at("sampleRate");
-  VELOX_USER_CHECK(
-      sampleRate.isDouble() || sampleRate.isInt(),
-      "Expected Paimon numeric sample rate");
   return std::make_shared<PaimonTableHandle>(
       obj.at("connectorId").asString(),
       obj.at("tableName").asString(),
-      std::move(schema),
-      ReadProfile::kSameSchemaAppendBatch,
+      ISerializable::deserialize<int64_t>(obj.at("schemaId")),
+      ISerializable::deserialize<RowType>(obj.at("rowType"), context),
+      ISerializable::deserialize<std::vector<int32_t>>(obj.at("fieldIds")),
+      paimonTableTypeFromString(obj.at("tableType").asString()),
+      ISerializable::deserialize<std::vector<std::string>>(
+          obj.at("partitionKeys")),
+      std::move(options),
       std::move(filters),
       std::move(remainingFilter),
-      std::move(filterColumnHandles),
-      std::move(queryOptions),
-      sampleRate.asDouble(),
+      std::move(filterColumns),
+      obj.at("sampleRate").asDouble(),
       obj.at("dbName").asString());
 }
 

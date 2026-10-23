@@ -23,7 +23,7 @@ namespace facebook::velox::connector::hive::paimon {
 
 /// Sequential multi-file reader for rawConvertible Paimon splits. Files are
 /// opened lazily and advanced through EOF or legal empty files. The required
-/// PaimonTableHandle checks the physical footer against the fixed schema
+/// PaimonTableHandle supplies the fixed schema checked against each footer
 /// before column adaptation; split values supply the partition constants.
 /// Deletion vectors and changelog files are rejected before reading.
 class PaimonSplitReader : public FileSplitReader {
@@ -82,6 +82,9 @@ class PaimonSplitReader : public FileSplitReader {
   // reader is exhausted, advances to the next non-empty file. Returns true
   // if a reader is ready, false when all files are exhausted.
   bool ensureFileSplitReader();
+
+  // Checks the current same-schema physical layout before column adaptation.
+  void checkFileSchema(const RowTypePtr& fileType) const;
 
   // Cleans up the current file reader after it is exhausted and advances
   // currentFileIndex_ so ensureFileSplitReader() opens the next file.

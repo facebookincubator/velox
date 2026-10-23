@@ -25,8 +25,9 @@ class PaimonConnectorSplit;
 
 /// Paimon-specific data source that extends FileDataSource.
 ///
-/// Requires PaimonTableHandle to validate the fixed table schema,
-/// same-schema append batch profile and query metadata.
+/// Consumes PaimonTableHandle's fixed table definition and enforces the current
+/// same-schema append reader limits. Generic query binding stays in
+/// FileDataSource.
 class PaimonDataSource : public FileDataSource {
  public:
   PaimonDataSource(
