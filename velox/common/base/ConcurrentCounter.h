@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <folly/hash/Hash.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <new>
@@ -106,8 +107,11 @@ class ConcurrentCounter {
   };
 
   size_t shardIndex() const {
-    const size_t hash =
-        std::hash<std::thread::id>{}(std::this_thread::get_id());
+    // Mix the hash before masking: some standard libraries (e.g. libc++) hash
+    // a thread id to its raw, aligned value, whose low bits are identical
+    // across threads and would send every thread to the same shard.
+    const size_t hash = folly::hash::twang_mix64(
+        std::hash<std::thread::id>{}(std::this_thread::get_id()));
     const size_t index = hash & shardMask_;
     VELOX_DCHECK_LT(index, counters_.size());
     return index;
