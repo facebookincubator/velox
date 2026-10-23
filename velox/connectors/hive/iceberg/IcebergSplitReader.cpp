@@ -24,6 +24,7 @@
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/config/Config.h"
 #include "velox/common/encode/Base64.h"
+#include "velox/connectors/hive/ConstantFromString.h"
 #include "velox/connectors/hive/FileConfig.h"
 #include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
 #include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
@@ -937,7 +938,8 @@ void IcebergSplitReader::configureEqualityDeleteColumns() {
         connectorQueryCtx_->memoryPool(),
         fileConfig_->readTimestampPartitionValueAsLocalTime(
             connectorQueryCtx_->sessionProperties()),
-        isDaysSinceEpoch);
+        isDaysSinceEpoch,
+        adjustTimestampToTimezone_ ? sessionTimezone_ : nullptr);
     extraSpecs[i]->setConstantValue(constant);
     // Keeps 'adaptColumns' from clearing the constant when the file also
     // carries the column: the value must come from the partition metadata.
@@ -1317,7 +1319,8 @@ std::vector<TypePtr> IcebergSplitReader::adaptColumns(
           iter->second,
           connectorQueryCtx_->memoryPool(),
           readTimestampAsLocalTime,
-          false);
+          false,
+          adjustTimestampToTimezone_ ? sessionTimezone_ : nullptr);
       childSpec->setConstantValue(constant);
     } else {
       auto fileTypeIdx = fileType->getChildIdxIfExists(fieldName);
@@ -1443,7 +1446,8 @@ std::vector<TypePtr> IcebergSplitReader::adaptColumns(
                 it->second->initialDefaultValue().value(),
                 connectorQueryCtx_->memoryPool(),
                 /*isLocalTimestamp=*/false,
-                /*isDaysSinceEpoch=*/false));
+                /*isDaysSinceEpoch=*/false,
+                adjustTimestampToTimezone_ ? sessionTimezone_ : nullptr));
           } else {
             // Fall back to NULL if no default value.
             VELOX_CHECK_NOT_NULL(
