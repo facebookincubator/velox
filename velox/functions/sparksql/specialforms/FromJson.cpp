@@ -41,31 +41,23 @@ struct JsonRowSchemaInfo {
   // index.
   uint64_t key;
 
-  // Indicates if all field names in this row are ASCII (for optimized
-  // case-insensitive comparison).
-  // True if all field names in this row are ASCII, enabling optimized lowercase
-  // conversion.
-  bool allFieldsAreAscii;
-
   // Shared pointer to a vector indicating which fields are missing in the
   // current JSON object.
   std::shared_ptr<std::vector<bool>> isFieldMissing;
 
-  // Maps lowercased field names to their column indices for fast lookup.
+  // Maps field names to their column indices for fast lookup. Names are
+  // matched exactly (case-sensitively), as Spark does.
   folly::F14FastMap<std::string, column_index_t> fieldIndices;
 
-  // Maps lowercased field names to their node index in the schema tree for fast
-  // lookup.
+  // Maps field names to their node index in the schema tree for fast lookup.
   folly::F14FastMap<std::string, column_index_t> nodeIndices;
 
   JsonRowSchemaInfo(
       uint64_t key,
-      bool allFieldsAreAscii,
       std::shared_ptr<std::vector<bool>>&& isFieldMissing,
       folly::F14FastMap<std::string, column_index_t>&& fieldIndices,
       folly::F14FastMap<std::string, column_index_t>&& nodeIndices)
       : key(key),
-        allFieldsAreAscii(allFieldsAreAscii),
         isFieldMissing(std::move(isFieldMissing)),
         fieldIndices(std::move(fieldIndices)),
         nodeIndices(std::move(nodeIndices)) {}
@@ -354,11 +346,8 @@ struct ExtractJsonTypeImpl {
           if (!field.value().is_null()) {
             SIMDJSON_ASSIGN_OR_RAISE(key, field.unescaped_key(true));
 
-            if (schemaInfo.allFieldsAreAscii) {
-              folly::toLowerAscii(key);
-            } else {
-              boost::algorithm::to_lower(key);
-            }
+            // Spark matches JSON keys against schema field names
+            // case-sensitively, independent of spark.sql.caseSensitive.
             auto it = fieldIndices.find(key);
             if (it != fieldIndices.end() && isFieldMissing->at(it->second)) {
               const auto index = it->second;
@@ -720,23 +709,13 @@ class FromJsonFunction final : public exec::VectorFunction {
       }
       case TypeKind::ROW: {
         const auto& rowType = asRowType(type);
-        const auto& names = rowType->names();
-        bool allFieldsAreAscii =
-            std::all_of(names.begin(), names.end(), [](const auto& name) {
-              return functions::stringCore::isAscii(name.data(), name.size());
-            });
         auto isFieldMissing = std::make_shared<std::vector<bool>>();
         isFieldMissing->resize(rowType->size(), true);
         folly::F14FastMap<std::string, column_index_t> fieldIndices;
         folly::F14FastMap<std::string, column_index_t> nodeIndices;
         const auto size = rowType->size();
         for (auto i = 0; i < size; ++i) {
-          std::string key = rowType->nameOf(i);
-          if (allFieldsAreAscii) {
-            folly::toLowerAscii(key);
-          } else {
-            boost::algorithm::to_lower(key);
-          }
+          const std::string& key = rowType->nameOf(i);
           fieldIndices[key] = i;
           nodeIndices[key] = constructRowSchemaInfoMap(type->childAt(i), index);
         }
@@ -744,7 +723,6 @@ class FromJsonFunction final : public exec::VectorFunction {
             nodeKey,
             JsonRowSchemaInfo(
                 nodeKey,
-                allFieldsAreAscii,
                 std::move(isFieldMissing),
                 std::move(fieldIndices),
                 std::move(nodeIndices)));
