@@ -57,6 +57,7 @@ add_executable(
   IntervalArithmeticTest.cpp
   JsonArrayLengthTest.cpp
   JsonObjectKeysTest.cpp
+  LastWinTest.cpp
   LeastGreatestTest.cpp
   LuhnCheckTest.cpp
   MakeDecimalTest.cpp
