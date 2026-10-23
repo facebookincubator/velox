@@ -47,6 +47,7 @@ velox_add_library(
   LastWin.cpp
   LeastGreatest.cpp
   Map.cpp
+  MapFromEntries.cpp
   RegexFunctions.cpp
   Size.cpp
   String.cpp
@@ -93,6 +94,7 @@ velox_add_library(
   LeastGreatest.h
   LuhnCheckFunction.h
   MakeTimestamp.h
+  MapFromEntries.h
   MaskFunction.h
   MightContain.h
   MonotonicallyIncreasingId.h
