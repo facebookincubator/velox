@@ -50,6 +50,13 @@ struct InputBatchRef {
   /// Number of rows from this batch that are still in-flight or pending output.
   /// When this reaches 0, the batch can be released.
   int64_t activeRowCount{0};
+
+  /// Function arguments for the batch, kept so a capacity retry can dispatch
+  /// its row again. Empty unless capacity retries are enabled.
+  std::vector<VectorPtr> arguments;
+
+  /// Row count of 'arguments'.
+  vector_size_t numRows{0};
 };
 
 /// Shared state between RPCOperator's driver thread and RPC completion
@@ -70,7 +77,7 @@ struct InputBatchRef {
 ///   Lower tail latency for high-variance workloads (e.g., LLM inference).
 /// - BATCH: All rows in a batch complete before emitting. Lower overhead
 ///   for uniform-latency workloads.
-class RPCState {
+class RPCState : public std::enable_shared_from_this<RPCState> {
  public:
   // ===== Data structures =====
 
@@ -123,6 +130,40 @@ class RPCState {
     /// Round-trip latency (nanos) from dispatch to completion, used as the
     /// gradient congestion signal on success.
     int64_t rttNs{0};
+  };
+
+  /// A row whose attempt was rejected for capacity, waiting to be admitted and
+  /// dispatched again.
+  struct RetryRow {
+    int64_t rowId{0};
+    RowLocation location;
+    /// Monotonic time (nanos) of the row's first attempt; the retry budget
+    /// counts from here.
+    int64_t firstAttemptNs{0};
+    /// Number of attempts made so far.
+    int32_t numAttempts{0};
+    /// Monotonic time (nanos) before which the row must not be dispatched.
+    int64_t notBeforeNs{0};
+    /// Monotonic time (nanos) after which no retry may start. A row still
+    /// waiting then fails with 'error'.
+    int64_t deadlineNs{0};
+    /// The rejection the row fails with if its budget runs out.
+    velox::rpc::RpcError error;
+    /// Admission epoch of the rejected attempt, whose overload the shared
+    /// limiter already handled.
+    std::optional<uint64_t> admissionEpoch;
+  };
+
+  /// Overload feedback from rejected attempts that went to the retry queue
+  /// instead of to output. The driver applies it to its window before
+  /// dispatching more work.
+  struct RetryFeedback {
+    /// True when at least one attempt was rejected since the last take.
+    bool overloaded{false};
+    /// True when the shared limiter already applied the overload.
+    bool sharedOverloadHandled{false};
+    /// Newest admission epoch among those attempts.
+    std::optional<uint64_t> admissionEpoch;
   };
 
   /// Pairs completed responses with their query-pool memory charge.
@@ -207,6 +248,8 @@ class RPCState {
     // counter, so this is the only value that moves while a backend is
     // trickling responses back.
     int64_t numCompletionsSignaled{0};
+    // Rejected attempts sent back for another admission.
+    int64_t numCapacityRetries{0};
   };
 
   explicit RPCState(std::shared_ptr<memory::MemoryPool> pool)
@@ -250,6 +293,12 @@ class RPCState {
   /// Get the current streaming mode.
   RPCStreamingMode streamingMode() const;
 
+  /// Retry PER_ROW capacity rejections that carry a retry hint instead of
+  /// completing them. Must be called before any dispatch.
+  void setCapacityRetryEnabled(bool enabled) {
+    capacityRetryEnabled_.store(enabled, std::memory_order_relaxed);
+  }
+
   /// Set both the starting limit and the ceiling to maxWindow, overriding the
   /// per-mode default chosen in setStreamingMode(). This yields a fixed window
   /// only while no samples/errors are fed: onUnitError still halves it and
@@ -270,6 +319,18 @@ class RPCState {
   /// Get the flattened columns for a stored input batch. Thread-safe.
   /// Returns by value to avoid returning a reference that outlives the lock.
   std::vector<VectorPtr> getInputBatchColumns(int32_t batchIndex) const;
+
+  /// Keep 'arguments' for the stored batch so its rows can be dispatched
+  /// again. Released together with the batch's columns. Thread-safe.
+  void setInputBatchArguments(
+      int32_t batchIndex,
+      std::vector<VectorPtr> arguments,
+      vector_size_t numRows);
+
+  /// Returns the arguments kept by setInputBatchArguments() and their row
+  /// count. Returns by value so nothing outlives the lock. Thread-safe.
+  std::pair<std::vector<VectorPtr>, vector_size_t> inputBatchArguments(
+      int32_t batchIndex) const;
 
   /// Release rows from an input batch. Thread-safe.
   /// When all rows are released, the batch columns are freed.
@@ -319,6 +380,29 @@ class RPCState {
       RowLocation location,
       folly::SemiFuture<RPCResponse> future,
       std::shared_ptr<RPCRateLimiter::AdmissionLease> admissionLease = nullptr);
+
+  /// Dispatches a capacity retry claimed by takeDueRetries(). Same contract as
+  /// addPendingRow(), carrying the row's first-attempt time and attempt count.
+  void addRetriedRow(
+      std::shared_ptr<RPCState> selfPtr,
+      const RetryRow& retry,
+      folly::SemiFuture<RPCResponse> future,
+      std::shared_ptr<RPCRateLimiter::AdmissionLease> admissionLease);
+
+  /// Returns the number of retry rows whose wait has elapsed. Thread-safe.
+  int64_t numDueRetries() const;
+
+  /// Returns true when any row waits for a capacity retry. Thread-safe.
+  bool hasRetries() const;
+
+  /// Removes and returns up to 'maxRows' retry rows whose wait has elapsed.
+  /// Due rows whose budget has run out are completed with their rejection
+  /// instead, and are not counted in 'maxRows'. Thread-safe.
+  std::vector<RetryRow> takeDueRetries(int64_t maxRows);
+
+  /// Returns and clears the overload feedback of rejected attempts.
+  /// Thread-safe.
+  RetryFeedback takeRetryFeedback();
 
   /// Atomically tries to claim a ready row, detect completion, distinguish an
   /// idle state that only backend admission can advance, or wait for an
@@ -456,6 +540,51 @@ class RPCState {
   OperatorSnapshot operatorSnapshot() const;
 
  private:
+  // tryClaimOrWait() under mutex_. Sets 'retryWakeDelayNs' when the caller
+  // must arm a retry wake-up timer after releasing the lock.
+  ClaimResult claimOrRegisterWaiter(
+      ContinueFuture* future,
+      std::optional<ReadyRow>* claimedRow,
+      std::optional<int64_t>& retryWakeDelayNs);
+
+  // Admission and retry bookkeeping for one per-row RPC in flight.
+  struct PendingRow {
+    // Admission held until completion classifies the response.
+    std::shared_ptr<RPCRateLimiter::AdmissionLease> lease;
+    // Monotonic time (nanos) of the row's first attempt.
+    int64_t firstAttemptNs{0};
+    // Attempts made so far, including the one in flight.
+    int32_t numAttempts{1};
+  };
+
+  // Registers a pending row and attaches its completion callbacks.
+  void addPendingRowImpl(
+      std::shared_ptr<RPCState> selfPtr,
+      int64_t rowId,
+      RowLocation location,
+      folly::SemiFuture<RPCResponse> future,
+      PendingRow&& pendingRow);
+
+  // Returns the delay until the earliest retry is due when no wake-up timer
+  // already covers it, and records the new timer deadline. Must be called with
+  // mutex_ held.
+  std::optional<int64_t> takeRetryWakeDelayNsLocked();
+
+  // Wakes waiting drivers after 'delayNs', so a driver parked with only
+  // retries outstanding dispatches them on time. Must be called without
+  // mutex_.
+  void scheduleRetryWake(int64_t delayNs);
+
+  // Timer callback for scheduleRetryWake().
+  void onRetryWake();
+
+  // True when no more input will come and no row is in flight or waiting for
+  // a retry. Must be called with mutex_ held.
+  bool allDispatchedWorkDoneLocked() const;
+
+  // Completes retry rows whose budget ran out with their last rejection.
+  void failExpiredRetries(std::vector<RetryRow> expired);
+
   // Moves a completed row into readyRows_ and notifies waiters. Called from
   // the RPC completion callback, which runs on an executor thread.
   void completeRow(
@@ -496,8 +625,22 @@ class RPCState {
   std::deque<ReadyRow> readyRows_;
   // Owns admission while each per-row RPC is in flight. Completion finalizes
   // the lease before queuing ReadyRow; close releases unresolved leases.
-  folly::F14FastMap<int64_t, std::shared_ptr<RPCRateLimiter::AdmissionLease>>
-      pendingRowAdmissionLeases_;
+  folly::F14FastMap<int64_t, PendingRow> pendingRows_;
+  // Set once before dispatch, read by the driver and by completion callbacks.
+  // Atomic so the setter needs no lock.
+  std::atomic<bool> capacityRetryEnabled_{false};
+  // Rows rejected for capacity that wait for their retry. They count toward
+  // the finish condition but not toward inFlight_, so they hold no window or
+  // admission slot. They have not been output, so their input batch's
+  // activeRowCount still includes them and its arguments stay available.
+  std::vector<RetryRow> retryRows_;
+  // Overload feedback of rejected attempts, taken by the driver.
+  RetryFeedback retryFeedback_;
+  // Rejected attempts sent back for another admission.
+  int64_t numCapacityRetries_{0};
+  // Deadline (nanos) of the armed retry wake-up timer, or 0 when none is
+  // armed.
+  int64_t retryWakeDeadlineNs_{0};
 
   // BATCH state
   int64_t nextBatchId_{0};

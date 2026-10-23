@@ -189,6 +189,15 @@ class AsyncRPCFunction {
     return false;
   }
 
+  /// Whether this function may return a capacity rejection with a retry hint
+  /// (RPCResponse::capacityRetry()). Only then does the PER_ROW operator keep
+  /// each input batch's arguments and retry hinted rows through the shared
+  /// limiter; otherwise a hinted row completes with its error. Read once,
+  /// after initialize().
+  virtual bool mayReturnCapacityRetries() const {
+    return false;
+  }
+
   /// Returns the adaptive-window floor requested by the resolved backend.
   /// The operator seals it on the limiter identified by admissionKey(). A
   /// positive legacy session override takes precedence; zero delegates here.

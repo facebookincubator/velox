@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <chrono>
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
@@ -291,6 +292,17 @@ struct RpcError {
   std::string message;
 };
 
+/// Asks the caller to retry a capacity rejection itself. The function returns
+/// this instead of retrying internally, so the caller can give back the
+/// request's admission slot while it waits and admit the retry again.
+struct CapacityRetry {
+  /// How long to wait before the next attempt.
+  std::chrono::milliseconds retryAfter{0};
+  /// How long, from the row's first attempt, the row may keep retrying. A
+  /// retry that would start after this fails with the response's error.
+  std::chrono::milliseconds budget{0};
+};
+
 /// Carries the framework-visible correlation and outcome of a response.
 ///
 /// A response is a payload or an error, never both and never neither. The
@@ -334,10 +346,21 @@ struct RPCResponse {
     } else {
       result_ = RpcPayload{std::forward<T>(payload)};
     }
+    capacityRetry_.reset();
   }
 
   /// Stores a typed failure and rejects the non-error sentinel.
   void setError(RPCErrorKind kind, std::string errorMessage);
+
+  /// Marks an overload error as retryable by the caller. Only valid after
+  /// setError() with a kind in RPCErrorCategory::kOverload. The caller ignores
+  /// the hint unless it was configured to retry capacity rejections.
+  void setCapacityRetry(CapacityRetry retry);
+
+  /// Returns the caller-retry hint, if the function set one.
+  const std::optional<CapacityRetry>& capacityRetry() const {
+    return capacityRetry_;
+  }
 
   /// Returns true if this response represents an error.
   bool hasError() const {
@@ -373,6 +396,8 @@ struct RPCResponse {
   // is filled, so a longer one would put a heap allocation on the per-row path.
   folly::Expected<RpcPayload, RpcError> result_{
       folly::makeUnexpected(RpcError{RPCErrorKind::kUnset, "unset response"})};
+  // Set only on an overload error; cleared whenever the outcome changes.
+  std::optional<CapacityRetry> capacityRetry_;
 };
 
 /// Returns the checked sum of bytes retained by a response collection.

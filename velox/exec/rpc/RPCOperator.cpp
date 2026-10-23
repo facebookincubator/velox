@@ -32,6 +32,22 @@ namespace facebook::velox::exec::rpc {
 namespace {
 constexpr int64_t kLegacyFixedLimit{200};
 constexpr int64_t kDefaultAdaptiveHardLimit{1'000'000};
+
+// Bounds a per-row future by 'timeout' and stamps 'rowId' on its response.
+folly::SemiFuture<RPCResponse> wrapRowFuture(
+    folly::SemiFuture<RPCResponse> future,
+    int64_t rowId,
+    std::chrono::milliseconds timeout) {
+  return std::move(future)
+      .within(timeout)
+      .deferValue([rowId](RPCResponse resp) {
+        resp.rowId = rowId;
+        return resp;
+      })
+      .deferError([](folly::exception_wrapper error) {
+        return folly::makeSemiFuture<RPCResponse>(std::move(error));
+      });
+}
 } // namespace
 
 RPCOperator::RPCOperator(
@@ -140,6 +156,10 @@ void RPCOperator::initialize() {
   const auto& queryConfig = driverCtx->queryConfig();
   function_->initialize(
       queryConfig, inputTypes, constantInputs, rpcNode_->streamingMode());
+  capacityRetryEnabled_ =
+      rpcNode_->streamingMode() == RPCStreamingMode::kPerRow &&
+      function_->mayReturnCapacityRetries();
+  state_->setCapacityRetryEnabled(capacityRetryEnabled_);
   shrinkOncePerLimitCut_ = function_->shrinkWindowOncePerLimitCut();
   requiresRowInspectionBeforeAdmission_ =
       function_->requiresRowInspectionBeforeAdmission();
@@ -331,6 +351,10 @@ void RPCOperator::addInput(RowVectorPtr input) {
     pendingCursor_ = 0;
     pendingBatchIndex_ = state_->storeInputBatch(
         std::move(flattenedColumns), static_cast<int64_t>(pendingNumRows_));
+    if (capacityRetryEnabled_) {
+      state_->setInputBatchArguments(
+          pendingBatchIndex_, pendingArgs_, pendingNumRows_);
+    }
     dispatchRowsUnderAdmission();
   } else {
     // BATCH: function accumulates typed data internally.
@@ -354,7 +378,61 @@ void RPCOperator::addInput(RowVectorPtr input) {
   }
 }
 
+void RPCOperator::dispatchDueRetries() {
+  const auto feedback = state_->takeRetryFeedback();
+  if (feedback.overloaded) {
+    recordCongestion(
+        AsyncRPCFunction::CongestionSignal::kOverloaded,
+        /*roundTripTimesNs=*/{},
+        /*successUnitsByEpoch=*/{},
+        feedback.sharedOverloadHandled,
+        feedback.admissionEpoch);
+  }
+  // Fails rows past their budget now, even when no slot is free below.
+  state_->takeDueRetries(0);
+  while (true) {
+    const int64_t want =
+        std::min(state_->dispatchHeadroom(), state_->numDueRetries());
+    if (want <= 0) {
+      return;
+    }
+    auto reserved = limiter_->tryAcquireUpTo(want);
+    if (reserved.empty()) {
+      return;
+    }
+    // Rows past their budget fail instead of dispatching, so the take can
+    // return fewer rows than were reserved. Each unused token in 'reserved'
+    // releases its slot when destroyed at the end of this iteration.
+    const auto retries =
+        state_->takeDueRetries(static_cast<int64_t>(reserved.size()));
+    for (size_t i = 0; i < retries.size(); ++i) {
+      const auto& retry = retries[i];
+      auto [arguments, numRows] =
+          state_->inputBatchArguments(retry.location.batchIndex);
+      SelectivityVector row(numRows, false);
+      row.setValid(retry.location.rowIndex, true);
+      row.updateBounds();
+      auto futures = function_->dispatchPerRow(row, arguments);
+      VELOX_CHECK_EQ(
+          futures.size(),
+          1,
+          "dispatchPerRow returned {} futures for one retried row",
+          futures.size());
+      for (auto& [_, future] : futures) {
+        state_->addRetriedRow(
+            state_,
+            retry,
+            wrapRowFuture(std::move(future), retry.rowId, kBatchRpcTimeout),
+            limiter_->makeLease(std::move(reserved[i])));
+      }
+    }
+  }
+}
+
 void RPCOperator::dispatchRowsUnderAdmission() {
+  if (capacityRetryEnabled_) {
+    dispatchDueRetries();
+  }
   while (hasPendingRows()) {
     // Both the per-driver window and shared admission capacity must have room.
     const int64_t windowHeadroom = state_->dispatchHeadroom();
@@ -399,21 +477,11 @@ void RPCOperator::dispatchRowsUnderAdmission() {
       // applies canonical overload feedback and releases admission.
       auto admissionLease =
           limiter_->makeLease(std::move(reserved[reservedIndex++]));
-      auto wrapped =
-          std::move(future)
-              .within(kBatchRpcTimeout)
-              .deferValue([rowId](RPCResponse resp) {
-                resp.rowId = rowId;
-                return resp;
-              })
-              .deferError([](folly::exception_wrapper error) {
-                return folly::makeSemiFuture<RPCResponse>(std::move(error));
-              });
       state_->addPendingRow(
           state_,
           rowId,
           RPCState::RowLocation{pendingBatchIndex_, originalRowIndex},
-          std::move(wrapped),
+          wrapRowFuture(std::move(future), rowId, kBatchRpcTimeout),
           std::move(admissionLease));
     }
     pendingCursor_ += numRowsInChunk;
@@ -1071,7 +1139,8 @@ std::optional<exec::BlockingReason> RPCOperator::tryClaimOrParkOnRow(
       return park(future, std::move(waitFuture), /*isBackpressure=*/false);
     case RPCState::ClaimResult::kIdle:
       VELOX_CHECK(
-          hasPendingRows(), "PER_ROW state is idle with no undispatched input");
+          hasPendingRows() || state_->numDueRetries() > 0,
+          "PER_ROW state is idle with no undispatched input");
       return parkOnAdmission(future);
     case RPCState::ClaimResult::kFinished:
       return std::nullopt;
@@ -1121,11 +1190,13 @@ exec::BlockingReason RPCOperator::blockedInPerRow(ContinueFuture* future) {
   }
 
   // Nothing ready. With buffered rows and no local RPC in flight, only shared
-  // admission can wake this operator.
-  if (state_->numInFlight() > 0 || hasUndispatchableWork()) {
+  // admission can wake this operator. Rows waiting for a capacity retry park
+  // on the state, which wakes the driver when the first one is due.
+  const bool hasRetries = state_->hasRetries();
+  if (state_->numInFlight() > 0 || hasRetries || hasUndispatchableWork()) {
     // Prefer this driver's own completion; the admission queue depends on
     // another operator releasing capacity.
-    if (state_->numInFlight() > 0) {
+    if (state_->numInFlight() > 0 || hasRetries) {
       if (auto reason = tryClaimOrParkOnRow(future)) {
         return reason.value();
       }
@@ -1441,6 +1512,10 @@ void RPCOperator::recordRuntimeStats() {
       lockedStats->addRuntimeStat(
           kRpcCongestionOverloadShrinks,
           RuntimeCounter(snapshot.numOverloadShrinks));
+    }
+    if (snapshot.numCapacityRetries > 0) {
+      lockedStats->addRuntimeStat(
+          kRpcCapacityRetries, RuntimeCounter(snapshot.numCapacityRetries));
     }
     if (snapshot.baselineRttNs > 0) {
       lockedStats->addRuntimeStat(
