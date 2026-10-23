@@ -182,6 +182,29 @@ class AsyncRPCFunction {
     return 0;
   }
 
+  /// Whether the operator halves its congestion window at most once per
+  /// decrease of the shared rate limit, instead of once per output group that
+  /// drains an overload. Read once, after initialize().
+  virtual bool shrinkWindowOncePerLimitCut() const {
+    return false;
+  }
+
+  /// Whether this function may return a capacity rejection with a retry hint
+  /// (RPCResponse::capacityRetry()). Only then does the PER_ROW operator keep
+  /// each input batch's arguments and retry hinted rows through the shared
+  /// limiter; otherwise a hinted row completes with its error. Read once,
+  /// after initialize().
+  virtual bool mayReturnCapacityRetries() const {
+    return false;
+  }
+
+  /// Whether the backend's shared rate limit grows back quickly after a run of
+  /// decreases (RPCRateLimiter::Config::fastRecovery). Like the floor and
+  /// ceiling, the first query to reach the backend fixes it.
+  virtual bool fastLimitRecovery() const {
+    return false;
+  }
+
   /// Returns the adaptive-window floor requested by the resolved backend.
   /// The operator seals it on the limiter identified by admissionKey(). A
   /// positive legacy session override takes precedence; zero delegates here.

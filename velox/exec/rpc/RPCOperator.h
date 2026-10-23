@@ -134,6 +134,8 @@ class RPCOperator : public exec::Operator {
   static inline const std::string kRpcCongestionShrinks{"rpcCongestionShrinks"};
   static inline const std::string kRpcCongestionOverloadShrinks{
       "rpcCongestionOverloadShrinks"};
+  /// Attempts rejected for capacity and admitted again for another attempt.
+  static inline const std::string kRpcCapacityRetries{"rpcCapacityRetries"};
   static inline const std::string kRpcBaselineRttNanos{"rpcBaselineRttNanos"};
   static inline const std::string kRpcPeakInFlight{"rpcPeakInFlight"};
   static inline const std::string kRpcRttMinWallNanos{"rpcRttMinWallNanos"};
@@ -278,11 +280,14 @@ class RPCOperator : public exec::Operator {
   // window and the shared admission cap. They must back off together: a
   // rate-limit storm is low-latency, so the latency gradient alone is blind to
   // it and only the error verdict makes the window shrink.
+  // 'overloadedRowsEpoch' is the newest admission epoch among the rows whose
+  // overload the shared limiter already handled.
   void recordCongestion(
       AsyncRPCFunction::CongestionSignal signal,
       const std::vector<int64_t>& roundTripTimesNs,
       const std::vector<std::pair<uint64_t, int64_t>>& successUnitsByEpoch,
-      bool sharedOverloadHandled);
+      bool sharedOverloadHandled,
+      std::optional<uint64_t> overloadedRowsEpoch);
 
   // isBlocked() decomposed. Each returns the reason to hand the driver; the
   // try* helpers return nullopt when the state reports finished, which the
@@ -319,6 +324,11 @@ class RPCOperator : public exec::Operator {
   // rate-limiter headroom). Called from addInput()/getOutput()/isBlocked() so a
   // whole input vector is dripped at the sustainable rate instead of blasted.
   void dispatchRowsUnderAdmission();
+
+  // Applies the window feedback of rejected attempts, then dispatches the
+  // retries that are due, ahead of new rows. Each retry takes a window slot
+  // and a fresh admission slot.
+  void dispatchDueRetries();
 
   // Whether the PER_ROW dispatch buffer still has undispatched rows.
   bool hasPendingRows() const {
@@ -362,6 +372,14 @@ class RPCOperator : public exec::Operator {
   // Process-scoped controller for admissionKey_, resolved before the first
   // dispatch; outlives this operator.
   RPCRateLimiter* limiter_{nullptr};
+  // From AsyncRPCFunction::shrinkWindowOncePerLimitCut().
+  bool shrinkOncePerLimitCut_{false};
+  // PER_ROW and AsyncRPCFunction::mayReturnCapacityRetries().
+  bool capacityRetryEnabled_{false};
+  // Newest admission epoch whose overloads already halved this driver's
+  // window. An epoch is the span between two decreases of the shared limit;
+  // each row records the epoch it was admitted in.
+  std::optional<uint64_t> windowShrunkForEpoch_;
 
   // Precomputed per-argument sources, in call()->inputs() order. Built once in
   // initialize() by walking the RPC call's argument expressions. A

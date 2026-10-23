@@ -203,6 +203,153 @@ TEST_F(RPCStateTest, claimReportsIdleWithoutCreatingAWaiter) {
   EXPECT_FALSE(claimedRow.has_value());
 }
 
+// A hinted rejection goes to the retry queue instead of to output. A due row
+// is handed back for dispatch while its budget lasts; once the budget has run
+// out it fails with its rejection instead.
+TEST_F(RPCStateTest, capacityRetryDispatchesOnlyWithinBudget) {
+  state_->setStreamingMode(RPCStreamingMode::kPerRow);
+  state_->setCapacityRetryEnabled(true);
+  auto addRejected = [&](int64_t rowId, std::chrono::milliseconds budget) {
+    auto response = RPCResponse::failed(
+        rowId, velox::rpc::RPCErrorKind::kRateLimited, "rejected");
+    response.setCapacityRetry(
+        {.retryAfter = std::chrono::milliseconds(0), .budget = budget});
+    state_->addPendingRow(
+        state_,
+        rowId,
+        RPCState::RowLocation{0, 0},
+        folly::makeSemiFuture(std::move(response)));
+    waitFor([&]() { return state_->numInFlight() == 0; });
+  };
+
+  {
+    addRejected(1, std::chrono::seconds(60));
+    EXPECT_TRUE(state_->hasRetries());
+    EXPECT_FALSE(state_->tryClaimReady().has_value());
+    const auto retries = state_->takeDueRetries(1);
+    ASSERT_EQ(retries.size(), 1);
+    EXPECT_EQ(retries[0].rowId, 1);
+    EXPECT_EQ(retries[0].numAttempts, 1);
+  }
+
+  {
+    addRejected(2, std::chrono::milliseconds(20));
+    /* sleep override */
+    std::this_thread::sleep_for(std::chrono::milliseconds(30));
+    EXPECT_TRUE(state_->takeDueRetries(1).empty());
+    EXPECT_FALSE(state_->hasRetries());
+    const auto failed = state_->tryClaimReady();
+    ASSERT_TRUE(failed.has_value());
+    EXPECT_EQ(failed->rowId, 2);
+    EXPECT_EQ(
+        failed->response.errorKind(), velox::rpc::RPCErrorKind::kRateLimited);
+    EXPECT_EQ(failed->response.error().message, "rejected");
+    EXPECT_TRUE(failed->sharedOverloadHandled);
+  }
+}
+
+// A row past its budget fails as soon as the driver claims, without waiting
+// for an admission slot to dispatch it.
+TEST_F(RPCStateTest, expiredCapacityRetryFailsOnClaim) {
+  state_->setStreamingMode(RPCStreamingMode::kPerRow);
+  state_->setCapacityRetryEnabled(true);
+  auto rejected = RPCResponse::failed(
+      1, velox::rpc::RPCErrorKind::kRateLimited, "rejected");
+  rejected.setCapacityRetry(
+      {.retryAfter = std::chrono::milliseconds(0),
+       .budget = std::chrono::milliseconds(20)});
+  state_->addPendingRow(
+      state_,
+      1,
+      RPCState::RowLocation{0, 0},
+      folly::makeSemiFuture(std::move(rejected)));
+  waitFor([&]() { return state_->hasRetries(); });
+  /* sleep override */
+  std::this_thread::sleep_for(std::chrono::milliseconds(30));
+
+  ContinueFuture waitFuture{ContinueFuture::makeEmpty()};
+  std::optional<RPCState::ReadyRow> claimedRow;
+  ASSERT_EQ(
+      state_->tryClaimOrWait(&waitFuture, &claimedRow),
+      RPCState::ClaimResult::kClaimed);
+  EXPECT_EQ(
+      claimedRow->response.errorKind(), velox::rpc::RPCErrorKind::kRateLimited);
+  EXPECT_FALSE(state_->hasRetries());
+}
+
+// A row waiting for a retry keeps its input batch, and the arguments needed to
+// dispatch it again, even after every other row of the batch was output.
+TEST_F(RPCStateTest, capacityRetryKeepsBatchArgumentsAfterSiblingsOutput) {
+  state_->setStreamingMode(RPCStreamingMode::kPerRow);
+  state_->setCapacityRetryEnabled(true);
+  const auto batchIndex = state_->storeInputBatch({}, 2);
+  state_->setInputBatchArguments(
+      batchIndex,
+      {BaseVector::createConstant(
+          BIGINT(), variant(int64_t{1}), 2, testPool().get())},
+      2);
+
+  auto rejected = RPCResponse::failed(
+      1, velox::rpc::RPCErrorKind::kRateLimited, "rejected");
+  rejected.setCapacityRetry(
+      {.retryAfter = std::chrono::milliseconds(0),
+       .budget = std::chrono::seconds(60)});
+  state_->addPendingRow(
+      state_,
+      1,
+      RPCState::RowLocation{batchIndex, 0},
+      folly::makeSemiFuture(std::move(rejected)));
+  state_->addPendingRow(
+      state_,
+      2,
+      RPCState::RowLocation{batchIndex, 1},
+      folly::makeSemiFuture(RPCResponse::ok(2, makeTextPayload("served"))));
+  waitFor([&]() { return state_->numInFlight() == 0; });
+
+  // The served sibling is output and released.
+  ASSERT_TRUE(state_->tryClaimReady().has_value());
+  state_->releaseRows(batchIndex, 1);
+
+  ASSERT_TRUE(state_->hasRetries());
+  const auto [arguments, numRows] = state_->inputBatchArguments(batchIndex);
+  EXPECT_EQ(arguments.size(), 1);
+  EXPECT_EQ(numRows, 2);
+}
+
+// Closing with rows queued for a retry drops them, and a retry wake-up timer
+// that fires afterwards finds nothing to do.
+TEST_F(RPCStateTest, closeDropsQueuedCapacityRetries) {
+  auto state = std::make_shared<RPCState>(testPool());
+  state->setStreamingMode(RPCStreamingMode::kPerRow);
+  state->setCapacityRetryEnabled(true);
+  auto rejected = RPCResponse::failed(
+      1, velox::rpc::RPCErrorKind::kRateLimited, "rejected");
+  rejected.setCapacityRetry(
+      {.retryAfter = std::chrono::milliseconds(20),
+       .budget = std::chrono::seconds(60)});
+  state->addPendingRow(
+      state,
+      1,
+      RPCState::RowLocation{0, 0},
+      folly::makeSemiFuture(std::move(rejected)));
+  waitFor([&]() { return state->hasRetries(); });
+
+  // Park on the state so a wake-up timer is armed for the queued retry.
+  ContinueFuture waitFuture{ContinueFuture::makeEmpty()};
+  std::optional<RPCState::ReadyRow> claimedRow;
+  ASSERT_EQ(
+      state->tryClaimOrWait(&waitFuture, &claimedRow),
+      RPCState::ClaimResult::kMustWait);
+
+  state->close();
+  EXPECT_FALSE(state->hasRetries());
+  EXPECT_TRUE(state->takeDueRetries(1).empty());
+  // close() fulfilled the waiter; the timer firing later is harmless.
+  std::move(waitFuture).wait(std::chrono::seconds(5));
+  /* sleep override */
+  std::this_thread::sleep_for(std::chrono::milliseconds(50));
+}
+
 TEST_F(RPCStateTest, completedRowReleasesAdmissionBeforeDriverOutput) {
   state_->setStreamingMode(RPCStreamingMode::kPerRow);
   auto limiter = std::make_shared<RPCRateLimiter>("test.row.admission");

@@ -714,6 +714,63 @@ TEST_F(RPCRateLimiterTest, adaptiveMultiplicativeDecrease) {
   EXPECT_EQ(limiterFor(backend).stats().capacity, 4);
 }
 
+// A run of decreases from 64 to 1 recovers to 64 within about six round trips
+// of successes with fast recovery, where additive increase alone reaches 11.
+TEST_F(RPCRateLimiterTest, fastRecoveryReturnsToWindowBeforeDecreases) {
+  auto recover = [](bool fastRecovery) {
+    auto limiter = std::make_shared<RPCRateLimiter>("test.fast.recovery");
+    limiter->configure(
+        RPCRateLimiter::Config{
+            .adaptive = true,
+            .ceiling = 64,
+            .floor = 1,
+            .decreaseFactor = 0.5,
+            .fastRecovery = fastRecovery,
+        });
+    for (int i = 0; i < 6; ++i) {
+      limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+    }
+    EXPECT_EQ(limiter->stats().capacity, 1);
+    // One round trip at window w returns w successes: 1 + 2 + ... + 32.
+    for (int64_t window = 1; window < 64; window *= 2) {
+      limiter->onOutcome(RPCRateLimiter::Outcome::kSuccess, window);
+    }
+    return limiter->stats().capacity;
+  };
+
+  EXPECT_EQ(recover(true), 64);
+  EXPECT_EQ(recover(false), 11);
+}
+
+// A decrease after partial recovery lowers the target by the decrease factor,
+// but not below the window reached, so recovery aims lower than before.
+TEST_F(RPCRateLimiterTest, fastRecoveryLowersTargetAfterFailedRecovery) {
+  auto limiter =
+      std::make_shared<RPCRateLimiter>("test.fast.recovery.retarget");
+  limiter->configure(
+      RPCRateLimiter::Config{
+          .adaptive = true,
+          .ceiling = 64,
+          .floor = 1,
+          .decreaseFactor = 0.5,
+          .fastRecovery = true,
+      });
+  // 64 -> 32 -> 16, then back up to 24 before the next decrease.
+  limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  limiter->onOutcome(RPCRateLimiter::Outcome::kSuccess, 8);
+  EXPECT_EQ(limiter->stats().capacity, 24);
+  // The target falls from 64 to max(24, 64 * 0.5) = 32.
+  limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  EXPECT_EQ(limiter->stats().capacity, 12);
+
+  limiter->onOutcome(RPCRateLimiter::Outcome::kSuccess, 20);
+  EXPECT_EQ(limiter->stats().capacity, 32);
+  // Past the target, growth is additive again.
+  limiter->onOutcome(RPCRateLimiter::Outcome::kSuccess, 32);
+  EXPECT_EQ(limiter->stats().capacity, 32);
+}
+
 TEST_F(RPCRateLimiterTest, adaptiveStartsBelowLargeHardLimit) {
   auto limiter = std::make_shared<RPCRateLimiter>("test.large-hard-limit");
   limiter->configure(

@@ -37,6 +37,10 @@
 /// off -- a low-water mark below the ceiling; the final cap sitting above that
 /// low-water mark proves recovery.
 
+#include <mutex>
+#include <optional>
+
+#include <folly/futures/Future.h>
 #include <gtest/gtest.h>
 
 #include "velox/common/base/Exceptions.h"
@@ -90,6 +94,13 @@ class BurstFunctionBase : public AsyncRPCFunction {
     std::chrono::milliseconds latency{std::chrono::milliseconds(1)};
     // Non-empty so the process-global rate limiter is keyed on a real backend.
     std::string backend{"layer2.test.backend"};
+    // Returned from shrinkWindowOncePerLimitCut().
+    bool shrinkWindowOncePerLimitCut{false};
+    // Returned from fastLimitRecovery().
+    bool fastLimitRecovery{false};
+    // Attach a retry hint to burst errors and declare it in
+    // mayReturnCapacityRetries().
+    bool hintBurstErrors{false};
   };
 
   explicit BurstFunctionBase(Config config) : config_{std::move(config)} {}
@@ -115,6 +126,18 @@ class BurstFunctionBase : public AsyncRPCFunction {
 
   std::string admissionKey() const override {
     return config_.backend;
+  }
+
+  bool shrinkWindowOncePerLimitCut() const override {
+    return config_.shrinkWindowOncePerLimitCut;
+  }
+
+  bool mayReturnCapacityRetries() const override {
+    return config_.hintBurstErrors;
+  }
+
+  bool fastLimitRecovery() const override {
+    return config_.fastLimitRecovery;
   }
 
   // Overload failures produce kOverloaded. A null-input error is a user error
@@ -255,7 +278,9 @@ class BurstBatchRPCFunction : public BurstFunctionBase {
     // The simulator decides only whether each call fails; the function owns
     // the response it builds from that verdict.
     return simulator_->nextBatch(count).deferValue(
-        [prompts = std::move(prompts)](std::vector<RPCErrorKind> kinds) {
+        [prompts = std::move(prompts),
+         hintBurstErrors =
+             config_.hintBurstErrors](std::vector<RPCErrorKind> kinds) {
           std::vector<RPCResponse> responses;
           responses.reserve(kinds.size());
           for (size_t i = 0; i < kinds.size(); ++i) {
@@ -264,6 +289,11 @@ class BurstBatchRPCFunction : public BurstFunctionBase {
             response.rowId = static_cast<int64_t>(i);
             if (kinds[i] != RPCErrorKind::kNone) {
               response.setError(kinds[i], "simulated backend overload");
+              if (hintBurstErrors) {
+                response.setCapacityRetry(
+                    {.retryAfter = std::chrono::milliseconds(1),
+                     .budget = std::chrono::seconds(60)});
+              }
             } else {
               response.setPayload(makeTextPayload("burst: " + prompts[i]));
             }
@@ -279,6 +309,166 @@ class BurstBatchRPCFunction : public BurstFunctionBase {
 
  private:
   std::vector<std::string> pending_;
+};
+
+// A backend that serves at most 'capacity' calls at once and rejects the rest
+// with kRateLimited. Capacity steps from 'lowCapacity' to 'highCapacity' after
+// 'stepAfterSuccesses' calls succeed, like a service whose new copies come up
+// during the query.
+class CapacityBackend {
+ public:
+  struct Config {
+    int32_t lowCapacity{3};
+    int32_t highCapacity{3};
+    int64_t stepAfterSuccesses{0};
+  };
+
+  explicit CapacityBackend(Config config) : config_{config} {}
+
+  // Admits a call when capacity allows. Counts every attempt.
+  bool tryEnter() {
+    std::lock_guard<std::mutex> l(mutex_);
+    ++numAttempts_;
+    const auto capacity = numSuccesses_ >= config_.stepAfterSuccesses &&
+            config_.stepAfterSuccesses > 0
+        ? config_.highCapacity
+        : config_.lowCapacity;
+    if (numInFlight_ >= capacity) {
+      return false;
+    }
+    ++numInFlight_;
+    return true;
+  }
+
+  void exit() {
+    std::lock_guard<std::mutex> l(mutex_);
+    --numInFlight_;
+    ++numSuccesses_;
+  }
+
+  int64_t numAttempts() const {
+    std::lock_guard<std::mutex> l(mutex_);
+    return numAttempts_;
+  }
+
+ private:
+  const Config config_;
+  mutable std::mutex mutex_;
+  int32_t numInFlight_{0};
+  int64_t numSuccesses_{0};
+  int64_t numAttempts_{0};
+};
+
+// PER_ROW function over a CapacityBackend. With 'returnHints' it returns each
+// rejection with a retry hint, as a transport does when the operator owns
+// capacity retries; otherwise it retries internally while the row holds its
+// admission slot.
+class CapacityRPCFunction : public AsyncRPCFunction {
+ public:
+  struct Config {
+    std::string name;
+    std::string backend;
+    CapacityBackend::Config capacity;
+    std::chrono::milliseconds latency{20};
+    std::chrono::milliseconds retryAfter{5};
+    std::chrono::milliseconds retryBudget{60'000};
+    bool returnHints{false};
+    // Returned from mayReturnCapacityRetries(). Unset means 'returnHints'.
+    std::optional<bool> declareHints;
+  };
+
+  explicit CapacityRPCFunction(Config config) : config_{std::move(config)} {}
+
+  void initialize(
+      const core::QueryConfig& /*queryConfig*/,
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const std::vector<VectorPtr>& /*constantInputs*/,
+      RPCStreamingMode /*instruction*/) override {
+    backend_ = std::make_shared<CapacityBackend>(config_.capacity);
+    lastBackend() = backend_;
+  }
+
+  std::string name() const override {
+    return config_.name;
+  }
+
+  TypePtr resultType() const override {
+    return VARCHAR();
+  }
+
+  std::string admissionKey() const override {
+    return config_.backend;
+  }
+
+  bool mayReturnCapacityRetries() const override {
+    return config_.declareHints.value_or(config_.returnHints);
+  }
+
+  std::vector<std::pair<vector_size_t, folly::SemiFuture<RPCResponse>>>
+  dispatchPerRow(
+      const SelectivityVector& rows,
+      const std::vector<VectorPtr>& /*args*/) override {
+    std::vector<std::pair<vector_size_t, folly::SemiFuture<RPCResponse>>>
+        results;
+    rows.applyToSelected([&](vector_size_t row) {
+      results.emplace_back(row, attempt(backend_, config_));
+    });
+    return results;
+  }
+
+  CongestionSignal evaluateCongestion(
+      const std::vector<RPCResponse>& responses) const override {
+    for (const auto& response : responses) {
+      if (response.hasError()) {
+        return CongestionSignal::kOverloaded;
+      }
+    }
+    return responses.empty() ? CongestionSignal::kNone
+                             : CongestionSignal::kSuccess;
+  }
+
+  VectorPtr buildOutput(
+      const std::vector<RPCResponse>& responses,
+      memory::MemoryPool* pool) const override {
+    return buildTextOutput(responses, pool);
+  }
+
+  // The backend of the most recently initialized function, for assertions.
+  static std::shared_ptr<CapacityBackend>& lastBackend() {
+    static std::shared_ptr<CapacityBackend> backend;
+    return backend;
+  }
+
+ private:
+  static folly::SemiFuture<RPCResponse> attempt(
+      std::shared_ptr<CapacityBackend> backend,
+      Config config) {
+    if (backend->tryEnter()) {
+      return folly::futures::sleep(config.latency)
+          .deferValue([backend](folly::Unit) {
+            backend->exit();
+            RPCResponse response;
+            response.setPayload(makeTextPayload("served"));
+            return response;
+          });
+    }
+    if (config.returnHints) {
+      auto response = RPCResponse::failed(
+          0, RPCErrorKind::kRateLimited, "simulated capacity rejection");
+      response.setCapacityRetry(
+          {.retryAfter = config.retryAfter, .budget = config.retryBudget});
+      return folly::makeSemiFuture(std::move(response));
+    }
+    const auto retryAfter = config.retryAfter;
+    return folly::futures::sleep(retryAfter)
+        .deferValue([backend = std::move(backend),
+                     config = std::move(config)](folly::Unit) mutable {
+          return attempt(std::move(backend), std::move(config));
+        });
+  }
+
+  const Config config_;
+  std::shared_ptr<CapacityBackend> backend_;
 };
 
 class RPCAimdUnderLoadTest : public OperatorTestBase {
@@ -299,6 +489,13 @@ class RPCAimdUnderLoadTest : public OperatorTestBase {
   static constexpr int64_t kMaxLimit = 64;
   static constexpr int64_t kMinLimit = 4;
   static constexpr int64_t kMaxWindow = 32;
+  // Shorter than the window, so every failing call is admitted before the
+  // first failure completes: one overload wave.
+  static constexpr int32_t kShortBurstRows = 8;
+  // Rows sent to a backend whose capacity steps up halfway through.
+  static constexpr int32_t kCapacityStepRows = 200;
+  // Rows sent to a backend that rejects every call.
+  static constexpr int32_t kCapacityExhaustedRows = 8;
 
   static void SetUpTestCase() {
     OperatorTestBase::SetUpTestCase();
@@ -309,7 +506,10 @@ class RPCAimdUnderLoadTest : public OperatorTestBase {
           return std::make_shared<BurstRPCFunction>(BurstRPCFunction::Config{
               /*burstFirstCall=*/kWarmupRows,
               /*burstLastCall=*/kWarmupRows + kBurstRows,
-              /*burstKind=*/RPCErrorKind::kRateLimited});
+              /*burstKind=*/RPCErrorKind::kRateLimited,
+              /*latency=*/std::chrono::milliseconds(1),
+              /*backend=*/"layer2.test.backend",
+              /*shrinkWindowOncePerLimitCut=*/true});
         },
         varcharSignature());
     AsyncRPCFunctionRegistry::registerFunction(
@@ -325,6 +525,42 @@ class RPCAimdUnderLoadTest : public OperatorTestBase {
         },
         varcharSignature());
     AsyncRPCFunctionRegistry::registerFunction(
+        "short_burst_rpc",
+        [] {
+          return std::make_shared<BurstRPCFunction>(BurstRPCFunction::Config{
+              /*burstFirstCall=*/kWarmupRows,
+              /*burstLastCall=*/kWarmupRows + kShortBurstRows,
+              /*burstKind=*/RPCErrorKind::kRateLimited,
+              /*latency=*/std::chrono::milliseconds(1),
+              /*backend=*/"layer2.test.short.backend"});
+        },
+        varcharSignature());
+    AsyncRPCFunctionRegistry::registerFunction(
+        "fast_recovery_rpc",
+        [] {
+          return std::make_shared<BurstRPCFunction>(BurstRPCFunction::Config{
+              /*burstFirstCall=*/kWarmupRows,
+              /*burstLastCall=*/kWarmupRows + kShortBurstRows,
+              /*burstKind=*/RPCErrorKind::kRateLimited,
+              /*latency=*/std::chrono::milliseconds(1),
+              /*backend=*/"layer2.test.fast.recovery.backend",
+              /*shrinkWindowOncePerLimitCut=*/false,
+              /*fastLimitRecovery=*/true});
+        },
+        varcharSignature());
+    AsyncRPCFunctionRegistry::registerFunction(
+        "short_burst_once_rpc",
+        [] {
+          return std::make_shared<BurstRPCFunction>(BurstRPCFunction::Config{
+              /*burstFirstCall=*/kWarmupRows,
+              /*burstLastCall=*/kWarmupRows + kShortBurstRows,
+              /*burstKind=*/RPCErrorKind::kRateLimited,
+              /*latency=*/std::chrono::milliseconds(1),
+              /*backend=*/"layer2.test.short.backend",
+              /*shrinkWindowOncePerLimitCut=*/true});
+        },
+        varcharSignature());
+    AsyncRPCFunctionRegistry::registerFunction(
         "backend_error_rpc",
         [] {
           return std::make_shared<BurstRPCFunction>(BurstRPCFunction::Config{
@@ -333,6 +569,79 @@ class RPCAimdUnderLoadTest : public OperatorTestBase {
               /*burstKind=*/RPCErrorKind::kBackendError,
               /*latency=*/std::chrono::milliseconds(1),
               /*backend=*/"layer2.test.backend.error"});
+        },
+        varcharSignature());
+    AsyncRPCFunctionRegistry::registerFunction(
+        "capacity_step_rpc",
+        [] {
+          return std::make_shared<CapacityRPCFunction>(
+              CapacityRPCFunction::Config{
+                  .name = "capacity_step_rpc",
+                  .backend = "layer2.test.capacity.step.backend",
+                  .capacity =
+                      {
+                          .lowCapacity = 3,
+                          .highCapacity = 10,
+                          .stepAfterSuccesses = kCapacityStepRows / 2,
+                      },
+              });
+        },
+        varcharSignature());
+    AsyncRPCFunctionRegistry::registerFunction(
+        "capacity_step_hint_rpc",
+        [] {
+          return std::make_shared<CapacityRPCFunction>(
+              CapacityRPCFunction::Config{
+                  .name = "capacity_step_hint_rpc",
+                  .backend = "layer2.test.capacity.step.backend",
+                  .capacity =
+                      {
+                          .lowCapacity = 3,
+                          .highCapacity = 10,
+                          .stepAfterSuccesses = kCapacityStepRows / 2,
+                      },
+                  .returnHints = true,
+              });
+        },
+        varcharSignature());
+    AsyncRPCFunctionRegistry::registerFunction(
+        "capacity_undeclared_hint_rpc",
+        [] {
+          return std::make_shared<CapacityRPCFunction>(
+              CapacityRPCFunction::Config{
+                  .name = "capacity_undeclared_hint_rpc",
+                  .backend = "layer2.test.capacity.undeclared.backend",
+                  .capacity = {.lowCapacity = 0, .highCapacity = 0},
+                  .returnHints = true,
+                  .declareHints = false,
+              });
+        },
+        varcharSignature());
+    AsyncRPCFunctionRegistry::registerFunction(
+        "burst_batch_hint_rpc",
+        [] {
+          return std::make_shared<BurstBatchRPCFunction>(
+              BurstRPCFunction::Config{
+                  .burstFirstCall = kWarmupRows,
+                  .burstLastCall = kWarmupRows + kBurstRows,
+                  .burstKind = RPCErrorKind::kRateLimited,
+                  .backend = "layer2.test.batch.hint.backend",
+                  .hintBurstErrors = true,
+              });
+        },
+        varcharSignature());
+    AsyncRPCFunctionRegistry::registerFunction(
+        "capacity_exhausted_rpc",
+        [] {
+          return std::make_shared<CapacityRPCFunction>(
+              CapacityRPCFunction::Config{
+                  .name = "capacity_exhausted_rpc",
+                  .backend = "layer2.test.capacity.exhausted.backend",
+                  .capacity = {.lowCapacity = 0, .highCapacity = 0},
+                  .retryAfter = std::chrono::milliseconds(10),
+                  .retryBudget = std::chrono::milliseconds(50),
+                  .returnHints = true,
+              });
         },
         varcharSignature());
     AsyncRPCFunctionRegistry::registerFunction(
@@ -477,9 +786,11 @@ TEST_F(RPCAimdUnderLoadTest, windowAndRateLimiterBackOffThenRecover) {
   EXPECT_EQ(statSum(RPCOperator::kRpcErrorKindRateLimited), kBurstRows);
   EXPECT_GT(statSum(RPCOperator::kRpcCongestionOverloadShrinks), 0);
 
-  // (2) Overload -> the per-driver congestion window shrank at least once
-  //     (this stat is only emitted when numShrinks > 0).
+  // (2) Overload -> the per-driver congestion window shrank (this stat is only
+  //     emitted when numShrinks > 0). The burst outlasts the window, so rows
+  //     admitted after each decrease fail again and shrink it again.
   EXPECT_GT(statSum(RPCOperator::kRpcCongestionShrinks), 0);
+  EXPECT_GT(statSum(RPCOperator::kRpcCongestionOverloadShrinks), 1);
 
   // (3) Overload -> this backend's rate-limiter cap backed off below its
   //     ceiling. rpcRateLimiterMinCap lands on every query, so presence alone
@@ -494,6 +805,237 @@ TEST_F(RPCAimdUnderLoadTest, windowAndRateLimiterBackOffThenRecover) {
   //     the final cap climbed back above the low-water mark.
   const int64_t finalCap = statSum(RPCOperator::kRpcRateLimiterCap);
   EXPECT_GT(finalCap, minCap) << "cap should recover above its low-water mark";
+}
+
+// Every failing call of a short burst is admitted under one limiter epoch, and
+// the failures drain across several output groups. The shared limiter
+// decreases once for them. When the function asks for it, the per-driver
+// window halves once too; otherwise once per output group.
+TEST_F(RPCAimdUnderLoadTest, perDriverWindowShrinksOncePerAdmissionEpoch) {
+  std::vector<std::string> storage;
+  storage.reserve(kTotalRows);
+  for (int32_t i = 0; i < kTotalRows; ++i) {
+    storage.push_back("row_" + std::to_string(i));
+  }
+  std::vector<StringView> prompts(storage.begin(), storage.end());
+  auto input = makeRowVector({"prompt"}, {makeFlatVector<StringView>(prompts)});
+
+  auto countOverloadShrinks = [&](const std::string& functionName) {
+    RPCRateLimiterRegistry::global().testingReset();
+    auto plan =
+        makeRPCNode(PlanBuilder().values({input}).planNode(), functionName);
+    std::shared_ptr<Task> task;
+    auto result = AssertQueryBuilder(plan)
+                      .maxDrivers(1)
+                      .config("rpc.ratelimiter.adaptive_enabled", "true")
+                      .config("rpc.ratelimiter.max_limit", kMaxLimit)
+                      .config("rpc.ratelimiter.min_limit", kMinLimit)
+                      .config("rpc.ratelimiter.decrease_factor", "0.5")
+                      .config("rpc.congestion.max_window", kMaxWindow)
+                      .config("rpc.congestion.min_window", 1)
+                      .config(core::QueryConfig::kPreferredOutputBatchRows, "1")
+                      .copyResults(pool(), task);
+    EXPECT_EQ(result->size(), kTotalRows);
+
+    const auto planStats = toPlanStats(task->taskStats());
+    const auto& customStats = planStats.at("rpc-0").customStats;
+    EXPECT_EQ(
+        customStats.at(RPCOperator::kRpcErrorKindRateLimited).sum,
+        kShortBurstRows);
+    return customStats.at(RPCOperator::kRpcCongestionOverloadShrinks).sum;
+  };
+
+  EXPECT_EQ(countOverloadShrinks("short_burst_once_rpc"), 1);
+  EXPECT_GT(countOverloadShrinks("short_burst_rpc"), 1);
+}
+
+// A backend serves 3 calls at once, then 10. When the function returns its
+// rejections with retry hints, each rejected attempt gives back its slot and
+// the shared limit falls toward the backend's capacity, so far fewer attempts
+// are rejected than when the function retries in place while the row holds
+// its slot.
+TEST_F(RPCAimdUnderLoadTest, capacityRetriesBoundAttemptsToCapacity) {
+  std::vector<std::string> storage;
+  storage.reserve(kCapacityStepRows);
+  for (int32_t i = 0; i < kCapacityStepRows; ++i) {
+    storage.push_back("row_" + std::to_string(i));
+  }
+  std::vector<StringView> prompts(storage.begin(), storage.end());
+  auto input = makeRowVector({"prompt"}, {makeFlatVector<StringView>(prompts)});
+
+  struct Run {
+    int64_t numAttempts{0};
+    int64_t numCapacityRetries{0};
+  };
+  auto run = [&](const std::string& functionName) {
+    RPCRateLimiterRegistry::global().testingReset();
+    auto plan =
+        makeRPCNode(PlanBuilder().values({input}).planNode(), functionName);
+    std::shared_ptr<Task> task;
+    auto result = AssertQueryBuilder(plan)
+                      .maxDrivers(1)
+                      .config("rpc.ratelimiter.adaptive_enabled", "true")
+                      .config("rpc.ratelimiter.max_limit", kMaxWindow)
+                      .config("rpc.ratelimiter.min_limit", 1)
+                      .config("rpc.ratelimiter.decrease_factor", "0.5")
+                      .config("rpc.congestion.max_window", kMaxWindow)
+                      .config("rpc.congestion.min_window", 1)
+                      .copyResults(pool(), task);
+    EXPECT_EQ(result->size(), kCapacityStepRows);
+    auto* results = result->childAt(1)->asFlatVector<StringView>();
+    for (vector_size_t i = 0; i < result->size(); ++i) {
+      EXPECT_FALSE(results->isNullAt(i)) << "row " << i << " failed";
+    }
+    const auto planStats = toPlanStats(task->taskStats());
+    const auto& customStats = planStats.at("rpc-0").customStats;
+    const auto it = customStats.find(RPCOperator::kRpcCapacityRetries);
+    return Run{
+        .numAttempts = CapacityRPCFunction::lastBackend()->numAttempts(),
+        .numCapacityRetries = it == customStats.end() ? 0 : it->second.sum,
+    };
+  };
+
+  const auto inPlace = run("capacity_step_rpc");
+  const auto readmitted = run("capacity_step_hint_rpc");
+  EXPECT_EQ(inPlace.numCapacityRetries, 0);
+  EXPECT_GT(readmitted.numCapacityRetries, 0);
+  // Every rejected attempt was readmitted through the operator.
+  EXPECT_EQ(
+      readmitted.numAttempts,
+      kCapacityStepRows + readmitted.numCapacityRetries);
+  EXPECT_LT(readmitted.numAttempts * 2, inPlace.numAttempts)
+      << "in place: " << inPlace.numAttempts
+      << ", readmitted: " << readmitted.numAttempts;
+}
+
+// A row whose retries would outlast its budget fails with the rejection it
+// last got, kRateLimited, as it does when the function retries in place.
+TEST_F(RPCAimdUnderLoadTest, capacityRetriesStopAtBudget) {
+  std::vector<std::string> storage;
+  storage.reserve(kCapacityExhaustedRows);
+  for (int32_t i = 0; i < kCapacityExhaustedRows; ++i) {
+    storage.push_back("row_" + std::to_string(i));
+  }
+  std::vector<StringView> prompts(storage.begin(), storage.end());
+  auto input = makeRowVector({"prompt"}, {makeFlatVector<StringView>(prompts)});
+  auto plan = makeRPCNode(
+      PlanBuilder().values({input}).planNode(), "capacity_exhausted_rpc");
+
+  std::shared_ptr<Task> task;
+  auto result = AssertQueryBuilder(plan)
+                    .maxDrivers(1)
+                    .config("rpc.ratelimiter.min_limit", 1)
+                    .copyResults(pool(), task);
+  ASSERT_EQ(result->size(), kCapacityExhaustedRows);
+  auto* results = result->childAt(1)->asFlatVector<StringView>();
+  for (vector_size_t i = 0; i < result->size(); ++i) {
+    EXPECT_TRUE(results->isNullAt(i));
+  }
+  const auto planStats = toPlanStats(task->taskStats());
+  const auto& customStats = planStats.at("rpc-0").customStats;
+  EXPECT_EQ(
+      customStats.at(RPCOperator::kRpcErrorKindRateLimited).sum,
+      kCapacityExhaustedRows);
+  EXPECT_GT(customStats.at(RPCOperator::kRpcCapacityRetries).sum, 0);
+}
+
+// A function that returns hints without declaring them in
+// mayReturnCapacityRetries() gets today's behavior: each hinted row fails on
+// its first rejection.
+TEST_F(RPCAimdUnderLoadTest, undeclaredCapacityRetriesAreIgnored) {
+  auto input = makeRowVector(
+      {"prompt"}, {makeFlatVector<StringView>({"a", "b", "c", "d"})});
+  auto plan = makeRPCNode(
+      PlanBuilder().values({input}).planNode(), "capacity_undeclared_hint_rpc");
+  std::shared_ptr<Task> task;
+  auto result = AssertQueryBuilder(plan)
+                    .config("rpc.ratelimiter.min_limit", 1)
+                    .copyResults(pool(), task);
+  ASSERT_EQ(result->size(), 4);
+  const auto planStats = toPlanStats(task->taskStats());
+  const auto& customStats = planStats.at("rpc-0").customStats;
+  EXPECT_EQ(customStats.at(RPCOperator::kRpcErrorKindRateLimited).sum, 4);
+  EXPECT_EQ(customStats.count(RPCOperator::kRpcCapacityRetries), 0);
+  EXPECT_EQ(CapacityRPCFunction::lastBackend()->numAttempts(), 4);
+}
+
+// BATCH keeps the function's own retries: hinted rows in a batch fail with
+// their rejection instead of being re-admitted.
+TEST_F(RPCAimdUnderLoadTest, batchIgnoresCapacityRetries) {
+  std::vector<std::string> storage;
+  storage.reserve(kTotalRows);
+  for (int32_t i = 0; i < kTotalRows; ++i) {
+    storage.push_back("row_" + std::to_string(i));
+  }
+  std::vector<StringView> prompts(storage.begin(), storage.end());
+  auto input = makeRowVector({"prompt"}, {makeFlatVector<StringView>(prompts)});
+  auto plan = makeBatchRPCNode(
+      PlanBuilder().values({input}).planNode(), 16, "burst_batch_hint_rpc");
+  std::shared_ptr<Task> task;
+  auto result = AssertQueryBuilder(plan)
+                    .maxDrivers(1)
+                    .config("rpc.ratelimiter.adaptive_enabled", "true")
+                    .config("rpc.ratelimiter.max_limit", kMaxLimit)
+                    .config("rpc.ratelimiter.min_limit", kMinLimit)
+                    .copyResults(pool(), task);
+  ASSERT_EQ(result->size(), kTotalRows);
+  const auto planStats = toPlanStats(task->taskStats());
+  const auto& customStats = planStats.at("rpc-0").customStats;
+  EXPECT_EQ(
+      customStats.at(RPCOperator::kRpcErrorKindRateLimited).sum, kBurstRows);
+  EXPECT_EQ(customStats.count(RPCOperator::kRpcCapacityRetries), 0);
+}
+
+// Several drivers share one backend and one limiter; every row is output
+// exactly once and succeeds.
+TEST_F(RPCAimdUnderLoadTest, capacityRetriesWithSeveralDrivers) {
+  constexpr int32_t kRows = 50;
+  constexpr int32_t kDrivers = 4;
+  std::vector<std::string> storage;
+  storage.reserve(kRows);
+  for (int32_t i = 0; i < kRows; ++i) {
+    storage.push_back("row_" + std::to_string(i));
+  }
+  std::vector<StringView> prompts(storage.begin(), storage.end());
+  auto input = makeRowVector({"prompt"}, {makeFlatVector<StringView>(prompts)});
+  auto plan = makeRPCNode(
+      PlanBuilder().values({input}, /*parallelizable=*/true).planNode(),
+      "capacity_step_hint_rpc");
+  std::shared_ptr<Task> task;
+  auto result = AssertQueryBuilder(plan)
+                    .maxDrivers(kDrivers)
+                    .config("rpc.ratelimiter.adaptive_enabled", "true")
+                    .config("rpc.ratelimiter.max_limit", kMaxWindow)
+                    .config("rpc.ratelimiter.min_limit", 1)
+                    .copyResults(pool(), task);
+  ASSERT_EQ(result->size(), kRows * kDrivers);
+  auto* results = result->childAt(1)->asFlatVector<StringView>();
+  for (vector_size_t i = 0; i < result->size(); ++i) {
+    EXPECT_FALSE(results->isNullAt(i)) << "row " << i << " failed";
+  }
+  const auto planStats = toPlanStats(task->taskStats());
+  EXPECT_GT(
+      planStats.at("rpc-0")
+          .customStats.at(RPCOperator::kRpcCapacityRetries)
+          .sum,
+      0);
+}
+
+// The function's fastLimitRecovery() choice reaches the backend's shared
+// limiter when the first query configures it.
+TEST_F(RPCAimdUnderLoadTest, functionEnablesFastLimitRecovery) {
+  auto input = makeRowVector(
+      {"prompt"}, {makeFlatVector<StringView>({"row_0", "row_1"})});
+  auto plan = makeRPCNode(
+      PlanBuilder().values({input}).planNode(), "fast_recovery_rpc");
+  AssertQueryBuilder(plan)
+      .config("rpc.ratelimiter.adaptive_enabled", "true")
+      .copyResults(pool());
+  EXPECT_TRUE(
+      RPCRateLimiterRegistry::global()
+          .get("layer2.test.fast.recovery.backend")
+          .config()
+          .fastRecovery);
 }
 
 TEST_F(RPCAimdUnderLoadTest, perRowBackendErrorsDoNotBackOff) {
