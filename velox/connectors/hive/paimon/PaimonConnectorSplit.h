@@ -67,10 +67,24 @@ struct fmt::formatter<facebook::velox::connector::hive::paimon::PaimonTableType>
 
 namespace facebook::velox::connector::hive::paimon {
 
-/// Represents a logical Paimon read unit containing one or more data files
-/// from the same partition/bucket, potentially across LSM levels. Carries
-/// the planner-provided snapshot identity, partition values, bucket identity,
-/// file metadata and raw-read eligibility.
+/// Represents a planner-selected Paimon DataSplit: a logical read unit with
+/// one or more files from the same partition/bucket. Unlike a single-file
+/// split, it can group multiple physical files. A bucket may produce several
+/// splits; a split need not contain every file in the bucket.
+///
+/// The planner supplies the file set and its snapshot identity. Files may
+/// span LSM levels; when logical merging is needed, the necessary files must
+/// remain together in the split. This object does not discover files from
+/// storage or select snapshots.
+///
+/// partitionKeys carries this split's partition values, including nulls,
+/// rather than the table's partition column declaration. dataFiles carries
+/// file paths and per-file metadata. PaimonTableHandle separately carries
+/// the table definition and scan conditions.
+///
+/// rawConvertible indicates that the planner-selected files can be read
+/// without logical merging. It does not imply support for every file feature:
+/// deletion vectors and changelog files require their own read semantics.
 class PaimonConnectorSplit : public connector::ConnectorSplit {
  public:
   /// @param connectorId Connector identifier.
