@@ -96,7 +96,10 @@ bool PaimonSplitReader::ensureFileSplitReader() {
     fileSplit_ = fileSplits_[currentFileIndex_];
 
     createReader();
-    VELOX_USER_CHECK_NOT_NULL(baseReader_, "Missing Paimon file reader");
+    VELOX_USER_CHECK_NOT_NULL(
+        baseReader_,
+        "Missing Paimon file reader for '{}'; snapshot files cannot be skipped",
+        fileSplit_->readPath());
     checkFileSchema(baseReader_->rowType());
     auto rowType = getAdaptedRowType();
     if (!checkIfSplitIsEmpty(*runtimeStats_)) {
@@ -136,10 +139,10 @@ void PaimonSplitReader::checkFileSchema(const RowTypePtr& fileType) const {
         expectedType->nameOf(i));
   }
   const auto extraColumns = fileType->size() - expectedType->size();
+  // Ordinary-column scans can ignore physical tracking columns.
   VELOX_USER_CHECK(
       extraColumns == 0 ||
-          (paimonTableHandle_->options().at("row-tracking.enabled") == "true" &&
-           extraColumns == 2 &&
+          (extraColumns == 2 &&
            fileType->nameOf(expectedType->size()) == "_ROW_ID" &&
            fileType->nameOf(expectedType->size() + 1) == "_SEQUENCE_NUMBER" &&
            *fileType->childAt(expectedType->size()) == *BIGINT() &&

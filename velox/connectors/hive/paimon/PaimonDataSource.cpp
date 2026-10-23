@@ -39,69 +39,38 @@ PaimonDataSource::PaimonDataSource(
           connectorQueryCtx,
           paimonConfig),
       paimonTableHandle_(tableHandle) {
-  // TODO: Add the planned PK, DV, DE and thin-file readers when their row and
-  // layout semantics are implemented. These are reader limits, not schema
-  // validity rules; catalog and snapshot planning remain with the caller.
+  // TODO: Add primary-key reading with its planned row semantics.
   VELOX_USER_CHECK(
       tableHandle->tableType() == PaimonTableType::kAppendOnly,
       "Paimon same-schema append reader does not support primary-key tables; "
       "primary-key reading is not implemented yet");
-  const auto& options = tableHandle->options();
-  for (const auto* key :
-       {"deletion-vectors.enabled",
-        "data-evolution.enabled",
-        "data-file.thin-mode"}) {
-    const auto it = options.find(key);
-    VELOX_USER_CHECK(
-        it != options.end() && it->second == "false",
-        "Paimon same-schema append reader requires normalized '{}'='false'; "
-        "the corresponding read semantics are not implemented yet",
-        key);
-  }
-  const auto tracking = options.find("row-tracking.enabled");
-  VELOX_USER_CHECK(
-      tracking != options.end() &&
-          (tracking->second == "true" || tracking->second == "false"),
-      "Paimon reader requires normalized boolean 'row-tracking.enabled'");
 
-  // The input already uses Velox types. Do not introduce a parallel logical
-  // type model to describe capabilities that this reader does not yet expose.
-  for (const auto& type : tableHandle->rowType()->children()) {
+  // ScanSpec includes projected columns and hidden filter dependencies.
+  for (const auto& field : scanSpec_->children()) {
+    const auto& name = field->fieldName();
+    const auto index = tableHandle->rowType()->getChildIdxIfExists(name);
+    VELOX_USER_CHECK(
+        index.has_value(),
+        "Unknown Paimon scan column '{}' in fixed table",
+        name);
+    const auto& type = tableHandle->rowType()->childAt(*index);
     VELOX_USER_CHECK(
         *type == *BOOLEAN() || *type == *INTEGER() || *type == *BIGINT() ||
             *type == *DOUBLE() || *type == *VARCHAR(),
         "Unsupported Paimon same-schema append type '{}'; the current reader "
         "supports BOOLEAN, INTEGER, BIGINT, DOUBLE and VARCHAR",
         type->toString());
+    if (const auto readerIndex = readerOutputType_->getChildIdxIfExists(name)) {
+      VELOX_USER_CHECK(
+          *readerOutputType_->childAt(*readerIndex) == *type,
+          "Paimon scan column '{}' type does not match fixed table",
+          name);
+    }
   }
-  // FileDataSource has resolved assignments and expression dependencies. Check
-  // that actual reader inputs describe the fixed table, without rebinding
-  // query columns by ID or revalidating column roles and expression trees.
-  for (column_index_t i = 0; i < readerOutputType_->size(); ++i) {
-    const auto& name = readerOutputType_->nameOf(i);
-    const auto index = tableHandle->rowType()->getChildIdxIfExists(name);
-    VELOX_USER_CHECK(
-        index.has_value(),
-        "Unknown Paimon scan column '{}' in fixed table",
-        name);
-    VELOX_USER_CHECK(
-        *readerOutputType_->childAt(i) ==
-            *tableHandle->rowType()->childAt(*index),
-        "Paimon scan column '{}' type does not match fixed table",
-        name);
-  }
-  VELOX_USER_CHECK(
-      !paimonConfig->ignoreMissingFiles(connectorQueryCtx->sessionProperties()),
-      "Paimon reader does not support ignore_missing_files; "
-      "missing snapshot files must fail instead of returning incomplete results");
 }
 
 void PaimonDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
   auto paimonSplit = checkedPointerCast<PaimonConnectorSplit>(split);
-  VELOX_USER_CHECK_EQ(
-      paimonSplit->connectorId,
-      paimonTableHandle_->connectorId(),
-      "Paimon split connector does not match table handle");
   VELOX_USER_CHECK_EQ(
       paimonSplit->tableType(),
       paimonTableHandle_->tableType(),
@@ -109,7 +78,7 @@ void PaimonDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
   VELOX_USER_CHECK(
       paimonSplit->rawConvertible(),
       "Paimon same-schema append reader requires rawConvertible=true; "
-      "merge-on-read is not implemented yet");
+      "merge-on-read and data-evolution column merging are not implemented yet");
   for (const auto& file : paimonSplit->dataFiles()) {
     VELOX_USER_CHECK(
         !file.deletionFile,
@@ -120,16 +89,6 @@ void PaimonDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
         PaimonDataFile::Type::kData,
         "Paimon reader requires data files; changelog reading is not implemented yet");
   }
-  const auto& partitions = paimonSplit->partitionKeys();
-  VELOX_USER_CHECK_EQ(
-      partitions.size(),
-      paimonTableHandle_->partitionKeys().size(),
-      "Paimon split partition names do not match table handle");
-  for (const auto& name : paimonTableHandle_->partitionKeys()) {
-    VELOX_USER_CHECK(
-        partitions.count(name), "Missing Paimon split partition '{}'", name);
-  }
-
   paimonSplit_ = std::move(paimonSplit);
 
   // Create a FileConnectorSplit for the first data file and delegate to

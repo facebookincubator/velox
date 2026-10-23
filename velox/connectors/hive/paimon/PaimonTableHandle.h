@@ -30,10 +30,10 @@ class PaimonTableHandle final : public FileTableHandle {
   static constexpr int32_t kSerdeVersion = 1;
 
   /// rowType includes partition columns; fieldIds follow its column order.
-  /// The caller supplies normalized options and files belonging to the fixed
-  /// schema and batch snapshot. PaimonDataSource checks the current reader's
-  /// supported table semantics; this handle does not parse native schema JSON
-  /// or resolve version-dependent defaults.
+  /// The caller resolves table options and supplies files belonging to the
+  /// fixed schema and batch snapshot. Reader capability checks apply to the
+  /// scan inputs; this handle does not parse native schema JSON or validate
+  /// table-option combinations.
   PaimonTableHandle(
       std::string connectorId,
       std::string tableName,
