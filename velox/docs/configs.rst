@@ -1632,6 +1632,10 @@ Note: These configurations are experimental and subject to change.
      - bool
      - true
      - If true, allow falling back to Velox CPU execution when an operation is not supported in cuDF execution. If false, an error will be thrown if an operation is not supported in cuDF execution.
+   * - cudf.allowed_cpu_operators
+     - string
+     -
+     - Comma-separated Velox operator types (as returned by ``Operator::operatorType()``, e.g. ``Exchange,MergeExchange``) that are allowed to run on the CPU even when ``cudf.allow_cpu_fallback`` is false, for operators a deployment intentionally keeps on the CPU. A CPU operator is reported in its runtime stats as ``cudfCpuAllowlisted`` when listed and ``cudfCpuFallback`` otherwise. Empty by default, so every CPU operator counts as a fallback.
    * - cudf.debug_enabled
      - bool
      - false
