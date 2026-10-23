@@ -129,6 +129,17 @@ bool maskSupportedByCudf(
   return aggregationSupportsMask(aggregate.call->name());
 }
 
+bool sortingKeysSupportedByCudf(
+    const core::AggregationNode::Aggregate& aggregate) {
+  if (aggregate.sortingKeys.empty()) {
+    return true;
+  }
+  // A function the CPU registry does not know counts as order sensitive.
+  const auto* entry =
+      exec::getAggregateFunctionEntry(getOriginalName(aggregate.call->name()));
+  return entry != nullptr && !entry->metadata.orderSensitive;
+}
+
 namespace {
 bool isCompanionAggregateName(std::string const& kind) {
   return kind.ends_with("_merge") || kind.ends_with("_partial") ||
