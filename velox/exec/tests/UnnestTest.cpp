@@ -407,9 +407,9 @@ TEST_P(UnnestTest, arrayWithoutIdentityMap) {
   }
 }
 
-// Unnest copies dictionary-wrapped output into flat vectors. The copies must
-// come from the operator's pool, not from the pool of the input vectors, which
-// can live outside the query.
+// Unnest copies dictionary-wrapped output into flat vectors. When the input
+// vectors live in a pool outside the query, the copies must come from the
+// operator's pool.
 TEST_P(UnnestTest, outputAllocatedFromOperatorPool) {
   auto inputRootPool = memory::memoryManager()->addRootPool("unnestInput");
   auto inputPool = inputRootPool->addLeafChild("unnestInput");

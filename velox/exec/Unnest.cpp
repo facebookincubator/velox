@@ -483,7 +483,7 @@ RowVectorPtr Unnest::generateOutput(const RowRange& range) {
 VectorPtr Unnest::UnnestChannelEncoding::wrap(
     const VectorPtr& base,
     vector_size_t wrapSize,
-    memory::MemoryPool* pool) const {
+    memory::MemoryPool* operatorPool) const {
   if (identityMapping) {
     if (wrapSize == base->size()) {
       return base;
@@ -509,7 +509,16 @@ VectorPtr Unnest::UnnestChannelEncoding::wrap(
   //
   // TODO A better fix might be to change expression evaluation (and all other
   // operations) to handle dictionaries with large alphabets efficiently.
-  return BaseVector::copy(*result, pool);
+  //
+  // Copy into the input's pool when that pool belongs to this query. A copy
+  // within one pool shares the input's string buffers. A copy into another
+  // pool copies all the string data.
+  //
+  // Input from a Values node can live in a pool outside the query. Growing
+  // that pool here would start memory arbitration without suspending this
+  // driver. Copy that input into the operator's pool instead.
+  const bool inputInQuery = base->pool()->root() == operatorPool->root();
+  return BaseVector::copy(*result, inputInQuery ? base->pool() : operatorPool);
 }
 
 bool Unnest::isFinished() {
