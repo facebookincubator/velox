@@ -294,6 +294,11 @@ CudfHiveConnectorTestBase::makeCudfHiveConnectorSplit(
       .fileFormat(facebook::velox::dwio::common::FileFormat::PARQUET)
       .infoColumn("$file_size", fmt::format("{}", fileSize))
       .infoColumn("$file_modified_time", fmt::format("{}", fileModifiedTime))
+      .fileProperties(
+          FileProperties{
+              .fileSize = fileSize,
+              .modificationTime = fileModifiedTime,
+          })
       .start(start)
       .length(length)
       .build();
