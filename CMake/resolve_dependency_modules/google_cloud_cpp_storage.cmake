@@ -14,7 +14,7 @@
 include_guard(GLOBAL)
 
 velox_set_source(gRPC)
-velox_resolve_dependency(gRPC CONFIG 1.76.0 REQUIRED)
+velox_resolve_dependency(gRPC CONFIG 1.83.0 REQUIRED)
 
 set(VELOX_GOOGLE_CLOUD_CPP_BUILD_VERSION 3.11.0)
 set(

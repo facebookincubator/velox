@@ -694,16 +694,17 @@ if(
   # propagate them, leading to unresolved utf8_range / absl symbols
   # when statically linking libprotobuf.a.
   #
-  # The requested version is the Protobuf C++ runtime major (6), not
-  # the product version (31.1). protobuf-config-version.cmake installed
+  # The requested version is the Protobuf C++ runtime major (7), not
+  # the product version (35.1). protobuf-config-version.cmake installed
   # by Protobuf 22+ requires PACKAGE_FIND_VERSION_MAJOR to equal the
-  # runtime major; requesting "31.1" is rejected (31 != 6) even though
-  # the installed PACKAGE_VERSION is reported as "31.1.0". Requesting
-  # "6" matches the runtime line Christian documents in
-  # facebookincubator/velox#19467 (Option B: Protobuf 31.1 = C++ 6.x
-  # runtime) and continues to accept any Protobuf whose runtime is 6.x.
+  # runtime major; requesting "35.1" is rejected (35 != 7) even though
+  # the installed PACKAGE_VERSION is reported as "35.1.0". Requesting
+  # "7" matches the runtime line Christian documents in
+  # facebookincubator/velox#19467 (Protobuf 35.1 = C++ 7.x runtime,
+  # which is what Meta is using internally per @kgpai) and continues
+  # to accept any Protobuf whose runtime is 7.x.
   velox_set_source(Protobuf)
-  velox_resolve_dependency(Protobuf 6 CONFIG REQUIRED)
+  velox_resolve_dependency(Protobuf 7 CONFIG REQUIRED)
   include_directories(${Protobuf_INCLUDE_DIRS})
 endif()
 
