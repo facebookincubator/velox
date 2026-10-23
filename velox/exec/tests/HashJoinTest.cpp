@@ -72,6 +72,27 @@ class MultiThreadedHashJoinTest : public HashJoinTest {
   }
 };
 
+TEST_P(MultiThreadedHashJoinTest, integerSpillPartitions) {
+  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+      .numDrivers(numDrivers_)
+      .parallelizeJoinBuildRows(parallelBuildSideRowsEnabled_)
+      .keyTypes({INTEGER()})
+      .probeVectors(1600, 5)
+      .buildVectors(1500, 5)
+      .config(core::QueryConfig::kSpillStartPartitionBit, "48")
+      .config(core::QueryConfig::kSpillNumPartitionBits, "3")
+      .referenceQuery(
+          "SELECT t_k0, t_data, u_k0, u_data FROM t, u WHERE t.t_k0 = u.u_k0")
+      .verifier([](const std::shared_ptr<Task>& task, bool spilled) {
+        if (spilled) {
+          const auto [buildStats, probeStats] = taskSpilledStats(*task);
+          EXPECT_GE(buildStats.spilledPartitions, 8);
+          EXPECT_GE(probeStats.spilledPartitions, 8);
+        }
+      })
+      .run();
+}
+
 TEST_P(MultiThreadedHashJoinTest, bigintArray) {
   HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
       .numDrivers(numDrivers_)

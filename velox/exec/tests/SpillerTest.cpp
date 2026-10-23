@@ -509,7 +509,7 @@ class SpillerTest : public exec::test::RowContainerTestBase {
             rowContainer_->hash(i, testRowSet, i > 0, hashes.data());
           }
           const int partitionNum =
-              hashBits_.partition(hashes[0], numPartitions_);
+              hashBits_.partition(spillHash(hashes[0]), numPartitions_);
           // Copy 'index'th row from 'batch' to 'rowVector_' with
           // 'numDuplicates' times. 'numDuplicates' is the number of duplicates
           // per each distinct row key.
@@ -566,7 +566,8 @@ class SpillerTest : public exec::test::RowContainerTestBase {
 
     partitions_.resize(numPartitions_);
     for (auto i = 0; i < rowContainer_->numRows(); ++i) {
-      partitions_[hashBits_.partition(hashes[i], numPartitions_)].push_back(i);
+      partitions_[hashBits_.partition(spillHash(hashes[i]), numPartitions_)]
+          .push_back(i);
     }
 
     // We sort the rows in each partition in key order.
@@ -885,7 +886,8 @@ class SpillerTest : public exec::test::RowContainerTestBase {
     std::vector<std::vector<RowVectorPtr>> inputsByPartition(numPartitions_);
 
     std::vector<column_index_t> keyChannels(numKeys_);
-    HashPartitionFunction spillHashFunction(hashBits_, rowType_, keyChannels_);
+    HashPartitionFunction spillHashFunction(
+        hashBits_, rowType_, keyChannels_, {}, true);
     // Setup a number of spillers to spill data and then accumulate results from
     // them by partition.
     std::vector<std::unique_ptr<SpillerBase>> spillers;
@@ -1408,7 +1410,8 @@ class HashJoinBuildOnly : public SpillerTest,
 TEST_P(HashJoinBuildOnly, spillPartition) {
   setupSpillData(numKeys_, 1'000, 1, nullptr, {});
   std::vector<std::vector<RowVectorPtr>> vectorsByPartition(numPartitions_);
-  HashPartitionFunction spillHashFunction(hashBits_, rowType_, keyChannels_);
+  HashPartitionFunction spillHashFunction(
+      hashBits_, rowType_, keyChannels_, {}, true);
   splitByPartition(rowVector_, spillHashFunction, vectorsByPartition);
   setupSpiller(100'000, 0, false);
   spill(spiller_.get());
@@ -1442,7 +1445,8 @@ TEST_P(HashJoinBuildOnly, writeBufferSize) {
       ASSERT_EQ(numDiskWrites, 0);
     }
 
-    HashPartitionFunction spillHashFunction(hashBits_, rowType_, keyChannels_);
+    HashPartitionFunction spillHashFunction(
+        hashBits_, rowType_, keyChannels_, {}, true);
 
     VectorFuzzer::Options options;
     options.vectorSize = 100;
