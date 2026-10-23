@@ -23,11 +23,8 @@ namespace facebook::velox::connector::hive::paimon {
 
 class PaimonConnectorSplit;
 
-/// Paimon-specific data source that extends FileDataSource.
-///
-/// Consumes PaimonTableHandle's fixed table definition and enforces the current
-/// same-schema append reader limits. Generic query binding stays in
-/// FileDataSource.
+/// Adapts Paimon table handles and logical splits to the FileDataSource scan
+/// pipeline. PaimonSplitReader reads the files within each split.
 class PaimonDataSource : public FileDataSource {
  public:
   PaimonDataSource(
@@ -44,15 +41,13 @@ class PaimonDataSource : public FileDataSource {
   void setFromDataSource(std::unique_ptr<DataSource> sourceUnique) override;
 
  protected:
-  /// Creates a PaimonSplitReader with all data files from the Paimon split.
-  /// Called by FileDataSource::addSplit() during split initialization.
+  /// Creates a reader for the complete logical Paimon split.
   std::unique_ptr<FileSplitReader> createSplitReader() override;
 
  private:
   const std::shared_ptr<const PaimonTableHandle> paimonTableHandle_;
 
-  // The original Paimon split. Stored so createSplitReader() can access
-  // the full list of data files.
+  // Retains the complete split while FileDataSource uses its first file.
   std::shared_ptr<PaimonConnectorSplit> paimonSplit_;
 };
 

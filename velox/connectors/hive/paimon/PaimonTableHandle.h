@@ -20,20 +20,15 @@
 
 namespace facebook::velox::connector::hive::paimon {
 
-/// Fixed table definition and conditions for a Paimon file scan. Names and
-/// types use Velox RowType; stable field IDs are stored alongside its top-level
-/// columns, not in a parallel type tree. The current reader uses same-schema
-/// append batch inputs and FileColumnHandle name binding. ID-based query
-/// binding and historical schema mapping are separate increments.
+/// Fixed table definition and scan conditions for a Paimon file scan.
+/// Uses Velox RowType for names and types, with stable field IDs aligned to
+/// its top-level columns, and exposes scan inputs through FileTableHandle.
 class PaimonTableHandle final : public FileTableHandle {
  public:
   static constexpr int32_t kSerdeVersion = 1;
 
   /// rowType includes partition columns; fieldIds follow its column order.
-  /// The caller resolves table options and supplies files belonging to the
-  /// fixed schema and batch snapshot. Reader capability checks apply to the
-  /// scan inputs; this handle does not parse native schema JSON or validate
-  /// table-option combinations.
+  /// options are resolved by the caller.
   PaimonTableHandle(
       std::string connectorId,
       std::string tableName,
@@ -73,8 +68,7 @@ class PaimonTableHandle final : public FileTableHandle {
     return tableType_;
   }
 
-  /// Ordered partition column names for the complete table, not the query's
-  /// selected partition column handles or split partition values.
+  /// Ordered partition column names for the complete table.
   const std::vector<std::string>& partitionKeys() const {
     return partitionKeys_;
   }
@@ -95,7 +89,7 @@ class PaimonTableHandle final : public FileTableHandle {
     return sampleRate_;
   }
 
-  /// Full table columns excluding partitions, derived in table column order.
+  /// Non-partition table columns in schema order.
   const RowTypePtr& dataColumns() const override {
     return dataColumns_;
   }

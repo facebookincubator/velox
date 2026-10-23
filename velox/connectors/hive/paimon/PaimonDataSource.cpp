@@ -39,7 +39,7 @@ PaimonDataSource::PaimonDataSource(
           connectorQueryCtx,
           paimonConfig),
       paimonTableHandle_(tableHandle) {
-  // TODO: Add primary-key reading with its planned row semantics.
+  // TODO: Implement primary-key read semantics.
   VELOX_USER_CHECK(
       tableHandle->tableType() == PaimonTableType::kAppendOnly,
       "Paimon same-schema append reader does not support primary-key tables; "
@@ -68,9 +68,8 @@ void PaimonDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
   }
   paimonSplit_ = std::move(paimonSplit);
 
-  // Create a FileConnectorSplit for the first data file and delegate to
-  // FileDataSource::addSplit(), which calls createSplitReader() to create
-  // a PaimonSplitReader that handles all files internally.
+  // Use the first file to enter the FileDataSource scan pipeline;
+  // PaimonSplitReader keeps the full file list.
   const auto& firstFile = paimonSplit_->dataFiles().front();
   auto firstFileSplit = std::make_shared<FileConnectorSplit>(
       paimonSplit_->connectorId,
@@ -108,8 +107,7 @@ void PaimonDataSource::setFromDataSource(
   auto* source = checkedPointerCast<PaimonDataSource>(sourceUnique.get());
   paimonSplit_ = std::move(source->paimonSplit_);
   FileDataSource::setFromDataSource(std::move(sourceUnique));
-  // Files are opened lazily after takeover, when the previous owner of the
-  // borrowed runtimeStats pointer has already been destroyed.
+  // Rebind the lazy reader's borrowed stats pointer after ownership transfer.
   checkedPointerCast<PaimonSplitReader>(splitReader_.get())
       ->setRuntimeStats(runtimeStats_);
 }

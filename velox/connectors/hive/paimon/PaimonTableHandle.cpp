@@ -49,8 +49,8 @@ RowTypePtr deriveDataColumns(
   return ROW(std::move(names), std::move(types));
 }
 
-// A stringified Subfield cannot distinguish literal dots or brackets in field
-// names from path separators. Preserve the existing scan paths in the wire.
+// Encode path elements explicitly to distinguish literal dots and brackets
+// in names from path separators.
 folly::dynamic serializeSubfield(const common::Subfield& subfield) {
   folly::dynamic path = folly::dynamic::array;
   for (const auto& element : subfield.path()) {
@@ -194,7 +194,7 @@ folly::dynamic PaimonTableHandle::serialize() const {
     VELOX_USER_CHECK(
         !handle->postProcessor(),
         "Paimon filter column callbacks cannot be serialized");
-    // FileColumnHandle wire currently stores required subfields as strings.
+    // FileColumnHandle serializes required subfields as strings.
     for (const auto& path : handle->requiredSubfields()) {
       VELOX_USER_CHECK(
           common::Subfield(path.toString()) == path,
