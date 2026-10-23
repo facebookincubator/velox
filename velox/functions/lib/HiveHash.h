@@ -16,6 +16,7 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
 #include <vector>
 
 #include "velox/common/base/Exceptions.h"
@@ -28,12 +29,34 @@
 
 namespace facebook::velox::functions {
 
-/// Hive-compatible hash primitives, mirroring the hashCode implementation in
+/// Computes Hive-compatible hashes, mirroring the hashCode implementation in
 /// Hive's ObjectInspectorUtils (HIVE-12025). Shared between the Hive
 /// connector's partition function and Spark's `hive_hash` scalar function so
 /// both produce bit-identical bucket assignments.
 class HiveHash {
  public:
+  /// Pools must outlive this instance.
+  HiveHash(
+      std::vector<std::unique_ptr<std::vector<uint32_t>>>& hashesPool,
+      std::vector<std::unique_ptr<SelectivityVector>>& rowsPool,
+      std::vector<std::unique_ptr<DecodedVector>>& decodedVectorsPool)
+      : decodedVectorsPool_(decodedVectorsPool),
+        rowsPool_(rowsPool),
+        hashesPool_(hashesPool) {}
+
+  /// Folds selected values into 'hashes' using Hive's recursive hashing rules.
+  /// Supports existing Hive hash primitives, arrays, maps, and rows. Nulls
+  /// contribute zero. Replaces the accumulator when 'mix' is false; otherwise
+  /// combines it as 31 * accumulator + valueHash. Requires 'hashes' to cover
+  /// 'rows.end()'. Scratch buffers below 'poolIndex' are reserved for the
+  /// caller. Concurrent evaluations must use separate pools.
+  void hash(
+      const DecodedVector& values,
+      const SelectivityVector& rows,
+      bool mix,
+      std::vector<uint32_t>& hashes,
+      size_t poolIndex = 0);
+
   /// Folds 'oneHash' into 'aggregateHash'. When 'mix' is false the aggregate is
   /// replaced (used for the first column); otherwise it is combined as
   /// 31 * aggregateHash + oneHash (Hive's field-folding rule).
@@ -83,6 +106,34 @@ class HiveHash {
       const SelectivityVector& rows,
       bool mix,
       std::vector<uint32_t>& hashes);
+
+ private:
+  // Hashes a type using scratch buffers starting at 'poolIndex'.
+  template <TypeKind kind>
+  void hashTyped(
+      const DecodedVector& values,
+      const SelectivityVector& rows,
+      bool mix,
+      std::vector<uint32_t>& hashes,
+      size_t poolIndex);
+
+  // Retrieves a reusable decoder whose address remains stable during recursion.
+  DecodedVector& getDecodedVector(size_t poolIndex);
+
+  // Retrieves a reusable selection for referenced container elements.
+  SelectivityVector& getRows(size_t poolIndex);
+
+  // Retrieves reusable per-element hash storage.
+  std::vector<uint32_t>& getHashes(size_t poolIndex);
+
+  // Keeps scratch objects at stable addresses as recursion grows the pools.
+  std::vector<std::unique_ptr<DecodedVector>>& decodedVectorsPool_;
+
+  // Tracks selected child positions at each recursion level.
+  std::vector<std::unique_ptr<SelectivityVector>>& rowsPool_;
+
+  // Stores intermediate child hashes at each recursion level.
+  std::vector<std::unique_ptr<std::vector<uint32_t>>>& hashesPool_;
 };
 
 template <TypeKind kind>
