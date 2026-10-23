@@ -15,6 +15,8 @@
  */
 
 #include "velox/connectors/hive/storage_adapters/abfs/DynamicSasTokenClientProvider.h"
+#include "velox/connectors/hive/storage_adapters/abfs/AbfsAsyncRuntime.h"
+#include "velox/connectors/hive/storage_adapters/abfs/RegisterAbfsFileSystem.h"
 
 #include <azure/core/datetime.hpp>
 
@@ -76,6 +78,20 @@ bool isNearExpiry(Azure::DateTime expiration, int64_t minExpirationInSeconds) {
                        expiration - Azure::DateTime::clock::now())
                        .count();
   return remaining <= minExpirationInSeconds;
+}
+
+std::string asyncBlobUrl(
+    const std::shared_ptr<AbfsPath>& abfsPath,
+    const config::ConfigBase& config) {
+  if (!config.valueExists(kAzureBlobEndpoint)) {
+    return abfsPath->getUrl(true);
+  }
+  auto endpoint = config.get<std::string>(kAzureBlobEndpoint).value();
+  while (!endpoint.empty() && endpoint.back() == '/') {
+    endpoint.pop_back();
+  }
+  return fmt::format(
+      "{}/{}/{}", endpoint, abfsPath->fileSystem(), abfsPath->filePath());
 }
 
 class DynamicSasTokenDataLakeFileClient final : public AzureDataLakeFileClient {
@@ -194,6 +210,78 @@ class DynamicSasTokenBlobClient : public AzureBlobClient {
   }
 };
 
+class FiberDynamicSasTokenBlobClient final : public AzureBlobClient {
+ public:
+  FiberDynamicSasTokenBlobClient(
+      std::shared_ptr<AbfsPath> abfsPath,
+      std::shared_ptr<SasTokenProvider> sasTokenProvider,
+      int64_t sasTokenRenewPeriod,
+      Azure::Storage::Blobs::BlobClientOptions clientOptions,
+      std::shared_ptr<AbfsAsyncAuthService> authService,
+      std::string stableUrl)
+      : abfsPath_(std::move(abfsPath)),
+        sasTokenProvider_(std::move(sasTokenProvider)),
+        sasTokenRenewPeriod_(sasTokenRenewPeriod),
+        clientOptions_(std::move(clientOptions)),
+        authService_(std::move(authService)),
+        stableUrl_(std::move(stableUrl)) {
+    if (authService_ == nullptr) {
+      throw std::invalid_argument(
+          "Dynamic SAS async client requires an authentication service");
+    }
+  }
+
+  Azure::Response<Azure::Storage::Blobs::Models::BlobProperties> getProperties()
+      override {
+    return getBlobClient()->GetProperties();
+  }
+
+  Azure::Response<Azure::Storage::Blobs::Models::DownloadBlobResult> download(
+      const Azure::Storage::Blobs::DownloadBlobOptions& options) override {
+    return getBlobClient()->Download(options);
+  }
+
+  std::string getUrl() override {
+    return stableUrl_;
+  }
+
+ private:
+  Azure::Storage::Blobs::BlobClient* getBlobClient() {
+    if (blobClient_ == nullptr ||
+        isNearExpiry(sasExpiration_, sasTokenRenewPeriod_)) {
+      const auto sas = authService_->refresh(
+          AbfsAsyncAuthKey{
+              abfsPath_->accountNameWithSuffix(),
+              abfsPath_->fileSystem(),
+              abfsPath_->filePath(),
+              kAbfsReadOperation,
+          },
+          [sasTokenProvider = sasTokenProvider_, abfsPath = abfsPath_] {
+            return sasTokenProvider->getSasToken(
+                abfsPath->fileSystem(),
+                abfsPath->filePath(),
+                kAbfsReadOperation);
+          });
+      if (blobClient_ == nullptr ||
+          isNearExpiry(sasExpiration_, sasTokenRenewPeriod_)) {
+        sasExpiration_ = getExpiry(sas);
+        blobClient_ = std::make_unique<Azure::Storage::Blobs::BlobClient>(
+            fmt::format("{}?{}", stableUrl_, sas), clientOptions_);
+      }
+    }
+    return blobClient_.get();
+  }
+
+  const std::shared_ptr<AbfsPath> abfsPath_;
+  const std::shared_ptr<SasTokenProvider> sasTokenProvider_;
+  const int64_t sasTokenRenewPeriod_;
+  const Azure::Storage::Blobs::BlobClientOptions clientOptions_;
+  const std::shared_ptr<AbfsAsyncAuthService> authService_;
+  const std::string stableUrl_;
+  std::unique_ptr<Azure::Storage::Blobs::BlobClient> blobClient_;
+  Azure::DateTime sasExpiration_{Azure::DateTime::clock::time_point::min()};
+};
+
 } // namespace
 
 DynamicSasTokenClientProvider::DynamicSasTokenClientProvider(
@@ -212,6 +300,21 @@ DynamicSasTokenClientProvider::getReadFileClient(
   init(config);
   return std::make_unique<DynamicSasTokenBlobClient>(
       abfsPath, sasTokenProvider_, sasTokenRenewPeriod_);
+}
+
+std::unique_ptr<AzureBlobClient>
+DynamicSasTokenClientProvider::getReadFileClientForAsync(
+    const std::shared_ptr<AbfsPath>& abfsPath,
+    const config::ConfigBase& config,
+    const AzureAsyncReadContext& context) {
+  init(config);
+  return std::make_unique<FiberDynamicSasTokenBlobClient>(
+      abfsPath,
+      sasTokenProvider_,
+      sasTokenRenewPeriod_,
+      context.clientOptions,
+      context.authService,
+      asyncBlobUrl(abfsPath, config));
 }
 
 std::unique_ptr<AzureDataLakeFileClient>

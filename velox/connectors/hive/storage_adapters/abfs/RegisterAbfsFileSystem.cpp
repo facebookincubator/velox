@@ -33,14 +33,13 @@ namespace facebook::velox::filesystems {
 std::shared_ptr<FileSystem> abfsFileSystemGenerator(
     std::shared_ptr<const config::ConfigBase> properties,
     std::string_view filePath) {
-  // Cache FileSystem instances per unique set of Azure account configurations
-  // to support multiple catalogs with different Azure storage accounts.
-  // Each catalog may have different account credentials and configurations.
+  // Cache FileSystem instances per complete connector configuration because
+  // registered providers may consume keys outside the fs.azure namespace.
   static folly::Synchronized<
       std::unordered_map<std::vector<CacheKey>, std::shared_ptr<FileSystem>>>
       filesystemCache;
 
-  auto cacheKeys = extractCacheKeyFromConfig(*properties);
+  auto cacheKeys = extractFileSystemCacheKeyFromConfig(*properties);
 
   return filesystemCache.withWLock(
       [&](auto& cache) -> std::shared_ptr<FileSystem> {

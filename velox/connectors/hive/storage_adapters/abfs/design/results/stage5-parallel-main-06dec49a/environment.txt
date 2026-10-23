@@ -1,0 +1,37 @@
+Stage 5 parallel dynamic-SAS validation environment
+Date: 2026-07-22
+Base SHA: 06dec49a333b7e39f73a49ba9dd2c4ee12e4fd4e
+Status: DYNAMIC SAS COMPLETE; OAUTH AND C4 STILL OPEN
+
+Execution environment
+- OS: Ubuntu 24.04.4 LTS under WSL2
+- Kernel: 6.18.33.2-microsoft-standard-WSL2
+- Architecture: x86_64
+- Source and build filesystem: WSL ext4 (reported as ext2/ext3)
+- CMake: 3.30.4
+- Ninja: 1.11.1
+- Ordinary compiler: GCC 13.3.0
+- Sanitizer compiler and compiler-rt: Clang 20.1.2
+- Pinned formatter: clang-format 21.1.2
+- OpenSSL: 3.0.13
+- Azure Storage Data Lake SDK pin: 12.8.0
+- Local Azure retry prototype revision: 224332197dcd405f67445e2e2a7105ea62f01496
+- Folly/Fizz pin: v2026.01.05.00
+- Node: 22.23.1
+- Azurite: 3.36.0
+
+Build trees
+- Ordinary Debug: <ordinary-build>
+- ASAN Debug: <asan-build>
+- TSAN Debug: <tsan-build>
+
+Sanitizer prerequisites
+- ASAN and TSAN use bundled Folly compiled with matching sanitizer flags.
+- Folly's generated library-ASAN marker was verified as 1 before execution.
+- Every TSAN test process ran through setarch x86_64 -R.
+
+Security and privacy
+- Tests use synthetic tokens, synthetic provider identities, loopback fixtures,
+  deterministic test certificates, and local Azurite.
+- Evidence retains no credential, SAS value, signed URL, authorization header,
+  real endpoint, account identifier, username, hostname, or private root.
