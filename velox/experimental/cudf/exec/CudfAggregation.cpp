@@ -99,9 +99,9 @@ std::string getOriginalName(const std::string& kind) {
 
 bool aggregationSupportsMask(const std::string& aggregateName) {
   // Mask eligibility is declared at registration (see
-  // maskSupportedAggregations() populated in
-  // registerCommonAggregationFunctions), so no aggregate names are hardcoded
-  // here. getOriginalName strips the _partial/_merge companion suffixes to the
+  // maskSupportedAggregations(), populated by the registration functions in
+  // AggregationRegistry.cpp), so no aggregate names are hardcoded here.
+  // getOriginalName strips the _partial/_merge companion suffixes to the
   // registered name before lookup.
   const auto& supported = maskSupportedAggregations();
   return supported.count(getOriginalName(aggregateName)) > 0;
@@ -127,6 +127,17 @@ bool maskSupportedByCudf(
   // Aggregates that ignore the mask must fall back to CPU rather than silently
   // produce an unmasked result.
   return aggregationSupportsMask(aggregate.call->name());
+}
+
+bool sortingKeysSupportedByCudf(
+    const core::AggregationNode::Aggregate& aggregate) {
+  if (aggregate.sortingKeys.empty()) {
+    return true;
+  }
+  // A function the CPU registry does not know counts as order sensitive.
+  const auto* entry =
+      exec::getAggregateFunctionEntry(getOriginalName(aggregate.call->name()));
+  return entry != nullptr && !entry->metadata.orderSensitive;
 }
 
 namespace {

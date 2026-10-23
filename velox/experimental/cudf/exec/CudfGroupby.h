@@ -24,6 +24,10 @@
 #include <string_view>
 #include <utility>
 
+namespace facebook::velox::core {
+class QueryConfig;
+} // namespace facebook::velox::core
+
 namespace facebook::velox::cudf_velox {
 
 class CudaEvent;
@@ -137,16 +141,18 @@ struct GroupbyAggregator {
   std::unique_ptr<cudf::column> maskedValues_;
 };
 
-// Factory functions for creating groupby aggregators from plan nodes.
-// 'maskChannels' carries the post-permutation mask column index per aggregate;
-// pass the raw-input mask channels for raw base/partial steps and an empty
-// vector for intermediate/final steps.
+/// Factory functions for creating groupby aggregators from plan nodes.
+/// 'maskChannels' carries the post-permutation mask column index per
+/// aggregate; pass the raw-input mask channels for raw base/partial steps and
+/// an empty vector for intermediate/final steps. 'queryConfig' supplies the
+/// session properties an aggregate's semantics depend on.
 std::vector<std::unique_ptr<GroupbyAggregator>> toGroupbyAggregators(
     core::AggregationNode const& aggregationNode,
     core::AggregationNode::Step step,
     TypePtr const& outputType,
     std::vector<VectorPtr> const& constants,
-    std::vector<std::optional<uint32_t>> const& maskChannels);
+    std::vector<std::optional<uint32_t>> const& maskChannels,
+    const core::QueryConfig& queryConfig);
 
 std::optional<std::vector<std::unique_ptr<StreamingGroupbyAggregator>>>
 toStreamingGroupbyAggregators(

@@ -337,13 +337,18 @@ void registerCommonAggregationFunctions(
       core::AggregationNode::Step::kIntermediate,
       minMaxSignatures);
 
-  // sum/count/min/max honor a FILTER mask (masked rows are null-injected, or
-  // excluded via the validity column for count). Declared here, alongside their
-  // registration, so mask eligibility stays with the function rather than being
-  // duplicated as a name list in the groupby/reduce validators. avg and the
-  // engine-specific aggregates below intentionally do not opt in.
-  maskSupportedAggregations().insert(
-      {prefix + "sum", prefix + "count", prefix + "min", prefix + "max"});
+  // These aggregations honor a FILTER mask: masked rows are null-injected, or
+  // excluded via the validity column for count(*), and cuDF's null-excluding
+  // aggregations skip them. Declared here, alongside their registration, so
+  // mask eligibility stays with the function rather than being duplicated as
+  // a name list in the groupby/reduce validators.
+  maskSupportedAggregations().insert({
+      prefix + "sum",
+      prefix + "count",
+      prefix + "min",
+      prefix + "max",
+      prefix + "avg",
+  });
 
   auto avgSingleSignatures = std::vector<exec::FunctionSignaturePtr>{
       FunctionSignatureBuilder()
@@ -555,6 +560,11 @@ void registerGroupbyOnlyAggregationFunctions(
       prefix + "stddev",
       core::AggregationNode::Step::kFinal,
       stddevSampFinalSignatures);
+
+  // stddev honors a FILTER mask: its masked rows are null-injected, and cuDF's
+  // null-excluding std, count, mean and M2 skip them.
+  maskSupportedAggregations().insert(
+      {prefix + "stddev_samp", prefix + "stddev"});
 }
 
 void registerReduceOnlyAggregationFunctions(
@@ -678,6 +688,10 @@ void registerReduceOnlyAggregationFunctions(
       prefix + "approx_distinct",
       core::AggregationNode::Step::kFinal,
       approxDistinctFinalSignatures);
+
+  // approx_distinct honors a FILTER mask: its masked rows are null-injected,
+  // and the sketch excludes nulls.
+  maskSupportedAggregations().insert({prefix + "approx_distinct"});
 }
 
 void appendGroupbyAggregationFunctionForStep(
