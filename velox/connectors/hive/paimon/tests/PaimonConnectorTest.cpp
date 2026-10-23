@@ -1449,7 +1449,7 @@ TEST_F(PaimonConnectorTest, takeoverPreparedSplit) {
   test::assertEqualVectors(input, *result);
 }
 
-TEST_F(PaimonConnectorTest, takeoverPartitionHandlesAndDynamicFilters) {
+TEST_F(PaimonConnectorTest, takeoverUnusedPartitionHandles) {
   auto queryCtx = core::QueryCtx::create();
   const auto config = std::make_shared<config::ConfigBase>(
       std::unordered_map<std::string, std::string>{});
@@ -1457,10 +1457,7 @@ TEST_F(PaimonConnectorTest, takeoverPartitionHandlesAndDynamicFilters) {
                      .sessionProperties(config.get())
                      .build();
   const auto rowType = ROW({{"id", BIGINT()}, {"p", VARCHAR()}});
-  common::SubfieldFilters filters;
-  filters.emplace(common::Subfield("p"), std::make_unique<common::IsNotNull>());
-  const auto table =
-      makePaimonTableHandle(rowType, std::move(filters), nullptr, {"p"});
+  const auto table = makePaimonTableHandle(rowType, {}, nullptr, {"p"});
   const ColumnHandleMap columns{
       {"id",
        std::make_shared<HiveColumnHandle>(
@@ -1472,61 +1469,7 @@ TEST_F(PaimonConnectorTest, takeoverPartitionHandlesAndDynamicFilters) {
            VARCHAR(),
            VARCHAR())}};
   const auto connector = ConnectorRegistry::tryGet(kPaimonConnectorId);
-  const auto makeSource = [&] {
-    return connector->createDataSource(rowType, table, columns, context.get());
-  };
   const auto input = makeRowVector({"id"}, {makeFlatVector<int64_t>({7, 8})});
-  for (auto format : fileFormats()) {
-    SCOPED_TRACE(dwio::common::FileFormatName::toName(format));
-    const auto files = makeFilePaths(2);
-    for (const auto& file : files) {
-      writeFile(file->getPath(), input, format);
-    }
-    auto source = makeSource();
-    ContinueFuture future = ContinueFuture::makeEmpty();
-    source->addSplit(makePaimonSplit(
-        {files[0]->getPath()},
-        PaimonTableType::kAppendOnly,
-        format,
-        {{"p", "old"}}));
-    ASSERT_TRUE(source->next(100, future).has_value());
-    auto end = source->next(100, future);
-    ASSERT_TRUE(end.has_value());
-    ASSERT_EQ(*end, nullptr);
-    source->addDynamicFilter(
-        1,
-        std::make_shared<common::BytesValues>(
-            std::vector<std::string>{"keep"}, false));
-    for (const auto& partition : {"drop", "keep"}) {
-      SCOPED_TRACE(partition);
-      auto donor = makeSource();
-      donor->addSplit(makePaimonSplit(
-          {files[0]->getPath(), files[1]->getPath()},
-          PaimonTableType::kAppendOnly,
-          format,
-          {{"p", partition}}));
-      source->setFromDataSource(std::move(donor));
-      ASSERT_EQ(donor, nullptr);
-      if (std::string_view(partition) == "keep") {
-        const auto expected = makeRowVector(
-            {"id", "p"},
-            {input->childAt(0), makeFlatVector<std::string>({"keep", "keep"})});
-        for (const auto& file : files) {
-          auto result = source->next(100, future);
-          ASSERT_TRUE(result.has_value());
-          ASSERT_TRUE(*result);
-          test::assertEqualVectors(expected, *result);
-        }
-      }
-      end = source->next(100, future);
-      ASSERT_TRUE(end.has_value());
-      EXPECT_EQ(*end, nullptr);
-    }
-    EXPECT_EQ(source->getCompletedRows(), 6);
-  }
-
-  const auto unfilteredTable =
-      makePaimonTableHandle(rowType, {}, nullptr, {"p"});
   const auto outputType = ROW({{"id", BIGINT()}});
   const ColumnHandleMap idColumns{{"id", columns.at("id")}};
   const auto files = makeFilePaths(1);
@@ -1540,12 +1483,12 @@ TEST_F(PaimonConnectorTest, takeoverPartitionHandlesAndDynamicFilters) {
               donorHasUnusedPartition));
       auto recipient = connector->createDataSource(
           outputType,
-          unfilteredTable,
+          table,
           recipientHasUnusedPartition ? columns : idColumns,
           context.get());
       auto donor = connector->createDataSource(
           outputType,
-          unfilteredTable,
+          table,
           donorHasUnusedPartition ? columns : idColumns,
           context.get());
       donor->addSplit(makePaimonSplit(

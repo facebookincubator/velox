@@ -106,22 +106,12 @@ std::unique_ptr<FileSplitReader> PaimonDataSource::createSplitReader() {
 void PaimonDataSource::setFromDataSource(
     std::unique_ptr<DataSource> sourceUnique) {
   auto* source = checkedPointerCast<PaimonDataSource>(sourceUnique.get());
-  auto* sourceReader =
-      checkedPointerCast<PaimonSplitReader>(source->splitReader_.get());
-  // Common adaptation skips constant columns. A prior split's partition
-  // constant must not prevent its current filters from reaching the donor.
-  for (const auto& [name, column] : partitionKeys_) {
-    const auto* field = scanSpec_->childByName(name);
-    if (field && field->filter()) {
-      auto* sourceField = source->scanSpec_->childByName(name);
-      sourceField->setFilter(field->filter()->clone());
-    }
-  }
   paimonSplit_ = std::move(source->paimonSplit_);
   FileDataSource::setFromDataSource(std::move(sourceUnique));
   // Files are opened lazily after takeover, when the previous owner of the
   // borrowed runtimeStats pointer has already been destroyed.
-  sourceReader->setRuntimeStats(runtimeStats_);
+  checkedPointerCast<PaimonSplitReader>(splitReader_.get())
+      ->setRuntimeStats(runtimeStats_);
 }
 
 } // namespace facebook::velox::connector::hive::paimon
