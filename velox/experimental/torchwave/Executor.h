@@ -367,6 +367,15 @@ struct StepVectors {
   std::vector<int64_t> sizesUpper;
   int32_t cachedBlockSize{0};
 
+  /// Threads per block of this step's launch: the largest
+  /// KernelOperation::blockSizePreference among its ops, and at least
+  /// WaveConfig::blockSize. Set by gatherLaunches.
+  int32_t blockSize{0};
+
+  /// The kernel entry point this step's launch runs; see
+  /// CompositeKernel::entryFor. Set by gatherLaunches.
+  int32_t entry{0};
+
   /// Bitmap of grid choices from selectGrid (1 = singleBlock, 0 = default).
   /// Used to detect when grid choice changed, invalidating all step caches.
   uint64_t gridChoiceBitmap{0};
@@ -890,8 +899,10 @@ void runShortcutStandalones(
 /// Builds BlockInfo grid for a set of LaunchData entries. Uses preallocated
 /// vectors in 'sv' (blocks, launchIndices, costs, maxBlocks,
 /// numBlocksPerLaunch). Returns the block size (threads per block).
-/// 'maxBlocksPerSM' is the kernel's occupancy at zero dynamic shared memory and
-/// 'staticSharedPerBlock' its static shared memory; both are needed to bound a
+/// 'blockSize' is the kernel's threads per block, which is also what makeGrid
+/// returns. 'maxBlocksPerSM' is the kernel's occupancy at that block size and
+/// zero dynamic shared memory, and 'staticSharedPerBlock' its static shared
+/// memory; both are needed to bound a
 /// cooperative grid when an op in the step asks for dynamic shared memory.
 /// 'occupancyFor' answers the same question from the driver at a given dynamic
 /// shared memory, and supersedes the other two when given: a cooperative launch
@@ -900,6 +911,7 @@ void runShortcutStandalones(
 int32_t makeGrid(
     std::vector<LaunchData>& launches,
     StepVectors& sv,
+    int32_t blockSize,
     int32_t maxBlocksPerSM = 0,
     int32_t staticSharedPerBlock = 0,
     const std::function<int32_t(int32_t dynamicShared)>& occupancyFor =

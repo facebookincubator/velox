@@ -129,6 +129,25 @@ using OutputReserveFunc = std::function<std::vector<std::vector<Dim>>(
     NodeCP originalFormalNode,
     const NodeMap& nodeMap)>;
 
+/// Threads per block of the kernel whose output an OutputReserveFunc is
+/// sizing, for a buffer with one entry per block or per tile. Set around each
+/// call by ReserveBlockSizeScope; WaveConfig::blockSize outside one.
+int32_t reserveBlockSize();
+
+class ReserveBlockSizeScope {
+ public:
+  explicit ReserveBlockSizeScope(int32_t blockSize);
+  ~ReserveBlockSizeScope();
+
+  ReserveBlockSizeScope(const ReserveBlockSizeScope&) = delete;
+  ReserveBlockSizeScope& operator=(const ReserveBlockSizeScope&) = delete;
+  ReserveBlockSizeScope(ReserveBlockSizeScope&&) = delete;
+  ReserveBlockSizeScope& operator=(ReserveBlockSizeScope&&) = delete;
+
+ private:
+  int32_t saved_;
+};
+
 /// Per-argument metadata controlling how an argument is passed to device code.
 struct ArgumentMeta {
   /// If can be passed / returned in a register. Caller must read from / assign
@@ -473,7 +492,7 @@ struct Metadata {
 
   /// List of type, name pairs for __shared__ variables to be declared at head
   /// of containing kernel and then passed as last args in the call to the
-  /// function.
+  /// function. "{blockSize}" in a type is replaced by the kernel's block size.
   std::vector<std::pair<std::string, std::string>> sharedDecls;
 
   /// Like sharedDecls but the type is determined at compile time from the dtype
@@ -489,12 +508,32 @@ struct Metadata {
   /// that it lowers the occupancy of every other op sharing the kernel.
   int32_t minBlocksPerSm{0};
 
+  /// If true, several consumers of this node may share it inside one compiled
+  /// node instead of the node being placed in an earlier one of its own. Only
+  /// for an op whose outputs are always written to memory and read by its
+  /// consumers after a kernel boundary, so that sharing it computes it once.
+  /// Lets a multi-stage op whose stages all read one state buffer run as
+  /// consecutive steps of one node.
+  bool sharedWithinNode{false};
+
+  /// If true, the kernel holding this node gets an entry point with only this
+  /// node's op in it, which a step launching nothing else runs. A heavy op that
+  /// has a step to itself then uses only the registers it needs, and the other
+  /// ops of the kernel do not pay for them either.
+  bool ownEntryPoint{false};
+
+  /// If set, returns the threads per block this node's device function wants,
+  /// or 0 for no preference. A kernel runs at one block size, so it takes the
+  /// largest any of its nodes asks for and WaveConfig::blockSize, and every
+  /// device function in it gets that as its block size template parameter.
+  std::function<int32_t(NodeCP)> blockSize;
+
   /// If set, returns the bytes of dynamic (extern __shared__) shared memory
-  /// this node's device function needs. The kernel op takes the max over its
-  /// nodes and the launch passes that as the kernel's dynamic shared memory
-  /// size, so an op that needs a large scratch buffer only costs occupancy in
-  /// the launches that contain it.
-  std::function<int64_t(NodeCP)> dynamicSharedMemory;
+  /// this node's device function needs at the kernel's block size. The kernel
+  /// op takes the max over its nodes and the launch passes that as the
+  /// kernel's dynamic shared memory size, so an op that needs a large scratch
+  /// buffer only costs occupancy in the launches that contain it.
+  std::function<int64_t(NodeCP, int32_t blockSize)> dynamicSharedMemory;
 
   /// Ordinal value meaning the type comes from the node's dtype attribute.
   static constexpr int32_t kTypeFromDtype = -1;
@@ -503,8 +542,8 @@ struct Metadata {
   /// device func, set according to the dtype of the arg at the ordinal.
   std::vector<int32_t> typeTemplateParams;
 
-  /// If true, the device function takes WaveConfig::blockSize as its first
-  /// template parameter.
+  /// If true, the device function takes its kernel's block size as its first
+  /// template parameter. See blockSize.
   bool hasBlockSizeTemplateParam{false};
 
   /// If true, the resolved dtype attribute is emitted as an additional type
@@ -725,8 +764,13 @@ class MetadataBuilder {
       std::vector<std::pair<std::string, std::string>> decls);
   MetadataBuilder& dynamicSharedDecls(
       std::vector<std::pair<int32_t, std::string>> decls);
-  MetadataBuilder& dynamicSharedMemory(std::function<int64_t(NodeCP)> func);
+  MetadataBuilder& dynamicSharedMemory(
+      std::function<int64_t(NodeCP, int32_t blockSize)> func);
   MetadataBuilder& minBlocksPerSm(int32_t blocks);
+  MetadataBuilder& sharedWithinNode(bool value = true);
+  MetadataBuilder& ownEntryPoint(bool value = true);
+  MetadataBuilder& blockSize(int32_t threads);
+  MetadataBuilder& blockSize(std::function<int32_t(NodeCP)> func);
   MetadataBuilder& typeTemplateParams(std::vector<int32_t> params);
   MetadataBuilder& hasBlockSizeTemplateParam(bool val = true);
   MetadataBuilder& hasDtypeTemplateParam(bool val = true);
