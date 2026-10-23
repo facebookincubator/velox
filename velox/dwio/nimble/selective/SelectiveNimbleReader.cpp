@@ -99,22 +99,67 @@ std::vector<velox::core::SortOrder> toVeloxSortOrders(
   return veloxSortOrders;
 }
 
+// Scales a flat map's logical size to the fraction of keys the scan selects.
+// The stats roll up every key in the file, so without this the estimate counts
+// keys the scan never reads. Assumes keys are of comparable size, since per-key
+// stats are not available.
+uint64_t scaleToSelectedKeys(
+    uint64_t logicalSize,
+    const nimble::FlatMapType& flatMapType,
+    const velox::common::ScanSpec& columnSpec) {
+  const auto numKeysInFile = flatMapType.childrenCount();
+  const auto numKeysSelected = columnSpec.children().size();
+  if (numKeysInFile == 0 || numKeysSelected == 0 ||
+      numKeysSelected >= numKeysInFile) {
+    return logicalSize;
+  }
+  return logicalSize * numKeysSelected / numKeysInFile;
+}
+
+// Returns the Nimble type of 'fileColumn', or nullptr if the schemas disagree
+// in column count or that column's type.
+const nimble::Type* matchingNimbleColumn(
+    const nimble::RowType& nimbleRow,
+    const velox::dwio::common::TypeWithId& rootTypeWithId,
+    const velox::dwio::common::TypeWithId& fileColumn) {
+  if (nimbleRow.childrenCount() != rootTypeWithId.size()) {
+    return nullptr;
+  }
+  const auto& nimbleType = *nimbleRow.childAt(fileColumn.column());
+  if (!convertToVeloxType(nimbleType)->equivalent(*fileColumn.type())) {
+    return nullptr;
+  }
+  return &nimbleType;
+}
+
 // Sums the logical sizes of projected top-level columns from the column stats.
 // The stats are already recursively rolled up, so each column's logicalSize
 // includes all descendants and null overhead. We just need to find the
-// projected top-level columns and sum their sizes.
+// projected top-level columns and sum their sizes, scaling flat maps to the
+// selected keys.
 uint64_t sumProjectedLogicalSize(
     const velox::dwio::common::TypeWithId& rootTypeWithId,
     const std::vector<std::unique_ptr<ColumnStatistics>>& columnStats,
-    const velox::common::ScanSpec& scanSpec) {
+    const velox::common::ScanSpec& scanSpec,
+    const nimble::Type& nimbleSchema) {
   uint64_t size = 0;
+  const auto& nimbleRow = nimbleSchema.asRow();
   for (uint32_t i = 0; i < rootTypeWithId.size(); ++i) {
     if (auto* childSpec =
             scanSpec.childByName(rootTypeWithId.type()->asRow().nameOf(i));
         childSpec != nullptr && rootTypeWithId.childAt(i) != nullptr) {
       auto id = rootTypeWithId.childAt(i)->id();
       if (id < columnStats.size() && columnStats[id]) {
-        size += columnStats[id]->getLogicalSize();
+        auto logicalSize = columnStats[id]->getLogicalSize();
+        const auto* nimbleType = matchingNimbleColumn(
+            nimbleRow, rootTypeWithId, *rootTypeWithId.childAt(i));
+        // Only a flat map read as a struct has one child spec per selected key.
+        if (nimbleType != nullptr && nimbleType->isFlatMap() &&
+            childSpec->isFlatMapAsStruct()) {
+          logicalSize = scaleToSelectedKeys(
+              logicalSize, nimbleType->asFlatMap(), *childSpec);
+        }
+        size += logicalSize;
       }
     }
   }
@@ -737,7 +782,10 @@ void SelectiveNimbleRowReader::computeStatsBasedRowSize() const {
     return;
   }
   auto totalLogicalSize = sumProjectedLogicalSize(
-      *readerBase_->fileSchemaWithId(), columnStats, *options_.scanSpec());
+      *readerBase_->fileSchemaWithId(),
+      columnStats,
+      *options_.scanSpec(),
+      *readerBase_->nimbleSchema());
   auto totalRows = readerBase_->tablet().tabletRowCount();
   if (totalRows > 0) {
     statsBasedRowSize_ = std::max<size_t>(1, totalLogicalSize / totalRows);
