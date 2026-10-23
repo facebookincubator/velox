@@ -296,7 +296,10 @@ void registerMapFunctions(
   VELOX_REGISTER_VECTOR_FUNCTION_WITH_OWNER(
       udf_map_entries, prefix + "map_entries", defaultOwner);
   registerMapFromEntriesFunction(
-      prefix + "map_from_entries", /*throwForNull=*/true, defaultOwner);
+      prefix + "map_from_entries",
+      /*throwForNull=*/true,
+      /*honorDuplicateKeysConfig=*/false,
+      defaultOwner);
 
   VELOX_REGISTER_VECTOR_FUNCTION_WITH_OWNER(
       udf_map_keys, prefix + "map_keys", defaultOwner);

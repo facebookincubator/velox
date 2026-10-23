@@ -22,9 +22,15 @@ namespace facebook::velox::functions {
 
 /// @param throwOnNull If true, throws exception when input array is null or
 /// contains null entry. Otherwise, returns null.
+/// @param honorDuplicateKeysConfig If true, a repeated key follows the
+/// throw_exception_on_duplicate_map_keys query config: throws when the config
+/// is true, otherwise the last value wins and the key keeps the position of its
+/// first occurrence (Spark's behavior). If false, a repeated key always throws
+/// (Presto's behavior).
 void registerMapFromEntriesFunction(
     const std::string& name,
     bool throwForNull,
+    bool honorDuplicateKeysConfig = false,
     std::string_view defaultOwner = {});
 
 } // namespace facebook::velox::functions
