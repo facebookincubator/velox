@@ -99,9 +99,9 @@ std::string getOriginalName(const std::string& kind) {
 
 bool aggregationSupportsMask(const std::string& aggregateName) {
   // Mask eligibility is declared at registration (see
-  // maskSupportedAggregations() populated in
-  // registerCommonAggregationFunctions), so no aggregate names are hardcoded
-  // here. getOriginalName strips the _partial/_merge companion suffixes to the
+  // maskSupportedAggregations(), populated by the registration functions in
+  // AggregationRegistry.cpp), so no aggregate names are hardcoded here.
+  // getOriginalName strips the _partial/_merge companion suffixes to the
   // registered name before lookup.
   const auto& supported = maskSupportedAggregations();
   return supported.count(getOriginalName(aggregateName)) > 0;
