@@ -96,6 +96,8 @@ class BurstFunctionBase : public AsyncRPCFunction {
     std::string backend{"layer2.test.backend"};
     // Returned from shrinkWindowOncePerLimitCut().
     bool shrinkWindowOncePerLimitCut{false};
+    // Returned from fastLimitRecovery().
+    bool fastLimitRecovery{false};
     // Attach a retry hint to burst errors and declare it in
     // mayReturnCapacityRetries().
     bool hintBurstErrors{false};
@@ -132,6 +134,10 @@ class BurstFunctionBase : public AsyncRPCFunction {
 
   bool mayReturnCapacityRetries() const override {
     return config_.hintBurstErrors;
+  }
+
+  bool fastLimitRecovery() const override {
+    return config_.fastLimitRecovery;
   }
 
   // Overload failures produce kOverloaded. A null-input error is a user error
@@ -527,6 +533,19 @@ class RPCAimdUnderLoadTest : public OperatorTestBase {
               /*burstKind=*/RPCErrorKind::kRateLimited,
               /*latency=*/std::chrono::milliseconds(1),
               /*backend=*/"layer2.test.short.backend"});
+        },
+        varcharSignature());
+    AsyncRPCFunctionRegistry::registerFunction(
+        "fast_recovery_rpc",
+        [] {
+          return std::make_shared<BurstRPCFunction>(BurstRPCFunction::Config{
+              /*burstFirstCall=*/kWarmupRows,
+              /*burstLastCall=*/kWarmupRows + kShortBurstRows,
+              /*burstKind=*/RPCErrorKind::kRateLimited,
+              /*latency=*/std::chrono::milliseconds(1),
+              /*backend=*/"layer2.test.fast.recovery.backend",
+              /*shrinkWindowOncePerLimitCut=*/false,
+              /*fastLimitRecovery=*/true});
         },
         varcharSignature());
     AsyncRPCFunctionRegistry::registerFunction(
@@ -1000,6 +1019,23 @@ TEST_F(RPCAimdUnderLoadTest, capacityRetriesWithSeveralDrivers) {
           .customStats.at(RPCOperator::kRpcCapacityRetries)
           .sum,
       0);
+}
+
+// The function's fastLimitRecovery() choice reaches the backend's shared
+// limiter when the first query configures it.
+TEST_F(RPCAimdUnderLoadTest, functionEnablesFastLimitRecovery) {
+  auto input = makeRowVector(
+      {"prompt"}, {makeFlatVector<StringView>({"row_0", "row_1"})});
+  auto plan = makeRPCNode(
+      PlanBuilder().values({input}).planNode(), "fast_recovery_rpc");
+  AssertQueryBuilder(plan)
+      .config("rpc.ratelimiter.adaptive_enabled", "true")
+      .copyResults(pool());
+  EXPECT_TRUE(
+      RPCRateLimiterRegistry::global()
+          .get("layer2.test.fast.recovery.backend")
+          .config()
+          .fastRecovery);
 }
 
 TEST_F(RPCAimdUnderLoadTest, perRowBackendErrorsDoNotBackOff) {

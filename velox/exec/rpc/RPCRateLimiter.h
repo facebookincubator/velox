@@ -77,6 +77,12 @@ class RPCRateLimiter : public std::enable_shared_from_this<RPCRateLimiter> {
     /// Multiplicative-decrease factor applied on overload, in (0, 1). Maps to
     /// rpc.ratelimiter.decrease_factor.
     double decreaseFactor{0.5};
+
+    /// After a run of decreases, grow back to the window the run started from
+    /// by one unit per success, which doubles the window each round trip,
+    /// then resume additive increase. Comes from
+    /// AsyncRPCFunction::fastLimitRecovery().
+    bool fastRecovery{false};
   };
 
   /// What completed work told us about the backend. The admission layer's own
@@ -456,6 +462,14 @@ class RPCRateLimiter : public std::enable_shared_from_this<RPCRateLimiter> {
 
   // Invalidates timers scheduled against an earlier rate or deadline.
   uint64_t pacingGeneration_{0};
+
+  // Window when the current run of decreases began. Fast recovery grows back
+  // to it quickly. Zero when no fast recovery is under way.
+  double recoveryTarget_{0.0};
+
+  // True when success grew the window after the last decrease. A decrease
+  // during recovery then lowers the target by the decrease factor.
+  bool grewSinceDecrease_{false};
 
   // Identifies the current offered-load wave. The first canonical overload
   // from a wave advances this before shrinking, coalescing later responses

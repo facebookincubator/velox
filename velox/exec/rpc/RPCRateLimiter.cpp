@@ -268,7 +268,8 @@ void RPCRateLimiter::initializeOnce(
       if (wanted.adaptive != config_.adaptive ||
           wanted.floor != config_.floor ||
           wanted.decreaseFactor != config_.decreaseFactor ||
-          wanted.ceiling != config_.ceiling) {
+          wanted.ceiling != config_.ceiling ||
+          wanted.fastRecovery != config_.fastRecovery) {
         // Per backend, not LOG_FIRST_N: that is process-wide, so the first
         // backend to take this path would silence the warning for every other
         // one even though the message names a specific backend.
@@ -302,6 +303,8 @@ void RPCRateLimiter::testingReset() {
   loggedDivergentSettings_ = false;
   limit_ = 0.0;
   lowWaterLimit_ = 0.0;
+  recoveryTarget_ = 0.0;
+  grewSinceDecrease_ = false;
   serviceHorizonNanos_ = kBootstrapServiceHorizonNanos;
   hasServiceHorizonSample_ = false;
   nextPacedAdmission_ = std::chrono::steady_clock::time_point{};
@@ -655,6 +658,19 @@ void RPCRateLimiter::applyOverloadLocked() {
       floorLocked(static_cast<double>(ceilingLocked())),
       current * config_.decreaseFactor);
   if (next < current) {
+    if (config_.fastRecovery) {
+      if (recoveryTarget_ == 0.0) {
+        recoveryTarget_ = current;
+      } else if (grewSinceDecrease_) {
+        // Recovery failed short of its target: lower the target by the same
+        // factor, so a backend whose capacity dropped is not pushed back to
+        // the old window, while one stray success does not discard it.
+        recoveryTarget_ =
+            std::max(current, recoveryTarget_ * config_.decreaseFactor);
+      }
+      // Consecutive decreases keep the target.
+    }
+    grewSinceDecrease_ = false;
     setLimitLocked(next);
     if (lowWaterLimit_ == 0.0 || next < lowWaterLimit_) {
       lowWaterLimit_ = next;
@@ -720,15 +736,28 @@ void RPCRateLimiter::applySuccessLocked(int64_t units, int64_t rttNs) {
   if (units <= 0 || !config_.adaptive || limit_ <= 0.0) {
     return;
   }
-  double next = limitLocked();
+  const double current = limitLocked();
+  double next = current;
   int64_t remainingUnits = units;
   while (remainingUnits > 0 && next < 1.0) {
     next = std::min(1.0, next * 2.0);
     --remainingUnits;
   }
+  if (remainingUnits > 0 && config_.fastRecovery && next < recoveryTarget_) {
+    // One unit per success: a full window of successes doubles the window.
+    const auto fastUnits = std::min<int64_t>(
+        remainingUnits,
+        static_cast<int64_t>(std::ceil(recoveryTarget_ - next)));
+    next = std::min(recoveryTarget_, next + static_cast<double>(fastUnits));
+    remainingUnits -= fastUnits;
+  }
+  if (next >= recoveryTarget_) {
+    recoveryTarget_ = 0.0;
+  }
   if (remainingUnits > 0) {
     next = std::sqrt(next * next + 2.0 * static_cast<double>(remainingUnits));
   }
+  grewSinceDecrease_ = grewSinceDecrease_ || next > current;
   setLimitLocked(next >= static_cast<double>(ceilingLocked()) ? 0.0 : next);
 }
 

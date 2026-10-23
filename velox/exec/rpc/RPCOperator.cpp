@@ -222,6 +222,7 @@ void RPCOperator::initializeRateLimiter() {
         config.floor = sessionFloor > 0 ? static_cast<double>(sessionFloor)
                                         : function_->configuredAdaptiveFloor();
         config.decreaseFactor = queryConfig.rpcRateLimiterDecreaseFactor();
+        config.fastRecovery = function_->fastLimitRecovery();
 
         const auto functionLimit = function_->configuredCeiling();
         if (sessionHardLimit < 0) {

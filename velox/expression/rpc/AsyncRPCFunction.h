@@ -198,6 +198,13 @@ class AsyncRPCFunction {
     return false;
   }
 
+  /// Whether the backend's shared rate limit grows back quickly after a run of
+  /// decreases (RPCRateLimiter::Config::fastRecovery). Like the floor and
+  /// ceiling, the first query to reach the backend fixes it.
+  virtual bool fastLimitRecovery() const {
+    return false;
+  }
+
   /// Returns the adaptive-window floor requested by the resolved backend.
   /// The operator seals it on the limiter identified by admissionKey(). A
   /// positive legacy session override takes precedence; zero delegates here.
