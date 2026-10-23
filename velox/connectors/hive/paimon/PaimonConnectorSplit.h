@@ -28,27 +28,26 @@
 #include "velox/connectors/hive/paimon/PaimonDataFileMeta.h"
 #include "velox/dwio/common/Options.h"
 
-/// @file
-/// Paimon logical split representation.
-///
-/// PaimonConnectorSplit represents a planner-selected Paimon DataSplit: a
-/// logical read unit with one or more files from the same partition/bucket.
-/// Unlike a single-file split, it can group multiple physical files. A bucket
-/// may produce several splits; a split need not contain every file in it.
-///
-/// The planner supplies the file set and its snapshot identity. Files may
-/// span LSM levels; when logical merging is needed, the necessary files must
-/// remain together in the split. The split does not discover files from
-/// storage or select snapshots.
-///
-/// partitionKeys carries this split's partition values, including nulls,
-/// rather than the table's partition column declaration. dataFiles carries
-/// file paths and per-file metadata. PaimonTableHandle separately carries
-/// the table definition and scan conditions.
-///
-/// rawConvertible indicates that the planner-selected files can be read
-/// without logical merging. It does not imply support for every file feature:
-/// deletion vectors and changelog files require their own read semantics.
+// Paimon logical split representation.
+//
+// PaimonConnectorSplit represents a planner-selected Paimon DataSplit: a
+// logical read unit with one or more files from the same partition/bucket.
+// Unlike a single-file split, it can group multiple physical files. A bucket
+// may produce several splits; a split need not contain every file in it.
+//
+// The planner supplies the file set and its snapshot identity. Files may
+// span LSM levels; when logical merging is needed, the necessary files must
+// remain together in the split. The split does not discover files from
+// storage or select snapshots.
+//
+// partitionKeys carries this split's partition values, including nulls,
+// rather than the table's partition column declaration. dataFiles carries
+// file paths and per-file metadata. PaimonTableHandle separately carries
+// the table definition and scan conditions.
+//
+// rawConvertible indicates that the planner-selected files can be read
+// without logical merging. It does not imply support for every file feature:
+// deletion vectors and changelog files require their own read semantics.
 
 namespace facebook::velox::connector::hive::paimon {
 
