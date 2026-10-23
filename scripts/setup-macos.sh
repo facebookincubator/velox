@@ -38,6 +38,10 @@ PYTHON_VENV=${PYTHON_VENV:-"${SCRIPT_DIR}/../.venv"}
 # This is used during package builds.
 OS_CXXFLAGS=" -isystem $(brew --prefix)/include "
 export OS_CXXFLAGS
+# Homebrew's unversioned openssl formula now points to OpenSSL 4, which Folly
+# does not build against yet. Pin OpenSSL 3 for the dependencies built here.
+export OPENSSL_ROOT_DIR=${OPENSSL_ROOT_DIR:-"$(brew --prefix openssl@3)"}
+export PKG_CONFIG_PATH="${OPENSSL_ROOT_DIR}/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
 export CMAKE_POLICY_VERSION_MINIMUM="3.5"
 
 DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)}
@@ -48,7 +52,7 @@ DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)}
 # /opt/homebrew/include shadow the built-in gmock in targets that reach
 # /opt/homebrew/include before the bundled googlemock, mixing two googletest
 # versions in one translation unit.
-MACOS_VELOX_DEPS="bison double-conversion fast_float flex icu4c libevent libsodium lz4 openssl simdjson snappy xz xxhash zstd"
+MACOS_VELOX_DEPS="bison double-conversion fast_float flex icu4c libevent libsodium lz4 openssl@3 simdjson snappy xz xxhash zstd"
 MACOS_BUILD_DEPS="ninja cmake"
 
 SUDO="${SUDO:-""}"

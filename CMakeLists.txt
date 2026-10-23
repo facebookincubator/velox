@@ -315,6 +315,25 @@ if(DEFINED ENV{INSTALL_PREFIX})
   include_directories(BEFORE "$ENV{INSTALL_PREFIX}/include")
 endif()
 
+# Homebrew's unversioned openssl formula now points to OpenSSL 4, which Folly
+# does not build against yet. Prefer Homebrew's OpenSSL 3 unless overridden.
+if(
+  CMAKE_SYSTEM_NAME MATCHES "Darwin"
+  AND NOT DEFINED OPENSSL_ROOT_DIR
+  AND NOT DEFINED ENV{OPENSSL_ROOT_DIR}
+)
+  execute_process(
+    COMMAND brew --prefix openssl@3
+    RESULT_VARIABLE BREW_OPENSSL
+    OUTPUT_VARIABLE BREW_OPENSSL_PREFIX
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+  )
+  if(BREW_OPENSSL EQUAL 0 AND EXISTS "${BREW_OPENSSL_PREFIX}")
+    message(STATUS "Found OpenSSL 3 installed by Homebrew at ${BREW_OPENSSL_PREFIX}")
+    set(OPENSSL_ROOT_DIR "${BREW_OPENSSL_PREFIX}")
+  endif()
+endif()
+
 # We look for OpenSSL here to cache the result enforce the version across our
 # dependencies.
 find_package(OpenSSL REQUIRED)
