@@ -94,6 +94,14 @@ class ChunkedDecoder {
   /// Decode nulls or in-map buffer values.
   void nextBools(uint64_t* data, int64_t count, const uint64_t* incomingNulls);
 
+  /// Decodes the nulls of the next 'count' rows of a scalar value stream into
+  /// 'nulls' and skips their values without decoding them. Rows that
+  /// 'incomingNulls' marks null are absent from the stream and come out null.
+  void nextNulls(
+      uint64_t* nulls,
+      velox::vector_size_t count,
+      const uint64_t* incomingNulls);
+
   /// Decode index type values, which usually needed to be read fully.
   void nextIndices(int32_t* data, int64_t count, const uint64_t* incomingNulls);
 

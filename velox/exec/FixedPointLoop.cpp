@@ -1008,6 +1008,13 @@ folly::coro::Task<std::vector<RowVectorPtr>> FixedPointLoop::runParallelChain(
       NanosecondWallTimer timer(&stats.taskStartNanos);
       for (size_t p = 0; p < tasks.size(); ++p) {
         tasks[p]->start(planDrivers[p]);
+        // A broadcast buffer finishes only once it knows all its destinations:
+        // every worker of this loop.
+        const auto* output = plans[p]->as<core::PartitionedOutputNode>();
+        if (output != nullptr && output->isBroadcast()) {
+          tasks[p]->updateOutputBuffers(
+              static_cast<int>(workers_.size()), /*noMoreBuffers=*/true);
+        }
       }
     }
 
@@ -1142,37 +1149,32 @@ folly::coro::Task<void> FixedPointLoop::runIteration(int32_t iteration) {
 
 namespace {
 
-// Reads the verdict the last convergence plan produced into 'rows', or returns
-// std::nullopt when it produced no rows.
-std::optional<bool> readVerdict(const std::vector<RowVectorPtr>& rows) {
+// Returns the verdict in 'rows', which must hold exactly one non-NULL BOOLEAN
+// row.
+bool readVerdict(const std::vector<RowVectorPtr>& rows) {
   // The last convergence plan is contracted (and validated at node
   // construction) to produce exactly one BOOLEAN column.  The row count is a
-  // runtime property the node cannot check, so enforce it here: a sequence
-  // emitting several rows would otherwise decide the loop on whichever batch
-  // arrived first, silently and nondeterministically.
-  static constexpr std::string_view kOneRow =
-      "The convergence sequence must produce at most one row; aggregate it to "
-      "a single verdict";
-  std::optional<bool> verdict;
-  for (const auto& row : rows) {
-    if (row->size() == 0) {
-      continue;
-    }
-
-    VELOX_USER_CHECK(!verdict.has_value(), kOneRow);
-    VELOX_USER_CHECK_EQ(row->size(), 1, "{}", kOneRow);
-
-    const auto* flag = row->childAt(0)->as<SimpleVector<bool>>();
-    VELOX_CHECK_NOT_NULL(flag, "Convergence column must be BOOLEAN");
-    // Reading NULL as "not converged" would run out the whole iteration budget
-    // and then report non-convergence, hiding that the criterion was malformed.
-    VELOX_USER_CHECK(
-        !flag->isNullAt(0),
-        "The convergence criterion produced a NULL verdict; it must be TRUE or "
-        "FALSE");
-    verdict = flag->valueAt(0);
-  }
-  return verdict;
+  // runtime property the node cannot check, so enforce it here: several rows
+  // would decide the loop on whichever batch arrived first, and no row leaves
+  // no verdict.
+  VELOX_USER_CHECK_EQ(
+      countRows(rows),
+      1u,
+      "The convergence sequence must produce exactly one row; aggregate it to "
+      "a single verdict");
+  const auto& row =
+      *std::find_if(rows.begin(), rows.end(), [](const auto& batch) {
+        return batch->size() > 0;
+      });
+  const auto* flag = row->childAt(0)->as<SimpleVector<bool>>();
+  VELOX_CHECK_NOT_NULL(flag, "Convergence column must be BOOLEAN");
+  // Reading NULL as "not converged" would run out the whole iteration budget
+  // and then report non-convergence, hiding that the criterion was malformed.
+  VELOX_USER_CHECK(
+      !flag->isNullAt(0),
+      "The convergence criterion produced a NULL verdict; it must be TRUE or "
+      "FALSE");
+  return flag->valueAt(0);
 }
 
 } // namespace
@@ -1244,16 +1246,11 @@ folly::coro::Task<bool> FixedPointLoop::converged() {
 
   if (computesVerdict) {
     recordStats();
-    const auto verdict = readVerdict(rows);
-    if (!hasVerdictPlan) {
-      // A plan over an empty state can produce no rows, which stops the loop
-      // (see ConvergenceConfig).
-      co_return verdict.value_or(true);
+    const bool verdict = readVerdict(rows);
+    if (hasVerdictPlan) {
+      options_.publishVerdict(address(0), iteration, verdict);
     }
-    VELOX_USER_CHECK(
-        verdict.has_value(), "A verdict plan must produce one row");
-    options_.publishVerdict(address(0), iteration, *verdict);
-    co_return *verdict;
+    co_return verdict;
   }
 
   folly::stop_watch<std::chrono::nanoseconds> waitTimer;

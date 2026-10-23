@@ -44,13 +44,16 @@ class NimbleData : public velox::dwio::common::FormatData {
       bool scanFastPath = false);
 
   /// Read internal node nulls. For leaf nodes, we only copy `incomingNulls' if
-  /// it exists.
+  /// it exists. A nulls-only read of a scalar column reads its nulls from the
+  /// value stream instead.
   void readNulls(
       velox::vector_size_t numValues,
       const uint64_t* incomingNulls,
       velox::BufferPtr& nulls,
       bool nullsOnly) override;
 
+  /// With nulls-only reads enabled, a nulls-only skip skips the value stream,
+  /// which holds the nulls, and returns 0.
   uint64_t skipNulls(uint64_t numValues, bool nullsOnly) override;
 
   uint64_t skip(uint64_t numValues) final {
@@ -79,6 +82,21 @@ class NimbleData : public velox::dwio::common::FormatData {
   }
 
   ChunkedDecoder makeScalarDecoder();
+
+  /// Enables nulls-only reads through 'decoder', which decodes this scalar
+  /// column's value stream. Takes effect only when:
+  ///
+  /// - scanFastPath is on.
+  /// - The encodings are non-legacy.
+  /// - The column has no in-map stream, which also holds nulls.
+  void setNullsOnlyDecoder(ChunkedDecoder* decoder);
+
+  /// Returns true if nulls-only reads are enabled and 'scanSpec' needs only the
+  /// column's nulls:
+  ///
+  /// - An IS NULL filter.
+  /// - An IS NOT NULL filter on a column whose values are not kept.
+  bool readsNullsOnly(const velox::common::ScanSpec& scanSpec) const;
 
   // Decoders for Timestamps
   ChunkedDecoder makeMicrosDecoder();
@@ -123,6 +141,9 @@ class NimbleData : public velox::dwio::common::FormatData {
   StripeStreams* const streams_;
   velox::memory::MemoryPool* const pool_;
   ChunkedDecoder* const inMapDecoder_;
+  // Decoder of a scalar column's value stream (which holds its nulls), owned by
+  // the column reader. Null when nulls-only reads are disabled.
+  ChunkedDecoder* nullsOnlyDecoder_{nullptr};
   std::unique_ptr<ChunkedDecoder> nullsDecoder_;
   velox::BufferPtr inMap_;
   const EncodingFactory* const encodingFactory_;
