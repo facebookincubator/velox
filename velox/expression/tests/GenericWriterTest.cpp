@@ -558,6 +558,35 @@ TEST_F(GenericWriterTest, dynamicRow) {
   ASSERT_EQ(current2.tryCastTo<DynamicRow>(), nullptr);
 }
 
+TEST_F(GenericWriterTest, dynamicRowSetNullResetsChildWriter) {
+  VectorPtr result;
+  BaseVector::ensureWritable(
+      SelectivityVector(2), ROW("a", ARRAY(BIGINT())), pool(), result);
+
+  VectorWriter<Any> writer;
+  writer.init(*result);
+
+  writer.setOffset(0);
+  auto& firstRow = writer.current().castTo<DynamicRow>();
+  auto& discardedArray = firstRow.get_writer_at(0).castTo<Array<Any>>();
+  discardedArray.add_item().castTo<int64_t>() = 1;
+  discardedArray.add_item().castTo<int64_t>() = 2;
+  firstRow.set_null_at(0);
+  writer.commit(true);
+
+  writer.setOffset(1);
+  auto& secondRow = writer.current().castTo<DynamicRow>();
+  secondRow.get_writer_at(0).castTo<Array<Any>>().add_item().castTo<int64_t>() =
+      3;
+  writer.commit(true);
+  writer.finish();
+
+  test::assertEqualVectors(
+      makeRowVector(
+          {"a"}, {makeNullableArrayVector<int64_t>({std::nullopt, {{3}}})}),
+      result);
+}
+
 TEST_F(GenericWriterTest, nested) {
   // Test with map of array.
   VectorPtr result;
