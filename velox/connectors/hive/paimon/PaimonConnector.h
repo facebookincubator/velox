@@ -62,8 +62,8 @@ class PaimonConnector final : public HiveConnector {
       const ColumnHandleMap& columnHandles,
       ConnectorQueryCtx* connectorQueryCtx) override;
 
-  /// Registers Paimon table/split serde and the reused HiveColumnHandle. Type,
-  /// Filter and expression serde are registered by the query plan owner.
+  /// Registers serde for Paimon table/split handles and HiveColumnHandle.
+  /// Callers must register type, filter and expression serde separately.
   static void registerSerDe();
 
  private:

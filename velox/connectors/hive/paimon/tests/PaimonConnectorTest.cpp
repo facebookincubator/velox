@@ -895,8 +895,8 @@ TEST_F(PaimonConnectorTest, fileExpressionPipelineWithLambda) {
       {"id", "value"},
       {makeFlatVector<int64_t>({1, 2, 3}),
        makeFlatVector<int64_t>({10, 20, 30})});
-  // Lambda arguments are handled by the existing expression compiler, not by
-  // a second Paimon expression-tree validator. The captured column is hidden.
+  // The lambda captures 'value', which is needed by the filter but is not
+  // included in the scan output.
   const auto table = makePaimonTableHandle(
       rowType, {}, parseExpr("any_match(array[20], x -> x = value)", rowType));
   const auto plan =

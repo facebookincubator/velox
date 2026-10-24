@@ -72,8 +72,8 @@ TEST_F(PaimonTableHandleTest, tableDefinition) {
   EXPECT_EQ(paimon->fieldIds(), (std::vector<int32_t>{7, 8, 20}));
   EXPECT_EQ(paimon->partitionKeys(), (std::vector<std::string>{"p"}));
   EXPECT_EQ(paimon->tableType(), PaimonTableType::kAppendOnly);
-  // The handle carries table identity. Opening an unsupported reader is a
-  // DataSource decision, not a second table-definition validation framework.
+  // The handle can describe primary-key tables even though reading them
+  // is not yet supported.
   EXPECT_EQ(
       table(PaimonTableType::kPrimaryKey)->tableType(),
       PaimonTableType::kPrimaryKey);

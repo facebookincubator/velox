@@ -68,10 +68,6 @@ class PaimonSplitReader : public FileSplitReader {
   }
 
  private:
-  // TODO: Add historical-schema adaptation using per-file schema metadata.
-  // TODO: Apply deletion vectors using original physical file row positions.
-  // TODO: Decode internal columns and row kinds for primary-key/changelog files.
-
   // Builds a FileConnectorSplit from a PaimonDataFile.
   std::shared_ptr<FileConnectorSplit> makeFileConnectorSplit(
       const PaimonDataFile& dataFile) const;

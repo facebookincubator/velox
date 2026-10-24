@@ -69,6 +69,9 @@ void PaimonSplitReader::prepareSplit(
 
 uint64_t PaimonSplitReader::next(uint64_t size, VectorPtr& output) {
   while (ensureFileSplitReader()) {
+    // TODO: Apply deletion vectors using original physical file row positions.
+    // TODO: Decode internal columns and row kinds for primary-key/changelog
+    // files.
     const auto rowsRead = FileSplitReader::next(size, output);
     if (rowsRead > 0) {
       return rowsRead;
@@ -90,6 +93,7 @@ bool PaimonSplitReader::ensureFileSplitReader() {
     // Point to the current file.
     fileSplit_ = fileSplits_[currentFileIndex_];
 
+    // TODO: Add historical-schema adaptation using per-file schema metadata.
     FileSplitReader::prepareSplit(metadataFilter_, *runtimeStats_);
     if (!emptySplit_) {
       return true;
