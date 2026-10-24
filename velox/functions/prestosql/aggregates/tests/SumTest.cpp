@@ -49,6 +49,14 @@ TEST_F(SumTest, sumTinyint) {
 
   // Global aggregation.
   testAggregations(vectors, {}, {"sum(c1)"}, "SELECT sum(c1) FROM tmp");
+  testAggregationsWithCompanion(
+      vectors,
+      [](auto&) {},
+      {},
+      {"sum(c1)"},
+      {{TINYINT()}},
+      {},
+      "SELECT sum(c1) FROM tmp");
 
   // Group by aggregation.
   testAggregations(
@@ -125,6 +133,14 @@ TEST_F(SumTest, sumDoubleAndFloat) {
         vectors,
         {},
         {"sum(c0)", "sum(c1)"},
+        "SELECT sum(c0), sum(c1) FROM tmp");
+    testAggregationsWithCompanion(
+        vectors,
+        [](auto&) {},
+        {},
+        {"sum(c0)", "sum(c1)"},
+        {{REAL()}, {DOUBLE()}},
+        {},
         "SELECT sum(c0), sum(c1) FROM tmp");
   }
 }

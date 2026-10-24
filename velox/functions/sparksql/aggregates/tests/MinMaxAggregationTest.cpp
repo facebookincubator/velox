@@ -69,6 +69,14 @@ class MinMaxAggregationTest
     // Global aggregation.
     testAggregations(
         vectors, {}, {min(c1), max(c1)}, "SELECT min(c1), max(c1) FROM tmp");
+    testAggregationsWithCompanion(
+        vectors,
+        [](auto&) {},
+        {},
+        {min(c1), max(c1)},
+        {{inputType}, {inputType}},
+        {},
+        "SELECT min(c1), max(c1) FROM tmp");
 
     // Group by aggregation.
     testAggregations(

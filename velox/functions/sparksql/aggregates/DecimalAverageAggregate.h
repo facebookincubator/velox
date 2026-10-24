@@ -71,9 +71,13 @@ class DecimalAverageAggregate {
     if (in.has_value()) {
       out.copy_from(std::make_tuple(in.value(), 1));
     } else {
-      out.copy_from(std::make_tuple(0, 0));
+      fillEmptyIntermediate(out);
     }
     return true;
+  }
+
+  static void fillEmptyIntermediate(exec::out_type<IntermediateType>& out) {
+    out.copy_from(std::make_tuple(int128_t{0}, int64_t{0}));
   }
 
   /// This struct stores the sum of input values, overflow during accumulation,

@@ -34,6 +34,22 @@ class AverageAggregate
     return true;
   }
 
+  bool supportsFillEmptyIntermediate() const override {
+    return true;
+  }
+
+  void fillEmptyIntermediate(const SelectivityVector& rows, VectorPtr& result)
+      const override {
+    auto* rowVector = result->as<RowVector>();
+    auto* sumVector = rowVector->childAt(0)->asFlatVector<TAccumulator>();
+    auto* countVector = rowVector->childAt(1)->asFlatVector<int64_t>();
+    rows.applyToSelected([&](vector_size_t row) {
+      rowVector->setNull(row, false);
+      sumVector->set(row, TAccumulator{0});
+      countVector->set(row, 0);
+    });
+  }
+
   void toIntermediate(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,

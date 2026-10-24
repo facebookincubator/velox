@@ -523,8 +523,7 @@ void FlatVector<T>::ensureWritable(const SelectivityVector& rows) {
           std::min(values_->size(), newValues->size()));
     } else {
       auto rawNewValues = newValues->asMutable<T>();
-      SelectivityVector rowsToCopy(BaseVector::length_);
-      rowsToCopy.deselect(rows);
+      auto rowsToCopy = rows.complement(BaseVector::length_);
       rowsToCopy.applyToSelected(
           [&](vector_size_t row) { rawNewValues[row] = rawValues_[row]; });
     }
