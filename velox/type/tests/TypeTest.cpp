@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/type/Type.h"
+#include <fmt/format.h>
 #include <sstream>
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/type/CppToType.h"
@@ -1194,27 +1195,26 @@ TEST(TypeTest, function) {
 }
 
 TEST(TypeTest, follySformat) {
-  EXPECT_EQ("BOOLEAN", folly::sformat("{}", BOOLEAN()));
-  EXPECT_EQ("TINYINT", folly::sformat("{}", TINYINT()));
-  EXPECT_EQ("SMALLINT", folly::sformat("{}", SMALLINT()));
-  EXPECT_EQ("INTEGER", folly::sformat("{}", INTEGER()));
-  EXPECT_EQ("BIGINT", folly::sformat("{}", BIGINT()));
-  EXPECT_EQ("REAL", folly::sformat("{}", REAL()));
-  EXPECT_EQ("DOUBLE", folly::sformat("{}", DOUBLE()));
-  EXPECT_EQ("VARCHAR", folly::sformat("{}", VARCHAR()));
-  EXPECT_EQ("VARBINARY", folly::sformat("{}", VARBINARY()));
-  EXPECT_EQ("TIMESTAMP", folly::sformat("{}", TIMESTAMP()));
-  EXPECT_EQ("DATE", folly::sformat("{}", DATE()));
+  EXPECT_EQ("BOOLEAN", fmt::format("{}", BOOLEAN()));
+  EXPECT_EQ("TINYINT", fmt::format("{}", TINYINT()));
+  EXPECT_EQ("SMALLINT", fmt::format("{}", SMALLINT()));
+  EXPECT_EQ("INTEGER", fmt::format("{}", INTEGER()));
+  EXPECT_EQ("BIGINT", fmt::format("{}", BIGINT()));
+  EXPECT_EQ("REAL", fmt::format("{}", REAL()));
+  EXPECT_EQ("DOUBLE", fmt::format("{}", DOUBLE()));
+  EXPECT_EQ("VARCHAR", fmt::format("{}", VARCHAR()));
+  EXPECT_EQ("VARBINARY", fmt::format("{}", VARBINARY()));
+  EXPECT_EQ("TIMESTAMP", fmt::format("{}", TIMESTAMP()));
+  EXPECT_EQ("DATE", fmt::format("{}", DATE()));
 
-  EXPECT_EQ("ARRAY<VARCHAR>", folly::sformat("{}", ARRAY(VARCHAR())));
-  EXPECT_EQ(
-      "MAP<VARCHAR,BIGINT>", folly::sformat("{}", MAP(VARCHAR(), BIGINT())));
+  EXPECT_EQ("ARRAY<VARCHAR>", fmt::format("{}", ARRAY(VARCHAR())));
+  EXPECT_EQ("MAP<VARCHAR,BIGINT>", fmt::format("{}", MAP(VARCHAR(), BIGINT())));
   EXPECT_EQ(
       "ROW<\"\":BOOLEAN,\"\":VARCHAR,\"\":BIGINT>",
-      folly::sformat("{}", ROW({BOOLEAN(), VARCHAR(), BIGINT()})));
+      fmt::format("{}", ROW({BOOLEAN(), VARCHAR(), BIGINT()})));
   EXPECT_EQ(
       "ROW<a:BOOLEAN,b:VARCHAR,c:BIGINT>",
-      folly::sformat(
+      fmt::format(
           "{}", ROW({{"a", BOOLEAN()}, {"b", VARCHAR()}, {"c", BIGINT()}})));
 }
 
