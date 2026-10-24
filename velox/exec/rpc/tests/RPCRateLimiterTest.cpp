@@ -404,6 +404,23 @@ TEST_F(RPCRateLimiterTest, backpressureReliefOnRelease) {
   EXPECT_EQ(limiterFor(backend).stats().pending, 0);
 }
 
+TEST_F(RPCRateLimiterTest, statsCountParkedCallers) {
+  const std::string backend = "test.backend";
+  setCeiling(backend, 1);
+  EXPECT_EQ(limiterFor(backend).stats().waiting, 0);
+
+  auto token = limiterFor(backend).acquire();
+  auto first = limiterFor(backend).admitOrWait();
+  auto second = limiterFor(backend).admitOrWait();
+  ASSERT_FALSE(first.admitted);
+  ASSERT_FALSE(second.admitted);
+  EXPECT_EQ(limiterFor(backend).stats().waiting, 2);
+
+  // A release wakes the parked callers, which then retry admission.
+  token = RPCRateLimiter::Token();
+  EXPECT_EQ(limiterFor(backend).stats().waiting, 0);
+}
+
 TEST_F(RPCRateLimiterTest, integerWaitersRetryAdmissionOnRelease) {
   const std::string backend = "test.backend";
   setCeiling(backend, 1);
