@@ -28,6 +28,8 @@
 #include "velox/connectors/hive/paimon/PaimonDataFileMeta.h"
 #include "velox/dwio/common/Options.h"
 
+namespace facebook::velox::connector::hive::paimon {
+
 // Paimon logical split representation.
 //
 // PaimonConnectorSplit represents a planner-selected Paimon DataSplit: a
@@ -49,9 +51,6 @@
 // without logical merging. It does not imply support for every file feature:
 // deletion vectors and changelog files require their own read semantics.
 
-namespace facebook::velox::connector::hive::paimon {
-
-/// Classifies a Paimon table by whether it declares primary keys.
 enum class PaimonTableType {
   /// Table without a primary key.
   kAppendOnly,
