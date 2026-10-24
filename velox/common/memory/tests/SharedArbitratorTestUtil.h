@@ -54,6 +54,18 @@ class SharedArbitratorTestHelper {
     }
   }
 
+  uint64_t reclaimUsedMemoryBySpill(
+      uint64_t targetBytes,
+      std::unordered_set<uint64_t>& reclaimedParticipants,
+      std::unordered_set<uint64_t>& failedParticipants,
+      bool& allParticipantsReclaimed) const {
+    return arbitrator_->reclaimUsedMemoryBySpill(
+        targetBytes,
+        reclaimedParticipants,
+        failedParticipants,
+        allParticipantsReclaimed);
+  }
+
   uint64_t maxArbitrationTimeNs() const {
     return arbitrator_->maxArbitrationTimeNs_;
   }
