@@ -449,21 +449,6 @@ class CardinalityFunction : public CudfFunction {
   }
 };
 
-class IsNullFunction : public CudfFunction {
- public:
-  explicit IsNullFunction(const core::TypedExprPtr& expr) {
-    VELOX_CHECK_EQ(expr->inputs().size(), 1, "is_null expects 1 input");
-  }
-
-  ColumnOrView eval(
-      std::vector<ColumnOrView>& inputColumns,
-      cuda::stream_ref stream,
-      rmm::device_async_resource_ref mr) const override {
-    VELOX_CHECK_EQ(inputColumns.size(), 1, "is_null expects 1 input");
-    return cudf::is_null(asView(inputColumns[0]), stream, mr);
-  }
-};
-
 class IsNotNullFunction : public CudfFunction {
  public:
   explicit IsNotNullFunction(const core::TypedExprPtr& expr) {
@@ -2318,19 +2303,6 @@ bool registerBuiltinFunctions(const std::string& prefix) {
       {FunctionSignatureBuilder()
            .returnType("boolean")
            .argumentType("boolean")
-           .build()});
-
-  registerCudfFunction(
-      "is_null",
-      [](const std::string&,
-         const core::TypedExprPtr& expr,
-         memory::MemoryPool*) {
-        return std::make_shared<IsNullFunction>(expr);
-      },
-      {FunctionSignatureBuilder()
-           .typeVariable("T")
-           .returnType("boolean")
-           .argumentType("T")
            .build()});
 
   registerCudfFunction(
