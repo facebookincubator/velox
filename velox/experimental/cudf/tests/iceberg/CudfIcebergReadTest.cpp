@@ -16,6 +16,8 @@
 
 /// Basic end-to-end read tests for the cudf Iceberg connector.
 
+#include "velox/experimental/cudf/CudfConfig.h"
+#include "velox/experimental/cudf/connectors/hive/CudfHiveConfig.h"
 #include "velox/experimental/cudf/tests/iceberg/CudfDeletionVectorTestUtils.h"
 #include "velox/experimental/cudf/tests/iceberg/CudfIcebergTestBase.h"
 
@@ -38,6 +40,8 @@
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/type/Timestamp.h"
 #include "velox/type/TimestampConversion.h"
+
+#include <cudf/types.hpp>
 
 #include <folly/Random.h>
 #include <folly/ScopeGuard.h>
@@ -2182,6 +2186,81 @@ TEST_F(CudfIcebergReadTest, timestampPartitionHonorsLocalTimeSetting) {
 
   // Interpret the partition string as local time and convert it to UTC.
   assertValue(true, localTimestamp);
+}
+
+// A TIMESTAMP partition column the split reader injects takes the type the
+// reader gives file timestamps, whatever unit cuDF expressions default to, so
+// an expression can combine the two.
+TEST_F(CudfIcebergReadTest, partitionTimestampMixedWithFileTimestamp) {
+  auto& config = CudfConfig::getInstance();
+  const auto originalUnit = config.timestampUnit;
+  SCOPE_EXIT {
+    config.timestampUnit = originalUnit;
+  };
+
+  auto input = makeRowVector(
+      {"flag", "file_ts"},
+      {makeFlatVector<bool>({true, false}),
+       makeFlatVector<Timestamp>(
+           {Timestamp(1'700'000'000, 0), Timestamp(1'700'000'001, 0)})});
+  auto dataFile = TempFilePath::create();
+  writeToFile(dataFile->getPath(), input);
+  const auto tableType =
+      ROW({"flag", "file_ts", "partition_ts"},
+          {BOOLEAN(), TIMESTAMP(), TIMESTAMP()});
+  const auto fileValues = makeRowVector({input->childAt(1)});
+  const auto caseValues = makeRowVector({makeFlatVector<Timestamp>(
+      {Timestamp(1'577'836'800, 0), Timestamp(1'700'000'001, 0)})});
+
+  // The reader's timestamp type is pinned through the session to a unit
+  // distinct from both default units below, so each scan proves the column
+  // follows the reader rather than a fixed unit. The setting takes the
+  // enumerator's integer value.
+  const auto readerTimestampType = std::to_string(
+      static_cast<int32_t>(cudf::type_id::TIMESTAMP_MICROSECONDS));
+
+  // Projects 'projection' over the file and partition timestamps of a split
+  // in the partition 'partitionValue', expecting 'expected'.
+  const auto check = [&](const std::string& projection,
+                         const std::optional<std::string>& partitionValue,
+                         const RowVectorPtr& expected) {
+    SCOPED_TRACE(projection);
+    auto plan = PlanBuilder()
+                    .startTableScan()
+                    .connectorId(kCudfIcebergConnectorId)
+                    .outputType(tableType)
+                    .dataColumns(tableType)
+                    .assignments(makeAssignments(tableType, {"partition_ts"}))
+                    .endTableScan()
+                    .project({projection})
+                    .planNode();
+    AssertQueryBuilder(plan)
+        .connectorSessionProperty(
+            kCudfIcebergConnectorId,
+            facebook::velox::connector::hive::HiveConfig::
+                kReadTimestampPartitionValueAsLocalTimeSession,
+            "false")
+        .connectorSessionProperty(
+            kCudfIcebergConnectorId,
+            cudf_velox::connector::hive::CudfHiveConfig::kTimestampTypeSession,
+            readerTimestampType)
+        .splits(makeIcebergSplits(
+            dataFile->getPath(), {}, {{"partition_ts", partitionValue}}))
+        .assertResults(expected);
+  };
+
+  for (const auto& [unit, label] :
+       {std::pair{cudf::type_id::TIMESTAMP_MILLISECONDS, "ms default unit"},
+        std::pair{cudf::type_id::TIMESTAMP_NANOSECONDS, "ns default unit"}}) {
+    SCOPED_TRACE(label);
+    config.timestampUnit = unit;
+    check("file_ts", std::nullopt, fileValues);
+    check("coalesce(partition_ts, file_ts)", std::nullopt, fileValues);
+    check(
+        "CASE WHEN flag THEN partition_ts ELSE file_ts END",
+        "2020-01-01 00:00:00",
+        caseValues);
+  }
 }
 
 /// A remaining filter is allowed with positional deletes
