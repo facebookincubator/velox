@@ -79,6 +79,13 @@ class NimbleReaderOptions : public velox::dwio::common::FormatSpecificOptions {
  public:
   /// Resolves External shared integer dictionaries referenced by this file.
   std::shared_ptr<const ExternalDictionaryResolver> externalDictionaryResolver;
+
+  /// NOTE: !!! This is under experimentation and please do not turn on in
+  /// production use case !!!
+  /// When true, kStreamMajor stripe groups share one EncodingView among streams
+  /// whose offsets or sizes arrays reference the same encoded payload, which
+  /// files written with experimentalStripeGroupMetadataDeduplication contain.
+  bool experimentalStripeGroupEncodingViewDeduplication{false};
 };
 
 namespace test {
@@ -174,6 +181,14 @@ class TabletReader {
     /// when the weak-pointer cache entries would otherwise expire. Works
     /// independently of cacheMetadata.
     bool pinMetadata{false};
+
+    /// If true, kStreamMajor stripe groups build one EncodingView per distinct
+    /// encoded offsets or sizes payload instead of one per stream, so streams
+    /// whose arrays TabletWriter deduplicated share a view. Reduces resident
+    /// stripe-group metadata for files written with stripe-group metadata
+    /// deduplication. Set from
+    /// NimbleReaderOptions::experimentalStripeGroupEncodingViewDeduplication.
+    bool stripeGroupEncodingViewDeduplicationEnabled{false};
 
     /// If true, caches file metadata and index metadata in the async data
     /// cache. Takes effect only when fileHandle and cache are provided.
@@ -668,6 +683,7 @@ class TabletReader {
   const std::string clusterIndexName_;
   const bool loadChunkStats_;
   const bool loadDenseIndexes_;
+  const bool stripeGroupEncodingViewDeduplicationEnabled_;
   // IO options copied from Options.ioOptions (required, with non-null
   // metadataIoStats).
   const velox::io::ReaderOptions ioOptions_;
