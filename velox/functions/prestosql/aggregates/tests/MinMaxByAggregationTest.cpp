@@ -15,15 +15,45 @@
  */
 
 #include <fmt/format.h>
+#include <folly/Range.h>
+#include <glog/logging.h>
+#include <gtest/gtest.h>
+#include <algorithm>
+#include <cmath>
+#include <cstdint>
+#include <limits>
+#include <memory>
+#include <optional>
+#include <ostream>
+#include <random>
+#include <string>
+#include <unordered_map>
+#include <utility>
+#include <vector>
+#include "velox/common/base/Exceptions.h"
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/core/PlanNode.h"
+#include "velox/core/QueryConfig.h"
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/RowContainer.h"
+#include "velox/exec/Task.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
 #include "velox/functions/prestosql/aggregates/AggregateNames.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
+#include "velox/type/CppToType.h"
+#include "velox/type/HugeInt.h"
+#include "velox/type/StringView.h"
+#include "velox/type/Timestamp.h"
+#include "velox/type/Type.h"
+#include "velox/type/TypeKind.h"
+#include "velox/vector/BaseVector.h"
+#include "velox/vector/ComplexVector.h"
+#include "velox/vector/FlatVector.h"
+#include "velox/vector/TypeAliases.h"
+#include "velox/vector/fuzzer/VectorFuzzer.h"
 
 using namespace facebook::velox::exec::test;
 using namespace facebook::velox::functions::aggregate::test;
@@ -1141,6 +1171,58 @@ VELOX_INSTANTIATE_TEST_SUITE_P(
     testing::ValuesIn(getTestParams()));
 
 class MinMaxByComplexTypes : public AggregationTestBase {};
+
+// Exercise real row-container placement, including a comparison wider than its
+// value.
+TEST_F(MinMaxByComplexTypes, accumulatorAlignment) {
+  core::QueryConfig queryConfig({});
+  for (const auto& name : {"min_by", "max_by"}) {
+    for (const auto& types : std::vector<std::pair<TypePtr, TypePtr>>{
+             {BIGINT(), BIGINT()},
+             {TINYINT(), BIGINT()},
+             {BIGINT(), TINYINT()}}) {
+      SCOPED_TRACE(
+          fmt::format(
+              "{}({}, {})",
+              name,
+              types.first->toString(),
+              types.second->toString()));
+      auto aggregate = exec::Aggregate::create(
+          name,
+          core::AggregationNode::Step::kSingle,
+          {types.first, types.second},
+          types.first,
+          queryConfig);
+      EXPECT_GE(aggregate->accumulatorAlignmentSize(), alignof(int64_t));
+    }
+  }
+
+  // Boolean grouping keys leave compact row offsets. The tinyint/bigint pair
+  // additionally requires padding inside the accumulator, not just at its
+  // start.
+  auto data = makeRowVector({
+      makeFlatVector<bool>({false, false, true, true}),
+      makeFlatVector<int8_t>({1, 2, 3, 4}),
+      makeFlatVector<int64_t>({40, 30, 20, 10}),
+  });
+  auto expected = makeRowVector({
+      makeFlatVector<bool>({false, true}),
+      makeFlatVector<int8_t>({2, 4}),
+      makeFlatVector<int8_t>({1, 3}),
+      makeFlatVector<int64_t>({40, 20}),
+      makeFlatVector<int64_t>({30, 10}),
+      makeFlatVector<int64_t>({30, 10}),
+  });
+  testAggregations(
+      {data},
+      {"c0"},
+      {"min_by(c1, c2)",
+       "max_by(c1, c2)",
+       "min_by(c2, c1)",
+       "max_by(c2, c1)",
+       "min_by(c2, c2)"},
+      {expected});
+}
 
 TEST_F(MinMaxByComplexTypes, trackRowSize) {
   // A non-numeric value is held in the HashStringAllocator by
