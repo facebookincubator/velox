@@ -4140,7 +4140,30 @@ void Task::createExchangeClientLocked(
       "Exchange client has been created for planNode: {}",
       planNodeId);
 
-  const auto* exchangeNode = planNode->as<core::ExchangeNode>();
+  auto [client, entry] = makeExchangeClient(
+      *planNode,
+      numberOfConsumers,
+      addExchangeClientPool(planNodeId, pipelineId));
+  exchangeClients_[pipelineId] = std::move(client);
+  exchangeTransportEntries_[pipelineId] = std::move(entry);
+  exchangeClientByPlanNode_.emplace(planNodeId, exchangeClients_[pipelineId]);
+  // MergeExchange fetches through clients of its own. A node that takes no
+  // splits has nothing to forward.
+  if (!planNode->is<core::MergeExchangeNode>()) {
+    if (auto it = splitsStates_.find(planNodeId); it != splitsStates_.end()) {
+      it->second.exchangeClient = exchangeClients_[pipelineId];
+    }
+  }
+}
+
+std::pair<
+    std::shared_ptr<ExchangeClient>,
+    std::shared_ptr<ExchangeTransportEntry>>
+Task::makeExchangeClient(
+    const core::PlanNode& planNode,
+    int32_t numberOfConsumers,
+    memory::MemoryPool* pool) const {
+  const auto* exchangeNode = planNode.as<core::ExchangeNode>();
   const std::string transport = exchangeNode != nullptr
       ? exchangeNode->transportKind()
       : std::string{core::TransportKind::kInMemory};
@@ -4150,7 +4173,7 @@ void Task::createExchangeClientLocked(
   // An unavailable transport is a plan configuration error.
   VELOX_USER_CHECK_NOT_NULL(
       entry, "No exchange client registered for transport '{}'", transport);
-  if (planNode->is<core::MergeExchangeNode>()) {
+  if (planNode.is<core::MergeExchangeNode>()) {
     VELOX_USER_CHECK(
         entry->makeMergeExchangeOperator != nullptr,
         "Exchange transport does not support merge exchange: {}",
@@ -4164,7 +4187,7 @@ void Task::createExchangeClientLocked(
       .numberOfConsumers = numberOfConsumers,
       .maxExchangeBufferSize = queryConfig.maxExchangeBufferSize(),
       .minExchangeOutputBatchBytes = queryConfig.minExchangeOutputBatchBytes(),
-      .pool = addExchangeClientPool(planNodeId, pipelineId),
+      .pool = pool,
       .executor = queryCtx()->executor(),
       .queryConfig = queryConfig};
   auto client = entry->makeClient(context);
@@ -4172,17 +4195,7 @@ void Task::createExchangeClientLocked(
       client,
       "Exchange transport created a null exchange client for transport '{}'",
       transport);
-
-  exchangeClients_[pipelineId] = std::move(client);
-  exchangeTransportEntries_[pipelineId] = std::move(entry);
-  exchangeClientByPlanNode_.emplace(planNodeId, exchangeClients_[pipelineId]);
-  // MergeExchange fetches through clients of its own. A node that takes no
-  // splits has nothing to forward.
-  if (!planNode->is<core::MergeExchangeNode>()) {
-    if (auto it = splitsStates_.find(planNodeId); it != splitsStates_.end()) {
-      it->second.exchangeClient = exchangeClients_[pipelineId];
-    }
-  }
+  return {std::move(client), std::move(entry)};
 }
 
 std::shared_ptr<ExchangeClient> Task::getExchangeClientLocked(
