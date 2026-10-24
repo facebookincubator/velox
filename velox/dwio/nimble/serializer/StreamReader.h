@@ -24,9 +24,9 @@
 #include <folly/container/F14Map.h>
 #include <folly/coro/Task.h>
 #include "velox/common/memory/Memory.h"
+#include "velox/dwio/nimble/common/RowRange.h"
 #include "velox/dwio/nimble/encodings/common/Encoding.h"
-#include "velox/dwio/nimble/velox/Decoder.h"
-#include "velox/dwio/nimble/velox/RowRange.h"
+#include "velox/dwio/nimble/reader/Decoder.h"
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/ComplexVector.h"
 

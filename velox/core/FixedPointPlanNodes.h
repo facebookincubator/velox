@@ -444,9 +444,10 @@ class FixedPointNode : public PlanNode {
   /// Number of workers this fixed point runs as: one per output partition of
   /// whichever chain shuffles -- the body, the convergence sequence, or a fixed
   /// point nested in any of its plans.  1 when none does.  A convergence
-  /// sequence that only gathers to worker 0 has one partition, so it leaves
-  /// this at 1, yet the loop reads every peer (see readsPeers()) and runs on as
-  /// many workers as the coordinator names.
+  /// sequence that only gathers to worker 0, or a chain that only broadcasts,
+  /// has one partition, so it leaves this at 1, yet the loop reads every peer
+  /// (see readsPeers()) and runs on as many workers as the coordinator names.
+  /// A broadcast reaches every one of them.
   int32_t numWorkers() const;
 
   folly::dynamic serialize() const override;

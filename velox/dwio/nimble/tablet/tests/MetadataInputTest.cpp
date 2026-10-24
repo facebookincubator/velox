@@ -41,6 +41,8 @@
 #include "velox/dwio/nimble/tablet/Compression.h"
 
 #include "folly/executors/IOThreadPoolExecutor.h"
+#include "folly/executors/InlineExecutor.h"
+#include "folly/executors/ManualExecutor.h"
 #include "folly/synchronization/Baton.h"
 
 #include <thread>
@@ -282,6 +284,92 @@ TEST_F(DirectMetadataInputTest, repeatedLoad) {
   NIMBLE_ASSERT_THROW(
       input->load(std::span<const nimble::MetadataSection>{}),
       "No sections to load");
+}
+
+TEST_F(DirectMetadataInputTest, executorStartsNoTaskDuringLoad) {
+  // The gap between the sections exceeds the coalesce distance, so they form
+  // two IO groups and load() hands the second group to the executor.
+  const std::string data0 = "first";
+  const std::string data1 = "second";
+  const nimble::MetadataSection section0{
+      /*offset=*/0,
+      /*size=*/static_cast<uint32_t>(data0.size()),
+      nimble::CompressionType::Uncompressed,
+      /*uncompressedSize=*/static_cast<uint32_t>(data0.size()),
+  };
+  const nimble::MetadataSection section1{
+      /*offset=*/data0.size() + 100,
+      /*size=*/static_cast<uint32_t>(data1.size()),
+      nimble::CompressionType::Uncompressed,
+      /*uncompressedSize=*/static_cast<uint32_t>(data1.size()),
+  };
+  const auto fileContent =
+      buildFileContent({section0, section1}, {data0, data1});
+  auto readFile = std::make_shared<nimble::testing::TrackingReadFile>(
+      std::make_shared<velox::InMemoryReadFile>(fileContent));
+
+  // The manual executor starts no task until drain(), so load() reads both
+  // groups itself and returns while the task is still queued.
+  folly::ManualExecutor executor;
+  auto options = makeMetadataInputOptions(/*maxCoalesceDistance=*/0);
+  options.executor = &executor;
+  auto input = nimble::MetadataInput::create(readFile.get(), options);
+  const auto results = input->load(std::array{section0, section1});
+  ASSERT_EQ(results.size(), 2);
+  EXPECT_EQ(results[0]->content(), data0);
+  EXPECT_EQ(results[1]->content(), data1);
+
+  // load() reads the unqueued group before it claims the queued one. That
+  // gives a running executor time to start the queued one.
+  const auto ioGroups = readFile->ioGroups();
+  ASSERT_EQ(ioGroups.size(), 2);
+  EXPECT_EQ(ioGroups[0].offset, section0.offset());
+  EXPECT_EQ(ioGroups[1].offset, section1.offset());
+
+  // The queued task runs after load() returns and after the MetadataInput is
+  // destroyed, as when a cached tablet is evicted. ASAN reports any access to
+  // the freed state.
+  input.reset();
+  EXPECT_EQ(executor.drain(), 1);
+}
+
+TEST_F(DirectMetadataInputTest, executorReadsAllButFirstGroup) {
+  // The gap between the sections exceeds the coalesce distance, so they form
+  // two IO groups.
+  const std::string data0 = "first";
+  const std::string data1 = "second";
+  const nimble::MetadataSection section0{
+      /*offset=*/0,
+      /*size=*/static_cast<uint32_t>(data0.size()),
+      nimble::CompressionType::Uncompressed,
+      /*uncompressedSize=*/static_cast<uint32_t>(data0.size()),
+  };
+  const nimble::MetadataSection section1{
+      /*offset=*/data0.size() + 100,
+      /*size=*/static_cast<uint32_t>(data1.size()),
+      nimble::CompressionType::Uncompressed,
+      /*uncompressedSize=*/static_cast<uint32_t>(data1.size()),
+  };
+  const auto fileContent =
+      buildFileContent({section0, section1}, {data0, data1});
+  auto readFile = std::make_shared<nimble::testing::TrackingReadFile>(
+      std::make_shared<velox::InMemoryReadFile>(fileContent));
+
+  // The inline executor runs each task inside add(), so the first read is the
+  // group load() queued. load() then reads the first group and takes the
+  // queued group's finished read.
+  auto options = makeMetadataInputOptions(/*maxCoalesceDistance=*/0);
+  options.executor = &folly::InlineExecutor::instance();
+  auto input = nimble::MetadataInput::create(readFile.get(), options);
+  const auto results = input->load(std::array{section0, section1});
+  ASSERT_EQ(results.size(), 2);
+  EXPECT_EQ(results[0]->content(), data0);
+  EXPECT_EQ(results[1]->content(), data1);
+
+  const auto ioGroups = readFile->ioGroups();
+  ASSERT_EQ(ioGroups.size(), 2);
+  EXPECT_EQ(ioGroups[0].offset, section1.offset());
+  EXPECT_EQ(ioGroups[1].offset, section0.offset());
 }
 
 TEST_F(DirectMetadataInputTest, ioStats) {

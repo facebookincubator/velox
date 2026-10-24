@@ -72,6 +72,7 @@ class NullableEncoding final
 
   void reset() final;
   void skip(uint32_t rowCount) final;
+  void readNulls(uint32_t rowCount, uint64_t* nulls, int begin) final;
   void materialize(uint32_t rowCount, void* buffer) final;
   uint32_t materializeNullable(
       uint32_t rowCount,
@@ -233,6 +234,17 @@ void NullableEncoding<T>::skip(uint32_t rowCount) {
   const uint32_t nonNullCount =
       std::accumulate(nullBuffer_.begin(), nullBuffer_.end(), 0U);
   nonNullValues_->skip(nonNullCount);
+}
+
+template <typename T>
+void NullableEncoding<T>::readNulls(
+    uint32_t rowCount,
+    uint64_t* nulls,
+    int begin) {
+  nulls_->materializeBoolsAsBits(rowCount, nulls, begin);
+  nonNullValues_->skip(
+      static_cast<uint32_t>(velox::bits::countBits(
+          nulls, begin, begin + static_cast<int>(rowCount))));
 }
 
 template <typename T>

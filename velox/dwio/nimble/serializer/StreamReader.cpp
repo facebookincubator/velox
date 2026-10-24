@@ -22,11 +22,11 @@
 
 #include "velox/common/Casts.h"
 #include "velox/dwio/common/TypeWithId.h"
+#include "velox/dwio/nimble/common/ChunkedStream.h"
+#include "velox/dwio/nimble/common/SchemaUtils.h"
 #include "velox/dwio/nimble/encodings/views/EncodingViewFactory.h"
+#include "velox/dwio/nimble/reader/FieldReader.h"
 #include "velox/dwio/nimble/serializer/EncodingViewDecoder.h"
-#include "velox/dwio/nimble/velox/ChunkedStream.h"
-#include "velox/dwio/nimble/velox/FieldReader.h"
-#include "velox/dwio/nimble/velox/SchemaUtils.h"
 
 namespace facebook::nimble {
 namespace {

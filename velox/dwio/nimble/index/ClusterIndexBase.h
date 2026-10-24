@@ -30,6 +30,7 @@
 #include "velox/dwio/nimble/index/IndexLookup.h"
 #include "velox/dwio/nimble/index/IndexTypes.h"
 #include "velox/dwio/nimble/index/KeyChunkDecoder.h"
+#include "velox/dwio/nimble/index/KeyComparator.h"
 #include "velox/dwio/nimble/index/SortOrder.h"
 #include "velox/dwio/nimble/tablet/ClusterIndexGenerated.h"
 #include "velox/dwio/nimble/tablet/MetadataBuffer.h"
@@ -161,11 +162,14 @@ class ClusterIndexBase : public IndexLookup {
   // keyCursor().
   class KeyIterator;
 
+  // 'keyComparator' is the order of the encoded keys, or null for bytewise
+  // order; 'keyReaderFactory' must create readers that seek in the same order.
   ClusterIndexBase(
       Section rootSection,
       std::shared_ptr<MetadataInput> metadataInput,
       std::shared_ptr<velox::dwio::common::BufferedInput> dataInput,
       KeyReaderFactory keyReaderFactory,
+      const KeyComparator* keyComparator,
       bool pinIndex,
       bool preloadIndex,
       velox::memory::MemoryPool* pool);
@@ -242,9 +246,12 @@ class ClusterIndexBase : public IndexLookup {
       return index->chunk_keys()->size();
     }
 
-    // Returns the chunk index for the given encoded key via binary search.
-    // The key must be within the partition's chunk range.
-    uint32_t chunkIndex(std::string_view encodedKey) const;
+    // Returns the chunk index for the given encoded key via binary search
+    // under 'keyComparator', or bytewise when it is null. The key must be
+    // within the partition's chunk range.
+    uint32_t chunkIndex(
+        std::string_view encodedKey,
+        const KeyComparator* keyComparator) const;
 
     uint32_t chunkOffset(uint32_t chunkIdx) const {
       return index->chunk_offsets()->Get(chunkIdx);
@@ -407,6 +414,9 @@ class ClusterIndexBase : public IndexLookup {
   const std::shared_ptr<MetadataInput> metadataInput_;
   const std::shared_ptr<velox::dwio::common::BufferedInput> dataInput_;
   const KeyReaderFactory keyReaderFactory_;
+
+  // Order of the encoded keys, or null for bytewise order.
+  const KeyComparator* const keyComparator_;
   velox::memory::MemoryPool* const pool_;
 
   // When true, every decoded chunk stays pinned in IndexPartition::

@@ -158,7 +158,7 @@ class Aggregate {
   // @param indices Indices into 'groups' of the new entries.
   virtual void initializeNewGroups(
       char** groups,
-      folly::Range<const vector_size_t*> indices) {
+      folly::Range<const vector_size_t*> indices) final {
     initializeNewGroupsInternal(groups, indices);
 
     for (auto index : indices) {
@@ -318,7 +318,7 @@ class Aggregate {
 
   // Frees any out of line storage for the accumulator in
   // 'groups' and marks the aggregate as uninitialized.
-  virtual void destroy(folly::Range<char**> groups) {
+  virtual void destroy(folly::Range<char**> groups) final {
     destroyInternal(groups);
 
     for (auto* group : groups) {

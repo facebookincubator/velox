@@ -22,7 +22,7 @@
 #include "velox/buffer/BufferPool.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/dwio/nimble/encodings/views/EncodingView.h"
-#include "velox/dwio/nimble/velox/Decoder.h"
+#include "velox/dwio/nimble/reader/Decoder.h"
 
 namespace facebook::nimble {
 
