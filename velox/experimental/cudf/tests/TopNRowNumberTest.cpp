@@ -14,12 +14,17 @@
  * limitations under the License.
  */
 #include "velox/experimental/cudf/CudfConfig.h"
+#include "velox/experimental/cudf/exec/CudfTopNRowNumber.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
+
+#include <limits>
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec::test;
@@ -67,6 +72,15 @@ class TopNRowNumberTest : public OperatorTestBase {
       const core::PlanNodePtr& plan,
       const std::string& duckDbSql) {
     auto task = assertQuery(plan, duckDbSql);
+    ASSERT_TRUE(wasCudfTopNRowNumberUsed(task));
+    ASSERT_FALSE(wasCpuTopNRowNumberUsed(task));
+  }
+
+  void assertCpuAndGpuResults(const core::PlanNodePtr& plan) {
+    cudf_velox::unregisterCudf();
+    auto expected = AssertQueryBuilder(plan).copyResults(pool());
+    cudf_velox::registerCudf();
+    auto task = AssertQueryBuilder(plan).assertResults(expected);
     ASSERT_TRUE(wasCudfTopNRowNumberUsed(task));
     ASSERT_FALSE(wasCpuTopNRowNumberUsed(task));
   }
@@ -266,26 +280,299 @@ TEST_F(TopNRowNumberTest, manySmallBatchesStaggeredPartitions) {
       "WHERE row_number <= 4");
 }
 
-TEST_F(TopNRowNumberTest, rankFallsBackToCpu) {
-  cudf_velox::unregisterCudf();
-  cudf_velox::CudfConfig::getInstance().allowCpuFallback = true;
-  cudf_velox::registerCudf();
-
+TEST_F(TopNRowNumberTest, rank) {
   auto data = makeRowVector({
-      makeFlatVector<int64_t>({1, 1, 2, 2}),
-      makeFlatVector<int64_t>({10, 20, 30, 40}),
-      makeFlatVector<int64_t>({100, 200, 300, 400}),
+      makeNullableFlatVector<int64_t>(
+          {1, 1, 2, std::nullopt, 1, 2, std::nullopt, 1, 2, 3, 3, 1}),
+      makeNullableFlatVector<int64_t>(
+          {30, 20, 30, 10, 10, 20, 10, 10, 20, std::nullopt, std::nullopt, 20}),
+      makeFlatVector<int64_t>(12, [](auto row) { return row; }),
   });
   createDuckDbTable({data});
 
-  auto plan = PlanBuilder()
-                  .values({data})
-                  .topNRank("rank", {"c0"}, {"c1"}, 2, true)
-                  .planNode();
-  auto task = assertQuery(
-      plan,
-      "SELECT * FROM (SELECT *, rank() over (partition by c0 order by c1) as row_number FROM tmp) "
-      "WHERE row_number <= 2");
-  ASSERT_FALSE(wasCudfTopNRowNumberUsed(task));
-  ASSERT_TRUE(wasCpuTopNRowNumberUsed(task));
+  // Better keys and peers arrive in later batches. Keep every peer at the
+  // cutoff, even when their number exceeds the limit.
+  for (const auto& function : {"rank", "dense_rank"}) {
+    for (bool partitioned : {false, true}) {
+      for (bool generateRowNumber : {false, true}) {
+        for (int32_t limit : {1, 2, 3, 20}) {
+          for (auto numBatches : {1, 4}) {
+            SCOPED_TRACE(
+                fmt::format(
+                    "function={}, partitioned={}, generate={}, limit={}, batches={}",
+                    function,
+                    partitioned,
+                    generateRowNumber,
+                    limit,
+                    numBatches));
+            auto plan = PlanBuilder()
+                            .values(split(data, numBatches))
+                            .topNRank(
+                                function,
+                                partitioned ? std::vector<std::string>{"c0"}
+                                            : std::vector<std::string>{},
+                                {"c1"},
+                                limit,
+                                generateRowNumber)
+                            .planNode();
+            assertGpuTopNRowNumber(
+                plan,
+                fmt::format(
+                    "SELECT {} FROM (SELECT *, {}() OVER ({} ORDER BY c1) "
+                    "AS row_number FROM tmp) WHERE row_number <= {}",
+                    generateRowNumber ? "*" : "c0, c1, c2",
+                    function,
+                    partitioned ? "PARTITION BY c0" : "",
+                    limit));
+          }
+        }
+      }
+    }
+  }
+}
+
+TEST_F(TopNRowNumberTest, rankMultipleKeys) {
+  auto data = makeRowVector({
+      makeNullableFlatVector<int64_t>(
+          {1, 2, 1, 1, std::nullopt, 2, 1, std::nullopt, 2, 1, 2, 1}),
+      makeNullableFlatVector<int64_t>(
+          {10, 20, 10, std::nullopt, 10, 20, 10, 10, 20, std::nullopt, 30, 10}),
+      makeNullableFlatVector<std::string>(
+          {"b",
+           "b",
+           "a",
+           "a",
+           "a",
+           "b",
+           "a",
+           "a",
+           std::nullopt,
+           "a",
+           "c",
+           "c"}),
+      makeFlatVector<int64_t>(12, [](auto row) { return row; }),
+  });
+  createDuckDbTable({data});
+
+  for (const auto& function : {"rank", "dense_rank"}) {
+    for (bool partitioned : {false, true}) {
+      for (bool ascending : {false, true}) {
+        for (bool nullsFirst : {false, true}) {
+          for (int32_t limit : {1, 2, 3}) {
+            SCOPED_TRACE(
+                fmt::format(
+                    "function={}, partitioned={}, ascending={}, nullsFirst={}, limit={}",
+                    function,
+                    partitioned,
+                    ascending,
+                    nullsFirst,
+                    limit));
+            auto ordering = fmt::format(
+                "c1 {} NULLS {}",
+                ascending ? "ASC" : "DESC",
+                nullsFirst ? "FIRST" : "LAST");
+            auto plan = PlanBuilder()
+                            .values(split(data, 4))
+                            .topNRank(
+                                function,
+                                partitioned ? std::vector<std::string>{"c0"}
+                                            : std::vector<std::string>{},
+                                {ordering, "c2 DESC NULLS LAST"},
+                                limit,
+                                true)
+                            .planNode();
+            assertGpuTopNRowNumber(
+                plan,
+                fmt::format(
+                    "SELECT * FROM (SELECT *, {}() OVER ({} ORDER BY {}, "
+                    "c2 DESC NULLS LAST) AS row_number FROM tmp) "
+                    "WHERE row_number <= {}",
+                    function,
+                    partitioned ? "PARTITION BY c0" : "",
+                    ordering,
+                    limit));
+          }
+        }
+      }
+    }
+
+    auto plan = PlanBuilder()
+                    .values(split(data, 4))
+                    .topNRank(function, {"c0", "c2"}, {"c1 DESC"}, 2, true)
+                    .planNode();
+    assertGpuTopNRowNumber(
+        plan,
+        fmt::format(
+            "SELECT * FROM (SELECT *, {}() OVER (PARTITION BY c0, c2 "
+            "ORDER BY c1 DESC) AS row_number FROM tmp) WHERE row_number <= 2",
+            function));
+  }
+}
+
+TEST_F(TopNRowNumberTest, rankSpecialValues) {
+  const auto nan = std::numeric_limits<double>::quiet_NaN();
+  auto floatingData = makeRowVector({
+      makeNullableFlatVector<double>(
+          {nan, 0.0, 1.0, -nan, -0.0, 1.0, nan, -0.0, -nan, std::nullopt}),
+      makeNullableFlatVector<double>(
+          {nan, 0.0, nan, -nan, -0.0, 3.0, 2.0, std::nullopt, -nan, 0.0}),
+      makeFlatVector<int64_t>(10, [](auto row) { return row; }),
+  });
+
+  auto sortingKeys = makeRowVector({
+      makeNullableFlatVector<int64_t>(
+          {1, 1, std::nullopt, 2, 1, 2, 1, 2, std::nullopt, 1}),
+      makeNullableFlatVector<std::string>(
+          {"a", "a", "b", "c", std::nullopt, "c", "a", "b", "b", "a"}),
+  });
+  sortingKeys->setNull(2, true);
+  sortingKeys->setNull(8, true);
+  auto nestedData = makeRowVector({
+      makeFlatVector<int64_t>({1, 1, 2, 1, 1, 1, 2, 1, 2, 1}),
+      sortingKeys,
+      makeFlatVector<int64_t>(10, [](auto row) { return row; }),
+  });
+
+  for (const auto& data : {floatingData, nestedData}) {
+    for (const auto& function : {"rank", "dense_rank"}) {
+      for (const auto& ordering :
+           {"c1 ASC NULLS FIRST", "c1 DESC NULLS LAST"}) {
+        for (int32_t limit : {1, 2, 5}) {
+          SCOPED_TRACE(
+              fmt::format(
+                  "type={}, function={}, ordering={}, limit={}",
+                  data->type()->toString(),
+                  function,
+                  ordering,
+                  limit));
+          assertCpuAndGpuResults(
+              PlanBuilder()
+                  .values(split(data, 5))
+                  .topNRank(function, {"c0"}, {ordering}, limit, true)
+                  .planNode());
+        }
+      }
+    }
+  }
+}
+
+TEST_F(TopNRowNumberTest, allPeers) {
+  constexpr vector_size_t kNumRows = 10'000;
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>(kNumRows, [](auto /*row*/) { return 1; }),
+      makeFlatVector<int64_t>(kNumRows, [](auto row) { return row; }),
+  });
+  for (const auto& function : {"rank", "dense_rank"}) {
+    for (bool generateRowNumber : {false, true}) {
+      SCOPED_TRACE(
+          fmt::format("function={}, generate={}", function, generateRowNumber));
+      auto plan = PlanBuilder()
+                      .values(split(data, 10))
+                      .topNRank(function, {}, {"c0"}, 1, generateRowNumber)
+                      .planNode();
+      auto task = AssertQueryBuilder(plan).assertTypeAndNumRows(
+          plan->outputType(), kNumRows);
+      ASSERT_TRUE(wasCudfTopNRowNumberUsed(task));
+      ASSERT_FALSE(wasCpuTopNRowNumberUsed(task));
+      assertCpuAndGpuResults(plan);
+    }
+  }
+}
+
+TEST_F(TopNRowNumberTest, emptyInput) {
+  auto data = makeRowVector({makeFlatVector<int64_t>({})});
+  for (const auto& function : {"row_number", "rank", "dense_rank"}) {
+    for (bool generateRowNumber : {false, true}) {
+      SCOPED_TRACE(
+          fmt::format("function={}, generate={}", function, generateRowNumber));
+      auto plan = PlanBuilder()
+                      .values({data})
+                      .topNRank(function, {}, {"c0"}, 1, generateRowNumber)
+                      .planNode();
+      auto task = AssertQueryBuilder(plan).assertEmptyResults();
+      ASSERT_TRUE(wasCudfTopNRowNumberUsed(task));
+      ASSERT_FALSE(wasCpuTopNRowNumberUsed(task));
+    }
+  }
+}
+
+TEST_F(TopNRowNumberTest, unsupportedRankKeys) {
+  const std::vector<TypePtr> unsupportedSortingTypes = {
+      ARRAY(BIGINT()),
+      MAP(BIGINT(), BIGINT()),
+      ROW("nested", ARRAY(BIGINT())),
+      TIMESTAMP_WITH_TIME_ZONE(),
+      ROW("nested", TIMESTAMP_WITH_TIME_ZONE()),
+  };
+  for (const auto& function : {"rank", "dense_rank"}) {
+    for (const auto& type : unsupportedSortingTypes) {
+      auto data = BaseVector::create<RowVector>(
+          ROW({{"c0", BIGINT()}, {"c1", type}}), 0, pool());
+      for (bool multipleKeys : {false, true}) {
+        SCOPED_TRACE(
+            fmt::format(
+                "function={}, type={}, multipleKeys={}",
+                function,
+                type->toString(),
+                multipleKeys));
+        auto plan = PlanBuilder()
+                        .values({data})
+                        .topNRank(
+                            function,
+                            {},
+                            multipleKeys ? std::vector<std::string>{"c0", "c1"}
+                                         : std::vector<std::string>{"c1"},
+                            1,
+                            true)
+                        .planNode();
+        ASSERT_FALSE(
+            cudf_velox::CudfTopNRowNumber::canRunOnGPU(
+                *std::dynamic_pointer_cast<const core::TopNRowNumberNode>(
+                    plan)));
+      }
+    }
+
+    for (const auto& type : std::vector<TypePtr>{
+             TIMESTAMP_WITH_TIME_ZONE(),
+             ROW("nested", TIMESTAMP_WITH_TIME_ZONE())}) {
+      auto data = BaseVector::create<RowVector>(
+          ROW({{"c0", type}, {"c1", BIGINT()}}), 0, pool());
+      auto plan = PlanBuilder()
+                      .values({data})
+                      .topNRank(function, {"c0"}, {"c1"}, 1, true)
+                      .planNode();
+      ASSERT_FALSE(
+          cudf_velox::CudfTopNRowNumber::canRunOnGPU(
+              *std::dynamic_pointer_cast<const core::TopNRowNumberNode>(plan)));
+    }
+  }
+
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>({1, 1, 1, 1}),
+      makeArrayVector<int64_t>({{2}, {1}, {2}, {3}}),
+  });
+  createDuckDbTable({data});
+  for (const auto& function : {"rank", "dense_rank"}) {
+    auto plan = PlanBuilder()
+                    .values({data})
+                    .topNRank(function, {"c0"}, {"c1"}, 2, true)
+                    .planNode();
+    VELOX_ASSERT_THROW(
+        AssertQueryBuilder(plan).copyResults(pool()),
+        "Replacement with cuDF operator failed");
+    cudf_velox::unregisterCudf();
+    cudf_velox::CudfConfig::getInstance().allowCpuFallback = true;
+    cudf_velox::registerCudf();
+    auto task = assertQuery(
+        plan,
+        fmt::format(
+            "SELECT * FROM (SELECT *, {}() OVER (PARTITION BY c0 "
+            "ORDER BY c1) AS row_number FROM tmp) WHERE row_number <= 2",
+            function));
+    ASSERT_FALSE(wasCudfTopNRowNumberUsed(task));
+    ASSERT_TRUE(wasCpuTopNRowNumberUsed(task));
+    cudf_velox::unregisterCudf();
+    cudf_velox::CudfConfig::getInstance().allowCpuFallback = false;
+    cudf_velox::registerCudf();
+  }
 }
