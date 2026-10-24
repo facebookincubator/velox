@@ -401,7 +401,9 @@ TEST_F(IcebergInsertTest, maxTargetFileSizeRotation) {
     return files.size();
   };
 
-  ASSERT_EQ(writeAndRead("1KB"), kNumBatches);
+  // Each batch compresses to under 1KB, so the threshold must stay below one
+  // batch's written size for every batch to start a new file.
+  ASSERT_EQ(writeAndRead("512B"), kNumBatches);
   ASSERT_EQ(writeAndRead("10MB"), 1);
 }
 
@@ -585,14 +587,6 @@ TEST_F(IcebergInsertTest, changedWriteDefaultAcrossInserts) {
   const auto outputDir = TempDirectoryPath::create();
   const auto rowType =
       ROW({"id", "amount", "country"}, {BIGINT(), DOUBLE(), VARCHAR()});
-
-  auto omittedCountryRow = [&](int64_t id, double amount) {
-    return makeRowVector(
-        rowType->names(),
-        {makeFlatVector<int64_t>({id}),
-         makeFlatVector<double>({amount}),
-         makeNullableFlatVector<std::string>({std::nullopt})});
-  };
 
   // INSERT 1: write-default = 'IN', two rows.
   icebergAddInputWithDefault(

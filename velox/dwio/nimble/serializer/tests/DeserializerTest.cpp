@@ -24,14 +24,14 @@
 #include <vector>
 
 #include "velox/common/memory/Memory.h"
+#include "velox/dwio/nimble/common/HybridFlatMap.h"
+#include "velox/dwio/nimble/common/SchemaBuilder.h"
+#include "velox/dwio/nimble/common/SchemaReader.h"
+#include "velox/dwio/nimble/common/SchemaSerialization.h"
 #include "velox/dwio/nimble/serializer/Deserializer.h"
 #include "velox/dwio/nimble/serializer/SerializationHeader.h"
 #include "velox/dwio/nimble/serializer/Serializer.h"
 #include "velox/dwio/nimble/serializer/StreamDataParser.h"
-#include "velox/dwio/nimble/velox/HybridFlatMap.h"
-#include "velox/dwio/nimble/velox/SchemaBuilder.h"
-#include "velox/dwio/nimble/velox/SchemaReader.h"
-#include "velox/dwio/nimble/velox/SchemaSerialization.h"
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/FlatVector.h"
 #include "velox/vector/tests/utils/VectorMaker.h"

@@ -16,6 +16,7 @@
 
 #include <gtest/gtest.h>
 #include <memory>
+#include <utility>
 
 #include "velox/common/Casts.h"
 #include "velox/common/base/tests/GTestUtils.h"
@@ -101,6 +102,68 @@ TEST_F(CastsTest, checkedNotNull) {
   EXPECT_EQ(&constValue, checkedNotNull(&constValue));
 
   VELOX_ASSERT_THROW(checkedNotNull(static_cast<int*>(nullptr)), "");
+}
+
+TEST_F(CastsTest, checkedNotNullUniquePointer) {
+  auto uniquePtr = std::make_unique<int>(1);
+  auto* const originalPtr = uniquePtr.get();
+  auto checkedPtr = checkedNotNull(std::move(uniquePtr));
+  EXPECT_EQ(checkedPtr.get(), originalPtr);
+  EXPECT_EQ(uniquePtr, nullptr);
+
+  std::unique_ptr<int> nullPtr;
+  try {
+    checkedNotNull(std::move(nullPtr));
+    FAIL() << "Expected a null-pointer check failure";
+  } catch (const VeloxRuntimeError& exception) {
+    EXPECT_EQ(exception.failingExpression(), "pointer.get() != nullptr");
+  }
+}
+
+TEST_F(CastsTest, checkedNotNullPreservesUniquePointerDeleter) {
+  int numDeletions{0};
+  auto deleter = [&](int* value) {
+    ++numDeletions;
+    delete value;
+  };
+  {
+    std::unique_ptr<int, decltype(deleter)> pointer{
+        new int{17}, std::move(deleter)};
+    const auto originalPointer = pointer.get();
+    const auto checkedPointer = checkedNotNull(std::move(pointer));
+    EXPECT_EQ(pointer, nullptr);
+    EXPECT_EQ(checkedPointer.get(), originalPointer);
+    EXPECT_EQ(*checkedPointer, 17);
+    EXPECT_EQ(numDeletions, 0);
+  }
+  EXPECT_EQ(numDeletions, 1);
+}
+
+TEST_F(CastsTest, checkedNotNullSharedPointer) {
+  auto sharedPtr = std::make_shared<int>(1);
+  auto* const originalPtr = sharedPtr.get();
+  auto checkedPtr = checkedNotNull(std::move(sharedPtr));
+  EXPECT_EQ(checkedPtr.get(), originalPtr);
+  EXPECT_EQ(sharedPtr, nullptr);
+
+  std::shared_ptr<int> nullPtr;
+  try {
+    checkedNotNull(std::move(nullPtr));
+    FAIL() << "Expected a null-pointer check failure";
+  } catch (const VeloxRuntimeError& exception) {
+    EXPECT_EQ(exception.failingExpression(), "pointer.get() != nullptr");
+  }
+}
+
+TEST_F(CastsTest, checkedNotNullCopiesSharedPointerOwnership) {
+  const auto pointer = std::make_shared<const int>(17);
+  {
+    const auto checkedPointer = checkedNotNull(pointer);
+    EXPECT_EQ(checkedPointer.get(), pointer.get());
+    EXPECT_EQ(*checkedPointer, 17);
+    EXPECT_EQ(pointer.use_count(), 2);
+  }
+  EXPECT_EQ(pointer.use_count(), 1);
 }
 
 // Tests for checkedPointerCast with shared_ptr

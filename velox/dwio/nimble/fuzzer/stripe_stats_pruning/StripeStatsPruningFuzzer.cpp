@@ -31,7 +31,7 @@
 #include "velox/dwio/nimble/common/FeatureGate.h"
 #include "velox/dwio/nimble/common/tests/NimbleFileWriter.h"
 #include "velox/dwio/nimble/common/tests/ScopedFeatureGate.h"
-#include "velox/dwio/nimble/velox/selective/SelectiveNimbleReader.h"
+#include "velox/dwio/nimble/selective/SelectiveNimbleReader.h"
 #include "velox/dwio/nimble/writer/FlushPolicy.h"
 #include "velox/dwio/nimble/writer/WriterOptions.h"
 #include "velox/type/Filter.h"

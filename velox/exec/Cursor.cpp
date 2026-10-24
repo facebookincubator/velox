@@ -17,6 +17,7 @@
 #include "velox/exec/Cursor.h"
 
 #include <folly/OperationCancelled.h>
+#include <folly/Synchronized.h>
 #include <folly/system/HardwareConcurrency.h>
 #include <filesystem>
 #include <optional>
@@ -44,9 +45,8 @@ class TaskQueue {
                                   : memory::memoryManager()->addLeafPool()),
         maxBytes_(maxBytes) {}
 
-  void setNumProducers(int32_t n) {
-    numProducers_ = n;
-  }
+  // Publishes the producer count under the lock shared with queue operations.
+  void setNumProducers(int32_t numProducers);
 
   // Adds a batch of rows to the queue and returns kNotBlocked if the
   // producer may continue. Returns kWaitForConsumer if the queue is
@@ -62,6 +62,9 @@ class TaskQueue {
   // distinguishes "blocked" from "done" by whether 'future' is valid.
   RowVectorPtr dequeue(velox::ContinueFuture& future);
 
+  // Returns true and resets the count after all producers reach a drain point.
+  bool finishDrain();
+
   void close();
 
   bool hasNext();
@@ -70,13 +73,14 @@ class TaskQueue {
     return pool_.get();
   }
 
-  std::optional<int32_t> numProducers_;
-  std::atomic_int32_t numDrainedProducers_{0};
-
  private:
   // Owns the vectors in 'queue_', hence must be declared first.
   std::shared_ptr<velox::memory::MemoryPool> pool_;
   std::deque<TaskQueueEntry> queue_;
+  // Counts queue producers and is guarded by 'mutex_'.
+  std::optional<int32_t> numProducers_;
+  // Counts producers at the current drain point and is guarded by 'mutex_'.
+  int32_t numDrainedProducers_{0};
   int32_t producersFinished_{0};
   uint64_t totalBytes_{0};
   // Blocks the producer if 'totalBytes' exceeds 'maxBytes' after
@@ -88,6 +92,11 @@ class TaskQueue {
   ContinuePromise consumerPromise_{ContinuePromise::makeEmpty()};
   bool closed_{false};
 };
+
+void TaskQueue::setNumProducers(int32_t numProducers) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  numProducers_ = numProducers;
+}
 
 exec::BlockingReason TaskQueue::enqueue(
     RowVectorPtr vector,
@@ -198,6 +207,17 @@ RowVectorPtr TaskQueue::dequeue(velox::ContinueFuture& future) {
     promise.setValue();
   }
   return vector;
+}
+
+bool TaskQueue::finishDrain() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (numDrainedProducers_ == 0) {
+    return false;
+  }
+  VELOX_CHECK(numProducers_.has_value());
+  VELOX_CHECK_EQ(numDrainedProducers_, numProducers_.value());
+  numDrainedProducers_ = 0;
+  return true;
 }
 
 void TaskQueue::close() {
@@ -415,8 +435,8 @@ class MultiThreadedTaskCursor : public TaskCursorBase {
   bool moveNext(ContinueFuture* future) override {
     while (true) {
       start();
-      if (error_) {
-        std::rethrow_exception(error_);
+      if (auto error = error_.copy()) {
+        std::rethrow_exception(error);
       }
 
       // Task might be aborted before start.
@@ -443,11 +463,7 @@ class MultiThreadedTaskCursor : public TaskCursorBase {
       // signal as end-of-stream. This preserves the prior blocking contract
       // (both yielded false); the moveNext() protocol does not distinguish a
       // drain boundary from end-of-stream.
-      if (queue_->numDrainedProducers_ > 0) {
-        VELOX_CHECK(queue_->numProducers_.has_value());
-        VELOX_CHECK_EQ(
-            queue_->numDrainedProducers_.load(), queue_->numProducers_.value());
-        queue_->numDrainedProducers_ = 0;
+      if (queue_->finishDrain()) {
         return false;
       }
       atEnd_ = true;
@@ -477,7 +493,7 @@ class MultiThreadedTaskCursor : public TaskCursorBase {
   }
 
   void setError(std::exception_ptr error) override {
-    error_ = error;
+    *error_.wlock() = error;
     if (task_) {
       task_->setError(error);
     }
@@ -521,7 +537,9 @@ class MultiThreadedTaskCursor : public TaskCursorBase {
   RowVectorPtr current_;
   bool atEnd_{false};
   tsan_atomic<bool> noMoreSplits_{false};
-  std::exception_ptr error_;
+
+  // Gives an injected error precedence over the task's own error.
+  folly::Synchronized<std::exception_ptr> error_;
 };
 
 class SingleThreadedTaskCursor : public TaskCursorBase {

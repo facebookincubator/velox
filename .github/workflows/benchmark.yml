@@ -54,7 +54,7 @@ jobs:
           persist-credentials: false
 
       - name: Check setup script changes
-        uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # v3.0.2
+        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
         if: ${{ github.event_name == 'pull_request' }}
         id: setup-script-changes
         with:
@@ -105,6 +105,8 @@ jobs:
           key: dependencies-benchmark-${{ hashFiles('velox/scripts/setup-ubuntu.sh') }}
 
       - name: Restore ccache
+        continue-on-error: true
+        timeout-minutes: 30
         uses: apache/infrastructure-actions/stash/restore@3354c1565d4b0e335b78a76aedd82153a9e144d4
         id: restore-cache
         with:
@@ -129,7 +131,9 @@ jobs:
           ccache -vs
 
       - name: Save ccache"
-        uses: apache/infrastructure-actions/stash/save@3354c1565d4b0e335b78a76aedd82153a9e144d4
+        continue-on-error: true
+        timeout-minutes: 20
+        uses: apache/infrastructure-actions/stash/save@b1b1ab191498302581efdef55279706f79249c0e
         with:
           path: ccache
           key: ccache-benchmark

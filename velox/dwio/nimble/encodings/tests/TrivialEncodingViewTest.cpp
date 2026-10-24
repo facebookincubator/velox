@@ -25,15 +25,14 @@
 
 using namespace facebook;
 
-using EncodingViewTest = nimble::test::EncodingViewTest;
 using TrivialEncodingViewTest = nimble::test::EncodingViewTest;
 
-TEST_F(EncodingViewTest, readsTrivialEncoding) {
+TEST_P(TrivialEncodingViewTest, readsTrivialEncoding) {
   expectReads<nimble::TrivialEncoding<int32_t>>(
       makeVector({10, 20, 30, 40, 50}), {4, 1, 3, 0, 1});
 }
 
-TEST_F(EncodingViewTest, readsTrivialEncodingForAllLayoutFamilies) {
+TEST_P(TrivialEncodingViewTest, readsTrivialEncodingForAllLayoutFamilies) {
   expectReads<nimble::TrivialEncoding<double>>(
       makeVector<double>({1.25, -0.5, 3.0, 1024.125}), {3, 0, 2, 1});
   expectReads<nimble::TrivialEncoding<bool>>(
@@ -43,7 +42,7 @@ TEST_F(EncodingViewTest, readsTrivialEncodingForAllLayoutFamilies) {
       {3, 0, 1, 2});
 }
 
-TEST_F(TrivialEncodingViewTest, readsInternallyCompressedPayloads) {
+TEST_P(TrivialEncodingViewTest, readsInternallyCompressedPayloads) {
   const auto positions = randomizedPositions(/*seed=*/33);
   const auto integers = constantInt32(42);
   const auto booleans = randomBool(/*seed=*/34);
@@ -62,7 +61,7 @@ TEST_F(TrivialEncodingViewTest, readsInternallyCompressedPayloads) {
   }
 }
 
-TEST_F(TrivialEncodingViewTest, concurrent) {
+TEST_P(TrivialEncodingViewTest, concurrent) {
   const auto positions = randomizedPositions(/*seed=*/2);
   std::vector<std::string> backing;
 
@@ -73,3 +72,5 @@ TEST_F(TrivialEncodingViewTest, concurrent) {
   expectConcurrentReads<nimble::TrivialEncoding<std::string_view>>(
       randomStringViews(backing, /*seed=*/5), positions);
 }
+
+INSTANTIATE_ENCODING_VIEW_TEST_SUITE(TrivialEncodingViewTest);

@@ -58,6 +58,26 @@ class TestConnector : public connector::Connector {
   }
 };
 
+// Implements only the pure virtuals, so numChangedRows keeps its default.
+class TestDataSink : public connector::DataSink {
+ public:
+  void appendData(RowVectorPtr /*input*/) override {}
+
+  bool finish() override {
+    return true;
+  }
+
+  std::vector<std::string> close() override {
+    return {};
+  }
+
+  void abort() override {}
+
+  Stats stats() const override {
+    return {};
+  }
+};
+
 TEST(ConnectorTest, exceptionProperties) {
   auto makeProperties = [](VeloxException::Type /*exceptionType*/,
                            void* untypedConnector)
@@ -130,6 +150,7 @@ TEST(ConnectorTest, positionalQueryCtxConstructorRemainsPublic) {
   EXPECT_EQ(context.sessionProperties(), &sessionProperties);
   EXPECT_EQ(context.scanId(), "task.scan");
   EXPECT_EQ(context.driverId(), 3);
+  EXPECT_EQ(context.customMemoryPool("gpu"), nullptr);
 }
 
 TEST(ConnectorTest, builderPreservesConfiguredFields) {
@@ -205,6 +226,52 @@ class ConnectorRegistryTest : public testing::Test {
     memory::MemoryManager::testingSetInstance({});
   }
 };
+
+class ConnectorQueryCtxTest : public testing::Test {
+ protected:
+  static void SetUpTestSuite() {
+    memory::MemoryManager::testingSetInstance({});
+  }
+};
+
+TEST_F(ConnectorQueryCtxTest, noCustomMemoryPoolsByDefault) {
+  auto pool = memory::memoryManager()->addLeafPool("operator");
+  config::ConfigBase config{std::unordered_map<std::string, std::string>{}};
+  auto context = ConnectorQueryCtx::Builder()
+                     .operatorPool(pool.get())
+                     .sessionProperties(&config)
+                     .queryId("query")
+                     .taskId("task")
+                     .planNodeId("scan")
+                     .build();
+
+  EXPECT_EQ(context->memoryPool(), pool.get());
+  EXPECT_EQ(context->customMemoryPool("gpu"), nullptr);
+  EXPECT_EQ(context->customMemoryPool("cxl"), nullptr);
+}
+
+TEST_F(ConnectorQueryCtxTest, customMemoryPoolsByTag) {
+  auto pool = memory::memoryManager()->addLeafPool("operator");
+  auto gpu = memory::memoryManager()->addLeafPool("gpu");
+  auto cxl = memory::memoryManager()->addLeafPool("cxl");
+  config::ConfigBase config{std::unordered_map<std::string, std::string>{}};
+  std::unordered_map<std::string, memory::MemoryPool*> customPools{
+      {"gpu", gpu.get()}, {"cxl", cxl.get()}};
+  auto context = ConnectorQueryCtx::Builder()
+                     .operatorPool(pool.get())
+                     .sessionProperties(&config)
+                     .queryId("query")
+                     .taskId("task")
+                     .planNodeId("scan")
+                     .customPools(customPools)
+                     .build();
+  customPools.clear();
+
+  EXPECT_EQ(context->memoryPool(), pool.get());
+  EXPECT_EQ(context->customMemoryPool("gpu"), gpu.get());
+  EXPECT_EQ(context->customMemoryPool("cxl"), cxl.get());
+  EXPECT_EQ(context->customMemoryPool("missing"), nullptr);
+}
 
 TEST_F(ConnectorRegistryTest, queryScopedOverride) {
   auto globalConnector = std::make_shared<TestConnector>("global");
@@ -323,6 +390,18 @@ TEST(ConnectorTest, connectorSplit) {
         split.toString(),
         "[split: connector id test, weight 50, cacheable false]");
   }
+}
+
+TEST_F(ConnectorQueryCtxTest, dataSinkNumChangedRowsDefaultsToInputSize) {
+  auto pool = memory::memoryManager()->addLeafPool("sink");
+  const auto input = std::make_shared<RowVector>(
+      pool.get(),
+      ROW({"c0"}, {BIGINT()}),
+      /*nulls=*/nullptr,
+      7,
+      std::vector<VectorPtr>{BaseVector::create(BIGINT(), 7, pool.get())});
+  TestDataSink sink;
+  EXPECT_EQ(sink.numChangedRows(*input), 7);
 }
 } // namespace
 } // namespace facebook::velox::connector

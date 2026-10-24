@@ -15,6 +15,13 @@
  */
 #pragma once
 
+#include <climits>
+#include <type_traits>
+
+#include <folly/CPortability.h>
+
+#include "velox/common/base/BitUtil.h"
+#include "velox/common/base/Exceptions.h"
 #include "velox/functions/Macros.h"
 
 namespace facebook::velox::functions::sparksql {
@@ -96,6 +103,17 @@ struct ShiftRightFunction {
       }
     }
     result = a >> b;
+  }
+};
+
+template <typename T>
+struct ShiftRightUnsignedFunction {
+  template <typename TInput1, typename TInput2>
+  FOLLY_ALWAYS_INLINE void call(TInput1& result, TInput1 value, TInput2 shift) {
+    using UnsignedType = std::make_unsigned_t<TInput1>;
+    constexpr TInput2 kShiftMask = sizeof(TInput1) * CHAR_BIT - 1;
+    result = static_cast<TInput1>(
+        static_cast<UnsignedType>(value) >> (shift & kShiftMask));
   }
 };
 

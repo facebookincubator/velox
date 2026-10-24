@@ -37,6 +37,15 @@ class StringToMapTest : public SparkFunctionBaseTest {
     auto expectVector = makeMapVector<StringView, StringView>({expect});
     assertEqualVectors(result, expectVector);
   }
+
+  // Sets the Spark 'spark.sql.mapKeyDedupPolicy' equivalent query config.
+  // true corresponds to EXCEPTION, false to LAST_WIN.
+  void setThrowExceptionOnDuplicateMapKeys(bool value) {
+    queryCtx_->testingOverrideConfigUnsafe({
+        {core::QueryConfig::kThrowExceptionOnDuplicateMapKeys,
+         value ? "true" : "false"},
+    });
+  }
 };
 
 TEST_F(StringToMapTest, basic) {
@@ -85,14 +94,56 @@ TEST_F(StringToMapTest, basic) {
   VELOX_ASSERT_THROW(
       evaluateStringToMap({"a:1,b:2", ",", "æ"}),
       "keyValueDelimiter's size should be 1.");
+}
 
-  // Exception for duplicated keys.
-  VELOX_ASSERT_THROW(
+TEST_F(StringToMapTest, duplicateKeysThrow) {
+  setThrowExceptionOnDuplicateMapKeys(true);
+
+  VELOX_ASSERT_USER_THROW(
       evaluateStringToMap({"a:1,b:2,a:3", ",", ":"}),
       "Duplicate keys are not allowed: 'a'.");
-  VELOX_ASSERT_THROW(
+  VELOX_ASSERT_USER_THROW(
       evaluateStringToMap({":1,:2", ",", ":"}),
       "Duplicate keys are not allowed: ''.");
+  // Entries without a key/value delimiter still carry a key, so they take part
+  // in deduplication like in Spark.
+  VELOX_ASSERT_USER_THROW(
+      evaluateStringToMap({"a,a", ",", ":"}),
+      "Duplicate keys are not allowed: 'a'.");
+  VELOX_ASSERT_USER_THROW(
+      evaluateStringToMap({"a:1,a", ",", ":"}),
+      "Duplicate keys are not allowed: 'a'.");
+}
+
+TEST_F(StringToMapTest, duplicateKeysLastWin) {
+  setThrowExceptionOnDuplicateMapKeys(false);
+
+  // The repeated key keeps the position of its first occurrence and takes the
+  // last value, matching Spark's ArrayBasedMapBuilder.
+  testStringToMap({"a:1,b:2,a:3", ",", ":"}, {{"a", "3"}, {"b", "2"}});
+  testStringToMap({"b:1,a:2,b:3,a:4", ",", ":"}, {{"b", "3"}, {"a", "4"}});
+  testStringToMap({"a:1,a:2,a:3", ",", ":"}, {{"a", "3"}});
+  testStringToMap({":1,:2", ",", ":"}, {{"", "2"}});
+
+  // A later entry without a key/value delimiter overwrites the value with
+  // NULL, and a later entry with a value overwrites a NULL.
+  testStringToMap({"a:1,a", ",", ":"}, {{"a", std::nullopt}});
+  testStringToMap({"a,a:1", ",", ":"}, {{"a", "1"}});
+  testStringToMap({"a,a", ",", ":"}, {{"a", std::nullopt}});
+
+  // Distinct keys are unaffected.
+  testStringToMap(
+      {"a:1,b:2,c:3", ",", ":"}, {{"a", "1"}, {"b", "2"}, {"c", "3"}});
+}
+
+TEST_F(StringToMapTest, lastWinPreservesFirstKeyPosition) {
+  setThrowExceptionOnDuplicateMapKeys(false);
+
+  // Map equality ignores entry order, so pin the position through map_keys.
+  auto result = evaluate<ArrayVector>(
+      "map_keys(str_to_map(c0, ',', ':'))",
+      makeRowVector({makeFlatVector<StringView>({"b:1,a:2,b:3"})}));
+  assertEqualVectors(makeArrayVector<StringView>({{"b", "a"}}), result);
 }
 } // namespace
 } // namespace facebook::velox::functions::sparksql::test
