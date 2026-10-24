@@ -33,6 +33,8 @@
 #include "velox/core/PlanFragment.h"
 #include "velox/core/QueryCtx.h"
 #include "velox/exec/Driver.h"
+#include "velox/exec/Exchange.h"
+#include "velox/exec/ExchangeClient.h"
 #include "velox/exec/FixedPointSplit.h"
 #include "velox/exec/HashTable.h"
 #include "velox/exec/MemoryReclaimer.h"
@@ -129,27 +131,27 @@ std::optional<core::PlanNodeId> findExchangeNodeId(
   return std::nullopt;
 }
 
-// Collects the ids of the split sources in the plan, such as a TableScan or an
-// Exchange.  A fixed point nested in the plan, other than 'self', contributes
-// the sources of its initial plans: the task running it passes their splits
-// on.  A fixed point's own id is not collected.
+// Collects the split sources in the plan, such as a TableScan or an Exchange,
+// by id.  A fixed point nested in the plan, other than 'self', contributes the
+// sources of its initial plans: the task running it passes their splits on.  A
+// fixed point itself is not collected.
 void collectSplitTargets(
     const core::PlanNodePtr& node,
     const core::PlanNode* self,
-    folly::F14FastSet<core::PlanNodeId>& ids) {
+    folly::F14FastMap<core::PlanNodeId, const core::PlanNode*>& targets) {
   if (const auto* fixedPoint = node->as<FixedPointNode>()) {
     if (fixedPoint != self) {
       for (const auto& declaration : fixedPoint->stateDeclarations()) {
         if (declaration->initialPlan() != nullptr) {
-          collectSplitTargets(declaration->initialPlan(), self, ids);
+          collectSplitTargets(declaration->initialPlan(), self, targets);
         }
       }
     }
   } else if (node->requiresSplits()) {
-    ids.insert(node->id());
+    targets.emplace(node->id(), node.get());
   }
   for (const auto& source : node->sources()) {
-    collectSplitTargets(source, self, ids);
+    collectSplitTargets(source, self, targets);
   }
 }
 
@@ -208,6 +210,18 @@ folly::coro::Task<void> awaitTasks(
       std::rethrow_exception(error);
     }
   }
+}
+
+// Throws once 'ended' is requested.  Called before a step creates its
+// sub-tasks, so a loop whose task has ended starts no more of them.
+void checkRunning(
+    const folly::CancellationToken& ended,
+    std::string_view taskId) {
+  VELOX_CHECK(
+      !ended.isCancellationRequested(),
+      "The fixed point's task ended before the loop created its next "
+      "sub-tasks: {}",
+      taskId);
 }
 
 } // namespace
@@ -298,7 +312,7 @@ FixedPointLoop::FixedPointLoop(
   // worker's remote split; everything else is a split-requiring source in an
   // initial plan.  The body and convergence chains wire their own exchanges,
   // so their ids are not here.
-  splitTargets_.insert(node_->id());
+  splitTargets_.emplace(node_->id(), node_);
 
   for (const auto& declaration : node_->stateDeclarations()) {
     if (declaration->initialPlan() != nullptr) {
@@ -364,9 +378,19 @@ void FixedPointLoop::addSplit(
       "an initial plan's TableScan, say -- not to the fixed point itself, "
       "which cannot tell which source it was meant for");
 
+  // finish() stores the terminal phase before it takes splitsMutex_ to release
+  // the splits held, so a split it does not find is released here.
+  if (const Phase phase = phase_; phase == Phase::kFinalized ||
+      phase == Phase::kFailed || phase == Phase::kAbandoned) {
+    releaseRemoteSplitLocked(planNodeId, split);
+    return;
+  }
+
   if (auto it = splitConsumers_.find(planNodeId); it != splitConsumers_.end()) {
     if (auto task = it->second.lock()) {
       task->addSplit(planNodeId, std::move(split));
+    } else {
+      releaseRemoteSplitLocked(planNodeId, split);
     }
     return;
   }
@@ -391,18 +415,21 @@ void FixedPointLoop::noMoreSplits(const core::PlanNodeId& planNodeId) {
 }
 
 void FixedPointLoop::runSerially() {
-  if (phase_ == Phase::kFailed) {
+  const Phase phase = leaveCreated(Phase::kStarted);
+  if (phase == Phase::kFailed) {
     VELOX_FAIL("The fixed point failed on an earlier call and cannot resume");
   }
+  if (phase == Phase::kAbandoned) {
+    VELOX_FAIL("The fixed point's task ended before the loop ran");
+  }
   VELOX_CHECK(
-      phase_ == Phase::kCreated,
+      phase == Phase::kCreated,
       "runSerially() cannot run a fixed point that has already been driven");
   try {
     folly::coro::blocking_wait(run());
   } catch (...) {
     // A throw part-way through leaves the state half-written.
-    phase_ = Phase::kFailed;
-    finished_.setValue();
+    finish(Phase::kFailed);
     throw;
   }
 }
@@ -411,28 +438,99 @@ void FixedPointLoop::start(
     uint32_t maxDrivers,
     std::function<void(std::exception_ptr)> onError) {
   // Task::start() already rejected a serial task before delegating here.
+  // The owning task keeps this loop alive for its whole run.  Taken before the
+  // loop leaves kCreated: from then on only the run ends the loop, so nothing
+  // may throw before it is scheduled.
+  auto ownerHandle = owner_->shared_from_this();
+  const Phase phase = leaveCreated(Phase::kStarted);
+  if (phase == Phase::kAbandoned) {
+    return;
+  }
+  VELOX_USER_CHECK(
+      phase == Phase::kCreated,
+      "start() cannot run a fixed point that has already been driven");
   maxDrivers_ = maxDrivers;
   // Run the loop asynchronously on the orchestration executor so start()
   // returns immediately (Task::start's contract).  run() is the same coroutine
   // runSerially() waits on; here it suspends while its sub-tasks run on the
   // query executor.
-  VELOX_USER_CHECK(
-      phase_ == Phase::kCreated,
-      "start() cannot run a fixed point that has already been driven");
-  // The owning task keeps this loop alive for its whole run.
-  auto ownerHandle = owner_->shared_from_this();
   folly::coro::co_withExecutor(
       folly::getKeepAliveToken(options_.orchestrationExecutor), run())
       .start([this, ownerHandle, onError = std::move(onError)](
                  folly::Try<void>&& result) {
         if (result.hasException()) {
-          phase_ = Phase::kFailed;
           // Fail the task before waking its FixedPointNode leaf, so the task
           // reports the loop's error.
           onError(result.exception().to_exception_ptr());
-          finished_.setValue();
+          finish(Phase::kFailed);
         }
       });
+}
+
+void FixedPointLoop::abandon() {
+  if (leaveCreated(Phase::kAbandoned) == Phase::kCreated) {
+    finish(Phase::kAbandoned);
+  }
+}
+
+FixedPointLoop::Phase FixedPointLoop::leaveCreated(Phase next) {
+  Phase phase = Phase::kCreated;
+  phase_.compare_exchange_strong(phase, next);
+  return phase;
+}
+
+void FixedPointLoop::finish(Phase terminal) {
+  phase_ = terminal;
+  releaseRemoteSplits();
+  finished_.setValue();
+}
+
+void FixedPointLoop::releaseRemoteSplitLocked(
+    const core::PlanNodeId& planNodeId,
+    const exec::Split& split) {
+  if (executionMode_ == exec::Task::ExecutionMode::kSerial ||
+      !split.hasConnectorSplit()) {
+    return;
+  }
+  const auto* remote = split.connectorSplit->as<RemoteConnectorSplit>();
+  const auto target = splitTargets_.find(planNodeId);
+  const auto* exchange = target != splitTargets_.end()
+      ? target->second->as<core::ExchangeNode>()
+      : nullptr;
+  if (remote == nullptr || exchange == nullptr) {
+    return;
+  }
+  // A closed client tells the producer of each remote task added to it that
+  // its data is no longer needed (ExchangeClient::addRemoteTaskId()), as
+  // Task::terminate() does for a task's own Exchanges.
+  try {
+    auto& closed = closedClients_[exchange->transportKind()];
+    if (closed.client == nullptr) {
+      if (closedClientPool_ == nullptr) {
+        closedClientPool_ =
+            owner_->pool()->addLeafChild("fixedpoint.closedExchange");
+      }
+      auto [client, entry] = owner_->makeExchangeClient(
+          *exchange, /*numberOfConsumers=*/1, closedClientPool_.get());
+      client->close();
+      closed = ClosedClient{std::move(entry), std::move(client)};
+    }
+    closed.client->addRemoteTaskId(remote->taskId);
+  } catch (const std::exception& e) {
+    LOG(WARNING) << "Failed to release the producer of a remote split of "
+                 << owner_->taskId() << ": " << e.what();
+  }
+}
+
+void FixedPointLoop::releaseRemoteSplits() {
+  std::lock_guard<std::mutex> l(splitsMutex_);
+  for (const auto& [planNodeId, splits] : nodeSplits_) {
+    for (const auto& split : splits) {
+      releaseRemoteSplitLocked(planNodeId, split);
+    }
+  }
+  nodeSplits_.clear();
+  splitConsumers_.clear();
 }
 
 folly::coro::Task<void> FixedPointLoop::run() {
@@ -505,7 +603,7 @@ folly::coro::Task<void> FixedPointLoop::awaitWorkers() {
 
 folly::coro::Task<void> FixedPointLoop::initialize() {
   VELOX_CHECK(
-      phase_ == Phase::kCreated,
+      phase_ == Phase::kStarted,
       "initialize() must run once, before any other phase");
   folly::stop_watch<std::chrono::nanoseconds> timer;
 
@@ -538,9 +636,7 @@ folly::coro::Task<void> FixedPointLoop::finalize() {
   // owning task's pipeline reads (output shaping such as a recursive CTE's
   // UNION ALL is the plan's responsibility, e.g. accumulating into an
   // append-mode output entry).
-  phase_ = Phase::kFinalized;
-  succeeded_ = true;
-  finished_.setValue();
+  finish(Phase::kFinalized);
   co_return;
 
   // The state's pool is not released here.  A sub-task can still be tearing
@@ -826,6 +922,9 @@ folly::coro::Task<TaskStats> FixedPointLoop::consumePlan(
   // parallel, the supplier gives each output driver its own consumer, called on
   // that driver's thread.
   const bool serial = executionMode_ == exec::Task::ExecutionMode::kSerial;
+  if (!serial) {
+    checkRunning(cancellation_.getToken(), owner_->taskId());
+  }
   auto task = createSubTask(
       *owner_,
       subTaskId(),
@@ -862,12 +961,12 @@ folly::coro::Task<TaskStats> FixedPointLoop::consumePlan(
 void FixedPointLoop::feedInitSplits(
     const exec::TaskPtr& task,
     const core::PlanNodePtr& plan) {
-  folly::F14FastSet<core::PlanNodeId> sourceIds;
-  collectSplitTargets(plan, node_, sourceIds);
+  folly::F14FastMap<core::PlanNodeId, const core::PlanNode*> sources;
+  collectSplitTargets(plan, node_, sources);
   // Splits are held under the id of the node that reads them, so each source
   // takes only its own: several sources in one initial plan, or several initial
   // plans that each scan a table, no longer share one list.
-  for (const auto& sourceId : sourceIds) {
+  for (const auto& [sourceId, _] : sources) {
     routeSplits(task, sourceId);
   }
 }
@@ -923,6 +1022,7 @@ folly::coro::Task<std::vector<RowVectorPtr>> FixedPointLoop::runParallelChain(
     bool producesVerdict,
     bool runLastPlan,
     FixedPointChainExecutionStats& stats) {
+  checkRunning(cancellation_.getToken(), owner_->taskId());
   folly::stop_watch<std::chrono::nanoseconds> chainTimer;
   const size_t lastPlan = plans.size() - 1;
   const size_t numPlansToRun = runLastPlan ? plans.size() : lastPlan;

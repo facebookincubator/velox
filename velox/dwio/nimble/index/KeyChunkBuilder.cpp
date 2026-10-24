@@ -74,11 +74,13 @@ class FlatKeyChunkBuilder final : public KeyChunkBuilder {
       EncodingLayout encodingLayout,
       bool enforceKeyOrder,
       bool noDuplicateKey,
+      const KeyComparator* keyComparator,
       velox::memory::MemoryPool* pool)
       : keyEncoder_{std::move(keyEncoder)},
         encodingLayout_{std::move(encodingLayout)},
         enforceKeyOrder_{enforceKeyOrder},
         noDuplicateKey_{noDuplicateKey},
+        keyComparator_{keyComparator},
         pool_{pool},
         keyStream_{std::make_unique<ContentStreamData<std::string_view>>(
             *pool_,
@@ -143,27 +145,39 @@ class FlatKeyChunkBuilder final : public KeyChunkBuilder {
       return;
     }
 
-    const auto& keys = keyStream_->mutableData();
-    if (newKeyStart == 0 && lastKey_.has_value() &&
-        !isKeyOrdered(
-            keyAtView(0).compare(lastKey_.value()), noDuplicateKey_)) {
-      failKeyOrder(noDuplicateKey_, 0, keyAtView(0), 0, lastKey_.value());
-    }
-
-    for (auto row = std::max<size_t>(newKeyStart, 1); row < keys.size();
-         ++row) {
-      if (FOLLY_UNLIKELY(!isKeyOrdered(
-              keyAtView(row).compare(keyAtView(row - 1)), noDuplicateKey_))) {
-        failKeyOrder(
-            noDuplicateKey_, row, keyAtView(row), row - 1, keyAtView(row - 1));
+    withKeyOrder(keyComparator_, [&](auto keyOrder) {
+      const auto& keys = keyStream_->mutableData();
+      if (newKeyStart == 0 && lastKey_.has_value() &&
+          !isKeyOrdered(
+              keyOrder.compare(keyAtView(0), lastKey_.value()),
+              noDuplicateKey_)) {
+        failKeyOrder(noDuplicateKey_, 0, keyAtView(0), 0, lastKey_.value());
       }
-    }
+
+      for (auto row = std::max<size_t>(newKeyStart, 1); row < keys.size();
+           ++row) {
+        if (FOLLY_UNLIKELY(!isKeyOrdered(
+                keyOrder.compare(keyAtView(row), keyAtView(row - 1)),
+                noDuplicateKey_))) {
+          failKeyOrder(
+              noDuplicateKey_,
+              row,
+              keyAtView(row),
+              row - 1,
+              keyAtView(row - 1));
+        }
+      }
+    });
   }
 
   const std::unique_ptr<IndexKeyEncoder> keyEncoder_;
   const EncodingLayout encodingLayout_;
   const bool enforceKeyOrder_;
   const bool noDuplicateKey_;
+
+  // Order the keys must follow when enforceKeyOrder_ is set, or null for
+  // bytewise order.
+  const KeyComparator* const keyComparator_;
   velox::memory::MemoryPool* const pool_;
   const std::unique_ptr<ContentStreamData<std::string_view>> keyStream_;
   std::optional<std::string> lastKey_;
@@ -193,12 +207,14 @@ std::unique_ptr<KeyChunkBuilder> createFlatKeyChunkBuilder(
     EncodingLayout encodingLayout,
     bool enforceKeyOrder,
     bool noDuplicateKey,
+    const KeyComparator* keyComparator,
     velox::memory::MemoryPool* pool) {
   return std::make_unique<FlatKeyChunkBuilder>(
       std::move(keyEncoder),
       std::move(encodingLayout),
       enforceKeyOrder,
       noDuplicateKey,
+      keyComparator,
       pool);
 }
 
