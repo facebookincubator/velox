@@ -15,6 +15,7 @@
  */
 #include "velox/connectors/hive/paimon/PaimonConnector.h"
 
+#include "velox/common/Casts.h"
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/connectors/hive/paimon/PaimonDataSource.h"
 #include "velox/connectors/hive/paimon/PaimonTableHandle.h"
@@ -33,11 +34,8 @@ std::unique_ptr<DataSource> PaimonConnector::createDataSource(
     const ConnectorTableHandlePtr& tableHandle,
     const ColumnHandleMap& columnHandles,
     ConnectorQueryCtx* connectorQueryCtx) {
-  VELOX_USER_CHECK_NOT_NULL(tableHandle, "Missing Paimon table handle");
   const auto paimonTableHandle =
-      std::dynamic_pointer_cast<const PaimonTableHandle>(tableHandle);
-  VELOX_USER_CHECK_NOT_NULL(
-      paimonTableHandle, "Paimon connector requires PaimonTableHandle");
+      checkedPointerCast<const PaimonTableHandle>(tableHandle);
   VELOX_USER_CHECK_EQ(
       paimonTableHandle->connectorId(),
       connectorId(),
@@ -58,17 +56,6 @@ std::unique_ptr<DataSink> PaimonConnector::createDataSink(
     ConnectorQueryCtx* /*connectorQueryCtx*/,
     CommitStrategy /*commitStrategy*/) {
   VELOX_UNSUPPORTED("Paimon connector does not support writes");
-}
-
-std::shared_ptr<IndexSource> PaimonConnector::createIndexSource(
-    const RowTypePtr& /*inputType*/,
-    const std::vector<std::shared_ptr<core::IndexLookupCondition>>&
-    /*joinConditions*/,
-    const RowTypePtr& /*outputType*/,
-    const ConnectorTableHandlePtr& /*tableHandle*/,
-    const ColumnHandleMap& /*columnHandles*/,
-    ConnectorQueryCtx* /*connectorQueryCtx*/) {
-  VELOX_UNSUPPORTED("Paimon connector does not support index lookup");
 }
 
 void PaimonConnector::registerSerDe() {

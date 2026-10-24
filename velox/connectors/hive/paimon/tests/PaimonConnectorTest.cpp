@@ -359,9 +359,6 @@ TEST_F(PaimonConnectorTest, connectorRegistration) {
       connector->createDataSink(
           ROW({}), nullptr, nullptr, CommitStrategy::kNoCommit),
       "Paimon connector does not support writes");
-  VELOX_ASSERT_THROW(
-      connector->createIndexSource(ROW({}), {}, ROW({}), nullptr, {}, nullptr),
-      "Paimon connector does not support index lookup");
 }
 
 TEST_F(PaimonConnectorTest, connectorFactory) {
@@ -1394,18 +1391,18 @@ TEST_F(PaimonConnectorTest, requiresPaimonTableHandle) {
                      .build();
   const auto fileSystem = validationFileSystem();
   fileSystem->openedFiles = 0;
-  VELOX_ASSERT_USER_THROW(
+  VELOX_ASSERT_THROW(
       connector->createDataSource(rowType, nullptr, columns, context.get()),
-      "Missing Paimon table handle");
+      "input.get() != nullptr");
   const auto tableHandle = std::make_shared<HiveTableHandle>(
       kPaimonConnectorId,
       "paimon_table",
       common::SubfieldFilters{},
       nullptr,
       rowType);
-  VELOX_ASSERT_USER_THROW(
+  VELOX_ASSERT_THROW(
       connector->createDataSource(rowType, tableHandle, columns, context.get()),
-      "Paimon connector requires PaimonTableHandle");
+      "Failed to cast from");
   const auto plan = exec::test::PlanBuilder()
                         .startTableScan()
                         .connectorId(kPaimonConnectorId)
@@ -1421,9 +1418,9 @@ TEST_F(PaimonConnectorTest, requiresPaimonTableHandle) {
         {"paimon-table-test:/not-opened"},
         tableType,
         dwio::common::FileFormat::DWRF);
-    VELOX_ASSERT_USER_THROW(
+    VELOX_ASSERT_THROW(
         exec::test::AssertQueryBuilder(plan).split(split).copyResults(pool()),
-        "Paimon connector requires PaimonTableHandle");
+        "Failed to cast from");
     exec::test::waitForAllTasksToBeDeleted();
   }
   EXPECT_EQ(fileSystem->openedFiles, 0);

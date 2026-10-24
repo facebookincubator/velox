@@ -52,16 +52,6 @@ class PaimonConnector final : public HiveConnector {
       ConnectorQueryCtx* connectorQueryCtx,
       CommitStrategy commitStrategy) override;
 
-  /// Paimon index lookup is not supported.
-  std::shared_ptr<IndexSource> createIndexSource(
-      const RowTypePtr& inputType,
-      const std::vector<std::shared_ptr<core::IndexLookupCondition>>&
-          joinConditions,
-      const RowTypePtr& outputType,
-      const ConnectorTableHandlePtr& tableHandle,
-      const ColumnHandleMap& columnHandles,
-      ConnectorQueryCtx* connectorQueryCtx) override;
-
   /// Registers serde for Paimon table/split handles and HiveColumnHandle.
   /// Callers must register type, filter and expression serde separately.
   static void registerSerDe();

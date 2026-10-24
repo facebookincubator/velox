@@ -40,8 +40,9 @@ PaimonDataSource::PaimonDataSource(
           paimonConfig),
       paimonTableHandle_(tableHandle) {
   // TODO: Implement primary-key read semantics.
-  VELOX_USER_CHECK(
-      tableHandle->tableType() == PaimonTableType::kAppendOnly,
+  VELOX_USER_CHECK_EQ(
+      tableHandle->tableType(),
+      PaimonTableType::kAppendOnly,
       "Paimon same-schema append reader does not support primary-key tables; "
       "primary-key reading is not implemented yet");
 }
