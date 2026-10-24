@@ -36,6 +36,32 @@ Velox-cuDF builds are included in Velox CI as part of the [adapters build](https
 
 Velox-cuDF provides several configuration properties to control GPU execution behavior, memory management, and debugging. These configurations are available when compiled with cuDF support and can be set via Velox's configuration system. For a complete list of cuDF-specific configuration properties and their descriptions, see the [Cudf-specific Configuration section](https://facebookincubator.github.io/velox/configs.html#cudf-specific-configuration-experimental) in the Velox configuration documentation.
 
+### Spark numeric casts and decimal comparisons
+
+`registerSparkFunctions` enables `spark_legacy_cast` for Boolean, integral,
+REAL, and DOUBLE conversions, numeric-to-DECIMAL casts, and DECIMAL-to-DECIMAL
+rescaling. Floating-point-to-integral casts truncate toward zero, map NaN to
+zero, and saturate before narrowing to smaller integer types. Decimal casts
+round HALF_UP and return NULL on precision overflow. Floating-point-to-decimal
+conversion uses the Java 8/11/17 decimal representation, matching Spark 3.5 on
+JDK 17; REAL inputs are first promoted to DOUBLE. Newer Java decimal-rendering
+semantics are not implemented by this path.
+
+Floating-point-to-decimal and floating-point-to-integral calls with foldable
+constant inputs are rejected before GPU planning: the CPU expression optimizer
+currently uses different rounding or overflow behavior for these casts.
+Constant-encoded input columns are supported.
+
+String, date/time, complex-type, DECIMAL-to-non-DECIMAL, and `spark_ansi_cast`
+conversions remain unsupported by this path. Unsupported conversions are
+rejected during GPU validation; CPU fallback is used only when enabled.
+
+The `decimal_equalto`, `decimal_notequalto`, `decimal_lessthan`,
+`decimal_lessthanorequal`, `decimal_greaterthan`, and
+`decimal_greaterthanorequal` names support nullable decimal operands. Scale
+alignment must fit the common decimal storage width; combinations that could
+overflow during alignment are rejected during validation.
+
 ### Testing Velox with cuDF
 
 Tests with Velox-cuDF can only be run on GPU-enabled hardware. The Velox-cuDF tests in [experimental/cudf/tests](https://github.com/facebookincubator/velox/blob/main/velox/experimental/cudf/tests) include several types of tests:

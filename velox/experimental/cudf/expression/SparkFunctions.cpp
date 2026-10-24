@@ -20,6 +20,7 @@
 #include "velox/experimental/cudf/expression/SparkFunctions.h"
 #include "velox/experimental/cudf/expression/sparksql/DateAddFunction.h"
 #include "velox/experimental/cudf/expression/sparksql/HashFunction.h"
+#include "velox/experimental/cudf/expression/sparksql/LegacyCastFunction.h"
 #include "velox/experimental/cudf/expression/sparksql/SubStringFunction.h"
 
 #include "velox/expression/FunctionSignature.h"
@@ -45,6 +46,17 @@ void registerSparkArrayAccessFunctions(const std::string& prefix) {
 
 void registerSparkFunctions(const std::string& prefix) {
   using exec::FunctionSignatureBuilder;
+
+  registerCudfFunction(
+      prefix + "spark_legacy_cast",
+      [](const std::string&,
+         const core::TypedExprPtr& expr,
+         memory::MemoryPool*) {
+        return std::make_shared<sparksql::LegacyCastFunction>(expr);
+      },
+      {},
+      /*overwrite=*/true,
+      sparksql::LegacyCastFunction::canEvaluate);
 
   const std::vector<exec::FunctionSignaturePtr> subStringSignatures{
       FunctionSignatureBuilder()
