@@ -130,6 +130,9 @@ class SubstrFunction : public CudfFunction {
 void registerPrestoFunctions(const std::string& prefix) {
   using exec::FunctionSignatureBuilder;
 
+  // CastFunction's cast from VARCHAR and cast from TIMESTAMP to VARCHAR follow
+  // Presto's rules.
+  setPrestoCastEnabled(true);
   registerPrestoArrayAccessFunctions(prefix);
 
   registerCudfFunction(

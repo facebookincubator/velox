@@ -139,6 +139,59 @@ class CudfFilterProjectTest : public CudfFunctionBaseTest {
   }
 };
 
+// The GPU cast from VARCHAR follows Presto's rules, so a Spark session keeps
+// such casts on the CPU.
+TEST_F(CudfFilterProjectTest, castFromVarcharStaysOnCpu) {
+  const auto rowType = ROW({{"c0", VARCHAR()}});
+  for (const auto* expr :
+       {"cast(c0 as integer)",
+        "try_cast(c0 as double)",
+        "cast(c0 as boolean)"}) {
+    SCOPED_TRACE(expr);
+    EXPECT_FALSE(
+        cudf_velox::canExprRunOnGpu(
+            makeTypedExpr(expr, rowType),
+            execCtx_.queryCtx(),
+            execCtx_.pool()));
+  }
+}
+
+// A TIMESTAMP cast to VARCHAR prints Presto's text, so it stays on the CPU in
+// a Spark session; a DATE prints the same in both dialects and runs on the GPU.
+TEST_F(CudfFilterProjectTest, castTimestampToVarcharStaysOnCpu) {
+  const auto rowType = ROW({{"ts", TIMESTAMP()}, {"d", DATE()}});
+  EXPECT_FALSE(
+      cudf_velox::canExprRunOnGpu(
+          makeTypedExpr("cast(ts as varchar)", rowType),
+          execCtx_.queryCtx(),
+          execCtx_.pool()));
+  EXPECT_TRUE(
+      cudf_velox::canExprRunOnGpu(
+          makeTypedExpr("cast(d as varchar)", rowType),
+          execCtx_.queryCtx(),
+          execCtx_.pool()));
+}
+
+// The GPU prints a DATE as Spark's CPU cast does: the year padded to four
+// digits and led by a minus sign when negative.
+TEST_F(CudfFilterProjectTest, castDateToVarcharMatchesCpu) {
+  // 1970-01-01, 1969-12-31, 2026-01-02, 0000-01-01, -0001-01-01 and
+  // 10000-01-01.
+  const auto input = makeRowVector({makeNullableFlatVector<int32_t>(
+      {0,
+       -1,
+       DATE()->toDays("2026-01-02"),
+       std::nullopt,
+       -719'528,
+       -719'893,
+       2'932'897},
+      DATE())});
+  for (const auto* expr : {"cast(c0 as varchar)", "try_cast(c0 as varchar)"}) {
+    SCOPED_TRACE(expr);
+    assertExpressionMatchesCpu(expr, input, input->rowType());
+  }
+}
+
 TEST_F(CudfFilterProjectTest, hashWithSeed) {
   auto input = makeFlatVector<int64_t>({INT64_MAX, INT64_MIN});
   auto data = makeRowVector({input});
