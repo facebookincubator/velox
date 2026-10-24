@@ -198,6 +198,20 @@ void SortedAggregations::clear() {
   inputData_->clear();
 }
 
+void SortedAggregations::eraseInputs(folly::Range<char**> groups) {
+  std::vector<char*> groupRows;
+  for (auto* group : groups) {
+    auto* accumulator = reinterpret_cast<RowPointers*>(group + offset_);
+    if (accumulator->size > 0) {
+      groupRows.resize(accumulator->size);
+      accumulator->read(folly::Range(groupRows.data(), groupRows.size()));
+      inputData_->eraseRows(folly::Range(groupRows.data(), groupRows.size()));
+    }
+    accumulator->free(*allocator_);
+    new (accumulator) RowPointers();
+  }
+}
+
 void SortedAggregations::initializeNewGroups(
     char** groups,
     folly::Range<const vector_size_t*> indices) {

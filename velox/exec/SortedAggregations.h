@@ -94,6 +94,11 @@ class SortedAggregations {
   /// Clears all data accumulated so far. Used to release memory after spilling.
   void clear();
 
+  /// Frees the input rows accumulated for 'groups'. Used to release memory of
+  /// groups already output while other groups keep accumulating. Must be
+  /// called after 'extractValues' for the same groups.
+  void eraseInputs(folly::Range<char**> groups);
+
  private:
   void addNewRow(char* group, char* newRow);
 
