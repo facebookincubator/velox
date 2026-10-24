@@ -34,6 +34,18 @@ class SparseHlls {
   /// @return True if the data is in SparseV2 format, false otherwise
   static bool canDeserialize(const char* input);
 
+  /// Returns true if 'input' has a Presto SparseV2 header and 'size' bytes are
+  /// enough to hold the entries it declares:
+  /// 1 byte for version
+  /// 1 byte for index bit length, index bit length must be in [4,16]
+  /// 2 bytes for # entries, must be non-negative
+  /// 4 * #entries bytes for entries
+  /// The entries themselves are not checked.
+  /// @param input Pointer to serialized data to check
+  /// @param size Size of the serialized data in bytes
+  /// @return True if the header and size are consistent, false otherwise
+  static bool canDeserialize(const char* input, int size);
+
   /// Creates an empty serialized SparseHll with the specified index bit length.
   /// @param indexBitLength Number of bits for indexing (must be in [4,16])
   /// @return Serialized empty SparseHll as a string
