@@ -29,8 +29,7 @@ class PaimonConnector final : public HiveConnector {
       std::shared_ptr<const config::ConfigBase> config,
       folly::Executor* ioExecutor);
 
-  /// Creates PaimonDataSource. Requires a PaimonTableHandle belonging to this
-  /// connector instance.
+  /// Creates PaimonDataSource for reading from Paimon tables.
   std::unique_ptr<DataSource> createDataSource(
       const RowTypePtr& outputType,
       const ConnectorTableHandlePtr& tableHandle,
