@@ -579,9 +579,11 @@ class NimbleIndexProjector {
       size_t stripeOffset,
       const RowRange& packRange);
 
-  // When Options::needResumeKey is set, resolves resume keys for requests
-  // whose results were cut short and stores them in ctx_.resumeKeys. No-op
-  // when needResumeKey is unset.
+  // After global truncation (maxRows or maxBytes), resolves resume keys for the
+  // requests it cut short and stores them in ctx_.resumeKeys: a request
+  // continuing past the last planned stripe resumes at the next stripe, and a
+  // request planning never reached resumes from its lower key. No-op when
+  // Options::needResumeKey is unset or the plan was not truncated.
   void prepareResumeKeys();
 
   // Iterates planned stripes and ctx_.packedStripes to build per-request
@@ -656,15 +658,9 @@ class NimbleIndexProjector {
     StripeRanges stripeRanges;
     // Populated by prepareStripes().
     ScanPlan plan;
-    // Per-request flag: true once planning has processed a stripe range for
-    // the request. Deliberately not "contributed a range to the plan": it is
-    // also set when the stripe is dropped for projecting no streams, because
-    // what prepareResumeKeys() needs to know is whether the request was reached
-    // before global truncation, not whether it produced output. Set by
-    // prepareStripes(), used by setResumeKeys().
-    std::vector<bool> hasProcessedStripeRange;
-    // Per-request resume keys set when a request reaches maxRowsPerRequest and
-    // Options::needResumeKey is enabled.
+    // Per-request resume keys, set by setResumeKey() when a request reaches
+    // maxRowsPerRequest and by prepareResumeKeys() after global truncation.
+    // All nullopt when Options::needResumeKey is unset.
     std::vector<std::optional<std::string>> resumeKeys;
     // Flat array of enqueue indices, logically
     // [stripeOffset * numProjectedStreams + streamIndex]. nullopt for absent
