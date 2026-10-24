@@ -94,6 +94,13 @@ struct GroupbyAggregator {
       cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) = 0;
 
+  // Finalizes the kIntermediate state column, which must hold exactly one
+  // already-merged state per grouping key. Does not regroup.
+  virtual std::unique_ptr<cudf::column> finalize(
+      std::unique_ptr<cudf::column> state,
+      cuda::stream_ref stream,
+      rmm::device_async_resource_ref mr) = 0;
+
   // Release request temporaries after aggregate() has enqueued their last use.
   virtual void releaseInput() {
     maskedValues_.reset();
@@ -198,6 +205,11 @@ class CudfGroupby : public CudfOperatorBase {
       TypePtr const& outputType,
       cuda::stream_ref stream,
       rmm::device_async_resource_ref mr);
+
+  // Converts the merged per-key states in 'bufferedResult_' to final output
+  // without regrouping. Keeps key columns as-is.
+  CudfVectorPtr finalizeGroupedStates(
+      std::vector<std::unique_ptr<GroupbyAggregator>>& aggregators);
 
   CudfVectorPtr releaseAndResetBufferedResult();
 

@@ -19,6 +19,8 @@
 #include "folly/container/F14Set.h"
 #include "velox/dwio/nimble/common/Buffer.h"
 #include "velox/dwio/nimble/common/MetricsLogger.h"
+#include "velox/dwio/nimble/common/NimbleConfig.h"
+#include "velox/dwio/nimble/common/SharedDictionaryConfig.h"
 #include "velox/dwio/nimble/common/Types.h"
 #include "velox/dwio/nimble/encodings/SharedDictionaryEncoding.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
@@ -27,9 +29,7 @@
 #include "velox/dwio/nimble/index/VectorIndexWriter.h" // @manual=//velox/dwio/nimble/index:index
 #include "velox/dwio/nimble/tablet/ChunkStatsWriter.h"
 #include "velox/dwio/nimble/tablet/StripeGroup.h"
-#include "velox/dwio/nimble/velox/BufferGrowthPolicy.h"
-#include "velox/dwio/nimble/velox/NimbleConfig.h"
-#include "velox/dwio/nimble/velox/SharedDictionaryConfig.h"
+#include "velox/dwio/nimble/writer/BufferGrowthPolicy.h"
 #include "velox/dwio/nimble/writer/BufferPolicy.h"
 #include "velox/dwio/nimble/writer/EncodingLayoutTree.h"
 #include "velox/dwio/nimble/writer/FlushPolicy.h"
@@ -131,6 +131,14 @@ struct WriterOptions {
   /// Trivial, FixedBitWidth, Dictionary).
   std::vector<std::pair<EncodingType, float>>
       experimentalStripeGroupEncodingLayoutReadFactors{};
+
+  /// NOTE: !!! This is under experimentation and please do not turn on in
+  /// production use case !!!
+  /// When true, kStreamMajor stripe-group metadata encodes each distinct
+  /// offsets or sizes array once per stripe group, and streams with identical
+  /// arrays reference the same copy. Existing readers read such files.
+  /// Enabling this can increase temporary writer memory.
+  bool experimentalStripeGroupMetadataDeduplication{false};
 
   /// If set, the cluster index on the specified columns will be built during
   /// writing. It is the primary index over key-ordered data and stores
@@ -255,6 +263,12 @@ struct WriterOptions {
   /// are not addressable as literal names through this interface.
   std::vector<std::string> fsstEncodingSubfields{};
 
+  /// INTEGER, BIGINT, REAL and DOUBLE value streams pinned to SubIntSplit.
+  /// Paths use the same syntax as fsstEncodingSubfields. Cluster-index keys,
+  /// duplicate targets and shared dictionary collisions are rejected.
+  /// Explicit encodingLayoutTree entries take precedence.
+  std::vector<std::string> subIntSplitEncodingSubfields{};
+
   /// Compression settings to be used when encoding and compressing data streams
   CompressionOptions compressionOptions{};
 
@@ -298,7 +312,7 @@ struct WriterOptions {
   /// TODO: This options should be removed and integrated into the
   /// inputGrowthPolicyFactory option (e.g. allow the caller to set an
   /// ExactGrowthPolicy, as defined here:
-  /// velox/dwio/nimble/velox/BufferGrowthPolicy.h)
+  /// velox/dwio/nimble/writer/BufferGrowthPolicy.h)
   bool lowMemoryMode{false};
 
   /// If present, metadata sections above this threshold size will be

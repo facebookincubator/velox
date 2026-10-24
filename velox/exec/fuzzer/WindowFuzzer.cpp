@@ -284,13 +284,12 @@ std::vector<SortingKeyAndOrder> WindowFuzzer::generateSortingKeysAndOrders(
 }
 
 template <typename T>
-VectorPtr WindowFuzzer::buildKRangeColumn(
+VectorPtr WindowFuzzer::buildKRangeOffsetColumn(
     const VectorPtr& frameBound,
     const VectorPtr& orderByCol,
     const core::WindowNode::BoundType& frameBoundType,
     const core::SortOrder& sortOrder,
-    bool isColumnBound,
-    bool isOffsetColumn) {
+    bool isColumnBound) {
   auto type = CppToType<T>::create();
   const auto size = vectorFuzzer_.getOptions().vectorSize;
   const SelectivityVector allRows(size);
@@ -316,12 +315,8 @@ VectorPtr WindowFuzzer::buildKRangeColumn(
       const T frameBoundValue = isColumnBound
           ? frameBound->as<FlatVector<T>>()->valueAt(j)
           : frameBound->as<ConstantVector<T>>()->valueAt(0);
-      if (isOffsetColumn) {
-        rawValues[j] = genOffsetAtIdx<T>(
-            orderByValueAtIdx, frameBoundValue, frameBoundType, sortOrder);
-      } else {
-        rawValues[j] = frameBoundValue;
-      }
+      rawValues[j] = genOffsetAtIdx<T>(
+          orderByValueAtIdx, frameBoundValue, frameBoundType, sortOrder);
     }
   }
 
@@ -355,28 +350,23 @@ std::string WindowFuzzer::addKRangeOffsetColumnToInputImpl(
     auto names = input[i]->type()->asRow().names();
     auto children = input[i]->children();
     if (isColumnBound) {
-      VectorPtr fuzzFrameBound = vectorFuzzer_.fuzzFlat(type);
+      // Presto validates the frame bound of every input row, including the
+      // rows whose ORDER BY key is null, so the column keeps the fuzzed value
+      // in every row.
+      columnFrameBound = vectorFuzzer_.fuzzFlat(type);
       names.push_back(columnName);
-      columnFrameBound = buildKRangeColumn<T>(
-          fuzzFrameBound,
-          orderByCol,
-          frameBoundType,
-          orderByKey.sortOrder_,
-          isColumnBound,
-          false);
       children.push_back(columnFrameBound);
     }
 
     names.push_back(offsetColumnName);
     VectorPtr frameBound =
         isColumnBound ? columnFrameBound : constantFrameBound;
-    const VectorPtr offsetColumn = buildKRangeColumn<T>(
+    const VectorPtr offsetColumn = buildKRangeOffsetColumn<T>(
         frameBound,
         orderByCol,
         frameBoundType,
         orderByKey.sortOrder_,
-        isColumnBound,
-        true);
+        isColumnBound);
     children.push_back(offsetColumn);
     input[i] = vectorMaker.rowVector(names, children);
   }

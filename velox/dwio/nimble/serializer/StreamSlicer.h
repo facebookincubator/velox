@@ -26,9 +26,9 @@
 #include "velox/buffer/BufferPool.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/dwio/nimble/common/Buffer.h"
+#include "velox/dwio/nimble/common/SchemaReader.h"
 #include "velox/dwio/nimble/common/Vector.h"
 #include "velox/dwio/nimble/serializer/Options.h"
-#include "velox/dwio/nimble/velox/SchemaReader.h"
 
 namespace facebook::nimble::serde {
 

@@ -29,7 +29,6 @@
 #include "velox/dwio/common/Statistics.h"
 #include "velox/dwio/common/tests/utils/FilterGenerator.h"
 #include "velox/dwio/dwrf/common/Config.h"
-#include "velox/dwio/nimble/velox/selective/NimbleReaderFuzzerStats.h"
 #include "velox/exec/Cursor.h"
 #include "velox/exec/tests/utils/FilterToExpression.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -164,7 +163,8 @@ int64_t runtimeStatCount(const OperatorStats& op, std::string_view key) {
 }
 
 TableEvolutionFuzzer::ScanPlanCoverage extractScanStats(
-    const std::shared_ptr<exec::Task>& task) {
+    const std::shared_ptr<exec::Task>& task,
+    const std::vector<std::string_view>& customRuntimeStatKeys) {
   TableEvolutionFuzzer::ScanPlanCoverage result;
   result.numQueries = 1;
   bool remainingFilterEvaluated{false};
@@ -216,20 +216,9 @@ TableEvolutionFuzzer::ScanPlanCoverage extractScanStats(
           runtimeStatSum(op, "dataSourceLazyCpuNanos");
       result.dataSourceLazyWallNanos +=
           runtimeStatSum(op, "dataSourceLazyWallNanos");
-      result.numStringDictionaryEncodingPreserved += runtimeStatSum(
-          op, nimble::fuzzer::kStringDictionaryEncodingPreserved);
-      result.numStringDictionaryEncodingAbandoned += runtimeStatSum(
-          op, nimble::fuzzer::kStringDictionaryEncodingAbandoned);
-      result.numSmallintDictionaryAwareReads +=
-          runtimeStatSum(op, nimble::fuzzer::kSmallintDictionaryAwareReads);
-      result.numIntegerDictionaryAwareReads +=
-          runtimeStatSum(op, nimble::fuzzer::kIntegerDictionaryAwareReads);
-      result.numBigintDictionaryAwareReads +=
-          runtimeStatSum(op, nimble::fuzzer::kBigintDictionaryAwareReads);
-      result.numRealDictionaryAwareReads +=
-          runtimeStatSum(op, nimble::fuzzer::kRealDictionaryAwareReads);
-      result.numDoubleDictionaryAwareReads +=
-          runtimeStatSum(op, nimble::fuzzer::kDoubleDictionaryAwareReads);
+      for (const auto& key : customRuntimeStatKeys) {
+        result.customRuntimeStats[std::string(key)] += runtimeStatSum(op, key);
+      }
     }
   }
   result.numQueriesWithValueHook = result.numValuesLoadedToValueHook > 0;
@@ -265,17 +254,9 @@ void addScanStats(
 
   coverage.numStripeLoads += stats.numStripeLoads;
   coverage.numIndexFilterConversions += stats.numIndexFilterConversions;
-  coverage.numStringDictionaryEncodingPreserved +=
-      stats.numStringDictionaryEncodingPreserved;
-  coverage.numStringDictionaryEncodingAbandoned +=
-      stats.numStringDictionaryEncodingAbandoned;
-  coverage.numSmallintDictionaryAwareReads +=
-      stats.numSmallintDictionaryAwareReads;
-  coverage.numIntegerDictionaryAwareReads +=
-      stats.numIntegerDictionaryAwareReads;
-  coverage.numBigintDictionaryAwareReads += stats.numBigintDictionaryAwareReads;
-  coverage.numRealDictionaryAwareReads += stats.numRealDictionaryAwareReads;
-  coverage.numDoubleDictionaryAwareReads += stats.numDoubleDictionaryAwareReads;
+  for (const auto& [key, value] : stats.customRuntimeStats) {
+    coverage.customRuntimeStats[key] += value;
+  }
   coverage.numQueriesWithValueHook += stats.numQueriesWithValueHook;
   coverage.numValuesLoadedToValueHook += stats.numValuesLoadedToValueHook;
   coverage.numQueriesWithRemainingFilterEvaluation +=
@@ -310,18 +291,16 @@ void logScanStats(
           << " processedStrides=" << stats.processedStrides
           << " chunkSkippedRows=" << stats.chunkSkippedRows
           << " processedRows=" << stats.processedRows;
-  VLOG(1) << "ScanCoverage[" << label
-          << "] nimble: stripeLoads=" << stats.numStripeLoads
-          << " indexFilterConv=" << stats.numIndexFilterConversions
-          << " dictionaryEncodingPreserved="
-          << stats.numStringDictionaryEncodingPreserved
-          << " dictionaryEncodingAbandoned="
-          << stats.numStringDictionaryEncodingAbandoned
-          << " smallintDictAwareReads=" << stats.numSmallintDictionaryAwareReads
-          << " integerDictAwareReads=" << stats.numIntegerDictionaryAwareReads
-          << " bigintDictAwareReads=" << stats.numBigintDictionaryAwareReads
-          << " realDictAwareReads=" << stats.numRealDictionaryAwareReads
-          << " doubleDictAwareReads=" << stats.numDoubleDictionaryAwareReads;
+  if (VLOG_IS_ON(1)) {
+    std::string customStats;
+    for (const auto& [key, value] : stats.customRuntimeStats) {
+      customStats += fmt::format(" {}={}", key, value);
+    }
+    VLOG(1) << "ScanCoverage[" << label
+            << "] format: stripeLoads=" << stats.numStripeLoads
+            << " indexFilterConv=" << stats.numIndexFilterConversions
+            << customStats;
+  }
   VLOG(1) << "ScanCoverage[" << label
           << "] execution: valueHookQueries=" << stats.numQueriesWithValueHook
           << " valueHookValues=" << stats.numValuesLoadedToValueHook
@@ -1009,6 +988,16 @@ std::string TableEvolutionFuzzer::quoteIdentifier(std::string_view name) {
   return quoted;
 }
 
+std::vector<std::string> TableEvolutionFuzzer::quoteIdentifiers(
+    const std::vector<std::string>& names) {
+  std::vector<std::string> quoted;
+  quoted.reserve(names.size());
+  for (const auto& name : names) {
+    quoted.push_back(quoteIdentifier(name));
+  }
+  return quoted;
+}
+
 // Only generates aggregations that are eligible for pushdown:
 // - Supported aggregate functions: min, max, bool_and, bool_or
 // - Each column can only be used by at most one aggregate
@@ -1366,32 +1355,6 @@ std::vector<std::string> groupingKeyTypeKinds(
   return typeKindsForColumns(schema, groupingKeys);
 }
 
-std::vector<std::string> aggregationBlockingProjectExpressions(
-    const RowTypePtr& schema,
-    const AggregationConfig& aggregationConfig) {
-  std::vector<std::string> expressions;
-  expressions.reserve(schema->size());
-  for (int i = 0; i < schema->size(); ++i) {
-    const auto& name = schema->nameOf(i);
-    const bool isAggregateInput = std::any_of(
-        aggregationConfig.aggregates.begin(),
-        aggregationConfig.aggregates.end(),
-        [&](const auto& aggregate) {
-          return containsIdentifier(aggregate, name);
-        });
-    if (isAggregateInput) {
-      expressions.push_back(
-          fmt::format(
-              "if({0} is null, cast(null as {1}), {0}) as {0}",
-              name,
-              schema->childAt(i)->toString()));
-    } else {
-      expressions.push_back(name);
-    }
-  }
-  return expressions;
-}
-
 void addTypeEvolution(
     const TypePtr& previous,
     const TypePtr& current,
@@ -1444,6 +1407,34 @@ void addTypeEvolution(
 }
 
 } // namespace
+
+std::vector<std::string>
+TableEvolutionFuzzer::aggregationBlockingProjectExpressions(
+    const RowTypePtr& schema,
+    const AggregationConfig& aggregationConfig) {
+  std::vector<std::string> expressions;
+  expressions.reserve(schema->size());
+  for (int i = 0; i < schema->size(); ++i) {
+    const auto& name = schema->nameOf(i);
+    const bool isAggregateInput = std::any_of(
+        aggregationConfig.aggregates.begin(),
+        aggregationConfig.aggregates.end(),
+        [&](const auto& aggregate) {
+          return containsIdentifier(aggregate, name);
+        });
+    const auto quotedName = quoteIdentifier(name);
+    if (isAggregateInput) {
+      expressions.push_back(
+          fmt::format(
+              "if({0} is null, cast(null as {1}), {0}) as {0}",
+              quotedName,
+              schema->childAt(i)->toString()));
+    } else {
+      expressions.push_back(quotedName);
+    }
+  }
+  return expressions;
+}
 
 void TableEvolutionFuzzer::CoverageAccumulator::addSchemaEvolution(
     const RowTypePtr& previous,
@@ -2159,8 +2150,10 @@ void TableEvolutionFuzzer::runQueryShape(
     return;
   }
 
-  auto pushdownStats = extractScanStats(scanTasks[0]->task());
-  auto referenceStats = extractScanStats(scanTasks[1]->task());
+  auto pushdownStats =
+      extractScanStats(scanTasks[0]->task(), config_.customRuntimeStatKeys);
+  auto referenceStats =
+      extractScanStats(scanTasks[1]->task(), config_.customRuntimeStatKeys);
   queryCoverage.pushdown = pushdownStats;
   queryCoverage.reference = referenceStats;
   queryCoverage.executionSucceeded = true;
@@ -2814,7 +2807,7 @@ std::unique_ptr<TaskCursor> TableEvolutionFuzzer::makeValuesTask(
       builder.project(aggregationBlockingProjectExpressions(
           projectedSchema, *pushdownConfig.aggregationConfig));
     } else {
-      builder.project(projectedSchema->names());
+      builder.project(quoteIdentifiers(projectedSchema->names()));
     }
   }
   if (pushdownConfig.aggregationConfig.has_value()) {
@@ -2915,13 +2908,7 @@ std::unique_ptr<TaskCursor> TableEvolutionFuzzer::makeScanTask(
     } else {
       // Reachable only when pruned, since the branch above takes every
       // aggregation case, so the pruned schema is the one to project.
-      const auto& projectedNames = projectedSchema->names();
-      std::vector<std::string> projections;
-      projections.reserve(projectedNames.size());
-      for (const auto& name : projectedNames) {
-        projections.push_back(quoteIdentifier(name));
-      }
-      builder.project(projections);
+      builder.project(quoteIdentifiers(projectedSchema->names()));
     }
   }
 

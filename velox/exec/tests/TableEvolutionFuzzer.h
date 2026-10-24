@@ -68,14 +68,8 @@ class TableEvolutionFuzzer {
 
     int64_t numStripeLoads{0};
     int64_t numIndexFilterConversions{0};
-    int64_t numStringDictionaryEncodingPreserved{0};
-    int64_t numStringDictionaryEncodingAbandoned{0};
-    /// Completed fused dictionary visitor calls, including nested encodings.
-    int64_t numSmallintDictionaryAwareReads{0};
-    int64_t numIntegerDictionaryAwareReads{0};
-    int64_t numBigintDictionaryAwareReads{0};
-    int64_t numRealDictionaryAwareReads{0};
-    int64_t numDoubleDictionaryAwareReads{0};
+    /// Format-specific runtime stats collected by the fuzzer driver.
+    std::map<std::string, int64_t, std::less<>> customRuntimeStats;
     int64_t numQueriesWithValueHook{0};
     uint64_t numValuesLoadedToValueHook{0};
     int64_t numQueriesWithRemainingFilterEvaluation{0};
@@ -287,6 +281,12 @@ class TableEvolutionFuzzer {
     /// Set to e.g. 0.1 for format-specific fuzzers that need null coverage.
     double nullRatio = 0;
 
+    /// Runtime stat keys to collect from operator stats into
+    /// ScanPlanCoverage::customRuntimeStats. Format-specific drivers populate
+    /// this so the generic fuzzer collects the stats without knowing what they
+    /// mean.
+    std::vector<std::string_view> customRuntimeStatKeys;
+
     /// Observes one attempted query while its correlated file, plan, feature,
     /// execution, and verification details are available. Called before an
     /// execution or verification failure is rethrown.
@@ -340,6 +340,10 @@ class TableEvolutionFuzzer {
   /// be quoted to survive the round trip.
   static std::string quoteIdentifier(std::string_view name);
 
+  /// Returns 'names' with each one quoted by quoteIdentifier.
+  static std::vector<std::string> quoteIdentifiers(
+      const std::vector<std::string>& names);
+
   /// Generates a pushdown-eligible aggregation over the columns of 'schema'
   /// that are absent from 'filteredColumns'. Returns nullopt when no column is
   /// eligible. Grouping keys and aggregate operands are quoted identifiers.
@@ -372,6 +376,13 @@ class TableEvolutionFuzzer {
   static std::vector<std::string> projectedColumnNames(
       const RowTypePtr& schema,
       const folly::F14FastSet<std::string>& droppedColumns);
+
+  /// Returns one project expression per column of 'schema' that passes the
+  /// column through, wrapping each aggregate input of 'aggregationConfig' in a
+  /// null-preserving 'if' so the aggregation cannot be pushed into the scan.
+  static std::vector<std::string> aggregationBlockingProjectExpressions(
+      const RowTypePtr& schema,
+      const AggregationConfig& aggregationConfig);
 
   /// Drains each of 'cursors' on 'executor' and returns each cursor's rows, in
   /// order. If any cursor fails, waits for the others to finish, then rethrows

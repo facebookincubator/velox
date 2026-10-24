@@ -14,10 +14,12 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/exec/DecimalAggregationDevice.h"
 
 #include <cudf/column/column_device_view.cuh>
 #include <cudf/column/column_factories.hpp>
+#include <cudf/fixed_point/fixed_point.hpp>
 #include <cudf/strings/string_view.cuh>
 #include <cudf/transform.hpp>
 #include <cudf/utilities/error.hpp>
@@ -27,8 +29,10 @@
 #include <rmm/exec_policy.hpp>
 
 #include <cub/device/device_for.cuh>
+#include <cub/device/device_reduce.cuh>
 #include <cuda/iterator>
 #include <cuda/std/span>
+#include <cuda/std/tuple>
 #include <cuda/std/type_traits>
 #include <cuda_runtime.h>
 #include <thrust/transform.h>
@@ -48,6 +52,45 @@ struct DecimalSumState {
   int64_t overflow; // net int128 carries (CPU parity); always 0 on GPU for now
   uint64_t lower; // lower 64 bits of the decimal sum
   int64_t upper; // upper 64 bits of the decimal sum (signed)
+};
+
+// Widens and rescales raw DECIMAL64 values into sum/count pairs, reduces them,
+// then splits the result into output columns. A null input contributes zero to
+// both sum and count.
+struct DecimalSumCount {
+  __int128_t sum;
+  int64_t count;
+};
+
+struct Decimal64ToSumCount {
+  int64_t const* values;
+  cudf::bitmask_type const* nullMask;
+  cudf::size_type offset;
+  numeric::scale_type inputScale;
+  numeric::scale_type outputScale;
+
+  __device__ DecimalSumCount operator()(cudf::size_type idx) const {
+    if (nullMask && !cudf::bit_is_set(nullMask, idx + offset)) {
+      return {0, 0};
+    }
+    auto value = numeric::decimal128{numeric::scaled_integer<__int128_t>{
+        static_cast<__int128_t>(values[idx]), inputScale}};
+    return {value.rescaled(outputScale).value(), 1};
+  }
+};
+
+struct AddDecimalSumCount {
+  __device__ DecimalSumCount
+  operator()(DecimalSumCount lhs, DecimalSumCount rhs) const {
+    return {lhs.sum + rhs.sum, lhs.count + rhs.count};
+  }
+};
+
+struct SplitDecimalSumCount {
+  __device__ cuda::std::tuple<__int128_t, int64_t> operator()(
+      DecimalSumCount result) const {
+    return {result.sum, result.count};
+  }
 };
 
 static_assert(sizeof(DecimalSumState) == detail::kDecimalSumStateSize);
@@ -179,11 +222,17 @@ buildStateValidityMaskImpl(
   auto numRows = sumCol.size();
   if (numRows == 0) {
     return {
-        cudf::create_null_mask(0, cudf::mask_state::UNALLOCATED, stream, mr),
+        cudf::create_null_mask(
+            0,
+            cudf::mask_state::UNALLOCATED,
+            stream,
+            cudf::memory_resources{mr, get_temp_mr()}),
         0};
   }
-  auto sumDeviceView = cudf::column_device_view::create(sumCol, stream);
-  auto countDeviceView = cudf::column_device_view::create(countCol, stream);
+  auto sumDeviceView =
+      cudf::column_device_view::create(sumCol, stream, get_temp_mr());
+  auto countDeviceView =
+      cudf::column_device_view::create(countCol, stream, get_temp_mr());
   StateValidPredicate pred{*sumDeviceView, *countDeviceView};
   // Build a BOOL8 column of per-row validity, then convert via the public API.
   auto bools = cudf::make_fixed_width_column(
@@ -206,6 +255,58 @@ buildStateValidityMaskImpl(
 } // namespace
 
 namespace detail {
+
+void reduceDecimal64SumCount(
+    cudf::column_view input,
+    cudf::mutable_column_view sum,
+    cudf::mutable_column_view count,
+    cuda::stream_ref stream,
+    rmm::device_async_resource_ref mr) {
+  CUDF_EXPECTS(
+      input.type().id() == cudf::type_id::DECIMAL64,
+      "Direct decimal reduction requires DECIMAL64 input");
+  CUDF_EXPECTS(
+      sum.type().id() == cudf::type_id::DECIMAL128 && sum.size() == 1,
+      "Direct decimal reduction requires one DECIMAL128 sum output");
+  CUDF_EXPECTS(
+      count.type().id() == cudf::type_id::INT64 && count.size() == 1,
+      "Direct decimal reduction requires one INT64 count output");
+
+  auto indices = cuda::counting_iterator<cudf::size_type>{0};
+  auto transform = Decimal64ToSumCount{
+      input.data<int64_t>(),
+      input.nullable() ? input.null_mask() : nullptr,
+      input.offset(),
+      numeric::scale_type{input.type().scale()},
+      numeric::scale_type{sum.type().scale()}};
+  auto output = cuda::transform_output_iterator{
+      cuda::make_zip_iterator(sum.data<__int128_t>(), count.data<int64_t>()),
+      SplitDecimalSumCount{}};
+  size_t tempStorageBytes = 0;
+  CUDF_CUDA_TRY(
+      cub::DeviceReduce::TransformReduce(
+          nullptr,
+          tempStorageBytes,
+          indices,
+          output,
+          input.size(),
+          AddDecimalSumCount{},
+          transform,
+          DecimalSumCount{0, 0},
+          stream.get()));
+  auto tempStorage = rmm::device_buffer(tempStorageBytes, stream, mr);
+  CUDF_CUDA_TRY(
+      cub::DeviceReduce::TransformReduce(
+          tempStorage.data(),
+          tempStorageBytes,
+          indices,
+          output,
+          input.size(),
+          AddDecimalSumCount{},
+          transform,
+          DecimalSumCount{0, 0},
+          stream.get()));
+}
 
 template <typename T>
 concept OffsetStorageType =
@@ -321,9 +422,11 @@ bool unpackDecimalSumState(
     cuda::stream_ref stream) {
   auto const numRows = stateCol.size();
   auto const n = static_cast<size_t>(numRows);
-  auto stateDeviceView = cudf::column_device_view::create(stateCol, stream);
+  auto stateDeviceView =
+      cudf::column_device_view::create(stateCol, stream, get_temp_mr());
   int32_t initialInvalidState{0};
-  rmm::device_scalar<int32_t> invalidState{initialInvalidState, stream};
+  rmm::device_scalar<int32_t> invalidState{
+      initialInvalidState, stream, get_temp_mr()};
   launchDeviceFor(
       numRows,
       [&] {

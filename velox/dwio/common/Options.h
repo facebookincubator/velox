@@ -595,6 +595,14 @@ class RowReaderOptions {
     nimbleDictionaryAwareReads_ = value;
   }
 
+  bool nimbleScanFastPath() const {
+    return nimbleScanFastPath_;
+  }
+
+  void setNimbleScanFastPath(bool value) {
+    nimbleScanFastPath_ = value;
+  }
+
   bool lazyColumnIo() const {
     return lazyColumnIo_;
   }
@@ -695,6 +703,8 @@ class RowReaderOptions {
   bool nimblePreserveDictionaryEncoding_{false};
   // Enables dictionary-aware reads for Nimble dictionary-encoded columns.
   bool nimbleDictionaryAwareReads_{false};
+  // Routes Nimble encodings through the scan fast path.
+  bool nimbleScanFastPath_{false};
   // Defers I/O for projected columns without pushdown or remaining filters.
   bool lazyColumnIo_{false};
   folly::F14FastSet<std::string> remainingFilterColumns_;

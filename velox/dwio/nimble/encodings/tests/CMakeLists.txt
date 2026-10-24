@@ -81,6 +81,7 @@ add_executable(
   SparseBoolEncodingViewTest.cpp
   StatisticsTest.cpp
   TrivialEncodingViewTest.cpp
+  VarintEncodingViewTest.cpp
   TrivialEncodingTest.cpp
   EncodingViewTestUtils.h
 )

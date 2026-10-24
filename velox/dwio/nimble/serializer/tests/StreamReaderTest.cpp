@@ -33,13 +33,15 @@
 #include "velox/dwio/nimble/common/Buffer.h"
 #include "velox/dwio/nimble/common/ChunkHeader.h"
 #include "velox/dwio/nimble/common/NimbleException.h"
+#include "velox/dwio/nimble/common/SchemaReader.h"
 #include "velox/dwio/nimble/common/Vector.h"
 #include "velox/dwio/nimble/common/tests/GTestUtils.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
+#include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
+#include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
 #include "velox/dwio/nimble/serializer/StreamReader.h"
-#include "velox/dwio/nimble/velox/ChunkedStreamWriter.h"
-#include "velox/dwio/nimble/velox/SchemaReader.h"
+#include "velox/dwio/nimble/writer/ChunkedStreamWriter.h"
 #include "velox/type/Type.h"
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/SelectivityVector.h"
@@ -619,32 +621,37 @@ TEST_F(StreamReaderTest, rejectsEmptySourceRange) {
 TEST_F(StreamReaderTest, rejectsUnsupportedEncodingViews) {
   const auto type = std::make_shared<const ScalarType>(
       StreamDescriptor{0, ScalarKind::Int64});
-  for (const bool nullable : {false, true}) {
-    SCOPED_TRACE(fmt::format("nullable={}", nullable));
-    const auto stream = nullable
-        ? encodeNullableChunk<int64_t>(
-              {10, std::nullopt, 12}, EncodingType::Varint)
-        : encodeChunk<int64_t>(
-              std::vector<int64_t>{10, 11, 12}, EncodingType::Varint);
-    const std::array<std::string_view, 1> streams{stream};
-    StreamReader reader{type, pool_.get(), {}};
-    auto output = velox::BaseVector::create(velox::BIGINT(), 1, pool_.get());
-    const std::array<RowRange, 1> ranges{{{1, 2}}};
-    const auto expectUnsupported = [](auto read) {
-      try {
-        read();
-        FAIL() << "Expected unsupported EncodingView to throw";
-      } catch (const NimbleException& exception) {
-        EXPECT_EQ(exception.errorCode(), error_code::NotSupported);
-        EXPECT_EQ(
-            exception.errorMessage(), "Varint does not support EncodingView.");
-      }
-    };
-
-    expectUnsupported(
-        [&] { runRead(reader, streams, ranges, /*outputOffset=*/0, output); });
-    expectUnsupported([&] { reader.setStreams(streams); });
+  // The encoding prefix alone selects the unsupported encoding.
+  std::string encoded(EncodingPrefix::kFixedPrefixSize, 0);
+  char* pos = encoded.data();
+  encoding::writeChar(static_cast<char>(EncodingType::Delta), pos);
+  encoding::writeChar(static_cast<char>(DataType::Int64), pos);
+  encoding::writeUint32(/*value=*/3, pos);
+  Buffer buffer{*pool_};
+  ChunkedStreamWriter writer{
+      buffer, CompressionParams{.type = CompressionType::Uncompressed}};
+  std::string stream;
+  for (const auto segment : writer.encode(encoded)) {
+    stream.append(segment);
   }
+  const std::array<std::string_view, 1> streams{stream};
+  StreamReader reader{type, pool_.get(), {}};
+  auto output = velox::BaseVector::create(velox::BIGINT(), 1, pool_.get());
+  const std::array<RowRange, 1> ranges{{{1, 2}}};
+  const auto expectUnsupported = [](auto read) {
+    try {
+      read();
+      FAIL() << "Expected unsupported EncodingView to throw";
+    } catch (const NimbleException& exception) {
+      EXPECT_EQ(exception.errorCode(), error_code::NotSupported);
+      EXPECT_EQ(
+          exception.errorMessage(), "Delta does not support EncodingView.");
+    }
+  };
+
+  expectUnsupported(
+      [&] { runRead(reader, streams, ranges, /*outputOffset=*/0, output); });
+  expectUnsupported([&] { reader.setStreams(streams); });
 }
 
 TEST_F(StreamReaderTest, readsNewStreamsAcrossCalls) {

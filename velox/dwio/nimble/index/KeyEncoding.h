@@ -23,6 +23,7 @@
 #include <vector>
 
 #include "velox/common/memory/Memory.h"
+#include "velox/dwio/nimble/index/KeyComparator.h"
 #include "velox/dwio/nimble/index/KeyCursor.h"
 
 namespace facebook::nimble::index {
@@ -54,12 +55,17 @@ class KeyEncoding {
   /// String data buffers are allocated via stringBufferFactory. The caller
   /// must ensure these buffers outlive the returned KeyEncoding (typically
   /// owned by DecodedKeyChunk::stringBuffers).
+  ///
+  /// The keys sort under 'comparator', or bytewise when it is null, which
+  /// seek() relies on. The comparator must outlive the returned KeyEncoding.
   static std::unique_ptr<KeyEncoding> create(
       velox::memory::MemoryPool& pool,
       std::string_view encodedData,
-      std::function<void*(uint32_t)> stringBufferFactory);
+      std::function<void*(uint32_t)> stringBufferFactory,
+      const KeyComparator* comparator);
 
-  /// Returns the row index of the first key matching the target.
+  /// Returns the row index of the first key matching the target, in the key
+  /// order the encoding was created with.
   /// @param inclusive When true, returns first row >= value.
   ///        When false, returns first row > value.
   /// @return Row index if found, std::nullopt if no matching row exists.
@@ -88,7 +94,10 @@ class KeyEncoding {
 /// vector for fast binary search and direct index access.
 class TrivialKeyEncoding final : public KeyEncoding {
  public:
-  explicit TrivialKeyEncoding(std::vector<std::string_view> values);
+  /// 'values' sort under 'comparator', or bytewise when it is null.
+  TrivialKeyEncoding(
+      std::vector<std::string_view> values,
+      const KeyComparator* comparator);
 
   std::optional<uint32_t> seek(std::string_view value, bool inclusive)
       const override;
@@ -106,6 +115,9 @@ class TrivialKeyEncoding final : public KeyEncoding {
 
  private:
   const std::vector<std::string_view> values_;
+
+  // Order of 'values_', or null for bytewise order.
+  const KeyComparator* const comparator_;
 };
 
 /// Memory-compact key encoding for PrefixEncoding-backed keys.
@@ -113,10 +125,12 @@ class TrivialKeyEncoding final : public KeyEncoding {
 /// restart-point binary search and linear scan with local variables.
 class PrefixKeyEncoding final : public KeyEncoding {
  public:
+  /// The encoded keys sort under 'comparator', or bytewise when it is null.
   PrefixKeyEncoding(
       std::string_view encodedData,
       uint32_t rowCount,
-      uint32_t dataOffset);
+      uint32_t dataOffset,
+      const KeyComparator* comparator);
 
   std::optional<uint32_t> seek(std::string_view value, bool inclusive)
       const override;
@@ -149,6 +163,13 @@ class PrefixKeyEncoding final : public KeyEncoding {
       uint32_t& row,
       KeyScratch& scratch);
 
+  // Implements seek() under 'keyOrder', a key order from withKeyOrder().
+  template <typename KeyOrder>
+  std::optional<uint32_t> seekWithOrder(
+      std::string_view targetValue,
+      bool inclusive,
+      KeyOrder keyOrder) const;
+
   uint32_t restartOffset(uint32_t restartIndex) const;
 
   const char* restartPosition(uint32_t restartIndex) const {
@@ -161,6 +182,9 @@ class PrefixKeyEncoding final : public KeyEncoding {
   const char* const restartOffsets_;
   const char* const dataStart_;
   const char* const dataEnd_;
+
+  // Order of the keys, or null for bytewise order.
+  const KeyComparator* const comparator_;
 };
 
 } // namespace facebook::nimble::index

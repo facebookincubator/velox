@@ -38,11 +38,9 @@ class AggregateCompanionFunctionBase : public Aggregate {
 
   bool isReducing() const override final;
 
-  void destroy(folly::Range<char**> groups) override final;
-
-  void initializeNewGroups(
-      char** groups,
-      folly::Range<const vector_size_t*> indices) override final;
+  /// Forwards the constant inputs to the wrapped aggregate.
+  void setConstantInputs(
+      const std::vector<VectorPtr>& constantInputs) override final;
 
   void addRawInput(
       char** groups,

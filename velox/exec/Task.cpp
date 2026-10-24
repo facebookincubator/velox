@@ -18,7 +18,9 @@
 #include <boost/lexical_cast.hpp>
 #include <boost/uuid/uuid_generators.hpp>
 #include <boost/uuid/uuid_io.hpp>
+#include <algorithm>
 #include <exception>
+#include <random>
 #include <string>
 
 #include <folly/Conv.h>
@@ -184,8 +186,9 @@ void buildSplitStates(
   // node and may use splits for processing.
   if (planNode->sources().empty()) {
     // Not all leaf nodes require splits. ValuesNode doesn't. Check if this plan
-    // node requires splits.
-    if (planNode->requiresSplits()) {
+    // node requires splits.  A FixedPointNode's splits go to its loop, and as
+    // the pipeline's leaf it reads loop state.
+    if (planNode->requiresSplits() && !planNode->is<core::FixedPointNode>()) {
       splitStateMap[planNode->id()].sourceIsTableScan =
           (dynamic_cast<const core::TableScanNode*>(planNode) != nullptr);
     }
@@ -384,7 +387,8 @@ std::shared_ptr<Task> Task::create(
     int32_t memoryArbitrationPriority,
     std::optional<common::SpillDiskOptions> spillDiskOpts,
     std::function<void(std::exception_ptr)> onError,
-    const FixedPointOptions* fixedPointOptions) {
+    const FixedPointOptions* fixedPointOptions,
+    const NestedFixedPoint* nested) {
   return Task::create(
       taskId,
       std::move(planFragment),
@@ -396,7 +400,8 @@ std::shared_ptr<Task> Task::create(
       memoryArbitrationPriority,
       std::move(spillDiskOpts),
       std::move(onError),
-      fixedPointOptions);
+      fixedPointOptions,
+      nested);
 }
 
 // static
@@ -410,21 +415,30 @@ std::shared_ptr<Task> Task::create(
     int32_t memoryArbitrationPriority,
     std::optional<common::SpillDiskOptions> spillDiskOpts,
     std::function<void(std::exception_ptr)> onError,
-    const FixedPointOptions* fixedPointOptions) {
+    const FixedPointOptions* fixedPointOptions,
+    const NestedFixedPoint* nested) {
   VELOX_CHECK_NOT_NULL(planFragment.planNode);
-  // A plan containing a FixedPointNode runs as a schedule of sub-tasks rather
-  // than a Driver pipeline.  The loop is built after the Task so it can hold
-  // its owner -- which outlives it -- and before init(), which skips compiling
-  // drivers when there is one.  Note the owner is constructed but not yet
-  // initialized here: pool() is assigned in init(), below.
-  const bool isFixedPoint =
-      FixedPointLoop::claims(planFragment, fixedPointOptions);
-  // An enclosing loop names itself here when it creates a sub-task, so the
-  // link is fixed before anything can observe the task.
-  FixedPointLoop* const parentFixedPoint =
-      (fixedPointOptions != nullptr && fixedPointOptions->nested.has_value())
-      ? fixedPointOptions->nested->parent
-      : nullptr;
+
+  // A plan containing a FixedPointNode runs the node's iterations as a
+  // schedule of sub-tasks, and the rest of the plan as this task's Driver
+  // pipeline. The loop is built after the Task so it can hold its owner --
+  // which outlives it.
+  //
+  // Note the owner is constructed but not yet initialized here: pool() is
+  // assigned in init(), below. Every FixedPointNode leaf reads its task's one
+  // loop, so a plan has at most one. The walk visits every node to find a
+  // second one.
+  const core::FixedPointNode* fixedPoint = nullptr;
+  core::PlanNode::findFirstNode(
+      planFragment.planNode.get(), [&](const core::PlanNode* node) {
+        if (const auto* candidate = node->as<core::FixedPointNode>()) {
+          VELOX_USER_CHECK_NULL(
+              fixedPoint, "A plan fragment can run at most one FixedPointNode");
+          fixedPoint = candidate;
+        }
+        return false;
+      });
+
   auto task = std::shared_ptr<Task>(new Task(
       taskId,
       std::move(planFragment),
@@ -434,10 +448,11 @@ std::shared_ptr<Task> Task::create(
       std::move(consumerSupplier),
       memoryArbitrationPriority,
       std::move(onError),
-      parentFixedPoint));
-  if (isFixedPoint) {
-    task->fixedPoint_ =
-        std::make_unique<FixedPointLoop>(task.get(), fixedPointOptions);
+      nested != nullptr ? nested->state : std::weak_ptr<PersistentState>{},
+      nested != nullptr ? nested->statePool : nullptr));
+  if (fixedPoint != nullptr) {
+    task->fixedPoint_ = std::make_unique<FixedPointLoop>(
+        task.get(), *fixedPoint, fixedPointOptions, nested);
   }
   task->init(std::move(spillDiskOpts));
   task->addToTaskList();
@@ -453,7 +468,8 @@ Task::Task(
     ConsumerSupplier consumerSupplier,
     int32_t memoryArbitrationPriority,
     std::function<void(std::exception_ptr)> onError,
-    FixedPointLoop* parentFixedPoint)
+    std::weak_ptr<PersistentState> fixedPointState,
+    std::shared_ptr<memory::MemoryPool> fixedPointStatePool)
     : uuid_{makeUuid()},
       taskId_(taskId),
       destination_(destination),
@@ -465,7 +481,8 @@ Task::Task(
           planFragment_.firstNodeNotSupportingBarrier()),
       traceCtx_(maybeMakeTraceCtx()),
       consumerSupplier_(std::move(consumerSupplier)),
-      parentFixedPoint_(parentFixedPoint),
+      fixedPointState_(std::move(fixedPointState)),
+      fixedPointStatePool_(std::move(fixedPointStatePool)),
       onError_(std::move(onError)),
       splitsStates_(buildSplitStates(planFragment_.planNode)) {
   ++numCreatedTasks_;
@@ -538,6 +555,7 @@ Task::~Task() {
   CLEAR(customChildPools_.clear());
   CLEAR(childPools_.clear());
   CLEAR(planFragment_ = core::PlanFragment());
+  CLEAR(fixedPointStatePool_.reset());
   CLEAR(pool_.reset());
   CLEAR(queryCtx_.reset());
   clearStage = "exiting ~Task()";
@@ -567,19 +585,14 @@ void Task::init(std::optional<common::SpillDiskOptions>&& spillDiskOpts) {
     return;
   }
 
-  if (fixedPoint_ != nullptr) {
-    // The fixed point runs this plan itself as a schedule of sub-tasks; do not
-    // compile it into a Driver pipeline.
-    return;
-  }
-
   // Create drivers.
   VELOX_CHECK_NULL(
       consumerSupplier_,
       "Serial execution mode doesn't support delivering results to a "
       "callback");
 
-  taskStats_.executionStartTimeMs = getCurrentTimeMs();
+  taskStats_.executionStartTimeMs = EpochTime::now<std::chrono::milliseconds>();
+  executionStartWatch_.emplace();
   LocalPlanner::plan(
       planFragment_,
       /*consumerSupplier=*/nullptr,
@@ -685,10 +698,9 @@ void Task::removeFromTaskList() {
 }
 
 uint64_t Task::timeSinceStartMsLocked() const {
-  if (taskStats_.executionStartTimeMs == 0UL) {
-    return 0UL;
-  }
-  return getCurrentTimeMs() - taskStats_.executionStartTimeMs;
+  return executionStartWatch_.has_value()
+      ? executionStartWatch_->elapsed().count()
+      : 0;
 }
 
 SplitsState& Task::getPlanNodeSplitsStateLocked(
@@ -1034,24 +1046,19 @@ bool Task::supportSerialExecutionMode() const {
 }
 
 RowVectorPtr Task::next(ContinueFuture* future) {
-  if (fixedPoint_ != nullptr) {
+  if (fixedPoint_ != nullptr && !fixedPoint_->succeeded()) {
     // Same invariant as the driver path below: next() is the serial API.
     checkExecutionMode(ExecutionMode::kSerial);
-    RowVectorPtr batch;
+    // The pipeline's FixedPointNode leaf reads the loop's output, so the loop
+    // runs first.
     try {
-      batch = fixedPoint_->next(future);
+      fixedPoint_->runSerially();
     } catch (...) {
-      // No driver reports the failure for a fixed point, so record it here;
-      // state() and error() then read as they would for a driver-based task.
+      // No driver reports the loop's failure, so record it here; state() and
+      // error() then read as they would for a driver-based task.
       setError(std::current_exception());
       throw;
     }
-    if (batch == nullptr) {
-      // Drained.  Nothing else moves the task off kRunning on this path, so
-      // taskCompletionFuture() would never resolve.
-      terminate(TaskState::kFinished);
-    }
-    return batch;
   }
   recordBatchStartTime();
 
@@ -1161,43 +1168,20 @@ RowVectorPtr Task::next(ContinueFuture* future) {
 }
 
 void Task::recordBatchStartTime() {
-  if (batchStartTimeMs_.has_value()) {
+  if (batchWatch_.has_value()) {
     return;
   }
-  batchStartTimeMs_ = getCurrentTimeMs();
+  batchWatch_.emplace();
 }
 
 void Task::recordBatchEndTime() {
-  VELOX_CHECK(batchStartTimeMs_.has_value());
+  VELOX_CHECK(batchWatch_.has_value());
   RECORD_METRIC_VALUE(
-      kMetricTaskBatchProcessTimeMs, getCurrentTimeMs() - *batchStartTimeMs_);
-  batchStartTimeMs_.reset();
+      kMetricTaskBatchProcessTimeMs, batchWatch_->elapsed().count());
+  batchWatch_.reset();
 }
 
 void Task::start(uint32_t maxDrivers, uint32_t concurrentSplitGroups) {
-  if (fixedPoint_ != nullptr) {
-    // Same invariant as the driver path below: start() is the parallel API.
-    checkExecutionMode(ExecutionMode::kParallel);
-    try {
-      fixedPoint_->start(
-          maxDrivers,
-          concurrentSplitGroups,
-          [self = shared_from_this()](std::exception_ptr error) {
-            if (error != nullptr) {
-              self->setError(error);
-            } else {
-              self->terminate(TaskState::kFinished);
-            }
-          });
-    } catch (...) {
-      // The loop rejected the start before it could schedule anything -- a
-      // missing orchestration executor, say.  Without this the task would stay
-      // kRunning for ever with no error recorded.
-      setError(std::current_exception());
-      throw;
-    }
-    return;
-  }
   facebook::velox::process::ThreadDebugInfo threadDebugInfo{
       queryCtx()->queryId(), taskId_, nullptr};
   facebook::velox::process::ScopedThreadDebugInfo scopedInfo(threadDebugInfo);
@@ -1215,7 +1199,9 @@ void Task::start(uint32_t maxDrivers, uint32_t concurrentSplitGroups) {
 
     {
       std::unique_lock<std::timed_mutex> l(mutex_);
-      taskStats_.executionStartTimeMs = getCurrentTimeMs();
+      taskStats_.executionStartTimeMs =
+          EpochTime::now<std::chrono::milliseconds>();
+      executionStartWatch_.emplace();
       if (!isRunningLocked()) {
         LOG(WARNING) << "Task " << taskId_
                      << " has already been terminated before start: "
@@ -1230,6 +1216,15 @@ void Task::start(uint32_t maxDrivers, uint32_t concurrentSplitGroups) {
                    << " was terminated while starting: " << errorMessage();
       finishUnstartedDrivers();
       return;
+    }
+    // After the drivers: createAndStartDrivers requires an empty task pool, and
+    // the loop allocates from it.  The pipeline's FixedPointNode leaf waits for
+    // the loop to finish; the loop fails the task if it fails.
+    if (fixedPoint_ != nullptr) {
+      fixedPoint_->start(
+          maxDrivers, [self = shared_from_this()](std::exception_ptr error) {
+            self->setError(error);
+          });
     }
   } catch (const std::exception&) {
     if (isRunning()) {
@@ -1364,12 +1359,56 @@ bool Task::createAndStartDrivers(uint32_t concurrentSplitGroups) {
   return true;
 }
 
+namespace {
+const std::string& remoteTaskId(const exec::Split& split) {
+  return checkedPointerCast<RemoteConnectorSplit>(split.connectorSplit)->taskId;
+}
+
+// Remote splits and 'no more splits' a node received before the task created
+// its exchange client.
+struct PendingExchangeSplits {
+  std::shared_ptr<ExchangeClient> client;
+  std::vector<std::string> remoteTaskIds;
+  bool noMoreSplits{false};
+
+  static PendingExchangeSplits from(const SplitsState& splitsState) {
+    std::vector<std::string> remoteTaskIds;
+    for (const auto& [groupId, store] : splitsState.groupSplitsStores) {
+      for (const auto& split : store->queuedSplits()) {
+        remoteTaskIds.push_back(remoteTaskId(split));
+      }
+    }
+    // Consumer tasks receive the same splits in the same order. Shuffle so they
+    // fetch from different producers first.
+    std::shuffle(
+        remoteTaskIds.begin(),
+        remoteTaskIds.end(),
+        std::default_random_engine{std::random_device{}()});
+    return PendingExchangeSplits{
+        .client = splitsState.exchangeClient,
+        .remoteTaskIds = std::move(remoteTaskIds),
+        .noMoreSplits = splitsState.noMoreSplits,
+    };
+  }
+
+  void forward() const {
+    for (const auto& id : remoteTaskIds) {
+      client->addRemoteTaskId(id);
+    }
+    if (noMoreSplits) {
+      client->noMoreRemoteTasks();
+    }
+  }
+};
+} // namespace
+
 bool Task::initializePartitionOutput() {
   TestValue::adjust(
       "facebook::velox::exec::Task::initializePartitionOutput", this);
-  std::shared_ptr<const core::PartitionedOutputNode> partitionedOutputNode{
-      nullptr};
+  core::PartitionedOutputNodePtr partitionedOutputNode;
   int numOutputDrivers{0};
+  std::vector<PendingExchangeSplits> pendingExchangeSplits;
+  std::unique_lock<std::mutex> exchangeSplitsLock(exchangeSplitsMutex_);
   {
     std::unique_lock<std::timed_mutex> l(mutex_);
     if (!isRunningLocked()) {
@@ -1411,7 +1450,19 @@ bool Task::initializePartitionOutput() {
             folly::to<int32_t>(factory->numDrivers));
       }
     }
+
+    for (const auto& [nodeId, splitsState] : splitsStates_) {
+      if (splitsState.exchangeClient != nullptr) {
+        pendingExchangeSplits.push_back(
+            PendingExchangeSplits::from(splitsState));
+      }
+    }
   }
+
+  for (const auto& pending : pendingExchangeSplits) {
+    pending.forward();
+  }
+  exchangeSplitsLock.unlock();
 
   if (partitionedOutputNode != nullptr) {
     VELOX_CHECK(hasPartitionedOutput());
@@ -1492,9 +1543,9 @@ void Task::resume(std::shared_ptr<Task> self) {
         VELOX_CHECK(!driver->isOnThread() && !driver->isTerminated());
         if (!driver->state().hasBlockingFuture &&
             driver->task()->queryCtx()->isExecutorSupplied()) {
-          if (driver->state().endExecTimeMs != 0) {
+          if (driver->state().offThreadWatch.has_value()) {
             driver->state().totalPauseTimeMs +=
-                getCurrentTimeMs() - driver->state().endExecTimeMs;
+                driver->state().offThreadWatch->elapsed().count();
           }
           // Do not continue a Driver that is blocked on external
           // event. The Driver gets enqueued by the promise realization.
@@ -1796,6 +1847,11 @@ void Task::setMaxSplitSequenceId(
     const core::PlanNodeId& planNodeId,
     long maxSequenceId) {
   std::lock_guard<std::timed_mutex> l(mutex_);
+  if (fixedPoint_ != nullptr && fixedPoint_->takesSplits(planNodeId)) {
+    auto [it, _] = fixedPointMaxSequenceIds_.emplace(planNodeId, -1);
+    it->second = std::max(it->second, maxSequenceId);
+    return;
+  }
   if (isRunningLocked()) {
     auto& splitsState = getPlanNodeSplitsStateLocked(planNodeId);
     // We could have been sent an old split again, so only change max id, when
@@ -1813,15 +1869,49 @@ void Task::onAddSplit(
   }
 }
 
+namespace {
+// Forwards 'split' to 'client', if set. Returns the error if the client
+// throws. The caller must then fail the task: the split is already in the
+// split store, and the client may have recorded the remote task before
+// failing, so the split cannot be retried.
+std::exception_ptr forwardRemoteSplit(
+    ExchangeClient* client,
+    const exec::Split& split) {
+  if (client == nullptr) {
+    return nullptr;
+  }
+  try {
+    client->addRemoteTaskId(remoteTaskId(split));
+  } catch (const std::exception&) {
+    return std::current_exception();
+  }
+  return nullptr;
+}
+} // namespace
+
 bool Task::addSplitWithSequence(
     const core::PlanNodeId& planNodeId,
     exec::Split&& split,
     long sequenceId) {
   RECORD_METRIC_VALUE(kMetricTaskSplitsCount, 1);
+  if (fixedPoint_ != nullptr && fixedPoint_->takesSplits(planNodeId)) {
+    // A split sent again is ignored, as for the task's own nodes below.
+    {
+      std::lock_guard<std::timed_mutex> l(mutex_);
+      const auto it = fixedPointMaxSequenceIds_.find(planNodeId);
+      if (it != fixedPointMaxSequenceIds_.end() && sequenceId <= it->second) {
+        return false;
+      }
+    }
+    fixedPoint_->addSplit(planNodeId, std::move(split));
+    return true;
+  }
   std::vector<ContinuePromise> promises;
   bool added = false;
   bool isTaskRunning;
   bool shouldLogSplit = false;
+  std::shared_ptr<ExchangeClient> exchangeClient;
+  std::unique_lock<std::mutex> exchangeSplitsLock(exchangeSplitsMutex_);
   {
     std::lock_guard<std::timed_mutex> l(mutex_);
     isTaskRunning = isRunningLocked();
@@ -1834,16 +1924,23 @@ bool Task::addSplitWithSequence(
         shouldLogSplit = true;
         addSplitLocked(splitsState, split, promises);
         added = true;
+        exchangeClient = splitsState.exchangeClient;
       }
     }
   }
 
+  const auto forwardError = forwardRemoteSplit(exchangeClient.get(), split);
+  exchangeSplitsLock.unlock();
+
   for (auto& promise : promises) {
     promise.setValue();
   }
+  if (forwardError != nullptr) {
+    setError(forwardError);
+  }
 
   if (!isTaskRunning) {
-    // Safe because 'split' is moved away above only if 'isTaskRunning'.
+    // Safe because 'split' is only read above.
     // @lint-ignore CLANGTIDY bugprone-use-after-move
     addRemoteSplit(planNodeId, split);
   }
@@ -1857,30 +1954,39 @@ bool Task::addSplitWithSequence(
 
 void Task::addSplit(const core::PlanNodeId& planNodeId, exec::Split&& split) {
   RECORD_METRIC_VALUE(kMetricTaskSplitsCount, 1);
-  if (fixedPoint_ != nullptr) {
-    // The loop routes the split to whichever sub-task consumes it; there
-    // is no driver source operator to deliver it to.
+  if (fixedPoint_ != nullptr && fixedPoint_->takesSplits(planNodeId)) {
+    // The loop routes the split to whichever of its sub-tasks consumes it.
     fixedPoint_->addSplit(planNodeId, std::move(split));
     return;
   }
   bool isTaskRunning;
   bool shouldLogSplit = false;
   std::vector<ContinuePromise> promises;
+  std::shared_ptr<ExchangeClient> exchangeClient;
+  std::unique_lock<std::mutex> exchangeSplitsLock(exchangeSplitsMutex_);
   {
     std::lock_guard<std::timed_mutex> l(mutex_);
     isTaskRunning = isRunningLocked();
     if (isTaskRunning) {
       shouldLogSplit = true;
-      addSplitLocked(getPlanNodeSplitsStateLocked(planNodeId), split, promises);
+      auto& splitsState = getPlanNodeSplitsStateLocked(planNodeId);
+      addSplitLocked(splitsState, split, promises);
+      exchangeClient = splitsState.exchangeClient;
     }
   }
+
+  const auto forwardError = forwardRemoteSplit(exchangeClient.get(), split);
+  exchangeSplitsLock.unlock();
 
   for (auto& promise : promises) {
     promise.setValue();
   }
+  if (forwardError != nullptr) {
+    setError(forwardError);
+  }
 
   if (!isTaskRunning) {
-    // Safe because 'split' is moved away above only if 'isTaskRunning'.
+    // Safe because 'split' is only read above.
     // @lint-ignore CLANGTIDY bugprone-use-after-move
     addRemoteSplit(planNodeId, split);
   }
@@ -1895,11 +2001,8 @@ void Task::addRemoteSplit(
     const exec::Split& split) {
   if (split.hasConnectorSplit()) {
     if (exchangeClientByPlanNode_.count(planNodeId)) {
-      auto remoteSplit =
-          std::dynamic_pointer_cast<RemoteConnectorSplit>(split.connectorSplit);
-      VELOX_CHECK(remoteSplit, "Wrong type of split");
       exchangeClientByPlanNode_[planNodeId]->addRemoteTaskId(
-          remoteSplit->taskId);
+          remoteTaskId(split));
     }
   }
 }
@@ -1987,13 +2090,14 @@ void Task::noMoreSplitsForGroup(
 }
 
 void Task::noMoreSplits(const core::PlanNodeId& planNodeId) {
-  if (fixedPoint_ != nullptr) {
+  if (fixedPoint_ != nullptr && fixedPoint_->takesSplits(planNodeId)) {
     fixedPoint_->noMoreSplits(planNodeId);
     return;
   }
   std::vector<ContinuePromise> splitPromises;
   bool allFinished;
   std::shared_ptr<ExchangeClient> exchangeClient;
+  std::unique_lock<std::mutex> exchangeSplitsLock(exchangeSplitsMutex_);
   {
     std::lock_guard<std::timed_mutex> l(mutex_);
 
@@ -2036,17 +2140,17 @@ void Task::noMoreSplits(const core::PlanNodeId& planNodeId) {
 
     allFinished = checkNoMoreSplitGroupsLocked();
 
-    if (!isRunningLocked()) {
-      exchangeClient = getExchangeClientLocked(planNodeId);
-    }
-  }
-
-  for (auto& promise : splitPromises) {
-    promise.setValue();
+    exchangeClient = isRunningLocked() ? splitsState.exchangeClient
+                                       : getExchangeClientLocked(planNodeId);
   }
 
   if (exchangeClient != nullptr) {
     exchangeClient->noMoreRemoteTasks();
+  }
+  exchangeSplitsLock.unlock();
+
+  for (auto& promise : splitPromises) {
+    promise.setValue();
   }
 
   if (allFinished) {
@@ -2121,7 +2225,7 @@ ContinueFuture Task::startBarrier(std::string_view comment) {
     return std::move(future);
   }
 
-  barrierStartUs_ = getCurrentTimeMicro();
+  barrierWatch_.reset();
   ++taskStats_.numBarriers;
 
   promises.reserve(leafPlanNodeIds.size());
@@ -2174,10 +2278,8 @@ void Task::endBarrierLocked(std::vector<ContinuePromise>& promises) {
   }
   barrierFinishPromises_.clear();
   barrierRequested_ = false;
-  VELOX_CHECK_GE(getCurrentTimeMicro(), barrierStartUs_);
   RECORD_HISTOGRAM_METRIC_VALUE(
-      kMetricTaskBarrierProcessTimeMs,
-      (getCurrentTimeMicro() - barrierStartUs_) / 1'000);
+      kMetricTaskBarrierProcessTimeMs, barrierWatch_.elapsed().count());
 }
 
 namespace {
@@ -2536,10 +2638,12 @@ bool Task::checkIfFinishedLocked() {
     // the output buffers. Preserve this boundary on subsequent checks so that
     // endTimeMs - executionEndTimeMs measures the output-consumption tail.
     if (taskStats_.executionEndTimeMs == 0) {
-      taskStats_.executionEndTimeMs = getCurrentTimeMs();
+      taskStats_.executionEndTimeMs =
+          EpochTime::now<std::chrono::milliseconds>();
+      executionEndWatch_.emplace();
     }
     if (!hasPartitionedOutput() || partitionedOutputConsumed_) {
-      taskStats_.endTimeMs = getCurrentTimeMs();
+      taskStats_.endTimeMs = EpochTime::now<std::chrono::milliseconds>();
       return true;
     }
   }
@@ -2899,7 +3003,9 @@ ContinueFuture Task::terminate(TaskState terminalState) {
   {
     std::lock_guard<std::timed_mutex> l(mutex_);
     if (taskStats_.executionEndTimeMs == 0) {
-      taskStats_.executionEndTimeMs = getCurrentTimeMs();
+      taskStats_.executionEndTimeMs =
+          EpochTime::now<std::chrono::milliseconds>();
+      executionEndWatch_.emplace();
     }
     if (!isRunningLocked()) {
       return makeFinishFutureLocked("Task::terminate");
@@ -2909,7 +3015,8 @@ ContinueFuture Task::terminate(TaskState terminalState) {
         taskStats_.terminationTimeMs,
         0,
         "Termination time has already been set, this should only happen once.");
-    taskStats_.terminationTimeMs = getCurrentTimeMs();
+    taskStats_.terminationTimeMs = EpochTime::now<std::chrono::milliseconds>();
+    terminationWatch_.emplace();
     if (state_ == TaskState::kCanceled || state_ == TaskState::kAborted) {
       // Construct the exception directly instead of going through VELOX_FAIL to
       // avoid error log when cancellation is expected.
@@ -2986,12 +3093,7 @@ ContinueFuture Task::terminate(TaskState terminalState) {
 
   for (auto& exchangeClient : exchangeClients) {
     if (exchangeClient != nullptr) {
-      try {
-        exchangeClient->close();
-      } catch (const std::exception& ex) {
-        LOG(ERROR) << "Exchange client threw from close() during termination "
-                   << "of task " << taskId_ << ": " << ex.what();
-      }
+      exchangeClient->close();
     }
   }
 
@@ -3005,8 +3107,12 @@ ContinueFuture Task::terminate(TaskState terminalState) {
   std::
       unordered_map<core::PlanNodeId, std::pair<std::vector<exec::Split>, bool>>
           remainingRemoteSplits;
+  folly::F14FastSet<std::shared_ptr<connector::ConnectorSplit>>
+      preloadingSplits;
   {
     std::lock_guard<std::timed_mutex> l(mutex_);
+    preloadingSplits.swap(preloadingSplits_);
+
     // Collect all the join bridges to clear them.
     for (auto& splitGroupState : splitGroupStates_) {
       for (auto& pair : splitGroupState.second.bridges) {
@@ -3064,12 +3170,7 @@ ContinueFuture Task::terminate(TaskState terminalState) {
       }
     }
     if (splits.second) {
-      try {
-        client->noMoreRemoteTasks();
-      } catch (const std::exception& ex) {
-        LOG(ERROR) << "Exchange client threw from noMoreRemoteTasks() during "
-                   << "termination of task " << taskId_ << ": " << ex.what();
-      }
+      client->noMoreRemoteTasks();
     }
   }
 
@@ -3085,13 +3186,19 @@ ContinueFuture Task::terminate(TaskState terminalState) {
     bridge->cancel();
   }
 
-  for (auto split : preloadingSplits_) {
+  for (const auto& split : preloadingSplits) {
     split->dataSource->close();
   }
-  preloadingSplits_.clear();
 
   for (auto& barrierPromise : barrierPromises) {
     barrierPromise.setValue();
+  }
+
+  // A loop that has not started is abandoned, which releases a driver of the
+  // pipeline's FixedPointNode leaf waiting for it.  The task has already
+  // stopped, so the driver stops.
+  if (fixedPoint_ != nullptr) {
+    fixedPoint_->abandon();
   }
 
   return makeFinishFuture("Task::terminate");
@@ -3332,18 +3439,14 @@ uint64_t Task::timeSinceStartMs() const {
 
 uint64_t Task::timeSinceEndMs() const {
   std::lock_guard<std::timed_mutex> l(mutex_);
-  if (taskStats_.executionEndTimeMs == 0UL) {
-    return 0UL;
-  }
-  return getCurrentTimeMs() - taskStats_.executionEndTimeMs;
+  return executionEndWatch_.has_value() ? executionEndWatch_->elapsed().count()
+                                        : 0;
 }
 
 uint64_t Task::timeSinceTerminationMs() const {
   std::lock_guard<std::timed_mutex> l(mutex_);
-  if (taskStats_.terminationTimeMs == 0UL) {
-    return 0UL;
-  }
-  return getCurrentTimeMs() - taskStats_.terminationTimeMs;
+  return terminationWatch_.has_value() ? terminationWatch_->elapsed().count()
+                                       : 0;
 }
 
 Task::DriverCounts Task::driverCounts() const {
@@ -3535,7 +3638,9 @@ folly::dynamic Task::toJson() const {
   obj["numRunningSplitGroups"] = numRunningSplitGroups_;
   obj["partitionedOutputConsumed"] = partitionedOutputConsumed_;
   obj["noMoreOutputBuffers"] = noMoreOutputBuffers_;
-  obj["onThreadSince"] = std::to_string(onThreadSince_);
+  obj["onThreadUs"] = numThreads_ > 0
+      ? SteadyTime::now<std::chrono::microseconds>() - onThreadSince_
+      : 0;
 
   if (exception_) {
     obj["exception"] = errorMessageLocked();
@@ -3765,7 +3870,7 @@ std::string Task::errorMessage() const {
   return errorMessageLocked();
 }
 
-StopReason Task::enter(ThreadState& state, uint64_t nowMicros) {
+StopReason Task::enter(ThreadState& state) {
   TestValue::adjust("facebook::velox::exec::Task::enter", this);
   std::lock_guard<std::timed_mutex> l(mutex_);
   VELOX_CHECK(state.isEnqueued);
@@ -3783,7 +3888,7 @@ StopReason Task::enter(ThreadState& state, uint64_t nowMicros) {
   if (reason == StopReason::kNone) {
     ++numThreads_;
     if (numThreads_ == 1) {
-      onThreadSince_ = nowMicros;
+      onThreadSince_ = SteadyTime::now<std::chrono::microseconds>();
     }
     state.setThread();
     state.hasBlockingFuture = false;
@@ -3944,11 +4049,21 @@ StopReason Task::shouldStop() {
 }
 
 int32_t Task::yieldIfDue(uint64_t startTimeMicros) {
-  if (onThreadSince_ < startTimeMicros) {
+  // Callers compute 'startTimeMicros' from the epoch clock. Recover the time
+  // slice from it and compare on the steady clock, which never goes backward.
+  // A start time at or after now means a zero time slice.
+  const auto nowMicros = EpochTime::now<std::chrono::microseconds>();
+  const auto timeSliceMicros =
+      nowMicros > startTimeMicros ? nowMicros - startTimeMicros : 0;
+  const auto isDue = [&]() {
+    return onThreadSince_ + timeSliceMicros <
+        SteadyTime::now<std::chrono::microseconds>();
+  };
+  if (isDue()) {
     std::lock_guard<std::timed_mutex> l(mutex_);
     // Reread inside the mutex
-    if (onThreadSince_ < startTimeMicros && numThreads_ && !toYield_ &&
-        !terminateRequested_ && !pauseRequested_) {
+    if (isDue() && numThreads_ && !toYield_ && !terminateRequested_ &&
+        !pauseRequested_) {
       toYield_ = numThreads_;
       return numThreads_;
     }
@@ -4025,7 +4140,30 @@ void Task::createExchangeClientLocked(
       "Exchange client has been created for planNode: {}",
       planNodeId);
 
-  const auto* exchangeNode = planNode->as<core::ExchangeNode>();
+  auto [client, entry] = makeExchangeClient(
+      *planNode,
+      numberOfConsumers,
+      addExchangeClientPool(planNodeId, pipelineId));
+  exchangeClients_[pipelineId] = std::move(client);
+  exchangeTransportEntries_[pipelineId] = std::move(entry);
+  exchangeClientByPlanNode_.emplace(planNodeId, exchangeClients_[pipelineId]);
+  // MergeExchange fetches through clients of its own. A node that takes no
+  // splits has nothing to forward.
+  if (!planNode->is<core::MergeExchangeNode>()) {
+    if (auto it = splitsStates_.find(planNodeId); it != splitsStates_.end()) {
+      it->second.exchangeClient = exchangeClients_[pipelineId];
+    }
+  }
+}
+
+std::pair<
+    std::shared_ptr<ExchangeClient>,
+    std::shared_ptr<ExchangeTransportEntry>>
+Task::makeExchangeClient(
+    const core::PlanNode& planNode,
+    int32_t numberOfConsumers,
+    memory::MemoryPool* pool) const {
+  const auto* exchangeNode = planNode.as<core::ExchangeNode>();
   const std::string transport = exchangeNode != nullptr
       ? exchangeNode->transportKind()
       : std::string{core::TransportKind::kInMemory};
@@ -4035,7 +4173,7 @@ void Task::createExchangeClientLocked(
   // An unavailable transport is a plan configuration error.
   VELOX_USER_CHECK_NOT_NULL(
       entry, "No exchange client registered for transport '{}'", transport);
-  if (planNode->is<core::MergeExchangeNode>()) {
+  if (planNode.is<core::MergeExchangeNode>()) {
     VELOX_USER_CHECK(
         entry->makeMergeExchangeOperator != nullptr,
         "Exchange transport does not support merge exchange: {}",
@@ -4049,7 +4187,7 @@ void Task::createExchangeClientLocked(
       .numberOfConsumers = numberOfConsumers,
       .maxExchangeBufferSize = queryConfig.maxExchangeBufferSize(),
       .minExchangeOutputBatchBytes = queryConfig.minExchangeOutputBatchBytes(),
-      .pool = addExchangeClientPool(planNodeId, pipelineId),
+      .pool = pool,
       .executor = queryCtx()->executor(),
       .queryConfig = queryConfig};
   auto client = entry->makeClient(context);
@@ -4057,10 +4195,7 @@ void Task::createExchangeClientLocked(
       client,
       "Exchange transport created a null exchange client for transport '{}'",
       transport);
-
-  exchangeClients_[pipelineId] = std::move(client);
-  exchangeTransportEntries_[pipelineId] = std::move(entry);
-  exchangeClientByPlanNode_.emplace(planNodeId, exchangeClients_[pipelineId]);
+  return {std::move(client), std::move(entry)};
 }
 
 std::shared_ptr<ExchangeClient> Task::getExchangeClientLocked(
@@ -4249,7 +4384,7 @@ void Task::DriverBlockingState::setDriverFuture(
     blocked_ = true;
     op_ = driverOp;
     blockingReason_ = blockingReason;
-    blockStartUs_ = getCurrentTimeMicro();
+    blockStartUs_ = SteadyTime::now<std::chrono::microseconds>();
   }
   std::move(driverFuture)
       .via(&folly::InlineExecutor::instance())
