@@ -980,9 +980,8 @@ TEST_P(NimbleIndexProjectorTest, stripeProjectingNoStreams) {
 
 // A request whose only stripe projects no streams was still reached, so global
 // truncation must not hand it back its own lower key: it has nothing left to
-// read, and retrying would re-scan the same empty ground forever. Reaching
-// that path needs needResumeKey and a truncated plan, plus a following stripe
-// that still carries ranges, so it takes two requests to set up.
+// read, and retrying would re-scan the same empty ground forever. Truncation
+// needs a stripe that carries data, so it takes a second request to set up.
 TEST_P(NimbleIndexProjectorTest, emptyStripeCountsAsReachedUnderTruncation) {
   auto rowType = singleFeatureRowType();
 
@@ -5618,6 +5617,69 @@ TEST_P(NimbleIndexProjectorTest, truncationResumeKeyWithStripeGap) {
   }
   EXPECT_EQ(resumedRows, 300);
   EXPECT_FALSE(resumeResult.responses[0].resumeKey.has_value());
+}
+
+// The stripe right after the last planned one can hold no ranges while a later
+// stripe holds a request that planning never reached. That request must still
+// get its lower key back.
+TEST_P(
+    NimbleIndexProjectorTest,
+    truncationResumeKeyForUnreachedRequestPastGap) {
+  const auto rowType = ROW({{"key", BIGINT()}, {"value", INTEGER()}});
+  // 10 stripes x 100 rows; stripe s holds keys [s*100, s*100+100).
+  writeResumeKeyTestData();
+
+  std::vector<Subfield> subfields;
+  subfields.emplace_back("value");
+  auto projector = createProjector(subfields);
+
+  // Request 0 ends in stripe 0 and request 1 starts in stripe 5, so stripe 1
+  // carries no ranges.
+  const auto bounds0 = makeRangeLookup(rowType, {"key"}, 0, 100);
+  const auto bounds1 = makeRangeLookup(rowType, {"key"}, 500, 900);
+  NimbleIndexProjector::Request request;
+  request.keyBounds = {bounds0, bounds1};
+  NimbleIndexProjector::Options options;
+  // Stripe 0 alone reaches the soft limit, so planning stops before request 1.
+  options.maxRows = 100;
+  options.needResumeKey = true;
+  const auto result = projector->projectStreams(request, options);
+
+  ASSERT_EQ(result.responses.size(), 2);
+  EXPECT_FALSE(result.responses[0].resumeKey.has_value());
+  EXPECT_TRUE(result.responses[1].slices.empty());
+  EXPECT_EQ(result.responses[1].resumeKey, bounds1.lowerKey);
+}
+
+// A request whose key range matches no rows has nothing to resume, so global
+// truncation must not hand it back its lower key.
+TEST_P(
+    NimbleIndexProjectorTest,
+    truncationResumeKeySkipsRequestMatchingNoRows) {
+  const auto rowType = ROW({{"key", BIGINT()}, {"value", INTEGER()}});
+  // 10 stripes x 100 rows; keys run from 0 to 999.
+  writeResumeKeyTestData();
+
+  std::vector<Subfield> subfields;
+  subfields.emplace_back("value");
+  auto projector = createProjector(subfields);
+
+  // Request 0 spans stripes 0-1 and is cut after stripe 0. Request 1 lies past
+  // the last key.
+  NimbleIndexProjector::Request request;
+  request.keyBounds = {
+      makeRangeLookup(rowType, {"key"}, 0, 200),
+      makeRangeLookup(rowType, {"key"}, 2'000, 2'100),
+  };
+  NimbleIndexProjector::Options options;
+  options.maxRows = 100;
+  options.needResumeKey = true;
+  const auto result = projector->projectStreams(request, options);
+
+  ASSERT_EQ(result.responses.size(), 2);
+  EXPECT_TRUE(result.responses[0].resumeKey.has_value());
+  EXPECT_TRUE(result.responses[1].slices.empty());
+  EXPECT_FALSE(result.responses[1].resumeKey.has_value());
 }
 
 TEST_P(NimbleIndexProjectorTest, needResumeKeyGatesResumeKey) {
