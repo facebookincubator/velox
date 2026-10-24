@@ -520,7 +520,8 @@ TEST_F(IcebergInsertTest, writeDefaultAllTypes) {
            "active",
            "dt",
            "ts",
-           "price"},
+           "price",
+           "payload"},
           {BIGINT(),
            VARCHAR(),
            DOUBLE(),
@@ -529,7 +530,8 @@ TEST_F(IcebergInsertTest, writeDefaultAllTypes) {
            BOOLEAN(),
            DATE(),
            TIMESTAMP(),
-           DECIMAL(10, 2)});
+           DECIMAL(10, 2),
+           VARBINARY()});
 
   icebergAddInputWithDefault(
       rowType,
@@ -546,7 +548,9 @@ TEST_F(IcebergInsertTest, writeDefaultAllTypes) {
        // fractional digits the coordinator always emits.
        {"ts", "2024-01-15 10:30:00.000000"},
        // DECIMAL(10,2): "99.99" → scaled integer 9999.
-       {"price", "99.99"}},
+       {"price", "99.99"},
+       // VARBINARY: Base64 of the bytes 0x0A 0xFF.
+       {"payload", "Cv8="}},
       {makeRowVector(
           rowType->names(),
           {makeFlatVector<int64_t>({2, 3}),
@@ -559,7 +563,9 @@ TEST_F(IcebergInsertTest, writeDefaultAllTypes) {
                {std::nullopt, std::nullopt}, DATE()),
            makeNullableFlatVector<Timestamp>({std::nullopt, std::nullopt}),
            makeNullableFlatVector<int64_t>(
-               {std::nullopt, std::nullopt}, DECIMAL(10, 2))})});
+               {std::nullopt, std::nullopt}, DECIMAL(10, 2)),
+           makeNullableFlatVector<std::string>(
+               {std::nullopt, std::nullopt}, VARBINARY())})});
 
   auto splits = createSplitsForDirectory(outputDir->getPath());
   ASSERT_EQ(splits.size(), 1U);
@@ -577,7 +583,9 @@ TEST_F(IcebergInsertTest, writeDefaultAllTypes) {
            makeFlatVector<int32_t>({19737, 19737}, DATE()),
            makeFlatVector<Timestamp>(
                {Timestamp(1705314600, 0), Timestamp(1705314600, 0)}),
-           makeFlatVector<int64_t>({9999, 9999}, DECIMAL(10, 2))}));
+           makeFlatVector<int64_t>({9999, 9999}, DECIMAL(10, 2)),
+           makeFlatVector<std::string>(
+               {"\x0A\xFF", "\x0A\xFF"}, VARBINARY())}));
 }
 
 // Simulates ALTER TABLE … SET DEFAULT: two consecutive INSERTs each use a
