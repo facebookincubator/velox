@@ -17,6 +17,7 @@
 
 #include <atomic>
 #include <thread>
+#include <tuple>
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/core/QueryCtx.h"
@@ -111,6 +112,34 @@ TEST_F(QueryCtxTest, withSysRootPool) {
   uint64_t reclaimableBytes{0};
   ASSERT_FALSE(
       queryPool->reclaimer()->reclaimableBytes(*queryPool, reclaimableBytes));
+}
+
+// Registry overrides follow a derived QueryCtx while destination-only entries
+// remain in place.
+TEST_F(QueryCtxTest, copyRegistries) {
+  struct FirstRegistry {};
+  struct SecondRegistry {};
+  struct DestinationRegistry {};
+
+  auto source = QueryCtx::create();
+  auto destination = QueryCtx::create();
+  auto first = std::make_shared<FirstRegistry>();
+  auto second = std::make_shared<SecondRegistry>();
+  auto replaced = std::make_shared<FirstRegistry>();
+  auto destinationOnly = std::make_shared<DestinationRegistry>();
+  source->setRegistry("first", first);
+  source->setRegistry("second", second);
+  destination->setRegistry("first", replaced);
+  destination->setRegistry("destination", destinationOnly);
+
+  destination->copyRegistriesFrom(*source);
+
+  EXPECT_EQ(
+      std::make_tuple(
+          destination->registry<FirstRegistry>("first"),
+          destination->registry<SecondRegistry>("second"),
+          destination->registry<DestinationRegistry>("destination")),
+      std::make_tuple(first, second, destinationOnly));
 }
 
 TEST_F(QueryCtxTest, releaseCallbacks) {
