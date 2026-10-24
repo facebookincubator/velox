@@ -425,6 +425,13 @@ Mathematical Functions
     Returns ``x`` rounded to ``d`` decimal places using HALF_UP rounding mode.
     In HALF_UP rounding, the digit 5 is rounded up.
     Supported types for ``x`` are integral and floating point types.
+    For floating-point inputs, returns positive zero if an extreme negative
+    scale underflows the scale factor. Returns ``x`` unchanged if scaling or
+    conversion would otherwise turn a finite input into infinity or NaN. This
+    prevents non-finite artifacts. Unlike Spark, this also preserves a finite
+    ``REAL`` input when the rounded value exceeds the finite ``REAL`` range.
+    Results can also differ from Spark's decimal rounding for subnormal values
+    at extreme positive scales.
 
 .. spark:function:: sec(x) -> double
 
