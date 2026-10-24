@@ -252,7 +252,10 @@ class DirectBufferedInput : public BufferedInput {
   /// 'stream' or nullptr if none. Returns nullptr on all but first
   /// call for 'stream' since the load is to be triggered by the first
   /// access.
-  std::shared_ptr<DirectCoalescedLoad> coalescedLoad(
+  /// Returns the CoalescedLoad covering 'stream' and forgets the mapping, or
+  /// nullptr if 'stream' is loaded by itself. Called by the stream on its
+  /// first read; the stream then loads it synchronously if still planned.
+  virtual std::shared_ptr<DirectCoalescedLoad> coalescedLoad(
       const SeekableInputStream* stream);
 
   std::unique_ptr<SeekableInputStream>
@@ -315,17 +318,24 @@ class DirectBufferedInput : public BufferedInput {
   // Distinct coalesced loads in 'coalescedLoads_'.
   std::vector<std::shared_ptr<cache::CoalescedLoad>> coalescedLoads_;
 
- private:
+  // Splits 'requests', sorted by offset, into groups to be read in one IO
+  // each. Returns the end index of every group. 'prefetch' selects the
+  // coalescing limits for dense (prefetched) or sparse (on demand) access.
   std::vector<int32_t> groupRequests(
       const std::vector<LoadRequest*>& requests,
       bool prefetch) const;
 
-  // Makes a CoalescedLoad for 'requests' to be read together, coalescing IO if
-  // appropriate. If 'prefetch' is set, schedules the CoalescedLoad on
-  // 'executor_'. Links the CoalescedLoad  to all DirectInputStreams that it
-  // covers.
+  // Makes a CoalescedLoad for 'requests' to be read together and links it to
+  // all DirectInputStreams it covers. The load stays planned: it is read on
+  // the first access of one of its streams, or earlier by prefetchLoad().
+  // Makes no load for a single request unless 'prefetch' is set.
   void readRegion(const std::vector<LoadRequest*>& requests, bool prefetch);
 
+  // Schedules 'load' on 'executor_' if it is still planned and there is an
+  // executor.
+  void prefetchLoad(const std::shared_ptr<cache::CoalescedLoad>& load);
+
+ private:
   // Read coalesced regions.  Regions are grouped together using `groupEnds'.
   // For example if there are 5 regions, 1 and 2 are coalesced together and 3,
   // 4, 5 are coalesced together, we will have {2, 5} in `groupEnds'.

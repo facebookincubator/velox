@@ -1628,6 +1628,9 @@ class ParquetRowReader::Impl {
         params,
         *options_.scanSpec());
     columnReader_->setIsTopLevel();
+    // The root is always the struct reader, see advanceToNextRowGroup().
+    static_cast<StructColumnReader&>(*columnReader_)
+        .setRemainingFilterColumns(options_.remainingFilterColumns());
 
     filterRowGroups();
     if (!rowGroupIds_.empty()) {
