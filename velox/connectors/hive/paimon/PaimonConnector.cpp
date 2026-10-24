@@ -72,6 +72,7 @@ std::shared_ptr<IndexSource> PaimonConnector::createIndexSource(
 }
 
 void PaimonConnector::registerSerDe() {
+  // TODO: Introduce PaimonColumnHandle and register its serde here.
   HiveColumnHandle::registerSerDe();
   PaimonConnectorSplit::registerSerDe();
   PaimonTableHandle::registerSerDe();
