@@ -20,9 +20,9 @@
 
 namespace facebook::velox::connector::hive::paimon {
 
-/// Fixed Paimon table definition and scan conditions exposed through
-/// FileTableHandle. Carries the schema version ID and stable field identities
-/// alongside a Velox RowType.
+/// Table handle for Paimon scans. Stores the fixed table definition and scan
+/// conditions, including a schema version ID and stable field IDs aligned with
+/// the top-level columns of its Velox RowType.
 class PaimonTableHandle final : public FileTableHandle {
  public:
   static constexpr int32_t kSerdeVersion = 1;

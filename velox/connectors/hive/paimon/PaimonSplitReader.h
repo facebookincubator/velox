@@ -21,29 +21,10 @@
 
 namespace facebook::velox::connector::hive::paimon {
 
-/// Sequential reader for rawConvertible Paimon splits. A logical split may
-/// contain multiple physical files; this reader traverses the supplied file
-/// list and exposes it as one read stream. Traversal is not merge-on-read:
-/// merge-required splits need version reconciliation, not concatenation.
-///
-/// Construction creates a FileConnectorSplit for each file without opening
-/// it. prepareSplit() saves the metadata filter and borrows runtime statistics.
-/// next() lazily calls FileSplitReader::prepareSplit() for the current file,
-/// reads batches, and advances at EOF. Empty or skipped files are bypassed,
-/// and only one file reader is active at a time.
-///
-/// FileSplitReader supplies file I/O, column adaptation, partition constants
-/// and ScanSpec filtering. The same ScanSpec is reused across files, including
-/// dynamic filters. Partition-column handles and runtime statistics are
-/// borrowed from the data source; statistics are rebound on reader takeover.
-///
-/// PaimonDataSource currently supplies same-schema append data and rejects
-/// unsupported table/file semantics before constructing this reader.
-/// TODO: Add historical-schema adaptation when per-file schema metadata is
-/// available.
-/// TODO: Apply deletion vectors using original physical file row positions.
-/// TODO: Add internal-column and row-kind decoding for primary-key and
-/// changelog inputs.
+/// Sequential multi-file reader for rawConvertible Paimon splits. Opens one
+/// file at a time and reuses FileSplitReader for per-file preparation and batch
+/// reads, advancing past exhausted, empty or skipped files. The same ScanSpec
+/// is reused across files.
 class PaimonSplitReader : public FileSplitReader {
  public:
   /// @param fileSplit FileConnectorSplit for the first data file.
@@ -87,6 +68,10 @@ class PaimonSplitReader : public FileSplitReader {
   }
 
  private:
+  // TODO: Add historical-schema adaptation using per-file schema metadata.
+  // TODO: Apply deletion vectors using original physical file row positions.
+  // TODO: Decode internal columns and row kinds for primary-key/changelog files.
+
   // Builds a FileConnectorSplit from a PaimonDataFile.
   std::shared_ptr<FileConnectorSplit> makeFileConnectorSplit(
       const PaimonDataFile& dataFile) const;
