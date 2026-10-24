@@ -32,6 +32,9 @@
 
 namespace facebook::velox::exec {
 
+class ExchangeClient;
+struct ExchangeTransportEntry;
+
 /// The nesting protocol's internal state, set by an enclosing FixedPointLoop on
 /// a sub-task it creates.  A coordinator never fills this in: it describes
 /// where a sub-task sits inside a loop that is already running, which only that
@@ -185,11 +188,14 @@ struct FixedPointExecutionStats {
 ///
 /// In parallel mode, when the owning task ends -- requestCancel(),
 /// requestAbort(), or a failure -- the loop stops at its next wait: it aborts
-/// the sub-tasks it is running, waits for them, and fails.  The loop waits on
-/// its sub-tasks, its peers and the verdict, so it stops within one step of the
-/// work it was doing.  A serial loop runs to completion inside the caller's
-/// next().  requestPause() does not end the task, and the loop keeps running
-/// through a pause.
+/// the sub-tasks it is running, waits for them, and fails.  A loop between two
+/// waits fails before it creates its next sub-tasks.  A loop that ends, or
+/// whose task ends before it runs, closes the exchange sources of the remote
+/// splits it still holds and of those that arrive later, so their producers
+/// stop keeping this worker's output.  The loop waits on its sub-tasks, its
+/// peers and the verdict, so it stops within one step of the work it was doing.
+/// A serial loop runs to completion inside the caller's next().  requestPause()
+/// does not end the task, and the loop keeps running through a pause.
 class FixedPointLoop {
  public:
   /// 'owner' is the fully constructed Task this loop runs the fragment for; it
@@ -386,6 +392,19 @@ class FixedPointLoop {
   // plan has no split source (e.g. Values).
   void feedInitSplits(const exec::TaskPtr& task, const core::PlanNodePtr& plan);
 
+  // Tells the producer of 'split', a remote split for the Exchange
+  // 'planNodeId', that this worker reads none of its output, through a closed
+  // exchange client.  Does nothing to any other split, or in serial mode,
+  // where no Exchange runs.  Logs instead of throwing.  Called with
+  // splitsMutex_ held.
+  void releaseRemoteSplitLocked(
+      const core::PlanNodeId& planNodeId,
+      const exec::Split& split);
+
+  // Releases the remote splits this loop holds (releaseRemoteSplitLocked())
+  // and drops the rest, along with the sub-tasks that take later splits.
+  void releaseRemoteSplits();
+
   // Label for an internal sub-task of this worker that no peer addresses (an
   // initial, convergence, serial-body, or last-in-chain sub-task).
   std::string subTaskId();
@@ -469,6 +488,21 @@ class FixedPointLoop {
   // to.  Guarded by splitsMutex_, as are nodeSplits_ and splitConsumers_.
   folly::F14FastSet<core::PlanNodeId> splitsComplete_;
 
+  // A transport's exchange client, closed as soon as it is created.  The entry
+  // is kept with the client, which may depend on state the entry owns.
+  struct ClosedClient {
+    std::shared_ptr<ExchangeTransportEntry> entry;
+    std::shared_ptr<ExchangeClient> client;
+  };
+
+  // The pool of the closed clients, created with the first.  Declared before
+  // them, so it outlives them.  Guarded by splitsMutex_.
+  std::shared_ptr<memory::MemoryPool> closedClientPool_;
+
+  // The closed clients releaseRemoteSplitLocked() releases producers through,
+  // by transport kind.  Guarded by splitsMutex_.
+  folly::F14FastMap<std::string, ClosedClient> closedClients_;
+
   // This worker's persistent state.  Its pool is a leaf of the owning task's
   // pool, which every sub-task holds.
   std::shared_ptr<PersistentState> state_;
@@ -512,8 +546,9 @@ class FixedPointLoop {
   // loop sees kCreated.
   Phase leaveCreated(Phase next);
 
-  // Ends the loop in the terminal phase 'terminal' and resolves 'finished_'.
-  // The only place the loop ends.
+  // Ends the loop in the terminal phase 'terminal', releases the remote splits
+  // it holds (releaseRemoteSplits()) and resolves 'finished_'.  The only place
+  // the loop ends.
   void finish(Phase terminal);
 
   // The last iteration passed to runIteration(), so a repeated or decreasing
@@ -521,11 +556,11 @@ class FixedPointLoop {
   // the cross-worker barrier, and reusing one desynchronizes the peers.
   int32_t lastIteration_{-1};
 
-  // Plan node ids a caller may address splits to.  The driver path rejects an
-  // unknown id in getPlanNodeSplitsStateLocked; without the same check here a
-  // split would be filed under an id nothing ever reads, and the query would
-  // return nothing rather than fail.
-  folly::F14FastSet<core::PlanNodeId> splitTargets_;
+  // Plan node ids a caller may address splits to, with the node each names.
+  // The driver path rejects an unknown id in getPlanNodeSplitsStateLocked;
+  // without the same check here a split would be filed under an id nothing
+  // ever reads, and the query would return nothing rather than fail.
+  folly::F14FastMap<core::PlanNodeId, const core::PlanNode*> splitTargets_;
 };
 
 } // namespace facebook::velox::exec
