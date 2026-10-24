@@ -20,8 +20,8 @@
 
 namespace facebook::velox::connector::hive::paimon {
 
-/// Connector for Paimon table scans. Creates PaimonDataSource and reuses
-/// HiveConnector's file-handle infrastructure; physical readers come from DWIO.
+/// Connector for Paimon table scans. Creates PaimonDataSource and reuses the
+/// common File scan pipeline and DWIO readers for physical file access.
 class PaimonConnector final : public HiveConnector {
  public:
   PaimonConnector(
