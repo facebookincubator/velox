@@ -90,6 +90,8 @@ class BurstFunctionBase : public AsyncRPCFunction {
     std::chrono::milliseconds latency{std::chrono::milliseconds(1)};
     // Non-empty so the process-global rate limiter is keyed on a real backend.
     std::string backend{"layer2.test.backend"};
+    // Returned from shrinkWindowOncePerLimitCut().
+    bool shrinkWindowOncePerLimitCut{false};
   };
 
   explicit BurstFunctionBase(Config config) : config_{std::move(config)} {}
@@ -115,6 +117,10 @@ class BurstFunctionBase : public AsyncRPCFunction {
 
   std::string admissionKey() const override {
     return config_.backend;
+  }
+
+  bool shrinkWindowOncePerLimitCut() const override {
+    return config_.shrinkWindowOncePerLimitCut;
   }
 
   // Overload failures produce kOverloaded. A null-input error is a user error
@@ -299,6 +305,9 @@ class RPCAimdUnderLoadTest : public OperatorTestBase {
   static constexpr int64_t kMaxLimit = 64;
   static constexpr int64_t kMinLimit = 4;
   static constexpr int64_t kMaxWindow = 32;
+  // Shorter than the window, so every failing call is admitted before the
+  // first failure completes: one overload wave.
+  static constexpr int32_t kShortBurstRows = 8;
 
   static void SetUpTestCase() {
     OperatorTestBase::SetUpTestCase();
@@ -309,7 +318,10 @@ class RPCAimdUnderLoadTest : public OperatorTestBase {
           return std::make_shared<BurstRPCFunction>(BurstRPCFunction::Config{
               /*burstFirstCall=*/kWarmupRows,
               /*burstLastCall=*/kWarmupRows + kBurstRows,
-              /*burstKind=*/RPCErrorKind::kRateLimited});
+              /*burstKind=*/RPCErrorKind::kRateLimited,
+              /*latency=*/std::chrono::milliseconds(1),
+              /*backend=*/"layer2.test.backend",
+              /*shrinkWindowOncePerLimitCut=*/true});
         },
         varcharSignature());
     AsyncRPCFunctionRegistry::registerFunction(
@@ -322,6 +334,29 @@ class RPCAimdUnderLoadTest : public OperatorTestBase {
                   /*burstKind=*/RPCErrorKind::kRateLimited,
                   /*latency=*/std::chrono::milliseconds(1),
                   /*backend=*/"layer2.test.batch.backend"});
+        },
+        varcharSignature());
+    AsyncRPCFunctionRegistry::registerFunction(
+        "short_burst_rpc",
+        [] {
+          return std::make_shared<BurstRPCFunction>(BurstRPCFunction::Config{
+              /*burstFirstCall=*/kWarmupRows,
+              /*burstLastCall=*/kWarmupRows + kShortBurstRows,
+              /*burstKind=*/RPCErrorKind::kRateLimited,
+              /*latency=*/std::chrono::milliseconds(1),
+              /*backend=*/"layer2.test.short.backend"});
+        },
+        varcharSignature());
+    AsyncRPCFunctionRegistry::registerFunction(
+        "short_burst_once_rpc",
+        [] {
+          return std::make_shared<BurstRPCFunction>(BurstRPCFunction::Config{
+              /*burstFirstCall=*/kWarmupRows,
+              /*burstLastCall=*/kWarmupRows + kShortBurstRows,
+              /*burstKind=*/RPCErrorKind::kRateLimited,
+              /*latency=*/std::chrono::milliseconds(1),
+              /*backend=*/"layer2.test.short.backend",
+              /*shrinkWindowOncePerLimitCut=*/true});
         },
         varcharSignature());
     AsyncRPCFunctionRegistry::registerFunction(
@@ -477,9 +512,11 @@ TEST_F(RPCAimdUnderLoadTest, windowAndRateLimiterBackOffThenRecover) {
   EXPECT_EQ(statSum(RPCOperator::kRpcErrorKindRateLimited), kBurstRows);
   EXPECT_GT(statSum(RPCOperator::kRpcCongestionOverloadShrinks), 0);
 
-  // (2) Overload -> the per-driver congestion window shrank at least once
-  //     (this stat is only emitted when numShrinks > 0).
+  // (2) Overload -> the per-driver congestion window shrank (this stat is only
+  //     emitted when numShrinks > 0). The burst outlasts the window, so rows
+  //     admitted after each decrease fail again and shrink it again.
   EXPECT_GT(statSum(RPCOperator::kRpcCongestionShrinks), 0);
+  EXPECT_GT(statSum(RPCOperator::kRpcCongestionOverloadShrinks), 1);
 
   // (3) Overload -> this backend's rate-limiter cap backed off below its
   //     ceiling. rpcRateLimiterMinCap lands on every query, so presence alone
@@ -494,6 +531,48 @@ TEST_F(RPCAimdUnderLoadTest, windowAndRateLimiterBackOffThenRecover) {
   //     the final cap climbed back above the low-water mark.
   const int64_t finalCap = statSum(RPCOperator::kRpcRateLimiterCap);
   EXPECT_GT(finalCap, minCap) << "cap should recover above its low-water mark";
+}
+
+// Every failing call of a short burst is admitted under one limiter epoch, and
+// the failures drain across several output groups. The shared limiter
+// decreases once for them. When the function asks for it, the per-driver
+// window halves once too; otherwise once per output group.
+TEST_F(RPCAimdUnderLoadTest, perDriverWindowShrinksOncePerAdmissionEpoch) {
+  std::vector<std::string> storage;
+  storage.reserve(kTotalRows);
+  for (int32_t i = 0; i < kTotalRows; ++i) {
+    storage.push_back("row_" + std::to_string(i));
+  }
+  std::vector<StringView> prompts(storage.begin(), storage.end());
+  auto input = makeRowVector({"prompt"}, {makeFlatVector<StringView>(prompts)});
+
+  auto countOverloadShrinks = [&](const std::string& functionName) {
+    RPCRateLimiterRegistry::global().testingReset();
+    auto plan =
+        makeRPCNode(PlanBuilder().values({input}).planNode(), functionName);
+    std::shared_ptr<Task> task;
+    auto result = AssertQueryBuilder(plan)
+                      .maxDrivers(1)
+                      .config("rpc.ratelimiter.adaptive_enabled", "true")
+                      .config("rpc.ratelimiter.max_limit", kMaxLimit)
+                      .config("rpc.ratelimiter.min_limit", kMinLimit)
+                      .config("rpc.ratelimiter.decrease_factor", "0.5")
+                      .config("rpc.congestion.max_window", kMaxWindow)
+                      .config("rpc.congestion.min_window", 1)
+                      .config(core::QueryConfig::kPreferredOutputBatchRows, "1")
+                      .copyResults(pool(), task);
+    EXPECT_EQ(result->size(), kTotalRows);
+
+    const auto planStats = toPlanStats(task->taskStats());
+    const auto& customStats = planStats.at("rpc-0").customStats;
+    EXPECT_EQ(
+        customStats.at(RPCOperator::kRpcErrorKindRateLimited).sum,
+        kShortBurstRows);
+    return customStats.at(RPCOperator::kRpcCongestionOverloadShrinks).sum;
+  };
+
+  EXPECT_EQ(countOverloadShrinks("short_burst_once_rpc"), 1);
+  EXPECT_GT(countOverloadShrinks("short_burst_rpc"), 1);
 }
 
 TEST_F(RPCAimdUnderLoadTest, perRowBackendErrorsDoNotBackOff) {
