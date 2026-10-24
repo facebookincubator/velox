@@ -17,6 +17,8 @@
 #include "velox/dwio/text/reader/TextReader.h"
 
 #include <boost/algorithm/string/predicate.hpp>
+#include <cmath>
+#include <limits>
 #include <string>
 
 #include "velox/common/encode/Base64.h"
@@ -837,29 +839,53 @@ bool TextRowReader::getBoolean(
 namespace {
 
 static constexpr std::string_view kNaNStringView{"NaN"};
-static constexpr std::string_view kInfinityStringView{"Infinity"};
-static constexpr std::string_view kShortInfinityStringView{"Inf"};
-static constexpr std::string_view kNegInfinityStringView{"-Infinity"};
-static constexpr std::string_view kShortNegInfinityStringView{"-Inf"};
 
-bool unacceptableFloatingPoint(std::string& s) {
-  for (int i = 0; i < s.size(); ++i) {
-    char c = s.data()[i];
-    if (!(std::isalpha(c) || c == '-')) {
-      return false;
-    }
+// Return whether trimmed input is accepted given sscanf's %lln consumed-byte
+// count and whether its scanned value is NaN. NaN spellings and trailing
+// f/F/d/D type suffixes follow Java; case-insensitive infinity aliases are
+// accepted for compatibility. Hex significands consume f/d as digits, so hex
+// type suffixes follow a p exponent.
+bool isValidFloatingPoint(
+    std::string_view input,
+    size_t numConsumed,
+    bool isNaN) {
+  // Guard local indexing independently of the callers' scan preconditions.
+  if (input.empty()) {
+    return false;
   }
 
-  bool isNaN = boost::algorithm::iequals(s, kNaNStringView);
+  auto literal = input;
+  if (literal.front() == '+' || literal.front() == '-') {
+    literal.remove_prefix(1);
+  }
+  if (isNaN) {
+    return numConsumed == input.size() && literal == kNaNStringView;
+  }
+  if (numConsumed == input.size()) {
+    return true;
+  }
+  if (numConsumed == 0 || numConsumed != input.size() - 1 || literal.empty()) {
+    return false;
+  }
 
-  bool isInf = boost::algorithm::iequals(s, kInfinityStringView);
-  bool isShortInf = boost::algorithm::iequals(s, kShortInfinityStringView);
+  const auto suffix = input.back();
+  if (suffix != 'f' && suffix != 'F' && suffix != 'd' && suffix != 'D') {
+    return false;
+  }
 
-  bool isNegInf = boost::algorithm::iequals(s, kNegInfinityStringView);
-  bool isShortNegInf =
-      boost::algorithm::iequals(s, kShortNegInfinityStringView);
+  const auto isDigit = [](char character) {
+    return character >= '0' && character <= '9';
+  };
+  // Keep this explicit even though the last-byte check also rejects suffixed
+  // infinity spellings in the C numeric locale.
+  if (!isDigit(literal.front()) && literal.front() != '.') {
+    return false;
+  }
 
-  return (!isNaN && !isInf && !isShortInf && !isNegInf && !isShortNegInf);
+  // glibc sscanf consumes incomplete exponents such as "1e+" and "0x1p+".
+  // Require a digit or decimal point before a suffix to reject these inputs.
+  const auto lastConsumed = input[numConsumed - 1];
+  return isDigit(lastConsumed) || lastConsumed == '.';
 }
 
 void trimStringInPlace(std::string& s) {
@@ -903,27 +929,24 @@ float TextRowReader::getFloat(
   }
 
   trimStringInPlace(str);
-
-  if (str.data()[0] == '.') {
-    th.ownedString_.insert(th.ownedString_.begin(), '0');
-    str = th.ownedString_;
-  }
-
-  if (unacceptableFloatingPoint(str)) {
+  if (str.empty()) {
     isNull = true;
     return 0.0;
   }
 
   float v = 0.0;
-  unsigned long long scanPos = 0;
+  long long numConsumed{0};
   // We ignore ERANGE, since denormalized floats and
   // infinities are acceptable.
-  auto scanCount = sscanf(str.c_str(), "%f%lln", &v, &scanPos);
-  if (scanCount != 1 || scanPos < str.size()) {
+  auto scanCount = sscanf(str.c_str(), "%f%lln", &v, &numConsumed);
+  const auto isNaN = std::isnan(v);
+  if (scanCount != 1 ||
+      !isValidFloatingPoint(str, static_cast<size_t>(numConsumed), isNaN)) {
     isNull = true;
     return 0.0;
   }
-  return v;
+  // Java discards the sign of NaN, unlike sscanf.
+  return isNaN ? std::numeric_limits<float>::quiet_NaN() : v;
 }
 
 double
@@ -938,30 +961,23 @@ TextRowReader::getDouble(TextRowReader& th, bool& isNull, DelimType& delim) {
   }
 
   trimStringInPlace(str);
-
-  if (str.data()[0] == '.') {
-    th.ownedString_.insert(th.ownedString_.begin(), '0');
-    str = th.ownedString_;
-  }
-
-  // Filter out values from non-warehouse sources which
-  // other readers translate to null. Warehouse
-  // readers require upper-case values.
-  if (unacceptableFloatingPoint(str)) {
+  if (str.empty()) {
     isNull = true;
     return 0.0;
   }
 
   double v = 0.0;
-  unsigned long long scanPos = 0;
+  long long numConsumed{0};
   // We ignore ERANGE, since denormalized doubles and
   // infinities are acceptable.
-  auto scanCount = sscanf(str.c_str(), "%lf%lln", &v, &scanPos);
-  if (scanCount != 1 || scanPos < str.size()) {
+  auto scanCount = sscanf(str.c_str(), "%lf%lln", &v, &numConsumed);
+  const auto isNaN = std::isnan(v);
+  if (scanCount != 1 ||
+      !isValidFloatingPoint(str, static_cast<size_t>(numConsumed), isNaN)) {
     isNull = true;
     return 0.0;
   }
-  return v;
+  return isNaN ? std::numeric_limits<double>::quiet_NaN() : v;
 }
 
 /// TODO: Reconsider error handling strategy for malformed data
