@@ -182,6 +182,13 @@ class AsyncRPCFunction {
     return 0;
   }
 
+  /// Whether the operator halves its congestion window at most once per
+  /// decrease of the shared rate limit, instead of once per output group that
+  /// drains an overload. Read once, after initialize().
+  virtual bool shrinkWindowOncePerLimitCut() const {
+    return false;
+  }
+
   /// Returns the adaptive-window floor requested by the resolved backend.
   /// The operator seals it on the limiter identified by admissionKey(). A
   /// positive legacy session override takes precedence; zero delegates here.

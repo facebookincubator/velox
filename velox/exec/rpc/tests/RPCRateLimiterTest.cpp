@@ -356,6 +356,40 @@ TEST_F(RPCRateLimiterTest, concurrentInitializersDoNotMixConfigurations) {
       << " with floor " << config.floor;
 }
 
+// initializeOrMatch() seals the policy like initializeOnce(), and tells a later
+// caller whether the sealed policy is the one it asked for.
+TEST_F(RPCRateLimiterTest, initializeOrMatchReportsWhetherSealedPolicyMatches) {
+  auto& limiter = RPCRateLimiterRegistry::global().get("test.backend");
+  auto withCeiling = [](int64_t ceiling) {
+    return
+        [ceiling](RPCRateLimiter::Config& config) { config.ceiling = ceiling; };
+  };
+
+  EXPECT_TRUE(limiter.initializeOrMatch(withCeiling(25)));
+  EXPECT_TRUE(limiter.initializeOrMatch(withCeiling(25)));
+  EXPECT_FALSE(limiter.initializeOrMatch(withCeiling(100)));
+  EXPECT_EQ(limiter.config().ceiling, 25);
+}
+
+// Settings that clamp to the same policy share a key; different policies, and
+// the backend's own shared limiter, do not.
+TEST_F(RPCRateLimiterTest, settingsScopedKeyIsSharedOnlyByTheSamePolicy) {
+  const std::string backend{"test.backend"};
+  RPCRateLimiter::Config small;
+  small.ceiling = 25;
+  small.floor = 0.001;
+  RPCRateLimiter::Config clampsToSmall = small;
+  clampsToSmall.floor = 0;
+  RPCRateLimiter::Config large = small;
+  large.ceiling = 100;
+
+  const auto smallKey = RPCRateLimiter::settingsScopedKey(backend, small);
+  EXPECT_EQ(
+      RPCRateLimiter::settingsScopedKey(backend, clampsToSmall), smallKey);
+  EXPECT_NE(RPCRateLimiter::settingsScopedKey(backend, large), smallKey);
+  EXPECT_NE(smallKey, backend);
+}
+
 TEST_F(RPCRateLimiterTest, admitOrWaitEitherAdmitsOrEnrols) {
   const std::string backend = "test.backend";
   setCeiling(backend, 1);

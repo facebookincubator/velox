@@ -965,6 +965,33 @@ TEST_F(RPCOperatorTest, backendIsConfiguredByTheFirstQueryOnly) {
   EXPECT_DOUBLE_EQ(config.decreaseFactor, 0.25);
 }
 
+// A query that sets its own rate-limiter limits runs under them, even after
+// another query with different limits sealed the backend's shared limiter. The
+// first query's limits still hold for later queries that ask for them.
+TEST_F(RPCOperatorTest, explicitSessionLimitsAreHonoredOnSealedBackend) {
+  auto input =
+      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"a", "b"})});
+  // Returns the lowest admission capacity any of the query's drivers saw.
+  auto lowestCapWithLimit = [&](const std::string& limit) {
+    auto plan =
+        makeRPCNode(PlanBuilder().values({input}).planNode(), {"prompt"});
+    std::shared_ptr<exec::Task> task;
+    AssertQueryBuilder(plan)
+        .maxDrivers(1)
+        .config(core::QueryConfig::kRpcRateLimiterMinLimit, limit)
+        .config(core::QueryConfig::kRpcRateLimiterMaxLimit, limit)
+        .copyResults(pool(), task);
+    return toPlanStats(task->taskStats())
+        .at("rpc-0")
+        .customStats.at(RPCOperator::kRpcRateLimiterCap)
+        .min;
+  };
+
+  EXPECT_EQ(lowestCapWithLimit("25"), 25);
+  EXPECT_EQ(lowestCapWithLimit("100"), 100);
+  EXPECT_EQ(lowestCapWithLimit("25"), 25);
+}
+
 TEST_F(RPCOperatorTest, resolvesAdmissionKeyBeforeDispatch) {
   PreAdmissionKeyRPCFunction::reset();
   auto input =
@@ -1882,7 +1909,10 @@ TEST_F(RPCOperatorTest, positiveSessionFloorOverridesPerLimiterFloor) {
   EXPECT_EQ(limiter.stats().hardLimit, 8);
 }
 
-TEST_F(RPCOperatorTest, firstFunctionFixesPolicyForSharedAdmissionKey) {
+// Two functions share an admission key but resolve to different floors. The
+// first seals the shared limiter; the second runs under a limiter of its own
+// and leaves the shared policy as the first set it.
+TEST_F(RPCOperatorTest, laterFunctionLeavesSharedLimiterPolicyUnchanged) {
   auto input =
       makeRowVector({"prompt"}, {makeFlatVector<StringView>({"healthy"})});
   for (const auto& functionName :
