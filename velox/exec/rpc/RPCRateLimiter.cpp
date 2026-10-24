@@ -814,6 +814,7 @@ RPCRateLimiter::Stats RPCRateLimiter::stats() const {
       .capacity = capacityLocked(),
       .hardLimit = ceilingLocked(),
       .pending = pending_.load(),
+      .waiting = static_cast<int64_t>(waiters_.size()),
       .peakPending = peakPending_.load(),
       .lowWaterCapacity =
           std::max<int64_t>(1, static_cast<int64_t>(std::floor(lowWaterLimit))),
