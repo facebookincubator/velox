@@ -140,6 +140,7 @@ void RPCOperator::initialize() {
   const auto& queryConfig = driverCtx->queryConfig();
   function_->initialize(
       queryConfig, inputTypes, constantInputs, rpcNode_->streamingMode());
+  shrinkOncePerLimitCut_ = function_->shrinkWindowOncePerLimitCut();
   requiresRowInspectionBeforeAdmission_ =
       function_->requiresRowInspectionBeforeAdmission();
   if (!requiresRowInspectionBeforeAdmission_) {
@@ -847,7 +848,8 @@ void RPCOperator::recordCongestion(
     AsyncRPCFunction::CongestionSignal signal,
     const std::vector<int64_t>& roundTripTimesNs,
     const std::vector<std::pair<uint64_t, int64_t>>& successUnitsByEpoch,
-    bool sharedOverloadHandled) {
+    bool sharedOverloadHandled,
+    std::optional<uint64_t> overloadedRowsEpoch) {
   if (limiter_ == nullptr) {
     return;
   }
@@ -859,7 +861,23 @@ void RPCOperator::recordCongestion(
   const bool overloadObserved = sharedOverloadHandled ||
       signal == AsyncRPCFunction::CongestionSignal::kOverloaded;
   if (overloadObserved) {
-    state_->onUnitError();
+    // Rows admitted in one epoch were all sent at the same limit, and their
+    // overloads can drain across several output groups. With
+    // shrinkOncePerLimitCut_, only the first of them halves the window, as the
+    // shared limiter decreases once per epoch. An overload the shared limiter
+    // did not handle has no epoch here and always halves the window.
+    const auto overloadEpoch = shrinkOncePerLimitCut_ && sharedOverloadHandled
+        ? overloadedRowsEpoch
+        : std::nullopt;
+    const bool alreadyShrunk = overloadEpoch.has_value() &&
+        windowShrunkForEpoch_.has_value() &&
+        overloadEpoch.value() <= windowShrunkForEpoch_.value();
+    if (!alreadyShrunk) {
+      state_->onUnitError();
+      if (overloadEpoch.has_value()) {
+        windowShrunkForEpoch_ = overloadEpoch;
+      }
+    }
     if (!sharedOverloadHandled) {
       limiter_->onOutcome(RPCRateLimiter::Outcome::kOverload, 0, 0);
     }
@@ -883,8 +901,8 @@ void RPCOperator::recordCongestion(
   int64_t serviceHorizonNs = roundTripTimesNs.empty()
       ? 0
       : *std::min_element(roundTripTimesNs.begin(), roundTripTimesNs.end());
-  for (const auto& [overloadEpoch, successUnits] : successUnitsByEpoch) {
-    limiter_->onSuccessForEpoch(overloadEpoch, successUnits, serviceHorizonNs);
+  for (const auto& [admissionEpoch, successUnits] : successUnitsByEpoch) {
+    limiter_->onSuccessForEpoch(admissionEpoch, successUnits, serviceHorizonNs);
     serviceHorizonNs = 0;
   }
 }
@@ -944,15 +962,24 @@ RowVectorPtr RPCOperator::outputPerRow() {
   checkNoFrameworkFailures(function_->name(), responses);
 
   if (!claimedRowsAreLocalOnly_) {
-    const bool sharedOverloadHandled = std::any_of(
-        claimedRows_.begin(), claimedRows_.end(), [](const auto& row) {
-          return row.sharedOverloadHandled;
-        });
+    bool sharedOverloadHandled{false};
+    std::optional<uint64_t> overloadedRowsEpoch;
+    for (const auto& row : claimedRows_) {
+      if (!row.sharedOverloadHandled) {
+        continue;
+      }
+      sharedOverloadHandled = true;
+      if (row.admissionEpoch.has_value()) {
+        overloadedRowsEpoch = std::max(
+            overloadedRowsEpoch.value_or(0), row.admissionEpoch.value());
+      }
+    }
     recordCongestion(
         function_->evaluateCongestion(responses),
         roundTripTimesNs,
         successUnitsByEpoch,
-        sharedOverloadHandled);
+        sharedOverloadHandled,
+        overloadedRowsEpoch);
     // Apply the completed rows' driver-local feedback before admitting more
     // buffered work. Completion already released the shared admission lease.
     dispatchRowsUnderAdmission();
@@ -1002,7 +1029,8 @@ RowVectorPtr RPCOperator::outputBatch() {
         function_->evaluateCongestion(claimedBatch_->responses),
         roundTripTimesNs,
         successUnitsByEpoch,
-        claimedBatch_->sharedOverloadHandled);
+        claimedBatch_->sharedOverloadHandled,
+        claimedBatch_->admissionEpoch);
   }
 
   auto output = buildOutputFromReadyBatch(*claimedBatch_);
