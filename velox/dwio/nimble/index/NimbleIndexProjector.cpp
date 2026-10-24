@@ -1622,6 +1622,13 @@ folly::IOBuf assembleStripeSlice(
   return std::move(*serializedHeader);
 }
 
+// Builds a header-only kTablet IOBuf for a request cut short before any of its
+// rows were read: no rows, an empty row range, and the resume key.
+folly::IOBuf assembleResumeKeySlice(std::string resumeKey) {
+  return serde::createTabletChunkHeader(
+      serde::TabletChunkHeader{.resumeKey = std::move(resumeKey)});
+}
+
 } // namespace
 
 void NimbleIndexProjector::buildResult(SerializedResult& result) {
@@ -1670,6 +1677,12 @@ void NimbleIndexProjector::buildResult(SerializedResult& result) {
           packedRelativeRange,
           packedStripe.body.cloneAsValue(),
           isLastSlice ? response.resumeKey : std::nullopt));
+    }
+  }
+
+  for (auto& response : result.responses) {
+    if (response.slices.empty() && response.resumeKey.has_value()) {
+      response.slices.emplace_back(assembleResumeKeySlice(*response.resumeKey));
     }
   }
 }
