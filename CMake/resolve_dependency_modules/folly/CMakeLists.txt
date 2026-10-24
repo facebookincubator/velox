@@ -44,7 +44,9 @@ FetchContent_Declare(
   folly
   URL ${VELOX_FOLLY_SOURCE_URL}
   URL_HASH ${VELOX_FOLLY_BUILD_SHA256_CHECKSUM}
-  PATCH_COMMAND git apply ${CMAKE_CURRENT_LIST_DIR}/folly-no-export.patch ${glog_patch}
+  PATCH_COMMAND
+    git apply ${CMAKE_CURRENT_LIST_DIR}/folly-no-export.patch ${VELOX_WINDOWS_FOLLY_PATCH}
+    ${glog_patch}
   OVERRIDE_FIND_PACKAGE
   SYSTEM
   EXCLUDE_FROM_ALL
@@ -52,10 +54,9 @@ FetchContent_Declare(
 
 set(BUILD_SHARED_LIBS ${VELOX_BUILD_SHARED})
 
-# Enable INT128 support
-set(FOLLY_HAVE_INT128_T ON)
-
 FetchContent_MakeAvailable(folly)
+# Bundled Boost supplies header-only include paths through targets, not an install.
+target_link_libraries(folly_deps INTERFACE Boost::headers)
 
 if(gflags_SOURCE STREQUAL "BUNDLED")
   add_dependencies(folly glog::glog gflags::gflags fmt::fmt)
