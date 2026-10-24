@@ -2184,6 +2184,31 @@ TEST_F(CudfIcebergReadTest, timestampPartitionHonorsLocalTimeSetting) {
   assertValue(true, localTimestamp);
 }
 
+// The Iceberg data source shares the Hive constructor, so it rejects a
+// remaining filter that casts from VARCHAR the same way.
+TEST_F(CudfIcebergReadTest, remainingFilterCastFromVarchar) {
+  auto rowType = ROW({"c0"}, {VARCHAR()});
+  auto dataFile = TempFilePath::create();
+  writeToFile(
+      dataFile->getPath(),
+      makeRowVector({"c0"}, {makeFlatVector<std::string>({"1.5", "x"})}));
+
+  auto plan = PlanBuilder()
+                  .startTableScan()
+                  .connectorId(kCudfIcebergConnectorId)
+                  .outputType(rowType)
+                  .dataColumns(rowType)
+                  .remainingFilter("try_cast(c0 as double) > 1.0")
+                  .endTableScan()
+                  .planNode();
+
+  VELOX_ASSERT_UNSUPPORTED_THROW(
+      AssertQueryBuilder(plan)
+          .splits(makeIcebergSplits(dataFile->getPath()))
+          .copyResults(pool()),
+      "Remaining filter with a cast from VARCHAR is not supported");
+}
+
 /// A remaining filter is allowed with positional deletes
 TEST_F(CudfIcebergReadTest, remainingFilterAndPositionalDeletes) {
   auto data = makeRowVector(
