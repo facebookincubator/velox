@@ -1393,7 +1393,7 @@ TEST_F(PaimonConnectorTest, requiresPaimonTableHandle) {
   fileSystem->openedFiles = 0;
   VELOX_ASSERT_THROW(
       connector->createDataSource(rowType, nullptr, columns, context.get()),
-      "input.get() != nullptr");
+      "Missing Paimon table handle");
   const auto tableHandle = std::make_shared<HiveTableHandle>(
       kPaimonConnectorId,
       "paimon_table",

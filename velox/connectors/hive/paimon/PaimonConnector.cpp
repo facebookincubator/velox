@@ -34,6 +34,7 @@ std::unique_ptr<DataSource> PaimonConnector::createDataSource(
     const ConnectorTableHandlePtr& tableHandle,
     const ColumnHandleMap& columnHandles,
     ConnectorQueryCtx* connectorQueryCtx) {
+  VELOX_CHECK_NOT_NULL(tableHandle, "Missing Paimon table handle");
   const auto paimonTableHandle =
       checkedPointerCast<const PaimonTableHandle>(tableHandle);
   VELOX_USER_CHECK_EQ(
