@@ -335,6 +335,13 @@ void mergeRowRanges(std::vector<RowRange>& ranges) {
   ranges.resize(outputIndex + 1);
 }
 
+// Returns true when 'ranges' skip all rows in [0, numRows). The ranges are
+// sorted and merged, so only the first one needs checking.
+bool coversAllRows(const std::vector<RowRange>& ranges, uint32_t numRows) {
+  return !ranges.empty() && ranges.front().startRow == 0 &&
+      ranges.front().endRow >= numRows;
+}
+
 } // namespace
 
 namespace {
@@ -449,6 +456,11 @@ class SelectiveNimbleRowReader : public dwio::common::RowReader {
 
   bool skipStripe(uint32_t stripe) const;
 
+  // Returns true when chunk statistics rule out every row of the current
+  // stripe, and counts those rows as skipped by them. Otherwise the stripe's
+  // skip ranges stay in skipRanges_ for reading it.
+  bool skipStripeByChunkStats(uint32_t numStripeRows);
+
   // Computes which top-level columns should use lazy I/O based on the scan
   // spec and remaining filter columns. Returns a const set used for the
   // lifetime of this reader.
@@ -533,14 +545,13 @@ int64_t SelectiveNimbleRowReader::nextRowNumber() {
         advanceToNextStripe();
         continue;
       }
-      if (skipStripe(currentStripe_)) {
+      if (skipStripe(currentStripe_) || skipStripeByChunkStats(numStripeRows)) {
         maybeUpdateRandomSkip(numStripeRows);
         ++skippedStripes_;
         advanceToNextStripe();
         continue;
       }
       loadCurrentStripe();
-      computeSkipRowRanges();
     }
     if (endRowInCurrentStripe_.has_value()) {
       NIMBLE_CHECK_LE(endRowInCurrentStripe_.value(), numStripeRows);
@@ -639,8 +650,12 @@ void SelectiveNimbleRowReader::computeSkipRowRanges() {
     return;
   }
 
+  NIMBLE_CHECK_EQ(
+      streams_.stripeIndex(),
+      currentStripe_,
+      "Chunk statistics must come from the current stripe.");
   const auto* scanSpec = options_.scanSpec().get();
-  if (columnReader_ == nullptr || scanSpec == nullptr) {
+  if (scanSpec == nullptr) {
     return;
   }
 
@@ -832,6 +847,21 @@ bool SelectiveNimbleRowReader::skipStripe(uint32_t stripe) const {
     }
   }
   return false;
+}
+
+bool SelectiveNimbleRowReader::skipStripeByChunkStats(uint32_t numStripeRows) {
+  if (!readerBase_->tablet().supportsChunkStatsPruning()) {
+    return false;
+  }
+  // Also keeps the stripe metadata cached for loadCurrentStripe().
+  streams_.setStripe(currentStripe_);
+  computeSkipRowRanges();
+  if (!coversAllRows(skipRanges_, numStripeRows)) {
+    return false;
+  }
+  chunkSkippedRows_ += numStripeRows;
+  processedRows_ += numStripeRows;
+  return true;
 }
 
 std::optional<size_t> SelectiveNimbleRowReader::estimatedRowSize() const {
