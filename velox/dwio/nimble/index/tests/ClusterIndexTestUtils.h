@@ -189,6 +189,7 @@ class ClusterIndexTestHelper {
         std::move(rootSection),
         std::move(metadataInput),
         std::move(dataInput),
+        /*keyComparator=*/nullptr,
         pinIndex,
         preloadIndex,
         pool));

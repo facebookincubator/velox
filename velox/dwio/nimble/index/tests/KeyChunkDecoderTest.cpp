@@ -81,7 +81,18 @@ class KeyChunkDecoderTest : public ::testing::TestWithParam<EncodingType> {
   std::shared_ptr<DecodedKeyChunk> decode(
       std::unique_ptr<SeekableArrayInputStream> stream) {
     return decodeKeyChunk(
-        std::move(stream), createFlatKeyReader, dataBuffer_, leafPool_.get());
+        std::move(stream),
+        [](std::string_view encodedKeys,
+           std::function<void*(uint32_t)> stringBufferFactory,
+           velox::memory::MemoryPool* pool) {
+          return createFlatKeyReader(
+              encodedKeys,
+              std::move(stringBufferFactory),
+              /*comparator=*/nullptr,
+              pool);
+        },
+        dataBuffer_,
+        leafPool_.get());
   }
 
   std::shared_ptr<velox::memory::MemoryPool> pool_;

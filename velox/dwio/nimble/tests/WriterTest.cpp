@@ -8126,12 +8126,15 @@ class WriterIndexTest : public WriterTest,
           // Decode the key encoding from the chunk data
 
           keyStreamCache[chunkFileOffset] = nimble::index::KeyEncoding::create(
-              *leafPool_, encodingData, [&](uint32_t totalLength) {
+              *leafPool_,
+              encodingData,
+              [&](uint32_t totalLength) {
                 auto& buf = stringBuffers.emplace_back(
                     velox::AlignedBuffer::allocate<char>(
                         totalLength, leafPool_.get()));
                 return buf->asMutable<void>();
-              });
+              },
+              /*comparator=*/nullptr);
         }
 
         auto* keyEncoding = keyStreamCache[chunkFileOffset].get();

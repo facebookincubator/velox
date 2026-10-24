@@ -80,7 +80,7 @@ std::unique_ptr<FileSplitReader> PaimonDataSource::createSplitReader() {
       ioStats_,
       fileHandleFactory_,
       ioExecutor_,
-      scanSpec_);
+      fileScanState_->scanSpec);
 }
 
 void PaimonDataSource::setFromDataSource(

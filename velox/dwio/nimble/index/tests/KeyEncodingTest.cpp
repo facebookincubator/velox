@@ -14,10 +14,13 @@
  * limitations under the License.
  */
 
+#include <limits>
 #include <random>
 #include <thread>
 
 #include <fmt/format.h>
+#include <folly/String.h>
+#include <folly/lang/Bits.h>
 #include <gtest/gtest.h>
 
 #include "velox/common/memory/Memory.h"
@@ -29,6 +32,45 @@
 
 namespace facebook::nimble::index {
 namespace {
+
+// Orders keys that end in an 8-byte little-endian suffix the way RocksDB orders
+// internal keys: the rest of the key bytewise ascending, then the suffix in
+// descending order. For example, ("a", 5) sorts before ("a", 1), which sorts
+// before ("a\0", 9), though bytewise ("a\0", 9) comes first.
+class SuffixDescendingComparator final : public KeyComparator {
+ public:
+  int compare(std::string_view lhs, std::string_view rhs) const override {
+    if (const int result = prefix(lhs).compare(prefix(rhs)); result != 0) {
+      return result;
+    }
+    const auto lhsSuffix = suffix(lhs);
+    const auto rhsSuffix = suffix(rhs);
+    if (lhsSuffix == rhsSuffix) {
+      return 0;
+    }
+    return lhsSuffix > rhsSuffix ? -1 : 1;
+  }
+
+ private:
+  static std::string_view prefix(std::string_view key) {
+    return key.substr(0, key.size() - sizeof(uint64_t));
+  }
+
+  static uint64_t suffix(std::string_view key) {
+    return folly::Endian::little(
+        folly::loadUnaligned<uint64_t>(
+            key.data() + key.size() - sizeof(uint64_t)));
+  }
+};
+
+// Returns 'prefix' followed by 'suffix' as 8 little-endian bytes.
+std::string suffixedKey(std::string_view prefix, uint64_t suffix) {
+  std::string key{prefix};
+  const auto littleEndian = folly::Endian::little(suffix);
+  key.append(
+      reinterpret_cast<const char*>(&littleEndian), sizeof(littleEndian));
+  return key;
+}
 
 class KeyEncodingTest : public ::testing::TestWithParam<EncodingType> {
  protected:
@@ -60,6 +102,14 @@ class KeyEncodingTest : public ::testing::TestWithParam<EncodingType> {
 
   std::unique_ptr<KeyEncoding> createKeyEncoding(
       const std::vector<std::string_view>& keys) {
+    return createKeyEncoding(keys, /*comparator=*/nullptr);
+  }
+
+  // Encodes 'keys', which sort under 'comparator', or bytewise when it is
+  // null.
+  std::unique_ptr<KeyEncoding> createKeyEncoding(
+      const std::vector<std::string_view>& keys,
+      const KeyComparator* comparator) {
     Buffer encodingBuffer{*leafPool_};
     auto policy =
         std::make_unique<ReplayedEncodingSelectionPolicy<std::string_view>>(
@@ -73,12 +123,15 @@ class KeyEncodingTest : public ::testing::TestWithParam<EncodingType> {
     encodedData_ = std::string(encoded.data(), encoded.size());
     stringBuffers_.clear();
     auto keyEncoding = KeyEncoding::create(
-        *leafPool_, encodedData_, [this](uint32_t totalLength) -> void* {
+        *leafPool_,
+        encodedData_,
+        [this](uint32_t totalLength) -> void* {
           auto& buffer = stringBuffers_.emplace_back(
               velox::AlignedBuffer::allocate<char>(
                   totalLength, leafPool_.get()));
           return buffer->asMutable<void>();
-        });
+        },
+        comparator);
     // Guards against the encoding silently degrading to Trivial, which would
     // make the /Prefix instantiation test the same path twice.
     if (GetParam() == EncodingType::Trivial) {
@@ -234,6 +287,64 @@ TEST_P(KeyEncodingTest, seekNonExactMatch) {
         SCOPED_TRACE("value larger than max");
         auto result = keyEncoding->seek("zzz_larger_than_all", inclusive);
         EXPECT_FALSE(result.has_value());
+      }
+    }
+  }
+}
+
+TEST_P(KeyEncodingTest, seekWithKeyComparator) {
+  const SuffixDescendingComparator comparator;
+  const ComparatorKeyOrder less{&comparator};
+
+  // Prefixes where one is a prefix of another ("a", "a\0", "ab"), and enough
+  // keys to span several Prefix restart intervals of 16.
+  std::vector<std::string> prefixes{
+      "", "a", std::string("a\0", 2), std::string("a\x01", 2), "ab", "b"};
+  for (int i = 0; i < 12; ++i) {
+    prefixes.push_back(fmt::format("p_{:02d}", i));
+  }
+  std::vector<std::string> storage;
+  for (const auto& prefix : prefixes) {
+    for (const uint64_t suffix :
+         {uint64_t{300} << 8 | 1, uint64_t{9}, uint64_t{1}}) {
+      storage.push_back(suffixedKey(prefix, suffix));
+    }
+  }
+  std::sort(storage.begin(), storage.end(), less);
+  const std::vector<std::string_view> keys{storage.begin(), storage.end()};
+  ASSERT_FALSE(std::is_sorted(keys.begin(), keys.end()))
+      << "Keys must not sort bytewise, or the comparator goes untested";
+
+  auto keyEncoding = createKeyEncoding(keys, &comparator);
+
+  // Every stored key, plus keys between, before and after the versions of
+  // each prefix.
+  std::vector<std::string> targets{storage};
+  for (const auto& prefix : prefixes) {
+    for (const uint64_t suffix :
+         {std::numeric_limits<uint64_t>::max(),
+          uint64_t{100},
+          uint64_t{5},
+          uint64_t{0}}) {
+      targets.push_back(suffixedKey(prefix, suffix));
+    }
+  }
+  targets.push_back(suffixedKey("zzz", 0));
+
+  for (const bool inclusive : {true, false}) {
+    SCOPED_TRACE(fmt::format("inclusive={}", inclusive));
+    for (const auto& target : targets) {
+      SCOPED_TRACE(folly::hexlify(target));
+      const auto expected = inclusive
+          ? std::lower_bound(keys.begin(), keys.end(), target, less)
+          : std::upper_bound(keys.begin(), keys.end(), target, less);
+      const auto result = keyEncoding->seek(target, inclusive);
+      if (expected == keys.end()) {
+        EXPECT_FALSE(result.has_value());
+      } else {
+        ASSERT_TRUE(result.has_value());
+        EXPECT_EQ(
+            result.value(), static_cast<uint32_t>(expected - keys.begin()));
       }
     }
   }
