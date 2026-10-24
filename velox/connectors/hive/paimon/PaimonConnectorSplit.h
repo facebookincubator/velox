@@ -30,8 +30,6 @@
 
 namespace facebook::velox::connector::hive::paimon {
 
-// Paimon logical split representation.
-//
 // PaimonConnectorSplit represents a planner-selected Paimon DataSplit: a
 // logical read unit with one or more files from the same partition/bucket.
 // Unlike a single-file split, it can group multiple physical files. A bucket
@@ -52,9 +50,7 @@ namespace facebook::velox::connector::hive::paimon {
 // deletion vectors and changelog files require their own read semantics.
 
 enum class PaimonTableType {
-  /// Table without a primary key.
   kAppendOnly,
-  /// Table with a primary key.
   kPrimaryKey,
 };
 
