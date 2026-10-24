@@ -24,7 +24,8 @@ namespace facebook::velox::connector::hive::paimon {
 class PaimonConnectorSplit;
 
 /// Data source for reading Paimon tables. Reuses FileDataSource for projection
-/// and filtering, and PaimonSplitReader to read the files in each logical split.
+/// and filtering, and PaimonSplitReader to read the files in each logical
+/// split.
 class PaimonDataSource : public FileDataSource {
  public:
   PaimonDataSource(

@@ -29,12 +29,7 @@ velox_link_libraries(velox_hive_paimon_split velox_connector velox_hive_connecto
 
 velox_add_library(velox_hive_paimon_table_handle PaimonTableHandle.cpp HEADERS PaimonTableHandle.h)
 
-velox_link_libraries(
-  velox_hive_paimon_table_handle
-  velox_hive_paimon_split
-  velox_core
-  velox_type
-)
+velox_link_libraries(velox_hive_paimon_table_handle velox_hive_paimon_split velox_core velox_type)
 
 velox_add_library(
   velox_hive_paimon_connector

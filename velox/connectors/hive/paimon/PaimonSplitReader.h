@@ -62,7 +62,8 @@ class PaimonSplitReader : public FileSplitReader {
   /// are exhausted.
   uint64_t next(uint64_t size, VectorPtr& output) override;
 
-  /// Rebinds the borrowed counters when the reader moves to another data source.
+  /// Rebinds the borrowed counters when the reader moves to another data
+  /// source.
   void setRuntimeStats(dwio::common::RuntimeStats& runtimeStats) {
     runtimeStats_ = &runtimeStats;
   }
