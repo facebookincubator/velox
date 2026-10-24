@@ -105,6 +105,8 @@ TabletReader::Options TabletReader::configureOptions(
                 formatOptions)) {
       tabletOptions.externalDictionaryResolver =
           nimbleOptions->externalDictionaryResolver;
+      tabletOptions.stripeGroupEncodingViewDeduplicationEnabled =
+          nimbleOptions->experimentalStripeGroupEncodingViewDeduplication;
     }
   }
 
@@ -201,6 +203,8 @@ TabletReader::TabletReader(
       clusterIndexName_{options.clusterIndexName},
       loadChunkStats_{options.loadChunkStats},
       loadDenseIndexes_{options.loadDenseIndexes},
+      stripeGroupEncodingViewDeduplicationEnabled_{
+          options.stripeGroupEncodingViewDeduplicationEnabled},
       ioOptions_{[&]() {
         NIMBLE_CHECK(options.ioOptions.has_value(), "ioOptions is not set.");
         NIMBLE_CHECK_NOT_NULL(
@@ -721,7 +725,11 @@ void TabletReader::initStripes(
       stripeGroupCache_.pin(
           0,
           std::make_shared<StripeGroup>(
-              0, *stripes_, std::move(metadataBuffer), pool_));
+              0,
+              *stripes_,
+              std::move(metadataBuffer),
+              stripeGroupEncodingViewDeduplicationEnabled_,
+              pool_));
     }
   }
 }
@@ -909,7 +917,11 @@ std::shared_ptr<StripeGroup> TabletReader::loadStripeGroup(
 
   const auto section = toMetadataSection(stripeGroupInfo);
   return std::make_shared<StripeGroup>(
-      stripeGroupIndex, *stripes_, readMetadata(section), pool_);
+      stripeGroupIndex,
+      *stripes_,
+      readMetadata(section),
+      stripeGroupEncodingViewDeduplicationEnabled_,
+      pool_);
 }
 
 std::shared_ptr<StripeGroup> TabletReader::stripeGroup(
@@ -959,7 +971,11 @@ TabletReader::loadStripeGroupMetadata(
     auto metadata =
         std::make_unique<MetadataBuffer>(std::move(*buffers[bufferIndex++]));
     group.stripeGroup = std::make_shared<StripeGroup>(
-        stripeGroupIndex, *stripes_, std::move(metadata), pool_);
+        stripeGroupIndex,
+        *stripes_,
+        std::move(metadata),
+        stripeGroupEncodingViewDeduplicationEnabled_,
+        pool_);
     if (hasChunkStats(stripeGroupIndex)) {
       auto chunkMetadata =
           std::make_unique<MetadataBuffer>(std::move(*buffers[bufferIndex++]));

@@ -75,10 +75,14 @@ class StripeGroup {
       static_cast<char>('0' + static_cast<int>(EncodingLayout::kStreamMajor)),
       '\0'};
 
+  /// When `encodingViewDeduplicationEnabled` is true, kStreamMajor streams
+  /// whose offsets or sizes arrays reference the same encoded payload share one
+  /// EncodingView.
   StripeGroup(
       uint32_t stripeGroupIndex,
       const MetadataBuffer& stripes,
       std::unique_ptr<MetadataBuffer> metadata,
+      bool encodingViewDeduplicationEnabled,
       velox::memory::MemoryPool* pool);
 
   ~StripeGroup();
@@ -119,6 +123,12 @@ class StripeGroup {
   bool hasStreamChecksums() const {
     return hasStreamChecksums_;
   }
+
+  /// Number of encoding views this group holds for random access to its
+  /// stream-major metadata. With encoding view deduplication, streams whose
+  /// encoded arrays share one payload share one view, so this can be below
+  /// 2 * streamCount(). Zero for kRaw.
+  size_t testingEncodingViewCount() const;
 
   /// Relative byte location of one stream within a stripe. A zero size means
   /// the stream is absent.
@@ -161,11 +171,16 @@ class StripeGroup {
     const uint32_t* checksums{nullptr};
   };
 
-  // kStreamMajor: streamCount entries, one EncodingView per leaf stream, each
-  // over that stream's stripeCount-length array.
+  // kStreamMajor: streamCount entries per array, each pointing at the view over
+  // that stream's stripeCount-length array. With encoding view deduplication,
+  // streams whose arrays share one encoded payload (TabletWriter stripe-group
+  // metadata deduplication) share one view, which is safe because view reads
+  // are stateless.
   struct StreamMajorMetadata {
-    std::vector<std::unique_ptr<EncodingView>> offsets;
-    std::vector<std::unique_ptr<EncodingView>> sizes;
+    // Owns the views that offsets and sizes point at.
+    std::vector<std::unique_ptr<EncodingView>> views;
+    std::vector<EncodingView*> offsets;
+    std::vector<EncodingView*> sizes;
     // One array of stripeCount x streamCount values, stream-major, so stream S
     // of local stripe T sits at S * stripeCount + T. Null when the group
     // carries no checksums.
@@ -178,7 +193,7 @@ class StripeGroup {
   // construction from the blob's FlatBuffers file identifier. Determines which
   // metadata member below is populated. All encoded forms are written
   // uncompressed (which EncodingView requires); every EncodingView-supported
-  // encoding provides a stateless O(1) const readAt, so point access needs no
+  // encoding provides a stateless const readAt, so point access needs no
   // auxiliary state and is safe for concurrent reads.
   const EncodingLayout encodingLayout_;
   // Whether the group carries per-stream checksums. Which member above holds

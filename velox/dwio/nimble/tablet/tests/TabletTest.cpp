@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include <fmt/format.h>
+#include <folly/container/F14Set.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include <algorithm>
@@ -2978,8 +2979,12 @@ TEST_P(TabletTest, stripeGroupMetadataDeduplication) {
           /*deduplicate=*/false, flushThreshold, compressionThreshold);
       const auto deduplicatedFile = writeTablet(
           /*deduplicate=*/true, flushThreshold, compressionThreshold);
-      const auto tablet = createTabletReader(file);
-      const auto deduplicatedTablet = createTabletReader(deduplicatedFile);
+      const nimble::TabletReader::Options viewDeduplicationOptions{
+          .stripeGroupEncodingViewDeduplicationEnabled = true};
+      const auto tablet = createTabletReader(file, viewDeduplicationOptions);
+      const auto deduplicatedTablet =
+          createTabletReader(deduplicatedFile, viewDeduplicationOptions);
+      const auto unsharedViewsTablet = createTabletReader(deduplicatedFile);
       ASSERT_EQ(deduplicatedTablet->stripeCount(), kStripeCount);
       const auto& sections = tablet->stripeGroupsMetadata();
       const auto& deduplicatedSections =
@@ -2990,6 +2995,8 @@ TEST_P(TabletTest, stripeGroupMetadataDeduplication) {
       } else {
         EXPECT_EQ(sections.size(), 1);
       }
+      // Distinct encoded payloads per deduplicated group.
+      std::vector<size_t> uniquePayloads(sections.size());
       for (size_t group = 0; group < sections.size(); ++group) {
         EXPECT_LT(
             deduplicatedSections[group].uncompressedSize().value(),
@@ -3015,20 +3022,57 @@ TEST_P(TabletTest, stripeGroupMetadataDeduplication) {
         EXPECT_NE(sizes->Get(0), sizes->Get(1));
         EXPECT_EQ(offsets->Get(3), sizes->Get(3));
         EXPECT_EQ(offsets->Get(0), sizes->Get(3));
+        folly::F14FastSet<const void*> payloads;
+        for (uint32_t streamId = 0; streamId < kStreamCount; ++streamId) {
+          payloads.insert(offsets->Get(streamId)->data());
+          payloads.insert(sizes->Get(streamId)->data());
+        }
+        uniquePayloads[group] = payloads.size();
       }
       for (uint32_t stripe = 0; stripe < kStripeCount; ++stripe) {
         const auto stripeId = tablet->stripeIdentifier(stripe);
         const auto deduplicatedId =
             deduplicatedTablet->stripeIdentifier(stripe);
+        const auto unsharedViewsId =
+            unsharedViewsTablet->stripeIdentifier(stripe);
+        const auto& deduplicatedGroup = deduplicatedId.stripeGroup();
+        std::vector<nimble::StripeGroup::StreamMetadata> locations(
+            kStreamCount);
+        deduplicatedGroup->streamLocations(stripe, locations);
         for (uint32_t streamId = 0; streamId < kStreamCount; ++streamId) {
           SCOPED_TRACE(fmt::format("stripe={} stream={}", stripe, streamId));
+          const auto expectedOffset = tablet->streamOffset(stripeId, streamId);
           EXPECT_EQ(
               deduplicatedTablet->streamSize(deduplicatedId, streamId),
               streamSize(stripe, streamId));
           EXPECT_EQ(
               deduplicatedTablet->streamOffset(deduplicatedId, streamId),
-              tablet->streamOffset(stripeId, streamId));
+              expectedOffset);
+          EXPECT_EQ(
+              unsharedViewsTablet->streamSize(unsharedViewsId, streamId),
+              streamSize(stripe, streamId));
+          EXPECT_EQ(
+              unsharedViewsTablet->streamOffset(unsharedViewsId, streamId),
+              expectedOffset);
+          EXPECT_EQ(locations[streamId].size, streamSize(stripe, streamId));
+          if (locations[streamId].size != 0) {
+            EXPECT_EQ(locations[streamId].offset, expectedOffset);
+          }
         }
+        // Every stream owns an offsets and a sizes view unless view
+        // deduplication is enabled and its payload is shared, in which case it
+        // reuses the payload's single view.
+        EXPECT_EQ(
+            stripeId.stripeGroup()->testingEncodingViewCount(),
+            2 * kStreamCount);
+        EXPECT_EQ(
+            unsharedViewsId.stripeGroup()->testingEncodingViewCount(),
+            2 * kStreamCount);
+        EXPECT_EQ(
+            deduplicatedGroup->testingEncodingViewCount(),
+            uniquePayloads[deduplicatedGroup->index()]);
+        EXPECT_LT(
+            deduplicatedGroup->testingEncodingViewCount(), 2 * kStreamCount);
       }
     }
   }
@@ -3141,8 +3185,11 @@ TEST_P(TabletTest, stripeGroupViewsKeepTheirValues) {
   viewManagerOptions.trackDefaultUsage = true;
   velox::memory::MemoryManager viewManager{viewManagerOptions};
   const auto viewPool = viewManager.addLeafPool();
-  const nimble::StripeGroup group{
-      /*stripeGroupIndex=*/0, *stripes, std::move(stripeGroup), viewPool.get()};
+  const nimble::StripeGroup group{/*stripeGroupIndex=*/0,
+                                  *stripes,
+                                  std::move(stripeGroup),
+                                  /*encodingViewDeduplicationEnabled=*/false,
+                                  viewPool.get()};
   // A cached Varint view decodes every row into a uint32 vector from its pool,
   // for the offsets and for the sizes of the one stream. An uncached view
   // decodes on each read and keeps nothing, so this pool stays empty. That is
@@ -6558,6 +6605,20 @@ TEST_P(TabletTest, configureOptionsIndexFlags) {
     EXPECT_TRUE(containsSection(
         opts.preloadOptionalSections, nimble::kChunkStatsSection));
   }
+}
+
+TEST_P(TabletTest, configureOptionsStripeGroupEncodingViewDeduplication) {
+  velox::dwio::common::ReaderOptions readerOptions(pool_.get());
+  EXPECT_FALSE(
+      nimble::TabletReader::configureOptions(readerOptions)
+          .stripeGroupEncodingViewDeduplicationEnabled);
+
+  auto nimbleOptions = std::make_shared<nimble::NimbleReaderOptions>();
+  nimbleOptions->experimentalStripeGroupEncodingViewDeduplication = true;
+  readerOptions.setFormatSpecificOptions(std::move(nimbleOptions));
+  EXPECT_TRUE(
+      nimble::TabletReader::configureOptions(readerOptions)
+          .stripeGroupEncodingViewDeduplicationEnabled);
 }
 
 TEST_P(TabletTest, configureOptionsCacheFields) {
