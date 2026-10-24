@@ -23,6 +23,7 @@
 #include "velox/dwio/nimble/index/IndexKeyEncoder.h"
 #include "velox/dwio/nimble/index/IndexLookup.h"
 #include "velox/dwio/nimble/index/IndexWriter.h"
+#include "velox/dwio/nimble/index/KeyComparator.h"
 #include "velox/dwio/nimble/tablet/MetadataBuffer.h"
 #include "velox/type/Type.h"
 
@@ -51,6 +52,15 @@ class ClusterIndexFactory {
       Section rootSection,
       velox::memory::MemoryPool* pool,
       const IndexLookup::Options& options) const = 0;
+
+  /// Returns the order of the keys this factory's key encoder writes, or null
+  /// when they sort bytewise. The cluster index writer validates key order
+  /// with it, and createReader() passes it to the reader through
+  /// IndexLookup::Options::keyComparator. The comparator lives as long as the
+  /// factory.
+  virtual const KeyComparator* keyComparator() const {
+    return nullptr;
+  }
 };
 
 /// Registers a process-wide factory. Call during process initialization,

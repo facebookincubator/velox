@@ -633,13 +633,10 @@ void UcxOutputQueue::updateStatsWithFreedLocked(
 }
 
 void UcxOutputQueue::updateTotalQueuedBytesMsLocked() {
-  const auto nowMs = getCurrentTimeMs();
+  const auto deltaMs = queueWatch_.lap().count();
   if (queuedBytes_ > 0) {
-    const auto deltaMs = nowMs - queueStartMs_;
     totalQueuedBytesMs_ += queuedBytes_ * deltaMs;
   }
-
-  queueStartMs_ = nowMs;
 }
 
 int64_t UcxOutputQueue::getAverageQueueTimeMsLocked() const {

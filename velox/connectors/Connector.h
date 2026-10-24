@@ -15,6 +15,9 @@
  */
 #pragma once
 
+#include <string_view>
+#include <unordered_map>
+
 #include "folly/CancellationToken.h"
 #include "velox/common/Casts.h"
 #include "velox/common/EnumDeclare.h"
@@ -311,6 +314,13 @@ class DataSink {
   /// Add the next data (vector) to be written. This call is blocking.
   /// TODO maybe at some point we want to make it async.
   virtual void appendData(RowVectorPtr input) = 0;
+
+  /// Returns the number of table rows that 'input' changes, which the table
+  /// writer reports as its row count. A sink whose input encodes one logical
+  /// change as several rows overrides this to count the change once.
+  virtual vector_size_t numChangedRows(const RowVector& input) const {
+    return input.size();
+  }
 
   /// Called after all data has been added via possibly multiple calls to
   /// appendData() This function finishes the data procesing like sort all the
@@ -632,6 +642,12 @@ class ConnectorQueryCtx {
       return *this;
     }
 
+    Builder& customPools(
+        std::unordered_map<std::string, memory::MemoryPool*> customPools) {
+      customPools_ = std::move(customPools);
+      return *this;
+    }
+
     /// Constructs a ConnectorQueryCtx with the configured parameters.
     ///
     /// Consumes owned settings; do not call build() more than once.
@@ -654,6 +670,7 @@ class ConnectorQueryCtx {
     bool adjustTimestampToTimezone_{false};
     folly::CancellationToken cancellationToken_;
     std::shared_ptr<filesystems::TokenProvider> tokenProvider_;
+    std::unordered_map<std::string, memory::MemoryPool*> customPools_;
     bool built_{false};
   };
 
@@ -675,7 +692,8 @@ class ConnectorQueryCtx {
       const std::string& sessionTimezone,
       bool adjustTimestampToTimezone = false,
       folly::CancellationToken cancellationToken = {},
-      std::shared_ptr<filesystems::TokenProvider> tokenProvider = {});
+      std::shared_ptr<filesystems::TokenProvider> tokenProvider = {},
+      std::unordered_map<std::string, memory::MemoryPool*> customPools = {});
 
   /// Returns the associated operator's memory pool which is a leaf kind of
   /// memory pool, used for direct memory allocation use.
@@ -775,6 +793,14 @@ class ConnectorQueryCtx {
     return fsTokenProvider_;
   }
 
+  /// Returns the associated operator's custom leaf pool for 'tag', or nullptr
+  /// if none is registered. The pools are borrowed and must outlive this
+  /// context.
+  memory::MemoryPool* customMemoryPool(std::string_view tag) const {
+    auto it = customPools_.find(std::string(tag));
+    return it == customPools_.end() ? nullptr : it->second;
+  }
+
  private:
   memory::MemoryPool* const operatorPool_;
   memory::MemoryPool* const connectorPool_;
@@ -792,6 +818,7 @@ class ConnectorQueryCtx {
   const bool adjustTimestampToTimezone_;
   const folly::CancellationToken cancellationToken_;
   const std::shared_ptr<filesystems::TokenProvider> fsTokenProvider_;
+  const std::unordered_map<std::string, memory::MemoryPool*> customPools_;
   bool selectiveNimbleReaderEnabled_{false};
   core::QueryConfig::RowSizeTrackingMode rowSizeTrackingEnabled_{
       core::QueryConfig::RowSizeTrackingMode::ENABLED_FOR_ALL};

@@ -15,6 +15,8 @@
  */
 #pragma once
 
+#include <folly/stop_watch.h>
+
 #include "velox/common/base/ConcurrentRuntimeStatWriter.h"
 #include "velox/exec/IndexLookupJoinBridge.h"
 #include "velox/exec/Operator.h"
@@ -421,9 +423,9 @@ class IndexLookupJoin : public Operator {
   FlatVectorPtr<bool> matchColumn_{nullptr};
   uint64_t* rawMatchValues_{nullptr};
 
-  // The start time of the current lookup driver block wait, and reset after the
-  // driver wait completes.
-  std::optional<size_t> blockWaitStartNs_;
+  // Started when the driver starts a lookup block wait, and reset after the
+  // wait completes.
+  std::optional<folly::stop_watch<std::chrono::milliseconds>> blockWaitWatch_;
 
   // The bridge for sharing index splits across operators in the same pipeline.
   // Null if the index source does not need splits.

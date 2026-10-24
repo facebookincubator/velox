@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/core/FixedPointPlanNodes.h"
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/core/Expressions.h"
@@ -267,8 +268,8 @@ TEST_F(FixedPointPlanNodesTest, validation) {
           "n"),
       "output arity must equal probe columns plus hash table payload columns");
 
-  // A StateHashJoin's leading probe key column types must match the hash
-  // table's build key types (keys-first on both sides).
+  // A StateHashJoin's probe key types must match the hash table's build key
+  // types.
   auto varcharProbe = ROW("k", VARCHAR());
   auto badKeyTypeJoin = std::make_shared<StateHashJoinNode>(
       "j",
@@ -288,7 +289,37 @@ TEST_F(FixedPointPlanNodesTest, validation) {
           ConvergenceConfig{
               .maxIterations = 5, .errorWhenMaxIterationReached = false},
           "probe"),
-      "probe key column type at channel 0 must match the hash table build key");
+      "probe key type must match the hash table build key type: k");
+
+  // Probe keys are resolved by name, so a probe key that is not the leading
+  // probe column is accepted, and a missing one is rejected.
+  auto trailingKeyProbe = ROW({{"p", VARCHAR()}, {"k", BIGINT()}});
+  auto makeTrailingKeyNode = [&](const std::string& probeKey) {
+    auto join = std::make_shared<StateHashJoinNode>(
+        "j",
+        "h",
+        std::vector<std::string>{probeKey},
+        ROW({{"p", VARCHAR()}, {"k", BIGINT()}, {"v", BIGINT()}}),
+        std::make_shared<StateSourceNode>(
+            "s", "probe", trailingKeyProbe, /*delta=*/true));
+    return std::make_shared<FixedPointNode>(
+        "fp",
+        std::vector<StateDeclarationPtr>{
+            std::make_shared<VectorStateDeclaration>("probe", trailingKeyProbe),
+            std::make_shared<VectorStateDeclaration>(
+                "out",
+                ROW({{"p", VARCHAR()}, {"k", BIGINT()}, {"v", BIGINT()}})),
+            std::make_shared<HashTableStateDeclaration>(
+                "h", htSchema, std::vector<std::string>{"k"})},
+        std::vector<PlanNodePtr>{join},
+        ConvergenceConfig{
+            .maxIterations = 5, .errorWhenMaxIterationReached = false},
+        "out");
+  };
+  EXPECT_NO_THROW(makeTrailingKeyNode("k"));
+  VELOX_ASSERT_USER_THROW(
+      makeTrailingKeyNode("missing"),
+      "probe key is not a probe input column: missing");
 
   // A null body plan is rejected with a clean error rather than crashing.
   VELOX_ASSERT_USER_THROW(
@@ -388,21 +419,74 @@ TEST_F(FixedPointPlanNodesTest, chainValidation) {
   // coordinator never assigned it.
   {
     auto convergenceSchema = ROW("c", BOOLEAN());
+    auto convergence = ConvergenceConfig::globalVerdict(
+        {shuffleOut(
+             "cp",
+             std::make_shared<StateSourceNode>(
+                 "cs", "n", schema, /*delta=*/false),
+             3,
+             schema),
+         PartitionedOutputNode::single(
+             "cg", schema, "Presto", exchange("ce", schema))},
+        std::make_shared<ProjectNode>(
+            "cv",
+            convergenceSchema->names(),
+            std::vector<TypedExprPtr>{
+                std::make_shared<ConstantTypedExpr>(BOOLEAN(), Variant(true))},
+            exchange("cx", schema)),
+        5);
+    VELOX_ASSERT_USER_THROW(
+        fixedPoint(
+            {shuffleOut("p", stateSource(), 2, schema), exchange("e", schema)},
+            std::move(convergence)),
+        "must shuffle across the same number of workers");
+  }
+
+  // Workers that each decide after a convergence shuffle could disagree, so a
+  // shuffling sequence needs a verdict plan.
+  {
+    auto convergenceSchema = ROW("c", BOOLEAN());
     ConvergenceConfig convergence{
         .plans =
             {shuffleOut(
                  "cp",
                  std::make_shared<StateSourceNode>(
                      "cs", "n", schema, /*delta=*/false),
-                 3,
+                 2,
                  schema),
-             exchange("ce", schema)},
+             std::make_shared<ProjectNode>(
+                 "cv",
+                 convergenceSchema->names(),
+                 std::vector<TypedExprPtr>{std::make_shared<ConstantTypedExpr>(
+                     BOOLEAN(), Variant(true))},
+                 exchange("ce", schema))},
         .maxIterations = 5};
     VELOX_ASSERT_USER_THROW(
+        fixedPoint({stateSource()}, std::move(convergence)),
+        "FixedPointNode: convergence plans that shuffle require a verdict plan; "
+        "use ConvergenceConfig::globalVerdict");
+  }
+
+  // A verdict plan reads every worker's rows, so plans before it must gather
+  // them to the one worker that runs it.
+  {
+    auto convergenceSource =
+        std::make_shared<StateSourceNode>("cs", "n", schema, /*delta=*/false);
+    VELOX_ASSERT_USER_THROW(
         fixedPoint(
-            {shuffleOut("p", stateSource(), 2, schema), exchange("e", schema)},
-            std::move(convergence)),
-        "must shuffle across the same number of workers");
+            {stateSource()},
+            ConvergenceConfig::globalVerdict(
+                {shuffleOut("cp", convergenceSource, 2, schema)},
+                exchange("ce", schema),
+                5)),
+        "FixedPointNode: the convergence plans before a verdict plan must end "
+        "in a PartitionedOutput with one partition");
+    VELOX_ASSERT_USER_THROW(
+        fixedPoint(
+            {stateSource()},
+            ConvergenceConfig::globalVerdict({}, exchange("ce", schema), 5)),
+        "FixedPointNode: a verdict plan requires convergence plans that gather "
+        "to it");
   }
 }
 
@@ -537,8 +621,7 @@ TEST_F(FixedPointPlanNodesTest, nestedInConvergence) {
         "v");
   };
   auto convergenceHosting = [&](const PlanNodePtr& nested) {
-    return std::vector<PlanNodePtr>{
-        beside("cg", verdictSource("cs", "w"), nested)};
+    return beside("cg", verdictSource("cs", "w"), nested);
   };
   auto withVerdictState = [&](std::vector<PlanNodePtr> plans,
                               ConvergenceConfig convergence) {
@@ -573,6 +656,35 @@ TEST_F(FixedPointPlanNodesTest, nestedInConvergence) {
             std::move(convergence)),
         "nested in convergence plan 0");
   }
+}
+
+// A declaration without an initial plan adds no plan.
+TEST_F(FixedPointPlanNodesTest, nestedPlans) {
+  auto initial = std::make_shared<ValuesNode>(
+      "i",
+      std::vector<RowVectorPtr>{
+          makeRowVector({"x"}, {makeFlatVector<int64_t>({1})})});
+  auto body = stateSource("b", "n");
+  auto convergence = std::make_shared<ProjectNode>(
+      "c",
+      std::vector<std::string>{"converged"},
+      std::vector<TypedExprPtr>{
+          std::make_shared<ConstantTypedExpr>(BOOLEAN(), Variant(true))},
+      stateSource("cs", "n"));
+  FixedPointNode node(
+      "fp",
+      std::vector<StateDeclarationPtr>{
+          std::make_shared<VectorStateDeclaration>(
+              "n", schema_, initial, /*append=*/true),
+          std::make_shared<VectorStateDeclaration>(
+              "m", schema_, /*initialPlan=*/nullptr, /*append=*/true)},
+      {body},
+      ConvergenceConfig::converging(convergence, /*maxIterations=*/5),
+      "n");
+
+  EXPECT_THAT(
+      node.nestedPlans(),
+      testing::UnorderedElementsAre(initial, body, convergence));
 }
 
 } // namespace

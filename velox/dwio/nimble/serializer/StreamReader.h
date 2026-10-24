@@ -24,10 +24,11 @@
 #include <folly/container/F14Map.h>
 #include <folly/coro/Task.h>
 #include "velox/common/memory/Memory.h"
+#include "velox/dwio/nimble/common/RowRange.h"
 #include "velox/dwio/nimble/encodings/common/Encoding.h"
-#include "velox/dwio/nimble/velox/Decoder.h"
-#include "velox/dwio/nimble/velox/RowRange.h"
+#include "velox/dwio/nimble/reader/Decoder.h"
 #include "velox/vector/BaseVector.h"
+#include "velox/vector/ComplexVector.h"
 
 namespace facebook::nimble {
 
@@ -38,6 +39,7 @@ class Type;
 
 /// Decodes selected rows from the streams of one projected Nimble type through
 /// FieldReader. Scalar leaves use Decoder's random-access EncodingView path.
+/// Requires an EncodingView for every present stream.
 class StreamReader {
  public:
   /// Binds the projected schema and initializes its reusable reader metadata.
@@ -51,22 +53,32 @@ class StreamReader {
   /// Decodes source ranges contiguously starting at `outputOffset`.
   /// Source ranges must be non-empty, ordered by `startRow`, and disjoint.
   /// `streams` must follow the projected schema's serialization traversal
-  /// order and contain exactly one encoded chunk per present stream.
+  /// order and contain one encoded chunk per present stream.
   /// String outputs retain backing buffers across calls so values written by
   /// earlier calls remain valid until the assembled output is released.
-  void read(
-      std::span<const std::string_view> streams,
-      std::span<const RowRange> ranges,
-      velox::vector_size_t outputOffset,
-      velox::VectorPtr& output);
-
-  /// Coroutine form of `read` with the same input and output contract. Inputs
-  /// and output must remain valid until the returned task completes.
+  /// Inputs and output must remain valid until the returned task completes.
   folly::coro::Task<void> co_read(
       std::span<const std::string_view> streams,
       std::span<const RowRange> ranges,
       velox::vector_size_t outputOffset,
       velox::VectorPtr& output);
+
+  /// Binds one stripe's already-loaded streams for sequential decoding.
+  /// The stream storage must outlive this binding.
+  void setStreams(std::span<const std::string_view> streams);
+
+  /// Decodes the next rows from the currently bound stripe asynchronously.
+  /// Reuses uniquely owned vectors. Supplied output must match the projected
+  /// schema; reset incompatible output before calling.
+  /// `output` must remain valid until the returned task completes.
+  folly::coro::Task<void> co_next(uint32_t numRows, velox::VectorPtr& output);
+
+  /// Advances within the currently bound stripe asynchronously without
+  /// materializing rows.
+  folly::coro::Task<void> co_skip(uint32_t numRows);
+
+  /// Releases the currently bound stripe.
+  void reset();
 
  private:
   // Initializes the schema-derived reader factory and stream offsets.

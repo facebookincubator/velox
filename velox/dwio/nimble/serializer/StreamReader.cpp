@@ -20,15 +20,13 @@
 #include <limits>
 #include <utility>
 
-#include <folly/coro/BlockingWait.h>
 #include "velox/common/Casts.h"
 #include "velox/dwio/common/TypeWithId.h"
-#include "velox/dwio/nimble/common/NimbleException.h"
+#include "velox/dwio/nimble/common/ChunkedStream.h"
+#include "velox/dwio/nimble/common/SchemaUtils.h"
 #include "velox/dwio/nimble/encodings/views/EncodingViewFactory.h"
+#include "velox/dwio/nimble/reader/FieldReader.h"
 #include "velox/dwio/nimble/serializer/EncodingViewDecoder.h"
-#include "velox/dwio/nimble/velox/ChunkedStream.h"
-#include "velox/dwio/nimble/velox/FieldReader.h"
-#include "velox/dwio/nimble/velox/SchemaUtils.h"
 
 namespace facebook::nimble {
 namespace {
@@ -159,14 +157,6 @@ void StreamReader::init() {
 
 StreamReader::~StreamReader() = default;
 
-void StreamReader::read(
-    std::span<const std::string_view> streams,
-    std::span<const RowRange> ranges,
-    velox::vector_size_t outputOffset,
-    velox::VectorPtr& output) {
-  folly::coro::blockingWait(co_read(streams, ranges, outputOffset, output));
-}
-
 folly::coro::Task<void> StreamReader::co_read(
     std::span<const std::string_view> streams,
     std::span<const RowRange> ranges,
@@ -183,16 +173,41 @@ folly::coro::Task<void> StreamReader::co_read(
   co_await co_decodeRows(ranges, outputRanges, output);
 }
 
+void StreamReader::setStreams(std::span<const std::string_view> streams) {
+  prepareRead(streams);
+}
+
+folly::coro::Task<void> StreamReader::co_next(
+    uint32_t numRows,
+    velox::VectorPtr& output) {
+  NIMBLE_CHECK_NOT_NULL(reader_, "No streams are bound");
+  co_await reader_->co_next(numRows, output);
+}
+
+folly::coro::Task<void> StreamReader::co_skip(uint32_t numRows) {
+  NIMBLE_CHECK_NOT_NULL(reader_, "No streams are bound");
+  co_await reader_->co_skip(numRows);
+}
+
+void StreamReader::reset() {
+  reader_.reset();
+  streamDecoders_.clear();
+  chunkedStreams_.clear();
+}
+
 void StreamReader::prepareRead(std::span<const std::string_view> streams) {
-  const auto makeDecoder = [this](std::string_view stream) {
+  const auto makeDecoder =
+      [this](std::string_view stream) -> std::unique_ptr<Decoder> {
     auto chunkedStream = std::make_unique<InMemoryChunkedStream>(
         *pool_, std::make_unique<StringViewStreamLoader>(stream));
     NIMBLE_CHECK(
         chunkedStream->hasNext(), "StreamReader requires a non-empty stream");
     const auto encoded = chunkedStream->nextChunk();
+    // TODO: Support multiple encoding chunks per stream.
     NIMBLE_CHECK(
         !chunkedStream->hasNext(),
-        "StreamReader requires exactly one encoded chunk per stream");
+        "StreamReader requires a single encoding chunk per stream");
+    // TODO: Support encodings without an EncodingView.
     auto decoder = std::make_unique<EncodingViewDecoder>(
         encoded, pool_, options_.bufferPool, [this](std::string_view encoding) {
           return createEncodingView(encoding, pool_, options_);
@@ -203,9 +218,7 @@ void StreamReader::prepareRead(std::span<const std::string_view> streams) {
 
   // TODO: Cache reader trees by stream-presence pattern if rebuild cost
   // becomes material.
-  reader_.reset();
-  streamDecoders_.clear();
-  chunkedStreams_.clear();
+  reset();
   streamDecoders_.reserve(streams.size());
   chunkedStreams_.reserve(streams.size());
   for (size_t i{0}; i < streams.size(); ++i) {

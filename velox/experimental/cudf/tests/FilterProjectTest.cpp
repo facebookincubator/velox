@@ -34,6 +34,7 @@
 
 #include <atomic>
 #include <limits>
+#include <string_view>
 
 using namespace facebook::velox;
 using namespace facebook::velox::exec;
@@ -1428,6 +1429,231 @@ TEST_F(CudfFilterProjectTest, dateTruncGroupByOrderBy) {
   assertPlanMatchesVelox(plan);
 }
 
+TEST_F(CudfFilterProjectTest, fromUnixtimeMatchesVelox) {
+  // Whole seconds, fractions that round down and up, the half-millisecond,
+  // the fraction that rolls into the next second, negatives, NaN and NULL,
+  // under every unit that holds a millisecond.
+  auto input = makeRowVector(
+      {"seconds"},
+      {makeNullableFlatVector<double>({
+          0.0,
+          1.0,
+          -1.0,
+          1736942461.123,
+          0.5,
+          0.0005,
+          0.9995,
+          -0.5,
+          -1.0005,
+          0.0001,
+          std::numeric_limits<double>::quiet_NaN(),
+          std::nullopt,
+      })});
+  auto& config = cudf_velox::CudfConfig::getInstance();
+  const auto originalUnit = config.timestampUnit;
+  SCOPE_EXIT {
+    config.timestampUnit = originalUnit;
+  };
+  for (const auto unit :
+       {cudf::type_id::TIMESTAMP_MILLISECONDS,
+        cudf::type_id::TIMESTAMP_MICROSECONDS,
+        cudf::type_id::TIMESTAMP_NANOSECONDS}) {
+    SCOPED_TRACE("unit=" + std::to_string(static_cast<int32_t>(unit)));
+    config.timestampUnit = unit;
+    assertProjectMatchesVelox(
+        {input},
+        {"from_unixtime(seconds) AS ts",
+         "to_unixtime(from_unixtime(seconds)) AS round_trip"});
+  }
+}
+
+TEST_F(CudfFilterProjectTest, fromUnixtimeBeyondRange) {
+  // The millisecond unit holds every CPU result. The microsecond and
+  // nanosecond units hold less: a row inside the range matches the CPU, and a
+  // row past it fails with a user error. The nanosecond rows are the last
+  // millisecond in range and the first past it; the microsecond rows sit a
+  // second on either side, since doubles there are 2 ms apart.
+  constexpr double kInfinity = std::numeric_limits<double>::infinity();
+  auto& config = cudf_velox::CudfConfig::getInstance();
+  const auto originalUnit = config.timestampUnit;
+  SCOPE_EXIT {
+    config.timestampUnit = originalUnit;
+  };
+  auto makeInput = [&](const std::vector<double>& seconds) {
+    return makeRowVector({"seconds"}, {makeFlatVector<double>(seconds)});
+  };
+  // A null row never reaches the kernel, whatever value its slot holds.
+  auto nullSlotPastRange = makeFlatVector<double>({1e300, 0.0});
+  nullSlotPastRange->setNull(0, true);
+  auto nullRowInput = makeRowVector({"seconds"}, {nullSlotPastRange});
+  auto assertOutOfRange = [&](double seconds, std::string_view unitName) {
+    SCOPED_TRACE(fmt::format("unit={} seconds={}", unitName, seconds));
+    auto input = makeRowVector(
+        {"seconds"},
+        {makeNullableFlatVector<double>({std::nullopt, 0.0, seconds})});
+    auto plan = PlanBuilder()
+                    .values({input})
+                    .project({"from_unixtime(seconds) AS ts"})
+                    .planNode();
+    VELOX_ASSERT_USER_THROW(
+        AssertQueryBuilder(plan).copyResults(pool()),
+        fmt::format(
+            "from_unixtime result is out of range for the cuDF timestamp "
+            "unit set by cudf.timestamp_unit: {}",
+            unitName));
+  };
+
+  config.timestampUnit = cudf::type_id::TIMESTAMP_MILLISECONDS;
+  assertProjectMatchesVelox(
+      {makeInput(
+           {kInfinity,
+            -kInfinity,
+            1e300,
+            -1e300,
+            1e10,
+            9'223'372'036'855.0,
+            -9'223'372'036'855.0}),
+       nullRowInput},
+      {"from_unixtime(seconds) AS ts"});
+
+  config.timestampUnit = cudf::type_id::TIMESTAMP_MICROSECONDS;
+  assertProjectMatchesVelox(
+      {makeInput({9'223'372'036'854.0, -9'223'372'036'854.0, 1e10}),
+       nullRowInput},
+      {"from_unixtime(seconds) AS ts"});
+  for (const double seconds :
+       {9'223'372'036'855.0,
+        -9'223'372'036'855.0,
+        1e300,
+        -1e300,
+        kInfinity,
+        -kInfinity}) {
+    assertOutOfRange(seconds, "us");
+  }
+
+  config.timestampUnit = cudf::type_id::TIMESTAMP_NANOSECONDS;
+  assertProjectMatchesVelox(
+      {makeInput({9'223'372'036.854, -9'223'372'036.854}), nullRowInput},
+      {"from_unixtime(seconds) AS ts"});
+  for (const double seconds :
+       {9'223'372'036.855,
+        -9'223'372'036.855,
+        1e10,
+        1e300,
+        -1e300,
+        kInfinity,
+        -kInfinity}) {
+    assertOutOfRange(seconds, "ns");
+  }
+}
+
+TEST_F(CudfFilterProjectTest, fromUnixtimeSecondsUnit) {
+  // The seconds unit keeps the floor of the seconds of the CPU's millisecond
+  // timestamp, so a fraction is dropped after the rounding and the rollover,
+  // and the pinned extremes are Timestamp::kMaxSeconds and kMinSeconds.
+  constexpr double kInfinity = std::numeric_limits<double>::infinity();
+  auto input = makeRowVector(
+      {"seconds"},
+      {makeNullableFlatVector<double>({
+          0.0,
+          1.0,
+          -1.0,
+          1.5,
+          -0.5,
+          0.9995,
+          std::numeric_limits<double>::quiet_NaN(),
+          kInfinity,
+          -kInfinity,
+          1e300,
+          std::nullopt,
+      })});
+  auto& config = cudf_velox::CudfConfig::getInstance();
+  const auto originalUnit = config.timestampUnit;
+  SCOPE_EXIT {
+    config.timestampUnit = originalUnit;
+  };
+  config.timestampUnit = cudf::type_id::TIMESTAMP_SECONDS;
+  auto expected = makeRowVector({makeNullableFlatVector<Timestamp>(
+      {Timestamp(0, 0),
+       Timestamp(1, 0),
+       Timestamp(-1, 0),
+       Timestamp(1, 0),
+       Timestamp(-1, 0),
+       Timestamp(1, 0),
+       Timestamp(0, 0),
+       Timestamp(Timestamp::kMaxSeconds, 0),
+       Timestamp(Timestamp::kMinSeconds, 0),
+       Timestamp(Timestamp::kMaxSeconds, 0),
+       std::nullopt},
+      TIMESTAMP())});
+  auto plan = PlanBuilder()
+                  .values({input})
+                  .project({"from_unixtime(seconds) AS ts"})
+                  .planNode();
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+TEST_F(CudfFilterProjectTest, toUnixtimeMatchesVelox) {
+  auto& config = cudf_velox::CudfConfig::getInstance();
+  const auto originalUnit = config.timestampUnit;
+  SCOPE_EXIT {
+    config.timestampUnit = originalUnit;
+  };
+
+  // Whole seconds, which every unit carries exactly.
+  auto wholeSeconds = makeRowVector(
+      {"event_ts"},
+      {makeNullableFlatVector<Timestamp>(
+          {Timestamp(-14400, 0),
+           Timestamp(-1, 0),
+           Timestamp(0, 0),
+           Timestamp(1609459200, 0),
+           std::nullopt},
+          TIMESTAMP())});
+  for (const auto unit :
+       {cudf::type_id::TIMESTAMP_SECONDS,
+        cudf::type_id::TIMESTAMP_MILLISECONDS,
+        cudf::type_id::TIMESTAMP_MICROSECONDS,
+        cudf::type_id::TIMESTAMP_NANOSECONDS}) {
+    SCOPED_TRACE("unit=" + std::to_string(static_cast<int32_t>(unit)));
+    config.timestampUnit = unit;
+    assertProjectMatchesVelox(
+        {wholeSeconds}, {"to_unixtime(event_ts) AS seconds"});
+  }
+
+  // The fixture timestamps are whole milliseconds, which the millisecond and
+  // finer units carry exactly.
+  auto vectors = makeTimestampExtractVectors();
+  for (const auto unit :
+       {cudf::type_id::TIMESTAMP_MILLISECONDS,
+        cudf::type_id::TIMESTAMP_MICROSECONDS,
+        cudf::type_id::TIMESTAMP_NANOSECONDS}) {
+    SCOPED_TRACE("unit=" + std::to_string(static_cast<int32_t>(unit)));
+    config.timestampUnit = unit;
+    assertProjectMatchesVelox(vectors, {"to_unixtime(event_ts) AS seconds"});
+  }
+}
+
+TEST_F(CudfFilterProjectTest, toUnixtimeNanosecondFractions) {
+  // Under the nanosecond unit a sub-millisecond fraction reaches the GPU.
+  auto& config = cudf_velox::CudfConfig::getInstance();
+  const auto originalUnit = config.timestampUnit;
+  SCOPE_EXIT {
+    config.timestampUnit = originalUnit;
+  };
+  config.timestampUnit = cudf::type_id::TIMESTAMP_NANOSECONDS;
+  auto input = makeRowVector(
+      {"ts"},
+      {makeNullableFlatVector<Timestamp>(
+          {Timestamp(1, 999'999'999),
+           Timestamp(-1, 1),
+           Timestamp(0, 1),
+           Timestamp(-1, 999'999'999),
+           std::nullopt},
+          TIMESTAMP())});
+  assertProjectMatchesVelox({input}, {"to_unixtime(ts) AS seconds"});
+}
+
 TEST_F(CudfFilterProjectTest, extractTimestampComponents) {
   auto vectors = makeTimestampExtractVectors();
   const std::vector<std::string> projections{
@@ -1611,8 +1837,9 @@ TEST_F(CudfFilterProjectTest, betweenLiteralAndColumnBounds) {
   functionEntry.create = [create = previousEntry.create, &betweenCreations](
                              const core::TypedExprPtr& expr,
                              const RowTypePtr& rowType,
-                             memory::MemoryPool* pool) {
-    auto evaluator = create(expr, rowType, pool);
+                             memory::MemoryPool* pool,
+                             const core::QueryConfig& config) {
+    auto evaluator = create(expr, rowType, pool, config);
     if (expr->isCallKind() &&
         expr->asUnchecked<core::CallTypedExpr>()->name() == "between") {
       ++betweenCreations;
@@ -2283,6 +2510,26 @@ TEST_F(CudfFilterProjectTest, cardinalityAndSplitFused) {
   AssertQueryBuilder(plan).assertResults({expected});
 }
 
+// array_join runs inside CudfFilterProject on an array column; CPU fallback
+// is off, so the GPU has to produce the rows.
+TEST_F(CudfFilterProjectTest, arrayJoin) {
+  using Elements = std::vector<std::optional<std::string>>;
+  auto input = makeRowVector({makeNullableArrayVector<std::string>({
+      Elements{"a", "b", "c"},
+      Elements{},
+      Elements{"", "d"},
+      Elements{"e", std::nullopt},
+      std::nullopt,
+  })});
+  auto plan = PlanBuilder()
+                  .values({input})
+                  .project({"array_join(c0, ', ') AS joined"})
+                  .planNode();
+  auto expected = makeRowVector({makeNullableFlatVector<std::string>(
+      {"a, b, c", "", ", d", "e", std::nullopt})});
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
 TEST_F(CudfFilterProjectTest, negativeSubstr) {
   auto input =
       makeFlatVector<std::string>({"hellobutlonghello", "secondstring"});
@@ -2699,6 +2946,48 @@ class CudfSimpleFilterProjectTest : public cudf_velox::CudfFunctionBaseTest {
     facebook::velox::test::assertEqualVectors(expected, actual);
   }
 };
+
+// Registers the Presto functions on top of the built-in ones for the suite
+// and clears them afterwards, so the registry of the next suite starts clean.
+class CudfPrestoFunctionTest : public CudfSimpleFilterProjectTest {
+ protected:
+  static void SetUpTestCase() {
+    CudfSimpleFilterProjectTest::SetUpTestCase();
+    cudf_velox::registerPrestoFunctions("");
+  }
+
+  static void TearDownTestCase() {
+    cudf_velox::unregisterFunctions();
+    CudfSimpleFilterProjectTest::TearDownTestCase();
+  }
+};
+
+// Every shape of an array row, joined by a plain, an empty and a multi-byte
+// separator, must match the CPU: a null element is skipped, an empty or
+// all-null array joins to an empty string and a null array stays null.
+TEST_F(CudfPrestoFunctionTest, arrayJoinMatchesCpu) {
+  using Elements = std::vector<std::optional<std::string>>;
+  auto rowType = ROW({{"c0", ARRAY(VARCHAR())}});
+  auto input = makeRowVector({makeNullableArrayVector<std::string>({
+      Elements{"a", "b", "c"},
+      Elements{},
+      Elements{"", "d"},
+      Elements{"e", std::nullopt},
+      Elements{std::nullopt, "f"},
+      Elements{std::nullopt},
+      std::nullopt,
+      Elements{"g"},
+      Elements{"h", "", std::nullopt, "i"},
+      Elements{"héllo", std::nullopt, std::nullopt, "longer than twelve bytes"},
+  })});
+  for (const auto* expr :
+       {"array_join(c0, ', ')",
+        "array_join(c0, '')",
+        "array_join(c0, ' — ')"}) {
+    SCOPED_TRACE(expr);
+    assertExpressionMatchesCpu(expr, input, rowType);
+  }
+}
 
 TEST_F(CudfSimpleFilterProjectTest, castToSmallInt) {
   auto castValue = evaluateOnce<int16_t, int32_t>("cast(c0 as smallint)", 12);

@@ -31,6 +31,7 @@
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/DecodedVector.h"
 #include "velox/vector/DictionaryVector.h"
+#include "velox/vector/FlatMapVector.h"
 #include "velox/vector/FlatVector.h"
 #include "velox/vector/LazyVector.h"
 #include "velox/vector/SelectivityVector.h"
@@ -856,11 +857,15 @@ class VectorTest : public testing::Test, public velox::test::VectorTestBase {
 
     std::vector<IndexRange> evenIndices;
     std::vector<IndexRange> oddIndices;
+    std::vector<vector_size_t> evenRows;
+    std::vector<vector_size_t> oddRows;
     for (vector_size_t i = 0; i < source->size(); ++i) {
       if (i % 2 == 0) {
         evenIndices.push_back(IndexRange{i, 1});
+        evenRows.push_back(i);
       } else {
         oddIndices.push_back(IndexRange{i, 1});
+        oddRows.push_back(i);
       }
     }
 
@@ -876,10 +881,19 @@ class VectorTest : public testing::Test, public velox::test::VectorTestBase {
       oddSizePointers[i] = &oddSizes[i];
     }
 
+    Scratch scratch;
     VectorStreamGroup::estimateSerializedSize(
-        source.get(), evenIndices, nullptr, evenSizePointers.data());
+        source.get(),
+        folly::Range(evenRows.data(), evenRows.size()),
+        nullptr,
+        evenSizePointers.data(),
+        scratch);
     VectorStreamGroup::estimateSerializedSize(
-        source.get(), oddIndices, nullptr, oddSizePointers.data());
+        source.get(),
+        folly::Range(oddRows.data(), oddRows.size()),
+        nullptr,
+        oddSizePointers.data(),
+        scratch);
     even.append(
         sourceRow, folly::Range(evenIndices.data(), evenIndices.size() / 2));
     even.append(
@@ -1431,6 +1445,15 @@ TEST_F(VectorTest, copyFromUnknown) {
         [](auto row) { return row % 7; },
         [](auto row) { return row; },
         [](auto row) { return row * 0.1; });
+  });
+
+  // Copy to FLAT_MAP.
+  test([&]() {
+    return FlatMapVector::fromMapVector(*makeMapVector<int64_t, double>(
+        size,
+        [](auto row) { return row % 7; },
+        [](auto index) { return index % 7; },
+        [](auto index) { return index * 0.1; }));
   });
 
   // Copy to ROW.

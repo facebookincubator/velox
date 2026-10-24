@@ -111,9 +111,9 @@ void NestedLoopJoinBuild::noMoreInput() {
   // The last Driver to hit NestedLoopJoinBuild::finish gathers the data from
   // all build Drivers and hands it over to the probe side. At this
   // point all build Drivers are continued and will free their
-  // state. allPeersFinished is true only for the last Driver of the
+  // state. allPeersArrived is true only for the last Driver of the
   // build pipeline.
-  if (!operatorCtx_->allPeersFinished(&future_, promises, peerOperators)) {
+  if (!operatorCtx_->allPeersArrived(&future_, promises, peerOperators)) {
     return;
   }
 

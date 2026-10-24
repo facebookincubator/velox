@@ -21,7 +21,7 @@
 
 #include "folly/Likely.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
-#include "velox/dwio/nimble/velox/SchemaReader.h"
+#include "velox/dwio/nimble/common/SchemaReader.h"
 
 namespace facebook::nimble {
 
@@ -195,14 +195,10 @@ void BatchedStreamDecoder::skip(uint32_t count) {
     return;
   }
 
-  // `skipStringBuffers_` is a persistent per-decoder buffer given to
-  // `ensureStreamData`. It must outlive the encoding created by skip,
-  // which may hold `string_view`s into it and be re-used by a
-  // subsequent `next()`.
   if (isInMapStream()) {
-    skipInMap(count, skipStringBuffers_);
+    skipInMap(count);
   } else {
-    skipEncoded(count, skipStringBuffers_);
+    skipEncoded(count);
   }
   currentRow_ += count;
 }
@@ -215,10 +211,10 @@ void BatchedStreamDecoder::clear() {
   streamSegments_.clear();
   presentInMapSegments_.clear();
   // Reset streamData_ (and hence its encoding_) BEFORE dropping
-  // skipStringBuffers_ — the encoding may hold string_views into buffers
+  // encodingStringBuffers_ — the encoding may hold string_views into buffers
   // stored there, and those views must not outlive the buffers.
   streamData_.reset();
-  skipStringBuffers_.clear();
+  encodingStringBuffers_.clear();
   streamSegmentIndex_ = 0;
   presentSegmentIndex_ = 0;
   currentRow_ = 0;
@@ -235,7 +231,7 @@ uint32_t BatchedStreamDecoder::remainingRows() {
   NIMBLE_CHECK(
       !streamSegments_[streamSegmentIndex_].legacyHeaderless,
       "remainingRows is not supported for legacy headerless streams");
-  auto& streamData = ensureStreamData(skipStringBuffers_);
+  auto& streamData = ensureStreamData();
   NIMBLE_CHECK(
       streamData.hasEncoding(),
       "remainingRows requires an encoded stream segment");
@@ -244,17 +240,8 @@ uint32_t BatchedStreamDecoder::remainingRows() {
   return rowCount;
 }
 
-serde::StreamData& BatchedStreamDecoder::ensureStreamData(
-    std::vector<velox::BufferPtr>& stringBuffers) {
+serde::StreamData& BatchedStreamDecoder::ensureStreamData() {
   if (streamData_.has_value()) {
-    if (!skipStringBuffers_.empty() && &stringBuffers != &skipStringBuffers_) {
-      stringBuffers.insert(
-          stringBuffers.end(),
-          std::make_move_iterator(skipStringBuffers_.begin()),
-          std::make_move_iterator(skipStringBuffers_.end()));
-      skipStringBuffers_.clear();
-    }
-    streamData_->setStringBuffers(&stringBuffers);
     return *streamData_;
   }
 
@@ -263,7 +250,7 @@ serde::StreamData& BatchedStreamDecoder::ensureStreamData(
   streamData_.emplace(
       segment.data,
       scalarKind_,
-      stringBuffers,
+      encodingStringBuffers_,
       pool_,
       serde::StreamData::Options{
           .legacyHeaderless = segment.legacyHeaderless,
@@ -276,7 +263,17 @@ serde::StreamData& BatchedStreamDecoder::ensureStreamData(
 
 void BatchedStreamDecoder::advanceSegment() {
   streamData_.reset();
+  // TODO: Release vector capacity if deep encodings bloat reserved memory.
+  encodingStringBuffers_.clear();
   ++streamSegmentIndex_;
+}
+
+void BatchedStreamDecoder::attachEncodingBuffers(
+    std::vector<velox::BufferPtr>& stringBuffers) {
+  stringBuffers.insert(
+      stringBuffers.end(),
+      encodingStringBuffers_.begin(),
+      encodingStringBuffers_.end());
 }
 
 uint32_t BatchedStreamDecoder::fillInMapGap(
@@ -346,14 +343,13 @@ serde::StreamData::DecodeResult BatchedStreamDecoder::readSegment(
     uint32_t offset,
     uint32_t count,
     const std::function<void*()>& getOutputNulls,
-    const velox::bits::Bitmap* scatterOutputBitmap,
-    std::vector<velox::BufferPtr>& stringBuffers) {
+    const velox::bits::Bitmap* scatterOutputBitmap) {
   NIMBLE_CHECK(
       scatterOutputBitmap == nullptr || !isInMapStream(),
       "scatterOutputBitmap not used for FlatMap in-map streams");
 
   NIMBLE_CHECK_LT(streamSegmentIndex_, streamSegments_.size());
-  auto& streamData = ensureStreamData(stringBuffers);
+  auto& streamData = ensureStreamData();
   if (!streamData.hasEncoding()) {
     NIMBLE_CHECK_NULL(
         scatterOutputBitmap,
@@ -366,14 +362,12 @@ serde::StreamData::DecodeResult BatchedStreamDecoder::readSegment(
       output, offset, count, width, getOutputNulls, scatterOutputBitmap);
 }
 
-uint32_t BatchedStreamDecoder::skipSegment(
-    uint32_t numRows,
-    std::vector<velox::BufferPtr>& stringBuffers) {
+uint32_t BatchedStreamDecoder::skipSegment(uint32_t numRows) {
   NIMBLE_CHECK_LT(
       streamSegmentIndex_,
       streamSegments_.size(),
       "BatchedStreamDecoder::skip past end of decoder queue");
-  auto& streamData = ensureStreamData(stringBuffers);
+  auto& streamData = ensureStreamData();
   NIMBLE_CHECK(
       streamData.hasEncoding(),
       "BatchedStreamDecoder::skip requires encoded segments");
@@ -387,18 +381,14 @@ uint32_t BatchedStreamDecoder::skipSegment(
   return toSkip;
 }
 
-void BatchedStreamDecoder::skipEncoded(
-    uint32_t numRows,
-    std::vector<velox::BufferPtr>& stringBuffers) {
+void BatchedStreamDecoder::skipEncoded(uint32_t numRows) {
   uint32_t skippedRows = 0;
   while (skippedRows < numRows) {
-    skippedRows += skipSegment(numRows - skippedRows, stringBuffers);
+    skippedRows += skipSegment(numRows - skippedRows);
   }
 }
 
-void BatchedStreamDecoder::skipInMap(
-    uint32_t numRows,
-    std::vector<velox::BufferPtr>& stringBuffers) {
+void BatchedStreamDecoder::skipInMap(uint32_t numRows) {
   const uint32_t targetRow = currentRow_ + numRows;
   uint32_t skippedRows = 0;
   while (skippedRows < numRows) {
@@ -418,7 +408,7 @@ void BatchedStreamDecoder::skipInMap(
       skippedRows += gapEndRow - currentRow;
       continue;
     }
-    skippedRows += skipSegment(numRows - skippedRows, stringBuffers);
+    skippedRows += skipSegment(numRows - skippedRows);
   }
 }
 
@@ -467,8 +457,7 @@ uint32_t BatchedStreamDecoder::denseRead(
         rowsRead,
         rowsToRead,
         getOutputNulls,
-        /*scatterOutputBitmap=*/nullptr,
-        stringBuffers);
+        /*scatterOutputBitmap=*/nullptr);
     NIMBLE_CHECK_GT(
         result.numOutputRows, 0, "Current segment returned no rows");
     NIMBLE_CHECK_LE(
@@ -501,6 +490,7 @@ uint32_t BatchedStreamDecoder::denseRead(
     rowsRead += result.numOutputRows;
     nonNullCount += result.nonNullOutputRows;
     if (FOLLY_LIKELY(result.segmentExhausted)) {
+      attachEncodingBuffers(stringBuffers);
       advanceSegment();
     }
   }
@@ -513,6 +503,9 @@ uint32_t BatchedStreamDecoder::denseRead(
       isInMapStream_,
       streamSegments_.size(),
       streamSegmentIndex_);
+  if (streamData_.has_value()) {
+    attachEncodingBuffers(stringBuffers);
+  }
   return nonNullCount;
 }
 
@@ -552,8 +545,7 @@ uint32_t BatchedStreamDecoder::inMapRead(
         rowsRead,
         rowsToRead,
         /*getOutputNulls=*/nullptr,
-        /*scatterOutputBitmap=*/nullptr,
-        stringBuffers);
+        /*scatterOutputBitmap=*/nullptr);
     NIMBLE_CHECK_GT(
         result.numOutputRows, 0, "Current in-map segment returned no rows");
     NIMBLE_CHECK_EQ(
@@ -563,6 +555,7 @@ uint32_t BatchedStreamDecoder::inMapRead(
     rowsRead += result.numOutputRows;
     nonNullCount += result.numOutputRows;
     if (FOLLY_LIKELY(result.segmentExhausted)) {
+      attachEncodingBuffers(stringBuffers);
       advanceSegment();
     }
   }
@@ -573,6 +566,9 @@ uint32_t BatchedStreamDecoder::inMapRead(
       "Incomplete in-map read: segments={} streamSegmentIndex={}",
       streamSegments_.size(),
       streamSegmentIndex_);
+  if (streamData_.has_value()) {
+    attachEncodingBuffers(stringBuffers);
+  }
   return nonNullCount;
 }
 
@@ -602,7 +598,7 @@ uint32_t BatchedStreamDecoder::scatteredRead(
   bool hasNulls = false;
 
   while (rowsRead < count && streamSegmentIndex_ < streamSegments_.size()) {
-    auto& streamData = ensureStreamData(stringBuffers);
+    auto& streamData = ensureStreamData();
     NIMBLE_CHECK(
         streamData.hasEncoding(),
         "Scattered reads require encoded stream data");
@@ -618,12 +614,7 @@ uint32_t BatchedStreamDecoder::scatteredRead(
     velox::bits::Bitmap segmentScatterBitmap{
         scatterOutputBitmap->bits(), endOffset};
     const auto result = readSegment(
-        output,
-        offset,
-        rowsToRead,
-        getOutputNulls,
-        &segmentScatterBitmap,
-        stringBuffers);
+        output, offset, rowsToRead, getOutputNulls, &segmentScatterBitmap);
     NIMBLE_CHECK_EQ(
         result.numOutputRows, rowsToRead, "Incomplete scattered segment read");
 
@@ -643,6 +634,7 @@ uint32_t BatchedStreamDecoder::scatteredRead(
     nonNullCount += result.nonNullOutputRows;
     offset = endOffset;
     if (FOLLY_LIKELY(result.segmentExhausted)) {
+      attachEncodingBuffers(stringBuffers);
       advanceSegment();
     }
   }
@@ -654,6 +646,9 @@ uint32_t BatchedStreamDecoder::scatteredRead(
       toString(typeKind_),
       streamSegments_.size(),
       streamSegmentIndex_);
+  if (streamData_.has_value()) {
+    attachEncodingBuffers(stringBuffers);
+  }
   return nonNullCount;
 }
 

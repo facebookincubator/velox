@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/experimental/ucx-exchange/UcxExchange.h"
+#include "velox/common/Casts.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
 using facebook::velox::exec::Operator;
@@ -46,7 +47,12 @@ UcxExchange::UcxExchange(
           driverCtx->queryConfig().preferredOutputBatchBytes()},
       processSplits_{driverCtx->driverId == 0},
       pipelineId_{driverCtx->pipelineId},
-      driverId_{driverCtx->driverId} {
+      driverId_{driverCtx->driverId},
+      planNodeBoundary_{
+          planNode->is<core::MergeExchangeNode>()
+              ? core::PlanNode::Boundary::kInput
+              : core::PlanNode::Boundary::kBoth},
+      forwardsSplits_{planNode->is<core::MergeExchangeNode>()} {
   VELOX_CHECK_NOT_NULL(
       ucxExchangeClient,
       "UCX exchange client is null, plan node: {}",
@@ -56,14 +62,6 @@ UcxExchange::UcxExchange(
 
 UcxExchange::~UcxExchange() {
   close();
-}
-
-void UcxExchange::addRemoteTaskIds(std::vector<std::string>& remoteTaskIds) {
-  std::shuffle(std::begin(remoteTaskIds), std::end(remoteTaskIds), rng_);
-  for (const std::string& remoteTaskId : remoteTaskIds) {
-    exchangeClient_->addRemoteTaskId(remoteTaskId);
-  }
-  stats_.wlock()->numSplits += remoteTaskIds.size();
 }
 
 void UcxExchange::getSplits(ContinueFuture* future) {
@@ -80,7 +78,6 @@ void UcxExchange::getSplits(ContinueFuture* future) {
             << " getSplits: No more splits for task: " << taskId();
     return;
   }
-  std::vector<std::string> remoteTaskIds;
   // loop until we get an end marker.
   for (;;) {
     exec::Split split;
@@ -93,30 +90,26 @@ void UcxExchange::getSplits(ContinueFuture* future) {
         split,
         *future);
     if (reason != BlockingReason::kNotBlocked) {
-      // we are blocked. Add the splits collected so far (if any) and return.
-      addRemoteTaskIds(remoteTaskIds);
       return;
     }
 
     if (split.hasConnectorSplit()) {
-      auto remoteSplit =
-          std::dynamic_pointer_cast<RemoteConnectorSplit>(split.connectorSplit);
-      VELOX_CHECK_NOT_NULL(remoteSplit, "Wrong type of split");
-      remoteTaskIds.push_back(remoteSplit->taskId);
+      if (forwardsSplits_) {
+        exchangeClient_->addRemoteTaskId(
+            checkedPointerCast<RemoteConnectorSplit>(split.connectorSplit)
+                ->taskId);
+      }
+      ++stats_.wlock()->numSplits;
       // check for more splits.
       continue;
     }
 
     // not blocked but also no connector split.
     // we've reached the end.
-    addRemoteTaskIds(remoteTaskIds);
-    exchangeClient_->noMoreRemoteTasks();
-    noMoreSplits_ = true;
-    if (atEnd_) {
-      operatorCtx_->task()->multipleSplitsFinished(
-          false, stats_.rlock()->numSplits, 0);
-      recordExchangeClientStats();
+    if (forwardsSplits_) {
+      exchangeClient_->noMoreRemoteTasks();
     }
+    noMoreSplits_ = true;
     return;
   }
 }
@@ -136,6 +129,13 @@ BlockingReason UcxExchange::isBlocked(ContinueFuture* future) {
   currentData_ = exchangeClient_->next(driverId_, &atEnd_, &dataFuture);
   if (currentData_ || atEnd_) {
     // got some data or reached the end.
+    if (atEnd_ && !noMoreSplits_) {
+      // The task stores 'no more splits' before it tells the client, so the
+      // remaining splits are in the store. When the task terminates, the client
+      // can report the end first; the splits are then not reported finished.
+      splitFuture_ = ContinueFuture::makeEmpty();
+      getSplits(&splitFuture_);
+    }
     if (atEnd_ && noMoreSplits_) {
       const auto numSplits = stats_.rlock()->numSplits;
       operatorCtx_->task()->multipleSplitsFinished(false, numSplits, 0);

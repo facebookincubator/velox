@@ -17,6 +17,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cmath>
 #include <limits>
 #include <numeric>
@@ -43,21 +44,21 @@
 #include "velox/dwio/common/Statistics.h"
 #include "velox/dwio/nimble/common/Buffer.h"
 #include "velox/dwio/nimble/common/ChunkHeader.h"
+#include "velox/dwio/nimble/common/ChunkedStream.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/common/FixedBitArray.h"
+#include "velox/dwio/nimble/common/SchemaSerialization.h"
 #include "velox/dwio/nimble/common/tests/NimbleFileWriter.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/common/EncodingLayout.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
 #include "velox/dwio/nimble/encodings/selection/tests/RandomEncodingSelectionPolicy.h"
+#include "velox/dwio/nimble/reader/BatchReader.h"
+#include "velox/dwio/nimble/stats/ColumnStatistics.h"
+#include "velox/dwio/nimble/stats/VectorizedStatistics.h"
 #include "velox/dwio/nimble/tablet/TabletReader.h"
 #include "velox/dwio/nimble/tablet/tests/TabletTestUtils.h"
-#include "velox/dwio/nimble/velox/BatchReader.h"
-#include "velox/dwio/nimble/velox/ChunkedStream.h"
-#include "velox/dwio/nimble/velox/SchemaSerialization.h"
-#include "velox/dwio/nimble/velox/stats/ColumnStatistics.h"
-#include "velox/dwio/nimble/velox/stats/VectorizedStatistics.h"
 #include "velox/dwio/nimble/writer/EncodingSelectionPolicyFactory.h"
 #include "velox/dwio/nimble/writer/FlushPolicy.h"
 #include "velox/dwio/nimble/writer/WriterOptions.h"
@@ -77,7 +78,7 @@ using ::facebook::velox::fuzzer::FuzzerGenerator;
 // phase and coverage gate from adding them back. This is not a global
 // unsupported-encoding list.
 constexpr auto kExcludedFuzzerCandidateEncodings =
-    std::to_array({EncodingType::Huffman, EncodingType::SubIntSplit});
+    std::to_array({EncodingType::SubIntSplit});
 
 // Scalar types the Nimble writer round-trips with type identity.
 // FieldWriter::create dispatches on the physical TypeKind, so DATE, TIME,
@@ -244,13 +245,15 @@ EncodingSelectionPolicyCreator gateFloatingPointStreams(
 }
 
 CompressionType randomCompressionType(FuzzerGenerator& rng) {
-  static constexpr std::array<CompressionType, 5> kCompressionTypes = {
+  static constexpr auto kCompressionTypes = std::to_array({
       CompressionType::Uncompressed,
       CompressionType::Zstd,
+#ifndef DISABLE_META_INTERNAL_COMPRESSOR
       CompressionType::MetaInternal,
+#endif
       CompressionType::Lz4,
       CompressionType::OpenZL,
-  };
+  });
   return kCompressionTypes[folly::Random::rand32(
       kCompressionTypes.size(), rng)];
 }
@@ -287,7 +290,6 @@ void randomizeWriterOptions(WriterOptions& options, FuzzerGenerator& rng) {
   options.chunkStatsMinAvgChunks = 0;
   options.enableStreamDeduplication = folly::Random::oneIn(2, rng);
   options.fixedBitWidthUseExactBits = folly::Random::oneIn(2, rng);
-  options.allowNestedAlpSelection = folly::Random::oneIn(2, rng);
   // Ratios above 1.0 keep FSST even when it does not shrink the data, so the
   // encoding is actually exercised instead of rejected on size.
   options.fsstCompressionTargetRatio =
@@ -666,6 +668,25 @@ void makeDecimalLike(velox::FlatVector<T>* vector, FuzzerGenerator& rng) {
   }
 }
 
+// Exercises ALPRD's dictionary codes and exceptions while preserving NULLs
+// and a tail of the original special floating-point values.
+template <typename T>
+void makeSharedPrefixes(velox::FlatVector<T>* vector, FuzzerGenerator& rng) {
+  using PhysicalType = typename TypeTraits<T>::physicalType;
+  constexpr auto kShift = sizeof(T) * 8 - 16;
+  constexpr auto kMask = (PhysicalType{1} << kShift) - 1;
+  for (velox::vector_size_t i = 0; i < vector->size() * 9 / 10; ++i) {
+    if (vector->isNullAt(i)) {
+      continue;
+    }
+    const PhysicalType high = folly::Random::oneIn(16, rng)
+        ? folly::Random::rand32(65'536, rng)
+        : (folly::Random::oneIn(2, rng) ? 0x3f00 : 0xbf00);
+    const auto bits = (high << kShift) | (folly::Random::rand64(rng) & kMask);
+    vector->set(i, std::bit_cast<T>(static_cast<PhysicalType>(bits)));
+  }
+}
+
 // Rewrites a string column to values built from a small token alphabet, so
 // substrings repeat across rows. FsstEncoding::estimateSize cannot decline --
 // it returns a plain size -- so selection is never the obstacle. The obstacle
@@ -829,6 +850,7 @@ enum class ColumnShape {
   kConstant,
   kNonDecreasing,
   kCappingJson,
+  kSharedPrefixes,
 };
 
 // Draws one shape per top-level column. Drawn once per iteration rather than
@@ -851,6 +873,11 @@ std::vector<ColumnShape> drawColumnShapes(
         schema->childAt(i)->kind() == velox::TypeKind::VARCHAR &&
         folly::Random::oneIn(2, rng)) {
       shapes.push_back(ColumnShape::kCappingJson);
+    } else if (
+        (schema->childAt(i)->kind() == velox::TypeKind::REAL ||
+         schema->childAt(i)->kind() == velox::TypeKind::DOUBLE) &&
+        folly::Random::oneIn(2, rng)) {
+      shapes.push_back(ColumnShape::kSharedPrefixes);
     } else {
       shapes.push_back(ColumnShape::kDefault);
     }
@@ -932,6 +959,8 @@ void applyEncodingFriendlyShapes(
       case velox::TypeKind::REAL:
         if (collapseToConstant) {
           makeConstant(child->asFlatVector<float>());
+        } else if (shapes.at(childIndex) == ColumnShape::kSharedPrefixes) {
+          makeSharedPrefixes(child->asFlatVector<float>(), rng);
         } else {
           makeDecimalLike(child->asFlatVector<float>(), rng);
         }
@@ -939,6 +968,8 @@ void applyEncodingFriendlyShapes(
       case velox::TypeKind::DOUBLE:
         if (collapseToConstant) {
           makeConstant(child->asFlatVector<double>());
+        } else if (shapes.at(childIndex) == ColumnShape::kSharedPrefixes) {
+          makeSharedPrefixes(child->asFlatVector<double>(), rng);
         } else {
           makeDecimalLike(child->asFlatVector<double>(), rng);
         }
@@ -1116,7 +1147,8 @@ bool isTypeCompatible(EncodingType encodingType, DataType dataType) {
 
   // Gated on isFloatingPointType<T>() / isIntegralType<T>(), which test the
   // logical type, so these two split cleanly.
-  if (encodingType == EncodingType::ALP) {
+  if (encodingType == EncodingType::ALP ||
+      encodingType == EncodingType::ALPRD) {
     return isFloatingPointDataType(dataType);
   }
   if (encodingType == EncodingType::DeltaBlock ||
@@ -1201,12 +1233,14 @@ std::string NimbleWriterFuzzer::writeFile(
   // regime identical.
   const bool chunkStatsEnabled = writerOptions.enableChunkStats;
   const auto maxChunkStringStatSize = writerOptions.maxChunkStringStatSize;
+  const VectorizedFileStats::Options statsOptions{
+      .stringStatsLengthLimit = writerOptions.vectorizedStatsStringLengthLimit};
   auto file = test::createNimbleFile(
       rootPool_, batches, std::move(writerOptions), /*flushAfterWrite=*/false);
   verifyChunkStatsMetadata(file, chunkStatsEnabled, maxChunkStringStatSize);
   auto schema =
       std::dynamic_pointer_cast<const velox::RowType>(batches[0]->type());
-  verifyColumnStatistics(file, schema, batches);
+  verifyColumnStatistics(file, schema, batches, statsOptions);
   verifySchemaAndStripeGroupConsistency(file, schema);
   return file;
 }
@@ -1617,7 +1651,8 @@ void accumulateNodeStats(
 void NimbleWriterFuzzer::verifyColumnStatistics(
     const std::string& file,
     const RowTypePtr& schema,
-    const std::vector<VectorPtr>& batches) {
+    const std::vector<VectorPtr>& batches,
+    const VectorizedFileStats::Options& statsOptions) {
   auto readFile = std::make_shared<velox::InMemoryReadFile>(file);
   auto tablet = TabletReader::create(
       readFile, leafPool_.get(), test::makeTestTabletOptions(leafPool_.get()));
@@ -1728,20 +1763,43 @@ void NimbleWriterFuzzer::verifyColumnStatistics(
     auto* expectedStr =
         dynamic_cast<velox::dwio::common::StringColumnStatistics*>(
             expectedCommon.get());
-    if (actualStr != nullptr && expectedStr != nullptr &&
-        expectedStr->getMinimum().has_value()) {
-      NIMBLE_CHECK_EQ(
-          *actualStr->getMinimum(),
-          *expectedStr->getMinimum(),
-          "Node {} string min mismatch (seed {}).",
-          node,
-          options_.seed);
-      NIMBLE_CHECK_EQ(
-          *actualStr->getMaximum(),
-          *expectedStr->getMaximum(),
-          "Node {} string max mismatch (seed {}).",
-          node,
-          options_.seed);
+    if (actualStr != nullptr && expectedStr != nullptr) {
+      const auto applyLengthLimit =
+          [&](const std::optional<std::string>& value) {
+            return value.has_value() &&
+                    value->size() <= statsOptions.stringStatsLengthLimit
+                ? value
+                : std::nullopt;
+          };
+      const auto checkBound =
+          [&](std::string_view bound,
+              const std::optional<std::string>& actualValue,
+              const std::optional<std::string>& expectedValue) {
+            NIMBLE_CHECK_EQ(
+                actualValue.has_value(),
+                expectedValue.has_value(),
+                "Node {} string {} presence mismatch (seed {}).",
+                node,
+                bound,
+                options_.seed);
+            if (expectedValue.has_value()) {
+              NIMBLE_CHECK_EQ(
+                  *actualValue,
+                  *expectedValue,
+                  "Node {} string {} mismatch (seed {}).",
+                  node,
+                  bound,
+                  options_.seed);
+            }
+          };
+      checkBound(
+          "min",
+          actualStr->getMinimum(),
+          applyLengthLimit(expectedStr->getMinimum()));
+      checkBound(
+          "max",
+          actualStr->getMaximum(),
+          applyLengthLimit(expectedStr->getMaximum()));
     }
   }
 }
@@ -2268,8 +2326,8 @@ void NimbleWriterFuzzer::run() {
   velox::VectorFuzzer vectorFuzzer(
       fuzzerOptions, leafPool_.get(), folly::Random::rand32(rng));
 
-  // Two thirds of iterations bias the scalar columns toward the shapes ALP and
-  // FSST are built for; the rest stay purely random so the generic encodings
+  // Two thirds of iterations bias scalar columns toward ALP, ALPRD and FSST
+  // shapes; the rest stay purely random so the generic encodings
   // keep seeing adversarial input.
   const bool shapeForEncodings = !folly::Random::oneIn(3, rng);
   const auto columnShapes = drawColumnShapes(schema, rng);

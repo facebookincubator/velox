@@ -23,6 +23,7 @@
 #include "velox/dwio/nimble/common/Vector.h"
 #include "velox/dwio/nimble/tablet/Chunk.h"
 #include "velox/dwio/nimble/tablet/ChunkStatsWriter.h"
+#include "velox/dwio/nimble/tablet/FileProperties.h"
 #include "velox/dwio/nimble/tablet/FooterGenerated.h"
 #include "velox/dwio/nimble/tablet/MetadataBuffer.h"
 #include "velox/dwio/nimble/tablet/StripeGroup.h"
@@ -68,10 +69,14 @@ class TabletWriter {
     uint32_t metadataFlushThreshold{kMetadataFlushThreshold};
     uint32_t metadataCompressionThreshold{kMetadataCompressionThreshold};
     ChecksumType checksumType{ChecksumType::XXH3_64};
-    // When true, records a checksum of each stream's on-disk bytes in the
-    // stripe group, letting readers verify an individual stream without
-    // reading the whole file. Independent of checksumType's whole-file
-    // checksum, which is always written.
+    // When true, follows each non-empty stream's bytes with a trailer holding
+    // their checksum, letting readers verify an individual stream without
+    // reading the whole file. The trailer is outside the stream's recorded
+    // size, so readers that do not verify ignore it. Readers find trailers only
+    // through the file's properties, so the caller must record
+    // streamTrailerLayout() there, as nimble::Writer does. Independent of
+    // checksumType's whole-file checksum, which is always written and covers
+    // the trailers.
     bool streamChecksumsEnabled{false};
     bool streamDeduplicationEnabled{true};
     // When true, chunk statistics are built for all streams.
@@ -92,9 +97,13 @@ class TabletWriter {
     // Candidate encodings (with read-cost weights) considered when encoding
     // per-stripe-group offsets/sizes in the encoded layouts. Only O(1)
     // point-access encodings are valid. Empty (default) lets the writer pick
-    // its own candidate set (Constant, Trivial, FixedBitWidth).
+    // its own candidate set (Constant, Trivial, FixedBitWidth, Dictionary).
     std::vector<std::pair<EncodingType, float>>
         stripeGroupEncodingLayoutReadFactors{};
+    /// When true, identical kStreamMajor offsets or sizes arrays share one
+    /// encoding in the same stripe group.
+    /// Enabling this can increase temporary writer memory.
+    bool stripeGroupMetadataDeduplicationEnabled{false};
     // Callback invoked at stripe group flush boundaries. Used by index
     // writers (e.g., ClusterIndexWriter) to write partition data aligned
     // with stripe groups.
@@ -143,9 +152,12 @@ class TabletWriter {
   /// separate sections.
   MetadataSection createMetadataSection(std::string_view metadata);
 
-  /// Returns whether per-stream checksums are recorded in stripe groups.
-  bool streamChecksumsEnabled() const {
-    return options_.streamChecksumsEnabled;
+  /// Returns the layout of the trailer written after each non-empty stream,
+  /// for the caller to record in the file's properties; empty when stream
+  /// checksums are disabled.
+  StreamTrailerLayout streamTrailerLayout() const {
+    return streamChecksum_ != nullptr ? StreamTrailerLayout::defaultLayout()
+                                      : StreamTrailerLayout{};
   }
 
   /// The number of bytes written so far.
@@ -225,6 +237,11 @@ class TabletWriter {
   // reassembled stream in one call, which yields the same result.
   uint32_t writeStreamWithChecksum(const Stream& stream);
 
+  // Writes the trailer that follows a non-empty stream's bytes: the stream's
+  // checksum alone, which is all streamTrailerLayout() declares. Does nothing
+  // when stream checksums are disabled.
+  void writeStreamTrailer(uint32_t checksum);
+
   // Starts chunk stats writing for a new stripe.
   void finishStripeChunkStats(size_t streamCount);
 
@@ -265,9 +282,6 @@ class TabletWriter {
   // Accumulated stream sizes within each stripe. Same behavior as
   // streamOffsets_.
   std::vector<std::vector<uint32_t>> streamSizes_;
-  // Accumulated per-stream checksums. Same behavior as streamOffsets_. Empty
-  // when stream checksums are disabled.
-  std::vector<std::vector<uint32_t>> streamChecksums_;
 
   // Current stripe group index.
   uint32_t stripeGroupIndex_{0};

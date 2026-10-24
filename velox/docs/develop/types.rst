@@ -292,7 +292,7 @@ format and is what the Presto coordinator interprets; it is neither WKT nor WKB.
 
 An Iceberg v3 ``geometry`` column is stored on disk as a plain ``binary`` column holding standard ISO WKB. The Iceberg
 connector, and only the Iceberg connector, re-encodes those bytes into Velox's internal encoding while reading a split
-(see ``velox/connectors/hive/iceberg/IcebergGeometryConverter.h``). The format-generic Parquet, DWRF and ORC readers
+(see ``velox/connectors/hive/iceberg/IcebergGeospatialConverter.h``). The format-generic Parquet, DWRF and ORC readers
 never inspect GEOMETRY: they read the column by its physical file type. An unannotated ``binary`` column, a non-Iceberg
 table, or a file written from an existing Velox GEOMETRY vector is therefore never reinterpreted as WKB.
 
@@ -311,6 +311,14 @@ converts internal encoding to WKB.
 SPHERICALGEOGRAPHY represents a geometry on a spherical model of the Earth. It is internally represented the same
 way as GEOMETRY, but only certain functions are supported.  Moreover, these functions will return values in meters
 as opposed to the units of the coordinate space.
+
+An Iceberg v3 ``geography`` column is read as SPHERICALGEOGRAPHY. It holds the same ISO WKB as a ``geometry`` column
+and takes the same re-encoding, with the same scope: two-dimensional, Parquet only, ``VELOX_ENABLE_GEO=ON``, and
+read-only. Iceberg geography coordinates are WGS84 longitude/latitude, so each value is also held to the checks of
+Presto's ``to_spherical_geography``: every longitude must lie in [-180, 180] and every latitude in [-90, 90], and a
+NaN or infinite ordinate is rejected. Empty values are accepted. The connector does not check the column's CRS or
+edge interpolation algorithm; the engine that maps the Iceberg schema to SPHERICALGEOGRAPHY is expected to accept
+only WGS84 with spherical edges, the semantics SPHERICALGEOGRAPHY models.
 
 Spark Types
 ~~~~~~~~~~~~
@@ -470,9 +478,10 @@ in two places:
 * ``LongDecimalType::commonSuperType`` inside ``leastCommonSuperType``
   computes the common ``(p, s)`` for plan-level operations (UNION, CASE
   result type, etc.).
-* ``SignatureBinder``'s integer-parameter binding handles function
-  signatures of the form ``DECIMAL(P, S)`` by binding ``P`` and ``S`` as
-  integer variables from the actual argument types.
+* ``SignatureBinder`` pre-binds ``P`` and ``S`` in function signatures of
+  the form ``DECIMAL(P, S)`` from actual DECIMAL arguments or from a scalar's
+  rule-defined DECIMAL target. Arguments that share literal variables widen
+  those variables to a common DECIMAL before the binder records casts.
 
 *DECIMAL widening rule.* ``DECIMAL(p1, s1)`` is coercible to
 ``DECIMAL(p2, s2)`` iff:
@@ -548,12 +557,14 @@ BIGINT           DECIMAL(19, 0), REAL, DOUBLE
 REAL             DOUBLE
 DECIMAL          REAL, DOUBLE
 DATE             TIMESTAMP
-UNKNOWN          TINYINT, BOOLEAN, SMALLINT, INTEGER, BIGINT, REAL, DOUBLE,
-                 VARCHAR, VARBINARY
+UNKNOWN          TINYINT, BOOLEAN, SMALLINT, INTEGER, BIGINT, DECIMAL(1, 0),
+                 REAL, DOUBLE, VARCHAR, VARBINARY
 ==============   ==========================================================
 
 Differences from Velox's defaults:
 
+* ``UNKNOWN -> DECIMAL(1, 0)`` is added so an unknown literal can bind to a
+  parameterized DECIMAL signature.
 * ``BIGINT -> REAL`` is added. The BIGINT row becomes
   ``DECIMAL(19, 0), REAL, DOUBLE``, mirroring the INTEGER row's
   ordering. This makes ``divide(real, bigint)`` resolve to
