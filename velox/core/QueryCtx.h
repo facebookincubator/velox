@@ -457,6 +457,10 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
     });
   }
 
+  /// Copies every per-query registry override from 'source' into this
+  /// QueryCtx, replacing entries with the same key.
+  void copyRegistriesFrom(const QueryCtx& source);
+
   void testingOverrideMemoryPool(std::shared_ptr<memory::MemoryPool> pool) {
     pool_ = std::move(pool);
   }
