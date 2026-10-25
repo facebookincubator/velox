@@ -410,11 +410,24 @@ class KernelOperation {
     return alwaysSingleBlock_;
   }
 
-  /// Bytes of dynamic shared memory this op needs, i.e. the max over its
-  /// nodes' Metadata::dynamicSharedMemory. A launch passes the max over its
-  /// ops as the kernel's dynamic shared memory size.
-  int64_t dynamicSharedBytes() const {
-    return dynamicSharedBytes_;
+  /// Bytes of dynamic shared memory this op needs when it runs at
+  /// 'blockSize' threads per block, i.e. the max over its nodes'
+  /// Metadata::dynamicSharedMemory. A launch passes the max over its ops as the
+  /// kernel's dynamic shared memory size.
+  int64_t dynamicSharedBytes(int32_t blockSize) const;
+
+  /// Threads per block this op asks for, i.e. the max over its nodes'
+  /// Metadata::blockSize, or 0 when none asks. A launch runs at the largest of
+  /// its ops' and WaveConfig::blockSize, and every op in it is compiled for
+  /// that size.
+  int32_t blockSizePreference() const {
+    return blockSizePreference_;
+  }
+
+  /// True if a node of this op has Metadata::ownEntryPoint, so the kernel
+  /// gets an entry point holding only this op.
+  bool ownEntryPoint() const {
+    return ownEntryPoint_;
   }
 
   /// Blocks per SM this op wants the containing kernel compiled for, i.e. the
@@ -581,8 +594,15 @@ class KernelOperation {
   // True if any node in the subgraph has alwaysSingleBlock set in its metadata.
   bool alwaysSingleBlock_{false};
 
-  // Max Metadata::dynamicSharedMemory over the nodes in the subgraph.
-  int64_t dynamicSharedBytes_{0};
+  // Max Metadata::dynamicSharedMemory over the nodes in the subgraph, for each
+  // block size from WaveConfig::blockSize up to 1024.
+  std::vector<std::pair<int32_t, int64_t>> dynamicSharedBytes_;
+
+  // Max Metadata::blockSize over the nodes in the subgraph.
+  int32_t blockSizePreference_{0};
+
+  // Any Metadata::ownEntryPoint over the nodes in the subgraph.
+  bool ownEntryPoint_{false};
 
   // Max Metadata::minBlocksPerSm over the nodes in the subgraph.
   int32_t minBlocksPerSm_{0};

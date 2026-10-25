@@ -72,6 +72,9 @@ class CompiledPlan {
   /// Holds the parallel launches at one step.
   struct StepView {
     std::vector<KernelView> kernels;
+
+    /// Threads per block the step's launch runs at.
+    int32_t blockSize{0};
   };
 
   /// Holds the step sequence of one CompiledNode. A kernel boundary sits
@@ -131,6 +134,12 @@ class CompiledPlan {
       std::string_view op,
       std::string_view anchor,
       int32_t howMany) const;
+
+  /// Passes if 'op' is fused into some kernel and every step running it
+  /// launches 'threads' per block.
+  ::testing::AssertionResult runsAtBlockSize(
+      std::string_view op,
+      int32_t threads) const;
 
   /// Returns a human-readable dump of the plan for failure messages.
   std::string describe() const;

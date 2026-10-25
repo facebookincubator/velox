@@ -156,7 +156,14 @@ struct Tensor {
   /// Ensures exactly one thread executes 'func', others wait until complete.
   template <typename Func>
   __device__ void synchronized(Func func) {
+    // A thread that finds the work done must acquire before returning: its
+    // callers read what 'func' wrote (numEl, contiguous, the index dividers)
+    // with plain loads, which can otherwise be served stale from this SM's L1
+    // -- the same cache line holds the dims and strides every caller has
+    // already read. Stale zero dividers turn an element index into a wild
+    // offset. The writer's __threadfence() below is only the release half.
     if (atomicAdd(&status, 0u) == kInited) {
+      __threadfence();
       return;
     }
     uint32_t old = atomicCAS(&status, kUninited, kIniting);
@@ -166,6 +173,7 @@ struct Tensor {
         __nanosleep(waitNano);
         waitNano += threadIdx.x & 31;
       }
+      __threadfence();
       return;
     }
     func();
@@ -178,13 +186,16 @@ struct Tensor {
   /// (broadcast support) and sets numEl from output dims.
   template <bool kConcurrent>
   __device__ void init(const Tensor* output = nullptr) {
-    if ((!output || output->dims[0] == dims[0]) && rank == 1 &&
-        strides[0] == 1) {
-      numEl = dims[0];
-      contiguous = true;
-      return;
-    }
     auto doInit = [&]() {
+      // The rank-1 contiguous case goes through the status protocol like the
+      // rest: every block of an op initializes the same descriptor, and none
+      // may read it before one of them has finished and marked it kInited.
+      if ((!output || output->dims[0] == dims[0]) && rank == 1 &&
+          strides[0] == 1) {
+        numEl = dims[0];
+        contiguous = true;
+        return;
+      }
       contiguous = isContiguous();
       initIndexCalculator(output);
       uint32_t n = 1;

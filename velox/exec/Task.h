@@ -519,6 +519,20 @@ class Task : public std::enable_shared_from_this<Task> {
       uint32_t pipelineId,
       uint32_t sourceId);
 
+  /// Builds an exchange client of this task for the exchange 'planNode', over
+  /// the transport the node names, or the built-in in-memory transport for a
+  /// custom node, which names none.  'numberOfConsumers' operators read
+  /// through the client, which allocates from 'pool'.  Returns the client with
+  /// the entry of its transport, which the client may depend on.  Throws a
+  /// user error for an unavailable transport or unsupported merge exchange.
+  std::pair<
+      std::shared_ptr<ExchangeClient>,
+      std::shared_ptr<ExchangeTransportEntry>>
+  makeExchangeClient(
+      const core::PlanNode& planNode,
+      int32_t numberOfConsumers,
+      memory::MemoryPool* pool) const;
+
   /// Removes driver from the set of drivers in 'self'. The task will be kept
   /// alive by 'self'. 'self' going out of scope may cause the Task to
   /// be freed. This happens if a cancelled task is decoupled from the
