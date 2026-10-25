@@ -70,10 +70,6 @@ TEST_F(PaimonTableHandleTest, tableDefinition) {
   EXPECT_EQ(paimon->schemaId(), int64_t{1} << 40);
   EXPECT_EQ(*paimon->rowType(), *rowType());
   EXPECT_EQ(paimon->fieldIds(), (std::vector<int32_t>{7, 8, 20}));
-  EXPECT_EQ(paimon->columnIndex(20), 2);
-  VELOX_ASSERT_USER_THROW(
-      paimon->columnIndex(2),
-      "Unknown Paimon field ID 2 in table 'orders' schema 1099511627776");
   EXPECT_EQ(paimon->partitionKeys(), (std::vector<std::string>{"p"}));
   EXPECT_EQ(paimon->tableType(), PaimonTableType::kAppendOnly);
   // The handle can describe primary-key tables even though reading them

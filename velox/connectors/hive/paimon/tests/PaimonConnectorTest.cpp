@@ -1373,7 +1373,7 @@ TEST_F(PaimonConnectorTest, takeoverPreparedSplit) {
   test::assertEqualVectors(input, *result);
 }
 
-TEST_F(PaimonConnectorTest, stableFieldIdBindings) {
+TEST_F(PaimonConnectorTest, columnHandlesRoundTrip) {
   const auto rowType =
       ROW({{"value", BIGINT()}, {"id", BIGINT()}, {"p", VARCHAR()}});
   const auto id = std::make_shared<PaimonColumnHandle>(
@@ -1429,83 +1429,12 @@ TEST_F(PaimonConnectorTest, stableFieldIdBindings) {
       exec::test::AssertQueryBuilder(scan).split(split).assertResults(expected);
     }
   }
-
-  auto queryCtx = core::QueryCtx::create();
-  const auto config = std::make_shared<config::ConfigBase>(
-      std::unordered_map<std::string, std::string>{});
-  auto context = queryContextBuilder(queryCtx.get())
-                     .sessionProperties(config.get())
-                     .build();
-  const auto connector = ConnectorRegistry::tryGet(kPaimonConnectorId);
-  const auto makeSource = [&](const ColumnHandlePtr& column) {
-    return connector->createDataSource(
-        ROW({{"selected_id", BIGINT()}}),
-        table,
-        {{"selected_id", column}},
-        context.get());
-  };
-  // A correct name must not hide a different or unknown stable ID.
-  auto wire = id->serialize();
-  wire["fieldId"] = 41;
-  VELOX_ASSERT_USER_THROW(
-      makeSource(PaimonColumnHandle::create(wire)),
-      "Paimon field ID 41 is column 'value' in table 'orders' schema 23");
-  wire["fieldId"] = 1;
-  VELOX_ASSERT_USER_THROW(
-      makeSource(PaimonColumnHandle::create(wire)),
-      "Unknown Paimon field ID 1 in table 'orders' schema 23");
-  wire = id->serialize();
-  wire["schemaType"] = VARCHAR()->serialize();
-  VELOX_ASSERT_USER_THROW(
-      makeSource(PaimonColumnHandle::create(wire)),
-      "Paimon column 'id' (field ID 7) has type VARCHAR");
-  wire = id->serialize();
-  wire["columnType"] = "PartitionKey";
-  VELOX_ASSERT_USER_THROW(
-      makeSource(PaimonColumnHandle::create(wire)),
-      "Paimon column 'id' (field ID 7) has the wrong role");
-  VELOX_ASSERT_USER_THROW(makeSource(nullptr), "Missing Paimon column handle");
-  VELOX_ASSERT_THROW(
-      makeSource(
-          std::make_shared<HiveColumnHandle>(
-              "id",
-              FileColumnHandle::ColumnType::kRegular,
-              BIGINT(),
-              BIGINT())),
-      "PaimonColumnHandle");
-
-  auto tableWire = table->serialize();
-  tableWire["filterColumnHandles"][0]["fieldId"] = 7;
-  const auto wrongFilter =
-      ISerializable::deserialize<PaimonTableHandle>(tableWire);
-  VELOX_ASSERT_USER_THROW(
-      connector->createDataSource(
-          ROW({{"selected_id", BIGINT()}}),
-          wrongFilter,
-          {{"selected_id", id}},
-          context.get()),
-      "Paimon field ID 7 is column 'id'");
 }
 
 TEST_F(PaimonConnectorTest, nestedColumnHandleRoundTrip) {
   const auto nestedType = ROW({{"keep", BIGINT()}, {"unused", VARCHAR()}});
   const auto rowType = ROW({{"r", nestedType}});
   const auto table = makePaimonTableHandle(rowType);
-  auto queryCtx = core::QueryCtx::create();
-  const auto config = std::make_shared<config::ConfigBase>(
-      std::unordered_map<std::string, std::string>{});
-  auto context = queryContextBuilder(queryCtx.get())
-                     .sessionProperties(config.get())
-                     .build();
-  const auto renamed = std::make_shared<PaimonColumnHandle>(
-      "r",
-      10,
-      FileColumnHandle::ColumnType::kRegular,
-      ROW({{"renamed", BIGINT()}, {"unused", VARCHAR()}}));
-  VELOX_ASSERT_USER_THROW(
-      ConnectorRegistry::tryGet(kPaimonConnectorId)
-          ->createDataSource(rowType, table, {{"r", renamed}}, context.get()),
-      "Paimon column 'r' (field ID 10) has type ROW<renamed:BIGINT,unused:VARCHAR>");
   std::vector<common::Subfield> paths;
   paths.emplace_back("r.keep");
   const auto column = std::make_shared<PaimonColumnHandle>(

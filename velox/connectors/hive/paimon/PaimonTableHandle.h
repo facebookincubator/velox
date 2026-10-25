@@ -68,9 +68,6 @@ class PaimonTableHandle final : public FileTableHandle {
     return fieldIds_;
   }
 
-  /// Resolves a stable field ID to its position in this fixed table schema.
-  column_index_t columnIndex(int32_t fieldId) const;
-
   PaimonTableType tableType() const {
     return tableType_;
   }

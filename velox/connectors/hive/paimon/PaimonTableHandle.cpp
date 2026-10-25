@@ -15,7 +15,6 @@
  */
 #include "velox/connectors/hive/paimon/PaimonTableHandle.h"
 
-#include <algorithm>
 #include <cmath>
 #include <unordered_set>
 
@@ -102,17 +101,6 @@ PaimonTableHandle::tableParameters() const {
   // Native Paimon options are not file-reader parameters such as skip-header.
   static const std::unordered_map<std::string, std::string> kEmpty;
   return kEmpty;
-}
-
-column_index_t PaimonTableHandle::columnIndex(int32_t fieldId) const {
-  const auto it = std::find(fieldIds_.begin(), fieldIds_.end(), fieldId);
-  VELOX_USER_CHECK(
-      it != fieldIds_.end(),
-      "Unknown Paimon field ID {} in table '{}' schema {}",
-      fieldId,
-      tableName_,
-      schemaId_);
-  return std::distance(fieldIds_.begin(), it);
 }
 
 std::string PaimonTableHandle::toString() const {

@@ -15,71 +15,12 @@
  */
 #include "velox/connectors/hive/paimon/PaimonDataSource.h"
 
-#include <algorithm>
-
 #include "velox/common/Casts.h"
-#include "velox/connectors/hive/paimon/PaimonColumnHandle.h"
 #include "velox/connectors/hive/paimon/PaimonConnectorSplit.h"
 #include "velox/connectors/hive/paimon/PaimonSplitReader.h"
 #include "velox/connectors/hive/paimon/PaimonTableHandle.h"
 
 namespace facebook::velox::connector::hive::paimon {
-namespace {
-
-// Bind explicit query columns before FileDataSource consumes their names,
-// types and roles. Subsequent splits reuse this fixed binding.
-const ColumnHandleMap& bindColumns(
-    const PaimonTableHandle& table,
-    const ColumnHandleMap& assignments) {
-  const auto bind = [&](const ColumnHandlePtr& column) {
-    VELOX_USER_CHECK_NOT_NULL(column, "Missing Paimon column handle");
-    const auto* handle =
-        checkedPointerCast<const PaimonColumnHandle>(column.get());
-    const auto index = table.columnIndex(handle->fieldId());
-    const auto& name = table.rowType()->nameOf(index);
-    const auto& type = table.rowType()->childAt(index);
-    VELOX_USER_CHECK_EQ(
-        handle->name(),
-        name,
-        "Paimon field ID {} is column '{}' in table '{}' schema {}",
-        handle->fieldId(),
-        name,
-        table.name(),
-        table.schemaId());
-    VELOX_USER_CHECK(
-        *handle->schemaType() == *type,
-        "Paimon column '{}' (field ID {}) has type {}, but table '{}' schema {} requires {}",
-        name,
-        handle->fieldId(),
-        handle->schemaType()->toString(),
-        table.name(),
-        table.schemaId(),
-        type->toString());
-    const bool partition =
-        std::find(
-            table.partitionKeys().begin(), table.partitionKeys().end(), name) !=
-        table.partitionKeys().end();
-    const auto role = partition ? FileColumnHandle::ColumnType::kPartitionKey
-                                : FileColumnHandle::ColumnType::kRegular;
-    VELOX_USER_CHECK_EQ(
-        handle->columnType(),
-        role,
-        "Paimon column '{}' (field ID {}) has the wrong role in table '{}' schema {}",
-        name,
-        handle->fieldId(),
-        table.name(),
-        table.schemaId());
-  };
-  for (const auto& [_, handle] : assignments) {
-    bind(handle);
-  }
-  for (const auto& handle : table.filterColumnHandles()) {
-    bind(handle);
-  }
-  return assignments;
-}
-
-} // namespace
 
 PaimonDataSource::PaimonDataSource(
     const RowTypePtr& outputType,
@@ -92,7 +33,7 @@ PaimonDataSource::PaimonDataSource(
     : FileDataSource(
           outputType,
           tableHandle,
-          bindColumns(*tableHandle, assignments),
+          assignments,
           fileHandleFactory,
           ioExecutor,
           connectorQueryCtx,
