@@ -134,6 +134,8 @@ class RPCOperator : public exec::Operator {
   static inline const std::string kRpcCongestionShrinks{"rpcCongestionShrinks"};
   static inline const std::string kRpcCongestionOverloadShrinks{
       "rpcCongestionOverloadShrinks"};
+  /// Attempts rejected for capacity and admitted again for another attempt.
+  static inline const std::string kRpcCapacityRetries{"rpcCapacityRetries"};
   static inline const std::string kRpcBaselineRttNanos{"rpcBaselineRttNanos"};
   static inline const std::string kRpcPeakInFlight{"rpcPeakInFlight"};
   static inline const std::string kRpcRttMinWallNanos{"rpcRttMinWallNanos"};
@@ -320,6 +322,11 @@ class RPCOperator : public exec::Operator {
   // whole input vector is dripped at the sustainable rate instead of blasted.
   void dispatchRowsUnderAdmission();
 
+  // Applies the window feedback of rejected attempts, then dispatches the
+  // retries that are due, ahead of new rows. Each retry takes a window slot
+  // and a fresh admission slot.
+  void dispatchDueRetries();
+
   // Whether the PER_ROW dispatch buffer still has undispatched rows.
   bool hasPendingRows() const {
     return pendingCursor_ < pendingNumRows_;
@@ -362,6 +369,8 @@ class RPCOperator : public exec::Operator {
   // Process-scoped controller for admissionKey_, resolved before the first
   // dispatch; outlives this operator.
   RPCRateLimiter* limiter_{nullptr};
+  // PER_ROW and AsyncRPCFunction::mayReturnCapacityRetries().
+  bool capacityRetryEnabled_{false};
 
   // Precomputed per-argument sources, in call()->inputs() order. Built once in
   // initialize() by walking the RPC call's argument expressions. A
