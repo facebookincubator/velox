@@ -21,8 +21,6 @@
 #include "velox/experimental/torchwave/Utils.h"
 #include "velox/experimental/torchwave/WaveConfig.h"
 
-#include <fmt/format.h>
-
 #include <cmath>
 #include <limits>
 
@@ -920,7 +918,7 @@ std::vector<std::vector<Dim>> numBlocksShape(
     NodeCP /*originalFormalNode*/,
     const NodeMap& /*nodeMap*/) {
   auto tensor = paramTensor(node->inputs()[0].value, frame, map);
-  auto blockSize = WaveConfig::get().blockSize;
+  auto blockSize = reserveBlockSize();
   // At least one block: makeGrid always launches >=1 block (even for an empty
   // input), and that block's head kernel unconditionally writes one per-block
   // partial sum (out[blockInOp]).  A zero-length counts buffer would make that
@@ -949,8 +947,8 @@ std::vector<std::vector<Dim>> lookbackStateShape(
     const NodeMap& /*nodeMap*/) {
   constexpr int64_t kWidestAccumulatorWords = 2;
   auto tensor = paramTensor(node->inputs()[0].value, frame, map);
-  const int64_t tileSize = static_cast<int64_t>(WaveConfig::get().blockSize) *
-      kSinglePassItemsPerThread;
+  const int64_t tileSize =
+      static_cast<int64_t>(reserveBlockSize()) * kSinglePassItemsPerThread;
   // At least one tile: an empty input processes none, but a zero-length buffer
   // would make the reserve produce a tensor with null storage.
   const int64_t numTiles =
@@ -4860,8 +4858,7 @@ void registerBuiltins() {
       .deviceFunc("masked_select_1pass")
       .multiBlockReturnBarrier()
       .sharedDecls(
-          {{fmt::format("SelectStaging<{}>", WaveConfig::get().blockSize),
-            "staging"},
+          {{"SelectStaging<{blockSize}>", "staging"},
            {"Int32X32", "warpSums"},
            {"uint32_t", "size"},
            {"uint32_t", "numTiles"},
