@@ -15,12 +15,73 @@
  */
 #include "velox/connectors/hive/paimon/PaimonDataSource.h"
 
+#include <algorithm>
+
 #include "velox/common/Casts.h"
+#include "velox/connectors/hive/paimon/PaimonColumnHandle.h"
 #include "velox/connectors/hive/paimon/PaimonConnectorSplit.h"
 #include "velox/connectors/hive/paimon/PaimonSplitReader.h"
+#include "velox/connectors/hive/paimon/PaimonSubfield.h"
 #include "velox/connectors/hive/paimon/PaimonTableHandle.h"
+#include "velox/expression/FieldReference.h"
 
 namespace facebook::velox::connector::hive::paimon {
+namespace {
+
+// Bind explicit query columns before FileDataSource consumes their names,
+// types and roles. Subsequent splits reuse this fixed binding.
+const ColumnHandleMap& bindColumns(
+    const PaimonTableHandle& table,
+    const ColumnHandleMap& assignments) {
+  const auto bind = [&](const ColumnHandlePtr& column) {
+    VELOX_USER_CHECK_NOT_NULL(column, "Missing Paimon column handle");
+    const auto* handle =
+        checkedPointerCast<const PaimonColumnHandle>(column.get());
+    const auto index = table.columnIndex(handle->fieldId());
+    const auto& name = table.rowType()->nameOf(index);
+    const auto& type = table.rowType()->childAt(index);
+    VELOX_USER_CHECK_EQ(
+        handle->name(),
+        name,
+        "Paimon field ID {} is column '{}' in table '{}' schema {}",
+        handle->fieldId(),
+        name,
+        table.name(),
+        table.schemaId());
+    VELOX_USER_CHECK(
+        *handle->schemaType() == *type,
+        "Paimon column '{}' (field ID {}) has type {}, but table '{}' schema {} requires {}",
+        name,
+        handle->fieldId(),
+        handle->schemaType()->toString(),
+        table.name(),
+        table.schemaId(),
+        type->toString());
+    const bool partition =
+        std::find(
+            table.partitionKeys().begin(), table.partitionKeys().end(), name) !=
+        table.partitionKeys().end();
+    const auto role = partition ? FileColumnHandle::ColumnType::kPartitionKey
+                                : FileColumnHandle::ColumnType::kRegular;
+    VELOX_USER_CHECK_EQ(
+        handle->columnType(),
+        role,
+        "Paimon column '{}' (field ID {}) has the wrong role in table '{}' schema {}",
+        name,
+        handle->fieldId(),
+        table.name(),
+        table.schemaId());
+  };
+  for (const auto& [_, handle] : assignments) {
+    bind(handle);
+  }
+  for (const auto& handle : table.filterColumnHandles()) {
+    bind(handle);
+  }
+  return assignments;
+}
+
+} // namespace
 
 PaimonDataSource::PaimonDataSource(
     const RowTypePtr& outputType,
@@ -33,7 +94,7 @@ PaimonDataSource::PaimonDataSource(
     : FileDataSource(
           outputType,
           tableHandle,
-          assignments,
+          bindColumns(*tableHandle, assignments),
           fileHandleFactory,
           ioExecutor,
           connectorQueryCtx,
@@ -45,6 +106,32 @@ PaimonDataSource::PaimonDataSource(
       PaimonTableType::kAppendOnly,
       "Paimon same-schema append reader does not support primary-key tables; "
       "primary-key reading is not implemented yet");
+
+  // Named conditions refer to the same fixed schema as the ID-bound columns.
+  for (const auto& [path, _] : tableHandle->subfieldFilters()) {
+    resolveSubfieldType(tableHandle->rowType(), path);
+  }
+  if (const auto* expressions = remainingFilterExprSet()) {
+    // The compiled expression already resolves lambda captures and shadowing.
+    for (const auto* field : expressions->expr(0)->distinctFields()) {
+      const auto index =
+          tableHandle->rowType()->getChildIdxIfExists(field->field());
+      VELOX_USER_CHECK(
+          index.has_value(),
+          "Unknown Paimon filter column '{}' in table '{}' schema {}",
+          field->field(),
+          tableHandle->name(),
+          tableHandle->schemaId());
+      VELOX_USER_CHECK(
+          *field->type() == *tableHandle->rowType()->childAt(*index),
+          "Paimon filter column '{}' (field ID {}) has type {}, but schema {} requires {}",
+          field->field(),
+          tableHandle->fieldIds()[*index],
+          field->type()->toString(),
+          tableHandle->schemaId(),
+          tableHandle->rowType()->childAt(*index)->toString());
+    }
+  }
 }
 
 void PaimonDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {

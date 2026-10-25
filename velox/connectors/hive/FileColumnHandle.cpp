@@ -19,6 +19,99 @@
 namespace facebook::velox::connector::hive {
 namespace {
 
+folly::dynamic serializeExtractionPathElement(
+    const ExtractionPathElement& element) {
+  folly::dynamic obj = folly::dynamic::object;
+  obj["step"] = extractionStepName(element.step());
+  if (element.step() == ExtractionStep::kStructField) {
+    obj["fieldName"] =
+        static_cast<const StructFieldExtractionPathElement&>(element)
+            .fieldName();
+  }
+  if (element.step() == ExtractionStep::kMapKeyFilter) {
+    if (auto* stringFilter =
+            dynamic_cast<const StringMapKeyFilterExtractionPathElement*>(
+                &element)) {
+      folly::dynamic keys = folly::dynamic::array;
+      for (const auto& key : stringFilter->filterKeys()) {
+        keys.push_back(key);
+      }
+      obj["stringFilterKeys"] = keys;
+    } else if (
+        auto* intFilter =
+            dynamic_cast<const IntMapKeyFilterExtractionPathElement*>(
+                &element)) {
+      folly::dynamic keys = folly::dynamic::array;
+      for (const auto& key : intFilter->filterKeys()) {
+        keys.push_back(key);
+      }
+      obj["intFilterKeys"] = keys;
+    }
+  }
+  return obj;
+}
+
+ExtractionPathElementPtr deserializeExtractionPathElement(
+    const folly::dynamic& obj) {
+  auto step = extractionStepFromName(obj["step"].asString());
+  switch (step) {
+    case ExtractionStep::kStructField:
+      return ExtractionPathElement::structField(obj["fieldName"].asString());
+    case ExtractionStep::kMapKeyFilter: {
+      std::vector<std::string> stringKeys;
+      std::vector<int64_t> intKeys;
+      if (auto it = obj.find("stringFilterKeys"); it != obj.items().end()) {
+        for (const auto& key : it->second) {
+          stringKeys.push_back(key.asString());
+        }
+      }
+      if (auto it = obj.find("intFilterKeys"); it != obj.items().end()) {
+        for (const auto& key : it->second) {
+          intKeys.push_back(key.asInt());
+        }
+      }
+      if (!stringKeys.empty()) {
+        return ExtractionPathElement::mapKeyFilter(std::move(stringKeys));
+      }
+      return ExtractionPathElement::mapKeyFilter(std::move(intKeys));
+    }
+    case ExtractionStep::kMapKeys:
+    case ExtractionStep::kMapValues:
+    case ExtractionStep::kArrayElements:
+    case ExtractionStep::kSize:
+      return ExtractionPathElement::simple(step);
+  }
+  VELOX_UNREACHABLE();
+}
+
+} // namespace
+
+folly::dynamic serializeNamedExtraction(const NamedExtraction& extraction) {
+  folly::dynamic obj = folly::dynamic::object;
+  obj["outputName"] = extraction.outputName;
+  obj["dataType"] = extraction.dataType->serialize();
+  folly::dynamic chain = folly::dynamic::array;
+  for (const auto& element : extraction.chain) {
+    chain.push_back(serializeExtractionPathElement(*element));
+  }
+  obj["chain"] = chain;
+  return obj;
+}
+
+NamedExtraction deserializeNamedExtraction(const folly::dynamic& obj) {
+  NamedExtraction extraction;
+  extraction.outputName = obj["outputName"].asString();
+  extraction.dataType = ISerializable::deserialize<Type>(obj["dataType"]);
+  const auto& chainArr = obj["chain"];
+  extraction.chain.reserve(chainArr.size());
+  for (const auto& element : chainArr) {
+    extraction.chain.push_back(deserializeExtractionPathElement(element));
+  }
+  return extraction;
+}
+
+namespace {
+
 const std::unordered_map<FileColumnHandle::ColumnType, std::string>&
 columnTypeNames() {
   static const std::unordered_map<FileColumnHandle::ColumnType, std::string>

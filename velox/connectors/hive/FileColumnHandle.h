@@ -165,6 +165,10 @@ TypePtr deriveExtractionOutputType(
     const TypePtr& inputType,
     const std::vector<ExtractionPathElementPtr>& chain);
 
+folly::dynamic serializeNamedExtraction(const NamedExtraction& extraction);
+
+NamedExtraction deserializeNamedExtraction(const folly::dynamic& obj);
+
 /// Base class for column handles in file-based connectors.
 ///
 /// Define the common interface for column metadata needed by

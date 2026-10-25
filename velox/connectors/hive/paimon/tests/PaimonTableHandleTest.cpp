@@ -14,12 +14,12 @@
  * limitations under the License.
  */
 #include "velox/connectors/hive/paimon/PaimonTableHandle.h"
+#include "velox/connectors/hive/paimon/PaimonColumnHandle.h"
 
 #include <gtest/gtest.h>
 #include <limits>
 
 #include "velox/common/base/tests/GTestUtils.h"
-#include "velox/connectors/hive/TableHandle.h"
 #include "velox/core/Expressions.h"
 
 namespace facebook::velox::connector::hive::paimon {
@@ -31,7 +31,7 @@ class PaimonTableHandleTest : public testing::Test {
     Type::registerSerDe();
     common::Filter::registerSerDe();
     core::ITypedExpr::registerSerDe();
-    HiveColumnHandle::registerSerDe();
+    PaimonColumnHandle::registerSerDe();
     PaimonTableHandle::registerSerDe();
   }
 
@@ -70,6 +70,10 @@ TEST_F(PaimonTableHandleTest, tableDefinition) {
   EXPECT_EQ(paimon->schemaId(), int64_t{1} << 40);
   EXPECT_EQ(*paimon->rowType(), *rowType());
   EXPECT_EQ(paimon->fieldIds(), (std::vector<int32_t>{7, 8, 20}));
+  EXPECT_EQ(paimon->columnIndex(20), 2);
+  VELOX_ASSERT_USER_THROW(
+      paimon->columnIndex(2),
+      "Unknown Paimon field ID 2 in table 'orders' schema 1099511627776");
   EXPECT_EQ(paimon->partitionKeys(), (std::vector<std::string>{"p"}));
   EXPECT_EQ(paimon->tableType(), PaimonTableType::kAppendOnly);
   // The handle can describe primary-key tables even though reading them
@@ -104,8 +108,8 @@ TEST_F(PaimonTableHandleTest, roundTrip) {
       std::make_unique<common::BigintRange>(1, 9, false));
   const auto remaining =
       std::make_shared<core::ConstantTypedExpr>(BOOLEAN(), Variant(true));
-  const auto filterColumn = std::make_shared<HiveColumnHandle>(
-      "value", FileColumnHandle::ColumnType::kRegular, BIGINT(), BIGINT());
+  const auto filterColumn = std::make_shared<PaimonColumnHandle>(
+      "value", 20, FileColumnHandle::ColumnType::kRegular, BIGINT());
   const std::unordered_map<std::string, std::string> options{
       {"deletion-vectors.enabled", "false"},
       {"data-evolution.enabled", "false"},
@@ -245,14 +249,14 @@ TEST_F(PaimonTableHandleTest, malformedWire) {
 }
 
 TEST_F(PaimonTableHandleTest, localCallbackIsNotWireState) {
-  const auto column = std::make_shared<HiveColumnHandle>(
+  const auto column = std::make_shared<PaimonColumnHandle>(
       "id",
+      7,
       FileColumnHandle::ColumnType::kRegular,
-      BIGINT(),
       BIGINT(),
       std::vector<common::Subfield>{},
       std::vector<NamedExtraction>{},
-      HiveColumnHandle::ColumnParseParameters{},
+      /*partitionDateValueDaysSinceEpoch=*/false,
       [](VectorPtr&) {});
   const PaimonTableHandle handle(
       "test-paimon",
@@ -268,8 +272,7 @@ TEST_F(PaimonTableHandleTest, localCallbackIsNotWireState) {
       {column});
   EXPECT_TRUE(handle.filterColumnHandles()[0]->postProcessor());
   VELOX_ASSERT_USER_THROW(
-      handle.serialize(),
-      "Paimon filter column callbacks cannot be serialized");
+      handle.serialize(), "Paimon column callbacks cannot be serialized");
 }
 
 } // namespace
