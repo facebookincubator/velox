@@ -108,11 +108,19 @@ std::string PaimonTableHandle::toString() const {
 }
 
 folly::dynamic PaimonTableHandle::serialize() const {
-  for (const auto& [_, filter] : subfieldFilters()) {
-    VELOX_USER_CHECK_NOT_NULL(filter, "Missing Paimon subfield filter");
+  for (const auto& [subfield, filter] : subfieldFilters()) {
+    VELOX_USER_CHECK_NOT_NULL(
+        filter,
+        "Null filter for subfield '{}' in table '{}'",
+        subfield.toString(),
+        tableName());
   }
-  for (const auto& handle : filterColumnHandles_) {
-    VELOX_USER_CHECK_NOT_NULL(handle, "Missing Paimon filter column handle");
+  for (size_t i = 0; i < filterColumnHandles_.size(); ++i) {
+    VELOX_USER_CHECK_NOT_NULL(
+        filterColumnHandles_[i],
+        "Null filter column handle at index {} in table '{}'",
+        i,
+        tableName());
   }
 
   folly::dynamic obj = serializeFileFields("PaimonTableHandle");

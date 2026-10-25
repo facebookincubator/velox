@@ -417,6 +417,43 @@ TEST_F(PaimonTableHandleTest, malformedWire) {
       "Duplicate Paimon subfield filter");
 }
 
+TEST_F(PaimonTableHandleTest, serializeNullSubfieldFilter) {
+  common::SubfieldFilters filters;
+  filters.emplace(common::Subfield("r.a"), nullptr);
+  const PaimonTableHandle handle(
+      "test-paimon",
+      "orders",
+      0,
+      ROW({{"r", ROW({{"a", BIGINT()}})}}),
+      {7},
+      PaimonTableType::kAppendOnly,
+      {},
+      {},
+      std::move(filters));
+  VELOX_ASSERT_USER_THROW(
+      handle.serialize(), "Null filter for subfield 'r.a' in table 'orders'");
+}
+
+TEST_F(PaimonTableHandleTest, serializeNullFilterColumnHandle) {
+  const auto column = std::make_shared<PaimonColumnHandle>(
+      "id", 7, FileColumnHandle::ColumnType::kRegular, BIGINT());
+  const PaimonTableHandle handle(
+      "test-paimon",
+      "orders",
+      0,
+      rowType(),
+      {7, 8, 20},
+      PaimonTableType::kAppendOnly,
+      {"p"},
+      {},
+      {},
+      nullptr,
+      {column, nullptr});
+  VELOX_ASSERT_USER_THROW(
+      handle.serialize(),
+      "Null filter column handle at index 1 in table 'orders'");
+}
+
 TEST_F(PaimonTableHandleTest, localCallbackIsNotWireState) {
   const auto column = std::make_shared<PaimonColumnHandle>(
       "id",
