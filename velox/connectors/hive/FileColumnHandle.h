@@ -273,6 +273,16 @@ class FileColumnHandle : public ColumnHandle {
       bool partitionDateValueDaysSinceEpoch,
       std::function<void(VectorPtr&)> postProcessor);
 
+  /// Serializes the shared column role, subfields and extractions. Derived
+  /// handles add names, types and metadata using their existing wire fields.
+  folly::dynamic serializeFileFields(std::string_view typeName) const;
+
+  static void deserializeFileFields(
+      const folly::dynamic& obj,
+      ColumnType& columnType,
+      std::vector<common::Subfield>& requiredSubfields,
+      std::vector<NamedExtraction>& extractions);
+
  private:
   const std::string name_;
   const ColumnType columnType_;

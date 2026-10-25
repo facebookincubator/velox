@@ -83,22 +83,11 @@ std::string PaimonColumnHandle::toString() const {
 folly::dynamic PaimonColumnHandle::serialize() const {
   VELOX_USER_CHECK(
       !postProcessor(), "Paimon column callbacks cannot be serialized");
-  auto obj = ColumnHandle::serializeBase("PaimonColumnHandle");
+  auto obj = serializeFileFields("PaimonColumnHandle");
   obj["version"] = kSerdeVersion;
   obj["columnName"] = name();
   obj["fieldId"] = fieldId_;
-  obj["columnType"] = columnTypeName(columnType());
   obj["schemaType"] = schemaType()->serialize();
-  obj["requiredSubfields"] = folly::dynamic::array;
-  for (const auto& path : requiredSubfields()) {
-    obj["requiredSubfields"].push_back(serializeSubfield(path));
-  }
-  if (!extractions().empty()) {
-    obj["extractions"] = folly::dynamic::array;
-    for (const auto& extraction : extractions()) {
-      obj["extractions"].push_back(serializeNamedExtraction(extraction));
-    }
-  }
   if (isPartitionDateValueDaysSinceEpoch()) {
     obj["partitionDateValueDaysSinceEpoch"] = true;
   }
@@ -110,20 +99,14 @@ ColumnHandlePtr PaimonColumnHandle::create(const folly::dynamic& obj) {
       obj.at("version").asInt(),
       kSerdeVersion,
       "Unsupported Paimon column handle wire version");
+  ColumnType columnType;
   std::vector<common::Subfield> subfields;
-  for (const auto& path : obj.at("requiredSubfields")) {
-    subfields.push_back(deserializeSubfield(path));
-  }
   std::vector<NamedExtraction> extractions;
-  if (auto it = obj.find("extractions"); it != obj.items().end()) {
-    for (const auto& extraction : it->second) {
-      extractions.push_back(deserializeNamedExtraction(extraction));
-    }
-  }
+  deserializeFileFields(obj, columnType, subfields, extractions);
   return std::make_shared<PaimonColumnHandle>(
       obj.at("columnName").asString(),
       ISerializable::deserialize<int32_t>(obj.at("fieldId")),
-      columnTypeFromName(obj.at("columnType").asString()),
+      columnType,
       ISerializable::deserialize<Type>(obj.at("schemaType")),
       std::move(subfields),
       std::move(extractions),

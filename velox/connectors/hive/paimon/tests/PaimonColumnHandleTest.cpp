@@ -18,6 +18,7 @@
 #include <gtest/gtest.h>
 
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/connectors/hive/TableHandle.h"
 
 namespace facebook::velox::connector::hive::paimon {
 namespace {
@@ -111,6 +112,92 @@ TEST_F(PaimonColumnHandleTest, stringSubfieldsAndDefaults) {
     EXPECT_FALSE(copy->isPartitionDateValueDaysSinceEpoch());
     EXPECT_EQ(*copy->dataType(), *schemaType);
     EXPECT_EQ(copy->serialize(), requiredFields);
+  }
+}
+
+TEST_F(PaimonColumnHandleTest, commonFieldsMatchHive) {
+  HiveColumnHandle::registerSerDe();
+  const auto type = ROW({{"a", BIGINT()}});
+  for (bool withSubfields : {false, true}) {
+    folly::dynamic paths = folly::dynamic::array;
+    if (withSubfields) {
+      paths.push_back("r.a");
+    }
+    const folly::dynamic commonFields = folly::dynamic::object(
+        "columnType", "Regular")("requiredSubfields", paths);
+    auto hiveExpected = commonFields;
+    hiveExpected["name"] = "HiveColumnHandle";
+    hiveExpected["hiveColumnHandleName"] = "r";
+    hiveExpected["dataType"] = type->serialize();
+    hiveExpected["hiveType"] = type->serialize();
+    auto paimonExpected = commonFields;
+    paimonExpected["name"] = "PaimonColumnHandle";
+    paimonExpected["version"] = 1;
+    paimonExpected["columnName"] = "r";
+    paimonExpected["schemaType"] = type->serialize();
+    paimonExpected["fieldId"] = 7;
+
+    for (bool explicitDefaults : {false, true}) {
+      SCOPED_TRACE(
+          fmt::format(
+              "withSubfields={}, explicitDefaults={}",
+              withSubfields,
+              explicitDefaults));
+      auto hiveObj = hiveExpected;
+      auto paimonObj = paimonExpected;
+      if (explicitDefaults) {
+        hiveObj["extractions"] = folly::dynamic::array;
+        paimonObj["extractions"] = folly::dynamic::array;
+      }
+      const auto hive = ISerializable::deserialize<HiveColumnHandle>(hiveObj);
+      const auto paimon =
+          ISerializable::deserialize<PaimonColumnHandle>(paimonObj);
+      EXPECT_EQ(hive->serialize(), hiveExpected);
+      EXPECT_EQ(paimon->serialize(), paimonExpected);
+      EXPECT_EQ(hive->columnType(), paimon->columnType());
+      EXPECT_EQ(hive->requiredSubfields(), paimon->requiredSubfields());
+      EXPECT_TRUE(hive->extractions().empty());
+      EXPECT_TRUE(paimon->extractions().empty());
+    }
+  }
+}
+
+TEST_F(PaimonColumnHandleTest, commonExtractionsMatchHive) {
+  HiveColumnHandle::registerSerDe();
+  const auto schemaType = MAP(VARCHAR(), BIGINT());
+  const NamedExtraction keys{
+      "keys",
+      {ExtractionPathElement::simple(ExtractionStep::kMapKeys)},
+      ARRAY(VARCHAR())};
+  const NamedExtraction size{
+      "size", {ExtractionPathElement::simple(ExtractionStep::kSize)}, BIGINT()};
+  for (const auto& extractions :
+       {std::vector<NamedExtraction>{keys},
+        std::vector<NamedExtraction>{keys, size}}) {
+    SCOPED_TRACE(extractions.size());
+    TypePtr dataType = ARRAY(VARCHAR());
+    if (extractions.size() > 1) {
+      dataType = ROW({{"keys", ARRAY(VARCHAR())}, {"size", BIGINT()}});
+    }
+    const HiveColumnHandle hive(
+        "m", ColumnType::kRegular, dataType, schemaType, {}, extractions);
+    const PaimonColumnHandle paimon(
+        "m", 30, ColumnType::kRegular, schemaType, {}, extractions);
+    const auto hiveObj = hive.serialize();
+    const auto paimonObj = paimon.serialize();
+    for (const auto* field :
+         {"columnType", "requiredSubfields", "extractions"}) {
+      EXPECT_EQ(hiveObj[field], paimonObj[field]) << field;
+    }
+    const auto hiveCopy = ISerializable::deserialize<HiveColumnHandle>(hiveObj);
+    const auto paimonCopy =
+        ISerializable::deserialize<PaimonColumnHandle>(paimonObj);
+    EXPECT_EQ(hiveCopy->serialize(), hiveObj);
+    EXPECT_EQ(paimonCopy->serialize(), paimonObj);
+    EXPECT_EQ(hiveCopy->extractions(), extractions);
+    EXPECT_EQ(paimonCopy->extractions(), extractions);
+    EXPECT_EQ(*hiveCopy->dataType(), *dataType);
+    EXPECT_EQ(*paimonCopy->dataType(), *dataType);
   }
 }
 

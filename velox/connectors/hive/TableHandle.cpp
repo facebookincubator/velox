@@ -61,23 +61,10 @@ HiveColumnHandle::HiveColumnHandle(
 }
 
 folly::dynamic HiveColumnHandle::serialize() const {
-  folly::dynamic obj = ColumnHandle::serializeBase("HiveColumnHandle");
+  folly::dynamic obj = serializeFileFields("HiveColumnHandle");
   obj["hiveColumnHandleName"] = name();
-  obj["columnType"] = columnTypeName(columnType());
   obj["dataType"] = dataType()->serialize();
   obj["hiveType"] = hiveType()->serialize();
-  folly::dynamic requiredSubfields = folly::dynamic::array;
-  for (const auto& subfield : this->requiredSubfields()) {
-    requiredSubfields.push_back(serializeSubfield(subfield));
-  }
-  obj["requiredSubfields"] = requiredSubfields;
-  if (!extractions().empty()) {
-    folly::dynamic extractions = folly::dynamic::array;
-    for (const auto& extraction : this->extractions()) {
-      extractions.push_back(serializeNamedExtraction(extraction));
-    }
-    obj["extractions"] = extractions;
-  }
   return obj;
 }
 
@@ -151,23 +138,12 @@ std::string HiveColumnHandle::toString() const {
 
 ColumnHandlePtr HiveColumnHandle::create(const folly::dynamic& obj) {
   auto name = obj["hiveColumnHandleName"].asString();
-  auto columnType = columnTypeFromName(obj["columnType"].asString());
   auto dataType = ISerializable::deserialize<Type>(obj["dataType"]);
   auto hiveType = ISerializable::deserialize<Type>(obj["hiveType"]);
-
-  const auto& arr = obj["requiredSubfields"];
+  ColumnType columnType;
   std::vector<common::Subfield> requiredSubfields;
-  requiredSubfields.reserve(arr.size());
-  for (auto& s : arr) {
-    requiredSubfields.push_back(deserializeSubfield(s));
-  }
-
   std::vector<NamedExtraction> extractions;
-  if (auto it = obj.find("extractions"); it != obj.items().end()) {
-    for (const auto& extraction : it->second) {
-      extractions.push_back(deserializeNamedExtraction(extraction));
-    }
-  }
+  deserializeFileFields(obj, columnType, requiredSubfields, extractions);
 
   return std::make_shared<HiveColumnHandle>(
       name,
