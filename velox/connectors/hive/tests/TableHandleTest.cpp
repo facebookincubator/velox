@@ -251,6 +251,31 @@ TEST(FileHandleTest, hiveTableDefaults) {
     EXPECT_TRUE(fileHandle.filterColumnHandles().empty());
     EXPECT_EQ(copy->serialize(), requiredFields);
   }
+
+  auto obj = requiredFields;
+  obj["remainingFilter"] = nullptr;
+  VELOX_ASSERT_USER_THROW(
+      ISerializable::deserialize<HiveTableHandle>(obj),
+      "Hive remaining filter must not be null when present");
+}
+
+TEST(FileHandleTest, hiveTableDuplicateFilters) {
+  HiveTableHandle::registerSerDe();
+  common::Filter::registerSerDe();
+  const folly::dynamic obj = folly::dynamic::object("name", "HiveTableHandle")(
+      "connectorId", "test-connector")("tableName", "orders")(
+      "subfieldFilters",
+      folly::dynamic::array(
+          folly::dynamic::object("subfield", "a")(
+              "filter", common::IsNull().serialize()),
+          folly::dynamic::object("subfield", "a")(
+              "filter", common::IsNotNull().serialize())))(
+      "tableParameters", folly::dynamic::object);
+  const auto copy = ISerializable::deserialize<HiveTableHandle>(obj);
+  ASSERT_EQ(copy->subfieldFilters().size(), 1);
+  EXPECT_EQ(
+      copy->subfieldFilters().at(common::Subfield("a"))->serialize(),
+      common::IsNotNull().serialize());
 }
 
 TEST(TableHandleTest, hiveTableHandleDataColumnFieldIds) {

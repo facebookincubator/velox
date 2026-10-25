@@ -28,6 +28,7 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
     velox_hive_paimon_table_handle_test
     velox_hive_paimon_table_handle
     velox_hive_paimon_column_handle
+    velox_hive_connector
     GTest::gtest
     GTest::gtest_main
   )

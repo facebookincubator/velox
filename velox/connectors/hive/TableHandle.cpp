@@ -299,19 +299,6 @@ folly::dynamic HiveTableHandle::serializeHiveFields(
     std::string_view typeName) const {
   folly::dynamic obj = serializeFileFields(typeName);
 
-  folly::dynamic subfieldFilters = folly::dynamic::array;
-  for (const auto& [subfield, filter] : this->subfieldFilters()) {
-    folly::dynamic pair = folly::dynamic::object;
-    pair["subfield"] = serializeSubfield(subfield);
-    pair["filter"] = filter->serialize();
-    subfieldFilters.push_back(pair);
-  }
-  obj["subfieldFilters"] = subfieldFilters;
-
-  if (remainingFilter()) {
-    obj["remainingFilter"] = remainingFilter()->serialize();
-  }
-
   if (dataColumns()) {
     obj["dataColumns"] = dataColumns()->serialize();
   }
@@ -329,14 +316,6 @@ folly::dynamic HiveTableHandle::serializeHiveFields(
     tableParameters[param.first] = param.second;
   }
   obj["tableParameters"] = tableParameters;
-
-  if (!filterColumnHandles_.empty()) {
-    folly::dynamic filterColumnHandles = folly::dynamic::array;
-    for (const auto& handle : filterColumnHandles_) {
-      filterColumnHandles.push_back(handle->serialize());
-    }
-    obj["filterColumnHandles"] = filterColumnHandles;
-  }
 
   if (!indexColumns_.empty()) {
     folly::dynamic indexColumns = folly::dynamic::array;
@@ -368,18 +347,27 @@ void HiveTableHandle::deserializeHiveFields(
     std::vector<std::string>& indexColumns,
     std::string& dbName,
     std::vector<int32_t>& dataColumnFieldIds) {
-  deserializeFileFields(obj, connectorId, tableName, sampleRate, dbName);
-
+  // Hive represents an absent remaining filter by omitting the field.
   if (auto it = obj.find("remainingFilter"); it != obj.items().end()) {
-    remainingFilter =
-        ISerializable::deserialize<core::ITypedExpr>(it->second, context);
+    VELOX_USER_CHECK(
+        !it->second.isNull(),
+        "Hive remaining filter must not be null when present");
   }
 
-  for (const auto& entry : obj["subfieldFilters"]) {
-    auto subfield = deserializeSubfield(entry["subfield"]);
-    auto filter = ISerializable::deserialize<common::Filter>(entry["filter"]);
-    subfieldFilters[common::Subfield(std::move(subfield.path()))] =
-        filter->clone();
+  std::vector<FileColumnHandlePtr> fileFilterColumns;
+  deserializeFileFields(
+      obj,
+      context,
+      connectorId,
+      tableName,
+      subfieldFilters,
+      remainingFilter,
+      fileFilterColumns,
+      sampleRate,
+      dbName);
+  for (const auto& handle : fileFilterColumns) {
+    filterColumnHandles.push_back(
+        std::dynamic_pointer_cast<const HiveColumnHandle>(handle));
   }
 
   if (auto it = obj.find("dataColumns"); it != obj.items().end()) {
@@ -396,13 +384,6 @@ void HiveTableHandle::deserializeHiveFields(
   const auto& tableParametersObj = obj["tableParameters"];
   for (const auto& key : tableParametersObj.keys()) {
     tableParameters.emplace(key.asString(), tableParametersObj[key].asString());
-  }
-
-  if (auto it = obj.find("filterColumnHandles"); it != obj.items().end()) {
-    for (const auto& handle : it->second) {
-      filterColumnHandles.push_back(
-          ISerializable::deserialize<HiveColumnHandle>(handle, context));
-    }
   }
 
   if (auto it = obj.find("indexColumns"); it != obj.items().end()) {

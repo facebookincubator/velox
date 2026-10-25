@@ -40,6 +40,29 @@ folly::dynamic FileTableHandle::serializeFileFields(
     std::string_view typeName) const {
   folly::dynamic obj = ConnectorTableHandle::serializeBase(typeName);
   obj["tableName"] = tableName_;
+
+  folly::dynamic subfieldFilters = folly::dynamic::array;
+  for (const auto& [subfield, filter] : this->subfieldFilters()) {
+    folly::dynamic pair = folly::dynamic::object;
+    pair["subfield"] = serializeSubfield(subfield);
+    pair["filter"] = filter->serialize();
+    subfieldFilters.push_back(pair);
+  }
+  obj["subfieldFilters"] = subfieldFilters;
+
+  if (remainingFilter()) {
+    obj["remainingFilter"] = remainingFilter()->serialize();
+  }
+
+  const auto filterColumns = filterColumnHandles();
+  if (!filterColumns.empty()) {
+    folly::dynamic handles = folly::dynamic::array;
+    for (const auto& handle : filterColumns) {
+      handles.push_back(handle->serialize());
+    }
+    obj["filterColumnHandles"] = handles;
+  }
+
   if (sampleRate_ < 1.0) {
     obj["sampleRate"] = sampleRate_;
   }
@@ -51,12 +74,38 @@ folly::dynamic FileTableHandle::serializeFileFields(
 
 void FileTableHandle::deserializeFileFields(
     const folly::dynamic& obj,
+    void* context,
     std::string& connectorId,
     std::string& tableName,
+    common::SubfieldFilters& subfieldFilters,
+    core::TypedExprPtr& remainingFilter,
+    std::vector<FileColumnHandlePtr>& filterColumnHandles,
     double& sampleRate,
     std::string& dbName) {
   connectorId = obj["connectorId"].asString();
   tableName = obj["tableName"].asString();
+
+  if (auto it = obj.find("remainingFilter");
+      it != obj.items().end() && !it->second.isNull()) {
+    remainingFilter =
+        ISerializable::deserialize<core::ITypedExpr>(it->second, context);
+  }
+
+  for (const auto& entry : obj["subfieldFilters"]) {
+    auto subfield = deserializeSubfield(entry["subfield"]);
+    auto filter = ISerializable::deserialize<common::Filter>(entry["filter"]);
+    VELOX_USER_CHECK_NOT_NULL(filter, "Missing subfield filter");
+    subfieldFilters[common::Subfield(std::move(subfield.path()))] =
+        filter->clone();
+  }
+
+  if (auto it = obj.find("filterColumnHandles"); it != obj.items().end()) {
+    for (const auto& handle : it->second) {
+      filterColumnHandles.push_back(
+          ISerializable::deserialize<FileColumnHandle>(handle, context));
+    }
+  }
+
   sampleRate = 1.0;
   if (obj.count("sampleRate")) {
     sampleRate = obj["sampleRate"].asDouble();

@@ -89,14 +89,18 @@ class FileTableHandle : public ConnectorTableHandle {
       double sampleRate,
       std::string dbName);
 
-  /// Serializes table identity and sampling fields. Derived handles add their
-  /// filters and format-specific fields using their existing wire contracts.
+  /// Serializes table identity, filters and sampling fields. Derived handles
+  /// append their own fields without changing the shared query-plan format.
   folly::dynamic serializeFileFields(std::string_view typeName) const;
 
   static void deserializeFileFields(
       const folly::dynamic& obj,
+      void* context,
       std::string& connectorId,
       std::string& tableName,
+      common::SubfieldFilters& subfieldFilters,
+      core::TypedExprPtr& remainingFilter,
+      std::vector<FileColumnHandlePtr>& filterColumnHandles,
       double& sampleRate,
       std::string& dbName);
 
