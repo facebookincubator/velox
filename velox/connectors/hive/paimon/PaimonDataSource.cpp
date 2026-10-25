@@ -21,9 +21,7 @@
 #include "velox/connectors/hive/paimon/PaimonColumnHandle.h"
 #include "velox/connectors/hive/paimon/PaimonConnectorSplit.h"
 #include "velox/connectors/hive/paimon/PaimonSplitReader.h"
-#include "velox/connectors/hive/paimon/PaimonSubfield.h"
 #include "velox/connectors/hive/paimon/PaimonTableHandle.h"
-#include "velox/expression/FieldReference.h"
 
 namespace facebook::velox::connector::hive::paimon {
 namespace {
@@ -106,32 +104,6 @@ PaimonDataSource::PaimonDataSource(
       PaimonTableType::kAppendOnly,
       "Paimon same-schema append reader does not support primary-key tables; "
       "primary-key reading is not implemented yet");
-
-  // Include filters extracted from remainingFilter by FileDataSource.
-  for (const auto& [path, _] : fileScanState_->filters) {
-    resolveSubfieldType(tableHandle->rowType(), path);
-  }
-  if (const auto* expressions = remainingFilterExprSet()) {
-    // The compiled expression already resolves lambda captures and shadowing.
-    for (const auto* field : expressions->expr(0)->distinctFields()) {
-      const auto index =
-          tableHandle->rowType()->getChildIdxIfExists(field->field());
-      VELOX_USER_CHECK(
-          index.has_value(),
-          "Unknown Paimon filter column '{}' in table '{}' schema {}",
-          field->field(),
-          tableHandle->name(),
-          tableHandle->schemaId());
-      VELOX_USER_CHECK(
-          *field->type() == *tableHandle->rowType()->childAt(*index),
-          "Paimon filter column '{}' (field ID {}) has type {}, but schema {} requires {}",
-          field->field(),
-          tableHandle->fieldIds()[*index],
-          field->type()->toString(),
-          tableHandle->schemaId(),
-          tableHandle->rowType()->childAt(*index)->toString());
-    }
-  }
 }
 
 void PaimonDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {

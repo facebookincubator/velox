@@ -70,36 +70,4 @@ common::Subfield deserializeSubfield(const folly::dynamic& obj) {
   return common::Subfield(std::move(path));
 }
 
-TypePtr resolveSubfieldType(
-    const TypePtr& rowType,
-    const common::Subfield& subfield) {
-  VELOX_USER_CHECK(subfield.valid(), "Invalid Paimon column path");
-  auto type = rowType;
-  for (const auto& element : subfield.path()) {
-    if (const auto* field = element->as<common::Subfield::NestedField>()) {
-      VELOX_USER_CHECK(
-          type->isRow() && type->asRow().containsChild(field->name()),
-          "Paimon column path '{}' references an unknown field '{}'",
-          subfield.toString(),
-          field->name());
-      type = type->asRow().findChild(field->name());
-    } else if (type->isArray()) {
-      VELOX_USER_CHECK(
-          element->is(common::SubfieldKind::kLongSubscript) ||
-              element->is(common::SubfieldKind::kAllSubscripts),
-          "Paimon column path '{}' requires an array index",
-          subfield.toString());
-      type = type->asArray().elementType();
-    } else {
-      VELOX_USER_CHECK(
-          type->isMap(),
-          "Paimon column path '{}' applies a subscript to {}",
-          subfield.toString(),
-          type->toString());
-      type = type->asMap().valueType();
-    }
-  }
-  return type;
-}
-
 } // namespace facebook::velox::connector::hive::paimon

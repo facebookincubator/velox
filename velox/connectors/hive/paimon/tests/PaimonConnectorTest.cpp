@@ -1133,7 +1133,7 @@ TEST_F(PaimonConnectorTest, queryValidationBeforeFileOpen) {
             table,
             {{"id", requiredColumn(common::Subfield(path))}},
             context.get()),
-        fmt::format("references an unknown field '{}'", path));
+        "Required subfield does not match column name");
   }
   EXPECT_NE(
       connector->createDataSource(
@@ -1591,27 +1591,8 @@ TEST_F(PaimonConnectorTest, extractedColumnHandleRoundTrip) {
   }
 }
 
-TEST_F(PaimonConnectorTest, filterBindingsUseFixedSchema) {
+TEST_F(PaimonConnectorTest, remainingFilterLambdaRoundTrip) {
   const auto rowType = ROW({{"id", BIGINT()}, {"value", BIGINT()}});
-  auto queryCtx = core::QueryCtx::create();
-  const auto config = std::make_shared<config::ConfigBase>(
-      std::unordered_map<std::string, std::string>{});
-  auto context = queryContextBuilder(queryCtx.get())
-                     .sessionProperties(config.get())
-                     .build();
-  const auto connector = ConnectorRegistry::tryGet(kPaimonConnectorId);
-  const auto table = makePaimonTableHandle(
-      rowType,
-      {},
-      parseExpr(
-          "value % 2.0 = 0.0", ROW({{"id", BIGINT()}, {"value", DOUBLE()}})));
-  VELOX_ASSERT_USER_THROW(
-      connector->createDataSource(
-          ROW({{"id", BIGINT()}}),
-          table,
-          makePaimonColumnHandles(ROW({{"id", BIGINT()}})),
-          context.get()),
-      "Paimon filter column 'value' (field ID 11) has type DOUBLE");
 
   // The lambda parameter 'id' shadows the table column, while 'value' is
   // a captured, unprojected table column.
@@ -1643,7 +1624,7 @@ TEST_F(PaimonConnectorTest, filterBindingsUseFixedSchema) {
   }
 }
 
-TEST_F(PaimonConnectorTest, subfieldFilterBindingsUseFixedSchema) {
+TEST_F(PaimonConnectorTest, subfieldFilterRoundTrip) {
   const auto rowType = ROW({{"id", BIGINT()}, {"r", ROW({{"x", BIGINT()}})}});
   const auto outputType = ROW({{"id", BIGINT()}});
   const auto input = makeRowVector(
@@ -1655,44 +1636,32 @@ TEST_F(PaimonConnectorTest, subfieldFilterBindingsUseFixedSchema) {
   const auto files = makeFilePaths(1);
   writeToFile(files[0]->getPath(), input);
 
-  for (const auto* field : {"x", "missing"}) {
-    SCOPED_TRACE(field);
-    for (bool useRemainingFilter : {false, true}) {
-      SCOPED_TRACE(useRemainingFilter);
-      common::SubfieldFilters filters;
-      core::TypedExprPtr remainingFilter;
-      const auto path = fmt::format("r.{}", field);
-      if (useRemainingFilter) {
-        remainingFilter = parseExpr(
-            fmt::format("{} is null", path),
-            ROW({{"r", ROW({{field, BIGINT()}})}}));
-      } else {
-        filters.emplace(
-            common::Subfield(path), std::make_unique<common::IsNull>());
-      }
-      const auto table =
-          makePaimonTableHandle(rowType, std::move(filters), remainingFilter);
-      const auto plan = exec::test::PlanBuilder()
-                            .startTableScan()
-                            .connectorId(kPaimonConnectorId)
-                            .outputType(outputType)
-                            .tableHandle(table)
-                            .assignments(makePaimonColumnHandles(outputType))
-                            .endTableScan()
-                            .planNode();
-      const auto copy =
-          ISerializable::deserialize<core::PlanNode>(plan->serialize(), pool());
-      for (const auto& scan : {plan, copy}) {
-        auto query = exec::test::AssertQueryBuilder(scan);
-        query.split(makePaimonSplit({files[0]->getPath()}));
-        if (path == "r.missing") {
-          VELOX_ASSERT_USER_THROW(
-              query.assertResults(expected),
-              "Paimon column path 'r.missing' references an unknown field 'missing'");
-        } else {
-          query.assertResults(expected);
-        }
-      }
+  for (bool useRemainingFilter : {false, true}) {
+    SCOPED_TRACE(useRemainingFilter);
+    common::SubfieldFilters filters;
+    core::TypedExprPtr remainingFilter;
+    if (useRemainingFilter) {
+      remainingFilter = parseExpr("r.x is null", rowType);
+    } else {
+      filters.emplace(
+          common::Subfield("r.x"), std::make_unique<common::IsNull>());
+    }
+    const auto table =
+        makePaimonTableHandle(rowType, std::move(filters), remainingFilter);
+    const auto plan = exec::test::PlanBuilder()
+                          .startTableScan()
+                          .connectorId(kPaimonConnectorId)
+                          .outputType(outputType)
+                          .tableHandle(table)
+                          .assignments(makePaimonColumnHandles(outputType))
+                          .endTableScan()
+                          .planNode();
+    const auto copy =
+        ISerializable::deserialize<core::PlanNode>(plan->serialize(), pool());
+    for (const auto& scan : {plan, copy}) {
+      exec::test::AssertQueryBuilder(scan)
+          .split(makePaimonSplit({files[0]->getPath()}))
+          .assertResults(expected);
     }
   }
 }

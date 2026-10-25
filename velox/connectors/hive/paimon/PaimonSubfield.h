@@ -15,18 +15,14 @@
  */
 #pragma once
 
+#include <folly/dynamic.h>
+
 #include "velox/type/Subfield.h"
-#include "velox/type/Type.h"
 
 namespace facebook::velox::connector::hive::paimon {
 
 // Preserve path elements, including literal dots and brackets in field names.
 folly::dynamic serializeSubfield(const common::Subfield& subfield);
 common::Subfield deserializeSubfield(const folly::dynamic& obj);
-
-// Resolve a path within a fixed schema; this does not map historical fields.
-TypePtr resolveSubfieldType(
-    const TypePtr& rowType,
-    const common::Subfield& subfield);
 
 } // namespace facebook::velox::connector::hive::paimon

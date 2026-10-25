@@ -70,9 +70,6 @@ PaimonColumnHandle::PaimonColumnHandle(
       extractions_.empty() || requiredSubfields_.empty(),
       "Extractions and requiredSubfields are mutually exclusive on column: {}",
       name_);
-  for (const auto& path : requiredSubfields_) {
-    resolveSubfieldType(ROW({name_}, {schemaType_}), path);
-  }
 }
 
 std::string PaimonColumnHandle::toString() const {

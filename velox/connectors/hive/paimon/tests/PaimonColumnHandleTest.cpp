@@ -140,26 +140,6 @@ TEST_F(PaimonColumnHandleTest, invalidMetadata) {
       PaimonColumnHandle("id", 1, ColumnType::kRegular, nullptr),
       "Missing Paimon column schema type");
 
-  const auto withPath = [](const std::string& path) {
-    std::vector<common::Subfield> paths;
-    paths.emplace_back(path);
-    return PaimonColumnHandle(
-        "r", 1, ColumnType::kRegular, ROW({{"x", BIGINT()}}), std::move(paths));
-  };
-  VELOX_ASSERT_USER_THROW(
-      withPath("other.x"), "references an unknown field 'other'");
-  VELOX_ASSERT_USER_THROW(
-      withPath("r.missing"), "references an unknown field 'missing'");
-  VELOX_ASSERT_USER_THROW(withPath("r.x[0]"), "applies a subscript to BIGINT");
-  VELOX_ASSERT_USER_THROW(
-      PaimonColumnHandle(
-          "r",
-          1,
-          ColumnType::kRegular,
-          ROW({{"x", BIGINT()}}),
-          std::vector<common::Subfield>(1)),
-      "Invalid Paimon column path");
-
   VELOX_ASSERT_USER_THROW(
       PaimonColumnHandle(
           "m",
