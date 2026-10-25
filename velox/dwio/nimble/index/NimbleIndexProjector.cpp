@@ -402,6 +402,11 @@ NimbleIndexProjector::co_projectRows(
                               stripeOffset,
                               /*resolveCanonicalStreams=*/false)
                               .streams;
+    streamReader_->setStreams(streams);
+    // Release the views before the stripe's streams go away.
+    SCOPE_EXIT {
+      streamReader_->reset();
+    };
     // co_read() takes the output by reference and may reassign it, so it gets
     // its own handle rather than result.values; the check below holds it to
     // filling the vector this function allocated.
@@ -411,7 +416,6 @@ NimbleIndexProjector::co_projectRows(
       const auto outputOffset = result.responses[range.requestIndex].offset +
           stripeOutputRows[range.requestIndex];
       co_await streamReader_->co_read(
-          streams,
           std::span<const RowRange>{&range.rowRange, 1},
           outputOffset,
           outputVector);
