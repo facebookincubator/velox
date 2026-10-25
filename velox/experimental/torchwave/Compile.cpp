@@ -2993,7 +2993,7 @@ std::string CompileCtx::makeCall(
     ss << "<";
     bool firstTp = true;
     if (meta->hasBlockSizeTemplateParam) {
-      ss << WaveConfig::get().blockSize;
+      ss << kBlockSizeMacro;
       firstTp = false;
     }
     for (size_t i = 0; i < meta->typeTemplateParams.size(); ++i) {
@@ -3151,7 +3151,12 @@ std::string CompileCtx::makeCall(
   // the whole declaration string, and even matching on the name would be wrong,
   // since the two ops need storage of different types rather than one shared
   // variable.
-  for (const auto& [type, name] : meta->sharedDecls) {
+  for (const auto& [declType, name] : meta->sharedDecls) {
+    std::string type = declType;
+    constexpr std::string_view kBlockSizeToken = "{blockSize}";
+    if (auto pos = type.find(kBlockSizeToken); pos != std::string::npos) {
+      type.replace(pos, kBlockSizeToken.size(), kBlockSizeMacro);
+    }
     auto varName = name + "_" + identifierSuffix(type);
     std::string decl = "  __shared__ ";
     decl += type;
