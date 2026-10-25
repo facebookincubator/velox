@@ -17,6 +17,30 @@
 #include "velox/connectors/hive/FileColumnHandle.h"
 
 namespace facebook::velox::connector::hive {
+
+FileColumnHandle::FileColumnHandle(
+    std::string name,
+    ColumnType columnType,
+    TypePtr dataType,
+    TypePtr schemaType,
+    std::vector<common::Subfield> requiredSubfields,
+    std::vector<NamedExtraction> extractions,
+    bool partitionDateValueDaysSinceEpoch,
+    std::function<void(VectorPtr&)> postProcessor)
+    : name_(std::move(name)),
+      columnType_(columnType),
+      dataType_(std::move(dataType)),
+      schemaType_(std::move(schemaType)),
+      requiredSubfields_(std::move(requiredSubfields)),
+      extractions_(std::move(extractions)),
+      partitionDateValueDaysSinceEpoch_(partitionDateValueDaysSinceEpoch),
+      postProcessor_(std::move(postProcessor)) {
+  VELOX_USER_CHECK(
+      extractions_.empty() || requiredSubfields_.empty(),
+      "Extractions and requiredSubfields are mutually exclusive on column: {}",
+      name_);
+}
+
 namespace {
 
 folly::dynamic serializeExtractionPathElement(

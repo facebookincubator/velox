@@ -37,40 +37,8 @@ class PaimonColumnHandle final : public FileColumnHandle {
       bool partitionDateValueDaysSinceEpoch = false,
       std::function<void(VectorPtr&)> postProcessor = {});
 
-  const std::string& name() const override {
-    return name_;
-  }
-
   int32_t fieldId() const {
     return fieldId_;
-  }
-
-  ColumnType columnType() const override {
-    return columnType_;
-  }
-
-  const TypePtr& schemaType() const override {
-    return schemaType_;
-  }
-
-  const TypePtr& dataType() const override {
-    return dataType_;
-  }
-
-  const std::vector<common::Subfield>& requiredSubfields() const override {
-    return requiredSubfields_;
-  }
-
-  const std::vector<NamedExtraction>& extractions() const override {
-    return extractions_;
-  }
-
-  bool isPartitionDateValueDaysSinceEpoch() const override {
-    return partitionDateValueDaysSinceEpoch_;
-  }
-
-  const std::function<void(VectorPtr&)>& postProcessor() const override {
-    return postProcessor_;
   }
 
   std::string toString() const override;
@@ -79,15 +47,7 @@ class PaimonColumnHandle final : public FileColumnHandle {
   static void registerSerDe();
 
  private:
-  const std::string name_;
   const int32_t fieldId_;
-  const ColumnType columnType_;
-  const TypePtr schemaType_;
-  const std::vector<common::Subfield> requiredSubfields_;
-  const std::vector<NamedExtraction> extractions_;
-  const bool partitionDateValueDaysSinceEpoch_;
-  const std::function<void(VectorPtr&)> postProcessor_;
-  const TypePtr dataType_;
 };
 
 using PaimonColumnHandlePtr = std::shared_ptr<const PaimonColumnHandle>;

@@ -27,31 +27,28 @@ HiveColumnHandle::HiveColumnHandle(
     std::vector<NamedExtraction> extractions,
     ColumnParseParameters columnParseParameters,
     std::function<void(VectorPtr&)> postProcessor)
-    : name_(name),
-      columnType_(columnType),
-      dataType_(std::move(dataType)),
-      hiveType_(std::move(hiveType)),
-      requiredSubfields_(std::move(requiredSubfields)),
-      extractions_(std::move(extractions)),
-      columnParseParameters_(columnParseParameters),
-      postProcessor_(std::move(postProcessor)) {
-  VELOX_USER_CHECK(
-      extractions_.empty() || requiredSubfields_.empty(),
-      "Extractions and requiredSubfields are mutually exclusive on column: {}",
-      name_);
-
-  if (extractions_.empty()) {
+    : FileColumnHandle(
+          name,
+          columnType,
+          std::move(dataType),
+          std::move(hiveType),
+          std::move(requiredSubfields),
+          std::move(extractions),
+          columnParseParameters.partitionDateValueFormat ==
+              ColumnParseParameters::kDaysSinceEpoch,
+          std::move(postProcessor)) {
+  if (this->extractions().empty()) {
     // No extractions: dataType and hiveType must match (existing behavior).
     VELOX_USER_CHECK(
-        dataType_->equivalent(*hiveType_),
+        this->dataType()->equivalent(*this->hiveType()),
         "data type {} and hive type {} do not match",
-        dataType_->toString(),
-        hiveType_->toString());
+        this->dataType()->toString(),
+        this->hiveType()->toString());
   } else {
     // Validate each extraction chain against hiveType and verify output types.
-    for (const auto& extraction : extractions_) {
+    for (const auto& extraction : this->extractions()) {
       auto derivedType =
-          deriveExtractionOutputType(hiveType_, extraction.chain);
+          deriveExtractionOutputType(this->hiveType(), extraction.chain);
       VELOX_USER_CHECK(
           derivedType->equivalent(*extraction.dataType),
           "Extraction '{}' declared output type {} does not match "
@@ -65,18 +62,18 @@ HiveColumnHandle::HiveColumnHandle(
 
 folly::dynamic HiveColumnHandle::serialize() const {
   folly::dynamic obj = ColumnHandle::serializeBase("HiveColumnHandle");
-  obj["hiveColumnHandleName"] = name_;
-  obj["columnType"] = columnTypeName(columnType_);
-  obj["dataType"] = dataType_->serialize();
-  obj["hiveType"] = hiveType_->serialize();
+  obj["hiveColumnHandleName"] = name();
+  obj["columnType"] = columnTypeName(columnType());
+  obj["dataType"] = dataType()->serialize();
+  obj["hiveType"] = hiveType()->serialize();
   folly::dynamic requiredSubfields = folly::dynamic::array;
-  for (const auto& subfield : requiredSubfields_) {
+  for (const auto& subfield : this->requiredSubfields()) {
     requiredSubfields.push_back(subfield.toString());
   }
   obj["requiredSubfields"] = requiredSubfields;
-  if (!extractions_.empty()) {
+  if (!extractions().empty()) {
     folly::dynamic extractions = folly::dynamic::array;
-    for (const auto& extraction : extractions_) {
+    for (const auto& extraction : this->extractions()) {
       extractions.push_back(serializeNamedExtraction(extraction));
     }
     obj["extractions"] = extractions;
@@ -88,20 +85,20 @@ std::string HiveColumnHandle::toStringFields() const {
   std::ostringstream out;
   out << fmt::format(
       "columnType: {}, dataType: {},",
-      columnTypeName(columnType_),
-      dataType_->toString());
+      columnTypeName(columnType()),
+      dataType()->toString());
   out << " requiredSubfields: [";
-  for (const auto& subfield : requiredSubfields_) {
+  for (const auto& subfield : requiredSubfields()) {
     out << " " << subfield.toString();
   }
   out << " ]";
-  if (!extractions_.empty()) {
+  if (!extractions().empty()) {
     out << ", extractions: [";
-    for (size_t i = 0; i < extractions_.size(); ++i) {
+    for (size_t i = 0; i < extractions().size(); ++i) {
       if (i > 0) {
         out << ", ";
       }
-      const auto& extraction = extractions_[i];
+      const auto& extraction = extractions()[i];
       out << "{outputName: " << extraction.outputName << ", chain: [";
       for (size_t j = 0; j < extraction.chain.size(); ++j) {
         if (j > 0) {
@@ -149,7 +146,7 @@ std::string HiveColumnHandle::toStringFields() const {
 
 std::string HiveColumnHandle::toString() const {
   return fmt::format(
-      "HiveColumnHandle [name: {}, {}]", name_, toStringFields());
+      "HiveColumnHandle [name: {}, {}]", name(), toStringFields());
 }
 
 ColumnHandlePtr HiveColumnHandle::create(const folly::dynamic& obj) {

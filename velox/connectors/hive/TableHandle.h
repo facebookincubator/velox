@@ -74,81 +74,10 @@ class HiveColumnHandle : public FileColumnHandle {
             columnParseParameters,
             std::move(postProcessor)) {}
 
-  const std::string& name() const override {
-    return name_;
-  }
-
-  ColumnType columnType() const override {
-    return columnType_;
-  }
-
-  const TypePtr& dataType() const override {
-    return dataType_;
-  }
-
   /// The type of this column as stored in the Hive source table. May differ
   /// from dataType() when type coercion is needed for schema evolution.
   const TypePtr& hiveType() const {
-    return hiveType_;
-  }
-
-  const TypePtr& schemaType() const override {
-    return hiveType();
-  }
-
-  /// Applies to columns of complex types: arrays, maps and structs.  When a
-  /// query uses only some of the subfields, the engine provides the complete
-  /// list of required subfields and the connector is free to prune the rest.
-  ///
-  /// Examples:
-  ///  - SELECT a[1], b['x'], x.y FROM t
-  ///  - SELECT a FROM t WHERE b['y'] > 10
-  ///
-  /// Pruning a struct means populating some of the members with null values.
-  ///
-  /// Pruning a map means dropping keys not listed in the required subfields.
-  ///
-  /// Pruning arrays means dropping values with indices larger than maximum
-  /// required index.
-  const std::vector<common::Subfield>& requiredSubfields() const override {
-    return requiredSubfields_;
-  }
-
-  /// Named extraction chains.  Empty means no extraction (current behavior).
-  /// When a single entry is present, the column handle's dataType is that
-  /// entry's dataType.  When multiple entries are present, the column
-  /// handle's dataType is a ROW type whose fields are the outputNames with
-  /// their corresponding dataTypes.
-  /// Mutually exclusive with requiredSubfields — if extractions is non-empty,
-  /// requiredSubfields must be empty.
-  const std::vector<NamedExtraction>& extractions() const override {
-    return extractions_;
-  }
-
-  bool isPartitionKey() const override {
-    return columnType_ == ColumnType::kPartitionKey;
-  }
-
-  bool isPartitionDateValueDaysSinceEpoch() const override {
-    return columnParseParameters_.partitionDateValueFormat ==
-        ColumnParseParameters::kDaysSinceEpoch;
-  }
-
-  /// Apply some row-wise post processing to this column when it is present in
-  /// output.
-  ///
-  /// It's not allowed to change the size of the vector in the processor.  The
-  /// top level vector is guaranteed to be safe to change.  Any inner vectors
-  /// and buffers need to check the reference count before doing any change in
-  /// place, otherwise you need to allocate new vectors and buffers.
-  ///
-  /// For lazy vector, this will be applied after the lazy vector is loaded.
-  /// This is only applied after all the filtering is done; the filters (both
-  /// subfield filters and remaining filter) still apply to values before post
-  /// processing.  ValueHook usage will be disabled if a post processor is
-  /// present.
-  const std::function<void(VectorPtr&)>& postProcessor() const override {
-    return postProcessor_;
+    return schemaType();
   }
 
   std::string toString() const override;
@@ -164,16 +93,6 @@ class HiveColumnHandle : public FileColumnHandle {
   // extractions) without a class-name prefix. Subclasses use this to build
   // their own toString() with the correct class name in the header.
   std::string toStringFields() const;
-
- private:
-  const std::string name_;
-  const ColumnType columnType_;
-  const TypePtr dataType_;
-  const TypePtr hiveType_;
-  const std::vector<common::Subfield> requiredSubfields_;
-  const std::vector<NamedExtraction> extractions_;
-  const ColumnParseParameters columnParseParameters_;
-  const std::function<void(VectorPtr&)> postProcessor_;
 };
 
 using HiveColumnHandlePtr = std::shared_ptr<const HiveColumnHandle>;

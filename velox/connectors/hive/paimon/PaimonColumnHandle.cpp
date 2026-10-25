@@ -55,52 +55,52 @@ PaimonColumnHandle::PaimonColumnHandle(
     std::vector<NamedExtraction> extractions,
     bool partitionDateValueDaysSinceEpoch,
     std::function<void(VectorPtr&)> postProcessor)
-    : name_(std::move(name)),
-      fieldId_(fieldId),
-      columnType_(columnType),
-      schemaType_(std::move(schemaType)),
-      requiredSubfields_(std::move(requiredSubfields)),
-      extractions_(std::move(extractions)),
-      partitionDateValueDaysSinceEpoch_(partitionDateValueDaysSinceEpoch),
-      postProcessor_(std::move(postProcessor)),
-      dataType_(outputType(schemaType_, extractions_)) {
-  VELOX_USER_CHECK(!name_.empty(), "Paimon column name must not be empty");
-  VELOX_USER_CHECK_GE(fieldId_, 0, "Paimon field ID must be nonnegative");
+    : FileColumnHandle{
+          std::move(name),
+          columnType,
+          // Braces keep type derivation before moving its inputs.
+          outputType(schemaType, extractions),
+          std::move(schemaType),
+          std::move(requiredSubfields),
+          std::move(extractions),
+          partitionDateValueDaysSinceEpoch,
+          std::move(postProcessor)},
+      fieldId_(fieldId) {
   VELOX_USER_CHECK(
-      extractions_.empty() || requiredSubfields_.empty(),
-      "Extractions and requiredSubfields are mutually exclusive on column: {}",
-      name_);
+      !this->name().empty(), "Paimon column name must not be empty");
+  VELOX_USER_CHECK_GE(fieldId_, 0, "Paimon field ID must be nonnegative");
 }
 
 std::string PaimonColumnHandle::toString() const {
   return fmt::format(
       "PaimonColumnHandle[name {}, fieldId {}, columnType {}, schemaType {}, "
       "dataType {}]",
-      name_,
+      name(),
       fieldId_,
-      columnType_,
-      schemaType_->toString(),
-      dataType_->toString());
+      columnType(),
+      schemaType()->toString(),
+      dataType()->toString());
 }
 
 folly::dynamic PaimonColumnHandle::serialize() const {
   VELOX_USER_CHECK(
-      !postProcessor_, "Paimon column callbacks cannot be serialized");
+      !postProcessor(), "Paimon column callbacks cannot be serialized");
   auto obj = ColumnHandle::serializeBase("PaimonColumnHandle");
   obj["version"] = kSerdeVersion;
-  obj["columnName"] = name_;
+  obj["columnName"] = name();
   obj["fieldId"] = fieldId_;
-  obj["columnType"] = columnTypeName(columnType_);
-  obj["schemaType"] = schemaType_->serialize();
+  obj["columnType"] = columnTypeName(columnType());
+  obj["schemaType"] = schemaType()->serialize();
   obj["requiredSubfields"] = folly::dynamic::array;
-  for (const auto& path : requiredSubfields_) {
+  for (const auto& path : requiredSubfields()) {
     obj["requiredSubfields"].push_back(serializeSubfield(path));
   }
   obj["extractions"] = folly::dynamic::array;
-  for (const auto& extraction : extractions_) {
+  for (const auto& extraction : extractions()) {
     obj["extractions"].push_back(serializeNamedExtraction(extraction));
   }
-  obj["partitionDateValueDaysSinceEpoch"] = partitionDateValueDaysSinceEpoch_;
+  obj["partitionDateValueDaysSinceEpoch"] =
+      isPartitionDateValueDaysSinceEpoch();
   return obj;
 }
 

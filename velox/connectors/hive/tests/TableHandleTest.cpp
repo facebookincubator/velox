@@ -41,13 +41,24 @@ TEST(FileHandleTest, hiveColumnHandle) {
       connector::hive::FileColumnHandle::ColumnType::kRegular);
   ASSERT_EQ(columnHandle->dataType(), columnType);
   ASSERT_EQ(columnHandle->hiveType(), columnType);
+  ASSERT_EQ(columnHandle->schemaType(), columnType);
   ASSERT_FALSE(columnHandle->isPartitionKey());
+  ASSERT_FALSE(columnHandle->isPartitionDateValueDaysSinceEpoch());
+  ASSERT_FALSE(columnHandle->postProcessor());
 
   auto str = columnHandle->toString();
   auto obj = columnHandle->serialize();
+  const folly::dynamic expected = folly::dynamic::object(
+      "name", "HiveColumnHandle")("hiveColumnHandleName", "columnHandle")(
+      "columnType", "Regular")("dataType", columnType->serialize())(
+      "hiveType", columnType->serialize())(
+      "requiredSubfields",
+      folly::dynamic::array(columnHandle->requiredSubfields()[0].toString()));
+  ASSERT_EQ(obj, expected);
   auto clone =
       ISerializable::deserialize<connector::hive::HiveColumnHandle>(obj);
   ASSERT_EQ(clone->toString(), str);
+  ASSERT_EQ(clone->serialize(), expected);
 
   auto incompatibleHiveType = ROW({{"c0c0", BIGINT()}, {"c0c1", BIGINT()}});
   VELOX_ASSERT_THROW(
@@ -57,6 +68,39 @@ TEST(FileHandleTest, hiveColumnHandle) {
           incompatibleHiveType,
           {"c0.c0c1[3][\"foo\"].c0c1c0"}),
       "data type ROW<c0c0:BIGINT,c0c1:ARRAY<MAP<VARCHAR,ROW<c0c1c0:BIGINT,c0c1c1:BIGINT>>>> and hive type ROW<c0c0:BIGINT,c0c1:BIGINT> do not match");
+}
+
+TEST(FileHandleTest, hiveColumnHandlePartitionMetadata) {
+  using ParseParameters = HiveColumnHandle::ColumnParseParameters;
+  for (auto format :
+       {ParseParameters::kISO8601, ParseParameters::kDaysSinceEpoch}) {
+    bool called = false;
+    const HiveColumnHandle column(
+        "day",
+        FileColumnHandle::ColumnType::kPartitionKey,
+        DATE(),
+        DATE(),
+        {},
+        {},
+        ParseParameters{format},
+        [&called](VectorPtr&) { called = true; });
+    const FileColumnHandle& fileColumn = column;
+    EXPECT_EQ(fileColumn.name(), "day");
+    EXPECT_EQ(
+        fileColumn.columnType(), FileColumnHandle::ColumnType::kPartitionKey);
+    EXPECT_EQ(fileColumn.schemaType(), DATE());
+    EXPECT_EQ(fileColumn.dataType(), DATE());
+    EXPECT_TRUE(fileColumn.isPartitionKey());
+    EXPECT_EQ(
+        fileColumn.isPartitionDateValueDaysSinceEpoch(),
+        format == ParseParameters::kDaysSinceEpoch);
+    EXPECT_TRUE(fileColumn.requiredSubfields().empty());
+    EXPECT_TRUE(fileColumn.extractions().empty());
+    ASSERT_TRUE(fileColumn.postProcessor());
+    VectorPtr unused;
+    fileColumn.postProcessor()(unused);
+    EXPECT_TRUE(called);
+  }
 }
 
 TEST(TableHandleTest, hiveTableHandleDbName) {
@@ -431,6 +475,9 @@ TEST(ColumnExtractionTest, singleExtraction) {
   ASSERT_EQ(handle->name(), "col");
   ASSERT_TRUE(handle->dataType()->equivalent(*ARRAY(VARCHAR())));
   ASSERT_TRUE(handle->hiveType()->equivalent(*MAP(VARCHAR(), BIGINT())));
+  const FileColumnHandle& fileColumn = *handle;
+  EXPECT_EQ(fileColumn.schemaType(), hiveType);
+  EXPECT_EQ(fileColumn.dataType(), outputType);
   ASSERT_TRUE(handle->requiredSubfields().empty());
   ASSERT_EQ(handle->extractions().size(), 1);
   ASSERT_EQ(handle->extractions()[0].outputName, "keys");
@@ -443,6 +490,9 @@ TEST(ColumnExtractionTest, singleExtraction) {
   auto obj = handle->serialize();
   auto clone = ISerializable::deserialize<HiveColumnHandle>(obj);
   ASSERT_EQ(clone->toString(), handle->toString());
+  EXPECT_EQ(clone->serialize(), obj);
+  EXPECT_EQ(*clone->schemaType(), *hiveType);
+  EXPECT_EQ(*clone->dataType(), *outputType);
   ASSERT_EQ(clone->extractions().size(), 1);
   ASSERT_EQ(clone->extractions()[0].outputName, "keys");
   ASSERT_TRUE(clone->extractions()[0].dataType->equivalent(*ARRAY(VARCHAR())));

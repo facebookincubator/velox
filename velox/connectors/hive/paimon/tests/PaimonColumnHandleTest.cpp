@@ -48,6 +48,14 @@ TEST_F(PaimonColumnHandleTest, columnMetadata) {
       column.toString(),
       "PaimonColumnHandle[name id, fieldId 73, columnType Regular, "
       "schemaType BIGINT, dataType BIGINT]");
+  const folly::dynamic expected =
+      folly::dynamic::object("name", "PaimonColumnHandle")("version", 1)(
+          "columnName", "id")("fieldId", 73)("columnType", "Regular")(
+          "schemaType", BIGINT()->serialize())(
+          "requiredSubfields", folly::dynamic::array)(
+          "extractions", folly::dynamic::array)(
+          "partitionDateValueDaysSinceEpoch", false);
+  EXPECT_EQ(column.serialize(), expected);
 }
 
 TEST_F(PaimonColumnHandleTest, roundTrip) {
@@ -101,6 +109,9 @@ TEST_F(PaimonColumnHandleTest, extractionRoundTrip) {
         std::vector<NamedExtraction>{keys, size}}) {
     const PaimonColumnHandle column(
         "m", 30, ColumnType::kRegular, schemaType, {}, extractions);
+    const FileColumnHandle& fileColumn = column;
+    EXPECT_EQ(fileColumn.schemaType(), schemaType);
+    EXPECT_EQ(fileColumn.extractions(), extractions);
     const auto copy =
         ISerializable::deserialize<PaimonColumnHandle>(column.serialize());
     EXPECT_EQ(copy->serialize(), column.serialize());
@@ -111,6 +122,7 @@ TEST_F(PaimonColumnHandleTest, extractionRoundTrip) {
     }
     EXPECT_EQ(*copy->dataType(), *expectedType);
     EXPECT_EQ(*copy->schemaType(), *schemaType);
+    EXPECT_EQ(*fileColumn.dataType(), *expectedType);
   }
 }
 
@@ -174,10 +186,21 @@ TEST_F(PaimonColumnHandleTest, malformedWire) {
 }
 
 TEST_F(PaimonColumnHandleTest, localCallbackIsNotWireState) {
+  bool called = false;
   const PaimonColumnHandle column(
-      "id", 7, ColumnType::kRegular, BIGINT(), {}, {}, false, [](VectorPtr&) {
-      });
-  EXPECT_TRUE(column.postProcessor());
+      "id",
+      7,
+      ColumnType::kRegular,
+      BIGINT(),
+      {},
+      {},
+      false,
+      [&called](VectorPtr&) { called = true; });
+  const FileColumnHandle& fileColumn = column;
+  ASSERT_TRUE(fileColumn.postProcessor());
+  VectorPtr unused;
+  fileColumn.postProcessor()(unused);
+  EXPECT_TRUE(called);
   VELOX_ASSERT_USER_THROW(
       column.serialize(), "Paimon column callbacks cannot be serialized");
 }
