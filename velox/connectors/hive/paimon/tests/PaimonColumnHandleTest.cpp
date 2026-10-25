@@ -52,9 +52,7 @@ TEST_F(PaimonColumnHandleTest, columnMetadata) {
       folly::dynamic::object("name", "PaimonColumnHandle")("version", 1)(
           "columnName", "id")("fieldId", 73)("columnType", "Regular")(
           "schemaType", BIGINT()->serialize())(
-          "requiredSubfields", folly::dynamic::array)(
-          "extractions", folly::dynamic::array)(
-          "partitionDateValueDaysSinceEpoch", false);
+          "requiredSubfields", folly::dynamic::array);
   EXPECT_EQ(column.serialize(), expected);
 }
 
@@ -68,6 +66,8 @@ TEST_F(PaimonColumnHandleTest, roundTrip) {
       ROW({{"items", ARRAY(ROW({{"value", BIGINT()}, {"other", VARCHAR()}}))}}),
       std::move(paths));
   const auto obj = column.serialize();
+  EXPECT_EQ(
+      obj["requiredSubfields"], folly::dynamic::array("r.items[*].value"));
   const auto copy = ISerializable::deserialize<PaimonColumnHandle>(obj);
   ASSERT_NE(copy, nullptr);
   EXPECT_EQ(copy->serialize(), obj);
@@ -84,16 +84,34 @@ TEST_F(PaimonColumnHandleTest, roundTrip) {
   EXPECT_EQ(partitionCopy->schemaType(), DATE());
 }
 
-TEST_F(PaimonColumnHandleTest, literalNamesRoundTrip) {
-  std::vector<common::Subfield> paths;
-  paths.push_back(std::move(*common::Subfield::create("a.b[0]")));
-  const PaimonColumnHandle column(
-      "a.b[0]", 91, ColumnType::kRegular, BIGINT(), std::move(paths));
-  const auto copy =
-      ISerializable::deserialize<PaimonColumnHandle>(column.serialize());
-  ASSERT_EQ(copy->requiredSubfields().size(), 1);
-  EXPECT_EQ(copy->requiredSubfields()[0], column.requiredSubfields()[0]);
-  EXPECT_EQ(copy->requiredSubfields()[0].path().size(), 1);
+TEST_F(PaimonColumnHandleTest, stringSubfieldsAndDefaults) {
+  const auto schemaType = ROW(
+      {{"a", BIGINT()},
+       {"items", ARRAY(ROW({{"value", BIGINT()}}))},
+       {"labels", MAP(VARCHAR(), BIGINT())}});
+  const auto paths = folly::dynamic::array(
+      "r.a", "r.items[2].value", "r.labels[\"a.b[0]\"]", "r.items[*].value");
+  const folly::dynamic requiredFields =
+      folly::dynamic::object("name", "PaimonColumnHandle")("version", 1)(
+          "columnName", "r")("fieldId", 29)("columnType", "Regular")(
+          "schemaType", schemaType->serialize())("requiredSubfields", paths);
+  std::vector<common::Subfield> expectedPaths;
+  for (const auto& path : paths) {
+    expectedPaths.emplace_back(path.asString());
+  }
+  for (bool explicitDefaults : {false, true}) {
+    auto obj = requiredFields;
+    if (explicitDefaults) {
+      obj["extractions"] = folly::dynamic::array;
+      obj["partitionDateValueDaysSinceEpoch"] = false;
+    }
+    const auto copy = ISerializable::deserialize<PaimonColumnHandle>(obj);
+    EXPECT_EQ(copy->requiredSubfields(), expectedPaths);
+    EXPECT_TRUE(copy->extractions().empty());
+    EXPECT_FALSE(copy->isPartitionDateValueDaysSinceEpoch());
+    EXPECT_EQ(*copy->dataType(), *schemaType);
+    EXPECT_EQ(copy->serialize(), requiredFields);
+  }
 }
 
 TEST_F(PaimonColumnHandleTest, extractionRoundTrip) {
@@ -179,10 +197,6 @@ TEST_F(PaimonColumnHandleTest, malformedWire) {
   obj["fieldId"] = -1;
   VELOX_ASSERT_USER_THROW(
       PaimonColumnHandle::create(obj), "Paimon field ID must be nonnegative");
-  obj = column.serialize();
-  obj["requiredSubfields"].push_back("id");
-  VELOX_ASSERT_USER_THROW(
-      PaimonColumnHandle::create(obj), "Expected Paimon subfield path");
 }
 
 TEST_F(PaimonColumnHandleTest, localCallbackIsNotWireState) {

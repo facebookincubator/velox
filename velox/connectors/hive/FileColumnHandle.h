@@ -169,6 +169,10 @@ folly::dynamic serializeNamedExtraction(const NamedExtraction& extraction);
 
 NamedExtraction deserializeNamedExtraction(const folly::dynamic& obj);
 
+/// Subfield serde using the string representation in file-based query plans.
+folly::dynamic serializeSubfield(const common::Subfield& subfield);
+common::Subfield deserializeSubfield(const folly::dynamic& obj);
+
 /// Common column metadata and accessors for file-based connectors. Used by
 /// FileDataSource and FileSplitReader. Connector-specific handles extend this
 /// class with their own metadata and serialization.

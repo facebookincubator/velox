@@ -25,6 +25,16 @@
 using namespace facebook::velox;
 using namespace facebook::velox::connector::hive;
 
+TEST(FileHandleTest, subfieldSerde) {
+  for (const auto* path :
+       {"c", "c.a", "c.items[2]", "c.labels[\"a.b[0]\"]", "c.items[*]"}) {
+    const common::Subfield subfield(path);
+    const folly::dynamic serialized = path;
+    EXPECT_EQ(serializeSubfield(subfield), serialized);
+    EXPECT_EQ(deserializeSubfield(serialized), subfield);
+  }
+}
+
 TEST(FileHandleTest, hiveColumnHandle) {
   Type::registerSerDe();
   connector::hive::HiveColumnHandle::registerSerDe();

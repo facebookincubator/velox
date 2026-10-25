@@ -134,6 +134,14 @@ NamedExtraction deserializeNamedExtraction(const folly::dynamic& obj) {
   return extraction;
 }
 
+folly::dynamic serializeSubfield(const common::Subfield& subfield) {
+  return subfield.toString();
+}
+
+common::Subfield deserializeSubfield(const folly::dynamic& obj) {
+  return common::Subfield(obj.asString());
+}
+
 namespace {
 
 const std::unordered_map<FileColumnHandle::ColumnType, std::string>&

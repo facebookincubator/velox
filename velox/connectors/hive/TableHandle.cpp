@@ -68,7 +68,7 @@ folly::dynamic HiveColumnHandle::serialize() const {
   obj["hiveType"] = hiveType()->serialize();
   folly::dynamic requiredSubfields = folly::dynamic::array;
   for (const auto& subfield : this->requiredSubfields()) {
-    requiredSubfields.push_back(subfield.toString());
+    requiredSubfields.push_back(serializeSubfield(subfield));
   }
   obj["requiredSubfields"] = requiredSubfields;
   if (!extractions().empty()) {
@@ -159,7 +159,7 @@ ColumnHandlePtr HiveColumnHandle::create(const folly::dynamic& obj) {
   std::vector<common::Subfield> requiredSubfields;
   requiredSubfields.reserve(arr.size());
   for (auto& s : arr) {
-    requiredSubfields.emplace_back(s.asString());
+    requiredSubfields.push_back(deserializeSubfield(s));
   }
 
   std::vector<NamedExtraction> extractions;
@@ -302,7 +302,7 @@ folly::dynamic HiveTableHandle::serializeHiveFields(
   folly::dynamic subfieldFilters = folly::dynamic::array;
   for (const auto& [subfield, filter] : subfieldFilters_) {
     folly::dynamic pair = folly::dynamic::object;
-    pair["subfield"] = subfield.toString();
+    pair["subfield"] = serializeSubfield(subfield);
     pair["filter"] = filter->serialize();
     subfieldFilters.push_back(pair);
   }
@@ -385,7 +385,7 @@ void HiveTableHandle::deserializeHiveFields(
   }
 
   for (const auto& entry : obj["subfieldFilters"]) {
-    common::Subfield subfield(entry["subfield"].asString());
+    auto subfield = deserializeSubfield(entry["subfield"]);
     auto filter = ISerializable::deserialize<common::Filter>(entry["filter"]);
     subfieldFilters[common::Subfield(std::move(subfield.path()))] =
         filter->clone();

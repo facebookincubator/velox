@@ -15,8 +15,6 @@
  */
 #include "velox/connectors/hive/paimon/PaimonColumnHandle.h"
 
-#include "velox/connectors/hive/paimon/PaimonSubfield.h"
-
 namespace facebook::velox::connector::hive::paimon {
 namespace {
 
@@ -95,12 +93,15 @@ folly::dynamic PaimonColumnHandle::serialize() const {
   for (const auto& path : requiredSubfields()) {
     obj["requiredSubfields"].push_back(serializeSubfield(path));
   }
-  obj["extractions"] = folly::dynamic::array;
-  for (const auto& extraction : extractions()) {
-    obj["extractions"].push_back(serializeNamedExtraction(extraction));
+  if (!extractions().empty()) {
+    obj["extractions"] = folly::dynamic::array;
+    for (const auto& extraction : extractions()) {
+      obj["extractions"].push_back(serializeNamedExtraction(extraction));
+    }
   }
-  obj["partitionDateValueDaysSinceEpoch"] =
-      isPartitionDateValueDaysSinceEpoch();
+  if (isPartitionDateValueDaysSinceEpoch()) {
+    obj["partitionDateValueDaysSinceEpoch"] = true;
+  }
   return obj;
 }
 
@@ -114,8 +115,10 @@ ColumnHandlePtr PaimonColumnHandle::create(const folly::dynamic& obj) {
     subfields.push_back(deserializeSubfield(path));
   }
   std::vector<NamedExtraction> extractions;
-  for (const auto& extraction : obj.at("extractions")) {
-    extractions.push_back(deserializeNamedExtraction(extraction));
+  if (auto it = obj.find("extractions"); it != obj.items().end()) {
+    for (const auto& extraction : it->second) {
+      extractions.push_back(deserializeNamedExtraction(extraction));
+    }
   }
   return std::make_shared<PaimonColumnHandle>(
       obj.at("columnName").asString(),
@@ -124,7 +127,7 @@ ColumnHandlePtr PaimonColumnHandle::create(const folly::dynamic& obj) {
       ISerializable::deserialize<Type>(obj.at("schemaType")),
       std::move(subfields),
       std::move(extractions),
-      obj.at("partitionDateValueDaysSinceEpoch").asBool());
+      obj.getDefault("partitionDateValueDaysSinceEpoch", false).asBool());
 }
 
 void PaimonColumnHandle::registerSerDe() {

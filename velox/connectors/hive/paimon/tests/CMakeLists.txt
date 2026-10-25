@@ -27,6 +27,7 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
   target_link_libraries(
     velox_hive_paimon_table_handle_test
     velox_hive_paimon_table_handle
+    velox_hive_paimon_column_handle
     GTest::gtest
     GTest::gtest_main
   )

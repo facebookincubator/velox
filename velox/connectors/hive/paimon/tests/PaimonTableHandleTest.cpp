@@ -150,30 +150,73 @@ TEST_F(PaimonTableHandleTest, roundTrip) {
   EXPECT_FALSE(obj.count("queryOptions"));
 }
 
-TEST_F(PaimonTableHandleTest, literalFilterNameRoundTrip) {
+TEST_F(PaimonTableHandleTest, defaultValues) {
+  const folly::dynamic requiredFields = folly::dynamic::object(
+      "name", "PaimonTableHandle")("version", 1)("connectorId", "test-paimon")(
+      "tableName", "orders")("schemaId", int64_t{1} << 40)(
+      "rowType", rowType()->serialize())(
+      "fieldIds", folly::dynamic::array(7, 8, 20))("tableType", "APPEND_ONLY")(
+      "partitionKeys", folly::dynamic::array("p"))(
+      "options", folly::dynamic::object)(
+      "subfieldFilters", folly::dynamic::array);
+  for (bool explicitDefaults : {false, true}) {
+    auto obj = requiredFields;
+    if (explicitDefaults) {
+      obj["remainingFilter"] = nullptr;
+      obj["sampleRate"] = 1.0;
+      obj["dbName"] = "";
+      obj["filterColumnHandles"] = folly::dynamic::array;
+    }
+    const auto copy = ISerializable::deserialize<PaimonTableHandle>(obj);
+    EXPECT_EQ(copy->remainingFilter(), nullptr);
+    EXPECT_EQ(copy->sampleRate(), 1.0);
+    EXPECT_TRUE(copy->dbName().empty());
+    EXPECT_TRUE(copy->filterColumnHandles().empty());
+    EXPECT_EQ(copy->serialize(), requiredFields);
+  }
+}
+
+TEST_F(PaimonTableHandleTest, subfieldStringSerde) {
+  const auto nestedType = ROW({{"a", BIGINT()}});
   common::SubfieldFilters filters;
   filters.emplace(
-      std::move(*common::Subfield::create("a.b")),
-      std::make_unique<common::IsNotNull>());
+      common::Subfield("r.a"), std::make_unique<common::IsNotNull>());
+  std::vector<common::Subfield> requiredSubfields;
+  requiredSubfields.emplace_back("r.a");
+  const auto filterColumn = std::make_shared<PaimonColumnHandle>(
+      "r",
+      7,
+      FileColumnHandle::ColumnType::kRegular,
+      nestedType,
+      std::move(requiredSubfields));
   const PaimonTableHandle original(
       "test-paimon",
       "orders",
       0,
-      ROW({{"a.b", BIGINT()}}),
+      ROW({{"r", nestedType}}),
       {7},
       PaimonTableType::kAppendOnly,
       {},
       {},
-      std::move(filters));
-  const auto copy =
-      ISerializable::deserialize<PaimonTableHandle>(original.serialize());
+      std::move(filters),
+      nullptr,
+      {filterColumn});
+  const auto obj = original.serialize();
+  EXPECT_EQ(obj["subfieldFilters"][0]["subfield"].asString(), "r.a");
+  EXPECT_EQ(
+      obj["filterColumnHandles"][0]["requiredSubfields"],
+      folly::dynamic::array("r.a"));
+  const auto copy = ISerializable::deserialize<PaimonTableHandle>(obj);
   ASSERT_EQ(copy->subfieldFilters().size(), 1);
   const auto& path = copy->subfieldFilters().begin()->first;
-  ASSERT_EQ(path.path().size(), 1);
-  EXPECT_EQ(path.baseName(), "a.b");
+  EXPECT_EQ(path, common::Subfield("r.a"));
   EXPECT_EQ(
       copy->subfieldFilters().begin()->second->serialize(),
       original.subfieldFilters().begin()->second->serialize());
+  ASSERT_EQ(copy->filterColumnHandles().size(), 1);
+  EXPECT_EQ(
+      copy->filterColumnHandles()[0]->requiredSubfields(),
+      filterColumn->requiredSubfields());
 }
 
 TEST_F(PaimonTableHandleTest, invalidDefinition) {
