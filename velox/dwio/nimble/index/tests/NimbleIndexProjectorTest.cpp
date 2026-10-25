@@ -4941,7 +4941,8 @@ TEST_P(NimbleIndexProjectorTest, maxRowsTotalAcrossRequests) {
   // Request 1: stripe 9 was never processed, resume key = original lower key.
   {
     const auto& response = result.responses[1];
-    EXPECT_TRUE(response.slices.empty());
+    ASSERT_EQ(response.slices.size(), 1);
+    EXPECT_EQ(readEmbeddedRowRange(response.slices[0]).numRows(), 0);
     ASSERT_TRUE(response.resumeKey.has_value());
     EXPECT_EQ(response.resumeKey.value(), bounds1.lowerKey);
   }
@@ -5647,8 +5648,49 @@ TEST_P(
 
   ASSERT_EQ(result.responses.size(), 2);
   EXPECT_FALSE(result.responses[0].resumeKey.has_value());
-  EXPECT_TRUE(result.responses[1].slices.empty());
+  ASSERT_EQ(result.responses[1].slices.size(), 1);
+  EXPECT_EQ(readEmbeddedRowRange(result.responses[1].slices[0]).numRows(), 0);
   EXPECT_EQ(result.responses[1].resumeKey, bounds1.lowerKey);
+}
+
+// A request that truncation stops before any of its rows are read has no data
+// slice to carry its resume key, so the key gets a header-only slice. Callers
+// that keep only the slices can still continue the request.
+TEST_P(
+    NimbleIndexProjectorTest,
+    truncationResumeKeyEmbeddedForUnreachedRequest) {
+  const auto rowType = ROW({{"key", BIGINT()}, {"value", INTEGER()}});
+  // 10 stripes x 100 rows; stripe s holds keys [s*100, s*100+100).
+  writeResumeKeyTestData();
+
+  std::vector<Subfield> subfields;
+  subfields.emplace_back("value");
+  auto projector = createProjector(subfields);
+
+  // Request 0 covers stripe 0 and request 1 covers stripe 1.
+  const auto bounds0 = makeRangeLookup(rowType, {"key"}, 0, 100);
+  const auto bounds1 = makeRangeLookup(rowType, {"key"}, 100, 200);
+  NimbleIndexProjector::Request request;
+  request.keyBounds = {bounds0, bounds1};
+  NimbleIndexProjector::Options options;
+  // Stripe 0 alone reaches the soft limit, so planning stops before request 1.
+  options.maxRows = 100;
+  options.needResumeKey = true;
+  const auto result = projector->projectStreams(request, options);
+
+  ASSERT_EQ(result.responses.size(), 2);
+  EXPECT_FALSE(result.responses[0].resumeKey.has_value());
+
+  const auto& unreached = result.responses[1];
+  EXPECT_EQ(unreached.resumeKey, bounds1.lowerKey);
+  ASSERT_EQ(unreached.slices.size(), 1);
+  const auto& slice = unreached.slices[0];
+  // The header node alone, with no stripe body behind it.
+  EXPECT_FALSE(slice.isChained());
+  const auto header = readEmbeddedTabletChunkHeader(slice);
+  EXPECT_EQ(header.rowCount, 0);
+  EXPECT_EQ(header.rowRange, RowRange(0, 0));
+  EXPECT_EQ(header.resumeKey, bounds1.lowerKey);
 }
 
 // A request whose key range matches no rows has nothing to resume, so global
@@ -6026,7 +6068,8 @@ TEST_P(NimbleIndexProjectorTest, maxRowsMultiRequestMixedSatisfaction) {
   EXPECT_TRUE(result.responses[2].resumeKey.has_value());
 
   // Request 3: stripe 9 never processed, resume key = original lower key.
-  EXPECT_TRUE(result.responses[3].slices.empty());
+  ASSERT_EQ(result.responses[3].slices.size(), 1);
+  EXPECT_EQ(readEmbeddedRowRange(result.responses[3].slices[0]).numRows(), 0);
   ASSERT_TRUE(result.responses[3].resumeKey.has_value());
   EXPECT_EQ(result.responses[3].resumeKey.value(), bounds3.lowerKey);
 }
