@@ -195,23 +195,24 @@ HiveTableHandle::HiveTableHandle(
     double sampleRate,
     std::string dbName,
     std::vector<int32_t> dataColumnFieldIds)
-    : FileTableHandle(std::move(connectorId)),
-      tableName_(tableName),
-      subfieldFilters_(std::move(subfieldFilters)),
-      remainingFilter_(remainingFilter),
-      sampleRate_(sampleRate),
-      dataColumns_(dataColumns),
+    : FileTableHandle(
+          std::move(connectorId),
+          tableName,
+          std::move(subfieldFilters),
+          remainingFilter,
+          dataColumns,
+          tableParameters,
+          sampleRate,
+          std::move(dbName)),
       dataColumnFieldIds_(std::move(dataColumnFieldIds)),
       indexColumns_(std::move(indexColumns)),
-      tableParameters_(tableParameters),
-      filterColumnHandles_(std::move(filterColumnHandles)),
-      dbName_(std::move(dbName)) {
-  VELOX_CHECK_GT(sampleRate_, 0.0, "Sample rate must be positive");
-  VELOX_CHECK_LE(sampleRate_, 1.0, "Sample rate must not exceed 1.0");
+      filterColumnHandles_(std::move(filterColumnHandles)) {
+  VELOX_CHECK_GT(sampleRate, 0.0, "Sample rate must be positive");
+  VELOX_CHECK_LE(sampleRate, 1.0, "Sample rate must not exceed 1.0");
   VELOX_CHECK(
       dataColumnFieldIds_.empty() ||
-          (dataColumns_ != nullptr &&
-           dataColumnFieldIds_.size() == dataColumns_->size()),
+          (dataColumns != nullptr &&
+           dataColumnFieldIds_.size() == dataColumns->size()),
       "Data column field IDs must be empty or aligned to data columns");
 }
 
@@ -237,11 +238,11 @@ HiveTableHandle::HiveTableHandle(
 
 std::string HiveTableHandle::toString() const {
   std::stringstream out;
-  out << "table: " << tableName_;
-  if (!subfieldFilters_.empty()) {
+  out << "table: " << tableName();
+  if (!subfieldFilters().empty()) {
     // Sort filters by subfield for deterministic output.
     std::map<std::string, common::Filter*> orderedFilters;
-    for (const auto& [field, filter] : subfieldFilters_) {
+    for (const auto& [field, filter] : subfieldFilters()) {
       orderedFilters[field.toString()] = filter.get();
     }
     out << ", range filters: [";
@@ -255,18 +256,18 @@ std::string HiveTableHandle::toString() const {
     }
     out << "]";
   }
-  if (sampleRate_ < 1.0) {
-    out << ", sample rate: " << sampleRate_;
+  if (sampleRate() < 1.0) {
+    out << ", sample rate: " << sampleRate();
   }
-  if (remainingFilter_) {
-    out << ", remaining filter: (" << remainingFilter_->toString() << ")";
+  if (remainingFilter()) {
+    out << ", remaining filter: (" << remainingFilter()->toString() << ")";
   }
-  if (dataColumns_) {
-    out << ", data columns: " << dataColumns_->toString();
+  if (dataColumns()) {
+    out << ", data columns: " << dataColumns()->toString();
   }
-  if (!tableParameters_.empty()) {
+  if (!tableParameters().empty()) {
     std::map<std::string, std::string> orderedTableParameters{
-        tableParameters_.begin(), tableParameters_.end()};
+        tableParameters().begin(), tableParameters().end()};
     out << ", table parameters: [";
     bool firstParam = true;
     for (const auto& param : orderedTableParameters) {
@@ -296,11 +297,10 @@ std::string HiveTableHandle::toString() const {
 
 folly::dynamic HiveTableHandle::serializeHiveFields(
     std::string_view typeName) const {
-  folly::dynamic obj = ConnectorTableHandle::serializeBase(typeName);
-  obj["tableName"] = tableName_;
+  folly::dynamic obj = serializeFileFields(typeName);
 
   folly::dynamic subfieldFilters = folly::dynamic::array;
-  for (const auto& [subfield, filter] : subfieldFilters_) {
+  for (const auto& [subfield, filter] : this->subfieldFilters()) {
     folly::dynamic pair = folly::dynamic::object;
     pair["subfield"] = serializeSubfield(subfield);
     pair["filter"] = filter->serialize();
@@ -308,16 +308,12 @@ folly::dynamic HiveTableHandle::serializeHiveFields(
   }
   obj["subfieldFilters"] = subfieldFilters;
 
-  if (remainingFilter_) {
-    obj["remainingFilter"] = remainingFilter_->serialize();
+  if (remainingFilter()) {
+    obj["remainingFilter"] = remainingFilter()->serialize();
   }
 
-  if (sampleRate_ < 1.0) {
-    obj["sampleRate"] = sampleRate_;
-  }
-
-  if (dataColumns_) {
-    obj["dataColumns"] = dataColumns_->serialize();
+  if (dataColumns()) {
+    obj["dataColumns"] = dataColumns()->serialize();
   }
 
   if (!dataColumnFieldIds_.empty()) {
@@ -329,7 +325,7 @@ folly::dynamic HiveTableHandle::serializeHiveFields(
   }
 
   folly::dynamic tableParameters = folly::dynamic::object;
-  for (const auto& param : tableParameters_) {
+  for (const auto& param : this->tableParameters()) {
     tableParameters[param.first] = param.second;
   }
   obj["tableParameters"] = tableParameters;
@@ -348,10 +344,6 @@ folly::dynamic HiveTableHandle::serializeHiveFields(
       indexColumns.push_back(column);
     }
     obj["indexColumns"] = indexColumns;
-  }
-
-  if (!dbName_.empty()) {
-    obj["dbName"] = dbName_;
   }
 
   return obj;
@@ -376,8 +368,7 @@ void HiveTableHandle::deserializeHiveFields(
     std::vector<std::string>& indexColumns,
     std::string& dbName,
     std::vector<int32_t>& dataColumnFieldIds) {
-  connectorId = obj["connectorId"].asString();
-  tableName = obj["tableName"].asString();
+  deserializeFileFields(obj, connectorId, tableName, sampleRate, dbName);
 
   if (auto it = obj.find("remainingFilter"); it != obj.items().end()) {
     remainingFilter =
@@ -389,11 +380,6 @@ void HiveTableHandle::deserializeHiveFields(
     auto filter = ISerializable::deserialize<common::Filter>(entry["filter"]);
     subfieldFilters[common::Subfield(std::move(subfield.path()))] =
         filter->clone();
-  }
-
-  sampleRate = 1.0;
-  if (obj.count("sampleRate")) {
-    sampleRate = obj["sampleRate"].asDouble();
   }
 
   if (auto it = obj.find("dataColumns"); it != obj.items().end()) {
@@ -423,10 +409,6 @@ void HiveTableHandle::deserializeHiveFields(
     for (const auto& col : it->second) {
       indexColumns.push_back(col.asString());
     }
-  }
-
-  if (auto it = obj.find("dbName"); it != obj.items().end()) {
-    dbName = it->second.asString();
   }
 }
 

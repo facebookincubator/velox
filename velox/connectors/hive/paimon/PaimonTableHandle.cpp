@@ -65,20 +65,22 @@ PaimonTableHandle::PaimonTableHandle(
     std::vector<FileColumnHandlePtr> filterColumnHandles,
     double sampleRate,
     std::string dbName)
-    : FileTableHandle(std::move(connectorId)),
-      tableName_(std::move(tableName)),
-      dbName_(std::move(dbName)),
+    : FileTableHandle(
+          std::move(connectorId),
+          std::move(tableName),
+          std::move(subfieldFilters),
+          std::move(remainingFilter),
+          deriveDataColumns(rowType, partitionKeys),
+          /*tableParameters=*/{},
+          sampleRate,
+          std::move(dbName)),
       schemaId_(schemaId),
       rowType_(std::move(rowType)),
       fieldIds_(std::move(fieldIds)),
       tableType_(tableType),
       partitionKeys_(std::move(partitionKeys)),
       options_(std::move(options)),
-      subfieldFilters_(std::move(subfieldFilters)),
-      remainingFilter_(std::move(remainingFilter)),
-      filterColumnHandles_(std::move(filterColumnHandles)),
-      sampleRate_(sampleRate),
-      dataColumns_(deriveDataColumns(rowType_, partitionKeys_)) {
+      filterColumnHandles_(std::move(filterColumnHandles)) {
   VELOX_USER_CHECK_GE(schemaId_, 0, "Paimon schema ID must be nonnegative");
   VELOX_USER_CHECK_EQ(
       fieldIds_.size(),
@@ -90,32 +92,24 @@ PaimonTableHandle::PaimonTableHandle(
     VELOX_USER_CHECK(ids.insert(id).second, "Duplicate Paimon field ID {}", id);
   }
   VELOX_USER_CHECK(
-      std::isfinite(sampleRate_) && sampleRate_ > 0 && sampleRate_ <= 1,
+      std::isfinite(sampleRate) && sampleRate > 0 && sampleRate <= 1,
       "Paimon sample rate must be finite and in (0, 1]");
-}
-
-const std::unordered_map<std::string, std::string>&
-PaimonTableHandle::tableParameters() const {
-  // Native Paimon options are not file-reader parameters such as skip-header.
-  static const std::unordered_map<std::string, std::string> kEmpty;
-  return kEmpty;
 }
 
 std::string PaimonTableHandle::toString() const {
   return fmt::format(
       "PaimonTableHandle[table {}, schemaId {}, tableType {}, dataColumns {}, "
       "sampleRate {}]",
-      tableName_,
+      tableName(),
       schemaId_,
       tableType_,
-      dataColumns_->toString(),
-      sampleRate_);
+      dataColumns()->toString(),
+      sampleRate());
 }
 
 folly::dynamic PaimonTableHandle::serialize() const {
-  folly::dynamic obj = ConnectorTableHandle::serializeBase("PaimonTableHandle");
+  folly::dynamic obj = serializeFileFields("PaimonTableHandle");
   obj["version"] = kSerdeVersion;
-  obj["tableName"] = tableName_;
   obj["schemaId"] = schemaId_;
   obj["rowType"] = rowType_->serialize();
   obj["fieldIds"] = ISerializable::serialize(fieldIds_);
@@ -126,7 +120,7 @@ folly::dynamic PaimonTableHandle::serialize() const {
     obj["options"][key] = value;
   }
   folly::dynamic subfieldFilters = folly::dynamic::array;
-  for (const auto& [subfield, filter] : subfieldFilters_) {
+  for (const auto& [subfield, filter] : this->subfieldFilters()) {
     VELOX_USER_CHECK_NOT_NULL(filter, "Missing Paimon subfield filter");
     folly::dynamic pair = folly::dynamic::object;
     pair["subfield"] = serializeSubfield(subfield);
@@ -135,12 +129,8 @@ folly::dynamic PaimonTableHandle::serialize() const {
   }
   obj["subfieldFilters"] = subfieldFilters;
 
-  if (remainingFilter_) {
-    obj["remainingFilter"] = remainingFilter_->serialize();
-  }
-
-  if (sampleRate_ < 1.0) {
-    obj["sampleRate"] = sampleRate_;
+  if (remainingFilter()) {
+    obj["remainingFilter"] = remainingFilter()->serialize();
   }
 
   if (!filterColumnHandles_.empty()) {
@@ -152,10 +142,6 @@ folly::dynamic PaimonTableHandle::serialize() const {
     obj["filterColumnHandles"] = filterColumnHandles;
   }
 
-  if (!dbName_.empty()) {
-    obj["dbName"] = dbName_;
-  }
-
   return obj;
 }
 
@@ -165,6 +151,12 @@ ConnectorTableHandlePtr PaimonTableHandle::create(
   VELOX_USER_CHECK(
       obj.at("version").isInt() && obj.at("version").asInt() == kSerdeVersion,
       "Unsupported Paimon table handle wire version");
+
+  std::string connectorId;
+  std::string tableName;
+  std::string dbName;
+  double sampleRate{1.0};
+  deserializeFileFields(obj, connectorId, tableName, sampleRate, dbName);
 
   core::TypedExprPtr remainingFilter;
   if (auto it = obj.find("remainingFilter");
@@ -187,11 +179,6 @@ ConnectorTableHandlePtr PaimonTableHandle::create(
         "Duplicate Paimon subfield filter");
   }
 
-  double sampleRate = 1.0;
-  if (obj.count("sampleRate")) {
-    sampleRate = obj["sampleRate"].asDouble();
-  }
-
   std::vector<FileColumnHandlePtr> filterColumns;
   if (auto it = obj.find("filterColumnHandles"); it != obj.items().end()) {
     VELOX_USER_CHECK(
@@ -206,14 +193,9 @@ ConnectorTableHandlePtr PaimonTableHandle::create(
     options.emplace(key.asString(), value.asString());
   }
 
-  std::string dbName;
-  if (auto it = obj.find("dbName"); it != obj.items().end()) {
-    dbName = it->second.asString();
-  }
-
   return std::make_shared<PaimonTableHandle>(
-      obj["connectorId"].asString(),
-      obj["tableName"].asString(),
+      std::move(connectorId),
+      std::move(tableName),
       ISerializable::deserialize<int64_t>(obj.at("schemaId")),
       ISerializable::deserialize<RowType>(obj.at("rowType"), context),
       ISerializable::deserialize<std::vector<int32_t>>(obj.at("fieldIds")),

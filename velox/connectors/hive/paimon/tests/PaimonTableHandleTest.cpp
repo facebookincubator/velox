@@ -127,6 +127,20 @@ TEST_F(PaimonTableHandleTest, roundTrip) {
       {filterColumn},
       0.5,
       "analytics");
+  const FileTableHandle& fileHandle = original;
+  EXPECT_EQ(fileHandle.name(), "orders");
+  EXPECT_EQ(fileHandle.tableName(), "orders");
+  EXPECT_EQ(fileHandle.dbName(), "analytics");
+  EXPECT_EQ(fileHandle.sampleRate(), 0.5);
+  EXPECT_EQ(fileHandle.remainingFilter(), remaining);
+  EXPECT_TRUE(fileHandle.tableParameters().empty());
+  EXPECT_EQ(
+      *fileHandle.dataColumns(), *ROW({{"id", BIGINT()}, {"value", BIGINT()}}));
+  ASSERT_EQ(fileHandle.filterColumnHandles().size(), 1);
+  EXPECT_EQ(fileHandle.filterColumnHandles()[0], filterColumn);
+  EXPECT_EQ(
+      fileHandle.subfieldFilters().at(common::Subfield("id"))->serialize(),
+      common::BigintRange(1, 9, false).serialize());
   const auto obj = original.serialize();
   const auto copy = ISerializable::deserialize<PaimonTableHandle>(obj);
   ASSERT_NE(copy, nullptr);
@@ -145,6 +159,7 @@ TEST_F(PaimonTableHandleTest, roundTrip) {
   EXPECT_EQ(copy->dbName(), "analytics");
   EXPECT_EQ(copy->sampleRate(), 0.5);
   EXPECT_FALSE(obj.count("dataColumns"));
+  EXPECT_FALSE(obj.count("tableParameters"));
   EXPECT_FALSE(obj.count("schema"));
   EXPECT_FALSE(obj.count("readProfile"));
   EXPECT_FALSE(obj.count("queryOptions"));

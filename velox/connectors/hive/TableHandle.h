@@ -128,36 +128,12 @@ class HiveTableHandle : public FileTableHandle {
       std::vector<HiveColumnHandlePtr> filterColumnHandles,
       double sampleRate = 1.0);
 
-  const std::string& tableName() const {
-    return tableName_;
-  }
-
-  const std::string& name() const override {
-    return tableName();
-  }
-
   bool supportsIndexLookup() const override {
     return !indexColumns_.empty();
   }
 
   bool needsIndexSplit() const override {
     return true;
-  }
-
-  const common::SubfieldFilters& subfieldFilters() const override {
-    return subfieldFilters_;
-  }
-
-  const core::TypedExprPtr& remainingFilter() const override {
-    return remainingFilter_;
-  }
-
-  double sampleRate() const override {
-    return sampleRate_;
-  }
-
-  const RowTypePtr& dataColumns() const override {
-    return dataColumns_;
   }
 
   /// Returns Iceberg field IDs aligned positionally to dataColumns(). An empty
@@ -171,11 +147,6 @@ class HiveTableHandle : public FileTableHandle {
     return indexColumns_;
   }
 
-  const std::unordered_map<std::string, std::string>& tableParameters()
-      const override {
-    return tableParameters_;
-  }
-
   /// Return filter column handles as FileColumnHandlePtr for the generic scan
   /// pipeline.
   std::vector<FileColumnHandlePtr> filterColumnHandles() const override {
@@ -185,10 +156,6 @@ class HiveTableHandle : public FileTableHandle {
   /// Return filter column handles with their concrete Hive type.
   const std::vector<HiveColumnHandlePtr>& hiveFilterColumnHandles() const {
     return filterColumnHandles_;
-  }
-
-  const std::string& dbName() const override {
-    return dbName_;
   }
 
   std::string toString() const override;
@@ -228,16 +195,9 @@ class HiveTableHandle : public FileTableHandle {
       std::vector<int32_t>& dataColumnFieldIds);
 
  private:
-  const std::string tableName_;
-  const common::SubfieldFilters subfieldFilters_;
-  const core::TypedExprPtr remainingFilter_;
-  const double sampleRate_;
-  const RowTypePtr dataColumns_;
   const std::vector<int32_t> dataColumnFieldIds_;
   const std::vector<std::string> indexColumns_;
-  const std::unordered_map<std::string, std::string> tableParameters_;
   const std::vector<HiveColumnHandlePtr> filterColumnHandles_;
-  const std::string dbName_;
 };
 
 using HiveTableHandlePtr = std::shared_ptr<const HiveTableHandle>;
