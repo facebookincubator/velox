@@ -1133,7 +1133,7 @@ TEST_F(PaimonConnectorTest, queryValidationBeforeFileOpen) {
             table,
             {{"id", requiredColumn(common::Subfield(path))}},
             context.get()),
-        "Required subfield does not match column name");
+        fmt::format("references an unknown field '{}'", path));
   }
   EXPECT_NE(
       connector->createDataSource(
@@ -1640,6 +1640,60 @@ TEST_F(PaimonConnectorTest, filterBindingsUseFixedSchema) {
     exec::test::AssertQueryBuilder(scan)
         .split(makePaimonSplit({files[0]->getPath()}))
         .assertResults(expected);
+  }
+}
+
+TEST_F(PaimonConnectorTest, subfieldFilterBindingsUseFixedSchema) {
+  const auto rowType = ROW({{"id", BIGINT()}, {"r", ROW({{"x", BIGINT()}})}});
+  const auto outputType = ROW({{"id", BIGINT()}});
+  const auto input = makeRowVector(
+      {"id", "r"},
+      {makeFlatVector<int64_t>({1, 2}),
+       makeRowVector(
+           {"x"}, {makeNullableFlatVector<int64_t>({std::nullopt, 20})})});
+  const auto expected = makeRowVector({"id"}, {makeFlatVector<int64_t>({1})});
+  const auto files = makeFilePaths(1);
+  writeToFile(files[0]->getPath(), input);
+
+  for (const auto* field : {"x", "missing"}) {
+    SCOPED_TRACE(field);
+    for (bool useRemainingFilter : {false, true}) {
+      SCOPED_TRACE(useRemainingFilter);
+      common::SubfieldFilters filters;
+      core::TypedExprPtr remainingFilter;
+      const auto path = fmt::format("r.{}", field);
+      if (useRemainingFilter) {
+        remainingFilter = parseExpr(
+            fmt::format("{} is null", path),
+            ROW({{"r", ROW({{field, BIGINT()}})}}));
+      } else {
+        filters.emplace(
+            common::Subfield(path), std::make_unique<common::IsNull>());
+      }
+      const auto table =
+          makePaimonTableHandle(rowType, std::move(filters), remainingFilter);
+      const auto plan = exec::test::PlanBuilder()
+                            .startTableScan()
+                            .connectorId(kPaimonConnectorId)
+                            .outputType(outputType)
+                            .tableHandle(table)
+                            .assignments(makePaimonColumnHandles(outputType))
+                            .endTableScan()
+                            .planNode();
+      const auto copy =
+          ISerializable::deserialize<core::PlanNode>(plan->serialize(), pool());
+      for (const auto& scan : {plan, copy}) {
+        auto query = exec::test::AssertQueryBuilder(scan);
+        query.split(makePaimonSplit({files[0]->getPath()}));
+        if (path == "r.missing") {
+          VELOX_ASSERT_USER_THROW(
+              query.assertResults(expected),
+              "Paimon column path 'r.missing' references an unknown field 'missing'");
+        } else {
+          query.assertResults(expected);
+        }
+      }
+    }
   }
 }
 

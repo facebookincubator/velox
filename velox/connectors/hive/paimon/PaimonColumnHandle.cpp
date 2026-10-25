@@ -71,10 +71,6 @@ PaimonColumnHandle::PaimonColumnHandle(
       "Extractions and requiredSubfields are mutually exclusive on column: {}",
       name_);
   for (const auto& path : requiredSubfields_) {
-    VELOX_USER_CHECK(
-        path.valid() && path.baseName() == name_,
-        "Required subfield does not match column name '{}'",
-        name_);
     resolveSubfieldType(ROW({name_}, {schemaType_}), path);
   }
 }

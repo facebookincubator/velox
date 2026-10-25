@@ -147,10 +147,18 @@ TEST_F(PaimonColumnHandleTest, invalidMetadata) {
         "r", 1, ColumnType::kRegular, ROW({{"x", BIGINT()}}), std::move(paths));
   };
   VELOX_ASSERT_USER_THROW(
-      withPath("other.x"), "Required subfield does not match column name 'r'");
+      withPath("other.x"), "references an unknown field 'other'");
   VELOX_ASSERT_USER_THROW(
       withPath("r.missing"), "references an unknown field 'missing'");
   VELOX_ASSERT_USER_THROW(withPath("r.x[0]"), "applies a subscript to BIGINT");
+  VELOX_ASSERT_USER_THROW(
+      PaimonColumnHandle(
+          "r",
+          1,
+          ColumnType::kRegular,
+          ROW({{"x", BIGINT()}}),
+          std::vector<common::Subfield>(1)),
+      "Invalid Paimon column path");
 
   VELOX_ASSERT_USER_THROW(
       PaimonColumnHandle(

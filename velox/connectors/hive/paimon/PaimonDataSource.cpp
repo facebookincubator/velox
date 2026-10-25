@@ -107,8 +107,8 @@ PaimonDataSource::PaimonDataSource(
       "Paimon same-schema append reader does not support primary-key tables; "
       "primary-key reading is not implemented yet");
 
-  // Named conditions refer to the same fixed schema as the ID-bound columns.
-  for (const auto& [path, _] : tableHandle->subfieldFilters()) {
+  // Include filters extracted from remainingFilter by FileDataSource.
+  for (const auto& [path, _] : fileScanState_->filters) {
     resolveSubfieldType(tableHandle->rowType(), path);
   }
   if (const auto* expressions = remainingFilterExprSet()) {
