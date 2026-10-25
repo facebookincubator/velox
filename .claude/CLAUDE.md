@@ -178,6 +178,16 @@ are summarized below.
   function-call argument lists that span multiple lines. This produces cleaner
   diffs when items are added or reordered.
 
+### Types
+
+- Use the short `ROW` forms rather than spelling out parallel vectors:
+  - One field: `ROW("a", BIGINT())`, not `ROW({"a"}, {BIGINT()})`.
+  - Fields sharing a type: `ROW({"a", "b"}, BIGINT())`, not
+    `ROW({"a", "b"}, {BIGINT(), BIGINT()})`.
+  - Mixed types: `ROW({{"a", BIGINT()}, {"b", VARCHAR()}})`, not
+    `ROW({"a", "b"}, {BIGINT(), VARCHAR()})`, which leaves the reader pairing
+    up two lists by position.
+
 ### API Design
 
 - Keep the public API surface small.
@@ -217,6 +227,18 @@ Common matchers:
 - `SizeIs(n)` - collection has n elements
 
 Requires `#include <gmock/gmock.h>`.
+
+- Assert the error message, not just the type. Use
+  `VELOX_ASSERT_THROW(expression, "message")` from
+  `velox/common/base/tests/GTestUtils.h`. Spelling the message out in the test
+  forces you to read it and judge whether it is informative and actionable; in
+  production that text is the whole diagnosis.
+  `EXPECT_THROW(expression, VeloxRuntimeError)` checks the type and leaves the
+  message unread.
+- Scope each case instead of numbering names. When a test walks through several
+  cases, wrap each in braces and reuse one name. `rowType1`, `rowType2` and
+  `expected1` make the reader track which one is live, and keep dead values in
+  scope.
 
 ## Common Mistakes
 
