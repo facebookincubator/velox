@@ -17,9 +17,11 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <atomic>
 #include <cstdint>
 #include <optional>
 #include <string_view>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -5286,6 +5288,88 @@ TEST_F(ProjectorTest, singleFlatMapSortedFastPath) {
   auto resultMap = resultRow->childAt(1)->as<MapVector>();
   for (vector_size_t i = 0; i < numRows; ++i) {
     ASSERT_EQ(resultMap->sizeAt(i), 2); // keys "a" and "c"
+  }
+}
+
+// Verifies one Projector serves concurrent project() calls. Threads share the
+// projector and its contiguous and chained inputs, across the sorted and the
+// unsorted stream paths, and must reproduce the single-threaded output.
+TEST_F(ProjectorTest, concurrentProject) {
+  velox::test::VectorMaker vectorMaker{pool_.get()};
+  const auto input = vectorMaker.rowVector(
+      {"id", "map_a", "map_b"},
+      {makeIntVector<int64_t>({0, 1, 2, 3}),
+       vectorMaker.mapVectorFromJson<int64_t, double>(
+           {"{1: 10, 2: 20}", "null", "{}", "{1: 11, 2: 21}"}),
+       vectorMaker.mapVectorFromJson<int64_t, int64_t>(
+           {"{3: 30}", "{3: 31, 4: 40}", "null", "{}"})});
+  const auto [serialized, inputSchema] = serializeWithSchema(
+      input,
+      input->type(),
+      {
+          .version = SerializationVersion::kSerialization,
+          .flatMapColumns = {{"map_a", {}}, {"map_b", {}}},
+      });
+  const std::string_view contiguousInput{serialized};
+  const auto mid = serialized.size() / 2;
+  auto chainedInput = folly::IOBuf::copyBuffer(serialized.data(), mid);
+  chainedInput->appendToChain(
+      folly::IOBuf::copyBuffer(
+          serialized.data() + mid, serialized.size() - mid));
+
+  struct TestParam {
+    std::string testName;
+    std::vector<std::string> paths;
+    bool inputStreamsSorted;
+
+    std::string debugString() const {
+      return fmt::format(
+          "{}, inputStreamsSorted {}", testName, inputStreamsSorted);
+    }
+  };
+  // One FlatMap keeps the selected input streams in input order; keys from two
+  // FlatMaps interleave them.
+  const std::vector<TestParam> testSettings = {
+      {"singleFlatMap", {"id", "map_a[\"1\"]"}, true},
+      {"interleavedFlatMaps", {"map_a[\"2\"]", "map_b[\"3\"]"}, false},
+  };
+
+  constexpr int kNumThreads = 8;
+  constexpr int kNumIterations = 100;
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(testData.debugString());
+    std::vector<common::Subfield> subfields;
+    subfields.reserve(testData.paths.size());
+    for (const auto& path : testData.paths) {
+      subfields.emplace_back(path);
+    }
+    const Projector projector{inputSchema, subfields, pool_.get(), {}};
+    ASSERT_EQ(
+        projector.testingInputStreamsSorted(), testData.inputStreamsSorted);
+    const auto expectedContiguous =
+        toString(projector.project(contiguousInput));
+    const auto expectedChained = toString(projector.project(*chainedInput));
+
+    std::atomic_int32_t numMismatches{0};
+    std::vector<std::thread> threads;
+    threads.reserve(kNumThreads);
+    for (int i = 0; i < kNumThreads; ++i) {
+      threads.emplace_back([&]() {
+        for (int iteration = 0; iteration < kNumIterations; ++iteration) {
+          if (toString(projector.project(contiguousInput)) !=
+              expectedContiguous) {
+            ++numMismatches;
+          }
+          if (toString(projector.project(*chainedInput)) != expectedChained) {
+            ++numMismatches;
+          }
+        }
+      });
+    }
+    for (auto& thread : threads) {
+      thread.join();
+    }
+    EXPECT_EQ(numMismatches.load(), 0);
   }
 }
 
