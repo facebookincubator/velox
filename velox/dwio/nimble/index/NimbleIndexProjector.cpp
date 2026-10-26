@@ -402,6 +402,11 @@ NimbleIndexProjector::co_projectRows(
                               stripeOffset,
                               /*resolveCanonicalStreams=*/false)
                               .streams;
+    streamReader_->setStreams(streams);
+    // Release the views before the stripe's streams go away.
+    SCOPE_EXIT {
+      streamReader_->reset();
+    };
     // co_read() takes the output by reference and may reassign it, so it gets
     // its own handle rather than result.values; the check below holds it to
     // filling the vector this function allocated.
@@ -411,7 +416,6 @@ NimbleIndexProjector::co_projectRows(
       const auto outputOffset = result.responses[range.requestIndex].offset +
           stripeOutputRows[range.requestIndex];
       co_await streamReader_->co_read(
-          streams,
           std::span<const RowRange>{&range.rowRange, 1},
           outputOffset,
           outputVector);
@@ -628,7 +632,6 @@ void NimbleIndexProjector::prepareStripes() {
   const auto needResumeKey = ctx_.options->needResumeKey;
   auto& rowsPerRequest = ctx_.rowsPerRequest;
   rowsPerRequest.assign(ctx_.numRequests, 0);
-  ctx_.hasProcessedStripeRange.assign(ctx_.numRequests, false);
   ctx_.resumeKeys.assign(ctx_.numRequests, std::nullopt);
   // Reserve against the number of stripes that carry ranges, not the min..max
   // span: the CSR is now indexed by position in resolvedStripes, so the span
@@ -669,12 +672,6 @@ void NimbleIndexProjector::prepareStripes() {
     uint64_t stripeRows{0};
     for (const auto& range : spanRanges) {
       const auto requestIndex = range.requestIndex;
-      // The request reached this stripe, whether or not the stripe hands it
-      // any data. Recording that keeps it out of the retry path in
-      // setResumeKeys(), which would otherwise return its own lower key and
-      // have it scan the same ground again.
-      ctx_.hasProcessedStripeRange[requestIndex] = true;
-
       if (maxRowsPerRequest > 0 &&
           rowsPerRequest[requestIndex] >= maxRowsPerRequest) {
         continue;
@@ -787,7 +784,6 @@ void NimbleIndexProjector::clearRequest() {
   ctx_.plan.stripeRangeOffsets.clear();
   ctx_.plan.stripeRanges.clear();
   ctx_.plan.truncated = false;
-  ctx_.hasProcessedStripeRange.clear();
   ctx_.resumeKeys.clear();
   ctx_.dataInputIndices.clear();
   ctx_.dataHandle.reset();
@@ -1552,55 +1548,53 @@ void NimbleIndexProjector::prepareResumeKeys() {
   }
   const auto lastStripeOffset = ctx_.plan.stripeIndices.size() - 1;
   const auto stripeIndex = ctx_.plan.stripeIndices[lastStripeOffset];
-  const auto stripeRanges = plannedStripeRanges(lastStripeOffset);
-
-  // No next stripe in the range map — all mapped requests end at this stripe.
-  // resolvedStripes is ascending, so the successor is found by binary search;
-  // a miss means the next stripe carries no ranges and nothing continues.
-  const auto nextStripe = stripeIndex + 1;
+  // resolvedStripes is ascending, so the stripes from here on are the ones
+  // planning never processed.
   const auto& resolvedStripes = ctx_.stripeRanges.resolvedStripes;
-  const auto nextStripeIt = std::lower_bound(
-      resolvedStripes.begin(), resolvedStripes.end(), nextStripe);
-  if (nextStripeIt == resolvedStripes.end() || *nextStripeIt != nextStripe) {
-    return;
-  }
+  const auto firstUnprocessed = static_cast<uint32_t>(
+      std::upper_bound(
+          resolvedStripes.begin(), resolvedStripes.end(), stripeIndex) -
+      resolvedStripes.begin());
 
-  // No next stripe in the file — all requests are fully satisfied.
-  const auto stripeStartRow =
-      static_cast<uint32_t>(tablet_->stripeStartRow(stripeIndex));
-  const auto nextStripeStartRow = stripeStartRow + stripeRowCount(stripeIndex);
-  if (nextStripeStartRow >= tablet_->tabletRowCount()) {
-    return;
-  }
-
-  const auto nextStripeResumeKey = clusterIndex_->keyAtRow(nextStripeStartRow);
-  const auto nextRanges = ctx_.stripeRanges.getRanges(
-      static_cast<uint32_t>(nextStripeIt - resolvedStripes.begin()));
-
-  for (const auto& request : stripeRanges) {
-    auto& resumeKey = ctx_.resumeKeys[request.requestIndex];
-    if (!resumeKey.has_value() &&
-        std::any_of(
-            nextRanges.begin(), nextRanges.end(), [&](const auto& range) {
-              return range.requestIndex == request.requestIndex;
-            })) {
-      resumeKey = nextStripeResumeKey;
+  // A request covers one contiguous stripe run, so a request planned in the
+  // last stripe can only continue into the adjacent stripe.
+  if (firstUnprocessed < resolvedStripes.size() &&
+      resolvedStripes[firstUnprocessed] == stripeIndex + 1) {
+    const auto nextStripeResumeKey = clusterIndex_->keyAtRow(
+        static_cast<uint32_t>(tablet_->stripeStartRow(stripeIndex + 1)));
+    const auto nextRanges = ctx_.stripeRanges.getRanges(firstUnprocessed);
+    for (const auto& request : plannedStripeRanges(lastStripeOffset)) {
+      auto& resumeKey = ctx_.resumeKeys[request.requestIndex];
+      if (!resumeKey.has_value() &&
+          std::any_of(
+              nextRanges.begin(), nextRanges.end(), [&](const auto& range) {
+                return range.requestIndex == request.requestIndex;
+              })) {
+        resumeKey = nextStripeResumeKey;
+      }
     }
   }
 
-  // For requests planning never reached before truncation, set the resume key
-  // to their original lower key so the caller can retry. A request whose only
-  // stripes projected no streams was reached and is complete, so it is not
-  // sent back here to re-scan ground that holds nothing for it.
-  for (size_t i = 0; i < ctx_.resumeKeys.size(); ++i) {
-    auto& resumeKey = ctx_.resumeKeys[i];
-    if (!ctx_.hasProcessedStripeRange[i] && !resumeKey.has_value()) {
-      const auto& keyBounds = ctx_.request->keyBounds[i];
+  // A request whose ranges all lie in unprocessed stripes was never reached,
+  // so it resumes from its original lower key. A reached request that
+  // continues past the cut already has its key, set above or by setResumeKey()
+  // when it hit maxRowsPerRequest, and so does a never-reached request seen in
+  // an earlier unprocessed stripe. A request that matched no rows has no
+  // ranges, so it is not sent back to re-scan.
+  for (auto resolvedStripeIndex = firstUnprocessed;
+       resolvedStripeIndex < resolvedStripes.size();
+       ++resolvedStripeIndex) {
+    for (const auto& range : ctx_.stripeRanges.getRanges(resolvedStripeIndex)) {
+      auto& resumeKey = ctx_.resumeKeys[range.requestIndex];
+      if (resumeKey.has_value()) {
+        continue;
+      }
+      const auto& keyBounds = ctx_.request->keyBounds[range.requestIndex];
       NIMBLE_CHECK(
           keyBounds.lowerKey.has_value(),
           "Request {} has no lowerKey: unbounded lower requests start from "
           "stripe 0 and should have been processed before truncation",
-          i);
+          range.requestIndex);
       resumeKey = *keyBounds.lowerKey;
     }
   }
@@ -1630,6 +1624,16 @@ folly::IOBuf assembleStripeSlice(
   serializedHeader->appendToChain(
       std::make_unique<folly::IOBuf>(std::move(body)));
   return std::move(*serializedHeader);
+}
+
+// Builds a header-only kTablet IOBuf for a request cut short before any of its
+// rows were read: no rows, an empty row range, and the resume key.
+folly::IOBuf assembleResumeKeySlice(std::string resumeKey) {
+  return serde::createTabletChunkHeader(
+      serde::TabletChunkHeader{
+          .rowRange = {},
+          .resumeKey = std::move(resumeKey),
+      });
 }
 
 } // namespace
@@ -1680,6 +1684,12 @@ void NimbleIndexProjector::buildResult(SerializedResult& result) {
           packedRelativeRange,
           packedStripe.body.cloneAsValue(),
           isLastSlice ? response.resumeKey : std::nullopt));
+    }
+  }
+
+  for (auto& response : result.responses) {
+    if (response.slices.empty() && response.resumeKey.has_value()) {
+      response.slices.emplace_back(assembleResumeKeySlice(*response.resumeKey));
     }
   }
 }

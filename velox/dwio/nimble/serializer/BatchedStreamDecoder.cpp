@@ -56,7 +56,9 @@ inline uint32_t getTypeStorageWidth(const Type& type) {
       break;
     }
     case Kind::TimestampMicroNano:
-      return 10;
+      // The main stream holds the microseconds. The nanoseconds stream is
+      // decoded as a scalar stream of its own.
+      return sizeof(int64_t);
     case Kind::Row:
     case Kind::FlatMap:
     case Kind::HybridFlatMap:
@@ -67,7 +69,7 @@ inline uint32_t getTypeStorageWidth(const Type& type) {
     case Kind::SlidingWindowMap:
       return 4;
   }
-  NIMBLE_UNREACHABLE("Unsupported type kind: {}.", toString(type.kind()));
+  NIMBLE_UNREACHABLE("Unsupported type kind: {}.", type.kind());
 }
 
 // Get the ScalarKind for a type based on its storage format. Types the legacy

@@ -492,6 +492,28 @@ void Deserializer::createDeserializersForType(
         "Duplicate stream offset in deserializer schema: {}.",
         streamOffset);
   }
+  // A timestamp keeps its sub-microsecond nanoseconds in a stream of its own,
+  // next to the microseconds of its main stream. Their values are narrower than
+  // the microseconds, so the stream is decoded as a scalar stream.
+  if (type.isTimestampMicroNano()) {
+    const ScalarType nanosType{type.asTimestampMicroNano().nanosDescriptor()};
+    const auto nanosOffset = nanosType.scalarDescriptor().offset();
+    if (shouldDecodeStream(nanosOffset)) {
+      const bool inserted = deserializerMap_
+                                .emplace(
+                                    nanosOffset,
+                                    std::make_unique<BatchedStreamDecoder>(
+                                        nanosType,
+                                        /*isInMapStream=*/false,
+                                        options_.bufferPoolCapacity,
+                                        pool_))
+                                .second;
+      NIMBLE_CHECK(
+          inserted,
+          "Duplicate stream offset in deserializer schema: {}.",
+          nanosOffset);
+    }
+  }
   // FlatMap is only supported at depth 1 (top-level columns). Register each
   // child in-map stream so it is decoded like other physical streams.
   if (type.isFlatMap()) {

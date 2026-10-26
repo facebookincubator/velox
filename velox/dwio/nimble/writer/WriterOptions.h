@@ -132,6 +132,14 @@ struct WriterOptions {
   std::vector<std::pair<EncodingType, float>>
       experimentalStripeGroupEncodingLayoutReadFactors{};
 
+  /// NOTE: !!! This is under experimentation and please do not turn on in
+  /// production use case !!!
+  /// When true, kStreamMajor stripe-group metadata encodes each distinct
+  /// offsets or sizes array once per stripe group, and streams with identical
+  /// arrays reference the same copy. Existing readers read such files.
+  /// Enabling this can increase temporary writer memory.
+  bool experimentalStripeGroupMetadataDeduplication{false};
+
   /// If set, the cluster index on the specified columns will be built during
   /// writing. It is the primary index over key-ordered data and stores
   /// per-chunk boundary keys per stripe-group partition for binary-search
