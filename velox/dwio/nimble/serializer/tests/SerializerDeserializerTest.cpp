@@ -355,7 +355,7 @@ TEST_P(SerializationTest, fuzzSimple) {
       {"double_val", velox::DOUBLE()},
       {"string_val", velox::VARCHAR()},
       {"binary_val", velox::VARBINARY()},
-      // {"ts_val", velox::TIMESTAMP()},
+      {"ts_val", velox::TIMESTAMP()},
   });
   auto seed = folly::Random::rand32();
   LOG(INFO) << "seed: " << seed;
@@ -411,6 +411,7 @@ TEST_P(SerializationTest, fuzzNullableStreams) {
       velox::DOUBLE(),
       velox::VARCHAR(),
       velox::VARBINARY(),
+      velox::TIMESTAMP(),
   };
 
   folly::detail::DefaultGenerator rng{seed};
@@ -1338,6 +1339,137 @@ TEST_P(SerializationTest, fuzzComplex) {
         vectorEquals,
         {},
         batches);
+  }
+}
+
+TEST_P(SerializationTest, timestampRoundTrip) {
+  // A timestamp travels as a microseconds stream, which carries the nulls, and
+  // a sub-microsecond nanoseconds stream with one value per non-null row.
+  const auto type = velox::ROW({
+      {"ts", velox::TIMESTAMP()},
+      {"row", velox::ROW({{"ts", velox::TIMESTAMP()}})},
+      {"array", velox::ARRAY(velox::TIMESTAMP())},
+      {"map", velox::MAP(velox::INTEGER(), velox::TIMESTAMP())},
+      {"features", velox::MAP(velox::INTEGER(), velox::TIMESTAMP())},
+  });
+  const std::vector<velox::Timestamp> timestamps{
+      velox::Timestamp(0, 0),
+      velox::Timestamp(-1, 999'999'999),
+      velox::Timestamp(-86'400, 1),
+      velox::Timestamp(1'700'000'000, 123'456'789),
+      velox::Timestamp(2'000'000'000, 999),
+  };
+  const auto timestampAt = [&](velox::vector_size_t index) {
+    return timestamps[index % timestamps.size()];
+  };
+  velox::test::VectorMaker maker{pool_.get()};
+  const auto makeBatch =
+      [&](velox::vector_size_t numRows,
+          const std::function<bool(velox::vector_size_t)>& isNullAt) {
+        return maker.rowVector(
+            {"ts", "row", "array", "map", "features"},
+            {
+                maker.flatVector<velox::Timestamp>(
+                    numRows, timestampAt, isNullAt),
+                maker.rowVector(
+                    {"ts"},
+                    {maker.flatVector<velox::Timestamp>(
+                        numRows, timestampAt, isNullAt)}),
+                maker.arrayVector<velox::Timestamp>(
+                    numRows,
+                    [](auto row) { return row % 3; },
+                    timestampAt,
+                    /*isNullAt=*/nullptr,
+                    isNullAt),
+                maker.mapVector<int32_t, velox::Timestamp>(
+                    numRows,
+                    [](auto row) { return row % 3; },
+                    [](auto index) { return static_cast<int32_t>(index); },
+                    timestampAt,
+                    /*isNullAt=*/nullptr,
+                    isNullAt),
+                maker.mapVector<int32_t, velox::Timestamp>(
+                    numRows,
+                    [](auto /*row*/) { return 2; },
+                    [](auto index) { return static_cast<int32_t>(index % 2); },
+                    timestampAt,
+                    /*isNullAt=*/nullptr,
+                    isNullAt),
+            });
+      };
+  // An all-null batch writes no nanoseconds at all.
+  const std::vector<velox::VectorPtr> inputs{
+      makeBatch(13, [](auto row) { return row % 4 == 1; }),
+      makeBatch(7, [](auto /*row*/) { return true; }),
+      makeBatch(11, [](auto /*row*/) { return false; }),
+  };
+
+  SerializerOptions options{
+      .version = version(),
+      .flatMapColumns = {{"features", {}}},
+      .streamIndicesEncodingType = streamSizesEncodingType(),
+      .streamSizesEncodingType = streamSizesEncodingType(),
+  };
+  Serializer serializer{options, type, pool_.get()};
+  std::vector<std::string> serialized;
+  serialized.reserve(inputs.size());
+  for (const auto& input : inputs) {
+    serialized.emplace_back(
+        serializer.serialize(input, OrderedRanges::of(0, input->size())));
+  }
+  Deserializer deserializer{
+      SchemaReader::getSchema(serializer.schemaBuilder().schemaNodes()),
+      pool_.get(),
+      deserializerOptions()};
+  const auto verify = [](const velox::VectorPtr& expected,
+                         const velox::VectorPtr& actual) {
+    ASSERT_EQ(actual->size(), expected->size());
+    for (velox::vector_size_t row = 0; row < expected->size(); ++row) {
+      ASSERT_TRUE(expected->equalValueAt(actual.get(), row, row))
+          << "Mismatch at row " << row
+          << "\nExpected: " << expected->toString(row)
+          << "\nActual: " << actual->toString(row);
+    }
+  };
+
+  for (size_t i = 0; i < inputs.size(); ++i) {
+    SCOPED_TRACE(fmt::format("batch {}", i));
+    velox::VectorPtr output;
+    deserializer.deserialize(serialized[i], output);
+    verify(inputs[i], output);
+  }
+
+  // Decoding the batches in one call reads each stream from several segments.
+  auto expected = velox::BaseVector::create(type, 0, pool_.get());
+  for (const auto& input : inputs) {
+    const auto offset = expected->size();
+    expected->resize(offset + input->size());
+    expected->copy(input.get(), offset, 0, input->size());
+  }
+  const std::vector<std::string_view> batches{
+      serialized.begin(), serialized.end()};
+  velox::VectorPtr output;
+  deserializer.deserialize(batches, output);
+  verify(expected, output);
+
+  // Column projection decodes the timestamp streams of selected columns only.
+  for (const std::string column : {"ts", "map"}) {
+    SCOPED_TRACE(fmt::format("projection {}", column));
+    std::vector<Deserializer::Subfield> subfields;
+    subfields.emplace_back(column);
+    Deserializer projectingDeserializer{
+        SchemaReader::getSchema(serializer.schemaBuilder().schemaNodes()),
+        subfields,
+        pool_.get(),
+        deserializerOptions()};
+    velox::VectorPtr projected;
+    projectingDeserializer.deserialize(batches, projected);
+    auto* projectedRow = projected->as<velox::RowVector>();
+    ASSERT_NE(projectedRow, nullptr);
+    ASSERT_EQ(projectedRow->childrenSize(), 1);
+    verify(
+        expected->as<velox::RowVector>()->childAt(column),
+        projectedRow->childAt(0));
   }
 }
 
@@ -4890,6 +5022,57 @@ TEST_F(SerializationTest, tabletDeserialization) {
     ASSERT_TRUE(input->equalValueAt(deserialized.get(), i, i))
         << "Mismatch at row " << i << "\nExpected: " << input->toString(i)
         << "\nActual: " << deserialized->toString(i);
+  }
+}
+
+TEST_F(SerializationTest, tabletTimestampDeserialization) {
+  // File streams keep a timestamp's sub-microsecond nanoseconds apart from its
+  // microseconds, as kTablet slices of an index projection carry them.
+  const auto rowType = velox::ROW({
+      {"id", velox::INTEGER()},
+      {"ts", velox::TIMESTAMP()},
+      {"nested", velox::ROW({{"ts", velox::TIMESTAMP()}})},
+      {"list", velox::ARRAY(velox::TIMESTAMP())},
+  });
+  constexpr velox::vector_size_t kRows{100};
+  const auto timestampAt = [](velox::vector_size_t index) {
+    return velox::Timestamp(
+        static_cast<int64_t>(index) * 86'400 - 4'000'000,
+        static_cast<uint64_t>(index) * 1'000'001 % 1'000'000'000);
+  };
+  velox::test::VectorMaker maker{pool_.get()};
+  auto input = maker.rowVector(
+      {"id", "ts", "nested", "list"},
+      {
+          maker.flatVector<int32_t>(kRows, [](auto row) { return row; }),
+          maker.flatVector<velox::Timestamp>(
+              kRows, timestampAt, [](auto row) { return row % 3 == 0; }),
+          maker.rowVector(
+              {"ts"},
+              {maker.flatVector<velox::Timestamp>(
+                  kRows, timestampAt, [](auto row) { return row % 5 == 2; })}),
+          maker.arrayVector<velox::Timestamp>(
+              kRows,
+              [](auto row) { return row % 4; },
+              timestampAt,
+              [](auto row) { return row % 7 == 3; },
+              [](auto index) { return index % 6 == 1; }),
+      });
+
+  auto tablet = serializeTablet(rowType, {input}, /*enableChunking=*/true);
+  ASSERT_EQ(tablet.serialized.size(), 1);
+
+  nimble::Deserializer deserializer{
+      tablet.schema, pool_.get(), DeserializerOptions{}};
+  velox::VectorPtr output;
+  deserializer.deserialize(std::string_view(tablet.serialized[0]), output);
+
+  ASSERT_NE(output, nullptr);
+  ASSERT_EQ(output->size(), kRows);
+  for (velox::vector_size_t i = 0; i < kRows; ++i) {
+    ASSERT_TRUE(input->equalValueAt(output.get(), i, i))
+        << "Mismatch at row " << i << "\nExpected: " << input->toString(i)
+        << "\nActual: " << output->toString(i);
   }
 }
 

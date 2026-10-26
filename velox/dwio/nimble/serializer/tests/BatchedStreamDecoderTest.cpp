@@ -476,6 +476,81 @@ TEST_F(BatchedStreamDecoderTest, nextStitchesSegmentsFromMultipleBatches) {
   EXPECT_EQ(readInts(decoder, 12), expectedInts(0, 12));
 }
 
+TEST_F(BatchedStreamDecoderTest, timestampStreamsStitchAcrossBatches) {
+  // A timestamp's 8-byte microseconds carry its nulls; its 2-byte
+  // sub-microsecond nanoseconds hold one value per non-null row. Each decoder
+  // places later segments by the width of its own stream.
+  namespace vx = facebook::velox;
+  auto rowType = vx::ROW({{"ts", vx::TIMESTAMP()}});
+  const auto timestampAt = [](int64_t row) {
+    return vx::Timestamp(
+        row - 6, static_cast<uint64_t>(row) * 1'001'001 % 1'000'000'000);
+  };
+  const auto isNullAt = [](int64_t row) { return row == 5; };
+  const auto makeBatch = [&](int64_t firstRow, vx::vector_size_t numRows) {
+    auto values = vx::BaseVector::create(vx::TIMESTAMP(), numRows, pool_.get());
+    for (vx::vector_size_t i = 0; i < numRows; ++i) {
+      if (isNullAt(firstRow + i)) {
+        values->setNull(i, true);
+      } else {
+        values->asFlatVector<vx::Timestamp>()->set(
+            i, timestampAt(firstRow + i));
+      }
+    }
+    return std::make_shared<vx::RowVector>(
+        pool_.get(),
+        rowType,
+        /*nulls=*/nullptr,
+        numRows,
+        std::vector<vx::VectorPtr>{values});
+  };
+  auto input = serializeBatches(
+      rowType,
+      {makeBatch(0, 4), makeBatch(4, 3), makeBatch(7, 5)},
+      serializerOptions());
+
+  const auto& tsType = *input.schema->asRow().childAt(0);
+  const auto& timestamp = tsType.asTimestampMicroNano();
+  BatchedStreamDecoder microsDecoder{
+      tsType, /*isInMapStream=*/false, kNoBufferPool, pool_.get()};
+  addBatches(microsDecoder, input, timestamp.microsDescriptor().offset());
+  const ScalarType nanosType{timestamp.nanosDescriptor()};
+  BatchedStreamDecoder nanosDecoder{
+      nanosType, /*isInMapStream=*/false, kNoBufferPool, pool_.get()};
+  addBatches(nanosDecoder, input, timestamp.nanosDescriptor().offset());
+
+  constexpr uint32_t kRows = 12;
+  std::vector<int64_t> micros(kRows);
+  std::vector<uint64_t> nulls(vx::bits::nwords(kRows), 0);
+  std::vector<vx::BufferPtr> stringBuffers;
+  const auto numNonNulls = microsDecoder.next(
+      kRows,
+      micros.data(),
+      [&]() -> void* { return nulls.data(); },
+      stringBuffers);
+  ASSERT_EQ(numNonNulls, kRows - 1);
+  std::vector<uint16_t> nanos(numNonNulls);
+  nanosDecoder.next(
+      numNonNulls, nanos.data(), /*getOutputNulls=*/nullptr, stringBuffers);
+
+  std::vector<int64_t> expectedMicros;
+  std::vector<uint16_t> expectedNanos;
+  std::vector<int64_t> actualMicros;
+  for (uint32_t row = 0; row < kRows; ++row) {
+    ASSERT_EQ(vx::bits::isBitSet(nulls.data(), row), !isNullAt(row));
+    if (isNullAt(row)) {
+      continue;
+    }
+    const auto expected = timestampAt(row);
+    expectedMicros.push_back(
+        expected.getSeconds() * 1'000'000 + expected.getNanos() / 1'000);
+    expectedNanos.push_back(static_cast<uint16_t>(expected.getNanos() % 1'000));
+    actualMicros.push_back(micros[row]);
+  }
+  EXPECT_EQ(actualMicros, expectedMicros);
+  EXPECT_EQ(nanos, expectedNanos);
+}
+
 TEST_F(BatchedStreamDecoderTest, remainingRowsTracksCurrentSegment) {
   auto rowType = facebook::velox::ROW({{"c0", facebook::velox::INTEGER()}});
   auto input = serializeBatches(
