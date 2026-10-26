@@ -22,6 +22,7 @@
 #include <folly/synchronization/EventCount.h>
 #include <gtest/gtest.h>
 #include <rmm/device_buffer.hpp>
+#include <array>
 #include <limits>
 #include <memory>
 #include <type_traits>
@@ -74,7 +75,6 @@ class UcxOutputQueueManagerTest : public testing::Test {
 
   std::unique_ptr<cudf::packed_columns> makePackedColumns(std::size_t numRows) {
     cuda::stream_ref stream = cuda::stream_ref{cudaStream_t{cudaStreamDefault}};
-    // Create table directly without going through pack/unpack
     auto table = facebook::velox::ucx_exchange::makeTable(
         numRows, UcxTestData::kTestRowType, stream);
     auto cols = std::make_unique<cudf::packed_columns>(
@@ -87,7 +87,6 @@ class UcxOutputQueueManagerTest : public testing::Test {
     enqueue(taskId, 0, size);
   }
 
-  // Returns the enqueued page byte size.
   void enqueue(std::string_view taskId, int destination, vector_size_t size) {
     auto data = makePackedColumns(size);
     queueManager_->enqueue(taskId, destination, std::move(data), size);
@@ -180,8 +179,6 @@ class UcxOutputQueueManagerTest : public testing::Test {
       int64_t& fetchedPackedColumns,
       bool earlyTermination) {
     int64_t received{0};
-    folly::Random::DefaultGenerator rng;
-    rng.seed(destination);
     while (true) {
       if (earlyTermination && folly::Random().oneIn(200)) {
         queueManager_->deleteResults(taskId, destination);
@@ -379,16 +376,6 @@ TEST_F(UcxOutputQueueManagerTest, basicPartitioned) {
 
   ASSERT_FALSE(queueManager_->isFinished(taskId));
 
-  // - enqueue one group per destination
-  // - fetch and ask one group per destination
-  // - enqueue one more group for destinations 0-2
-  // - fetch and ask one group for destinations 0-2
-  // - register end-marker callback for destination 3 and data callback for 4
-  // - enqueue data for 4 and assert callback was called
-  // - enqueue end marker for all destinations
-  // - assert callback was called for destination 3
-  // - fetch end markers for destinations 0-2 and 4
-
   for (int destination = 0; destination < 5; ++destination) {
     enqueue(taskId, destination, size);
   }
@@ -498,7 +485,6 @@ TEST_F(UcxOutputQueueManagerTest, lateTaskCreation) {
   const vector_size_t size = 10;
   const std::string taskId = "t0";
   int numPartitions = 1;
-  bool earlyTermination = false;
   int destination = 0;
 
   // Clear stale state from prior tests (removeTask on a non-existing queue
@@ -522,11 +508,7 @@ TEST_F(UcxOutputQueueManagerTest, lateTaskCreation) {
         promise.setValue(Response{std::move(data), std::move(remainingBytes)});
       });
 
-  // getData() above created a placeholder queue with no known capacity yet:
-  // maxSize_ is only set from the task's query config, in initializeTask().
-  // Both observability methods must report that honestly as nullopt -- one so
-  // it does not divide by zero, the other so it does not call an
-  // unknown-capacity queue over-utilized the moment any byte is queued.
+  // A placeholder has no configured capacity until initializeTask().
   std::shared_ptr<exec::OutputBufferManager> mgr = queueManager_;
   EXPECT_EQ(mgr->getUtilization(taskId), std::nullopt);
   EXPECT_EQ(mgr->isOverutilized(taskId), std::nullopt);
@@ -661,89 +643,34 @@ TEST_F(UcxOutputQueueManagerTest, multiFetchers) {
   }
 }
 
-// Test BUG B scenario (a): Producer never starts / never calls
-// initializeTask(). getData() creates a stub queue, then removeTask() is
-// called without initializeTask() ever being called. The pending callback
-// must fire with nullptr to unblock the consumer.
 TEST_F(UcxOutputQueueManagerTest, callbackFiredOnTerminateBeforeInit) {
   const std::string taskId = "orphanTest";
-  queueManager_->removeTask(taskId); // ensure clean state
-
-  bool callbackFired = false;
-  bool receivedNullptr = false;
-  queueManager_->getData(
-      taskId,
-      0, // destination
-      [&callbackFired, &receivedNullptr](
-          std::shared_ptr<cudf::packed_columns> data,
-          vector_size_t /*numRows*/,
-          std::vector<int64_t> remainingBytes) {
-        callbackFired = true;
-        receivedNullptr = (data == nullptr);
-      });
-
-  // Callback should NOT have fired yet (queue is empty, no data).
-  EXPECT_FALSE(callbackFired);
-
-  // Now simulate the producer failing: removeTask fires terminate().
-  // The stub queue has task_ == nullptr so the isRunning() check is skipped.
   queueManager_->removeTask(taskId);
 
-  // Callback must have been fired with nullptr.
-  EXPECT_TRUE(callbackFired);
-  EXPECT_TRUE(receivedNullptr);
+  bool receivedEndMarker{false};
+  registerForEndMarker(taskId, 0, receivedEndMarker);
+
+  queueManager_->removeTask(taskId);
+  EXPECT_TRUE(receivedEndMarker);
 }
 
-// Test BUG B scenario (b): Producer starts but crashes before noMoreData().
-// initializeTask() was called but noMoreData() was never called.
-// removeTask() must fire pending callbacks with nullptr.
 TEST_F(UcxOutputQueueManagerTest, callbackFiredOnTerminateAfterInit) {
   const std::string taskId = "crashTest";
-  queueManager_->removeTask(taskId); // ensure clean state
+  constexpr int kNumDestinations = 2;
+  auto task = initializeTask(taskId, kNumDestinations, 1);
 
-  auto task =
-      initializeTask(taskId, 2 /* numDestinations */, 1 /* numDrivers */);
+  std::array<bool, kNumDestinations> receivedEndMarkers{};
+  for (int destination = 0; destination < kNumDestinations; ++destination) {
+    registerForEndMarker(taskId, destination, receivedEndMarkers[destination]);
+  }
 
-  // Register callbacks on both destinations.
-  bool callback0Fired = false;
-  bool callback0Nullptr = false;
-  bool callback1Fired = false;
-  bool callback1Nullptr = false;
-  queueManager_->getData(
-      taskId,
-      0,
-      [&callback0Fired, &callback0Nullptr](
-          std::shared_ptr<cudf::packed_columns> data,
-          vector_size_t /*numRows*/,
-          std::vector<int64_t> remainingBytes) {
-        callback0Fired = true;
-        callback0Nullptr = (data == nullptr);
-      });
-  queueManager_->getData(
-      taskId,
-      1,
-      [&callback1Fired, &callback1Nullptr](
-          std::shared_ptr<cudf::packed_columns> data,
-          vector_size_t /*numRows*/,
-          std::vector<int64_t> remainingBytes) {
-        callback1Fired = true;
-        callback1Nullptr = (data == nullptr);
-      });
-
-  // Neither callback should fire yet.
-  EXPECT_FALSE(callback0Fired);
-  EXPECT_FALSE(callback1Fired);
-
-  // Simulate task failure: abort the task so isRunning() returns false,
-  // which is required by terminate()'s VELOX_CHECK.
   task->requestAbort().wait();
-
   queueManager_->removeTask(taskId);
 
-  EXPECT_TRUE(callback0Fired);
-  EXPECT_TRUE(callback0Nullptr);
-  EXPECT_TRUE(callback1Fired);
-  EXPECT_TRUE(callback1Nullptr);
+  for (int destination = 0; destination < kNumDestinations; ++destination) {
+    EXPECT_TRUE(receivedEndMarkers[destination])
+        << "for destination " << destination;
+  }
 }
 
 TEST_F(UcxOutputQueueManagerTest, terminateUnpublishedReader) {
