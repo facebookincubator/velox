@@ -332,6 +332,27 @@ struct WaveConfig {
   // wave. The _tw operator must be registered before the graph compiles.
   bool twMad{false};
 
+  // Split merge-and-dedup into the fused TorchWave head and final ops instead
+  // of running a standalone operator (sparsenn's or, with twMad, TorchWave's).
+  bool twFusedMad{false};
+
+  // With twFusedMad, a metadata feature that a chain gather produces is read
+  // through the chain by the merge-and-dedup head or final instead of being
+  // materialized first.
+  bool madChains{true};
+
+  // If non-zero, the fused merge-and-dedup insert asks for enough dynamic
+  // shared memory that at most this many of its blocks are resident per SM.
+  // The memory is unused ballast, as for the standalone operator's insert
+  // kernel: the insert's hash table traffic is random, and fewer resident rows
+  // per SM keep more of it in cache.
+  int32_t madInsertBlocksPerSm{0};
+
+  // If non-zero, the threads per block of the launch that runs the fused
+  // merge-and-dedup insert. It gives each row one block and scans the row
+  // in-block, so a wider block puts more threads on a row.
+  int32_t madInsertBlockSize{0};
+
   // If true, a metadata getter (aten.sym_size.int / aten.sym_numel.default)
   // that is not a subexpression of a single fusable consumer runs as a
   // host-side shortcut standalone instead of a fused kernel op. Fused, such a

@@ -240,7 +240,8 @@ NodeSet makeCseBorder(
       if (placed.count(expr)) {
         continue;
       }
-      if (refCount[expr] > 1) {
+      const auto* meta = Registry::metadata(expr->target());
+      if (refCount[expr] > 1 && (meta == nullptr || !meta->sharedWithinNode)) {
         auto subs = subexpressions(expr);
         bool overlaps = false;
         for (auto sub : subs) {

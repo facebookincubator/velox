@@ -24,6 +24,7 @@
 #include <folly/init/Init.h>
 #include <glog/logging.h>
 
+#include "velox/experimental/torchwave/Registry.h"
 #include "velox/experimental/torchwave/Utils.h"
 #include "velox/experimental/torchwave/WaveConfig.h"
 #include "velox/experimental/torchwave/WaveGraph.h"
@@ -1484,6 +1485,126 @@ TEST_F(ExecutorTest, maskedSelectEmptyTest) {
       "data/masked_select_empty_test_results.pt",
       "cg");
   WaveConfig::get().isCg = std::nullopt;
+}
+
+// A launch runs at the largest block size any of its ops asks for, and every
+// device function in it takes that as its block size. tw.sum2 is aten.sum's
+// single-block form with a block size of 1024; the two aten.sum ops beside it
+// ask for none, yet share its launch, so they have to run correctly at 1024 as
+// well. In the multi-kernel form each aten.sum ends in a tw.sum_final one step
+// later, in the same node, and that step runs at the default again. A device
+// function compiled for
+// one block size and launched at another reduces the wrong number of lanes and
+// gets the sums wrong. Programmatic graph, no .pt2.
+void registerSum2() {
+  if (Registry::metadata("tw.sum2") != nullptr) {
+    return;
+  }
+  MetadataBuilder(
+      std::make_unique<c10::FunctionSchema>(
+          "tw.sum2",
+          "",
+          std::vector<c10::Argument>{
+              c10::Argument("input", c10::TensorType::get())},
+          std::vector<c10::Argument>{
+              c10::Argument("output", c10::TensorType::get())}))
+      .sizeOrdinal({0})
+      .sizeShortcut(SizeShortcut::kMax)
+      .hasBarrier()
+      .singleBlockIfFused()
+      .argumentMeta({{.isRegister = true}})
+      .returnMeta(
+          {{.isRegister = false,
+            .reserveShape = [](NodeCP,
+                               nativert::ExecutionFrame&,
+                               const FormalToActual&,
+                               NodeCP,
+                               const NodeMap&)
+                -> std::vector<std::vector<Dim>> { return {{}}; }}})
+      .headerFile("velox/experimental/torchwave/Scan.cuh")
+      .deviceFunc("tw_sum")
+      .sharedDecls({{"Int32X32", "warpSums"}})
+      .dynamicSharedDecls({{Metadata::kTypeFromDtype, "counter"}})
+      .typeTemplateParams({0})
+      .hasDtypeTemplateParam()
+      .hasBlockSizeTemplateParam()
+      .alwaysSingleBlock()
+      .blockSize(1024)
+      .registerOp();
+}
+
+const char* kSum2Graph = R"(graph(%a, %b, %c):
+%a2 = torch.ops.aten.mul.Tensor(self=%a, other=%a)
+%s1 = torch.ops.aten.sum.default(self=%a2)
+%s2 = tw.sum2(input=%b, dtype="Float")
+%s3 = torch.ops.aten.sum.default(self=%c)
+%d = torch.ops.aten.sub.Tensor(self=%c, other=%s3)
+%s4 = torch.ops.aten.sum.default(self=%d)
+return(%s1, %s2, %s3, %s4)
+)";
+
+std::unordered_map<std::string, torch::_export::TensorMeta> sum2Meta() {
+  std::unordered_map<std::string, torch::_export::TensorMeta> meta;
+  for (const auto* name : {"a", "b", "c", "a2", "d"}) {
+    meta[name] = makeTensorMeta(c10::ScalarType::Float, 1);
+  }
+  for (const auto* name : {"s1", "s2", "s3", "s4"}) {
+    meta[name] = makeTensorMeta(c10::ScalarType::Float, 0);
+  }
+  return meta;
+}
+
+TEST_F(ExecutorTest, blockSizeFromOpTest) {
+  registerSum2();
+  for (const auto mode :
+       {CompiledPlan::Mode::kMultiKernel, CompiledPlan::Mode::kSingleBlock}) {
+    auto plan = compilePlanProgrammatic(
+        nativert::stringToGraph(kSum2Graph), sum2Meta(), mode);
+    EXPECT_TRUE(plan.runsAtBlockSize("tw.sum2", 1024));
+    EXPECT_TRUE(plan.runsAtBlockSize("aten.mul.Tensor", 1024));
+  }
+  // The aten.sum ops split into a head and a final. The heads share
+  // tw.sum2's step, the finals come a step later in the same node, at the
+  // default size again.
+  auto multiPlan = compilePlanProgrammatic(
+      nativert::stringToGraph(kSum2Graph),
+      sum2Meta(),
+      CompiledPlan::Mode::kMultiKernel);
+  EXPECT_TRUE(multiPlan.fuses({"aten.mul.Tensor", "tw.sum_head"}));
+  EXPECT_TRUE(multiPlan.inLaterStep("tw.sum_final", "tw.sum2"));
+  EXPECT_TRUE(multiPlan.runsAtBlockSize("tw.sum_final", 256));
+  // tw.sum2 has no cooperative-grid form, so the cg view of the plan does not
+  // show it beside the tw.sum_cg ops; the cg run below checks that case.
+
+  // Small integers, so every summation order gives the same float.
+  auto a = (at::arange(3000, at::kFloat).remainder(5));
+  auto b = (at::arange(5000, at::kFloat).remainder(7));
+  auto c = (at::arange(700, at::kFloat).remainder(3));
+  auto check = [&](const char* label) {
+    SCOPED_TRACE(label);
+    auto outputs = runWaveProgrammatic(
+        nativert::stringToGraph(kSum2Graph), sum2Meta(), {{a, b, c}});
+    ASSERT_EQ(outputs.size(), 4);
+    EXPECT_TRUE(tensorsMatch(outputs[0], (a * a).sum()))
+        << firstDifference(outputs[0], (a * a).sum());
+    EXPECT_TRUE(tensorsMatch(outputs[1], b.sum()))
+        << firstDifference(outputs[1], b.sum());
+    EXPECT_TRUE(tensorsMatch(outputs[2], c.sum()))
+        << firstDifference(outputs[2], c.sum());
+    EXPECT_TRUE(tensorsMatch(outputs[3], (c - c.sum()).sum()))
+        << firstDifference(outputs[3], (c - c.sum()).sum());
+  };
+  SCOPE_EXIT {
+    WaveConfig::get().useSingleBlock = std::nullopt;
+    WaveConfig::get().isCg = std::nullopt;
+  };
+  WaveConfig::get().useSingleBlock = false;
+  check("multi-block");
+  WaveConfig::get().useSingleBlock = true;
+  check("single-block");
+  WaveConfig::get().useSingleBlock = std::nullopt;
+  WaveConfig::get().isCg = true;
+  check("cg");
 }
 
 TEST_F(ExecutorTest, sumTest) {
