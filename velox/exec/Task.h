@@ -370,6 +370,15 @@ class Task : public std::enable_shared_from_this<Task> {
   /// the background activities have finished at that point.
   ContinueFuture taskDeletionFuture();
 
+  /// Returns a future which is realized once the task is no longer running and
+  /// every driver it created has closed, so taskStats() includes the stats of
+  /// all its operators. This can be well after taskCompletionFuture(): a task
+  /// finishes when its output pipeline does, and drivers that are on thread or
+  /// paused when it stops close later. The future is realized immediately if
+  /// this already holds. Wait with a timeout if a driver may never return from
+  /// an operator call.
+  ContinueFuture allDriversClosedFuture();
+
   /// Returns task execution error or nullptr if no error occurred.
   std::exception_ptr error() const {
     std::lock_guard<std::timed_mutex> l(mutex_);
@@ -1193,6 +1202,14 @@ class Task : public std::enable_shared_from_this<Task> {
 
   void driverClosedLocked();
 
+  // Returns true if 'this' is not running and 'drivers_' holds no drivers.
+  bool allDriversClosedLocked() const;
+
+  // Closes 'drivers', which terminate() or resume() has terminated off thread,
+  // one at a time with Driver::closeByTask(). Clears each driver's slot as soon
+  // as that driver has closed, so taskStats() stops reading its operators.
+  void closeDriversByTask(const std::vector<std::shared_ptr<Driver>>& drivers);
+
   // Returns true if Task is in kRunning state, but all output drivers finished
   // processing and all output has been consumed. In other words, returns true
   // if task should transition to kFinished state.
@@ -1475,6 +1492,8 @@ class Task : public std::enable_shared_from_this<Task> {
   std::function<void(std::exception_ptr)> onError_;
 
   std::vector<std::unique_ptr<DriverFactory>> driverFactories_;
+  // A slot holds its driver until the driver has closed. A terminated driver
+  // cannot run but may still be closing, so getDriver() returns null for it.
   std::vector<std::shared_ptr<Driver>> drivers_;
   std::unordered_map<core::PlanNodeId, uint32_t> numDriversPerLeafNode_;
 
@@ -1607,6 +1626,10 @@ class Task : public std::enable_shared_from_this<Task> {
 
   // Promises that are fulfilled when the task is destroyed.
   std::vector<ContinuePromise> taskDeletionPromises_;
+
+  // Promises that are fulfilled when the task is no longer running and every
+  // driver has closed.
+  std::vector<ContinuePromise> allDriversClosedPromises_;
 
   // Promises that are fulfilled when the task's state has changed and ready to
   // report some progress (such as split group finished or task is completed).
