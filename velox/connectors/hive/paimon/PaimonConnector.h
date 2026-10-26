@@ -20,11 +20,8 @@
 
 namespace facebook::velox::connector::hive::paimon {
 
-/// Provides Paimon table format support by extending HiveConnector.
-///
-/// Creates PaimonDataSource instances that handle Paimon's multi-file splits
-/// (one split = one bucket with multiple data files across LSM-tree levels).
-/// Reuses HiveConnector's ORC/Parquet readers directly — no Arrow bridge.
+/// Connector for Paimon table scans. Creates PaimonDataSource and reuses the
+/// common File scan pipeline and DWIO readers for physical file access.
 class PaimonConnector final : public HiveConnector {
  public:
   PaimonConnector(
@@ -38,6 +35,26 @@ class PaimonConnector final : public HiveConnector {
       const ConnectorTableHandlePtr& tableHandle,
       const ColumnHandleMap& columnHandles,
       ConnectorQueryCtx* connectorQueryCtx) override;
+
+  bool supportsSplitPreload() const override {
+    // TODO: Support asynchronous preparation of multi-file splits.
+    return false;
+  }
+
+  bool supportsIndexLookup() const override {
+    return false;
+  }
+
+  /// Paimon writes are not supported.
+  std::unique_ptr<DataSink> createDataSink(
+      RowTypePtr inputType,
+      ConnectorInsertTableHandlePtr connectorInsertTableHandle,
+      ConnectorQueryCtx* connectorQueryCtx,
+      CommitStrategy commitStrategy) override;
+
+  /// Registers serde for Paimon table/split handles and HiveColumnHandle.
+  /// Callers must register type, filter and expression serde separately.
+  static void registerSerDe();
 
  private:
   const std::shared_ptr<PaimonConfig> paimonConfig_;

@@ -980,9 +980,8 @@ TEST_P(NimbleIndexProjectorTest, stripeProjectingNoStreams) {
 
 // A request whose only stripe projects no streams was still reached, so global
 // truncation must not hand it back its own lower key: it has nothing left to
-// read, and retrying would re-scan the same empty ground forever. Reaching
-// that path needs needResumeKey and a truncated plan, plus a following stripe
-// that still carries ranges, so it takes two requests to set up.
+// read, and retrying would re-scan the same empty ground forever. Truncation
+// needs a stripe that carries data, so it takes a second request to set up.
 TEST_P(NimbleIndexProjectorTest, emptyStripeCountsAsReachedUnderTruncation) {
   auto rowType = singleFeatureRowType();
 
@@ -1996,6 +1995,89 @@ TEST_P(NimbleIndexProjectorTest, projectedNullableDataDeserializes) {
   expectVectorRows(
       deserializeProjectedSlice(*projector, result.responses[0].slices[0]),
       expected);
+}
+
+TEST_P(NimbleIndexProjectorTest, projectedTabletTimestampsDeserialize) {
+  // A timestamp keeps its sub-microsecond nanoseconds in a second stream with
+  // one value per non-null row, which slicing and deserializing keep aligned
+  // with the microseconds.
+  constexpr vector_size_t kRowsPerBatch = 100;
+  constexpr int kNumBatches = 3;
+  const auto rowType = ROW({{"key", BIGINT()}, {"ts", TIMESTAMP()}});
+  const auto timestampAt = [](int64_t key) {
+    return Timestamp(
+        key * 1'000 - 150'000,
+        static_cast<uint64_t>(key) * 1'001 % 1'000'000'000);
+  };
+  const auto isNullAt = [](int64_t key) { return key % 3 == 0; };
+  const auto makeRows = [&](int64_t firstKey, vector_size_t numRows) {
+    return vectorMaker_->rowVector(
+        {"key", "ts"},
+        {vectorMaker_->flatVector<int64_t>(
+             numRows, [&](auto row) { return firstKey + row; }),
+         vectorMaker_->flatVector<Timestamp>(
+             numRows,
+             [&](auto row) { return timestampAt(firstKey + row); },
+             [&](auto row) { return isNullAt(firstKey + row); })});
+  };
+  std::vector<RowVectorPtr> batches;
+  batches.reserve(kNumBatches);
+  for (int batch = 0; batch < kNumBatches; ++batch) {
+    batches.push_back(makeRows(batch * kRowsPerBatch, kRowsPerBatch));
+  }
+  writeData(batches, {"key"}, /*flatMapColumns=*/{}, /*stripeSize=*/2 << 10);
+  ASSERT_GT(openSinkTablet()->stripeCount(), 1);
+
+  std::vector<Subfield> subfields;
+  subfields.emplace_back("key");
+  subfields.emplace_back("ts");
+
+  // 1.0 packs whole stripes; 0.0 slices the part of each stripe a range reads.
+  // Each range is its own request, since requests that share a stripe pack the
+  // union of their rows in it.
+  for (const double maxOverfetchRowsRatio : {1.0, 0.0}) {
+    SCOPED_TRACE(
+        fmt::format("maxOverfetchRowsRatio {}", maxOverfetchRowsRatio));
+    NimbleIndexProjector::Options options;
+    options.maxOverfetchRowsRatio = maxOverfetchRowsRatio;
+    auto projector = createProjector(subfields);
+    // Whole file, a range inside one stripe, one row, and a range across
+    // stripes.
+    for (const auto& [startKey, endKey] :
+         std::vector<std::pair<int64_t, int64_t>>{
+             {0, kNumBatches * kRowsPerBatch},
+             {5, 37},
+             {150, 151},
+             {123, 260}}) {
+      SCOPED_TRACE(fmt::format("keys [{}, {})", startKey, endKey));
+      NimbleIndexProjector::Request request;
+      request.keyBounds = {makeRangeLookup(rowType, {"key"}, startKey, endKey)};
+      const auto expected =
+          makeRows(startKey, static_cast<vector_size_t>(endKey - startKey));
+
+      const auto rows = projectRows(*projector, request, options);
+      ASSERT_EQ(rows.responses.size(), 1);
+      expectVectorRows(
+          rows.values->slice(rows.responses[0].offset, rows.responses[0].size),
+          expected);
+
+      const auto streams = projector->projectStreams(request, options);
+      ASSERT_EQ(streams.responses.size(), 1);
+      std::vector<folly::IOBuf> owned;
+      std::vector<std::string_view> serializedBatches;
+      owned.reserve(streams.responses[0].slices.size());
+      for (const auto& slice : streams.responses[0].slices) {
+        owned.push_back(coalesceChunkSlice(slice));
+        serializedBatches.emplace_back(
+            reinterpret_cast<const char*>(owned.back().data()),
+            owned.back().length());
+      }
+      expectVectorRows(
+          deserializeProjectedBatches(*projector, serializedBatches), expected);
+    }
+    EXPECT_EQ(
+        projector->stats().numSlicedStripes > 0, maxOverfetchRowsRatio == 0.0);
+  }
 }
 
 TEST_P(NimbleIndexProjectorTest, projectedTabletNullBarrierFlag) {
@@ -4942,7 +5024,8 @@ TEST_P(NimbleIndexProjectorTest, maxRowsTotalAcrossRequests) {
   // Request 1: stripe 9 was never processed, resume key = original lower key.
   {
     const auto& response = result.responses[1];
-    EXPECT_TRUE(response.slices.empty());
+    ASSERT_EQ(response.slices.size(), 1);
+    EXPECT_EQ(readEmbeddedRowRange(response.slices[0]).numRows(), 0);
     ASSERT_TRUE(response.resumeKey.has_value());
     EXPECT_EQ(response.resumeKey.value(), bounds1.lowerKey);
   }
@@ -5620,6 +5703,110 @@ TEST_P(NimbleIndexProjectorTest, truncationResumeKeyWithStripeGap) {
   EXPECT_FALSE(resumeResult.responses[0].resumeKey.has_value());
 }
 
+// The stripe right after the last planned one can hold no ranges while a later
+// stripe holds a request that planning never reached. That request must still
+// get its lower key back.
+TEST_P(
+    NimbleIndexProjectorTest,
+    truncationResumeKeyForUnreachedRequestPastGap) {
+  const auto rowType = ROW({{"key", BIGINT()}, {"value", INTEGER()}});
+  // 10 stripes x 100 rows; stripe s holds keys [s*100, s*100+100).
+  writeResumeKeyTestData();
+
+  std::vector<Subfield> subfields;
+  subfields.emplace_back("value");
+  auto projector = createProjector(subfields);
+
+  // Request 0 ends in stripe 0 and request 1 starts in stripe 5, so stripe 1
+  // carries no ranges.
+  const auto bounds0 = makeRangeLookup(rowType, {"key"}, 0, 100);
+  const auto bounds1 = makeRangeLookup(rowType, {"key"}, 500, 900);
+  NimbleIndexProjector::Request request;
+  request.keyBounds = {bounds0, bounds1};
+  NimbleIndexProjector::Options options;
+  // Stripe 0 alone reaches the soft limit, so planning stops before request 1.
+  options.maxRows = 100;
+  options.needResumeKey = true;
+  const auto result = projector->projectStreams(request, options);
+
+  ASSERT_EQ(result.responses.size(), 2);
+  EXPECT_FALSE(result.responses[0].resumeKey.has_value());
+  ASSERT_EQ(result.responses[1].slices.size(), 1);
+  EXPECT_EQ(readEmbeddedRowRange(result.responses[1].slices[0]).numRows(), 0);
+  EXPECT_EQ(result.responses[1].resumeKey, bounds1.lowerKey);
+}
+
+// A request that truncation stops before any of its rows are read has no data
+// slice to carry its resume key, so the key gets a header-only slice. Callers
+// that keep only the slices can still continue the request.
+TEST_P(
+    NimbleIndexProjectorTest,
+    truncationResumeKeyEmbeddedForUnreachedRequest) {
+  const auto rowType = ROW({{"key", BIGINT()}, {"value", INTEGER()}});
+  // 10 stripes x 100 rows; stripe s holds keys [s*100, s*100+100).
+  writeResumeKeyTestData();
+
+  std::vector<Subfield> subfields;
+  subfields.emplace_back("value");
+  auto projector = createProjector(subfields);
+
+  // Request 0 covers stripe 0 and request 1 covers stripe 1.
+  const auto bounds0 = makeRangeLookup(rowType, {"key"}, 0, 100);
+  const auto bounds1 = makeRangeLookup(rowType, {"key"}, 100, 200);
+  NimbleIndexProjector::Request request;
+  request.keyBounds = {bounds0, bounds1};
+  NimbleIndexProjector::Options options;
+  // Stripe 0 alone reaches the soft limit, so planning stops before request 1.
+  options.maxRows = 100;
+  options.needResumeKey = true;
+  const auto result = projector->projectStreams(request, options);
+
+  ASSERT_EQ(result.responses.size(), 2);
+  EXPECT_FALSE(result.responses[0].resumeKey.has_value());
+
+  const auto& unreached = result.responses[1];
+  EXPECT_EQ(unreached.resumeKey, bounds1.lowerKey);
+  ASSERT_EQ(unreached.slices.size(), 1);
+  const auto& slice = unreached.slices[0];
+  // The header node alone, with no stripe body behind it.
+  EXPECT_FALSE(slice.isChained());
+  const auto header = readEmbeddedTabletChunkHeader(slice);
+  EXPECT_EQ(header.rowCount, 0);
+  EXPECT_EQ(header.rowRange, RowRange(0, 0));
+  EXPECT_EQ(header.resumeKey, bounds1.lowerKey);
+}
+
+// A request whose key range matches no rows has nothing to resume, so global
+// truncation must not hand it back its lower key.
+TEST_P(
+    NimbleIndexProjectorTest,
+    truncationResumeKeySkipsRequestMatchingNoRows) {
+  const auto rowType = ROW({{"key", BIGINT()}, {"value", INTEGER()}});
+  // 10 stripes x 100 rows; keys run from 0 to 999.
+  writeResumeKeyTestData();
+
+  std::vector<Subfield> subfields;
+  subfields.emplace_back("value");
+  auto projector = createProjector(subfields);
+
+  // Request 0 spans stripes 0-1 and is cut after stripe 0. Request 1 lies past
+  // the last key.
+  NimbleIndexProjector::Request request;
+  request.keyBounds = {
+      makeRangeLookup(rowType, {"key"}, 0, 200),
+      makeRangeLookup(rowType, {"key"}, 2'000, 2'100),
+  };
+  NimbleIndexProjector::Options options;
+  options.maxRows = 100;
+  options.needResumeKey = true;
+  const auto result = projector->projectStreams(request, options);
+
+  ASSERT_EQ(result.responses.size(), 2);
+  EXPECT_TRUE(result.responses[0].resumeKey.has_value());
+  EXPECT_TRUE(result.responses[1].slices.empty());
+  EXPECT_FALSE(result.responses[1].resumeKey.has_value());
+}
+
 TEST_P(NimbleIndexProjectorTest, needResumeKeyGatesResumeKey) {
   auto rowType = ROW({"key", "value"}, {BIGINT(), INTEGER()});
   // 10 stripes x 100 rows.
@@ -5964,7 +6151,8 @@ TEST_P(NimbleIndexProjectorTest, maxRowsMultiRequestMixedSatisfaction) {
   EXPECT_TRUE(result.responses[2].resumeKey.has_value());
 
   // Request 3: stripe 9 never processed, resume key = original lower key.
-  EXPECT_TRUE(result.responses[3].slices.empty());
+  ASSERT_EQ(result.responses[3].slices.size(), 1);
+  EXPECT_EQ(readEmbeddedRowRange(result.responses[3].slices[0]).numRows(), 0);
   ASSERT_TRUE(result.responses[3].resumeKey.has_value());
   EXPECT_EQ(result.responses[3].resumeKey.value(), bounds3.lowerKey);
 }
