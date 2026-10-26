@@ -133,6 +133,11 @@ bool registerBuiltinFunctions(const std::string& prefix);
 
 void unregisterFunctions();
 
+/// Turns the GPU cast from VARCHAR on or off. CastFunction parses strings with
+/// Presto's rules, so registerPrestoFunctions() turns it on and
+/// registerSparkFunctions() off; unregisterFunctions() turns it off as well.
+void setCastFromVarcharEnabled(bool enabled);
+
 class CudfExpression {
  public:
   virtual ~CudfExpression() = default;
@@ -206,9 +211,10 @@ std::shared_ptr<CudfExpression> createCudfExpression(
 /// same form the operator compiles at runtime; e.g. cast(<literal> as DECIMAL)
 /// folds to a plain decimal constant that the structural check accepts, rather
 /// than a live decimal-target cast that it would reject. Then applies the
-/// query-context-dependent timezone fallback (a timezone-sensitive date_trunc
-/// under adjust_timestamp_to_session_timezone must stay on CPU) and a
-/// structural support check on the optimized expression. When
+/// query-context-dependent fallbacks (a timezone-sensitive date_trunc under
+/// adjust_timestamp_to_session_timezone, and a cast from VARCHAR under
+/// legacy_cast or cast_string_to_floating_point_lenient_inf_nan, must stay on
+/// CPU) and a structural support check on the optimized expression. When
 /// `queryCtx` or `pool` is null, skips optimization and checks `expr` directly.
 /// \param pool Leaf pool used for constant folding during optimization,
 ///             typically the operator's own pool.
@@ -216,6 +222,22 @@ bool canExprRunOnGpu(
     const core::TypedExprPtr& expr,
     core::QueryCtx* queryCtx,
     memory::MemoryPool* pool);
+
+/// Plan-time GPU eligibility for a join filter: canExprRunOnGpu(), and no CAST
+/// from VARCHAR. The GPU precomputes such a cast over every row of a side,
+/// where the CPU casts only the pairs the join matches, so a string that spells
+/// no value in a row the join never matches would fail only on the GPU. A
+/// TRY_CAST gives NULL instead and is fine.
+bool canJoinFilterRunOnGpu(
+    const core::TypedExprPtr& filter,
+    core::QueryCtx* queryCtx,
+    memory::MemoryPool* pool);
+
+/// Returns true if 'expr' holds a CAST or TRY_CAST from VARCHAR; with
+/// 'floatingPointOnly', one to REAL or DOUBLE.
+bool containsCastFromVarchar(
+    const core::TypedExprPtr& expr,
+    bool floatingPointOnly);
 
 /// Extract the full field path from a field access / dereference chain.
 /// Returns nullopt for non-field expressions.
