@@ -426,7 +426,7 @@ class CudfHashJoinBaseAdapter : public OperatorAdapter {
     }
 
     if (joinPlanNode->filter()) {
-      if (!canExprRunOnGpu(
+      if (!canJoinFilterRunOnGpu(
               joinPlanNode->filter(),
               ctx->task->queryCtx().get(),
               op->pool())) {
@@ -567,7 +567,7 @@ class CudfNestedLoopJoinBaseAdapter : public OperatorAdapter {
             planNode->id());
         return false;
       }
-      if (!canExprRunOnGpu(
+      if (!canJoinFilterRunOnGpu(
               joinPlanNode->joinCondition(),
               ctx->task->queryCtx().get(),
               op->pool())) {
