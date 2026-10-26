@@ -18,6 +18,8 @@
 
 #include <unistd.h>
 
+#include <map>
+
 #include <cuda_runtime.h> // @manual
 #include <fmt/format.h>
 #include <folly/ScopeGuard.h>
@@ -795,6 +797,695 @@ TEST_F(ExecutorTest, disjointColumnCopiesTest) {
         EXPECT_TRUE(tensorsMatch(outputs[1], expectedMid))
             << firstDifference(outputs[1], expectedMid);
       }
+    }
+  }
+}
+
+// Counts the nodes of each of 'targets' left in the graph 'str' once the
+// executor has compiled it. A target counts every node whose target contains
+// it, so "select_scatter" counts the aten op and its tw form.
+std::map<std::string, int32_t> compiledTargetCounts(
+    const std::string& str,
+    const std::unordered_map<std::string, torch::_export::TensorMeta>& meta,
+    const std::vector<std::string>& targets) {
+  auto graph = nativert::stringToGraph(str);
+  graph->setTensorValuesMeta(meta);
+  setGraphDevice(graph.get(), /*isCuda=*/true);
+  auto ctx = std::make_unique<ModelContext>();
+  ctx->weights = std::make_shared<nativert::Weights>(graph.get());
+  ctx->graph = std::move(graph);
+  WaveGraphExecutor exec(std::move(ctx));
+  std::map<std::string, int32_t> counts;
+  for (const auto& target : targets) {
+    counts[target] = 0;
+  }
+  for (const auto& node : exec.graph().nodes()) {
+    for (const auto& target : targets) {
+      counts[target] += node.target().find(target) != std::string::npos ? 1 : 0;
+    }
+  }
+  return counts;
+}
+
+// Number of steps of 'plan' that run 'op' in some kernel.
+int32_t stepsRunning(const CompiledPlan& plan, std::string_view op) {
+  int32_t steps = 0;
+  for (const auto& node : plan.nodes()) {
+    for (const auto& step : node.steps) {
+      bool runs = false;
+      for (const auto& kernel : step.kernels) {
+        runs |= kernel.has(op);
+      }
+      steps += runs ? 1 : 0;
+    }
+  }
+  return steps;
+}
+
+// The column source of disjointColumnCopiesTest: column i of %s2, expanded to
+// a column of the target, as %e<i>.
+std::string columnSource(int32_t column, int32_t rows) {
+  return fmt::format(
+      "%c{0} = torch.ops.aten.select.int(self=%s2, dim=1, index={0})\n"
+      "%e{0} = torch.ops.aten.expand.default(self=%c{0}, size=[{1}])\n",
+      column,
+      rows);
+}
+
+// The functional form of "%b<link>[:, column].copy_(src)": the copy into the
+// column, a select_scatter writing the column back, and a slice_scatter
+// writing that over the whole tensor, giving %b<link + 1>.
+std::string
+functionalColumnWrite(int32_t link, int32_t column, const std::string& src) {
+  return fmt::format(
+      "%va{0} = torch.ops.aten.slice.Tensor(self=%b{0}, dim=0, start=0, "
+      "end=9223372036854775807)\n"
+      "%sel{0} = torch.ops.aten.select.int(self=%va{0}, dim=1, index={1})\n"
+      "%cp{0} = torch.ops.aten.copy.default(self=%sel{0}, src={2})\n"
+      "%vb{0} = torch.ops.aten.slice.Tensor(self=%b{0}, dim=0, start=0, "
+      "end=9223372036854775807)\n"
+      "%ss{0} = torch.ops.aten.select_scatter.default(self=%vb{0}, "
+      "src=%cp{0}, dim=1, index={1})\n"
+      "%b{3} = torch.ops.aten.slice_scatter.default(self=%b{0}, src=%ss{0}, "
+      "dim=0, start=0, end=9223372036854775807)\n",
+      link,
+      column,
+      src,
+      link + 1);
+}
+
+// The same for "%b<link>[:, start:end].copy_(src)" with a slice_scatter of
+// columns start..end-1 in place of the select_scatter.
+std::string functionalSliceWrite(
+    int32_t link,
+    int32_t start,
+    int32_t end,
+    const std::string& src) {
+  return fmt::format(
+      "%va{0} = torch.ops.aten.slice.Tensor(self=%b{0}, dim=0, start=0, "
+      "end=9223372036854775807)\n"
+      "%sel{0} = torch.ops.aten.slice.Tensor(self=%va{0}, dim=1, start={1}, "
+      "end={2})\n"
+      "%cp{0} = torch.ops.aten.copy.default(self=%sel{0}, src={3})\n"
+      "%vb{0} = torch.ops.aten.slice.Tensor(self=%b{0}, dim=0, start=0, "
+      "end=9223372036854775807)\n"
+      "%ss{0} = torch.ops.aten.slice_scatter.default(self=%vb{0}, "
+      "src=%cp{0}, dim=1, start={1}, end={2})\n"
+      "%b{4} = torch.ops.aten.slice_scatter.default(self=%b{0}, src=%ss{0}, "
+      "dim=0, start=0, end=9223372036854775807)\n",
+      link,
+      start,
+      end,
+      src,
+      link + 1);
+}
+
+// TensorMeta for the values the helpers above name, over 'links' links: the
+// chain values are 2-D, the per-column values 1-D. A slice link's per-link
+// values are 2-D; 'sliceLinks' lists them.
+std::unordered_map<std::string, torch::_export::TensorMeta> chainMeta(
+    int32_t links,
+    int32_t columns,
+    const std::vector<int32_t>& sliceLinks,
+    const std::vector<std::string>& extra2d) {
+  std::unordered_map<std::string, torch::_export::TensorMeta> meta;
+  for (const auto& name : extra2d) {
+    meta[name] = makeTensorMeta(c10::ScalarType::Float, 2);
+  }
+  for (int32_t i = 0; i < columns; ++i) {
+    meta[fmt::format("c{}", i)] = makeTensorMeta(c10::ScalarType::Float, 1);
+    meta[fmt::format("e{}", i)] = makeTensorMeta(c10::ScalarType::Float, 1);
+  }
+  for (int32_t i = 0; i <= links; ++i) {
+    meta[fmt::format("b{}", i)] = makeTensorMeta(c10::ScalarType::Float, 2);
+  }
+  for (int32_t i = 0; i < links; ++i) {
+    const bool isSlice =
+        std::find(sliceLinks.begin(), sliceLinks.end(), i) != sliceLinks.end();
+    for (const auto* name : {"va", "vb", "ss"}) {
+      meta[fmt::format("{}{}", name, i)] =
+          makeTensorMeta(c10::ScalarType::Float, 2);
+    }
+    for (const auto* name : {"sel", "cp"}) {
+      meta[fmt::format("{}{}", name, i)] =
+          makeTensorMeta(c10::ScalarType::Float, isSlice ? 2 : 1);
+    }
+  }
+  return meta;
+}
+
+// Sets the three rewrite switches for the scope of a test and restores them.
+class RewriteSwitches {
+ public:
+  RewriteSwitches()
+      : reinplace_{WaveConfig::get().reinplaceScatters},
+        recognize_{WaveConfig::get().recognizeDisjointCopies},
+        ordering_{WaveConfig::get().disjointWriteOrdering} {}
+
+  ~RewriteSwitches() {
+    WaveConfig::get().reinplaceScatters = reinplace_;
+    WaveConfig::get().recognizeDisjointCopies = recognize_;
+    WaveConfig::get().disjointWriteOrdering = ordering_;
+  }
+
+  void set(bool reinplace, bool recognize, bool ordering) {
+    WaveConfig::get().reinplaceScatters = reinplace;
+    WaveConfig::get().recognizeDisjointCopies = recognize;
+    WaveConfig::get().disjointWriteOrdering = ordering;
+  }
+
+ private:
+  const bool reinplace_;
+  const bool recognize_;
+  const bool ordering_;
+};
+
+// Column copies into runs of columns: {0, 1}, {3, 4} and the single column 6.
+// rewriteDisjointCopies merges each run of two or more into one copy and
+// leaves the single one. A group that writes column 1 twice is not merged, and
+// the later copy wins.
+TEST_F(ExecutorTest, disjointColumnRunsTest) {
+  constexpr int32_t kRows = 256;
+  constexpr int32_t kCols = 7;
+  auto graphString = [&](const std::vector<int32_t>& columns) {
+    std::string str = "graph(%x, %s):\n";
+    str += "%t = torch.ops.aten.ones_like.default(self=%x)\n";
+    str += "%s2 = torch.ops.aten.mul.Scalar(self=%s, other=2)\n";
+    for (size_t i = 0; i < columns.size(); ++i) {
+      str += fmt::format(
+          "%sl{0} = torch.ops.aten.slice.Tensor(self=%t, dim=0, start=0, "
+          "end=9223372036854775807)\n"
+          "%d{0} = torch.ops.aten.select.int(self=%sl{0}, dim=1, index={1})\n"
+          "%c{0} = torch.ops.aten.select.int(self=%s2, dim=1, index={0})\n"
+          "%e{0} = torch.ops.aten.expand.default(self=%c{0}, size=[{2}])\n"
+          "%w{0} = torch.ops.aten.copy_.default(self=%d{0}, src=%e{0})\n",
+          i,
+          columns[i],
+          kRows);
+    }
+    str += "%o = torch.ops.aten.add.Tensor(self=%t, other=%x)\n";
+    str += "return(%o)\n";
+    return str;
+  };
+  auto metaFor = [&](size_t numCopies) {
+    std::unordered_map<std::string, torch::_export::TensorMeta> meta;
+    for (const auto* name : {"x", "s", "t", "s2", "o"}) {
+      meta[name] = makeTensorMeta(c10::ScalarType::Float, 2);
+    }
+    for (size_t i = 0; i < numCopies; ++i) {
+      meta[fmt::format("sl{}", i)] = makeTensorMeta(c10::ScalarType::Float, 2);
+      for (const auto* prefix : {"d", "c", "e", "w"}) {
+        meta[fmt::format("{}{}", prefix, i)] =
+            makeTensorMeta(c10::ScalarType::Float, 1);
+      }
+    }
+    return meta;
+  };
+  auto x = at::arange(kRows * kCols, at::kFloat).reshape({kRows, kCols}) / 7;
+  auto s = at::arange(kRows * kCols, at::kFloat).reshape({kRows, kCols}) * 3;
+  // Copy i writes column i of 2 * s into column columns[i] of the target.
+  auto expectedFor = [&](const std::vector<int32_t>& columns) {
+    auto target = at::ones_like(x);
+    for (size_t i = 0; i < columns.size(); ++i) {
+      target.select(1, columns[i])
+          .copy_(s.select(1, static_cast<int64_t>(i)) * 2);
+    }
+    return target + x;
+  };
+
+  RewriteSwitches switches;
+  for (const bool recognize : {true, false}) {
+    switches.set(/*reinplace=*/true, recognize, /*ordering=*/true);
+    {
+      SCOPED_TRACE(fmt::format("runs recognize={}", recognize));
+      const std::vector<int32_t> columns{0, 1, 3, 4, 6};
+      const auto str = graphString(columns);
+      const auto meta = metaFor(columns.size());
+      EXPECT_EQ(
+          compiledTargetCounts(str, meta, {"copy_"})["copy_"],
+          recognize ? 3 : 5);
+      auto outputs =
+          runWaveProgrammatic(nativert::stringToGraph(str), meta, {{x, s}});
+      ASSERT_EQ(outputs.size(), 1);
+      EXPECT_TRUE(tensorsMatch(outputs[0], expectedFor(columns)))
+          << firstDifference(outputs[0], expectedFor(columns));
+    }
+    {
+      SCOPED_TRACE(fmt::format("duplicate recognize={}", recognize));
+      const std::vector<int32_t> columns{0, 1, 1};
+      const auto str = graphString(columns);
+      const auto meta = metaFor(columns.size());
+      EXPECT_EQ(compiledTargetCounts(str, meta, {"copy_"})["copy_"], 3);
+      auto outputs =
+          runWaveProgrammatic(nativert::stringToGraph(str), meta, {{x, s}});
+      ASSERT_EQ(outputs.size(), 1);
+      EXPECT_TRUE(tensorsMatch(outputs[0], expectedFor(columns)))
+          << firstDifference(outputs[0], expectedFor(columns));
+    }
+  }
+}
+
+// The functional form of the column-copy loop, as functionalization writes it:
+// per column a copy, a select_scatter writing it back and a slice_scatter
+// writing that over the whole tensor, each link reading the previous one's
+// result. reinplaceScatterChains writes the chain into the ones_like in place;
+// rewriteDisjointCopies then merges it into one copy as it does the in-place
+// loop. Every combination of the two is checked against ATen.
+TEST_F(ExecutorTest, functionalColumnChainTest) {
+  constexpr int32_t kRows = 256;
+  constexpr int32_t kCols = 4;
+  std::string str = "graph(%x, %s):\n";
+  str += "%b0 = torch.ops.aten.ones_like.default(self=%x)\n";
+  str += "%s2 = torch.ops.aten.mul.Scalar(self=%s, other=2)\n";
+  for (int32_t i = 0; i < kCols; ++i) {
+    str += columnSource(i, kRows);
+    str += functionalColumnWrite(i, i, fmt::format("%e{}", i));
+  }
+  str += fmt::format(
+      "%o = torch.ops.aten.add.Tensor(self=%b{}, other=%x)\n", kCols);
+  str += "return(%o)\n";
+  const auto meta = chainMeta(kCols, kCols, {}, {"x", "s", "s2", "o"});
+
+  auto x = at::arange(kRows * kCols, at::kFloat).reshape({kRows, kCols}) / 7;
+  auto s = at::arange(kRows * kCols, at::kFloat).reshape({kRows, kCols}) * 3;
+  const auto expected = s * 2 + x;
+
+  RewriteSwitches switches;
+  for (const bool reinplace : {true, false}) {
+    for (const bool recognize : {true, false}) {
+      SCOPED_TRACE(
+          fmt::format("reinplace={} recognize={}", reinplace, recognize));
+      switches.set(reinplace, recognize, /*ordering=*/true);
+      auto counts =
+          compiledTargetCounts(str, meta, {"copy_", "select_scatter"});
+      EXPECT_EQ(counts["select_scatter"], reinplace ? 0 : kCols);
+      if (reinplace) {
+        EXPECT_EQ(counts["copy_"], recognize ? 1 : kCols);
+      }
+      auto outputs =
+          runWaveProgrammatic(nativert::stringToGraph(str), meta, {{x, s}});
+      ASSERT_EQ(outputs.size(), 1);
+      EXPECT_TRUE(tensorsMatch(outputs[0], expected))
+          << firstDifference(outputs[0], expected);
+    }
+  }
+}
+
+// Functional chains that must not be written in place, each checked to keep
+// its scatters and to produce the functional result:
+//   intermediate  an intermediate result is also returned
+//   input         the root is a graph input, which in place would be modified
+//   readBetween   the root is read between two links
+//   srcFromRoot   a link writes a column of the root, which the earlier links
+//                 overwrite in place
+TEST_F(ExecutorTest, functionalColumnChainBlockedTest) {
+  constexpr int32_t kRows = 256;
+  constexpr int32_t kCols = 4;
+  auto x = at::arange(kRows * kCols, at::kFloat).reshape({kRows, kCols}) / 7;
+  auto s = at::arange(kRows * kCols, at::kFloat).reshape({kRows, kCols}) * 3;
+  auto ones = at::ones_like(x);
+  // The root with columns 0..k-1 written with 2 * s.
+  auto writtenUpTo = [&](int64_t k) {
+    auto target = at::ones_like(x);
+    target.narrow(1, 0, k).copy_((s * 2).narrow(1, 0, k));
+    return target;
+  };
+
+  RewriteSwitches switches;
+  switches.set(/*reinplace=*/true, /*recognize=*/true, /*ordering=*/true);
+  for (const std::string variant :
+       {"intermediate", "input", "readBetween", "srcFromRoot"}) {
+    SCOPED_TRACE(variant);
+    const bool rootIsInput = variant == "input";
+    std::string str =
+        rootIsInput ? "graph(%x, %s, %b0):\n" : "graph(%x, %s):\n";
+    if (!rootIsInput) {
+      str += "%b0 = torch.ops.aten.ones_like.default(self=%x)\n";
+    }
+    str += "%s2 = torch.ops.aten.mul.Scalar(self=%s, other=2)\n";
+    std::vector<std::string> extra{"x", "s", "s2", "o"};
+    for (int32_t i = 0; i < kCols; ++i) {
+      str += columnSource(i, kRows);
+      std::string src = fmt::format("%e{}", i);
+      if (variant == "srcFromRoot" && i == 1) {
+        str +=
+            "%rootColumn = torch.ops.aten.select.int(self=%b0, dim=1, "
+            "index=0)\n";
+        src = "%rootColumn";
+      }
+      str += functionalColumnWrite(i, i, src);
+      if (variant == "readBetween" && i == 1) {
+        str += "%mid = torch.ops.aten.mul.Tensor(self=%b0, other=%x)\n";
+      }
+    }
+    str += fmt::format(
+        "%o = torch.ops.aten.add.Tensor(self=%b{}, other=%x)\n", kCols);
+    if (variant == "intermediate") {
+      str += "return(%o, %b2)\n";
+    } else if (variant == "readBetween") {
+      str += "return(%o, %mid)\n";
+      extra.emplace_back("mid");
+    } else {
+      str += "return(%o)\n";
+    }
+    auto meta = chainMeta(kCols, kCols, {}, extra);
+    meta["rootColumn"] = makeTensorMeta(c10::ScalarType::Float, 1);
+
+    EXPECT_EQ(
+        compiledTargetCounts(str, meta, {"select_scatter"})["select_scatter"],
+        kCols);
+    std::vector<at::Tensor> inputs{x, s};
+    if (rootIsInput) {
+      inputs.push_back(ones.clone());
+    }
+    auto outputs =
+        runWaveProgrammatic(nativert::stringToGraph(str), meta, {inputs});
+    auto expected = writtenUpTo(kCols);
+    if (variant == "srcFromRoot") {
+      // Column 1 is the root's original column 0, a column of ones.
+      expected.select(1, 1).fill_(1);
+    }
+    ASSERT_GE(outputs.size(), 1);
+    EXPECT_TRUE(tensorsMatch(outputs[0], expected + x))
+        << firstDifference(outputs[0], expected + x);
+    if (variant == "intermediate") {
+      ASSERT_EQ(outputs.size(), 2);
+      EXPECT_TRUE(tensorsMatch(outputs[1], writtenUpTo(2)))
+          << firstDifference(outputs[1], writtenUpTo(2));
+    }
+    if (variant == "readBetween") {
+      ASSERT_EQ(outputs.size(), 2);
+      EXPECT_TRUE(tensorsMatch(outputs[1], x))
+          << firstDifference(outputs[1], x);
+    }
+  }
+}
+
+// A functional chain of mixed links: columns 0 and 1, a slice link writing
+// columns 3..4, and column 6. Written in place, the run 0..1 merges into one
+// copy and the other two stay copies of their own, three in all.
+TEST_F(ExecutorTest, functionalMixedChainTest) {
+  constexpr int32_t kRows = 256;
+  constexpr int32_t kCols = 7;
+  std::string str = "graph(%x, %s):\n";
+  str += "%b0 = torch.ops.aten.ones_like.default(self=%x)\n";
+  str += "%s2 = torch.ops.aten.mul.Scalar(self=%s, other=2)\n";
+  str += columnSource(0, kRows) + functionalColumnWrite(0, 0, "%e0");
+  str += columnSource(1, kRows) + functionalColumnWrite(1, 1, "%e1");
+  str +=
+      "%band = torch.ops.aten.slice.Tensor(self=%s2, dim=1, start=3, "
+      "end=5)\n";
+  str += functionalSliceWrite(2, 3, 5, "%band");
+  str += columnSource(6, kRows) + functionalColumnWrite(3, 6, "%e6");
+  str += "%o = torch.ops.aten.add.Tensor(self=%b4, other=%x)\n";
+  str += "return(%o)\n";
+  const auto meta = chainMeta(4, kCols, {2}, {"x", "s", "s2", "o", "band"});
+
+  auto x = at::arange(kRows * kCols, at::kFloat).reshape({kRows, kCols}) / 7;
+  auto s = at::arange(kRows * kCols, at::kFloat).reshape({kRows, kCols}) * 3;
+  auto expected = at::ones_like(x);
+  for (const int64_t column : {0, 1, 3, 4, 6}) {
+    expected.select(1, column).copy_(s.select(1, column) * 2);
+  }
+  expected += x;
+
+  RewriteSwitches switches;
+  for (const bool reinplace : {true, false}) {
+    SCOPED_TRACE(fmt::format("reinplace={}", reinplace));
+    switches.set(reinplace, /*recognize=*/true, /*ordering=*/true);
+    auto counts = compiledTargetCounts(str, meta, {"copy_", "select_scatter"});
+    EXPECT_EQ(counts["select_scatter"], reinplace ? 0 : 3);
+    if (reinplace) {
+      EXPECT_EQ(counts["copy_"], 3);
+    }
+    auto outputs =
+        runWaveProgrammatic(nativert::stringToGraph(str), meta, {{x, s}});
+    ASSERT_EQ(outputs.size(), 1);
+    EXPECT_TRUE(tensorsMatch(outputs[0], expected))
+        << firstDifference(outputs[0], expected);
+  }
+}
+
+// A functional chain that mixes column writes with index-tensor writes:
+// column 0, an index_put of whole rows, column 1, then a scatter_add along
+// dim 0. The rows the index_put writes cross both columns, so the order of the
+// writes decides the result. Written in place, the index_put and scatter_add
+// become their in-place forms on the ones_like, no link copies the tensor, and
+// every write stays ordered against the others. A second graph checks a
+// one-link chain whose write is the fused tw.scatter_add.
+TEST_F(ExecutorTest, functionalIndexedChainTest) {
+  constexpr int32_t kRows = 256;
+  constexpr int32_t kCols = 4;
+  constexpr int32_t kPut = 16;
+  std::string str = "graph(%x, %s, %idx, %vals, %sidx, %ssrc):\n";
+  str += "%b0 = torch.ops.aten.ones_like.default(self=%x)\n";
+  str += "%s2 = torch.ops.aten.mul.Scalar(self=%s, other=2)\n";
+  str += columnSource(0, kRows) + functionalColumnWrite(0, 0, "%e0");
+  str +=
+      "%l[] = prim.ListPack(l0=%idx)\n"
+      "%b2 = torch.ops.aten.index_put.default(self=%b1, indices=%l, "
+      "values=%vals)\n";
+  str += columnSource(1, kRows) + functionalColumnWrite(2, 1, "%e1");
+  str +=
+      "%b4 = torch.ops.aten.scatter_add.default(self=%b3, dim=0, "
+      "index=%sidx, src=%ssrc)\n";
+  str += "%o = torch.ops.aten.add.Tensor(self=%b4, other=%x)\n";
+  str += "return(%o)\n";
+  auto meta = chainMeta(4, kCols, {}, {"x", "s", "s2", "o", "vals", "ssrc"});
+  meta["idx"] = makeTensorMeta(c10::ScalarType::Long, 1);
+  meta["sidx"] = makeTensorMeta(c10::ScalarType::Long, 2);
+
+  auto x = at::arange(kRows * kCols, at::kFloat).reshape({kRows, kCols}) / 7;
+  auto s = at::arange(kRows * kCols, at::kFloat).reshape({kRows, kCols}) * 3;
+  auto idx = at::arange(kPut, at::kLong) * 5;
+  auto vals = at::arange(kPut * kCols, at::kFloat).reshape({kPut, kCols}) - 50;
+  auto sidx = (at::arange(kRows * kCols, at::kLong) % kRows)
+                  .flip(0)
+                  .reshape({kRows, kCols});
+  auto ssrc = at::arange(kRows * kCols, at::kFloat).reshape({kRows, kCols});
+  auto expected = at::ones_like(x);
+  expected.select(1, 0).copy_(s.select(1, 0) * 2);
+  expected.index_put_({idx}, vals);
+  expected.select(1, 1).copy_(s.select(1, 1) * 2);
+  expected.scatter_add_(0, sidx, ssrc);
+  expected += x;
+
+  RewriteSwitches switches;
+  for (const bool reinplace : {true, false}) {
+    SCOPED_TRACE(fmt::format("reinplace={}", reinplace));
+    switches.set(reinplace, /*recognize=*/true, /*ordering=*/true);
+    auto counts = compiledTargetCounts(
+        str, meta, {"select_scatter", "index_put.default", "clone"});
+    EXPECT_EQ(counts["select_scatter"], reinplace ? 0 : 2);
+    if (reinplace) {
+      EXPECT_EQ(counts["index_put.default"], 0);
+      EXPECT_EQ(counts["clone"], 0);
+    }
+    auto outputs = runWaveProgrammatic(
+        nativert::stringToGraph(str), meta, {{x, s, idx, vals, sidx, ssrc}});
+    ASSERT_EQ(outputs.size(), 1);
+    EXPECT_TRUE(tensorsMatch(outputs[0], expected))
+        << firstDifference(outputs[0], expected);
+  }
+
+  // A chain of one fused index-tensor write, a histogram into a fresh tensor:
+  // the in-place tw.scatter_add must stay reachable from the chain's readers.
+  const char* kHistogram = R"(graph(%hsrc, %hidx):
+%z = torch.ops.aten.new_zeros.default(self=%hsrc, size=[64])
+%h = torch.ops.aten.scatter_add.default(self=%z, dim=0, index=%hidx, src=%hsrc)
+%ho = torch.ops.aten.mul.Scalar(self=%h, other=2)
+return(%ho)
+)";
+  std::unordered_map<std::string, torch::_export::TensorMeta> histogramMeta;
+  for (const auto* name : {"hsrc", "z", "h", "ho"}) {
+    histogramMeta[name] = makeTensorMeta(c10::ScalarType::Float, 1);
+  }
+  histogramMeta["hidx"] = makeTensorMeta(c10::ScalarType::Long, 1);
+  auto hsrc = at::arange(1024, at::kFloat);
+  auto hidx = at::arange(1024, at::kLong) % 64;
+  const auto histogram =
+      at::zeros({64}, at::kFloat).scatter_add(0, hidx, hsrc) * 2;
+  for (const bool reinplace : {true, false}) {
+    SCOPED_TRACE(fmt::format("histogram reinplace={}", reinplace));
+    switches.set(reinplace, /*recognize=*/true, /*ordering=*/true);
+    EXPECT_EQ(
+        compiledTargetCounts(
+            kHistogram, histogramMeta, {"tw.scatter_add"})["tw.scatter_add"],
+        1);
+    auto outputs = runWaveProgrammatic(
+        nativert::stringToGraph(kHistogram), histogramMeta, {{hsrc, hidx}});
+    ASSERT_EQ(outputs.size(), 1);
+    EXPECT_TRUE(tensorsMatch(outputs[0], histogram))
+        << firstDifference(outputs[0], histogram);
+  }
+}
+
+// The functional form of "t.view(128, 16)[:, :5] += y" followed by an index_put
+// into the same view: a slice_scatter and an index_put whose root is a view of
+// t. Written in place, both write t through the view. The variants that must
+// keep the chain functional:
+//   baseRead     t itself is also returned, so it must keep its values
+//   baseInput    the view is of a graph input, which in place would be modified
+//   valsFromBase the index_put writes a view of t, taken before the chain,
+//                which the slice update would already have changed in place
+TEST_F(ExecutorTest, functionalViewRootTest) {
+  constexpr int32_t kPut = 8;
+  auto x = at::arange(256 * 8, at::kFloat).reshape({256, 8}) / 7;
+  auto y = at::arange(128 * 5, at::kFloat).reshape({128, 5}) * 3;
+  auto idx = at::arange(kPut, at::kLong) * 9;
+  auto vals = at::arange(kPut * 16, at::kFloat).reshape({kPut, 16}) - 100;
+
+  RewriteSwitches switches;
+  for (const std::string variant :
+       {"inPlace", "baseRead", "baseInput", "valsFromBase"}) {
+    for (const bool reinplace : {true, false}) {
+      SCOPED_TRACE(fmt::format("{} reinplace={}", variant, reinplace));
+      switches.set(reinplace, /*recognize=*/true, /*ordering=*/true);
+      const bool baseInput = variant == "baseInput";
+      const bool valsFromBase = variant == "valsFromBase";
+      std::string str = "graph(%x, %y, %idx, %vals):\n";
+      str += baseInput ? "%t = torch.ops.aten.view.default(self=%x, "
+                         "size=[256, 8])\n"
+                       : "%t = torch.ops.aten.mul.Scalar(self=%x, other=3)\n";
+      if (valsFromBase) {
+        str +=
+            "%v3 = torch.ops.aten.view.default(self=%t, size=[128, 16])\n"
+            "%pv = torch.ops.aten.slice.Tensor(self=%v3, dim=0, start=0, "
+            "end=8)\n";
+      }
+      str +=
+          "%v1 = torch.ops.aten.view.default(self=%t, size=[128, 16])\n"
+          "%v2 = torch.ops.aten.view.default(self=%t, size=[128, 16])\n"
+          "%sl = torch.ops.aten.slice.Tensor(self=%v2, dim=1, start=0, end=5)\n"
+          "%a = torch.ops.aten.add.Tensor(self=%sl, other=%y)\n"
+          "%u = torch.ops.aten.slice_scatter.default(self=%v1, src=%a, dim=1, "
+          "start=0, end=5)\n"
+          "%l[] = prim.ListPack(l0=%idx)\n";
+      str += fmt::format(
+          "%p = torch.ops.aten.index_put.default(self=%u, indices=%l, "
+          "values={})\n",
+          valsFromBase ? "%pv" : "%vals");
+      str +=
+          "%w = torch.ops.aten.view.default(self=%p, size=[256, 8])\n"
+          "%o = torch.ops.aten.mul.Scalar(self=%w, other=2)\n";
+      str += variant == "baseRead" ? "return(%o, %t)\n" : "return(%o)\n";
+      std::unordered_map<std::string, torch::_export::TensorMeta> meta;
+      for (const auto* name :
+           {"x",
+            "y",
+            "vals",
+            "t",
+            "v1",
+            "v2",
+            "v3",
+            "sl",
+            "a",
+            "u",
+            "pv",
+            "p",
+            "w",
+            "o"}) {
+        meta[name] = makeTensorMeta(c10::ScalarType::Float, 2);
+      }
+      meta["idx"] = makeTensorMeta(c10::ScalarType::Long, 1);
+
+      const bool blocked = variant != "inPlace";
+      auto counts = compiledTargetCounts(str, meta, {"slice_scatter", "clone"});
+      if (reinplace) {
+        EXPECT_EQ(counts["slice_scatter"], blocked ? 1 : 0);
+        if (!blocked) {
+          EXPECT_EQ(counts["clone"], 0);
+        }
+      }
+
+      auto base = baseInput ? x.clone() : x * 3;
+      auto view = base.clone().view({128, 16});
+      view.narrow(1, 0, 5).add_(y);
+      view.index_put_(
+          {idx}, valsFromBase ? base.view({128, 16}).narrow(0, 0, kPut) : vals);
+      auto expected = view.view({256, 8}) * 2;
+      auto xInput = x.clone();
+      auto outputs = runWaveProgrammatic(
+          nativert::stringToGraph(str), meta, {{xInput, y, idx, vals}});
+      ASSERT_GE(outputs.size(), 1);
+      EXPECT_TRUE(tensorsMatch(outputs[0], expected))
+          << firstDifference(outputs[0], expected);
+      if (variant == "baseRead") {
+        ASSERT_EQ(outputs.size(), 2);
+        EXPECT_TRUE(tensorsMatch(outputs[1], base))
+            << firstDifference(outputs[1], base);
+      }
+      if (baseInput) {
+        EXPECT_TRUE(tensorsMatch(xInput, x)) << firstDifference(xInput, x);
+      }
+    }
+  }
+}
+
+// In-place writes into one tensor that cannot be merged into one copy: two
+// columns from plain tensors and a band of two columns. With
+// WaveConfig::disjointWriteOrdering their regions are provably disjoint, so
+// they run in one step; without it each is ordered after the previous one.
+// Writes that overlap (column 0 twice, then a band over columns 0..1) stay
+// ordered either way, and the last one wins.
+TEST_F(ExecutorTest, disjointWriteOrderingTest) {
+  constexpr int32_t kRows = 256;
+  constexpr int32_t kCols = 4;
+  auto graphString = [](bool overlap) {
+    const int32_t first = 0;
+    const int32_t second = overlap ? 0 : 1;
+    const int32_t bandStart = overlap ? 0 : 2;
+    return fmt::format(
+        "graph(%x, %a, %b, %w):\n"
+        "%t = torch.ops.aten.ones_like.default(self=%x)\n"
+        "%d0 = torch.ops.aten.select.int(self=%t, dim=1, index={0})\n"
+        "%w0 = torch.ops.aten.copy_.default(self=%d0, src=%a)\n"
+        "%d1 = torch.ops.aten.select.int(self=%t, dim=1, index={1})\n"
+        "%w1 = torch.ops.aten.copy_.default(self=%d1, src=%b)\n"
+        "%d2 = torch.ops.aten.slice.Tensor(self=%t, dim=1, start={2}, "
+        "end={3})\n"
+        "%w2 = torch.ops.aten.copy_.default(self=%d2, src=%w)\n"
+        "%o = torch.ops.aten.add.Tensor(self=%t, other=%x)\n"
+        "return(%o)\n",
+        first,
+        second,
+        bandStart,
+        bandStart + 2);
+  };
+  std::unordered_map<std::string, torch::_export::TensorMeta> meta;
+  for (const auto* name : {"x", "w", "t", "d2", "w2", "o"}) {
+    meta[name] = makeTensorMeta(c10::ScalarType::Float, 2);
+  }
+  for (const auto* name : {"a", "b", "d0", "w0", "d1", "w1"}) {
+    meta[name] = makeTensorMeta(c10::ScalarType::Float, 1);
+  }
+  auto x = at::arange(kRows * kCols, at::kFloat).reshape({kRows, kCols}) / 7;
+  auto a = at::arange(kRows, at::kFloat) * 3;
+  auto b = at::arange(kRows, at::kFloat) * 5;
+  auto w = at::arange(kRows * 2, at::kFloat).reshape({kRows, 2}) * 11;
+
+  RewriteSwitches switches;
+  for (const bool overlap : {false, true}) {
+    const auto str = graphString(overlap);
+    auto expected = at::ones_like(x);
+    expected.select(1, 0).copy_(a);
+    expected.select(1, overlap ? 0 : 1).copy_(b);
+    expected.narrow(1, overlap ? 0 : 2, 2).copy_(w);
+    expected += x;
+    for (const bool ordering : {true, false}) {
+      SCOPED_TRACE(fmt::format("overlap={} ordering={}", overlap, ordering));
+      switches.set(/*reinplace=*/true, /*recognize=*/true, ordering);
+      auto plan = compilePlanProgrammatic(
+          nativert::stringToGraph(str), meta, CompiledPlan::Mode::kMultiKernel);
+      EXPECT_EQ(
+          stepsRunning(plan, "aten.copy_.default"),
+          ordering && !overlap ? 1 : 3)
+          << plan.describe();
+      auto outputs = runWaveProgrammatic(
+          nativert::stringToGraph(str), meta, {{x, a, b, w}});
+      ASSERT_EQ(outputs.size(), 1);
+      EXPECT_TRUE(tensorsMatch(outputs[0], expected))
+          << firstDifference(outputs[0], expected);
     }
   }
 }
@@ -3278,6 +3969,103 @@ TEST_F(ExecutorTest, cloneContiguousTest) {
   runTest(
       "data/clone_contiguous_test.pt2",
       "data/clone_contiguous_test_results.pt");
+}
+
+// aten.contiguous fused: 2D transposes through shared-memory tiles (int64 and
+// many tiles too), and rank-3, sliced and rank-1 inputs copied. torch.export
+// drops a contiguous whose input is contiguous when traced, so the elision is
+// tested on a programmatic graph below.
+TEST_F(ExecutorTest, contiguousTest) {
+  runTest("data/contiguous_test.pt2", "data/contiguous_test_results.pt");
+}
+
+// A contiguous of an add's fresh result is elided: the graph proves that input
+// dense. A contiguous of a transpose stays, as a fused copy rather than an
+// eager op. Programmatic graph, no .pt2.
+TEST_F(ExecutorTest, contiguousElidedWhenKnownDense) {
+  const char* kGraph = R"(graph(%x, %y):
+%a = torch.ops.aten.add.Tensor(self=%x, other=%y)
+%c = torch.ops.aten.contiguous.default(self=%a)
+%o = torch.ops.aten.mul.Tensor(self=%c, other=%c)
+%t = torch.ops.aten.t.default(self=%x)
+%d = torch.ops.aten.contiguous.default(self=%t)
+return(%o, %d)
+)";
+  std::unordered_map<std::string, torch::_export::TensorMeta> meta;
+  for (const char* name : {"x", "y", "a", "c", "o", "t", "d"}) {
+    meta[name] = makeTensorMeta(c10::ScalarType::Float, 2);
+  }
+
+  auto plan = compilePlanProgrammatic(
+      nativert::stringToGraph(kGraph), meta, CompiledPlan::Mode::kMultiKernel);
+  int32_t numContiguous = 0;
+  for (const auto& node : plan.nodes()) {
+    for (const auto& step : node.steps) {
+      for (const auto& kernel : step.kernels) {
+        numContiguous += kernel.has("aten.contiguous.default");
+      }
+    }
+  }
+  EXPECT_EQ(numContiguous, 1) << plan.describe();
+  EXPECT_TRUE(plan.fuses({"aten.contiguous.default"}));
+
+  auto x = at::randn({64, 48}, at::kFloat);
+  auto y = at::randn({64, 48}, at::kFloat);
+  auto outputs =
+      runWaveProgrammatic(nativert::stringToGraph(kGraph), meta, {{x, y}});
+  ASSERT_EQ(outputs.size(), 2);
+  const auto sum = x + y;
+  EXPECT_TRUE(tensorsMatch(outputs[0], sum * sum))
+      << firstDifference(outputs[0], sum * sum);
+  EXPECT_TRUE(tensorsMatch(outputs[1], x.t().contiguous()))
+      << firstDifference(outputs[1], x.t().contiguous());
+}
+
+// A clone of a 2D transpose takes contiguous's shared-memory tiles; a clone of
+// a rank-3 permute keeps the element copy. Both stay fused copies.
+TEST_F(ExecutorTest, cloneTransposeTiled) {
+  const char* kGraph = R"(graph(%x, %y):
+%t = torch.ops.aten.t.default(self=%x)
+%c = torch.ops.aten.clone.default(self=%t)
+%p = torch.ops.aten.permute.default(self=%y, dims=[2, 0, 1])
+%d = torch.ops.aten.clone.default(self=%p)
+return(%c, %d)
+)";
+  std::unordered_map<std::string, torch::_export::TensorMeta> meta;
+  for (const char* name : {"x", "t", "c"}) {
+    meta[name] = makeTensorMeta(c10::ScalarType::Float, 2);
+  }
+  for (const char* name : {"y", "p", "d"}) {
+    meta[name] = makeTensorMeta(c10::ScalarType::Float, 3);
+  }
+
+  auto plan = compilePlanProgrammatic(
+      nativert::stringToGraph(kGraph), meta, CompiledPlan::Mode::kMultiKernel);
+  EXPECT_TRUE(plan.fuses({"aten.clone.default"})) << plan.describe();
+  int32_t numTiled = 0;
+  int32_t numElementwise = 0;
+  for (const auto& node : plan.nodes()) {
+    for (const auto& step : node.steps) {
+      for (const auto& kernel : step.kernels) {
+        numTiled +=
+            kernel.code.find("tw_contiguous<float, true>") != std::string::npos;
+        numElementwise += kernel.code.find("tw_contiguous<float, false>") !=
+            std::string::npos;
+      }
+    }
+  }
+  EXPECT_EQ(numTiled, 1) << plan.describe();
+  EXPECT_EQ(numElementwise, 1) << plan.describe();
+
+  auto x = at::randn({70, 45}, at::kFloat);
+  auto y = at::randn({6, 5, 4}, at::kFloat);
+  auto outputs =
+      runWaveProgrammatic(nativert::stringToGraph(kGraph), meta, {{x, y}});
+  ASSERT_EQ(outputs.size(), 2);
+  EXPECT_TRUE(tensorsMatch(outputs[0], x.t().contiguous()))
+      << firstDifference(outputs[0], x.t().contiguous());
+  EXPECT_TRUE(tensorsMatch(outputs[1], y.permute({2, 0, 1}).contiguous()))
+      << firstDifference(outputs[1], y.permute({2, 0, 1}).contiguous());
 }
 
 // Empty-tensor broadcast: [8,1] + [1,0] -> [8,0] without reading null storage.

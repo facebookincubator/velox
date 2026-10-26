@@ -898,6 +898,13 @@ TEST_F(CompileTest, exprLocalOverwritableTemps) {
 // rewriteInPlace elides all of them: each in-place writer is rewired to write
 // its original buffer, and every clone output is left dead (no users).
 TEST_F(CompileTest, cloneElisionRewritesInPlaceChain) {
+  // reinplaceScatterChains writes these chains in place before any clone is
+  // inserted; this test is about the clones.
+  const bool savedReinplace = WaveConfig::get().reinplaceScatters;
+  WaveConfig::get().reinplaceScatters = false;
+  SCOPE_EXIT {
+    WaveConfig::get().reinplaceScatters = savedReinplace;
+  };
   auto& graph = loadGraph("data/index_put_chain_test.pt2");
 
   ValueTypes types;
@@ -946,6 +953,13 @@ TEST_F(CompileTest, cloneElisionRewritesInPlaceChain) {
 // clones whose input is c. The single-use temporaries c1 and c3 are still
 // safely elided, so the pass is selective, not a no-op.
 TEST_F(CompileTest, cloneElisionKeepsForkedInput) {
+  // reinplaceScatterChains writes these chains in place before any clone is
+  // inserted; this test is about the clones.
+  const bool savedReinplace = WaveConfig::get().reinplaceScatters;
+  WaveConfig::get().reinplaceScatters = false;
+  SCOPE_EXIT {
+    WaveConfig::get().reinplaceScatters = savedReinplace;
+  };
   auto& graph = loadGraph("data/index_put_fork_test.pt2");
 
   ValueTypes types;
