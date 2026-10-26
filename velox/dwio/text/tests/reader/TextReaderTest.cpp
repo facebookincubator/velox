@@ -1180,6 +1180,9 @@ TEST_F(TextReaderTest, readFloatingPointValues) {
       {"-Infinity", -realInfinity, -doubleInfinity},
       {"Inf", realInfinity, doubleInfinity},
       {"-Inf", -realInfinity, -doubleInfinity},
+      {"inf", realInfinity, doubleInfinity},
+      {"INF", realInfinity, doubleInfinity},
+      {"-inf", -realInfinity, -doubleInfinity},
       {"+inf", realInfinity, doubleInfinity},
       {"inFINITY", realInfinity, doubleInfinity},
       {"Infinityf", std::nullopt, std::nullopt},
@@ -1192,12 +1195,16 @@ TEST_F(TextReaderTest, readFloatingPointValues) {
       {"1.25D", 1.25f, 1.25},
       {" \t1.25f\t ", 1.25f, 1.25},
       {".5", 0.5f, 0.5},
+      {"-.5", -0.5f, -0.5},
+      {"+.5", 0.5f, 0.5},
       {".5f", 0.5f, 0.5},
       {"+.5f", 0.5f, 0.5},
       {"-.5D", -0.5f, -0.5},
       {"1.f", 1.0f, 1.0},
       {"1e2F", 100.0f, 100.0},
       {"0x1.8p+1D", 3.0f, 3.0},
+      // Preserve C-library hex grammar even without Java's required p exponent.
+      {"0x10", 16.0f, 16.0},
       // A suffix does not narrow a DOUBLE value to float precision.
       {"0.1f", 0.1f, 0.1},
       {"16777217f", 16'777'216.0f, 16'777'217.0},
@@ -1233,6 +1240,8 @@ TEST_F(TextReaderTest, readFloatingPointValues) {
       {"1L", std::nullopt, std::nullopt},
       {"1.5%", std::nullopt, std::nullopt},
       {"1.0 f", std::nullopt, std::nullopt},
+      {"1.5 d", std::nullopt, std::nullopt},
+      {"1e5x", std::nullopt, std::nullopt},
       {"1e+f", std::nullopt, std::nullopt},
       {"1ef", std::nullopt, std::nullopt},
       {"0x1p+f", std::nullopt, std::nullopt},
@@ -1265,7 +1274,9 @@ TEST_F(TextReaderTest, readFloatingPointValues) {
     auto writeFile =
         std::make_unique<LocalWriteFile>(textFile->getPath(), true, false);
     for (const auto& testCase : testCases) {
-      writeFile->append("7," + testCase.input + "," + testCase.input + ",9\n");
+      writeFile->append(
+          "7," + testCase.input + "," + testCase.input + "," + testCase.input +
+          ",9\n");
     }
     writeFile->close();
   }
@@ -1274,6 +1285,13 @@ TEST_F(TextReaderTest, readFloatingPointValues) {
       {{"before", INTEGER()},
        {"real", REAL()},
        {"double", DOUBLE()},
+       {"widened_real", REAL()},
+       {"after", INTEGER()}});
+  const auto requestedType = ROW(
+      {{"before", INTEGER()},
+       {"real", REAL()},
+       {"double", DOUBLE()},
+       {"widened_real", DOUBLE()},
        {"after", INTEGER()}});
   auto factory = dwio::common::getReaderFactory(dwio::common::FileFormat::TEXT);
   auto readFile = std::make_shared<LocalReadFile>(textFile->getPath());
@@ -1288,7 +1306,10 @@ TEST_F(TextReaderTest, readFloatingPointValues) {
         std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
     auto reader = factory->createReader(std::move(input), readerOptions);
     dwio::common::RowReaderOptions rowReaderOptions;
-    setScanSpec(*type, rowReaderOptions);
+    setScanSpec(*requestedType, rowReaderOptions);
+    rowReaderOptions.select(
+        std::make_shared<dwio::common::ColumnSelector>(requestedType, type));
+    rowReaderOptions.setProjectSelectedType(true);
     auto rowReader = reader->createRowReader(rowReaderOptions);
     VectorPtr result;
     size_t offset = 0;
@@ -1297,10 +1318,12 @@ TEST_F(TextReaderTest, readFloatingPointValues) {
       ASSERT_GT(rowsRead, 0);
       ASSERT_LE(rowsRead, testCases.size() - offset);
       auto* rows = result->asChecked<RowVector>();
+      ASSERT_EQ(*rows->type(), *requestedType);
       auto* before = rows->childAt(0)->asChecked<FlatVector<int32_t>>();
       auto* real = rows->childAt(1)->asChecked<FlatVector<float>>();
       auto* doubles = rows->childAt(2)->asChecked<FlatVector<double>>();
-      auto* after = rows->childAt(3)->asChecked<FlatVector<int32_t>>();
+      auto* widenedReal = rows->childAt(3)->asChecked<FlatVector<double>>();
+      auto* after = rows->childAt(4)->asChecked<FlatVector<int32_t>>();
       for (vector_size_t row = 0; row < rowsRead; ++row) {
         const auto& testCase = testCases[offset + row];
         SCOPED_TRACE(testCase.input);
@@ -1311,6 +1334,10 @@ TEST_F(TextReaderTest, readFloatingPointValues) {
         ASSERT_NO_FATAL_FAILURE(assertValue(real, row, testCase.realValue));
         ASSERT_NO_FATAL_FAILURE(
             assertValue(doubles, row, testCase.doubleValue));
+        const std::optional<double> widenedValue = testCase.realValue
+            ? std::optional<double>{static_cast<double>(*testCase.realValue)}
+            : std::nullopt;
+        ASSERT_NO_FATAL_FAILURE(assertValue(widenedReal, row, widenedValue));
       }
       offset += rowsRead;
     }

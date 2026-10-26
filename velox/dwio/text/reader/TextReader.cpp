@@ -842,9 +842,9 @@ static constexpr std::string_view kNaNStringView{"NaN"};
 
 // Return whether trimmed input is accepted given sscanf's %lln consumed-byte
 // count and whether its scanned value is NaN. NaN spellings and trailing
-// f/F/d/D type suffixes follow Java; case-insensitive infinity aliases are
-// accepted for compatibility. Hex significands consume f/d as digits, so hex
-// type suffixes follow a p exponent.
+// f/F/d/D type suffixes follow Java. Preserve C-library numeric grammar,
+// including hex inputs without Java's required p exponent. Hex significands
+// consume f/d as digits, so hex type suffixes follow a p exponent.
 bool isValidFloatingPoint(
     std::string_view input,
     size_t numConsumed,
@@ -861,6 +861,8 @@ bool isValidFloatingPoint(
   if (isNaN) {
     return numConsumed == input.size() && literal == kNaNStringView;
   }
+  // Preserve case-insensitive infinity aliases such as inf, INF and -inf for
+  // backward compatibility, even though Hive's Double.parseDouble rejects them.
   if (numConsumed == input.size()) {
     return true;
   }
@@ -1432,7 +1434,8 @@ void TextRowReader::readElement(
           putValue<float, float>(getFloat, data, insertionRow, delim);
           break;
         case TypeKind::DOUBLE:
-          putValue<float, double>(getDouble, data, insertionRow, delim);
+          // Parse at the file column's precision before widening to DOUBLE.
+          putValue<float, double>(getFloat, data, insertionRow, delim);
           break;
         default:
           VELOX_FAIL(
