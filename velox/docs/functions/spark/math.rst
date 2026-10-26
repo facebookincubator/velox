@@ -340,6 +340,23 @@ Mathematical Functions
         SELECT CAST(1 as DECIMAL(20, 3)) * CAST(0 as DECIMAL(20, 3)); -- decimal 0.000000
         SELECT CAST(201e-38 as DECIMAL(38, 38)) * CAST(301e-38 as DECIMAL(38, 38)); -- decimal 0.0000000000000000000000000000000000000
 
+.. spark:function:: normalize_nan_and_zero(x) -> [same as x]
+
+    Returns 0.0 if ``x`` is -0.0, the canonical NaN if ``x`` is any NaN, and ``x`` otherwise.
+    The canonical NaN is Java's ``Double.NaN`` (``0x7ff8000000000000``) for DOUBLE and
+    ``Float.NaN`` (``0x7fc00000``) for REAL. Returns NULL if ``x`` is NULL.
+    Supported types are: REAL, DOUBLE.
+    Note: This function is not directly callable in Spark SQL, but is used internally by
+    `Spark's NormalizeFloatingNumbers <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/optimizer/NormalizeFloatingNumbers.scala>`_. ::
+
+        -- Function call examples (this function is not directly callable in Spark SQL).
+        normalize_nan_and_zero(-0.0) -- 0.0
+        normalize_nan_and_zero(0.0) -- 0.0
+        normalize_nan_and_zero(1.5) -- 1.5
+        normalize_nan_and_zero(NaN) -- NaN
+        normalize_nan_and_zero(-NaN) -- NaN
+        normalize_nan_and_zero(NULL) -- NULL
+
 .. spark:function:: not(x) -> boolean
 
     Logical not. ::
