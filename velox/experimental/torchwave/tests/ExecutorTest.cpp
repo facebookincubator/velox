@@ -4083,6 +4083,20 @@ TEST_F(ExecutorTest, clampNoneMinTest) {
       "data/clamp_none_min_test.pt2", "data/clamp_none_min_test_results.pt");
 }
 
+// (x + 1, None, x, None, None, x * 2): the user outputs hold the None slots,
+// the graph's output node only the tensors.  Each None slot must come back
+// None; the returned input x, which stays in the frame, must not fill one.
+TEST_F(ExecutorTest, noneOutputTest) {
+  runTest("data/none_output_test.pt2", "data/none_output_test_results.pt");
+}
+
+// The graph returns new_ones(x, [sym_size(y, 0)]), which the optimizer replaces
+// with ones_like(y), a new value.
+TEST_F(ExecutorTest, replacedOutputTest) {
+  runTest(
+      "data/replaced_output_test.pt2", "data/replaced_output_test_results.pt");
+}
+
 // cumsum(x[:, 1], dim=0): the input is a non-contiguous column view (select
 // dim=1, stride = ncols).  The scan must honor the stride rather than reading
 // the backing storage contiguously.

@@ -1549,8 +1549,11 @@ void ExecutorTestBase::verifyOutputs(
     const auto& actual = outputs[i];
     const auto& exp = expected[i];
     if (exp.isTensor()) {
-      ASSERT_TRUE(actual.isTensor())
-          << fullLabel << " output " << i << " expected tensor, got non-tensor";
+      if (!actual.isTensor()) {
+        ADD_FAILURE() << fullLabel << " output " << i
+                      << " expected tensor, got " << actual.tagKind();
+        continue;
+      }
       auto match = tensorsMatch(actual.toTensor(), exp.toTensor());
       auto limit = WaveConfig::get().tensorPrintElementLimit;
       EXPECT_TRUE(match) << fullLabel << " output " << i
