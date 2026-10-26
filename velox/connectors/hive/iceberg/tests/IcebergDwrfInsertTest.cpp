@@ -17,10 +17,10 @@
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
 #include "velox/connectors/hive/iceberg/tests/IcebergTestBase.h"
+#include "velox/connectors/hive/iceberg/tests/utils/IcebergPlanBuilder.h"
 #include "velox/dwio/dwrf/RegisterDwrfReader.h"
 #include "velox/dwio/dwrf/RegisterDwrfWriter.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
-#include "velox/exec/tests/utils/PlanBuilder.h"
 
 using namespace facebook::velox::common::testutil;
 
@@ -53,8 +53,8 @@ class IcebergDwrfInsertTest : public test::IcebergTestBase {
 
     auto splits = createSplitsForDirectory(dataPath);
     ASSERT_EQ(splits.size(), commitTasks.size());
-    auto plan = exec::test::PlanBuilder()
-                    .startTableScan(test::kIcebergConnectorId)
+    auto plan = test::IcebergPlanBuilder()
+                    .startTableScan()
                     .outputType(rowType)
                     .endTableScan()
                     .planNode();
@@ -232,8 +232,8 @@ TEST_F(IcebergDwrfInsertTest, partitioned) {
 
   auto splits = createSplitsForDirectory(dataPath);
   ASSERT_EQ(splits.size(), commitTasks.size());
-  auto plan = exec::test::PlanBuilder()
-                  .startTableScan(test::kIcebergConnectorId)
+  auto plan = test::IcebergPlanBuilder()
+                  .startTableScan()
                   .outputType(rowType)
                   .endTableScan()
                   .planNode();
@@ -299,8 +299,8 @@ TEST_F(IcebergDwrfInsertTest, writerRotationProducesMultipleFiles) {
   // The rotated files still read back as the original data.
   auto splits = createSplitsForDirectory(dataPath);
   ASSERT_EQ(splits.size(), commitTasks.size());
-  auto plan = exec::test::PlanBuilder()
-                  .startTableScan(test::kIcebergConnectorId)
+  auto plan = test::IcebergPlanBuilder()
+                  .startTableScan()
                   .outputType(rowType)
                   .endTableScan()
                   .planNode();
@@ -421,9 +421,8 @@ TEST_F(IcebergDwrfInsertTest, fieldIdRenameReorderDropAdd) {
               {"a", makeIcebergColumnHandle("a", BIGINT(), {1, {}})},
               {"d", makeIcebergColumnHandle("d", INTEGER(), {9, {}})}};
 
-  auto plan = exec::test::PlanBuilder()
+  auto plan = test::IcebergPlanBuilder()
                   .startTableScan()
-                  .connectorId(test::kIcebergConnectorId)
                   .outputType(readSchema)
                   .dataColumns(readSchema)
                   .assignments(assignments)
@@ -455,9 +454,8 @@ TEST_F(IcebergDwrfInsertTest, fieldIdDropReaddSameName) {
       unordered_map<std::string, std::shared_ptr<const connector::ColumnHandle>>
           assignments{{"c", makeIcebergColumnHandle("c", INTEGER(), {9, {}})}};
 
-  auto plan = exec::test::PlanBuilder()
+  auto plan = test::IcebergPlanBuilder()
                   .startTableScan()
-                  .connectorId(test::kIcebergConnectorId)
                   .outputType(readSchema)
                   .dataColumns(readSchema)
                   .assignments(assignments)
@@ -497,9 +495,8 @@ TEST_F(IcebergDwrfInsertTest, fieldIdNestedStructReorderDrop) {
                    ROW({"z", "x"}, {INTEGER(), INTEGER()}),
                    {1, {{4, {}}, {2, {}}}})}};
 
-  auto plan = exec::test::PlanBuilder()
+  auto plan = test::IcebergPlanBuilder()
                   .startTableScan()
-                  .connectorId(test::kIcebergConnectorId)
                   .outputType(readSchema)
                   .dataColumns(readSchema)
                   .assignments(assignments)
@@ -536,9 +533,8 @@ TEST_F(IcebergDwrfInsertTest, fieldIdTypePromotion) {
               {"a", makeIcebergColumnHandle("a", BIGINT(), {1, {}})},
               {"b", makeIcebergColumnHandle("b", DOUBLE(), {2, {}})}};
 
-  auto plan = exec::test::PlanBuilder()
+  auto plan = test::IcebergPlanBuilder()
                   .startTableScan()
-                  .connectorId(test::kIcebergConnectorId)
                   .outputType(readSchema)
                   .dataColumns(readSchema)
                   .assignments(assignments)

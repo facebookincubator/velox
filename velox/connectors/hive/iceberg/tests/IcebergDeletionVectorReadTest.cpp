@@ -24,11 +24,11 @@
 #include "velox/common/file/FileSystems.h"
 #include "velox/connectors/hive/iceberg/IcebergMetadataColumns.h"
 #include "velox/connectors/hive/iceberg/IcebergSplit.h"
+#include "velox/connectors/hive/iceberg/tests/utils/IcebergPlanBuilder.h"
 #include "velox/dwio/common/FileSink.h"
 #include "velox/dwio/dwrf/reader/ReaderBase.h"
 #include "velox/dwio/dwrf/writer/FlushPolicy.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
-#include "velox/exec/tests/utils/PlanBuilder.h"
 
 namespace facebook::velox::connector::hive::iceberg {
 namespace {
@@ -109,8 +109,8 @@ TEST_F(IcebergDeletionVectorReadTest, deletionVectorFiltersDeletedRowsInScan) {
 
   auto splits = makeIcebergSplits(dataFile->getPath(), {dvFile});
 
-  auto plan = exec::test::PlanBuilder()
-                  .startTableScan(test::kIcebergConnectorId)
+  auto plan = test::IcebergPlanBuilder()
+                  .startTableScan()
                   .outputType(ROW({"c0"}, {BIGINT()}))
                   .endTableScan()
                   .planNode();
@@ -145,8 +145,8 @@ TEST_F(IcebergDeletionVectorReadTest, rowIdIsFileAbsoluteWithDeletionVector) {
 
   const std::vector<std::string> outputNames{
       "c0", "_row_id", "_last_updated_sequence_number"};
-  auto plan = exec::test::PlanBuilder()
-                  .startTableScan(test::kIcebergConnectorId)
+  auto plan = test::IcebergPlanBuilder()
+                  .startTableScan()
                   .outputType(
                       ROW({outputNames[0], outputNames[1], outputNames[2]},
                           {BIGINT(), BIGINT(), BIGINT()}))
@@ -226,8 +226,8 @@ TEST_F(IcebergDeletionVectorReadTest, deletionVectorAppliesToNonZeroByteSplit) {
                    .deleteFiles({dvFile})
                    .build();
 
-  auto plan = exec::test::PlanBuilder()
-                  .startTableScan(test::kIcebergConnectorId)
+  auto plan = test::IcebergPlanBuilder()
+                  .startTableScan()
                   .outputType(ROW({"c0"}, {BIGINT()}))
                   .endTableScan()
                   .planNode();
