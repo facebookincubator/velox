@@ -33,6 +33,10 @@
 
 namespace torch::wave {
 
+/// The macro device code names its kernel's block size by. A composite kernel
+/// defines it once per entry point; see Metadata::blockSize.
+inline constexpr std::string_view kBlockSizeMacro = "TW_BLOCK_SIZE";
+
 /// Specifies how the result of a compiled expression is delivered. If value
 /// is set, the result is written to memory as an element of the tensor
 /// identified by value. If variable is set instead, the result is kept as a

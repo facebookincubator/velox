@@ -76,6 +76,10 @@ using Subfield = velox::common::Subfield;
 /// different row ranges share the body+trailer bytes via refcounted IOBuf
 /// clones; only the header node is unique per slice.
 ///
+/// A request cut short before any of its rows were read gets a single
+/// header-only slice instead: NODE 1 alone, with rowCount 0, an empty row
+/// range, and the resume key.
+///
 /// Usage:
 ///   auto result = projector.projectStreams(request, options);
 ///   for (size_t i = 0; i < result.responses.size(); ++i) {
@@ -174,13 +178,15 @@ class NimbleIndexProjector {
   struct SerializedResponse {
     /// One self-describing kTablet IOBuf chain per (request × stripe)
     /// intersection. Each entry covers a contiguous row range within one
-    /// stripe; the row range is embedded in the chain's header. Empty for
-    /// miss. Slices for overlapping requests share the body+trailer bytes
-    /// via refcounted SharedInfo on the second IOBuf node.
+    /// stripe; the row range is embedded in the chain's header. Empty when
+    /// the request returns no rows and has no resume key. Slices for
+    /// overlapping requests share the body+trailer bytes via refcounted
+    /// SharedInfo on the second IOBuf node.
     ///
     /// If the response is truncated and has a resume key, it is embedded in
     /// the header of the last slice. Use `rocks::readResultResumeKey()` on
-    /// the last slice to extract it.
+    /// the last slice to extract it. A request cut short before any of its
+    /// rows were read holds one header-only slice with 0 rows and the key.
     std::vector<folly::IOBuf> slices;
 
     /// When Options::needResumeKey is set and this request's results were cut
@@ -189,9 +195,9 @@ class NimbleIndexProjector {
     /// this as lowerKey with their original upperKey. nullopt if complete, a
     /// miss, or needResumeKey was not set.
     ///
-    /// Also embedded in the last slice's per-slice header (when slices
-    /// is non-empty) so consumers that hold an IOBuf can recover the key
-    /// without keeping the SerializedResponse struct around.
+    /// Also embedded in the last slice's per-slice header so consumers that
+    /// hold an IOBuf can recover the key without keeping the
+    /// SerializedResponse struct around.
     std::optional<std::string> resumeKey;
   };
 
@@ -579,15 +585,18 @@ class NimbleIndexProjector {
       size_t stripeOffset,
       const RowRange& packRange);
 
-  // When Options::needResumeKey is set, resolves resume keys for requests
-  // whose results were cut short and stores them in ctx_.resumeKeys. No-op
-  // when needResumeKey is unset.
+  // After global truncation (maxRows or maxBytes), resolves resume keys for the
+  // requests it cut short and stores them in ctx_.resumeKeys: a request
+  // continuing past the last planned stripe resumes at the next stripe, and a
+  // request planning never reached resumes from its lower key. No-op when
+  // Options::needResumeKey is unset or the plan was not truncated.
   void prepareResumeKeys();
 
   // Iterates planned stripes and ctx_.packedStripes to build per-request
   // output slices. Each slice clones the shared stripe body and prepends a
   // per-request header with the row range and (on the last slice of a
-  // truncated response) the resume key.
+  // truncated response) the resume key. A request that planning never reached
+  // has no data slice, so its resume key gets a header-only slice.
   void buildResult(SerializedResult& result);
 
   inline uint32_t stripeRowCount(uint32_t stripe) const {
@@ -656,15 +665,9 @@ class NimbleIndexProjector {
     StripeRanges stripeRanges;
     // Populated by prepareStripes().
     ScanPlan plan;
-    // Per-request flag: true once planning has processed a stripe range for
-    // the request. Deliberately not "contributed a range to the plan": it is
-    // also set when the stripe is dropped for projecting no streams, because
-    // what prepareResumeKeys() needs to know is whether the request was reached
-    // before global truncation, not whether it produced output. Set by
-    // prepareStripes(), used by setResumeKeys().
-    std::vector<bool> hasProcessedStripeRange;
-    // Per-request resume keys set when a request reaches maxRowsPerRequest and
-    // Options::needResumeKey is enabled.
+    // Per-request resume keys, set by setResumeKey() when a request reaches
+    // maxRowsPerRequest and by prepareResumeKeys() after global truncation.
+    // All nullopt when Options::needResumeKey is unset.
     std::vector<std::optional<std::string>> resumeKeys;
     // Flat array of enqueue indices, logically
     // [stripeOffset * numProjectedStreams + streamIndex]. nullopt for absent

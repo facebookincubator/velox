@@ -104,6 +104,10 @@ std::string WaveConfig::toString() const {
   addBool("cseViews", &WaveConfig::cseViews);
   addBool("decomposeLists", &WaveConfig::decomposeLists);
   addBool("twMad", &WaveConfig::twMad);
+  addBool("twFusedMad", &WaveConfig::twFusedMad);
+  addBool("madChains", &WaveConfig::madChains);
+  addInt("madInsertBlocksPerSm", &WaveConfig::madInsertBlocksPerSm);
+  addInt("madInsertBlockSize", &WaveConfig::madInsertBlockSize);
   addBool("metadataGetterStandalone", &WaveConfig::metadataGetterStandalone);
   addBool("concatOperandsInPlace", &WaveConfig::concatOperandsInPlace);
   addBool("foldSharedChains", &WaveConfig::foldSharedChains);
