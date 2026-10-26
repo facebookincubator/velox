@@ -17,6 +17,7 @@
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/connectors/hive/CachingDataSource.h"
 
+#include "velox/common/caching/CacheTTLController.h"
 #include "velox/common/caching/FileIds.h"
 
 #include <cudf/utilities/error.hpp>
@@ -39,6 +40,7 @@
 #include <future>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <string_view>
 #include <unordered_map>
 #include <vector>
@@ -91,10 +93,10 @@ folly::Executor* fillExecutor() {
   return executor;
 }
 
-// Threads that copy a range to the GPU, each through its own pinned buffer.
-// The thread count is cudf.kvikio_cache_copy_threads, kept low to limit pinned
-// memory. A copy thread waits for a remote read only for the part of a range
-// that the async data cache cannot hold.
+// Threads that copy a range to the GPU, through pinned buffers from a shared
+// pool. The thread count is cudf.kvikio_cache_copy_threads, kept low to limit
+// pinned memory. A copy thread waits for a remote read only for the part of a
+// range that the async data cache cannot hold.
 folly::Executor* copyExecutor() {
   static auto* executor = [] {
     const auto threads = CudfConfig::getInstance().kvikioCacheCopyThreads;
@@ -134,52 +136,142 @@ void waitForStream(cuda::stream_ref stream, int device) {
   }
 }
 
+class PinnedBuffer;
+
 // Pinned host memory used as a bounce buffer for copies from the async data
-// cache to the GPU. Bytes read without the async data cache use it too.
+// cache to the GPU, shared by all threads. Bytes read without the async data
+// cache use it too. get() lends a buffer, and the buffer puts its memory back
+// into the pool when it is destroyed. No thread keeps the memory, so nothing
+// is lost when folly retires an idle thread.
+//
+// The pool is created once and never destroyed, so it makes no CUDA call after
+// main returns. freeCachingDataSourceBuffers() frees its memory before that.
+class PinnedBufferPool {
+ public:
+  static PinnedBufferPool& instance() {
+    static auto* pool = new PinnedBufferPool();
+    return *pool;
+  }
+
+  // Lends a buffer of at least 'bytes' bytes for copies to 'device', which
+  // must be the current device. Waits until the last copy out of its memory
+  // has finished, so the caller can write to it.
+  PinnedBuffer get(int device, size_t bytes);
+
+  // Frees the memory in the pool, after its last copies finish. Memory that
+  // is lent out at the time is put back later and freed by the next call.
+  void freeAll();
+
+ private:
+  friend class PinnedBuffer;
+
+  struct Memory {
+    int device{-1};
+    uint8_t* data{nullptr};
+    size_t size{0};
+    cudaEvent_t lastCopy{nullptr};
+  };
+
+  PinnedBufferPool() = default;
+
+  // Puts memory back on the free list of its device.
+  void put(Memory memory);
+
+  rmm::host_device_async_resource_ref allocator_ =
+      cudf::get_pinned_memory_resource();
+  std::mutex mutex_;
+  // Free memory, one list per device.
+  std::unordered_map<int, std::vector<Memory>> free_;
+};
+
+// Pinned memory lent by PinnedBufferPool::get(). Puts the memory back into the
+// pool when destroyed, or when an exception is thrown.
 class PinnedBuffer {
  public:
-  // Waits until the last copy out of the buffer has finished, grows the buffer
-  // to at least 'bytes' if needed, and returns it.
-  uint8_t* reserve(size_t bytes) {
-    if (lastCopy_ != nullptr) {
-      CUDF_CUDA_TRY(cudaEventSynchronize(lastCopy_));
-    }
-    if (size_ < bytes) {
-      if (data_ != nullptr) {
-        allocator_.deallocate_sync(data_, size_);
-        data_ = nullptr;
-        size_ = 0;
-      }
-      data_ = static_cast<uint8_t*>(allocator_.allocate_sync(bytes));
-      size_ = bytes;
-    }
-    return data_;
+  explicit PinnedBuffer(PinnedBufferPool::Memory memory) : memory_(memory) {}
+
+  ~PinnedBuffer() {
+    PinnedBufferPool::instance().put(memory_);
+  }
+
+  // Not copyable or movable, so the memory is put back exactly once.
+  PinnedBuffer(const PinnedBuffer&) = delete;
+  PinnedBuffer& operator=(const PinnedBuffer&) = delete;
+  PinnedBuffer(PinnedBuffer&&) = delete;
+  PinnedBuffer& operator=(PinnedBuffer&&) = delete;
+
+  uint8_t* data() const {
+    return memory_.data;
   }
 
   // Queues a copy of the first 'bytes' bytes of the buffer to 'dst' on the GPU.
   void copyToGpu(size_t bytes, uint8_t* dst, cuda::stream_ref stream) {
     CUDF_CUDA_TRY(cudaMemcpyAsync(
-        dst, data_, bytes, cudaMemcpyHostToDevice, stream.get()));
-    if (lastCopy_ == nullptr) {
-      CUDF_CUDA_TRY(
-          cudaEventCreateWithFlags(&lastCopy_, cudaEventDisableTiming));
-    }
-    CUDF_CUDA_TRY(cudaEventRecord(lastCopy_, stream.get()));
+        dst, memory_.data, bytes, cudaMemcpyHostToDevice, stream.get()));
+    CUDF_CUDA_TRY(cudaEventRecord(memory_.lastCopy, stream.get()));
   }
 
  private:
-  rmm::host_device_async_resource_ref allocator_ =
-      cudf::get_pinned_memory_resource();
-  uint8_t* data_{nullptr};
-  size_t size_{0};
-  // Recorded after the last copy out of 'data_'.
-  cudaEvent_t lastCopy_{nullptr};
+  PinnedBufferPool::Memory memory_;
 };
 
-// One pinned buffer per thread and GPU, kept until the process exits.
-PinnedBuffer& pinnedBuffer(int device) {
-  static thread_local std::unordered_map<int, PinnedBuffer> buffers;
-  return buffers[device];
+PinnedBuffer PinnedBufferPool::get(int device, size_t bytes) {
+  Memory memory;
+  memory.device = device;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto it = free_.find(device);
+    if (it != free_.end() && !it->second.empty()) {
+      memory = it->second.back();
+      it->second.pop_back();
+    }
+  }
+  try {
+    if (memory.lastCopy == nullptr) {
+      CUDF_CUDA_TRY(
+          cudaEventCreateWithFlags(&memory.lastCopy, cudaEventDisableTiming));
+    }
+    // The memory may still be in use by its last copy to the GPU.
+    CUDF_CUDA_TRY(cudaEventSynchronize(memory.lastCopy));
+    if (memory.size < bytes) {
+      if (memory.data != nullptr) {
+        allocator_.deallocate_sync(memory.data, memory.size);
+        memory.data = nullptr;
+        memory.size = 0;
+      }
+      memory.data = static_cast<uint8_t*>(allocator_.allocate_sync(bytes));
+      memory.size = bytes;
+    }
+  } catch (...) {
+    // Keep what is left of the memory for later use.
+    put(memory);
+    throw;
+  }
+  return PinnedBuffer(memory);
+}
+
+void PinnedBufferPool::put(Memory memory) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  // Creates the free list of the device on its first memory.
+  auto it = free_.try_emplace(memory.device).first;
+  it->second.push_back(memory);
+}
+
+void PinnedBufferPool::freeAll() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  for (auto& [device, memories] : free_) {
+    const rmm::cuda_set_device_raii onDevice{rmm::cuda_device_id{device}};
+    for (auto& memory : memories) {
+      if (memory.lastCopy != nullptr) {
+        CUDF_CUDA_TRY(cudaEventSynchronize(memory.lastCopy));
+        CUDF_CUDA_TRY(cudaEventDestroy(memory.lastCopy));
+      }
+      if (memory.data != nullptr) {
+        allocator_.deallocate_sync(memory.data, memory.size);
+      }
+    }
+  }
+  free_.clear();
 }
 
 // One device read: 'bytes' bytes at file 'offset' go to 'dst' on 'device',
@@ -207,6 +299,12 @@ class Reader {
         ioStats_(std::move(stats)) {
     VELOX_CHECK_NOT_NULL(kvikioSource_);
     VELOX_CHECK_NOT_NULL(cache_);
+    // Register the file with the cache TTL controller, if there is one, so
+    // that TTL expiration also removes this file's cache entries. The
+    // buffered-input reader does the same when it opens a file.
+    if (auto* ttlController = cache::CacheTTLController::getInstance()) {
+      ttlController->addOpenFileInfo(fileId_.id());
+    }
   }
 
   size_t fileSize() const {
@@ -418,31 +516,31 @@ class Reader {
     }
   }
 
-  // Queues the GPU copy of 'bytes' bytes of a cached piece, through this
-  // thread's pinned buffer.
+  // Queues the GPU copy of 'bytes' bytes of a cached piece, through a pinned
+  // buffer from the shared pool.
   static void copyCachedPieceToGpu(
       cache::CachePin pin,
       size_t bytes,
       uint8_t* dst,
       const DeviceRead& read) {
-    auto& buffer = pinnedBuffer(read.device);
-    copyFromEntry(pin, bytes, buffer.reserve(bytes));
+    auto buffer = PinnedBufferPool::instance().get(read.device, bytes);
+    copyFromEntry(pin, bytes, buffer.data());
     // The bytes are in the pinned buffer. The cache may evict the entry.
     pin.clear();
     buffer.copyToGpu(bytes, dst, read.stream);
   }
 
   // Reads 'bytes' bytes at 'offset' from KvikIO, without the cache, and queues
-  // their GPU copy through this thread's pinned buffer. Returns the number of
-  // bytes read.
+  // their GPU copy through a pinned buffer from the shared pool. Returns the
+  // number of bytes read.
   size_t copyUncachedToGpu(
       size_t offset,
       size_t bytes,
       uint8_t* dst,
       const DeviceRead& read) {
-    auto& buffer = pinnedBuffer(read.device);
+    auto buffer = PinnedBufferPool::instance().get(read.device, bytes);
     const auto bytesRead =
-        kvikioSource_->host_read(offset, bytes, buffer.reserve(bytes));
+        kvikioSource_->host_read(offset, bytes, buffer.data());
     countBytes("cudfKvikioCacheBypassBytes", bytesRead);
     buffer.copyToGpu(bytesRead, dst, read.stream);
     return bytesRead;
@@ -600,6 +698,10 @@ std::unique_ptr<cudf::io::datasource> maybeCacheKvikioDataSource(
   }
   return std::make_unique<CachingDataSource>(
       std::move(kvikioSource), path, cache, std::move(ioStats));
+}
+
+void freeCachingDataSourceBuffers() {
+  PinnedBufferPool::instance().freeAll();
 }
 
 } // namespace facebook::velox::cudf_velox::connector::hive

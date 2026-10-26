@@ -39,4 +39,9 @@ std::unique_ptr<cudf::io::datasource> maybeCacheKvikioDataSource(
     bool cacheable,
     std::shared_ptr<IoStats> ioStats = nullptr);
 
+/// Frees the pinned host buffers that the async data cache wrapper uses to copy
+/// to the GPU, after their last copies finish. Call it while CUDA is still
+/// usable, e.g. from unregisterCudf(). Copies that run later make new buffers.
+void freeCachingDataSourceBuffers();
+
 } // namespace facebook::velox::cudf_velox::connector::hive
