@@ -1636,6 +1636,54 @@ TEST_F(TableScanTest, filterPushdown) {
       "SELECT count(*) FROM tmp");
 }
 
+// Presto pushes an equality on a column into the scan and re-creates the
+// column above it as a constant projection. When the scan reads no other
+// column, that projection sits over a zero-column input and still runs on the
+// GPU, filled to the row count of each batch.
+TEST_F(TableScanTest, constantProjectionOverZeroColumnScan) {
+  auto rowType = ROW({"c0", "c1"}, {BIGINT(), VARCHAR()});
+  auto data = makeRowVector(
+      {"c0", "c1"},
+      {makeFlatVector<int64_t>({1, 2, 3, 4, 5}),
+       makeFlatVector<std::string>({"a", "b", "a", "c", "a"})});
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), data);
+
+  common::SubfieldFilters subfieldFilters =
+      common::test::SubfieldFiltersBuilder()
+          .add(
+              "c1",
+              std::make_unique<common::BytesValues>(
+                  std::vector<std::string>{"a"}, false))
+          .build();
+  auto plan = PlanBuilder(pool_.get())
+                  .startTableScan()
+                  .outputType(ROW({}, {}))
+                  .tableHandle(makeTableHandle(
+                      "parquet_table", rowType, std::move(subfieldFilters)))
+                  .endTableScan()
+                  .project({"'a' AS c1"})
+                  .singleAggregation({"c1"}, {"count(1)"})
+                  .planNode();
+
+  std::shared_ptr<Task> task;
+  auto result = AssertQueryBuilder(plan)
+                    .split(makeCudfHiveSplit(filePath->getPath()))
+                    .copyResults(pool_.get(), task);
+  assertEqualResults(
+      {makeRowVector(
+          {makeFlatVector<std::string>({"a"}), makeFlatVector<int64_t>({3})})},
+      {result});
+
+  bool cudfFilterProjectUsed = false;
+  for (const auto& pipeline : task->taskStats().pipelineStats) {
+    for (const auto& op : pipeline.operatorStats) {
+      cudfFilterProjectUsed |= op.operatorType == "CudfFilterProject";
+    }
+  }
+  EXPECT_TRUE(cudfFilterProjectUsed);
+}
+
 // Disable this test and the one below for now, pending a CUDF fix.
 // simoneves 2/25/26
 // @TODO simoneves/mattgara re-enable once fixed.

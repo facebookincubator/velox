@@ -20,6 +20,7 @@
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/Validation.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
+#include "velox/experimental/cudf/expression/AstUtils.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
@@ -28,6 +29,7 @@
 #include "velox/expression/ExprOptimizer.h"
 
 #include <cudf/aggregation.hpp>
+#include <cudf/column/column_factories.hpp>
 #include <cudf/reduction.hpp>
 #include <cudf/stream_compaction.hpp>
 #include <cudf/unary.hpp>
@@ -151,6 +153,14 @@ void CudfFilterProject::initialize() {
 
     for (column_index_t i = 0; i < project_->projections().size(); i++) {
       auto& projection = project_->projections()[i];
+      if (inputType->size() == 0 && projection->isConstantKind()) {
+        // There is no input column to size an expression result from, so the
+        // constant is kept as a scalar and filled to the row count of each
+        // batch in project().
+        constantProjections_.emplace_back(
+            i, makeScalarFromConstantExpr(projection, operatorCtx_->pool()));
+        continue;
+      }
       bool identityProjection = checkAddIdentityProjection(
           projection, inputType, i, identityProjections_);
       if (!identityProjection) {
@@ -240,7 +250,7 @@ RowVectorPtr CudfFilterProject::doGetOutput() {
   if (!inputTableColumns.empty()) {
     outputSize = inputTableColumns.front()->size();
   }
-  auto outputColumns = project(inputTableColumns, stream);
+  auto outputColumns = project(inputTableColumns, outputSize, stream);
 
   auto outputTable = std::make_unique<cudf::table>(std::move(outputColumns));
   auto const numColumns = outputTable->num_columns();
@@ -298,6 +308,7 @@ void CudfFilterProject::filter(
 
 std::vector<std::unique_ptr<cudf::column>> CudfFilterProject::project(
     std::vector<std::unique_ptr<cudf::column>>& inputTableColumns,
+    cudf::size_type numRows,
     cuda::stream_ref stream) {
   std::vector<cudf::column_view> inputViews;
   inputViews.reserve(inputTableColumns.size());
@@ -312,6 +323,19 @@ std::vector<std::unique_ptr<cudf::column>> CudfFilterProject::project(
 
   // Rearrange columns to match outputType_
   std::vector<std::unique_ptr<cudf::column>> outputColumns(outputType_->size());
+  // constant projections of a zero-column input
+  for (const auto& [outputChannel, scalar] : constantProjections_) {
+    auto column = cudf::make_column_from_scalar(
+        *scalar, numRows, stream, get_output_mr());
+    // The scalar of an INTERVAL DAY TO SECOND constant is a duration, while
+    // the pipeline carries the type as INT64; cast to the output type as the
+    // evaluators do.
+    const auto type = veloxToCudfDataType(outputType_->childAt(outputChannel));
+    if (column->type() != type) {
+      column = cudf::cast(column->view(), type, stream, get_output_mr());
+    }
+    outputColumns[outputChannel] = std::move(column);
+  }
   // computed resultProjections
   for (int i = 0; i < resultProjections_.size(); i++) {
     auto& columnOrView = columns[i];

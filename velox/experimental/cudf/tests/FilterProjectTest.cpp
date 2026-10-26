@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/experimental/cudf/CudfConfig.h"
+#include "velox/experimental/cudf/exec/CudfConversion.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluatorRegistry.h"
 #include "velox/experimental/cudf/expression/PrestoFunctions.h"
@@ -3434,6 +3435,50 @@ TEST_F(CudfSimpleFilterProjectTest, roundDouble) {
       999999999999999.5,
   })});
   AssertQueryBuilder(plan).assertResults(expected);
+}
+
+// Constant projections over a zero-column input are filled to the row count of
+// each batch: here two batches that the filter cuts to 3 and 2 rows. A third
+// batch that the filter empties never reaches the projection.
+TEST_F(CudfFilterProjectTest, constantProjectionsOverZeroColumns) {
+  const std::vector<RowVectorPtr> batches = {
+      makeRowVector({makeFlatVector<int64_t>({1, 2, 3, 4})}),
+      makeRowVector({makeFlatVector<int64_t>({0, 1})}),
+      makeRowVector({makeFlatVector<int64_t>({5, 0, 6})}),
+  };
+  const auto constant = [](const TypePtr& type,
+                           const Variant& value) -> core::TypedExprPtr {
+    return std::make_shared<core::ConstantTypedExpr>(type, value);
+  };
+  auto plan = PlanBuilder()
+                  .values(batches)
+                  .filter("c0 > 1")
+                  .project({})
+                  .projectExpressions(
+                      {constant(VARCHAR(), "abc"),
+                       constant(BIGINT(), int64_t(42)),
+                       constant(DOUBLE(), 1.5),
+                       constant(BOOLEAN(), true),
+                       constant(DATE(), int32_t(20'454)),
+                       constant(INTERVAL_DAY_TIME(), int64_t(86'400'000)),
+                       constant(BIGINT(), Variant::null(TypeKind::BIGINT)),
+                       constant(VARCHAR(), Variant::null(TypeKind::VARCHAR))})
+                  .planNode();
+
+  const vector_size_t numRows = 5;
+  auto expected = makeRowVector(
+      {makeConstant(StringView("abc"), numRows),
+       makeConstant<int64_t>(42, numRows),
+       makeConstant(1.5, numRows),
+       makeConstant(true, numRows),
+       makeConstant<int32_t>(20'454, numRows, DATE()),
+       makeConstant<int64_t>(86'400'000, numRows, INTERVAL_DAY_TIME()),
+       makeNullConstant(TypeKind::BIGINT, numRows),
+       makeNullConstant(TypeKind::VARCHAR, numRows)});
+  // Each Values batch reaches the GPU on its own.
+  AssertQueryBuilder(plan)
+      .config(cudf_velox::CudfFromVelox::kGpuBatchSizeRows, "1")
+      .assertResults(expected);
 }
 
 } // namespace

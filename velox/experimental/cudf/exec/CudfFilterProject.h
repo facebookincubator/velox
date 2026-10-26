@@ -24,6 +24,8 @@
 #include "velox/exec/Operator.h"
 #include "velox/vector/ComplexVector.h"
 
+#include <cudf/scalar/scalar.hpp>
+
 namespace facebook::velox::cudf_velox {
 
 // TODO: Does not support Filter yet.
@@ -45,8 +47,12 @@ class CudfFilterProject : public CudfOperatorBase {
       std::vector<std::unique_ptr<cudf::column>>& inputTableColumns,
       cuda::stream_ref stream);
 
+  /// Evaluates the projections over 'inputTableColumns'. 'numRows' is the
+  /// row count of the batch, which sizes the constant projections of a
+  /// zero-column input.
   std::vector<std::unique_ptr<cudf::column>> project(
       std::vector<std::unique_ptr<cudf::column>>& inputTableColumns,
+      cudf::size_type numRows,
       cuda::stream_ref stream);
 
   exec::BlockingReason isBlocked(ContinueFuture* /*future*/) override {
@@ -62,6 +68,7 @@ class CudfFilterProject : public CudfOperatorBase {
   void doClose() override {
     Operator::close();
     projectEvaluators_.clear();
+    constantProjections_.clear();
     filterEvaluator_.reset();
   }
 
@@ -77,6 +84,10 @@ class CudfFilterProject : public CudfOperatorBase {
   std::shared_ptr<const core::FilterNode> filter_;
 
   std::vector<CudfExpressionPtr> projectEvaluators_;
+  // Constant projections of a zero-column input, as (output channel, scalar).
+  // project() fills each to the row count of the batch.
+  std::vector<std::pair<column_index_t, std::unique_ptr<cudf::scalar>>>
+      constantProjections_;
   CudfExpressionPtr filterEvaluator_;
 
   std::vector<velox::exec::IdentityProjection> resultProjections_;
