@@ -105,6 +105,14 @@ class RPCRateLimiter : public std::enable_shared_from_this<RPCRateLimiter> {
     /// In-flight requests right now.
     int64_t pending{0};
 
+    /// Callers parked in admitOrWait(). A positive count means work is ready
+    /// that the backend's window does not admit: the window is full, or, when
+    /// pacing a window below one unit, the next admission is not yet due, which
+    /// can hold callers with nothing in flight. A caller that abandons its wait
+    /// stays counted until the next wake-up, a release that frees a slot or
+    /// the pacing timer, which wakes every waiter.
+    int64_t waiting{0};
+
     /// High-water in-flight count over the backend's lifetime.
     int64_t peakPending{0};
 
