@@ -21,7 +21,7 @@
 
 #include "folly/Likely.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
-#include "velox/dwio/nimble/velox/SchemaReader.h"
+#include "velox/dwio/nimble/common/SchemaReader.h"
 
 namespace facebook::nimble {
 

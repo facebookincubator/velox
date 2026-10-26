@@ -17,6 +17,7 @@
 
 #include "velox/dwio/nimble/common/Types.h"
 
+#include <array>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -92,20 +93,35 @@ class StreamTrailerLayout {
   std::optional<uint32_t> checksumOffset_;
 };
 
+/// A feature a reader must support to read a file correctly. The value is the
+/// feature's bit in the file's `required_features`. Give each new feature the
+/// next value after the last one, written out explicitly. Files on disk depend
+/// on these values, so never renumber, reuse or remove one. TabletReader checks
+/// these bits after it parses the postscript, the footer, the stripes section
+/// and possibly the first stripe group, so a bit cannot gate changes to those.
+enum class RequiredFeature : uint32_t {};
+
 /// File-level properties that readers need before loading other optional
 /// metadata.
 class FileProperties {
  public:
+  /// Features this reader supports, in bit order. A new feature is appended
+  /// here together with its reader support. Entries are never removed, so every
+  /// later reader supports them too.
+  static constexpr std::array<RequiredFeature, 0> kSupportedRequiredFeatures{};
+
   /// A file records per-stream checksums in at most one place: stripe-group
   /// arrays (`hasStreamChecksums`, legacy files only) or a stream trailer that
-  /// carries kChecksum32.
+  /// carries kChecksum32. `requiredFeatures` must be in increasing bit order,
+  /// each once.
   FileProperties(
       bool compactRowCountEncoding,
       bool clusterIndexKeyColumnStorageOmitted,
       std::vector<std::string> clusterIndexKeyColumnsWithOmittedStorage,
       bool hasStreamChecksums = false,
       StreamTrailerLayout streamTrailerLayout = {},
-      bool hasTopLevelNulls = false);
+      bool hasTopLevelNulls = false,
+      std::vector<RequiredFeature> requiredFeatures = {});
 
   /// Returns whether encoded stream row counts use compact varint encoding.
   bool compactRowCountEncoding() const {
@@ -142,11 +158,20 @@ class FileProperties {
     return hasTopLevelNulls_;
   }
 
+  /// Returns the features a reader must support to read the file, each once,
+  /// in increasing bit order.
+  const std::vector<RequiredFeature>& requiredFeatures() const {
+    return requiredFeatures_;
+  }
+
   /// Serializes file properties into the `columnar.properties` optional
   /// section.
   std::string serialize() const;
 
-  /// Deserializes the `columnar.properties` optional section.
+  /// Deserializes the `columnar.properties` optional section. Throws a
+  /// NotSupported user error if the file requires a feature that is not in
+  /// kSupportedRequiredFeatures. That check runs before any other field is
+  /// validated, so such a file never fails as corrupt first.
   static FileProperties deserialize(std::string_view data);
 
  private:
@@ -156,6 +181,7 @@ class FileProperties {
   bool hasStreamChecksums_{false};
   StreamTrailerLayout streamTrailerLayout_;
   bool hasTopLevelNulls_{false};
+  std::vector<RequiredFeature> requiredFeatures_;
 };
 
 } // namespace facebook::nimble

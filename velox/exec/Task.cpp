@@ -439,10 +439,6 @@ std::shared_ptr<Task> Task::create(
         return false;
       });
 
-  // An enclosing loop names itself here when it creates a sub-task, so the
-  // link is fixed before anything can observe the task.
-  FixedPointLoop* const parentFixedPoint =
-      nested != nullptr ? nested->parent : nullptr;
   auto task = std::shared_ptr<Task>(new Task(
       taskId,
       std::move(planFragment),
@@ -452,7 +448,8 @@ std::shared_ptr<Task> Task::create(
       std::move(consumerSupplier),
       memoryArbitrationPriority,
       std::move(onError),
-      parentFixedPoint));
+      nested != nullptr ? nested->state : std::weak_ptr<PersistentState>{},
+      nested != nullptr ? nested->statePool : nullptr));
   if (fixedPoint != nullptr) {
     task->fixedPoint_ = std::make_unique<FixedPointLoop>(
         task.get(), *fixedPoint, fixedPointOptions, nested);
@@ -471,7 +468,8 @@ Task::Task(
     ConsumerSupplier consumerSupplier,
     int32_t memoryArbitrationPriority,
     std::function<void(std::exception_ptr)> onError,
-    FixedPointLoop* parentFixedPoint)
+    std::weak_ptr<PersistentState> fixedPointState,
+    std::shared_ptr<memory::MemoryPool> fixedPointStatePool)
     : uuid_{makeUuid()},
       taskId_(taskId),
       destination_(destination),
@@ -483,7 +481,8 @@ Task::Task(
           planFragment_.firstNodeNotSupportingBarrier()),
       traceCtx_(maybeMakeTraceCtx()),
       consumerSupplier_(std::move(consumerSupplier)),
-      parentFixedPoint_(parentFixedPoint),
+      fixedPointState_(std::move(fixedPointState)),
+      fixedPointStatePool_(std::move(fixedPointStatePool)),
       onError_(std::move(onError)),
       splitsStates_(buildSplitStates(planFragment_.planNode)) {
   ++numCreatedTasks_;
@@ -556,6 +555,7 @@ Task::~Task() {
   CLEAR(customChildPools_.clear());
   CLEAR(childPools_.clear());
   CLEAR(planFragment_ = core::PlanFragment());
+  CLEAR(fixedPointStatePool_.reset());
   CLEAR(pool_.reset());
   CLEAR(queryCtx_.reset());
   clearStage = "exiting ~Task()";
@@ -3192,6 +3192,13 @@ ContinueFuture Task::terminate(TaskState terminalState) {
 
   for (auto& barrierPromise : barrierPromises) {
     barrierPromise.setValue();
+  }
+
+  // A loop that has not started is abandoned, which releases a driver of the
+  // pipeline's FixedPointNode leaf waiting for it.  The task has already
+  // stopped, so the driver stops.
+  if (fixedPoint_ != nullptr) {
+    fixedPoint_->abandon();
   }
 
   return makeFinishFuture("Task::terminate");

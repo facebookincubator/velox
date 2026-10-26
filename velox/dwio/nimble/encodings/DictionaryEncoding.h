@@ -36,7 +36,7 @@
 #include "velox/dwio/nimble/encodings/common/EncodingType.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingIdentifier.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelection.h"
-#include "velox/dwio/nimble/velox/selective/NimbleReaderFuzzerStats.h"
+#include "velox/dwio/nimble/selective/NimbleReaderFuzzerStats.h"
 
 // A dictionary encoded stream is comprised of two pieces: a mapping from the
 // n unique values in a stream to the integers [0, n) and the vector of indices

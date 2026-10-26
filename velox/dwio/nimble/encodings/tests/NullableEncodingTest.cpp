@@ -34,6 +34,7 @@
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
+#include "velox/dwio/nimble/encodings/legacy/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/tests/TestUtils.h"
 
 // Tests the Encoding API for all nullable Encoding implementations + data
@@ -244,6 +245,82 @@ TYPED_TEST(NullableEncodingTest, materialize) {
         encoding->materialize(length, buffer.data());
         for (uint32_t i = 0; i < length; ++i) {
           ASSERT_EQ(buffer[i], spreadData[offset + i]);
+        }
+      }
+    }
+  }
+}
+
+// readNulls writes the null bits from an unaligned offset, leaves the other
+// bits alone, and skips the non-null values, so a later materialize returns
+// the rows that follow.
+TYPED_TEST(NullableEncodingTest, readNulls) {
+  using E = typename TypeParam::encoding_type::cppDataType;
+  const nimble::Encoding::Options options{
+      .useVarintRowCount = TypeParam::useVarint};
+  constexpr uint64_t kPattern = 0xA5A5A5A5A5A5A5A5ULL;
+  constexpr int kBegin = 13;
+  const auto patternBit = [](uint64_t bit) {
+    return ((kPattern >> (bit % 64)) & 1) != 0;
+  };
+
+  auto seed = folly::Random::rand32();
+  LOG(INFO) << "seed: " << seed;
+  std::mt19937 rng(seed);
+
+  for (int run = 0; run < this->kNumRandomRuns; ++run) {
+    const std::vector<nimble::Vector<E>> dataPatterns =
+        this->util_->template makeDataPatterns<E>(
+            rng, this->kMaxRows, this->buffer_.get());
+    for (const auto& data : dataPatterns) {
+      for (auto nullPattern :
+           {NullsPattern::None, NullsPattern::All, NullsPattern::Random}) {
+        const nimble::Vector<bool> nulls = this->makeRandomNulls(
+            rng, folly::to<uint32_t>(data.size()), nullPattern);
+        const nimble::Vector<E> spreadData =
+            spreadNullsIntoData<E>(*this->pool_, data, nulls);
+
+        std::vector<velox::BufferPtr> newStringBuffers;
+        const auto stringBufferFactory = [&](uint32_t totalLength) {
+          auto& buffer = newStringBuffers.emplace_back(
+              velox::AlignedBuffer::allocate<char>(
+                  totalLength, this->pool_.get()));
+          return buffer->template asMutable<void>();
+        };
+        auto encoding = nimble::test::Encoder<nimble::NullableEncoding<E>>::
+            createNullableEncoding(
+                *this->buffer_,
+                data,
+                nulls,
+                stringBufferFactory,
+                nimble::CompressionType::Uncompressed,
+                options);
+        const uint32_t rowCount = encoding->rowCount();
+
+        // Two calls, so the second starts where the first left off.
+        const uint32_t blockSize = rowCount / 3;
+        const uint32_t numRead = 2 * blockSize;
+        std::vector<uint64_t> bits(
+            velox::bits::nwords(kBegin + numRead) + 1, kPattern);
+        encoding->readNulls(blockSize, bits.data(), kBegin);
+        encoding->readNulls(blockSize, bits.data(), kBegin + blockSize);
+        for (uint32_t row = 0; row < numRead; ++row) {
+          ASSERT_EQ(
+              velox::bits::isBitSet(bits.data(), kBegin + row), nulls[row])
+              << "row " << row;
+        }
+        for (uint64_t bit = 0; bit < 64 * bits.size(); ++bit) {
+          if (bit < kBegin || bit >= kBegin + numRead) {
+            ASSERT_EQ(velox::bits::isBitSet(bits.data(), bit), patternBit(bit))
+                << "bit " << bit;
+          }
+        }
+
+        const uint32_t numRest = rowCount - numRead;
+        nimble::Vector<E> rest(this->pool_.get(), numRest);
+        encoding->materialize(numRest, rest.data());
+        for (uint32_t i = 0; i < numRest; ++i) {
+          ASSERT_EQ(rest[i], spreadData[numRead + i]) << "row " << numRead + i;
         }
       }
     }
@@ -741,6 +818,45 @@ TEST_F(NullableEncodingSliceTest, materializeNullableBoolChildren) {
     checkNullableMaterialization(
         *pool_, toBoolVector({true, true, false, true}), serializedNulls);
   }
+}
+
+// legacy::NullableEncoding has no readNulls, so nulls-only reads stay off with
+// the legacy encodings.
+TEST_F(NullableEncodingSliceTest, legacyReadNullsThrows) {
+  nimble::Buffer buffer{*pool_};
+  const auto encoded =
+      nimble::test::Encoder<nimble::NullableEncoding<int32_t>>::encodeNullable(
+          buffer, toInt32Vector({10, 20}), toBoolVector({true, false, true}));
+  const auto encoding = nimble::legacy::EncodingFactory().create(
+      *pool_, encoded, [](uint32_t /*totalLength*/) -> void* {
+        return nullptr;
+      });
+  ASSERT_TRUE(encoding->isNullable());
+  uint64_t nulls{0};
+  NIMBLE_ASSERT_THROW(
+      encoding->readNulls(3, &nulls, 0),
+      "Nullable encoding must override readNulls: Nullable");
+}
+
+// A chunk without nulls is written without NullableEncoding. The base
+// readNulls marks its rows not null, leaves the other bits alone, and skips
+// the values.
+TEST_F(NullableEncodingSliceTest, readNullsWithoutNullableEncoding) {
+  nimble::Buffer buffer{*pool_};
+  const auto encoded =
+      nimble::test::Encoder<nimble::TrivialEncoding<int32_t>>::encode(
+          buffer, toInt32Vector({10, 20, 30, 40, 50}));
+  const auto encoding = nimble::EncodingFactory().create(
+      *pool_, encoded, [](uint32_t /*totalLength*/) -> void* {
+        return nullptr;
+      });
+  ASSERT_FALSE(encoding->isNullable());
+  uint64_t nulls{0b1000'0001};
+  encoding->readNulls(3, &nulls, /*begin=*/2);
+  EXPECT_EQ(nulls, 0b1001'1101);
+  std::array<int32_t, 2> rest{};
+  encoding->materialize(rest.size(), rest.data());
+  EXPECT_EQ(rest, (std::array<int32_t, 2>{40, 50}));
 }
 
 TEST(NullableEncodingEdgeTest, materializeNullableWordBoundaries) {

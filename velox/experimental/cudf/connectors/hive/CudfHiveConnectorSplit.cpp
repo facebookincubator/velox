@@ -19,8 +19,8 @@
 
 #include <cudf/io/types.hpp>
 
-#include <charconv>
-#include <limits>
+#include <folly/Conv.h>
+
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -37,29 +37,6 @@ std::string stripFilePrefix(const std::string& targetPath) {
 }
 } // namespace
 
-std::optional<size_t> knownKvikioFileSize(const CudfHiveConnectorSplit& split) {
-  // The whole file's size, not this split's range.
-  const auto it = split.infoColumns.find("$file_size");
-  if (it == split.infoColumns.end() || it->second.empty()) {
-    return std::nullopt;
-  }
-  const auto& text = it->second;
-  int64_t parsedSize;
-  const auto [end, error] =
-      std::from_chars(text.data(), text.data() + text.size(), parsedSize);
-  if (error != std::errc{} || end != text.data() + text.size() ||
-      parsedSize < 0) {
-    return std::nullopt;
-  }
-  const auto fileSize = static_cast<uint64_t>(parsedSize);
-  if (fileSize > std::numeric_limits<size_t>::max() || split.start > fileSize ||
-      (split.length != std::numeric_limits<uint64_t>::max() &&
-       split.length > fileSize - split.start)) {
-    return std::nullopt;
-  }
-  return static_cast<size_t>(fileSize);
-}
-
 std::string CudfHiveConnectorSplit::toString() const {
   return fmt::format("CudfHive: {}", filePath);
 }
@@ -73,6 +50,21 @@ uint64_t CudfHiveConnectorSplit::size() const {
   return length;
 }
 
+std::optional<int64_t> CudfHiveConnectorSplit::fileSize() const {
+  if (properties.has_value() && properties->fileSize.value_or(-1) >= 0) {
+    return properties->fileSize;
+  }
+  // TODO: Drop the $file_size fallback once Prestissimo's Hive split
+  // conversion fills FileProperties::fileSize.
+  if (const auto it = infoColumns.find("$file_size"); it != infoColumns.end()) {
+    const auto parsed = folly::tryTo<int64_t>(it->second);
+    if (parsed.hasValue() && parsed.value() >= 0) {
+      return parsed.value();
+    }
+  }
+  return std::nullopt;
+}
+
 CudfHiveConnectorSplit::CudfHiveConnectorSplit(
     const std::string& connectorId,
     const std::string& _filePath,
@@ -82,6 +74,7 @@ CudfHiveConnectorSplit::CudfHiveConnectorSplit(
     const std::unordered_map<std::string, std::string>& _infoColumns,
     const std::unordered_map<std::string, std::optional<std::string>>&
         _partitionKeys,
+    std::optional<FileProperties> _properties,
     bool _cacheable)
     : facebook::velox::connector::ConnectorSplit(
           connectorId,
@@ -92,7 +85,8 @@ CudfHiveConnectorSplit::CudfHiveConnectorSplit(
       length(_length),
       cudfSourceInfo(std::make_unique<cudf::io::source_info>(filePath)),
       infoColumns(_infoColumns),
-      partitionKeys(_partitionKeys) {}
+      partitionKeys(_partitionKeys),
+      properties(std::move(_properties)) {}
 
 // static
 std::shared_ptr<CudfHiveConnectorSplit> CudfHiveConnectorSplit::create(
@@ -116,6 +110,12 @@ std::shared_ptr<CudfHiveConnectorSplit> CudfHiveConnectorSplit::create(
         : std::optional<std::string>(value.asString());
   }
 
+  std::optional<FileProperties> properties;
+  const auto& propertiesObj = obj.getDefault("properties", nullptr);
+  if (propertiesObj != nullptr) {
+    properties = FileProperties::create(propertiesObj);
+  }
+
   return std::make_shared<CudfHiveConnectorSplit>(
       connectorId,
       filePath,
@@ -124,6 +124,7 @@ std::shared_ptr<CudfHiveConnectorSplit> CudfHiveConnectorSplit::create(
       splitWeight,
       infoColumns,
       partitionKeys,
+      std::move(properties),
       cacheable);
 }
 
@@ -148,6 +149,10 @@ folly::dynamic CudfHiveConnectorSplit::serialize() const {
         value.has_value() ? folly::dynamic(*value) : folly::dynamic(nullptr);
   }
   obj["partitionKeys"] = partitionKeysObj;
+
+  if (properties.has_value()) {
+    obj["properties"] = properties->serialize();
+  }
 
   return obj;
 }
