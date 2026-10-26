@@ -877,7 +877,7 @@ host DRAM (GPU device memory, CXL-attached memory, pinned host memory,
 NUMA-bound pools) side-by-side with the default CPU tier. A resource
 bundles a tag, an allocator, an arbitrator, and a reclaimer factory. The
 constructor requires a non-empty tag and non-null allocator, arbitrator,
-and factory; the resource is immutable once constructed:
+and reclaimerFactory; the resource is immutable once constructed:
 
 .. code-block:: c++
 
@@ -901,11 +901,11 @@ and factory; the resource is immutable once constructed:
         const ReclaimerContext& context = PoolReclaimerContext{nullptr}) const;
   };
 
-A custom root pool allocates through its resource's allocator and
-arbitrator. Giving each tier its own allocator and arbitrator keeps
-accounting and capacity decisions separate for tiers that differ in size,
-latency, or allocation rules. Resources may also share an allocator or
-arbitrator.
+Each resource carries its own allocator and arbitrator; the default CPU
+allocator and arbitrator on *MemoryManager* are not shared with custom
+resources. Per-tier accounting and capacity decisions stay self-contained,
+which matters when tiers differ in size, latency, alignment, or allocation
+failure modes.
 
 Registration
 ^^^^^^^^^^^^
@@ -922,7 +922,7 @@ global scope at process startup, after *initializeMemoryManager*:
   auto resource = std::make_shared<memory::CustomMemoryResource>(
       "device",
       std::make_shared<MyTieredAllocator>(...),
-      memory::MemoryArbitrator::create(...),
+      MemoryArbitrator::create(...),
       [](const memory::ReclaimerContext&) {
         return std::make_unique<MyReclaimer>();
       },
@@ -931,27 +931,25 @@ global scope at process startup, after *initializeMemoryManager*:
       resource->tag(), resource);
 
 For each query that wants to use a registered resource, the caller looks
-the resource up by tag, creates a custom root pool from it, and registers
-the root with the *QueryCtx*:
+the resource up by tag, materializes the per-resource root pool through
+*MemoryManager::addCustomRootPool*, and hands the pool to the *QueryCtx*
+via *Builder::customPool*:
 
 .. code-block:: c++
 
+  auto* manager = memory::memoryManager();
   auto resource =
       memory::CustomMemoryResourceRegistry::global().find("device");
   VELOX_USER_CHECK_NOT_NULL(resource, "Unknown resource tag: device");
-  auto root = memory::memoryManager()->addCustomRootPool(
-      "query.q0.device", resource);
-  auto queryCtx = core::QueryCtx::Builder().queryId("q0").build();
-  queryCtx->addCustomPool(resource->tag(), std::move(root));
+  auto devicePool = manager->addCustomRootPool("query.q0.device", resource);
+  auto queryCtx = core::QueryCtx::Builder()
+                      .customPool("device", std::move(devicePool))
+                      .queryId("q0")
+                      .build();
 
-This *addCustomRootPool* overload backs the root with the resource's
-allocator and arbitrator, caps it at *resource->maxCapacity()*, and calls
-the factory with a pool context for the root's reclaimer. The arbitrator
-decides how much of that capacity the root holds at any time.
-*QueryCtx::addCustomPool* and *Builder::customPool* only record the root
-under its tag. The caller keeps the resource alive while any pool or
-allocation backed by it exists.
-
+*addCustomRootPool* invokes *resource->newReclaimer()* to build the
+pool's reclaimer, uses *resource->maxCapacity()* as the pool capacity, and
+backs the pool with *resource->allocator()* and *resource->arbitrator()*.
 The root pool is exposed on *QueryCtx* keyed by tag:
 
 .. code-block:: c++
@@ -963,43 +961,26 @@ The root pool is exposed on *QueryCtx* keyed by tag:
 Per-Query Pool Hierarchy
 ^^^^^^^^^^^^^^^^^^^^^^^^
 
-For every custom root pool registered on *QueryCtx*, *Task* builds a
-parallel ``task → node → operator`` aggregate/leaf subtree beneath it that
-mirrors the default hierarchy. Aggregate children under a custom root are
-created at the same moment as their default counterparts. *Task* looks up
-each resource by tag in the query's scoped *CustomMemoryResourceRegistry*
-if one is installed, and in the global registry otherwise. That resource
-must be the one backing the query's root.
-
-Each pool in the subtree gets its reclaimer from the resource's factory:
-
-* The task pool passes a *TaskReclaimerContext*.
-* Node and join-node pools pass a *PoolReclaimerContext*.
-* Operator leaves get no reclaimer. The extension installs one on a leaf
-  whose operator state is reclaimable.
-
-The factory's result is installed as is, and ``nullptr`` means the pool
-has no reclaimer. As in the default hierarchy, a child pool can have a
-reclaimer only if its parent has one. A factory that ignores its context,
-such as the CXL resource's, gives every level the same kind of reclaimer.
+For every custom root pool registered on *QueryCtx* via
+*Builder::customPool*, *Task* builds a parallel ``task → node → operator``
+aggregate/leaf subtree beneath it that mirrors the default hierarchy.
+Aggregate children under a custom root are created at the same moment as
+their default counterparts. Reclaimers for these aggregates come
+from each resource's ``reclaimerFactory`` via
+*CustomMemoryResource::newReclaimer*, so capacity decisions and reclaim
+on a custom subtree are governed end-to-end by the resource's own
+arbitrator and reclaimer — separate from the default DRAM tier.
 
 Query- and Task-Aware Reclaimers
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-*ReclaimerContext* is a ``std::variant`` that tells the factory which pool
-it is building a reclaimer for:
-
-* *PoolReclaimerContext* carries the pool, which is ``nullptr`` because
-  the pool does not exist yet.
-* *QueryReclaimerContext* carries the *QueryCtx* and its custom root.
-* *TaskReclaimerContext* carries the *Task*, its arbitration priority, and
-  the resource tag. The tag is a view that is valid only during the call.
-
-A factory can choose a reclaimer per context. This one uses Velox's
-built-in query and task reclaimers, so arbitration on the custom root
-coordinates with the query and pauses the *Task* as it does for the CPU
-tree. The built-in task reclaimer uses the tag to reclaim only that
-resource's subtree of the *Task*:
+The factory receives a *ReclaimerContext*, a ``std::variant`` of
+*PoolReclaimerContext*, *QueryReclaimerContext*, and
+*TaskReclaimerContext*. *Task* passes a task context for its custom task
+pool and a pool context for node pools. A ``nullptr`` result means the
+pool has no reclaimer. A factory can return Velox's built-in reclaimers so
+that arbitration on a custom root pauses the *Task* and reclaims only that
+resource's pools:
 
 .. code-block:: c++
 
@@ -1018,15 +999,10 @@ resource's subtree of the *Task*:
     return exec::MemoryReclaimer::create();
   }
 
-The memory library only forward-declares *QueryCtx* and *Task*, so a
-factory that uses the built-in reclaimers includes the execution headers.
-Any branch can return an extension's own reclaimer instead.
-
-*MemoryManager* and *QueryCtx* never call the factory with a query
-context. To give a root a query reclaimer, the extension creates the root
-with the component-based *addCustomRootPool* overload, asks the resource
-for a query reclaimer, and then registers the root. Here *resource* uses
-*makeDeviceReclaimer* as its factory:
+Velox never passes a query context itself. To give a custom root a query
+reclaimer, create the root with the *addCustomRootPool* overload that
+takes an allocator and an arbitrator, which installs no reclaimer, and set
+one before creating Tasks:
 
 .. code-block:: c++
 
@@ -1043,22 +1019,8 @@ for a query reclaimer, and then registers the root. Here *resource* uses
   }
   queryCtx->addCustomPool(resource->tag(), std::move(root));
 
-The component-based overload calls no factory and installs only the
-reclaimer it is given, which defaults to ``nullptr``. The example needs it
-because *setReclaimer* accepts a reclaimer only once, and a root built
-from the resource already has its pool-context reclaimer. Install the
-query reclaimer before creating Tasks or allocating from the root. The
-component-based overload also creates standalone roots that belong to no
-query. Its allocator and arbitrator must outlive the pool.
-
-Factories on a resource shared across queries must support concurrent
-calls and should not capture a particular query or task. Reclaimers
-should avoid strong ownership cycles; the built-in ones hold weak
-references to their query and task.
-
-Velox does not serialize reclaims across arbitrators. Applications that
-let more than one arbitrator reclaim the same query or task must
-coordinate those reclaims.
+Factories on a resource shared across queries must be safe to call
+concurrently.
 
 Server OOM Prevention
 ---------------------
