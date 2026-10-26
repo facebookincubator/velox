@@ -16,6 +16,8 @@
 
 #include <gtest/gtest.h>
 
+#include <array>
+
 #include "velox/external/tzdb/tzdb_list.h"
 
 namespace facebook::velox::tzdb {
@@ -153,6 +155,146 @@ TEST(TzdbConversionTest, transitionsAndExceptionMessages) {
           date::local_time<milliseconds>{
               duration_cast<milliseconds>((local + delta).time_since_epoch()) +
               milliseconds{999}});
+    }
+  }
+}
+
+TEST(TzdbConversionTest, transitionBoundaries) {
+  struct Transition {
+    const char* name;
+    date::local_seconds begin;
+    date::local_seconds end;
+    date::sys_seconds instant;
+    seconds before;
+    seconds after;
+    int result;
+  };
+  const auto sysTime =
+      [](int year, unsigned month, unsigned day, int hour, int minute = 0) {
+        return date::sys_seconds{
+            localTime(year, month, day, hour, minute).time_since_epoch()};
+      };
+  // State the civil-time interval, UTC instant and offsets explicitly. Cover
+  // precomputed transitions and future rules, including non-hour changes.
+  const std::vector<Transition> transitions = {
+      {"America/New_York",
+       localTime(2024, 3, 10, 2),
+       localTime(2024, 3, 10, 3),
+       sysTime(2024, 3, 10, 7),
+       hours{-5},
+       hours{-4},
+       local_info::nonexistent},
+      {"America/New_York",
+       localTime(2024, 11, 3, 1),
+       localTime(2024, 11, 3, 2),
+       sysTime(2024, 11, 3, 6),
+       hours{-4},
+       hours{-5},
+       local_info::ambiguous},
+      {"America/New_York",
+       localTime(2100, 3, 14, 2),
+       localTime(2100, 3, 14, 3),
+       sysTime(2100, 3, 14, 7),
+       hours{-5},
+       hours{-4},
+       local_info::nonexistent},
+      {"America/New_York",
+       localTime(2100, 11, 7, 1),
+       localTime(2100, 11, 7, 2),
+       sysTime(2100, 11, 7, 6),
+       hours{-4},
+       hours{-5},
+       local_info::ambiguous},
+      {"Australia/Lord_Howe",
+       localTime(2024, 4, 7, 1, 30),
+       localTime(2024, 4, 7, 2),
+       sysTime(2024, 4, 6, 15),
+       hours{11},
+       hours{10} + minutes{30},
+       local_info::ambiguous},
+      {"Australia/Lord_Howe",
+       localTime(2024, 10, 6, 2),
+       localTime(2024, 10, 6, 2, 30),
+       sysTime(2024, 10, 5, 15, 30),
+       hours{10} + minutes{30},
+       hours{11},
+       local_info::nonexistent},
+      {"Pacific/Apia",
+       localTime(2011, 12, 30),
+       localTime(2011, 12, 31),
+       sysTime(2011, 12, 30, 10),
+       hours{-10},
+       hours{14},
+       local_info::nonexistent},
+  };
+  for (const auto& transition : transitions) {
+    SCOPED_TRACE(transition.name);
+    SCOPED_TRACE(transition.begin.time_since_epoch().count());
+    const auto* zone = locate_zone(transition.name);
+    const date::local_time<milliseconds> begin{transition.begin};
+    const date::local_time<milliseconds> end{transition.end};
+    struct LocalCase {
+      date::local_time<milliseconds> local;
+      int result;
+      seconds firstOffset;
+      seconds secondOffset;
+    };
+    // Both gaps and overlaps include their beginning and exclude their end.
+    const std::array<LocalCase, 6> cases = {{
+        {begin - milliseconds{1},
+         local_info::unique,
+         transition.before,
+         transition.before},
+        {begin, transition.result, transition.before, transition.after},
+        {begin + milliseconds{1},
+         transition.result,
+         transition.before,
+         transition.after},
+        {end - milliseconds{1},
+         transition.result,
+         transition.before,
+         transition.after},
+        {end, local_info::unique, transition.after, transition.after},
+        {end + milliseconds{1},
+         local_info::unique,
+         transition.after,
+         transition.after},
+    }};
+    for (const auto& test : cases) {
+      SCOPED_TRACE(test.local.time_since_epoch().count());
+      const auto info = zone->get_info_for_conversion(test.local);
+      ASSERT_EQ(test.result, info.result);
+      EXPECT_EQ(test.firstOffset, info.first.offset);
+      if (test.result != local_info::unique) {
+        EXPECT_EQ(test.secondOffset, info.second.offset);
+      }
+      EXPECT_EQ(
+          (date::sys_time<milliseconds>{
+              test.local.time_since_epoch() - test.firstOffset}),
+          zone->to_sys(test.local, choose::earliest));
+      const auto latestOffset = test.result == local_info::ambiguous
+          ? test.secondOffset
+          : test.firstOffset;
+      EXPECT_EQ(
+          (date::sys_time<milliseconds>{
+              test.local.time_since_epoch() - latestOffset}),
+          zone->to_sys(test.local, choose::latest));
+      checkConversion(*zone, test.local);
+    }
+
+    // UTC instants are unambiguous. At the transition itself the new offset
+    // applies, and the millisecond component must survive the conversion.
+    const date::sys_time<milliseconds> instant{transition.instant};
+    for (const auto delta :
+         {milliseconds{-1}, milliseconds{0}, milliseconds{1}}) {
+      SCOPED_TRACE(delta.count());
+      const auto sys = instant + delta;
+      const auto offset =
+          delta < milliseconds{0} ? transition.before : transition.after;
+      EXPECT_EQ(offset, zone->get_info(sys).offset);
+      EXPECT_EQ(
+          (date::local_time<milliseconds>{sys.time_since_epoch() + offset}),
+          zone->to_local(sys));
     }
   }
 }
