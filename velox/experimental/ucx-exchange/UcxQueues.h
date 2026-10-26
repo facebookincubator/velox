@@ -174,11 +174,10 @@ class UcxOutputQueue : public std::enable_shared_from_this<UcxOutputQueue> {
   /// already initialized.
   bool initialize(
       std::shared_ptr<exec::Task> task,
-      std::vector<UcxDataAvailable>& notifications,
       uint32_t numDestinations,
       uint32_t numDrivers,
-      core::PartitionedOutputNode::Kind kind =
-          core::PartitionedOutputNode::Kind::kPartitioned);
+      core::PartitionedOutputNode::Kind kind,
+      std::vector<UcxDataAvailable>& notifications);
 
   core::PartitionedOutputNode::Kind kind() const {
     return kind_;
@@ -218,10 +217,13 @@ class UcxOutputQueue : public std::enable_shared_from_this<UcxOutputQueue> {
   /// @return True if blocked (queue over capacity), false otherwise.
   bool checkBlocked(ContinueFuture* future);
 
-  /// @brief Returns the data for the given destination through the callback
-  /// function. If data is available, notify will be called immediately. If
-  /// there is no data, 'notify' is installed and it will be called when data
-  /// becomes available.
+  /// @brief Returns data for the destination through 'notify', immediately if
+  /// available. Otherwise, installs 'notify' until data becomes available.
+  /// Unpublished readers wait for initialize() or updateOutputBuffers() to
+  /// publish their destination and backfill any broadcast data and end marker.
+  /// Invokes 'notify' with nullptr when the final count excludes the reader,
+  /// results have been deleted, or the queue has terminated. Negative
+  /// destinations also receive nullptr.
   void getData(int destination, UcxDataAvailableCallback notify);
 
   /// @brief Indicates that a driver is done and won't enqueue any more data.
@@ -310,6 +312,9 @@ class UcxOutputQueue : public std::enable_shared_from_this<UcxOutputQueue> {
       std::shared_ptr<cudf::packed_columns> data,
       vector_size_t numRows,
       std::vector<UcxDataAvailable>& dataAvailableCbs);
+
+  // Returns true when no more destinations can be published. Requires mutex_.
+  bool isDestinationCountFinalLocked() const;
 
   // Adds destination queues and restores broadcast data and end markers.
   void addDestinationQueuesLocked(

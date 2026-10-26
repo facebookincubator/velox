@@ -48,7 +48,7 @@ void UcxOutputQueueManager::initializeTask(
           std::move(task), numDestinations, numDrivers, kind);
     } else {
       if (!it->second->initialize(
-              task, notifications, numDestinations, numDrivers, kind)) {
+              task, numDestinations, numDrivers, kind, notifications)) {
         VELOX_FAIL(
             "Registering a cudf output queue for pre-existing taskId {}",
             taskId);
@@ -122,10 +122,8 @@ void UcxOutputQueueManager::getData(
   queues_.withLock([&](auto& queues) {
     auto it = queues.find(taskIdStr);
     if (it == queues.end()) {
-      // Check if the task was already removed. If so, don't re-create a
-      // placeholder — the task is dead and any server calling getData() is a
-      // stale leftover. Re-creating would produce an undersized queue that
-      // crashes when deleteResults() is called for other destinations.
+      // Late readers of removed tasks must receive EOS rather than wait on
+      // a new placeholder.
       if (removedTasks_.withLock(
               [&](auto& removed) { return removed.count(taskIdStr) > 0; })) {
         VLOG(2) << "[QUEUE-MGR] task=" << taskId << " dest=" << destination

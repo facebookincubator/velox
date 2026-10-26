@@ -163,10 +163,10 @@ UcxOutputQueue::UcxOutputQueue(
 
 bool UcxOutputQueue::initialize(
     std::shared_ptr<exec::Task> task,
-    std::vector<UcxDataAvailable>& notifications,
     uint32_t numDestinations,
     uint32_t numDrivers,
-    core::PartitionedOutputNode::Kind kind) {
+    core::PartitionedOutputNode::Kind kind,
+    std::vector<UcxDataAvailable>& notifications) {
   std::lock_guard<std::mutex> l(mutex_);
   if (task_) {
     // already initialized!
@@ -267,6 +267,11 @@ bool UcxOutputQueue::checkBlocked(ContinueFuture* future) {
   return false;
 }
 
+bool UcxOutputQueue::isDestinationCountFinalLocked() const {
+  return terminated_ || noMoreQueues_ ||
+      (task_ && kind_ == core::PartitionedOutputNode::Kind::kPartitioned);
+}
+
 void UcxOutputQueue::getData(int destination, UcxDataAvailableCallback notify) {
   UcxDestinationQueue::Data data;
   std::vector<ContinuePromise> promises;
@@ -279,17 +284,15 @@ void UcxOutputQueue::getData(int destination, UcxDataAvailableCallback notify) {
     }
     if (destination < 0 ||
         (static_cast<size_t>(destination) >= queues_.size() &&
-         ((task_ && kind_ == core::PartitionedOutputNode::Kind::kPartitioned) ||
-          noMoreQueues_))) {
-      const std::string taskId = task_ ? task_->taskId() : "uninitialized";
+         isDestinationCountFinalLocked())) {
+      const std::string taskId = task_ ? task_->taskId() : "n/a";
       const auto numQueues = queues_.size();
       const auto kind = kind_;
       const bool noMoreQueues = noMoreQueues_;
       l.unlock();
       VLOG(1) << "UCX reader outside published destinations: task=" << taskId
               << " destination=" << destination << " queues=" << numQueues
-              << " kind=" << static_cast<int>(kind)
-              << " noMoreQueues=" << noMoreQueues;
+              << " kind=" << kind << " noMoreQueues=" << noMoreQueues;
       notify(nullptr, /*numRows=*/0, {});
       return;
     }
@@ -305,8 +308,7 @@ void UcxOutputQueue::getData(int destination, UcxDataAvailableCallback notify) {
       }
       queue = it->second.get();
     }
-    // queue can be nullptr here if the task has terminated and results
-    // have been removed. In this case, no data is returned.
+    // A null queue means deleteResults() has already removed this destination.
     if (queue) {
       // Capture weak_ptr instead of raw `this` to prevent use-after-free.
       // The callback fires outside the lock (from enqueue() or terminate()),
@@ -549,7 +551,7 @@ void UcxOutputQueue::updateOutputBuffers(int numBuffers, bool noMoreBuffers) {
       clearPendingReadersLocked(notifications);
       numRejected = notifications.size() - priorNotifications;
       if (numRejected > 0) {
-        taskId = task_ ? task_->taskId() : "uninitialized";
+        taskId = task_ ? task_->taskId() : "n/a";
       }
     }
     if (isFinishedLocked()) {
@@ -581,8 +583,7 @@ void UcxOutputQueue::deleteResults(int destination) {
       // Only tombstone while the destination can still be published; once the
       // count is final the reader already got EOS and a stray entry would
       // wedge isFinishedLocked().
-      const bool publishable = !terminated_ && !noMoreQueues_ &&
-          !(task_ && kind_ == core::PartitionedOutputNode::Kind::kPartitioned);
+      const bool publishable = !isDestinationCountFinalLocked();
       auto it = pendingQueues_.find(destination);
       if (it != pendingQueues_.end()) {
         if (it->second) {
