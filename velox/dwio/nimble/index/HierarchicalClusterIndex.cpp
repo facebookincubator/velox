@@ -35,6 +35,12 @@ std::unique_ptr<HierarchicalClusterIndex> HierarchicalClusterIndex::create(
           &velox::checkedNotNull(options.ioOptions)->memoryPool()),
       static_cast<const void*>(pool),
       "ioOptions pool must match the provided pool");
+
+  // Hierarchical key chunks search per-column integer levels, whose order is
+  // the bytewise order of the encoded keys.
+  NIMBLE_CHECK_NULL(
+      options.keyComparator,
+      "Hierarchical cluster index requires bytewise key order");
   return std::unique_ptr<HierarchicalClusterIndex>(new HierarchicalClusterIndex(
       std::move(rootSection),
       createIndexMetadataInput(options),
@@ -56,6 +62,7 @@ HierarchicalClusterIndex::HierarchicalClusterIndex(
           std::move(metadataInput),
           std::move(dataInput),
           createHierarchicalKeyReader,
+          /*keyComparator=*/nullptr,
           pinIndex,
           preloadIndex,
           pool) {}

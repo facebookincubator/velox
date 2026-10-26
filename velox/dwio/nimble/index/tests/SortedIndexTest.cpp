@@ -34,10 +34,10 @@
 #include "velox/common/memory/MallocAllocator.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/common/testutil/TempDirectoryPath.h"
+#include "velox/dwio/nimble/reader/BatchReader.h"
 #include "velox/dwio/nimble/tablet/TabletReader.h"
 #include "velox/dwio/nimble/tablet/TabletWriter.h"
 #include "velox/dwio/nimble/tablet/tests/TabletTestUtils.h"
-#include "velox/dwio/nimble/velox/BatchReader.h"
 #include "velox/dwio/nimble/writer/Writer.h"
 #include "velox/vector/FlatVector.h"
 

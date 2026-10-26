@@ -21,7 +21,7 @@
 #include "velox/dwio/nimble/index/KeyChunkBuilder.h"
 #include "velox/dwio/nimble/tablet/ClusterIndexGenerated.h"
 #include "velox/dwio/nimble/tablet/Constants.h"
-#include "velox/dwio/nimble/velox/ChunkedStreamWriter.h"
+#include "velox/dwio/nimble/writer/ChunkedStreamWriter.h"
 
 namespace facebook::nimble::index {
 

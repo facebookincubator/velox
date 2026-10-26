@@ -43,6 +43,12 @@
 #include "velox/dwio/nimble/common/ChunkHeader.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/common/FeatureGate.h"
+#include "velox/dwio/nimble/common/MetadataGenerated.h"
+#include "velox/dwio/nimble/common/SchemaBuilder.h"
+#include "velox/dwio/nimble/common/SchemaReader.h"
+#include "velox/dwio/nimble/common/SchemaSerialization.h"
+#include "velox/dwio/nimble/common/SchemaTypes.h"
+#include "velox/dwio/nimble/common/SchemaUtils.h"
 #include "velox/dwio/nimble/common/Types.h"
 #include "velox/dwio/nimble/encodings/SharedDictionaryCatalog.h"
 #include "velox/dwio/nimble/encodings/SharedDictionaryEncoding.h"
@@ -57,22 +63,16 @@
 #include "velox/dwio/nimble/tablet/Constants.h"
 #include "velox/dwio/nimble/tablet/FileProperties.h"
 #include "velox/dwio/nimble/tablet/IndexGenerated.h"
-#include "velox/dwio/nimble/velox/BufferGrowthPolicy.h"
-#include "velox/dwio/nimble/velox/ChunkedStreamWriter.h"
-#include "velox/dwio/nimble/velox/FieldWriter.h"
-#include "velox/dwio/nimble/velox/LayoutPlanner.h"
-#include "velox/dwio/nimble/velox/MetadataGenerated.h"
-#include "velox/dwio/nimble/velox/SchemaBuilder.h"
-#include "velox/dwio/nimble/velox/SchemaReader.h"
-#include "velox/dwio/nimble/velox/SchemaSerialization.h"
-#include "velox/dwio/nimble/velox/SchemaTypes.h"
-#include "velox/dwio/nimble/velox/SchemaUtils.h"
+#include "velox/dwio/nimble/writer/BufferGrowthPolicy.h"
+#include "velox/dwio/nimble/writer/ChunkedStreamWriter.h"
+#include "velox/dwio/nimble/writer/FieldWriter.h"
+#include "velox/dwio/nimble/writer/LayoutPlanner.h"
 
-#include "velox/dwio/nimble/velox/SharedDictionaryWriter.h"
-#include "velox/dwio/nimble/velox/StatsGenerated.h"
-#include "velox/dwio/nimble/velox/stats/VectorizedStatistics.h"
+#include "velox/dwio/nimble/common/StatsGenerated.h"
+#include "velox/dwio/nimble/stats/VectorizedStatistics.h"
 #include "velox/dwio/nimble/writer/EncodingLayoutTree.h"
 #include "velox/dwio/nimble/writer/FlushPolicy.h"
+#include "velox/dwio/nimble/writer/SharedDictionaryWriter.h"
 #include "velox/dwio/nimble/writer/StreamChunker.h"
 #include "velox/exec/Driver.h"
 #include "velox/exec/Operator.h"
@@ -2142,6 +2142,8 @@ Writer::Writer(
            .stripeGroupEncodingLayoutReadFactors =
                context_->options()
                    .experimentalStripeGroupEncodingLayoutReadFactors,
+           .stripeGroupMetadataDeduplicationEnabled =
+               context_->options().experimentalStripeGroupMetadataDeduplication,
            .stripeGroupFlushCallback =
                (clusterIndexWriter_ != nullptr || !denseIndexWriters_.empty())
                ? TabletWriter::StripeGroupFlushCallback(
