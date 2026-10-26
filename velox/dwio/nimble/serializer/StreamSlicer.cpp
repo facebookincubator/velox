@@ -467,14 +467,17 @@ void StreamSlicer::sliceType(
             outputBuffer,
             encodingOptions);
       }
-      sliceDescriptor(
-          timestamp.nanosDescriptor(),
-          nanosRange,
-          inputStreams,
-          /*isRowOrFlatMapNullStream=*/false,
-          outputStreams,
-          outputBuffer,
-          encodingOptions);
+      // A range of null rows has no nanoseconds to slice.
+      if (nanosRange.length > 0) {
+        sliceDescriptor(
+            timestamp.nanosDescriptor(),
+            nanosRange,
+            inputStreams,
+            /*isRowOrFlatMapNullStream=*/false,
+            outputStreams,
+            outputBuffer,
+            encodingOptions);
+      }
       return;
     }
     case Kind::Row: {

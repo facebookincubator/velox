@@ -1997,6 +1997,89 @@ TEST_P(NimbleIndexProjectorTest, projectedNullableDataDeserializes) {
       expected);
 }
 
+TEST_P(NimbleIndexProjectorTest, projectedTabletTimestampsDeserialize) {
+  // A timestamp keeps its sub-microsecond nanoseconds in a second stream with
+  // one value per non-null row, which slicing and deserializing keep aligned
+  // with the microseconds.
+  constexpr vector_size_t kRowsPerBatch = 100;
+  constexpr int kNumBatches = 3;
+  const auto rowType = ROW({{"key", BIGINT()}, {"ts", TIMESTAMP()}});
+  const auto timestampAt = [](int64_t key) {
+    return Timestamp(
+        key * 1'000 - 150'000,
+        static_cast<uint64_t>(key) * 1'001 % 1'000'000'000);
+  };
+  const auto isNullAt = [](int64_t key) { return key % 3 == 0; };
+  const auto makeRows = [&](int64_t firstKey, vector_size_t numRows) {
+    return vectorMaker_->rowVector(
+        {"key", "ts"},
+        {vectorMaker_->flatVector<int64_t>(
+             numRows, [&](auto row) { return firstKey + row; }),
+         vectorMaker_->flatVector<Timestamp>(
+             numRows,
+             [&](auto row) { return timestampAt(firstKey + row); },
+             [&](auto row) { return isNullAt(firstKey + row); })});
+  };
+  std::vector<RowVectorPtr> batches;
+  batches.reserve(kNumBatches);
+  for (int batch = 0; batch < kNumBatches; ++batch) {
+    batches.push_back(makeRows(batch * kRowsPerBatch, kRowsPerBatch));
+  }
+  writeData(batches, {"key"}, /*flatMapColumns=*/{}, /*stripeSize=*/2 << 10);
+  ASSERT_GT(openSinkTablet()->stripeCount(), 1);
+
+  std::vector<Subfield> subfields;
+  subfields.emplace_back("key");
+  subfields.emplace_back("ts");
+
+  // 1.0 packs whole stripes; 0.0 slices the part of each stripe a range reads.
+  // Each range is its own request, since requests that share a stripe pack the
+  // union of their rows in it.
+  for (const double maxOverfetchRowsRatio : {1.0, 0.0}) {
+    SCOPED_TRACE(
+        fmt::format("maxOverfetchRowsRatio {}", maxOverfetchRowsRatio));
+    NimbleIndexProjector::Options options;
+    options.maxOverfetchRowsRatio = maxOverfetchRowsRatio;
+    auto projector = createProjector(subfields);
+    // Whole file, a range inside one stripe, one row, and a range across
+    // stripes.
+    for (const auto& [startKey, endKey] :
+         std::vector<std::pair<int64_t, int64_t>>{
+             {0, kNumBatches * kRowsPerBatch},
+             {5, 37},
+             {150, 151},
+             {123, 260}}) {
+      SCOPED_TRACE(fmt::format("keys [{}, {})", startKey, endKey));
+      NimbleIndexProjector::Request request;
+      request.keyBounds = {makeRangeLookup(rowType, {"key"}, startKey, endKey)};
+      const auto expected =
+          makeRows(startKey, static_cast<vector_size_t>(endKey - startKey));
+
+      const auto rows = projectRows(*projector, request, options);
+      ASSERT_EQ(rows.responses.size(), 1);
+      expectVectorRows(
+          rows.values->slice(rows.responses[0].offset, rows.responses[0].size),
+          expected);
+
+      const auto streams = projector->projectStreams(request, options);
+      ASSERT_EQ(streams.responses.size(), 1);
+      std::vector<folly::IOBuf> owned;
+      std::vector<std::string_view> serializedBatches;
+      owned.reserve(streams.responses[0].slices.size());
+      for (const auto& slice : streams.responses[0].slices) {
+        owned.push_back(coalesceChunkSlice(slice));
+        serializedBatches.emplace_back(
+            reinterpret_cast<const char*>(owned.back().data()),
+            owned.back().length());
+      }
+      expectVectorRows(
+          deserializeProjectedBatches(*projector, serializedBatches), expected);
+    }
+    EXPECT_EQ(
+        projector->stats().numSlicedStripes > 0, maxOverfetchRowsRatio == 0.0);
+  }
+}
+
 TEST_P(NimbleIndexProjectorTest, projectedTabletNullBarrierFlag) {
   constexpr vector_size_t kRows = 6;
   auto nestedValueType = ROW({{"score", INTEGER()}});
