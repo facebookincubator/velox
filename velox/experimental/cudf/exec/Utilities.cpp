@@ -356,7 +356,10 @@ std::unique_ptr<cudf::column> makeAllNullColumn(
           cudf::make_column_from_scalar(zeroScalar, numRows + 1, stream, mr);
       auto child = makeAllNullColumn(type->childAt(0), 0, stream, mr);
       auto nullMask = cudf::create_null_mask(
-          numRows, cudf::mask_state::ALL_NULL, stream, mr);
+          numRows,
+          cudf::mask_state::ALL_NULL,
+          stream,
+          cudf::memory_resources{mr, get_temp_mr()});
       return cudf::make_lists_column(
           numRows,
           std::move(offsets),
@@ -373,7 +376,10 @@ std::unique_ptr<cudf::column> makeAllNullColumn(
             makeAllNullColumn(type->childAt(i), numRows, stream, mr));
       }
       auto nullMask = cudf::create_null_mask(
-          numRows, cudf::mask_state::ALL_NULL, stream, mr);
+          numRows,
+          cudf::mask_state::ALL_NULL,
+          stream,
+          cudf::memory_resources{mr, get_temp_mr()});
       return cudf::make_structs_column(
           numRows,
           std::move(children),

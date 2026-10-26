@@ -302,6 +302,69 @@ TEST_F(EncodingViewDecoderTest, remainingRowsTracksSequentialCursor) {
   EXPECT_EQ(decoder->remainingRows(), 0);
 }
 
+TEST_F(EncodingViewDecoderTest, rebindReplacesChunkAndRewindsCursor) {
+  const auto first = encode<int64_t>(std::vector<int64_t>{10, 11, 12, 13});
+  const auto second = encode<int64_t>(std::vector<int64_t>{20, 21, 22});
+  auto decoder = makeDecoder(first);
+  std::array<int64_t, 2> output{};
+  std::array<uint64_t, 1> outputNulls{};
+  std::vector<velox::BufferPtr> stringBuffers;
+  const auto getOutputNulls = [&outputNulls]() { return outputNulls.data(); };
+  decoder->next(2, output.data(), getOutputNulls, stringBuffers);
+  ASSERT_EQ(output, (std::array<int64_t, 2>{10, 11}));
+  ASSERT_EQ(decoder->remainingRows(), 2);
+
+  decoder->rebind(second);
+
+  EXPECT_EQ(decoder->remainingRows(), 3);
+  decoder->next(2, output.data(), getOutputNulls, stringBuffers);
+  EXPECT_EQ(output, (std::array<int64_t, 2>{20, 21}));
+}
+
+TEST_F(EncodingViewDecoderTest, releaseDropsViewUntilRebound) {
+  const auto first = encode<int64_t>(std::vector<int64_t>{10, 11, 12});
+  const auto second = encode<int64_t>(std::vector<int64_t>{20, 21});
+  std::weak_ptr<const EncodingView> view;
+  EncodingViewDecoder decoder{
+      first,
+      pool_.get(),
+      /*bufferPool=*/nullptr,
+      [&](std::string_view encoded) {
+        std::shared_ptr<const EncodingView> encodingView =
+            createEncodingView(encoded, pool_.get());
+        view = encodingView;
+        return encodingView;
+      }};
+  ASSERT_FALSE(view.expired());
+
+  decoder.release();
+  EXPECT_TRUE(view.expired());
+
+  decoder.rebind(second);
+  EXPECT_FALSE(view.expired());
+  EXPECT_EQ(decoder.remainingRows(), 2);
+}
+
+TEST_F(EncodingViewDecoderTest, rebindUsesConstructorFactory) {
+  const auto first = encode<int64_t>(std::vector<int64_t>{10, 11, 12});
+  const auto second = encode<int64_t>(std::vector<int64_t>{20, 21});
+  uint32_t numViews{0};
+  EncodingViewDecoder decoder{
+      first,
+      pool_.get(),
+      /*bufferPool=*/nullptr,
+      [&](std::string_view encoded) {
+        ++numViews;
+        return createEncodingView(encoded, pool_.get());
+      }};
+  ASSERT_EQ(numViews, 1);
+
+  decoder.rebind(second);
+  decoder.rebind(first);
+
+  EXPECT_EQ(numViews, 3);
+}
+
 TEST_F(EncodingViewDecoderTest, scattersSequentialRows) {
   const auto stream = encodeNullable<int64_t>({10, std::nullopt, 12});
   auto decoder = makeDecoder(stream);

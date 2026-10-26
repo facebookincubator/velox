@@ -663,7 +663,8 @@ TEST_P(HashTableTest, clearBeforeInsert) {
       core::AggregationNode::Step::kPartial,
       std::vector<TypePtr>{BIGINT()},
       BIGINT(),
-      config);
+      config,
+      /*constantInputs=*/{});
 
   for (const bool clearTable : {false, true}) {
     const auto table = HashTable<true>::createForAggregation(

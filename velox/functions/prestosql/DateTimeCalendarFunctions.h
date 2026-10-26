@@ -1501,6 +1501,8 @@ struct AtTimezoneFunction {
 /// Converts a TIMESTAMP WITH TIME ZONE to the wall clock read in the target
 /// zone, dropping the zone. The zone the input carries is ignored; only its
 /// instant is used.
+/// With adjust_timestamp_to_session_timezone enabled, the result is the instant
+/// that reads as this wall clock in the session zone.
 template <typename T>
 struct AtTimezoneConvertToTimestampFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
@@ -1508,11 +1510,15 @@ struct AtTimezoneConvertToTimestampFunction {
   // Target zone when the timezone argument is constant; null otherwise.
   const tz::TimeZone* targetTimeZone_{nullptr};
 
+  // Session zone for encoding the wall clock under legacy TIMESTAMP semantics.
+  const tz::TimeZone* sessionTimeZone_{nullptr};
+
   FOLLY_ALWAYS_INLINE void initialize(
       const std::vector<TypePtr>& /*inputTypes*/,
-      const core::QueryConfig& /*config*/,
+      const core::QueryConfig& config,
       const arg_type<TimestampWithTimezone>* /*timestampWithTimezone*/,
       const arg_type<Varchar>* timezone) {
+    sessionTimeZone_ = getTimeZoneFromConfig(config);
     if (timezone) {
       targetTimeZone_ =
           tz::locateZone(std::string_view(timezone->data(), timezone->size()));
@@ -1529,6 +1535,18 @@ struct AtTimezoneConvertToTimestampFunction {
 
     Timestamp timestamp = unpackTimestampUtc(*timestampWithTimezone);
     timestamp.toTimezone(*targetTimeZone);
+    // Preserve the wall clock across session-zone encoding, resolving overlaps
+    // to the earlier instant and normalizing gaps forward.
+    if (sessionTimeZone_ != nullptr) {
+      timestamp = Timestamp{
+          sessionTimeZone_
+              ->correct_nonexistent_time(
+                  std::chrono::seconds(timestamp.getSeconds()))
+              .count(),
+          timestamp.getNanos(),
+      };
+      timestamp.toGMT(*sessionTimeZone_);
+    }
     result = timestamp;
   }
 };

@@ -447,7 +447,7 @@ class DefaultOutputBufferManagerTest : public testing::Test {
   RowTypePtr rowType_;
 };
 
-class DefaultOutputBufferManagerWithDifferentSerdeKindsTest
+class DefaultOutputBufferManagerSerdeTest
     : public DefaultOutputBufferManagerTest,
       public testing::WithParamInterface<std::string> {
  public:
@@ -456,6 +456,9 @@ class DefaultOutputBufferManagerWithDifferentSerdeKindsTest
         "Presto", "CompactRow", "UnsafeRow"};
     return params;
   }
+
+  DefaultOutputBufferManagerSerdeTest()
+      : DefaultOutputBufferManagerTest(GetParam()) {}
 };
 
 class AllDefaultOutputBufferManagerTest
@@ -484,7 +487,7 @@ class AllDefaultOutputBufferManagerTest
   const PartitionedOutputNode::Kind outputKind_;
 };
 
-TEST_P(DefaultOutputBufferManagerWithDifferentSerdeKindsTest, arbitrayBuffer) {
+TEST_P(DefaultOutputBufferManagerSerdeTest, arbitrayBuffer) {
   {
     ArbitraryBuffer buffer;
     ASSERT_TRUE(buffer.empty());
@@ -561,11 +564,9 @@ TEST_P(DefaultOutputBufferManagerWithDifferentSerdeKindsTest, arbitrayBuffer) {
 }
 
 VELOX_INSTANTIATE_TEST_SUITE_P(
-    DefaultOutputBufferManagerWithDifferentSerdeKindsTest,
-    DefaultOutputBufferManagerWithDifferentSerdeKindsTest,
-    testing::ValuesIn(
-        DefaultOutputBufferManagerWithDifferentSerdeKindsTest::
-            getTestParams()));
+    DefaultOutputBufferManagerSerdeTest,
+    DefaultOutputBufferManagerSerdeTest,
+    testing::ValuesIn(DefaultOutputBufferManagerSerdeTest::getTestParams()));
 
 TEST_F(DefaultOutputBufferManagerTest, outputType) {
   ASSERT_EQ(
@@ -583,9 +584,7 @@ TEST_F(DefaultOutputBufferManagerTest, outputType) {
       "Invalid enum value: 100");
 }
 
-TEST_P(
-    DefaultOutputBufferManagerWithDifferentSerdeKindsTest,
-    destinationBuffer) {
+TEST_P(DefaultOutputBufferManagerSerdeTest, destinationBuffer) {
   {
     ArbitraryBuffer buffer;
     DestinationBuffer destinationBuffer;
@@ -640,7 +639,7 @@ TEST_P(
     ASSERT_TRUE(buffers.immediate);
     ASSERT_TRUE(buffers.remainingBytes.empty());
     for (const auto& iobuf : buffers.data) {
-      numBytes += iobuf->length();
+      numBytes += iobuf->computeChainDataLength();
     }
     ASSERT_GT(numBytes, 0);
     ASSERT_FALSE(notified);
@@ -663,7 +662,7 @@ TEST_P(
           ASSERT_EQ(buffers.size(), 9);
           ASSERT_TRUE(remainingBytes.empty());
           for (const auto& buffer : buffers) {
-            numBytes += buffer->length();
+            numBytes += buffer->computeChainDataLength();
           }
           notified = true;
         },
@@ -698,7 +697,7 @@ TEST_P(
         destinationBuffer.getData(1, sequence, noNotify, [] { return true; });
     ASSERT_TRUE(buffers.immediate);
     ASSERT_EQ(buffers.data.size(), 1);
-    ASSERT_GT(buffers.data[0]->length(), 0);
+    ASSERT_GT(buffers.data[0]->computeChainDataLength(), 0);
     ASSERT_EQ(buffers.remainingBytes.size(), 9);
     ++sequence;
     ASSERT_EQ(destinationBuffer.acknowledge(sequence, false).size(), 1);
@@ -708,7 +707,7 @@ TEST_P(
         bytes, sequence, noNotify, [] { return true; });
     ASSERT_TRUE(buffers.immediate);
     ASSERT_EQ(buffers.data.size(), 1);
-    ASSERT_EQ(buffers.data[0]->length(), bytes);
+    ASSERT_EQ(buffers.data[0]->computeChainDataLength(), bytes);
     ASSERT_EQ(buffers.remainingBytes.size(), 8);
     ++sequence;
     ASSERT_EQ(destinationBuffer.acknowledge(sequence, false).size(), 1);
@@ -719,8 +718,8 @@ TEST_P(
         bytes + 1, sequence, noNotify, [] { return true; });
     ASSERT_TRUE(buffers.immediate);
     ASSERT_EQ(buffers.data.size(), 2);
-    ASSERT_EQ(buffers.data[0]->length(), bytes);
-    ASSERT_EQ(buffers.data[1]->length(), bytes2);
+    ASSERT_EQ(buffers.data[0]->computeChainDataLength(), bytes);
+    ASSERT_EQ(buffers.data[1]->computeChainDataLength(), bytes2);
     ASSERT_EQ(buffers.remainingBytes.size(), 6);
     sequence += 2;
     ASSERT_EQ(destinationBuffer.acknowledge(sequence, false).size(), 2);
@@ -769,14 +768,12 @@ TEST_P(
         destinationBuffer.getData(1, 0, noNotify, [] { return true; }, &buffer);
     ASSERT_TRUE(buffers.immediate);
     ASSERT_EQ(buffers.data.size(), 1);
-    ASSERT_GT(buffers.data[0]->length(), 0);
+    ASSERT_GT(buffers.data[0]->computeChainDataLength(), 0);
     ASSERT_EQ(buffers.remainingBytes.size(), 9);
   }
 }
 
-TEST_P(
-    DefaultOutputBufferManagerWithDifferentSerdeKindsTest,
-    basicPartitioned) {
+TEST_P(DefaultOutputBufferManagerSerdeTest, basicPartitioned) {
   vector_size_t size = 100;
   std::string taskId = "t0";
   auto task = initializeTask(
@@ -856,7 +853,7 @@ TEST_P(
   EXPECT_TRUE(task->isFinished());
 }
 
-TEST_P(DefaultOutputBufferManagerWithDifferentSerdeKindsTest, basicBroadcast) {
+TEST_P(DefaultOutputBufferManagerSerdeTest, basicBroadcast) {
   vector_size_t size = 100;
 
   std::string taskId = "t0";
@@ -927,7 +924,7 @@ TEST_P(DefaultOutputBufferManagerWithDifferentSerdeKindsTest, basicBroadcast) {
   EXPECT_TRUE(task->isFinished());
 }
 
-TEST_P(DefaultOutputBufferManagerWithDifferentSerdeKindsTest, basicArbitrary) {
+TEST_P(DefaultOutputBufferManagerSerdeTest, basicArbitrary) {
   const vector_size_t size = 100;
   int numDestinations = 5;
   const std::string taskId = "t0";
@@ -1010,9 +1007,7 @@ TEST_P(DefaultOutputBufferManagerWithDifferentSerdeKindsTest, basicArbitrary) {
   EXPECT_TRUE(task->isFinished());
 }
 
-TEST_P(
-    DefaultOutputBufferManagerWithDifferentSerdeKindsTest,
-    inactiveDestinationBuffer) {
+TEST_P(DefaultOutputBufferManagerSerdeTest, inactiveDestinationBuffer) {
   const vector_size_t dataSize = 1'000;
   const int maxBytes = 1;
   int numDestinations = 2;
@@ -1150,7 +1145,7 @@ TEST_P(
 }
 
 TEST_P(
-    DefaultOutputBufferManagerWithDifferentSerdeKindsTest,
+    DefaultOutputBufferManagerSerdeTest,
     broadcastWithDynamicAddedDestination) {
   vector_size_t size = 100;
 
@@ -1196,7 +1191,7 @@ TEST_P(
 }
 
 TEST_P(
-    DefaultOutputBufferManagerWithDifferentSerdeKindsTest,
+    DefaultOutputBufferManagerSerdeTest,
     arbitraryWithDynamicAddedDestination) {
   const vector_size_t size = 100;
   int numDestinations = 5;
@@ -1421,7 +1416,7 @@ TEST_P(AllDefaultOutputBufferManagerTest, outputBufferStats) {
   ASSERT_FALSE(bufferManager_->isOverutilized(taskId).has_value());
 }
 
-TEST_P(DefaultOutputBufferManagerWithDifferentSerdeKindsTest, outOfOrderAcks) {
+TEST_P(DefaultOutputBufferManagerSerdeTest, outOfOrderAcks) {
   const vector_size_t size = 100;
   const std::string taskId = "t0";
   auto task = initializeTask(
@@ -1465,9 +1460,7 @@ TEST_F(DefaultOutputBufferManagerTest, errorInQueue) {
       "Forced failure");
 }
 
-TEST_P(
-    DefaultOutputBufferManagerWithDifferentSerdeKindsTest,
-    setQueueErrorWithPendingPages) {
+TEST_P(DefaultOutputBufferManagerSerdeTest, setQueueErrorWithPendingPages) {
   const uint64_t kBufferSize = 128;
   auto iobuf = folly::IOBuf::create(kBufferSize);
   const std::string payload("setQueueErrorWithPendingPages");
@@ -1496,9 +1489,7 @@ TEST_P(
       "Forced failure");
 }
 
-TEST_P(
-    DefaultOutputBufferManagerWithDifferentSerdeKindsTest,
-    getDataOnFailedTask) {
+TEST_P(DefaultOutputBufferManagerSerdeTest, getDataOnFailedTask) {
   // Fetching data on a task which was either never initialized in the buffer
   // manager or was removed by a parallel thread must return false. The
   // `notify` callback must not be registered.
@@ -1515,9 +1506,48 @@ TEST_P(
   ASSERT_FALSE(bufferManager_->updateNumDrivers("test.0.2", 1));
 }
 
-TEST_P(
-    DefaultOutputBufferManagerWithDifferentSerdeKindsTest,
-    updateBrodcastBufferOnFailedTask) {
+// A request for a task whose buffer does not exist yet is served once the
+// buffer is created, unless its consumer stopped waiting or deleted its
+// results.
+TEST_F(DefaultOutputBufferManagerTest, getDataWhenCreated) {
+  const auto unreachable = [](std::vector<std::unique_ptr<folly::IOBuf>>,
+                              int64_t,
+                              std::vector<int64_t>) { VELOX_UNREACHABLE(); };
+  int64_t numPages{-1};
+  bufferManager_->getDataWhenCreated(
+      "t0",
+      0,
+      1'000'000'000,
+      0,
+      [&](std::vector<std::unique_ptr<folly::IOBuf>> pages,
+          int64_t /*sequence*/,
+          std::vector<int64_t> /*remainingBytes*/) { numPages = pages.size(); },
+      [] { return true; });
+  bufferManager_->getDataWhenCreated(
+      "t1", 0, 1'000'000'000, 0, unreachable, [] { return false; });
+  bufferManager_->getDataWhenCreated(
+      "t2", 0, 1'000'000'000, 0, unreachable, [] { return true; });
+  bufferManager_->deleteResults("t2", 0);
+
+  initializeTask(
+      "t0", rowType_, PartitionedOutputNode::Kind::kPartitioned, 1, 1);
+  ASSERT_EQ(-1, numPages);
+  enqueue("t0", rowType_, 10);
+  ASSERT_EQ(1, numPages);
+  noMoreData("t0");
+  fetchEndMarker("t0", 0, 1);
+  bufferManager_->removeTask("t0");
+
+  for (const auto* taskId : {"t1", "t2"}) {
+    initializeTask(
+        taskId, rowType_, PartitionedOutputNode::Kind::kPartitioned, 1, 1);
+    noMoreData(taskId);
+    fetchEndMarker(taskId, 0, 0);
+    bufferManager_->removeTask(taskId);
+  }
+}
+
+TEST_P(DefaultOutputBufferManagerSerdeTest, updateBrodcastBufferOnFailedTask) {
   // Updating broadcast buffer count in the buffer manager for a given unknown
   // task must not throw exception, instead must return FALSE.
   ASSERT_FALSE(bufferManager_->updateOutputBuffers(

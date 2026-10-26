@@ -240,7 +240,8 @@ NodeSet makeCseBorder(
       if (placed.count(expr)) {
         continue;
       }
-      if (refCount[expr] > 1) {
+      const auto* meta = Registry::metadata(expr->target());
+      if (refCount[expr] > 1 && (meta == nullptr || !meta->sharedWithinNode)) {
         auto subs = subexpressions(expr);
         bool overlaps = false;
         for (auto sub : subs) {
@@ -1589,6 +1590,334 @@ void setDuplicateConstraint(
 }
 
 } // namespace
+
+namespace {
+
+// One copy_(select(T, dim, index), src) of a group rewriteDisjointCopies
+// merges, with the view nodes between T and the copy's destination.
+struct ColumnCopy {
+  nativert::Node* copy;
+  ValueCP src;
+  int64_t index;
+  // The select and the full slices under it, outermost first.
+  std::vector<nativert::Node*> views;
+};
+
+std::optional<int64_t> intAttribute(NodeCP node, const char* name) {
+  const auto* attr = node->tryGetAttribute(name);
+  if (attr != nullptr && std::holds_alternative<int64_t>(attr->value)) {
+    return std::get<int64_t>(attr->value);
+  }
+  return std::nullopt;
+}
+
+// Whether 'node' is slice(x, start=0, end=max, step=1), the identity view
+// torch.export leaves in front of a select.
+bool isFullSlice(NodeCP node) {
+  if (node->target() != "torch.ops.aten.slice.Tensor" ||
+      node->tryGetInput("start") != nullptr ||
+      node->tryGetInput("end") != nullptr) {
+    return false;
+  }
+  const auto start = intAttribute(node, "start");
+  const auto end = intAttribute(node, "end");
+  const auto step = intAttribute(node, "step");
+  return start.value_or(0) == 0 &&
+      end.value_or(std::numeric_limits<int64_t>::max()) ==
+      std::numeric_limits<int64_t>::max() &&
+      step.value_or(1) == 1;
+}
+
+// The size list of an expand, as value ids and constants, so two expands to
+// the same symbolic sizes compare equal. Empty when the sizes cannot be read
+// or contain -1, which keeps the input's size and so may differ per operand.
+std::vector<std::string> expandSizesKey(ValueCP src) {
+  NodeCP expand = src->producer();
+  if (expand == nullptr ||
+      expand->target() != "torch.ops.aten.expand.default") {
+    return {};
+  }
+  std::vector<std::string> key;
+  if (const auto* sizes = expand->tryGetInput("size")) {
+    NodeCP pack = sizes->value->producer();
+    if (pack == nullptr || pack->target() != "prim.ListPack") {
+      return {};
+    }
+    for (const auto& element : pack->inputs()) {
+      key.push_back(fmt::format("v{}", element.value->id()));
+    }
+  } else if (const auto* attr = expand->tryGetAttribute("size");
+             attr != nullptr &&
+             std::holds_alternative<std::vector<int64_t>>(attr->value)) {
+    for (auto size : std::get<std::vector<int64_t>>(attr->value)) {
+      if (size < 0) {
+        return {};
+      }
+      key.push_back(fmt::format("c{}", size));
+    }
+  }
+  return key;
+}
+
+// Parses 'node' as a column copy into T. Returns T, or null when 'node' is not
+// copy_(select(full slices of T, dim, index), src) with every intermediate view
+// read only by the next.
+ValueCP parseColumnCopy(nativert::Node* node, ColumnCopy& out, int64_t& dim) {
+  if (node->target() != "torch.ops.aten.copy_.default" ||
+      node->outputs().size() != 1 || !node->outputs()[0]->users().empty()) {
+    return nullptr;
+  }
+  const auto* selfArg = node->tryGetInput("self");
+  const auto* srcArg = node->tryGetInput("src");
+  if (selfArg == nullptr || srcArg == nullptr ||
+      selfArg->value->users().size() != 1) {
+    return nullptr;
+  }
+  ValueCP src = srcArg->value;
+  auto* select = const_cast<nativert::Node*>(selfArg->value->producer());
+  if (select == nullptr || select->target() != "torch.ops.aten.select.int" ||
+      select->tryGetInput("index") != nullptr) {
+    return nullptr;
+  }
+  const auto selectDim = intAttribute(select, "dim");
+  const auto index = intAttribute(select, "index");
+  const auto* baseArg = select->tryGetInput("self");
+  if (!selectDim.has_value() || !index.has_value() || *index < 0 ||
+      baseArg == nullptr) {
+    return nullptr;
+  }
+  ValueCP base = baseArg->value;
+  out = ColumnCopy{node, src, *index, {select}};
+  dim = *selectDim;
+  for (auto* producer = const_cast<nativert::Node*>(base->producer());
+       producer != nullptr && isFullSlice(producer) &&
+       base->users().size() == 1;
+       producer = const_cast<nativert::Node*>(base->producer())) {
+    out.views.push_back(producer);
+    baseArg = producer->tryGetInput("self");
+    if (baseArg == nullptr) {
+      return nullptr;
+    }
+    base = baseArg->value;
+  }
+  return base;
+}
+
+} // namespace
+
+int64_t rewriteDisjointCopies(nativert::Graph& graph, WaveGraph& waveGraph) {
+  auto& types = waveGraph.types();
+  auto dtypeOf = [&](ValueCP value) -> std::optional<c10::ScalarType> {
+    const auto id = static_cast<size_t>(value->id());
+    if (id < types.types.size() && types.types[id] != nullptr) {
+      return types.types[id]->dtype();
+    }
+    return std::nullopt;
+  };
+
+  // Group the column copies by destination tensor and dimension.
+  std::map<std::pair<nativert::ValueId, int64_t>, std::vector<ColumnCopy>>
+      groups;
+  std::unordered_map<nativert::ValueId, ValueCP> targets;
+  for (auto& node : graph.nodes()) {
+    ColumnCopy copy;
+    int64_t dim = 0;
+    if (auto* target = parseColumnCopy(&node, copy, dim)) {
+      groups[{target->id(), dim}].push_back(std::move(copy));
+      targets[target->id()] = target;
+    }
+  }
+
+  int64_t removed = 0;
+  // New tensors and their dtypes. Their TensorMeta is registered once ids are
+  // final, below.
+  std::vector<std::pair<nativert::Value*, c10::ScalarType>> created;
+  for (auto& [key, copies] : groups) {
+    if (copies.size() < 2) {
+      continue;
+    }
+    ValueCP target = targets.at(key.first);
+    const auto targetDtype = dtypeOf(target);
+    const auto* targetMeta =
+        static_cast<size_t>(target->id()) < types.types.size()
+        ? types.types[target->id()]
+        : nullptr;
+    if (!targetDtype.has_value() || targetMeta == nullptr) {
+      continue;
+    }
+    const int64_t rank = targetMeta->dim();
+    int64_t dim = key.second < 0 ? key.second + rank : key.second;
+    if (dim < 0 || dim >= rank) {
+      continue;
+    }
+
+    // The writes must cover columns 0..k-1 once each, so one copy into
+    // slice(T, dim, 0, k) writes exactly what they did.
+    std::sort(copies.begin(), copies.end(), [](const auto& a, const auto& b) {
+      return a.index < b.index;
+    });
+    bool contiguous = true;
+    for (size_t i = 0; i < copies.size(); ++i) {
+      contiguous &= copies[i].index == static_cast<int64_t>(i);
+    }
+    if (!contiguous) {
+      continue;
+    }
+
+    // Stacking needs one shape for every source, and each source must have the
+    // rank of a column, so that the stack's broadcast into the slice is the
+    // per-column broadcast the copies did.
+    const auto sizesKey = expandSizesKey(copies[0].src);
+    if (sizesKey.empty() || static_cast<int64_t>(sizesKey.size()) != rank - 1) {
+      continue;
+    }
+    bool sameShape = true;
+    for (const auto& copy : copies) {
+      sameShape &= expandSizesKey(copy.src) == sizesKey;
+    }
+    if (!sameShape) {
+      continue;
+    }
+    const auto srcDtype = dtypeOf(copies[0].src);
+    if (!srcDtype.has_value()) {
+      continue;
+    }
+
+    // The merged copy runs where the last one did. That is the same program
+    // unless something between the first copy and the last reads or writes T,
+    // or writes a source after its copy read it.
+    std::unordered_map<NodeCP, int32_t> pos;
+    std::vector<NodeCP> order;
+    for (const auto& node : graph.nodes()) {
+      pos[&node] = static_cast<int32_t>(order.size());
+      order.push_back(&node);
+    }
+    std::unordered_set<NodeCP> groupNodes;
+    int32_t first = std::numeric_limits<int32_t>::max();
+    int32_t last = -1;
+    nativert::Node* lastCopy = nullptr;
+    for (const auto& copy : copies) {
+      groupNodes.insert(copy.copy);
+      groupNodes.insert(copy.views.begin(), copy.views.end());
+      const auto copyPos = pos.at(copy.copy);
+      first = std::min(first, copyPos);
+      if (copyPos > last) {
+        last = copyPos;
+        lastCopy = copy.copy;
+      }
+    }
+    ValueCP targetBase = viewStorageBase(target);
+    bool safe = true;
+    for (auto* user : target->users()) {
+      if (groupNodes.count(user) == 0 && pos.at(user) < last) {
+        safe = false;
+      }
+    }
+    for (const auto& copy : copies) {
+      ValueCP srcBase = viewStorageBase(copy.src);
+      if (srcBase == targetBase) {
+        safe = false;
+        break;
+      }
+      for (int32_t i = pos.at(copy.copy) + 1; safe && i < last; ++i) {
+        if (groupNodes.count(order[i]) > 0) {
+          continue;
+        }
+        for (auto* mutated : dataMutatedInputs(order[i])) {
+          if (viewStorageBase(mutated) == srcBase ||
+              viewStorageBase(mutated) == targetBase) {
+            safe = false;
+            break;
+          }
+        }
+      }
+    }
+    if (!safe) {
+      continue;
+    }
+
+    auto mutableValue = [](ValueCP value) {
+      return const_cast<nativert::Value*>(value);
+    };
+    auto newTensor = [&](nativert::Node* node, c10::ScalarType dtype) {
+      auto* value = node->addOutput(
+          graph.getUniqueValueName(),
+          nativert::Type(nativert::Type::Kind::Tensor));
+      created.emplace_back(value, dtype);
+      return value;
+    };
+    std::vector<nativert::NamedArgument> elements;
+    for (size_t i = 0; i < copies.size(); ++i) {
+      elements.push_back(
+          {"e" + std::to_string(i), mutableValue(copies[i].src)});
+    }
+    auto* pack = graph.createNode("prim.ListPack", std::move(elements));
+    graph.insertBefore(pack, lastCopy);
+    auto* list = pack->addOutput(
+        graph.getUniqueValueName(),
+        nativert::Type(nativert::Type::Kind::TensorList));
+
+    auto* stack =
+        graph.createNode("torch.ops.aten.stack.default", {{"tensors", list}});
+    stack->addAttribute({"dim", dim});
+    graph.insertBefore(stack, lastCopy);
+    auto* stacked = newTensor(stack, *srcDtype);
+
+    auto* slice = graph.createNode(
+        "torch.ops.aten.slice.Tensor", {{"self", mutableValue(target)}});
+    slice->addAttribute({"dim", dim});
+    slice->addAttribute({"start", static_cast<int64_t>(0)});
+    slice->addAttribute({"end", static_cast<int64_t>(copies.size())});
+    slice->addAttribute({"step", static_cast<int64_t>(1)});
+    graph.insertBefore(slice, lastCopy);
+    auto* columns = newTensor(slice, *targetDtype);
+
+    auto* merged = graph.createNode(
+        "torch.ops.aten.copy_.default", {{"self", columns}, {"src", stacked}});
+    merged->addAttribute({"non_blocking", false});
+    graph.insertBefore(merged, lastCopy);
+    newTensor(merged, *targetDtype);
+
+    for (auto& copy : copies) {
+      copy.copy->destroy();
+      for (auto* view : copy.views) {
+        view->destroy();
+      }
+    }
+    removed += static_cast<int64_t>(copies.size());
+    LOG(INFO) << "rewriteDisjointCopies: merged " << copies.size()
+              << " column copies into " << target->name() << " along dim "
+              << dim;
+  }
+  if (removed > 0) {
+    // The frame is sized by the value count, so ids have to stay dense after
+    // the views and copies are gone. Renumber, and move each value's
+    // TensorMeta and constraint to its new id.
+    std::vector<std::pair<ValueCP, nativert::ValueId>> values;
+    for (const auto* value : graph.values()) {
+      values.emplace_back(value, value->id());
+    }
+    graph.renumberValues();
+    ValueTypes renumbered;
+    renumbered.types.resize(graph.numValues(), nullptr);
+    renumbered.constraints.resize(graph.numValues());
+    for (const auto& [value, oldId] : values) {
+      const auto id = static_cast<size_t>(oldId);
+      if (id < types.types.size()) {
+        renumbered.types.at(value->id()) = types.types[id];
+      }
+      if (id < types.constraints.size()) {
+        renumbered.constraints.at(value->id()) = types.constraints[id];
+      }
+    }
+    types.types = std::move(renumbered.types);
+    types.constraints = std::move(renumbered.constraints);
+    for (const auto& [value, dtype] : created) {
+      waveGraph.registerTensorMeta(value, dtype);
+    }
+  }
+  return removed;
+}
 
 int64_t duplicateMetadataOps(
     nativert::Graph& graph,

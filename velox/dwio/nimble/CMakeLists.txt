@@ -81,11 +81,16 @@ add_subdirectory(compression)
 add_subdirectory(encodings)
 add_subdirectory(index)
 add_subdirectory(tablet)
-add_subdirectory(velox)
+add_subdirectory(selective)
+# Must follow selective: nimble_velox_reader_factory links
+# nimble_velox_selective.
+add_subdirectory(reader)
+add_subdirectory(stats)
 add_subdirectory(writer)
 add_subdirectory(serializer)
 add_subdirectory(tools)
 
 if(NIMBLE_BUILD_TESTING)
   add_subdirectory(fuzzer)
+  add_subdirectory(tests)
 endif()

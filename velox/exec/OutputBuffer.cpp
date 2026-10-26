@@ -438,13 +438,10 @@ void OutputBuffer::updateStatsWithFreedPagesLocked(
 }
 
 void OutputBuffer::updateTotalBufferedBytesMsLocked() {
-  const auto nowMs = getCurrentTimeMs();
+  const auto deltaMs = bufferWatch_.lap().count();
   if (bufferedBytes_ > 0) {
-    const auto deltaMs = nowMs - bufferStartMs_;
     totalBufferedBytesMs_ += bufferedBytes_ * deltaMs;
   }
-
-  bufferStartMs_ = nowMs;
 }
 
 bool OutputBuffer::enqueue(

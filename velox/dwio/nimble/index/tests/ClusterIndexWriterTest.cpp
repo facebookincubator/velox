@@ -30,10 +30,12 @@
 #include "velox/dwio/nimble/index/ClusterIndex.h"
 #include "velox/dwio/nimble/index/ClusterIndexConfig.h"
 #include "velox/dwio/nimble/index/ClusterIndexFactory.h"
+#include "velox/dwio/nimble/index/HierarchicalClusterIndex.h"
 #include "velox/dwio/nimble/index/HierarchicalClusterIndexWriter.h"
 #include "velox/dwio/nimble/index/IndexConfig.h"
 #include "velox/dwio/nimble/index/IndexKeyEncoder.h"
 #include "velox/dwio/nimble/index/KeyChunkDecoder.h"
+#include "velox/dwio/nimble/index/KeyComparator.h"
 #include "velox/dwio/nimble/index/SortOrder.h"
 #include "velox/dwio/nimble/index/tests/ClusterIndexTestUtils.h"
 #include "velox/dwio/nimble/tablet/MetadataInput.h"
@@ -51,6 +53,14 @@ velox::BufferPtr toBufferPtr(
   std::memcpy(buffer->asMutable<char>(), data.data(), data.size());
   return buffer;
 }
+
+// Orders keys in reverse bytewise order.
+class ReverseKeyComparator final : public KeyComparator {
+ public:
+  int compare(std::string_view lhs, std::string_view rhs) const override {
+    return rhs.compare(lhs);
+  }
+};
 
 class ClusterIndexWriterTest : public testing::Test,
                                public velox::test::VectorTestBase {
@@ -344,7 +354,15 @@ TEST_F(ClusterIndexWriterTest, keyChunkCompressionProducesRequestedChunkCodec) {
     auto decoded = decodeKeyChunk(
         std::make_unique<velox::dwio::common::SeekableArrayInputStream>(
             keyStreamData.data(), keyStreamData.size()),
-        createFlatKeyReader,
+        [](std::string_view encodedKeys,
+           std::function<void*(uint32_t)> stringBufferFactory,
+           velox::memory::MemoryPool* pool) {
+          return createFlatKeyReader(
+              encodedKeys,
+              std::move(stringBufferFactory),
+              /*comparator=*/nullptr,
+              pool);
+        },
         decodeBuffer,
         pool_.get());
     ASSERT_NE(decoded, nullptr);
@@ -1201,11 +1219,13 @@ TEST_F(ClusterIndexWriterTest, hierarchicalKeyChunksUseIntegralColumns) {
   EXPECT_EQ(descriptor->name, kHierarchicalClusterIndexName);
   ASSERT_EQ(metadata.size(), 2);
 
-  Section rootSection{MetadataBuffer(
-      MetadataBuffer::decompress(
-          toBufferPtr(metadata.at(metadata.size() - 1), pool_.get()),
-          CompressionType::Uncompressed,
-          pool_.get()))};
+  const auto makeRootSection = [&]() {
+    return Section{MetadataBuffer(
+        MetadataBuffer::decompress(
+            toBufferPtr(metadata.at(metadata.size() - 1), pool_.get()),
+            CompressionType::Uncompressed,
+            pool_.get()))};
+  };
   auto file =
       std::make_shared<velox::InMemoryReadFile>(keyStreamData + metadata.at(0));
   velox::io::ReaderOptions ioOptions{pool_.get()};
@@ -1214,9 +1234,20 @@ TEST_F(ClusterIndexWriterTest, hierarchicalKeyChunksUseIntegralColumns) {
   IndexLookup::Options indexOptions{.file = file, .ioOptions = &ioOptions};
   const auto index =
       clusterIndexFactory(descriptor->name)
-          .createReader(std::move(rootSection), pool_.get(), indexOptions);
+          .createReader(makeRootSection(), pool_.get(), indexOptions);
   EXPECT_NE(
       dynamic_cast<const HierarchicalClusterIndex*>(index.get()), nullptr);
+
+  {
+    // Hierarchical key chunks keep bytewise order, so a key comparator fails.
+    const ReverseKeyComparator comparator;
+    auto comparatorOptions = indexOptions;
+    comparatorOptions.keyComparator = &comparator;
+    NIMBLE_ASSERT_THROW(
+        HierarchicalClusterIndex::create(
+            makeRootSection(), pool_.get(), comparatorOptions),
+        "Hierarchical cluster index requires bytewise key order");
+  }
 
   ASSERT_EQ(index->layout(/*detail=*/true).partitions.at(0).numChunks, 2);
 

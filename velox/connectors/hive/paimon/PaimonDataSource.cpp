@@ -18,12 +18,13 @@
 #include "velox/common/Casts.h"
 #include "velox/connectors/hive/paimon/PaimonConnectorSplit.h"
 #include "velox/connectors/hive/paimon/PaimonSplitReader.h"
+#include "velox/connectors/hive/paimon/PaimonTableHandle.h"
 
 namespace facebook::velox::connector::hive::paimon {
 
 PaimonDataSource::PaimonDataSource(
     const RowTypePtr& outputType,
-    const ConnectorTableHandlePtr& tableHandle,
+    const std::shared_ptr<const PaimonTableHandle>& tableHandle,
     const ColumnHandleMap& assignments,
     FileHandleFactory* fileHandleFactory,
     folly::Executor* ioExecutor,
@@ -36,21 +37,40 @@ PaimonDataSource::PaimonDataSource(
           fileHandleFactory,
           ioExecutor,
           connectorQueryCtx,
-          paimonConfig) {}
+          paimonConfig),
+      paimonTableHandle_(tableHandle) {
+  // TODO: Implement primary-key read semantics.
+  VELOX_USER_CHECK_EQ(
+      tableHandle->tableType(),
+      PaimonTableType::kAppendOnly,
+      "Paimon same-schema append reader does not support primary-key tables; "
+      "primary-key reading is not implemented yet");
+}
 
 void PaimonDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
-  paimonSplit_ = checkedPointerCast<PaimonConnectorSplit>(split);
-
-  if (!paimonSplit_->rawConvertible()) {
-    VELOX_NYI(
-        "Paimon merge-on-read is not yet implemented. "
-        "Primary-key tables with rawConvertible=false require merge-on-read "
-        "to deduplicate records across LSM levels.");
+  auto paimonSplit = checkedPointerCast<PaimonConnectorSplit>(split);
+  VELOX_USER_CHECK_EQ(
+      paimonSplit->tableType(),
+      paimonTableHandle_->tableType(),
+      "Paimon split table type does not match table handle");
+  VELOX_USER_CHECK(
+      paimonSplit->rawConvertible(),
+      "Paimon same-schema append reader requires rawConvertible=true; "
+      "merge-on-read and data-evolution column merging are not implemented yet");
+  for (const auto& file : paimonSplit->dataFiles()) {
+    VELOX_USER_CHECK(
+        !file.deletionFile,
+        "Paimon reader does not support deletion vectors; "
+        "position-based deletion filtering is not implemented yet");
+    VELOX_USER_CHECK_EQ(
+        file.type,
+        PaimonDataFile::Type::kData,
+        "Paimon reader requires data files; changelog reading is not implemented yet");
   }
+  paimonSplit_ = std::move(paimonSplit);
 
-  // Create a FileConnectorSplit for the first data file and delegate to
-  // FileDataSource::addSplit(), which calls createSplitReader() to create
-  // a PaimonSplitReader that handles all files internally.
+  // Use the first file to enter the FileDataSource scan pipeline;
+  // PaimonSplitReader keeps the full file list.
   const auto& firstFile = paimonSplit_->dataFiles().front();
   auto firstFileSplit = std::make_shared<FileConnectorSplit>(
       paimonSplit_->connectorId,
@@ -70,7 +90,7 @@ std::unique_ptr<FileSplitReader> PaimonDataSource::createSplitReader() {
   return std::make_unique<PaimonSplitReader>(
       split_,
       paimonSplit_,
-      tableHandle_,
+      paimonTableHandle_,
       &partitionKeys_,
       connectorQueryCtx_,
       fileConfig_,
@@ -80,7 +100,17 @@ std::unique_ptr<FileSplitReader> PaimonDataSource::createSplitReader() {
       ioStats_,
       fileHandleFactory_,
       ioExecutor_,
-      scanSpec_);
+      fileScanState_->scanSpec);
+}
+
+void PaimonDataSource::setFromDataSource(
+    std::unique_ptr<DataSource> sourceUnique) {
+  auto* source = checkedPointerCast<PaimonDataSource>(sourceUnique.get());
+  paimonSplit_ = std::move(source->paimonSplit_);
+  FileDataSource::setFromDataSource(std::move(sourceUnique));
+  // Rebind the lazy reader's borrowed stats pointer after ownership transfer.
+  checkedPointerCast<PaimonSplitReader>(splitReader_.get())
+      ->setRuntimeStats(runtimeStats_);
 }
 
 } // namespace facebook::velox::connector::hive::paimon

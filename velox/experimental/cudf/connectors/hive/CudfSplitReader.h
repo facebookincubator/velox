@@ -148,6 +148,13 @@ class CudfSplitReader : public NvtxHelper {
   // file is ignored.
   void setupCudfDataSource();
 
+  // Returns whether the session ignores missing files.
+  bool ignoreMissingFiles() const;
+
+  // Marks the split empty after an ignored missing data file, dropping its
+  // data source and footer metadata.
+  void markSplitEmpty();
+
   // Create the parquet reader and select the row group passes to read.
   void createCudfReader();
 
@@ -272,6 +279,7 @@ class CudfSplitReader : public NvtxHelper {
   bool emptySplit_{false};
 
   struct TotalScanTimeCallbackData {
+    // SteadyTime reading in microseconds when the chunk read started.
     uint64_t startTimeUs;
     std::shared_ptr<io::IoStatistics> ioStatistics;
   };

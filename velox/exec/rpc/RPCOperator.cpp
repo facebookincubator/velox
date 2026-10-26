@@ -32,6 +32,22 @@ namespace facebook::velox::exec::rpc {
 namespace {
 constexpr int64_t kLegacyFixedLimit{200};
 constexpr int64_t kDefaultAdaptiveHardLimit{1'000'000};
+
+// Bounds a per-row future by 'timeout' and stamps 'rowId' on its response.
+folly::SemiFuture<RPCResponse> wrapRowFuture(
+    folly::SemiFuture<RPCResponse> future,
+    int64_t rowId,
+    std::chrono::milliseconds timeout) {
+  return std::move(future)
+      .within(timeout)
+      .deferValue([rowId](RPCResponse resp) {
+        resp.rowId = rowId;
+        return resp;
+      })
+      .deferError([](folly::exception_wrapper error) {
+        return folly::makeSemiFuture<RPCResponse>(std::move(error));
+      });
+}
 } // namespace
 
 RPCOperator::RPCOperator(
@@ -57,7 +73,8 @@ RPCOperator::RPCOperator(
       queryConfig.rpcCongestionMinWindow(),
       queryConfig.rpcCongestionStepCoef(),
       queryConfig.rpcCongestionMaxWindow(),
-      queryConfig.rpcCongestionBatchStartWindow());
+      queryConfig.rpcCongestionBatchStartWindow(),
+      queryConfig.rpcCongestionAsyncGrowthMaxWindow());
 }
 
 RPCOperator::~RPCOperator() {
@@ -139,6 +156,10 @@ void RPCOperator::initialize() {
   const auto& queryConfig = driverCtx->queryConfig();
   function_->initialize(
       queryConfig, inputTypes, constantInputs, rpcNode_->streamingMode());
+  capacityRetryEnabled_ =
+      rpcNode_->streamingMode() == RPCStreamingMode::kPerRow &&
+      function_->mayReturnCapacityRetries();
+  state_->setCapacityRetryEnabled(capacityRetryEnabled_);
   requiresRowInspectionBeforeAdmission_ =
       function_->requiresRowInspectionBeforeAdmission();
   if (!requiresRowInspectionBeforeAdmission_) {
@@ -329,6 +350,10 @@ void RPCOperator::addInput(RowVectorPtr input) {
     pendingCursor_ = 0;
     pendingBatchIndex_ = state_->storeInputBatch(
         std::move(flattenedColumns), static_cast<int64_t>(pendingNumRows_));
+    if (capacityRetryEnabled_) {
+      state_->setInputBatchArguments(
+          pendingBatchIndex_, pendingArgs_, pendingNumRows_);
+    }
     dispatchRowsUnderAdmission();
   } else {
     // BATCH: function accumulates typed data internally.
@@ -352,7 +377,60 @@ void RPCOperator::addInput(RowVectorPtr input) {
   }
 }
 
+void RPCOperator::dispatchDueRetries() {
+  const auto feedback = state_->takeRetryFeedback();
+  if (feedback.overloaded) {
+    recordCongestion(
+        AsyncRPCFunction::CongestionSignal::kOverloaded,
+        /*roundTripTimesNs=*/{},
+        /*successUnitsByEpoch=*/{},
+        feedback.sharedOverloadHandled);
+  }
+  // Fails rows past their budget now, even when no slot is free below.
+  state_->takeDueRetries(0);
+  while (true) {
+    const int64_t want =
+        std::min(state_->dispatchHeadroom(), state_->numDueRetries());
+    if (want <= 0) {
+      return;
+    }
+    auto reserved = limiter_->tryAcquireUpTo(want);
+    if (reserved.empty()) {
+      return;
+    }
+    // Rows past their budget fail instead of dispatching, so the take can
+    // return fewer rows than were reserved. Each unused token in 'reserved'
+    // releases its slot when destroyed at the end of this iteration.
+    const auto retries =
+        state_->takeDueRetries(static_cast<int64_t>(reserved.size()));
+    for (size_t i = 0; i < retries.size(); ++i) {
+      const auto& retry = retries[i];
+      auto [arguments, numRows] =
+          state_->inputBatchArguments(retry.location.batchIndex);
+      SelectivityVector row(numRows, false);
+      row.setValid(retry.location.rowIndex, true);
+      row.updateBounds();
+      auto futures = function_->dispatchPerRow(row, arguments);
+      VELOX_CHECK_EQ(
+          futures.size(),
+          1,
+          "dispatchPerRow returned {} futures for one retried row",
+          futures.size());
+      for (auto& [_, future] : futures) {
+        state_->addRetriedRow(
+            state_,
+            retry,
+            wrapRowFuture(std::move(future), retry.rowId, kBatchRpcTimeout),
+            limiter_->makeLease(std::move(reserved[i])));
+      }
+    }
+  }
+}
+
 void RPCOperator::dispatchRowsUnderAdmission() {
+  if (capacityRetryEnabled_) {
+    dispatchDueRetries();
+  }
   while (hasPendingRows()) {
     // Both the per-driver window and shared admission capacity must have room.
     const int64_t windowHeadroom = state_->dispatchHeadroom();
@@ -397,21 +475,11 @@ void RPCOperator::dispatchRowsUnderAdmission() {
       // applies canonical overload feedback and releases admission.
       auto admissionLease =
           limiter_->makeLease(std::move(reserved[reservedIndex++]));
-      auto wrapped =
-          std::move(future)
-              .within(kBatchRpcTimeout)
-              .deferValue([rowId](RPCResponse resp) {
-                resp.rowId = rowId;
-                return resp;
-              })
-              .deferError([](folly::exception_wrapper error) {
-                return folly::makeSemiFuture<RPCResponse>(std::move(error));
-              });
       state_->addPendingRow(
           state_,
           rowId,
           RPCState::RowLocation{pendingBatchIndex_, originalRowIndex},
-          std::move(wrapped),
+          wrapRowFuture(std::move(future), rowId, kBatchRpcTimeout),
           std::move(admissionLease));
     }
     pendingCursor_ += numRowsInChunk;
@@ -828,8 +896,21 @@ void RPCOperator::recordCongestion(
     }
   } else if (signal == AsyncRPCFunction::CongestionSignal::kSuccess) {
     state_->onUnitSamples(roundTripTimesNs);
+  } else if (signal == AsyncRPCFunction::CongestionSignal::kSuccessNoLatency) {
+    // No usable latency (async-job queue time dominates), so the gradient gets
+    // nothing — but clean completions still prove capacity. Grow on completion
+    // count; on the batch path there is one measured round trip per completed
+    // flush, i.e. one unit per completed batch. RPCState ignores this in
+    // PER_ROW mode, whose window is shrink-only by design.
+    state_->onUnitCleanCompletions(
+        static_cast<int64_t>(roundTripTimesNs.size()));
   }
 
+  // The shared limiter needs a service-horizon sample for fractional pacing
+  // even when the driver-local latency gradient cannot use the elapsed time.
+  // Keep these two learning signals independent: kSuccessNoLatency may grow
+  // the local BATCH window by completion count while the shared limiter learns
+  // the observed service duration.
   int64_t serviceHorizonNs = roundTripTimesNs.empty()
       ? 0
       : *std::min_element(roundTripTimesNs.begin(), roundTripTimesNs.end());
@@ -967,16 +1048,16 @@ RowVectorPtr RPCOperator::getOutput() {
 }
 
 void RPCOperator::endBlockWait() {
-  if (!blockWaitStartNs_.has_value()) {
+  if (!blockWaitWatch_.has_value()) {
     return;
   }
-  const auto elapsed = getCurrentTimeNano() - blockWaitStartNs_.value();
+  const auto elapsed = blockWaitWatch_->elapsed().count();
   if (blockWaitIsBackpressure_) {
     totalBackpressureWaitNanos_ += elapsed;
   } else {
     totalBlockWaitNanos_ += elapsed;
   }
-  blockWaitStartNs_ = std::nullopt;
+  blockWaitWatch_.reset();
 }
 
 exec::BlockingReason RPCOperator::park(
@@ -984,7 +1065,7 @@ exec::BlockingReason RPCOperator::park(
     ContinueFuture waitFuture,
     bool isBackpressure) {
   *future = std::move(waitFuture);
-  blockWaitStartNs_ = getCurrentTimeNano();
+  blockWaitWatch_.emplace();
   blockWaitIsBackpressure_ = isBackpressure;
   return exec::BlockingReason::kWaitForRPC;
 }
@@ -1026,10 +1107,24 @@ std::optional<exec::BlockingReason> RPCOperator::tryClaimOrParkOnRow(
       claimedRows_.push_back(std::move(*claimed));
       return exec::BlockingReason::kNotBlocked;
     case RPCState::ClaimResult::kMustWait:
+      // Nothing in flight here, so no completion can wake this driver; its
+      // buffered rows wait for a shared slot, not for the next retry's timer.
+      if (capacityRetryEnabled_ && state_->numInFlight() == 0 &&
+          hasPendingRows()) {
+        return parkOnAdmission(future);
+      }
+      // A retry that became due while this driver was deciding to park goes
+      // now if its window and the shared limiter have room, rather than after
+      // an unrelated call completes.
+      if (state_->numDueRetries() > 0 && state_->dispatchHeadroom() > 0 &&
+          limiter_->available() > 0) {
+        return exec::BlockingReason::kNotBlocked;
+      }
       return park(future, std::move(waitFuture), /*isBackpressure=*/false);
     case RPCState::ClaimResult::kIdle:
       VELOX_CHECK(
-          hasPendingRows(), "PER_ROW state is idle with no undispatched input");
+          hasPendingRows() || state_->numDueRetries() > 0,
+          "PER_ROW state is idle with no undispatched input");
       return parkOnAdmission(future);
     case RPCState::ClaimResult::kFinished:
       return std::nullopt;
@@ -1079,11 +1174,13 @@ exec::BlockingReason RPCOperator::blockedInPerRow(ContinueFuture* future) {
   }
 
   // Nothing ready. With buffered rows and no local RPC in flight, only shared
-  // admission can wake this operator.
-  if (state_->numInFlight() > 0 || hasUndispatchableWork()) {
+  // admission can wake this operator. Rows waiting for a capacity retry park
+  // on the state, which wakes the driver when the first one is due.
+  const bool hasRetries = state_->hasRetries();
+  if (state_->numInFlight() > 0 || hasRetries || hasUndispatchableWork()) {
     // Prefer this driver's own completion; the admission queue depends on
     // another operator releasing capacity.
-    if (state_->numInFlight() > 0) {
+    if (state_->numInFlight() > 0 || hasRetries) {
       if (auto reason = tryClaimOrParkOnRow(future)) {
         return reason.value();
       }
@@ -1275,13 +1372,12 @@ void RPCOperator::recordErrorKind(velox::rpc::RPCErrorKind kind) {
     case velox::rpc::RPCErrorKind::kBackendError:
       ++numErrorsBackend_;
       break;
+    case velox::rpc::RPCErrorKind::kInvalidRequest:
+      ++numErrorsInvalidRequest_;
+      break;
     case velox::rpc::RPCErrorKind::kNone:
     case velox::rpc::RPCErrorKind::kNullInput:
     case velox::rpc::RPCErrorKind::kEmptyResponse:
-    // A rejected request is a permanent client-side error, not a congestion
-    // signal, so it is not counted among the overload kinds above (it is
-    // tracked separately via a dedicated invalid-request counter).
-    case velox::rpc::RPCErrorKind::kInvalidRequest:
       break;
     case velox::rpc::RPCErrorKind::kUnset:
     case velox::rpc::RPCErrorKind::kInternalError:
@@ -1401,6 +1497,10 @@ void RPCOperator::recordRuntimeStats() {
           kRpcCongestionOverloadShrinks,
           RuntimeCounter(snapshot.numOverloadShrinks));
     }
+    if (snapshot.numCapacityRetries > 0) {
+      lockedStats->addRuntimeStat(
+          kRpcCapacityRetries, RuntimeCounter(snapshot.numCapacityRetries));
+    }
     if (snapshot.baselineRttNs > 0) {
       lockedStats->addRuntimeStat(
           kRpcBaselineRttNanos,
@@ -1435,6 +1535,10 @@ void RPCOperator::recordRuntimeStats() {
   if (numErrorsBackend_ > 0) {
     lockedStats->addRuntimeStat(
         kRpcErrorKindBackendError, RuntimeCounter(numErrorsBackend_));
+  }
+  if (numErrorsInvalidRequest_ > 0) {
+    lockedStats->addRuntimeStat(
+        kRpcErrorKindInvalidRequest, RuntimeCounter(numErrorsInvalidRequest_));
   }
   if (numErrorsInternal_ > 0) {
     lockedStats->addRuntimeStat(
