@@ -402,6 +402,11 @@ NimbleIndexProjector::co_projectRows(
                               stripeOffset,
                               /*resolveCanonicalStreams=*/false)
                               .streams;
+    streamReader_->setStreams(streams);
+    // Release the views before the stripe's streams go away.
+    SCOPE_EXIT {
+      streamReader_->reset();
+    };
     // co_read() takes the output by reference and may reassign it, so it gets
     // its own handle rather than result.values; the check below holds it to
     // filling the vector this function allocated.
@@ -411,7 +416,6 @@ NimbleIndexProjector::co_projectRows(
       const auto outputOffset = result.responses[range.requestIndex].offset +
           stripeOutputRows[range.requestIndex];
       co_await streamReader_->co_read(
-          streams,
           std::span<const RowRange>{&range.rowRange, 1},
           outputOffset,
           outputVector);
@@ -1622,6 +1626,16 @@ folly::IOBuf assembleStripeSlice(
   return std::move(*serializedHeader);
 }
 
+// Builds a header-only kTablet IOBuf for a request cut short before any of its
+// rows were read: no rows, an empty row range, and the resume key.
+folly::IOBuf assembleResumeKeySlice(std::string resumeKey) {
+  return serde::createTabletChunkHeader(
+      serde::TabletChunkHeader{
+          .rowRange = {},
+          .resumeKey = std::move(resumeKey),
+      });
+}
+
 } // namespace
 
 void NimbleIndexProjector::buildResult(SerializedResult& result) {
@@ -1670,6 +1684,12 @@ void NimbleIndexProjector::buildResult(SerializedResult& result) {
           packedRelativeRange,
           packedStripe.body.cloneAsValue(),
           isLastSlice ? response.resumeKey : std::nullopt));
+    }
+  }
+
+  for (auto& response : result.responses) {
+    if (response.slices.empty() && response.resumeKey.has_value()) {
+      response.slices.emplace_back(assembleResumeKeySlice(*response.resumeKey));
     }
   }
 }
