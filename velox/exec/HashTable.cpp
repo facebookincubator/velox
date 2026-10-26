@@ -501,9 +501,9 @@ void HashTable<ignoreNullKeys>::groupProbeWithPrefetch(HashLookup& lookup) {
   const int32_t numProbes = lookup.rows.size();
   const vector_size_t* rows = lookup.rows.data();
   const uint64_t* hashes = lookup.hashes.data();
-  // Prefetch the row tail to overlap the accumulator access with probe work.
-  // Narrow rows (< 64 bytes) are skipped: on x86 microbenchmarks the extra
-  // prefetch there was a net loss.
+  // A group by keeps its accumulators behind the key, often on the next cache
+  // line. Prefetch the end of the row to overlap that access with probe work.
+  // Skip rows narrower than 64 bytes, where the microbenchmarks show no gain.
   const int32_t rowSize = rows_->fixedRowSize();
   const bool prefetchRowEnd = rowSize >= 64;
   for (int32_t probeIndex = 0; probeIndex < numProbes;
