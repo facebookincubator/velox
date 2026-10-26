@@ -420,6 +420,20 @@ CudfHiveDataSource::CudfHiveDataSource(
     optimizedRemainingFilter_ = nullptr;
   }
   if (optimizedRemainingFilter_) {
+    // The local config above carries no cast setting, so a cast from VARCHAR
+    // compiled against it follows Presto's strict rules in a session that sets
+    // legacy_cast or cast_string_to_floating_point_lenient_inf_nan, and a
+    // TRY_CAST would drop the rows those settings accept.
+    // TODO: Keep such a scan on the CPU data source instead, once the
+    // connector sees the session config and checks the filter the way
+    // canExprRunOnGpu() does before choosing a data source
+    // (facebookincubator/velox#19476, facebookincubator/velox#18238).
+    if (containsCastFromVarchar(
+            optimizedRemainingFilter_, /*floatingPointOnly=*/false)) {
+      VELOX_UNSUPPORTED(
+          "Remaining filter with a cast from VARCHAR is not supported: {}",
+          optimizedRemainingFilter_->toString());
+    }
     // Add fields referenced by the filter to the columns to read. Collect from
     // the optimized expression since folding may drop branches and the columns
     // they reference. Read-column order does not affect results: the data
