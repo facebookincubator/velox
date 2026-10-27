@@ -171,6 +171,10 @@ class DecimalRoundFunction : public exec::VectorFunction {
       std::string name)
       : factors_(factors), name_(std::move(name)) {}
 
+  bool supportsFlatNoNullsFastPath() const override {
+    return true;
+  }
+
   void apply(
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,

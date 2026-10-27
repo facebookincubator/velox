@@ -225,8 +225,81 @@ TEST_F(DecimalRoundTest, sharedExtremeScaleAndErrors) {
         makeNullableFlatVector<int128_t>(test.expected, DECIMAL(38, 0)));
     if (test.overflows) {
       VELOX_ASSERT_USER_THROW(
-          evaluate(call, makeRowVector({input})), "Decimal overflow");
+          evaluate(call, makeRowVector({input})),
+          fmt::format("Decimal overflow in {}.", test.name));
     }
+  }
+}
+
+TEST_F(DecimalRoundTest, sharedFlatNoNullsFastPath) {
+  struct TestCase {
+    TypePtr inputType;
+    TypePtr resultType;
+    int64_t input;
+    std::vector<std::pair<int64_t, int64_t>> expected;
+  };
+  const std::vector<TestCase> cases{
+      {DECIMAL(3, 1), DECIMAL(3, 0), 25, {{3, -3}, {3, -2}, {2, -3}}},
+      {DECIMAL(18, 0), DECIMAL(19, 0), 25, {{25, -25}, {25, -25}, {25, -25}}},
+      {DECIMAL(19, 2), DECIMAL(18, 0), 250, {{3, -3}, {3, -2}, {2, -3}}},
+      {DECIMAL(19, 1), DECIMAL(19, 0), 25, {{3, -3}, {3, -2}, {2, -3}}}};
+  const std::vector<const char*> names{
+      kRoundDecimal, kCeilDecimal, kFloorDecimal};
+  const auto decimalVector = [&](const TypePtr& type,
+                                 int64_t positive,
+                                 int64_t negative) -> VectorPtr {
+    if (type->isShortDecimal()) {
+      return makeFlatVector<int64_t>({positive, negative, 0}, type);
+    }
+    return makeFlatVector<int128_t>({positive, negative, 0}, type);
+  };
+  for (const auto& test : cases) {
+    for (size_t i = 0; i < names.size(); ++i) {
+      SCOPED_TRACE(
+          fmt::format(
+              "{}: {} -> {}",
+              names[i],
+              test.inputType->toString(),
+              test.resultType->toString()));
+      const auto call = createDecimalRounding(
+          test.inputType, test.resultType, 0, false, names[i]);
+      exec::ExprSet expressions({call}, &execCtx_);
+      ASSERT_TRUE(expressions.exprs()[0]->supportsFlatNoNullsFastPath());
+      const auto input = decimalVector(test.inputType, test.input, -test.input);
+      const auto expected = decimalVector(
+          test.resultType, test.expected[i].first, test.expected[i].second);
+      for (bool constant : {false, true}) {
+        const auto row = makeRowVector(
+            {constant ? BaseVector::wrapInConstant(3, 0, input) : input});
+        exec::EvalCtx context(&execCtx_, &expressions, row.get());
+        ASSERT_TRUE(context.inputFlatNoNulls());
+        ASSERT_TRUE(context.throwOnError());
+        ASSERT_TRUE(queryCtx_->queryConfig().exprEvalFlatNoNulls());
+        std::vector<VectorPtr> results(1);
+        expressions.eval(SelectivityVector(3), context, results);
+        ASSERT_TRUE(
+            results[0]->isFlatEncoding() || results[0]->isConstantEncoding());
+        facebook::velox::test::assertEqualVectors(
+            constant ? BaseVector::wrapInConstant(3, 0, expected) : expected,
+            results[0]);
+      }
+    }
+  }
+}
+
+TEST_F(DecimalRoundTest, documentedDirectionalResultTypes) {
+  const auto input = makeFlatVector<int64_t>({990, -990, 0}, DECIMAL(3, 1));
+  for (const char* name : {kCeilDecimal, kFloorDecimal}) {
+    SCOPED_TRACE(name);
+    const auto call =
+        createDecimalRounding(input->type(), DECIMAL(3, 0), -1, false, name);
+    testEncodings(
+        call,
+        {input},
+        makeFlatVector<int64_t>(
+            name == kCeilDecimal ? std::vector<int64_t>{100, -90, 0}
+                                 : std::vector<int64_t>{90, -100, 0},
+            DECIMAL(3, 0)));
   }
 }
 
@@ -258,7 +331,7 @@ TEST_F(DecimalRoundTest, directionalOverflowIsUserError) {
         evaluate(
             createDecimalRounding(type, DECIMAL(38, 0), -1, false, name),
             input),
-        "Decimal overflow");
+        fmt::format("Decimal overflow in {}.", name));
   }
 }
 
@@ -280,7 +353,8 @@ TEST_F(DecimalRoundTest, roundNegativeScaleOverflow) {
       makeRowVector({makeFlatVector<int128_t>({maximum}, DECIMAL(38, 0))});
   const auto call =
       createDecimalRound(DECIMAL(38, 0), DECIMAL(38, 0), -1, false);
-  VELOX_ASSERT_THROW(evaluate(call, input), "Decimal overflow");
+  VELOX_ASSERT_USER_THROW(
+      evaluate(call, input), "Decimal overflow in decimal_round.");
 }
 
 TEST_F(DecimalRoundTest, roundMixedErrorsAndCoarseBoundary) {
@@ -480,11 +554,13 @@ TEST_F(DecimalRoundTest, unaryRoundMetadataValidation) {
     return std::make_shared<core::CallTypedExpr>(
         resultType, std::move(args), kRoundDecimal);
   };
-  VELOX_ASSERT_THROW(
-      evaluate(call(DECIMAL(1, 0), {field}), input), "result type");
-  VELOX_ASSERT_THROW(
-      evaluate(call(DECIMAL(3, 1), {field}), input), "result type");
-  VELOX_ASSERT_THROW(evaluate(call(BIGINT(), {field}), input), "result type");
+  for (const auto& output : {DECIMAL(1, 0), DECIMAL(3, 1), TypePtr(BIGINT())}) {
+    VELOX_ASSERT_USER_THROW(
+        evaluate(call(output, {field}), input),
+        fmt::format(
+            "Invalid result type for decimal_round: expected DECIMAL(3, 0), got {}.",
+            output->toString()));
+  }
 }
 
 TEST_F(DecimalRoundTest, sharedArgumentAndResultValidation) {
@@ -507,15 +583,27 @@ TEST_F(DecimalRoundTest, sharedArgumentAndResultValidation) {
     for (const auto& output :
          {TypePtr(BIGINT()), DECIMAL(19, 0), DECIMAL(18, 1), DECIMAL(17, 0)}) {
       VELOX_ASSERT_USER_THROW(
-          evaluate(call(output, {field, scale}), row), "result type");
+          evaluate(call(output, {field, scale}), row),
+          fmt::format(
+              "Invalid result type for {}: expected DECIMAL(18, 0), got {}.",
+              name,
+              output->toString()));
       VELOX_ASSERT_USER_THROW(
-          evaluate(call(output, {field, nullScale}), row), "result type");
+          evaluate(call(output, {field, nullScale}), row),
+          fmt::format(
+              "Invalid result type for {}: expected DECIMAL(18, 0), got {}.",
+              name,
+              output->toString()));
     }
+    const auto argumentError = fmt::format(
+        "{} expects {} arguments.",
+        name,
+        name == kRoundDecimal ? "one or two" : "two");
     VELOX_ASSERT_USER_THROW(
-        evaluate(call(DECIMAL(18, 0), {}), row), "arguments");
+        evaluate(call(DECIMAL(18, 0), {}), row), argumentError);
     VELOX_ASSERT_USER_THROW(
         evaluate(call(DECIMAL(18, 0), {field, scale, scale}), row),
-        "arguments");
+        argumentError);
     VELOX_ASSERT_USER_THROW(
         evaluate(
             call(
@@ -524,14 +612,15 @@ TEST_F(DecimalRoundTest, sharedArgumentAndResultValidation) {
                  std::make_shared<core::FieldAccessTypedExpr>(
                      INTEGER(), "c1")}),
             row),
-        "constant expression");
+        fmt::format(
+            "The second argument of {} must be a constant expression.", name));
     for (const auto& invalidScale :
          {std::make_shared<core::ConstantTypedExpr>(BOOLEAN(), variant(true)),
           std::make_shared<core::ConstantTypedExpr>(
               BIGINT(), variant(int64_t{0}))}) {
       VELOX_ASSERT_USER_THROW(
           evaluate(call(DECIMAL(18, 0), {field, invalidScale}), row),
-          "INTEGER");
+          fmt::format("The second argument of {} must be INTEGER.", name));
     }
     VELOX_ASSERT_USER_THROW(
         evaluate(
@@ -540,13 +629,13 @@ TEST_F(DecimalRoundTest, sharedArgumentAndResultValidation) {
                 {std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "c1"),
                  scale}),
             row),
-        "must be decimal");
+        fmt::format("The first argument of {} must be decimal.", name));
     VELOX_ASSERT_USER_THROW(
         evaluate(fmt::format("{}(c0, cast(0 as integer))", name), row),
-        "explicitly resolved result type");
+        fmt::format("{} requires an explicitly resolved result type.", name));
     if (name == kCeilDecimal || name == kFloorDecimal) {
       VELOX_ASSERT_USER_THROW(
-          evaluate(call(DECIMAL(18, 0), {field}), row), "two arguments");
+          evaluate(call(DECIMAL(18, 0), {field}), row), argumentError);
     }
   }
 }
