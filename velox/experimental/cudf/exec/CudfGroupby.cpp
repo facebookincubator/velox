@@ -49,6 +49,7 @@
 
 #include <folly/ScopeGuard.h>
 
+#include <algorithm>
 #include <cmath>
 #include <limits>
 
@@ -822,8 +823,15 @@ struct GroupbyMeanAggregator : GroupbyAggregator {
       rmm::device_async_resource_ref mr) override {
     const auto& outputType = asRowType(resultType);
     switch (step) {
-      case core::AggregationNode::Step::kSingle:
-        return std::move(results[meanIdx_].results[0]);
+      case core::AggregationNode::Step::kSingle: {
+        // cuDF computes the mean in double; avg over REAL is declared REAL.
+        auto mean = std::move(results[meanIdx_].results[0]);
+        const auto cudfType = cudf_velox::veloxToCudfDataType(resultType);
+        if (mean->type() != cudfType) {
+          mean = cudf::cast(*mean, cudfType, stream, mr);
+        }
+        return mean;
+      }
       case core::AggregationNode::Step::kPartial: {
         auto sum = std::move(results[sumIdx_].results[0]);
         auto count = std::move(results[sumIdx_].results[1]);
@@ -1188,10 +1196,8 @@ std::unique_ptr<cudf::column> nullifyEmptyLists(
 
 // Collects each group's values into one list for Presto's array_agg, nulls
 // included unless the session sets presto.array_agg.ignore_nulls, and merges
-// the lists of partial results. A group left without elements keeps an empty
-// list in a partial or intermediate result, since every merge step, on the
-// CPU or the GPU, adds nothing for an empty list and for a NULL one alike, and
-// yields NULL in a final result, as the CPU function does.
+// the lists of partial results. A group without elements yields NULL at every
+// step, as the CPU function does.
 struct GroupbyArrayAggAggregator final : GroupbyAggregator {
   GroupbyArrayAggAggregator(
       core::AggregationNode::Step step,
@@ -1213,6 +1219,7 @@ struct GroupbyArrayAggAggregator final : GroupbyAggregator {
       std::vector<cudf::groupby::aggregation_request>& requests,
       cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) override {
+    VELOX_CHECK_NULL(constant, "array_agg does not support constant input");
     // A masked array_agg falls back to the CPU: cuDF collects every row or
     // every non-null row of a group, and neither skips the masked rows alone.
     VELOX_CHECK(!maskIndex.has_value(), "array_agg does not support masks");
@@ -1220,7 +1227,6 @@ struct GroupbyArrayAggAggregator final : GroupbyAggregator {
     outputIndex_ = requests.size() - 1;
     const auto input = table.column(inputIndex);
     if (exec::isRawInput(step)) {
-      droppedNulls_ = ignoreNulls_ && input.has_nulls();
       request.values = input;
       request.aggregations.push_back(
           cudf::make_collect_list_aggregation<cudf::groupby_aggregation>(
@@ -1238,21 +1244,25 @@ struct GroupbyArrayAggAggregator final : GroupbyAggregator {
       cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) override {
     auto lists = std::move(results[outputIndex_].results[0]);
-    // Only a final result turns an empty group into NULL. A merge can leave a
-    // group empty; a raw-input step only when it dropped nulls.
-    if (step == core::AggregationNode::Step::kFinal ||
-        (step == core::AggregationNode::Step::kSingle && droppedNulls_)) {
+    // A raw-input step leaves a group without elements only when it drops
+    // nulls; a merge step whenever the group had NULL and empty lists alone.
+    if (ignoreNulls_ || !exec::isRawInput(step)) {
       return nullifyEmptyLists(std::move(lists), stream, mr);
     }
     return lists;
   }
 
   std::unique_ptr<cudf::column> finalize(
-      std::unique_ptr<cudf::column> state,
-      cuda::stream_ref stream,
-      rmm::device_async_resource_ref mr) override {
-    VELOX_CHECK_EQ(step, core::AggregationNode::Step::kFinal);
-    return nullifyEmptyLists(std::move(state), stream, mr);
+      std::unique_ptr<cudf::column> /*state*/,
+      cuda::stream_ref /*stream*/,
+      rmm::device_async_resource_ref /*mr*/) override {
+    // Only incremental aggregation finalizes a buffered state, and a node
+    // with this aggregator never aggregates incrementally.
+    VELOX_UNREACHABLE("array_agg is not aggregated incrementally");
+  }
+
+  bool stateGrowsWithInput() const override {
+    return true;
   }
 
   void releaseInput() override {
@@ -1291,9 +1301,6 @@ struct GroupbyArrayAggAggregator final : GroupbyAggregator {
   const bool ignoreNulls_;
   // Index of this aggregate's request in the groupby results.
   uint32_t outputIndex_{0};
-  // True when the pending raw-input request drops nulls the input holds, the
-  // only way a raw-input step leaves a group without elements.
-  bool droppedNulls_{false};
   // Keeps a merge input whose NULL rows were emptied alive until
   // releaseInput().
   std::unique_ptr<cudf::column> purgedInput_;
@@ -1899,8 +1906,19 @@ void CudfGroupby::initialize() {
       aggregationInput.constants,
       aggregationInput.maskChannels,
       queryConfig);
+  // Incremental aggregation re-aggregates the buffered state with every batch,
+  // copying it to concatenate and again to merge: cheap while it holds one
+  // value per group, quadratic in the number of batches when it holds every
+  // input row. A node with such an aggregate takes the non-incremental path
+  // instead, as one with companion aggregates does: a partial step aggregates
+  // the batches pending at each getOutput() and a final or single step all of
+  // its input at once.
   incrementalAggregationEnabled_ =
-      !hasCompanionAggregates(aggregationNode_->aggregates());
+      !hasCompanionAggregates(aggregationNode_->aggregates()) &&
+      std::none_of(
+          aggregators_.begin(), aggregators_.end(), [](const auto& aggregator) {
+            return aggregator->stateGrowsWithInput();
+          });
 
   // Make aggregators for intermediate step when streaming is enabled.
   if (incrementalAggregationEnabled_) {

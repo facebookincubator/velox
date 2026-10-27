@@ -18,6 +18,7 @@
 #include "velox/experimental/cudf/exec/CudfAggregation.h"
 #include "velox/experimental/cudf/exec/CudfGroupby.h"
 #include "velox/experimental/cudf/exec/CudfReduce.h"
+#include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 
 #include "velox/core/Expressions.h"
@@ -433,8 +434,10 @@ bool canAggregationBeEvaluatedByRegistry(
     return false;
   }
 
-  // Validate against step-specific signatures from registry.
-  return matchTypedCallAgainstSignatures(call, stepIt->second);
+  // Validate against step-specific signatures from registry. A type variable
+  // in a signature binds any type, so the result must still be one cuDF holds.
+  return matchTypedCallAgainstSignatures(call, stepIt->second) &&
+      isTypeSupportedByCudf(call.type());
 }
 
 bool canBeEvaluatedByCudf(

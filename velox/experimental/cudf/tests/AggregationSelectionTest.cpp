@@ -50,6 +50,7 @@ bool canAggregationBeEvaluatedByCudf(
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/parse/TypeResolver.h"
 #include "velox/type/Type.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
@@ -259,6 +260,39 @@ TEST_F(CudfAggregationSelectionTest, globalArrayAggUnsupported) {
 
   ASSERT_FALSE(
       canBeEvaluatedByCudf(*aggregationNode, queryCtx_.get(), pool_.get()));
+}
+
+// array_agg over a constant stays on the CPU, like every aggregate but count
+// over constants alone.
+TEST_F(CudfAggregationSelectionTest, arrayAggConstantArgumentUnsupported) {
+  auto aggregationNode = createAggregationNode({"c0"}, {"array_agg(1)"});
+
+  ASSERT_FALSE(
+      canBeEvaluatedByCudf(*aggregationNode, queryCtx_.get(), pool_.get()));
+}
+
+// array_agg over an element type cuDF cannot hold, a MAP or a type with a
+// custom comparison, stays on the CPU.
+TEST_F(CudfAggregationSelectionTest, arrayAggUnsupportedElementTypes) {
+  auto data = makeRowVector(
+      {"k", "m", "tz"},
+      {
+          makeFlatVector<int64_t>({1, 2}),
+          makeMapVectorFromJson<int64_t, int64_t>({"{1: 10}", "{2: 20}"}),
+          makeFlatVector<int64_t>(
+              {pack(0, 0), pack(1, 0)}, TIMESTAMP_WITH_TIME_ZONE()),
+      });
+  for (const auto* aggregate : {"array_agg(m)", "array_agg(tz)"}) {
+    SCOPED_TRACE(aggregate);
+    auto plan = PlanBuilder()
+                    .values({data})
+                    .singleAggregation({"k"}, {aggregate})
+                    .planNode();
+    auto aggregationNode =
+        std::dynamic_pointer_cast<const core::AggregationNode>(plan);
+    ASSERT_FALSE(
+        canBeEvaluatedByCudf(*aggregationNode, queryCtx_.get(), pool_.get()));
+  }
 }
 
 // Test complex groupby clause with expressions
@@ -729,8 +763,9 @@ TEST_F(CudfAggregationSelectionTest, distinctAggregationsRejected) {
 }
 
 // An aggregate with ORDER BY stays on the CPU when its result depends on the
-// input order, which Velox records per function. One whose result does not is
-// accepted, as the CPU skips that sort as well.
+// input order, which Velox records per function, and is accepted otherwise,
+// as the CPU skips that sort as well. The grouped and the global validation
+// share the rule.
 TEST_F(CudfAggregationSelectionTest, orderByAggregations) {
   for (const auto* sorted :
        {"array_agg(c1 ORDER BY c2)", "stddev_samp(c1 ORDER BY c2)"}) {
@@ -739,9 +774,18 @@ TEST_F(CudfAggregationSelectionTest, orderByAggregations) {
     ASSERT_FALSE(
         canBeEvaluatedByCudf(*aggregationNode, queryCtx_.get(), pool_.get()));
   }
-
   auto unordered = createAggregationNode({"c0"}, {"min(c1 ORDER BY c2)"});
   ASSERT_TRUE(canBeEvaluatedByCudf(*unordered, queryCtx_.get(), pool_.get()));
+
+  auto globalSorted =
+      createAggregationNode({}, {"approx_distinct(c1 ORDER BY c2)"});
+  ASSERT_FALSE(
+      canBeEvaluatedByCudf(*globalSorted, queryCtx_.get(), pool_.get()));
+  auto globalPlain = createAggregationNode({}, {"approx_distinct(c1)"});
+  ASSERT_TRUE(canBeEvaluatedByCudf(*globalPlain, queryCtx_.get(), pool_.get()));
+  auto globalUnordered = createAggregationNode({}, {"sum(c1 ORDER BY c2)"});
+  ASSERT_TRUE(
+      canBeEvaluatedByCudf(*globalUnordered, queryCtx_.get(), pool_.get()));
 }
 
 // Masked sum is supported at raw-input steps.

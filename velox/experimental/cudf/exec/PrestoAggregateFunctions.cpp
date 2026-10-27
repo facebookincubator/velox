@@ -119,9 +119,10 @@ void registerPrestoAggregateFunctions(const std::string& prefix) {
           .argumentType("row(double,bigint)")
           .build());
 
-  // array_agg takes any element type the GPU operators convert; the operator's
-  // type gate keeps the other types on the CPU. The function is grouped only:
-  // CudfReduce has no aggregator for it, so the global form stays on the CPU.
+  // array_agg takes any element type the GPU operators convert; the result
+  // type check of the registry validation keeps the other types on the CPU.
+  // The function is grouped only: CudfReduce has no aggregator for it, so the
+  // global form stays on the CPU.
   auto registerArrayAgg = [&](core::AggregationNode::Step step,
                               const std::string& argumentType) {
     appendGroupbyAggregationFunctionForStep(

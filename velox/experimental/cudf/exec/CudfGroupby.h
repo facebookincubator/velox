@@ -110,6 +110,13 @@ struct GroupbyAggregator {
     maskedValues_.reset();
   }
 
+  // True when the state grows with the number of input rows rather than the
+  // number of groups, as array_agg's does. Such a node is not aggregated
+  // incrementally.
+  virtual bool stateGrowsWithInput() const {
+    return false;
+  }
+
   virtual ~GroupbyAggregator() = default;
 
  protected:
@@ -253,7 +260,8 @@ class CudfGroupby : public CudfOperatorBase {
 
   const bool isPartialOutput_;
   const bool isSingleStep_;
-  // Incremental aggregation is disabled if companion aggregates are present.
+  // Incremental aggregation is off for companion aggregates and for an
+  // aggregate whose state grows with the input.
   bool incrementalAggregationEnabled_{true};
   bool streamingGroupbyEnabled_{false};
   const int64_t maxPartialAggregationMemoryUsage_;
