@@ -19,8 +19,6 @@
 #include <string_view>
 
 #include "velox/benchmarks/ExpressionBenchmarkBuilder.h"
-#include "velox/functions/Registerer.h"
-#include "velox/functions/sparksql/EncodeFunction.h"
 #include "velox/functions/sparksql/SparkQueryConfig.h"
 #include "velox/functions/sparksql/registration/Register.h"
 
@@ -28,54 +26,25 @@ using namespace facebook::velox;
 
 namespace {
 
-// Resolve the constant charset once, but repeat converter setup for every row.
-template <typename T>
-struct UncachedEncodeFunction {
-  VELOX_DEFINE_FUNCTION_TYPES(T);
-
-  void initialize(
-      const std::vector<TypePtr>& /*inputTypes*/,
-      const core::QueryConfig& config,
-      const arg_type<Varchar>* /*input*/,
-      const arg_type<Varchar>* charset) {
-    VELOX_CHECK_NOT_NULL(charset);
-    const functions::sparksql::SparkQueryConfig sparkConfig{config};
-    charsetType_ = functions::sparksql::detail::resolveCharset(
-        *charset, sparkConfig.legacyJavaCharsets());
-    VELOX_CHECK(
-        charsetType_ == functions::sparksql::detail::CharsetType::kLegacy);
-    replaceUnmappable_ = sparkConfig.legacyCodingErrorAction();
-  }
-
-  Status call(
-      out_type<Varbinary>& result,
-      const arg_type<Varchar>& input,
-      const arg_type<Varchar>& charset) {
-    return functions::sparksql::detail::encode(
-        result, input, charset, charsetType_, replaceUnmappable_);
-  }
-
- private:
-  functions::sparksql::detail::CharsetType charsetType_{
-      functions::sparksql::detail::CharsetType::kUnsupported};
-  bool replaceUnmappable_{false};
-};
-
-// Keep both encoding options in one query-config override.
+// Compares constant and per-row standard charsets in both error-action modes.
 class EncodeBenchmark : public ExpressionBenchmarkBuilder {
  public:
   void addBenchmarks(bool replaceUnmappable) {
     queryCtx_->testingOverrideConfigUnsafe({
-        {functions::sparksql::SparkQueryConfig::qualify(
-             functions::sparksql::SparkQueryConfig::kLegacyJavaCharsets),
-         "true"},
         {functions::sparksql::SparkQueryConfig::qualify(
              functions::sparksql::SparkQueryConfig::kLegacyCodingErrorAction),
          replaceUnmappable ? "true" : "false"},
     });
     auto& maker = vectorMaker();
     constexpr vector_size_t kNumRows = 1'024;
-    for (const auto* charset : {"windows-1252", "windows-31j", "ISO-2022-JP"}) {
+    for (const auto* charset :
+         {"UTF-8",
+          "US-ASCII",
+          "ISO-8859-1",
+          "UTF-16BE",
+          "UTF-16LE",
+          "UTF-16",
+          "UTF-32"}) {
       const auto addWorkload = [&](const std::string& name,
                                    const std::vector<std::string>& values) {
         auto input = maker.rowVector(
@@ -93,28 +62,30 @@ class EncodeBenchmark : public ExpressionBenchmarkBuilder {
                 name),
             input)
             .addExpression(
-                "uncached_pre_resolved",
-                fmt::format("encode_uncached(input, '{}')", charset))
-            .addExpression(
-                "cached_constant", fmt::format("encode(input, '{}')", charset))
+                "constant_charset", fmt::format("encode(input, '{}')", charset))
             .addExpression("per_row_charset", "encode(input, charset)")
             .withIterations(100);
       };
-      for (const size_t length : {1, 8, 32}) {
+      for (const size_t length : {1, 8, 32, 256}) {
         addWorkload(
             fmt::format("ascii_{}bytes", length),
             {std::string(length, 'A'), std::string(length, 'B')});
       }
-      if (std::string_view(charset) == "windows-1252") {
-        addWorkload("non_ascii", {"\xE2\x82\xAC", "A\xC2\xA5"});
-      } else if (std::string_view(charset) == "windows-31j") {
-        addWorkload("non_ascii", {"\xC2\xA5\xE2\x80\xBE", "\xE3\x81\x82"});
-      } else {
-        addWorkload("non_ascii", {"\xE3\x81\x82", "A\xE3\x81\x84"});
+      const std::string_view charsetName{charset};
+      const bool singleByte =
+          charsetName == "US-ASCII" || charsetName == "ISO-8859-1";
+      if (charsetName == "ISO-8859-1") {
+        addWorkload("non_ascii", {"\xC3\xA9", "A\xC2\xA5"});
+      } else if (!singleByte) {
+        addWorkload("non_ascii", {"\xE2\x82\xAC", "A\xF0\x9F\x98\x80"});
       }
-      if (replaceUnmappable) {
+      if (replaceUnmappable || !singleByte) {
+        addWorkload("malformed_utf8", {"A\xFF", "\xC3"});
+      }
+      if (replaceUnmappable && singleByte) {
         addWorkload("unmappable", {"A\xF0\x9F\x98\x80", "\xE2\x80\x8D"});
       }
+      addWorkload("empty", {""});
     }
   }
 };
@@ -128,8 +99,6 @@ int main(int argc, char** argv) {
   EncodeBenchmark strict;
   EncodeBenchmark replacement;
   functions::sparksql::registerFunctions("");
-  registerFunction<UncachedEncodeFunction, Varbinary, Varchar, Varchar>(
-      {"encode_uncached"});
   strict.addBenchmarks(false);
   replacement.addBenchmarks(true);
   strict.testBenchmarks();
