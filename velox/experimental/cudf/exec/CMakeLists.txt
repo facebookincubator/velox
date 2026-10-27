@@ -36,6 +36,7 @@ add_library(
   CudfPlanNode.cpp
   CudfPlanNodeConversion.cpp
   CudfPlanNodeTranslator.cpp
+  CudfPlanRewriter.cpp
   CudfReduce.cpp
   CudfScanUtils.cpp
   CudfTopN.cpp
