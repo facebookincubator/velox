@@ -83,10 +83,13 @@ void UcxOutputQueueManager::enqueue(
     int destination,
     std::unique_ptr<cudf::packed_columns> txData,
     vector_size_t numRows,
-    int64_t transferReservationBytes) {
+    uint64_t* transferReservationBytes) {
   if (auto queue = getQueueIfActive(taskId)) {
     queue->enqueue(
         destination, std::move(txData), numRows, transferReservationBytes);
+  } else if (transferReservationBytes != nullptr) {
+    // removeTask() owns cancellation of the removed queue's reservations.
+    *transferReservationBytes = 0;
   }
 }
 

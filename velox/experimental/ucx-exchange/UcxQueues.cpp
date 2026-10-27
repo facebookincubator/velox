@@ -17,6 +17,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <new>
 #include <sstream>
 
 #include <glog/logging.h>
@@ -408,21 +409,27 @@ void UcxOutputQueue::enqueue(
     int destination,
     std::unique_ptr<cudf::packed_columns> data,
     vector_size_t numRows,
-    int64_t transferReservationBytes) {
+    uint64_t* transferReservationBytes) {
   VELOX_CHECK_NOT_NULL(data);
   VELOX_CHECK_NOT_NULL(task_);
   VELOX_CHECK_GE(numRows, 0);
-  VELOX_CHECK_GE(transferReservationBytes, 0);
+  const auto reservationBytes =
+      transferReservationBytes ? checkedBytes(*transferReservationBytes) : 0;
   if (!task_->isRunning()) {
     std::vector<ContinuePromise> transferPromises;
-    if (transferReservationBytes > 0) {
+    if (reservationBytes > 0) {
       std::lock_guard<std::mutex> l(mutex_);
       if (!terminated_ && destination >= 0 &&
           static_cast<size_t>(destination) < transferReservedBytes_.size() &&
           queues_[destination] != nullptr) {
-        releaseTransferReservationLocked(destination, transferReservationBytes);
+        releaseTransferReservationLocked(destination, reservationBytes);
+        // Promise collection or notification can throw after the release.
+        *transferReservationBytes = 0;
         collectTransferPromisesLocked(destination, transferPromises);
       }
+    }
+    if (transferReservationBytes != nullptr) {
+      *transferReservationBytes = 0;
     }
     for (auto& promise : transferPromises) {
       promise.setValue();
@@ -444,7 +451,7 @@ void UcxOutputQueue::enqueue(
     bool success = false;
     if (kind_ == core::PartitionedOutputNode::Kind::kBroadcast) {
       VELOX_CHECK_EQ(
-          transferReservationBytes,
+          reservationBytes,
           0,
           "Broadcast output does not use transfer reservations");
       VELOX_CHECK_EQ(destination, 0, "Broadcast uses destination 0");
@@ -487,13 +494,25 @@ void UcxOutputQueue::enqueue(
       }
       // This is the reservation-to-queued/in-flight commit point. Everything
       // above that can allocate either completed successfully or left the
-      // reservation untouched for the producer's scope guard to release.
-      releaseTransferReservationLocked(destination, transferReservationBytes);
+      // reservation untouched for the producer's scope guard to release. Mark
+      // the producer's reservation consumed here: reader callbacks can throw
+      // after commit, so returning from enqueue is not the ownership boundary.
+      releaseTransferReservationLocked(destination, reservationBytes);
+      if (transferReservationBytes != nullptr) {
+        *transferReservationBytes = 0;
+      }
     }
   }
   // Now that data is enqueued, notify blocked readers (outside of mutex.)
   for (auto& callback : dataAvailableCallbacks) {
-    callback.notify();
+    try {
+      callback.notify();
+    } catch (const std::bad_alloc&) {
+      // Producers may retry materialization on allocation failure. Retrying
+      // after publication could duplicate the payload, so fail this query.
+      VELOX_FAIL(
+          "Failed to notify UCX output consumer after enqueue committed");
+    }
   }
 }
 

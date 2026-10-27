@@ -25,7 +25,11 @@
 #include <rmm/device_buffer.hpp>
 #include <rmm/resource_ref.hpp>
 
+#include <folly/ScopeGuard.h>
+#include <gtest/gtest.h>
+
 #include <cstdint>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -115,6 +119,210 @@ TEST_F(GpuResourcesTest, allocatedBytesIncludesSeparateOutputResource) {
   assertTracksAllocations(
       {cudf::get_current_device_resource_ref(), get_output_mr()});
 }
+
+using ResourceKind = CudfMemoryResourceKind;
+using AdmissionStatus = CudfDeviceMemoryAdmissionStatus;
+constexpr uint64_t kAllocationBytes = 4096;
+constexpr uint64_t kImpossibleHeadroom = std::numeric_limits<uint64_t>::max();
+
+class GpuMemoryAdmissionTest : public ::testing::Test {
+ protected:
+  void SetUp() override {
+    clearCurrentDeviceMemoryInfo();
+    ASSERT_EQ(
+        cudaStreamCreateWithFlags(&stream_, cudaStreamNonBlocking),
+        cudaSuccess);
+  }
+
+  void TearDown() override {
+    EXPECT_EQ(cudaStreamSynchronize(stream_), cudaSuccess);
+    // The tracking contains non-owning pool handles. Invalidate them before
+    // releasing either resource, including on assertion-failure paths.
+    clearCurrentDeviceMemoryInfo();
+    output_.reset();
+    primary_.reset();
+    EXPECT_EQ(cudaStreamDestroy(stream_), cudaSuccess);
+  }
+
+  rmm::device_async_resource_ref makeResource(
+      std::string_view mode,
+      ResourceKind kind = ResourceKind::kPrimary) {
+    auto& resource = kind == ResourceKind::kPrimary ? primary_ : output_;
+    // Pools grow on demand from empty. Arena requires a nonzero capacity;
+    // one percent is the smallest supported size in the production factory.
+    resource.emplace(createMemoryResource(mode, mode == "arena" ? 1 : 0, kind));
+    return resource.value();
+  }
+
+  cuda::stream_ref stream() const {
+    return cuda::stream_ref{stream_};
+  }
+
+ private:
+  cudaStream_t stream_{nullptr};
+  std::optional<cuda::mr::any_resource<cuda::mr::device_accessible>> primary_;
+  std::optional<cuda::mr::any_resource<cuda::mr::device_accessible>> output_;
+};
+
+TEST_F(GpuMemoryAdmissionTest, unregisteredResourceDoesNotInferAdmission) {
+  const auto info = currentDeviceMemoryInfo();
+  ASSERT_TRUE(info.has_value());
+  EXPECT_FALSE(info->hasAdmissionStats);
+  const auto admission =
+      tryReserveCurrentDeviceMemory(kAllocationBytes, kImpossibleHeadroom);
+  EXPECT_EQ(admission.status, AdmissionStatus::kUnavailable);
+  EXPECT_TRUE(admission.mayProceed());
+}
+
+TEST_F(GpuMemoryAdmissionTest, sharedAsyncPoolSharesCapacityAndReservations) {
+  auto resource = makeResource("async");
+  sharePrimaryMemoryResourceWithOutput();
+  rmm::device_buffer buffer(kAllocationBytes, stream(), resource);
+  stream().sync();
+
+  const auto primary = currentDeviceMemoryInfo();
+  const auto output = currentDeviceMemoryInfo(ResourceKind::kOutput);
+  ASSERT_TRUE(primary.has_value());
+  ASSERT_TRUE(output.has_value());
+  ASSERT_TRUE(primary->hasAdmissionStats);
+  ASSERT_TRUE(output->hasAdmissionStats);
+  ASSERT_TRUE(primary->hasPoolStats);
+  ASSERT_TRUE(output->hasPoolStats);
+  EXPECT_GE(primary->poolUsedBytes, kAllocationBytes);
+  EXPECT_EQ(primary->poolReservedBytes, output->poolReservedBytes);
+  EXPECT_EQ(primary->poolUsedBytes, output->poolUsedBytes);
+  EXPECT_EQ(primary->poolReusableBytes, output->poolReusableBytes);
+
+  const auto admission = tryReserveCurrentDeviceMemory(kAllocationBytes, 0);
+  auto release =
+      folly::makeGuard([&] { releaseDeviceMemoryReservation(admission); });
+  ASSERT_EQ(admission.status, AdmissionStatus::kAdmitted);
+  const auto reserved = currentDeviceMemoryInfo(ResourceKind::kOutput);
+  ASSERT_TRUE(reserved.has_value());
+  EXPECT_EQ(reserved->inProcessReservedBytes, kAllocationBytes);
+}
+
+TEST_F(GpuMemoryAdmissionTest, distinctAsyncPoolsReportTheirOwnCapacity) {
+  auto primaryResource = makeResource("async");
+  rmm::device_buffer primaryBuffer(kAllocationBytes, stream(), primaryResource);
+  auto outputResource = makeResource("async", ResourceKind::kOutput);
+  stream().sync();
+  const auto primaryBefore = currentDeviceMemoryInfo();
+  const auto outputBefore = currentDeviceMemoryInfo(ResourceKind::kOutput);
+  ASSERT_TRUE(primaryBefore.has_value());
+  ASSERT_TRUE(outputBefore.has_value());
+  ASSERT_TRUE(primaryBefore->hasPoolStats);
+  ASSERT_TRUE(outputBefore->hasPoolStats);
+
+  rmm::device_buffer outputBuffer(
+      2 * kAllocationBytes, stream(), outputResource);
+  stream().sync();
+  const auto primaryAfter = currentDeviceMemoryInfo();
+  const auto outputAfter = currentDeviceMemoryInfo(ResourceKind::kOutput);
+  ASSERT_TRUE(primaryAfter.has_value());
+  ASSERT_TRUE(outputAfter.has_value());
+  EXPECT_EQ(primaryAfter->poolUsedBytes, primaryBefore->poolUsedBytes);
+  EXPECT_GT(outputAfter->poolUsedBytes, outputBefore->poolUsedBytes);
+
+  const auto admission =
+      tryReserveCurrentDeviceMemory(kAllocationBytes, 0, ResourceKind::kOutput);
+  auto release =
+      folly::makeGuard([&] { releaseDeviceMemoryReservation(admission); });
+  ASSERT_EQ(admission.status, AdmissionStatus::kAdmitted);
+  const auto reserved = currentDeviceMemoryInfo();
+  ASSERT_TRUE(reserved.has_value());
+  EXPECT_EQ(reserved->inProcessReservedBytes, kAllocationBytes);
+}
+
+TEST_F(GpuMemoryAdmissionTest, cudaOutputDoesNotBorrowPrimaryPool) {
+  auto primaryResource = makeResource("async");
+  rmm::device_buffer primaryBuffer(kAllocationBytes, stream(), primaryResource);
+  makeResource("cuda", ResourceKind::kOutput);
+  stream().sync();
+
+  const auto primary = currentDeviceMemoryInfo();
+  const auto output = currentDeviceMemoryInfo(ResourceKind::kOutput);
+  ASSERT_TRUE(primary.has_value());
+  ASSERT_TRUE(output.has_value());
+  ASSERT_TRUE(primary->hasPoolStats);
+  EXPECT_TRUE(output->hasAdmissionStats);
+  EXPECT_FALSE(output->hasPoolStats);
+  EXPECT_EQ(output->poolReusableBytes, 0);
+  EXPECT_EQ(
+      tryReserveCurrentDeviceMemory(
+          kAllocationBytes, kImpossibleHeadroom, ResourceKind::kOutput)
+          .status,
+      AdmissionStatus::kInsufficient);
+}
+
+TEST_F(GpuMemoryAdmissionTest, poolOutputDoesNotBorrowPrimaryPool) {
+  makeResource("async");
+  auto outputResource = makeResource("pool", ResourceKind::kOutput);
+  const auto primary = currentDeviceMemoryInfo();
+  const auto output = currentDeviceMemoryInfo(ResourceKind::kOutput);
+  ASSERT_TRUE(primary.has_value());
+  ASSERT_TRUE(output.has_value());
+  EXPECT_TRUE(primary->hasAdmissionStats);
+  EXPECT_FALSE(output->hasAdmissionStats);
+  EXPECT_EQ(
+      tryReserveCurrentDeviceMemory(
+          kAllocationBytes, kImpossibleHeadroom, ResourceKind::kOutput)
+          .status,
+      AdmissionStatus::kUnavailable);
+  rmm::device_buffer buffer(kAllocationBytes, stream(), outputResource);
+  stream().sync();
+}
+
+TEST_F(GpuMemoryAdmissionTest, poolPrimaryDoesNotDisableAsyncOutputAdmission) {
+  makeResource("pool");
+  makeResource("async", ResourceKind::kOutput);
+  const auto primary = currentDeviceMemoryInfo();
+  const auto output = currentDeviceMemoryInfo(ResourceKind::kOutput);
+  ASSERT_TRUE(primary.has_value());
+  ASSERT_TRUE(output.has_value());
+  EXPECT_FALSE(primary->hasAdmissionStats);
+  EXPECT_TRUE(output->hasAdmissionStats);
+  EXPECT_TRUE(output->hasPoolStats);
+  EXPECT_EQ(
+      tryReserveCurrentDeviceMemory(
+          kAllocationBytes, kImpossibleHeadroom, ResourceKind::kOutput)
+          .status,
+      AdmissionStatus::kInsufficient);
+}
+
+class UnobservableGpuMemoryAdmissionTest
+    : public GpuMemoryAdmissionTest,
+      public ::testing::WithParamInterface<const char*> {};
+
+TEST_P(UnobservableGpuMemoryAdmissionTest, letsAllocatorDecide) {
+  // A device-only estimate must not reject an allocation without observing
+  // allocator capacity: pool/arena retain reusable bytes, and managed memory
+  // may allocate beyond device memory. Impossible headroom distinguishes the
+  // explicit unavailable fallback from accidental physical-only admission.
+  auto resource = makeResource(GetParam());
+  const auto info = currentDeviceMemoryInfo();
+  ASSERT_TRUE(info.has_value());
+  EXPECT_FALSE(info->hasAdmissionStats);
+  const auto admission =
+      tryReserveCurrentDeviceMemory(kAllocationBytes, kImpossibleHeadroom);
+  EXPECT_EQ(admission.status, AdmissionStatus::kUnavailable);
+  EXPECT_TRUE(admission.mayProceed());
+  rmm::device_buffer buffer(kAllocationBytes, stream(), resource);
+  stream().sync();
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    AllocatorModes,
+    UnobservableGpuMemoryAdmissionTest,
+    ::testing::Values(
+        "pool",
+        "arena",
+        "managed",
+        "managed_pool",
+        "managed_async",
+        "prefetch_managed",
+        "prefetch_managed_pool",
+        "prefetch_managed_async"));
 
 } // namespace
 } // namespace facebook::velox::cudf_velox
