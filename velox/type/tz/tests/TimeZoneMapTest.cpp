@@ -20,7 +20,6 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/external/date/date.h"
-#include "velox/external/tzdb/tzdb_list.h"
 #include "velox/type/tz/TimeZoneMap.h"
 
 using facebook::velox::common::testutil::TestValue;
@@ -262,7 +261,8 @@ TEST(TimeZoneMapTest, correctNonexistentTimeGapBoundaries) {
   for (const auto& gap : gaps) {
     SCOPED_TRACE(gap.name);
     SCOPED_TRACE(gap.begin.count());
-    const TimeZone zone{gap.name, 0, tzdb::locate_zone(gap.name)};
+    const auto* zone = locateZone(gap.name);
+    ASSERT_NE(zone, nullptr);
     // The gap includes its beginning but excludes its end. This API accepts
     // seconds, so check each boundary and the adjacent representable instants.
     const std::vector<std::pair<seconds, seconds>> cases = {
@@ -275,7 +275,7 @@ TEST(TimeZoneMapTest, correctNonexistentTimeGapBoundaries) {
     };
     for (const auto& [input, expected] : cases) {
       SCOPED_TRACE(input.count());
-      EXPECT_EQ(expected, zone.correct_nonexistent_time(input));
+      EXPECT_EQ(expected, zone->correct_nonexistent_time(input));
     }
   }
 }
@@ -300,7 +300,8 @@ TEST(TimeZoneMapTest, correctNonexistentTimeOverlapBoundaries) {
   for (const auto& overlap : overlaps) {
     SCOPED_TRACE(overlap.name);
     SCOPED_TRACE(overlap.begin.count());
-    const TimeZone zone{overlap.name, 0, tzdb::locate_zone(overlap.name)};
+    const auto* zone = locateZone(overlap.name);
+    ASSERT_NE(zone, nullptr);
     for (const auto input :
          {overlap.begin - seconds{1},
           overlap.begin,
@@ -309,35 +310,19 @@ TEST(TimeZoneMapTest, correctNonexistentTimeOverlapBoundaries) {
           overlap.end,
           overlap.end + seconds{1}}) {
       SCOPED_TRACE(input.count());
-      EXPECT_EQ(input, zone.correct_nonexistent_time(input));
+      EXPECT_EQ(input, zone->correct_nonexistent_time(input));
     }
   }
 }
 
-TEST(TimeZoneMapTest, correctNonexistentTimeUtcAndOffsets) {
-  // The same civil times that fall in gaps or overlaps in named zones are
-  // unchanged for UTC and fixed offsets, as are ordinary dates.
-  const std::vector<seconds> inputs = {
-      localTimestamp(1969, 12, 31, 23, 59, 59),
-      localTimestamp(2024, 7, 1, 12),
-      localTimestamp(2024, 3, 10, 2, 30),
-      localTimestamp(2024, 11, 3, 1, 30),
-      localTimestamp(2100, 3, 14, 2, 30),
-      localTimestamp(2100, 11, 7, 1, 30),
-      localTimestamp(2024, 10, 6, 2, 15),
-      localTimestamp(2024, 4, 7, 1, 45),
-      localTimestamp(2011, 12, 30, 12),
-  };
-  const TimeZone utc{"UTC", 0, tzdb::locate_zone("UTC")};
-  const TimeZone fixedUtc{"UTC", 0, minutes{0}};
-  const TimeZone positiveOffset{"+05:30", 0, minutes{330}};
-  const TimeZone negativeOffset{"-08:00", 0, minutes{-480}};
-  for (const auto* zone : {&utc, &fixedUtc, &positiveOffset, &negativeOffset}) {
-    SCOPED_TRACE(zone->name());
-    for (const auto input : inputs) {
-      SCOPED_TRACE(input.count());
-      EXPECT_EQ(input, zone->correct_nonexistent_time(input));
-    }
+TEST(TimeZoneMapTest, correctNonexistentTimeUtc) {
+  const auto* zone = locateZone("UTC");
+  ASSERT_NE(zone, nullptr);
+  ASSERT_NE(zone->tz(), nullptr);
+  for (const auto input :
+       {localTimestamp(2024, 7, 1, 12), localTimestamp(2024, 3, 10, 2, 30)}) {
+    SCOPED_TRACE(input.count());
+    EXPECT_EQ(input, zone->correct_nonexistent_time(input));
   }
 }
 

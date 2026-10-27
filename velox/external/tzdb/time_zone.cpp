@@ -971,29 +971,28 @@ time_zone::~time_zone() = default;
 sys_info
 time_zone::load_sys_info(std::vector<date::transition>::const_iterator i) const
 {
-  return load_sys_info(i, true);
+    return load_sys_info(i, true);
 }
 
-sys_info time_zone::load_sys_info(
-    std::vector<date::transition>::const_iterator i,
-    bool __with_abbreviation) const {
-  using namespace std::chrono;
-  const auto& transitions = __impl_->transitions();
-  assert(!transitions.empty());
-  assert(i != transitions.begin());
+sys_info
+time_zone::load_sys_info(std::vector<date::transition>::const_iterator i,
+                         bool __with_abbreviation) const
+{
+    using namespace std::chrono;
+    const auto& transitions = __impl_->transitions();
+    assert(!transitions.empty());
+    assert(i != transitions.begin());
 
-  sys_info r;
-  r.begin = i[-1].timepoint;
-  r.end = i != transitions.end()
-      ? i->timepoint
-      : date::sys_seconds(
-            date::sys_days(date::year::max() / date::December / 31));
-  r.offset = i[-1].info->offset;
-  r.save = i[-1].info->is_dst ? minutes{1} : minutes{0};
-  if (__with_abbreviation) {
-    r.abbrev = i[-1].info->abbrev;
-  }
-  return r;
+    sys_info r;
+    r.begin = i[-1].timepoint;
+    r.end = i != transitions.end() ? i->timepoint :
+                                      date::sys_seconds(date::sys_days(date::year::max()/date::December/31));
+    r.offset = i[-1].info->offset;
+    r.save = i[-1].info->is_dst ? minutes{1} : minutes{0};
+    if (__with_abbreviation) {
+        r.abbrev = i[-1].info->abbrev;
+    }
+    return r;
 }
 
 [[nodiscard]] sys_info time_zone::__get_info_to_populate_transition(date::sys_seconds __time) const {
@@ -1204,15 +1203,13 @@ sys_info time_zone::load_sys_info(
 
   if (iter == transitions.begin()) {
     return sys_info{
-        date::sys_days(date::year::min() / date::January / 1),
-        iter + 1 != transitions.end()
-            ? iter[1].timepoint
-            : date::sys_seconds(
-                  date::sys_days(date::year::max() / date::December / 31)),
-        iter[0].info->offset,
-        iter[0].info->is_dst ? std::chrono::minutes{1}
-                             : std::chrono::minutes{0},
-        __with_abbreviation ? iter[0].info->abbrev : std::string{}};
+      date::sys_days(date::year::min()/date::January/1),
+      iter + 1 != transitions.end() ? iter[1].timepoint :
+                                      date::sys_seconds(date::sys_days(date::year::max()/date::December/31)),
+      iter[0].info->offset,
+      iter[0].info->is_dst ? std::chrono::minutes{1} : std::chrono::minutes{0},
+      __with_abbreviation ? iter[0].info->abbrev : std::string{}
+    };
   }
 
   if (iter == transitions.end() && __impl_->__continuations().back().__has_forever_rules) {
@@ -1252,16 +1249,15 @@ sys_info time_zone::load_sys_info(
     }
 
     return sys_info{
-        currentTransition,
-        nextTransition,
-        continuation.__stdoff + (*currentRule)->__save.__time,
-        std::chrono::duration_cast<std::chrono::minutes>(
-            (*currentRule)->__save.__time),
-        __with_abbreviation ? __format(
-                                  continuation,
-                                  (*currentRule)->__letters,
-                                  (*currentRule)->__save.__time)
-                            : std::string{}};
+      currentTransition,
+      nextTransition,
+      continuation.__stdoff + (*currentRule)->__save.__time,
+      std::chrono::duration_cast<std::chrono::minutes>(
+                  (*currentRule)->__save.__time),
+      __with_abbreviation ? __format(
+                  continuation, (*currentRule)->__letters, (*currentRule)->__save.__time)
+                          : std::string{}
+    };
   }
 
   return load_sys_info(iter, __with_abbreviation);

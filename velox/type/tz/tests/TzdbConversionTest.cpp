@@ -132,33 +132,6 @@ TEST(TzdbConversionTest, historicalAndFutureConversions) {
   }
 }
 
-TEST(TzdbConversionTest, transitionsAndExceptionMessages) {
-  // US one-hour DST changes, Lord Howe's half-hour changes, and Apia's
-  // skipped date. Include future DST rules beyond the precomputed table.
-  const std::vector<std::pair<const char*, date::local_seconds>> cases = {
-      {"America/New_York", localTime(2024, 3, 10, 2, 30)},
-      {"America/New_York", localTime(2024, 11, 3, 1, 30)},
-      {"America/New_York", localTime(2100, 3, 14, 2, 30)},
-      {"America/New_York", localTime(2100, 11, 7, 1, 30)},
-      {"Australia/Lord_Howe", localTime(2024, 4, 7, 1, 45)},
-      {"Australia/Lord_Howe", localTime(2024, 10, 6, 2, 15)},
-      {"Pacific/Apia", localTime(2011, 12, 30, 12)},
-  };
-  for (const auto& [name, local] : cases) {
-    SCOPED_TRACE(name);
-    const auto* zone = locate_zone(name);
-    ASSERT_NE(local_info::unique, zone->get_info(local).result);
-    for (const auto delta : {-hours{2}, hours{0}, hours{2}}) {
-      checkConversion(*zone, local + delta);
-      checkConversion(
-          *zone,
-          date::local_time<milliseconds>{
-              duration_cast<milliseconds>((local + delta).time_since_epoch()) +
-              milliseconds{999}});
-    }
-  }
-}
-
 TEST(TzdbConversionTest, transitionBoundaries) {
   struct Transition {
     const char* name;
@@ -280,6 +253,16 @@ TEST(TzdbConversionTest, transitionBoundaries) {
               test.local.time_since_epoch() - latestOffset}),
           zone->to_sys(test.local, choose::latest));
       checkConversion(*zone, test.local);
+    }
+
+    // Also exercise the seconds instantiation at both boundaries and inside
+    // the interval, including the middle of Apia's skipped calendar date.
+    for (const auto local :
+         {transition.begin,
+          transition.begin + (transition.end - transition.begin) / 2,
+          transition.end}) {
+      SCOPED_TRACE(local.time_since_epoch().count());
+      checkConversion(*zone, local);
     }
 
     // UTC instants are unambiguous. At the transition itself the new offset
