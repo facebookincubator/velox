@@ -206,18 +206,7 @@ class SelectivityVector {
   SelectivityVector complement(vector_size_t size) const {
     VELOX_CHECK_GE(size, 0);
     SelectivityVector result(size);
-    const auto commonWords = bits::nwords(std::min(size, size_));
-    for (uint64_t i = 0; i < commonWords; ++i) {
-      result.bits_[i] = ~bits_[i];
-    }
-    // Source padding is not part of the selection when extending the size.
-    if (size > size_ && size_ % 64 != 0) {
-      result.bits_[size_ / 64] |= ~bits::lowMask(size_ % 64);
-    }
-    if (size % 64 != 0) {
-      result.bits_.back() &= bits::lowMask(size % 64);
-    }
-    result.updateBounds();
+    result.deselect(*this);
     return result;
   }
 

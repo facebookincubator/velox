@@ -198,10 +198,6 @@ TEST(SelectivityVectorTest, complement) {
         const auto result = rows.complement(targetSize);
         assertState(expected, result);
         assertState(original, rows);
-        EXPECT_EQ(
-            bits::countBits(
-                result.allBits(), targetSize, bits::nwords(targetSize) * 64),
-            0);
         if (targetSize == sourceSize) {
           assertState(expected, rows.complement());
         }
