@@ -246,43 +246,52 @@ int64_t RPCRateLimiter::capacityLocked() const {
       static_cast<int64_t>(std::floor(limitLocked())), 1, ceiling);
 }
 
+namespace {
+// Clamps 'config' into its valid ranges and replaces a NaN floor or decrease
+// factor with its default.
+RPCRateLimiter::Config clamped(RPCRateLimiter::Config config) {
+  const RPCRateLimiter::Config defaults;
+  config.floor =
+      std::isnan(config.floor) ? defaults.floor : std::max(0.001, config.floor);
+  config.decreaseFactor = std::isnan(config.decreaseFactor)
+      ? defaults.decreaseFactor
+      : std::clamp(config.decreaseFactor, 0.01, 0.99);
+  return config;
+}
+
+// Reduces 'policy' to the fields a limiter reads, so policies that differ only
+// in fields it ignores compare equal.
+RPCRateLimiter::Config canonicalize(const RPCRateLimiter::Config& policy) {
+  auto canonical = clamped(policy);
+  if (canonical.ceiling > 0 &&
+      canonical.floor >= static_cast<double>(canonical.ceiling)) {
+    canonical.adaptive = false;
+  }
+  if (!canonical.adaptive) {
+    const RPCRateLimiter::Config defaults;
+    canonical.floor = defaults.floor;
+    canonical.decreaseFactor = defaults.decreaseFactor;
+  }
+  return canonical;
+}
+} // namespace
+
 void RPCRateLimiter::configure(const Config& config) {
   // Replacing the whole config is one kind of amendment, so it shares
   // amend()'s clamping and adaptive-flip logging rather than repeating them.
   amend([&config](Config& target) { target = config; });
 }
 
-void RPCRateLimiter::initializeOnce(
-    const std::function<void(Config&)>& mutate) {
+bool RPCRateLimiter::initializeOrMatch(const Config& policy) {
   std::vector<ContinuePromise> toNotify;
   std::optional<PacingTimerRequest> timerRequest;
+  bool matches{true};
   {
     std::lock_guard<std::mutex> l(mutex_);
     if (initialized_) {
-      // Compare what the caller would actually get, not what they passed: an
-      // out-of-range floor or factor clamps to the same effective value and is
-      // not a divergent request.
-      Config wanted = config_;
-      mutate(wanted);
-      clampLocked(wanted);
-      if (wanted.adaptive != config_.adaptive ||
-          wanted.floor != config_.floor ||
-          wanted.decreaseFactor != config_.decreaseFactor ||
-          wanted.ceiling != config_.ceiling) {
-        // Per backend, not LOG_FIRST_N: that is process-wide, so the first
-        // backend to take this path would silence the warning for every other
-        // one even though the message names a specific backend.
-        if (!loggedDivergentSettings_) {
-          loggedDivergentSettings_ = true;
-          RPC_RATE_LIMITER_LOG(WARNING)
-              << "admission key " << admissionKey_
-              << " is already initialized; ignoring different settings from a "
-                 "later query. One configuration is shared by every query on a "
-                 "backend, and it is fixed by the first of them.";
-        }
-      }
+      matches = canonicalize(policy) == canonicalize(config_);
     } else {
-      applyMutationLocked(mutate);
+      applyMutationLocked([&policy](Config& config) { config = policy; });
       timerRequest = collectWakeableLocked(toNotify);
       // Sealed here rather than by a second call: two calls left a window in
       // which another query saw initialized_ still false and overwrote.
@@ -293,13 +302,13 @@ void RPCRateLimiter::initializeOnce(
   if (timerRequest.has_value()) {
     schedulePacingTimer(timerRequest.value());
   }
+  return matches;
 }
 
 void RPCRateLimiter::testingReset() {
   std::lock_guard<std::mutex> l(mutex_);
   config_ = Config{};
   initialized_ = false;
-  loggedDivergentSettings_ = false;
   limit_ = 0.0;
   lowWaterLimit_ = 0.0;
   serviceHorizonNanos_ = kBootstrapServiceHorizonNanos;
@@ -312,11 +321,6 @@ void RPCRateLimiter::testingReset() {
   pending_.store(0);
   peakPending_.store(0);
   waiters_.clear();
-}
-
-void RPCRateLimiter::clampLocked(Config& config) {
-  config.floor = std::max(0.001, config.floor);
-  config.decreaseFactor = std::clamp(config.decreaseFactor, 0.01, 0.99);
 }
 
 std::optional<RPCRateLimiter::PacingTimerRequest>
@@ -434,7 +438,7 @@ void RPCRateLimiter::applyMutationLocked(
     const std::function<void(Config&)>& mutate) {
   const bool wasAdaptive = config_.adaptive;
   mutate(config_);
-  clampLocked(config_);
+  config_ = clamped(config_);
   if (!config_.adaptive) {
     setLimitLocked(0.0);
   } else if (!wasAdaptive) {
@@ -856,6 +860,66 @@ RPCRateLimiter& RPCRateLimiterRegistry::get(const std::string& admissionKey) {
   return *inserted->second;
 }
 
+RPCRateLimiterRegistry::Lookup RPCRateLimiterRegistry::getForPolicy(
+    std::string_view admissionKey,
+    const RPCRateLimiter::Config& policy) {
+  const std::string key{admissionKey};
+  auto& shared = get(key);
+  if (shared.initializeOrMatch(policy)) {
+    return {.limiter = &shared, .policyScoped = false};
+  }
+
+  const auto canonical = canonicalize(policy);
+  // Caller holds mutex_, shared or exclusive.
+  auto findLocked = [&]() -> RPCRateLimiter* {
+    const auto it = policyScopedLimiters_.find(key);
+    if (it == policyScopedLimiters_.end()) {
+      return nullptr;
+    }
+    for (const auto& [scopedPolicy, limiter] : it->second) {
+      if (scopedPolicy == canonical) {
+        return limiter.get();
+      }
+    }
+    return nullptr;
+  };
+  {
+    std::shared_lock<std::shared_mutex> rl(mutex_);
+    if (auto* limiter = findLocked()) {
+      return {.limiter = limiter, .policyScoped = true};
+    }
+  }
+  common::testutil::TestValue::adjust(
+      "facebook::velox::exec::rpc::RPCRateLimiterRegistry::getForPolicy", this);
+
+  // Sealed before it is published, so no other query can reach it unsealed.
+  // Discarded unused if another thread publishes one for this policy first.
+  auto created = std::make_shared<RPCRateLimiter>(key + " (policy-scoped)");
+  const bool sealed = created->initializeOrMatch(policy);
+  VELOX_CHECK(sealed, "A new rate limiter refused its first policy: {}", key);
+
+  size_t numPolicies{0};
+  {
+    std::unique_lock<std::shared_mutex> wl(mutex_);
+    if (auto* limiter = findLocked()) {
+      return {.limiter = limiter, .policyScoped = true};
+    }
+    auto& limiters = policyScopedLimiters_[key];
+    limiters.emplace_back(canonical, created);
+    // The shared limiter runs one more policy.
+    numPolicies = limiters.size() + 1;
+  }
+  const auto sealedPolicy = created->config();
+  RPC_RATE_LIMITER_LOG(INFO)
+      << "admission key '" << key << "' runs " << numPolicies
+      << " rate-limiter policies on this worker; added adaptive="
+      << (sealedPolicy.adaptive ? "true" : "false")
+      << ", ceiling=" << sealedPolicy.ceiling
+      << ", floor=" << sealedPolicy.floor
+      << ", decrease=" << sealedPolicy.decreaseFactor;
+  return {.limiter = created.get(), .policyScoped = true};
+}
+
 void RPCRateLimiterRegistry::testingReset() {
   std::unique_lock<std::shared_mutex> wl(mutex_);
   defaultCapacityRef().store(20);
@@ -865,6 +929,16 @@ void RPCRateLimiterRegistry::testingReset() {
   // them writing through a dangling pointer.
   for (auto& [admissionKey, admission] : backends_) {
     admission->testingReset();
+  }
+  // A policy-scoped limiter stays listed under its policy, so it is sealed
+  // with the policy it ran before the reset.
+  for (auto& [admissionKey, limiters] : policyScopedLimiters_) {
+    for (auto& entry : limiters) {
+      auto& limiter = entry.second;
+      const auto sealedPolicy = limiter->config();
+      limiter->testingReset();
+      limiter->initializeOrMatch(sealedPolicy);
+    }
   }
 }
 

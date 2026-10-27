@@ -1555,11 +1555,12 @@ class QueryConfig {
       "drain, additive-increase on a clean drain. On by default because it is "
       "the protective behavior for shared, rate-limited inference backends; set "
       "false to keep a static cap. Unlike the per-driver congestion window, this "
-      "coordinates all drivers on the worker and reacts to the rate-limit signal "
+      "coordinates all drivers on the worker that run the same policy and "
+      "reacts to the rate-limit signal "
       "directly, not to RTT. Recovery doubles a fractional window until one, "
-      "then uses additive increase. The first query to reach a backend fixes "
-      "its policy for the life of the worker process; later queries contribute "
-      "their outcomes to the adaptation but cannot change the setting. ")
+      "then uses additive increase. "
+      "Queries that resolve to the same policy share a backend's rate "
+      "limiter, and each distinct policy gets its own.")
 
   /// Legacy integral override for the adaptive congestion-window floor.
   VELOX_QUERY_CONFIG(
@@ -1572,9 +1573,9 @@ class QueryConfig {
       "Positive values preserve the legacy in-flight floor; zero delegates to "
       "the backend policy, which may select a fractional floor and pace "
       "discrete admissions using the learned service horizon. Only used when "
-      "rpc.ratelimiter.adaptive_enabled is true. The first query to reach a "
-      "backend fixes its policy for the life of the worker process; later "
-      "queries contribute outcomes but cannot change it.")
+      "rpc.ratelimiter.adaptive_enabled is true. "
+      "Queries that resolve to the same policy share a backend's rate "
+      "limiter, and each distinct policy gets its own.")
 
   /// Multiplicative-decrease factor for the adaptive rate-limit capacity.
   VELOX_QUERY_CONFIG(
@@ -1587,7 +1588,9 @@ class QueryConfig {
       "on overload. Canonical typed overload completions from the same admitted "
       "epoch are coalesced; function-specific aggregate overload verdicts "
       "apply at driver consumption. Default 0.5 (halve). Clamped to "
-      "(0, 1). Only used when rpc.ratelimiter.adaptive_enabled is true. The first query to reach a backend fixes its policy for the life of the worker process; later queries contribute their outcomes to the adaptation but cannot change the setting. ")
+      "(0, 1). Only used when rpc.ratelimiter.adaptive_enabled is true. "
+      "Queries that resolve to the same policy share a backend's rate "
+      "limiter, and each distinct policy gets its own.")
 
   /// Legacy ceiling for a backend's rate-limit capacity.
   VELOX_QUERY_CONFIG(
@@ -1600,13 +1603,13 @@ class QueryConfig {
       "across drivers. Default 200. Zero defers to the function ceiling or the "
       "built-in legacy limit. A positive value overrides the function ceiling. "
       "With admission-controlled dispatch this cap bounds in-flight work "
-      "against that backend across every driver on the worker; the adaptive "
+      "against that backend across every driver on the worker that runs the "
+      "same policy; the adaptive "
       "limiter shrinks from here toward rpc.ratelimiter.min_limit under "
       "overload. Superseded by rpc.ratelimiter.hard_limit when that property "
-      "is non-negative. The first "
-      "query to reach a backend fixes its policy for the life of the worker "
-      "process; later queries contribute their outcomes to the adaptation but "
-      "cannot change the setting.")
+      "is non-negative. "
+      "Queries that resolve to the same policy share a backend's rate "
+      "limiter, and each distinct policy gets its own.")
 
   /// Versioned hard ceiling for a backend's rate-limit capacity.
   VELOX_QUERY_CONFIG(
@@ -1620,7 +1623,9 @@ class QueryConfig {
       "rollouts. Zero adds no session ceiling; a positive value is combined "
       "with the function ceiling using the smaller positive value. With no "
       "positive ceiling, adaptive mode starts at 200 with a 1,000,000 safety "
-      "ceiling and fixed mode uses 200.")
+      "ceiling and fixed mode uses 200. Queries that resolve to the same "
+      "policy share a backend's rate limiter, and each distinct policy gets "
+      "its own.")
 
   // --- Hand-written accessors for properties that need custom logic ---
 

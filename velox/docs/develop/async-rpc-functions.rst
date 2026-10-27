@@ -114,9 +114,10 @@ An async RPC function subclasses
      - The concurrency ceiling requested by function options, or ``0`` when
        unset.
    * - ``admissionKey()``
-     - Key used to select the process-wide shared admission bucket. Empty keys
-       share the default ``""`` bucket. Override this method when requests
-       share a backend-specific capacity pool.
+     - Key used, together with the query's resolved rate-limiter policy, to
+       select a process-wide admission bucket. Empty keys share the default
+       ``""`` bucket. Override this method when requests share a
+       backend-specific capacity pool.
    * - ``dispatchPerRow(rows, args)``
      - Per-row dispatch. Send one RPC per active row and return one future per
        row, keyed by the original row index. Null-input rows should return an
@@ -289,15 +290,16 @@ costs one unit per row.
   derived from the ratio of baseline to observed RTT). Tunables:
   ``rpc.congestion.*`` (see :doc:`/configs`).
 * **Per-backend admission** — ``RPCRateLimiter``
-  (``velox/exec/rpc/RPCRateLimiter.h``), one instance per admission key,
-  obtained from the process-scoped ``RPCRateLimiterRegistry`` and keyed by
-  ``admissionKey()``:
-  an adaptive limit shared across every driver hitting that backend —
-  multiplicative decrease on overload, doubling recovery below one, and
-  additive increase at or above one. Distinct admission keys adapt
-  independently; functions returning the same key, including ``""``, share
-  one controller. The worker properties are
-  ``rpc.ratelimiter.adaptive_enabled``, ``rpc.ratelimiter.min_limit``,
+  (``velox/exec/rpc/RPCRateLimiter.h``), one instance per admission key and
+  policy, obtained from the process-scoped ``RPCRateLimiterRegistry`` and
+  keyed by ``admissionKey()`` and the query's resolved policy:
+  an adaptive limit shared across every driver hitting that backend under
+  that policy — multiplicative decrease on overload, doubling recovery below
+  one, and additive increase at or above one. Distinct admission keys adapt
+  independently; queries whose functions return the same key, including
+  ``""``, share one controller when they resolve to the same policy. The
+  worker properties are ``rpc.ratelimiter.adaptive_enabled``,
+  ``rpc.ratelimiter.min_limit``,
   ``rpc.ratelimiter.decrease_factor``, and
   ``rpc.ratelimiter.max_limit`` (see :doc:`/configs`).
 
@@ -306,17 +308,19 @@ costs one unit per row.
   the smoothed successful RPC duration. The class and configuration names
   retain the historical "rate limiter" terminology.
 
-Each admission key is configured by the first query that reaches it. Adaptive
-control defaults to enabled with a legacy ceiling of 200, an integral session
-floor of 50, and a decrease factor of 0.5. Setting
+A query's policy is resolved from its session properties and its function's
+stable bounds. Adaptive control defaults to enabled with a legacy ceiling of
+200, an integral session floor of 50, and a decrease factor of 0.5. Setting
 ``rpc.ratelimiter.min_limit`` to ``0`` delegates the floor to
 ``configuredAdaptiveFloor()``. The legacy ``rpc.ratelimiter.max_limit`` keeps
 its original behavior during mixed-version rollout. A non-negative
 ``rpc.ratelimiter.hard_limit`` supersedes it: zero adds no session ceiling and
 a positive value is combined with ``configuredCeiling()`` using the smaller
-positive value. Minus one, the default, retains legacy behavior. Functions that
-share an admission key must declare the same stable floor and ceiling. Later
-queries cannot reconfigure an initialized key until the worker restarts.
+positive value. Minus one, the default, retains legacy behavior. The first
+query to reach an admission key seals its shared limiter with its policy. A
+later query whose resolved policy differs runs under a limiter for that policy,
+so the limiters for one key can together admit the sum of their ceilings. Each
+limiter lives until the worker restarts.
 
 With ``rpc.ratelimiter.hard_limit=0`` and no function ceiling,
 ``rpcRateLimiterHardLimit`` is 1,000,000 while the current and lifetime
