@@ -16,6 +16,7 @@
 #pragma once
 
 #include "velox/core/PlanNode.h"
+#include "velox/core/QueryCtx.h"
 
 #include <optional>
 #include <string>
@@ -36,7 +37,9 @@ struct CudfPlanNodeTraits {
 };
 
 /// Base class of plan nodes that run cuDF operators. Applications may also
-/// implement it for their own nodes.
+/// implement it for their own nodes, or register a CudfPlanNodeDescriptor for
+/// an existing node class. Neither interface chooses a replacement
+/// implementation for the application's node.
 class CudfPlanNode : public core::PlanNode {
  public:
   using PlanNode::PlanNode;
@@ -49,9 +52,49 @@ class CudfPlanNode : public core::PlanNode {
       std::vector<core::PlanNodePtr> sources) const = 0;
 };
 
+/// Supplies representation and rebuilding support for nodes owned by another
+/// library. Operator construction remains registered with LocalPlanner through
+/// Operator::PlanNodeTranslator. Descriptors must be registered before
+/// planning.
+class CudfPlanNodeDescriptor {
+ public:
+  virtual ~CudfPlanNodeDescriptor() = default;
+  virtual bool canHandle(const core::PlanNode& node) const = 0;
+  virtual CudfPlanNodeTraits traits(
+      const core::PlanNode& node,
+      const core::QueryCtx& queryCtx) const = 0;
+  virtual core::PlanNodePtr withSources(
+      const core::PlanNodePtr& node,
+      std::vector<core::PlanNodePtr> sources) const = 0;
+};
+
+/// Names identify registrations for targeted cleanup. Duplicate names fail;
+/// intrinsic CudfPlanNode contracts take precedence over registered
+/// descriptors.
+void registerCudfPlanNodeDescriptor(
+    std::string name,
+    std::shared_ptr<const CudfPlanNodeDescriptor> descriptor);
+void unregisterCudfPlanNodeDescriptor(const std::string& name);
+
+/// Validates an engine-built or rewritten plan without changing it. A terminal
+/// sink has no output and is independent of the requested task representation.
+void validateCudfPlan(
+    const core::PlanNodePtr& plan,
+    const core::QueryCtx& queryCtx,
+    VectorRepresentation taskOutput = VectorRepresentation::kVelox);
+
 namespace detail {
 core::PlanNodePtr rebuildCudfLocalPartition(
     const core::LocalPartitionNode& node,
+    std::vector<core::PlanNodePtr> sources);
+std::optional<CudfPlanNodeTraits> customCudfPlanNodeTraits(
+    const core::PlanNodePtr& node,
+    const core::QueryCtx& queryCtx);
+CudfPlanNodeTraits cudfPlanNodeTraits(
+    const core::PlanNodePtr& node,
+    const core::QueryCtx& queryCtx);
+core::PlanNodePtr rebuildCustomCudfPlanNode(
+    const core::PlanNodePtr& node,
     std::vector<core::PlanNodePtr> sources);
 } // namespace detail
 
