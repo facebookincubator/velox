@@ -541,6 +541,7 @@ Task::~Task() {
   CLEAR(taskStats_ = TaskStats());
   CLEAR(stateChangePromises_.clear());
   CLEAR(taskCompletionPromises_.clear());
+  CLEAR(allDriversClosedPromises_.clear());
   CLEAR(splitsStates_.clear());
   CLEAR(drivers_.clear());
   CLEAR(driverFactories_.clear());
@@ -1250,6 +1251,9 @@ void Task::finishUnstartedDrivers() {
 std::shared_ptr<Driver> Task::getDriver(uint32_t driverId) const {
   VELOX_CHECK_LT(driverId, drivers_.size());
   std::unique_lock<std::timed_mutex> l(mutex_);
+  if (drivers_[driverId] != nullptr && drivers_[driverId]->isTerminated()) {
+    return nullptr;
+  }
   return drivers_[driverId];
 }
 
@@ -1512,10 +1516,7 @@ void Task::resume(std::shared_ptr<Task> self) {
   SCOPE_EXIT {
     // Get the stats and free the resources of Drivers that were not on
     // thread.
-    for (auto& driver : offThreadDrivers) {
-      self->driversClosedByTask_.emplace_back(driver);
-      driver->closeByTask();
-    }
+    self->closeDriversByTask(offThreadDrivers);
     // Fulfill resume futures.
     for (auto& promise : resumePromises) {
       promise.setValue();
@@ -1577,8 +1578,7 @@ void Task::resume(std::shared_ptr<Task> self) {
       }
       driver->state().isTerminated = true;
       driver->state().setThread();
-      self->driverClosedLocked();
-      offThreadDrivers.push_back(std::move(driver));
+      offThreadDrivers.push_back(driver);
     }
   }
   resumePromises.swap(self->resumePromises_);
@@ -1748,6 +1748,7 @@ void Task::removeDriver(std::shared_ptr<Task> self, Driver* driver) {
   bool foundDriver = false;
   bool allFinished = true;
   EventCompletionNotifier stateChangeNotifier;
+  EventCompletionNotifier allDriversClosedNotifier;
   {
     std::lock_guard<std::timed_mutex> taskLock(self->mutex_);
     for (auto& driverPtr : self->drivers_) {
@@ -1770,6 +1771,10 @@ void Task::removeDriver(std::shared_ptr<Task> self, Driver* driver) {
       // Release the driver, note that after this 'driver' is invalid.
       driverPtr = nullptr;
       self->driverClosedLocked();
+      if (self->allDriversClosedLocked()) {
+        allDriversClosedNotifier.activate(
+            std::move(self->allDriversClosedPromises_));
+      }
 
       allFinished = self->checkIfFinishedLocked();
 
@@ -1797,6 +1802,7 @@ void Task::removeDriver(std::shared_ptr<Task> self, Driver* driver) {
     }
   }
   stateChangeNotifier.notify();
+  allDriversClosedNotifier.notify();
 
   if (!foundDriver) {
     LOG(WARNING) << "Trying to remove a Driver twice from its Task";
@@ -2618,6 +2624,32 @@ void Task::driverClosedLocked() {
   ++numFinishedDrivers_;
 }
 
+bool Task::allDriversClosedLocked() const {
+  return !isRunningLocked() &&
+      std::ranges::none_of(
+          drivers_, [](const auto& driver) { return driver != nullptr; });
+}
+
+void Task::closeDriversByTask(
+    const std::vector<std::shared_ptr<Driver>>& drivers) {
+  for (const auto& driver : drivers) {
+    driver->closeByTask();
+    EventCompletionNotifier allDriversClosedNotifier;
+    {
+      std::lock_guard<std::timed_mutex> l(mutex_);
+      auto driverSlot = std::ranges::find(drivers_, driver);
+      VELOX_DCHECK(driverSlot != drivers_.end());
+      *driverSlot = nullptr;
+      driverClosedLocked();
+      driversClosedByTask_.emplace_back(driver);
+      if (allDriversClosedLocked()) {
+        allDriversClosedNotifier.activate(std::move(allDriversClosedPromises_));
+      }
+    }
+    allDriversClosedNotifier.notify();
+  }
+}
+
 bool Task::checkIfFinishedLocked() {
   if (!isRunningLocked()) {
     return false;
@@ -2997,6 +3029,7 @@ ContinueFuture Task::terminate(TaskState terminalState) {
   std::vector<std::shared_ptr<Driver>> offThreadDrivers;
   EventCompletionNotifier taskCompletionNotifier;
   EventCompletionNotifier stateChangeNotifier;
+  EventCompletionNotifier allDriversClosedNotifier;
   std::vector<ContinuePromise> barrierPromises;
   std::vector<std::shared_ptr<ExchangeClient>> exchangeClients;
   bool removeFromOutputBufferManager{false};
@@ -3043,6 +3076,11 @@ ContinueFuture Task::terminate(TaskState terminalState) {
     taskCompletionNotifier.activate(
         std::move(taskCompletionPromises_), [&]() { onTaskCompletion(); });
     stateChangeNotifier.activate(std::move(stateChangePromises_));
+    // If a driver is still open, the last driver to close realizes
+    // allDriversClosedFuture().
+    if (allDriversClosedLocked()) {
+      allDriversClosedNotifier.activate(std::move(allDriversClosedPromises_));
+    }
 
     // Update the total number of drivers if we were cancelled.
     numTotalDrivers_ = seenSplitGroups_.size() * numDriversPerSplitGroup_ +
@@ -3058,8 +3096,7 @@ ContinueFuture Task::terminate(TaskState terminalState) {
       if (driver) {
         if (enterForTerminateLocked(driver->state()) ==
             StopReason::kTerminate) {
-          offThreadDrivers.push_back(std::move(driver));
-          driverClosedLocked();
+          offThreadDrivers.push_back(driver);
         }
       }
     }
@@ -3075,13 +3112,11 @@ ContinueFuture Task::terminate(TaskState terminalState) {
 
   taskCompletionNotifier.notify();
   stateChangeNotifier.notify();
+  allDriversClosedNotifier.notify();
 
   // Get the stats and free the resources of Drivers that were not on
   // thread.
-  for (auto& driver : offThreadDrivers) {
-    driversClosedByTask_.emplace_back(driver);
-    driver->closeByTask();
-  }
+  closeDriversByTask(offThreadDrivers);
 
   // We continue all Drivers waiting for promises known to the
   // Task. The Drivers are now detached from Task and therefore will
@@ -3550,6 +3585,17 @@ ContinueFuture Task::taskDeletionFuture() {
   auto [promise, future] = makeVeloxContinuePromiseContract(
       fmt::format("Task::taskDeletionFuture {}", taskId_));
   taskDeletionPromises_.emplace_back(std::move(promise));
+  return std::move(future);
+}
+
+ContinueFuture Task::allDriversClosedFuture() {
+  std::lock_guard<std::timed_mutex> l(mutex_);
+  if (allDriversClosedLocked()) {
+    return ContinueFuture();
+  }
+  auto [promise, future] = makeVeloxContinuePromiseContract(
+      fmt::format("Task::allDriversClosedFuture {}", taskId_));
+  allDriversClosedPromises_.emplace_back(std::move(promise));
   return std::move(future);
 }
 
