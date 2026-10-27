@@ -239,16 +239,15 @@ size_t replaceInvalidUTF8Characters(
         outputIndex += charLength;
         inputIndex += charLength;
       } else {
-        const auto bytesConsumed = decodeUtf8CodePointOrReplacement(
-            input + inputIndex, len - inputIndex, codePoint);
         const auto& replacementCharacterString =
-            kReplacementCharacterStrings[0];
+            getInvalidUTF8ReplacementString(
+                input + inputIndex, len - inputIndex, -charLength);
         std::memcpy(
             outputBuffer + outputIndex,
             replacementCharacterString.data(),
             replacementCharacterString.size());
         outputIndex += replacementCharacterString.size();
-        inputIndex += bytesConsumed;
+        inputIndex += -charLength;
       }
     }
   }
