@@ -294,8 +294,8 @@ costs one unit per row.
   policy, obtained from the process-scoped ``RPCRateLimiterRegistry`` and
   keyed by ``admissionKey()`` and the query's resolved policy:
   an adaptive limit shared across every driver hitting that backend under
-  that policy — multiplicative decrease on overload, doubling recovery below
-  one, and additive increase at or above one. Distinct admission keys adapt
+  that policy — multiplicative decrease on overload, recovery that doubles
+  every service horizon below one, and additive increase at or above one. Distinct admission keys adapt
   independently; queries whose functions return the same key, including
   ``""``, share one controller when they resolve to the same policy. The
   worker properties are ``rpc.ratelimiter.adaptive_enabled``,
@@ -309,18 +309,23 @@ costs one unit per row.
   retain the historical "rate limiter" terminology.
 
 A query's policy is resolved from its session properties and its function's
-stable bounds. Adaptive control defaults to enabled with a legacy ceiling of
-200, an integral session floor of 50, and a decrease factor of 0.5. Setting
-``rpc.ratelimiter.min_limit`` to ``0`` delegates the floor to
-``configuredAdaptiveFloor()``. The legacy ``rpc.ratelimiter.max_limit`` keeps
-its original behavior during mixed-version rollout. A non-negative
-``rpc.ratelimiter.hard_limit`` supersedes it: zero adds no session ceiling and
-a positive value is combined with ``configuredCeiling()`` using the smaller
-positive value. Minus one, the default, retains legacy behavior. The first
-query to reach an admission key seals its shared limiter with its policy. A
-later query whose resolved policy differs runs under a limiter for that policy,
-so the limiters for one key can together admit the sum of their ceilings. Each
-limiter lives until the worker restarts.
+stable bounds, and ``rpc.ratelimiter.hard_limit`` selects whose bounds win.
+Minus one, the default, keeps the session's precedence: a positive
+``rpc.ratelimiter.min_limit`` (default 50) replaces ``configuredAdaptiveFloor()``
+and a positive ``rpc.ratelimiter.max_limit`` (default 200) replaces
+``configuredCeiling()``. Zero or more lets the function's bounds win, since
+session properties apply to every function in the query while a function
+declares bounds for its own backend, and ``max_limit`` no longer applies. A
+positive value caps ``configuredCeiling()``, the smaller winning, and is the
+ceiling when the function declares none. Zero adds no session ceiling: with no
+function ceiling, the window starts at 200 and may grow to the 1,000,000 safety
+ceiling. To use the function's bounds and keep a cap, set ``hard_limit`` to the
+cap, such as 200. ``min_limit`` still applies when the function declares no
+floor. Adaptive control defaults to enabled with a decrease factor of 0.5. The
+first query to reach an admission key seals its shared limiter with its policy.
+A later query whose resolved policy differs runs under a limiter for that
+policy, so the limiters for one key can together admit the sum of their
+ceilings. Each limiter lives until the worker restarts.
 
 With ``rpc.ratelimiter.hard_limit=0`` and no function ceiling,
 ``rpcRateLimiterHardLimit`` is 1,000,000 while the current and lifetime
@@ -329,8 +334,16 @@ prove overload. With a decrease factor of 0.5, overloads from successive
 admission epochs move the window from 200 to 100 to 50; completions admitted in
 the same epoch coalesce after the first decrease. If the function floor permits
 fractional pacing, successive overload epochs can move the window from 1 to 0.5
-to 0.25. Healthy completions never shrink the window: they recover 0.25 to 0.5
-to 1 before additive growth resumes, clamped at the hard limit.
+to 0.25. They stop at the probe floor, which keeps the gap between probes
+within ``rpc.ratelimiter.max_probe_interval_ms`` (60 seconds by default) while
+rejections return quickly. A probe that hangs until it times out holds the only
+paced slot, so timeouts space probes at least one timeout apart. The floor is
+also a minimum load of one probe per interval per worker; zero removes it.
+Healthy completions never shrink the window: after the first paced success it
+doubles every service horizon back to 1, then additive growth resumes, clamped
+at the hard limit. A non-overload failure stops that growth until the next
+success, and an overload cuts the window as it stood when the rejected call was
+admitted.
 
 ``evaluateCongestion()`` returns one of five verdicts. Canonical typed overload
 backs off shared admission at completion time before its lease is released; the
