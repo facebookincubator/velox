@@ -383,13 +383,13 @@ std::optional<arrow::SizeStatisticsLevel> toSizeStatisticsLevel(
     return std::nullopt;
   }
   if (*level == "NONE") {
-    return arrow::SizeStatisticsLevel::None;
+    return arrow::SizeStatisticsLevel::kNone;
   }
   if (*level == "COLUMN_CHUNK") {
-    return arrow::SizeStatisticsLevel::ColumnChunk;
+    return arrow::SizeStatisticsLevel::kColumnChunk;
   }
   if (*level == "PAGE_AND_COLUMN_CHUNK") {
-    return arrow::SizeStatisticsLevel::PageAndColumnChunk;
+    return arrow::SizeStatisticsLevel::kPageAndColumnChunk;
   }
   VELOX_USER_FAIL(
       "Unsupported parquet writer size statistics level {}", *level);

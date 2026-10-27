@@ -29,6 +29,7 @@
 #include <utility>
 #include <vector>
 
+#include "velox/dwio/parquet/common/LevelConversion.h"
 #include "velox/dwio/parquet/writer/arrow/Platform.h"
 #include "velox/dwio/parquet/writer/arrow/Types.h"
 
@@ -457,6 +458,8 @@ class PARQUET_EXPORT ColumnDescriptor {
   int16_t maxRepetitionLevel() const {
     return maxRepetitionLevel_;
   }
+
+  LevelInfo levelInfo() const;
 
   Type::type physicalType() const {
     return primitiveNode_->physicalType();

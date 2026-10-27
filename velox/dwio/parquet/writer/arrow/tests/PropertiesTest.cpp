@@ -49,7 +49,7 @@ TEST(TestWriterProperties, basics) {
   ASSERT_EQ(ParquetDataPageVersion::V1, props->dataPageVersion());
   ASSERT_FALSE(props->pageChecksumEnabled());
   ASSERT_EQ(
-      SizeStatisticsLevel::PageAndColumnChunk, props->sizeStatisticsLevel());
+      SizeStatisticsLevel::kPageAndColumnChunk, props->sizeStatisticsLevel());
 }
 
 TEST(TestWriterProperties, advancedHandling) {

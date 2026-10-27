@@ -103,11 +103,11 @@ enum class ParquetDataPageVersion { V1, V2 };
 /// Controls the level of size statistics that are written to the file.
 enum class SizeStatisticsLevel : uint8_t {
   // No size statistics are written.
-  None = 0,
+  kNone = 0,
   // Only column chunk size statistics are written.
-  ColumnChunk,
+  kColumnChunk,
   // Both size statistics in the column chunk and page index are written.
-  PageAndColumnChunk
+  kPageAndColumnChunk
 };
 
 /// Align the default buffer size to a small multiple of a page size.
@@ -229,7 +229,7 @@ static constexpr Compression::type DEFAULT_COMPRESSION_TYPE =
     Compression::UNCOMPRESSED;
 static constexpr bool DEFAULT_IS_PAGE_INDEX_ENABLED = true;
 static constexpr SizeStatisticsLevel DEFAULT_SIZE_STATISTICS_LEVEL =
-    SizeStatisticsLevel::PageAndColumnChunk;
+    SizeStatisticsLevel::kPageAndColumnChunk;
 
 class PARQUET_EXPORT ColumnProperties {
  public:
@@ -745,11 +745,11 @@ class PARQUET_EXPORT WriterProperties {
     }
 
     /// \brief Set the level to write size statistics for all columns. Default
-    /// is PageAndColumnChunk.
+    /// is kPageAndColumnChunk.
     ///
     /// \param level The level to write size statistics. Note that if page index
     /// is not enabled, page level size statistics will not be written even if
-    /// the level is set to PageAndColumnChunk.
+    /// the level is set to kPageAndColumnChunk.
     Builder* setSizeStatisticsLevel(SizeStatisticsLevel level) {
       sizeStatisticsLevel_ = level;
       return this;

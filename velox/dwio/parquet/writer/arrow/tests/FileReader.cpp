@@ -62,23 +62,6 @@ static constexpr uint32_t kFooterSize = 8;
 // For PARQUET-816.
 static constexpr int64_t kMaxDictHeaderSize = 100;
 
-LevelInfo computeLevelInfo(const ColumnDescriptor* descr) {
-  LevelInfo levelInfo;
-  levelInfo.defLevel = descr->maxDefinitionLevel();
-  levelInfo.repLevel = descr->maxRepetitionLevel();
-
-  int16_t minSpacedDefLevel = descr->maxDefinitionLevel();
-  const schema::Node* node = descr->schemaNode().get();
-  while (node != nullptr && !node->isRepeated()) {
-    if (node->isOptional()) {
-      minSpacedDefLevel--;
-    }
-    node = node->parent();
-  }
-  levelInfo.repeatedAncestorDefLevel = minSpacedDefLevel;
-  return levelInfo;
-}
-
 // ----------------------------------------------------------------------.
 // RowGroupReader public API.
 
@@ -113,7 +96,7 @@ std::shared_ptr<internal::RecordReader> RowGroupReader::recordReader(int i) {
   const ColumnDescriptor* descr = metadata()->schema()->column(i);
   auto reader = internal::RecordReader::make(
       descr,
-      computeLevelInfo(descr),
+      descr->levelInfo(),
       const_cast<ReaderProperties*>(contents_->properties())->memoryPool());
   reader->setPageReader(contents_->getColumnPageReader(i));
   return reader;

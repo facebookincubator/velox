@@ -166,23 +166,6 @@ struct ValueBufferSlicer {
   MemoryPool* pool_;
 };
 
-LevelInfo computeLevelInfo(const ColumnDescriptor* descr) {
-  LevelInfo levelInfo;
-  levelInfo.defLevel = descr->maxDefinitionLevel();
-  levelInfo.repLevel = descr->maxRepetitionLevel();
-
-  int16_t minSpacedDefLevel = descr->maxDefinitionLevel();
-  const schema::Node* node = descr->schemaNode().get();
-  while (node != nullptr && !node->isRepeated()) {
-    if (node->isOptional()) {
-      minSpacedDefLevel--;
-    }
-    node = node->parent();
-  }
-  levelInfo.repeatedAncestorDefLevel = minSpacedDefLevel;
-  return levelInfo;
-}
-
 template <class T>
 inline const T* addIfNotNull(const T* base, int64_t offset) {
   if (base != nullptr) {
@@ -898,7 +881,7 @@ class ColumnWriterImpl {
       const WriterProperties* properties)
       : metadata_(metadata),
         descr_(metadata->descr()),
-        levelInfo_(computeLevelInfo(metadata->descr())),
+        levelInfo_(metadata->descr()->levelInfo()),
         pager_(std::move(pager)),
         hasDictionary_(useDictionary),
         encoding_(encoding),
@@ -1494,9 +1477,10 @@ class TypedColumnWriterImpl : public ColumnWriterImpl,
       pageStatistics_ = makeStatistics<DType>(descr_, allocator_);
       chunkStatistics_ = makeStatistics<DType>(descr_, allocator_);
     }
-    if (properties->sizeStatisticsLevel() == SizeStatisticsLevel::ColumnChunk ||
+    if (properties->sizeStatisticsLevel() ==
+            SizeStatisticsLevel::kColumnChunk ||
         properties->sizeStatisticsLevel() ==
-            SizeStatisticsLevel::PageAndColumnChunk) {
+            SizeStatisticsLevel::kPageAndColumnChunk) {
       pageSizeStatistics_ = SizeStatistics::make(descr_);
       chunkSizeStatistics_ = SizeStatistics::make(descr_);
     }
@@ -1707,7 +1691,7 @@ class TypedColumnWriterImpl : public ColumnWriterImpl,
       result.encodedStats = pageStatistics_->encode();
     }
     if (properties_->sizeStatisticsLevel() ==
-        SizeStatisticsLevel::PageAndColumnChunk) {
+        SizeStatisticsLevel::kPageAndColumnChunk) {
       VELOX_DCHECK_NOT_NULL(pageSizeStatistics_);
       result.sizeStats = *pageSizeStatistics_;
     }

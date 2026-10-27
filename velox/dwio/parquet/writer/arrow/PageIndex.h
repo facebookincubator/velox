@@ -345,7 +345,7 @@ class PARQUET_EXPORT OffsetIndexBuilder {
       int64_t offset,
       int32_t compressedPageSize,
       int64_t firstRowIndex,
-      std::optional<int64_t> unencodedByteArrayLength = {}) = 0;
+      std::optional<int64_t> unencodedByteArrayDataBytes) = 0;
 
   /// \brief Add page location and size stats of a data page.
   void addPage(

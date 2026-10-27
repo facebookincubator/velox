@@ -287,7 +287,7 @@ TEST_F(ParquetWriterTest, createFormatOptions) {
   EXPECT_TRUE(parquetOptions->enableWritePageIndex.value());
   EXPECT_EQ(
       parquetOptions->sizeStatisticsLevel.value(),
-      parquetArrow::SizeStatisticsLevel::ColumnChunk);
+      parquetArrow::SizeStatisticsLevel::kColumnChunk);
 
   // When unset in both connector and session config, the option is left unset
   // so the writer falls back to its default (page index on).
@@ -1045,7 +1045,7 @@ TEST_F(ParquetWriterTest, sizeStatistics) {
         ASSERT_NE(rowGroupIndexReader, nullptr);
         auto offsetIndex = rowGroupIndexReader->getOffsetIndex(0);
         ASSERT_NE(offsetIndex, nullptr);
-        if (level == parquetArrow::SizeStatisticsLevel::PageAndColumnChunk ||
+        if (level == parquetArrow::SizeStatisticsLevel::kPageAndColumnChunk ||
             !level.has_value()) {
           EXPECT_THAT(
               offsetIndex->unencodedByteArrayDataBytes(),
@@ -1056,11 +1056,13 @@ TEST_F(ParquetWriterTest, sizeStatistics) {
       };
 
   for (const bool enableDictionary : {false, true}) {
-    verify(parquetArrow::SizeStatisticsLevel::None, false, enableDictionary);
+    verify(parquetArrow::SizeStatisticsLevel::kNone, false, enableDictionary);
     verify(
-        parquetArrow::SizeStatisticsLevel::ColumnChunk, true, enableDictionary);
+        parquetArrow::SizeStatisticsLevel::kColumnChunk,
+        true,
+        enableDictionary);
     verify(
-        parquetArrow::SizeStatisticsLevel::PageAndColumnChunk,
+        parquetArrow::SizeStatisticsLevel::kPageAndColumnChunk,
         true,
         enableDictionary);
     verify(std::nullopt, true, enableDictionary);

@@ -243,12 +243,12 @@ TEST_F(SizeStatisticsRoundTripTest, enableSizeStats) {
     ])"});
 
   for (const auto sizeStatsLevel :
-       {SizeStatisticsLevel::None,
-        SizeStatisticsLevel::ColumnChunk,
-        SizeStatisticsLevel::PageAndColumnChunk}) {
+       {SizeStatisticsLevel::kNone,
+        SizeStatisticsLevel::kColumnChunk,
+        SizeStatisticsLevel::kPageAndColumnChunk}) {
     writeFile(sizeStatsLevel, table, /*maxRowGroupLength=*/2, /*pageSize=*/1);
     readSizeStatistics();
-    if (sizeStatsLevel == SizeStatisticsLevel::None) {
+    if (sizeStatsLevel == SizeStatisticsLevel::kNone) {
       EXPECT_THAT(
           rowGroupStats_,
           ::testing::ElementsAre(
@@ -265,7 +265,7 @@ TEST_F(SizeStatisticsRoundTripTest, enableSizeStats) {
               SizeStatistics{{0, 1, 1, 1, 1, 0}, {2, 2, 0}, std::nullopt},
               SizeStatistics{{0, 1, 1, 1, 1, 0}, {2, 2, 0}, 0}));
     }
-    if (sizeStatsLevel == SizeStatisticsLevel::PageAndColumnChunk) {
+    if (sizeStatsLevel == SizeStatisticsLevel::kPageAndColumnChunk) {
       EXPECT_THAT(
           pageStats_,
           ::testing::ElementsAre(
@@ -298,7 +298,7 @@ TEST_F(SizeStatisticsRoundTripTest, writeDictionaryArray) {
   auto schema = ::arrow::schema({::arrow::field(
       "a", ::arrow::dictionary(::arrow::int16(), ::arrow::utf8()))});
   writeFile(
-      SizeStatisticsLevel::PageAndColumnChunk,
+      SizeStatisticsLevel::kPageAndColumnChunk,
       ::arrow::TableFromJSON(
           schema, {R"([["aa"],["aaa"],[null],["a"],["aaa"],["a"]])"}),
       /*maxRowGroupLength=*/2,
@@ -335,7 +335,7 @@ TEST_F(SizeStatisticsRoundTripTest, writePageInBatches) {
   for (int writeBatchSize : {100, 5, 4, 3, 2, 1}) {
     SCOPED_TRACE(writeBatchSize);
     writeFile(
-        SizeStatisticsLevel::PageAndColumnChunk,
+        SizeStatisticsLevel::kPageAndColumnChunk,
         table,
         /*maxRowGroupLength=*/1000,
         /*pageSize=*/1000,
@@ -367,7 +367,7 @@ TEST_F(SizeStatisticsRoundTripTest, largePage) {
   ASSERT_EQ(table->num_rows(), 90000);
 
   writeFile(
-      SizeStatisticsLevel::PageAndColumnChunk,
+      SizeStatisticsLevel::kPageAndColumnChunk,
       table,
       /*maxRowGroupLength=*/1 << 30,
       /*pageSize=*/1 << 30,
@@ -385,7 +385,7 @@ TEST_F(SizeStatisticsRoundTripTest, maxLevelZero) {
   auto schema = ::arrow::schema(
       {::arrow::field("a", ::arrow::utf8(), /*nullable=*/false)});
   writeFile(
-      SizeStatisticsLevel::PageAndColumnChunk,
+      SizeStatisticsLevel::kPageAndColumnChunk,
       ::arrow::TableFromJSON(schema, {R"([["foo"],["bar"]])"}),
       /*maxRowGroupLength=*/2,
       /*pageSize=*/1024);
