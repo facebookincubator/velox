@@ -849,15 +849,15 @@ void HashProbe::addInput(RowVectorPtr input) {
       input_ = nullptr;
       return;
     }
-    // Build side is empty. This state is valid only for anti, left and full
-    // joins.
+    // An empty table can still have spilled build partitions. Join types
+    // reaching this path must include probe rows without a match.
     VELOX_CHECK(joinIncludesMissesFromLeft(joinType_));
     if (isLeftSemiProjectJoin(joinType_) ||
-        (isAntiJoin(joinType_) && filter_)) {
-      // For anti join with filter and semi project join we need to decode the
-      // join keys columns to initialize 'nonNullInputRows_'. The anti join
-      // filter evaluation and semi project join output generation will access
-      // 'nonNullInputRows_' later.
+        (isAntiJoin(joinType_) &&
+         (filter_ || (nullAware_ && !emptyBuildSide())))) {
+      // Filter evaluation and semi project output need 'nonNullInputRows_'.
+      // Null-aware anti joins also need it to exclude NULL probe keys when
+      // non-empty build partitions have been spilled.
       decodeAndDetectNonNullKeys();
     }
     return;
@@ -1310,17 +1310,17 @@ RowVectorPtr HashProbe::getOutputInternal(bool toSpillOutput) {
   const bool isRightSemiFilterJoinNoFilter =
       !filter_ && isRightSemiFilterJoin(joinType_);
 
-  const bool emptyBuildSide = (table_->numDistinct() == 0);
+  const bool emptyTable = (table_->numDistinct() == 0);
 
   if (isRightSemiFilterJoinNoFilter) {
-    processRightSemiNoFilter(emptyBuildSide);
+    processRightSemiNoFilter(emptyTable);
     return nullptr;
   }
 
   // Left semi and anti joins are always cardinality reducing, e.g. for a
   // given row of input they produce zero or 1 row of output. Therefore, if
   // there is no extra filter we can process each batch of input in one go.
-  auto outputBatchSize = (isLeftSemiOrAntiJoinNoFilter || emptyBuildSide)
+  auto outputBatchSize = (isLeftSemiOrAntiJoinNoFilter || emptyTable)
       ? inputSize
       : outputBatchSize_;
   outputTableRowsCapacity_ = outputBatchSize;
@@ -1348,12 +1348,21 @@ RowVectorPtr HashProbe::getOutputInternal(bool toSpillOutput) {
     }
     int numOut = 0;
 
-    if (emptyBuildSide) {
-      // When build side is empty, anti and left joins return all probe side
-      // rows, including ones with null join keys.
-      std::iota(mapping.begin(), mapping.begin() + inputSize, 0);
-      std::fill(outputTableRows, outputTableRows + inputSize, nullptr);
-      numOut = inputSize;
+    if (emptyTable) {
+      if (isAntiJoin(joinType_) && nullAware_ && !filter_ &&
+          !emptyBuildSide()) {
+        // NULL probe keys do not pass a null-aware anti join when the build
+        // side is non-empty, even if its rows have been spilled.
+        for (auto i = 0; i < inputSize; ++i) {
+          if (nonNullInputRows_.isValid(i)) {
+            mapping[numOut++] = i;
+          }
+        }
+      } else {
+        std::iota(mapping.begin(), mapping.begin() + inputSize, 0);
+        numOut = inputSize;
+      }
+      std::fill(outputTableRows, outputTableRows + numOut, nullptr);
     } else if (isAntiJoin(joinType_) && !filter_) {
       if (nullAware_) {
         // When build side is not empty, anti join without a filter returns
@@ -1462,7 +1471,7 @@ RowVectorPtr HashProbe::getOutputInternal(bool toSpillOutput) {
 
     fillOutput(numOut);
 
-    if (isLeftSemiOrAntiJoinNoFilter || emptyBuildSide) {
+    if (isLeftSemiOrAntiJoinNoFilter || emptyTable) {
       input_ = nullptr;
     }
     return output_;
