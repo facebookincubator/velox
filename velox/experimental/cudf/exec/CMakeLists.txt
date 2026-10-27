@@ -35,6 +35,7 @@ add_library(
   CudfOrderBy.cpp
   CudfPlanNode.cpp
   CudfPlanNodeConversion.cpp
+  CudfPlanNodeTranslator.cpp
   CudfReduce.cpp
   CudfScanUtils.cpp
   CudfTopN.cpp
