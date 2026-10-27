@@ -151,7 +151,8 @@ std::shared_ptr<RPCRateLimiter> makePacingLimiter(
   return std::make_shared<RPCRateLimiter>(
       std::move(admissionKey),
       [&clock] { return clock.now(); },
-      clock.timekeeper());
+      clock.timekeeper(),
+      [] { return 1.0; });
 }
 
 void enableFractionalLimit(RPCRateLimiter& limiter, double minimumLimit) {
@@ -487,7 +488,13 @@ TEST_F(RPCRateLimiterTest, zeroCeilingStaysDeferredToProcessDefault) {
 // sealed with either follow the same capacity through overload and recovery.
 TEST_F(RPCRateLimiterTest, policiesThatMatchAdmitAlike) {
   auto trajectory = [](const RPCRateLimiter::Config& policy) {
-    auto limiter = std::make_shared<RPCRateLimiter>("test.backend");
+    // A frozen clock: a recovering paced window grows with elapsed time, which
+    // would make the trajectory depend on scheduling.
+    auto limiter = std::make_shared<RPCRateLimiter>(
+        "test.backend",
+        [] { return std::chrono::steady_clock::time_point{}; },
+        nullptr,
+        [] { return 1.0; });
     EXPECT_TRUE(limiter->initializeOrMatch(policy));
     std::vector<std::tuple<int64_t, int64_t, int64_t, int64_t, int64_t>> steps;
     auto record = [&] {
@@ -534,6 +541,33 @@ TEST_F(RPCRateLimiterTest, policiesThatMatchAdmitAlike) {
 // never merges policies that admit differently. The trajectory check cannot
 // see a change that merges fewer policies, so the number of matching pairs is
 // pinned as well.
+TEST_F(RPCRateLimiterTest, maxProbeIntervalIsPartOfThePolicy) {
+  auto& registry = RPCRateLimiterRegistry::global();
+  const RPCRateLimiter::Config oneMinute{
+      .adaptive = true, .ceiling = 25, .floor = 0.01};
+  auto tenSeconds = oneMinute;
+  tenSeconds.maxProbeInterval = std::chrono::seconds(10);
+
+  const auto first = registry.getForPolicy("test.probe-interval", oneMinute);
+  const auto second = registry.getForPolicy("test.probe-interval", tenSeconds);
+  EXPECT_FALSE(first.policyScoped);
+  EXPECT_TRUE(second.policyScoped);
+  EXPECT_NE(second.limiter, first.limiter);
+  EXPECT_EQ(
+      second.limiter->config().maxProbeInterval, std::chrono::seconds(10));
+
+  // A fixed limiter never paces, so the interval does not separate policies.
+  const RPCRateLimiter::Config fixed{.adaptive = false, .ceiling = 25};
+  auto fixedTenSeconds = fixed;
+  fixedTenSeconds.maxProbeInterval = std::chrono::seconds(10);
+  const auto fixedFirst =
+      registry.getForPolicy("test.probe-interval-fixed", fixed);
+  const auto fixedSecond =
+      registry.getForPolicy("test.probe-interval-fixed", fixedTenSeconds);
+  EXPECT_EQ(fixedSecond.limiter, fixedFirst.limiter);
+  EXPECT_FALSE(fixedSecond.policyScoped);
+}
+
 TEST_F(RPCRateLimiterTest, matchingPoliciesAdmitAlikeAcrossPolicyGrid) {
   constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
   std::vector<RPCRateLimiter::Config> grid;
@@ -553,7 +587,13 @@ TEST_F(RPCRateLimiterTest, matchingPoliciesAdmitAlikeAcrossPolicyGrid) {
         ", decrease=" + std::to_string(policy.decreaseFactor) + "}";
   };
   auto trajectory = [](const RPCRateLimiter::Config& policy) {
-    auto limiter = std::make_shared<RPCRateLimiter>("test.backend");
+    // A frozen clock: a recovering paced window grows with elapsed time, which
+    // would make the trajectory depend on scheduling.
+    auto limiter = std::make_shared<RPCRateLimiter>(
+        "test.backend",
+        [] { return std::chrono::steady_clock::time_point{}; },
+        nullptr,
+        [] { return 1.0; });
     EXPECT_TRUE(limiter->initializeOrMatch(policy));
     std::vector<int64_t> steps;
     auto record = [&] {
@@ -1273,7 +1313,8 @@ TEST_F(RPCRateLimiterTest, timerSchedulingFailureFailsEveryWaiter) {
   auto limiter = std::make_shared<RPCRateLimiter>(
       "test.throwing-timekeeper",
       [] { return std::chrono::steady_clock::time_point{}; },
-      &timekeeper);
+      &timekeeper,
+      [] { return 1.0; });
   enableFractionalLimit(*limiter, 0.25);
   limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
   limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
@@ -1291,7 +1332,10 @@ TEST_F(RPCRateLimiterTest, timerSchedulingFailureFailsEveryWaiter) {
 TEST_F(RPCRateLimiterTest, timerFailureAllowsLaterWaiterToRearm) {
   FailOncePacingClock clock;
   auto limiter = std::make_shared<RPCRateLimiter>(
-      "test.recovering-timekeeper", [&clock] { return clock.now(); }, &clock);
+      "test.recovering-timekeeper",
+      [&clock] { return clock.now(); },
+      &clock,
+      [] { return 1.0; });
   enableFractionalLimit(*limiter, 0.25);
   limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
   limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
@@ -1410,7 +1454,7 @@ TEST_F(RPCRateLimiterTest, losingPacedWaiterRearmsOnWinnerRelease) {
   EXPECT_EQ(limiter->tryAcquireUpTo(1).size(), 1);
 }
 
-TEST_F(RPCRateLimiterTest, fractionalLimitBacksOffAndRecoversToOne) {
+TEST_F(RPCRateLimiterTest, fractionalLimitRecoversWithTimeAfterASuccess) {
   ManualPacingClock clock;
   auto limiter = makePacingLimiter("test.paced.backend", clock);
   enableFractionalLimit(*limiter, 0.25);
@@ -1423,9 +1467,15 @@ TEST_F(RPCRateLimiterTest, fractionalLimitBacksOffAndRecoversToOne) {
   EXPECT_EQ(limiter->stats().limitMilli, 250);
   EXPECT_EQ(limiter->stats().lowWaterLimitMilli, 250);
 
+  // Without a success the window waits. The first success starts recovery:
+  // the window then doubles every horizon, up to one, and the next paced
+  // admission commits the growth.
+  clock.advance(1s);
+  EXPECT_EQ(limiter->stats().limitMilli, 250);
   limiter->onOutcome(RPCRateLimiter::Outcome::kSuccess, 1);
-  EXPECT_EQ(limiter->stats().limitMilli, 500);
-  limiter->onOutcome(RPCRateLimiter::Outcome::kSuccess, 1);
+  EXPECT_EQ(limiter->stats().limitMilli, 250);
+  clock.advance(2s);
+  EXPECT_FALSE(limiter->tryAcquireUpTo(1).empty());
   EXPECT_EQ(limiter->stats().limitMilli, 1'000);
   EXPECT_EQ(limiter->stats().capacity, 1);
   EXPECT_EQ(limiter->stats().lowWaterLimitMilli, 250);
@@ -1445,6 +1495,8 @@ TEST_F(RPCRateLimiterTest, fractionalLimitRecoversWithCeilingOne) {
   limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
   EXPECT_EQ(limiter->stats().limitMilli, 500);
   limiter->onOutcome(RPCRateLimiter::Outcome::kSuccess, 1);
+  clock.advance(2s);
+  EXPECT_FALSE(limiter->tryAcquireUpTo(1).empty());
   EXPECT_EQ(limiter->stats().limitMilli, 1'000);
   EXPECT_EQ(limiter->stats().capacity, 1);
 }
@@ -1562,9 +1614,14 @@ TEST_F(RPCRateLimiterTest, fractionalLimitIncreaseReschedulesEarlierWake) {
   auto wait = limiter->admitOrWait();
   ASSERT_FALSE(wait.admitted);
 
+  // A fixed window of 0.25 waits 4 horizons. Once a success starts recovery,
+  // the window doubles every horizon and the wait is T(0.25) = log2(1 + ln2 /
+  // 0.25) = 1.9156 horizons.
   limiter->onOutcome(RPCRateLimiter::Outcome::kSuccess, 1);
-  ASSERT_EQ(limiter->stats().limitMilli, 500);
-  clock.advance(2s);
+  ASSERT_EQ(limiter->stats().limitMilli, 250);
+  clock.advance(1'915ms);
+  EXPECT_FALSE(wait.wait.isReady());
+  clock.advance(1ms);
   EXPECT_TRUE(wait.wait.isReady());
 }
 
@@ -1583,7 +1640,7 @@ TEST_F(RPCRateLimiterTest, pacingUsesAdmissionStartForNextDeadline) {
   EXPECT_TRUE(limiter->admitOrWait().admitted);
 }
 
-TEST_F(RPCRateLimiterTest, pacingSupportsOneRequestPerHundredSeconds) {
+TEST_F(RPCRateLimiterTest, pacingProbesAtLeastOncePerMaxInterval) {
   ManualPacingClock clock;
   auto limiter = makePacingLimiter("test.paced.backend", clock);
   enableFractionalLimit(*limiter, 0.01);
@@ -1592,14 +1649,287 @@ TEST_F(RPCRateLimiterTest, pacingSupportsOneRequestPerHundredSeconds) {
   for (int i = 0; i < 7; ++i) {
     limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
   }
-  ASSERT_EQ(limiter->stats().limitMilli, 10);
+  // The configured floor of 0.01 is raised to 1s / 60s, so probes are at most
+  // 60s apart.
+  ASSERT_EQ(limiter->stats().limitMilli, 17);
 
   auto wait = limiter->admitOrWait();
   ASSERT_FALSE(wait.admitted);
-  clock.advance(99'999ms);
+  clock.advance(59'999ms);
   EXPECT_FALSE(wait.wait.isReady());
   clock.advance(1ms);
   EXPECT_TRUE(wait.wait.isReady());
+}
+
+// Admits one call whenever pacing allows, completes it with 'outcome', and
+// returns the number of calls admitted before 'stop' returns true or 'limit'
+// elapses.
+int64_t runPacedCalls(
+    RPCRateLimiter& limiter,
+    ManualPacingClock& clock,
+    RPCRateLimiter::Outcome outcome,
+    std::chrono::seconds limit,
+    const std::function<bool()>& stop) {
+  const auto deadline = clock.now() + limit;
+  // Bounds the loop when calls are admitted without the clock moving, as they
+  // are once pacing stops.
+  constexpr int64_t kMaxCalls{10'000};
+  int64_t numCalls{0};
+  while (!stop() && clock.now() < deadline && numCalls < kMaxCalls) {
+    auto wait = limiter.admitOrWait();
+    while (!wait.admitted && !wait.wait.isReady() && clock.now() < deadline) {
+      clock.advance(100ms);
+    }
+    if (!limiter.tryAcquireUpTo(1).empty()) {
+      ++numCalls;
+      limiter.onOutcome(outcome, outcome == RPCRateLimiter::Outcome::kSuccess);
+    }
+  }
+  return numCalls;
+}
+
+TEST_F(RPCRateLimiterTest, outageBacksOffToOneProbePerMaxInterval) {
+  ManualPacingClock clock;
+  auto limiter = makePacingLimiter("test.paced.outage", clock);
+  enableFractionalLimit(*limiter, 0.001);
+
+  // Every call is rejected for an hour. The window falls until the gap between
+  // probes reaches the 60s maximum: a window of 1s / 60s.
+  const auto numProbes = runPacedCalls(
+      *limiter, clock, RPCRateLimiter::Outcome::kOverload, 3'600s, [] {
+        return false;
+      });
+
+  EXPECT_EQ(limiter->stats().limitMilli, 17);
+  EXPECT_GE(numProbes, 60);
+  EXPECT_LE(numProbes, 75);
+}
+
+TEST_F(RPCRateLimiterTest, backOffProbesComeEarlyByAtMostTheJitter) {
+  ManualPacingClock clock;
+  // The earliest draw: every probe comes 20% before the interval.
+  auto limiter = std::make_shared<RPCRateLimiter>(
+      "test.paced.outage-jitter",
+      [&clock] { return clock.now(); },
+      clock.timekeeper(),
+      [] { return 0.0; });
+  enableFractionalLimit(*limiter, 0.001);
+
+  // The window still backs off to 1s / 60s, but probes come every 48s rather
+  // than every 60s: 75 an hour instead of 60.
+  const auto numProbes = runPacedCalls(
+      *limiter, clock, RPCRateLimiter::Outcome::kOverload, 3'600s, [] {
+        return false;
+      });
+
+  EXPECT_EQ(limiter->stats().limitMilli, 17);
+  EXPECT_GE(numProbes, 75);
+  EXPECT_LE(numProbes, 90);
+}
+
+TEST_F(RPCRateLimiterTest, outageBackOffFollowsConfiguredMaxProbeInterval) {
+  ManualPacingClock clock;
+  auto limiter = makePacingLimiter("test.paced.outage-10s", clock);
+  limiter->configure(
+      RPCRateLimiter::Config{
+          .adaptive = true,
+          .ceiling = 2,
+          .floor = 0.001,
+          .decreaseFactor = 0.5,
+          .maxProbeInterval = 10s,
+      });
+
+  // An hour of rejections backs off to one probe per 10s: a window of
+  // 1s / 10s.
+  const auto numProbes = runPacedCalls(
+      *limiter, clock, RPCRateLimiter::Outcome::kOverload, 3'600s, [] {
+        return false;
+      });
+
+  EXPECT_EQ(limiter->stats().limitMilli, 100);
+  EXPECT_GE(numProbes, 360);
+  EXPECT_LE(numProbes, 375);
+}
+
+TEST_F(RPCRateLimiterTest, slowBackendStaysPacedDuringAnOutage) {
+  ManualPacingClock clock;
+  auto limiter = makePacingLimiter("test.paced.slow-outage", clock);
+  enableFractionalLimit(*limiter, 0.001);
+  // Calls take 120s, longer than the 60s probe interval.
+  limiter->onOutcome(
+      RPCRateLimiter::Outcome::kSuccess,
+      1,
+      std::chrono::duration_cast<std::chrono::nanoseconds>(120s).count());
+
+  // The window still backs off below one, so probes stay paced, 240s apart at
+  // a window of 0.5, rather than as fast as rejections return.
+  const auto numProbes = runPacedCalls(
+      *limiter, clock, RPCRateLimiter::Outcome::kOverload, 3'600s, [] {
+        return false;
+      });
+
+  EXPECT_EQ(limiter->stats().limitMilli, 500);
+  EXPECT_LE(numProbes, 20);
+}
+
+TEST_F(RPCRateLimiterTest, pacedWindowRecoversSoonAfterTheFirstSuccess) {
+  ManualPacingClock clock;
+  auto limiter = makePacingLimiter("test.paced.recovery", clock);
+  enableFractionalLimit(*limiter, 0.001);
+  runPacedCalls(
+      *limiter, clock, RPCRateLimiter::Outcome::kOverload, 3'600s, [] {
+        return false;
+      });
+  ASSERT_EQ(limiter->stats().limitMilli, 17);
+
+  // The backend recovers. The next probe comes within 60s.
+  const auto start = clock.now();
+  int64_t numSuccesses{0};
+  runPacedCalls(*limiter, clock, RPCRateLimiter::Outcome::kSuccess, 600s, [&] {
+    return numSuccesses++ > 0;
+  });
+  EXPECT_LE(clock.now() - start, 60s);
+
+  // Once it succeeds, the window doubles every horizon and reaches one about
+  // 6.5 horizons later. Growth by successes alone would take about 2 / 0.017
+  // horizons.
+  const auto firstSuccess = clock.now();
+  runPacedCalls(*limiter, clock, RPCRateLimiter::Outcome::kSuccess, 600s, [&] {
+    return limiter->available() > 0;
+  });
+  EXPECT_GT(limiter->available(), 0);
+  EXPECT_LE(clock.now() - firstSuccess, 8s);
+}
+
+namespace {
+// Advances the clock in 'step' increments until a paced call is admitted, and
+// returns the admission time.
+std::chrono::steady_clock::time_point admitNextPacedCall(
+    RPCRateLimiter& limiter,
+    ManualPacingClock& clock,
+    std::chrono::milliseconds step) {
+  for (int i = 0; i < 1'000'000; ++i) {
+    if (!limiter.tryAcquireUpTo(1).empty()) {
+      return clock.now();
+    }
+    clock.advance(step);
+  }
+  VELOX_FAIL("No paced call was admitted");
+}
+
+// Backs 'limiter' off to the 60s probe interval, then reports one paced
+// success, which starts time-based recovery.
+void startPacedRecovery(RPCRateLimiter& limiter, ManualPacingClock& clock) {
+  enableFractionalLimit(limiter, 0.001);
+  runPacedCalls(limiter, clock, RPCRateLimiter::Outcome::kOverload, 3'600s, [] {
+    return false;
+  });
+  admitNextPacedCall(limiter, clock, 100ms);
+  limiter.onOutcome(RPCRateLimiter::Outcome::kSuccess, 1);
+}
+} // namespace
+
+TEST_F(RPCRateLimiterTest, lateOverloadCutsTheWindowItsCallWasAdmittedUnder) {
+  ManualPacingClock clock;
+  auto limiter = makePacingLimiter("test.paced.late-overload", clock);
+  startPacedRecovery(*limiter, clock);
+
+  const auto admitted = admitNextPacedCall(*limiter, clock, 100ms);
+  const auto admittedUnder = limiter->stats().limitMilli;
+
+  // The rejection arrives 5 horizons later, as a timeout would. The cut halves
+  // the window the call was admitted under, not the one projected since.
+  clock.advance(5s);
+  limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  const auto cut = limiter->stats().limitMilli;
+  EXPECT_LE(cut, admittedUnder / 2 + 1);
+
+  // Recovery has ended: the next probe waits the back-off interval of the cut
+  // window, and its admission commits no growth.
+  const auto next = admitNextPacedCall(*limiter, clock, 10ms);
+  EXPECT_GE(next - admitted, std::chrono::milliseconds(1'000'000 / cut - 10));
+  EXPECT_EQ(limiter->stats().limitMilli, cut);
+}
+
+TEST_F(RPCRateLimiterTest, nonOverloadFailureStopsRecoveryUntilTheNextSuccess) {
+  ManualPacingClock clock;
+  auto limiter = makePacingLimiter("test.paced.failure", clock);
+  startPacedRecovery(*limiter, clock);
+
+  const auto admitted = admitNextPacedCall(*limiter, clock, 10ms);
+  const auto window = limiter->stats().limitMilli;
+  limiter->onOutcome(RPCRateLimiter::Outcome::kFailure, 0);
+
+  // Back to the back-off interval of one horizon / window, measured from the
+  // failed call's admission, rather than the shrinking recovery interval.
+  const auto next = admitNextPacedCall(*limiter, clock, 10ms);
+  EXPECT_GE(
+      next - admitted, std::chrono::milliseconds(1'000'000 / window - 10));
+  EXPECT_EQ(limiter->stats().limitMilli, window);
+
+  // A success resumes recovery.
+  limiter->onOutcome(RPCRateLimiter::Outcome::kSuccess, 1);
+  runPacedCalls(*limiter, clock, RPCRateLimiter::Outcome::kSuccess, 600s, [&] {
+    return limiter->available() > 0;
+  });
+  EXPECT_GT(limiter->available(), 0);
+}
+
+TEST_F(RPCRateLimiterTest, pacedSuccessLearnsTheServiceHorizon) {
+  ManualPacingClock clock;
+  auto limiter = makePacingLimiter("test.paced.horizon", clock);
+  enableFractionalLimit(*limiter, 0.001);
+  limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  ASSERT_LT(limiter->stats().limitMilli, 1'000);
+
+  admitNextPacedCall(*limiter, clock, 100ms);
+  limiter->onOutcome(
+      RPCRateLimiter::Outcome::kSuccess,
+      1,
+      std::chrono::duration_cast<std::chrono::nanoseconds>(3s).count());
+  EXPECT_EQ(limiter->stats().serviceHorizonNanos, 3'000'000'000);
+}
+
+TEST_F(RPCRateLimiterTest, recoveringWindowAboveOneMinusLn2WaitsForCredit) {
+  ManualPacingClock clock;
+  auto limiter = makePacingLimiter("test.paced.near-one", clock);
+  enableFractionalLimit(*limiter, 0.001);
+  // From the ceiling of 2, two overloads leave a window of 0.5.
+  limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  ASSERT_EQ(limiter->stats().limitMilli, 500);
+
+  const auto admitted = admitNextPacedCall(*limiter, clock, 10ms);
+  limiter->onOutcome(RPCRateLimiter::Outcome::kSuccess, 1);
+
+  // Above 1 - ln2 the growing window reaches one before it accumulates a full
+  // admission: log2(1 / 0.5) + 1 - (1 - 0.5) / ln2 = 1.279 horizons, against
+  // 1.255 from the formula for smaller windows and 2 without recovery.
+  const auto next = admitNextPacedCall(*limiter, clock, 10ms);
+  EXPECT_GE(next - admitted, 1'270ms);
+  EXPECT_LE(next - admitted, 1'290ms);
+}
+
+TEST_F(RPCRateLimiterTest, zeroMaxProbeIntervalLetsTheWindowReachTheFloor) {
+  ManualPacingClock clock;
+  auto limiter = makePacingLimiter("test.paced.no-probe-floor", clock);
+  limiter->configure(
+      RPCRateLimiter::Config{
+          .adaptive = true,
+          .ceiling = 2,
+          .floor = 0.001,
+          .decreaseFactor = 0.5,
+          .maxProbeInterval = 0ms,
+      });
+
+  runPacedCalls(
+      *limiter, clock, RPCRateLimiter::Outcome::kOverload, 10'000s, [] {
+        return false;
+      });
+
+  EXPECT_EQ(limiter->stats().limitMilli, 1);
 }
 
 TEST_F(RPCRateLimiterTest, fractionalLimitDecreaseInvalidatesEarlierWake) {
@@ -1628,6 +1958,11 @@ TEST_F(RPCRateLimiterTest, leavingPacingWakesWaitersImmediately) {
   auto wait = limiter->admitOrWait();
   ASSERT_FALSE(wait.admitted);
 
+  // A success starts recovery; one horizon later 0.5 has doubled to one, before
+  // the paced wake at T(0.5) = 1.2787 horizons. The next outcome commits it.
+  limiter->onOutcome(RPCRateLimiter::Outcome::kSuccess, 1);
+  clock.advance(1s);
+  ASSERT_FALSE(wait.wait.isReady());
   limiter->onOutcome(RPCRateLimiter::Outcome::kSuccess, 1);
 
   EXPECT_EQ(limiter->stats().limitMilli, 1'000);

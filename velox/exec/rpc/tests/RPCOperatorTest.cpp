@@ -283,6 +283,37 @@ class CappedRPCFunction : public DemoAsyncRPCFunction {
   }
 };
 
+class BackendErrorRPCFunction : public DemoAsyncRPCFunction {
+ public:
+  std::vector<std::pair<vector_size_t, folly::SemiFuture<RPCResponse>>>
+  dispatchPerRow(
+      const SelectivityVector& rows,
+      const std::vector<VectorPtr>& /*args*/) override {
+    std::vector<std::pair<vector_size_t, folly::SemiFuture<RPCResponse>>>
+        results;
+    rows.applyToSelected([&](vector_size_t row) {
+      results.emplace_back(
+          row,
+          folly::makeSemiFuture(
+              RPCResponse::failed(
+                  0,
+                  velox::rpc::RPCErrorKind::kBackendError,
+                  "backend_error")));
+    });
+    return results;
+  }
+
+  CongestionSignal evaluateCongestion(
+      const std::vector<RPCResponse>& responses) const override {
+    return responses.empty() ? CongestionSignal::kNone
+                             : CongestionSignal::kNonOverloadError;
+  }
+
+  std::string admissionKey() const override {
+    return "backend-error-rpc";
+  }
+};
+
 class DifferentFloorSameKeyRPCFunction : public CappedRPCFunction {
  public:
   double configuredAdaptiveFloor() const override {
@@ -647,6 +678,10 @@ class RPCOperatorTest : public OperatorTestBase {
     AsyncRPCFunctionRegistry::registerFunction(
         "capped_rpc",
         []() { return std::make_shared<CappedRPCFunction>(); },
+        DemoAsyncRPCFunction::signatures());
+    AsyncRPCFunctionRegistry::registerFunction(
+        "backend_error_rpc",
+        []() { return std::make_shared<BackendErrorRPCFunction>(); },
         DemoAsyncRPCFunction::signatures());
     AsyncRPCFunctionRegistry::registerFunction(
         "different_floor_same_key_rpc",
@@ -2182,6 +2217,66 @@ TEST_F(RPCOperatorTest, defaultAdaptiveLimitPreservesLegacyCeiling) {
   EXPECT_EQ(limiterStats.hardLimit, 200);
 }
 
+TEST_F(RPCOperatorTest, backendErrorsStopPacedRecovery) {
+  auto input =
+      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"fails"})});
+  auto plan = makeRPCNode(
+      PlanBuilder().values({input}).planNode(),
+      {"prompt"},
+      "backend_error_rpc");
+  auto runQuery = [&]() {
+    return AssertQueryBuilder(plan)
+        .config(core::QueryConfig::kRpcRateLimiterMinLimit, "0")
+        .copyResults(pool());
+  };
+  // The first query seals the limiter with the function's fractional floor.
+  runQuery();
+  auto& limiter = RPCRateLimiterRegistry::global().get("backend-error-rpc");
+
+  // A 10ms service horizon keeps paced waits short. Overloads drive the
+  // window to the function's floor of 0.25, and a success starts paced
+  // recovery. The next paced admission comes about 1.9 horizons later, when
+  // the window has grown to about 0.94, so the limiter is still pacing.
+  constexpr int64_t kHorizonNanos{10'000'000};
+  limiter.onOutcome(RPCRateLimiter::Outcome::kSuccess, 1, kHorizonNanos);
+  while (limiter.stats().limitMilli > 250) {
+    limiter.onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  }
+  limiter.onOutcome(RPCRateLimiter::Outcome::kSuccess, 1, kHorizonNanos);
+  ASSERT_TRUE(limiter.stats().recovering);
+
+  // A call that fails without overload ends the recovery.
+  runQuery();
+  EXPECT_FALSE(limiter.stats().recovering);
+}
+
+TEST_F(RPCOperatorTest, maxProbeIntervalDefaultsToOneMinute) {
+  auto input =
+      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"healthy"})});
+  auto plan = makeRPCNode(
+      PlanBuilder().values({input}).planNode(), {"prompt"}, "capped_rpc");
+  auto result = AssertQueryBuilder(plan).copyResults(pool());
+  ASSERT_EQ(result->size(), 1);
+
+  const auto& limiter = RPCRateLimiterRegistry::global().get("capped-rpc");
+  EXPECT_EQ(limiter.config().maxProbeInterval, std::chrono::seconds(60));
+}
+
+TEST_F(RPCOperatorTest, maxProbeIntervalReachesLimiter) {
+  auto input =
+      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"healthy"})});
+  auto plan = makeRPCNode(
+      PlanBuilder().values({input}).planNode(), {"prompt"}, "capped_rpc");
+  auto result =
+      AssertQueryBuilder(plan)
+          .config(core::QueryConfig::kRpcRateLimiterMaxProbeIntervalMs, "10000")
+          .copyResults(pool());
+  ASSERT_EQ(result->size(), 1);
+
+  const auto& limiter = RPCRateLimiterRegistry::global().get("capped-rpc");
+  EXPECT_EQ(limiter.config().maxProbeInterval, std::chrono::seconds(10));
+}
+
 TEST_F(RPCOperatorTest, legacySessionLimitPreservesOverrideSemantics) {
   auto input =
       makeRowVector({"prompt"}, {makeFlatVector<StringView>({"bounded"})});
@@ -2208,7 +2303,9 @@ TEST_F(RPCOperatorTest, negativeRateLimiterBoundsAreRejected) {
            {core::QueryConfig::kRpcRateLimiterMaxLimit,
             "rpc.ratelimiter.max_limit must be non-negative"},
            {core::QueryConfig::kRpcRateLimiterHardLimit,
-            "rpc.ratelimiter.hard_limit must be at least -1"}}) {
+            "rpc.ratelimiter.hard_limit must be at least -1"},
+           {core::QueryConfig::kRpcRateLimiterMaxProbeIntervalMs,
+            "rpc.ratelimiter.max_probe_interval_ms must be non-negative"}}) {
     auto plan = makeRPCNode(
         PlanBuilder().values({input}).planNode(), {"prompt"}, "demo_rpc");
     VELOX_ASSERT_THROW(
