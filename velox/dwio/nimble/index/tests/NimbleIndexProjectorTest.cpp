@@ -809,6 +809,55 @@ TEST_P(NimbleIndexProjectorTest, projectsNestedRowsWithFieldReader) {
   velox::test::assertEqualVectors(expected, result.values);
 }
 
+TEST_P(NimbleIndexProjectorTest, projectsStructSelectedWithItsField) {
+  // Listing a struct and one of its fields returns the whole struct.
+  auto profileType = ROW({"age", "score"}, {INTEGER(), BIGINT()});
+  auto rowType = ROW({"key", "profile"}, {BIGINT(), profileType});
+
+  constexpr vector_size_t kNumRows{20};
+  auto profiles = vectorMaker_->rowVector(
+      {"age", "score"},
+      {vectorMaker_->flatVector<int32_t>(
+           kNumRows, [](auto row) { return row * 10; }),
+       vectorMaker_->flatVector<int64_t>(
+           kNumRows, [](auto row) { return row * 1'000; })});
+  auto batch = vectorMaker_->rowVector(
+      {"key", "profile"},
+      {vectorMaker_->flatVector<int64_t>(
+           kNumRows, [](auto row) { return row; }),
+       profiles});
+  writeData({batch}, {"key"});
+
+  std::vector<Subfield> subfields;
+  subfields.emplace_back("profile.score");
+  subfields.emplace_back("profile");
+  auto projector = createProjector(subfields);
+  NimbleIndexProjector::Request request;
+  request.keyBounds = {
+      makePointLookup(rowType, {"key"}, 7),
+      makePointLookup(rowType, {"key"}, 2),
+  };
+  auto expected = vectorMaker_->rowVector(
+      {"profile"},
+      {vectorMaker_->rowVector(
+          {"age", "score"},
+          {vectorMaker_->flatVector<int32_t>({70, 20}),
+           vectorMaker_->flatVector<int64_t>({7'000, 2'000})})});
+
+  velox::test::assertEqualVectors(
+      expected, projectRows(*projector, request, {}).values);
+
+  const auto streams = projector->projectStreams(request, {});
+  ASSERT_EQ(streams.responses.size(), 2);
+  for (vector_size_t i = 0; i < 2; ++i) {
+    SCOPED_TRACE(fmt::format("request {}", i));
+    ASSERT_EQ(streams.responses[i].slices.size(), 1);
+    velox::test::assertEqualVectors(
+        expected->slice(i, 1),
+        deserializeProjectedSlice(*projector, streams.responses[i].slices[0]));
+  }
+}
+
 // Every IOBuf node in a result slice chain should be managed (own/refcount its
 // own buffer) so the chain is self-contained. This currently fails when the
 // projected streams are non-contiguous in the read buffer, because packStripe
