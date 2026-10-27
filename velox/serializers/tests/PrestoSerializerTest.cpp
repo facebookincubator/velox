@@ -16,6 +16,9 @@
 #include "velox/serializers/PrestoSerializer.h"
 #include <boost/random/uniform_int_distribution.hpp>
 #include <folly/Random.h>
+#include <folly/compression/Compression.h>
+#include <folly/io/IOBuf.h>
+#include <folly/lang/Bits.h>
 #include <gtest/gtest.h>
 #include <vector>
 #include "folly/synchronization/EventCount.h"
@@ -25,6 +28,7 @@
 #include "velox/functions/prestosql/types/IPPrefixType.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/serializers/PrestoBatchVectorSerializer.h"
+#include "velox/serializers/PrestoSerializerSerializationUtils.h"
 #include "velox/serializers/PrestoVectorLexer.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
@@ -1157,6 +1161,332 @@ TEST_P(PrestoSerializerTest, multiPage) {
     }
     assertEqualVectors(deserialized, vec);
     deserialized->validate({});
+  }
+}
+
+namespace {
+// Presents 'out' as the tail of a stream that already holds 'base' bytes.
+class OffsetOutputStream : public OutputStream {
+ public:
+  OffsetOutputStream(
+      std::ostream* out,
+      int64_t base,
+      OutputStreamListener* listener)
+      : OutputStream(listener), out_(out), base_(base) {}
+
+  void write(const char* data, std::streamsize count) override {
+    out_->write(data, count);
+    if (listener_) {
+      listener_->onWrite(data, count);
+    }
+  }
+
+  std::streampos tellp() const override {
+    return base_ + static_cast<int64_t>(out_->tellp());
+  }
+
+  void seekp(std::streampos pos) override {
+    out_->seekp(static_cast<int64_t>(pos) - base_);
+  }
+
+ private:
+  std::ostream* const out_;
+  const int64_t base_;
+};
+
+// Counts each byte written as 'scale' bytes, so a small page reports the
+// positions of a much larger one.
+class ScaledOutputStream : public OutputStream {
+ public:
+  ScaledOutputStream(std::ostream* out, int64_t scale)
+      : out_(out), scale_(scale) {}
+
+  void write(const char* data, std::streamsize count) override {
+    out_->write(data, count);
+  }
+
+  std::streampos tellp() const override {
+    return static_cast<int64_t>(out_->tellp()) * scale_;
+  }
+
+  void seekp(std::streampos pos) override {
+    out_->seekp(static_cast<int64_t>(pos) / scale_);
+  }
+
+ private:
+  std::ostream* const out_;
+  const int64_t scale_;
+};
+
+// Counts 'padding' more bytes than were written once more than 'start' bytes
+// are written, so a small page reports the size of a larger one.
+class PaddedOutputStream : public OutputStream {
+ public:
+  PaddedOutputStream(std::ostream* out, int64_t start, int64_t padding)
+      : out_(out), start_(start), padding_(padding) {}
+
+  void write(const char* data, std::streamsize count) override {
+    out_->write(data, count);
+  }
+
+  std::streampos tellp() const override {
+    const int64_t position = out_->tellp();
+    return position > start_ ? position + padding_ : position;
+  }
+
+  void seekp(std::streampos pos) override {
+    const int64_t position = pos;
+    out_->seekp(position > start_ ? position - padding_ : position);
+  }
+
+ private:
+  std::ostream* const out_;
+  const int64_t start_;
+  const int64_t padding_;
+};
+
+// Compresses any input to 'numBlocks' copies of one 1MB block, so a large
+// output takes 1MB of memory.
+class RepeatingCodec : public folly::compression::Codec {
+ public:
+  explicit RepeatingCodec(int32_t numBlocks)
+      : Codec(folly::compression::CodecType::USER_DEFINED),
+        numBlocks_(numBlocks) {}
+
+ private:
+  static constexpr uint64_t kBlockSize{1 << 20};
+
+  uint64_t doMaxCompressedLength(
+      uint64_t /*uncompressedLength*/) const override {
+    return numBlocks_ * kBlockSize;
+  }
+
+  std::unique_ptr<folly::IOBuf> doCompress(
+      const folly::IOBuf* /*data*/) override {
+    auto output = folly::IOBuf::wrapBuffer(block_.data(), block_.size());
+    for (int32_t i = 1; i < numBlocks_; ++i) {
+      output->prependChain(
+          folly::IOBuf::wrapBuffer(block_.data(), block_.size()));
+    }
+    return output;
+  }
+
+  std::unique_ptr<folly::IOBuf> doUncompress(
+      const folly::IOBuf* /*data*/,
+      folly::Optional<uint64_t> /*uncompressedLength*/) override {
+    VELOX_UNREACHABLE();
+  }
+
+  const int32_t numBlocks_;
+  const std::string block_ = std::string(kBlockSize, 'x');
+};
+} // namespace
+
+// A page written into a stream that already holds more than 2GB keeps its
+// sizes and checksum in its own header.
+TEST_P(PrestoSerializerTest, flushPast2GB) {
+  constexpr int64_t kBase{3LL << 30};
+  const auto rowVector = makeTestVector(100);
+  const auto rowType = asRowType(rowVector->type());
+  const auto options = getParamSerdeOptions(nullptr);
+  StreamArena arena(pool_.get());
+  auto serializer = serde_->createIterativeSerializer(
+      rowType, rowVector->size(), &arena, &options);
+  serializer->append(rowVector);
+  serializer::presto::PrestoOutputStreamListener listener;
+  std::ostringstream output;
+  OffsetOutputStream out(&output, kBase, &listener);
+  serializer->flush(&out);
+
+  const auto serialized = output.str();
+  ASSERT_EQ(
+      static_cast<int64_t>(out.tellp()),
+      kBase + static_cast<int64_t>(serialized.size()));
+  assertEqualVectors(deserialize(rowType, serialized, nullptr), rowVector);
+}
+
+// A page of 2GB or more cannot record its size in the header's 32-bit fields,
+// so flushing one throws instead of writing truncated sizes.
+TEST_P(PrestoSerializerTest, flushPageOver2GB) {
+  if (GetParam() != common::CompressionKind::CompressionKind_NONE) {
+    GTEST_SKIP() << "A compressed page is measured in the serializer's buffer";
+  }
+
+  const auto rowVector = makeTestVector(100);
+  const auto options = getParamSerdeOptions(nullptr);
+  StreamArena arena(pool_.get());
+  auto serializer = serde_->createIterativeSerializer(
+      asRowType(rowVector->type()), rowVector->size(), &arena, &options);
+  serializer->append(rowVector);
+  std::ostringstream output;
+  // Every byte counts as 1GB, so the page reports a size far past 2GB.
+  ScaledOutputStream out(&output, 1LL << 30);
+  VELOX_ASSERT_THROW(serializer->flush(&out), "Serialized page exceeds 2GB");
+}
+
+// The 2GB limit applies to the bytes after the page header: the largest page
+// records INT32_MAX in both size fields, and one more byte throws.
+TEST_F(PrestoSerializerTest, flushPageAt2GB) {
+  using serializer::presto::detail::kHeaderSize;
+  using serializer::presto::detail::kSizeInBytesOffset;
+  constexpr int32_t kMaxSize{std::numeric_limits<int32_t>::max()};
+  const auto rowVector = makeTestVector(100);
+  const serializer::presto::PrestoVectorSerde::PrestoOptions options;
+  StreamArena arena(pool_.get());
+  auto serializer = serde_->createIterativeSerializer(
+      asRowType(rowVector->type()), rowVector->size(), &arena, &options);
+  serializer->append(rowVector);
+  std::ostringstream unpadded;
+  OStreamOutputStream unpaddedOut(&unpadded);
+  serializer->flush(&unpaddedOut);
+  // Padding the bytes after the header by this much makes them INT32_MAX.
+  const int64_t maxPadding =
+      kMaxSize - (static_cast<int64_t>(unpadded.str().size()) - kHeaderSize);
+
+  {
+    std::ostringstream output;
+    PaddedOutputStream out(&output, kHeaderSize, maxPadding);
+    serializer->flush(&out);
+    const auto serialized = output.str();
+    ASSERT_EQ(
+        folly::loadUnaligned<int32_t>(serialized.data() + kSizeInBytesOffset),
+        kMaxSize);
+    ASSERT_EQ(
+        folly::loadUnaligned<int32_t>(
+            serialized.data() + kSizeInBytesOffset + sizeof(int32_t)),
+        kMaxSize);
+  }
+  {
+    std::ostringstream output;
+    PaddedOutputStream out(&output, kHeaderSize, maxPadding + 1);
+    VELOX_ASSERT_THROW(serializer->flush(&out), "Serialized page exceeds 2GB");
+  }
+}
+
+// A page whose compressed form is 2GB or more, and larger than the page, is
+// written uncompressed.
+TEST_F(PrestoSerializerTest, flushCompressedFallbackPast2GB) {
+  // 2048 blocks of 1MB make INT32_MAX + 1 bytes.
+  RepeatingCodec codec(2'048);
+  StreamArena arena(pool_.get());
+  std::vector<serializer::presto::detail::VectorStream> streams;
+  std::ostringstream output;
+  OStreamOutputStream out(&output);
+  const auto sizes = serializer::presto::detail::flushCompressed(
+      streams, arena, codec, 0, 0.8, &out, nullptr);
+
+  // A page of no columns holds only the column count.
+  constexpr int64_t kPageSize{sizeof(int32_t)};
+  ASSERT_EQ(sizes.uncompressedSize, kPageSize);
+  ASSERT_EQ(sizes.compressedSize, kPageSize);
+  ASSERT_EQ(
+      output.str().size(), serializer::presto::detail::kHeaderSize + kPageSize);
+}
+
+// A compressed page of 2GB or more throws. Only a minimum compression ratio
+// above 1 keeps compressed output that is larger than its input.
+TEST_F(PrestoSerializerTest, flushCompressedPageOver2GB) {
+  // 2048 blocks of 1MB make INT32_MAX + 1 bytes.
+  RepeatingCodec codec(2'048);
+  StreamArena arena(pool_.get());
+  std::vector<serializer::presto::detail::VectorStream> streams;
+  std::ostringstream output;
+  OStreamOutputStream out(&output);
+  VELOX_ASSERT_THROW(
+      serializer::presto::detail::flushCompressed(
+          streams, arena, codec, 0, 1e9, &out, nullptr),
+      "Serialized page exceeds 2GB");
+}
+
+// A string whose end offset would pass INT32_MAX fails the append before any
+// of its bytes are copied.
+TEST_F(PrestoSerializerTest, appendStringPast2GBOffset) {
+  // The strings end at offset INT32_MAX + 1. Only the first 16 bytes of the
+  // second one are real, so it must not be copied.
+  auto strings =
+      makeFlatVector<std::string>({std::string(16, 'a'), std::string(16, 'b')});
+  strings->setNoCopy(
+      1,
+      StringView(
+          strings->valueAt(1).data(),
+          std::numeric_limits<int32_t>::max() - 15));
+  const auto rowVector = makeRowVector({strings});
+  const serializer::presto::PrestoVectorSerde::PrestoOptions options;
+  StreamArena arena(pool_.get());
+  auto serializer = serde_->createIterativeSerializer(
+      asRowType(rowVector->type()), rowVector->size(), &arena, &options);
+  VELOX_ASSERT_THROW(
+      serializer->append(rowVector), "Serialized page exceeds 2GB");
+}
+
+// A row of 4GB or more saturates its estimate instead of wrapping to a small
+// size that would pass for a real one.
+TEST_P(PrestoSerializerTest, estimateSerializedSizeSaturates) {
+  // Estimation reads only the string sizes, so the strings need no memory.
+  static const char kPrefix[] = "abcd";
+  auto makeMaxSizeString = [&]() {
+    auto strings =
+        BaseVector::create<FlatVector<StringView>>(VARCHAR(), 1, pool_.get());
+    strings->setNoCopy(
+        0, StringView(kPrefix, std::numeric_limits<int32_t>::max()));
+    return strings;
+  };
+  // Two strings of INT32_MAX bytes and one of 12 add up to 2^32+10.
+  const auto rowVector = makeRowVector(
+      {makeMaxSizeString(),
+       makeMaxSizeString(),
+       makeFlatVector<std::string>({std::string(12, 'x')})});
+  constexpr vector_size_t kMaxSize{std::numeric_limits<vector_size_t>::max()};
+  const IndexRange range{0, 1};
+  Scratch scratch;
+  {
+    const vector_size_t row{0};
+    vector_size_t size{0};
+    vector_size_t* sizePtr = &size;
+    serde_->estimateSerializedSize(
+        rowVector.get(), folly::Range(&row, 1), &sizePtr, scratch);
+    ASSERT_EQ(size, kMaxSize);
+  }
+  {
+    vector_size_t size{0};
+    vector_size_t* sizePtr = &size;
+    serde_->estimateSerializedSize(
+        rowVector.get(), folly::Range(&range, 1), &sizePtr, scratch);
+    ASSERT_EQ(size, kMaxSize);
+  }
+}
+
+// Each null string adds 4 bytes to the estimate it is added to, so null strings
+// added to an estimate near INT32_MAX saturate it.
+TEST_P(PrestoSerializerTest, estimateSerializedSizeSaturatesOnNullStrings) {
+  constexpr vector_size_t kNumRows{8};
+  constexpr vector_size_t kMaxSize{std::numeric_limits<vector_size_t>::max()};
+  const auto strings = makeAllNullFlatVector<StringView>(kNumRows);
+  Scratch scratch;
+  {
+    // All rows of a range add to one estimate, which passes INT32_MAX at the
+    // third row.
+    const IndexRange range{0, kNumRows};
+    vector_size_t size{kMaxSize - 10};
+    vector_size_t* sizePtr = &size;
+    serde_->estimateSerializedSize(
+        strings.get(), folly::Range(&range, 1), &sizePtr, scratch);
+    ASSERT_EQ(size, kMaxSize);
+  }
+  {
+    std::vector<vector_size_t> rows(kNumRows);
+    std::iota(rows.begin(), rows.end(), 0);
+    std::vector<vector_size_t> sizes(kNumRows, kMaxSize - 1);
+    std::vector<vector_size_t*> sizePtrs(kNumRows);
+    for (auto i = 0; i < kNumRows; ++i) {
+      sizePtrs[i] = &sizes[i];
+    }
+    serde_->estimateSerializedSize(
+        strings.get(),
+        folly::Range(rows.data(), rows.size()),
+        sizePtrs.data(),
+        scratch);
+    ASSERT_EQ(sizes, std::vector<vector_size_t>(kNumRows, kMaxSize));
   }
 }
 
@@ -2600,4 +2930,21 @@ TEST_F(PrestoSerializerEstimateSizeTest, rows) {
   // 24 non-null doubles and 8 nulls.
   // 24 * 8 = 192
   testEstimateSerializedSizeByRows(nullableDoubles, rows, expectedRowSizes);
+}
+
+// The row overload estimates the elements of an array once per row that
+// selects it. Here 1,024 rows select one array of 2^21 elements, 2^31 element
+// rows in all.
+TEST_F(PrestoSerializerEstimateSizeTest, rowsRepeatingLargeArray) {
+  constexpr vector_size_t kNumRows{1'024};
+  constexpr vector_size_t kNumElements{1 << 21};
+  const auto array = makeArrayVector(
+      {0}, makeFlatVector<int8_t>(kNumElements, [](auto) { return 0; }));
+  const auto dictionary = BaseVector::wrapInDictionary(
+      nullptr, makeIndices(kNumRows, [](auto) { return 0; }), kNumRows, array);
+  std::vector<vector_size_t> rows(kNumRows);
+  std::iota(rows.begin(), rows.end(), 0);
+  // 4 bytes for the row wrapper, 4 for the array length and 1 per element.
+  testEstimateSerializedSizeByRows(
+      dictionary, rows, std::vector<vector_size_t>(kNumRows, 8 + kNumElements));
 }

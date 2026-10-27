@@ -127,12 +127,20 @@ class SerializedPageFileWriter {
 
   /// Appends the rows selected by 'indices', splitting them into pages based on
   /// per-row serialized size estimates. Each page stays within
-  /// 'writeBufferSize' unless a single row exceeds the limit. A
+  /// 'writeBufferSize' unless a single row exceeds the limit. A row estimated
+  /// at 2GB or more fails the call before any row is appended. If
+  /// canEstimateWrites() is false for the type of 'rows', the rows are appended
+  /// as one batch, which is flushed once it reaches 'writeBufferSize'. A
   /// 'writeBufferSize' of 0 flushes after each call. Returns the actual bytes
   /// written by flushes during this call, excluding data that remains buffered.
   uint64_t write(
       const RowVectorPtr& rows,
       const folly::Range<IndexRange*>& indices);
+
+  /// Returns true if write() splits rows of 'type' into pages by their
+  /// serialized size estimates. It does not if 'writeBufferSize' is 0 or if
+  /// 'type' contains OPAQUE, whose serialized size the serde can't estimate.
+  bool canEstimateWrites(const Type& type) const;
 
   /// Closes the current output file if any. Subsequent calls to write will
   /// start a new one.
