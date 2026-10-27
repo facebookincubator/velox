@@ -15,6 +15,7 @@
  */
 #include "velox/dwio/nimble/common/SchemaUtils.h"
 
+#include <fmt/ranges.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
@@ -1345,6 +1346,81 @@ TEST(SchemaUtilsTest, projectionDeepWithStreamOffsets) {
   EXPECT_EQ(
       projection.rowOrFlatMapNullStreams,
       std::vector<bool>({true, true, true, false, false}));
+}
+
+TEST(SchemaUtilsTest, projectionKeepsStructSelectedWhole) {
+  // A subfield that names a struct selects all of it, so listing fields of the
+  // struct as well does not narrow it, in any order and at any depth.
+  SchemaBuilder schemaBuilder;
+  NIMBLE_SCHEMA(
+      schemaBuilder,
+      NIMBLE_ROW({
+          {"id", NIMBLE_BIGINT()},
+          {"s",
+           NIMBLE_ROW({
+               {"x", NIMBLE_INTEGER()},
+               {"inner",
+                NIMBLE_ROW({
+                    {"y", NIMBLE_STRING()},
+                    {"z", NIMBLE_DOUBLE()},
+                })},
+           })},
+      }));
+  const auto schema = SchemaReader::getSchema(schemaBuilder.schemaNodes());
+  const auto toSubfields = [](const std::vector<std::string>& paths) {
+    std::vector<Subfield> subfields;
+    subfields.reserve(paths.size());
+    for (const auto& path : paths) {
+      subfields.emplace_back(path);
+    }
+    return subfields;
+  };
+
+  struct TestCase {
+    std::vector<std::string> subfields;
+    // Subfields without the fields of a struct that is selected whole.
+    std::vector<std::string> expectedSubfields;
+
+    std::string debugString() const {
+      return fmt::format(
+          "subfields [{}], expected [{}]",
+          fmt::join(subfields, ", "),
+          fmt::join(expectedSubfields, ", "));
+    }
+  };
+  const std::vector<TestCase> testCases{
+      {{"s", "s.x"}, {"s"}},
+      {{"s.x", "s"}, {"s"}},
+      {{"s", "s.inner.y"}, {"s"}},
+      {{"s.inner.y", "s", "s.x"}, {"s"}},
+      {{"s.inner", "s.inner.y", "s.x"}, {"s.inner", "s.x"}},
+      {{"s.inner.z", "id", "s.inner"}, {"id", "s.inner"}},
+  };
+  const auto veloxType = velox::asRowType(convertToVeloxType(*schema));
+  for (const auto& testCase : testCases) {
+    SCOPED_TRACE(testCase.debugString());
+    const auto projection =
+        buildProjectedNimbleType(schema.get(), toSubfields(testCase.subfields));
+    const auto expected = buildProjectedNimbleType(
+        schema.get(), toSubfields(testCase.expectedSubfields));
+    EXPECT_EQ(
+        convertToVeloxType(*projection.nimbleType)->toString(),
+        convertToVeloxType(*expected.nimbleType)->toString());
+    EXPECT_EQ(projection.streamOffsets, expected.streamOffsets);
+    EXPECT_EQ(
+        projection.rowOrFlatMapNullStreams, expected.rowOrFlatMapNullStreams);
+
+    // The velox-source overload, which builds the projected schema above,
+    // agrees on its own.
+    EXPECT_EQ(
+        convertToVeloxType(*buildProjectedNimbleType(
+                               *veloxType, toSubfields(testCase.subfields)))
+            ->toString(),
+        convertToVeloxType(
+            *buildProjectedNimbleType(
+                *veloxType, toSubfields(testCase.expectedSubfields)))
+            ->toString());
+  }
 }
 
 TEST(SchemaUtilsTest, projectionMarksRowOrFlatMapNullStreams) {

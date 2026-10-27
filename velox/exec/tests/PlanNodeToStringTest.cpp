@@ -1375,5 +1375,43 @@ TEST_F(PlanNodeToStringTest, fixedPointDistributed) {
       plan->toString(true, false));
 }
 
+// A replicated state: every worker sums every worker's values, worker 0 decides
+// over its own copy, and only worker 0 emits the output.
+TEST_F(PlanNodeToStringTest, fixedPointOnWorkerZero) {
+  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto schema = ROW({"key", "val"}, BIGINT());
+  auto plan = PlanBuilder(idGenerator)
+                  .fixedPoint(
+                      {core::VectorState("total", schema)
+                           .initial(PlanBuilder(idGenerator)
+                                        .values({makeRowVector(
+                                            {"key", "val"},
+                                            {makeFlatVector<int64_t>({0}),
+                                             makeFlatVector<int64_t>({1})})})
+                                        .planNode())},
+                      {PlanBuilder(idGenerator)
+                           .stateSource("total", schema)
+                           .partitionedOutputBroadcast()
+                           .planNode(),
+                       PlanBuilder(idGenerator)
+                           .exchange(schema, "Presto")
+                           .singleAggregation({}, {"sum(val)"})
+                           .project({"CAST(0 AS BIGINT) AS key", "a0 AS val"})
+                           .planNode()},
+                      core::ConvergenceConfig::workerZeroVerdict(
+                          PlanBuilder(idGenerator)
+                              .stateSource("total", schema)
+                              .project({"val >= 8"})
+                              .planNode(),
+                          100),
+                      "total",
+                      /*outputOnWorkerZero=*/true)
+                  .planNode();
+
+  ASSERT_EQ(
+      "-- FixedPoint[8][outputStateEntry: total, states: [total (vector, replace, initialized)], plans: 2, maxIterations: 100, verdict, outputOnWorkerZero] -> key:BIGINT, val:BIGINT\n",
+      plan->toString(true, false));
+}
+
 } // namespace
 } // namespace facebook::velox::exec

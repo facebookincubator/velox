@@ -23,7 +23,9 @@
 #include "velox/dwio/nimble/common/tests/NimbleFileWriter.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
+#include <algorithm>
 #include <bit>
+#include <functional>
 
 #include <fmt/format.h>
 #include <gtest/gtest.h>
@@ -166,6 +168,44 @@ class FlatMapColumnReaderTest : public ::testing::TestWithParam<bool>,
     }
     ASSERT_EQ(numScanned, expected.size());
     ASSERT_EQ(0, rowReader.next(1, result));
+  }
+
+  // Reads 'file' with 'scanSpec' in batches of 'batchSize' and checks that the
+  // result holds, in order, the rows of 'expected' at which 'passes' is true.
+  // 'expected' has a row for every row of the file. The reader requests the
+  // type of 'written', the data of the file's first stripe.
+  void validateFiltered(
+      const RowVectorPtr& written,
+      const std::string& file,
+      const std::shared_ptr<common::ScanSpec>& scanSpec,
+      const RowVectorPtr& expected,
+      const std::function<bool(vector_size_t)>& passes,
+      vector_size_t batchSize) {
+    std::vector<vector_size_t> passingRows;
+    for (vector_size_t row = 0; row < expected->size(); ++row) {
+      if (passes(row)) {
+        passingRows.push_back(row);
+      }
+    }
+    auto readers = makeReaders(written, file, scanSpec);
+    VectorPtr batch = BaseVector::create(expected->type(), 0, pool());
+    size_t numPassing{0};
+    vector_size_t numScanned{0};
+    while (numScanned < expected->size()) {
+      const auto numRead = readers.rowReader->next(batchSize, batch);
+      ASSERT_GT(numRead, 0);
+      numScanned += numRead;
+      batch->validate();
+      for (vector_size_t i = 0; i < batch->size(); ++i) {
+        ASSERT_LT(numPassing, passingRows.size());
+        const auto row = passingRows[numPassing++];
+        ASSERT_TRUE(batch->equalValueAt(expected.get(), i, row))
+            << "row " << row << ": expected " << expected->toString(row)
+            << " got " << batch->toString(i);
+      }
+    }
+    EXPECT_EQ(numPassing, passingRows.size());
+    EXPECT_EQ(readers.rowReader->next(batchSize, batch), 0);
   }
 
   // Writes one stripe per vector, so later stripes can hold key sets that
@@ -329,6 +369,220 @@ TEST_P(FlatMapColumnReaderTest, asStructNullFilterOnKeyInEveryRow) {
   while (expectedRow < kSize) {
     ASSERT_FALSE(isKey1NullAt(expectedRow)) << "row " << expectedRow;
     ++expectedRow;
+  }
+}
+
+// A value filter on a key drops the rows whose value fails it, and treats a
+// row without the key like a null value. Filters on two keys must both pass.
+TEST_P(FlatMapColumnReaderTest, asStructValueFiltersOnKeys) {
+  constexpr vector_size_t kSize{300};
+  const auto hasKey1At = [](vector_size_t row) { return row % 3 != 0; };
+  const auto isKey1NullAt = [&](vector_size_t row) {
+    return !hasKey1At(row) || row % 10 == 1;
+  };
+  const auto hasKey2At = [](vector_size_t row) { return row % 2 == 0; };
+  std::vector<std::vector<std::pair<int32_t, std::optional<int64_t>>>> maps(
+      kSize);
+  for (vector_size_t row = 0; row < kSize; ++row) {
+    if (hasKey1At(row)) {
+      maps[row].emplace_back(
+          1, isKey1NullAt(row) ? std::nullopt : std::optional<int64_t>(row));
+    }
+    if (hasKey2At(row)) {
+      maps[row].emplace_back(2, row * 10);
+    }
+  }
+  auto input = makeRowVector({
+      makeMapVector<int32_t, int64_t>(maps),
+      makeFlatIdentityVector<int64_t>(kSize),
+  });
+  auto file = writeFlatMapFile(input);
+  auto expected = makeRowVector(
+      {"c0", "c1"},
+      {
+          makeRowVector(
+              {"1", "2"},
+              {
+                  makeFlatVector<int64_t>(
+                      kSize, [](auto row) { return row; }, isKey1NullAt),
+                  makeFlatVector<int64_t>(
+                      kSize,
+                      [](auto row) { return row * 10; },
+                      [&](auto row) { return !hasKey2At(row); }),
+              }),
+          makeFlatIdentityVector<int64_t>(kSize),
+      });
+
+  struct TestParam {
+    bool nullAllowed;
+    bool requireKey2;
+
+    std::string debugString() const {
+      return fmt::format(
+          "nullAllowed {}, requireKey2 {}", nullAllowed, requireKey2);
+    }
+  };
+  const std::vector<TestParam> testSettings{
+      {false, false},
+      {true, false},
+      {false, true},
+      {true, true},
+  };
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(testData.debugString());
+    auto scanSpec = std::make_shared<common::ScanSpec>("root");
+    scanSpec->addAllChildFields(*expected->type());
+    auto* c0 = scanSpec->childByName("c0");
+    c0->setFlatMapAsStruct(true);
+    c0->childByName("1")->setFilter(
+        std::make_unique<common::BigintRange>(100, 199, testData.nullAllowed));
+    if (testData.requireKey2) {
+      c0->childByName("2")->setFilter(std::make_unique<common::IsNotNull>());
+    }
+    validateFiltered(
+        input,
+        file,
+        scanSpec,
+        expected,
+        [&](auto row) {
+          const bool key1Passes = isKey1NullAt(row) ? testData.nullAllowed
+                                                    : row >= 100 && row <= 199;
+          return key1Passes && (!testData.requireKey2 || hasKey2At(row));
+        },
+        /*batchSize=*/37);
+  }
+}
+
+TEST_P(FlatMapColumnReaderTest, asStructBytesValuesFilterOnStringKey) {
+  constexpr vector_size_t kSize{200};
+  // Longer than 12 bytes, so StringView does not hold them inline.
+  std::vector<std::string> values(kSize);
+  for (vector_size_t row = 0; row < kSize; ++row) {
+    values[row] = fmt::format("value-{:012}", row);
+  }
+  const auto hasKeyAAt = [](vector_size_t row) { return row % 4 != 3; };
+  const auto hasKeyBAt = [](vector_size_t row) { return row % 5 == 0; };
+  std::vector<std::vector<std::pair<StringView, std::optional<StringView>>>>
+      maps(kSize);
+  for (vector_size_t row = 0; row < kSize; ++row) {
+    if (hasKeyAAt(row)) {
+      maps[row].emplace_back("a", StringView(values[row]));
+    }
+    if (hasKeyBAt(row)) {
+      maps[row].emplace_back("b", StringView(values[row]));
+    }
+  }
+  auto input = makeRowVector({makeMapVector<StringView, StringView>(maps)});
+  auto file = writeFlatMapFile(input);
+  const auto valueAt = [&](vector_size_t row) {
+    return StringView(values[row]);
+  };
+  auto expected = makeRowVector({makeRowVector(
+      {"a", "b"},
+      {
+          makeFlatVector<StringView>(
+              kSize, valueAt, [&](auto row) { return !hasKeyAAt(row); }),
+          makeFlatVector<StringView>(
+              kSize, valueAt, [&](auto row) { return !hasKeyBAt(row); }),
+      })});
+  // Rows 11 and 199 lack key "a", and no row has the value "missing".
+  const std::vector<vector_size_t> listedRows{10, 11, 150, 199};
+  std::vector<std::string> listedValues{"missing"};
+  for (const auto row : listedRows) {
+    listedValues.push_back(values[row]);
+  }
+
+  auto scanSpec = std::make_shared<common::ScanSpec>("root");
+  scanSpec->addAllChildFields(*expected->type());
+  auto* c0 = scanSpec->childByName("c0");
+  c0->setFlatMapAsStruct(true);
+  c0->childByName("a")->setFilter(
+      std::make_unique<common::BytesValues>(
+          listedValues, /*nullAllowed=*/false));
+  validateFiltered(
+      input,
+      file,
+      scanSpec,
+      expected,
+      [&](auto row) {
+        return hasKeyAAt(row) &&
+            std::find(listedRows.begin(), listedRows.end(), row) !=
+            listedRows.end();
+      },
+      /*batchSize=*/37);
+}
+
+// Key 1 is in every row of the first stripe and in no row of the second, and
+// key 9 is in no stripe. A stripe that lacks a filtered key tests the filter
+// against null in every row.
+TEST_P(FlatMapColumnReaderTest, asStructFilterOnKeyMissingFromStripe) {
+  constexpr vector_size_t kRowsPerStripe{100};
+  constexpr vector_size_t kSize{2 * kRowsPerStripe};
+  const auto isKey1NullAt = [](vector_size_t row) {
+    return row >= kRowsPerStripe || row % 5 == 0;
+  };
+  std::vector<VectorPtr> stripes;
+  for (vector_size_t firstRow = 0; firstRow < kSize;
+       firstRow += kRowsPerStripe) {
+    std::vector<std::vector<std::pair<int64_t, std::optional<int64_t>>>> maps(
+        kRowsPerStripe);
+    for (vector_size_t i = 0; i < kRowsPerStripe; ++i) {
+      const auto row = firstRow + i;
+      if (row < kRowsPerStripe) {
+        maps[i].emplace_back(
+            1, isKey1NullAt(row) ? std::nullopt : std::optional<int64_t>(row));
+      }
+      maps[i].emplace_back(2, row * 10);
+    }
+    stripes.push_back(makeRowVector({makeMapVector<int64_t, int64_t>(maps)}));
+  }
+  auto file = writeMultiStripeFlatMapFile(stripes);
+  auto expected = makeRowVector({makeRowVector(
+      {"1", "2", "9"},
+      {
+          makeFlatVector<int64_t>(
+              kSize, [](auto row) { return row; }, isKey1NullAt),
+          makeFlatVector<int64_t>(kSize, [](auto row) { return row * 10; }),
+          makeNullConstant(TypeKind::BIGINT, kSize),
+      })});
+
+  struct TestParam {
+    std::string key;
+    std::shared_ptr<common::Filter> filter;
+    std::function<bool(vector_size_t)> passes;
+
+    std::string debugString() const {
+      return fmt::format("key {}, filter {}", key, filter->toString());
+    }
+  };
+  const auto inRange = [](vector_size_t row) { return row >= 20 && row <= 60; };
+  const std::vector<TestParam> testSettings{
+      {"1", std::make_shared<common::IsNull>(), isKey1NullAt},
+      {"1",
+       std::make_shared<common::BigintRange>(20, 60, /*nullAllowed=*/false),
+       [&](auto row) { return !isKey1NullAt(row) && inRange(row); }},
+      {"1",
+       std::make_shared<common::BigintRange>(20, 60, /*nullAllowed=*/true),
+       [&](auto row) { return isKey1NullAt(row) || inRange(row); }},
+      {"9", std::make_shared<common::IsNull>(), [](auto) { return true; }},
+      {"9",
+       std::make_shared<common::BigintRange>(20, 60, /*nullAllowed=*/false),
+       [](auto) { return false; }},
+  };
+  for (const auto& testData : testSettings) {
+    SCOPED_TRACE(testData.debugString());
+    auto scanSpec = std::make_shared<common::ScanSpec>("root");
+    scanSpec->addAllChildFields(*expected->type());
+    auto* c0 = scanSpec->childByName("c0");
+    c0->setFlatMapAsStruct(true);
+    c0->childByName(testData.key)->setFilter(testData.filter);
+    validateFiltered(
+        std::static_pointer_cast<RowVector>(stripes[0]),
+        file,
+        scanSpec,
+        expected,
+        testData.passes,
+        /*batchSize=*/37);
   }
 }
 
