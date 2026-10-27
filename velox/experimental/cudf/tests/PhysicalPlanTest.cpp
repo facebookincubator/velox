@@ -15,6 +15,7 @@
  */
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/CudfPlanNodes.h"
+#include "velox/experimental/cudf/exec/CudfPlanRewriter.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
 
@@ -193,6 +194,14 @@ class PhysicalPlanTest : public exec::test::OperatorTestBase {
     unregisterCudf();
     CudfConfig::getInstance() = *saved_;
     OperatorTestBase::TearDown();
+  }
+  core::PlanNodePtr rewrite(
+      const core::PlanNodePtr& plan,
+      Kind output = Kind::kVelox) {
+    CudfPlanRewriter::Config config;
+    config.queryCtx = queryCtx_;
+    config.taskOutput = output;
+    return CudfPlanRewriter::rewrite(plan, config);
   }
   core::PlanNodePtr values() {
     return PlanBuilder().values({input_}).planNode();
@@ -386,5 +395,225 @@ TEST_F(PhysicalPlanTest, cudfMaxDriversLimitsGpuPipelines) {
   }
 }
 
+TEST_F(PhysicalPlanTest, externalDeviceNodeGetsConversionsAndExecutes) {
+  auto original = app(values(), Need::kCudf, Kind::kCudf);
+  auto physical = rewrite(original);
+  EXPECT_EQ(count(physical, "CudfFromVelox"), 1);
+  EXPECT_EQ(count(physical, "CudfToVelox"), 1);
+  EXPECT_EQ(original->sources()[0]->name(), "Values");
+  check(physical, input_);
+  EXPECT_EQ(rewrite(physical), physical);
+}
+
+TEST_F(PhysicalPlanTest, intrinsicDeviceNodeNeedsNoDescriptor) {
+  auto node = std::make_shared<NativeGpuNode>("native", values());
+  auto physical = rewrite(node);
+  check(physical, input_);
+  EXPECT_EQ(count(physical, "CudfFromVelox"), 1);
+  EXPECT_EQ(count(physical, "CudfToVelox"), 1);
+}
+
+TEST_F(PhysicalPlanTest, externalHostNodePreservesGpuRegions) {
+  auto ids = std::make_shared<core::PlanNodeIdGenerator>();
+  auto source =
+      PlanBuilder(ids).values({input_}).project({"k + 1 AS k"}).planNode();
+  auto middle = app(source, Need::kVelox, Kind::kVelox);
+  auto plan = PlanBuilder(middle, ids).orderBy({"k"}, false).planNode();
+  auto physical = rewrite(plan);
+  EXPECT_EQ(count(physical, "CudfFromVelox"), 2);
+  EXPECT_EQ(count(physical, "CudfToVelox"), 2);
+  EXPECT_EQ(count(physical, "CudfFilterProject"), 1);
+  EXPECT_EQ(count(physical, "CudfOrderBy"), 1);
+  check(physical, makeRowVector({"k"}, {makeFlatVector<int64_t>({2, 3, 4})}));
+}
+
+TEST_F(PhysicalPlanTest, representationPreservingNodeDoesNotForceConversion) {
+  for (bool gpu : {false, true}) {
+    auto source = gpu ? PlanBuilder().values({input_}).project({"k"}).planNode()
+                      : values();
+    auto physical = rewrite(app(source, Need::kEither, {}, true));
+    EXPECT_EQ(count(physical, "CudfFromVelox"), gpu ? 1 : 0);
+    EXPECT_EQ(count(physical, "CudfToVelox"), gpu ? 1 : 0);
+    check(physical, input_);
+  }
+}
+
+TEST_F(PhysicalPlanTest, perSourceContractsAndSelectedOutputSource) {
+  auto ids = std::make_shared<core::PlanNodeIdGenerator>();
+  auto left = PlanBuilder(ids).values({input_}).project({"k"}).planNode();
+  auto right = PlanBuilder(ids).values({input_}).planNode();
+  auto node = std::make_shared<AppNode>(
+      "multi",
+      std::vector<core::PlanNodePtr>{left, right},
+      input_->rowType(),
+      CudfPlanNodeTraits{{Need::kEither, Need::kVelox}, {}, 0});
+  auto physical = rewrite(node, Kind::kCudf);
+  EXPECT_EQ(physical->sources()[0]->name(), "CudfFilterProject");
+  EXPECT_EQ(physical->sources()[1], right);
+  validateCudfPlan(physical, *queryCtx_, Kind::kCudf);
+}
+
+TEST_F(PhysicalPlanTest, sourceAndSinkContracts) {
+  auto source = std::make_shared<AppNode>(
+      "gpu-source",
+      std::vector<core::PlanNodePtr>{},
+      input_->rowType(),
+      CudfPlanNodeTraits{{}, Kind::kCudf, {}});
+  EXPECT_EQ(rewrite(source)->name(), "CudfToVelox");
+  EXPECT_EQ(rewrite(source, Kind::kCudf), source);
+  auto sink = std::make_shared<AppNode>(
+      "sink",
+      std::vector<core::PlanNodePtr>{values()},
+      input_->rowType(),
+      CudfPlanNodeTraits{{Need::kCudf}, {}, {}});
+  auto physical = rewrite(sink);
+  EXPECT_EQ(physical->name(), "AppForward");
+  EXPECT_EQ(physical->sources()[0]->name(), "CudfFromVelox");
+  EXPECT_EQ(count(physical, "CudfToVelox"), 0);
+}
+
+TEST_F(PhysicalPlanTest, badRebuilderCannotDiscardRewrittenSources) {
+  unregisterCudfPlanNodeDescriptor("app-test");
+  registerCudfPlanNodeDescriptor(
+      "app-test", std::make_shared<AppDescriptor>(true));
+  VELOX_ASSERT_THROW(
+      rewrite(app(values(), Need::kCudf, Kind::kCudf)),
+      "did not install the rewritten sources");
+}
+
+TEST_F(PhysicalPlanTest, validationAndContextAreExplicit) {
+  auto invalid = std::make_shared<NativeGpuNode>("native", values());
+  CudfPlanRewriter::Config missingContext;
+  VELOX_ASSERT_THROW(
+      CudfPlanRewriter::rewrite(values(), missingContext),
+      "requires the task's QueryCtx");
+  auto valid = rewrite(invalid, Kind::kCudf);
+  VELOX_ASSERT_THROW(
+      validateCudfPlan(valid, *queryCtx_), "requested task representation");
+}
+
+TEST_F(PhysicalPlanTest, badRebuilderCannotChangeOutputSchema) {
+  unregisterCudfPlanNodeDescriptor("app-test");
+  registerCudfPlanNodeDescriptor(
+      "app-test", std::make_shared<AppDescriptor>(false, true));
+  VELOX_ASSERT_THROW(
+      rewrite(app(values(), Need::kCudf, Kind::kCudf)),
+      "must preserve its output schema");
+}
+
+TEST_F(PhysicalPlanTest, unsupportedColumnsCanBeRemovedBeforeGpuExecution) {
+  auto maps =
+      makeMapVector<int64_t, int64_t>({{{1, 10}}, {{2, 20}}, {{3, 30}}});
+  auto data =
+      makeRowVector({"k", "m"}, {makeFlatVector<int64_t>({3, 1, 2}), maps});
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .project({"k"})
+                  .orderBy({"k"}, false)
+                  .planNode();
+  auto physical = rewrite(plan);
+  auto sort = core::PlanNode::findFirstNode<CudfOrderByNode>(physical.get());
+  ASSERT_NE(sort, nullptr);
+  ASSERT_TRUE(sort->sources()[0]->is<CudfFromVeloxNode>());
+  EXPECT_TRUE(sort->sources()[0]->sources()[0]->is<core::ProjectNode>());
+  EXPECT_EQ(count(physical, "CudfFromVelox"), 1);
+  check(physical, input_);
+}
+
+TEST_F(PhysicalPlanTest, realQueryContextControlsLoweringAndFallback) {
+  queryCtx_ = core::QueryCtx::create(
+      executor_.get(),
+      core::QueryConfig({{CudfConfig::kCudfEnabled, "false"}}));
+  auto plan = PlanBuilder().values({input_}).project({"k + 1 AS k"}).planNode();
+  EXPECT_EQ(rewrite(plan), plan);
+  check(plan, makeRowVector({"k"}, {makeFlatVector<int64_t>({4, 2, 3})}));
+
+  queryCtx_ = core::QueryCtx::create(
+      executor_.get(),
+      core::QueryConfig(
+          {{CudfConfig::kCudfEnabled, "true"},
+           {CudfConfig::kCudfAllowCpuFallback, "false"}}));
+  auto unsupported = PlanBuilder().values({input_}).rowNumber({}).planNode();
+  VELOX_ASSERT_THROW(rewrite(unsupported), "CPU fallback is disabled");
+  auto partition = PlanBuilder().values({input_}).localPartition({}).planNode();
+  auto scaled = core::LocalPartitionNode::Builder(
+                    *partition->as<core::LocalPartitionNode>())
+                    .scaleWriter(true)
+                    .build();
+  VELOX_ASSERT_THROW(rewrite(scaled), "CPU fallback is disabled");
+}
+
+TEST_F(PhysicalPlanTest, httpAndUcxOutputContracts) {
+  for (auto transport :
+       {core::TransportKind::kInMemory, core::TransportKind::kUcx}) {
+    auto plan = PlanBuilder()
+                    .values({input_})
+                    .partialAggregation({}, {"sum(k)"})
+                    .partitionedOutput(
+                        {}, 1, false, {}, "Presto", std::string{transport})
+                    .planNode();
+    auto physical = rewrite(plan);
+    EXPECT_TRUE(physical->is<core::PartitionedOutputNode>());
+    EXPECT_EQ(
+        physical->sources()[0]->name(),
+        transport == core::TransportKind::kUcx ? "CudfAggregation"
+                                               : "CudfToVelox");
+    auto aggregation =
+        core::PlanNode::findFirstNode<CudfAggregationNode>(physical.get());
+    ASSERT_NE(aggregation, nullptr);
+    ASSERT_EQ(aggregation->intermediateTypes().size(), 1);
+    EXPECT_TRUE(*aggregation->intermediateTypes()[0] == *BIGINT());
+  }
+}
+
+TEST_F(PhysicalPlanTest, concurrentFragmentsShareQueryContext) {
+  auto plan = PlanBuilder().values({input_}).project({"k + 1 AS k"}).planNode();
+  std::vector<std::future<core::PlanNodePtr>> fragments;
+  for (size_t i = 0; i < 8; ++i) {
+    fragments.push_back(std::async(std::launch::async, [&, plan] {
+      core::PlanNodePtr result;
+      for (size_t repeat = 0; repeat < 20; ++repeat) {
+        result = rewrite(plan);
+      }
+      return result;
+    }));
+  }
+  for (auto& fragment : fragments) {
+    EXPECT_EQ(count(fragment.get(), "CudfFilterProject"), 1);
+  }
+}
+
+TEST_F(PhysicalPlanTest, httpAndUcxInputContracts) {
+  const auto inputType = ROW({"s"}, {BIGINT()});
+  for (auto transport :
+       {core::TransportKind::kInMemory, core::TransportKind::kUcx}) {
+    auto plan = PlanBuilder()
+                    .exchange(inputType, "Presto", std::string{transport})
+                    .finalAggregation({}, {"sum(s)"}, {{BIGINT()}})
+                    .planNode();
+    auto physical = rewrite(plan);
+    auto aggregation =
+        core::PlanNode::findFirstNode<CudfAggregationNode>(physical.get());
+    ASSERT_NE(aggregation, nullptr);
+    EXPECT_EQ(
+        aggregation->sources()[0]->name(),
+        transport == core::TransportKind::kUcx ? "Exchange" : "CudfFromVelox");
+  }
+}
+
+TEST_F(PhysicalPlanTest, ucxMergeRequiresExplicitSort) {
+  auto type = ROW({"s"}, {BIGINT()});
+  auto merge = std::make_shared<core::MergeExchangeNode>(
+      "merge",
+      type,
+      std::vector<core::FieldAccessTypedExprPtr>{
+          std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "s")},
+      std::vector<core::SortOrder>{core::SortOrder(true, false)},
+      "Presto",
+      std::string{core::TransportKind::kUcx});
+  auto physical = rewrite(merge, Kind::kCudf);
+  EXPECT_EQ(count(physical, "CudfOrderBy"), 1);
+  EXPECT_EQ(physical->sources()[0]->id(), merge->id());
+}
 } // namespace
 } // namespace facebook::velox::cudf_velox::test
