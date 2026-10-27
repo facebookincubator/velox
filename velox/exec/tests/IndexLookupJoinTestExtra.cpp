@@ -661,13 +661,10 @@ DEBUG_ONLY_TEST_P(IndexLookupJoinTest, statsSplitterWithFilter) {
 }
 
 TEST_P(IndexLookupJoinTest, barrier) {
-  // Parallel cases remain disabled; only serial coverage is restored here.
-  if (!GetParam().serialExecution) {
-    return;
-  }
   if (GetParam().needsIndexSplit) {
     return;
   }
+  const int maxDrivers = GetParam().serialExecution ? 1 : 4;
   IndexTableData tableData;
   generateIndexTableData({100, 1, 1}, tableData, pool_);
   const int numProbeSplits{5};
@@ -743,9 +740,11 @@ TEST_P(IndexLookupJoinTest, barrier) {
         32,
         testData.numPrefetches,
         GetParam().needsIndexSplit,
-        "SELECT u.c3, t.c5 FROM t, u WHERE t.c0 = u.c0 AND t.c1 = u.c1 AND t.c2 = u.c2");
+        "SELECT u.c3, t.c5 FROM t, u WHERE t.c0 = u.c0 AND t.c1 = u.c1 AND t.c2 = u.c2",
+        maxDrivers);
 
     const auto taskStats = task->taskStats();
+    ASSERT_EQ(taskStats.numTotalDrivers, maxDrivers);
     ASSERT_EQ(
         taskStats.numBarriers, testData.barrierExecution ? numProbeSplits : 0);
     ASSERT_EQ(taskStats.numFinishedSplits, numProbeSplits);

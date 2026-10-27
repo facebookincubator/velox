@@ -179,7 +179,7 @@ class IndexLookupJoinTestBase : public HiveConnectorTestBase {
       int maxDrivers = 1);
 
   /// Verifies the results of the index lookup join query with and without match
-  /// column using the specified execution mode.
+  /// column using the specified execution mode and number of drivers.
   void verifyResultWithMatchColumn(
       const PlanNodePtr& planWithoutMatchColumn,
       const PlanNodeId& probeScanNodeIdWithoutMatchColumn,
@@ -187,7 +187,8 @@ class IndexLookupJoinTestBase : public HiveConnectorTestBase {
       const PlanNodeId& probeScanNodeIdWithMatchColumn,
       const std::vector<std::shared_ptr<TempFilePath>>& probeFiles,
       bool needsIndexSplit,
-      bool serialExecution);
+      bool serialExecution,
+      int maxDrivers = 1);
 
   RowTypePtr keyType_;
   std::optional<RowTypePtr> partitionType_;

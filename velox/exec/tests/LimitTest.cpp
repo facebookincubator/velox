@@ -491,7 +491,8 @@ TEST_F(LimitTest, barrier) {
        numSplits},
   };
   for (const auto& testData : testSettings) {
-    // Parallel cases remain disabled; only serial coverage is restored here.
+    // TODO: Re-enable parallel cases after fixing
+    // https://github.com/facebookincubator/velox/issues/19866
     if (!testData.serialExecution) {
       continue;
     }

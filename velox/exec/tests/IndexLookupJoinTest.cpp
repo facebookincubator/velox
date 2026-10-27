@@ -854,10 +854,7 @@ TEST_F(IndexLookupJoinTest, forwardedProbeColumnOverlapsWithCondition) {
 }
 
 TEST_P(IndexLookupJoinTest, equalJoin) {
-  // Parallel cases remain disabled; only serial coverage is restored here.
-  if (!GetParam().serialExecution) {
-    return;
-  }
+  const int maxDrivers = GetParam().serialExecution ? 1 : 4;
   struct {
     std::vector<int> keyCardinalities;
     int numProbeBatches;
@@ -1252,7 +1249,7 @@ TEST_P(IndexLookupJoinTest, equalJoin) {
         /*hasMarker=*/false,
         testData.joinType,
         testData.outputColumns);
-    runLookupQuery(
+    auto task = runLookupQuery(
         plan,
         probeFiles,
         GetParam().serialExecution,
@@ -1260,7 +1257,9 @@ TEST_P(IndexLookupJoinTest, equalJoin) {
         32,
         GetParam().numPrefetches,
         GetParam().needsIndexSplit,
-        testData.duckDbVerifySql);
+        testData.duckDbVerifySql,
+        maxDrivers);
+    ASSERT_EQ(task->numTotalDrivers(), maxDrivers);
     if (testData.joinType != core::JoinType::kLeft) {
       continue;
     }
@@ -1282,7 +1281,8 @@ TEST_P(IndexLookupJoinTest, equalJoin) {
         probeScanNodeId_,
         probeFiles,
         GetParam().needsIndexSplit,
-        GetParam().serialExecution);
+        GetParam().serialExecution,
+        maxDrivers);
   }
 }
 
