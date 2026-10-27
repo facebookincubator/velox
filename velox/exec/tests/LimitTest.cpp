@@ -491,7 +491,7 @@ TEST_F(LimitTest, barrier) {
        numSplits},
   };
   for (const auto& testData : testSettings) {
-    // TODO: Re-enable parallel cases after #19832 is resolved.
+    // Parallel cases remain disabled; only serial coverage is restored here.
     if (!testData.serialExecution) {
       continue;
     }

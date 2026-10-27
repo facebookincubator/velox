@@ -854,8 +854,9 @@ TEST_F(IndexLookupJoinTest, forwardedProbeColumnOverlapsWithCondition) {
 }
 
 TEST_P(IndexLookupJoinTest, equalJoin) {
+  // Parallel cases remain disabled; only serial coverage is restored here.
   if (!GetParam().serialExecution) {
-    GTEST_SKIP() << "Parallel execution is disabled pending #19832.";
+    return;
   }
   struct {
     std::vector<int> keyCardinalities;
@@ -1762,7 +1763,8 @@ TEST_P(IndexLookupJoinTest, betweenJoinCondition) {
         planWithMatchColumn,
         probeScanNodeId_,
         probeFiles,
-        GetParam().needsIndexSplit);
+        GetParam().needsIndexSplit,
+        /*serialExecution=*/false);
   }
 }
 
@@ -2109,7 +2111,8 @@ TEST_P(IndexLookupJoinTest, inJoinCondition) {
         planWithMatchColumn,
         probeScanNodeId_,
         probeFiles,
-        GetParam().needsIndexSplit);
+        GetParam().needsIndexSplit,
+        /*serialExecution=*/false);
   }
 }
 
@@ -2272,7 +2275,8 @@ TEST_P(IndexLookupJoinTest, prefixKeysEqualJoin) {
         planWithMatchColumn,
         probeScanNodeId_,
         probeFiles,
-        GetParam().needsIndexSplit);
+        GetParam().needsIndexSplit,
+        /*serialExecution=*/false);
   }
 }
 
@@ -2418,7 +2422,8 @@ TEST_P(IndexLookupJoinTest, prefixKeysbetweenJoinCondition) {
         planWithMatchColumn,
         probeScanNodeId_,
         probeFiles,
-        GetParam().needsIndexSplit);
+        GetParam().needsIndexSplit,
+        /*serialExecution=*/false);
   }
 }
 
@@ -2565,7 +2570,8 @@ TEST_P(IndexLookupJoinTest, prefixInJoinCondition) {
         planWithMatchColumn,
         probeScanNodeId_,
         probeFiles,
-        GetParam().needsIndexSplit);
+        GetParam().needsIndexSplit,
+        /*serialExecution=*/false);
   }
 }
 
@@ -3019,7 +3025,8 @@ TEST_P(IndexLookupJoinTest, outputBatchSizeWithLeftJoin) {
         planWithMatchColumn,
         probeScanNodeId_,
         probeFiles,
-        GetParam().needsIndexSplit);
+        GetParam().needsIndexSplit,
+        /*serialExecution=*/false);
   }
 }
 

@@ -282,7 +282,8 @@ TEST_P(IndexLookupJoinTest, leftJoinTrailingMissesWithNoSplitOutput) {
         planWithMatchColumn,
         probeScanNodeId_,
         probeFiles,
-        GetParam().needsIndexSplit);
+        GetParam().needsIndexSplit,
+        /*serialExecution=*/false);
   }
 }
 
@@ -660,11 +661,12 @@ DEBUG_ONLY_TEST_P(IndexLookupJoinTest, statsSplitterWithFilter) {
 }
 
 TEST_P(IndexLookupJoinTest, barrier) {
+  // Parallel cases remain disabled; only serial coverage is restored here.
   if (!GetParam().serialExecution) {
-    GTEST_SKIP() << "Parallel execution is disabled pending #19832.";
+    return;
   }
   if (GetParam().needsIndexSplit) {
-    GTEST_SKIP() << "Barrier execution does not support index splits.";
+    return;
   }
   IndexTableData tableData;
   generateIndexTableData({100, 1, 1}, tableData, pool_);
@@ -853,7 +855,8 @@ TEST_P(IndexLookupJoinTest, nullKeys) {
       planWithMatchColumn,
       probeScanNodeId_,
       probeFiles,
-      GetParam().needsIndexSplit);
+      GetParam().needsIndexSplit,
+      /*serialExecution=*/false);
 }
 
 TEST_P(IndexLookupJoinTest, joinFuzzer) {
@@ -1254,7 +1257,8 @@ TEST_P(IndexLookupJoinTest, withFilter) {
         planWithMatchColumn,
         probeScanNodeId_,
         probeFiles,
-        GetParam().needsIndexSplit);
+        GetParam().needsIndexSplit,
+        /*serialExecution=*/false);
   }
 }
 

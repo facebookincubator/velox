@@ -187,7 +187,7 @@ class IndexLookupJoinTestBase : public HiveConnectorTestBase {
       const PlanNodeId& probeScanNodeIdWithMatchColumn,
       const std::vector<std::shared_ptr<TempFilePath>>& probeFiles,
       bool needsIndexSplit,
-      bool serialExecution = false);
+      bool serialExecution);
 
   RowTypePtr keyType_;
   std::optional<RowTypePtr> partitionType_;
