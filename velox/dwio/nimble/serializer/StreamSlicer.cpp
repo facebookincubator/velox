@@ -590,6 +590,10 @@ void StreamSlicer::sliceType(
             outputBuffer,
             encodingOptions);
       }
+      // A range of null maps has no keys to slice.
+      if (mapRange.length == 0) {
+        return;
+      }
       for (size_t i = 0; i < flatMap.childrenCount(); ++i) {
         const auto& inMapDescriptor = flatMap.inMapDescriptorAt(i);
         const auto childHasInMap = hasStream(inputStreams, inMapDescriptor);
