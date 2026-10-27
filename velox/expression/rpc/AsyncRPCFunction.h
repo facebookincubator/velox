@@ -175,9 +175,8 @@ class AsyncRPCFunction {
   virtual TypePtr resultType() const = 0;
 
   /// Returns the concurrency ceiling requested by function options, or 0 when
-  /// unset. The operator applies it alongside the session properties in a
-  /// single configuration step, so a backend's whole policy lands at once
-  /// rather than in two writes a concurrent query could interleave with.
+  /// unset. The operator resolves it with the session properties into the
+  /// query's rate-limiter policy.
   virtual int64_t configuredCeiling() const {
     return 0;
   }
@@ -197,7 +196,7 @@ class AsyncRPCFunction {
   }
 
   /// Returns the adaptive-window floor requested by the resolved backend.
-  /// The operator seals it on the limiter identified by admissionKey(). A
+  /// The operator resolves it into the query's rate-limiter policy. A
   /// positive legacy session override takes precedence; zero delegates here.
   virtual double configuredAdaptiveFloor() const {
     return 50.0;
@@ -206,8 +205,8 @@ class AsyncRPCFunction {
   /// Identifies the shared admission bucket for this function.
   /// Empty string uses the global default bucket. The key may include more
   /// than a service tier, such as a credential discriminator or tenant.
-  /// Functions returning the same key must declare the same stable ceiling
-  /// and adaptive floor; the first query fixes both for the worker lifetime.
+  /// Queries whose functions return the same key share a rate limiter when
+  /// they also resolve to the same policy, ceiling and floor included.
   virtual std::string admissionKey() const {
     return "";
   }

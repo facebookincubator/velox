@@ -25,7 +25,10 @@
 #include <optional>
 #include <shared_mutex>
 #include <string>
+#include <string_view>
 #include <unordered_map>
+#include <utility>
+#include <vector>
 
 #include "velox/common/future/VeloxPromise.h"
 
@@ -37,9 +40,11 @@ class Timekeeper;
 namespace facebook::velox::exec::rpc {
 
 /// Admission control for one unit of provisioned capacity: a backend
-/// plus the credential used to reach it. Everything sharing that pair --
-/// every driver, every query, both streaming modes -- draws on one quota,
-/// because that is what the remote service actually provisions.
+/// plus the credential used to reach it. Every driver and query that shares
+/// that pair and runs the same policy -- in both streaming modes -- draws on
+/// one limiter. Queries that run different policies against the same pair get
+/// one limiter per policy, so together they can admit the sum of their
+/// ceilings.
 ///
 /// A backend (e.g. "translation-service") is shared by every driver in the
 /// process that dispatches to it, so admission is a process-scoped concern:
@@ -57,8 +62,9 @@ class RPCRateLimiter : public std::enable_shared_from_this<RPCRateLimiter> {
   struct TokenConstructionKey {};
 
  public:
-  /// Resolved tuning for one admission key. The operator combines session
-  /// overrides with stable function-provided bounds before initialization.
+  /// Resolved tuning a limiter runs: one query's rate-limiter policy. The
+  /// operator combines session overrides with stable function-provided bounds
+  /// before initialization.
   struct Config {
     /// Whether capacity adapts to overload. When false, capacity is pinned at
     /// the ceiling. Maps to rpc.ratelimiter.adaptive_enabled.
@@ -77,6 +83,10 @@ class RPCRateLimiter : public std::enable_shared_from_this<RPCRateLimiter> {
     /// Multiplicative-decrease factor applied on overload, in (0, 1). Maps to
     /// rpc.ratelimiter.decrease_factor.
     double decreaseFactor{0.5};
+
+    /// Field-wise equality. Limiters compare policies after reducing them to
+    /// the fields a limiter reads; see initializeOrMatch().
+    bool operator==(const Config& other) const = default;
   };
 
   /// What completed work told us about the backend. The admission layer's own
@@ -105,17 +115,18 @@ class RPCRateLimiter : public std::enable_shared_from_this<RPCRateLimiter> {
     /// In-flight requests right now.
     int64_t pending{0};
 
-    /// High-water in-flight count over the backend's lifetime.
+    /// High-water in-flight count over this limiter's lifetime.
     int64_t peakPending{0};
 
     /// Lowest integral capacity ever reached. In adaptive mode this includes
     /// the conservative initial window; in fixed mode it is the ceiling. Use
     /// lowWaterLimitMilli to observe a sub-unit low-water mark.
     ///
-    /// Scoped to the backend's lifetime in this process, not to one query:
+    /// Scoped to this limiter's lifetime in this process, not to one query:
     /// the mark is never cleared on recovery, so a query that saw no overload
-    /// still reports a dip an earlier query produced. It also includes the
-    /// conservative initial window, so it does not by itself prove overload.
+    /// still reports a dip an earlier query sharing the limiter produced. It
+    /// also includes the conservative initial window, so it does not by itself
+    /// prove overload.
     int64_t lowWaterCapacity{0};
 
     /// Current adaptive congestion window in milli-admission-units.
@@ -223,21 +234,27 @@ class RPCRateLimiter : public std::enable_shared_from_this<RPCRateLimiter> {
   /// Applies already-resolved limiter tuning.
   /// Never touches work already in flight — a ceiling that lands below the
   /// current pending count stops admission but cancels nothing and wakes no
-  /// waiter, because nothing was freed.
+  /// waiter, because nothing was freed. On a registry limiter, call it only
+  /// before initializeOrMatch() seals a policy: the registry finds a limiter
+  /// by the policy it sealed.
   void configure(const Config& config);
 
-  /// Applies 'mutate' to this backend's tuning under the lock, so a
+  /// Applies 'mutate' to this limiter's tuning under the lock, so a
   /// read-modify-write cannot lose concurrent changes. Prefer this over
-  /// config() + configure() whenever only some fields change.
+  /// config() + configure() whenever only some fields change. On a registry
+  /// limiter, call it only before initializeOrMatch() seals a policy.
   void amend(const std::function<void(Config&)>& mutate);
 
-  /// Applies `mutate` on the first call for this backend and seals the
-  /// configuration; later calls are refused.
-  /// A backend's configuration is shared by every query running against it and
-  /// has to hold still while the limiter adapts, so a later query's settings
-  /// are ignored rather than allowed to move the target mid-flight. A
-  /// divergent request is logged once so the no-op is visible.
-  void initializeOnce(const std::function<void(Config&)>& mutate);
+  /// Seals `policy` when no policy is sealed yet, and otherwise leaves the
+  /// sealed policy as it is. Returns true when this call sealed `policy` or the
+  /// sealed policy matches it, and false otherwise.
+  ///
+  /// Two policies match when they agree after clamping, ignoring what the
+  /// limiter never reads: fixed capacity reads neither the floor nor the
+  /// decrease factor, and a floor at or above a positive ceiling pins capacity
+  /// at the ceiling, as fixed capacity does. Limiters sealed with matching
+  /// policies admit alike.
+  bool initializeOrMatch(const Config& policy);
 
   /// The resolved tuning currently in effect.
   Config config() const;
@@ -348,11 +365,8 @@ class RPCRateLimiter : public std::enable_shared_from_this<RPCRateLimiter> {
   // Caller holds mutex_.
   bool updateServiceHorizonLocked(int64_t rttNs);
 
-  // Clamps a Config into its valid ranges. Caller holds mutex_.
-  static void clampLocked(Config& config);
-
   // Applies `mutate` to config_, clamps the result, and logs when adaptation
-  // flips on or off. Shared by amend() and initializeOnce() so the clamping
+  // flips on or off. Shared by amend() and initializeOrMatch() so the clamping
   // and the logging live in one place. Caller holds mutex_.
   void applyMutationLocked(const std::function<void(Config&)>& mutate);
 
@@ -403,9 +417,9 @@ class RPCRateLimiter : public std::enable_shared_from_this<RPCRateLimiter> {
   // longest-waiting parked driver, if any.
   void release() noexcept;
 
-  // Identifies the backend this limiter admits for. Composed by the transport
-  // from whatever distinguishes one deployment from another, so two
-  // deployments never share a limiter.
+  // Names the backend this limiter admits for in logs: the admission key, with
+  // a suffix on a policy-scoped limiter. The registry, not this name, decides
+  // which queries share the limiter.
   const std::string admissionKey_;
 
   // Supplies monotonic time. Injected together with timekeeper_ in tests so
@@ -424,14 +438,10 @@ class RPCRateLimiter : public std::enable_shared_from_this<RPCRateLimiter> {
   // tests can exercise controlled policy changes.
   Config config_;
 
-  // Set once the first query to reach this backend has finished configuring
-  // it. Guards config_ against later queries; the adapted capacity below keeps
-  // moving, because that is learned from every query's outcomes.
+  // Set once initializeOrMatch() seals a policy. Later calls compare against
+  // config_ rather than change it; the adapted capacity below keeps moving,
+  // because that is learned from the outcomes of every query sharing it.
   bool initialized_{false};
-
-  // Warn once per backend about settings a later query asked for and did not
-  // get, rather than once per process.
-  bool loggedDivergentSettings_{false};
 
   // Adaptive congestion window in admission units per service horizon. Zero
   // means the hard ceiling governs.
@@ -465,11 +475,11 @@ class RPCRateLimiter : public std::enable_shared_from_this<RPCRateLimiter> {
   // True while the current generation has one reserved or scheduled timer.
   bool pacingTimerArmed_{false};
 
-  // Units currently in flight against this backend. Integral reservations and
+  // Units currently in flight through this limiter. Integral reservations and
   // release use atomic updates; fractional admission compares it under mutex_.
   std::atomic<int64_t> pending_{0};
 
-  // High-water pending count over the backend's lifetime, for runtime stats.
+  // High-water pending count over this limiter's lifetime, for runtime stats.
   // Updated with a relaxed compare-exchange: best effort, not a
   // synchronization point.
   std::atomic<int64_t> peakPending_{0};
@@ -482,7 +492,8 @@ class RPCRateLimiter : public std::enable_shared_from_this<RPCRateLimiter> {
   [[no_unique_address]] TokenConstructionKey tokenConstructionKey_;
 };
 
-/// Owns one process-scoped RPCRateLimiter per admission key.
+/// Owns the process-scoped RPCRateLimiters: one shared limiter per admission
+/// key, plus one for each other policy that queries run against that key.
 ///
 /// A backend is shared across queries by definition, so the registry is a
 /// process singleton rather than something threaded through the operator.
@@ -490,12 +501,36 @@ class RPCRateLimiterRegistry {
  public:
   static RPCRateLimiterRegistry& global();
 
-  /// Returns the backend's admission control, creating it on first sight. The
+  /// Returns the backend's shared limiter, creating it on first sight. The
   /// reference stays valid for the process lifetime: values are shared-owned,
   /// and later insertions do not replace an existing limiter.
   RPCRateLimiter& get(const std::string& admissionKey);
 
-  /// Resets every backend in place and restores process-global defaults.
+  /// The limiter a query runs under, from getForPolicy().
+  struct Lookup {
+    /// Valid for the life of the process.
+    RPCRateLimiter* limiter{nullptr};
+
+    /// True when the backend's shared limiter runs another policy and
+    /// 'limiter' is the one for the query's own policy.
+    bool policyScoped{false};
+  };
+
+  /// Returns the limiter for a query that runs `policy` against the backend
+  /// named by `admissionKey`. The first query to reach the backend seals the
+  /// shared limiter, get(admissionKey), with its policy, and every later query
+  /// whose policy matches shares it (see RPCRateLimiter::initializeOrMatch()).
+  /// A query whose policy does not match gets the limiter for its policy,
+  /// created and sealed on first sight and shared with every later query whose
+  /// policy matches that one. A new limiter starts from its initial window
+  /// rather than from any backoff another limiter for the same backend has
+  /// learned. Limiters live as long as the process.
+  Lookup getForPolicy(
+      std::string_view admissionKey,
+      const RPCRateLimiter::Config& policy);
+
+  /// Resets every backend in place and restores process-global defaults. A
+  /// policy-scoped limiter is sealed with the policy it ran before the reset.
   /// Resets rather than drops: a Token releases through a back-pointer to its
   /// issuing limiter, so erasing the map would leave outstanding tokens
   /// pointing at freed memory. Intended only
@@ -505,11 +540,20 @@ class RPCRateLimiterRegistry {
   void testingReset();
 
  private:
-  // Read-mostly: backends are created once then only looked up, so lookups take
+  // Read-mostly: limiters are created once then only looked up, so lookups take
   // a shared lock and do not serialize against each other. Only first sight
-  // of a backend takes the exclusive lock.
+  // of a backend or of a policy takes the exclusive lock.
   mutable std::shared_mutex mutex_;
   std::unordered_map<std::string, std::shared_ptr<RPCRateLimiter>> backends_;
+
+  // Limiters for policies other than the shared limiter's, by admission key,
+  // each paired with the reduced policy initializeOrMatch() compares. A backend
+  // sees few distinct policies, so a lookup scans its list.
+  std::unordered_map<
+      std::string,
+      std::vector<
+          std::pair<RPCRateLimiter::Config, std::shared_ptr<RPCRateLimiter>>>>
+      policyScopedLimiters_;
 };
 
 } // namespace facebook::velox::exec::rpc

@@ -40,9 +40,13 @@
 
 #include <atomic>
 #include <chrono>
+#include <cmath>
+#include <future>
+#include <limits>
 #include <stdexcept>
 #include <system_error>
 #include <thread>
+#include <tuple>
 #include <vector>
 
 #include "velox/common/testutil/TestValue.h"
@@ -307,10 +311,11 @@ TEST_F(RPCRateLimiterTest, configAmendDoesNotSuppressCanonicalOverload) {
 // query -- the function's ceiling, then the operator's session properties --
 // with a window between them where a second query saw the backend still
 // unconfigured and overwrote, fixing one query's ceiling with another's floor.
-// There is one call site now, so that shape cannot be written to fail this.
+// A seal that checked and wrote under separate locks would let two callers
+// both seal. One race rarely shows either defect, so the test runs many.
 TEST_F(RPCRateLimiterTest, concurrentInitializersDoNotMixConfigurations) {
   constexpr int kThreads = 16;
-  auto& limiter = limiterFor("test.backend");
+  constexpr int kRounds = 50;
 
   // Each thread offers an internally consistent policy; the pairs are chosen
   // so a mixture is detectable.
@@ -322,38 +327,492 @@ TEST_F(RPCRateLimiterTest, concurrentInitializersDoNotMixConfigurations) {
     return {static_cast<int64_t>(100 * (i + 1)), static_cast<double>(i + 1)};
   };
 
+  for (int round = 0; round < kRounds; ++round) {
+    SCOPED_TRACE(round);
+    auto limiter = std::make_shared<RPCRateLimiter>("test.backend");
+    std::atomic<bool> go{false};
+    std::atomic<int> numSealed{0};
+    std::vector<std::thread> threads;
+    threads.reserve(kThreads);
+    for (int i = 0; i < kThreads; ++i) {
+      threads.emplace_back([&, i]() {
+        const auto policy = policyFor(i);
+        while (!go.load(std::memory_order_relaxed)) {
+        }
+        if (limiter->initializeOrMatch(
+                {.ceiling = policy.ceiling, .floor = policy.floor})) {
+          ++numSealed;
+        }
+      });
+    }
+    go.store(true);
+    for (auto& thread : threads) {
+      thread.join();
+    }
+    // Every policy has its own ceiling, so only the thread that sealed
+    // matches.
+    EXPECT_EQ(numSealed.load(), 1);
+
+    // Whatever landed must be exactly one thread's pair, not a blend.
+    const auto config = limiter->config();
+    bool matchesSomeThread = false;
+    for (int i = 0; i < kThreads; ++i) {
+      const auto policy = policyFor(i);
+      if (config.ceiling == policy.ceiling && config.floor == policy.floor) {
+        matchesSomeThread = true;
+        break;
+      }
+    }
+    EXPECT_TRUE(matchesSomeThread)
+        << "configuration is a mixture: ceiling " << config.ceiling
+        << " with floor " << config.floor;
+  }
+}
+
+// initializeOrMatch() seals the first policy it sees and tells each later
+// caller whether the sealed policy is the one it asked for.
+TEST_F(RPCRateLimiterTest, initializeOrMatchReportsWhetherSealedPolicyMatches) {
+  auto& limiter = limiterFor("test.backend");
+  const RPCRateLimiter::Config small{.ceiling = 25};
+  const RPCRateLimiter::Config large{.ceiling = 100};
+
+  EXPECT_TRUE(limiter.initializeOrMatch(small));
+  EXPECT_TRUE(limiter.initializeOrMatch(small));
+  EXPECT_FALSE(limiter.initializeOrMatch(large));
+  EXPECT_EQ(limiter.config(), small);
+}
+
+// A later policy matches the sealed one when a limiter running it would admit
+// alike, and only then.
+TEST_F(RPCRateLimiterTest, initializeOrMatchMatchesPoliciesThatAdmitAlike) {
+  constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
+  auto sealedWith = [](const std::string& admissionKey,
+                       const RPCRateLimiter::Config& policy) -> auto& {
+    auto& limiter = limiterFor(admissionKey);
+    EXPECT_TRUE(limiter.initializeOrMatch(policy));
+    return limiter;
+  };
+
+  {
+    // Out-of-range values compare as the values they clamp to.
+    auto& limiter = sealedWith(
+        "clamped",
+        {.adaptive = true,
+         .ceiling = 25,
+         .floor = 0.001,
+         .decreaseFactor = 0.99});
+    EXPECT_TRUE(limiter.initializeOrMatch(
+        {.adaptive = true, .ceiling = 25, .floor = 0, .decreaseFactor = 5}));
+    EXPECT_FALSE(limiter.initializeOrMatch(
+        {.adaptive = true,
+         .ceiling = 25,
+         .floor = 0.002,
+         .decreaseFactor = 0.99}));
+  }
+  {
+    // NaN compares as the default.
+    auto& limiter = sealedWith("nan", {.adaptive = true, .ceiling = 25});
+    EXPECT_TRUE(limiter.initializeOrMatch(
+        {.adaptive = true,
+         .ceiling = 25,
+         .floor = kNaN,
+         .decreaseFactor = kNaN}));
+  }
+  {
+    // Fixed capacity reads neither the floor nor the decrease factor.
+    auto& limiter = sealedWith(
+        "fixed", {.ceiling = 25, .floor = 4, .decreaseFactor = 0.25});
+    EXPECT_TRUE(limiter.initializeOrMatch({.ceiling = 25}));
+    EXPECT_FALSE(limiter.initializeOrMatch({.ceiling = 26}));
+    EXPECT_FALSE(limiter.initializeOrMatch(
+        {.adaptive = true, .ceiling = 25, .floor = 4}));
+  }
+  {
+    // A floor at or above a positive ceiling pins capacity at the ceiling.
+    auto& limiter =
+        sealedWith("pinned", {.adaptive = true, .ceiling = 25, .floor = 50});
+    EXPECT_TRUE(limiter.initializeOrMatch(
+        {.adaptive = true, .ceiling = 25, .floor = 25, .decreaseFactor = 0.9}));
+    EXPECT_TRUE(limiter.initializeOrMatch({.ceiling = 25}));
+    EXPECT_FALSE(limiter.initializeOrMatch(
+        {.adaptive = true, .ceiling = 25, .floor = 24}));
+  }
+  {
+    // A zero ceiling defers to the process default, which can change, so a
+    // large floor does not pin it.
+    auto& limiter =
+        sealedWith("deferred", {.adaptive = true, .ceiling = 0, .floor = 50});
+    EXPECT_FALSE(limiter.initializeOrMatch({.ceiling = 0}));
+  }
+}
+
+// initializeOrMatch() seals the clamped policy, so the limiter never reads an
+// out-of-range value: a factor above the range shrinks the window by 0.99, and
+// a NaN factor by the default.
+TEST_F(RPCRateLimiterTest, sealedPolicyIsClampedBeforeTheLimiterReadsIt) {
+  auto& aboveRange = limiterFor("above.range");
+  ASSERT_TRUE(aboveRange.initializeOrMatch(
+      {.adaptive = true, .ceiling = 100, .floor = 0, .decreaseFactor = 5}));
+  EXPECT_DOUBLE_EQ(aboveRange.config().floor, 0.001);
+  EXPECT_DOUBLE_EQ(aboveRange.config().decreaseFactor, 0.99);
+  aboveRange.onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  EXPECT_EQ(aboveRange.stats().capacity, 99);
+
+  auto& nan = limiterFor("nan.factor");
+  ASSERT_TRUE(nan.initializeOrMatch(
+      {.adaptive = true,
+       .ceiling = 16,
+       .floor = 1,
+       .decreaseFactor = std::numeric_limits<double>::quiet_NaN()}));
+  nan.onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  EXPECT_EQ(nan.stats().capacity, 8);
+}
+
+// A zero ceiling defers to the process default on every read. A sealed zero
+// ceiling follows a later change to the default, and it stays distinct from a
+// policy that names today's default.
+TEST_F(RPCRateLimiterTest, zeroCeilingStaysDeferredToProcessDefault) {
+  auto& limiter = limiterFor("test.backend");
+  ASSERT_TRUE(limiter.initializeOrMatch({.ceiling = 0}));
+  EXPECT_FALSE(limiter.initializeOrMatch(
+      {.ceiling = RPCRateLimiter::defaultCapacity()}));
+
+  RPCRateLimiter::setDefaultCapacity(5);
+  EXPECT_EQ(limiter.stats().hardLimit, 5);
+  EXPECT_EQ(limiter.stats().capacity, 5);
+  EXPECT_TRUE(limiter.initializeOrMatch({.ceiling = 0}));
+}
+
+// Policies that initializeOrMatch() treats as equal do admit alike: limiters
+// sealed with either follow the same capacity through overload and recovery.
+TEST_F(RPCRateLimiterTest, policiesThatMatchAdmitAlike) {
+  auto trajectory = [](const RPCRateLimiter::Config& policy) {
+    auto limiter = std::make_shared<RPCRateLimiter>("test.backend");
+    EXPECT_TRUE(limiter->initializeOrMatch(policy));
+    std::vector<std::tuple<int64_t, int64_t, int64_t, int64_t, int64_t>> steps;
+    auto record = [&] {
+      const auto stats = limiter->stats();
+      steps.emplace_back(
+          stats.capacity,
+          stats.hardLimit,
+          stats.lowWaterCapacity,
+          stats.limitMilli,
+          stats.lowWaterLimitMilli);
+    };
+    record();
+    for (int i = 0; i < 3; ++i) {
+      limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+      record();
+    }
+    for (int i = 0; i < 3; ++i) {
+      limiter->onOutcome(RPCRateLimiter::Outcome::kSuccess, 10, 1'000'000);
+      record();
+    }
+    return steps;
+  };
+
+  const auto fixed = trajectory({.ceiling = 25});
+  EXPECT_EQ(
+      trajectory({.ceiling = 25, .floor = 4, .decreaseFactor = 0.25}), fixed);
+  EXPECT_EQ(trajectory({.adaptive = true, .ceiling = 25, .floor = 50}), fixed);
+  EXPECT_EQ(trajectory({.adaptive = true, .ceiling = 25, .floor = 25}), fixed);
+  // Above the initial adaptive window a pinned limiter holds its window at the
+  // ceiling, where fixed capacity holds none, and still admits alike.
+  EXPECT_EQ(
+      trajectory({.adaptive = true, .ceiling = 300, .floor = 300}),
+      trajectory({.ceiling = 300}));
+  // A policy that does not match moves differently, so the comparisons above
+  // can tell policies apart.
+  EXPECT_NE(trajectory({.adaptive = true, .ceiling = 25, .floor = 1}), fixed);
+  EXPECT_NE(
+      trajectory({.adaptive = true, .ceiling = 300, .floor = 1}),
+      trajectory({.ceiling = 300}));
+}
+
+// Over a grid of policies, every pair that initializeOrMatch() matches follows
+// the same capacity trajectory through overload and recovery, so matching
+// never merges policies that admit differently. The trajectory check cannot
+// see a change that merges fewer policies, so the number of matching pairs is
+// pinned as well.
+TEST_F(RPCRateLimiterTest, matchingPoliciesAdmitAlikeAcrossPolicyGrid) {
+  constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
+  std::vector<RPCRateLimiter::Config> grid;
+  for (const bool adaptive : {false, true}) {
+    for (const int64_t ceiling : {0, 1, 25, 200, 250}) {
+      for (const double floor : {0.0, 0.5, 1.0, 25.0, 50.0, 300.0}) {
+        for (const double decrease : {0.25, 0.5, 0.99, kNaN}) {
+          grid.push_back({adaptive, ceiling, floor, decrease});
+        }
+      }
+    }
+  }
+  auto describe = [](const RPCRateLimiter::Config& policy) {
+    return "{adaptive=" + std::to_string(policy.adaptive) +
+        ", ceiling=" + std::to_string(policy.ceiling) +
+        ", floor=" + std::to_string(policy.floor) +
+        ", decrease=" + std::to_string(policy.decreaseFactor) + "}";
+  };
+  auto trajectory = [](const RPCRateLimiter::Config& policy) {
+    auto limiter = std::make_shared<RPCRateLimiter>("test.backend");
+    EXPECT_TRUE(limiter->initializeOrMatch(policy));
+    std::vector<int64_t> steps;
+    auto record = [&] {
+      const auto stats = limiter->stats();
+      steps.insert(
+          steps.end(),
+          {stats.capacity,
+           stats.limitMilli,
+           stats.lowWaterLimitMilli,
+           stats.hardLimit});
+    };
+    record();
+    for (int i = 0; i < 3; ++i) {
+      limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+      record();
+    }
+    for (int i = 0; i < 3; ++i) {
+      limiter->onOutcome(RPCRateLimiter::Outcome::kSuccess, 10, 1'000'000);
+      record();
+    }
+    return steps;
+  };
+
+  std::vector<std::vector<int64_t>> trajectories;
+  std::vector<std::shared_ptr<RPCRateLimiter>> sealed;
+  for (const auto& policy : grid) {
+    trajectories.push_back(trajectory(policy));
+    sealed.push_back(std::make_shared<RPCRateLimiter>("test.backend"));
+    EXPECT_TRUE(sealed.back()->initializeOrMatch(policy));
+  }
+  int64_t matchingPairs{0};
+  int64_t divergentPairs{0};
+  std::string firstDivergent;
+  for (size_t a = 0; a < grid.size(); ++a) {
+    for (size_t b = 0; b < grid.size(); ++b) {
+      if (!sealed[a]->initializeOrMatch(grid[b])) {
+        continue;
+      }
+      ++matchingPairs;
+      if (trajectories[a] != trajectories[b] && divergentPairs++ == 0) {
+        firstDivergent = describe(grid[a]) + " and " + describe(grid[b]);
+      }
+    }
+  }
+  EXPECT_EQ(divergentPairs, 0)
+      << "matching policies admit differently, first " << firstDivergent;
+  // 240 policies fall into 68 classes; this is the sum of their squared sizes.
+  EXPECT_EQ(matchingPairs, 5166);
+}
+
+// A query gets the backend's shared limiter when its policy admits like the
+// sealed one, and otherwise the limiter for its own policy, which every later
+// query running that policy shares.
+TEST_F(RPCRateLimiterTest, getForPolicySharesLimitersByPolicy) {
+  auto& registry = RPCRateLimiterRegistry::global();
+  const RPCRateLimiter::Config small{
+      .adaptive = true, .ceiling = 25, .floor = 1};
+  const RPCRateLimiter::Config large{
+      .adaptive = true, .ceiling = 100, .floor = 1};
+
+  const auto first = registry.getForPolicy("test.backend", small);
+  EXPECT_EQ(first.limiter, &registry.get("test.backend"));
+  EXPECT_FALSE(first.policyScoped);
+
+  const auto second = registry.getForPolicy("test.backend", large);
+  EXPECT_NE(second.limiter, first.limiter);
+  EXPECT_TRUE(second.policyScoped);
+  EXPECT_EQ(second.limiter->config(), large);
+  EXPECT_EQ(registry.get("test.backend").config(), small);
+
+  {
+    const auto again = registry.getForPolicy("test.backend", large);
+    EXPECT_EQ(again.limiter, second.limiter);
+    EXPECT_TRUE(again.policyScoped);
+  }
+  {
+    // Admits like 'small', so it shares the shared limiter.
+    auto clampsToSmall = small;
+    clampsToSmall.decreaseFactor = std::numeric_limits<double>::quiet_NaN();
+    const auto alike = registry.getForPolicy("test.backend", clampsToSmall);
+    EXPECT_EQ(alike.limiter, first.limiter);
+    EXPECT_FALSE(alike.policyScoped);
+  }
+  {
+    // Policies one ULP apart get separate limiters, each sealed with a policy
+    // that matches its own.
+    auto oneUlpAway = large;
+    oneUlpAway.floor = std::nextafter(large.floor, 2.0);
+    const auto apart = registry.getForPolicy("test.backend", oneUlpAway);
+    EXPECT_NE(apart.limiter, second.limiter);
+    EXPECT_TRUE(apart.limiter->initializeOrMatch(oneUlpAway));
+    EXPECT_FALSE(apart.limiter->initializeOrMatch(large));
+  }
+  {
+    // A policy-scoped limiter is shared by every policy that matches the one
+    // it was created for, including that policy itself when the registry
+    // compares a reduced form of it.
+    ASSERT_FALSE(registry.getForPolicy("pinned.backend", small).policyScoped);
+    const RPCRateLimiter::Config pinned{
+        .adaptive = true, .ceiling = 60, .floor = 60};
+    const auto forPinned = registry.getForPolicy("pinned.backend", pinned);
+    EXPECT_TRUE(forPinned.policyScoped);
+    EXPECT_EQ(
+        registry.getForPolicy("pinned.backend", pinned).limiter,
+        forPinned.limiter);
+    EXPECT_EQ(
+        registry.getForPolicy("pinned.backend", {.ceiling = 60}).limiter,
+        forPinned.limiter);
+  }
+  {
+    // Another backend's limiters are its own, whatever the policy.
+    ASSERT_FALSE(registry.getForPolicy("other.backend", small).policyScoped);
+    const auto otherBackend = registry.getForPolicy("other.backend", large);
+    EXPECT_TRUE(otherBackend.policyScoped);
+    EXPECT_NE(otherBackend.limiter, second.limiter);
+  }
+}
+
+// However queries with different policies interleave on a fresh backend, each
+// runs under a limiter sealed with a policy that matches its own, and queries
+// share a limiter exactly when their policies match.
+TEST_F(RPCRateLimiterTest, concurrentQueriesGetTheLimiterForTheirPolicy) {
+  constexpr int kThreads = 32;
+  constexpr int kPolicies = 4;
+  auto policyFor = [](int thread) {
+    return RPCRateLimiter::Config{
+        .adaptive = true, .ceiling = 25 * (thread % kPolicies + 1), .floor = 1};
+  };
+  auto& registry = RPCRateLimiterRegistry::global();
+  std::vector<RPCRateLimiterRegistry::Lookup> lookups(kThreads);
   std::atomic<bool> go{false};
   std::vector<std::thread> threads;
   threads.reserve(kThreads);
   for (int i = 0; i < kThreads; ++i) {
     threads.emplace_back([&, i]() {
-      const auto policy = policyFor(i);
       while (!go.load(std::memory_order_relaxed)) {
       }
-      limiter.initializeOnce([policy](RPCRateLimiter::Config& config) {
-        config.ceiling = policy.ceiling;
-        config.floor = policy.floor;
-      });
+      lookups[i] = registry.getForPolicy("test.backend", policyFor(i));
     });
   }
   go.store(true);
-  for (auto& t : threads) {
-    t.join();
+  for (auto& thread : threads) {
+    thread.join();
   }
 
-  // Whatever landed must be exactly one thread's pair, not a blend.
-  const auto config = limiter.config();
-  bool matchesSomeThread = false;
+  const auto* shared = &registry.get("test.backend");
   for (int i = 0; i < kThreads; ++i) {
-    const auto policy = policyFor(i);
-    if (config.ceiling == policy.ceiling && config.floor == policy.floor) {
-      matchesSomeThread = true;
-      break;
+    EXPECT_TRUE(lookups[i].limiter->initializeOrMatch(policyFor(i))) << i;
+    EXPECT_EQ(lookups[i].policyScoped, lookups[i].limiter != shared) << i;
+    for (int j = 0; j < kThreads; ++j) {
+      EXPECT_EQ(
+          lookups[i].limiter == lookups[j].limiter,
+          i % kPolicies == j % kPolicies)
+          << i << " " << j;
     }
   }
-  EXPECT_TRUE(matchesSomeThread)
-      << "configuration is a mixture: ceiling " << config.ceiling
-      << " with floor " << config.floor;
+}
+
+// A policy limiter is sealed before any query can reach it, so a query that
+// gets it under contention already runs its own ceiling. One round rarely
+// lands a query in that window, so the test runs many.
+TEST_F(RPCRateLimiterTest, noQueryReachesAPolicyLimiterBeforeItIsSealed) {
+  constexpr int kThreads = 32;
+  constexpr int kPolicies = 4;
+  constexpr int kRounds = 200;
+  auto policyFor = [](int thread) {
+    return RPCRateLimiter::Config{
+        .adaptive = true, .ceiling = 25 * (thread % kPolicies + 1), .floor = 1};
+  };
+  auto& registry = RPCRateLimiterRegistry::global();
+  int64_t numUnsealedReads{0};
+  for (int round = 0; round < kRounds; ++round) {
+    const std::string backend = "unsealed.backend." + std::to_string(round);
+    ASSERT_FALSE(registry.getForPolicy(backend, {.ceiling = 7}).policyScoped);
+    std::vector<int64_t> hardLimits(kThreads);
+    std::atomic<bool> go{false};
+    std::vector<std::thread> threads;
+    threads.reserve(kThreads);
+    for (int i = 0; i < kThreads; ++i) {
+      threads.emplace_back([&, i]() {
+        while (!go.load(std::memory_order_relaxed)) {
+        }
+        hardLimits[i] = registry.getForPolicy(backend, policyFor(i))
+                            .limiter->stats()
+                            .hardLimit;
+      });
+    }
+    go.store(true);
+    for (auto& thread : threads) {
+      thread.join();
+    }
+    for (int i = 0; i < kThreads; ++i) {
+      numUnsealedReads += hardLimits[i] != policyFor(i).ceiling;
+    }
+  }
+  EXPECT_EQ(numUnsealedReads, 0) << "over " << kRounds * kThreads << " lookups";
+}
+
+// A query that finds no limiter for its policy builds one and publishes it,
+// unless another query published one for that policy in the meantime. Two
+// queries that interleave there share the limiter published first.
+TEST_F(RPCRateLimiterTest, queriesRacingToCreateAPolicyLimiterShareOne) {
+#ifdef NDEBUG
+  GTEST_SKIP() << "Needs TestValue injection, which release builds omit.";
+#endif
+  // The registry outlives each run, so every run takes a backend no earlier
+  // run has seen.
+  static std::atomic<int> numRuns{0};
+  const std::string backend = "race.backend." + std::to_string(numRuns++);
+  auto& registry = RPCRateLimiterRegistry::global();
+  ASSERT_FALSE(registry.getForPolicy(backend, {.ceiling = 25}).policyScoped);
+  const RPCRateLimiter::Config policy{.ceiling = 100};
+
+  std::promise<void> paused;
+  std::promise<void> resume;
+  const auto resumed = resume.get_future().share();
+  std::atomic<bool> pauseNext{true};
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::rpc::RPCRateLimiterRegistry::getForPolicy",
+      std::function<void(RPCRateLimiterRegistry*)>(
+          [&](RPCRateLimiterRegistry* /*registry*/) {
+            if (pauseNext.exchange(false)) {
+              paused.set_value();
+              resumed.wait();
+            }
+          }));
+
+  RPCRateLimiter* slowLimiter{nullptr};
+  std::thread slow(
+      [&] { slowLimiter = registry.getForPolicy(backend, policy).limiter; });
+  const bool slowPaused =
+      paused.get_future().wait_for(std::chrono::seconds(30)) ==
+      std::future_status::ready;
+  const auto fast = registry.getForPolicy(backend, policy);
+  resume.set_value();
+  slow.join();
+
+  ASSERT_TRUE(slowPaused) << "the first query never reached the injection";
+  EXPECT_TRUE(fast.policyScoped);
+  EXPECT_EQ(slowLimiter, fast.limiter);
+}
+
+// Tests reset the registry between cases. A policy-scoped limiter stays listed
+// under its policy across the reset, so it must come back sealed with it.
+TEST_F(RPCRateLimiterTest, testingResetKeepsPolicyScopedLimitersSealed) {
+  auto& registry = RPCRateLimiterRegistry::global();
+  const RPCRateLimiter::Config pinned{
+      .adaptive = true, .ceiling = 100, .floor = 100};
+  ASSERT_FALSE(
+      registry.getForPolicy("reset.backend", {.ceiling = 25}).policyScoped);
+  const auto scoped = registry.getForPolicy("reset.backend", pinned);
+  ASSERT_TRUE(scoped.policyScoped);
+
+  registry.testingReset();
+  ASSERT_FALSE(
+      registry.getForPolicy("reset.backend", {.ceiling = 25}).policyScoped);
+  const auto again = registry.getForPolicy("reset.backend", pinned);
+  EXPECT_EQ(again.limiter, scoped.limiter);
+  EXPECT_EQ(again.limiter->config(), pinned);
 }
 
 TEST_F(RPCRateLimiterTest, admitOrWaitEitherAdmitsOrEnrols) {

@@ -160,6 +160,8 @@ void RPCOperator::initialize() {
       rpcNode_->streamingMode() == RPCStreamingMode::kPerRow &&
       function_->mayReturnCapacityRetries();
   state_->setCapacityRetryEnabled(capacityRetryEnabled_);
+  *liveStatsSources_.wlock() =
+      LiveStatsSources{.state = state_, .function = function_};
   requiresRowInspectionBeforeAdmission_ =
       function_->requiresRowInspectionBeforeAdmission();
   if (!requiresRowInspectionBeforeAdmission_) {
@@ -168,9 +170,6 @@ void RPCOperator::initialize() {
 
   // Size output vectors from config; see getOutput().
   outputBatchRows_ = queryConfig.preferredOutputBatchRows();
-
-  *liveStatsSources_.wlock() = LiveStatsSources{
-      .state = state_, .limiter = limiter_, .function = function_};
 
   RPC_OP_VLOG(1) << "Created operator for function '"
                  << rpcNode_->functionName() << "', planNodeId=" << planNodeId()
@@ -198,10 +197,6 @@ void RPCOperator::initializeRateLimiter() {
   }
 
   admissionKey_ = function_->admissionKey();
-  limiter_ = &RPCRateLimiterRegistry::global().get(admissionKey_);
-  *liveStatsSources_.wlock() = LiveStatsSources{
-      .state = state_, .limiter = limiter_, .function = function_};
-
   const auto& queryConfig = operatorCtx_->driverCtx()->queryConfig();
   const auto sessionFloor = queryConfig.rpcRateLimiterMinLimit();
   const auto legacySessionLimit = queryConfig.rpcRateLimiterMaxLimit();
@@ -212,35 +207,37 @@ void RPCOperator::initializeRateLimiter() {
       legacySessionLimit, 0, "rpc.ratelimiter.max_limit must be non-negative");
   VELOX_USER_CHECK_GE(
       sessionHardLimit, -1, "rpc.ratelimiter.hard_limit must be at least -1");
-  // The first query fixes this shared controller's configuration.
-  // initializeOnce applies the function and session settings atomically.
-  limiter_->initializeOnce(
-      [this, &queryConfig, sessionFloor, legacySessionLimit, sessionHardLimit](
-          RPCRateLimiter::Config& config) {
-        config.adaptive = queryConfig.rpcRateLimiterAdaptiveEnabled();
-        config.floor = sessionFloor > 0 ? static_cast<double>(sessionFloor)
-                                        : function_->configuredAdaptiveFloor();
-        config.decreaseFactor = queryConfig.rpcRateLimiterDecreaseFactor();
 
-        const auto functionLimit = function_->configuredCeiling();
-        if (sessionHardLimit < 0) {
-          if (functionLimit > 0) {
-            config.ceiling = functionLimit;
-          }
-          if (legacySessionLimit > 0) {
-            config.ceiling = legacySessionLimit;
-          }
-        } else if (functionLimit > 0 && sessionHardLimit > 0) {
-          config.ceiling = std::min(functionLimit, sessionHardLimit);
-        } else if (functionLimit > 0) {
-          config.ceiling = functionLimit;
-        } else if (sessionHardLimit > 0) {
-          config.ceiling = sessionHardLimit;
-        } else {
-          config.ceiling =
-              config.adaptive ? kDefaultAdaptiveHardLimit : kLegacyFixedLimit;
-        }
-      });
+  RPCRateLimiter::Config policy;
+  policy.adaptive = queryConfig.rpcRateLimiterAdaptiveEnabled();
+  policy.floor = sessionFloor > 0 ? static_cast<double>(sessionFloor)
+                                  : function_->configuredAdaptiveFloor();
+  policy.decreaseFactor = queryConfig.rpcRateLimiterDecreaseFactor();
+  const auto functionLimit = function_->configuredCeiling();
+  if (sessionHardLimit < 0) {
+    if (functionLimit > 0) {
+      policy.ceiling = functionLimit;
+    }
+    if (legacySessionLimit > 0) {
+      policy.ceiling = legacySessionLimit;
+    }
+  } else if (functionLimit > 0 && sessionHardLimit > 0) {
+    policy.ceiling = std::min(functionLimit, sessionHardLimit);
+  } else if (functionLimit > 0) {
+    policy.ceiling = functionLimit;
+  } else if (sessionHardLimit > 0) {
+    policy.ceiling = sessionHardLimit;
+  } else {
+    policy.ceiling =
+        policy.adaptive ? kDefaultAdaptiveHardLimit : kLegacyFixedLimit;
+  }
+
+  const auto lookup =
+      RPCRateLimiterRegistry::global().getForPolicy(admissionKey_, policy);
+  limiter_ = lookup.limiter;
+  auto sources = liveStatsSources_.wlock();
+  sources->limiter = limiter_;
+  sources->policyScoped = lookup.policyScoped;
 }
 
 bool RPCOperator::needsInput() const {
@@ -1412,10 +1409,11 @@ void RPCOperator::addLiveProgressStats(
         RuntimeMetric(sources->function->numRetriesAttempted());
   }
   // The backend's admission capacity trajectory: the capacity this operator
-  // shares with every other driver dispatching to the same backend, as
-  // distinct from the per-driver rpcCongestion* window. Emitted for every
-  // backend including the default one, whose key is empty; gating on a
-  // non-empty key would hide the cap on exactly the most common path.
+  // shares with every other driver dispatching to the same backend under the
+  // same policy, as distinct from the per-driver rpcCongestion* window.
+  // Emitted for every backend including the default one, whose key is empty;
+  // gating on a non-empty key would hide the cap on exactly the most common
+  // path.
   //
   // limiter_ is resolved in initialize(), but Driver::closeOperators() closes
   // every operator whether or not initializeOperators() ran -- a task that
@@ -1437,6 +1435,9 @@ void RPCOperator::addLiveProgressStats(
         RuntimeMetric(limiterStats.lowWaterLimitMilli);
     stats.runtimeStats[kRpcRateLimiterServiceHorizonNanos] =
         RuntimeMetric(limiterStats.serviceHorizonNanos);
+    if (sources->policyScoped) {
+      stats.runtimeStats[kRpcRateLimiterPolicyScoped] = RuntimeMetric(1);
+    }
   }
   if (!includeGauges) {
     return;
