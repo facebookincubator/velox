@@ -1585,6 +1585,62 @@ TEST_P(NimbleIndexProjectorTest, projectsFlatMapWithoutConstantInMapStream) {
   }
 }
 
+// A flat map entry whose value is null stays in the map that projectRows()
+// returns, whether or not the key has an in-map stream.
+TEST_P(NimbleIndexProjectorTest, projectRowsKeepsNullFlatMapValues) {
+  constexpr vector_size_t kNumRows{12};
+  const auto rowType =
+      ROW({"key", "features"}, {BIGINT(), MAP(VARCHAR(), BIGINT())});
+  // Key "a" is in every row and null in odd rows, and key "b" is in rows that
+  // are multiples of 3.
+  std::vector<std::vector<std::pair<StringView, std::optional<int64_t>>>> maps(
+      kNumRows);
+  for (vector_size_t row = 0; row < kNumRows; ++row) {
+    maps[row].emplace_back(
+        "a", row % 2 == 1 ? std::nullopt : std::optional<int64_t>(row));
+    if (row % 3 == 0) {
+      maps[row].emplace_back("b", row * 10);
+    }
+  }
+  const auto features = vectorMaker_->mapVector<StringView, int64_t>(maps);
+  const auto batch = vectorMaker_->rowVector(
+      {"key", "features"},
+      {vectorMaker_->flatVector<int64_t>(
+           kNumRows, [](auto row) { return static_cast<int64_t>(row); }),
+       features});
+  std::vector<Subfield> subfields;
+  subfields.emplace_back("features[\"a\"]");
+  subfields.emplace_back("features[\"b\"]");
+  const auto expected =
+      vectorMaker_->rowVector({"features"}, {features->slice(2, 8)});
+
+  for (const bool skipConstantInMapStreams : {false, true}) {
+    SCOPED_TRACE(
+        fmt::format("skipConstantInMapStreams={}", skipConstantInMapStreams));
+    writeData(
+        {batch},
+        {"key"},
+        {{"features", {}}},
+        /*stripeSize=*/1 << 20,
+        /*enableStreamDeduplication=*/true,
+        /*compactRowCountEncoding=*/false,
+        CompressionType::Uncompressed,
+        skipConstantInMapStreams,
+        // The chunked writer keeps constant FlatMap in-map streams.
+        /*enableChunking=*/!skipConstantInMapStreams);
+    auto projector = createProjector(subfields);
+    NimbleIndexProjector::Request request;
+    request.keyBounds = {makeRangeLookup(rowType, {"key"}, 2, 10)};
+
+    const auto result = projectRows(*projector, request, {});
+
+    ASSERT_EQ(result.responses.size(), 1);
+    const auto& response = result.responses[0];
+    velox::test::assertEqualVectors(
+        expected, result.values->slice(response.offset, response.size));
+  }
+}
+
 TEST_P(NimbleIndexProjectorTest, preservesStreamRowCountEncoding) {
   constexpr vector_size_t kNumRows{64};
   constexpr uint32_t kRequestStart{10};
