@@ -301,19 +301,6 @@ std::string stripFunctionPrefix(
   return base;
 }
 
-void orderCudfVectorDeallocationsAfterStream(
-    std::span<const CudfVectorPtr> vectors,
-    cuda::stream_ref stream) {
-  // Rebind every input before checking, so a released one does not leave the
-  // rest freeing on their producer streams while 'stream' may still read them.
-  bool allRebound = true;
-  for (const auto& vector : vectors) {
-    VELOX_CHECK_NOT_NULL(vector);
-    allRebound &= vector->rebindStream(stream);
-  }
-  VELOX_CHECK(allRebound, "Cannot rebind a released CudfVector");
-}
-
 std::unique_ptr<cudf::column> makeAllNullColumn(
     const TypePtr& type,
     cudf::size_type numRows,

@@ -25,6 +25,7 @@
 #include <cuda/stream>
 
 #include <memory>
+#include <span>
 #include <utility>
 #include <variant>
 
@@ -103,5 +104,14 @@ class CudfVector : public RowVector {
 };
 
 using CudfVectorPtr = std::shared_ptr<CudfVector>;
+
+/// Orders CudfVector deallocations after work on a target stream.
+///
+/// Rebinds each input's device buffers to 'stream' so stream-ordered memory
+/// resources free the inputs after prior work on that stream. Throws if any
+/// input was passed to CudfVector::release(), after rebinding the others.
+void orderCudfVectorDeallocationsAfterStream(
+    std::span<const CudfVectorPtr> vectors,
+    cuda::stream_ref stream);
 
 } // namespace facebook::velox::cudf_velox
