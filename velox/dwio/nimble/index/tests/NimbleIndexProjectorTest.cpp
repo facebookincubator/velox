@@ -16,10 +16,13 @@
 
 #include "velox/dwio/nimble/index/tests/NimbleIndexTestBase.h"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <functional>
 #include <future>
 #include <limits>
+#include <numeric>
 #include <string_view>
 #include <vector>
 
@@ -911,6 +914,556 @@ TEST_P(NimbleIndexProjectorTest, resultSlicesAreManaged) {
         << "slice " << s << "/" << response.slices.size()
         << " has an unmanaged (wrapBuffer) IOBuf node";
   }
+}
+
+// Counts the stripe-group metadata loads a projection makes while planning.
+// These tests call the groups that one load returns a window, as
+// StripeGroupLoader does. Files have several stripe groups because a file with
+// one group can have that group pinned when the reader opens it.
+class NimbleIndexProjectorMetadataLoadTest : public NimbleIndexProjectorTest {
+ protected:
+  // Rows in each stripe that writeGroupedStripes() writes.
+  static constexpr vector_size_t kRowsPerStripe{10};
+
+  // Schema of the files that writeGroupedStripes() writes.
+  static RowTypePtr keyValueRowType() {
+    return ROW({{"key", BIGINT()}, {"value", INTEGER()}});
+  }
+
+  // Writes `numStripes` stripes of kRowsPerStripe rows with keys 0, 1, ... and
+  // closes a stripe group after every `stripesPerGroup` stripes. Each row's
+  // value equals its key, so decoded values show which stripe they came from.
+  void writeGroupedStripes(uint32_t numStripes, uint32_t stripesPerGroup) {
+    std::vector<RowVectorPtr> batches;
+    for (uint32_t stripe{0}; stripe < numStripes; ++stripe) {
+      batches.push_back(vectorMaker_->rowVector(
+          {"key", "value"},
+          {vectorMaker_->flatVector<int64_t>(
+               kRowsPerStripe,
+               [stripe](auto row) {
+                 return int64_t{stripe} * kRowsPerStripe + row;
+               }),
+           vectorMaker_->flatVector<int32_t>(
+               kRowsPerStripe, [stripe](auto row) {
+                 return static_cast<int32_t>(stripe * kRowsPerStripe + row);
+               })}));
+    }
+
+    // stripeSize=1 cuts a stripe per batch. The writer closes a stripe group
+    // once its estimate of the group's metadata, 4 bytes plus 13 per stream
+    // per stripe, reaches the flush threshold. A first write finds the stream
+    // count, and the layout check below catches a wrong estimate.
+    writeData(batches, {"key"}, /*flatMapColumns=*/{}, /*stripeSize=*/1);
+    const auto numStreams = [&] {
+      const auto tablet = openSinkTablet();
+      return tablet->streamCount(tablet->stripeIdentifier(0));
+    }();
+    writeData(
+        batches,
+        {"key"},
+        /*flatMapColumns=*/{},
+        /*stripeSize=*/1,
+        /*enableStreamDeduplication=*/true,
+        /*compactRowCountEncoding=*/false,
+        /*chunkCompressionType=*/CompressionType::Uncompressed,
+        /*skipConstantFlatMapInMapStreams=*/false,
+        /*enableChunking=*/true,
+        /*enableStreamChecksums=*/false,
+        StripeGroup::EncodingLayout::kRaw,
+        /*metadataFlushThreshold=*/4 + stripesPerGroup * numStreams * 13);
+
+    const auto tablet = openSinkTablet();
+    ASSERT_EQ(tablet->stripeCount(), numStripes);
+    std::vector<uint32_t> stripes(numStripes);
+    std::iota(stripes.begin(), stripes.end(), 0);
+    const auto descriptors = tablet->stripeGroupDescriptors(stripes);
+    for (uint32_t stripe{0}; stripe < numStripes; ++stripe) {
+      ASSERT_EQ(descriptors[stripe].index, stripe / stripesPerGroup);
+    }
+  }
+
+  // Returns the key bounds of stripes [firstStripe, firstStripe + numStripes)
+  // of a file from writeGroupedStripes().
+  velox::serializer::EncodedKeyBounds stripeKeys(
+      uint32_t firstStripe,
+      uint32_t numStripes) {
+    return makeRangeLookup(
+        keyValueRowType(),
+        {"key"},
+        int64_t{firstStripe} * kRowsPerStripe,
+        int64_t{firstStripe + numStripes} * kRowsPerStripe);
+  }
+
+  // Creates a projector that reads only the `value` column.
+  std::unique_ptr<NimbleIndexProjector> createValueProjector() {
+    std::vector<Subfield> subfields;
+    subfields.emplace_back("value");
+    return createProjector(subfields);
+  }
+
+  // Returns the tablet reader cache entry of the projector's file. Every
+  // in-memory file has the same cache key, so the entry found is the one the
+  // projector created.
+  std::shared_ptr<CachedTabletReader> cachedTablet() {
+    auto cachedTablet = tabletReaderCache_->testingGet(
+        InMemoryReadFile(std::string_view(sinkData_)).getName());
+    NIMBLE_CHECK_NOT_NULL(
+        cachedTablet, "Create a projector before looking up its tablet");
+    return cachedTablet;
+  }
+
+  // Returns how many metadata loads the cached tablet has made and how many
+  // bytes they read. The tablet reader cache replaces the IO statistics a
+  // projector's reader options carry, so the cache entry is the only place
+  // that counts stripe-group loads.
+  std::pair<uint64_t, uint64_t> tabletMetadataReads() {
+    // The entry exposes its statistics read-only, and reading a counter needs
+    // a mutable copy.
+    io::IoStatistics stats;
+    stats.merge(cachedTablet()->metadataIoStats());
+    return {stats.read().count(), stats.rawBytesRead()};
+  }
+
+  // Runs `project` and returns how many stripe-group metadata loads it made
+  // and how many bytes they read.
+  template <typename Project>
+  std::pair<uint64_t, uint64_t> countMetadataReads(Project&& project) {
+    const auto [loadsBefore, bytesBefore] = tabletMetadataReads();
+    project();
+    const auto [loadsAfter, bytesAfter] = tabletMetadataReads();
+    return {loadsAfter - loadsBefore, bytesAfter - bytesBefore};
+  }
+
+  // Returns the stored size of the given stripe groups' metadata sections.
+  uint64_t stripeGroupBytes(const std::vector<uint32_t>& stripeGroups) {
+    const auto sections = openSinkTablet()->stripeGroupsMetadata();
+    uint64_t numBytes{0};
+    for (const auto stripeGroup : stripeGroups) {
+      numBytes += sections.at(stripeGroup).size();
+    }
+    return numBytes;
+  }
+
+  // Returns the summed decompressed size of the file's `numStripeGroups`
+  // largest stripe groups. That budget fits any `numStripeGroups` groups, and
+  // for groups of about the same size, no more. These files have no chunk
+  // stats, so a group's metadata is just its stripe-group section.
+  uint64_t budgetForStripeGroups(uint32_t numStripeGroups) {
+    const auto tablet = openSinkTablet();
+    NIMBLE_CHECK(
+        !tablet->hasChunkStatsSection(), "The budget leaves out chunk stats.");
+    std::vector<uint64_t> sizes;
+    for (const auto& section : tablet->stripeGroupsMetadata()) {
+      sizes.push_back(section.uncompressedSize().value());
+    }
+    NIMBLE_CHECK_LE(
+        numStripeGroups,
+        sizes.size(),
+        "File has fewer stripe groups than requested.");
+    std::sort(sizes.begin(), sizes.end(), std::greater<>());
+    return std::accumulate(
+        sizes.begin(), sizes.begin() + numStripeGroups, uint64_t{0});
+  }
+};
+
+TEST_P(NimbleIndexProjectorMetadataLoadTest, stripesOfAGroupShareOneLoad) {
+  ASSERT_NO_FATAL_FAILURE(
+      writeGroupedStripes(/*numStripes=*/6, /*stripesPerGroup=*/3));
+  NimbleIndexProjector::Request request;
+  {
+    request.keyBounds = {stripeKeys(/*firstStripe=*/0, /*numStripes=*/3)};
+    auto projector = createValueProjector();
+    NimbleIndexProjector::SerializedResult result;
+    EXPECT_EQ(
+        countMetadataReads(
+            [&] { result = projector->projectStreams(request, {}); }),
+        std::make_pair(uint64_t{1}, stripeGroupBytes({0})));
+    ASSERT_EQ(result.responses.size(), 1);
+    ASSERT_EQ(result.responses[0].slices.size(), 3);
+
+    // Stripes 1 and 2 are located through the group held since stripe 0.
+    for (uint32_t stripe{0}; stripe < 3; ++stripe) {
+      SCOPED_TRACE(fmt::format("stripe={}", stripe));
+      expectVectorRows(
+          deserializeProjectedSlice(
+              *projector, result.responses[0].slices[stripe]),
+          vectorMaker_->rowVector(
+              {"value"},
+              {vectorMaker_->flatVector<int32_t>(
+                  kRowsPerStripe, [stripe](auto row) {
+                    return static_cast<int32_t>(stripe * kRowsPerStripe + row);
+                  })}));
+    }
+
+    // A pinned group outlives the projection. An unpinned one goes with it,
+    // so the next projection loads it again.
+    EXPECT_EQ(
+        countMetadataReads([&] {
+          projector->projectStreams(request, {});
+        }).first,
+        GetParam().pinMetadata ? 0 : 1);
+  }
+  {
+    resetReaders();
+    request.keyBounds = {stripeKeys(/*firstStripe=*/0, /*numStripes=*/6)};
+    auto projector = createValueProjector();
+    EXPECT_EQ(
+        countMetadataReads([&] { projector->projectStreams(request, {}); }),
+        std::make_pair(uint64_t{2}, stripeGroupBytes({0, 1})));
+  }
+}
+
+TEST_P(NimbleIndexProjectorMetadataLoadTest, windowLoadsGroupsWithinBudget) {
+  ASSERT_NO_FATAL_FAILURE(
+      writeGroupedStripes(/*numStripes=*/5, /*stripesPerGroup=*/1));
+  NimbleIndexProjector::Request request;
+  request.keyBounds = {stripeKeys(/*firstStripe=*/0, /*numStripes=*/5)};
+  const auto allGroupBytes = stripeGroupBytes({0, 1, 2, 3, 4});
+
+  // The groups are equal in size, so one byte less than the size of two fits
+  // only one.
+  const auto sections = openSinkTablet()->stripeGroupsMetadata();
+  for (const auto& section : sections) {
+    ASSERT_EQ(section.uncompressedSize(), sections.front().uncompressedSize());
+  }
+
+  // A budget smaller than one group still reads the stripe's own group.
+  for (const auto& [budget, expectedLoads] :
+       std::vector<std::pair<uint64_t, uint64_t>>{
+           {0, 5},
+           {1, 5},
+           {budgetForStripeGroups(2) - 1, 5},
+           {budgetForStripeGroups(2), 3},
+           {std::numeric_limits<uint64_t>::max(), 1},
+       }) {
+    SCOPED_TRACE(fmt::format("maxStripeGroupMetadataBytesPerLoad={}", budget));
+    resetReaders();
+    auto projector = createValueProjector();
+    NimbleIndexProjector::SerializedResult result;
+    EXPECT_EQ(
+        countMetadataReads([&] {
+          result = projector->projectStreams(
+              request, {.maxStripeGroupMetadataBytesPerLoad = budget});
+        }),
+        std::make_pair(expectedLoads, allGroupBytes));
+    ASSERT_EQ(result.responses.size(), 1);
+    EXPECT_EQ(result.responses[0].slices.size(), 5);
+  }
+}
+
+TEST_P(NimbleIndexProjectorMetadataLoadTest, windowEndsAtFirstGroupOverBudget) {
+  // Groups 0 and 1 hold two stripes each and group 2 holds one, so group 2 has
+  // the least metadata.
+  ASSERT_NO_FATAL_FAILURE(
+      writeGroupedStripes(/*numStripes=*/5, /*stripesPerGroup=*/2));
+  const auto sections = openSinkTablet()->stripeGroupsMetadata();
+  const auto groupSize = [&](uint32_t stripeGroup) {
+    return uint64_t{sections.at(stripeGroup).uncompressedSize().value()};
+  };
+
+  // Group 1 does not fit after group 0, though group 2 would.
+  const auto budget = groupSize(1) + groupSize(2);
+  ASSERT_GT(groupSize(0) + groupSize(1), budget);
+  ASSERT_LE(groupSize(0) + groupSize(2), budget);
+  NimbleIndexProjector::Request request;
+  request.keyBounds = {stripeKeys(/*firstStripe=*/0, /*numStripes=*/5)};
+
+  // The loads are {0} and {1, 2}. A first load of {0, 2} would release group 2
+  // when planning reaches group 1, so unpinned metadata would read it twice.
+  auto projector = createValueProjector();
+  NimbleIndexProjector::SerializedResult result;
+  EXPECT_EQ(
+      countMetadataReads([&] {
+        result = projector->projectStreams(
+            request, {.maxStripeGroupMetadataBytesPerLoad = budget});
+      }),
+      std::make_pair(uint64_t{2}, stripeGroupBytes({0, 1, 2})));
+  ASSERT_EQ(result.responses.size(), 1);
+  EXPECT_EQ(result.responses[0].slices.size(), 5);
+}
+
+TEST_P(NimbleIndexProjectorMetadataLoadTest, cachedGroupsCountTowardBudget) {
+  ASSERT_NO_FATAL_FAILURE(
+      writeGroupedStripes(/*numStripes=*/5, /*stripesPerGroup=*/1));
+  NimbleIndexProjector::Request request;
+  request.keyBounds = {stripeKeys(/*firstStripe=*/0, /*numStripes=*/5)};
+  auto projector = createValueProjector();
+
+  // Holding stripe 1 keeps group 1 cached through the projection.
+  const auto heldStripe = cachedTablet()->tablet()->stripeIdentifier(1);
+  const auto budget = budgetForStripeGroups(2);
+
+  // The loads are still {0, 1}, {2, 3} and {4}, and the first reads only
+  // group 0.
+  NimbleIndexProjector::SerializedResult result;
+  EXPECT_EQ(
+      countMetadataReads([&] {
+        result = projector->projectStreams(
+            request, {.maxStripeGroupMetadataBytesPerLoad = budget});
+      }),
+      std::make_pair(uint64_t{3}, stripeGroupBytes({0, 2, 3, 4})));
+  ASSERT_EQ(result.responses.size(), 1);
+  EXPECT_EQ(result.responses[0].slices.size(), 5);
+}
+
+TEST_P(
+    NimbleIndexProjectorMetadataLoadTest,
+    windowReadsAheadOfRowAndByteLimits) {
+  ASSERT_NO_FATAL_FAILURE(
+      writeGroupedStripes(/*numStripes=*/6, /*stripesPerGroup=*/1));
+  NimbleIndexProjector::Request request;
+  request.keyBounds = {stripeKeys(/*firstStripe=*/0, /*numStripes=*/6)};
+
+  // Each limit leaves stripe 0 the only stripe planning locates, but a window
+  // also reads the next groups that hold resolved stripes.
+  const auto expectStripe0Only =
+      [&](const NimbleIndexProjector::Options& options,
+          const std::vector<uint32_t>& expectedGroups) {
+        SCOPED_TRACE(
+            fmt::format(
+                "maxStripeGroupMetadataBytesPerLoad={}",
+                options.maxStripeGroupMetadataBytesPerLoad));
+        resetReaders();
+        auto projector = createValueProjector();
+        NimbleIndexProjector::SerializedResult result;
+        EXPECT_EQ(
+            countMetadataReads(
+                [&] { result = projector->projectStreams(request, options); }),
+            std::make_pair(uint64_t{1}, stripeGroupBytes(expectedGroups)));
+        ASSERT_EQ(result.responses.size(), 1);
+        EXPECT_EQ(result.responses[0].slices.size(), 1);
+      };
+  {
+    SCOPED_TRACE("maxRowsPerRequest");
+    expectStripe0Only({.maxRowsPerRequest = kRowsPerStripe / 2}, {0});
+    expectStripe0Only(
+        {
+            .maxRowsPerRequest = kRowsPerStripe / 2,
+            .maxStripeGroupMetadataBytesPerLoad = budgetForStripeGroups(4),
+        },
+        {0, 1, 2, 3});
+  }
+  {
+    SCOPED_TRACE("maxRows");
+    expectStripe0Only({.maxRows = 1}, {0});
+    expectStripe0Only(
+        {
+            .maxRows = 1,
+            .maxStripeGroupMetadataBytesPerLoad = budgetForStripeGroups(3),
+        },
+        {0, 1, 2});
+  }
+  {
+    SCOPED_TRACE("maxBytes");
+    expectStripe0Only({.maxBytes = 1}, {0});
+    expectStripe0Only(
+        {
+            .maxBytes = 1,
+            .maxStripeGroupMetadataBytesPerLoad = budgetForStripeGroups(2),
+        },
+        {0, 1});
+  }
+}
+
+TEST_P(
+    NimbleIndexProjectorMetadataLoadTest,
+    windowSkipsGroupsWithoutResolvedStripes) {
+  ASSERT_NO_FATAL_FAILURE(
+      writeGroupedStripes(/*numStripes=*/8, /*stripesPerGroup=*/2));
+  NimbleIndexProjector::Request request;
+
+  // The requests come out of key order. Planning still visits stripes 0, 1, 6
+  // and 7 in ascending order, which a load of several groups requires. They
+  // live in groups 0 and 3, so a budget that fits two groups loads both at
+  // once.
+  request.keyBounds = {
+      stripeKeys(/*firstStripe=*/6, /*numStripes=*/2),
+      stripeKeys(/*firstStripe=*/0, /*numStripes=*/2),
+  };
+  for (const auto& [budget, expectedLoads] :
+       std::vector<std::pair<uint64_t, uint64_t>>{
+           {0, 2},
+           {budgetForStripeGroups(2), 1},
+       }) {
+    SCOPED_TRACE(fmt::format("maxStripeGroupMetadataBytesPerLoad={}", budget));
+    resetReaders();
+    auto projector = createValueProjector();
+    NimbleIndexProjector::SerializedResult result;
+    EXPECT_EQ(
+        countMetadataReads([&] {
+          result = projector->projectStreams(
+              request, {.maxStripeGroupMetadataBytesPerLoad = budget});
+        }),
+        std::make_pair(expectedLoads, stripeGroupBytes({0, 3})));
+    ASSERT_EQ(result.responses.size(), 2);
+    EXPECT_EQ(result.responses[0].slices.size(), 2);
+    EXPECT_EQ(result.responses[1].slices.size(), 2);
+  }
+}
+
+TEST_P(NimbleIndexProjectorMetadataLoadTest, laterRequestStartsNewWindow) {
+  ASSERT_NO_FATAL_FAILURE(
+      writeGroupedStripes(/*numStripes=*/8, /*stripesPerGroup=*/1));
+  NimbleIndexProjector::Request request;
+
+  // The row cap stops the first request inside stripe 0 although its range
+  // covers every stripe. The second request needs stripe 6, which neither
+  // window here reaches from stripe 0.
+  request.keyBounds = {
+      stripeKeys(/*firstStripe=*/0, /*numStripes=*/8),
+      stripeKeys(/*firstStripe=*/6, /*numStripes=*/1),
+  };
+  for (const auto& [budget, expectedGroups] :
+       std::vector<std::pair<uint64_t, std::vector<uint32_t>>>{
+           {0, {0, 6}},
+           {budgetForStripeGroups(2), {0, 1, 6, 7}},
+       }) {
+    SCOPED_TRACE(fmt::format("maxStripeGroupMetadataBytesPerLoad={}", budget));
+    resetReaders();
+    auto projector = createValueProjector();
+    NimbleIndexProjector::SerializedResult result;
+    EXPECT_EQ(
+        countMetadataReads([&] {
+          result = projector->projectStreams(
+              request,
+              {
+                  .maxRowsPerRequest = kRowsPerStripe / 2,
+                  .maxStripeGroupMetadataBytesPerLoad = budget,
+              });
+        }),
+        std::make_pair(uint64_t{2}, stripeGroupBytes(expectedGroups)));
+    ASSERT_EQ(result.responses.size(), 2);
+    EXPECT_EQ(result.responses[0].slices.size(), 1);
+    EXPECT_EQ(result.responses[1].slices.size(), 1);
+  }
+}
+
+TEST_P(
+    NimbleIndexProjectorMetadataLoadTest,
+    windowServesStripePastSkippedGroups) {
+  ASSERT_NO_FATAL_FAILURE(
+      writeGroupedStripes(/*numStripes=*/8, /*stripesPerGroup=*/1));
+  NimbleIndexProjector::Request request;
+
+  // The row cap stops the first request inside stripe 0, so planning skips
+  // stripes 1 and 2. The second request's stripe 3 is still in the window that
+  // stripe 0 loaded, so it needs no load of its own.
+  request.keyBounds = {
+      stripeKeys(/*firstStripe=*/0, /*numStripes=*/4),
+      stripeKeys(/*firstStripe=*/3, /*numStripes=*/1),
+  };
+  const auto budget = budgetForStripeGroups(4);
+  auto projector = createValueProjector();
+  NimbleIndexProjector::SerializedResult result;
+  EXPECT_EQ(
+      countMetadataReads([&] {
+        result = projector->projectStreams(
+            request,
+            {
+                .maxRowsPerRequest = kRowsPerStripe / 2,
+                .maxStripeGroupMetadataBytesPerLoad = budget,
+            });
+      }),
+      std::make_pair(uint64_t{1}, stripeGroupBytes({0, 1, 2, 3})));
+  ASSERT_EQ(result.responses.size(), 2);
+  EXPECT_EQ(result.responses[0].slices.size(), 1);
+  EXPECT_EQ(result.responses[1].slices.size(), 1);
+}
+
+TEST_P(
+    NimbleIndexProjectorMetadataLoadTest,
+    stripesProjectingNoStreamsUseWindow) {
+  // Alternating the feature key leaves stripes 1 and 3 projecting nothing.
+  // Planning still locates them, so their groups take part in windows like any
+  // other.
+  writeData(
+      {singleFeatureBatch(0, StringView("a")),
+       singleFeatureBatch(kFeatureRowsPerBatch, StringView("b")),
+       singleFeatureBatch(2 * kFeatureRowsPerBatch, StringView("a")),
+       singleFeatureBatch(3 * kFeatureRowsPerBatch, StringView("b"))},
+      {"key"},
+      {{"features", {}}},
+      /*stripeSize=*/1,
+      /*enableStreamDeduplication=*/true,
+      /*compactRowCountEncoding=*/false,
+      /*chunkCompressionType=*/CompressionType::Uncompressed,
+      /*skipConstantFlatMapInMapStreams=*/false,
+      /*enableChunking=*/true,
+      /*enableStreamChecksums=*/false,
+      StripeGroup::EncodingLayout::kRaw,
+      /*metadataFlushThreshold=*/1);
+  ASSERT_EQ(openSinkTablet()->stripeGroupsMetadata().size(), 4);
+  NimbleIndexProjector::Request request;
+  request.keyBounds = {makeRangeLookup(
+      singleFeatureRowType(),
+      {"key"},
+      /*lowerKey=*/0,
+      /*upperKey=*/4 * kFeatureRowsPerBatch)};
+  std::vector<Subfield> subfields;
+  subfields.emplace_back("features[\"a\"]");
+  const auto allGroupBytes = stripeGroupBytes({0, 1, 2, 3});
+  for (const auto& [budget, expectedLoads] :
+       std::vector<std::pair<uint64_t, uint64_t>>{
+           {0, 4},
+           {budgetForStripeGroups(2), 2},
+       }) {
+    SCOPED_TRACE(fmt::format("maxStripeGroupMetadataBytesPerLoad={}", budget));
+    resetReaders();
+    auto projector = createProjector(subfields);
+    NimbleIndexProjector::SerializedResult result;
+    EXPECT_EQ(
+        countMetadataReads([&] {
+          result = projector->projectStreams(
+              request, {.maxStripeGroupMetadataBytesPerLoad = budget});
+        }),
+        std::make_pair(expectedLoads, allGroupBytes));
+    ASSERT_EQ(result.responses.size(), 1);
+    EXPECT_EQ(result.responses[0].slices.size(), 2);
+  }
+}
+
+TEST_P(NimbleIndexProjectorMetadataLoadTest, missingKeysLoadNoMetadata) {
+  ASSERT_NO_FATAL_FAILURE(
+      writeGroupedStripes(/*numStripes=*/4, /*stripesPerGroup=*/1));
+  NimbleIndexProjector::Request request;
+  request.keyBounds = {makeRangeLookup(
+      keyValueRowType(),
+      {"key"},
+      /*lowerKey=*/100 * kRowsPerStripe,
+      /*upperKey=*/200 * kRowsPerStripe)};
+  auto projector = createValueProjector();
+  NimbleIndexProjector::SerializedResult result;
+  EXPECT_EQ(
+      countMetadataReads(
+          [&] { result = projector->projectStreams(request, {}); }),
+      std::make_pair(uint64_t{0}, uint64_t{0}));
+  ASSERT_EQ(result.responses.size(), 1);
+  EXPECT_THAT(result.responses[0].slices, ::testing::IsEmpty());
+}
+
+TEST_P(NimbleIndexProjectorMetadataLoadTest, projectRowsLoadsInWindows) {
+  ASSERT_NO_FATAL_FAILURE(
+      writeGroupedStripes(/*numStripes=*/5, /*stripesPerGroup=*/1));
+  NimbleIndexProjector::Request request;
+  request.keyBounds = {stripeKeys(/*firstStripe=*/0, /*numStripes=*/5)};
+  const NimbleIndexProjector::Options options{
+      .maxStripeGroupMetadataBytesPerLoad = budgetForStripeGroups(2),
+  };
+  auto projector = createValueProjector();
+  NimbleIndexProjector::RowProjectionResult result;
+  EXPECT_EQ(
+      countMetadataReads(
+          [&] { result = projectRows(*projector, request, options); }),
+      std::make_pair(uint64_t{3}, stripeGroupBytes({0, 1, 2, 3, 4})));
+
+  // Stripes located through a held group decode their own rows.
+  ASSERT_NE(result.values, nullptr);
+  velox::test::assertEqualVectors(
+      vectorMaker_->rowVector(
+          {"value"},
+          {vectorMaker_->flatVector<int32_t>(
+              5 * kRowsPerStripe, [](auto row) { return row; })}),
+      result.values);
 }
 
 TEST_P(NimbleIndexProjectorTest, loadsStripesWithAbsentProjectedStreams) {
@@ -7522,6 +8075,18 @@ INSTANTIATE_TEST_CASE_P(
           "cacheMeta{}_pin{}",
           info.param.cacheMetadata ? "On" : "Off",
           info.param.pinMetadata ? "On" : "Off");
+    });
+
+// createProjector() leaves ReaderOptions::fileHandle unset, so TabletReader
+// ignores cacheMetadata and only pinning varies here.
+INSTANTIATE_TEST_SUITE_P(
+    MetadataPinning,
+    NimbleIndexProjectorMetadataLoadTest,
+    ::testing::Values(
+        TestParam{.cacheMetadata = false, .pinMetadata = false},
+        TestParam{.cacheMetadata = false, .pinMetadata = true}),
+    [](const ::testing::TestParamInfo<TestParam>& info) {
+      return fmt::format("pin{}", info.param.pinMetadata ? "On" : "Off");
     });
 
 } // namespace facebook::nimble::test
