@@ -1316,6 +1316,30 @@ TEST_F(PlanNodeSerdeTest, fixedPointConvergenceSequence) {
                         {gather}, sumPartials, 100),
                     "values")
                 .planNode());
+
+  // Every worker sums every worker's values into the same replicated state;
+  // worker 0 decides over its own copy and alone emits the output.
+  auto broadcast = PlanBuilder(idGenerator)
+                       .stateSource("values", schema)
+                       .partitionedOutputBroadcast()
+                       .planNode();
+  auto sumAll = PlanBuilder(idGenerator)
+                    .exchange(schema, "Presto")
+                    .singleAggregation({}, {"sum(val)"})
+                    .project({"CAST(0 AS BIGINT) AS key", "a0 AS val"})
+                    .planNode();
+  auto ownVerdict = PlanBuilder(idGenerator)
+                        .stateSource("values", schema)
+                        .project({"val >= 16"})
+                        .planNode();
+  testSerde(PlanBuilder(idGenerator)
+                .fixedPoint(
+                    {core::VectorState("values", schema).initial(seed)},
+                    {broadcast, sumAll},
+                    core::ConvergenceConfig::workerZeroVerdict(ownVerdict, 100),
+                    "values",
+                    /*outputOnWorkerZero=*/true)
+                .planNode());
 }
 
 TEST_F(PlanNodeSerdeTest, fixedPointThreeDegrees) {
