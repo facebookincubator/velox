@@ -194,7 +194,6 @@ const std::vector<Split>& JoinSource::groupedSplits(
           filePath, inputVectorsByGroup[groupId][i], writerPool_.get());
       splitsWithGroup.emplace_back(test::makeConnectorSplit(filePath), groupId);
     }
-    splitsWithGroup.emplace_back(nullptr, groupId);
   }
 
   return groupedSplits_.insert(std::make_pair(numGroups, splitsWithGroup))

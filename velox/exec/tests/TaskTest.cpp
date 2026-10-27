@@ -871,8 +871,17 @@ TEST_F(TaskTest, wrongPlanNodeForSplit) {
   // Add split for the source node.
   task->addSplit("0", exec::Split(folly::copy(connectorSplit)));
 
-  // Add an empty split.
-  task->addSplit("0", exec::Split());
+  VELOX_ASSERT_THROW(
+      task->addSplit("0", exec::Split{}), "Cannot add an empty split");
+  VELOX_ASSERT_THROW(
+      task->addSplitWithSequence("0", exec::Split{}, 3),
+      "Cannot add an empty split");
+  const auto stats = task->taskStats();
+  EXPECT_EQ(stats.numTotalSplits, 1);
+  EXPECT_EQ(stats.numQueuedSplits, 1);
+  EXPECT_EQ(stats.numQueuedTableScanSplits, 1);
+  EXPECT_EQ(stats.numRunningSplits, 0);
+  EXPECT_EQ(stats.numAbandonedSplits, 0);
 
   // Try to add split for a non-source node.
   auto errorMessage =
@@ -909,6 +918,8 @@ TEST_F(TaskTest, wrongPlanNodeForSplit) {
   VELOX_ASSERT_THROW(task->noMoreSplits("12"), errorMessage)
 
   VELOX_ASSERT_THROW(task->noMoreSplitsForGroup("12", 5), errorMessage)
+
+  EXPECT_NO_THROW(task->addSplit("0", exec::Split::createBarrier()));
 
   // Try to add split for a Values source node.
   plan =
