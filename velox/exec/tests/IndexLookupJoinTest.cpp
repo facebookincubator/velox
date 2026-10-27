@@ -1763,8 +1763,7 @@ TEST_P(IndexLookupJoinTest, betweenJoinCondition) {
         planWithMatchColumn,
         probeScanNodeId_,
         probeFiles,
-        GetParam().needsIndexSplit,
-        /*serialExecution=*/false);
+        GetParam().needsIndexSplit);
   }
 }
 
@@ -2111,8 +2110,7 @@ TEST_P(IndexLookupJoinTest, inJoinCondition) {
         planWithMatchColumn,
         probeScanNodeId_,
         probeFiles,
-        GetParam().needsIndexSplit,
-        /*serialExecution=*/false);
+        GetParam().needsIndexSplit);
   }
 }
 
@@ -2275,8 +2273,7 @@ TEST_P(IndexLookupJoinTest, prefixKeysEqualJoin) {
         planWithMatchColumn,
         probeScanNodeId_,
         probeFiles,
-        GetParam().needsIndexSplit,
-        /*serialExecution=*/false);
+        GetParam().needsIndexSplit);
   }
 }
 
@@ -2422,8 +2419,7 @@ TEST_P(IndexLookupJoinTest, prefixKeysbetweenJoinCondition) {
         planWithMatchColumn,
         probeScanNodeId_,
         probeFiles,
-        GetParam().needsIndexSplit,
-        /*serialExecution=*/false);
+        GetParam().needsIndexSplit);
   }
 }
 
@@ -2570,8 +2566,7 @@ TEST_P(IndexLookupJoinTest, prefixInJoinCondition) {
         planWithMatchColumn,
         probeScanNodeId_,
         probeFiles,
-        GetParam().needsIndexSplit,
-        /*serialExecution=*/false);
+        GetParam().needsIndexSplit);
   }
 }
 
@@ -3025,8 +3020,7 @@ TEST_P(IndexLookupJoinTest, outputBatchSizeWithLeftJoin) {
         planWithMatchColumn,
         probeScanNodeId_,
         probeFiles,
-        GetParam().needsIndexSplit,
-        /*serialExecution=*/false);
+        GetParam().needsIndexSplit);
   }
 }
 

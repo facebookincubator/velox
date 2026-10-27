@@ -282,8 +282,7 @@ TEST_P(IndexLookupJoinTest, leftJoinTrailingMissesWithNoSplitOutput) {
         planWithMatchColumn,
         probeScanNodeId_,
         probeFiles,
-        GetParam().needsIndexSplit,
-        /*serialExecution=*/false);
+        GetParam().needsIndexSplit);
   }
 }
 
@@ -854,8 +853,7 @@ TEST_P(IndexLookupJoinTest, nullKeys) {
       planWithMatchColumn,
       probeScanNodeId_,
       probeFiles,
-      GetParam().needsIndexSplit,
-      /*serialExecution=*/false);
+      GetParam().needsIndexSplit);
 }
 
 TEST_P(IndexLookupJoinTest, joinFuzzer) {
@@ -1256,8 +1254,7 @@ TEST_P(IndexLookupJoinTest, withFilter) {
         planWithMatchColumn,
         probeScanNodeId_,
         probeFiles,
-        GetParam().needsIndexSplit,
-        /*serialExecution=*/false);
+        GetParam().needsIndexSplit);
   }
 }
 
