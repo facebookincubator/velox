@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 #include "velox/functions/lib/MapConcat.h"
-#include "velox/functions/lib/MapFromEntries.h"
 #include "velox/functions/lib/RegistrationHelpers.h"
+#include "velox/functions/sparksql/MapFromEntries.h"
 
 namespace facebook::velox::functions {
 extern void registerElementAtFunction(
@@ -24,8 +24,7 @@ extern void registerElementAtFunction(
     std::string_view defaultOwner = {});
 
 void registerSparkMapFunctions(const std::string& prefix) {
-  registerMapFromEntriesFunction(
-      prefix + "map_from_entries", /*throwForNull=*/false);
+  sparksql::registerMapFromEntriesFunction(prefix + "map_from_entries");
   // Spark and Presto share map_filter and transform_values: the lambda
   // expression corresponds to the function body, arguments to the signature.
   VELOX_REGISTER_VECTOR_FUNCTION(udf_map_filter, prefix + "map_filter");
