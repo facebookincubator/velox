@@ -1488,6 +1488,13 @@ DEBUG_ONLY_TEST_P(IndexLookupJoinTest, needsIndexSplit) {
 
     queryThread.join();
 
+    const auto stats = task->taskStats();
+    EXPECT_EQ(
+        stats.numFinishedSplits, probeFiles.size() + testData.numIndexSplits);
+    EXPECT_EQ(stats.numAbandonedSplits, 0);
+    EXPECT_EQ(stats.numRunningSplits, 0);
+    EXPECT_EQ(stats.numQueuedSplits, 0);
+
     // Verify collectIndexSplits was called the expected number of times:
     // once initially when blocked, plus once after splits are available.
     ASSERT_EQ(collectSplitCallCount.load(), 2)
