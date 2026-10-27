@@ -164,9 +164,10 @@ configured ceiling remain stable after the first
 unset.</p></td>
 </tr>
 <tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">admissionKey()</span></code></p></td>
-<td><p>Key used to select the process-wide shared admission bucket. Empty keys
-share the default <code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code> bucket. Override this method when requests
-share a backend-specific capacity pool.</p></td>
+<td><p>Key used, together with the query’s resolved rate-limiter policy, to
+select a process-wide admission bucket. Empty keys share the default
+<code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code> bucket. Override this method when requests share a
+backend-specific capacity pool.</p></td>
 </tr>
 <tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">dispatchPerRow(rows,</span> <span class="pre">args)</span></code></p></td>
 <td><p>Per-row dispatch. Send one RPC per active row and return one future per
@@ -333,15 +334,16 @@ additively on healthy latency
 derived from the ratio of baseline to observed RTT). Tunables:
 <code class="docutils literal notranslate"><span class="pre">rpc.congestion.*</span></code> (see <a class="reference internal" href="../configs.html"><span class="doc">Configuration properties</span></a>).</p></li>
 <li><p><strong>Per-backend admission</strong> — <code class="docutils literal notranslate"><span class="pre">RPCRateLimiter</span></code>
-(<code class="docutils literal notranslate"><span class="pre">velox/exec/rpc/RPCRateLimiter.h</span></code>), one instance per admission key,
-obtained from the process-scoped <code class="docutils literal notranslate"><span class="pre">RPCRateLimiterRegistry</span></code> and keyed by
-<code class="docutils literal notranslate"><span class="pre">admissionKey()</span></code>:
-an adaptive limit shared across every driver hitting that backend —
-multiplicative decrease on overload, doubling recovery below one, and
-additive increase at or above one. Distinct admission keys adapt
-independently; functions returning the same key, including <code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code>, share
-one controller. The worker properties are
-<code class="docutils literal notranslate"><span class="pre">rpc.ratelimiter.adaptive_enabled</span></code>, <code class="docutils literal notranslate"><span class="pre">rpc.ratelimiter.min_limit</span></code>,
+(<code class="docutils literal notranslate"><span class="pre">velox/exec/rpc/RPCRateLimiter.h</span></code>), one instance per admission key and
+policy, obtained from the process-scoped <code class="docutils literal notranslate"><span class="pre">RPCRateLimiterRegistry</span></code> and
+keyed by <code class="docutils literal notranslate"><span class="pre">admissionKey()</span></code> and the query’s resolved policy:
+an adaptive limit shared across every driver hitting that backend under
+that policy — multiplicative decrease on overload, doubling recovery below
+one, and additive increase at or above one. Distinct admission keys adapt
+independently; queries whose functions return the same key, including
+<code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code>, share one controller when they resolve to the same policy. The
+worker properties are <code class="docutils literal notranslate"><span class="pre">rpc.ratelimiter.adaptive_enabled</span></code>,
+<code class="docutils literal notranslate"><span class="pre">rpc.ratelimiter.min_limit</span></code>,
 <code class="docutils literal notranslate"><span class="pre">rpc.ratelimiter.decrease_factor</span></code>, and
 <code class="docutils literal notranslate"><span class="pre">rpc.ratelimiter.max_limit</span></code> (see <a class="reference internal" href="../configs.html"><span class="doc">Configuration properties</span></a>).</p>
 <p>At limits of at least one, capacity bounds concurrent in-flight units. Below
@@ -350,17 +352,19 @@ the smoothed successful RPC duration. The class and configuration names
 retain the historical “rate limiter” terminology.</p>
 </li>
 </ul>
-<p>Each admission key is configured by the first query that reaches it. Adaptive
-control defaults to enabled with a legacy ceiling of 200, an integral session
-floor of 50, and a decrease factor of 0.5. Setting
+<p>A query’s policy is resolved from its session properties and its function’s
+stable bounds. Adaptive control defaults to enabled with a legacy ceiling of
+200, an integral session floor of 50, and a decrease factor of 0.5. Setting
 <code class="docutils literal notranslate"><span class="pre">rpc.ratelimiter.min_limit</span></code> to <code class="docutils literal notranslate"><span class="pre">0</span></code> delegates the floor to
 <code class="docutils literal notranslate"><span class="pre">configuredAdaptiveFloor()</span></code>. The legacy <code class="docutils literal notranslate"><span class="pre">rpc.ratelimiter.max_limit</span></code> keeps
 its original behavior during mixed-version rollout. A non-negative
 <code class="docutils literal notranslate"><span class="pre">rpc.ratelimiter.hard_limit</span></code> supersedes it: zero adds no session ceiling and
 a positive value is combined with <code class="docutils literal notranslate"><span class="pre">configuredCeiling()</span></code> using the smaller
-positive value. Minus one, the default, retains legacy behavior. Functions that
-share an admission key must declare the same stable floor and ceiling. Later
-queries cannot reconfigure an initialized key until the worker restarts.</p>
+positive value. Minus one, the default, retains legacy behavior. The first
+query to reach an admission key seals its shared limiter with its policy. A
+later query whose resolved policy differs runs under a limiter for that policy,
+so the limiters for one key can together admit the sum of their ceilings. Each
+limiter lives until the worker restarts.</p>
 <p>With <code class="docutils literal notranslate"><span class="pre">rpc.ratelimiter.hard_limit=0</span></code> and no function ceiling,
 <code class="docutils literal notranslate"><span class="pre">rpcRateLimiterHardLimit</span></code> is 1,000,000 while the current and lifetime
 low-water windows start at 200. A low-water value of 200 therefore does not
