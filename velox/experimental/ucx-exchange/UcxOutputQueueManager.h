@@ -79,12 +79,15 @@ class UcxOutputQueueManager : public exec::OutputBufferManager {
   /// @param numRows The number of rows in the data. Supplied by the producer
   /// rather than read back from 'txData', which cannot report a row count once
   /// it has no columns.
+  /// @param transferReservationBytes Optional producer-owned reservation. Set
+  /// to zero at commit or cancellation, before callbacks run. On exception the
+  /// producer must release only the remaining value.
   void enqueue(
       std::string_view taskId,
       int destination,
       std::unique_ptr<cudf::packed_columns> txData,
       vector_size_t numRows,
-      int64_t transferReservationBytes = 0);
+      uint64_t* transferReservationBytes = nullptr);
 
   /// @brief Checks if the queue for a task is over capacity.
   /// Should be called after enqueueing all partitions for a batch.

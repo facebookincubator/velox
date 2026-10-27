@@ -227,11 +227,15 @@ class UcxOutputQueue : public std::enable_shared_from_this<UcxOutputQueue> {
   /// @param numRows The number of rows in the data. Supplied by the producer
   /// rather than read back from 'data', which cannot report a row count once it
   /// has no columns.
+  /// @param transferReservationBytes Optional producer-owned reservation. Set
+  /// to zero when consumed, before notifying readers. On exception the producer
+  /// must release only the remaining value, which is unchanged if enqueue has
+  /// not committed. A cancelled destination or task also consumes the value.
   void enqueue(
       int destination,
       std::unique_ptr<cudf::packed_columns> data,
       vector_size_t numRows,
-      int64_t transferReservationBytes = 0);
+      uint64_t* transferReservationBytes = nullptr);
 
   /// @brief Checks if the queue is over capacity and returns a future if so.
   /// This should be called after enqueueing all partitions for a batch.

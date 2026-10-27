@@ -377,23 +377,29 @@ void registerCudf() {
       folly::makeGuard([] { clearCurrentDeviceMemoryInfo(); });
   base.emplace(
       cudf_velox::createMemoryResource(
-          mrMode, CudfConfig::getInstance().memoryPercent, true));
+          mrMode,
+          CudfConfig::getInstance().memoryPercent,
+          CudfMemoryResourceKind::kPrimary));
   // Wrap the device resource in a statistics adaptor so that
   // cudfAllocatedBytes() can report live device memory.
   statsMr_.emplace(std::move(*base));
   mr_ = statsMr_.value();
   cudf::set_current_device_resource(mr_.value());
-  clearTrackedMemoryResourceOnFailure.dismiss();
 
   const auto& outputMrMode = CudfConfig::getInstance().outputMemoryResource;
   if (!outputMrMode.empty() && outputMrMode != mrMode) {
-    outputStatsMr_.emplace(
+    base.emplace(
         cudf_velox::createMemoryResource(
-            outputMrMode, CudfConfig::getInstance().memoryPercent));
+            outputMrMode,
+            CudfConfig::getInstance().memoryPercent,
+            CudfMemoryResourceKind::kOutput));
+    outputStatsMr_.emplace(std::move(*base));
     output_mr_ = outputStatsMr_.value();
   } else {
     output_mr_ = mr_;
+    sharePrimaryMemoryResourceWithOutput();
   }
+  clearTrackedMemoryResourceOnFailure.dismiss();
 
   exec::Operator::registerOperator(
       std::make_unique<CudfHashJoinBridgeTranslator>());

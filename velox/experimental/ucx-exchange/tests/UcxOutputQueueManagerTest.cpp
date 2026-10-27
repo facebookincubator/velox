@@ -19,11 +19,14 @@
 #include <cudf/table/table.hpp>
 #include <cudf/types.hpp>
 #include <folly/Executor.h>
+#include <folly/ScopeGuard.h>
 #include <folly/synchronization/EventCount.h>
 #include <gtest/gtest.h>
 #include <rmm/device_buffer.hpp>
 #include <limits>
 #include <memory>
+#include <new>
+#include <stdexcept>
 #include <type_traits>
 #include <vector>
 #include "velox/common/memory/MemoryPool.h"
@@ -930,18 +933,195 @@ TEST_F(UcxOutputQueueManagerTest, enqueueConsumesReservationExactlyOnce) {
 
   EXPECT_FALSE(
       queueManager_->reserveTransferBytes(taskId, 0, bytes, bytes, nullptr));
+  auto reservationBytes = static_cast<uint64_t>(bytes);
   EXPECT_NO_THROW(queueManager_->enqueue(
-      taskId, 0, std::move(page), /*numRows=*/10, bytes));
+      taskId, 0, std::move(page), /*numRows=*/10, &reservationBytes));
   ASSERT_NE(stableQueue, nullptr);
   ASSERT_NE(received, nullptr);
 
   // enqueue atomically converted the reservation into in-flight ownership.
-  // A producer scope guard must therefore be dismissed after the call returns.
+  EXPECT_EQ(reservationBytes, 0);
   EXPECT_ANY_THROW(queueManager_->releaseTransferReservation(taskId, 0, bytes));
   EXPECT_EQ(queueManager_->stats(taskId)->bufferedBytes, bytes);
   stableQueue->releaseInFlightBytes(0, bytes, 1);
   EXPECT_EQ(queueManager_->stats(taskId)->bufferedBytes, 0);
 
+  task->requestAbort().wait();
+  queueManager_->removeTask(taskId);
+}
+
+TEST_F(
+    UcxOutputQueueManagerTest,
+    enqueueConsumesReservationBeforeCallbackFailure) {
+  for (const bool allocationFailure : {false, true}) {
+    const auto taskId = std::string("adaptive.enqueueCallbackFailure.") +
+        (allocationFailure ? "allocation" : "consumer");
+    auto task = initializeTask(taskId, 1, 1, false /* cleanup */);
+    auto page = makePackedColumns(10);
+    const auto bytes = static_cast<int64_t>(page->gpu_data->size());
+    ASSERT_GT(bytes, 0);
+    auto reservationBytes = static_cast<uint64_t>(bytes);
+
+    // Another producer's reservation must survive both this enqueue and its
+    // caller's exception cleanup, even though it uses the same destination.
+    constexpr int64_t kOtherReservation = 37;
+    ASSERT_FALSE(queueManager_->reserveTransferBytes(
+        taskId, 0, kOtherReservation, bytes + kOtherReservation, nullptr));
+    ASSERT_FALSE(queueManager_->reserveTransferBytes(
+        taskId, 0, bytes, bytes + kOtherReservation, nullptr));
+
+    std::shared_ptr<UcxOutputQueue> stableQueue;
+    std::shared_ptr<cudf::packed_columns> received;
+    queueManager_->getDataWithQueue(
+        taskId,
+        0,
+        [&](std::shared_ptr<UcxOutputQueue> outputQueue,
+            std::shared_ptr<cudf::packed_columns> data,
+            vector_size_t /*numRows*/,
+            std::vector<int64_t> /*remainingBytes*/) {
+          EXPECT_EQ(reservationBytes, 0);
+          stableQueue = std::move(outputQueue);
+          received = std::move(data);
+          if (allocationFailure) {
+            throw std::bad_alloc{};
+          }
+          throw std::runtime_error("consumer failed");
+        });
+
+    bool rolledBack = false;
+    auto enqueueWithRollback = [&]() {
+      auto rollback = folly::makeGuard([&]() {
+        if (reservationBytes != 0) {
+          rolledBack = true;
+          queueManager_->releaseTransferReservation(
+              taskId, 0, static_cast<int64_t>(reservationBytes));
+        }
+      });
+      queueManager_->enqueue(
+          taskId, 0, std::move(page), /*numRows=*/10, &reservationBytes);
+    };
+    if (allocationFailure) {
+      // A post-commit bad_alloc must not trigger the producer's allocation
+      // retry: its row-progress marker has not advanced past enqueue yet.
+      EXPECT_THROW(enqueueWithRollback(), VeloxRuntimeError);
+    } else {
+      EXPECT_THROW(enqueueWithRollback(), std::runtime_error);
+    }
+    EXPECT_FALSE(rolledBack);
+    EXPECT_EQ(reservationBytes, 0);
+    ASSERT_NE(stableQueue, nullptr);
+    ASSERT_NE(received, nullptr);
+    EXPECT_EQ(queueManager_->stats(taskId)->bufferedBytes, bytes);
+
+    // Only the unrelated reservation remains. Keep the strict accounting
+    // assertion: accepting excess release would hide a double rollback.
+    EXPECT_ANY_THROW(queueManager_->releaseTransferReservation(
+        taskId, 0, kOtherReservation + 1));
+    EXPECT_NO_THROW(queueManager_->releaseTransferReservation(
+        taskId, 0, kOtherReservation));
+    EXPECT_ANY_THROW(queueManager_->releaseTransferReservation(taskId, 0, 1));
+    stableQueue->releaseInFlightBytes(0, bytes, 1);
+    received.reset();
+    EXPECT_EQ(queueManager_->stats(taskId)->bufferedBytes, 0);
+    task->requestAbort().wait();
+    queueManager_->removeTask(taskId);
+  }
+}
+
+TEST_F(UcxOutputQueueManagerTest, enqueueFailureRetainsReservationForRollback) {
+  const std::string taskId = "adaptive.enqueueBeforeCommitFailure";
+  auto task = initializeTask(taskId, 1, 1, false /* cleanup */);
+  auto page = makePackedColumns(10);
+  const auto bytes = static_cast<int64_t>(page->gpu_data->size());
+  ASSERT_GT(bytes, 0);
+  auto reservationBytes = static_cast<uint64_t>(bytes);
+  constexpr int64_t kOtherReservation = 37;
+  ASSERT_FALSE(queueManager_->reserveTransferBytes(
+      taskId, 0, kOtherReservation, bytes + kOtherReservation, nullptr));
+  ASSERT_FALSE(queueManager_->reserveTransferBytes(
+      taskId, 0, bytes, bytes + kOtherReservation, nullptr));
+  ContinueFuture future;
+  ASSERT_TRUE(queueManager_->reserveTransferBytes(
+      taskId, 0, 1, bytes + kOtherReservation, &future));
+  EXPECT_FALSE(future.isReady());
+
+  uint64_t rolledBackBytes = 0;
+  auto enqueueWithRollback = [&]() {
+    auto rollback = folly::makeGuard([&]() {
+      rolledBackBytes = reservationBytes;
+      if (reservationBytes != 0) {
+        queueManager_->releaseTransferReservation(
+            taskId, 0, static_cast<int64_t>(reservationBytes));
+        reservationBytes = 0;
+      }
+    });
+    // Invalid row metadata fails before publishing any page or consuming the
+    // reservation. The producer must still release exactly its own bytes.
+    queueManager_->enqueue(
+        taskId, 0, std::move(page), /*numRows=*/-1, &reservationBytes);
+  };
+  EXPECT_THROW(enqueueWithRollback(), VeloxRuntimeError);
+  EXPECT_EQ(rolledBackBytes, bytes);
+  EXPECT_EQ(reservationBytes, 0);
+  EXPECT_TRUE(future.isReady());
+  EXPECT_EQ(queueManager_->stats(taskId)->bufferedBytes, 0);
+  EXPECT_ANY_THROW(queueManager_->releaseTransferReservation(
+      taskId, 0, kOtherReservation + 1));
+  EXPECT_NO_THROW(
+      queueManager_->releaseTransferReservation(taskId, 0, kOtherReservation));
+  EXPECT_ANY_THROW(queueManager_->releaseTransferReservation(taskId, 0, 1));
+  task->requestAbort().wait();
+  queueManager_->removeTask(taskId);
+}
+
+TEST_F(UcxOutputQueueManagerTest, enqueueClearsCancelledReservation) {
+  for (const bool removeTask : {false, true}) {
+    const auto taskId = std::string("adaptive.enqueueCancelledReservation.") +
+        (removeTask ? "removed" : "aborted");
+    auto task = initializeTask(taskId, 1, 1, false /* cleanup */);
+    auto page = makePackedColumns(10);
+    const auto bytes = static_cast<int64_t>(page->gpu_data->size());
+    auto reservationBytes = static_cast<uint64_t>(bytes);
+    ASSERT_FALSE(
+        queueManager_->reserveTransferBytes(taskId, 0, bytes, bytes, nullptr));
+    task->requestAbort().wait();
+    if (removeTask) {
+      queueManager_->removeTask(taskId);
+    }
+    EXPECT_NO_THROW(queueManager_->enqueue(
+        taskId, 0, std::move(page), /*numRows=*/10, &reservationBytes));
+    EXPECT_EQ(reservationBytes, 0);
+    if (!removeTask) {
+      EXPECT_EQ(queueManager_->stats(taskId)->bufferedBytes, 0);
+      EXPECT_NE(
+          queueManager_->toString(taskId).find("transferReservedBytes=0,"),
+          std::string::npos);
+      queueManager_->removeTask(taskId);
+    }
+  }
+}
+
+TEST_F(UcxOutputQueueManagerTest, enqueueClearsDeletedDestinationReservation) {
+  const std::string taskId = "adaptive.enqueueDeletedDestinationReservation";
+  auto task = initializeTask(taskId, 2, 1, false /* cleanup */);
+  auto page = makePackedColumns(10);
+  const auto bytes = static_cast<int64_t>(page->gpu_data->size());
+  auto reservationBytes = static_cast<uint64_t>(bytes);
+  ASSERT_FALSE(
+      queueManager_->reserveTransferBytes(taskId, 0, bytes, bytes, nullptr));
+  constexpr int64_t kOtherReservation = 37;
+  ASSERT_FALSE(queueManager_->reserveTransferBytes(
+      taskId, 1, kOtherReservation, kOtherReservation, nullptr));
+  queueManager_->deleteResults(taskId, 0);
+  EXPECT_NO_THROW(queueManager_->enqueue(
+      taskId, 0, std::move(page), /*numRows=*/10, &reservationBytes));
+  EXPECT_EQ(reservationBytes, 0);
+  EXPECT_EQ(queueManager_->stats(taskId)->bufferedBytes, 0);
+  EXPECT_ANY_THROW(queueManager_->releaseTransferReservation(
+      taskId, 1, kOtherReservation + 1));
+  EXPECT_NO_THROW(
+      queueManager_->releaseTransferReservation(taskId, 1, kOtherReservation));
+  EXPECT_ANY_THROW(queueManager_->releaseTransferReservation(taskId, 1, 1));
   task->requestAbort().wait();
   queueManager_->removeTask(taskId);
 }

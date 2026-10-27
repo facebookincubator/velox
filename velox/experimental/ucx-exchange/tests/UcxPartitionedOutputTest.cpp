@@ -32,11 +32,12 @@
 #include <vector>
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/memory/MemoryPool.h"
-#include "velox/core/QueryConfig.h"
 #include "velox/common/testutil/TestValue.h"
+#include "velox/core/QueryConfig.h"
 #include "velox/exec/Driver.h"
 #include "velox/exec/OutputTransportRegistry.h"
 #include "velox/exec/RoundRobinPartitionFunction.h"
+#include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/vector/CudfVector.h"
@@ -66,8 +67,13 @@ TEST(UcxPartitionedOutputHelpersTest, deviceAdmissionAccountsAtomically) {
   using cudf_velox::releaseDeviceMemoryReservation;
   using cudf_velox::tryReserveCurrentDeviceMemory;
 
+  auto resource = cudf_velox::createMemoryResource(
+      "cuda", 0, cudf_velox::CudfMemoryResourceKind::kPrimary);
+  auto clearTracking =
+      folly::makeGuard([] { cudf_velox::clearCurrentDeviceMemoryInfo(); });
   const auto before = currentDeviceMemoryInfo();
   ASSERT_TRUE(before.has_value());
+  ASSERT_TRUE(before->hasAdmissionStats);
   const auto effectiveFree = before->poolReusableBytes >
           std::numeric_limits<uint64_t>::max() - before->freeBytes
       ? std::numeric_limits<uint64_t>::max()
@@ -588,6 +594,108 @@ TEST_F(UcxPartitionedOutputTest, eagerFlushFromSessionPropertySendsEachBatch) {
 
   finishPartitionedOutput(partitionedOutput);
 }
+
+TEST_F(UcxPartitionedOutputTest, wholeInputsPreserveNullsAndOutputLayout) {
+  auto stream = cuda::stream_ref{cudaStream_t{cudaStreamDefault}};
+  auto rowVector = std::dynamic_pointer_cast<RowVector>(
+      BaseVector::create(UcxTestData::kTestRowType, 1, pool_.get()));
+  auto planFragment =
+      exec::test::PlanBuilder()
+          .values({rowVector})
+          .partitionedOutput(
+              /*keys=*/{}, /*numPartitions=*/1, /*outputLayout=*/{"c1", "c0"})
+          .planFragment();
+  auto queryCtx = core::QueryCtx::create(
+      nullptr,
+      core::QueryConfig{
+          {{core::QueryConfig::kMaxOutputBufferSize,
+            std::to_string(FOUR_GBYTES)},
+           {CudfConfig::kUcxPartitionedOutputBatchRows, "100"}}});
+  queryCtx->addReleaseCallback([pool = pool_]() {});
+  auto task = Task::create(
+      taskId_,
+      std::move(planFragment),
+      /*destination=*/0,
+      std::move(queryCtx),
+      Task::ExecutionMode::kParallel);
+  queueManager_->initializeTask(
+      task,
+      core::PartitionedOutputNode::Kind::kPartitioned,
+      /*numDestinations=*/1,
+      /*numDrivers=*/1);
+  auto partitionedOutput = makePartitionedOutput(task);
+
+  // Both complete owners are buffered until the final flush. Output reverses
+  // the numeric columns and drops the string column; each retained column has
+  // a different null mask, including nulls on both sides of the batch boundary.
+  feedBatch(
+      partitionedOutput.get(),
+      makeKeyColumn({10, 11, 12}, {1}, stream),
+      stream,
+      makeSecondKeyColumn({100, 101, 102}, {2}, stream));
+  feedBatch(
+      partitionedOutput.get(),
+      makeKeyColumn({13, 14, 15}, {0}, stream),
+      stream,
+      makeSecondKeyColumn({103, 104, 105}, {1}, stream));
+  EXPECT_EQ(numBufferedPages(), 0);
+  finishPartitionedOutput(partitionedOutput.get());
+
+  vector_size_t totalRows = 0;
+  while (true) {
+    std::shared_ptr<UcxOutputQueue> outputQueue;
+    std::shared_ptr<cudf::packed_columns> payload;
+    queueManager_->getDataWithQueue(
+        taskId_,
+        0,
+        [&](std::shared_ptr<UcxOutputQueue> queue,
+            std::shared_ptr<cudf::packed_columns> data,
+            vector_size_t /*numRows*/,
+            std::vector<int64_t> /*remainingBytes*/) {
+          outputQueue = std::move(queue);
+          payload = std::move(data);
+        });
+    if (payload == nullptr) {
+      break;
+    }
+    const auto unpacked = cudf::unpack(*payload);
+    ASSERT_EQ(unpacked.num_columns(), 2);
+    ASSERT_EQ(unpacked.column(0).type().id(), cudf::type_id::FLOAT64);
+    ASSERT_EQ(unpacked.column(1).type().id(), cudf::type_id::INT32);
+    const auto doubles =
+        getColVector<double>(unpacked.column(0), unpacked.num_rows(), stream);
+    const auto keys =
+        getColVector<int32_t>(unpacked.column(1), unpacked.num_rows(), stream);
+    for (cudf::size_type row = 0; row < unpacked.num_rows(); ++row) {
+      const auto inputRow = totalRows + row;
+      ASSERT_LT(inputRow, 6);
+      const bool doubleIsNull = inputRow == 2 || inputRow == 4;
+      const bool keyIsNull = inputRow == 1 || inputRow == 3;
+      for (int column = 0; column < 2; ++column) {
+        const auto view = unpacked.column(column);
+        EXPECT_EQ(
+            cudf::null_count(
+                view.null_mask(),
+                view.offset() + row,
+                view.offset() + row + 1,
+                stream),
+            column == 0 ? doubleIsNull : keyIsNull);
+      }
+      if (!doubleIsNull) {
+        EXPECT_EQ(doubles[row], 100 + inputRow);
+      }
+      if (!keyIsNull) {
+        EXPECT_EQ(keys[row], 10 + inputRow);
+      }
+    }
+    totalRows += unpacked.num_rows();
+    outputQueue->releaseInFlightBytes(
+        0, static_cast<int64_t>(payload->gpu_data->size()), 1);
+  }
+  EXPECT_EQ(totalRows, 6);
+  EXPECT_EQ(queueManager_->stats(taskId_)->bufferedBytes, 0);
+}
+
 #ifndef NDEBUG
 TEST_F(UcxPartitionedOutputTest, allocationRetrySlicesAcrossInputsExactly) {
   auto stream = cuda::stream_ref{cudaStream_t{cudaStreamDefault}};
@@ -637,6 +745,10 @@ TEST_F(UcxPartitionedOutputTest, allocationRetrySlicesAcrossInputsExactly) {
 #endif
 
 TEST_F(UcxPartitionedOutputTest, downsizesRecoverableInputUnderDevicePressure) {
+  auto resource = cudf_velox::createMemoryResource(
+      "cuda", 0, cudf_velox::CudfMemoryResourceKind::kPrimary);
+  auto clearTracking =
+      folly::makeGuard([] { cudf_velox::clearCurrentDeviceMemoryInfo(); });
   constexpr uint64_t kOutputBufferBytes = 1024 * 1024;
   constexpr uint64_t kUnreservedBytes = kOutputBufferBytes / 2;
   auto stream = cuda::stream_ref{cudaStream_t{cudaStreamDefault}};
