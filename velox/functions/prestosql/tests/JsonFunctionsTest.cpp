@@ -75,10 +75,19 @@ class JsonFunctionsTest : public functions::test::FunctionBaseTest {
   }
 
   void testJsonParse(std::string json, std::string expectedJson) {
-    auto data = makeRowVector({makeFlatVector<std::string>({json})});
-    auto result = evaluate("json_parse(c0)", data);
-    auto expected = makeFlatVector<std::string>({expectedJson}, JSON());
-    velox::test::assertEqualVectors(expected, result);
+    {
+      auto data = makeRowVector({makeFlatVector<std::string>({json})});
+      auto result = evaluate("json_parse(c0)", data);
+      auto expected = makeFlatVector<std::string>({expectedJson}, JSON());
+      velox::test::assertEqualVectors(expected, result);
+    }
+    {
+      auto data = makeRowVector({makeConstant(Variant(json), 2)});
+      auto result = evaluate("json_parse(c0)", data);
+      auto expected =
+          makeFlatVector<std::string>({expectedJson, expectedJson}, JSON());
+      velox::test::assertEqualVectors(expected, result);
+    }
   }
 
   std::pair<VectorPtr, VectorPtr> makeVectors(std::optional<std::string> json) {
@@ -282,6 +291,19 @@ TEST_F(JsonFunctionsTest, jsonParse) {
   EXPECT_EQ(jsonParse("\"abc\u4FE1\""), "\"abc\u4FE1\"");
   auto utf32cp = folly::codePointToUtf8(U'😀');
   testJsonParse(fmt::format("\"{}\"", utf32cp), R"("\uD83D\uDE00")");
+  // Normalization makes this input 3x longer. The growth must exceed the
+  // padding AlignedBuffer adds past the requested size, or ASAN can't see an
+  // overflow.
+  {
+    std::string emojis;
+    std::string escapedEmojis;
+    for (auto i = 0; i < 100; ++i) {
+      emojis += utf32cp;
+      escapedEmojis += R"(\uD83D\uDE00)";
+    }
+    testJsonParse(
+        fmt::format("\"{}\"", emojis), fmt::format("\"{}\"", escapedEmojis));
+  }
   EXPECT_EQ(jsonParse(R"([1, 2, 3])"), "[1,2,3]");
   EXPECT_EQ(jsonParse(R"({"k1": "v1" })"), R"({"k1":"v1"})");
   EXPECT_EQ(jsonParse(R"(["k1", "v1"])"), R"(["k1","v1"])");
