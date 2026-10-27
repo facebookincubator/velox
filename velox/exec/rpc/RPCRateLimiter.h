@@ -55,7 +55,10 @@ namespace facebook::velox::exec::rpc {
 ///
 /// Uses one adaptive congestion window measured in admission units per
 /// successful service horizon. Integral windows bound in-flight work;
-/// fractional windows pace discrete admissions. A separate ceiling limits
+/// fractional windows pace discrete admissions. While calls keep failing, a
+/// fractional window backs off until probes are a maximum interval apart.
+/// After the first success it doubles every service horizon, so recovery takes
+/// a few horizons however deep the back-off went. A separate ceiling limits
 /// concurrency even when the learned horizon is short.
 class RPCRateLimiter : public std::enable_shared_from_this<RPCRateLimiter> {
   // Restricts owner-backed token construction without using friendship.
@@ -84,6 +87,13 @@ class RPCRateLimiter : public std::enable_shared_from_this<RPCRateLimiter> {
     /// rpc.ratelimiter.decrease_factor.
     double decreaseFactor{0.5};
 
+    /// Longest gap between paced probes. It bounds both the calls wasted while
+    /// a backend rejects everything and how long the limiter takes to notice
+    /// that it recovered. Zero leaves the floor alone, so probes can be as far
+    /// apart as the floor allows. Maps to
+    /// rpc.ratelimiter.max_probe_interval_ms.
+    std::chrono::milliseconds maxProbeInterval{60'000};
+
     /// Field-wise equality. Limiters compare policies after reducing them to
     /// the fields a limiter reads; see initializeOrMatch().
     bool operator==(const Config& other) const = default;
@@ -92,11 +102,15 @@ class RPCRateLimiter : public std::enable_shared_from_this<RPCRateLimiter> {
   /// What completed work told us about the backend. The admission layer's own
   /// vocabulary keeps this target free of expression-layer dependencies.
   enum class Outcome {
-    /// The backend served the work. Doubles a fractional window until one,
-    /// then drives additive increase.
+    /// The backend served the work. Drives additive increase of an integral
+    /// window, and starts time-based recovery of a fractional one.
     kSuccess,
     /// The backend shed load. Drives multiplicative decrease.
     kOverload,
+    /// The backend failed the work for a reason other than load. Leaves the
+    /// window alone but ends time-based recovery of a fractional one, which
+    /// resumes only after the next success.
+    kFailure,
     /// Nothing to learn from; capacity is left alone.
     kNone,
   };
@@ -137,6 +151,9 @@ class RPCRateLimiter : public std::enable_shared_from_this<RPCRateLimiter> {
 
     /// Smoothed successful service horizon used to pace fractional windows.
     int64_t serviceHorizonNanos{0};
+
+    /// True while a paced window grows with time after a success.
+    bool recovering{false};
   };
 
   /// One in-flight request slot, released on destruction so a slot is returned
@@ -223,13 +240,16 @@ class RPCRateLimiter : public std::enable_shared_from_this<RPCRateLimiter> {
 
   explicit RPCRateLimiter(std::string admissionKey);
 
-  /// Constructs a limiter with an injected clock and timer for deterministic
-  /// tests. Store it in a shared_ptr before enabling pacing; timer callbacks
-  /// use weak ownership. The injected clock and timer must outlive it.
+  /// Constructs a limiter with an injected clock, timer and random source for
+  /// deterministic tests. 'random' returns a value in [0, 1] and spreads the
+  /// back-off probes of limiters that were cut at the same moment. Store the
+  /// limiter in a shared_ptr before enabling pacing; timer callbacks use weak
+  /// ownership. The injected clock and timer must outlive it.
   RPCRateLimiter(
       std::string admissionKey,
       std::function<std::chrono::steady_clock::time_point()> now,
-      folly::Timekeeper* timekeeper);
+      folly::Timekeeper* timekeeper,
+      std::function<double()> random);
 
   /// Applies already-resolved limiter tuning.
   /// Never touches work already in flight — a ceiling that lands below the
@@ -347,15 +367,33 @@ class RPCRateLimiter : public std::enable_shared_from_this<RPCRateLimiter> {
   // Caller holds mutex_.
   int64_t ceilingLocked() const;
 
-  // Config::floor clamped to at most the ceiling. Caller holds mutex_.
+  // Config::floor, raised so paced probes are at most the maximum probe
+  // interval apart (up to a floor of 0.5, which keeps pacing on), and clamped
+  // to at most the ceiling. Caller holds mutex_.
   double floorLocked(double ceiling) const;
 
   // True while overload has reduced the congestion window below one unit.
   // Caller holds mutex_.
   bool isPacingLocked() const;
 
-  // Interval between paced admission starts. Caller holds mutex_.
+  // Interval between paced admission starts. While recovering, it is the time
+  // for the window, growing as grownLimitLocked() describes, to accumulate one
+  // admission. Caller holds mutex_.
   std::chrono::steady_clock::duration pacingIntervalLocked() const;
+
+  // Wait before the next paced admission: pacingIntervalLocked(), shortened by
+  // a random fraction of up to kProbeJitter while backing off, so limiters cut
+  // at the same moment do not probe in lockstep. Caller holds mutex_.
+  std::chrono::steady_clock::duration nextPacedDelayLocked() const;
+
+  // The fractional window at 'now'. While recovering, it doubles once per
+  // service horizon since limitChangedAt_, capped at one; otherwise it is
+  // limitLocked(). Caller holds mutex_.
+  double grownLimitLocked(std::chrono::steady_clock::time_point now) const;
+
+  // Commits recovery growth, so a cut or a schedule change starts from the
+  // grown window. Caller holds mutex_.
+  void commitGrowthLocked();
 
   // Changes the adaptive window and reschedules fractional pacing. Zero means
   // the configured ceiling governs. Caller holds mutex_.
@@ -407,6 +445,9 @@ class RPCRateLimiter : public std::enable_shared_from_this<RPCRateLimiter> {
   // Applies one decrease with mutex_ held.
   void applyOverloadLocked();
 
+  // Ends time-based recovery after a non-overload failure.
+  void onFailure();
+
   // Applies success recovery and learns the successful service horizon.
   void onSuccess(int64_t units, int64_t rttNs);
 
@@ -425,6 +466,8 @@ class RPCRateLimiter : public std::enable_shared_from_this<RPCRateLimiter> {
   // Supplies monotonic time. Injected together with timekeeper_ in tests so
   // pacing can advance without wall-clock sleeps.
   const std::function<std::chrono::steady_clock::time_point()> now_;
+  // Returns a value in [0, 1] for probe jitter.
+  const std::function<double()> random_;
 
   // Schedules paced waits. Null selects Folly's process-global timekeeper.
   folly::Timekeeper* const timekeeper_;
@@ -446,6 +489,15 @@ class RPCRateLimiter : public std::enable_shared_from_this<RPCRateLimiter> {
   // Adaptive congestion window in admission units per service horizon. Zero
   // means the hard ceiling governs.
   double limit_{0.0};
+
+  // When limit_ last changed by a cut, growth or configuration. A recovering
+  // fractional window grows from here.
+  std::chrono::steady_clock::time_point limitChangedAt_;
+
+  // True once a paced call has succeeded since the last cut: the backend is
+  // serving again, so the window grows with time instead of waiting for
+  // successes that pacing makes rare.
+  bool recovering_{false};
 
   // Lowest initialized adaptive limit. Zero means no adaptive low-water mark
   // has been recorded.

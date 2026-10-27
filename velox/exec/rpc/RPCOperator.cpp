@@ -201,18 +201,25 @@ void RPCOperator::initializeRateLimiter() {
   const auto sessionFloor = queryConfig.rpcRateLimiterMinLimit();
   const auto legacySessionLimit = queryConfig.rpcRateLimiterMaxLimit();
   const auto sessionHardLimit = queryConfig.rpcRateLimiterHardLimit();
+  const auto maxProbeIntervalMs =
+      queryConfig.rpcRateLimiterMaxProbeIntervalMs();
   VELOX_USER_CHECK_GE(
       sessionFloor, 0, "rpc.ratelimiter.min_limit must be non-negative");
   VELOX_USER_CHECK_GE(
       legacySessionLimit, 0, "rpc.ratelimiter.max_limit must be non-negative");
   VELOX_USER_CHECK_GE(
       sessionHardLimit, -1, "rpc.ratelimiter.hard_limit must be at least -1");
+  VELOX_USER_CHECK_GE(
+      maxProbeIntervalMs,
+      0,
+      "rpc.ratelimiter.max_probe_interval_ms must be non-negative");
 
   RPCRateLimiter::Config policy;
   policy.adaptive = queryConfig.rpcRateLimiterAdaptiveEnabled();
   policy.floor = sessionFloor > 0 ? static_cast<double>(sessionFloor)
                                   : function_->configuredAdaptiveFloor();
   policy.decreaseFactor = queryConfig.rpcRateLimiterDecreaseFactor();
+  policy.maxProbeInterval = std::chrono::milliseconds{maxProbeIntervalMs};
   const auto functionLimit = function_->configuredCeiling();
   if (sessionHardLimit < 0) {
     if (functionLimit > 0) {
@@ -901,6 +908,10 @@ void RPCOperator::recordCongestion(
     // PER_ROW mode, whose window is shrink-only by design.
     state_->onUnitCleanCompletions(
         static_cast<int64_t>(roundTripTimesNs.size()));
+  } else if (signal == AsyncRPCFunction::CongestionSignal::kNonOverloadError) {
+    // Neither window shrinks, but a recovering paced window must stop growing
+    // while the backend fails calls.
+    limiter_->onOutcome(RPCRateLimiter::Outcome::kFailure, 0, 0);
   }
 
   // The shared limiter needs a service-horizon sample for fractional pacing
