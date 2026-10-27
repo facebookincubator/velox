@@ -2080,6 +2080,99 @@ TEST_P(NimbleIndexProjectorTest, projectedTabletTimestampsDeserialize) {
   }
 }
 
+TEST_P(NimbleIndexProjectorTest, projectedTabletNullFlatMapsDeserialize) {
+  // A flat map's in-map streams hold one value per non-null map, so slicing a
+  // range of null maps leaves no keys to slice.
+  constexpr vector_size_t kRowsPerBatch = 100;
+  constexpr int kNumBatches = 3;
+  const auto rowType =
+      ROW({{"key", BIGINT()}, {"features", MAP(VARCHAR(), BIGINT())}});
+  // Rows 10 to 19 of every 30 hold null maps. The others hold key "a", and key
+  // "b" when even.
+  const auto isNullAt = [](int64_t key) {
+    return key % 30 >= 10 && key % 30 < 20;
+  };
+  const auto makeRows = [&](int64_t firstKey, vector_size_t numRows) {
+    std::vector<std::vector<std::pair<StringView, std::optional<int64_t>>>>
+        entries(numRows);
+    for (vector_size_t row = 0; row < numRows; ++row) {
+      const auto key = firstKey + row;
+      if (isNullAt(key)) {
+        continue;
+      }
+      entries[row].emplace_back("a", key);
+      if (key % 2 == 0) {
+        entries[row].emplace_back("b", key * 10);
+      }
+    }
+    auto features = vectorMaker_->mapVector<StringView, int64_t>(entries);
+    for (vector_size_t row = 0; row < numRows; ++row) {
+      if (isNullAt(firstKey + row)) {
+        features->setNull(row, true);
+      }
+    }
+    return vectorMaker_->rowVector(
+        {"key", "features"},
+        {vectorMaker_->flatVector<int64_t>(
+             numRows, [&](auto row) { return firstKey + row; }),
+         features});
+  };
+  std::vector<RowVectorPtr> batches;
+  batches.reserve(kNumBatches);
+  for (int batch = 0; batch < kNumBatches; ++batch) {
+    batches.push_back(makeRows(batch * kRowsPerBatch, kRowsPerBatch));
+  }
+  writeData(batches, {"key"}, {{"features", {}}}, /*stripeSize=*/2 << 10);
+  ASSERT_GT(openSinkTablet()->stripeCount(), 1);
+
+  std::vector<Subfield> subfields;
+  subfields.emplace_back("key");
+  subfields.emplace_back("features[\"a\"]");
+  subfields.emplace_back("features[\"b\"]");
+
+  // 1.0 packs whole stripes; 0.0 slices the part of each stripe a range reads.
+  for (const double maxOverfetchRowsRatio : {1.0, 0.0}) {
+    SCOPED_TRACE(
+        fmt::format("maxOverfetchRowsRatio {}", maxOverfetchRowsRatio));
+    NimbleIndexProjector::Options options;
+    options.maxOverfetchRowsRatio = maxOverfetchRowsRatio;
+    auto projector = createProjector(subfields);
+    // One null map, a range of null maps, a range with both, and the whole
+    // file.
+    for (const auto& [startKey, endKey] :
+         std::vector<std::pair<int64_t, int64_t>>{
+             {15, 16}, {130, 140}, {5, 37}, {0, kNumBatches * kRowsPerBatch}}) {
+      SCOPED_TRACE(fmt::format("keys [{}, {})", startKey, endKey));
+      NimbleIndexProjector::Request request;
+      request.keyBounds = {makeRangeLookup(rowType, {"key"}, startKey, endKey)};
+      const auto expected =
+          makeRows(startKey, static_cast<vector_size_t>(endKey - startKey));
+
+      const auto rows = projectRows(*projector, request, options);
+      ASSERT_EQ(rows.responses.size(), 1);
+      expectVectorRows(
+          rows.values->slice(rows.responses[0].offset, rows.responses[0].size),
+          expected);
+
+      const auto streams = projector->projectStreams(request, options);
+      ASSERT_EQ(streams.responses.size(), 1);
+      std::vector<folly::IOBuf> owned;
+      std::vector<std::string_view> serializedBatches;
+      owned.reserve(streams.responses[0].slices.size());
+      for (const auto& slice : streams.responses[0].slices) {
+        owned.push_back(coalesceChunkSlice(slice));
+        serializedBatches.emplace_back(
+            reinterpret_cast<const char*>(owned.back().data()),
+            owned.back().length());
+      }
+      expectVectorRows(
+          deserializeProjectedBatches(*projector, serializedBatches), expected);
+    }
+    EXPECT_EQ(
+        projector->stats().numSlicedStripes > 0, maxOverfetchRowsRatio == 0.0);
+  }
+}
+
 TEST_P(NimbleIndexProjectorTest, projectedTabletNullBarrierFlag) {
   constexpr vector_size_t kRows = 6;
   auto nestedValueType = ROW({{"score", INTEGER()}});
