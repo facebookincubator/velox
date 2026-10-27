@@ -1763,7 +1763,9 @@ TEST_P(IndexLookupJoinTest, betweenJoinCondition) {
         planWithMatchColumn,
         probeScanNodeId_,
         probeFiles,
-        GetParam().needsIndexSplit);
+        GetParam().needsIndexSplit,
+        /*serialExecution=*/false,
+        /*maxDrivers=*/1);
   }
 }
 
@@ -2110,7 +2112,9 @@ TEST_P(IndexLookupJoinTest, inJoinCondition) {
         planWithMatchColumn,
         probeScanNodeId_,
         probeFiles,
-        GetParam().needsIndexSplit);
+        GetParam().needsIndexSplit,
+        /*serialExecution=*/false,
+        /*maxDrivers=*/1);
   }
 }
 
@@ -2273,7 +2277,9 @@ TEST_P(IndexLookupJoinTest, prefixKeysEqualJoin) {
         planWithMatchColumn,
         probeScanNodeId_,
         probeFiles,
-        GetParam().needsIndexSplit);
+        GetParam().needsIndexSplit,
+        /*serialExecution=*/false,
+        /*maxDrivers=*/1);
   }
 }
 
@@ -2419,7 +2425,9 @@ TEST_P(IndexLookupJoinTest, prefixKeysbetweenJoinCondition) {
         planWithMatchColumn,
         probeScanNodeId_,
         probeFiles,
-        GetParam().needsIndexSplit);
+        GetParam().needsIndexSplit,
+        /*serialExecution=*/false,
+        /*maxDrivers=*/1);
   }
 }
 
@@ -2566,7 +2574,9 @@ TEST_P(IndexLookupJoinTest, prefixInJoinCondition) {
         planWithMatchColumn,
         probeScanNodeId_,
         probeFiles,
-        GetParam().needsIndexSplit);
+        GetParam().needsIndexSplit,
+        /*serialExecution=*/false,
+        /*maxDrivers=*/1);
   }
 }
 
@@ -3020,7 +3030,9 @@ TEST_P(IndexLookupJoinTest, outputBatchSizeWithLeftJoin) {
         planWithMatchColumn,
         probeScanNodeId_,
         probeFiles,
-        GetParam().needsIndexSplit);
+        GetParam().needsIndexSplit,
+        /*serialExecution=*/false,
+        /*maxDrivers=*/1);
   }
 }
 
