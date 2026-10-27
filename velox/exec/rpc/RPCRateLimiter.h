@@ -79,8 +79,9 @@ class RPCRateLimiter : public std::enable_shared_from_this<RPCRateLimiter> {
     int64_t ceiling{0};
 
     /// Lower bound on the adaptive congestion window, in admission units per
-    /// successful service horizon. A positive rpc.ratelimiter.min_limit
-    /// overrides the function-provided value.
+    /// successful service horizon. Resolved from the function's floor and
+    /// rpc.ratelimiter.min_limit; rpc.ratelimiter.hard_limit selects which
+    /// wins.
     double floor{0.01};
 
     /// Multiplicative-decrease factor applied on overload, in (0, 1). Maps to
