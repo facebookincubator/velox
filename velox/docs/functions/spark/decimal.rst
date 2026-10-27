@@ -14,7 +14,7 @@ handles both ANSI and non-ANSI behavior, controlled by an ``EvalMode`` flag. In 
 variants are registered as separate functions (e.g., ``checked_add``, ``checked_subtract``)
 to support the TRY evaluation mode (e.g., ``try(checked_add(...))`` returns NULL on overflow).
 
-For addition, subtraction, multiplication, division, and decimal ``pmod``, regular
+For addition, subtraction, multiplication, division, and ``pmod``, regular
 functions return NULL on overflow, while checked functions throw an error.
 
 For example, addition of decimal(38, 7) and decimal(10, 0) requires precision of 39 and scale of 7.
