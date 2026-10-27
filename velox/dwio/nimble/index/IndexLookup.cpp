@@ -44,6 +44,13 @@ void IndexLookup::Options::validate() const {
         static_cast<const void*>(fileHandle->file.get()),
         "file and fileHandle->file must point to the same file");
   }
+  if (cache != nullptr) {
+    NIMBLE_USER_CHECK_NULL(
+        blockCache, "cache cannot be combined with blockCache");
+    NIMBLE_USER_CHECK(
+        !blockMetadataInput,
+        "cache cannot be combined with blockMetadataInput");
+  }
   NIMBLE_USER_CHECK(
       !preloadIndex || pinIndex,
       "preloadIndex requires pinIndex=true to retain preloaded chunks");
@@ -60,6 +67,9 @@ std::shared_ptr<MetadataInput> createIndexMetadataInput(
       .fileHandle = options.fileHandle,
       .cache = options.cache,
       .maxCacheEntrySize = options.maxCacheEntrySize,
+      .blockCache = options.blockCache,
+      .blockCacheFileId = options.blockCacheFileId,
+      .blockMetadataInput = options.blockMetadataInput,
   };
   return MetadataInput::create(options.file.get(), metadataOptions);
 }

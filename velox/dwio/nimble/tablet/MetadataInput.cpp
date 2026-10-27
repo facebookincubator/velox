@@ -22,6 +22,7 @@
 
 #include "folly/Range.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
+#include "velox/dwio/nimble/tablet/BlockMetadataInput.h"
 #include "velox/dwio/nimble/tablet/Compression.h"
 
 #include "folly/executors/QueuedImmediateExecutor.h"
@@ -39,6 +40,15 @@ std::unique_ptr<MetadataInput> MetadataInput::create(
     velox::ReadFile* file,
     const Options& options) {
   NIMBLE_CHECK_NOT_NULL(file);
+  if (options.blockCache != nullptr || options.blockMetadataInput) {
+    NIMBLE_CHECK_NULL(
+        options.cache,
+        "Block metadata input does not use an AsyncDataCache; unset cache");
+    if (options.blockCache != nullptr) {
+      return std::make_unique<CachedBlockMetadataInput>(file, options);
+    }
+    return std::make_unique<DirectBlockMetadataInput>(file, options);
+  }
   if (options.fileHandle != nullptr) {
     NIMBLE_CHECK_NOT_NULL(
         options.cache, "cache required when fileHandle is set");
@@ -48,26 +58,23 @@ std::unique_ptr<MetadataInput> MetadataInput::create(
   return std::unique_ptr<MetadataInput>(new DirectMetadataInput(file, options));
 }
 
-MetadataInput::MetadataInput(velox::ReadFile* file, const Options& options)
-    : file_{file},
-      pool_{options.pool},
-      maxCoalesceDistance_{options.maxCoalesceDistance},
-      maxCoalesceBytes_{options.maxCoalesceBytes},
-      executor_{options.executor},
-      ioStats_{options.ioStats} {
-  NIMBLE_CHECK_NOT_NULL(pool_);
+MetadataInput::MetadataInput(
+    velox::ReadFile* file,
+    std::shared_ptr<velox::io::IoStatistics> ioStats)
+    : file_{file}, ioStats_{std::move(ioStats)} {
+  NIMBLE_CHECK_NOT_NULL(file_);
   NIMBLE_CHECK_NOT_NULL(ioStats_.get());
 }
 
-std::vector<std::shared_ptr<MetadataBuffer>> MetadataInput::extractResults(
-    std::vector<LoadedSection>&& sections) {
-  std::vector<std::shared_ptr<MetadataBuffer>> results;
-  results.reserve(sections.size());
-  for (auto& loaded : sections) {
-    NIMBLE_CHECK_NOT_NULL(loaded.buffer);
-    results.emplace_back(std::move(loaded.buffer));
-  }
-  return results;
+std::unique_ptr<MetadataBuffer> MetadataInput::findCachedMetadata(
+    uint64_t /*offset*/) {
+  NIMBLE_UNREACHABLE("findCachedMetadata requires a cached MetadataInput");
+}
+
+void MetadataInput::cacheMetadata(
+    uint64_t /*cacheOffset*/,
+    std::span<const std::string_view> /*ranges*/) {
+  NIMBLE_UNREACHABLE("cacheMetadata requires a cached MetadataInput");
 }
 
 void MetadataInput::readRaw(uint64_t offset, uint64_t size, void* dest) {
@@ -87,18 +94,42 @@ void MetadataInput::readRaw(uint64_t offset, uint64_t size, void* dest) {
   ioStats_->incRawBytesRead(size);
 }
 
-std::unique_ptr<MetadataBuffer> MetadataInput::findCachedMetadata(
-    uint64_t /*offset*/) {
-  NIMBLE_UNREACHABLE("findCachedMetadata requires CachedMetadataInput");
+std::optional<uint32_t> MetadataInput::resolveUncompressedSize(
+    const MetadataSection& section) {
+  if (section.uncompressedSize().has_value()) {
+    return section.uncompressedSize();
+  }
+  if (section.compressionType() == CompressionType::Uncompressed) {
+    return section.size();
+  }
+  return std::nullopt;
 }
 
-void MetadataInput::cacheMetadata(
-    uint64_t /*cacheOffset*/,
-    std::span<const std::string_view> /*ranges*/) {
-  NIMBLE_UNREACHABLE("cacheMetadata requires CachedMetadataInput");
+// --- BufferedMetadataInput ---
+
+BufferedMetadataInput::BufferedMetadataInput(
+    velox::ReadFile* file,
+    const Options& options)
+    : MetadataInput(file, options.ioStats),
+      pool_{options.pool},
+      maxCoalesceDistance_{options.maxCoalesceDistance},
+      maxCoalesceBytes_{options.maxCoalesceBytes},
+      executor_{options.executor} {
+  NIMBLE_CHECK_NOT_NULL(pool_);
 }
 
-std::shared_ptr<MetadataBuffer> MetadataInput::decompressAndStore(
+std::vector<std::shared_ptr<MetadataBuffer>>
+BufferedMetadataInput::extractResults(std::vector<LoadedSection>&& sections) {
+  std::vector<std::shared_ptr<MetadataBuffer>> results;
+  results.reserve(sections.size());
+  for (auto& loaded : sections) {
+    NIMBLE_CHECK_NOT_NULL(loaded.buffer);
+    results.emplace_back(std::move(loaded.buffer));
+  }
+  return results;
+}
+
+std::shared_ptr<MetadataBuffer> BufferedMetadataInput::decompressAndStore(
     const MetadataSection& section,
     velox::BufferPtr&& buffer) {
   NIMBLE_CHECK_EQ(
@@ -114,18 +145,8 @@ std::shared_ptr<MetadataBuffer> MetadataInput::decompressAndStore(
   return store(section, ZstdCompression::uncompress(data, pool_));
 }
 
-std::optional<uint32_t> MetadataInput::resolveUncompressedSize(
-    const MetadataSection& section) {
-  if (section.uncompressedSize().has_value()) {
-    return section.uncompressedSize();
-  }
-  if (section.compressionType() == CompressionType::Uncompressed) {
-    return section.size();
-  }
-  return std::nullopt;
-}
-
-std::vector<MetadataInput::IoGroup> MetadataInput::computeIoGroups(
+std::vector<BufferedMetadataInput::IoGroup>
+BufferedMetadataInput::computeIoGroups(
     const std::vector<LoadedSection>& sections,
     const std::vector<uint32_t>& loadIndices,
     const std::vector<folly::Range<char*>>& readRanges) {
@@ -181,7 +202,7 @@ std::vector<MetadataInput::IoGroup> MetadataInput::computeIoGroups(
       "Metadata input must not contain duplicate regions");
   recordCoalescedIoStats(ioStats);
   velox::common::testutil::TestValue::adjust(
-      "facebook::nimble::MetadataInput::computeIoGroups",
+      "facebook::nimble::BufferedMetadataInput::computeIoGroups",
       const_cast<velox::CoalesceIoStats*>(&ioStats));
 
   std::vector<IoGroup> ioGroups;
@@ -206,7 +227,7 @@ std::vector<MetadataInput::IoGroup> MetadataInput::computeIoGroups(
   return ioGroups;
 }
 
-void MetadataInput::executeIoGroups(std::vector<IoGroup>& ioGroups) {
+void BufferedMetadataInput::executeIoGroups(std::vector<IoGroup>& ioGroups) {
   // Shared with the executor tasks below, which can outlive this call.
   std::vector<std::shared_ptr<velox::AsyncSource<folly::Unit>>> asyncIos;
   asyncIos.reserve(ioGroups.size());
@@ -253,7 +274,7 @@ void MetadataInput::executeIoGroups(std::vector<IoGroup>& ioGroups) {
   }
 }
 
-void MetadataInput::loadFromFile(
+void BufferedMetadataInput::loadFromFile(
     const std::vector<LoadedSection>& sections,
     const std::vector<uint32_t>& loadIndices,
     const std::vector<folly::Range<char*>>& readRanges) {
@@ -282,7 +303,7 @@ void MetadataInput::loadFromFile(
   executeIoGroups(ioGroups);
 }
 
-void MetadataInput::loadFromFile(
+void BufferedMetadataInput::loadFromFile(
     const std::vector<LoadedSection>& sections,
     const std::vector<folly::Range<char*>>& readRanges) {
   std::vector<uint32_t> loadIndices(sections.size());
@@ -290,7 +311,7 @@ void MetadataInput::loadFromFile(
   loadFromFile(sections, loadIndices, readRanges);
 }
 
-void MetadataInput::recordCoalescedIoStats(
+void BufferedMetadataInput::recordCoalescedIoStats(
     const velox::CoalesceIoStats& ioStats) {
   ioStats_->read().increment(ioStats.payloadBytes + ioStats.extraBytes);
   ioStats_->incRawBytesRead(ioStats.payloadBytes);
@@ -302,7 +323,7 @@ void MetadataInput::recordCoalescedIoStats(
 DirectMetadataInput::DirectMetadataInput(
     velox::ReadFile* file,
     const Options& options)
-    : MetadataInput(file, options) {}
+    : BufferedMetadataInput(file, options) {}
 
 void DirectMetadataInput::prepareBuffers(
     const std::vector<LoadedSection>& sections,
@@ -349,7 +370,7 @@ CachedMetadataInput::CachedMetadataInput(
     velox::StringIdLease fileId,
     velox::cache::AsyncDataCache* cache,
     const Options& options)
-    : MetadataInput(file, options),
+    : BufferedMetadataInput(file, options),
       cache_{cache},
       fileId_{std::move(fileId)},
       maxCacheEntrySize_{options.maxCacheEntrySize} {

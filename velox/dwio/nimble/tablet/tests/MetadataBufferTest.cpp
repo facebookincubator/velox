@@ -426,6 +426,31 @@ TEST_F(MetadataBufferCacheTest, cloneCachePin) {
   EXPECT_EQ(original.content(), cloned.content());
 }
 
+TEST_F(MetadataBufferTest, pinnedBytesOwnerOutlivesCopies) {
+  auto owner = std::make_shared<std::string>(kTestData);
+  const std::weak_ptr<std::string> weakOwner = owner;
+  std::unique_ptr<nimble::MetadataBuffer> sliced;
+  {
+    nimble::MetadataBuffer original{nimble::PinnedBytes{owner, *owner}};
+    owner.reset();
+    auto cloned = original.clone();
+    sliced = cloned.slice(7, 14);
+    EXPECT_EQ(original.content(), kTestData);
+    EXPECT_EQ(cloned.content(), kTestData);
+  }
+
+  EXPECT_FALSE(weakOwner.expired());
+  EXPECT_EQ(sliced->content(), "MetadataBuffer");
+  sliced.reset();
+  EXPECT_TRUE(weakOwner.expired());
+}
+
+TEST_F(MetadataBufferTest, pinnedBytesRequireOwner) {
+  NIMBLE_ASSERT_THROW(
+      nimble::MetadataBuffer(nimble::PinnedBytes{nullptr, kTestData}),
+      "PinnedBytes must have an owner");
+}
+
 TEST_F(MetadataBufferTest, sliceBufferPtr) {
   struct SliceOp {
     uint64_t offset;
