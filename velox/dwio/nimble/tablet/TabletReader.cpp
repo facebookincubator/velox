@@ -984,7 +984,6 @@ TabletReader::StripeGroupMetadata TabletReader::cacheStripeGroupMetadata(
         stripeGroupIndex,
         [&metadata](uint32_t) { return std::move(metadata.chunkStats); });
   }
-  checkStreamChecksumsPresent(*cached.stripeGroup, stripeGroupIndex);
   return cached;
 }
 
@@ -1002,13 +1001,6 @@ uint32_t TabletReader::streamSize(
   // Mirrors streamOffset: StripeGroup::streamSize already returns 0 for an
   // out-of-range streamId, so delegate without a redundant guard here.
   return stripe.stripeGroup()->streamSize(stripe.stripeId(), streamId);
-}
-
-uint32_t TabletReader::streamChecksum(
-    const StripeIdentifier& stripe,
-    uint32_t streamId) const {
-  NIMBLE_CHECK_LT(stripe.stripeId(), stripeCount_, "Stripe is out of range.");
-  return stripe.stripeGroup()->streamChecksum(stripe.stripeId(), streamId);
 }
 
 void TabletReader::streamLocations(
@@ -1048,11 +1040,9 @@ StripeIdentifier TabletReader::stripeIdentifier(uint32_t stripeIndex) const {
   const bool allCached =
       stripeGroupCached && (!hasChunkStats || chunkStatsCached);
   if (allCached) {
-    auto cachedStripeGroup = stripeGroup(stripeGroupIndex);
-    checkStreamChecksumsPresent(*cachedStripeGroup, stripeGroupIndex);
     return StripeIdentifier{
         stripeIndex,
-        std::move(cachedStripeGroup),
+        stripeGroup(stripeGroupIndex),
         hasChunkStats ? chunkStats(stripeGroupIndex) : nullptr};
   }
 
@@ -1097,7 +1087,6 @@ std::vector<StripeIdentifier> TabletReader::stripeIdentifiers(
       if (needsChunkStats) {
         groups[i].chunkStats = chunkStats(groupIndex);
       }
-      checkStreamChecksumsPresent(*groups[i].stripeGroup, groupIndex);
     } else {
       missingGroups.push_back(groupIndex);
       missingSlots.push_back(i);
@@ -1119,25 +1108,6 @@ std::vector<StripeIdentifier> TabletReader::stripeIdentifiers(
         stripeOffset + i, metadata.stripeGroup, metadata.chunkStats);
   }
   return identifiers;
-}
-
-void TabletReader::checkStreamChecksumsPresent(
-    const StripeGroup& stripeGroup,
-    uint32_t stripeGroupIndex) const {
-  if (!properties_.hasStreamChecksums()) {
-    // The file claims no checksum arrays, so there is nothing to enforce. A
-    // group that carries one anyway is inert: readers look for the arrays only
-    // when the properties claim them.
-    return;
-  }
-  if (stripeGroup.streamCount() == 0) {
-    // No streams, so no checksum array. Not a contradiction.
-    return;
-  }
-  NIMBLE_CHECK_FILE(
-      stripeGroup.hasStreamChecksums(),
-      "File properties claim stripe-group checksum arrays, but stripe group {} carries none.",
-      stripeGroupIndex);
 }
 
 std::vector<std::unique_ptr<StreamLoader>> TabletReader::load(

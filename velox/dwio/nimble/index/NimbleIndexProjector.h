@@ -501,19 +501,17 @@ class NimbleIndexProjector {
   // Builds serialized responses from the loaded stripe streams.
   SerializedResult processStripeStreams();
 
-  // Checks one loaded stream against the checksum the file records for it,
-  // throwing when they differ. With stream trailers, `data` ends with the
-  // stream's trailer. Otherwise the checksum comes from the stream's stripe
-  // group, at the stream's position in ctx_.expectedStreamChecksums, which is
-  // `enqueueIndex`: the index DataInput returned from enqueue().
+  // Checks one loaded stream against the checksum in its stream trailer, which
+  // `data` ends with, throwing when they differ. `enqueueIndex`, the index
+  // DataInput returned from enqueue(), only locates the stream for the error.
   void verifyStreamChecksum(uint32_t enqueueIndex, std::string_view data) const;
 
   // Validates the projected row schema.
   void validateProjection() const;
 
-  // Builds streamChecksum_, and for files with stream trailers the trailer
-  // members, when `verifyStreamChecksums` is set and the file records
-  // per-stream checksums.
+  // Builds streamChecksum_ and the stream trailer members when
+  // `verifyStreamChecksums` is set and the file's stream trailers carry a
+  // checksum.
   void initStreamChecksum(bool verifyStreamChecksums);
 
   // Resolves the request's stripes and loads their projected streams.
@@ -624,14 +622,15 @@ class NimbleIndexProjector {
   const std::unique_ptr<serde::StreamSlicer> streamSlicer_;
 
   std::unique_ptr<DataInput> dataInput_;
-  // Verifies a stream read from storage against the checksum the file records
-  // for it. Built only when ReaderOptions::verifyStreamChecksums() is set and
-  // the file records per-stream checksums, so null means this projector does
-  // not verify. Stateful, so it relies on this class being single-threaded.
+  // Verifies a stream read from storage against the checksum in its stream
+  // trailer. Built only when ReaderOptions::verifyStreamChecksums() is set and
+  // the file's stream trailers carry a checksum, so null means this projector
+  // does not verify. Stateful, so it relies on this class being
+  // single-threaded.
   std::unique_ptr<Checksum> streamChecksum_;
-  // When verifying a file whose checksums are in stream trailers: the stream
-  // trailer's size, read with every stream, and the checksum's offset within
-  // it. Zero otherwise, so unverified reads load exactly the stream's bytes.
+  // When verifying: the stream trailer's size, read with every stream, and the
+  // checksum's offset within it. Zero otherwise, so unverified reads load
+  // exactly the stream's bytes.
   uint32_t streamTrailerSize_{0};
   uint32_t streamTrailerChecksumOffset_{0};
   // Whether the stats timings read the CPU and wall clocks.
@@ -673,11 +672,6 @@ class NimbleIndexProjector {
     // [stripeOffset * numProjectedStreams + streamIndex]. nullopt for absent
     // streams. Populated by loadStripeStreams().
     std::vector<std::optional<uint32_t>> dataInputIndices;
-    // Expected checksum of each enqueued stream, indexed by the enqueue index
-    // DataInput returns. Appended in enqueue order by loadStripes(). Empty
-    // when checksum verification is off or reads checksums from stream
-    // trailers.
-    std::vector<uint32_t> expectedStreamChecksums;
     // Handle keeping loaded data alive for zero-copy BufferRefs.
     DataInput::Handle dataHandle;
     // Serialized stripe bodies and metadata, one per planned stripe. Populated

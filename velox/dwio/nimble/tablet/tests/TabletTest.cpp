@@ -30,7 +30,6 @@
 #include "folly/Random.h"
 #include "folly/executors/CPUThreadPoolExecutor.h"
 #include "velox/common/file/File.h"
-#include "velox/dwio/common/tests/utils/DataFiles.h"
 #include "velox/dwio/nimble/common/Buffer.h"
 #include "velox/dwio/nimble/common/Checksum.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
@@ -1859,16 +1858,6 @@ std::string writeTabletWithStreamChecksums(
   return file;
 }
 
-// Reads a legacy file, with stripe-group checksum arrays, that the writer
-// produced before stream trailers. data/README.md records how each was made.
-std::string readLegacyFile(const std::string& name) {
-  const auto path = velox::test::getDataFilePath(
-      "velox/dwio/nimble/tablet/tests", "data/" + name);
-  std::string data;
-  NIMBLE_CHECK(folly::readFile(path.c_str(), data), "Cannot read {}", path);
-  return data;
-}
-
 uint32_t checksum32(std::string_view data) {
   return nimble::ChecksumFactory::create(nimble::ChecksumType::XXH3_64)
       ->computeChecksum32(data);
@@ -1914,7 +1903,7 @@ std::string_view onlyStripeGroup(
 
 // The checksum a stream's trailer holds must equal a hash of the stream's bytes
 // as the reader reassembles them, although the writer accumulates it across
-// chunk buffers. The stripe groups record no checksums.
+// chunk buffers.
 TEST_P(TabletTest, streamChecksumTrailersFollowStreams) {
   for (const auto layout :
        {nimble::StripeGroup::EncodingLayout::kRaw,
@@ -1934,7 +1923,6 @@ TEST_P(TabletTest, streamChecksumTrailersFollowStreams) {
     for (uint32_t stripeIndex = 0; stripeIndex < tablet->stripeCount();
          ++stripeIndex) {
       const auto stripe = tablet->stripeIdentifier(stripeIndex);
-      EXPECT_FALSE(stripe.stripeGroup()->hasStreamChecksums());
       const auto streamCount = tablet->streamCount(stripe);
       std::vector<nimble::TabletReader::StreamMetadata> locations(streamCount);
       tablet->streamLocations(stripe, locations);
@@ -1943,7 +1931,6 @@ TEST_P(TabletTest, streamChecksumTrailersFollowStreams) {
       for (uint32_t streamId = 0; streamId < streamCount; ++streamId) {
         SCOPED_TRACE(
             fmt::format("stripe={} streamId={}", stripeIndex, streamId));
-        EXPECT_EQ(locations[streamId].checksum, 0);
         if (locations[streamId].size == 0) {
           continue;
         }
@@ -2019,45 +2006,23 @@ TEST_P(TabletTest, streamChecksumTrailersLeaveStreamsUnchanged) {
   }
 }
 
-// Checksums live in the trailers alone: a stripe group of a file with stream
-// checksums carries no checksum field. In the raw layout, whose arrays have
-// fixed widths, it is exactly as large as one without.
+// Checksums live in the trailers alone, so in the raw layout, whose arrays
+// have fixed widths, a stripe group of a file with stream checksums is exactly
+// as large as one without. Its offsets differ only by the trailers.
 TEST_P(TabletTest, streamChecksumTrailersAddNothingToStripeGroups) {
-  for (const auto layout :
-       {nimble::StripeGroup::EncodingLayout::kRaw,
-        nimble::StripeGroup::EncodingLayout::kStreamMajor}) {
-    SCOPED_TRACE(fmt::format("layout={}", nimble::toString(layout)));
-    const auto withTrailers = writeTabletWithStreamChecksums(
-        *pool_,
-        layout,
-        /*streamChecksumsEnabled=*/true,
-        /*streamDeduplicationEnabled=*/false);
-    const auto withoutTrailers = writeTabletWithStreamChecksums(
-        *pool_,
-        layout,
-        /*streamChecksumsEnabled=*/false,
-        /*streamDeduplicationEnabled=*/false);
-    const auto stripeGroup = onlyStripeGroup(withTrailers, pool_.get());
-    const auto expectedStripeGroup =
-        onlyStripeGroup(withoutTrailers, pool_.get());
-
-    if (layout == nimble::StripeGroup::EncodingLayout::kRaw) {
-      EXPECT_EQ(
-          flatbuffers::GetRoot<nimble::serialization::StripeGroup>(
-              stripeGroup.data())
-              ->stream_checksums(),
-          nullptr);
-
-      // Offsets differ by the trailers, but raw arrays have fixed widths.
-      EXPECT_EQ(stripeGroup.size(), expectedStripeGroup.size());
-    } else {
-      EXPECT_EQ(
-          flatbuffers::GetRoot<nimble::serialization::StreamMajorStripeGroup>(
-              stripeGroup.data())
-              ->stream_checksums(),
-          nullptr);
-    }
-  }
+  const auto withTrailers = writeTabletWithStreamChecksums(
+      *pool_,
+      nimble::StripeGroup::EncodingLayout::kRaw,
+      /*streamChecksumsEnabled=*/true,
+      /*streamDeduplicationEnabled=*/false);
+  const auto withoutTrailers = writeTabletWithStreamChecksums(
+      *pool_,
+      nimble::StripeGroup::EncodingLayout::kRaw,
+      /*streamChecksumsEnabled=*/false,
+      /*streamDeduplicationEnabled=*/false);
+  EXPECT_EQ(
+      onlyStripeGroup(withTrailers, pool_.get()).size(),
+      onlyStripeGroup(withoutTrailers, pool_.get()).size());
 }
 
 // A stream with no bytes reads back as absent, so it gets no trailer, and
@@ -2239,10 +2204,8 @@ TEST_P(TabletTest, wholeFileChecksumCoversStreamTrailers) {
       nimble::TabletReader::calculateChecksum(*pool_, readFile.get()));
 }
 
-// Without the write option there are no checksums anywhere: every checksum
-// reads as 0, hasStreamChecksums() reports false and the stripes hold no
-// trailers. A reader must gate on the properties, never on a value being
-// non-zero.
+// Without the write option the stripes hold no trailers: each is exactly the
+// streams it holds.
 TEST_P(TabletTest, streamChecksumsAbsentWhenDisabled) {
   for (const auto layout :
        {nimble::StripeGroup::EncodingLayout::kRaw,
@@ -2257,170 +2220,22 @@ TEST_P(TabletTest, streamChecksumsAbsentWhenDisabled) {
         std::make_shared<nimble::testing::InMemoryTrackableReadFile>(
             file, false);
     auto tablet = createTabletReader(readFile, nimble::TabletReader::Options{});
-
-    const auto stripe = tablet->stripeIdentifier(0);
-    EXPECT_FALSE(stripe.stripeGroup()->hasStreamChecksums());
-    const auto streamCount = tablet->streamCount(stripe);
-    std::vector<nimble::TabletReader::StreamMetadata> locations(streamCount);
-    tablet->streamLocations(stripe, locations);
-    uint64_t streamBytes{0};
-    for (uint32_t streamId = 0; streamId < streamCount; ++streamId) {
-      EXPECT_EQ(locations[streamId].checksum, 0);
-      EXPECT_EQ(tablet->streamChecksum(stripe, streamId), 0);
-      streamBytes += locations[streamId].size;
-    }
-    EXPECT_EQ(tablet->stripeSize(0), streamBytes);
-  }
-}
-
-// Legacy files keep each stream's checksum in stripe-group arrays. A current
-// reader must still read them, in both layouts, through the point accessor and
-// both streamLocations() overloads.
-TEST_P(TabletTest, readsLegacyStripeGroupChecksums) {
-  for (const auto& name :
-       {"legacy_stripe_group_checksums_raw.nimble",
-        "legacy_stripe_group_checksums_stream_major.nimble"}) {
-    SCOPED_TRACE(name);
-    const auto file = readLegacyFile(name);
-    auto tablet = createTabletReader(
-        std::make_shared<nimble::testing::InMemoryTrackableReadFile>(
-            file, false),
-        nimble::TabletReader::Options{});
-    ASSERT_TRUE(tablet->properties().hasStreamChecksums());
-    ASSERT_TRUE(tablet->properties().streamTrailerLayout().empty());
     ASSERT_EQ(tablet->stripeCount(), 2);
 
-    uint32_t verified{0};
     for (uint32_t stripeIndex = 0; stripeIndex < tablet->stripeCount();
          ++stripeIndex) {
+      SCOPED_TRACE(fmt::format("stripe={}", stripeIndex));
       const auto stripe = tablet->stripeIdentifier(stripeIndex);
-      EXPECT_TRUE(stripe.stripeGroup()->hasStreamChecksums());
-      const auto streamCount = tablet->streamCount(stripe);
-      std::vector<nimble::TabletReader::StreamMetadata> all(streamCount);
-      tablet->streamLocations(stripe, all);
-
-      // Reverse order, plus one id past the end, for the selected overload.
-      std::vector<uint32_t> streamIds;
-      for (uint32_t i = streamCount; i > 0; --i) {
-        streamIds.push_back(i - 1);
-      }
-      streamIds.push_back(streamCount);
-      std::vector<nimble::TabletReader::StreamMetadata> selected(
-          streamIds.size());
-      tablet->streamLocations(stripe, streamIds, selected);
-      EXPECT_EQ(selected.back().size, 0);
-      EXPECT_EQ(selected.back().checksum, 0);
-
-      auto loaded = loadAllStreams(*tablet, stripe);
-      for (uint32_t streamId = 0; streamId < streamCount; ++streamId) {
-        SCOPED_TRACE(
-            fmt::format("stripe={} streamId={}", stripeIndex, streamId));
-        EXPECT_EQ(
-            selected[streamCount - 1 - streamId].checksum,
-            all[streamId].checksum);
-        EXPECT_EQ(
-            tablet->streamChecksum(stripe, streamId), all[streamId].checksum);
-        if (all[streamId].size == 0) {
-          EXPECT_EQ(all[streamId].checksum, 0);
-          continue;
-        }
-        ASSERT_NE(loaded[streamId], nullptr);
-        EXPECT_EQ(
-            all[streamId].checksum, checksum32(loaded[streamId]->getStream()));
-        ++verified;
-      }
-      EXPECT_ANY_THROW(tablet->streamChecksum(stripe, streamCount));
-    }
-    EXPECT_EQ(verified, 5);
-  }
-}
-
-// Stripe groups after the first start at a non-zero stripe, which the legacy
-// arrays index differently in each layout. Reading a stripe also checks that
-// its group carries the arrays the properties claim. The projector reads
-// through the selected-streams overload, so both overloads are checked.
-TEST_P(TabletTest, readsLegacyStripeGroupChecksumsAcrossStripeGroups) {
-  constexpr uint32_t kStripeCount = 12;
-  constexpr uint32_t kStreamCount = 3;
-  for (const auto& name :
-       {"legacy_stripe_group_checksums_multi_group_raw.nimble",
-        "legacy_stripe_group_checksums_multi_group_stream_major.nimble"}) {
-    SCOPED_TRACE(name);
-    const auto file = readLegacyFile(name);
-    auto tablet = createTabletReader(
-        std::make_shared<nimble::testing::InMemoryTrackableReadFile>(
-            file, false),
-        nimble::TabletReader::Options{});
-    ASSERT_TRUE(tablet->properties().hasStreamChecksums());
-    ASSERT_EQ(tablet->stripeCount(), kStripeCount);
-
-    uint32_t verified{0};
-    uint32_t lastStripeGroup{0};
-    for (uint32_t stripeIndex = 0; stripeIndex < kStripeCount; ++stripeIndex) {
-      const auto stripe = tablet->stripeIdentifier(stripeIndex);
-      EXPECT_TRUE(stripe.stripeGroup()->hasStreamChecksums());
-      lastStripeGroup = stripe.stripeGroup()->index();
-      const auto streamCount = tablet->streamCount(stripe);
-      ASSERT_EQ(streamCount, kStreamCount);
-      std::vector<nimble::TabletReader::StreamMetadata> locations(streamCount);
+      std::vector<nimble::TabletReader::StreamMetadata> locations(
+          tablet->streamCount(stripe));
       tablet->streamLocations(stripe, locations);
-      const std::vector<uint32_t> selectedIds{2, 0};
-      std::vector<nimble::TabletReader::StreamMetadata> selected(
-          selectedIds.size());
-      tablet->streamLocations(stripe, selectedIds, selected);
-      auto loaded = loadAllStreams(*tablet, stripe);
-      for (uint32_t streamId = 0; streamId < streamCount; ++streamId) {
-        SCOPED_TRACE(
-            fmt::format("stripe={} streamId={}", stripeIndex, streamId));
-        ASSERT_NE(loaded[streamId], nullptr);
-        EXPECT_EQ(
-            locations[streamId].checksum,
-            checksum32(loaded[streamId]->getStream()));
-        ++verified;
+      uint64_t streamBytes{0};
+      for (const auto& location : locations) {
+        streamBytes += location.size;
       }
-      EXPECT_EQ(selected[0].checksum, locations[2].checksum);
-      EXPECT_EQ(selected[1].checksum, locations[0].checksum);
+      EXPECT_EQ(tablet->stripeSize(stripeIndex), streamBytes);
     }
-    EXPECT_GT(lastStripeGroup, 0);
-    EXPECT_EQ(verified, kStripeCount * kStreamCount);
   }
-}
-
-// A file whose properties claim stripe-group checksum arrays while a stripe
-// group has none is malformed, not corrupt storage: every checksum in that
-// group reads as 0, so verification would blame the bytes. Reading a stripe
-// must reject it and say so. Reproduced by writing the properties section by
-// hand over a file the writer produced without checksums, which is what a
-// stripe-group rewriter that copies optional sections verbatim yields.
-TEST_P(TabletTest, rejectsPropertiesClaimingAbsentStreamChecksums) {
-  std::string file;
-  velox::InMemoryWriteFile writeFile(&file);
-  auto tabletWriter = nimble::TabletWriter::create(
-      &writeFile, *pool_, {.streamChecksumsEnabled = false});
-
-  nimble::Buffer buffer{*pool_};
-  std::vector<nimble::Stream> streams;
-  streams.push_back(
-      nimble::index::test::createStream(
-          buffer, {.offset = 0, .chunks = {{.rowCount = 10, .size = 16}}}));
-  tabletWriter->writeStripe(10, std::move(streams));
-  tabletWriter->writeOptionalSection(
-      std::string(nimble::kPropertiesSection),
-      nimble::FileProperties{/*compactRowCountEncoding=*/false,
-                             /*clusterIndexKeyColumnStorageOmitted=*/false,
-                             /*clusterIndexKeyColumnsWithOmittedStorage=*/{},
-                             /*hasStreamChecksums=*/true}
-          .serialize());
-  tabletWriter->close();
-  writeFile.close();
-
-  auto readFile =
-      std::make_shared<nimble::testing::InMemoryTrackableReadFile>(file, false);
-  auto tablet = createTabletReader(readFile, nimble::TabletReader::Options{});
-  ASSERT_TRUE(tablet->properties().hasStreamChecksums());
-  NIMBLE_ASSERT_THROW(
-      tablet->stripeIdentifier(0),
-      "File properties claim stripe-group checksum arrays, but stripe group 0 carries none.");
 }
 
 // A file that requires a feature this reader lacks is refused when the reader
@@ -2441,7 +2256,6 @@ TEST_P(TabletTest, rejectsUnsupportedRequiredFeatures) {
       nimble::FileProperties{/*compactRowCountEncoding=*/false,
                              /*clusterIndexKeyColumnStorageOmitted=*/false,
                              /*clusterIndexKeyColumnsWithOmittedStorage=*/{},
-                             /*hasStreamChecksums=*/false,
                              /*streamTrailerLayout=*/{},
                              /*hasTopLevelNulls=*/false,
                              /*requiredFeatures=*/

@@ -66,7 +66,6 @@
 #include "velox/dwio/nimble/writer/ChunkedStreamWriter.h"
 #include "velox/dwio/nimble/writer/Writer.h"
 
-#include "folly/FileUtil.h"
 #include "folly/Random.h"
 #include "velox/common/caching/AsyncDataCache.h"
 #include "velox/common/caching/FileIds.h"
@@ -76,7 +75,6 @@
 #include "velox/common/memory/Memory.h"
 #include "velox/common/testutil/TempFilePath.h"
 #include "velox/common/testutil/TestValue.h"
-#include "velox/dwio/common/tests/utils/DataFiles.h"
 #include "velox/row/CompactRow.h"
 #include "velox/row/UnsafeRowFast.h"
 #include "velox/serializers/KeyEncoder.h"
@@ -6600,14 +6598,6 @@ std::vector<RowVectorPtr> makeStreamChecksumBatches(
   }
   return batches;
 }
-
-// Shape of the legacy_indexed_stripe_group_checksums_*.nimble files: four
-// 100-row stripes of {key, valueA, valueB, valueC}, with row r keyed r * 10,
-// valueA = valueB = r * 100 and valueC = r * 7, so valueA and valueB
-// deduplicate. tests/data/README.md records how the files were made.
-constexpr int kLegacyRowsPerStripe{100};
-constexpr int kLegacyStripes{4};
-constexpr int kLegacyLastRow{kLegacyRowsPerStripe * kLegacyStripes - 1};
 } // namespace
 
 enum class ProjectionOutput { kStreams, kRows };
@@ -6640,48 +6630,6 @@ class NimbleIndexProjectorChecksumTest
         /*setIndexIoStats=*/true,
         /*cacheData=*/false,
         /*verifyStreamChecksums=*/true);
-  }
-
-  // Loads legacy_indexed_stripe_group_checksums_<layout>.nimble into sinkData_
-  // and checks it has the shape the legacy tests rely on.
-  void loadLegacyFile(std::string_view layout) {
-    const auto path = velox::test::getDataFilePath(
-        "velox/dwio/nimble/index/tests",
-        fmt::format(
-            "data/legacy_indexed_stripe_group_checksums_{}.nimble", layout));
-    std::string data;
-    ASSERT_TRUE(folly::readFile(path.c_str(), data)) << path;
-    setFile(std::move(data));
-    auto tablet = openSinkTablet();
-    ASSERT_TRUE(tablet->properties().hasStreamChecksums());
-    ASSERT_TRUE(tablet->properties().streamTrailerLayout().empty());
-    ASSERT_EQ(tablet->stripeCount(), kLegacyStripes);
-    ASSERT_GT(
-        tablet->stripeIdentifier(kLegacyStripes - 1).stripeGroup()->index(), 0);
-    ASSERT_GT(countDeduplicatedStreams(), 0);
-  }
-
-  static std::vector<Subfield> legacySubfields() {
-    std::vector<Subfield> subfields;
-    subfields.emplace_back("valueA");
-    subfields.emplace_back("valueB");
-    subfields.emplace_back("valueC");
-    return subfields;
-  }
-
-  static RowTypePtr legacyRowType() {
-    return ROW(
-        {"key", "valueA", "valueB", "valueC"},
-        {BIGINT(), INTEGER(), INTEGER(), INTEGER()});
-  }
-
-  // The projected columns of row `row` of a legacy file.
-  RowVectorPtr legacyRow(int row) {
-    return vectorMaker_->rowVector(
-        {"valueA", "valueB", "valueC"},
-        {vectorMaker_->flatVector<int32_t>({row * 100}),
-         vectorMaker_->flatVector<int32_t>({row * 100}),
-         vectorMaker_->flatVector<int32_t>({row * 7})});
   }
 
   ProjectionSummary project(
@@ -6928,81 +6876,6 @@ TEST_P(
       vectorMaker_->rowVector(
           {"value"}, {vectorMaker_->flatVector<int32_t>({500})}),
       values[0]);
-}
-
-// Legacy files keep each stream's checksum in stripe-group arrays, in either
-// layout. A verifying projector must keep checking them, and keep catching
-// corruption, until those files are gone.
-TEST_P(NimbleIndexProjectorChecksumTest, legacyStripeGroupChecksumsVerify) {
-  for (const auto* layout : {"raw", "stream_major"}) {
-    SCOPED_TRACE(layout);
-    ASSERT_NO_FATAL_FAILURE(loadLegacyFile(layout));
-
-    const auto subfields = legacySubfields();
-    NimbleIndexProjector::Request request;
-    for (const int row : {5, kLegacyLastRow}) {
-      request.keyBounds.push_back(
-          makePointLookup(legacyRowType(), {"key"}, row * 10));
-    }
-    const auto values =
-        projectValues(*createVerifyingProjector(subfields), request);
-    ASSERT_EQ(values.size(), 2);
-    velox::test::assertEqualVectors(legacyRow(5), values[0]);
-    velox::test::assertEqualVectors(legacyRow(kLegacyLastRow), values[1]);
-
-    ASSERT_NO_FATAL_FAILURE(corruptProjectedStreams());
-    NIMBLE_ASSERT_THROW(
-        project(*createVerifyingProjector(subfields), request, {}),
-        "Stream checksum mismatch");
-  }
-}
-
-// The legacy path looks each loaded stream's checksum up by its enqueue index,
-// which DataInput hands out densely from 0 on every load, while
-// loadStripeStreams() rebuilds the expected-checksum vector to match. Both
-// reset between projection calls, so a reused projector must keep them aligned
-// across calls that read different numbers of streams and stripes, including
-// after a call that failed verification. A drift compares a stream against
-// another stream's checksum.
-TEST_P(
-    NimbleIndexProjectorChecksumTest,
-    legacyStripeGroupChecksumsAcrossStripesAndCalls) {
-  for (const auto* layout : {"raw", "stream_major"}) {
-    SCOPED_TRACE(layout);
-    ASSERT_NO_FATAL_FAILURE(loadLegacyFile(layout));
-
-    const auto subfields = legacySubfields();
-    auto projector = createVerifyingProjector(subfields);
-    const std::vector<int> rows{kLegacyLastRow, 3, kLegacyRowsPerStripe + 50};
-    for (size_t call = 0; call < rows.size(); ++call) {
-      SCOPED_TRACE(fmt::format("call={}", call));
-      NimbleIndexProjector::Request request;
-      for (size_t i = 0; i <= call; ++i) {
-        request.keyBounds.push_back(
-            makePointLookup(legacyRowType(), {"key"}, rows[i] * 10));
-      }
-      const auto values = projectValues(*projector, request);
-      ASSERT_EQ(values.size(), call + 1);
-      for (size_t i = 0; i <= call; ++i) {
-        velox::test::assertEqualVectors(legacyRow(rows[i]), values[i]);
-      }
-    }
-
-    // Only stripe 0 is corrupted, so the last stripe still reads.
-    ASSERT_NO_FATAL_FAILURE(corruptProjectedStreams());
-    NimbleIndexProjector::Request firstStripeRequest;
-    firstStripeRequest.keyBounds = {
-        makePointLookup(legacyRowType(), {"key"}, 30)};
-    NIMBLE_ASSERT_THROW(
-        project(*projector, firstStripeRequest, {}),
-        "Stream checksum mismatch");
-    NimbleIndexProjector::Request lastStripeRequest;
-    lastStripeRequest.keyBounds = {
-        makePointLookup(legacyRowType(), {"key"}, kLegacyLastRow * 10)};
-    const auto values = projectValues(*projector, lastStripeRequest);
-    ASSERT_EQ(values.size(), 1);
-    velox::test::assertEqualVectors(legacyRow(kLegacyLastRow), values[0]);
-  }
 }
 
 // A reader that asks to verify still reads a file written without checksums:
@@ -7573,7 +7446,6 @@ TEST_P(
           /*cluster_index_key_column_storage_omitted=*/false,
           /*cluster_index_key_columns_with_omitted_storage=*/0,
           compactEncoding,
-          /*has_stream_checksums=*/false,
           streamTrailer));
   tabletWriter->writeOptionalSection(
       std::string{kPropertiesSection},
