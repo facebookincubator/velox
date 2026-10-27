@@ -195,6 +195,23 @@ TEST_F(CudfFilterProjectTest, isNull) {
   }
 }
 
+// The GPU cast from VARCHAR follows Presto's rules, so a Spark session keeps
+// such casts on the CPU.
+TEST_F(CudfFilterProjectTest, castFromVarcharStaysOnCpu) {
+  const auto rowType = ROW({{"c0", VARCHAR()}});
+  for (const auto* expr :
+       {"cast(c0 as integer)",
+        "try_cast(c0 as double)",
+        "cast(c0 as boolean)"}) {
+    SCOPED_TRACE(expr);
+    EXPECT_FALSE(
+        cudf_velox::canExprRunOnGpu(
+            makeTypedExpr(expr, rowType),
+            execCtx_.queryCtx(),
+            execCtx_.pool()));
+  }
+}
+
 TEST_F(CudfFilterProjectTest, hashWithSeed) {
   auto input = makeFlatVector<int64_t>({INT64_MAX, INT64_MIN});
   auto data = makeRowVector({input});

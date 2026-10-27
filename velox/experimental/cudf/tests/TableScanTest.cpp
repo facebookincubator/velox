@@ -2430,6 +2430,34 @@ TEST_F(TableScanTest, decimalRemainingFilter) {
       "SELECT c0, c1 FROM tmp WHERE c0 = CAST('-5.00' AS DECIMAL(5, 2))");
 }
 
+// The data source cannot apply the session's cast settings, so it rejects a
+// remaining filter that casts from VARCHAR.
+TEST_F(TableScanTest, remainingFilterCastFromVarchar) {
+  auto rowType = ROW({"c0"}, {VARCHAR()});
+  auto filePath = TempFilePath::create();
+  writeToFile(
+      filePath->getPath(),
+      makeRowVector({"c0"}, {makeFlatVector<std::string>({"1.5", "x"})}));
+
+  auto plan = PlanBuilder(pool_.get())
+                  .startTableScan()
+                  .connectorId(kCudfHiveConnectorId)
+                  .outputType(rowType)
+                  .dataColumns(rowType)
+                  .assignments(
+                      facebook::velox::exec::test::HiveConnectorTestBase::
+                          allRegularColumns(rowType))
+                  .remainingFilter("try_cast(c0 as double) > 1.0")
+                  .endTableScan()
+                  .planNode();
+
+  VELOX_ASSERT_UNSUPPORTED_THROW(
+      AssertQueryBuilder(plan)
+          .splits(makeCudfHiveConnectorSplits({filePath}))
+          .copyResults(pool_.get()),
+      "Remaining filter with a cast from VARCHAR is not supported");
+}
+
 TEST_F(TableScanTest, unsupportedScanColumnProjectedOut) {
   auto rowType = ROW({"k", "m"}, {BIGINT(), MAP(BIGINT(), BIGINT())});
   auto filePath = writeUnsupportedMapInput();

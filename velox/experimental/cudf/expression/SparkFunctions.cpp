@@ -59,6 +59,9 @@ void registerSparkFunctions(const std::string& prefix) {
            .argumentType("T")
            .build()});
 
+  // The GPU cast from VARCHAR follows Presto's rules, not Spark's.
+  setCastFromVarcharEnabled(false);
+
   const std::vector<exec::FunctionSignaturePtr> subStringSignatures{
       FunctionSignatureBuilder()
           .returnType("varchar")
