@@ -186,7 +186,7 @@ Mathematical Functions
         SELECT decimal_ceil(DECIMAL(3,1) 10.1, 5); -- 10.1 (DECIMAL(4,1))
 
         -- negative scale: round up to power of 10
-        SELECT decimal_ceil(DECIMAL(3,1) 99.0, -1); -- 100 (DECIMAL(4,0))
+        SELECT decimal_ceil(DECIMAL(3,1) 99.0, -1); -- 100 (DECIMAL(3,0))
 
 .. spark:function:: decimal_floor(x, scale) -> decimal
 
@@ -223,7 +223,7 @@ Mathematical Functions
         SELECT decimal_floor(DECIMAL(3,1) 10.1, 5); -- 10.1 (DECIMAL(4,1))
 
         -- negative scale: round down to power of 10
-        SELECT decimal_floor(DECIMAL(3,1) 99.0, -1); -- 90 (DECIMAL(4,0))
+        SELECT decimal_floor(DECIMAL(3,1) 99.0, -1); -- 90 (DECIMAL(3,0))
 
 .. spark:function:: degrees(x) -> double
 
