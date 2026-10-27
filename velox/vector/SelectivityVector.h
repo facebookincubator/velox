@@ -204,7 +204,6 @@ class SelectivityVector {
   /// Returns the unselected rows within 'size'. Rows beyond this vector's size
   /// are selected; rows beyond 'size' are excluded.
   SelectivityVector complement(vector_size_t size) const {
-    VELOX_CHECK_GE(size, 0);
     SelectivityVector result(size);
     result.deselect(*this);
     return result;
