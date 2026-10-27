@@ -469,9 +469,11 @@ void IndexLookupJoinTestBase::verifyResultWithMatchColumn(
     const PlanNodePtr& planWithMatchColumn,
     const PlanNodeId& probeScanNodeIdWithMatchColumn,
     const std::vector<std::shared_ptr<TempFilePath>>& probeFiles,
-    bool needsIndexSplit) {
+    bool needsIndexSplit,
+    bool serialExecution) {
   AssertQueryBuilder expectedResultBuilder(duckDbQueryRunner_);
   expectedResultBuilder.plan(planWithoutMatchColumn)
+      .serialExecution(serialExecution)
       .splits(
           probeScanNodeIdWithoutMatchColumn,
           makeHiveConnectorSplits(probeFiles));
@@ -487,6 +489,7 @@ void IndexLookupJoinTestBase::verifyResultWithMatchColumn(
 
   AssertQueryBuilder resultWithMatchColumnBuilder(duckDbQueryRunner_);
   resultWithMatchColumnBuilder.plan(planWithMatchColumn)
+      .serialExecution(serialExecution)
       .splits(
           probeScanNodeIdWithMatchColumn, makeHiveConnectorSplits(probeFiles));
   if (needsIndexSplit) {

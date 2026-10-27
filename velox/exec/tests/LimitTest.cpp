@@ -24,6 +24,8 @@ using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
 using namespace facebook::velox::common::testutil;
 
+DECLARE_bool(enable_parallel_barrier_tests);
+
 namespace {
 class LimitTest : public HiveConnectorTestBase {};
 
@@ -147,7 +149,7 @@ TEST_F(LimitTest, partialLimitEagerFlush) {
   test(false);
 }
 
-TEST_F(LimitTest, DISABLED_barrier) {
+TEST_F(LimitTest, barrier) {
   std::vector<RowVectorPtr> vectors;
   std::vector<std::shared_ptr<TempFilePath>> tempFiles;
   const int numSplits{5};
@@ -185,8 +187,8 @@ TEST_F(LimitTest, DISABLED_barrier) {
   } testSettings[] = {
       // Test the case where the limit covers all the input rows
       // with barrier and not.
-      {false,
-       false,
+      {true,
+       true,
        0,
        numRowsPerSplit * numSplits,
        numSplits,
@@ -491,6 +493,9 @@ TEST_F(LimitTest, DISABLED_barrier) {
        numSplits},
   };
   for (const auto& testData : testSettings) {
+    if (!testData.serialExecution && !FLAGS_enable_parallel_barrier_tests) {
+      continue;
+    }
     SCOPED_TRACE(testData.toString());
     core::PlanNodeId limitPlanNodeId;
     auto plan = PlanBuilder()
@@ -509,6 +514,10 @@ TEST_F(LimitTest, DISABLED_barrier) {
                             testData.offset));
     const auto taskStats = task->taskStats();
     ASSERT_EQ(taskStats.numBarriers, testData.numExpectedBarriers);
+    if (testData.serialExecution) {
+      ASSERT_EQ(
+          taskStats.numFinishedSplits, testData.numExpectedFinishedSplits);
+    }
     ASSERT_EQ(
         exec::toPlanStats(taskStats).at(limitPlanNodeId).outputRows,
         testData.numExpectedOutputRows);

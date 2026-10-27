@@ -37,6 +37,8 @@ using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
 using namespace facebook::velox::common::testutil;
 
+DECLARE_bool(enable_parallel_barrier_tests);
+
 namespace facebook::velox::exec::test {
 namespace {
 struct TestParam {
@@ -659,9 +661,13 @@ DEBUG_ONLY_TEST_P(IndexLookupJoinTest, statsSplitterWithFilter) {
       << "IndexLookupJoin (after filter)";
 }
 
-TEST_P(IndexLookupJoinTest, DISABLED_barrier) {
+TEST_P(IndexLookupJoinTest, barrier) {
+  if (!GetParam().serialExecution && !FLAGS_enable_parallel_barrier_tests) {
+    GTEST_SKIP()
+        << "Use --enable_parallel_barrier_tests to run parallel cases.";
+  }
   if (GetParam().needsIndexSplit) {
-    return;
+    GTEST_SKIP() << "Barrier execution does not support index splits.";
   }
   IndexTableData tableData;
   generateIndexTableData({100, 1, 1}, tableData, pool_);
@@ -710,32 +716,22 @@ TEST_P(IndexLookupJoinTest, DISABLED_barrier) {
   struct {
     int numPrefetches;
     bool barrierExecution;
-    bool serialExecution;
 
     std::string debugString() const {
       return fmt::format(
-          "numPrefetches {}, barrierExecution {}, serialExecution {}",
+          "numPrefetches {}, barrierExecution {}",
           numPrefetches,
-          barrierExecution,
-          serialExecution);
+          barrierExecution);
     }
   } testSettings[] = {
-      {0, false, false},
-      {0, false, true},
-      {1, true, true},
-      {1, false, true},
-      {4, true, true},
-      {4, false, true},
-      {256, true, true},
-      {256, false, true},
-      {0, true, false},
-      {0, false, false},
-      {1, true, false},
-      {1, false, false},
-      {4, true, false},
-      {4, false, false},
-      {256, true, false},
-      {256, false, false},
+      {0, true},
+      {0, false},
+      {1, true},
+      {1, false},
+      {4, true},
+      {4, false},
+      {256, true},
+      {256, false},
   };
 
   for (const auto& testData : testSettings) {
@@ -743,7 +739,7 @@ TEST_P(IndexLookupJoinTest, DISABLED_barrier) {
     auto task = runLookupQuery(
         plan,
         probeFiles,
-        testData.serialExecution,
+        GetParam().serialExecution,
         testData.barrierExecution,
         32,
         testData.numPrefetches,
