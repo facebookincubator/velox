@@ -24,8 +24,6 @@ using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
 using namespace facebook::velox::common::testutil;
 
-DECLARE_bool(enable_parallel_barrier_tests);
-
 namespace {
 class LimitTest : public HiveConnectorTestBase {};
 
@@ -493,7 +491,8 @@ TEST_F(LimitTest, barrier) {
        numSplits},
   };
   for (const auto& testData : testSettings) {
-    if (!testData.serialExecution && !FLAGS_enable_parallel_barrier_tests) {
+    // TODO: Re-enable parallel cases after #19832 is resolved.
+    if (!testData.serialExecution) {
       continue;
     }
     SCOPED_TRACE(testData.toString());

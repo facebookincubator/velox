@@ -18,15 +18,7 @@
 
 #include <folly/Unit.h>
 #include <folly/init/Init.h>
-#include <gflags/gflags.h>
 #include <gtest/gtest.h>
-
-DEFINE_bool(
-    enable_parallel_barrier_tests,
-    false,
-    "Run parallel cases of LimitTest.barrier and "
-    "IndexLookupJoinTest.{barrier,equalJoin}; disabled by default pending "
-    "https://github.com/facebookincubator/velox/issues/19832");
 
 // This main is needed for some tests on linux.
 int main(int argc, char** argv) {

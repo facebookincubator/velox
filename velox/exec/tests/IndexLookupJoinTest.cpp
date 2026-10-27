@@ -38,8 +38,6 @@ using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
 using namespace facebook::velox::common::testutil;
 
-DECLARE_bool(enable_parallel_barrier_tests);
-
 namespace facebook::velox::exec::test {
 namespace {
 struct TestParam {
@@ -856,9 +854,8 @@ TEST_F(IndexLookupJoinTest, forwardedProbeColumnOverlapsWithCondition) {
 }
 
 TEST_P(IndexLookupJoinTest, equalJoin) {
-  if (!GetParam().serialExecution && !FLAGS_enable_parallel_barrier_tests) {
-    GTEST_SKIP()
-        << "Use --enable_parallel_barrier_tests to run parallel cases.";
+  if (!GetParam().serialExecution) {
+    GTEST_SKIP() << "Parallel execution is disabled pending #19832.";
   }
   struct {
     std::vector<int> keyCardinalities;

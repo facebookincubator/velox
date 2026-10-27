@@ -37,8 +37,6 @@ using namespace facebook::velox::exec;
 using namespace facebook::velox::exec::test;
 using namespace facebook::velox::common::testutil;
 
-DECLARE_bool(enable_parallel_barrier_tests);
-
 namespace facebook::velox::exec::test {
 namespace {
 struct TestParam {
@@ -662,9 +660,8 @@ DEBUG_ONLY_TEST_P(IndexLookupJoinTest, statsSplitterWithFilter) {
 }
 
 TEST_P(IndexLookupJoinTest, barrier) {
-  if (!GetParam().serialExecution && !FLAGS_enable_parallel_barrier_tests) {
-    GTEST_SKIP()
-        << "Use --enable_parallel_barrier_tests to run parallel cases.";
+  if (!GetParam().serialExecution) {
+    GTEST_SKIP() << "Parallel execution is disabled pending #19832.";
   }
   if (GetParam().needsIndexSplit) {
     GTEST_SKIP() << "Barrier execution does not support index splits.";
