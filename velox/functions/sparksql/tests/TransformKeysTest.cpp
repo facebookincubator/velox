@@ -161,7 +161,7 @@ TEST_F(TransformKeysTest, throwOnDuplicateKeys) {
 
   VELOX_ASSERT_USER_THROW(
       evaluate("transform_keys(c0, (k, v) -> remainder(k, 2))", data),
-      "Duplicate map key (1) was found.");
+      "Duplicate map key was found: 1");
 }
 
 TEST_F(TransformKeysTest, throwPolicyTryDuplicateKeys) {
@@ -250,7 +250,7 @@ TEST_F(TransformKeysTest, throwPolicyFloatingPointKeys) {
     });
     VELOX_ASSERT_USER_THROW(
         evaluate("transform_keys(c0, (k, v) -> multiply(k, c1))", data),
-        "Duplicate map key (NaN) was found.");
+        "Duplicate map key was found: NaN");
   }
 }
 
@@ -304,6 +304,38 @@ TEST_F(TransformKeysTest, throwPolicyTryNullKey) {
   testTryNullKey();
 }
 
+TEST_F(TransformKeysTest, throwPolicyNullAndRepeatedKeysFailInKeyOrder) {
+  setThrowExceptionOnDuplicateMapKeys(true);
+  VELOX_ASSERT_USER_THROW(
+      evaluate(
+          "transform_keys(c0, (k, v) -> v)",
+          makeRowVector({makeMapVector<int64_t, int64_t>(
+              {{{1, 1}, {2, 1}, {3, std::nullopt}}})})),
+      "Duplicate map key was found: 1");
+  VELOX_ASSERT_USER_THROW(
+      evaluate(
+          "transform_keys(c0, (k, v) -> v)",
+          makeRowVector({makeMapVector<int64_t, int64_t>(
+              {{{1, 1}, {2, std::nullopt}, {3, 1}}})})),
+      "Cannot use null as map key!");
+}
+
+TEST_F(TransformKeysTest, lastWinNullAndRepeatedKeysFailInKeyOrder) {
+  setThrowExceptionOnDuplicateMapKeys(false);
+  VELOX_ASSERT_USER_THROW(
+      evaluate(
+          "transform_keys(c0, (k, v) -> v)",
+          makeRowVector({makeMapVector<int64_t, int64_t>(
+              {{{1, 1}, {2, 1}, {3, std::nullopt}}})})),
+      "Cannot use null as map key!");
+  VELOX_ASSERT_USER_THROW(
+      evaluate(
+          "transform_keys(c0, (k, v) -> v)",
+          makeRowVector({makeMapVector<int64_t, int64_t>(
+              {{{1, 1}, {2, std::nullopt}, {3, 1}}})})),
+      "Cannot use null as map key!");
+}
+
 TEST_F(TransformKeysTest, lastWinArrayKeysWithNestedNulls) {
   setThrowExceptionOnDuplicateMapKeys(false);
 
@@ -345,7 +377,7 @@ TEST_F(TransformKeysTest, throwOnDuplicateArrayKeysWithNestedNulls) {
 
   VELOX_ASSERT_USER_THROW(
       evaluate("transform_keys(c0, (k, v) -> c1)", data),
-      "Duplicate map key ({1, null}) was found.");
+      "Duplicate map key was found: {1, null}");
 }
 
 TEST_F(TransformKeysTest, throwPolicyTryArrayKeysWithNestedNulls) {
