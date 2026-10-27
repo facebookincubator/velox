@@ -28,6 +28,7 @@
 
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/base/Exceptions.h"
+#include "velox/common/base/Macros.h"
 
 namespace folly {
 struct dynamic;
@@ -76,7 +77,10 @@ struct StringView {
   static constexpr size_t kPrefixSize = 4 * sizeof(char);
   static constexpr size_t kInlineSize = 12;
 
-  StringView() {
+  // The empty view and the accessors are device-callable, so a function body
+  // compiled for the GPU can take a StringView argument; a view over data is
+  // still built on the host.
+  VELOX_GPU_COMPATIBLE StringView() {
     static_assert(sizeof(StringView) == 16);
     memset(this, 0, sizeof(StringView));
   }
@@ -135,7 +139,7 @@ struct StringView {
   explicit StringView(std::string_view value)
       : StringView(value.data(), value.size()) {}
 
-  bool isInline() const {
+  VELOX_GPU_COMPATIBLE bool isInline() const {
     return isInline(size_);
   }
 
@@ -156,11 +160,11 @@ struct StringView {
   }
 
   const char* data() const&& = delete;
-  const char* data() const& {
+  VELOX_GPU_COMPATIBLE const char* data() const& {
     return isInline() ? prefix_ : value_.data;
   }
 
-  size_t size() const {
+  VELOX_GPU_COMPATIBLE size_t size() const {
     return size_;
   }
 
@@ -261,7 +265,7 @@ struct StringView {
   /// are not from a temporary (rvalue) StringView, for the same reasons
   /// described above.
   /* implicit */ operator std::string_view() const&& = delete;
-  /* implicit */ operator std::string_view() const& {
+  /* implicit */ VELOX_GPU_COMPATIBLE operator std::string_view() const& {
     return std::string_view(data(), size());
   }
 

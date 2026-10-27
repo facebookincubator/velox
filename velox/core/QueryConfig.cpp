@@ -54,6 +54,7 @@ const std::vector<config::ConfigProperty>& QueryConfig::registeredProperties() {
     // Cast.
     VELOX_REGISTER_QUERY_CONFIG(kLegacyCast);
     VELOX_REGISTER_QUERY_CONFIG(kCastMatchStructByName);
+    VELOX_REGISTER_QUERY_CONFIG(kCastStringToFloatingPointLenientInfNan);
 
     // Local exchange.
     VELOX_REGISTER_QUERY_CONFIG(kMaxLocalExchangeBufferSize);
@@ -146,6 +147,7 @@ const std::vector<config::ConfigProperty>& QueryConfig::registeredProperties() {
 
     // Task writer.
     VELOX_REGISTER_QUERY_CONFIG(kTaskWriterCount);
+    VELOX_REGISTER_QUERY_CONFIG(kTaskPartitionedWriterCount);
 
     // Hash probe.
     VELOX_REGISTER_QUERY_CONFIG(kHashProbeFinishEarlyOnEmptyBuild);
@@ -261,9 +263,11 @@ const std::vector<config::ConfigProperty>& QueryConfig::registeredProperties() {
     VELOX_REGISTER_QUERY_CONFIG(kMarkSortedZeroCopyThreshold);
 
     // RPC congestion.
+    VELOX_REGISTER_QUERY_CONFIG(kRpcCongestionBatchStartWindow);
     VELOX_REGISTER_QUERY_CONFIG(kRpcCongestionMinWindow);
     VELOX_REGISTER_QUERY_CONFIG(kRpcCongestionStepCoef);
     VELOX_REGISTER_QUERY_CONFIG(kRpcCongestionMaxWindow);
+    VELOX_REGISTER_QUERY_CONFIG(kRpcCongestionAsyncGrowthMaxWindow);
 
     // RPC adaptive rate limiter.
     VELOX_REGISTER_QUERY_CONFIG(kRpcRateLimiterAdaptiveEnabled);

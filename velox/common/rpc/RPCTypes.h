@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <chrono>
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
@@ -291,6 +292,24 @@ struct RpcError {
   std::string message;
 };
 
+/// Asks the caller to retry a capacity rejection itself. The function returns
+/// this instead of retrying internally, so the caller can give back the
+/// request's admission slot while it waits and admit the retry again.
+struct CapacityRetry {
+  /// The nominal wait before the row's first retry.
+  std::chrono::milliseconds retryAfter{0};
+  /// How long, from the row's first attempt, the row may keep retrying. A
+  /// retry that would start after this fails with the response's error.
+  /// Any duration above a week counts as a week.
+  std::chrono::milliseconds budget{0};
+  /// Each further rejection of the same row doubles its nominal wait, up to
+  /// this. Zero keeps every wait at 'retryAfter'.
+  std::chrono::milliseconds maxRetryAfter{0};
+  /// Draw each wait uniformly from [0, nominal wait] rather than waiting the
+  /// nominal wait, so rows rejected together spread their retries out.
+  bool jitter{false};
+};
+
 /// Carries the framework-visible correlation and outcome of a response.
 ///
 /// A response is a payload or an error, never both and never neither. The
@@ -334,10 +353,21 @@ struct RPCResponse {
     } else {
       result_ = RpcPayload{std::forward<T>(payload)};
     }
+    capacityRetry_.reset();
   }
 
   /// Stores a typed failure and rejects the non-error sentinel.
   void setError(RPCErrorKind kind, std::string errorMessage);
+
+  /// Marks an overload error as retryable by the caller. Only valid after
+  /// setError() with a kind in RPCErrorCategory::kOverload. The caller ignores
+  /// the hint unless it was configured to retry capacity rejections.
+  void setCapacityRetry(CapacityRetry retry);
+
+  /// Returns the caller-retry hint, if the function set one.
+  const std::optional<CapacityRetry>& capacityRetry() const {
+    return capacityRetry_;
+  }
 
   /// Returns true if this response represents an error.
   bool hasError() const {
@@ -373,6 +403,8 @@ struct RPCResponse {
   // is filled, so a longer one would put a heap allocation on the per-row path.
   folly::Expected<RpcPayload, RpcError> result_{
       folly::makeUnexpected(RpcError{RPCErrorKind::kUnset, "unset response"})};
+  // Set only on an overload error; cleared whenever the outcome changes.
+  std::optional<CapacityRetry> capacityRetry_;
 };
 
 /// Returns the checked sum of bytes retained by a response collection.

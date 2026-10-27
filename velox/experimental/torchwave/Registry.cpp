@@ -17,6 +17,7 @@
 #include "velox/experimental/torchwave/Registry.h"
 #include "velox/experimental/torchwave/CompiledOp.h"
 #include "velox/experimental/torchwave/Utils.h"
+#include "velox/experimental/torchwave/WaveConfig.h"
 
 #include <c10/util/StringUtil.h>
 
@@ -508,13 +509,56 @@ MetadataBuilder& MetadataBuilder::dynamicSharedDecls(
 }
 
 MetadataBuilder& MetadataBuilder::dynamicSharedMemory(
-    std::function<int64_t(NodeCP)> func) {
+    std::function<int64_t(NodeCP, int32_t blockSize)> func) {
   md_.dynamicSharedMemory = std::move(func);
   return *this;
 }
 
 MetadataBuilder& MetadataBuilder::minBlocksPerSm(int32_t blocks) {
   md_.minBlocksPerSm = blocks;
+  return *this;
+}
+
+namespace {
+thread_local int32_t tlReserveBlockSize = 0;
+} // namespace
+
+int32_t reserveBlockSize() {
+  return tlReserveBlockSize > 0 ? tlReserveBlockSize
+                                : WaveConfig::get().blockSize;
+}
+
+ReserveBlockSizeScope::ReserveBlockSizeScope(int32_t blockSize)
+    : saved_(tlReserveBlockSize) {
+  tlReserveBlockSize = blockSize;
+}
+
+ReserveBlockSizeScope::~ReserveBlockSizeScope() {
+  tlReserveBlockSize = saved_;
+}
+
+MetadataBuilder& MetadataBuilder::sharedWithinNode(bool value) {
+  md_.sharedWithinNode = value;
+  return *this;
+}
+
+MetadataBuilder& MetadataBuilder::ownEntryPoint(bool value) {
+  md_.ownEntryPoint = value;
+  return *this;
+}
+
+MetadataBuilder& MetadataBuilder::blockSize(int32_t threads) {
+  TORCH_CHECK(
+      threads > 0 && threads <= 1024 && (threads & (threads - 1)) == 0,
+      "block size must be a power of two up to 1024, got ",
+      threads);
+  md_.blockSize = [threads](NodeCP) { return threads; };
+  return *this;
+}
+
+MetadataBuilder& MetadataBuilder::blockSize(
+    std::function<int32_t(NodeCP)> func) {
+  md_.blockSize = std::move(func);
   return *this;
 }
 
@@ -601,6 +645,11 @@ MetadataBuilder& MetadataBuilder::hasBlockInfo(bool val) {
 
 MetadataBuilder& MetadataBuilder::hasOutputArg(bool val) {
   ensureElementwise().hasOutputArg = val;
+  return *this;
+}
+
+MetadataBuilder& MetadataBuilder::hasOwnOutputArg(bool val) {
+  ensureElementwise().hasOwnOutputArg = val;
   return *this;
 }
 

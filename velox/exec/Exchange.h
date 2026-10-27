@@ -15,8 +15,6 @@
  */
 #pragma once
 
-#include <random>
-
 #include "velox/exec/InMemoryExchangeClient.h"
 #include "velox/exec/Operator.h"
 #include "velox/exec/OperatorType.h"
@@ -77,15 +75,9 @@ class Exchange : public SourceOperator {
   // much.
   static constexpr uint64_t kInitialOutputRows = 64;
 
-  // Invoked to create exchange client for remote tasks. The function shuffles
-  // the source task ids first to randomize the source tasks we fetch data from.
-  // This helps to avoid different tasks fetching from the same source task in a
-  // distributed system.
-  void addRemoteTaskIds(std::vector<std::string>& remoteTaskIds);
-
   // Fetches splits from the task until there are no more splits or task returns
-  // a future that will be complete when more splits arrive. Adds splits to
-  // exchangeClient_.
+  // a future that will be complete when more splits arrive. Records split
+  // stats and traces.
   void getSplits(ContinueFuture* future);
 
   // Fetches runtime stats from exchangeClient_ and replaces these in this
@@ -104,8 +96,8 @@ class Exchange : public SourceOperator {
 
   const std::unique_ptr<VectorSerde::Options> serdeOptions_;
 
-  // True if this operator is responsible for fetching splits from the Task
-  // and passing these to exchangeClient_.
+  // True if this operator takes splits from the Task, records split stats,
+  // traces and exchange client stats, and reports the splits finished.
   const bool processSplits_;
 
   const int driverId_;
@@ -123,7 +115,6 @@ class Exchange : public SourceOperator {
 
   std::vector<std::unique_ptr<SerializedPageBase>> currentPages_;
   bool atEnd_{false};
-  std::default_random_engine rng_{std::random_device{}()};
 
   // Memory holders for deserialization across 'getOutput' calls.
   // The merged pages for row serialization.

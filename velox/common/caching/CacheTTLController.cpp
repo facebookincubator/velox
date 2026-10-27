@@ -48,12 +48,12 @@ CacheAgeStats CacheTTLController::getCacheAgeStats() const {
     minOpenTime = std::min<int64_t>(minOpenTime, it->second.openTimeSec);
   }
 
-  int64_t maxAge = getCurrentTimeSec() - minOpenTime;
+  int64_t maxAge = EpochTime::now<std::chrono::seconds>() - minOpenTime;
   return CacheAgeStats{.maxAgeSecs = std::max<int64_t>(maxAge, 0)};
 }
 
 void CacheTTLController::applyTTL(int64_t ttlSecs) {
-  int64_t maxOpenTime = getCurrentTimeSec() - ttlSecs;
+  int64_t maxOpenTime = EpochTime::now<std::chrono::seconds>() - ttlSecs;
 
   folly::F14FastSet<uint64_t> filesToRemove =
       getAndMarkAgedOutFiles(maxOpenTime);

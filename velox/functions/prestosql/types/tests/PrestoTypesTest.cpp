@@ -31,6 +31,7 @@
 #include "velox/functions/prestosql/types/SetDigestType.h"
 #include "velox/functions/prestosql/types/SfmSketchType.h"
 #include "velox/functions/prestosql/types/TDigestType.h"
+#include "velox/functions/prestosql/types/TimeWithTimezoneType.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/functions/prestosql/types/UuidType.h"
 #include "velox/functions/prestosql/types/VarcharEnumRegistration.h"
@@ -473,6 +474,27 @@ TEST_F(PrestoTypesDecodedTest, unknownScalar) {
   EXPECT_EQ(PrestoTypes::valueToString(decoded, 0, UNKNOWN()), "null");
   EXPECT_EQ(PrestoTypes::valueToString(decoded, 1, UNKNOWN()), "null");
   EXPECT_EQ(PrestoTypes::valueToString(decoded, 2, UNKNOWN()), "null");
+}
+
+template <typename T>
+concept HasCreate = requires { T::create(); };
+
+// These types would otherwise inherit their base scalar type's create() and
+// return that type: JsonType::create() would return VARCHAR.
+TEST(PrestoTypeSqlTest, customTypesHaveNoCreate) {
+  static_assert(!HasCreate<BingTileType>);
+  static_assert(!HasCreate<HyperLogLogType>);
+  static_assert(!HasCreate<IPAddressType>);
+  static_assert(!HasCreate<JsonType>);
+  static_assert(!HasCreate<KHyperLogLogType>);
+  static_assert(!HasCreate<P4HyperLogLogType>);
+  static_assert(!HasCreate<QDigestType>);
+  static_assert(!HasCreate<SetDigestType>);
+  static_assert(!HasCreate<SfmSketchType>);
+  static_assert(!HasCreate<TDigestType>);
+  static_assert(!HasCreate<TimestampWithTimeZoneType>);
+  static_assert(!HasCreate<TimeWithTimezoneType>);
+  static_assert(!HasCreate<UuidType>);
 }
 
 } // namespace

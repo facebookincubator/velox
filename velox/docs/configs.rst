@@ -290,12 +290,28 @@ Generic Configuration
      - Floor the RPC flow\-control congestion window may shrink to under overload in the RPC operator.
        Default 1, which never fully stalls dispatch. The controller clamps this to the range
        [1, maxWindow].
+   * - rpc.congestion.batch_start_window
+     - integer
+     - 0
+     - Initial per\-driver BATCH RPC congestion window. 0 keeps the built\-in default of 2.
+       Positive values are clamped to [minWindow, maxWindow]. PER_ROW always starts at its ceiling.
+       Size at or below the backend's measured concurrency knee: starting above it seeds the
+       unloaded\-RTT baseline with queueing delay, leaving only explicit overload errors to shrink
+       the window.
    * - rpc.congestion.step_coef
      - double
      - 1.0
      - Multiplier on the RPC congestion window's sqrt(window) additive\-increase headroom. Default 1.0
        is the plain sqrt headroom; lower values converge tighter at small windows. The controller
        clamps this to be non\-negative.
+   * - rpc.congestion.async_growth_max_window
+     - integer
+     - 0
+     - Cap for per\-driver BATCH window growth on clean completions that carry no usable latency
+       sample. 0 (default) disables recovery growth: overload may shrink the window, and clean
+       completions do not grow it back toward the start. Positive values let the window discover
+       capacity additively up to the cap. A positive value below the effective BATCH start window
+       is raised to that start. The congestion max window remains the overall ceiling.
 
 
 Expression Evaluation Configuration
@@ -355,6 +371,14 @@ Expression Evaluation Configuration
      - bool
      - false
      - This flag makes the Row conversion to by applied in a way that the casting row field are matched by name instead of position.
+   * - cast_string_to_floating_point_lenient_inf_nan
+     - bool
+     - false
+     - If true, casting a VARCHAR to REAL or DOUBLE with Presto semantics also accepts the C-style spellings of the
+       special floating-point values: ``inf``, ``infinity`` and ``nan`` in any letter case, with an optional leading
+       sign. By default only the Presto spellings ``Infinity`` and ``NaN`` are accepted, in exactly that letter case.
+       This deviates from Presto; enable it to cast data whose writer printed the values the way glibc, Python and
+       numpy do. Spark CAST and casts from JSON are not affected.
    * - expression.max_array_size_in_reduce
      - integer
      - 100000
@@ -1286,6 +1310,11 @@ key set with the ``s3.`` prefix takes precedence over the same key set with the
      - bool
      - false
      - Utilize the configuration of the environment variables http_proxy, https_proxy, and no_proxy for use with the S3 API.
+   * - ``s3.use-fips``
+     - bool
+     -
+     - Use AWS FIPS endpoints. When unset, the ``AWS_USE_FIPS_ENDPOINT`` environment variable decides. Cannot be combined
+       with ``s3.endpoint``. See `FIPS Endpoints`_.
    * - ``s3.connect-timeout``
      - string
      -
@@ -1340,6 +1369,18 @@ explicitly set will override the base ``s3.`` values. The deprecated
 ``hive.s3.`` prefix follows the same rules (for example
 ``hive.s3.bucket.velox.endpoint``).
 These semantics are similar to the `Apache Hadoop-Aws module <https://hadoop.apache.org/docs/current/hadoop-aws/tools/hadoop-aws/index.html>`_.
+
+FIPS Endpoints
+""""""""""""""
+``s3.use-fips`` sets ``useFIPS`` on the AWS SDK client, which then resolves the
+AWS FIPS endpoint for the region. It also applies to the STS calls of
+``s3.iam-role``. When unset, the environment variable ``AWS_USE_FIPS_ENDPOINT``
+decides. The AWS SDK rejects FIPS combined with ``s3.endpoint``, so requests
+fail with "A custom endpoint cannot be combined with FIPS". Set
+``s3.use-fips=false`` for buckets with a custom endpoint, including an explicit
+AWS FIPS endpoint. Web identity credentials also need ``AWS_ENDPOINT_URL_STS``
+set to the STS FIPS host name, such as ``sts-fips.us-east-1.amazonaws.com``.
+The CRT uses the value as the host, so a URL with a scheme fails to resolve.
 
 ``Google Cloud Storage Configuration``
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

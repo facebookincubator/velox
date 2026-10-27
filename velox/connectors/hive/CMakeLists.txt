@@ -60,6 +60,7 @@ velox_add_library(
   FileHandle.h
   FileIndexReader.h
   FileProperties.h
+  FileScanState.h
   FileSplitReader.h
   FileTableHandle.h
   HiveConfig.h

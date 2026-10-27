@@ -38,6 +38,7 @@
 #include "velox/exec/ExchangeTransportRegistry.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/Values.h"
+#include "velox/exec/tests/utils/ArbitratorTestUtil.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -159,9 +160,9 @@ class TestSkewedJoinBuild : public exec::Operator {
     // The last Driver to hit CustomJoinBuild::finish gathers the data from
     // all build Drivers and hands it over to the probe side. At this
     // point all build Drivers are continued and will free their
-    // state. allPeersFinished is true only for the last Driver of the
+    // state. allPeersArrived is true only for the last Driver of the
     // build pipeline.
-    if (!operatorCtx_->allPeersFinished(&future_, promises, peerOperators)) {
+    if (!operatorCtx_->allPeersArrived(&future_, promises, peerOperators)) {
       return;
     }
     VELOX_FAIL("Last driver should not finish successfully.");
@@ -297,16 +298,19 @@ class ExternalBlocker {
 // A test node that normally just re-project/passthrough the output from input
 // When the node is blocked by external event (via externalBlocker), the
 // operator will signal kBlocked. The pipeline can ONLY proceed again when it is
-// unblocked externally.
+// unblocked externally. The operator calls 'closeCallback', if set, when it
+// closes.
 class TestExternalBlockableNode : public core::PlanNode {
  public:
   TestExternalBlockableNode(
       const core::PlanNodeId& id,
       core::PlanNodePtr source,
-      std::shared_ptr<ExternalBlocker> externalBlocker)
+      std::shared_ptr<ExternalBlocker> externalBlocker,
+      std::function<void()> closeCallback = nullptr)
       : PlanNode(id),
         sources_{std::move(source)},
-        externalBlocker_(std::move(externalBlocker)) {}
+        externalBlocker_(std::move(externalBlocker)),
+        closeCallback_(std::move(closeCallback)) {}
 
   const RowTypePtr& outputType() const override {
     return sources_[0]->outputType();
@@ -324,11 +328,16 @@ class TestExternalBlockableNode : public core::PlanNode {
     return externalBlocker_.get();
   }
 
+  const std::function<void()>& closeCallback() const {
+    return closeCallback_;
+  }
+
  private:
   void addDetails(std::stringstream& /* stream */) const override {}
 
   std::vector<core::PlanNodePtr> sources_;
   std::shared_ptr<ExternalBlocker> externalBlocker_;
+  std::function<void()> closeCallback_;
 };
 
 class TestExternalBlockableOperator : public exec::Operator {
@@ -343,7 +352,8 @@ class TestExternalBlockableOperator : public exec::Operator {
             operatorId,
             node->id(),
             "ExternalBlockable"),
-        externalBlocker_(node->externalBlocker()) {}
+        externalBlocker_(node->externalBlocker()),
+        closeCallback_(node->closeCallback()) {}
 
   bool needsInput() const override {
     return !noMoreInput_;
@@ -376,9 +386,17 @@ class TestExternalBlockableOperator : public exec::Operator {
     return noMoreInput_;
   }
 
+  void close() override {
+    Operator::close();
+    if (closeCallback_) {
+      closeCallback_();
+    }
+  }
+
  private:
   RowVectorPtr input_;
   ExternalBlocker* externalBlocker_;
+  const std::function<void()> closeCallback_;
   ContinueFuture continueFuture_{ContinueFuture::makeEmpty()};
 };
 
@@ -715,7 +733,7 @@ TEST_F(TaskTest, toJson) {
       "\n}");
   ASSERT_EQ(
       folly::toPrettyJson(task->toJson()),
-      "{\n  \"concurrentSplitGroups\": 1,\n  \"drivers\": {},\n  \"exchangeClientByPlanNode\": {},\n  \"groupedPartitionedOutput\": false,\n  \"id\": \"task-1\",\n  \"noMoreOutputBuffers\": false,\n  \"numDriversPerSplitGroup\": 0,\n  \"numDriversUngrouped\": 0,\n  \"numFinishedDrivers\": 0,\n  \"numRunningDrivers\": 0,\n  \"numRunningSplitGroups\": 0,\n  \"numThreads\": 0,\n  \"numTotalDrivers\": 0,\n  \"onThreadSince\": \"0\",\n  \"partitionedOutputConsumed\": false,\n  \"pauseRequested\": false,\n  \"plan\": \"-- Project[1][expressions: (p0:INTEGER, multiply(ROW[\\\"a\\\"],ROW[\\\"a\\\"])), (p1:DOUBLE, plus(ROW[\\\"b\\\"],ROW[\\\"b\\\"]))] -> p0:INTEGER, p1:DOUBLE\\n  -- TableScan[0][table: hive_table] -> a:INTEGER, b:DOUBLE\\n\",\n  \"shortId\": \"task-1\",\n  \"state\": \"Running\",\n  \"terminateRequested\": false\n}");
+      "{\n  \"concurrentSplitGroups\": 1,\n  \"drivers\": {},\n  \"exchangeClientByPlanNode\": {},\n  \"groupedPartitionedOutput\": false,\n  \"id\": \"task-1\",\n  \"noMoreOutputBuffers\": false,\n  \"numDriversPerSplitGroup\": 0,\n  \"numDriversUngrouped\": 0,\n  \"numFinishedDrivers\": 0,\n  \"numRunningDrivers\": 0,\n  \"numRunningSplitGroups\": 0,\n  \"numThreads\": 0,\n  \"numTotalDrivers\": 0,\n  \"onThreadUs\": 0,\n  \"partitionedOutputConsumed\": false,\n  \"pauseRequested\": false,\n  \"plan\": \"-- Project[1][expressions: (p0:INTEGER, multiply(ROW[\\\"a\\\"],ROW[\\\"a\\\"])), (p1:DOUBLE, plus(ROW[\\\"b\\\"],ROW[\\\"b\\\"]))] -> p0:INTEGER, p1:DOUBLE\\n  -- TableScan[0][table: hive_table] -> a:INTEGER, b:DOUBLE\\n\",\n  \"shortId\": \"task-1\",\n  \"state\": \"Running\",\n  \"terminateRequested\": false\n}");
   ASSERT_EQ(
       folly::toPrettyJson(task->toShortJson()),
       "{\n  \"id\": \"task-1\",\n  \"numFinishedDrivers\": 0,\n  \"numRunningDrivers\": 0,\n  \"numThreads\": 0,\n  \"numTotalDrivers\": 0,\n  \"pauseRequested\": false,\n  \"shortId\": \"task-1\",\n  \"state\": \"Running\",\n  \"terminateRequested\": false\n}");
@@ -1190,63 +1208,6 @@ TEST_F(TaskTest, customExchangeTransportContext) {
   EXPECT_NE(observed.pool, nullptr);
   EXPECT_EQ(observed.executor, driverExecutor_.get());
   task->requestAbort().wait();
-}
-
-TEST_F(TaskTest, abortToleratesThrowingExchangeClient) {
-  // Exceptions from close() or noMoreRemoteTasks() must not interrupt
-  // termination or strand waiters.
-  for (const bool throwOnClose : {true, false}) {
-    SCOPED_TRACE(
-        throwOnClose ? "close() throws" : "noMoreRemoteTasks() throws");
-    const std::string transportKind{"throwing-exchange"};
-    auto queryRegistry = ExchangeTransportRegistry::create();
-    auto queryCtx = core::QueryCtx::create(driverExecutor_.get());
-    queryCtx->setRegistry(
-        ExchangeTransportRegistry::kRegistryKey, queryRegistry);
-    queryRegistry->insert(
-        transportKind,
-        ExchangeTransportEntry::make<TestExchangeClient>(
-            [throwOnClose](const ExchangeClientContext&) {
-              auto fail = [] { throw std::runtime_error("transport failure"); };
-              TestExchangeClientCallbacks callbacks;
-              if (throwOnClose) {
-                callbacks.onClose = fail;
-              } else {
-                callbacks.onNoMoreRemoteTasks = fail;
-              }
-              return std::make_shared<TestExchangeClient>(std::move(callbacks));
-            },
-            [](int32_t operatorId,
-               DriverCtx* ctx,
-               const std::shared_ptr<const core::ExchangeNode>& node,
-               const std::shared_ptr<TestExchangeClient>&)
-                -> std::unique_ptr<Operator> {
-              return std::make_unique<TestExchangeOperator>(
-                  operatorId, ctx, node);
-            }));
-
-    auto plan = PlanBuilder()
-                    .exchange(ROW("a", BIGINT()), "Presto", transportKind)
-                    .planFragment();
-    const auto exchangeNodeId = plan.planNode->id();
-    auto task = Task::create(
-        "task-throwing-exchange-client",
-        std::move(plan),
-        0,
-        queryCtx,
-        Task::ExecutionMode::kParallel,
-        exec::Consumer{});
-
-    task->start(1, 1);
-    // Leave a split queued so termination calls noMoreRemoteTasks().
-    task->addSplit(
-        exchangeNodeId,
-        exec::Split(std::make_shared<RemoteConnectorSplit>("remote-task")));
-    task->noMoreSplits(exchangeNodeId);
-
-    EXPECT_NO_THROW(task->requestAbort().wait());
-    EXPECT_EQ(task->state(), TaskState::kAborted);
-  }
 }
 
 DEBUG_ONLY_TEST_F(TaskTest, abortDuringTaskStartupFinishesPlannedDrivers) {
@@ -2751,12 +2712,16 @@ DEBUG_ONLY_TEST_F(TaskPauseTest, raceBetweenTaskPauseAndTerminate) {
   ASSERT_EQ(task_->numTotalDrivers(), 1);
   ASSERT_EQ(task_->numFinishedDrivers(), 0);
   ASSERT_EQ(task_->numRunningDrivers(), 0);
+  // The paused driver is off thread, so terminate() leaves it to resume().
+  auto allDriversClosed = task_->allDriversClosedFuture();
+  ASSERT_FALSE(allDriversClosed.isReady());
 
   Task::resume(task_->shared_from_this());
 
   ASSERT_EQ(task_->numTotalDrivers(), 1);
   ASSERT_EQ(task_->numFinishedDrivers(), 1);
   ASSERT_EQ(task_->numRunningDrivers(), 0);
+  ASSERT_TRUE(allDriversClosed.isReady());
 
   taskThread_.join();
 }
@@ -2784,9 +2749,8 @@ DEBUG_ONLY_TEST_F(TaskPauseTest, resumeFuture) {
   observeThread.join();
 
   ASSERT_EQ(task_->numTotalDrivers(), 1);
-  while (task_->numFinishedDrivers() != 1) {
-    std::this_thread::sleep_for(std::chrono::milliseconds(100)); // NOLINT
-  }
+  ASSERT_TRUE(task_->allDriversClosedFuture().wait(std::chrono::seconds(10)));
+  ASSERT_EQ(task_->numFinishedDrivers(), 1);
   ASSERT_EQ(task_->numRunningDrivers(), 0);
 }
 
@@ -3757,6 +3721,209 @@ DEBUG_ONLY_TEST_F(TaskTest, taskDeletionPromise) {
   // The task deletion future is ful-filled after the wait.
   ASSERT_TRUE(deleteFuture.wait().hasValue());
   queryThread.join();
+}
+
+TEST_F(TaskTest, allDriversClosedFutureOnStoppedTask) {
+  const auto data = makeRowVector({makeFlatVector<int64_t>({1, 2, 3})});
+  const auto plan = PlanBuilder().values({data}).planFragment();
+
+  {
+    auto task = Task::create(
+        "never-started",
+        plan,
+        0,
+        core::QueryCtx::create(driverExecutor_.get()),
+        Task::ExecutionMode::kParallel,
+        exec::Consumer{});
+    auto allDriversClosed = task->allDriversClosedFuture();
+    ASSERT_FALSE(allDriversClosed.isReady());
+
+    task->requestCancel().wait();
+    ASSERT_TRUE(allDriversClosed.isReady());
+    ASSERT_TRUE(task->allDriversClosedFuture().isReady());
+  }
+
+  {
+    // assertResults() waits for the drivers to close.
+    auto task = AssertQueryBuilder(plan.planNode).assertResults(data);
+    ASSERT_TRUE(task->allDriversClosedFuture().isReady());
+  }
+}
+
+TEST_F(TaskTest, allDriversClosedFutureWaitsForOffThreadClose) {
+  exec::Operator::registerOperator(
+      std::make_unique<TestExternalBlockableTranslator>());
+  auto blocker = std::make_shared<ExternalBlocker>();
+  folly::Baton<> closeStarted;
+  std::atomic_bool closeAllowed{false};
+  folly::EventCount closeAllowedWait;
+  // The local exchange splits the plan into the output pipeline and a producer
+  // pipeline that holds the blockable operator, with one driver each.
+  const auto plan =
+      PlanBuilder()
+          .values({makeRowVector({makeFlatVector<int64_t>({1, 2, 3})})})
+          .addNode([&](const std::string& id, core::PlanNodePtr input) {
+            return std::make_shared<TestExternalBlockableNode>(
+                id, std::move(input), blocker, [&]() {
+                  closeStarted.post();
+                  closeAllowedWait.await([&]() { return closeAllowed.load(); });
+                });
+          })
+          .localPartition({})
+          .planFragment();
+  auto task = Task::create(
+      "task",
+      plan,
+      0,
+      core::QueryCtx::create(),
+      Task::ExecutionMode::kSerial,
+      exec::Consumer{});
+
+  // The blocked operator takes the producer off thread, and the output driver
+  // waits off thread for the producer.
+  blocker->block();
+  ContinueFuture blockedFuture = ContinueFuture::makeEmpty();
+  ASSERT_EQ(task->next(&blockedFuture), nullptr);
+  ASSERT_TRUE(blockedFuture.valid());
+  // The callback on the blocked future holds the driver until this unblocks.
+  SCOPE_EXIT {
+    blocker->unblock();
+  };
+
+  // terminate() closes the off-thread drivers in pipeline order on the thread
+  // that calls it, so the output driver has closed when the producer starts to.
+  std::thread cancelThread([&]() { task->requestCancel(); });
+  SCOPE_EXIT {
+    closeAllowed = true;
+    closeAllowedWait.notifyAll();
+    cancelThread.join();
+  };
+  ASSERT_TRUE(closeStarted.try_wait_for(std::chrono::seconds(10)));
+  auto allDriversClosed = task->allDriversClosedFuture();
+  ASSERT_TRUE(task->taskCompletionFuture().isReady());
+  ASSERT_FALSE(allDriversClosed.isReady());
+  ASSERT_EQ(task->numFinishedDrivers(), 1);
+  {
+    const auto stats = task->taskStats();
+    ASSERT_EQ(stats.numCompletedDrivers, 1);
+    ASSERT_EQ(stats.numRunningDrivers, 1);
+    EXPECT_THAT(
+        stats.pipelineStats[1].operatorStats,
+        testing::Each(testing::Field(&OperatorStats::numDrivers, 0)));
+  }
+
+  closeAllowed = true;
+  closeAllowedWait.notifyAll();
+  ASSERT_TRUE(std::move(allDriversClosed).wait(std::chrono::seconds(10)));
+  ASSERT_EQ(task->numFinishedDrivers(), task->numTotalDrivers());
+  for (const auto& pipelineStats : task->taskStats().pipelineStats) {
+    EXPECT_THAT(
+        pipelineStats.operatorStats,
+        testing::Each(testing::Field(&OperatorStats::numDrivers, 1)));
+  }
+}
+
+DEBUG_ONLY_TEST_F(TaskTest, allDriversClosedFutureAfterOutputPipelineFinishes) {
+  const auto data = makeRowVector({makeFlatVector<int64_t>({1, 2, 3})});
+  // The output pipeline finishes after one row, while the producer pipeline
+  // has more to produce.
+  const auto plan = PlanBuilder()
+                        .values({data}, false, 1'000)
+                        .localPartition({})
+                        .limit(0, 1, false)
+                        .planFragment();
+
+  // Holds the producer in its second getOutput() call. The suspended section
+  // keeps it out of the task's thread count, like a driver waiting for memory
+  // arbitration.
+  std::atomic_int32_t numValuesCalls{0};
+  folly::Baton<> producerHeld;
+  std::atomic_bool producerReleased{false};
+  folly::EventCount producerReleasedWait;
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Values::getOutput",
+      std::function<void(const exec::Values*)>([&](const exec::Values* values) {
+        if (++numValuesCalls != 2) {
+          return;
+        }
+        TestSuspendedSection suspendedSection(values->operatorCtx()->driver());
+        producerHeld.post();
+        producerReleasedWait.await([&]() { return producerReleased.load(); });
+      }));
+  // Lets the output pipeline finish only once the producer is held.
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Driver::runInternal::noMoreInput",
+      std::function<void(Operator*)>([&](Operator* op) {
+        if (op->operatorType() == "CallbackSink") {
+          producerHeld.wait();
+        }
+      }));
+
+  auto task = Task::create(
+      "task",
+      plan,
+      0,
+      core::QueryCtx::create(driverExecutor_.get()),
+      Task::ExecutionMode::kParallel,
+      [](RowVectorPtr /*vector*/,
+         bool /*drained*/,
+         ContinueFuture* /*future*/) { return BlockingReason::kNotBlocked; });
+  task->start(1);
+  SCOPE_EXIT {
+    producerReleased = true;
+    producerReleasedWait.notifyAll();
+  };
+
+  ASSERT_TRUE(
+      waitForTaskStateChange(task.get(), TaskState::kFinished, 10'000'000));
+  // requestAbort() on the finished task waits for the threads the task counts,
+  // which leave out the suspended producer.
+  ASSERT_TRUE(task->requestAbort().wait(std::chrono::seconds(10)));
+  auto allDriversClosed = task->allDriversClosedFuture();
+  ASSERT_FALSE(allDriversClosed.isReady());
+
+  producerReleased = true;
+  producerReleasedWait.notifyAll();
+  ASSERT_TRUE(std::move(allDriversClosed).wait(std::chrono::seconds(10)));
+  for (const auto& pipelineStats : task->taskStats().pipelineStats) {
+    EXPECT_THAT(
+        pipelineStats.operatorStats,
+        testing::Each(testing::Field(&OperatorStats::numDrivers, 1)));
+  }
+}
+
+TEST_F(TaskTest, allDriversClosedFutureWithQueuedSplitGroup) {
+  const auto data = makeRowVector({makeFlatVector<int64_t>({1, 2, 3})});
+  const auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), {data});
+  auto plan = PlanBuilder().tableScan(asRowType(data->type())).planFragment();
+  const auto scanNodeId = plan.planNode->id();
+  plan.executionStrategy = core::ExecutionStrategy::kGrouped;
+  plan.groupedExecutionLeafNodeIds.emplace(scanNodeId);
+  plan.numSplitGroups = 2;
+  auto task = Task::create(
+      "task",
+      std::move(plan),
+      0,
+      core::QueryCtx::create(driverExecutor_.get()),
+      Task::ExecutionMode::kParallel,
+      [](RowVectorPtr /*vector*/,
+         bool /*drained*/,
+         ContinueFuture* /*future*/) { return BlockingReason::kNotBlocked; });
+  // With one split group at a time, group 1 stays queued while group 0 waits
+  // for more splits.
+  task->start(1, 1);
+  for (int32_t groupId = 0; groupId < 2; ++groupId) {
+    task->addSplit(
+        scanNodeId,
+        exec::Split(makeHiveConnectorSplit(filePath->getPath()), groupId));
+  }
+
+  task->requestCancel().wait();
+  ASSERT_TRUE(waitForTaskDriversToFinish(task.get()));
+  // The total counts the drivers of group 1, which the task never creates.
+  ASSERT_EQ(task->numTotalDrivers(), 2);
+  ASSERT_EQ(task->numFinishedDrivers(), 1);
 }
 
 DEBUG_ONLY_TEST_F(TaskTest, taskCancellation) {

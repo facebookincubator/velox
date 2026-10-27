@@ -29,6 +29,19 @@ namespace facebook::velox::connector::hive::iceberg {
 struct HiveIcebergSplit;
 struct IcebergDeleteFile;
 
+/// Scan-spec state that outlives a split reader. The data source creates a new
+/// reader for every split but keeps the scan spec, and a preloaded split brings
+/// its scan spec along when the data source adopts it.
+struct IcebergScanSpecState {
+  /// Columns that received a dynamic filter. Their filters stay enabled in
+  /// every split, even when the split's partition values enforce them.
+  folly::F14FastSet<std::string> dynamicFilterColumns;
+
+  /// Columns a split set to a constant that holds for that split only. The next
+  /// split clears these constants before configuring its own.
+  folly::F14FastSet<std::string> splitConstantColumns;
+};
+
 class IcebergSplitReader : public FileSplitReader {
  public:
   IcebergSplitReader(
@@ -44,7 +57,8 @@ class IcebergSplitReader : public FileSplitReader {
       FileHandleFactory* fileHandleFactory,
       folly::Executor* executor,
       const std::shared_ptr<common::ScanSpec>& scanSpec,
-      std::shared_ptr<ColumnHandleMap> columnHandles);
+      std::shared_ptr<ColumnHandleMap> columnHandles,
+      IcebergScanSpecState* scanSpecState = nullptr);
 
   ~IcebergSplitReader() override = default;
 
@@ -55,6 +69,15 @@ class IcebergSplitReader : public FileSplitReader {
       override;
 
   uint64_t next(uint64_t size, VectorPtr& output) override;
+
+  /// Re-enables the filter on 'columnName' if this split disabled it as
+  /// partition-enforced, so a dynamic filter pushed onto the column applies.
+  void enableFilterForDynamicFilter(const std::string& columnName);
+
+  /// Points this reader at the state of the data source that adopted it.
+  void setScanSpecState(IcebergScanSpecState* scanSpecState) {
+    scanSpecState_ = scanSpecState;
+  }
 
  private:
   // Configures the base reader options. For DWRF/ORC Iceberg reads, selects
@@ -203,6 +226,40 @@ class IcebergSplitReader : public FileSplitReader {
   // out of its file-natural position.
   folly::F14FastSet<std::string> equalityAugmentedPartitionColumns_;
 
+  // Sets every scan-spec column the split proves is an identity partition
+  // field (see 'HiveIcebergSplit::identityPartitionKeys') to its partition
+  // value, as Java Presto does for 'PARTITION_KEY' columns. The column is then
+  // never read from the data file, which Iceberg writers fill with the same
+  // value on every row.
+  void configureIdentityPartitionColumns();
+
+  // Clears the constants the previous split set in
+  // 'IcebergScanSpecState::splitConstantColumns'. The scan spec is shared
+  // across splits, so a stale constant would replace the next file's values.
+  void clearSplitConstants();
+
+  // Names of scan-spec children 'configureIdentityPartitionColumns' set to a
+  // partition-value constant for the current split. 'adaptColumns' keeps
+  // these constants when the data file also carries the column.
+  folly::F14FastSet<std::string> identityPartitionColumns_;
+
+  // Disables, for this split, the filters on the columns in
+  // 'HiveIcebergSplit::partitionEnforcedFieldIds', whose partition values
+  // already satisfy the filter for every row, and re-enables the filters a
+  // previous split sharing the scan spec disabled. A column with a dynamic
+  // filter keeps its filter. A column only that filter reads becomes a null
+  // constant for the split, so the reader skips it. The filled-in columns stay
+  // with 'configurePostReadFilters'.
+  void configurePartitionEnforcedFilters();
+
+  // Columns whose filter 'configurePartitionEnforcedFilters' disabled.
+  folly::F14FastSet<std::string> partitionEnforcedColumns_;
+
+  // Used when no data source supplies the state.
+  IcebergScanSpecState ownScanSpecState_;
+
+  IcebergScanSpecState* scanSpecState_;
+
  protected:
   const std::shared_ptr<const HiveIcebergSplit> icebergSplit_;
 
@@ -243,8 +300,8 @@ class IcebergSplitReader : public FileSplitReader {
   // Resolved once per split in prepareSplit() from 'readerOutputType_', which
   // mirrors the Iceberg column assignments, so next() pays nothing for tables
   // without a geometry column. The Iceberg connector is the sole owner of the
-  // WKB -> internal-geometry conversion; see IcebergGeometryConverter.h.
-  std::vector<column_index_t> geometryOutputChannels_;
+  // WKB -> internal-geometry conversion; see IcebergGeospatialConverter.h.
+  std::vector<column_index_t> geospatialOutputChannels_;
   // Whether the reader appends a row-number column, the source of the file
   // positions for _row_id and $target_table_row_id.
   bool useRowNumberColumn_{false};

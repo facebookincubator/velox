@@ -16,6 +16,8 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
+
 #include "velox/core/Expressions.h"
 #include "velox/expression/fuzzer/ArgValuesGenerators.h"
 
@@ -66,6 +68,58 @@ TEST(ArgValuesGeneratorsTest, inverseFCdf) {
       EXPECT_LE(denominator, 1'000'000);
       EXPECT_GE(probability, 0);
       EXPECT_LE(probability, 1);
+    }
+  }
+}
+
+TEST(ArgValuesGeneratorsTest, levenshtein) {
+  VectorFuzzer::Options options;
+  options.nullRatio = 0;
+
+  FuzzerGenerator rng{0};
+  ExpressionFuzzerState state{rng, 5};
+  LevenshteinArgValuesGenerator generator;
+
+  for (const auto& args : std::vector<std::vector<TypePtr>>{
+           {VARCHAR(), VARCHAR()},
+           {VARCHAR(), VARCHAR(), INTEGER()},
+       }) {
+    const CallableSignature signature{
+        .name = "levenshtein",
+        .args = args,
+        .returnType = INTEGER(),
+        .constantArgs = std::vector<bool>(args.size(), false),
+    };
+
+    for (auto i = 0; i < 100; ++i) {
+      state.reset();
+      const auto inputs = generator.generate(signature, options, rng, state);
+
+      // Every argument must read an input column. Arguments left null would be
+      // filled with arbitrary expressions, which can produce strings long
+      // enough to make the distance computation run for minutes.
+      ASSERT_EQ(inputs.size(), args.size());
+      ASSERT_EQ(state.customInputGenerators_.size(), args.size());
+      for (auto j = 0; j < args.size(); ++j) {
+        const auto field =
+            std::dynamic_pointer_cast<const core::FieldAccessTypedExpr>(
+                inputs[j]);
+        ASSERT_NE(field, nullptr);
+        EXPECT_EQ(field->name(), state.inputRowNames_[j]);
+      }
+
+      for (auto j = 0; j < 2; ++j) {
+        ASSERT_NE(state.customInputGenerators_[j], nullptr);
+        for (auto k = 0; k < 20; ++k) {
+          const auto value =
+              state.customInputGenerators_[j]->generate().value<std::string>();
+          const auto numCharacters =
+              std::count_if(value.begin(), value.end(), [](char c) {
+                return (c & 0xC0) != 0x80;
+              });
+          EXPECT_LE(numCharacters, 1'000);
+        }
+      }
     }
   }
 }

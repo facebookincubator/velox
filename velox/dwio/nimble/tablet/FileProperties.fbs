@@ -75,6 +75,20 @@ table FileProperties {
   /// copies streams into a file that declares this field must copy their
   /// trailers too.
   stream_trailer:[StreamTrailerField];
+
+  /// Whether any top-level row in the file is null.
+  has_top_level_nulls:bool = false;
+
+  /// Features a reader must support to read this file, as a bitset: feature i
+  /// is the bit with value 1 << (i % 8) in byte i / 8. Writers set only the
+  /// bits of features the file uses, end at the byte that holds the highest
+  /// one, and leave the field out when there are none. A reader refuses a file
+  /// that sets any bit the reader does not support, and checks this field
+  /// before the other fields of this table. Only set bits count, so extra zero
+  /// bytes change nothing. Bit numbers are assigned in RequiredFeature
+  /// (FileProperties.h). Once assigned, a bit is never reused and readers never
+  /// drop support for it.
+  required_features:[ubyte];
 }
 
 root_type FileProperties;

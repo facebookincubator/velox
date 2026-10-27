@@ -17,30 +17,20 @@
 
 #include "velox/connectors/hive/FileDataSource.h"
 #include "velox/connectors/hive/paimon/PaimonConfig.h"
+#include "velox/connectors/hive/paimon/PaimonTableHandle.h"
 
 namespace facebook::velox::connector::hive::paimon {
 
 class PaimonConnectorSplit;
 
-/// Paimon-specific data source that extends FileDataSource.
-///
-/// Acts as an orchestrator that selects the right reading strategy based on
-/// split properties:
-///
-///   rawConvertible=true (append-only or fully-compacted primary-key):
-///     Creates a PaimonSplitReader that handles multi-file iteration,
-///     deletion vectors, and _rowkind internally. FileDataSource::next()
-///     drives the read loop — no override needed.
-///
-///   rawConvertible=false (primary-key with overlapping keys):
-///     Merge path. A PaimonMergeReader opens all files simultaneously and
-///     performs a sorted merge by primary key, deduplicating by sequence
-///     number. Not yet implemented.
+/// Data source for reading Paimon tables. Reuses FileDataSource for projection
+/// and filtering, and PaimonSplitReader to read the files in each logical
+/// split.
 class PaimonDataSource : public FileDataSource {
  public:
   PaimonDataSource(
       const RowTypePtr& outputType,
-      const ConnectorTableHandlePtr& tableHandle,
+      const std::shared_ptr<const PaimonTableHandle>& tableHandle,
       const ColumnHandleMap& assignments,
       FileHandleFactory* fileHandleFactory,
       folly::Executor* ioExecutor,
@@ -49,14 +39,16 @@ class PaimonDataSource : public FileDataSource {
 
   void addSplit(std::shared_ptr<ConnectorSplit> split) override;
 
+  void setFromDataSource(std::unique_ptr<DataSource> sourceUnique) override;
+
  protected:
-  /// Creates a PaimonSplitReader with all data files from the Paimon split.
-  /// Called by FileDataSource::addSplit() during split initialization.
+  /// Creates a reader for the complete logical Paimon split.
   std::unique_ptr<FileSplitReader> createSplitReader() override;
 
  private:
-  // The original Paimon split. Stored so createSplitReader() can access
-  // the full list of data files.
+  const std::shared_ptr<const PaimonTableHandle> paimonTableHandle_;
+
+  // Retains the complete split while FileDataSource uses its first file.
   std::shared_ptr<PaimonConnectorSplit> paimonSplit_;
 };
 

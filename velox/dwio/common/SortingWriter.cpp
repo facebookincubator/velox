@@ -16,6 +16,8 @@
 
 #include "velox/dwio/common/SortingWriter.h"
 
+#include <folly/stop_watch.h>
+
 namespace facebook::velox::dwio::common {
 SortingWriter::SortingWriter(
     std::unique_ptr<Writer> writer,
@@ -53,9 +55,9 @@ void SortingWriter::flush() {
 }
 
 bool SortingWriter::finish() {
-  const uint64_t startTimeMs = getCurrentTimeMs();
+  const folly::stop_watch<std::chrono::milliseconds> finishWatch;
   SCOPE_EXIT {
-    const uint64_t flushTimeMs = getCurrentTimeMs() - startTimeMs;
+    const uint64_t flushTimeMs = finishWatch.elapsed().count();
     if (flushTimeMs != 0) {
       RECORD_HISTOGRAM_METRIC_VALUE(
           kMetricHiveSortWriterFinishTimeMs, flushTimeMs);
@@ -72,7 +74,7 @@ bool SortingWriter::finish() {
   const auto maxOutputBatchRows = outputBatchRows();
   RowVectorPtr output{nullptr};
   do {
-    if (getCurrentTimeMs() - startTimeMs > finishTimeSliceLimitMs_) {
+    if (finishWatch.elapsed().count() > finishTimeSliceLimitMs_) {
       return false;
     }
     output = sortBuffer_->getOutput(maxOutputBatchRows);

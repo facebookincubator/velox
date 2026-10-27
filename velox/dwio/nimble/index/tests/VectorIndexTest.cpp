@@ -15,6 +15,7 @@
  */
 
 #include <faiss/IndexFlat.h>
+#include <faiss/IndexIVF.h>
 #include <fmt/format.h>
 #include <folly/ScopeGuard.h>
 #include <gtest/gtest.h>
@@ -547,6 +548,12 @@ TEST_F(VectorIndexTest, searchMatchesAcrossBatchSizes) {
           .indexType = VectorIndexType::kIvfRaBitQ,
           .searchOptions = std::make_shared<VectorIndex::IvfSearchOptions>(8),
       },
+#ifndef DISABLE_META_INTERNAL_FAISS_IVF_RABITQ_FAST_SCAN
+      TestParam{
+          .indexType = VectorIndexType::kIvfRaBitQFastScan,
+          .searchOptions = std::make_shared<VectorIndex::IvfSearchOptions>(8),
+      },
+#endif
       TestParam{
           .indexType = VectorIndexType::kHnswSq8,
           .searchOptions = std::make_shared<VectorIndex::HnswSearchOptions>(32),
@@ -583,6 +590,86 @@ TEST_F(VectorIndexTest, searchMatchesAcrossBatchSizes) {
       expectSearchResultsEqual(
           batchResults.results(query), expected.results(0));
     }
+  }
+}
+
+TEST_F(VectorIndexTest, searchResultsDerivesCounts) {
+  VectorIndex::SearchResults results{
+      std::vector<VectorIndex::SearchResult>{{.rowId = 7, .score = 1.0}},
+      std::vector<size_t>{0, 1},
+      VectorIndex::SearchStats{
+          .numQueries = 9,
+          .numResults = 9,
+          .partitionAssignmentTiming = {},
+          .searchTiming = {},
+          .ivf = {},
+      },
+  };
+
+  EXPECT_EQ(results.stats().numQueries, 1);
+  EXPECT_EQ(results.stats().numResults, 1);
+}
+
+TEST_F(VectorIndexTest, searchStats) {
+  constexpr uint32_t kNumQueries{3};
+  const auto data = generateRandomVectors(500, kDimensions);
+  const auto queries =
+      generateRandomVectors(kNumQueries, kDimensions, /*seed=*/99);
+
+  {
+    const auto written =
+        writeIndexFromVectors(makeConfig(VectorIndexType::kIvfFlat), data);
+    const auto results = readIndex(written)->search({
+        .numQueries = kNumQueries,
+        .queryVectors = queries,
+        .numNeighbors = 5,
+        .searchOptions = std::make_shared<VectorIndex::IvfSearchOptions>(8),
+    });
+
+    EXPECT_EQ(results.stats().numQueries, kNumQueries);
+    EXPECT_EQ(results.stats().numResults, results.totalNumResults());
+    EXPECT_EQ(results.stats().partitionAssignmentTiming.count, 1);
+    EXPECT_EQ(results.stats().searchTiming.count, 1);
+    ASSERT_TRUE(results.stats().ivf.has_value());
+    EXPECT_GT(results.stats().ivf->numPartitionsScanned, 0);
+    EXPECT_GT(results.stats().ivf->numDistanceComputations, 0);
+    EXPECT_GT(results.stats().ivf->numHeapUpdates, 0);
+  }
+
+#ifndef DISABLE_META_INTERNAL_FAISS_IVF_RABITQ_FAST_SCAN
+  {
+    const auto written = writeIndexFromVectors(
+        makeConfig(VectorIndexType::kIvfRaBitQFastScan), data);
+    const auto results = readIndex(written)->search({
+        .numQueries = kNumQueries,
+        .queryVectors = queries,
+        .numNeighbors = 5,
+        .searchOptions = std::make_shared<VectorIndex::IvfSearchOptions>(8),
+    });
+
+    EXPECT_EQ(results.stats().numQueries, kNumQueries);
+    EXPECT_EQ(results.stats().numResults, results.totalNumResults());
+    EXPECT_EQ(results.stats().partitionAssignmentTiming.count, 1);
+    EXPECT_EQ(results.stats().searchTiming.count, 1);
+    EXPECT_FALSE(results.stats().ivf.has_value());
+  }
+#endif
+
+  {
+    const auto written =
+        writeIndexFromVectors(makeConfig(VectorIndexType::kHnswSq8), data);
+    const auto results = readIndex(written)->search({
+        .numQueries = kNumQueries,
+        .queryVectors = queries,
+        .numNeighbors = 5,
+        .searchOptions = std::make_shared<VectorIndex::HnswSearchOptions>(32),
+    });
+
+    EXPECT_EQ(results.stats().numQueries, kNumQueries);
+    EXPECT_EQ(results.stats().numResults, results.totalNumResults());
+    EXPECT_EQ(results.stats().partitionAssignmentTiming.count, 0);
+    EXPECT_EQ(results.stats().searchTiming.count, 1);
+    EXPECT_FALSE(results.stats().ivf.has_value());
   }
 }
 
@@ -707,6 +794,11 @@ TEST_F(VectorIndexTest, searchControlsAndRestoresThreadCount) {
   EXPECT_EQ(omp_get_max_threads(), configuredNumThreads);
 }
 
+template <typename SearchParameters>
+constexpr bool supportsEnsureTopKFull() {
+  return requires(SearchParameters parameters) { parameters.ensure_topk_full; };
+}
+
 TEST_F(VectorIndexTest, searchLimitsScannedCodes) {
   constexpr uint32_t kNumVectors{500};
   constexpr uint32_t kNumNeighbors{10};
@@ -726,6 +818,7 @@ TEST_F(VectorIndexTest, searchLimitsScannedCodes) {
           /*ensureTopKFull=*/false),
   });
   EXPECT_LE(limited.totalNumResults(), 1);
+  EXPECT_EQ(limited.stats().searchTiming.count, 1);
 
   const auto filled = reader->search({
       .numQueries = 1,
@@ -737,6 +830,11 @@ TEST_F(VectorIndexTest, searchLimitsScannedCodes) {
           /*ensureTopKFull=*/true),
   });
   EXPECT_EQ(filled.totalNumResults(), kNumNeighbors);
+  if constexpr (supportsEnsureTopKFull<faiss::SearchParametersIVF>()) {
+    EXPECT_EQ(filled.stats().searchTiming.count, 1);
+  } else {
+    EXPECT_EQ(filled.stats().searchTiming.count, 2);
+  }
 }
 
 TEST_F(VectorIndexTest, searchClampsOversizedSearchParameters) {
@@ -905,6 +1003,13 @@ TEST_F(VectorIndexTest, searchFiltersRowsBeforeTopK) {
           .searchOptions = std::make_shared<VectorIndex::IvfSearchOptions>(
               std::numeric_limits<uint32_t>::max()),
       },
+#ifndef DISABLE_META_INTERNAL_FAISS_IVF_RABITQ_FAST_SCAN
+      TestParam{
+          .indexType = VectorIndexType::kIvfRaBitQFastScan,
+          .searchOptions = std::make_shared<VectorIndex::IvfSearchOptions>(
+              std::numeric_limits<uint32_t>::max()),
+      },
+#endif
       TestParam{
           .indexType = VectorIndexType::kHnswSq8,
           .searchOptions =
@@ -1229,6 +1334,39 @@ TEST_F(VectorIndexTest, retainsPoolBackedSerializedIndex) {
   EXPECT_EQ(pool()->usedBytes(), bytesBeforeLoad);
 }
 
+#ifndef DISABLE_META_INTERNAL_FAISS_IVF_RABITQ_FAST_SCAN
+TEST_F(VectorIndexTest, releasesPoolBackedSerializedFastScanIndex) {
+  constexpr uint32_t kNumVectors{500};
+  const auto data = generateRandomVectors(kNumVectors, kDimensions);
+  const auto written = writeIndex(
+      makeConfig(VectorIndexType::kIvfRaBitQFastScan),
+      {makeInputFromVectors(data, kDimensions)});
+
+  const auto bytesBeforeLoad = pool()->usedBytes();
+  const auto reader = readIndex(written);
+  ASSERT_NE(reader, nullptr);
+  EXPECT_LT(pool()->usedBytes() - bytesBeforeLoad, written.indexData.size());
+
+  std::vector<float> queryVector(data.begin(), data.begin() + kDimensions);
+  const auto searchResult = reader->search({
+      .numQueries = 1,
+      .queryVectors = std::move(queryVector),
+      .numNeighbors = 5,
+      .searchOptions = std::make_shared<VectorIndex::IvfSearchOptions>(8),
+  });
+  EXPECT_FALSE(searchResult.results(0).empty());
+}
+#else
+TEST_F(VectorIndexTest, fastScanRequiresSupportedFaiss) {
+  const auto data = generateRandomVectors(100, kDimensions);
+  NIMBLE_ASSERT_USER_THROW(
+      writeIndex(
+          makeConfig(VectorIndexType::kIvfRaBitQFastScan),
+          {makeInputFromVectors(data, kDimensions)}),
+      "IVF RaBitQ FastScan requires a FAISS build with FastScan support");
+}
+#endif
+
 TEST_F(VectorIndexTest, truncatedFaissIndexRejected) {
   constexpr uint32_t kNumVectors{100};
   auto written = std::make_shared<WrittenIndexes>(writeIndex(
@@ -1508,6 +1646,13 @@ TEST_F(VectorIndexTest, metadataAllIndexTypes) {
           .metric = VectorDistanceMetric::kL2,
           .searchOptions = std::make_shared<VectorIndex::IvfSearchOptions>(8),
       },
+#ifndef DISABLE_META_INTERNAL_FAISS_IVF_RABITQ_FAST_SCAN
+      {
+          .indexType = VectorIndexType::kIvfRaBitQFastScan,
+          .metric = VectorDistanceMetric::kL2,
+          .searchOptions = std::make_shared<VectorIndex::IvfSearchOptions>(8),
+      },
+#endif
       {
           .indexType = VectorIndexType::kHnswSq8,
           .metric = VectorDistanceMetric::kL2,

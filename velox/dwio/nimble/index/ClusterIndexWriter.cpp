@@ -78,6 +78,7 @@ ClusterIndexWriter::ClusterIndexWriter(
               config.encodingLayout,
               config.enforceKeyOrder,
               config.noDuplicateKey,
+              clusterIndexFactory(config.name).keyComparator(),
               pool),
           pool} {}
 

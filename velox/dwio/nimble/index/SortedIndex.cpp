@@ -136,7 +136,15 @@ std::shared_ptr<DecodedKeyChunk> SortedIndex::loadChunk(
           streamOffset + chunkOffset,
           chunkSize,
           velox::dwio::common::LogType::FOOTER),
-      createFlatKeyReader,
+      [](std::string_view encodedKeys,
+         std::function<void*(uint32_t)> stringBufferFactory,
+         velox::memory::MemoryPool* pool) {
+        return createFlatKeyReader(
+            encodedKeys,
+            std::move(stringBufferFactory),
+            /*comparator=*/nullptr,
+            pool);
+      },
       chunkBuffer_,
       pool_);
 }

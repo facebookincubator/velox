@@ -201,6 +201,21 @@ class SparkQueryRunnerToSqlPlanNodeVisitor
       const override {
     VELOX_NYI();
   }
+
+  void visit(const core::FixedPointNode&, core::PlanNodeVisitorContext&)
+      const override {
+    VELOX_NYI();
+  }
+
+  void visit(const core::StateSourceNode&, core::PlanNodeVisitorContext&)
+      const override {
+    VELOX_NYI();
+  }
+
+  void visit(const core::StateHashJoinNode&, core::PlanNodeVisitorContext&)
+      const override {
+    VELOX_NYI();
+  }
 };
 
 } // namespace facebook::velox::functions::sparksql::fuzzer

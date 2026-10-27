@@ -51,17 +51,20 @@
 #include <cudf/round.hpp>
 #include <cudf/scalar/scalar.hpp>
 #include <cudf/scalar/scalar_factories.hpp>
+#include <cudf/stream_compaction.hpp>
 #include <cudf/strings/attributes.hpp>
 #include <cudf/strings/case.hpp>
 #include <cudf/strings/combine.hpp>
 #include <cudf/strings/contains.hpp>
 #include <cudf/strings/convert/convert_datetime.hpp>
+#include <cudf/strings/convert/convert_floats.hpp>
 #include <cudf/strings/convert/convert_integers.hpp>
 #include <cudf/strings/find.hpp>
 #include <cudf/strings/replace.hpp>
 #include <cudf/strings/split/split.hpp>
 #include <cudf/strings/string_view.hpp>
 #include <cudf/strings/strings_column_view.hpp>
+#include <cudf/strings/strip.hpp>
 #include <cudf/structs/structs_column_view.hpp>
 #include <cudf/table/table.hpp>
 #include <cudf/transform.hpp>
@@ -73,7 +76,9 @@
 
 #include <cctype>
 #include <cmath>
+#include <limits>
 #include <memory>
+#include <string_view>
 
 namespace facebook::velox::cudf_velox {
 
@@ -317,9 +322,55 @@ const CudfExpressionEvaluatorEntry* findBestEvaluator(
   return best;
 }
 
+// Returns true if the tree holds a CAST from VARCHAR, which fails on a string
+// that spells no value of the target type; a TRY_CAST gives NULL instead.
+bool containsFailingCastFromVarchar(const core::TypedExprPtr& expr) {
+  if (expr->isCastKind() &&
+      !expr->asUnchecked<core::CastTypedExpr>()->isTryCast() &&
+      !expr->inputs().empty() && expr->inputs()[0]->type()->isVarchar()) {
+    return true;
+  }
+  for (const auto& input : expr->inputs()) {
+    if (containsFailingCastFromVarchar(input)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// Returns true if 'expr' holds a CAST from VARCHAR that the GPU would evaluate
+// on rows the CPU settles without it. On the CPU a CAST error never surfaces
+// on such a row: and and or hold the error and clear it on any row another
+// argument decides (ConjunctExpr::finalizeErrors), coalesce evaluates a later
+// argument only on the rows still null, a default-null function skips the
+// rows where another argument is NULL (Expr::removeSureNulls and
+// evalArgsDefaultNulls), and if and switch evaluate a branch only on the rows
+// its condition selects. The GPU evaluates every argument over every row, and
+// CastFunction raises on any string that spells no value, so a CAST beside
+// another non-constant argument, or beside a NULL constant, keeps the tree on
+// the CPU. A CAST in a branch of if or switch stays there too: the evaluator
+// hands a branch its inputs with the other rows nulled, which spares a cast
+// whose input stays NULL on those rows, such as a cast of a column, but not
+// one whose input a branch fills in, as in if(c0 is null, 0,
+// cast(coalesce(c0, 'x') as bigint)).
+// TODO: Let a cast in a branch run on the GPU once the evaluator skips those
+// rows instead of nulling their inputs
+// (https://github.com/facebookincubator/velox/issues/19677).
+bool castFromVarcharNeedsCpu(const core::TypedExprPtr& expr) {
+  if (!expr->isCallKind()) {
+    return false;
+  }
+  size_t nonConstantOrNullInputs{0};
+  for (const auto& input : expr->inputs()) {
+    nonConstantOrNullInputs += !input->isConstantKind() ||
+        input->asUnchecked<core::ConstantTypedExpr>()->isNull();
+  }
+  return nonConstantOrNullInputs >= 2 && containsFailingCastFromVarchar(expr);
+}
+
 // Recursive, context-free check that some cuDF evaluator supports every node in
 // the expression tree. canExprRunOnGpu wraps this with expression optimization
-// and the timezone fallback.
+// and the session-dependent fallbacks.
 bool canBeEvaluatedByCudf(const core::TypedExprPtr& expr) {
   ensureBuiltinExpressionEvaluatorsRegistered();
 
@@ -334,6 +385,14 @@ bool canBeEvaluatedByCudf(const core::TypedExprPtr& expr) {
   }
   if (!supported) {
     LOG_FALLBACK(expr->toString());
+    return false;
+  }
+
+  if (castFromVarcharNeedsCpu(expr)) {
+    LOG_FALLBACK(
+        fmt::format(
+            "CAST from VARCHAR beside another argument stays on the CPU: {}",
+            expr->toString()));
     return false;
   }
 
@@ -404,18 +463,257 @@ class SplitFunction : public CudfFunction {
   cudf::size_type maxSplitCount_;
 };
 
+// Lists the characters the Presto cast hooks skip around a floating-point
+// literal: ASCII whitespace only (stringImpl::isAsciiWhiteSpace()).
+constexpr std::string_view kFloatingPointCastTrimCharacters{
+    "\t\n\v\f\r\x1c\x1d\x1e\x1f "};
+
+// Casts a string to the integral type T, whose maximum is kMax, with the rules
+// of the Presto cast (util::trimWhiteSpace() and folly::tryTo()): after ASCII
+// whitespace and control characters, bytes 1 to 32, are dropped from both
+// ends, an optional sign and digits whose magnitude is at most kMax, or kMax +
+// 1 when negative. A non-ASCII byte anywhere rejects the string, as on the
+// CPU, where PrestoCastPolicy::throwOnUnicode fails the cast before
+// util::trimWhiteSpace() would drop Unicode whitespace; that is a stopgap
+// (https://github.com/facebookincubator/velox/issues/10803) and this kernel
+// must trim Unicode whitespace once the CPU does. Writes the value and whether
+// the string is one. makePrestoIntegralUdf() defines T and kMax ahead of it.
+constexpr std::string_view kPrestoIntegralUdf = R"***(
+__device__ void presto_integral(T* value, bool* valid, cudf::string_view s) {
+  unsigned char const* d = reinterpret_cast<unsigned char const*>(s.data());
+  int n = s.size_bytes();
+  int i = 0;
+  while (i < n && d[i] >= 1 && d[i] <= 32) {
+    ++i;
+  }
+  while (n > i && d[n - 1] >= 1 && d[n - 1] <= 32) {
+    --n;
+  }
+  bool const negative = i < n && d[i] == '-';
+  if (i < n && (d[i] == '+' || d[i] == '-')) {
+    ++i;
+  }
+  unsigned long long const limit = kMax + (negative ? 1ULL : 0ULL);
+  unsigned long long magnitude = 0;
+  bool ok = i < n;
+  for (; ok && i < n; ++i) {
+    unsigned char const c = d[i];
+    if (c < '0' || c > '9') {
+      ok = false;
+      break;
+    }
+    unsigned long long const digit = c - '0';
+    if (magnitude > (limit - digit) / 10) {
+      ok = false;
+      break;
+    }
+    magnitude = magnitude * 10 + digit;
+  }
+  *valid = ok;
+  *value = !ok ? T{0}
+      : negative ? static_cast<T>(0ULL - magnitude)
+                 : static_cast<T>(magnitude);
+}
+)***";
+
+// Returns kPrestoIntegralUdf for the integral 'type', with T and kMax defined
+// ahead of it.
+std::string makePrestoIntegralUdf(cudf::data_type type) {
+  const char* typeName = nullptr;
+  uint64_t max = 0;
+  switch (type.id()) {
+    case cudf::type_id::INT8:
+      typeName = "int8_t";
+      max = std::numeric_limits<int8_t>::max();
+      break;
+    case cudf::type_id::INT16:
+      typeName = "int16_t";
+      max = std::numeric_limits<int16_t>::max();
+      break;
+    case cudf::type_id::INT32:
+      typeName = "int32_t";
+      max = std::numeric_limits<int32_t>::max();
+      break;
+    case cudf::type_id::INT64:
+      typeName = "int64_t";
+      max = std::numeric_limits<int64_t>::max();
+      break;
+    default:
+      VELOX_FAIL(
+          "Cast from VARCHAR to cuDF type {} is not supported",
+          static_cast<int32_t>(type.id()));
+  }
+  return fmt::format(
+      "using T = {};\nconstexpr unsigned long long kMax = {}ULL;\n{}",
+      typeName,
+      max,
+      kPrestoIntegralUdf);
+}
+
+// Decides whether a string is a REAL or DOUBLE literal to the Presto cast
+// (PrestoCastHooks::doCastToFloatingPoint()): after ASCII whitespace is
+// dropped from both ends, an optional sign, then digits with an optional
+// fraction or a fraction alone, then an optional exponent with digits; or NaN
+// or Infinity in exactly that case.
+constexpr const char* kPrestoFloatingPointValidUdf = R"***(
+__device__ void presto_floating_point_valid(bool* valid, cudf::string_view s) {
+  unsigned char const* d = reinterpret_cast<unsigned char const*>(s.data());
+  int n = s.size_bytes();
+  int i = 0;
+  auto isSpace = [](unsigned char c) {
+    return (c >= 9 && c <= 13) || (c >= 28 && c <= 32);
+  };
+  while (i < n && isSpace(d[i])) {
+    ++i;
+  }
+  while (n > i && isSpace(d[n - 1])) {
+    --n;
+  }
+  if (i < n && (d[i] == '+' || d[i] == '-')) {
+    ++i;
+  }
+  int const rest = n - i;
+  if (rest == 3 && d[i] == 'N' && d[i + 1] == 'a' && d[i + 2] == 'N') {
+    *valid = true;
+    return;
+  }
+  if (rest == 8 && d[i] == 'I' && d[i + 1] == 'n' && d[i + 2] == 'f' &&
+      d[i + 3] == 'i' && d[i + 4] == 'n' && d[i + 5] == 'i' &&
+      d[i + 6] == 't' && d[i + 7] == 'y') {
+    *valid = true;
+    return;
+  }
+  int digits = 0;
+  for (; i < n && d[i] >= '0' && d[i] <= '9'; ++i) {
+    ++digits;
+  }
+  if (i < n && d[i] == '.') {
+    for (++i; i < n && d[i] >= '0' && d[i] <= '9'; ++i) {
+      ++digits;
+    }
+  }
+  if (digits == 0) {
+    *valid = false;
+    return;
+  }
+  if (i < n && (d[i] == 'e' || d[i] == 'E')) {
+    ++i;
+    if (i < n && (d[i] == '+' || d[i] == '-')) {
+      ++i;
+    }
+    int exponentDigits = 0;
+    for (; i < n && d[i] >= '0' && d[i] <= '9'; ++i) {
+      ++exponentDigits;
+    }
+    if (exponentDigits == 0) {
+      *valid = false;
+      return;
+    }
+  }
+  *valid = i == n;
+}
+)***";
+
+// Casts a string to BOOLEAN with the rules of the Presto cast
+// (util::castToBoolean()): t, f, 1, 0, true and false in any case, with
+// nothing trimmed. Writes the value and whether the string is one.
+constexpr const char* kPrestoBooleanUdf = R"***(
+__device__ void presto_boolean(bool* value, bool* valid, cudf::string_view s) {
+  unsigned char const* d = reinterpret_cast<unsigned char const*>(s.data());
+  int const n = s.size_bytes();
+  auto lower = [](unsigned char c) {
+    return (c >= 'A' && c <= 'Z') ? static_cast<unsigned char>(c + ('a' - 'A'))
+                                  : c;
+  };
+  if (n == 1) {
+    unsigned char const c = lower(d[0]);
+    if (c == 't' || c == '1') {
+      *value = true;
+      *valid = true;
+      return;
+    }
+    if (c == 'f' || c == '0') {
+      *value = false;
+      *valid = true;
+      return;
+    }
+  } else if (
+      n == 4 && lower(d[0]) == 't' && lower(d[1]) == 'r' &&
+      lower(d[2]) == 'u' && lower(d[3]) == 'e') {
+    *value = true;
+    *valid = true;
+    return;
+  } else if (
+      n == 5 && lower(d[0]) == 'f' && lower(d[1]) == 'a' &&
+      lower(d[2]) == 'l' && lower(d[3]) == 's' && lower(d[4]) == 'e') {
+    *value = false;
+    *valid = true;
+    return;
+  }
+  *value = false;
+  *valid = false;
+}
+)***";
+
+// Returns true if CastFunction casts VARCHAR to 'target'. cudf::cast has no
+// string source, so CastFunction parses the strings itself for these targets.
+bool isCastFromVarcharSupported(cudf::data_type target) {
+  return cudf::is_boolean(target) || cudf::is_integral_not_bool(target) ||
+      cudf::is_floating_point(target);
+}
+
+// Returns true if 'type' is the plain type of its kind. A logical type under
+// another name, such as JSON or INTERVAL DAY TO SECOND, has its own cast rules
+// on the CPU and stays there.
+bool isPlainType(const TypePtr& type) {
+  return std::string_view(type->name()) == type->kindName();
+}
+
+// Whether the GPU casts VARCHAR at all: CastFunction follows Presto's rules,
+// so the Presto function registration turns it on and the Spark one off.
+// TODO: Register cast as a special form per dialect in place of this switch
+// (https://github.com/facebookincubator/velox/issues/19748).
+bool castFromVarcharEnabled = false;
+
+// Returns true if CastFunction casts 'sourceType' to 'targetType'.
+bool isCastFromVarcharEnabled(
+    const TypePtr& sourceType,
+    const TypePtr& targetType) {
+  if (!castFromVarcharEnabled || !sourceType->isVarchar() ||
+      !isPlainType(sourceType) || !isPlainType(targetType)) {
+    return false;
+  }
+  const auto target = cudf_velox::tryVeloxToCudfDataType(targetType);
+  return target.has_value() && isCastFromVarcharSupported(*target);
+}
+
 class CastFunction : public CudfFunction {
  public:
   CastFunction(const core::TypedExprPtr& expr) {
     VELOX_CHECK_EQ(expr->inputs().size(), 1, "cast expects exactly 1 input");
 
+    const auto& sourceType = expr->inputs()[0]->type();
     targetCudfType_ = cudf_velox::veloxToCudfDataType(expr->type());
-    auto sourceType =
-        cudf_velox::veloxToCudfDataType(expr->inputs()[0]->type());
+    fromVarchar_ = sourceType->isVarchar();
+    if (fromVarchar_) {
+      VELOX_CHECK(
+          isCastFromVarcharEnabled(sourceType, expr->type()),
+          "Cast from {} to {} is not supported",
+          sourceType->toString(),
+          expr->type()->toString());
+      isTryCast_ = expr->isCastKind() &&
+          expr->asUnchecked<core::CastTypedExpr>()->isTryCast();
+      targetTypeName_ = expr->type()->toString();
+      if (cudf::is_integral_not_bool(targetCudfType_)) {
+        integralUdf_ = makePrestoIntegralUdf(targetCudfType_);
+      }
+      return;
+    }
+    const auto sourceCudfType = cudf_velox::veloxToCudfDataType(sourceType);
     VELOX_CHECK(
-        cudf::is_supported_cast(sourceType, targetCudfType_),
+        cudf::is_supported_cast(sourceCudfType, targetCudfType_),
         "Cast from {} to {} is not supported",
-        expr->inputs()[0]->type()->toString(),
+        sourceType->toString(),
         expr->type()->toString());
   }
 
@@ -424,11 +722,148 @@ class CastFunction : public CudfFunction {
       cuda::stream_ref stream,
       rmm::device_async_resource_ref mr) const override {
     auto inputCol = asView(inputColumns[0]);
+    if (fromVarchar_) {
+      return castFromVarchar(inputCol, stream, mr);
+    }
     return cudf::cast(inputCol, targetCudfType_, stream, mr);
   }
 
  private:
+  // Runs 'udf', a CUDA function of one cudf::string_view that writes one value
+  // per entry of 'outputTypes', over the rows of 'input', allocating every
+  // output from 'mr'. A null row stays null in every output.
+  static std::vector<std::unique_ptr<cudf::column>> transformStrings(
+      const std::string& udf,
+      cudf::column_view input,
+      std::initializer_list<cudf::data_type> outputTypes,
+      cuda::stream_ref stream,
+      rmm::device_async_resource_ref mr) {
+    const cudf::transform_input inputs[] = {input};
+    std::vector<cudf::transform_output> outputs;
+    outputs.reserve(outputTypes.size());
+    for (const auto type : outputTypes) {
+      outputs.push_back({type, cudf::output_nullability::PRESERVE});
+    }
+    return cudf::transform(
+               udf,
+               cudf::udf_source_type::CUDA,
+               cudf::null_aware::NO,
+               std::nullopt,
+               inputs,
+               outputs,
+               {},
+               std::nullopt,
+               stream,
+               mr)
+        ->release();
+  }
+
+  // Casts strings with the rules of the CPU's Presto cast: the string, less
+  // the whitespace the cast ignores, must spell a value of the target type. A
+  // NULL stays NULL; any other string fails CAST and becomes NULL under
+  // TRY_CAST.
+  std::unique_ptr<cudf::column> castFromVarchar(
+      cudf::column_view input,
+      cuda::stream_ref stream,
+      rmm::device_async_resource_ref mr) const {
+    auto tempMr = get_temp_mr();
+    const auto boolType = cudf::data_type{cudf::type_id::BOOL8};
+    // 'valid' is false where the string spells no value and null where the
+    // input is null; 'values' holds the parsed values with the input's nulls.
+    // A kernel that writes both allocates 'valid' from 'mr' along with them.
+    std::unique_ptr<cudf::column> valid;
+    std::unique_ptr<cudf::column> values;
+    if (cudf::is_boolean(targetCudfType_)) {
+      auto columns = transformStrings(
+          kPrestoBooleanUdf, input, {boolType, boolType}, stream, mr);
+      values = std::move(columns[0]);
+      valid = std::move(columns[1]);
+    } else if (cudf::is_floating_point(targetCudfType_)) {
+      // TODO: Validate, trim and parse the strings in one kernel
+      // (https://github.com/facebookincubator/velox/issues/19749).
+      valid = std::move(
+          transformStrings(
+              kPrestoFloatingPointValidUdf, input, {boolType}, stream, tempMr)
+              .front());
+      // cudf::strings::to_floats() parses the trimmed string. It scales the
+      // digits by a power of ten in double arithmetic, which is exact for a
+      // significand of at most 15 digits scaled by at most 10^22 when exp10()
+      // returns that power exactly, and can differ from the CPU's correctly
+      // rounded parse in the last bit beyond that; a REAL is rounded through
+      // a double.
+      auto stripped = cudf::strings::strip(
+          cudf::strings_column_view(input),
+          cudf::strings::side_type::BOTH,
+          cudf::string_scalar(
+              std::string(kFloatingPointCastTrimCharacters),
+              true,
+              stream,
+              tempMr),
+          stream,
+          tempMr);
+      values = cudf::strings::to_floats(
+          cudf::strings_column_view(stripped->view()),
+          targetCudfType_,
+          stream,
+          mr);
+    } else {
+      auto columns = transformStrings(
+          integralUdf_, input, {targetCudfType_, boolType}, stream, mr);
+      values = std::move(columns[0]);
+      valid = std::move(columns[1]);
+    }
+
+    if (isTryCast_) {
+      // The rows that spell no value become NULL. bools_to_mask() clears a
+      // false and a null alike, so a null input stays NULL as well. A count
+      // of zero means every input row spelled a value, and 'values' stays as
+      // it is.
+      auto [nullMask, nullCount] =
+          cudf::bools_to_mask(valid->view(), stream, mr);
+      if (nullCount > 0) {
+        values->set_null_mask(std::move(*nullMask), nullCount);
+      }
+      return values;
+    }
+
+    // The rows whose string spells no value; a null input is not one of them.
+    auto invalid = cudf::binary_operation(
+        valid->view(),
+        cudf::numeric_scalar<bool>(false, true, stream, tempMr),
+        cudf::binary_operator::NULL_EQUALS,
+        boolType,
+        stream,
+        tempMr);
+    auto anyInvalid = cudf::reduce(
+        invalid->view(),
+        *cudf::make_any_aggregation<cudf::reduce_aggregation>(),
+        boolType,
+        stream,
+        tempMr);
+    const auto* anyInvalidScalar =
+        static_cast<const cudf::numeric_scalar<bool>*>(anyInvalid.get());
+    if (!anyInvalidScalar->is_valid(stream) ||
+        !anyInvalidScalar->value(stream)) {
+      return values;
+    }
+    // Name the first offending string, as the CPU cast does.
+    auto invalidStrings = cudf::apply_retention_mask(
+        cudf::table_view({input}), invalid->view(), stream, tempMr);
+    auto first =
+        cudf::get_element(invalidStrings->view().column(0), 0, stream, tempMr);
+    VELOX_USER_FAIL(
+        "Cannot cast VARCHAR '{}' to {}.",
+        static_cast<const cudf::string_scalar*>(first.get())->to_string(stream),
+        targetTypeName_);
+  }
+
   cudf::data_type targetCudfType_;
+  // Set when the source is VARCHAR.
+  bool fromVarchar_{false};
+  bool isTryCast_{false};
+  std::string targetTypeName_;
+  // The kernel casting strings to the integral target type.
+  std::string integralUdf_;
 };
 
 class CardinalityFunction : public CudfFunction {
@@ -2132,7 +2567,11 @@ class RowConstructorFunction : public CudfFunction {
         outputSize,
         std::move(children),
         0,
-        cudf::create_null_mask(0, cudf::mask_state::UNALLOCATED, stream, mr),
+        cudf::create_null_mask(
+            0,
+            cudf::mask_state::UNALLOCATED,
+            stream,
+            cudf::memory_resources{mr, get_temp_mr()}),
         stream,
         mr);
   }
@@ -2926,7 +3365,8 @@ std::string exprRegistryName(const core::TypedExprPtr& expr) {
 std::shared_ptr<FunctionExpression> FunctionExpression::create(
     const core::TypedExprPtr& expr,
     const RowTypePtr& inputRowSchema,
-    memory::MemoryPool* pool) {
+    memory::MemoryPool* pool,
+    const core::QueryConfig& config) {
   auto node = std::make_shared<FunctionExpression>();
   node->expr_ = expr;
   node->inputRowSchema_ = inputRowSchema;
@@ -2970,7 +3410,7 @@ std::shared_ptr<FunctionExpression> FunctionExpression::create(
         // string ops).  Field references are handled as leaf
         // FunctionExpressions.
         node->subexpressions_.push_back(
-            createCudfExpression(input, inputRowSchema, pool));
+            createCudfExpression(input, inputRowSchema, pool, config));
       }
     }
   }
@@ -3108,8 +3548,12 @@ MaskedInputs maskInputRows(
       masks.push_back(input.null_mask());
       beginBits.push_back(0);
     }
-    auto [combined, nullCount] =
-        cudf::bitmask_and(masks, beginBits, input.size(), stream, mr);
+    auto [combined, nullCount] = cudf::bitmask_and(
+        masks,
+        beginBits,
+        input.size(),
+        stream,
+        cudf::memory_resources{mr, get_temp_mr()});
     std::vector<cudf::column_view> children;
     children.reserve(input.num_children());
     for (cudf::size_type child = 0; child < input.num_children(); ++child) {
@@ -3270,7 +3714,20 @@ bool FunctionExpression::canEvaluate(const core::TypedExprPtr& expr) {
     }
     auto src = cudf_velox::tryVeloxToCudfDataType(srcType);
     auto dst = cudf_velox::tryVeloxToCudfDataType(dstType);
-    return src && dst && cudf::is_supported_cast(*src, *dst);
+    if (!src || !dst) {
+      return false;
+    }
+    // After expression::optimize(), which canExprRunOnGpu() applies, a cast
+    // of a constant is only left unfolded when it fails; the CPU raises its
+    // error. CastFunction gets no column for a constant, so such a cast stays
+    // on the CPU, as does one in a tree that was not optimized.
+    if (expr->inputs()[0]->isConstantKind()) {
+      return false;
+    }
+    if (srcType->isVarchar()) {
+      return isCastFromVarcharEnabled(srcType, dstType);
+    }
+    return cudf::is_supported_cast(*src, *dst);
   }
 
   auto& registry = getCudfFunctionRegistry();
@@ -3373,37 +3830,117 @@ bool requiresCpuForTimezone(
   return false;
 }
 
+// Returns true if 'expr' must stay on the CPU because it casts from VARCHAR
+// while a session config selects rules CastFunction does not implement:
+// legacy_cast, for every target, and
+// cast_string_to_floating_point_lenient_inf_nan, which admits inf, infinity
+// and nan in any letter case, for REAL and DOUBLE. False when 'queryCtx' is
+// null or both configs are off.
+bool requiresCpuForCastConfig(
+    const core::TypedExprPtr& expr,
+    core::QueryCtx* queryCtx) {
+  if (queryCtx == nullptr) {
+    return false;
+  }
+  const auto& config = queryCtx->queryConfig();
+  if (config.isLegacyCast() &&
+      containsCastFromVarchar(expr, /*floatingPointOnly=*/false)) {
+    LOG_FALLBACK("A cast from VARCHAR stays on the CPU under legacy_cast");
+    return true;
+  }
+  if (config.isCastStringToFloatingPointLenientInfNan() &&
+      containsCastFromVarchar(expr, /*floatingPointOnly=*/true)) {
+    LOG_FALLBACK(
+        "A cast from VARCHAR to REAL or DOUBLE stays on the CPU under "
+        "cast_string_to_floating_point_lenient_inf_nan");
+    return true;
+  }
+  return false;
+}
+
+// Optimizes 'expr' the way the operators do before compiling, so that a support
+// check sees the same tree; see canExprRunOnGpu() in the header. Returns 'expr'
+// itself without a query context or pool.
+core::TypedExprPtr optimizeForCheck(
+    const core::TypedExprPtr& expr,
+    core::QueryCtx* queryCtx,
+    memory::MemoryPool* pool) {
+  return (queryCtx != nullptr && pool != nullptr)
+      ? expression::optimize(expr, queryCtx, pool)
+      : expr;
+}
+
+// Decides canExprRunOnGpu() for an expression optimizeForCheck() returned.
+bool canOptimizedExprRunOnGpu(
+    const core::TypedExprPtr& checked,
+    core::QueryCtx* queryCtx) {
+  return !requiresCpuForTimezone(checked, queryCtx) &&
+      !requiresCpuForCastConfig(checked, queryCtx) &&
+      canBeEvaluatedByCudf(checked);
+}
+
 } // namespace
+
+bool containsCastFromVarchar(
+    const core::TypedExprPtr& expr,
+    bool floatingPointOnly) {
+  if (expr->isCastKind() && !expr->inputs().empty() &&
+      expr->inputs()[0]->type()->isVarchar() &&
+      (!floatingPointOnly || expr->type()->isReal() ||
+       expr->type()->isDouble())) {
+    return true;
+  }
+  for (const auto& input : expr->inputs()) {
+    if (containsCastFromVarchar(input, floatingPointOnly)) {
+      return true;
+    }
+  }
+  return false;
+}
 
 bool canExprRunOnGpu(
     const core::TypedExprPtr& expr,
     core::QueryCtx* queryCtx,
     memory::MemoryPool* pool) {
-  // Optimize (constant fold and rewrite) so the support check sees the same
-  // form the operator compiles: operators optimize with their own pool before
-  // compiling, folding e.g. cast(<literal> as DECIMAL) into a plain decimal
-  // constant. Checking the un-optimized tree would reject such folded-away
-  // casts that the operator never actually compiles.
-  const core::TypedExprPtr checked = (queryCtx != nullptr && pool != nullptr)
-      ? expression::optimize(expr, queryCtx, pool)
-      : expr;
-  return !requiresCpuForTimezone(checked, queryCtx) &&
-      canBeEvaluatedByCudf(checked);
+  return canOptimizedExprRunOnGpu(
+      optimizeForCheck(expr, queryCtx, pool), queryCtx);
+}
+
+bool canJoinFilterRunOnGpu(
+    const core::TypedExprPtr& filter,
+    core::QueryCtx* queryCtx,
+    memory::MemoryPool* pool) {
+  // The filter is optimized first, so that a cast of a literal folds away
+  // before the check.
+  const auto checked = optimizeForCheck(filter, queryCtx, pool);
+  if (containsFailingCastFromVarchar(checked)) {
+    LOG_FALLBACK(
+        "CAST from VARCHAR in a join filter stays on the CPU, which casts "
+        "only the pairs the join matches");
+    return false;
+  }
+  return canOptimizedExprRunOnGpu(checked, queryCtx);
 }
 
 std::shared_ptr<CudfExpression> createCudfExpression(
     const core::TypedExprPtr& expr,
     const RowTypePtr& inputRowSchema,
-    memory::MemoryPool* pool) {
+    memory::MemoryPool* pool,
+    const core::QueryConfig& config) {
   const auto* best = findBestEvaluator(expr);
   VELOX_CHECK_NOT_NULL(
       best, "No cuDF expression evaluator can handle: {}", expr->toString());
-  return best->create(expr, inputRowSchema, pool);
+  return best->create(expr, inputRowSchema, pool, config);
 }
 
 void unregisterFunctions() {
   auto& registry = getCudfFunctionRegistry();
   registry.clear();
+  castFromVarcharEnabled = false;
+}
+
+void setCastFromVarcharEnabled(bool enabled) {
+  castFromVarcharEnabled = enabled;
 }
 
 } // namespace facebook::velox::cudf_velox

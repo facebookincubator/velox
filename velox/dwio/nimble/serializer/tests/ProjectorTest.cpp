@@ -17,8 +17,10 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <optional>
+#include <random>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -26,7 +28,12 @@
 #include "velox/dwio/nimble/common/Exceptions.h"
 
 #include "folly/Random.h"
+#include "folly/container/F14Map.h"
 #include "folly/container/F14Set.h"
+#include "velox/dwio/nimble/common/HybridFlatMap.h"
+#include "velox/dwio/nimble/common/SchemaBuilder.h"
+#include "velox/dwio/nimble/common/SchemaSerialization.h"
+#include "velox/dwio/nimble/common/SchemaUtils.h"
 #include "velox/dwio/nimble/common/tests/GTestUtils.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
 #include "velox/dwio/nimble/serializer/Deserializer.h"
@@ -34,13 +41,10 @@
 #include "velox/dwio/nimble/serializer/SerializationHeader.h"
 #include "velox/dwio/nimble/serializer/Serializer.h"
 #include "velox/dwio/nimble/serializer/StreamDataParser.h"
-#include "velox/dwio/nimble/velox/HybridFlatMap.h"
-#include "velox/dwio/nimble/velox/SchemaBuilder.h"
-#include "velox/dwio/nimble/velox/SchemaSerialization.h"
-#include "velox/dwio/nimble/velox/SchemaUtils.h"
 #include "velox/type/Subfield.h"
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/ComplexVector.h"
+#include "velox/vector/DecodedVector.h"
 #include "velox/vector/FlatVector.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
@@ -2357,6 +2361,606 @@ TEST_P(ProjectorFormatTest, hybridFlatMapArrayProjectionRoundTrip) {
       projector.projectedSchema(),
       outputDeserializerOptions());
   EXPECT_TRUE(input->equalValueAt(output.get(), 0, 0));
+}
+
+namespace {
+
+// Canonical Hybrid FlatMap key of entry 'index' of a TINYINT or VARCHAR key
+// vector.
+std::string hybridFlatMapKeyAt(const DecodedVector& keys, vector_size_t index) {
+  const auto keyKind = keys.base()->typeKind();
+  if (keyKind == TypeKind::TINYINT) {
+    return std::to_string(keys.valueAt<int8_t>(index));
+  }
+  NIMBLE_CHECK_EQ(
+      keyKind, TypeKind::VARCHAR, "Unexpected Hybrid FlatMap key type.");
+  return std::string{keys.valueAt<StringView>(index)};
+}
+
+// Keys of one fuzzed map column and the map shapes it holds.
+struct FuzzedMapKeys {
+  // Distinct keys in first-seen order, so draws from them are reproducible.
+  std::vector<std::string> orderedKeys;
+  // The same keys, for membership checks.
+  folly::F14FastSet<std::string> keys;
+  // Whether some row holds a null map.
+  bool hasNullMap{false};
+  // Whether some row holds a non-null map with no entries.
+  bool hasEmptyMap{false};
+};
+
+FuzzedMapKeys fuzzedMapKeys(const VectorPtr& mapColumn) {
+  const DecodedVector maps{*mapColumn};
+  const auto* base = maps.base()->as<MapVector>();
+  NIMBLE_CHECK_NOT_NULL(base, "Hybrid FlatMap input must be a MapVector.");
+  const DecodedVector keys{*base->mapKeys()};
+  FuzzedMapKeys result;
+  for (vector_size_t row = 0; row < mapColumn->size(); ++row) {
+    if (maps.isNullAt(row)) {
+      result.hasNullMap = true;
+      continue;
+    }
+    const auto index = maps.index(row);
+    const auto begin = base->offsetAt(index);
+    const auto end = begin + base->sizeAt(index);
+    result.hasEmptyMap |= begin == end;
+    for (auto entry = begin; entry < end; ++entry) {
+      auto key = hybridFlatMapKeyAt(keys, entry);
+      if (result.keys.insert(key).second) {
+        result.orderedKeys.push_back(std::move(key));
+      }
+    }
+  }
+  return result;
+}
+
+// Returns 'numKeys' distinct keys no row of the column holds. Candidates are
+// negative integers or 7-character strings, which this test's VectorFuzzer
+// never produces: it draws integers from [0, max] (boost's default
+// uniform_int_distribution range) and 8-character strings. The membership
+// check guards against any overlap regardless.
+std::vector<std::string> unusedHybridFlatMapKeys(
+    TypeKind keyKind,
+    const FuzzedMapKeys& mapKeys,
+    size_t numKeys) {
+  std::vector<std::string> keys;
+  for (int64_t candidate = -1; keys.size() < numKeys; --candidate) {
+    auto key = keyKind == TypeKind::VARCHAR
+        ? fmt::format("nodata{}", -candidate)
+        : std::to_string(candidate);
+    if (!mapKeys.keys.contains(key)) {
+      keys.push_back(std::move(key));
+    }
+  }
+  return keys;
+}
+
+// Returns 'mapColumn' with every map reduced to the entries whose key is in
+// 'keys'. Null maps stay null.
+VectorPtr filterMapKeys(
+    const VectorPtr& mapColumn,
+    const folly::F14FastSet<std::string>& keys,
+    memory::MemoryPool* pool) {
+  const DecodedVector maps{*mapColumn};
+  const auto* base = maps.base()->as<MapVector>();
+  NIMBLE_CHECK_NOT_NULL(base, "Hybrid FlatMap input must be a MapVector.");
+  const DecodedVector mapKeys{*base->mapKeys()};
+  const auto numRows = mapColumn->size();
+  auto nulls = allocateNulls(numRows, pool);
+  auto offsets = allocateOffsets(numRows, pool);
+  auto sizes = allocateSizes(numRows, pool);
+  auto* rawOffsets = offsets->asMutable<vector_size_t>();
+  auto* rawSizes = sizes->asMutable<vector_size_t>();
+  std::vector<vector_size_t> selectedEntries;
+  for (vector_size_t row = 0; row < numRows; ++row) {
+    rawOffsets[row] = static_cast<vector_size_t>(selectedEntries.size());
+    if (maps.isNullAt(row)) {
+      bits::setNull(nulls->asMutable<uint64_t>(), row);
+    } else {
+      const auto index = maps.index(row);
+      const auto begin = base->offsetAt(index);
+      for (auto entry = begin; entry < begin + base->sizeAt(index); ++entry) {
+        if (keys.contains(hybridFlatMapKeyAt(mapKeys, entry))) {
+          selectedEntries.push_back(entry);
+        }
+      }
+    }
+    rawSizes[row] =
+        static_cast<vector_size_t>(selectedEntries.size()) - rawOffsets[row];
+  }
+  const auto numEntries = static_cast<vector_size_t>(selectedEntries.size());
+  auto indices = AlignedBuffer::allocate<vector_size_t>(numEntries, pool);
+  std::copy(
+      selectedEntries.begin(),
+      selectedEntries.end(),
+      indices->asMutable<vector_size_t>());
+  return std::make_shared<MapVector>(
+      pool,
+      mapColumn->type(),
+      std::move(nulls),
+      numRows,
+      std::move(offsets),
+      std::move(sizes),
+      BaseVector::wrapInDictionary(
+          nullptr, indices, numEntries, base->mapKeys()),
+      BaseVector::wrapInDictionary(
+          nullptr, indices, numEntries, base->mapValues()));
+}
+
+// Which of a column's keys the Hybrid FlatMap grouping configures.
+enum class HybridFlatMapGroupingKind {
+  kDefaultOnly,
+  kPartlyConfigured,
+  // Every key is configured, so Default stays empty.
+  kFullyConfigured,
+};
+
+// Unless 'kind' is Default-only, builds a configured group holding only
+// 'keyWithoutData', then splits the configured share of 'mapKeys' over 1-2
+// groups. 'mixedKey', which no row holds either, joins the first of those
+// groups so its key-presence bitmap mixes present and absent keys. Group IDs
+// ascend with random gaps; Default comes last.
+HybridFlatMap makeProjectionGrouping(
+    HybridFlatMapGroupingKind kind,
+    const FuzzedMapKeys& mapKeys,
+    std::string_view keyWithoutData,
+    const std::optional<std::string>& mixedKey,
+    std::mt19937& rng) {
+  HybridFlatMap grouping;
+  if (kind != HybridFlatMapGroupingKind::kDefaultOnly) {
+    std::vector<std::string> configuredKeys;
+    for (const auto& key : mapKeys.orderedKeys) {
+      if (kind == HybridFlatMapGroupingKind::kFullyConfigured ||
+          folly::Random::oneIn(2, rng)) {
+        configuredKeys.push_back(key);
+      }
+    }
+    std::shuffle(configuredKeys.begin(), configuredKeys.end(), rng);
+    uint32_t groupId{folly::Random::rand32(3, rng)};
+    grouping.groups.push_back(
+        {.groupId = groupId, .groupKeys = {std::string{keyWithoutData}}});
+    const auto numGroups = std::min<size_t>(
+        configuredKeys.size(), 1 + folly::Random::rand32(2, rng));
+    for (size_t group = 0; group < numGroups; ++group) {
+      groupId += 1 + folly::Random::rand32(3, rng);
+      grouping.groups.push_back({.groupId = groupId, .groupKeys = {}});
+    }
+    for (size_t i = 0; i < configuredKeys.size(); ++i) {
+      grouping.groups[1 + i % numGroups].groupKeys.push_back(
+          std::move(configuredKeys[i]));
+    }
+    if (mixedKey.has_value()) {
+      grouping.groups[numGroups > 0 ? 1 : 0].groupKeys.push_back(*mixedKey);
+    }
+  }
+  grouping.groups.push_back(
+      {.groupId = HybridFlatMap::kDefaultGroupId, .groupKeys = {}});
+  return grouping;
+}
+
+// Which keys a projection requests from one Hybrid FlatMap column.
+enum class HybridFlatMapRequestKind {
+  kOneGroup,
+  // One key from each of several groups.
+  kSeveralGroups,
+  // Only a key in no group, so the result is empty.
+  kAbsentOnly,
+  kAbsentAndPresent,
+  // The whole column, which returns every feature.
+  kWholeColumn,
+  // The configured key that no row holds.
+  kKeyWithoutData,
+};
+
+// A request for one column and what the projection must return for it.
+struct HybridFlatMapRequest {
+  // Whether the request names the column without a key.
+  bool wholeColumn{false};
+  // Requested keys, in request order. Empty for a whole-column request.
+  std::vector<std::string> keys;
+  // Schema-order indices of the groups the Projector must keep.
+  std::vector<size_t> selectedGroups;
+  // Keys a decode restricted to the request returns.
+  folly::F14FastSet<std::string> requestedKeys;
+  // Keys a decode of every projected group returns.
+  folly::F14FastSet<std::string> selectedGroupKeys;
+};
+
+// Draws a request of shape 'kind' from the groups in 'schema' and derives what
+// the projection must return for it. 'dataKeys' are the keys some row holds,
+// 'absentKey' is in no group and 'keyWithoutData' is a configured key no row
+// holds. Falls back to a simpler shape when the schema lacks the groups 'kind'
+// needs.
+HybridFlatMapRequest drawHybridFlatMapRequest(
+    HybridFlatMapRequestKind kind,
+    const HybridFlatMapType& schema,
+    const folly::F14FastSet<std::string>& dataKeys,
+    std::string_view absentKey,
+    std::string_view keyWithoutData,
+    std::mt19937& rng) {
+  std::vector<size_t> groupsWithKeys;
+  // Configured groups holding a key some row holds.
+  std::vector<size_t> configuredGroupsWithData;
+  for (size_t group = 0; group < schema.groupCount(); ++group) {
+    const auto& [groupId, groupKeys] = std::pair{
+        schema.groupAt(group).groupId,
+        schema.groupAt(group).groupKeys,
+    };
+    if (groupKeys.empty()) {
+      continue;
+    }
+    groupsWithKeys.push_back(group);
+    if (!HybridFlatMap::isDefaultGroup(groupId) &&
+        std::any_of(groupKeys.begin(), groupKeys.end(), [&](const auto& key) {
+          return dataKeys.contains(key);
+        })) {
+      configuredGroupsWithData.push_back(group);
+    }
+  }
+  const auto randomIndex = [&](size_t size) {
+    return folly::Random::rand32(static_cast<uint32_t>(size), rng);
+  };
+  const auto randomKeyOf = [&](size_t group) {
+    const auto& keys = schema.groupAt(group).groupKeys;
+    return keys[randomIndex(keys.size())];
+  };
+
+  HybridFlatMapRequest request;
+  if (kind == HybridFlatMapRequestKind::kWholeColumn) {
+    request.wholeColumn = true;
+  } else if (
+      kind == HybridFlatMapRequestKind::kAbsentOnly || groupsWithKeys.empty()) {
+    request.keys = {std::string{absentKey}};
+  } else if (kind == HybridFlatMapRequestKind::kOneGroup) {
+    // Prefer a configured group with data, so every run covers one.
+    const auto& candidates = configuredGroupsWithData.empty()
+        ? groupsWithKeys
+        : configuredGroupsWithData;
+    auto keys =
+        schema.groupAt(candidates[randomIndex(candidates.size())]).groupKeys;
+    std::shuffle(keys.begin(), keys.end(), rng);
+    keys.resize(
+        std::min<size_t>(keys.size(), 1 + folly::Random::rand32(3, rng)));
+    request.keys = std::move(keys);
+  } else if (kind == HybridFlatMapRequestKind::kSeveralGroups) {
+    std::shuffle(groupsWithKeys.begin(), groupsWithKeys.end(), rng);
+    groupsWithKeys.resize(std::min<size_t>(groupsWithKeys.size(), 3));
+    for (const auto group : groupsWithKeys) {
+      request.keys.push_back(randomKeyOf(group));
+    }
+  } else if (kind == HybridFlatMapRequestKind::kAbsentAndPresent) {
+    request.keys = {
+        std::string{absentKey},
+        randomKeyOf(groupsWithKeys[randomIndex(groupsWithKeys.size())]),
+    };
+  } else if (
+      std::find(
+          schema.groupAt(0).groupKeys.begin(),
+          schema.groupAt(0).groupKeys.end(),
+          keyWithoutData) != schema.groupAt(0).groupKeys.end()) {
+    request.keys = {std::string{keyWithoutData}};
+  } else {
+    request.keys = {randomKeyOf(groupsWithKeys.front())};
+  }
+
+  for (size_t group = 0; group < schema.groupCount(); ++group) {
+    const auto& groupKeys = schema.groupAt(group).groupKeys;
+    const bool selected =
+        request.wholeColumn ||
+        std::any_of(groupKeys.begin(), groupKeys.end(), [&](const auto& key) {
+          return std::find(request.keys.begin(), request.keys.end(), key) !=
+              request.keys.end();
+        });
+    if (selected) {
+      request.selectedGroups.push_back(group);
+      request.selectedGroupKeys.insert(groupKeys.begin(), groupKeys.end());
+    }
+  }
+  request.requestedKeys = request.wholeColumn
+      ? request.selectedGroupKeys
+      : folly::F14FastSet<std::string>(
+            request.keys.begin(), request.keys.end());
+  return request;
+}
+
+// Builds 'column[key]' from path elements, because fuzzed VARCHAR keys may hold
+// characters the subfield parser treats as syntax.
+common::Subfield hybridFlatMapSubfield(
+    std::string_view column,
+    TypeKind keyKind,
+    std::string_view key) {
+  std::vector<std::unique_ptr<common::Subfield::PathElement>> path;
+  path.push_back(
+      std::make_unique<common::Subfield::NestedField>(std::string{column}));
+  if (keyKind == TypeKind::VARCHAR) {
+    path.push_back(
+        std::make_unique<common::Subfield::StringSubscript>(std::string{key}));
+  } else {
+    path.push_back(
+        std::make_unique<common::Subfield::LongSubscript>(
+            std::stol(std::string{key})));
+  }
+  return common::Subfield(std::move(path));
+}
+
+// Returns the Hybrid FlatMap type of top-level column 'name' in 'schema'.
+const HybridFlatMapType& hybridFlatMapColumn(
+    const nimble::Type& schema,
+    std::string_view name) {
+  const auto& row = schema.asRow();
+  const auto index = row.findChild(name);
+  NIMBLE_CHECK(index.has_value(), "Missing Hybrid FlatMap column: {}", name);
+  return row.childAt(*index)->asHybridFlatMap();
+}
+
+// Checks that 'projected' keeps exactly the groups 'request' selects from
+// 'source', in source order with their IDs and keys, or a single keyless
+// Default group when the request selects none.
+void verifyProjectedGroups(
+    const HybridFlatMapType& projected,
+    const HybridFlatMapType& source,
+    const HybridFlatMapRequest& request) {
+  if (request.selectedGroups.empty()) {
+    // A request with only absent keys keeps a keyless Default group.
+    ASSERT_EQ(projected.groupCount(), 1);
+    EXPECT_TRUE(HybridFlatMap::isDefaultGroup(projected.groupAt(0).groupId));
+    EXPECT_THAT(projected.groupAt(0).groupKeys, IsEmpty());
+    return;
+  }
+  ASSERT_EQ(projected.groupCount(), request.selectedGroups.size());
+  for (size_t i = 0; i < projected.groupCount(); ++i) {
+    const auto& sourceGroup = source.groupAt(request.selectedGroups[i]);
+    EXPECT_EQ(projected.groupAt(i).groupId, sourceGroup.groupId);
+    EXPECT_EQ(projected.groupAt(i).groupKeys, sourceGroup.groupKeys);
+  }
+}
+
+} // namespace
+
+TEST_P(ProjectorFormatTest, hybridFlatMapProjectionFuzz) {
+  // Projects fuzzed Hybrid FlatMap batches with random requests. Checks the
+  // projected groups, then decodes the projected bytes twice: every projected
+  // group must return whole groups, and a decode restricted to the request
+  // must return exactly the requested keys. As in production, every batch has
+  // its own Serializer and is projected with its own schema. The test fails if
+  // the fuzzed batches and requests miss any case in 'coverage'.
+  const auto seed = folly::Random::rand32();
+  LOG(INFO) << "hybridFlatMapProjectionFuzz seed: " << seed;
+  SCOPED_TRACE(fmt::format("seed {}", seed));
+  std::mt19937 rng{seed};
+
+  // Columns are in alphabetical order, the order a Deserializer with subfields
+  // returns them in. TINYINT keys repeat across rows.
+  const auto rowType = ROW({
+      {"id", BIGINT()},
+      {"int_features", MAP(TINYINT(), DOUBLE())},
+      {"string_features", MAP(VARCHAR(), ARRAY(BIGINT()))},
+  });
+  const std::vector<std::string> hybridFlatMapColumns{
+      "int_features",
+      "string_features",
+  };
+
+  VectorFuzzer fuzzer(
+      {
+          .vectorSize = 50,
+          // Null maps and null values.
+          .nullRatio = 0.1,
+          // Use fixed non-zero string length to avoid empty string keys.
+          .stringLength = 8,
+          .stringVariableLength = false,
+          .containerLength = 5,
+          .containerVariableLength = true,
+          // Remove duplicate keys from maps.
+          .normalizeMapKeys = true,
+      },
+      pool_.get(),
+      seed);
+
+  // Shapes the batches and requests must include.
+  struct {
+    // Requested keys with data, all in one configured group.
+    bool oneConfiguredGroup{false};
+    // Requested keys spread over several groups.
+    bool severalGroups{false};
+    // A requested key in the Default group.
+    bool defaultGroupKey{false};
+    // Only keys in no group, so the result is empty.
+    bool absentOnly{false};
+    // A key in no group next to keys that are in a group.
+    bool absentAndPresent{false};
+    bool wholeColumn{false};
+    bool wholeColumnWithEmptyDefault{false};
+    // A requested configured key that no row holds.
+    bool keyWithoutData{false};
+    // A configured group whose key-presence bitmap has true and false bits.
+    bool configuredGroupWithPresentAndAbsentKeys{false};
+    // skipConstantHybridFlatMapMetadataStreams on, with a configured group
+    // whose keys are all present, so its key-presence stream is omitted.
+    bool skippedAllPresentKeyPresence{false};
+    bool nullMap{false};
+    bool emptyMap{false};
+  } coverage;
+
+  constexpr int kNumGroupingKinds{3};
+  constexpr int kNumRequestKinds{6};
+  // Each half covers every grouping kind with every request kind; the second
+  // half turns on skipConstantHybridFlatMapMetadataStreams. Within each half,
+  // the second quarter mixes keys no row holds into data groups.
+  constexpr int kIterations{2 * kNumRequestKinds * kNumGroupingKinds};
+  for (int i = 0; i < kIterations; ++i) {
+    SCOPED_TRACE(fmt::format("iteration {}", i));
+    const auto input = fuzzer.fuzzInputRow(rowType);
+    const auto groupingKind =
+        static_cast<HybridFlatMapGroupingKind>(i % kNumGroupingKinds);
+    const bool skipConstantMetadataStreams = i >= kIterations / 2;
+    const bool mixKeysWithoutData = (i / (kIterations / 4)) % 2 == 1;
+
+    auto serializerOptions = inputSerializerOptions();
+    serializerOptions.skipConstantHybridFlatMapMetadataStreams =
+        skipConstantMetadataStreams;
+    folly::F14FastMap<std::string, FuzzedMapKeys> mapKeysByColumn;
+    // Per column: a key in no group, the configured key no row holds, and a
+    // key no row holds that joins a data group.
+    folly::F14FastMap<std::string, std::vector<std::string>> unusedKeysByColumn;
+    for (const auto& column : hybridFlatMapColumns) {
+      const auto& mapColumn = input->childAt(column);
+      auto mapKeys = fuzzedMapKeys(mapColumn);
+      auto unusedKeys = unusedHybridFlatMapKeys(
+          mapColumn->type()->asMap().keyType()->kind(),
+          mapKeys,
+          /*numKeys=*/3);
+      serializerOptions.hybridFlatMapColumns.emplace(
+          column,
+          makeProjectionGrouping(
+              groupingKind,
+              mapKeys,
+              unusedKeys[1],
+              mixKeysWithoutData ? std::optional{unusedKeys[2]} : std::nullopt,
+              rng));
+      coverage.nullMap |= mapKeys.hasNullMap;
+      coverage.emptyMap |= mapKeys.hasEmptyMap;
+      mapKeysByColumn.emplace(column, std::move(mapKeys));
+      unusedKeysByColumn.emplace(column, std::move(unusedKeys));
+    }
+    const auto [serialized, inputSchema] =
+        serializeWithSchema(input, rowType, std::move(serializerOptions));
+
+    std::vector<common::Subfield> subfields;
+    subfields.emplace_back("id");
+    folly::F14FastMap<std::string, HybridFlatMapRequest> requests;
+    for (size_t column = 0; column < hybridFlatMapColumns.size(); ++column) {
+      const auto& name = hybridFlatMapColumns[column];
+      const auto keyKind = rowType->findChild(name)->asMap().keyType()->kind();
+      const auto& unusedKeys = unusedKeysByColumn.at(name);
+      auto request = drawHybridFlatMapRequest(
+          static_cast<HybridFlatMapRequestKind>(
+              (i / kNumGroupingKinds + column) % kNumRequestKinds),
+          hybridFlatMapColumn(*inputSchema, name),
+          mapKeysByColumn.at(name).keys,
+          /*absentKey=*/unusedKeys[0],
+          /*keyWithoutData=*/unusedKeys[1],
+          rng);
+      if (request.wholeColumn) {
+        subfields.emplace_back(name);
+      } else {
+        for (const auto& key : request.keys) {
+          subfields.push_back(hybridFlatMapSubfield(name, keyKind, key));
+        }
+      }
+      requests.emplace(name, std::move(request));
+    }
+
+    Projector projector{
+        inputSchema,
+        subfields,
+        pool_.get(),
+        projectorOptions(),
+    };
+    const auto projectedSchema = projector.projectedSchema();
+    for (const auto& [name, request] : requests) {
+      SCOPED_TRACE(name);
+      verifyProjectedGroups(
+          hybridFlatMapColumn(*projectedSchema, name),
+          hybridFlatMapColumn(*inputSchema, name),
+          request);
+    }
+
+    std::vector<VectorPtr> wholeGroupChildren{input->childAt("id")};
+    std::vector<VectorPtr> requestedChildren{input->childAt("id")};
+    for (const auto& name : hybridFlatMapColumns) {
+      const auto& request = requests.at(name);
+      wholeGroupChildren.push_back(filterMapKeys(
+          input->childAt(name), request.selectedGroupKeys, pool_.get()));
+      requestedChildren.push_back(filterMapKeys(
+          input->childAt(name), request.requestedKeys, pool_.get()));
+    }
+    const auto makeExpected = [&](std::vector<VectorPtr> children) {
+      return std::make_shared<RowVector>(
+          pool_.get(), rowType, nullptr, input->size(), std::move(children));
+    };
+
+    const auto projectedBytes =
+        toString(projectInput(projector, serialized, /*useIOBuf=*/i % 2 == 1));
+    velox::test::assertEqualVectors(
+        makeExpected(std::move(wholeGroupChildren)),
+        deserialize(
+            projectedBytes, projectedSchema, outputDeserializerOptions()));
+    Deserializer requestedDeserializer{
+        projectedSchema,
+        subfields,
+        pool_.get(),
+        outputDeserializerOptions(),
+    };
+    VectorPtr requested;
+    requestedDeserializer.deserialize(projectedBytes, requested);
+    velox::test::assertEqualVectors(
+        makeExpected(std::move(requestedChildren)), requested);
+
+    for (const auto& [name, request] : requests) {
+      const auto& source = hybridFlatMapColumn(*inputSchema, name);
+      const auto& dataKeys = mapKeysByColumn.at(name).keys;
+      const auto isDefault = [&](size_t group) {
+        return HybridFlatMap::isDefaultGroup(source.groupAt(group).groupId);
+      };
+      const bool hasAbsentKey = std::any_of(
+          request.keys.begin(), request.keys.end(), [&](const auto& key) {
+            return !source.findGroup(key).has_value();
+          });
+      for (size_t group = 0; group < source.groupCount(); ++group) {
+        if (isDefault(group)) {
+          continue;
+        }
+        const auto& groupKeys = source.groupAt(group).groupKeys;
+        const auto numPresentKeys = std::count_if(
+            groupKeys.begin(), groupKeys.end(), [&](const auto& key) {
+              return dataKeys.contains(key);
+            });
+        const bool allPresent =
+            numPresentKeys == static_cast<int64_t>(groupKeys.size());
+        coverage.configuredGroupWithPresentAndAbsentKeys |=
+            numPresentKeys > 0 && !allPresent;
+        coverage.skippedAllPresentKeyPresence |=
+            skipConstantMetadataStreams && allPresent;
+      }
+      if (request.wholeColumn) {
+        coverage.wholeColumn = true;
+        coverage.wholeColumnWithEmptyDefault |=
+            source.defaultGroup().groupKeys.empty();
+        continue;
+      }
+      coverage.absentOnly |= request.selectedGroups.empty();
+      coverage.absentAndPresent |=
+          hasAbsentKey && !request.selectedGroups.empty();
+      coverage.severalGroups |= request.selectedGroups.size() > 1;
+      coverage.defaultGroupKey |= std::any_of(
+          request.selectedGroups.begin(),
+          request.selectedGroups.end(),
+          isDefault);
+      coverage.oneConfiguredGroup |= request.selectedGroups.size() == 1 &&
+          !isDefault(request.selectedGroups[0]) &&
+          std::any_of(request.keys.begin(),
+                      request.keys.end(),
+                      [&](const auto& key) { return dataKeys.contains(key); });
+      coverage.keyWithoutData |= std::any_of(
+          request.keys.begin(), request.keys.end(), [&](const auto& key) {
+            return source.findGroup(key).has_value() && !dataKeys.contains(key);
+          });
+    }
+  }
+
+  EXPECT_TRUE(coverage.oneConfiguredGroup);
+  EXPECT_TRUE(coverage.severalGroups);
+  EXPECT_TRUE(coverage.defaultGroupKey);
+  EXPECT_TRUE(coverage.absentOnly);
+  EXPECT_TRUE(coverage.absentAndPresent);
+  EXPECT_TRUE(coverage.wholeColumn);
+  EXPECT_TRUE(coverage.wholeColumnWithEmptyDefault);
+  EXPECT_TRUE(coverage.keyWithoutData);
+  EXPECT_TRUE(coverage.configuredGroupWithPresentAndAbsentKeys);
+  EXPECT_TRUE(coverage.skippedAllPresentKeyPresence);
+  EXPECT_TRUE(coverage.nullMap);
+  EXPECT_TRUE(coverage.emptyMap);
 }
 
 TEST_F(ProjectorTest, hybridFlatMapProjectTypePreservesAttributes) {

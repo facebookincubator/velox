@@ -21,7 +21,9 @@
 #include <exception>
 #include <utility>
 
+#include <folly/Random.h>
 #include <folly/executors/InlineExecutor.h>
+#include <folly/futures/Future.h>
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/exec/rpc/RpcErrorClassification.h"
@@ -45,6 +47,34 @@ int64_t steadyNowNs() {
   return std::chrono::duration_cast<std::chrono::nanoseconds>(
              std::chrono::steady_clock::now().time_since_epoch())
       .count();
+}
+
+// A retry hint's wait or budget in nanoseconds, capped at a week so adding it
+// to a timestamp cannot overflow.
+int64_t hintNanos(std::chrono::milliseconds duration) {
+  constexpr std::chrono::milliseconds kMaxHint{std::chrono::hours(24 * 7)};
+  return std::chrono::duration_cast<std::chrono::nanoseconds>(
+             std::min(duration, kMaxHint))
+      .count();
+}
+
+// The wait before a row's next attempt, after its 'numAttempts'-th rejection:
+// the nominal wait starts at the hint's retryAfter and doubles for each
+// rejection after the first, up to its maxRetryAfter; with jitter, the wait is
+// drawn uniformly from [0, nominal wait].
+int64_t retryWaitNanos(
+    const velox::rpc::CapacityRetry& hint,
+    int32_t numAttempts) {
+  int64_t nominal = hintNanos(hint.retryAfter);
+  const int64_t cap = std::max(nominal, hintNanos(hint.maxRetryAfter));
+  for (int32_t i = 1; i < numAttempts && nominal < cap; ++i) {
+    nominal = std::min(cap, nominal * 2);
+  }
+  if (!hint.jitter) {
+    return nominal;
+  }
+  return static_cast<int64_t>(
+      folly::Random::rand64(static_cast<uint64_t>(nominal) + 1));
 }
 
 // Wake blocked drivers by fulfilling their promises. Must run with no RPCState
@@ -113,18 +143,39 @@ void RPCState::setStreamingMode(
     RPCStreamingMode mode,
     int64_t minWindow,
     double stepCoef,
-    int64_t maxWindow) {
+    int64_t maxWindow,
+    int64_t batchStartWindow,
+    int64_t asyncGrowthMaxWindow) {
+  VELOX_USER_CHECK_GE(
+      batchStartWindow,
+      0,
+      "BATCH RPC congestion start window must be non-negative: {}",
+      batchStartWindow);
   streamingMode_ = mode;
   if (mode == RPCStreamingMode::kBatch) {
-    // BATCH: the gradient window starts at 2 (the previously hand-tuned value)
-    // and learns the in-flight-batch sweet spot from per-batch RTT, bounded
-    // only by a large safety ceiling so it never leaves throughput on the
-    // table.
+    VELOX_USER_CHECK_GE(
+        asyncGrowthMaxWindow,
+        0,
+        "BATCH RPC congestion async growth max window must be non-negative: {}",
+        asyncGrowthMaxWindow);
     const int64_t maxW = maxWindow > 0 ? maxWindow : kBatchMaxWindow;
-    window_ = CongestionController{/*startWindow*/ 2,
-                                   /*maxWindow*/ maxW,
-                                   minWindow,
-                                   stepCoef};
+    window_ = CongestionController{
+        batchStartWindow > 0 ? batchStartWindow : 2,
+        /*maxWindow*/ maxW,
+        minWindow,
+        stepCoef,
+    };
+    auto effectiveGrowthMaxWindow = asyncGrowthMaxWindow;
+    if (effectiveGrowthMaxWindow > 0 &&
+        effectiveGrowthMaxWindow < window_.limit()) {
+      LOG_FIRST_N(WARNING, 10)
+          << "[RPC_STATE] Clamping BATCH RPC congestion async growth max "
+             "window from "
+          << effectiveGrowthMaxWindow << " to the effective start window "
+          << window_.limit();
+      effectiveGrowthMaxWindow = window_.limit();
+    }
+    window_.setCleanMaxWindow(effectiveGrowthMaxWindow);
   } else {
     // PER_ROW: start == max. Default ceiling 100; a high-latency backend can
     // raise it via rpc.congestion.max_window. Pinning start == max is
@@ -136,7 +187,11 @@ void RPCState::setStreamingMode(
     // by RPCOperator) shrink it under sustained overload.
     const int64_t maxW = maxWindow > 0 ? maxWindow : 100;
     window_ = CongestionController{
-        /*startWindow*/ maxW, /*maxWindow*/ maxW, minWindow, stepCoef};
+        maxW,
+        /*maxWindow*/ maxW,
+        minWindow,
+        stepCoef,
+    };
   }
 }
 
@@ -179,6 +234,7 @@ void RPCState::releaseAllInputBatches() {
   std::lock_guard<std::mutex> l(mutex_);
   for (auto& batch : inputBatches_) {
     batch.flatColumns.clear();
+    batch.arguments.clear();
     batch.activeRowCount = 0;
   }
   RPC_STATE_VLOG(1) << "releaseAllInputBatches: dropped "
@@ -190,8 +246,7 @@ void RPCState::close() {
   std::vector<InputBatchRef> inputBatches;
   std::deque<ReadyRow> readyRows;
   std::deque<PendingBatch> pendingBatches;
-  folly::F14FastMap<int64_t, std::shared_ptr<RPCRateLimiter::AdmissionLease>>
-      pendingRowAdmissionLeases;
+  folly::F14FastMap<int64_t, PendingRow> pendingRows;
   {
     std::lock_guard<std::mutex> l(mutex_);
     if (closed_) {
@@ -201,14 +256,15 @@ void RPCState::close() {
     inputBatches = std::move(inputBatches_);
     readyRows = std::move(readyRows_);
     pendingBatches = std::move(pendingBatches_);
-    pendingRowAdmissionLeases = std::move(pendingRowAdmissionLeases_);
+    pendingRows = std::move(pendingRows_);
+    retryRows_.clear();
     waiters = takeWaitersLocked();
     pool_.reset();
   }
   inputBatches.clear();
   readyRows.clear();
   pendingBatches.clear();
-  pendingRowAdmissionLeases.clear();
+  pendingRows.clear();
   fulfillWaiters(waiters);
 }
 
@@ -227,6 +283,31 @@ RPCState::PayloadMemoryCharge RPCState::chargePayloadBytes(int64_t bytes) {
   }
   VELOX_CHECK_NOT_NULL(pool);
   return PayloadMemoryCharge{std::move(pool), bytes};
+}
+
+void RPCState::setInputBatchArguments(
+    int32_t batchIndex,
+    std::vector<VectorPtr> arguments,
+    vector_size_t numRows) {
+  std::lock_guard<std::mutex> l(mutex_);
+  VELOX_CHECK_LT(batchIndex, static_cast<int32_t>(inputBatches_.size()));
+  auto& batch = inputBatches_[batchIndex];
+  batch.arguments = std::move(arguments);
+  batch.numRows = numRows;
+}
+
+std::pair<std::vector<VectorPtr>, vector_size_t> RPCState::inputBatchArguments(
+    int32_t batchIndex) const {
+  std::lock_guard<std::mutex> l(mutex_);
+  VELOX_CHECK_LT(batchIndex, static_cast<int32_t>(inputBatches_.size()));
+  const auto& batch = inputBatches_[batchIndex];
+  // A row waiting for a retry has not been output, and releaseRows() runs
+  // only on output, so its batch still holds its arguments.
+  VELOX_CHECK(
+      !batch.arguments.empty(),
+      "Input batch kept no arguments to retry with: {}",
+      batchIndex);
+  return {batch.arguments, batch.numRows};
 }
 
 void RPCState::releaseRows(int32_t batchIndex, int64_t count) {
@@ -249,6 +330,7 @@ void RPCState::releaseRows(int32_t batchIndex, int64_t count) {
   if (batch.activeRowCount == 0) {
     // Release the column vectors to free memory.
     batch.flatColumns.clear();
+    batch.arguments.clear();
     RPC_STATE_VLOG(2) << "releaseRows: batch " << batchIndex
                       << " fully released";
   }
@@ -262,11 +344,50 @@ void RPCState::addPendingRow(
     RowLocation location,
     folly::SemiFuture<RPCResponse> future,
     std::shared_ptr<RPCRateLimiter::AdmissionLease> admissionLease) {
+  addPendingRowImpl(
+      std::move(selfPtr),
+      rowId,
+      location,
+      std::move(future),
+      PendingRow{
+          .lease = std::move(admissionLease),
+          .firstAttemptNs = steadyNowNs(),
+          .numAttempts = 1,
+      });
+}
+
+void RPCState::addRetriedRow(
+    std::shared_ptr<RPCState> selfPtr,
+    const RetryRow& retry,
+    folly::SemiFuture<RPCResponse> future,
+    std::shared_ptr<RPCRateLimiter::AdmissionLease> admissionLease) {
+  {
+    std::lock_guard<std::mutex> l(mutex_);
+    ++numCapacityRetries_;
+  }
+  addPendingRowImpl(
+      std::move(selfPtr),
+      retry.rowId,
+      retry.location,
+      std::move(future),
+      PendingRow{
+          .lease = std::move(admissionLease),
+          .firstAttemptNs = retry.firstAttemptNs,
+          .numAttempts = retry.numAttempts + 1,
+      });
+}
+
+void RPCState::addPendingRowImpl(
+    std::shared_ptr<RPCState> selfPtr,
+    int64_t rowId,
+    RowLocation location,
+    folly::SemiFuture<RPCResponse> future,
+    PendingRow&& pendingRow) {
   auto dispatchTimeNs = steadyNowNs();
   {
     std::lock_guard<std::mutex> l(mutex_);
-    const auto [_, inserted] = pendingRowAdmissionLeases_.try_emplace(
-        rowId, std::move(admissionLease));
+    const auto [_, inserted] =
+        pendingRows_.try_emplace(rowId, std::move(pendingRow));
     VELOX_CHECK(inserted, "Duplicate pending RPC row ID: {}", rowId);
     inFlight_++;
     peakInFlight_ = std::max(peakInFlight_, inFlight_);
@@ -318,13 +439,13 @@ void RPCState::addPendingRow(
                   }
                 }));
   } catch (...) {
-    std::shared_ptr<RPCRateLimiter::AdmissionLease> lease;
+    PendingRow pending;
     {
       std::lock_guard<std::mutex> l(mutex_);
-      const auto it = pendingRowAdmissionLeases_.find(rowId);
-      if (it != pendingRowAdmissionLeases_.end()) {
-        lease = std::move(it->second);
-        pendingRowAdmissionLeases_.erase(it);
+      const auto it = pendingRows_.find(rowId);
+      if (it != pendingRows_.end()) {
+        pending = std::move(it->second);
+        pendingRows_.erase(it);
       }
       --inFlight_;
     }
@@ -347,23 +468,65 @@ void RPCState::completeRow(
       .admissionEpoch = std::nullopt,
       .rttNs = rttNs,
   };
-  std::shared_ptr<RPCRateLimiter::AdmissionLease> lease;
+  std::optional<PendingRow> pending;
   bool missingLease = false;
+  bool capacityRetryEnabled = false;
   {
     std::lock_guard<std::mutex> l(mutex_);
-    const auto it = pendingRowAdmissionLeases_.find(rowId);
-    if (it != pendingRowAdmissionLeases_.end()) {
-      lease = std::move(it->second);
-      pendingRowAdmissionLeases_.erase(it);
+    capacityRetryEnabled =
+        capacityRetryEnabled_.load(std::memory_order_relaxed);
+    const auto it = pendingRows_.find(rowId);
+    if (it != pendingRows_.end()) {
+      pending = std::move(it->second);
+      pendingRows_.erase(it);
     } else {
       missingLease = !closed_;
     }
   }
-  if (lease != nullptr) {
+  if (pending.has_value() && pending->lease != nullptr) {
     const auto completion =
-        lease->completeAndRelease(isHardOverload(readyRow.response));
+        pending->lease->completeAndRelease(isHardOverload(readyRow.response));
     readyRow.sharedOverloadHandled = completion.sharedOverloadHandled;
     readyRow.admissionEpoch = completion.overloadEpoch;
+  }
+
+  // A capacity rejection with a retry hint goes back for another admission
+  // while its budget lasts. Completion already gave back its slot above.
+  const auto& retryHint = readyRow.response.capacityRetry();
+  if (capacityRetryEnabled && pending.has_value() && retryHint.has_value()) {
+    const auto nowNs = steadyNowNs();
+    const auto notBeforeNs =
+        nowNs + retryWaitNanos(*retryHint, pending->numAttempts);
+    const auto deadlineNs =
+        pending->firstAttemptNs + hintNanos(retryHint->budget);
+    if (notBeforeNs <= deadlineNs) {
+      std::vector<ContinuePromise> retryWaiters;
+      {
+        std::lock_guard<std::mutex> l(mutex_);
+        inFlight_--;
+        ++numCompletionsSignaled_;
+        if (!closed_) {
+          retryRows_.push_back(
+              RetryRow{
+                  .rowId = rowId,
+                  .location = location,
+                  .firstAttemptNs = pending->firstAttemptNs,
+                  .numAttempts = pending->numAttempts,
+                  .notBeforeNs = notBeforeNs,
+                  .deadlineNs = deadlineNs,
+                  .error = readyRow.response.error(),
+                  .admissionEpoch = readyRow.admissionEpoch,
+              });
+          retryFeedback_.overloaded = true;
+          retryFeedback_.sharedOverloadHandled |=
+              readyRow.sharedOverloadHandled;
+        }
+        // Wake the driver so it applies the overload to its window now.
+        retryWaiters = takeWaitersLocked();
+      }
+      fulfillWaiters(retryWaiters);
+      return;
+    }
   }
 
   bool accountingFailed = false;
@@ -412,6 +575,23 @@ RPCState::ClaimResult RPCState::tryClaimOrWait(
   VELOX_CHECK_NOT_NULL(future, "tryClaimOrWait requires a future out-param");
   VELOX_CHECK_NOT_NULL(
       claimedRow, "tryClaimOrWait requires a claimedRow out-param");
+  if (capacityRetryEnabled_.load(std::memory_order_relaxed)) {
+    // A row past its budget fails here rather than waiting for a slot.
+    takeDueRetries(0);
+  }
+  std::optional<int64_t> retryWakeDelayNs;
+  const auto result =
+      claimOrRegisterWaiter(future, claimedRow, retryWakeDelayNs);
+  if (retryWakeDelayNs.has_value()) {
+    scheduleRetryWake(retryWakeDelayNs.value());
+  }
+  return result;
+}
+
+RPCState::ClaimResult RPCState::claimOrRegisterWaiter(
+    ContinueFuture* future,
+    std::optional<ReadyRow>* claimedRow,
+    std::optional<int64_t>& retryWakeDelayNs) {
   std::lock_guard<std::mutex> l(mutex_);
 
   // Step 1: Try to claim a ready row.
@@ -425,7 +605,7 @@ RPCState::ClaimResult RPCState::tryClaimOrWait(
   }
 
   // Step 2: Check finish condition.
-  if (noMoreInput_ && inFlight_ == 0) {
+  if (allDispatchedWorkDoneLocked()) {
     // A row that could not be queued is gone. Finishing here would return
     // fewer rows than the query was given and report success, which no
     // consumer can detect. This runs on the driver thread, so failing is a
@@ -436,15 +616,23 @@ RPCState::ClaimResult RPCState::tryClaimOrWait(
   }
 
   // Step 3: No local completion can wake this driver. The caller must wait on
-  // shared backend admission if it still has undispatched rows.
-  if (inFlight_ == 0) {
+  // shared backend admission if it still has undispatched rows or due
+  // retries.
+  const auto nowNs = steadyNowNs();
+  const bool hasDueRetry =
+      std::any_of(retryRows_.begin(), retryRows_.end(), [&](const auto& row) {
+        return row.notBeforeNs <= nowNs;
+      });
+  if (inFlight_ == 0 && (retryRows_.empty() || hasDueRetry)) {
     return ClaimResult::kIdle;
   }
 
   // Step 4: Must wait — create a promise under the same lock to prevent
-  // TOCTOU races (no completion can slip between the check and wait).
+  // TOCTOU races (no completion can slip between the check and wait). A
+  // pending retry also arms a timer that wakes this driver when it is due.
   RPC_STATE_VLOG(2) << "tryClaimOrWait: must wait (inFlight=" << inFlight_
-                    << ")";
+                    << ", retries=" << retryRows_.size() << ")";
+  retryWakeDelayNs = takeRetryWakeDelayNsLocked(nowNs);
   promises_.emplace_back("RPCState::tryClaimOrWait");
   *future = promises_.back().getSemiFuture();
   return ClaimResult::kMustWait;
@@ -735,7 +923,7 @@ bool RPCState::isFinished() {
   std::lock_guard<std::mutex> l(mutex_);
   // inFlight_ == 0 covers both pending rows and pending batches; readyRows_ is
   // PER_ROW-only and always empty in BATCH.
-  const bool finished = noMoreInput_ && inFlight_ == 0 && readyRows_.empty();
+  const bool finished = allDispatchedWorkDoneLocked() && readyRows_.empty();
   if (finished) {
     // The barrier drain reaches finish through here rather than through
     // tryClaimOrWait(), so the same guarantee has to hold on both paths.
@@ -747,8 +935,10 @@ bool RPCState::isFinished() {
 bool RPCState::isUnderBackpressure() {
   std::lock_guard<std::mutex> l(mutex_);
   // Unified across modes: inFlight_ counts the active mode's units (rows for
-  // PER_ROW, batches for BATCH) and window_ carries the gradient limit.
-  return inFlight_ >= window_.limit();
+  // PER_ROW, batches for BATCH) and window_ carries the gradient limit. Rows
+  // waiting for a capacity retry count too: each keeps its input batch, so
+  // taking more input while they wait would grow memory without bound.
+  return inFlight_ + static_cast<int64_t>(retryRows_.size()) >= window_.limit();
 }
 
 int64_t RPCState::dispatchHeadroom() {
@@ -789,6 +979,165 @@ void RPCState::onUnitSamples(const std::vector<int64_t>& rttNsList) {
   }
 }
 
+void RPCState::onUnitCleanCompletions(int64_t numUnits) {
+  std::lock_guard<std::mutex> l(mutex_);
+  if (streamingMode_ != RPCStreamingMode::kBatch || numUnits <= 0 ||
+      window_.cleanMaxWindow() <= 0) {
+    return;
+  }
+  const auto prev = window_.limit();
+  window_.onCleanUnits(numUnits);
+  if (window_.limit() != prev) {
+    RPC_STATE_LOG(INFO) << "RPC congestion: " << numUnits
+                        << " clean completions, window " << prev << " -> "
+                        << window_.limit();
+  }
+}
+
+int64_t RPCState::numDueRetries() const {
+  std::lock_guard<std::mutex> l(mutex_);
+  const auto nowNs = steadyNowNs();
+  return std::count_if(
+      retryRows_.begin(), retryRows_.end(), [&](const auto& row) {
+        return row.notBeforeNs <= nowNs;
+      });
+}
+
+bool RPCState::hasRetries() const {
+  std::lock_guard<std::mutex> l(mutex_);
+  return !retryRows_.empty();
+}
+
+std::vector<RPCState::RetryRow> RPCState::takeDueRetries(int64_t maxRows) {
+  std::vector<RetryRow> due;
+  std::vector<RetryRow> expired;
+  {
+    std::lock_guard<std::mutex> l(mutex_);
+    const auto nowNs = steadyNowNs();
+    auto it = retryRows_.begin();
+    while (it != retryRows_.end()) {
+      if (it->notBeforeNs > nowNs) {
+        ++it;
+      } else if (it->deadlineNs < nowNs) {
+        expired.push_back(std::move(*it));
+        it = retryRows_.erase(it);
+      } else if (static_cast<int64_t>(due.size()) < maxRows) {
+        due.push_back(std::move(*it));
+        it = retryRows_.erase(it);
+      } else {
+        ++it;
+      }
+    }
+  }
+  if (!expired.empty()) {
+    failExpiredRetries(std::move(expired));
+  }
+  return due;
+}
+
+void RPCState::failExpiredRetries(std::vector<RetryRow> expired) {
+  // Charge outside mutex_: memory arbitration must not run under it.
+  std::vector<ReadyRow> failed;
+  failed.reserve(expired.size());
+  for (auto& retry : expired) {
+    auto response = RPCResponse::failed(
+        retry.rowId, retry.error.kind, std::move(retry.error.message));
+    auto charge = chargePayloadBytes(response.retainedBytes());
+    failed.push_back(
+        ReadyRow{
+            .rowId = retry.rowId,
+            .location = retry.location,
+            .charge = std::move(charge),
+            .response = std::move(response),
+            // The shared limiter already applied this overload when the
+            // attempt was rejected.
+            .sharedOverloadHandled = true,
+            .admissionEpoch = retry.admissionEpoch,
+            .rttNs = 0,
+        });
+  }
+  std::vector<ContinuePromise> waiters;
+  {
+    std::lock_guard<std::mutex> l(mutex_);
+    if (!closed_) {
+      for (auto& row : failed) {
+        readyRows_.push_back(std::move(row));
+      }
+    }
+    waiters = takeWaitersLocked();
+  }
+  fulfillWaiters(waiters);
+}
+
+RPCState::RetryFeedback RPCState::takeRetryFeedback() {
+  std::lock_guard<std::mutex> l(mutex_);
+  return std::exchange(retryFeedback_, {});
+}
+
+std::optional<int64_t> RPCState::takeRetryWakeDelayNsLocked(int64_t nowNs) {
+  // A due retry is waiting for a slot, which this driver's own completion
+  // frees; a timer for it would fire at once and spin the driver.
+  std::optional<int64_t> earliestNs;
+  for (const auto& row : retryRows_) {
+    if (row.notBeforeNs > nowNs &&
+        (!earliestNs.has_value() || row.notBeforeNs < *earliestNs)) {
+      earliestNs = row.notBeforeNs;
+    }
+  }
+  if (!earliestNs.has_value()) {
+    return std::nullopt;
+  }
+  if (retryWakeDeadlineNs_ != 0 && retryWakeDeadlineNs_ <= *earliestNs) {
+    return std::nullopt;
+  }
+  retryWakeDeadlineNs_ = *earliestNs;
+  return *earliestNs - nowNs;
+}
+
+void RPCState::scheduleRetryWake(int64_t delayNs) {
+  const std::weak_ptr<RPCState> weakSelf = weak_from_this();
+  // A timer holding an empty weak pointer would never wake the driver.
+  VELOX_CHECK(
+      !weakSelf.expired(),
+      "RPCState must be owned by a shared_ptr to retry capacity rejections");
+  try {
+    folly::futures::detachOn(
+        folly::getKeepAliveToken(folly::InlineExecutor::instance()),
+        folly::futures::sleep(
+            std::chrono::ceil<std::chrono::microseconds>(
+                std::chrono::nanoseconds(delayNs)))
+            .deferValue([weakSelf](folly::Unit) {
+              if (auto self = weakSelf.lock()) {
+                self->onRetryWake();
+              }
+            })
+            .deferError([weakSelf](const folly::exception_wrapper&) {
+              if (auto self = weakSelf.lock()) {
+                self->onRetryWake();
+              }
+              return folly::Unit{};
+            }));
+  } catch (...) {
+    // Without a timer, wake now: the driver re-parks and arms another, which
+    // is better than parking with no wake-up at all.
+    onRetryWake();
+  }
+}
+
+void RPCState::onRetryWake() {
+  std::vector<ContinuePromise> waiters;
+  {
+    std::lock_guard<std::mutex> l(mutex_);
+    retryWakeDeadlineNs_ = 0;
+    waiters = takeWaitersLocked();
+  }
+  fulfillWaiters(waiters);
+}
+
+bool RPCState::allDispatchedWorkDoneLocked() const {
+  return noMoreInput_ && inFlight_ == 0 && retryRows_.empty();
+}
+
 std::vector<ContinuePromise> RPCState::takeWaitersLocked() {
   // Hand the waiter promises back to the caller to fulfill after releasing
   // mutex_. See the header for why setValue() must not run under mutex_.
@@ -809,6 +1158,7 @@ RPCState::OperatorSnapshot RPCState::operatorSnapshot() const {
       .streamingMode = streamingMode_,
       .inFlight = inFlight_,
       .numCompletionsSignaled = numCompletionsSignaled_,
+      .numCapacityRetries = numCapacityRetries_,
   };
 }
 

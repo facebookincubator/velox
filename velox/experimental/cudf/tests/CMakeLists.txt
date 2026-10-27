@@ -139,6 +139,26 @@ velox_add_cudf_test(
   TIMEOUT 3000
 )
 
+# Decimal arithmetic on the device. gpu_shadows/ must precede the Velox root,
+# and --diag-error=20011 fails the build on host-only calls from device code.
+velox_add_cudf_test(
+  NAME velox_cudf_decimal_arithmetic_device_test
+  SOURCES DecimalArithmeticDeviceTest.cu
+  LIBS cudf::cudf Folly::folly
+)
+set_target_properties(velox_cudf_decimal_arithmetic_device_test PROPERTIES CUDA_STANDARD 20)
+target_include_directories(
+  velox_cudf_decimal_arithmetic_device_test
+  BEFORE
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../functions/gpu_shadows
+)
+target_compile_options(
+  velox_cudf_decimal_arithmetic_device_test
+  PRIVATE
+    $<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr>
+    $<$<COMPILE_LANGUAGE:CUDA>:--diag-error=20011>
+)
+
 velox_add_cudf_test(
   NAME velox_cudf_enforce_single_row_test
   SOURCES Main.cpp EnforceSingleRowTest.cpp
@@ -252,6 +272,7 @@ if(VELOX_ENABLE_S3)
       velox_exec_test_lib
       velox_file
       velox_s3fs
+      velox_stats_reporter_utils
       velox_test_util
   )
 endif()
@@ -271,7 +292,7 @@ velox_add_cudf_test(
 velox_add_cudf_test(
   NAME velox_cudf_subfield_filter_ast_test
   SOURCES Main.cpp SubfieldFilterAstTest.cpp
-  LIBS ${CUDF_TEST_DEFAULT_LIBS}
+  LIBS ${CUDF_TEST_DEFAULT_LIBS} velox_cudf_iceberg_connector
 )
 
 velox_add_cudf_test(
@@ -304,7 +325,7 @@ velox_add_cudf_test(
 velox_add_cudf_test(
   NAME velox_cudf_tocudf_selection_test
   SOURCES Main.cpp ToCudfSelectionTest.cpp
-  LIBS ${CUDF_TEST_DEFAULT_LIBS} velox_vector_fuzzer
+  LIBS ${CUDF_TEST_DEFAULT_LIBS} velox_vector_fuzzer gmock
 )
 
 velox_add_cudf_test(
@@ -318,6 +339,16 @@ velox_add_cudf_test(
   SOURCES Main.cpp TopNRowNumberTest.cpp
   LIBS ${CUDF_TEST_DEFAULT_LIBS} fmt::fmt
 )
+
+# Only built when VELOX_ENABLE_UCX_EXCHANGE is on; without it the ucx-exchange
+# library does not exist and ucxx was never fetched.
+if(VELOX_ENABLE_UCX_EXCHANGE)
+  velox_add_cudf_test(
+    NAME velox_cudf_ucx_transport_registration_test
+    SOURCES Main.cpp UcxTransportRegistrationTest.cpp
+    LIBS ${CUDF_TEST_DEFAULT_LIBS} velox_ucx_exchange
+  )
+endif()
 
 velox_add_cudf_test(
   NAME velox_cudf_window_test
