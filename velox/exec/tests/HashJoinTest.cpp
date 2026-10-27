@@ -1687,6 +1687,41 @@ TEST_P(MultiThreadedHashJoinTest, nullAwareAntiJoin) {
   }
 }
 
+TEST_P(MultiThreadedHashJoinTest, nullAwareAntiJoinWithSpill) {
+  auto probeVectors = makeBatches(5, [&](int32_t batch) {
+    return makeRowVector({
+        makeFlatVector<int64_t>(
+            1'000, [](auto row) { return 194 + row % 3; }, nullEvery(13)),
+        makeFlatVector<int32_t>(
+            1'000, [batch](auto row) { return batch * 1'000 + row; }),
+    });
+  });
+  auto buildVectors = makeBatches(5, [&](int32_t /*unused*/) {
+    return makeRowVector(
+        {"u0"},
+        {makeFlatVector<int64_t>(1'234, [](auto /*row*/) { return 194; })});
+  });
+
+  // The hashes of NULL and BIGINT 194 share partition 0 at bits 48-50 and
+  // 51-53, but split into partitions 0 and 3 at bits 54-56. Recursive spilling
+  // must filter NULL probe keys even when their build partition is empty.
+  HashJoinBuilder(*pool_, duckDbQueryRunner_, driverExecutor_.get())
+      .numDrivers(numDrivers_)
+      .parallelizeJoinBuildRows(parallelBuildSideRowsEnabled_)
+      .probeKeys({"c0"})
+      .probeVectors(std::move(probeVectors))
+      .buildKeys({"u0"})
+      .buildVectors(std::move(buildVectors))
+      .joinType(core::JoinType::kAnti)
+      .nullAware(true)
+      .config(core::QueryConfig::kSpillStartPartitionBit, "48")
+      .config(core::QueryConfig::kSpillNumPartitionBits, "3")
+      .joinOutputLayout({"c0", "c1"})
+      .referenceQuery(
+          "SELECT t.c0, t.c1 FROM t WHERE t.c0 NOT IN (SELECT u0 FROM u)")
+      .run();
+}
+
 TEST_P(HashJoinTest, nullAwareRightAntiJoinIsRejected) {
   // Right anti join supports only the regular (NOT EXISTS) semantic. Requesting
   // the null-aware flag is rejected at plan construction.
