@@ -15,6 +15,8 @@
  */
 #pragma once
 
+#include <limits>
+
 #include "velox/common/memory/StreamArena.h"
 #include "velox/serializers/PrestoSerializer.h"
 #include "velox/vector/BaseVector.h"
@@ -103,8 +105,16 @@ class VectorStream {
     nonNullCount_ += count;
   }
 
+  // Throws if the end offset would not fit the page's 32-bit offsets. Callers
+  // append a value after its length, so a value that does not fit is never
+  // copied.
   void appendLength(int32_t length) {
-    totalLength_ += length;
+    const int64_t totalLength = static_cast<int64_t>(totalLength_) + length;
+    VELOX_CHECK_LE(
+        totalLength,
+        std::numeric_limits<int32_t>::max(),
+        "Serialized page exceeds 2GB");
+    totalLength_ = static_cast<int32_t>(totalLength);
     lengths_.appendOne<int32_t>(totalLength_);
   }
 
