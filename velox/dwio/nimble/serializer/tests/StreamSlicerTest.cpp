@@ -937,6 +937,44 @@ TEST_P(StreamSlicerPayloadApiTest, slicesFlatMap) {
   }
 }
 
+TEST_P(StreamSlicerPayloadApiTest, slicesNullFlatMapRanges) {
+  // The in-map streams of a flat map hold one value per non-null map, so a
+  // range of null maps slices no keys.
+  auto type = ROW({{"features", MAP(INTEGER(), INTEGER())}});
+  auto features = makeMapVector(
+      {2, 0, 0, 1, 0, 1},
+      makeFlatVector<int32_t>({1, 2, 2, 1}),
+      makeFlatVector<int32_t>({10, 20, 32, 51}));
+  features->setNull(1, true);
+  features->setNull(2, true);
+  features->setNull(4, true);
+  auto input = makeRowVector({"features"}, {features});
+  auto [serialized, schema] = serialize(
+      input,
+      type,
+      /*encodingType=*/std::nullopt,
+      /*compressionOptions=*/std::nullopt,
+      /*flatMapColumns=*/{{"features", {}}});
+  auto payload = makePayload(
+      serialized, schema, {"features[1]", "features[2]"}, GetParam());
+  StreamSlicer slicer{payload.schema, pool_.get(), StreamSlicer::Options{}};
+
+  for (const auto& [offset, length] :
+       std::vector<std::pair<uint32_t, uint32_t>>{
+           {1, 2}, {4, 1}, {1, 1}, {0, 3}, {2, 3}}) {
+    SCOPED_TRACE(fmt::format("offset={} length={}", offset, length));
+    auto sliced = iobufToString(slicer.slice(payload.data, offset, length));
+    auto output = deserialize(sliced, payload.schema);
+    ASSERT_EQ(output->size(), length);
+    for (vector_size_t i = 0; i < static_cast<vector_size_t>(length); ++i) {
+      const auto row = static_cast<vector_size_t>(offset) + i;
+      EXPECT_TRUE(input->equalValueAt(output.get(), row, i))
+          << "Expected " << input->toString(row) << ", got "
+          << output->toString(i);
+    }
+  }
+}
+
 TEST_P(StreamSlicerPayloadApiTest, slicesEmptyArrayElementRange) {
   auto type = ROW({{"items", ARRAY(INTEGER())}});
   auto items =

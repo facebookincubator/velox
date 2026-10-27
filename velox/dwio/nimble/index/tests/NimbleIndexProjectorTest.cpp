@@ -809,6 +809,55 @@ TEST_P(NimbleIndexProjectorTest, projectsNestedRowsWithFieldReader) {
   velox::test::assertEqualVectors(expected, result.values);
 }
 
+TEST_P(NimbleIndexProjectorTest, projectsStructSelectedWithItsField) {
+  // Listing a struct and one of its fields returns the whole struct.
+  auto profileType = ROW({"age", "score"}, {INTEGER(), BIGINT()});
+  auto rowType = ROW({"key", "profile"}, {BIGINT(), profileType});
+
+  constexpr vector_size_t kNumRows{20};
+  auto profiles = vectorMaker_->rowVector(
+      {"age", "score"},
+      {vectorMaker_->flatVector<int32_t>(
+           kNumRows, [](auto row) { return row * 10; }),
+       vectorMaker_->flatVector<int64_t>(
+           kNumRows, [](auto row) { return row * 1'000; })});
+  auto batch = vectorMaker_->rowVector(
+      {"key", "profile"},
+      {vectorMaker_->flatVector<int64_t>(
+           kNumRows, [](auto row) { return row; }),
+       profiles});
+  writeData({batch}, {"key"});
+
+  std::vector<Subfield> subfields;
+  subfields.emplace_back("profile.score");
+  subfields.emplace_back("profile");
+  auto projector = createProjector(subfields);
+  NimbleIndexProjector::Request request;
+  request.keyBounds = {
+      makePointLookup(rowType, {"key"}, 7),
+      makePointLookup(rowType, {"key"}, 2),
+  };
+  auto expected = vectorMaker_->rowVector(
+      {"profile"},
+      {vectorMaker_->rowVector(
+          {"age", "score"},
+          {vectorMaker_->flatVector<int32_t>({70, 20}),
+           vectorMaker_->flatVector<int64_t>({7'000, 2'000})})});
+
+  velox::test::assertEqualVectors(
+      expected, projectRows(*projector, request, {}).values);
+
+  const auto streams = projector->projectStreams(request, {});
+  ASSERT_EQ(streams.responses.size(), 2);
+  for (vector_size_t i = 0; i < 2; ++i) {
+    SCOPED_TRACE(fmt::format("request {}", i));
+    ASSERT_EQ(streams.responses[i].slices.size(), 1);
+    velox::test::assertEqualVectors(
+        expected->slice(i, 1),
+        deserializeProjectedSlice(*projector, streams.responses[i].slices[0]));
+  }
+}
+
 // Every IOBuf node in a result slice chain should be managed (own/refcount its
 // own buffer) so the chain is self-contained. This currently fails when the
 // projected streams are non-contiguous in the read buffer, because packStripe
@@ -2049,6 +2098,99 @@ TEST_P(NimbleIndexProjectorTest, projectedTabletTimestampsDeserialize) {
              {5, 37},
              {150, 151},
              {123, 260}}) {
+      SCOPED_TRACE(fmt::format("keys [{}, {})", startKey, endKey));
+      NimbleIndexProjector::Request request;
+      request.keyBounds = {makeRangeLookup(rowType, {"key"}, startKey, endKey)};
+      const auto expected =
+          makeRows(startKey, static_cast<vector_size_t>(endKey - startKey));
+
+      const auto rows = projectRows(*projector, request, options);
+      ASSERT_EQ(rows.responses.size(), 1);
+      expectVectorRows(
+          rows.values->slice(rows.responses[0].offset, rows.responses[0].size),
+          expected);
+
+      const auto streams = projector->projectStreams(request, options);
+      ASSERT_EQ(streams.responses.size(), 1);
+      std::vector<folly::IOBuf> owned;
+      std::vector<std::string_view> serializedBatches;
+      owned.reserve(streams.responses[0].slices.size());
+      for (const auto& slice : streams.responses[0].slices) {
+        owned.push_back(coalesceChunkSlice(slice));
+        serializedBatches.emplace_back(
+            reinterpret_cast<const char*>(owned.back().data()),
+            owned.back().length());
+      }
+      expectVectorRows(
+          deserializeProjectedBatches(*projector, serializedBatches), expected);
+    }
+    EXPECT_EQ(
+        projector->stats().numSlicedStripes > 0, maxOverfetchRowsRatio == 0.0);
+  }
+}
+
+TEST_P(NimbleIndexProjectorTest, projectedTabletNullFlatMapsDeserialize) {
+  // A flat map's in-map streams hold one value per non-null map, so slicing a
+  // range of null maps leaves no keys to slice.
+  constexpr vector_size_t kRowsPerBatch = 100;
+  constexpr int kNumBatches = 3;
+  const auto rowType =
+      ROW({{"key", BIGINT()}, {"features", MAP(VARCHAR(), BIGINT())}});
+  // Rows 10 to 19 of every 30 hold null maps. The others hold key "a", and key
+  // "b" when even.
+  const auto isNullAt = [](int64_t key) {
+    return key % 30 >= 10 && key % 30 < 20;
+  };
+  const auto makeRows = [&](int64_t firstKey, vector_size_t numRows) {
+    std::vector<std::vector<std::pair<StringView, std::optional<int64_t>>>>
+        entries(numRows);
+    for (vector_size_t row = 0; row < numRows; ++row) {
+      const auto key = firstKey + row;
+      if (isNullAt(key)) {
+        continue;
+      }
+      entries[row].emplace_back("a", key);
+      if (key % 2 == 0) {
+        entries[row].emplace_back("b", key * 10);
+      }
+    }
+    auto features = vectorMaker_->mapVector<StringView, int64_t>(entries);
+    for (vector_size_t row = 0; row < numRows; ++row) {
+      if (isNullAt(firstKey + row)) {
+        features->setNull(row, true);
+      }
+    }
+    return vectorMaker_->rowVector(
+        {"key", "features"},
+        {vectorMaker_->flatVector<int64_t>(
+             numRows, [&](auto row) { return firstKey + row; }),
+         features});
+  };
+  std::vector<RowVectorPtr> batches;
+  batches.reserve(kNumBatches);
+  for (int batch = 0; batch < kNumBatches; ++batch) {
+    batches.push_back(makeRows(batch * kRowsPerBatch, kRowsPerBatch));
+  }
+  writeData(batches, {"key"}, {{"features", {}}}, /*stripeSize=*/2 << 10);
+  ASSERT_GT(openSinkTablet()->stripeCount(), 1);
+
+  std::vector<Subfield> subfields;
+  subfields.emplace_back("key");
+  subfields.emplace_back("features[\"a\"]");
+  subfields.emplace_back("features[\"b\"]");
+
+  // 1.0 packs whole stripes; 0.0 slices the part of each stripe a range reads.
+  for (const double maxOverfetchRowsRatio : {1.0, 0.0}) {
+    SCOPED_TRACE(
+        fmt::format("maxOverfetchRowsRatio {}", maxOverfetchRowsRatio));
+    NimbleIndexProjector::Options options;
+    options.maxOverfetchRowsRatio = maxOverfetchRowsRatio;
+    auto projector = createProjector(subfields);
+    // One null map, a range of null maps, a range with both, and the whole
+    // file.
+    for (const auto& [startKey, endKey] :
+         std::vector<std::pair<int64_t, int64_t>>{
+             {15, 16}, {130, 140}, {5, 37}, {0, kNumBatches * kRowsPerBatch}}) {
       SCOPED_TRACE(fmt::format("keys [{}, {})", startKey, endKey));
       NimbleIndexProjector::Request request;
       request.keyBounds = {makeRangeLookup(rowType, {"key"}, startKey, endKey)};

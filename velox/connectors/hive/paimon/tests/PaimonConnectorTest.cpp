@@ -1391,9 +1391,12 @@ TEST_F(PaimonConnectorTest, requiresPaimonTableHandle) {
                      .build();
   const auto fileSystem = validationFileSystem();
   fileSystem->openedFiles = 0;
-  VELOX_ASSERT_THROW(
-      connector->createDataSource(rowType, nullptr, columns, context.get()),
-      "Missing Paimon table handle");
+  try {
+    connector->createDataSource(rowType, nullptr, columns, context.get());
+    FAIL() << "Expected a null table handle check failure";
+  } catch (const VeloxRuntimeError& exception) {
+    EXPECT_EQ(exception.failingExpression(), "tableHandle != nullptr");
+  }
   const auto tableHandle = std::make_shared<HiveTableHandle>(
       kPaimonConnectorId,
       "paimon_table",
