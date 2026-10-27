@@ -367,11 +367,13 @@ nativert::Value* inputAt(NodeCP node, size_t idx) {
   return inputs[idx].value;
 }
 
-// True if 'node' reduces or scans a 2-D input along its last dim, given as the
-// int attribute 'dim' or a one-element list. Such an op runs as one block per
-// row (tw.cumsum_rows / tw.sum_rows) instead of the 1-D-only fused form.
-bool isLastDimOf2d(NodeCP node, const ValueTypes& types) {
-  if (types.rank(inputAt(node, 0)) != 2) {
+// True if 'node' reduces or scans an input of rank 2 or more along its last
+// dim, given as the int attribute 'dim' or a one-element list. Such an op runs
+// as one block per row (tw.cumsum_rows / tw.sum_rows), a row being one index
+// into the dims before the last, instead of the 1-D-only fused form.
+bool isLastDimOfRows(NodeCP node, const ValueTypes& types) {
+  const auto rank = types.rank(inputAt(node, 0));
+  if (rank < 2) {
     return false;
   }
   const auto* dimAttr = node->tryGetAttribute("dim");
@@ -396,7 +398,7 @@ bool isLastDimOf2d(NodeCP node, const ValueTypes& types) {
       return false;
     }
   }
-  return dim == 1 || dim == -1;
+  return dim == rank - 1 || dim == -1;
 }
 
 // new_ones(x, [sym_numel(y)]) with a 1-D y is ones_like(y): the size list is
@@ -1569,6 +1571,130 @@ bool tryFuseScatter(
   const_cast<nativert::Node*>(node)->setTarget(
       accumulate ? "tw.scatter_add" : "tw.scatter");
   return true;
+}
+
+// Row kernels: one block per row of an input of rank 2 or more.
+void registerRowBuiltins(const std::string& scanHeader) {
+  // Row-wise forms of cumsum(dim=1) and sum(dim=[1]) of a 2-D input: one
+  // block per row, rows striding over the op's blocks. The input is read
+  // across lanes and the output written row by row, so both need a
+  // kernel-wide barrier against a producer or consumer in the same kernel.
+  // The aten node is retargeted in place, so the input keeps aten's name.
+  auto rowScanSchema = [](const char* name) {
+    return std::make_unique<c10::FunctionSchema>(
+        name,
+        "",
+        std::vector<c10::Argument>{
+            c10::Argument("self", c10::TensorType::get())},
+        std::vector<c10::Argument>{
+            c10::Argument("output", c10::TensorType::get())});
+  };
+  MetadataBuilder(rowScanSchema("tw.cumsum_rows"))
+      .sizeOrdinal({0})
+      .argumentMeta({{.isRegister = false, .randomAccess = true}})
+      .returnMeta(
+          {{.isRegister = false,
+            .reserveShape = [](NodeCP node,
+                               nativert::ExecutionFrame& frame,
+                               const FormalToActual& map,
+                               NodeCP /*originalFormalNode*/,
+                               const NodeMap& /*nodeMap*/)
+                -> std::vector<std::vector<Dim>> {
+              return elementwiseInputShape(node, frame, map, 0);
+            },
+            .shapeFromInput = 0}})
+      .normalize(resolveDtypeFromInput)
+      .ignoreAttrs({"dim"})
+      .headerFile(scanHeader)
+      .deviceFunc("cumsum_rows")
+      .sharedDecls(
+          {{"Int32X32", "warpSums"},
+           {"uint32_t", "size"},
+           {"uint32_t", "rounded"}})
+      .dynamicSharedDecls({{Metadata::kTypeFromDtype, "counter"}})
+      .typeTemplateParams({0})
+      .hasDtypeTemplateParam()
+      .hasBlockSizeTemplateParam()
+      .multiBlockReturnBarrier()
+      .outputConstraints(
+          [](NodeCP node,
+             const ValueTypes& types) -> std::vector<ValueConstraint> {
+            return {
+                {.rank = types.rank(inputAt(node, 0)),
+                 .contiguity = Contiguity::kContiguous}};
+          })
+      .registerOp();
+  // The input's dims less the last, for each of 'numOutputs' outputs: the shape
+  // of a row reduction.
+  auto rowReduceShape = [](int32_t numOutputs) {
+    return [numOutputs](
+               NodeCP node,
+               nativert::ExecutionFrame& frame,
+               const FormalToActual& map,
+               NodeCP /*originalFormalNode*/,
+               const NodeMap& /*nodeMap*/) -> std::vector<std::vector<Dim>> {
+      auto input = paramTensor(node->inputs()[0].value, frame, map);
+      std::vector<Dim> dims;
+      for (int64_t d = 0; d + 1 < input.dim(); ++d) {
+        dims.push_back(static_cast<Dim>(input.size(d)));
+      }
+      return std::vector<std::vector<Dim>>(numOutputs, dims);
+    };
+  };
+  auto rowReduceConstraint = [](int32_t numOutputs) {
+    return [numOutputs](
+               NodeCP node,
+               const ValueTypes& types) -> std::vector<ValueConstraint> {
+      return std::vector<ValueConstraint>(
+          numOutputs,
+          {.rank = static_cast<int8_t>(
+               std::max(types.rank(inputAt(node, 0)) - 1, -1)),
+           .contiguity = Contiguity::kContiguous});
+    };
+  };
+  MetadataBuilder(rowScanSchema("tw.sum_rows"))
+      .sizeOrdinal({0})
+      .argumentMeta({{.isRegister = false, .randomAccess = true}})
+      .returnMeta({{.isRegister = false, .reserveShape = rowReduceShape(1)}})
+      .normalize(resolveDtypeFromInput)
+      .headerFile(scanHeader)
+      .deviceFunc("sum_rows")
+      .sharedDecls(
+          {{"Int32X32", "warpSums"},
+           {"uint32_t", "size"},
+           {"uint32_t", "rounded"}})
+      .dynamicSharedDecls({{Metadata::kTypeFromDtype, "counter"}})
+      .typeTemplateParams({0})
+      .hasDtypeTemplateParam()
+      .hasBlockSizeTemplateParam()
+      .multiBlockReturnBarrier()
+      .outputConstraints(rowReduceConstraint(1))
+      .registerOp();
+  // min(dim=-1) of an input of rank 2 or more, with indices: one block per row
+  // as above. The index is that of the row's first minimum, as aten's.
+  MetadataBuilder(
+      std::make_unique<c10::FunctionSchema>(
+          "tw.min_rows",
+          "",
+          std::vector<c10::Argument>{
+              c10::Argument("self", c10::TensorType::get())},
+          std::vector<c10::Argument>{
+              c10::Argument("values", c10::TensorType::get()),
+              c10::Argument("indices", c10::TensorType::get())}))
+      .sizeOrdinal({0})
+      .argumentMeta({{.isRegister = false, .randomAccess = true}})
+      .returnMeta(
+          {{.isRegister = false, .reserveShape = rowReduceShape(2)},
+           {.isRegister = false, .reserveShape = rowReduceShape(2)}})
+      .ignoreAttrs({"dim", "keepdim"})
+      .headerFile(scanHeader)
+      .deviceFunc("min_rows")
+      .sharedDecls({{"Int32X32", "warpValues"}, {"Int32X32", "warpIndices"}})
+      .typeTemplateParams({0})
+      .hasBlockSizeTemplateParam()
+      .multiBlockReturnBarrier()
+      .outputConstraints(rowReduceConstraint(2))
+      .registerOp();
 }
 
 } // namespace
@@ -4292,7 +4418,7 @@ void registerBuiltins() {
       .maybeReplace(
           [](NodeCP node, ValueTypes& types, WaveGraph& /*waveGraph*/)
               -> std::vector<std::pair<ValueCP, ValueCP>> {
-            if (isLastDimOf2d(node, types)) {
+            if (isLastDimOfRows(node, types)) {
               const_cast<nativert::Node*>(node)->setTarget("tw.cumsum_rows");
             }
             return {};
@@ -4328,81 +4454,7 @@ void registerBuiltins() {
       .outputConstraints(rank1Constraint)
       .registerOp();
 
-  // Row-wise forms of cumsum(dim=1) and sum(dim=[1]) of a 2-D input: one
-  // block per row, rows striding over the op's blocks. The input is read
-  // across lanes and the output written row by row, so both need a
-  // kernel-wide barrier against a producer or consumer in the same kernel.
-  // The aten node is retargeted in place, so the input keeps aten's name.
-  auto rowScanSchema = [](const char* name) {
-    return std::make_unique<c10::FunctionSchema>(
-        name,
-        "",
-        std::vector<c10::Argument>{
-            c10::Argument("self", c10::TensorType::get())},
-        std::vector<c10::Argument>{
-            c10::Argument("output", c10::TensorType::get())});
-  };
-  MetadataBuilder(rowScanSchema("tw.cumsum_rows"))
-      .sizeOrdinal({0})
-      .argumentMeta({{.isRegister = false, .randomAccess = true}})
-      .returnMeta(
-          {{.isRegister = false,
-            .reserveShape = [](NodeCP node,
-                               nativert::ExecutionFrame& frame,
-                               const FormalToActual& map,
-                               NodeCP /*originalFormalNode*/,
-                               const NodeMap& /*nodeMap*/)
-                -> std::vector<std::vector<Dim>> {
-              return elementwiseInputShape(node, frame, map, 0);
-            },
-            .shapeFromInput = 0}})
-      .normalize(resolveDtypeFromInput)
-      .ignoreAttrs({"dim"})
-      .headerFile(kScanHeader)
-      .deviceFunc("cumsum_rows")
-      .sharedDecls(
-          {{"Int32X32", "warpSums"},
-           {"uint32_t", "size"},
-           {"uint32_t", "rounded"}})
-      .dynamicSharedDecls({{Metadata::kTypeFromDtype, "counter"}})
-      .typeTemplateParams({0})
-      .hasDtypeTemplateParam()
-      .hasBlockSizeTemplateParam()
-      .multiBlockReturnBarrier()
-      .outputConstraints(
-          [](NodeCP /*node*/,
-             const ValueTypes& /*types*/) -> std::vector<ValueConstraint> {
-            return {{.rank = 2, .contiguity = Contiguity::kContiguous}};
-          })
-      .registerOp();
-  MetadataBuilder(rowScanSchema("tw.sum_rows"))
-      .sizeOrdinal({0})
-      .argumentMeta({{.isRegister = false, .randomAccess = true}})
-      .returnMeta(
-          {{.isRegister = false,
-            .reserveShape = [](NodeCP node,
-                               nativert::ExecutionFrame& frame,
-                               const FormalToActual& map,
-                               NodeCP /*originalFormalNode*/,
-                               const NodeMap& /*nodeMap*/)
-                -> std::vector<std::vector<Dim>> {
-              auto input = paramTensor(node->inputs()[0].value, frame, map);
-              return {{static_cast<Dim>(input.size(0))}};
-            }}})
-      .normalize(resolveDtypeFromInput)
-      .headerFile(kScanHeader)
-      .deviceFunc("sum_rows")
-      .sharedDecls(
-          {{"Int32X32", "warpSums"},
-           {"uint32_t", "size"},
-           {"uint32_t", "rounded"}})
-      .dynamicSharedDecls({{Metadata::kTypeFromDtype, "counter"}})
-      .typeTemplateParams({0})
-      .hasDtypeTemplateParam()
-      .hasBlockSizeTemplateParam()
-      .multiBlockReturnBarrier()
-      .outputConstraints(rank1Constraint)
-      .registerOp();
+  registerRowBuiltins(kScanHeader);
 
   // tw.cumsum_head: (Tensor) -> Tensor
   MetadataBuilder(
@@ -6050,7 +6102,7 @@ void registerBuiltins() {
           [](NodeCP node,
              ValueTypes& types,
              WaveGraph& waveGraph) -> std::vector<std::pair<ValueCP, ValueCP>> {
-            if (!isLastDimOf2d(node, types)) {
+            if (!isLastDimOfRows(node, types)) {
               return {};
             }
             // A new node rather than a retarget: the export passes dtype=None,
@@ -6074,6 +6126,7 @@ void registerBuiltins() {
           })
       .registerOp();
   // min.dim returns (values, indices); both share the reduced shape.
+  // Over the last dim, min.dim runs as tw.min_rows.
   MetadataBuilder("torch.ops.aten.min.dim")
       .sizeOrdinal({0})
       .isStandalone()
@@ -6083,6 +6136,14 @@ void registerBuiltins() {
               const ValueTypes& types) -> std::vector<ValueConstraint> {
             auto one = singleDimReduceConstraint(node, types);
             return {one[0], one[0]};
+          })
+      .maybeReplace(
+          [](NodeCP node, ValueTypes& types, WaveGraph& /*waveGraph*/)
+              -> std::vector<std::pair<ValueCP, ValueCP>> {
+            if (isLastDimOfRows(node, types)) {
+              const_cast<nativert::Node*>(node)->setTarget("tw.min_rows");
+            }
+            return {};
           })
       .registerOp();
   // max / min (global): fused single-scalar reductions across all three exec
@@ -6791,14 +6852,9 @@ void registerBuiltins() {
             }
             const auto& sizeVec =
                 std::get<std::vector<int64_t>>(sizeAttr->value);
-            int64_t numel = 1;
-            for (auto dim : sizeVec) {
-              numel *= dim;
-            }
-            if (numel == 0) {
-              // Empty result: an elementwise ones with zero elements feeds the
-              // empty-input scan/masked_select fusion path, which faults. Keep
-              // the eager standalone for empty factories.
+            if (std::find(sizeVec.begin(), sizeVec.end(), 0) != sizeVec.end()) {
+              // Empty: no kernel at all. It stays a standalone, which runs as
+              // the kEmptyFactory host shortcut.
               return {};
             }
             auto outDtype = resolveOutDtype(node, &waveGraph).first;
@@ -6822,18 +6878,13 @@ void registerBuiltins() {
             return {{node->outputs()[0], newOutput}};
           })
       .registerOp();
-  // pow.Scalar: scalar base raised to a tensor of exponents. self is a scalar
-  // attribute, so the only tensor input (exponent) is at position 0.
+  // pow.Scalar: a scalar base raised to a tensor of exponents. The base is an
+  // attribute ahead of the tensor, so __pow gets (base, exponent).
   MetadataBuilder("torch.ops.aten.pow.Scalar")
-      .sizeOrdinal({0})
-      .isStandalone()
-      .outputConstraints(
-          [](NodeCP node,
-             const ValueTypes& types) -> std::vector<ValueConstraint> {
-            return {
-                {.rank = types.rank(inputAt(node, 0)),
-                 .contiguity = Contiguity::kContiguous}};
-          })
+      .elementwiseFunc("__pow")
+      .arithmeticPromotion()
+      .normalize(castScalarAttrsToInputDtype)
+      .costFunction(powCost)
       .registerOp();
   // _local_scalar_dense: Tensor.item(). torch.export emits this synonym of
   // aten.item, so register it fused exactly like aten.item -- it reads self[0]

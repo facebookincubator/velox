@@ -4147,6 +4147,38 @@ TEST_F(ExecutorTest, cumsumSelect3dTest) {
   WaveConfig::get().isCg = std::nullopt;
 }
 
+// cumsum, sum and min along the last dim of inputs of rank 2 to 4, as the ads
+// preproc graph has them: they run as tw.cumsum_rows, tw.sum_rows and
+// tw.min_rows with a row per index into the leading dims, a transposed input
+// included.
+TEST_F(ExecutorTest, rowsNdTest) {
+  runTest("data/rows_nd_test.pt2", "data/rows_nd_test_results.pt");
+  WaveConfig::get().isCg = true;
+  runTest("data/rows_nd_test.pt2", "data/rows_nd_test_results.pt", "cg");
+  WaveConfig::get().isCg = std::nullopt;
+
+  auto plans = compilePlans("data/rows_nd_test.pt2");
+  for (const char* op : {"tw.cumsum_rows", "tw.sum_rows", "tw.min_rows"}) {
+    EXPECT_TRUE(plans.multiKernel.fuses({op})) << op;
+  }
+  for (const char* op :
+       {"aten.cumsum.default", "aten.sum.dim_IntList", "aten.min.dim"}) {
+    EXPECT_FALSE(plans.multiKernel.standalone(op)) << op;
+  }
+}
+
+// A scalar base raised to a tensor of exponents fuses. An empty new_ones, which
+// a cumsum and a cat read, runs as a host shortcut with no kernel.
+TEST_F(ExecutorTest, powScalarTest) {
+  runTest("data/pow_scalar_test.pt2", "data/pow_scalar_test_results.pt");
+  WaveConfig::get().isCg = true;
+  runTest("data/pow_scalar_test.pt2", "data/pow_scalar_test_results.pt", "cg");
+  WaveConfig::get().isCg = std::nullopt;
+
+  auto plans = compilePlans("data/pow_scalar_test.pt2");
+  EXPECT_FALSE(plans.multiKernel.standalone("aten.pow.Scalar"));
+}
+
 // exclusive_sum (cat(zeros[1], cumsum(x))) over a non-contiguous select-column
 // view: cumsum(select(x, dim=1, index=1)). The exclusive_sum rewrite feeds the
 // select view directly to exclusive_sum, whose multi-block final stage
