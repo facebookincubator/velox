@@ -1419,6 +1419,77 @@ TEST_F(PrestoSerializerTest, appendStringPast2GBOffset) {
       serializer->append(rowVector), "Serialized page exceeds 2GB");
 }
 
+// A row of 4GB or more saturates its estimate instead of wrapping to a small
+// size that would pass for a real one.
+TEST_P(PrestoSerializerTest, estimateSerializedSizeSaturates) {
+  // Estimation reads only the string sizes, so the strings need no memory.
+  static const char kPrefix[] = "abcd";
+  auto makeMaxSizeString = [&]() {
+    auto strings =
+        BaseVector::create<FlatVector<StringView>>(VARCHAR(), 1, pool_.get());
+    strings->setNoCopy(
+        0, StringView(kPrefix, std::numeric_limits<int32_t>::max()));
+    return strings;
+  };
+  // Two strings of INT32_MAX bytes and one of 12 add up to 2^32+10.
+  const auto rowVector = makeRowVector(
+      {makeMaxSizeString(),
+       makeMaxSizeString(),
+       makeFlatVector<std::string>({std::string(12, 'x')})});
+  constexpr vector_size_t kMaxSize{std::numeric_limits<vector_size_t>::max()};
+  const IndexRange range{0, 1};
+  Scratch scratch;
+  {
+    const vector_size_t row{0};
+    vector_size_t size{0};
+    vector_size_t* sizePtr = &size;
+    serde_->estimateSerializedSize(
+        rowVector.get(), folly::Range(&row, 1), &sizePtr, scratch);
+    ASSERT_EQ(size, kMaxSize);
+  }
+  {
+    vector_size_t size{0};
+    vector_size_t* sizePtr = &size;
+    serde_->estimateSerializedSize(
+        rowVector.get(), folly::Range(&range, 1), &sizePtr, scratch);
+    ASSERT_EQ(size, kMaxSize);
+  }
+}
+
+// Each null string adds 4 bytes to the estimate it is added to, so null strings
+// added to an estimate near INT32_MAX saturate it.
+TEST_P(PrestoSerializerTest, estimateSerializedSizeSaturatesOnNullStrings) {
+  constexpr vector_size_t kNumRows{8};
+  constexpr vector_size_t kMaxSize{std::numeric_limits<vector_size_t>::max()};
+  const auto strings = makeAllNullFlatVector<StringView>(kNumRows);
+  Scratch scratch;
+  {
+    // All rows of a range add to one estimate, which passes INT32_MAX at the
+    // third row.
+    const IndexRange range{0, kNumRows};
+    vector_size_t size{kMaxSize - 10};
+    vector_size_t* sizePtr = &size;
+    serde_->estimateSerializedSize(
+        strings.get(), folly::Range(&range, 1), &sizePtr, scratch);
+    ASSERT_EQ(size, kMaxSize);
+  }
+  {
+    std::vector<vector_size_t> rows(kNumRows);
+    std::iota(rows.begin(), rows.end(), 0);
+    std::vector<vector_size_t> sizes(kNumRows, kMaxSize - 1);
+    std::vector<vector_size_t*> sizePtrs(kNumRows);
+    for (auto i = 0; i < kNumRows; ++i) {
+      sizePtrs[i] = &sizes[i];
+    }
+    serde_->estimateSerializedSize(
+        strings.get(),
+        folly::Range(rows.data(), rows.size()),
+        sizePtrs.data(),
+        scratch);
+    ASSERT_EQ(sizes, std::vector<vector_size_t>(kNumRows, kMaxSize));
+  }
+}
+
 TEST_P(PrestoSerializerTest, appendDeserializeInvalidatesNullCount) {
   const auto options = getParamSerdeOptions(nullptr);
   RowVectorPtr result;
@@ -2859,4 +2930,21 @@ TEST_F(PrestoSerializerEstimateSizeTest, rows) {
   // 24 non-null doubles and 8 nulls.
   // 24 * 8 = 192
   testEstimateSerializedSizeByRows(nullableDoubles, rows, expectedRowSizes);
+}
+
+// The row overload estimates the elements of an array once per row that
+// selects it. Here 1,024 rows select one array of 2^21 elements, 2^31 element
+// rows in all.
+TEST_F(PrestoSerializerEstimateSizeTest, rowsRepeatingLargeArray) {
+  constexpr vector_size_t kNumRows{1'024};
+  constexpr vector_size_t kNumElements{1 << 21};
+  const auto array = makeArrayVector(
+      {0}, makeFlatVector<int8_t>(kNumElements, [](auto) { return 0; }));
+  const auto dictionary = BaseVector::wrapInDictionary(
+      nullptr, makeIndices(kNumRows, [](auto) { return 0; }), kNumRows, array);
+  std::vector<vector_size_t> rows(kNumRows);
+  std::iota(rows.begin(), rows.end(), 0);
+  // 4 bytes for the row wrapper, 4 for the array length and 1 per element.
+  testEstimateSerializedSizeByRows(
+      dictionary, rows, std::vector<vector_size_t>(kNumRows, 8 + kNumElements));
 }

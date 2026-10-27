@@ -18,6 +18,7 @@
 #include <cstdint>
 #include <memory>
 #include "velox/common/file/FileSystems.h"
+#include "velox/common/testutil/TestValue.h"
 
 namespace facebook::velox::serializer {
 std::unique_ptr<SerializedPageFile> SerializedPageFile::create(
@@ -167,7 +168,30 @@ folly::Range<const vector_size_t*> SerializedPageFileWriter::estimateRowSizes(
       folly::Range(rowNumbers_.data(), numRows),
       sizePointers_.data(),
       scratch);
+  common::testutil::TestValue::adjust(
+      "facebook::velox::serializer::SerializedPageFileWriter::estimateRowSizes",
+      &rowSizes_);
   return folly::Range<const vector_size_t*>(rowSizes_.data(), numRows);
+}
+
+namespace {
+// Returns true if 'type' or any type nested in it is OPAQUE, whose serialized
+// size the serde can't estimate.
+bool containsOpaque(const Type& type) {
+  if (type.isOpaque()) {
+    return true;
+  }
+  for (uint32_t i = 0; i < type.size(); ++i) {
+    if (containsOpaque(*type.childAt(i))) {
+      return true;
+    }
+  }
+  return false;
+}
+} // namespace
+
+bool SerializedPageFileWriter::canEstimateWrites(const Type& type) const {
+  return writeBufferSize_ > 0 && !containsOpaque(type);
 }
 
 uint64_t SerializedPageFileWriter::write(
@@ -194,13 +218,23 @@ uint64_t SerializedPageFileWriter::write(
   };
 
   uint64_t writtenBytes{0};
-  if (writeBufferSize_ == 0) {
+  if (!canEstimateWrites(*rows->type())) {
     for (const auto& range : indices) {
       append(range.begin, range.size);
     }
-    writtenBytes += flush();
+    if (batch_->size() >= writeBufferSize_) {
+      writtenBytes += flush();
+    }
   } else {
     const auto rowSizes = estimateRowSizes(rows, indices);
+    // The serializer can't write a row of 2GB or more, and appending one can
+    // overflow its offsets. The serde caps a row estimate at INT32_MAX.
+    for (const auto rowSize : rowSizes) {
+      VELOX_CHECK_LT(
+          rowSize,
+          std::numeric_limits<int32_t>::max(),
+          "Serialized row exceeds 2GB");
+    }
     uint64_t bufferedSize = batch_ == nullptr ? 0 : batch_->size();
     vector_size_t rowIndex = 0;
     for (const auto& range : indices) {
