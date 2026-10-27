@@ -751,12 +751,21 @@ void OutputBuffer::terminate() {
   VELOX_CHECK(!task_->isRunning());
 
   std::vector<ContinuePromise> outstandingPromises;
+  std::vector<DataAvailable> outstandingReaders;
   {
     std::lock_guard<std::mutex> l(mutex_);
     outstandingPromises.swap(promises_);
+    for (auto& buffer : buffers_) {
+      if (buffer != nullptr) {
+        outstandingReaders.push_back(buffer->getAndClearNotify());
+      }
+    }
   }
   for (auto& promise : outstandingPromises) {
     promise.setValue();
+  }
+  for (auto& reader : outstandingReaders) {
+    reader.notify();
   }
 }
 
