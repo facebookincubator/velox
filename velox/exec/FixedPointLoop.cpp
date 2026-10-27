@@ -1295,7 +1295,7 @@ folly::coro::Task<bool> FixedPointLoop::converged() {
     co_return lastDeltaEmpty_;
   }
 
-  if (config.plans.empty()) {
+  if (convergencePlans_.empty()) {
     // No convergence sequence: the loop is bounded only by maxIterations.
     co_return false;
   }
