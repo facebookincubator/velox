@@ -38,6 +38,7 @@
 #include "velox/exec/Exchange.h"
 #include "velox/exec/FixedPointLoop.h"
 #include "velox/exec/FixedPointSplit.h"
+#include "velox/exec/FixedPointVerdicts.h"
 #include "velox/exec/MemoryReclaimer.h"
 #include "velox/exec/Operator.h"
 #include "velox/exec/OperatorType.h"
@@ -257,7 +258,7 @@ class FixedPointTest : public exec::test::HiveConnectorTestBase {
   static auto alwaysTrueAwaitVerdict() {
     return [](const FixedPointOptions::LoopAddress& /*workerZero*/,
               int32_t /*iteration*/,
-              folly::CancellationToken /*cancel*/) {
+              const folly::CancellationToken& /*cancel*/) {
       return folly::makeSemiFuture(true);
     };
   }
@@ -506,7 +507,7 @@ class FixedPointTest : public exec::test::HiveConnectorTestBase {
           [verdicts, verdictKey](
               const FixedPointOptions::LoopAddress& workerZero,
               int32_t iteration,
-              folly::CancellationToken /*cancel*/) {
+              const folly::CancellationToken& /*cancel*/) {
             return (*verdicts->wlock())[verdictKey(workerZero, iteration)]
                 .getSemiFuture();
           };
@@ -2042,7 +2043,7 @@ TEST_F(FixedPointTest, verdictFailures) {
   options.awaitVerdict =
       [](const FixedPointOptions::LoopAddress& /*workerZero*/,
          int32_t /*iteration*/,
-         folly::CancellationToken /*cancel*/) {
+         const folly::CancellationToken& /*cancel*/) {
         return folly::makeSemiFuture<bool>(
             std::runtime_error("Worker 0 is unreachable"));
       };
@@ -2196,18 +2197,13 @@ TEST_F(FixedPointTest, kMeans) {
 
 // The same KMeans across two workers: the points are sharded, the centroids are
 // replicated, and each iteration reduces the per-slot statistics across workers
-// so that every worker installs the identical next centroid set.  The reduction
-// is an all-reduce assembled from existing nodes -- each worker replicates its
-// local statistics once per destination and shuffles them, so plan 1 sees every
+// so that every worker installs the next centroid set.  The reduction is an
+// all-reduce assembled from existing nodes -- each worker replicates its local
+// statistics once per destination and shuffles them, so plan 1 sees every
 // worker's contribution and aggregates them globally (see
-// allReduceOverReplicatedState for the mechanism on its own).
-//
-// Coordinates are scaled integers rather than doubles.  Integer addition is
-// associative, so the reduction is exact regardless of the order rows arrive
-// from the exchange; every worker therefore computes bit-identical centroids
-// and reaches the same convergence verdict on the same iteration.  With doubles
-// the reduction order would decide the last bits, and two workers could
-// disagree at the epsilon boundary -- which would break lockstep.
+// allReduceOverReplicatedState for the mechanism on its own).  Worker 0 decides
+// when to stop over its own centroids and alone emits them, so every worker
+// stops on the same iteration and the output holds each centroid once.
 TEST_F(FixedPointTest, kMeansTwoWorkers) {
   constexpr int32_t kNumWorkers{2};
   auto pointsType = ROW({"point_id", "x", "y"}, BIGINT());
@@ -2335,31 +2331,43 @@ TEST_F(FixedPointTest, kMeansTwoWorkers) {
                            "(gsy / gcnt - old_cy) * (gsy / gcnt - old_cy), 0) AS "
                            "movement"})
                       .planNode()},
-              ConvergenceConfig::converging(
-                  // Exact integer test: no centroid moved.
+              ConvergenceConfig::workerZeroVerdict(
+                  // No centroid moved.
                   PlanBuilder(idGenerator)
                       .stateSource("centroids", centroidsType)
                       .singleAggregation({}, {"max(movement)"})
                       .project({"a0 = 0 AS converged"})
                       .planNode(),
                   20),
-              /*outputStateEntry=*/"centroids")
+              /*outputStateEntry=*/"centroids",
+              /*outputOnWorkerZero=*/true)
           .planNode();
 
   // Neither worker can reach these alone: worker 0 holds no point near
   // (833, 833) and worker 1 none near (133, 133), so each centroid proves the
-  // cross-worker reduction ran.  Both workers emit the same three centroids
-  // after the same two iterations -- the replicated state stayed in lockstep.
+  // cross-worker reduction ran.
   std::vector<std::tuple<int64_t, int64_t, int64_t>> expected{
       {133, 133, 2},
-      {133, 133, 2},
       {833, 833, 2},
-      {833, 833, 2},
-      {10000, 10000, 2},
       {10000, 10000, 2},
   };
+  // FixedPointVerdicts holds only each loop's latest verdict.
+  auto verdicts = std::make_shared<FixedPointVerdicts>();
+  auto options = localOptions();
+  options.publishVerdict = [verdicts](
+                               const FixedPointOptions::LoopAddress& workerZero,
+                               int32_t iteration,
+                               bool converged) {
+    verdicts->publish(workerZero, iteration, converged);
+  };
+  options.awaitVerdict = [verdicts](
+                             const FixedPointOptions::LoopAddress& workerZero,
+                             int32_t iteration,
+                             const folly::CancellationToken& /*cancel*/) {
+    return verdicts->get(workerZero, iteration);
+  };
   EXPECT_THAT(
-      withIterations(runOnWorkers(plan, pointShards)),
+      withIterations(runOnWorkers(plan, pointShards, options)),
       testing::UnorderedElementsAreArray(expected));
 }
 

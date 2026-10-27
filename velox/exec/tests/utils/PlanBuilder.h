@@ -1230,11 +1230,14 @@ class PlanBuilder {
   /// @param outputStateEntry The mutable vector state entry whose final
   /// contents are emitted and into which each iteration's last plan output is
   /// written.
+  /// @param outputOnWorkerZero Whether only worker 0 emits the output (see
+  /// core::FixedPointNode::outputOnWorkerZero).
   PlanBuilder& fixedPoint(
       std::vector<core::StateDeclarationPtr> stateDeclarations,
       std::vector<core::PlanNodePtr> plans,
       core::ConvergenceConfig convergenceConfig,
-      std::string outputStateEntry);
+      std::string outputStateEntry,
+      bool outputOnWorkerZero = false);
 
   /// Add a FixedPointNode with a single per-iteration body plan (the common
   /// case: no in-iteration shuffle).  `outputStateEntry` defaults to the last
