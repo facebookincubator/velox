@@ -222,7 +222,7 @@ TEST_F(XPathFunctionsTest, mixedRowNullsAndErrors) {
            std::nullopt,
            std::nullopt,
            std::nullopt,
-           std::nullopt,
+           "",
            "",
            "tail",
            std::nullopt,
@@ -236,7 +236,7 @@ TEST_F(XPathFunctionsTest, mixedRowNullsAndErrors) {
            std::nullopt,
            std::nullopt,
            std::nullopt,
-           std::nullopt,
+           false,
            false,
            true,
            std::nullopt,
@@ -271,7 +271,8 @@ TEST_F(XPathFunctionsTest, xpathNumberStringConversions) {
           "<a><b id='n1'>value</b></a>",
           "id('n1')"),
       "value");
-  EXPECT_EQ(xpathBoolean("<a xml:lang='en'><b/></a>", "a/b[lang('en')]"), true);
+  EXPECT_EQ(
+      xpathBoolean("<a xml:lang='en'><b/></a>", "a/b[lang('en')]"), false);
   // Conversions inside XPath go through the string-function wrappers.
   // Repetition also checks that converting a cached numeric constant does not
   // mutate the compiled expression's copy of that constant.
@@ -335,21 +336,19 @@ TEST_F(XPathFunctionsTest, xpathEvaluationErrorsThrow) {
   }
 }
 
-TEST_F(XPathFunctionsTest, namespacePrefixedReturnsNull) {
-  // A prefixed step references an unregistered prefix -> evaluation fails ->
-  // NULL, as documented in the namespace compatibility notes.
-  EXPECT_EQ(
-      xpathString(
-          "<x:a xmlns:x=\"http://e\"><x:b>v</x:b></x:a>", "x:a/x:b/text()"),
-      std::nullopt);
-  // Undeclared prefix in the input parses but still fails evaluation.
-  EXPECT_EQ(
-      xpathString("<ns:a><ns:b>v</ns:b></ns:a>", "ns:a/ns:b/text()"),
-      std::nullopt);
-  EXPECT_EQ(xpathBoolean("<a xmlns=\"urn:test\"><b>v</b></a>", "a/b"), false);
-  EXPECT_EQ(xpathString("<a xmlns=\"urn:test\"><b>v</b></a>", "a/b"), "");
-  EXPECT_EQ(xpathString("<a xml:lang='en'/>", "a/@xml:lang"), "en");
+TEST_F(XPathFunctionsTest, namespacePrefixedPathsDoNotMatch) {
+  expectBoth(
+      "<x:a xmlns:x=\"http://e\"><x:b>v</x:b></x:a>",
+      "x:a/x:b/text()",
+      "",
+      false);
+  expectBoth("<ns:a><ns:b>v</ns:b></ns:a>", "ns:a/ns:b/text()", "", false);
+  expectBoth("<a xmlns=\"urn:test\"><b>v</b></a>", "a/b", "v", true);
+  expectBoth("<a xml:lang='en'/>", "a/@xml:lang", "", false);
   EXPECT_EQ(xpathBoolean("<a/>", "false() and ns:a"), false);
+  EXPECT_EQ(xpathBoolean("<a/>", "true() or ns:a"), true);
+  expectBoth("<a>v</a>", "ns:a | a", "v", true);
+  expectBoth("<a>v</a>", "ns:*", "", false);
 }
 
 TEST_F(XPathFunctionsTest, doctypeHandling) {
@@ -473,6 +472,25 @@ TEST_F(XPathFunctionsTest, doctypeHandling) {
             "<lolz>&lol2;</lolz>",
             "lolz"),
         std::nullopt);
+  }
+}
+
+TEST_F(XPathFunctionsTest, undeclaredAttributeEntityBeforeAnotherWarning) {
+  const std::string doctype = "<!DOCTYPE a SYSTEM \"file:///xpath-absent\">";
+  for (const auto& body :
+       {"<a b=\"&bar;\"><c xml:space=\"invalid\"/></a>",
+        "<a b=\"&bar;\" xml:space=\"invalid\"/>",
+        "<a><c b=\"&bar;\"/><d xml:space=\"invalid\"/></a>"}) {
+    SCOPED_TRACE(body);
+    for (const auto& path : {"a/@b", "a", "true()"}) {
+      expectBoth(doctype + body, path, std::nullopt, std::nullopt);
+    }
+    expectUserErrorBoth(doctype + body, "a[", "Invalid XPath");
+    expectBoth(
+        doctype + "<a b=\"ok\"><c xml:space=\"invalid\"/></a>",
+        "a/@b",
+        "ok",
+        true);
   }
 }
 
@@ -835,8 +853,8 @@ TEST_F(XPathFunctionsTest, numberArgumentsAreStringified) {
   EXPECT_EQ(xpathString(tinyIdXml, "id(" + third + ")"), "");
 
   const std::string langXml = "<a xml:lang='0.0000001'><b>hit</b></a>";
-  EXPECT_EQ(xpathString(langXml, "a/b[lang(" + tiny + ")]"), "hit");
-  EXPECT_EQ(xpathBoolean(langXml, "a/b[lang(" + tiny + ")]"), true);
+  EXPECT_EQ(xpathString(langXml, "a/b[lang(" + tiny + ")]"), "");
+  EXPECT_EQ(xpathBoolean(langXml, "a/b[lang(" + tiny + ")]"), false);
   EXPECT_EQ(xpathBoolean(langXml, "a/b[lang(" + third + ")]"), false);
 }
 
@@ -1343,52 +1361,369 @@ TEST_F(XPathFunctionsTest, rootAndDocumentNode) {
 
 TEST_F(XPathFunctionsTest, defaultNamespaceAndPrefixedNames) {
   const std::string defaultNs = "<a xmlns=\"urn:x\"><b>v</b></a>";
-  // An unprefixed name test never matches a namespaced element.
-  expectBoth(defaultNs, "a/b", "", false);
+  expectBoth(defaultNs, "a/b", "v", true);
   expectBoth(defaultNs, "/*/*", "v", true);
   EXPECT_EQ(xpathString(defaultNs, "local-name(/*)"), "a");
-  EXPECT_EQ(xpathString(defaultNs, "namespace-uri(/*)"), "urn:x");
+  EXPECT_EQ(xpathString(defaultNs, "namespace-uri(/*)"), "");
   EXPECT_EQ(xpathString(defaultNs, "name(/*)"), "a");
+  EXPECT_EQ(xpathString(defaultNs, "a/namespace::*[name()='']"), "urn:x");
 
   const std::string prefixed = "<x:a xmlns:x=\"urn:x\"><x:b>v</x:b></x:a>";
   EXPECT_EQ(xpathString(prefixed, "name(/*)"), "x:a");
   EXPECT_EQ(xpathString(prefixed, "local-name(/*/*)"), "b");
-  EXPECT_EQ(xpathString(prefixed, "namespace-uri(/*/*)"), "urn:x");
+  EXPECT_EQ(xpathString(prefixed, "namespace-uri(/*/*)"), "");
   expectBoth(prefixed, "/*/*[local-name()='b']", "v", true);
-  expectBoth(prefixed, "/*/*[namespace-uri()='urn:x']", "v", true);
-  // A prefix in the path is not bound, so evaluation yields NULL, not an error
-  // and not a wrong match.
-  expectBoth(prefixed, "x:a/x:b", std::nullopt, std::nullopt);
-  expectBoth(prefixed, "/*/x:b", std::nullopt, std::nullopt);
-  expectBoth(prefixed, "f:g()", std::nullopt, std::nullopt);
-  expectBoth(prefixed, "$p:v", std::nullopt, std::nullopt);
+  expectBoth(prefixed, "/*/*[name()='x:b']", "v", true);
+  expectBoth(prefixed, "/*/*[namespace-uri()='urn:x']", "", false);
+  expectBoth(prefixed, "x:a/x:b", "", false);
+  expectBoth(prefixed, "/*/x:b", "", false);
+  expectBoth(prefixed, "/*/b", "v", true);
+  expectUserErrorBoth(prefixed, "f:g()", "Invalid XPath");
+  expectUserErrorBoth(prefixed, "$p:v", "Invalid XPath");
+  expectBoth(prefixed, "false() and f:g()", "false", false);
+  expectBoth(prefixed, "true() or $p:v", "true", true);
   const auto input = makeRowVector({
       makeFlatVector<std::string>({prefixed, prefixed, "<a>ok</a>"}),
       makeFlatVector<std::string>({"f:g()", "$p:v", "a"}),
   });
   velox::test::assertEqualVectors(
       makeNullableFlatVector<std::string>({std::nullopt, std::nullopt, "ok"}),
-      evaluate("xpath_string(c0, c1)", input));
+      evaluate("try(xpath_string(c0, c1))", input));
   velox::test::assertEqualVectors(
       makeNullableFlatVector<bool>({std::nullopt, std::nullopt, true}),
-      evaluate("xpath_boolean(c0, c1)", input));
+      evaluate("try(xpath_boolean(c0, c1))", input));
 }
 
 TEST_F(XPathFunctionsTest, namespaceDeclarationsAreNotAttributes) {
-  // Spark's DOM exposes xmlns declarations as attributes; libxml2's data model
-  // does not. This is a documented difference.
   EXPECT_EQ(xpathString("<a xmlns:p=\"urn:p\" id=\"1\"/>", "count(a/@*)"), "1");
   EXPECT_EQ(xpathString("<a xmlns=\"urn:d\" id=\"1\"/>", "count(/*/@*)"), "1");
   EXPECT_EQ(xpathString("<a xmlns:p=\"urn:p\"/>", "count(a/@*)"), "0");
-  EXPECT_EQ(xpathBoolean("<a xmlns:p=\"urn:p\"/>", "a/@xmlns:p"), std::nullopt);
+  expectBoth("<a xmlns:p=\"urn:p\"/>", "a/@xmlns:p", "", false);
+  expectBoth("<a xmlns:p=\"urn:p\"/>", "a/namespace::p", "urn:p", true);
 
   const std::string prefixedAttribute = "<a xmlns:p=\"urn:p\" p:id=\"1\"/>";
-  EXPECT_EQ(xpathString(prefixedAttribute, "a/@p:id"), std::nullopt);
+  expectBoth(prefixedAttribute, "a/@p:id", "", false);
   EXPECT_EQ(xpathString(prefixedAttribute, "a/@*"), "1");
   EXPECT_EQ(xpathString(prefixedAttribute, "count(a/@*)"), "1");
   EXPECT_EQ(xpathString(prefixedAttribute, "local-name(a/@*)"), "id");
   EXPECT_EQ(xpathString(prefixedAttribute, "name(a/@*)"), "p:id");
   EXPECT_EQ(xpathString(prefixedAttribute, "a/@*[local-name()='id']"), "1");
+  EXPECT_EQ(xpathString(prefixedAttribute, "namespace-uri(a/@*)"), "");
+}
+
+TEST_F(XPathFunctionsTest, namespaceScopesAndAttributeOrder) {
+  const std::string xml =
+      "<a xmlns=\"urn:outer\" xmlns:p=\"urn:one\">"
+      "<b xmlns=\"\" xmlns:p=\"urn:two\" z=\"last\" p:id=\"value\" "
+      "a=\"first\"><p:c>nested</p:c></b><b>tail</b></a>";
+  expectBoth(xml, "a/b[1]/@*", "first", true);
+  EXPECT_EQ(xpathString(xml, "name(a/b[1]/@*[2])"), "p:id");
+  EXPECT_EQ(xpathString(xml, "name(a/b[1]/@*[3])"), "z");
+  EXPECT_EQ(xpathString(xml, "a/b[1]/namespace::p"), "urn:two");
+  EXPECT_EQ(xpathString(xml, "a/b[2]/namespace::p"), "urn:one");
+  expectBoth(xml, "a/b[1]/*[local-name()='c']", "nested", true);
+  expectBoth(xml, "a/b[1]/*[name()='p:c']", "nested", true);
+  expectBoth(xml, "a/b[1]/p:c", "", false);
+  expectBoth(xml, "a/b[2]", "tail", true);
+  expectBoth(xml, "a/descendant::*[local-name()='c']", "nested", true);
+
+  for (int pass = 0; pass < 2; ++pass) {
+    expectBoth(
+        "<a xmlns=\"urn:x\"><b>namespaced</b></a>", "a/b", "namespaced", true);
+    expectBoth("<a><b>plain</b></a>", "a/b", "plain", true);
+    expectBoth(
+        "<p:a xmlns:p=\"urn:x\"><p:b>prefixed</p:b></p:a>",
+        "/*/*[local-name()='b']",
+        "prefixed",
+        true);
+  }
+}
+
+TEST_F(XPathFunctionsTest, namespaceUnawareDescendantIterators) {
+  const std::string xml =
+      "<a xmlns:p=\"urn:p\"><p:b x=\"1\">prefixed</p:b>"
+      "<b>plain</b><c><p:b>deep</p:b></c></a>";
+  for (const auto& path :
+       {"a/b",
+        "/*/b",
+        "a//b",
+        "/a/descendant::b",
+        "descendant::b",
+        "//b[1]",
+        "//b[position()=1]",
+        "//b[true() or false()]",
+        "//b[(true())]",
+        "//b[1!=2]"}) {
+    expectBoth(xml, path, "prefixed", true);
+  }
+  for (const auto& path :
+       {"//b",
+        "/descendant::b",
+        ".//b",
+        "./descendant::b",
+        "descendant-or-self::node()/b",
+        "//b[true()]",
+        "//b[1=1]"}) {
+    expectBoth(xml, path, "plain", true);
+  }
+  EXPECT_EQ(xpathString(xml, "count(a//b)"), "3");
+  EXPECT_EQ(xpathString(xml, "count(//b)"), "1");
+  EXPECT_EQ(xpathString(xml, "count(//b[1])"), "2");
+  EXPECT_EQ(xpathString(xml, "count(./descendant::node())"), "9");
+  expectBoth(xml, "//b[@x='1']", "", false);
+  EXPECT_EQ(xpathString(xml, "a/b[./descendant::b]"), "plain");
+}
+
+TEST_F(XPathFunctionsTest, namespaceUnawareNestedPredicates) {
+  const std::string xml =
+      "<a xmlns:p=\"urn:p\"><p:b x=\"1\">prefixed</p:b>"
+      "<b>plain</b><c><p:b>deep</p:b></c></a>";
+  for (const auto& path :
+       {"//b[boolean(@x=1)]",
+        "//b[boolean(1=1)]",
+        "//b[boolean(position()=1)]",
+        "/descendant::b[boolean(1=1)]",
+        "descendant-or-self::node()/b[boolean(1=1)]",
+        "(//b[boolean(1=1)])"}) {
+    expectBoth(xml, path, "prefixed", true);
+  }
+  expectBoth(xml, "//b[boolean(count(../b)=1)]", "deep", true);
+  expectBoth(xml, "count(//b[boolean(1=1)])", "3", true);
+  expectBoth(xml, "count(//b[boolean(count(../b)=1)])", "1", true);
+
+  // The JDK's compiler layout changes iterator selection inside concat.
+  expectBoth(xml, "concat('x',//b[boolean(1=1)])", "xplain", true);
+  expectBoth(xml, "concat('x',//b[boolean(@x=1)])", "x", true);
+  expectBoth(xml, "concat('x',//b[boolean(count(../b)=1)])", "x", true);
+  expectUserErrorBoth(xml, "a | //b[boolean(1=1)]", "Invalid XPath");
+  expectUserErrorBoth(
+      xml,
+      "a | /descendant-or-self::node()[boolean(1=1)]/child::node()/b",
+      "Invalid XPath");
+}
+
+TEST_F(XPathFunctionsTest, namespaceUnawareNamespaceAxis) {
+  const std::string xml =
+      "<a xmlns=\"urn:default\" xmlns:p=\"urn:p\" xmlns:q=\"urn:q\">"
+      "<b xmlns:p=\"urn:child\"/><b/></a>";
+  EXPECT_EQ(xpathString(xml, "count(a/namespace::*)"), "2");
+  EXPECT_EQ(xpathString(xml, "name(a/namespace::*[1])"), "q");
+  EXPECT_EQ(xpathString(xml, "name(a/namespace::*[2])"), "xml");
+  expectBoth(xml, "a/namespace::p", "", false);
+  expectBoth(xml, "a/namespace::q", "urn:q", true);
+  expectBoth(xml, "a/b[1]/namespace::p", "urn:child", true);
+  expectBoth(xml, "a/b[2]/namespace::q", "urn:q", true);
+  EXPECT_EQ(xpathString(xml, "count(a//namespace::*)"), "3");
+  EXPECT_EQ(xpathString(xml, "name(a/b[2]/namespace::q/..)"), "a");
+  EXPECT_EQ(xpathString(xml, "count(a/b/namespace::*[1])"), "2");
+  EXPECT_EQ(xpathString(xml, "count(a/namespace::node())"), "2");
+  expectBoth(xml, "a/namespace::text()", "", false);
+  expectBoth(
+      xml,
+      "a/namespace::*[contains('urn:q', \"q\")][name()='q']",
+      "urn:q",
+      true);
+  expectUserErrorBoth(xml, "a/namespace::*[missing()]", "Invalid XPath");
+  expectUserErrorBoth("<a/>", "_velox_namespaces()", "Invalid XPath");
+  expectUserErrorBoth("<a/>", "_velox_namespace_step(a, '')", "Invalid XPath");
+  expectUserErrorBoth("<a/>", "_velox_first_step(a, 0)", "Invalid XPath");
+}
+
+TEST_F(XPathFunctionsTest, namespaceNodeDocumentOrder) {
+  const std::string uri = "http://www.w3.org/XML/1998/namespace";
+  for (const auto& xml :
+       {"<a><b xmlns:q='urn:q'/></a>",
+        "<a><b xmlns:q='urn:q'/><b/></a>",
+        "<a><b xmlns:q='urn:q'/><b xmlns:r='urn:r'/></a>"}) {
+    SCOPED_TRACE(xml);
+    expectBoth(xml, "a/b/namespace::*", uri, true);
+    expectBoth(xml, "string(a/b/namespace::*)", uri, true);
+    expectBoth(xml, "name(a/b/namespace::*)", "xml", true);
+    expectBoth(xml, "name(a/b/namespace::*) = 'q'", "false", false);
+    expectBoth(xml, "(a/b/namespace::*)[1]", uri, true);
+    expectBoth(xml, "a/b/namespace::*[1]", uri, true);
+  }
+  for (const std::string prefix : {"p", "z"}) {
+    const auto xml =
+        "<a xmlns:" + prefix + "='urn:root'><b xmlns:q='urn:q'/><b/></a>";
+    SCOPED_TRACE(xml);
+    expectBoth(xml, "a/b/namespace::*", "urn:root", true);
+    expectBoth(xml, "name(a/b/namespace::*)", "q", true);
+    expectBoth(xml, "name((a/b/namespace::*))", "q", true);
+    expectBoth(xml, "local-name(a/b/namespace::*)", "q", true);
+    expectBoth(xml, "name((a/b/namespace::*)[1])", prefix, true);
+    expectBoth(xml, "name((a/b/namespace::*)[2])", "xml", true);
+    expectBoth(xml, "count(a/b/namespace::*)", "3", true);
+    expectBoth(xml, "count(a/b/namespace::*[1])", "2", true);
+    expectBoth(xml, "name(a/b/namespace::*[1])", "q", true);
+    expectBoth(xml, "count(a/b/namespace::*[last()])", "1", true);
+  }
+  const std::string siblings =
+      "<a><b xmlns:q='urn:one'/><b xmlns:q='urn:two'/></a>";
+  expectBoth(siblings, "count(a/b/namespace::*)", "3", true);
+  expectBoth(siblings, "count(a/b/namespace::*[last()])", "2", true);
+  expectBoth(siblings, "(a/b/namespace::*[last()])[last()]", "urn:two", true);
+  expectBoth(
+      "<a xmlns:xml='" + uri + "'><b xmlns:q='urn:q'/><b/></a>",
+      "a/b/namespace::*",
+      uri,
+      true);
+}
+
+TEST_F(XPathFunctionsTest, namespaceFirstMatchTraversal) {
+  const std::string xml = "<a xmlns:p='p'><b xmlns:q='q'/></a>";
+  for (int pass = 0; pass < 2; ++pass) {
+    expectBoth(xml, "name(a/b/namespace::*/..)", "b", true);
+    expectBoth(xml, "local-name(a/b/namespace::*/..)", "b", true);
+    expectBoth(xml, "name((a/b/namespace::*/..))", "b", true);
+    expectBoth(xml, "name(a/b/namespace::*/..) = 'b'", "true", true);
+    expectBoth(xml, "local-name(a/b/namespace::*/..) = 'b'", "true", true);
+    expectBoth(xml, "name((a/b/namespace::*)[1]/..)", "a", true);
+    expectBoth(xml, "name((a/b/namespace::*/..)[1])", "a", true);
+    expectBoth(xml, "count(a/b/namespace::*/..)", "2", true);
+    expectBoth(xml, "name(a/b/namespace::*/../missing)", "", false);
+    expectBoth(xml, "name(a/b/namespace::*/../namespace::*/..)", "b", true);
+    expectBoth(xml, "name(a/b/namespace::*/../namespace::*)", "q", true);
+    expectBoth(xml, "name(a/b/namespace::*/self::node()/..)", "b", true);
+    expectBoth(xml, "name(a/b/namespace::*[1]/..)", "b", true);
+    expectBoth(xml, "name(a/b/namespace::*[last()]/..)", "a", true);
+    expectBoth(
+        xml,
+        "name(a/b/namespace::*/parent::*[self::b or $missing])",
+        "b",
+        true);
+    expectBoth(
+        "<a><b xmlns:q='q'/></a>", "name(a/b/namespace::*/..)", "a", true);
+  }
+  expectBoth(
+      "<a xmlns:p='p'><c/><b xmlns:q='q'><x:c/></b></a>",
+      "name(a/b/namespace::*/../c)",
+      "x:c",
+      true);
+  expectBoth(
+      "<a xmlns:p='p'><x:c/><b xmlns:q='q'/></a>",
+      "name(a/b/namespace::*/../c)",
+      "x:c",
+      true);
+  expectBoth(
+      "<a xmlns:p='p'><b xmlns:q='q'/><b xmlns:r='r'><c/></b></a>",
+      "name(a/b/namespace::*/../c)",
+      "c",
+      true);
+  expectBoth(
+      "<a xmlns:p='p' root='root'><b xmlns:q='q' child='child'/></a>",
+      "name(a/b/namespace::*/../@*)",
+      "child",
+      true);
+  expectBoth(
+      "<a xmlns:p='p'>outer<b xmlns:q='q'>inner</b></a>",
+      "name(a/b/namespace::*/../text()/..)",
+      "b",
+      true);
+  std::string repeated = "a";
+  for (int depth = 0; depth < 20; ++depth) {
+    repeated += "/namespace::q/..";
+  }
+  expectBoth("<a xmlns:q='q'/>", "name(" + repeated + ")", "a", true);
+  expectBoth(
+      xml, "name(a/b/namespace::*/..)" + std::string(4'097, ' '), "b", true);
+  for (const auto& expression :
+       {"missing()", "$missing", "contains('x')", "1 | 2"}) {
+    expectUserErrorBoth(
+        xml,
+        "name(a/b/namespace::*/parent::node()[" + std::string(expression) +
+            "])",
+        "Invalid XPath");
+  }
+  expectBoth(
+      "<a/>", "name(a/b/namespace::*/parent::node()[$missing])", "", false);
+}
+
+TEST_F(XPathFunctionsTest, namespaceUnawareDeclarationsAndQualifiedNames) {
+  expectBoth("<p:a><p:b>value</p:b></p:a>", "a/b", "value", true);
+  EXPECT_EQ(xpathString("<p:a/>", "name(/*)"), "p:a");
+  expectBoth("<a xmlns:xml=\"wrong\"/>", "a/namespace::xml", "wrong", true);
+  expectBoth("<a xmlns:p=\"\"/>", "a/namespace::p", "", true);
+  const std::string aliases =
+      "<a xmlns:p=\"urn:x\" xmlns:q=\"urn:x\" p:id=\"p\" q:id=\"q\"/>";
+  EXPECT_EQ(xpathString(aliases, "count(a/@id)"), "2");
+  EXPECT_EQ(xpathString(aliases, "a/@id"), "p");
+  EXPECT_EQ(xpathString(aliases, "name(a/@id[2])"), "q:id");
+
+  const std::string supplementary = "\xf0\x90\x80\x80";
+  const std::string bmp = "\xef\xa4\x80";
+  const auto xml = "<?xml version=\"1.1\"?><a " + bmp + "=\"bmp\" " +
+      supplementary + "=\"supplementary\"/>";
+  EXPECT_EQ(xpathString(xml, "a/@*"), "supplementary");
+}
+
+TEST_F(XPathFunctionsTest, canonicalXmlNamespaceDeclaration) {
+  const std::string uri = "http://www.w3.org/XML/1998/namespace";
+  const auto xml = "<a xmlns='urn:default' xmlns:xml='" + uri + "'>ok</a>";
+  for (int pass = 0; pass < 2; ++pass) {
+    expectBoth(xml, "a", "ok", true);
+    expectBoth(xml, "a/namespace::xml", uri, true);
+    EXPECT_EQ(xpathString(xml, "count(a/namespace::*)"), "1");
+    EXPECT_EQ(xpathString(xml, "count(a/@*)"), "0");
+    expectBoth("<a>plain</a>", "a", "plain", true);
+  }
+  const auto lastDeclaration =
+      "<a xmlns:xml='" + uri + "' xmlns:z='urn:z'><b/></a>";
+  expectBoth(lastDeclaration, "a/namespace::xml", "", false);
+  expectBoth(lastDeclaration, "a/namespace::z", "urn:z", true);
+  EXPECT_EQ(xpathString(lastDeclaration, "count(a/namespace::*)"), "1");
+}
+
+TEST_F(XPathFunctionsTest, colonContainingNamespaceLocalNames) {
+  const std::string xml = "<a xmlns:p:q='v'/>";
+  expectBoth(xml, "local-name(a/namespace::*[1])", "p:q", true);
+  expectBoth(xml, "a/namespace::*[local-name()='p:q']", "v", true);
+  expectBoth(xml, "a/namespace::q", "", false);
+  expectBoth(xml, "a/namespace::p:q", "", false);
+  expectBoth(xml, "a/namespace::p:*", "v", true);
+  expectBoth(xml, "local-name(a/namespace::missing)", "", false);
+  expectBoth(xml, "local-name((a | a/namespace::*)[1])", "a", true);
+  expectBoth(
+      "<p:a p:id='value'><?p:q data?></p:a>",
+      "concat(local-name(/*), '|', local-name(/*/@*), '|', "
+      "local-name(/*/processing-instruction()))",
+      "a|id|q",
+      true);
+  expectUserErrorBoth(xml, "local-name('not a nodeset')", "Invalid XPath");
+  expectUserErrorBoth(xml, "local-name(a, a)", "Invalid XPath");
+}
+
+TEST_F(XPathFunctionsTest, nestedNamespaceSelectors) {
+  std::string predicate = "true()";
+  for (int depth = 0; depth < 20; ++depth) {
+    predicate = "../namespace::q[" + predicate + "]";
+  }
+  const auto path = "a/namespace::q[" + predicate + "]";
+  for (int pass = 0; pass < 2; ++pass) {
+    expectBoth("<a xmlns:q='urn:one'/>", path, "urn:one", true);
+    expectBoth("<a xmlns:q='urn:two'/>", path, "urn:two", true);
+    expectBoth("<a/>", path, "", false);
+  }
+  expectBoth(
+      "<a xmlns:q='urn:uncached'/>",
+      path + std::string(4'097, ' '),
+      "urn:uncached",
+      true);
+  expectBoth(
+      "<a xmlns:q='urn:q'><b xmlns:p='urn:p'/></a>",
+      "concat(a/namespace::q, '|', a/b/namespace::p)",
+      "urn:q|urn:p",
+      true);
+  expectBoth(
+      "<a xmlns:q='urn:q'/>",
+      "a/namespace::*[contains('urn:q', \"q\")][../namespace::q]",
+      "urn:q",
+      true);
+  expectBoth(
+      "<a xmlns:q='urn:q'/>",
+      "a/namespace::q/../namespace::q/../namespace::q",
+      "urn:q",
+      true);
 }
 
 // ==================== Diagnostics ====================
@@ -1506,15 +1841,94 @@ TEST_F(XPathFunctionsTest, userErrorsCarryTheLibxmlCode) {
       actual("missing()"),
       pathMessage("missing()", XML_XPATH_UNKNOWN_FUNC_ERROR));
   EXPECT_EQ(
+      actual("missing('x', 1)"),
+      pathMessage("missing('x', 1)", XML_XPATH_UNKNOWN_FUNC_ERROR));
+  expectBoth("<a/>", "false() and missing()", "false", false);
+  expectBoth("<a/>", "true() or missing()", "true", true);
+  EXPECT_EQ(
       actual("$missing"),
       pathMessage("$missing", XML_XPATH_UNDEF_VARIABLE_ERROR));
   EXPECT_EQ(
       actual("contains('x')"),
       pathMessage("contains('x')", XML_XPATH_INVALID_ARITY));
   EXPECT_EQ(actual("1 | 2"), pathMessage("1 | 2", XML_XPATH_INVALID_TYPE));
+
+  const std::string namespaced = "<a xmlns:q='urn:q'/>";
+  for (const auto& [expression, code] :
+       std::vector<std::pair<std::string, int>>{
+           {"missing()", XML_XPATH_UNKNOWN_FUNC_ERROR},
+           {"$missing", XML_XPATH_UNDEF_VARIABLE_ERROR},
+           {"contains('x')", XML_XPATH_INVALID_ARITY},
+           {"1 | 2", XML_XPATH_INVALID_TYPE}}) {
+    for (const auto& predicate :
+         {expression, "../namespace::*[" + expression + "]"}) {
+      const auto path = "a/namespace::*[" + predicate + "]";
+      SCOPED_TRACE(path);
+      EXPECT_EQ(
+          userErrorMessage([&]() { xpathString(namespaced, path); }),
+          pathMessage(path, code));
+      EXPECT_EQ(
+          userErrorMessage([&]() { xpathBoolean(namespaced, path); }),
+          pathMessage(path, code));
+    }
+  }
+  expectBoth("<b/>", "a/namespace::*[$missing]", "", false);
+  expectBoth(namespaced, "a/namespace::*[false() and missing()]", "", false);
+  const auto input = makeRowVector({
+      makeFlatVector<std::string>(
+          {namespaced, namespaced, namespaced, namespaced}),
+      makeFlatVector<std::string>(
+          {"a/namespace::*[$missing]",
+           "a/namespace::q",
+           "a/namespace::*[1 | 2]",
+           "a/namespace::q"}),
+  });
+  velox::test::assertEqualVectors(
+      makeNullableFlatVector<std::string>(
+          {std::nullopt, "urn:q", std::nullopt, "urn:q"}),
+      evaluate("try(xpath_string(c0, c1))", input));
+  velox::test::assertEqualVectors(
+      makeNullableFlatVector<bool>({std::nullopt, true, std::nullopt, true}),
+      evaluate("try(xpath_boolean(c0, c1))", input));
 }
 
 // ==================== TRY, vectors, and registration ====================
+
+TEST_F(XPathFunctionsTest, exponentLiteralsAreUserErrors) {
+  std::vector<std::string> paths = {
+      "1e2",
+      "1E2",
+      "1e-2",
+      "0.5e+2",
+      "a + 1e2",
+      "(1e2)",
+      "count(a[.=1e2])",
+      "concat('x', 1e2)",
+      "false() and 1e2",
+      "true() or 1e2"};
+  for (const auto& path : paths) {
+    expectUserErrorBoth("<a>ok</a>", path, "Invalid XPath");
+  }
+  paths.insert(paths.begin(), "a");
+  paths.push_back("a");
+  const auto input = makeRowVector({
+      makeFlatVector<std::string>(
+          std::vector<std::string>(paths.size(), "<a>ok</a>")),
+      makeFlatVector<std::string>(paths),
+  });
+  std::vector<std::optional<std::string>> strings(paths.size(), std::nullopt);
+  strings.front() = strings.back() = "ok";
+  std::vector<std::optional<bool>> booleans(paths.size(), std::nullopt);
+  booleans.front() = booleans.back() = true;
+  velox::test::assertEqualVectors(
+      makeNullableFlatVector<std::string>(strings),
+      evaluate("try(xpath_string(c0, c1))", input));
+  velox::test::assertEqualVectors(
+      makeNullableFlatVector<bool>(booleans),
+      evaluate("try(xpath_boolean(c0, c1))", input));
+  expectBoth("<a/>", "'1e2'", "1e2", true);
+  expectBoth("<a><e2>ok</e2></a>", "a/e2", "ok", true);
+}
 
 TEST_F(XPathFunctionsTest, tryNullsOnlyTheFailingRows) {
   const auto input = makeRowVector({

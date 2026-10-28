@@ -7,19 +7,25 @@ Inputs are UTF-8 strings; an XML encoding declaration does not change their
 encoding. A leading byte-order mark is rejected, matching Spark's character
 Reader input.
 
-Spark XPath functions require libxml2 earlier than 2.14. The bundled libxml2
-2.13.5 dependency is used by default.
+Spark XPath functions require libxml2 earlier than 2.14 with SAX1 and thread
+support. The bundled libxml2 2.13.5 dependency is used by default.
 
 Compatibility notes
 -------------------
 
-* XML parsing is namespace-aware, unlike Spark's namespace-unaware parser.
-  Unprefixed paths do not match elements in a default namespace, producing
-  the usual no-match result. An evaluated node step that uses an unregistered
-  namespace prefix returns NULL, as do function calls and variable references
-  with such a prefix. The predefined ``xml`` prefix is supported. Namespace
-  declarations (``xmlns`` and ``xmlns:prefix``) are not attribute nodes, so
-  ``@*`` does not select them.
+* Elements and attributes use Spark's namespace-unaware node model.
+  Unprefixed paths match elements in a default namespace. Qualified names
+  retain their prefixes for ``name()``, while ``local-name()`` strips them
+  and ``namespace-uri()`` returns an empty string. Prefixed element and
+  attribute tests, including ``@xml:lang``, do not match. Namespace
+  declarations remain available on the namespace axis, not through ``@*``.
+  Attributes are ordered by qualified name, matching the JDK DOM's UTF-16
+  ordering. As in JDK XPath, ordinary paths such as ``a/b`` match prefixed
+  elements by local name, while eligible descendant paths such as ``//b``
+  match their full qualified names. Descendant-iterator selection follows the
+  JDK 17/21 compiler, including its context-dependent treatment of nested
+  predicates. Namespace-axis results preserve the JDK's declaration
+  replacement, ordering, and inheritance behavior.
 * External DTD loading and entity substitution are disabled. Documents with
   retained user-defined entity references return NULL rather than expanding
   those references for XPath evaluation, including a reference left in place
