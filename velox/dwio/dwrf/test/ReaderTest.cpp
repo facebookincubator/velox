@@ -1230,6 +1230,9 @@ TEST_F(TestReader, testMismatchSchemaMoreFields) {
   scanSpec->addFieldRecursively("b", *requestedType->childAt(1), 1);
   scanSpec->addFieldRecursively("c", *requestedType->childAt(2), 2);
   scanSpec->addFieldRecursively("d", *requestedType->childAt(3), 3);
+  // The connector supplies constants for missing top-level columns.
+  scanSpec->childByName("d")->setConstantValue(
+      BaseVector::createNullConstant(requestedType->childAt(3), 1, pool()));
   rowReaderOpts.setScanSpec(scanSpec);
   auto rowReader = reader->createRowReader(rowReaderOpts);
   VectorPtr batch = BaseVector::create(requestedType, 0, pool());
@@ -2485,39 +2488,6 @@ FlatMapReaderWithKeyFilter createFlatMapReaderWithKeyFilter(
 }
 
 } // namespace
-
-TEST_F(TestReader, missingTopLevelFields) {
-  auto input = makeRowVector(
-      {"a", "b"},
-      {makeFlatVector<int32_t>({10, 20, 30}),
-       makeFlatVector<int64_t>({100, 200, 300})});
-  auto [writer, reader] =
-      createWriterReader({input}, pool(), dataIoStats_, metadataIoStats_);
-
-  for (bool constantPrefix : {false, true}) {
-    SCOPED_TRACE(constantPrefix);
-    auto prefix = constantPrefix
-        ? makeConstant<std::string>("partition", input->size())
-        : BaseVector::createNullConstant(VARCHAR(), input->size(), pool());
-    // Output channels differ from file positions. In particular, 'a' is at
-    // channel 2 even though the file has only two columns.
-    auto expected = makeRowVector(
-        {"missing", "b", "a"}, {prefix, input->childAt(1), input->childAt(0)});
-    auto outputType = asRowType(expected->type());
-    auto scanSpec = std::make_shared<common::ScanSpec>("root");
-    scanSpec->addAllChildFields(*outputType);
-    if (constantPrefix) {
-      scanSpec->childByName("missing")->setConstantValue(prefix);
-    }
-    RowReaderOptions options;
-    options.setRequestedType(outputType);
-    options.setScanSpec(scanSpec);
-    auto rowReader = reader->createRowReader(options);
-    auto output = BaseVector::create(outputType, 0, pool());
-    ASSERT_EQ(input->size(), rowReader->next(input->size(), output));
-    assertEqualVectors(expected, output);
-  }
-}
 
 TEST_F(TestReader, resetFilterCachesWithoutStripeInRange) {
   auto batches = createBatches({{0, 1, 2, 3}});

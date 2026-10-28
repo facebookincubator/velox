@@ -385,12 +385,6 @@ void SelectiveStructColumnReaderBase::next(
           outputRows(),
           resultRowVector->pool(),
           childField);
-    } else if (childSpec->subscript() == kConstantChildSpecSubscript) {
-      setNullField(
-          numValues,
-          childField,
-          resultRowVector->type()->childAt(childSpec->channel()),
-          resultRowVector->pool());
     } else {
       VELOX_UNREACHABLE();
     }
@@ -567,16 +561,13 @@ void SelectiveStructColumnReaderBase::recordParentNullsInChildren(
 
 bool SelectiveStructColumnReaderBase::isChildMissing(
     const velox::common::ScanSpec& childSpec) const {
-  if (isRoot_) {
-    // Root channels refer to output positions, which can differ from file
-    // positions after projection or insertion of constant columns.
-    return !asRowType(fileType_->type())->containsChild(childSpec.fieldName());
-  }
-
   return
       // The below check is trying to determine if this is a missing field in a
       // struct that should be constant null.
-      (childSpec.channel() !=
+      (!isRoot_ && // If we're in the root struct channel is meaningless in this
+                   // context and it will be a null constant anyway if it's
+                   // missing.
+       childSpec.channel() !=
            velox::common::ScanSpec::kNoChannel && // This can happen if there's
                                                   // a filter on a subfield of a
                                                   // row type that doesn't exist
@@ -724,7 +715,8 @@ void SelectiveStructColumnReaderBase::getValues(
       continue;
     }
 
-    // Set missing fields to be null constants.
+    // Set missing fields to be null constant, if we're in the top level struct
+    // missing columns should already be a null constant from the check above.
     if (index == kConstantChildSpecSubscript) {
       const auto& childType = rowType.childAt(channel);
       setNullField(rows.size(), childResult, childType, resultRow->pool());

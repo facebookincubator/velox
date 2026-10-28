@@ -335,30 +335,6 @@ TEST_F(ParquetReaderTest, parquetFieldIdInsertedColumnNotNullFilled) {
       outputType, *readerBundle.rowReader, expected, *leafPool_);
 }
 
-TEST_F(ParquetReaderTest, onlyMissingTopLevelFields) {
-  auto input =
-      makeRowVector({"present"}, {makeFlatIdentityVector<int32_t>(1001)});
-  auto* sink = write(input);
-  const auto outputType =
-      ROW({"missing", "missing_array"}, {VARCHAR(), ARRAY(BIGINT())});
-  auto readerOptions = makeDefaultReaderOptions();
-  readerOptions.setFileSchema(outputType);
-  readerOptions.setColumnMappingMode(ColumnMappingMode::kName);
-
-  auto readerBundle = readerBuilder(*sink, outputType)
-                          .options(readerOptions)
-                          .withScanSpecOnly()
-                          .build();
-  auto expected = makeRowVector(
-      outputType->names(),
-      {BaseVector::createNullConstant(
-           VARCHAR(), input->size(), leafPool_.get()),
-       BaseVector::createNullConstant(
-           ARRAY(BIGINT()), input->size(), leafPool_.get())});
-  assertReadWithReaderAndExpected(
-      outputType, *readerBundle.rowReader, expected, *leafPool_);
-}
-
 TEST_F(ParquetReaderTest, nestedNameColumnMapping) {
   auto data = makeRowVector(
       {"nested"},
