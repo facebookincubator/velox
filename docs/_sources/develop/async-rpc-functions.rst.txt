@@ -370,11 +370,10 @@ independently reduce the per-driver gradient window.
    * - ``kNonOverloadError``
      - The unit failed without explicit evidence of overload. The driver
        window does not react because reducing concurrency would not address
-       this signal. A completed BATCH flush still reports its units and
-       duration to the shared limiter.
+       this signal. A paced window stops recovering until the next success.
    * - ``kNone``
-     - Nothing for the driver window to evaluate. A completed BATCH flush still
-       participates in shared accounting.
+     - Nothing for the driver window to evaluate. A completed BATCH flush in
+       which a row succeeded still participates in shared accounting.
 
 The distinction matters: a majority of rows failing on bad input is not a reason
 to throttle against a healthy backend. For the same reason, a function on a
@@ -400,8 +399,10 @@ Putting it together, for each unit the operator:
    fractional pacing. A recorded canonical overload shrinks the driver window
    without repeating the shared decrease; a function-specific ``kOverloaded``
    verdict shrinks both controllers; the other verdicts leave the driver
-   window unchanged. Every completed BATCH flush still reports its reserved
-   units and observed duration to epoch-guarded shared accounting. After a
+   window unchanged. A completed BATCH flush in which at least one row
+   succeeded reports its reserved units and observed duration to
+   epoch-guarded shared accounting, as PER_ROW reports only rows that
+   succeeded. After a
    canonical overload, a stale success may update the service horizon but
    cannot recover shared capacity.
 
