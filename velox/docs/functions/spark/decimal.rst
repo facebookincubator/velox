@@ -291,14 +291,7 @@ Decimal Special Forms
     that error per row.
     Dropping more than 38 digits returns zero; dropping exactly 38 digits can
     still round away from zero and overflow.
-    The scale bounds are a conservative native compatibility restriction,
-    not an emulation of JVM BigInteger resource limits or INTEGER negation
-    overflow. Spark may evaluate scales outside this interval or fail at
-    different extreme scales. Callers requiring those cases must use Spark
-    rather than this special form.
-    The endpoints were selected for compatibility testing well beyond the
-    maximum decimal precision of 38. The value 400 has no mathematical
-    significance compared with 300 and is not a Spark failure threshold.
+    Callers requiring scales outside [-400, 400] must fall back to Spark.
 
     ::
 

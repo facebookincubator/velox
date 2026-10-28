@@ -29,10 +29,8 @@
 namespace facebook::velox::functions::sparksql {
 namespace {
 
-// Conservative compatibility policy matching the Spark comparison-test domain.
-// The endpoints stress scales far beyond decimal's 38 digits; 400 is not a
-// numerical limit, and 300 has no different rounding semantics. Spark can
-// evaluate scales outside this interval, so its integrations must fall back.
+// Callers requiring scales outside this supported range must fall back to
+// Spark.
 constexpr int32_t kMinSupportedScale{-400};
 constexpr int32_t kMaxSupportedScale{400};
 
@@ -186,6 +184,12 @@ class DecimalRoundFunction : public exec::VectorFunction {
     flat->clearNulls(rows);
     auto* rawResults = flat->mutableRawValues();
     DecodedVector input(*args[0], rows);
+    if (factors_.divideFactor == 1 && factors_.multiplyFactor == 1) {
+      rows.applyToSelected([&](auto row) {
+        rawResults[row] = static_cast<TResult>(input.valueAt<TInput>(row));
+      });
+      return;
+    }
     rows.applyToSelected([&](auto row) {
       const auto rounded =
           Policy::divide(input.valueAt<TInput>(row), factors_.divideFactor);
