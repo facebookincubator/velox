@@ -144,6 +144,16 @@ class SparkQueryConfig {
       false,
       "Return NaN instead of NULL for Spark statistical aggregation on divide-by-zero.")
 
+  /// If true, encode accepts the verified Java single-byte charsets and
+  /// aliases.
+  VELOX_SPARK_CONFIG(
+      kLegacyJavaCharsets,
+      legacyJavaCharsets,
+      "legacy_java_charsets",
+      bool,
+      false,
+      "Enable the verified subset of Java charset names in Spark encode.")
+
   /// If true, encode replaces unmappable characters instead of failing.
   VELOX_SPARK_CONFIG(
       kLegacyCodingErrorAction,
