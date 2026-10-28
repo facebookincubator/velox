@@ -645,6 +645,11 @@ TEST_F(ArraySortTest, unsupporteLambda) {
   VELOX_ASSERT_THROW(
       evaluate("array_sort(c0, (a, b) -> 0)", data),
       "array_sort with comparator lambda that cannot be rewritten into a transform is not supported");
+
+  VELOX_ASSERT_THROW(
+      evaluate(
+          "array_sort(c0, (a, b) -> if(a < b, -10, if(a > b, 10, 0)))", data),
+      "array_sort with comparator lambda that cannot be rewritten into a transform is not supported");
 }
 
 TEST_F(ArraySortTest, failOnMapTypeSort) {

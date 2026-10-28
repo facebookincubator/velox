@@ -77,8 +77,8 @@ class SortArrayTest : public SparkFunctionBaseTest {
         makeNullableArrayVector(reverseNested(expected)));
   }
 
-  // Spark sorts with a stable comparator that treats -0.0 and 0.0 as equal, so
-  // their original relative order is preserved in both directions.
+  // Match Spark's interpreted/comparator ordering, not its generated ascending
+  // primitive sort for non-nullable elements, which places -0.0 before 0.0.
   template <typename T>
   void testPreservesSignedZeroOrder() {
     auto input = makeArrayVector<T>({{-0.0, 1.0, 0.0, -0.0}, {0.0, -0.0}});

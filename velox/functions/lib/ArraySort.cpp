@@ -382,6 +382,13 @@ class ArraySortFunction : public exec::VectorFunction {
       exec::EvalCtx& context) const {
     // Acquire the array elements vector.
     auto inputArray = arg->as<ArrayVector>();
+    ArrayVectorPtr flattenedArray;
+    if (inputArray->hasOverlappingRanges()) {
+      exec::LocalDecodedVector arrayDecoder(context, *arg, rows);
+      flattenedArray =
+          flattenArrayWithOverlappingRanges(rows, arg, *arrayDecoder.get());
+      inputArray = flattenedArray.get();
+    }
     VectorPtr resultElements;
 
     constexpr bool kIsFloatingPoint =
@@ -449,7 +456,8 @@ class ArraySortLambdaFunction : public exec::VectorFunction {
     exec::LocalDecodedVector arrayDecoder(context, *args[0], rows);
     auto& decodedArray = *arrayDecoder.get();
 
-    auto flatArray = flattenArray(rows, args[0], decodedArray);
+    auto flatArray =
+        flattenArrayWithOverlappingRanges(rows, args[0], decodedArray);
 
     auto numElements = flatArray->elements()->size();
     const std::vector<VectorPtr> lambdaArgs = {flatArray->elements()};
