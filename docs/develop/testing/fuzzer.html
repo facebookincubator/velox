@@ -164,6 +164,14 @@ plans and verifies that results match. These plans include</p>
 <p>Window fuzzer currently doesn’t use any custom result verifiers. Functions
 that require custom result verifiers are left unverified.</p>
 </section>
+<section id="limitations">
+<h2>Limitations<a class="headerlink" href="#limitations" title="Link to this heading">¶</a></h2>
+<p>The Aggregation and Window Fuzzers do not generate constant arguments. They
+pass every argument as a column, including arguments that a signature declares
+constant. Functions that read constant arguments through <cite>setConstantInputs()</cite>
+receive null for them, so these functions are on the fuzzers’ skip lists and
+are not tested.</p>
+</section>
 <section id="how-to-integrate">
 <h2>How to integrate<a class="headerlink" href="#how-to-integrate" title="Link to this heading">¶</a></h2>
 <p>To integrate with the Aggregation Fuzzer, create a test, register all
@@ -232,6 +240,7 @@ to rerun the saved query plans with save input vectors.</p>
 <li><a class="reference internal" href="#">Aggregation and Window Fuzzer</a><ul>
 <li><a class="reference internal" href="#aggregation-fuzzer">Aggregation Fuzzer</a></li>
 <li><a class="reference internal" href="#window-fuzzer">Window Fuzzer</a></li>
+<li><a class="reference internal" href="#limitations">Limitations</a></li>
 <li><a class="reference internal" href="#how-to-integrate">How to integrate</a></li>
 <li><a class="reference internal" href="#how-to-run">How to run</a></li>
 <li><a class="reference internal" href="#how-to-reproduce-failures">How to reproduce failures</a></li>

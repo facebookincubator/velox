@@ -1202,6 +1202,32 @@ In Journal of Computer and System Sciences, 31:182-209, 1985</p>
 </dd></dl>
 
 </section>
+<section id="vector-index-aggregate-functions">
+<h2>Vector Index Aggregate Functions<a class="headerlink" href="#vector-index-aggregate-functions" title="Link to this heading">¶</a></h2>
+<p>These functions are available when Velox is built with FAISS
+(<code class="docutils literal notranslate"><span class="pre">VELOX_ENABLE_FAISS</span></code>).</p>
+<dl class="py function">
+<dt class="sig sig-object py" id="vector_index_pack">
+<span class="sig-name descname"><span class="pre">vector_index_pack</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">cluster_id</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">cluster_centroid</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">metric</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varbinary</span></span></span><a class="headerlink" href="#vector_index_pack" title="Link to this definition">¶</a></dt>
+<dd><p>Packs the centroids of <code class="docutils literal notranslate"><span class="pre">n</span></code> clusters into a vector index codec: a FAISS
+index over the centroids, serialized as <code class="docutils literal notranslate"><span class="pre">faiss::write_index</span></code> writes it.
+A cluster’s id is its centroid’s position in the codec.</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">cluster_id</span></code> (BIGINT): ids must be 0 to <code class="docutils literal notranslate"><span class="pre">n</span> <span class="pre">-</span> <span class="pre">1</span></code>, each once.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">cluster_centroid</span></code> (ARRAY(REAL)): all centroids must have the same,
+non-zero length and must not contain null elements.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">metric</span></code> (VARCHAR): a constant. Supported values: <code class="docutils literal notranslate"><span class="pre">'cosine'</span></code>, which
+normalizes centroids to length 1 and compares by dot product.</p></li>
+</ul>
+<p>Rows with a null <code class="docutils literal notranslate"><span class="pre">cluster_id</span></code> or <code class="docutils literal notranslate"><span class="pre">cluster_centroid</span></code> are ignored. The
+result does not depend on the order rows arrive in:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">vector_index_pack</span><span class="p">(</span><span class="n">cluster_id</span><span class="p">,</span> <span class="n">centroid</span><span class="p">,</span> <span class="s1">'cosine'</span><span class="p">)</span>
+<span class="n">FROM</span> <span class="n">centroids</span><span class="p">;</span>
+</pre></div>
+</div>
+</dd></dl>
+
+</section>
 </section>
 
 
@@ -1317,6 +1343,10 @@ In Journal of Computer and System Sciences, 31:182-209, 1985</p>
 <li><a class="reference internal" href="#miscellaneous">Miscellaneous</a><ul>
 <li><a class="reference internal" href="#max_data_size_for_stats"><code class="docutils literal notranslate"><span class="pre">max_data_size_for_stats()</span></code></a></li>
 <li><a class="reference internal" href="#sum_data_size_for_stats"><code class="docutils literal notranslate"><span class="pre">sum_data_size_for_stats()</span></code></a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#vector-index-aggregate-functions">Vector Index Aggregate Functions</a><ul>
+<li><a class="reference internal" href="#vector_index_pack"><code class="docutils literal notranslate"><span class="pre">vector_index_pack()</span></code></a></li>
 </ul>
 </li>
 </ul>

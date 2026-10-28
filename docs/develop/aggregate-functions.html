@@ -264,8 +264,10 @@ aggregation function, these types can be defined as member variables in the
 aggregate class and initialized in the initialize() method.</p>
 <p>The author can also optionally define a <cite>setConstantInputs()</cite> method to access
 constant arguments at initialization time. This method is called once after the
-aggregation function is created, before any data is processed. The method receives
-a vector of constant input values, where non-constant inputs have null entries.
+aggregation function is created, before any data is processed, and only in steps
+that read raw input: partial and single aggregations. Steps that merge
+intermediate results have no raw arguments. The method receives one entry per
+raw input argument, where non-constant inputs have null entries.
 This is useful for reading configuration flags or constant parameters that don’t
 change during aggregation. For example, a function might use this to read a boolean
 flag that controls null handling behavior.</p>
@@ -396,8 +398,15 @@ access. This flag is false by default.</p>
 initialize all accumulators.</p>
 <p>The author can also optionally define a <cite>destroy</cite> function that is called when
 <em>this</em> accumulator object is destructed.</p>
-<p>Notice that <cite>writeIntermediateResult</cite> and <cite>writeFinalResult</cite> are expected to not
-modify contents in the accumulator.</p>
+<p>When an aggregation function runs as a window function over a frame that grows
+row by row, such as <code class="docutils literal notranslate"><span class="pre">ROWS</span> <span class="pre">BETWEEN</span> <span class="pre">UNBOUNDED</span> <span class="pre">PRECEDING</span> <span class="pre">AND</span> <span class="pre">CURRENT</span> <span class="pre">ROW</span></code>, Velox
+reuses one accumulator for the whole frame: it adds each new row to the
+accumulator and then writes the result for that row. Streaming systems that
+embed Velox aggregates do the same over unbounded input: they write a running
+result, then keep adding input to the same accumulator. So <cite>writeIntermediateResult</cite>
+and <cite>writeFinalResult</cite> must leave the accumulator representing the same input.
+They may rearrange its contents, as long as later calls to <cite>addInput</cite>,
+<cite>combine</cite> and the write methods behave as if no write had happened.</p>
 <section id="addinput">
 <h4>addInput<a class="headerlink" href="#addinput" title="Link to this heading">¶</a></h4>
 <p>This method adds raw input values to <em>this</em> accumulator. It receives a
@@ -420,7 +429,8 @@ assumed to be non-null.</p>
 <p>This method writes <em>this</em> accumulator out to an intermediate state vector. It
 has an out-parameter of the type <cite>exec::out_type&lt;IntermediateType&gt;&amp;</cite>. This
 method returns true if it writes a non-null value to <cite>out</cite>, or returns false
-meaning a null should be written to the intermediate state vector. Accumulators
+meaning a null should be written to the intermediate state vector. A method
+whose result is never null may return void instead. Accumulators
 that are nulls (i.e., no value has been added to them) automatically become
 nulls in the intermediate state vector without <cite>writeIntermediateResult</cite> being
 called.</p>
@@ -430,7 +440,8 @@ called.</p>
 <p>This method writes <em>this</em> accumulator out to a final result vector. It
 has an out-parameter of the type <cite>exec::out_type&lt;OutputType&gt;&amp;</cite>. This
 method returns true if it writes a non-null value to <cite>out</cite>, or returns false
-meaning a null should be written to the final result vector. Accumulators
+meaning a null should be written to the final result vector. A method whose
+result is never null may return void instead. Accumulators
 that are nulls (i.e., no value has been added to them) automatically become
 nulls in the final result vector without <cite>writeFinalResult</cite> being called.</p>
 </section>
@@ -475,7 +486,7 @@ the same as those for default-null behavior.</p>
 <p>On the other hand, the C++ function signatures of <cite>addInput</cite>, <cite>combine</cite>,
 <cite>writeIntermediateResult</cite>, and <cite>writeFinalResult</cite> are different.</p>
 <p>Same as the case for default-null behavior, <cite>writeIntermediateResult</cite> and
-<cite>writeFinalResult</cite> are expected to not modify contents in the accumulator.</p>
+<cite>writeFinalResult</cite> must leave the accumulator representing the same input.</p>
 <section id="id1">
 <h4>addInput<a class="headerlink" href="#id1" title="Link to this heading">¶</a></h4>
 <p>This method receives a <cite>HashStringAllocator*</cite> followed by
@@ -500,7 +511,8 @@ returns a boolean meaning whether <em>this</em> accumulator is non-null after th
 <p>This method has an out-parameter of the type <cite>exec::out_type&lt;IntermediateType&gt;&amp;</cite>
 and a boolean flag <cite>nonNullGroup</cite> indicating whether <em>this</em> accumulator is
 non-null. This method returns true if it writes a non-null value to <cite>out</cite>, or
-return false meaning a null should be written to the intermediate state vector.</p>
+return false meaning a null should be written to the intermediate state vector.
+A method whose result is never null may return void instead.</p>
 </section>
 <section id="id4">
 <h4>writeFinalResult<a class="headerlink" href="#id4" title="Link to this heading">¶</a></h4>
@@ -508,7 +520,8 @@ return false meaning a null should be written to the intermediate state vector.<
 out-parameter of the type <cite>exec::out_type&lt;OutputType&gt;&amp;</cite> and a boolean flag
 <cite>nonNullGroup</cite> indicating whether <em>this</em> accumulator is non-null. This method
 returns true if it writes a non-null value to <cite>out</cite>, or return false meaning a
-null should be written to the final result vector.</p>
+null should be written to the final result vector. A method whose result is
+never null may return void instead.</p>
 </section>
 </section>
 <section id="limitations">
