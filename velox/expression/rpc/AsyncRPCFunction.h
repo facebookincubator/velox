@@ -346,7 +346,8 @@ class AsyncRPCFunction {
     /// overload already backed off shared admission at completion time.
     kOverloaded,
     /// Unit failed without explicit evidence of overload. Neither controller
-    /// reacts; reducing admission concurrency would not address this signal.
+    /// shrinks, since reducing admission concurrency would not address this
+    /// signal, but a paced recovery stops until the next success.
     kNonOverloadError,
     /// No congestion evaluation — skip window adjustment.
     kNone,

@@ -1020,20 +1020,24 @@ RowVectorPtr RPCOperator::outputBatch() {
   checkNoFrameworkFailures(function_->name(), claimedBatch_->responses);
 
   const auto numRows = static_cast<int64_t>(claimedBatch_->responses.size());
+  int64_t numFailedRows{0};
   for (const auto& response : claimedBatch_->responses) {
     if (response.hasError()) {
       numErrors_++;
+      ++numFailedRows;
       recordErrorKind(response.errorKind());
     }
   }
 
   // One measured round trip is recorded for the completed flush. Shared-cap
   // recovery is credited by the exact backend units reserved: one for a
-  // native batch, or one per emitted RPC for a fan-out batch.
+  // native batch, or one per emitted RPC for a fan-out batch. A flush in which
+  // no row succeeded earns no credit, as errored PER_ROW rows earn none:
+  // crediting it would restart a paced recovery that its failure ends.
   const std::vector<int64_t> roundTripTimesNs{claimedBatch_->rttNs};
   if (claimedBatch_->admissionUnits > 0) {
     std::vector<std::pair<uint64_t, int64_t>> successUnitsByEpoch;
-    if (claimedBatch_->admissionEpoch.has_value()) {
+    if (claimedBatch_->admissionEpoch.has_value() && numFailedRows < numRows) {
       successUnitsByEpoch.emplace_back(
           claimedBatch_->admissionEpoch.value(), claimedBatch_->admissionUnits);
     }
