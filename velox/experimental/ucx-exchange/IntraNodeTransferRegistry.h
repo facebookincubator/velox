@@ -16,11 +16,13 @@
 #pragma once
 
 #include <cudf/contiguous_split.hpp>
+#include <functional>
 #include <future>
 #include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -71,6 +73,8 @@ struct IntraNodeTransferEntry {
   bool atEnd{false}; // True if this is the end-of-stream marker
   /// See IntraNodeTransferResult.
   std::optional<std::string> producerError;
+  /// Runs when the source reads 'data'; see publish().
+  std::function<void()> onRetrieved;
   std::promise<void> retrievedPromise; // Server waits on this after publishing
   std::mutex entryMutex;
   bool ready{false}; // True when data is ready to retrieve
@@ -104,20 +108,26 @@ class IntraNodeTransferRegistry {
   /// @param atEnd True if this is the end-of-stream marker
   /// @param producerError Why the producer ended before sending all its
   /// output; set only with 'atEnd'
+  /// @param onRetrieved Runs inside the poll() that hands 'data' to the
+  /// source, under the registry lock, so that a removal of the producer sees
+  /// the data either read or still here. It must not throw or call into the
+  /// registry. It does not run if the task is cancelled first. May be empty.
   /// @return A future that completes when source has retrieved the data
   [[nodiscard]] std::future<void> publish(
       const IntraNodeTransferKey& key,
       std::shared_ptr<cudf::packed_columns> data,
       vector_size_t numRows,
       bool atEnd,
-      std::optional<std::string> producerError);
+      std::optional<std::string> producerError,
+      std::function<void()> onRetrieved);
 
   /// @brief Non-blocking poll for intra-node transfer data.
   /// Returns immediately whether data is available or not.
   /// @param key The unique key identifying this transfer
-  /// @return nullopt if not ready, or IntraNodeTransferResult if ready.
-  ///         Data is nullptr when atEnd is true. For a cancelled task the
-  ///         result is atEnd with the producerError given to cancelTask().
+  /// @return nullopt if not ready or the task is frozen, or
+  ///         IntraNodeTransferResult if ready. Data is nullptr when atEnd is
+  ///         true. For a cancelled task the result is atEnd with the
+  ///         producerError given to cancelTask().
   [[nodiscard]] std::optional<IntraNodeTransferResult> poll(
       const IntraNodeTransferKey& key);
 
@@ -132,6 +142,18 @@ class IntraNodeTransferRegistry {
       std::string_view taskId,
       std::optional<std::string> producerError);
 
+  /// @brief Holds back poll() for a task until unfreezeTask(): poll() returns
+  /// nullopt meanwhile, unless the task is cancelled. Called while the
+  /// producer's removal decides whether its consumers read all its output, so
+  /// that no page is read in the middle of that decision. publish() is
+  /// unaffected.
+  /// @param taskId The task to freeze
+  void freezeTask(std::string_view taskId);
+
+  /// @brief Ends a freezeTask(). Does not allocate.
+  /// @param taskId The task to unfreeze
+  void unfreezeTask(std::string_view taskId);
+
   /// @brief Remove a task from the cancelled tasks.
   /// Called when a task ID is (re)initialized, so that the cancelled tasks
   /// do not grow unboundedly across queries.
@@ -145,6 +167,10 @@ class IntraNodeTransferRegistry {
       registry_;
   // Cancelled tasks and the producerError each was cancelled with.
   std::unordered_map<std::string, std::optional<std::string>> cancelledTasks_;
+  // One element per freezeTask() not yet ended, so that overlapping removals of
+  // a task each keep it frozen. The transparent comparator lets unfreezeTask()
+  // find a task without allocating: it runs from a scope guard.
+  std::multiset<std::string, std::less<>> frozenTasks_;
   std::mutex mutex_;
 };
 

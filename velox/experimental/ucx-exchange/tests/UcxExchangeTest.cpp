@@ -341,7 +341,8 @@ TEST(IntraNodeTransferRegistryTest, publishedEndMarkerCarriesProducerError) {
       nullptr,
       /*numRows=*/0,
       /*atEnd=*/true,
-      "Injected producer failure");
+      "Injected producer failure",
+      /*onRetrieved=*/nullptr);
 
   const auto result = registry->poll(key);
   ASSERT_TRUE(result.has_value());

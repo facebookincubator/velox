@@ -128,8 +128,8 @@ void UcxExchangeServer::process() {
       // An intra-node server delivers through IntraNodeTransferRegistry, which
       // drops pages when the producer is removed. getIntraNodeData() counts
       // each page as undelivered from the moment it leaves the queue until
-      // onIntraNodeRetrieveComplete(), so removal in between fails the
-      // consumer.
+      // the source reads it from the registry, so removal in between fails
+      // the consumer.
       auto onData = [weakQueue](
                         std::shared_ptr<cudf::packed_columns> data,
                         vector_size_t numRows,
@@ -293,6 +293,14 @@ void UcxExchangeServer::sendData() {
 
       IntraNodeTransferKey key{
           partitionKey_.taskId, partitionKey_.destination, sequenceNumber_};
+      // Counted as read when the source takes it, rather than when this
+      // server notices, a Communicator turn later: a removal in between
+      // would otherwise fail a consumer that has all the producer's output.
+      auto onRetrieved = [queueMgr = queueMgr_,
+                          taskId = partitionKey_.taskId,
+                          destination = partitionKey_.destination]() {
+        queueMgr->intraNodePageRetrieved(taskId, destination);
+      };
       // dataPtr_ is already a shared_ptr, pass directly to share ownership.
       intraNodeRetrieveFuture_ =
           IntraNodeTransferRegistry::getInstance()->publish(
@@ -300,7 +308,8 @@ void UcxExchangeServer::sendData() {
               dataPtr_,
               dataNumRows_,
               /*atEnd=*/false,
-              /*producerError=*/std::nullopt);
+              /*producerError=*/std::nullopt,
+              std::move(onRetrieved));
       dataPtr_.reset();
       dataNumRows_ = 0;
       intraNodeAtEndPublished_ = false;
@@ -323,7 +332,8 @@ void UcxExchangeServer::sendData() {
               nullptr,
               /*numRows=*/0,
               /*atEnd=*/true,
-              producerError_);
+              producerError_,
+              /*onRetrieved=*/nullptr);
       intraNodeAtEndPublished_ = true;
 
       queueMgr_->deleteResults(partitionKey_.taskId, partitionKey_.destination);
@@ -544,11 +554,6 @@ void UcxExchangeServer::onIntraNodeRetrieveComplete() {
 
   VLOG(3) << "@" << partitionKey_.taskId
           << " Intra-node transfer complete for sequence " << sequenceNumber_;
-
-  if (!intraNodeAtEndPublished_) {
-    queueMgr_->intraNodePageRetrieved(
-        partitionKey_.taskId, partitionKey_.destination);
-  }
 
   if (intraNodeAtEndPublished_) {
     // This was the final atEnd marker, we're done

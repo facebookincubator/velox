@@ -33,6 +33,7 @@
 #include "velox/exec/ExchangeTransportRegistry.h"
 #include "velox/exec/OutputTransportRegistry.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/experimental/ucx-exchange/IntraNodeTransferRegistry.h"
 #include "velox/experimental/ucx-exchange/UcxExchangeRegistration.h"
 #include "velox/experimental/ucx-exchange/tests/UcxTestHelpers.h"
 
@@ -143,6 +144,16 @@ class UcxOutputQueueManagerTest : public testing::Test {
 
   void deleteResults(std::string_view taskId, int destination) {
     queueManager_->deleteResults(taskId, destination);
+  }
+
+  // What a server passes to IntraNodeTransferRegistry::publish() for a page it
+  // took with getIntraNodeData().
+  std::function<void()> countIntraNodePageRead(
+      std::string_view taskId,
+      int destination) {
+    return [this, taskId = std::string{taskId}, destination]() {
+      queueManager_->intraNodePageRetrieved(taskId, destination);
+    };
   }
 
   void registerForEndMarker(
@@ -970,6 +981,174 @@ TEST_F(
       });
   EXPECT_TRUE(fired);
   EXPECT_EQ(producerError, std::nullopt);
+}
+
+// The consumer owns a page once it polled it from IntraNodeTransferRegistry.
+// Its server learns of the read only on a later Communicator turn, so the
+// producer can be removed in between. That removal must still end the stream
+// cleanly: the consumer has all the producer's output.
+TEST_F(
+    UcxOutputQueueManagerTest,
+    removeTaskBetweenIntraNodePollAndAcknowledgeKeepsCleanEndMarker) {
+  const std::string taskId = "intraNodePolledNotAcknowledged";
+  auto task = initializeTask(taskId, /*numDestinations=*/1, /*numDrivers=*/1);
+  enqueue(taskId, /*size=*/100);
+  noMoreData(taskId);
+
+  std::shared_ptr<cudf::packed_columns> page;
+  queueManager_->getIntraNodeData(
+      taskId,
+      0,
+      [&page](
+          std::shared_ptr<cudf::packed_columns> data,
+          vector_size_t /*numRows*/,
+          std::vector<int64_t> /*remainingBytes*/,
+          std::optional<std::string> /*error*/) { page = std::move(data); });
+  ASSERT_NE(page, nullptr);
+
+  auto registry = IntraNodeTransferRegistry::getInstance();
+  const IntraNodeTransferKey pageKey{taskId, /*destination=*/0, 0};
+  auto retrieved = registry->publish(
+      pageKey,
+      std::move(page),
+      /*numRows=*/100,
+      /*atEnd=*/false,
+      /*producerError=*/std::nullopt,
+      countIntraNodePageRead(taskId, /*destination=*/0));
+  const auto pageRead = registry->poll(pageKey);
+  ASSERT_TRUE(pageRead.has_value());
+  ASSERT_NE(pageRead->data, nullptr);
+  ASSERT_EQ(
+      retrieved.wait_for(std::chrono::seconds(0)), std::future_status::ready);
+
+  task->requestAbort().wait();
+  queueManager_->removeTask(taskId);
+
+  const auto endMarker = registry->poll({taskId, /*destination=*/0, 1});
+  ASSERT_TRUE(endMarker.has_value());
+  EXPECT_TRUE(endMarker->atEnd);
+  EXPECT_EQ(endMarker->producerError, std::nullopt);
+  registry->clearCancelledTask(taskId);
+}
+
+// A page its server published but its consumer has not read yet is dropped
+// with the producer, so that consumer must fail rather than end cleanly.
+TEST_F(
+    UcxOutputQueueManagerTest,
+    removeTaskBeforeIntraNodePollReportsProducerError) {
+  const std::string taskId = "intraNodePublishedNotPolled";
+  auto task = initializeTask(taskId, /*numDestinations=*/1, /*numDrivers=*/1);
+  enqueue(taskId, /*size=*/100);
+  noMoreData(taskId);
+
+  std::shared_ptr<cudf::packed_columns> page;
+  queueManager_->getIntraNodeData(
+      taskId,
+      0,
+      [&page](
+          std::shared_ptr<cudf::packed_columns> data,
+          vector_size_t /*numRows*/,
+          std::vector<int64_t> /*remainingBytes*/,
+          std::optional<std::string> /*error*/) { page = std::move(data); });
+  ASSERT_NE(page, nullptr);
+
+  auto registry = IntraNodeTransferRegistry::getInstance();
+  const IntraNodeTransferKey pageKey{taskId, /*destination=*/0, 0};
+  auto retrieved = registry->publish(
+      pageKey,
+      std::move(page),
+      /*numRows=*/100,
+      /*atEnd=*/false,
+      /*producerError=*/std::nullopt,
+      countIntraNodePageRead(taskId, /*destination=*/0));
+
+  task->requestAbort().wait();
+  queueManager_->removeTask(taskId);
+
+  // The server does not wait for a read that will not come.
+  EXPECT_EQ(
+      retrieved.wait_for(std::chrono::seconds(0)), std::future_status::ready);
+  const auto result = registry->poll(pageKey);
+  ASSERT_TRUE(result.has_value());
+  EXPECT_TRUE(result->atEnd);
+  EXPECT_EQ(result->data, nullptr);
+  EXPECT_THAT(
+      result->producerError,
+      testing::Optional(
+          testing::HasSubstr(
+              "Producer task ended before its consumers received all its output")));
+  registry->clearCancelledTask(taskId);
+}
+
+// A source can poll while the removal of its producer decides whether the
+// consumers read all its output. Once that decision counted a page as unread,
+// the source must not get the page and then an error: it gets only the
+// producer's error. The poll here runs from a server callback on destination 1,
+// which removeTask() fires after the decision and before it cancels the task
+// in IntraNodeTransferRegistry.
+TEST_F(
+    UcxOutputQueueManagerTest,
+    intraNodePollDuringRemoveTaskReportsProducerError) {
+  const std::string taskId = "intraNodePolledDuringRemoval";
+  auto task = initializeTask(taskId, /*numDestinations=*/2, /*numDrivers=*/1);
+  enqueue(taskId, /*destination=*/0, /*size=*/100);
+  noMoreData(taskId);
+
+  std::shared_ptr<cudf::packed_columns> page;
+  queueManager_->getIntraNodeData(
+      taskId,
+      0,
+      [&page](
+          std::shared_ptr<cudf::packed_columns> data,
+          vector_size_t /*numRows*/,
+          std::vector<int64_t> /*remainingBytes*/,
+          std::optional<std::string> /*error*/) { page = std::move(data); });
+  ASSERT_NE(page, nullptr);
+
+  auto registry = IntraNodeTransferRegistry::getInstance();
+  const IntraNodeTransferKey pageKey{taskId, /*destination=*/0, 0};
+  auto retrieved = registry->publish(
+      pageKey,
+      std::move(page),
+      /*numRows=*/100,
+      /*atEnd=*/false,
+      /*producerError=*/std::nullopt,
+      countIntraNodePageRead(taskId, /*destination=*/0));
+
+  // Destination 1 is empty after its end marker, so this request waits until
+  // removeTask() ends the stream.
+  fetch(taskId, /*destination=*/1, /*expectedEndMarker=*/true);
+  bool polledDuringRemoval = false;
+  std::optional<IntraNodeTransferResult> readDuringRemoval;
+  queueManager_->getData(
+      taskId,
+      1,
+      [&](std::shared_ptr<cudf::packed_columns> /*data*/,
+          vector_size_t /*numRows*/,
+          std::vector<int64_t> /*remainingBytes*/,
+          std::optional<std::string> /*error*/) {
+        polledDuringRemoval = true;
+        readDuringRemoval = registry->poll(pageKey);
+      });
+
+  task->requestAbort().wait();
+  queueManager_->removeTask(taskId);
+
+  ASSERT_TRUE(polledDuringRemoval);
+  EXPECT_FALSE(readDuringRemoval.has_value())
+      << "The source read a page that the removal counted as lost";
+  EXPECT_EQ(
+      retrieved.wait_for(std::chrono::seconds(0)), std::future_status::ready);
+  const auto result = registry->poll(pageKey);
+  ASSERT_TRUE(result.has_value());
+  EXPECT_TRUE(result->atEnd);
+  EXPECT_EQ(result->data, nullptr);
+  EXPECT_THAT(
+      result->producerError,
+      testing::Optional(
+          testing::HasSubstr(
+              "Producer task ended before its consumers received all its output")));
+  registry->clearCancelledTask(taskId);
 }
 
 // A broadcast producer keeps its pages for destinations that have not arrived

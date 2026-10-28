@@ -123,7 +123,8 @@ class UcxOutputQueueManager : public exec::OutputBufferManager {
       UcxDataAvailableCallback notify);
 
   /// @brief Records that the consumer of 'destination' read a page it got
-  /// through getIntraNodeData().
+  /// through getIntraNodeData(). Called from IntraNodeTransferRegistry::poll()
+  /// under the registry lock, so it must not throw or call into the registry.
   void intraNodePageRetrieved(std::string_view taskId, int destination);
 
   /// Returns true if the given task can use intra-node transfer.
@@ -137,7 +138,8 @@ class UcxOutputQueueManager : public exec::OutputBufferManager {
   /// Calls "terminate" on the queue to awake waiting producers and to end each
   /// destination's stream. If the task had not sent all its output, every
   /// consumer, including one that connects later, gets an end marker that
-  /// carries the reason.
+  /// carries the reason. Intra-node consumers stop reading while that is
+  /// decided; see IntraNodeTransferRegistry::freezeTask().
   void removeTask(const std::string& taskId) override;
 
   /// @brief Returns the queue statistics of the queue associated with the given

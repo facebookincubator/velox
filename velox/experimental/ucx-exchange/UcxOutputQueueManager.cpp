@@ -18,6 +18,7 @@
 #include <cudf/detail/nvtx/ranges.hpp>
 #include <cudf/io/types.hpp>
 #include <cudf/table/table.hpp>
+#include <folly/ScopeGuard.h>
 #include <rmm/exec_policy.hpp>
 #include "velox/experimental/ucx-exchange/IntraNodeTransferRegistry.h"
 
@@ -188,6 +189,13 @@ bool UcxOutputQueueManager::canUseIntraNode(std::string_view taskId) {
 
 void UcxOutputQueueManager::removeTask(const std::string& taskId) {
   std::string taskIdStr{taskId};
+  auto registry = IntraNodeTransferRegistry::getInstance();
+  // Intra-node sources stop reading until cancelTask() publishes the outcome:
+  // a page read after the decision below would be counted as lost although
+  // its consumer has it.
+  registry->freezeTask(taskId);
+  auto unfreeze = folly::makeGuard(
+      [&registry, &taskId]() { registry->unfreezeTask(taskId); });
   // Decided before the queue is unpublished, and with no manager lock held:
   // reading the task's state takes the task's mutex, and a getData() that
   // finds the task removed must already see the reason.
@@ -222,7 +230,7 @@ void UcxOutputQueueManager::removeTask(const std::string& taskId) {
   }
   // Notify the intra-node registry so that any sources polling for this
   // task get an atEnd result instead of spinning forever.
-  IntraNodeTransferRegistry::getInstance()->cancelTask(taskId, producerError);
+  registry->cancelTask(taskId, producerError);
 }
 
 std::shared_ptr<UcxOutputQueue> UcxOutputQueueManager::getQueueIfExists(
