@@ -461,6 +461,16 @@ class Rewriter {
   RewriteResult rewriteFilterProject(
       const std::shared_ptr<const core::FilterNode>& filter,
       const std::shared_ptr<const core::ProjectNode>& project) {
+    // Do not absorb an application-selected implementation into our GPU
+    // FilterProject. Keep the Project on CPU and visit the Filter normally so
+    // its contract and rebuilding callback determine the input boundaries.
+    // For a host Filter, LocalPlanner can still fuse the pair on CPU.
+    if (facebook::velox::cudf_velox::detail::customCudfPlanNodeTraits(
+            filter, *queryCtx_)) {
+      return rewriteGenericNode(
+          project, "Filter has an application-provided vector contract");
+    }
+
     std::string reason;
     if (typesSupported(project, &reason) &&
         canRunFilterProjectOnGpu(
