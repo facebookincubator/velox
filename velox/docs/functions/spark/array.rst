@@ -367,6 +367,15 @@ Array Functions
         SELECT sort_array(array(1, 2, 3)); -- [1, 2, 3]
         SELECT sort_array(array(NULL, 2, 1)); -- [NULL, 1, 2]
 
+    .. note::
+
+        Floating-point tie ordering follows Spark's interpreted and boxed-comparator paths.
+        Spark 4.1.1's generated ascending sort for primitive arrays declared with
+        ``containsNull=false`` instead places ``-0.0`` before ``0.0``. Velox array types do
+        not carry element nullability, so this function always uses stable comparator
+        ordering, even when the input contains no nulls. Signed-zero ordering may therefore
+        differ from Spark's generated primitive path.
+
 .. spark:function:: sort_array(array(E), ascendingOrder) -> array(E)
    :noindex:
 
@@ -374,7 +383,8 @@ Array Functions
     be orderable. Null elements will be placed at the beginning of the returned array in ascending
     order or at the end of the returned array in descending order. Nulls nested inside complex
     values follow the same ordering. Elements that compare equal retain their original relative
-    order in both directions. ::
+    order in both directions. The floating-point compatibility note above also applies to
+    this overload. ::
 
         SELECT sort_array(array(3, 2, 1), true); -- [1, 2, 3]
         SELECT sort_array(array(2, 1, NULL), true); -- [NULL, 1, 2]

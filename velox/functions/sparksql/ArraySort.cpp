@@ -148,6 +148,8 @@ std::shared_ptr<exec::VectorFunction> makeSortArray(
   }
   // Nulls are smallest when ascending and largest when descending.
   bool nullsFirst = ascending;
+  // Follow Spark's interpreted/comparator ordering. Velox array types do not
+  // carry the element nullability needed to select Spark's primitive fast path.
   return facebook::velox::functions::makeArraySort(
       name,
       inputArgs,

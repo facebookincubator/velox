@@ -14,8 +14,11 @@
  * limitations under the License.
  */
 
+#include <bit>
 #include <cmath>
+#include <cstdint>
 #include <optional>
+#include <type_traits>
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/functions/Macros.h"
@@ -121,6 +124,105 @@ class ArraySortTest : public SparkFunctionBaseTest {
       }
     }
   }
+
+  template <typename T>
+  void testFloatingPointBitStability() {
+    using Bits =
+        std::conditional_t<sizeof(T) == sizeof(uint32_t), uint32_t, uint64_t>;
+    const Bits firstNanBits = [] {
+      if constexpr (std::is_same_v<T, float>) {
+        return uint32_t{0x7fc00001};
+      } else {
+        return uint64_t{0x7ff8000000000001};
+      }
+    }();
+    const Bits secondNanBits = firstNanBits + 1;
+    std::vector<std::optional<T>> values;
+    std::vector<std::optional<Bits>> zeros;
+    std::vector<std::optional<Bits>> nans;
+    for (auto i = 0; i < 8; ++i) {
+      values.insert(
+          values.end(),
+          {T{-0.0},
+           std::nullopt,
+           T{0.0},
+           std::bit_cast<T>(firstNanBits),
+           std::nullopt,
+           std::bit_cast<T>(secondNanBits)});
+      zeros.insert(
+          zeros.end(),
+          {std::bit_cast<Bits>(T{-0.0}), std::bit_cast<Bits>(T{0.0})});
+      nans.insert(nans.end(), {firstNanBits, secondNanBits});
+    }
+
+    auto input = makeNullableArrayVector<T>({values});
+    auto reversedElements = wrapInDictionary(
+        makeIndicesInReverse(input->elements()->size()), input->elements());
+    auto dictionaryElements = wrapInDictionary(
+        makeIndicesInReverse(input->elements()->size()), reversedElements);
+    auto encoded = std::make_shared<ArrayVector>(
+        pool(),
+        input->type(),
+        input->nulls(),
+        input->size(),
+        input->offsets(),
+        input->sizes(),
+        dictionaryElements);
+
+    const std::string comparator =
+        "(x, y) -> if(lessthan(x, y), -1, "
+        "if(greaterthan(x, y), 1, 0))";
+    const std::string descendingComparator =
+        "(x, y) -> if(lessthan(x, y), 1, "
+        "if(greaterthan(x, y), -1, 0))";
+    queryCtx_->testingOverrideConfigUnsafe({
+        {SparkQueryConfig::qualify(
+             SparkQueryConfig::kArraySortRejectNullComparatorKeys),
+         "false"},
+    });
+
+    for (const auto& inputVector : {VectorPtr{input}, VectorPtr{encoded}}) {
+      for (const auto& expression : {
+               std::string{"array_sort(c0)"},
+               std::string{"sort_array(c0)"},
+               std::string{"sort_array(c0, false)"},
+               fmt::format("array_sort(c0, {})", comparator),
+               fmt::format("array_sort(c0, {})", descendingComparator),
+           }) {
+        SCOPED_TRACE(expression);
+        const bool descending = expression == "sort_array(c0, false)" ||
+            expression ==
+                fmt::format("array_sort(c0, {})", descendingComparator);
+        std::vector<std::optional<Bits>> expected;
+        if (expression == "sort_array(c0)") {
+          expected.resize(16, std::nullopt);
+        }
+        const auto& first = descending ? nans : zeros;
+        const auto& second = descending ? zeros : nans;
+        expected.insert(expected.end(), first.begin(), first.end());
+        expected.insert(expected.end(), second.begin(), second.end());
+        if (expression != "sort_array(c0)") {
+          expected.resize(values.size(), std::nullopt);
+        }
+
+        auto result = evaluate(expression, makeRowVector({inputVector}));
+        auto* arrays = result->template as<ArrayVector>();
+        ASSERT_EQ(arrays->sizeAt(0), expected.size());
+        DecodedVector elements(*arrays->elements());
+        for (vector_size_t i = 0; i < expected.size(); ++i) {
+          const auto index = arrays->offsetAt(0) + i;
+          if (expected[i].has_value()) {
+            ASSERT_FALSE(elements.isNullAt(index));
+            EXPECT_EQ(
+                std::bit_cast<Bits>(elements.valueAt<T>(index)),
+                expected[i].value());
+          } else {
+            EXPECT_TRUE(elements.isNullAt(index));
+          }
+        }
+      }
+    }
+  }
 };
 
 TEST_F(ArraySortTest, int8) {
@@ -150,6 +252,11 @@ TEST_F(ArraySortTest, double) {
 TEST_F(ArraySortTest, naturalSortPreservesSignedZeroOrder) {
   testNaturalSortPreservesSignedZeroOrder<float>();
   testNaturalSortPreservesSignedZeroOrder<double>();
+}
+
+TEST_F(ArraySortTest, floatingPointBitStability) {
+  testFloatingPointBitStability<float>();
+  testFloatingPointBitStability<double>();
 }
 
 TEST_F(ArraySortTest, string) {
@@ -223,6 +330,20 @@ TEST_F(ArraySortTest, array) {
   auto expected =
       makeNullableNestedArrayVector(arrayAscTopNullLargestNestedNullSmallest());
   testArraySort(input, expected);
+}
+
+TEST_F(ArraySortTest, nestedTransformOrdering) {
+  using InnerArray = std::vector<std::optional<int32_t>>;
+  auto input = makeNullableNestedArrayVector<int32_t>(
+      {{{InnerArray{1}, InnerArray{std::nullopt}, InnerArray{}}}});
+  auto expectedAscending = makeNullableNestedArrayVector<int32_t>(
+      {{{InnerArray{}, InnerArray{std::nullopt}, InnerArray{1}}}});
+  auto expectedDescending = makeNullableNestedArrayVector<int32_t>(
+      {{{InnerArray{1}, InnerArray{std::nullopt}, InnerArray{}}}});
+
+  const std::string transform = "x -> coalesce(x, x)";
+  testArraySort(transform, true, input, expectedAscending);
+  testArraySort(transform, false, input, expectedDescending);
 }
 
 // Map is not orderable, so sorting is not supported.
@@ -358,6 +479,18 @@ TEST_F(ArraySortTest, lambda) {
       false,
       tiedData,
       makeNullableArrayVector<std::string>({{"bb", "aa", "dd", "c"}}));
+
+  std::vector<std::optional<std::string>> manyTies;
+  for (auto i = 0; i < 64; ++i) {
+    manyTies.emplace_back(fmt::format("v{:03}", i));
+  }
+  auto manyTiesInput = makeNullableArrayVector<std::string>({manyTies});
+  testArraySort(
+      "(x, y) -> if(lessthan(length(x), length(y)), -10, "
+      "if(greaterthan(length(x), length(y)), 37, 0))",
+      true,
+      manyTiesInput,
+      manyTiesInput);
 
   auto capturedData = makeRowVector({
       makeNullableArrayVector<int32_t>({{3, 1, 2}, {6, 4, 5}}),
@@ -548,6 +681,113 @@ TEST_F(ArraySortTest, comparatorRepeatedDictionaryRowsWithCaptures) {
   assertEqualVectors(
       makeNullableArrayVector<int32_t>({{3, 1, 2}, {1, 2, 3}, {1, 2, 3}}),
       result);
+}
+
+TEST_F(ArraySortTest, capturedTransformWithOverlappingRanges) {
+  auto input = std::make_shared<ArrayVector>(
+      pool(),
+      ARRAY(INTEGER()),
+      nullptr,
+      2,
+      makeIndices({0, 0}),
+      makeIndices({2, 2}),
+      makeFlatVector<int32_t>({1, 2}));
+  ASSERT_TRUE(input->hasOverlappingRanges());
+
+  auto result = evaluate(
+      "array_sort(c0, (x, y) -> "
+      "if(lessthan(abs(subtract(x, c1)), abs(subtract(y, c1))), -1, "
+      "if(greaterthan(abs(subtract(x, c1)), abs(subtract(y, c1))), 1, 0)))",
+      makeRowVector({input, makeFlatVector<int32_t>({0, 3})}));
+  assertEqualVectors(makeArrayVector<int32_t>({{1, 2}, {2, 1}}), result);
+}
+
+TEST_F(ArraySortTest, capturedTransformWithEncodedOverlappingRanges) {
+  auto elements = wrapInDictionary(
+      makeIndices({4, 3, 2, 1, 0}), makeFlatVector<int32_t>({0, 4, 2, 1, 3}));
+  auto overlapping = std::make_shared<ArrayVector>(
+      pool(),
+      ARRAY(INTEGER()),
+      makeNulls(5, [](auto row) { return row == 3; }),
+      5,
+      makeIndices({0, 1, 4, 0, 0}),
+      makeIndices({3, 3, 0, 1, 2}),
+      elements);
+  ASSERT_TRUE(overlapping->hasOverlappingRanges());
+
+  auto flatOracle =
+      makeArrayVector<int32_t>({{3, 1, 2}, {1, 2, 4}, {}, {}, {3, 1}});
+  flatOracle->setNull(3, true);
+  const std::vector<std::string> expressions = {
+      "array_sort(c0)",
+      "sort_array(c0)",
+      "sort_array(c0, false)",
+      "array_sort(c0, (x, y) -> "
+      "if(lessthan(x, y), -1, if(greaterthan(x, y), 1, 0)))",
+  };
+  for (const auto& expression : expressions) {
+    SCOPED_TRACE(expression);
+    assertEqualVectors(
+        evaluate(expression, makeRowVector({flatOracle})),
+        evaluate(expression, makeRowVector({overlapping})));
+  }
+
+  auto nested = std::make_shared<ArrayVector>(
+      pool(),
+      ARRAY(ARRAY(INTEGER())),
+      overlapping->nulls(),
+      overlapping->size(),
+      overlapping->offsets(),
+      overlapping->sizes(),
+      makeArrayVector<int32_t>({{3}, {1}, {2}, {4}, {0}}));
+  auto nestedOracle = makeNestedArrayVectorFromJson<int32_t>(
+      {"[[3], [1], [2]]", "[[1], [2], [4]]", "[]", "[]", "[[3], [1]]"});
+  nestedOracle->setNull(3, true);
+  for (const auto& expression : expressions) {
+    SCOPED_TRACE(expression);
+    assertEqualVectors(
+        evaluate(expression, makeRowVector({nestedOracle})),
+        evaluate(expression, makeRowVector({nested})));
+  }
+
+  auto encoded = wrapInDictionary(makeIndices({1, 3, 0, 4, 2, 1}), overlapping);
+  auto oracle = makeArrayVector<int32_t>(
+      {{1, 2, 4}, {}, {3, 1, 2}, {3, 1}, {}, {1, 2, 4}});
+  oracle->setNull(1, true);
+  auto captures = makeFlatVector<int32_t>({2, 0, 0, 3, 0, 4});
+  auto encodedData = makeRowVector({encoded, captures});
+  auto oracleData = makeRowVector({oracle, captures});
+  SelectivityVector rows(6, false);
+  for (auto row : {1, 2, 4, 5}) {
+    rows.setValid(row, true);
+  }
+  rows.updateBounds();
+
+  const std::string capturedExpression =
+      "array_sort(c0, (x, y) -> "
+      "if(lessthan(abs(subtract(x, c1)), abs(subtract(y, c1))), -1, "
+      "if(greaterthan(abs(subtract(x, c1)), abs(subtract(y, c1))), 1, 0)))";
+  assertEqualVectors(
+      evaluate(capturedExpression, oracleData, rows),
+      evaluate(capturedExpression, encodedData, rows),
+      rows);
+  for (const auto& expression : expressions) {
+    SCOPED_TRACE(expression);
+    assertEqualVectors(
+        evaluate(expression, oracleData, rows),
+        evaluate(expression, encodedData, rows),
+        rows);
+  }
+
+  auto constantArray = BaseVector::wrapInConstant(6, 0, flatOracle);
+  auto constantOracle = makeArrayVector<int32_t>(
+      {{3, 1, 2}, {3, 1, 2}, {3, 1, 2}, {3, 1, 2}, {3, 1, 2}, {3, 1, 2}});
+  assertEqualVectors(
+      evaluate(
+          capturedExpression, makeRowVector({constantOracle, captures}), rows),
+      evaluate(
+          capturedExpression, makeRowVector({constantArray, captures}), rows),
+      rows);
 }
 
 TEST_F(ArraySortTest, comparatorLazyTopLevelArray) {

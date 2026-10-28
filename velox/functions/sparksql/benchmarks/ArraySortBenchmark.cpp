@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <iostream>
 #include <limits>
 #include <string_view>
 
@@ -24,13 +25,20 @@
 #include <folly/init/Init.h>
 
 #include "velox/benchmarks/ExpressionBenchmarkBuilder.h"
+#include "velox/buffer/Buffer.h"
 #include "velox/common/base/VeloxException.h"
 #include "velox/functions/sparksql/registration/Register.h"
+#include "velox/vector/ComplexVector.h"
 
 namespace facebook::velox {
 namespace {
 
 constexpr vector_size_t kElementsPerBatch = 1 << 15;
+constexpr std::string_view kCapturedComparator =
+    "array_sort(c0, (x, y) -> "
+    "if(lessthan(greatest(x, c1), greatest(y, c1)), (-1)::integer, "
+    "if(greaterthan(greatest(x, c1), greatest(y, c1)), "
+    "1::integer, 0::integer)))";
 
 enum class InputPattern {
   kAscending,
@@ -86,6 +94,48 @@ RowVectorPtr makeInput(
         }
         VELOX_UNREACHABLE();
       });
+  auto captures = builder.vectorMaker().flatVector<int32_t>(
+      numRows,
+      [](vector_size_t row) { return static_cast<int32_t>(row % 32) - 16; });
+  return builder.vectorMaker().rowVector({arrays, captures});
+}
+
+RowVectorPtr makeCapturedOverlapInput(
+    ExpressionBenchmarkBuilder& builder,
+    vector_size_t arrayLength) {
+  const auto numRows =
+      std::max<vector_size_t>(32, kElementsPerBatch / arrayLength);
+  const auto numRanges = (numRows + 1) / 2;
+  const auto numElements = numRanges * arrayLength;
+  auto baseElements = builder.vectorMaker().flatVector<int32_t>(
+      numElements,
+      [=](vector_size_t row) { return randomValue(row, row % arrayLength); });
+  auto elementIndices = allocateIndices(numElements, builder.pool());
+  auto rawElementIndices = elementIndices->asMutable<vector_size_t>();
+  for (vector_size_t i = 0; i < numElements; ++i) {
+    rawElementIndices[i] = numElements - i - 1;
+  }
+  auto dictionaryElements = BaseVector::wrapInDictionary(
+      nullptr, elementIndices, numElements, baseElements);
+
+  auto offsets = allocateOffsets(numRows, builder.pool());
+  auto sizes = allocateSizes(numRows, builder.pool());
+  auto rawOffsets = offsets->asMutable<vector_size_t>();
+  auto rawSizes = sizes->asMutable<vector_size_t>();
+  for (vector_size_t row = 0; row < numRows; ++row) {
+    rawOffsets[row] = (row / 2) * arrayLength;
+    rawSizes[row] = arrayLength;
+  }
+  auto arrays = std::make_shared<ArrayVector>(
+      builder.pool(),
+      ARRAY(INTEGER()),
+      nullptr,
+      numRows,
+      offsets,
+      sizes,
+      dictionaryElements);
+  VELOX_CHECK(arrays->hasOverlappingRanges());
+
   auto captures = builder.vectorMaker().flatVector<int32_t>(
       numRows,
       [](vector_size_t row) { return static_cast<int32_t>(row % 32) - 16; });
@@ -210,13 +260,34 @@ void addComparatorBenchmarks(ExpressionBenchmarkBuilder& builder) {
             "array_sort(c0, (x, y) -> "
             "if(lessthan(abs(x), abs(y)), (-1)::integer, "
             "if(greaterthan(abs(x), abs(y)), 1::integer, 0::integer)))")
-        .addExpression(
-            "capturedTransform",
-            "array_sort(c0, (x, y) -> "
-            "if(lessthan(greatest(x, c1), greatest(y, c1)), (-1)::integer, "
-            "if(greaterthan(greatest(x, c1), greatest(y, c1)), "
-            "1::integer, 0::integer)))");
+        .addExpression("capturedTransform", std::string{kCapturedComparator});
   }
+}
+
+void addCapturedOverlapBenchmark(ExpressionBenchmarkBuilder& builder) {
+  builder
+      .addBenchmarkSet(
+          "array_sort_captured_overlap_dictionary_elements_length64",
+          makeCapturedOverlapInput(builder, 64))
+      .withIterations(20)
+      .addExpression("capturedOverlap", std::string{kCapturedComparator});
+}
+
+void reportCapturedOverlapMemory() {
+  ExpressionBenchmarkBuilder builder;
+  auto input = makeCapturedOverlapInput(builder, 64);
+  auto expression = builder.compileExpression(
+      std::string{kCapturedComparator}, input->type());
+  auto* pool = builder.pool();
+  const auto usedBefore = pool->usedBytes();
+  const auto peakBefore = pool->peakBytes();
+  auto result = builder.evaluate(expression, input);
+  const auto peakAfter = pool->peakBytes();
+  std::cout << "array_sort captured-overlap memory: usedBeforeBytes="
+            << usedBefore << ", peakBeforeBytes=" << peakBefore
+            << ", peakAfterBytes=" << peakAfter << ", peakAboveBaselineBytes="
+            << std::max<int64_t>(0, peakAfter - usedBefore) << '\n';
+  folly::doNotOptimizeAway(result);
 }
 
 } // namespace
@@ -228,10 +299,12 @@ int main(int argc, char** argv) {
       facebook::velox::memory::MemoryManager::Options{});
   facebook::velox::functions::sparksql::registerFunctions("");
 
+  facebook::velox::reportCapturedOverlapMemory();
   facebook::velox::ExpressionBenchmarkBuilder builder;
   facebook::velox::addDefaultOrderingBenchmarks(builder);
   facebook::velox::addFloatingPointBenchmarks(builder);
   facebook::velox::addComparatorBenchmarks(builder);
+  facebook::velox::addCapturedOverlapBenchmark(builder);
   builder.registerBenchmarks();
   builder.testBenchmarks();
   folly::runBenchmarks();
