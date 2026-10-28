@@ -910,7 +910,7 @@ class NamespaceUnawarePath {
       const auto qualified = name.text.find(':') != std::string_view::npos;
       operations_.insert(
           operations_.end(),
-          {qualified ? name.poolIndex : kEmpty,
+          {qualified ? name.poolIndex : static_cast<int64_t>(kEmpty),
            name.poolIndex + (qualified ? 2 : 0)});
       ++position_;
     } else if (token.text == "(") {
@@ -989,8 +989,8 @@ class NamespaceUnawarePath {
         const auto& token = tokens_[test];
         const auto qualified = token.text.find(':') != std::string_view::npos;
         arguments = {
-            qualified ? token.poolIndex : kEmpty,
-            token.text.ends_with("*") ? kWildcard
+            qualified ? token.poolIndex : static_cast<int64_t>(kEmpty),
+            token.text.ends_with("*") ? static_cast<int64_t>(kWildcard)
                                       : token.poolIndex + (qualified ? 2 : 0)};
         if (token.kind == TokenKind::kName && !qualified) {
           result.nameToken = test;
@@ -1404,7 +1404,8 @@ void namespaceUnawareStep(xmlXPathParserContextPtr parser, int nargs) noexcept {
                   : XPATH_EXPR_ERROR);
           return;
         }
-        VELOX_CHECK_EQ(selected->type, XPATH_NODESET);
+        VELOX_CHECK_EQ(
+            static_cast<int>(selected->type), static_cast<int>(XPATH_NODESET));
         if constexpr (firstMatch) {
           if (selected->nodesetval != nullptr &&
               selected->nodesetval->nodeNr > 0) {
@@ -1414,7 +1415,9 @@ void namespaceUnawareStep(xmlXPathParserContextPtr parser, int nargs) noexcept {
         } else if (selected->nodesetval != nullptr) {
           for (int j = 0; j < selected->nodesetval->nodeNr; ++j) {
             auto* node = selected->nodesetval->nodeTab[j];
-            VELOX_CHECK_EQ(node->type, XML_NAMESPACE_DECL);
+            VELOX_CHECK_EQ(
+                static_cast<int>(node->type),
+                static_cast<int>(XML_NAMESPACE_DECL));
             auto* ns = reinterpret_cast<xmlNsPtr>(node);
             // Unlike merge, insertion retains the nodeset on allocation
             // failure.
