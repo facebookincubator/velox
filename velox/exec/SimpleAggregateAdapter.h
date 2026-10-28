@@ -138,7 +138,8 @@ class SimpleAggregateAdapter : public Aggregate {
   // These functions are only called on groups of non-null accumulators. Groups
   // that have NULL accumulators automatically become NULL in the result vector.
   // These functions also return a bool indicating whether the current group
-  // should be a NULL in the result vector.
+  // should be a NULL in the result vector, or return void when the result is
+  // never NULL.
   //
   // 2. When default_null_behavior_ is false, authors define
   //     bool AccumulatorType::addInput(HashStringAllocator* allocator,
@@ -159,7 +160,8 @@ class SimpleAggregateAdapter : public Aggregate {
   //         exec::out_type<OutputType>& out)
   // These functions are called on groups of both non-null and null
   // accumulators. These functions also return a bool indicating whether the
-  // current group should be a NULL in the result vector.
+  // current group should be a NULL in the result vector, or return void when
+  // the result is never NULL.
   template <typename T, typename = void>
   struct aggregate_default_null_behavior : std::true_type {};
 
@@ -408,13 +410,15 @@ class SimpleAggregateAdapter : public Aggregate {
         if (isNull(groups[i])) {
           writer.commitNull();
         } else {
-          bool nonNull = group->writeIntermediateResult(writer.current());
-          writer.commit(nonNull);
+          writer.commit(callWrite([&] {
+            return group->writeIntermediateResult(writer.current());
+          }));
         }
       } else {
-        bool nonNull = group->writeIntermediateResult(
-            !isNull(groups[i]), writer.current());
-        writer.commit(nonNull);
+        writer.commit(callWrite([&] {
+          return group->writeIntermediateResult(
+              !isNull(groups[i]), writer.current());
+        }));
       }
     }
     writer.finish();
@@ -439,19 +443,32 @@ class SimpleAggregateAdapter : public Aggregate {
         if (isNull(groups[i])) {
           writer.commitNull();
         } else {
-          bool nonNull = group->writeFinalResult(writer.current());
-          writer.commit(nonNull);
+          writer.commit(callWrite(
+              [&] { return group->writeFinalResult(writer.current()); }));
         }
       } else {
-        bool nonNull =
-            group->writeFinalResult(!isNull(groups[i]), writer.current());
-        writer.commit(nonNull);
+        writer.commit(callWrite([&] {
+          return group->writeFinalResult(!isNull(groups[i]), writer.current());
+        }));
       }
     }
     writer.finish();
   }
 
  protected:
+  // Calls 'write', a writeIntermediateResult() or writeFinalResult() call, and
+  // returns whether the result is non-NULL: what 'write' returns, or true when
+  // it returns void.
+  template <typename TWrite>
+  static bool callWrite(TWrite&& write) {
+    if constexpr (std::is_void_v<std::invoke_result_t<TWrite>>) {
+      write();
+      return true;
+    } else {
+      return write();
+    }
+  }
+
   void initializeNewGroupsInternal(
       char** groups,
       folly::Range<const vector_size_t*> indices) override {
