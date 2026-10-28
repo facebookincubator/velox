@@ -25,6 +25,10 @@
 #include "velox/functions/sparksql/registration/Register.h"
 #include "velox/type/DecimalUtil.h"
 
+#include <folly/ScopeGuard.h>
+
+#include <array>
+
 namespace facebook::velox::cudf_velox {
 namespace {
 
@@ -59,6 +63,38 @@ class DecimalComparisonTest : public CudfFunctionBaseTest {
     return makeNullableFlatVector<int64_t>(shortValues, type);
   }
 
+  void assertGpuComparison(
+      const std::string& expression,
+      const RowVectorPtr& input,
+      const VectorPtr& expected) {
+    const auto typed = makeTypedExpr(expression, input->rowType());
+    ASSERT_TRUE(FunctionExpression::canEvaluate(typed));
+    ASSERT_FALSE(ASTExpression::canEvaluate(typed));
+    facebook::velox::test::assertEqualVectors(expected, evaluate(typed, input));
+  }
+
+  struct CpuComparisonCase {
+    std::string name;
+    std::vector<bool> shortResults;
+    std::array<bool, 2> alternatingResults;
+    bool longResult;
+  };
+
+  // Expected values from functions/sparksql/tests/DecimalCompareTest.cpp.
+  const std::vector<CpuComparisonCase> cpuComparisons_{
+      {"decimal_equalto", {true, false, false, false}, {true, false}, false},
+      {"decimal_notequalto", {false, true, true, true}, {false, true}, true},
+      {"decimal_lessthan", {false, false, false, true}, {false, false}, true},
+      {"decimal_lessthanorequal",
+       {true, false, false, true},
+       {true, false},
+       true},
+      {"decimal_greaterthan", {false, true, true, false}, {false, true}, false},
+      {"decimal_greaterthanorequal",
+       {true, true, true, false},
+       {true, true},
+       false}};
+
   const std::vector<std::string> comparisons_{
       "decimal_equalto",
       "decimal_notequalto",
@@ -67,6 +103,182 @@ class DecimalComparisonTest : public CudfFunctionBaseTest {
       "decimal_greaterthan",
       "decimal_greaterthanorequal"};
 };
+
+TEST_F(DecimalComparisonTest, cpuInputEncodings) {
+  const auto left =
+      makeFlatVector<int64_t>({1000, 2000, 3000, 400}, DECIMAL(6, 2));
+  const auto right =
+      makeFlatVector<int64_t>({100, 120, 130, 350}, DECIMAL(5, 1));
+  const std::vector<std::pair<std::string, RowVectorPtr>> inputs{
+      {"constant",
+       makeRowVector({left, makeConstant<int64_t>(100, 4, DECIMAL(5, 1))})},
+      {"flat", makeRowVector({left, right})},
+      {"dictionary",
+       makeRowVector({
+           wrapInDictionary(makeIndices({0, 1, 2, 3}), left),
+           wrapInDictionary(makeIndices({0, 1, 2, 3}), right),
+       })}};
+  const auto nullable = makeRowVector({
+      left,
+      makeNullableFlatVector<int64_t>(
+          {100, std::nullopt, 130, 350}, DECIMAL(5, 1)),
+  });
+
+  for (const auto& comparison : cpuComparisons_) {
+    SCOPED_TRACE(comparison.name);
+    const auto expression = fmt::format("{}(c0, c1)", comparison.name);
+    const auto expected = makeFlatVector<bool>(comparison.shortResults);
+    for (const auto& [encoding, input] : inputs) {
+      SCOPED_TRACE(encoding);
+      assertGpuComparison(expression, input, expected);
+    }
+    assertGpuComparison(
+        expression,
+        nullable,
+        makeNullableFlatVector<bool>({
+            comparison.shortResults[0],
+            std::nullopt,
+            comparison.shortResults[2],
+            comparison.shortResults[3],
+        }));
+  }
+}
+
+TEST_F(DecimalComparisonTest, cpuBatchInputs) {
+  for (const vector_size_t size : {70, 140}) {
+    SCOPED_TRACE(size);
+    VectorPtr left;
+    if (size == 70) {
+      left = makeFlatVector<int64_t>(
+          size,
+          [](auto row) { return row % 2 == 0 ? 1000 : 3000; },
+          nullptr,
+          DECIMAL(6, 2));
+    } else {
+      left = wrapInDictionary(
+          makeIndices(size, [](auto row) { return row % 2; }),
+          makeFlatVector<int64_t>({1000, 3000}, DECIMAL(6, 2)));
+    }
+    const auto input = makeRowVector({
+        left,
+        makeFlatVector<int64_t>(
+            size,
+            [](auto row) { return row % 2 == 0 ? 100 : 130; },
+            nullptr,
+            DECIMAL(5, 1)),
+    });
+    for (const auto& comparison : cpuComparisons_) {
+      SCOPED_TRACE(comparison.name);
+      assertGpuComparison(
+          fmt::format("{}(c0, c1)", comparison.name),
+          input,
+          makeFlatVector<bool>(size, [&](auto row) {
+            return comparison.alternatingResults[row % 2];
+          }));
+    }
+  }
+}
+
+TEST_F(DecimalComparisonTest, cpuSelectedRows) {
+  // The CPU tests exclude the first 13 of 130 rows using SelectivityVector.
+  // The GPU fixture evaluates whole batches, so select the same rows in a
+  // query and retain row IDs to check each selected row's result.
+  const auto input = makeRowVector({
+      makeFlatVector<int64_t>(
+          130,
+          [](auto row) { return row % 2 == 0 ? 1000 : 3000; },
+          nullptr,
+          DECIMAL(6, 2)),
+      makeFlatVector<int64_t>(
+          130,
+          [](auto row) { return row % 2 == 0 ? 100 : 130; },
+          nullptr,
+          DECIMAL(5, 1)),
+      makeFlatIdentityVector<int64_t>(130),
+  });
+  for (const auto& comparison : cpuComparisons_) {
+    SCOPED_TRACE(comparison.name);
+    const auto plan = exec::test::PlanBuilder()
+                          .values({input})
+                          .filter("greaterthanorequal(c2, 13)")
+                          .project({
+                              "c2",
+                              fmt::format("{}(c0, c1)", comparison.name),
+                          })
+                          .planNode();
+    const auto expected = makeRowVector({
+        makeFlatVector<int64_t>(117, [](auto row) { return row + 13; }),
+        makeFlatVector<bool>(
+            117,
+            [&](auto row) {
+              return comparison.alternatingResults[(row + 13) % 2];
+            }),
+    });
+    exec::test::AssertQueryBuilder(plan).assertResults(expected);
+  }
+}
+
+TEST_F(DecimalComparisonTest, cpuWideScaleFallback) {
+  // These CPU cases need 39 digits when DECIMAL(6, 1) is aligned to scale 34.
+  // Preserve the CPU types and expected results while checking GPU rejection.
+  const auto left = makeFlatVector<int128_t>(
+      {10'000'000'000'000'000,
+       12'000'000'000'000'000,
+       13'000'000'000'000'000,
+       35'000'000'000'000'000},
+      DECIMAL(38, 34));
+  const auto right =
+      makeFlatVector<int64_t>({100000, 120000, 130000, 350000}, DECIMAL(6, 1));
+  const std::vector<std::pair<std::string, RowVectorPtr>> inputs{
+      {"constant",
+       makeRowVector({left, makeConstant<int64_t>(100000, 4, DECIMAL(6, 1))})},
+      {"flat", makeRowVector({left, right})},
+      {"dictionary",
+       makeRowVector({
+           wrapInDictionary(makeIndices({0, 1, 2, 3}), left),
+           wrapInDictionary(makeIndices({0, 1, 2, 3}), right),
+       })},
+      {"nullable",
+       makeRowVector({
+           left,
+           makeNullableFlatVector<int64_t>(
+               {100000, std::nullopt, 130000, 350000}, DECIMAL(6, 1)),
+       })}};
+
+  auto& config = CudfConfig::getInstance();
+  const auto previousFallback = config.allowCpuFallback;
+  unregisterCudf();
+  config.allowCpuFallback = true;
+  registerCudf();
+  SCOPE_EXIT {
+    unregisterCudf();
+    config.allowCpuFallback = previousFallback;
+    registerCudf();
+  };
+
+  for (const auto& comparison : cpuComparisons_) {
+    SCOPED_TRACE(comparison.name);
+    const auto expression = fmt::format("{}(c0, c1)", comparison.name);
+    for (const auto& [encoding, input] : inputs) {
+      SCOPED_TRACE(encoding);
+      const auto typed = makeTypedExpr(expression, input->rowType());
+      ASSERT_FALSE(FunctionExpression::canEvaluate(typed));
+      ASSERT_FALSE(ASTExpression::canEvaluate(typed));
+      ASSERT_FALSE(canExprRunOnGpu(typed, execCtx_.queryCtx(), pool_.get()));
+      ASSERT_EQ(
+          createCudfFunction(comparison.name, typed, pool_.get()), nullptr);
+      const auto plan = exec::test::PlanBuilder()
+                            .values({input})
+                            .project({expression})
+                            .planNode();
+      const auto expected = makeRowVector({makeFlatVector<bool>(
+          4,
+          [&](auto /*row*/) { return comparison.longResult; },
+          [&](auto row) { return encoding == "nullable" && row == 1; })});
+      exec::test::AssertQueryBuilder(plan).assertResults(expected);
+    }
+  }
+}
 
 TEST_F(DecimalComparisonTest, columns) {
   const std::vector<std::pair<TypePtr, TypePtr>> types{
@@ -137,7 +349,15 @@ TEST_F(DecimalComparisonTest, constants) {
     const auto scale = getDecimalPrecisionScale(*columnType).second;
     const auto unit = DecimalUtil::kPowersOfTen[scale];
     auto input = makeRowVector({makeDecimalVector(
-        columnType, {-unit, -unit / 2, 0, unit / 2, unit, std::nullopt})});
+        columnType,
+        {-unit,
+         -9 * unit / 10,
+         -unit / 2,
+         0,
+         unit / 2,
+         9 * unit / 10,
+         unit,
+         std::nullopt})});
     for (const auto& comparison : comparisons_) {
       for (const auto& constant : {"'0.90'", "'-0.90'", "null"}) {
         auto literal =

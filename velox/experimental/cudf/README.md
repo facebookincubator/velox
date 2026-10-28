@@ -47,6 +47,14 @@ conversion uses the Java 8/11/17 decimal representation, matching Spark 3.5 on
 JDK 17; REAL inputs are first promoted to DOUBLE. Newer Java decimal-rendering
 semantics are not implemented by this path.
 
+Floating-point-to-decimal conversion uses a guarded fast path when conservative
+rounding bounds agree, and otherwise falls back to exact decimal digit
+generation. The fast path requires scale at most 18 and scaled magnitude below
+2^52. Direct binary scaling and rounding is not equivalent: `37.175` cast to
+`DECIMAL(15, 2)` must produce `37.18`, and `1e38` cast to `DECIMAL(38, 0)` must
+overflow to NULL. The guard preserves these rounding and validity decisions;
+there is no opt-in approximate conversion mode.
+
 Floating-point-to-decimal and floating-point-to-integral calls with foldable
 constant inputs are rejected before GPU planning: the CPU expression optimizer
 currently uses different rounding or overflow behavior for these casts.

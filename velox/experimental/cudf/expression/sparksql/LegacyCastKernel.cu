@@ -22,8 +22,8 @@
 #include <cudf/utilities/bit.hpp>
 #include <cudf/utilities/error.hpp>
 
-#include <cuda/std/limits>
 #include <cuda_runtime.h>
+#include <cuda/std/limits>
 
 #include <cmath>
 #include <type_traits>
@@ -78,7 +78,7 @@ struct DecimalCast {
   int32_t sourceScale;
   int32_t targetScale;
   UInt128 maxValue;
-  int32_t targetPrecision;
+  double floatingScaleFactor;
 
   __device__ bool operator()(Input input, Output& output) const {
     if constexpr (std::is_floating_point_v<Input>) {
@@ -88,8 +88,9 @@ struct DecimalCast {
       // normalization that can move values across decimal halfway points.
       if (!detail::floatingPointToDecimal(
               static_cast<double>(input),
-              targetPrecision,
+              maxValue,
               targetScale,
+              floatingScaleFactor,
               value)) {
         return false;
       }
@@ -212,20 +213,29 @@ void dispatchDecimalOutput(
     maxValue *= 10;
   }
   --maxValue;
+  double floatingScaleFactor = 1;
+  if constexpr (std::is_floating_point_v<Input>) {
+    // The guarded fast path only uses exact binary64 powers through 10^18.
+    if (targetScale <= 18) {
+      for (int32_t i = 0; i < targetScale; ++i) {
+        floatingScaleFactor *= 10;
+      }
+    }
+  }
 
   if (output.type().id() == cudf::type_id::DECIMAL64) {
     launchCast<Input, int64_t>(
         input,
         output,
         DecimalCast<Input, int64_t>{
-            sourceScale, targetScale, maxValue, targetPrecision},
+            sourceScale, targetScale, maxValue, floatingScaleFactor},
         stream);
   } else {
     launchCast<Input, Int128>(
         input,
         output,
         DecimalCast<Input, Int128>{
-            sourceScale, targetScale, maxValue, targetPrecision},
+            sourceScale, targetScale, maxValue, floatingScaleFactor},
         stream);
   }
 }

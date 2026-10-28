@@ -15,14 +15,11 @@
  */
 #pragma once
 
+#include <cuda/std/cmath>
+#include <cuda/std/limits>
+
 #include <cstdint>
 #include <cstring>
-
-#ifdef __CUDACC__
-#define VELOX_CUDF_CAST_HOST_DEVICE __host__ __device__
-#else
-#define VELOX_CUDF_CAST_HOST_DEVICE
-#endif
 
 namespace facebook::velox::cudf_velox::sparksql::detail {
 
@@ -34,11 +31,11 @@ namespace facebook::velox::cudf_velox::sparksql::detail {
 struct CastUInt256 {
   uint64_t words[4]{};
 
-  VELOX_CUDF_CAST_HOST_DEVICE explicit CastUInt256(uint64_t value = 0) {
+  __device__ explicit CastUInt256(uint64_t value = 0) {
     words[0] = value;
   }
 
-  VELOX_CUDF_CAST_HOST_DEVICE int32_t compare(const CastUInt256& other) const {
+  __device__ int32_t compare(const CastUInt256& other) const {
     for (int32_t i = 3; i >= 0; --i) {
       if (words[i] != other.words[i]) {
         return words[i] < other.words[i] ? -1 : 1;
@@ -47,7 +44,7 @@ struct CastUInt256 {
     return 0;
   }
 
-  VELOX_CUDF_CAST_HOST_DEVICE void multiply(uint32_t factor) {
+  __device__ void multiply(uint32_t factor) {
     unsigned __int128 carry = 0;
     for (auto& word : words) {
       const unsigned __int128 product =
@@ -57,7 +54,7 @@ struct CastUInt256 {
     }
   }
 
-  VELOX_CUDF_CAST_HOST_DEVICE void add(const CastUInt256& other) {
+  __device__ void add(const CastUInt256& other) {
     unsigned __int128 carry = 0;
     for (int32_t i = 0; i < 4; ++i) {
       const unsigned __int128 sum =
@@ -67,7 +64,7 @@ struct CastUInt256 {
     }
   }
 
-  VELOX_CUDF_CAST_HOST_DEVICE void subtract(const CastUInt256& other) {
+  __device__ void subtract(const CastUInt256& other) {
     uint64_t borrow = 0;
     for (int32_t i = 0; i < 4; ++i) {
       const uint64_t subtrahend = other.words[i] + borrow;
@@ -78,7 +75,7 @@ struct CastUInt256 {
     }
   }
 
-  VELOX_CUDF_CAST_HOST_DEVICE void shiftLeft(int32_t bits) {
+  __device__ void shiftLeft(int32_t bits) {
     CastUInt256 shifted;
     const int32_t whole = bits / 64;
     const int32_t partial = bits % 64;
@@ -91,7 +88,7 @@ struct CastUInt256 {
     *this = shifted;
   }
 
-  VELOX_CUDF_CAST_HOST_DEVICE void shiftRight(int32_t bits) {
+  __device__ void shiftRight(int32_t bits) {
     CastUInt256 shifted;
     const int32_t whole = bits / 64;
     const int32_t partial = bits % 64;
@@ -104,7 +101,7 @@ struct CastUInt256 {
     *this = shifted;
   }
 
-  VELOX_CUDF_CAST_HOST_DEVICE int32_t bitWidth() const {
+  __device__ int32_t bitWidth() const {
     for (int32_t i = 3; i >= 0; --i) {
       if (words[i] != 0) {
 #ifdef __CUDA_ARCH__
@@ -117,7 +114,7 @@ struct CastUInt256 {
     return 0;
   }
 
-  VELOX_CUDF_CAST_HOST_DEVICE int32_t trailingZeros() const {
+  __device__ int32_t trailingZeros() const {
     for (int32_t i = 0; i < 4; ++i) {
       if (words[i] != 0) {
 #ifdef __CUDA_ARCH__
@@ -136,7 +133,7 @@ struct CastFloatingDecimal {
   int32_t exponent;
 };
 
-VELOX_CUDF_CAST_HOST_DEVICE inline void scaledFraction(
+__device__ inline void scaledFraction(
     uint64_t significand,
     int32_t exponent,
     int32_t decimalExponent,
@@ -172,8 +169,7 @@ VELOX_CUDF_CAST_HOST_DEVICE inline void scaledFraction(
 // is integer interval digit generation, not binary rounding at the final scale.
 // In particular, 1.2344499999999998 must not first become 1.23445, and 1e23's
 // binary double is represented as 9.999999999999999e22 on these Java versions.
-VELOX_CUDF_CAST_HOST_DEVICE inline CastFloatingDecimal floatingDecimal(
-    uint64_t absoluteBits) {
+__device__ inline CastFloatingDecimal floatingDecimal(uint64_t absoluteBits) {
   const auto binaryExponent = static_cast<int32_t>(absoluteBits >> 52) - 1023;
   const uint64_t significand =
       (absoluteBits & 0xfffffffffffffULL) | (uint64_t{1} << 52);
@@ -289,9 +285,9 @@ VELOX_CUDF_CAST_HOST_DEVICE inline CastFloatingDecimal floatingDecimal(
   }
 }
 
-VELOX_CUDF_CAST_HOST_DEVICE inline bool floatingPointToDecimal(
+__device__ inline bool floatingPointToDecimalExact(
     double input,
-    int32_t precision,
+    unsigned __int128 maxValue,
     int32_t scale,
     __int128& output) {
   uint64_t bits;
@@ -314,11 +310,6 @@ VELOX_CUDF_CAST_HOST_DEVICE inline bool floatingPointToDecimal(
   }
   const auto decimal = floatingDecimal(absoluteBits);
   unsigned __int128 value = decimal.significand;
-  unsigned __int128 limit = 1;
-  for (int32_t i = 0; i < precision; ++i) {
-    limit *= 10;
-  }
-  --limit;
   const int32_t delta = scale + decimal.exponent;
   if (delta >= 0) {
     if (delta > 38) {
@@ -328,7 +319,7 @@ VELOX_CUDF_CAST_HOST_DEVICE inline bool floatingPointToDecimal(
     for (int32_t i = 0; i < delta; ++i) {
       factor *= 10;
     }
-    if (value > limit / factor) {
+    if (value > maxValue / factor) {
       return false;
     }
     value *= factor;
@@ -341,7 +332,7 @@ VELOX_CUDF_CAST_HOST_DEVICE inline bool floatingPointToDecimal(
     }
     value = value / factor + (value % factor >= factor / 2);
   }
-  if (value > limit) {
+  if (value > maxValue) {
     return false;
   }
   output = static_cast<__int128>(value);
@@ -351,6 +342,62 @@ VELOX_CUDF_CAST_HOST_DEVICE inline bool floatingPointToDecimal(
   return true;
 }
 
-} // namespace facebook::velox::cudf_velox::sparksql::detail
+// Return true when every decimal value in a conservative interval around the
+// input rounds to the same unscaled integer. In that case, valid reports
+// whether the integer fits the requested precision. Otherwise, use exact digit
+// generation.
+__device__ inline bool tryFloatingPointToDecimalFastPath(
+    double input,
+    unsigned __int128 maxValue,
+    int32_t scale,
+    double factor,
+    __int128& output,
+    bool& valid) {
+  if (!cuda::std::isfinite(input) || scale > 18) {
+    return false;
+  }
+  // Powers of ten through 10^18 are represented exactly in binary64.
+  // The caller computes factor once for the column.
+  const double magnitude = cuda::std::fabs(input);
+  const double scaled = magnitude * factor;
+  if (!cuda::std::isfinite(scaled) || scaled >= 0x1p52) {
+    return false;
+  }
+  // Java's round-tripping decimal lies between the adjacent binary64 values.
+  // Expand the scaled endpoints outward to account for multiplication rounding.
+  const auto infinity = cuda::std::numeric_limits<double>::infinity();
+  const double lower =
+      cuda::std::nextafter(cuda::std::nextafter(magnitude, 0.0) * factor, 0.0);
+  const double upper = cuda::std::nextafter(
+      cuda::std::nextafter(magnitude, infinity) * factor, infinity);
+  const double lowerRounded = cuda::std::round(lower);
+  const double upperRounded = cuda::std::round(upper);
+  if (lowerRounded != upperRounded) {
+    return false;
+  }
+  const auto value = static_cast<unsigned __int128>(lowerRounded);
+  valid = value <= maxValue;
+  if (valid) {
+    output = static_cast<__int128>(value);
+    if (cuda::std::signbit(input)) {
+      output = -output;
+    }
+  }
+  return true;
+}
 
-#undef VELOX_CUDF_CAST_HOST_DEVICE
+__device__ inline bool floatingPointToDecimal(
+    double input,
+    unsigned __int128 maxValue,
+    int32_t scale,
+    double factor,
+    __int128& output) {
+  bool valid;
+  if (tryFloatingPointToDecimalFastPath(
+          input, maxValue, scale, factor, output, valid)) {
+    return valid;
+  }
+  return floatingPointToDecimalExact(input, maxValue, scale, output);
+}
+
+} // namespace facebook::velox::cudf_velox::sparksql::detail

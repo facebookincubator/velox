@@ -471,6 +471,45 @@ TEST_F(LegacyCastTest, floatingPointToDecimal) {
            std::nullopt}));
 }
 
+TEST_F(LegacyCastTest, floatingPointToDecimalFastPathBoundaries) {
+  // Expected unscaled values come from Java 17 BigDecimal.valueOf(value)
+  // followed by setScale(scale, HALF_UP), independently of either cast helper.
+  assertCastMatchesSpark(
+      makeFlatVector<double>({37.175, -37.175}),
+      makeFlatVector<int64_t>({3'718, -3'718}, DECIMAL(15, 2)));
+
+  // Only the scale guard changes: both scaled magnitudes remain below 2^52.
+  for (const auto scale : {18, 19}) {
+    const int128_t unscaled =
+        scale == 18 ? 100'000'000'000'000LL : 1'000'000'000'000'000LL;
+    assertCastMatchesSpark(
+        makeFlatVector<double>({0.0001, -0.0001}),
+        makeFlatVector<int128_t>({unscaled, -unscaled}, DECIMAL(38, scale)));
+  }
+
+  // Adjacent input values straddle the scaled-magnitude guard at 2^52.
+  assertCastMatchesSpark(
+      makeFlatVector<double>(
+          {std::bit_cast<double>(0x42c47ae147ae147aULL),
+           std::bit_cast<double>(0x42c47ae147ae147bULL),
+           std::bit_cast<double>(0x42c47ae147ae147cULL),
+           std::bit_cast<double>(0xc2c47ae147ae147bULL)}),
+      makeFlatVector<int64_t>(
+          {4'503'599'627'370'495LL,
+           4'503'599'627'370'496LL,
+           4'503'599'627'370'497LL,
+           -4'503'599'627'370'496LL},
+          DECIMAL(18, 2)));
+
+  assertCastMatchesSpark(
+      makeFlatVector<double>(
+          {std::bit_cast<double>(0x47d2ced32a16a1b0ULL), 1e38}),
+      makeNullableFlatVector<int128_t>(
+          {DecimalUtil::kPowersOfTen[38] - 2 * DecimalUtil::kPowersOfTen[22],
+           std::nullopt},
+          DECIMAL(38, 0)));
+}
+
 TEST_F(LegacyCastTest, decimalRescale) {
   for (const auto& source : {DECIMAL(18, 4), DECIMAL(38, 4), DECIMAL(38, 38)}) {
     const auto maximum =
