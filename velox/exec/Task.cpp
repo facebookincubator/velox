@@ -1783,6 +1783,12 @@ std::vector<std::shared_ptr<Driver>> Task::createDriversLocked(
 void Task::removeDriver(std::shared_ptr<Task> self, Driver* driver) {
   bool foundDriver = false;
   bool allFinished = true;
+  std::vector<ContinuePromise> barrierPromises;
+  SCOPE_EXIT {
+    for (auto& promise : barrierPromises) {
+      promise.setValue();
+    }
+  };
   EventCompletionNotifier stateChangeNotifier;
   EventCompletionNotifier allDriversClosedNotifier;
   {
@@ -1795,6 +1801,19 @@ void Task::removeDriver(std::shared_ptr<Task> self, Driver* driver) {
       // Mark the closure of another driver for its split group (even in
       // ungrouped execution mode).
       const auto splitGroupId = driver->driverCtx()->splitGroupId;
+      if (self->isRunningLocked()) {
+        auto splits =
+            self->splitsStates_.find(driver->sourceOperator()->planNodeId());
+        if (splits != self->splitsStates_.end() &&
+            splits->second.sourceIsTableScan) {
+          self->getOrCreateSplitsStoreLocked(splits->second, splitGroupId)
+              ->finishDriver(driver->driverCtx()->driverId);
+        }
+        // A driver may finish before consuming its barrier marker.
+        if (driver->hasBarrier()) {
+          self->finishDriverBarrierLocked(barrierPromises);
+        }
+      }
       auto& splitGroupState = self->splitGroupStates_[splitGroupId];
       --splitGroupState.numRunningDrivers;
 
@@ -2289,6 +2308,9 @@ ContinueFuture Task::startBarrier(std::string_view comment) {
     addSplitLocked(splitState, barrierSplit, promises);
   }
   startDriverBarriersLocked();
+  if (numDriversUnderBarrier_ == 0) {
+    endBarrierLocked(promises);
+  }
   return std::move(future);
 }
 
@@ -2296,13 +2318,12 @@ void Task::startDriverBarriersLocked() {
   VELOX_CHECK(underBarrier());
   VELOX_CHECK_EQ(numDriversUnderBarrier_, 0);
   for (auto& driver : drivers_) {
-    // We only support barrier on sequential mode so all the drivers must
-    // present when task is still running.
-    VELOX_CHECK_NOT_NULL(driver);
+    if (driver == nullptr) {
+      continue;
+    }
     driver->startBarrier();
     ++numDriversUnderBarrier_;
   }
-  VELOX_CHECK_EQ(numDriversUnderBarrier_, drivers_.size());
 }
 
 void Task::finishDriverBarrier() {
@@ -2314,11 +2335,14 @@ void Task::finishDriverBarrier() {
   };
   {
     std::lock_guard<std::timed_mutex> l(mutex_);
-    VELOX_CHECK(underBarrier());
-    VELOX_CHECK_GT(numDriversUnderBarrier_, 0);
-    if (--numDriversUnderBarrier_ > 0) {
-      return;
-    }
+    finishDriverBarrierLocked(promises);
+  }
+}
+
+void Task::finishDriverBarrierLocked(std::vector<ContinuePromise>& promises) {
+  VELOX_CHECK(underBarrier());
+  VELOX_CHECK_GT(numDriversUnderBarrier_, 0);
+  if (--numDriversUnderBarrier_ == 0) {
     endBarrierLocked(promises);
   }
 }

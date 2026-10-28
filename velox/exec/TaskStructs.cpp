@@ -26,7 +26,9 @@ void SplitsStore::addSplit(
   VELOX_CHECK(barrierSplits_.empty());
   if (split.isBarrier()) {
     for (auto i = 0; i < split.barrier->numDrivers; ++i) {
-      barrierSplits_[i] = Split::createBarrier();
+      if (!finishedDrivers_.contains(i)) {
+        barrierSplits_[i] = Split::createBarrier();
+      }
     }
     VELOX_CHECK_LE(promises_.size(), split.barrier->numDrivers);
     // A barrier is assigned to every driver; wake up all currently blocked
@@ -105,6 +107,11 @@ void SplitsStore::removeQueuedSplitStats(const Split& split) {
     taskStats_->queuedTableScanSplitWeights -=
         split.connectorSplit->splitWeight;
   }
+}
+
+void SplitsStore::finishDriver(uint32_t driverId) {
+  finishedDrivers_.insert(driverId);
+  barrierSplits_.erase(driverId);
 }
 
 Split SplitsStore::getSplit(

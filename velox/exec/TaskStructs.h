@@ -152,6 +152,10 @@ class SplitsStore {
     return allConsumersFinished_;
   }
 
+  /// Discard the driver's pending barrier marker and exclude it from future
+  /// barriers, without changing the IDs of the remaining drivers.
+  void finishDriver(uint32_t driverId);
+
   /// Returns the splits added but not yet returned by nextSplit().
   const std::deque<Split>& queuedSplits() const {
     return splits_;
@@ -209,6 +213,7 @@ class SplitsStore {
 
   // The map from driver id to barrier splits.
   std::unordered_map<uint32_t, Split> barrierSplits_;
+  std::unordered_set<uint32_t> finishedDrivers_;
 
   // Blocking promises given out when out of splits to distribute.
   std::vector<ContinuePromise> promises_;
