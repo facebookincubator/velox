@@ -78,15 +78,11 @@ void registerUcxTransports() {
             // receive prefetch window; it is not a cap on total query GPU
             // memory.
             checkCudfEnabledForUcx(context.queryConfig);
-            VELOX_USER_CHECK_GE(
-                context.maxExchangeBufferSize,
-                0,
-                "UCX max exchange buffer size must not be negative");
             return std::make_shared<UcxExchangeClient>(
                 context.taskId,
                 context.destination,
                 context.numberOfConsumers,
-                static_cast<uint64_t>(context.maxExchangeBufferSize));
+                context.maxExchangeBufferSize);
           },
           [](int32_t operatorId,
              exec::DriverCtx* ctx,
