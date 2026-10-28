@@ -36,18 +36,28 @@ enum class CharsetType : uint8_t {
   kUtf16BE,
   kUtf16LE,
   kUtf32,
+  kLegacySingleByte,
   kUnsupported,
 };
 
-/// Resolves one of the seven standard Spark charset names, ignoring case.
-CharsetType resolveCharset(const StringView& charset);
+/// Identifies a standard charset or an entry in the verified single-byte table.
+struct Charset {
+  /// Selects a standard encoder or the verified single-byte table.
+  CharsetType type{CharsetType::kUnsupported};
+  /// Indexes the table only when type is kLegacySingleByte.
+  uint8_t legacyIndex{0};
+};
+
+/// Resolves standard names, optionally including verified Java names and
+/// aliases.
+Charset resolveCharset(const StringView& charset, bool legacyJavaCharsets);
 
 /// Encodes input using the selected charset and Spark coding-error behavior.
 Status encode(
     exec::StringWriter& result,
     const StringView& input,
     const StringView& charset,
-    CharsetType type,
+    Charset resolved,
     bool legacyCodingErrorAction);
 
 } // namespace detail
@@ -57,6 +67,9 @@ template <typename T>
 struct EncodeFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
+  // Keeps borrowed output bytes alive after the input vector is released.
+  static constexpr int32_t reuse_strings_from_arg = 0;
+
   void initialize(
       const std::vector<TypePtr>& /*inputTypes*/,
       const core::QueryConfig& config,
@@ -64,8 +77,9 @@ struct EncodeFunction {
       const arg_type<Varchar>* charset) {
     const SparkQueryConfig sparkConfig{config};
     legacyCodingErrorAction_ = sparkConfig.legacyCodingErrorAction();
+    legacyJavaCharsets_ = sparkConfig.legacyJavaCharsets();
     if (charset != nullptr) {
-      charsetType_ = detail::resolveCharset(*charset);
+      charset_ = detail::resolveCharset(*charset, legacyJavaCharsets_);
       isConstantCharset_ = true;
     }
   }
@@ -74,26 +88,46 @@ struct EncodeFunction {
       out_type<Varbinary>& result,
       const arg_type<Varchar>& input,
       const arg_type<Varchar>& charset) {
-    const auto type =
-        isConstantCharset_ ? charsetType_ : detail::resolveCharset(charset);
-    if (type == detail::CharsetType::kUnsupported) {
+    auto resolved = charset_;
+    // Avoid copying cheap standard names when the Java allowlist is disabled.
+    if (!isConstantCharset_ && !legacyJavaCharsets_) {
+      resolved = detail::resolveCharset(charset, false);
+    } else if (
+        !isConstantCharset_ &&
+        (resolved.type == detail::CharsetType::kUnsupported ||
+         StringView(cachedCharsetName_) != charset)) {
+      resolved = detail::resolveCharset(charset, legacyJavaCharsets_);
+      // Only supported names have a bounded length. Do not retain arbitrary
+      // unsupported input strings in the function instance.
+      if (resolved.type != detail::CharsetType::kUnsupported) {
+        cachedCharsetName_.assign(charset.data(), charset.size());
+        charset_ = resolved;
+      }
+    }
+    if (resolved.type == detail::CharsetType::kUnsupported) {
       return Status::UserError(
           "encode: unsupported charset '{}'",
           std::string(charset.data(), charset.size()));
     }
     return detail::encode(
-        result, input, charset, type, legacyCodingErrorAction_);
+        result, input, charset, resolved, legacyCodingErrorAction_);
   }
 
  private:
-  // Stores the charset resolved from a constant argument.
-  detail::CharsetType charsetType_{detail::CharsetType::kUnsupported};
+  // Stores the constant charset or the last supported opt-in charset.
+  detail::Charset charset_;
+
+  // Owns the cached name because input vectors need not survive the next batch.
+  std::string cachedCharsetName_;
 
   // Indicates whether the charset argument was constant.
   bool isConstantCharset_{false};
 
   // Replaces unmappable characters instead of returning an error.
   bool legacyCodingErrorAction_{false};
+
+  // Enables only the explicitly verified Java names and single-byte encoders.
+  bool legacyJavaCharsets_{false};
 };
 
 } // namespace facebook::velox::functions::sparksql
