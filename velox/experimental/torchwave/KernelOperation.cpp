@@ -363,6 +363,7 @@ bool hasAlwaysSingleBlock(
 int64_t maxDynamicSharedMemory(
     NodeCP node,
     const std::unordered_set<ValueCP>& inputs,
+    int32_t blockSize,
     std::unordered_set<NodeCP>& visited) {
   if (!visited.insert(node).second) {
     return 0;
@@ -370,7 +371,7 @@ int64_t maxDynamicSharedMemory(
   int64_t bytes = 0;
   auto* meta = Registry::metadata(node->target());
   if (meta && meta->dynamicSharedMemory) {
-    bytes = meta->dynamicSharedMemory(node);
+    bytes = meta->dynamicSharedMemory(node, blockSize);
   }
   for (const auto& input : node->inputs()) {
     if (inputs.count(input.value)) {
@@ -378,8 +379,8 @@ int64_t maxDynamicSharedMemory(
     }
     auto* producer = input.value->producer();
     if (producer) {
-      bytes =
-          std::max(bytes, maxDynamicSharedMemory(producer, inputs, visited));
+      bytes = std::max(
+          bytes, maxDynamicSharedMemory(producer, inputs, blockSize, visited));
     }
   }
   return bytes;
@@ -404,6 +405,35 @@ int32_t maxMinBlocksPerSm(
     }
   }
   return blocks;
+}
+
+int32_t maxBlockSizePreference(
+    NodeCP node,
+    const std::unordered_set<ValueCP>& inputs,
+    std::unordered_set<NodeCP>& visited) {
+  if (!visited.insert(node).second) {
+    return 0;
+  }
+  auto* meta = Registry::metadata(node->target());
+  int32_t threads = 0;
+  if (meta != nullptr && meta->blockSize) {
+    threads = meta->blockSize(node);
+    TORCH_CHECK(
+        threads >= 0 && threads <= 1024 && (threads & (threads - 1)) == 0,
+        node->target(),
+        ": block size must be a power of two up to 1024, got ",
+        threads);
+  }
+  for (const auto& input : node->inputs()) {
+    if (inputs.count(input.value)) {
+      continue;
+    }
+    if (auto* producer = input.value->producer()) {
+      threads =
+          std::max(threads, maxBlockSizePreference(producer, inputs, visited));
+    }
+  }
+  return threads;
 }
 
 float sumNodeCosts(
@@ -621,9 +651,19 @@ KernelOperation::KernelOperation(
   std::unordered_set<NodeCP> asbVisited;
   alwaysSingleBlock_ = hasAlwaysSingleBlock(sg.root, inputs_, asbVisited);
 
-  std::unordered_set<NodeCP> dynSharedVisited;
-  dynamicSharedBytes_ =
-      maxDynamicSharedMemory(sg.root, inputs_, dynSharedVisited);
+  for (int32_t threads = WaveConfig::get().blockSize; threads <= 1024;
+       threads *= 2) {
+    std::unordered_set<NodeCP> dynSharedVisited;
+    dynamicSharedBytes_.emplace_back(
+        threads,
+        maxDynamicSharedMemory(sg.root, inputs_, threads, dynSharedVisited));
+  }
+
+  std::unordered_set<NodeCP> blockSizeVisited;
+  blockSizePreference_ =
+      maxBlockSizePreference(sg.root, inputs_, blockSizeVisited);
+  ownEntryPoint_ = Registry::metadata(sg.root->target()) != nullptr &&
+      Registry::metadata(sg.root->target())->ownEntryPoint;
 
   std::unordered_set<NodeCP> minBlocksVisited;
   minBlocksPerSm_ = maxMinBlocksPerSm(sg.root, inputs_, minBlocksVisited);
@@ -968,6 +1008,39 @@ void collectElementwiseLeaves(
 // tensor inputs, so collectElementwiseLeaves finds no leaf to size the fused
 // subtree from; their extent lives in the `size` attribute instead and must be
 // broadcast into the output shape.
+// The length of an aten.arange whose bounds are all attributes. Its size has
+// no `size` attribute, so a fused consumer learns it only from here.
+std::optional<int64_t> constantArangeExtent(NodeCP node) {
+  const auto& target = node->target();
+  const bool hasStart = target == "torch.ops.aten.arange.start" ||
+      target == "torch.ops.aten.arange.start_step";
+  if (!hasStart && target != "torch.ops.aten.arange.default") {
+    return std::nullopt;
+  }
+  auto intAttr = [&](const char* name,
+                     int64_t missing) -> std::optional<int64_t> {
+    const auto* attr = node->tryGetAttribute(name);
+    if (attr == nullptr) {
+      return node->tryGetInput(name) ? std::nullopt
+                                     : std::optional<int64_t>(missing);
+    }
+    if (const auto* value = std::get_if<int64_t>(&attr->value)) {
+      return *value;
+    }
+    return std::nullopt;
+  };
+  const auto start = hasStart ? intAttr("start", 0) : std::optional<int64_t>(0);
+  const auto end = intAttr("end", 0);
+  const auto step = intAttr("step", 1);
+  if (!start || !end || !step || *step == 0) {
+    return std::nullopt;
+  }
+  const auto span = *end - *start;
+  const auto size =
+      *step > 0 ? (span + *step - 1) / *step : (span + *step + 1) / *step;
+  return std::max<int64_t>(size, 0);
+}
+
 void collectFactorySizes(
     NodeCP node,
     const std::unordered_set<ValueCP>& subgraphInputs,
@@ -990,6 +1063,9 @@ void collectFactorySizes(
             input.value->type().kind() == nativert::Type::Kind::Tensor;
       });
   if (isFactory) {
+    if (auto extent = constantArangeExtent(node)) {
+      constShapes.push_back({static_cast<Dim>(*extent)});
+    }
     if (const auto* sizeAttr = node->tryGetAttribute("size")) {
       if (std::holds_alternative<std::vector<int64_t>>(sizeAttr->value)) {
         const auto& sz = std::get<std::vector<int64_t>>(sizeAttr->value);
@@ -1372,6 +1448,19 @@ OutputDesc KernelOperation::makeOutputDesc(
   }
 
   return desc;
+}
+
+int64_t KernelOperation::dynamicSharedBytes(int32_t blockSize) const {
+  for (const auto& [threads, bytes] : dynamicSharedBytes_) {
+    if (threads == blockSize) {
+      return bytes;
+    }
+  }
+  TORCH_CHECK(
+      dynamicSharedBytes_.empty(),
+      "no dynamic shared memory size for block size ",
+      blockSize);
+  return 0;
 }
 
 bool KernelOperation::isMultiUseInput(nativert::ValueId id) const {

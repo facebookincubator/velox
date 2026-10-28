@@ -22,7 +22,7 @@
 #include "velox/buffer/BufferPool.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/dwio/nimble/encodings/views/EncodingView.h"
-#include "velox/dwio/nimble/velox/Decoder.h"
+#include "velox/dwio/nimble/reader/Decoder.h"
 
 namespace facebook::nimble {
 
@@ -34,12 +34,21 @@ class EncodingViewDecoder final : public Decoder {
       std::function<std::shared_ptr<const EncodingView>(std::string_view)>;
 
   /// Creates a decoder over one raw encoded chunk. `pool` and the view returned
-  /// by `encodingViewFactory` must be non-null.
+  /// by `encodingViewFactory` must be non-null. The decoder keeps the factory
+  /// to create the view of every chunk bound later with rebind().
   EncodingViewDecoder(
       std::string_view encoded,
       velox::memory::MemoryPool* pool,
       velox::BufferPool* bufferPool,
       const EncodingViewFactory& encodingViewFactory);
+
+  /// Replaces the decoded chunk with `encoded` and rewinds the sequential
+  /// cursor.
+  void rebind(std::string_view encoded);
+
+  /// Drops the view of the current chunk so its bytes can be freed. The decoder
+  /// must be rebound before it is used again.
+  void release();
 
   uint32_t next(
       uint32_t count,
@@ -90,6 +99,9 @@ class EncodingViewDecoder final : public Decoder {
 
   // Returns temporary decode storage to the caller-owned cache.
   velox::BufferPool* const bufferPool_;
+
+  // Creates the view of each chunk bound to this decoder.
+  const EncodingViewFactory encodingViewFactory_;
 
   // Random-access view over the encoded values.
   std::shared_ptr<const EncodingView> encodingView_;

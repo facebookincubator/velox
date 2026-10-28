@@ -35,6 +35,9 @@
 #include "velox/common/memory/Memory.h"
 #include "velox/dwio/nimble/common/Buffer.h"
 #include "velox/dwio/nimble/common/ChunkHeader.h"
+#include "velox/dwio/nimble/common/HybridFlatMap.h"
+#include "velox/dwio/nimble/common/SchemaBuilder.h"
+#include "velox/dwio/nimble/common/SchemaReader.h"
 #include "velox/dwio/nimble/common/tests/GTestUtils.h"
 #include "velox/dwio/nimble/encodings/ALPRDEncoding.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
@@ -45,9 +48,6 @@
 #include "velox/dwio/nimble/serializer/Serializer.h"
 #include "velox/dwio/nimble/serializer/StreamDataWriter.h"
 #include "velox/dwio/nimble/serializer/StreamSlicer.h"
-#include "velox/dwio/nimble/velox/HybridFlatMap.h"
-#include "velox/dwio/nimble/velox/SchemaBuilder.h"
-#include "velox/dwio/nimble/velox/SchemaReader.h"
 #include "velox/type/Type.h"
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/FlatVector.h"
@@ -552,7 +552,7 @@ TEST_P(StreamSlicerPayloadApiTest, fuzzesRandomSchemasAndNullableData) {
   constexpr uint32_t kMinSliceRows{8};
   const auto payloadKind = GetParam();
   const std::vector<TypePtr> scalarTypes{
-      BOOLEAN(), INTEGER(), BIGINT(), REAL(), DOUBLE(), VARCHAR()};
+      BOOLEAN(), INTEGER(), BIGINT(), REAL(), DOUBLE(), VARCHAR(), TIMESTAMP()};
   VectorFuzzer fuzzer(
       {
           .vectorSize = 32,
@@ -937,6 +937,44 @@ TEST_P(StreamSlicerPayloadApiTest, slicesFlatMap) {
   }
 }
 
+TEST_P(StreamSlicerPayloadApiTest, slicesNullFlatMapRanges) {
+  // The in-map streams of a flat map hold one value per non-null map, so a
+  // range of null maps slices no keys.
+  auto type = ROW({{"features", MAP(INTEGER(), INTEGER())}});
+  auto features = makeMapVector(
+      {2, 0, 0, 1, 0, 1},
+      makeFlatVector<int32_t>({1, 2, 2, 1}),
+      makeFlatVector<int32_t>({10, 20, 32, 51}));
+  features->setNull(1, true);
+  features->setNull(2, true);
+  features->setNull(4, true);
+  auto input = makeRowVector({"features"}, {features});
+  auto [serialized, schema] = serialize(
+      input,
+      type,
+      /*encodingType=*/std::nullopt,
+      /*compressionOptions=*/std::nullopt,
+      /*flatMapColumns=*/{{"features", {}}});
+  auto payload = makePayload(
+      serialized, schema, {"features[1]", "features[2]"}, GetParam());
+  StreamSlicer slicer{payload.schema, pool_.get(), StreamSlicer::Options{}};
+
+  for (const auto& [offset, length] :
+       std::vector<std::pair<uint32_t, uint32_t>>{
+           {1, 2}, {4, 1}, {1, 1}, {0, 3}, {2, 3}}) {
+    SCOPED_TRACE(fmt::format("offset={} length={}", offset, length));
+    auto sliced = iobufToString(slicer.slice(payload.data, offset, length));
+    auto output = deserialize(sliced, payload.schema);
+    ASSERT_EQ(output->size(), length);
+    for (vector_size_t i = 0; i < static_cast<vector_size_t>(length); ++i) {
+      const auto row = static_cast<vector_size_t>(offset) + i;
+      EXPECT_TRUE(input->equalValueAt(output.get(), row, i))
+          << "Expected " << input->toString(row) << ", got "
+          << output->toString(i);
+    }
+  }
+}
+
 TEST_P(StreamSlicerPayloadApiTest, slicesEmptyArrayElementRange) {
   auto type = ROW({{"items", ARRAY(INTEGER())}});
   auto items =
@@ -955,6 +993,49 @@ TEST_P(StreamSlicerPayloadApiTest, slicesEmptyArrayElementRange) {
   auto* arrays = row->childAt(0)->as<ArrayVector>();
   ASSERT_NE(arrays, nullptr);
   EXPECT_EQ(arrays->sizeAt(0), 0);
+}
+
+TEST_P(StreamSlicerPayloadApiTest, slicesTimestampRanges) {
+  // The nanoseconds stream holds one value per non-null row, so a range of
+  // null rows slices no nanoseconds.
+  auto type = ROW({{"ts", TIMESTAMP()}});
+  const std::vector<std::optional<Timestamp>> values{
+      Timestamp(1, 1),
+      std::nullopt,
+      std::nullopt,
+      Timestamp(-2, 999'999'999),
+      std::nullopt,
+      Timestamp(3, 1'001),
+  };
+  const auto numRows = static_cast<vector_size_t>(values.size());
+  auto timestamps = BaseVector::create<FlatVector<Timestamp>>(
+      TIMESTAMP(), numRows, pool_.get());
+  for (vector_size_t i = 0; i < numRows; ++i) {
+    if (values[i].has_value()) {
+      timestamps->set(i, *values[i]);
+    } else {
+      timestamps->setNull(i, true);
+    }
+  }
+  auto input = makeRowVector({"ts"}, {timestamps});
+  auto [serialized, schema] = serialize(input, type);
+  auto payload = makePayload(serialized, schema, {"ts"}, GetParam());
+  StreamSlicer slicer{payload.schema, pool_.get(), StreamSlicer::Options{}};
+
+  for (const auto& [offset, length] :
+       std::vector<std::pair<uint32_t, uint32_t>>{
+           {1, 2}, {4, 1}, {0, 3}, {2, 3}, {3, 3}}) {
+    SCOPED_TRACE(fmt::format("offset={} length={}", offset, length));
+    auto sliced = iobufToString(slicer.slice(payload.data, offset, length));
+    auto output = deserialize(sliced, payload.schema);
+    ASSERT_EQ(output->size(), length);
+    for (vector_size_t i = 0; i < static_cast<vector_size_t>(length); ++i) {
+      const auto row = static_cast<vector_size_t>(offset) + i;
+      EXPECT_TRUE(input->equalValueAt(output.get(), row, i))
+          << "Expected " << input->toString(row) << ", got "
+          << output->toString(i);
+    }
+  }
 }
 
 TEST_P(StreamSlicerPayloadApiTest, returnsInputForFullPayloadSlice) {

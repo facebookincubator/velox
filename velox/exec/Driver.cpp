@@ -950,6 +950,14 @@ std::exception_ptr Driver::closeOperators() {
     }
   }
 
+  try {
+    task()->splitConsumerFinished(*ctx_);
+  } catch (...) {
+    if (!error) {
+      error = std::current_exception();
+    }
+  }
+
   // Report driver-level lifecycle timing to the Task accumulator.
   // Use partitionId (0..numDrivers-1) so same-index drivers across split
   // groups in grouped execution are summed together.

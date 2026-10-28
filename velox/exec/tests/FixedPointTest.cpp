@@ -23,6 +23,8 @@
 #include <atomic>
 #include <chrono>
 #include <functional>
+#include <optional>
+#include <set>
 #include <thread>
 #include <tuple>
 
@@ -36,7 +38,10 @@
 #include "velox/exec/Exchange.h"
 #include "velox/exec/FixedPointLoop.h"
 #include "velox/exec/FixedPointSplit.h"
+#include "velox/exec/FixedPointVerdicts.h"
+#include "velox/exec/MemoryReclaimer.h"
 #include "velox/exec/Operator.h"
+#include "velox/exec/OperatorType.h"
 #include "velox/exec/PartitionFunction.h"
 #include "velox/exec/Split.h"
 #include "velox/exec/Task.h"
@@ -193,11 +198,11 @@ class FixedPointTest : public exec::test::HiveConnectorTestBase {
     return kExecutor.get();
   }
 
-  // Formats the nesting of 'address', one "/{planNodeId}.{iteration}" per step.
+  // Formats 'nesting', one "/{planNodeId}.{iteration}" per step.
   static std::string nestingSuffix(
-      const FixedPointOptions::LoopAddress& address) {
+      const std::vector<FixedPointOptions::NestingStep>& nesting) {
     std::string suffix;
-    for (const auto& step : address.nesting) {
+    for (const auto& step : nesting) {
       suffix += fmt::format("/{}.{}", step.planNodeId, step.iteration);
     }
     return suffix;
@@ -213,7 +218,7 @@ class FixedPointTest : public exec::test::HiveConnectorTestBase {
     return fmt::format(
         "local://{}{}.it{}.{}",
         address.worker,
-        nestingSuffix(address),
+        nestingSuffix(address.nesting),
         iteration,
         planNodeId);
   }
@@ -253,7 +258,7 @@ class FixedPointTest : public exec::test::HiveConnectorTestBase {
   static auto alwaysTrueAwaitVerdict() {
     return [](const FixedPointOptions::LoopAddress& /*workerZero*/,
               int32_t /*iteration*/,
-              folly::CancellationToken /*cancel*/) {
+              const folly::CancellationToken& /*cancel*/) {
       return folly::makeSemiFuture(true);
     };
   }
@@ -310,6 +315,16 @@ class FixedPointTest : public exec::test::HiveConnectorTestBase {
   // Same, but converges at val='target', after 'target' iterations, unless
   // 'maxIterations' runs out first.
   core::PlanNodePtr countingNodeTo(int64_t target, int32_t maxIterations) {
+    return countingNodeWith(
+        "val + 1", fmt::format("val >= {}", target), maxIterations);
+  }
+
+  // Same, but each iteration sets val to 'nextVal', and the loop converges once
+  // 'converged' holds; both are expressions over key and val.
+  core::PlanNodePtr countingNodeWith(
+      std::string_view nextVal,
+      std::string_view converged,
+      int32_t maxIterations) {
     auto schema = ROW({"key", "val"}, BIGINT());
     auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
     auto seed = makeKeyValueRow(0, 0);
@@ -322,25 +337,107 @@ class FixedPointTest : public exec::test::HiveConnectorTestBase {
                 PlanBuilder(idGenerator).values({seed}).planNode()),
             PlanBuilder(idGenerator)
                 .stateSource("values", schema)
-                .project({"key AS next_key", "val + 1 AS next_val"}),
+                .project(
+                    {"key AS next_key",
+                     fmt::format("{} AS next_val", nextVal)}),
             ConvergenceConfig::converging(
                 PlanBuilder(idGenerator)
                     .stateSource("values", schema)
-                    .project({fmt::format("val >= {} AS converged", target)})
+                    .project({fmt::format("{} AS converged", converged)})
                     .planNode(),
                 maxIterations),
             /*outputStateEntry=*/"values")
         .planNode();
   }
 
+  // A fixed point whose initial plan reads state "values" through an Exchange,
+  // and whose body passes the state through for one iteration.  Stores the
+  // Exchange's id in 'exchangeId', for the test to add remote splits to.
+  static core::PlanNodePtr exchangeSeededNode(core::PlanNodeId& exchangeId) {
+    auto schema = ROW({"key", "val"}, BIGINT());
+    auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    return PlanBuilder(idGenerator)
+        .fixedPoint(
+            std::make_shared<VectorStateDeclaration>(
+                "values",
+                schema,
+                PlanBuilder(idGenerator)
+                    .exchange(schema, "Presto")
+                    .capturePlanNodeId(exchangeId)
+                    .planNode()),
+            PlanBuilder(idGenerator).stateSource("values", schema),
+            ConvergenceConfig::withMaxIterations(1))
+        .planNode();
+  }
+
+  // A single-worker fixed point to nest in a plan built with 'idGenerator'.  It
+  // counts ival up to 3 in three iterations and emits {(0, 3)} as (ikey, ival).
+  core::PlanNodePtr innerCountingNode(
+      const std::shared_ptr<core::PlanNodeIdGenerator>& idGenerator) {
+    auto schema = ROW({"ikey", "ival"}, BIGINT());
+    auto seed = makeKeyValueRow(0, 0, schema->names());
+    return PlanBuilder(idGenerator)
+        .fixedPoint(
+            std::make_shared<VectorStateDeclaration>(
+                "inner",
+                schema,
+                PlanBuilder(idGenerator).values({seed}).planNode()),
+            PlanBuilder(idGenerator)
+                .stateSource("inner", schema)
+                .project({"ikey", "ival + 1 AS ival"}),
+            ConvergenceConfig::converging(
+                PlanBuilder(idGenerator)
+                    .stateSource("inner", schema)
+                    .project({"ival >= 3 AS converged"})
+                    .planNode(),
+                100),
+            /*outputStateEntry=*/"inner")
+        .planNode();
+  }
+
+  // A single-worker fixed point whose body runs innerCountingNode() on the
+  // build side of its join.  Each outer iteration adds the inner loop's 3 to
+  // val, reaching 3 then 6 in two iterations, and emits {(0, 6)}.
+  core::PlanNodePtr nestedCountingNode() {
+    auto schema = ROW({"key", "val"}, BIGINT());
+    auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    auto seed = makeKeyValueRow(0, 0);
+    return PlanBuilder(idGenerator)
+        .fixedPoint(
+            std::make_shared<VectorStateDeclaration>(
+                "outer",
+                schema,
+                PlanBuilder(idGenerator).values({seed}).planNode()),
+            PlanBuilder(idGenerator)
+                .stateSource("outer", schema)
+                .hashJoin(
+                    {"key"},
+                    {"ikey"},
+                    innerCountingNode(idGenerator),
+                    "",
+                    {"key", "val", "ival"})
+                .project({"key", "val + ival AS val"}),
+            ConvergenceConfig::converging(
+                PlanBuilder(idGenerator)
+                    .stateSource("outer", schema)
+                    .project({"val >= 6 AS converged"})
+                    .planNode(),
+                100),
+            /*outputStateEntry=*/"outer")
+        .planNode();
+  }
+
   // Creates the task 'node' runs as, named after 'label'.  'options' defaults
-  // to the in-process coordinator hooks.
+  // to the in-process coordinator hooks, and 'executor', the query executor, to
+  // cpuExecutor_.
   exec::TaskPtr makeTask(
       const core::PlanNodePtr& node,
       exec::Task::ExecutionMode mode,
       const std::string& label,
-      const FixedPointOptions* options = nullptr) {
-    auto queryCtx = core::QueryCtx::create(cpuExecutor_.get());
+      const FixedPointOptions* options = nullptr,
+      folly::Executor* executor = nullptr) {
+    auto queryCtx = core::QueryCtx::create(
+        executor != nullptr ? executor : cpuExecutor_.get());
     return exec::Task::create(
         fmt::format("local://fixedpoint-{}-{}", label, queryCtx->queryId()),
         core::PlanFragment{node},
@@ -360,6 +457,58 @@ class FixedPointTest : public exec::test::HiveConnectorTestBase {
         options != nullptr ? options : &localOptions());
   }
 
+  // Wraps an executor and hands each function added to it, with the wrapped
+  // executor, to a callback, which decides how to run it.
+  class InterceptingExecutor : public folly::Executor {
+   public:
+    InterceptingExecutor(
+        folly::Executor* executor,
+        std::function<void(folly::Func, folly::Executor&)> onAdd)
+        : executor_(executor), onAdd_(std::move(onAdd)) {}
+
+    void add(folly::Func func) override {
+      onAdd_(std::move(func), *executor_);
+    }
+
+   private:
+    folly::Executor* const executor_;
+    const std::function<void(folly::Func, folly::Executor&)> onAdd_;
+  };
+
+  // Runs 'task' until it ends: drains it in serial mode, or starts it and waits
+  // for it in parallel mode.
+  static void runToEnd(exec::Task& task) {
+    if (task.executionMode() == exec::Task::ExecutionMode::kSerial) {
+      while (task.next() != nullptr) {
+      }
+    } else {
+      task.start(/*maxDrivers=*/1);
+      task.taskCompletionFuture().wait();
+    }
+  }
+
+  // One call of FixedPointOptions::onIterationStats.
+  struct IterationReport {
+    std::vector<FixedPointOptions::NestingStep> nesting;
+    FixedPointIterationExecutionStats stats;
+  };
+
+  using IterationReports = folly::Synchronized<std::vector<IterationReport>>;
+
+  // localOptions() with an onIterationStats hook that appends each call to
+  // 'reports'.  Shared, since the loop's task holds the hook.
+  static FixedPointOptions reportingOptions(
+      std::shared_ptr<IterationReports> reports) {
+    auto options = localOptions();
+    options.onIterationStats =
+        [reports = std::move(reports)](
+            const std::vector<FixedPointOptions::NestingStep>& nesting,
+            const FixedPointIterationExecutionStats& stats) {
+          reports->wlock()->push_back({.nesting = nesting, .stats = stats});
+        };
+    return options;
+  }
+
   // Starts a task running 'plan', a producer whose partitioned output a fixed
   // point's initial plan reads through an Exchange.
   exec::TaskPtr startUpstreamTask(
@@ -376,6 +525,13 @@ class FixedPointTest : public exec::test::HiveConnectorTestBase {
         exec::Task::ExecutionMode::kParallel);
     task->start(/*maxDrivers=*/1);
     return task;
+  }
+
+  // Starts an upstream task of one row, in a query of its own.
+  exec::TaskPtr startOneRowUpstream() {
+    return startUpstreamTask(
+        PlanBuilder().values({makeKeyValueRow(0, 0)}).partitionedOutput({}, 1),
+        core::QueryCtx::create(cpuExecutor_.get()));
   }
 
   // One worker's result: its shard rows and the number of iterations its loop
@@ -437,7 +593,10 @@ class FixedPointTest : public exec::test::HiveConnectorTestBase {
     auto verdictKey = [](const FixedPointOptions::LoopAddress& workerZero,
                          int32_t iteration) {
       return fmt::format(
-          "{}{}#{}", workerZero.worker, nestingSuffix(workerZero), iteration);
+          "{}{}#{}",
+          workerZero.worker,
+          nestingSuffix(workerZero.nesting),
+          iteration);
     };
     if (!options.publishVerdict) {
       options.publishVerdict =
@@ -454,7 +613,7 @@ class FixedPointTest : public exec::test::HiveConnectorTestBase {
           [verdicts, verdictKey](
               const FixedPointOptions::LoopAddress& workerZero,
               int32_t iteration,
-              folly::CancellationToken /*cancel*/) {
+              const folly::CancellationToken& /*cancel*/) {
             return (*verdicts->wlock())[verdictKey(workerZero, iteration)]
                 .getSemiFuture();
           };
@@ -1990,7 +2149,7 @@ TEST_F(FixedPointTest, verdictFailures) {
   options.awaitVerdict =
       [](const FixedPointOptions::LoopAddress& /*workerZero*/,
          int32_t /*iteration*/,
-         folly::CancellationToken /*cancel*/) {
+         const folly::CancellationToken& /*cancel*/) {
         return folly::makeSemiFuture<bool>(
             std::runtime_error("Worker 0 is unreachable"));
       };
@@ -2144,18 +2303,13 @@ TEST_F(FixedPointTest, kMeans) {
 
 // The same KMeans across two workers: the points are sharded, the centroids are
 // replicated, and each iteration reduces the per-slot statistics across workers
-// so that every worker installs the identical next centroid set.  The reduction
-// is an all-reduce assembled from existing nodes -- each worker replicates its
-// local statistics once per destination and shuffles them, so plan 1 sees every
+// so that every worker installs the next centroid set.  The reduction is an
+// all-reduce assembled from existing nodes -- each worker replicates its local
+// statistics once per destination and shuffles them, so plan 1 sees every
 // worker's contribution and aggregates them globally (see
-// allReduceOverReplicatedState for the mechanism on its own).
-//
-// Coordinates are scaled integers rather than doubles.  Integer addition is
-// associative, so the reduction is exact regardless of the order rows arrive
-// from the exchange; every worker therefore computes bit-identical centroids
-// and reaches the same convergence verdict on the same iteration.  With doubles
-// the reduction order would decide the last bits, and two workers could
-// disagree at the epsilon boundary -- which would break lockstep.
+// allReduceOverReplicatedState for the mechanism on its own).  Worker 0 decides
+// when to stop over its own centroids and alone emits them, so every worker
+// stops on the same iteration and the output holds each centroid once.
 TEST_F(FixedPointTest, kMeansTwoWorkers) {
   constexpr int32_t kNumWorkers{2};
   auto pointsType = ROW({"point_id", "x", "y"}, BIGINT());
@@ -2283,31 +2437,43 @@ TEST_F(FixedPointTest, kMeansTwoWorkers) {
                            "(gsy / gcnt - old_cy) * (gsy / gcnt - old_cy), 0) AS "
                            "movement"})
                       .planNode()},
-              ConvergenceConfig::converging(
-                  // Exact integer test: no centroid moved.
+              ConvergenceConfig::workerZeroVerdict(
+                  // No centroid moved.
                   PlanBuilder(idGenerator)
                       .stateSource("centroids", centroidsType)
                       .singleAggregation({}, {"max(movement)"})
                       .project({"a0 = 0 AS converged"})
                       .planNode(),
                   20),
-              /*outputStateEntry=*/"centroids")
+              /*outputStateEntry=*/"centroids",
+              /*outputOnWorkerZero=*/true)
           .planNode();
 
   // Neither worker can reach these alone: worker 0 holds no point near
   // (833, 833) and worker 1 none near (133, 133), so each centroid proves the
-  // cross-worker reduction ran.  Both workers emit the same three centroids
-  // after the same two iterations -- the replicated state stayed in lockstep.
+  // cross-worker reduction ran.
   std::vector<std::tuple<int64_t, int64_t, int64_t>> expected{
       {133, 133, 2},
-      {133, 133, 2},
       {833, 833, 2},
-      {833, 833, 2},
-      {10000, 10000, 2},
       {10000, 10000, 2},
   };
+  // FixedPointVerdicts holds only each loop's latest verdict.
+  auto verdicts = std::make_shared<FixedPointVerdicts>();
+  auto options = localOptions();
+  options.publishVerdict = [verdicts](
+                               const FixedPointOptions::LoopAddress& workerZero,
+                               int32_t iteration,
+                               bool converged) {
+    verdicts->publish(workerZero, iteration, converged);
+  };
+  options.awaitVerdict = [verdicts](
+                             const FixedPointOptions::LoopAddress& workerZero,
+                             int32_t iteration,
+                             const folly::CancellationToken& /*cancel*/) {
+    return verdicts->get(workerZero, iteration);
+  };
   EXPECT_THAT(
-      withIterations(runOnWorkers(plan, pointShards)),
+      withIterations(runOnWorkers(plan, pointShards, options)),
       testing::UnorderedElementsAreArray(expected));
 }
 
@@ -2393,20 +2559,8 @@ TEST_F(FixedPointTest, upstreamSplits) {
         PlanBuilder().values({part}).partitionedOutput({}, 1), queryCtx));
   }
 
-  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   core::PlanNodeId exchangeId;
-  auto plan = PlanBuilder(idGenerator)
-                  .fixedPoint(
-                      std::make_shared<VectorStateDeclaration>(
-                          "values",
-                          schema,
-                          PlanBuilder(idGenerator)
-                              .exchange(schema, "Presto")
-                              .capturePlanNodeId(exchangeId)
-                              .planNode()),
-                      PlanBuilder(idGenerator).stateSource("values", schema),
-                      ConvergenceConfig::withMaxIterations(1))
-                  .planNode();
+  auto plan = exchangeSeededNode(exchangeId);
 
   auto expected = makeRowVector(
       schema->names(),
@@ -3044,29 +3198,7 @@ TEST_F(FixedPointTest, stateHashJoinAcrossDrivers) {
 // so a loop nested there runs its own iterations on one driver too.
 TEST_F(FixedPointTest, nestedFixedPointRunsWithinItsPlansDrivers) {
   auto outerSchema = ROW({"key", "val"}, BIGINT());
-  auto innerSchema = ROW({"ikey", "ival"}, BIGINT());
   auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-
-  // Inner fixed point: counts ival up to 3, emitting {(0, 3)}.
-  auto innerSeed = makeKeyValueRow(0, 0, innerSchema->names());
-  core::PlanNodePtr innerFixedPoint =
-      PlanBuilder(idGenerator)
-          .fixedPoint(
-              std::make_shared<VectorStateDeclaration>(
-                  "inner",
-                  innerSchema,
-                  PlanBuilder(idGenerator).values({innerSeed}).planNode()),
-              PlanBuilder(idGenerator)
-                  .stateSource("inner", innerSchema)
-                  .project({"ikey", "ival + 1 AS ival"}),
-              ConvergenceConfig::converging(
-                  PlanBuilder(idGenerator)
-                      .stateSource("inner", innerSchema)
-                      .project({"ival >= 3 AS converged"})
-                      .planNode(),
-                  100),
-              /*outputStateEntry=*/"inner")
-          .planNode();
 
   // Outer fixed point: val grows by one per iteration, and the convergence
   // plan joins the inner loop's 3, so the loop stops once val reaches 3.
@@ -3087,7 +3219,7 @@ TEST_F(FixedPointTest, nestedFixedPointRunsWithinItsPlansDrivers) {
                       .hashJoin(
                           {"key"},
                           {"ikey"},
-                          innerFixedPoint,
+                          innerCountingNode(idGenerator),
                           "",
                           {"val", "ival"})
                       .project({"val + ival >= 6 AS converged"})
@@ -3193,8 +3325,7 @@ TEST_F(FixedPointTest, taskReachesTerminalStateWhenLoopFinishes) {
   {
     auto task = makeTask(
         countingNode(), exec::Task::ExecutionMode::kSerial, "terminal-serial");
-    while (task->next() != nullptr) {
-    }
+    runToEnd(*task);
     EXPECT_EQ(task->state(), exec::TaskState::kFinished);
     EXPECT_TRUE(task->taskCompletionFuture().isReady());
     EXPECT_EQ(task->error(), nullptr);
@@ -3204,8 +3335,7 @@ TEST_F(FixedPointTest, taskReachesTerminalStateWhenLoopFinishes) {
         countingNode(),
         exec::Task::ExecutionMode::kParallel,
         "terminal-parallel");
-    task->start(/*maxDrivers=*/1);
-    task->taskCompletionFuture().wait();
+    runToEnd(*task);
     EXPECT_EQ(task->state(), exec::TaskState::kFinished);
     EXPECT_EQ(task->error(), nullptr);
   }
@@ -3221,13 +3351,7 @@ TEST_F(FixedPointTest, reportsExecutionStats) {
         exec::Task::ExecutionMode::kParallel}) {
     SCOPED_TRACE(executionModeString(mode));
     auto task = makeTask(countingNode(), mode, "stats");
-    if (mode == exec::Task::ExecutionMode::kSerial) {
-      while (task->next() != nullptr) {
-      }
-    } else {
-      task->start(/*maxDrivers=*/1);
-      task->taskCompletionFuture().wait();
-    }
+    runToEnd(*task);
     ASSERT_EQ(task->error(), nullptr);
 
     auto stats = task->fixedPointExecutionStats();
@@ -3257,42 +3381,84 @@ TEST_F(FixedPointTest, reportsExecutionStats) {
       exec::Task::ExecutionMode::kSerial,
       "plain");
   EXPECT_FALSE(plainTask->fixedPointExecutionStats().has_value());
-  while (plainTask->next() != nullptr) {
-  }
+  runToEnd(*plainTask);
 }
 
 // The statistics stay readable after the loop fails, which is when a caller
-// needs them most.
+// needs them most: when an iteration's body or convergence check fails, or when
+// the loop does not converge.  onIterationStats has received the iterations
+// that completed, and not the one that failed.
 TEST_F(FixedPointTest, executionStatsSurviveFailure) {
-  auto node = countingNodeTo(/*target=*/100, /*maxIterations=*/2);
-  auto task = makeTask(node, exec::Task::ExecutionMode::kParallel, "failed");
-  task->start(/*maxDrivers=*/1);
-  task->taskCompletionFuture().wait();
-  ASSERT_EQ(task->state(), exec::TaskState::kFailed);
+  struct TestCase {
+    std::string label;
+    core::PlanNodePtr node;
+    std::string error;
+    // Iterations the statistics record, one whose convergence check failed
+    // included.
+    size_t numRecordedIterations;
+  };
+  const std::vector<TestCase> testCases{
+      {
+          .label = "maxIterations",
+          .node = countingNodeTo(/*target=*/100, /*maxIterations=*/2),
+          .error = "Fixed point did not converge within 2 iterations",
+          .numRecordedIterations = 2,
+      },
+      // The body of iteration 2 divides by zero.
+      {
+          .label = "body",
+          .node = countingNodeWith(
+              "val + 1 + 0 / (2 - val)", "val >= 100", /*maxIterations=*/100),
+          .error = "division by zero",
+          .numRecordedIterations = 2,
+      },
+      // The convergence check of iteration 2 divides by zero.
+      {
+          .label = "convergence",
+          .node = countingNodeWith(
+              "val + 1", "val / (3 - val) >= 100", /*maxIterations=*/100),
+          .error = "division by zero",
+          .numRecordedIterations = 3,
+      },
+  };
+  for (const auto& testCase : testCases) {
+    SCOPED_TRACE(testCase.label);
+    auto reports = std::make_shared<IterationReports>();
+    const auto options = reportingOptions(reports);
+    auto task = makeTask(
+        testCase.node,
+        exec::Task::ExecutionMode::kParallel,
+        fmt::format("failed-{}", testCase.label),
+        &options);
+    runToEnd(*task);
+    ASSERT_EQ(task->state(), exec::TaskState::kFailed);
+    VELOX_ASSERT_THROW(std::rethrow_exception(task->error()), testCase.error);
 
-  auto stats = task->fixedPointExecutionStats();
-  ASSERT_TRUE(stats.has_value());
-  ASSERT_THAT(stats->iterations, testing::SizeIs(2));
-  EXPECT_FALSE(stats->iterations[0].converged);
-  EXPECT_FALSE(stats->iterations[1].converged);
+    auto stats = task->fixedPointExecutionStats();
+    ASSERT_TRUE(stats.has_value());
+    ASSERT_THAT(
+        stats->iterations, testing::SizeIs(testCase.numRecordedIterations));
+    for (const auto& iteration : stats->iterations) {
+      EXPECT_FALSE(iteration.converged);
+    }
+    std::vector<int32_t> reported;
+    for (const auto& report : *reports->rlock()) {
+      reported.push_back(report.stats.iteration);
+    }
+    EXPECT_THAT(reported, testing::ElementsAre(0, 1));
+  }
 }
 
 // Only the first three iterations and the latest one keep their sub-tasks'
-// TaskStats, which bounds memory for long-running loops.
+// TaskStats, which bounds memory for long-running loops.  onIterationStats
+// receives every iteration with its TaskStats, in order.  Here the hook also
+// reads the task's statistics, whose latest iteration is the one reported, and
+// then throws, which the loop logs and ignores.
 TEST_F(FixedPointTest, executionStatsBoundDetailedIterations) {
-  auto node = countingNodeTo(/*target=*/6, /*maxIterations=*/10);
-  auto task = makeTask(node, exec::Task::ExecutionMode::kSerial, "bounded");
-  while (task->next() != nullptr) {
-  }
-
-  auto stats = task->fixedPointExecutionStats();
-  ASSERT_TRUE(stats.has_value());
-  std::vector<bool> detailed;
-  for (const auto& iteration : stats->iterations) {
-    detailed.push_back(
-        !iteration.body.plans[0].taskStats.pipelineStats.empty() &&
-        !iteration.convergence->plans[0].taskStats.pipelineStats.empty());
-  }
+  auto detailed = [](const FixedPointIterationExecutionStats& iteration) {
+    return !iteration.body.plans[0].taskStats.pipelineStats.empty() &&
+        !iteration.convergence->plans[0].taskStats.pipelineStats.empty();
+  };
   const std::vector<bool> expected{
       true,
       true,
@@ -3301,7 +3467,53 @@ TEST_F(FixedPointTest, executionStatsBoundDetailedIterations) {
       false,
       true,
   };
-  EXPECT_EQ(detailed, expected);
+  for (auto mode :
+       {exec::Task::ExecutionMode::kSerial,
+        exec::Task::ExecutionMode::kParallel}) {
+    SCOPED_TRACE(executionModeString(mode));
+    auto reports = std::make_shared<IterationReports>();
+    auto options = reportingOptions(reports);
+    const exec::Task* reportingTask = nullptr;
+    std::vector<int32_t> latestInTaskStats;
+    options.onIterationStats =
+        [record = options.onIterationStats, &reportingTask, &latestInTaskStats](
+            const std::vector<FixedPointOptions::NestingStep>& nesting,
+            const FixedPointIterationExecutionStats& stats) {
+          record(nesting, stats);
+          latestInTaskStats.push_back(reportingTask->fixedPointExecutionStats()
+                                          ->iterations.back()
+                                          .iteration);
+          throw std::runtime_error("Injected statistics failure");
+        };
+    auto task = makeTask(
+        countingNodeTo(/*target=*/6, /*maxIterations=*/10),
+        mode,
+        "bounded",
+        &options);
+    reportingTask = task.get();
+    runToEnd(*task);
+    ASSERT_EQ(task->error(), nullptr);
+
+    auto stats = task->fixedPointExecutionStats();
+    ASSERT_TRUE(stats.has_value());
+    std::vector<bool> retained;
+    for (const auto& iteration : stats->iterations) {
+      retained.push_back(detailed(iteration));
+    }
+    EXPECT_EQ(retained, expected);
+
+    const auto lockedReports = reports->rlock();
+    ASSERT_EQ(lockedReports->size(), stats->iterations.size());
+    ASSERT_EQ(latestInTaskStats.size(), stats->iterations.size());
+    for (size_t i = 0; i < lockedReports->size(); ++i) {
+      const auto& report = (*lockedReports)[i];
+      EXPECT_THAT(report.nesting, testing::IsEmpty());
+      EXPECT_EQ(report.stats.iteration, i);
+      EXPECT_EQ(report.stats.converged, stats->iterations[i].converged);
+      EXPECT_TRUE(detailed(report.stats));
+      EXPECT_EQ(latestInTaskStats[i], i);
+    }
+  }
 }
 
 // A chain records each plan's driver limit, which the sub-task's own TaskStats
@@ -3358,6 +3570,48 @@ TEST_F(FixedPointTest, executionStatsRecordDrivers) {
   EXPECT_EQ(plans[1].taskStats.numTotalDrivers, 2);
   // The Project above the fixed point runs in the task's own pipeline.
   EXPECT_EQ(task->taskStats().numTotalDrivers, 5);
+}
+
+// A nested loop inherits onIterationStats and reports its own iterations, with
+// its nesting, before the outer iteration that ran it.
+TEST_F(FixedPointTest, onIterationStatsFromNestedLoop) {
+  const auto plan = nestedCountingNode();
+  const auto& innerId = core::PlanNode::findFirstNode<FixedPointNode>(
+                            plan->as<FixedPointNode>()->plans().front().get())
+                            ->id();
+  for (auto mode :
+       {exec::Task::ExecutionMode::kSerial,
+        exec::Task::ExecutionMode::kParallel}) {
+    SCOPED_TRACE(executionModeString(mode));
+    auto reports = std::make_shared<IterationReports>();
+    const auto options = reportingOptions(reports);
+    auto task = makeTask(plan, mode, "report-nested", &options);
+    runToEnd(*task);
+    ASSERT_EQ(task->error(), nullptr);
+
+    // One "{loop}{nesting}#{iteration}" per call, marked when it converged.
+    std::vector<std::string> calls;
+    for (const auto& report : *reports->rlock()) {
+      calls.push_back(
+          fmt::format(
+              "{}{}#{}{}",
+              report.nesting.empty() ? "outer" : "inner",
+              nestingSuffix(report.nesting),
+              report.stats.iteration,
+              report.stats.converged ? " converged" : ""));
+    }
+    EXPECT_THAT(
+        calls,
+        testing::ElementsAre(
+            fmt::format("inner/{}.0#0", innerId),
+            fmt::format("inner/{}.0#1", innerId),
+            fmt::format("inner/{}.0#2 converged", innerId),
+            "outer#0",
+            fmt::format("inner/{}.1#0", innerId),
+            fmt::format("inner/{}.1#1", innerId),
+            fmt::format("inner/{}.1#2 converged", innerId),
+            "outer#1 converged"));
+  }
 }
 
 // A parallel fixed point needs an orchestration executor separate from the
@@ -3462,6 +3716,32 @@ void waitFor(folly::Baton<>& baton) {
   }
 }
 
+// Aborts 'task', which does nothing if it has already ended, and expects its
+// loop to end without succeeding and the task to be deleted once released.
+// With 'numTasksAtAbort', the number of tasks created when the task ended, also
+// expects the loop to have created no sub-task since.
+void abortAndExpectReleased(
+    exec::TaskPtr task,
+    std::optional<size_t> numTasksAtAbort = std::nullopt) {
+  task->requestAbort().wait();
+  EXPECT_TRUE(
+      task->fixedPoint()->finishedFuture().wait(std::chrono::seconds(10)));
+  EXPECT_FALSE(task->fixedPoint()->succeeded());
+  if (numTasksAtAbort.has_value()) {
+    EXPECT_EQ(exec::Task::numCreatedTasks(), *numTasksAtAbort);
+  }
+  auto deleted = task->taskDeletionFuture();
+  task.reset();
+  EXPECT_TRUE(std::move(deleted).wait(std::chrono::seconds(10)));
+}
+
+// Expects 'producer' to finish, which it does only once every consumer has
+// taken or released its output.
+void expectProducerFinished(exec::Task& producer) {
+  EXPECT_TRUE(producer.taskCompletionFuture().wait(std::chrono::seconds(10)));
+  EXPECT_EQ(producer.state(), exec::TaskState::kFinished);
+}
+
 // Holds the calling driver on its thread until 'owner' stops running or a
 // second passes, and records whether 'owner' stopped first.
 void holdUntilStopped(exec::Task& owner, HeldDriver& held) {
@@ -3475,23 +3755,12 @@ void holdUntilStopped(exec::Task& owner, HeldDriver& held) {
 // from it, so the task starts the loop after its drivers. The loop schedules
 // itself on the orchestration executor, which counts what it runs.
 DEBUG_ONLY_TEST_F(FixedPointTest, loopStartsAfterDrivers) {
-  class CountingExecutor : public folly::Executor {
-   public:
-    explicit CountingExecutor(folly::Executor* executor)
-        : executor_(executor) {}
-
-    void add(folly::Func func) override {
-      ++count;
-      executor_->add(std::move(func));
-    }
-
-    std::atomic_int32_t count{0};
-
-   private:
-    folly::Executor* const executor_;
-  };
-
-  CountingExecutor executor(orchestrationExecutor());
+  std::atomic_int32_t count{0};
+  InterceptingExecutor executor(
+      orchestrationExecutor(), [&](folly::Func func, folly::Executor& wrapped) {
+        ++count;
+        wrapped.add(std::move(func));
+      });
   FixedPointOptions options = localOptions();
   options.orchestrationExecutor = &executor;
 
@@ -3500,13 +3769,72 @@ DEBUG_ONLY_TEST_F(FixedPointTest, loopStartsAfterDrivers) {
       "facebook::velox::exec::Task::createAndStartDrivers",
       std::function<void(exec::Task*)>([&](exec::Task* task) {
         if (task->fixedPoint() != nullptr) {
-          countAtDrivers = executor.count.load();
+          countAtDrivers = count.load();
         }
       }));
   AssertQueryBuilder(countingNode())
       .fixedPointOptions(&options)
       .copyResults(pool());
   EXPECT_EQ(countAtDrivers, 0);
+}
+
+// A task that ends while its start runs abandons the loop, which resolves its
+// finishedFuture().  A driver of the FixedPointNode leaf can be waiting on that
+// future, holding the task that owns the loop.  The task ends when it is
+// aborted while it starts its drivers, and fails when an enqueue throws after a
+// driver blocked on the loop.
+DEBUG_ONLY_TEST_F(FixedPointTest, unstartedLoopIsAbandoned) {
+  {
+    SCOPED_TRACE("Aborted during start");
+    SCOPED_TESTVALUE_SET(
+        "facebook::velox::exec::Task::createAndStartDrivers",
+        std::function<void(exec::Task*)>(
+            [](exec::Task* startingTask) { startingTask->requestAbort(); }));
+    auto task = makeTask(
+        countingNode(),
+        exec::Task::ExecutionMode::kParallel,
+        "abort-during-start");
+    task->start(/*maxDrivers=*/1);
+    EXPECT_TRUE(task->fixedPoint()->finishedFuture().isReady());
+    abortAndExpectReleased(std::move(task));
+  }
+
+  {
+    SCOPED_TRACE("Enqueue failed after a driver blocked on the loop");
+    // Runs the first driver and fails to enqueue the second.
+    std::atomic_int32_t numAdded{0};
+    folly::Baton<> firstRan;
+    InterceptingExecutor executor(
+        cpuExecutor_.get(), [&](folly::Func func, folly::Executor& wrapped) {
+          const int32_t index = numAdded++;
+          if (index == 1) {
+            VELOX_FAIL("Injected enqueue failure");
+          }
+          if (index == 0) {
+            wrapped.add([&firstRan, run = std::move(func)]() mutable {
+              run();
+              firstRan.post();
+            });
+            return;
+          }
+          wrapped.add(std::move(func));
+        });
+    // Fails the task only once the first driver has blocked on the loop.
+    SCOPED_TESTVALUE_SET(
+        "facebook::velox::exec::Task::setError",
+        std::function<void(exec::Task*)>(
+            [&](exec::Task*) { waitFor(firstRan); }));
+    auto task = makeTask(
+        countingNode(),
+        exec::Task::ExecutionMode::kParallel,
+        "failed-enqueue",
+        /*options=*/nullptr,
+        &executor);
+    VELOX_ASSERT_THROW(
+        task->start(/*maxDrivers=*/2), "Injected enqueue failure");
+    EXPECT_TRUE(task->fixedPoint()->finishedFuture().isReady());
+    abortAndExpectReleased(std::move(task));
+  }
 }
 
 // A failed sub-task resolves its completion future while its other drivers can
@@ -3540,7 +3868,7 @@ DEBUG_ONLY_TEST_F(FixedPointTest, failedInitialPlanStopsDriversFirst) {
   SCOPED_TESTVALUE_SET(
       "facebook::velox::exec::Driver::runInternal::getOutput",
       std::function<void(Operator*)>([task, held](Operator* op) {
-        if (op->operatorType() != "Values") {
+        if (op->operatorType() != OperatorType::kValues) {
           return;
         }
         if (op->operatorCtx()->driverCtx()->driverId == 0) {
@@ -3614,12 +3942,12 @@ DEBUG_ONLY_TEST_F(FixedPointTest, failedBodyPlanStopsChainFirst) {
       "facebook::velox::exec::Driver::runInternal::getOutput",
       std::function<void(Operator*)>(
           [task, held, numProducerBatches](Operator* op) {
-            if (op->operatorType() == "FixedPointStateSource" &&
+            if (op->operatorType() == OperatorType::kFixedPointStateSource &&
                 ++*numProducerBatches == 2) {
               waitFor(held->onThread);
               VELOX_FAIL("Injected producer failure");
             }
-            if (op->operatorType() == "Exchange") {
+            if (op->operatorType() == OperatorType::kExchange) {
               holdUntilStopped(*task, *held);
               VELOX_FAIL("Injected failure of the held consumer");
             }
@@ -3634,9 +3962,134 @@ DEBUG_ONLY_TEST_F(FixedPointTest, failedBodyPlanStopsChainFirst) {
       std::rethrow_exception(task->error()), "Injected producer failure");
 }
 
-// Aborting a task stops its loop wherever it waits, and the loop releases the
-// task: while it waits for its workers, and while it waits on an iteration's
-// sub-tasks.
+// A sub-task can outlive its loop's task, so the pool of the loop's state must
+// outlive the sub-task.  The body reads two batches through a StateSource, a
+// local exchange and a Limit of one row.  The StateSource is held on its thread
+// before its second read, and the Limit takes its row only then.  A sub-task
+// completes once its output pipeline finishes, so the sub-task, its loop and
+// the loop's task finish while the StateSource still holds the batches.  The
+// StateSource frees them when released, after the loop's task is deleted.
+DEBUG_ONLY_TEST_F(FixedPointTest, stateOutlivesSubTask) {
+  auto schema = ROW({"key", "val"}, BIGINT());
+  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto node = PlanBuilder(idGenerator)
+                  .fixedPoint(
+                      std::make_shared<VectorStateDeclaration>(
+                          "values",
+                          schema,
+                          PlanBuilder(idGenerator)
+                              .values(makeOneRowBatches(2))
+                              .planNode()),
+                      PlanBuilder(idGenerator)
+                          .stateSource("values", schema)
+                          .localGather()
+                          .limit(0, 1, false),
+                      ConvergenceConfig::withMaxIterations(1),
+                      /*outputStateEntry=*/"values")
+                  .planNode();
+
+  struct StateReader {
+    folly::Baton<> held;
+    folly::Baton<> released;
+    std::atomic_int32_t numReads{0};
+  };
+  // Shared with the injection callbacks, which can outlive this test.
+  auto reader = std::make_shared<StateReader>();
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Driver::runInternal::getOutput",
+      std::function<void(Operator*)>([reader](Operator* op) {
+        // The loop's task reads its output through a StateSource too.
+        if (op->operatorType() == OperatorType::kFixedPointStateSource &&
+            op->operatorCtx()->task()->fixedPoint() == nullptr &&
+            ++reader->numReads == 2) {
+          reader->held.post();
+          reader->released.try_wait_for(std::chrono::seconds(10));
+        }
+      }));
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Driver::runInternal::addInput",
+      std::function<void(Operator*)>([reader](Operator* op) {
+        if (op->operatorType() == OperatorType::kLimit) {
+          waitFor(reader->held);
+        }
+      }));
+
+  // Without this query context, the cursor runs the query on an executor of
+  // its own and joins it before returning, which releases the StateSource.
+  auto task = AssertQueryBuilder(node)
+                  .queryCtx(core::QueryCtx::create(cpuExecutor_.get()))
+                  .maxDrivers(1)
+                  .fixedPointOptions(&localOptions())
+                  .assertResults(makeKeyValueRow(0, 0));
+  auto deleted = task->taskDeletionFuture();
+  task.reset();
+  const bool isDeleted = std::move(deleted).wait(std::chrono::seconds(10));
+  reader->released.post();
+  EXPECT_TRUE(isDeleted);
+}
+
+// Drivers of the sub-tasks allocate from pools of the loop's task: the state's
+// pool and each step's scratch pool.  Under a query pool with a reclaimer, a
+// driver that waits for memory arbitration on one of them is suspended, so a
+// reclaim of the query, which waits for the drivers of each task to pause, does
+// not wait for it.  Each sub-task's StateSource enters arbitration on every
+// pool of the loop's task that exists while it reads.
+DEBUG_ONLY_TEST_F(FixedPointTest, subTaskDriverSuspendsInArbitration) {
+  auto queryCtx =
+      core::QueryCtx::Builder()
+          .executor(cpuExecutor_.get())
+          .pool(
+              memory::memoryManager()->addRootPool(
+                  "", memory::kMaxMemory, exec::MemoryReclaimer::create()))
+          .build();
+
+  // The pools entered, by name without the step: "fixedpoint.body.0" is
+  // "fixedpoint.body".
+  folly::Synchronized<std::set<std::string>> loopPools;
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Driver::runInternal::getOutput",
+      std::function<void(Operator*)>([&](Operator* op) {
+        const auto& task = op->operatorCtx()->task();
+        // The loop's task reads its output through a StateSource too.
+        if (op->operatorType() != OperatorType::kFixedPointStateSource ||
+            task->fixedPoint() != nullptr) {
+          return;
+        }
+        const auto& driverState =
+            driverThreadContext()->driverCtx()->driver->state();
+        constexpr std::string_view kPrefix{"fixedpoint."};
+        task->queryCtx()->pool()->visitChildren(
+            [&](memory::MemoryPool* taskPool) {
+              taskPool->visitChildren([&](memory::MemoryPool* pool) {
+                const auto& name = pool->name();
+                if (name.starts_with(kPrefix)) {
+                  memory::MemoryPoolArbitrationSection arbitration(pool);
+                  EXPECT_TRUE(driverState.suspended()) << name;
+                  loopPools.wlock()->insert(
+                      name.substr(0, name.find('.', kPrefix.size())));
+                }
+                return true;
+              });
+              return true;
+            });
+      }));
+
+  AssertQueryBuilder(countingNode())
+      .queryCtx(queryCtx)
+      .fixedPointOptions(&localOptions())
+      .assertResults(makeKeyValueRow(0, 3));
+  EXPECT_THAT(
+      *loopPools.rlock(),
+      testing::ElementsAre(
+          "fixedpoint.body", "fixedpoint.convergence", "fixedpoint.state"));
+}
+
+// Aborting a task stops its loop, or abandons a loop that has not started, and
+// the loop releases the task: before start(), before a serial next(), while
+// start() schedules the loop, while the loop waits for its workers, after an
+// iteration's verdict, and while it waits on an iteration's sub-tasks.  Where
+// the abort comes between two steps, the loop creates no more sub-tasks, and
+// it releases the producers of the remote splits it holds or receives later.
 TEST_F(FixedPointTest, abortReleasesTask) {
   auto schema = ROW({"key", "val"}, BIGINT());
   auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
@@ -3658,20 +4111,112 @@ TEST_F(FixedPointTest, abortReleasesTask) {
               /*outputStateEntry=*/"values")
           .planNode();
 
-  auto abortAndExpectReleased = [](exec::TaskPtr task) {
-    std::weak_ptr<exec::Task> released = task;
-    task->requestAbort().wait();
-    task.reset();
-    const auto deadline =
-        std::chrono::steady_clock::now() + std::chrono::seconds(10);
-    while (!released.expired() && std::chrono::steady_clock::now() < deadline) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    }
-    ASSERT_TRUE(released.expired());
-  };
+  core::PlanNodeId exchangeId;
+  auto exchangeNode = exchangeSeededNode(exchangeId);
 
-  // The FixedPointSplit never arrives.
   {
+    SCOPED_TRACE("Before start");
+    auto heldUpstream = startOneRowUpstream();
+    auto lateUpstream = startOneRowUpstream();
+    auto task = makeTask(
+        exchangeNode,
+        exec::Task::ExecutionMode::kParallel,
+        "abort-before-start");
+    task->addSplit(exchangeId, remoteSplit(heldUpstream));
+    task->requestAbort().wait();
+    const auto numTasksAtAbort = exec::Task::numCreatedTasks();
+    task->addSplit(exchangeId, remoteSplit(lateUpstream));
+    // The loop is abandoned, so start() does not run it.
+    task->start(/*maxDrivers=*/1);
+    abortAndExpectReleased(std::move(task), numTasksAtAbort);
+    expectProducerFinished(*heldUpstream);
+    expectProducerFinished(*lateUpstream);
+  }
+
+  {
+    SCOPED_TRACE("Serial, before next()");
+    auto task = makeTask(
+        countingNode(),
+        exec::Task::ExecutionMode::kSerial,
+        "abort-before-next");
+    task->requestAbort().wait();
+    VELOX_ASSERT_THROW(
+        task->next(), "The fixed point's task ended before the loop ran");
+    abortAndExpectReleased(std::move(task));
+  }
+
+  {
+    SCOPED_TRACE("While start() schedules the loop");
+    auto upstream = startOneRowUpstream();
+    // Aborts 'abortedTask' when the loop schedules its run.
+    std::atomic<exec::Task*> abortedTask{nullptr};
+    std::atomic_size_t numTasksAtAbort{0};
+    InterceptingExecutor executor(
+        orchestrationExecutor(),
+        [&](folly::Func func, folly::Executor& wrapped) {
+          if (auto* task = abortedTask.exchange(nullptr)) {
+            task->requestAbort().wait();
+            numTasksAtAbort = exec::Task::numCreatedTasks();
+          }
+          wrapped.add(std::move(func));
+        });
+    FixedPointOptions options = localOptions();
+    options.orchestrationExecutor = &executor;
+    auto task = makeTask(
+        exchangeNode,
+        exec::Task::ExecutionMode::kParallel,
+        "abort-while-starting",
+        &options);
+    task->addSplit(exchangeId, remoteSplit(upstream));
+    abortedTask = task.get();
+    task->start(/*maxDrivers=*/1);
+    EXPECT_EQ(task->state(), exec::TaskState::kAborted);
+    abortAndExpectReleased(std::move(task), numTasksAtAbort.load());
+    expectProducerFinished(*upstream);
+  }
+
+  {
+    SCOPED_TRACE("After a verdict");
+    auto verdictNode =
+        PlanBuilder(idGenerator)
+            .fixedPoint(
+                core::VectorState("values", schema)
+                    .initial(PlanBuilder(idGenerator)
+                                 .values({makeKeyValueRow(0, 0)})
+                                 .planNode()),
+                PlanBuilder(idGenerator).stateSource("values", schema),
+                sumVerdict(idGenerator, schema, "count(*)", "total < 0"))
+            .planNode();
+    // Aborts the task from the loop's thread once worker 0 has computed the
+    // first verdict, which runs another iteration.
+    exec::Task* owner{nullptr};
+    std::atomic_size_t numTasksAtAbort{0};
+    auto options = localOptions();
+    options.publishVerdict =
+        [&](const FixedPointOptions::LoopAddress& /*workerZero*/,
+            int32_t /*iteration*/,
+            bool /*converged*/) {
+          numTasksAtAbort = exec::Task::numCreatedTasks();
+          owner->requestAbort();
+        };
+    options.awaitVerdict = alwaysTrueAwaitVerdict();
+    auto task = makeTask(
+        verdictNode,
+        exec::Task::ExecutionMode::kParallel,
+        "abort-after-verdict",
+        &options);
+    owner = task.get();
+    task->addSplit(verdictNode->id(), workersSplit({task->taskId()}));
+    task->noMoreSplits(verdictNode->id());
+    task->start(/*maxDrivers=*/1);
+    // The count is taken on the loop's thread.
+    EXPECT_TRUE(
+        task->fixedPoint()->finishedFuture().wait(std::chrono::seconds(10)));
+    abortAndExpectReleased(std::move(task), numTasksAtAbort.load());
+  }
+
+  {
+    SCOPED_TRACE("The FixedPointSplit never arrives");
     auto task =
         makeTask(node, exec::Task::ExecutionMode::kParallel, "no-peers");
     task->start(/*maxDrivers=*/1);
@@ -3679,8 +4224,9 @@ TEST_F(FixedPointTest, abortReleasesTask) {
     abortAndExpectReleased(std::move(task));
   }
 
-  // The second peer never starts, so the iteration's sub-tasks wait for it.
   {
+    SCOPED_TRACE("The second peer never starts");
+    // The iteration's sub-tasks wait for the missing peer.
     auto task =
         makeTask(node, exec::Task::ExecutionMode::kParallel, "missing-peer");
     task->start(/*maxDrivers=*/1);
@@ -3689,6 +4235,140 @@ TEST_F(FixedPointTest, abortReleasesTask) {
     waitForInitialization(*task);
     abortAndExpectReleased(std::move(task));
   }
+}
+
+// A loop that fails releases the producers of the remote splits it still
+// holds: here that of the initial plan after the one that failed.
+TEST_F(FixedPointTest, failedLoopReleasesProducer) {
+  auto schema = ROW({"key", "val"}, BIGINT());
+  auto upstream = startOneRowUpstream();
+
+  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  core::PlanNodeId exchangeId;
+  auto node = PlanBuilder(idGenerator)
+                  .fixedPoint(
+                      {std::make_shared<VectorStateDeclaration>(
+                           "failed",
+                           schema,
+                           PlanBuilder(idGenerator)
+                               .values({makeKeyValueRow(0, 0)})
+                               .project({"key", "val / 0 AS val"})
+                               .planNode()),
+                       std::make_shared<VectorStateDeclaration>(
+                           "values",
+                           schema,
+                           PlanBuilder(idGenerator)
+                               .exchange(schema, "Presto")
+                               .capturePlanNodeId(exchangeId)
+                               .planNode())},
+                      {PlanBuilder(idGenerator)
+                           .stateSource("values", schema)
+                           .planNode()},
+                      ConvergenceConfig::withMaxIterations(1),
+                      /*outputStateEntry=*/"values")
+                  .planNode();
+
+  auto task = makeTask(
+      node, exec::Task::ExecutionMode::kParallel, "failed-with-producer");
+  task->addSplit(exchangeId, remoteSplit(upstream));
+  task->noMoreSplits(exchangeId);
+  task->start(/*maxDrivers=*/1);
+  EXPECT_TRUE(
+      task->fixedPoint()->finishedFuture().wait(std::chrono::seconds(10)));
+  EXPECT_FALSE(task->fixedPoint()->succeeded());
+  expectProducerFinished(*upstream);
+}
+
+// A remote split whose producer the loop fails to release is logged and
+// skipped, and the loop releases the producers of its other splits.  Here the
+// release fails for a "bad://" task id, for which the test's exchange source
+// factory throws.  Each failing split comes before a good one: one the loop
+// holds when its task is aborted, and one that arrives later.
+TEST_F(FixedPointTest, failedReleaseSkipsOnlyThatSplit) {
+  auto heldUpstream = startOneRowUpstream();
+  auto lateUpstream = startOneRowUpstream();
+
+  core::PlanNodeId exchangeId;
+  auto node = exchangeSeededNode(exchangeId);
+
+  auto task =
+      makeTask(node, exec::Task::ExecutionMode::kParallel, "failed-release");
+  task->addSplit(exchangeId, remoteSplit("bad://held"));
+  task->addSplit(exchangeId, remoteSplit(heldUpstream));
+  EXPECT_NO_THROW(task->requestAbort().wait());
+  EXPECT_NO_THROW(task->addSplit(exchangeId, remoteSplit("bad://late")));
+  task->addSplit(exchangeId, remoteSplit(lateUpstream));
+  abortAndExpectReleased(std::move(task));
+  expectProducerFinished(*heldUpstream);
+  expectProducerFinished(*lateUpstream);
+}
+
+// The loop releases a remote split that arrives while it runs, after the
+// sub-task that read the split's Exchange is deleted.  The initial plan's
+// Limit ends that sub-task after one row, while its Exchange still takes
+// splits.  The late split is added on the loop's thread as the loop names the
+// body's sub-task, once the initial plan's sub-task is deleted.
+DEBUG_ONLY_TEST_F(FixedPointTest, splitForEndedConsumerReleasesProducer) {
+  auto schema = ROW({"key", "val"}, BIGINT());
+  auto heldUpstream = startOneRowUpstream();
+  auto lateUpstream = startOneRowUpstream();
+
+  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  core::PlanNodeId exchangeId;
+  auto node = PlanBuilder(idGenerator)
+                  .fixedPoint(
+                      std::make_shared<VectorStateDeclaration>(
+                          "values",
+                          schema,
+                          PlanBuilder(idGenerator)
+                              .exchange(schema, "Presto")
+                              .capturePlanNodeId(exchangeId)
+                              .limit(0, 1, false)
+                              .planNode()),
+                      PlanBuilder(idGenerator).stateSource("values", schema),
+                      ConvergenceConfig::withMaxIterations(1))
+                  .planNode();
+
+  struct InitialSubTask {
+    folly::Synchronized<std::string> taskId;
+    folly::Baton<> deleted;
+  };
+  // Shared with the injection callback, which can outlive this test.
+  auto initial = std::make_shared<InitialSubTask>();
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Task::~Task",
+      std::function<void(exec::Task*)>([initial](exec::Task* task) {
+        if (task->taskId() == *initial->taskId.rlock()) {
+          initial->deleted.post();
+        }
+      }));
+
+  exec::Task* owner{nullptr};
+  auto options = localOptions();
+  // The loop names the initial plan's sub-task, then the body's.
+  options.subTaskId = [&](const std::string& workerTaskId, int64_t counter) {
+    auto taskId = localOptions().subTaskId(workerTaskId, counter);
+    if (counter == 0) {
+      *initial->taskId.wlock() = taskId;
+    } else if (counter == 1) {
+      EXPECT_TRUE(initial->deleted.try_wait_for(std::chrono::seconds(10)));
+      owner->addSplit(exchangeId, remoteSplit(lateUpstream));
+    }
+    return taskId;
+  };
+  auto task = makeTask(
+      node,
+      exec::Task::ExecutionMode::kParallel,
+      "split-for-ended-consumer",
+      &options);
+  owner = task.get();
+  task->addSplit(exchangeId, remoteSplit(heldUpstream));
+  task->start(/*maxDrivers=*/1);
+  EXPECT_TRUE(
+      task->fixedPoint()->finishedFuture().wait(std::chrono::seconds(10)));
+  EXPECT_TRUE(task->fixedPoint()->succeeded());
+  expectProducerFinished(*heldUpstream);
+  expectProducerFinished(*lateUpstream);
 }
 
 // The application names a loop's workers with exactly one FixedPointSplit,
@@ -4224,61 +4904,7 @@ TEST_F(FixedPointTest, initialPlanSplitsComplete) {
 // the nested FixedPointNode sits on a non-primary branch -- here the build side
 // of the outer body's join.
 TEST_F(FixedPointTest, nestedFixedPoint) {
-  auto outerSchema = ROW({"key", "val"}, BIGINT());
-  auto innerSchema = ROW({"ikey", "ival"}, BIGINT());
-  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-
-  // Inner fixed point: counts ival up to 3, emitting {(0, 3)}.
-  auto innerSeed = makeKeyValueRow(0, 0, innerSchema->names());
-
-  core::PlanNodePtr innerFixedPoint =
-      PlanBuilder(idGenerator)
-          .fixedPoint(
-              std::make_shared<VectorStateDeclaration>(
-                  "inner",
-                  innerSchema,
-                  PlanBuilder(idGenerator).values({innerSeed}).planNode()),
-              PlanBuilder(idGenerator)
-                  .stateSource("inner", innerSchema)
-                  .project({"ikey", "ival + 1 AS ival"}),
-              ConvergenceConfig::converging(
-                  PlanBuilder(idGenerator)
-                      .stateSource("inner", innerSchema)
-                      .project({"ival >= 3 AS converged"})
-                      .planNode(),
-                  100),
-              /*outputStateEntry=*/"inner")
-          .planNode();
-
-  // Outer fixed point: each iteration adds the inner loop's result to val,
-  // reaching 3 then 6.
-  auto outerSeed = makeKeyValueRow(0, 0);
-
-  expectBothModes(
-      PlanBuilder(idGenerator)
-          .fixedPoint(
-              std::make_shared<VectorStateDeclaration>(
-                  "outer",
-                  outerSchema,
-                  PlanBuilder(idGenerator).values({outerSeed}).planNode()),
-              PlanBuilder(idGenerator)
-                  .stateSource("outer", outerSchema)
-                  .hashJoin(
-                      {"key"},
-                      {"ikey"},
-                      innerFixedPoint,
-                      "",
-                      {"key", "val", "ival"})
-                  .project({"key", "val + ival AS val"}),
-              ConvergenceConfig::converging(
-                  PlanBuilder(idGenerator)
-                      .stateSource("outer", outerSchema)
-                      .project({"val >= 6 AS converged"})
-                      .planNode(),
-                  100),
-              /*outputStateEntry=*/"outer")
-          .planNode(),
-      {{0, 6}});
+  expectBothModes(nestedCountingNode(), {{0, 6}});
 }
 
 // Nesting where the inner loop shuffles but the outer does not.  Each outer

@@ -154,6 +154,7 @@ set(
   VectorWindowPartitionTest.cpp
   FileExchangeTest.cpp
   CursorTest.cpp
+  SplitLifecycleTest.cpp
 )
 
 set(

@@ -29,7 +29,7 @@
 #include "velox/common/memory/Memory.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/common/Types.h"
-#include "velox/dwio/nimble/velox/stats/VectorizedStatistics.h"
+#include "velox/dwio/nimble/stats/VectorizedStatistics.h"
 #include "velox/type/Type.h"
 #include "velox/vector/BaseVector.h"
 

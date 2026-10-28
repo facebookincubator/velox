@@ -39,11 +39,9 @@ table StripeGroup {
   stripe_count:uint32;
   stream_offsets:[uint32];
   stream_sizes:[uint32];
-  /// Optional per-stream checksum of the stream's on-disk bytes, laid out
-  /// stripe-major alongside stream_offsets / stream_sizes and of equal length.
-  /// Legacy: current writers put each stream's checksum in its trailer
-  /// (FileProperties.stream_trailer) and leave this absent.
-  stream_checksums:[uint32];
+  /// Deprecated: per-stream checksums are stored in stream trailers
+  /// (FileProperties.stream_trailer). Never reuse this slot.
+  stream_checksums:[uint32] (deprecated);
 }
 
 /// One independently encoded array. Wraps the raw encoded bytes in a sub-table
@@ -63,14 +61,9 @@ table StreamMajorStripeGroup {
   stream_count:uint32;
   stream_offsets:[EncodedStream];
   stream_sizes:[EncodedStream];
-  /// Optional per-stream checksums: one encoded array of
-  /// stream_count * stripe_count values, stream-major, so stream S of stripe T
-  /// sits at S * stripe_count + T. A single blob rather than one per stream,
-  /// because checksums are uniformly distributed and have no per-stream value
-  /// range for a tighter bit width to exploit. Legacy: current writers put each
-  /// stream's checksum in its trailer (FileProperties.stream_trailer) and leave
-  /// this absent.
-  stream_checksums:EncodedStream;
+  /// Deprecated: per-stream checksums are stored in stream trailers
+  /// (FileProperties.stream_trailer). Never reuse this slot.
+  stream_checksums:EncodedStream (deprecated);
 }
 
 table MetadataSection {

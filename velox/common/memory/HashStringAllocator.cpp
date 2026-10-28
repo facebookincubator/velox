@@ -20,10 +20,11 @@
 namespace facebook::velox {
 
 namespace {
-// Returns the size of the previous free block. The size is stored in the last 4
-// bytes of the free block, e.g. 4 bytes just before the current header.
-uint32_t* previousFreeSize(HashStringAllocator::Header* header) {
-  return reinterpret_cast<uint32_t*>(header) - 1;
+// Returns the address of the size of the previous free block. The size is
+// stored in the last 4 bytes of the free block, e.g. 4 bytes just before the
+// current header. Blocks are byte-aligned, so access it unaligned.
+char* previousFreeSize(HashStringAllocator::Header* header) {
+  return reinterpret_cast<char*>(header) - sizeof(uint32_t);
 }
 
 // Returns the header of the previous free block or nullptr if previous block is
@@ -33,7 +34,8 @@ HashStringAllocator::Header* getPreviousFree(
   if (!header->isPreviousFree()) {
     return nullptr;
   }
-  const auto numBytes = *previousFreeSize(header);
+  const auto numBytes =
+      folly::loadUnaligned<uint32_t>(previousFreeSize(header));
   auto* previous = reinterpret_cast<HashStringAllocator::Header*>(
       header->begin() - numBytes - 2 * sizeof(HashStringAllocator::Header));
   VELOX_CHECK_EQ(previous->size(), numBytes);
@@ -49,7 +51,8 @@ void markAsFree(HashStringAllocator::Header* header) {
   auto* nextHeader = header->next();
   if (nextHeader != nullptr) {
     nextHeader->setPreviousFree();
-    *previousFreeSize(nextHeader) = header->size();
+    folly::storeUnaligned<uint32_t>(
+        previousFreeSize(nextHeader), static_cast<uint32_t>(header->size()));
   }
 }
 } // namespace
@@ -73,7 +76,8 @@ std::string HashStringAllocator::Header::toString() {
     out << "]";
   }
   if (isPreviousFree()) {
-    out << ", previous is free (" << *previousFreeSize(this) << " bytes)";
+    out << ", previous is free ("
+        << folly::loadUnaligned<uint32_t>(previousFreeSize(this)) << " bytes)";
   }
   if (next() == nullptr) {
     out << ", at end";
@@ -296,10 +300,10 @@ void HashStringAllocator::newRange(
 
   // Copy the last word of the current range to the head of new range, and then
   // used the space to store the new range pointer.
-  auto** lastWordPtr = reinterpret_cast<void**>(
-      state_.currentHeader()->end() - Header::kContinuedPtrSize);
-  *reinterpret_cast<void**>(newHeader->begin()) = *lastWordPtr;
-  *lastWordPtr = newHeader;
+  auto* lastWord = state_.currentHeader()->end() - Header::kContinuedPtrSize;
+  folly::storeUnaligned<void*>(
+      newHeader->begin(), folly::loadUnaligned<void*>(lastWord));
+  folly::storeUnaligned<void*>(lastWord, static_cast<void*>(newHeader));
   state_.currentHeader()->setContinued();
   state_.currentHeader() = newHeader;
   if (lastRange) {
@@ -592,7 +596,11 @@ inline bool HashStringAllocator::storeStringFast(
     if (header->size() - spaceTaken > kMaxAlloc) {
       // The entry after allocation stays in the largest free list.
       // The size at the end of the block is changed in place.
-      reinterpret_cast<int32_t*>(header->end())[-1] -= spaceTaken;
+      auto* freeSize = header->end() - sizeof(int32_t);
+      folly::storeUnaligned<int32_t>(
+          freeSize,
+          static_cast<int32_t>(
+              folly::loadUnaligned<int32_t>(freeSize) - spaceTaken));
       auto* freeHeader = new (header->begin() + roundedBytes)
           Header(header->size() - spaceTaken);
       freeHeader->setFree();
@@ -715,7 +723,7 @@ int64_t HashStringAllocator::checkConsistency() const {
           if (header->next() != nullptr) {
             VELOX_CHECK_EQ(
                 header->size(),
-                *(reinterpret_cast<int32_t*>(header->end()) - 1));
+                folly::loadUnaligned<int32_t>(header->end() - sizeof(int32_t)));
           }
           ++numFree;
           freeBytes += blockBytes(header);

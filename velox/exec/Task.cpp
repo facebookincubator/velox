@@ -246,13 +246,13 @@ class QueueSplitsStore : public SplitsStore {
   }
 
   bool nextSplit(
-      std::optional<uint32_t> driverId,
+      uint32_t driverId,
       int maxPreloadSplits,
       const ConnectorSplitPreloadFunc& preload,
       Split& split,
       ContinueFuture& future) override {
     if (!splits_.empty()) {
-      split = getSplit(maxPreloadSplits, preload);
+      split = getSplit(driverId, maxPreloadSplits, preload);
       return true;
     }
     if (tryGetBarrier(driverId, split)) {
@@ -269,6 +269,25 @@ class QueueSplitsStore : public SplitsStore {
     return noMoreSplits_ && splits_.empty();
   }
 };
+
+// Identifies the split sources consumed by a pipeline, including an index
+// lookup source that is managed by its join operator rather than a leaf driver.
+std::vector<core::PlanNodeId> splitSourceIds(const DriverFactory& factory) {
+  std::vector<core::PlanNodeId> ids;
+  for (const auto& node : factory.planNodes) {
+    if (node->sources().empty() && node->requiresSplits() &&
+        !node->is<core::FixedPointNode>()) {
+      ids.push_back(node->id());
+    } else if (isIndexLookupJoin(node.get())) {
+      const auto* join =
+          checkedPointerCast<const core::IndexLookupJoinNode>(node.get());
+      if (join->needsIndexSplit()) {
+        ids.push_back(join->lookupSource()->id());
+      }
+    }
+  }
+  return ids;
+}
 
 void noMoreSplitsForStore(
     SplitsStore* splitsStore,
@@ -439,10 +458,6 @@ std::shared_ptr<Task> Task::create(
         return false;
       });
 
-  // An enclosing loop names itself here when it creates a sub-task, so the
-  // link is fixed before anything can observe the task.
-  FixedPointLoop* const parentFixedPoint =
-      nested != nullptr ? nested->parent : nullptr;
   auto task = std::shared_ptr<Task>(new Task(
       taskId,
       std::move(planFragment),
@@ -452,7 +467,8 @@ std::shared_ptr<Task> Task::create(
       std::move(consumerSupplier),
       memoryArbitrationPriority,
       std::move(onError),
-      parentFixedPoint));
+      nested != nullptr ? nested->state : std::weak_ptr<PersistentState>{},
+      nested != nullptr ? nested->statePool : nullptr));
   if (fixedPoint != nullptr) {
     task->fixedPoint_ = std::make_unique<FixedPointLoop>(
         task.get(), *fixedPoint, fixedPointOptions, nested);
@@ -471,7 +487,8 @@ Task::Task(
     ConsumerSupplier consumerSupplier,
     int32_t memoryArbitrationPriority,
     std::function<void(std::exception_ptr)> onError,
-    FixedPointLoop* parentFixedPoint)
+    std::weak_ptr<PersistentState> fixedPointState,
+    std::shared_ptr<memory::MemoryPool> fixedPointStatePool)
     : uuid_{makeUuid()},
       taskId_(taskId),
       destination_(destination),
@@ -483,7 +500,8 @@ Task::Task(
           planFragment_.firstNodeNotSupportingBarrier()),
       traceCtx_(maybeMakeTraceCtx()),
       consumerSupplier_(std::move(consumerSupplier)),
-      parentFixedPoint_(parentFixedPoint),
+      fixedPointState_(std::move(fixedPointState)),
+      fixedPointStatePool_(std::move(fixedPointStatePool)),
       onError_(std::move(onError)),
       splitsStates_(buildSplitStates(planFragment_.planNode)) {
   ++numCreatedTasks_;
@@ -542,6 +560,7 @@ Task::~Task() {
   CLEAR(taskStats_ = TaskStats());
   CLEAR(stateChangePromises_.clear());
   CLEAR(taskCompletionPromises_.clear());
+  CLEAR(allDriversClosedPromises_.clear());
   CLEAR(splitsStates_.clear());
   CLEAR(drivers_.clear());
   CLEAR(driverFactories_.clear());
@@ -556,6 +575,7 @@ Task::~Task() {
   CLEAR(customChildPools_.clear());
   CLEAR(childPools_.clear());
   CLEAR(planFragment_ = core::PlanFragment());
+  CLEAR(fixedPointStatePool_.reset());
   CLEAR(pool_.reset());
   CLEAR(queryCtx_.reset());
   clearStage = "exiting ~Task()";
@@ -1250,6 +1270,9 @@ void Task::finishUnstartedDrivers() {
 std::shared_ptr<Driver> Task::getDriver(uint32_t driverId) const {
   VELOX_CHECK_LT(driverId, drivers_.size());
   std::unique_lock<std::timed_mutex> l(mutex_);
+  if (drivers_[driverId] != nullptr && drivers_[driverId]->isTerminated()) {
+    return nullptr;
+  }
   return drivers_[driverId];
 }
 
@@ -1512,10 +1535,7 @@ void Task::resume(std::shared_ptr<Task> self) {
   SCOPE_EXIT {
     // Get the stats and free the resources of Drivers that were not on
     // thread.
-    for (auto& driver : offThreadDrivers) {
-      self->driversClosedByTask_.emplace_back(driver);
-      driver->closeByTask();
-    }
+    self->closeDriversByTask(offThreadDrivers);
     // Fulfill resume futures.
     for (auto& promise : resumePromises) {
       promise.setValue();
@@ -1577,8 +1597,7 @@ void Task::resume(std::shared_ptr<Task> self) {
       }
       driver->state().isTerminated = true;
       driver->state().setThread();
-      self->driverClosedLocked();
-      offThreadDrivers.push_back(std::move(driver));
+      offThreadDrivers.push_back(driver);
     }
   }
   resumePromises.swap(self->resumePromises_);
@@ -1748,6 +1767,7 @@ void Task::removeDriver(std::shared_ptr<Task> self, Driver* driver) {
   bool foundDriver = false;
   bool allFinished = true;
   EventCompletionNotifier stateChangeNotifier;
+  EventCompletionNotifier allDriversClosedNotifier;
   {
     std::lock_guard<std::timed_mutex> taskLock(self->mutex_);
     for (auto& driverPtr : self->drivers_) {
@@ -1770,6 +1790,10 @@ void Task::removeDriver(std::shared_ptr<Task> self, Driver* driver) {
       // Release the driver, note that after this 'driver' is invalid.
       driverPtr = nullptr;
       self->driverClosedLocked();
+      if (self->allDriversClosedLocked()) {
+        allDriversClosedNotifier.activate(
+            std::move(self->allDriversClosedPromises_));
+      }
 
       allFinished = self->checkIfFinishedLocked();
 
@@ -1797,6 +1821,7 @@ void Task::removeDriver(std::shared_ptr<Task> self, Driver* driver) {
     }
   }
   stateChangeNotifier.notify();
+  allDriversClosedNotifier.notify();
 
   if (!foundDriver) {
     LOG(WARNING) << "Trying to remove a Driver twice from its Task";
@@ -1893,6 +1918,9 @@ bool Task::addSplitWithSequence(
     const core::PlanNodeId& planNodeId,
     exec::Split&& split,
     long sequenceId) {
+  VELOX_CHECK(
+      split.hasConnectorSplit() || split.isBarrier(),
+      "Cannot add an empty split. Use noMoreSplits() to signal completion.");
   RECORD_METRIC_VALUE(kMetricTaskSplitsCount, 1);
   if (fixedPoint_ != nullptr && fixedPoint_->takesSplits(planNodeId)) {
     // A split sent again is ignored, as for the task's own nodes below.
@@ -1921,9 +1949,8 @@ bool Task::addSplitWithSequence(
       // duplicate splits would be ignored.
       auto& splitsState = getPlanNodeSplitsStateLocked(planNodeId);
       if (sequenceId > splitsState.maxSequenceId) {
-        shouldLogSplit = true;
-        addSplitLocked(splitsState, split, promises);
-        added = true;
+        added = addSplitLocked(splitsState, split, promises);
+        shouldLogSplit = added;
         exchangeClient = splitsState.exchangeClient;
       }
     }
@@ -1953,6 +1980,9 @@ bool Task::addSplitWithSequence(
 }
 
 void Task::addSplit(const core::PlanNodeId& planNodeId, exec::Split&& split) {
+  VELOX_CHECK(
+      split.hasConnectorSplit() || split.isBarrier(),
+      "Cannot add an empty split. Use noMoreSplits() to signal completion.");
   RECORD_METRIC_VALUE(kMetricTaskSplitsCount, 1);
   if (fixedPoint_ != nullptr && fixedPoint_->takesSplits(planNodeId)) {
     // The loop routes the split to whichever of its sub-tasks consumes it.
@@ -1968,9 +1998,8 @@ void Task::addSplit(const core::PlanNodeId& planNodeId, exec::Split&& split) {
     std::lock_guard<std::timed_mutex> l(mutex_);
     isTaskRunning = isRunningLocked();
     if (isTaskRunning) {
-      shouldLogSplit = true;
       auto& splitsState = getPlanNodeSplitsStateLocked(planNodeId);
-      addSplitLocked(splitsState, split, promises);
+      shouldLogSplit = addSplitLocked(splitsState, split, promises);
       exchangeClient = splitsState.exchangeClient;
     }
   }
@@ -2007,16 +2036,22 @@ void Task::addRemoteSplit(
   }
 }
 
-void Task::addSplitLocked(
+bool Task::addSplitLocked(
     SplitsState& splitsState,
     const exec::Split& split,
     std::vector<ContinuePromise>& promises) {
+  const auto groupId = split.hasGroup() ? split.groupId : kUngroupedGroupId;
+  const auto it = splitsState.groupSplitsStores.find(groupId);
+  if (it != splitsState.groupSplitsStores.end() && it->second &&
+      it->second->allConsumersFinished()) {
+    return false;
+  }
   if (split.isBarrier()) {
     ensureBarrierSupport();
     VELOX_CHECK(splitsState.sourceIsTableScan);
     VELOX_CHECK(!splitsState.noMoreSplits);
     addSplitToStoreLocked(splitsState, kUngroupedGroupId, split, promises);
-    return;
+    return true;
   }
   VELOX_CHECK(
       !barrierRequested_, "Can't add new split under barrier processing");
@@ -2035,7 +2070,7 @@ void Task::addSplitLocked(
 
   if (!split.hasGroup()) {
     addSplitToStoreLocked(splitsState, kUngroupedGroupId, split, promises);
-    return;
+    return true;
   }
 
   const auto splitGroupId = split.groupId;
@@ -2048,6 +2083,7 @@ void Task::addSplitLocked(
     ensureSplitGroupsAreBeingProcessedLocked();
   }
   addSplitToStoreLocked(splitsState, splitGroupId, split, promises);
+  return true;
 }
 
 void Task::addSplitToStoreLocked(
@@ -2464,26 +2500,65 @@ void Task::addScaledScanControllerLocked(
           queryCtx_->queryConfig().tableScanScaleUpMemoryUsageRatio()));
 }
 
-void Task::splitFinished(bool fromTableScan, int64_t splitWeight) {
+void Task::splitsFinished(
+    const core::PlanNodeId& planNodeId,
+    const DriverCtx& driverCtx) {
   std::lock_guard<std::timed_mutex> l(mutex_);
-  ++taskStats_.numFinishedSplits;
-  --taskStats_.numRunningSplits;
-  if (fromTableScan) {
-    --taskStats_.numRunningTableScanSplits;
-    taskStats_.runningTableScanSplitWeights -= splitWeight;
-  }
+  auto& state = getPlanNodeSplitsStateLocked(planNodeId);
+  getOrCreateSplitsStoreLocked(state, driverCtx.splitGroupId)
+      ->finishSplits(driverCtx.driverId);
 }
 
-void Task::multipleSplitsFinished(
-    bool fromTableScan,
-    int32_t numSplits,
-    int64_t splitsWeight) {
-  std::lock_guard<std::timed_mutex> l(mutex_);
-  taskStats_.numFinishedSplits += numSplits;
-  taskStats_.numRunningSplits -= numSplits;
-  if (fromTableScan) {
-    taskStats_.numRunningTableScanSplits -= numSplits;
-    taskStats_.runningTableScanSplitWeights -= splitsWeight;
+namespace {
+// Closes preloads from discarded splits. Call without holding the task lock.
+template <typename Splits>
+void closePreloadedSplits(const Splits& splits) {
+  for (const auto& split : splits) {
+    if (split.hasConnectorSplit() && split.connectorSplit->dataSource) {
+      split.connectorSplit->dataSource->close();
+    }
+  }
+}
+} // namespace
+
+void Task::splitConsumerFinished(const DriverCtx& driverCtx) {
+  std::vector<std::pair<core::PlanNodeId, std::deque<Split>>> abandoned;
+  std::vector<ContinuePromise> promises;
+  EventCompletionNotifier stateChangeNotifier;
+  {
+    std::lock_guard<std::timed_mutex> l(mutex_);
+    const auto& factory = *driverFactories_.at(driverCtx.pipelineId);
+    const auto numAbandonedBefore = taskStats_.numAbandonedSplits;
+    bool sourceFinished{false};
+    for (const auto& id : splitSourceIds(factory)) {
+      auto& state = getPlanNodeSplitsStateLocked(id);
+      auto* store = getOrCreateSplitsStoreLocked(state, driverCtx.splitGroupId);
+      auto splits = store->finishConsumer(
+          driverCtx.driverId, factory.numDrivers, promises);
+      sourceFinished |= store->allConsumersFinished();
+      for (const auto& split : splits) {
+        preloadingSplits_.erase(split.connectorSplit);
+      }
+      if (!splits.empty()) {
+        abandoned.emplace_back(id, std::move(splits));
+      }
+    }
+    if (sourceFinished || taskStats_.numAbandonedSplits != numAbandonedBefore) {
+      stateChangeNotifier.activate(std::move(stateChangePromises_));
+    }
+  }
+  stateChangeNotifier.notify();
+  for (auto& promise : promises) {
+    promise.setValue();
+  }
+  for (const auto& [id, splits] : abandoned) {
+    for (const auto& split : splits) {
+      // Register remote producers with the closed Exchange client so it closes
+      // their sources and releases upstream output buffers, including those
+      // whose splits were never acquired by a consumer.
+      addRemoteSplit(id, split);
+    }
+    closePreloadedSplits(splits);
   }
 }
 
@@ -2616,6 +2691,32 @@ void Task::driverClosedLocked() {
     --numRunningDrivers_;
   }
   ++numFinishedDrivers_;
+}
+
+bool Task::allDriversClosedLocked() const {
+  return !isRunningLocked() &&
+      std::ranges::none_of(
+          drivers_, [](const auto& driver) { return driver != nullptr; });
+}
+
+void Task::closeDriversByTask(
+    const std::vector<std::shared_ptr<Driver>>& drivers) {
+  for (const auto& driver : drivers) {
+    driver->closeByTask();
+    EventCompletionNotifier allDriversClosedNotifier;
+    {
+      std::lock_guard<std::timed_mutex> l(mutex_);
+      auto driverSlot = std::ranges::find(drivers_, driver);
+      VELOX_DCHECK(driverSlot != drivers_.end());
+      *driverSlot = nullptr;
+      driverClosedLocked();
+      driversClosedByTask_.emplace_back(driver);
+      if (allDriversClosedLocked()) {
+        allDriversClosedNotifier.activate(std::move(allDriversClosedPromises_));
+      }
+    }
+    allDriversClosedNotifier.notify();
+  }
 }
 
 bool Task::checkIfFinishedLocked() {
@@ -2997,6 +3098,7 @@ ContinueFuture Task::terminate(TaskState terminalState) {
   std::vector<std::shared_ptr<Driver>> offThreadDrivers;
   EventCompletionNotifier taskCompletionNotifier;
   EventCompletionNotifier stateChangeNotifier;
+  EventCompletionNotifier allDriversClosedNotifier;
   std::vector<ContinuePromise> barrierPromises;
   std::vector<std::shared_ptr<ExchangeClient>> exchangeClients;
   bool removeFromOutputBufferManager{false};
@@ -3043,6 +3145,11 @@ ContinueFuture Task::terminate(TaskState terminalState) {
     taskCompletionNotifier.activate(
         std::move(taskCompletionPromises_), [&]() { onTaskCompletion(); });
     stateChangeNotifier.activate(std::move(stateChangePromises_));
+    // If a driver is still open, the last driver to close realizes
+    // allDriversClosedFuture().
+    if (allDriversClosedLocked()) {
+      allDriversClosedNotifier.activate(std::move(allDriversClosedPromises_));
+    }
 
     // Update the total number of drivers if we were cancelled.
     numTotalDrivers_ = seenSplitGroups_.size() * numDriversPerSplitGroup_ +
@@ -3058,8 +3165,7 @@ ContinueFuture Task::terminate(TaskState terminalState) {
       if (driver) {
         if (enterForTerminateLocked(driver->state()) ==
             StopReason::kTerminate) {
-          offThreadDrivers.push_back(std::move(driver));
-          driverClosedLocked();
+          offThreadDrivers.push_back(driver);
         }
       }
     }
@@ -3075,13 +3181,11 @@ ContinueFuture Task::terminate(TaskState terminalState) {
 
   taskCompletionNotifier.notify();
   stateChangeNotifier.notify();
+  allDriversClosedNotifier.notify();
 
   // Get the stats and free the resources of Drivers that were not on
   // thread.
-  for (auto& driver : offThreadDrivers) {
-    driversClosedByTask_.emplace_back(driver);
-    driver->closeByTask();
-  }
+  closeDriversByTask(offThreadDrivers);
 
   // We continue all Drivers waiting for promises known to the
   // Task. The Drivers are now detached from Task and therefore will
@@ -3104,6 +3208,7 @@ ContinueFuture Task::terminate(TaskState terminalState) {
   std::vector<ContinuePromise> splitPromises;
   std::vector<std::shared_ptr<JoinBridge>> oldBridges;
   std::vector<SplitGroupState> splitGroupStates;
+  std::vector<Split> abandonedSplits;
   std::
       unordered_map<core::PlanNodeId, std::pair<std::vector<exec::Split>, bool>>
           remainingRemoteSplits;
@@ -3127,30 +3232,25 @@ ContinueFuture Task::terminate(TaskState terminalState) {
     // Collect all outstanding split promises from all splits state structures.
     for (auto& [nodeId, state] : splitsStates_) {
       for (auto& [_, store] : state.groupSplitsStores) {
-        noMoreSplitsForStore(store.get(), splitPromises);
-      }
-
-      // Process remaining remote splits.
-      if (getExchangeClientLocked(nodeId) != nullptr) {
-        std::vector<exec::Split> splits;
-        for (auto& [groupId, store] : state.groupSplitsStores) {
-          if (!store) {
-            continue;
-          }
-          while (!store->allSplitsConsumed()) {
-            auto future = ContinueFuture::makeEmpty();
-            const auto hasNextSplit = store->nextSplit(
-                /*driverId=*/std::nullopt,
-                /*maxPreloadSplits=*/0,
-                /*preload=*/nullptr,
-                splits.emplace_back(),
-                future);
-            VELOX_CHECK(hasNextSplit);
-          }
+        if (!store) {
+          continue;
         }
-        if (!splits.empty()) {
-          remainingRemoteSplits.emplace(
-              nodeId, std::make_pair(std::move(splits), state.noMoreSplits));
+        auto splits = store->discardQueuedSplits(splitPromises);
+        for (const auto& split : splits) {
+          preloadingSplits.erase(split.connectorSplit);
+        }
+        if (getExchangeClientLocked(nodeId) != nullptr && !splits.empty()) {
+          auto& remaining = remainingRemoteSplits[nodeId];
+          remaining.second = state.noMoreSplits;
+          std::move(
+              splits.begin(),
+              splits.end(),
+              std::back_inserter(remaining.first));
+        } else {
+          std::move(
+              splits.begin(),
+              splits.end(),
+              std::back_inserter(abandonedSplits));
         }
       }
     }
@@ -3186,12 +3286,21 @@ ContinueFuture Task::terminate(TaskState terminalState) {
     bridge->cancel();
   }
 
+  closePreloadedSplits(abandonedSplits);
+
   for (const auto& split : preloadingSplits) {
     split->dataSource->close();
   }
 
   for (auto& barrierPromise : barrierPromises) {
     barrierPromise.setValue();
+  }
+
+  // A loop that has not started is abandoned, which releases a driver of the
+  // pipeline's FixedPointNode leaf waiting for it.  The task has already
+  // stopped, so the driver stops.
+  if (fixedPoint_ != nullptr) {
+    fixedPoint_->abandon();
   }
 
   return makeFinishFuture("Task::terminate");
@@ -3543,6 +3652,17 @@ ContinueFuture Task::taskDeletionFuture() {
   auto [promise, future] = makeVeloxContinuePromiseContract(
       fmt::format("Task::taskDeletionFuture {}", taskId_));
   taskDeletionPromises_.emplace_back(std::move(promise));
+  return std::move(future);
+}
+
+ContinueFuture Task::allDriversClosedFuture() {
+  std::lock_guard<std::timed_mutex> l(mutex_);
+  if (allDriversClosedLocked()) {
+    return ContinueFuture();
+  }
+  auto [promise, future] = makeVeloxContinuePromiseContract(
+      fmt::format("Task::allDriversClosedFuture {}", taskId_));
+  allDriversClosedPromises_.emplace_back(std::move(promise));
   return std::move(future);
 }
 
@@ -4133,7 +4253,30 @@ void Task::createExchangeClientLocked(
       "Exchange client has been created for planNode: {}",
       planNodeId);
 
-  const auto* exchangeNode = planNode->as<core::ExchangeNode>();
+  auto [client, entry] = makeExchangeClient(
+      *planNode,
+      numberOfConsumers,
+      addExchangeClientPool(planNodeId, pipelineId));
+  exchangeClients_[pipelineId] = std::move(client);
+  exchangeTransportEntries_[pipelineId] = std::move(entry);
+  exchangeClientByPlanNode_.emplace(planNodeId, exchangeClients_[pipelineId]);
+  // MergeExchange fetches through clients of its own. A node that takes no
+  // splits has nothing to forward.
+  if (!planNode->is<core::MergeExchangeNode>()) {
+    if (auto it = splitsStates_.find(planNodeId); it != splitsStates_.end()) {
+      it->second.exchangeClient = exchangeClients_[pipelineId];
+    }
+  }
+}
+
+std::pair<
+    std::shared_ptr<ExchangeClient>,
+    std::shared_ptr<ExchangeTransportEntry>>
+Task::makeExchangeClient(
+    const core::PlanNode& planNode,
+    int32_t numberOfConsumers,
+    memory::MemoryPool* pool) const {
+  const auto* exchangeNode = planNode.as<core::ExchangeNode>();
   const std::string transport = exchangeNode != nullptr
       ? exchangeNode->transportKind()
       : std::string{core::TransportKind::kInMemory};
@@ -4143,7 +4286,7 @@ void Task::createExchangeClientLocked(
   // An unavailable transport is a plan configuration error.
   VELOX_USER_CHECK_NOT_NULL(
       entry, "No exchange client registered for transport '{}'", transport);
-  if (planNode->is<core::MergeExchangeNode>()) {
+  if (planNode.is<core::MergeExchangeNode>()) {
     VELOX_USER_CHECK(
         entry->makeMergeExchangeOperator != nullptr,
         "Exchange transport does not support merge exchange: {}",
@@ -4157,7 +4300,7 @@ void Task::createExchangeClientLocked(
       .numberOfConsumers = numberOfConsumers,
       .maxExchangeBufferSize = queryConfig.maxExchangeBufferSize(),
       .minExchangeOutputBatchBytes = queryConfig.minExchangeOutputBatchBytes(),
-      .pool = addExchangeClientPool(planNodeId, pipelineId),
+      .pool = pool,
       .executor = queryCtx()->executor(),
       .queryConfig = queryConfig};
   auto client = entry->makeClient(context);
@@ -4165,17 +4308,7 @@ void Task::createExchangeClientLocked(
       client,
       "Exchange transport created a null exchange client for transport '{}'",
       transport);
-
-  exchangeClients_[pipelineId] = std::move(client);
-  exchangeTransportEntries_[pipelineId] = std::move(entry);
-  exchangeClientByPlanNode_.emplace(planNodeId, exchangeClients_[pipelineId]);
-  // MergeExchange fetches through clients of its own. A node that takes no
-  // splits has nothing to forward.
-  if (!planNode->is<core::MergeExchangeNode>()) {
-    if (auto it = splitsStates_.find(planNodeId); it != splitsStates_.end()) {
-      it->second.exchangeClient = exchangeClients_[pipelineId];
-    }
-  }
+  return {std::move(client), std::move(entry)};
 }
 
 std::shared_ptr<ExchangeClient> Task::getExchangeClientLocked(
