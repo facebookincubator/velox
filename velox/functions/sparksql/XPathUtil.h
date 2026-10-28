@@ -71,8 +71,9 @@ class XPathStringValue {
 /// Error text does not include the document or entity system identifiers, and
 /// an invalid path is reported as a short UTF-8 prefix with controls and
 /// invalid bytes replaced, not cut inside a code point.
-/// Returns nullopt when no value is available, including retained entity
-/// references and unregistered namespace prefixes.
+/// Returns nullopt for empty inputs or retained entity references.
+/// Prefixed element and attribute name tests do not match. Evaluated
+/// unregistered functions or variables return a user error.
 folly::Expected<std::optional<bool>, Status> evalBoolean(
     std::string_view xml,
     std::string_view path);
@@ -82,9 +83,10 @@ folly::Expected<std::optional<bool>, Status> evalBoolean(
 /// Error text does not include the document or entity system identifiers, and
 /// an invalid path is reported as a short UTF-8 prefix with controls and
 /// invalid bytes replaced, not cut inside a code point.
-/// Returns nullopt when no value is available, including retained entity
-/// references and unregistered namespace prefixes. A no-match node-set returns
-/// an empty string.
+/// Returns nullopt for empty inputs or retained entity references.
+/// Prefixed element and attribute name tests do not match. Evaluated
+/// unregistered functions or variables return a user error. A no-match
+/// node-set returns an empty string.
 folly::Expected<std::optional<XPathStringValue>, Status> evalString(
     std::string_view xml,
     std::string_view path);
