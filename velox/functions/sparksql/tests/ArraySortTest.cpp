@@ -745,7 +745,12 @@ TEST_F(ArraySortTest, capturedTransformWithEncodedOverlappingRanges) {
   auto nestedOracle = makeNestedArrayVectorFromJson<int32_t>(
       {"[[3], [1], [2]]", "[[1], [2], [4]]", "[]", "[]", "[[3], [1]]"});
   nestedOracle->setNull(3, true);
-  for (const auto& expression : expressions) {
+  auto nestedExpressions = expressions;
+  nestedExpressions.back() =
+      "array_sort(c0, (x, y) -> "
+      "if(lessthan(element_at(x, 1), element_at(y, 1)), -1, "
+      "if(greaterthan(element_at(x, 1), element_at(y, 1)), 1, 0)))";
+  for (const auto& expression : nestedExpressions) {
     SCOPED_TRACE(expression);
     assertEqualVectors(
         evaluate(expression, makeRowVector({nestedOracle})),
