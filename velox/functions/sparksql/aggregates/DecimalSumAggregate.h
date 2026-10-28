@@ -107,7 +107,7 @@ class DecimalSumAggregate {
       }
     }
 
-    bool addInput(
+    FOLLY_ALWAYS_INLINE bool addInput(
         HashStringAllocator* /*allocator*/,
         exec::optional_arg_type<TInputType> data) {
       if (!data.has_value()) {
