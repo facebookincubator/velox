@@ -427,6 +427,90 @@ TEST_F(PlanRewriterTest, cpuFallbackMatchesDriverAdapter) {
   }
 }
 
+class HostOnlyFilterNode final : public core::FilterNode {
+ public:
+  using core::FilterNode::FilterNode;
+
+  std::string_view name() const override {
+    return "HostOnlyFilter";
+  }
+};
+
+class HostFilterDescriptor final : public CudfPlanNodeDescriptor {
+ public:
+  bool canHandle(const core::PlanNode& node) const override {
+    return typeid(node) == typeid(HostOnlyFilterNode);
+  }
+
+  CudfPlanNodeTraits traits(const core::PlanNode&, const core::QueryCtx&)
+      const override {
+    return {{InputRepresentation::kVelox}, VectorRepresentation::kVelox, {}};
+  }
+
+  core::PlanNodePtr withSources(
+      const core::PlanNodePtr& node,
+      std::vector<core::PlanNodePtr> sources) const override {
+    VELOX_CHECK_EQ(sources.size(), 1);
+    return std::make_shared<HostOnlyFilterNode>(
+        node->id(), node->as<core::FilterNode>()->filter(), sources[0]);
+  }
+};
+TEST_F(PlanRewriterTest, filterProjectPreservesCustomFilterContract) {
+  registerCudfPlanNodeDescriptor(
+      "host-filter-test", std::make_shared<HostFilterDescriptor>());
+  SCOPE_EXIT {
+    unregisterCudfPlanNodeDescriptor("host-filter-test");
+  };
+
+  for (bool gpuSource : {false, true}) {
+    SCOPED_TRACE(gpuSource);
+    auto ids = std::make_shared<core::PlanNodeIdGenerator>();
+    auto builder = PlanBuilder(ids).values({input_});
+    if (gpuSource) {
+      builder.project({"c0", "c1 + 1 AS c1"});
+    }
+    auto filter = builder.filter("c0 > 1").planNode();
+    auto custom = std::make_shared<HostOnlyFilterNode>(
+        filter->id(),
+        filter->as<core::FilterNode>()->filter(),
+        filter->sources()[0]);
+    auto plan =
+        PlanBuilder(custom, ids).project({"c0", "c1 + 1 AS x"}).planNode();
+    auto queryCtx = core::QueryCtx::create(executor_.get());
+    auto physical = rewriteToCudfPlan(plan, queryCtx);
+    ASSERT_TRUE(physical->is<core::ProjectNode>());
+    auto retained = physical->sources()[0];
+    ASSERT_TRUE(retained->is<HostOnlyFilterNode>());
+    EXPECT_EQ(retained->id(), custom->id());
+    if (gpuSource) {
+      ASSERT_TRUE(retained->sources()[0]->is<CudfToVeloxNode>());
+      EXPECT_TRUE(
+          retained->sources()[0]->sources()[0]->is<CudfFilterProjectNode>());
+    } else {
+      EXPECT_EQ(retained, custom);
+    }
+
+    auto task =
+        AssertQueryBuilder(physical)
+            .queryCtx(queryCtx)
+            .maxDrivers(1)
+            .assertResults(makeRowVector(
+                {"c0", "x"},
+                {makeFlatVector<int64_t>({2, 3}),
+                 makeFlatVector<int64_t>({21 + gpuSource, 41 + gpuSource})}));
+    bool foundCpuFilterProject = false;
+    for (const auto& pipeline : task->taskStats().pipelineStats) {
+      for (const auto& op : pipeline.operatorStats) {
+        if (op.planNodeId == plan->id()) {
+          EXPECT_EQ(op.operatorType, "FilterProject");
+          foundCpuFilterProject = true;
+        }
+      }
+    }
+    EXPECT_TRUE(foundCpuFilterProject);
+  }
+}
+
 TEST_F(PlanRewriterTest, cpuNodesAboveGpuRegionsAreRebuilt) {
   auto ids = std::make_shared<core::PlanNodeIdGenerator>();
   auto gpuRegion = [&] {
