@@ -74,8 +74,9 @@ void registerUcxTransports() {
             // memory pool, and the sources are driven by the UCX progress
             // thread rather than by an executor, so 'context.pool',
             // 'context.executor' and 'context.minExchangeOutputBatchBytes' are
-            // unused. maxExchangeBufferSize is the query-level byte budget for
-            // adaptive receive admission.
+            // unused. maxExchangeBufferSize seeds this client's adaptive
+            // receive prefetch window; it is not a cap on total query GPU
+            // memory.
             checkCudfEnabledForUcx(context.queryConfig);
             VELOX_USER_CHECK_GE(
                 context.maxExchangeBufferSize,

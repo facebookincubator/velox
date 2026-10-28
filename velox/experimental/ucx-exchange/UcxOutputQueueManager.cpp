@@ -113,6 +113,16 @@ bool UcxOutputQueueManager::checkTransferCapacity(
   return false;
 }
 
+bool UcxOutputQueueManager::waitForAnyTransferCapacity(
+    std::string_view taskId,
+    const std::vector<UcxOutputQueue::TransferCapacityRequest>& requests,
+    ContinueFuture* future) {
+  if (auto queue = getQueueIfActive(taskId)) {
+    return queue->waitForAnyTransferCapacity(requests, future);
+  }
+  return false;
+}
+
 bool UcxOutputQueueManager::reserveTransferBytes(
     std::string_view taskId,
     int destination,
