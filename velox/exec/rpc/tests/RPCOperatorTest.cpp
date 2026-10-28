@@ -478,6 +478,17 @@ class NoLatencySuccessBatchRPCFunction : public DemoBatchRPCFunction {
   }
 };
 
+// Fails the only row of every batch with a backend error.
+class BackendErrorBatchRPCFunction : public DemoBatchRPCFunction {
+ public:
+  BackendErrorBatchRPCFunction()
+      : DemoBatchRPCFunction(ResponseOrder::kInOrder, {0}) {}
+
+  std::string admissionKey() const override {
+    return "backend-error-batch-rpc";
+  }
+};
+
 // Declares a per-request byte budget and reports a fixed number of rows that
 // fit it, so the operator must chunk a large backlog to keep each request
 // under the cap. Records every flush's row count so the test can assert no
@@ -557,6 +568,10 @@ class RPCOperatorTest : public OperatorTestBase {
     AsyncRPCFunctionRegistry::registerFunction(
         "no_latency_success_batch_rpc",
         []() { return std::make_shared<NoLatencySuccessBatchRPCFunction>(); },
+        DemoBatchRPCFunction::signatures());
+    AsyncRPCFunctionRegistry::registerFunction(
+        "backend_error_batch_rpc",
+        []() { return std::make_shared<BackendErrorBatchRPCFunction>(); },
         DemoBatchRPCFunction::signatures());
     AsyncRPCFunctionRegistry::registerFunction(
         "demo_batch_rpc",
@@ -2248,6 +2263,74 @@ TEST_F(RPCOperatorTest, backendErrorsStopPacedRecovery) {
   // A call that fails without overload ends the recovery.
   runQuery();
   EXPECT_FALSE(limiter.stats().recovering);
+}
+
+TEST_F(RPCOperatorTest, backendErrorBatchesDoNotStartPacedRecovery) {
+  auto input =
+      makeRowVector({"prompt"}, {makeFlatVector<StringView>({"fails"})});
+  auto plan = makeBatchRPCNode(
+      PlanBuilder().values({input}).planNode(),
+      {"prompt"},
+      "backend_error_batch_rpc");
+  auto runQuery = [&]() {
+    return AssertQueryBuilder(plan)
+        .config(core::QueryConfig::kRpcRateLimiterMinLimit, "0")
+        .copyResults(pool());
+  };
+  // The first query seals the limiter with the function's fractional floor.
+  runQuery();
+  auto& limiter =
+      RPCRateLimiterRegistry::global().get("backend-error-batch-rpc");
+
+  // A 10ms service horizon keeps paced waits short. Overloads drive the
+  // window to the function's floor of 0.25 and leave it paced, not
+  // recovering.
+  constexpr int64_t kHorizonNanos{10'000'000};
+  limiter.onOutcome(RPCRateLimiter::Outcome::kSuccess, 1, kHorizonNanos);
+  while (limiter.stats().limitMilli > 250) {
+    limiter.onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  }
+  ASSERT_FALSE(limiter.stats().recovering);
+
+  // Batches that fail without overload prove no capacity: the window neither
+  // starts recovering nor grows.
+  runQuery();
+  runQuery();
+  const auto stats = limiter.stats();
+  EXPECT_FALSE(stats.recovering);
+  EXPECT_EQ(stats.limitMilli, 250);
+}
+
+TEST_F(RPCOperatorTest, batchWithASuccessfulRowStartsPacedRecovery) {
+  // Both rows go in one flush; the function fails the first and serves the
+  // second.
+  auto input = makeRowVector(
+      {"prompt"}, {makeFlatVector<StringView>({"fails", "served"})});
+  auto plan = makeBatchRPCNode(
+      PlanBuilder().values({input}).planNode(),
+      {"prompt"},
+      "backend_error_batch_rpc",
+      /*dispatchBatchSize=*/2);
+  auto runQuery = [&]() {
+    return AssertQueryBuilder(plan)
+        .config(core::QueryConfig::kRpcRateLimiterMinLimit, "0")
+        .copyResults(pool());
+  };
+  runQuery();
+  auto& limiter =
+      RPCRateLimiterRegistry::global().get("backend-error-batch-rpc");
+
+  constexpr int64_t kHorizonNanos{10'000'000};
+  limiter.onOutcome(RPCRateLimiter::Outcome::kSuccess, 1, kHorizonNanos);
+  while (limiter.stats().limitMilli > 250) {
+    limiter.onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  }
+  ASSERT_FALSE(limiter.stats().recovering);
+
+  // The served row proves capacity, as it would in PER_ROW, although the
+  // flush's verdict is kNonOverloadError.
+  runQuery();
+  EXPECT_TRUE(limiter.stats().recovering);
 }
 
 TEST_F(RPCOperatorTest, maxProbeIntervalDefaultsToOneMinute) {
