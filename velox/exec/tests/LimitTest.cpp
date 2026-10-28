@@ -13,6 +13,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include <folly/executors/ManualExecutor.h>
+
 #include "velox/exec/DefaultOutputBufferManager.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
@@ -25,7 +27,177 @@ using namespace facebook::velox::exec::test;
 using namespace facebook::velox::common::testutil;
 
 namespace {
-class LimitTest : public HiveConnectorTestBase {};
+class LimitTest : public HiveConnectorTestBase {
+ protected:
+  void testParallelBarrier(
+      int32_t numDrivers,
+      int32_t numSplits,
+      int32_t limit,
+      bool finishBeforeBarrier,
+      bool abortAfterBarrier) {
+    SCOPED_TRACE(
+        fmt::format(
+            "drivers={} splits={} limit={} finishBeforeBarrier={} abort={}",
+            numDrivers,
+            numSplits,
+            limit,
+            finishBeforeBarrier,
+            abortAfterBarrier));
+    auto data = makeRowVector(
+        {makeFlatVector<int32_t>(1'000, [](auto row) { return row; })});
+    auto file = TempFilePath::create();
+    writeToFile(file->getPath(), {data});
+
+    folly::ManualExecutor executor;
+    core::PlanNodeId scanId;
+    CursorParameters params;
+    params.planNode = PlanBuilder()
+                          .tableScan(asRowType(data->type()))
+                          .capturePlanNodeId(scanId)
+                          .limit(0, limit, true)
+                          .planNode();
+    params.maxDrivers = numDrivers;
+    if (finishBeforeBarrier) {
+      params.queryCtx = core::QueryCtx::create(&executor);
+    }
+    auto cursor = TaskCursor::create(params);
+    auto task = cursor->task();
+    SCOPE_EXIT {
+      auto finished = task->requestAbort();
+      executor.drain();
+      finished.wait();
+    };
+    cursor->start();
+    ASSERT_EQ(task->numTotalDrivers(), numDrivers);
+
+    std::vector<RowVectorPtr> results;
+    auto readRound = [&]() {
+      for (;;) {
+        ContinueFuture future = ContinueFuture::makeEmpty();
+        if (cursor->moveNext(&future)) {
+          results.push_back(cursor->current());
+        } else if (!future.valid()) {
+          return;
+        } else {
+          executor.drain();
+          ASSERT_TRUE(std::move(future).wait(std::chrono::seconds(5)))
+              << task->toString();
+        }
+      }
+    };
+
+    for (int32_t i = 0; i < numSplits; ++i) {
+      task->addSplit(
+          scanId, exec::Split(makeHiveConnectorSplit(file->getPath())));
+      if (finishBeforeBarrier) {
+        executor.drain();
+        ASSERT_GT(task->numFinishedDrivers(), 0);
+      }
+      auto barrier = task->requestBarrier();
+      executor.drain();
+      ASSERT_NO_FATAL_FAILURE(readRound());
+      ASSERT_TRUE(std::move(barrier).wait(std::chrono::seconds(5)))
+          << task->toString();
+      ASSERT_FALSE(task->underBarrier());
+      if (abortAfterBarrier) {
+        ASSERT_TRUE(task->isRunning());
+        auto finished = task->requestAbort();
+        executor.drain();
+        ASSERT_TRUE(std::move(finished).wait(std::chrono::seconds(5)));
+        ASSERT_EQ(task->state(), TaskState::kAborted);
+        return;
+      }
+      if (!task->isRunning()) {
+        break;
+      }
+    }
+
+    task->noMoreSplits(scanId);
+    executor.drain();
+    ASSERT_NO_FATAL_FAILURE(readRound());
+    ASSERT_TRUE(waitForTaskCompletion(task.get()));
+    const auto expectedSplits =
+        limit == 1'000 ? std::min(numSplits, numDrivers) : numSplits;
+    assertEqualResults(
+        std::vector<RowVectorPtr>(expectedSplits, data), results);
+  }
+};
+
+// https://github.com/facebookincubator/velox/issues/19866
+TEST_F(LimitTest, parallelBarrierEarlyFinish) {
+  for (const auto numDrivers : {2, 4}) {
+    ASSERT_NO_FATAL_FAILURE(
+        testParallelBarrier(numDrivers, 1, 1'000, false, false));
+    ASSERT_NO_FATAL_FAILURE(
+        testParallelBarrier(numDrivers, 5, 5'000, false, false));
+    ASSERT_NO_FATAL_FAILURE(
+        testParallelBarrier(numDrivers, 8, 1'000, false, false));
+    ASSERT_NO_FATAL_FAILURE(
+        testParallelBarrier(numDrivers, 5, 6'000, false, false));
+  }
+}
+
+TEST_F(LimitTest, parallelBarrierFinishBeforeRequest) {
+  for (const auto numDrivers : {2, 4}) {
+    ASSERT_NO_FATAL_FAILURE(
+        testParallelBarrier(numDrivers, 8, 1'000, true, false));
+  }
+}
+
+TEST_F(LimitTest, parallelBarrierFinishAfterDrain) {
+  for (const auto numDrivers : {2, 4}) {
+    for (const auto consumeRound : {false, true}) {
+      SCOPED_TRACE(
+          fmt::format("drivers={} consumeRound={}", numDrivers, consumeRound));
+      folly::ManualExecutor executor;
+      core::PlanNodeId scanId;
+      CursorParameters params;
+      params.planNode = PlanBuilder()
+                            .tableScan(ROW({"c0"}, {INTEGER()}))
+                            .capturePlanNodeId(scanId)
+                            .limit(0, 1'000, true)
+                            .planNode();
+      params.maxDrivers = numDrivers;
+      params.queryCtx = core::QueryCtx::create(&executor);
+      auto cursor = TaskCursor::create(params);
+      auto task = cursor->task();
+      SCOPE_EXIT {
+        auto finished = task->requestAbort();
+        executor.drain();
+        finished.wait();
+      };
+      cursor->start();
+      ASSERT_EQ(task->numTotalDrivers(), numDrivers);
+      auto barrier = task->requestBarrier();
+      if (consumeRound) {
+        executor.drain();
+        ASSERT_TRUE(barrier.isReady());
+        ContinueFuture future = ContinueFuture::makeEmpty();
+        ASSERT_FALSE(cursor->moveNext(&future));
+        ASSERT_FALSE(future.valid());
+      } else {
+        // One producer reports drained before EOF, without advancing the
+        // cursor to the next round. Its EOF must not count as another arrival.
+        ASSERT_EQ(executor.step(), 1);
+        ASSERT_FALSE(barrier.isReady());
+      }
+      task->noMoreSplits(scanId);
+      executor.drain();
+      ASSERT_TRUE(barrier.isReady());
+      ContinueFuture future = ContinueFuture::makeEmpty();
+      ASSERT_FALSE(cursor->moveNext(&future));
+      ASSERT_FALSE(future.valid());
+      ASSERT_EQ(task->state(), TaskState::kFinished);
+    }
+  }
+}
+
+TEST_F(LimitTest, parallelBarrierCancelAfterEarlyFinish) {
+  for (const auto numDrivers : {2, 4}) {
+    ASSERT_NO_FATAL_FAILURE(
+        testParallelBarrier(numDrivers, 1, 1'000, false, true));
+  }
+}
 
 TEST_F(LimitTest, basic) {
   vector_size_t batchSize = 1'000;
