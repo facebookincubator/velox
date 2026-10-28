@@ -208,8 +208,10 @@ aggregate class and initialized in the initialize() method.
 
 The author can also optionally define a `setConstantInputs()` method to access
 constant arguments at initialization time. This method is called once after the
-aggregation function is created, before any data is processed. The method receives
-a vector of constant input values, where non-constant inputs have null entries.
+aggregation function is created, before any data is processed, and only in steps
+that read raw input: partial and single aggregations. Steps that merge
+intermediate results have no raw arguments. The method receives one entry per
+raw input argument, where non-constant inputs have null entries.
 This is useful for reading configuration flags or constant parameters that don't
 change during aggregation. For example, a function might use this to read a boolean
 flag that controls null handling behavior.
@@ -344,8 +346,15 @@ initialize all accumulators.
 The author can also optionally define a `destroy` function that is called when
 *this* accumulator object is destructed.
 
-Notice that `writeIntermediateResult` and `writeFinalResult` are expected to not
-modify contents in the accumulator.
+When an aggregation function runs as a window function over a frame that grows
+row by row, such as ``ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW``, Velox
+reuses one accumulator for the whole frame: it adds each new row to the
+accumulator and then writes the result for that row. Streaming systems that
+embed Velox aggregates do the same over unbounded input: they write a running
+result, then keep adding input to the same accumulator. So `writeIntermediateResult`
+and `writeFinalResult` must leave the accumulator representing the same input.
+They may rearrange its contents, as long as later calls to `addInput`,
+`combine` and the write methods behave as if no write had happened.
 
 addInput
 """"""""
@@ -373,7 +382,8 @@ writeIntermediateResult
 This method writes *this* accumulator out to an intermediate state vector. It
 has an out-parameter of the type `exec::out_type<IntermediateType>&`. This
 method returns true if it writes a non-null value to `out`, or returns false
-meaning a null should be written to the intermediate state vector. Accumulators
+meaning a null should be written to the intermediate state vector. A method
+whose result is never null may return void instead. Accumulators
 that are nulls (i.e., no value has been added to them) automatically become
 nulls in the intermediate state vector without `writeIntermediateResult` being
 called.
@@ -384,7 +394,8 @@ writeFinalResult
 This method writes *this* accumulator out to a final result vector. It
 has an out-parameter of the type `exec::out_type<OutputType>&`. This
 method returns true if it writes a non-null value to `out`, or returns false
-meaning a null should be written to the final result vector. Accumulators
+meaning a null should be written to the final result vector. A method whose
+result is never null may return void instead. Accumulators
 that are nulls (i.e., no value has been added to them) automatically become
 nulls in the final result vector without `writeFinalResult` being called.
 
@@ -433,7 +444,7 @@ On the other hand, the C++ function signatures of `addInput`, `combine`,
 `writeIntermediateResult`, and `writeFinalResult` are different.
 
 Same as the case for default-null behavior, `writeIntermediateResult` and
-`writeFinalResult` are expected to not modify contents in the accumulator.
+`writeFinalResult` must leave the accumulator representing the same input.
 
 addInput
 """"""""
@@ -464,6 +475,7 @@ This method has an out-parameter of the type `exec::out_type<IntermediateType>&`
 and a boolean flag `nonNullGroup` indicating whether *this* accumulator is
 non-null. This method returns true if it writes a non-null value to `out`, or
 return false meaning a null should be written to the intermediate state vector.
+A method whose result is never null may return void instead.
 
 writeFinalResult
 """"""""""""""""
@@ -472,7 +484,8 @@ This method writes *this* accumulator out to a final result vector. It has an
 out-parameter of the type `exec::out_type<OutputType>&` and a boolean flag
 `nonNullGroup` indicating whether *this* accumulator is non-null. This method
 returns true if it writes a non-null value to `out`, or return false meaning a
-null should be written to the final result vector.
+null should be written to the final result vector. A method whose result is
+never null may return void instead.
 
 Limitations
 ^^^^^^^^^^^
