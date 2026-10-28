@@ -30,6 +30,7 @@
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/DecodedVector.h"
+#include "velox/vector/FlatMapVector.h"
 #include "velox/vector/SelectivityVector.h"
 #include "velox/vector/SimpleVector.h"
 #include "velox/vector/TypeAliases.h"
@@ -353,6 +354,49 @@ class MakeRowFroMapTest : public testing::Test, public test::VectorTestBase {
     }
   }
 
+  // Checks that projecting 'flatMap' returns the same rows as projecting
+  // 'map', which holds the same maps, for every combination of options and
+  // selected rows. Key 5 is in none of the maps.
+  void verifyFlatMapMatchesMap(const VectorPtr& map, const VectorPtr& flatMap) {
+    MakeRowFromMapOptions options{
+        .keysToProject = makeFlatVector<int64_t>({1, 2, 5}),
+        .outputFieldNames = {"key1", "key2", "key5"}};
+    const auto valueKind = map->type()->asMap().valueType()->kind();
+    for (bool replaceNulls : {false, true}) {
+      // ROW values have no defaults.
+      if (replaceNulls && valueKind == TypeKind::ROW) {
+        continue;
+      }
+
+      for (bool allowTopLevelNulls : {false, true}) {
+        for (bool useEvalCtx : {false, true}) {
+          for (std::string pattern :
+               {"all", "start", "end", "mid", "scattered"}) {
+            SCOPED_TRACE(
+                fmt::format(
+                    "replaceNulls: {}, allowTopLevelNulls: {}, useEvalCtx: {}, rows: {}",
+                    replaceNulls,
+                    allowTopLevelNulls,
+                    useEvalCtx,
+                    pattern));
+            options.replaceNulls = replaceNulls;
+            options.allowTopLevelNulls = allowTopLevelNulls;
+            auto rows = createSelectivityVector(map->size(), pattern);
+            exec::EvalCtx evalCtx(
+                execCtx_.get(), &dummyExprSet, dummyRowVector.get());
+            auto* context = useEvalCtx ? &evalCtx : nullptr;
+
+            auto expected =
+                toRowVector<TypeKind::BIGINT>(*map, options, rows, context);
+            auto actual =
+                toRowVector<TypeKind::BIGINT>(*flatMap, options, rows, context);
+            test::assertEqualVectors(expected, actual, rows);
+          }
+        }
+      }
+    }
+  }
+
   std::shared_ptr<core::QueryCtx> queryCtx_{velox::core::QueryCtx::create()};
   std::unique_ptr<core::ExecCtx> execCtx_{
       std::make_unique<core::ExecCtx>(pool_.get(), queryCtx_.get())};
@@ -413,6 +457,12 @@ TEST_F(MakeRowFroMapTest, unknownTypeValues) {
   options.replaceNulls = true;
   VELOX_ASSERT_THROW(
       toRowVector<TypeKind::BIGINT>(*testCase, options, rows),
+      "Unsupported type for replacing nulls: UNKNOWN");
+
+  // Flat maps fail the same way.
+  VELOX_ASSERT_THROW(
+      toRowVector<TypeKind::BIGINT>(
+          *FlatMapVector::fromMapVector(*testCase), options, rows),
       "Unsupported type for replacing nulls: UNKNOWN");
 }
 
@@ -478,6 +528,187 @@ TEST_F(MakeRowFroMapTest, wrappedNullMaps) {
   test::assertEqualVectors(expected, result);
 }
 
+TEST_F(MakeRowFroMapTest, flatMap) {
+  EXPECT_EQ(NonPOD::alive, 0);
+  auto testCases = makeTestCases();
+  auto reverseIndices = makeIndicesInReverse(testCases[0]->size());
+  for (auto& map : testCases) {
+    SCOPED_TRACE(map->type()->toString());
+    VectorPtr flatMap = FlatMapVector::fromMapVector(*map);
+    verifyFlatMapMatchesMap(map, flatMap);
+
+    // Flat maps wrapped in a dictionary and in a constant.
+    verifyFlatMapMatchesMap(
+        wrapInDictionary(reverseIndices, map),
+        wrapInDictionary(reverseIndices, flatMap));
+
+    // A dictionary that adds nulls.
+    auto dictionaryNulls = allocateNulls(map->size(), pool());
+    for (vector_size_t row = 0; row < map->size(); row += 3) {
+      bits::setNull(dictionaryNulls->asMutable<uint64_t>(), row);
+    }
+    verifyFlatMapMatchesMap(
+        BaseVector::wrapInDictionary(
+            dictionaryNulls, reverseIndices, map->size(), map),
+        BaseVector::wrapInDictionary(
+            dictionaryNulls, reverseIndices, map->size(), flatMap));
+    verifyFlatMapMatchesMap(
+        BaseVector::wrapInConstant(map->size(), 1, map),
+        BaseVector::wrapInConstant(map->size(), 1, flatMap));
+  }
+  testCases.clear();
+  EXPECT_EQ(NonPOD::alive, 0);
+}
+
+TEST_F(MakeRowFroMapTest, flatMapValuesInRowsWithoutKey) {
+  // Row 1 does not contain key 1 and row 2 is a null map, yet the map values of
+  // both keys hold non-null values in those rows, which must not be projected.
+  auto map = makeMapVectorFromJson<int64_t, int64_t>({
+      "{1:1, 2:2}",
+      "{2:20}",
+      "null",
+      "{1:100, 2:null}",
+  });
+  auto flatMap = FlatMapVector::fromMapVector(*map);
+  for (int64_t key : {1, 2}) {
+    const auto channel = flatMap->getKeyChannel(key).value();
+    auto* values = flatMap->mapValuesAt(channel)->asFlatVector<int64_t>();
+    auto& inMap = flatMap->inMapsAt(channel, /*resize=*/true);
+    if (inMap == nullptr) {
+      inMap = AlignedBuffer::allocate<bool>(map->size(), pool(), true);
+    }
+
+    // Fill every row without the key, and the null map, with a value.
+    for (vector_size_t row = 0; row < map->size(); ++row) {
+      if (!flatMap->isInMap(channel, row) || row == 2) {
+        values->set(row, -1);
+      }
+    }
+    bits::setBit(inMap->asMutable<uint64_t>(), 2);
+  }
+
+  verifyFlatMapMatchesMap(map, flatMap);
+}
+
+TEST_F(MakeRowFroMapTest, flatMapKeysInEveryRow) {
+  // Every row contains every key, which flat maps express with no in-map
+  // buffers. Key 1 has no null values; key 2 has one.
+  auto makeFlatMap = [&](BufferPtr nulls) {
+    return std::make_shared<FlatMapVector>(
+        pool(),
+        MAP(BIGINT(), BIGINT()),
+        std::move(nulls),
+        3,
+        makeFlatVector<int64_t>({1, 2}),
+        std::vector<VectorPtr>{
+            makeFlatVector<int64_t>({10, 11, 12}),
+            makeNullableFlatVector<int64_t>({20, std::nullopt, 22})},
+        std::vector<BufferPtr>{});
+  };
+  auto flatMap = makeFlatMap(nullptr);
+  auto map = flatMap->toMapVector();
+  verifyFlatMapMatchesMap(map, flatMap);
+
+  // The same maps wrapped in a dictionary and in a constant.
+  auto reverseIndices = makeIndicesInReverse(map->size());
+  verifyFlatMapMatchesMap(
+      wrapInDictionary(reverseIndices, map),
+      wrapInDictionary(reverseIndices, flatMap));
+  verifyFlatMapMatchesMap(
+      BaseVector::wrapInConstant(map->size(), 0, map),
+      BaseVector::wrapInConstant(map->size(), 0, flatMap));
+
+  // Null maps, which are then the only rows without a value.
+  auto flatMapWithNulls = makeFlatMap(makeNulls({false, true, false}));
+  verifyFlatMapMatchesMap(flatMapWithNulls->toMapVector(), flatMapWithNulls);
+
+  // Every row has a value for key 1, so its field is the map values when the
+  // maps are not wrapped, and the map values wrapped like the maps otherwise,
+  // rather than a copy.
+  const auto& values =
+      flatMap->mapValuesAt(flatMap->getKeyChannel(int64_t{1}).value());
+  for (bool replaceNulls : {false, true}) {
+    SCOPED_TRACE(fmt::format("replaceNulls: {}", replaceNulls));
+    MakeRowFromMapOptions options{
+        .keysToProject = makeFlatVector<int64_t>({1}),
+        .outputFieldNames = {"key1"},
+        .replaceNulls = replaceNulls};
+    SelectivityVector rows(map->size());
+    auto field = [&](const VectorPtr& input) -> VectorPtr {
+      return toRowVector<TypeKind::BIGINT>(*input, options, rows)
+          ->as<RowVector>()
+          ->childAt(0);
+    };
+    EXPECT_EQ(field(flatMap), values);
+    EXPECT_EQ(
+        field(wrapInDictionary(reverseIndices, flatMap))->encoding(),
+        VectorEncoding::Simple::DICTIONARY);
+  }
+}
+
+TEST_F(MakeRowFroMapTest, flatMapEncodedValues) {
+  // The map values of each key are wrapped in dictionaries, or constant.
+  auto flatMap = FlatMapVector::fromMapVector(*makeTestCases()[0]);
+  const auto size = flatMap->size();
+  for (column_index_t channel = 0; channel < flatMap->numDistinctKeys();
+       ++channel) {
+    auto& values = flatMap->mapValuesAt(channel);
+    values = channel % 2 == 0
+        ? wrapInDictionary(
+              makeIndicesInReverse(size),
+              wrapInDictionary(makeIndicesInReverse(size), values))
+        : BaseVector::wrapInConstant(size, 0, values);
+  }
+  verifyFlatMapMatchesMap(flatMap->toMapVector(), flatMap);
+}
+
+TEST_F(MakeRowFroMapTest, flatMapLazy) {
+  auto map = makeTestCases()[0];
+  VectorPtr flatMap = FlatMapVector::fromMapVector(*map);
+  auto lazyFlatMap = std::make_shared<LazyVector>(
+      pool(),
+      flatMap->type(),
+      flatMap->size(),
+      std::make_unique<test::SimpleVectorLoader>(
+          [flatMap](RowSet) { return flatMap; }));
+  verifyFlatMapMatchesMap(map, lazyFlatMap);
+}
+
+TEST_F(MakeRowFroMapTest, flatMapIntegerKeys) {
+  auto map = makeMapVectorFromJson<int32_t, int64_t>({
+      "{1:10, 2:20}",
+      "{1:11}",
+      "null",
+      "{2:null, 3:30}",
+  });
+  auto flatMap = FlatMapVector::fromMapVector(*map);
+  MakeRowFromMapOptions options{
+      .keysToProject = makeFlatVector<int32_t>({1, 2, 5}),
+      .outputFieldNames = {"key1", "key2", "key5"}};
+  SelectivityVector rows(map->size());
+  for (bool replaceNulls : {false, true}) {
+    for (bool allowTopLevelNulls : {false, true}) {
+      SCOPED_TRACE(
+          fmt::format(
+              "replaceNulls: {}, allowTopLevelNulls: {}",
+              replaceNulls,
+              allowTopLevelNulls));
+      options.replaceNulls = replaceNulls;
+      options.allowTopLevelNulls = allowTopLevelNulls;
+      test::assertEqualVectors(
+          toRowVector<TypeKind::INTEGER>(*map, options, rows),
+          toRowVector<TypeKind::INTEGER>(*flatMap, options, rows),
+          rows);
+    }
+  }
+}
+
+TEST_F(MakeRowFroMapTest, flatMapWithoutKeys) {
+  // Every map is empty or null, so the flat map has no keys.
+  auto map = makeMapVectorFromJson<int64_t, int64_t>({"{}", "null", "{}"});
+  verifyFlatMapMatchesMap(map, FlatMapVector::fromMapVector(*map));
+}
+
 TEST_F(MakeRowFroMapTest, errorCases) {
   SelectivityVector rows(1);
   auto validMap = makeMapVectorFromJson<int64_t, int64_t>({"{1:1, 2:2, 3:3}"});
@@ -498,6 +729,15 @@ TEST_F(MakeRowFroMapTest, errorCases) {
       toRowVector<TypeKind::BIGINT>(
           *makeMapVectorFromJson<int32_t, int64_t>({"{1:1}"}), options, rows),
       "(INTEGER vs. BIGINT) Map key type and the type of keys to project are not the same");
+
+  // Missing keys to project.
+  {
+    auto noKeys = options;
+    noKeys.keysToProject = nullptr;
+    VELOX_ASSERT_THROW(
+        toRowVector<TypeKind::BIGINT>(*validMap, noKeys, rows),
+        "Keys to project cannot be null");
+  }
 
   // Mismatched Type between keysToProject and template type of toRowVector
   options.keysToProject = makeFlatVector<int32_t>({1, 2});

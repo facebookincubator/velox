@@ -22,6 +22,7 @@
 #include "velox/functions/lib/LambdaFunctionUtil.h"
 #include "velox/functions/lib/RowsTranslationUtil.h"
 #include "velox/functions/sparksql/LastWin.h"
+#include "velox/functions/sparksql/Map.h"
 #include "velox/vector/VectorTypeUtils.h"
 
 // The description of the map function in Spark
@@ -135,9 +136,8 @@ vector_size_t buildMapEntriesForConstantKeys(
   return numEntries;
 }
 
-// Builds a map for the selected rows from per-row key and value arrays,
-// resolving repeated keys with LastWin. The result has the given size and no
-// nulls.
+} // namespace
+
 std::shared_ptr<MapVector> buildDeduplicatedMap(
     const SelectivityVector& rows,
     exec::EvalCtx& context,
@@ -193,6 +193,8 @@ std::shared_ptr<MapVector> buildDeduplicatedMap(
       BaseVector::wrapInDictionary(
           nullptr, std::move(valuesIndices), numEntries, valueElements));
 }
+
+namespace {
 
 // Throws on a null key or a repeated key. Used by the zero-copy path, which
 // builds no entry indices.
