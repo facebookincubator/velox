@@ -608,6 +608,82 @@ TEST_F(CountMinSketchAggregateTest, changedParametersAcrossBatchesRejected) {
       "eps argument must be constant for all input rows");
 }
 
+TEST_F(CountMinSketchAggregateTest, windowEmptyFramesWithColumnParameters) {
+  const auto emptySketch = serializeSketch(makeFlatVector<int64_t>({}));
+  const auto singleValueSketch = serializeSketch(makeFlatVector<int64_t>({1}));
+  const auto emptySketchView = StringView(emptySketch);
+  const auto singleValueSketchView = StringView(singleValueSketch);
+  const vector_size_t numRows = 6;
+
+  const std::vector<VectorPtr> seeds = {
+      makeFlatVector<int32_t>(numRows, [](auto) { return 1; }),
+      makeFlatVector<int64_t>(numRows, [](auto) { return 1; }),
+  };
+  for (const auto& seed : seeds) {
+    SCOPED_TRACE(seed->type()->toString());
+    auto input = makeRowVector({
+        makeNullableFlatVector<int64_t>(
+            {1, std::nullopt, 3, 1, std::nullopt, 3}),
+        makeFlatVector<double>(numRows, [](auto) { return 0.5; }),
+        makeFlatVector<double>(numRows, [](auto) { return 0.5; }),
+        seed,
+        makeFlatVector<int32_t>({0, 1, 2, 0, 1, 2}),
+        makeFlatVector<int32_t>({0, 0, 0, 1, 1, 1}),
+    });
+    auto expectedColumns = input->children();
+    expectedColumns.push_back(
+        makeFlatVector<StringView>(
+            {emptySketchView,
+             singleValueSketchView,
+             emptySketchView,
+             emptySketchView,
+             singleValueSketchView,
+             emptySketchView},
+            VARBINARY()));
+    expectedColumns.push_back(
+        makeFlatVector<StringView>(
+            {emptySketchView,
+             singleValueSketchView,
+             singleValueSketchView,
+             emptySketchView,
+             singleValueSketchView,
+             singleValueSketchView},
+            VARBINARY()));
+    expectedColumns.push_back(
+        makeFlatVector<StringView>(
+            numRows,
+            [&](auto) { return emptySketchView; },
+            nullptr,
+            VARBINARY()));
+    auto expected = makeRowVector(expectedColumns);
+
+    const std::vector<std::string> windowFunctions = {
+        "count_min_sketch(c0, c1, c2, c3) OVER (PARTITION BY c5 ORDER BY c4 "
+        "ROWS BETWEEN 1 PRECEDING AND 1 PRECEDING)",
+        "count_min_sketch(c0, c1, c2, c3) OVER (PARTITION BY c5 ORDER BY c4 "
+        "ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING)",
+        "count_min_sketch(c0, c1, c2, c3) OVER (PARTITION BY c5 ORDER BY c4 "
+        "ROWS BETWEEN 10 PRECEDING AND 9 PRECEDING)",
+    };
+    for (const auto streaming : {false, true}) {
+      SCOPED_TRACE(streaming);
+      for (const auto batchSize : {1, 1024}) {
+        SCOPED_TRACE(batchSize);
+        exec::test::PlanBuilder builder(pool());
+        builder.values({input});
+        if (streaming) {
+          builder.streamingWindow(windowFunctions);
+        } else {
+          builder.window(windowFunctions);
+        }
+        exec::test::AssertQueryBuilder(builder.planNode())
+            .config(core::QueryConfig::kPreferredOutputBatchRows, batchSize)
+            .assertResults(expected);
+      }
+    }
+  }
+}
+
 TEST_F(CountMinSketchAggregateTest, maskedGroupsProduceEmptySketches) {
   const auto makeInput = [&](int32_t group, bool mask) {
     return makeRowVector({
