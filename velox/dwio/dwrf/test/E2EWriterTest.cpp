@@ -751,6 +751,42 @@ TEST_F(E2EWriterTest, tooManyFlatMapKeys) {
       "");
 }
 
+TEST_F(E2EWriterTest, malformedMapReportsColumn) {
+  auto pool = memory::memoryManager()->addLeafPool();
+  VectorMaker maker{pool.get()};
+
+  const auto mapType = MAP(INTEGER(), INTEGER());
+  const auto rowType = ROW("map_col", mapType);
+
+  // Builds a map row claiming 3 entries with empty keys and values.
+  auto offsets = AlignedBuffer::allocate<vector_size_t>(1, pool.get());
+  auto sizes = AlignedBuffer::allocate<vector_size_t>(1, pool.get());
+  offsets->asMutable<vector_size_t>()[0] = 0;
+  sizes->asMutable<vector_size_t>()[0] = 3;
+  auto mapVector = std::make_shared<MapVector>(
+      pool.get(),
+      mapType,
+      nullptr,
+      1,
+      std::move(offsets),
+      std::move(sizes),
+      maker.flatVector<int32_t>({}),
+      maker.flatVector<int32_t>({}),
+      0);
+  auto batch = std::make_shared<RowVector>(
+      pool.get(), rowType, nullptr, 1, std::vector<VectorPtr>{mapVector});
+
+  VELOX_ASSERT_THROW(
+      dwrf::E2EWriterTestUtil::testWriter(
+          *pool,
+          rowType,
+          dwrf::E2EWriterTestUtil::generateBatches(batch),
+          1,
+          1,
+          std::make_shared<dwrf::Config>()),
+      "map_col");
+}
+
 TEST_F(E2EWriterTest, flatMapBackfill) {
   auto pool = memory::memoryManager()->addLeafPool();
 
