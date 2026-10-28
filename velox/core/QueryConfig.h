@@ -1570,9 +1570,12 @@ class QueryConfig {
       int64_t,
       50,
       "Integral override for a backend's adaptive congestion-window floor. "
-      "Positive values preserve the legacy in-flight floor; zero delegates to "
-      "the backend policy, which may select a fractional floor and pace "
-      "discrete admissions using the learned service horizon. Only used when "
+      "While rpc.ratelimiter.hard_limit is -1, a positive value replaces the "
+      "function's floor. When rpc.ratelimiter.hard_limit is 0 or more, or this "
+      "property is 0, the function's floor applies; it may be fractional, "
+      "pacing discrete admissions using the learned service horizon. This "
+      "value, or 50 if it is 0, applies when the function declares no floor. "
+      "Only used when "
       "rpc.ratelimiter.adaptive_enabled is true. "
       "Queries that resolve to the same policy share a backend's rate "
       "limiter, and each distinct policy gets its own.")
@@ -1618,12 +1621,17 @@ class QueryConfig {
       "rpc.ratelimiter.hard_limit",
       int64_t,
       -1,
-      "Versioned session hard ceiling for the per-backend rate-limit capacity. "
-      "Minus one preserves rpc.ratelimiter.max_limit semantics for mixed-version "
-      "rollouts. Zero adds no session ceiling; a positive value is combined "
-      "with the function ceiling using the smaller positive value. With no "
-      "positive ceiling, adaptive mode starts at 200 with a 1,000,000 safety "
-      "ceiling and fixed mode uses 200. Queries that resolve to the same "
+      "Versioned session hard ceiling for the per-backend rate-limit capacity, "
+      "and the switch to the function's bounds. Minus one keeps the session's "
+      "precedence: rpc.ratelimiter.min_limit and rpc.ratelimiter.max_limit "
+      "override the function's floor and ceiling. Zero or more lets the "
+      "function's floor and ceiling win, since session properties apply to "
+      "every function in the query, and ignores rpc.ratelimiter.max_limit. A "
+      "positive value caps the function's ceiling, the smaller winning, and is "
+      "the ceiling when the function declares none. Zero adds no session "
+      "ceiling: with no function ceiling, adaptive mode starts at 200 and may "
+      "grow to a 1,000,000 safety ceiling, and fixed mode uses 200. To use the "
+      "function's bounds and keep a cap, set the cap here, e.g. 200. Queries that resolve to the same "
       "policy share a backend's rate limiter, and each distinct policy gets "
       "its own.")
 
