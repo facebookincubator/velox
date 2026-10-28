@@ -196,339 +196,76 @@ create a new class that extends velox::exec::Aggregate base class
 </section>
 <section id="simple-function-interface">
 <h2>Simple Function Interface<a class="headerlink" href="#simple-function-interface" title="Link to this heading">¶</a></h2>
-<p>This section describes the main concepts and the simple interface of
-aggregation functions. Examples of aggregation functions implemented through
-the simple-function interface can be found at SimpleAverageAggregate.cpp,
-SimpleArrayAggAggregate.cpp, SimpleVariadicSumAggregate.cpp, and
-SimpleVariadicArrayAggAggregate.cpp under velox/exec/tests.</p>
-<p>A simple aggregation function is implemented as a class as the following.</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">// array_agg(T) -&gt; array(T) -&gt; array(T)</span>
-<span class="k">class</span><span class="w"> </span><span class="nc">ArrayAggAggregate</span><span class="w"> </span><span class="p">{</span>
+<p>A simple aggregation function is a class that processes input one row at a
+time; SimpleAggregateAdapter turns it into an Aggregate. The class must satisfy
+the <cite>SimpleAggregateFunction</cite> concept in velox/exec/SimpleAggregateAdapter.h,
+so the compiler checks its required members. The concept’s documentation lists the
+required and optional members and the rules they must follow: which rows reach
+each method, how nulls are handled, and what the write methods must preserve.</p>
+<p>Here is a function with default-null behavior, the default: rows with a null
+argument are skipped, and groups without input produce null. It is a
+simplified version of GeometricMeanAggregate.cpp under
+velox/functions/prestosql/aggregates.</p>
+<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="c1">// geometric_mean(BIGINT) -&gt; ROW(DOUBLE, BIGINT) -&gt; DOUBLE</span>
+<span class="k">class</span><span class="w"> </span><span class="nc">GeometricMeanAggregate</span><span class="w"> </span><span class="p">{</span>
 <span class="w"> </span><span class="k">public</span><span class="o">:</span>
-<span class="w">  </span><span class="c1">// Type(s) of input vector(s) wrapped in Row.</span>
-<span class="w">  </span><span class="k">using</span><span class="w"> </span><span class="n">InputType</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Row</span><span class="o">&lt;</span><span class="n">Generic</span><span class="o">&lt;</span><span class="n">T1</span><span class="o">&gt;&gt;</span><span class="p">;</span>
-<span class="w">  </span><span class="k">using</span><span class="w"> </span><span class="n">IntermediateType</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Array</span><span class="o">&lt;</span><span class="n">Generic</span><span class="o">&lt;</span><span class="n">T1</span><span class="o">&gt;&gt;</span><span class="p">;</span>
-<span class="w">  </span><span class="k">using</span><span class="w"> </span><span class="n">OutputType</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Array</span><span class="o">&lt;</span><span class="n">Generic</span><span class="o">&lt;</span><span class="n">T1</span><span class="o">&gt;&gt;</span><span class="p">;</span>
+<span class="w">  </span><span class="c1">// Argument types, wrapped in Row even for a single argument.</span>
+<span class="w">  </span><span class="k">using</span><span class="w"> </span><span class="n">InputType</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Row</span><span class="o">&lt;</span><span class="kt">int64_t</span><span class="o">&gt;</span><span class="p">;</span>
+<span class="w">  </span><span class="c1">// Sum of logs and count.</span>
+<span class="w">  </span><span class="k">using</span><span class="w"> </span><span class="n">IntermediateType</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Row</span><span class="o">&lt;</span><span class="kt">double</span><span class="p">,</span><span class="w"> </span><span class="kt">int64_t</span><span class="o">&gt;</span><span class="p">;</span>
+<span class="w">  </span><span class="k">using</span><span class="w"> </span><span class="n">OutputType</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="kt">double</span><span class="p">;</span>
 
-<span class="w">  </span><span class="c1">// Optional. Default is true.</span>
-<span class="w">  </span><span class="k">static</span><span class="w"> </span><span class="k">constexpr</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="n">default_null_behavior_</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">false</span><span class="p">;</span>
+<span class="w">  </span><span class="k">struct</span><span class="w"> </span><span class="nc">AccumulatorType</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kt">double</span><span class="w"> </span><span class="n">logSum</span><span class="p">{</span><span class="mi">0</span><span class="p">};</span>
+<span class="w">    </span><span class="kt">int64_t</span><span class="w"> </span><span class="n">count</span><span class="p">{</span><span class="mi">0</span><span class="p">};</span>
 
-<span class="w">  </span><span class="c1">// Optional. Default is true.</span>
-<span class="w">  </span><span class="k">static</span><span class="w"> </span><span class="k">constexpr</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="n">is_reducing_</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">false</span><span class="p">;</span>
+<span class="w">    </span><span class="k">explicit</span><span class="w"> </span><span class="n">AccumulatorType</span><span class="p">(</span>
+<span class="w">        </span><span class="n">HashStringAllocator</span><span class="o">*</span><span class="w"> </span><span class="cm">/*allocator*/</span><span class="p">,</span>
+<span class="w">        </span><span class="n">GeometricMeanAggregate</span><span class="o">*</span><span class="w"> </span><span class="cm">/*fn*/</span><span class="p">)</span><span class="w"> </span><span class="p">{}</span>
 
-<span class="w">  </span><span class="c1">// Optional.</span>
-<span class="w">  </span><span class="k">static</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="nf">toIntermediate</span><span class="p">(</span>
-<span class="w">      </span><span class="n">exec</span><span class="o">::</span><span class="n">out_type</span><span class="o">&lt;</span><span class="n">Array</span><span class="o">&lt;</span><span class="n">Generic</span><span class="o">&lt;</span><span class="n">T1</span><span class="o">&gt;&gt;&gt;&amp;</span><span class="w"> </span><span class="n">out</span><span class="p">,</span>
-<span class="w">      </span><span class="n">exec</span><span class="o">::</span><span class="n">optional_arg_type</span><span class="o">&lt;</span><span class="n">Generic</span><span class="o">&lt;</span><span class="n">T1</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="n">in</span><span class="p">);</span>
-
-<span class="w">  </span><span class="c1">// Optional. Define some function-level variables.</span>
-<span class="w">  </span><span class="n">TypePtr</span><span class="w"> </span><span class="n">inputType_</span><span class="p">;</span>
-<span class="w">  </span><span class="n">TypePtr</span><span class="w"> </span><span class="n">resultType_</span><span class="p">;</span>
-
-<span class="w">  </span><span class="c1">// Optional. Defined only when the aggregation function needs to use function-level variables.</span>
-<span class="w">  </span><span class="c1">// This method is called once when the aggregation function is created.</span>
-<span class="w">  </span><span class="kt">void</span><span class="w"> </span><span class="nf">initialize</span><span class="p">(</span>
-<span class="w">      </span><span class="n">core</span><span class="o">::</span><span class="n">AggregationNode</span><span class="o">::</span><span class="n">Step</span><span class="w"> </span><span class="n">step</span><span class="p">,</span>
-<span class="w">      </span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">TypePtr</span><span class="o">&gt;&amp;</span><span class="w"> </span><span class="n">argTypes</span><span class="p">,</span>
-<span class="w">      </span><span class="k">const</span><span class="w"> </span><span class="n">TypePtr</span><span class="o">&amp;</span><span class="w"> </span><span class="n">resultType</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="n">VELOX_CHECK_EQ</span><span class="p">(</span><span class="n">argTypes</span><span class="p">.</span><span class="n">size</span><span class="p">(),</span><span class="w"> </span><span class="mi">1</span><span class="p">);</span>
-<span class="w">    </span><span class="n">inputType_</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">argTypes</span><span class="p">[</span><span class="mi">0</span><span class="p">];</span>
-<span class="w">    </span><span class="n">resultType_</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">resultType</span><span class="p">;</span>
-<span class="w">  </span><span class="p">}</span>
-
-<span class="w">  </span><span class="c1">// Optional. Defined only when the aggregation function needs to access constant arguments.</span>
-<span class="w">  </span><span class="c1">// This method is called once after the aggregation function is created, before any data</span>
-<span class="w">  </span><span class="c1">// is processed. Non-constant inputs have null entries in constantInputs.</span>
-<span class="w">  </span><span class="kt">void</span><span class="w"> </span><span class="nf">setConstantInputs</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">VectorPtr</span><span class="o">&gt;&amp;</span><span class="w"> </span><span class="n">constantInputs</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="c1">// Example: Extract a constant boolean flag from the second argument</span>
-<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">constantInputs</span><span class="p">.</span><span class="n">size</span><span class="p">()</span><span class="w"> </span><span class="o">&gt;=</span><span class="w"> </span><span class="mi">2</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="n">constantInputs</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="nb">nullptr</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-<span class="w">      </span><span class="n">ignoreNulls_</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">constantInputs</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="o">-&gt;</span><span class="n">as</span><span class="o">&lt;</span><span class="n">ConstantVector</span><span class="o">&lt;</span><span class="kt">bool</span><span class="o">&gt;&gt;</span><span class="p">()</span><span class="o">-&gt;</span><span class="n">valueAt</span><span class="p">(</span><span class="mi">0</span><span class="p">);</span>
+<span class="w">    </span><span class="kt">void</span><span class="w"> </span><span class="n">addInput</span><span class="p">(</span><span class="n">HashStringAllocator</span><span class="o">*</span><span class="w"> </span><span class="cm">/*allocator*/</span><span class="p">,</span><span class="w"> </span><span class="kt">int64_t</span><span class="w"> </span><span class="n">value</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="n">logSum</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">log</span><span class="p">(</span><span class="n">value</span><span class="p">);</span>
+<span class="w">      </span><span class="o">++</span><span class="n">count</span><span class="p">;</span>
 <span class="w">    </span><span class="p">}</span>
-<span class="w">  </span><span class="p">}</span>
 
-<span class="w">  </span><span class="k">struct</span><span class="w"> </span><span class="nc">AccumulatorType</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="p">...</span><span class="w"> </span><span class="p">};</span>
+<span class="w">    </span><span class="kt">void</span><span class="w"> </span><span class="n">combine</span><span class="p">(</span>
+<span class="w">        </span><span class="n">HashStringAllocator</span><span class="o">*</span><span class="w"> </span><span class="cm">/*allocator*/</span><span class="p">,</span>
+<span class="w">        </span><span class="n">exec</span><span class="o">::</span><span class="n">arg_type</span><span class="o">&lt;</span><span class="n">Row</span><span class="o">&lt;</span><span class="kt">double</span><span class="p">,</span><span class="w"> </span><span class="kt">int64_t</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="n">other</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="n">logSum</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="n">other</span><span class="p">.</span><span class="n">at</span><span class="o">&lt;</span><span class="mi">0</span><span class="o">&gt;</span><span class="p">().</span><span class="n">value</span><span class="p">();</span>
+<span class="w">      </span><span class="n">count</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="n">other</span><span class="p">.</span><span class="n">at</span><span class="o">&lt;</span><span class="mi">1</span><span class="o">&gt;</span><span class="p">().</span><span class="n">value</span><span class="p">();</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="kt">void</span><span class="w"> </span><span class="n">writeIntermediateResult</span><span class="p">(</span>
+<span class="w">        </span><span class="n">exec</span><span class="o">::</span><span class="n">out_type</span><span class="o">&lt;</span><span class="n">Row</span><span class="o">&lt;</span><span class="kt">double</span><span class="p">,</span><span class="w"> </span><span class="kt">int64_t</span><span class="o">&gt;&gt;&amp;</span><span class="w"> </span><span class="n">out</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="n">out</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">make_tuple</span><span class="p">(</span><span class="n">logSum</span><span class="p">,</span><span class="w"> </span><span class="n">count</span><span class="p">);</span>
+<span class="w">    </span><span class="p">}</span>
+
+<span class="w">    </span><span class="kt">void</span><span class="w"> </span><span class="n">writeFinalResult</span><span class="p">(</span><span class="kt">double</span><span class="o">&amp;</span><span class="w"> </span><span class="n">out</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="n">out</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">exp</span><span class="p">(</span><span class="n">logSum</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">count</span><span class="p">);</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">  </span><span class="p">};</span>
 <span class="p">};</span>
 </pre></div>
 </div>
-<p>The author declares the function’s input type, intermediate type, and output
-type in the simple aggregation function class. The input type must be the
-function’s argument type(s) wrapped in a Row&lt;&gt; even if the function only takes
-one argument. This is needed for the SimpleAggregateAdapter to parse input
-types for arbitrary aggregation functions properly.</p>
-<p>The author can optionally define function-level variables in the simple
-aggregation function class. These variables are initialized once when the
-aggregation function is created and used at every row when adding inputs to
-accumulators or extracting values from accumulators. For example, if the
-aggregation function needs to get the result type or the raw input type of the
-aggregation function, these types can be defined as member variables in the
-aggregate class and initialized in the initialize() method.</p>
-<p>The author can also optionally define a <cite>setConstantInputs()</cite> method to access
-constant arguments at initialization time. This method is called once after the
-aggregation function is created, before any data is processed, and only in steps
-that read raw input: partial and single aggregations. Steps that merge
-intermediate results have no raw arguments. The method receives one entry per
-raw input argument, where non-constant inputs have null entries.
-This is useful for reading configuration flags or constant parameters that don’t
-change during aggregation. For example, a function might use this to read a boolean
-flag that controls null handling behavior.</p>
-<p>The author can define an optional flag <cite>default_null_behavior_</cite> indicating
-whether the aggregation function has default-null behavior. This flag is true
-by default. The optional <cite>is_reducing_</cite> flag indicates whether the accumulator
-state is expected to be smaller than its input. This flag is true by default.
-Set it to false for aggregates whose state generally grows with input
-cardinality, such as aggregates that collect input values into an array. Next,
-the class can have an optional method <cite>toIntermediate()</cite>
-that converts the aggregation function’s raw input directly to its intermediate
-states. Finally, the author must define a struct named <cite>AccumulatorType</cite> in
-the aggregation function class. We explain each part in more details below.</p>
-<section id="default-null-behavior">
-<h3>Default-Null Behavior<a class="headerlink" href="#default-null-behavior" title="Link to this heading">¶</a></h3>
-<p>When adding raw inputs or intermediate states to accumulators, aggregation
-functions of default-null behavior ignore the input values that are nulls. For
-raw inputs that consist of multiple columns, an entire row is ignored if at
-least one column is null at this row. Below is an example.</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="k">sum</span><span class="p">(</span><span class="n">c0</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="p">(</span><span class="k">values</span><span class="w"> </span><span class="p">(</span><span class="k">cast</span><span class="p">(</span><span class="k">NULL</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nb">bigint</span><span class="p">),</span><span class="w"> </span><span class="mi">10</span><span class="p">),</span><span class="w"> </span><span class="p">(</span><span class="k">NULL</span><span class="p">,</span><span class="w"> </span><span class="mi">20</span><span class="p">),</span><span class="w"> </span><span class="p">(</span><span class="k">NULL</span><span class="p">,</span><span class="w"> </span><span class="mi">30</span><span class="p">))</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">t</span><span class="p">(</span><span class="n">c0</span><span class="p">,</span><span class="w"> </span><span class="n">c1</span><span class="p">);</span><span class="w"> </span><span class="c1">-- NULL</span>
-</pre></div>
-</div>
-<p>When generating intermediate or final output results from accumulators,
-aggregation functions of default-null behavior produce nulls for groups of no
-input row or only null rows. Another example is given below.</p>
-<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="k">sum</span><span class="p">(</span><span class="n">c0</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="p">(</span><span class="k">values</span><span class="w"> </span><span class="p">(</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">10</span><span class="p">),</span><span class="w"> </span><span class="p">(</span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">20</span><span class="p">),</span><span class="w"> </span><span class="p">(</span><span class="mi">3</span><span class="p">,</span><span class="w"> </span><span class="mi">30</span><span class="p">))</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">t</span><span class="p">(</span><span class="n">c0</span><span class="p">,</span><span class="w"> </span><span class="n">c1</span><span class="p">)</span><span class="w"> </span><span class="k">WHERE</span><span class="w"> </span><span class="n">c1</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">40</span><span class="p">;</span><span class="w"> </span><span class="c1">-- NULL</span>
-</pre></div>
-</div>
-<p>Most aggregation functions have default-null behavior. An example is in
-SimpleAverageAggregate.cpp. On the other hand, SimpleArrayAggAggregate.cpp has
-an example of non-default-null behavior.</p>
-<p>This flag affects the C++ function signatures of <cite>toIntermediate()</cite> and methods
-in the <cite>AccumulatorType</cite> struct.</p>
-</section>
-<section id="tointermediate">
-<h3>toIntermediate<a class="headerlink" href="#tointermediate" title="Link to this heading">¶</a></h3>
-<p>The author can optionally define a static method <cite>toIntermediate()</cite> that
-converts a raw input to an intermediate state. If defined, this function is used
-in query plans that abandon the partial aggregation step. If the aggregation
-function has default-null behavior, the toIntermediate() function has an
-out-parameter of the type <cite>exec::out_type&lt;IntermediateType&gt;&amp;</cite> followed by
-in-parameters of the type <cite>exec::arg_type&lt;T&gt;</cite> for each <cite>T</cite> wrapped inside
-InputType . If the aggregation function has non-default null behavior, the
-in-parameters of toIntermediate() are of the type <cite>exec::optional_arg_type&lt;T&gt;</cite>
-instead.</p>
-<p>When <cite>T</cite> is a primitive type except Varchar and Varbinary, <cite>exec::arg_type&lt;T&gt;</cite>
-is simply <cite>T</cite> itself and <cite>exec::out_type&lt;T&gt;</cite> is <cite>T&amp;</cite>. <cite>exec::optional_arg_type&lt;T&gt;</cite>
-is <cite>std::optional&lt;T&gt;</cite>.</p>
+<p>Functions that handle nulls themselves set <cite>default_null_behavior_</cite> to false;
+their accumulator methods take <cite>exec::optional_arg_type</cite> arguments and report
+whether the group is non-null. SimpleArrayAggAggregate.cpp under
+velox/exec/tests is an example. More examples are SimpleAverageAggregate.cpp,
+SimpleVariadicSumAggregate.cpp and SimpleVariadicArrayAggAggregate.cpp in the
+same directory.</p>
+<p>Accumulator methods receive each argument type <cite>T</cite> of InputType, and the
+intermediate type, as <cite>exec::arg_type&lt;T&gt;</cite>, or as <cite>exec::optional_arg_type&lt;T&gt;</cite>
+for functions that handle nulls themselves; they write results through
+<cite>exec::out_type&lt;T&gt;</cite>. When <cite>T</cite> is a primitive type except Varchar and
+Varbinary, <cite>exec::arg_type&lt;T&gt;</cite> is simply <cite>T</cite> itself and <cite>exec::out_type&lt;T&gt;</cite> is
+<cite>T&amp;</cite>. <cite>exec::optional_arg_type&lt;T&gt;</cite> provides <cite>has_value()</cite> and <cite>value()</cite>.</p>
 <p>When <cite>T</cite> is Varchar, Varbinary, or a complex type, <cite>exec::arg_type&lt;T&gt;</cite>,
 <cite>exec::optional_arg_type&lt;T&gt;</cite>, and <cite>exec::out_type&lt;T&gt;</cite> are the corresponding
 view and writer types of <cite>T</cite>. A detailed explanation can be found in <a class="reference internal" href="view-and-writer-types.html"><span class="doc">View and Writer Types</span></a>.</p>
-<table class="docutils align-default">
-<colgroup>
-<col style="width: 50.0%" />
-<col style="width: 50.0%" />
-</colgroup>
-<thead>
-<tr class="row-odd"><th class="head"><p>Default-Null Behavior</p></th>
-<th class="head"><p>Non-Default-Null Behavior</p></th>
-</tr>
-</thead>
-<tbody>
-<tr class="row-even"><td><dl class="simple">
-<dt>static bool SimpleAverageAggregate::toIntermediate(</dt><dd><p>exec::out_type&lt;Row&lt;double, int64_t&gt;&gt;&amp; out,
-exec::arg_type&lt;T&gt; in);</p>
-</dd>
-</dl>
-</td>
-<td><dl class="simple">
-<dt>static bool SimpleArrayAggAggregate::toIntermediate(</dt><dd><p>exec::out_type&lt;Array&lt;Generic&lt;T1&gt;&gt;&gt;&amp; out,
-exec::optional_arg_type&lt;Generic&lt;T1&gt;&gt; in);</p>
-</dd>
-</dl>
-</td>
-</tr>
-</tbody>
-</table>
-</section>
-<section id="accumulatortype-of-default-null-behavior">
-<h3>AccumulatorType of Default-Null Behavior<a class="headerlink" href="#accumulatortype-of-default-null-behavior" title="Link to this heading">¶</a></h3>
-<p>For aggregaiton functions of default-null behavior, the author defines an
-<cite>AccumulatorType</cite> struct as follows.</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">struct</span><span class="w"> </span><span class="nc">AccumulatorType</span><span class="w"> </span><span class="p">{</span>
-<span class="w">  </span><span class="c1">// Author defines data members</span>
-<span class="w">  </span><span class="p">...</span>
-
-<span class="w">  </span><span class="c1">// Optional. Define a pointer to the UDAF class if the aggregation</span>
-<span class="w">  </span><span class="c1">// function uses function-level variables.</span>
-<span class="w">  </span><span class="n">ArrayAggAggregate</span><span class="o">*</span><span class="w"> </span><span class="n">fn_</span><span class="p">;</span>
-
-<span class="w">  </span><span class="c1">// Optional. Default is true.</span>
-<span class="w">  </span><span class="k">static</span><span class="w"> </span><span class="k">constexpr</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="n">is_fixed_size_</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">false</span><span class="p">;</span>
-
-<span class="w">  </span><span class="c1">// Optional. Default is false.</span>
-<span class="w">  </span><span class="k">static</span><span class="w"> </span><span class="k">constexpr</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="n">use_external_memory_</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">true</span><span class="p">;</span>
-
-<span class="w">  </span><span class="c1">// Optional. Default is false.</span>
-<span class="w">  </span><span class="k">static</span><span class="w"> </span><span class="k">constexpr</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="n">is_aligned_</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">true</span><span class="p">;</span>
-
-<span class="w">  </span><span class="k">explicit</span><span class="w"> </span><span class="n">AccumulatorType</span><span class="p">(</span>
-<span class="w">      </span><span class="n">HashStringAllocator</span><span class="o">*</span><span class="w"> </span><span class="n">allocator</span><span class="p">,</span><span class="w"> </span><span class="n">ArrayAggAggregate</span><span class="o">*</span><span class="w"> </span><span class="n">fn</span><span class="p">)</span>
-<span class="w">      </span><span class="o">:</span><span class="w"> </span><span class="n">fn_</span><span class="p">(</span><span class="n">fn</span><span class="p">);</span>
-
-<span class="w">  </span><span class="kt">void</span><span class="w"> </span><span class="nf">addInput</span><span class="p">(</span><span class="n">HashStringAllocator</span><span class="o">*</span><span class="w"> </span><span class="n">allocator</span><span class="p">,</span><span class="w"> </span><span class="n">exec</span><span class="o">::</span><span class="n">arg_type</span><span class="o">&lt;</span><span class="n">T1</span><span class="o">&gt;</span><span class="w"> </span><span class="n">value1</span><span class="p">,</span><span class="w"> </span><span class="p">...);</span>
-
-<span class="w">  </span><span class="kt">void</span><span class="w"> </span><span class="nf">combine</span><span class="p">(</span>
-<span class="w">      </span><span class="n">HashStringAllocator</span><span class="o">*</span><span class="w"> </span><span class="n">allocator</span><span class="p">,</span>
-<span class="w">      </span><span class="n">exec</span><span class="o">::</span><span class="n">arg_type</span><span class="o">&lt;</span><span class="n">IntermediateType</span><span class="o">&gt;</span><span class="w"> </span><span class="n">other</span><span class="p">);</span>
-
-<span class="w">  </span><span class="kt">bool</span><span class="w"> </span><span class="nf">writeIntermediateResult</span><span class="p">(</span><span class="n">exec</span><span class="o">::</span><span class="n">out_type</span><span class="o">&lt;</span><span class="n">IntermediateType</span><span class="o">&gt;&amp;</span><span class="w"> </span><span class="n">out</span><span class="p">);</span>
-
-<span class="w">  </span><span class="kt">bool</span><span class="w"> </span><span class="nf">writeFinalResult</span><span class="p">(</span><span class="n">exec</span><span class="o">::</span><span class="n">out_type</span><span class="o">&lt;</span><span class="n">OutputType</span><span class="o">&gt;&amp;</span><span class="w"> </span><span class="n">out</span><span class="p">);</span>
-
-<span class="w">  </span><span class="c1">// Optional. Called during destruction.</span>
-<span class="w">  </span><span class="kt">void</span><span class="w"> </span><span class="nf">destroy</span><span class="p">(</span><span class="n">HashStringAllocator</span><span class="o">*</span><span class="w"> </span><span class="n">allocator</span><span class="p">);</span>
-<span class="p">};</span>
-</pre></div>
-</div>
-<p>The author defines an optional flag <cite>is_fixed_size_</cite> indicating whether the
-every accumulator takes fixed amount of memory. This flag is true by default.
-Next, the author defines another optional flag <cite>use_external_memory_</cite>
-indicating whether the accumulator uses memory that is not tracked by Velox.
-This flag is false by default. Then, the author can define an optional flag
-<cite>is_aligned_</cite> indicating whether the accumulator requires aligned
-access. This flag is false by default.</p>
-<p>The author defines a constructor that takes a single argument of
-<cite>HashStringAllocator*</cite>. This constructor is called before aggregation starts to
-initialize all accumulators.</p>
-<p>The author can also optionally define a <cite>destroy</cite> function that is called when
-<em>this</em> accumulator object is destructed.</p>
-<p>When an aggregation function runs as a window function over a frame that grows
-row by row, such as <code class="docutils literal notranslate"><span class="pre">ROWS</span> <span class="pre">BETWEEN</span> <span class="pre">UNBOUNDED</span> <span class="pre">PRECEDING</span> <span class="pre">AND</span> <span class="pre">CURRENT</span> <span class="pre">ROW</span></code>, Velox
-reuses one accumulator for the whole frame: it adds each new row to the
-accumulator and then writes the result for that row. Streaming systems that
-embed Velox aggregates do the same over unbounded input: they write a running
-result, then keep adding input to the same accumulator. So <cite>writeIntermediateResult</cite>
-and <cite>writeFinalResult</cite> must leave the accumulator representing the same input.
-They may rearrange its contents, as long as later calls to <cite>addInput</cite>,
-<cite>combine</cite> and the write methods behave as if no write had happened.</p>
-<section id="addinput">
-<h4>addInput<a class="headerlink" href="#addinput" title="Link to this heading">¶</a></h4>
-<p>This method adds raw input values to <em>this</em> accumulator. It receives a
-<cite>HashStringAllocator*</cite> followed by <cite>exec::arg_type&lt;T1&gt;</cite>-typed values, one for
-each argument type <cite>Ti</cite> wrapped in InputType.</p>
-<p>With default-null behavior, raw-input rows where at least one column is null are
-ignored before <cite>addInput</cite> is called. After <cite>addInput</cite> is called, <em>this</em>
-accumulator is assumed to be non-null.</p>
-</section>
-<section id="combine">
-<h4>combine<a class="headerlink" href="#combine" title="Link to this heading">¶</a></h4>
-<p>This method adds an input intermediate state to <em>this</em> accumulator. It receives
-a <cite>HashStringAllocator*</cite> and one <cite>exec::arg_type&lt;IntermediateType&gt;</cite> value. With
-default-null behavior, nulls among the input intermediate states are ignored
-before <cite>combine</cite> is called. After <cite>combine</cite> is called, <em>this</em>  accumulator is
-assumed to be non-null.</p>
-</section>
-<section id="writeintermediateresult">
-<h4>writeIntermediateResult<a class="headerlink" href="#writeintermediateresult" title="Link to this heading">¶</a></h4>
-<p>This method writes <em>this</em> accumulator out to an intermediate state vector. It
-has an out-parameter of the type <cite>exec::out_type&lt;IntermediateType&gt;&amp;</cite>. This
-method returns true if it writes a non-null value to <cite>out</cite>, or returns false
-meaning a null should be written to the intermediate state vector. A method
-whose result is never null may return void instead. Accumulators
-that are nulls (i.e., no value has been added to them) automatically become
-nulls in the intermediate state vector without <cite>writeIntermediateResult</cite> being
-called.</p>
-</section>
-<section id="writefinalresult">
-<h4>writeFinalResult<a class="headerlink" href="#writefinalresult" title="Link to this heading">¶</a></h4>
-<p>This method writes <em>this</em> accumulator out to a final result vector. It
-has an out-parameter of the type <cite>exec::out_type&lt;OutputType&gt;&amp;</cite>. This
-method returns true if it writes a non-null value to <cite>out</cite>, or returns false
-meaning a null should be written to the final result vector. A method whose
-result is never null may return void instead. Accumulators
-that are nulls (i.e., no value has been added to them) automatically become
-nulls in the final result vector without <cite>writeFinalResult</cite> being called.</p>
-</section>
-</section>
-<section id="accumulatortype-of-non-default-null-behavior">
-<h3>AccumulatorType of Non-Default-Null Behavior<a class="headerlink" href="#accumulatortype-of-non-default-null-behavior" title="Link to this heading">¶</a></h3>
-<p>For aggregaiton functions of non-default-null behavior, the author defines an
-<cite>AccumulatorType</cite> struct as follows.</p>
-<div class="highlight-c++ notranslate"><div class="highlight"><pre><span></span><span class="k">struct</span><span class="w"> </span><span class="nc">AccumulatorType</span><span class="w"> </span><span class="p">{</span>
-<span class="w">  </span><span class="c1">// Author defines data members</span>
-<span class="w">  </span><span class="p">...</span>
-
-<span class="w">  </span><span class="c1">// Optional. Default is true.</span>
-<span class="w">  </span><span class="k">static</span><span class="w"> </span><span class="k">constexpr</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="n">is_fixed_size_</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">false</span><span class="p">;</span>
-
-<span class="w">  </span><span class="c1">// Optional. Default is false.</span>
-<span class="w">  </span><span class="k">static</span><span class="w"> </span><span class="k">constexpr</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="n">use_external_memory_</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">true</span><span class="p">;</span>
-
-<span class="w">  </span><span class="c1">// Optional. Default is false.</span>
-<span class="w">  </span><span class="k">static</span><span class="w"> </span><span class="k">constexpr</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="n">is_aligned_</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">true</span><span class="p">;</span>
-
-<span class="w">  </span><span class="k">explicit</span><span class="w"> </span><span class="n">AccumulatorType</span><span class="p">(</span><span class="n">HashStringAllocator</span><span class="o">*</span><span class="w"> </span><span class="n">allocator</span><span class="p">,</span><span class="w"> </span><span class="n">ArrayAggAggregate</span><span class="o">*</span><span class="w"> </span><span class="n">fn</span><span class="p">);</span>
-
-<span class="w">  </span><span class="kt">bool</span><span class="w"> </span><span class="nf">addInput</span><span class="p">(</span><span class="n">HashStringAllocator</span><span class="o">*</span><span class="w"> </span><span class="n">allocator</span><span class="p">,</span><span class="w"> </span><span class="n">exec</span><span class="o">::</span><span class="n">optional_arg_type</span><span class="o">&lt;</span><span class="n">T1</span><span class="o">&gt;</span><span class="w"> </span><span class="n">value1</span><span class="p">,</span><span class="w"> </span><span class="p">...);</span>
-
-<span class="w">  </span><span class="kt">bool</span><span class="w"> </span><span class="nf">combine</span><span class="p">(</span>
-<span class="w">      </span><span class="n">HashStringAllocator</span><span class="o">*</span><span class="w"> </span><span class="n">allocator</span><span class="p">,</span>
-<span class="w">      </span><span class="n">exec</span><span class="o">::</span><span class="n">optional_arg_type</span><span class="o">&lt;</span><span class="n">IntermediateType</span><span class="o">&gt;</span><span class="w"> </span><span class="n">other</span><span class="p">);</span>
-
-<span class="w">  </span><span class="kt">bool</span><span class="w"> </span><span class="nf">writeIntermediateResult</span><span class="p">(</span><span class="kt">bool</span><span class="w"> </span><span class="n">nonNullGroup</span><span class="p">,</span><span class="w"> </span><span class="n">exec</span><span class="o">::</span><span class="n">out_type</span><span class="o">&lt;</span><span class="n">IntermediateType</span><span class="o">&gt;&amp;</span><span class="w"> </span><span class="n">out</span><span class="p">);</span>
-
-<span class="w">  </span><span class="kt">bool</span><span class="w"> </span><span class="nf">writeFinalResult</span><span class="p">(</span><span class="kt">bool</span><span class="w"> </span><span class="n">nonNullGroup</span><span class="p">,</span><span class="w"> </span><span class="n">exec</span><span class="o">::</span><span class="n">out_type</span><span class="o">&lt;</span><span class="n">OutputType</span><span class="o">&gt;&amp;</span><span class="w"> </span><span class="n">out</span><span class="p">);</span>
-
-<span class="w">  </span><span class="c1">// Optional.</span>
-<span class="w">  </span><span class="kt">void</span><span class="w"> </span><span class="nf">destroy</span><span class="p">(</span><span class="n">HashStringAllocator</span><span class="o">*</span><span class="w"> </span><span class="n">allocator</span><span class="p">);</span>
-<span class="p">};</span>
-</pre></div>
-</div>
-<p>The definition of <cite>is_fixed_size_</cite>, <cite>use_external_memory_</cite>,
-<cite>is_aligned_</cite>, the constructor, and the <cite>destroy</cite> method are exactly
-the same as those for default-null behavior.</p>
-<p>On the other hand, the C++ function signatures of <cite>addInput</cite>, <cite>combine</cite>,
-<cite>writeIntermediateResult</cite>, and <cite>writeFinalResult</cite> are different.</p>
-<p>Same as the case for default-null behavior, <cite>writeIntermediateResult</cite> and
-<cite>writeFinalResult</cite> must leave the accumulator representing the same input.</p>
-<section id="id1">
-<h4>addInput<a class="headerlink" href="#id1" title="Link to this heading">¶</a></h4>
-<p>This method receives a <cite>HashStringAllocator*</cite> followed by
-<cite>exec::optional_arg_type&lt;T1&gt;</cite> values, one for each argument type <cite>Ti</cite> wrapped
-in InputType.</p>
-<p>This method is called on all raw-input rows even if some columns may be null.
-It returns a boolean meaning whether <em>this</em> accumulator is non-null after the
-call. All accumulators are initialized to <em>null</em> before aggregation starts. An
-accumulator that is originally null can be turned to non-null. But an
-accumulator that’s already non-null remains non-null regardless of the return
-value of <cite>addInput</cite>.</p>
-</section>
-<section id="id2">
-<h4>combine<a class="headerlink" href="#id2" title="Link to this heading">¶</a></h4>
-<p>This method receives a <cite>HashStringAllocator*</cite> and an
-<cite>exec::optional_arg_type&lt;IntermediateType&gt;</cite> value. This method is called on
-all intermediate states even if some are nulls. Same as <cite>addInput</cite>, this method
-returns a boolean meaning whether <em>this</em> accumulator is non-null after the call.</p>
-</section>
-<section id="id3">
-<h4>writeIntermediateResult<a class="headerlink" href="#id3" title="Link to this heading">¶</a></h4>
-<p>This method has an out-parameter of the type <cite>exec::out_type&lt;IntermediateType&gt;&amp;</cite>
-and a boolean flag <cite>nonNullGroup</cite> indicating whether <em>this</em> accumulator is
-non-null. This method returns true if it writes a non-null value to <cite>out</cite>, or
-return false meaning a null should be written to the intermediate state vector.
-A method whose result is never null may return void instead.</p>
-</section>
-<section id="id4">
-<h4>writeFinalResult<a class="headerlink" href="#id4" title="Link to this heading">¶</a></h4>
-<p>This method writes <em>this</em> accumulator out to a final result vector. It has an
-out-parameter of the type <cite>exec::out_type&lt;OutputType&gt;&amp;</cite> and a boolean flag
-<cite>nonNullGroup</cite> indicating whether <em>this</em> accumulator is non-null. This method
-returns true if it writes a non-null value to <cite>out</cite>, or return false meaning a
-null should be written to the final result vector. A method whose result is
-never null may return void instead.</p>
-</section>
-</section>
 <section id="limitations">
 <h3>Limitations<a class="headerlink" href="#limitations" title="Link to this heading">¶</a></h3>
-<p>The simple aggregation function interface currently has one limitation:
-aggregation pushdown to table scan is not supported yet. We’re planning to
-add this support.</p>
+<p>Simple aggregation functions do not support aggregation pushdown to table
+scan.</p>
 </section>
 </section>
 <section id="vector-function-interface">
@@ -1031,6 +768,12 @@ result type is the same as input value type.</p>
 <span class="w">  </span><span class="p">}</span>
 </pre></div>
 </div>
+<p>A signature declares a constant argument with <cite>constantArgumentType()</cite>. The
+function reads the values of constant arguments in
+<cite>Aggregate::setConstantInputs()</cite>, which is called only in steps that read raw
+input. Velox does not check that arguments the signature declares constant are
+constant: <cite>setConstantInputs()</cite> receives null for a non-constant argument, so
+the function must check.</p>
 </section>
 <section id="testing">
 <h2>Testing<a class="headerlink" href="#testing" title="Link to this heading">¶</a></h2>
@@ -1380,22 +1123,6 @@ example pull request can be found at
 <li><a class="reference internal" href="#">How to add an aggregate function?</a><ul>
 <li><a class="reference internal" href="#memory-layout">Memory Layout</a></li>
 <li><a class="reference internal" href="#simple-function-interface">Simple Function Interface</a><ul>
-<li><a class="reference internal" href="#default-null-behavior">Default-Null Behavior</a></li>
-<li><a class="reference internal" href="#tointermediate">toIntermediate</a></li>
-<li><a class="reference internal" href="#accumulatortype-of-default-null-behavior">AccumulatorType of Default-Null Behavior</a><ul>
-<li><a class="reference internal" href="#addinput">addInput</a></li>
-<li><a class="reference internal" href="#combine">combine</a></li>
-<li><a class="reference internal" href="#writeintermediateresult">writeIntermediateResult</a></li>
-<li><a class="reference internal" href="#writefinalresult">writeFinalResult</a></li>
-</ul>
-</li>
-<li><a class="reference internal" href="#accumulatortype-of-non-default-null-behavior">AccumulatorType of Non-Default-Null Behavior</a><ul>
-<li><a class="reference internal" href="#id1">addInput</a></li>
-<li><a class="reference internal" href="#id2">combine</a></li>
-<li><a class="reference internal" href="#id3">writeIntermediateResult</a></li>
-<li><a class="reference internal" href="#id4">writeFinalResult</a></li>
-</ul>
-</li>
 <li><a class="reference internal" href="#limitations">Limitations</a></li>
 </ul>
 </li>
