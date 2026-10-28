@@ -22,6 +22,7 @@
 
 #include <cudf/utilities/memory_resource.hpp>
 
+#include <rmm/detail/runtime_capabilities.hpp>
 #include <rmm/device_buffer.hpp>
 #include <rmm/resource_ref.hpp>
 
@@ -31,6 +32,7 @@
 #include <cstdint>
 #include <limits>
 #include <string>
+#include <string_view>
 #include <vector>
 
 using namespace facebook::velox;
@@ -295,11 +297,19 @@ class UnobservableGpuMemoryAdmissionTest
       public ::testing::WithParamInterface<const char*> {};
 
 TEST_P(UnobservableGpuMemoryAdmissionTest, letsAllocatorDecide) {
+  const std::string_view mode{GetParam()};
+  // Use the same capability check as RMM before constructing its async
+  // managed resource. These modes are unavailable on CUDA 12.x builds.
+  if ((mode == "managed_async" || mode == "prefetch_managed_async") &&
+      !rmm::detail::runtime_async_managed_alloc::is_supported()) {
+    GTEST_SKIP() << "Async managed memory requires CUDA 13.0 or higher and "
+                    "concurrent managed access support";
+  }
   // A device-only estimate must not reject an allocation without observing
   // allocator capacity: pool/arena retain reusable bytes, and managed memory
   // may allocate beyond device memory. Impossible headroom distinguishes the
   // explicit unavailable fallback from accidental physical-only admission.
-  auto resource = makeResource(GetParam());
+  auto resource = makeResource(mode);
   const auto info = currentDeviceMemoryInfo();
   ASSERT_TRUE(info.has_value());
   EXPECT_FALSE(info->hasAdmissionStats);
