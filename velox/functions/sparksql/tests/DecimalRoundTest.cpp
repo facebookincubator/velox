@@ -192,6 +192,68 @@ TEST_F(DecimalRoundTest, round) {
       makeFlatVector<int128_t>({0, 0, 0, 0}, DECIMAL(38, 0)));
 }
 
+TEST_F(DecimalRoundTest, sharedIdentityScales) {
+  const std::vector<std::pair<TypePtr, TypePtr>> types{
+      {DECIMAL(17, 4), DECIMAL(18, 4)},
+      {DECIMAL(18, 4), DECIMAL(19, 4)},
+      {DECIMAL(19, 4), DECIMAL(20, 4)},
+      {DECIMAL(38, 4), DECIMAL(38, 4)},
+      {DECIMAL(38, 0), DECIMAL(38, 0)}};
+  for (const auto& [inputType, resultType] : types) {
+    const auto [precision, inputScale] = getDecimalPrecisionScale(*inputType);
+    const auto maximum = DecimalUtil::kPowersOfTen[precision] - 1;
+    const auto decimalVector = [&](const TypePtr& type) -> VectorPtr {
+      if (type->isShortDecimal()) {
+        return makeNullableFlatVector<int64_t>(
+            {static_cast<int64_t>(maximum),
+             static_cast<int64_t>(-maximum),
+             1,
+             -1,
+             0,
+             std::nullopt},
+            type);
+      }
+      return makeNullableFlatVector<int128_t>(
+          {maximum, -maximum, 1, -1, 0, std::nullopt}, type);
+    };
+    const auto input = decimalVector(inputType);
+    const auto expected = decimalVector(resultType);
+    for (const char* name : {kRoundDecimal, kCeilDecimal, kFloorDecimal}) {
+      for (int32_t scale : {static_cast<int32_t>(inputScale), 400}) {
+        SCOPED_TRACE(
+            fmt::format("{}({}, {})", name, inputType->toString(), scale));
+        const auto call =
+            createDecimalRounding(inputType, resultType, scale, false, name);
+        testEncodings(call, {input}, expected);
+        facebook::velox::test::assertEqualVectors(
+            expected,
+            evaluate(call, makeRowVector({wrapInLazyDictionary(input)})));
+
+        SelectivityVector selected(input->size(), false);
+        selected.setValid(0, true);
+        selected.setValid(2, true);
+        selected.setValid(4, true);
+        selected.updateBounds();
+        exec::ExprSet expressions({call}, &execCtx_);
+        const auto row = makeRowVector({input});
+        exec::EvalCtx context(&execCtx_, &expressions, row.get());
+        auto reused = BaseVector::create(resultType, input->size(), pool());
+        reused->setNulls(
+            AlignedBuffer::allocate<bool>(input->size(), pool(), bits::kNull));
+        std::vector<VectorPtr> results{reused};
+        expressions.eval(selected, context, results);
+        for (vector_size_t i = 0; i < input->size(); ++i) {
+          if (selected.isValid(i)) {
+            EXPECT_TRUE(results[0]->equalValueAt(expected.get(), i, i));
+          } else {
+            EXPECT_TRUE(results[0]->isNullAt(i));
+          }
+        }
+      }
+    }
+  }
+}
+
 TEST_F(DecimalRoundTest, sharedExtremeScaleAndErrors) {
   const auto type = DECIMAL(38, 0);
   const auto maximum = HugeInt::parse("99999999999999999999999999999999999999");

@@ -142,15 +142,13 @@ Mathematical Functions
     Non-NULL scales must be in the inclusive range [-400, 400]. Out-of-range
     scales raise a user error during expression construction, regardless of
     ANSI mode; ``try`` does not catch this construction-time error.
+    Callers requiring scales outside this range must fall back to Spark.
     For example, rounding DECIMAL(38,38) 0.1 to scale -1 returns 10, not zero.
     When the quantum is outside the result precision, positive nonzero inputs
     raise an error; negative inputs and zero return zero.
 
     A typed NULL scale returns NULL without evaluating the runtime decimal
-    child; its result type uses scale zero. This follows Spark's shared
-    RoundBase evaluator, but Spark 4.1.1's SQL ceil/floor function builder
-    rejects NULL scales before reaching that evaluator. Acceptance here is a
-    native special-form contract, not SQL registry parity.
+    child; its result type uses scale zero.
 
     **Result type rules:**
 
@@ -166,8 +164,6 @@ Mathematical Functions
       to the nearest 10^|n| can produce a value one digit wider.
 
     See https://github.com/apache/spark/blob/v4.1.1/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/mathExpressions.scala.
-    The native scale bounds are a compatibility restriction, not a claim
-    that Spark rejects every scale outside this interval.
 
     Examples (type annotations for clarity, not executable SQL)::
 
