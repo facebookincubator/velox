@@ -294,8 +294,8 @@ costs one unit per row.
   policy, obtained from the process-scoped ``RPCRateLimiterRegistry`` and
   keyed by ``admissionKey()`` and the query's resolved policy:
   an adaptive limit shared across every driver hitting that backend under
-  that policy — multiplicative decrease on overload, doubling recovery below
-  one, and additive increase at or above one. Distinct admission keys adapt
+  that policy — multiplicative decrease on overload, recovery that doubles
+  every service horizon below one, and additive increase at or above one. Distinct admission keys adapt
   independently; queries whose functions return the same key, including
   ``""``, share one controller when they resolve to the same policy. The
   worker properties are ``rpc.ratelimiter.adaptive_enabled``,
@@ -329,8 +329,16 @@ prove overload. With a decrease factor of 0.5, overloads from successive
 admission epochs move the window from 200 to 100 to 50; completions admitted in
 the same epoch coalesce after the first decrease. If the function floor permits
 fractional pacing, successive overload epochs can move the window from 1 to 0.5
-to 0.25. Healthy completions never shrink the window: they recover 0.25 to 0.5
-to 1 before additive growth resumes, clamped at the hard limit.
+to 0.25. They stop at the probe floor, which keeps the gap between probes
+within ``rpc.ratelimiter.max_probe_interval_ms`` (60 seconds by default) while
+rejections return quickly. A probe that hangs until it times out holds the only
+paced slot, so timeouts space probes at least one timeout apart. The floor is
+also a minimum load of one probe per interval per worker; zero removes it.
+Healthy completions never shrink the window: after the first paced success it
+doubles every service horizon back to 1, then additive growth resumes, clamped
+at the hard limit. A non-overload failure stops that growth until the next
+success, and an overload cuts the window as it stood when the rejected call was
+admitted.
 
 ``evaluateCongestion()`` returns one of five verdicts. Canonical typed overload
 backs off shared admission at completion time before its lease is released; the
