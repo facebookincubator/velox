@@ -930,4 +930,15 @@ if(VELOX_ENABLE_NIMBLE)
   endif()
 endif()
 
+# Warnings that Velox holds its own code to but not its dependencies. Compile
+# options added here reach only targets defined from this point on, so they
+# skip every dependency resolved above. They come after CMAKE_CXX_FLAGS on the
+# command line, so they override the GCC suppression of implicit-fallthrough.
+if(ENABLE_ALL_WARNINGS)
+  add_compile_options($<$<COMPILE_LANGUAGE:CXX>:-Wimplicit-fallthrough>)
+  if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    add_compile_options($<$<COMPILE_LANGUAGE:CXX>:-Wunreachable-code-break>)
+  endif()
+endif()
+
 add_subdirectory(velox)
