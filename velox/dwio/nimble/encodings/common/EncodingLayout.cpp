@@ -299,6 +299,23 @@ EncodingLayout EncodingLayoutCapture::capture(
       captureChild(children, pos, valuesBytes, options);
       break;
     }
+    case EncodingType::PartitionedEliasFano: {
+      // PartitionedEliasFano nests three directories: partition offsets,
+      // partition bases and partition group offsets. The group streams that
+      // follow are always EliasFano and carry no selectable layout.
+      auto body = encoding.substr(prefixSize);
+      encoding::readVarint32(body); // numPartitions
+      encoding::readVarint32(body); // numGroups
+
+      children.reserve(3);
+      for (uint32_t child = 0; child < 3; ++child) {
+        const auto bytes = encoding::readLengthPrefixedBytes(body);
+        const char* pos = bytes.data();
+        captureChild(
+            children, pos, static_cast<uint32_t>(bytes.size()), options);
+      }
+      break;
+    }
     case EncodingType::BlockBitPacking: {
       // BlockBitPacking nests three per-block metadata sub-streams: baselines,
       // bit widths, and data offsets.
