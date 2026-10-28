@@ -166,6 +166,21 @@ class NimbleIndexProjector {
     /// as the new lowerKey with the original upperKey). When unset, no resume
     /// keys are produced even if a limit truncated the results.
     bool needResumeKey{false};
+    /// Caps the summed StripeGroupDescriptor::metadataSize of the stripe groups
+    /// that one metadata load returns while planning which stripes to read. A
+    /// load always returns the group of the stripe being planned, even when
+    /// that group alone exceeds the cap. It then adds the next groups that hold
+    /// stripes the key lookups found. It stops before the first group that
+    /// would take the total past the cap, so 0 loads only the stripe's own
+    /// group. Cached groups count toward the cap because planning holds them.
+    /// Planning keeps the groups of a load until it reaches a stripe outside
+    /// them, so a projection loads each group it uses at most once. A load of
+    /// several groups coalesces nearby sections and can read the rest in
+    /// parallel when the tablet reader has an IO executor. Its extra groups can
+    /// include ones that a row or byte limit keeps planning from reaching. A
+    /// read error in any of them fails the projection. Pinned metadata keeps
+    /// them in memory for the reader's lifetime.
+    uint64_t maxStripeGroupMetadataBytesPerLoad{0};
   };
 
   /// Request for a batch of index lookups.
@@ -452,14 +467,11 @@ class NimbleIndexProjector {
     bool requiredBarrier{false};
   };
 
-  // Locates this stripe's projected streams, staging them at the tail of
-  // ScanPlan::projectedStreams. The stripe is not part of the plan until
-  // appendStripePlan() commits it; a stripe dropped in between leaves the
-  // staged slots to be overwritten by the next stripe, and prepareStripes()
-  // trims any left over.
-  StripeStreams locateStripeStreams(uint32_t stripeIndex);
-
-  // Stages projected stream locations from metadata already loaded in a batch.
+  // Locates this stripe's projected streams from its loaded metadata, staging
+  // them at the tail of ScanPlan::projectedStreams. The stripe is not part of
+  // the plan until appendStripePlan() commits it; a stripe dropped in between
+  // leaves the staged slots to be overwritten by the next stripe, and
+  // prepareStripes() trims any left over.
   StripeStreams locateStripeStreams(const StripeIdentifier& stripe);
 
   // Appends one stripe to the plan using streams already staged for it by

@@ -912,6 +912,265 @@ TEST_P(TabletTest, batchStripeIdentifiers) {
   }
 }
 
+namespace {
+
+// Size of the stream in stripe 0 of writeOneStreamStripes(); each later stripe
+// adds one byte, so stream sizes identify their stripes.
+constexpr uint32_t kStreamBytes{10};
+
+// Metadata compression threshold that leaves every metadata section
+// uncompressed.
+constexpr uint32_t kNoMetadataCompression{std::numeric_limits<uint32_t>::max()};
+
+// Writes `numStripes` stripes of one uncompressed stream each, with chunk
+// stats. A `metadataFlushThreshold` of 1 closes a stripe group after every
+// stripe. Metadata sections larger than `metadataCompressionThreshold` bytes
+// are compressed when that makes them smaller.
+std::string writeOneStreamStripes(
+    velox::memory::MemoryPool& pool,
+    uint32_t numStripes,
+    uint32_t metadataFlushThreshold,
+    uint32_t metadataCompressionThreshold) {
+  std::string file;
+  velox::InMemoryWriteFile writeFile(&file);
+  auto writer = nimble::TabletWriter::create(
+      &writeFile,
+      pool,
+      {
+          .metadataFlushThreshold = metadataFlushThreshold,
+          .metadataCompressionThreshold = metadataCompressionThreshold,
+          .streamDeduplicationEnabled = false,
+          .enableChunkStats = true,
+          .chunkStatsMinAvgChunks = 0,
+      });
+  nimble::Buffer buffer{pool};
+  for (uint32_t i{0}; i < numStripes; ++i) {
+    writer->writeStripe(
+        100,
+        {nimble::index::test::createStream(
+            buffer,
+            {
+                .offset = 0,
+                .chunks = {{.rowCount = 100, .size = kStreamBytes + i}},
+            })});
+  }
+  writer->close();
+  writeFile.close();
+  return file;
+}
+
+} // namespace
+
+TEST_P(TabletTest, sparseStripeIdentifiers) {
+  constexpr uint32_t kNumStripes{6};
+
+  // Every stripe gets its own group, so the stripes below span three groups.
+  const auto file = writeOneStreamStripes(
+      *pool_,
+      kNumStripes,
+      /*metadataFlushThreshold=*/1,
+      kNoMetadataCompression);
+  const std::vector<uint32_t> stripes{1, 3, 4};
+
+  for (const bool loadChunkStats : {false, true}) {
+    SCOPED_TRACE(loadChunkStats);
+    nimble::TabletReader::Options options;
+    options.loadChunkStats = loadChunkStats;
+    auto tablet = createTabletReader(file, options);
+    const auto readsBefore = metadataIoStats_->read().count();
+    const auto bytesBefore = metadataIoStats_->rawBytesRead();
+    const auto identifiers = tablet->stripeIdentifiers(stripes);
+    ASSERT_EQ(identifiers.size(), stripes.size());
+    for (size_t i{0}; i < identifiers.size(); ++i) {
+      SCOPED_TRACE(i);
+      EXPECT_EQ(identifiers[i].stripeId(), stripes[i]);
+      EXPECT_EQ(identifiers[i].stripeGroup()->index(), stripes[i]);
+      EXPECT_EQ(
+          tablet->streamSize(identifiers[i], 0), kStreamBytes + stripes[i]);
+      EXPECT_EQ(identifiers[i].chunkStats() != nullptr, loadChunkStats);
+    }
+    if (!expectHasCache()) {
+      // The three groups arrive in one load.
+      EXPECT_EQ(metadataIoStats_->read().count() - readsBefore, 1);
+      if (!loadChunkStats) {
+        const auto sections = tablet->stripeGroupsMetadata();
+        EXPECT_EQ(
+            metadataIoStats_->rawBytesRead() - bytesBefore,
+            sections[1].size() + sections[3].size() + sections[4].size());
+      }
+    }
+
+    // Holding the identifiers keeps their groups cached.
+    const auto readsAfter = metadataIoStats_->read().count();
+    const auto cached = tablet->stripeIdentifiers(stripes);
+    ASSERT_EQ(cached.size(), identifiers.size());
+    for (size_t i{0}; i < cached.size(); ++i) {
+      SCOPED_TRACE(i);
+      EXPECT_EQ(cached[i].stripeGroup(), identifiers[i].stripeGroup());
+      EXPECT_EQ(cached[i].chunkStats(), identifiers[i].chunkStats());
+    }
+    EXPECT_EQ(metadataIoStats_->read().count(), readsAfter);
+
+    {
+      const std::vector<uint32_t> noStripes;
+      EXPECT_THAT(tablet->stripeIdentifiers(noStripes), ::testing::IsEmpty());
+    }
+    {
+      const std::vector<uint32_t> descending{3, 1};
+      NIMBLE_ASSERT_THROW(
+          tablet->stripeIdentifiers(descending),
+          "Stripes must be strictly ascending.");
+    }
+    {
+      const std::vector<uint32_t> duplicate{1, 1};
+      NIMBLE_ASSERT_THROW(
+          tablet->stripeIdentifiers(duplicate),
+          "Stripes must be strictly ascending.");
+    }
+    {
+      const std::vector<uint32_t> outOfRange{kNumStripes};
+      NIMBLE_ASSERT_THROW(
+          tablet->stripeIdentifiers(outOfRange), "Stripe is out of range.");
+    }
+    EXPECT_EQ(metadataIoStats_->read().count(), readsAfter);
+
+    // Group 3 is still held, so only groups 2 and 5 are read.
+    {
+      const std::vector<uint32_t> partlyCached{2, 3, 5};
+      const auto partlyCachedReadsBefore = metadataIoStats_->read().count();
+      const auto partlyCachedBytesBefore = metadataIoStats_->rawBytesRead();
+      const auto mixed = tablet->stripeIdentifiers(partlyCached);
+      ASSERT_EQ(mixed.size(), partlyCached.size());
+      for (size_t i{0}; i < mixed.size(); ++i) {
+        SCOPED_TRACE(i);
+        EXPECT_EQ(mixed[i].stripeId(), partlyCached[i]);
+        EXPECT_EQ(
+            tablet->streamSize(mixed[i], 0), kStreamBytes + partlyCached[i]);
+      }
+      EXPECT_EQ(mixed[1].stripeGroup(), identifiers[1].stripeGroup());
+      if (!expectHasCache()) {
+        EXPECT_EQ(
+            metadataIoStats_->read().count() - partlyCachedReadsBefore, 1);
+        if (!loadChunkStats) {
+          const auto sections = tablet->stripeGroupsMetadata();
+          EXPECT_EQ(
+              metadataIoStats_->rawBytesRead() - partlyCachedBytesBefore,
+              sections[2].size() + sections[5].size());
+        }
+      }
+    }
+  }
+}
+
+TEST_P(TabletTest, stripeGroupDescriptors) {
+  constexpr uint32_t kNumStripes{4};
+
+  // Every stripe gets its own group.
+  const auto file = writeOneStreamStripes(
+      *pool_,
+      kNumStripes,
+      /*metadataFlushThreshold=*/1,
+      kNoMetadataCompression);
+  for (const bool loadChunkStats : {false, true}) {
+    SCOPED_TRACE(loadChunkStats);
+    nimble::TabletReader::Options options;
+    options.loadChunkStats = loadChunkStats;
+    const auto tablet = createTabletReader(file, options);
+    const auto sections = tablet->stripeGroupsMetadata();
+    ASSERT_EQ(sections.size(), kNumStripes);
+    const std::vector<uint32_t> stripes{0, 2, 3};
+    const auto readsBefore = metadataIoStats_->read().count();
+    const auto descriptors = tablet->stripeGroupDescriptors(stripes);
+    EXPECT_EQ(metadataIoStats_->read().count(), readsBefore);
+    ASSERT_EQ(descriptors.size(), stripes.size());
+    for (size_t i{0}; i < descriptors.size(); ++i) {
+      SCOPED_TRACE(i);
+      const auto stripeGroup = stripes[i];
+      EXPECT_EQ(descriptors[i].index, stripeGroup);
+
+      // Chunk stats add their own section.
+      const auto sectionSize = sections[stripeGroup].uncompressedSize().value();
+      if (loadChunkStats) {
+        EXPECT_GT(descriptors[i].metadataSize, sectionSize);
+      } else {
+        EXPECT_EQ(descriptors[i].metadataSize, sectionSize);
+      }
+
+      // The stripe is alone in its group, and the metadata is uncompressed, so
+      // loading the stripe reads exactly the group's metadata size.
+      if (!expectHasCache()) {
+        const auto bytesBefore = metadataIoStats_->rawBytesRead();
+        tablet->stripeIdentifier(/*stripeIndex=*/stripeGroup);
+        EXPECT_EQ(
+            metadataIoStats_->rawBytesRead() - bytesBefore,
+            descriptors[i].metadataSize);
+      }
+    }
+  }
+  {
+    // The writer closes a group once its estimate, 4 bytes plus 13 per stream
+    // per stripe, reaches the threshold. With one stream, each group holds
+    // three stripes, and stripes of one group get the same descriptor.
+    nimble::TabletReader::Options options;
+    options.loadChunkStats = false;
+    const auto tablet = createTabletReader(
+        writeOneStreamStripes(
+            *pool_,
+            /*numStripes=*/6,
+            /*metadataFlushThreshold=*/4 + 3 * 13,
+            kNoMetadataCompression),
+        options);
+    const auto sections = tablet->stripeGroupsMetadata();
+    ASSERT_EQ(sections.size(), 2);
+    const nimble::StripeGroupDescriptor group0{
+        .index = 0,
+        .metadataSize = sections[0].uncompressedSize().value(),
+    };
+    const nimble::StripeGroupDescriptor group1{
+        .index = 1,
+        .metadataSize = sections[1].uncompressedSize().value(),
+    };
+    const std::vector<uint32_t> stripes{0, 2, 3, 5};
+    EXPECT_THAT(
+        tablet->stripeGroupDescriptors(stripes),
+        ::testing::ElementsAre(group0, group0, group1, group1));
+  }
+  {
+    // A compressed section counts its decompressed size. The default flush
+    // threshold puts every stripe in one group, whose metadata compresses.
+    // Leaving out chunk stats makes the size the stripe-group section alone.
+    nimble::TabletReader::Options options;
+    options.loadChunkStats = false;
+    const auto tablet = createTabletReader(
+        writeOneStreamStripes(
+            *pool_,
+            /*numStripes=*/50,
+            nimble::kMetadataFlushThreshold,
+            /*metadataCompressionThreshold=*/0),
+        options);
+    const auto sections = tablet->stripeGroupsMetadata();
+    ASSERT_EQ(sections.size(), 1);
+    ASSERT_LT(sections[0].size(), sections[0].uncompressedSize().value());
+    const std::vector<uint32_t> stripes{0};
+    const auto descriptors = tablet->stripeGroupDescriptors(stripes);
+    ASSERT_EQ(descriptors.size(), 1);
+    EXPECT_EQ(
+        descriptors[0].metadataSize, sections[0].uncompressedSize().value());
+  }
+
+  const auto tablet = createTabletReader(file);
+  {
+    const std::vector<uint32_t> noStripes;
+    EXPECT_THAT(
+        tablet->stripeGroupDescriptors(noStripes), ::testing::IsEmpty());
+  }
+  {
+    const std::vector<uint32_t> outOfRange{kNumStripes};
+    NIMBLE_ASSERT_THROW(
+        tablet->stripeGroupDescriptors(outOfRange), "Stripe is out of range.");
+  }
+}
+
 TEST_P(TabletTest, emptyWrite) {
   // Creating an Nimble file without writing any stripes
   test(/* stripes */ {});
