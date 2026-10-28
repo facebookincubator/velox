@@ -97,6 +97,7 @@ class StreamTrailerLayout {
 /// on these values, so never renumber, reuse or remove one. TabletReader checks
 /// these bits after it parses the postscript, the footer, the stripes section
 /// and possibly the first stripe group, so a bit cannot gate changes to those.
+/// See ADDING_REQUIRED_FEATURE.md in this directory before adding a feature.
 enum class RequiredFeature : uint32_t {};
 
 /// File-level properties that readers need before loading other optional
