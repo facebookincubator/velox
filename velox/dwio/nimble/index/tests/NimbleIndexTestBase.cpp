@@ -18,6 +18,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstring>
 #include <future>
 #include <limits>
 #include <vector>
@@ -44,6 +45,7 @@
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
 #include "velox/dwio/nimble/encodings/views/EncodingViewFactory.h"
 #include "velox/dwio/nimble/index/ClusterIndexConfig.h"
+#include "velox/dwio/nimble/index/KeyCursor.h"
 #include "velox/dwio/nimble/index/NimbleIterator.h"
 #include "velox/dwio/nimble/index/StripeStreams.h"
 #include "velox/dwio/nimble/index/tests/ClusterIndexTestUtils.h"
@@ -77,7 +79,6 @@
 #include "velox/common/testutil/TestValue.h"
 #include "velox/dwio/common/tests/utils/DataFiles.h"
 #include "velox/row/CompactRow.h"
-#include "velox/row/UnsafeRowFast.h"
 #include "velox/serializers/KeyEncoder.h"
 #include "velox/vector/fuzzer/VectorFuzzer.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
@@ -105,12 +106,6 @@ RowRange readEmbeddedRowRange(const folly::IOBuf& slice) {
 
 std::optional<std::string> readEmbeddedResumeKey(const folly::IOBuf& slice) {
   return readEmbeddedTabletChunkHeader(slice).resumeKey;
-}
-
-std::string nextTestOutputRowFormat(std::string_view prefix) {
-  static std::atomic<std::size_t> nextFormatId{0};
-  return fmt::format(
-      "{}_{}", prefix, nextFormatId.fetch_add(1, std::memory_order_relaxed));
 }
 
 // Coalesces the chunk slice IOBuf chain into a single contiguous buffer for
@@ -415,19 +410,68 @@ NimbleIndexProjectorTestBase::createProjector(
       setIndexIoStats);
 }
 
+NimbleIterator::EntryDecoder NimbleIndexProjectorTestBase::compactRowDecoder() {
+  return [](const velox::RowVectorPtr& rows,
+            nimble::index::KeyCursor& keyCursor,
+            folly::IOBufQueue& keyStorage,
+            folly::IOBufQueue& valueStorage,
+            std::vector<std::string_view>& keys,
+            std::vector<std::string_view>& values) {
+    const auto numRows = rows->size();
+    // Copies the keys, which the cursor reuses its buffer for.
+    for (velox::vector_size_t row = 0; row < numRows; ++row) {
+      const auto key = keyCursor.next();
+      auto [buffer, capacity] = keyStorage.preallocate(
+          key.size(), std::max<size_t>(key.size(), 4'096));
+      NIMBLE_CHECK_GE(capacity, key.size());
+      std::memcpy(buffer, key.data(), key.size());
+      keyStorage.postallocate(key.size());
+      keys.emplace_back(static_cast<const char*>(buffer), key.size());
+    }
+
+    velox::row::CompactRow compactRow{rows};
+    const auto fixedRowSize =
+        velox::row::CompactRow::fixedRowSize(rows->rowType());
+    std::vector<size_t> offsets(static_cast<size_t>(numRows) + 1, 0);
+    for (velox::vector_size_t row = 0; row < numRows; ++row) {
+      offsets[row + 1] = offsets[row] +
+          (fixedRowSize.has_value() ? *fixedRowSize : compactRow.rowSize(row));
+    }
+    const auto numBytes = offsets[numRows];
+    auto [buffer, capacity] = valueStorage.preallocate(numBytes, numBytes);
+    NIMBLE_CHECK_GE(capacity, numBytes);
+    auto* data = static_cast<char*>(buffer);
+    // CompactRow needs a zeroed buffer.
+    std::memset(data, 0, numBytes);
+    compactRow.serialize(/*offset=*/0, numRows, offsets.data(), data);
+    valueStorage.postallocate(numBytes);
+    for (velox::vector_size_t row = 0; row < numRows; ++row) {
+      values.emplace_back(data + offsets[row], offsets[row + 1] - offsets[row]);
+    }
+  };
+}
+
 std::unique_ptr<NimbleIterator> NimbleIndexProjectorTestBase::createRowIterator(
     const std::vector<Subfield>& projectedSubfields,
     const NimbleIterator::Options& options) {
-  return createIterator(
-      NimbleIterator::createRowIterator, projectedSubfields, options);
+  return createEntryIterator(projectedSubfields, compactRowDecoder(), options);
 }
 
 std::unique_ptr<NimbleIterator>
-NimbleIndexProjectorTestBase::createBatchIterator(
+NimbleIndexProjectorTestBase::createEntryIterator(
     const std::vector<Subfield>& projectedSubfields,
+    const NimbleIterator::EntryDecoder& entryDecoder,
     const NimbleIterator::Options& options) {
   return createIterator(
-      NimbleIterator::createBatchIterator, projectedSubfields, options);
+      [&entryDecoder](
+          std::unique_ptr<NimbleIndexProjector> projector,
+          velox::memory::MemoryPool* pool,
+          const NimbleIterator::Options& iteratorOptions) {
+        return NimbleIterator::createRowIterator(
+            std::move(projector), pool, entryDecoder, iteratorOptions);
+      },
+      projectedSubfields,
+      options);
 }
 
 std::unique_ptr<NimbleIndexProjector>
