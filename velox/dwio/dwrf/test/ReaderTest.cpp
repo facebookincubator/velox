@@ -27,6 +27,7 @@
 #include "velox/connectors/hive/HiveConnectorUtil.h"
 #include "velox/dwio/common/ExecutorBarrier.h"
 #include "velox/dwio/common/FileSink.h"
+#include "velox/dwio/common/Mutation.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/dwio/dwrf/common/Common.h"
 #include "velox/dwio/dwrf/common/DwrfRuntimeStats.h"
@@ -2536,6 +2537,30 @@ TEST_F(TestReader, seekToRow) {
   ASSERT_EQ(rowReader->next(2, result), 1);
   assertEqualVectors(batches.back()->slice(9, 1), result);
   EXPECT_EQ(rowReader->next(2, result), 0);
+}
+
+TEST_F(TestReader, seekToRowAfterDeletedBatch) {
+  auto batches = createBatches({{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}});
+  auto schema = asRowType(batches.front()->type());
+  auto [writer, reader] =
+      createWriterReader(batches, pool(), dataIoStats_, metadataIoStats_);
+
+  auto scanSpec = std::make_shared<common::ScanSpec>("root");
+  scanSpec->addAllChildFields(*schema);
+  RowReaderOptions options;
+  options.setScanSpec(scanSpec);
+  auto rowReader = reader->createDwrfRowReader(options);
+  auto result = BaseVector::create(schema, 0, pool());
+
+  ASSERT_EQ(rowReader->seekToRow(2), 2);
+  const uint64_t deletedRows = 0b11;
+  const Mutation mutation{.deletedRows = &deletedRows};
+  ASSERT_EQ(rowReader->next(2, result, &mutation), 2);
+  ASSERT_EQ(result->size(), 0);
+
+  ASSERT_NO_THROW(rowReader->seekToRow(7));
+  ASSERT_EQ(rowReader->next(2, result), 2);
+  assertEqualVectors(batches.front()->slice(7, 2), result);
 }
 
 TEST_F(TestReader, seekToRowWithStrideFilter) {
