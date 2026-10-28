@@ -155,7 +155,8 @@ class ArraySortTest : public SparkFunctionBaseTest {
       nans.insert(nans.end(), {firstNanBits, secondNanBits});
     }
 
-    auto input = makeNullableArrayVector<T>({values});
+    auto input = makeNullableArrayVector<T>(
+        std::vector<std::vector<std::optional<T>>>{values});
     auto reversedElements = wrapInDictionary(
         makeIndicesInReverse(input->elements()->size()), input->elements());
     auto dictionaryElements = wrapInDictionary(
@@ -484,7 +485,8 @@ TEST_F(ArraySortTest, lambda) {
   for (auto i = 0; i < 64; ++i) {
     manyTies.emplace_back(fmt::format("v{:03}", i));
   }
-  auto manyTiesInput = makeNullableArrayVector<std::string>({manyTies});
+  auto manyTiesInput = makeNullableArrayVector<std::string>(
+      std::vector<std::vector<std::optional<std::string>>>{manyTies});
   testArraySort(
       "(x, y) -> if(lessthan(length(x), length(y)), -10, "
       "if(greaterthan(length(x), length(y)), 37, 0))",
