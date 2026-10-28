@@ -437,6 +437,7 @@ void UcxOutputQueue::enqueue(
     return;
   }
   std::vector<UcxDataAvailable> dataAvailableCallbacks;
+  std::vector<ContinuePromise> capacityPromises;
   {
     std::lock_guard<std::mutex> l(mutex_);
     // Partitioned output can notify at most one destination; broadcast can
@@ -487,6 +488,14 @@ void UcxOutputQueue::enqueue(
     } else {
       VELOX_CHECK_GE(destination, 0);
       VELOX_CHECK_LT(destination, queues_.size());
+      if (reservationBytes > numBytes) {
+        // Publishing a smaller payload returns the excess reservation. Make
+        // room for every possible wakeup before publication, so allocation
+        // failure still leaves the producer's reservation and input intact.
+        capacityPromises.reserve(
+            promises_.size() + transferPromises_[destination].size() +
+            anyTransferPromises_.size());
+      }
       success = enqueuePartitionedOutputLocked(
           destination, std::move(sharedData), numRows, dataAvailableCallbacks);
       if (success) {
@@ -501,6 +510,25 @@ void UcxOutputQueue::enqueue(
       if (transferReservationBytes != nullptr) {
         *transferReservationBytes = 0;
       }
+      if (reservationBytes > numBytes) {
+        try {
+          maybeContinueProducersLocked(capacityPromises);
+          collectTransferPromisesLocked(destination, capacityPromises);
+        } catch (const std::bad_alloc&) {
+          // Storage for promise moves was reserved before publication, but
+          // diagnostics may still allocate. Never retry a published payload.
+          VELOX_FAIL(
+              "Failed to collect UCX producer wakeups after enqueue committed");
+        }
+      }
+    }
+  }
+  for (auto& promise : capacityPromises) {
+    try {
+      promise.setValue();
+    } catch (const std::bad_alloc&) {
+      VELOX_FAIL(
+          "Failed to resume UCX output producer after enqueue committed");
     }
   }
   // Now that data is enqueued, notify blocked readers (outside of mutex.)
@@ -572,6 +600,38 @@ bool UcxOutputQueue::reserveTransferBytes(
     int64_t maxBytes,
     ContinueFuture* future) {
   std::lock_guard<std::mutex> l(mutex_);
+  return reserveTransferBytesLocked(
+      destination, bytes, maxBytes, future, /*reserveBytes=*/true);
+}
+
+bool UcxOutputQueue::waitForAnyTransferCapacity(
+    const std::vector<TransferCapacityRequest>& requests,
+    ContinueFuture* future) {
+  VELOX_CHECK_NOT_NULL(future);
+  VELOX_CHECK(!requests.empty());
+  std::lock_guard<std::mutex> l(mutex_);
+  for (const auto& request : requests) {
+    if (!reserveTransferBytesLocked(
+            request.destination,
+            request.bytes,
+            request.maxBytes,
+            nullptr,
+            /*reserveBytes=*/false)) {
+      return false;
+    }
+  }
+  anyTransferPromises_.emplace_back(
+      "UcxOutputQueue::waitForAnyTransferCapacity");
+  *future = anyTransferPromises_.back().getSemiFuture();
+  return true;
+}
+
+bool UcxOutputQueue::reserveTransferBytesLocked(
+    int destination,
+    int64_t bytes,
+    int64_t maxBytes,
+    ContinueFuture* future,
+    bool reserveBytes) {
   VELOX_CHECK_GT(bytes, 0);
   VELOX_CHECK_GT(maxBytes, 0);
   VELOX_CHECK_GE(destination, 0);
@@ -601,7 +661,9 @@ bool UcxOutputQueue::reserveTransferBytes(
   auto& reservedBytes = transferReservedBytes_[destination];
   if (queue->waitingForData() && destinationStats.bytesQueued == 0 &&
       reservedBytes == 0) {
-    reservedBytes = checkedAdd(reservedBytes, bytes, "transfer reservation");
+    if (reserveBytes) {
+      reservedBytes = checkedAdd(reservedBytes, bytes, "transfer reservation");
+    }
     return false;
   }
 
@@ -615,7 +677,9 @@ bool UcxOutputQueue::reserveTransferBytes(
     return true;
   }
 
-  reservedBytes = checkedAdd(reservedBytes, bytes, "transfer reservation");
+  if (reserveBytes) {
+    reservedBytes = checkedAdd(reservedBytes, bytes, "transfer reservation");
+  }
   return false;
 }
 
@@ -883,6 +947,11 @@ void UcxOutputQueue::getData(int destination, UcxDataAvailableCallback notify) {
         // Ownership is now retained by the server until transfer completion.
         updateStatsWithDequeuedLocked(
             checkedBytes(data.data->gpu_data->size()), 1, promises);
+      } else if (!data.immediate) {
+        // A waiting consumer can admit a payload despite retained in-flight
+        // bytes. Installing this callback changes the admission predicate, so
+        // wake producers that checked it before the consumer arrived.
+        collectTransferPromisesLocked(destination, promises);
       }
     } else {
       data = UcxDestinationQueue::Data{nullptr, 0, {}, true};
@@ -1042,6 +1111,7 @@ void UcxOutputQueue::collectTransferPromisesLocked(
     promises.push_back(std::move(promise));
   }
   transferPromises_[destination].clear();
+  collectAnyTransferPromisesLocked(promises);
 }
 
 void UcxOutputQueue::collectAllTransferPromisesLocked(
@@ -1052,6 +1122,16 @@ void UcxOutputQueue::collectAllTransferPromisesLocked(
     }
     destinationPromises.clear();
   }
+  collectAnyTransferPromisesLocked(promises);
+}
+
+void UcxOutputQueue::collectAnyTransferPromisesLocked(
+    std::vector<ContinuePromise>& promises) {
+  promises.reserve(promises.size() + anyTransferPromises_.size());
+  for (auto& promise : anyTransferPromises_) {
+    promises.push_back(std::move(promise));
+  }
+  anyTransferPromises_.clear();
 }
 
 void UcxOutputQueue::enqueueBroadcastOutputLocked(
@@ -1295,6 +1375,7 @@ std::string UcxOutputQueue::toString() {
       << ", fullTransferRetainedLimit=" << fullTransferRetainedLimitLocked()
       << ", fullTransferCongested=" << fullTransferCongested_
       << ", waitingProducers=" << promises_.size()
+      << ", waitingAnyTransferProducers=" << anyTransferPromises_.size()
       << ", numFinished=" << numFinished_ << "/" << numDrivers_
       << ", atEnd=" << atEnd_ << ", noMoreQueues=" << noMoreQueues_
       << ", terminated=" << terminated_ << "]";

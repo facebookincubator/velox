@@ -910,6 +910,224 @@ TEST_F(UcxOutputQueueManagerTest, transferReservationBlocksAndWakes) {
   EXPECT_TRUE(cancelledFuture.isReady());
 }
 
+TEST_F(
+    UcxOutputQueueManagerTest,
+    anyTransferCapacityWakesWithoutRetainingOldWaiters) {
+  const std::string taskId = "adaptive.anyTransferCapacity";
+  auto task = initializeTask(taskId, 2, 1);
+  auto cleanup = folly::makeGuard([&] { queueManager_->removeTask(taskId); });
+  ASSERT_FALSE(
+      queueManager_->reserveTransferBytes(taskId, 0, 100, 100, nullptr));
+  ASSERT_FALSE(
+      queueManager_->reserveTransferBytes(taskId, 1, 100, 100, nullptr));
+  const std::vector<UcxOutputQueue::TransferCapacityRequest> requests{
+      {0, 1, 100}, {1, 1, 100}};
+
+  // Destination zero remains full through every wakeup. Repeatedly collecting
+  // fresh destination-local futures would leave abandoned waiters there.
+  for (int attempt = 0; attempt < 32; ++attempt) {
+    ContinueFuture future;
+    ASSERT_TRUE(
+        queueManager_->waitForAnyTransferCapacity(taskId, requests, &future));
+    EXPECT_FALSE(future.isReady());
+    EXPECT_NE(
+        queueManager_->toString(taskId).find("waitingAnyTransferProducers=1"),
+        std::string::npos);
+    queueManager_->releaseTransferReservation(taskId, 1, 100);
+    ASSERT_TRUE(future.isReady());
+    std::move(future).get();
+    EXPECT_NE(
+        queueManager_->toString(taskId).find("waitingAnyTransferProducers=0"),
+        std::string::npos);
+
+    // Capacity freed between the caller's probes and waiter installation must
+    // prevent parking. The successful probe must not reserve bytes itself.
+    ContinueFuture unblockedFuture = ContinueFuture::makeEmpty();
+    EXPECT_FALSE(queueManager_->waitForAnyTransferCapacity(
+        taskId, requests, &unblockedFuture));
+    EXPECT_FALSE(unblockedFuture.valid());
+    ASSERT_FALSE(
+        queueManager_->reserveTransferBytes(taskId, 1, 100, 100, nullptr));
+  }
+  queueManager_->releaseTransferReservation(taskId, 0, 100);
+  queueManager_->releaseTransferReservation(taskId, 1, 100);
+}
+
+TEST_F(UcxOutputQueueManagerTest, anyTransferCapacityChecksExactRequestBytes) {
+  const std::string taskId = "adaptive.anyExactAdmission";
+  auto task = initializeTask(taskId, 2, 1);
+  auto cleanup = folly::makeGuard([&] { queueManager_->removeTask(taskId); });
+  ASSERT_FALSE(
+      queueManager_->reserveTransferBytes(taskId, 0, 90, 100, nullptr));
+  ASSERT_FALSE(
+      queueManager_->reserveTransferBytes(taskId, 1, 90, 100, nullptr));
+  const std::vector<UcxOutputQueue::TransferCapacityRequest> requests{
+      {0, 20, 100}, {1, 20, 100}};
+  ContinueFuture future;
+  ASSERT_TRUE(
+      queueManager_->waitForAnyTransferCapacity(taskId, requests, &future));
+  EXPECT_FALSE(future.isReady());
+  queueManager_->releaseTransferReservation(taskId, 1, 10);
+  ASSERT_TRUE(future.isReady());
+  std::move(future).get();
+  ContinueFuture unblockedFuture = ContinueFuture::makeEmpty();
+  EXPECT_FALSE(queueManager_->waitForAnyTransferCapacity(
+      taskId, requests, &unblockedFuture));
+  EXPECT_FALSE(unblockedFuture.valid());
+  EXPECT_FALSE(
+      queueManager_->reserveTransferBytes(taskId, 1, 20, 100, nullptr));
+  queueManager_->releaseTransferReservation(taskId, 0, 90);
+  queueManager_->releaseTransferReservation(taskId, 1, 100);
+}
+
+TEST_F(
+    UcxOutputQueueManagerTest,
+    anyTransferCapacityWakesOnDestinationDeletionAndTaskRemoval) {
+  const std::string taskId = "adaptive.anyTerminalWakeup";
+  auto task = initializeTask(taskId, 2, 1);
+  auto cleanup = folly::makeGuard([&] { queueManager_->removeTask(taskId); });
+  ASSERT_FALSE(
+      queueManager_->reserveTransferBytes(taskId, 0, 100, 100, nullptr));
+  ASSERT_FALSE(
+      queueManager_->reserveTransferBytes(taskId, 1, 100, 100, nullptr));
+  ContinueFuture deletedFuture;
+  ASSERT_TRUE(queueManager_->waitForAnyTransferCapacity(
+      taskId, {{0, 1, 100}, {1, 1, 100}}, &deletedFuture));
+  queueManager_->deleteResults(taskId, 1);
+  ASSERT_TRUE(deletedFuture.isReady());
+  std::move(deletedFuture).get();
+
+  ContinueFuture removedFuture;
+  ASSERT_TRUE(queueManager_->waitForAnyTransferCapacity(
+      taskId, {{0, 1, 100}}, &removedFuture));
+  queueManager_->removeTask(taskId);
+  ASSERT_TRUE(removedFuture.isReady());
+  std::move(removedFuture).get();
+  ContinueFuture terminalFuture = ContinueFuture::makeEmpty();
+  EXPECT_FALSE(queueManager_->waitForAnyTransferCapacity(
+      taskId, {{0, 1, 100}}, &terminalFuture));
+  EXPECT_FALSE(terminalFuture.valid());
+}
+
+TEST_F(UcxOutputQueueManagerTest, waitingConsumerWakesAnyTransferCapacity) {
+  const std::string taskId = "adaptive.anyWaitingConsumer";
+  auto task = initializeTask(taskId, 2, 1);
+  auto cleanup = folly::makeGuard([&] { queueManager_->removeTask(taskId); });
+  ASSERT_FALSE(
+      queueManager_->reserveTransferBytes(taskId, 0, 100, 100, nullptr));
+  enqueue(taskId, 1, 100);
+
+  struct Received {
+    bool called{false};
+    std::shared_ptr<UcxOutputQueue> queue;
+    std::shared_ptr<cudf::packed_columns> page;
+  };
+  auto held = std::make_shared<Received>();
+  queueManager_->getDataWithQueue(
+      taskId,
+      1,
+      [held](
+          std::shared_ptr<UcxOutputQueue> queue,
+          std::shared_ptr<cudf::packed_columns> page,
+          vector_size_t,
+          std::vector<int64_t>) {
+        held->called = true;
+        held->queue = std::move(queue);
+        held->page = std::move(page);
+      });
+  ASSERT_TRUE(held->called);
+  ASSERT_NE(held->page, nullptr);
+  const auto bytes = static_cast<int64_t>(held->page->gpu_data->size());
+  ASSERT_GT(bytes, 100);
+
+  ContinueFuture future;
+  const std::vector<UcxOutputQueue::TransferCapacityRequest> requests{
+      {0, 1, 100}, {1, 1, 100}};
+  ASSERT_TRUE(
+      queueManager_->waitForAnyTransferCapacity(taskId, requests, &future));
+  ASSERT_FALSE(future.isReady());
+
+  // A request arriving at an empty destination makes the waiting-consumer
+  // admission exception eligible even while an earlier send remains in flight.
+  // Registering that consumer is therefore a capacity-changing event.
+  auto waiting = std::make_shared<Received>();
+  queueManager_->getDataWithQueue(
+      taskId,
+      1,
+      [waiting](
+          std::shared_ptr<UcxOutputQueue> queue,
+          std::shared_ptr<cudf::packed_columns> page,
+          vector_size_t,
+          std::vector<int64_t>) {
+        waiting->called = true;
+        waiting->queue = std::move(queue);
+        waiting->page = std::move(page);
+      });
+  ASSERT_FALSE(waiting->called);
+  ASSERT_TRUE(future.isReady());
+  std::move(future).get();
+  ContinueFuture unblockedFuture = ContinueFuture::makeEmpty();
+  EXPECT_FALSE(queueManager_->waitForAnyTransferCapacity(
+      taskId, requests, &unblockedFuture));
+  EXPECT_FALSE(unblockedFuture.valid());
+  ASSERT_FALSE(queueManager_->reserveTransferBytes(taskId, 1, 1, 100, nullptr));
+  queueManager_->releaseTransferReservation(taskId, 1, 1);
+
+  held->page.reset();
+  CUDF_CUDA_TRY(cudaStreamSynchronize(cudaStreamDefault));
+  held->queue->releaseInFlightBytes(1, bytes, 1);
+  queueManager_->releaseTransferReservation(taskId, 0, 100);
+  queueManager_->removeTask(taskId);
+  EXPECT_TRUE(waiting->called);
+  EXPECT_EQ(waiting->page, nullptr);
+}
+
+TEST_F(
+    UcxOutputQueueManagerTest,
+    smallerPublishedPayloadWakesTransferCapacity) {
+  const std::string taskId = "adaptive.smallerPublishedPayload";
+  auto task = initializeTask(taskId, 2, 1);
+  auto cleanup = folly::makeGuard([&] { queueManager_->removeTask(taskId); });
+  auto page = makePackedColumns(10);
+  const auto bytes = static_cast<int64_t>(page->gpu_data->size());
+  constexpr int64_t kUnusedReservation = 100;
+  constexpr int64_t kUnrelatedReservation = 17;
+  const auto limit = bytes + kUnusedReservation;
+  auto reservationBytes = static_cast<uint64_t>(limit);
+  ASSERT_FALSE(
+      queueManager_->reserveTransferBytes(taskId, 0, limit, limit, nullptr));
+  ASSERT_FALSE(queueManager_->reserveTransferBytes(
+      taskId, 1, kUnrelatedReservation, kUnrelatedReservation, nullptr));
+
+  ContinueFuture anyFuture;
+  ASSERT_TRUE(queueManager_->waitForAnyTransferCapacity(
+      taskId, {{0, 1, limit}, {1, 1, kUnrelatedReservation}}, &anyFuture));
+  ASSERT_FALSE(anyFuture.isReady());
+  ContinueFuture destinationFuture;
+  ASSERT_TRUE(queueManager_->reserveTransferBytes(
+      taskId, 0, 1, limit, &destinationFuture));
+  ASSERT_FALSE(destinationFuture.isReady());
+
+  // Publication consumes the whole estimate but retains only the smaller
+  // actual payload. This returns capacity without a send-completion callback.
+  queueManager_->enqueue(taskId, 0, std::move(page), 10, &reservationBytes);
+  EXPECT_EQ(reservationBytes, 0);
+  ASSERT_TRUE(anyFuture.isReady());
+  std::move(anyFuture).get();
+  ASSERT_TRUE(destinationFuture.isReady());
+  std::move(destinationFuture).get();
+  EXPECT_EQ(queueManager_->stats(taskId)->bufferedBytes, bytes);
+  ASSERT_FALSE(queueManager_->reserveTransferBytes(
+      taskId, 0, kUnusedReservation, limit, nullptr));
+  queueManager_->releaseTransferReservation(taskId, 0, kUnusedReservation);
+  EXPECT_ANY_THROW(queueManager_->releaseTransferReservation(taskId, 0, 1));
+  EXPECT_ANY_THROW(queueManager_->releaseTransferReservation(
+      taskId, 1, kUnrelatedReservation + 1));
+  queueManager_->releaseTransferReservation(taskId, 1, kUnrelatedReservation);
+  fetch(taskId, 0);
+  EXPECT_EQ(queueManager_->stats(taskId)->bufferedBytes, 0);
+}
+
 TEST_F(UcxOutputQueueManagerTest, enqueueConsumesReservationExactlyOnce) {
   const std::string taskId = "adaptive.enqueueReservationCommit";
   auto task = initializeTask(taskId, 1, 1, false /* cleanup */);

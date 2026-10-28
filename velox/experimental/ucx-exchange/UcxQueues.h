@@ -250,6 +250,19 @@ class UcxOutputQueue : public std::enable_shared_from_this<UcxOutputQueue> {
       int64_t maxBytes,
       ContinueFuture* future);
 
+  struct TransferCapacityRequest {
+    int destination;
+    int64_t bytes;
+    int64_t maxBytes;
+  };
+
+  /// Rechecks exact admission for every candidate under the queue mutex. If
+  /// all are blocked, installs one waiter that any destination can wake. No
+  /// bytes are reserved, and no stale destination-local waiters are retained.
+  bool waitForAnyTransferCapacity(
+      const std::vector<TransferCapacityRequest>& requests,
+      ContinueFuture* future);
+
   /// Reserves destination-local capacity before materializing a GPU payload.
   /// Returns true when blocked and, when supplied, installs a future that is
   /// fulfilled when that destination makes progress.
@@ -425,6 +438,16 @@ class UcxOutputQueue : public std::enable_shared_from_this<UcxOutputQueue> {
       vector_size_t numRows,
       std::vector<UcxDataAvailable>& dataAvailableCbs);
 
+  // Shared admission logic for a reservation and an atomic capacity probe.
+  // A probe may recover the adaptive limit but does not reserve bytes.
+  // Returns true when the request cannot be admitted.
+  bool reserveTransferBytesLocked(
+      int destination,
+      int64_t bytes,
+      int64_t maxBytes,
+      ContinueFuture* future,
+      bool reserveBytes);
+
   void releaseTransferReservationLocked(int destination, int64_t bytes);
 
   int64_t transferWindowBytesLocked(
@@ -438,6 +461,8 @@ class UcxOutputQueue : public std::enable_shared_from_this<UcxOutputQueue> {
       std::vector<ContinuePromise>& promises);
 
   void collectAllTransferPromisesLocked(std::vector<ContinuePromise>& promises);
+
+  void collectAnyTransferPromisesLocked(std::vector<ContinuePromise>& promises);
 
   void enqueueBroadcastOutputLocked(
       std::shared_ptr<cudf::packed_columns> data,
@@ -503,6 +528,9 @@ class UcxOutputQueue : public std::enable_shared_from_this<UcxOutputQueue> {
   // Destination-local waiters, materialization reservations, and adaptive
   // windows. These vectors always grow in lockstep with queues_.
   std::vector<std::vector<ContinuePromise>> transferPromises_;
+  // One promise per parked producer, independent of destination count. Every
+  // capacity wakeup removes these promises before the producer can park again.
+  std::vector<ContinuePromise> anyTransferPromises_;
   std::vector<int64_t> transferReservedBytes_;
   std::vector<int64_t> transferWindowBytes_;
 

@@ -2010,11 +2010,13 @@ bool UcxPartitionedOutput::drainPendingPartitionedBatch() {
   VELOX_CHECK_EQ(
       batch.offsets.size(), numPartitions_ + 1, "mismatch in numPartitions_");
 
+  std::vector<UcxOutputQueue::TransferCapacityRequest> blockedTransfers;
+  blockedTransfers.reserve(numPartitions_);
   while (batch.remainingPartitions > 0) {
     if (maybeFinishCancelled()) {
       return false;
     }
-    int waitPartition = -1;
+    blockedTransfers.clear();
     bool madeProgress = false;
 
     for (size_t visited = 0; visited < numPartitions_; ++visited) {
@@ -2037,20 +2039,11 @@ bool UcxPartitionedOutput::drainPendingPartitionedBatch() {
         if (maybeFinishCancelled()) {
           return false;
         }
-        if (queueManager->checkTransferCapacity(
-                this->taskId(), partition, transferWindow, nullptr)) {
-          if (waitPartition < 0) {
-            waitPartition = partition;
-          }
-          break;
-        }
-
         if (batch.drainDeficits[partition] <
             batch.nextPayloadBytes[partition]) {
           break;
         }
 
-        madeProgress = true;
         const auto start = batch.offsets[partition];
         const auto end = batch.offsets[partition + 1];
         VELOX_CHECK_LE(start, end);
@@ -2112,9 +2105,12 @@ bool UcxPartitionedOutput::drainPendingPartitionedBatch() {
                 partition,
                 static_cast<int64_t>(transferReservationBytes),
                 static_cast<int64_t>(reservationLimit),
-                &future_)) {
-          blockingReason_ = exec::BlockingReason::kWaitForConsumer;
-          return false;
+                nullptr)) {
+          blockedTransfers.push_back(
+              {static_cast<int>(partition),
+               static_cast<int64_t>(transferReservationBytes),
+               static_cast<int64_t>(reservationLimit)});
+          break;
         }
         auto releaseReservation = folly::makeGuard([&]() {
           if (transferReservationBytes != 0) {
@@ -2176,9 +2172,15 @@ bool UcxPartitionedOutput::drainPendingPartitionedBatch() {
                   partition,
                   static_cast<int64_t>(reservationDelta),
                   static_cast<int64_t>(actualReservationLimit),
-                  &future_)) {
-            blockingReason_ = exec::BlockingReason::kWaitForConsumer;
-            return false;
+                  nullptr)) {
+            // The guard releases this attempt's existing reservation and the
+            // uncommitted payload is freed before we register a waiter. A
+            // retry needs capacity for the complete payload, not just delta.
+            blockedTransfers.push_back(
+                {static_cast<int>(partition),
+                 static_cast<int64_t>(packedBytes),
+                 static_cast<int64_t>(actualReservationLimit)});
+            break;
           }
           transferReservationBytes += reservationDelta;
         }
@@ -2189,6 +2191,7 @@ bool UcxPartitionedOutput::drainPendingPartitionedBatch() {
             chunkEnd - chunkStart,
             &transferReservationBytes);
         releaseReservation.dismiss();
+        madeProgress = true;
 
         if (packedBytes >= batch.drainDeficits[partition]) {
           batch.drainDeficits[partition] = 0;
@@ -2214,11 +2217,12 @@ bool UcxPartitionedOutput::drainPendingPartitionedBatch() {
       continue;
     }
 
-    VELOX_CHECK_GE(waitPartition, 0);
-    const auto transferWindow =
-        transferWindowBytes(batch, waitPartition, queueManager);
-    if (queueManager->checkTransferCapacity(
-            this->taskId(), waitPartition, transferWindow, &future_)) {
+    VELOX_CHECK(!blockedTransfers.empty());
+    // Recheck exact admission and install one waiter atomically. Waiting only
+    // on the first full destination strands useful work when another drains.
+    // Do not accumulate one abandoned future per destination on each retry.
+    if (queueManager->waitForAnyTransferCapacity(
+            this->taskId(), blockedTransfers, &future_)) {
       blockingReason_ = exec::BlockingReason::kWaitForConsumer;
       return false;
     }

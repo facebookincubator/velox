@@ -43,8 +43,10 @@ class UcxExchangeClient : public exec::ExchangeClient {
   /// each split URL names the partition its source fetches.
   /// @param numberOfConsumers Number of UcxExchange operators sharing this
   /// client.
-  /// @param receiveHighWaterBytes Query-level target for receive buffering.
-  /// Zero disables byte accounting and retains the legacy table-count limit.
+  /// @param receiveHighWaterBytes Base byte target for this client's adaptive
+  /// receive prefetch window, not a query-wide memory cap. Zero disables
+  /// byte-based receive admission and downstream-retention tracking; the legacy
+  /// table-count limit still applies.
   /// @param requestDataSizesMaxWaitSec Max wait for a data-size request.
   UcxExchangeClient(
       std::string taskId,

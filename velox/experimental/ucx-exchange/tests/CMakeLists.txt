@@ -19,6 +19,7 @@ add_executable(
   IntraNodeTransferRegistryTest.cpp
   UcxOutputQueueManagerTest.cpp
   UcxPartitionedOutputTest.cpp
+  UcxPartitionedOutputFairnessTest.cpp
   UcxExchangeTest.cpp
   UcxExchangeTaskTest.cpp
   UcxExchangeTestBase.cpp

@@ -102,6 +102,11 @@ class UcxOutputQueueManager : public exec::OutputBufferManager {
       int64_t maxBytes,
       ContinueFuture* future);
 
+  bool waitForAnyTransferCapacity(
+      std::string_view taskId,
+      const std::vector<UcxOutputQueue::TransferCapacityRequest>& requests,
+      ContinueFuture* future);
+
   bool reserveTransferBytes(
       std::string_view taskId,
       int destination,
