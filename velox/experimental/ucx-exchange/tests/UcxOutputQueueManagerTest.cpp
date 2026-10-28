@@ -28,7 +28,9 @@
 #include <string>
 #include <type_traits>
 #include <vector>
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/memory/MemoryPool.h"
+#include "velox/common/testutil/TestValue.h"
 #include "velox/core/PlanNode.h"
 #include "velox/exec/ExchangeTransportRegistry.h"
 #include "velox/exec/OutputTransportRegistry.h"
@@ -48,6 +50,7 @@ class UcxOutputQueueManagerTest : public testing::Test {
 
   static void SetUpTestCase() {
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
+    common::testutil::TestValue::enable();
   }
 
   void SetUp() override {
@@ -658,6 +661,56 @@ TEST_F(UcxOutputQueueManagerTest, callbackFiredOnTerminateBeforeInit) {
   // Callback must have been fired with nullptr.
   EXPECT_TRUE(callbackFired);
   EXPECT_TRUE(receivedNullptr);
+  EXPECT_THAT(
+      producerError,
+      testing::Optional(
+          testing::HasSubstr(
+              "Producer task ended before initializing its output")));
+}
+
+// A task whose output initialization failed is removed with no queue
+// registered. A consumer that arrives while the removal runs leaves a
+// placeholder queue, which the removal then takes. That consumer must learn
+// that the producer never initialized its output, rather than get a clean end
+// of stream.
+DEBUG_ONLY_TEST_F(
+    UcxOutputQueueManagerTest,
+    placeholderCreatedDuringRemoveTaskReportsProducerError) {
+  const std::string taskId = "placeholderDuringRemoval";
+  // A manager that has not seen the task, as after an initializeTask() that
+  // threw before it registered a queue.
+  queueManager_ = std::make_shared<UcxOutputQueueManager>();
+
+  bool fired = false;
+  std::optional<std::string> producerError;
+  bool consumerArrived = false;
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::ucx_exchange::UcxOutputQueueManager::removeTask::afterProducerError",
+      std::function<void(UcxOutputQueueManager*)>(
+          [&](UcxOutputQueueManager* manager) {
+            if (consumerArrived) {
+              return;
+            }
+            consumerArrived = true;
+            manager->getData(
+                taskId,
+                0,
+                [&fired, &producerError](
+                    std::shared_ptr<cudf::packed_columns> data,
+                    vector_size_t /*numRows*/,
+                    std::vector<int64_t> /*remainingBytes*/,
+                    std::optional<std::string> error) {
+                  EXPECT_EQ(data, nullptr);
+                  fired = true;
+                  producerError = std::move(error);
+                });
+            EXPECT_FALSE(fired);
+          }));
+
+  queueManager_->removeTask(taskId);
+
+  ASSERT_TRUE(consumerArrived);
+  EXPECT_TRUE(fired);
   EXPECT_THAT(
       producerError,
       testing::Optional(
