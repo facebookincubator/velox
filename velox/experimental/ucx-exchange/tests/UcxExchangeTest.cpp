@@ -1335,14 +1335,12 @@ TEST_F(UcxExchangeFocusedTest, intraNodeProducerRemovedBeforePageReadFails) {
   }
   exchange.close();
 
-  if (numRows != static_cast<uint64_t>(numPages) * numRowsPerPage) {
-    EXPECT_THAT(
-        error,
-        testing::Optional(
-            testing::HasSubstr("Producer failed before sending all its data")))
-        << "Rows received: " << numRows << " of "
-        << static_cast<uint64_t>(numPages) * numRowsPerPage;
-  }
+  // The last page is dropped, so receiving every row means this ran remote.
+  EXPECT_LT(numRows, static_cast<uint64_t>(numPages) * numRowsPerPage);
+  EXPECT_THAT(
+      error,
+      testing::Optional(
+          testing::HasSubstr("Producer failed before sending all its data")));
 }
 
 // A producing task removed while its intra-node consumer polls
