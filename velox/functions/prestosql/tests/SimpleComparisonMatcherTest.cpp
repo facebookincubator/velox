@@ -15,6 +15,8 @@
  */
 #include <gtest/gtest.h>
 
+#include <limits>
+
 #include "velox/expression/VectorFunction.h"
 #include "velox/functions/lib/SimpleComparisonMatcher.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
@@ -74,13 +76,58 @@ class TestFunction : public exec::VectorFunction {
   }
 };
 
+class AlwaysMatchingMatcher : public Matcher {
+ public:
+  bool match(const core::TypedExprPtr& /*expr*/) override {
+    return true;
+  }
+};
+
+TEST_F(SimpleComparisonMatcherTest, arityMismatch) {
+  std::vector<core::TypedExprPtr> expressions(2);
+  std::vector<std::shared_ptr<Matcher>> matchers{
+      std::make_shared<AlwaysMatchingMatcher>(),
+      std::make_shared<AlwaysMatchingMatcher>(),
+      std::make_shared<AlwaysMatchingMatcher>()};
+
+  ASSERT_FALSE(Matcher::allMatch(expressions, matchers));
+}
+
+TEST_F(SimpleComparisonMatcherTest, integerVectorConstants) {
+  for (const auto expected :
+       {std::numeric_limits<int32_t>::min(),
+        -10,
+        0,
+        37,
+        std::numeric_limits<int32_t>::max()}) {
+    int64_t actual{0};
+    ComparisonConstantMatcher matcher(&actual);
+    const auto expression = std::make_shared<core::ConstantTypedExpr>(
+        makeFlatVector<int32_t>({expected}));
+
+    ASSERT_TRUE(matcher.match(expression));
+    ASSERT_EQ(expected, actual);
+  }
+
+  int64_t actual{123};
+  ComparisonConstantMatcher matcher(&actual);
+  const auto nullExpression = std::make_shared<core::ConstantTypedExpr>(
+      makeNullableFlatVector<int32_t>({std::nullopt}));
+  ASSERT_FALSE(matcher.match(nullExpression));
+  ASSERT_EQ(123, actual);
+}
+
 TEST_F(SimpleComparisonMatcherTest, basic) {
   exec::registerVectorFunction(
       prefix_ + "test_array_sort",
       TestFunction::signatures(),
       std::make_unique<TestFunction>());
 
-  const auto inputType = ROW({"a"}, {ARRAY(ROW({"f", "g"}, INTEGER()))});
+  const auto inputType =
+      ROW({"a", "captured", "captured_array"},
+          {ARRAY(ROW({"f", "g"}, {INTEGER(), INTEGER()})),
+           INTEGER(),
+           ARRAY(INTEGER())});
 
   auto checker = std::make_unique<SimpleComparisonChecker>();
 
@@ -99,10 +146,12 @@ TEST_F(SimpleComparisonMatcherTest, basic) {
     if (lessThan.has_value()) {
       ASSERT_EQ(lessThan.value(), comparison->isLessThen);
 
-      auto field = dynamic_cast<const core::DereferenceTypedExpr*>(
-          comparison->expr.get());
-      ASSERT_TRUE(field != nullptr);
-      ASSERT_EQ(0, field->index());
+      if (expr.find("captured") == std::string::npos) {
+        auto field = dynamic_cast<const core::DereferenceTypedExpr*>(
+            comparison->expr.get());
+        ASSERT_TRUE(field != nullptr);
+        ASSERT_EQ(0, field->index());
+      }
     }
   };
 
@@ -134,11 +183,74 @@ TEST_F(SimpleComparisonMatcherTest, basic) {
   testMatcher("if(x.f = y.f, 0, if(x.f > y.f, -1, 1))", false);
   testMatcher("if(x.f = y.f, 0, if(y.f < x.f, -1, 1))", false);
 
+  // Non-unit comparator values are not supported by Presto.
+  testMatcher("if(x.f = y.f, 0, if(x.f < y.f, -10, 37))", std::nullopt);
+  testMatcher("if(x.f < y.f, -10, if(x.f = y.f, 0, 37))", std::nullopt);
+  testMatcher("if(x.f = y.f, 0, if(x.f < y.f, 37, -10))", std::nullopt);
+  testMatcher("if(x.f < y.f, 37, if(x.f = y.f, 0, -10))", std::nullopt);
+
+  // Captures shared by the left and right transforms.
+  testMatcher(
+      "if(coalesce(x.f, captured) < coalesce(y.f, captured), -1, "
+      "if(coalesce(x.f, captured) > coalesce(y.f, captured), 1, 0))",
+      true);
+  testMatcher(
+      "if(x.f + cast(cardinality(filter(captured_array, "
+      "z -> z > captured)) as integer) < "
+      "y.f + cast(cardinality(filter(captured_array, "
+      "z -> z > captured)) as integer), -1, "
+      "if(x.f + cast(cardinality(filter(captured_array, "
+      "z -> z > captured)) as integer) > "
+      "y.f + cast(cardinality(filter(captured_array, "
+      "z -> z > captured)) as integer), 1, 0))",
+      true);
+
   // Non-matching expressions.
   testMatcher("if(x.f + y.f > 0, 1, -1)", std::nullopt);
   testMatcher("if(x.f < y.f, 1, -1)", std::nullopt);
   testMatcher("if(x.f = y.f, 0, if(x.f > y.f, -1, 0))", std::nullopt);
   testMatcher("if(x.f = y.f, 1, if(x.f > y.f, -1, 0))", std::nullopt);
+  testMatcher("if(x.f = y.f, 5, if(x.f < y.f, -10, 37))", std::nullopt);
+  testMatcher("if(x.f < y.f, -10, if(x.f = y.f, 5, 37))", std::nullopt);
+  testMatcher("if(x.f = y.f, 0, if(x.f < y.f, -10, -20))", std::nullopt);
+  testMatcher("if(x.f < y.f, 10, if(x.f = y.f, 0, 20))", std::nullopt);
+  testMatcher("if(x.f < x.f, -10, if(x.f > x.f, 37, 0))", std::nullopt);
+  testMatcher(
+      "if(x.f < captured, -10, if(x.f > captured, 37, 0))", std::nullopt);
+  testMatcher(
+      "if(coalesce(x.f, captured) < y.f, -10, "
+      "if(coalesce(x.f, captured) > y.f, 37, 0))",
+      std::nullopt);
+  testMatcher(
+      "if(x.f + cast(cardinality(filter(captured_array, "
+      "z -> z > y.f)) as integer) < "
+      "y.f + cast(cardinality(filter(captured_array, "
+      "z -> z > x.f)) as integer), -1, "
+      "if(x.f + cast(cardinality(filter(captured_array, "
+      "z -> z > y.f)) as integer) > "
+      "y.f + cast(cardinality(filter(captured_array, "
+      "z -> z > x.f)) as integer), 1, 0))",
+      std::nullopt);
+  testMatcher(
+      "if(x.f + cast(cardinality(filter(captured_array, "
+      "y -> y > captured)) as integer) < "
+      "y.f + cast(cardinality(filter(captured_array, "
+      "x -> x > captured)) as integer), -1, "
+      "if(x.f + cast(cardinality(filter(captured_array, "
+      "y -> y > captured)) as integer) > "
+      "y.f + cast(cardinality(filter(captured_array, "
+      "x -> x > captured)) as integer), 1, 0))",
+      std::nullopt);
+  testMatcher(
+      "if(x.f + cast(cardinality(filter(captured_array, "
+      "z -> z > cast(random() as integer))) as integer) < "
+      "y.f + cast(cardinality(filter(captured_array, "
+      "z -> z > cast(random() as integer))) as integer), -1, "
+      "if(x.f + cast(cardinality(filter(captured_array, "
+      "z -> z > cast(random() as integer))) as integer) > "
+      "y.f + cast(cardinality(filter(captured_array, "
+      "z -> z > cast(random() as integer))) as integer), 1, 0))",
+      std::nullopt);
   testMatcher("if(x.f > (y.f + 5), 1, if(x.f < y.f, -1, 0))", std::nullopt);
   testMatcher("x.f + y.f", std::nullopt);
 }
