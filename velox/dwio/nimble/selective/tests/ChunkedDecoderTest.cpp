@@ -1151,6 +1151,28 @@ TEST_P(ChunkedDecoderDataTest, skipEntireStream) {
       "Failed to read chunk header");
 }
 
+// The row-size estimates peek at a chunk header only before anything is read
+// or skipped. A skip with the index to exactly the end of the stream leaves no
+// header to peek at, so they keep their last values.
+TEST_F(ChunkedDecoderDataTest, skipWithIndexToStreamEndKeepsEstimates) {
+  auto [streamData, chunkInfos] =
+      encodeChunkedStream<uint32_t>({{1, 2, 3}, {4, 5}, {6, 7, 8, 9}});
+  ChunkedDecoder decoder(
+      std::make_unique<dwio::common::SeekableArrayInputStream>(
+          streamData.data(), streamData.size()),
+      createTestStreamIndexInternal(chunkInfos),
+      /*decodeValuesWithNulls=*/false,
+      &encodingFactory(),
+      pool_.get());
+  EXPECT_EQ(decoder.estimateRowCount(), 3);
+
+  // Into the second chunk, then across the third to the end of the stream.
+  decoder.skip(4);
+  decoder.skip(5);
+  EXPECT_EQ(decoder.estimateRowCount(), 3);
+  EXPECT_EQ(decoder.estimateStringDataSize(), std::nullopt);
+}
+
 TEST_P(ChunkedDecoderDataTest, skipAndReadMixed) {
   // Create test data: 4 chunks with varying sizes
   std::vector<std::vector<uint32_t>> chunks;
