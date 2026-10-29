@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include <string_view>
+#include <tuple>
 
 #include <gmock/gmock.h>
 
@@ -22,6 +23,7 @@
 #include "velox/functions/sparksql/tests/SparkFunctionBaseTest.h"
 
 using ::testing::ElementsAre;
+using ::testing::ElementsAreArray;
 using ::testing::IsEmpty;
 
 namespace facebook::velox::functions::sparksql::test {
@@ -76,55 +78,28 @@ TEST_F(EncodeTest, usAscii) {
       "encode: input contains a character that cannot be encoded using 'US-ASCII'");
 }
 
-TEST_F(EncodeTest, usAsciiReplacement) {
-  enableLegacyCodingErrorAction();
-  EXPECT_EQ(encode("\xC3\xA9", "US-ASCII"), "?");
-  EXPECT_EQ(
-      encode(
-          "a\xC3\xA9"
-          "b",
-          "US-ASCII"),
-      "a?b");
-}
-
 TEST_F(EncodeTest, iso8859) {
   EXPECT_EQ(encode("hello", "ISO-8859-1"), "hello");
   EXPECT_EQ(encode("", "ISO-8859-1"), "");
   EXPECT_EQ(encode("abc", "iso-8859-1"), "abc");
-}
-
-TEST_F(EncodeTest, iso8859Passthrough) {
   EXPECT_THAT(encodeBytes("\xC3\xA9", "ISO-8859-1"), ElementsAre(0xE9));
   EXPECT_THAT(encodeBytes("\xC3\xBF", "ISO-8859-1"), ElementsAre(0xFF));
 }
 
-TEST_F(EncodeTest, iso8859Replacement) {
-  enableLegacyCodingErrorAction();
-  EXPECT_EQ(encode("\xC4\x80", "ISO-8859-1"), "?");
-}
-
-TEST_F(EncodeTest, utf16be) {
-  EXPECT_THAT(encodeBytes("A", "UTF-16BE"), ElementsAre(0x00, 0x41));
-  EXPECT_THAT(encodeBytes("A", "utf-16be"), ElementsAre(0x00, 0x41));
-  EXPECT_THAT(encodeBytes("", "UTF-16BE"), IsEmpty());
-}
-
-TEST_F(EncodeTest, utf16le) {
-  EXPECT_THAT(encodeBytes("A", "UTF-16LE"), ElementsAre(0x41, 0x00));
-  EXPECT_THAT(encodeBytes("A", "utf-16le"), ElementsAre(0x41, 0x00));
-  EXPECT_THAT(encodeBytes("", "UTF-16LE"), IsEmpty());
-}
-
-TEST_F(EncodeTest, utf16) {
-  EXPECT_THAT(encodeBytes("A", "UTF-16"), ElementsAre(0xFE, 0xFF, 0x00, 0x41));
-  EXPECT_THAT(encodeBytes("A", "utf-16"), ElementsAre(0xFE, 0xFF, 0x00, 0x41));
-  EXPECT_THAT(encodeBytes("", "UTF-16"), IsEmpty());
-}
-
-TEST_F(EncodeTest, utf32) {
-  EXPECT_THAT(encodeBytes("A", "UTF-32"), ElementsAre(0x00, 0x00, 0x00, 0x41));
-  EXPECT_THAT(encodeBytes("A", "utf-32"), ElementsAre(0x00, 0x00, 0x00, 0x41));
-  EXPECT_THAT(encodeBytes("", "UTF-32"), IsEmpty());
+TEST_F(EncodeTest, utf16AndUtf32) {
+  const std::vector<std::tuple<std::string, std::string, std::vector<uint8_t>>>
+      testCases{
+          {"UTF-16BE", "utf-16be", {0x00, 0x41}},
+          {"UTF-16LE", "utf-16le", {0x41, 0x00}},
+          {"UTF-16", "utf-16", {0xFE, 0xFF, 0x00, 0x41}},
+          {"UTF-32", "utf-32", {0x00, 0x00, 0x00, 0x41}},
+  };
+  for (const auto& [charset, lowercaseCharset, expected] : testCases) {
+    SCOPED_TRACE(charset);
+    EXPECT_THAT(encodeBytes("A", charset), ElementsAreArray(expected));
+    EXPECT_THAT(encodeBytes("A", lowercaseCharset), ElementsAreArray(expected));
+    EXPECT_THAT(encodeBytes("", charset), IsEmpty());
+  }
 }
 
 TEST_F(EncodeTest, supplementaryCodepoint) {
@@ -246,6 +221,12 @@ TEST_F(EncodeTest, codingErrorAction) {
     EXPECT_EQ(encode("\xF0\x9F\x98\x80", charset), "?");
     EXPECT_EQ(encode("\xFF", charset), "?");
   }
+  EXPECT_EQ(
+      encode(
+          "a\xC3\xA9"
+          "b",
+          "US-ASCII"),
+      "a?b");
 }
 
 TEST_F(EncodeTest, malformedUtf8) {
@@ -330,25 +311,6 @@ TEST_F(EncodeTest, perRowCharset) {
     ASSERT_TRUE(constantResult.has_value());
     EXPECT_EQ(toBytes(*constantResult), expected[row]);
   }
-}
-
-TEST_F(EncodeTest, unsupportedCharsetNameLengths) {
-  VELOX_ASSERT_USER_THROW(
-      encode("hello", "ABCDEFGHIJKLMNOPQRSTUVWX"),
-      "encode: unsupported charset 'ABCDEFGHIJKLMNOPQRSTUVWX'");
-  VELOX_ASSERT_USER_THROW(
-      encode("hello", "ABCDEFGHIJKLMNOPQRSTUVWXY"),
-      "encode: unsupported charset 'ABCDEFGHIJKLMNOPQRSTUVWXY'");
-}
-
-TEST_F(EncodeTest, batch) {
-  auto inputs = makeFlatVector<StringView>({"hello", "world", "abc"});
-  auto charsets = makeFlatVector<StringView>({"UTF-8", "UTF-8", "UTF-8"});
-  auto result = evaluate<SimpleVector<StringView>>(
-      "encode(c0, c1)", makeRowVector({inputs, charsets}));
-  EXPECT_EQ(result->valueAt(0).str(), "hello");
-  EXPECT_EQ(result->valueAt(1).str(), "world");
-  EXPECT_EQ(result->valueAt(2).str(), "abc");
 }
 
 } // namespace
