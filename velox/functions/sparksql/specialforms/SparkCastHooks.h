@@ -107,8 +107,11 @@ class SparkCastHooks : public exec::CastHooks {
 
   bool isDateOverflowForTimestampUtc(int64_t days) const override;
 
+  // Spark casts decimal to plain string in ANSI and TRY modes, and uses
+  // scientific notation for small values in legacy mode. Overflow is allowed
+  // only in legacy mode.
   bool isScientific() const override {
-    return true;
+    return allowOverflow_;
   }
 
  private:

@@ -286,7 +286,26 @@ class SparkCastExprTest : public functions::test::CastBaseTest {
     testDecimalToIntegralCasts<int8_t>();
   }
 
-  void testDecimalToString() {
+  // Casts 'input' to VARCHAR in each Spark cast mode. 'try_cast' and
+  // 'spark_ansi_cast' produce 'plain'. 'spark_legacy_cast' produces
+  // 'scientific'. 'cast' follows the session ANSI setting, which
+  // 'useScientificNotation' reflects.
+  void testDecimalToString(
+      const VectorPtr& input,
+      const VectorPtr& plain,
+      const VectorPtr& scientific,
+      bool useScientificNotation) {
+    testCast(
+        input, useScientificNotation ? scientific : plain, /*isTryCast=*/false);
+    testCast(input, plain, /*isTryCast=*/true);
+    assertEqualVectors(
+        plain, evaluateCastModeSpecialForm(kSparkAnsiCast, VARCHAR(), input));
+    assertEqualVectors(
+        scientific,
+        evaluateCastModeSpecialForm(kSparkLegacyCast, VARCHAR(), input));
+  }
+
+  void testDecimalToString(bool useScientificNotation) {
     testCast(
         makeFlatVector<int64_t>(
             {100, 1230, 12345, 0, -100, -1230, -12345}, DECIMAL(10, 2)),
@@ -306,7 +325,7 @@ class SparkCastExprTest : public functions::test::CastBaseTest {
              "-123.000",
              "-123.450"}));
 
-    testCast(
+    testDecimalToString(
         makeFlatVector<int128_t>(
             {HugeInt::build(0, 10000000000),
              HugeInt::build(0, 12300000000),
@@ -323,21 +342,42 @@ class SparkCastExprTest : public functions::test::CastBaseTest {
             {"1.0000000000",
              "1.2300000000",
              "1.2345000000",
+             "0.0000000000",
+             "0.0000000055",
+             "0.0000000001",
+             "-0.0000000003",
+             "-1.0000000000",
+             "-1.2300000000",
+             "-1.2345000000"}),
+        makeFlatVector<std::string>(
+            {"1.0000000000",
+             "1.2300000000",
+             "1.2345000000",
              "0E-10",
              "5.5E-9",
              "1E-10",
              "-3E-10",
              "-1.0000000000",
              "-1.2300000000",
-             "-1.2345000000"}));
+             "-1.2345000000"}),
+        useScientificNotation);
 
     testCast(
         makeFlatVector<int64_t>({100, 200, 300}, DECIMAL(10, 0)),
         makeFlatVector<std::string>({"100", "200", "300"}));
 
-    testCast(
+    testDecimalToString(
         makeFlatVector<int64_t>(
             {0, 12, 55, 120, 1200, -3, -12, -120}, DECIMAL(10, 8)),
+        makeFlatVector<std::string>(
+            {"0.00000000",
+             "0.00000012",
+             "0.00000055",
+             "0.00000120",
+             "0.00001200",
+             "-0.00000003",
+             "-0.00000012",
+             "-0.00000120"}),
         makeFlatVector<std::string>(
             {"0E-8",
              "1.2E-7",
@@ -346,7 +386,8 @@ class SparkCastExprTest : public functions::test::CastBaseTest {
              "0.00001200",
              "-3E-8",
              "-1.2E-7",
-             "-0.00000120"}));
+             "-0.00000120"}),
+        useScientificNotation);
 
     testCast(
         makeNullableFlatVector<int64_t>(
@@ -1915,7 +1956,7 @@ TEST_F(SparkCastExprTestAnsiOn, bigIntToBinary) {
 }
 
 TEST_F(SparkCastExprTestAnsiOn, decimalToString) {
-  testDecimalToString();
+  testDecimalToString(/*useScientificNotation=*/false);
 }
 
 TEST_F(SparkCastExprTestAnsiOn, decimalToIntegral) {
@@ -2461,7 +2502,7 @@ TEST_F(SparkCastExprTestAnsiOff, decimalToFloat) {
 }
 
 TEST_F(SparkCastExprTestAnsiOff, decimalToString) {
-  testDecimalToString();
+  testDecimalToString(/*useScientificNotation=*/true);
 }
 
 TEST_F(SparkCastExprTestAnsiOff, floatToTimestamp) {
