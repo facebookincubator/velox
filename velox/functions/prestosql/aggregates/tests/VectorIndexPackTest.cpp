@@ -14,8 +14,10 @@
  * limitations under the License.
  */
 
+#include <numeric>
+
 #include "velox/common/base/tests/GTestUtils.h"
-#include "velox/common/vectorindex/VectorIndexCodec.h"
+#include "velox/common/vectorindex/LocalVectorIndex.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
@@ -28,14 +30,18 @@ namespace {
 
 class VectorIndexPackTest : public AggregationTestBase {
  protected:
-  // The codec of 2-dimensional centroids given in cluster-id order.
-  static std::string codec(std::vector<float> centroids) {
+  // The codec of 2-dimensional unit-length centroids given in cluster-id
+  // order.
+  static std::string codec(const std::vector<float>& centroids) {
+    std::vector<int64_t> clusterIds(centroids.size() / 2);
+    std::iota(clusterIds.begin(), clusterIds.end(), 0);
     std::string result;
-    common::vectorindex::VectorIndexCodec::pack(
-        centroids.data(),
-        centroids.size() / 2,
-        /*dimension=*/2,
+    common::vectorindex::LocalVectorIndex::build(
+        common::vectorindex::VectorIndexType::kFlat,
         common::vectorindex::VectorIndexMetric::kCosine,
+        common::vectorindex::LocalVectorIndexOptions{},
+        common::vectorindex::Embeddings(centroids, /*dimension=*/2),
+        clusterIds,
         [&](std::string_view chunk) { result.append(chunk); });
     return result;
   }
@@ -131,9 +137,16 @@ TEST_F(VectorIndexPackTest, errors) {
   VELOX_ASSERT_THROW(
       pack(
           makeFlatVector<int64_t>({0}),
+          makeArrayVector<float>(
+              {{1, std::numeric_limits<float>::quiet_NaN()}})),
+      "Cluster centroid must not contain NaN or infinity");
+
+  VELOX_ASSERT_THROW(
+      pack(
+          makeFlatVector<int64_t>({0}),
           makeArrayVector<float>({{1, 0}}),
           "'dot'"),
-      "Unsupported vector index metric");
+      "Unsupported vector index metric: dot");
 
   VELOX_ASSERT_THROW(
       pack(
@@ -154,16 +167,79 @@ TEST_F(VectorIndexPackTest, errors) {
 }
 
 TEST_F(VectorIndexPackTest, mergeExtractErrors) {
-  // vector_index_pack_merge_extract takes intermediate results directly,
-  // without the checks on raw input.
+  // vector_index_pack_merge_extract takes intermediate results directly:
+  // metric, cluster ids and centroids.
+  auto testFailingWithMetrics =
+      [&](const std::vector<std::optional<int32_t>>& metrics,
+          const std::vector<std::string>& idsJson,
+          const std::vector<std::string>& centroidsJson,
+          const std::string& expectedMessage) {
+        SCOPED_TRACE(expectedMessage);
+        testFailingAggregations(
+            {makeRowVector({makeRowVector({
+                makeNullableFlatVector<int32_t>(metrics),
+                makeArrayVectorFromJson<int64_t>(idsJson),
+                makeArrayVectorFromJson<float>(centroidsJson),
+            })})},
+            /*groupingKeys=*/{},
+            {"vector_index_pack_merge_extract(c0)"},
+            expectedMessage);
+      };
+  auto testFailing = [&](const std::vector<std::string>& idsJson,
+                         const std::vector<std::string>& centroidsJson,
+                         const std::string& expectedMessage) {
+    testFailingWithMetrics({0, 0}, idsJson, centroidsJson, expectedMessage);
+  };
+
+  testFailingWithMetrics(
+      {0, std::nullopt},
+      {"[0]", "[1]"},
+      {"[1, 0]", "[0, 1]"},
+      "Intermediate vector index codec must include the metric");
+  testFailingWithMetrics(
+      {0, 9},
+      {"[0]", "[1]"},
+      {"[1, 0]", "[0, 1]"},
+      "Invalid vector index metric value: 9");
+
+  testFailing(
+      {"[0]", "[-1]"},
+      {"[1, 0]", "[0, 1]"},
+      "Cluster ids must be in [0, number of clusters) range");
+  testFailing(
+      {"[0]", "null"},
+      {"[1, 0]", "[0, 1]"},
+      "Intermediate vector index codec must include the cluster ids");
+  testFailing(
+      {"[0]", "[1]"},
+      {"[1, 0]", "null"},
+      "Intermediate vector index codec must include the centroids");
+  testFailing(
+      {"[0]", "[]"},
+      {"[1, 0]", "[]"},
+      "Intermediate vector index codec must include a cluster");
+  testFailing(
+      {"[0]", "[1, 2]"},
+      {"[1, 0]", "[0, 1, 0]"},
+      "Intermediate vector index codec must have the same number of values per centroid");
+  testFailing(
+      {"[0]", "[null]"},
+      {"[1, 0]", "[0, 1]"},
+      "Intermediate cluster ids must not be null");
+  testFailing(
+      {"[0]", "[1]"},
+      {"[1, 0]", "[0, null]"},
+      "Intermediate cluster centroids must not contain nulls");
   testFailingAggregations(
       {makeRowVector({makeRowVector({
-          makeArrayVector<int64_t>({{0}, {-1}}),
-          makeArrayVector<float>({{1, 0}, {0, 1}}),
+          makeFlatVector<int32_t>({0, 0}),
+          makeArrayVector<int64_t>({{0}, {1}}),
+          makeArrayVector<float>(
+              {{1, 0}, {0, std::numeric_limits<float>::infinity()}}),
       })})},
       /*groupingKeys=*/{},
       {"vector_index_pack_merge_extract(c0)"},
-      "Cluster ids must be in [0, number of clusters) range");
+      "Cluster centroid must not contain NaN or infinity");
 }
 
 } // namespace

@@ -41,6 +41,7 @@ class HashJoinBridge;
 class IndexLookupJoinBridge;
 class NestedLoopJoinBridge;
 class SpatialJoinBridge;
+class VectorSearchJoinBridge;
 class SplitListener;
 
 class FixedPointLoop;
@@ -700,23 +701,9 @@ class Task : public std::enable_shared_from_this<Task> {
       const core::PlanNodeId& planNodeId,
       Driver* caller);
 
-  /// Adds HashJoinBridge's for all the specified plan node IDs.
-  void addHashJoinBridgesLocked(
-      uint32_t splitGroupId,
-      const std::vector<core::PlanNodeId>& planNodeIds);
-
-  /// Adds NestedLoopJoinBridge's for all the specified plan node IDs.
-  void addNestedLoopJoinBridgesLocked(
-      uint32_t splitGroupId,
-      const std::vector<core::PlanNodeId>& planNodeIds);
-
-  /// Adds SpatialJoinBridge's for all the specified plan node IDs.
-  void addSpatialJoinBridgesLocked(
-      uint32_t splitGroupId,
-      const std::vector<core::PlanNodeId>& planNodeIds);
-
-  /// Adds IndexLookupJoinBridge's for all the specified plan node IDs.
-  void addIndexLookupJoinBridgesLocked(
+  /// Adds join bridges of type 'TBridge' for all the specified plan node IDs.
+  template <typename TBridge>
+  void addJoinBridgesLocked(
       uint32_t splitGroupId,
       const std::vector<core::PlanNodeId>& planNodeIds);
 
@@ -744,6 +731,11 @@ class Task : public std::enable_shared_from_this<Task> {
 
   /// Returns a SpatialJoinBridge for 'planNodeId'.
   std::shared_ptr<SpatialJoinBridge> getSpatialJoinBridge(
+      uint32_t splitGroupId,
+      const core::PlanNodeId& planNodeId);
+
+  /// Returns a VectorSearchJoinBridge for 'planNodeId'.
+  std::shared_ptr<VectorSearchJoinBridge> getVectorSearchJoinBridge(
       uint32_t splitGroupId,
       const core::PlanNodeId& planNodeId);
 

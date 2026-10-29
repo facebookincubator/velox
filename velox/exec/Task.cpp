@@ -49,6 +49,7 @@
 #include "velox/exec/SpatialJoinBuild.h"
 #include "velox/exec/TableScan.h"
 #include "velox/exec/Task.h"
+#include "velox/exec/VectorSearchJoinBridge.h"
 
 using facebook::velox::common::testutil::TestValue;
 
@@ -1667,12 +1668,15 @@ void Task::createSplitGroupStateLocked(uint32_t splitGroupId) {
       createLocalExchangeQueuesLocked(
           splitGroupId, partitionNode, factory->numDrivers);
     }
-    addHashJoinBridgesLocked(splitGroupId, factory->needsHashJoinBridges());
-    addNestedLoopJoinBridgesLocked(
+    addJoinBridgesLocked<HashJoinBridge>(
+        splitGroupId, factory->needsHashJoinBridges());
+    addJoinBridgesLocked<NestedLoopJoinBridge>(
         splitGroupId, factory->needsNestedLoopJoinBridges());
-    addSpatialJoinBridgesLocked(
+    addJoinBridgesLocked<SpatialJoinBridge>(
         splitGroupId, factory->needsSpatialJoinBridges());
-    addIndexLookupJoinBridgesLocked(
+    addJoinBridgesLocked<VectorSearchJoinBridge>(
+        splitGroupId, factory->needsVectorSearchJoinBridges());
+    addJoinBridgesLocked<IndexLookupJoinBridge>(
         splitGroupId, factory->needsIndexLookupJoinBridges());
     addCustomJoinBridgesLocked(splitGroupId, factory->needsCustomJoinBridges());
 
@@ -2906,14 +2910,14 @@ void Task::finishPeerFromBarrier(
   ++numFinishedPeers;
 }
 
-void Task::addHashJoinBridgesLocked(
+template <typename TBridge>
+void Task::addJoinBridgesLocked(
     uint32_t splitGroupId,
     const std::vector<core::PlanNodeId>& planNodeIds) {
   auto& splitGroupState = splitGroupStates_[splitGroupId];
   for (const auto& planNodeId : planNodeIds) {
     auto const inserted =
-        splitGroupState.bridges
-            .emplace(planNodeId, std::make_shared<HashJoinBridge>())
+        splitGroupState.bridges.emplace(planNodeId, std::make_shared<TBridge>())
             .second;
     VELOX_CHECK(
         inserted, "Join bridge for node {} is already present", planNodeId);
@@ -2959,48 +2963,6 @@ std::shared_ptr<JoinBridge> Task::getCustomJoinBridge(
   return getCustomJoinBridgeInternal(splitGroupId, planNodeId);
 }
 
-void Task::addNestedLoopJoinBridgesLocked(
-    uint32_t splitGroupId,
-    const std::vector<core::PlanNodeId>& planNodeIds) {
-  auto& splitGroupState = splitGroupStates_[splitGroupId];
-  for (const auto& planNodeId : planNodeIds) {
-    auto const inserted =
-        splitGroupState.bridges
-            .emplace(planNodeId, std::make_shared<NestedLoopJoinBridge>())
-            .second;
-    VELOX_CHECK(
-        inserted, "Join bridge for node {} is already present", planNodeId);
-  }
-}
-
-void Task::addSpatialJoinBridgesLocked(
-    uint32_t splitGroupId,
-    const std::vector<core::PlanNodeId>& planNodeIds) {
-  auto& splitGroupState = splitGroupStates_[splitGroupId];
-  for (const auto& planNodeId : planNodeIds) {
-    auto const inserted =
-        splitGroupState.bridges
-            .emplace(planNodeId, std::make_shared<SpatialJoinBridge>())
-            .second;
-    VELOX_CHECK(
-        inserted, "Join bridge for node {} is already present", planNodeId);
-  }
-}
-
-void Task::addIndexLookupJoinBridgesLocked(
-    uint32_t splitGroupId,
-    const std::vector<core::PlanNodeId>& planNodeIds) {
-  auto& splitGroupState = splitGroupStates_[splitGroupId];
-  for (const auto& planNodeId : planNodeIds) {
-    auto const inserted =
-        splitGroupState.bridges
-            .emplace(planNodeId, std::make_shared<IndexLookupJoinBridge>())
-            .second;
-    VELOX_CHECK(
-        inserted, "Join bridge for node {} is already present", planNodeId);
-  }
-}
-
 std::shared_ptr<IndexLookupJoinBridge> Task::getIndexLookupJoinBridge(
     uint32_t splitGroupId,
     const core::PlanNodeId& planNodeId) {
@@ -3030,6 +2992,13 @@ std::shared_ptr<SpatialJoinBridge> Task::getSpatialJoinBridge(
     uint32_t splitGroupId,
     const core::PlanNodeId& planNodeId) {
   return getJoinBridgeInternal<SpatialJoinBridge>(splitGroupId, planNodeId);
+}
+
+std::shared_ptr<VectorSearchJoinBridge> Task::getVectorSearchJoinBridge(
+    uint32_t splitGroupId,
+    const core::PlanNodeId& planNodeId) {
+  return getJoinBridgeInternal<VectorSearchJoinBridge>(
+      splitGroupId, planNodeId);
 }
 
 template <class TBridgeType>
