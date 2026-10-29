@@ -16,6 +16,8 @@
 
 #include "velox/dwio/common/Options.h"
 
+#include <typeinfo>
+
 #include "velox/common/EnumDefine.h"
 
 namespace facebook::velox::dwio::common {
@@ -82,6 +84,21 @@ ColumnReaderOptions makeColumnReaderOptions(const ReaderOptions& options) {
   ColumnReaderOptions columnReaderOptions;
   columnReaderOptions.columnMappingMode_ = options.columnMappingMode();
   return columnReaderOptions;
+}
+
+std::shared_ptr<WriterOptions> WriterOptions::clone() const {
+  VELOX_CHECK(
+      typeid(*this) == typeid(WriterOptions),
+      "WriterOptions subclass must override clone().");
+  return deepCopyInto(std::make_shared<WriterOptions>(*this));
+}
+
+std::shared_ptr<WriterOptions> WriterOptions::deepCopyInto(
+    std::shared_ptr<WriterOptions> copy) const {
+  if (formatSpecificOptions != nullptr) {
+    copy->formatSpecificOptions = formatSpecificOptions->clone();
+  }
+  return copy;
 }
 
 } // namespace facebook::velox::dwio::common
