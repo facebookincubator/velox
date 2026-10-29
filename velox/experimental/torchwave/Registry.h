@@ -101,6 +101,9 @@ enum class StandaloneShortcut {
   kExpand,
   kSymSize,
   kSymNumel,
+  // A new_* factory with a constant size of zero elements: an empty tensor
+  // with no kernel and no storage.
+  kEmptyFactory,
 };
 
 /// Specifies which arguments determine the number of elements a kernel

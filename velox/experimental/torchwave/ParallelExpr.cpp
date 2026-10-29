@@ -20,9 +20,11 @@
 #include <functional>
 #include <iostream>
 #include <limits>
+#include <map>
 #include <memory>
 #include <optional>
 #include <ranges>
+#include <set>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -42,7 +44,6 @@
 
 #include "velox/experimental/torchwave/ParallelExpr.h"
 
-#include <map>
 #include "velox/experimental/torchwave/Utils.h"
 #include "velox/experimental/torchwave/WaveConfig.h"
 #include "velox/experimental/torchwave/WaveGraph.h"
@@ -341,6 +342,168 @@ void collectReachable(
   }
 }
 
+// The indices one dimension of a storage base covers: start, start + step, ...
+// below end.
+struct IndexRange {
+  int64_t start{0};
+  int64_t end{std::numeric_limits<int64_t>::max()};
+  int64_t step{1};
+};
+
+// The part of a storage base a value covers. 'ranges' maps a dimension of the
+// base to the indices covered in it; a dimension not in 'ranges' is covered
+// whole. Unknown unless every view between the base and the value is a slice
+// or select with constant, non-negative arguments, or an in-place op, which
+// covers what its input does.
+struct BaseRegion {
+  bool known{false};
+  std::map<int64_t, IndexRange> ranges;
+};
+
+std::optional<int64_t> constantIntAttribute(NodeCP node, const char* name) {
+  if (node->tryGetInput(name) != nullptr) {
+    return std::nullopt;
+  }
+  const auto* attr = node->tryGetAttribute(name);
+  if (attr != nullptr && std::holds_alternative<int64_t>(attr->value)) {
+    return std::get<int64_t>(attr->value);
+  }
+  return std::nullopt;
+}
+
+// Whether 'name' is absent or None on 'node', so the op takes its default.
+bool defaultedAttribute(NodeCP node, const char* name) {
+  if (node->tryGetInput(name) != nullptr) {
+    return false;
+  }
+  const auto* attr = node->tryGetAttribute(name);
+  return attr == nullptr || std::holds_alternative<nativert::None>(attr->value);
+}
+
+// The dimension of the base that dimension 'dim' of a view indexes, when the
+// base dimensions in 'removed' have been selected away.
+int64_t baseDimension(int64_t dim, const std::set<int64_t>& removed) {
+  int64_t base = 0;
+  for (int64_t seen = 0;; ++base) {
+    if (removed.count(base) > 0) {
+      continue;
+    }
+    if (seen++ == dim) {
+      return base;
+    }
+  }
+}
+
+BaseRegion regionOf(ValueCP value) {
+  std::vector<NodeCP> views;
+  for (auto* producer = value->producer(); producer != nullptr;
+       producer = value->producer()) {
+    ValueCP next = schemaAliasedInput(producer, value);
+    if (next == nullptr) {
+      const auto* meta = Registry::metadata(producer->target());
+      if (meta != nullptr && meta->viewOfArg.has_value() &&
+          static_cast<size_t>(*meta->viewOfArg) < producer->inputs().size()) {
+        next = producer->inputs()[*meta->viewOfArg].value;
+      }
+    }
+    if (next == nullptr || next == value) {
+      break;
+    }
+    views.push_back(producer);
+    value = next;
+  }
+  BaseRegion region;
+  std::set<int64_t> removed;
+  for (auto it = views.rbegin(); it != views.rend(); ++it) {
+    NodeCP view = *it;
+    const auto& target = view->target();
+    if (target == "torch.ops.aten.slice.Tensor") {
+      const auto dim = defaultedAttribute(view, "dim")
+          ? std::optional<int64_t>(0)
+          : constantIntAttribute(view, "dim");
+      const auto start = defaultedAttribute(view, "start")
+          ? std::optional<int64_t>(0)
+          : constantIntAttribute(view, "start");
+      const auto end = defaultedAttribute(view, "end")
+          ? std::optional<int64_t>(std::numeric_limits<int64_t>::max())
+          : constantIntAttribute(view, "end");
+      const auto step = defaultedAttribute(view, "step")
+          ? std::optional<int64_t>(1)
+          : constantIntAttribute(view, "step");
+      if (!dim || !start || !end || !step || *dim < 0 || *start < 0 ||
+          *end < *start || *step < 1) {
+        return {};
+      }
+      auto& range = region.ranges[baseDimension(*dim, removed)];
+      const int64_t span = range.end == std::numeric_limits<int64_t>::max()
+          ? std::numeric_limits<int64_t>::max()
+          : (range.end - range.start + range.step - 1) / range.step;
+      const int64_t newStart =
+          range.start + std::min(*start, span) * range.step;
+      int64_t newEnd = range.end;
+      if (*end < span) {
+        newEnd = range.start + *end * range.step;
+      }
+      range = {newStart, newEnd, range.step * *step};
+    } else if (target == "torch.ops.aten.select.int") {
+      const auto dim = constantIntAttribute(view, "dim");
+      const auto index = constantIntAttribute(view, "index");
+      if (!dim || !index || *dim < 0 || *index < 0) {
+        return {};
+      }
+      const int64_t base = baseDimension(*dim, removed);
+      auto& range = region.ranges[base];
+      const int64_t at = range.start + *index * range.step;
+      range = {at, at + 1, 1};
+      removed.insert(base);
+    } else if (dataMutatedInputs(view).empty()) {
+      // Any other view may reorder or reshape the base's indices.
+      return {};
+    }
+  }
+  region.known = true;
+  return region;
+}
+
+bool rangesDisjoint(const IndexRange& left, const IndexRange& right) {
+  if (left.end <= right.start || right.end <= left.start) {
+    return true;
+  }
+  auto contains = [](const IndexRange& range, int64_t index) {
+    return index >= range.start && index < range.end &&
+        (index - range.start) % range.step == 0;
+  };
+  if (left.end - left.start == 1) {
+    return !contains(right, left.start);
+  }
+  if (right.end - right.start == 1) {
+    return !contains(left, right.start);
+  }
+  return left.step == right.step && (left.start - right.start) % left.step != 0;
+}
+
+// Whether 'left' and 'right', regions of one storage base, provably share no
+// element: they are disjoint in some dimension both restrict.
+bool regionsDisjoint(const BaseRegion& left, const BaseRegion& right) {
+  if (!left.known || !right.known) {
+    return false;
+  }
+  for (const auto& [dim, range] : left.ranges) {
+    auto it = right.ranges.find(dim);
+    if (it != right.ranges.end() && rangesDisjoint(range, it->second)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// Whether 'node' only makes a view: it reads no data and writes none.
+bool isPureView(NodeCP node) {
+  const auto* meta = Registry::metadata(node->target());
+  return meta != nullptr && meta->viewOfArg.has_value() &&
+      dataMutatedInputs(node).empty();
+}
+
 // Computes the extra dependency edges needed to honor in-place side effects.
 //
 // A non-functionalized graph has imperative semantics: a "value" is a handle to
@@ -412,18 +575,39 @@ void computeSideEffectEdges(
     return b;
   };
 
+  // With disjointWriteOrdering, a write and a touch of provably disjoint parts
+  // of one storage are not ordered. A pure view reads no data and touches only
+  // the region it selects, so it is ordered against writes that overlap that
+  // region, as a view of the whole tensor is.
+  const bool regionAware = WaveConfig::get().disjointWriteOrdering;
+  std::unordered_map<ValueCP, BaseRegion> regionMemo;
+  auto regionFor = [&](ValueCP v) -> const BaseRegion& {
+    auto it = regionMemo.find(v);
+    if (it == regionMemo.end()) {
+      it = regionMemo.emplace(v, regionOf(v)).first;
+    }
+    return it->second;
+  };
+
   struct Touch {
     NodeCP node;
     int32_t pos;
+    ValueCP value;
   };
   std::unordered_map<ValueCP, std::vector<Touch>> touches;
   for (const auto& node : graph.nodes()) {
     if (&node == outputNode) {
       continue;
     }
+    if (regionAware && isPureView(&node) && node.outputs().size() == 1) {
+      ValueCP view = node.outputs()[0];
+      touches[baseOf(view)].push_back({&node, pos[&node], view});
+      continue;
+    }
     for (const auto& input : node.inputs()) {
       if (input.value != nullptr) {
-        touches[baseOf(input.value)].push_back({&node, pos[&node]});
+        touches[baseOf(input.value)].push_back(
+            {&node, pos[&node], input.value});
       }
     }
   }
@@ -432,7 +616,8 @@ void computeSideEffectEdges(
   constexpr int32_t kOutputPos = std::numeric_limits<int32_t>::max();
   for (const auto& input : outputNode->inputs()) {
     if (input.value != nullptr) {
-      touches[baseOf(input.value)].push_back({outputNode, kOutputPos});
+      touches[baseOf(input.value)].push_back(
+          {outputNode, kOutputPos, input.value});
     }
   }
 
@@ -459,6 +644,9 @@ void computeSideEffectEdges(
       }
       for (const auto& t : it->second) {
         if (t.node == &node) {
+          continue;
+        }
+        if (regionAware && regionsDisjoint(regionFor(mv), regionFor(t.value))) {
           continue;
         }
         if (t.pos > mPos) {
@@ -844,11 +1032,12 @@ bool cloneForcesLayout(
 
 // True if 'op' reads its tensor inputs at arbitrary strides: an elementwise op
 // (whose codegen handles strides and whose result values are layout
-// independent -- e.g. a fused tw.bucketize) or a clone (which copies any
-// layout). A clone that only densifies its input is unnecessary before such a
-// consumer.
+// independent -- e.g. a fused tw.bucketize) or a clone or contiguous (which
+// copy any layout). A clone that only densifies its input is unnecessary before
+// such a consumer.
 bool readsStridedInput(NodeCP op) {
-  if (op->target() == "torch.ops.aten.clone.default") {
+  if (op->target() == "torch.ops.aten.clone.default" ||
+      op->target() == "torch.ops.aten.contiguous.default") {
     return true;
   }
   const Metadata* meta = Registry::metadata(op->target());
@@ -1593,6 +1782,42 @@ void setDuplicateConstraint(
 
 namespace {
 
+// The frame is sized by the value count, so ids have to stay dense after a
+// rewrite removes nodes. Renumbers the values, moves each one's TensorMeta and
+// constraint to its new id, and registers the TensorMeta of the values the
+// rewrite 'created'.
+void renumberAfterRewrite(
+    nativert::Graph& graph,
+    WaveGraph& waveGraph,
+    const std::vector<std::pair<nativert::Value*, c10::ScalarType>>& created) {
+  auto& types = waveGraph.types();
+  std::vector<std::pair<ValueCP, nativert::ValueId>> values;
+  for (const auto* value : graph.values()) {
+    values.emplace_back(value, value->id());
+  }
+  graph.renumberValues();
+  // A rewrite that replaces a graph output updates the signature by name;
+  // finalize() rebuilds the user-output values from it.
+  graph.finalize();
+  ValueTypes renumbered;
+  renumbered.types.resize(graph.numValues(), nullptr);
+  renumbered.constraints.resize(graph.numValues());
+  for (const auto& [value, oldId] : values) {
+    const auto id = static_cast<size_t>(oldId);
+    if (id < types.types.size()) {
+      renumbered.types.at(value->id()) = types.types[id];
+    }
+    if (id < types.constraints.size()) {
+      renumbered.constraints.at(value->id()) = types.constraints[id];
+    }
+  }
+  types.types = std::move(renumbered.types);
+  types.constraints = std::move(renumbered.constraints);
+  for (const auto& [value, dtype] : created) {
+    waveGraph.registerTensorMeta(value, dtype);
+  }
+}
+
 // One copy_(select(T, dim, index), src) of a group rewriteDisjointCopies
 // merges, with the view nodes between T and the copy's destination.
 struct ColumnCopy {
@@ -1611,12 +1836,12 @@ std::optional<int64_t> intAttribute(NodeCP node, const char* name) {
   return std::nullopt;
 }
 
-// Whether 'node' is slice(x, start=0, end=max, step=1), the identity view
-// torch.export leaves in front of a select.
-bool isFullSlice(NodeCP node) {
-  if (node->target() != "torch.ops.aten.slice.Tensor" ||
-      node->tryGetInput("start") != nullptr ||
-      node->tryGetInput("end") != nullptr) {
+// Whether the slice or slice_scatter 'node' covers its whole dimension: start
+// 0, end max, step 1, each constant or defaulted.
+bool hasFullRange(NodeCP node) {
+  if (node->tryGetInput("start") != nullptr ||
+      node->tryGetInput("end") != nullptr ||
+      node->tryGetInput("step") != nullptr) {
     return false;
   }
   const auto start = intAttribute(node, "start");
@@ -1626,6 +1851,12 @@ bool isFullSlice(NodeCP node) {
       end.value_or(std::numeric_limits<int64_t>::max()) ==
       std::numeric_limits<int64_t>::max() &&
       step.value_or(1) == 1;
+}
+
+// Whether 'node' is slice(x, start=0, end=max, step=1), the identity view
+// torch.export leaves in front of a select.
+bool isFullSlice(NodeCP node) {
+  return node->target() == "torch.ops.aten.slice.Tensor" && hasFullRange(node);
 }
 
 // The size list of an expand, as value ids and constants, so two expands to
@@ -1703,17 +1934,159 @@ ValueCP parseColumnCopy(nativert::Node* node, ColumnCopy& out, int64_t& dim) {
   return base;
 }
 
+// The dtype of 'value', or nullopt when it has no TensorMeta.
+std::optional<c10::ScalarType> dtypeOf(const ValueTypes& types, ValueCP value) {
+  const auto id = static_cast<size_t>(value->id());
+  if (id < types.types.size() && types.types[id] != nullptr) {
+    return types.types[id]->dtype();
+  }
+  return std::nullopt;
+}
+
+// Merges 'run', copies into consecutive columns of 'target' along 'dim', into
+// one copy of their stacked sources into slice(target, dim, first, first +
+// length), placed where the last copy of the run was. Returns the number of
+// copies removed, 0 when the run cannot be merged. 'groupNodes' holds the nodes
+// of every copy writing a column of 'target', which the merged copy may move
+// past; the merged copy's nodes are added to it.
+int64_t mergeColumnRun(
+    nativert::Graph& graph,
+    const ValueTypes& types,
+    std::vector<ColumnCopy>& run,
+    ValueCP target,
+    int64_t dim,
+    int64_t rank,
+    c10::ScalarType targetDtype,
+    std::unordered_set<NodeCP>& groupNodes,
+    std::vector<std::pair<nativert::Value*, c10::ScalarType>>& created) {
+  // Stacking needs one shape and one dtype for every source, and each source
+  // must have the rank of a column, so that the stack's broadcast into the
+  // slice is the per-column broadcast the copies did.
+  const auto sizesKey = expandSizesKey(run[0].src);
+  if (sizesKey.empty() || static_cast<int64_t>(sizesKey.size()) != rank - 1) {
+    return 0;
+  }
+  const auto srcDtype = dtypeOf(types, run[0].src);
+  if (!srcDtype.has_value()) {
+    return 0;
+  }
+  for (const auto& copy : run) {
+    if (expandSizesKey(copy.src) != sizesKey ||
+        dtypeOf(types, copy.src) != srcDtype) {
+      return 0;
+    }
+  }
+
+  // The merged copy runs where the last one did. That is the same program
+  // unless something outside the group, between the first copy and the last,
+  // reads or writes T, or writes a source after its copy read it.
+  std::unordered_map<NodeCP, int32_t> pos;
+  std::vector<NodeCP> order;
+  for (const auto& node : graph.nodes()) {
+    pos[&node] = static_cast<int32_t>(order.size());
+    order.push_back(&node);
+  }
+  int32_t first = std::numeric_limits<int32_t>::max();
+  int32_t last = -1;
+  nativert::Node* lastCopy = nullptr;
+  for (const auto& copy : run) {
+    const auto copyPos = pos.at(copy.copy);
+    first = std::min(first, copyPos);
+    for (auto* view : copy.views) {
+      first = std::min(first, pos.at(view));
+    }
+    if (copyPos > last) {
+      last = copyPos;
+      lastCopy = copy.copy;
+    }
+  }
+  ValueCP targetBase = viewStorageBase(target);
+  for (auto* user : target->users()) {
+    const auto userPos = pos.at(user);
+    if (groupNodes.count(user) == 0 && userPos > first && userPos < last) {
+      return 0;
+    }
+  }
+  for (const auto& copy : run) {
+    ValueCP srcBase = viewStorageBase(copy.src);
+    if (srcBase == targetBase) {
+      return 0;
+    }
+    for (int32_t i = pos.at(copy.copy) + 1; i < last; ++i) {
+      if (groupNodes.count(order[i]) > 0) {
+        continue;
+      }
+      for (auto* mutated : dataMutatedInputs(order[i])) {
+        if (viewStorageBase(mutated) == srcBase ||
+            viewStorageBase(mutated) == targetBase) {
+          return 0;
+        }
+      }
+    }
+  }
+
+  auto mutableValue = [](ValueCP value) {
+    return const_cast<nativert::Value*>(value);
+  };
+  auto newTensor = [&](nativert::Node* node, c10::ScalarType dtype) {
+    auto* value = node->addOutput(
+        graph.getUniqueValueName(),
+        nativert::Type(nativert::Type::Kind::Tensor));
+    created.emplace_back(value, dtype);
+    return value;
+  };
+  std::vector<nativert::NamedArgument> elements;
+  for (size_t i = 0; i < run.size(); ++i) {
+    elements.push_back({"e" + std::to_string(i), mutableValue(run[i].src)});
+  }
+  auto* pack = graph.createNode("prim.ListPack", std::move(elements));
+  graph.insertBefore(pack, lastCopy);
+  auto* list = pack->addOutput(
+      graph.getUniqueValueName(),
+      nativert::Type(nativert::Type::Kind::TensorList));
+
+  auto* stack =
+      graph.createNode("torch.ops.aten.stack.default", {{"tensors", list}});
+  stack->addAttribute({"dim", dim});
+  graph.insertBefore(stack, lastCopy);
+  auto* stacked = newTensor(stack, *srcDtype);
+
+  const int64_t firstColumn = run.front().index;
+  auto* slice = graph.createNode(
+      "torch.ops.aten.slice.Tensor", {{"self", mutableValue(target)}});
+  slice->addAttribute({"dim", dim});
+  slice->addAttribute({"start", firstColumn});
+  slice->addAttribute({"end", firstColumn + static_cast<int64_t>(run.size())});
+  slice->addAttribute({"step", static_cast<int64_t>(1)});
+  graph.insertBefore(slice, lastCopy);
+  auto* columns = newTensor(slice, targetDtype);
+
+  auto* merged = graph.createNode(
+      "torch.ops.aten.copy_.default", {{"self", columns}, {"src", stacked}});
+  merged->addAttribute({"non_blocking", false});
+  graph.insertBefore(merged, lastCopy);
+  newTensor(merged, targetDtype);
+  groupNodes.insert(slice);
+  groupNodes.insert(merged);
+
+  for (auto& copy : run) {
+    groupNodes.erase(copy.copy);
+    copy.copy->destroy();
+    for (auto* view : copy.views) {
+      groupNodes.erase(view);
+      view->destroy();
+    }
+  }
+  LOG(INFO) << "rewriteDisjointCopies: merged " << run.size()
+            << " column copies into " << target->name() << " along dim " << dim
+            << " from column " << firstColumn;
+  return static_cast<int64_t>(run.size());
+}
+
 } // namespace
 
 int64_t rewriteDisjointCopies(nativert::Graph& graph, WaveGraph& waveGraph) {
   auto& types = waveGraph.types();
-  auto dtypeOf = [&](ValueCP value) -> std::optional<c10::ScalarType> {
-    const auto id = static_cast<size_t>(value->id());
-    if (id < types.types.size() && types.types[id] != nullptr) {
-      return types.types[id]->dtype();
-    }
-    return std::nullopt;
-  };
 
   // Group the column copies by destination tensor and dimension.
   std::map<std::pair<nativert::ValueId, int64_t>, std::vector<ColumnCopy>>
@@ -1737,7 +2110,7 @@ int64_t rewriteDisjointCopies(nativert::Graph& graph, WaveGraph& waveGraph) {
       continue;
     }
     ValueCP target = targets.at(key.first);
-    const auto targetDtype = dtypeOf(target);
+    const auto targetDtype = dtypeOf(types, target);
     const auto* targetMeta =
         static_cast<size_t>(target->id()) < types.types.size()
         ? types.types[target->id()]
@@ -1751,172 +2124,525 @@ int64_t rewriteDisjointCopies(nativert::Graph& graph, WaveGraph& waveGraph) {
       continue;
     }
 
-    // The writes must cover columns 0..k-1 once each, so one copy into
-    // slice(T, dim, 0, k) writes exactly what they did.
+    // Each run of consecutive columns becomes one copy into
+    // slice(T, dim, first, first + length), which writes exactly what the run's
+    // copies did. A column written twice keeps the group as it is: the later
+    // write must win.
     std::sort(copies.begin(), copies.end(), [](const auto& a, const auto& b) {
       return a.index < b.index;
     });
-    bool contiguous = true;
-    for (size_t i = 0; i < copies.size(); ++i) {
-      contiguous &= copies[i].index == static_cast<int64_t>(i);
+    bool duplicate = false;
+    for (size_t i = 1; i < copies.size(); ++i) {
+      duplicate |= copies[i].index == copies[i - 1].index;
     }
-    if (!contiguous) {
+    if (duplicate) {
       continue;
     }
-
-    // Stacking needs one shape for every source, and each source must have the
-    // rank of a column, so that the stack's broadcast into the slice is the
-    // per-column broadcast the copies did.
-    const auto sizesKey = expandSizesKey(copies[0].src);
-    if (sizesKey.empty() || static_cast<int64_t>(sizesKey.size()) != rank - 1) {
-      continue;
-    }
-    bool sameShape = true;
-    for (const auto& copy : copies) {
-      sameShape &= expandSizesKey(copy.src) == sizesKey;
-    }
-    if (!sameShape) {
-      continue;
-    }
-    const auto srcDtype = dtypeOf(copies[0].src);
-    if (!srcDtype.has_value()) {
-      continue;
-    }
-
-    // The merged copy runs where the last one did. That is the same program
-    // unless something between the first copy and the last reads or writes T,
-    // or writes a source after its copy read it.
-    std::unordered_map<NodeCP, int32_t> pos;
-    std::vector<NodeCP> order;
-    for (const auto& node : graph.nodes()) {
-      pos[&node] = static_cast<int32_t>(order.size());
-      order.push_back(&node);
-    }
+    // Every copy of the group writes its own column, so the group's copies, and
+    // the merged copies that replace them, may move past one another.
     std::unordered_set<NodeCP> groupNodes;
-    int32_t first = std::numeric_limits<int32_t>::max();
-    int32_t last = -1;
-    nativert::Node* lastCopy = nullptr;
     for (const auto& copy : copies) {
       groupNodes.insert(copy.copy);
       groupNodes.insert(copy.views.begin(), copy.views.end());
-      const auto copyPos = pos.at(copy.copy);
-      first = std::min(first, copyPos);
-      if (copyPos > last) {
-        last = copyPos;
-        lastCopy = copy.copy;
+    }
+    size_t runStart = 0;
+    for (size_t runEnd = 1; runEnd <= copies.size(); ++runEnd) {
+      if (runEnd < copies.size() &&
+          copies[runEnd].index == copies[runEnd - 1].index + 1) {
+        continue;
+      }
+      std::vector<ColumnCopy> run(
+          copies.begin() + static_cast<std::ptrdiff_t>(runStart),
+          copies.begin() + static_cast<std::ptrdiff_t>(runEnd));
+      runStart = runEnd;
+      if (run.size() < 2) {
+        continue;
+      }
+      removed += mergeColumnRun(
+          graph,
+          types,
+          run,
+          target,
+          dim,
+          rank,
+          *targetDtype,
+          groupNodes,
+          created);
+    }
+  }
+  if (removed > 0) {
+    renumberAfterRewrite(graph, waveGraph, created);
+  }
+  return removed;
+}
+
+namespace {
+
+// One link of a functional write chain: a select_scatter or slice_scatter that
+// writes 'src' into a region of 'base' and returns the result, with the nodes
+// functionalization emits around it. "x[:, i].copy_(v)" becomes
+//   select_scatter(slice(x), copy(select(slice(x), 1, i), v), 1, i)
+// wrapped in slice_scatter(x, ..., 0, 0, max) for the enclosing full view.
+struct ScatterLink {
+  ValueCP base{nullptr};
+  ValueCP result{nullptr};
+  // The value written: the copy's src when the scatter writes a copy into the
+  // same region, else the scatter's src.
+  ValueCP src{nullptr};
+  bool isSelect{false};
+  int64_t dim{0};
+  // select_scatter's index, or slice_scatter's start, end and step.
+  int64_t index{0};
+  int64_t start{0};
+  int64_t end{std::numeric_limits<int64_t>::max()};
+  int64_t step{1};
+  // Every node of the link. 'top' produces 'result'.
+  std::vector<nativert::Node*> nodes;
+  nativert::Node* top{nullptr};
+  // An index-tensor write (index_put, scatter_add) and its in-place form. Its
+  // region is unknown, so it is ordered against every other write of the root.
+  nativert::Node* indexed{nullptr};
+  const char* inPlaceTarget{nullptr};
+};
+
+// The in-place form of a functional index-tensor write that has the same
+// arguments, or null.
+const char* indexedInPlaceTarget(std::string_view target) {
+  if (target == "torch.ops.aten.index_put.default") {
+    return "torch.ops.aten.index_put_.default";
+  }
+  if (target == "torch.ops.aten.scatter_add.default") {
+    return "torch.ops.aten.scatter_add_.default";
+  }
+  return nullptr;
+}
+
+// Strips the full slices off 'value', each read only by the next, adding them
+// to 'nodes'. Returns the value under them, or null on a malformed slice.
+ValueCP stripFullSlices(ValueCP value, std::vector<nativert::Node*>& nodes) {
+  for (auto* producer = const_cast<nativert::Node*>(value->producer());
+       producer != nullptr && isFullSlice(producer) &&
+       value->users().size() == 1;
+       producer = const_cast<nativert::Node*>(value->producer())) {
+    nodes.push_back(producer);
+    const auto* self = producer->tryGetInput("self");
+    if (self == nullptr) {
+      return nullptr;
+    }
+    value = self->value;
+  }
+  return value;
+}
+
+// Reads the region attributes of the scatter 'node' into 'link'. False when one
+// is symbolic or out of the supported range.
+bool scatterRegion(NodeCP node, ScatterLink& link) {
+  auto attribute = [&](const char* name, int64_t defaultValue) {
+    return defaultedAttribute(node, name) ? std::optional<int64_t>(defaultValue)
+                                          : constantIntAttribute(node, name);
+  };
+  if (node->target() == "torch.ops.aten.select_scatter.default") {
+    const auto dim = constantIntAttribute(node, "dim");
+    const auto index = constantIntAttribute(node, "index");
+    if (!dim || !index || *dim < 0 || *index < 0) {
+      return false;
+    }
+    link.isSelect = true;
+    link.dim = *dim;
+    link.index = *index;
+    return true;
+  }
+  if (node->target() == "torch.ops.aten.slice_scatter.default") {
+    const auto dim = attribute("dim", 0);
+    const auto start = attribute("start", 0);
+    const auto end = attribute("end", std::numeric_limits<int64_t>::max());
+    const auto step = attribute("step", 1);
+    if (!dim || !start || !end || !step || *dim < 0 || *start < 0 ||
+        *end < *start || *step < 1) {
+      return false;
+    }
+    link.dim = *dim;
+    link.start = *start;
+    link.end = *end;
+    link.step = *step;
+    return true;
+  }
+  return false;
+}
+
+// Whether 'view' is the region 'link' writes, taken of 'base' through full
+// slices, each view read only by the next. Adds the view nodes to 'nodes'.
+bool isLinkRegion(
+    ValueCP view,
+    const ScatterLink& link,
+    ValueCP base,
+    std::vector<nativert::Node*>& nodes) {
+  auto* producer = const_cast<nativert::Node*>(view->producer());
+  if (producer == nullptr || view->users().size() != 1) {
+    return false;
+  }
+  if (link.isSelect) {
+    if (producer->target() != "torch.ops.aten.select.int" ||
+        constantIntAttribute(producer, "dim") != link.dim ||
+        constantIntAttribute(producer, "index") != link.index) {
+      return false;
+    }
+  } else {
+    auto attribute = [&](const char* name, int64_t defaultValue) {
+      return defaultedAttribute(producer, name)
+          ? std::optional<int64_t>(defaultValue)
+          : constantIntAttribute(producer, name);
+    };
+    if (producer->target() != "torch.ops.aten.slice.Tensor" ||
+        attribute("dim", 0) != link.dim ||
+        attribute("start", 0) != link.start ||
+        attribute("end", std::numeric_limits<int64_t>::max()) != link.end ||
+        attribute("step", 1) != link.step) {
+      return false;
+    }
+  }
+  const auto* self = producer->tryGetInput("self");
+  if (self == nullptr) {
+    return false;
+  }
+  std::vector<nativert::Node*> views{producer};
+  if (stripFullSlices(self->value, views) != base) {
+    return false;
+  }
+  nodes.insert(nodes.end(), views.begin(), views.end());
+  return true;
+}
+
+// Parses 'node' as a scatter link. False when it is not a select_scatter or
+// slice_scatter with a constant region.
+bool parseScatterLink(nativert::Node* node, ScatterLink& link) {
+  link = ScatterLink{};
+  link.inPlaceTarget = indexedInPlaceTarget(node->target());
+  if (link.inPlaceTarget == nullptr && !scatterRegion(node, link)) {
+    return false;
+  }
+  const auto* selfArg = node->tryGetInput("self");
+  if (selfArg == nullptr || node->outputs().size() != 1 ||
+      selfArg->value->users().size() != 1) {
+    return false;
+  }
+  link.base = stripFullSlices(selfArg->value, link.nodes);
+  if (link.base == nullptr) {
+    return false;
+  }
+  if (link.inPlaceTarget != nullptr) {
+    link.indexed = node;
+    link.nodes.push_back(node);
+    link.top = node;
+    link.result = node->outputs()[0];
+    return true;
+  }
+  const auto* srcArg = node->tryGetInput("src");
+  if (srcArg == nullptr) {
+    return false;
+  }
+  // The copy functionalization emits for copy_ into the region converts the
+  // value to the base's dtype and broadcasts it; copy_ does the same, so the
+  // in-place form writes the copy's src.
+  link.src = srcArg->value;
+  auto* copy = const_cast<nativert::Node*>(srcArg->value->producer());
+  if (copy != nullptr && copy->target() == "torch.ops.aten.copy.default" &&
+      srcArg->value->users().size() == 1) {
+    const auto* copySelf = copy->tryGetInput("self");
+    const auto* copySrc = copy->tryGetInput("src");
+    std::vector<nativert::Node*> regionNodes;
+    if (copySelf != nullptr && copySrc != nullptr &&
+        isLinkRegion(copySelf->value, link, link.base, regionNodes)) {
+      link.nodes.insert(
+          link.nodes.end(), regionNodes.begin(), regionNodes.end());
+      link.nodes.push_back(copy);
+      link.src = copySrc->value;
+    }
+  }
+  link.nodes.push_back(node);
+  link.top = node;
+  link.result = node->outputs()[0];
+  // A slice_scatter writing the result back over the whole base is the
+  // identity: the link's result is the base with the region written.
+  if (link.result->users().size() == 1) {
+    auto* outer = const_cast<nativert::Node*>(link.result->users()[0]);
+    const auto* outerSelf = outer->tryGetInput("self");
+    const auto* outerSrc = outer->tryGetInput("src");
+    if (outer->target() == "torch.ops.aten.slice_scatter.default" &&
+        hasFullRange(outer) && outer->outputs().size() == 1 &&
+        outerSelf != nullptr && outerSelf->value == link.base &&
+        outerSrc != nullptr && outerSrc->value == link.result) {
+      link.nodes.push_back(outer);
+      link.top = outer;
+      link.result = outer->outputs()[0];
+    }
+  }
+  return true;
+}
+
+// The values 'link' writes or indexes with: the written value, or every
+// operand of an index-tensor write besides its self, with the tensors of an
+// index list.
+std::vector<ValueCP> linkOperands(const ScatterLink& link) {
+  if (link.indexed == nullptr) {
+    return {link.src};
+  }
+  std::vector<ValueCP> operands;
+  for (const auto& input : link.indexed->inputs()) {
+    if (input.name == "self" || input.value == nullptr) {
+      continue;
+    }
+    operands.push_back(input.value);
+    NodeCP producer = input.value->producer();
+    if (producer != nullptr && producer->target() == "prim.ListPack") {
+      for (const auto& element : producer->inputs()) {
+        if (element.value != nullptr) {
+          operands.push_back(element.value);
+        }
       }
     }
-    ValueCP targetBase = viewStorageBase(target);
-    bool safe = true;
-    for (auto* user : target->users()) {
-      if (groupNodes.count(user) == 0 && pos.at(user) < last) {
-        safe = false;
+  }
+  return operands;
+}
+
+// The storage the chain writes: the root, or the tensor the root is a view of.
+// Null when that is a graph input or the root is reached through anything but
+// views.
+ValueCP chainStorage(ValueCP root) {
+  ValueCP storage = viewStorageBase(root);
+  for (ValueCP value = root; value != storage;) {
+    NodeCP producer = value->producer();
+    if (producer == nullptr || !isPureView(producer)) {
+      return nullptr;
+    }
+    value = producer->inputs()[0].value;
+  }
+  NodeCP producer = storage->producer();
+  if (producer == nullptr || producer->target() == "prim.Input") {
+    return nullptr;
+  }
+  return storage;
+}
+
+// Whether the chain 'chain' of 'links', each writing the previous one's result,
+// may write its root in place:
+// - the root is a tensor of its own, or a view of one, and nothing outside the
+//   chain touches that tensor from the chain's first node on;
+// - every intermediate result is used only by the next link;
+// - no written value or index is a view of that tensor;
+// - for a tensor that is a clone, no written value or index reads the clone's
+//   source.
+bool canReinplace(
+    const nativert::Graph& graph,
+    const std::vector<ScatterLink>& links,
+    const std::vector<size_t>& chain,
+    const std::unordered_map<NodeCP, int32_t>& pos) {
+  ValueCP storage = chainStorage(links[chain.front()].base);
+  if (storage == nullptr) {
+    return false;
+  }
+  std::unordered_set<NodeCP> chainNodes;
+  int32_t first = std::numeric_limits<int32_t>::max();
+  for (auto index : chain) {
+    for (auto* node : links[index].nodes) {
+      chainNodes.insert(node);
+      first = std::min(first, pos.at(node));
+    }
+  }
+  for (size_t i = 0; i + 1 < chain.size(); ++i) {
+    for (auto* user : links[chain[i]].result->users()) {
+      if (chainNodes.count(user) == 0) {
+        return false;
       }
     }
-    for (const auto& copy : copies) {
-      ValueCP srcBase = viewStorageBase(copy.src);
-      if (srcBase == targetBase) {
-        safe = false;
+  }
+  // Writing a clone in place lets clone elision write the clone's source
+  // instead, so a written value computed from a read of that source would then
+  // read the write target.
+  ValueCP cloneSource = nullptr;
+  NodeCP producer = storage->producer();
+  if (producer->target() == "torch.ops.aten.clone.default") {
+    if (const auto* self = producer->tryGetInput("self")) {
+      cloneSource = viewStorageBase(self->value);
+    }
+  }
+  auto readsStorage = [&](ValueCP value, ValueCP base) {
+    if (viewStorageBase(value) == base) {
+      return true;
+    }
+    NodeCP valueProducer = value->producer();
+    if (valueProducer == nullptr) {
+      return false;
+    }
+    for (const auto& input : valueProducer->inputs()) {
+      if (input.value != nullptr && viewStorageBase(input.value) == base) {
+        return true;
+      }
+    }
+    return false;
+  };
+  for (auto index : chain) {
+    for (ValueCP operand : linkOperands(links[index])) {
+      if (viewStorageBase(operand) == storage ||
+          (cloneSource != nullptr && readsStorage(operand, cloneSource))) {
+        return false;
+      }
+    }
+  }
+  for (const auto& node : graph.nodes()) {
+    const auto it = pos.find(&node);
+    const bool afterFirst =
+        &node == graph.outputNode() || (it != pos.end() && it->second > first);
+    if (!afterFirst || chainNodes.count(&node) > 0) {
+      continue;
+    }
+    for (const auto& input : node.inputs()) {
+      if (input.value != nullptr && viewStorageBase(input.value) == storage) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+// Retargets the index-tensor write 'node' to its in-place form 'target',
+// writing 'root'.
+void writeIndexedInPlace(
+    nativert::Node& node,
+    const char* target,
+    nativert::Value* root) {
+  for (auto& input : node.inputs()) {
+    if (input.name != "self" || input.value == root) {
+      continue;
+    }
+    auto* self = const_cast<nativert::Value*>(input.value);
+    input.value = root;
+    root->addUser(&node);
+    self->eraseUser(&node);
+  }
+  node.setTarget(target);
+}
+
+} // namespace
+
+int64_t reinplaceScatterChains(nativert::Graph& graph, WaveGraph& waveGraph) {
+  auto& types = waveGraph.types();
+  std::vector<ScatterLink> links;
+  std::unordered_set<NodeCP> claimed;
+  for (auto& node : graph.nodes()) {
+    ScatterLink link;
+    if (claimed.count(&node) > 0 || !parseScatterLink(&node, link)) {
+      continue;
+    }
+    claimed.insert(link.nodes.begin(), link.nodes.end());
+    links.push_back(std::move(link));
+  }
+  if (links.empty()) {
+    return 0;
+  }
+
+  // Chains: a link whose base is another link's result continues that link's
+  // chain. A result two links write into ends the chain before them.
+  std::unordered_map<ValueCP, std::vector<size_t>> byBase;
+  std::unordered_set<ValueCP> results;
+  for (size_t i = 0; i < links.size(); ++i) {
+    byBase[links[i].base].push_back(i);
+    results.insert(links[i].result);
+  }
+  std::unordered_map<NodeCP, int32_t> pos;
+  int32_t position = 0;
+  for (const auto& node : graph.nodes()) {
+    pos[&node] = position++;
+  }
+
+  int64_t reinplaced = 0;
+  std::vector<std::pair<nativert::Value*, c10::ScalarType>> created;
+  for (size_t head = 0; head < links.size(); ++head) {
+    if (results.count(links[head].base) > 0 ||
+        byBase[links[head].base].size() != 1) {
+      continue;
+    }
+    std::vector<size_t> chain{head};
+    for (;;) {
+      auto it = byBase.find(links[chain.back()].result);
+      if (it == byBase.end() || it->second.size() != 1) {
         break;
       }
-      for (int32_t i = pos.at(copy.copy) + 1; safe && i < last; ++i) {
-        if (groupNodes.count(order[i]) > 0) {
-          continue;
-        }
-        for (auto* mutated : dataMutatedInputs(order[i])) {
-          if (viewStorageBase(mutated) == srcBase ||
-              viewStorageBase(mutated) == targetBase) {
-            safe = false;
-            break;
-          }
-        }
-      }
+      chain.push_back(it->second.front());
     }
-    if (!safe) {
+    ValueCP root = links[head].base;
+    const auto rootDtype = dtypeOf(types, root);
+    if (!rootDtype.has_value() || !canReinplace(graph, links, chain, pos)) {
       continue;
     }
 
-    auto mutableValue = [](ValueCP value) {
-      return const_cast<nativert::Value*>(value);
-    };
-    auto newTensor = [&](nativert::Node* node, c10::ScalarType dtype) {
-      auto* value = node->addOutput(
+    // The value later links write and the chain's readers read: the root, or
+    // the output of the last index-tensor write, which aliases it and keeps
+    // that write reachable.
+    auto* current = const_cast<nativert::Value*>(root);
+    for (auto index : chain) {
+      const auto& link = links[index];
+      if (link.indexed != nullptr) {
+        writeIndexedInPlace(*link.indexed, link.inPlaceTarget, current);
+        current = link.indexed->outputs()[0];
+        continue;
+      }
+      nativert::Node* view = nullptr;
+      if (link.isSelect) {
+        view =
+            graph.createNode("torch.ops.aten.select.int", {{"self", current}});
+        view->addAttribute({"dim", link.dim});
+        view->addAttribute({"index", link.index});
+      } else {
+        view = graph.createNode(
+            "torch.ops.aten.slice.Tensor", {{"self", current}});
+        view->addAttribute({"dim", link.dim});
+        view->addAttribute({"start", link.start});
+        view->addAttribute({"end", link.end});
+        view->addAttribute({"step", link.step});
+      }
+      graph.insertBefore(view, link.top);
+      auto* region = view->addOutput(
           graph.getUniqueValueName(),
           nativert::Type(nativert::Type::Kind::Tensor));
-      created.emplace_back(value, dtype);
-      return value;
-    };
-    std::vector<nativert::NamedArgument> elements;
-    for (size_t i = 0; i < copies.size(); ++i) {
-      elements.push_back(
-          {"e" + std::to_string(i), mutableValue(copies[i].src)});
+      created.emplace_back(region, *rootDtype);
+      auto* copy = graph.createNode(
+          "torch.ops.aten.copy_.default",
+          {{"self", region}, {"src", const_cast<nativert::Value*>(link.src)}});
+      copy->addAttribute({"non_blocking", false});
+      graph.insertBefore(copy, link.top);
+      created.emplace_back(
+          copy->addOutput(
+              graph.getUniqueValueName(),
+              nativert::Type(nativert::Type::Kind::Tensor)),
+          *rootDtype);
     }
-    auto* pack = graph.createNode("prim.ListPack", std::move(elements));
-    graph.insertBefore(pack, lastCopy);
-    auto* list = pack->addOutput(
-        graph.getUniqueValueName(),
-        nativert::Type(nativert::Type::Kind::TensorList));
-
-    auto* stack =
-        graph.createNode("torch.ops.aten.stack.default", {{"tensors", list}});
-    stack->addAttribute({"dim", dim});
-    graph.insertBefore(stack, lastCopy);
-    auto* stacked = newTensor(stack, *srcDtype);
-
-    auto* slice = graph.createNode(
-        "torch.ops.aten.slice.Tensor", {{"self", mutableValue(target)}});
-    slice->addAttribute({"dim", dim});
-    slice->addAttribute({"start", static_cast<int64_t>(0)});
-    slice->addAttribute({"end", static_cast<int64_t>(copies.size())});
-    slice->addAttribute({"step", static_cast<int64_t>(1)});
-    graph.insertBefore(slice, lastCopy);
-    auto* columns = newTensor(slice, *targetDtype);
-
-    auto* merged = graph.createNode(
-        "torch.ops.aten.copy_.default", {{"self", columns}, {"src", stacked}});
-    merged->addAttribute({"non_blocking", false});
-    graph.insertBefore(merged, lastCopy);
-    newTensor(merged, *targetDtype);
-
-    for (auto& copy : copies) {
-      copy.copy->destroy();
-      for (auto* view : copy.views) {
-        view->destroy();
+    auto* result = const_cast<nativert::Value*>(links[chain.back()].result);
+    if (result != current) {
+      graph.replaceAllUses(result, current);
+    }
+    std::vector<nativert::Node*> doomed;
+    for (auto index : chain) {
+      for (auto* node : links[index].nodes) {
+        if (node != links[index].indexed) {
+          doomed.push_back(node);
+        }
       }
     }
-    removed += static_cast<int64_t>(copies.size());
-    LOG(INFO) << "rewriteDisjointCopies: merged " << copies.size()
-              << " column copies into " << target->name() << " along dim "
-              << dim;
+    std::sort(doomed.begin(), doomed.end(), [&](auto* left, auto* right) {
+      return pos.at(left) > pos.at(right);
+    });
+    for (auto* node : doomed) {
+      node->destroy();
+    }
+    reinplaced += static_cast<int64_t>(chain.size());
+    LOG(INFO) << "reinplaceScatterChains: wrote " << chain.size()
+              << " scatters into " << root->name() << " in place";
   }
-  if (removed > 0) {
-    // The frame is sized by the value count, so ids have to stay dense after
-    // the views and copies are gone. Renumber, and move each value's
-    // TensorMeta and constraint to its new id.
-    std::vector<std::pair<ValueCP, nativert::ValueId>> values;
-    for (const auto* value : graph.values()) {
-      values.emplace_back(value, value->id());
-    }
-    graph.renumberValues();
-    ValueTypes renumbered;
-    renumbered.types.resize(graph.numValues(), nullptr);
-    renumbered.constraints.resize(graph.numValues());
-    for (const auto& [value, oldId] : values) {
-      const auto id = static_cast<size_t>(oldId);
-      if (id < types.types.size()) {
-        renumbered.types.at(value->id()) = types.types[id];
-      }
-      if (id < types.constraints.size()) {
-        renumbered.constraints.at(value->id()) = types.constraints[id];
-      }
-    }
-    types.types = std::move(renumbered.types);
-    types.constraints = std::move(renumbered.constraints);
-    for (const auto& [value, dtype] : created) {
-      waveGraph.registerTensorMeta(value, dtype);
-    }
+  if (reinplaced > 0) {
+    renumberAfterRewrite(graph, waveGraph, created);
   }
-  return removed;
+  return reinplaced;
 }
 
 int64_t duplicateMetadataOps(

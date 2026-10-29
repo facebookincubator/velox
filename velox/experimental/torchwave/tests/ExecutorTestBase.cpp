@@ -183,6 +183,14 @@ DEFINE_bool(
     true,
     "Merge copies into the columns of one tensor into a single copy of the stacked sources");
 DEFINE_bool(
+    reinplace_scatters,
+    true,
+    "Write functional select_scatter / slice_scatter chains in place");
+DEFINE_bool(
+    disjoint_write_ordering,
+    true,
+    "Leave in-place writes into provably disjoint regions unordered");
+DEFINE_bool(
     free_intermediates,
     true,
     "Release each ProjectNode's last-use value tensors right after its composite invocation executes, instead of at end-of-graph");
@@ -818,6 +826,8 @@ void ExecutorTestBase::SetUpTestSuite() {
   WaveConfig::get().enableReuse = FLAGS_enable_reuse;
   WaveConfig::get().elideClones = FLAGS_elide_clones;
   WaveConfig::get().recognizeDisjointCopies = FLAGS_recognize_disjoint_copies;
+  WaveConfig::get().reinplaceScatters = FLAGS_reinplace_scatters;
+  WaveConfig::get().disjointWriteOrdering = FLAGS_disjoint_write_ordering;
   WaveConfig::get().freeIntermediates = FLAGS_free_intermediates;
   WaveConfig::get().stepLastUse = FLAGS_step_last_use;
   WaveConfig::get().syncEachStep = FLAGS_sync_each_step;
@@ -1539,8 +1549,11 @@ void ExecutorTestBase::verifyOutputs(
     const auto& actual = outputs[i];
     const auto& exp = expected[i];
     if (exp.isTensor()) {
-      ASSERT_TRUE(actual.isTensor())
-          << fullLabel << " output " << i << " expected tensor, got non-tensor";
+      if (!actual.isTensor()) {
+        ADD_FAILURE() << fullLabel << " output " << i
+                      << " expected tensor, got " << actual.tagKind();
+        continue;
+      }
       auto match = tensorsMatch(actual.toTensor(), exp.toTensor());
       auto limit = WaveConfig::get().tensorPrintElementLimit;
       EXPECT_TRUE(match) << fullLabel << " output " << i

@@ -205,6 +205,9 @@ std::unique_ptr<WaveGraph> WaveGraph::optimizeOnly(
   SCOPE_EXIT {
     waveGraph() = prevWaveGraph;
   };
+  if (WaveConfig::get().reinplaceScatters) {
+    reinplaceScatterChains(graph, *wg);
+  }
   if (WaveConfig::get().recognizeDisjointCopies) {
     rewriteDisjointCopies(graph, *wg);
   }
@@ -231,6 +234,9 @@ WaveGraph::WaveGraph(ModelContext* modelContext)
 
   initValueTypes(*graph_, types_, metaStorage_);
 
+  if (WaveConfig::get().reinplaceScatters) {
+    reinplaceScatterChains(*graph_, *this);
+  }
   if (WaveConfig::get().recognizeDisjointCopies) {
     rewriteDisjointCopies(*graph_, *this);
   }
