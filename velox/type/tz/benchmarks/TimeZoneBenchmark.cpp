@@ -16,7 +16,6 @@
 
 #include <folly/Benchmark.h>
 #include <folly/init/Init.h>
-#include <gflags/gflags.h>
 
 #include <chrono>
 #include <latch>
@@ -182,10 +181,6 @@ TIME_ZONE_BENCHMARK(
 } // namespace facebook::velox::tz
 
 int main(int argc, char** argv) {
-  // BENCHMARK_MULTI returns a batch conversion count. Estimate mode subtracts
-  // the framework baseline before dividing by that count.
-  gflags::SetCommandLineOptionWithMode(
-      "bm_estimate_time", "true", gflags::SET_FLAGS_DEFAULT);
   folly::Init init(&argc, &argv);
   folly::runBenchmarks();
 }
