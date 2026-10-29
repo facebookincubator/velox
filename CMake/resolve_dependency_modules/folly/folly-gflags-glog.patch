@@ -18,26 +18,22 @@
  list(APPEND FOLLY_INCLUDE_DIRECTORIES ${FASTFLOAT_INCLUDE_DIR})
 
 -find_package(Gflags MODULE)
-+find_package(gflags CONFIG REQUIRED)
++find_package(gflags)
 +set(LIBGFLAGS_FOUND ${gflags_FOUND})
-+set(LIBGFLAGS_LIBRARY gflags::gflags)
-+set(LIBGFLAGS_INCLUDE_DIR "")
++set(LIBGFLAGS_LIBRARY ${gflags_LIBRARY})
++set(LIBGFLAGS_INCLUDE_DIR "${gflags_INCLUDE_DIR}")
  if (NOT LIBGFLAGS_FOUND)
    # As a subproject gflags builds only its single-threaded library.
    set(GFLAGS_BUILD_gflags_LIB ON)
-@@ -201,7 +204,14 @@
+@@ -201,7 +204,10 @@
    set(FOLLY_LIBGFLAGS_INCLUDE ${LIBGFLAGS_INCLUDE_DIR})
  endif ()
 
 -find_package(Glog MODULE)
-+if (glog_SOURCE STREQUAL "BUNDLED")
-+  find_package(glog CONFIG REQUIRED)
-+  set(GLOG_FOUND ${glog_FOUND})
-+  set(GLOG_LIBRARIES glog::glog)
-+  set(GLOG_INCLUDE_DIR "")
-+else ()
-+  find_package(Glog MODULE REQUIRED)
-+endif ()
++find_package(glog)
++set(GLOG_FOUND ${glog_FOUND})
++set(GLOG_LIBRARIES glog::glog)
++message(STATUS "glog_LIBRARY: ${glog_LIBRARY}")
  if (GLOG_FOUND)
    list(APPEND FOLLY_INCLUDE_DIRECTORIES ${GLOG_INCLUDE_DIR})
    # Glog 0.7+ requires GLOG_USE_GLOG_EXPORT to be defined so that headers
