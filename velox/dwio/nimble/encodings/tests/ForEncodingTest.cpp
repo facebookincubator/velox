@@ -856,3 +856,46 @@ TEST_F(ForEncodingTest, batchSelectiveReads) {
 // readWithVisitor() is implemented and supports O(1) random access.
 // Full testing requires Velox's SelectiveColumnReader infrastructure.
 // Tests above verify the O(1) access through skip() and materialize().
+
+// A fresh encode starts every frame on a byte boundary, but a slice re-packs
+// from an arbitrary row, so a narrow frame ahead of a 64-bit frame leaves the
+// wide frame starting part-way through a byte. Decoding such a frame must not
+// lose the bits that no longer fit the 64-bit bit buffer.
+TEST_F(ForEncodingTest, sliceWideFrameStartingMidByte) {
+  constexpr uint32_t kFrameSize = 128;
+  uint64_t state = 0xD1B54A32D192ED03ULL;
+  auto nextRandom = [&state]() {
+    state = state * 6364136223846793005ULL + 1442695040888963407ULL;
+    return state;
+  };
+
+  // Frames alternate between 1-bit and 64-bit residuals.
+  nimble::Vector<uint64_t> data(pool_.get());
+  for (uint32_t frame = 0; frame < 6; ++frame) {
+    for (uint32_t i = 0; i < kFrameSize; ++i) {
+      data.push_back(frame % 2 == 0 ? 5 + (nextRandom() & 1) : nextRandom());
+    }
+  }
+  const auto rowCount = static_cast<uint32_t>(data.size());
+  const auto encoded =
+      nimble::test::Encoder<nimble::ForEncoding<uint64_t>>::encode(
+          *buffer_, data);
+
+  for (const uint32_t offset : {1u, 2u, 3u, 5u, 7u, 63u, 65u, 127u, 129u}) {
+    SCOPED_TRACE(testing::Message() << "slice offset=" << offset);
+    const uint32_t length = rowCount - offset;
+    nimble::Buffer sliceBuffer{*pool_};
+    const auto sliced = nimble::ForEncoding<uint64_t>::slice(
+        encoded, offset, length, sliceBuffer, nimble::Encoding::Options{});
+
+    nimble::ForEncoding<uint64_t> slice{
+        *pool_, sliced, [](uint32_t /*totalLength*/) -> void* {
+          return nullptr;
+        }};
+    nimble::Vector<uint64_t> output(pool_.get(), length);
+    slice.materialize(length, output.data());
+    for (uint32_t i = 0; i < length; ++i) {
+      ASSERT_EQ(output[i], data[offset + i]) << "sliced row " << i;
+    }
+  }
+}
