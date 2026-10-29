@@ -2056,7 +2056,8 @@ class HybridFlatMapFieldWriter : public FieldWriter {
       : FieldWriter(
             context,
             context.schemaBuilder().createHybridFlatMapTypeBuilder(
-                NimbleTypeTraits<K>::scalarKind)),
+                NimbleTypeTraits<K>::scalarKind,
+                HybridFlatMap::KeyPresenceMode::kBitmap)),
         valueType_{type->childAt(1)},
         nodeId_{type->id()},
         nullsStream_{context_.createNullsStreamData(

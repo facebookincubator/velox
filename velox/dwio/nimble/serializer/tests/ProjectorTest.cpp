@@ -2992,7 +2992,8 @@ TEST_P(ProjectorFormatTest, hybridFlatMapProjectionFuzz) {
 TEST_F(ProjectorTest, hybridFlatMapProjectTypePreservesAttributes) {
   SchemaBuilder builder;
   auto root = builder.createRowTypeBuilder(1);
-  auto hybridMap = builder.createHybridFlatMapTypeBuilder(ScalarKind::Int64);
+  auto hybridMap = builder.createHybridFlatMapTypeBuilder(
+      ScalarKind::Int64, HybridFlatMap::KeyPresenceMode::kBitmap);
   hybridMap->setAttributes({{"test.attribute", "preserved"}});
   const auto makeValueType = [&]() {
     auto value = builder.createRowTypeBuilder(1);
@@ -3022,6 +3023,42 @@ TEST_F(ProjectorTest, hybridFlatMapProjectTypePreservesAttributes) {
           {"test.attribute", "preserved"}}));
   EXPECT_EQ(projected.groupAt(0).valueType->asRow().nameAt(0), "new_value");
   EXPECT_EQ(projected.groupAt(0).groupKeys, (std::vector<std::string>{"1"}));
+}
+
+TEST_F(ProjectorTest, hybridFlatMapProjectTypeKeepsKeyList) {
+  SchemaBuilder builder;
+  auto root = builder.createRowTypeBuilder(1);
+  auto hybridMap = builder.createHybridFlatMapTypeBuilder(
+      ScalarKind::Int64, HybridFlatMap::KeyPresenceMode::kKeyList);
+  const auto makeValueType = [&]() {
+    auto value = builder.createRowTypeBuilder(1);
+    value->addChild(
+        "old_value", builder.createScalarTypeBuilder(ScalarKind::Int64));
+    return value;
+  };
+  hybridMap->addGroup(0, {"1"}, makeValueType());
+  hybridMap->addGroup(HybridFlatMap::kDefaultGroupId, {}, makeValueType());
+  root->addChild("features", hybridMap);
+  const auto inputSchema = SchemaReader::getSchema(builder.schemaNodes());
+  const auto projectType =
+      ROW({{"features", MAP(BIGINT(), ROW({{"new_value", BIGINT()}}))}});
+  // Key 7 is in no configured group, so it selects Default, whose key-presence
+  // stream lists Int64 keys.
+  Projector projector{
+      inputSchema,
+      makeSubfields({"features[7]"}),
+      pool_.get(),
+      {.projectVersion = SerializationVersion::kProjection,
+       .projectType = projectType}};
+
+  const auto& projected =
+      projector.projectedSchema()->asRow().childAt(0)->asHybridFlatMap();
+  EXPECT_EQ(
+      projected.defaultGroupKeyPresenceMode(),
+      HybridFlatMap::KeyPresenceMode::kKeyList);
+  ASSERT_EQ(projected.groupCount(), 1);
+  EXPECT_EQ(projected.groupAt(0).groupId, HybridFlatMap::kDefaultGroupId);
+  EXPECT_EQ(projected.groupAt(0).valueType->asRow().nameAt(0), "new_value");
 }
 
 TEST_F(ProjectorTest, projectTypeRenamesEveryNestedContainerKind) {
