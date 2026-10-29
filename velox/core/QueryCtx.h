@@ -352,7 +352,10 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
   /// Note: Callbacks are invoked in registration order. Exceptions thrown by
   /// callbacks are caught and logged; they do not prevent subsequent callbacks
   /// from running.
+  ///
+  /// Safe to call concurrently from multiple tasks of the same query.
   void addReleaseCallback(ReleaseCallback callback) {
+    std::lock_guard<std::mutex> l(mutex_);
     releaseCallbacks_.push_back(std::move(callback));
   }
 
@@ -453,6 +456,10 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
       return std::static_pointer_cast<T>(it->second.ptr);
     });
   }
+
+  /// Copies every per-query registry override from 'source'. Throws if a key
+  /// already exists unless 'overwrite' is true. Keeps destination-only keys.
+  void copyRegistriesFrom(const QueryCtx& source, bool overwrite = false);
 
   void testingOverrideMemoryPool(std::shared_ptr<memory::MemoryPool> pool) {
     pool_ = std::move(pool);
@@ -581,6 +588,7 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
   std::shared_ptr<filesystems::TokenProvider> fsTokenProvider_;
   const CredentialKeys credentialKeys_;
   // Callbacks invoked before destruction to clean up external resources.
+  // Guarded by mutex_; tasks of one query register concurrently.
   std::deque<ReleaseCallback> releaseCallbacks_;
 
   // A function that constructs a custom trace ctx object.

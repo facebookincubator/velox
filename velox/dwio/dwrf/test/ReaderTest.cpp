@@ -2496,6 +2496,104 @@ FlatMapReaderWithKeyFilter createFlatMapReaderWithKeyFilter(
 
 } // namespace
 
+TEST_F(TestReader, resetFilterCachesWithoutStripeInRange) {
+  auto batches = createBatches({{0, 1, 2, 3}});
+  auto schema = asRowType(batches.front()->type());
+  auto [writer, reader] =
+      createWriterReader(batches, pool(), dataIoStats_, metadataIoStats_);
+  auto spec = std::make_shared<common::ScanSpec>("<root>");
+  spec->addAllChildFields(*schema);
+  RowReaderOptions options;
+  options.setScanSpec(spec);
+  // The file is nonempty, but its header contains no stripe.
+  options.range(0, 1);
+  auto rowReader = reader->createRowReader(options);
+  spec->childByName("c0")->setFilter(
+      std::make_unique<common::BigintRange>(1, 3, false));
+  spec->resetCachedValues(true);
+  rowReader->resetFilterCaches();
+  auto output = BaseVector::create(schema, 0, pool());
+  EXPECT_EQ(rowReader->next(10, output), 0);
+}
+
+TEST_F(TestReader, resetFilterCachesAfterEof) {
+  auto batches = createBatches({{0, 1, 2, 3}});
+  auto schema = asRowType(batches.front()->type());
+  auto [writer, reader] =
+      createWriterReader(batches, pool(), dataIoStats_, metadataIoStats_);
+  auto spec = std::make_shared<common::ScanSpec>("<root>");
+  spec->addAllChildFields(*schema);
+  RowReaderOptions options;
+  options.setScanSpec(spec);
+  auto rowReader = reader->createRowReader(options);
+  auto output = BaseVector::create(schema, 0, pool());
+  ASSERT_EQ(rowReader->next(10, output), 4);
+  assertEqualVectors(batches.front(), output);
+  ASSERT_EQ(rowReader->next(10, output), 0);
+  for (int i = 0; i < 3; ++i) {
+    spec->childByName("c0")->setFilter(
+        std::make_unique<common::BigintRange>(i, 3, false));
+    spec->resetCachedValues(true);
+    rowReader->resetFilterCaches();
+    EXPECT_EQ(rowReader->next(10, output), 0);
+  }
+}
+
+TEST_F(TestReader, resetFilterCachesBeforeFirstStripeLoad) {
+  auto batches = createBatches({{0, 1, 2, 3}});
+  auto schema = asRowType(batches.front()->type());
+  auto [writer, reader] =
+      createWriterReader(batches, pool(), dataIoStats_, metadataIoStats_);
+  auto spec = std::make_shared<common::ScanSpec>("<root>");
+  spec->addAllChildFields(*schema);
+  RowReaderOptions options;
+  options.setScanSpec(spec);
+  options.setEagerFirstStripeLoad(false);
+  auto rowReader = reader->createRowReader(options);
+  spec->childByName("c0")->setFilter(
+      std::make_unique<common::BigintRange>(2, 3, false));
+  spec->resetCachedValues(true);
+  rowReader->resetFilterCaches();
+  auto output = BaseVector::create(schema, 0, pool());
+  ASSERT_EQ(rowReader->next(10, output), 4);
+  assertEqualVectors(createBatches({{2, 3}}).front(), output);
+  EXPECT_EQ(rowReader->next(10, output), 0);
+}
+
+TEST_F(TestReader, resetFilterCachesOnActiveStripe) {
+  auto input = makeRowVector({makeFlatVector<std::string>(
+      1024, [](auto row) { return row % 2 == 0 ? "a" : "b"; })});
+  auto schema = asRowType(input->type());
+  auto [writer, reader] =
+      createWriterReader({input}, pool(), dataIoStats_, metadataIoStats_);
+  auto spec = std::make_shared<common::ScanSpec>("<root>");
+  spec->addAllChildFields(*schema);
+  spec->childByName("c0")->setFilter(
+      std::make_unique<common::BytesValues>(
+          std::vector<std::string>{"a", "b"}, false));
+  RowReaderOptions options;
+  options.setScanSpec(spec);
+  auto rowReader = reader->createRowReader(options);
+  auto output = BaseVector::create(schema, 0, pool());
+  ASSERT_EQ(rowReader->next(128, output), 128);
+  assertEqualVectors(input->slice(0, 128), output);
+
+  // The same dictionary values recur after tightening the filter. Cached
+  // results from the first batch must not allow "a" through the new filter.
+  spec->childByName("c0")->setFilter(
+      std::make_unique<common::BytesValues>(
+          std::vector<std::string>{"b"}, false));
+  spec->resetCachedValues(true);
+  rowReader->resetFilterCaches();
+  auto expected = makeRowVector(
+      {makeFlatVector<std::string>(64, [](auto /*row*/) { return "b"; })});
+  for (int i = 0; i < 7; ++i) {
+    ASSERT_EQ(rowReader->next(128, output), 128);
+    assertEqualVectors(expected, output);
+  }
+  EXPECT_EQ(rowReader->next(128, output), 0);
+}
+
 TEST_F(TestReader, setRowNumberColumnInfo) {
   std::vector<std::vector<int32_t>> integerValues{
       {0, 1, 2, 3, 4},

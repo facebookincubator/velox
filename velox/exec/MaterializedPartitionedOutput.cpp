@@ -436,9 +436,9 @@ void MaterializedPartitionedOutput::finish() {
   ContinueFuture peerFuture;
   auto* driverContext = operatorCtx()->driverCtx();
   const auto isLast =
-      operatorCtx()->allPeersFinished(&peerFuture, peerPromises, peerOperators);
+      operatorCtx()->allPeersArrived(&peerFuture, peerPromises, peerOperators);
   if (isLast) {
-    // allPeersFinished returns true only for the last driver. That driver owns
+    // allPeersArrived returns true only for the last driver. That driver owns
     // the shared buffer's terminal snapshot and publishes it exactly once.
     isLastDriver_ = true;
     buffer_->noMoreData();

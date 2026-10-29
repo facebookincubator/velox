@@ -39,6 +39,7 @@ constexpr auto kEncodingTypes =
         {EncodingType::Prefix, "Prefix"},
         {EncodingType::ALP, "ALP"},
         {EncodingType::ALPRD, "ALPRD"},
+        {EncodingType::PartitionedEliasFano, "PartitionedEliasFano"},
         {EncodingType::PFOR, "PFOR"},
         {EncodingType::SimdForBitpack, "SimdForBitpack"},
         {EncodingType::BlockBitPacking, "BlockBitPacking"},

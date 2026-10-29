@@ -25,13 +25,17 @@
 #     Use "n" to never wipe directories.
 # * VELOX_CUDA_VERSION="12.9": Which version of CUDA to install, will pick up
 #   CUDA_VERSION from the env
-# * VELOX_UCX_VERSION="1.20.1": Which version of ucx to install, will pick up
+# * VELOX_UCX_VERSION="1.22.0": Which version of ucx to install, will pick up
 #   UCX_VERSION from the env
+# * VELOX_ENABLE_CUDF="OFF": Set to "ON" to also install UCX, which the cuDF
+#   UCX exchange needs. The Makefile reads the same variable, so exporting it
+#   also builds Velox with cuDF.
 
 set -efx -o pipefail
 
 VELOX_CUDA_VERSION=${CUDA_VERSION:-"12.9"}
-VELOX_UCX_VERSION=${UCX_VERSION:-"1.20.1"}
+VELOX_UCX_VERSION=${UCX_VERSION:-"1.22.0"}
+VELOX_ENABLE_CUDF=${VELOX_ENABLE_CUDF:-"OFF"}
 SCRIPT_DIR=$(dirname "${BASH_SOURCE[0]}")
 # shellcheck disable=SC1091
 source "$SCRIPT_DIR"/setup-centos9.sh
@@ -173,6 +177,11 @@ function install_adapters {
     source /opt/rh/gcc-toolset-12/enable || exit 1
     set -u
     install_cuda "$VELOX_CUDA_VERSION"
+    # After install_cuda: UCX only builds its CUDA transports when CUDA is
+    # already installed.
+    if [[ ${VELOX_ENABLE_CUDF} == "ON" ]]; then
+      install_ucx
+    fi
     install_adapters
     echo "All dependencies for the Velox Adapters installed!"
     if [[ ${USE_CLANG} != "false" ]]; then

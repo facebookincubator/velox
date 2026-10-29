@@ -16,6 +16,8 @@
 #include <gtest/gtest.h>
 #include <array>
 #include <limits>
+#include <optional>
+#include <span>
 #include <string>
 
 #include "velox/dwio/nimble/common/Types.h"
@@ -32,6 +34,8 @@
 #include "velox/dwio/nimble/encodings/TrivialEncoding.h"
 #include "velox/dwio/nimble/encodings/VarintEncoding.h"
 #include "velox/dwio/nimble/encodings/common/EncodingType.h"
+#include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
+#include "velox/dwio/nimble/encodings/selection/EncodingSizeEstimation.h"
 
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/memory/Memory.h"
@@ -179,16 +183,16 @@ class EncodingSizeEstimationTest : public ::testing::Test {
             EncodingType::ALP, data.size(), stats, defaultOptions_)
             .has_value());
 
-    const auto estimated = Est::estimateSize(
-        EncodingType::ALP, physicalValues, stats, defaultOptions_);
-    ASSERT_TRUE(estimated.has_value());
-
     auto policy = std::make_unique<ManualEncodingSelectionPolicy<T>>(
         std::vector<std::pair<EncodingType, float>>{
             {EncodingType::FixedBitWidth, 1.0},
         },
         std::nullopt,
         std::nullopt);
+    const auto estimated = Est::estimateSize(
+        *policy, EncodingType::ALP, physicalValues, stats, defaultOptions_);
+    ASSERT_TRUE(estimated.has_value());
+
     EncodingSelection<physicalType> selection{
         {.encodingType = EncodingType::ALP},
         Statistics<physicalType>::create(physicalValues),
@@ -210,14 +214,73 @@ class EncodingSizeEstimationTest : public ::testing::Test {
   const Encoding::Options defaultOptions_;
 };
 
+TEST_F(EncodingSizeEstimationTest, ordinaryEncodingsKeepSizeBasedScores) {
+  const auto verify = [&]<typename T>(
+                          std::span<const T> data,
+                          std::span<const EncodingType> candidates) {
+    using physicalType = typename TypeTraits<T>::physicalType;
+    using Est = detail::EncodingSizeEstimation<T>;
+    SCOPED_TRACE(toString(TypeTraits<T>::dataType));
+    const auto values =
+        EncodingPhysicalType<T>::asEncodingPhysicalTypeSpan(data);
+    const auto statistics = Statistics<physicalType>::create(values);
+    for (const auto encodingType : candidates) {
+      SCOPED_TRACE(toString(encodingType));
+      for (const float readFactor : {0.5f, 3.0f}) {
+        SCOPED_TRACE(readFactor);
+        ManualEncodingSelectionPolicy<T> policy{
+            {{encodingType, readFactor}}, std::nullopt, std::nullopt};
+        const auto estimatedSize = Est::estimateSize(
+            policy, encodingType, values, statistics, defaultOptions_);
+        ASSERT_TRUE(estimatedSize.has_value());
+        const auto selected =
+            policy.select(values, statistics, defaultOptions_);
+        EXPECT_EQ(selected.encodingType, encodingType);
+        EXPECT_EQ(selected.estimatedSize, estimatedSize);
+        ASSERT_TRUE(selected.estimatedCost.has_value());
+        EXPECT_DOUBLE_EQ(
+            selected.estimatedCost.value(), estimatedSize.value() * readFactor);
+      }
+    }
+  };
+
+  const std::array<uint32_t, 6> numericData = {100, 101, 101, 104, 104, 104};
+  const std::array numericCandidates = {
+      EncodingType::Trivial,
+      EncodingType::FixedBitWidth,
+      EncodingType::Dictionary,
+      EncodingType::RLE,
+      EncodingType::MainlyConstant,
+      EncodingType::Varint};
+  verify(std::span<const uint32_t>{numericData}, numericCandidates);
+
+  const std::array<bool, 4> boolData = {true, true, false, true};
+  const std::array boolCandidates = {
+      EncodingType::Trivial, EncodingType::RLE, EncodingType::SparseBool};
+  verify(std::span<const bool>{boolData}, boolCandidates);
+
+  const std::array<std::string_view, 4> stringData = {"a", "a", "bbb", "a"};
+  const std::array stringCandidates = {
+      EncodingType::Trivial, EncodingType::Dictionary, EncodingType::RLE};
+  verify(std::span<const std::string_view>{stringData}, stringCandidates);
+
+  const std::array trivialCandidate = {EncodingType::Trivial};
+  const std::array<float, 3> floatData = {1.0f, 2.0f, 3.0f};
+  verify(std::span<const float>{floatData}, trivialCandidate);
+  const std::array<double, 3> doubleData = {1.0, 2.0, 3.0};
+  verify(std::span<const double>{doubleData}, trivialCandidate);
+}
+
 TEST_F(EncodingSizeEstimationTest, numericConstant) {
   using Est = detail::EncodingSizeEstimation<uint32_t>;
 
   std::vector<uint32_t> data(100, 42);
   auto stats = Statistics<uint32_t>::create(data);
 
-  auto size =
-      Est::estimateSize(EncodingType::Constant, data, stats, defaultOptions_);
+  ManualEncodingSelectionPolicy<uint32_t> policy{
+      {{EncodingType::Constant, 1}}, std::nullopt, std::nullopt};
+  auto size = Est::estimateSize(
+      policy, EncodingType::Constant, data, stats, defaultOptions_);
   ASSERT_TRUE(size.has_value());
   EXPECT_GT(size.value(), 0);
   EXPECT_LT(size.value(), 100 * sizeof(uint32_t));
@@ -232,6 +295,37 @@ TEST_F(EncodingSizeEstimationTest, numericConstantNonConstantData) {
   auto size =
       Est::estimateSize(EncodingType::Constant, 3, stats, defaultOptions_);
   EXPECT_FALSE(size.has_value());
+}
+
+TEST_F(EncodingSizeEstimationTest, constantProjectionUsesTargetRowPrefix) {
+  const std::array<uint32_t, 3> values{42, 42, 42};
+  const auto statistics = Statistics<uint32_t>::create(values);
+  constexpr double kCostFactor{3.0};
+  for (const bool useVarintRowCount : {false, true}) {
+    SCOPED_TRACE(useVarintRowCount);
+    Encoding::Options options;
+    options.useVarintRowCount = useVarintRowCount;
+    for (const uint32_t numValues : {127u, 128u, 16'383u, 16'384u}) {
+      SCOPED_TRACE(numValues);
+      ManualEncodingSelectionPolicy<uint32_t> policy{
+          {{EncodingType::Constant, kCostFactor}}, std::nullopt, std::nullopt};
+      const auto countSize =
+          detail::EncodingSizeEstimation<uint32_t>::estimateSize(
+              EncodingType::Constant, numValues, statistics, options);
+      ASSERT_TRUE(countSize.has_value());
+      const uint64_t expectedSize =
+          EncodingPrefix::serializedSize(numValues, useVarintRowCount) +
+          sizeof(uint32_t);
+      EXPECT_EQ(countSize, expectedSize);
+      const auto selected =
+          policy.select(values, statistics, numValues, options);
+      ASSERT_TRUE(selected.has_value());
+      EXPECT_EQ(selected->estimatedSize, expectedSize);
+      ASSERT_TRUE(selected->estimatedCost.has_value());
+      EXPECT_DOUBLE_EQ(
+          selected->estimatedCost.value(), expectedSize * kCostFactor);
+    }
+  }
 }
 
 TEST_F(EncodingSizeEstimationTest, numericTrivial) {
@@ -309,121 +403,50 @@ TEST_F(EncodingSizeEstimationTest, fixedBitWidthEstimateUsesExactBits) {
           data.size(), stats.min(), stats.max(), true));
 }
 
-TEST_F(EncodingSizeEstimationTest, floatingDictionaryEstimateUsesNestedAlp) {
-  auto verify = [&](auto typeTag) {
+TEST_F(EncodingSizeEstimationTest, floatingContainersUsePhysicalEstimates) {
+  const auto verify = [&](auto typeTag) {
     using T = decltype(typeTag);
     using physicalType = typename TypeTraits<T>::physicalType;
-    using Est = detail::EncodingSizeEstimation<T>;
     SCOPED_TRACE(toString(TypeTraits<T>::dataType));
 
     std::vector<T> data;
     data.reserve(4096);
     for (int32_t i = 0; i < 4096; ++i) {
-      data.push_back(static_cast<T>((i % 1024) - 512) / static_cast<T>(100));
+      data.push_back(static_cast<T>((i / 4 % 257) - 128) / static_cast<T>(100));
     }
     const auto physicalValues =
         EncodingPhysicalType<T>::asEncodingPhysicalTypeSpan(
             std::span<const T>{data.data(), data.size()});
     const auto stats = Statistics<physicalType>::create(physicalValues);
 
-    auto nestedAlpOptions = defaultOptions_;
-    nestedAlpOptions.allowNestedAlpSelection = true;
-    const auto defaultEstimate = Est::estimateSize(
-        EncodingType::Dictionary,
-        physicalValues.size(),
-        stats,
-        defaultOptions_);
-    const auto nestedAlpEstimate = Est::estimateSize(
-        EncodingType::Dictionary,
-        physicalValues.size(),
-        stats,
-        nestedAlpOptions);
-
-    ASSERT_TRUE(defaultEstimate.has_value());
-    ASSERT_TRUE(nestedAlpEstimate.has_value());
-    EXPECT_LT(nestedAlpEstimate.value(), defaultEstimate.value());
-  };
-
-  verify(float{});
-  verify(double{});
-}
-
-TEST_F(EncodingSizeEstimationTest, floatingRleEstimateUsesNestedAlp) {
-  auto verify = [&](auto typeTag) {
-    using T = decltype(typeTag);
-    using physicalType = typename TypeTraits<T>::physicalType;
-    using Est = detail::EncodingSizeEstimation<T>;
-    SCOPED_TRACE(toString(TypeTraits<T>::dataType));
-
-    std::vector<T> data;
-    data.reserve(4096);
-    for (int32_t i = 0; i < 1024; ++i) {
-      const auto value = static_cast<T>((i % 257) - 128) / static_cast<T>(100);
-      data.push_back(value);
-      data.push_back(value);
-      data.push_back(value);
-      data.push_back(value);
+    for (const auto encodingType :
+         {EncodingType::Dictionary, EncodingType::RLE}) {
+      SCOPED_TRACE(toString(encodingType));
+      ManualEncodingSelectionPolicy<T> logicalPolicy{
+          {{encodingType, 1}}, std::nullopt, std::nullopt};
+      ManualEncodingSelectionPolicy<physicalType> physicalPolicy{
+          {{encodingType, 1}}, std::nullopt, std::nullopt};
+      const auto logicalEstimate =
+          detail::EncodingSizeEstimation<T>::estimateSize(
+              logicalPolicy,
+              encodingType,
+              physicalValues,
+              stats,
+              defaultOptions_);
+      const auto physicalEstimate =
+          detail::EncodingSizeEstimation<physicalType>::estimateSize(
+              physicalPolicy,
+              encodingType,
+              physicalValues,
+              stats,
+              defaultOptions_);
+      ASSERT_TRUE(logicalEstimate.has_value());
+      EXPECT_EQ(logicalEstimate, physicalEstimate);
     }
-    const auto physicalValues =
-        EncodingPhysicalType<T>::asEncodingPhysicalTypeSpan(
-            std::span<const T>{data.data(), data.size()});
-    const auto stats = Statistics<physicalType>::create(physicalValues);
-
-    auto nestedAlpOptions = defaultOptions_;
-    nestedAlpOptions.allowNestedAlpSelection = true;
-    const auto defaultEstimate = Est::estimateSize(
-        EncodingType::RLE, physicalValues, stats, defaultOptions_);
-    const auto nestedAlpEstimate = Est::estimateSize(
-        EncodingType::RLE, physicalValues, stats, nestedAlpOptions);
-
-    ASSERT_TRUE(defaultEstimate.has_value());
-    ASSERT_TRUE(nestedAlpEstimate.has_value());
-    EXPECT_LT(nestedAlpEstimate.value(), defaultEstimate.value());
   };
 
   verify(float{});
   verify(double{});
-}
-
-TEST_F(EncodingSizeEstimationTest, nestedAlpSizeEligibility) {
-  const std::vector<float> logicalValues = {1.25F, 2.5F, 3.75F};
-  const auto physicalValues =
-      EncodingPhysicalType<float>::asEncodingPhysicalTypeSpan(logicalValues);
-
-  EXPECT_FALSE(
-      detail::nestedAlpSize<float>(physicalValues, defaultOptions_)
-          .has_value());
-
-  auto enabledOptions = defaultOptions_;
-  enabledOptions.allowNestedAlpSelection = true;
-  EXPECT_EQ(
-      detail::nestedAlpSize<float>(physicalValues, enabledOptions),
-      ALPEncoding<float>::estimateSize(physicalValues, enabledOptions));
-}
-
-TEST_F(EncodingSizeEstimationTest, uniqueValuesNestedAlpSizeEligibility) {
-  const std::vector<float> logicalValues = {1.25F, 1.25F, 2.5F, 3.75F};
-  const auto physicalValues =
-      EncodingPhysicalType<float>::asEncodingPhysicalTypeSpan(logicalValues);
-  const auto statistics = Statistics<uint32_t>::create(physicalValues);
-  const auto& uniqueCounts = statistics.uniqueCounts().value();
-
-  EXPECT_FALSE(
-      detail::uniqueValuesNestedAlpSize<float>(uniqueCounts, defaultOptions_)
-          .has_value());
-
-  auto enabledOptions = defaultOptions_;
-  enabledOptions.allowNestedAlpSelection = true;
-  EXPECT_TRUE(
-      detail::uniqueValuesNestedAlpSize<float>(uniqueCounts, enabledOptions)
-          .has_value());
-
-  const auto emptyStatistics =
-      Statistics<uint32_t>::create(std::span<const uint32_t>{});
-  EXPECT_FALSE(
-      detail::uniqueValuesNestedAlpSize<float>(
-          emptyStatistics.uniqueCounts().value(), enabledOptions)
-          .has_value());
 }
 
 TEST_F(EncodingSizeEstimationTest, numericDictionary) {
@@ -513,7 +536,10 @@ TEST_F(EncodingSizeEstimationTest, numericEstimateSizeDispatches) {
       EncodingType::Trivial, data.size(), stats, defaultOptions_);
   ASSERT_TRUE(size.has_value());
 
+  ManualEncodingSelectionPolicy<uint32_t> policy{
+      {{EncodingType::Trivial, 1}}, std::nullopt, std::nullopt};
   auto sizeFromValues = Est::estimateSize(
+      policy,
       EncodingType::Trivial,
       std::span<const uint32_t>{data},
       stats,
@@ -821,8 +847,10 @@ TEST_F(EncodingSizeEstimationTest, constantSmallestForConstantData) {
   std::vector<uint32_t> data(1000, 42);
   auto stats = Statistics<uint32_t>::create(data);
 
-  auto constantSize =
-      Est::estimateSize(EncodingType::Constant, data, stats, defaultOptions_);
+  ManualEncodingSelectionPolicy<uint32_t> policy{
+      {{EncodingType::Constant, 1}}, std::nullopt, std::nullopt};
+  auto constantSize = Est::estimateSize(
+      policy, EncodingType::Constant, data, stats, defaultOptions_);
   auto trivialSize =
       Est::estimateSize(EncodingType::Trivial, 1000, stats, defaultOptions_);
 
@@ -930,6 +958,31 @@ TEST_F(EncodingSizeEstimationTest, pforEstimateVsActualSize) {
   EXPECT_LT(estimated.value(), actualSize * 2)
       << "estimate too high: " << estimated.value() << " vs actual "
       << actualSize;
+}
+
+TEST_F(EncodingSizeEstimationTest, pforEstimateWithoutExceptions) {
+  using Est = detail::EncodingSizeEstimation<uint32_t>;
+  std::vector<uint32_t> varying;
+  for (uint32_t row = 0; row < 200; ++row) {
+    varying.push_back(100 + row % 64);
+  }
+  for (const auto& data : {std::vector<uint32_t>(100, 42), varying}) {
+    SCOPED_TRACE(data.size());
+    const auto stats = Statistics<uint32_t>::create(data);
+    const auto estimated = Est::estimateSize(
+        EncodingType::PFOR,
+        static_cast<uint32_t>(data.size()),
+        stats,
+        Encoding::Options{});
+    ASSERT_TRUE(estimated.has_value());
+
+    nimble::Buffer buffer{*pool_};
+    const auto encoded =
+        nimble::test::Encoder<nimble::PFOREncoding<uint32_t>>::encode(
+            buffer,
+            nimble::Vector<uint32_t>(pool_.get(), data.begin(), data.end()));
+    EXPECT_EQ(estimated.value(), encoded.size());
+  }
 }
 
 TEST_F(EncodingSizeEstimationTest, simdForBitpackEstimateVsActualSize) {

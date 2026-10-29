@@ -252,6 +252,14 @@ class TypeCoercer {
   std::optional<Coercion> coerce(const TypePtr& fromType, const TypePtr& toType)
       const;
 
+  /// Returns the coercion from scalar 'fromType' to the type that the rule for
+  /// a target named 'toTypeName' stores, or std::nullopt if there is no such
+  /// rule. For a parameterized target this is the narrowest type that holds
+  /// every value of 'fromType': INTEGER and "DECIMAL" give DECIMAL(10, 0).
+  std::optional<Coercion> coerce(
+      const TypePtr& fromType,
+      std::string_view toTypeName) const;
+
   /// Returns least common type for 'a' and 'b', i.e. a type that both 'a' and
   /// 'b' are coercible to. Returns nullptr if no such type exists.
   ///

@@ -98,7 +98,7 @@ class CudfNestedLoopJoinBridge : public exec::JoinBridge {
 /// Lifecycle:
 /// 1. addInput() - Collects all input batches in memory (as CudfVectors)
 /// 2. noMoreInput() - Called when upstream finishes
-///    - One build operator (chosen via allPeersFinished) transfers all
+///    - One build operator (chosen via allPeersArrived) transfers all
 ///      accumulated data to the bridge
 ///    - Other operators just mark themselves as finished
 /// 3. getOutput() - Always returns nullptr (build operators don't produce
@@ -144,14 +144,14 @@ class CudfNestedLoopJoinBuild : public CudfJoinBuild {
 ///     probe batch. After the build is exhausted, unmatched probe rows are
 ///     emitted with null build columns.
 ///   - Right join: buildMatchedFlags_ tracks build mismatches across all probe
-///     inputs. After all probes finish, the last driver (via allPeersFinished)
+///     inputs. After all probes finish, the last driver (via allPeersArrived)
 ///     merges flags from all peers and emits unmatched build rows with null
 ///     probe columns.
 ///
 /// Lifecycle:
 /// 1. Constructor - Builds AST filter if join condition exists
 /// 2. isBlocked() - Waits for build data from bridge; for right join, also
-///    blocks on peer probes finishing (allPeersFinished barrier)
+///    blocks on peer probes finishing (allPeersArrived barrier)
 /// 3. addInput() - Receives probe batches one at a time
 /// 4. getOutput() - Performs join, returns results (including mismatch rows
 ///    for left/right joins)

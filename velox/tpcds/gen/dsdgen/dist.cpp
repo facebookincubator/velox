@@ -445,7 +445,6 @@ static int load_dist(d_idx_t* di) {
   int res = 0, i = 0, j = 0;
   dist_t* d;
   int32_t temp;
-  FILE* ifp;
 
   if (di->flags != FL_LOADED) /* make sure no one beat us to it */
   {
