@@ -893,6 +893,58 @@ TEST(DuckParserTest, arrayLiteral) {
   }
 }
 
+TEST(DuckParserTest, mapLiteral) {
+  {
+    auto expr = parseExpr("map(array['a', 'b'], array[1, 2])");
+    EXPECT_TRUE(expr->is(core::IExpr::Kind::kConstant));
+    VELOX_EXPECT_EQ_TYPES(
+        expr->as<core::ConstantExpr>()->type(), MAP(VARCHAR(), BIGINT()));
+    EXPECT_EQ("{a => 1, b => 2}", expr->toString());
+  }
+
+  // DuckDB's map literal parses as map(keys, values).
+  {
+    auto expr = parseExpr("MAP {1: 42.001, 5: -32.1}");
+    EXPECT_TRUE(expr->is(core::IExpr::Kind::kConstant));
+    VELOX_EXPECT_EQ_TYPES(
+        expr->as<core::ConstantExpr>()->type(), MAP(BIGINT(), DOUBLE()));
+    EXPECT_EQ("{1 => 42.001, 5 => -32.1}", expr->toString());
+  }
+
+  // Empty map.
+  for (const auto* sql : {"map()", "map(array[], array[])"}) {
+    SCOPED_TRACE(sql);
+    auto expr = parseExpr(sql);
+    EXPECT_TRUE(expr->is(core::IExpr::Kind::kConstant));
+    VELOX_EXPECT_EQ_TYPES(
+        expr->as<core::ConstantExpr>()->type(), MAP(UNKNOWN(), UNKNOWN()));
+  }
+
+  // A cast gives an empty map its type.
+  {
+    auto expr = parseExpr("map()::map(varchar, bigint)");
+    EXPECT_TRUE(expr->is(core::IExpr::Kind::kConstant));
+    VELOX_EXPECT_EQ_TYPES(
+        expr->as<core::ConstantExpr>()->type(), MAP(VARCHAR(), BIGINT()));
+  }
+
+  // Non-constant argument stays a function call.
+  {
+    auto expr = parseExpr("map(array[a], array[1])");
+    EXPECT_TRUE(expr->is(core::IExpr::Kind::kCall));
+  }
+
+  // Invalid input stays a function call, which reports the error.
+  for (const auto* sql :
+       {"map(array['a', 'a'], array[1, 2])",
+        "map(array['a'], array[1, 2])",
+        "map(array[null], array[1])",
+        "map(array[array[1, null]], array[1])"}) {
+    SCOPED_TRACE(sql);
+    EXPECT_TRUE(parseExpr(sql)->is(core::IExpr::Kind::kCall));
+  }
+}
+
 TEST(DuckParserTest, structLiteral) {
   // {'x': 1, 'y': 2} becomes a ROW constant with named fields.
   {
