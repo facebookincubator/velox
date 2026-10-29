@@ -1,0 +1,83 @@
+# Copyright (c) Facebook, Inc. and its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# GCC warnings that fail the build when TREAT_WARNINGS_AS_ERRORS is on. GCC
+# reports every other enabled warning without failing.
+#
+# Internal Velox builds only with Clang, so a GCC warning reaches GitHub
+# unchecked and can break the OSS build. Each warning here has a Clang warning
+# of the same name that internal Velox's Clang build treats as an error.
+#
+# nonnull and tautological-compare are left out: GCC reports them on code that
+# Clang accepts (nonnull after inlining, for example), so internal Velox cannot
+# catch them.
+#
+# One warning per line, without the -W prefix. Warnings that a GCC release does
+# not know are skipped.
+address
+array-compare
+array-parameter
+attribute-warning
+attributes
+bool-operation
+c++23-extensions
+char-subscripts
+class-conversion
+conversion-null
+dangling-else
+delete-incomplete
+delete-non-virtual-dtor
+div-by-zero
+elaborated-enum-base
+endif-labels
+exceptions
+format
+frame-address
+free-nonheap-object
+header-guard
+ignored-attributes
+inaccessible-base
+infinite-recursion
+int-to-pointer-cast
+invalid-offsetof
+logical-not-parentheses
+memset-transposed-args
+mismatched-new-delete
+non-c-typedef-for-linkage
+odr
+parentheses
+pessimizing-move
+pointer-compare
+pragma-once-outside-header
+psabi
+range-loop-construct
+return-local-addr
+return-type
+self-move
+sequence-point
+shift-count-negative
+shift-count-overflow
+shift-overflow
+sizeof-array-argument
+sizeof-array-div
+sizeof-pointer-div
+sizeof-pointer-memaccess
+switch
+switch-bool
+trigraphs
+unicode
+unknown-pragmas
+varargs
+vexing-parse
+xor-used-as-pow
