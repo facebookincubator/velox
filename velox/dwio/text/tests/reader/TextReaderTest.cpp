@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <fmt/format.h>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -21,6 +22,8 @@
 #include <limits>
 #include <optional>
 #include <string>
+#include <string_view>
+
 #include "velox/common/base/RandomUtil.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/file/File.h"
@@ -171,6 +174,34 @@ class TextReaderTest : public testing::Test,
         ? std::optional<float>{static_cast<float>(*expected)}
         : std::nullopt;
     ASSERT_NO_FATAL_FAILURE(assertReadsAs(inputs, expectedReal, expected));
+  }
+
+  void assertReadText(std::string_view text, const RowVectorPtr& expected) {
+    for (const auto batchSize : {1, 3}) {
+      SCOPED_TRACE(batchSize);
+      auto readFile = std::make_shared<InMemoryReadFile>(text);
+      dwio::common::ReaderOptions readerOptions(pool());
+      readerOptions.setFileSchema(expected->rowType());
+      auto input =
+          std::make_unique<dwio::common::BufferedInput>(readFile, *pool());
+      auto reader =
+          dwio::common::getReaderFactory(dwio::common::FileFormat::TEXT)
+              ->createReader(std::move(input), readerOptions);
+      dwio::common::RowReaderOptions rowReaderOptions;
+      setScanSpec(*expected->type(), rowReaderOptions);
+      auto rowReader = reader->createRowReader(rowReaderOptions);
+      VectorPtr result;
+      vector_size_t offset{0};
+      while (offset < expected->size()) {
+        const auto numRows =
+            static_cast<vector_size_t>(rowReader->next(batchSize, result));
+        ASSERT_GT(numRows, 0);
+        ASSERT_LE(numRows, expected->size() - offset);
+        assertEqualVectors(expected->slice(offset, numRows), result);
+        offset += numRows;
+      }
+      ASSERT_EQ(rowReader->next(batchSize, result), 0);
+    }
   }
 
   std::shared_ptr<velox::io::IoStatistics> dataIoStats_ =
@@ -1213,6 +1244,104 @@ TEST_F(TextReaderTest, readIntegerWithLeadingPlus) {
   ASSERT_EQ(rowReader->next(testCases.size(), result), testCases.size());
   assertEqualVectors(expected, result);
   ASSERT_EQ(rowReader->next(1, result), 0);
+}
+
+TEST_F(TextReaderTest, dateParsing) {
+  assertReadText(
+      "2024-01-01\n"
+      "2024-01-01T10:00\n"
+      "2024-01-01Tnot-a-time\n"
+      "2024-01-01 ignored\n"
+      " \t2024-01-01\tignored\n"
+      "2024-02-29T23:59:59\n"
+      "1969-12-31T23:59:59\n"
+      "2024-1-2T10:00\n"
+      "\\N\n",
+      makeRowVector({makeNullableFlatVector<int32_t>(
+          {19'723,
+           19'723,
+           19'723,
+           19'723,
+           19'723,
+           19'782,
+           -1,
+           19'724,
+           std::nullopt},
+          DATE())}));
+}
+
+TEST_F(TextReaderTest, timestampParsing) {
+  assertReadText(
+      "2024-01-01 00:00:00\n"
+      "2024-01-01T00:00:00\n"
+      "2024-01-01T10:00\n"
+      " \t2024-01-01T00:00:00 \t\n"
+      "2024-01-01T00:00:00.123456789\n"
+      "2024-01-01T00:00:00.1\n"
+      "2024-01-01T23:59:59.999999999\n"
+      "2024-01-01 00:00:001\n"
+      "2024-01-01 00:00:60\n"
+      "2024-07-01 00:00:00\n"
+      "2024-07-01T00:00:00\n"
+      "\\N\n",
+      makeRowVector({makeNullableFlatVector<Timestamp>({
+          Timestamp(1'704'096'000, 0),
+          Timestamp(1'704'096'000, 0),
+          Timestamp(1'704'132'000, 0),
+          Timestamp(1'704'096'000, 0),
+          Timestamp(1'704'096'000, 123'456'000),
+          Timestamp(1'704'096'000, 100'000'000),
+          Timestamp(1'704'182'399, 999'999'000),
+          Timestamp(1'704'096'000, 100'000'000),
+          Timestamp(1'704'096'060, 0),
+          Timestamp(1'719'817'200, 0),
+          Timestamp(1'719'817'200, 0),
+          std::nullopt,
+      })}));
+}
+
+TEST_F(TextReaderTest, invalidDateAndTimestampParsing) {
+  for (const auto* input : {
+           "2023-02-29T10:00",
+           "2024-01-01X10:00",
+           "2024/01/01T10:00",
+           "2024-01-0110:00",
+       }) {
+    SCOPED_TRACE(input);
+    VELOX_ASSERT_THROW(
+        assertReadText(
+            std::string(input) + "\n",
+            makeRowVector(
+                {makeNullableFlatVector<int32_t>({std::nullopt}, DATE())})),
+        fmt::format(
+            "Unable to parse date value. "
+            "Valid date string pattern is (YYYY-MM-DD), "
+            "optionally prefixed with [+-] and optionally followed by "
+            "'T' or whitespace and arbitrary text. Got: \"{}\"",
+            input));
+  }
+  for (const auto* input : {
+           "2024-01-01T",
+           "2024-01-01T 00:00:00",
+           "2024-01-01Tnot-a-time",
+           "2024-01-01T24:00:00",
+           "2024-01-01T00:00:60",
+           "2024-01-01T00:00:60.1",
+           "2024-01-01T00:00:001",
+           "2024-01-01T00:00:00.",
+           "2024-01-01T00:00:00. \t",
+           "2024-01-01T00:00:00Z",
+       }) {
+    SCOPED_TRACE(input);
+    VELOX_ASSERT_THROW(
+        assertReadText(
+            std::string(input) + "\n",
+            makeRowVector({makeNullableFlatVector<Timestamp>({std::nullopt})})),
+        fmt::format(
+            "Unable to parse timestamp value: \"{}\", "
+            "expected format is (YYYY-MM-DD HH:MM:SS[.MS])",
+            input));
+  }
 }
 
 TEST_F(TextReaderTest, simpleTypes) {

@@ -27,6 +27,7 @@
 
 #include "velox/common/encode/Base64.h"
 #include "velox/dwio/common/exception/Exceptions.h"
+#include "velox/type/TimestampConversion.h"
 #include "velox/type/fbhive/HiveTypeParser.h"
 
 namespace facebook::velox::text {
@@ -961,7 +962,11 @@ void TextRowReader::readElement(
                 data,
                 insertionRow,
                 [](const std::string& s) -> std::optional<int32_t> {
-                  return DATE()->toDays(s);
+                  return util::fromDateString(
+                             s.data(), s.size(), util::ParseMode::kHiveCast)
+                      .thenOrThrow(std::identity{}, [](const Status& status) {
+                        VELOX_USER_FAIL("{}", status.message());
+                      });
                 });
           } else {
             putValue<int32_t, int32_t>(
@@ -1424,9 +1429,11 @@ void TextRowReader::readElement(
         isNull = true;
         flatVector->setNull(insertionRow, true);
       } else {
-        auto ts = util::Converter<TypeKind::TIMESTAMP>::tryCast(s).thenOrThrow(
-            std::identity{},
-            [&](const Status& status) { VELOX_USER_FAIL(status.message()); });
+        auto ts = util::fromTimestampString(
+                      s.data(), s.size(), util::TimestampParseMode::kHiveCast)
+                      .thenOrThrow(std::identity{}, [](const Status& status) {
+                        VELOX_USER_FAIL("{}", status.message());
+                      });
         ts.toGMT(Timestamp::defaultTimezone());
         flatVector->set(
             insertionRow, Timestamp{ts.getSeconds(), ts.getNanos()});
