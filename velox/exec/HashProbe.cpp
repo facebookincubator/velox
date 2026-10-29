@@ -807,6 +807,10 @@ void HashProbe::decodeAndDetectNonNullKeys() {
   }
 }
 
+bool HashProbe::filterNullKeysOnEmptyTable() const {
+  return isAntiJoin(joinType_) && nullAware_ && !filter_ && !emptyBuildSide();
+}
+
 void HashProbe::addInput(RowVectorPtr input) {
   if (skipInput_) {
     VELOX_CHECK_NULL(input_);
@@ -853,8 +857,7 @@ void HashProbe::addInput(RowVectorPtr input) {
     // reaching this path must include probe rows without a match.
     VELOX_CHECK(joinIncludesMissesFromLeft(joinType_));
     if (isLeftSemiProjectJoin(joinType_) ||
-        (isAntiJoin(joinType_) &&
-         (filter_ || (nullAware_ && !emptyBuildSide())))) {
+        (isAntiJoin(joinType_) && filter_) || filterNullKeysOnEmptyTable()) {
       // Filter evaluation and semi project output need 'nonNullInputRows_'.
       // Null-aware anti joins also need it to exclude NULL probe keys when
       // non-empty build partitions have been spilled.
@@ -1347,10 +1350,8 @@ RowVectorPtr HashProbe::getOutputInternal(bool toSpillOutput) {
       return nullptr;
     }
     int numOut = 0;
-
     if (emptyTable) {
-      if (isAntiJoin(joinType_) && nullAware_ && !filter_ &&
-          !emptyBuildSide()) {
+      if (filterNullKeysOnEmptyTable()) {
         // NULL probe keys do not pass a null-aware anti join when the build
         // side is non-empty, even if its rows have been spilled.
         for (auto i = 0; i < inputSize; ++i) {
