@@ -226,6 +226,9 @@ TEST_F(HistogramNumericAggregateTest, decimalCentersUnsupported) {
   options.parseIntegerAsBigint = false;
   const core::QueryConfig config({});
   using Step = core::AggregationNode::Step;
+  const auto* functionEntry =
+      exec::getAggregateFunctionEntry("histogram_numeric");
+  ASSERT_NE(functionEntry, nullptr);
   for (const auto& type : {
            DECIMAL(3, 2),
            DECIMAL(18, 0),
@@ -249,8 +252,7 @@ TEST_F(HistogramNumericAggregateTest, decimalCentersUnsupported) {
           ? std::vector<TypePtr>{VARBINARY()}
           : std::vector<TypePtr>{type, INTEGER()};
       VELOX_ASSERT_USER_THROW(
-          exec::Aggregate::create(
-              "histogram_numeric",
+          functionEntry->factory(
               step,
               argTypes,
               step == Step::kPartial ? VARBINARY() : resultType,
