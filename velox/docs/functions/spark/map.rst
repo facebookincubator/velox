@@ -15,7 +15,7 @@ Map Functions
 
         SELECT map(1, 2, 3, 4); -- {1 -> 2, 3 -> 4}
         SELECT map(1, 2, 3, 4, 1, 5); -- {1 -> 5, 3 -> 4} (LAST_WIN behavior)
-        SELECT map(1, 2, 3, 4, 1, 5); -- "Duplicate map key (1) was found" (EXCEPTION behavior)
+        SELECT map(1, 2, 3, 4, 1, 5); -- "Duplicate map key was found: 1" (EXCEPTION behavior)
 
         SELECT map(array(1, 2), array(3, 4)); -- {[1, 2] -> [3, 4]}
 
@@ -114,7 +114,7 @@ Map Functions
 
         SELECT transform_keys(map(1, 'a', 2, 'b'), (k, v) -> k + 10); -- {11 -> 'a', 12 -> 'b'}
         SELECT transform_keys(map(1, 'a', 2, 'b', 3, 'c'), (k, v) -> k % 2); -- {1 -> 'c', 0 -> 'b'} (LAST_WIN behavior)
-        SELECT transform_keys(map(1, 'a', 2, 'b', 3, 'c'), (k, v) -> k % 2); -- "Duplicate map key (1) was found" (EXCEPTION behavior)
+        SELECT transform_keys(map(1, 'a', 2, 'b', 3, 'c'), (k, v) -> k % 2); -- "Duplicate map key was found: 1" (EXCEPTION behavior)
 
 .. spark:function:: transform_values(map(K,V1), func) -> map(K,V2)
 

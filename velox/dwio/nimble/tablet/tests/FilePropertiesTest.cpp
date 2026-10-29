@@ -130,21 +130,6 @@ TEST(FilePropertiesTest, rejectsOmittedStorageWithoutColumns) {
   }
 }
 
-TEST(FilePropertiesTest, roundTripStreamChecksums) {
-  FileProperties absent{/*compactRowCountEncoding=*/false,
-                        /*clusterIndexKeyColumnStorageOmitted=*/false,
-                        /*clusterIndexKeyColumnsWithOmittedStorage=*/{}};
-  EXPECT_FALSE(
-      FileProperties::deserialize(absent.serialize()).hasStreamChecksums());
-
-  FileProperties present{/*compactRowCountEncoding=*/false,
-                         /*clusterIndexKeyColumnStorageOmitted=*/false,
-                         /*clusterIndexKeyColumnsWithOmittedStorage=*/{},
-                         /*hasStreamChecksums=*/true};
-  EXPECT_TRUE(
-      FileProperties::deserialize(present.serialize()).hasStreamChecksums());
-}
-
 TEST(FilePropertiesTest, roundTripTopLevelNulls) {
   FileProperties absent{/*compactRowCountEncoding=*/false,
                         /*clusterIndexKeyColumnStorageOmitted=*/false,
@@ -155,7 +140,6 @@ TEST(FilePropertiesTest, roundTripTopLevelNulls) {
   FileProperties present{/*compactRowCountEncoding=*/false,
                          /*clusterIndexKeyColumnStorageOmitted=*/false,
                          /*clusterIndexKeyColumnsWithOmittedStorage=*/{},
-                         /*hasStreamChecksums=*/false,
                          /*streamTrailerLayout=*/{},
                          /*hasTopLevelNulls=*/true};
   EXPECT_TRUE(
@@ -166,7 +150,6 @@ TEST(FilePropertiesTest, topLevelNullsCoexistWithStreamTrailers) {
   FileProperties properties{/*compactRowCountEncoding=*/false,
                             /*clusterIndexKeyColumnStorageOmitted=*/false,
                             /*clusterIndexKeyColumnsWithOmittedStorage=*/{},
-                            /*hasStreamChecksums=*/false,
                             StreamTrailerLayout::defaultLayout(),
                             /*hasTopLevelNulls=*/true};
   const auto decoded = FileProperties::deserialize(properties.serialize());
@@ -176,26 +159,10 @@ TEST(FilePropertiesTest, topLevelNullsCoexistWithStreamTrailers) {
       properties.streamTrailerLayout().fields());
 }
 
-// A file whose properties section exists only to record stream checksums must
-// still round trip; the writer skips the section entirely when nothing is set.
-TEST(FilePropertiesTest, streamChecksumsCoexistWithOtherProperties) {
-  FileProperties properties{
-      /*compactRowCountEncoding=*/true,
-      /*clusterIndexKeyColumnStorageOmitted=*/true,
-      /*clusterIndexKeyColumnsWithOmittedStorage=*/{"key0"},
-      /*hasStreamChecksums=*/true};
-
-  const auto decoded = FileProperties::deserialize(properties.serialize());
-  EXPECT_TRUE(decoded.compactRowCountEncoding());
-  EXPECT_TRUE(decoded.clusterIndexKeyColumnStorageOmitted());
-  EXPECT_TRUE(decoded.hasStreamChecksums());
-}
-
 // Serializes a properties section by hand, so a test can write layouts that
 // FileProperties itself refuses to build.
 std::string serializeStreamTrailer(
-    const std::vector<serialization::StreamTrailerField>& fields,
-    bool hasStreamChecksums = false) {
+    const std::vector<serialization::StreamTrailerField>& fields) {
   flatbuffers::FlatBufferBuilder builder;
   const auto streamTrailer = builder.CreateVectorOfStructs(fields);
   builder.Finish(
@@ -204,7 +171,6 @@ std::string serializeStreamTrailer(
           /*cluster_index_key_column_storage_omitted=*/false,
           /*cluster_index_key_columns_with_omitted_storage=*/0,
           /*compact_encoding=*/0,
-          hasStreamChecksums,
           streamTrailer));
   return std::string{
       reinterpret_cast<const char*>(builder.GetBufferPointer()),
@@ -219,23 +185,34 @@ TEST(FilePropertiesTest, roundTripStreamTrailer) {
   FileProperties properties{/*compactRowCountEncoding=*/false,
                             /*clusterIndexKeyColumnStorageOmitted=*/false,
                             /*clusterIndexKeyColumnsWithOmittedStorage=*/{},
-                            /*hasStreamChecksums=*/false,
                             StreamTrailerLayout::defaultLayout()};
-  const auto serialized = properties.serialize();
 
-  const auto decoded = FileProperties::deserialize(serialized);
-  EXPECT_FALSE(decoded.hasStreamChecksums());
+  const auto decoded = FileProperties::deserialize(properties.serialize());
   EXPECT_EQ(
       decoded.streamTrailerLayout().fields(),
       (std::vector<StreamTrailerField>{
           {StreamTrailerFieldKind::kChecksum32, 4}}));
   EXPECT_EQ(decoded.streamTrailerLayout().size(), 4);
   EXPECT_EQ(decoded.streamTrailerLayout().checksumOffset(), 0);
+}
 
-  // Readers that predate stream trailers see no checksums at all.
-  const auto* root =
-      flatbuffers::GetRoot<serialization::FileProperties>(serialized.data());
-  EXPECT_FALSE(root->has_stream_checksums());
+// The trailer layout round trips alongside every other property.
+TEST(FilePropertiesTest, streamTrailerCoexistsWithOtherProperties) {
+  FileProperties properties{
+      /*compactRowCountEncoding=*/true,
+      /*clusterIndexKeyColumnStorageOmitted=*/true,
+      /*clusterIndexKeyColumnsWithOmittedStorage=*/{"key0"},
+      StreamTrailerLayout::defaultLayout()};
+
+  const auto decoded = FileProperties::deserialize(properties.serialize());
+  EXPECT_TRUE(decoded.compactRowCountEncoding());
+  EXPECT_TRUE(decoded.clusterIndexKeyColumnStorageOmitted());
+  EXPECT_EQ(
+      decoded.clusterIndexKeyColumnsWithOmittedStorage(),
+      (std::vector<std::string>{"key0"}));
+  EXPECT_EQ(
+      decoded.streamTrailerLayout().fields(),
+      StreamTrailerLayout::defaultLayout().fields());
 }
 
 // Files without a trailer, including every file written before trailers
@@ -277,7 +254,6 @@ TEST(FilePropertiesTest, streamTrailerWithoutChecksum) {
       serializeStreamTrailer({onDiskField(/*kind=*/5, /*size=*/4)}));
   EXPECT_EQ(decoded.streamTrailerLayout().size(), 4);
   EXPECT_EQ(decoded.streamTrailerLayout().checksumOffset(), std::nullopt);
-  EXPECT_FALSE(decoded.hasStreamChecksums());
 }
 
 TEST(FilePropertiesTest, rejectsMalformedStreamTrailer) {
@@ -318,29 +294,6 @@ TEST(FilePropertiesTest, rejectsMalformedStreamTrailer) {
   }
 }
 
-// No writer records checksums in both places, so a file claiming both is
-// malformed rather than verified half one way and half the other.
-TEST(FilePropertiesTest, rejectsChecksumsInStripeGroupsAndTrailers) {
-  NIMBLE_ASSERT_FILE_THROW(
-      FileProperties::deserialize(serializeStreamTrailer(
-          {onDiskField(/*kind=*/0, /*size=*/4)},
-          /*hasStreamChecksums=*/true)),
-      "File properties record per-stream checksums both in stripe groups and in stream trailers");
-  NIMBLE_ASSERT_THROW(
-      (FileProperties{/*compactRowCountEncoding=*/false,
-                      /*clusterIndexKeyColumnStorageOmitted=*/false,
-                      /*clusterIndexKeyColumnsWithOmittedStorage=*/{},
-                      /*hasStreamChecksums=*/true,
-                      StreamTrailerLayout::defaultLayout()}),
-      "Stream checksums cannot be recorded both in stripe groups and in stream trailers");
-
-  // A trailer that carries no checksum does not conflict with the arrays.
-  const auto decoded = FileProperties::deserialize(serializeStreamTrailer(
-      {onDiskField(/*kind=*/5, /*size=*/4)}, /*hasStreamChecksums=*/true));
-  EXPECT_TRUE(decoded.hasStreamChecksums());
-  EXPECT_EQ(decoded.streamTrailerLayout().checksumOffset(), std::nullopt);
-}
-
 // Serializes a properties section whose required_features holds exactly
 // `bitset`, including forms FileProperties never emits, such as an empty or
 // all-zero bitset. `streamTrailer` pairs the bitset with another field the
@@ -362,7 +315,6 @@ std::string serializeRequiredFeaturesBitset(
           /*cluster_index_key_column_storage_omitted=*/false,
           /*cluster_index_key_columns_with_omitted_storage=*/0,
           /*compact_encoding=*/0,
-          /*has_stream_checksums=*/false,
           trailer,
           /*has_top_level_nulls=*/false,
           requiredFeatures));
@@ -383,7 +335,6 @@ FileProperties withRequiredFeatures(std::vector<RequiredFeature> features) {
   return FileProperties{/*compactRowCountEncoding=*/false,
                         /*clusterIndexKeyColumnStorageOmitted=*/false,
                         /*clusterIndexKeyColumnsWithOmittedStorage=*/{},
-                        /*hasStreamChecksums=*/false,
                         /*streamTrailerLayout=*/{},
                         /*hasTopLevelNulls=*/false,
                         std::move(features)};

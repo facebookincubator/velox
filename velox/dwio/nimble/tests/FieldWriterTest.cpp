@@ -39,22 +39,23 @@ namespace facebook::nimble {
 namespace {
 
 HybridFlatMap makeHybridFlatMap(
+    ScalarKind keyKind,
     std::vector<std::vector<std::string>> explicitGroups) {
-  HybridFlatMap hybridMap;
-  hybridMap.groups.reserve(explicitGroups.size() + 1);
+  std::vector<HybridFlatMap::Group> groups;
+  groups.reserve(explicitGroups.size() + 1);
   for (uint32_t groupId = 0; groupId < explicitGroups.size(); ++groupId) {
-    hybridMap.groups.push_back(
+    groups.push_back(
         HybridFlatMap::Group{
             .groupId = groupId,
             .groupKeys = std::move(explicitGroups[groupId]),
         });
   }
-  hybridMap.groups.push_back(
+  groups.push_back(
       HybridFlatMap::Group{
           .groupId = HybridFlatMap::kDefaultGroupId,
           .groupKeys = {},
       });
-  return hybridMap;
+  return HybridFlatMap{keyKind, std::move(groups)};
 }
 
 class FieldWriterTest : public ::testing::Test {
@@ -113,7 +114,7 @@ TEST_F(FieldWriterTest, writesHybridGroupKeysInMapsAndValues) {
 
   FieldWriterContext context{*pool_};
   context.addHybridFlatMapNode(
-      mapNode->id(), makeHybridFlatMap({{"1", "2"}, {"3"}}));
+      mapNode->id(), makeHybridFlatMap(ScalarKind::Int32, {{"1", "2"}, {"3"}}));
   EXPECT_FALSE(context.hasFlatMapNodeId(mapNode->id()));
   EXPECT_TRUE(context.hasHybridFlatMapNodeId(mapNode->id()));
   auto writer = FieldWriter::create(context, schemaWithId);
@@ -177,7 +178,7 @@ TEST_F(FieldWriterTest, omitsAbsentHybridKeysAndEmptyGroups) {
 
   FieldWriterContext context{*pool_};
   context.addHybridFlatMapNode(
-      typeWithId->id(), makeHybridFlatMap({{"1", "2"}}));
+      typeWithId->id(), makeHybridFlatMap(ScalarKind::Int32, {{"1", "2"}}));
   auto writer = FieldWriter::create(context, typeWithId);
   writer->write(map, OrderedRanges::of(0, map->size()));
 
@@ -215,7 +216,7 @@ TEST_F(FieldWriterTest, disablesChunkingOnlyForHybridGroupMetadata) {
           velox::MAP(velox::INTEGER(), velox::BIGINT()));
   FieldWriterContext context{*pool_};
   context.addHybridFlatMapNode(
-      typeWithId->id(), makeHybridFlatMap({{"1", "2"}}));
+      typeWithId->id(), makeHybridFlatMap(ScalarKind::Int32, {{"1", "2"}}));
   auto writer = FieldWriter::create(context, typeWithId);
 
   const auto schema =
@@ -251,12 +252,12 @@ TEST_F(FieldWriterTest, writesStringKeysInGroupOrder) {
 
   FieldWriterContext context{*pool_};
   context.addHybridFlatMapNode(
-      typeWithId->id(), makeHybridFlatMap({{"b", "a"}}));
+      typeWithId->id(), makeHybridFlatMap(ScalarKind::String, {{"b", "a"}}));
   auto writer = FieldWriter::create(context, typeWithId);
   const auto* configuredHybridMap = context.hybridFlatMapNode(typeWithId->id());
   ASSERT_NE(configuredHybridMap, nullptr);
   EXPECT_EQ(
-      configuredHybridMap->groups[0].groupKeys,
+      configuredHybridMap->groups()[0].groupKeys,
       (std::vector<std::string>{"a", "b"}));
   writer->write(map, OrderedRanges::of(0, map->size()));
 
@@ -287,7 +288,8 @@ TEST_F(FieldWriterTest, accumulatesDefaultKeysInSchemaOrderAcrossBatches) {
       velox::dwio::common::TypeWithId::create(
           velox::MAP(velox::INTEGER(), velox::BIGINT()));
   FieldWriterContext context{*pool_};
-  context.addHybridFlatMapNode(typeWithId->id(), makeHybridFlatMap({{"1"}}));
+  context.addHybridFlatMapNode(
+      typeWithId->id(), makeHybridFlatMap(ScalarKind::Int32, {{"1"}}));
   auto writer = FieldWriter::create(context, typeWithId);
 
   // Returns the Default catalog, key-presence bits, in-map bits and values.
@@ -336,29 +338,17 @@ TEST_F(FieldWriterTest, accumulatesDefaultKeysInSchemaOrderAcrossBatches) {
 }
 
 TEST_F(FieldWriterTest, rejectsEmptyConfiguredKey) {
-  const auto type =
-      velox::ROW({{"features", velox::MAP(velox::VARCHAR(), velox::DOUBLE())}});
-  const SerializerOptions options{
-      .version = SerializationVersion::kSerialization,
-      .hybridFlatMapColumns = {{"features", makeHybridFlatMap({{""}})}},
-  };
-
-  NIMBLE_ASSERT_THROW(
-      std::make_unique<Serializer>(options, type, pool_.get()),
+  // The configuration rejects it when it is built.
+  NIMBLE_ASSERT_USER_THROW(
+      makeHybridFlatMap(ScalarKind::String, {{""}}),
       "Hybrid FlatMap key cannot be empty");
 }
 
 TEST_F(FieldWriterTest, rejectsInvalidConfiguredNumericKeys) {
-  const auto type =
-      velox::ROW({{"features", velox::MAP(velox::INTEGER(), velox::BIGINT())}});
+  // The configuration rejects them when it is built.
   const auto expectRejected = [&](std::string key) {
-    const SerializerOptions options{
-        .version = SerializationVersion::kSerialization,
-        .hybridFlatMapColumns =
-            {{"features", makeHybridFlatMap({{std::move(key)}})}},
-    };
-    NIMBLE_ASSERT_THROW(
-        std::make_unique<Serializer>(options, type, pool_.get()),
+    NIMBLE_ASSERT_USER_THROW(
+        makeHybridFlatMap(ScalarKind::Int32, {{std::move(key)}}),
         "cannot be parsed");
   };
 
@@ -367,99 +357,95 @@ TEST_F(FieldWriterTest, rejectsInvalidConfiguredNumericKeys) {
 }
 
 TEST_F(FieldWriterTest, rejectsUnsupportedHybridKeyType) {
-  const auto expectRejected = [&](const velox::TypePtr& keyType,
-                                  std::string key) {
+  // The column's key type is checked when the writer is created, whatever the
+  // configuration.
+  const auto expectRejected = [&](const velox::TypePtr& keyType) {
     const auto type =
         velox::ROW({{"features", velox::MAP(keyType, velox::BIGINT())}});
     const SerializerOptions options{
         .version = SerializationVersion::kSerialization,
         .hybridFlatMapColumns =
-            {{"features", makeHybridFlatMap({{std::move(key)}})}},
+            {{"features", makeHybridFlatMap(ScalarKind::Int32, {{"1"}})}},
     };
     NIMBLE_ASSERT_THROW(
         std::make_unique<Serializer>(options, type, pool_.get()),
         "Unsupported hybrid FlatMap key type");
   };
 
-  expectRejected(velox::BOOLEAN(), "true");
-  expectRejected(velox::VARBINARY(), "binary");
+  expectRejected(velox::BOOLEAN());
+  expectRejected(velox::VARBINARY());
 }
 
+// A configuration is checked when it is built (see HybridFlatMapTest); these
+// are the cases the writer used to reject when created.
 TEST_F(FieldWriterTest, rejectsDuplicateDefaultGroupsAfterWrite) {
-  const auto type = velox::MAP(velox::INTEGER(), velox::BIGINT());
-  const std::shared_ptr<const velox::dwio::common::TypeWithId> typeWithId =
-      velox::dwio::common::TypeWithId::create(type);
-  FieldWriterContext context{*pool_};
-  context.addHybridFlatMapNode(
-      typeWithId->id(),
-      HybridFlatMap{
-          .groups =
-              {
-                  HybridFlatMap::Group{
-                      .groupId = HybridFlatMap::kDefaultGroupId,
-                      .groupKeys = {},
-                  },
-                  HybridFlatMap::Group{
-                      .groupId = HybridFlatMap::kDefaultGroupId,
-                      .groupKeys = {},
-                  },
-              },
-      });
-
-  NIMBLE_ASSERT_THROW(
-      FieldWriter::create(context, typeWithId),
+  NIMBLE_ASSERT_USER_THROW(
+      HybridFlatMap(
+          ScalarKind::Int32,
+          {{.groupId = HybridFlatMap::kDefaultGroupId, .groupKeys = {}},
+           {.groupId = HybridFlatMap::kDefaultGroupId, .groupKeys = {}}}),
       "Hybrid FlatMap has multiple Default groups");
 }
 
 TEST_F(FieldWriterTest, rejectsConfiguredKeysInDefaultGroup) {
-  const auto type = velox::MAP(velox::INTEGER(), velox::BIGINT());
-  const std::shared_ptr<const velox::dwio::common::TypeWithId> typeWithId =
-      velox::dwio::common::TypeWithId::create(type);
-  FieldWriterContext context{*pool_};
-  context.addHybridFlatMapNode(
-      typeWithId->id(),
-      HybridFlatMap{
-          .groups =
-              {
-                  HybridFlatMap::Group{
-                      .groupId = 0,
-                      .groupKeys = {"1"},
-                  },
-                  HybridFlatMap::Group{
-                      .groupId = HybridFlatMap::kDefaultGroupId,
-                      .groupKeys = {"2"},
-                  },
-              },
-      });
-
   NIMBLE_ASSERT_USER_THROW(
-      FieldWriter::create(context, typeWithId),
+      HybridFlatMap(
+          ScalarKind::Int32,
+          {{.groupId = 0, .groupKeys = {"1"}},
+           {.groupId = HybridFlatMap::kDefaultGroupId, .groupKeys = {"2"}}}),
       "Hybrid FlatMap Default group keys are appended in first-seen order and "
-      "cannot be configured for node");
+      "cannot be configured.");
 }
 
 TEST_F(FieldWriterTest, rejectsDuplicateConfiguredKeys) {
-  const std::shared_ptr<const velox::dwio::common::TypeWithId> typeWithId =
-      velox::dwio::common::TypeWithId::create(
-          velox::MAP(velox::INTEGER(), velox::BIGINT()));
-
-  // The type builder rejects both: a key repeated within one group fails the
-  // strictly ascending check, and a key repeated across groups fails the
-  // cross-group check.
+  // A key repeated within one group and a key repeated across groups.
   for (const auto& explicitGroups :
        std::vector<std::vector<std::vector<std::string>>>{
            {{"1", "1"}},
            {{"1"}, {"1"}},
        }) {
     SCOPED_TRACE(explicitGroups.size());
-    FieldWriterContext context{*pool_};
-    context.addHybridFlatMapNode(
-        typeWithId->id(), makeHybridFlatMap(explicitGroups));
-
-    NIMBLE_ASSERT_THROW(
-        FieldWriter::create(context, typeWithId),
+    NIMBLE_ASSERT_USER_THROW(
+        makeHybridFlatMap(ScalarKind::Int32, explicitGroups),
         "Duplicate Hybrid FlatMap key: '1'");
   }
+}
+
+// A configuration built for other keys than the column's is rejected when the
+// writer is created.
+TEST_F(FieldWriterTest, rejectsConfigurationForOtherKeys) {
+  const std::shared_ptr<const velox::dwio::common::TypeWithId> typeWithId =
+      velox::dwio::common::TypeWithId::create(
+          velox::MAP(velox::INTEGER(), velox::BIGINT()));
+  FieldWriterContext context{*pool_};
+  context.addHybridFlatMapNode(
+      typeWithId->id(), makeHybridFlatMap(ScalarKind::Int64, {{"1"}}));
+  NIMBLE_ASSERT_USER_THROW(
+      FieldWriter::create(context, typeWithId),
+      "Hybrid FlatMap configuration is for keys of another type");
+}
+
+// A configuration built without a key kind is checked for the column's keys
+// when the writer is created: 3000000000 is a valid BIGINT key but not an
+// INTEGER one.
+TEST_F(FieldWriterTest, checksConfigurationWithoutKeyKindForColumnKeys) {
+  HybridFlatMap configuration;
+  configuration.addGroup(0, {"1", "3000000000"});
+  const std::shared_ptr<const velox::dwio::common::TypeWithId> bigintColumn =
+      velox::dwio::common::TypeWithId::create(
+          velox::MAP(velox::BIGINT(), velox::BIGINT()));
+  FieldWriterContext bigintContext{*pool_};
+  bigintContext.addHybridFlatMapNode(bigintColumn->id(), configuration);
+  EXPECT_NE(FieldWriter::create(bigintContext, bigintColumn), nullptr);
+
+  const std::shared_ptr<const velox::dwio::common::TypeWithId> integerColumn =
+      velox::dwio::common::TypeWithId::create(
+          velox::MAP(velox::INTEGER(), velox::BIGINT()));
+  FieldWriterContext integerContext{*pool_};
+  integerContext.addHybridFlatMapNode(integerColumn->id(), configuration);
+  NIMBLE_ASSERT_USER_THROW(
+      FieldWriter::create(integerContext, integerColumn),
+      "Hybrid FlatMap key '3000000000' cannot be parsed as");
 }
 
 TEST_F(FieldWriterTest, hybridFlatMapOwnsLongStringKeys) {
@@ -510,7 +496,8 @@ TEST_F(FieldWriterTest, hybridFlatMapOwnsLongStringKeys) {
       SerializerOptions{
           .version = SerializationVersion::kSerialization,
           .hybridFlatMapColumns =
-              {{"features", makeHybridFlatMap({{groupedKey}})}},
+              {{"features",
+                makeHybridFlatMap(ScalarKind::String, {{groupedKey}})}},
       },
       type,
       pool_.get()};
@@ -576,7 +563,8 @@ TEST_F(FieldWriterTest, initializesEverySupportedHybridValueType) {
   const auto& valueNode = typeWithId->childAt(1);
 
   FieldWriterContext context{*pool_};
-  context.addHybridFlatMapNode(typeWithId->id(), makeHybridFlatMap({{"1"}}));
+  context.addHybridFlatMapNode(
+      typeWithId->id(), makeHybridFlatMap(ScalarKind::Int32, {{"1"}}));
   context.dictionaryArrayNodeIds().insert(
       valueNode->childByName("offset_array")->id());
   context.deduplicatedMapNodeIds().insert(
@@ -611,7 +599,8 @@ TEST_F(FieldWriterTest, delegatesUnsupportedHybridValueTypeValidation) {
   const std::shared_ptr<const velox::dwio::common::TypeWithId> typeWithId =
       velox::dwio::common::TypeWithId::create(type);
   FieldWriterContext context{*pool_};
-  context.addHybridFlatMapNode(typeWithId->id(), makeHybridFlatMap({{"1"}}));
+  context.addHybridFlatMapNode(
+      typeWithId->id(), makeHybridFlatMap(ScalarKind::Int32, {{"1"}}));
 
   NIMBLE_ASSERT_THROW(
       FieldWriter::create(context, typeWithId), "Unsupported kind: UNKNOWN");
@@ -650,7 +639,8 @@ TEST_F(FieldWriterTest, writesDecodedMapAndKeyVectors) {
   const std::shared_ptr<const velox::dwio::common::TypeWithId> typeWithId =
       velox::dwio::common::TypeWithId::create(baseMap->type());
   FieldWriterContext context{*pool_};
-  context.addHybridFlatMapNode(typeWithId->id(), makeHybridFlatMap({{"1"}}));
+  context.addHybridFlatMapNode(
+      typeWithId->id(), makeHybridFlatMap(ScalarKind::Int32, {{"1"}}));
   auto writer = FieldWriter::create(context, typeWithId);
   writer->write(dictionaryMap, OrderedRanges::of(0, dictionaryMap->size()));
 

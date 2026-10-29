@@ -99,13 +99,14 @@ TEST(SchemaSerializationTest, hybridFlatMapMetadataRoundTripsThroughSchema) {
   EXPECT_EQ(metadata->group_keys()->Get(2)->str(), "C");
 
   const auto decodedMetadata = HybridFlatMap::deserialize(serializedMetadata);
-  ASSERT_EQ(decodedMetadata.groups.size(), 3);
-  EXPECT_EQ(decodedMetadata.groups[0].groupId, 0);
-  EXPECT_EQ(decodedMetadata.groups[0].groupKeys, groupKeys);
+  ASSERT_EQ(decodedMetadata.groups().size(), 3);
+  EXPECT_EQ(decodedMetadata.groups()[0].groupId, 0);
+  EXPECT_EQ(decodedMetadata.groups()[0].groupKeys, groupKeys);
   EXPECT_EQ(
-      decodedMetadata.groups[1].groupKeys, (std::vector<std::string>{"C"}));
-  EXPECT_EQ(decodedMetadata.groups[2].groupId, HybridFlatMap::kDefaultGroupId);
-  EXPECT_TRUE(decodedMetadata.groups[2].groupKeys.empty());
+      decodedMetadata.groups()[1].groupKeys, (std::vector<std::string>{"C"}));
+  EXPECT_EQ(
+      decodedMetadata.groups()[2].groupId, HybridFlatMap::kDefaultGroupId);
+  EXPECT_TRUE(decodedMetadata.groups()[2].groupKeys.empty());
 
   EXPECT_EQ(serialized->nodes()->Get(2)->kind(), serialization::Kind_Bool);
   EXPECT_EQ(serialized->nodes()->Get(3)->kind(), serialization::Kind_Bool);
@@ -238,7 +239,7 @@ TEST(SchemaSerializationTest, hybridFlatMapRejectsMalformedFlatMetadata) {
       HybridFlatMap::deserialize("malformed"),
       "Hybrid FlatMap metadata attribute is malformed");
 
-  const auto emptyMetadata = HybridFlatMap{}.serialize();
+  const auto emptyMetadata = HybridFlatMap::fromSchema({}).serialize();
   const auto schemaWithEmptyMetadata =
       encodeSchemaWithMetadataAttribute(emptyMetadata);
   NIMBLE_ASSERT_THROW(

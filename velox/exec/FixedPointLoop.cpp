@@ -548,7 +548,25 @@ folly::coro::Task<void> FixedPointLoop::run() {
   for (int32_t iteration = 0; iteration < node_->maxIterations(); ++iteration) {
     co_await runIteration(iteration);
     const bool iterationConverged = co_await converged();
-    executionStats_.wlock()->iterations.back().converged = iterationConverged;
+    // Copied, so the application runs outside the statistics lock.
+    std::optional<FixedPointIterationExecutionStats> completed;
+    {
+      auto stats = executionStats_.wlock();
+      auto& latest = stats->iterations.back();
+      latest.converged = iterationConverged;
+      if (options_.onIterationStats) {
+        completed = latest;
+      }
+    }
+    if (completed.has_value()) {
+      try {
+        options_.onIterationStats(nesting_, *completed);
+      } catch (const std::exception& e) {
+        LOG(ERROR) << "FixedPointOptions::onIterationStats threw for task "
+                   << owner_->taskId() << ", iteration " << iteration << ": "
+                   << e.what();
+      }
+    }
     if (iterationConverged) {
       hasConverged = true;
       break;
@@ -1295,7 +1313,7 @@ folly::coro::Task<bool> FixedPointLoop::converged() {
     co_return lastDeltaEmpty_;
   }
 
-  if (config.plans.empty()) {
+  if (convergencePlans_.empty()) {
     // No convergence sequence: the loop is bounded only by maxIterations.
     co_return false;
   }

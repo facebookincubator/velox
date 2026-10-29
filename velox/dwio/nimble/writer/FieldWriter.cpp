@@ -85,8 +85,6 @@ struct NimbleTypeTraits<velox::TypeKind::VARBINARY> {
   static constexpr ScalarKind scalarKind = ScalarKind::Binary;
 };
 
-constexpr uint64_t kTimestampLogicalSize = 12;
-
 template <bool addNulls, typename Vector, typename Consumer, typename IndexOp>
 uint64_t iterateNonNulls(
     const OrderedRanges& ranges,
@@ -2146,28 +2144,7 @@ class HybridFlatMapFieldWriter : public FieldWriter {
   }
 
   std::string canonicalKey(std::string_view key) const {
-    NIMBLE_USER_CHECK(
-        !key.empty(),
-        "Hybrid FlatMap key cannot be empty for node {}.",
-        nodeId_);
-    if constexpr (K == velox::TypeKind::VARCHAR) {
-      return std::string(key);
-    } else {
-      const auto parsed = folly::tryTo<KeyType>(key);
-      NIMBLE_USER_CHECK(
-          parsed.hasValue(),
-          "Hybrid FlatMap key '{}' cannot be parsed for node {}.",
-          key,
-          nodeId_);
-      const auto canonical = flatMapKeyToString(parsed.value());
-      NIMBLE_USER_CHECK_EQ(
-          canonical,
-          key,
-          "Hybrid FlatMap key '{}' is not canonical for node {}.",
-          key,
-          nodeId_);
-      return canonical;
-    }
+    return HybridFlatMap::canonicalKey(NimbleTypeTraits<K>::scalarKind, key);
   }
 
   // Materializes the fixed group topology and its physical stream descriptors.
@@ -2179,19 +2156,16 @@ class HybridFlatMapFieldWriter : public FieldWriter {
         "Hybrid FlatMap grouping is missing for node {}.",
         nodeId_);
 
-    HybridFlatMap& hybridMap = *configuredHybridMap;
-    for (auto& group : hybridMap.groups) {
-      for (auto& key : group.groupKeys) {
-        key = canonicalKey(key);
-      }
-      std::sort(group.groupKeys.begin(), group.groupKeys.end());
-    }
+    // Binds the configuration to this column's keys; HybridFlatMap checks it
+    // for them.
+    const HybridFlatMap hybridMap{
+        NimbleTypeTraits<K>::scalarKind, *configuredHybridMap};
     auto& hybridTypeBuilder = typeBuilder_->asHybridFlatMap();
 
-    groups_.reserve(hybridMap.groups.size());
+    groups_.reserve(hybridMap.groups().size());
     const auto configuredGroupKeyCount = std::accumulate(
-        hybridMap.groups.begin(),
-        hybridMap.groups.end(),
+        hybridMap.groups().begin(),
+        hybridMap.groups().end(),
         size_t{0},
         [](size_t count, const auto& group) {
           return count + group.groupKeys.size();
@@ -2225,15 +2199,10 @@ class HybridFlatMapFieldWriter : public FieldWriter {
 
     // Build the writer-lifetime lookup for configured keys. Default keys join
     // this lookup when first observed and retain that schema ordinal.
-    for (const auto& configuredGroup : hybridMap.groups) {
+    for (const auto& configuredGroup : hybridMap.groups()) {
       const auto groupIndex = groups_.size();
       const bool isDefault =
           configuredGroup.groupId == HybridFlatMap::kDefaultGroupId;
-      NIMBLE_USER_CHECK(
-          !isDefault || configuredGroup.groupKeys.empty(),
-          "Hybrid FlatMap Default group keys are appended in first-seen "
-          "order and cannot be configured for node {}.",
-          nodeId_);
       addGroup(configuredGroup.groupId, configuredGroup.groupKeys);
       if (isDefault) {
         defaultGroupIndex_ = groupIndex;
@@ -2248,7 +2217,7 @@ class HybridFlatMapFieldWriter : public FieldWriter {
     // ingestMap() reads group i's keys from type builder group i.
     NIMBLE_CHECK_EQ(hybridTypeBuilder.groupCount(), groups_.size());
 
-    NIMBLE_USER_CHECK(
+    NIMBLE_CHECK(
         defaultGroupIndex_.has_value(),
         "Hybrid FlatMap requires a Default group for node {}.",
         nodeId_);

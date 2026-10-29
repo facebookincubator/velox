@@ -140,36 +140,6 @@ uint64_t SerializedPageFileWriter::flush() {
   return writtenBytes;
 }
 
-folly::Range<const vector_size_t*> SerializedPageFileWriter::estimateRowSizes(
-    const RowVectorPtr& rows,
-    const folly::Range<IndexRange*>& indices) {
-  vector_size_t numRows = 0;
-  for (const auto& range : indices) {
-    numRows += range.size;
-  }
-  if (numRows > rowSizes_.size()) {
-    rowNumbers_.resize(numRows);
-    rowSizes_.resize(numRows);
-    sizePointers_.resize(numRows);
-    std::iota(sizePointers_.begin(), sizePointers_.end(), rowSizes_.data());
-  }
-
-  vector_size_t rowIndex = 0;
-  for (const auto& range : indices) {
-    for (vector_size_t offset = 0; offset < range.size; ++offset) {
-      rowNumbers_[rowIndex++] = range.begin + offset;
-    }
-  }
-  std::fill(rowSizes_.begin(), rowSizes_.begin() + numRows, 0);
-  Scratch scratch;
-  serde_->estimateSerializedSize(
-      rows.get(),
-      folly::Range(rowNumbers_.data(), numRows),
-      sizePointers_.data(),
-      scratch);
-  return folly::Range<const vector_size_t*>(rowSizes_.data(), numRows);
-}
-
 uint64_t SerializedPageFileWriter::write(
     const RowVectorPtr& rows,
     const folly::Range<IndexRange*>& indices) {
@@ -180,8 +150,7 @@ uint64_t SerializedPageFileWriter::write(
   checkNotFinished();
 
   uint64_t timeNs{0};
-  auto append = [&](vector_size_t begin, vector_size_t size) {
-    IndexRange range{begin, size};
+  {
     NanosecondWallTimer timer(&timeNs);
     if (batch_ == nullptr) {
       batch_ = std::make_unique<VectorStreamGroup>(pool_, serde_);
@@ -190,56 +159,13 @@ uint64_t SerializedPageFileWriter::write(
           1'000,
           serdeOptions_.get());
     }
-    batch_->append(rows, folly::Range(&range, 1));
-  };
-
-  uint64_t writtenBytes{0};
-  if (writeBufferSize_ == 0) {
-    for (const auto& range : indices) {
-      append(range.begin, range.size);
-    }
-    writtenBytes += flush();
-  } else {
-    const auto rowSizes = estimateRowSizes(rows, indices);
-    uint64_t bufferedSize = batch_ == nullptr ? 0 : batch_->size();
-    vector_size_t rowIndex = 0;
-    for (const auto& range : indices) {
-      vector_size_t chunkBegin = range.begin;
-      vector_size_t chunkSize = 0;
-      uint64_t chunkBytes = 0;
-      if (range.size > 0 && bufferedSize > 0 &&
-          bufferedSize + rowSizes[rowIndex] > writeBufferSize_) {
-        writtenBytes += flush();
-        bufferedSize = 0;
-      }
-      for (vector_size_t offset = 0; offset < range.size; ++offset) {
-        const auto rowSize = rowSizes[rowIndex++];
-        if (chunkSize > 0 &&
-            bufferedSize + chunkBytes + rowSize > writeBufferSize_) {
-          append(chunkBegin, chunkSize);
-          writtenBytes += flush();
-          bufferedSize = 0;
-          chunkBegin += chunkSize;
-          chunkSize = 0;
-          chunkBytes = 0;
-        }
-
-        ++chunkSize;
-        chunkBytes += rowSize;
-      }
-      if (chunkSize > 0) {
-        append(chunkBegin, chunkSize);
-        bufferedSize = batch_->size();
-        if (bufferedSize >= writeBufferSize_) {
-          writtenBytes += flush();
-          bufferedSize = 0;
-        }
-      }
-    }
+    batch_->append(rows, indices);
   }
-
   updateAppendStats(rows->size(), timeNs);
-  return writtenBytes;
+  if (batch_->size() < writeBufferSize_) {
+    return 0;
+  }
+  return flush();
 }
 
 void SerializedPageFileWriter::finishFile() {

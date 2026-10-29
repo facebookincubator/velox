@@ -275,6 +275,7 @@ const std::vector<config::ConfigProperty>& QueryConfig::registeredProperties() {
     VELOX_REGISTER_QUERY_CONFIG(kRpcRateLimiterDecreaseFactor);
     VELOX_REGISTER_QUERY_CONFIG(kRpcRateLimiterMaxLimit);
     VELOX_REGISTER_QUERY_CONFIG(kRpcRateLimiterHardLimit);
+    VELOX_REGISTER_QUERY_CONFIG(kRpcRateLimiterMaxProbeIntervalMs);
 
 #undef VELOX_REGISTER_QUERY_CONFIG
 

@@ -35,6 +35,7 @@
 #include "velox/dwio/nimble/encodings/MainlyConstantEncoding.h"
 #include "velox/dwio/nimble/encodings/NullableEncoding.h"
 #include "velox/dwio/nimble/encodings/PFOREncoding.h"
+#include "velox/dwio/nimble/encodings/PartitionedEliasFanoEncoding.h"
 #include "velox/dwio/nimble/encodings/PrefixEncoding.h"
 #include "velox/dwio/nimble/encodings/RLEEncoding.h"
 #include "velox/dwio/nimble/encodings/SharedDictionaryEncoding.h"
@@ -161,6 +162,9 @@ std::unique_ptr<Encoding> EncodingFactory::create(
     }
     case EncodingType::EliasFano: {
       RETURN_ENCODING_BY_INTEGER_TYPE(EliasFanoEncoding, dataType);
+    }
+    case EncodingType::PartitionedEliasFano: {
+      RETURN_ENCODING_BY_INTEGER_TYPE(PartitionedEliasFanoEncoding, dataType);
     }
     case EncodingType::ALP: {
       switch (dataType) {
@@ -444,6 +448,15 @@ std::string_view EncodingFactory::encode(
       }
       NIMBLE_INCOMPATIBLE_ENCODING(
           "EliasFano encoding only supports integral data types, got {}.",
+          TypeTraits<T>::dataType);
+    }
+    case EncodingType::PartitionedEliasFano: {
+      if constexpr (isIntegralType<T>()) {
+        return PartitionedEliasFanoEncoding<T>::encode(
+            selection, castedValues, buffer, options);
+      }
+      NIMBLE_INCOMPATIBLE_ENCODING(
+          "PartitionedEliasFano encoding only supports integral data types, got {}.",
           TypeTraits<T>::dataType);
     }
     case EncodingType::ALP: {
