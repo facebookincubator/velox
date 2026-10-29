@@ -394,6 +394,7 @@ uint64_t DwrfRowReader::seekToRow(uint64_t rowNumber) {
     return 0;
   }
   nextRowNumber_.reset();
+  recomputeStridesToSkip_ = true;
 
   // If we are reading only a portion of the file (bounded by firstStripe_ and
   // stripeCeiling_), seeking before or after the portion of interest should
@@ -586,8 +587,9 @@ void DwrfRowReader::readNext(
 }
 
 uint64_t DwrfRowReader::skip(uint64_t numValues) {
-  if (getSelectiveColumnReader()) {
-    return getSelectiveColumnReader()->skip(numValues);
+  if (auto& reader = getSelectiveColumnReader()) {
+    reader->seekTo(reader->readOffset() + numValues, false);
+    return numValues;
   } else {
     return getColumnReader()->skip(numValues);
   }

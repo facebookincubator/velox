@@ -445,6 +445,7 @@ void SelectiveStructColumnReaderBase::read(
         rows.back(), rows.size() - 1, "Top level should have a dense row set");
     fillOutputRowsFromMutation(rows.size());
     if (outputRows_.empty()) {
+      recordParentNullsInChildren(offset, rows);
       readOffset_ = offset + rows.back() + 1;
       return;
     }
