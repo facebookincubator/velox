@@ -232,6 +232,32 @@ if(VELOX_ENABLE_FAISS)
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
   )
   target_link_libraries(velox_exec_VectorSearchJoinTest ${VELOX_EXEC_TEST_DEPS} velox_vector_index)
+
+  if(VELOX_ENABLE_FAISS_GPU)
+    # The same tests, with the local indexes built and searched on the GPU.
+    add_executable(
+      velox_exec_VectorSearchJoinGpuTest
+      VectorSearchJoinTest.cpp
+      VectorSearchTest.cpp
+      VectorSearchGpuEnvironment.cpp
+      Main.cpp
+    )
+    add_test(
+      NAME velox_exec_VectorSearchJoinGpuTest
+      COMMAND velox_exec_VectorSearchJoinGpuTest
+      WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    )
+    target_link_libraries(
+      velox_exec_VectorSearchJoinGpuTest
+      ${VELOX_EXEC_TEST_DEPS}
+      velox_vector_index
+      velox_vector_index_gpu
+    )
+    if(faiss_SOURCE_DIR)
+      target_include_directories(
+        velox_exec_VectorSearchJoinGpuTest BEFORE PRIVATE "${faiss_SOURCE_DIR}")
+    endif()
+  endif()
 endif()
 
 add_executable(
