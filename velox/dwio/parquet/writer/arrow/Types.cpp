@@ -258,7 +258,6 @@ int getTypeByteSize(Type::type parquetType) {
     default:
       return 0;
   }
-  return 0;
 }
 
 // Return the Sort Order of the Parquet Physical Types.
