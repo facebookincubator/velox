@@ -70,6 +70,9 @@ class AggregateWindowFunction : public exec::WindowFunction {
         config,
         constantInputs);
     aggregate_->setAllocator(stringAllocator_);
+    if (!constantInputs.empty()) {
+      aggregate_->setConstantInputs(constantInputs);
+    }
 
     // Aggregate initialization.
     // Row layout is:

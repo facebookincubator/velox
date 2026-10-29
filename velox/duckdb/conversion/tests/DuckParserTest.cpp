@@ -14,6 +14,9 @@
  * limitations under the License.
  */
 #include "velox/duckdb/conversion/DuckParser.h"
+
+#include <fmt/format.h>
+
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/core/PlanNode.h"
 #include "velox/functions/prestosql/types/JsonRegistration.h"
@@ -154,6 +157,83 @@ TEST(DuckParserTest, aggregatesWithMasks) {
   EXPECT_EQ(
       "array_agg(\"x\") FILTER(WHERE \"m\")",
       parseAgg("array_agg(x) filter (where m)"));
+}
+
+TEST(DuckParserTest, aggregateTypedLiterals) {
+  for (const bool parseIntegerAsBigint : {false, true}) {
+    ParseOptions options;
+    options.parseIntegerAsBigint = parseIntegerAsBigint;
+    for (const auto* expression : {
+             "histogram_numeric(c0, INTEGER '4')",
+             "histogram_numeric(c0, CAST('4' AS INTEGER))",
+         }) {
+      auto call = parseAggregateExpr(expression, options);
+      const auto* constant = call->inputs()[1]->as<core::ConstantExpr>();
+      ASSERT_NE(constant, nullptr);
+      EXPECT_TRUE(constant->type()->isInteger());
+      EXPECT_EQ(constant->value().value<TypeKind::INTEGER>(), 4);
+    }
+  }
+
+  EXPECT_EQ(
+      "histogram_numeric(DISTINCT \"c0\",4) FILTER(WHERE \"m\")",
+      parseAgg("histogram_numeric(distinct c0, INTEGER '4') filter (where m)"));
+  EXPECT_EQ(
+      "histogram_numeric(\"c0\",4) ORDER BY \"c0\" ASC NULLS LAST",
+      parseAgg("histogram_numeric(c0, INTEGER '4' order by c0)"));
+  EXPECT_EQ(
+      "histogram_numeric(\"c0\",cast(\"c1\" as INTEGER))",
+      parseAgg("histogram_numeric(c0, cast(c1 as integer))"));
+  EXPECT_EQ(
+      "histogram_numeric(\"c0\",try_cast(4 as INTEGER))",
+      parseAgg("histogram_numeric(c0, try_cast('4' as integer))"));
+}
+
+TEST(DuckParserTest, aggregateCastsRemainExpressions) {
+  const ParseOptions options;
+  for (const auto* value :
+       {"+1", "001", "-0", "1.2", "-1.8", "invalid", "2147483648"}) {
+    SCOPED_TRACE(value);
+    const auto expression = fmt::format("sum(CAST('{}' AS INTEGER))", value);
+    const auto call = parseAggregateExpr(expression, options);
+    const auto* cast = call->inputs()[0]->as<core::CastExpr>();
+    ASSERT_NE(cast, nullptr);
+    const auto* constant = cast->inputs()[0]->as<core::ConstantExpr>();
+    ASSERT_NE(constant, nullptr);
+    EXPECT_EQ(constant->value().value<TypeKind::VARCHAR>(), value);
+  }
+
+  const auto decimal =
+      parseAggregateExpr("sum(CAST('125' AS DECIMAL(5, 2)))", options);
+  EXPECT_NE(decimal->inputs()[0]->as<core::CastExpr>(), nullptr);
+}
+
+TEST(DuckParserTest, aggregateCanonicalNumericLiterals) {
+  const ParseOptions options;
+  struct TestCase {
+    std::string type;
+    std::string value;
+    TypePtr expectedType;
+  };
+  for (const auto& test : {
+           TestCase{"TINYINT", "-128", TINYINT()},
+           TestCase{"SMALLINT", "-32768", SMALLINT()},
+           TestCase{"INTEGER", "-2147483648", INTEGER()},
+           TestCase{"INTEGER", "2147483647", INTEGER()},
+           TestCase{"BIGINT", "-9223372036854775808", BIGINT()},
+           TestCase{"REAL", "1.25", REAL()},
+           TestCase{"DOUBLE", "1.25", DOUBLE()},
+           TestCase{"BOOLEAN", "true", BOOLEAN()},
+       }) {
+    SCOPED_TRACE(test.type);
+    const auto expression = fmt::format("sum({} '{}')", test.type, test.value);
+    const auto call = parseAggregateExpr(expression, options);
+    const auto* constant = call->inputs()[0]->as<core::ConstantExpr>();
+    ASSERT_NE(constant, nullptr);
+    EXPECT_TRUE(constant->type()->equivalent(*test.expectedType));
+    EXPECT_EQ(
+        constant->value().toStringAsVector(test.expectedType), test.value);
+  }
 }
 
 TEST(DuckParserTest, distinctAggregates) {
