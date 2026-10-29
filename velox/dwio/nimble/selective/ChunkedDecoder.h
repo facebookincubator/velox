@@ -733,6 +733,37 @@ class ChunkedDecoder {
     }
   }
 
+  // If the next row 'visitor' reads is past the current chunk, jumps to the
+  // destination chunk with the stream index, so the chunks in between are never
+  // loaded.
+  template <bool kHasNulls, typename V>
+  void skipToNextRowChunk(
+      const V& visitor,
+      const uint64_t* nulls,
+      ReadWithVisitorParams& params) {
+    if (streamIndex_ == nullptr) {
+      return;
+    }
+    const auto nextRow = visitor.rowAt(visitor.rowIndex());
+    // Already at the next row: nothing to skip.
+    if (nextRow <= params.numScanned) {
+      NIMBLE_CHECK_EQ(nextRow, params.numScanned);
+      return;
+    }
+    const int64_t rowsToSkip = nextRow - params.numScanned;
+    // Rows with a null parent or an absent flat-map key have no row in this
+    // stream.
+    const int64_t streamRowsToSkip = kHasNulls
+        ? velox::bits::countNonNulls(nulls, params.numScanned, nextRow)
+        : rowsToSkip;
+    // No jump: nothing to skip, or the skip stays within the current chunk.
+    if (streamRowsToSkip == 0 || streamRowsToSkip < remainingValues_) {
+      return;
+    }
+    skipWithIndex(streamRowsToSkip, kNoopAtChunkBoundary);
+    params.numScanned = nextRow;
+  }
+
   // Selects the encoding trait based on stringDecoderZeroCopy_ and
   // forwards to the fully-monomorphic readWithVisitorImpl.
   template <bool kHasNulls, typename V>
@@ -763,6 +794,9 @@ class ChunkedDecoder {
     std::vector<velox::BufferPtr> stringBuffers;
 
     while (visitor.rowIndex() < numRows) {
+      if constexpr (!V::dense) {
+        skipToNextRowChunk<kHasNulls>(visitor, nulls, params);
+      }
       if constexpr (!kHasNulls) {
         if (FOLLY_UNLIKELY(remainingValues_ == 0)) {
           loadNextChunk();
