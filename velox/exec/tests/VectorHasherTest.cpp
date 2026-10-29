@@ -1683,6 +1683,42 @@ TEST_F(VectorHasherTest, stringFilterDistinctOverflow) {
   ASSERT_TRUE(filter == nullptr);
 }
 
+TEST_F(VectorHasherTest, mergeStringDistinctOverflow) {
+  constexpr vector_size_t kNumRows = 256;
+  constexpr int32_t kStringSize = 8'192;
+
+  std::vector<std::string> strings;
+  strings.reserve(kNumRows);
+  for (auto i = 0; i < kNumRows; ++i) {
+    strings.push_back(fmt::format("{}_{}", i, std::string(kStringSize, 'x')));
+  }
+
+  auto vector = makeFlatVector<StringView>(
+      kNumRows, [&](vector_size_t row) { return StringView(strings[row]); });
+  SelectivityVector rows(kNumRows);
+  raw_vector<uint64_t> hashes(kNumRows);
+
+  VectorHasher overflowHasher(VARCHAR(), 0);
+  overflowHasher.decode(*vector, rows);
+  ASSERT_FALSE(overflowHasher.computeValueIds(rows, hashes));
+
+  uint64_t numRange;
+  uint64_t numDistinct;
+  overflowHasher.cardinality(0, numRange, numDistinct);
+  ASSERT_EQ(VectorHasher::kRangeTooLarge, numRange);
+  ASSERT_EQ(VectorHasher::kRangeTooLarge, numDistinct);
+  ASSERT_FALSE(overflowHasher.empty());
+
+  VectorHasher hasher(VARCHAR(), 0);
+  hasher.merge(overflowHasher, VectorHasher::kMaxDistinct);
+
+  hasher.cardinality(0, numRange, numDistinct);
+  EXPECT_EQ(VectorHasher::kRangeTooLarge, numRange);
+  EXPECT_EQ(VectorHasher::kRangeTooLarge, numDistinct);
+  EXPECT_FALSE(hasher.mayUseValueIds());
+  EXPECT_FALSE(hasher.empty());
+}
+
 DEBUG_ONLY_TEST_F(VectorHasherTest, customComparisonNoValueIds) {
   // Test that custom comparison types cannot use value IDs for optimization.
   auto data = makeRowVector({makeNullableFlatVector<int64_t>(
