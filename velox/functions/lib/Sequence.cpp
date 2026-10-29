@@ -15,6 +15,10 @@
  */
 
 #include "velox/functions/lib/Sequence.h"
+
+#include <exception>
+#include <optional>
+
 #include "velox/expression/DecodedArgs.h"
 #include "velox/functions/lib/DateTimeUtil.h"
 
@@ -116,6 +120,25 @@ int128_t getStepCount(Timestamp start, Timestamp end, int32_t step) {
   return diffTimestamp(DateTimeUnit::kMonth, start, end) / step + 1;
 }
 
+std::optional<int32_t> tryGetMaxElementsSize(
+    const SelectivityVector& rows,
+    exec::EvalCtx& context) {
+  try {
+    return context.execCtx()
+        ->queryCtx()
+        ->queryConfig()
+        .maxElementsSizeInRepeatAndSequence();
+  } catch (const VeloxException& error) {
+    if (!error.isUserError()) {
+      throw;
+    }
+    context.setErrors(rows, std::current_exception());
+  } catch (const std::exception&) {
+    context.setErrors(rows, std::current_exception());
+  }
+  return std::nullopt;
+}
+
 } // namespace
 
 template <typename T, typename K>
@@ -145,6 +168,15 @@ void SequenceFunction<T, K>::apply(
   auto rawOffsets = offsets->asMutable<vector_size_t>();
 
   const bool isDate = args[0]->type()->isDate();
+  const auto maxElementsSize = tryGetMaxElementsSize(rows, context);
+  if (!maxElementsSize.has_value()) {
+    context.moveOrCopyResult(
+        BaseVector::createNullConstant(outputType, numRows, pool),
+        rows,
+        result);
+    return;
+  }
+
   context.applyToSelectedNoThrow(rows, [&](auto row) {
     rawSizes[row] = checkArguments(
         startVector,
@@ -153,10 +185,7 @@ void SequenceFunction<T, K>::apply(
         row,
         isDate,
         isIntervalYearMonth,
-        context.execCtx()
-            ->queryCtx()
-            ->queryConfig()
-            .maxElementsSizeInRepeatAndSequence());
+        *maxElementsSize);
     numElements += rawSizes[row];
   });
 
