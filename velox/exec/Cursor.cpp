@@ -56,7 +56,7 @@ class TaskQueue {
       RowVectorPtr vector,
       bool drained,
       velox::ContinueFuture* future,
-      uint64_t& lastReportedRound);
+      uint64_t& lastArrivedRound);
 
   // Returns the next batch if one is available. Otherwise returns nullptr and,
   // if more output may still arrive, sets 'future' to a future realized when
@@ -78,24 +78,22 @@ class TaskQueue {
   }
 
  private:
-  bool allProducersReportedLocked() const {
-    return numProducers_.has_value() && numPendingProducers_ == 0;
+  bool allProducersArrivedLocked() const {
+    return numProducers_.has_value() &&
+        numArrivedProducers_ == numProducers_.value();
   }
 
   // Owns the vectors in 'queue_', hence must be declared first.
   std::shared_ptr<velox::memory::MemoryPool> pool_;
   std::deque<TaskQueueEntry> queue_;
-  // Remaining producers, including producers from not-yet-started split
-  // groups. Unset until Task::start() publishes the expected total.
+  // Expected total, including producers from not-yet-started split groups.
+  // Unset until Task::start() publishes it; never decremented on producer exit.
+  // Producer counts and round are guarded by 'mutex_'.
   std::optional<int32_t> numProducers_;
-  // Producers that have neither drained nor finished in the current round.
-  int32_t numPendingProducers_{0};
+  int32_t numFinishedProducers_{0};
+  // Includes permanently finished producers in every round.
+  int32_t numArrivedProducers_{0};
   uint64_t currentRound_{1};
-  // Drivers can report completion before Task::start() returns. Reconcile
-  // these counts when the expected total is published. Guarded by 'mutex_',
-  // as are the remaining counts and round above.
-  int32_t numFinishedBeforeStart_{0};
-  int32_t numReportedBeforeStart_{0};
   uint64_t totalBytes_{0};
   // Blocks the producer if 'totalBytes' exceeds 'maxBytes' after
   // adding the result.
@@ -110,43 +108,40 @@ class TaskQueue {
 void TaskQueue::setNumProducers(int32_t numProducers) {
   std::lock_guard<std::mutex> lock(mutex_);
   VELOX_CHECK(!numProducers_.has_value());
-  VELOX_CHECK_GE(numProducers, numReportedBeforeStart_);
-  numProducers_ = numProducers - numFinishedBeforeStart_;
-  numPendingProducers_ = numProducers - numReportedBeforeStart_;
+  VELOX_CHECK_GE(numProducers, numArrivedProducers_);
+  numProducers_ = numProducers;
 }
 
 exec::BlockingReason TaskQueue::enqueue(
     RowVectorPtr vector,
     bool drained,
     velox::ContinueFuture* future,
-    uint64_t& lastReportedRound) {
+    uint64_t& lastArrivedRound) {
   if (!vector) {
     // Fulfilled after releasing 'mutex_': setValue() may resume a coroutine
     // consumer inline, which would re-enter the queue and deadlock on 'mutex_'.
     ContinuePromise wakeConsumer{ContinuePromise::makeEmpty()};
     {
       std::lock_guard<std::mutex> l(mutex_);
-      const bool alreadyReported = lastReportedRound == currentRound_;
+      if (closed_) {
+        return exec::BlockingReason::kNotBlocked;
+      }
+      const bool alreadyArrived = lastArrivedRound == currentRound_;
       if (drained) {
-        VELOX_CHECK(!alreadyReported);
-      }
-      if (numProducers_.has_value()) {
-        if (!drained) {
-          VELOX_CHECK_GT(numProducers_.value(), 0);
-          --numProducers_.value();
-        }
-        if (!alreadyReported) {
-          VELOX_CHECK_GT(numPendingProducers_, 0);
-          --numPendingProducers_;
-        }
+        VELOX_CHECK(!alreadyArrived);
       } else {
-        numFinishedBeforeStart_ += !drained;
-        numReportedBeforeStart_ += !alreadyReported;
+        ++numFinishedProducers_;
       }
-      lastReportedRound = currentRound_;
-      // EOF retires a producer from this and future rounds. A producer that
-      // already reported drained must not decrement this round's wait twice.
-      if (consumerBlocked_ && allProducersReportedLocked()) {
+      if (!alreadyArrived) {
+        ++numArrivedProducers_;
+        lastArrivedRound = currentRound_;
+      }
+      VELOX_CHECK_LE(numFinishedProducers_, numArrivedProducers_);
+      if (numProducers_.has_value()) {
+        VELOX_CHECK_LE(numArrivedProducers_, numProducers_.value());
+      }
+      // A drain followed by EOF contributes only one arrival in this round.
+      if (consumerBlocked_ && allProducersArrivedLocked()) {
         consumerBlocked_ = false;
         wakeConsumer = std::move(consumerPromise_);
       }
@@ -206,7 +201,7 @@ RowVectorPtr TaskQueue::dequeue(velox::ContinueFuture& future) {
       if (totalBytes_ < maxBytes_ / 2) {
         mayContinue = std::move(producerUnblockPromises_);
       }
-    } else if (allProducersReportedLocked()) {
+    } else if (allProducersArrivedLocked()) {
       return nullptr;
     }
 
@@ -231,11 +226,11 @@ RowVectorPtr TaskQueue::dequeue(velox::ContinueFuture& future) {
 
 bool TaskQueue::finishDrain() {
   std::lock_guard<std::mutex> lock(mutex_);
-  if (closed_ || numProducers_ == 0) {
+  if (closed_ || numFinishedProducers_ == numProducers_) {
     return false;
   }
-  VELOX_CHECK(allProducersReportedLocked());
-  numPendingProducers_ = numProducers_.value();
+  VELOX_CHECK(allProducersArrivedLocked());
+  numArrivedProducers_ = numFinishedProducers_;
   ++currentRound_;
   return true;
 }
@@ -244,20 +239,20 @@ void TaskQueue::close() {
   // Fulfilled after releasing 'mutex_': setValue() may resume a coroutine
   // consumer inline, which would re-enter the queue and deadlock on 'mutex_'.
   ContinuePromise wakeConsumer{ContinuePromise::makeEmpty()};
+  std::vector<ContinuePromise> wakeProducers;
   {
     std::lock_guard<std::mutex> l(mutex_);
     closed_ = true;
-    // Unblock producers.
-    for (auto& promise : producerUnblockPromises_) {
-      promise.setValue();
-    }
-    producerUnblockPromises_.clear();
+    wakeProducers = std::move(producerUnblockPromises_);
 
     // Unblock the consumer.
     if (consumerBlocked_) {
       consumerBlocked_ = false;
       wakeConsumer = std::move(consumerPromise_);
     }
+  }
+  for (auto& promise : wakeProducers) {
+    promise.setValue();
   }
   if (wakeConsumer.valid()) {
     wakeConsumer.setValue();
@@ -385,11 +380,11 @@ class MultiThreadedTaskCursor : public TaskCursorBase {
         std::move(queryCtx_),
         Task::ExecutionMode::kParallel,
         // Task copies this callback for each output driver, giving each copy
-        // its own last-reported round.
+        // its own last-arrived round.
         [queueHolder,
          copyResult = params.copyResult,
          taskId = taskId_,
-         lastReportedRound = uint64_t{0}](
+         lastArrivedRound = uint64_t{0}](
             const RowVectorPtr& vector,
             bool drained,
             velox::ContinueFuture* future) mutable {
@@ -400,7 +395,7 @@ class MultiThreadedTaskCursor : public TaskCursorBase {
           }
 
           if (!vector || !copyResult) {
-            return queue->enqueue(vector, drained, future, lastReportedRound);
+            return queue->enqueue(vector, drained, future, lastArrivedRound);
           }
           VectorPtr copy = encodedVectorCopy(
               {.pool = queue->pool(), .reuseSource = false}, vector);
@@ -408,7 +403,7 @@ class MultiThreadedTaskCursor : public TaskCursorBase {
               std::static_pointer_cast<RowVector>(std::move(copy)),
               drained,
               future,
-              lastReportedRound);
+              lastArrivedRound);
         },
         0,
         std::move(spillDiskOpts),
