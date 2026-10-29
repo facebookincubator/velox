@@ -15,8 +15,10 @@
  */
 
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/exec/PlanNodeStats.h"
+#include "velox/exec/Spill.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -122,7 +124,13 @@ class MergeJoinTest : public HiveConnectorTestBase {
                     batchId, counter, [=, this](RowSet) { return child; })));
       }
 
-      data.push_back(makeRowVector(children));
+      data.push_back(
+          std::make_shared<RowVector>(
+              pool(),
+              asRowType(row->type()),
+              nullptr,
+              row->size(),
+              std::move(children)));
       ++batchId;
     }
 
@@ -472,6 +480,176 @@ TEST_F(MergeJoinTest, fewMatch) {
 TEST_F(MergeJoinTest, duplicateMatch) {
   testJoin<int32_t>(
       [](auto row) { return row / 2; }, [](auto row) { return row / 3; });
+}
+
+TEST_F(MergeJoinTest, spillDuplicateMatchBatches) {
+  std::vector<RowVectorPtr> leftVectors{
+      makeRowVector(
+          {"t0", "t1"},
+          {makeFlatVector<int64_t>({1, 1, 1}),
+           makeFlatVector<int64_t>({10, 11, 12})}),
+      makeRowVector(
+          {"t0", "t1"},
+          {makeFlatVector<int64_t>({1, 1, 1}),
+           makeFlatVector<int64_t>({13, 14, 15})}),
+      makeRowVector(
+          {"t0", "t1"},
+          {makeFlatVector<int64_t>({2, 3}), makeFlatVector<int64_t>({20, 30})}),
+  };
+  std::vector<RowVectorPtr> rightVectors{
+      makeRowVector(
+          {"u0", "u1"},
+          {makeFlatVector<int64_t>({1, 1}),
+           makeFlatVector<int64_t>({100, 101})}),
+      makeRowVector(
+          {"u0", "u1"},
+          {makeFlatVector<int64_t>({1, 1, 1}),
+           makeFlatVector<int64_t>({102, 103, 104})}),
+      makeRowVector(
+          {"u0", "u1"},
+          {makeFlatVector<int64_t>({2, 4}),
+           makeFlatVector<int64_t>({200, 400})}),
+  };
+
+  createDuckDbTable("t", leftVectors);
+  createDuckDbTable("u", rightVectors);
+
+  auto assertSpilled = [&](core::JoinType joinType,
+                           const std::string& filter,
+                           const std::vector<std::string>& outputLayout,
+                           const std::string& sql) {
+    SCOPED_TRACE(fmt::format("joinType={} filter={}", joinType, filter));
+    auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    core::PlanNodeId mergeJoinNodeId;
+    const auto plan = PlanBuilder(planNodeIdGenerator)
+                          .values(generateLazyInput(leftVectors))
+                          .mergeJoin(
+                              {"t0"},
+                              {"u0"},
+                              PlanBuilder(planNodeIdGenerator)
+                                  .values(generateLazyInput(rightVectors))
+                                  .planNode(),
+                              filter,
+                              outputLayout,
+                              joinType)
+                          .capturePlanNodeId(mergeJoinNodeId)
+                          .planNode();
+
+    const auto spillDirectory = TempDirectoryPath::create();
+    TestScopedSpillInjection scopedSpillInjection(100, ".*MergeJoin.*");
+    const auto task =
+        AssertQueryBuilder(plan, duckDbQueryRunner_)
+            .spillDirectory(spillDirectory->getPath())
+            .config(core::QueryConfig::kSpillEnabled, true)
+            .config(core::QueryConfig::kJoinSpillEnabled, true)
+            .config(
+                core::QueryConfig::kMergeJoinStreamLeftSide,
+                joinType == core::JoinType::kInner)
+            .config(core::QueryConfig::kPreferredOutputBatchRows, 2)
+            .config(core::QueryConfig::kMaxOutputBatchRows, 2)
+            .assertResults(sql);
+
+    const auto stats = toPlanStats(task->taskStats());
+    const auto& planStats = stats.at(mergeJoinNodeId);
+    ASSERT_GT(planStats.spilledBytes, 0);
+    if (joinType == core::JoinType::kInner) {
+      ASSERT_GT(planStats.customStats.at("streamedLeftBatches").sum, 0);
+    }
+  };
+
+  assertSpilled(
+      core::JoinType::kInner,
+      "",
+      {"t0", "t1", "u0", "u1"},
+      "SELECT t0, t1, u0, u1 FROM t, u WHERE t0 = u0");
+  assertSpilled(
+      core::JoinType::kLeft,
+      "",
+      {"t0", "t1", "u0", "u1"},
+      "SELECT t0, t1, u0, u1 FROM t LEFT JOIN u ON t0 = u0");
+  assertSpilled(
+      core::JoinType::kRight,
+      "",
+      {"t0", "t1", "u0", "u1"},
+      "SELECT t0, t1, u0, u1 FROM t RIGHT JOIN u ON t0 = u0");
+  assertSpilled(
+      core::JoinType::kFull,
+      "",
+      {"t0", "t1", "u0", "u1"},
+      "SELECT t0, t1, u0, u1 FROM t FULL OUTER JOIN u ON t0 = u0");
+  assertSpilled(
+      core::JoinType::kLeftSemiFilter,
+      "t1 + u1 > 118",
+      {"t0", "t1"},
+      "SELECT t0, t1 FROM t WHERE t0 IN (SELECT u0 FROM u WHERE t1 + u1 > 118)");
+  assertSpilled(
+      core::JoinType::kRightSemiFilter,
+      "t1 + u1 > 118",
+      {"u0", "u1"},
+      "SELECT u0, u1 FROM u WHERE u0 IN (SELECT t0 FROM t WHERE t1 + u1 > 118)");
+  assertSpilled(
+      core::JoinType::kAnti,
+      "",
+      {"t0", "t1"},
+      "SELECT t0, t1 FROM t WHERE NOT exists (SELECT 1 FROM u WHERE t0 = u0)");
+
+  assertSpilled(
+      core::JoinType::kLeft,
+      "t1 + u1 > 118",
+      {"t0", "t1", "u0", "u1"},
+      "SELECT t0, t1, u0, u1 FROM t LEFT JOIN u ON t0 = u0 AND t1 + u1 > 118");
+  assertSpilled(
+      core::JoinType::kRight,
+      "t1 + u1 > 118",
+      {"t0", "t1", "u0", "u1"},
+      "SELECT t0, t1, u0, u1 FROM t RIGHT JOIN u ON t0 = u0 AND t1 + u1 > 118");
+  assertSpilled(
+      core::JoinType::kFull,
+      "t1 + u1 > 118",
+      {"t0", "t1", "u0", "u1"},
+      "SELECT t0, t1, u0, u1 FROM t FULL OUTER JOIN u ON t0 = u0 AND t1 + u1 > 118");
+}
+
+TEST_F(MergeJoinTest, spillOutputBatchReuse) {
+  const auto left = makeRowVector({"t0"}, {makeFlatVector<int64_t>({1, 2})});
+  const std::vector<RowVectorPtr> right{
+      makeRowVector(
+          {"u0"}, {makeFlatVector<int64_t>(32, [](auto) { return 1; })}),
+      makeRowVector({"u0"}, {makeFlatVector<int64_t>({1, 2})})};
+  createDuckDbTable("t", {left});
+  createDuckDbTable("u", right);
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  core::PlanNodeId mergeJoinNodeId;
+  const auto plan =
+      PlanBuilder(planNodeIdGenerator)
+          .values({left})
+          .mergeJoin(
+              {"t0"},
+              {"u0"},
+              PlanBuilder(planNodeIdGenerator).values(right).planNode(),
+              "",
+              {"t0", "u0"})
+          .capturePlanNodeId(mergeJoinNodeId)
+          .planNode();
+
+  const auto spillDirectory = TempDirectoryPath::create();
+  TestScopedSpillInjection scopedSpillInjection(100, ".*MergeJoin.*");
+  const auto task =
+      AssertQueryBuilder(plan, duckDbQueryRunner_)
+          .spillDirectory(spillDirectory->getPath())
+          .config(core::QueryConfig::kSpillEnabled, true)
+          .config(core::QueryConfig::kJoinSpillEnabled, true)
+          .config(core::QueryConfig::kPreferredOutputBatchRows, 2)
+          .assertResults("SELECT t0, u0 FROM t JOIN u ON t0 = u0");
+
+  const auto stats = toPlanStats(task->taskStats());
+  const auto& joinStats = stats.at(mergeJoinNodeId);
+  ASSERT_GT(joinStats.spilledBytes, 0);
+  // One left row consumes the spilled right batch across many output calls.
+  // The batch should be read only once.
+  ASSERT_EQ(
+      joinStats.customStats.at("spillReadBytes").sum, joinStats.spilledBytes);
 }
 
 TEST_F(MergeJoinTest, someNulls) {
