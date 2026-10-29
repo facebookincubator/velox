@@ -297,7 +297,8 @@ exec::BlockingReason CudfLocalPartition::isBlocked(ContinueFuture* future) {
 void CudfLocalPartition::doNoMoreInput() {
   Operator::noMoreInput();
   for (const auto& queue : queues_) {
-    queue->noMoreData();
+    // This producer does not send drain notifications.
+    queue->noMoreData(/*lastArrivedRound=*/0);
   }
 }
 

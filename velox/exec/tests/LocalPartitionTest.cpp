@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "velox/exec/LocalPartition.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/exec/OperatorType.h"
@@ -30,6 +31,13 @@ namespace {
 
 class LocalPartitionTest : public HiveConnectorTestBase {
  protected:
+  std::unique_ptr<LocalExchangeQueue> makeQueue() {
+    return std::make_unique<LocalExchangeQueue>(
+        std::make_shared<LocalExchangeMemoryManager>(1 << 20),
+        std::make_shared<LocalExchangeVectorPool>(1 << 20),
+        0);
+  }
+
   void SetUp() override {
     HiveConnectorTestBase::SetUp();
     window::prestosql::registerAllWindowFunctions();
@@ -95,6 +103,263 @@ class LocalPartitionTest : public HiveConnectorTestBase {
     }
   }
 };
+
+TEST_F(LocalPartitionTest, queueMixedArrival) {
+  auto queue = makeQueue();
+  std::vector<uint64_t> rounds(4, 0);
+  for (auto i = 0; i < rounds.size(); ++i) {
+    queue->addProducer();
+  }
+  queue->noMoreProducers();
+  for (auto i = 0; i < 3; ++i) {
+    queue->drain(rounds[i]);
+  }
+  ContinueFuture future = ContinueFuture::makeEmpty();
+  RowVectorPtr data;
+  bool drained;
+  ASSERT_EQ(
+      queue->next(&future, pool(), &data, drained),
+      BlockingReason::kWaitForProducer);
+  ASSERT_FALSE(drained);
+  ASSERT_FALSE(future.isReady());
+
+  // The last outstanding participant finishes instead of draining.
+  queue->noMoreData(rounds[3]);
+  ASSERT_TRUE(future.isReady());
+  future = ContinueFuture::makeEmpty();
+  for (auto round = 0; round < 3; ++round) {
+    ASSERT_EQ(
+        queue->next(&future, pool(), &data, drained),
+        BlockingReason::kNotBlocked);
+    ASSERT_TRUE(drained);
+    ASSERT_FALSE(data);
+    ASSERT_FALSE(future.valid());
+    ASSERT_FALSE(queue->isFinished());
+    if (round < 2) {
+      for (auto i = 0; i < 3; ++i) {
+        queue->drain(rounds[i]);
+      }
+    }
+  }
+  for (auto i = 0; i < 3; ++i) {
+    queue->noMoreData(rounds[i]);
+  }
+  for (auto i = 0; i < 2; ++i) {
+    ASSERT_EQ(
+        queue->next(&future, pool(), &data, drained),
+        BlockingReason::kNotBlocked);
+    ASSERT_FALSE(drained);
+    ASSERT_FALSE(data);
+    ASSERT_FALSE(future.valid());
+    ASSERT_TRUE(queue->isFinished());
+  }
+}
+
+TEST_F(LocalPartitionTest, queueFinishAfterDrain) {
+  for (const auto consumeRound : {false, true}) {
+    SCOPED_TRACE(consumeRound);
+    auto queue = makeQueue();
+    uint64_t firstRound{0};
+    uint64_t secondRound{0};
+    queue->addProducer();
+    queue->addProducer();
+    queue->noMoreProducers();
+    queue->drain(firstRound);
+    ContinueFuture future = ContinueFuture::makeEmpty();
+    RowVectorPtr data;
+    bool drained;
+    if (consumeRound) {
+      queue->drain(secondRound);
+      ASSERT_EQ(
+          queue->next(&future, pool(), &data, drained),
+          BlockingReason::kNotBlocked);
+      ASSERT_TRUE(drained);
+    }
+    queue->noMoreData(firstRound);
+    ASSERT_EQ(
+        queue->next(&future, pool(), &data, drained),
+        BlockingReason::kWaitForProducer);
+    ASSERT_FALSE(drained);
+    ASSERT_FALSE(future.isReady());
+    queue->drain(secondRound);
+    ASSERT_TRUE(future.isReady());
+    future = ContinueFuture::makeEmpty();
+    ASSERT_EQ(
+        queue->next(&future, pool(), &data, drained),
+        BlockingReason::kNotBlocked);
+    ASSERT_TRUE(drained);
+    queue->noMoreData(secondRound);
+    ASSERT_TRUE(queue->isFinished());
+  }
+}
+
+TEST_F(LocalPartitionTest, queueRegistrationCompletion) {
+  for (const auto finish : {false, true}) {
+    SCOPED_TRACE(finish);
+    auto queue = makeQueue();
+    uint64_t round{0};
+    queue->addProducer();
+    if (finish) {
+      queue->noMoreData(round);
+    } else {
+      queue->drain(round);
+    }
+    ContinueFuture future = ContinueFuture::makeEmpty();
+    RowVectorPtr data;
+    bool drained;
+    ASSERT_EQ(
+        queue->next(&future, pool(), &data, drained),
+        BlockingReason::kWaitForProducer);
+    ASSERT_FALSE(drained);
+    ASSERT_FALSE(queue->isFinished());
+    ASSERT_FALSE(future.isReady());
+    queue->noMoreProducers();
+    ASSERT_TRUE(future.isReady());
+    future = ContinueFuture::makeEmpty();
+    ASSERT_EQ(
+        queue->next(&future, pool(), &data, drained),
+        BlockingReason::kNotBlocked);
+    ASSERT_EQ(drained, !finish);
+    if (!finish) {
+      queue->noMoreData(round);
+    }
+    ASSERT_TRUE(queue->isFinished());
+  }
+
+  auto queue = makeQueue();
+  ContinueFuture future = ContinueFuture::makeEmpty();
+  RowVectorPtr data;
+  bool drained;
+  ASSERT_EQ(
+      queue->next(&future, pool(), &data, drained),
+      BlockingReason::kWaitForProducer);
+  queue->noMoreProducers();
+  ASSERT_TRUE(future.isReady());
+  future = ContinueFuture::makeEmpty();
+  ASSERT_EQ(
+      queue->next(&future, pool(), &data, drained),
+      BlockingReason::kNotBlocked);
+  ASSERT_FALSE(drained);
+  ASSERT_TRUE(queue->isFinished());
+}
+
+TEST_F(LocalPartitionTest, queueIndependentRounds) {
+  auto first = makeQueue();
+  auto second = makeQueue();
+  uint64_t firstRound{0};
+  uint64_t secondRound{0};
+  for (auto* queue : {first.get(), second.get()}) {
+    queue->addProducer();
+    queue->noMoreProducers();
+  }
+  first->drain(firstRound);
+  second->drain(secondRound);
+
+  ContinueFuture future = ContinueFuture::makeEmpty();
+  RowVectorPtr data;
+  bool drained;
+  ASSERT_EQ(
+      first->next(&future, pool(), &data, drained),
+      BlockingReason::kNotBlocked);
+  ASSERT_TRUE(drained);
+  // Only the first consumer has advanced. EOF must arrive in its new round
+  // without being counted twice in the second queue's unconsumed round.
+  first->noMoreData(firstRound);
+  second->noMoreData(secondRound);
+  for (auto* queue : {first.get(), second.get()}) {
+    ASSERT_EQ(
+        queue->next(&future, pool(), &data, drained),
+        BlockingReason::kNotBlocked);
+    ASSERT_FALSE(drained);
+    ASSERT_TRUE(queue->isFinished());
+  }
+}
+
+TEST_F(LocalPartitionTest, queueBufferedCompletion) {
+  for (const auto finishAll : {false, true}) {
+    SCOPED_TRACE(finishAll);
+    auto queue = makeQueue();
+    queue->addProducer();
+    queue->addProducer();
+    queue->noMoreProducers();
+    auto input = makeRowVector({makeFlatVector<int32_t>({1, 1, 2})});
+    ContinueFuture future = ContinueFuture::makeEmpty();
+    ASSERT_EQ(
+        queue->enqueue(input, input->retainedSize(), &future),
+        BlockingReason::kNotBlocked);
+    uint64_t round{0};
+    queue->noMoreData(0);
+    if (finishAll) {
+      queue->noMoreData(0);
+    } else {
+      queue->drain(round);
+    }
+    ASSERT_FALSE(queue->isFinished());
+    RowVectorPtr data;
+    bool drained;
+    ASSERT_EQ(
+        queue->next(&future, pool(), &data, drained),
+        BlockingReason::kNotBlocked);
+    ASSERT_FALSE(drained);
+    assertEqualResults({input}, {data});
+    ASSERT_EQ(
+        queue->next(&future, pool(), &data, drained),
+        BlockingReason::kNotBlocked);
+    ASSERT_FALSE(data);
+    ASSERT_FALSE(future.valid());
+    ASSERT_EQ(drained, !finishAll);
+    if (!finishAll) {
+      queue->noMoreData(round);
+    }
+    ASSERT_TRUE(queue->isFinished());
+  }
+}
+
+TEST_F(LocalPartitionTest, queueCloseDuringDrain) {
+  auto memory = std::make_shared<LocalExchangeMemoryManager>(1);
+  auto vectors = std::make_shared<LocalExchangeVectorPool>(1 << 20);
+  LocalExchangeQueue queue(memory, vectors, 0);
+  queue.addProducer();
+  queue.addProducer();
+  queue.noMoreProducers();
+  uint64_t round{0};
+  queue.drain(round);
+  ContinueFuture consumer = ContinueFuture::makeEmpty();
+  RowVectorPtr data;
+  bool drained;
+  ASSERT_EQ(
+      queue.next(&consumer, pool(), &data, drained),
+      BlockingReason::kWaitForProducer);
+  auto input = makeRowVector({makeFlatVector<int32_t>({1, 1, 2})});
+  ContinueFuture producer = ContinueFuture::makeEmpty();
+  ASSERT_EQ(
+      queue.enqueue(input, input->retainedSize(), &producer),
+      BlockingReason::kWaitForConsumer);
+  ASSERT_TRUE(consumer.isReady());
+  ASSERT_FALSE(producer.isReady());
+  queue.close();
+  ASSERT_TRUE(producer.isReady());
+  ASSERT_EQ(memory->bufferedBytes(), 0);
+  // A closed channel no longer collects arrivals, even during driver cleanup.
+  queue.drain(round);
+  queue.noMoreData(round);
+  consumer = ContinueFuture::makeEmpty();
+  ASSERT_EQ(
+      queue.next(&consumer, pool(), &data, drained),
+      BlockingReason::kNotBlocked);
+  ASSERT_FALSE(data);
+  ASSERT_FALSE(drained);
+  ASSERT_TRUE(queue.isFinished());
+
+  auto emptyQueue = makeQueue();
+  emptyQueue->addProducer();
+  emptyQueue->noMoreProducers();
+  ASSERT_EQ(
+      emptyQueue->next(&consumer, pool(), &data, drained),
+      BlockingReason::kWaitForProducer);
+  emptyQueue->close();
+  ASSERT_TRUE(consumer.isReady());
+}
 
 struct TestParam {
   uint32_t minLocalExchangePartitionCountToUsePartitionBuffer;

@@ -2377,7 +2377,7 @@ void Task::dropInput(Operator* op) {
     }
     drivers.reserve(drivers_.size());
     for (const auto& driver : drivers_) {
-      if (driver.get() != dropDriver) {
+      if (driver != nullptr && driver.get() != dropDriver) {
         drivers.push_back(driver.get());
       }
     }
@@ -2390,7 +2390,9 @@ void Task::dropInput(const core::PlanNodeId& planNodeId) {
   std::lock_guard<std::timed_mutex> l(mutex_);
   drivers.reserve(drivers_.size());
   for (const auto& driver : drivers_) {
-    drivers.push_back(driver.get());
+    if (driver != nullptr) {
+      drivers.push_back(driver.get());
+    }
   }
   dropInputLocked(planNodeId, drivers);
 }
@@ -2400,16 +2402,13 @@ void Task::dropInputLocked(
     std::vector<Driver*>& drivers) {
   VELOX_CHECK(underBarrier());
   std::unordered_set<core::PlanNodeId> dropNodeIds{planNodeId};
-  while (!dropNodeIds.empty()) {
-    VELOX_CHECK(!drivers.empty());
+  while (!dropNodeIds.empty() && !drivers.empty()) {
     const auto dropNodeId = *dropNodeIds.begin();
-    bool foundDriver{false};
     auto it = drivers.cbegin();
     while (it != drivers.cend()) {
       Driver* driver = *it;
       VELOX_CHECK_NOT_NULL(driver);
       if (auto* dropOp = driver->findOperator(dropNodeId)) {
-        foundDriver = true;
         driver->dropInput(0);
         // Recursively drop the source operator's upstream operators.
         const auto* sourceOp = driver->sourceOperator();
@@ -2422,7 +2421,7 @@ void Task::dropInputLocked(
         ++it;
       }
     }
-    VELOX_CHECK(foundDriver);
+    // All drivers for this node may have finished before the drop request.
     dropNodeIds.erase(dropNodeId);
   }
 }
