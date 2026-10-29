@@ -81,7 +81,12 @@ enum class ParseMode {
   // [+-][Y]Y*
   // [+-][Y]Y*-[M]M
   // [+-][Y]Y*-[M]M*-[D]D
-  kIso8601
+  kIso8601,
+
+  /// Accepts a complete year-month-day with an optional leading sign and ASCII
+  /// whitespace. Requires all three fields, with one or two digits for month
+  /// and day. Ignores any suffix beginning with 'T' or ASCII whitespace.
+  kHiveCast,
 };
 
 // Returns true if leap year, false otherwise
@@ -207,6 +212,13 @@ enum class TimestampParseMode {
   /// space as separator between date and time. Allows leading and trailing
   /// spaces.
   kSparkCast,
+
+  /// Accepts date [(' ' | 'T') hour:minute[:second[.fraction]]], retaining
+  /// kPrestoCast's date forms and fractional precision. After 'T', requires
+  /// a time immediately, seconds in [0, 59], and '.' followed by at least one
+  /// digit for any fraction. Preserves kPrestoCast time parsing for
+  /// whitespace-separated input. Allows leading and trailing ASCII whitespace.
+  kHiveCast,
 };
 
 /// Parses a timestamp string using specified TimestampParseMode.
