@@ -53,6 +53,7 @@ velox_add_library(
   Size.cpp
   String.cpp
   TimestampUtils.cpp
+  ToPrettyString.cpp
   Transform.cpp
   TransformKeys.cpp
   UnscaledValueFunction.cpp
