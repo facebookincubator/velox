@@ -46,6 +46,7 @@ RUN dnf -y install "tzdata-${CENTOS_TZDATA_VERSION}.noarch" || \
 COPY scripts/setup-helper-functions.sh /
 COPY scripts/setup-versions.sh /
 COPY scripts/setup-common.sh /
+COPY scripts/setup-fbthrift.patch /
 COPY scripts/setup-centos9.sh /
 COPY CMake/resolve_dependency_modules/arrow/arrow-testing-boost.patch /
 COPY CMake/resolve_dependency_modules/arrow/cmake-compatibility.patch /
@@ -107,6 +108,7 @@ RUN dnf -y install "tzdata-${CENTOS_TZDATA_VERSION}.noarch" || \
 COPY scripts/setup-helper-functions.sh /
 COPY scripts/setup-versions.sh /
 COPY scripts/setup-common.sh /
+COPY scripts/setup-fbthrift.patch /
 COPY scripts/setup-centos9.sh /
 
 # This way it's on the PATH and doesn't clash with the version installed in manylinux
@@ -162,6 +164,7 @@ RUN dnf -y install "tzdata-${CENTOS_TZDATA_VERSION}.noarch" || \
 COPY scripts/setup-helper-functions.sh /
 COPY scripts/setup-versions.sh /
 COPY scripts/setup-common.sh /
+COPY scripts/setup-fbthrift.patch /
 COPY scripts/setup-centos9.sh /
 COPY scripts/setup-centos-adapters.sh /
 

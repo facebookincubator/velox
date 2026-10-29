@@ -14,7 +14,7 @@
 
 #
 # Try to find Facebook xxhash library This will define Xxhash_FOUND
-# Xxhash_INCLUDE_DIR Xxhash_LIBRARY
+# Xxhash_INCLUDE_DIR Xxhash_LIBRARY Xxhash::xxhash
 #
 
 find_path(Xxhash_INCLUDE_DIR NAMES xxhash.h)
@@ -29,6 +29,25 @@ find_package_handle_standard_args(Xxhash DEFAULT_MSG Xxhash_LIBRARY Xxhash_INCLU
 
 if(Xxhash_FOUND)
   message(STATUS "Found xxhash: ${Xxhash_LIBRARY}")
+endif()
+
+if(Xxhash_FOUND AND NOT TARGET Xxhash::xxhash)
+  add_library(Xxhash::xxhash UNKNOWN IMPORTED)
+  set_target_properties(
+    Xxhash::xxhash
+    PROPERTIES
+      IMPORTED_LINK_INTERFACE_LANGUAGES "C"
+      INTERFACE_INCLUDE_DIRECTORIES "${Xxhash_INCLUDE_DIR}"
+  )
+  foreach(xxhash_config IN ITEMS RELEASE DEBUG)
+    if(Xxhash_LIBRARY_${xxhash_config})
+      set_property(TARGET Xxhash::xxhash APPEND PROPERTY IMPORTED_CONFIGURATIONS ${xxhash_config})
+      set_property(
+        TARGET Xxhash::xxhash
+        PROPERTY "IMPORTED_LOCATION_${xxhash_config}" "${Xxhash_LIBRARY_${xxhash_config}}"
+      )
+    endif()
+  endforeach()
 endif()
 
 mark_as_advanced(Xxhash_INCLUDE_DIR Xxhash_LIBRARY)
