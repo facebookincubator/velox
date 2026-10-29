@@ -49,8 +49,7 @@ namespace facebook::nimble {
 /// +-------------------------------------------------------------------+
 /// |  Stripe M Streams (last stripe in Stripe Group 0)                 |
 /// +===================================================================+
-/// |  Stripe Group 0 Metadata (stream_offsets, stream_sizes, and, in   |
-/// |                           legacy files, stream_checksums)         |
+/// |  Stripe Group 0 Metadata (stream_offsets, stream_sizes)           |
 /// +-------------------------------------------------------------------+
 /// |  Index Group 0 Metadata (if indexing enabled, written immediately |
 /// |                          after its corresponding stripe group)    |

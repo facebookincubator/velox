@@ -107,3 +107,17 @@ if(${VELOX_ENABLE_GEO})
     velox_functions_geo
   )
 endif()
+
+if(VELOX_ENABLE_FAISS)
+  add_executable(velox_aggregates_VectorIndexPackTest VectorIndexPackTest.cpp Main.cpp)
+  add_test(
+    NAME velox_aggregates_VectorIndexPackTest
+    COMMAND velox_aggregates_VectorIndexPackTest
+    WORKING_DIRECTORY .
+  )
+  target_link_libraries(
+    velox_aggregates_VectorIndexPackTest
+    ${VELOX_AGGREGATES_TEST_DEPS}
+    velox_vector_index
+  )
+endif()

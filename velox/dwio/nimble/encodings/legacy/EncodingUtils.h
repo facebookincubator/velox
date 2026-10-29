@@ -22,6 +22,7 @@
 #include "velox/dwio/nimble/encodings/FsstEncoding.h"
 #include "velox/dwio/nimble/encodings/HuffmanEncoding.h"
 #include "velox/dwio/nimble/encodings/PFOREncoding.h"
+#include "velox/dwio/nimble/encodings/PartitionedEliasFanoEncoding.h"
 #include "velox/dwio/nimble/encodings/SimdForBitpackEncoding.h"
 #include "velox/dwio/nimble/encodings/SubIntSplitEncoding.h"
 #include "velox/dwio/nimble/encodings/common/EncodingUtils.h"
@@ -133,11 +134,20 @@ auto encodingTypeDispatchNonString(Encoding& encoding, F&& f) {
       }
     case EncodingType::EliasFano:
       if constexpr (isIntegralType<T>()) {
-        return ::facebook::nimble::detail::dispatchEliasFano(
-            encoding, std::forward<F>(f));
+        return ::facebook::nimble::detail::dispatchBySerializedIntegerType<
+            EliasFanoEncoding>(encoding, std::forward<F>(f));
       } else {
         NIMBLE_UNREACHABLE(
             "EliasFano encoding only supports integral data types, got {}.",
+            encoding.dataType());
+      }
+    case EncodingType::PartitionedEliasFano:
+      if constexpr (isIntegralType<T>()) {
+        return ::facebook::nimble::detail::dispatchBySerializedIntegerType<
+            PartitionedEliasFanoEncoding>(encoding, std::forward<F>(f));
+      } else {
+        NIMBLE_UNREACHABLE(
+            "PartitionedEliasFano encoding only supports integral data types, got {}.",
             encoding.dataType());
       }
     case EncodingType::PFOR:

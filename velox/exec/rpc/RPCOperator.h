@@ -163,6 +163,10 @@ class RPCOperator : public exec::Operator {
       "rpcRateLimiterMinLimitMilli"};
   static inline const std::string kRpcRateLimiterServiceHorizonNanos{
       "rpcRateLimiterServiceHorizonNanos"};
+  /// Present, with value one per driver, when the backend's shared limiter
+  /// runs another policy and this operator runs under the limiter for its own.
+  static inline const std::string kRpcRateLimiterPolicyScoped{
+      "rpcRateLimiterPolicyScoped"};
 
   /// Live liveness stats, refreshed on every stats() call rather than only at
   /// close(). Units dispatched but not yet completed.
@@ -250,8 +254,9 @@ class RPCOperator : public exec::Operator {
   // the name lookups per batch.
   void initOutputProjections();
 
-  // Binds the shared limiter after the function has resolved any
-  // input-dependent transport setup. Subsequent inputs must keep the same key.
+  // Binds the limiter for this operator's policy after the function has
+  // resolved any input-dependent transport setup. Subsequent inputs must keep
+  // the same key.
   void initializeRateLimiter();
 
   // Resolves an input whose selected rows all complete synchronously without a
@@ -355,6 +360,9 @@ class RPCOperator : public exec::Operator {
     std::shared_ptr<RPCState> state;
     RPCRateLimiter* limiter{nullptr};
     std::shared_ptr<AsyncRPCFunction> function;
+    // True when 'limiter' is the controller for this operator's policy rather
+    // than the backend's shared one.
+    bool policyScoped{false};
   };
   folly::Synchronized<LiveStatsSources> liveStatsSources_;
 
@@ -363,11 +371,13 @@ class RPCOperator : public exec::Operator {
   std::shared_ptr<AsyncRPCFunction> function_;
   bool requiresRowInspectionBeforeAdmission_{true};
 
-  // Operators with the same admission key share rate-limiter capacity.
+  // Operators with the same admission key and rate-limiter policy share
+  // rate-limiter capacity.
   std::string admissionKey_;
 
-  // Process-scoped controller for admissionKey_, resolved before the first
-  // dispatch; outlives this operator.
+  // Process-scoped controller for admissionKey_ and this operator's resolved
+  // rate-limiter policy. Resolved before the first dispatch; outlives this
+  // operator.
   RPCRateLimiter* limiter_{nullptr};
   // PER_ROW and AsyncRPCFunction::mayReturnCapacityRetries().
   bool capacityRetryEnabled_{false};

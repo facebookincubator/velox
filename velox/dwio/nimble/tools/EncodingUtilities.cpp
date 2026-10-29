@@ -72,6 +72,7 @@ void extractCompressionType(
     case EncodingType::ALPRD:
     case EncodingType::Fsst:
     case EncodingType::PFOR:
+    case EncodingType::PartitionedEliasFano:
     case EncodingType::SimdForBitpack:
     case EncodingType::BitRangeSplit:
     // SubIntSplit integration is disabled; it carries no separate compression
@@ -286,6 +287,27 @@ void traverseEncodings(
             level + 1,
             2,
             "DataOffsets",
+            useVarintRowCount,
+            visitor);
+      }
+      break;
+    }
+    case EncodingType::PartitionedEliasFano: {
+      // Layout after the common prefix: numPartitions and numGroups
+      // [varints], then the partition offsets, the partition bases and the
+      // partition group offsets, each a nested stream preceded by a varint
+      // size. The per-group Elias-Fano streams follow.
+      auto body = stream.substr(dataOffset);
+      encoding::readVarint32(body); // numPartitions
+      encoding::readVarint32(body); // numGroups
+      uint32_t childIndex{0};
+      for (const auto* name :
+           {"PartitionOffsets", "PartitionBases", "PartitionGroupOffsets"}) {
+        traverseEncodings(
+            encoding::readLengthPrefixedBytes(body),
+            level + 1,
+            childIndex++,
+            name,
             useVarintRowCount,
             visitor);
       }

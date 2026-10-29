@@ -578,11 +578,11 @@ NamedType getType(offset_size& index, const std::vector<SchemaNode>& nodes) {
       const auto metadata = HybridFlatMap::extractAttribute(attributes);
       NIMBLE_CHECK_EQ(
           node.childrenCount(),
-          metadata.groups.size(),
+          metadata.groups().size(),
           "Hybrid FlatMap group metadata must match its child count.");
       std::vector<HybridFlatMapType::Group> groups;
-      groups.reserve(metadata.groups.size());
-      for (const auto& groupMetadata : metadata.groups) {
+      groups.reserve(metadata.groups().size());
+      for (const auto& groupMetadata : metadata.groups()) {
         NIMBLE_CHECK_LT(
             index + 2, nodes.size(), "Incomplete Hybrid FlatMap group.");
         const auto& keyPresenceNode = nodes[index++];

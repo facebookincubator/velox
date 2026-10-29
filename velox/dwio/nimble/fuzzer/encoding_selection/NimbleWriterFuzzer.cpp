@@ -213,6 +213,7 @@ bool hasDataPrecondition(EncodingType encodingType) {
   return encodingType == EncodingType::Constant ||
       encodingType == EncodingType::DeltaBlock ||
       encodingType == EncodingType::EliasFano ||
+      encodingType == EncodingType::PartitionedEliasFano ||
       encodingType == EncodingType::Huffman;
 }
 
@@ -1152,7 +1153,8 @@ bool isTypeCompatible(EncodingType encodingType, DataType dataType) {
     return isFloatingPointDataType(dataType);
   }
   if (encodingType == EncodingType::DeltaBlock ||
-      encodingType == EncodingType::EliasFano) {
+      encodingType == EncodingType::EliasFano ||
+      encodingType == EncodingType::PartitionedEliasFano) {
     return !isFloatingPointDataType(dataType);
   }
   // Varint's gate is isIntegralType<physicalType>() && sizeof(T) >= 4, so the
@@ -1167,6 +1169,7 @@ bool isTypeCompatible(EncodingType encodingType, DataType dataType) {
 bool isIntegralOnlyEncoding(EncodingType encodingType) {
   return encodingType == EncodingType::DeltaBlock ||
       encodingType == EncodingType::EliasFano ||
+      encodingType == EncodingType::PartitionedEliasFano ||
       encodingType == EncodingType::PFOR ||
       encodingType == EncodingType::SimdForBitpack ||
       encodingType == EncodingType::Huffman;

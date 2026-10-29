@@ -166,7 +166,6 @@ add_library(
   nimble_index_iterator
   IndexScanCursor.cpp
   IndexScanCursor.h
-  NimbleBatchIterator.cpp
   NimbleIterator.cpp
   NimbleIterator.h
   NimbleRowIterator.cpp
