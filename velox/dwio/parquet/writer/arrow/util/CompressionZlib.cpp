@@ -158,7 +158,6 @@ class GZipDecompressor : public Decompressor {
       return DecompressResult{
           inputLen - stream_.avail_in, outputLen - stream_.avail_out, false};
     }
-    return Status::OK();
   }
 
   bool isFinished() override {

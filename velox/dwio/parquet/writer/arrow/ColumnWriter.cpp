@@ -2888,8 +2888,6 @@ std::shared_ptr<ColumnWriter> ColumnWriter::make(
     default:
       ParquetException::NYI("type reader not implemented");
   }
-  // Unreachable code, but suppress compiler warning.
-  return std::shared_ptr<ColumnWriter>(nullptr);
 }
 
 } // namespace facebook::velox::parquet::arrow
