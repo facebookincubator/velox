@@ -18,8 +18,6 @@
 
 #include <concepts>
 #include <cstdint>
-#include <optional>
-#include <string>
 
 #include "velox/type/Timestamp.h"
 #include "velox/type/Type.h"
@@ -70,9 +68,7 @@ class HistogramNumericTypes {
   static Timestamp javaDoubleToTimestamp(double value);
 };
 
-/// Binds Decimal metadata once for typed and legacy normalization and output.
-/// Pins textual selection to the Java 21 Double.toString specification and
-/// Scala 2.13.17 BigDecimal behavior used by the target Spark implementation.
+/// Binds Decimal metadata once to normalize legacy histogram inputs to DOUBLE.
 class HistogramNumericDecimal {
  public:
   /// Rejects precision outside [1,38] and scale outside [0,precision], before
@@ -85,20 +81,8 @@ class HistogramNumericDecimal {
   /// avoid double rounding.
   double decimalToDouble(int128_t unscaled) const;
 
-  /// Returns the fully reconstructed fixed-scale value after MathContext(p)
-  /// HALF_UP rounding followed by setScale(s, HALF_UP). Rejects non-finite
-  /// centers. Normalizes negative zero and retains values wider than p.
-  std::string reconstructDecimal(double center) const;
-
-  /// Returns the same reconstructed value as unscaled native Decimal storage,
-  /// or nullopt when it does not fit p and Spark materializes a null field.
-  /// Rejects non-finite centers. Results with p <= 18 fit int64 and may be
-  /// narrowed by the typed writer.
-  std::optional<int128_t> tryReconstructNativeDecimal(double center) const;
-
  private:
-  // Retains validated metadata for both independent Spark rounding stages.
-  int32_t precision_;
+  // Selects the exact-double division fast path for normalization.
   int32_t scale_;
   // Reuses native Decimal text conversion for both physical storage widths.
   TypePtr type_;
