@@ -811,6 +811,18 @@ int getMaxDigitConsume(
   }
 }
 
+// Rescales parsed fraction-of-second digits to truncated microseconds.
+int64_t scaleFractionToMicros(int64_t value, int digitCount) {
+  constexpr int kMicroDigits = 6;
+  for (int i = digitCount; i < kMicroDigits; ++i) {
+    value *= 10;
+  }
+  for (int i = kMicroDigits; i < digitCount; ++i) {
+    value /= 10;
+  }
+  return value;
+}
+
 // If failOnError is true, throws exception for parsing error. Otherwise,
 // returns -1. Returns 0 if no parsing error.
 int32_t parseFromPattern(
@@ -907,10 +919,15 @@ int32_t parseFromPattern(
         ++cur;
         ++count;
       }
+      if (type == DateTimeFormatterType::SPARK_ISO) {
+        // Spark truncates toward zero to microsecond precision.
+        number = scaleFractionToMicros(number, count);
+      }
       // If the number of digits is less than 3, a simple formatter interprets
       // it as the whole number; otherwise, it pads the number with zeros.
       if (type != DateTimeFormatterType::STRICT_SIMPLE &&
-          type != DateTimeFormatterType::LENIENT_SIMPLE) {
+          type != DateTimeFormatterType::LENIENT_SIMPLE &&
+          type != DateTimeFormatterType::SPARK_ISO) {
         number *= std::pow(10, 3 - count);
       }
     } else if (
@@ -932,7 +949,10 @@ int32_t parseFromPattern(
         ++count;
       }
       if (count == 2) {
-        if (number >= 70) {
+        if (type == DateTimeFormatterType::SPARK_ISO) {
+          // Spark always resolves a two-digit year as 2000 + value.
+          number += 2000;
+        } else if (number >= 70) {
           number += 1900;
         } else if (number >= 0 && number < 70) {
           number += 2000;
@@ -1094,7 +1114,10 @@ int32_t parseFromPattern(
         break;
 
       case DateTimeFormatSpecifier::FRACTION_OF_SECOND:
-        date.microsecond = number * util::kMicrosPerMsec;
+        // For SPARK_ISO, `number` was already rescaled to microseconds above.
+        date.microsecond = type == DateTimeFormatterType::SPARK_ISO
+            ? number
+            : number * util::kMicrosPerMsec;
         break;
 
       case DateTimeFormatSpecifier::WEEK_YEAR:
@@ -1820,7 +1843,8 @@ Expected<std::shared_ptr<DateTimeFormatter>> buildMysqlDateTimeFormatter(
 }
 
 Expected<std::shared_ptr<DateTimeFormatter>> buildJodaDateTimeFormatter(
-    const std::string_view& format) {
+    const std::string_view& format,
+    DateTimeFormatterType type) {
   if (format.empty()) {
     if (threadSkipErrorDetails()) {
       return folly::makeUnexpected(Status::UserError());
@@ -1950,7 +1974,7 @@ Expected<std::shared_ptr<DateTimeFormatter>> buildJodaDateTimeFormatter(
       }
     }
   }
-  return builder.setType(DateTimeFormatterType::JODA).build();
+  return builder.setType(type).build();
 }
 
 Expected<std::shared_ptr<DateTimeFormatter>> buildSimpleDateTimeFormatter(

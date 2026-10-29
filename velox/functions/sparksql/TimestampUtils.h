@@ -25,4 +25,22 @@ namespace facebook::velox::functions::sparksql {
 /// shifting forward to the nearest valid time.
 void toGMTWithGapCorrection(Timestamp& time, const tz::TimeZone& zone);
 
+/// Spark's (seconds, nanos) timestamp bounds, from Java's Long.MIN/MAX_VALUE.
+constexpr int64_t kSparkMaxTimestampSeconds = 9223372036854LL;
+constexpr int64_t kSparkMaxTimestampNanos = 775807000LL;
+constexpr int64_t kSparkMinTimestampSeconds = -9223372036855LL;
+constexpr int64_t kSparkMinTimestampNanos = 224192000LL;
+
+/// Returns false if `timestamp` falls outside Spark's representable range.
+inline bool isWithinSparkTimestampRange(const Timestamp& timestamp) {
+  if (timestamp.getSeconds() > kSparkMaxTimestampSeconds ||
+      (timestamp.getSeconds() == kSparkMaxTimestampSeconds &&
+       timestamp.getNanos() > kSparkMaxTimestampNanos)) {
+    return false;
+  }
+  return timestamp.getSeconds() > kSparkMinTimestampSeconds ||
+      (timestamp.getSeconds() == kSparkMinTimestampSeconds &&
+       timestamp.getNanos() >= kSparkMinTimestampNanos);
+}
+
 } // namespace facebook::velox::functions::sparksql
