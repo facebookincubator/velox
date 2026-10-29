@@ -18,29 +18,30 @@
 
 namespace facebook::velox::exec {
 
+void SplitsStore::requestBarrier(
+    const std::vector<uint32_t>& driverIds,
+    std::vector<ContinuePromise>& promises) {
+  VELOX_CHECK(!noMoreSplits_);
+  VELOX_CHECK(!remoteSplit_);
+  VELOX_CHECK(barrierSplits_.empty());
+  for (const auto driverId : driverIds) {
+    barrierSplits_.emplace(driverId, Split::createBarrier());
+  }
+  VELOX_CHECK_LE(promises_.size(), driverIds.size());
+  // Wake up all blocked drivers to consume their markers.
+  std::move(promises_.begin(), promises_.end(), std::back_inserter(promises));
+  promises_.clear();
+}
+
 void SplitsStore::addSplit(
     Split split,
     std::vector<ContinuePromise>& promises) {
   VELOX_CHECK(!noMoreSplits_);
-  VELOX_CHECK(!(remoteSplit_ && split.isBarrier()));
   VELOX_CHECK(barrierSplits_.empty());
-  if (split.isBarrier()) {
-    for (auto i = 0; i < split.barrier->numDrivers; ++i) {
-      if (!finishedDrivers_.contains(i)) {
-        barrierSplits_[i] = Split::createBarrier();
-      }
-    }
-    VELOX_CHECK_LE(promises_.size(), split.barrier->numDrivers);
-    // A barrier is assigned to every driver; wake up all currently blocked
-    // drivers to process it.
-    std::move(promises_.begin(), promises_.end(), std::back_inserter(promises));
-    promises_.clear();
-  } else {
-    splits_.push_back(std::move(split));
-    if (!promises_.empty()) {
-      promises.push_back(std::move(promises_.back()));
-      promises_.pop_back();
-    }
+  splits_.push_back(std::move(split));
+  if (!promises_.empty()) {
+    promises.push_back(std::move(promises_.back()));
+    promises_.pop_back();
   }
 }
 
@@ -109,8 +110,7 @@ void SplitsStore::removeQueuedSplitStats(const Split& split) {
   }
 }
 
-void SplitsStore::finishDriver(uint32_t driverId) {
-  finishedDrivers_.insert(driverId);
+void SplitsStore::removeBarrier(uint32_t driverId) {
   barrierSplits_.erase(driverId);
 }
 

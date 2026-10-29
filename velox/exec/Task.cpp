@@ -240,12 +240,6 @@ class QueueSplitsStore : public SplitsStore {
  public:
   using SplitsStore::SplitsStore;
 
-  void requestBarrier(
-      uint32_t numDrivers,
-      std::vector<ContinuePromise>& promises) override {
-    addSplit(Split::createBarrier(numDrivers), promises);
-  }
-
   bool nextSplit(
       uint32_t driverId,
       int maxPreloadSplits,
@@ -644,7 +638,6 @@ void Task::init(std::optional<common::SpillDiskOptions>&& spillDiskOpts) {
     taskStats_.pipelineStats.emplace_back(
         factory->inputDriver, factory->outputDriver);
     VELOX_CHECK_EQ(factory->numDrivers, 1);
-    numDriversPerLeafNode_[factory->leafNodeId()] = factory->numDrivers;
   }
 
   initDriverLifecycleStatsLocked();
@@ -1314,7 +1307,6 @@ void Task::createDriverFactoriesLocked(uint32_t maxDrivers) {
       numDriversUngrouped_ += factory->numDrivers;
     }
     numTotalDrivers_ += factory->numTotalDrivers;
-    numDriversPerLeafNode_[factory->leafNodeId()] = factory->numDrivers;
     taskStats_.pipelineStats.emplace_back(
         factory->inputDriver, factory->outputDriver);
   }
@@ -1801,18 +1793,16 @@ void Task::removeDriver(std::shared_ptr<Task> self, Driver* driver) {
       // Mark the closure of another driver for its split group (even in
       // ungrouped execution mode).
       const auto splitGroupId = driver->driverCtx()->splitGroupId;
-      if (self->isRunningLocked()) {
+      if (self->isRunningLocked() && driver->hasBarrier()) {
         auto splits =
             self->splitsStates_.find(driver->sourceOperator()->planNodeId());
         if (splits != self->splitsStates_.end() &&
             splits->second.sourceIsTableScan) {
           self->getOrCreateSplitsStoreLocked(splits->second, splitGroupId)
-              ->finishDriver(driver->driverCtx()->driverId);
+              ->removeBarrier(driver->driverCtx()->driverId);
         }
         // A driver may finish before consuming its barrier marker.
-        if (driver->hasBarrier()) {
-          self->finishDriverBarrierLocked(barrierPromises);
-        }
+        self->finishDriverBarrierLocked(barrierPromises);
       }
       auto& splitGroupState = self->splitGroupStates_[splitGroupId];
       --splitGroupState.numRunningDrivers;
@@ -2082,13 +2072,8 @@ bool Task::addSplitLocked(
       it->second->allConsumersFinished()) {
     return false;
   }
-  if (split.isBarrier()) {
-    ensureBarrierSupport();
-    VELOX_CHECK(splitsState.sourceIsTableScan);
-    VELOX_CHECK(!splitsState.noMoreSplits);
-    addSplitToStoreLocked(splitsState, kUngroupedGroupId, split, promises);
-    return true;
-  }
+  VELOX_CHECK(
+      !split.isBarrier(), "Use Task::requestBarrier() to start a barrier");
   VELOX_CHECK(
       !barrierRequested_, "Can't add new split under barrier processing");
 
@@ -2128,10 +2113,6 @@ void Task::addSplitToStoreLocked(
     const exec::Split& split,
     std::vector<ContinuePromise>& promises) {
   auto* splitsStore = getOrCreateSplitsStoreLocked(splitsState, groupId);
-  if (split.isBarrier()) {
-    splitsStore->requestBarrier(split.barrier->numDrivers, promises);
-    return;
-  }
   auto* queueSplitsStore = checkedPointerCast<QueueSplitsStore>(splitsStore);
   queueSplitsStore->addSplit(split, promises);
 }
@@ -2300,22 +2281,7 @@ ContinueFuture Task::startBarrier(std::string_view comment) {
   barrierWatch_.reset();
   ++taskStats_.numBarriers;
 
-  promises.reserve(leafPlanNodeIds.size());
-  for (const auto& leafPlanNode : leafPlanNodeIds) {
-    const auto barrierSplit =
-        Split::createBarrier(numDriversPerLeafNode_.at(leafPlanNode));
-    auto& splitState = getPlanNodeSplitsStateLocked(leafPlanNode);
-    addSplitLocked(splitState, barrierSplit, promises);
-  }
-  startDriverBarriersLocked();
-  if (numDriversUnderBarrier_ == 0) {
-    endBarrierLocked(promises);
-  }
-  return std::move(future);
-}
-
-void Task::startDriverBarriersLocked() {
-  VELOX_CHECK(underBarrier());
+  std::unordered_map<core::PlanNodeId, std::vector<uint32_t>> driverIdsBySource;
   VELOX_CHECK_EQ(numDriversUnderBarrier_, 0);
   for (auto& driver : drivers_) {
     if (driver == nullptr) {
@@ -2323,7 +2289,25 @@ void Task::startDriverBarriersLocked() {
     }
     driver->startBarrier();
     ++numDriversUnderBarrier_;
+    const auto& sourceId = driver->sourceOperator()->planNodeId();
+    if (leafPlanNodeIds.contains(sourceId)) {
+      driverIdsBySource[sourceId].push_back(driver->driverCtx()->driverId);
+    }
   }
+
+  promises.reserve(leafPlanNodeIds.size());
+  for (const auto& leafPlanNode : leafPlanNodeIds) {
+    auto& splitState = getPlanNodeSplitsStateLocked(leafPlanNode);
+    auto* store = getOrCreateSplitsStoreLocked(splitState, kUngroupedGroupId);
+    // A source can close its split store before its last driver is removed.
+    if (!store->allConsumersFinished()) {
+      store->requestBarrier(driverIdsBySource[leafPlanNode], promises);
+    }
+  }
+  if (numDriversUnderBarrier_ == 0) {
+    endBarrierLocked(promises);
+  }
+  return std::move(future);
 }
 
 void Task::finishDriverBarrier() {

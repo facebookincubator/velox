@@ -149,6 +149,81 @@ TEST_F(LimitTest, parallelBarrierFinishBeforeRequest) {
   }
 }
 
+TEST_F(LimitTest, parallelBarrierWithNonContiguousDriverIds) {
+  auto data = makeRowVector({makeFlatVector<int32_t>({0, 1, 2})});
+  auto file = TempFilePath::create();
+  writeToFile(file->getPath(), {data});
+  for (const auto numDrivers : {2, 4}) {
+    for (const auto finishBeforeBarrier : {false, true}) {
+      SCOPED_TRACE(
+          fmt::format(
+              "drivers={} finishBeforeBarrier={}",
+              numDrivers,
+              finishBeforeBarrier));
+      folly::ManualExecutor executor;
+      core::PlanNodeId scanId;
+      CursorParameters params;
+      params.planNode = PlanBuilder()
+                            .tableScan(asRowType(data->type()))
+                            .capturePlanNodeId(scanId)
+                            .limit(0, data->size(), true)
+                            .planNode();
+      params.maxDrivers = numDrivers;
+      params.queryCtx = core::QueryCtx::create(&executor);
+      auto cursor = TaskCursor::create(params);
+      auto task = cursor->task();
+      SCOPE_EXIT {
+        auto finished = task->requestAbort();
+        executor.drain();
+        finished.wait();
+      };
+      cursor->start();
+      ASSERT_EQ(task->numTotalDrivers(), numDrivers);
+
+      // Driver 0 waits for a split. Driver 1 runs next and consumes the split,
+      // reaching its limit while the other driver IDs remain unchanged.
+      ASSERT_EQ(executor.step(), 1);
+      task->addSplit(
+          scanId, exec::Split(makeHiveConnectorSplit(file->getPath())));
+      if (finishBeforeBarrier) {
+        executor.drain();
+        ASSERT_EQ(task->numFinishedDrivers(), 1);
+      }
+
+      const std::vector<uint32_t> expectedDriverIds = numDrivers == 2
+          ? std::vector<uint32_t>{0}
+          : std::vector<uint32_t>{0, 2, 3};
+      std::vector<RowVectorPtr> results;
+      for (auto round = 0; round < 3; ++round) {
+        SCOPED_TRACE(round);
+        auto barrier = task->requestBarrier();
+        executor.drain();
+        ASSERT_TRUE(barrier.isReady());
+        ASSERT_EQ(task->numFinishedDrivers(), 1);
+        std::vector<uint32_t> driverIds;
+        task->testingVisitDrivers([&](Driver* driver) {
+          driverIds.push_back(driver->driverCtx()->driverId);
+          EXPECT_FALSE(driver->hasBarrier());
+        });
+        ASSERT_EQ(driverIds, expectedDriverIds);
+        ContinueFuture future = ContinueFuture::makeEmpty();
+        while (cursor->moveNext(&future)) {
+          results.push_back(cursor->current());
+        }
+        ASSERT_FALSE(future.valid());
+      }
+
+      task->noMoreSplits(scanId);
+      executor.drain();
+      ContinueFuture future = ContinueFuture::makeEmpty();
+      ASSERT_FALSE(cursor->moveNext(&future));
+      ASSERT_FALSE(future.valid());
+      ASSERT_TRUE(waitForTaskCompletion(task.get()));
+      assertEqualResults({data}, results);
+    }
+  }
+}
+
 TEST_F(LimitTest, parallelBarrierFinishAfterDrain) {
   for (const auto numDrivers : {2, 4}) {
     for (const auto consumeRound : {false, true}) {

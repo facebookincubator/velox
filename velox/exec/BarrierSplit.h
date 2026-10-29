@@ -15,21 +15,14 @@
  */
 #pragma once
 
-#include <cstdint>
-
 namespace facebook::velox::exec {
 
 /// A special split used by task barrier processing to signal output drain
 /// processing. When task barrier processing is triggered, one barrier split is
-/// added to each leaf source node. Once a source node receives the barrier
-/// split, it will produce output and propagate the barrier down to the root
-/// node of a pipeline (typically exchange or partitioned output).
-struct BarrierSplit {
-  /// The number of drivers in the source pipeline that share this barrier
-  /// split. It is used to deduplicate barrier processing at the root node of
-  /// the pipeline which blocks the barrier processing until all the pipelines
-  /// drivers have reached it.
-  uint32_t numDrivers;
-};
+/// added for each participating driver of a leaf source node. Once a source
+/// node receives the barrier split, it will produce output and propagate the
+/// barrier down to the root node of a pipeline (typically exchange or
+/// partitioned output).
+struct BarrierSplit {};
 
 } // namespace facebook::velox::exec

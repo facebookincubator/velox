@@ -88,16 +88,15 @@ class SplitsStore {
 
   virtual ~SplitsStore() = default;
 
-  /// Add a barrier split to this store.  Some of the waiters previously waiting
-  /// on the ContinueFuture after the nextSplit() call should be notified by the
-  /// caller of this function by setting values on the `promises` output
-  /// parameter.
+  /// Add a barrier marker for each participating driver supplied by Task.
+  /// Driver IDs are not necessarily contiguous. Waiters on nextSplit() are
+  /// returned in `promises` for the caller to notify.
   ///
   /// `promises` should be set by caller (potentially outside a lock), to notify
   /// any waiters on the splits.
   virtual void requestBarrier(
-      uint32_t numDrivers,
-      std::vector<ContinuePromise>& promises) = 0;
+      const std::vector<uint32_t>& driverIds,
+      std::vector<ContinuePromise>& promises);
 
   /// Returns the next split to process.
   ///
@@ -152,9 +151,8 @@ class SplitsStore {
     return allConsumersFinished_;
   }
 
-  /// Discard the driver's pending barrier marker and exclude it from future
-  /// barriers, without changing the IDs of the remaining drivers.
-  void finishDriver(uint32_t driverId);
+  /// Discard the driver's pending marker for the current barrier, if any.
+  void removeBarrier(uint32_t driverId);
 
   /// Returns the splits added but not yet returned by nextSplit().
   const std::deque<Split>& queuedSplits() const {
@@ -213,7 +211,6 @@ class SplitsStore {
 
   // The map from driver id to barrier splits.
   std::unordered_map<uint32_t, Split> barrierSplits_;
-  std::unordered_set<uint32_t> finishedDrivers_;
 
   // Blocking promises given out when out of splits to distribute.
   std::vector<ContinuePromise> promises_;
