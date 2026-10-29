@@ -1250,15 +1250,21 @@ TEST_F(DateTimeFunctionsTest, fromUnixtime) {
 
 TEST_F(DateTimeFunctionsTest, makeYMInterval) {
   const auto fromYearAndMonth = [&](const std::optional<int32_t>& year,
-                                    const std::optional<int32_t>& month) {
+                                    const std::optional<int32_t>& month)
+      -> std::optional<std::string> {
     auto result =
         evaluateOnce<int32_t>("make_ym_interval(c0, c1)", year, month);
-    VELOX_CHECK(result.has_value());
+    if (!result.has_value()) {
+      return std::nullopt;
+    }
     return INTERVAL_YEAR_MONTH()->valueToString(result.value());
   };
-  const auto fromYear = [&](const std::optional<int32_t>& year) {
+  const auto fromYear = [&](const std::optional<int32_t>& year)
+      -> std::optional<std::string> {
     auto result = evaluateOnce<int32_t>("make_ym_interval(c0)", year);
-    VELOX_CHECK(result.has_value());
+    if (!result.has_value()) {
+      return std::nullopt;
+    }
     return INTERVAL_YEAR_MONTH()->valueToString(result.value());
   };
 
@@ -1279,6 +1285,15 @@ TEST_F(DateTimeFunctionsTest, makeYMInterval) {
     EXPECT_EQ(INTERVAL_YEAR_MONTH()->valueToString(result.value()), "0-0");
   }
 
+  // Non-ANSI mode: returns NULL on integer overflow.
+  EXPECT_EQ(fromYearAndMonth(178956970, 8), std::nullopt);
+  EXPECT_EQ(fromYearAndMonth(-178956970, -9), std::nullopt);
+  EXPECT_EQ(fromYearAndMonth(178956971, 0), std::nullopt);
+  EXPECT_EQ(fromYear(178956971), std::nullopt);
+  EXPECT_EQ(fromYear(-178956971), std::nullopt);
+
+  // ANSI mode: throws user error on integer overflow.
+  enableAnsiMode();
   VELOX_ASSERT_THROW(
       fromYearAndMonth(178956970, 8),
       "Integer overflow in make_ym_interval(178956970, 8)");
