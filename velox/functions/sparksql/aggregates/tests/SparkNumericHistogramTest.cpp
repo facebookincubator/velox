@@ -20,6 +20,7 @@
 #include <cmath>
 #include <limits>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <folly/String.h>
@@ -495,17 +496,24 @@ TEST_F(SparkNumericHistogramTest, rejectsInvalidHeaderCounts) {
   histogram.initialize(3);
   histogram.add(1);
   const auto before = serialize(histogram);
-  for (const auto* hex : {
-           "ffffffff00000000", // Negative capacity.
-           "0000000000000000",
-           "0000000100000000",
-           "00000003ffffffff", // Negative used count.
-           "0000000380000000",
-           "0000000300000004", // Used count exceeds capacity.
-       }) {
+  struct TestCase {
+    std::string_view hex;
+    std::string_view expectedError;
+  };
+  const std::vector<TestCase> cases{
+      {"ffffffff00000000", "histogram_numeric requires numBins at least 2"},
+      {"0000000000000000", "histogram_numeric requires numBins at least 2"},
+      {"0000000100000000", "histogram_numeric requires numBins at least 2"},
+      {"00000003ffffffff", "histogram_numeric usedBins must be nonnegative"},
+      {"0000000380000000", "histogram_numeric usedBins must be nonnegative"},
+      {"0000000300000004", "histogram_numeric usedBins exceeds numBins"},
+  };
+  for (const auto& [hex, expectedError] : cases) {
+    SCOPED_TRACE(hex);
     const auto padded = "!" + unhex(hex);
     VELOX_ASSERT_USER_THROW(
-        histogram.mergeSerialized(std::string_view(padded).substr(1)), "");
+        histogram.mergeSerialized(std::string_view(padded).substr(1)),
+        expectedError);
     EXPECT_EQ(serialize(histogram), before);
   }
 }
@@ -645,13 +653,19 @@ TEST_F(SparkNumericHistogramTest, mergeAllocationFailureDoesNotMutate) {
     for (auto numSourceBins : {24'576, 100'000}) {
       const auto source =
           payload(kMaxNumBins, std::vector<Bin>(numSourceBins, {0, 1}));
-      VELOX_ASSERT_THROW(histogram.mergeSerialized(source), "");
+      VELOX_ASSERT_RUNTIME_THROW_CODE(
+          histogram.mergeSerialized(source),
+          error_code::kMemCapExceeded,
+          "Exceeded memory pool capacity");
       EXPECT_EQ(serialize(histogram), before);
       EXPECT_EQ(allocator.currentBytes(), memoryBefore);
     }
     SparkNumericHistogram empty(&allocator);
     const auto source = payload(kMaxNumBins, std::vector<Bin>(100'000, {0, 1}));
-    VELOX_ASSERT_THROW(empty.mergeSerialized(source), "");
+    VELOX_ASSERT_RUNTIME_THROW_CODE(
+        empty.mergeSerialized(source),
+        error_code::kMemCapExceeded,
+        "Exceeded memory pool capacity");
     EXPECT_EQ(empty.numBins(), 0);
     EXPECT_THAT(empty.bins(), IsEmpty());
     EXPECT_EQ(allocator.currentBytes(), memoryBefore);
@@ -674,7 +688,10 @@ TEST_F(SparkNumericHistogramTest, addAllocationFailureDoesNotMutate) {
     }
     const auto before = serialize(histogram);
     const auto memoryBefore = allocator.currentBytes();
-    VELOX_ASSERT_THROW(histogram.add(32'768), "");
+    VELOX_ASSERT_RUNTIME_THROW_CODE(
+        histogram.add(32'768),
+        error_code::kMemCapExceeded,
+        "Exceeded memory pool capacity");
     EXPECT_EQ(serialize(histogram), before);
     EXPECT_EQ(allocator.currentBytes(), memoryBefore);
     // An existing bin can still be updated without allocating.

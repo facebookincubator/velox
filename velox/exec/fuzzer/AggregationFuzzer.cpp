@@ -395,8 +395,6 @@ void AggregationFuzzer::go() {
 
       std::vector<TypePtr> argTypes = signature.args;
       std::vector<std::string> argNames = makeNames(argTypes.size());
-      auto call = makeFunctionCall(
-          signature.name, argNames, sortedInputs, distinctInputs);
 
       // 20% of times use mask.
       std::vector<std::string> masks;
@@ -419,6 +417,8 @@ void AggregationFuzzer::go() {
 
       auto input =
           generateInputData(argNames, argTypes, signature, groupingKeys);
+      auto call = makeFunctionCall(
+          signature, input.front(), sortedInputs, distinctInputs);
       auto [convertedInput, projections] =
           referenceQueryRunner_->inputProjections(input);
 

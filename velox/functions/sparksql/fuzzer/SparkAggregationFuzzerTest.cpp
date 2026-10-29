@@ -167,6 +167,9 @@ int main(int argc, char** argv) {
           {"first_ignore_null", nullptr},
           {"max_by", nullptr},
           {"min_by", nullptr},
+          // Bin centers, heights, and counts depend on the merge tree.
+          {"histogram_numeric", nullptr},
+          {"histogram_numeric_legacy", nullptr},
           // If multiple values have the same greatest frequency, the return
           // value is indeterminate.
           {"mode", nullptr},
