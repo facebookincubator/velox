@@ -409,6 +409,7 @@ Mathematical Functions
 
     Returns the modulus (remainder) of ``n`` divided by ``m``. Corresponds to Spark's operator ``%``.
     Supported types are: TINYINT, SMALLINT, INTEGER, BIGINT, REAL and DOUBLE.
+    For DECIMAL, see the decimal ``remainder`` function.
     When ``m`` is zero, returns NULL following the behavior when Spark ANSI mode
     is disabled, and throws an exception when Spark ANSI mode is enabled.
 

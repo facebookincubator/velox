@@ -301,6 +301,27 @@ void registerDecimalDivide(const std::string& prefix) {
       getDivideConstraintsDenyPrecisionLoss());
 }
 
+void registerDecimalRemainder(const std::string& prefix) {
+  std::string rPrecision = fmt::format(
+      "min({a_precision} - {a_scale}, {b_precision} - {b_scale}) + max({a_scale}, {b_scale})",
+      fmt::arg("a_precision", P1::name()),
+      fmt::arg("b_precision", P2::name()),
+      fmt::arg("a_scale", S1::name()),
+      fmt::arg("b_scale", S2::name()));
+  std::string rScale = fmt::format(
+      "max({a_scale}, {b_scale})",
+      fmt::arg("a_scale", S1::name()),
+      fmt::arg("b_scale", S2::name()));
+  // Unlike registerDecimalBinary, registerDecimalDivide also registers
+  // (short, long) -> short and (long, short) -> short, which remainder needs:
+  // e.g. DECIMAL(10, 2) % DECIMAL(30, 2) returns DECIMAL(10, 2).
+  registerDecimalDivide<DecimalRemainderFunction>(
+      prefix + "remainder", makeConstraints(rPrecision, rScale, true));
+  registerDecimalDivide<DecimalRemainderFunction>(
+      prefix + "remainder" + kDenyPrecisionLoss,
+      makeConstraints(rPrecision, rScale, false));
+}
+
 void registerDecimalIntegralDivide(const std::string& prefix) {
   registerIntegralDecimalDivide<DecimalIntegralDivideFunction>(prefix + "div");
   registerIntegralDecimalDivide<CheckedDecimalIntegralDivideFunction>(
