@@ -155,6 +155,48 @@ TEST_F(LocalPartitionTest, queueMixedArrival) {
   }
 }
 
+TEST_F(LocalPartitionTest, queueMixedFinishAcrossRounds) {
+  auto queue = makeQueue();
+  std::vector<uint64_t> rounds(3, 0);
+  for (auto i = 0; i < rounds.size(); ++i) {
+    queue->addProducer();
+  }
+  queue->noMoreProducers();
+  queue->drain(rounds[0]);
+  queue->noMoreData(rounds[0]);
+  queue->noMoreData(rounds[1]);
+
+  ContinueFuture future = ContinueFuture::makeEmpty();
+  RowVectorPtr data;
+  bool drained;
+  for (auto round = 0; round < 3; ++round) {
+    // The first two producers finished for different reasons, but neither
+    // counts twice in this round or needs to report in later rounds.
+    ASSERT_EQ(
+        queue->next(&future, pool(), &data, drained),
+        BlockingReason::kWaitForProducer);
+    ASSERT_FALSE(drained);
+    ASSERT_FALSE(future.isReady());
+    queue->drain(rounds[2]);
+    ASSERT_TRUE(future.isReady());
+    future = ContinueFuture::makeEmpty();
+    ASSERT_EQ(
+        queue->next(&future, pool(), &data, drained),
+        BlockingReason::kNotBlocked);
+    ASSERT_TRUE(drained);
+    ASSERT_FALSE(data);
+    ASSERT_FALSE(future.valid());
+    ASSERT_FALSE(queue->isFinished());
+  }
+  queue->noMoreData(rounds[2]);
+  ASSERT_EQ(
+      queue->next(&future, pool(), &data, drained),
+      BlockingReason::kNotBlocked);
+  ASSERT_FALSE(drained);
+  ASSERT_FALSE(future.valid());
+  ASSERT_TRUE(queue->isFinished());
+}
+
 TEST_F(LocalPartitionTest, queueFinishAfterDrain) {
   for (const auto consumeRound : {false, true}) {
     SCOPED_TRACE(consumeRound);

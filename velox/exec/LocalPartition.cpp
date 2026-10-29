@@ -102,16 +102,17 @@ void LocalExchangeQueue::noMoreProducers() {
   notify(consumerPromises);
 }
 
-void LocalExchangeQueue::drain(uint64_t& lastArrivedRound) {
+void LocalExchangeQueue::drain(uint64_t& lastDrainRound) {
   std::vector<ContinuePromise> consumerPromises;
   queue_.withWLock([&](auto& queue) {
     if (closed_) {
       return;
     }
-    VELOX_CHECK_NE(lastArrivedRound, currentRound_);
-    VELOX_CHECK_LT(numArrivedProducers_, numProducers_);
-    ++numArrivedProducers_;
-    lastArrivedRound = currentRound_;
+    VELOX_CHECK_NE(lastDrainRound, currentRound_);
+    VELOX_CHECK_LT(
+        numDrainedProducers_ + numUndrainedFinishedProducers_, numProducers_);
+    ++numDrainedProducers_;
+    lastDrainRound = currentRound_;
     if (allProducersArrivedLocked()) {
       consumerPromises = std::move(consumerPromises_);
     }
@@ -152,7 +153,7 @@ BlockingReason LocalExchangeQueue::enqueue(
   return BlockingReason::kNotBlocked;
 }
 
-void LocalExchangeQueue::noMoreData(uint64_t lastArrivedRound) {
+void LocalExchangeQueue::noMoreData(uint64_t lastDrainRound) {
   std::vector<ContinuePromise> consumerPromises;
   queue_.withWLock([&](auto& queue) {
     if (closed_) {
@@ -160,11 +161,14 @@ void LocalExchangeQueue::noMoreData(uint64_t lastArrivedRound) {
     }
     VELOX_CHECK_LT(numFinishedProducers_, numProducers_);
     ++numFinishedProducers_;
-    if (lastArrivedRound != currentRound_) {
-      VELOX_CHECK_LT(numArrivedProducers_, numProducers_);
-      ++numArrivedProducers_;
+    if (lastDrainRound != currentRound_) {
+      VELOX_CHECK_LT(
+          numDrainedProducers_ + numUndrainedFinishedProducers_, numProducers_);
+      ++numUndrainedFinishedProducers_;
     }
-    VELOX_CHECK_LE(numFinishedProducers_, numArrivedProducers_);
+    VELOX_CHECK_LE(
+        numFinishedProducers_,
+        numDrainedProducers_ + numUndrainedFinishedProducers_);
     if (allProducersArrivedLocked()) {
       consumerPromises = std::move(consumerPromises_);
     }
@@ -230,7 +234,8 @@ bool LocalExchangeQueue::testAndClearDrainedLocked() {
     return false;
   }
   VELOX_CHECK_LT(numFinishedProducers_, numProducers_);
-  numArrivedProducers_ = numFinishedProducers_;
+  numDrainedProducers_ = 0;
+  numUndrainedFinishedProducers_ = numFinishedProducers_;
   ++currentRound_;
   return true;
 }
@@ -364,7 +369,7 @@ LocalPartition::LocalPartition(
               : ctx->queryConfig().maxLocalExchangePartitionBufferSize()},
       partitionBufferPreserveEncoding_{
           ctx->queryConfig().localExchangePartitionBufferPreserveEncoding()},
-      lastArrivedRounds_(numPartitions_, 0) {
+      lastDrainRounds_(numPartitions_, 0) {
   VELOX_CHECK(numPartitions_ == 1 || partitionFunction_ != nullptr);
   for (auto& queue : queues_) {
     queue->addProducer();
@@ -689,7 +694,7 @@ void LocalPartition::noMoreInput() {
     copyRanges_.resize(0);
   }
   for (auto i = 0; i < numPartitions_; ++i) {
-    queues_[i]->noMoreData(lastArrivedRounds_[i]);
+    queues_[i]->noMoreData(lastDrainRounds_[i]);
   }
 }
 
@@ -706,7 +711,7 @@ RowVectorPtr LocalPartition::getOutput() {
     return nullptr;
   }
   for (auto i = 0; i < numPartitions_; ++i) {
-    queues_[i]->drain(lastArrivedRounds_[i]);
+    queues_[i]->drain(lastDrainRounds_[i]);
   }
   finishDrain();
   return nullptr;
