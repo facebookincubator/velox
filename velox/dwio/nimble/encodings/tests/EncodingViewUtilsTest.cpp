@@ -37,7 +37,7 @@ using namespace facebook;
 // (fallback), so both branches of the switch are exercised.
 class EncodingViewUtilsTest : public nimble::test::EncodingViewTest {};
 
-TEST_F(EncodingViewUtilsTest, readEncodingViewAtFastPathTrivial) {
+TEST_P(EncodingViewUtilsTest, readEncodingViewAtFastPathTrivial) {
   const nimble::Encoding::Options options;
   auto values = randomInt32(/*seed=*/1);
   auto serialized =
@@ -52,7 +52,7 @@ TEST_F(EncodingViewUtilsTest, readEncodingViewAtFastPathTrivial) {
   }
 }
 
-TEST_F(EncodingViewUtilsTest, readEncodingViewAtFastPathFixedBitWidth) {
+TEST_P(EncodingViewUtilsTest, readEncodingViewAtFastPathFixedBitWidth) {
   const nimble::Encoding::Options options;
   auto values = randomNarrowUnsigned<uint32_t>(/*seed=*/2);
   auto serialized =
@@ -67,7 +67,7 @@ TEST_F(EncodingViewUtilsTest, readEncodingViewAtFastPathFixedBitWidth) {
   }
 }
 
-TEST_F(EncodingViewUtilsTest, readEncodingViewAtFastPathRLE) {
+TEST_P(EncodingViewUtilsTest, readEncodingViewAtFastPathRLE) {
   const nimble::Encoding::Options options;
   auto values = randomRleInt32(/*seed=*/3);
   auto serialized = nimble::test::Encoder<nimble::RLEEncoding<int32_t>>::encode(
@@ -81,7 +81,7 @@ TEST_F(EncodingViewUtilsTest, readEncodingViewAtFastPathRLE) {
   }
 }
 
-TEST_F(EncodingViewUtilsTest, readEncodingViewAtFastPathConstant) {
+TEST_P(EncodingViewUtilsTest, readEncodingViewAtFastPathConstant) {
   const nimble::Encoding::Options options;
   auto values = constantInt32(/*value=*/42);
   auto serialized =
@@ -96,7 +96,7 @@ TEST_F(EncodingViewUtilsTest, readEncodingViewAtFastPathConstant) {
   }
 }
 
-TEST_F(EncodingViewUtilsTest, readEncodingViewAtFastPathPFOR) {
+TEST_P(EncodingViewUtilsTest, readEncodingViewAtFastPathPFOR) {
   const nimble::Encoding::Options options;
   auto values = randomPforData(/*seed=*/4);
   auto serialized =
@@ -115,7 +115,7 @@ TEST_F(EncodingViewUtilsTest, readEncodingViewAtFastPathPFOR) {
 // this exercises the default fallback branch that goes through the base-class
 // vtable `readAt(index, void*)` path. Correctness must match the fast path's
 // contract regardless.
-TEST_F(EncodingViewUtilsTest, readEncodingViewAtFallbackEliasFano) {
+TEST_P(EncodingViewUtilsTest, readEncodingViewAtFallbackEliasFano) {
   const nimble::Encoding::Options options;
   // EliasFano requires strictly ascending unsigned integers.
   nimble::Vector<uint32_t> values{pool_.get()};
@@ -140,3 +140,5 @@ TEST_F(EncodingViewUtilsTest, readEncodingViewAtFallbackEliasFano) {
         << "i=" << i;
   }
 }
+
+INSTANTIATE_ENCODING_VIEW_TEST_SUITE(EncodingViewUtilsTest);

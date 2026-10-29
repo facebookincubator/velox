@@ -128,17 +128,21 @@ class PFOREncoding final
     const uint64_t baseValuesSize = baseBitWidth == 0
         ? 0
         : FixedBitArray::bufferSize(rowCount, baseBitWidth);
-    const uint64_t positionsSize = std::min(
-        TrivialEncoding<uint32_t>::estimateSize(numExceptions),
-        FixedBitWidthEncoding<uint32_t>::estimateSize(
-            numExceptions,
-            /*minValue=*/0,
-            /*maxValue=*/rowCount == 0 ? 0 : rowCount - 1,
-            options));
-    const uint64_t valuesSize = std::min(
-        TrivialEncoding<physicalType>::estimateSize(numExceptions),
-        FixedBitWidthEncoding<physicalType>::estimateSize(
-            numExceptions, statistics, options));
+    const uint64_t positionsSize = numExceptions == 0
+        ? 0
+        : std::min(
+              TrivialEncoding<uint32_t>::estimateSize(numExceptions),
+              FixedBitWidthEncoding<uint32_t>::estimateSize(
+                  numExceptions,
+                  /*minValue=*/0,
+                  /*maxValue=*/rowCount == 0 ? 0 : rowCount - 1,
+                  options));
+    const uint64_t valuesSize = numExceptions == 0
+        ? 0
+        : std::min(
+              TrivialEncoding<physicalType>::estimateSize(numExceptions),
+              FixedBitWidthEncoding<physicalType>::estimateSize(
+                  numExceptions, statistics, options));
     const uint64_t outerEncodingSize = EncodingPrefix::kFixedPrefixSize +
         kFixedHeaderSize + varint::varintSize(numExceptions) +
         varint::varintSize(positionsSize) + varint::varintSize(valuesSize);
@@ -244,8 +248,8 @@ PFOREncoding<T>::PFOREncoding(
     const std::function<void*(uint32_t)>& stringBufferFactory,
     const Encoding::Options& options)
     : TypedEncoding<T, physicalType>{pool, data, options},
-      exceptionPositions_{this->template getVectorBuffer<uint32_t>()},
-      exceptionValues_{this->template getVectorBuffer<physicalType>()} {
+      exceptionPositions_{&pool},
+      exceptionValues_{&pool} {
   if constexpr (!isIntegralType<physicalType>()) {
     NIMBLE_INCOMPATIBLE_ENCODING(
         "Pfor encoding only supports integral data types.");
@@ -262,6 +266,12 @@ PFOREncoding<T>::PFOREncoding(
         numExceptions_,
         this->rowCount_,
         "Pfor exception count exceeds row count.");
+
+    // Leave unused scratch buffers in the pool for other decoders to reuse.
+    if (numExceptions_ != 0) {
+      exceptionPositions_ = this->template getVectorBuffer<uint32_t>();
+      exceptionValues_ = this->template getVectorBuffer<physicalType>();
+    }
 
     auto readExceptionStream = [&](auto& subStream) {
       subStream.resize(numExceptions_);

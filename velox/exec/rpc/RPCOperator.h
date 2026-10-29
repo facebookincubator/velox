@@ -16,6 +16,8 @@
 
 #pragma once
 
+#include <folly/stop_watch.h>
+
 #include <atomic>
 #include <memory>
 #include <optional>
@@ -132,6 +134,8 @@ class RPCOperator : public exec::Operator {
   static inline const std::string kRpcCongestionShrinks{"rpcCongestionShrinks"};
   static inline const std::string kRpcCongestionOverloadShrinks{
       "rpcCongestionOverloadShrinks"};
+  /// Attempts rejected for capacity and admitted again for another attempt.
+  static inline const std::string kRpcCapacityRetries{"rpcCapacityRetries"};
   static inline const std::string kRpcBaselineRttNanos{"rpcBaselineRttNanos"};
   static inline const std::string kRpcPeakInFlight{"rpcPeakInFlight"};
   static inline const std::string kRpcRttMinWallNanos{"rpcRttMinWallNanos"};
@@ -143,6 +147,8 @@ class RPCOperator : public exec::Operator {
   static inline const std::string kRpcErrorKindTimeout{"rpcErrorKindTimeout"};
   static inline const std::string kRpcErrorKindBackendError{
       "rpcErrorKindBackendError"};
+  static inline const std::string kRpcErrorKindInvalidRequest{
+      "rpcErrorKindInvalidRequest"};
   static inline const std::string kRpcErrorKindInternal{"rpcErrorKindInternal"};
   // Shared rate-limiter stats, refreshed on every stats() call.
   static inline const std::string kRpcRateLimiterCap{"rpcRateLimiterCap"};
@@ -157,6 +163,10 @@ class RPCOperator : public exec::Operator {
       "rpcRateLimiterMinLimitMilli"};
   static inline const std::string kRpcRateLimiterServiceHorizonNanos{
       "rpcRateLimiterServiceHorizonNanos"};
+  /// Present, with value one per driver, when the backend's shared limiter
+  /// runs another policy and this operator runs under the limiter for its own.
+  static inline const std::string kRpcRateLimiterPolicyScoped{
+      "rpcRateLimiterPolicyScoped"};
 
   /// Live liveness stats, refreshed on every stats() call rather than only at
   /// close(). Units dispatched but not yet completed.
@@ -244,8 +254,9 @@ class RPCOperator : public exec::Operator {
   // the name lookups per batch.
   void initOutputProjections();
 
-  // Binds the shared limiter after the function has resolved any
-  // input-dependent transport setup. Subsequent inputs must keep the same key.
+  // Binds the limiter for this operator's policy after the function has
+  // resolved any input-dependent transport setup. Subsequent inputs must keep
+  // the same key.
   void initializeRateLimiter();
 
   // Resolves an input whose selected rows all complete synchronously without a
@@ -316,6 +327,11 @@ class RPCOperator : public exec::Operator {
   // whole input vector is dripped at the sustainable rate instead of blasted.
   void dispatchRowsUnderAdmission();
 
+  // Applies the window feedback of rejected attempts, then dispatches the
+  // retries that are due, ahead of new rows. Each retry takes a window slot
+  // and a fresh admission slot.
+  void dispatchDueRetries();
+
   // Whether the PER_ROW dispatch buffer still has undispatched rows.
   bool hasPendingRows() const {
     return pendingCursor_ < pendingNumRows_;
@@ -344,6 +360,9 @@ class RPCOperator : public exec::Operator {
     std::shared_ptr<RPCState> state;
     RPCRateLimiter* limiter{nullptr};
     std::shared_ptr<AsyncRPCFunction> function;
+    // True when 'limiter' is the controller for this operator's policy rather
+    // than the backend's shared one.
+    bool policyScoped{false};
   };
   folly::Synchronized<LiveStatsSources> liveStatsSources_;
 
@@ -352,12 +371,16 @@ class RPCOperator : public exec::Operator {
   std::shared_ptr<AsyncRPCFunction> function_;
   bool requiresRowInspectionBeforeAdmission_{true};
 
-  // Operators with the same admission key share rate-limiter capacity.
+  // Operators with the same admission key and rate-limiter policy share
+  // rate-limiter capacity.
   std::string admissionKey_;
 
-  // Process-scoped controller for admissionKey_, resolved before the first
-  // dispatch; outlives this operator.
+  // Process-scoped controller for admissionKey_ and this operator's resolved
+  // rate-limiter policy. Resolved before the first dispatch; outlives this
+  // operator.
   RPCRateLimiter* limiter_{nullptr};
+  // PER_ROW and AsyncRPCFunction::mayReturnCapacityRetries().
+  bool capacityRetryEnabled_{false};
 
   // Precomputed per-argument sources, in call()->inputs() order. Built once in
   // initialize() by walking the RPC call's argument expressions. A
@@ -392,6 +415,7 @@ class RPCOperator : public exec::Operator {
   int64_t numErrorsRateLimited_{0};
   int64_t numErrorsTimeout_{0};
   int64_t numErrorsBackend_{0};
+  int64_t numErrorsInvalidRequest_{0};
   // Rows that failed because something here broke -- an invariant tripped, or
   // a response was returned with no outcome set -- rather than because the
   // backend refused. Tracked apart from the backend error count.
@@ -436,8 +460,9 @@ class RPCOperator : public exec::Operator {
   // scheduling, so this needs generous headroom.
   static constexpr auto kBatchRpcTimeout = std::chrono::milliseconds(3'600'000);
 
-  // Block wait time tracking for runtime stats.
-  std::optional<uint64_t> blockWaitStartNs_;
+  // Block wait time tracking for runtime stats. Started when the operator
+  // parks and reset when the wait ends.
+  std::optional<folly::stop_watch<std::chrono::nanoseconds>> blockWaitWatch_;
   bool blockWaitIsBackpressure_{false};
   uint64_t totalBlockWaitNanos_{0};
   uint64_t totalBackpressureWaitNanos_{0};

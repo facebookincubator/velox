@@ -21,13 +21,8 @@
 #include "velox/dwio/nimble/encodings/FsstEncoding.h"
 #include "velox/dwio/nimble/encodings/HuffmanEncoding.h"
 #include "velox/dwio/nimble/encodings/PFOREncoding.h"
+#include "velox/dwio/nimble/encodings/PartitionedEliasFanoEncoding.h"
 #include "velox/dwio/nimble/encodings/SimdForBitpackEncoding.h"
-// SubIntSplit integration commented out (disabled):
-/*
-#ifdef NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
-#include "velox/dwio/nimble/encodings/SubIntSplitEncoding.h"
-#endif
-*/
 #include "velox/dwio/nimble/encodings/legacy/ConstantEncoding.h"
 #include "velox/dwio/nimble/encodings/legacy/DeltaEncoding.h"
 #include "velox/dwio/nimble/encodings/legacy/DictionaryEncoding.h"
@@ -298,14 +293,10 @@ std::unique_ptr<Encoding> EncodingFactory::create(
       RETURN_ENCODING_BY_INTEGRAL_TYPE(
           ::facebook::nimble::EliasFanoEncoding, dataType);
     }
-    // SubIntSplit integration commented out (disabled):
-    /*
-#ifdef NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
-    case EncodingType::SubIntSplit: {
-      RETURN_ENCODING_BY_VARINT_TYPE(SubIntSplitEncoding, dataType);
+    case EncodingType::PartitionedEliasFano: {
+      RETURN_ENCODING_BY_INTEGRAL_TYPE(
+          ::facebook::nimble::PartitionedEliasFanoEncoding, dataType);
     }
-#endif
-    */
     case EncodingType::BlockBitPacking: {
       RETURN_ENCODING_BY_NUMERIC_TYPE(
           facebook::nimble::BlockBitPackingEncoding, dataType);
@@ -329,9 +320,11 @@ std::unique_ptr<Encoding> EncodingFactory::create(
       RETURN_ENCODING_BY_INTEGRAL_TYPE(
           ::facebook::nimble::HuffmanEncoding, dataType);
     }
+    case EncodingType::SubIntSplit:
     case EncodingType::ALPRD:
-      // ALPRD and its integer children use the shared implementation. Calling
-      // the base factory on this object also preserves the decoding options.
+      // These encodings and their children use the shared implementation.
+      // Calling the base factory on this object also preserves the decoding
+      // options.
       return ::facebook::nimble::EncodingFactory::create(
           memoryPool, data, std::move(stringBufferFactory));
     case EncodingType::ALP: {

@@ -44,21 +44,21 @@
 #include "velox/dwio/common/Statistics.h"
 #include "velox/dwio/nimble/common/Buffer.h"
 #include "velox/dwio/nimble/common/ChunkHeader.h"
+#include "velox/dwio/nimble/common/ChunkedStream.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/common/FixedBitArray.h"
+#include "velox/dwio/nimble/common/SchemaSerialization.h"
 #include "velox/dwio/nimble/common/tests/NimbleFileWriter.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/common/EncodingLayout.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
 #include "velox/dwio/nimble/encodings/selection/tests/RandomEncodingSelectionPolicy.h"
+#include "velox/dwio/nimble/reader/BatchReader.h"
+#include "velox/dwio/nimble/stats/ColumnStatistics.h"
+#include "velox/dwio/nimble/stats/VectorizedStatistics.h"
 #include "velox/dwio/nimble/tablet/TabletReader.h"
 #include "velox/dwio/nimble/tablet/tests/TabletTestUtils.h"
-#include "velox/dwio/nimble/velox/BatchReader.h"
-#include "velox/dwio/nimble/velox/ChunkedStream.h"
-#include "velox/dwio/nimble/velox/SchemaSerialization.h"
-#include "velox/dwio/nimble/velox/stats/ColumnStatistics.h"
-#include "velox/dwio/nimble/velox/stats/VectorizedStatistics.h"
 #include "velox/dwio/nimble/writer/EncodingSelectionPolicyFactory.h"
 #include "velox/dwio/nimble/writer/FlushPolicy.h"
 #include "velox/dwio/nimble/writer/WriterOptions.h"
@@ -78,7 +78,7 @@ using ::facebook::velox::fuzzer::FuzzerGenerator;
 // phase and coverage gate from adding them back. This is not a global
 // unsupported-encoding list.
 constexpr auto kExcludedFuzzerCandidateEncodings =
-    std::to_array({EncodingType::Huffman, EncodingType::SubIntSplit});
+    std::to_array({EncodingType::SubIntSplit});
 
 // Scalar types the Nimble writer round-trips with type identity.
 // FieldWriter::create dispatches on the physical TypeKind, so DATE, TIME,
@@ -213,6 +213,7 @@ bool hasDataPrecondition(EncodingType encodingType) {
   return encodingType == EncodingType::Constant ||
       encodingType == EncodingType::DeltaBlock ||
       encodingType == EncodingType::EliasFano ||
+      encodingType == EncodingType::PartitionedEliasFano ||
       encodingType == EncodingType::Huffman;
 }
 
@@ -290,7 +291,6 @@ void randomizeWriterOptions(WriterOptions& options, FuzzerGenerator& rng) {
   options.chunkStatsMinAvgChunks = 0;
   options.enableStreamDeduplication = folly::Random::oneIn(2, rng);
   options.fixedBitWidthUseExactBits = folly::Random::oneIn(2, rng);
-  options.allowNestedAlpSelection = folly::Random::oneIn(2, rng);
   // Ratios above 1.0 keep FSST even when it does not shrink the data, so the
   // encoding is actually exercised instead of rejected on size.
   options.fsstCompressionTargetRatio =
@@ -1153,7 +1153,8 @@ bool isTypeCompatible(EncodingType encodingType, DataType dataType) {
     return isFloatingPointDataType(dataType);
   }
   if (encodingType == EncodingType::DeltaBlock ||
-      encodingType == EncodingType::EliasFano) {
+      encodingType == EncodingType::EliasFano ||
+      encodingType == EncodingType::PartitionedEliasFano) {
     return !isFloatingPointDataType(dataType);
   }
   // Varint's gate is isIntegralType<physicalType>() && sizeof(T) >= 4, so the
@@ -1168,6 +1169,7 @@ bool isTypeCompatible(EncodingType encodingType, DataType dataType) {
 bool isIntegralOnlyEncoding(EncodingType encodingType) {
   return encodingType == EncodingType::DeltaBlock ||
       encodingType == EncodingType::EliasFano ||
+      encodingType == EncodingType::PartitionedEliasFano ||
       encodingType == EncodingType::PFOR ||
       encodingType == EncodingType::SimdForBitpack ||
       encodingType == EncodingType::Huffman;

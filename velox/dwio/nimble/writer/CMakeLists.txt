@@ -12,11 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# ChunkedStreamWriter still lives next to its reader-side counterparts in
-# velox/dwio/nimble/velox, so it is picked up by path rather than moved here.
 add_library(
   nimble_writer
-  ${CMAKE_CURRENT_SOURCE_DIR}/../velox/ChunkedStreamWriter.cpp
+  ChunkedStreamWriter.cpp
   BufferPolicy.h
   EncodingLayoutTree.cpp
   EncodingSelectionPolicyFactory.cpp
@@ -58,3 +56,46 @@ target_link_libraries(
   velox_type
   Folly::folly
 )
+
+# Moved from velox/CMakeLists.txt when the nimble/velox/ folder was flattened.
+
+add_library(nimble_velox_stream_data StreamData.cpp StreamData.h)
+target_link_libraries(nimble_velox_stream_data nimble_velox_schema_builder nimble_common)
+
+add_library(nimble_velox_layout_planner LayoutPlanner.cpp LayoutPlanner.h)
+target_link_libraries(nimble_velox_layout_planner nimble_velox_schema_reader nimble_tablet_writer)
+
+add_library(
+  nimble_velox_field_writer
+  BufferGrowthPolicy.cpp
+  DeduplicationUtils.cpp
+  FieldWriter.cpp
+  VectorAdapters.h
+  SharedDictionaryWriter.h
+  RawSizeContext.h
+  FieldWriter.h
+  DeduplicationUtils.h
+  ChunkedStreamWriter.h
+  BufferGrowthPolicy.h
+)
+target_link_libraries(
+  nimble_velox_field_writer
+  nimble_velox_common
+  nimble_velox_nimble_config
+  nimble_column_stats
+  nimble_column_stats_utils
+  nimble_velox_schema
+  nimble_velox_stream_data
+  nimble_velox_schema_builder
+  velox_test_util
+  Folly::folly
+)
+
+add_library(
+  raw_size_utils
+  RawSizeUtils.cpp
+  DecodedVectorManager.cpp
+  DecodedVectorManager.h
+  RawSizeUtils.h
+)
+target_link_libraries(raw_size_utils nimble_common velox_vector velox_dwio_common)

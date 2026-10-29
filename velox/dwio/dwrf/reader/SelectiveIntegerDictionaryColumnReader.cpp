@@ -120,6 +120,19 @@ void SelectiveIntegerDictionaryColumnReader::ensureInitialized() {
 
   ClockTimer timer{initTimeClocks_};
   scanState_.dictionary.values = dictInit_();
+  // The decoded dictionary can be missing or shorter than the size the encoding
+  // advertises. Lookups trust that size, so reject the mismatch here.
+  VELOX_USER_CHECK_NOT_NULL(
+      scanState_.dictionary.values,
+      "DWRF integer dictionary is missing for column id {}",
+      fileType_->id());
+  VELOX_USER_CHECK_GE(
+      scanState_.dictionary.values->size(),
+      static_cast<size_t>(scanState_.dictionary.numValues) * valueSize_,
+      "DWRF integer dictionary holds {} bytes, need {} for {} entries",
+      scanState_.dictionary.values->size(),
+      static_cast<size_t>(scanState_.dictionary.numValues) * valueSize_,
+      scanState_.dictionary.numValues);
   if (DictionaryValues::hasFilter(scanSpec_->filter())) {
     // Make sure there is a cache even for an empty dictionary because of asan
     // failure when preparing a gather with all lanes masked out.

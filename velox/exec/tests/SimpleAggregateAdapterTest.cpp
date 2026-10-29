@@ -14,8 +14,10 @@
  * limitations under the License.
  */
 
-#include "velox/exec/SimpleAggregateAdapter.h"
+#include <folly/CPortability.h>
+
 #include "velox/exec/Aggregate.h"
+#include "velox/exec/SimpleAggregateAdapter.h"
 #include "velox/exec/tests/SimpleAggregateFunctionsRegistration.h"
 #include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
 
@@ -24,6 +26,7 @@ using namespace facebook::velox::exec::test;
 using facebook::velox::functions::aggregate::test::AggregationTestBase;
 
 namespace facebook::velox::aggregate::test {
+
 namespace {
 
 const char* const kSimpleAvg = "simple_avg";
@@ -121,96 +124,6 @@ exec::AggregateRegistrationResult registerSimpleCountNullsAggregate(
         VELOX_CHECK_LE(
             argTypes.size(), 1, "{} takes at most one argument", name);
         return std::make_unique<SimpleAggregateAdapter<CountNullsAggregate>>(
-            step, argTypes, resultType);
-      },
-      false /*registerCompanionFunctions*/,
-      true /*overwrite*/);
-}
-
-class ConstantInputForwardingAggregate {
- public:
-  using InputType = Row<int64_t, int64_t>;
-  using IntermediateType = int64_t;
-  using OutputType = int64_t;
-
-  void setConstantInputs(const std::vector<VectorPtr>& constantInputs) {
-    // The hook fires for each aggregation step. In the final aggregation
-    // step the only argument is the intermediate column, so there are no
-    // constants to read.
-    if (constantInputs.size() != 2) {
-      return;
-    }
-    VELOX_CHECK_NULL(constantInputs[0]);
-    VELOX_CHECK_NOT_NULL(constantInputs[1]);
-    auto* constant = constantInputs[1]->as<ConstantVector<int64_t>>();
-    VELOX_CHECK_NOT_NULL(constant);
-
-    offset_ = constant->valueAt(0);
-  }
-
-  struct Accumulator {
-    int64_t sum{0};
-    ConstantInputForwardingAggregate* fn;
-
-    explicit Accumulator(
-        HashStringAllocator* /*allocator*/,
-        ConstantInputForwardingAggregate* fn)
-        : fn(fn) {}
-
-    void addInput(
-        HashStringAllocator* /*allocator*/,
-        exec::arg_type<int64_t> value,
-        exec::arg_type<int64_t> /*constantValue*/) {
-      sum += value + fn->offset_;
-    }
-
-    void combine(
-        HashStringAllocator* /*allocator*/,
-        exec::arg_type<int64_t> other) {
-      sum += other;
-    }
-
-    bool writeIntermediateResult(exec::out_type<IntermediateType>& out) {
-      out = sum;
-      return true;
-    }
-
-    bool writeFinalResult(exec::out_type<OutputType>& out) {
-      out = sum;
-      return true;
-    }
-  };
-
-  using AccumulatorType = Accumulator;
-
-  // Read from the constant second argument; 0 when constants are not
-  // forwarded, which makes the aggregate result detectably wrong.
-  int64_t offset_{0};
-};
-
-exec::AggregateRegistrationResult registerSimpleConstantForwardingAggregate(
-    const std::string& name) {
-  std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures{
-      exec::AggregateFunctionSignatureBuilder()
-          .returnType("bigint")
-          .intermediateType("bigint")
-          .argumentType("bigint")
-          .argumentType("bigint")
-          .build()};
-
-  return exec::registerAggregateFunction(
-      name,
-      std::move(signatures),
-      [name](
-          core::AggregationNode::Step step,
-          const std::vector<TypePtr>& argTypes,
-          const TypePtr& resultType,
-          const core::QueryConfig& /*config*/)
-          -> std::unique_ptr<exec::Aggregate> {
-        VELOX_CHECK_EQ(
-            argTypes.size(), 2, "{} takes exactly two arguments", name);
-        return std::make_unique<
-            SimpleAggregateAdapter<ConstantInputForwardingAggregate>>(
             step, argTypes, resultType);
       },
       false /*registerCompanionFunctions*/,
@@ -322,6 +235,93 @@ exec::AggregateRegistrationResult registerFuncLevelVariableTestAggregate(
       true /*registerCompanionFunctions*/,
       true /*overwrite*/);
 }
+
+// The classes below check that SimpleAggregateFunction rejects interfaces the
+// adapter cannot call. A concept checks declarations only, so their members
+// have no definitions and are never used.
+FOLLY_PUSH_WARNING
+FOLLY_CLANG_DISABLE_WARNING("-Wunused-member-function")
+FOLLY_CLANG_DISABLE_WARNING("-Wunneeded-member-function")
+
+// Takes VARCHAR input, which addInput does not accept.
+class MismatchedInputAggregate {
+ public:
+  using InputType = Row<Varchar>;
+  using IntermediateType = int64_t;
+  using OutputType = int64_t;
+
+  struct AccumulatorType {
+    AccumulatorType(HashStringAllocator*, MismatchedInputAggregate*);
+    void addInput(HashStringAllocator*, int64_t);
+    void combine(HashStringAllocator*, int64_t);
+    bool writeIntermediateResult(int64_t&);
+    bool writeFinalResult(int64_t&);
+  };
+};
+
+static_assert(!SimpleAggregateFunction<MismatchedInputAggregate>);
+
+// Has default null behavior but declares the write methods with the
+// 'nonNullGroup' flag.
+class MismatchedNullBehaviorAggregate {
+ public:
+  using InputType = Row<int64_t>;
+  using IntermediateType = int64_t;
+  using OutputType = int64_t;
+
+  struct AccumulatorType {
+    AccumulatorType(HashStringAllocator*, MismatchedNullBehaviorAggregate*);
+    void addInput(HashStringAllocator*, int64_t);
+    void combine(HashStringAllocator*, int64_t);
+    bool writeIntermediateResult(bool, int64_t&);
+    bool writeFinalResult(bool, int64_t&);
+  };
+};
+
+static_assert(!SimpleAggregateFunction<MismatchedNullBehaviorAggregate>);
+
+// Handles nulls itself but declares addInput without optional arguments and
+// without a result.
+class MismatchedOptionalInputAggregate {
+ public:
+  using InputType = Row<int64_t>;
+  using IntermediateType = int64_t;
+  using OutputType = int64_t;
+
+  static constexpr bool default_null_behavior_ = false;
+
+  struct AccumulatorType {
+    AccumulatorType(HashStringAllocator*, MismatchedOptionalInputAggregate*);
+    void addInput(HashStringAllocator*, int64_t);
+    bool combine(HashStringAllocator*, exec::optional_arg_type<int64_t>);
+    bool writeIntermediateResult(bool, int64_t&);
+    bool writeFinalResult(bool, int64_t&);
+  };
+};
+
+static_assert(!SimpleAggregateFunction<MismatchedOptionalInputAggregate>);
+
+// Declares setConstantInputs with a parameter the adapter does not pass.
+class MismatchedConstantInputsAggregate {
+ public:
+  using InputType = Row<int64_t>;
+  using IntermediateType = int64_t;
+  using OutputType = int64_t;
+
+  void setConstantInputs(const VectorPtr&);
+
+  struct AccumulatorType {
+    AccumulatorType(HashStringAllocator*, MismatchedConstantInputsAggregate*);
+    void addInput(HashStringAllocator*, int64_t);
+    void combine(HashStringAllocator*, int64_t);
+    bool writeIntermediateResult(int64_t&);
+    bool writeFinalResult(int64_t&);
+  };
+};
+
+static_assert(!SimpleAggregateFunction<MismatchedConstantInputsAggregate>);
+
+FOLLY_POP_WARNING
 
 class SimpleAggregateAdapterTest : public AggregationTestBase {
  protected:
@@ -575,7 +575,8 @@ TEST_F(SimpleAggregateAdapterTest, arrayAggTrackRowSize) {
                               : core::AggregationNode::Step::kSingle,
         std::vector<TypePtr>{BIGINT()},
         ARRAY(BIGINT()),
-        queryConfig);
+        queryConfig,
+        /*constantInputs=*/{});
 
     HashStringAllocator stringAllocator{pool()};
     memory::AllocationPool allocationPool{pool()};
@@ -660,11 +661,19 @@ TEST_F(SimpleAggregateAdapterTest, countNulls) {
 TEST_F(SimpleAggregateAdapterTest, forwardsConstantInputs) {
   auto input = makeRowVector({makeFlatVector<int64_t>({1, 2, 3})});
   auto expected = makeRowVector({makeConstant<int64_t>(36, 1)});
-  // The literal 10 parses to a BIGINT constant -> AggregateInfo discovers it
-  // and calls setConstantInputs(), which the adapter forwards to the simple
-  // function. A cast expression like BIGINT '10' would be rejected by
-  // AggregateInfo, which only accepts field accesses, constants, and lambdas.
+  // simple_const_fwd adds its constant second argument to every input value:
+  // (1 + 10) + (2 + 10) + (3 + 10) = 36.
   testAggregations({input}, {}, {"simple_const_fwd(c0, 10)"}, {expected});
+
+  // The _partial companion wraps the aggregate and must pass the constant on.
+  testAggregationsWithCompanion(
+      {input},
+      [](auto& /*builder*/) {},
+      {},
+      {"simple_const_fwd(c0, 10)"},
+      {{BIGINT(), BIGINT()}},
+      {},
+      {expected});
 }
 
 TEST_F(SimpleAggregateAdapterTest, functionLevelVariables) {

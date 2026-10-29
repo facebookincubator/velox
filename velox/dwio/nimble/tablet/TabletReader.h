@@ -126,6 +126,22 @@ class StripeIdentifier {
   std::shared_ptr<ChunkStatsGroup> chunkStats_;
 };
 
+/// Describes a stripe group from metadata held in memory, so a caller can size
+/// a load before reading the group. TabletReader::stripeGroupDescriptors()
+/// returns these.
+struct StripeGroupDescriptor {
+  /// Index of the stripe group in the file.
+  uint32_t index{0};
+
+  /// Decompressed size of the metadata that loading the group reads: its
+  /// stripe-group section, plus its chunk-stats section when the reader loads
+  /// chunk stats. A section written without its uncompressed size counts its
+  /// stored size.
+  uint64_t metadataSize{0};
+
+  bool operator==(const StripeGroupDescriptor&) const = default;
+};
+
 using index::ClusterIndexBase;
 
 /// Provides read access to a tablet written by a TabletWriter.
@@ -407,9 +423,9 @@ class TabletReader {
   }
 
   /// Returns the physical byte span of `stripe`, covering every stream it
-  /// holds. The writer records it as the bytes appended while writing the
-  /// stripe, so it stays correct for the last stripe, where no following
-  /// stripe offset bounds it.
+  /// holds and their trailers, if the file has any. The writer records it as
+  /// the bytes appended while writing the stripe, so it stays correct for the
+  /// last stripe, where no following stripe offset bounds it.
   uint32_t stripeSize(uint32_t stripe) const {
     NIMBLE_CHECK_LT(stripe, stripeCount_, "Stripe index out of bounds");
     return stripeSizes_[stripe];
@@ -425,13 +441,6 @@ class TabletReader {
   /// Returns the byte size of `streamId` within `stripe`. Returns 0 if the
   /// stream does not exist in this stripe. O(1) point read.
   uint32_t streamSize(const StripeIdentifier& stripe, uint32_t streamId) const;
-
-  /// Returns the recorded checksum of `streamId` within `stripe`, or 0 when
-  /// the file carries no per-stream checksums. Gate on
-  /// properties().hasStreamChecksums() rather than on a non-zero result.
-  /// O(1) point read.
-  uint32_t streamChecksum(const StripeIdentifier& stripe, uint32_t streamId)
-      const;
 
   /// Relative byte location of one stream within a stripe. A zero size means
   /// the stream is absent.
@@ -454,7 +463,26 @@ class TabletReader {
   /// group was written. May be less than the final schema's node count.
   uint32_t streamCount(const StripeIdentifier& stripe) const;
 
+  /// Describes the stripe group of each stripe, in input order. Reads only
+  /// metadata held in memory, so it does no IO.
+  std::vector<StripeGroupDescriptor> stripeGroupDescriptors(
+      std::span<const uint32_t> stripes) const;
+
+  /// Loads the metadata identifying one stripe.
   StripeIdentifier stripeIdentifier(uint32_t stripeIndex) const;
+
+  /// Loads metadata for consecutive stripes, coalescing uncached stripe-group
+  /// and chunk-stat sections. Returns identifiers in stripe order.
+  /// Requires a non-zero stripe count.
+  std::vector<StripeIdentifier> stripeIdentifiers(
+      uint32_t stripeOffset,
+      uint32_t numStripes) const;
+
+  /// Loads metadata for strictly ascending stripes, which need not be
+  /// consecutive, coalescing uncached stripe-group and chunk-stat sections
+  /// into one load. Returns identifiers in input order.
+  std::vector<StripeIdentifier> stripeIdentifiers(
+      std::span<const uint32_t> stripes) const;
 
   /// Returns whether any value stream uses a file or external dictionary.
   bool hasFileOrExternalDictionaries() const;
@@ -564,14 +592,6 @@ class TabletReader {
 
   std::shared_ptr<StripeGroup> loadStripeGroup(uint32_t stripeGroupIndex) const;
 
-  // Enforces that a file whose properties record per-stream checksums has them
-  // in every non-empty stripe group. A group that violates this reads back as
-  // all-zero checksums, which verification would report as storage corruption
-  // rather than as the malformed file it is.
-  void checkStreamChecksumsPresent(
-      const StripeGroup& stripeGroup,
-      uint32_t stripeGroupIndex) const;
-
   // Parses the shared index section and caches its runtime descriptors.
   void initIndexDescriptors();
 
@@ -592,6 +612,15 @@ class TabletReader {
   // Loads stripe group and chunk stats together using coalesced IO via
   // MetadataInput.
   StripeGroupMetadata loadStripeGroupMetadata(uint32_t stripeGroupIndex) const;
+
+  // Loads all missing groups in one metadata I/O plan, preserving input order.
+  std::vector<StripeGroupMetadata> loadStripeGroupMetadata(
+      std::span<const uint32_t> stripeGroupIndices) const;
+
+  // Keeps loaded group and chunk metadata in their respective caches.
+  StripeGroupMetadata cacheStripeGroupMetadata(
+      uint32_t stripeGroupIndex,
+      StripeGroupMetadata metadata) const;
 
   // Optional sections.
   //
@@ -688,7 +717,7 @@ class TabletReader {
 
   // Describes available indexes without materializing their FAISS data.
   std::unique_ptr<index::VectorIndexDirectory> vectorIndexDirectory_;
-  // Keeps immutable indexes strongly cached for the reader lifetime.
+  // Caches immutable indexes according to the configured pinning policy.
   mutable MetadataCache<std::string, const index::VectorIndex>
       vectorIndexCache_;
 

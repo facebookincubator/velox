@@ -33,6 +33,7 @@
 #include "velox/dwio/nimble/encodings/MainlyConstantEncoding.h"
 #include "velox/dwio/nimble/encodings/NullableEncoding.h"
 #include "velox/dwio/nimble/encodings/PFOREncoding.h"
+#include "velox/dwio/nimble/encodings/PartitionedEliasFanoEncoding.h"
 #include "velox/dwio/nimble/encodings/PrefixEncoding.h"
 #include "velox/dwio/nimble/encodings/RLEEncoding.h"
 #include "velox/dwio/nimble/encodings/SharedDictionaryEncoding.h"
@@ -77,13 +78,13 @@ inline int dataTypeSize(DataType type) {
 
 // Uses the stream's serialized type because it may differ in signedness from
 // the visitor type while sharing the same physical width.
-template <typename F>
-auto dispatchEliasFano(Encoding& encoding, F&& callback) {
+template <template <typename> class EncodingTemplate, typename F>
+auto dispatchBySerializedIntegerType(Encoding& encoding, F&& callback) {
   NIMBLE_RETURN_BY_INTEGER_DATA_TYPE(
       encoding.dataType(),
       EncodingDataType,
       std::forward<F>(callback)(
-          static_cast<EliasFanoEncoding<EncodingDataType>&>(encoding)));
+          static_cast<EncodingTemplate<EncodingDataType>&>(encoding)));
 }
 
 template <typename F>
@@ -174,10 +175,19 @@ auto encodingTypeDispatchNonString(Encoding& encoding, F&& f) {
           encoding.dataType());
     case EncodingType::EliasFano:
       if constexpr (isIntegralType<T>()) {
-        return dispatchEliasFano(encoding, std::forward<F>(f));
+        return dispatchBySerializedIntegerType<EliasFanoEncoding>(
+            encoding, std::forward<F>(f));
       }
       NIMBLE_UNREACHABLE(
           "EliasFano encoding only supports integral data types, got {}.",
+          encoding.dataType());
+    case EncodingType::PartitionedEliasFano:
+      if constexpr (isIntegralType<T>()) {
+        return dispatchBySerializedIntegerType<PartitionedEliasFanoEncoding>(
+            encoding, std::forward<F>(f));
+      }
+      NIMBLE_UNREACHABLE(
+          "PartitionedEliasFano encoding only supports integral data types, got {}.",
           encoding.dataType());
     case EncodingType::ALPRD:
       if constexpr (isFloatingPointType<T>()) {

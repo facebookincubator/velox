@@ -17,7 +17,9 @@
 
 #include <glog/logging.h>
 #include <algorithm>
+#include <array>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -62,8 +64,10 @@ bool hasUnspecifiedValueEncoding(const EncodingLayout& layout);
 
 #ifdef NIMBLE_ENCODING_SELECTION_DEBUG
 #define NIMBLE_SELECTION_LOG(stream) LOG(INFO) << stream
+#define NIMBLE_SELECTION_LOG_EVERY_N(n, stream) LOG_EVERY_N(INFO, n) << stream
 #else
 #define NIMBLE_SELECTION_LOG(stream)
+#define NIMBLE_SELECTION_LOG_EVERY_N(n, stream)
 #endif
 
 #define COMMA ,
@@ -138,54 +142,80 @@ class ManualEncodingSelectionPolicy : public EncodingSelectionPolicy<T> {
       std::span<const physicalType> values,
       const Statistics<physicalType>& statistics,
       const Encoding::Options& options) override {
-    if (values.empty()) {
-      return {
+    // Full-input selection always provides an encoding, falling back to
+    // Trivial.
+    return select(values, statistics, values.size(), options).value();
+  }
+
+  /// Returns nullopt when no candidate can estimate the projected sample.
+  std::optional<EncodingSelectionResult> select(
+      std::span<const physicalType> sampleValues,
+      const Statistics<physicalType>& statistics,
+      size_t numValues,
+      const Encoding::Options& options) override {
+    NIMBLE_CHECK_LE(sampleValues.size(), numValues);
+    if (sampleValues.empty()) {
+      NIMBLE_CHECK_EQ(numValues, 0);
+      return EncodingSelectionResult{
           .encodingType = EncodingType::Trivial,
-          .encodingConfig = {},
-          .estimatedSize = std::nullopt,
+          .estimatedSize = 0,
+          .estimatedCost = 0,
       };
     }
 
-    const auto& candidateEncodingReadFactors =
-        this->candidateEncodingReadFactors();
+    // Parent exclusion can leave a child without candidates. Estimate the
+    // Trivial fallback for nested-stream size accounting.
+    static const std::array<std::pair<EncodingType, float>, 1>
+        kFallbackCandidates{{
+            {EncodingType::Trivial, /*readFactor=*/1.0f},
+        }};
+    const std::span<const std::pair<EncodingType, float>>
+        candidateEncodingReadFactors = candidateEncodingReadFactors_.empty()
+        ? std::span<const std::pair<EncodingType, float>>{kFallbackCandidates}
+        : std::span<const std::pair<EncodingType, float>>{
+              candidateEncodingReadFactors_};
 
-    // Fast path: when there are no candidate encodings, fall back to Trivial.
-    if (candidateEncodingReadFactors.empty()) {
-      return {
-          .encodingType = EncodingType::Trivial,
-          .encodingConfig = {},
-          .estimatedSize = std::nullopt,
-      };
-    }
-
-    float minCost = std::numeric_limits<float>::max();
+    double minCost = std::numeric_limits<double>::max();
     EncodingType selectedEncoding = EncodingType::Trivial;
-    std::optional<uint64_t> selectedEstimatedSize;
+    std::optional<uint64_t> sampledEstimateSize;
     // Iterate on all candidate encodings, and pick the encoding with the
     // minimal cost.
     for (const auto& entry : candidateEncodingReadFactors) {
       const auto encodingType = entry.first;
-      const auto estimatedSize =
-          detail::EncodingSizeEstimation<T>::estimateSize(
-              encodingType, values, statistics, options);
-      if (!estimatedSize.has_value()) {
-        NIMBLE_SELECTION_LOG(encodingType << " encoding is incompatible.");
+      const auto estimateResultOr = estimateCandidateSize(
+          encodingType, sampleValues, statistics, numValues, options);
+      if (!estimateResultOr.has_value()) {
+        NIMBLE_SELECTION_LOG_EVERY_N(
+            1'000, encodingType << " encoding is incompatible.");
+        continue;
+      }
+      if (!estimateResultOr->estimatedSize.has_value()) {
         continue;
       }
 
-      // We use read factor weights to raise/lower the favorability of each
-      // encoding.
-      const auto readFactor = entry.second;
-      const auto cost = estimatedSize.value() * readFactor;
+      // Preserve a candidate's supplied cost; otherwise use the ordinary
+      // size-based score with this encoding's read factor.
+      const double readFactor = entry.second;
+      const auto cost = estimateResultOr->estimatedCost.value_or(
+          *estimateResultOr->estimatedSize * readFactor);
       NIMBLE_SELECTION_LOG(
           "Encoding: " << encodingType << ", Size: "
-                       << velox::succinctBytes(estimatedSize.value())
-                       << ", Factor: " << readFactor << ", Cost: " << cost);
+                       << velox::succinctBytes(
+                              estimateResultOr->estimatedSize.value())
+                       << ", Read Factor: " << entry.second
+                       << ", Cost: " << cost);
       if (cost < minCost) {
         minCost = cost;
         selectedEncoding = encodingType;
-        selectedEstimatedSize = estimatedSize;
+        sampledEstimateSize = estimateResultOr->estimatedSize;
       }
+    }
+
+    // Reject projected selection when no candidate can estimate the full size.
+    // Full-input selection can still use the Trivial fallback without
+    // estimates.
+    if (!sampledEstimateSize.has_value() && sampleValues.size() != numValues) {
+      return std::nullopt;
     }
 
     NIMBLE_SELECTION_LOG(
@@ -198,31 +228,40 @@ class ManualEncodingSelectionPolicy : public EncodingSelectionPolicy<T> {
         << folly::join(
                ",",
                std::span<const physicalType>{
-                   values.data(),
+                   sampleValues.data(),
                    std::min(
                        size_t(NIMBLE_ENCODING_SELECTION_DEBUG_MAX_ITEMS),
-                       values.size())})
-        << (values.size() > size_t(NIMBLE_ENCODING_SELECTION_DEBUG_MAX_ITEMS)
+                       sampleValues.size())})
+        << (sampleValues.size() >
+                    size_t(NIMBLE_ENCODING_SELECTION_DEBUG_MAX_ITEMS)
                 ? "..."
                 : ""));
-    if (!compressionOptions_.has_value()) {
-      return {
+    // A fallback with no size estimate has no estimated selection cost.
+    const auto estimatedCost = sampledEstimateSize.has_value()
+        ? std::optional<double>{minCost}
+        : std::nullopt;
+    // Preserve the uncompressed fallback used for an empty candidate list.
+    if (!compressionOptions_.has_value() ||
+        candidateEncodingReadFactors_.empty()) {
+      return EncodingSelectionResult{
           .encodingType = selectedEncoding,
-          .encodingConfig = {},
-          .estimatedSize = selectedEstimatedSize};
+          .estimatedSize = sampledEstimateSize,
+          .estimatedCost = estimatedCost,
+      };
     }
     // Encoding selection optimizes the in-memory layout. Compression is still
     // attempted for leaf data streams to reduce persistent storage size.
-    return {
+    return EncodingSelectionResult{
         .encodingType = selectedEncoding,
-        .encodingConfig = {},
-        .estimatedSize = selectedEstimatedSize,
-        .compressionPolicyFactory = [compressionOptions =
-                                         compressionOptions_.value(),
-                                     selectedEncoding]() {
-          return std::make_unique<ConfiguredCompressionPolicy>(
-              compressionOptions, selectedEncoding);
-        }};
+        .estimatedSize = sampledEstimateSize,
+        .estimatedCost = estimatedCost,
+        .compressionPolicyFactory =
+            [compressionOptions = compressionOptions_.value(),
+             selectedEncoding]() {
+              return std::make_unique<ConfiguredCompressionPolicy>(
+                  compressionOptions, selectedEncoding);
+            },
+    };
   }
 
   EncodingSelectionResult selectNullable(
@@ -250,6 +289,53 @@ class ManualEncodingSelectionPolicy : public EncodingSelectionPolicy<T> {
   }
 
  protected:
+  // Override to customize candidate size and optionally cost, including in
+  // child policies. Selection applies the read factor when cost is omitted.
+  virtual std::optional<EncodingSelectionResult> estimateCandidateSize(
+      EncodingType encodingType,
+      std::span<const physicalType> sampledValues,
+      const Statistics<physicalType>& statistics,
+      size_t numValues,
+      const Encoding::Options& options) {
+    const auto& nestedEncodingReadFactors = nestedEncodingReadFactorsOverride_
+        ? *nestedEncodingReadFactorsOverride_
+        : candidateEncodingReadFactors_;
+    NIMBLE_CHECK_LE(sampledValues.size(), numValues);
+    // Sample statistics describe fewer rows than the requested estimate.
+    const bool needsProjection = numValues != sampledValues.size();
+    if (needsProjection &&
+        !detail::canProjectSizeEstimation<physicalType>(encodingType)) {
+      return std::nullopt;
+    }
+    using Estimator = detail::EncodingSizeEstimation<T>;
+    std::optional<uint64_t> estimatedSize;
+    if (needsProjection) {
+      estimatedSize = Estimator::estimateSize(
+          encodingType,
+          numValues,
+          statistics,
+          options,
+          nestedEncodingReadFactors);
+    } else {
+      estimatedSize = Estimator::estimateSize(
+          *this,
+          encodingType,
+          sampledValues,
+          statistics,
+          options,
+          nestedEncodingReadFactors);
+    }
+    // Unsupported encodings, unsuitable data, or encoding limits can prevent
+    // a size estimate. Skip the candidate when no estimate is available.
+    if (!estimatedSize.has_value()) {
+      return std::nullopt;
+    }
+    return EncodingSelectionResult{
+        .encodingType = encodingType,
+        .estimatedSize = estimatedSize,
+    };
+  }
+
   std::unique_ptr<EncodingSelectionPolicyBase> createImpl(
       EncodingType parentEncodingType,
       NestedEncodingIdentifier nestedEncodingIdentifier,
@@ -284,18 +370,18 @@ class ManualEncodingSelectionPolicy : public EncodingSelectionPolicy<T> {
         ManualEncodingSelectionPolicy,
         std::move(nestedEncodingReadFactors),
         compressionOptions_,
-        nestedEncodingIdentifier,
-        std::nullopt);
+        nestedEncodingIdentifier);
   }
 
  private:
   // Candidate encodings and their read-cost factors. Encoding selection uses
   // estimatedSize * readFactor as the cost, so a lower factor makes an
-  // encoding more likely to be picked. Right now, these represent mostly the
-  // CPU cost to decode values. Trivial is boosted with a lower factor because
-  // it also benefits from applying compression.
-  // See ManualEncodingSelectionPolicyFactory::defaultEncodingReadFactors for
-  // the default.
+  // encoding more likely to be picked.
+  // Read factors represent mostly the CPU
+  // cost to decode values. Trivial is boosted with a lower read factor because
+  // it also benefits from applying compression. See
+  // ManualEncodingSelectionPolicyFactory::defaultEncodingReadFactors for the
+  // default.
   const std::vector<std::pair<EncodingType, float>>
       candidateEncodingReadFactors_;
   // When nullopt, compression is disabled for this policy and all nested

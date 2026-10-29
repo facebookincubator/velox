@@ -128,6 +128,13 @@ WriteOutcome expectedOutcome(
       !columnCase.isNonDecreasing) {
     return WriteOutcome::kNotApplied;
   }
+  // PartitionedEliasFano declines a stream with fewer than two ascending runs,
+  // which plain EliasFano covers. The cycling columns have two runs of at
+  // least 64 rows, the minimum average it accepts.
+  if (encodingType == EncodingType::PartitionedEliasFano &&
+      columnCase.isNonDecreasing) {
+    return WriteOutcome::kNotApplied;
+  }
   // "Huffman encoding requires at least two symbols" -- a single-symbol
   // alphabet has no code to assign, and estimateSize declines it for the same
   // reason.
@@ -352,7 +359,10 @@ TEST_F(
   fuzzer.run();
 
   EXPECT_EQ(fuzzer.numUnfilteredFilesWritten(), kNumUnfilteredRounds);
-  EXPECT_FALSE(fuzzer.coverage().contains(EncodingType::Huffman));
+  // Huffman is a fuzzer candidate now. It reaches the writer only through the
+  // forced rounds, which gate floating-point streams; the unfiltered rounds
+  // still omit it, for the reason in isIntegralOnlyEncoding.
+  EXPECT_TRUE(fuzzer.coverage().contains(EncodingType::Huffman));
   for (const auto encodingType : allCandidateEncodings()) {
     SCOPED_TRACE(toString(encodingType));
     const auto entry = fuzzer.coverage().find(encodingType);

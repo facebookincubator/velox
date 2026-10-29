@@ -85,6 +85,8 @@ bool shouldSkipBySequenceNumber(
 CudfIcebergSplitReader::CudfIcebergSplitReader(
     std::shared_ptr<CudfHiveConnectorSplit> split,
     std::shared_ptr<const velox_iceberg::HiveIcebergSplit> icebergSplit,
+    std::unordered_set<std::string> partitionColumnNames,
+    std::unordered_map<std::string, int32_t> sourceFieldIds,
     std::shared_ptr<const velox_hive::HiveTableHandle> tableHandle,
     const RowTypePtr& outputType,
     const std::vector<std::string>& readColumnNames,
@@ -110,6 +112,8 @@ CudfIcebergSplitReader::CudfIcebergSplitReader(
           ioStats,
           subfieldFilterAst),
       icebergSplit_(std::move(icebergSplit)),
+      partitionColumnNames_(std::move(partitionColumnNames)),
+      sourceFieldIds_(std::move(sourceFieldIds)),
       hiveConfig_(hiveConfig),
       subfieldFilters_(subfieldFilters) {
   VELOX_CHECK_NOT_NULL(subfieldFilters_);
@@ -124,6 +128,7 @@ void CudfIcebergSplitReader::resetSplit() {
   equalityDeleteFileReaders_.clear();
   extraEqualityColumns_.clear();
   injectedColumns_.clear();
+  injectedTimestampType_.reset();
   skipSplit_ = false;
   transformedPushdownFilter_.reset();
   transformedLogicalFilter_.reset();
@@ -180,10 +185,6 @@ const cudf::ast::expression* CudfIcebergSplitReader::deferredFilter() const {
 
 void CudfIcebergSplitReader::prepareSplitInternal(
     dwio::common::RuntimeStats& runtimeStats) {
-  // Base `prepareSplit` already called `resetSplit()` through virtual
-  // dispatch, which for this class clears both the iceberg-specific state
-  // and the base reader state.
-
   // Read file metadata and cache schema information
   cacheSchemaFromMetadata();
 
@@ -283,8 +284,8 @@ void CudfIcebergSplitReader::prepareSubfieldFilter() {
     return;
   }
 
-  // A `PushdownFilterBuilder` may have rebuilt the pushed filter against the
-  // split's physical decimal types. The deferred filter runs over the assembled
+  // The pushed filter may have been rebuilt against the split's physical
+  // decimal types. The deferred filter runs over the assembled
   // table instead, so it has to come from the logical filter. Both are built
   // from the same subfield filters, so both fold the same way.
   auto* logicalFilter = subfieldFilterAst();
@@ -652,8 +653,8 @@ void CudfIcebergSplitReader::setupDeleteFileReaders(
   }
 
   if (deletionVectorFile_ != nullptr) {
-    deletionVectorReader_ =
-        std::make_unique<CudfDeletionVectorReader>(*deletionVectorFile_);
+    deletionVectorReader_ = std::make_unique<CudfDeletionVectorReader>(
+        *deletionVectorFile_, hiveConfig_->config());
   }
 }
 
@@ -773,8 +774,10 @@ void CudfIcebergSplitReader::setupEqualityColumnKeys() {
   for (const auto& deleteFile : equalityDeleteFiles_) {
     for (size_t i = 0; i < deleteFile.keyNames.size(); ++i) {
       const auto& columnName = deleteFile.keyNames[i];
-      if (icebergSplit_->partitionKeys.contains(columnName) or
-          not fileColumnNames_.contains(columnName)) {
+      // A physical key column is read even if a partition field shares its
+      // name. Keys absent from the file, including Hive partition columns,
+      // are unsupported.
+      if (not fileColumnNames_.contains(columnName)) {
         VELOX_NYI(
             "Equality deletes on partition columns or columns "
             "missing from the data file are not yet supported: {}",
@@ -808,18 +811,29 @@ void CudfIcebergSplitReader::adaptColumns() {
         iter != split_->infoColumns.end()) {
       injectedColumns_.push_back({i, fieldName, iter->second, veloxType});
       injectedNames.insert(fieldName);
-    } else if (auto it = icebergSplit_->partitionKeys.find(fieldName);
-               it != icebergSplit_->partitionKeys.end()) {
-      // Partition columns: Hive migrated table. In Hive-written data
-      // files, partition column values are stored in partition metadata
-      // rather than in the data file itself, following Hive's
-      // partitioning convention.
-      injectedColumns_.push_back({i, fieldName, it->second, veloxType});
-      injectedNames.insert(fieldName);
     } else if (not fileColumnNames_.contains(fieldName)) {
-      // Schema evolution: Column was added after the data file was written
-      // and doesn't exist in older data files.
-      injectedColumns_.push_back({i, fieldName, std::nullopt, veloxType});
+      // Hive-migrated partition columns are absent from data files and take
+      // the split's partition value. The file's identity partition value is
+      // keyed by source field ID and applies even if the current spec no
+      // longer partitions by this column. Any other missing column was added
+      // after the file was written and reads as NULL, even if a transformed
+      // partition field shares its name.
+      auto partitionValue = std::optional<std::string>{};
+      const auto& identityKeys = icebergSplit_->identityPartitionKeys;
+      const auto fieldIdIter = sourceFieldIds_.find(fieldName);
+      const auto identityIter = fieldIdIter == sourceFieldIds_.end()
+          ? identityKeys.end()
+          : identityKeys.find(fieldIdIter->second);
+      if (identityIter != identityKeys.end()) {
+        partitionValue = identityIter->second;
+      } else if (partitionColumnNames_.contains(fieldName)) {
+        if (const auto partitionIter =
+                icebergSplit_->partitionKeys.find(fieldName);
+            partitionIter != icebergSplit_->partitionKeys.end()) {
+          partitionValue = partitionIter->second;
+        }
+      }
+      injectedColumns_.push_back({i, fieldName, partitionValue, veloxType});
       injectedNames.insert(fieldName);
     }
   }
@@ -847,6 +861,8 @@ void CudfIcebergSplitReader::adaptColumns() {
         [](const auto& a, const auto& b) {
           return a.outputIndex < b.outputIndex;
         });
+    injectedTimestampType_ = constantTimestampType(
+        cudfHiveConfig(), connectorQueryCtx_->sessionProperties());
   }
 }
 
@@ -867,7 +883,7 @@ std::unique_ptr<cudf::scalar> CudfIcebergSplitReader::makeInjectedScalar(
     return cudf_velox::makeScalarFromConstantExpr(
         std::make_shared<core::ConstantTypedExpr>(constant),
         connectorQueryCtx_->memoryPool(),
-        std::nullopt,
+        col.veloxType->isTimestamp() ? injectedTimestampType_ : std::nullopt,
         stream_);
   } catch (const std::exception& e) {
     VELOX_USER_FAIL(

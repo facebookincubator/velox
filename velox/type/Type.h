@@ -507,6 +507,9 @@ class ScalarType : public CanProvideCustomComparisonType<KIND> {
   // TODO: This and all similar functions should be constexpr starting from
   // C++23. In such case similar places but with type parameters can be
   // constexpr too.
+  //
+  // Types derived from a scalar type (DATE, JSON, DECIMAL, ...) delete
+  // create(); inherited, it would return this base type. Use their get().
   static std::shared_ptr<const ScalarType<KIND>> create() {
     static constexpr ScalarType<KIND> kInstance;
     return {std::shared_ptr<const ScalarType<KIND>>{}, &kInstance};
@@ -529,6 +532,8 @@ TypePtr DECIMAL(uint8_t precision, uint8_t scale);
 template <TypeKind KIND>
 class DecimalType : public ScalarType<KIND> {
  public:
+  static std::shared_ptr<const DecimalType> create() = delete;
+
   static_assert(KIND == TypeKind::BIGINT || KIND == TypeKind::HUGEINT);
   static constexpr uint8_t kMaxPrecision = KIND == TypeKind::BIGINT ? 18 : 38;
   static constexpr uint8_t kMinPrecision = KIND == TypeKind::BIGINT ? 1 : 19;
@@ -1176,6 +1181,8 @@ using VarbinaryType = ScalarType<TypeKind::VARBINARY>;
 // Timestamp type in UTC that is not subject to session timezone adjustment.
 class TimestampUtcType final : public TimestampType {
  public:
+  static std::shared_ptr<const TimestampUtcType> create() = delete;
+
   static std::shared_ptr<const TimestampUtcType> get() {
     VELOX_CONSTEXPR_SINGLETON TimestampUtcType kInstance;
     return {std::shared_ptr<const TimestampUtcType>{}, &kInstance};
@@ -1214,6 +1221,8 @@ class IntervalDayTimeType final : public BigintType {
   IntervalDayTimeType() = default;
 
  public:
+  static std::shared_ptr<const IntervalDayTimeType> create() = delete;
+
   static std::shared_ptr<const IntervalDayTimeType> get() {
     VELOX_CONSTEXPR_SINGLETON IntervalDayTimeType kInstance;
     return {std::shared_ptr<const IntervalDayTimeType>{}, &kInstance};
@@ -1259,6 +1268,8 @@ class IntervalYearMonthType final : public IntegerType {
   IntervalYearMonthType() = default;
 
  public:
+  static std::shared_ptr<const IntervalYearMonthType> create() = delete;
+
   static std::shared_ptr<const IntervalYearMonthType> get() {
     VELOX_CONSTEXPR_SINGLETON IntervalYearMonthType kInstance;
     return {std::shared_ptr<const IntervalYearMonthType>{}, &kInstance};
@@ -1302,6 +1313,8 @@ class DateType final : public IntegerType {
   DateType() = default;
 
  public:
+  static std::shared_ptr<const DateType> create() = delete;
+
   static std::shared_ptr<const DateType> get() {
     VELOX_CONSTEXPR_SINGLETON DateType kInstance;
     return {std::shared_ptr<const DateType>{}, &kInstance};
@@ -1363,6 +1376,8 @@ VELOX_DECLARE_ENUM_NAME(TimePrecision);
 template <TimePrecision kPrecision, bool kLocalTime>
 class TimeType : public BigintType {
  public:
+  static std::shared_ptr<const TimeType> create() = delete;
+
   std::string toString() const override {
     return name();
   }

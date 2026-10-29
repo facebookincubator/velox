@@ -32,6 +32,8 @@
 
 #include <cstdint>
 
+#include "velox/common/base/Macros.h"
+
 namespace facebook::velox {
 
 /// Result of converting an epoch-day to a Gregorian (year, month, day).
@@ -95,7 +97,7 @@ inline constexpr int32_t kYearMax = 2'906'945;
 ///   M     | monthFromMarch       | month index counted from March
 ///   D     | dayOfMonthZeroBased  | zero-based day-of-month
 ///   J     | janFebAdjust         | 1 if Jan/Feb of next calendar year
-inline YearMonthDay daysToYmd(int32_t dayNumber) {
+VELOX_GPU_COMPATIBLE inline YearMonthDay daysToYmd(int32_t dayNumber) {
   using namespace fast_date;
   const uint32_t shiftedDay = static_cast<uint32_t>(dayNumber) + kEpochOffset;
   // Century.
@@ -141,7 +143,8 @@ inline YearMonthDay daysToYmd(int32_t dayNumber) {
 ///   y_star | yearDays             | days from era start to year start
 ///   m_star | monthDays            | days from year start to month start
 ///   N      | shiftedRataDie       | shifted day-since-epoch (pre-offset)
-inline int32_t ymdToDays(int32_t year, uint32_t month, uint32_t day) {
+VELOX_GPU_COMPATIBLE inline int32_t
+ymdToDays(int32_t year, uint32_t month, uint32_t day) {
   using namespace fast_date;
   const uint32_t janFebAdjust = month <= 2u ? 1u : 0u;
   const uint32_t shiftedYear =
