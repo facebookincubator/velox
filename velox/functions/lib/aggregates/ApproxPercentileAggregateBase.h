@@ -16,6 +16,8 @@
 
 #pragma once
 
+#include <array>
+
 #include "velox/common/base/RandomUtil.h"
 #include "velox/common/memory/HashStringAllocator.h"
 #include "velox/exec/Aggregate.h"
@@ -90,10 +92,10 @@ struct KllSketchAccumulator {
             getRandomSeed(fixedRandomSeed)),
         largeCountValues_(StlAllocator<std::pair<T, int64_t>>(allocator)) {}
 
-  /// Sets the accuracy of the sketch using the given epsilon value.
-  /// The epsilon value is a double in (0, 1] representing the error bound.
-  void setAccuracy(double epsilon) {
-    sketch_.setK(functions::kll::kFromEpsilon(epsilon));
+  /// Sets the K of the sketch, which accuracy policies derive from the
+  /// accuracy argument. Cannot change K after a value is appended.
+  void setK(uint32_t k) {
+    sketch_.setK(k);
   }
 
   void append(T value) {
@@ -240,49 +242,57 @@ class ApproxPercentileAggregateBase : public exec::Aggregate {
       const SelectivityVector& rows,
       std::vector<VectorPtr>& args,
       VectorPtr& result) const override {
-    auto* self = const_cast<ApproxPercentileAggregateBase*>(this);
+    DecodedVector decodedValue;
+    DecodedVector decodedWeight;
     if (rows.hasSelections()) {
-      self->decodeArguments(rows, args);
+      DecodedVector decodedAccuracy;
+      decodeArguments(rows, args, decodedValue, decodedWeight, decodedAccuracy);
     }
-    const auto numRows = rows.size();
 
-    std::vector<detail::KllSketch<T, std::allocator<T>>> sketches;
-    sketches.reserve(numRows);
-    detail::KllSketchAccumulator<T> kProbe(allocator_, fixedRandomSeed_);
-    AccuracyPolicy::setOnAccumulator(&kProbe, self->accuracy_);
-    const auto sketchK = kProbe.getSketch().k();
-
-    for (vector_size_t row = 0; row < numRows; ++row) {
-      if (!rows.isValid(row) || self->decodedValue_.isNullAt(row)) {
-        sketches.emplace_back();
-        continue;
-      }
-
-      int64_t count = 1;
-
-      if constexpr (kHasWeight) {
-        if (self->hasWeight_) {
-          if (self->decodedWeight_.isNullAt(row)) {
-            sketches.emplace_back();
-            continue;
+    // The sketch of one value repeated 'count' times holds one copy of the
+    // value on level i for each bit i set in 'count', the same as
+    // KllSketch::fromRepeatedValue() builds. Writing it from these buffers
+    // avoids allocating a sketch per row. checkWeight() bounds 'count' to
+    // kMaxLevel bits, so the buffers fit every row.
+    const uint32_t k = AccuracyPolicy::toK(accuracy_);
+    std::array<T, functions::kll::detail::kMaxLevel> items;
+    std::array<uint32_t, functions::kll::detail::kMaxLevel + 1> levels;
+    writeIntermediate(
+        rows.size(),
+        [&](vector_size_t row) -> detail::KllView<T> {
+          if (!rows.isValid(row) || decodedValue.isNullAt(row)) {
+            return {};
           }
-          count = self->decodedWeight_.template valueAt<int64_t>(row);
-          self->checkWeight(count);
-        }
-      }
-
-      const auto value = self->decodedValue_.template valueAt<T>(row);
-      sketches.push_back(
-          detail::KllSketch<T, std::allocator<T>>::fromRepeatedValue(
-              value,
-              count,
-              sketchK,
-              std::allocator<T>(),
-              detail::getRandomSeed(fixedRandomSeed_)));
-    }
-
-    auto resultPtr = &result;
-    self->writeIntermediateFromSketches(sketches, numRows, resultPtr);
+          int64_t count = 1;
+          if constexpr (kHasWeight) {
+            if (hasWeight_) {
+              if (decodedWeight.isNullAt(row)) {
+                return {};
+              }
+              count = decodedWeight.valueAt<int64_t>(row);
+              checkWeight(count);
+            }
+          }
+          const auto value = decodedValue.valueAt<T>(row);
+          uint32_t numItems = 0;
+          uint32_t numLevels = 0;
+          levels[0] = 0;
+          for (auto remaining = count; remaining > 0; remaining >>= 1) {
+            if (remaining & 1) {
+              items[numItems++] = value;
+            }
+            levels[++numLevels] = numItems;
+          }
+          return {
+              .k = k,
+              .n = static_cast<size_t>(count),
+              .minValue = value,
+              .maxValue = value,
+              .items = {items.data(), numItems},
+              .levels = {levels.data(), numLevels + 1},
+          };
+        },
+        &result);
   }
 
   void addRawInput(
@@ -447,7 +457,10 @@ class ApproxPercentileAggregateBase : public exec::Aggregate {
               fixedRandomSeed_));
     }
 
-    writeIntermediateFromSketches(sketches, numGroups, result);
+    writeIntermediate(
+        numGroups,
+        [&](vector_size_t i) { return sketches[i].toView(); },
+        result);
   }
 
  protected:
@@ -455,9 +468,12 @@ class ApproxPercentileAggregateBase : public exec::Aggregate {
   const bool hasAccuracy_;
   const std::optional<uint32_t> fixedRandomSeed_;
 
-  AccuracyIntermediateType accuracy_{AccuracyPolicy::kDefaultAccuracy};
+  // Accuracy and percentiles are constant arguments. They are mutable because
+  // the const toIntermediate() records them from its first input, so that
+  // later inputs can be checked against them.
+  mutable AccuracyIntermediateType accuracy_{AccuracyPolicy::kDefaultAccuracy};
 
-  std::optional<Percentiles> percentiles_;
+  mutable std::optional<Percentiles> percentiles_;
   DecodedVector decodedValue_;
   DecodedVector decodedWeight_;
   DecodedVector decodedAccuracy_;
@@ -491,22 +507,31 @@ class ApproxPercentileAggregateBase : public exec::Aggregate {
   void decodeArguments(
       const SelectivityVector& rows,
       const std::vector<VectorPtr>& args) {
+    decodeArguments(
+        rows, args, decodedValue_, decodedWeight_, decodedAccuracy_);
+  }
+
+  void decodeArguments(
+      const SelectivityVector& rows,
+      const std::vector<VectorPtr>& args,
+      DecodedVector& decodedValue,
+      DecodedVector& decodedWeight,
+      DecodedVector& decodedAccuracy) const {
     size_t argIndex = 0;
-    decodedValue_.decode(*args[argIndex++], rows, true);
+    decodedValue.decode(*args[argIndex++], rows, true);
     if (kHasWeight && hasWeight_) {
-      decodedWeight_.decode(*args[argIndex++], rows, true);
+      decodedWeight.decode(*args[argIndex++], rows, true);
     }
     checkSetPercentile(rows, *args[argIndex++]);
     if (hasAccuracy_) {
-      decodedAccuracy_.decode(*args[argIndex++], rows, true);
-      checkSetAccuracy(rows);
+      decodedAccuracy.decode(*args[argIndex++], rows, true);
+      checkSetAccuracy(rows, decodedAccuracy);
     }
     VELOX_CHECK_EQ(argIndex, args.size());
   }
 
-  void checkSetPercentile(
-      const SelectivityVector& rows,
-      const BaseVector& vec) {
+  void checkSetPercentile(const SelectivityVector& rows, const BaseVector& vec)
+      const {
     DecodedVector decoded(vec, rows);
 
     auto* base = decoded.base();
@@ -558,7 +583,7 @@ class ApproxPercentileAggregateBase : public exec::Aggregate {
       bool isArray,
       const DecodedVector& percentiles,
       vector_size_t offset,
-      vector_size_t len) {
+      vector_size_t len) const {
     if (!percentiles_) {
       VELOX_USER_CHECK_GT(len, 0, "Percentile cannot be empty");
       percentiles_ = {
@@ -617,11 +642,13 @@ class ApproxPercentileAggregateBase : public exec::Aggregate {
     }
   }
 
-  void checkSetAccuracy(const SelectivityVector& rows) {
+  void checkSetAccuracy(
+      const SelectivityVector& rows,
+      DecodedVector& decodedAccuracy) const {
     if (!hasAccuracy_) {
       return;
     }
-    AccuracyPolicy::checkSetAccuracy(decodedAccuracy_, rows, accuracy_);
+    AccuracyPolicy::checkSetAccuracy(decodedAccuracy, rows, accuracy_);
   }
 
   static void checkWeight(int64_t weight) {
@@ -842,9 +869,16 @@ class ApproxPercentileAggregateBase : public exec::Aggregate {
     }
   }
 
-  void writeIntermediateFromSketches(
-      const std::vector<detail::KllSketch<T, std::allocator<T>>>& sketches,
-      int32_t numGroups,
+  // Writes one intermediate row per group into 'result'. 'getView(i)' returns
+  // the sketch of group i, with n == 0 for a null group. It is called twice
+  // per group, first to size the items and levels arrays and then to copy
+  // them, and its returned view only needs to stay valid until the next call.
+  // Writes all nulls when 'percentiles_' is not set, which happens when all
+  // inputs are null.
+  template <typename GetView>
+  void writeIntermediate(
+      vector_size_t numGroups,
+      GetView getView,
       VectorPtr* result) const {
     VELOX_CHECK(result);
     auto rowResult = (*result)->as<RowVector>();
@@ -929,8 +963,8 @@ class ApproxPercentileAggregateBase : public exec::Aggregate {
     auto levelsElements = levels->elements()->asFlatVector<int32_t>();
     size_t itemsCount = 0;
     vector_size_t levelsCount = 0;
-    for (auto& sketch : sketches) {
-      auto v = sketch.toView();
+    for (vector_size_t i = 0; i < numGroups; ++i) {
+      auto v = getView(i);
       itemsCount += v.items.size();
       levelsCount += v.levels.size();
     }
@@ -944,8 +978,8 @@ class ApproxPercentileAggregateBase : public exec::Aggregate {
     auto rawLevels = levelsElements->mutableRawValues();
     itemsCount = 0;
     levelsCount = 0;
-    for (int i = 0; i < sketches.size(); ++i) {
-      auto v = sketches[i].toView();
+    for (vector_size_t i = 0; i < numGroups; ++i) {
+      auto v = getView(i);
       if (v.n == 0) {
         rowResult->setNull(i, true);
       } else {
