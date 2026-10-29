@@ -360,7 +360,9 @@ void ChunkedDecoder::seekToChunk(
 }
 
 std::optional<size_t> ChunkedDecoder::estimateRowCount() const {
-  if (encoding_ != nullptr) {
+  // Peek at the chunk header only at the stream start. With a chunk open, the
+  // input is past its header, and after a skip it can be at the stream end.
+  if (encoding_ != nullptr || rowPosition_ != 0) {
     return rowCountEstimate_;
   }
   constexpr int kChunkCompressionTypeOffset = 4;
@@ -382,7 +384,7 @@ std::optional<size_t> ChunkedDecoder::estimateRowCount() const {
 }
 
 std::optional<size_t> ChunkedDecoder::estimateStringDataSize() const {
-  if (encoding_) {
+  if (encoding_ || rowPosition_ != 0) {
     return stringDataSizeEstimate_;
   }
   constexpr int kChunkCompressionTypeOffset{4};

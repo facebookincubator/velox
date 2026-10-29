@@ -289,7 +289,9 @@ class ChunkedDecoder {
   /// A temporary solution to estimate row size before column statistics are
   /// implemented.  This is based on the first chunk so is only accurate when
   /// there is a single chunk in the stripe, or all the first chunks of all
-  /// streams are aligned at the same row count (unlikely).
+  /// streams are aligned at the same row count (unlikely). It reads a chunk
+  /// header only before anything is read or skipped, and returns its last value
+  /// after that.
   ///
   /// TODO: Remove after column statistics are added.
   std::optional<size_t> estimateRowCount() const;
