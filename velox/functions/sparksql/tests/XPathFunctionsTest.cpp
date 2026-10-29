@@ -302,6 +302,64 @@ TEST_F(XPathFunctionsTest, xpathNumberStringConversions) {
   EXPECT_EQ(xpathString("<a>0.0000001</a>", "string(number(a))"), "0.0000001");
 }
 
+TEST_F(XPathFunctionsTest, numericStringCoercions) {
+  const std::string xml = "<a><b>1e2</b><b>2.5</b></a>";
+  for (const auto& path :
+       {"number(a/b[1])",
+        "number('1e2')",
+        "number('1E2')",
+        "number('1e-2')",
+        "number('0.5e+2')",
+        "a/b[1] + 1",
+        "a/b[1] - 1",
+        "a/b[1] * 2",
+        "a/b[1] div 2",
+        "a/b[1] mod 2",
+        "-a/b[1]",
+        "sum(a/b)",
+        "floor(a/b[1])",
+        "ceiling(a/b[1])",
+        "round(a/b[1])"}) {
+    expectBoth(xml, path, "NaN", false);
+  }
+  for (const auto& path :
+       {"a/b[1] = 100",
+        "a/b[1] < 100",
+        "a/b[1] <= 100",
+        "a/b[1] > 0",
+        "a/b[1] >= 0",
+        "100 = a/b[1]",
+        "a/b[1] < a/b[2]",
+        "number('1e2') = 100"}) {
+    expectBoth(xml, path, "false", false);
+  }
+  expectBoth(xml, "a/b[1] != 100", "true", true);
+  expectBoth(xml, "a/b[1] = '1e2'", "true", true);
+  expectBoth(xml, "a/b[1] = a/b[1]", "true", true);
+  expectBoth(xml, "a/b[1] = true()", "true", true);
+  expectBoth(xml, "a/b[1] <= true()", "true", true);
+  expectBoth(xml, "true() <= a/b[1]", "true", true);
+  expectBoth(xml, "a/missing != number('1e2')", "false", false);
+  expectBoth(xml, "a/b[1]", "1e2", true);
+  expectBoth(xml, "'1e2'", "1e2", true);
+  expectBoth(xml, "a/b[number(.) = 100]", "", false);
+  expectBoth(xml, "a/b[number() = 2.5]", "2.5", true);
+  expectBoth(xml, "number(' -.5 ')", "-0.5", true);
+  expectBoth(xml, "sum(a/b[2]) + 1", "3.5", true);
+  expectBoth(xml, "substring('abc', '1e2', 1)", "", false);
+  expectUserErrorBoth(xml, "_velox_numeric(1,2,10)", "Invalid XPath");
+  const auto input = makeRowVector(
+      {makeFlatVector<std::string>({xml, xml, xml}),
+       makeFlatVector<std::string>(
+           {"number(a/b[1])", "a/b[1] = 100", "a/b[1]"})});
+  velox::test::assertEqualVectors(
+      makeFlatVector<std::string>({"NaN", "false", "1e2"}),
+      evaluate("xpath_string(c0, c1)", input));
+  velox::test::assertEqualVectors(
+      makeFlatVector<bool>({false, false, true}),
+      evaluate("xpath_boolean(c0, c1)", input));
+}
+
 TEST_F(XPathFunctionsTest, invalidXmlThrows) {
   // Spark's UDFXPathUtil throws on malformed XML, so these raise user errors
   // instead of returning NULL.
@@ -1303,6 +1361,41 @@ TEST_F(XPathFunctionsTest, unicodeContentRoundTrips) {
     EXPECT_EQ(xpathString("<a>&#xE9;&#x20AC;&#x1F600;</a>", "a"), all);
     EXPECT_EQ(xpathString("<a b=\"&#233;\"/>", "a/@b"), e);
   }
+}
+
+TEST_F(XPathFunctionsTest, utf16StringFunctions) {
+  const std::string emoji = "\xf0\x9f\x98\x80";
+  const std::string nextEmoji = "\xf0\x9f\x98\x81";
+  const auto xml = "<a>A" + emoji + "B</a>";
+  for (int pass = 0; pass < 2; ++pass) {
+    expectBoth(xml, "string-length(a)", "4", true);
+    expectBoth(xml, "string-length(a) = 4", "true", true);
+    expectBoth(xml, "substring(a, 2, 2)", emoji, true);
+    expectBoth(xml, "substring(a, 4)", "B", true);
+    expectBoth(xml, "substring(a, 1, 2)", "A?", true);
+    expectBoth(xml, "substring(a, 3, 1)", "?", true);
+    expectBoth(xml, "substring(a, 0 div 0)", "A" + emoji + "B", true);
+    expectBoth(xml, "substring(a, 2, -1 div 0)", emoji + "B", true);
+    expectBoth(
+        xml, "substring(a,(1 div 2)-(1 div 18014398509481984),2)", "A", true);
+    expectBoth(xml, "concat(substring(a,2,1),substring(a,3,1))", emoji, true);
+    expectBoth(xml, "contains(a, substring(a,2,1))", "true", true);
+    expectBoth(xml, "substring-before(a, substring(a,3,1))", "A?", true);
+    expectBoth(
+        xml,
+        "translate('" + emoji + nextEmoji + "', '" + emoji + nextEmoji +
+            "', 'ab')",
+        "aba",
+        true);
+  }
+  expectUserErrorBoth(xml, "substring(a, 2, -1)", "Invalid XPath");
+  const auto input = makeRowVector(
+      {makeFlatVector<std::string>({xml, xml, xml}),
+       makeFlatVector<std::string>(
+           {"string-length(a)", "substring(a,2,2)", "string-length(a)=4"})});
+  velox::test::assertEqualVectors(
+      makeFlatVector<std::string>({"4", emoji, "true"}),
+      evaluate("xpath_string(c0, c1)", input));
 }
 
 TEST_F(XPathFunctionsTest, whitespaceNormalization) {

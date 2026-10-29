@@ -58,6 +58,11 @@ Compatibility notes
   exponent, including numbers converted inside XPath string functions. As with
   other floating-point operations, the final decimal digits can differ between
   libxml2 and JVM versions.
+  Numeric strings use the JDK's decimal grammar; scientific notation converts
+  to NaN, including in arithmetic, comparisons, and ``sum()``.
+* String functions use JDK UTF-16 code-unit indexing, including supplementary
+  characters. Unpaired surrogates produced by ``substring()`` are preserved
+  inside XPath expressions and replaced with ``?`` in the final UTF-8 result.
 
 .. spark:function:: xpath_boolean(xml, path) -> boolean
 
