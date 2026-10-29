@@ -17,6 +17,8 @@
 #include "velox/exec/Cursor.h"
 
 #include <folly/OperationCancelled.h>
+#include <folly/executors/CPUThreadPoolExecutor.h>
+#include <folly/synchronization/Baton.h>
 #include <barrier>
 #include <thread>
 
@@ -27,6 +29,27 @@
 using namespace facebook::velox;
 
 namespace facebook::velox::exec::test {
+
+// Runs functions on a CPU thread pool and synchronizes their start with the
+// caller.
+class EagerExecutor : public folly::Executor {
+ public:
+  explicit EagerExecutor(size_t numThreads) : executor_{numThreads} {}
+
+  // Returns after 'function' begins, without waiting for it to finish.
+  void add(folly::Func function) override {
+    auto started = std::make_shared<folly::Baton<>>();
+    executor_.add([started, function = std::move(function)]() mutable {
+      started->post();
+      function();
+    });
+    started->wait();
+  }
+
+ private:
+  // Runs scheduled functions on separate threads.
+  folly::CPUThreadPoolExecutor executor_;
+};
 
 class CursorTest : public OperatorTestBase {
  protected:
@@ -129,6 +152,21 @@ TEST_F(CursorTest, asyncDrainParallelMultipleProducers) {
   // multi-producer wakeup path and fail here loudly.
   EXPECT_EQ(cursor->task()->numOutputDrivers(), kNumDrivers);
   EXPECT_EQ(drainAsync(*cursor), kNumDrivers * kRowsPerDriver);
+}
+
+TEST_F(CursorTest, producerCountInitialization) {
+  constexpr int32_t kNumDrivers = 32;
+  auto executor = std::make_shared<EagerExecutor>(kNumDrivers);
+  CursorParameters params;
+  params.planNode =
+      PlanBuilder()
+          .values(std::vector<RowVectorPtr>{}, /*parallelizable=*/true)
+          .planNode();
+  params.queryCtx = core::QueryCtx::create(executor.get());
+  params.maxDrivers = kNumDrivers;
+
+  auto cursor = TaskCursor::create(params);
+  EXPECT_EQ(drainAsync(*cursor), 0);
 }
 
 TEST_F(CursorTest, setErrorConcurrentWithMoveNext) {

@@ -17,6 +17,7 @@
 #include <gtest/gtest.h>
 #include "velox/dwio/nimble/common/Buffer.h"
 
+#include <fmt/format.h>
 #include "velox/dwio/nimble/common/tests/GTestUtils.h"
 #ifdef NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
 #include "velox/dwio/nimble/encodings/subintsplit/SplitBoundaries.h"
@@ -25,6 +26,7 @@
 #include "velox/dwio/nimble/encodings/SharedDictionaryEncoding.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
+#include "velox/dwio/nimble/encodings/tests/EncodingLayoutTestHelper.h"
 #include "velox/dwio/nimble/encodings/tests/SharedDictionaryEncodingTestUtils.h"
 #include "velox/dwio/nimble/tools/EncodingUtilities.h"
 
@@ -389,6 +391,35 @@ TEST(EncodingLayoutTests, blockBitPacking) {
   EXPECT_TRUE(captured.child(2).has_value());
 }
 
+TEST(EncodingLayoutTests, partitionedEliasFano) {
+  // PartitionedEliasFano nests three directories (partition starts, partition
+  // bases, group starts). Its group streams are always EliasFano, so capture
+  // records only the directories.
+  nimble::EncodingLayout pefLayout{
+      nimble::EncodingType::PartitionedEliasFano,
+      {},
+      nimble::CompressionType::Uncompressed,
+      {std::nullopt, std::nullopt, std::nullopt}};
+  testSerialization(pefLayout);
+
+  // Three ascending runs of 300 rows, each starting below the previous end.
+  std::vector<uint32_t> data;
+  data.reserve(900);
+  for (uint32_t run = 0; run < 3; ++run) {
+    for (uint32_t i = 0; i < 300; ++i) {
+      data.push_back(run * 7 + i * 3);
+    }
+  }
+
+  auto captured = encodeAndCapture<uint32_t>(pefLayout, data);
+  ASSERT_EQ(
+      captured.encodingType(), nimble::EncodingType::PartitionedEliasFano);
+  ASSERT_EQ(captured.childrenCount(), 3);
+  EXPECT_TRUE(captured.child(0).has_value());
+  EXPECT_TRUE(captured.child(1).has_value());
+  EXPECT_TRUE(captured.child(2).has_value());
+}
+
 TEST(EncodingLayoutTests, sparseBool) {
   nimble::EncodingLayout expected{
       nimble::EncodingType::SparseBool,
@@ -699,6 +730,56 @@ TEST(EncodingLayoutTests, nullable) {
       expected.child(nimble::EncodingIdentifiers::Nullable::Data),
       actual.first,
       /*compressionMayBeRedirected=*/false);
+}
+
+namespace {
+
+// Encodes 'data' with createNullableFromCustomLayout, using a Constant layout
+// for the non-null values, then reads every row back.
+template <typename T>
+void testNullableCustomLayout(const std::vector<std::optional<T>>& data) {
+  auto pool = velox::memory::deprecatedAddDefaultLeafMemoryPool();
+  nimble::Buffer buffer{*pool};
+  auto encoding = nimble::createNullableFromCustomLayout<T>(
+      nimble::ConstantEnc{}, data, *pool, buffer);
+
+  ASSERT_TRUE(encoding->isNullable());
+  ASSERT_EQ(nimble::TypeTraits<T>::dataType, encoding->dataType());
+  ASSERT_EQ(data.size(), encoding->rowCount());
+
+  // Null rows materialize as the default value.
+  std::vector<T> expected;
+  expected.reserve(data.size());
+  for (const auto& value : data) {
+    expected.push_back(value.value_or(T{}));
+  }
+  std::vector<T> actual(data.size());
+  encoding->materialize(static_cast<uint32_t>(data.size()), actual.data());
+  ASSERT_EQ(expected, actual);
+
+  const auto numNonNull =
+      std::count_if(data.begin(), data.end(), [](const auto& value) {
+        return value.has_value();
+      });
+  // The non-null values are encoded as the physical type of T.
+  using PhysicalType = typename nimble::TypeTraits<T>::physicalType;
+  const auto expectedChild = fmt::format(
+      "non-null child:\n    {}<{}> rowCount={}",
+      nimble::toString(nimble::EncodingType::Constant),
+      nimble::toString(nimble::TypeTraits<PhysicalType>::dataType),
+      numNonNull);
+  ASSERT_NE(std::string::npos, encoding->debugString().find(expectedChild))
+      << encoding->debugString();
+}
+
+} // namespace
+
+TEST(EncodingLayoutTests, nullableCustomLayout) {
+  // Covers uint32_t, which is its own physical type, and int64_t and double,
+  // which both map to uint64_t.
+  testNullableCustomLayout<uint32_t>({7, std::nullopt, 7, 7, std::nullopt});
+  testNullableCustomLayout<int64_t>({-7, std::nullopt, -7, -7, std::nullopt});
+  testNullableCustomLayout<double>({2.5, std::nullopt, 2.5, 2.5, std::nullopt});
 }
 
 #ifdef NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS

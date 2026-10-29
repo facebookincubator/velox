@@ -29,11 +29,7 @@
 #include "velox/common/file/Region.h"
 #include "velox/common/io/Options.h"
 #include "velox/common/memory/Memory.h"
-
-namespace facebook::velox::cache {
-class AsyncDataCache;
-class CachePin;
-} // namespace facebook::velox::cache
+#include "velox/dwio/nimble/tablet/BlockCache.h"
 
 namespace facebook::nimble {
 
@@ -46,7 +42,7 @@ namespace facebook::nimble {
 ///
 /// Implementations:
 ///   - DirectDataInput: coalesced I/O, no caching
-///   - CachedDataInput: whole-group caching through AsyncDataCache
+///   - CachedDataInput: whole-group caching through a BlockCache
 class DataInput {
  public:
   using Region = velox::common::Region;
@@ -270,7 +266,7 @@ class DirectDataInput : public DataInput {
 /// zero-copy slices into their group's cached entry.
 ///
 /// NOTE: CachedDataInput is not thread-safe. Each thread must use its own
-/// instance, while the underlying AsyncDataCache may be shared.
+/// instance, while the underlying BlockCache may be shared.
 class CachedDataInput final : public DataInput {
  public:
   /// Configures the cache, source-file identity, and memory accounting.
@@ -278,7 +274,7 @@ class CachedDataInput final : public DataInput {
     /// Pool used for direct-I/O staging buffers.
     velox::memory::MemoryPool* pool{nullptr};
     /// Shared cache receiving one entry for each loaded group.
-    velox::cache::AsyncDataCache* cache{nullptr};
+    BlockCache* cache{nullptr};
     /// Stable identity of the source file in the cache key space.
     uint64_t fileId{0};
     /// Statistics receiving storage-read and memory-hit counters.
@@ -330,7 +326,7 @@ class CachedDataInput final : public DataInput {
   };
 
   struct CacheMissGroup {
-    // Position shared by groups_ and the vector of cache pins.
+    // Position shared by groups_ and the vector of cache entries.
     size_t groupIndex{0};
     // Physical range submitted to storage, including direct-I/O alignment.
     Region readRegion;
@@ -359,7 +355,7 @@ class CachedDataInput final : public DataInput {
   void loadCacheMissGroups(
       std::span<const CacheMissGroup> cacheMissGroups,
       uint64_t stagingBufferSize,
-      const std::vector<velox::cache::CachePin>& cachePins,
+      std::vector<BlockCache::Entry>& cacheEntries,
       LoadCallback loadCallback);
 
   // File to read from on a cache miss.
@@ -367,7 +363,7 @@ class CachedDataInput final : public DataInput {
   // Memory pool for allocating direct-I/O staging buffers.
   velox::memory::MemoryPool* const pool_;
   // Shared cache used for full-group entries.
-  velox::cache::AsyncDataCache* const cache_;
+  BlockCache* const cache_;
   // Stable file identity used in cache keys.
   const uint64_t fileId_;
   // IO statistics for storage reads, cache hits, and logical bytes.

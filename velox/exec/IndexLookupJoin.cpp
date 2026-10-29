@@ -559,10 +559,6 @@ void IndexLookupJoin::initLookupOutput() {
         lookupSourceOutputType->childAt(lookupChannelOpt.value()));
     VELOX_CHECK(outputType_->childAt(i)->equivalent(*lookupOutputTypes.back()));
   }
-  // TODO: support index lookup without output value columns.
-  VELOX_CHECK(
-      !lookupOutputNames.empty(),
-      "Must read at least one value column from index lookup table");
   lookupOutputType_ =
       ROW(std::move(lookupOutputNames), std::move(lookupOutputTypes));
 }
@@ -778,22 +774,18 @@ BlockingReason IndexLookupJoin::isBlocked(ContinueFuture* future) {
 }
 
 void IndexLookupJoin::startLookupBlockWait() {
-  VELOX_CHECK(!blockWaitStartNs_.has_value());
-  blockWaitStartNs_ = getCurrentTimeNano();
+  VELOX_CHECK(!blockWaitWatch_.has_value());
+  blockWaitWatch_.emplace();
 }
 
 void IndexLookupJoin::endLookupBlockWait() {
-  if (!blockWaitStartNs_.has_value()) {
+  if (!blockWaitWatch_.has_value()) {
     return;
   }
-  SCOPE_EXIT {
-    blockWaitStartNs_ = std::nullopt;
-  };
-  const auto blockWaitEndNs = getCurrentTimeNano();
-  VELOX_CHECK_GE(blockWaitEndNs, blockWaitStartNs_.value());
-  const auto blockWaitNs = blockWaitEndNs - blockWaitStartNs_.value();
   RECORD_HISTOGRAM_METRIC_VALUE(
-      velox::kMetricIndexLookupBlockedWaitTimeMs, blockWaitNs / 1'000'000);
+      velox::kMetricIndexLookupBlockedWaitTimeMs,
+      blockWaitWatch_->elapsed().count());
+  blockWaitWatch_.reset();
 }
 
 void IndexLookupJoin::addInput(RowVectorPtr input) {
@@ -1533,6 +1525,12 @@ void IndexLookupJoin::prepareOutputRowMappings(size_t outputBatchSize) {
 }
 
 void IndexLookupJoin::close() {
+  // Only the collector owns split records. Early closure leaves unfinished
+  // splits for Driver's abandonment path.
+  if (isIndexSplitCollector_ && noMoreIndexSplits_ && isFinished()) {
+    operatorCtx_->task()->splitsFinished(
+        indexSourceNodeId_, *operatorCtx_->driverCtx());
+  }
   recordConnectorStats();
   // TODO: add close method for index source if needed to free up resource
   // or shutdown index source gracefully.

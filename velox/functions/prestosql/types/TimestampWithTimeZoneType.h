@@ -62,6 +62,8 @@ class TimestampWithTimeZoneType final : public BigintType {
       : BigintType{ProvideCustomComparison{}} {}
 
  public:
+  static std::shared_ptr<const TimestampWithTimeZoneType> create() = delete;
+
   static std::shared_ptr<const TimestampWithTimeZoneType> get() {
     VELOX_CONSTEXPR_SINGLETON TimestampWithTimeZoneType kInstance;
     return {std::shared_ptr<const TimestampWithTimeZoneType>{}, &kInstance};

@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 #include "velox/exec/Exchange.h"
-#include "velox/common/Casts.h"
 #include "velox/common/serialization/Serializable.h"
 #include "velox/exec/OperatorUtils.h"
 #include "velox/exec/Task.h"
@@ -86,14 +85,6 @@ Exchange::Exchange(
       driverId_{driverCtx->driverId},
       exchangeClient_{std::move(exchangeClient)} {}
 
-void Exchange::addRemoteTaskIds(std::vector<std::string>& remoteTaskIds) {
-  std::shuffle(std::begin(remoteTaskIds), std::end(remoteTaskIds), rng_);
-  for (const std::string& taskId : remoteTaskIds) {
-    exchangeClient_->addRemoteTaskId(taskId);
-  }
-  stats_.wlock()->numSplits += remoteTaskIds.size();
-}
-
 void Exchange::getSplits(ContinueFuture* future) {
   if (!processSplits_) {
     return;
@@ -101,7 +92,6 @@ void Exchange::getSplits(ContinueFuture* future) {
   if (noMoreSplits_) {
     return;
   }
-  std::vector<std::string> remoteTaskIds;
   for (;;) {
     exec::Split split;
     const auto reason = operatorCtx_->task()->getSplitOrFuture(
@@ -113,28 +103,18 @@ void Exchange::getSplits(ContinueFuture* future) {
         split,
         *future);
     if (reason != BlockingReason::kNotBlocked) {
-      addRemoteTaskIds(remoteTaskIds);
       return;
     }
 
     if (split.hasConnectorSplit()) {
-      auto remoteSplit =
-          checkedPointerCast<RemoteConnectorSplit>(split.connectorSplit);
       if (FOLLY_UNLIKELY(splitTracer_ != nullptr)) {
         splitTracer_->write(split);
       }
-      remoteTaskIds.push_back(remoteSplit->taskId);
+      ++stats_.wlock()->numSplits;
       continue;
     }
 
-    addRemoteTaskIds(remoteTaskIds);
-    exchangeClient_->noMoreRemoteTasks();
     noMoreSplits_ = true;
-    if (atEnd_) {
-      operatorCtx_->task()->multipleSplitsFinished(
-          false, stats_.rlock()->numSplits, 0);
-      recordExchangeClientStats();
-    }
     return;
   }
 }
@@ -153,9 +133,16 @@ BlockingReason Exchange::isBlocked(ContinueFuture* future) {
   currentPages_ = exchangeClient_->next(
       driverId_, preferredOutputBatchBytes_, &atEnd_, &dataFuture);
   if (!currentPages_.empty() || atEnd_) {
+    if (atEnd_ && !noMoreSplits_) {
+      // The task stores 'no more splits' before it tells the client, so the
+      // remaining splits are in the store. When the task terminates, the client
+      // can report the end first; the splits are then not reported finished.
+      splitFuture_ = ContinueFuture::makeEmpty();
+      getSplits(&splitFuture_);
+    }
     if (atEnd_ && noMoreSplits_) {
-      const auto numSplits = stats_.rlock()->numSplits;
-      operatorCtx_->task()->multipleSplitsFinished(false, numSplits, 0);
+      operatorCtx_->task()->splitsFinished(
+          planNodeId(), *operatorCtx_->driverCtx());
     }
     recordExchangeClientStats();
     return BlockingReason::kNotBlocked;

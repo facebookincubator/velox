@@ -16,6 +16,8 @@
 
 #pragma once
 
+#include <folly/stop_watch.h>
+
 #include "velox/core/PlanNode.h"
 #include "velox/core/TableWriteTraits.h"
 #include "velox/exec/ColumnStatsCollector.h"
@@ -168,10 +170,10 @@ class TableWriter : public Operator {
   memory::MemoryPool* const connectorPool_;
   const connector::ConnectorInsertTableHandlePtr insertTableHandle_;
   const connector::CommitStrategy commitStrategy_;
-  // Records the writer operator creation time in ns. This is used to record
-  // the running wall time of a writer operator. This can help to detect the
-  // slow scaled writer scheduling in Prestissimo.
-  const uint64_t createTimeNs_{0};
+  // Started at the writer operator creation. This is used to record the
+  // running wall time of a writer operator. This can help to detect the slow
+  // scaled writer scheduling in Prestissimo.
+  const folly::stop_watch<std::chrono::nanoseconds> creationWatch_;
 
   std::unique_ptr<ColumnStatsCollector> statsCollector_;
   std::shared_ptr<connector::Connector> connector_;

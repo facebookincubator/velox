@@ -28,9 +28,9 @@
 #include "folly/container/F14Set.h"
 #include "velox/buffer/BufferPool.h"
 #include "velox/dwio/nimble/common/Buffer.h"
+#include "velox/dwio/nimble/common/HybridFlatMap.h"
 #include "velox/dwio/nimble/common/Types.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
-#include "velox/dwio/nimble/velox/HybridFlatMap.h"
 #include "velox/dwio/nimble/writer/EncodingLayoutTree.h"
 
 #include <set>

@@ -31,6 +31,8 @@ target_link_libraries(nimble_encoding_layout_test_helper nimble_encodings)
 add_executable(
   nimble_encodings_tests
   ALPRDEncodingTest.cpp
+  ALPRDEncodingViewTest.cpp
+  ALPRDSelectionTest.cpp
   ALPEncodingTest.cpp
   ALPEncodingViewTest.cpp
   BufferedEncodingTest.cpp
@@ -41,6 +43,8 @@ add_executable(
   DictionaryEncodingViewTest.cpp
   EliasFanoEncodingTest.cpp
   EliasFanoEncodingViewTest.cpp
+  PartitionedEliasFanoEncodingTest.cpp
+  PartitionedEliasFanoEncodingViewTest.cpp
   EncodingLayoutTest.cpp
   EncodingSelectionTest.cpp
   EncodingSliceTest.cpp
@@ -53,6 +57,7 @@ add_executable(
   EncodingTypeDispatchTest.cpp
   FixedBitWidthEncodingViewTest.cpp
   FsstEncodingTest.cpp
+  FsstEncodingViewTest.cpp
   HuffmanEncodingTest.cpp
   HuffmanEncodingViewTest.cpp
   FOREncodingViewTest.cpp
@@ -70,6 +75,7 @@ add_executable(
   RLEEncodingViewTest.cpp
   RLEEncodingTest.cpp
   SentinelEncodingTest.cpp
+  SentinelEncodingViewTest.cpp
   SharedDictionaryBuilderTest.cpp
   SharedDictionaryEncodingTest.cpp
   SimdForBitpackEncodingViewTest.cpp
@@ -77,6 +83,7 @@ add_executable(
   SparseBoolEncodingViewTest.cpp
   StatisticsTest.cpp
   TrivialEncodingViewTest.cpp
+  VarintEncodingViewTest.cpp
   TrivialEncodingTest.cpp
   EncodingViewTestUtils.h
 )

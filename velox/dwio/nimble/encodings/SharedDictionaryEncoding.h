@@ -48,6 +48,7 @@
 #include "velox/dwio/nimble/encodings/common/EncodingType.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelection.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
+#include "velox/dwio/nimble/encodings/selection/EncodingSizeEstimation.h"
 #include "velox/dwio/nimble/encodings/views/EncodingViewFactory.h"
 
 namespace facebook::nimble {
@@ -274,7 +275,11 @@ class SharedDictionaryAlphabet {
     const auto estimate = selection.estimatedSize.has_value()
         ? selection.estimatedSize
         : detail::EncodingSizeEstimation<T>::estimateSize(
-              selection.encodingType, physicalValues, statistics, options);
+              *policy,
+              selection.encodingType,
+              physicalValues,
+              statistics,
+              options);
     NIMBLE_USER_CHECK(
         estimate.has_value(),
         "{} cannot size a shared dictionary alphabet of {} entries.",

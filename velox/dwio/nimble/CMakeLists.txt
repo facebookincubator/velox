@@ -41,7 +41,10 @@ endif()
 # by widely included headers (compression/CompressionPolicy.h,
 # encodings/legacy/EncodingSelectionPolicy.h), so every translation unit that
 # sees those headers must agree on it.
-add_compile_definitions(DISABLE_META_INTERNAL_COMPRESSOR=1)
+add_compile_definitions(
+  DISABLE_META_INTERNAL_COMPRESSOR=1
+  DISABLE_META_INTERNAL_FAISS_IVF_RABITQ_FAST_SCAN=1
+)
 
 option(NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS "Enable experimental encodings" OFF)
 if(NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS)
@@ -53,7 +56,10 @@ if(VELOX_MONO_LIBRARY AND TARGET velox)
   # reaches targets created in this directory tree. Under VELOX_MONO_LIBRARY
   # Nimble's sources are folded into the single `velox` target, created
   # elsewhere, so the definitions have to be applied to it explicitly.
-  target_compile_definitions(velox PUBLIC DISABLE_META_INTERNAL_COMPRESSOR=1)
+  target_compile_definitions(
+    velox
+    PUBLIC DISABLE_META_INTERNAL_COMPRESSOR=1 DISABLE_META_INTERNAL_FAISS_IVF_RABITQ_FAST_SCAN=1
+  )
   if(NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS)
     target_compile_definitions(velox PUBLIC NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS)
   endif()
@@ -75,11 +81,16 @@ add_subdirectory(compression)
 add_subdirectory(encodings)
 add_subdirectory(index)
 add_subdirectory(tablet)
-add_subdirectory(velox)
+add_subdirectory(selective)
+# Must follow selective: nimble_velox_reader_factory links
+# nimble_velox_selective.
+add_subdirectory(reader)
+add_subdirectory(stats)
 add_subdirectory(writer)
 add_subdirectory(serializer)
 add_subdirectory(tools)
 
 if(NIMBLE_BUILD_TESTING)
   add_subdirectory(fuzzer)
+  add_subdirectory(tests)
 endif()

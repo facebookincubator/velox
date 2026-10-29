@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/expression/DecimalExpressionKernelsGpu.h"
 
 #include <cudf/binaryop.hpp>
@@ -323,7 +324,7 @@ int32_t launchOverflowChecked(
   if (size == 0) {
     return 0;
   }
-  cudf::detail::device_scalar<int32_t> overflowFlag{0, stream};
+  cudf::detail::device_scalar<int32_t> overflowFlag{0, stream, get_temp_mr()};
   auto op = buildOp();
   cudf::detail::grid_1d const grid{size, kOverflowCheckedBlockSize};
   overflowCheckedKernel<<<
@@ -356,9 +357,10 @@ struct divideColumnColumnKernel {
   template <typename InT, typename OutT>
     requires ValidDecimalDivideStorageTypes<InT, OutT>
   DecimalBinaryOpStatus operator()() const {
-    auto lhsDev = cudf::column_device_view::create(lhs, stream);
-    auto rhsDev = cudf::column_device_view::create(rhs, stream);
-    auto outDev = cudf::mutable_column_device_view::create(out, stream);
+    auto lhsDev = cudf::column_device_view::create(lhs, stream, get_temp_mr());
+    auto rhsDev = cudf::column_device_view::create(rhs, stream, get_temp_mr());
+    auto outDev =
+        cudf::mutable_column_device_view::create(out, stream, get_temp_mr());
     return toDecimalBinaryOpStatus(launchOverflowChecked(
         lhs.size(),
         [&]() {
@@ -392,8 +394,9 @@ struct divideColumnScalarKernel {
   template <typename InT, typename OutT>
     requires ValidDecimalDivideStorageTypes<InT, OutT>
   DecimalBinaryOpStatus operator()() const {
-    auto lhsDev = cudf::column_device_view::create(lhs, stream);
-    auto outDev = cudf::mutable_column_device_view::create(out, stream);
+    auto lhsDev = cudf::column_device_view::create(lhs, stream, get_temp_mr());
+    auto outDev =
+        cudf::mutable_column_device_view::create(out, stream, get_temp_mr());
     return toDecimalBinaryOpStatus(launchOverflowChecked(
         lhs.size(),
         [&]() {
@@ -427,8 +430,9 @@ struct divideScalarColumnKernel {
   template <typename InT, typename OutT>
     requires ValidDecimalDivideStorageTypes<InT, OutT>
   DecimalBinaryOpStatus operator()() const {
-    auto rhsDev = cudf::column_device_view::create(rhs, stream);
-    auto outDev = cudf::mutable_column_device_view::create(out, stream);
+    auto rhsDev = cudf::column_device_view::create(rhs, stream, get_temp_mr());
+    auto outDev =
+        cudf::mutable_column_device_view::create(out, stream, get_temp_mr());
     return toDecimalBinaryOpStatus(launchOverflowChecked(
         rhs.size(),
         [&]() {
@@ -905,8 +909,10 @@ decimalBinaryOperationColColImpl(
     cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   CUDF_EXPECTS(lhs.size() == rhs.size(), "Decimal binop requires equal sizes");
-  auto [nullMask, nullCount] =
-      cudf::bitmask_and(cudf::table_view({lhs, rhs}), stream, mr);
+  auto [nullMask, nullCount] = cudf::bitmask_and(
+      cudf::table_view({lhs, rhs}),
+      stream,
+      cudf::memory_resources{mr, get_temp_mr()});
   auto result = cudf::make_fixed_width_column(
       outputType, lhs.size(), std::move(nullMask), nullCount, stream, mr);
 
@@ -1057,7 +1063,8 @@ decimalBinaryOperationWithOverflow(
         outputType, lhs.size(), cudf::mask_state::ALL_NULL, stream, mr);
     return {std::move(result), DecimalBinaryOpStatus::kOk};
   }
-  auto nullMask = cudf::copy_bitmask(lhs, stream, mr);
+  auto nullMask = cudf::copy_bitmask(
+      lhs, stream, cudf::memory_resources{mr, get_temp_mr()});
   auto result = cudf::make_fixed_width_column(
       outputType,
       lhs.size(),
@@ -1086,7 +1093,8 @@ decimalBinaryOperationWithOverflow(
         outputType, rhs.size(), cudf::mask_state::ALL_NULL, stream, mr);
     return {std::move(result), DecimalBinaryOpStatus::kOk};
   }
-  auto nullMask = cudf::copy_bitmask(rhs, stream, mr);
+  auto nullMask = cudf::copy_bitmask(
+      rhs, stream, cudf::memory_resources{mr, get_temp_mr()});
   auto result = cudf::make_fixed_width_column(
       outputType,
       rhs.size(),

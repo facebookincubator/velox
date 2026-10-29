@@ -18,8 +18,10 @@
 #include "velox/experimental/cudf/expression/DateTruncFunction.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 #include "velox/experimental/cudf/expression/PrestoFunctions.h"
+#include "velox/experimental/cudf/expression/prestosql/ArrayJoinFunction.h"
 #include "velox/experimental/cudf/expression/prestosql/DateAddFunction.h"
 #include "velox/experimental/cudf/expression/prestosql/DatePlusIntervalFunction.h"
+#include "velox/experimental/cudf/expression/prestosql/UnixtimeFunctions.h"
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/expression/FunctionSignature.h"
@@ -128,7 +130,24 @@ class SubstrFunction : public CudfFunction {
 void registerPrestoFunctions(const std::string& prefix) {
   using exec::FunctionSignatureBuilder;
 
+  // The GPU cast from VARCHAR follows Presto's rules.
+  setCastFromVarcharEnabled(true);
   registerPrestoArrayAccessFunctions(prefix);
+
+  registerCudfFunction(
+      prefix + "array_join",
+      [](const std::string&,
+         const core::TypedExprPtr& expr,
+         memory::MemoryPool* pool) {
+        return std::make_shared<prestosql::ArrayJoinFunction>(expr, pool);
+      },
+      {FunctionSignatureBuilder()
+           .returnType("varchar")
+           .argumentType("array(varchar)")
+           .constantArgumentType("varchar")
+           .build()},
+      true,
+      prestosql::ArrayJoinFunction::canEvaluate);
 
   registerCudfFunctions(
       {prefix + "substr", prefix + "substring"},
@@ -198,6 +217,34 @@ void registerPrestoFunctions(const std::string& prefix) {
            .build()},
       true,
       DateTruncFunction::canEvaluate);
+
+  registerCudfFunction(
+      prefix + "from_unixtime",
+      [](const std::string&,
+         const core::TypedExprPtr& expr,
+         memory::MemoryPool* pool) {
+        return std::make_shared<prestosql::FromUnixtimeFunction>(expr, pool);
+      },
+      {FunctionSignatureBuilder()
+           .returnType("timestamp")
+           .argumentType("double")
+           .build()},
+      true,
+      prestosql::FromUnixtimeFunction::canEvaluate);
+
+  registerCudfFunction(
+      prefix + "to_unixtime",
+      [](const std::string&,
+         const core::TypedExprPtr& expr,
+         memory::MemoryPool* pool) {
+        return std::make_shared<prestosql::ToUnixtimeFunction>(expr, pool);
+      },
+      {FunctionSignatureBuilder()
+           .returnType("double")
+           .argumentType("timestamp")
+           .build()},
+      true,
+      prestosql::ToUnixtimeFunction::canEvaluate);
 }
 
 } // namespace facebook::velox::cudf_velox

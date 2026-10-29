@@ -469,13 +469,15 @@ constexpr int32_t kDefaultBlocksPerSM = 4;
 constexpr int32_t kDefaultSharedMemPerSM = 164 * 1024;
 
 namespace {
-// Dynamic shared memory a launch of 'launches' needs: the max over the ops,
-// since the ops share one kernel launch.
-int32_t dynamicSharedBytes(const std::vector<LaunchData>& launches) {
+// Dynamic shared memory a launch of 'launches' at 'blockSize' threads needs:
+// the max over the ops, since the ops share one kernel launch.
+int32_t dynamicSharedBytes(
+    const std::vector<LaunchData>& launches,
+    int32_t blockSize) {
   int64_t bytes = 0;
   for (const auto& launch : launches) {
     if (launch.launch && launch.launch->op) {
-      bytes = std::max(bytes, launch.launch->op->dynamicSharedBytes());
+      bytes = std::max(bytes, launch.launch->op->dynamicSharedBytes(blockSize));
     }
   }
   return static_cast<int32_t>(bytes);
@@ -515,18 +517,19 @@ GridDevice currentGridDevice(
 // The packer calls it once per op while grouping, and a step's ops fall into a
 // handful of distinct shared-memory sizes, so the driver is asked a handful of
 // times rather than once per op.
-std::function<int32_t(int32_t)> occupancyQuery(const CompositeKernel* kernel) {
+std::function<int32_t(int32_t)> occupancyQuery(
+    const CompositeKernel* kernel,
+    int32_t entry) {
   if (kernel == nullptr) {
     return nullptr;
   }
-  const int32_t blockSize = WaveConfig::get().blockSize;
   auto cache = std::make_shared<folly::F14FastMap<int32_t, int32_t>>();
-  return [kernel, blockSize, cache](int32_t dynamicShared) -> int32_t {
+  return [kernel, entry, cache](int32_t dynamicShared) -> int32_t {
     auto it = cache->find(dynamicShared);
     if (it != cache->end()) {
       return it->second;
     }
-    const int32_t blocks = kernel->occupancy(blockSize, dynamicShared);
+    const int32_t blocks = kernel->occupancy(entry, dynamicShared);
     cache->emplace(dynamicShared, blocks);
     return blocks;
   };
@@ -542,10 +545,6 @@ int32_t targetBlockCount(
 
 namespace {
 
-// Nanoseconds one thread-block clock tick is worth. The performance report
-// converts block clocks to microseconds with the same figure.
-constexpr double kNsPerBlockClock = 0.7;
-
 // The step's ops as the launch layout sees them: cost and block cap from the
 // pass above, occupancy and splittability from the op itself.
 std::vector<GridOp> describeGridOps(
@@ -556,10 +555,12 @@ std::vector<GridOp> describeGridOps(
     auto* kernelOp = launches[i].launch->op;
     ops.at(i).cost = sv.costs.at(i);
     ops.at(i).maxBlocks = sv.maxBlocks.at(i);
-    ops.at(i).dynamicShared =
-        kernelOp ? static_cast<int32_t>(kernelOp->dynamicSharedBytes()) : 0;
+    ops.at(i).dynamicShared = kernelOp
+        ? static_cast<int32_t>(kernelOp->dynamicSharedBytes(sv.blockSize))
+        : 0;
     ops.at(i).alwaysSingleBlock = kernelOp && kernelOp->alwaysSingleBlock();
     ops.at(i).hasBarrier = kernelOp && !kernelOp->barrierCounters().empty();
+    ops.at(i).blocksPerSm = launches.at(i).launch->blocksPerSm;
   }
   return ops;
 }
@@ -592,6 +593,12 @@ PartitionParams partitionParams(const StepVectors& sv) {
   return PartitionParams{
       .maxWaves = config.maxLaunchWaves,
       .skewThreshold = config.launchSkewThreshold,
+      .minSavingUs = config.launchSplitMinUs,
+      .measuredIdleUs = sv.splitRejected || sv.measureUnsplit ? 0.0
+          : sv.measuredMaxClocks > 0
+          ? static_cast<double>(sv.measuredMaxClocks) *
+              (1.0 - sv.measuredUtil) * kNsPerBlockClock / 1000.0
+          : -1.0,
       .minBlockCost = minBlockCost(sv),
       .measuredUtil = sv.measuredUtil,
       .measuredBlocks = sv.measuredBlocks};
@@ -688,10 +695,14 @@ void traceGrid(int32_t sequenceNumber, int32_t stepIdx, const StepVectors& sv) {
 int32_t makeGrid(
     std::vector<LaunchData>& launches,
     StepVectors& sv,
+    int32_t blockSize,
     int32_t maxBlocksPerSM,
     int32_t staticSharedPerBlock,
     const std::function<int32_t(int32_t)>& occupancyFor) {
-  const int32_t blockSize = WaveConfig::get().blockSize;
+  auto unitCost = [&](size_t i) {
+    return WaveConfig::get().uniformCost ? 1.0f
+                                         : launches[i].launch->op->unitCost();
+  };
 
   // Compute cost per launch: numElements * unitCost * costAdjustFactor.
   sv.costs.resize(launches.size());
@@ -699,8 +710,8 @@ int32_t makeGrid(
   for (size_t i = 0; i < launches.size(); ++i) {
     float adjust =
         launches[i].costAdjustFactor > 0 ? launches[i].costAdjustFactor : 1.0f;
-    sv.costs[i] = static_cast<float>(launches[i].numElements) *
-        launches[i].launch->op->unitCost() * adjust;
+    sv.costs[i] =
+        static_cast<float>(launches[i].numElements) * unitCost(i) * adjust;
     totalCost += sv.costs[i];
   }
 
@@ -720,7 +731,7 @@ int32_t makeGrid(
     }
     float adjust =
         launches[i].costAdjustFactor > 0 ? launches[i].costAdjustFactor : 1.0f;
-    float costPerInput = launches[i].launch->op->unitCost() * adjust;
+    float costPerInput = unitCost(i) * adjust;
     int32_t elementsPerBlock =
         blockSize * elementsPerThreadForCost(costPerInput);
     sv.maxBlocks[i] = static_cast<int32_t>(
@@ -734,8 +745,22 @@ int32_t makeGrid(
   const auto budgetDevice =
       currentGridDevice(maxBlocksPerSM, staticSharedPerBlock, occupancyFor);
   int32_t maxBlocks = budgetDevice.numSMs *
-      blocksPerSM(budgetDevice, dynamicSharedBytes(launches));
+      blocksPerSM(budgetDevice, dynamicSharedBytes(launches, blockSize));
   int32_t targetBlocks = maxBlocks;
+
+  // An op that asked for a width gets no more than numSMs times it.
+  // partitionLaunchPlan caps a launch's capacity the same way, but it declines
+  // to reshape a step that is already a single launch -- which is exactly the
+  // shape a lone op has, and a lone expensive op is the case the preference
+  // exists for -- so the cap has to be applied to the op's block ceiling here
+  // as well, where every path goes through it.
+  for (size_t i = 0; i < launches.size(); ++i) {
+    const int32_t prefer = launches[i].launch->blocksPerSm;
+    if (prefer > 0) {
+      sv.maxBlocks[i] =
+          std::max(1, std::min(sv.maxBlocks[i], budgetDevice.numSMs * prefer));
+    }
+  }
 
   // Assign blocks pro rata by cost, at least 1 per launch, capped by
   // maxBlocks.
@@ -771,32 +796,94 @@ int32_t makeGrid(
     totalAssigned += assigned;
   }
 
+  // A width is a property of a LAUNCH -- blocks resident per SM -- not of one
+  // op's share of it, so the cap is on the total blocks of the ops that asked
+  // for the same width, not on each one. One opcode can be several launches in
+  // a step: op 107 on the ROO graph is five launches of one KernelOperation,
+  // each well under numSMs times its preference and together well over it.
+  //
+  // Done here rather than only in partitionLaunchPlan because that declines to
+  // reshape a step it would leave as a single launch, which is the common case
+  // for exactly these ops, and its capacity is a packing hint for an ordinary
+  // launch rather than a bound.
+  if (!WaveConfig::get().preferBlocksPerSm.empty()) {
+    std::map<int32_t, int32_t> assignedPerWidth;
+    for (size_t i = 0; i < launches.size(); ++i) {
+      const int32_t prefer = launches[i].launch->blocksPerSm;
+      if (prefer > 0) {
+        assignedPerWidth[prefer] += sv.numBlocksPerLaunch[i];
+      }
+    }
+    for (const auto& [prefer, assigned] : assignedPerWidth) {
+      const int32_t budget = std::max(1, budgetDevice.numSMs * prefer);
+      if (assigned <= budget) {
+        continue;
+      }
+      // Scale the members down together, then trim the largest until the sum
+      // fits: proportional scaling alone cannot land exactly, and rounding up
+      // anywhere would leave the launch wider than was asked for.
+      const float scale =
+          static_cast<float>(budget) / static_cast<float>(assigned);
+      int32_t sum = 0;
+      for (size_t i = 0; i < launches.size(); ++i) {
+        if (launches[i].launch->blocksPerSm != prefer) {
+          continue;
+        }
+        auto& blocks = sv.numBlocksPerLaunch[i];
+        totalAssigned -= blocks;
+        blocks = std::max(
+            1, static_cast<int32_t>(static_cast<float>(blocks) * scale));
+        sum += blocks;
+      }
+      while (sum > budget) {
+        int32_t widest = -1;
+        for (size_t i = 0; i < launches.size(); ++i) {
+          if (launches[i].launch->blocksPerSm == prefer &&
+              sv.numBlocksPerLaunch[i] > 1 &&
+              (widest < 0 ||
+               sv.numBlocksPerLaunch[i] > sv.numBlocksPerLaunch[widest])) {
+            widest = static_cast<int32_t>(i);
+          }
+        }
+        if (widest < 0) {
+          // Every member is down to one block; the width cannot be honoured
+          // without dropping an op, so leave it at one apiece.
+          break;
+        }
+        --sv.numBlocksPerLaunch[widest];
+        --sum;
+      }
+      totalAssigned += sum;
+    }
+  }
+
   // For cooperative grids, cap total blocks at what the GPU can run
   // concurrently.
   if (sv.isCgGrid && totalAssigned > targetBlocks) {
-    // Trim excess blocks from launches with the most blocks first,
-    // preserving the proportional allocation for small launches.
+    // Trim one block at a time from the launch that loses least by it: the one
+    // whose per-block cost stays lowest with a block fewer. Trimming the
+    // launches with the most blocks instead levels them regardless of cost; on
+    // a step where 251 one-block copies took half the wave, that cut a 3.9M
+    // element gather to the 34 blocks of ops with a third of its work.
     while (totalAssigned > targetBlocks) {
-      int32_t before = totalAssigned;
-      // Find the current max block count.
-      int32_t maxVal = 1;
+      int32_t best = -1;
+      float bestLat = 0;
       for (size_t i = 0; i < launches.size(); ++i) {
-        maxVal = std::max(maxVal, sv.numBlocksPerLaunch[i]);
-      }
-      if (maxVal <= 1) {
-        break;
-      }
-      // Remove one block from all launches at the max level.
-      for (size_t i = 0; i < launches.size() && totalAssigned > targetBlocks;
-           ++i) {
-        if (sv.numBlocksPerLaunch[i] == maxVal) {
-          --sv.numBlocksPerLaunch[i];
-          --totalAssigned;
+        const int32_t blocks = sv.numBlocksPerLaunch[i];
+        if (blocks <= 1) {
+          continue;
+        }
+        const float lat = sv.costs[i] / static_cast<float>(blocks - 1);
+        if (best < 0 || lat < bestLat) {
+          best = static_cast<int32_t>(i);
+          bestLat = lat;
         }
       }
-      if (totalAssigned == before) {
+      if (best < 0) {
         break;
       }
+      --sv.numBlocksPerLaunch[best];
+      --totalAssigned;
     }
   }
 
@@ -1560,17 +1647,17 @@ CompositeKernel::CompositeKernel(
     int32_t kernelId)
     : ops_(std::move(ops)), kernelOpStorage_(std::move(kernelOps)) {
   auto kernelName = "torchwave" + std::to_string(kernelId);
-  auto entryPoint = "torch::wave::" + kernelName;
+  const auto entryPoint = "torch::wave::" + kernelName;
 
-  std::stringstream ss;
-  ss << "#include \"velox/experimental/torchwave/Core.cuh\"\n";
+  std::stringstream header;
+  header << "#include \"velox/experimental/torchwave/Core.cuh\"\n";
   for (const auto& inc : includes) {
-    ss << "#include \"" << inc << "\"\n";
+    header << "#include \"" << inc << "\"\n";
   }
-  ss << "\nnamespace torch::wave {\n\n";
+  header << "\nnamespace torch::wave {\n\n";
   for (const auto& kop : kernelOpStorage_) {
     if (!kop->helperCode().empty()) {
-      ss << kop->helperCode();
+      header << kop->helperCode();
     }
   }
   // An op whose device function is register-hungry would otherwise cost every
@@ -1580,12 +1667,25 @@ CompositeKernel::CompositeKernel(
   for (const auto& kop : kernelOpStorage_) {
     minBlocksPerSm = std::max(minBlocksPerSm, kop->minBlocksPerSm());
   }
-  ss << "__global__ ";
-  if (minBlocksPerSm > 0) {
-    ss << "__launch_bounds__(" << WaveConfig::get().blockSize << ", "
-       << minBlocksPerSm << ") ";
+  // One entry point per block size a launch of this kernel can run at: the
+  // default, and each size an op asks for. Every op is compiled into each of
+  // them, since an op that asks for nothing runs at whatever size the other
+  // ops of its launch ask for.
+  blockSizes_.push_back(WaveConfig::get().blockSize);
+  for (const auto& kop : kernelOpStorage_) {
+    const int32_t threads = kop->blockSizePreference();
+    if (threads > WaveConfig::get().blockSize &&
+        std::find(blockSizes_.begin(), blockSizes_.end(), threads) ==
+            blockSizes_.end()) {
+      blockSizes_.push_back(threads);
+    }
   }
-  ss << "void " << kernelName << "(TorchWaveParams params) {\n"
+  std::sort(blockSizes_.begin(), blockSizes_.end());
+
+  // The function body, shared by the entry points. Device code names the
+  // block size through kBlockSizeMacro, which each entry point defines.
+  std::stringstream ss;
+  ss << "(TorchWaveParams params) {\n"
      << "  ENTRY;\n";
   eltTrace(
       ss,
@@ -1598,18 +1698,21 @@ CompositeKernel::CompositeKernel(
       }
     }
   }
+  // Each op's case, kept for the entry points of ops that have their own.
+  std::vector<std::string> caseTexts;
   ss << "  switch (blockInfo.op) {\n";
   {
     WithPrintOptions printGuard("D3,L4,S");
     for (const auto& kop : kernelOpStorage_) {
-      ss << "    // " << kop->label() << "\n";
+      std::stringstream cs;
+      cs << "    // " << kop->label() << "\n";
       auto opStr = kop->toString();
       std::istringstream lines(opStr);
       std::string line;
       while (std::getline(lines, line)) {
-        ss << "    // " << line << "\n";
+        cs << "    // " << line << "\n";
       }
-      ss << "    case " << kop->opCode() << ": {\n";
+      cs << "    case " << kop->opCode() << ": {\n";
 
       // Build parallel paramOffsets/outputOffsets/altOffsets arrays from
       // ElementExprs and remaining orderedInputs.
@@ -1625,8 +1728,11 @@ CompositeKernel::CompositeKernel(
             continue;
           }
           inElementExpr.insert(v);
-          paramOffs.push_back(kop->paramOffset(v));
-          outputOffs.push_back(outputOff);
+          const auto leafOff = kop->paramOffset(v);
+          const auto refIt = kop->broadcastRefs().find(leafOff);
+          paramOffs.push_back(leafOff);
+          outputOffs.push_back(
+              refIt != kop->broadcastRefs().end() ? refIt->second : outputOff);
           auto ait = ee.altParamOffset.find(v);
           altOffs.push_back(ait != ee.altParamOffset.end() ? ait->second : -1);
         }
@@ -1676,21 +1782,21 @@ CompositeKernel::CompositeKernel(
       if (!normalParam.empty() || !gatherParam.empty()) {
         auto emitArray = [&](const char* name,
                              const std::vector<int32_t>& arr) {
-          ss << "    static int32_t " << name << "[] = {";
+          cs << "    static int32_t " << name << "[] = {";
           for (size_t i = 0; i < arr.size(); ++i) {
             if (i > 0) {
-              ss << ", ";
+              cs << ", ";
             }
-            ss << arr[i];
+            cs << arr[i];
           }
-          ss << "};\n";
+          cs << "};\n";
         };
         if (!normalParam.empty()) {
-          ss << "  {\n";
+          cs << "  {\n";
           emitArray("paramOffsets", normalParam);
           emitArray("outputOffsets", normalOutput);
           emitArray("altOffsets", normalAlt);
-          ss << "    for (auto i = threadIdx.x; i < sizeof(paramOffsets) / sizeof(paramOffsets[0]); i += blockDim.x) {\n"
+          cs << "    for (auto i = threadIdx.x; i < sizeof(paramOffsets) / sizeof(paramOffsets[0]); i += blockDim.x) {\n"
              << "      if (altOffsets[i] != -1) {\n"
              << "        copyTensorHead(param<Tensor>(blockInfo, paramOffsets[i]), param<Tensor>(blockInfo, altOffsets[i]));\n"
              << "        param<Tensor>(blockInfo, altOffsets[i])->init<true>(param<Tensor>(blockInfo, outputOffsets[i]));\n"
@@ -1701,25 +1807,85 @@ CompositeKernel::CompositeKernel(
              << "  }\n";
         }
         if (!gatherParam.empty()) {
-          ss << "  {\n";
+          cs << "  {\n";
           emitArray("gatherOffsets", gatherParam);
-          ss << "    for (auto i = threadIdx.x; i < sizeof(gatherOffsets) / sizeof(gatherOffsets[0]); i += blockDim.x) {\n"
+          cs << "    for (auto i = threadIdx.x; i < sizeof(gatherOffsets) / sizeof(gatherOffsets[0]); i += blockDim.x) {\n"
              << "      param<Tensor>(blockInfo, gatherOffsets[i])->ensureIndexCalculator();\n"
              << "    }\n"
              << "  }\n";
         }
-        ss << "  __syncthreads();\n";
+        cs << "  __syncthreads();\n";
       }
-      ss << kop->code() << "      break;\n"
+      cs << kop->code() << "      break;\n"
          << "    }\n";
+      caseTexts.push_back(cs.str());
+      ss << caseTexts.back();
     }
   } // WithPrintOptions scope
   ss << "  }\n"
      << "  LEAVE();\n"
-     << "}\n\n"
-     << "} // namespace torch::wave\n";
+     << "}\n\n";
 
-  auto code = ss.str();
+  // The default size keeps the plain kernel name; a larger one is suffixed.
+  // A size above the default needs __launch_bounds__: without it the compiler
+  // may use more registers than a block that large can have.
+  std::vector<std::string> entryPoints;
+  auto emitEntry = [&](const std::string& name,
+                       int32_t threads,
+                       int32_t minBlocks,
+                       const std::string& body) {
+    entryPoints.push_back("torch::wave::" + name);
+    header << "#define " << kBlockSizeMacro << " " << threads << "\n"
+           << "__global__ ";
+    if (minBlocks > 0) {
+      header << "__launch_bounds__(" << threads << ", "
+             << std::min(minBlocks, 2048 / threads) << ") ";
+    } else if (threads > WaveConfig::get().blockSize) {
+      header << "__launch_bounds__(" << threads << ") ";
+    }
+    header << "void " << name << body << "#undef " << kBlockSizeMacro << "\n\n";
+  };
+  for (const int32_t threads : blockSizes_) {
+    std::string entryName = kernelName;
+    if (threads != WaveConfig::get().blockSize) {
+      entryName += "_b" + std::to_string(threads);
+    }
+    emitEntry(entryName, threads, minBlocksPerSm, ss.str());
+    entryBlockSize_.push_back(threads);
+    entryOp_.push_back(nullptr);
+  }
+  // An op that asks for an entry point of its own gets one holding only its
+  // case, for a step that launches nothing else. Such a step then runs with
+  // the registers its op needs rather than those of the heaviest op in the
+  // kernel.
+  for (size_t i = 0; i < kernelOpStorage_.size(); ++i) {
+    const auto& kop = kernelOpStorage_[i];
+    if (!kop->ownEntryPoint()) {
+      continue;
+    }
+    std::stringstream body;
+    body << "(TorchWaveParams params) {\n"
+         << "  ENTRY;\n";
+    for (const auto& decl : kop->sharedDeclarations()) {
+      body << decl;
+    }
+    body << "  switch (blockInfo.op) {\n"
+         << caseTexts.at(i) << "  }\n"
+         << "  LEAVE();\n"
+         << "}\n\n";
+    const int32_t threads =
+        std::max(WaveConfig::get().blockSize, kop->blockSizePreference());
+    emitEntry(
+        kernelName + "_op" + std::to_string(kop->opCode()),
+        threads,
+        kop->minBlocksPerSm(),
+        body.str());
+    entryBlockSize_.push_back(threads);
+    entryOp_.push_back(kop.get());
+  }
+  header << "} // namespace torch::wave\n";
+
+  auto code = header.str();
 
   // Save to /tmp for debugging. Kernel ids are per-construction (not globally
   // unique), so append a process-wide ordinal to keep filenames distinct when
@@ -1777,6 +1943,9 @@ CompositeKernel::CompositeKernel(
       if (!kop->helperCode().empty()) {
         ts << kop->helperCode();
       }
+      ts << "#define " << kBlockSizeMacro << " "
+         << std::max(WaveConfig::get().blockSize, kop->blockSizePreference())
+         << "\n";
       ts << "__global__ void " << trialName << "(TorchWaveParams params) {\n"
          << "  ENTRY;\n";
       for (const auto& decl : kop->sharedDeclarations()) {
@@ -1836,6 +2005,9 @@ CompositeKernel::CompositeKernel(
       if (!kop->helperCode().empty()) {
         os << kop->helperCode();
       }
+      os << "#define " << kBlockSizeMacro << " "
+         << std::max(WaveConfig::get().blockSize, kop->blockSizePreference())
+         << "\n";
       os << "__global__ void " << opName << "(TorchWaveParams params) {\n"
          << "  ENTRY;\n";
       for (const auto& decl : kop->sharedDeclarations()) {
@@ -1885,11 +2057,11 @@ CompositeKernel::CompositeKernel(
   // NCCL/Thrift/folly hosts -- T275179010).
   if (facebook::velox::wave::currentDevice()) {
     auto genFunc = [code = std::move(code),
-                    entryPoint,
+                    entryPoints,
                     filePath]() -> facebook::velox::wave::KernelSpec {
       facebook::velox::wave::KernelSpec spec;
       spec.code = code;
-      spec.entryPoints = {entryPoint};
+      spec.entryPoints = entryPoints;
       spec.filePath = filePath;
       spec.numHeaders = 0;
       spec.headers = nullptr;
@@ -1953,32 +2125,83 @@ facebook::velox::wave::KernelInfo CompositeKernel::kernelInfo() const {
   return {};
 }
 
-int32_t CompositeKernel::occupancy(
-    int32_t numThreads,
-    int32_t dynamicSharedBytes) const {
+int32_t CompositeKernel::entryIndex(int32_t blockSize) const {
+  for (size_t i = 0; i < blockSizes_.size(); ++i) {
+    if (blockSizes_[i] == blockSize) {
+      return static_cast<int32_t>(i);
+    }
+  }
+  TORCH_CHECK(
+      false,
+      entryPoint_,
+      " has no entry point for ",
+      blockSize,
+      " threads per block");
+}
+
+int32_t CompositeKernel::entryFor(
+    int32_t blockSize,
+    const KernelOperation* soleOp) const {
+  if (soleOp != nullptr) {
+    for (size_t i = 0; i < entryOp_.size(); ++i) {
+      if (entryOp_[i] == soleOp && entryBlockSize_[i] == blockSize) {
+        return static_cast<int32_t>(i);
+      }
+    }
+  }
+  return entryIndex(blockSize);
+}
+
+int32_t CompositeKernel::maxOccupancy(int32_t entry) const {
+  if (entry == 0 && entryBlockSize_.at(0) == 256) {
+    return kernelInfo().maxOccupancy0;
+  }
+  return occupancy(entry, 0);
+}
+
+int32_t CompositeKernel::maxOccupancyOfEntries() const {
+  int32_t blocks = 0;
+  for (size_t i = 0; i < entryBlockSize_.size(); ++i) {
+    blocks = std::max(blocks, maxOccupancy(static_cast<int32_t>(i)));
+  }
+  return blocks;
+}
+
+int32_t CompositeKernel::occupancy(int32_t entry, int32_t dynamicSharedBytes)
+    const {
   if (!kernel_) {
     return 0;
   }
-  return kernel_->occupancy(0, numThreads, dynamicSharedBytes);
+  return kernel_->occupancy(
+      entry, entryBlockSize_.at(entry), dynamicSharedBytes);
+}
+
+facebook::velox::wave::KernelInfo CompositeKernel::kernelInfo(
+    int32_t entry) const {
+  if (kernel_) {
+    return kernel_->info(entry);
+  }
+  return {};
 }
 
 void CompositeKernel::launch(
+    int32_t entry,
     int32_t numBlocks,
-    int32_t numThreads,
     int32_t sharedMemory,
     facebook::velox::wave::Stream* stream,
     void** args) {
-  kernel_->launch(0, numBlocks, numThreads, sharedMemory, stream, args);
+  kernel_->launch(
+      entry, numBlocks, entryBlockSize_.at(entry), sharedMemory, stream, args);
 }
 
 void CompositeKernel::launchCooperative(
+    int32_t entry,
     int32_t numBlocks,
-    int32_t numThreads,
     int32_t sharedMemory,
     facebook::velox::wave::Stream* stream,
     void** args) {
   kernel_->launchCooperative(
-      0, numBlocks, numThreads, sharedMemory, stream, args);
+      entry, numBlocks, entryBlockSize_.at(entry), sharedMemory, stream, args);
 }
 
 std::string CompositeKernel::toString(Listing /*mode*/) const {
@@ -3009,7 +3232,7 @@ void CompositeInvocation::layoutParamSlots(int32_t stepIdx, StepVectors& sv) {
   sv.blockCapacity = 2 * numSlots +
       waves *
           targetBlockCount(
-              kernel_->kernelInfo().maxOccupancy0,
+              kernel_->maxOccupancyOfEntries(),
               // A bound, so skip the shared-memory reduction: it only ever
               // lowers the count makeGrid will actually use, and a step's
               // dynamic shared-memory need is not known until its launches are
@@ -3162,9 +3385,20 @@ void CompositeInvocation::sizeForUnreadyOperands(
   // kernel's concrete static input shapes (TensorMeta is available without
   // materialization). numElements only drives the grid; the kernel loops to the
   // true size on device, so an over-estimate is safe (surplus blocks
-  // early-out).
+  // early-out). An under-estimate is not: a static shape is only a placeholder
+  // for a dynamically sized input, so an input already in the frame counts at
+  // its actual size. A concat fill clone whose band is not carved yet reads a
+  // 3M-element input through a formal typed at 256 elements, and sized from the
+  // formal it ran on one block.
   if (data.numElements == 0 && WaveConfig::get().isCg.value_or(false)) {
     int64_t staticNumElements = 0;
+    for (size_t k = 0; k < numOpInputs; ++k) {
+      const auto& iv = frame.getIValue(data.actualInputs[k]);
+      if (iv.isTensor()) {
+        staticNumElements =
+            std::max<int64_t>(staticNumElements, iv.toTensor().numel());
+      }
+    }
     for (const auto* tensorMeta : launch.op->inputTypes()) {
       if (tensorMeta != nullptr && !tensorMeta->hasSymbolicShape()) {
         int64_t numElements = 1;
@@ -3229,7 +3463,33 @@ void CompositeInvocation::gatherLaunches(
     sv.isCgGrid = false;
     sv.hasGpuStandalones = false;
     layoutParamSlots(stepIdx, sv);
+    // The step's launch runs at the largest block size any of its ops asks
+    // for; the kernel has an entry point compiled for each such size.
+    // A step whose every launch is one op that has an entry point of its own
+    // runs that entry point.
+    sv.blockSize = WaveConfig::get().blockSize;
+    const KernelOperation* soleOp = nullptr;
+    bool oneOp = true;
+    for (size_t i = 0; i < ops_.size(); ++i) {
+      const auto* grid = grids.at(i).grid;
+      if (stepIdx >= static_cast<int32_t>(grid->size())) {
+        continue;
+      }
+      for (const auto& launch : (*grid)[stepIdx]) {
+        if (launch.op != nullptr) {
+          sv.blockSize =
+              std::max(sv.blockSize, launch.op->blockSizePreference());
+          oneOp = oneOp && (soleOp == nullptr || soleOp == launch.op);
+          soleOp = launch.op;
+        }
+      }
+    }
+    sv.entry =
+        kernel_ ? kernel_->entryFor(sv.blockSize, oneOp ? soleOp : nullptr) : 0;
   }
+  // Outputs sized one entry per block or per tile are sized for the launch's
+  // block size.
+  ReserveBlockSizeScope reserveBlockSize(sv.blockSize);
   const bool doTiming = WaveConfig::get().printTiming ||
       (WaveConfig::get().trace & WaveConfig::kTiming);
   const int64_t maxDelayedFree = WaveConfig::get().maxDelayedFree;
@@ -4397,7 +4657,7 @@ void CompositeInvocation::execute(ExecutionState& state) {
       auto& stepEvents = newStepEvents(state, sequenceNumber_, stepIdx);
       if (sv.hasGpuStandalones) {
         if (state.lastWaveDone != nullptr) {
-          state.lastWaveDone->wait(torchStream());
+          waitOnce(state.lastWaveDone, torchStream(), state.torchWaitedFor);
         }
         if (doEventTiming) {
           stepEvents.standaloneBegin->record(torchStream());
@@ -4412,7 +4672,7 @@ void CompositeInvocation::execute(ExecutionState& state) {
           *state.standaloneStats,
           doTiming);
       if (sv.hasGpuStandalones) {
-        stepEvents.standaloneDone->record(torchStream());
+        recordStepDone(stepEvents, torchStream(), /*wave=*/false);
         state.lastStandaloneDone = stepEvents.standaloneDone.get();
       }
       if (doTiming) {
@@ -4492,13 +4752,13 @@ void CompositeInvocation::execute(ExecutionState& state) {
       if (gridSizesMatch(sv.kernels, sv)) {
         blockSize = sv.cachedBlockSize;
       } else {
-        const auto kernelInfo = kernel_->kernelInfo();
         blockSize = makeGrid(
             sv.kernels,
             sv,
-            kernelInfo.maxOccupancy0,
-            kernelInfo.sharedMemory,
-            occupancyQuery(kernel_.get()));
+            sv.blockSize,
+            kernel_->maxOccupancy(sv.entry),
+            kernel_->kernelInfo(sv.entry).sharedMemory,
+            occupancyQuery(kernel_.get(), sv.entry));
         TORCH_CHECK(
             (blockSize & (blockSize - 1)) == 0,
             "Block size must be a power of two, got ",
@@ -4568,7 +4828,7 @@ void CompositeInvocation::execute(ExecutionState& state) {
         // step N-1's kernel -- not on this step's, which is exactly what lets
         // the two overlap.
         if (state.lastWaveDone != nullptr) {
-          state.lastWaveDone->wait(torchStream());
+          waitOnce(state.lastWaveDone, torchStream(), state.torchWaitedFor);
         }
         if (doEventTiming) {
           stepEvents.standaloneBegin->record(torchStream());
@@ -4581,7 +4841,7 @@ void CompositeInvocation::execute(ExecutionState& state) {
             *state.standaloneIndices,
             *state.standaloneStats,
             doTiming);
-        stepEvents.standaloneDone->record(torchStream());
+        recordStepDone(stepEvents, torchStream(), /*wave=*/false);
         state.lastStandaloneDone = stepEvents.standaloneDone.get();
         if (doTiming) {
           standaloneElapsed = elapsed(tStandalone);
@@ -4595,7 +4855,7 @@ void CompositeInvocation::execute(ExecutionState& state) {
     // not block; the wait is enqueued before waveBegin is recorded so that
     // event marks the real start of GPU work (see the kernel-less path above).
     if (state.lastStandaloneDone != nullptr) {
-      state.lastStandaloneDone->wait(*state.stream);
+      waitOnce(state.lastStandaloneDone, *state.stream, state.waveWaitedFor);
     }
     if (doEventTiming) {
       stepEvents.waveBegin->record(*state.stream);
@@ -5140,7 +5400,7 @@ void CompositeInvocation::executeAllocGroups(ExecutionState& state) {
       auto& stepEvents = newStepEvents(state, sequenceNumber_, stepIdx);
       if (sv.hasGpuStandalones) {
         if (state.lastWaveDone != nullptr) {
-          state.lastWaveDone->wait(torchStream());
+          waitOnce(state.lastWaveDone, torchStream(), state.torchWaitedFor);
         }
         if (doEventTiming) {
           stepEvents.standaloneBegin->record(torchStream());
@@ -5155,7 +5415,7 @@ void CompositeInvocation::executeAllocGroups(ExecutionState& state) {
           *state.standaloneStats,
           doTiming);
       if (sv.hasGpuStandalones) {
-        stepEvents.standaloneDone->record(torchStream());
+        recordStepDone(stepEvents, torchStream(), /*wave=*/false);
         state.lastStandaloneDone = stepEvents.standaloneDone.get();
       }
       if (doTiming) {
@@ -5225,9 +5485,10 @@ void CompositeInvocation::executeAllocGroups(ExecutionState& state) {
         blockSize = makeGrid(
             sv.kernels,
             sv,
-            kernel_->kernelInfo().maxOccupancy0,
+            sv.blockSize,
+            kernel_->maxOccupancy(sv.entry),
             /*staticSharedPerBlock=*/0,
-            occupancyQuery(kernel_.get()));
+            occupancyQuery(kernel_.get(), sv.entry));
         TORCH_CHECK(
             (blockSize & (blockSize - 1)) == 0,
             "Block size must be a power of two, got ",
@@ -5292,7 +5553,7 @@ void CompositeInvocation::executeAllocGroups(ExecutionState& state) {
       }
       if (!sv.standalones.empty()) {
         if (state.lastWaveDone != nullptr) {
-          state.lastWaveDone->wait(torchStream());
+          waitOnce(state.lastWaveDone, torchStream(), state.torchWaitedFor);
         }
         if (doEventTiming) {
           stepEvents.standaloneBegin->record(torchStream());
@@ -5305,7 +5566,7 @@ void CompositeInvocation::executeAllocGroups(ExecutionState& state) {
             *state.standaloneIndices,
             *state.standaloneStats,
             doTiming);
-        stepEvents.standaloneDone->record(torchStream());
+        recordStepDone(stepEvents, torchStream(), /*wave=*/false);
         state.lastStandaloneDone = stepEvents.standaloneDone.get();
         if (doTiming) {
           standaloneElapsed = elapsed(tStandalone);
@@ -5315,7 +5576,7 @@ void CompositeInvocation::executeAllocGroups(ExecutionState& state) {
     };
 
     if (state.lastStandaloneDone != nullptr) {
-      state.lastStandaloneDone->wait(*state.stream);
+      waitOnce(state.lastStandaloneDone, *state.stream, state.waveWaitedFor);
     }
     if (doEventTiming) {
       stepEvents.waveBegin->record(*state.stream);
@@ -5458,7 +5719,7 @@ void CompositeInvocation::launch(
   // Metadata::dynamicSharedMemory; the ops of a step share one launch, so the
   // launch takes the max. Steps with no such op launch with zero and keep the
   // occupancy they would have had.
-  const int32_t dynShared = dynamicSharedBytes(sv.kernels);
+  const int32_t dynShared = dynamicSharedBytes(sv.kernels, blockSize);
 
   // opBarrier (Core.cuh) is a counter spin-wait that blocks until numBlocksInOp
   // blocks have arrived, so it needs those blocks co-resident -- which only a
@@ -5517,10 +5778,10 @@ void CompositeInvocation::launch(
         segments.size() > 1 ? segment.cooperative : cooperative;
     if (launchCooperative) {
       kernel_->launchCooperative(
-          segment.numBlocks, blockSize, segment.dynamicShared, stream, args);
+          sv.entry, segment.numBlocks, segment.dynamicShared, stream, args);
     } else {
       kernel_->launch(
-          segment.numBlocks, blockSize, segment.dynamicShared, stream, args);
+          sv.entry, segment.numBlocks, segment.dynamicShared, stream, args);
     }
   };
 
@@ -5613,15 +5874,15 @@ void CompositeInvocation::launch(
         try {
           if (groupAll || segment.cooperative) {
             kernel_->launchCooperative(
+                kernel_->entryFor(blockSize, nullptr),
                 segment.numBlocks,
-                blockSize,
                 segment.dynamicShared,
                 stream,
                 args);
           } else {
             kernel_->launch(
+                kernel_->entryFor(blockSize, nullptr),
                 segment.numBlocks,
-                blockSize,
                 segment.dynamicShared,
                 stream,
                 args);
@@ -5661,7 +5922,7 @@ void CompositeInvocation::launch(
     // The debug path already syncs after every block; just close the event
     // chain so the ordering edges stay consistent with the normal path.
     if (events != nullptr) {
-      events->waveDone->record(*stream);
+      recordStepDone(*events, *stream, /*wave=*/true);
     }
 
     if (betweenLaunchAndSync) {
@@ -5670,7 +5931,26 @@ void CompositeInvocation::launch(
   } else {
     stream->hostToDeviceAsync(deviceBase, pinnedBase, h2dBytes);
     for (const auto& segment : segments) {
-      launchSegment(segment);
+      if (!WaveConfig::get().launchPerOp) {
+        launchSegment(segment);
+        continue;
+      }
+      // An op's blocks are contiguous in the step's block array, so each run
+      // of one launch index is one op.  A barrier op's blocks stay together
+      // in their run, which keeps them in one launch.
+      const int32_t segmentEnd = segment.firstBlock + segment.numBlocks;
+      for (int32_t runStart = segment.firstBlock; runStart < segmentEnd;) {
+        int32_t runEnd = runStart + 1;
+        while (runEnd < segmentEnd &&
+               sv.launchIndices.at(runEnd) == sv.launchIndices.at(runStart)) {
+          ++runEnd;
+        }
+        LaunchSegment opSegment = segment;
+        opSegment.firstBlock = runStart;
+        opSegment.numBlocks = runEnd - runStart;
+        launchSegment(opSegment);
+        runStart = runEnd;
+      }
     }
     if (returnBegin >= 0) {
       stream->deviceToHostAsync(
@@ -5681,7 +5961,7 @@ void CompositeInvocation::launch(
       // completion rather than the host's observation of it, and so the
       // ordering edge is established as early as possible.
       if (events != nullptr) {
-        events->waveDone->record(*stream);
+        recordStepDone(*events, *stream, /*wave=*/true);
       }
       if (betweenLaunchAndSync) {
         betweenLaunchAndSync();
@@ -5694,7 +5974,7 @@ void CompositeInvocation::launch(
       }
     } else {
       if (events != nullptr) {
-        events->waveDone->record(*stream);
+        recordStepDone(*events, *stream, /*wave=*/true);
       }
       if (betweenLaunchAndSync) {
         betweenLaunchAndSync();

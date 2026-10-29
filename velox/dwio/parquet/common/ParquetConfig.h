@@ -139,7 +139,7 @@ class ParquetConfig {
       "writer_enable_page_index",
       "writer.enable-page-index",
       bool,
-      false,
+      true,
       "Write the Parquet page index (column index and offset index) in the "
       "Parquet writer. When enabled, per-page statistics are stored in the "
       "page index instead of the data page headers.")

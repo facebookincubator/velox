@@ -38,6 +38,7 @@ std::unique_ptr<ClusterIndex> ClusterIndex::create(
       std::move(rootSection),
       createIndexMetadataInput(options),
       createIndexDataInput(options),
+      options.keyComparator,
       options.pinIndex,
       options.preloadIndex,
       pool));
@@ -47,6 +48,7 @@ ClusterIndex::ClusterIndex(
     Section rootSection,
     std::shared_ptr<MetadataInput> metadataInput,
     std::shared_ptr<velox::dwio::common::BufferedInput> dataInput,
+    const KeyComparator* keyComparator,
     bool pinIndex,
     bool preloadIndex,
     velox::memory::MemoryPool* pool)
@@ -54,12 +56,17 @@ ClusterIndex::ClusterIndex(
           std::move(rootSection),
           std::move(metadataInput),
           std::move(dataInput),
-          [](std::string_view encodedKeys,
-             std::function<void*(uint32_t)> stringBufferFactory,
-             velox::memory::MemoryPool* pool) {
+          [keyComparator](
+              std::string_view encodedKeys,
+              std::function<void*(uint32_t)> stringBufferFactory,
+              velox::memory::MemoryPool* pool) {
             return createFlatKeyReader(
-                encodedKeys, std::move(stringBufferFactory), pool);
+                encodedKeys,
+                std::move(stringBufferFactory),
+                keyComparator,
+                pool);
           },
+          keyComparator,
           pinIndex,
           preloadIndex,
           pool) {}
