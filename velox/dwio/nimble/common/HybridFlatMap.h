@@ -19,6 +19,7 @@
 #include <cstdint>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -51,19 +52,85 @@ class HybridFlatMap {
     return groupId == kDefaultGroupId;
   }
 
+  /// An empty writer configuration: only the Default group, without keys.
+  /// addGroup() adds the explicit groups. Without a key kind, as when the
+  /// caller does not know the map's key type yet, the keys are checked for one
+  /// when a writer binds the configuration to its column (see the binding
+  /// constructor below).
+  HybridFlatMap();
+
+  /// As above, for keys of `keyKind`, so addGroup() checks each key for it
+  /// on the spot.
+  explicit HybridFlatMap(ScalarKind keyKind);
+
+  /// A writer configuration for keys of `keyKind`, checked with user errors
+  /// and normalized: every key canonical (canonicalKey()), group IDs
+  /// ascending, no key repeated within or across groups, every configured
+  /// group non-empty, and exactly one Default group, without keys. groups()
+  /// then holds each group's keys sorted, the schema and key-presence bitmap
+  /// order.
+  ///
+  /// Example: for Int64 keys, groups {0: ["9", "10"], Default: []} hold
+  /// {0: ["10", "9"], Default: []}; {0: ["07"], Default: []} and
+  /// {1: ["1"], 0: ["2"], Default: []} are rejected.
+  HybridFlatMap(ScalarKind keyKind, std::vector<Group> groups);
+
+  /// `configuration` bound to a column whose keys are of `keyKind`, as a
+  /// writer does when it meets the column. A configuration built without a
+  /// key kind is checked for `keyKind` as the constructor above checks one; a
+  /// configuration built for another key kind is rejected.
+  ///
+  /// Example: a configuration with group {0: ["7", "300"]} and no key kind
+  /// binds to an Int16 column, and is rejected for an Int8 column, where
+  /// "300" does not parse.
+  HybridFlatMap(ScalarKind keyKind, const HybridFlatMap& configuration);
+
+  /// The groups of a written schema, as recorded: the Default group holds
+  /// the keys found while writing, in first-seen order, and a projection may
+  /// leave groups out. Not checked as a writer configuration; schema readers
+  /// and builders apply their own checks. Its key kind is the schema type's.
+  static HybridFlatMap fromSchema(std::vector<Group> groups);
+
+  /// The key kind a writer configuration was built for; empty for a
+  /// configuration built without one, until a writer binds it, and for schema
+  /// metadata (fromSchema()), whose key kind is the schema type's.
+  std::optional<ScalarKind> keyKind() const {
+    return keyKind_;
+  }
+
+  /// Logical groups in schema order.
+  const std::vector<Group>& groups() const {
+    return groups_;
+  }
+
+  /// Adds explicit group `groupId` holding `keys`, checked with user errors
+  /// on the spot: `groupId` above every explicit group added before and below
+  /// the Default group's, `keys` non-empty, no key empty or already in a
+  /// group, and, with a key kind, every key canonical for it. The group goes
+  /// before the Default group with its keys sorted, the key-presence bitmap
+  /// order.
+  ///
+  /// Example: on HybridFlatMap{ScalarKind::Int64}, addGroup(0, {"9", "10"})
+  /// adds {0: ["10", "9"]}; a later addGroup(0, {"1"}) or addGroup(1, {"9"})
+  /// is rejected.
+  void addGroup(uint32_t groupId, std::vector<std::string> keys);
+
   /// Returns the logical group with `groupId`. Fails when it is absent.
   const Group& groupById(uint32_t groupId) const;
 
   /// Reserved schema attribute containing serialized group metadata.
   static constexpr std::string_view kAttributeName{"hybridFlatMap"};
 
-  /// Logical groups in schema order.
-  std::vector<Group> groups;
-
   bool operator==(const HybridFlatMap&) const = default;
 
   /// Returns whether `kind` is supported for Hybrid FlatMap keys.
   static bool supportedKeyKind(ScalarKind kind);
+
+  /// Returns `key` as a Hybrid FlatMap schema writes keys of `keyKind`: a
+  /// String key unchanged, an integer key as the decimal form of its value.
+  /// Throws a user error when `key` is empty, does not parse as `keyKind`, or
+  /// is not written that way, e.g. "07" or "+7" for an integer kind.
+  static std::string canonicalKey(ScalarKind keyKind, std::string_view key);
 
   /// Serializes the groups into the flattened HybridFlatMap FlatBuffer table.
   /// `group_ids` and `group_key_counts` are parallel per-group vectors, and
@@ -72,8 +139,9 @@ class HybridFlatMap {
   /// preceding groups.
   std::string serialize() const;
 
-  /// Deserializes and validates groups produced by `serialize()`. Also accepts
-  /// an omitted `group_keys` vector when no group has keys.
+  /// Deserializes and validates groups produced by `serialize()`, as schema
+  /// metadata (fromSchema()). Also accepts an omitted `group_keys` vector when
+  /// no group has keys.
   static HybridFlatMap deserialize(std::string_view serialized);
 
   /// Deserializes the reserved metadata attribute, leaving `attributes`
@@ -90,6 +158,24 @@ class HybridFlatMap {
   /// stale value in place.
   void setAttribute(
       std::vector<std::pair<std::string, std::string>>& attributes) const;
+
+ private:
+  // fromSchema(): the groups as given, without a key kind.
+  struct AsRecorded {};
+  HybridFlatMap(AsRecorded, std::vector<Group> groups)
+      : groups_{std::move(groups)} {}
+
+  // The groups of `configuration` for the binding constructor, after
+  // rejecting a configuration built for another key kind than `keyKind`.
+  static std::vector<Group> groupsForKeyKind(
+      ScalarKind keyKind,
+      const HybridFlatMap& configuration);
+
+  // See keyKind(). Fixed at construction: binding to a column builds a new
+  // HybridFlatMap.
+  const std::optional<ScalarKind> keyKind_;
+  // See groups().
+  std::vector<Group> groups_;
 };
 
 namespace detail {

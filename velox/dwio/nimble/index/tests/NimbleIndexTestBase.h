@@ -57,6 +57,7 @@ RowRange readEmbeddedRowRange(const folly::IOBuf& slice);
 std::optional<std::string> readEmbeddedResumeKey(const folly::IOBuf& slice);
 folly::IOBuf coalesceChunkSlice(const folly::IOBuf& slice);
 HybridFlatMap makeHybridFlatMapConfig(
+    ScalarKind keyKind,
     const std::vector<std::vector<std::string>>& explicitGroups);
 NimbleIndexProjector::RowProjectionResult projectRows(
     NimbleIndexProjector& projector,
