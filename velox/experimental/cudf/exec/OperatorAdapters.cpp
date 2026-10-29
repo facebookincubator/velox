@@ -236,7 +236,8 @@ class FilterProjectAdapter : public OperatorAdapter {
     // constant projections, which CudfFilterProject fills to the row count
     // of each batch, can run. A FilterNode keeps its input type, so the
     // source of 'planNode' gives the input type of a fused FilterProject too.
-    if (planNode->sources()[0]->outputType()->size() == 0) {
+    const auto& inputType = planNode->sources()[0]->outputType();
+    if (inputType->size() == 0) {
       if (filterNode) {
         LOG_FALLBACK(
             "FilterProject filter over a zero-column input, PlanNode id: {}",
@@ -247,7 +248,10 @@ class FilterProjectAdapter : public OperatorAdapter {
           !std::all_of(
               projectPlanNode->projections().begin(),
               projectPlanNode->projections().end(),
-              [](const auto& e) { return e->isConstantKind(); })) {
+              [&](const auto& projection) {
+                return isConstantProjectionOverZeroColumns(
+                    inputType, projection);
+              })) {
         LOG_FALLBACK(
             "FilterProject non-constant projection over a zero-column input, PlanNode id: {}",
             planNode->id());

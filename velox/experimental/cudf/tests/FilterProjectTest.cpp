@@ -3904,8 +3904,9 @@ TEST_F(CudfSimpleFilterProjectTest, roundDouble) {
 }
 
 // Constant projections over a zero-column input are filled to the row count of
-// each batch: here two batches that the filter cuts to 3 and 2 rows. A third
-// batch that the filter empties never reaches the projection.
+// each batch: here the first and third batches, which the filter cuts to 3 and
+// 2 rows. The second batch, which the filter empties, never reaches the
+// projection.
 TEST_F(CudfFilterProjectTest, constantProjectionsOverZeroColumns) {
   const std::vector<RowVectorPtr> batches = {
       makeRowVector({makeFlatVector<int64_t>({1, 2, 3, 4})}),
@@ -3916,20 +3917,22 @@ TEST_F(CudfFilterProjectTest, constantProjectionsOverZeroColumns) {
                            const Variant& value) -> core::TypedExprPtr {
     return std::make_shared<core::ConstantTypedExpr>(type, value);
   };
-  auto plan = PlanBuilder()
-                  .values(batches)
-                  .filter("c0 > 1")
-                  .project({})
-                  .projectExpressions(
-                      {constant(VARCHAR(), "abc"),
-                       constant(BIGINT(), int64_t(42)),
-                       constant(DOUBLE(), 1.5),
-                       constant(BOOLEAN(), true),
-                       constant(DATE(), int32_t(20'454)),
-                       constant(INTERVAL_DAY_TIME(), int64_t(86'400'000)),
-                       constant(BIGINT(), Variant::null(TypeKind::BIGINT)),
-                       constant(VARCHAR(), Variant::null(TypeKind::VARCHAR))})
-                  .planNode();
+  auto plan =
+      PlanBuilder()
+          .values(batches)
+          .filter("c0 > 1")
+          .project({})
+          .projectExpressions(
+              {constant(VARCHAR(), "abc"),
+               constant(BIGINT(), int64_t(42)),
+               constant(DOUBLE(), 1.5),
+               constant(BOOLEAN(), true),
+               constant(DATE(), int32_t(20'454)),
+               constant(INTERVAL_DAY_TIME(), int64_t(86'400'000)),
+               constant(BIGINT(), Variant::null(TypeKind::BIGINT)),
+               constant(VARCHAR(), Variant::null(TypeKind::VARCHAR)),
+               constant(INTERVAL_DAY_TIME(), Variant::null(TypeKind::BIGINT))})
+          .planNode();
 
   const vector_size_t numRows = 5;
   auto expected = makeRowVector(
@@ -3940,7 +3943,8 @@ TEST_F(CudfFilterProjectTest, constantProjectionsOverZeroColumns) {
        makeConstant<int32_t>(20'454, numRows, DATE()),
        makeConstant<int64_t>(86'400'000, numRows, INTERVAL_DAY_TIME()),
        makeNullConstant(TypeKind::BIGINT, numRows),
-       makeNullConstant(TypeKind::VARCHAR, numRows)});
+       makeNullConstant(TypeKind::VARCHAR, numRows),
+       BaseVector::createNullConstant(INTERVAL_DAY_TIME(), numRows, pool())});
   // Each Values batch reaches the GPU on its own.
   AssertQueryBuilder(plan)
       .config(cudf_velox::CudfFromVelox::kGpuBatchSizeRows, "1")

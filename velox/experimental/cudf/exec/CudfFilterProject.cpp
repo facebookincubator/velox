@@ -30,6 +30,7 @@
 
 #include <cudf/aggregation.hpp>
 #include <cudf/column/column_factories.hpp>
+#include <cudf/copying.hpp>
 #include <cudf/reduction.hpp>
 #include <cudf/stream_compaction.hpp>
 #include <cudf/unary.hpp>
@@ -139,6 +140,12 @@ CudfFilterProject::CudfFilterProject(
   }
 }
 
+bool isConstantProjectionOverZeroColumns(
+    const RowTypePtr& inputType,
+    const core::TypedExprPtr& projection) {
+  return inputType->size() == 0 && projection->isConstantKind();
+}
+
 void CudfFilterProject::initialize() {
   Operator::initialize();
 
@@ -153,12 +160,23 @@ void CudfFilterProject::initialize() {
 
     for (column_index_t i = 0; i < project_->projections().size(); i++) {
       auto& projection = project_->projections()[i];
-      if (inputType->size() == 0 && projection->isConstantKind()) {
+      if (isConstantProjectionOverZeroColumns(inputType, projection)) {
         // There is no input column to size an expression result from, so the
         // constant is kept as a scalar and filled to the row count of each
-        // batch in project().
-        constantProjections_.emplace_back(
-            i, makeScalarFromConstantExpr(projection, operatorCtx_->pool()));
+        // batch in project(). The scalar is cast once to the type the pipeline
+        // carries, e.g. INT64 for an INTERVAL DAY TO SECOND duration.
+        auto scalar =
+            makeScalarFromConstantExpr(projection, operatorCtx_->pool());
+        const auto type = veloxToCudfDataType(projection->type());
+        if (scalar->type() != type) {
+          auto stream = getDefaultStreamForCurrentThread();
+          auto column =
+              cudf::make_column_from_scalar(*scalar, 1, stream, get_temp_mr());
+          column = cudf::cast(column->view(), type, stream, get_temp_mr());
+          scalar = cudf::get_element(column->view(), 0, stream, get_temp_mr());
+          stream.sync();
+        }
+        constantProjections_.emplace_back(i, std::move(scalar));
         continue;
       }
       bool identityProjection = checkAddIdentityProjection(
@@ -323,18 +341,10 @@ std::vector<std::unique_ptr<cudf::column>> CudfFilterProject::project(
 
   // Rearrange columns to match outputType_
   std::vector<std::unique_ptr<cudf::column>> outputColumns(outputType_->size());
-  // constant projections of a zero-column input
+  // Constant projections of a zero-column input.
   for (const auto& [outputChannel, scalar] : constantProjections_) {
-    auto column = cudf::make_column_from_scalar(
+    outputColumns[outputChannel] = cudf::make_column_from_scalar(
         *scalar, numRows, stream, get_output_mr());
-    // The scalar of an INTERVAL DAY TO SECOND constant is a duration, while
-    // the pipeline carries the type as INT64; cast to the output type as the
-    // evaluators do.
-    const auto type = veloxToCudfDataType(outputType_->childAt(outputChannel));
-    if (column->type() != type) {
-      column = cudf::cast(column->view(), type, stream, get_output_mr());
-    }
-    outputColumns[outputChannel] = std::move(column);
   }
   // computed resultProjections
   for (int i = 0; i < resultProjections_.size(); i++) {

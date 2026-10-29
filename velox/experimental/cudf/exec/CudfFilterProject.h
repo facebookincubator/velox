@@ -84,8 +84,9 @@ class CudfFilterProject : public CudfOperatorBase {
   std::shared_ptr<const core::FilterNode> filter_;
 
   std::vector<CudfExpressionPtr> projectEvaluators_;
-  // Constant projections of a zero-column input, as (output channel, scalar).
-  // project() fills each to the row count of the batch.
+  // Constant projections of a zero-column input, as (output channel, scalar)
+  // with the scalar in the type the pipeline carries. project() fills each to
+  // the row count of the batch.
   std::vector<std::pair<column_index_t, std::unique_ptr<cudf::scalar>>>
       constantProjections_;
   CudfExpressionPtr filterEvaluator_;
@@ -93,5 +94,12 @@ class CudfFilterProject : public CudfOperatorBase {
   std::vector<velox::exec::IdentityProjection> resultProjections_;
   std::vector<velox::exec::IdentityProjection> identityProjections_;
 };
+
+/// True when 'projection' is a plan constant over a zero-column 'inputType'.
+/// Shared by FilterProjectAdapter::canRunOnGPU and
+/// CudfFilterProject::initialize() so the two checks cannot drift.
+bool isConstantProjectionOverZeroColumns(
+    const RowTypePtr& inputType,
+    const core::TypedExprPtr& projection);
 
 } // namespace facebook::velox::cudf_velox
