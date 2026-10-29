@@ -85,8 +85,6 @@ struct NimbleTypeTraits<velox::TypeKind::VARBINARY> {
   static constexpr ScalarKind scalarKind = ScalarKind::Binary;
 };
 
-constexpr uint64_t kTimestampLogicalSize = 12;
-
 template <bool addNulls, typename Vector, typename Consumer, typename IndexOp>
 uint64_t iterateNonNulls(
     const OrderedRanges& ranges,

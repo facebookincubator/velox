@@ -125,6 +125,14 @@ struct EncodingIdentifiers {
     static constexpr NestedEncodingIdentifier BitOffsets = 2;
   };
 
+  struct PartitionedEliasFano {
+    // Nested sub-streams for PartitionedEliasFano: the first row and the first
+    // value of each partition, and the first partition of each group.
+    static constexpr NestedEncodingIdentifier PartitionOffsets = 0;
+    static constexpr NestedEncodingIdentifier PartitionBases = 1;
+    static constexpr NestedEncodingIdentifier PartitionGroupOffsets = 2;
+  };
+
   struct Fsst {
     static constexpr NestedEncodingIdentifier Lengths = 0;
   };

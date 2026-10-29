@@ -32,6 +32,8 @@ namespace facebook::velox::exec::rpc {
 namespace {
 constexpr int64_t kLegacyFixedLimit{200};
 constexpr int64_t kDefaultAdaptiveHardLimit{1'000'000};
+// Limiter floor when neither the function nor the session declares one.
+constexpr double kDefaultAdaptiveFloor{50.0};
 
 // Bounds a per-row future by 'timeout' and stamps 'rowId' on its response.
 folly::SemiFuture<RPCResponse> wrapRowFuture(
@@ -214,10 +216,25 @@ void RPCOperator::initializeRateLimiter() {
       0,
       "rpc.ratelimiter.max_probe_interval_ms must be non-negative");
 
+  // A hard limit of 0 or more opts into the function's bounds taking
+  // precedence: session properties apply to every function in the query,
+  // while the function declares bounds for its own backend. The default of -1
+  // keeps the session's precedence. With 0 or more, max_limit no longer
+  // applies: a positive hard limit is the ceiling when the function declares
+  // none, and 0 leaves only the safety ceiling.
+  const bool functionBoundsFirst = sessionHardLimit >= 0;
   RPCRateLimiter::Config policy;
   policy.adaptive = queryConfig.rpcRateLimiterAdaptiveEnabled();
-  policy.floor = sessionFloor > 0 ? static_cast<double>(sessionFloor)
-                                  : function_->configuredAdaptiveFloor();
+  const auto functionFloor = function_->configuredAdaptiveFloor();
+  if (functionBoundsFirst && functionFloor > 0) {
+    policy.floor = functionFloor;
+  } else if (sessionFloor > 0) {
+    policy.floor = static_cast<double>(sessionFloor);
+  } else if (functionFloor > 0) {
+    policy.floor = functionFloor;
+  } else {
+    policy.floor = kDefaultAdaptiveFloor;
+  }
   policy.decreaseFactor = queryConfig.rpcRateLimiterDecreaseFactor();
   policy.maxProbeInterval = std::chrono::milliseconds{maxProbeIntervalMs};
   const auto functionLimit = function_->configuredCeiling();
