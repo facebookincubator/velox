@@ -27,6 +27,7 @@
 #include "velox/common/vectorindex/CodecOptions.h"
 #include "velox/common/vectorindex/Embeddings.h"
 #include "velox/common/vectorindex/LocalVectorIndex.h"
+#include "velox/common/vectorindex/LocalVectorIndexAccelerator.h"
 #include "velox/common/vectorindex/LocalVectorIndexOptions.h"
 #include "velox/common/vectorindex/VectorIndexKind.h"
 #include "velox/common/vectorindex/VectorIndexMetric.h"
@@ -62,7 +63,9 @@ class FaissLocalVectorIndex : public LocalVectorIndex {
 
   /// Builds a local index of 'kind' over 'embeddings', with 'ids' giving each
   /// embedding's id, on the calling thread. Throws a user error for an id of
-  /// kPaddingId. The same input gives the same bytes. The embeddings must be
+  /// kPaddingId. The same input gives the same bytes, unless an accelerator
+  /// (see LocalVectorIndexAccelerator) builds the index. kCagra is built only
+  /// by an accelerator and stored as an IndexHNSWCagra. The embeddings must be
   /// normalized for 'metric' (see
   /// EmbeddingNormalizer). Passes the index's bytes to 'write' in order, a
   /// chunk at a time, so the caller can place them without an intermediate
@@ -125,9 +128,11 @@ class FaissLocalVectorIndex : public LocalVectorIndex {
   /// 'bytes' must outlive it. 'searchOptions', search settings only (see
   /// LocalVectorIndexOptions::parseSearch), override the ones recorded in the
   /// index: 'ivf.nprobe' for IVF types, capped at the number of lists, and
-  /// 'hnsw.efSearch' for kHnswSq. Throws a user error if 'bytes' is not such
-  /// a local index, if an embedding has kPaddingId, or for a setting that does
-  /// not apply to its kind. A local index has at least one embedding.
+  /// 'hnsw.efSearch' for kHnswSq and kCagra. Throws a user error if 'bytes' is
+  /// not such a local index, if an embedding has kPaddingId, or for a setting
+  /// that does not apply to its kind. A local index has at least one embedding.
+  /// With an accelerator set, the index also gets a device copy for search()
+  /// to use.
   FaissLocalVectorIndex(
       std::string_view bytes,
       VectorIndexMetric metric,
@@ -142,6 +147,11 @@ class FaissLocalVectorIndex : public LocalVectorIndex {
 
   VectorIndexKind kind() const;
 
+  /// True if search() runs on an accelerator's device copy.
+  bool accelerated() const {
+    return accelerated_ != nullptr;
+  }
+
   int32_t dimension() const override;
 
   int64_t size() const override;
@@ -155,6 +165,8 @@ class FaissLocalVectorIndex : public LocalVectorIndex {
  private:
   std::unique_ptr<faiss::Index> index_;
   VectorIndexKind kind_;
+  // Refers to 'index_', so it is declared after it to be destroyed first.
+  std::unique_ptr<LocalVectorIndexAccelerator::Index> accelerated_;
 };
 
 } // namespace facebook::velox::common::vectorindex

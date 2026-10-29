@@ -31,6 +31,9 @@
 #ifdef VELOX_ENABLE_UCX_EXCHANGE
 #include "velox/experimental/ucx-exchange/UcxExchangeRegistration.h"
 #endif
+#ifdef VELOX_ENABLE_FAISS_GPU
+#include "velox/common/vectorindex/GpuLocalVectorIndex.h"
+#endif
 
 #include "folly/Conv.h"
 #include "velox/common/base/Exceptions.h"
@@ -402,6 +405,17 @@ void registerCudf() {
     registerJitEvaluator(CudfConfig::getInstance().jitExpressionPriority);
   }
 
+#ifdef VELOX_ENABLE_FAISS_GPU
+  if (CudfConfig::getInstance().vectorSearchEnabled) {
+    common::vectorindex::setLocalVectorIndexAccelerator(
+        common::vectorindex::makeGpuLocalVectorIndexAccelerator({
+            .device = contextDevice,
+            .minSearchSize = CudfConfig::getInstance().vectorSearchMinIndexSize,
+            .build = CudfConfig::getInstance().vectorIndexBuildEnabled,
+        }));
+  }
+#endif
+
 #ifdef VELOX_ENABLE_UCX_EXCHANGE
   // Registered last, after the memory resources and driver adapter it relies
   // on, so a registerCudf() that fails part way leaves no kUcx behind.
@@ -418,6 +432,9 @@ void unregisterCudf() {
   // Unconditionally unregister the UCX transports, whether or not
   // CudfConfig::exchange was set when registerCudf() ran.
   ucx_exchange::unregisterUcxTransports();
+#endif
+#ifdef VELOX_ENABLE_FAISS_GPU
+  common::vectorindex::setLocalVectorIndexAccelerator(nullptr);
 #endif
   // Reset the any_resource copies before the adaptors they were copied from,
   // so that the wrapped upstream resources are released here.
@@ -535,6 +552,17 @@ void CudfConfig::initialize(
   }
   if (config.find(kCudfTopNBatchSize) != config.end()) {
     topNBatchSize = folly::to<int32_t>(config[kCudfTopNBatchSize]);
+  }
+  if (config.find(kCudfVectorSearchEnabled) != config.end()) {
+    vectorSearchEnabled = folly::to<bool>(config[kCudfVectorSearchEnabled]);
+  }
+  if (config.find(kCudfVectorSearchMinIndexSize) != config.end()) {
+    vectorSearchMinIndexSize =
+        folly::to<int64_t>(config[kCudfVectorSearchMinIndexSize]);
+  }
+  if (config.find(kCudfVectorIndexBuildEnabled) != config.end()) {
+    vectorIndexBuildEnabled =
+        folly::to<bool>(config[kCudfVectorIndexBuildEnabled]);
   }
   if (config.find(kCudfTimestampUnit) != config.end()) {
     const auto& unit = config[kCudfTimestampUnit];
