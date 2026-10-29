@@ -582,8 +582,6 @@ jobs:
     env:
       CCACHE_DIR: ${{ github.workspace }}/ccache
       USE_CLANG: ${{ inputs.use-clang && 'true' || 'false' }}
-      # Match the shared Velox build and system glog's shared gflags.
-      VELOX_BUILD_SHARED: "ON"
       # Targets to build. Empty means build everything.
       BUILD_TARGETS: ${{ inputs.cmake-targets }}
     outputs:
@@ -657,7 +655,16 @@ jobs:
           install_fmt
           install_boost
           install_fast_float
-          install_folly
+          # Build folly (and its gflags) shared under Clang so it matches the
+          # shared libvelox.so. A static folly links gflags statically, which
+          # then collides with the shared gflags velox links
+          # (VELOX_GFLAGS_TYPE=shared), registering gflags' flags twice and
+          # aborting every test at startup.
+          if [[ "${USE_CLANG}" = "true" ]]; then
+            VELOX_BUILD_SHARED=ON install_folly
+          else
+            install_folly
+          fi
           install_fizz
           install_wangle
           install_mvfst
@@ -681,8 +688,13 @@ jobs:
           # fails the configure.
           faiss_SOURCE: BUNDLED
           LibXml2_SOURCE: BUNDLED
-          # Use the same shared gflags as Folly and glog.
-          gflags_SOURCE: SYSTEM
+          # Use BUNDLED gflags to provide PIC static gflags for .so plugins.
+          # The container's folly is built with -DGFLAGS_SHARED=FALSE so its
+          # exported config references gflags_static which BUNDLED gflags provides.
+          gflags_SOURCE: BUNDLED
+          # Keep system glog (container's glog is built against the same gflags
+          # version). Without this, BUNDLED gflags cascades to BUNDLED glog
+          # which conflicts with system glog loaded transitively.
           glog_SOURCE: SYSTEM
           MAKEFLAGS: NUM_THREADS=32 MAX_HIGH_MEM_JOBS=8 MAX_LINK_JOBS=6
         run: |
@@ -692,6 +704,11 @@ jobs:
           BUILD_PROFILE=ubuntu-debug USE_CLANG="${USE_CLANG}" source .github/scripts/cmake-flags.sh
           if [[ "${USE_CLANG}" = "true" ]]; then
              export CC=/usr/bin/clang-15; export CXX=/usr/bin/clang++-15;
+             # folly is now built shared (linking the system libgflags.so), so
+             # resolve gflags from SYSTEM here too. This keeps a single shared
+             # libgflags.so across folly, glog and velox instead of mixing a
+             # BUNDLED gflags into libvelox.so alongside the system one.
+             export gflags_SOURCE=SYSTEM;
           fi
           export EXTRA_CMAKE_FLAGS="${CMAKE_FLAGS[*]}"
 
