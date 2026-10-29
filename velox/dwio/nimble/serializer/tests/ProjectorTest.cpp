@@ -58,23 +58,45 @@ using testing::Optional;
 
 namespace facebook::nimble::serde {
 
+// The Hybrid FlatMap key kind of a map column whose keys are `keyType`.
+ScalarKind keyKindOf(const velox::Type& keyType) {
+  const auto kind = keyType.kind();
+  if (kind == velox::TypeKind::TINYINT) {
+    return ScalarKind::Int8;
+  }
+  if (kind == velox::TypeKind::SMALLINT) {
+    return ScalarKind::Int16;
+  }
+  if (kind == velox::TypeKind::INTEGER) {
+    return ScalarKind::Int32;
+  }
+  if (kind == velox::TypeKind::BIGINT) {
+    return ScalarKind::Int64;
+  }
+  if (kind == velox::TypeKind::VARCHAR) {
+    return ScalarKind::String;
+  }
+  NIMBLE_UNREACHABLE("No Hybrid FlatMap key kind for {}", keyType.toString());
+}
+
 HybridFlatMap makeHybridFlatMap(
+    ScalarKind keyKind,
     const std::vector<std::vector<std::string>>& explicitGroups) {
-  HybridFlatMap hybridMap;
-  hybridMap.groups.reserve(explicitGroups.size() + 1);
+  std::vector<HybridFlatMap::Group> groups;
+  groups.reserve(explicitGroups.size() + 1);
   for (uint32_t groupId = 0; groupId < explicitGroups.size(); ++groupId) {
-    hybridMap.groups.push_back(
+    groups.push_back(
         HybridFlatMap::Group{
             .groupId = groupId,
             .groupKeys = explicitGroups[groupId],
         });
   }
-  hybridMap.groups.push_back(
+  groups.push_back(
       HybridFlatMap::Group{
           .groupId = HybridFlatMap::kDefaultGroupId,
           .groupKeys = {},
       });
-  return hybridMap;
+  return HybridFlatMap{keyKind, std::move(groups)};
 }
 
 // Coalesces an IOBuf chain into a single string for test comparisons.
@@ -2013,7 +2035,7 @@ TEST_P(ProjectorFormatTest, hybridFlatMapProjectionRoundTrip) {
 
   auto serializerOptions = inputSerializerOptions();
   serializerOptions.hybridFlatMapColumns = {
-      {"features", makeHybridFlatMap({{"1", "2"}, {"3"}})},
+      {"features", makeHybridFlatMap(ScalarKind::Int32, {{"1", "2"}, {"3"}})},
   };
   Serializer serializer{serializerOptions, type, pool_.get()};
   const std::string serialized{
@@ -2110,7 +2132,7 @@ TEST_P(ProjectorFormatTest, hybridFlatMapProjectionSkipsAbsentKey) {
       makeInput({"{1: 10, 9: 90}", "null", "{}", "{2: null, 1: 11}"});
   auto options = inputSerializerOptions();
   options.hybridFlatMapColumns = {
-      {"features", makeHybridFlatMap({{"1", "2"}})},
+      {"features", makeHybridFlatMap(ScalarKind::Int64, {{"1", "2"}})},
   };
   const auto [serialized, inputSchema] =
       serializeWithSchema(input, input->type(), std::move(options));
@@ -2170,7 +2192,8 @@ TEST_P(ProjectorFormatTest, hybridFlatMapDefaultOnlyProjectionRoundTrip) {
       "{1: 10, 9: 90}", "null", "{}", "{2: null, 1: 11}"};
   const auto input = makeInput(inputMaps);
   auto options = inputSerializerOptions();
-  options.hybridFlatMapColumns = {{"features", makeHybridFlatMap({})}};
+  options.hybridFlatMapColumns = {
+      {"features", makeHybridFlatMap(ScalarKind::Int64, {})}};
   const auto [serialized, inputSchema] =
       serializeWithSchema(input, input->type(), std::move(options));
   const auto& sourceRow = inputSchema->asRow();
@@ -2293,8 +2316,8 @@ TEST_P(ProjectorFormatTest, hybridFlatMapMultipleColumnsRoundTrip) {
           makeMap({1, 2}, {10, 20}), makeMap({10, 11}, {100, 110})});
   auto options = inputSerializerOptions();
   options.hybridFlatMapColumns = {
-      {"left", makeHybridFlatMap({{"1", "2"}})},
-      {"right", makeHybridFlatMap({{"10", "11"}})},
+      {"left", makeHybridFlatMap(ScalarKind::Int32, {{"1", "2"}})},
+      {"right", makeHybridFlatMap(ScalarKind::Int32, {{"10", "11"}})},
   };
   auto [serialized, schema] =
       serializeWithSchema(input, type, std::move(options));
@@ -2348,7 +2371,7 @@ TEST_P(ProjectorFormatTest, hybridFlatMapArrayProjectionRoundTrip) {
       pool_.get(), type, nullptr, kRows, std::vector<VectorPtr>{inputMap});
   auto options = inputSerializerOptions();
   options.hybridFlatMapColumns = {
-      {"features", makeHybridFlatMap({{"1", "2"}})},
+      {"features", makeHybridFlatMap(ScalarKind::Int32, {{"1", "2"}})},
   };
   auto [serialized, schema] =
       serializeWithSchema(input, type, std::move(options));
@@ -2499,14 +2522,16 @@ enum class HybridFlatMapGroupingKind {
 // 'keyWithoutData', then splits the configured share of 'mapKeys' over 1-2
 // groups. 'mixedKey', which no row holds either, joins the first of those
 // groups so its key-presence bitmap mixes present and absent keys. Group IDs
-// ascend with random gaps; Default comes last.
+// ascend with random gaps; Default comes last. 'keyKind' is the column's key
+// kind.
 HybridFlatMap makeProjectionGrouping(
+    ScalarKind keyKind,
     HybridFlatMapGroupingKind kind,
     const FuzzedMapKeys& mapKeys,
     std::string_view keyWithoutData,
     const std::optional<std::string>& mixedKey,
     std::mt19937& rng) {
-  HybridFlatMap grouping;
+  std::vector<HybridFlatMap::Group> groups;
   if (kind != HybridFlatMapGroupingKind::kDefaultOnly) {
     std::vector<std::string> configuredKeys;
     for (const auto& key : mapKeys.orderedKeys) {
@@ -2517,25 +2542,25 @@ HybridFlatMap makeProjectionGrouping(
     }
     std::shuffle(configuredKeys.begin(), configuredKeys.end(), rng);
     uint32_t groupId{folly::Random::rand32(3, rng)};
-    grouping.groups.push_back(
+    groups.push_back(
         {.groupId = groupId, .groupKeys = {std::string{keyWithoutData}}});
     const auto numGroups = std::min<size_t>(
         configuredKeys.size(), 1 + folly::Random::rand32(2, rng));
     for (size_t group = 0; group < numGroups; ++group) {
       groupId += 1 + folly::Random::rand32(3, rng);
-      grouping.groups.push_back({.groupId = groupId, .groupKeys = {}});
+      groups.push_back({.groupId = groupId, .groupKeys = {}});
     }
     for (size_t i = 0; i < configuredKeys.size(); ++i) {
-      grouping.groups[1 + i % numGroups].groupKeys.push_back(
+      groups[1 + i % numGroups].groupKeys.push_back(
           std::move(configuredKeys[i]));
     }
     if (mixedKey.has_value()) {
-      grouping.groups[numGroups > 0 ? 1 : 0].groupKeys.push_back(*mixedKey);
+      groups[numGroups > 0 ? 1 : 0].groupKeys.push_back(*mixedKey);
     }
   }
-  grouping.groups.push_back(
+  groups.push_back(
       {.groupId = HybridFlatMap::kDefaultGroupId, .groupKeys = {}});
-  return grouping;
+  return HybridFlatMap{keyKind, std::move(groups)};
 }
 
 // Which keys a projection requests from one Hybrid FlatMap column.
@@ -2813,6 +2838,7 @@ TEST_P(ProjectorFormatTest, hybridFlatMapProjectionFuzz) {
       serializerOptions.hybridFlatMapColumns.emplace(
           column,
           makeProjectionGrouping(
+              keyKindOf(*mapColumn->type()->asMap().keyType()),
               groupingKind,
               mapKeys,
               unusedKeys[1],
@@ -3072,7 +3098,8 @@ TEST_F(ProjectorTest, hybridFlatMapRejectsEmptyProjectedKey) {
   SerializerOptions validOptions{
       .version = SerializationVersion::kSerialization,
       .hybridFlatMapColumns =
-          {{"features", makeHybridFlatMap({{"other", "peer"}})}},
+          {{"features",
+            makeHybridFlatMap(ScalarKind::String, {{"other", "peer"}})}},
   };
   const auto schema = getNimbleSchema(type, validOptions);
   NIMBLE_ASSERT_THROW(

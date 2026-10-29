@@ -880,18 +880,18 @@ void addSchemaNode(
     case Kind::HybridFlatMap: {
       const auto& hybridMap = type.asHybridFlatMap();
       validateForSerialization(hybridMap);
-      HybridFlatMap metadata;
-      metadata.groups.reserve(hybridMap.groupCount());
+      std::vector<HybridFlatMap::Group> groups;
+      groups.reserve(hybridMap.groupCount());
       for (size_t i = 0; i < hybridMap.groupCount(); ++i) {
         const auto& group = hybridMap.groupAt(i);
-        metadata.groups.push_back(
+        groups.push_back(
             HybridFlatMap::Group{
                 .groupId = group.groupId,
                 .groupKeys = group.groupKeys,
             });
       }
       auto attributes = type.attributes();
-      metadata.setAttribute(attributes);
+      HybridFlatMap::fromSchema(std::move(groups)).setAttribute(attributes);
       nodes.emplace_back(
           type.kind(),
           hybridMap.nullsDescriptor().offset(),
