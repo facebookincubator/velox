@@ -60,7 +60,15 @@ namespace facebook::velox::ucx_exchange {
 
 // Each case registers cuDF, and with it both UCX transports, for its own
 // duration, through CudfRegistration.
-class UcxExchangeTaskTest : public UcxExchangeTestBase {};
+class UcxExchangeTaskTest : public UcxExchangeTestBase {
+ protected:
+  // A Task can be destroyed on a driver thread after the case drops its
+  // references; its plan's vectors come from 'pool_'.
+  void TearDown() override {
+    exec::test::waitForAllTasksToBeDeleted();
+    UcxExchangeTestBase::TearDown();
+  }
+};
 
 namespace {
 
