@@ -67,20 +67,6 @@ struct CudfConfig {
       "cudf.partitioned_output_batch_rows"};
   /// Query session configs for the cuDF Operators.
   static constexpr const char* kCudfTopNBatchSize{"cudf.topk_batch_size"};
-  static constexpr const char* kVectorJoinMaxShardRows{
-      "cudf.vector_join_max_shard_rows"};
-  static constexpr const char* kVectorJoinMaxShardBytes{
-      "cudf.vector_join_max_shard_bytes"};
-  static constexpr const char* kVectorJoinTrainRows{
-      "cudf.vector_join_train_rows"};
-  static constexpr const char* kVectorJoinProbeBatchRows{
-      "cudf.vector_join_probe_batch_rows"};
-  static constexpr const char* kVectorJoinNLists{"cudf.vector_join_n_lists"};
-  static constexpr const char* kVectorJoinNProbes{"cudf.vector_join_n_probes"};
-  static constexpr const char* kVectorJoinPqBits{"cudf.vector_join_pq_bits"};
-  static constexpr const char* kVectorJoinPqDim{"cudf.vector_join_pq_dim"};
-  static constexpr const char* kVectorJoinCandidateMultiplier{
-      "cudf.vector_join_candidate_multiplier"};
 
   /// Singleton CudfConfig instance.
   /// Clients must set the configs below before invoking registerCudf().
@@ -212,26 +198,6 @@ struct CudfConfig {
   std::optional<int32_t> batchSizeMaxThreshold;
   // Query config key for the TopN batch size in the cuDF TopN operator.
   int32_t topNBatchSize{5};
-
-  /// Maximum build rows kept on one vector-join task. A larger shard fails
-  /// and must be repartitioned by the planner.
-  int64_t vectorJoinMaxShardRows{50'000'000};
-
-  /// Maximum estimated build bytes kept on one vector-join task.
-  int64_t vectorJoinMaxShardBytes{8LL << 30};
-
-  /// Rows used to train the per-shard IVF-PQ quantizer.
-  int32_t vectorJoinTrainRows{100'000};
-
-  /// Probe rows searched per batch. Output is also bounded by this times k.
-  int32_t vectorJoinProbeBatchRows{2048};
-
-  /// Defaults used when the plan node leaves a parameter at zero.
-  int32_t vectorJoinNLists{256};
-  int32_t vectorJoinNProbes{16};
-  int32_t vectorJoinPqBits{8};
-  int32_t vectorJoinPqDim{0};
-  int32_t vectorJoinCandidateMultiplier{4};
 
   /// Timestamp unit for cuDF timestamp types.
   /// Can be configured via kCudfTimestampUnit with string values:

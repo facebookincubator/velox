@@ -78,14 +78,4 @@ if(VELOX_ENABLE_UCX_EXCHANGE)
   target_compile_definitions(velox_cudf_exec PRIVATE VELOX_ENABLE_UCX_EXCHANGE)
 endif()
 
-if(VELOX_ENABLE_FAISS_GPU)
-  target_sources(
-    velox_cudf_exec
-    PRIVATE CudfVectorJoin.cpp RuntimeVectorIndex.cu)
-  target_compile_definitions(velox_cudf_exec PRIVATE VELOX_ENABLE_FAISS_GPU)
-  target_link_libraries(
-    velox_cudf_exec
-    PUBLIC cuvs::cuvs cuvs::cuvs_cpp_headers CUDA::cudart_static)
-endif()
-
 target_compile_options(velox_cudf_exec PRIVATE -Wno-missing-field-initializers)

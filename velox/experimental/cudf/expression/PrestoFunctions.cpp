@@ -22,7 +22,6 @@
 #include "velox/experimental/cudf/expression/prestosql/DateAddFunction.h"
 #include "velox/experimental/cudf/expression/prestosql/DatePlusIntervalFunction.h"
 #include "velox/experimental/cudf/expression/prestosql/UnixtimeFunctions.h"
-#include "velox/experimental/cudf/expression/prestosql/VectorDistanceFunctions.h"
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/expression/FunctionSignature.h"
@@ -134,7 +133,6 @@ void registerPrestoFunctions(const std::string& prefix) {
   // The GPU cast from VARCHAR follows Presto's rules.
   setCastFromVarcharEnabled(true);
   registerPrestoArrayAccessFunctions(prefix);
-  prestosql::registerVectorDistanceFunctions(prefix);
 
   registerCudfFunction(
       prefix + "array_join",
