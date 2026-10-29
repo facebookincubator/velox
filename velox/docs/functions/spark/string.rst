@@ -141,7 +141,8 @@ String Functions
     Supported charsets (case-insensitive) are ``US-ASCII``, ``ISO-8859-1``,
     ``UTF-8``, ``UTF-16BE``, ``UTF-16LE``, ``UTF-16``, and ``UTF-32``. Throws
     an exception when ``charset`` is not supported or a character cannot be
-    represented by the selected charset.
+    represented by the selected charset, following Spark 4.0's default behavior.
+    Other charset names and aliases require the opt-in setting below.
 
     With ``spark.legacy_java_charsets`` enabled, also accepts JDK 17 names and
     aliases for these standard charsets and the following single-byte encoders:
@@ -157,12 +158,16 @@ String Functions
     ``GBK``, ``EUC-JP``, ``EUC-KR``, and ``ISO-2022-JP``, and decode-only
     charsets remain unsupported.
 
-    When ``spark.legacy_coding_error_action`` is enabled, unmappable characters
+    ``spark.legacy_coding_error_action`` corresponds to Spark 4.0's
+    ``spark.sql.legacy.codingErrorAction``. When enabled, unmappable characters
     in the single-byte encoders are replaced with their JDK replacement byte,
-    ``3F`` in hexadecimal. Unsupported charsets remain errors in either mode.
-    ``UTF-16`` prepends
-    a big-endian byte-order mark; ``UTF-32`` emits big-endian data without a
-    byte-order mark. Empty input returns empty output without a byte-order mark.
+    ``3F`` in hexadecimal. Spark 3.x always replaces unmappable characters; set
+    ``spark.legacy_coding_error_action=true`` to match that behavior for the
+    supported charsets. This does not enable additional JDK charset names or
+    aliases. Unsupported charsets remain errors in either mode.
+    ``UTF-16`` prepends a big-endian byte-order mark; ``UTF-32`` emits big-endian
+    data without a byte-order mark. Empty input returns empty output without a
+    byte-order mark.
     Malformed UTF-8 in ``string`` is normalized to the replacement character
     ``U+FFFD`` before encoding. ::
 

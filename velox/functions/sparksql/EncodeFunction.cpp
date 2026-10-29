@@ -17,10 +17,12 @@
 #include "velox/functions/sparksql/EncodeFunction.h"
 
 #include <algorithm>
+#include <array>
 #include <compare>
 #include <cstring>
 #include <string>
 #include <string_view>
+#include <utility>
 
 #include <simdjson.h>
 
@@ -31,6 +33,44 @@
 
 namespace facebook::velox::functions::sparksql::detail {
 namespace {
+
+constexpr std::array<std::pair<std::string_view, CharsetType>, 7>
+    kStandardCharsets{{
+        {"UTF-8", CharsetType::kUtf8},
+        {"US-ASCII", CharsetType::kUsAscii},
+        {"ISO-8859-1", CharsetType::kIso8859_1},
+        {"UTF-16", CharsetType::kUtf16},
+        {"UTF-16BE", CharsetType::kUtf16BE},
+        {"UTF-16LE", CharsetType::kUtf16LE},
+        {"UTF-32", CharsetType::kUtf32},
+    }};
+
+static_assert(
+    [] {
+      if (kStandardCharsets.size() != single_byte::kStandardNames.size()) {
+        return false;
+      }
+      for (size_t i = 0; i < kStandardCharsets.size(); ++i) {
+        if (kStandardCharsets[i].first != single_byte::kStandardNames[i]) {
+          return false;
+        }
+      }
+      for (const auto& alias : single_byte::kStandardAliases) {
+        if (alias.charsetIndex >= kStandardCharsets.size()) {
+          return false;
+        }
+      }
+      return true;
+    }(),
+    "Standard charset types must match the generated alias order");
+
+constexpr auto kStandardTypes = [] {
+  std::array<CharsetType, kStandardCharsets.size()> types{};
+  for (size_t i = 0; i < types.size(); ++i) {
+    types[i] = kStandardCharsets[i].second;
+  }
+  return types;
+}();
 
 template <bool foldKelvinSign>
 std::strong_ordering compareIgnoreCase(
@@ -481,15 +521,6 @@ Charset resolveCharset(const StringView& charset, bool legacyJavaCharsets) {
     const auto standard = findAlias(single_byte::kStandardAliases);
     if (standard != single_byte::kStandardAliases.end() &&
         compareIgnoreCase<true>(charset, standard->name) == 0) {
-      constexpr std::array kStandardTypes{
-          CharsetType::kUtf8,
-          CharsetType::kUsAscii,
-          CharsetType::kIso8859_1,
-          CharsetType::kUtf16,
-          CharsetType::kUtf16BE,
-          CharsetType::kUtf16LE,
-          CharsetType::kUtf32,
-      };
       return {kStandardTypes[standard->charsetIndex]};
     }
     const auto legacy = findAlias(single_byte::kLegacyAliases);

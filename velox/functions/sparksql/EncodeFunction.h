@@ -53,6 +53,7 @@ struct Charset {
 Charset resolveCharset(const StringView& charset, bool legacyJavaCharsets);
 
 /// Encodes input using the selected charset and Spark coding-error behavior.
+/// May borrow input bytes; callers must retain their backing storage.
 Status encode(
     exec::StringWriter& result,
     const StringView& input,
@@ -68,6 +69,7 @@ struct EncodeFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   // Keeps borrowed output bytes alive after the input vector is released.
+  // The adapter retains input buffers even for conversion-only batches.
   static constexpr int32_t reuse_strings_from_arg = 0;
 
   void initialize(
