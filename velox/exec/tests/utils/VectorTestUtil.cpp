@@ -107,4 +107,49 @@ std::vector<RowVectorPtr> makeCopies(
   return res;
 }
 
+RowVectorPtr makeInputWithNullRows(
+    const RowVectorPtr& source,
+    const std::vector<std::vector<std::string>>& columnGroups,
+    memory::MemoryPool* pool) {
+  for (const auto& columnGroup : columnGroups) {
+    VELOX_CHECK(!columnGroup.empty());
+  }
+  if (source->size() == 0) {
+    return source;
+  }
+
+  const auto size = 2 * source->size();
+  auto indices = allocateIndices(size, pool);
+  auto* rawIndices = indices->asMutable<vector_size_t>();
+  for (vector_size_t row = 0; row < size; ++row) {
+    rawIndices[row] = row / 2;
+  }
+
+  const auto& sourceType = source->type()->asRow();
+  std::vector<VectorPtr> children;
+  children.reserve(source->childrenSize());
+  for (column_index_t column = 0; column < source->childrenSize(); ++column) {
+    const auto& name = sourceType.nameOf(column);
+    BufferPtr nulls;
+    for (vector_size_t row = 0; row < size; row += 2) {
+      const auto sourceRow = row / 2;
+      for (const auto& columnGroup : columnGroups) {
+        if (columnGroup[sourceRow % columnGroup.size()] == name) {
+          if (!nulls) {
+            nulls = allocateNulls(size, pool, bits::kNotNull);
+          }
+          bits::setNull(nulls->asMutable<uint64_t>(), row);
+          break;
+        }
+      }
+    }
+    children.push_back(
+        BaseVector::wrapInDictionary(
+            nulls, indices, size, source->childAt(column)));
+  }
+
+  return std::make_shared<RowVector>(
+      pool, asRowType(source->type()), nullptr, size, std::move(children));
+}
+
 } // namespace facebook::velox::exec::test
