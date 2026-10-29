@@ -152,6 +152,12 @@ void FileSplitReader::prepareSplit(
   createRowReader(std::move(metadataFilter), std::move(rowType), std::nullopt);
 }
 
+void FileSplitReader::hintLazyColumnsNeeded() {
+  if (baseReader_ != nullptr && baseFileInput_ != nullptr) {
+    baseFileInput_->hintLazyColumnsNeeded();
+  }
+}
+
 uint64_t FileSplitReader::next(uint64_t size, VectorPtr& output) {
   if (!baseReaderOpts_.randomSkip()) {
     return baseRowReader_->next(size, output);
@@ -276,9 +282,11 @@ void FileSplitReader::createReader(
       ioExecutor_,
       fileReadOps);
 
+  baseFileInput_ = baseFileInput.get();
   baseReader_ = dwio::common::getReaderFactory(baseReaderOpts_.fileFormat())
                     ->createReader(std::move(baseFileInput), baseReaderOpts_);
   if (!baseReader_) {
+    baseFileInput_ = nullptr;
     emptySplit_ = true;
   }
 }
