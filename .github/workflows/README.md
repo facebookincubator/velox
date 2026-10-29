@@ -37,6 +37,7 @@ For current build times and performance trends, see the [CI performance metrics]
 | Update Documentation | `docs.yml` | push (docs changes), PRs | Sphinx docs + GitHub Pages |
 | Collect Build Metrics | `build-metrics.yml` | PRs, daily, manual | Binary size tracking (disabled) |
 | Ubuntu Bundled Deps | `ubuntu-bundled-deps.yml` | nightly, manual, PRs (dep scripts) | Build-from-source validation |
+| Windows MSVC | `windows.yml` | manual | Experimental Windows build validation |
 
 ## Core Build & Test
 
@@ -199,3 +200,14 @@ All build workflows use ccache for compiler output caching, persisted across run
 ### Concurrency
 
 Most workflows use concurrency groups keyed on `workflow + repository + branch/SHA` to automatically cancel in-progress runs when new commits are pushed to the same branch, avoiding wasted CI resources.
+
+## Experimental
+
+### Windows MSVC (`windows.yml`)
+
+Validates Windows build support and uploads configure and build logs for
+troubleshooting. Coverage evolves as Windows support develops.
+
+Runs manually through `workflow_dispatch`. Once the workflow is on the default
+branch, users with write access can choose a branch under
+**Actions > Windows MSVC > Run workflow**.

@@ -49,7 +49,8 @@ FetchContent_Declare(
   URL_HASH ${VELOX_BOOST_BUILD_SHA256_CHECKSUM}
 )
 
-# Configure the file before adding the header only libs
+# Expose requested components in the FindBoost shim before adding header-only libs.
+set(BOOST_INCLUDE_LIBRARIES ${BOOST_COMPONENTS} ${BOOST_OPTIONAL_COMPONENTS})
 configure_file(
   ${CMAKE_CURRENT_LIST_DIR}/FindBoost.cmake.in
   ${CMAKE_CURRENT_LIST_DIR}/FindBoost.cmake
