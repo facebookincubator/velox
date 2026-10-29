@@ -15,6 +15,9 @@
  */
 
 #ifdef VELOX_ENABLE_PARQUET
+#include "velox/common/base/RuntimeMetrics.h" // @manual
+#include "velox/dwio/common/Statistics.h" // @manual
+#include "velox/dwio/parquet/common/ParquetRuntimeStats.h" // @manual
 #include "velox/dwio/parquet/reader/ParquetReader.h" // @manual
 #endif
 
@@ -23,12 +26,20 @@ namespace facebook::velox::parquet {
 void registerParquetReaderFactory() {
 #ifdef VELOX_ENABLE_PARQUET
   dwio::common::registerReaderFactory(std::make_shared<ParquetReaderFactory>());
+  OperatorAggregatedMetrics::add(
+      dwio::common::RuntimeStats::formatMetricName(
+          dwio::common::FileFormat::PARQUET,
+          ParquetRuntimeStats::kPageLoadTimeNs));
 #endif
 }
 
 void unregisterParquetReaderFactory() {
 #ifdef VELOX_ENABLE_PARQUET
   dwio::common::unregisterReaderFactory(dwio::common::FileFormat::PARQUET);
+  OperatorAggregatedMetrics::remove(
+      dwio::common::RuntimeStats::formatMetricName(
+          dwio::common::FileFormat::PARQUET,
+          ParquetRuntimeStats::kPageLoadTimeNs));
 #endif
 }
 
