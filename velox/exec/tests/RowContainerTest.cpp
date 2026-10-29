@@ -2834,13 +2834,20 @@ TEST_P(RowContainerTest, columnStatsMixedTypes) {
   auto rowVector = makeRowVector({
       makeFlatVector<bool>(
           kNumRows, [](auto row) { return row % 2 == 0; }, nulls),
-      makeFlatVector<int8_t>(kNumRows, [](auto row) { return row; }, nulls),
-      makeFlatVector<int16_t>(kNumRows, [](auto row) { return row; }, nulls),
-      makeFlatVector<int32_t>(kNumRows, [](auto row) { return row; }, nulls),
-      makeFlatVector<int64_t>(kNumRows, [](auto row) { return row; }, nulls),
-      makeFlatVector<int128_t>(kNumRows, [](auto row) { return row; }, nulls),
-      makeFlatVector<float>(kNumRows, [](auto row) { return row; }, nulls),
-      makeFlatVector<double>(kNumRows, [](auto row) { return row; }, nulls),
+      makeFlatVector<int8_t>(
+          kNumRows, [](auto row) { return row; }, nulls),
+      makeFlatVector<int16_t>(
+          kNumRows, [](auto row) { return row; }, nulls),
+      makeFlatVector<int32_t>(
+          kNumRows, [](auto row) { return row; }, nulls),
+      makeFlatVector<int64_t>(
+          kNumRows, [](auto row) { return row; }, nulls),
+      makeFlatVector<int128_t>(
+          kNumRows, [](auto row) { return row; }, nulls),
+      makeFlatVector<float>(
+          kNumRows, [](auto row) { return row; }, nulls),
+      makeFlatVector<double>(
+          kNumRows, [](auto row) { return row; }, nulls),
       makeFlatVector<Timestamp>(
           kNumRows, [](auto row) { return Timestamp(row, 0); }, nulls),
       makeFlatVector<std::string>(
