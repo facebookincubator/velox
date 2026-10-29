@@ -733,32 +733,21 @@ endif()
 if(VELOX_NEEDS_FBTHRIFT)
   find_package(fizz CONFIG REQUIRED)
   find_package(wangle CONFIG REQUIRED)
+  # cuDF's source-only xxhash package can redirect find_package(), even in
+  # MODULE mode, without providing the library target required by FBThrift.
+  if(NOT TARGET Xxhash::xxhash)
+    include("${CMAKE_CURRENT_LIST_DIR}/CMake/FindXxhash.cmake")
+    if(NOT TARGET Xxhash::xxhash)
+      message(FATAL_ERROR "FBThrift requires the xxHash library and headers.")
+    endif()
+  endif()
   find_package(FBThrift CONFIG REQUIRED)
 
-  # Workaround for a missing edge in the system-installed FBThrift's
-  # exported CMake graph. At the pinned FB_OS_VERSION, fbthrift's own
-  # `target_link_libraries(thriftmetadata PUBLIC ...)` block does not
-  # declare an xxhash dep on `thriftmetadata` — the conditional
-  # `if(Xxhash_FOUND) target_link_libraries(thriftmetadata PUBLIC
-  # ${Xxhash_LIBRARY})` block was added later in fbthrift mainline.
-  # Meanwhile `libthriftmetadata.a` itself does call XXH3_64bits(),
-  # so the binary needs xxhash but the exported FBThriftTargets.cmake
-  # doesn't declare it. Symptom (only with VELOX_BUILD_SHARED=ON +
-  # VELOX_MONO_LIBRARY=ON, where libvelox.so doesn't drag xxhash in
-  # incidentally): `undefined reference to symbol 'XXH3_64bits'` on
-  # any test executable that links FBThrift through velox.
-  # Tracking: https://github.com/facebook/fbthrift/issues/651,
-  # https://github.com/facebookincubator/velox/issues/13153.
-  # Remove once FB_OS_VERSION is bumped past the commit that adds the
-  # `if(Xxhash_FOUND)` block AND the velox-dev container is rebuilt
-  # against that fixed fbthrift release.
+  # Older system-installed FBThrift packages omit this dependency. Keep the
+  # edge until the containers have been rebuilt with the upgraded FBThrift.
+  # https://github.com/facebook/fbthrift/issues/651
   if(TARGET FBThrift::thriftmetadata)
-    find_library(VELOX_XXHASH_LIB xxhash REQUIRED)
-    set_property(
-      TARGET FBThrift::thriftmetadata
-      APPEND
-      PROPERTY INTERFACE_LINK_LIBRARIES "${VELOX_XXHASH_LIB}"
-    )
+    target_link_libraries(FBThrift::thriftmetadata INTERFACE Xxhash::xxhash)
   endif()
 endif()
 
