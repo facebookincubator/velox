@@ -38,9 +38,9 @@ struct Split {
       : connectorSplit(std::move(connectorSplit)), groupId(groupId) {}
 
   /// Called by the task barrier to create a special barrier split.
-  static Split createBarrier(uint32_t numDrivers = 1) {
+  static Split createBarrier() {
     Split barrierSplit;
-    barrierSplit.barrier = BarrierSplit{numDrivers};
+    barrierSplit.barrier = BarrierSplit{};
     VELOX_CHECK_NULL(barrierSplit.connectorSplit);
     return barrierSplit;
   }

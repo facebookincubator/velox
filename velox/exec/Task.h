@@ -1292,9 +1292,6 @@ class Task : public std::enable_shared_from_this<Task> {
 
   void finishDriverBarrierLocked(std::vector<ContinuePromise>& promises);
 
-  // Invoked to start a barrier processig on a driver.
-  void startDriverBarriersLocked();
-
   // Set to drop input for drivers that containing the operator instantiated
   // from the given plan node.
   void dropInputLocked(
@@ -1495,7 +1492,6 @@ class Task : public std::enable_shared_from_this<Task> {
   // A slot holds its driver until the driver has closed. A terminated driver
   // cannot run but may still be closing, so getDriver() returns null for it.
   std::vector<std::shared_ptr<Driver>> drivers_;
-  std::unordered_map<core::PlanNodeId, uint32_t> numDriversPerLeafNode_;
 
   // Tracks the blocking state for each driver under serialized execution mode.
   class DriverBlockingState {
