@@ -128,9 +128,14 @@ class MinMaxByAggregateBase : public exec::Aggregate {
       std::is_same_v<ValueAccumulatorType, SingleValueAccumulator> ||
       std::is_same_v<ComparisonAccumulatorType, SingleValueAccumulator>;
 
+  /// Includes padding between differently aligned value and comparison types.
   int32_t accumulatorFixedWidthSize() const override {
-    return sizeof(ValueAccumulatorType) + sizeof(ComparisonAccumulatorType) +
-        sizeof(bool);
+    return sizeof(Accumulator);
+  }
+
+  /// RowContainer must align both the first group and subsequent group rows.
+  int32_t accumulatorAlignmentSize() const override {
+    return alignof(Accumulator);
   }
 
   bool isFixedSize() const override {
@@ -512,25 +517,7 @@ class MinMaxByAggregateBase : public exec::Aggregate {
       folly::Range<const vector_size_t*> indices) override {
     exec::Aggregate::setAllNulls(groups, indices);
     for (const vector_size_t i : indices) {
-      auto group = groups[i];
-      valueIsNull(group) = true;
-
-      if constexpr (std::is_same_v<
-                        ValueAccumulatorType,
-                        SingleValueAccumulator>) {
-        new (group + offset_) SingleValueAccumulator();
-      } else {
-        *value(group) = ValueAccumulatorType();
-      }
-
-      if constexpr (!std::is_same_v<
-                        ComparisonAccumulatorType,
-                        SingleValueAccumulator>) {
-        *comparisonValue(group) = ComparisonAccumulatorType();
-      } else {
-        new (group + offset_ + sizeof(ValueAccumulatorType))
-            SingleValueAccumulator();
-      }
+      new (groups[i] + offset_) Accumulator();
     }
   }
 
@@ -552,6 +539,18 @@ class MinMaxByAggregateBase : public exec::Aggregate {
   }
 
  private:
+  // Let the compiler align each member, including a wide comparison after a
+  // narrow value. This layout is shared by allocation, initialization and
+  // access.
+  struct Accumulator {
+    // Selected value, stored inline or through SingleValueAccumulator.
+    ValueAccumulatorType value{};
+    // Ordering value, independently aligned for its own type.
+    ComparisonAccumulatorType comparison{};
+    // A winning comparison may correspond to a null selected value.
+    bool valueIsNull{true};
+  };
+
   template <typename MayUpdate>
   inline void updateValues(
       char* group,
@@ -582,19 +581,24 @@ class MinMaxByAggregateBase : public exec::Aggregate {
     }
   }
 
+  // Access the state using the same aligned layout used at initialization.
+  inline Accumulator* accumulator(char* group) {
+    return reinterpret_cast<Accumulator*>(group + Aggregate::offset_);
+  }
+
+  // Locate the selected-value member without assuming packed fields.
   inline ValueAccumulatorType* value(char* group) {
-    return reinterpret_cast<ValueAccumulatorType*>(group + Aggregate::offset_);
+    return &accumulator(group)->value;
   }
 
+  // Locate the comparison member with its compiler-provided padding.
   inline ComparisonAccumulatorType* comparisonValue(char* group) {
-    return reinterpret_cast<ComparisonAccumulatorType*>(
-        group + Aggregate::offset_ + sizeof(ValueAccumulatorType));
+    return &accumulator(group)->comparison;
   }
 
+  // Track null values independently of the aggregate's comparison-null flag.
   inline bool& valueIsNull(char* group) {
-    return *reinterpret_cast<bool*>(
-        group + Aggregate::offset_ + sizeof(ValueAccumulatorType) +
-        sizeof(ComparisonAccumulatorType));
+    return accumulator(group)->valueIsNull;
   }
 
   const bool throwOnNestedNulls_;
