@@ -136,9 +136,14 @@ class EliasFanoEncoding final
                                        /*upperBytes=*/sizeof(uint32_t)};
 
   // Makes Folly's word-at-a-time payload reads safe at the end of the stream.
+  // Folly documents 7 readable bytes past the buffer when upper bits come last
+  // and 8 when lower bits do. Newer Folly names these
+  // kUpperTrailingBytes and kLowerTrailingBytes; older versions only document
+  // them, so the sizes live here.
+  static constexpr size_t kUpperTrailingBytes{7};
+  static constexpr size_t kLowerTrailingBytes{8};
   static constexpr size_t kPayloadPaddingBytes{
-      kUpperFirst ? folly::compression::kLowerTrailingBytes
-                  : folly::compression::kUpperTrailingBytes};
+      kUpperFirst ? kLowerTrailingBytes : kUpperTrailingBytes};
 
   // Aligns Folly's uint64 pointer tables while encoding into the arena.
   static constexpr size_t kPayloadAlignment{alignof(uint64_t)};

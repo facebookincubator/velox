@@ -290,6 +290,12 @@ velox_add_cudf_test(
 )
 
 velox_add_cudf_test(
+  NAME velox_cudf_vector_distance_functions_test
+  SOURCES Main.cpp VectorDistanceFunctionsTest.cpp
+  LIBS ${CUDF_TEST_DEFAULT_LIBS} velox_functions_test_lib
+)
+
+velox_add_cudf_test(
   NAME velox_cudf_subfield_filter_ast_test
   SOURCES Main.cpp SubfieldFilterAstTest.cpp
   LIBS ${CUDF_TEST_DEFAULT_LIBS} velox_cudf_iceberg_connector

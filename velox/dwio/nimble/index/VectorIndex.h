@@ -28,6 +28,7 @@
 
 #include <folly/Range.h>
 #include <folly/container/F14Map.h>
+#include <folly/synchronization/CallOnce.h>
 
 #include "velox/common/time/CpuWallTimer.h"
 #include "velox/dwio/nimble/index/IndexLookup.h"
@@ -43,6 +44,8 @@ class MetadataInput;
 } // namespace facebook::nimble
 
 namespace facebook::nimble::index {
+
+class GpuVectorIndex;
 
 /// Reads a FAISS-based vector similarity search index from a Nimble file.
 ///
@@ -161,6 +164,16 @@ class VectorIndex {
     /// Restricts every query to the same set of eligible indexed rows. All
     /// indexed rows are eligible by default.
     RowSelection rowSelection{RowSelection::all()};
+
+    /// Requests a GPU search. The first search builds or copies a device index
+    /// and later searches reuse it. Falls back to CPU search when GPU support
+    /// is not built, no device is visible, cuVS rejects the index, the IVF
+    /// search sets maxCodes, or a RaBitQ search has a row filter. HNSW SQ8
+    /// GPU search builds a CAGRA graph from reconstructed vectors, so its
+    /// neighbors can differ from the CPU HNSW graph. RaBitQ GPU search builds
+    /// a cuVS IVF-RaBitQ index from decoded vectors and supports L2 only.
+    /// SearchStats::usedGpu reports which path ran.
+    bool useGpu{false};
   };
 
   /// Identifies one nearest-neighbor match and its metric-specific score.
@@ -207,6 +220,11 @@ class VectorIndex {
 
     /// Contains IVF counters when the implementation reports them.
     std::optional<IvfSearchStats> ivf;
+
+    /// Reports whether the batch ran on the GPU. GPU searches assign
+    /// partitions on the device, so partitionAssignmentTiming stays empty and
+    /// ivf is not set.
+    bool usedGpu{false};
   };
 
   /// Stores batch results contiguously while preserving each query's
@@ -276,6 +294,10 @@ class VectorIndex {
 
   ~VectorIndex();
 
+  /// Returns whether this build includes FAISS GPU support and a CUDA device
+  /// is visible.
+  static bool gpuSearchAvailable();
+
   /// Searches query vectors together and preserves query order.
   SearchResults search(const SearchConfig& config) const;
 
@@ -321,6 +343,16 @@ class VectorIndex {
 
   // Keeps zero-copy FAISS views valid for index types that use them.
   std::shared_ptr<const void> indexData_;
+
+  // Returns the device copy of the index, creating it on first use. Returns
+  // null when the index cannot be searched on the GPU.
+  const GpuVectorIndex* gpuIndex() const;
+
+  // Copies the index to the GPU at most once, on the first GPU search.
+  mutable folly::once_flag gpuIndexOnce_;
+
+  // Remains null when GPU search is unavailable for this index.
+  mutable std::shared_ptr<const GpuVectorIndex> gpuIndex_;
 };
 
 /// Describes the vector indexes in a Nimble file without loading their data.

@@ -51,6 +51,8 @@ enum class VectorIndexType : uint8_t {
   kIvfRaBitQFastScan,
   /// HNSW graph with SQ8 quantization.
   kHnswSq8,
+  /// CAGRA nearest-neighbor graph. hnswNumConnections is half the graph degree.
+  kCagra,
 };
 
 /// Configuration for building a vector search index during file writes.
@@ -77,7 +79,8 @@ struct VectorIndexConfig {
   /// Sets the number of bits per PQ code.
   uint8_t pqBits{8};
 
-  /// Sets the number of bidirectional HNSW links per node.
+  /// Sets the number of bidirectional HNSW links per node. For CAGRA this is
+  /// half the graph degree.
   uint32_t hnswNumConnections{32};
 
   /// Rejects input when buffered vectors exceed this many bytes.

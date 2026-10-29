@@ -132,6 +132,20 @@ target_link_libraries(
   Folly::folly
   OpenMP::OpenMP_CXX
 )
+# container-deps/include can hold an older faiss. This target links the faiss
+# Velox built, so those headers have to win.
+if(faiss_SOURCE_DIR)
+  target_include_directories(
+    nimble_vector_index BEFORE PRIVATE "${faiss_SOURCE_DIR}")
+endif()
+if(VELOX_ENABLE_FAISS_GPU)
+  target_sources(nimble_vector_index PRIVATE VectorIndexGpu.cpp VectorIndexGpu.h)
+  # FAISS GPU headers include RAFT. Those include paths stay private to
+  # faiss_gpu_objs, so this target has to see them through cuVS.
+  target_link_libraries(
+    nimble_vector_index CUDA::cudart cuvs::cuvs cuvs::cuvs_cpp_headers)
+  target_compile_definitions(nimble_vector_index PUBLIC VELOX_ENABLE_FAISS_GPU)
+endif()
 
 if(NIMBLE_BUILD_TESTING)
   add_subdirectory(tests)
