@@ -93,7 +93,7 @@ TEST_F(EncodeTest, utf16AndUtf32) {
           {"UTF-16LE", "utf-16le", {0x41, 0x00}},
           {"UTF-16", "utf-16", {0xFE, 0xFF, 0x00, 0x41}},
           {"UTF-32", "utf-32", {0x00, 0x00, 0x00, 0x41}},
-  };
+      };
   for (const auto& [charset, lowercaseCharset, expected] : testCases) {
     SCOPED_TRACE(charset);
     EXPECT_THAT(encodeBytes("A", charset), ElementsAreArray(expected));
