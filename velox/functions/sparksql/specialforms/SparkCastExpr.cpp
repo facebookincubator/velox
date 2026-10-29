@@ -35,6 +35,18 @@ bool isNumericType(const TypePtr& type) {
   return isIntegralType(type) || isFloatingPointType(type);
 }
 
+// Returns true if casting 'fromType' to 'toType' succeeds for every input
+// value, so ANSI mode cannot change its result.
+bool castCannotFail(const TypePtr& fromType, const TypePtr& toType) {
+  if (fromType->equivalent(*toType) || toType->isVarchar()) {
+    return true;
+  }
+  // Widening numeric casts, and numeric to boolean (non-zero is true).
+  return (isIntegralType(fromType) && isFloatingPointType(toType)) ||
+      (fromType == REAL() && toType == DOUBLE()) ||
+      (isNumericType(fromType) && toType->isBoolean());
+}
+
 exec::ExprPtr makeSparkCastExpr(
     const TypePtr& type,
     exec::ExprPtr&& input,
@@ -115,6 +127,30 @@ class SparkLegacyCastCallToSpecialForm : public exec::CastCallToSpecialForm {
 bool SparkCastCallToSpecialForm::isAnsiSupported(
     const TypePtr& fromType,
     const TypePtr& toType) {
+  // A cast between complex types supports ANSI mode when every nested cast
+  // either supports ANSI mode or cannot fail.
+  const auto nestedSupported = [](const TypePtr& from, const TypePtr& to) {
+    return isAnsiSupported(from, to) || castCannotFail(from, to);
+  };
+  if (fromType->isArray() && toType->isArray()) {
+    return nestedSupported(fromType->childAt(0), toType->childAt(0));
+  }
+  if (fromType->isMap() && toType->isMap()) {
+    return nestedSupported(fromType->childAt(0), toType->childAt(0)) &&
+        nestedSupported(fromType->childAt(1), toType->childAt(1));
+  }
+  if (fromType->isRow() && toType->isRow()) {
+    if (fromType->size() != toType->size()) {
+      return false;
+    }
+    for (auto i = 0; i < fromType->size(); ++i) {
+      if (!nestedSupported(fromType->childAt(i), toType->childAt(i))) {
+        return false;
+      }
+    }
+    return true;
+  }
+
   if (fromType->isVarchar()) {
     if (toType->isBoolean() || toType->isTimestamp() || toType->isDate() ||
         toType->isDecimal() || toType->isTime()) {
