@@ -136,6 +136,9 @@ int main(int argc, char** argv) {
       "noisy_approx_set_sfm",
       "noisy_approx_distinct_sfm",
       "noisy_approx_set_sfm_from_index_and_zeros",
+      // Requires constant index_type, metric and options arguments, which the
+      // fuzzer does not generate.
+      "vector_index_build",
       // Requires a constant metric argument and cluster ids 0 to n - 1, which
       // the fuzzer does not generate.
       "vector_index_pack",
