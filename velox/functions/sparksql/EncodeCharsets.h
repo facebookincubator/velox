@@ -19,11 +19,14 @@
 #include <cstdint>
 #include <string_view>
 
-// Generated with JDK 17; do not edit.
-// Regenerate: java scripts/GenerateEncodeCharsets.java | clang-format
+// Generated with JDK 17.0.20.1+1-LTS; do not edit.
+// Regenerate from the repository root with JDK 17:
+//   header=velox/functions/sparksql/EncodeCharsets.h
+//   java scripts/GenerateEncodeCharsets.java | clang-format > "$header"
+// @generated
 namespace facebook::velox::functions::sparksql::detail::single_byte {
 
-/// Stores an encoder-only or non-Latin-1 Unicode mapping.
+/// Stores an encoder mapping for a scalar at or above U+0100.
 struct Mapping {
   /// Identifies the input Unicode scalar.
   char32_t codePoint;
@@ -986,6 +989,16 @@ inline constexpr std::array<Charset, 25> kCharsets{{
     {"windows-1256", 1303, 85, 0x3F, true},
     {"windows-1257", 1388, 68, 0x3F, true},
     {"windows-1258", 1456, 37, 0x3F, true},
+}};
+/// Preserves the standard charset order used by kStandardAliases.
+inline constexpr std::array<std::string_view, 7> kStandardNames{{
+    "UTF-8",
+    "US-ASCII",
+    "ISO-8859-1",
+    "UTF-16",
+    "UTF-16BE",
+    "UTF-16LE",
+    "UTF-32",
 }};
 inline constexpr std::array<Alias, 50> kStandardAliases{{
     {"646", 1},

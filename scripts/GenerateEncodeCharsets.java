@@ -163,11 +163,14 @@ public final class GenerateEncodeCharsets {
         #include <cstdint>
         #include <string_view>
 
-        // Generated with JDK 17; do not edit.
-        // Regenerate: java scripts/GenerateEncodeCharsets.java | clang-format
+        // Generated with JDK %s; do not edit.
+        // Regenerate from the repository root with JDK 17:
+        //   header=velox/functions/sparksql/EncodeCharsets.h
+        //   java scripts/GenerateEncodeCharsets.java | clang-format > "$header"
+        // @generated
         namespace facebook::velox::functions::sparksql::detail::single_byte {
 
-        /// Stores an encoder-only or non-Latin-1 Unicode mapping.
+        /// Stores an encoder mapping for a scalar at or above U+0100.
         struct Mapping {
           /// Identifies the input Unicode scalar.
           char32_t codePoint;
@@ -199,7 +202,7 @@ public final class GenerateEncodeCharsets {
 
         /// Distinguishes an unmappable scalar from every possible output byte.
         inline constexpr uint16_t kUnmappable = 256;
-        """);
+        """.formatted(Runtime.version()));
     System.out.println("/// Maps Latin-1 scalars directly; kUnmappable marks absent mappings.");
     System.out.printf(
         "inline constexpr std::array<std::array<uint16_t, 256>, %d> kLowMappings{{%n",
@@ -233,6 +236,13 @@ public final class GenerateEncodeCharsets {
           encoding.charset().name(), offset, encoding.extra().size(),
           encoding.replacement(), encoding.asciiCompatible());
       offset += encoding.extra().size();
+    }
+    System.out.println("}};");
+    System.out.println("/// Preserves the standard charset order used by kStandardAliases.");
+    System.out.printf(
+        "inline constexpr std::array<std::string_view, %d> kStandardNames{{%n", STANDARD.length);
+    for (String name : STANDARD) {
+      System.out.printf("  \"%s\",%n", name);
     }
     System.out.println("}};");
     printAliases("kStandardAliases", standardAliases);
