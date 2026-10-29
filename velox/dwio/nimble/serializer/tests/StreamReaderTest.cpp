@@ -194,6 +194,42 @@ class StreamReaderTest : public ::testing::Test {
     return result;
   }
 
+  // Same as readMaps(), for maps whose values can be null.
+  std::vector<std::optional<
+      std::vector<std::pair<std::string, std::optional<int64_t>>>>>
+  readMapsWithNullValues(
+      const velox::VectorPtr& output,
+      velox::vector_size_t offset,
+      velox::vector_size_t count) {
+    const auto* maps = output->as<velox::MapVector>();
+    NIMBLE_CHECK_NOT_NULL(maps);
+    const auto* keys = maps->mapKeys()->asFlatVector<velox::StringView>();
+    const auto* values = maps->mapValues()->asFlatVector<int64_t>();
+    NIMBLE_CHECK_NOT_NULL(keys);
+    NIMBLE_CHECK_NOT_NULL(values);
+    std::vector<std::optional<
+        std::vector<std::pair<std::string, std::optional<int64_t>>>>>
+        result;
+    result.reserve(count);
+    for (velox::vector_size_t row{offset}; row < offset + count; ++row) {
+      if (maps->isNullAt(row)) {
+        result.emplace_back(std::nullopt);
+        continue;
+      }
+      std::vector<std::pair<std::string, std::optional<int64_t>>> entries;
+      for (velox::vector_size_t i{0}; i < maps->sizeAt(row); ++i) {
+        const auto entry = maps->offsetAt(row) + i;
+        entries.emplace_back(
+            keys->valueAt(entry).str(),
+            values->isNullAt(entry)
+                ? std::nullopt
+                : std::optional<int64_t>(values->valueAt(entry)));
+      }
+      result.emplace_back(std::move(entries));
+    }
+    return result;
+  }
+
   std::vector<std::optional<int64_t>> readScalars(
       const velox::VectorPtr& output,
       velox::vector_size_t offset,
@@ -1743,9 +1779,10 @@ TEST_F(StreamReaderTest, readsSelectedSlidingWindowMapsWithEmptyMaps) {
           NullableMap{MapEntries{{"d", 40}}}));
 }
 
-// Entry counting walks the rows each key was found present in, so a key that
-// no selected row carries, and a key whose value decoded as null, both have to
-// drop out of the entry layout.
+// Entry counting walks the rows each key was found present in. A key that no
+// selected row carries drops out of the entry layout, and a present key whose
+// value decoded as null keeps its entry with a null value, as in a contiguous
+// read.
 TEST_F(StreamReaderTest, readsSelectedFlatMapsWithSparseAndNullKeys) {
   std::vector<std::unique_ptr<StreamDescriptor>> inMapDescriptors;
   for (offset_size offset : {2, 4, 6}) {
@@ -1805,14 +1842,15 @@ TEST_F(StreamReaderTest, readsSelectedFlatMapsWithSparseAndNullKeys) {
 
   const auto* row = output->as<velox::RowVector>();
   ASSERT_NE(row, nullptr);
-  using MapEntries = std::vector<std::pair<std::string, int64_t>>;
+  using MapEntries =
+      std::vector<std::pair<std::string, std::optional<int64_t>>>;
   using NullableMap = std::optional<MapEntries>;
   EXPECT_THAT(
-      readMaps(row->childAt(0), /*offset=*/0, /*count=*/3),
+      readMapsWithNullValues(row->childAt(0), /*offset=*/0, /*count=*/3),
       ::testing::ElementsAre(
           NullableMap{MapEntries{{"a", 10}, {"c", 30}}},
           NullableMap{MapEntries{}},
-          NullableMap{MapEntries{{"c", 33}}}));
+          NullableMap{MapEntries{{"a", std::nullopt}, {"c", 33}}}));
 }
 
 TEST_F(StreamReaderTest, readsSelectedFlatMaps) {

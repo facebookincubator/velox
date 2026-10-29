@@ -172,6 +172,8 @@ are summarized below.
 
 ### Variables
 
+- Declare one variable per line, except in for-loop initializers.
+
 - Prefer value types, then `std::optional`, then `std::unique_ptr`.
 - Prefer `std::string_view` over `const std::string&` for function parameters.
 - Use uniform initialization: `size_t size{0}` over `size_t size = 0`.
@@ -206,6 +208,9 @@ are summarized below.
 - Convert epoch seconds to calendar time with `Timestamp::epochToCalendarUtc()`. `gmtime` is not thread-safe, and glibc's `gmtime_r` serializes threads on a global lock.
 
 ### Tests
+
+- Each test file should have one test suite with a matching name. For example,
+  `FooTest.cpp` contains the `FooTest` suite.
 
 - Place new tests next to related existing tests, not at the end of the file. Group tests by topic (e.g., place `tryCast` next to `types`, `notBetween` next to `ifClause` which uses `between`).
 

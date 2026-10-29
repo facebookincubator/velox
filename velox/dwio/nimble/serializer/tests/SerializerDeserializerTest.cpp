@@ -1393,10 +1393,31 @@ std::vector<std::string> keysWithoutData(
   return keys;
 }
 
+// The Hybrid FlatMap key kind of a map column whose keys are `keyType`.
+ScalarKind keyKindOf(const velox::Type& keyType) {
+  const auto kind = keyType.kind();
+  if (kind == velox::TypeKind::TINYINT) {
+    return ScalarKind::Int8;
+  }
+  if (kind == velox::TypeKind::SMALLINT) {
+    return ScalarKind::Int16;
+  }
+  if (kind == velox::TypeKind::INTEGER) {
+    return ScalarKind::Int32;
+  }
+  if (kind == velox::TypeKind::BIGINT) {
+    return ScalarKind::Int64;
+  }
+  if (kind == velox::TypeKind::VARCHAR) {
+    return ScalarKind::String;
+  }
+  NIMBLE_UNREACHABLE("No Hybrid FlatMap key kind for {}", keyType.toString());
+}
+
 // A grouping for one Hybrid FlatMap column and the schema it must produce.
 struct HybridFlatMapGroupingCase {
-  // The grouping passed to the Serializer.
-  HybridFlatMap grouping;
+  // The groups of the grouping passed to the Serializer.
+  std::vector<HybridFlatMap::Group> groups;
   // Keys the writer must append to the Default group, in first-seen order.
   std::vector<std::string> expectedDefaultKeys;
 };
@@ -1416,7 +1437,7 @@ HybridFlatMapGroupingCase makeHybridFlatMapGrouping(
   HybridFlatMapGroupingCase result;
   if (kind == HybridFlatMapGroupingKind::kDefaultOnly) {
     result.expectedDefaultKeys = observedKeys;
-    result.grouping.groups.push_back(
+    result.groups.push_back(
         {.groupId = HybridFlatMap::kDefaultGroupId, .groupKeys = {}});
     return result;
   }
@@ -1435,21 +1456,21 @@ HybridFlatMapGroupingCase makeHybridFlatMapGrouping(
       configuredKeys.size(), 1 + folly::Random::rand32(2, rng));
 
   uint32_t groupId{folly::Random::rand32(3, rng)};
-  result.grouping.groups.push_back(
+  result.groups.push_back(
       {.groupId = groupId, .groupKeys = {std::move(keysWithoutData[0])}});
   for (size_t group = 0; group < numGroups; ++group) {
     groupId += 1 + folly::Random::rand32(3, rng);
-    result.grouping.groups.push_back({.groupId = groupId, .groupKeys = {}});
+    result.groups.push_back({.groupId = groupId, .groupKeys = {}});
   }
   for (size_t i = 0; i < configuredKeys.size(); ++i) {
-    result.grouping.groups[1 + i % numGroups].groupKeys.push_back(
+    result.groups[1 + i % numGroups].groupKeys.push_back(
         std::move(configuredKeys[i]));
   }
   if (mixKeysWithoutData) {
-    result.grouping.groups[numGroups > 0 ? 1 : 0].groupKeys.push_back(
+    result.groups[numGroups > 0 ? 1 : 0].groupKeys.push_back(
         std::move(keysWithoutData[1]));
   }
-  result.grouping.groups.push_back(
+  result.groups.push_back(
       {.groupId = HybridFlatMap::kDefaultGroupId, .groupKeys = {}});
   return result;
 }
@@ -1460,9 +1481,9 @@ HybridFlatMapGroupingCase makeHybridFlatMapGrouping(
 void verifyHybridFlatMapGroups(
     const HybridFlatMapType& actual,
     const HybridFlatMapGroupingCase& expected) {
-  ASSERT_EQ(actual.groupCount(), expected.grouping.groups.size());
+  ASSERT_EQ(actual.groupCount(), expected.groups.size());
   for (size_t i = 0; i < actual.groupCount(); ++i) {
-    const auto& expectedGroup = expected.grouping.groups[i];
+    const auto& expectedGroup = expected.groups[i];
     auto expectedKeys = expectedGroup.groupKeys;
     if (HybridFlatMap::isDefaultGroup(expectedGroup.groupId)) {
       expectedKeys = expected.expectedDefaultKeys;
@@ -1511,7 +1532,7 @@ void recordHybridFlatMapCoverage(
     HybridFlatMapCoverage& coverage) {
   size_t numConfiguredGroups{0};
   size_t numPresentConfiguredGroups{0};
-  for (const auto& group : groupingCase.grouping.groups) {
+  for (const auto& group : groupingCase.groups) {
     if (HybridFlatMap::isDefaultGroup(group.groupId)) {
       continue;
     }
@@ -1682,7 +1703,11 @@ TEST_P(SerializationTest, hybridFlatMapEncodingFuzz) {
             rng);
         recordHybridFlatMapCoverage(
             columnKeys, grouping, skipConstantMetadataStreams, coverage);
-        options.hybridFlatMapColumns.emplace(column, grouping.grouping);
+        options.hybridFlatMapColumns.emplace(
+            column,
+            HybridFlatMap{
+                keyKindOf(*mapColumn->type()->asMap().keyType()),
+                grouping.groups});
         groupings.emplace(column, std::move(grouping));
       }
 

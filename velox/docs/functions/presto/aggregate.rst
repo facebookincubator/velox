@@ -1014,3 +1014,27 @@ Miscellaneous
 .. function:: sum_data_size_for_stats(x) -> bigint
 
     Returns an estimate of the sum of in-memory size in bytes of ``x``.
+
+Vector Index Aggregate Functions
+--------------------------------
+
+These functions are available when Velox is built with FAISS
+(``VELOX_ENABLE_FAISS``).
+
+.. function:: vector_index_pack(cluster_id, cluster_centroid, metric) -> varbinary
+
+    Packs the centroids of ``n`` clusters into a vector index codec: a FAISS
+    index over the centroids, serialized as ``faiss::write_index`` writes it.
+    A cluster's id is its centroid's position in the codec.
+
+    * ``cluster_id`` (BIGINT): ids must be 0 to ``n - 1``, each once.
+    * ``cluster_centroid`` (ARRAY(REAL)): all centroids must have the same,
+      non-zero length and must not contain null elements.
+    * ``metric`` (VARCHAR): a constant. Supported values: ``'cosine'``, which
+      normalizes centroids to length 1 and compares by dot product.
+
+    Rows with a null ``cluster_id`` or ``cluster_centroid`` are ignored. The
+    result does not depend on the order rows arrive in::
+
+        SELECT vector_index_pack(cluster_id, centroid, 'cosine')
+        FROM centroids;

@@ -125,10 +125,11 @@ TEST(SchemaBuilderTest, hybridFlatMapUsesGroupChildrenAndKeyPresenceStreams) {
   auto attributes = nodes[1].attributes();
   const auto metadata = HybridFlatMap::extractAttribute(attributes);
   EXPECT_TRUE(attributes.empty());
-  ASSERT_EQ(metadata.groups.size(), 2);
-  EXPECT_EQ(metadata.groups[0].groupId, 7);
-  EXPECT_EQ(metadata.groups[0].groupKeys, (std::vector<std::string>{"a", "b"}));
-  EXPECT_TRUE(metadata.groups[1].groupKeys.empty());
+  ASSERT_EQ(metadata.groups().size(), 2);
+  EXPECT_EQ(metadata.groups()[0].groupId, 7);
+  EXPECT_EQ(
+      metadata.groups()[0].groupKeys, (std::vector<std::string>{"a", "b"}));
+  EXPECT_TRUE(metadata.groups()[1].groupKeys.empty());
   EXPECT_EQ(nodes[2].scalarKind(), ScalarKind::Bool);
   EXPECT_EQ(nodes[3].scalarKind(), ScalarKind::Bool);
 
@@ -794,14 +795,10 @@ TEST(SchemaBuilderTest, hybridFlatMapRejectsTruncatedGroup) {
           std::nullopt,
           2,
           hybridFlatMapAttributes(
-              HybridFlatMap{
-                  .groups =
-                      {
-                          {.groupId = 0, .groupKeys = {"a"}},
-                          {.groupId = HybridFlatMap::kDefaultGroupId,
-                           .groupKeys = {}},
-                      },
-              })},
+              HybridFlatMap::fromSchema({
+                  {.groupId = 0, .groupKeys = {"a"}},
+                  {.groupId = HybridFlatMap::kDefaultGroupId, .groupKeys = {}},
+              }))},
       SchemaNode{Kind::Scalar, 1, ScalarKind::Bool},
       SchemaNode{Kind::Scalar, 2, ScalarKind::Bool},
       SchemaNode{Kind::Scalar, 3, ScalarKind::Int64},
@@ -1093,7 +1090,7 @@ TEST(SchemaBuilderTest, hybridFlatMapReaderAcceptsPhysicalGroupMetadata) {
         0,
         ScalarKind::String,
         std::nullopt,
-        metadata.groups.size(),
+        metadata.groups().size(),
         hybridFlatMapAttributes(metadata));
     for (size_t i = 0; i < nodes.front().childrenCount(); ++i) {
       nodes.emplace_back(Kind::Scalar, 1 + 3 * i, ScalarKind::Bool);
@@ -1104,32 +1101,26 @@ TEST(SchemaBuilderTest, hybridFlatMapReaderAcceptsPhysicalGroupMetadata) {
   };
 
   NIMBLE_ASSERT_THROW(
-      SchemaReader::getSchema(makeNodes(HybridFlatMap{})),
+      SchemaReader::getSchema(makeNodes(HybridFlatMap::fromSchema({}))),
       "Hybrid FlatMap requires at least 1 group(s)");
 
   NIMBLE_ASSERT_THROW(
       SchemaReader::getSchema(makeNodes(
-          HybridFlatMap{.groups = {{.groupId = 7, .groupKeys = {}}}})),
+          HybridFlatMap::fromSchema({{.groupId = 7, .groupKeys = {}}}))),
       "Hybrid FlatMap group must contain at least one key: 7");
 
   NIMBLE_ASSERT_THROW(
       SchemaReader::getSchema(makeNodes(
-          HybridFlatMap{
-              .groups =
-                  {
-                      {.groupId = 7, .groupKeys = {"b"}},
-                      {.groupId = 3, .groupKeys = {"a"}},
-                  },
-          })),
+          HybridFlatMap::fromSchema({
+              {.groupId = 7, .groupKeys = {"b"}},
+              {.groupId = 3, .groupKeys = {"a"}},
+          }))),
       "Hybrid FlatMap group IDs must be in ascending order");
 
   const auto schema = SchemaReader::getSchema(makeNodes(
-      HybridFlatMap{
-          .groups =
-              {
-                  {.groupId = 7, .groupKeys = {"a"}},
-              },
-      }));
+      HybridFlatMap::fromSchema({
+          {.groupId = 7, .groupKeys = {"a"}},
+      })));
   const auto& map = schema->asHybridFlatMap();
   ASSERT_EQ(map.groupCount(), 1);
   EXPECT_EQ(map.groupAt(0).groupId, 7);
@@ -1141,14 +1132,11 @@ TEST(SchemaBuilderTest, hybridFlatMapReaderAcceptsPhysicalGroupMetadata) {
   // every group but may keep any first-seen order.
   const auto withKeys = [](std::vector<std::string> configuredKeys,
                            std::vector<std::string> defaultKeys) {
-    return HybridFlatMap{
-        .groups =
-            {
-                {.groupId = 7, .groupKeys = std::move(configuredKeys)},
-                {.groupId = HybridFlatMap::kDefaultGroupId,
-                 .groupKeys = std::move(defaultKeys)},
-            },
-    };
+    return HybridFlatMap::fromSchema({
+        {.groupId = 7, .groupKeys = std::move(configuredKeys)},
+        {.groupId = HybridFlatMap::kDefaultGroupId,
+         .groupKeys = std::move(defaultKeys)},
+    });
   };
   NIMBLE_ASSERT_THROW(
       SchemaReader::getSchema(makeNodes(withKeys({"b", "a"}, {}))),
@@ -1161,23 +1149,17 @@ TEST(SchemaBuilderTest, hybridFlatMapReaderAcceptsPhysicalGroupMetadata) {
       "Duplicate Hybrid FlatMap key: 'a'");
   NIMBLE_ASSERT_THROW(
       SchemaReader::getSchema(makeNodes(
-          HybridFlatMap{
-              .groups =
-                  {
-                      {.groupId = 3, .groupKeys = {"a", "b"}},
-                      {.groupId = 7, .groupKeys = {"b"}},
-                  },
-          })),
+          HybridFlatMap::fromSchema({
+              {.groupId = 3, .groupKeys = {"a", "b"}},
+              {.groupId = 7, .groupKeys = {"b"}},
+          }))),
       "Duplicate Hybrid FlatMap key: 'b'");
   NIMBLE_ASSERT_THROW(
       SchemaReader::getSchema(makeNodes(
-          HybridFlatMap{
-              .groups =
-                  {
-                      {.groupId = 7, .groupKeys = {"a"}},
-                      {.groupId = 7, .groupKeys = {"b"}},
-                  },
-          })),
+          HybridFlatMap::fromSchema({
+              {.groupId = 7, .groupKeys = {"a"}},
+              {.groupId = 7, .groupKeys = {"b"}},
+          }))),
       "Duplicate Hybrid FlatMap group ID: 7");
   {
     const auto keyedSchema =
@@ -1285,13 +1267,10 @@ TEST(SchemaBuilderTest, hybridFlatMapReaderRejectsMismatchedValueShapes) {
 }
 
 TEST(SchemaBuilderTest, hybridFlatMapReaderRejectsMalformedPhysicalGroups) {
-  const HybridFlatMap metadata{
-      .groups =
-          {
-              {.groupId = 0, .groupKeys = {"a"}},
-              {.groupId = HybridFlatMap::kDefaultGroupId, .groupKeys = {}},
-          },
-  };
+  const auto metadata = HybridFlatMap::fromSchema({
+      {.groupId = 0, .groupKeys = {"a"}},
+      {.groupId = HybridFlatMap::kDefaultGroupId, .groupKeys = {}},
+  });
   const auto makeNodes = [&](ScalarKind parentKeyKind,
                              ScalarKind keyPresenceKind,
                              ScalarKind inMapKind,

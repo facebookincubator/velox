@@ -25,7 +25,7 @@
 #include <vector>
 
 #include <folly/Executor.h>
-#include <folly/coro/Task.h>
+#include <folly/io/IOBufQueue.h>
 
 #include "velox/common/time/CpuWallTimer.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
@@ -33,69 +33,49 @@
 #include "velox/serializers/KeyEncoder.h"
 #include "velox/vector/ComplexVector.h"
 
-namespace facebook::velox {
-class BufferPool;
-namespace memory {
+namespace facebook::velox::memory {
 class MemoryPool;
-}
-} // namespace facebook::velox
+} // namespace facebook::velox::memory
 
 namespace facebook::nimble {
 
 class NimbleIndexProjector;
 
-/// Iterates index-selected Nimble rows as serialized rows or Velox batches.
-/// Each iterator exclusively owns its non-thread-safe projector and must be
-/// used by one thread at a time.
+namespace index {
+class KeyCursor;
+} // namespace index
+
+/// Iterates index-selected Nimble rows as output entries. Each iterator
+/// exclusively owns its non-thread-safe projector and must be used by one
+/// thread at a time.
 class NimbleIterator {
  public:
-  /// Names a serialized row format accepted by the row-iterator factory.
-  using OutputRowFormat = std::string;
-
-  /// Holds serialized rows back to back. Row i of the range occupies the bytes
-  /// [offsets[i], offsets[i + 1]) of 'buffer'.
-  struct SerializedRows {
-    velox::BufferPtr buffer;
-    std::vector<std::size_t> offsets;
-
-    /// Returns the bytes of row 'index' of the range, which stay valid while
-    /// this object holds the buffer. The buffer is null when every row of the
-    /// range is empty, and each row is then an empty view.
-    std::string_view row(std::size_t index) const;
-  };
-
-  /// Serializes the non-null rows [rowOffset, rowOffset + numRows) of a vector
-  /// into 'output'. The iterator passes the output of its previous call, so a
-  /// serializer can reuse the buffer. The serializer sets numRows + 1 offsets
-  /// and fills the buffer with the bytes they cover. It may leave the buffer
-  /// null when every row is empty. 'bufferPool' is optional and can be null. A
-  /// serializer that takes buffers from it lets the iterator recycle them
-  /// across stripes and iterators. Use this callback to provide formats beyond
-  /// the built-in row formats. The row iterator calls it once for all the rows
-  /// of a decoded stripe.
-  using OutputRowSerializer = std::function<void(
+  /// Decodes the rows of a stripe into output entries, a key and a value each,
+  /// in key order, however many entries a row has. 'keyCursor' supplies one
+  /// encoded cluster-index key per row of the stripe. The decoder writes the
+  /// bytes of the entries into 'keyStorage' and 'valueStorage', and sets
+  /// 'keys' and 'values', which view those storages, to the entries. The
+  /// iterator releases 'rows' after the call, so a decoder whose entries refer
+  /// to 'rows' ties them to a storage, for example with an IOBuf whose free
+  /// function holds them. A non-empty input must produce at least one entry.
+  /// When the iterator prefetches, it calls the decoder on threads of the
+  /// prefetch executor, for several stripes at a time, so a decoder must be
+  /// thread-safe. The prefetch keeps a copy of the decoder until it stops,
+  /// which can be after the iterator is destroyed unless reset() ran first, so
+  /// a decoder must not refer to state that ends before that.
+  using EntryDecoder = std::function<void(
       const velox::RowVectorPtr& rows,
-      velox::vector_size_t rowOffset,
-      velox::vector_size_t numRows,
-      velox::memory::MemoryPool* pool,
-      velox::BufferPool* bufferPool,
-      SerializedRows& output)>;
+      index::KeyCursor& keyCursor,
+      folly::IOBufQueue& keyStorage,
+      folly::IOBufQueue& valueStorage,
+      std::vector<std::string_view>& keys,
+      std::vector<std::string_view>& values)>;
 
-  /// Selects the CompactRow serializer.
-  static constexpr std::string_view kCompactRowFormat{"CompactRow"};
-
-  /// Selects the UnsafeRow serializer.
-  static constexpr std::string_view kUnsafeRowFormat{"UnsafeRow"};
-
-  /// Controls output batching and stripe prefetch for an index iterator.
+  /// Controls stripe prefetch for an index iterator.
   struct Options {
-    /// Maximum rows returned in one batch. A batch never crosses a stripe
-    /// boundary. Row iterators ignore this limit. They decode and serialize all
-    /// remaining selected rows in a projected stripe when the first row of the
-    /// stripe is read.
-    uint32_t outputBatchRows{1'024};
-
-    /// Executor used to project later stripes ahead of the consumer.
+    /// Executor used to project later stripes ahead of the consumer. The
+    /// iterator also decodes the prefetched stripes into entries on it, so that
+    /// the stripe is ready when the consumer reaches it.
     /// Must accept task submissions while its keep-alive token is held.
     /// Prefetch is disabled when the executor is empty or the stripe limit is
     /// zero.
@@ -107,20 +87,9 @@ class NimbleIterator {
     /// Zero disables prefetch.
     uint32_t maxPrefetchStripes{1};
 
-    /// Selects the serialized row format. Batch iterators ignore this option.
-    OutputRowFormat rowFormat{std::string{kCompactRowFormat}};
-
-    /// Optional pool that recycles the buffer of serialized rows. A row
-    /// iterator takes the buffer from the pool and returns it when it leaves a
-    /// stripe or is destroyed, so iterators that share a pool reuse the buffer.
-    /// The pool is not thread-safe, so iterators used concurrently need their
-    /// own pools. A buffer keeps the memory pool of the iterator that allocated
-    /// it, so share a pool only among iterators with the same memory pool.
-    /// The pool must outlive the iterator. Batch iterators ignore this option.
-    velox::BufferPool* bufferPool{nullptr};
-
     /// Reads the CPU and wall clocks around index lookups, plan building,
-    /// stripe loads and the decoding of stripes to fill the timings of Stats.
+    /// stripe loads and the decoding and conversion of stripes to fill the
+    /// timings of Stats.
     /// Reading the thread CPU clock is a system call, so a point lookup spends
     /// about 3 us on it. The timings stay at zero when this is false.
     bool collectTimings{true};
@@ -132,33 +101,32 @@ class NimbleIterator {
     bool cacheEncodingView{true};
   };
 
-  /// Creates an iterator that serializes one selected row at a time.
+  /// Creates an iterator over the output entries that 'entryDecoder' decodes
+  /// from the selected rows. The iterator moves over entries: valid(),
+  /// nextRow(), key() and value() refer to the current entry, whose key is the
+  /// key that the decoder returned and not the cluster-index key. A row of the
+  /// file can have any number of entries.
   static std::unique_ptr<NimbleIterator> createRowIterator(
       std::unique_ptr<NimbleIndexProjector> projector,
       velox::memory::MemoryPool* pool,
+      EntryDecoder entryDecoder,
       const Options& options);
-
-  /// Creates an iterator that materializes selected rows into Velox batches.
-  static std::unique_ptr<NimbleIterator> createBatchIterator(
-      std::unique_ptr<NimbleIndexProjector> projector,
-      velox::memory::MemoryPool* pool,
-      Options options);
 
   /// Statistics accumulated while the iterator projects rows.
   struct Stats {
     /// Number of stripes read from the tablet.
     uint32_t numReadStripes{0};
-    /// Number of prefetched stripes discarded after row navigation skips them.
-    uint32_t numSkippedStripes{0};
-    /// Number of read stripes serialized through stream slicing.
+    /// Number of read stripes served through stream slicing.
     uint32_t numSlicedStripes{0};
     /// Total rows read from storage, including rows outside requested ranges.
     uint64_t numReadRows{0};
     /// Total rows selected for the iterator's output.
     uint64_t numOutputRows{0};
-    /// Total rows decoded into vectors. A row iterator decodes and serializes
-    /// the selected rows of a stripe when it reads the first of them, so a
-    /// range that excludes rows keeps this count below the rows of the stripe.
+    /// Total rows decoded into vectors. The iterator decodes the selected rows
+    /// of a stripe at once, and ahead of the consumer when it prefetches,
+    /// so the count includes the rows of prefetched stripes that the consumer
+    /// seeks or resets before reading, and a range that excludes rows keeps it
+    /// below the rows of the stripe.
     uint64_t numMaterializedRows{0};
     /// Total bytes retained by projected stripe streams.
     uint64_t numOutputBytes{0};
@@ -173,8 +141,12 @@ class NimbleIterator {
     velox::CpuWallTiming scanTiming{};
     /// Time spent assembling projected stripe streams.
     velox::CpuWallTiming projectionTiming{};
-    /// Time spent decoding projected streams into vectors or serialized rows.
-    velox::CpuWallTiming materializationTiming{};
+    /// Time spent decoding projected streams into vectors, which an iterator
+    /// that prefetches does on the prefetch executor.
+    velox::CpuWallTiming decodingTiming{};
+    /// Time spent converting decoded rows into entries, which an iterator that
+    /// prefetches does on the prefetch executor.
+    velox::CpuWallTiming conversionTiming{};
   };
 
   virtual ~NimbleIterator() = default;
@@ -210,35 +182,28 @@ class NimbleIterator {
     return hasCurrentRow();
   }
 
-  /// Advances a row iterator past its current row. Invalidates the key and
-  /// value views of the current row. Fails if the iterator is not positioned on
-  /// a row.
+  /// Advances the iterator past its current entry. Invalidates the key and
+  /// value views of the current entry. Fails if the iterator is not positioned
+  /// on an entry.
   virtual void nextRow() = 0;
 
-  /// Materializes the next batch and advances past it. Returns false after all
-  /// matching rows have been emitted.
-  virtual folly::coro::Task<bool> co_nextBatch(velox::RowVectorPtr& output) = 0;
+  /// Returns whether an entry follows the current one, which is whether
+  /// nextRow() leaves the iterator on an entry. Loads the stripe of the current
+  /// entry when the previous entries did not, and never the stripe after it.
+  /// Fails if the iterator is not positioned on an entry.
+  virtual bool hasNext() const = 0;
 
-  /// Returns the encoded cluster-index key for the current row. Requires the
-  /// iterator to be positioned on a row.
+  /// Returns the key of the current entry, and loads its stripe when the
+  /// previous entries did not. The view stays valid until the iterator reads an
+  /// entry of another stripe, seeks or resets. Requires the iterator to be
+  /// positioned on an entry.
   virtual std::string_view key() const = 0;
 
-  /// Loads and decodes the stripe of the current row when the previous rows did
-  /// not, which blocks the calling thread until the stripe is available. Lets a
-  /// caller learn about a failure to load the value before it reads the value.
-  /// Requires the iterator to be positioned on a row.
-  virtual void prepareValue() = 0;
-
-  /// Returns the serialized current row, preparing the value first if the
-  /// caller did not. The view stays valid until the next call to nextRow(),
-  /// seek(), seekToFirst() or reset(), because the buffer of a stripe returns
-  /// to `Options::bufferPool` once the iterator leaves the stripe. Requires the
-  /// iterator to be positioned on a row.
+  /// Returns the value of the current entry, and loads its stripe when the
+  /// previous entries did not. The view stays valid until the iterator reads an
+  /// entry of another stripe, seeks or resets. Requires the iterator to be
+  /// positioned on an entry.
   virtual std::string_view value() = 0;
-
-  /// Returns the current file-level row number. Requires the iterator to be
-  /// positioned on a row.
-  virtual uint32_t rowNumber() const = 0;
 
   /// Returns cumulative statistics for this iterator.
   /// Call only between iterator operations.
@@ -247,9 +212,15 @@ class NimbleIterator {
  protected:
   NimbleIterator() = default;
 
+  // Returns whether the file-level 'row' is before the end of the selected
+  // rows.
+  bool isBeforeEndRow(uint32_t row) const {
+    return rowRange_.has_value() && row < rowRange_->endRow;
+  }
+
   // Returns whether the iterator still has a selected row to emit.
   bool hasCurrentRow() const {
-    return rowRange_.has_value() && row_ < rowRange_->endRow;
+    return isBeforeEndRow(row_);
   }
 
   // Returns the current file-level row, checking that it is selected. Defined
@@ -268,18 +239,8 @@ class NimbleIterator {
  private:
   // File-level bounds selected for this iterator's current scan.
   std::optional<RowRange> rowRange_;
-  // Current file-level row, advanced by the row or batch iterator.
+  // Current file-level row, advanced by the iterator.
   uint32_t row_{0};
 };
-
-/// Registers CompactRow and UnsafeRow serializers process-wide. Repeated
-/// calls are safe. The row-iterator factory also ensures they are registered.
-void registerDefaultOutputRowSerializers();
-
-/// Registers a custom row serializer process-wide. Fails if the format is
-/// empty, built-in, already registered, or the serializer is empty.
-void registerOutputRowSerializer(
-    NimbleIterator::OutputRowFormat rowFormat,
-    const NimbleIterator::OutputRowSerializer& serializer);
 
 } // namespace facebook::nimble
