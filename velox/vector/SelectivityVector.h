@@ -302,6 +302,15 @@ class SelectivityVector {
     allSelected_.reset();
   }
 
+  /// Sets the active bounds [begin, end) directly instead of computing them
+  /// from the bitmap like updateBounds() does. The caller must guarantee that
+  /// all selected bits lie within [begin, end).
+  void setActiveBounds(vector_size_t begin, vector_size_t end) {
+    begin_ = begin;
+    end_ = end;
+    allSelected_.reset();
+  }
+
   bool isAllSelected() const {
     if (allSelected_.has_value()) {
       return allSelected_.value();
