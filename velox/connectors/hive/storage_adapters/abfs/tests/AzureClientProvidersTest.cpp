@@ -16,6 +16,8 @@
 
 #include "velox/connectors/hive/storage_adapters/abfs/AzureClientProviderImpl.h"
 
+#include <stdexcept>
+
 #include "connectors/hive/storage_adapters/abfs/RegisterAbfsFileSystem.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/config/Config.h"
@@ -25,6 +27,34 @@
 
 using namespace facebook::velox::filesystems;
 using namespace facebook::velox;
+
+namespace {
+
+class RecordingHttpTransport final : public Azure::Core::Http::HttpTransport {
+ public:
+  std::unique_ptr<Azure::Core::Http::RawResponse> Send(
+      Azure::Core::Http::Request& request,
+      const Azure::Core::Context& context) override {
+    ++numRequests_;
+    throw std::runtime_error("RecordingHttpTransport request");
+  }
+
+  int numRequests() const {
+    return numRequests_;
+  }
+
+ private:
+  int numRequests_{0};
+};
+
+Azure::Storage::Blobs::BlobClientOptions recordingOptions(
+    const std::shared_ptr<RecordingHttpTransport>& transport) {
+  Azure::Storage::Blobs::BlobClientOptions options;
+  options.Transport.Transport = transport;
+  return options;
+}
+
+} // namespace
 
 TEST(AzureClientProvidersTest, clientSecretOAuth) {
   const config::ConfigBase config(
@@ -112,6 +142,24 @@ TEST(AzureClientProviderTest, fixedSasToken) {
       "http://bar.blob.core.windows.net/abc/file?sas=test");
 }
 
+TEST(AzureClientProviderTest, fixedSasForwardsReadClientOptions) {
+  const config::ConfigBase config(
+      {{"fs.azure.sas.fixed.token.bar.dfs.core.windows.net", "sas=test"}},
+      false);
+  const auto abfsPath =
+      std::make_shared<AbfsPath>("abfs://abc@bar.dfs.core.windows.net/file");
+  auto transport = std::make_shared<RecordingHttpTransport>();
+  const auto options = recordingOptions(transport);
+  FixedSasAzureClientProvider provider;
+
+  auto readClient =
+      provider.getReadFileClientWithOptions(abfsPath, config, options);
+
+  ASSERT_NE(readClient, nullptr);
+  EXPECT_THROW(readClient->getProperties(), std::runtime_error);
+  EXPECT_EQ(transport->numRequests(), 1);
+}
+
 TEST(AzureClientProviderTest, sharedKey) {
   const config::ConfigBase config(
       {{"fs.azure.account.key.efg.dfs.core.windows.net", "123"},
@@ -155,4 +203,22 @@ TEST(AzureClientProviderTest, sharedKey) {
               "abfss://foo@otheraccount.dfs.core.windows.net/test.txt"),
           config),
       "Config fs.azure.account.key.otheraccount.dfs.core.windows.net not found");
+}
+
+TEST(AzureClientProviderTest, sharedKeyForwardsReadClientOptions) {
+  const config::ConfigBase config(
+      {{"fs.azure.account.key.efg.dfs.core.windows.net", "dGVzdGtleQ=="}},
+      false);
+  const auto abfsPath =
+      std::make_shared<AbfsPath>("abfs://abc@efg.dfs.core.windows.net/file");
+  auto transport = std::make_shared<RecordingHttpTransport>();
+  const auto options = recordingOptions(transport);
+  SharedKeyAzureClientProvider provider;
+
+  auto readClient =
+      provider.getReadFileClientWithOptions(abfsPath, config, options);
+
+  ASSERT_NE(readClient, nullptr);
+  EXPECT_THROW(readClient->getProperties(), std::runtime_error);
+  EXPECT_EQ(transport->numRequests(), 1);
 }

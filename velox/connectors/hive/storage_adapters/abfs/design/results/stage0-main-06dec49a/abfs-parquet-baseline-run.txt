@@ -1,0 +1,5 @@
+exit_code=0
+command=env PATH=<user-local-bin>:/usr/local/bin:/usr/bin:/bin timeout --signal=TERM --kill-after=30s 900s <release-build>/velox/connectors/hive/storage_adapters/abfs/tests/velox_abfs_parquet_benchmark
+working_directory=<repository-root>
+raw_stdout=velox/connectors/hive/storage_adapters/abfs/design/results/stage0-main-06dec49a/abfs-parquet-baseline.csv
+raw_stderr=velox/connectors/hive/storage_adapters/abfs/design/results/stage0-main-06dec49a/abfs-parquet-baseline.stderr.txt

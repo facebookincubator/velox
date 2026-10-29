@@ -23,6 +23,16 @@
 
 namespace facebook::velox::filesystems {
 
+class AbfsAsyncAuthService;
+
+/// Supplies only the runtime services needed to construct an async read client.
+struct AzureAsyncReadContext {
+  /// References the caller-owned Blob pipeline options used during creation.
+  const Azure::Storage::Blobs::BlobClientOptions& clientOptions;
+  /// Shares the runtime-owned bounded authentication service.
+  std::shared_ptr<AbfsAsyncAuthService> authService;
+};
+
 // Provider interface for creating Azure Blob and Data Lake clients.
 class AzureClientProvider {
  public:
@@ -32,6 +42,22 @@ class AzureClientProvider {
   virtual std::unique_ptr<AzureBlobClient> getReadFileClient(
       const std::shared_ptr<AbfsPath>& path,
       const config::ConfigBase& config) = 0;
+
+  /// Creates an optional AzureBlobClient using caller-supplied options.
+  virtual std::unique_ptr<AzureBlobClient> getReadFileClientWithOptions(
+      const std::shared_ptr<AbfsPath>& path,
+      const config::ConfigBase& config,
+      const Azure::Storage::Blobs::BlobClientOptions& options) {
+    return nullptr;
+  }
+
+  /// Creates an optional async read client using narrow runtime services.
+  virtual std::unique_ptr<AzureBlobClient> getReadFileClientForAsync(
+      const std::shared_ptr<AbfsPath>& path,
+      const config::ConfigBase& config,
+      const AzureAsyncReadContext& context) {
+    return getReadFileClientWithOptions(path, config, context.clientOptions);
+  }
 
   // Creates AzureDataLakeFileClient for file write operations.
   virtual std::unique_ptr<AzureDataLakeFileClient> getWriteFileClient(
