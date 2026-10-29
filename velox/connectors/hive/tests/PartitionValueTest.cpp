@@ -19,8 +19,10 @@
 #include <gtest/gtest.h>
 
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/type/Filter.h"
 #include "velox/type/TimestampConversion.h"
+#include "velox/type/tz/TimeZoneMap.h"
 
 namespace facebook::velox::connector::hive {
 namespace {
@@ -34,6 +36,10 @@ Variant toVariant(
     TimestampMode timestampMode = TimestampMode::kUtc,
     DateMode dateMode = DateMode::kIsoString) {
   return PartitionValue::fromString(value, *type, timestampMode, dateMode);
+}
+
+int64_t packedTimestampWithTimeZone(std::string_view value) {
+  return toVariant(value, TIMESTAMP_WITH_TIME_ZONE()).value<TypeKind::BIGINT>();
 }
 
 Timestamp parseTimestamp(std::string_view value) {
@@ -147,6 +153,65 @@ TEST(PartitionValueTest, filterOnDecimal) {
       longValue, longValue, /*nullAllowed=*/false);
   EXPECT_TRUE(applyFilter(
       longRange, toVariant("12345678901234567890.12", DECIMAL(25, 2))));
+}
+
+// TIMESTAMP WITH TIME ZONE has kind BIGINT, so the dispatch would otherwise
+// route it to the integer parse. Verify that fromString recognizes the type
+// and packs the value.
+TEST(PartitionValueTest, timestampWithTimeZoneNamedZone) {
+  const auto utc = packedTimestampWithTimeZone("2021-01-01 00:00:00 UTC");
+  EXPECT_EQ(unpackMillisUtc(utc), 1'609'459'200'000);
+  EXPECT_EQ(unpackZoneKeyId(utc), tz::getTimeZoneID("UTC"));
+
+  const auto newYork =
+      packedTimestampWithTimeZone("2021-01-01 00:00:00 America/New_York");
+  // 2021-01-01 00:00:00 in New York is 05:00:00 UTC.
+  EXPECT_EQ(unpackMillisUtc(newYork), 1'609'459'200'000 + 5 * 3'600'000);
+  EXPECT_EQ(unpackZoneKeyId(newYork), tz::getTimeZoneID("America/New_York"));
+}
+
+TEST(PartitionValueTest, timestampWithTimeZoneExplicitOffset) {
+  const auto packed =
+      packedTimestampWithTimeZone("2021-01-01 00:00:00 +03:00");
+  EXPECT_EQ(unpackMillisUtc(packed), 1'609'459'200'000 - 3 * 3'600'000);
+  EXPECT_EQ(unpackZoneKeyId(packed), tz::getTimeZoneID("+03:00"));
+}
+
+// A value with no zone is already UTC and is not shifted.
+TEST(PartitionValueTest, timestampWithTimeZoneNoZoneIsUtc) {
+  const auto packed = packedTimestampWithTimeZone("2021-01-01 00:00:00");
+  EXPECT_EQ(unpackMillisUtc(packed), 1'609'459'200'000);
+  EXPECT_EQ(unpackZoneKeyId(packed), tz::getTimeZoneID("UTC"));
+}
+
+// The packed layout holds milliseconds, so anything finer is truncated.
+TEST(PartitionValueTest, timestampWithTimeZoneTruncatesSubMillis) {
+  EXPECT_EQ(
+      unpackMillisUtc(
+          packedTimestampWithTimeZone("2021-01-01 00:00:00.123456")),
+      1'609'459'200'123);
+}
+
+// A value that is not a timestamp string is parsed as an already packed
+// integer, which is how a table can store pre-packed partition values.
+TEST(PartitionValueTest, timestampWithTimeZoneAlreadyPacked) {
+  const auto expected =
+      pack(1'609'459'200'000, tz::getTimeZoneID("America/New_York"));
+  EXPECT_EQ(packedTimestampWithTimeZone(fmt::format("{}", expected)), expected);
+}
+
+TEST(PartitionValueTest, timestampWithTimeZoneUnparseableValue) {
+  VELOX_ASSERT_USER_THROW(
+      packedTimestampWithTimeZone("not a timestamp"),
+      "Cannot convert value to TIMESTAMP WITH TIME ZONE: not a timestamp");
+}
+
+// An offset with no corresponding zone key has nothing to pack with, so it is
+// rejected rather than recorded under a different zone.
+TEST(PartitionValueTest, timestampWithTimeZoneUnknownOffset) {
+  VELOX_ASSERT_USER_THROW(
+      packedTimestampWithTimeZone("2021-01-01 00:00:00 +19:00"),
+      "Unknown timezone in TIMESTAMP WITH TIME ZONE value");
 }
 
 TEST(PartitionValueTest, filterUsesTimestampMode) {
