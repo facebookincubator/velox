@@ -24,6 +24,7 @@
 #include "velox/type/DecimalUtil.h"
 
 #include <cudf/copying.hpp>
+#include <folly/ScopeGuard.h>
 
 #include <bit>
 #include <limits>
@@ -67,14 +68,18 @@ class LegacyCastTest : public CudfFunctionBaseTest {
     velox::test::assertEqualVectors(expected, actual);
   }
 
-  void assertCastMatchesSpark(
-      const VectorPtr& input,
-      const VectorPtr& expected) {
+  void assertCastEquals(const VectorPtr& input, const VectorPtr& expected) {
     auto expr = castExpr(input->type(), expected->type());
     SCOPED_TRACE(expr->toString());
     ASSERT_TRUE(canExprRunOnGpu(expr, execCtx_.queryCtx(), pool_.get()));
     velox::test::assertEqualVectors(
         expected, evaluate(expr, makeRowVector({input})));
+  }
+
+  void assertCastMatchesSpark(
+      const VectorPtr& input,
+      const VectorPtr& expected) {
+    assertCastEquals(input, expected);
   }
 };
 
@@ -508,6 +513,173 @@ TEST_F(LegacyCastTest, floatingPointToDecimalFastPathBoundaries) {
           {DecimalUtil::kPowersOfTen[38] - 2 * DecimalUtil::kPowersOfTen[22],
            std::nullopt},
           DECIMAL(38, 0)));
+}
+
+TEST_F(LegacyCastTest, numericFloatingPointToDecimalCommonValues) {
+  auto& config = CudfConfig::getInstance();
+  const auto previous = config.numericFloatToDecimalEnabled;
+  SCOPE_EXIT {
+    config.numericFloatToDecimalEnabled = previous;
+  };
+  config.numericFloatToDecimalEnabled = true;
+
+  assertCastEquals(
+      makeNullableFlatVector<double>(
+          {37.175, -37.175, 12.5, -12.5, 0.0, -0.0, std::nullopt}),
+      makeNullableFlatVector<int64_t>(
+          {3'718, -3'718, 1'250, -1'250, 0, 0, std::nullopt}, DECIMAL(15, 2)));
+  assertCastEquals(
+      makeNullableFlatVector<float>(
+          {1.25F, -1.25F, 0.5F, -0.5F, 0.0F, -0.0F, std::nullopt}),
+      makeNullableFlatVector<int64_t>(
+          {125, -125, 50, -50, 0, 0, std::nullopt}, DECIMAL(15, 2)));
+  assertCastMatchesCpu(
+      makeNullableFlatVector<int64_t>({123, -123, std::nullopt}),
+      DECIMAL(15, 2));
+  assertCastMatchesCpu(
+      makeNullableFlatVector<double>({12.75, -12.75, std::nullopt}), BIGINT());
+}
+
+TEST_F(LegacyCastTest, numericFloatingPointToDecimalCompatibilityDifferences) {
+  EXPECT_FALSE(CudfConfig{}.numericFloatToDecimalEnabled);
+  auto& config = CudfConfig::getInstance();
+  const auto previous = config.numericFloatToDecimalEnabled;
+  SCOPE_EXIT {
+    config.numericFloatToDecimalEnabled = previous;
+  };
+  config.numericFloatToDecimalEnabled = true;
+
+  // These expected values are from the pinned numeric scaled_round algorithm,
+  // not from Spark's Java 17 decimal-string conversion.
+  const auto realInput = makeFlatVector<float>({0.1F, -0.1F});
+  assertCastEquals(
+      realInput,
+      makeFlatVector<int64_t>(
+          {100'000'001'490'116'119LL, -100'000'001'490'116'119LL},
+          DECIMAL(18, 18)));
+  assertCastEquals(
+      makeFlatVector<double>({0.1, -0.1}),
+      makeFlatVector<int64_t>(
+          {100'000'000'000'000'012LL, -100'000'000'000'000'012LL},
+          DECIMAL(18, 18)));
+
+  // The same binary value uses different rounding when the source is DOUBLE.
+  assertCastEquals(
+      makeFlatVector<double>({static_cast<double>(0.1F)}),
+      makeFlatVector<int64_t>({100'000'001'490'116'126LL}, DECIMAL(18, 18)));
+
+  const auto doubleInput =
+      makeFlatVector<double>({std::bit_cast<double>(0xc235b5bae25aebd0ULL)});
+  assertCastEquals(
+      doubleInput,
+      makeFlatVector<int64_t>({-932'432'369'549'212LL}, DECIMAL(15, 4)));
+
+  // The order of multiplication controls whether an extra rounding digit fits.
+  assertCastEquals(
+      makeFlatVector<double>({std::bit_cast<double>(0xc70a36e2eb1c432cULL)}),
+      makeFlatVector<int128_t>(
+          {-17'014'118'346'046'921LL * DecimalUtil::kPowersOfTen[21]},
+          DECIMAL(38, 3)));
+
+  // Numeric rounding can stay below a precision boundary where Java's decimal
+  // representation overflows. This is a validity difference, not wrapped
+  // storage.
+  const auto boundaryInput = makeFlatVector<double>({1e38, -1e38});
+  const auto numericBoundary =
+      DecimalUtil::kPowersOfTen[38] - DecimalUtil::kPowersOfTen[22];
+  assertCastEquals(
+      boundaryInput,
+      makeFlatVector<int128_t>(
+          {numericBoundary, -numericBoundary}, DECIMAL(38, 0)));
+
+  // Construct new expressions with the default mode restored. The exact path
+  // retains Spark's values and overflow behavior.
+  config.numericFloatToDecimalEnabled = false;
+  assertCastMatchesSpark(
+      realInput,
+      makeFlatVector<int64_t>(
+          {100'000'001'490'116'120LL, -100'000'001'490'116'120LL},
+          DECIMAL(18, 18)));
+  assertCastMatchesSpark(
+      doubleInput,
+      makeFlatVector<int64_t>({-932'432'369'549'211LL}, DECIMAL(15, 4)));
+  assertCastMatchesSpark(
+      boundaryInput,
+      makeNullableFlatVector<int128_t>(
+          {std::nullopt, std::nullopt}, DECIMAL(38, 0)));
+}
+
+TEST_F(LegacyCastTest, numericFloatingPointToDecimalOverflowAndNulls) {
+  auto& config = CudfConfig::getInstance();
+  const auto previous = config.numericFloatToDecimalEnabled;
+  SCOPE_EXIT {
+    config.numericFloatToDecimalEnabled = previous;
+  };
+  config.numericFloatToDecimalEnabled = true;
+
+  // Reject overflow before narrowing and check precision again after rounding.
+  assertCastEquals(
+      makeNullableFlatVector<double>(
+          {0.0,
+           -0.0,
+           9.49,
+           -9.49,
+           9.99,
+           -9.99,
+           10.0,
+           -10.0,
+           std::bit_cast<double>(0x45308b2a2c280291ULL),
+           -std::bit_cast<double>(0x45308b2a2c280291ULL),
+           1e100,
+           -1e100,
+           std::numeric_limits<double>::max(),
+           std::numeric_limits<double>::infinity(),
+           -std::numeric_limits<double>::infinity(),
+           std::numeric_limits<double>::quiet_NaN(),
+           std::nullopt}),
+      makeNullableFlatVector<int64_t>(
+          {0,
+           0,
+           9,
+           -9,
+           std::nullopt,
+           std::nullopt,
+           std::nullopt,
+           std::nullopt,
+           std::nullopt,
+           std::nullopt,
+           std::nullopt,
+           std::nullopt,
+           std::nullopt,
+           std::nullopt,
+           std::nullopt,
+           std::nullopt,
+           std::nullopt},
+          DECIMAL(1, 0)));
+
+  for (const auto& target : {DECIMAL(1, 0), DECIMAL(38, 0), DECIMAL(38, 38)}) {
+    assertCastMatchesCpu(makeFlatVector<double>({}), target);
+    assertCastMatchesCpu(
+        makeNullableFlatVector<double>(
+            {std::numeric_limits<double>::denorm_min(),
+             std::numeric_limits<double>::max(),
+             -std::numeric_limits<double>::max(),
+             std::numeric_limits<double>::infinity(),
+             -std::numeric_limits<double>::infinity(),
+             std::numeric_limits<double>::quiet_NaN(),
+             std::nullopt}),
+        target);
+    assertCastMatchesCpu(
+        makeNullableFlatVector<float>(
+            {std::numeric_limits<float>::denorm_min(),
+             std::numeric_limits<float>::max(),
+             -std::numeric_limits<float>::max(),
+             std::numeric_limits<float>::infinity(),
+             -std::numeric_limits<float>::infinity(),
+             std::numeric_limits<float>::quiet_NaN(),
+             std::nullopt}),
+        target);
+  }
 }
 
 TEST_F(LegacyCastTest, decimalRescale) {

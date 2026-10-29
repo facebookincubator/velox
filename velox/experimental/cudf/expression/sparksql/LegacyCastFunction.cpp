@@ -14,8 +14,9 @@
  * limitations under the License.
  */
 
-#include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/expression/sparksql/LegacyCastFunction.h"
+#include "velox/experimental/cudf/CudfConfig.h"
+#include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/expression/sparksql/LegacyCastKernel.h"
 
 #include <cudf/unary.hpp>
@@ -78,7 +79,9 @@ LegacyCastFunction::LegacyCastFunction(const core::TypedExprPtr& expr)
           expr->type()->isDecimal() ||
           (isFloatingPoint(expr->inputs()[0]->type()) &&
            (expr->type()->isTinyint() || expr->type()->isSmallint() ||
-            expr->type()->isInteger() || expr->type()->isBigint()))) {
+            expr->type()->isInteger() || expr->type()->isBigint()))),
+      numericFloatToDecimalEnabled_(
+          CudfConfig::getInstance().numericFloatToDecimalEnabled) {
   VELOX_CHECK(
       canEvaluate(expr), "Unsupported Spark legacy cast: {}", expr->toString());
 }
@@ -90,7 +93,13 @@ ColumnOrView LegacyCastFunction::eval(
   VELOX_CHECK_EQ(inputColumns.size(), 1);
   const auto input = asView(inputColumns[0]);
   if (needsSparkKernel_) {
-    return legacyCastNumeric(input, targetType_, targetPrecision_, stream, mr);
+    return legacyCastNumeric(
+        input,
+        targetType_,
+        targetPrecision_,
+        stream,
+        mr,
+        numericFloatToDecimalEnabled_);
   }
   return cudf::cast(input, targetType_, stream, mr);
 }

@@ -29,9 +29,11 @@ TEST(ConfigTest, cudfConfig) {
       {CudfConfig::kCudfFunctionNamePrefix, "presto"},
       {CudfConfig::kCudfStreamingGroupbyEnabled, "true"},
       {CudfConfig::kCudfStreamingGroupbyCapacityMultiplier, "3.5"},
+      {CudfConfig::kCudfNumericFloatToDecimalEnabled, "true"},
       {CudfConfig::kCudfAllowCpuFallback, "false"}};
 
   CudfConfig config;
+  ASSERT_FALSE(config.numericFloatToDecimalEnabled);
   ASSERT_FALSE(config.streamingGroupbyEnabled);
   ASSERT_EQ(config.streamingGroupbyCapacityMultiplier, 2.0);
   config.initialize(std::move(options));
@@ -43,5 +45,8 @@ TEST(ConfigTest, cudfConfig) {
   ASSERT_EQ(config.streamingGroupbyEnabled, true);
   ASSERT_EQ(config.streamingGroupbyCapacityMultiplier, 3.5);
   ASSERT_EQ(config.allowCpuFallback, false);
+  ASSERT_TRUE(config.numericFloatToDecimalEnabled);
+  config.initialize({{CudfConfig::kCudfNumericFloatToDecimalEnabled, "false"}});
+  ASSERT_FALSE(config.numericFloatToDecimalEnabled);
 }
 } // namespace facebook::velox::cudf_velox::test

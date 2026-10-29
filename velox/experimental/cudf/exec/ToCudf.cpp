@@ -434,6 +434,10 @@ void CudfConfig::initialize(
     astExpressionPriority =
         folly::to<int32_t>(config[kCudfAstExpressionPriority]);
   }
+  if (config.find(kCudfNumericFloatToDecimalEnabled) != config.end()) {
+    numericFloatToDecimalEnabled =
+        folly::to<bool>(config[kCudfNumericFloatToDecimalEnabled]);
+  }
   if (config.find(kCudfAllowCpuFallback) != config.end()) {
     allowCpuFallback = folly::to<bool>(config[kCudfAllowCpuFallback]);
   }

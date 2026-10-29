@@ -1587,6 +1587,12 @@ Note: These configurations are experimental and subject to change.
      - integer
      - 100
      - Priority of cuDF AST expressions. Higher value wins when multiple cuDF execution options are available for the same Velox expression. Standalone cuDF functions have priority 50. If enabled, with a default priority of 100, AST will be chosen as replacement for cudf execution.
+   * - cudf.numeric_float_to_decimal_enabled
+     - bool
+     - false
+     - Experimental numeric REAL/DOUBLE-to-DECIMAL conversion without exact Java decimal reconstruction.
+       May change rounded values and overflow NULLs relative to Spark. Set before constructing cast functions.
+       Other casts and input NULL propagation are unchanged. The default retains exact conversion with a guarded fast path.
    * - cudf.allow_cpu_fallback
      - bool
      - true

@@ -53,7 +53,33 @@ generation. The fast path requires scale at most 18 and scaled magnitude below
 2^52. Direct binary scaling and rounding is not equivalent: `37.175` cast to
 `DECIMAL(15, 2)` must produce `37.18`, and `1e38` cast to `DECIMAL(38, 0)` must
 overflow to NULL. The guard preserves these rounding and validity decisions;
-there is no opt-in approximate conversion mode.
+this remains the default conversion policy.
+
+For conversion experiments, set `cudf.numeric_float_to_decimal_enabled=true`
+in `CudfConfig::initialize` before constructing expressions. This selects a
+separate numeric kernel for REAL/DOUBLE-to-DECIMAL casts. It scales the binary
+significand and applies type-specific rounding without Java decimal digit
+reconstruction or an exact fallback. Other casts keep their existing behavior.
+The setting defaults to false and is captured when each cast function is
+constructed; changing it does not change existing functions.
+
+Numeric conversion is intentionally not Spark-exact. For example, REAL `0.1f`
+cast to `DECIMAL(18,18)` produces `0.100000001490116119` instead of Spark's
+`0.100000001490116120`. DOUBLE bits `0xc235b5bae25aebd0` cast to
+`DECIMAL(15,4)` produce `-93243236954.9212` instead of `-93243236954.9211`.
+DOUBLE `1e38` cast to `DECIMAL(38,0)` produces the non-NULL unscaled value
+`99999999999999990000000000000000000000`, whereas Spark returns NULL.
+Differences are not restricted to one unscaled unit for all precisions and
+magnitudes. Decimal rounding can also change whether a result overflows the
+requested precision, affecting NULLs, filters, equality, and aggregates.
+Input NULLs remain NULL; nonfinite values and storage overflow return NULL.
+The unsigned result is checked against decimal precision before narrowing.
+
+The numeric policy is experimental. Compare it with the default policy in the
+same operator, report value and NULL-mask differences separately, and measure
+complete conversion calls before claiming a speedup. External integrations
+must forward the setting explicitly; merely setting a Spark property does not
+establish that the numeric kernel was selected.
 
 Floating-point-to-decimal and floating-point-to-integral calls with foldable
 constant inputs are rejected before GPU planning: the CPU expression optimizer

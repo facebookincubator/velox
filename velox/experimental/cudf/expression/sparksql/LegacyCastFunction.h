@@ -25,7 +25,7 @@ class LegacyCastFunction : public CudfFunction {
  public:
   explicit LegacyCastFunction(const core::TypedExprPtr& expr);
 
-  /// Accepts only numeric conversions whose Spark semantics are implemented.
+  /// Accepts supported numeric conversions under the configured cast policy.
   /// Literal inputs are unsupported; constant-encoded columns are supported.
   static bool canEvaluate(const core::TypedExprPtr& expr);
 
@@ -45,6 +45,9 @@ class LegacyCastFunction : public CudfFunction {
   // Numeric conversions requiring Spark rounding, saturation or overflow
   // checks.
   bool needsSparkKernel_;
+
+  // Capture the process-wide conversion policy when constructing the function.
+  bool numericFloatToDecimalEnabled_;
 };
 
 } // namespace facebook::velox::cudf_velox::sparksql

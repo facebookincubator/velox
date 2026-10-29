@@ -16,6 +16,7 @@
 
 #include "velox/experimental/cudf/expression/sparksql/FloatingPointToDecimal.cuh"
 #include "velox/experimental/cudf/expression/sparksql/LegacyCastKernel.h"
+#include "velox/experimental/cudf/expression/sparksql/NumericFloatingPointToDecimal.cuh"
 
 #include <cudf/column/column_factories.hpp>
 #include <cudf/null_mask.hpp>
@@ -73,7 +74,7 @@ __device__ bool rescaleMagnitude(
   return value <= maxValue;
 }
 
-template <typename Input, typename Output>
+template <typename Input, typename Output, bool kNumericFloatToDecimal>
 struct DecimalCast {
   int32_t sourceScale;
   int32_t targetScale;
@@ -83,16 +84,25 @@ struct DecimalCast {
   __device__ bool operator()(Input input, Output& output) const {
     if constexpr (std::is_floating_point_v<Input>) {
       Int128 value;
-      // Spark promotes REAL to DOUBLE before constructing its decimal. Use
-      // the decimal representation of that double, not a 7/15-digit binary
-      // normalization that can move values across decimal halfway points.
-      if (!detail::floatingPointToDecimal(
-              static_cast<double>(input),
-              maxValue,
-              targetScale,
-              floatingScaleFactor,
-              value)) {
-        return false;
+      if constexpr (kNumericFloatToDecimal) {
+        // Preserve Input: numeric conversion uses different rounding for REAL
+        // and DOUBLE.
+        if (!detail::numericFloatingPointToDecimal(
+                input, maxValue, targetScale, floatingScaleFactor, value)) {
+          return false;
+        }
+      } else {
+        // Spark promotes REAL to DOUBLE before constructing its decimal. Use
+        // the decimal representation of that double, not a 7/15-digit binary
+        // normalization that can move values across decimal halfway points.
+        if (!detail::floatingPointToDecimal(
+                static_cast<double>(input),
+                maxValue,
+                targetScale,
+                floatingScaleFactor,
+                value)) {
+          return false;
+        }
       }
       output = static_cast<Output>(value);
       return true;
@@ -198,7 +208,7 @@ void dispatchIntegralOutput(
   }
 }
 
-template <typename Input>
+template <typename Input, bool kNumericFloatToDecimal = false>
 void dispatchDecimalOutput(
     cudf::column_view input,
     cudf::mutable_column_view output,
@@ -216,10 +226,14 @@ void dispatchDecimalOutput(
   double floatingScaleFactor = 1;
   if constexpr (std::is_floating_point_v<Input>) {
     // The guarded fast path only uses exact binary64 powers through 10^18.
-    if (targetScale <= 18) {
+    // The numeric candidate also uses larger, rounded powers for a storage
+    // guard.
+    if (kNumericFloatToDecimal || targetScale <= 18) {
+      UInt128 factor = 1;
       for (int32_t i = 0; i < targetScale; ++i) {
-        floatingScaleFactor *= 10;
+        factor *= 10;
       }
+      floatingScaleFactor = static_cast<double>(factor);
     }
   }
 
@@ -227,14 +241,14 @@ void dispatchDecimalOutput(
     launchCast<Input, int64_t>(
         input,
         output,
-        DecimalCast<Input, int64_t>{
+        DecimalCast<Input, int64_t, kNumericFloatToDecimal>{
             sourceScale, targetScale, maxValue, floatingScaleFactor},
         stream);
   } else {
     launchCast<Input, Int128>(
         input,
         output,
-        DecimalCast<Input, Int128>{
+        DecimalCast<Input, Int128, kNumericFloatToDecimal>{
             sourceScale, targetScale, maxValue, floatingScaleFactor},
         stream);
   }
@@ -244,7 +258,8 @@ void dispatchDecimalInput(
     cudf::column_view input,
     cudf::mutable_column_view output,
     int32_t targetPrecision,
-    cuda::stream_ref stream) {
+    cuda::stream_ref stream,
+    bool numericFloatToDecimalEnabled) {
   switch (input.type().id()) {
     case cudf::type_id::BOOL8:
       return dispatchDecimalOutput<bool>(
@@ -266,9 +281,17 @@ void dispatchDecimalInput(
       return dispatchDecimalOutput<Int128>(
           input, output, targetPrecision, stream);
     case cudf::type_id::FLOAT32:
+      if (numericFloatToDecimalEnabled) {
+        return dispatchDecimalOutput<float, true>(
+            input, output, targetPrecision, stream);
+      }
       return dispatchDecimalOutput<float>(
           input, output, targetPrecision, stream);
     case cudf::type_id::FLOAT64:
+      if (numericFloatToDecimalEnabled) {
+        return dispatchDecimalOutput<double, true>(
+            input, output, targetPrecision, stream);
+      }
       return dispatchDecimalOutput<double>(
           input, output, targetPrecision, stream);
     default:
@@ -283,7 +306,8 @@ std::unique_ptr<cudf::column> legacyCastNumeric(
     cudf::data_type targetType,
     int32_t targetPrecision,
     cuda::stream_ref stream,
-    rmm::device_async_resource_ref mr) {
+    rmm::device_async_resource_ref mr,
+    bool numericFloatToDecimalEnabled) {
   const bool targetIsDecimal = targetType.id() == cudf::type_id::DECIMAL64 ||
       targetType.id() == cudf::type_id::DECIMAL128;
   if (targetIsDecimal) {
@@ -315,7 +339,11 @@ std::unique_ptr<cudf::column> legacyCastNumeric(
 
   if (targetIsDecimal) {
     dispatchDecimalInput(
-        input, result->mutable_view(), targetPrecision, stream);
+        input,
+        result->mutable_view(),
+        targetPrecision,
+        stream,
+        numericFloatToDecimalEnabled);
   } else if (input.type().id() == cudf::type_id::FLOAT32) {
     dispatchIntegralOutput<float>(input, result->mutable_view(), stream);
   } else {

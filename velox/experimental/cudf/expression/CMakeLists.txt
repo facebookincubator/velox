@@ -37,6 +37,7 @@ add_library(
   SparkFunctions.cpp
   sparksql/DateAddFunction.cpp
   sparksql/FloatingPointToDecimal.cuh
+  sparksql/NumericFloatingPointToDecimal.cuh
   sparksql/HashFunction.cpp
   sparksql/LegacyCastFunction.cpp
   sparksql/LegacyCastFunction.h

@@ -31,12 +31,15 @@ namespace facebook::velox::cudf_velox::sparksql {
 /// point to integral, and numeric/decimal to DECIMAL64 or DECIMAL128. Decimal
 /// casts round half away from zero and return null on precision overflow;
 /// floating-to-integral casts saturate, narrow, and map NaN to zero as Spark
-/// does. targetPrecision is required only for decimal results.
+/// does. targetPrecision is required only for decimal results. Opting into
+/// numericFloatToDecimalEnabled uses numeric floating conversion without exact
+/// fallback and may change rounded values and overflow NULLs relative to Spark.
 std::unique_ptr<cudf::column> legacyCastNumeric(
     cudf::column_view input,
     cudf::data_type targetType,
     int32_t targetPrecision,
     cuda::stream_ref stream,
-    rmm::device_async_resource_ref mr);
+    rmm::device_async_resource_ref mr,
+    bool numericFloatToDecimalEnabled = false);
 
 } // namespace facebook::velox::cudf_velox::sparksql
