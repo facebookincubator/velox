@@ -47,14 +47,6 @@ class AverageAggregationTest : public AggregationTestBase {
         {},
         expected,
         /*config*/ {});
-    testAggregationsWithCompanion(
-        input,
-        [](auto&) {},
-        {},
-        {"spark_avg(c0)"},
-        {{input.front()->childAt(0)->type()}},
-        {},
-        expected);
   }
 
   core::PlanNodePtr createMergeExtractDecimal(
@@ -143,6 +135,14 @@ TEST_F(AverageAggregationTest, avgAllNulls) {
       vectors,
       {"c0"},
       {"spark_avg(c1)"},
+      "SELECT c0, avg(c1) FROM tmp GROUP BY c0");
+  testAggregationsWithCompanion(
+      vectors,
+      [](auto&) {},
+      {"c0"},
+      {"spark_avg(c1)"},
+      {{BIGINT()}},
+      {},
       "SELECT c0, avg(c1) FROM tmp GROUP BY c0");
 
   plan = PlanBuilder()
