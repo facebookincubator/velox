@@ -182,6 +182,12 @@ enum class EncodingType {
   /// EXPERIMENTAL: Not production-ready. Do not enable for production tables
   /// without consulting the Nimble team (oncall: dwios).
   ALPRD = 26,
+  /// Stores integer streams made of ascending runs. A new partition starts
+  /// wherever a value drops, and adjacent partitions of similar density share
+  /// one Elias-Fano list.
+  /// EXPERIMENTAL: Not production-ready. Do not enable for production tables
+  /// without consulting the Nimble team (oncall: dwios).
+  PartitionedEliasFano = 27,
 };
 std::string toString(EncodingType encodingType);
 /// Returns the encoding type for 'name'. Throws if 'name' is unknown.

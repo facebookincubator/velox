@@ -166,6 +166,21 @@ class NimbleIndexProjector {
     /// as the new lowerKey with the original upperKey). When unset, no resume
     /// keys are produced even if a limit truncated the results.
     bool needResumeKey{false};
+    /// Caps the summed StripeGroupDescriptor::metadataSize of the stripe groups
+    /// that one metadata load returns while planning which stripes to read. A
+    /// load always returns the group of the stripe being planned, even when
+    /// that group alone exceeds the cap. It then adds the next groups that hold
+    /// stripes the key lookups found. It stops before the first group that
+    /// would take the total past the cap, so 0 loads only the stripe's own
+    /// group. Cached groups count toward the cap because planning holds them.
+    /// Planning keeps the groups of a load until it reaches a stripe outside
+    /// them, so a projection loads each group it uses at most once. A load of
+    /// several groups coalesces nearby sections and can read the rest in
+    /// parallel when the tablet reader has an IO executor. Its extra groups can
+    /// include ones that a row or byte limit keeps planning from reaching. A
+    /// read error in any of them fails the projection. Pinned metadata keeps
+    /// them in memory for the reader's lifetime.
+    uint64_t maxStripeGroupMetadataBytesPerLoad{0};
   };
 
   /// Request for a batch of index lookups.
@@ -452,14 +467,11 @@ class NimbleIndexProjector {
     bool requiredBarrier{false};
   };
 
-  // Locates this stripe's projected streams, staging them at the tail of
-  // ScanPlan::projectedStreams. The stripe is not part of the plan until
-  // appendStripePlan() commits it; a stripe dropped in between leaves the
-  // staged slots to be overwritten by the next stripe, and prepareStripes()
-  // trims any left over.
-  StripeStreams locateStripeStreams(uint32_t stripeIndex);
-
-  // Stages projected stream locations from metadata already loaded in a batch.
+  // Locates this stripe's projected streams from its loaded metadata, staging
+  // them at the tail of ScanPlan::projectedStreams. The stripe is not part of
+  // the plan until appendStripePlan() commits it; a stripe dropped in between
+  // leaves the staged slots to be overwritten by the next stripe, and
+  // prepareStripes() trims any left over.
   StripeStreams locateStripeStreams(const StripeIdentifier& stripe);
 
   // Appends one stripe to the plan using streams already staged for it by
@@ -501,19 +513,17 @@ class NimbleIndexProjector {
   // Builds serialized responses from the loaded stripe streams.
   SerializedResult processStripeStreams();
 
-  // Checks one loaded stream against the checksum the file records for it,
-  // throwing when they differ. With stream trailers, `data` ends with the
-  // stream's trailer. Otherwise the checksum comes from the stream's stripe
-  // group, at the stream's position in ctx_.expectedStreamChecksums, which is
-  // `enqueueIndex`: the index DataInput returned from enqueue().
+  // Checks one loaded stream against the checksum in its stream trailer, which
+  // `data` ends with, throwing when they differ. `enqueueIndex`, the index
+  // DataInput returned from enqueue(), only locates the stream for the error.
   void verifyStreamChecksum(uint32_t enqueueIndex, std::string_view data) const;
 
   // Validates the projected row schema.
   void validateProjection() const;
 
-  // Builds streamChecksum_, and for files with stream trailers the trailer
-  // members, when `verifyStreamChecksums` is set and the file records
-  // per-stream checksums.
+  // Builds streamChecksum_ and the stream trailer members when
+  // `verifyStreamChecksums` is set and the file's stream trailers carry a
+  // checksum.
   void initStreamChecksum(bool verifyStreamChecksums);
 
   // Resolves the request's stripes and loads their projected streams.
@@ -624,14 +634,15 @@ class NimbleIndexProjector {
   const std::unique_ptr<serde::StreamSlicer> streamSlicer_;
 
   std::unique_ptr<DataInput> dataInput_;
-  // Verifies a stream read from storage against the checksum the file records
-  // for it. Built only when ReaderOptions::verifyStreamChecksums() is set and
-  // the file records per-stream checksums, so null means this projector does
-  // not verify. Stateful, so it relies on this class being single-threaded.
+  // Verifies a stream read from storage against the checksum in its stream
+  // trailer. Built only when ReaderOptions::verifyStreamChecksums() is set and
+  // the file's stream trailers carry a checksum, so null means this projector
+  // does not verify. Stateful, so it relies on this class being
+  // single-threaded.
   std::unique_ptr<Checksum> streamChecksum_;
-  // When verifying a file whose checksums are in stream trailers: the stream
-  // trailer's size, read with every stream, and the checksum's offset within
-  // it. Zero otherwise, so unverified reads load exactly the stream's bytes.
+  // When verifying: the stream trailer's size, read with every stream, and the
+  // checksum's offset within it. Zero otherwise, so unverified reads load
+  // exactly the stream's bytes.
   uint32_t streamTrailerSize_{0};
   uint32_t streamTrailerChecksumOffset_{0};
   // Whether the stats timings read the CPU and wall clocks.
@@ -673,11 +684,6 @@ class NimbleIndexProjector {
     // [stripeOffset * numProjectedStreams + streamIndex]. nullopt for absent
     // streams. Populated by loadStripeStreams().
     std::vector<std::optional<uint32_t>> dataInputIndices;
-    // Expected checksum of each enqueued stream, indexed by the enqueue index
-    // DataInput returns. Appended in enqueue order by loadStripes(). Empty
-    // when checksum verification is off or reads checksums from stream
-    // trailers.
-    std::vector<uint32_t> expectedStreamChecksums;
     // Handle keeping loaded data alive for zero-copy BufferRefs.
     DataInput::Handle dataHandle;
     // Serialized stripe bodies and metadata, one per planned stripe. Populated

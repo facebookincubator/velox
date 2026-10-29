@@ -34,6 +34,7 @@
 #include "velox/dwio/nimble/encodings/views/MainlyConstantEncodingView.h"
 #include "velox/dwio/nimble/encodings/views/NullableEncodingView.h"
 #include "velox/dwio/nimble/encodings/views/PFOREncodingView.h"
+#include "velox/dwio/nimble/encodings/views/PartitionedEliasFanoEncodingView.h"
 #include "velox/dwio/nimble/encodings/views/RLEEncodingView.h"
 #include "velox/dwio/nimble/encodings/views/SentinelEncodingView.h"
 #include "velox/dwio/nimble/encodings/views/SimdForBitpackEncodingView.h"
@@ -130,6 +131,14 @@ std::unique_ptr<TypedEncodingView<T>> createTypedEncodingView(
       }
       NIMBLE_INCOMPATIBLE_ENCODING(
           "EliasFano encoding only supports integral data types, got {}.",
+          TypeTraits<T>::dataType);
+    case EncodingType::PartitionedEliasFano:
+      if constexpr (isIntegralType<T>()) {
+        return std::make_unique<PartitionedEliasFanoEncodingView<T>>(
+            data, pool, options);
+      }
+      NIMBLE_INCOMPATIBLE_ENCODING(
+          "PartitionedEliasFano encoding only supports integral data types, got {}.",
           TypeTraits<T>::dataType);
     case EncodingType::Huffman:
       if constexpr (
@@ -244,6 +253,7 @@ bool supportsEncodingView(EncodingType encodingType) {
       EncodingType::FOR,
       EncodingType::DeltaBlock,
       EncodingType::EliasFano,
+      EncodingType::PartitionedEliasFano,
       EncodingType::Huffman,
       EncodingType::PFOR,
       EncodingType::SimdForBitpack,

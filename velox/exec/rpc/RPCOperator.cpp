@@ -32,6 +32,8 @@ namespace facebook::velox::exec::rpc {
 namespace {
 constexpr int64_t kLegacyFixedLimit{200};
 constexpr int64_t kDefaultAdaptiveHardLimit{1'000'000};
+// Limiter floor when neither the function nor the session declares one.
+constexpr double kDefaultAdaptiveFloor{50.0};
 
 // Bounds a per-row future by 'timeout' and stamps 'rowId' on its response.
 folly::SemiFuture<RPCResponse> wrapRowFuture(
@@ -160,6 +162,8 @@ void RPCOperator::initialize() {
       rpcNode_->streamingMode() == RPCStreamingMode::kPerRow &&
       function_->mayReturnCapacityRetries();
   state_->setCapacityRetryEnabled(capacityRetryEnabled_);
+  *liveStatsSources_.wlock() =
+      LiveStatsSources{.state = state_, .function = function_};
   requiresRowInspectionBeforeAdmission_ =
       function_->requiresRowInspectionBeforeAdmission();
   if (!requiresRowInspectionBeforeAdmission_) {
@@ -168,9 +172,6 @@ void RPCOperator::initialize() {
 
   // Size output vectors from config; see getOutput().
   outputBatchRows_ = queryConfig.preferredOutputBatchRows();
-
-  *liveStatsSources_.wlock() = LiveStatsSources{
-      .state = state_, .limiter = limiter_, .function = function_};
 
   RPC_OP_VLOG(1) << "Created operator for function '"
                  << rpcNode_->functionName() << "', planNodeId=" << planNodeId()
@@ -198,49 +199,69 @@ void RPCOperator::initializeRateLimiter() {
   }
 
   admissionKey_ = function_->admissionKey();
-  limiter_ = &RPCRateLimiterRegistry::global().get(admissionKey_);
-  *liveStatsSources_.wlock() = LiveStatsSources{
-      .state = state_, .limiter = limiter_, .function = function_};
-
   const auto& queryConfig = operatorCtx_->driverCtx()->queryConfig();
   const auto sessionFloor = queryConfig.rpcRateLimiterMinLimit();
   const auto legacySessionLimit = queryConfig.rpcRateLimiterMaxLimit();
   const auto sessionHardLimit = queryConfig.rpcRateLimiterHardLimit();
+  const auto maxProbeIntervalMs =
+      queryConfig.rpcRateLimiterMaxProbeIntervalMs();
   VELOX_USER_CHECK_GE(
       sessionFloor, 0, "rpc.ratelimiter.min_limit must be non-negative");
   VELOX_USER_CHECK_GE(
       legacySessionLimit, 0, "rpc.ratelimiter.max_limit must be non-negative");
   VELOX_USER_CHECK_GE(
       sessionHardLimit, -1, "rpc.ratelimiter.hard_limit must be at least -1");
-  // The first query fixes this shared controller's configuration.
-  // initializeOnce applies the function and session settings atomically.
-  limiter_->initializeOnce(
-      [this, &queryConfig, sessionFloor, legacySessionLimit, sessionHardLimit](
-          RPCRateLimiter::Config& config) {
-        config.adaptive = queryConfig.rpcRateLimiterAdaptiveEnabled();
-        config.floor = sessionFloor > 0 ? static_cast<double>(sessionFloor)
-                                        : function_->configuredAdaptiveFloor();
-        config.decreaseFactor = queryConfig.rpcRateLimiterDecreaseFactor();
+  VELOX_USER_CHECK_GE(
+      maxProbeIntervalMs,
+      0,
+      "rpc.ratelimiter.max_probe_interval_ms must be non-negative");
 
-        const auto functionLimit = function_->configuredCeiling();
-        if (sessionHardLimit < 0) {
-          if (functionLimit > 0) {
-            config.ceiling = functionLimit;
-          }
-          if (legacySessionLimit > 0) {
-            config.ceiling = legacySessionLimit;
-          }
-        } else if (functionLimit > 0 && sessionHardLimit > 0) {
-          config.ceiling = std::min(functionLimit, sessionHardLimit);
-        } else if (functionLimit > 0) {
-          config.ceiling = functionLimit;
-        } else if (sessionHardLimit > 0) {
-          config.ceiling = sessionHardLimit;
-        } else {
-          config.ceiling =
-              config.adaptive ? kDefaultAdaptiveHardLimit : kLegacyFixedLimit;
-        }
-      });
+  // A hard limit of 0 or more opts into the function's bounds taking
+  // precedence: session properties apply to every function in the query,
+  // while the function declares bounds for its own backend. The default of -1
+  // keeps the session's precedence. With 0 or more, max_limit no longer
+  // applies: a positive hard limit is the ceiling when the function declares
+  // none, and 0 leaves only the safety ceiling.
+  const bool functionBoundsFirst = sessionHardLimit >= 0;
+  RPCRateLimiter::Config policy;
+  policy.adaptive = queryConfig.rpcRateLimiterAdaptiveEnabled();
+  const auto functionFloor = function_->configuredAdaptiveFloor();
+  if (functionBoundsFirst && functionFloor > 0) {
+    policy.floor = functionFloor;
+  } else if (sessionFloor > 0) {
+    policy.floor = static_cast<double>(sessionFloor);
+  } else if (functionFloor > 0) {
+    policy.floor = functionFloor;
+  } else {
+    policy.floor = kDefaultAdaptiveFloor;
+  }
+  policy.decreaseFactor = queryConfig.rpcRateLimiterDecreaseFactor();
+  policy.maxProbeInterval = std::chrono::milliseconds{maxProbeIntervalMs};
+  const auto functionLimit = function_->configuredCeiling();
+  if (sessionHardLimit < 0) {
+    if (functionLimit > 0) {
+      policy.ceiling = functionLimit;
+    }
+    if (legacySessionLimit > 0) {
+      policy.ceiling = legacySessionLimit;
+    }
+  } else if (functionLimit > 0 && sessionHardLimit > 0) {
+    policy.ceiling = std::min(functionLimit, sessionHardLimit);
+  } else if (functionLimit > 0) {
+    policy.ceiling = functionLimit;
+  } else if (sessionHardLimit > 0) {
+    policy.ceiling = sessionHardLimit;
+  } else {
+    policy.ceiling =
+        policy.adaptive ? kDefaultAdaptiveHardLimit : kLegacyFixedLimit;
+  }
+
+  const auto lookup =
+      RPCRateLimiterRegistry::global().getForPolicy(admissionKey_, policy);
+  limiter_ = lookup.limiter;
+  auto sources = liveStatsSources_.wlock();
+  sources->limiter = limiter_;
+  sources->policyScoped = lookup.policyScoped;
 }
 
 bool RPCOperator::needsInput() const {
@@ -904,6 +925,10 @@ void RPCOperator::recordCongestion(
     // PER_ROW mode, whose window is shrink-only by design.
     state_->onUnitCleanCompletions(
         static_cast<int64_t>(roundTripTimesNs.size()));
+  } else if (signal == AsyncRPCFunction::CongestionSignal::kNonOverloadError) {
+    // Neither window shrinks, but a recovering paced window must stop growing
+    // while the backend fails calls.
+    limiter_->onOutcome(RPCRateLimiter::Outcome::kFailure, 0, 0);
   }
 
   // The shared limiter needs a service-horizon sample for fractional pacing
@@ -1012,20 +1037,24 @@ RowVectorPtr RPCOperator::outputBatch() {
   checkNoFrameworkFailures(function_->name(), claimedBatch_->responses);
 
   const auto numRows = static_cast<int64_t>(claimedBatch_->responses.size());
+  int64_t numFailedRows{0};
   for (const auto& response : claimedBatch_->responses) {
     if (response.hasError()) {
       numErrors_++;
+      ++numFailedRows;
       recordErrorKind(response.errorKind());
     }
   }
 
   // One measured round trip is recorded for the completed flush. Shared-cap
   // recovery is credited by the exact backend units reserved: one for a
-  // native batch, or one per emitted RPC for a fan-out batch.
+  // native batch, or one per emitted RPC for a fan-out batch. A flush in which
+  // no row succeeded earns no credit, as errored PER_ROW rows earn none:
+  // crediting it would restart a paced recovery that its failure ends.
   const std::vector<int64_t> roundTripTimesNs{claimedBatch_->rttNs};
   if (claimedBatch_->admissionUnits > 0) {
     std::vector<std::pair<uint64_t, int64_t>> successUnitsByEpoch;
-    if (claimedBatch_->admissionEpoch.has_value()) {
+    if (claimedBatch_->admissionEpoch.has_value() && numFailedRows < numRows) {
       successUnitsByEpoch.emplace_back(
           claimedBatch_->admissionEpoch.value(), claimedBatch_->admissionUnits);
     }
@@ -1412,10 +1441,11 @@ void RPCOperator::addLiveProgressStats(
         RuntimeMetric(sources->function->numRetriesAttempted());
   }
   // The backend's admission capacity trajectory: the capacity this operator
-  // shares with every other driver dispatching to the same backend, as
-  // distinct from the per-driver rpcCongestion* window. Emitted for every
-  // backend including the default one, whose key is empty; gating on a
-  // non-empty key would hide the cap on exactly the most common path.
+  // shares with every other driver dispatching to the same backend under the
+  // same policy, as distinct from the per-driver rpcCongestion* window.
+  // Emitted for every backend including the default one, whose key is empty;
+  // gating on a non-empty key would hide the cap on exactly the most common
+  // path.
   //
   // limiter_ is resolved in initialize(), but Driver::closeOperators() closes
   // every operator whether or not initializeOperators() ran -- a task that
@@ -1437,6 +1467,9 @@ void RPCOperator::addLiveProgressStats(
         RuntimeMetric(limiterStats.lowWaterLimitMilli);
     stats.runtimeStats[kRpcRateLimiterServiceHorizonNanos] =
         RuntimeMetric(limiterStats.serviceHorizonNanos);
+    if (sources->policyScoped) {
+      stats.runtimeStats[kRpcRateLimiterPolicyScoped] = RuntimeMetric(1);
+    }
   }
   if (!includeGauges) {
     return;

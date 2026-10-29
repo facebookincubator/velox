@@ -15,8 +15,6 @@
  */
 #pragma once
 
-#include "velox/dwio/nimble/common/Types.h"
-
 #include <array>
 #include <cstdint>
 #include <optional>
@@ -30,8 +28,8 @@ namespace facebook::nimble {
 /// StreamTrailerFieldKind, so values are append-only. A file may carry kinds
 /// this enum does not name; readers skip them by size.
 enum class StreamTrailerFieldKind : uint8_t {
-  /// The stream's checksum: Checksum::computeChecksum32() of its bytes, stored
-  /// little-endian.
+  /// The stream's checksum: Checksum::computeChecksum32() of its bytes, with
+  /// the file's ChecksumType from the postscript, stored little-endian.
   kChecksum32 = 0,
 };
 
@@ -99,6 +97,7 @@ class StreamTrailerLayout {
 /// on these values, so never renumber, reuse or remove one. TabletReader checks
 /// these bits after it parses the postscript, the footer, the stripes section
 /// and possibly the first stripe group, so a bit cannot gate changes to those.
+/// See ADDING_REQUIRED_FEATURE.md in this directory before adding a feature.
 enum class RequiredFeature : uint32_t {};
 
 /// File-level properties that readers need before loading other optional
@@ -110,15 +109,11 @@ class FileProperties {
   /// later reader supports them too.
   static constexpr std::array<RequiredFeature, 0> kSupportedRequiredFeatures{};
 
-  /// A file records per-stream checksums in at most one place: stripe-group
-  /// arrays (`hasStreamChecksums`, legacy files only) or a stream trailer that
-  /// carries kChecksum32. `requiredFeatures` must be in increasing bit order,
-  /// each once.
+  /// `requiredFeatures` must be in increasing bit order, each once.
   FileProperties(
       bool compactRowCountEncoding,
       bool clusterIndexKeyColumnStorageOmitted,
       std::vector<std::string> clusterIndexKeyColumnsWithOmittedStorage,
-      bool hasStreamChecksums = false,
       StreamTrailerLayout streamTrailerLayout = {},
       bool hasTopLevelNulls = false,
       std::vector<RequiredFeature> requiredFeatures = {});
@@ -137,14 +132,6 @@ class FileProperties {
   const std::vector<std::string>& clusterIndexKeyColumnsWithOmittedStorage()
       const {
     return clusterIndexKeyColumnsWithOmittedStorage_;
-  }
-
-  /// Returns whether stripe groups carry per-stream checksum arrays. Only
-  /// legacy files do; current writers put each stream's checksum in its
-  /// trailer instead (see streamTrailerLayout()). The algorithm is the file's
-  /// ChecksumType, from the postscript.
-  bool hasStreamChecksums() const {
-    return hasStreamChecksums_;
   }
 
   /// Returns the layout of the trailer that follows every non-empty stream;
@@ -178,7 +165,6 @@ class FileProperties {
   bool compactRowCountEncoding_{false};
   bool clusterIndexKeyColumnStorageOmitted_{false};
   std::vector<std::string> clusterIndexKeyColumnsWithOmittedStorage_;
-  bool hasStreamChecksums_{false};
   StreamTrailerLayout streamTrailerLayout_;
   bool hasTopLevelNulls_{false};
   std::vector<RequiredFeature> requiredFeatures_;

@@ -36,6 +36,7 @@
 
 #include "velox/dwio/nimble/common/Buffer.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
+#include "velox/dwio/nimble/common/OrderedInteger.h"
 #include "velox/dwio/nimble/encodings/common/Encoding.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelection.h"
@@ -81,6 +82,15 @@ class EliasFanoEncoding final
   /// value-to-row lookup in sorted index streams.
   uint32_t lowerBound(physicalType value) const;
 
+  /// Returns the first row in [begin, end) whose value is at least 'value', or
+  /// 'end'. Stores the value of a returned row before 'end' in 'found', which
+  /// spares a caller that compares it a second seek.
+  uint32_t lowerBound(
+      uint32_t begin,
+      uint32_t end,
+      physicalType value,
+      physicalType& found) const;
+
   /// Decodes selected rows through the generic visitor interface.
   template <typename DecoderVisitor>
   void readWithVisitor(DecoderVisitor& visitor, ReadWithVisitorParams& params);
@@ -107,8 +117,34 @@ class EliasFanoEncoding final
       const Statistics<physicalType>& statistics,
       const Encoding::Options& options = {});
 
+  /// Encodes a non-empty, non-decreasing span with a layout derived from its
+  /// first and last values. Lets another encoding store an ascending sequence
+  /// it computes from its own input, whose statistics it does not have.
+  static std::string_view encodeNonDecreasing(
+      std::span<const physicalType> values,
+      Buffer& buffer,
+      const Encoding::Options& options);
+
+  /// Estimates the encoded size of 'rowCount' non-decreasing values whose last
+  /// value exceeds the first by 'range'.
+  static std::optional<uint64_t> estimateNonDecreasingSize(
+      uint32_t rowCount,
+      uint64_t range,
+      const Encoding::Options& options);
+
   /// Returns a human-readable description of the encoded layout.
   std::string debugString(int offset) const final;
+
+  /// Reads a stream without the encoding object. Holds the parsed header and a
+  /// pointer to the encoded payload, which must outlive it. It is small, so an
+  /// encoding made of several lists can keep each one inline where a read
+  /// reaches it.
+  class List;
+
+  /// Returns the parsed header.
+  const List& list() const {
+    return list_;
+  }
 
  private:
   static_assert(
@@ -146,47 +182,6 @@ class EliasFanoEncoding final
   // Folly's encoder writes lower values with writeBits56().
   static constexpr uint8_t kMaxLowerBits{56};
 
-  // Moves signed values into monotonically ordered unsigned space.
-  static constexpr uint64_t kSignMask{
-      uint64_t{1} << (sizeof(physicalType) * 8 - 1)};
-
-  // Signed logical types use an unsigned physical type of the same width, so
-  // toggling its sign bit maps two's-complement order to unsigned order.
-  static uint64_t toOrdered(physicalType value) {
-    if constexpr (std::is_signed_v<T>) {
-      using UnsignedPhysicalType = std::make_unsigned_t<physicalType>;
-      return static_cast<uint64_t>(static_cast<UnsignedPhysicalType>(value)) ^
-          kSignMask;
-    } else {
-      return static_cast<uint64_t>(value);
-    }
-  }
-
-  // Restores a physical value from its unsigned sortable representation.
-  static physicalType fromOrdered(uint64_t value) {
-    if constexpr (std::is_signed_v<T>) {
-      using UnsignedPhysicalType = std::make_unsigned_t<physicalType>;
-      return static_cast<physicalType>(
-          static_cast<UnsignedPhysicalType>(value ^ kSignMask));
-    } else {
-      return static_cast<physicalType>(value);
-    }
-  }
-
-  // Holds the normalized base and the corresponding Folly payload layout.
-  struct ValueLayout {
-    // Absolute value represented by relative value zero in the payload.
-    uint64_t base{0};
-
-    // Describes the byte layout of the base-relative values.
-    Encoder::Layout payload;
-  };
-
-  // Returns the normalized base and payload layout for valid input.
-  static std::optional<ValueLayout> layoutForValues(
-      std::span<const physicalType> values,
-      const Statistics<physicalType>& statistics);
-
   // Returns the format-defined payload offset for the selected prefix size.
   static constexpr size_t payloadOffset(uint32_t prefixSize) {
     return (prefixSize + kHeaderSize + kPayloadAlignment - 1) &
@@ -209,7 +204,7 @@ class EliasFanoEncoding final
 
   struct RandomReadCache {
     uint64_t encodingId{0};
-    const uint8_t* upper{nullptr};
+    const uint8_t* payload{nullptr};
     std::optional<Reader> reader;
   };
 
@@ -228,17 +223,8 @@ class EliasFanoEncoding final
   // Creates the stateful cursor on its first sequential operation.
   Reader& ensureReader();
 
-  // Absolute value represented by relative value zero in the payload.
-  uint64_t base_{0};
-
-  // Bit width of each lower-value component in the Folly layout.
-  uint8_t lowerBits_{0};
-
-  // Byte length of the unary-coded upper-value component.
-  uint32_t upperBytes_{0};
-
   // Non-owning parsed view over the serialized Folly payload.
-  Encoder::CompressedList list_;
+  List list_;
 
   // Identifies this parsed stream in the per-thread random-read cache.
   const uint64_t encodingId_{nextEncodingId()};
@@ -248,6 +234,79 @@ class EliasFanoEncoding final
 
   // Next logical row consumed by the stateful Encoding interface.
   uint32_t row_{0};
+};
+
+/// A stateless reader over one Elias-Fano stream. It holds the header that
+/// EliasFanoEncoding validated and a pointer to the serialized Folly payload,
+/// and opens a fresh cursor per read, so concurrent reads need no locking.
+/// The payload must outlive the list; the encoding object need not, so an
+/// encoding made of several lists can keep each one inline.
+template <typename T>
+class EliasFanoEncoding<T>::List {
+ public:
+  List() = default;
+
+  /// Wraps a header that EliasFanoEncoding has validated against 'payload',
+  /// the start of the serialized Folly payload.
+  List(
+      uint64_t base,
+      uint8_t lowerBits,
+      uint32_t upperBytes,
+      uint32_t rowCount,
+      const uint8_t* payload)
+      : base_{base},
+        payload_{payload},
+        rowCount_{rowCount},
+        upperBytes_{upperBytes},
+        lowerBits_{lowerBits} {}
+
+  /// Returns the value at 'row'.
+  physicalType valueAt(uint32_t row) const;
+
+  /// Returns the first row whose value is at least 'value', or the row count,
+  /// storing the value of a returned row in 'found'.
+  uint32_t lowerBound(physicalType value, physicalType& found) const;
+
+  /// Materializes rows [offset, offset + rowCount). A zero-length read is
+  /// valid at any offset up to the row count.
+  void materializeAt(uint32_t offset, uint32_t rowCount, physicalType* output)
+      const;
+
+  /// Opens the Folly list. Rebuilding its layout is arithmetic only, so the
+  /// header alone is enough to read.
+  Encoder::CompressedList open() const;
+
+  uint64_t base() const {
+    return base_;
+  }
+
+  const uint8_t* payload() const {
+    return payload_;
+  }
+
+  uint32_t upperBytes() const {
+    return upperBytes_;
+  }
+
+  uint8_t lowerBits() const {
+    return lowerBits_;
+  }
+
+ private:
+  // Absolute value represented by relative value zero in the payload.
+  uint64_t base_{0};
+
+  // Start of the serialized Folly payload.
+  const uint8_t* payload_{nullptr};
+
+  // Number of values in the list.
+  uint32_t rowCount_{0};
+
+  // Byte length of the unary-coded upper-value component.
+  uint32_t upperBytes_{0};
+
+  // Bit width of each lower-value component in the Folly layout.
+  uint8_t lowerBits_{0};
 };
 
 namespace detail::elias_fano {
@@ -283,20 +342,20 @@ EliasFanoEncoding<T>::EliasFanoEncoding(
   NIMBLE_CHECK_FILE_GE(
       data.size() - dataOffset, kHeaderSize, "Truncated EliasFano header.");
   const char* position = data.data() + dataOffset;
-  base_ = encoding::read<uint64_t>(position);
-  lowerBits_ = encoding::read<uint8_t>(position);
-  upperBytes_ = encoding::readUint32(position);
+  const auto base = encoding::read<uint64_t>(position);
+  const auto lowerBits = encoding::read<uint8_t>(position);
+  const auto upperBytes = encoding::readUint32(position);
   NIMBLE_CHECK_FILE_LE(
-      lowerBits_, kMaxLowerBits, "Invalid EliasFano lower bit count.");
+      lowerBits, kMaxLowerBits, "Invalid EliasFano lower bit count.");
   NIMBLE_CHECK_FILE_GE(
-      static_cast<uint64_t>(upperBytes_) * 8,
+      static_cast<uint64_t>(upperBytes) * 8,
       this->rowCount(),
       "Invalid EliasFano upper bit count.");
 
   // Reconstructing the layout performs arithmetic only; it does not scan or
   // decode values.
   const auto layout = Encoder::Layout::fromInternalSizes(
-      lowerBits_, upperBytes_, this->rowCount());
+      lowerBits, upperBytes, this->rowCount());
   const auto encodedPayloadOffset = payloadOffset(dataOffset);
   NIMBLE_CHECK_FILE_LE(
       encodedPayloadOffset, data.size(), "Invalid EliasFano payload size.");
@@ -308,22 +367,25 @@ EliasFanoEncoding<T>::EliasFanoEncoding(
       layout.bytes(),
       remainingBytes - kPayloadPaddingBytes,
       "Invalid EliasFano payload size.");
-  folly::ByteRange range{
-      reinterpret_cast<const uint8_t*>(position), layout.bytes()};
-  // openList creates non-owning pointers into 'range' without allocation.
-  list_ = layout.openList(range);
+  list_ = List{
+      base,
+      lowerBits,
+      upperBytes,
+      this->rowCount(),
+      reinterpret_cast<const uint8_t*>(position)};
+  const auto* const upper = list_.open().upper;
   uint64_t upperValueCount{0};
   size_t upperByteOffset{0};
-  for (; upperByteOffset + sizeof(uint64_t) <= upperBytes_;
+  for (; upperByteOffset + sizeof(uint64_t) <= upperBytes;
        upperByteOffset += sizeof(uint64_t)) {
-    upperValueCount += std::popcount(
-        folly::loadUnaligned<uint64_t>(list_.upper + upperByteOffset));
+    upperValueCount +=
+        std::popcount(folly::loadUnaligned<uint64_t>(upper + upperByteOffset));
   }
-  if (upperByteOffset < upperBytes_) {
-    const auto remainingUpperBytes = upperBytes_ - upperByteOffset;
+  if (upperByteOffset < upperBytes) {
+    const auto remainingUpperBytes = upperBytes - upperByteOffset;
     // The persisted trailing padding makes the final word readable.
     const auto upperTail =
-        folly::loadUnaligned<uint64_t>(list_.upper + upperByteOffset) &
+        folly::loadUnaligned<uint64_t>(upper + upperByteOffset) &
         ((uint64_t{1} << (remainingUpperBytes * 8)) - 1);
     upperValueCount += std::popcount(upperTail);
   }
@@ -342,7 +404,7 @@ void EliasFanoEncoding<T>::reset() {
 template <typename T>
 typename EliasFanoEncoding<T>::Reader& EliasFanoEncoding<T>::ensureReader() {
   if (!reader_.has_value()) {
-    reader_.emplace(list_);
+    reader_.emplace(list_.open());
   }
   return *reader_;
 }
@@ -351,10 +413,10 @@ template <typename T>
 typename EliasFanoEncoding<T>::Reader& EliasFanoEncoding<T>::randomReader()
     const {
   static thread_local RandomReadCache cache;
-  if (cache.encodingId != encodingId_ || cache.upper != list_.upper) {
+  if (cache.encodingId != encodingId_ || cache.payload != list_.payload()) {
     cache.encodingId = encodingId_;
-    cache.upper = list_.upper;
-    cache.reader.emplace(list_);
+    cache.payload = list_.payload();
+    cache.reader.emplace(list_.open());
   }
   return *cache.reader;
 }
@@ -381,7 +443,7 @@ typename EliasFanoEncoding<T>::physicalType EliasFanoEncoding<T>::readValue(
   auto& reader = randomReader();
   const bool found = reader.jump(row);
   NIMBLE_CHECK(found, "Failed to seek EliasFano row.");
-  return fromOrdered(base_ + reader.value());
+  return fromOrdered<T>(list_.base() + reader.value());
 }
 
 template <typename T>
@@ -392,7 +454,7 @@ EliasFanoEncoding<T>::readNextValue() {
   const bool advanced = reader.next();
   NIMBLE_CHECK(advanced, "Unexpected end of EliasFano stream.");
   ++row_;
-  return fromOrdered(base_ + reader.value());
+  return fromOrdered<T>(list_.base() + reader.value());
 }
 
 template <typename T>
@@ -403,15 +465,71 @@ typename EliasFanoEncoding<T>::physicalType EliasFanoEncoding<T>::valueAt(
 
 template <typename T>
 uint32_t EliasFanoEncoding<T>::lowerBound(physicalType value) const {
-  const auto ordered = toOrdered(value);
+  physicalType found;
+  return lowerBound(0, this->rowCount(), value, found);
+}
+
+template <typename T>
+uint32_t EliasFanoEncoding<T>::lowerBound(
+    uint32_t begin,
+    uint32_t end,
+    physicalType value,
+    physicalType& found) const {
+  NIMBLE_CHECK_LE(begin, end, "Invalid lowerBound range.");
+  NIMBLE_CHECK_LE(end, this->rowCount(), "Invalid lowerBound range.");
+  if (begin == end) {
+    return end;
+  }
+  // The stream ascends as a whole, so its lower bound clamped to the range is
+  // the lower bound within [begin, end).
+  physicalType listFound;
+  const auto row = list_.lowerBound(value, listFound);
+  if (row < begin) {
+    found = valueAt(begin);
+    return begin;
+  }
+  if (row >= end) {
+    return end;
+  }
+  found = listFound;
+  return row;
+}
+
+template <typename T>
+typename EliasFanoEncoding<T>::Encoder::CompressedList
+EliasFanoEncoding<T>::List::open() const {
+  const auto layout =
+      Encoder::Layout::fromInternalSizes(lowerBits_, upperBytes_, rowCount_);
+  folly::ByteRange range{payload_, layout.bytes()};
+  // openList creates non-owning pointers into 'range' without allocation.
+  return layout.openList(range);
+}
+
+template <typename T>
+typename EliasFanoEncoding<T>::physicalType EliasFanoEncoding<T>::List::valueAt(
+    uint32_t row) const {
+  Reader reader{open()};
+  const bool found = reader.jump(row);
+  NIMBLE_CHECK(found, "Failed to seek EliasFano row.");
+  return fromOrdered<T>(base_ + reader.value());
+}
+
+template <typename T>
+uint32_t EliasFanoEncoding<T>::List::lowerBound(
+    physicalType value,
+    physicalType& found) const {
+  const auto ordered = toOrdered<T>(value);
   if (ordered <= base_) {
+    // The first row stores relative value zero.
+    found = fromOrdered<T>(base_);
     return 0;
   }
-  Reader reader{list_};
+  Reader reader{open()};
   if (!reader.jumpTo(ordered - base_)) {
-    return this->rowCount();
+    return rowCount_;
   }
-  return reader.position();
+  found = fromOrdered<T>(base_ + reader.value());
+  return static_cast<uint32_t>(reader.position());
 }
 
 template <typename T>
@@ -419,19 +537,26 @@ void EliasFanoEncoding<T>::materializeAt(
     uint32_t offset,
     uint32_t rowCount,
     physicalType* output) const {
-  NIMBLE_CHECK_LE(offset, this->rowCount(), "Invalid encoding position.");
+  list_.materializeAt(offset, rowCount, output);
+}
+
+template <typename T>
+void EliasFanoEncoding<T>::List::materializeAt(
+    uint32_t offset,
+    uint32_t rowCount,
+    physicalType* output) const {
+  NIMBLE_CHECK_LE(offset, rowCount_, "Invalid encoding position.");
   NIMBLE_CHECK_LE(
-      rowCount, this->rowCount() - offset, "Reading past end of encoding.");
+      rowCount, rowCount_ - offset, "Reading past end of encoding.");
   if (rowCount == 0) {
-    // Zero-length reads are valid at any in-range offset.
     return;
   }
 
-  Reader reader{list_};
+  Reader reader{open()};
   const bool found = reader.jump(offset);
   NIMBLE_CHECK(found, "Failed to seek EliasFano row.");
   for (uint32_t i = 0; i < rowCount; ++i) {
-    output[i] = fromOrdered(base_ + reader.value());
+    output[i] = fromOrdered<T>(base_ + reader.value());
     if (i + 1 < rowCount) {
       const bool advanced = reader.next();
       NIMBLE_CHECK(advanced, "Unexpected end of EliasFano stream.");
@@ -463,40 +588,18 @@ void EliasFanoEncoding<T>::readWithVisitor(
 }
 
 template <typename T>
-std::optional<typename EliasFanoEncoding<T>::ValueLayout>
-EliasFanoEncoding<T>::layoutForValues(
-    std::span<const physicalType> values,
-    const Statistics<physicalType>& statistics) {
-  if (values.empty() || !statistics.template isNonDecreasing<T>()) {
-    return std::nullopt;
-  }
-
-  const auto base = toOrdered(values.front());
-  return ValueLayout{
-      .base = base,
-      .payload = Encoder::Layout::fromUpperBoundAndSize(
-          toOrdered(values.back()) - base, values.size()),
-  };
-}
-
-template <typename T>
 std::optional<uint64_t> EliasFanoEncoding<T>::estimateSize(
     std::span<const physicalType> values,
     const Statistics<physicalType>& statistics,
     const Encoding::Options& options) {
-  if (values.size() > std::numeric_limits<uint32_t>::max()) {
+  if (values.empty() || values.size() > std::numeric_limits<uint32_t>::max() ||
+      !statistics.template isNonDecreasing<T>()) {
     return std::nullopt;
   }
-  const auto layout = layoutForValues(values, statistics);
-  if (!layout.has_value()) {
-    return std::nullopt;
-  }
-  const auto rowCount = static_cast<uint32_t>(values.size());
-  const auto prefixSize =
-      EncodingPrefix::serializedSize(rowCount, options.useVarintRowCount);
-  const auto encodingSize = detail::elias_fano::trySerializedSize(
-      payloadOffset(prefixSize), layout->payload.bytes(), kPayloadPaddingBytes);
-  return encodingSize;
+  return estimateNonDecreasingSize(
+      static_cast<uint32_t>(values.size()),
+      toOrdered<T>(values.back()) - toOrdered<T>(values.front()),
+      options);
 }
 
 template <typename T>
@@ -571,19 +674,45 @@ std::string_view EliasFanoEncoding<T>::encode(
       values.size(),
       std::numeric_limits<uint32_t>::max(),
       "EliasFano row count exceeds uint32.");
-  const auto layout = layoutForValues(values, selection.statistics());
-  if (!layout.has_value()) {
+  if (values.empty() || !selection.statistics().template isNonDecreasing<T>()) {
     NIMBLE_INCOMPATIBLE_ENCODING(
         "EliasFano requires non-empty non-decreasing values.");
   }
+  return encodeNonDecreasing(values, buffer, options);
+}
 
+template <typename T>
+std::string_view EliasFanoEncoding<T>::encodeNonDecreasing(
+    std::span<const physicalType> values,
+    Buffer& buffer,
+    const Encoding::Options& options) {
+  NIMBLE_CHECK(!values.empty(), "EliasFano encoding requires values.");
+  NIMBLE_CHECK_LE(
+      values.size(),
+      std::numeric_limits<uint32_t>::max(),
+      "EliasFano row count exceeds uint32.");
+  const auto base = toOrdered<T>(values.front());
+  const auto layout = Encoder::Layout::fromUpperBoundAndSize(
+      toOrdered<T>(values.back()) - base, values.size());
   return encode(
       static_cast<uint32_t>(values.size()),
-      layout->base,
-      layout->payload,
-      [&](uint32_t row) { return toOrdered(values[row]) - layout->base; },
+      base,
+      layout,
+      [&](uint32_t row) { return toOrdered<T>(values[row]) - base; },
       buffer,
       options);
+}
+
+template <typename T>
+std::optional<uint64_t> EliasFanoEncoding<T>::estimateNonDecreasingSize(
+    uint32_t rowCount,
+    uint64_t range,
+    const Encoding::Options& options) {
+  const auto layout = Encoder::Layout::fromUpperBoundAndSize(range, rowCount);
+  const auto prefixSize =
+      EncodingPrefix::serializedSize(rowCount, options.useVarintRowCount);
+  return detail::elias_fano::trySerializedSize(
+      payloadOffset(prefixSize), layout.bytes(), kPayloadPaddingBytes);
 }
 
 template <typename T>
@@ -601,14 +730,14 @@ std::string_view EliasFanoEncoding<T>::slice(
 
   const EliasFanoEncoding<T> source{
       buffer.getMemoryPool(), encoded, {}, options};
-  Reader reader{source.list_};
+  Reader reader{source.list_.open()};
   const bool foundFirst = reader.jump(offset);
   NIMBLE_CHECK(foundFirst, "Failed to seek first EliasFano slice row.");
   const auto firstRelative = reader.value();
   const bool foundLast = reader.jump(offset + length - 1);
   NIMBLE_CHECK(foundLast, "Failed to seek last EliasFano slice row.");
   const auto lastRelative = reader.value();
-  const auto sliceBase = source.base_ + firstRelative;
+  const auto sliceBase = source.list_.base() + firstRelative;
   const auto layout = Encoder::Layout::fromUpperBoundAndSize(
       lastRelative - firstRelative, length);
 
@@ -640,8 +769,8 @@ std::string EliasFanoEncoding<T>::debugString(int offset) const {
       fmt::format(
              "\n{}lowerBits={}, upperBytes={}",
              std::string(offset, ' '),
-             lowerBits_,
-             upperBytes_);
+             list_.lowerBits(),
+             list_.upperBytes());
 }
 
 } // namespace facebook::nimble

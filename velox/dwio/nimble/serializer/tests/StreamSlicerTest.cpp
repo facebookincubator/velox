@@ -1340,11 +1340,12 @@ TEST_F(StreamSlicerTest, hybridFlatMapRequiresWholeBatch) {
           {1, 1},
           makeFlatVector<int32_t>({1, 1}),
           makeFlatVector<int64_t>({10, 20}))});
-  HybridFlatMap hybridMap;
-  hybridMap.groups = {
-      {.groupId = 0, .groupKeys = {"1"}},
-      {.groupId = HybridFlatMap::kDefaultGroupId, .groupKeys = {}},
-  };
+  HybridFlatMap hybridMap{
+      ScalarKind::Int32,
+      {
+          {.groupId = 0, .groupKeys = {"1"}},
+          {.groupId = HybridFlatMap::kDefaultGroupId, .groupKeys = {}},
+      }};
   Serializer serializer{
       SerializerOptions{
           .version = SerializationVersion::kSerialization,

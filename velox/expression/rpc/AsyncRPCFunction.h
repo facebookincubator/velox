@@ -175,9 +175,10 @@ class AsyncRPCFunction {
   virtual TypePtr resultType() const = 0;
 
   /// Returns the concurrency ceiling requested by function options, or 0 when
-  /// unset. The operator applies it alongside the session properties in a
-  /// single configuration step, so a backend's whole policy lands at once
-  /// rather than in two writes a concurrent query could interleave with.
+  /// unset. It takes precedence over rpc.ratelimiter.max_limit when
+  /// rpc.ratelimiter.hard_limit is 0 or more, and a positive hard limit caps
+  /// it. The operator resolves it with the session properties into the query's
+  /// rate-limiter policy.
   virtual int64_t configuredCeiling() const {
     return 0;
   }
@@ -196,18 +197,19 @@ class AsyncRPCFunction {
     return false;
   }
 
-  /// Returns the adaptive-window floor requested by the resolved backend.
-  /// The operator seals it on the limiter identified by admissionKey(). A
-  /// positive legacy session override takes precedence; zero delegates here.
+  /// Returns the adaptive-window floor requested by the resolved backend, or 0
+  /// when unset. The operator resolves it into the query's rate-limiter
+  /// policy. It takes precedence over rpc.ratelimiter.min_limit when
+  /// rpc.ratelimiter.hard_limit is 0 or more.
   virtual double configuredAdaptiveFloor() const {
-    return 50.0;
+    return 0.0;
   }
 
   /// Identifies the shared admission bucket for this function.
   /// Empty string uses the global default bucket. The key may include more
   /// than a service tier, such as a credential discriminator or tenant.
-  /// Functions returning the same key must declare the same stable ceiling
-  /// and adaptive floor; the first query fixes both for the worker lifetime.
+  /// Queries whose functions return the same key share a rate limiter when
+  /// they also resolve to the same policy, ceiling and floor included.
   virtual std::string admissionKey() const {
     return "";
   }
@@ -347,7 +349,8 @@ class AsyncRPCFunction {
     /// overload already backed off shared admission at completion time.
     kOverloaded,
     /// Unit failed without explicit evidence of overload. Neither controller
-    /// reacts; reducing admission concurrency would not address this signal.
+    /// shrinks, since reducing admission concurrency would not address this
+    /// signal, but a paced recovery stops until the next success.
     kNonOverloadError,
     /// No congestion evaluation — skip window adjustment.
     kNone,

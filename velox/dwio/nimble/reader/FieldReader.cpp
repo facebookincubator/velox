@@ -5182,17 +5182,15 @@ class MergedFlatMapFieldReader final
     }
 
     // Count each row's entries by walking the rows each key was found present
-    // in, rather than asking every key about every row. A key present in a row
-    // still contributes no entry when its value decoded as null. The sizes of
+    // in, rather than asking every key about every row. A present key holds an
+    // entry even when its value is null, as in a contiguous read. The sizes of
     // every selected row are already seeded to zero above, and the parent
     // ranges only ever narrow that selection, so the counts accumulate onto
     // zeros.
     for (size_t i{0}; i < this->keyNodes_.size(); ++i) {
-      const auto& nodeValue = this->nodeValues_[i];
       for (const auto& range : this->keyNodes_[i]->presentOutputRanges()) {
         for (velox::vector_size_t row{0}; row < range.count; ++row) {
-          const auto outputRow = range.targetIndex + row;
-          rawSizes[outputRow] += !nodeValue->isNullAt(outputRow);
+          ++rawSizes[range.targetIndex + row];
         }
       }
     }
@@ -5221,9 +5219,6 @@ class MergedFlatMapFieldReader final
       for (const auto& range : this->keyNodes_[i]->presentOutputRanges()) {
         for (velox::vector_size_t row{0}; row < range.count; ++row) {
           const auto outputRow = range.targetIndex + row;
-          if (this->nodeValues_[i]->isNullAt(outputRow)) {
-            continue;
-          }
           const auto outputElementOffset = nextElementOffsets_[outputRow]++;
           flatKeysVector->set(
               outputElementOffset, this->keyNodes_[i]->key().get());

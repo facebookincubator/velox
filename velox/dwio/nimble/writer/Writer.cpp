@@ -2563,7 +2563,6 @@ void Writer::writeProperties(const WriteOptionalSectionFn& writeMetadataFn) {
           compactRowCountEncoding,
           clusterIndexKeyColumnStorageOmitted,
           std::move(clusterIndexKeyColumnsWithOmittedStorage),
-          /*hasStreamChecksums=*/false,
           std::move(streamTrailerLayout),
           hasTopLevelNulls_}
           .serialize();

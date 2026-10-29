@@ -22,13 +22,6 @@
 
 namespace facebook::nimble {
 
-std::string_view NimbleIterator::SerializedRows::row(std::size_t index) const {
-  const auto begin = offsets[index];
-  return std::string_view{
-      buffer == nullptr ? nullptr : buffer->as<char>() + begin,
-      offsets[index + 1] - begin};
-}
-
 void NimbleIterator::setRowRange(std::optional<RowRange> rowRange) {
   // An unset range invalidates the iterator on reset, before a seek completes,
   // or when lookup finds no matching rows. Normal exhaustion keeps the range

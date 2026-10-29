@@ -151,7 +151,7 @@ TEST_F(MapFromArraysTest, throwOnDuplicateKeys) {
 
   auto keys = makeArrayVectorFromJson<int64_t>({"[1, 2, 1]"});
   auto values = makeArrayVectorFromJson<int64_t>({"[10, 20, 30]"});
-  testMapFromArraysFails(keys, values, "Duplicate map key (1) was found.");
+  testMapFromArraysFails(keys, values, "Duplicate map key was found: 1");
 }
 
 // Under EXCEPTION no row can shrink, so the result references the input arrays
@@ -224,6 +224,33 @@ TEST_F(MapFromArraysTest, nullKey) {
   testMapFromArraysFails(keys, values, "Cannot use null as map key!");
 }
 
+TEST_F(MapFromArraysTest, nullAndRepeatedKeysFailInKeyOrder) {
+  const auto values = makeArrayVectorFromJson<int64_t>({"[10, 20, 30]"});
+  const auto encodings = [&](const VectorPtr& keys) {
+    return std::vector<VectorPtr>{
+        keys,
+        wrapInDictionary(makeIndices({0}), keys),
+        BaseVector::wrapInConstant(1, 0, keys),
+    };
+  };
+
+  for (const auto& keys :
+       encodings(makeArrayVectorFromJson<int64_t>({"[1, 1, null]"}))) {
+    setThrowExceptionOnDuplicateMapKeys(true);
+    testMapFromArraysFails(keys, values, "Duplicate map key was found: 1");
+    setThrowExceptionOnDuplicateMapKeys(false);
+    testMapFromArraysFails(keys, values, "Cannot use null as map key!");
+  }
+
+  for (const auto& keys :
+       encodings(makeArrayVectorFromJson<int64_t>({"[1, null, 1]"}))) {
+    for (const bool throwOnDuplicate : {true, false}) {
+      setThrowExceptionOnDuplicateMapKeys(throwOnDuplicate);
+      testMapFromArraysFails(keys, values, "Cannot use null as map key!");
+    }
+  }
+}
+
 TEST_F(MapFromArraysTest, mismatchedArrayLengths) {
   auto keys = makeArrayVectorFromJson<int64_t>({"[1, 2, 3]"});
   auto values = makeArrayVectorFromJson<int64_t>({"[10, 20]"});
@@ -259,7 +286,7 @@ TEST_F(MapFromArraysTest, complexTypeKeysDuplicate) {
   testMapFromArrays(keys, values, expected);
 
   setThrowExceptionOnDuplicateMapKeys(true);
-  testMapFromArraysFails(keys, values, "Duplicate map key ({1, 2}) was found.");
+  testMapFromArraysFails(keys, values, "Duplicate map key was found: {1, 2}");
 }
 
 TEST_F(MapFromArraysTest, arrayKeysWithNestedNulls) {
@@ -284,7 +311,8 @@ TEST_F(MapFromArraysTest, arrayKeysWithNestedNulls) {
   testMapFromArrays(keys, values, expected);
 
   setThrowExceptionOnDuplicateMapKeys(true);
-  testMapFromArraysFails(keys, values, "Duplicate map key ({1, null})");
+  testMapFromArraysFails(
+      keys, values, "Duplicate map key was found: {1, null}");
 }
 
 TEST_F(MapFromArraysTest, rowKeysWithNestedNulls) {
@@ -466,7 +494,7 @@ TEST_F(MapFromArraysTest, constantEncodedKeysThrowOnDuplicate) {
       "[10, 20, 30]",
       "[40, 50, 60]",
   });
-  testMapFromArraysFails(keys, values, "Duplicate map key (1) was found.");
+  testMapFromArraysFails(keys, values, "Duplicate map key was found: 1");
 
   auto expected = makeMapVectorFromJson<int64_t, int64_t>({"null", "null"});
   ::facebook::velox::test::assertEqualVectors(
@@ -668,7 +696,7 @@ TEST_F(MapFromArraysTest, throwPolicyFloatingPointKeys) {
     constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
     auto keys = makeArrayVector<double>({{kNaN, kNaN}});
     auto values = makeArrayVectorFromJson<int64_t>({"[1, 2]"});
-    testMapFromArraysFails(keys, values, "Duplicate map key (NaN) was found.");
+    testMapFromArraysFails(keys, values, "Duplicate map key was found: NaN");
   }
 }
 

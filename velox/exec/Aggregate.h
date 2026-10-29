@@ -101,8 +101,12 @@ class Aggregate {
   }
 
   /// Called by Aggregate::create() to pass constant input values to the
-  /// aggregate. Non-constant inputs have null entries in 'constantInputs'. This
-  /// is called before any data is processed, allowing the aggregate to read
+  /// aggregate, one entry per raw input argument; non-constant inputs have null
+  /// entries. Called only in steps that read raw input (see isRawInput()):
+  /// steps that merge intermediate results have no raw arguments. The step
+  /// passed to create() says only whether the output is partial, so callers
+  /// that run a merge step pass no constant inputs. This is
+  /// called before any data is processed, allowing the aggregate to read
   /// constant arguments (e.g., flags, configuration values) at initialization
   /// time rather than extracting them from 'args' at runtime.
   ///

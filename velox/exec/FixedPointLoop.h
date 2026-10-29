@@ -75,7 +75,8 @@ struct FixedPointPlanExecutionStats {
   uint32_t maxDrivers{0};
 
   /// The sub-task's statistics.  Empty for a plan that nests a fixed point,
-  /// whose work runs in that nested loop's sub-tasks.
+  /// whose work runs in that nested loop's sub-tasks.  The nested loop reports
+  /// its iterations through FixedPointOptions::onIterationStats.
   /// TODO: Report the nested loop's own FixedPointExecutionStats.
   TaskStats taskStats{};
 };

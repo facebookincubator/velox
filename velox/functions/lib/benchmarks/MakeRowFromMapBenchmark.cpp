@@ -36,8 +36,8 @@
 // Every case reports time per row, over the same maps passed as:
 //  - map: a MapVector with flat keys and values, as readers produce.
 //  - toMap: a FlatMapVector, converted to a MapVector with toMapVector()
-//    before projecting, which is how callers pass flat maps to MakeRowFromMap
-//    today. Reported relative to `map`.
+//    before projecting. Reported relative to `map`.
+//  - flatMap: a FlatMapVector, projected directly. Reported relative to `map`.
 
 DEFINE_int32(seed, 1, "Seed for the fuzzer that generates the maps");
 
@@ -222,17 +222,14 @@ class BenchmarkData {
       }
 
       const auto& [flatMap, map] = it->second;
-      testCases_.emplace(
-          spec.key(),
-          TestCase{
-              flatMap,
-              map,
-              spec.wrapped ? wrapIndices : nullptr,
-              makeProjection(
-                  pool_.get(),
-                  *flatMap,
-                  spec.numProjected,
-                  spec.replaceNulls)});
+      TestCase testCase{
+          flatMap,
+          map,
+          spec.wrapped ? wrapIndices : nullptr,
+          makeProjection(
+              pool_.get(), *flatMap, spec.numProjected, spec.replaceNulls)};
+      checkFlatMapMatchesMap(testCase);
+      testCases_.emplace(spec.key(), std::move(testCase));
     }
   }
 
@@ -245,6 +242,21 @@ class BenchmarkData {
   }
 
  private:
+  // Checks that projecting the flat map returns the same rows as projecting the
+  // map.
+  void checkFlatMapMatchesMap(const TestCase& testCase) const {
+    auto expected = testCase.projection->apply(
+        *wrap(testCase, testCase.map), rows_, nullptr);
+    auto actual = testCase.projection->apply(
+        *wrap(testCase, testCase.flatMap), rows_, nullptr);
+    for (vector_size_t row = 0; row < kNumRows; ++row) {
+      VELOX_CHECK(
+          expected->equalValueAt(actual.get(), row, row),
+          "Projecting the flat map differs from the map at row {}",
+          row);
+    }
+  }
+
   std::shared_ptr<memory::MemoryPool> pool_;
   const SelectivityVector rows_{kNumRows};
   folly::F14FastMap<std::string, TestCase> testCases_;
@@ -267,14 +279,23 @@ vector_size_t runToMap(const TestCase& testCase) {
   return kNumRows;
 }
 
+vector_size_t runFlatMap(const TestCase& testCase) {
+  folly::doNotOptimizeAway(testCase.projection->apply(
+      *wrap(testCase, testCase.flatMap), data->rows(), nullptr));
+  return kNumRows;
+}
+
 // Defines the benchmarks of the case `name`, whose CaseSpec fields follow.
-#define MAKE_ROW_FROM_MAP_BENCHMARKS(name, ...)             \
-  BENCHMARK_MULTI(map_##name) {                             \
-    return runMap(data->testCase(CaseSpec{__VA_ARGS__}));   \
-  }                                                         \
-  BENCHMARK_RELATIVE_MULTI(toMap_##name) {                  \
-    return runToMap(data->testCase(CaseSpec{__VA_ARGS__})); \
-  }                                                         \
+#define MAKE_ROW_FROM_MAP_BENCHMARKS(name, ...)               \
+  BENCHMARK_MULTI(map_##name) {                               \
+    return runMap(data->testCase(CaseSpec{__VA_ARGS__}));     \
+  }                                                           \
+  BENCHMARK_RELATIVE_MULTI(toMap_##name) {                    \
+    return runToMap(data->testCase(CaseSpec{__VA_ARGS__}));   \
+  }                                                           \
+  BENCHMARK_RELATIVE_MULTI(flatMap_##name) {                  \
+    return runFlatMap(data->testCase(CaseSpec{__VA_ARGS__})); \
+  }                                                           \
   BENCHMARK_DRAW_LINE();
 
 MAKE_ROW_FROM_MAP_BENCHMARKS(

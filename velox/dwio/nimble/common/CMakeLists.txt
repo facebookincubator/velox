@@ -28,6 +28,7 @@ add_library(
   Types.cpp
   Varint.cpp
   Zigzag.h
+  OrderedInteger.h
   Vector.h
   Varint.h
   Types.h

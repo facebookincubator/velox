@@ -21,6 +21,7 @@
 #include "velox/dwio/nimble/encodings/FsstEncoding.h"
 #include "velox/dwio/nimble/encodings/HuffmanEncoding.h"
 #include "velox/dwio/nimble/encodings/PFOREncoding.h"
+#include "velox/dwio/nimble/encodings/PartitionedEliasFanoEncoding.h"
 #include "velox/dwio/nimble/encodings/SimdForBitpackEncoding.h"
 #include "velox/dwio/nimble/encodings/legacy/ConstantEncoding.h"
 #include "velox/dwio/nimble/encodings/legacy/DeltaEncoding.h"
@@ -291,6 +292,10 @@ std::unique_ptr<Encoding> EncodingFactory::create(
     case EncodingType::EliasFano: {
       RETURN_ENCODING_BY_INTEGRAL_TYPE(
           ::facebook::nimble::EliasFanoEncoding, dataType);
+    }
+    case EncodingType::PartitionedEliasFano: {
+      RETURN_ENCODING_BY_INTEGRAL_TYPE(
+          ::facebook::nimble::PartitionedEliasFanoEncoding, dataType);
     }
     case EncodingType::BlockBitPacking: {
       RETURN_ENCODING_BY_NUMERIC_TYPE(

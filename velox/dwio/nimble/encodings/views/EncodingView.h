@@ -224,6 +224,24 @@ class TypedEncodingView : public EncodingView {
     return numMatches;
   }
 
+  /// Returns the first row in [begin, end) whose value is at least 'value', or
+  /// 'end'. Stores the value of a returned row before 'end' in 'found', so a
+  /// caller that compares it needs no second read.
+  ///
+  /// The values in [begin, end) must be non-decreasing. In debug builds the
+  /// default binary search checks the first and last rows of the range against
+  /// the result in O(1), which catches common disorder without a scan. An
+  /// EliasFano stream ascends as a whole, and a PartitionedEliasFano view
+  /// checks in O(1) that the range stays within one ascending partition.
+  uint32_t lowerBound(uint32_t begin, uint32_t end, T value, T& found) const {
+    NIMBLE_CHECK_LE(begin, end, "Invalid lowerBound range.");
+    NIMBLE_CHECK_LE(end, rowCount_, "Invalid lowerBound range.");
+    if (begin == end) {
+      return end;
+    }
+    return typedLowerBound(begin, end, value, found);
+  }
+
   /// Returns the sum of the values in the rows [begin, end) of an integral
   /// view, such as the row lengths of a string stream, whose sum is the byte
   /// offset of a row. Reads the rows in blocks, so the cost follows the range
@@ -340,6 +358,42 @@ class TypedEncodingView : public EncodingView {
   }
 
   virtual T readTypedAt(uint32_t index) const = 0;
+
+  // Implements lowerBound() for a non-empty range by binary search. Views that
+  // index their values, such as EliasFano, override it.
+  virtual uint32_t
+  typedLowerBound(uint32_t begin, uint32_t end, T value, T& found) const {
+    NIMBLE_DEBUG_ONLY const auto rangeBegin = begin;
+    NIMBLE_DEBUG_ONLY const auto rangeEnd = end;
+    while (begin < end) {
+      const auto middle = begin + (end - begin) / 2;
+      const auto middleValue = readTypedAt(middle);
+      if (middleValue < value) {
+        begin = middle + 1;
+      } else {
+        // The last value read at or above 'value' is the one at the result.
+        found = middleValue;
+        end = middle;
+      }
+    }
+#ifndef NDEBUG
+    // The rows next to the result are compared by the search itself, so check
+    // the ends of the range, which a sorted range orders the same way.
+    if (begin > rangeBegin) {
+      NIMBLE_DCHECK_LT(
+          readTypedAt(rangeBegin),
+          value,
+          "lowerBound range must be non-decreasing.");
+    }
+    if (begin < rangeEnd) {
+      NIMBLE_DCHECK_GE(
+          readTypedAt(rangeEnd - 1),
+          value,
+          "lowerBound range must be non-decreasing.");
+    }
+#endif
+    return begin;
+  }
 
   static physicalType castToPhysicalType(T value) {
     if constexpr (isFloatingPointType<T>()) {

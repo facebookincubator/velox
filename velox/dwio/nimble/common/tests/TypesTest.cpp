@@ -53,6 +53,7 @@ TEST(TypesTest, encodingTypeStringConversion) {
       {EncodingType::Huffman, "Huffman"},
       {EncodingType::DeltaBlock, "DeltaBlock"},
       {EncodingType::EliasFano, "EliasFano"},
+      {EncodingType::PartitionedEliasFano, "PartitionedEliasFano"},
       {EncodingType::BitRangeSplit, "BitRangeSplit"},
   };
   for (const auto& [type, name] : testCases) {

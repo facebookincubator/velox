@@ -43,6 +43,8 @@ add_executable(
   DictionaryEncodingViewTest.cpp
   EliasFanoEncodingTest.cpp
   EliasFanoEncodingViewTest.cpp
+  PartitionedEliasFanoEncodingTest.cpp
+  PartitionedEliasFanoEncodingViewTest.cpp
   EncodingLayoutTest.cpp
   EncodingSelectionTest.cpp
   EncodingSliceTest.cpp
