@@ -725,18 +725,20 @@ To allocate a large number of machines pages, *MmapAllocator* calls
 and the number of class pages to allocate from each of them.
 
 *MemoryAllocator::allocationSize* generates the allocation plan by searching from
-the largest fit *SizeClass* to the min *SizeClass* as specified by the user. If min
-*SizeClass* is not 1, there could be waste of memory in the last allocated class
-page. As the example in the diagram, for an allocation request of 150 pages and
-min *SizeClass* of 4, we choose to allocate 2 class pages from *SizeClass/64*, 1
-from *SizeClass/16* and 2 from *SizeClass/4*. The total number of allocated machine
-pages is 152. There are two machine pages wasted in the last allocated class
-page from *SizeClass/4*. The memory allocator allocates memory from each of the
-chosen *SizeClass* objects based on the allocation plan. The allocation result is
-returned in an *Allocation* object which consists of 4 page runs: two runs from
-*SizeClass/64* (the two allocated class pages are not contiguous in memory), one
-from *SizeClass/16* and one from *SizeClass/4* (the two allocated class pages are
-contiguous in memory).
+the largest fit *SizeClass* to the min *SizeClass* as specified by the user. A
+*SizeClass* is skipped if its class page size is more than 1/8 larger than the
+remaining number of pages to allocate. If min *SizeClass* is not 1, there could be
+waste of memory in the last allocated class page. As the example in the diagram,
+for an allocation request of 150 pages and min *SizeClass* of 4, we choose to
+allocate 1 class page from *SizeClass/128*, 1 from *SizeClass/16* and 2 from
+*SizeClass/4*. The total number of allocated machine pages is 152. There are two
+machine pages wasted in the last allocated class page from *SizeClass/4*. The
+memory allocator allocates memory from each of the chosen *SizeClass* objects
+based on the allocation plan. The allocation result is returned in an *Allocation*
+object which consists of 4 page runs: one run from *SizeClass/128*, one from
+*SizeClass/16* and two from *SizeClass/4*. Each allocated class page becomes its
+own page run; class pages which happen to be contiguous in memory are not merged
+into a single run.
 
 Each *SizeClass* object sets up its own memory space using std::mmap with the
 same size of the system memory limit. The setup memory space doesn’t cause any
