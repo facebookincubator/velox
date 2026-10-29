@@ -1139,6 +1139,27 @@ void recordD2hProducers(ExecutionState& state, const StepVectors& sv) {
   }
 }
 
+// Whether 'node' is a new_* factory whose constant size has no elements. It
+// needs no kernel: its output is an empty tensor of the right dtype.
+bool isEmptyFactory(NodeCP node) {
+  static const folly::F14FastSet<std::string_view> kFactories{
+      "torch.ops.aten.new_ones.default",
+      "torch.ops.aten.new_zeros.default",
+      "torch.ops.aten.new_full.default",
+      "torch.ops.aten.new_empty.default",
+  };
+  if (kFactories.count(node->target()) == 0) {
+    return false;
+  }
+  const auto* size = node->tryGetAttribute("size");
+  if (size == nullptr ||
+      !std::holds_alternative<std::vector<int64_t>>(size->value)) {
+    return false;
+  }
+  const auto& dims = std::get<std::vector<int64_t>>(size->value);
+  return std::find(dims.begin(), dims.end(), 0) != dims.end();
+}
+
 // Maps a metadata-only standalone op's target to its host-side shortcut.
 StandaloneShortcut standaloneShortcutForTarget(std::string_view target) {
   if (target == "prim.ListPack") {
@@ -1208,6 +1229,11 @@ Launch::Launch(
        standaloneNode->inputs()[0].value->type().kind() !=
            nativert::Type::Kind::TensorList)) {
     standaloneShortcut = StandaloneShortcut::kNone;
+  }
+  if (isEmptyFactory(standaloneNode)) {
+    standaloneShortcut = StandaloneShortcut::kEmptyFactory;
+    metadataOnly = true;
+    return;
   }
   auto* meta = Registry::metadata(standaloneNode->target());
   // prim.ListPack has no registry entry but is metadata-only by definition;

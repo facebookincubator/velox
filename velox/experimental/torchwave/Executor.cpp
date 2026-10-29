@@ -907,13 +907,22 @@ std::vector<c10::IValue> WaveGraphExecutor::executeWithPrefilledFrame(
   // move outputs whose graph-level default is Constant(None) -- in that case
   // the result slot stays None even though the frame has a computed tensor
   // (e.g. dynamic-shape outputs computed on device). The loop below copies
-  // these non-moved outputs from the frame into the results.
+  // these non-moved outputs from the frame into the results. The results are
+  // indexed like userOutputs(), which also holds the graph's constant outputs;
+  // the output node lists only the values, so the k-th value of userOutputs()
+  // is outputValues[k].
   auto results = frame.tryMoveUserOutputs();
   auto outputValues = graph_.outputs();
-  for (size_t i = 0; i < results.size() && i < outputValues.size(); ++i) {
-    TORCH_CHECK(i < results.size() && i < outputValues.size());
+  const auto& userOutputs = graph_.userOutputs();
+  for (size_t i = 0, k = 0;
+       i < results.size() && i < userOutputs.size() && k < outputValues.size();
+       ++i) {
+    if (!std::holds_alternative<nativert::Value*>(userOutputs[i])) {
+      continue;
+    }
+    const auto* output = outputValues.at(k++);
     if (results.at(i).isNone()) {
-      const auto& iv = frame.getIValue(outputValues.at(i)->id());
+      const auto& iv = frame.getIValue(output->id());
       if (!iv.isNone()) {
         results.at(i) = iv;
       }
@@ -924,11 +933,8 @@ std::vector<c10::IValue> WaveGraphExecutor::executeWithPrefilledFrame(
   // metadata-only view (e.g. view(x, [-1]) of an already-contiguous tensor):
   // wave aliases such a view to its input and never writes the view's own
   // value, so a graph-output view stays None even though its input tensor is
-  // present. The loop above cannot reach these when userOutputs() is longer
-  // than the output-node operand list (graph_.outputs()), so recover them here
-  // directly from the flattened user-output list, materializing the view from
-  // its input.
-  const auto& userOutputs = graph_.userOutputs();
+  // present. Recover them from the flattened user-output list, materializing
+  // the view from its input.
   for (size_t i = 0; i < results.size() && i < userOutputs.size(); ++i) {
     if (!results.at(i).isNone()) {
       continue;
