@@ -31,6 +31,9 @@
 #ifdef VELOX_ENABLE_UCX_EXCHANGE
 #include "velox/experimental/ucx-exchange/UcxExchangeRegistration.h"
 #endif
+#ifdef VELOX_ENABLE_FAISS_GPU
+#include "velox/experimental/cudf/exec/CudfVectorJoin.h"
+#endif
 
 #include "folly/Conv.h"
 #include "velox/common/base/Exceptions.h"
@@ -388,6 +391,11 @@ void registerCudf() {
 
   exec::Operator::registerOperator(
       std::make_unique<CudfHashJoinBridgeTranslator>());
+#ifdef VELOX_ENABLE_FAISS_GPU
+  // Nested-loop join's translator returns a bridge for every node. Register
+  // the vector join first so its own node resolves to a vector-join bridge.
+  registerCudfVectorJoin();
+#endif
   exec::Operator::registerOperator(
       std::make_unique<CudfNestedLoopJoinBridgeTranslator>());
   CudfDriverAdapter cda;
@@ -535,6 +543,37 @@ void CudfConfig::initialize(
   }
   if (config.find(kCudfTopNBatchSize) != config.end()) {
     topNBatchSize = folly::to<int32_t>(config[kCudfTopNBatchSize]);
+  }
+  if (config.find(kVectorJoinMaxShardRows) != config.end()) {
+    vectorJoinMaxShardRows =
+        folly::to<int64_t>(config[kVectorJoinMaxShardRows]);
+  }
+  if (config.find(kVectorJoinMaxShardBytes) != config.end()) {
+    vectorJoinMaxShardBytes =
+        folly::to<int64_t>(config[kVectorJoinMaxShardBytes]);
+  }
+  if (config.find(kVectorJoinTrainRows) != config.end()) {
+    vectorJoinTrainRows = folly::to<int32_t>(config[kVectorJoinTrainRows]);
+  }
+  if (config.find(kVectorJoinProbeBatchRows) != config.end()) {
+    vectorJoinProbeBatchRows =
+        folly::to<int32_t>(config[kVectorJoinProbeBatchRows]);
+  }
+  if (config.find(kVectorJoinNLists) != config.end()) {
+    vectorJoinNLists = folly::to<int32_t>(config[kVectorJoinNLists]);
+  }
+  if (config.find(kVectorJoinNProbes) != config.end()) {
+    vectorJoinNProbes = folly::to<int32_t>(config[kVectorJoinNProbes]);
+  }
+  if (config.find(kVectorJoinPqBits) != config.end()) {
+    vectorJoinPqBits = folly::to<int32_t>(config[kVectorJoinPqBits]);
+  }
+  if (config.find(kVectorJoinPqDim) != config.end()) {
+    vectorJoinPqDim = folly::to<int32_t>(config[kVectorJoinPqDim]);
+  }
+  if (config.find(kVectorJoinCandidateMultiplier) != config.end()) {
+    vectorJoinCandidateMultiplier =
+        folly::to<int32_t>(config[kVectorJoinCandidateMultiplier]);
   }
   if (config.find(kCudfTimestampUnit) != config.end()) {
     const auto& unit = config[kCudfTimestampUnit];

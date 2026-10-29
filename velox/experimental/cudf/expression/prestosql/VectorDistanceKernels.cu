@@ -28,10 +28,11 @@
 
 #include <rmm/device_uvector.hpp>
 
+#include <cuda/std/cmath>
+#include <cuda/std/limits>
 #include <cuda_runtime.h>
 
 #include <algorithm>
-#include <cmath>
 #include <cstdint>
 #include <type_traits>
 
@@ -41,24 +42,6 @@ namespace {
 constexpr int kWarpSize{32};
 constexpr int kBlockSize{256};
 constexpr unsigned kFullWarpMask{0xffffffffu};
-
-template <typename T>
-__device__ T quietNan() {
-  if constexpr (std::is_same_v<T, float>) {
-    return nanf("");
-  } else {
-    return nan("");
-  }
-}
-
-template <typename T>
-__device__ T squareRoot(T value) {
-  if constexpr (std::is_same_v<T, float>) {
-    return sqrtf(value);
-  } else {
-    return sqrt(value);
-  }
-}
 
 // One row's array, or a null array.
 template <typename T>
@@ -125,8 +108,7 @@ __global__ void vectorDistanceKernel(
     int32_t* sizeMismatch) {
   const auto lane = static_cast<int>(threadIdx.x % kWarpSize);
   const auto firstRow =
-      (static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x) /
-      kWarpSize;
+      (static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x) / kWarpSize;
   const auto rowStride =
       static_cast<int64_t>(gridDim.x) * blockDim.x / kWarpSize;
   bool mismatch{false};
@@ -184,15 +166,15 @@ __global__ void vectorDistanceKernel(
     }
     valid[rowIndex] = true;
     if (l.size == 0) {
-      out[rowIndex] = quietNan<T>();
+      out[rowIndex] = cuda::std::numeric_limits<T>::quiet_NaN();
       continue;
     }
     switch (kind) {
       case VectorDistanceKind::kCosineSimilarity: {
-        const auto leftNorm = squareRoot(leftSquares);
-        const auto rightNorm = squareRoot(rightSquares);
+        const auto leftNorm = cuda::std::sqrt(leftSquares);
+        const auto rightNorm = cuda::std::sqrt(rightSquares);
         out[rowIndex] = (leftNorm == 0 || rightNorm == 0)
-            ? quietNan<T>()
+            ? cuda::std::numeric_limits<T>::quiet_NaN()
             : dot / (leftNorm * rightNorm);
         break;
       }

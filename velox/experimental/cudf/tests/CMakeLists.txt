@@ -362,6 +362,14 @@ velox_add_cudf_test(
   LIBS ${CUDF_TEST_DEFAULT_LIBS} velox_window
 )
 
+if(VELOX_ENABLE_FAISS_GPU)
+  velox_add_cudf_test(
+    NAME velox_cudf_vector_join_test
+    SOURCES Main.cpp VectorJoinTest.cpp
+    LIBS ${CUDF_TEST_DEFAULT_LIBS}
+  )
+endif()
+
 add_subdirectory(iceberg)
 add_subdirectory(utils)
 

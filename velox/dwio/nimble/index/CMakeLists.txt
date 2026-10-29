@@ -143,7 +143,7 @@ if(VELOX_ENABLE_FAISS_GPU)
   # FAISS GPU headers include RAFT. Those include paths stay private to
   # faiss_gpu_objs, so this target has to see them through cuVS.
   target_link_libraries(
-    nimble_vector_index CUDA::cudart cuvs::cuvs cuvs::cuvs_cpp_headers)
+    nimble_vector_index CUDA::cudart_static cuvs::cuvs cuvs::cuvs_cpp_headers)
   target_compile_definitions(nimble_vector_index PUBLIC VELOX_ENABLE_FAISS_GPU)
 endif()
 
