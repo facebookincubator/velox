@@ -17,7 +17,6 @@
 #include "velox/functions/sparksql/aggregates/HistogramNumericAggregate.h"
 
 #include <optional>
-#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -52,7 +51,6 @@ enum class OutputFamily {
   kLong,
   kFloat,
   kDouble,
-  kDecimal,
   kDate,
   kTimestamp,
   kTimestampNtz,
@@ -156,13 +154,7 @@ class HistogramNumericAggregate {
       }
     }
     if (resultType->isArray()) {
-      const auto centerType = resultCenterType(resultType);
-      if constexpr (kOutput == OutputFamily::kDecimal) {
-        VELOX_USER_CHECK(
-            centerType->isDecimal(),
-            "histogram_numeric Decimal result must retain precision and scale");
-        setDecimalType(centerType);
-      }
+      resultCenterType(resultType);
     }
   }
 
@@ -173,14 +165,7 @@ class HistogramNumericAggregate {
     }
     const auto numBins = readRequiredConstant(constantInputs, 1, "numBins");
     validateNumBins(numBins);
-    if (rawNumBins_.has_value()) {
-      VELOX_USER_CHECK_EQ(
-          *rawNumBins_,
-          numBins,
-          "histogram_numeric numBins must be consistent");
-    } else {
-      rawNumBins_ = numBins;
-    }
+    bindRawNumBins(numBins);
   }
 
   struct AccumulatorType {
@@ -331,20 +316,6 @@ class HistogramNumericAggregate {
         kOutput == OutputFamily::kTimestampNtz) {
       row.template get_writer_at<0>() =
           HistogramNumericTypes::javaDoubleToTimestamp(center);
-    } else if constexpr (kOutput == OutputFamily::kDecimal) {
-      VELOX_CHECK(
-          decimal_.has_value(),
-          "histogram_numeric Decimal metadata is unavailable");
-      const auto value = decimal_->tryReconstructNativeDecimal(center);
-      if (!value.has_value()) {
-        row.template set_null_at<0>();
-        return;
-      }
-      if constexpr (std::is_same_v<exec::out_type<TOutput>, int64_t>) {
-        row.template get_writer_at<0>() = static_cast<int64_t>(*value);
-      } else {
-        row.template get_writer_at<0>() = *value;
-      }
     }
   }
 
@@ -484,6 +455,10 @@ std::unique_ptr<exec::Aggregate> makeCanonical(
     const TypePtr& resultType,
     const core::QueryConfig& config) {
   const auto type = canonicalType(argTypes, resultType);
+  VELOX_USER_CHECK(
+      !type->isDecimal(),
+      "histogram_numeric does not support DECIMAL centers; use "
+      "histogram_numeric_legacy for DOUBLE centers");
   switch (type->kind()) {
     case TypeKind::TINYINT:
       return makeAggregate<
@@ -519,27 +494,11 @@ std::unique_ptr<exec::Aggregate> makeCanonical(
           InputFamily::kInteger,
           OutputFamily::kInteger>(step, argTypes, resultType, config);
     case TypeKind::BIGINT:
-      if (type->isShortDecimal()) {
-        return makeAggregate<
-            ShortDecimal<P1, S1>,
-            ShortDecimal<P1, S1>,
-            InputFamily::kDecimal,
-            OutputFamily::kDecimal>(step, argTypes, resultType, config);
-      }
       return makeAggregate<
           int64_t,
           int64_t,
           InputFamily::kLong,
           OutputFamily::kLong>(step, argTypes, resultType, config);
-    case TypeKind::HUGEINT:
-      VELOX_CHECK(
-          type->isLongDecimal(),
-          "histogram_numeric supports HUGEINT only as Decimal");
-      return makeAggregate<
-          LongDecimal<P1, S1>,
-          LongDecimal<P1, S1>,
-          InputFamily::kDecimal,
-          OutputFamily::kDecimal>(step, argTypes, resultType, config);
     case TypeKind::REAL:
       return makeAggregate<
           float,
@@ -588,8 +547,6 @@ std::vector<exec::AggregateFunctionSignaturePtr> canonicalSignatures() {
     auto signature = fixedSignature(type, type);
     signatures.push_back(std::move(signature.front()));
   }
-  auto decimal = decimalSignature("decimal(p,s)");
-  signatures.push_back(std::move(decimal.front()));
   return signatures;
 }
 
