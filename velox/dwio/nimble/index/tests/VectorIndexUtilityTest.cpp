@@ -88,6 +88,10 @@ TEST(VectorIndexUtilityTest, indexTypeConversions) {
           VectorIndexType::kHnswSq8,
           serialization::VectorIndexType_HNSW_SQ8,
       },
+      TestCase{
+          VectorIndexType::kCagra,
+          serialization::VectorIndexType_CAGRA,
+      },
   };
 
   for (const auto& testCase : testCases) {

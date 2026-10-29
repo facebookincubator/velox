@@ -39,6 +39,9 @@
 #include <flatbuffers/flatbuffers.h>
 
 #include "velox/dwio/nimble/common/Exceptions.h"
+#ifdef VELOX_ENABLE_FAISS_GPU
+#include "velox/dwio/nimble/index/VectorIndexGpu.h"
+#endif
 #include "velox/dwio/nimble/index/VectorIndexUtility.h"
 #include "velox/dwio/nimble/tablet/Constants.h"
 #include "velox/dwio/nimble/tablet/VectorIndexGenerated.h"
@@ -57,6 +60,11 @@ constexpr int kHnswConstructionSearchDepth{200};
 constexpr uint8_t kMaxPqBits{24};
 
 constexpr uint8_t kRaBitQQueryBits{4};
+
+bool isGraphIndexType(VectorIndexType indexType) {
+  return indexType == VectorIndexType::kHnswSq8 ||
+      indexType == VectorIndexType::kCagra;
+}
 
 // Clamps the requested partition count to the available training data.
 uint32_t calculateNumPartitions(
@@ -160,6 +168,14 @@ std::unique_ptr<faiss::Index> createFaissIndex(
     index->hnsw.efConstruction = kHnswConstructionSearchDepth;
     return index;
   }
+  if (config.indexType == VectorIndexType::kCagra) {
+    auto index = std::make_unique<faiss::IndexHNSWCagra>(
+        dimensions,
+        static_cast<int>(config.hnswNumConnections),
+        faissMetric);
+    index->hnsw.efConstruction = kHnswConstructionSearchDepth;
+    return index;
+  }
 
   auto quantizer = std::make_unique<faiss::IndexFlat>(dimensions, faissMetric);
   std::unique_ptr<faiss::IndexIVF> index;
@@ -203,6 +219,8 @@ std::unique_ptr<faiss::Index> createFaissIndex(
     }
     case VectorIndexType::kHnswSq8:
       NIMBLE_UNREACHABLE("HNSW index must be created before IVF dispatch");
+    case VectorIndexType::kCagra:
+      NIMBLE_UNREACHABLE("CAGRA index must be created before IVF dispatch");
     default:
       NIMBLE_UNREACHABLE(
           "Unsupported vector index type: {}",
@@ -264,7 +282,7 @@ velox::column_index_t validateConfig(
         config.pqBits, kMaxPqBits, "PQ bits per code exceed the FAISS limit");
   }
 
-  if (config.indexType == VectorIndexType::kHnswSq8) {
+  if (isGraphIndexType(config.indexType)) {
     NIMBLE_USER_CHECK_GT(
         config.hnswNumConnections,
         0,
@@ -539,22 +557,38 @@ VectorIndexWriter::SerializedIndex VectorIndexWriter::buildIndex(
   normalizeVectors(
       config.metric, accumulator.numVectors, config.dimensions, vectorData);
 
-  const auto numPartitions = config.indexType == VectorIndexType::kHnswSq8
+  const auto numPartitions = isGraphIndexType(config.indexType)
       ? 0
       : calculateNumPartitions(accumulator.numVectors, config.numPartitions);
-  auto ownedIndex = createFaissIndex(config, numPartitions);
+  std::unique_ptr<faiss::Index> ownedIndex;
+#ifdef VELOX_ENABLE_FAISS_GPU
+  if (config.indexType == VectorIndexType::kCagra) {
+    ownedIndex = buildGpuCagraIndex(
+        static_cast<int>(config.dimensions),
+        static_cast<int>(config.hnswNumConnections),
+        toFaissMetric(config.metric),
+        static_cast<faiss::idx_t>(accumulator.numVectors),
+        vectorData);
+  }
+#endif
+  if (ownedIndex == nullptr) {
+    ownedIndex = createFaissIndex(config, numPartitions);
+  }
   NIMBLE_CHECK_NOT_NULL(ownedIndex.get());
   // @lint-ignore NULLSAFECLANG nullable-dereference
   auto& faissIndex = *ownedIndex;
 
   const auto faissNumVectors =
       static_cast<faiss::idx_t>(accumulator.numVectors);
-  // Some FAISS implementations are initialized as trained, while others must
-  // learn their quantization state from the input vectors.
-  if (!faissIndex.is_trained) {
-    faissIndex.train(faissNumVectors, vectorData);
+  // A GPU CAGRA build returns a populated index. Every other index is filled
+  // here. Some FAISS implementations are initialized as trained, while others
+  // must learn their quantization state from the input vectors.
+  if (faissIndex.ntotal == 0) {
+    if (!faissIndex.is_trained) {
+      faissIndex.train(faissNumVectors, vectorData);
+    }
+    faissIndex.add(faissNumVectors, vectorData);
   }
-  faissIndex.add(faissNumVectors, vectorData);
 
   SerializedIndexWriter writer{
       pool_, static_cast<size_t>(config.maxIndexSizeBytes)};
