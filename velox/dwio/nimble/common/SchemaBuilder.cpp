@@ -361,10 +361,12 @@ const StreamDescriptorBuilder& FlatMapTypeBuilder::addChild(
 HybridFlatMapTypeBuilder::HybridFlatMapTypeBuilder(
     SchemaBuilder& schemaBuilder,
     ScalarKind keyScalarKind,
+    HybridFlatMap::KeyPresenceMode defaultGroupKeyPresenceMode,
     bool requiresDefaultGroup)
     : TypeBuilder{schemaBuilder, Kind::HybridFlatMap},
       keyScalarKind_{keyScalarKind},
       requiresDefaultGroup_{requiresDefaultGroup},
+      defaultGroupKeyPresenceMode_{defaultGroupKeyPresenceMode},
       nullsDescriptor_{
           schemaBuilder_.allocateStreamOffset(),
           ScalarKind::Bool} {}
@@ -380,6 +382,16 @@ ScalarKind HybridFlatMapTypeBuilder::keyScalarKind() const {
 
 bool HybridFlatMapTypeBuilder::requiresDefaultGroup() const {
   return requiresDefaultGroup_;
+}
+
+HybridFlatMap::KeyPresenceMode
+HybridFlatMapTypeBuilder::defaultGroupKeyPresenceMode() const {
+  return defaultGroupKeyPresenceMode_;
+}
+
+bool HybridFlatMapTypeBuilder::useKeyPresentList(uint32_t groupId) const {
+  return HybridFlatMap::hasKeyPresenceList(
+      defaultGroupKeyPresenceMode_, groupId);
 }
 
 namespace {
@@ -428,6 +440,8 @@ HybridFlatMapTypeBuilder::GroupDescriptor HybridFlatMapTypeBuilder::addGroup(
       "Duplicate Hybrid FlatMap group ID: {}.",
       groupId);
   detail::checkHybridFlatMapGroupKeys(groupId, groupKeys);
+  detail::checkHybridFlatMapDefaultKeys(
+      defaultGroupKeyPresenceMode_, groupId, groupKeys);
   if (isDefaultGroup) {
     checkNewDefaultGroupKeys(groupKeys, groups_);
   } else {
@@ -442,7 +456,8 @@ HybridFlatMapTypeBuilder::GroupDescriptor HybridFlatMapTypeBuilder::addGroup(
           .groupId = groupId,
           .groupKeys = std::move(groupKeys),
           .keyPresenceDescriptor = std::make_unique<StreamDescriptorBuilder>(
-              schemaBuilder_.allocateStreamOffset(), ScalarKind::Bool),
+              schemaBuilder_.allocateStreamOffset(),
+              useKeyPresentList(groupId) ? keyScalarKind_ : ScalarKind::Bool),
           .inMapDescriptor = std::make_unique<StreamDescriptorBuilder>(
               schemaBuilder_.allocateStreamOffset(), ScalarKind::Bool),
           .valueType = std::move(valueType),
@@ -464,6 +479,10 @@ void HybridFlatMapTypeBuilder::appendDefaultGroupKey(std::string key) {
   NIMBLE_CHECK(
       defaultGroupIndex_.has_value(),
       "Hybrid FlatMap Default group is not initialized.");
+  NIMBLE_CHECK_EQ(
+      defaultGroupKeyPresenceMode_,
+      HybridFlatMap::KeyPresenceMode::kBitmap,
+      "Hybrid FlatMap Default keys are listed per batch, not in the schema.");
   NIMBLE_CHECK(!key.empty(), "Hybrid FlatMap key cannot be empty.");
   NIMBLE_CHECK(!containsKey(key), "Duplicate Hybrid FlatMap key: '{}'.", key);
   defaultGroupKeys_.insert(key);
@@ -617,6 +636,7 @@ std::shared_ptr<FlatMapTypeBuilder> SchemaBuilder::createFlatMapTypeBuilder(
 std::shared_ptr<HybridFlatMapTypeBuilder>
 SchemaBuilder::createHybridFlatMapTypeBuilder(
     ScalarKind keyScalarKind,
+    HybridFlatMap::KeyPresenceMode defaultGroupKeyPresenceMode,
     bool projection) {
   NIMBLE_USER_CHECK(
       HybridFlatMap::supportedKeyKind(keyScalarKind),
@@ -626,14 +646,16 @@ SchemaBuilder::createHybridFlatMapTypeBuilder(
     MakeSharedEnabler(
         SchemaBuilder& schemaBuilder,
         ScalarKind keyScalarKind,
+        HybridFlatMap::KeyPresenceMode defaultGroupKeyPresenceMode,
         bool projection)
         : HybridFlatMapTypeBuilder(
               schemaBuilder,
               keyScalarKind,
+              defaultGroupKeyPresenceMode,
               /*requiresDefaultGroup=*/!projection) {}
   };
-  auto type =
-      std::make_shared<MakeSharedEnabler>(*this, keyScalarKind, projection);
+  auto type = std::make_shared<MakeSharedEnabler>(
+      *this, keyScalarKind, defaultGroupKeyPresenceMode, projection);
   roots_.insert(type);
   return type;
 }
@@ -891,7 +913,9 @@ void addSchemaNode(
             });
       }
       auto attributes = type.attributes();
-      HybridFlatMap::fromSchema(std::move(groups)).setAttribute(attributes);
+      HybridFlatMap::fromSchema(
+          std::move(groups), hybridMap.defaultGroupKeyPresenceMode())
+          .setAttribute(attributes);
       nodes.emplace_back(
           type.kind(),
           hybridMap.nullsDescriptor().offset(),
@@ -904,7 +928,7 @@ void addSchemaNode(
         nodes.emplace_back(
             Kind::Scalar,
             group.keyPresenceDescriptor.offset(),
-            ScalarKind::Bool,
+            group.keyPresenceDescriptor.scalarKind(),
             std::nullopt);
         nodes.emplace_back(
             Kind::Scalar,

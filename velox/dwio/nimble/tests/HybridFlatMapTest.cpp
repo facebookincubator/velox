@@ -19,6 +19,7 @@
 #include <fmt/format.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include <optional>
 
 #include "velox/dwio/nimble/common/SchemaGenerated.h"
 #include "velox/dwio/nimble/common/tests/GTestUtils.h"
@@ -29,33 +30,47 @@ namespace {
 using testing::ElementsAre;
 
 HybridFlatMap metadata() {
-  return HybridFlatMap::fromSchema({
-      {.groupId = 7,
-       .groupKeys =
-           {"feature,with:delimiters|and;slashes/",
-            std::string{"prefix\0suffix", 13}}},
-      {.groupId = 11, .groupKeys = {"C"}},
-      {.groupId = HybridFlatMap::kDefaultGroupId,
-       .groupKeys = {"seen-second", "seen-first"}},
-  });
+  return HybridFlatMap::fromSchema(
+      {
+          {.groupId = 7,
+           .groupKeys =
+               {"feature,with:delimiters|and;slashes/",
+                std::string{"prefix\0suffix", 13}}},
+          {.groupId = 11, .groupKeys = {"C"}},
+          {.groupId = HybridFlatMap::kDefaultGroupId,
+           .groupKeys = {"seen-second", "seen-first"}},
+      },
+      HybridFlatMap::KeyPresenceMode::kBitmap);
 }
 
 std::string encodeRawMetadata(
     const std::vector<uint32_t>& groupIds,
     const std::vector<uint32_t>& groupKeyCounts,
-    const std::vector<std::string>& groupKeys) {
+    const std::vector<std::string>& groupKeys,
+    std::optional<uint8_t> defaultGroupKeyPresenceMode =
+        serialization::HybridFlatMapKeyPresenceMode_Bitmap) {
   flatbuffers::FlatBufferBuilder builder;
+  builder.ForceDefaults(true);
   std::vector<flatbuffers::Offset<flatbuffers::String>> keyOffsets;
   keyOffsets.reserve(groupKeys.size());
   for (const auto& key : groupKeys) {
     keyOffsets.push_back(builder.CreateString(key));
   }
-  const auto serialized = serialization::CreateHybridFlatMap(
-      builder,
-      builder.CreateVector(groupIds),
-      builder.CreateVector(groupKeyCounts),
-      builder.CreateVector(keyOffsets));
-  builder.Finish(serialized);
+  const auto groupIdsOffset = builder.CreateVector(groupIds);
+  const auto groupKeyCountsOffset = builder.CreateVector(groupKeyCounts);
+  const auto groupKeysOffset = builder.CreateVector(keyOffsets);
+  serialization::HybridFlatMapBuilder metadataBuilder{builder};
+  metadataBuilder.add_group_ids(groupIdsOffset);
+  metadataBuilder.add_group_key_counts(groupKeyCountsOffset);
+  metadataBuilder.add_group_keys(groupKeysOffset);
+  // Writes the raw byte, since the generated enum cannot hold unknown values.
+  if (defaultGroupKeyPresenceMode.has_value()) {
+    builder.AddElement<uint8_t>(
+        serialization::HybridFlatMap::VT_DEFAULT_GROUP_KEY_PRESENCE_MODE,
+        *defaultGroupKeyPresenceMode,
+        serialization::HybridFlatMapKeyPresenceMode_Bitmap);
+  }
+  builder.Finish(metadataBuilder.Finish());
   return {
       reinterpret_cast<const char*>(builder.GetBufferPointer()),
       builder.GetSize()};
@@ -65,6 +80,7 @@ std::string encodeMetadataWithoutGroupKeys(
     const std::vector<uint32_t>& groupIds,
     const std::vector<uint32_t>& groupKeyCounts) {
   flatbuffers::FlatBufferBuilder builder;
+  builder.ForceDefaults(true);
   builder.Finish(
       serialization::CreateHybridFlatMap(
           builder,
@@ -77,7 +93,8 @@ std::string encodeMetadataWithoutGroupKeys(
 
 HybridFlatMap defaultOnlyMetadata() {
   return HybridFlatMap::fromSchema(
-      {{.groupId = HybridFlatMap::kDefaultGroupId, .groupKeys = {}}});
+      {{.groupId = HybridFlatMap::kDefaultGroupId, .groupKeys = {}}},
+      HybridFlatMap::KeyPresenceMode::kBitmap);
 }
 
 void validateGroups(const HybridFlatMap& hybridMap, bool hasDefault) {
@@ -360,7 +377,8 @@ TEST(HybridFlatMapTest, addGroupChecksCanonicalKeysOnlyWithKeyKind) {
 // Schema metadata need not end with its Default group, so groups are added
 // only to a writer configuration.
 TEST(HybridFlatMapTest, addGroupRejectsSchemaMetadata) {
-  auto metadata = HybridFlatMap::fromSchema(config({{0, {"1"}}}));
+  auto metadata = HybridFlatMap::fromSchema(
+      config({{0, {"1"}}}), HybridFlatMap::KeyPresenceMode::kBitmap);
   NIMBLE_ASSERT_USER_THROW(
       metadata.addGroup(1, {"2"}),
       "Hybrid FlatMap groups can be added only to a writer configuration.");
@@ -397,11 +415,37 @@ TEST(HybridFlatMapTest, bindingRejectsConfigurationForOtherKeys) {
       "Hybrid FlatMap configuration is for keys of another type.");
 }
 
+TEST(HybridFlatMapTest, bindingKeepsDefaultGroupKeyPresenceMode) {
+  HybridFlatMap configuration;
+  configuration.setDefaultGroupKeyPresenceMode(
+      HybridFlatMap::KeyPresenceMode::kKeyList);
+  EXPECT_EQ(
+      (HybridFlatMap{ScalarKind::Int64, configuration})
+          .defaultGroupKeyPresenceMode(),
+      HybridFlatMap::KeyPresenceMode::kKeyList);
+}
+
 TEST(HybridFlatMapTest, identifiesDefaultGroup) {
   EXPECT_TRUE(HybridFlatMap::isDefaultGroup(HybridFlatMap::kDefaultGroupId));
   EXPECT_FALSE(HybridFlatMap::isDefaultGroup(0));
   EXPECT_FALSE(
       HybridFlatMap::isDefaultGroup(HybridFlatMap::kDefaultGroupId - 1));
+}
+
+TEST(HybridFlatMapTest, usesKeyPresentListOnlyForKeyListDefault) {
+  HybridFlatMap hybridMap;
+  EXPECT_FALSE(hybridMap.useKeyPresentList(HybridFlatMap::kDefaultGroupId));
+  hybridMap.setDefaultGroupKeyPresenceMode(
+      HybridFlatMap::KeyPresenceMode::kKeyList);
+  EXPECT_TRUE(hybridMap.useKeyPresentList(HybridFlatMap::kDefaultGroupId));
+  EXPECT_FALSE(hybridMap.useKeyPresentList(0));
+}
+
+TEST(HybridFlatMapTest, formatsKeyPresenceMode) {
+  EXPECT_EQ(
+      fmt::format("{}", HybridFlatMap::KeyPresenceMode::kBitmap), "Bitmap");
+  EXPECT_EQ(
+      fmt::format("{}", HybridFlatMap::KeyPresenceMode::kKeyList), "KeyList");
 }
 
 TEST(HybridFlatMapTest, getsGroupById) {
@@ -463,6 +507,30 @@ TEST(HybridFlatMapTest, metadataRoundTripsDefaultOnly) {
   EXPECT_EQ(HybridFlatMap::deserialize(serialized), expected);
 }
 
+TEST(HybridFlatMapTest, metadataRoundTripsKeyList) {
+  // The key presence mode is written even when it is Bitmap.
+  const auto hasKeyPresenceField = [](std::string_view serialized) {
+    return flatbuffers::GetRoot<flatbuffers::Table>(serialized.data())
+        ->CheckField(
+            serialization::HybridFlatMap::VT_DEFAULT_GROUP_KEY_PRESENCE_MODE);
+  };
+  EXPECT_TRUE(hasKeyPresenceField(metadata().serialize()));
+
+  const auto expected = HybridFlatMap::fromSchema(
+      defaultOnlyMetadata().groups(), HybridFlatMap::KeyPresenceMode::kKeyList);
+  const auto serialized = expected.serialize();
+  flatbuffers::Verifier verifier{
+      reinterpret_cast<const uint8_t*>(serialized.data()), serialized.size()};
+  ASSERT_TRUE(verifier.VerifyBuffer<serialization::HybridFlatMap>());
+
+  EXPECT_TRUE(hasKeyPresenceField(serialized));
+  EXPECT_EQ(
+      flatbuffers::GetRoot<serialization::HybridFlatMap>(serialized.data())
+          ->default_group_key_presence_mode(),
+      serialization::HybridFlatMapKeyPresenceMode_KeyList);
+  EXPECT_EQ(HybridFlatMap::deserialize(serialized), expected);
+}
+
 TEST(HybridFlatMapTest, rejectsOmittedVectors) {
   flatbuffers::FlatBufferBuilder builder;
   serialization::HybridFlatMapBuilder metadataBuilder{builder};
@@ -503,11 +571,34 @@ TEST(HybridFlatMapTest, rejectsMalformedMetadata) {
       HybridFlatMap::deserialize(
           encodeRawMetadata({0, 1}, {0, 0}, {"unexpected"})),
       "Hybrid FlatMap group key counts must match group keys size");
+  NIMBLE_ASSERT_THROW(
+      HybridFlatMap::deserialize(encodeRawMetadata(
+          {HybridFlatMap::kDefaultGroupId},
+          {1},
+          {"listed"},
+          serialization::HybridFlatMapKeyPresenceMode_KeyList)),
+      "Hybrid FlatMap Default group cannot list keys when batches list their "
+      "Default keys");
+  NIMBLE_ASSERT_THROW(
+      HybridFlatMap::deserialize(encodeRawMetadata(
+          {HybridFlatMap::kDefaultGroupId},
+          {0},
+          {},
+          /*defaultGroupKeyPresenceMode=*/2)),
+      "Hybrid FlatMap Default key presence is unknown");
+  NIMBLE_ASSERT_THROW(
+      HybridFlatMap::deserialize(encodeRawMetadata(
+          {HybridFlatMap::kDefaultGroupId},
+          {0},
+          {},
+          /*defaultGroupKeyPresenceMode=*/std::nullopt)),
+      "Hybrid FlatMap Default key presence is missing");
 }
 
 TEST(HybridFlatMapTest, projectedConfiguredGroupRequiresKeys) {
-  const auto projected =
-      HybridFlatMap::fromSchema({{.groupId = 7, .groupKeys = {}}});
+  const auto projected = HybridFlatMap::fromSchema(
+      {{.groupId = 7, .groupKeys = {}}},
+      HybridFlatMap::KeyPresenceMode::kBitmap);
 
   NIMBLE_ASSERT_THROW(
       detail::validateHybridFlatMapGroups(
@@ -527,14 +618,18 @@ TEST(HybridFlatMapTest, validatesMinimumGroupCount) {
     SCOPED_TRACE(hasDefault);
     EXPECT_NO_THROW(validateGroups(defaultOnlyMetadata(), hasDefault));
     NIMBLE_ASSERT_THROW(
-        validateGroups(HybridFlatMap::fromSchema({}), hasDefault),
+        validateGroups(
+            HybridFlatMap::fromSchema(
+                {}, HybridFlatMap::KeyPresenceMode::kBitmap),
+            hasDefault),
         "Hybrid FlatMap requires at least 1 group(s)");
   }
 
   // A projection may keep only a configured group, but a complete schema's
   // single group must be Default.
-  const auto explicitOnly =
-      HybridFlatMap::fromSchema({{.groupId = 7, .groupKeys = {"a"}}});
+  const auto explicitOnly = HybridFlatMap::fromSchema(
+      {{.groupId = 7, .groupKeys = {"a"}}},
+      HybridFlatMap::KeyPresenceMode::kBitmap);
   EXPECT_NO_THROW(validateGroups(explicitOnly, /*hasDefault=*/false));
   NIMBLE_ASSERT_THROW(
       validateGroups(explicitOnly, /*hasDefault=*/true),

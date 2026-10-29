@@ -189,7 +189,8 @@ TEST_F(DeserializerTest, acceptsRegularFlatMapSchema) {
 TEST_F(DeserializerTest, traversesComplexHybridValueSubtrees) {
   SchemaBuilder builder;
   auto root = builder.createRowTypeBuilder(1);
-  auto hybridMap = builder.createHybridFlatMapTypeBuilder(ScalarKind::Int32);
+  auto hybridMap = builder.createHybridFlatMapTypeBuilder(
+      ScalarKind::Int32, HybridFlatMap::KeyPresenceMode::kBitmap);
   hybridMap->addGroup(0, {"1"}, makeComplexValueType(builder));
   hybridMap->addGroup(
       HybridFlatMap::kDefaultGroupId, {}, makeComplexValueType(builder));

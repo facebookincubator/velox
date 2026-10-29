@@ -480,7 +480,8 @@ TEST_F(FieldReaderTest, handlesHybridGroupsWithNoObservedKeys) {
 TEST_F(FieldReaderTest, treatsAllFalseHybridGroupAsEmpty) {
   SchemaBuilder builder;
   auto root = builder.createRowTypeBuilder(1);
-  auto hybridMap = builder.createHybridFlatMapTypeBuilder(ScalarKind::Int32);
+  auto hybridMap = builder.createHybridFlatMapTypeBuilder(
+      ScalarKind::Int32, HybridFlatMap::KeyPresenceMode::kBitmap);
   const auto group = hybridMap->addGroup(
       7, {"1"}, builder.createScalarTypeBuilder(ScalarKind::Int64));
   hybridMap->addGroup(
@@ -522,7 +523,8 @@ TEST_F(FieldReaderTest, treatsAllFalseHybridGroupAsEmpty) {
 TEST_F(FieldReaderTest, infersOmittedHybridGroupStreams) {
   SchemaBuilder builder;
   auto root = builder.createRowTypeBuilder(1);
-  auto hybridMap = builder.createHybridFlatMapTypeBuilder(ScalarKind::Int32);
+  auto hybridMap = builder.createHybridFlatMapTypeBuilder(
+      ScalarKind::Int32, HybridFlatMap::KeyPresenceMode::kBitmap);
   auto groupValue = builder.createScalarTypeBuilder(ScalarKind::Int64);
   const auto valueOffset = groupValue->scalarDescriptor().offset();
   const auto group = hybridMap->addGroup(7, {"1"}, std::move(groupValue));
@@ -607,7 +609,8 @@ TEST_F(FieldReaderTest, infersOmittedHybridGroupStreams) {
 TEST_F(FieldReaderTest, rejectsMalformedHybridGroupStreams) {
   SchemaBuilder builder;
   auto root = builder.createRowTypeBuilder(1);
-  auto hybridMap = builder.createHybridFlatMapTypeBuilder(ScalarKind::Int32);
+  auto hybridMap = builder.createHybridFlatMapTypeBuilder(
+      ScalarKind::Int32, HybridFlatMap::KeyPresenceMode::kBitmap);
   auto groupValue = builder.createScalarTypeBuilder(ScalarKind::Int64);
   const auto groupValueOffset = groupValue->scalarDescriptor().offset();
   const auto group = hybridMap->addGroup(7, {"1", "2"}, std::move(groupValue));
@@ -842,7 +845,8 @@ TEST_F(FieldReaderTest, filtersDecodedHybridGroupsToRequestedFeatures) {
 TEST_F(FieldReaderTest, excludesRequestedKeysAfterWholeGroupDecode) {
   SchemaBuilder builder;
   auto root = builder.createRowTypeBuilder(1);
-  auto hybridMap = builder.createHybridFlatMapTypeBuilder(ScalarKind::Int32);
+  auto hybridMap = builder.createHybridFlatMapTypeBuilder(
+      ScalarKind::Int32, HybridFlatMap::KeyPresenceMode::kBitmap);
   auto groupValue = builder.createScalarTypeBuilder(ScalarKind::Int64);
   const auto groupValueOffset = groupValue->scalarDescriptor().offset();
   const auto group = hybridMap->addGroup(0, {"1", "2"}, std::move(groupValue));
