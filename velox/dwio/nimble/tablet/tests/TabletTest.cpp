@@ -46,6 +46,7 @@
 #include "velox/dwio/nimble/index/VectorIndex.h"
 #include "velox/dwio/nimble/index/VectorIndexWriter.h"
 #include "velox/dwio/nimble/index/tests/ClusterIndexTestUtils.h"
+#include "velox/dwio/nimble/tablet/BlockCache.h"
 #include "velox/dwio/nimble/tablet/ChunkStatsGenerated.h"
 #include "velox/dwio/nimble/tablet/Compression.h"
 #include "velox/dwio/nimble/tablet/Constants.h"
@@ -186,6 +187,7 @@ class TabletTest : public ::testing::TestWithParam<BufferedInputMode> {
   void TearDown() override {
     fileHandle_.reset();
     readerOptions_.reset();
+    nimble::testingResetBlockCache();
     if (cache_) {
       cache_->shutdown();
       cache_.reset();
@@ -8329,6 +8331,132 @@ TEST_P(TabletCacheTest, cacheMetadataCompressedMultipleStripeGroups) {
 
   auto warmCacheStats = cache_->refreshStats();
   EXPECT_EQ(warmCacheStats.numEvict, 0);
+}
+
+TEST_F(TabletTest, blockMetadataInput) {
+  std::string file;
+  velox::InMemoryWriteFile writeFile(&file);
+  nimble::Buffer buffer(*pool_);
+
+  // A low flush threshold gives each stripe its own stripe group, and a zero
+  // compression threshold compresses it, so stripe groups load and decompress
+  // through MetadataInput::load().
+  auto tabletWriter = nimble::TabletWriter::create(
+      &writeFile,
+      *pool_,
+      {.metadataFlushThreshold = 1,
+       .metadataCompressionThreshold = 0,
+       .streamDeduplicationEnabled = false});
+  constexpr int kNumStripes = 3;
+  constexpr int kNumStreams = 500;
+  for (int i = 0; i < kNumStripes; ++i) {
+    std::vector<nimble::Stream> streams;
+    for (int s = 0; s < kNumStreams; ++s) {
+      const auto size = 50;
+      auto* pos = buffer.reserve(size);
+      std::memset(pos, (i * kNumStreams + s) & 0xFF, size);
+      streams.push_back(
+          {.offset = static_cast<uint32_t>(s),
+           .chunks = {
+               {.rowCount = 100, .content = {std::string_view(pos, size)}}}});
+    }
+    tabletWriter->writeStripe(100, std::move(streams));
+  }
+  tabletWriter->close();
+  writeFile.close();
+  auto readFile = std::make_shared<velox::InMemoryReadFile>(file);
+
+  auto openReader = [&](nimble::TabletReader::Options options) {
+    auto metadataIoStats = std::make_shared<velox::io::IoStatistics>();
+    velox::io::ReaderOptions ioOptions{pool_.get()};
+    ioOptions.setMetadataIoStats(metadataIoStats);
+    options.ioOptions = ioOptions;
+    return std::make_pair(
+        nimble::TabletReader::create(readFile, pool_.get(), options),
+        metadataIoStats);
+  };
+
+  // Returns the offset and size of every stream, read from the stripe groups.
+  auto streamLocations = [](const nimble::TabletReader& reader) {
+    std::vector<std::pair<uint32_t, uint32_t>> result;
+    for (uint32_t i = 0; i < reader.stripeCount(); ++i) {
+      const auto stripe = reader.stripeIdentifier(i);
+      std::vector<nimble::TabletReader::StreamMetadata> locations(
+          reader.streamCount(stripe));
+      reader.streamLocations(stripe, locations);
+      for (const auto& location : locations) {
+        result.emplace_back(location.offset, location.size);
+      }
+    }
+    return result;
+  };
+
+  const auto defaultReader = openReader({}).first;
+  const auto expected = streamLocations(*defaultReader);
+  ASSERT_EQ(expected.size(), kNumStripes * kNumStreams);
+  for (const auto& section : defaultReader->stripeGroupsMetadata()) {
+    ASSERT_EQ(section.compressionType(), nimble::CompressionType::Zstd);
+  }
+
+  {
+    SCOPED_TRACE("Uncached block input");
+    nimble::TabletReader::Options options;
+    options.blockMetadataInput = true;
+    auto [reader, metadataIoStats] = openReader(options);
+    EXPECT_EQ(streamLocations(*reader), expected);
+  }
+
+  allocator_ = std::make_shared<velox::memory::MallocAllocator>(
+      velox::memory::MemoryAllocator::Options{
+          .capacity = 1UL << 30, .reservationByteLimit = 0});
+  cache_ = velox::cache::AsyncDataCache::create(allocator_.get());
+  const velox::StringIdLease fileId{
+      velox::fileIds(), "TabletTest.blockMetadataInput"};
+  nimble::TabletReader::Options cachedOptions;
+  cachedOptions.blockCache = nimble::getBlockCache(cache_.get());
+  cachedOptions.blockCacheFileId = fileId.id();
+  {
+    SCOPED_TRACE("Cold reader fills the block cache");
+    auto [reader, metadataIoStats] = openReader(cachedOptions);
+    EXPECT_FALSE(reader->stats().footerCacheHit);
+    EXPECT_EQ(streamLocations(*reader), expected);
+  }
+  {
+    SCOPED_TRACE("Warm reader reads no metadata from the file");
+    auto [reader, metadataIoStats] = openReader(cachedOptions);
+    EXPECT_TRUE(reader->stats().footerCacheHit);
+    EXPECT_EQ(streamLocations(*reader), expected);
+    EXPECT_EQ(metadataIoStats->rawBytesRead(), 0);
+    EXPECT_GT(metadataIoStats->ramHit().count(), 0);
+  }
+  {
+    SCOPED_TRACE("Block input rejects the async data cache");
+    velox::FileHandle fileHandle;
+    fileHandle.file = readFile;
+    fileHandle.uuid = velox::StringIdLease(
+        velox::fileIds(), "TabletTest.blockMetadataInput.fileHandle");
+    auto options = cachedOptions;
+    options.cacheMetadata = true;
+    options.fileHandle = &fileHandle;
+    options.cache = cache_.get();
+    NIMBLE_ASSERT_THROW(
+        openReader(options),
+        "Block metadata input does not use an AsyncDataCache");
+  }
+  {
+    // The file has no index, so only the up-front check can reject this.
+    SCOPED_TRACE("Block input rejects the async data cache for the index");
+    velox::FileHandle fileHandle;
+    fileHandle.file = readFile;
+    fileHandle.uuid = velox::StringIdLease(
+        velox::fileIds(), "TabletTest.blockMetadataInput.indexFileHandle");
+    auto options = cachedOptions;
+    options.cacheIndex = true;
+    options.fileHandle = &fileHandle;
+    options.cache = cache_.get();
+    NIMBLE_ASSERT_USER_THROW(
+        openReader(options), "cacheIndex cannot be combined with blockCache");
+  }
 }
 
 INSTANTIATE_TEST_SUITE_P(

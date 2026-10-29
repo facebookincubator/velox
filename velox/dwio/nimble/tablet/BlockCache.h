@@ -125,6 +125,15 @@ class BlockCache {
       uint32_t size,
       velox::io::IoStatistics& ioStats) = 0;
 
+  /// Returns the sealed entry for (fileId, offset) and its size in bytes, or
+  /// an empty Entry when none is cached. Unlike getOrCreate(), never creates
+  /// an entry, so callers can probe a key whose size they do not know. May
+  /// block while another thread fills the same entry, depending on the
+  /// implementation. 'ioStats' receives the same counters as getOrCreate().
+  /// The default implementation finds nothing.
+  virtual std::pair<Entry, uint32_t>
+  find(uint64_t fileId, uint64_t offset, velox::io::IoStatistics& ioStats);
+
   /// Seals a filled entry so it is visible to other readers. Call exactly once
   /// per entry whose sealed() is false, after its bytes are written. Sealing
   /// may fail to cache the entry under memory pressure; the bytes stay valid
@@ -146,8 +155,8 @@ class BlockCache {
 /// that lets a fixture inject its own AsyncDataCache. Thread-safe. The
 /// returned pointer is owned by the singleton and must not be deleted; the
 /// backing AsyncDataCache must outlive it. Entries are contiguous and never
-/// saved to the SSD tier. getOrCreate() blocks while another thread fills the
-/// same entry, so concurrent misses on one key cost a single read.
+/// saved to the SSD tier. getOrCreate() and find() block while another thread
+/// fills the same entry, so concurrent misses on one key cost a single read.
 BlockCache* getBlockCache(velox::cache::AsyncDataCache* cache = nullptr);
 
 /// Resets the singleton returned by getBlockCache() so the next call rebuilds

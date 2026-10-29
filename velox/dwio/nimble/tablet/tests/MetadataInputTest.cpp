@@ -506,7 +506,7 @@ DEBUG_ONLY_TEST_F(DirectMetadataInputTest, ioCoalescing) {
 
     velox::CoalesceIoStats capturedStats;
     SCOPED_TESTVALUE_SET(
-        "facebook::nimble::MetadataInput::computeIoGroups",
+        "facebook::nimble::BufferedMetadataInput::computeIoGroups",
         std::function<void(const velox::CoalesceIoStats*)>(
             [&](const velox::CoalesceIoStats* stats) {
               capturedStats = *stats;
@@ -959,7 +959,7 @@ DEBUG_ONLY_TEST_P(CachedMetadataInputTest, ioCoalescing) {
 
       velox::CoalesceIoStats capturedStats;
       SCOPED_TESTVALUE_SET(
-          "facebook::nimble::MetadataInput::computeIoGroups",
+          "facebook::nimble::BufferedMetadataInput::computeIoGroups",
           std::function<void(const velox::CoalesceIoStats*)>(
               [&](const velox::CoalesceIoStats* stats) {
                 capturedStats = *stats;

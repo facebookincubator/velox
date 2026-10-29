@@ -229,6 +229,24 @@ class TabletReader {
     /// SsdRun can describe, so every cached entry can reach SSD.
     uint32_t maxCacheEntrySize{1U << velox::cache::SsdRun::kSizeBits};
 
+    /// Block cache for decompressed file and index metadata, read through
+    /// CachedBlockMetadataInput. Must outlive the reader and everything
+    /// obtained from it that holds metadata, such as Sections from
+    /// loadOptionalSection() and StripeIdentifiers, since they pin cache
+    /// entries. Cannot be combined with cacheMetadata or cacheIndex taking
+    /// effect.
+    BlockCache* blockCache{nullptr};
+
+    /// Identity of the file in blockCache keys. See
+    /// MetadataInput::Options::blockCacheFileId.
+    uint64_t blockCacheFileId{0};
+
+    /// If true, reads file and index metadata through
+    /// DirectBlockMetadataInput unless blockCache is set: one batched,
+    /// direct-I/O-aligned read per load. Cannot be combined with
+    /// cacheMetadata or cacheIndex taking effect.
+    bool blockMetadataInput{false};
+
     /// Resolves External shared integer dictionaries referenced by this file.
     std::shared_ptr<const ExternalDictionaryResolver>
         externalDictionaryResolver;

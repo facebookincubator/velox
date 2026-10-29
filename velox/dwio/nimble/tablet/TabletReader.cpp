@@ -220,6 +220,14 @@ TabletReader::TabletReader(
             options.cacheIndex && options.fileHandle != nullptr;
         if (cacheEnabled) {
           NIMBLE_CHECK_NOT_NULL(options.cache, "cacheIndex requires cache");
+          // Index inputs are created only for files that have an index, so
+          // check here to fail the same way for every file.
+          NIMBLE_USER_CHECK_NULL(
+              options.blockCache,
+              "cacheIndex cannot be combined with blockCache");
+          NIMBLE_USER_CHECK(
+              !options.blockMetadataInput,
+              "cacheIndex cannot be combined with blockMetadataInput");
         }
         return index::IndexLookup::Options{
             .file = file_,
@@ -227,6 +235,9 @@ TabletReader::TabletReader(
             .fileHandle = cacheEnabled ? options.fileHandle : nullptr,
             .cache = cacheEnabled ? options.cache : nullptr,
             .maxCacheEntrySize = options.maxCacheEntrySize,
+            .blockCache = options.blockCache,
+            .blockCacheFileId = options.blockCacheFileId,
+            .blockMetadataInput = options.blockMetadataInput,
             // preloadIndex requires pinIndex; auto-promote so the caller only
             // needs to flip one knob.
             .pinIndex = options.pinIndex || options.preloadIndex,
@@ -238,7 +249,10 @@ TabletReader::TabletReader(
             .ioStats = ioOptions_.metadataIoStats(),
             .maxCoalesceDistance = ioOptions_.maxCoalesceDistance(),
             .maxCoalesceBytes = ioOptions_.maxCoalesceBytes(),
-            .executor = ioOptions_.ioExecutor().get()};
+            .executor = ioOptions_.ioExecutor().get(),
+            .blockCache = options.blockCache,
+            .blockCacheFileId = options.blockCacheFileId,
+            .blockMetadataInput = options.blockMetadataInput};
         // cacheMetadata takes effect only when fileHandle and cache are
         // provided.
         if (options.cacheMetadata && options.fileHandle != nullptr) {
