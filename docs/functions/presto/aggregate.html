@@ -1207,10 +1207,66 @@ In Journal of Computer and System Sciences, 31:182-209, 1985</p>
 <p>These functions are available when Velox is built with FAISS
 (<code class="docutils literal notranslate"><span class="pre">VELOX_ENABLE_FAISS</span></code>).</p>
 <dl class="py function">
+<dt class="sig sig-object py" id="vector_index_build">
+<span class="sig-name descname"><span class="pre">vector_index_build</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">embedding</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">id</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">index_type</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">metric</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">options</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varbinary</span></span></span><a class="headerlink" href="#vector_index_build" title="Link to this definition">¶</a></dt>
+<dd><p>Builds a local vector index over the group’s rows: a FAISS index holding
+each embedding with its <code class="docutils literal notranslate"><span class="pre">id</span></code>, serialized as <code class="docutils literal notranslate"><span class="pre">faiss::write_index</span></code>
+writes it. A vector index keeps one local index per group of nearby
+embeddings, and a search looks only in the groups nearest to the query.</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">embedding</span></code> (ARRAY(REAL)): all embeddings must have the same, non-zero
+length and must not contain null, NaN or infinite elements.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">id</span></code> (BIGINT): the id a search returns for the embedding. Ids need not
+be distinct. An id may not be -1, which FAISS returns for a missing
+result.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">index_type</span></code> (VARCHAR): a constant. Supported values:</p>
+<ul>
+<li><p><code class="docutils literal notranslate"><span class="pre">'flat'</span></code>: every embedding stored in full; a search is exact.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">'ivf_flat'</span></code>: the embeddings clustered into lists; a search scans
+the lists nearest to the query.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">'ivf_sq'</span></code>: as <code class="docutils literal notranslate"><span class="pre">'ivf_flat'</span></code>, with each dimension compressed to 8
+bits.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">'hnsw_sq'</span></code>: a graph of near neighbors over embeddings with each
+dimension compressed to 8 bits.</p></li>
+</ul>
+</li>
+<li><p><code class="docutils literal notranslate"><span class="pre">metric</span></code> (VARCHAR): a constant. Supported values: <code class="docutils literal notranslate"><span class="pre">'cosine'</span></code>, which
+normalizes embeddings to length 1 and compares by dot product.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">options</span></code> (MAP(VARCHAR, VARCHAR)): a constant map of settings, each a
+positive integer. Settings that do not apply to <code class="docutils literal notranslate"><span class="pre">index_type</span></code> are
+errors.</p>
+<ul>
+<li><p><code class="docutils literal notranslate"><span class="pre">ivf.nlist</span></code>: the number of lists. Defaults to <code class="docutils literal notranslate"><span class="pre">4</span> <span class="pre">*</span> <span class="pre">sqrt(n)</span></code> for
+<code class="docutils literal notranslate"><span class="pre">n</span></code> embeddings, between 8 and 16384. Reduced, even when set, to give
+each list at least 39 embeddings.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">ivf.nprobe</span></code>: the number of lists a search scans by default.
+Defaults to a tenth of the lists, rounded up, and is capped at the
+number of lists.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">hnsw.M</span></code>: the number of neighbors of each embedding in the graph,
+between 2 and 256. Defaults to 32.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">hnsw.efConstruction</span></code>: the number of candidates the build explores.
+Defaults to 200.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">hnsw.efSearch</span></code>: the number of candidates a search explores by
+default. Defaults to 64.</p></li>
+</ul>
+</li>
+</ul>
+<p>Rows with a null <code class="docutils literal notranslate"><span class="pre">embedding</span></code> or <code class="docutils literal notranslate"><span class="pre">id</span></code> are ignored.</p>
+<p>Example:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">cluster_id</span><span class="p">,</span>
+    <span class="n">vector_index_build</span><span class="p">(</span><span class="n">embedding</span><span class="p">,</span> <span class="nb">id</span><span class="p">,</span> <span class="s1">'ivf_flat'</span><span class="p">,</span> <span class="s1">'cosine'</span><span class="p">,</span>
+        <span class="nb">map</span><span class="p">(</span><span class="n">array</span><span class="p">[</span><span class="s1">'ivf.nprobe'</span><span class="p">],</span> <span class="n">array</span><span class="p">[</span><span class="s1">'4'</span><span class="p">]))</span>
+<span class="n">FROM</span> <span class="n">items</span>
+<span class="n">GROUP</span> <span class="n">BY</span> <span class="n">cluster_id</span><span class="p">;</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="py function">
 <dt class="sig sig-object py" id="vector_index_pack">
 <span class="sig-name descname"><span class="pre">vector_index_pack</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">cluster_id</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">cluster_centroid</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">metric</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">varbinary</span></span></span><a class="headerlink" href="#vector_index_pack" title="Link to this definition">¶</a></dt>
 <dd><p>Packs the centroids of <code class="docutils literal notranslate"><span class="pre">n</span></code> clusters into a vector index codec: a
-<code class="docutils literal notranslate"><span class="pre">'flat'</span></code> local index over the centroids, as <code class="xref py py-func docutils literal notranslate"><span class="pre">vector_index_build()</span></code>
+<code class="docutils literal notranslate"><span class="pre">'flat'</span></code> local index over the centroids, as <a class="reference internal" href="#vector_index_build" title="vector_index_build"><code class="xref py py-func docutils literal notranslate"><span class="pre">vector_index_build()</span></code></a>
 writes it, with each cluster’s id as its centroid’s id.</p>
 <ul class="simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">cluster_id</span></code> (BIGINT): ids must be 0 to <code class="docutils literal notranslate"><span class="pre">n</span> <span class="pre">-</span> <span class="pre">1</span></code>, each once.</p></li>
@@ -1347,6 +1403,7 @@ result does not depend on the order rows arrive in.</p>
 </ul>
 </li>
 <li><a class="reference internal" href="#vector-index-aggregate-functions">Vector Index Aggregate Functions</a><ul>
+<li><a class="reference internal" href="#vector_index_build"><code class="docutils literal notranslate"><span class="pre">vector_index_build()</span></code></a></li>
 <li><a class="reference internal" href="#vector_index_pack"><code class="docutils literal notranslate"><span class="pre">vector_index_pack()</span></code></a></li>
 </ul>
 </li>
