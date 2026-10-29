@@ -220,7 +220,12 @@ if(VELOX_ENABLE_GEO)
 endif()
 
 if(VELOX_ENABLE_FAISS)
-  add_executable(velox_exec_VectorSearchJoinTest VectorSearchJoinTest.cpp Main.cpp)
+  add_executable(
+    velox_exec_VectorSearchJoinTest
+    VectorSearchJoinTest.cpp
+    VectorSearchTest.cpp
+    Main.cpp
+  )
   add_test(
     NAME velox_exec_VectorSearchJoinTest
     COMMAND velox_exec_VectorSearchJoinTest

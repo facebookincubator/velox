@@ -123,6 +123,11 @@ class PlanBuilder {
 
   virtual ~PlanBuilder() = default;
 
+  /// Returns an empty PlanBuilder that shares this builder's
+  /// PlanNodeIdGenerator, memory pool and parse options, to build another
+  /// input of the same plan, e.g. a join's build side.
+  PlanBuilder newPlan() const;
+
   static constexpr const std::string_view kHiveDefaultConnectorId{"test-hive"};
   static constexpr const std::string_view kTpchDefaultConnectorId{"test-tpch"};
   static constexpr const std::string_view kTpcdsDefaultConnectorId{

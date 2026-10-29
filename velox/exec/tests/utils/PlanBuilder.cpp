@@ -69,6 +69,13 @@ std::shared_ptr<HiveBucketProperty> buildHiveBucketProperty(
 }
 } // namespace
 
+PlanBuilder PlanBuilder::newPlan() const {
+  PlanBuilder builder(planNodeIdGenerator_, pool_);
+  builder.options_ = options_;
+  builder.filtersAsNode_ = filtersAsNode_;
+  return builder;
+}
+
 PlanBuilder& PlanBuilder::tableScan(
     const RowTypePtr& outputType,
     const std::vector<std::string>& subfieldFilters,
