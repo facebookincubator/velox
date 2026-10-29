@@ -2026,6 +2026,52 @@ PlanBuilder& PlanBuilder::spatialJoin(
   return *this;
 }
 
+PlanBuilder& PlanBuilder::vectorSearchJoin(
+    const std::vector<std::string>& leftKeys,
+    const std::vector<std::string>& rightKeys,
+    const core::PlanNodePtr& right,
+    const std::string& probeEmbedding,
+    const std::string& buildIndex,
+    int64_t k,
+    const std::vector<std::string>& outputLayout,
+    const std::optional<std::string>& id,
+    const std::optional<std::string>& score,
+    core::JoinType joinType,
+    std::vector<std::pair<std::string, std::string>> searchOptions,
+    common::vectorindex::VectorIndexMetric metric) {
+  VELOX_CHECK_NOT_NULL(planNode_, "VectorSearchJoin cannot be the source node");
+  const auto& probeType = planNode_->outputType();
+  const auto& buildType = right->outputType();
+  const auto inputType = concat(probeType, buildType);
+  std::vector<TypePtr> types;
+  for (const auto& name : outputLayout) {
+    if (name == id) {
+      types.push_back(BIGINT());
+    } else if (name == score) {
+      types.push_back(REAL());
+    } else {
+      types.push_back(inputType->findChild(name));
+    }
+  }
+
+  planNode_ = std::make_shared<core::VectorSearchJoinNode>(
+      nextPlanNodeId(),
+      joinType,
+      fields(probeType, leftKeys),
+      fields(buildType, rightKeys),
+      field(probeType, probeEmbedding),
+      field(buildType, buildIndex),
+      metric,
+      k,
+      std::move(searchOptions),
+      id,
+      score,
+      std::move(planNode_),
+      right,
+      ROW(outputLayout, std::move(types)));
+  return *this;
+}
+
 namespace {
 core::TypedExprPtr removeCastTypedExpr(const core::TypedExprPtr& expr) {
   core::TypedExprPtr convertedTypedExpr = expr;

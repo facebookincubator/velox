@@ -499,6 +499,42 @@ TEST_F(PlanNodeToStringTest, nestedLoopJoin) {
       plan->toString(true, false));
 }
 
+TEST_F(PlanNodeToStringTest, vectorSearchJoin) {
+  auto plan =
+      PlanBuilder()
+          .values({makeRowVector(
+              {"t0", "t1"},
+              {
+                  makeFlatVector<int64_t>({1}),
+                  makeArrayVector<float>({{1, 0}}),
+              })})
+          .vectorSearchJoin(
+              {"t0"},
+              {"u0"},
+              PlanBuilder()
+                  .values({makeRowVector(
+                      {"u0", "u1"},
+                      {
+                          makeFlatVector<int64_t>({1}),
+                          makeFlatVector<std::string>({"a"}, VARBINARY()),
+                      })})
+                  .planNode(),
+              "t1",
+              "u1",
+              /*k=*/10,
+              {"t0", "id", "score"},
+              "id",
+              "score",
+              core::JoinType::kLeft,
+              {{"ivf.nprobe", "4"}})
+          .planNode();
+
+  ASSERT_EQ("-- VectorSearchJoin[1]\n", plan->toString());
+  ASSERT_EQ(
+      "-- VectorSearchJoin[1][LEFT t0=u0, t1 nearest in u1 (cosine), k: 10, ivf.nprobe: 4] -> t0:BIGINT, id:BIGINT, score:REAL\n",
+      plan->toString(true, false));
+}
+
 TEST_F(PlanNodeToStringTest, orderBy) {
   auto plan = PlanBuilder()
                   .values({data_})

@@ -12,20 +12,53 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# The vector search join plan node, which builds without FAISS, holds and
+# validates these settings.
 velox_add_library(
-  velox_vector_index
-  VectorIndexCodec.cpp
+  velox_vector_index_settings
+  LocalVectorIndexOptions.cpp
   VectorIndexMetric.cpp
+  VectorIndexType.cpp
   HEADERS
-  VectorIndexCodec.h
+  LocalVectorIndexOptions.h
   VectorIndexMetric.h
+  VectorIndexType.h
 )
 
 velox_link_libraries(
-  velox_vector_index
+  velox_vector_index_settings
   velox_enum_declare
   velox_enum_define
   velox_exception
   Folly::folly
-  FAISS::faiss
 )
+
+if(VELOX_ENABLE_FAISS)
+  find_package(OpenMP REQUIRED)
+
+  velox_add_library(
+    velox_vector_index
+    Embeddings.cpp
+    LocalVectorIndex.cpp
+    HEADERS
+    CallbackWriter.h
+    Embeddings.h
+    LocalVectorIndex.h
+    SingleThreadedFaiss.h
+  )
+
+  velox_link_libraries(
+    velox_vector_index
+    velox_vector_index_settings
+    velox_enum_declare
+    velox_enum_define
+    velox_exception
+    Folly::folly
+    FAISS::faiss
+    OpenMP::OpenMP_CXX
+  )
+
+  if(${VELOX_BUILD_TESTING})
+    add_subdirectory(tests)
+  endif()
+endif()
