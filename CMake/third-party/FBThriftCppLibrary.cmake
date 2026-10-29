@@ -156,6 +156,8 @@ function(add_fbthrift_cpp_library LIB_NAME THRIFT_FILE)
       ${ARG_DEPENDS}
       FBThrift::thriftcpp2
       Folly::folly
+      mvfst::mvfst_server_async_tran
+      mvfst::mvfst_server
       ${Xxhash_LIBRARY}
   )
 
