@@ -104,11 +104,11 @@ class LocalExchangeQueue {
   /// Called by a producer to indicate the producer pipeline has been drained
   /// under barrier processing. Updates the producer's queue-local round stamp,
   /// which must start at zero and be passed to noMoreData() on completion.
-  void drain(uint64_t& lastArrivedRound);
+  void drain(uint64_t& lastDrainRound);
 
   /// Called by a producer to indicate that no more data will be added.
   /// Each producer calls this once, with its last drain round (zero if none).
-  void noMoreData(uint64_t lastArrivedRound);
+  void noMoreData(uint64_t lastDrainRound);
 
   /// Used by a consumer to fetch some data. Returns kNotBlocked and sets data
   /// to nullptr if all data has been fetched and all producers are done
@@ -148,7 +148,8 @@ class LocalExchangeQueue {
   bool testAndClearDrainedLocked();
 
   bool allProducersArrivedLocked() const {
-    return noMoreProducers_ && numArrivedProducers_ == numProducers_;
+    return noMoreProducers_ &&
+        numDrainedProducers_ + numUndrainedFinishedProducers_ == numProducers_;
   }
 
   const std::shared_ptr<LocalExchangeMemoryManager> memoryManager_;
@@ -163,9 +164,11 @@ class LocalExchangeQueue {
   int numProducers_{0};
   bool noMoreProducers_{false};
   int numFinishedProducers_{0};
-  // Includes permanently finished producers in every round. Reset to the
-  // finished count when the consumer receives the round boundary in next().
-  int numArrivedProducers_{0};
+  // Producers that drained in this round, even if they subsequently finished.
+  int numDrainedProducers_{0};
+  // Finished producers that did not drain in this round, including those that
+  // finished in earlier rounds. Disjoint from numDrainedProducers_.
+  int numUndrainedFinishedProducers_{0};
   uint64_t currentRound_{1};
   bool closed_{false};
 };
@@ -327,7 +330,7 @@ class LocalPartition : public Operator {
   std::vector<VectorPtr> partitionBuffers_;
   const bool partitionBufferPreserveEncoding_;
   // Consumers may advance their queues to the next round independently.
-  std::vector<uint64_t> lastArrivedRounds_;
+  std::vector<uint64_t> lastDrainRounds_;
 };
 
 } // namespace facebook::velox::exec

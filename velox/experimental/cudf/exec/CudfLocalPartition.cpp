@@ -298,7 +298,7 @@ void CudfLocalPartition::doNoMoreInput() {
   Operator::noMoreInput();
   for (const auto& queue : queues_) {
     // This producer does not send drain notifications.
-    queue->noMoreData(/*lastArrivedRound=*/0);
+    queue->noMoreData(/*lastDrainRound=*/0);
   }
 }
 
