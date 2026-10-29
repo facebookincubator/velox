@@ -13,7 +13,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include <folly/ScopeGuard.h>
+
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/functions/sparksql/SparkQueryConfig.h"
 #include "velox/functions/sparksql/tests/SparkFunctionBaseTest.h"
 #include "velox/type/Type.h"
 
@@ -143,69 +146,104 @@ TEST_F(SplitTest, basic) {
 }
 
 TEST_F(SplitTest, emptyDelimiter) {
-  auto numRows = 4;
-  auto input = std::vector<std::string>{
-      {"I,he,she,they"}, // Simple
-      {"one,,,four,"}, // Empty strings
-      {"a\xED\xA0@123"}, // Not a well-formed UTF-8 string
-      {""}, // The whole string is empty
+  const auto setLegacySplitEmptyPattern = [&](bool legacy) {
+    queryCtx_->testingOverrideConfigUnsafe(
+        {{SparkQueryConfig::qualify(SparkQueryConfig::kLegacySplitEmptyPattern),
+          legacy ? "true" : "false"}});
   };
-  auto expected = std::vector<std::vector<std::string>>({
+  SCOPE_EXIT {
+    queryCtx_->testingOverrideConfigUnsafe({});
+  };
+
+  const auto numRows = 4;
+  const std::vector<std::string> input{
+      "I,he,she,they", // Simple
+      "one,,,four,", // Empty strings
+      "a\xED\xA0@123", // Not a well-formed UTF-8 string
+      "", // The whole string is empty
+  };
+  const std::vector<std::vector<std::string>> allChars{
       {"I", ",", "h", "e", ",", "s", "h", "e", ",", "t", "h", "e", "y"},
       {"o", "n", "e", ",", ",", ",", "f", "o", "u", "r", ","},
       {"a", "\xED\xA0", "@", "1", "2", "3"},
       {""},
-  });
-
-  // No limit provided.
-  testSplit(input, "", std::nullopt, numRows, expected);
-
-  // Limit <= 0.
-  testSplit(input, "", -1, numRows, expected);
-
-  // High limit, the limit greater than the input string size.
-  testSplit(input, "", 20, numRows, expected);
-
-  // Small limit, the limit is smaller than or equals to input string size.
-  expected = {
-      {"I", ",", "h"},
-      {"o", "n", "e"},
-      {"a", "\xED\xA0", "@"},
-      {""},
   };
-  testSplit(input, "", 3, numRows, expected);
-
-  // limit = 1.
-  expected = {
-      {"I"},
-      {"o"},
-      {"a"},
-      {""},
+  const std::vector<std::string> nonAsciiInput{
+      "синяя赤いトマト緑の",
+      "Hello世界🙂",
+      "a\xED\xA0@123", // Not a well-formed UTF-8 string
+      "",
   };
-  testSplit(input, "", 1, numRows, expected);
-
-  // Non-ascii, empty delimiter.
-  input = std::vector<std::string>{
-      {"синяя赤いトマト緑の"},
-      {"Hello世界🙂"},
-      {"a\xED\xA0@123"}, // Not a well-formed UTF-8 string
-      {""},
-  };
-  expected = {
+  const std::vector<std::vector<std::string>> nonAsciiAllChars{
       {"с", "и", "н", "я", "я", "赤", "い", "ト", "マ", "ト", "緑", "の"},
       {"H", "e", "l", "l", "o", "世", "界", "🙂"},
       {"a", "\xED\xA0", "@", "1", "2", "3"},
       {""},
   };
-  testSplit(input, "", std::nullopt, numRows, expected);
 
-  expected = {
+  // A limit smaller than the number of characters drops the rest of the
+  // input in legacy mode, and keeps it in the last element otherwise.
+  const std::vector<std::vector<std::string>> limit3Legacy{
+      {"I", ",", "h"},
+      {"o", "n", "e"},
+      {"a", "\xED\xA0", "@"},
+      {""},
+  };
+  const std::vector<std::vector<std::string>> limit3{
+      {"I", ",", "he,she,they"},
+      {"o", "n", "e,,,four,"},
+      {"a", "\xED\xA0", "@123"},
+      {""},
+  };
+  const std::vector<std::vector<std::string>> limit1Legacy{
+      {"I"},
+      {"o"},
+      {"a"},
+      {""},
+  };
+  const std::vector<std::vector<std::string>> limit1{
+      {"I,he,she,they"},
+      {"one,,,four,"},
+      {"a\xED\xA0@123"},
+      {""},
+  };
+  const std::vector<std::vector<std::string>> nonAsciiLimit2Legacy{
       {"с", "и"},
       {"H", "e"},
       {"a", "\xED\xA0"},
       {""},
   };
-  testSplit(input, "", 2, numRows, expected);
+  const std::vector<std::vector<std::string>> nonAsciiLimit2{
+      {"с", "иняя赤いトマト緑の"},
+      {"H", "ello世界🙂"},
+      {"a", "\xED\xA0@123"},
+      {""},
+  };
+
+  // Legacy mode is the default.
+  testSplit(input, "", 3, numRows, limit3Legacy);
+
+  for (const bool legacy : {true, false}) {
+    SCOPED_TRACE(fmt::format("legacy: {}", legacy));
+    setLegacySplitEmptyPattern(legacy);
+
+    // No limit, a non-positive limit, or a limit that is not smaller than the
+    // number of characters returns all characters in both modes.
+    testSplit(input, "", std::nullopt, numRows, allChars);
+    testSplit(input, "", -1, numRows, allChars);
+    testSplit(input, "", 20, numRows, allChars);
+    testSplit({"hello"}, "", 5, 1, {{"h", "e", "l", "l", "o"}});
+    testSplit(nonAsciiInput, "", std::nullopt, numRows, nonAsciiAllChars);
+
+    testSplit(input, "", 3, numRows, legacy ? limit3Legacy : limit3);
+    testSplit(input, "", 1, numRows, legacy ? limit1Legacy : limit1);
+    testSplit(
+        nonAsciiInput,
+        "",
+        2,
+        numRows,
+        legacy ? nonAsciiLimit2Legacy : nonAsciiLimit2);
+  }
 }
 
 TEST_F(SplitTest, regexDelimiter) {
