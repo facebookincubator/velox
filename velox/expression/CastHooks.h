@@ -30,6 +30,10 @@ namespace facebook::velox::tz {
 class TimeZone;
 }
 
+namespace facebook::velox {
+class Type;
+}
+
 namespace facebook::velox::exec {
 
 enum PolicyType {
@@ -110,8 +114,10 @@ class CastHooks {
   /// removeWhiteSpaces.
   virtual Expected<double> castStringToDouble(const StringView& data) const = 0;
 
-  /// Trims all leading and trailing UTF8 whitespaces.
-  virtual StringView removeWhiteSpaces(const StringView& view) const = 0;
+  /// Trims leading and trailing whitespaces for string casts to 'toType'.
+  virtual StringView removeWhiteSpaces(
+      const StringView& view,
+      const Type& toType) const = 0;
 
   /// Returns the options to cast from timestamp to string.
   virtual const TimestampToStringOptions& timestampToStringOptions() const = 0;
