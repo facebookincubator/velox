@@ -54,6 +54,7 @@ add_library(
   KeyEncoding.h
   KeyChunkBuilder.h
   KeyChunkDecoder.h
+  KeyComparator.h
   KeyReader.h
   KeyCursor.h
   IndexWriter.h
@@ -106,6 +107,8 @@ target_link_libraries(
   Folly::folly
 )
 
+find_package(OpenMP REQUIRED)
+
 add_library(
   nimble_vector_index
   VectorIndex.cpp
@@ -122,12 +125,57 @@ target_link_libraries(
   nimble_vector_index_fb
   velox_buffer
   velox_memory
+  velox_time
   velox_type
   velox_vector
   FAISS::faiss
   Folly::folly
+  OpenMP::OpenMP_CXX
 )
 
 if(NIMBLE_BUILD_TESTING)
   add_subdirectory(tests)
 endif()
+
+# Moved from velox/index/CMakeLists.txt when the nimble/velox/ folder was
+# flattened.
+add_library(
+  nimble_index_projector
+  NimbleIndexProjector.cpp
+  NimbleIndexProjector.h
+  StripeStreams.cpp
+  StripeStreams.h
+)
+target_link_libraries(
+  nimble_index_projector
+  nimble_data_input
+  nimble_index
+  nimble_stream_data_writer
+  nimble_stream_slicer
+  nimble_tablet_reader
+  nimble_tablet_reader_cache
+  nimble_velox_common
+  velox_caching
+  velox_time
+  velox_key_encoder
+  velox_type
+  Folly::folly
+)
+
+add_library(
+  nimble_index_iterator
+  IndexScanCursor.cpp
+  IndexScanCursor.h
+  NimbleIterator.cpp
+  NimbleIterator.h
+  NimbleRowIterator.cpp
+)
+target_link_libraries(
+  nimble_index_iterator
+  nimble_index_projector
+  nimble_stream_reader
+  velox_buffer
+  velox_row_fast
+  velox_test_util
+  Folly::folly
+)

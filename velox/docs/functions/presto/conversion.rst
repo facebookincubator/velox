@@ -696,6 +696,18 @@ Invalid examples
   SELECT cast('nAn' as real); -- Invalid argument
   SELECT cast('nan' as real); -- Invalid argument
 
+With the :doc:`cast_string_to_floating_point_lenient_inf_nan <../../configs>`
+configuration property set to true, the C-style spellings ``inf``, ``infinity``
+and ``nan`` are accepted as well, in any letter case and with an optional sign.
+This deviates from Presto, which rejects them.
+
+::
+
+  SELECT cast('inf' as real); -- Infinity
+  SELECT cast('-INF' as double); -- -Infinity
+  SELECT cast('infinity' as real); -- Infinity
+  SELECT cast('nan' as double); -- NaN
+
 Below cases are supported in Presto, but throw in Velox.
 
 ::

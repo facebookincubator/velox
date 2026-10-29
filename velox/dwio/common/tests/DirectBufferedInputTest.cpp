@@ -342,6 +342,15 @@ TEST_F(DirectBufferedInputTest, duplicateRegionsShareCoalescedRead) {
     EXPECT_EQ(next1.value(), content.substr(123, regionSize));
     EXPECT_EQ(readFile->numReads(), 1);
 
+    if (!tinyRegion) {
+      auto* load = dynamic_cast<DirectCoalescedLoad*>(
+          input.testingCoalescedLoads()[0].get());
+      ASSERT_NE(load, nullptr);
+      ASSERT_EQ(load->requests().size(), 2);
+      EXPECT_EQ(load->requests()[0].buffer.sharedData, nullptr);
+      EXPECT_GT(load->requests()[1].buffer.ownedData.numPages(), 0);
+    }
+
     auto next2 = getNext(*stream2);
     ASSERT_TRUE(next2.has_value());
     EXPECT_EQ(next2.value(), content.substr(123, regionSize));
@@ -370,8 +379,6 @@ TEST_F(DirectBufferedInputTest, duplicateRegionsShareAllocationRead) {
   readerOptions.setDataIoStats(dataIoStats_);
   readerOptions.setMetadataIoStats(metadataIoStats_);
   readerOptions.setLoadQuantum(1 << 20);
-  readerOptions.setDirectBufferedInputSharedAllocation(true);
-
   auto& ids = fileIds();
   StringIdLease fileId(ids, "sharedAllocDup");
   StringIdLease groupId(ids, "sharedAllocDupGroup");
@@ -426,6 +433,51 @@ TEST_F(DirectBufferedInputTest, duplicateRegionsShareAllocationRead) {
   EXPECT_EQ(readFile->numReads(), kNumRegions);
 }
 
+TEST_F(DirectBufferedInputTest, largeDuplicateForcesSharedAllocation) {
+  constexpr int32_t kRegionSize = 1 << 20;
+  std::string content(kRegionSize, 'x');
+  auto readFile = std::make_shared<tests::utils::CountingReadFile>(content);
+
+  io::ReaderOptions readerOptions(pool_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
+  readerOptions.setLoadQuantum(kRegionSize);
+  auto& ids = fileIds();
+  StringIdLease fileId(ids, "largeDuplicate");
+  StringIdLease groupId(ids, "largeDuplicateGroup");
+
+  DirectBufferedInput input(
+      readFile,
+      MetricsLog::voidLog(),
+      std::move(fileId),
+      tracker_,
+      std::move(groupId),
+      dataIoStats_,
+      nullptr,
+      executor_.get(),
+      readerOptions);
+
+  auto source = input.enqueue(common::Region{0, kRegionSize}, nullptr);
+  auto duplicate = input.enqueue(common::Region{0, kRegionSize}, nullptr);
+  ASSERT_NE(source, nullptr);
+  ASSERT_NE(duplicate, nullptr);
+
+  input.load(LogType::TEST);
+  ASSERT_EQ(input.testingCoalescedLoads().size(), 1);
+
+  EXPECT_EQ(getNext(*source), content);
+
+  auto* load = dynamic_cast<DirectCoalescedLoad*>(
+      input.testingCoalescedLoads()[0].get());
+  ASSERT_NE(load, nullptr);
+  ASSERT_EQ(load->requests().size(), 2);
+  EXPECT_NE(load->requests()[0].buffer.sharedData, nullptr);
+  EXPECT_TRUE(load->requests()[1].buffer.empty());
+
+  EXPECT_EQ(getNext(*duplicate), content);
+  EXPECT_EQ(readFile->numReads(), 1);
+}
+
 // A shared-allocation stream whose region exceeds loadQuantum reads the first
 // quantum from the shared allocation and the rest into its own buffer,
 // reproducing the region intact.
@@ -450,8 +502,6 @@ TEST_F(DirectBufferedInputTest, sharedAllocationStreamCrossesQuantum) {
   readerOptions.setDataIoStats(dataIoStats_);
   readerOptions.setMetadataIoStats(metadataIoStats_);
   readerOptions.setLoadQuantum(kLoadQuantum);
-  readerOptions.setDirectBufferedInputSharedAllocation(true);
-
   auto& ids = fileIds();
   StringIdLease fileId(ids, "sharedAllocQuantum");
   StringIdLease groupId(ids, "sharedAllocQuantumGroup");
@@ -507,8 +557,6 @@ TEST_F(DirectBufferedInputTest, sharedAllocationLoadServesTinyAndDuplicates) {
   readerOptions.setDataIoStats(dataIoStats_);
   readerOptions.setMetadataIoStats(metadataIoStats_);
   readerOptions.setLoadQuantum(1 << 20);
-  readerOptions.setDirectBufferedInputSharedAllocation(true);
-
   auto& ids = fileIds();
   StringIdLease fileId(ids, "sharedAllocTiny");
   StringIdLease groupId(ids, "sharedAllocTinyGroup");
@@ -559,70 +607,6 @@ TEST_F(DirectBufferedInputTest, sharedAllocationLoadServesTinyAndDuplicates) {
   EXPECT_EQ(readFile->numReads(), kNumSmall + 1);
 }
 
-// With the shared allocation off (the default), a load whose padding would
-// otherwise clear the floor still serves every request from its own allocation
-// and returns identical bytes. Same 32-region load that
-// useSharedAllocationThreshold shows is shared-backed once enabled.
-TEST_F(DirectBufferedInputTest, sharedAllocationDisabled) {
-  constexpr int32_t kContentSize = 4 << 20; // 4MB
-  std::string content;
-  content.resize(kContentSize);
-  for (int32_t i = 0; i < kContentSize; ++i) {
-    content[i] = static_cast<char>(i % 251);
-  }
-  constexpr int32_t kRegionSize = 4'097;
-  constexpr int32_t kNumRegions = 32; // clears the floor when enabled
-
-  auto readFile = std::make_shared<tests::utils::CountingReadFile>(content);
-  io::ReaderOptions readerOptions(pool_.get());
-  readerOptions.setDataIoStats(dataIoStats_);
-  readerOptions.setMetadataIoStats(metadataIoStats_);
-  readerOptions.setLoadQuantum(1 << 20);
-  // Already the default; set explicitly so the test states its intent.
-  readerOptions.setDirectBufferedInputSharedAllocation(false);
-  auto& ids = fileIds();
-  StringIdLease fileId(ids, "sharedAllocOff");
-  StringIdLease groupId(ids, "sharedAllocOffGroup");
-  DirectBufferedInput input(
-      readFile,
-      MetricsLog::voidLog(),
-      std::move(fileId),
-      tracker_,
-      std::move(groupId),
-      dataIoStats_,
-      nullptr,
-      executor_.get(),
-      readerOptions);
-  std::vector<std::unique_ptr<SeekableInputStream>> streams;
-  streams.reserve(kNumRegions);
-  for (int32_t k = 0; k < kNumRegions; ++k) {
-    streams.push_back(input.enqueue(
-        common::Region{static_cast<uint64_t>(k) * kRegionSize, kRegionSize},
-        nullptr));
-  }
-  input.load(LogType::TEST);
-
-  // Buffers are allocated on first access, so read every stream before
-  // inspecting the load. Bytes must be unchanged by the layout.
-  for (int32_t k = 0; k < kNumRegions; ++k) {
-    auto bytes = getNext(*streams[k]);
-    ASSERT_TRUE(bytes.has_value()) << "stream " << k;
-    EXPECT_EQ(
-        bytes.value(),
-        content.substr(
-            static_cast<size_t>(k) * kRegionSize,
-            static_cast<size_t>(kRegionSize)));
-  }
-
-  auto* load = dynamic_cast<DirectCoalescedLoad*>(
-      input.testingCoalescedLoads()[0].get());
-  ASSERT_NE(load, nullptr);
-  // No request is served from the shared allocation.
-  for (const auto& request : load->requests()) {
-    EXPECT_EQ(request.buffer.sharedData, nullptr);
-  }
-}
-
 // 'useSharedAllocation' engages only when per-request page padding would waste
 // more than the shared-allocation floor (kMinPages * kPageSize = 64KB). A 4097B
 // region rounds to two pages, wasting ~4095B; ~16 such regions reach the floor.
@@ -641,7 +625,6 @@ TEST_F(DirectBufferedInputTest, useSharedAllocationThreshold) {
     readerOptions.setDataIoStats(dataIoStats_);
     readerOptions.setMetadataIoStats(metadataIoStats_);
     readerOptions.setLoadQuantum(1 << 20);
-    readerOptions.setDirectBufferedInputSharedAllocation(true);
     auto& ids = fileIds();
     StringIdLease fileId(ids, fmt::format("sharedAllocFloor{}", numRegions));
     StringIdLease groupId(
@@ -695,7 +678,6 @@ TEST_F(DirectBufferedInputTest, sharedAllocationReducesAllocations) {
   readerOptions.setDataIoStats(dataIoStats_);
   readerOptions.setMetadataIoStats(metadataIoStats_);
   readerOptions.setLoadQuantum(1 << 20);
-  readerOptions.setDirectBufferedInputSharedAllocation(true);
   auto& ids = fileIds();
   StringIdLease fileId(ids, "sharedAllocs");
   StringIdLease groupId(ids, "sharedAllocsGroup");
@@ -1408,7 +1390,9 @@ TEST_F(DirectBufferedInputTest, readGapTracking) {
         std::move(groupId),
         ioStats,
         nullptr,
-        executor_.get(),
+        // Gaps are recorded synchronously in load(). Without an executor, no
+        // prefetch outlives 'input'.
+        nullptr,
         readerOptions);
 
     for (const auto& region : testCase.regions) {

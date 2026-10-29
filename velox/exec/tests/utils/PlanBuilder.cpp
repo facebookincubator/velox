@@ -1392,7 +1392,8 @@ PlanBuilder& PlanBuilder::fixedPoint(
     std::vector<core::StateDeclarationPtr> stateDeclarations,
     std::vector<core::PlanNodePtr> plans,
     core::ConvergenceConfig convergenceConfig,
-    std::string outputStateEntry) {
+    std::string outputStateEntry,
+    bool outputOnWorkerZero) {
   VELOX_CHECK_NULL(
       planNode_, "FixedPoint is a leaf node and cannot have an input");
   planNode_ = std::make_shared<core::FixedPointNode>(
@@ -1400,7 +1401,8 @@ PlanBuilder& PlanBuilder::fixedPoint(
       std::move(stateDeclarations),
       std::move(plans),
       std::move(convergenceConfig),
-      std::move(outputStateEntry));
+      std::move(outputStateEntry),
+      outputOnWorkerZero);
   return *this;
 }
 

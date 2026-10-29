@@ -58,6 +58,15 @@ std::string_view MainlyConstantEncoding<std::string_view>::encode(
 
   const uint32_t entryCount = values.size();
 
+  if (commonElement.second == entryCount) {
+    // Every row is the common value, so the isCommon bitmap would be all-true
+    // and otherValues empty -- neither carries information. Fall back to the
+    // strictly smaller ConstantEncoding, the same downgrade slice() already
+    // performs for an all-common range.
+    return ConstantEncoding<std::string_view>::encode(
+        selection, values, buffer, options);
+  }
+
   auto* pool = &buffer.getMemoryPool();
   physicalType commonValue = commonElement.first;
   auto childStreams =

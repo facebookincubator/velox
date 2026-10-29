@@ -153,28 +153,23 @@ std::unique_ptr<Encoding> createNullableFromCustomLayout(
     const std::vector<std::optional<T>>& data,
     velox::memory::MemoryPool& pool,
     Buffer& buffer) {
-  using physicalType = typename TypeTraits<T>::physicalType;
-
-  std::vector<physicalType> nonNullValues;
+  std::vector<T> nonNullValues;
   Vector<bool> nulls(&pool);
   nulls.resize(data.size());
   for (size_t i = 0; i < data.size(); ++i) {
     nulls[i] = data[i].has_value();
     if (data[i].has_value()) {
-      nonNullValues.push_back(
-          reinterpret_cast<const physicalType&>(data[i].value()));
+      nonNullValues.push_back(data[i].value());
     }
   }
 
-  std::span<const physicalType> valuesSpan(
-      nonNullValues.data(), nonNullValues.size());
+  std::span<const T> valuesSpan(nonNullValues.data(), nonNullValues.size());
   std::span<const bool> nullsSpan(nulls.data(), nulls.size());
 
-  NullableEnc nullableEnc{.data = dataLayout};
-  EncodingLayout nullableLayout = nullableEnc;
-
+  // ReplayedEncodingSelectionPolicy::selectNullable() wraps the data layout in
+  // a Nullable parent itself.
   auto policy = std::make_unique<ReplayedEncodingSelectionPolicy<T>>(
-      nullableLayout,
+      dataLayout,
       CompressionOptions{},
       [](DataType type) -> std::unique_ptr<EncodingSelectionPolicyBase> {
         UNIQUE_PTR_FACTORY(type, TrivialNestedPolicy);

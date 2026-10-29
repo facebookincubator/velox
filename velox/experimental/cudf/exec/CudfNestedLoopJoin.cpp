@@ -242,8 +242,10 @@ void CudfNestedLoopJoinProbe::initialize() {
   // Optimize (rewrites + constant folding) the join condition before building
   // the AST so CudfFunctions never see scalar-only operand sets. This carries
   // over the constant folding the exec::ExprSet used to perform.
-  const auto optimizedCondition = expression::optimize(
-      joinNode_->joinCondition(), operatorCtx_->execCtx()->queryCtx(), pool);
+  auto* const queryCtx = operatorCtx_->execCtx()->queryCtx();
+  const auto& config = queryCtx->queryConfig();
+  const auto optimizedCondition =
+      expression::optimize(joinNode_->joinCondition(), queryCtx, pool);
   VELOX_CHECK_NOT_NULL(optimizedCondition);
 
   if (hasNonAstSubexprSpanningBothSides(
@@ -252,7 +254,8 @@ void CudfNestedLoopJoinProbe::initialize() {
     filterEvaluator_ = createCudfExpression(
         optimizedCondition,
         facebook::velox::type::concatRowTypes({probeType_, buildType_}),
-        pool);
+        pool,
+        config);
     hasFilter_ = true;
     return;
   }
@@ -268,7 +271,8 @@ void CudfNestedLoopJoinProbe::initialize() {
       buildType_,
       leftPrecomputeInstructions_,
       rightPrecomputeInstructions_,
-      pool);
+      pool,
+      config);
 
   // Set hasFilter_ only after the AST has been fully built so that a throw
   // from createAstTree() does not leave the operator marked as having a filter
@@ -326,7 +330,7 @@ void CudfNestedLoopJoinProbe::doNoMoreInput() {
   std::vector<ContinuePromise> promises;
   std::vector<std::shared_ptr<exec::Operator>> peerOperators;
 
-  if (!operatorCtx_->allPeersFinished(&peerFuture_, promises, peerOperators)) {
+  if (!operatorCtx_->allPeersArrived(&peerFuture_, promises, peerOperators)) {
     return;
   }
 
@@ -345,7 +349,7 @@ void CudfNestedLoopJoinProbe::doNoMoreInput() {
   if (!buildEmpty_ && hasFilter_) {
     auto stream = cudfGlobalStreamPool().get_stream();
 
-    // GPU stream synchronization: allPeersFinished synchronizes CPU threads
+    // GPU stream synchronization: allPeersArrived synchronizes CPU threads
     // but not GPU streams. A peer's CPU thread may have returned from
     // getOutput() while its GPU work (updating buildMatchedFlags_) is still
     // in flight. join_streams establishes GPU-side ordering.
@@ -403,7 +407,7 @@ bool CudfNestedLoopJoinProbe::isFinished() {
 exec::BlockingReason CudfNestedLoopJoinProbe::isBlocked(
     ContinueFuture* future) {
   // For right/full join: after build data is available, also block on peer
-  // probes finishing (allPeersFinished barrier in noMoreInput).
+  // probes finishing (allPeersArrived barrier in noMoreInput).
   if (isRightOrFullJoin() && buildData_.has_value()) {
     if (!peerFuture_.valid()) {
       return exec::BlockingReason::kNotBlocked;

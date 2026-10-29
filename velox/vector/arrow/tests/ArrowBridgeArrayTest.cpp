@@ -23,6 +23,7 @@
 #include "velox/common/base/Nulls.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/core/QueryCtx.h"
+#include "velox/vector/BaseVector.h"
 #include "velox/vector/arrow/Bridge.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
@@ -877,6 +878,76 @@ TEST_F(ArrowBridgeArrayExportTest, arrayGap) {
   EXPECT_EQ(values.Value(3), 5);
 }
 
+TEST_F(ArrowBridgeArrayExportTest, allNullTimestampValues) {
+  constexpr vector_size_t kSize = 5;
+  auto nulls = allocateNulls(kSize, pool_.get(), bits::kNull);
+  auto vec = std::make_shared<FlatVector<Timestamp>>(
+      pool_.get(),
+      TIMESTAMP(),
+      nulls,
+      kSize,
+      /*values=*/nullptr,
+      std::vector<BufferPtr>{});
+
+  ArrowSchema schema;
+  ArrowArray data;
+  velox::exportToArrow(vec, schema, options_);
+  velox::exportToArrow(vec, data, pool_.get(), options_);
+
+  ASSERT_NE(nullptr, data.buffers[1]);
+  const auto* rawValues = static_cast<const int64_t*>(data.buffers[1]);
+  for (vector_size_t i = 0; i < kSize; ++i) {
+    EXPECT_EQ(rawValues[i], 0);
+  }
+
+  ASSERT_OK_AND_ASSIGN(auto type, arrow::ImportType(&schema));
+  ASSERT_OK_AND_ASSIGN(auto array, arrow::ImportArray(&data, type));
+  ASSERT_OK(array->ValidateFull());
+  EXPECT_EQ(array->length(), kSize);
+  EXPECT_EQ(array->null_count(), kSize);
+}
+
+TEST_F(ArrowBridgeArrayExportTest, arrayGapAllNullBigintChild) {
+  constexpr vector_size_t kElementCount = 5;
+  auto nulls = allocateNulls(kElementCount, pool_.get(), bits::kNull);
+  auto elements = std::make_shared<FlatVector<int64_t>>(
+      pool_.get(),
+      BIGINT(),
+      nulls,
+      kElementCount,
+      /*values=*/nullptr,
+      std::vector<BufferPtr>{});
+  // The gap between the two arrays forces the child selection to change.
+  auto offsets = makeBuffer<vector_size_t>({0, 3});
+  auto sizes = makeBuffer<vector_size_t>({2, 2});
+  auto vec = std::make_shared<ArrayVector>(
+      pool_.get(), ARRAY(BIGINT()), nullptr, 2, offsets, sizes, elements);
+
+  ArrowSchema schema;
+  ArrowArray data;
+  velox::exportToArrow(vec, schema, options_);
+  velox::exportToArrow(vec, data, pool_.get(), options_);
+
+  ASSERT_EQ(1, data.n_children);
+  ASSERT_NE(nullptr, data.children[0]);
+  ASSERT_NE(nullptr, data.children[0]->buffers[1]);
+  const auto* rawValues =
+      static_cast<const int64_t*>(data.children[0]->buffers[1]);
+  for (vector_size_t i = 0; i < 4; ++i) {
+    EXPECT_EQ(rawValues[i], 0);
+  }
+
+  ASSERT_OK_AND_ASSIGN(auto type, arrow::ImportType(&schema));
+  ASSERT_OK_AND_ASSIGN(auto array, arrow::ImportArray(&data, type));
+  ASSERT_OK(array->ValidateFull());
+  ASSERT_EQ(*array->type(), *arrow::list(arrow::int64()));
+  const auto& listArray = static_cast<const arrow::ListArray&>(*array);
+  const auto& values =
+      static_cast<const arrow::Int64Array&>(*listArray.values());
+  EXPECT_EQ(values.length(), 4);
+  EXPECT_EQ(values.null_count(), 4);
+}
+
 TEST_F(ArrowBridgeArrayExportTest, arrayReorder) {
   auto elements = vectorMaker_.flatVector<int64_t>({1, 2, 3, 4, 5});
   elements->setNull(3, true);
@@ -1426,6 +1497,34 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
          std::nullopt});
   }
 
+  void testImportDecimal32() {
+    const auto type = DECIMAL(9, 2);
+    const std::vector<std::vector<std::optional<int32_t>>> inputs = {
+        {},
+        {0, 1, -1, 999'999'999, -999'999'999},
+        {12'345, std::nullopt, -12'345},
+        {std::nullopt, std::nullopt}};
+    for (const auto& input : inputs) {
+      ArrowContextHolder holder;
+      auto array = fillArrowArray(input, holder);
+      if (array.null_count == array.length) {
+        holder.buffers[1] = nullptr;
+      }
+      auto schema = makeArrowSchema("d:9,2,32");
+      auto actual = importFromArrow(schema, array, pool_.get());
+      std::vector<std::optional<int64_t>> expectedValues(
+          input.begin(), input.end());
+      auto expected = vectorMaker_.flatVectorNullable(expectedValues, type);
+      facebook::velox::test::assertEqualVectors(expected, actual);
+      const auto* rawValues = actual->asFlatVector<int64_t>()->rawValues();
+      for (vector_size_t i = 0; i < actual->size(); ++i) {
+        if (!input[i].has_value()) {
+          EXPECT_EQ(rawValues[i], 0);
+        }
+      }
+    }
+  }
+
   void testTimestampUtcRoundtrip() {
     auto roundtripVector = [&](const VectorPtr& input) {
       ArrowSchema schema;
@@ -1826,6 +1925,25 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
     testImportRowEmpty();
   }
 
+  // Widths 4 and 16 cover inlined and buffer-backed StringViews.
+  void testImportFixedSizeBinary() {
+    for (const int32_t width : {4, 16}) {
+      const std::vector<std::optional<std::string>> values = {
+          std::string(width, 'a'), std::nullopt, std::string(width, 'b')};
+      arrow::FixedSizeBinaryBuilder builder(arrow::fixed_size_binary(width));
+      for (const auto& value : values) {
+        ASSERT_OK(value ? builder.Append(*value) : builder.AppendNull());
+      }
+      std::shared_ptr<arrow::Array> array;
+      ASSERT_OK(builder.Finish(&array));
+
+      VectorPtr vector;
+      toVeloxVector(*array, vector);
+      test::assertEqualVectors(
+          vectorMaker_.flatVectorNullable(values, VARBINARY()), vector);
+    }
+  }
+
  private:
   void toVeloxVector(const arrow::Array& array, VectorPtr& outVector) {
     ArrowSchema schema;
@@ -2154,6 +2272,10 @@ TEST_F(ArrowBridgeArrayImportAsViewerTest, scalar) {
   testImportScalar();
 }
 
+TEST_F(ArrowBridgeArrayImportAsViewerTest, decimal32) {
+  testImportDecimal32();
+}
+
 TEST_F(ArrowBridgeArrayImportAsViewerTest, timestampUtc) {
   testTimestampUtcRoundtrip();
 }
@@ -2174,6 +2296,10 @@ TEST_F(ArrowBridgeArrayImportAsViewerTest, string64) {
 
 TEST_F(ArrowBridgeArrayImportAsViewerTest, stringview) {
   testImportStringView();
+}
+
+TEST_F(ArrowBridgeArrayImportAsViewerTest, fixedSizeBinary) {
+  testImportFixedSizeBinary();
 }
 
 TEST_F(ArrowBridgeArrayImportAsViewerTest, nullType) {
@@ -2273,6 +2399,10 @@ TEST_F(ArrowBridgeArrayImportAsOwnerTest, scalar) {
   testImportScalar();
 }
 
+TEST_F(ArrowBridgeArrayImportAsOwnerTest, decimal32) {
+  testImportDecimal32();
+}
+
 TEST_F(ArrowBridgeArrayImportAsOwnerTest, timestampUtc) {
   testTimestampUtcRoundtrip();
 }
@@ -2293,6 +2423,10 @@ TEST_F(ArrowBridgeArrayImportAsOwnerTest, string64) {
 
 TEST_F(ArrowBridgeArrayImportAsOwnerTest, stringview) {
   testImportStringView();
+}
+
+TEST_F(ArrowBridgeArrayImportAsOwnerTest, fixedSizeBinary) {
+  testImportFixedSizeBinary();
 }
 
 TEST_F(ArrowBridgeArrayImportAsOwnerTest, nullType) {

@@ -21,6 +21,7 @@
 #include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
 #include "velox/dwio/nimble/encodings/common/EncodingUtils.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelection.h"
+#include "velox/dwio/nimble/encodings/subintsplit/Format.h"
 
 namespace facebook::nimble::tools {
 namespace {
@@ -71,6 +72,7 @@ void extractCompressionType(
     case EncodingType::ALPRD:
     case EncodingType::Fsst:
     case EncodingType::PFOR:
+    case EncodingType::PartitionedEliasFano:
     case EncodingType::SimdForBitpack:
     case EncodingType::BitRangeSplit:
     // SubIntSplit integration is disabled; it carries no separate compression
@@ -142,9 +144,6 @@ void traverseEncodings(
     case EncodingType::DeltaBlock:
     case EncodingType::EliasFano:
     case EncodingType::SimdForBitpack:
-    // SubIntSplit integration is disabled; treat it as having no nested
-    // encoding to traverse.
-    case EncodingType::SubIntSplit:
     // The wrapped encoding is carried verbatim rather than as a nested
     // stream, so there is nothing to traverse into here.
     case EncodingType::Slice: {
@@ -168,6 +167,28 @@ void traverseEncodings(
                 useVarintRowCount,
                 visitor);
           });
+      break;
+    }
+    case EncodingType::SubIntSplit: {
+      const char* position = stream.data() + dataOffset;
+      const auto streamHeader = subintsplit::readStreamHeader(position);
+      std::vector<subintsplit::SectionHeader> sectionHeaders;
+      sectionHeaders.reserve(streamHeader.numSections);
+      for (uint8_t section{0}; section < streamHeader.numSections; ++section) {
+        sectionHeaders.push_back(subintsplit::readSectionHeader(position));
+      }
+      for (uint8_t section{0}; section < streamHeader.numSections; ++section) {
+        const auto& header = sectionHeaders[section];
+        traverseEncodings(
+            {position, header.encodedSize},
+            level + 1,
+            section,
+            "Bits" + std::to_string(header.range.bitStart) + "-" +
+                std::to_string(header.range.bitEnd),
+            useVarintRowCount,
+            visitor);
+        position += header.encodedSize;
+      }
       break;
     }
     case EncodingType::ALPRD: {
@@ -266,6 +287,27 @@ void traverseEncodings(
             level + 1,
             2,
             "DataOffsets",
+            useVarintRowCount,
+            visitor);
+      }
+      break;
+    }
+    case EncodingType::PartitionedEliasFano: {
+      // Layout after the common prefix: numPartitions and numGroups
+      // [varints], then the partition offsets, the partition bases and the
+      // partition group offsets, each a nested stream preceded by a varint
+      // size. The per-group Elias-Fano streams follow.
+      auto body = stream.substr(dataOffset);
+      encoding::readVarint32(body); // numPartitions
+      encoding::readVarint32(body); // numGroups
+      uint32_t childIndex{0};
+      for (const auto* name :
+           {"PartitionOffsets", "PartitionBases", "PartitionGroupOffsets"}) {
+        traverseEncodings(
+            encoding::readLengthPrefixedBytes(body),
+            level + 1,
+            childIndex++,
+            name,
             useVarintRowCount,
             visitor);
       }

@@ -32,6 +32,9 @@ struct ArrowArrayStream;
 namespace facebook::velox::core {
 
 class PlanNodeVisitor;
+class FixedPointNode;
+class StateSourceNode;
+class StateHashJoinNode;
 class PlanNodeVisitorContext;
 
 using PlanNodeId = std::string;
@@ -221,7 +224,9 @@ class PlanNode : public ISerializable {
   /// Returns true if this is a leaf plan node and corresponding operator
   /// requires an ExchangeClient to retrieve data. For instance, TableScanNode
   /// is a leaf node that doesn't require an ExchangeClient. But ExchangeNode is
-  /// a leaf node that requires an ExchangeClient.
+  /// a leaf node that requires an ExchangeClient. Except for MergeExchangeNode,
+  /// the task forwards the node's splits, which must be RemoteConnectorSplits,
+  /// to the client.
   virtual bool requiresExchangeClient() const {
     return false;
   }
@@ -323,6 +328,14 @@ class PlanNode : public ISerializable {
   static const PlanNode* findFirstNode(
       const PlanNode* root,
       const std::function<bool(const PlanNode* node)>& predicate);
+
+  /// Returns the first node of type T in the tree under 'root', or nullptr.
+  template <typename T>
+  static const T* findFirstNode(const PlanNode* root) {
+    const PlanNode* node = findFirstNode(
+        root, [](const PlanNode* candidate) { return candidate->is<T>(); });
+    return node == nullptr ? nullptr : node->as<T>();
+  }
 
   /// @return PlanNode with matching ID or nullptr if not found.
   static const PlanNode* findNodeById(
@@ -6639,6 +6652,15 @@ class PlanNodeVisitor {
       const = 0;
 
   virtual void visit(const MixedUnionNode& node, PlanNodeVisitorContext& ctx)
+      const = 0;
+
+  virtual void visit(const FixedPointNode& node, PlanNodeVisitorContext& ctx)
+      const = 0;
+
+  virtual void visit(const StateSourceNode& node, PlanNodeVisitorContext& ctx)
+      const = 0;
+
+  virtual void visit(const StateHashJoinNode& node, PlanNodeVisitorContext& ctx)
       const = 0;
 
   /// Used to visit custom PlanNodes that extend the set provided by Velox.

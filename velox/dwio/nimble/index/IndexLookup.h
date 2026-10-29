@@ -32,8 +32,9 @@
 #include "velox/common/Casts.h"
 #include "velox/common/base/RuntimeMetrics.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
+#include "velox/dwio/nimble/common/RowRange.h"
+#include "velox/dwio/nimble/index/KeyComparator.h"
 #include "velox/dwio/nimble/index/KeyCursor.h"
-#include "velox/dwio/nimble/velox/RowRange.h"
 #include "velox/serializers/KeyEncoder.h"
 
 namespace facebook::nimble {
@@ -96,6 +97,8 @@ class IndexLookup {
     const velox::FileHandle* fileHandle{nullptr};
     /// Data cache for index metadata. Set with fileHandle for cached path.
     velox::cache::AsyncDataCache* cache{nullptr};
+    /// Maximum decompressed index metadata size admitted to the data cache.
+    std::optional<uint32_t> maxCacheEntrySize{std::nullopt};
     /// If true, pins parsed index objects in the index cache with strong
     /// references so they are never evicted.
     bool pinIndex{false};
@@ -105,6 +108,11 @@ class IndexLookup {
     /// pinIndex=true; otherwise preloaded chunks would be evicted on the
     /// first lookup.
     bool preloadIndex{false};
+
+    /// Order of the encoded keys of a cluster index, or null for bytewise
+    /// order. The cluster index factory sets it from
+    /// ClusterIndexFactory::keyComparator(), which owns the comparator.
+    const KeyComparator* keyComparator{nullptr};
 
     /// Validates options consistency.
     void validate() const;

@@ -157,6 +157,24 @@ TEST_F(ComparisonsTest, between) {
   }
 }
 
+TEST_F(ComparisonsTest, betweenBool) {
+  const auto between = [&](std::optional<bool> value,
+                           std::optional<bool> low,
+                           std::optional<bool> high) {
+    return evaluateOnce<bool>("c0 between c1 and c2", value, low, high);
+  };
+
+  EXPECT_EQ(true, between(false, false, true));
+  EXPECT_EQ(true, between(true, false, true));
+  EXPECT_EQ(true, between(false, false, false));
+  EXPECT_EQ(true, between(true, true, true));
+  EXPECT_EQ(false, between(true, false, false));
+  EXPECT_EQ(false, between(false, true, true));
+  EXPECT_EQ(std::nullopt, between(std::nullopt, false, true));
+  EXPECT_EQ(std::nullopt, between(true, std::nullopt, true));
+  EXPECT_EQ(std::nullopt, between(true, false, std::nullopt));
+}
+
 TEST_F(ComparisonsTest, betweenVarchar) {
   using S = StringView;
 

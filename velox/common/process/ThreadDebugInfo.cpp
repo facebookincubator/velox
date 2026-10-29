@@ -18,6 +18,7 @@
 
 #include <folly/debugging/symbolizer/SignalHandler.h>
 #include <glog/logging.h>
+#include <unistd.h>
 
 namespace facebook::velox::process {
 thread_local const ThreadDebugInfo* threadDebugInfo = nullptr;

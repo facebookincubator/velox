@@ -20,6 +20,7 @@ target_link_libraries(
   nimble_writer
   nimble_serializer
   nimble_deserializer
+  nimble_serializer_dump_lib
   nimble_serializer_options
   nimble_velox_schema_serialization
   velox_memory

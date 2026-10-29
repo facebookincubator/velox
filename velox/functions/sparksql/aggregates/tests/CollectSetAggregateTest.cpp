@@ -465,5 +465,60 @@ TEST_F(CollectSetAggregateTest, respectNullsGroupBy) {
       {expected});
 }
 
+TEST_F(CollectSetAggregateTest, mergeExtract) {
+  auto data = makeRowVector({
+      makeFlatVector<int16_t>({1, 1, 2, 2, 2}),
+      makeFlatVector<int32_t>({1, 1, 3, 2, 3}),
+  });
+
+  auto expected = makeRowVector({
+      makeFlatVector<int16_t>({1, 2}),
+      makeArrayVectorFromJson<int32_t>({"[1]", "[2, 3]"}),
+  });
+
+  auto plan = exec::test::PlanBuilder()
+                  .values({data})
+                  .singleAggregation({"c0"}, {"collect_set_partial(c1)"})
+                  .singleAggregation({"c0"}, {"collect_set_merge_extract(a0)"})
+                  .project({"c0", "spark_array_sort(a0)"})
+                  .planNode();
+
+  exec::test::AssertQueryBuilder(plan).assertResults(expected);
+}
+
+TEST_F(CollectSetAggregateTest, mergeExtractFloatingPoint) {
+  const auto nan = std::numeric_limits<double>::quiet_NaN();
+  std::vector<RowVectorPtr> data{
+      makeRowVector({
+          makeFlatVector<int16_t>({1, 1, 1, 1}),
+          makeFlatVector<double>({nan, nan, -0.0, 1.0}),
+      }),
+      makeRowVector({
+          makeFlatVector<int16_t>({1, 1, 1}),
+          makeFlatVector<double>({std::nan("1"), 0.0, 1.0}),
+      }),
+  };
+
+  auto expected = makeRowVector({
+      makeFlatVector<int16_t>({1}),
+      makeArrayVector<double>({{0.0, 1.0, nan, nan, nan}}),
+  });
+
+  auto plan = exec::test::PlanBuilder()
+                  .values(data)
+                  .singleAggregation({"c0"}, {"collect_set(c1)"})
+                  .project({"c0", "spark_array_sort(a0)"})
+                  .planNode();
+  exec::test::AssertQueryBuilder(plan).assertResults(expected);
+
+  plan = exec::test::PlanBuilder()
+             .values(data)
+             .singleAggregation({"c0"}, {"collect_set_partial(c1)"})
+             .singleAggregation({"c0"}, {"collect_set_merge_extract(a0)"})
+             .project({"c0", "spark_array_sort(a0)"})
+             .planNode();
+  exec::test::AssertQueryBuilder(plan).assertResults(expected);
+}
+
 } // namespace
 } // namespace facebook::velox::functions::aggregate::sparksql::test

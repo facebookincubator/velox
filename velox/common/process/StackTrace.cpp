@@ -25,6 +25,7 @@
 #endif
 
 #include <algorithm>
+#include <cstdlib>
 #include <fstream>
 
 #include <fmt/format.h>
@@ -142,7 +143,9 @@ std::string StackTrace::log(
   msg += toString();
   msg += "\n";
 
-  std::string tracefn = "/tmp/stacktrace." + pid + ".log";
+  const char* tmpDir = std::getenv("TMPDIR");
+  std::string tracefn =
+      fmt::format("{}/stacktrace.{}.log", tmpDir ? tmpDir : "/tmp", pid);
   std::ofstream f(tracefn.c_str());
   if (f) {
     f << msg;

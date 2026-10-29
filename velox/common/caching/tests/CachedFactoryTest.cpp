@@ -19,6 +19,7 @@
 #include "folly/Random.h"
 #include "folly/executors/CPUThreadPoolExecutor.h"
 #include "folly/executors/thread_factory/NamedThreadFactory.h"
+#include "folly/stop_watch.h"
 #include "folly/synchronization/Latch.h"
 #include "gtest/gtest.h"
 #include "velox/common/base/tests/GTestUtils.h"
@@ -487,8 +488,8 @@ TEST(CachedFactoryTest, fuzzer) {
     for (int i = 0; i < numThreads; ++i) {
       threads.emplace_back([&factory, i]() {
         folly::Random::DefaultGenerator rng(23 + i);
-        const auto startTimeMs = getCurrentTimeMs();
-        while (startTimeMs + testDurationMs > getCurrentTimeMs()) {
+        const folly::stop_watch<std::chrono::milliseconds> watch;
+        while (watch.elapsed().count() < testDurationMs) {
           const auto key = folly::Random::rand32(rng) % 256;
           const auto val = factory.generate(key);
           if (val.fromCache()) {

@@ -36,6 +36,20 @@ namespace facebook::velox::cudf_velox::detail {
 constexpr size_t kDecimalSumStateSize = 32;
 
 /**
+ * Reduces a DECIMAL64 column directly into one DECIMAL128 sum and one INT64
+ * non-null count without materializing a DECIMAL128 input column. Each input
+ * value is rescaled to the sum output's scale before accumulation, matching
+ * cast-before-sum semantics. The sum and count output views are preallocated;
+ * mr allocates only temporary CUB scratch storage.
+ */
+void reduceDecimal64SumCount(
+    cudf::column_view input,
+    cudf::mutable_column_view sum,
+    cudf::mutable_column_view count,
+    cuda::stream_ref stream,
+    rmm::device_async_resource_ref mr);
+
+/**
  * Writes strings-style prefix offsets: offset[i] == i * kDecimalSumStateSize.
  *
  * @param offsetType INT32 or INT64; selects offset storage width via
@@ -75,28 +89,20 @@ void packDecimalSumState(
     cuda::stream_ref stream);
 
 /**
- * Inverse of packDecimalSumState.
+ * Decodes each non-null row of a serialized decimal SUM state STRING column.
  *
- * @param offsetType INT32 or INT64; selects offset storage width via
- *        cudf::type_dispatcher.
- * @param offsetsView per-row byte offsets into chars.
- * @param chars packed payload buffer.
- * @param sumView output per-row DECIMAL128 sums.
- * @param countView output per-row counts.
- * @param numRows number of rows.
- * @param nullMask device null-mask bitmap; null rows are skipped to avoid
- *        out-of-bounds reads when Arrow compacts null payloads.  Pass nullptr
- *        when no mask is present.
+ * @param stateCol logical STRING view of packed states. Sliced views are
+ *        supported; their row offset is applied to payload and null-mask
+ *        access by cudf::column_device_view.
+ * @param sumView output per-row DECIMAL128 sums, sized to stateCol.
+ * @param countView output per-row counts, sized to stateCol.
  * @param stream CUDA stream for the launch.
+ * @return true if every non-null row contains a valid serialized state.
  */
-void unpackDecimalSumState(
-    cudf::type_id offsetType,
-    cudf::column_view offsetsView,
-    const uint8_t* chars,
+bool unpackDecimalSumState(
+    cudf::column_view stateCol,
     cudf::mutable_column_view sumView,
     cudf::mutable_column_view countView,
-    cudf::size_type numRows,
-    cudf::bitmask_type const* nullMask,
     cuda::stream_ref stream);
 
 /**

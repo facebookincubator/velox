@@ -29,10 +29,9 @@
 
 using namespace facebook;
 
-using EncodingViewTest = nimble::test::EncodingViewTest;
 using BlockBitPackingEncodingViewTest = nimble::test::EncodingViewTest;
 
-TEST_F(EncodingViewTest, readsBlockBitPackingEncoding) {
+TEST_P(BlockBitPackingEncodingViewTest, readsBlockBitPackingEncoding) {
   nimble::Vector<int32_t> values{pool_.get()};
   for (auto i = 0; i < 20; ++i) {
     values.push_back(i < 10 ? 500 + i : 9000 + (i % 3));
@@ -44,7 +43,7 @@ TEST_F(EncodingViewTest, readsBlockBitPackingEncoding) {
       values, {17, 0, 8, 9, 19, 3}, options);
 }
 
-TEST_F(BlockBitPackingEncodingViewTest, readsInternallyCompressedPayload) {
+TEST_P(BlockBitPackingEncodingViewTest, readsInternallyCompressedPayload) {
   const auto values = randomNarrowUnsigned<uint32_t>(/*seed=*/40);
   const auto positions = randomizedPositions(/*seed=*/41);
   nimble::Encoding::Options options;
@@ -57,7 +56,7 @@ TEST_F(BlockBitPackingEncodingViewTest, readsInternallyCompressedPayload) {
   }
 }
 
-DEBUG_ONLY_TEST_F(
+DEBUG_ONLY_TEST_P(
     BlockBitPackingEncodingViewTest,
     rejectsTruncatedPackedPayload) {
   using Encoding = nimble::BlockBitPackingEncoding<uint32_t>;
@@ -68,12 +67,25 @@ DEBUG_ONLY_TEST_F(
       *buffer_, values, nimble::CompressionType::Uncompressed, options);
   const std::string truncated{serialized.substr(0, serialized.size() - 1)};
 
+  options.cacheEncodingView = cacheEncodingView();
+  if (cacheEncodingView()) {
+    // A cached view checks every block against the payload when it is created.
+    NIMBLE_ASSERT_THROW(
+        nimble::createEncodingView(truncated, pool_.get(), options),
+        "BlockBitPacking block payload exceeds packed payload");
+    return;
+  }
+
+  // Without caching, a read checks the block it reaches.
+  const auto view = nimble::createEncodingView(truncated, pool_.get(), options);
+  uint32_t value;
+  view->readAt(0, &value);
   NIMBLE_ASSERT_THROW(
-      nimble::createEncodingView(truncated, pool_.get(), options),
+      view->readAt(view->rowCount() - 1, &value),
       "BlockBitPacking block payload exceeds packed payload");
 }
 
-TEST_F(BlockBitPackingEncodingViewTest, readsIndexedBlockRuns) {
+TEST_P(BlockBitPackingEncodingViewTest, readsIndexedBlockRuns) {
   using Encoding = nimble::BlockBitPackingEncoding<uint32_t>;
   auto values = makeVector<uint32_t>({
       42,  42,
@@ -121,7 +133,7 @@ TEST_F(BlockBitPackingEncodingViewTest, readsIndexedBlockRuns) {
   }
 }
 
-TEST_F(BlockBitPackingEncodingViewTest, concurrent) {
+TEST_P(BlockBitPackingEncodingViewTest, concurrent) {
   nimble::Encoding::Options options;
   options.blockBitPackingBlockSize = 64;
 
@@ -130,3 +142,5 @@ TEST_F(BlockBitPackingEncodingViewTest, concurrent) {
       randomizedPositions(/*seed=*/24),
       options);
 }
+
+INSTANTIATE_ENCODING_VIEW_TEST_SUITE(BlockBitPackingEncodingViewTest);

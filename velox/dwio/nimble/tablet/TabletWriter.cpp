@@ -17,9 +17,11 @@
 #include "velox/dwio/nimble/tablet/TabletWriter.h"
 
 #include <limits>
+#include <string_view>
 
 #include "velox/dwio/nimble/common/Buffer.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
+#include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
 #include "velox/dwio/nimble/tablet/Compression.h"
 #include "velox/dwio/nimble/tablet/Constants.h"
@@ -190,6 +192,7 @@ struct StreamEqual {
     return true;
   }
 };
+
 } // namespace
 
 void TabletWriter::close() {
@@ -313,10 +316,6 @@ void TabletWriter::writeStripe(uint32_t rowCount, std::vector<Stream> streams) {
 
   auto& stripeStreamOffsets = streamOffsets_.emplace_back(streamCount, 0);
   auto& stripeStreamSizes = streamSizes_.emplace_back(streamCount, 0);
-  std::vector<uint32_t>* stripeStreamChecksums{nullptr};
-  if (options_.streamChecksumsEnabled) {
-    stripeStreamChecksums = &streamChecksums_.emplace_back(streamCount, 0);
-  }
 
   finishStripeChunkStats(streamCount);
 
@@ -325,19 +324,19 @@ void TabletWriter::writeStripe(uint32_t rowCount, std::vector<Stream> streams) {
   }
 
   if (options_.streamDeduplicationEnabled) {
-    // Maps a stream's content to the (offset, size, checksum) already recorded
-    // for the first copy written in this stripe.
+    // Maps a stream's content to the (offset, size) already recorded for the
+    // first copy written in this stripe.
     folly::F14FastMap<
         const Stream*,
-        std::tuple<uint32_t, uint32_t, uint32_t>,
+        std::pair<uint32_t, uint32_t>,
         StreamHash,
         StreamEqual>
         uniqueStreams;
 
     for (const auto& stream : streams) {
       const uint32_t index = stream.offset;
-      auto it = uniqueStreams.emplace(
-          &stream, std::tuple<uint32_t, uint32_t, uint32_t>{0, 0, 0});
+      auto it =
+          uniqueStreams.emplace(&stream, std::pair<uint32_t, uint32_t>{0, 0});
 
       NIMBLE_DCHECK_GT(
           stripeStreamOffsets.size(),
@@ -369,21 +368,14 @@ void TabletWriter::writeStripe(uint32_t rowCount, std::vector<Stream> streams) {
         stripeStreamSizes[index] = static_cast<uint32_t>(
             file_->size() -
             (stripeStreamOffsets[index] + stripeOffsets_.back()));
-        // A zero-length stream reads back as absent, and absent slots carry 0
-        // in every array. Storing the checksum of no bytes would make the point
-        // accessor disagree with streamLocations(). Normalising here rather
-        // than at each use keeps duplicates of such a stream correct too, since
-        // they copy this value verbatim.
-        const auto recordedChecksum =
-            stripeStreamSizes[index] != 0 ? streamChecksum : 0;
-        if (stripeStreamChecksums != nullptr) {
-          (*stripeStreamChecksums)[index] = recordedChecksum;
+
+        // A zero-length stream reads back as absent, so it gets no trailer.
+        if (stripeStreamSizes[index] != 0) {
+          writeStreamTrailer(streamChecksum);
         }
 
         it.first->second = {
-            stripeStreamOffsets[index],
-            stripeStreamSizes[index],
-            recordedChecksum};
+            stripeStreamOffsets[index], stripeStreamSizes[index]};
       } else {
         // If we are here, this is a duplicate stream, so we need to reference
         // the original stream instead of this one.
@@ -392,15 +384,12 @@ void TabletWriter::writeStripe(uint32_t rowCount, std::vector<Stream> streams) {
           stats_.duplicateStreamBytes += chunk.contentSize();
         }
 
+        // The duplicate points at the original's bytes, so it shares the
+        // original's trailer too.
         // @lint-ignore CLANGTIDY facebook-hte-LocalUncheckedArrayBounds
-        stripeStreamOffsets[index] = std::get<0>(it.first->second);
+        stripeStreamOffsets[index] = it.first->second.first;
         // @lint-ignore CLANGTIDY facebook-hte-LocalUncheckedArrayBounds
-        stripeStreamSizes[index] = std::get<1>(it.first->second);
-        if (stripeStreamChecksums != nullptr) {
-          // The duplicate points at the original's bytes, so it carries the
-          // original's checksum, already normalised for a zero-length stream.
-          (*stripeStreamChecksums)[index] = std::get<2>(it.first->second);
-        }
+        stripeStreamSizes[index] = it.first->second.second;
         addStreamChunkStats(index, it.first->first->chunks);
       }
     }
@@ -434,9 +423,8 @@ void TabletWriter::writeStripe(uint32_t rowCount, std::vector<Stream> streams) {
       // @lint-ignore CLANGTIDY facebook-hte-LocalUncheckedArrayBounds
       stripeStreamSizes[index] = static_cast<uint32_t>(
           file_->size() - (stripeStreamOffsets[index] + stripeOffsets_.back()));
-      if (stripeStreamChecksums != nullptr && stripeStreamSizes[index] != 0) {
-        // See the dedup branch: absent streams carry 0 in every array.
-        (*stripeStreamChecksums)[index] = streamChecksum;
+      if (stripeStreamSizes[index] != 0) {
+        writeStreamTrailer(streamChecksum);
       }
     }
   }
@@ -536,11 +524,9 @@ bool TabletWriter::shouldWriteStripeGroup(bool force) const {
   }
 
   // Estimate size
-  // 8 bytes for offsets, 4 for size, 1 for compression type, so 13. Stream
-  // checksums add a third uint32 per slot, hence 17 when they are enabled.
-  const size_t bytesPerSlot = options_.streamChecksumsEnabled ? 17 : 13;
+  // 8 bytes for offsets, 4 for size, 1 for compression type, so 13.
   const size_t estimatedSize =
-      4 + stripeCount * streamOffsets_.back().size() * bytesPerSlot;
+      4 + stripeCount * streamOffsets_.back().size() * 13;
   if (!force && (estimatedSize < options_.metadataFlushThreshold)) {
     return false;
   }
@@ -560,6 +546,7 @@ std::unique_ptr<EncodingSelectionPolicy<T>> makeMetadataEncodingPolicy(
       {EncodingType::Constant, 1.0},
       {EncodingType::Trivial, 1.0},
       {EncodingType::FixedBitWidth, 1.0},
+      {EncodingType::Dictionary, 1.0},
   };
   ManualEncodingSelectionPolicyFactory factory{
       readFactors.empty() ? kDefaultReadFactors : readFactors,
@@ -598,18 +585,12 @@ void TabletWriter::writeStripeGroupWithRawLayout(
       builder, streamCount, streamOffsets_, 0);
   auto streamSizes = createFlattenedVector<uint32_t, uint32_t>(
       builder, streamCount, streamSizes_, 0);
-  flatbuffers::Offset<flatbuffers::Vector<uint32_t>> streamChecksums;
-  if (options_.streamChecksumsEnabled) {
-    streamChecksums = createFlattenedVector<uint32_t, uint32_t>(
-        builder, streamCount, streamChecksums_, 0);
-  }
   builder.Finish(
       serialization::CreateStripeGroup(
           builder,
           static_cast<uint32_t>(stripeCount),
           streamOffsets,
-          streamSizes,
-          streamChecksums));
+          streamSizes));
 }
 
 void TabletWriter::writeStripeGroupWithStreamMajorLayout(
@@ -619,59 +600,61 @@ void TabletWriter::writeStripeGroupWithStreamMajorLayout(
   // For each leaf streamId, gather that stream's values across every stripe and
   // encode the resulting stripeCount-length array independently. The per-stream
   // bit width is tight to that stream's value range.
+  // Identical arrays can reuse an existing encoding.
   std::vector<flatbuffers::Offset<serialization::EncodedStream>> encodedOffsets;
   std::vector<flatbuffers::Offset<serialization::EncodedStream>> encodedSizes;
   encodedOffsets.reserve(streamCount);
   encodedSizes.reserve(streamCount);
 
+  // FixedBitWidth rounds bit widths up to whole bytes by default. Readers that
+  // pin metadata keep these arrays resident, so pack them at exact widths.
+  Encoding::Options encodingOptions;
+  encodingOptions.fixedBitWidthUseExactBits = true;
+
   // Encodes one array, copies it into the flatbuffer, then rewinds the scratch
-  // buffer so peak memory stays bounded to a single stream.
+  // buffer for reuse.
   Buffer encodingBuffer{*pool_};
-  auto encodeStream =
-      [&](const std::vector<uint32_t>& values,
-          const std::vector<std::pair<EncodingType, float>>& readFactors) {
-        const auto encoded = EncodingFactory::encode<uint32_t>(
-            makeMetadataEncodingPolicy<uint32_t>(readFactors),
-            std::span<const uint32_t>(values),
-            encodingBuffer);
-        auto encodedStream = serialization::CreateEncodedStream(
-            builder,
-            builder.CreateVector(
-                reinterpret_cast<const uint8_t*>(encoded.data()),
-                encoded.size()));
-        encodingBuffer.reset();
-        return encodedStream;
-      };
-
-  for (uint32_t streamId = 0; streamId < streamCount; ++streamId) {
-    encodedOffsets.push_back(encodeStream(
-        transposeStreamMetadata(streamId, stripeCount, streamOffsets_),
-        options_.stripeGroupEncodingLayoutReadFactors));
-    encodedSizes.push_back(encodeStream(
-        transposeStreamMetadata(streamId, stripeCount, streamSizes_),
-        options_.stripeGroupEncodingLayoutReadFactors));
-  }
-
-  // Checksums go into one blob rather than one per stream: they are uniformly
-  // distributed, so there is no per-stream value range for a tighter bit width
-  // to exploit, and a single array costs the reader one EncodingView instead of
-  // streamCount of them. Encoding selection is skipped for the same reason --
-  // it would only rediscover that nothing compresses them.
-  static const std::vector<std::pair<EncodingType, float>> kChecksumReadFactors{
-      {EncodingType::Trivial, 1.0},
+  auto encodeStream = [&](const std::vector<uint32_t>& values) {
+    const auto encoded = EncodingFactory::encode<uint32_t>(
+        makeMetadataEncodingPolicy<uint32_t>(
+            options_.stripeGroupEncodingLayoutReadFactors),
+        std::span<const uint32_t>(values),
+        encodingBuffer,
+        encodingOptions);
+    const auto encodedStream = serialization::CreateEncodedStream(
+        builder,
+        builder.CreateVector(
+            reinterpret_cast<const uint8_t*>(encoded.data()), encoded.size()));
+    encodingBuffer.reset();
+    return encodedStream;
   };
-  flatbuffers::Offset<serialization::EncodedStream> streamChecksums;
-  if (options_.streamChecksumsEnabled) {
-    std::vector<uint32_t> checksums(stripeCount * streamCount, 0);
+  auto writeMetadataArrays = [&](const auto& encode) {
     for (uint32_t streamId = 0; streamId < streamCount; ++streamId) {
-      const auto perStream =
-          transposeStreamMetadata(streamId, stripeCount, streamChecksums_);
-      std::copy(
-          perStream.begin(),
-          perStream.end(),
-          checksums.begin() + static_cast<size_t>(streamId) * stripeCount);
+      encodedOffsets.push_back(encode(
+          transposeStreamMetadata(streamId, stripeCount, streamOffsets_)));
+      encodedSizes.push_back(
+          encode(transposeStreamMetadata(streamId, stripeCount, streamSizes_)));
     }
-    streamChecksums = encodeStream(checksums, kChecksumReadFactors);
+  };
+
+  if (options_.stripeGroupMetadataDeduplicationEnabled) {
+    // Offsets and sizes have the same type and encoding policy, so identical
+    // arrays can share an entry.
+    // Own the original arrays for equality checks on hash matches.
+    // Keep the raw-key cache local to this stripe-group write.
+    folly::F14FastMap<
+        std::vector<uint32_t>,
+        flatbuffers::Offset<serialization::EncodedStream>>
+        uniqueArrays;
+    writeMetadataArrays([&](std::vector<uint32_t> values) {
+      auto [it, inserted] = uniqueArrays.try_emplace(std::move(values));
+      if (inserted) {
+        it->second = encodeStream(it->first);
+      }
+      return it->second;
+    });
+  } else {
+    writeMetadataArrays(encodeStream);
   }
 
   // Tag the blob with the kStreamMajor file identifier so the reader detects
@@ -682,8 +665,7 @@ void TabletWriter::writeStripeGroupWithStreamMajorLayout(
           static_cast<uint32_t>(stripeCount),
           static_cast<uint32_t>(streamCount),
           builder.CreateVector(encodedOffsets),
-          builder.CreateVector(encodedSizes),
-          streamChecksums),
+          builder.CreateVector(encodedSizes)),
       StripeGroup::kStreamMajorLayoutIdentifier.data());
 }
 
@@ -787,7 +769,6 @@ void TabletWriter::tryWriteStripeGroup(bool force) {
 void TabletWriter::finishStripeGroup() {
   streamOffsets_.clear();
   streamSizes_.clear();
-  streamChecksums_.clear();
   // Move to the next stripe group
   ++stripeGroupIndex_;
 }
@@ -819,6 +800,17 @@ uint32_t TabletWriter::writeStreamWithChecksum(const Stream& stream) {
   return streamChecksum_ != nullptr
       ? streamChecksum_->getChecksum32(/*reset=*/true)
       : 0;
+}
+
+void TabletWriter::writeStreamTrailer(uint32_t checksum) {
+  if (streamChecksum_ == nullptr) {
+    return;
+  }
+  static_assert(StreamTrailerLayout::kChecksum32Size == sizeof(checksum));
+  char trailer[StreamTrailerLayout::kChecksum32Size];
+  char* pos = trailer;
+  encoding::writeUint32(checksum, pos);
+  writeWithChecksum({trailer, sizeof(trailer)});
 }
 
 void TabletWriter::finishStripeChunkStats(size_t streamCount) {

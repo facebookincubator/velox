@@ -16,6 +16,8 @@
 #include "velox/exec/tests/utils/LocalExchangeSource.h"
 #include <folly/executors/IOThreadPoolExecutor.h>
 #include <atomic>
+#include <condition_variable>
+#include <optional>
 #include "velox/common/testutil/TestValue.h"
 #include "velox/exec/DefaultOutputBufferManager.h"
 #include "velox/exec/Operator.h"
@@ -60,12 +62,15 @@ class LocalExchangeSource : public exec::ExchangeSource {
     VELOX_CHECK(requestPending_);
     auto requestedSequence = sequence_;
     auto self = shared_from_this();
+    // True until the request gets its result or times out.
+    auto active = std::make_shared<std::atomic_bool>(true);
     // Since this lambda may outlive 'this', we need to capture a
     // shared_ptr to the current object (self).
-    auto resultCallback = [self, requestedSequence, buffers, this](
+    auto resultCallback = [self, requestedSequence, buffers, active, this](
                               std::vector<std::unique_ptr<folly::IOBuf>> data,
                               int64_t sequence,
                               std::vector<int64_t> remainingBytes) {
+      *active = false;
       {
         std::lock_guard<std::mutex> l(mutex_);
         // This function is called either for a result or timeout. Only the
@@ -163,8 +168,29 @@ class LocalExchangeSource : public exec::ExchangeSource {
       return future;
     }
 
-    buffers->getData(
-        remoteTaskId_, destination_, maxBytes, sequence_, resultCallback);
+    common::testutil::TestValue::adjust(
+        "facebook::velox::exec::test::LocalExchangeSource::request", this);
+
+    // The producer may not have started yet: a fixed point's peers read each
+    // other's producers in the same iteration.
+    buffers->getDataWhenCreated(
+        remoteTaskId_,
+        destination_,
+        maxBytes,
+        sequence_,
+        resultCallback,
+        [active]() { return active->load(); });
+
+    // A close() that ran since registerTimeout() had no request to drop, and
+    // the request just held would keep this closed source alive.
+    bool closed;
+    {
+      std::lock_guard<std::mutex> l(mutex_);
+      closed = closed_;
+    }
+    if (closed) {
+      buffers->deleteResults(remoteTaskId_, destination_);
+    }
 
     return future;
   }
@@ -244,6 +270,7 @@ class LocalExchangeSource : public exec::ExchangeSource {
       }
       timeouts_.clear();
     }
+    timerWakeup_.notify_one();
     timerThread_->join();
     timerThread_.reset();
   }
@@ -274,24 +301,33 @@ class LocalExchangeSource : public exec::ExchangeSource {
       // The lambda references only static state, so it does not capture 'this'
       // and safely outlives any single source on the detached timer thread.
       timerThread_ = std::make_unique<std::thread>([]() {
+        std::unique_lock<std::mutex> l(mutex_);
         while (!stop_) {
-          auto now = std::chrono::system_clock::now();
+          const auto now = std::chrono::system_clock::now();
           ResultCallback callback = nullptr;
-          {
-            std::lock_guard<std::mutex> t(mutex_);
-            for (auto& pair : timeouts_) {
-              if (pair.second.second < now) {
-                callback = pair.second.first;
-                break;
-              }
+          std::optional<std::chrono::system_clock::time_point> nextDeadline;
+          for (const auto& [source, entry] : timeouts_) {
+            if (entry.second <= now) {
+              callback = entry.first;
+              break;
+            }
+            if (!nextDeadline.has_value() || entry.second < *nextDeadline) {
+              nextDeadline = entry.second;
             }
           }
           if (callback) {
-            // Outside of mutex.
+            // Outside of mutex. The callback removes its entry from
+            // 'timeouts_'.
+            l.unlock();
             callback({}, 0, {});
+            l.lock();
             continue;
           }
-          std::this_thread::sleep_for(std::chrono::seconds(1));
+          if (nextDeadline.has_value()) {
+            timerWakeup_.wait_until(l, *nextDeadline);
+          } else {
+            timerWakeup_.wait(l);
+          }
         }
       });
       if (!exitInitialized_) {
@@ -301,6 +337,7 @@ class LocalExchangeSource : public exec::ExchangeSource {
     }
     timeouts_[self] =
         std::make_pair(callback, std::chrono::system_clock::now() + maxWait);
+    timerWakeup_.notify_one();
     return true;
   }
 
@@ -324,6 +361,9 @@ class LocalExchangeSource : public exec::ExchangeSource {
       std::pair<ResultCallback, std::chrono::system_clock::time_point>>
       timeouts_;
   static inline std::unique_ptr<std::thread> timerThread_;
+  // Wakes the timer thread, which waits until the earliest deadline in
+  // 'timeouts_', when a timeout is registered or stop() is called.
+  static inline std::condition_variable timerWakeup_;
   static inline std::atomic_bool stop_{false};
   static inline bool exitInitialized_{false};
 

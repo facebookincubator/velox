@@ -22,6 +22,8 @@ namespace facebook::velox {
 
 class QDigestType final : public VarbinaryType {
  public:
+  static std::shared_ptr<const QDigestType> create() = delete;
+
   static std::shared_ptr<const QDigestType> get(const TypePtr& dataType) {
     if (dataType->isBigint()) {
       static const QDigestType kInstance{BIGINT()};

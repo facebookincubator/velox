@@ -22,10 +22,9 @@
 
 using namespace facebook;
 
-using EncodingViewTest = nimble::test::EncodingViewTest;
 using SparseBoolEncodingViewTest = nimble::test::EncodingViewTest;
 
-TEST_F(EncodingViewTest, readsSparseBoolEncoding) {
+TEST_P(SparseBoolEncodingViewTest, readsSparseBoolEncoding) {
   expectReads<nimble::SparseBoolEncoding>(
       makeVector<bool>({false, false, true, false, true, false, false, true}),
       {7, 0, 2, 4, 1});
@@ -34,7 +33,9 @@ TEST_F(EncodingViewTest, readsSparseBoolEncoding) {
       {7, 0, 2, 4, 1});
 }
 
-TEST_F(SparseBoolEncodingViewTest, concurrent) {
+TEST_P(SparseBoolEncodingViewTest, concurrent) {
   expectConcurrentReads<nimble::SparseBoolEncoding>(
       randomBool(/*seed=*/33), randomizedPositions(/*seed=*/34));
 }
+
+INSTANTIATE_ENCODING_VIEW_TEST_SUITE(SparseBoolEncodingViewTest);
