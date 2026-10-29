@@ -40,7 +40,6 @@ constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
 // Source-derived fixtures, NOT results of an executed oracle. See the public
 // Spark expression at revision b84dc909a8856388faddc154c6a1d3aba271474e:
 // https://github.com/apache/spark/blob/b84dc909a8856388faddc154c6a1d3aba271474e/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/aggregate/HistogramNumeric.scala
-// Decimal expectations use Java 21 Double.toString and Scala 2.13.17 decimal.
 // Binary expectations follow IEEE 754 and JLS 5.1.3.
 uint64_t doubleBits(double value) {
   return std::bit_cast<uint64_t>(value);
@@ -404,135 +403,6 @@ TEST_F(HistogramNumericTypesTest, decimalNormalizationFastPathBoundaries) {
       doubleBits(9.007199254740993e-7));
 }
 
-TEST_F(HistogramNumericTypesTest, decimalSignificantHalfUp) {
-  EXPECT_EQ(Decimal(1, 0).reconstructDecimal(2.5), "3");
-  EXPECT_EQ(Decimal(1, 0).reconstructDecimal(-2.5), "-3");
-  EXPECT_EQ(Decimal(2, 1).reconstructDecimal(1.25), "1.3");
-  EXPECT_EQ(Decimal(2, 1).reconstructDecimal(-1.25), "-1.3");
-  EXPECT_EQ(Decimal(1, 0).reconstructDecimal(9.5), "10");
-}
-
-TEST_F(HistogramNumericTypesTest, decimalScaleHalfUp) {
-  EXPECT_EQ(Decimal(38, 1).reconstructDecimal(1.25), "1.3");
-  EXPECT_EQ(Decimal(38, 1).reconstructDecimal(-1.25), "-1.3");
-  EXPECT_EQ(Decimal(38, 0).reconstructDecimal(0.5), "1");
-  EXPECT_EQ(Decimal(38, 0).reconstructDecimal(-0.5), "-1");
-  EXPECT_EQ(
-      Decimal(38, 38).reconstructDecimal(5e-39),
-      "0." + std::string(37, '0') + "1");
-}
-
-TEST_F(HistogramNumericTypesTest, decimalKeepsBothRounds) {
-  EXPECT_EQ(Decimal(3, 1).reconstructDecimal(9.949), "10.0");
-  EXPECT_EQ(Decimal(3, 1).reconstructDecimal(-9.949), "-10.0");
-  EXPECT_EQ(Decimal(38, 1).reconstructDecimal(9.949), "9.9");
-  EXPECT_EQ(Decimal(3, 1).tryReconstructNativeDecimal(9.949), 100);
-}
-
-TEST_F(HistogramNumericTypesTest, decimalPrecisionsAndFixedScale) {
-  EXPECT_EQ(Decimal(1, 1).reconstructDecimal(0.0), "0.0");
-  EXPECT_EQ(
-      Decimal(18, 18).reconstructDecimal(-0.0), "0." + std::string(18, '0'));
-  EXPECT_EQ(Decimal(19, 19).reconstructDecimal(0.1), "0.1000000000000000000");
-  EXPECT_EQ(
-      Decimal(38, 38).reconstructDecimal(-1e-39), "0." + std::string(38, '0'));
-  EXPECT_EQ(
-      Decimal(38, 38).reconstructDecimal(0.1), "0.1" + std::string(37, '0'));
-}
-
-TEST_F(HistogramNumericTypesTest, decimalJava21Selection) {
-  // Java 17 can select 9.999999999999999E22 here; Java 21 selects 1.0E23.
-  EXPECT_EQ(
-      Decimal(38, 0).reconstructDecimal(1e23), "100000000000000000000000");
-  EXPECT_EQ(
-      Decimal(38, 0).reconstructDecimal(-1e23), "-100000000000000000000000");
-  EXPECT_EQ(
-      Decimal(38, 20).reconstructDecimal(1.2345678901234567),
-      "1.23456789012345670000");
-  EXPECT_EQ(Decimal(38, 20).reconstructDecimal(0.1), "0.10000000000000000000");
-}
-
-TEST_F(HistogramNumericTypesTest, decimalSelectionIntervalEndpoints) {
-  // 1e23 is the upper midpoint of the even binary64 immediately below it.
-  // The next (odd) binary64 has an OPEN lower endpoint: 1e23 cannot represent
-  // that neighbor. Its shortest candidate is 10000000000000001 * 10^7.
-  const Decimal decimal(38, 0);
-  EXPECT_EQ(decimal.reconstructDecimal(1e23), "100000000000000000000000");
-  EXPECT_EQ(
-      decimal.reconstructDecimal(std::nextafter(1e23, kInfinity)),
-      "100000000000000010000000");
-  EXPECT_EQ(
-      decimal.reconstructDecimal(std::nextafter(1e23, 0.0)),
-      "99999999999999970000000");
-}
-
-TEST_F(HistogramNumericTypesTest, decimalSelectionNearestEvenSignificand) {
-  // At 2^49 the binary64 spacing is 1/8. Both adjacent decimal tenths are
-  // within the rounding interval around .25 and .75; each pair is equidistant.
-  // Choose the even decimal significand BEFORE either HALF_UP operation.
-  const Decimal decimal(38, 2);
-  EXPECT_EQ(decimal.reconstructDecimal(0x1p49 + 0.25), "562949953421312.20");
-  EXPECT_EQ(decimal.reconstructDecimal(0x1p49 + 0.75), "562949953421312.80");
-  EXPECT_EQ(decimal.reconstructDecimal(-0x1p49 - 0.25), "-562949953421312.20");
-}
-
-TEST_F(HistogramNumericTypesTest, decimalExponentExtremes) {
-  const double largest = std::numeric_limits<double>::max();
-  EXPECT_EQ(
-      Decimal(38, 0).reconstructDecimal(largest),
-      "17976931348623157" + std::string(292, '0'));
-  EXPECT_EQ(
-      Decimal(1, 0).reconstructDecimal(largest), "2" + std::string(308, '0'));
-  EXPECT_EQ(
-      Decimal(38, 38).reconstructDecimal(-largest),
-      "-17976931348623157" + std::string(292, '0') + "." +
-          std::string(38, '0'));
-  EXPECT_EQ(Decimal(38, 38).reconstructDecimal(-largest).size(), 349);
-  EXPECT_EQ(
-      Decimal(38, 38).reconstructDecimal(std::numeric_limits<double>::min()),
-      "0." + std::string(38, '0'));
-  EXPECT_EQ(
-      Decimal(38, 38).reconstructDecimal(
-          std::numeric_limits<double>::denorm_min()),
-      "0." + std::string(38, '0'));
-}
-
-TEST_F(HistogramNumericTypesTest, decimalNativeAndCarrierAgreement) {
-  EXPECT_EQ(Decimal(18, 2).tryReconstructNativeDecimal(12.345), 1'235);
-  EXPECT_EQ(Decimal(18, 2).reconstructDecimal(12.345), "12.35");
-  EXPECT_EQ(Decimal(19, 2).tryReconstructNativeDecimal(-12.345), -1'235);
-  EXPECT_EQ(Decimal(19, 2).reconstructDecimal(-12.345), "-12.35");
-  EXPECT_EQ(
-      Decimal(38, 0).tryReconstructNativeDecimal(1e37),
-      HugeInt::parse("10000000000000000000000000000000000000"));
-}
-
-TEST_F(HistogramNumericTypesTest, decimalNativeRepresentationBoundary) {
-  const auto unscaled =
-      HugeInt::parse("99999999999999999999999999999999999999");
-  const Decimal decimal(38, 0);
-  const double center = decimal.decimalToDouble(unscaled);
-  EXPECT_EQ(
-      decimal.reconstructDecimal(center),
-      "100000000000000000000000000000000000000");
-  EXPECT_EQ(
-      decimal.reconstructDecimal(-center),
-      "-100000000000000000000000000000000000000");
-  EXPECT_EQ(decimal.tryReconstructNativeDecimal(center), std::nullopt);
-  EXPECT_EQ(decimal.tryReconstructNativeDecimal(-center), std::nullopt);
-  EXPECT_EQ(Decimal(1, 0).reconstructDecimal(-9.5), "-10");
-  EXPECT_EQ(Decimal(1, 0).tryReconstructNativeDecimal(-9.5), std::nullopt);
-}
-
-TEST_F(HistogramNumericTypesTest, decimalNonFiniteErrors) {
-  const Decimal decimal(38, 18);
-  for (double value : {kNaN, kInfinity, -kInfinity}) {
-    VELOX_ASSERT_USER_THROW(decimal.reconstructDecimal(value), "non-finite");
-    VELOX_ASSERT_USER_THROW(
-        decimal.tryReconstructNativeDecimal(value), "non-finite");
-  }
-}
-
 TEST_F(HistogramNumericTypesTest, longCenterSurvivesKernelAndWire) {
   HashStringAllocator allocator(pool_.get());
   SparkNumericHistogram histogram(&allocator);
@@ -560,9 +430,7 @@ TEST_F(HistogramNumericTypesTest, decimalAndTimestampKernelCenters) {
   ASSERT_EQ(histogram.bins().size(), 2);
   EXPECT_EQ(
       Types::javaDoubleToTimestamp(histogram.bins()[0].x).toMicros(), -1'001);
-  EXPECT_EQ(
-      Decimal(3, 1).tryReconstructNativeDecimal(histogram.bins()[1].x), 125);
-  EXPECT_EQ(Decimal(3, 1).reconstructDecimal(histogram.bins()[1].x), "12.5");
+  EXPECT_EQ(histogram.bins()[1].x, 12.5);
   EXPECT_EQ(doubleBits(histogram.bins()[0].y), 0x3ff0000000000000ULL);
   EXPECT_EQ(doubleBits(histogram.bins()[1].y), 0x3ff0000000000000ULL);
 }

@@ -133,14 +133,20 @@ General Aggregate Functions
     values are ignored. Empty and all-null input returns null.
 
     Supported input and center types are TINYINT, SMALLINT, INTEGER, BIGINT,
-    REAL, DOUBLE, DECIMAL, DATE, TIMESTAMP, TIMESTAMP_UTC, and
-    INTERVAL_YEAR_MONTH. Decimal centers that exceed the input precision are
-    returned as null while retaining the corresponding height.
+    REAL, DOUBLE, DATE, TIMESTAMP, TIMESTAMP_UTC, and INTERVAL_YEAR_MONTH.
+    DECIMAL centers are not supported because Spark's Decimal reconstruction
+    depends on the Java runtime version.
 
     Results can vary with input order and aggregation-tree shape. See Spark's
     `histogram_numeric documentation
     <https://spark.apache.org/docs/latest/api/sql/index.html#histogram_numeric>`_
     for the function semantics.
+
+.. spark:function:: histogram_numeric_legacy(x, integer) -> array(row(x double, y double))
+
+    Computes a histogram using the same input and bin-count rules as
+    ``histogram_numeric``, but returns DOUBLE centers. Also supports DECIMAL
+    inputs without reconstructing Decimal centers.
 
 .. spark:function:: kurtosis(x) -> double
 

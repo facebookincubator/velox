@@ -33,6 +33,7 @@
 #include <duckdb/parser/parser.hpp> // @manual
 #include <duckdb/parser/parser_options.hpp> // @manual
 #include <fmt/format.h>
+#include <folly/Conv.h>
 
 namespace facebook::velox::duckdb {
 
@@ -728,6 +729,51 @@ core::ExprPtr parseCaseExpr(
   return callExpr("switch", std::move(inputs), getAlias(expr), options);
 }
 
+// Restrict folding to the spellings emitted by native vector formatting.
+template <typename T>
+std::optional<Variant> tryParseCanonicalLiteral(
+    const TypePtr& type,
+    const std::string& text) {
+  const auto parsed = folly::tryTo<T>(text);
+  if (!parsed.hasValue()) {
+    return std::nullopt;
+  }
+  Variant value(parsed.value());
+  if (value.toStringAsVector(type) != text) {
+    return std::nullopt;
+  }
+  return value;
+}
+
+std::optional<Variant> tryParseCanonicalLiteral(
+    const TypePtr& type,
+    const std::string& text) {
+  if (type->isDecimal()) {
+    return std::nullopt;
+  }
+  switch (type->kind()) {
+    case TypeKind::BOOLEAN:
+      if (text == "true" || text == "false") {
+        return Variant(text == "true");
+      }
+      return std::nullopt;
+    case TypeKind::TINYINT:
+      return tryParseCanonicalLiteral<int8_t>(type, text);
+    case TypeKind::SMALLINT:
+      return tryParseCanonicalLiteral<int16_t>(type, text);
+    case TypeKind::INTEGER:
+      return tryParseCanonicalLiteral<int32_t>(type, text);
+    case TypeKind::BIGINT:
+      return tryParseCanonicalLiteral<int64_t>(type, text);
+    case TypeKind::REAL:
+      return tryParseCanonicalLiteral<float>(type, text);
+    case TypeKind::DOUBLE:
+      return tryParseCanonicalLiteral<double>(type, text);
+    default:
+      return std::nullopt;
+  }
+}
+
 // Parse an CAST expression.
 core::ExprPtr parseCastExpr(
     ParsedExpression& expr,
@@ -990,9 +1036,27 @@ core::AggregateCallExprPtr parseAggregateExpr(
   }
 
   auto* call = callExpr->as<core::CallExpr>();
+  auto inputs = call->inputs();
+  for (auto i = 0; i < inputs.size(); ++i) {
+    if (inputs[i]->is(core::IExpr::Kind::kConstant)) {
+      continue;
+    }
+    const auto* cast = inputs[i]->as<core::CastExpr>();
+    if (cast == nullptr || cast->isTryCast()) {
+      continue;
+    }
+    const auto* constant = cast->inputs()[0]->as<core::ConstantExpr>();
+    if (constant != nullptr && constant->type()->isVarchar()) {
+      if (auto value = tryParseCanonicalLiteral(
+              cast->type(), constant->value().value<TypeKind::VARCHAR>())) {
+        inputs[i] = std::make_shared<const core::ConstantExpr>(
+            cast->type(), std::move(*value), inputs[i]->alias());
+      }
+    }
+  }
   return std::make_shared<core::AggregateCallExpr>(
       call->name(),
-      call->inputs(),
+      std::move(inputs),
       functionExpr.distinct,
       std::move(filter),
       std::move(orderBy),
