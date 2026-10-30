@@ -16,6 +16,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 
 #include "velox/dwio/nimble/encodings/EliasFanoEncoding.h"
 #include "velox/dwio/nimble/encodings/views/EncodingView.h"
@@ -43,6 +44,11 @@ class EliasFanoEncodingView final : public TypedEncodingView<T> {
   /// Returns the first row whose value is at least `value`.
   uint32_t lowerBound(physicalType value) const {
     return encoding_.lowerBound(value);
+  }
+
+  /// Returns the first row whose value equals `value`, or std::nullopt.
+  std::optional<uint32_t> find(physicalType value) const {
+    return encoding_.find(value);
   }
 
  private:

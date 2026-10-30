@@ -207,6 +207,22 @@ TEST_F(EliasFanoEncodingTest, listChecksMaterializeRange) {
       "Reading past end of encoding");
 }
 
+TEST_F(EliasFanoEncodingTest, find) {
+  const std::vector<uint64_t> input{10, 20, 20, 40};
+  const auto encoding = createEncoding(input);
+  const auto* eliasFano =
+      dynamic_cast<const nimble::EliasFanoEncoding<uint64_t>*>(encoding.get());
+  ASSERT_NE(eliasFano, nullptr);
+
+  EXPECT_EQ(eliasFano->find(0), std::nullopt);
+  EXPECT_EQ(eliasFano->find(10), 0);
+  EXPECT_EQ(eliasFano->find(19), std::nullopt);
+  EXPECT_EQ(eliasFano->find(20), 1);
+  EXPECT_EQ(eliasFano->find(21), std::nullopt);
+  EXPECT_EQ(eliasFano->find(40), 3);
+  EXPECT_EQ(eliasFano->find(41), std::nullopt);
+}
+
 TEST_F(EliasFanoEncodingTest, absoluteReadsPreserveSequentialPosition) {
   const std::vector<uint64_t> input{10, 20, 20, 40, 80};
   auto encoding = createEncoding(input);
@@ -497,6 +513,7 @@ TEST_F(EliasFanoEncodingTest, alignsAndReadsFollyPointerTables) {
     for (const uint32_t row : {127, 128, 255, 256, 511, 512}) {
       EXPECT_EQ(eliasFano->valueAt(row), input[row]);
       EXPECT_EQ(eliasFano->lowerBound(input[row]), row - row % 2);
+      EXPECT_EQ(eliasFano->find(input[row]), row - row % 2);
     }
   }
 }
