@@ -134,12 +134,14 @@ std::string HierarchicalKeyReader::encodeKey(
 namespace detail {
 
 // Opens a view whose values have type T after checking the sequence's prefix,
-// physical type and row count.
+// physical type and row count. With 'cacheEncodingView' the view keeps the
+// lookup structures of Encoding::Options::cacheEncodingView.
 template <typename T>
 std::unique_ptr<TypedEncodingView<T>> createKeyView(
     velox::memory::MemoryPool& pool,
     std::string_view data,
-    uint32_t expectedRows) {
+    uint32_t expectedRows,
+    bool cacheEncodingView) {
   NIMBLE_CHECK_FILE_GE(
       data.size(),
       EncodingPrefix::kFixedPrefixSize,
@@ -152,7 +154,8 @@ std::unique_ptr<TypedEncodingView<T>> createKeyView(
       EncodingPrefix::readRowCount(data, /*useVarint=*/false),
       expectedRows,
       "HierarchicalKeyReader child row count does not match its directory.");
-  return nimble::detail::createTypedEncodingView<T>(data, &pool, {});
+  return nimble::detail::createTypedEncodingView<T>(
+      data, &pool, {.cacheEncodingView = cacheEncodingView});
 }
 
 // Type-erases physical widths so one hierarchy can hold mixed-width sequences.
@@ -227,7 +230,8 @@ std::unique_ptr<KeySequence> createKeySequence(
     velox::memory::MemoryPool& pool,
     std::string_view data,
     uint32_t expectedRows,
-    uint8_t keyValueBytes) {
+    uint8_t keyValueBytes,
+    bool cacheEncodingView) {
   const auto expectedDataType = [&] {
     switch (keyValueBytes) {
       case sizeof(uint8_t):
@@ -246,19 +250,19 @@ std::unique_ptr<KeySequence> createKeySequence(
   }();
   if (expectedDataType == DataType::Uint8) {
     return std::make_unique<TypedKeySequence<uint8_t>>(
-        createKeyView<uint8_t>(pool, data, expectedRows));
+        createKeyView<uint8_t>(pool, data, expectedRows, cacheEncodingView));
   }
   if (expectedDataType == DataType::Uint16) {
     return std::make_unique<TypedKeySequence<uint16_t>>(
-        createKeyView<uint16_t>(pool, data, expectedRows));
+        createKeyView<uint16_t>(pool, data, expectedRows, cacheEncodingView));
   }
   if (expectedDataType == DataType::Uint32) {
     return std::make_unique<TypedKeySequence<uint32_t>>(
-        createKeyView<uint32_t>(pool, data, expectedRows));
+        createKeyView<uint32_t>(pool, data, expectedRows, cacheEncodingView));
   }
   NIMBLE_CHECK_EQ(expectedDataType, DataType::Uint64);
   return std::make_unique<TypedKeySequence<uint64_t>>(
-      createKeyView<uint64_t>(pool, data, expectedRows));
+      createKeyView<uint64_t>(pool, data, expectedRows, cacheEncodingView));
 }
 
 // Child offsets of one level: decoded values for a short sequence, the encoded
@@ -315,7 +319,8 @@ ChildOffsets readEncodedOffsets(
     uint32_t numValues,
     uint32_t expectedEnd,
     std::string_view description,
-    velox::memory::MemoryPool& pool) {
+    velox::memory::MemoryPool& pool,
+    bool cacheEncodingView) {
   // Keep short offset sets decoded. They sit at the upper levels, which every
   // seek reads, so reading them through a view would slow every seek for
   // little memory saved.
@@ -323,7 +328,7 @@ ChildOffsets readEncodedOffsets(
   // more than a decoded lookup.
   constexpr size_t kMaxDecodedOffsets{64};
   auto encodedOffsets = createKeyView<uint32_t>(
-      pool, readSizedSequence(position, end), numValues + 1);
+      pool, readSizedSequence(position, end), numValues + 1, cacheEncodingView);
   const auto numOffsets = encodedOffsets->rowCount();
   // Validates in fixed batches, so a compact sequence that claims a huge row
   // count fails without a matching allocation.
@@ -392,7 +397,8 @@ void HierarchicalKeyReader::readSequences(
     const char*& position,
     const char* end,
     std::span<const uint32_t> levelCounts,
-    velox::memory::MemoryPool* pool) {
+    velox::memory::MemoryPool* pool,
+    bool cacheEncodingViews) {
   NIMBLE_CHECK(
       childOffsets_.empty(), "Hierarchical child offsets are already read.");
   NIMBLE_CHECK(
@@ -410,14 +416,16 @@ void HierarchicalKeyReader::readSequences(
           levelCounts[level - 1],
           levelCounts[level],
           "child offsets",
-          memoryPool);
+          memoryPool,
+          cacheEncodingViews);
     }
     levelSequences_.push_back(
         detail::createKeySequence(
             memoryPool,
             readSizedSequence(position, end),
             levelCounts[level],
-            keyValueBytes_.at(level)));
+            keyValueBytes_.at(level),
+            cacheEncodingViews));
   }
   if (rowCount_ > levelCounts.back()) {
     childOffsets_.back() = detail::readEncodedOffsets(
@@ -426,13 +434,15 @@ void HierarchicalKeyReader::readSequences(
         levelCounts.back(),
         rowCount_,
         "leaf row offsets",
-        memoryPool);
+        memoryPool,
+        cacheEncodingViews);
   }
 }
 
 HierarchicalKeyReader::HierarchicalKeyReader(
     std::string_view encodedData,
-    velox::memory::MemoryPool* pool) {
+    velox::memory::MemoryPool* pool,
+    bool cacheEncodingViews) {
   NIMBLE_CHECK_NOT_NULL(pool);
   NIMBLE_CHECK_FILE_GE(
       encodedData.size(),
@@ -473,7 +483,7 @@ HierarchicalKeyReader::HierarchicalKeyReader(
       levelCounts.back(),
       "HierarchicalKeyReader has fewer rows than distinct keys.");
 
-  readSequences(position, end, levelCounts, pool);
+  readSequences(position, end, levelCounts, pool, cacheEncodingViews);
   NIMBLE_CHECK_FILE_EQ(
       remainingBytes(position, end),
       0,
@@ -616,9 +626,11 @@ uint32_t HierarchicalKeyReader::numLevels() const {
 std::unique_ptr<KeyReader> createHierarchicalKeyReader(
     std::string_view encodedKeys,
     const std::function<void*(uint32_t)>& /*stringBufferFactory*/,
-    velox::memory::MemoryPool* pool) {
+    velox::memory::MemoryPool* pool,
+    bool cacheEncodingViews) {
   NIMBLE_CHECK_NOT_NULL(pool);
-  return std::make_unique<HierarchicalKeyReader>(encodedKeys, pool);
+  return std::make_unique<HierarchicalKeyReader>(
+      encodedKeys, pool, cacheEncodingViews);
 }
 
 } // namespace facebook::nimble::index

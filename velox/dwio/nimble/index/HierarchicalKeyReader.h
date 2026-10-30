@@ -52,8 +52,14 @@ class KeySequence;
 /// each column. `get()` rebuilds a packed key and `seek()` accepts one.
 class HierarchicalKeyReader final : public KeyReader {
  public:
-  /// Opens a serialized index without materializing its keys.
-  HierarchicalKeyReader(std::string_view data, velox::memory::MemoryPool* pool);
+  /// Opens a serialized index without materializing its keys. With
+  /// 'cacheEncodingViews', every sequence's view keeps the lookup structures
+  /// of Encoding::Options::cacheEncodingView, which suits a chunk that stays
+  /// resident and serves many lookups.
+  HierarchicalKeyReader(
+      std::string_view data,
+      velox::memory::MemoryPool* pool,
+      bool cacheEncodingViews);
 
   ~HierarchicalKeyReader() override;
 
@@ -89,7 +95,8 @@ class HierarchicalKeyReader final : public KeyReader {
       const char*& position,
       const char* end,
       std::span<const uint32_t> levelCounts,
-      velox::memory::MemoryPool* pool);
+      velox::memory::MemoryPool* pool,
+      bool cacheEncodingViews);
 
   // Returns the first source row covered by a component subtree.
   // 'componentIndex' may be one past the level's last value, which returns
@@ -125,9 +132,11 @@ class HierarchicalKeyReader final : public KeyReader {
   std::vector<std::unique_ptr<detail::KeySequence>> levelSequences_;
 };
 
+/// Creates a HierarchicalKeyReader; 'cacheEncodingViews' is forwarded to it.
 std::unique_ptr<KeyReader> createHierarchicalKeyReader(
     std::string_view encodedKeys,
     const std::function<void*(uint32_t)>& stringBufferFactory,
-    velox::memory::MemoryPool* pool);
+    velox::memory::MemoryPool* pool,
+    bool cacheEncodingViews);
 
 } // namespace facebook::nimble::index

@@ -101,6 +101,25 @@ bool isKeyOrdered(int32_t comparison, bool noDuplicateKey) {
   return noDuplicateKey ? comparison > 0 : comparison >= 0;
 }
 
+// Returns the configured read factors of key sequences after checking that the
+// selection supports every encoding they name. Empty selects
+// defaultLevelEncodingReadFactors().
+std::vector<std::pair<EncodingType, float>> keySequenceEncodingReadFactors(
+    const ClusterIndexConfig& config) {
+  const auto possibleEncodings =
+      ManualEncodingSelectionPolicyFactory::possibleEncodings();
+  for (const auto& [encoding, readFactor] :
+       config.hierarchicalKeyEncodingReadFactors) {
+    NIMBLE_USER_CHECK(
+        std::find(
+            possibleEncodings.begin(), possibleEncodings.end(), encoding) !=
+            possibleEncodings.end(),
+        "Hierarchical key read factors name an encoding the selection does not support: {}",
+        encoding);
+  }
+  return config.hierarchicalKeyEncodingReadFactors;
+}
+
 // Reports an order violation using normalized key components.
 [[noreturn]] void failKeyOrder(
     bool noDuplicateKey,
@@ -129,13 +148,16 @@ class HierarchicalKeyChunkBuilder final : public KeyChunkBuilder {
       std::span<const SortOrder> sortOrders,
       bool enforceKeyOrder,
       bool noDuplicateKey,
+      std::vector<std::pair<EncodingType, float>> levelEncodingReadFactors,
       velox::memory::MemoryPool* pool)
       : keyEncoder_{std::move(keyEncoder)},
         keyColumnIndices_{keyColumnIndices.begin(), keyColumnIndices.end()},
         sortOrders_{sortOrders.begin(), sortOrders.end()},
         noDuplicateKey_{noDuplicateKey},
         encodingPolicyFactory_{
-            defaultLevelEncodingReadFactors(),
+            levelEncodingReadFactors.empty()
+                ? defaultLevelEncodingReadFactors()
+                : std::move(levelEncodingReadFactors),
             /*compressionOptions=*/std::nullopt},
         encodedKeyStream_{pool},
         keyBuffer_{*velox::checkedNotNull(pool)},
@@ -608,6 +630,7 @@ std::unique_ptr<KeyChunkBuilder> createHierarchicalKeyChunkBuilder(
     std::span<const SortOrder> sortOrders,
     bool enforceKeyOrder,
     bool noDuplicateKey,
+    std::vector<std::pair<EncodingType, float>> levelEncodingReadFactors,
     velox::memory::MemoryPool* pool) {
   return std::make_unique<HierarchicalKeyChunkBuilder>(
       std::move(keyEncoder),
@@ -616,6 +639,7 @@ std::unique_ptr<KeyChunkBuilder> createHierarchicalKeyChunkBuilder(
       sortOrders,
       enforceKeyOrder,
       noDuplicateKey,
+      std::move(levelEncodingReadFactors),
       pool);
 }
 
@@ -663,6 +687,7 @@ HierarchicalClusterIndexWriter::HierarchicalClusterIndexWriter(
               sortOrders,
               config.enforceKeyOrder,
               config.noDuplicateKey,
+              keySequenceEncodingReadFactors(config),
               pool),
           pool} {}
 
