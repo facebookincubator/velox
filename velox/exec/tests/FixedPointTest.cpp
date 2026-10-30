@@ -3918,7 +3918,8 @@ DEBUG_ONLY_TEST_F(FixedPointTest, failedBodyPlanStopsChainFirst) {
 // before its second read, and the Limit takes its row only then.  A sub-task
 // completes once its output pipeline finishes, so the sub-task, its loop and
 // the loop's task finish while the StateSource still holds the batches.  The
-// StateSource frees them when released, after the loop's task is deleted.
+// StateSource frees them when released, after the loop's task is destroyed.
+// The loop's task reports its deletion only once the sub-task is deleted too.
 DEBUG_ONLY_TEST_F(FixedPointTest, stateOutlivesSubTask) {
   auto schema = ROW({"key", "val"}, BIGINT());
   auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
@@ -3941,6 +3942,7 @@ DEBUG_ONLY_TEST_F(FixedPointTest, stateOutlivesSubTask) {
   struct StateReader {
     folly::Baton<> held;
     folly::Baton<> released;
+    folly::Baton<> loopTaskDestroyed;
     std::atomic_int32_t numReads{0};
   };
   // Shared with the injection callbacks, which can outlive this test.
@@ -3963,6 +3965,13 @@ DEBUG_ONLY_TEST_F(FixedPointTest, stateOutlivesSubTask) {
           waitFor(reader->held);
         }
       }));
+  SCOPED_TESTVALUE_SET(
+      "facebook::velox::exec::Task::~Task",
+      std::function<void(exec::Task*)>([reader](exec::Task* task) {
+        if (task->fixedPoint() != nullptr) {
+          reader->loopTaskDestroyed.post();
+        }
+      }));
 
   // Without this query context, the cursor runs the query on an executor of
   // its own and joins it before returning, which releases the StateSource.
@@ -3971,11 +3980,15 @@ DEBUG_ONLY_TEST_F(FixedPointTest, stateOutlivesSubTask) {
                   .maxDrivers(1)
                   .fixedPointOptions(&localOptions())
                   .assertResults(makeKeyValueRow(0, 0));
+  auto deletedWhileHeld = task->taskDeletionFuture();
   auto deleted = task->taskDeletionFuture();
   task.reset();
-  const bool isDeleted = std::move(deleted).wait(std::chrono::seconds(10));
+  EXPECT_TRUE(reader->loopTaskDestroyed.try_wait_for(std::chrono::seconds(10)));
+  EXPECT_FALSE(
+      std::move(deletedWhileHeld).wait(std::chrono::milliseconds(100)));
+
   reader->released.post();
-  EXPECT_TRUE(isDeleted);
+  EXPECT_TRUE(std::move(deleted).wait(std::chrono::seconds(10)));
 }
 
 // Drivers of the sub-tasks allocate from pools of the loop's task: the state's
