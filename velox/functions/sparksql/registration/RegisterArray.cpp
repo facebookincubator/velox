@@ -27,6 +27,7 @@
 #include "velox/functions/sparksql/ArrayMinMaxFunction.h"
 #include "velox/functions/sparksql/ArrayPrepend.h"
 #include "velox/functions/sparksql/ArraySort.h"
+#include "velox/functions/sparksql/ArraysOverlap.h"
 #include "velox/functions/sparksql/SimpleComparisonMatcher.h"
 #include "velox/functions/sparksql/SparkQueryConfig.h"
 
@@ -209,6 +210,41 @@ inline void registerArrayCompactFunctions(const std::string& prefix) {
       Array<Varchar>>({prefix + "array_compact"});
 }
 
+template <typename T>
+inline void registerArraysOverlapFunction(const std::string& prefix) {
+  registerFunction<
+      ParameterBinder<ArraysOverlapFunction, T>,
+      bool,
+      Array<T>,
+      Array<T>>({prefix + "arrays_overlap"});
+}
+
+// One signature per element type that Spark compares with equals(), and a
+// generic one for structs and arrays, which Spark compares with an ordering.
+// Function resolution prefers the concrete signatures.
+inline void registerArraysOverlapFunctions(const std::string& prefix) {
+  registerArraysOverlapFunction<int8_t>(prefix);
+  registerArraysOverlapFunction<int16_t>(prefix);
+  registerArraysOverlapFunction<int32_t>(prefix);
+  registerArraysOverlapFunction<int64_t>(prefix);
+  registerArraysOverlapFunction<float>(prefix);
+  registerArraysOverlapFunction<double>(prefix);
+  registerArraysOverlapFunction<bool>(prefix);
+  registerArraysOverlapFunction<ShortDecimal<P1, S1>>(prefix);
+  registerArraysOverlapFunction<LongDecimal<P1, S1>>(prefix);
+  registerArraysOverlapFunction<Date>(prefix);
+  registerArraysOverlapFunction<Timestamp>(prefix);
+  registerArraysOverlapFunction<IntervalDayTime>(prefix);
+  registerArraysOverlapFunction<IntervalYearMonth>(prefix);
+  registerArraysOverlapFunction<Varchar>(prefix);
+  registerArraysOverlapFunction<Varbinary>(prefix);
+  registerFunction<
+      ArraysOverlapComplexFunction,
+      bool,
+      Array<Orderable<T1>>,
+      Array<Orderable<T1>>>({prefix + "arrays_overlap"});
+}
+
 void registerArrayFunctions(const std::string& prefix) {
   registerArrayConcatFunctions(prefix);
   registerArrayJoinFunctions(prefix);
@@ -269,6 +305,7 @@ void registerArrayFunctions(const std::string& prefix) {
       Generic<T1>>({prefix + "array_append"});
   registerArrayUnionFunctions(prefix);
   registerArrayCompactFunctions(prefix);
+  registerArraysOverlapFunctions(prefix);
 }
 
 } // namespace sparksql
