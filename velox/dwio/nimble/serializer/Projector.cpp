@@ -258,6 +258,7 @@ std::shared_ptr<const Type> updateHybridFlatMapColumnNames(
       hybridMap.nullsDescriptor(),
       hybridMap.keyScalarKind(),
       std::move(groups),
+      hybridMap.defaultGroupKeyPresenceMode(),
       hybridMap.attributes());
 }
 

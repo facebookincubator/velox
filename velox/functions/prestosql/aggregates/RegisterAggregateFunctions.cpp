@@ -57,6 +57,7 @@
 #include "velox/functions/prestosql/aggregates/SumAggregate.h"
 #include "velox/functions/prestosql/aggregates/SumDataSizeForStatsAggregate.h"
 #include "velox/functions/prestosql/aggregates/VarianceAggregates.h"
+#include "velox/functions/prestosql/aggregates/VectorIndexBuildAggregate.h"
 #include "velox/functions/prestosql/aggregates/VectorIndexPackAggregate.h"
 #include "velox/functions/prestosql/aggregates/VectorSumAggregate.h"
 #include "velox/functions/prestosql/types/JsonRegistration.h"
@@ -346,6 +347,8 @@ void registerAllAggregateFunctions(
   registerVectorSumAggregate(
       {prefix + kVectorSum}, withCompanionFunctions, overwrite);
 #ifdef VELOX_ENABLE_FAISS
+  registerVectorIndexBuildAggregate(
+      {prefix + kVectorIndexBuild}, withCompanionFunctions, overwrite);
   registerVectorIndexPackAggregate(
       {prefix + kVectorIndexPack}, withCompanionFunctions, overwrite);
 #endif

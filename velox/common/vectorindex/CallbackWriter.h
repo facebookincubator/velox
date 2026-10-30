@@ -14,21 +14,19 @@
  * limitations under the License.
  */
 
-#include "velox/common/vectorindex/VectorIndexCodec.h"
+#pragma once
 
-#include <faiss/IndexFlat.h>
+#include <string_view>
+
 #include <faiss/impl/io.h>
-#include <faiss/index_io.h>
-#include <faiss/utils/distances.h>
-
-#include "velox/common/base/Exceptions.h"
+#include <folly/Function.h>
 
 namespace facebook::velox::common::vectorindex {
 
-namespace {
-
-// Passes each chunk FAISS writes to a callback.
-struct CallbackWriter : faiss::IOWriter {
+/// Passes each chunk faiss::write_index writes to a callback, so the caller
+/// can place the bytes without an intermediate copy.
+class CallbackWriter : public faiss::IOWriter {
+ public:
   explicit CallbackWriter(folly::FunctionRef<void(std::string_view)> write)
       : write_{write} {}
 
@@ -40,28 +38,5 @@ struct CallbackWriter : faiss::IOWriter {
  private:
   folly::FunctionRef<void(std::string_view)> write_;
 };
-
-} // namespace
-
-void VectorIndexCodec::pack(
-    float* centroids,
-    int64_t numClusters,
-    int32_t dimension,
-    VectorIndexMetric metric,
-    folly::FunctionRef<void(std::string_view)> write) {
-  VELOX_CHECK_GT(numClusters, 0);
-  VELOX_CHECK_GT(dimension, 0);
-  switch (metric) {
-    case VectorIndexMetric::kCosine: {
-      faiss::fvec_renorm_L2(dimension, numClusters, centroids);
-      faiss::IndexFlatIP index(dimension);
-      index.add(numClusters, centroids);
-      CallbackWriter writer(write);
-      faiss::write_index(&index, &writer);
-      return;
-    }
-  }
-  VELOX_UNREACHABLE();
-}
 
 } // namespace facebook::velox::common::vectorindex

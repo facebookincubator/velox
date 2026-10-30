@@ -48,6 +48,7 @@
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/LocalExchangeSource.h"
+#include "velox/exec/tests/utils/LocalFixedPoint.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/TestIndexStorageConnector.h"
 #include "velox/type/Filter.h"
@@ -62,6 +63,7 @@ using core::PlanNodePtr;
 using core::StateDeclarationPtr;
 using core::VectorStateDeclaration;
 using exec::test::AssertQueryBuilder;
+using exec::test::LocalFixedPoint;
 using exec::test::PlanBuilder;
 
 // Appends the rows of 'result' to 'rows' as (col0, col1) BIGINT pairs.
@@ -189,62 +191,9 @@ class FixedPointTest : public exec::test::HiveConnectorTestBase {
     return node->as<FixedPointNode>()->numWorkers();
   }
 
-  // Runs the iteration loops, kept off the query executor the sub-tasks'
-  // drivers run on.  One thread serves every loop, nested or peer: a loop
-  // suspends while its sub-tasks run.
-  static folly::Executor* orchestrationExecutor() {
-    static const auto kExecutor =
-        std::make_shared<folly::CPUThreadPoolExecutor>(1);
-    return kExecutor.get();
-  }
-
-  // Formats 'nesting', one "/{planNodeId}.{iteration}" per step.
-  static std::string nestingSuffix(
-      const std::vector<FixedPointOptions::NestingStep>& nesting) {
-    std::string suffix;
-    for (const auto& step : nesting) {
-      suffix += fmt::format("/{}.{}", step.planNodeId, step.iteration);
-    }
-    return suffix;
-  }
-
-  // Returns the in-process "local://" task id of the producer 'planNodeId' of
-  // the loop at 'address' in 'iteration'.  LocalExchangeSource reads a task by
-  // its id, so the same string names the producer and the split reading it.
-  static std::string producerId(
-      const FixedPointOptions::LoopAddress& address,
-      int32_t iteration,
-      const std::string& planNodeId) {
-    return fmt::format(
-        "local://{}{}.it{}.{}",
-        address.worker,
-        nestingSuffix(address.nesting),
-        iteration,
-        planNodeId);
-  }
-
-  // FixedPointOptions naming sub-tasks in the in-process "local://" scheme.  A
-  // FixedPointLoop provides no defaults, so the application (here the test)
-  // supplies them.
+  // FixedPointOptions naming sub-tasks in the in-process "local://" scheme.
   static const FixedPointOptions& localOptions() {
-    static const FixedPointOptions kOptions = [] {
-      FixedPointOptions options;
-      options.orchestrationExecutor = orchestrationExecutor();
-      options.producerTaskId = producerId;
-      options.producerSplit = [](const FixedPointOptions::LoopAddress& peer,
-                                 int32_t iteration,
-                                 const std::string& planNodeId)
-          -> std::shared_ptr<connector::ConnectorSplit> {
-        return std::make_shared<exec::RemoteConnectorSplit>(
-            producerId(peer, iteration, planNodeId));
-      };
-      options.subTaskId = [](const std::string& workerTaskId, int64_t counter) {
-        return fmt::format("{}.sub{}", workerTaskId, counter);
-      };
-      return options;
-    }();
-
-    return kOptions;
+    return LocalFixedPoint::options();
   }
 
   // A publishVerdict hook that drops the verdict.
@@ -595,7 +544,7 @@ class FixedPointTest : public exec::test::HiveConnectorTestBase {
       return fmt::format(
           "{}{}#{}",
           workerZero.worker,
-          nestingSuffix(workerZero.nesting),
+          LocalFixedPoint::nestingSuffix(workerZero.nesting),
           iteration);
     };
     if (!options.publishVerdict) {
@@ -929,7 +878,7 @@ class FixedPointTest : public exec::test::HiveConnectorTestBase {
   // numWorkers * numPlans sub-task drivers live at once (producers stay up
   // while peers' consumers drain them), so this must comfortably exceed that.
   // The run() loops that block on these sub-tasks run on a separate executor
-  // (see orchestrationExecutor()).
+  // (see LocalFixedPoint::orchestrationExecutor()).
   std::shared_ptr<folly::CPUThreadPoolExecutor> cpuExecutor_{
       std::make_shared<folly::CPUThreadPoolExecutor>(16)};
 
@@ -3596,7 +3545,7 @@ TEST_F(FixedPointTest, onIterationStatsFromNestedLoop) {
           fmt::format(
               "{}{}#{}{}",
               report.nesting.empty() ? "outer" : "inner",
-              nestingSuffix(report.nesting),
+              LocalFixedPoint::nestingSuffix(report.nesting),
               report.stats.iteration,
               report.stats.converged ? " converged" : ""));
     }
@@ -3757,7 +3706,8 @@ void holdUntilStopped(exec::Task& owner, HeldDriver& held) {
 DEBUG_ONLY_TEST_F(FixedPointTest, loopStartsAfterDrivers) {
   std::atomic_int32_t count{0};
   InterceptingExecutor executor(
-      orchestrationExecutor(), [&](folly::Func func, folly::Executor& wrapped) {
+      LocalFixedPoint::orchestrationExecutor(),
+      [&](folly::Func func, folly::Executor& wrapped) {
         ++count;
         wrapped.add(std::move(func));
       });
@@ -4152,7 +4102,7 @@ TEST_F(FixedPointTest, abortReleasesTask) {
     std::atomic<exec::Task*> abortedTask{nullptr};
     std::atomic_size_t numTasksAtAbort{0};
     InterceptingExecutor executor(
-        orchestrationExecutor(),
+        LocalFixedPoint::orchestrationExecutor(),
         [&](folly::Func func, folly::Executor& wrapped) {
           if (auto* task = abortedTask.exchange(nullptr)) {
             task->requestAbort().wait();
