@@ -134,6 +134,7 @@ jobs:
           install_double_conversion
 
           echo "NJOBS=`sysctl -n hw.ncpu`" >> $GITHUB_ENV
+          echo "OPENSSL_ROOT_DIR=$OPENSSL_ROOT_DIR" >> $GITHUB_ENV
           majorVersion=$(sw_vers -productVersion | awk -F '.' '{print $1}')
           echo "$INSTALL_PREFIX/bin" >> $GITHUB_PATH
 
