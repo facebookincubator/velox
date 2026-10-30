@@ -317,7 +317,20 @@ endif()
 
 # We look for OpenSSL here to cache the result enforce the version across our
 # dependencies.
-find_package(OpenSSL REQUIRED)
+if(APPLE)
+  # The bundled gRPC is not compatible with OpenSSL 4.
+  if(NOT OPENSSL_ROOT_DIR AND NOT DEFINED ENV{OPENSSL_ROOT_DIR})
+    execute_process(
+      COMMAND brew --prefix openssl@3
+      OUTPUT_VARIABLE OPENSSL_ROOT_DIR
+      OUTPUT_STRIP_TRAILING_WHITESPACE
+      COMMAND_ERROR_IS_FATAL ANY
+    )
+  endif()
+  find_package(OpenSSL 3...<4 REQUIRED)
+else()
+  find_package(OpenSSL REQUIRED)
+endif()
 
 if(
   VELOX_ENABLE_CCACHE

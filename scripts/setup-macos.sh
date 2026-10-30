@@ -39,6 +39,8 @@ PYTHON_VENV=${PYTHON_VENV:-"${SCRIPT_DIR}/../.venv"}
 OS_CXXFLAGS=" -isystem $(brew --prefix)/include "
 export OS_CXXFLAGS
 export CMAKE_POLICY_VERSION_MINIMUM="3.5"
+OPENSSL_ROOT_DIR="${OPENSSL_ROOT_DIR:-$(brew --prefix openssl@3)}"
+export OPENSSL_ROOT_DIR
 
 DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)}
 # gflags and glog are installed from source to ensure version compatibility.
@@ -48,7 +50,7 @@ DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)}
 # /opt/homebrew/include shadow the built-in gmock in targets that reach
 # /opt/homebrew/include before the bundled googlemock, mixing two googletest
 # versions in one translation unit.
-MACOS_VELOX_DEPS="bison double-conversion fast_float flex icu4c libevent libsodium lz4 openssl simdjson snappy xz xxhash zstd"
+MACOS_VELOX_DEPS="bison double-conversion fast_float flex icu4c libevent libsodium lz4 openssl@3 simdjson snappy xz xxhash zstd"
 MACOS_BUILD_DEPS="ninja cmake"
 
 SUDO="${SUDO:-""}"
