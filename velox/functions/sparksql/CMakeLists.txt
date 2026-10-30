@@ -68,6 +68,7 @@ velox_add_library(
   ArrayMinMaxFunction.h
   ArrayPrepend.h
   ArraySort.h
+  ArraysOverlap.h
   AssertNotNull.h
   Base64Function.h
   Bitwise.h
@@ -90,6 +91,7 @@ velox_add_library(
   Hash.h
   In.h
   InitcapFunction.h
+  JavaFloatingPoint.h
   JsonObjectKeys.h
   LambdaIndexUtil.h
   LastWin.h
