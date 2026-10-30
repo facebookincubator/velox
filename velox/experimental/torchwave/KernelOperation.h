@@ -51,6 +51,10 @@ struct ElementExpr {
   ValueCP output{nullptr};
   std::vector<ValueCP> inputs;
   std::unordered_map<ValueCP, int32_t> altParamOffset;
+  /// Leaves read below a view the expression computes through, each mapped to
+  /// that view's input. The leaf broadcasts against the view input's shape,
+  /// not against 'output'.
+  folly::F14FastMap<ValueCP, ValueCP> leafRefs;
   bool shapeFromThisOp{false};
 };
 
@@ -393,6 +397,21 @@ class KernelOperation {
     return barrierCounters_;
   }
 
+  /// Allocates a 32-bit counter in the parameter block, zeroed before every
+  /// launch like a barrier counter. Unlike one, it does not make the op need a
+  /// cooperative launch.
+  int32_t allocateCounter() {
+    auto offset = altParamOffset_;
+    counters_.push_back(offset);
+    altParamOffset_ += 8;
+    return offset;
+  }
+
+  /// Offsets of the counters from allocateCounter().
+  const std::vector<int32_t>& counters() const {
+    return counters_;
+  }
+
   const std::vector<int32_t>& altTensorOffsets() const {
     return altTensorOffsets_;
   }
@@ -430,6 +449,28 @@ class KernelOperation {
   /// for leaves that do not broadcast against their expression's output.
   const folly::F14FastMap<int32_t, int32_t>& broadcastRefs() const {
     return broadcastRefs_;
+  }
+
+  /// Records that the generated code assumes the tensor at 'offset' has
+  /// exactly 'dims', and with 'contiguous' also a dense layout. Code that
+  /// indexes with literal divisors depends on it, and each launch checks it
+  /// before running (runShapeChecks).
+  void
+  addStaticShape(int32_t offset, std::vector<int64_t> dims, bool contiguous) {
+    auto [it, inserted] =
+        staticShapes_.emplace(offset, StaticShape{std::move(dims), contiguous});
+    it->second.contiguous |= contiguous;
+  }
+
+  /// A shape the generated code assumes for one of its tensors.
+  struct StaticShape {
+    std::vector<int64_t> dims;
+    bool contiguous{false};
+  };
+
+  /// Param offset -> the shape the generated code assumes for that tensor.
+  const folly::F14FastMap<int32_t, StaticShape>& staticShapes() const {
+    return staticShapes_;
   }
 
   const std::unordered_set<NodeCP>& allNodes() const {
@@ -613,6 +654,7 @@ class KernelOperation {
 
   std::vector<int32_t> altTensorOffsets_;
   std::vector<int32_t> barrierCounters_;
+  std::vector<int32_t> counters_;
 
   std::vector<ElementExpr> elementExprs_;
 
@@ -623,6 +665,9 @@ class KernelOperation {
 
   // See broadcastRefs().
   folly::F14FastMap<int32_t, int32_t> broadcastRefs_;
+
+  // See staticShapes().
+  folly::F14FastMap<int32_t, StaticShape> staticShapes_;
 
   std::unordered_set<NodeCP> allNodes_;
 

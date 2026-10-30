@@ -296,8 +296,16 @@ class CompositeKernel {
     std::unique_ptr<facebook::velox::wave::CompiledKernel> kernel;
   };
 
+  static std::unique_ptr<facebook::velox::wave::CompiledKernel> compileModule(
+      const std::string& text,
+      std::function<facebook::velox::wave::KernelSpec()> genFunc);
+
   // The compiled modules, one per distinct set of ops that share a step.
   std::vector<std::unique_ptr<facebook::velox::wave::CompiledKernel>> modules_;
+  // Per module: the variant compiled without its ops' minimum blocks per SM,
+  // or null. warmup() keeps one of the two and clears these.
+  std::vector<std::unique_ptr<facebook::velox::wave::CompiledKernel>>
+      unboundedModules_;
   std::string entryPoint_;
   std::vector<std::unique_ptr<ProjectOperation>> ops_;
   std::vector<std::unique_ptr<KernelOperation>> kernelOpStorage_;

@@ -91,6 +91,11 @@ void addDuplicateExtraBindings(
     WaveGraph& waveGraph);
 
 /// Hash functor for Subgraph, used to deduplicate identical subgraphs.
+/// The number of leading dims a row reduction keeps, from its attribute.
+std::optional<int64_t> rowReductionKeep(
+    NodeCP node,
+    const RowReduction& reduction);
+
 struct SubgraphHash {
   size_t operator()(const Subgraph& sg) const;
 };
@@ -170,7 +175,12 @@ class CompileCtx {
       // Output Value of a data-dependent scan op (masked_select / nonzero)
       // whose size is written on device; its dims[0] is forced to 0 for an
       // empty input (the element loop that would set it runs zero iterations).
-      ValueCP FOLLY_NULLABLE shapeSetOnDeviceResult = nullptr);
+      ValueCP FOLLY_NULLABLE shapeSetOnDeviceResult = nullptr,
+      // A row reduction (Metadata::rowReduction) taking the expression as its
+      // input. The loop then runs over the reduction's rows and combines the
+      // expression's values into the reduction's output instead of storing
+      // them; 'resultSpecs' carry no value.
+      NodeCP FOLLY_NULLABLE rowReduction = nullptr);
 
   /// Recurses through inputs of 'node', stopping at placed_ and inputs of
   /// generatingOp_'s subgraph. Calls fusedCode on non-elementwise ops with
@@ -425,6 +435,21 @@ class CompileCtx {
     return it != variantToOriginal_.end() ? it->second : node;
   }
 
+  /// True when 'view' is a reshaping view that the elementwise expression
+  /// reading it computes through: its elementwise producer is generated inline
+  /// at the consumer's index and never written to memory. A reshape keeps the
+  /// row-major order of the elements, so element idx of the view is element
+  /// idx of its input. Requires that the view and its input have no other
+  /// reader, and that the view's output is not broadcast in the expression,
+  /// both decided from the graph and its static dims.
+  bool fusesThroughView(NodeCP view) const;
+
+  /// True when 'node' is a row reduction (Metadata::rowReduction) whose input
+  /// is computed by an inline elementwise expression with no other reader. The
+  /// expression is then evaluated in the reduction's row loop and never
+  /// written to memory.
+  bool fusesRowReduction(NodeCP node) const;
+
   /// Creates a new nativert::Graph with a deep copy of the contents of 'sg'.
   /// In kSingle mode, copies as-is. In kMulti/kCG, expands nodes that have
   /// a multikernel or cg variant. The graph is owned by the WaveGraph being
@@ -620,6 +645,47 @@ class CompileCtx {
       const std::vector<ValueCP>& inputs,
       const KernelOperation& op,
       bool slowPath);
+
+  // The literal loop bound of an elementwise op whose single root and every
+  // per-element operand have static shapes and contiguous layouts, so each
+  // operand reads at a static index. Records the outputs' shapes for the
+  // launch check. Nullopt otherwise.
+  std::optional<int64_t> staticLoopSize(
+      const std::vector<ValueCP>& leafInputs,
+      const std::unordered_set<ValueCP>& wholeTensorValues,
+      const std::unordered_set<ValueCP>& sizeExcludedValues,
+      const std::vector<Subgraph>& subgraphs,
+      const std::vector<ResultSpec>& resultSpecs,
+      ValueCP shapeSetOnDeviceResult,
+      const KernelOperation& op);
+
+  // Emits the loop of the row reduction 'reduction' over the expression rooted
+  // at 'root': each element of a row is evaluated at idx = row * rowLen + k
+  // and combined, and lane or thread 0 stores the row's result. A row of up to
+  // 1024 elements is reduced by a warp, a longer one by a block. Warps or
+  // blocks claim rows from the zeroed counter at 'rowCounter'.
+  void emitRowReduction(
+      NodeCP reduction,
+      ValueCP root,
+      KernelOperation& op,
+      const std::vector<ValueCP>& inputs,
+      int32_t rowCounter,
+      bool slowPath);
+
+  // Places a row reduction whose input expression it evaluates in its own row
+  // loop (see fusesRowReduction).
+  void fusedRowReduction(NodeCP node);
+
+  // The index text at which the slow path stores an output element. The
+  // output's layout is read at run time: a concat operand written in place is
+  // a strided band of the result, whatever its static layout says.
+  std::string rootStoreIndex(ValueCP value, const KernelOperation& op) const;
+
+  // Index expression with literal divisors for leaf 'value' of the current
+  // root, when both shapes are static and 'value' is contiguous.
+  std::optional<std::string> staticLeafIndexOf(
+      ValueCP value,
+      const KernelOperation& op) const;
 
   std::string buildElementwiseCall(
       const Metadata& meta,

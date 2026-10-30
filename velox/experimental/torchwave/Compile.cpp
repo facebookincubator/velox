@@ -15,8 +15,10 @@
  */
 
 #include "velox/experimental/torchwave/Compile.h"
+#include "velox/experimental/torchwave/StaticDims.h"
 
 #include <fmt/format.h>
+#include <folly/container/F14Set.h>
 #include <iostream>
 #include "velox/experimental/torchwave/AllocGroup.h"
 #include "velox/experimental/torchwave/Cat.h"
@@ -166,6 +168,189 @@ std::vector<const c10::IValue*> listConstants(
 
 namespace {
 
+// Views whose output lists the elements of their input in the same row-major
+// order, whatever the input's strides.
+bool isReshapeView(NodeCP node) {
+  static const folly::F14FastSet<std::string_view> kTargets{
+      "torch.ops.aten.view.default",
+      "torch.ops.aten._unsafe_view.default",
+      "torch.ops.aten.reshape.default",
+      "torch.ops.aten.alias.default",
+      "torch.ops.aten.unsqueeze.default",
+      "torch.ops.aten.squeeze.default",
+      "torch.ops.aten.squeeze.dim",
+      "torch.ops.aten.squeeze.dims",
+      "torch.ops.aten.flatten.using_ints",
+      "torch.ops.aten.unflatten.int",
+  };
+  const auto* meta = Registry::metadata(node->target());
+  return meta != nullptr && meta->viewOfArg.has_value() &&
+      kTargets.count(node->target()) > 0;
+}
+
+// The readers of 'value' whose results are used. A rewrite that replaces a
+// node leaves it in the graph reading its inputs, with no reader of its own.
+std::vector<NodeCP> liveUsers(WaveGraph& graph, ValueCP value) {
+  std::vector<NodeCP> users;
+  for (auto* user : value->users()) {
+    const bool live = std::any_of(
+        user->outputs().begin(), user->outputs().end(), [&](ValueCP output) {
+          return !output->users().empty() || graph.isGraphOutput(output->id());
+        });
+    if (live && std::find(users.begin(), users.end(), user) == users.end()) {
+      users.push_back(user);
+    }
+  }
+  return users;
+}
+
+bool isInlineElementwise(NodeCP node) {
+  const auto* meta = Registry::metadata(node->target());
+  return meta != nullptr && meta->elementwise != nullptr &&
+      !meta->isElementwiseBorder() && !meta->returnMeta.empty() &&
+      meta->returnMeta[0].isRegister;
+}
+
+// The only reader of 'value' when it is an inline elementwise op taking it as
+// a per-element register argument, else nullptr.
+NodeCP soleElementwiseReader(WaveGraph& graph, ValueCP value) {
+  const auto users = liveUsers(graph, value);
+  if (users.size() != 1) {
+    return nullptr;
+  }
+  auto* user = users[0];
+  if (!isInlineElementwise(user)) {
+    return nullptr;
+  }
+  const auto* meta = Registry::metadata(user->target());
+  for (size_t i = 0; i < user->inputs().size(); ++i) {
+    if (user->inputs()[i].value != value) {
+      continue;
+    }
+    const auto* argMeta = argMetaForInput(meta, user, i);
+    if (argMeta == nullptr || !argMeta->isRegister || argMeta->wholeTensor) {
+      return nullptr;
+    }
+  }
+  return user;
+}
+
+// Adds every value an expression could read below 'value', looking through
+// elementwise ops, views and lists, and not through 'stop'. A value with more
+// than one reader is added but not looked through: it is either computed in
+// another kernel or written to memory by this one, and either way read from
+// memory, so what lies below it is not part of the expression.
+void addExpressionValues(
+    WaveGraph& graph,
+    ValueCP value,
+    NodeCP stop,
+    folly::F14FastSet<ValueCP>& values) {
+  if (!values.insert(value).second) {
+    return;
+  }
+  auto* producer = value->producer();
+  if (producer == nullptr || producer == stop ||
+      liveUsers(graph, value).size() != 1) {
+    return;
+  }
+  const auto* meta = Registry::metadata(producer->target());
+  const bool descend = producer->target() == "prim.ListPack" ||
+      (meta != nullptr && (meta->elementwise != nullptr || meta->isView()));
+  if (!descend) {
+    return;
+  }
+  for (const auto& input : producer->inputs()) {
+    addExpressionValues(graph, input.value, stop, values);
+  }
+}
+
+// See CompileCtx::fusesThroughView. 'view' is a node of the original graph.
+bool viewIsFusedThrough(WaveGraph& graph, NodeCP view) {
+  if (!WaveConfig::get().fuseThroughViews || WaveConfig::get().allStandalone ||
+      !isReshapeView(view) || view->outputs().size() != 1) {
+    return false;
+  }
+  const auto& types = graph.types();
+  const auto* meta = Registry::metadata(view->target());
+  auto* input = view->inputs()[*meta->viewOfArg].value;
+  auto* output = view->outputs()[0];
+  auto* producer = input->producer();
+  if (producer == nullptr || !isInlineElementwise(producer) ||
+      Registry::metadata(producer->target())->isStandalone(producer, types) ||
+      liveUsers(graph, input).size() != 1 || graph.isGraphOutput(input->id()) ||
+      graph.isGraphOutput(output->id())) {
+    return false;
+  }
+  auto* consumer = soleElementwiseReader(graph, output);
+  if (consumer == nullptr || !isFullyStatic(types, output)) {
+    return false;
+  }
+  // The loop runs over the expression's root. Every op from the consumer up to
+  // that root must have the view's shape, so that the loop's idx is the view's
+  // idx. Ops above a value with another reader belong to another expression,
+  // so the walk ends there.
+  const auto viewDims = staticDimsOf(types, output);
+  auto* top = consumer;
+  for (;;) {
+    if (top->outputs().empty() ||
+        staticDimsOf(types, top->outputs()[0]) != viewDims) {
+      return false;
+    }
+    auto* next = soleElementwiseReader(graph, top->outputs()[0]);
+    if (next == nullptr) {
+      break;
+    }
+    top = next;
+  }
+  // A value read both below the view and beside it would be indexed against
+  // two different shapes in one expression.
+  folly::F14FastSet<ValueCP> below;
+  addExpressionValues(graph, input, nullptr, below);
+  folly::F14FastSet<ValueCP> beside;
+  for (const auto& topInput : top->inputs()) {
+    addExpressionValues(graph, topInput.value, view, beside);
+  }
+  beside.erase(output);
+  return std::none_of(below.begin(), below.end(), [&](ValueCP value) {
+    return beside.count(value) > 0;
+  });
+}
+
+} // namespace
+
+std::optional<int64_t> rowReductionKeep(
+    NodeCP node,
+    const RowReduction& reduction) {
+  const auto* attr = node->tryGetAttribute(reduction.keepAttr);
+  if (attr == nullptr || !std::holds_alternative<int64_t>(attr->value)) {
+    return std::nullopt;
+  }
+  return std::get<int64_t>(attr->value);
+}
+
+namespace {
+
+// See CompileCtx::fusesRowReduction. 'node' is a node of the original graph.
+bool rowReductionIsFused(WaveGraph& graph, NodeCP node) {
+  const auto* meta = Registry::metadata(node->target());
+  if (!WaveConfig::get().fuseRowReductions || WaveConfig::get().allStandalone ||
+      meta == nullptr || !meta->rowReduction.has_value() ||
+      node->inputs().empty() ||
+      !rowReductionKeep(node, *meta->rowReduction).has_value()) {
+    return false;
+  }
+  const auto& types = graph.types();
+  auto* input = node->inputs()[0].value;
+  auto* producer = input->producer();
+  return producer != nullptr && isInlineElementwise(producer) &&
+      !Registry::metadata(producer->target())->isStandalone(producer, types) &&
+      liveUsers(graph, input).size() == 1 && !graph.isGraphOutput(input->id());
+}
+
+} // namespace
+
+namespace {
+
 bool tensorMetaCompatible(
     const nativert::TensorMeta& l,
     const nativert::TensorMeta& r) {
@@ -226,6 +411,16 @@ bool intListAttributesMatch(NodeCP left, NodeCP right) {
   return true;
 }
 
+// Generated code may index with the static dims of its values (literal
+// divisors), so two nodes share a compiled op only when those dims agree.
+bool staticDimsMatch(ValueCP left, ValueCP right) {
+  if (!WaveConfig::get().staticLeafIndex) {
+    return true;
+  }
+  const auto& types = waveGraph()->types();
+  return staticDimsOf(types, left) == staticDimsOf(types, right);
+}
+
 bool subgraphNodesMatch(
     NodeCP left,
     NodeCP right,
@@ -236,7 +431,23 @@ bool subgraphNodesMatch(
   if (left->target() != right->target()) {
     return false;
   }
+  if (left->outputs().size() != right->outputs().size()) {
+    return false;
+  }
+  for (size_t i = 0; i < left->outputs().size(); ++i) {
+    if (!staticDimsMatch(left->outputs()[i], right->outputs()[i])) {
+      return false;
+    }
+  }
   if (!intListAttributesMatch(left, right)) {
+    return false;
+  }
+  // A view computed through, or a row reduction taking a fused input, leaves
+  // its producer's output unwritten.
+  if (viewIsFusedThrough(*waveGraph(), left) !=
+          viewIsFusedThrough(*waveGraph(), right) ||
+      rowReductionIsFused(*waveGraph(), left) !=
+          rowReductionIsFused(*waveGraph(), right)) {
     return false;
   }
   // dtype attributes must match when present.
@@ -307,6 +518,9 @@ bool subgraphNodesMatch(
       bool leftIsView = lMeta && lMeta->isView();
       bool rightIsView = rMeta && rMeta->isView();
       if (leftIsView != rightIsView) {
+        return false;
+      }
+      if (!staticDimsMatch(li[i].value, ri[i].value)) {
         return false;
       }
       if (leftKind == nativert::Type::Kind::Tensor) {
@@ -1075,6 +1289,16 @@ static ValueCP viewBase(ValueCP value) {
   return value;
 }
 
+bool CompileCtx::fusesThroughView(NodeCP node) const {
+  // Users are counted in the original graph: a variant copy sees only the
+  // readers inside its own kernel.
+  return viewIsFusedThrough(waveGraph_, originalFromVariant(node));
+}
+
+bool CompileCtx::fusesRowReduction(NodeCP node) const {
+  return rowReductionIsFused(waveGraph_, originalFromVariant(node));
+}
+
 // True when the consumer described by 'consumerMeta' reads its input
 // 'inputIdx' from the memory output of a 'producer' that would fuse into the
 // consumer's kernel. Any such edge needs a barrier: the producer's writes come
@@ -1233,8 +1457,12 @@ Context CompileCtx::placeKernels(NodeCP node, Context /*context*/) {
     // not write needs no ordering at all. The break itself still ends the
     // kernel at the direct producer -- for a view that pulls the base's writer
     // into the earlier kernel, which is what the launch boundary then orders.
+    // A view this op computes through hands its producer's value over in a
+    // register.
     auto* dataValue = viewBase(inputValue);
     if (thisContext == Context::kFused && !isCgGrid_ && !isSingleBlock_ &&
+        !(producer != nullptr && fusesThroughView(producer)) &&
+        !fusesRowReduction(node) &&
         readsFusedElementwiseProducerFromMemory(
             i,
             node,
@@ -2568,6 +2796,17 @@ void CompileCtx::generateElementwiseBorderImpl(
     auto* am = getArgMeta(inputIdx);
     if (isElementwiseProducer(producer) && !(am && am->wholeTensor)) {
       generateElementwiseBorderImpl(producer, opInputs, visited);
+    } else if (fusesThroughView(producer)) {
+      // The view stays unplaced, so the expression extracted next reaches
+      // through it into its producer.
+      auto* viewInput =
+          producer->inputs()[*nodeMeta(producer)->viewOfArg].value;
+      auto* viewProducer = viewInput->producer();
+      if (opInputs.count(viewInput) || placed_.count(viewProducer)) {
+        emitBorder(producer);
+      } else if (visited.insert(viewProducer).second) {
+        generateElementwiseBorderImpl(viewProducer, opInputs, visited);
+      }
     } else {
       emitBorder(producer);
     }
@@ -2699,6 +2938,18 @@ void CompileCtx::fusedCode(NodeCP node, std::vector<ResultSpec>& resultSpecs) {
     placed_.insert(node);
     generatingOp_->allNodes().insert(node);
     return;
+  }
+
+  if (meta->rowReduction.has_value() && fusesRowReduction(node)) {
+    const auto& ordered = generatingOp_->orderedInputs();
+    if (std::find(
+            ordered.begin(),
+            ordered.begin() + generatingOp_->numInputs(),
+            node->inputs()[0].value) ==
+        ordered.begin() + generatingOp_->numInputs()) {
+      fusedRowReduction(node);
+      return;
+    }
   }
 
   if (meta->elementwise) {
@@ -2879,6 +3130,25 @@ void CompileCtx::fusedCode(NodeCP node, std::vector<ResultSpec>& resultSpecs) {
   }
   placed_.insert(node);
   generatingOp_->allNodes().insert(node);
+}
+
+void CompileCtx::fusedRowReduction(NodeCP node) {
+  auto* producer = node->inputs()[0].value->producer();
+  TORCH_CHECK(
+      !placed_.count(producer),
+      "The input of a fused row reduction is already placed: ",
+      node->target());
+  generateElementwiseBorder(producer);
+  Subgraph sg = extractSubgraph(producer, *inputs_, placed_);
+  ResultSpec spec;
+  spec.variable = "result0";
+  generateElementwise({sg}, {spec}, "", false, nullptr, node);
+  placed_.insert(node);
+  generatingOp_->allNodes().insert(node);
+  if ((isCgGrid_ || isSingleBlock_) &&
+      nodeMeta(node)->multiBlockReturnBarrier) {
+    emitBarrier();
+  }
 }
 
 std::string cudaAttrType(const nativert::Constant& c) {
