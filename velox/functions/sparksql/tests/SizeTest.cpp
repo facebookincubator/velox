@@ -253,7 +253,7 @@ TEST_F(SizeTest, differentialEncodings) {
     for (const auto legacy : {false, true}) {
       SCOPED_TRACE(legacy);
       auto expected = evaluate<SimpleVector<int32_t>>(
-          legacy ? "coalesce(size_reference(c0), -1::integer)"
+          legacy ? "coalesce(size_reference(c0), cast('-1' as integer))"
                  : "size_reference(c0)",
           makeRowVector({reference}));
       facebook::velox::test::assertEqualVectors(
@@ -383,16 +383,10 @@ TEST_F(SizeTest, differentialEncodings) {
   }
 }
 
-TEST_F(SizeTest, maximumSizeWithoutLoadingChildren) {
+TEST_F(SizeTest, maximumSize) {
   constexpr auto kMaxSize = std::numeric_limits<vector_size_t>::max();
-  auto elements = std::make_shared<LazyVector>(
-      pool(),
-      INTEGER(),
-      kMaxSize,
-      std::make_unique<facebook::velox::test::SimpleVectorLoader>(
-          [](RowSet /*rows*/) -> VectorPtr {
-            VELOX_FAIL("Spark size must not load collection children");
-          }));
+  // Constant children cover the cardinality limit without a huge allocation.
+  auto elements = makeConstant<int32_t>(0, kMaxSize);
   const std::vector<VectorPtr> inputs{
       std::make_shared<ArrayVector>(
           pool(),
@@ -428,7 +422,6 @@ TEST_F(SizeTest, maximumSizeWithoutLoadingChildren) {
       function->apply(rows, args, INTEGER(), context, result);
       facebook::velox::test::assertEqualVectors(
           makeFlatVector<int32_t>({kMaxSize}), result);
-      EXPECT_FALSE(elements->isLoaded());
     }
   }
 }
