@@ -23,8 +23,8 @@
 #include "velox/connectors/hive/FileConnectorUtil.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/HivePartitionFunction.h"
+#include "velox/connectors/hive/SortingWriter.h"
 #include "velox/connectors/hive/TableHandle.h"
-#include "velox/dwio/common/SortingWriter.h"
 #include "velox/exec/SortBuffer.h"
 
 #include <boost/lexical_cast.hpp>
@@ -716,7 +716,7 @@ HiveDataSink::maybeCreateBucketSortWriter(
       spillConfig_,
       writerInfo_[writerIndex]->spillStats.get());
 
-  return std::make_unique<dwio::common::SortingWriter>(
+  return std::make_unique<SortingWriter>(
       std::move(writer),
       std::move(sortBuffer),
       hiveConfig_->sortWriterMaxOutputRows(
