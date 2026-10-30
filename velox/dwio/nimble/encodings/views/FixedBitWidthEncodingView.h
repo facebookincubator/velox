@@ -35,15 +35,26 @@ class FixedBitWidthEncodingView final : public TypedEncodingView<T> {
       : TypedEncodingView<T>{data, pool, options} {
     NIMBLE_CHECK_EQ(this->encodingType_, EncodingType::FixedBitWidth);
     const char* pos = data.data() + this->dataOffset_;
+    NIMBLE_CHECK_FILE_GE(
+        this->remainingBytes(pos),
+        2 + sizeof(physicalType),
+        "Truncated FixedBitWidth encoding.");
     const auto compressionType =
         static_cast<CompressionType>(encoding::readChar(pos));
     baseline_ = encoding::read<physicalType>(pos);
     bitWidth_ = static_cast<uint32_t>(encoding::readChar(pos));
+    NIMBLE_CHECK_FILE_LE(
+        bitWidth_,
+        8 * sizeof(physicalType),
+        "FixedBitWidth bit width exceeds its data type.");
     // Match FixedBitWidthEncoding: the packed payload has no scalar data type.
     const auto payload = this->decompressPayload(
-        compressionType,
-        DataType::Undefined,
-        {pos, static_cast<size_t>(data.data() + data.size() - pos)});
+        compressionType, DataType::Undefined, {pos, this->remainingBytes(pos)});
+    NIMBLE_CHECK_FILE_GE(
+        payload.size(),
+        static_cast<size_t>(FixedBitArray::bufferSize(
+            this->rowCount_, static_cast<int>(bitWidth_))),
+        "FixedBitWidth payload is shorter than its rows.");
     fixedBitArray_ = FixedBitArray{payload, static_cast<int>(bitWidth_)};
   }
 
