@@ -1024,7 +1024,7 @@ uint32_t TabletReader::streamSize(
     const StripeIdentifier& stripe,
     uint32_t streamId) const {
   NIMBLE_DCHECK_LT(stripe.stripeId(), stripeCount_, "Stripe is out of range.");
-  // Mirrors streamOffset: StripeGroup::streamSize already returns 0 for an
+  // Mirrors streamOffset: StripeGroup::streamSize already rejects an
   // out-of-range streamId, so delegate without a redundant guard here.
   return stripe.stripeGroup()->streamSize(stripe.stripeId(), streamId);
 }
@@ -1043,6 +1043,13 @@ void TabletReader::streamLocations(
   NIMBLE_DCHECK_LT(stripe.stripeId(), stripeCount_, "Stripe is out of range.");
   stripe.stripeGroup()->streamLocations(
       stripe.stripeId(), streamIds, locations);
+}
+
+TabletReader::StreamMetadata TabletReader::streamLocation(
+    const StripeIdentifier& stripe,
+    uint32_t streamId) const {
+  NIMBLE_DCHECK_LT(stripe.stripeId(), stripeCount_, "Stripe is out of range.");
+  return stripe.stripeGroup()->streamLocation(stripe.stripeId(), streamId);
 }
 
 uint32_t TabletReader::streamCount(const StripeIdentifier& stripe) const {
@@ -1189,22 +1196,17 @@ std::vector<std::unique_ptr<StreamLoader>> TabletReader::load(
   regionToStreamIndices.reserve(streamsToLoad);
   uniqueRegions.reserve(streamsToLoad);
 
+  std::vector<StreamMetadata> locations(streamsToLoad);
+  stripeGroup->streamLocations(stripeId, streamIdentifiers, locations);
   for (uint32_t i = 0; i < streamsToLoad; ++i) {
     const uint32_t streamIdentifier = streamIdentifiers[i];
-    if (streamIdentifier >= stripeGroup->streamCount()) {
-      streams[i] = nullptr;
-      continue;
-    }
-
-    const uint32_t streamSize =
-        stripeGroup->streamSize(stripeId, streamIdentifier);
+    const uint32_t streamSize = locations[i].size;
     if (streamSize == 0) {
       streams[i] = nullptr;
       continue;
     }
 
-    const auto streamStart =
-        stripeOffset + stripeGroup->streamOffset(stripeId, streamIdentifier);
+    const auto streamStart = stripeOffset + locations[i].offset;
 
     auto it = regionToStreamIndices.emplace(
         velox::common::Region{streamStart, streamSize},

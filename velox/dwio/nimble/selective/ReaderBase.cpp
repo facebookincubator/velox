@@ -255,17 +255,14 @@ LazyInput* StripeStreams::createLazyInput() {
 std::optional<common::Region> StripeStreams::streamRegion(int streamId) const {
   NIMBLE_CHECK(stripeIdentifier_.has_value());
   const auto& tablet = readerBase_->tablet();
-  if (streamId >= tablet.streamCount(*stripeIdentifier_)) {
-    return std::nullopt;
-  }
-  const auto size = tablet.streamSize(*stripeIdentifier_, streamId);
-  if (size == 0) {
+  const auto location = tablet.streamLocation(
+      *stripeIdentifier_, static_cast<uint32_t>(streamId));
+  if (location.size == 0) {
     return std::nullopt;
   }
   common::Region region;
-  region.offset = tablet.stripeOffset(stripe_) +
-      tablet.streamOffset(*stripeIdentifier_, streamId);
-  region.length = size;
+  region.offset = tablet.stripeOffset(stripe_) + location.offset;
+  region.length = location.size;
   return region;
 }
 
@@ -345,23 +342,22 @@ std::vector<std::optional<StreamLocation>> StripeStreams::locateStreams(
   NIMBLE_CHECK(stripeIdentifier_.has_value());
 
   const auto& tablet = readerBase_->tablet();
-  const auto streamCount = tablet.streamCount(*stripeIdentifier_);
   // File offset where this stripe's data begins.
   const auto stripeOffset = tablet.stripeOffset(stripe_);
 
+  std::vector<TabletReader::StreamMetadata> streamLocations(streamIds.size());
+  tablet.streamLocations(*stripeIdentifier_, streamIds, streamLocations);
   std::vector<std::optional<StreamLocation>> locations(streamIds.size());
   for (size_t i = 0; i < streamIds.size(); ++i) {
-    const auto streamId = streamIds[i];
-    if (streamId >= streamCount) {
+    // @lint-ignore CLANGTIDY facebook-hte-LocalUncheckedArrayBounds
+    const auto& streamLocation = streamLocations[i];
+    if (streamLocation.size == 0) {
       continue;
     }
-    const auto streamSize = tablet.streamSize(*stripeIdentifier_, streamId);
-    if (streamSize == 0) {
-      continue;
-    }
-    const auto streamOffset = tablet.streamOffset(*stripeIdentifier_, streamId);
     locations[i] = StreamLocation{
-        streamId, common::Region{stripeOffset + streamOffset, streamSize}};
+        streamIds[i],
+        common::Region{
+            stripeOffset + streamLocation.offset, streamLocation.size}};
   }
   return locations;
 }
@@ -376,9 +372,8 @@ std::shared_ptr<index::StreamIndex> StripeStreams::streamIndex(
   }
   // A stream absent from this stripe group (e.g. added by later schema
   // evolution or a flat-map feature not present in this group) has no chunk
-  // index. Gate on streamCount as streamRegion()/locateStreams() do, so an
-  // out-of-range stream id does not reach streamSize() (which check-fails on
-  // out-of-range).
+  // index. Gate on streamCount, so an out-of-range stream id does not reach
+  // streamSize(), which check-fails on it.
   if (streamId >= readerBase_->tablet().streamCount(*stripeIdentifier_)) {
     return nullptr;
   }
