@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include <fmt/format.h>
+#include <folly/container/F14Set.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include <algorithm>
@@ -2614,12 +2615,16 @@ TEST_P(TabletTest, stripeGroupEncodingLayouts) {
   }
 
   // An out-of-range streamId is a programming error: point access check-fails
-  // rather than silently returning 0.
+  // rather than silently returning 0. Location lookups read it as absent.
   for (const auto& tablet : {rawTablet, streamMajorTablet}) {
     auto stripe = tablet->stripeIdentifier(0);
     const auto streamCount = tablet->streamCount(stripe);
     EXPECT_ANY_THROW(tablet->streamOffset(stripe, streamCount));
     EXPECT_ANY_THROW(tablet->streamSize(stripe, streamCount));
+    EXPECT_EQ(tablet->streamLocation(stripe, streamCount).size, 0);
+    const std::vector<uint32_t> outOfRangeStreamIds{streamCount};
+    EXPECT_EQ(tablet->load(stripe, outOfRangeStreamIds)[0], nullptr);
+    EXPECT_EQ(tablet->totalStreamSize(stripe, outOfRangeStreamIds), 0);
   }
 
   auto expectAllLocations = [](const std::shared_ptr<nimble::TabletReader>&
@@ -2830,9 +2835,14 @@ TEST_P(TabletTest, stripeGroupEncodingLayoutsMultipleGroups) {
         EXPECT_EQ(
             rawTablet->streamOffset(rawStripe, streamId),
             encodedTablet->streamOffset(encStripe, streamId));
+        const auto rawSize = rawTablet->streamSize(rawStripe, streamId);
+        EXPECT_EQ(rawSize, encodedTablet->streamSize(encStripe, streamId));
+        const auto location =
+            encodedTablet->streamLocation(encStripe, streamId);
+        EXPECT_EQ(location.size, rawSize);
         EXPECT_EQ(
-            rawTablet->streamSize(rawStripe, streamId),
-            encodedTablet->streamSize(encStripe, streamId));
+            location.offset,
+            rawSize == 0 ? 0 : rawTablet->streamOffset(rawStripe, streamId));
       }
 
       std::vector<nimble::TabletReader::StreamMetadata> rawLocations(
@@ -3051,8 +3061,12 @@ TEST_P(TabletTest, stripeGroupMetadataDeduplication) {
           /*deduplicate=*/false, flushThreshold, compressionThreshold);
       const auto deduplicatedFile = writeTablet(
           /*deduplicate=*/true, flushThreshold, compressionThreshold);
-      const auto tablet = createTabletReader(file);
-      const auto deduplicatedTablet = createTabletReader(deduplicatedFile);
+      const nimble::TabletReader::Options viewDeduplicationOptions{
+          .stripeGroupEncodingViewDeduplicationEnabled = true};
+      const auto tablet = createTabletReader(file, viewDeduplicationOptions);
+      const auto deduplicatedTablet =
+          createTabletReader(deduplicatedFile, viewDeduplicationOptions);
+      const auto unsharedViewsTablet = createTabletReader(deduplicatedFile);
       ASSERT_EQ(deduplicatedTablet->stripeCount(), kStripeCount);
       const auto& sections = tablet->stripeGroupsMetadata();
       const auto& deduplicatedSections =
@@ -3063,6 +3077,8 @@ TEST_P(TabletTest, stripeGroupMetadataDeduplication) {
       } else {
         EXPECT_EQ(sections.size(), 1);
       }
+      // Distinct encoded payloads per deduplicated group.
+      std::vector<size_t> uniquePayloads(sections.size());
       for (size_t group = 0; group < sections.size(); ++group) {
         EXPECT_LT(
             deduplicatedSections[group].uncompressedSize().value(),
@@ -3088,20 +3104,57 @@ TEST_P(TabletTest, stripeGroupMetadataDeduplication) {
         EXPECT_NE(sizes->Get(0), sizes->Get(1));
         EXPECT_EQ(offsets->Get(3), sizes->Get(3));
         EXPECT_EQ(offsets->Get(0), sizes->Get(3));
+        folly::F14FastSet<const void*> payloads;
+        for (uint32_t streamId = 0; streamId < kStreamCount; ++streamId) {
+          payloads.insert(offsets->Get(streamId)->data());
+          payloads.insert(sizes->Get(streamId)->data());
+        }
+        uniquePayloads[group] = payloads.size();
       }
       for (uint32_t stripe = 0; stripe < kStripeCount; ++stripe) {
         const auto stripeId = tablet->stripeIdentifier(stripe);
         const auto deduplicatedId =
             deduplicatedTablet->stripeIdentifier(stripe);
+        const auto unsharedViewsId =
+            unsharedViewsTablet->stripeIdentifier(stripe);
+        const auto& deduplicatedGroup = deduplicatedId.stripeGroup();
+        std::vector<nimble::StripeGroup::StreamMetadata> locations(
+            kStreamCount);
+        deduplicatedGroup->streamLocations(stripe, locations);
         for (uint32_t streamId = 0; streamId < kStreamCount; ++streamId) {
           SCOPED_TRACE(fmt::format("stripe={} stream={}", stripe, streamId));
+          const auto expectedOffset = tablet->streamOffset(stripeId, streamId);
           EXPECT_EQ(
               deduplicatedTablet->streamSize(deduplicatedId, streamId),
               streamSize(stripe, streamId));
           EXPECT_EQ(
               deduplicatedTablet->streamOffset(deduplicatedId, streamId),
-              tablet->streamOffset(stripeId, streamId));
+              expectedOffset);
+          EXPECT_EQ(
+              unsharedViewsTablet->streamSize(unsharedViewsId, streamId),
+              streamSize(stripe, streamId));
+          EXPECT_EQ(
+              unsharedViewsTablet->streamOffset(unsharedViewsId, streamId),
+              expectedOffset);
+          EXPECT_EQ(locations[streamId].size, streamSize(stripe, streamId));
+          if (locations[streamId].size != 0) {
+            EXPECT_EQ(locations[streamId].offset, expectedOffset);
+          }
         }
+        // Every stream owns an offsets and a sizes view unless view
+        // deduplication is enabled and its payload is shared, in which case it
+        // reuses the payload's single view.
+        EXPECT_EQ(
+            stripeId.stripeGroup()->testingEncodingViewCount(),
+            2 * kStreamCount);
+        EXPECT_EQ(
+            unsharedViewsId.stripeGroup()->testingEncodingViewCount(),
+            2 * kStreamCount);
+        EXPECT_EQ(
+            deduplicatedGroup->testingEncodingViewCount(),
+            uniquePayloads[deduplicatedGroup->index()]);
+        EXPECT_LT(
+            deduplicatedGroup->testingEncodingViewCount(), 2 * kStreamCount);
       }
     }
   }
@@ -3214,8 +3267,11 @@ TEST_P(TabletTest, stripeGroupViewsKeepTheirValues) {
   viewManagerOptions.trackDefaultUsage = true;
   velox::memory::MemoryManager viewManager{viewManagerOptions};
   const auto viewPool = viewManager.addLeafPool();
-  const nimble::StripeGroup group{
-      /*stripeGroupIndex=*/0, *stripes, std::move(stripeGroup), viewPool.get()};
+  const nimble::StripeGroup group{/*stripeGroupIndex=*/0,
+                                  *stripes,
+                                  std::move(stripeGroup),
+                                  /*encodingViewDeduplicationEnabled=*/false,
+                                  viewPool.get()};
   // A cached Varint view decodes every row into a uint32 vector from its pool,
   // for the offsets and for the sizes of the one stream. An uncached view
   // decodes on each read and keeps nothing, so this pool stays empty. That is
@@ -6647,6 +6703,22 @@ TEST_P(TabletTest, configureOptionsCacheKeyEncodingViews) {
   EXPECT_TRUE(
       nimble::TabletReader::configureOptions(readerOptions)
           .cacheKeyEncodingViews);
+}
+
+TEST_P(TabletTest, configureOptionsStripeGroupEncodingViewDeduplication) {
+  velox::dwio::common::ReaderOptions readerOptions(pool_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
+  EXPECT_FALSE(
+      nimble::TabletReader::configureOptions(readerOptions)
+          .stripeGroupEncodingViewDeduplicationEnabled);
+
+  auto nimbleOptions = std::make_shared<nimble::NimbleReaderOptions>();
+  nimbleOptions->experimentalStripeGroupEncodingViewDeduplication = true;
+  readerOptions.setFormatSpecificOptions(std::move(nimbleOptions));
+  EXPECT_TRUE(
+      nimble::TabletReader::configureOptions(readerOptions)
+          .stripeGroupEncodingViewDeduplicationEnabled);
 }
 
 TEST_P(TabletTest, configureOptionsCacheFields) {

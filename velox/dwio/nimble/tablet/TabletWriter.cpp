@@ -572,6 +572,67 @@ std::vector<uint32_t> transposeStreamMetadata(
   }
   return streamValues;
 }
+
+// Encodes the metadata arrays of a stream-major stripe group into
+// EncodedStream entries. With deduplication, each distinct array is encoded
+// once, and every stream holding it references the same entry.
+class MetadataArrayEncoder {
+ public:
+  MetadataArrayEncoder(
+      flatbuffers::FlatBufferBuilder& builder,
+      velox::memory::MemoryPool& pool,
+      const std::vector<std::pair<EncodingType, float>>& readFactors,
+      bool deduplicate)
+      : builder_{builder},
+        readFactors_{readFactors},
+        deduplicate_{deduplicate},
+        encodingBuffer_{pool} {}
+
+  flatbuffers::Offset<serialization::EncodedStream> encode(
+      std::vector<uint32_t> values) {
+    if (!deduplicate_) {
+      return encodeArray(values);
+    }
+    // Every metadata array has the same type and encoding policy, so identical
+    // arrays can share an entry. The map owns the arrays to compare them on
+    // hash matches.
+    auto [it, inserted] = uniqueArrays_.try_emplace(std::move(values));
+    if (inserted) {
+      it->second = encodeArray(it->first);
+    }
+    return it->second;
+  }
+
+ private:
+  // Encodes one array, copies it into the flatbuffer, then rewinds the scratch
+  // buffer for reuse.
+  flatbuffers::Offset<serialization::EncodedStream> encodeArray(
+      const std::vector<uint32_t>& values) {
+    const auto encoded = EncodingFactory::encode<uint32_t>(
+        makeMetadataEncodingPolicy<uint32_t>(readFactors_),
+        std::span<const uint32_t>(values),
+        encodingBuffer_,
+        encodingOptions_);
+    const auto encodedStream = serialization::CreateEncodedStream(
+        builder_,
+        builder_.CreateVector(
+            reinterpret_cast<const uint8_t*>(encoded.data()), encoded.size()));
+    encodingBuffer_.reset();
+    return encodedStream;
+  }
+
+  flatbuffers::FlatBufferBuilder& builder_;
+  const std::vector<std::pair<EncodingType, float>>& readFactors_;
+  const bool deduplicate_;
+  // FixedBitWidth rounds bit widths up to whole bytes by default. Readers that
+  // pin metadata keep these arrays resident, so pack them at exact widths.
+  const Encoding::Options encodingOptions_{.fixedBitWidthUseExactBits = true};
+  Buffer encodingBuffer_;
+  folly::F14FastMap<
+      std::vector<uint32_t>,
+      flatbuffers::Offset<serialization::EncodedStream>>
+      uniqueArrays_;
+};
 } // namespace
 
 void TabletWriter::writeStripeGroupWithRawLayout(
@@ -600,61 +661,21 @@ void TabletWriter::writeStripeGroupWithStreamMajorLayout(
   // For each leaf streamId, gather that stream's values across every stripe and
   // encode the resulting stripeCount-length array independently. The per-stream
   // bit width is tight to that stream's value range.
-  // Identical arrays can reuse an existing encoding.
   std::vector<flatbuffers::Offset<serialization::EncodedStream>> encodedOffsets;
   std::vector<flatbuffers::Offset<serialization::EncodedStream>> encodedSizes;
   encodedOffsets.reserve(streamCount);
   encodedSizes.reserve(streamCount);
-
-  // FixedBitWidth rounds bit widths up to whole bytes by default. Readers that
-  // pin metadata keep these arrays resident, so pack them at exact widths.
-  Encoding::Options encodingOptions;
-  encodingOptions.fixedBitWidthUseExactBits = true;
-
-  // Encodes one array, copies it into the flatbuffer, then rewinds the scratch
-  // buffer for reuse.
-  Buffer encodingBuffer{*pool_};
-  auto encodeStream = [&](const std::vector<uint32_t>& values) {
-    const auto encoded = EncodingFactory::encode<uint32_t>(
-        makeMetadataEncodingPolicy<uint32_t>(
-            options_.stripeGroupEncodingLayoutReadFactors),
-        std::span<const uint32_t>(values),
-        encodingBuffer,
-        encodingOptions);
-    const auto encodedStream = serialization::CreateEncodedStream(
-        builder,
-        builder.CreateVector(
-            reinterpret_cast<const uint8_t*>(encoded.data()), encoded.size()));
-    encodingBuffer.reset();
-    return encodedStream;
+  MetadataArrayEncoder encoder{
+      builder,
+      *pool_,
+      options_.stripeGroupEncodingLayoutReadFactors,
+      options_.stripeGroupMetadataDeduplicationEnabled,
   };
-  auto writeMetadataArrays = [&](const auto& encode) {
-    for (uint32_t streamId = 0; streamId < streamCount; ++streamId) {
-      encodedOffsets.push_back(encode(
-          transposeStreamMetadata(streamId, stripeCount, streamOffsets_)));
-      encodedSizes.push_back(
-          encode(transposeStreamMetadata(streamId, stripeCount, streamSizes_)));
-    }
-  };
-
-  if (options_.stripeGroupMetadataDeduplicationEnabled) {
-    // Offsets and sizes have the same type and encoding policy, so identical
-    // arrays can share an entry.
-    // Own the original arrays for equality checks on hash matches.
-    // Keep the raw-key cache local to this stripe-group write.
-    folly::F14FastMap<
-        std::vector<uint32_t>,
-        flatbuffers::Offset<serialization::EncodedStream>>
-        uniqueArrays;
-    writeMetadataArrays([&](std::vector<uint32_t> values) {
-      auto [it, inserted] = uniqueArrays.try_emplace(std::move(values));
-      if (inserted) {
-        it->second = encodeStream(it->first);
-      }
-      return it->second;
-    });
-  } else {
-    writeMetadataArrays(encodeStream);
+  for (uint32_t streamId = 0; streamId < streamCount; ++streamId) {
+    encodedOffsets.push_back(encoder.encode(
+        transposeStreamMetadata(streamId, stripeCount, streamOffsets_)));
+    encodedSizes.push_back(encoder.encode(
+        transposeStreamMetadata(streamId, stripeCount, streamSizes_)));
   }
 
   // Tag the blob with the kStreamMajor file identifier so the reader detects
