@@ -350,6 +350,11 @@ std::unique_ptr<Encoding> EncodingFactory::create(
           memoryPool, data, stringBufferFactory);
     }
     default: {
+      NIMBLE_CHECK_FILE_NE(
+          encodingType,
+          kRemovedBitRangeSplitEncodingType,
+          "BitRangeSplit encoding was removed; rewrite the data with "
+          "SubIntSplit");
       NIMBLE_UNREACHABLE(
           "Trying to deserialize invalid EncodingType -- garbage input?");
     }
