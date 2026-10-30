@@ -31,6 +31,7 @@ const auto& vectorIndexTypeNames() {
       {VectorIndexType::kIvfFlat, "ivf_flat"},
       {VectorIndexType::kIvfSq, "ivf_sq"},
       {VectorIndexType::kHnswSq, "hnsw_sq"},
+      {VectorIndexType::kCagra, "cagra"},
   };
   return kNames;
 }
@@ -46,6 +47,7 @@ VectorIndexType VectorIndexTypeValue::fromValue(int32_t value) {
     case VectorIndexType::kIvfFlat:
     case VectorIndexType::kIvfSq:
     case VectorIndexType::kHnswSq:
+    case VectorIndexType::kCagra:
       return type;
   }
   VELOX_USER_FAIL("Invalid vector index type value: {}", value);

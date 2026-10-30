@@ -193,6 +193,11 @@ option(
 )
 option(VELOX_SIMDJSON_SKIPUTF8VALIDATION "Skip simdjson utf8 validation in JSON parsing" OFF)
 option(VELOX_ENABLE_FAISS "Build faiss vector search support" OFF)
+option(
+  VELOX_ENABLE_FAISS_GPU
+  "Build faiss GPU indexes backed by cuVS. Requires VELOX_ENABLE_CUDF."
+  OFF
+)
 option(VELOX_ENABLE_TORCHWAVE "Build TorchWave experimental subsystem." OFF)
 option(VELOX_ENABLE_CXL "Build CXL experimental memory subsystem (Linux only)." OFF)
 
@@ -300,7 +305,12 @@ if(${VELOX_ENABLE_DUCKDB})
   velox_resolve_dependency(DuckDB)
 endif()
 
-if(VELOX_ENABLE_FAISS OR VELOX_ENABLE_NIMBLE)
+if(VELOX_ENABLE_FAISS_GPU AND NOT VELOX_ENABLE_CUDF)
+  message(FATAL_ERROR "VELOX_ENABLE_FAISS_GPU requires VELOX_ENABLE_CUDF.")
+endif()
+
+# GPU faiss must share cuDF's rmm, so it is resolved after cuDF below.
+if((VELOX_ENABLE_FAISS OR VELOX_ENABLE_NIMBLE) AND NOT VELOX_ENABLE_FAISS_GPU)
   velox_set_source(faiss)
   velox_resolve_dependency(faiss)
   if(NOT TARGET FAISS::faiss)
@@ -551,6 +561,22 @@ if(VELOX_ENABLE_WAVE OR VELOX_ENABLE_CUDF)
     set(VELOX_ENABLE_ARROW ON)
     velox_set_source(cudf)
     velox_resolve_dependency(cudf)
+    if(VELOX_ENABLE_FAISS_GPU)
+      # System installs rarely match cuDF's rmm or provide GPU faiss.
+      if(NOT DEFINED cuvs_SOURCE)
+        set(cuvs_SOURCE BUNDLED)
+      endif()
+      if(NOT DEFINED faiss_SOURCE)
+        set(faiss_SOURCE BUNDLED)
+      endif()
+      velox_set_source(cuvs)
+      velox_resolve_dependency(cuvs)
+      velox_set_source(faiss)
+      velox_resolve_dependency(faiss)
+      if(NOT TARGET FAISS::faiss)
+        add_library(FAISS::faiss ALIAS faiss)
+      endif()
+    endif()
     if(TARGET aws-cpp-sdk-core)
       # Fix for AWS SDK CPP using hardcoded system curl instead of soft link to curl
       get_target_property(override_curl_lib aws-cpp-sdk-core INTERFACE_LINK_LIBRARIES)
@@ -907,6 +933,11 @@ if(VELOX_ENABLE_NIMBLE)
   # third dependency, FSST, is vendored under velox/external/fsst instead.
   velox_set_source(flatbuffers)
   velox_resolve_dependency(flatbuffers)
+  # With cuDF enabled, its CPM download satisfies find_package(flatbuffers), so
+  # neither FindFlatBuffers.cmake nor flatbuffers.cmake sets the include dir.
+  if(NOT FLATBUFFERS_INCLUDE_DIR AND CPM_PACKAGE_flatbuffers_SOURCE_DIR)
+    set(FLATBUFFERS_INCLUDE_DIR "${CPM_PACKAGE_flatbuffers_SOURCE_DIR}/include")
+  endif()
   # build_flatbuffers() only ships with FlatBuffers 22.9.4 and later, and a
   # bundled build does not put the package's own modules on CMAKE_MODULE_PATH at
   # all, so CMake/third-party/BuildFlatBuffers.cmake is used unconditionally to

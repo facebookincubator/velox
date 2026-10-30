@@ -78,4 +78,8 @@ if(VELOX_ENABLE_UCX_EXCHANGE)
   target_compile_definitions(velox_cudf_exec PRIVATE VELOX_ENABLE_UCX_EXCHANGE)
 endif()
 
+if(VELOX_ENABLE_FAISS AND VELOX_ENABLE_FAISS_GPU)
+  target_link_libraries(velox_cudf_exec PRIVATE velox_vector_index_gpu)
+endif()
+
 target_compile_options(velox_cudf_exec PRIVATE -Wno-missing-field-initializers)

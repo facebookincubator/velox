@@ -38,6 +38,11 @@ enum class VectorIndexType {
   /// compressed to 8 bits; a search walks it keeping 'hnsw.efSearch'
   /// candidates.
   kHnswSq = 3,
+  /// A CAGRA graph stored as a FAISS IndexHNSWCagra, so the same bytes search
+  /// on CPU and on GPU. 'hnsw.efSearch' is the candidate count; a GPU search
+  /// uses it as CAGRA's intermediate result count. The graph is built on the
+  /// GPU.
+  kCagra = 4,
 };
 
 VELOX_DECLARE_ENUM_NAME(VectorIndexType);

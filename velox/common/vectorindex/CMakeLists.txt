@@ -44,6 +44,7 @@ if(VELOX_ENABLE_FAISS)
     CallbackWriter.h
     Embeddings.h
     LocalVectorIndex.h
+    LocalVectorIndexAccelerator.h
     SingleThreadedFaiss.h
   )
 
@@ -57,6 +58,38 @@ if(VELOX_ENABLE_FAISS)
     FAISS::faiss
     OpenMP::OpenMP_CXX
   )
+
+  # A separate library, so that velox_vector_index needs no CUDA.
+  if(VELOX_ENABLE_FAISS_GPU)
+    velox_add_library(
+      velox_vector_index_gpu
+      GpuLocalVectorIndex.cpp
+      HEADERS
+      GpuLocalVectorIndex.h
+    )
+
+    # FAISS GPU headers include RAFT, whose include paths come through cuVS.
+    velox_link_libraries(
+      velox_vector_index_gpu
+      velox_vector_index
+      velox_exception
+      FAISS::faiss
+      CUDA::cudart_static
+      cuvs::cuvs
+      cuvs::cuvs_cpp_headers
+      glog::glog
+    )
+    velox_compile_definitions(velox_vector_index_gpu PUBLIC VELOX_ENABLE_FAISS_GPU)
+  endif()
+
+  # container-deps/include can hold an older faiss. These targets link the
+  # faiss Velox built, so those headers have to win.
+  if(faiss_SOURCE_DIR)
+    velox_include_directories(velox_vector_index BEFORE PRIVATE "${faiss_SOURCE_DIR}")
+    if(VELOX_ENABLE_FAISS_GPU)
+      velox_include_directories(velox_vector_index_gpu BEFORE PRIVATE "${faiss_SOURCE_DIR}")
+    endif()
+  endif()
 
   if(${VELOX_BUILD_TESTING})
     add_subdirectory(tests)
