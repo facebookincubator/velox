@@ -82,6 +82,7 @@ set(
   velox_vector_fuzzer
   velox_test_util
   gflags::gflags
+  GTest::gmock
   GTest::gtest
   GTest::gtest_main
 )
