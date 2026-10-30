@@ -16,7 +16,9 @@
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include <optional>
 #include <sstream>
+#include <tuple>
 
 #include "velox/common/base/SimdUtil.h"
 #include "velox/common/base/tests/GTestUtils.h"
@@ -60,6 +62,84 @@ TEST(StringView, comparison) {
   EXPECT_LT(
       StringView("In hoc signo"),
       StringView("in hoc signo vinces, Constantinus"));
+}
+
+int32_t sign(int32_t value) {
+  return (value > 0) - (value < 0);
+}
+
+void testCompare(std::string_view left, std::string_view right) {
+  SCOPED_TRACE(testing::Message() << left << " vs " << right);
+  EXPECT_EQ(
+      sign(StringView(left).compare(StringView(right))),
+      sign(left.compare(right)));
+}
+
+TEST(StringView, compare) {
+  const std::vector<std::pair<std::string, std::string>> pairs = {
+      {"", "a"},
+      {"a", "b"},
+      {"abc", "abd"},
+      {"\xff", "a"},
+      {"ab", "abc"},
+      {"abc", "abcd"},
+      {"abcd", "abcde"},
+      {"ab", std::string("ab\0", 3)},
+      {"abcdef", "abcdeg"},
+      {"abcdef", "abcdefg"},
+      {"abcdefghijkl", "abcdefghijkm"},
+      {"abcdefghijkl", "abcdefghijklm"},
+      {"abcdefghijkz", "abcdefghijklm"},
+      {"abcdXfghijklmnop", "abcdYfghijklmnop"},
+      {"abcdefghijklmnop", "abcdefghijklmnoq"},
+      {"abcdefghijklmnop", "abcdefghijklmnopq"},
+  };
+  for (const auto& [left, right] : pairs) {
+    testCompare(left, right);
+    testCompare(right, left);
+    testCompare(left, left);
+  }
+}
+
+void testComparePrefix(
+    std::string_view left,
+    std::string_view right,
+    std::optional<int32_t> expected) {
+  SCOPED_TRACE(testing::Message() << left << " vs " << right);
+  std::optional<int32_t> actual;
+  if (const auto result = StringView(left).comparePrefix(StringView(right))) {
+    actual = sign(*result);
+  }
+  EXPECT_EQ(actual, expected);
+}
+
+TEST(StringView, comparePrefix) {
+  const std::vector<
+      std::tuple<std::string, std::string, std::optional<int32_t>>>
+      cases = {
+          {"", "", 0},
+          {"", "a", -1},
+          {"a", "b", -1},
+          {"abc", "abd", -1},
+          {"\xff", "a", 1},
+          {"ab", "abc", -1},
+          {"ab", std::string("ab\0", 3), -1},
+          {"abcd", "abcd", 0},
+          {"abcd", "abcde", -1},
+          {"abcX", "abcdefghijklmnop", -1},
+          {"abcde", "abcde", std::nullopt},
+          {"abcdef", "abcdeg", std::nullopt},
+          {"abcdefghijkl", "abcdefghijklm", std::nullopt},
+          {"abcdXfghijklmnop", "abcdYfghijklmnop", std::nullopt},
+      };
+  for (const auto& [left, right, expected] : cases) {
+    testComparePrefix(left, right, expected);
+    testComparePrefix(
+        right,
+        left,
+        expected.has_value() ? std::optional<int32_t>(-*expected)
+                             : std::nullopt);
+  }
 }
 
 TEST(StringView, container) {

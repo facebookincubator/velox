@@ -1590,6 +1590,43 @@ TEST_F(RowContainerTest, equalAndCompareRowTypeDouble) {
   testEqualAndCompareRowContainerTypeFloat<double>(ROW({colName}, {DOUBLE()}));
 }
 
+TEST_F(RowContainerTest, compareStrings) {
+  auto rowContainer = makeRowContainer({VARCHAR()}, {});
+  auto testCompare = [&](std::string_view left, std::string_view right) {
+    SCOPED_TRACE(testing::Message() << left << " vs " << right);
+    const auto vector =
+        makeFlatVector<StringView>({StringView(left), StringView(right)});
+    const DecodedVector decoded(*vector);
+    auto* leftRow = rowContainer->newRow();
+    rowContainer->store(decoded, 0, leftRow, 0);
+    auto* rightRow = rowContainer->newRow();
+    rowContainer->store(decoded, 1, rightRow, 0);
+
+    const auto expected = sign(left.compare(right));
+    EXPECT_EQ(sign(rowContainer->compare(leftRow, rightRow, 0)), expected);
+    EXPECT_EQ(
+        sign(rowContainer->compare(
+            leftRow, rowContainer->columnAt(0), decoded, 1)),
+        expected);
+  };
+
+  const std::vector<std::pair<std::string, std::string>> pairs = {
+      {"", "a"},
+      {"abc", "abd"},
+      {"ab", "abc"},
+      {"abcdef", "abcdeg"},
+      {"abcdefghijkl", "abcdefghijklm"},
+      {"abcdXfghijklmnop", "abcdYfghijklmnop"},
+      {"abcdefghijklmnop", "abcdefghijklmnoq"},
+      {"abcdefghijklmnop", "abcdefghijklmnopq"},
+  };
+  for (const auto& [left, right] : pairs) {
+    testCompare(left, right);
+    testCompare(right, left);
+    testCompare(left, left);
+  }
+}
+
 TEST_F(RowContainerTest, partition) {
   // We assign an arbitrary partition number to each row and iterate over the
   // rows a partition at a time.
