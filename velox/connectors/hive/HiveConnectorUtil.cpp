@@ -312,7 +312,12 @@ void checkColumnNameLowerCase(const core::TypedExprPtr& typeExpr) {
   if (typeExpr == nullptr) {
     return;
   }
-  checkColumnNameLowerCase(typeExpr->type());
+  // Only the types of column references come from the file. The type of a
+  // computed expression, e.g. the result of Spark's from_json, whose field
+  // names are given by the query, is not subject to the lowercase requirement.
+  if (typeExpr->isFieldAccessKind() || typeExpr->isInputKind()) {
+    checkColumnNameLowerCase(typeExpr->type());
+  }
   for (auto& type : typeExpr->inputs()) {
     checkColumnNameLowerCase(type);
   }
