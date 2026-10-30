@@ -85,7 +85,7 @@ TEST_F(TestStatisticsBuilderUtils, addIntegerValues) {
     StatisticsBuilderUtils::addValues<int32_t>(
         builder, vec, common::Ranges::of(0, size));
     auto stats = builder.build();
-    auto intStats = dynamic_cast<IntegerColumnStatistics*>(stats.get());
+    auto intStats = dynamic_cast<IntegerColumnStatistics<>*>(stats.get());
     EXPECT_EQ(10, intStats->getNumberOfValues());
     EXPECT_FALSE(intStats->hasNull().value());
     EXPECT_EQ(10, intStats->getMaximum().value());
@@ -104,7 +104,7 @@ TEST_F(TestStatisticsBuilderUtils, addIntegerValues) {
     StatisticsBuilderUtils::addValues<int32_t>(
         builder, vec, common::Ranges::of(0, size));
     auto stats = builder.build();
-    auto intStats = dynamic_cast<IntegerColumnStatistics*>(stats.get());
+    auto intStats = dynamic_cast<IntegerColumnStatistics<>*>(stats.get());
     EXPECT_EQ(19, intStats->getNumberOfValues());
     EXPECT_TRUE(intStats->hasNull().value());
     EXPECT_EQ(10, intStats->getMaximum().value());
