@@ -27,6 +27,7 @@ velox_add_library(
   StringColumnReader.cpp
   SemanticVersion.cpp
   HEADERS
+  BigEndianDecimal.h
   BooleanColumnReader.h
   BooleanDecoder.h
   ByteStreamSplitDecoder.h

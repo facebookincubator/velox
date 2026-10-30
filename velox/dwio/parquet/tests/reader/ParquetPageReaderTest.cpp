@@ -292,32 +292,40 @@ std::unique_ptr<PageReader> ParquetPageReaderTest::makeDictionaryPageReader(
       nullptr);
 }
 
-// Test that prepareDictionary rejects FIXED_LEN_BYTE_ARRAY dictionary pages
-// where the Parquet type length exceeds the Velox type length. This guards
-// against heap buffer overflow from malicious Parquet files that have a patched
-// precision (e.g. decimal128 with typeLength=16 but precision lowered to make
-// Velox choose int64_t with cppSizeInBytes=8).
+// A FIXED_LEN_BYTE_ARRAY dictionary may be wider than the Velox decimal type.
+// For example, DECIMAL(10, 2) stored in 16 bytes is read as int64_t (8 bytes).
+// prepareDictionary must hold the 16-byte Parquet values before narrowing them
+// in place, or it writes past the dictionary buffer. Values whose extra leading
+// bytes are sign extension are read; other values are rejected.
 TEST_F(ParquetPageReaderTest, fixedLenByteArrayDictOverflow) {
-  // Simulate the exploit: Parquet FIXED_LEN_BYTE_ARRAY with typeLength=16
-  // but Velox sees SHORT_DECIMAL (precision=10) which is int64_t (8 bytes).
-  // Without the check, prepareDictionary would allocate numValues*8 bytes
-  // but memcpy numValues*16 bytes, causing a heap overflow.
-  constexpr int32_t kNumDictValues = 4;
   constexpr int32_t kParquetTypeLength = 16;
+  // 0, -1, 1 and the int64_t minimum, as 16-byte big-endian values.
+  const std::string values = std::string(16, '\0') + std::string(16, '\xFF') +
+      std::string(15, '\0') + '\x01' + std::string(8, '\xFF') + '\x80' +
+      std::string(7, '\0');
 
-  // Dictionary page data (content doesn't matter, check fires before read).
+  // skip(1) triggers seekToPage() -> prepareDictionary().
   auto pageReader = makeDictionaryPageReader(
       DECIMAL(10, 2),
       thrift::Type::FIXED_LEN_BYTE_ARRAY,
       kParquetTypeLength,
-      std::string(kNumDictValues * kParquetTypeLength, '\0'),
-      kNumDictValues,
+      values,
+      /*numDictionaryValues=*/4,
       CompressionKind::CompressionKind_NONE);
+  pageReader->skip(1);
 
-  // skip(1) triggers seekToPage() -> prepareDictionary().
-  // The VELOX_CHECK_LE should fire because numParquetBytes (4*16=64) >
-  // numVeloxBytes (4*8=32).
-  VELOX_ASSERT_THROW(pageReader->skip(1), "(64 vs. 32)");
+  // 2^64 does not fit in int64_t.
+  const std::string outOfRange =
+      std::string(7, '\0') + '\x01' + std::string(8, '\0');
+  pageReader = makeDictionaryPageReader(
+      DECIMAL(10, 2),
+      thrift::Type::FIXED_LEN_BYTE_ARRAY,
+      kParquetTypeLength,
+      values + outOfRange,
+      /*numDictionaryValues=*/5,
+      CompressionKind::CompressionKind_NONE);
+  VELOX_ASSERT_THROW(
+      pageReader->skip(1), "Decimal value of 16 bytes does not fit in 8 bytes");
 }
 
 TEST_F(ParquetPageReaderTest, fixedLenByteArrayStringDict) {

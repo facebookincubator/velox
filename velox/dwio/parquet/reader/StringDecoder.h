@@ -23,6 +23,7 @@
 
 #include "velox/common/base/Nulls.h"
 #include "velox/common/base/SimdUtil.h"
+#include "velox/dwio/parquet/reader/BigEndianDecimal.h"
 
 namespace facebook::velox::parquet {
 
@@ -89,8 +90,14 @@ class StringDecoder {
         }
 
         // We are at a non-null value on a row to visit.
-        toSkip = visitor.process(
-            fixedLength_ > 0 ? readFixedString() : readString(), atEnd);
+        using T = typename Visitor::DataType;
+        if constexpr (kIsDecimalValueType<T>) {
+          toSkip = visitor.process(
+              decimalFromBigEndian<T>(readFixedString()), atEnd);
+        } else {
+          toSkip = visitor.process(
+              fixedLength_ > 0 ? readFixedString() : readString(), atEnd);
+        }
       }
       ++current;
       ++numValues;
