@@ -359,8 +359,7 @@ class HybridFlatMapTypeBuilder : public TypeBuilder {
 
   /// Appends a newly observed key to the Default group's first-seen catalog.
   /// Fails when `key` is empty or already belongs to any group, or when
-  /// batches list their Default keys. Configured groups are binary searched
-  /// and Default keys are checked in a hash set.
+  /// batches list their Default keys.
   void appendDefaultGroupKey(std::string key);
 
   /// Returns the number of physical groups present in this schema.
@@ -388,10 +387,6 @@ class HybridFlatMapTypeBuilder : public TypeBuilder {
       HybridFlatMap::KeyPresenceMode defaultGroupKeyPresenceMode,
       bool requiresDefaultGroup);
 
-  // Returns whether any group holds `key`. Binary searches configured groups
-  // and checks the Default keys in defaultGroupKeys_.
-  bool containsKey(std::string_view key) const;
-
   const ScalarKind keyScalarKind_;
   const bool requiresDefaultGroup_;
   const HybridFlatMap::KeyPresenceMode defaultGroupKeyPresenceMode_;
@@ -399,8 +394,9 @@ class HybridFlatMapTypeBuilder : public TypeBuilder {
   std::vector<StoredGroup> groups_;
   // Zero-based schema position of the reserved Default group.
   std::optional<size_t> defaultGroupIndex_{};
-  // Keys of the Default group's catalog, for containsKey().
-  folly::F14FastSet<std::string> defaultGroupKeys_;
+  // Keys of every group, so that each new key is checked for duplicates with
+  // one insert.
+  folly::F14FastSet<std::string> keys_;
 
   friend class SchemaBuilder;
 };
