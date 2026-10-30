@@ -15,6 +15,7 @@
  */
 
 #include <arrow/io/file.h>
+#include <arrow/io/memory.h>
 #include <gmock/gmock.h>
 #include <numeric>
 
@@ -33,6 +34,7 @@
 #include "velox/dwio/parquet/writer/arrow/FileWriter.h"
 #include "velox/dwio/parquet/writer/arrow/Schema.h"
 #include "velox/expression/ExprToSubfieldFilter.h"
+#include "velox/type/DecimalUtil.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
 
 using namespace facebook::velox;
@@ -1306,6 +1308,350 @@ TEST_F(ParquetReaderTest, parseIntDecimal) {
     EXPECT_EQ(a[index + 1], expectValues[i]);
     EXPECT_EQ(b[index], expectValues[i]);
     EXPECT_EQ(b[index + 1], expectValues[i]);
+  }
+}
+
+// Reads FIXED_LEN_BYTE_ARRAY decimals whose column chunks start with
+// dictionary-encoded pages and fall back to DELTA_BYTE_ARRAY pages, the layout
+// parquet-mr writes with v2 pages. See decimal_delta_byte_array.parquet in
+// examples/README.md for the fixture.
+TEST_F(ParquetReaderTest, decimalDictionaryFallbackToDeltaByteArray) {
+  const std::string fileName("decimal_delta_byte_array.parquet");
+  const auto rowType = ROW({
+      {"id", BIGINT()},
+      {"short5", DECIMAL(10, 2)},
+      {"short8", DECIMAL(18, 2)},
+      {"long13", DECIMAL(30, 10)},
+      {"long16", DECIMAL(38, 10)},
+  });
+
+  {
+    auto reader = createReader(fileName);
+    const auto rowGroup = reader->fileMetaData().rowGroup(0);
+    for (auto column = 1; column < rowType->size(); ++column) {
+      EXPECT_THAT(
+          rowGroup.columnChunk(column).encodings(),
+          testing::IsSupersetOf({
+              thrift::Encoding::RLE_DICTIONARY,
+              thrift::Encoding::DELTA_BYTE_ARRAY,
+          }));
+    }
+  }
+
+  const auto unscaledValue = [](int64_t id, int128_t multiplier) {
+    const int64_t base = id < 200 ? id % 10 : id;
+    const int128_t value = base * multiplier;
+    return (base / 4) % 2 == 1 ? -value : value;
+  };
+  const auto makeExpected = [&](const std::vector<int64_t>& ids) {
+    const auto size = static_cast<vector_size_t>(ids.size());
+    const auto isNullAt = [&](vector_size_t row) { return ids[row] % 11 == 5; };
+    const auto makeDecimals = [&]<typename T>(
+                                  T multiplier, const TypePtr& type) {
+      return makeFlatVector<T>(
+          size,
+          [&](auto row) {
+            return static_cast<T>(unscaledValue(ids[row], multiplier));
+          },
+          isNullAt,
+          type);
+    };
+    return makeRowVector(
+        rowType->names(),
+        {
+            makeFlatVector<int64_t>(ids),
+            makeDecimals(int64_t{10'000'001}, rowType->childAt(1)),
+            makeDecimals(int64_t{999'999'999'999'999}, rowType->childAt(2)),
+            makeDecimals(
+                DecimalUtil::kPowersOfTen[26] + 7'919, rowType->childAt(3)),
+            makeDecimals(
+                DecimalUtil::kPowersOfTen[34] + 7'919, rowType->childAt(4)),
+        });
+  };
+
+  constexpr int64_t kNumRows = 500;
+  std::vector<int64_t> ids(kNumRows);
+  std::iota(ids.begin(), ids.end(), 0);
+  assertReadWithExpected(fileName, rowType, makeExpected(ids));
+
+  // Selecting every third row makes the decimal readers skip values within and
+  // across both dictionary and DELTA_BYTE_ARRAY pages.
+  std::vector<int64_t> selectedIds;
+  for (int64_t id = 0; id < kNumRows; id += 3) {
+    selectedIds.push_back(id);
+  }
+  FilterMap filters;
+  filters.insert(
+      {"id",
+       std::make_unique<common::BigintValuesUsingBitmask>(
+           0, kNumRows - 1, selectedIds, false)});
+  assertReadWithFilters(
+      fileName, rowType, std::move(filters), makeExpected(selectedIds));
+}
+
+namespace {
+
+// Returns a copy of Parquet 'file' whose schema element at 'schemaIndex'
+// declares 'typeLength'. The column data is unchanged.
+std::string overrideTypeLength(
+    std::string_view file,
+    size_t schemaIndex,
+    int32_t typeLength) {
+  // A Parquet file ends with the footer, the footer length as a 4-byte
+  // little-endian integer, and the magic number "PAR1".
+  constexpr size_t kMagicSize = 4;
+  uint32_t footerLength;
+  std::memcpy(
+      &footerLength,
+      file.data() + file.size() - kMagicSize - sizeof(footerLength),
+      sizeof(footerLength));
+  const auto footerOffset =
+      file.size() - kMagicSize - sizeof(footerLength) - footerLength;
+
+  thrift::FileMetaData metadata;
+  thrift::deserialize(&metadata, file.substr(footerOffset, footerLength));
+  metadata.schema()->at(schemaIndex).type_length() = typeLength;
+
+  std::string result(file.substr(0, footerOffset));
+  folly::IOBufQueue footer;
+  thrift::serialize(metadata, &footer);
+  footer.appendToString(result);
+  const uint32_t newFooterLength = result.size() - footerOffset;
+  result.append(
+      reinterpret_cast<const char*>(&newFooterLength), sizeof(newFooterLength));
+  result.append(file.substr(file.size() - kMagicSize));
+  return result;
+}
+
+// Creates a reader over the Parquet file held in 'file'.
+std::unique_ptr<ParquetReader> createReaderFromBytes(
+    std::string file,
+    const dwio::common::ReaderOptions& readerOptions) {
+  return std::make_unique<ParquetReader>(
+      std::make_unique<BufferedInput>(
+          std::make_shared<InMemoryReadFile>(std::move(file)),
+          readerOptions.memoryPool()),
+      readerOptions);
+}
+
+// Returns a Parquet file with an optional FIXED_LEN_BYTE_ARRAY('typeLength')
+// column named 'value' that holds 'values'. A DECIMAL 'type' annotates the
+// column as such, and VARBINARY leaves it unannotated. Data pages use
+// 'encoding', where RLE_DICTIONARY means dictionary encoding. The Velox writer
+// cannot produce these files because it writes decimals in the fewest bytes
+// and strings as BYTE_ARRAY.
+std::string writeFixedLenByteArray(
+    const TypePtr& type,
+    int32_t typeLength,
+    parquet::arrow::Encoding::type encoding,
+    const std::vector<std::optional<std::string>>& values) {
+  namespace parquet_arrow = facebook::velox::parquet::arrow;
+  using parquet_arrow::Repetition;
+  using parquet_arrow::schema::GroupNode;
+  using parquet_arrow::schema::PrimitiveNode;
+
+  VELOX_CHECK(type->isDecimal() || type->isVarbinary());
+  auto convertedType = parquet_arrow::ConvertedType::kNone;
+  int32_t precision = -1;
+  int32_t scale = -1;
+  if (type->isDecimal()) {
+    convertedType = parquet_arrow::ConvertedType::kDecimal;
+    std::tie(precision, scale) = getDecimalPrecisionScale(*type);
+  }
+  auto schema = std::static_pointer_cast<GroupNode>(GroupNode::make(
+      "schema",
+      Repetition::kRequired,
+      {PrimitiveNode::make(
+          "value",
+          Repetition::kOptional,
+          parquet_arrow::Type::kFixedLenByteArray,
+          convertedType,
+          typeLength,
+          precision,
+          scale)}));
+  parquet_arrow::WriterProperties::Builder properties;
+  if (encoding == parquet_arrow::Encoding::kRleDictionary) {
+    properties.enableDictionary();
+  } else {
+    properties.disableDictionary()->encoding(encoding);
+  }
+  auto sink = parquet_arrow::createOutputStream();
+  auto fileWriter =
+      parquet_arrow::ParquetFileWriter::open(sink, schema, properties.build());
+
+  std::vector<int16_t> definitionLevels;
+  std::vector<parquet_arrow::FLBA> nonNullValues;
+  for (const auto& value : values) {
+    definitionLevels.push_back(value.has_value() ? 1 : 0);
+    if (value.has_value()) {
+      VELOX_CHECK_EQ(value->size(), static_cast<size_t>(typeLength));
+      nonNullValues.emplace_back(
+          reinterpret_cast<const uint8_t*>(value->data()));
+    }
+  }
+  static_cast<parquet_arrow::FixedLenByteArrayWriter*>(
+      fileWriter->appendRowGroup()->nextColumn())
+      ->writeBatch(
+          values.size(),
+          definitionLevels.data(),
+          /*repLevels=*/nullptr,
+          nonNullValues.data());
+  fileWriter->close();
+  PARQUET_ASSIGN_OR_THROW(auto buffer, sink->Finish());
+  return buffer->ToString();
+}
+
+// Returns the 'numBytes' least significant bytes of 'value' in big-endian
+// order. Bytes beyond the 16 of 'value' are its sign extension.
+std::string toBigEndian(int128_t value, int32_t numBytes) {
+  std::string bytes(numBytes, '\0');
+  for (int32_t i = 0; i < numBytes; ++i) {
+    bytes[numBytes - 1 - i] = static_cast<char>(value >> std::min(8 * i, 127));
+  }
+  return bytes;
+}
+
+} // namespace
+
+// A FIXED_LEN_BYTE_ARRAY value must be exactly as long as the type length of
+// its column. DELTA_BYTE_ARRAY stores the length of each value, so a corrupt
+// file can hold values of other lengths, which must not be decoded as
+// decimals.
+TEST_F(ParquetReaderTest, decimalDeltaByteArrayLengthMismatch) {
+  // DECIMAL(10, 2) is written as FIXED_LEN_BYTE_ARRAY(5).
+  const auto data = makeRowVector(
+      {"a"}, {makeFlatVector<int64_t>({12'345, -678}, DECIMAL(10, 2))});
+  ParquetWriterOptions writerOptions;
+  writerOptions.enableDictionary = false;
+  writerOptions.enableStoreDecimalAsInteger = false;
+  writerOptions.encoding = parquet::arrow::Encoding::kDeltaByteArray;
+  const auto* sink = write(data, writerOptions);
+  const std::string_view file(sink->data(), sink->size());
+
+  for (const int32_t typeLength : {4, 6}) {
+    SCOPED_TRACE(fmt::format("Type length: {}", typeLength));
+    auto reader = createReaderFromBytes(
+        overrideTypeLength(file, /*schemaIndex=*/1, typeLength),
+        makeDefaultReaderOptions());
+    auto rowReader = createRowReaderFromReader(*reader, data->rowType());
+    const auto read = [&]() {
+      VectorPtr result =
+          BaseVector::create(data->rowType(), 0, leafPool_.get());
+      rowReader->next(data->size(), result);
+      // Top-level columns are loaded lazily.
+      result->loadedVector();
+    };
+    VELOX_ASSERT_THROW(
+        read(),
+        fmt::format(
+            "(5 vs. {}) DELTA_BYTE_ARRAY value length must equal the FIXED_LEN_BYTE_ARRAY type length",
+            typeLength));
+  }
+}
+
+// The Parquet spec allows a FIXED_LEN_BYTE_ARRAY decimal to be wider than its
+// precision needs, e.g. DECIMAL(10, 2) in 16 bytes. Values are read if the
+// extra leading bytes are sign extension and throw otherwise, the same way on
+// every page encoding.
+TEST_F(ParquetReaderTest, decimalWideFixedLenByteArray) {
+  const std::vector<std::pair<parquet::arrow::Encoding::type, thrift::Encoding>>
+      encodings = {
+          {parquet::arrow::Encoding::kPlain, thrift::Encoding::PLAIN},
+          {parquet::arrow::Encoding::kRleDictionary,
+           thrift::Encoding::RLE_DICTIONARY},
+          {parquet::arrow::Encoding::kDeltaByteArray,
+           thrift::Encoding::DELTA_BYTE_ARRAY},
+      };
+
+  const auto testRead = [&]<typename T>(
+                            const TypePtr& type,
+                            int32_t typeLength,
+                            const std::vector<std::optional<T>>& values) {
+    std::vector<std::optional<std::string>> bytes;
+    for (const auto& value : values) {
+      bytes.push_back(
+          value.has_value()
+              ? std::make_optional(toBigEndian(*value, typeLength))
+              : std::nullopt);
+    }
+    const auto rowType = ROW("value", type);
+    const auto expected =
+        makeRowVector({"value"}, {makeNullableFlatVector<T>(values, type)});
+    for (const auto& [encoding, thriftEncoding] : encodings) {
+      SCOPED_TRACE(
+          fmt::format(
+              "{} in {} bytes, {}",
+              type->toString(),
+              typeLength,
+              parquet::arrow::encodingToString(encoding)));
+      auto reader = createReaderFromBytes(
+          writeFixedLenByteArray(type, typeLength, encoding, bytes),
+          makeDefaultReaderOptions());
+      const auto rowGroup = reader->fileMetaData().rowGroup(0);
+      EXPECT_THAT(
+          rowGroup.columnChunk(0).encodings(),
+          testing::Contains(thriftEncoding));
+      EXPECT_EQ(
+          rowGroup.columnChunk(0).hasDictionaryPageOffset(),
+          thriftEncoding == thrift::Encoding::RLE_DICTIONARY);
+      EXPECT_EQ(*reader->typeWithId()->childAt(0)->type(), *type);
+
+      auto rowReader = createRowReaderFromReader(*reader, rowType);
+      assertReadWithReaderAndExpected(
+          rowType, *rowReader, expected, *leafPool_);
+    }
+  };
+
+  constexpr int64_t kShortMax = 9'999'999'999;
+  testRead(
+      DECIMAL(10, 2),
+      /*typeLength=*/16,
+      std::vector<std::optional<int64_t>>{
+          12'345, std::nullopt, -678, 0, kShortMax, -kShortMax});
+  const int128_t longMax = DecimalUtil::kPowersOfTen[30] - 1;
+  testRead(
+      DECIMAL(30, 2),
+      /*typeLength=*/20,
+      std::vector<std::optional<int128_t>>{
+          12'345, std::nullopt, -678, 0, longMax, -longMax});
+
+  // 2^63 needs 9 bytes, so it does not fit in the int64_t that holds
+  // DECIMAL(10, 2). Dictionary pages fail when the dictionary is loaded.
+  for (const auto& [encoding, thriftEncoding] : encodings) {
+    SCOPED_TRACE(parquet::arrow::encodingToString(encoding));
+    const auto rowType = ROW("value", DECIMAL(10, 2));
+    auto reader = createReaderFromBytes(
+        writeFixedLenByteArray(
+            DECIMAL(10, 2),
+            /*typeLength=*/16,
+            encoding,
+            {toBigEndian(12'345, 16), toBigEndian(int128_t{1} << 63, 16)}),
+        makeDefaultReaderOptions());
+    auto rowReader = createRowReaderFromReader(*reader, rowType);
+    const auto read = [&]() {
+      VectorPtr result = BaseVector::create(rowType, 0, leafPool_.get());
+      rowReader->next(2, result);
+      // Top-level columns are loaded lazily.
+      result->loadedVector();
+    };
+    VELOX_ASSERT_THROW(
+        read(), "Decimal value of 16 bytes does not fit in 8 bytes");
+  }
+}
+
+TEST_F(ParquetReaderTest, fixedLenByteArrayNonPositiveLength) {
+  const auto file = writeFixedLenByteArray(
+      DECIMAL(10, 2),
+      /*typeLength=*/16,
+      parquet::arrow::Encoding::kPlain,
+      {toBigEndian(12'345, 16)});
+  for (const int32_t typeLength : {0, -1}) {
+    SCOPED_TRACE(fmt::format("Type length: {}", typeLength));
+    VELOX_ASSERT_THROW(
+        createReaderFromBytes(
+            overrideTypeLength(file, /*schemaIndex=*/1, typeLength),
+            makeDefaultReaderOptions()),
+        "FIXED_LEN_BYTE_ARRAY requires a positive length");
   }
 }
 

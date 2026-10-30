@@ -1153,8 +1153,8 @@ TypePtr ReaderBase::convertType(
       schemaElement.type() && schemaElement.num_children().value_or(0) == 0);
   VELOX_CHECK(
       *schemaElement.type() != thrift::Type::FIXED_LEN_BYTE_ARRAY ||
-          schemaElement.type_length(),
-      "FIXED_LEN_BYTE_ARRAY requires length to be set");
+          schemaElement.type_length().value_or(0) > 0,
+      "FIXED_LEN_BYTE_ARRAY requires a positive length");
 
   static constexpr const char* kTypeMappingErrorFmtStr =
       "Converted type {} is not allowed for requested type {} for file column '{}'";
