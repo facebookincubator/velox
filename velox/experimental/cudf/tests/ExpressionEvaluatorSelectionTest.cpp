@@ -241,11 +241,7 @@ TEST_F(
       nullptr);
 }
 
-// Disabled because this test segfaults in CI while building the typed
-// not use cudf code.
-TEST_F(
-    CudfExpressionSelectionTest,
-    DISABLED_signatureEnforcesConstantArgsSplit) {
+TEST_F(CudfExpressionSelectionTest, signatureEnforcesConstantArgsSplit) {
   // OK: delimiter and limit are constants
   auto ok = optimizeTypedExpr(
       "split(name, ',', 3)",
@@ -550,12 +546,7 @@ TEST_F(CudfExpressionSelectionTest, switchWithElseRetainsNestedTypes) {
   }
 }
 
-TEST_F(CudfExpressionSelectionTest, DISABLED_castAndTryCast) {
-  // TODO (dm): This is required for passing of castAndTryCast test but breaks
-  // others. This is because ASTExpr agrees to support bad casts. remove after
-  // ASTExpr checks cast types
-  // CudfConfig::getInstance().astExpressionEnabled = false;
-
+TEST_F(CudfExpressionSelectionTest, castAndTryCast) {
   // OK: cast bigint -> double (supported by cuDF)
   auto okCast = optimizeTypedExpr(
       "cast(a AS double)", rowType_, queryCtx_.get(), execCtx_.get());

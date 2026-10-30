@@ -2654,6 +2654,12 @@ class TypedRunner {
     }
     auto view = createEncodingView(decoderArtifact(), &pool_, options_);
     for (const auto position : viewPositions_) {
+      // A nullable encoding view serves physical reads only for non-null rows;
+      // nullity is carried by a separate bitmap, so skip null positions rather
+      // than issuing a physical readAt that the view rejects.
+      if (!corpus_.nonNulls[position]) {
+        continue;
+      }
       PhysicalType actual{};
       view->readAt(position, &actual);
       require(

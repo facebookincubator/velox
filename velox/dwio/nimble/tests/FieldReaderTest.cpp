@@ -41,23 +41,45 @@
 namespace facebook::nimble {
 namespace {
 
+// The Nimble key kind of a Hybrid FlatMap column whose keys are `keyType`.
+ScalarKind keyKindOf(const velox::Type& keyType) {
+  const auto kind = keyType.kind();
+  if (kind == velox::TypeKind::TINYINT) {
+    return ScalarKind::Int8;
+  }
+  if (kind == velox::TypeKind::SMALLINT) {
+    return ScalarKind::Int16;
+  }
+  if (kind == velox::TypeKind::INTEGER) {
+    return ScalarKind::Int32;
+  }
+  if (kind == velox::TypeKind::BIGINT) {
+    return ScalarKind::Int64;
+  }
+  if (kind == velox::TypeKind::VARCHAR) {
+    return ScalarKind::String;
+  }
+  NIMBLE_UNREACHABLE("No Hybrid FlatMap key kind for {}", keyType.toString());
+}
+
 HybridFlatMap makeHybridFlatMap(
+    ScalarKind keyKind,
     std::vector<std::vector<std::string>> explicitGroups) {
-  HybridFlatMap hybridMap;
-  hybridMap.groups.reserve(explicitGroups.size() + 1);
+  std::vector<HybridFlatMap::Group> groups;
+  groups.reserve(explicitGroups.size() + 1);
   for (uint32_t groupId = 0; groupId < explicitGroups.size(); ++groupId) {
-    hybridMap.groups.push_back(
+    groups.push_back(
         HybridFlatMap::Group{
             .groupId = groupId,
             .groupKeys = std::move(explicitGroups[groupId]),
         });
   }
-  hybridMap.groups.push_back(
+  groups.push_back(
       HybridFlatMap::Group{
           .groupId = HybridFlatMap::kDefaultGroupId,
           .groupKeys = {},
       });
-  return hybridMap;
+  return HybridFlatMap{keyKind, std::move(groups)};
 }
 
 template <typename T>
@@ -344,7 +366,9 @@ class FieldReaderTest : public ::testing::Test {
         SerializerOptions{
             .version = SerializationVersion::kSerialization,
             .hybridFlatMapColumns =
-                {{"features", makeHybridFlatMap({{std::move(groupedKey)}})}},
+                {{"features",
+                  makeHybridFlatMap(
+                      keyKindOf(*keyType), {{std::move(groupedKey)}})}},
         },
         input->type(),
         pool_.get()};
@@ -413,7 +437,8 @@ TEST_F(FieldReaderTest, handlesHybridGroupsWithNoObservedKeys) {
           std::vector<std::vector<Entry>>{{}, {}})});
   Serializer serializer{
       SerializerOptions{
-          .hybridFlatMapColumns = {{"features", makeHybridFlatMap({{"1"}})}},
+          .hybridFlatMapColumns =
+              {{"features", makeHybridFlatMap(ScalarKind::Int32, {{"1"}})}},
       },
       input->type(),
       pool_.get()};
@@ -455,7 +480,8 @@ TEST_F(FieldReaderTest, handlesHybridGroupsWithNoObservedKeys) {
 TEST_F(FieldReaderTest, treatsAllFalseHybridGroupAsEmpty) {
   SchemaBuilder builder;
   auto root = builder.createRowTypeBuilder(1);
-  auto hybridMap = builder.createHybridFlatMapTypeBuilder(ScalarKind::Int32);
+  auto hybridMap = builder.createHybridFlatMapTypeBuilder(
+      ScalarKind::Int32, HybridFlatMap::KeyPresenceMode::kBitmap);
   const auto group = hybridMap->addGroup(
       7, {"1"}, builder.createScalarTypeBuilder(ScalarKind::Int64));
   hybridMap->addGroup(
@@ -497,7 +523,8 @@ TEST_F(FieldReaderTest, treatsAllFalseHybridGroupAsEmpty) {
 TEST_F(FieldReaderTest, infersOmittedHybridGroupStreams) {
   SchemaBuilder builder;
   auto root = builder.createRowTypeBuilder(1);
-  auto hybridMap = builder.createHybridFlatMapTypeBuilder(ScalarKind::Int32);
+  auto hybridMap = builder.createHybridFlatMapTypeBuilder(
+      ScalarKind::Int32, HybridFlatMap::KeyPresenceMode::kBitmap);
   auto groupValue = builder.createScalarTypeBuilder(ScalarKind::Int64);
   const auto valueOffset = groupValue->scalarDescriptor().offset();
   const auto group = hybridMap->addGroup(7, {"1"}, std::move(groupValue));
@@ -582,7 +609,8 @@ TEST_F(FieldReaderTest, infersOmittedHybridGroupStreams) {
 TEST_F(FieldReaderTest, rejectsMalformedHybridGroupStreams) {
   SchemaBuilder builder;
   auto root = builder.createRowTypeBuilder(1);
-  auto hybridMap = builder.createHybridFlatMapTypeBuilder(ScalarKind::Int32);
+  auto hybridMap = builder.createHybridFlatMapTypeBuilder(
+      ScalarKind::Int32, HybridFlatMap::KeyPresenceMode::kBitmap);
   auto groupValue = builder.createScalarTypeBuilder(ScalarKind::Int64);
   const auto groupValueOffset = groupValue->scalarDescriptor().offset();
   const auto group = hybridMap->addGroup(7, {"1", "2"}, std::move(groupValue));
@@ -736,7 +764,8 @@ TEST_F(FieldReaderTest, filtersDecodedHybridGroupsToRequestedFeatures) {
       SerializerOptions{
           .version = SerializationVersion::kSerialization,
           .hybridFlatMapColumns =
-              {{"features", makeHybridFlatMap({{"1", "2"}})}},
+              {{"features",
+                makeHybridFlatMap(ScalarKind::Int32, {{"1", "2"}})}},
       },
       input->type(),
       pool_.get()};
@@ -816,7 +845,8 @@ TEST_F(FieldReaderTest, filtersDecodedHybridGroupsToRequestedFeatures) {
 TEST_F(FieldReaderTest, excludesRequestedKeysAfterWholeGroupDecode) {
   SchemaBuilder builder;
   auto root = builder.createRowTypeBuilder(1);
-  auto hybridMap = builder.createHybridFlatMapTypeBuilder(ScalarKind::Int32);
+  auto hybridMap = builder.createHybridFlatMapTypeBuilder(
+      ScalarKind::Int32, HybridFlatMap::KeyPresenceMode::kBitmap);
   auto groupValue = builder.createScalarTypeBuilder(ScalarKind::Int64);
   const auto groupValueOffset = groupValue->scalarDescriptor().offset();
   const auto group = hybridMap->addGroup(0, {"1", "2"}, std::move(groupValue));
@@ -878,7 +908,8 @@ TEST_F(FieldReaderTest, skipsNullRowsWithoutAdvancingHybridGroups) {
   Serializer serializer{
       SerializerOptions{
           .version = SerializationVersion::kSerialization,
-          .hybridFlatMapColumns = {{"features", makeHybridFlatMap({{"1"}})}},
+          .hybridFlatMapColumns =
+              {{"features", makeHybridFlatMap(ScalarKind::Int32, {{"1"}})}},
       },
       input->type(),
       pool_.get()};
@@ -965,7 +996,8 @@ TEST_F(FieldReaderTest, hybridFlatMapRoundTripsNestedValues) {
       SerializerOptions{
           .version = SerializationVersion::kSerialization,
           .hybridFlatMapColumns =
-              {{"features", makeHybridFlatMap({{"1", "2"}, {"3"}})}},
+              {{"features",
+                makeHybridFlatMap(ScalarKind::Int32, {{"1", "2"}, {"3"}})}},
       },
       type,
       pool_.get()};

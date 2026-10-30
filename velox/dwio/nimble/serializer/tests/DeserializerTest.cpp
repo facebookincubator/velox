@@ -41,22 +41,23 @@ namespace facebook::nimble {
 namespace {
 
 HybridFlatMap makeHybridFlatMap(
+    ScalarKind keyKind,
     std::vector<std::vector<std::string>> explicitGroups) {
-  HybridFlatMap hybridMap;
-  hybridMap.groups.reserve(explicitGroups.size() + 1);
+  std::vector<HybridFlatMap::Group> groups;
+  groups.reserve(explicitGroups.size() + 1);
   for (uint32_t groupId = 0; groupId < explicitGroups.size(); ++groupId) {
-    hybridMap.groups.push_back(
+    groups.push_back(
         HybridFlatMap::Group{
             .groupId = groupId,
             .groupKeys = std::move(explicitGroups[groupId]),
         });
   }
-  hybridMap.groups.push_back(
+  groups.push_back(
       HybridFlatMap::Group{
           .groupId = HybridFlatMap::kDefaultGroupId,
           .groupKeys = {},
       });
-  return hybridMap;
+  return HybridFlatMap{keyKind, std::move(groups)};
 }
 
 std::shared_ptr<TypeBuilder> makeComplexValueType(SchemaBuilder& builder) {
@@ -109,7 +110,12 @@ class DeserializerTest : public ::testing::Test {
     Serializer serializer{
         SerializerOptions{
             .version = SerializationVersion::kSerialization,
-            .hybridFlatMapColumns = {{"features", makeHybridFlatMap({})}},
+            .hybridFlatMapColumns =
+                {{"features",
+                  makeHybridFlatMap(
+                      std::is_same_v<TKey, std::string> ? ScalarKind::String
+                                                        : ScalarKind::Int64,
+                      {})}},
         },
         input->type(),
         pool_.get()};
@@ -183,7 +189,8 @@ TEST_F(DeserializerTest, acceptsRegularFlatMapSchema) {
 TEST_F(DeserializerTest, traversesComplexHybridValueSubtrees) {
   SchemaBuilder builder;
   auto root = builder.createRowTypeBuilder(1);
-  auto hybridMap = builder.createHybridFlatMapTypeBuilder(ScalarKind::Int32);
+  auto hybridMap = builder.createHybridFlatMapTypeBuilder(
+      ScalarKind::Int32, HybridFlatMap::KeyPresenceMode::kBitmap);
   hybridMap->addGroup(0, {"1"}, makeComplexValueType(builder));
   hybridMap->addGroup(
       HybridFlatMap::kDefaultGroupId, {}, makeComplexValueType(builder));
@@ -256,7 +263,8 @@ TEST_F(DeserializerTest, hybridFlatMapOmitsConstantGroupMetadata) {
       SerializerOptions{
           .version = SerializationVersion::kSerialization,
           .hybridFlatMapColumns =
-              {{"features", makeHybridFlatMap({{"1", "2"}})}},
+              {{"features",
+                makeHybridFlatMap(ScalarKind::Int64, {{"1", "2"}})}},
           .skipConstantHybridFlatMapMetadataStreams = true,
       },
       type,
@@ -318,7 +326,8 @@ TEST_F(DeserializerTest, hybridFlatMapOmitsAllTrueKeyPresenceForFixedGroups) {
   Serializer serializer{
       SerializerOptions{
           .version = SerializationVersion::kSerialization,
-          .hybridFlatMapColumns = {{"features", makeHybridFlatMap({{"1"}})}},
+          .hybridFlatMapColumns =
+              {{"features", makeHybridFlatMap(ScalarKind::Int64, {{"1"}})}},
           .skipConstantHybridFlatMapMetadataStreams = true,
       },
       type,
@@ -388,7 +397,8 @@ TEST_F(DeserializerTest, hybridFlatMapOmitsAllFalseDefaultGroupMetadata) {
   Serializer serializer{
       SerializerOptions{
           .version = SerializationVersion::kSerialization,
-          .hybridFlatMapColumns = {{"features", makeHybridFlatMap({{"1"}})}},
+          .hybridFlatMapColumns =
+              {{"features", makeHybridFlatMap(ScalarKind::Int64, {{"1"}})}},
           .skipConstantHybridFlatMapMetadataStreams = true,
       },
       makeInput({"{99: 90}"})->type(),
@@ -462,7 +472,8 @@ TEST_F(DeserializerTest, hybridFlatMapMetadataIsRetainedByDefault) {
   Serializer serializer{
       SerializerOptions{
           .hybridFlatMapColumns =
-              {{"features", makeHybridFlatMap({{"1", "2"}})}},
+              {{"features",
+                makeHybridFlatMap(ScalarKind::Int64, {{"1", "2"}})}},
       },
       input->type(),
       pool_.get()};
@@ -525,7 +536,9 @@ TEST_F(DeserializerTest, hybridFlatMapRoundTripsMixedDefault) {
       SerializerOptions{
           .version = SerializationVersion::kSerialization,
           .hybridFlatMapColumns =
-              {{"features", makeHybridFlatMap({{"1", "2", "4"}, {"3"}})}},
+              {{"features",
+                makeHybridFlatMap(
+                    ScalarKind::Int32, {{"1", "2", "4"}, {"3"}})}},
           .skipConstantHybridFlatMapMetadataStreams = true,
       },
       type,

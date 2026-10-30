@@ -336,6 +336,86 @@ __device__ void __copyTensor(Tensor* source, Tensor* dest, BlockInfo& block) {
   __copyStrided<T>(source, dest, block);
 }
 
+// A 32x32 tile of elements of up to 8 bytes, each row padded by one element so
+// that reading a column touches 32 different banks.
+struct TransposeTile {
+  static constexpr int32_t kSize = 32;
+  int64_t data[kSize * (kSize + 1)];
+};
+
+// Copies a 2D 'source' whose rows are not unit-stride into the dense 'dest'
+// through shared-memory tiles, as aten's transpose copy does. A tile is read
+// with the lanes walking the rows, where a transposed source has unit stride,
+// and written with the lanes walking the columns, so both global accesses
+// coalesce.
+template <typename T>
+__device__ void __transposeCopy(
+    Tensor* source,
+    Tensor* dest,
+    TransposeTile& tile,
+    BlockInfo& block) {
+  constexpr int32_t kSize = TransposeTile::kSize;
+  auto* rowsOf = reinterpret_cast<T(*)[kSize + 1]>(tile.data);
+  const int64_t numRows = source->dims[0];
+  const int64_t numCols = source->dims[1];
+  const int64_t rowStride = source->strides[0];
+  const int64_t colStride = source->strides[1];
+  const T* in = storage<T>(source);
+  T* out = storage<T>(dest);
+  const int64_t tileCols = (numCols + kSize - 1) / kSize;
+  const int64_t numTiles = (numRows + kSize - 1) / kSize * tileCols;
+  const auto lane = threadIdx.x % kSize;
+  const auto firstLine = threadIdx.x / kSize;
+  const auto numLines = blockDim.x / kSize;
+  for (int64_t t = block.blockInOp; t < numTiles; t += block.numBlocksInOp) {
+    const int64_t row0 = t / tileCols * kSize;
+    const int64_t col0 = t % tileCols * kSize;
+    for (int32_t c = firstLine; c < kSize; c += numLines) {
+      const int64_t row = row0 + lane;
+      const int64_t col = col0 + c;
+      if (row < numRows && col < numCols) {
+        rowsOf[c][lane] = in[row * rowStride + col * colStride];
+      }
+    }
+    __syncthreads();
+    for (int32_t r = firstLine; r < kSize; r += numLines) {
+      const int64_t row = row0 + r;
+      const int64_t col = col0 + lane;
+      if (row < numRows && col < numCols) {
+        out[row * numCols + col] = rowsOf[lane][r];
+      }
+    }
+    __syncthreads();
+  }
+}
+
+// Copy of 'source' into 'dest' for aten.contiguous and aten.clone. With
+// 'kTile', a 2D source that is not contiguous at run time and has non-unit row
+// stride is transposed through a tile in the kernel's dynamic shared memory,
+// which the launch provides only for such nodes; any other source is copied
+// element by element through both tensors' strides.
+template <typename T, bool kTile>
+__device__ void tw_contiguous(Tensor* source, Tensor* dest, BlockInfo& block) {
+  if (source->storage == nullptr) {
+    return;
+  }
+  if constexpr (kTile) {
+    if (source->rank == 2 && !source->contiguous && source->strides[1] != 1 &&
+        dest->contiguous) {
+      extern __shared__ int64_t transposeShared[];
+      // Another op of the block may have used the same memory before.
+      __syncthreads();
+      __transposeCopy<T>(
+          source,
+          dest,
+          *reinterpret_cast<TransposeTile*>(transposeShared),
+          block);
+      return;
+    }
+  }
+  __copyStrided<T>(source, dest, block);
+}
+
 // Computes linear offset from scalar index values in registers.
 __device__ inline int32_t indexOffset(Tensor* tensor, int32_t index0) {
   return index0 * tensor->strides[0];

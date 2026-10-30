@@ -19,6 +19,7 @@
 #include <folly/container/F14Map.h>
 
 #include "velox/common/EnumDefine.h"
+#include "velox/common/base/Exceptions.h"
 
 namespace facebook::velox::common::vectorindex {
 
@@ -34,5 +35,14 @@ const auto& vectorIndexMetricNames() {
 } // namespace
 
 VELOX_DEFINE_ENUM_NAME(VectorIndexMetric, vectorIndexMetricNames);
+
+VectorIndexMetric VectorIndexMetricValue::fromValue(int32_t value) {
+  const auto metric = static_cast<VectorIndexMetric>(value);
+  switch (metric) {
+    case VectorIndexMetric::kCosine:
+      return metric;
+  }
+  VELOX_USER_FAIL("Invalid vector index metric value: {}", value);
+}
 
 } // namespace facebook::velox::common::vectorindex

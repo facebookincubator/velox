@@ -187,11 +187,18 @@ const std::vector<Split>& JoinSource::groupedSplits(
 
   std::vector<exec::Split> splitsWithGroup;
   for (int32_t groupId = 0; groupId < numGroups; ++groupId) {
-    for (auto i = 0; i < inputVectorsByGroup[groupId].size(); ++i) {
+    // Grouped execution hangs when a split group receives no splits from one
+    // of its grouped sources. Give an empty group one zero-row split.
+    std::vector<RowVectorPtr> groupInput = inputVectorsByGroup[groupId];
+    if (groupInput.empty()) {
+      groupInput.push_back(
+          BaseVector::create<RowVector>(
+              outputType_, 0, batches_.front()->pool()));
+    }
+    for (auto i = 0; i < groupInput.size(); ++i) {
       const std::string filePath = fmt::format(
           "{}/grouped[{}].{}.{}", splitsDir_, groupId, numGroups, i);
-      test::writeToFile(
-          filePath, inputVectorsByGroup[groupId][i], writerPool_.get());
+      test::writeToFile(filePath, groupInput[i], writerPool_.get());
       splitsWithGroup.emplace_back(test::makeConnectorSplit(filePath), groupId);
     }
   }
