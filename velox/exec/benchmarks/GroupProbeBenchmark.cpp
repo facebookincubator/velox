@@ -45,15 +45,19 @@ enum class KeyShape {
   // strings overflow VectorHasher's value ID limits, so this resolves to kHash
   // and probes compare non-inlined strings.
   kBigintVarchar,
+  // Eight BIGINT keys with at most 20K distinct values each. The value ranges
+  // multiply past 64 bits, so this resolves to kHash even for a table of a few
+  // thousand groups, which a single BIGINT key never does.
+  kEightBigints,
 };
 
-// Measures HashTable::groupProbe() with group-by tables larger than the CPU
-// cache. The build case inserts every group once in random order, so nearly
-// every probe row creates a new group. The probe case re-probes a built table
-// in a different random order, so every probe row hits an existing group.
-// With accumulators, every probe row also updates its group's accumulator after
-// the probe, as an aggregate function does, so the group row is read past the
-// key.
+// Measures HashTable::groupProbe() with group-by tables from a few thousand
+// groups, which fit in the core's L2, to tables larger than the CPU cache. The
+// build case inserts every group once in random order, so nearly every probe
+// row creates a new group. The probe case re-probes a built table in a
+// different random order, so every probe row hits an existing group. With
+// accumulators, every probe row also updates its group's accumulator after the
+// probe, as an aggregate function does, so the group row is read past the key.
 class GroupProbeBenchmark {
  public:
   // 'accumulatorBytes' is the width of the one fixed-size accumulator in a
@@ -105,6 +109,8 @@ class GroupProbeBenchmark {
       case KeyShape::kBigintVarcharValueIds:
       case KeyShape::kBigintVarchar:
         return {BIGINT(), VARCHAR()};
+      case KeyShape::kEightBigints:
+        return std::vector<TypePtr>(8, BIGINT());
     }
     VELOX_UNREACHABLE();
   }
@@ -176,6 +182,14 @@ class GroupProbeBenchmark {
         children[1]->asFlatVector<StringView>()->set(row, StringView(name));
         return;
       }
+      case KeyShape::kEightBigints:
+        for (auto channel = 0; channel < children.size(); ++channel) {
+          children[channel]->asFlatVector<int64_t>()->set(
+              row,
+              folly::hash::twang_mix64(id * children.size() + channel) %
+                  20'000);
+        }
+        return;
     }
   }
 
@@ -239,6 +253,7 @@ class GroupProbeBenchmark {
         return BaseHashTable::HashMode::kNormalizedKey;
       case KeyShape::kRandomBigint:
       case KeyShape::kBigintVarchar:
+      case KeyShape::kEightBigints:
         return BaseHashTable::HashMode::kHash;
     }
     VELOX_UNREACHABLE();
@@ -257,15 +272,20 @@ class GroupProbeBenchmark {
   const std::shared_ptr<memory::MemoryPool> pool_;
 };
 
-// 'accumulatorBytes' lists the accumulator widths to run, 0 meaning no
-// accumulator.
+// 'numGroupsList' lists the table sizes to run. 'accumulatorBytes' lists the
+// accumulator widths to run, 0 meaning no accumulator.
 void addBenchmarks(
     std::string_view name,
     KeyShape shape,
+    const std::vector<int64_t>& numGroupsList,
     const std::vector<int32_t>& accumulatorBytes) {
   for (const auto width : accumulatorBytes) {
-    for (const int64_t numGroups : {1'000'000, 8'000'000, 32'000'000}) {
-      auto suffix = fmt::format("{}_{}M", name, numGroups / 1'000'000);
+    for (const auto numGroups : numGroupsList) {
+      // Sizes of a million groups and more keep the 'M' suffix of the first
+      // cases.
+      auto suffix = numGroups % 1'000'000 == 0
+          ? fmt::format("{}_{}M", name, numGroups / 1'000'000)
+          : fmt::format("{}_{}K", name, numGroups / 1'000);
       if (width > 0) {
         suffix += fmt::format("_acc{}", width);
       }
@@ -287,13 +307,36 @@ int main(int argc, char** argv) {
   folly::Init init{&argc, &argv};
   memory::MemoryManager::initialize(memory::MemoryManager::Options{});
   // The prefetch of the accumulators applies to rows of 64 bytes or more.
-  // Accumulators of 8, 48, 56 and 64 bytes make rows of 24, 64, 72 and 80 bytes
-  // with one BIGINT key, and 32, 72, 80 and 88 bytes with two.
-  addBenchmarks("normalizedKey", KeyShape::kTwoBigints, {0, 8, 48, 56, 64});
-  addBenchmarks("hashBigint", KeyShape::kRandomBigint, {0, 8, 48, 56, 64});
+  // Accumulators of 8, 48, 56, 64, 120 and 248 bytes make rows of 24, 64, 72,
+  // 80, 136 and 264 bytes with one BIGINT key, and 32, 72, 80, 88, 144 and 272
+  // bytes with two. Eight BIGINT keys take 64 bytes, so those rows start at
+  // 80 bytes.
+  const std::vector<int32_t> accumulatorBytes{0, 8, 48, 56, 64, 120, 248};
   addBenchmarks(
-      "normalizedKeyBigintVarchar", KeyShape::kBigintVarcharValueIds, {0});
-  addBenchmarks("hashBigintVarchar", KeyShape::kBigintVarchar, {0});
+      "normalizedKey",
+      KeyShape::kTwoBigints,
+      {1'000'000, 8'000'000, 32'000'000},
+      accumulatorBytes);
+  addBenchmarks(
+      "hashBigint",
+      KeyShape::kRandomBigint,
+      {200'000, 400'000, 1'000'000, 8'000'000, 32'000'000},
+      accumulatorBytes);
+  addBenchmarks(
+      "hashEightBigints",
+      KeyShape::kEightBigints,
+      {10'000, 100'000},
+      {8, 48, 64});
+  addBenchmarks(
+      "normalizedKeyBigintVarchar",
+      KeyShape::kBigintVarcharValueIds,
+      {1'000'000, 8'000'000, 32'000'000},
+      {0});
+  addBenchmarks(
+      "hashBigintVarchar",
+      KeyShape::kBigintVarchar,
+      {1'000'000, 8'000'000, 32'000'000},
+      {0});
   folly::runBenchmarks();
   return 0;
 }
