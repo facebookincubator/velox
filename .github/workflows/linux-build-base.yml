@@ -680,12 +680,8 @@ jobs:
           VELOX_DEPENDENCY_SOURCE: SYSTEM
           ICU_SOURCE: SYSTEM
           # Mirror the adapters and fedora-debug jobs: build FAISS from
-          # source instead of resolving the system-installed package.
-          # The system FAISS config (/usr/local/share/faiss/faiss-config.cmake)
-          # sets the link interface of the imported `faiss` target to
-          # include OpenMP::OpenMP_CXX without ever calling
-          # find_package(OpenMP) to define it, so a SYSTEM resolution
-          # fails the configure.
+          # source. The image's FAISS is older than the 1.12.0 Velox
+          # requires. Remove once the images have FAISS 1.12.0.
           faiss_SOURCE: BUNDLED
           LibXml2_SOURCE: BUNDLED
           # Use BUNDLED gflags to provide PIC static gflags for .so plugins.

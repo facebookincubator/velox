@@ -34,8 +34,6 @@ velox_link_libraries(
 )
 
 if(VELOX_ENABLE_FAISS)
-  find_package(OpenMP REQUIRED)
-
   velox_add_library(
     velox_vector_index
     Embeddings.cpp
