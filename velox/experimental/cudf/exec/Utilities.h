@@ -210,19 +210,6 @@ void streamsWaitForStream(
     std::span<const cuda::stream_ref> streams,
     cuda::stream_ref stream);
 
-/**
- * @brief Orders CudfVector deallocations after work on a target stream.
- *
- * Prefer rebinding owned table buffers to @p stream so stream-ordered memory
- * resources free the inputs after prior work on that stream. Falls back to an
- * event wait on @p inputStreams when an input cannot be rebound without
- * materializing, e.g. packed-table inputs or older cuDF builds.
- */
-void orderCudfVectorDeallocationsAfterStream(
-    std::span<const CudfVectorPtr> vectors,
-    std::span<const cuda::stream_ref> inputStreams,
-    cuda::stream_ref stream);
-
 /// Creates an all-null cuDF column of \p numRows for the given Velox \p type.
 /// Supports cuDF-compatible scalar types and nested Velox ARRAY and ROW types.
 /// Throws for unsupported types.
