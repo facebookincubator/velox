@@ -90,6 +90,7 @@ velox_add_library(
   Hash.h
   In.h
   InitcapFunction.h
+  JavaFloatingPoint.h
   JsonObjectKeys.h
   LambdaIndexUtil.h
   LastWin.h
