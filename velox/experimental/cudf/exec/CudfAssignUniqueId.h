@@ -44,7 +44,7 @@ class CudfAssignUniqueId : public CudfOperatorBase {
     return input_ == nullptr;
   }
 
-  exec::BlockingReason isBlocked(ContinueFuture* /*future*/) override {
+  exec::BlockingReason doIsBlocked(ContinueFuture* /*future*/) override {
     return exec::BlockingReason::kNotBlocked;
   }
 
