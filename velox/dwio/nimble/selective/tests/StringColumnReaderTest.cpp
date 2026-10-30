@@ -900,9 +900,9 @@ TEST_P(StringColumnReaderTest, skipAcrossChunkBoundaryMidFile) {
 }
 
 // A selective filter keeps a few rows spread over many chunks of a file with
-// chunk stats. Inside a batch, reads use the stream index to go straight to the
-// chunk of the next kept row instead of decoding the chunks in between. The
-// columns cover strings
+// chunk stats. Reads use the stream index to go straight to the chunk of the
+// next kept row, both inside a batch and from one batch to the next, instead of
+// decoding the chunks in between. The columns cover strings
 // and integers in streams with an entry for every row read (top-level columns,
 // array elements) and in streams with values only where an outer nulls bitmap
 // is set (a nullable struct's children, flat-map values). Preserving
@@ -910,7 +910,7 @@ TEST_P(StringColumnReaderTest, skipAcrossChunkBoundaryMidFile) {
 // which falls back to a flat read at a chunk that is not a dictionary. A second
 // filter on the nullable 'n' drops more rows. The rows read must not change,
 // and without preserved dictionaries no batch size may decompress more chunks
-// than reading one row per batch, apart from the chunk each batch starts in.
+// than reading one row per batch.
 TEST_P(StringColumnReaderTest, sparseFilterSkipsToChunksOfKeptRows) {
   const bool stringDecoderZeroCopy = std::get<0>(GetParam());
   constexpr int kNumChunks = 40;
@@ -920,6 +920,8 @@ TEST_P(StringColumnReaderTest, sparseFilterSkipsToChunksOfKeptRows) {
   // 'r.u' and 'd'. The root is node 0.
   constexpr size_t kNumNodes{6};
   constexpr std::array<uint32_t, kNumNodes> kNodes{2, 4, 6, 11, 7, 12};
+  // Index in kNodes of the values of 'm'.
+  constexpr size_t kMapValuesIndex{3};
 
   // Puts consecutive keys in different chunks, so each chunk's key range spans
   // nearly all keys and chunk stats cannot skip the chunks between kept rows.
@@ -1137,12 +1139,10 @@ TEST_P(StringColumnReaderTest, sparseFilterSkipsToChunksOfKeptRows) {
   };
 
   // Reading one row per batch decompresses little more than the chunks of kept
-  // rows, since each batch starts at a kept row. With chunk stats, a larger
-  // batch decompresses at most one more chunk per batch with a kept row: the
-  // skip to the start of the batch opens the chunk it lands in. Without chunk
-  // stats, one batch decompresses every chunk up to its last kept row. Row
-  // 3'998 is in the null tail of 'r', so reads of 'r.u' skip past its last
-  // value.
+  // rows, since each batch starts at a kept row. With chunk stats, no batch
+  // size decompresses more. Without them, one batch decompresses every chunk
+  // up to its last kept row. Row 3'998 is in the null tail of 'r', so reads of
+  // 'r.u' skip past its last value.
   const std::vector<int> farApartRows{7, 1'234, 1'235, 2'999, 3'998};
   const auto oneRowBatches = read(
       file,
@@ -1157,13 +1157,6 @@ TEST_P(StringColumnReaderTest, sparseFilterSkipsToChunksOfKeptRows) {
       /*scanFastPath=*/false,
       /*preserveDictionary=*/false);
   for (const int batchSize : {37, 1'000, kNumRows}) {
-    uint64_t numBatchesWithKeptRows{0};
-    for (size_t i = 0; i < farApartRows.size(); ++i) {
-      if (i == 0 ||
-          farApartRows[i] / batchSize != farApartRows[i - 1] / batchSize) {
-        ++numBatchesWithKeptRows;
-      }
-    }
     for (const bool scanFastPath : {false, true}) {
       SCOPED_TRACE(
           fmt::format("batchSize={} scanFastPath={}", batchSize, scanFastPath));
@@ -1192,10 +1185,12 @@ TEST_P(StringColumnReaderTest, sparseFilterSkipsToChunksOfKeptRows) {
       }
       for (size_t index = 0; index < kNumNodes; ++index) {
         SCOPED_TRACE(fmt::format("node={}", kNodes[index]));
+        // A read stops at the next kept row even where it has no value, then
+        // opens the chunk of the next value in the batch. Kept row 7 has no map
+        // key 1, so one batch opens a chunk of key 1 that no kept row needs.
+        const uint64_t extraChunk = index == kMapValuesIndex ? 1 : 0;
         EXPECT_GT(decompressions[index], 0);
-        EXPECT_LE(
-            decompressions[index],
-            oneRowBatches[index] + numBatchesWithKeptRows);
+        EXPECT_LE(decompressions[index], oneRowBatches[index] + extraChunk);
         EXPECT_GT(withoutChunkStats[index], decompressions[index]);
       }
     }

@@ -42,6 +42,9 @@ void ChunkedDecoder::ensureSharedDictionaryAlphabet() {
 }
 
 bool ChunkedDecoder::loadNextChunk(const ChunkBoundaryCallback& onChunkLoaded) {
+  if (hasLazyChunkSeek_) {
+    return loadLazySeekChunk(onChunkLoaded);
+  }
   // Free the previous chunk first so that it is not alive while the next chunk
   // is decompressed.
   encoding_.reset();
@@ -304,6 +307,7 @@ void ChunkedDecoder::skipWithIndex(
     encoding_ = nullptr;
     remainingValues_ = 0;
     rowPosition_ = targetRow;
+    hasLazyChunkSeek_ = false;
     inputData_ += inputSize_;
     inputSize_ = 0;
     input_->SkipInt64(std::numeric_limits<int64_t>::max());
@@ -311,17 +315,32 @@ void ChunkedDecoder::skipWithIndex(
     return;
   }
 
+  rowPosition_ = targetRow;
+  encoding_ = nullptr;
+  currentStringBuffers_.clear();
+  remainingValues_ = 0;
+  hasLazyChunkSeek_ = true;
+  onChunkBoundary();
+}
+
+bool ChunkedDecoder::loadLazySeekChunk(
+    const ChunkBoundaryCallback& onChunkLoaded) {
+  NIMBLE_CHECK(hasLazyChunkSeek_);
+  hasLazyChunkSeek_ = false;
+  const uint32_t targetRow = rowPosition_;
+
   // Lookup the chunk containing targetRow.
   const auto location = streamIndex_->lookupChunk(targetRow);
 
   // Seek to the chunk and skip within it.
-  seekToChunk(location.chunkOffset, onChunkBoundary);
+  seekToChunk(location.chunkOffset);
   rowPosition_ = location.rowOffset;
 
   const uint32_t rowsToSkipInChunk = targetRow - rowPosition_;
   NIMBLE_DCHECK_LT(rowsToSkipInChunk, remainingValues_);
   encoding_->skip(rowsToSkipInChunk);
   advancePosition(rowsToSkipInChunk);
+  return onChunkLoaded();
 }
 
 void ChunkedDecoder::skipWithoutIndex(
