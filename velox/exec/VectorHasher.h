@@ -17,6 +17,7 @@
 
 #include <folly/container/F14Map.h>
 #include <folly/container/F14Set.h>
+#include <folly/hash/Hash.h>
 
 #include <type_traits>
 
@@ -390,21 +391,28 @@ class VectorHasher {
     return typeKind_ == TypeKind::HUGEINT || typeKind_ == TypeKind::TIMESTAMP;
   }
 
-  // Pack timestamps injectively for exact distinct value ids. This is not
-  // order-preserving because negative seconds are cast to uint64_t.
+  // Packs a timestamp as seconds * 2^64 + nanos for exact distinct value ids.
+  // The packing is injective and preserves timestamp order as signed int128_t.
   static int128_t timestampAsInt128(Timestamp timestamp) {
     return HugeInt::build(
         static_cast<uint64_t>(timestamp.getSeconds()), timestamp.getNanos());
   }
 
-  // Use millisecond range encoding only when conversion is lossless and safe.
+  // Converts 'timestamp' to milliseconds for range value ids. Returns false if
+  // the conversion would drop sub-millisecond precision or overflow int64_t.
+  // Computes the same value as Timestamp::toMillis() without throwing.
   static bool tryTimestampToMillis(Timestamp timestamp, int64_t& millis) {
-    if (timestamp.getNanos() % Timestamp::kNanosecondsInMillisecond != 0 ||
-        timestamp < Timestamp::minMillis() ||
-        timestamp > Timestamp::maxMillis()) {
+    if (timestamp.getNanos() % Timestamp::kNanosecondsInMillisecond != 0) {
       return false;
     }
-    millis = timestamp.toMillis();
+    const auto seconds = static_cast<int128_t>(timestamp.getSeconds());
+    const int128_t result = seconds * Timestamp::kMillisecondsInSecond +
+        timestamp.getNanos() / Timestamp::kNanosecondsInMillisecond;
+    if (result < std::numeric_limits<int64_t>::min() ||
+        result > std::numeric_limits<int64_t>::max()) {
+      return false;
+    }
+    millis = static_cast<int64_t>(result);
     return true;
   }
 
@@ -722,8 +730,11 @@ class VectorHasher {
       uniqueValues_;
 
   // Table for mapping distinct 128-bit values to small ints. Used for HUGEINT
-  // and exact timestamp value ids.
-  folly::F14FastMap<int128_t, uint32_t> uniqueHugeintValues_;
+  // and exact timestamp value ids. Uses folly::hasher because std::hash may
+  // hash only the low 64 bits. Keys that differ only in the high bits, such as
+  // timestamps that differ only in seconds, would then all collide.
+  folly::F14FastMap<int128_t, uint32_t, folly::hasher<int128_t>>
+      uniqueHugeintValues_;
 
   // Memory for unique string values.
   std::vector<std::string> uniqueValuesStorage_;
@@ -826,8 +837,14 @@ inline uint64_t VectorHasher::valueId(Timestamp value) {
     return valueId(millis);
   }
 
-  updateTimestampRange(value);
-  return valueId(timestampAsInt128(value));
+  // Only a new value can extend the range stats. Values already in the map
+  // were accounted for in the range stats when they were inserted.
+  const auto numDistinct = uniqueHugeintValues_.size();
+  const auto id = valueId(timestampAsInt128(value));
+  if (uniqueHugeintValues_.size() != numDistinct) {
+    updateTimestampRange(value);
+  }
+  return id;
 }
 
 template <>

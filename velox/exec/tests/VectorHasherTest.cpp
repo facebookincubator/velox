@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/exec/VectorHasher.h"
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include <array>
 #include "velox/common/base/tests/GTestUtils.h"
@@ -1080,12 +1081,75 @@ TEST_F(VectorHasherTest, timestampRangePrecision) {
 
   hasher->decode(*exactValues, exactRows);
   ASSERT_TRUE(hasher->computeValueIds(exactRows, result));
-  EXPECT_NE(0, result[0]);
-  EXPECT_NE(0, result[1]);
-  EXPECT_NE(0, result[2]);
-  EXPECT_NE(result[0], result[1]);
-  EXPECT_NE(result[0], result[2]);
-  EXPECT_NE(result[1], result[2]);
+  // Values keep the ids assigned when they were first seen: 1ms and 2ms while
+  // collecting stats, and 1001us when range mode failed.
+  EXPECT_THAT(
+      std::vector<uint64_t>(result.begin(), result.end()),
+      testing::ElementsAre(1, 3, 2));
+}
+
+TEST_F(VectorHasherTest, timestampRangeLimits) {
+  // Maps 'limit' to a value range and checks that 'outOfRange', whose
+  // milliseconds do not fit in int64_t, gets a distinct value id instead of
+  // throwing or being mapped into the range.
+  auto testLimit = [&](Timestamp limit, Timestamp outOfRange) {
+    auto limitVector = makeFlatVector<Timestamp>({limit});
+    SelectivityVector rows(limitVector->size());
+    raw_vector<uint64_t> result(limitVector->size());
+
+    auto hasher = exec::VectorHasher::create(TIMESTAMP(), 0);
+    hasher->decode(*limitVector, rows);
+    ASSERT_FALSE(hasher->computeValueIds(rows, result));
+
+    uint64_t asRange;
+    uint64_t asDistinct;
+    hasher->cardinality(0, asRange, asDistinct);
+    ASSERT_EQ(2, asRange);
+    ASSERT_EQ(2, hasher->enableValueRange(1, 0));
+
+    hasher->decode(*limitVector, rows);
+    ASSERT_TRUE(hasher->computeValueIds(rows, result));
+    EXPECT_EQ(1, result[0]);
+
+    auto outOfRangeVector = makeFlatVector<Timestamp>({outOfRange});
+    hasher->decode(*outOfRangeVector, rows);
+    ASSERT_FALSE(hasher->computeValueIds(rows, result));
+
+    hasher->cardinality(0, asRange, asDistinct);
+    EXPECT_EQ(VectorHasher::kRangeTooLarge, asRange);
+    EXPECT_EQ(3, asDistinct);
+    ASSERT_EQ(3, hasher->enableValueIds(1, 0));
+
+    auto values = makeFlatVector<Timestamp>({limit, outOfRange});
+    SelectivityVector valueRows(values->size());
+    result.resize(values->size());
+    hasher->decode(*values, valueRows);
+    ASSERT_TRUE(hasher->computeValueIds(valueRows, result));
+    EXPECT_THAT(
+        std::vector<uint64_t>(result.begin(), result.end()),
+        testing::ElementsAre(1, 2));
+  };
+
+  // Each out-of-range timestamp is one millisecond beyond a limit. Its
+  // milliseconds would wrap around to the opposite limit in int64_t.
+  const auto minMillis = Timestamp::minMillis();
+  const auto maxMillis = Timestamp::maxMillis();
+  {
+    SCOPED_TRACE("minMillis");
+    testLimit(
+        minMillis,
+        Timestamp(
+            maxMillis.getSeconds(),
+            maxMillis.getNanos() + Timestamp::kNanosecondsInMillisecond));
+  }
+  {
+    SCOPED_TRACE("maxMillis");
+    testLimit(
+        maxMillis,
+        Timestamp(
+            minMillis.getSeconds(),
+            minMillis.getNanos() - Timestamp::kNanosecondsInMillisecond));
+  }
 }
 
 TEST_F(VectorHasherTest, timestampAnalyzePrecision) {
@@ -1198,6 +1262,12 @@ TEST_F(VectorHasherTest, timestampLookupPrecision) {
   ASSERT_EQ(4, asDistinct);
   ASSERT_EQ(4, hasher->enableValueIds(1, 0));
 
+  hasher->decode(*build, rows);
+  ASSERT_TRUE(hasher->computeValueIds(rows, result));
+  EXPECT_THAT(
+      std::vector<uint64_t>(result.begin(), result.end()),
+      testing::ElementsAre(1, 2, 3));
+
   auto probe = makeFlatVector<Timestamp>(
       {Timestamp::fromMicros(1'001),
        Timestamp::fromMicros(1'999),
@@ -1215,12 +1285,10 @@ TEST_F(VectorHasherTest, timestampLookupPrecision) {
   EXPECT_TRUE(probeRows.isValid(2));
   EXPECT_FALSE(probeRows.isValid(3));
   EXPECT_EQ(probeRows.countSelected(), 3);
-  EXPECT_NE(0, result[0]);
-  EXPECT_NE(0, result[1]);
-  EXPECT_NE(0, result[2]);
-  EXPECT_NE(result[0], result[1]);
-  EXPECT_NE(result[0], result[2]);
-  EXPECT_NE(result[1], result[2]);
+  // Matching probe rows get the build-side ids of the same timestamps.
+  EXPECT_THAT(
+      std::vector<uint64_t>(result.begin(), result.begin() + 3),
+      testing::ElementsAre(2, 3, 1));
 }
 
 TEST_F(VectorHasherTest, computeValueIdsInteger) {

@@ -54,7 +54,7 @@ struct HashTableBenchmarkParams {
       int32_t hitrate,
       int32_t keySpacing = 1,
       int32_t _numWays = 10,
-      TypePtr buildType = ROW({"k1"}, {BIGINT()}))
+      TypePtr buildType = ROW("k1", BIGINT()))
       : title(std::move(title)),
         buildSize(size),
         size(100 * (size / _numWays) / hitrate),
@@ -667,12 +667,9 @@ int main(int argc, char** argv) {
       HashTableBenchmarkParams("HitVid10K", 10000, 100, 1000),
       HashTableBenchmarkParams("MissVid10K", 10000, 5, 1000),
       HashTableBenchmarkParams(
-          "TimestampHitVid10K",
-          10000,
-          100,
-          1000,
-          10,
-          ROW({"k1"}, {TIMESTAMP()})),
+          "TimestampHit10K", 10000, 100, 1, 10, ROW("k1", TIMESTAMP())),
+      HashTableBenchmarkParams(
+          "TimestampHitVid10K", 10000, 100, 1000, 10, ROW("k1", TIMESTAMP())),
 
       HashTableBenchmarkParams("Hit4M", 4000000, 100),
       HashTableBenchmarkParams("Miss4M", 4000000, 5),
