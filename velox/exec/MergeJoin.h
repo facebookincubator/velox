@@ -568,10 +568,9 @@ class MergeJoin : public Operator {
       }
     }
 
-    // Returns whether `row` corresponds to the same left key as the last
-    // left match evaluated.
-    bool isCurrentLeftMatch(vector_size_t row) {
-      return currentLeftRowNumber_ == rawLeftRowNumbers_[row];
+    // Tests whether the resume cursor continues the last tracked outer row.
+    bool isLastMatch(const RowVectorPtr& batch, vector_size_t row) const {
+      return lastVector_ == batch && lastIndex_ == row;
     }
 
     // Called when all rows from the current output batch are processed and the
