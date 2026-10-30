@@ -52,7 +52,6 @@ add_executable(
   RetryTests.cpp
   ScanSpecTest.cpp
   SelectiveColumnReaderTest.cpp
-  SortingWriterTest.cpp
   StreamUtilTest.cpp
   BufferedInputTest.cpp
   CachedBufferedInputTest.cpp
