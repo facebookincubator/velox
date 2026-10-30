@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "velox/dwio/common/SortingWriter.h"
+#include "velox/connectors/hive/SortingWriter.h"
 #include <gtest/gtest.h>
 
 #include "velox/common/base/tests/GTestUtils.h"
@@ -24,9 +24,9 @@
 using namespace facebook::velox::exec;
 using namespace facebook::velox::memory;
 
-namespace facebook::velox::dwio::common::test {
+namespace facebook::velox::connector::hive::test {
 
-class MockWriter : public Writer {
+class MockWriter : public dwio::common::Writer {
  public:
   MockWriter() {
     setState(State::kRunning);
@@ -43,7 +43,7 @@ class MockWriter : public Writer {
 
   void flush() override {}
 
-  std::unique_ptr<FileMetadata> close() override {
+  std::unique_ptr<dwio::common::FileMetadata> close() override {
     setState(State::kClosed);
     return nullptr;
   }
@@ -127,4 +127,4 @@ TEST_F(SortingWriterTest, largeRowSizeExceedsMaxOutputBytes) {
   ASSERT_GT(mockWriterPtr->getTotalRowsWritten(), 0);
 }
 
-} // namespace facebook::velox::dwio::common::test
+} // namespace facebook::velox::connector::hive::test

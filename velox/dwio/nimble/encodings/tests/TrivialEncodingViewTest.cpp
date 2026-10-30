@@ -17,10 +17,12 @@
 #include "velox/dwio/nimble/encodings/tests/EncodingViewTestUtils.h"
 
 #include <string>
+#include <tuple>
 #include <vector>
 
 #include <gtest/gtest.h>
 
+#include "velox/dwio/nimble/common/tests/GTestUtils.h"
 #include "velox/dwio/nimble/encodings/TrivialEncoding.h"
 
 using namespace facebook;
@@ -40,6 +42,60 @@ TEST_P(TrivialEncodingViewTest, readsTrivialEncodingForAllLayoutFamilies) {
   expectReads<nimble::TrivialEncoding<std::string_view>>(
       makeVector<std::string_view>({"alpha", "", "beta", "longer-value"}),
       {3, 0, 1, 2});
+}
+
+TEST_P(TrivialEncodingViewTest, lowerBoundSearchesRange) {
+  const auto values = makeVector<int32_t>({-7, -2, -2, 0, 5, 1, 3});
+  nimble::Encoding::Options options{.cacheEncodingView = cacheEncodingView()};
+  const auto serialized =
+      nimble::test::Encoder<nimble::TrivialEncoding<int32_t>>::encode(
+          *buffer_, values, nimble::CompressionType::Uncompressed, options);
+  auto view = nimble::createEncodingView(serialized, pool_.get(), options);
+  const auto& typedView =
+      dynamic_cast<const nimble::TypedEncodingView<int32_t>&>(*view);
+
+  for (const auto& [begin, end, value, expected] :
+       std::vector<std::tuple<uint32_t, uint32_t, int32_t, uint32_t>>{
+           {0, 5, -8, 0},
+           {0, 5, -2, 1},
+           {0, 5, -1, 3},
+           {1, 3, -2, 1},
+           {0, 5, 6, 5},
+           {5, 7, 2, 6},
+       }) {
+    SCOPED_TRACE(
+        ::testing::Message()
+        << "begin=" << begin << ", end=" << end << ", value=" << value);
+    int32_t found{0};
+    const auto row = typedView.lowerBound(begin, end, value, found);
+    EXPECT_EQ(row, expected);
+    if (row < end) {
+      EXPECT_EQ(found, values[row]);
+    }
+  }
+  int32_t found{0};
+  EXPECT_EQ(typedView.lowerBound(7, 7, 0, found), 7);
+  NIMBLE_ASSERT_THROW(
+      typedView.lowerBound(3, 2, 0, found), "Invalid lowerBound range");
+  NIMBLE_ASSERT_THROW(
+      typedView.lowerBound(0, 8, 0, found), "Invalid lowerBound range");
+}
+
+DEBUG_ONLY_TEST_P(TrivialEncodingViewTest, lowerBoundRejectsUnsortedRange) {
+  // The search probes rows 2 and 3, both below 4, and returns 4. Row 0 is
+  // above 4, so the range cannot be sorted.
+  const auto values = makeVector<int32_t>({5, 1, 2, 3});
+  const auto serialized =
+      nimble::test::Encoder<nimble::TrivialEncoding<int32_t>>::encode(
+          *buffer_, values);
+  auto view = nimble::createEncodingView(serialized, pool_.get());
+  const auto& typedView =
+      dynamic_cast<const nimble::TypedEncodingView<int32_t>&>(*view);
+  int32_t found{0};
+  NIMBLE_ASSERT_THROW(
+      typedView.lowerBound(0, 4, 4, found),
+      "lowerBound range must be non-decreasing");
+  EXPECT_EQ(typedView.lowerBound(1, 4, 2, found), 2);
 }
 
 TEST_P(TrivialEncodingViewTest, readsInternallyCompressedPayloads) {

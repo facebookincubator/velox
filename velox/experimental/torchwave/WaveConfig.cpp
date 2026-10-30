@@ -95,6 +95,8 @@ std::string WaveConfig::toString() const {
   addBool("enableReuse", &WaveConfig::enableReuse);
   addBool("elideClones", &WaveConfig::elideClones);
   addBool("recognizeDisjointCopies", &WaveConfig::recognizeDisjointCopies);
+  addBool("reinplaceScatters", &WaveConfig::reinplaceScatters);
+  addBool("disjointWriteOrdering", &WaveConfig::disjointWriteOrdering);
   addBool("skipRepeatedWaits", &WaveConfig::skipRepeatedWaits);
   addBool("completionCounters", &WaveConfig::completionCounters);
   addBool("scanOutputReturnBarrier", &WaveConfig::scanOutputReturnBarrier);

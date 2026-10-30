@@ -38,9 +38,16 @@ PYTHON_VENV=${PYTHON_VENV:-"${SCRIPT_DIR}/../.venv"}
 # This is used during package builds.
 OS_CXXFLAGS=" -isystem $(brew --prefix)/include "
 export OS_CXXFLAGS
-export CMAKE_POLICY_VERSION_MINIMUM="3.5"
-OPENSSL_ROOT_DIR="${OPENSSL_ROOT_DIR:-$(brew --prefix openssl@3)}"
+# Homebrew's unversioned openssl formula is OpenSSL 4 since 2026-09-25, and it
+# is no longer keg-only, so its headers and libraries are linked under
+# $(brew --prefix). Folly at FB_OS_VERSION and the gRPC Velox bundles do not
+# compile against OpenSSL 4, so point every CMake build here, and the Velox
+# configure that follows, at Homebrew's OpenSSL 3 instead. cmake_install also
+# passes it as a cache variable, which fbthrift's own FindOpenSSL needs. A
+# caller that has already chosen an OpenSSL root keeps it.
+OPENSSL_ROOT_DIR=${OPENSSL_ROOT_DIR:-"$(brew --prefix openssl@3)"}
 export OPENSSL_ROOT_DIR
+export CMAKE_POLICY_VERSION_MINIMUM="3.5"
 
 DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)}
 # gflags and glog are installed from source to ensure version compatibility.

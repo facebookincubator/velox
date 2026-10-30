@@ -19,6 +19,8 @@
 #include "velox/parse/Expressions.h"
 #include "velox/type/Variant.h"
 
+#include <algorithm>
+
 #include <duckdb.hpp> // @manual
 #include <duckdb/parser/expression/between_expression.hpp> // @manual
 #include <duckdb/parser/expression/case_expression.hpp> // @manual
@@ -319,6 +321,66 @@ core::ExprPtr tryFoldArrayConstant(
       ARRAY(elementType), Variant::array(std::move(elements)), alias);
 }
 
+// Returns whether 'value' is null or contains a null at any depth.
+bool containsNull(const Variant& value) {
+  if (value.isNull()) {
+    return true;
+  }
+  switch (value.kind()) {
+    case TypeKind::ARRAY:
+      return std::any_of(
+          value.array().begin(), value.array().end(), containsNull);
+    case TypeKind::MAP:
+      return std::any_of(
+          value.map().begin(), value.map().end(), [](const auto& entry) {
+            return containsNull(entry.first) || containsNull(entry.second);
+          });
+    case TypeKind::ROW:
+      return std::any_of(value.row().begin(), value.row().end(), containsNull);
+    default:
+      return false;
+  }
+}
+
+// Folds map() into an empty MAP constant, and map(keys, values) into a MAP
+// constant when 'keys' and 'values' are constant arrays of the same length
+// with distinct keys that contain no nulls. Returns nullptr otherwise, leaving
+// the map function to report invalid input.
+core::ExprPtr tryFoldMapConstant(
+    const std::vector<core::ExprPtr>& inputs,
+    const std::optional<std::string>& alias) {
+  if (inputs.empty()) {
+    return std::make_shared<const core::ConstantExpr>(
+        MAP(UNKNOWN(), UNKNOWN()), Variant::map({}), alias);
+  }
+  if (inputs.size() != 2) {
+    return nullptr;
+  }
+  auto* keys = inputs[0]->as<core::ConstantExpr>();
+  auto* values = inputs[1]->as<core::ConstantExpr>();
+  if (!keys || !values || !keys->type()->isArray() ||
+      !values->type()->isArray() || keys->value().isNull() ||
+      values->value().isNull()) {
+    return nullptr;
+  }
+  const auto& keyElements = keys->value().array();
+  const auto& valueElements = values->value().array();
+  if (keyElements.size() != valueElements.size()) {
+    return nullptr;
+  }
+  std::map<Variant, Variant> entries;
+  for (size_t i = 0; i < keyElements.size(); ++i) {
+    if (containsNull(keyElements[i]) ||
+        !entries.emplace(keyElements[i], valueElements[i]).second) {
+      return nullptr;
+    }
+  }
+  return std::make_shared<const core::ConstantExpr>(
+      MAP(keys->type()->childAt(0), values->type()->childAt(0)),
+      Variant::map(std::move(entries)),
+      alias);
+}
+
 // Parse a function call (avg(a), func(1, b), etc).
 // Arithmetic operators also follow this path (a + b, a * b, etc).
 core::ExprPtr parseFunctionExpr(
@@ -350,6 +412,12 @@ core::ExprPtr parseFunctionExpr(
   if (func == "list_value") {
     if (auto arrayConstant = tryFoldArrayConstant(params, getAlias(expr))) {
       return arrayConstant;
+    }
+  }
+
+  if (func == "map") {
+    if (auto mapConstant = tryFoldMapConstant(params, getAlias(expr))) {
+      return mapConstant;
     }
   }
 
@@ -781,6 +849,14 @@ core::ExprPtr parseCastExpr(
     // ROW(1, 2)::struct(x bigint, y bigint) — re-type the ROW constant with
     // the target type (which carries field names). Child types must match.
     if (targetType->isRow() && targetType->equivalent(*constant->type())) {
+      return std::make_shared<const core::ConstantExpr>(
+          targetType, constant->value(), getAlias(expr));
+    }
+
+    // map(array[], array[])::map(varchar, bigint) — an empty MAP constant
+    // takes the target type.
+    if (targetType->isMap() && constant->type()->isMap() &&
+        constant->value().map().empty()) {
       return std::make_shared<const core::ConstantExpr>(
           targetType, constant->value(), getAlias(expr));
     }

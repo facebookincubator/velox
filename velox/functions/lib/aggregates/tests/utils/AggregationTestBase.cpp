@@ -1573,7 +1573,7 @@ void AggregationTestBase::testIncrementalAggregation(
     }
     auto queryCtxConfig = config;
     auto func = createAggregateFunction(
-        functionName, aggregate.rawInputTypes, allocator, config);
+        functionName, aggregate.rawInputTypes, allocator, config, input);
     auto queryCtx =
         core::QueryCtx::create(nullptr, core::QueryConfig{queryCtxConfig});
 
@@ -1699,7 +1699,7 @@ void AggregationTestBase::testFailingAggregations(
     const std::unordered_map<std::string, std::string>& config) {
   {
     SCOPED_TRACE("Run single");
-    auto builder = PlanBuilder().values(data);
+    auto builder = PlanBuilder(pool()).values(data);
     builder.singleAggregation(groupingKeys, aggregates);
     AssertQueryBuilder queryBuilder(builder.planNode());
     queryBuilder.configs(config);
@@ -1708,7 +1708,7 @@ void AggregationTestBase::testFailingAggregations(
 
   {
     SCOPED_TRACE("Run partial + final");
-    auto builder = PlanBuilder().values(data);
+    auto builder = PlanBuilder(pool()).values(data);
     builder.partialAggregation(groupingKeys, aggregates).finalAggregation();
     AssertQueryBuilder queryBuilder(builder.planNode());
     queryBuilder.configs(config);
@@ -1717,7 +1717,7 @@ void AggregationTestBase::testFailingAggregations(
 
   {
     SCOPED_TRACE("Run partial + final with abandon partial agg");
-    auto builder = PlanBuilder().values(data);
+    auto builder = PlanBuilder(pool()).values(data);
     builder.partialAggregation(groupingKeys, aggregates)
         .intermediateAggregation()
         .finalAggregation();
@@ -1729,7 +1729,7 @@ void AggregationTestBase::testFailingAggregations(
 
   {
     SCOPED_TRACE("Run partial + intermediate + final");
-    auto builder = PlanBuilder().values(data);
+    auto builder = PlanBuilder(pool()).values(data);
     builder.partialAggregation(groupingKeys, aggregates)
         .intermediateAggregation()
         .finalAggregation();
@@ -1740,7 +1740,7 @@ void AggregationTestBase::testFailingAggregations(
 
   if (!groupingKeys.empty()) {
     SCOPED_TRACE("Run partial + local exchange + final");
-    auto builder = PlanBuilder().values(data);
+    auto builder = PlanBuilder(pool()).values(data);
     builder.partialAggregation(groupingKeys, aggregates)
         .localPartition(groupingKeys)
         .finalAggregation();
@@ -1752,7 +1752,7 @@ void AggregationTestBase::testFailingAggregations(
   {
     SCOPED_TRACE(
         "Run partial + local exchange + intermediate + local exchange + final");
-    auto builder = PlanBuilder().values(data);
+    auto builder = PlanBuilder(pool()).values(data);
     builder.partialAggregation(groupingKeys, aggregates);
 
     if (groupingKeys.empty()) {

@@ -176,8 +176,6 @@ struct HistogramRowCompare {
   }
 };
 
-constexpr uint32_t kContentBufferSize = 1000;
-
 template <typename T>
 void printScalarData(
     std::ostream& ostream,

@@ -21,6 +21,7 @@
 #include "velox/dwio/nimble/encodings/FsstEncoding.h"
 #include "velox/dwio/nimble/encodings/HuffmanEncoding.h"
 #include "velox/dwio/nimble/encodings/PFOREncoding.h"
+#include "velox/dwio/nimble/encodings/PartitionedEliasFanoEncoding.h"
 #include "velox/dwio/nimble/encodings/SimdForBitpackEncoding.h"
 #include "velox/dwio/nimble/encodings/legacy/ConstantEncoding.h"
 #include "velox/dwio/nimble/encodings/legacy/DeltaEncoding.h"
@@ -292,6 +293,10 @@ std::unique_ptr<Encoding> EncodingFactory::create(
       RETURN_ENCODING_BY_INTEGRAL_TYPE(
           ::facebook::nimble::EliasFanoEncoding, dataType);
     }
+    case EncodingType::PartitionedEliasFano: {
+      RETURN_ENCODING_BY_INTEGRAL_TYPE(
+          ::facebook::nimble::PartitionedEliasFanoEncoding, dataType);
+    }
     case EncodingType::BlockBitPacking: {
       RETURN_ENCODING_BY_NUMERIC_TYPE(
           facebook::nimble::BlockBitPackingEncoding, dataType);
@@ -345,6 +350,11 @@ std::unique_ptr<Encoding> EncodingFactory::create(
           memoryPool, data, stringBufferFactory);
     }
     default: {
+      NIMBLE_CHECK_FILE_NE(
+          encodingType,
+          kRemovedBitRangeSplitEncodingType,
+          "BitRangeSplit encoding was removed; rewrite the data with "
+          "SubIntSplit");
       NIMBLE_UNREACHABLE(
           "Trying to deserialize invalid EncodingType -- garbage input?");
     }

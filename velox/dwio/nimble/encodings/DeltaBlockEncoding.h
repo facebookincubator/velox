@@ -30,6 +30,7 @@
 #include "velox/dwio/nimble/common/Buffer.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/common/FixedBitArray.h"
+#include "velox/dwio/nimble/common/OrderedInteger.h"
 #include "velox/dwio/nimble/common/Varint.h"
 #include "velox/dwio/nimble/common/Vector.h"
 #include "velox/dwio/nimble/encodings/common/Encoding.h"
@@ -101,25 +102,7 @@ class DeltaBlockEncoding final
 
   friend class DeltaBlockEncodingView<T>;
 
-  static constexpr uint64_t kSignMask{
-      uint64_t{1} << (sizeof(physicalType) * 8 - 1)};
   static constexpr uint32_t kDeltaChunkSize{1024};
-
-  static uint64_t toOrdered(physicalType value) {
-    if constexpr (std::is_signed_v<T>) {
-      return static_cast<uint64_t>(value) ^ kSignMask;
-    } else {
-      return static_cast<uint64_t>(value);
-    }
-  }
-
-  static physicalType fromOrdered(uint64_t value) {
-    if constexpr (std::is_signed_v<T>) {
-      return static_cast<physicalType>(value ^ kSignMask);
-    } else {
-      return static_cast<physicalType>(value);
-    }
-  }
 
   static uint32_t
   blockRowCount(uint32_t rowCount, uint16_t blockSize, uint32_t blockIndex) {
@@ -203,8 +186,7 @@ DeltaBlockEncoding<T>::DeltaBlockEncoding(
 
   blockBases_.resize(numBlocks_);
   for (uint32_t i = 0; i < numBlocks_; ++i) {
-    blockBases_[i] =
-        DeltaBlockEncoding<T>::fromOrdered(varint::readVarint64(&pos));
+    blockBases_[i] = fromOrdered<T>(varint::readVarint64(&pos));
   }
 
   bitWidths_.resize(numBlocks_);
@@ -249,10 +231,10 @@ void DeltaBlockEncoding<T>::materializeBlock(
     return;
   }
 
-  uint64_t ordered = DeltaBlockEncoding<T>::toOrdered(blockBases_[blockIndex]);
+  uint64_t ordered = toOrdered<T>(blockBases_[blockIndex]);
   const auto bitWidth = bitWidths_[blockIndex];
   if (bitWidth == 0) {
-    std::fill_n(output, rowCount, DeltaBlockEncoding<T>::fromOrdered(ordered));
+    std::fill_n(output, rowCount, fromOrdered<T>(ordered));
     return;
   }
 
@@ -273,7 +255,7 @@ void DeltaBlockEncoding<T>::materializeBlock(
 
   // Deltas are stored between adjacent rows. After reconstructing the value at
   // `position`, delta `position + offset` advances to the next output row.
-  output[0] = DeltaBlockEncoding<T>::fromOrdered(ordered);
+  output[0] = fromOrdered<T>(ordered);
   for (uint32_t offset = 0; offset + 1 < rowCount;) {
     const auto chunkSize =
         std::min<uint32_t>(kDeltaChunkSize, rowCount - offset - 1);
@@ -281,7 +263,7 @@ void DeltaBlockEncoding<T>::materializeBlock(
         position + offset, chunkSize, deltaChunk, /*baseline=*/uint64_t{0});
     for (uint32_t i = 0; i < chunkSize; ++i) {
       ordered += deltaChunk[i];
-      output[offset + i + 1] = DeltaBlockEncoding<T>::fromOrdered(ordered);
+      output[offset + i + 1] = fromOrdered<T>(ordered);
     }
     offset += chunkSize;
   }
@@ -329,8 +311,7 @@ void DeltaBlockEncoding<T>::seekReadWithVisitorState(
   state.cachedBlockIndex = blockIndex;
   state.cachedPosition = 0;
   state.cachedBitWidth = bitWidths_[blockIndex];
-  state.cachedOrdered =
-      DeltaBlockEncoding<T>::toOrdered(blockBases_[blockIndex]);
+  state.cachedOrdered = toOrdered<T>(blockBases_[blockIndex]);
   if (state.cachedBitWidth != 0) {
     state.cachedDeltas = FixedBitArray{
         {packedData_ + blockOffsets_[blockIndex],
@@ -362,7 +343,7 @@ DeltaBlockEncoding<T>::decodeWithVisitorState(ReadWithVisitorState& state) {
     state.cachedPosition = position;
   }
   ++row_;
-  return DeltaBlockEncoding<T>::fromOrdered(state.cachedOrdered);
+  return fromOrdered<T>(state.cachedOrdered);
 }
 
 template <typename T>
@@ -396,12 +377,11 @@ std::optional<uint64_t> DeltaBlockEncoding<T>::estimateSize(
   for (uint32_t blockIndex = 0; blockIndex < numBlocks; ++blockIndex) {
     const uint32_t start = blockIndex * blockSize;
     const uint32_t end = std::min<uint32_t>(start + blockSize, rowCount);
-    blockBasesSize +=
-        varint::varintSize(DeltaBlockEncoding<T>::toOrdered(values[start]));
-    uint64_t prev = DeltaBlockEncoding<T>::toOrdered(values[start]);
+    blockBasesSize += varint::varintSize(toOrdered<T>(values[start]));
+    uint64_t prev = toOrdered<T>(values[start]);
     uint64_t maxDelta{0};
     for (uint32_t i = start + 1; i < end; ++i) {
-      const auto curr = DeltaBlockEncoding<T>::toOrdered(values[i]);
+      const auto curr = toOrdered<T>(values[i]);
       if (curr < prev) {
         return std::nullopt;
       }
@@ -450,12 +430,11 @@ std::string_view DeltaBlockEncoding<T>::encode(
     const uint32_t count = end - start;
 
     blockBases[blockIndex] = values[start];
-    blockBasesSize +=
-        varint::varintSize(DeltaBlockEncoding<T>::toOrdered(values[start]));
-    uint64_t prev = DeltaBlockEncoding<T>::toOrdered(values[start]);
+    blockBasesSize += varint::varintSize(toOrdered<T>(values[start]));
+    uint64_t prev = toOrdered<T>(values[start]);
     uint64_t maxDelta{0};
     for (uint32_t i = start + 1; i < end; ++i) {
-      const auto curr = DeltaBlockEncoding<T>::toOrdered(values[i]);
+      const auto curr = toOrdered<T>(values[i]);
       if (FOLLY_UNLIKELY(curr < prev)) {
         NIMBLE_INCOMPATIBLE_ENCODING(
             "DeltaBlock requires non-decreasing values.");
@@ -501,9 +480,9 @@ std::string_view DeltaBlockEncoding<T>::encode(
     }
 
     FixedBitArray deltas{packedData + blockOffsets[blockIndex], bitWidth};
-    uint64_t prev = DeltaBlockEncoding<T>::toOrdered(values[start]);
+    uint64_t prev = toOrdered<T>(values[start]);
     for (uint32_t i = start + 1; i < end; ++i) {
-      const auto curr = DeltaBlockEncoding<T>::toOrdered(values[i]);
+      const auto curr = toOrdered<T>(values[i]);
       deltas.set(i - start - 1, curr - prev);
       prev = curr;
     }
@@ -531,7 +510,7 @@ std::string_view DeltaBlockEncoding<T>::encode(
   varint::writeVarint(blockSize, &pos);
   varint::writeVarint(numBlocks, &pos);
   for (uint32_t i = 0; i < numBlocks; ++i) {
-    varint::writeVarint(DeltaBlockEncoding<T>::toOrdered(blockBases[i]), &pos);
+    varint::writeVarint(toOrdered<T>(blockBases[i]), &pos);
   }
   std::memcpy(pos, bitWidths.data(), numBlocks * sizeof(uint8_t));
   pos += numBlocks * sizeof(uint8_t);

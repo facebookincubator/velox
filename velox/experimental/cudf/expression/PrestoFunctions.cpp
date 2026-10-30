@@ -130,6 +130,20 @@ class SubstrFunction : public CudfFunction {
 void registerPrestoFunctions(const std::string& prefix) {
   using exec::FunctionSignatureBuilder;
 
+  // Presto special form functions don't have a prefix.
+  registerCudfFunction(
+      "is_null",
+      [](const std::string&,
+         const core::TypedExprPtr& expr,
+         memory::MemoryPool*) {
+        return std::make_shared<IsNullFunction>(expr);
+      },
+      {FunctionSignatureBuilder()
+           .typeVariable("T")
+           .returnType("boolean")
+           .argumentType("T")
+           .build()});
+
   // The GPU cast from VARCHAR follows Presto's rules.
   setCastFromVarcharEnabled(true);
   registerPrestoArrayAccessFunctions(prefix);

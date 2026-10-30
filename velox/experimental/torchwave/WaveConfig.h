@@ -181,11 +181,26 @@ struct WaveConfig {
   // the post-partition in-place rewrite alone.
   bool elideClones{true};
 
-  // If true, merge copies into the columns 0..k-1 of one tensor into a single
-  // copy of the stacked sources (rewriteDisjointCopies). Each copy mutates the
-  // target, which otherwise orders every copy after the previous one and cuts
-  // the graph into three partition layers per copy. On by default.
+  // If true, merge copies into each run of consecutive columns of one tensor
+  // into a single copy of the stacked sources (rewriteDisjointCopies). Each
+  // copy mutates the target, which otherwise orders every copy after the
+  // previous one and cuts the graph into three partition layers per copy. On by
+  // default.
   bool recognizeDisjointCopies{true};
+
+  // If true, write a functional chain of select_scatter / slice_scatter /
+  // index_put / scatter_add into a tensor nothing else reads as in-place writes
+  // into that tensor (reinplaceScatterChains). The column merge and the
+  // disjoint-write ordering then apply to it as to an in-place graph, and no
+  // scatter copies the whole tensor first. On by default.
+  bool reinplaceScatters{true};
+
+  // If true, an in-place write is not ordered against a touch of the same
+  // storage whose region is provably disjoint from the written one (constant
+  // selects and slices). A view, which reads no data, touches only the region
+  // it selects. Disjoint writes into one tensor can then run side by side. On
+  // by default.
+  bool disjointWriteOrdering{true};
 
   // Force a launch boundary after a multi-block (non-cooperative) scan so every
   // cross-block consumer of its output reads a fully materialized buffer from a

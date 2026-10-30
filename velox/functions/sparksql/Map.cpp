@@ -13,17 +13,13 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include <fmt/core.h>
+#include "velox/functions/sparksql/Map.h"
 
 #include <velox/common/base/Exceptions.h>
-#include "velox/expression/DecodedArgs.h"
 #include "velox/expression/Expr.h"
 #include "velox/expression/VectorFunction.h"
-#include "velox/functions/lib/LambdaFunctionUtil.h"
-#include "velox/functions/lib/RowsTranslationUtil.h"
 #include "velox/functions/sparksql/LastWin.h"
-#include "velox/functions/sparksql/Map.h"
-#include "velox/vector/VectorTypeUtils.h"
+#include "velox/functions/sparksql/MapFromArrays.h"
 
 // The description of the map function in Spark
 // https://kontext.tech/article/586/spark-sql-map-functions
@@ -194,10 +190,6 @@ std::shared_ptr<MapVector> buildDeduplicatedMap(
           nullptr, std::move(valuesIndices), numEntries, valueElements));
 }
 
-namespace {
-
-// Throws on a null key or a repeated key. Used by the zero-copy path, which
-// builds no entry indices.
 void checkNullAndDuplicateKeys(
     const SelectivityVector& rows,
     exec::EvalCtx& context,
@@ -214,124 +206,7 @@ void checkNullAndDuplicateKeys(
   });
 }
 
-// Can only take the fast path if keys and values have an equal number of arrays
-// and the offsets and sizes of these arrays match 1:1. The map must be well
-// formed for all elements, also ones not in 'rows' in apply(). This is because
-// canonicalize() will touch all elements in any case.
-bool canTakeFastPath(
-    const ArrayVector& keys,
-    const ArrayVector& values,
-    const SelectivityVector& rows) {
-  VELOX_CHECK_GE(keys.size(), rows.end());
-  VELOX_CHECK_GE(values.size(), rows.end());
-  if (keys.size() != values.size()) {
-    return false;
-  }
-  for (vector_size_t row = 0; row < keys.size(); ++row) {
-    if (keys.isNullAt(row)) {
-      continue;
-    }
-
-    if (values.isNullAt(row)) {
-      return false;
-    }
-
-    if (keys.offsetAt(row) != values.offsetAt(row) ||
-        keys.sizeAt(row) != values.sizeAt(row)) {
-      return false;
-    }
-  }
-  return true;
-}
-
-// Implements Spark's map_from_arrays(array(K), array(V)) -> map(K,V). Entries
-// are inserted in array order. A repeated key raises DUPLICATED_MAP_KEY, or
-// under LAST_WIN overwrites the value of its first occurrence in place, so the
-// key keeps that first position.
-class MapFromArraysFunction : public exec::VectorFunction {
- public:
-  explicit MapFromArraysFunction(bool throwExceptionOnDuplicateMapKeys)
-      : throwExceptionOnDuplicateMapKeys_{throwExceptionOnDuplicateMapKeys} {}
-
-  void apply(
-      const SelectivityVector& rows,
-      std::vector<VectorPtr>& args,
-      const TypePtr& outputType,
-      exec::EvalCtx& context,
-      VectorPtr& result) const override {
-    VELOX_CHECK_EQ(args.size(), 2);
-
-    exec::DecodedArgs decodedArgs(rows, args, context);
-    auto* decodedKeys = decodedArgs.at(0);
-    auto* decodedValues = decodedArgs.at(1);
-
-    auto* keysArray = decodedKeys->base()->as<ArrayVector>();
-    auto* valuesArray = decodedValues->base()->as<ArrayVector>();
-    const auto& keysElements = keysArray->elements();
-    const auto keyElementRows = toElementRows(
-        keysElements->size(),
-        rows,
-        keysArray,
-        decodedKeys->nulls(&rows),
-        decodedKeys->indices());
-    exec::LocalDecodedVector decodedKeyElements(
-        context, *keysElements, keyElementRows);
-
-    // Under EXCEPTION no row can shrink, so the result can reference the input
-    // arrays instead of building entry indices.
-    if (throwExceptionOnDuplicateMapKeys_ && decodedKeys->isIdentityMapping() &&
-        decodedValues->isIdentityMapping() &&
-        canTakeFastPath(*keysArray, *valuesArray, rows)) {
-      exec::LocalSelectivityVector remainingRows(context, rows);
-      checkNullAndDuplicateKeys(
-          *remainingRows, context, *keysArray, *decodedKeyElements);
-      context.deselectErrors(*remainingRows);
-
-      auto mapVector = std::make_shared<MapVector>(
-          context.pool(),
-          outputType,
-          keysArray->nulls(),
-          rows.end(),
-          keysArray->offsets(),
-          keysArray->sizes(),
-          keysElements,
-          valuesArray->elements());
-      context.moveOrCopyResult(mapVector, *remainingRows, result);
-      return;
-    }
-
-    exec::LocalSelectivityVector remainingRows(context, rows);
-    auto mapVector = buildDeduplicatedMap(
-        *remainingRows,
-        context,
-        rows.end(),
-        outputType,
-        *decodedKeys,
-        *decodedValues,
-        *decodedKeyElements,
-        keysElements,
-        valuesArray->elements(),
-        throwExceptionOnDuplicateMapKeys_);
-    context.deselectErrors(*remainingRows);
-    context.moveOrCopyResult(mapVector, *remainingRows, result);
-  }
-
-  static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
-    // array(K), array(V) -> map(K,V)
-    return {
-        exec::FunctionSignatureBuilder()
-            .knownTypeVariable("K")
-            .typeVariable("V")
-            .returnType("map(K,V)")
-            .argumentType("array(K)")
-            .argumentType("array(V)")
-            .build(),
-    };
-  }
-
- private:
-  const bool throwExceptionOnDuplicateMapKeys_;
-};
+namespace {
 
 // Returns the key and value arguments as two array vectors holding one array
 // per selected row, with one element per key-value pair. When every key
@@ -491,153 +366,14 @@ class MapFunction : public exec::VectorFunction {
     return signatures;
   }
 };
-
-std::shared_ptr<exec::VectorFunction> makeMapFromArrays(
-    const std::string& /*name*/,
-    const std::vector<exec::VectorFunctionArg>& /*inputArgs*/,
-    const core::QueryConfig& config) {
-  return std::make_shared<MapFromArraysFunction>(
-      config.throwExceptionOnDuplicateMapKeys());
-}
-
-// Implements Spark's transform_keys(map(K1,V), function(K1,V,K2)) ->
-// map(K2,V). Pairs each key the lambda returns with the original value, in
-// entry order. A repeated key raises DUPLICATED_MAP_KEY, or under LAST_WIN
-// overwrites the value of its first occurrence in place, so the key keeps that
-// first position.
-//
-// Default null behavior does not apply: the lambda may capture other columns,
-// and a null capture does not make the result null. A null map still yields a
-// null map.
-class TransformKeysFunction : public exec::VectorFunction {
- public:
-  explicit TransformKeysFunction(bool throwExceptionOnDuplicateMapKeys)
-      : throwExceptionOnDuplicateMapKeys_{throwExceptionOnDuplicateMapKeys} {}
-
-  void apply(
-      const SelectivityVector& rows,
-      std::vector<VectorPtr>& args,
-      const TypePtr& outputType,
-      exec::EvalCtx& context,
-      VectorPtr& result) const override {
-    VELOX_CHECK_EQ(args.size(), 2, "transform_keys requires two arguments");
-
-    exec::LocalDecodedVector mapDecoder(context, *args[0], rows);
-    auto flatMap = flattenMap(rows, args[0], *mapDecoder.get());
-
-    const auto numKeys = flatMap->mapKeys()->size();
-    const std::vector<VectorPtr> lambdaArgs = {
-        flatMap->mapKeys(), flatMap->mapValues()};
-    SelectivityVector validRowsInReusedResult =
-        toElementRows<MapVector>(numKeys, rows, flatMap.get());
-
-    VectorPtr transformedKeys;
-    applyLambdaToElements<MapVector>(
-        args[1],
-        rows,
-        numKeys,
-        flatMap,
-        lambdaArgs,
-        validRowsInReusedResult,
-        context,
-        transformedKeys);
-
-    // A null map has no keys to check and stays null in the result.
-    exec::LocalSelectivityVector remainingRows(context, rows);
-    context.deselectErrors(*remainingRows);
-    if (flatMap->mayHaveNulls()) {
-      remainingRows->deselectNulls(
-          flatMap->rawNulls(), rows.begin(), rows.end());
-    }
-    exec::LocalDecodedVector decodedKeys(
-        context,
-        *transformedKeys,
-        toElementRows<MapVector>(numKeys, *remainingRows, flatMap.get()));
-
-    // Under EXCEPTION no row can shrink, so the result keeps the offsets and
-    // sizes of the input map.
-    if (throwExceptionOnDuplicateMapKeys_) {
-      checkNullAndDuplicateKeys(
-          *remainingRows, context, *flatMap, *decodedKeys);
-      context.deselectErrors(*remainingRows);
-
-      auto mapVector = std::make_shared<MapVector>(
-          context.pool(),
-          outputType,
-          addNullsForUnselectedRows(flatMap, *remainingRows),
-          rows.end(),
-          flatMap->offsets(),
-          flatMap->sizes(),
-          transformedKeys,
-          flatMap->mapValues());
-      context.moveOrCopyResult(mapVector, rows, result);
-      return;
-    }
-
-    // The offsets and sizes of the map locate both the transformed keys and the
-    // values.
-    exec::LocalDecodedVector decodedFlatMap(context, *flatMap, *remainingRows);
-    auto mapVector = buildDeduplicatedMap(
-        *remainingRows,
-        context,
-        rows.end(),
-        outputType,
-        *decodedFlatMap,
-        *decodedFlatMap,
-        *decodedKeys,
-        transformedKeys,
-        flatMap->mapValues(),
-        /*throwOnDuplicateKey=*/false);
-    context.deselectErrors(*remainingRows);
-    mapVector->setNulls(addNullsForUnselectedRows(flatMap, *remainingRows));
-    context.moveOrCopyResult(mapVector, rows, result);
-  }
-
-  static std::vector<std::shared_ptr<exec::FunctionSignature>> signatures() {
-    // map(K1,V), function(K1,V,K2) -> map(K2,V)
-    // K2 is orderable, which rejects a key type that is or contains a map, as
-    // Spark does.
-    return {
-        exec::FunctionSignatureBuilder()
-            .typeVariable("K1")
-            .orderableTypeVariable("K2")
-            .typeVariable("V")
-            .returnType("map(K2,V)")
-            .argumentType("map(K1,V)")
-            .argumentType("function(K1,V,K2)")
-            .build(),
-    };
-  }
-
- private:
-  const bool throwExceptionOnDuplicateMapKeys_;
-};
-
-std::shared_ptr<exec::VectorFunction> makeTransformKeys(
-    const std::string& /*name*/,
-    const std::vector<exec::VectorFunctionArg>& /*inputArgs*/,
-    const core::QueryConfig& config) {
-  return std::make_shared<TransformKeysFunction>(
-      config.throwExceptionOnDuplicateMapKeys());
-}
 } // namespace
 
-VELOX_DECLARE_VECTOR_FUNCTION_WITH_METADATA(
-    udf_map,
-    MapFunction::signatures(),
-    exec::VectorFunctionMetadataBuilder().defaultNullBehavior(false).build(),
-    std::make_unique<MapFunction>());
+void registerMapFunction(const std::string& name) {
+  exec::registerVectorFunction(
+      name,
+      MapFunction::signatures(),
+      std::make_unique<MapFunction>(),
+      exec::VectorFunctionMetadataBuilder().defaultNullBehavior(false).build());
+}
 
-// Default null behavior applies: Spark's MapFromArrays is NullIntolerant, so a
-// null key or value array yields a null map.
-VELOX_DECLARE_STATEFUL_VECTOR_FUNCTION(
-    udf_map_from_arrays,
-    MapFromArraysFunction::signatures(),
-    makeMapFromArrays);
-
-VELOX_DECLARE_STATEFUL_VECTOR_FUNCTION_WITH_METADATA(
-    udf_transform_keys,
-    TransformKeysFunction::signatures(),
-    exec::VectorFunctionMetadataBuilder().defaultNullBehavior(false).build(),
-    makeTransformKeys);
 } // namespace facebook::velox::functions::sparksql

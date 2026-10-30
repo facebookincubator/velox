@@ -2989,7 +2989,8 @@ TEST_P(
       SerializerOptions{
           .version = SerializationVersion::kSerialization,
           .hybridFlatMapColumns =
-              {{"features", makeHybridFlatMapConfig({{"1", "2"}})}},
+              {{"features",
+                makeHybridFlatMapConfig(ScalarKind::Int32, {{"1", "2"}})}},
       },
       rowType,
       leafPool_.get()};

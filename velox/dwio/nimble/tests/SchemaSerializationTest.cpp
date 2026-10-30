@@ -36,8 +36,8 @@ TEST(SchemaSerializationTest, hybridFlatMapMetadataRoundTripsThroughSchema) {
   };
   SchemaBuilder schemaBuilder;
   auto row = schemaBuilder.createRowTypeBuilder(1);
-  auto features =
-      schemaBuilder.createHybridFlatMapTypeBuilder(ScalarKind::String);
+  auto features = schemaBuilder.createHybridFlatMapTypeBuilder(
+      ScalarKind::String, HybridFlatMap::KeyPresenceMode::kBitmap);
   const std::vector<std::pair<std::string, std::string>> userAttributes{
       {"user.a", "1"}, {"user.b", "2"}};
   features->setAttributes({{"user.a", "1"}, {"user.b", "2"}});
@@ -99,13 +99,14 @@ TEST(SchemaSerializationTest, hybridFlatMapMetadataRoundTripsThroughSchema) {
   EXPECT_EQ(metadata->group_keys()->Get(2)->str(), "C");
 
   const auto decodedMetadata = HybridFlatMap::deserialize(serializedMetadata);
-  ASSERT_EQ(decodedMetadata.groups.size(), 3);
-  EXPECT_EQ(decodedMetadata.groups[0].groupId, 0);
-  EXPECT_EQ(decodedMetadata.groups[0].groupKeys, groupKeys);
+  ASSERT_EQ(decodedMetadata.groups().size(), 3);
+  EXPECT_EQ(decodedMetadata.groups()[0].groupId, 0);
+  EXPECT_EQ(decodedMetadata.groups()[0].groupKeys, groupKeys);
   EXPECT_EQ(
-      decodedMetadata.groups[1].groupKeys, (std::vector<std::string>{"C"}));
-  EXPECT_EQ(decodedMetadata.groups[2].groupId, HybridFlatMap::kDefaultGroupId);
-  EXPECT_TRUE(decodedMetadata.groups[2].groupKeys.empty());
+      decodedMetadata.groups()[1].groupKeys, (std::vector<std::string>{"C"}));
+  EXPECT_EQ(
+      decodedMetadata.groups()[2].groupId, HybridFlatMap::kDefaultGroupId);
+  EXPECT_TRUE(decodedMetadata.groups()[2].groupKeys.empty());
 
   EXPECT_EQ(serialized->nodes()->Get(2)->kind(), serialization::Kind_Bool);
   EXPECT_EQ(serialized->nodes()->Get(3)->kind(), serialization::Kind_Bool);
@@ -154,7 +155,8 @@ TEST(SchemaSerializationTest, hybridFlatMapKeyKindsRoundTrip) {
            ScalarKind::String,
        }) {
     SchemaBuilder schemaBuilder;
-    auto hybridMap = schemaBuilder.createHybridFlatMapTypeBuilder(keyKind);
+    auto hybridMap = schemaBuilder.createHybridFlatMapTypeBuilder(
+        keyKind, HybridFlatMap::KeyPresenceMode::kBitmap);
     hybridMap->addGroup(
         0,
         {"configured"},
@@ -199,6 +201,7 @@ TEST(SchemaSerializationTest, hybridFlatMapRejectsMalformedFlatMetadata) {
                                     const std::vector<uint32_t>& groupKeyCounts,
                                     const std::vector<std::string>& groupKeys) {
     flatbuffers::FlatBufferBuilder builder;
+    builder.ForceDefaults(true);
     std::vector<flatbuffers::Offset<flatbuffers::String>> keyOffsets;
     keyOffsets.reserve(groupKeys.size());
     for (const auto& key : groupKeys) {
@@ -238,7 +241,9 @@ TEST(SchemaSerializationTest, hybridFlatMapRejectsMalformedFlatMetadata) {
       HybridFlatMap::deserialize("malformed"),
       "Hybrid FlatMap metadata attribute is malformed");
 
-  const auto emptyMetadata = HybridFlatMap{}.serialize();
+  const auto emptyMetadata =
+      HybridFlatMap::fromSchema({}, HybridFlatMap::KeyPresenceMode::kBitmap)
+          .serialize();
   const auto schemaWithEmptyMetadata =
       encodeSchemaWithMetadataAttribute(emptyMetadata);
   NIMBLE_ASSERT_THROW(

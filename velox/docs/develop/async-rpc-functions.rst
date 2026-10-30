@@ -309,18 +309,23 @@ costs one unit per row.
   retain the historical "rate limiter" terminology.
 
 A query's policy is resolved from its session properties and its function's
-stable bounds. Adaptive control defaults to enabled with a legacy ceiling of
-200, an integral session floor of 50, and a decrease factor of 0.5. Setting
-``rpc.ratelimiter.min_limit`` to ``0`` delegates the floor to
-``configuredAdaptiveFloor()``. The legacy ``rpc.ratelimiter.max_limit`` keeps
-its original behavior during mixed-version rollout. A non-negative
-``rpc.ratelimiter.hard_limit`` supersedes it: zero adds no session ceiling and
-a positive value is combined with ``configuredCeiling()`` using the smaller
-positive value. Minus one, the default, retains legacy behavior. The first
-query to reach an admission key seals its shared limiter with its policy. A
-later query whose resolved policy differs runs under a limiter for that policy,
-so the limiters for one key can together admit the sum of their ceilings. Each
-limiter lives until the worker restarts.
+stable bounds, and ``rpc.ratelimiter.hard_limit`` selects whose bounds win.
+Minus one, the default, keeps the session's precedence: a positive
+``rpc.ratelimiter.min_limit`` (default 50) replaces ``configuredAdaptiveFloor()``
+and a positive ``rpc.ratelimiter.max_limit`` (default 200) replaces
+``configuredCeiling()``. Zero or more lets the function's bounds win, since
+session properties apply to every function in the query while a function
+declares bounds for its own backend, and ``max_limit`` no longer applies. A
+positive value caps ``configuredCeiling()``, the smaller winning, and is the
+ceiling when the function declares none. Zero adds no session ceiling: with no
+function ceiling, the window starts at 200 and may grow to the 1,000,000 safety
+ceiling. To use the function's bounds and keep a cap, set ``hard_limit`` to the
+cap, such as 200. ``min_limit`` still applies when the function declares no
+floor. Adaptive control defaults to enabled with a decrease factor of 0.5. The
+first query to reach an admission key seals its shared limiter with its policy.
+A later query whose resolved policy differs runs under a limiter for that
+policy, so the limiters for one key can together admit the sum of their
+ceilings. Each limiter lives until the worker restarts.
 
 With ``rpc.ratelimiter.hard_limit=0`` and no function ceiling,
 ``rpcRateLimiterHardLimit`` is 1,000,000 while the current and lifetime
@@ -370,11 +375,10 @@ independently reduce the per-driver gradient window.
    * - ``kNonOverloadError``
      - The unit failed without explicit evidence of overload. The driver
        window does not react because reducing concurrency would not address
-       this signal. A completed BATCH flush still reports its units and
-       duration to the shared limiter.
+       this signal. A paced window stops recovering until the next success.
    * - ``kNone``
-     - Nothing for the driver window to evaluate. A completed BATCH flush still
-       participates in shared accounting.
+     - Nothing for the driver window to evaluate. A completed BATCH flush in
+       which a row succeeded still participates in shared accounting.
 
 The distinction matters: a majority of rows failing on bad input is not a reason
 to throttle against a healthy backend. For the same reason, a function on a
@@ -400,8 +404,10 @@ Putting it together, for each unit the operator:
    fractional pacing. A recorded canonical overload shrinks the driver window
    without repeating the shared decrease; a function-specific ``kOverloaded``
    verdict shrinks both controllers; the other verdicts leave the driver
-   window unchanged. Every completed BATCH flush still reports its reserved
-   units and observed duration to epoch-guarded shared accounting. After a
+   window unchanged. A completed BATCH flush in which at least one row
+   succeeded reports its reserved units and observed duration to
+   epoch-guarded shared accounting, as PER_ROW reports only rows that
+   succeeded. After a
    canonical overload, a stale success may update the service horizon but
    cannot recover shared capacity.
 

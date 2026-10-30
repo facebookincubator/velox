@@ -39,6 +39,9 @@
 #include <fmt/format.h>
 #include <gflags/gflags.h>
 #include <gtest/gtest.h>
+#include <algorithm>
+#include <array>
+#include <limits>
 #include <tuple>
 
 DECLARE_bool(avx2); // NOLINT
@@ -894,6 +897,346 @@ TEST_P(StringColumnReaderTest, skipAcrossChunkBoundaryMidFile) {
       readType,
       pool(),
       /*childIndex=*/1);
+}
+
+// A selective filter keeps a few rows spread over many chunks of a file with
+// chunk stats. Reads use the stream index to go straight to the chunk of the
+// next kept row, both inside a batch and from one batch to the next, instead of
+// decoding the chunks in between. The columns cover strings
+// and integers in streams with an entry for every row read (top-level columns,
+// array elements) and in streams with values only where an outer nulls bitmap
+// is set (a nullable struct's children, flat-map values). Preserving
+// dictionaries reads the dictionary strings through the dictionary read path,
+// which falls back to a flat read at a chunk that is not a dictionary. A second
+// filter on the nullable 'n' drops more rows. The rows read must not change,
+// and without preserved dictionaries no batch size may decompress more chunks
+// than reading one row per batch.
+TEST_P(StringColumnReaderTest, sparseFilterSkipsToChunksOfKeptRows) {
+  const bool stringDecoderZeroCopy = std::get<0>(GetParam());
+  constexpr int kNumChunks = 40;
+  constexpr int kRowsPerChunk = 100;
+  constexpr int kNumRows = kNumChunks * kRowsPerChunk;
+  // File schema node ids of 's', the elements of 'a', 'r.t', the values of 'm',
+  // 'r.u' and 'd'. The root is node 0.
+  constexpr size_t kNumNodes{6};
+  constexpr std::array<uint32_t, kNumNodes> kNodes{2, 4, 6, 11, 7, 12};
+  // Index in kNodes of the values of 'm'.
+  constexpr size_t kMapValuesIndex{3};
+
+  // Puts consecutive keys in different chunks, so each chunk's key range spans
+  // nearly all keys and chunk stats cannot skip the chunks between kept rows.
+  const auto keyAt = [](int row) -> int64_t {
+    return (row % kRowsPerChunk) * kNumChunks + row / kRowsPerChunk;
+  };
+  const auto makeString = [](int row) {
+    return fmt::format(
+        "{:08}{}", row, std::string(100 + row % 50, 'a' + row % 26));
+  };
+  // Eight random strings, so a column of them is encoded as a dictionary.
+  std::vector<std::string> dictionaryValues;
+  std::mt19937 letterRng(1);
+  std::uniform_int_distribution<int> letter('a', 'z');
+  for (int index = 0; index < 8; ++index) {
+    std::string value(1'000, ' ');
+    for (auto& character : value) {
+      character = static_cast<char>(letter(letterRng));
+    }
+    dictionaryValues.push_back(std::move(value));
+  }
+  const auto isStructNull = [](int row) {
+    return row % 4 == 0 || row >= kNumRows - 10;
+  };
+  // Rows [firstRow, firstRow + numRows): 'key' is unique, 's' a long string
+  // that is null in every seventh row, 'a' an array of 'row % 5' strings, 'r'
+  // a struct of a long string 't', a dictionary string 'u' and an integer 'i'
+  // that is null in every fourth row and the last 10 rows, 'm' a map of
+  // 'row % 3' strings, 'd' a dictionary string, 'e' a string that is a
+  // dictionary in even chunks and unique in odd ones, and 'n' an integer that
+  // is null in every fifth row. 'r.t' and some values of 'm' are null too, so
+  // their streams mix null entries with rows that have no entry (a null 'r' or
+  // an absent key).
+  const auto makeRows = [&](int firstRow, int numRows) {
+    std::vector<vector_size_t> arrayOffsets;
+    std::vector<std::string> elements;
+    std::vector<vector_size_t> mapOffsets;
+    std::vector<int32_t> mapKeys;
+    std::vector<std::optional<std::string>> mapValues;
+    for (int row = firstRow; row < firstRow + numRows; ++row) {
+      arrayOffsets.push_back(static_cast<vector_size_t>(elements.size()));
+      for (int element = 0; element < row % 5; ++element) {
+        elements.push_back(makeString(row * 5 + element));
+      }
+      mapOffsets.push_back(static_cast<vector_size_t>(mapKeys.size()));
+      for (int entry = 0; entry < row % 3; ++entry) {
+        mapKeys.push_back(entry);
+        mapValues.push_back(
+            (row + entry) % 4 == 1
+                ? std::nullopt
+                : std::make_optional(makeString(row * 3 + entry)));
+      }
+    }
+    const auto dictionaryValueAt = [&](auto row) {
+      return dictionaryValues[(firstRow + row) % dictionaryValues.size()];
+    };
+    return makeRowVector(
+        {"key", "s", "a", "r", "m", "d", "e", "n"},
+        {makeFlatVector<int64_t>(
+             numRows, [&](auto row) { return keyAt(firstRow + row); }),
+         makeFlatVector<std::string>(
+             numRows,
+             [&](auto row) { return makeString(firstRow + row); },
+             [&](auto row) { return (firstRow + row) % 7 == 0; }),
+         makeArrayVector(arrayOffsets, makeFlatVector<std::string>(elements)),
+         makeRowVector(
+             {"t", "u", "i"},
+             {makeFlatVector<std::string>(
+                  numRows,
+                  [&](auto row) { return makeString(firstRow + row); },
+                  [&](auto row) { return (firstRow + row) % 6 == 3; }),
+              makeFlatVector<std::string>(numRows, dictionaryValueAt),
+              makeFlatVector<int64_t>(
+                  numRows,
+                  [&](auto row) { return (firstRow + row) * int64_t{31}; })},
+             [&](auto row) { return isStructNull(firstRow + row); }),
+         makeMapVector(
+             mapOffsets,
+             makeFlatVector<int32_t>(mapKeys),
+             makeNullableFlatVector<std::string>(mapValues)),
+         makeFlatVector<std::string>(numRows, dictionaryValueAt),
+         makeFlatVector<std::string>(
+             numRows,
+             [&](auto row) {
+               return (firstRow + row) / kRowsPerChunk % 2 == 0
+                   ? dictionaryValueAt(row)
+                   : makeString(firstRow + row);
+             }),
+         makeFlatVector<int64_t>(
+             numRows,
+             [&](auto row) { return (firstRow + row) * int64_t{7'919}; },
+             [&](auto row) { return (firstRow + row) % 5 == 0; })});
+  };
+
+  std::vector<VectorPtr> chunks;
+  for (int chunk = 0; chunk < kNumChunks; ++chunk) {
+    chunks.push_back(makeRows(chunk * kRowsPerChunk, kRowsPerChunk));
+  }
+  const auto expected = makeRows(0, kNumRows);
+  WriterOptions writerOptions;
+  writerOptions.enableChunking = true;
+  // Flush every stream into a chunk at each write, however small.
+  writerOptions.minStreamChunkRawSize = 0;
+  writerOptions.enableChunkStats = true;
+  writerOptions.flatMapColumns = {{"m", {}}};
+  writerOptions.flushPolicyFactory = [] {
+    return std::make_unique<LambdaFlushPolicy>(
+        /*flushLambda=*/[](const StripeProgress&) { return false; },
+        /*chunkLambda=*/[](const StripeProgress&) { return true; });
+  };
+  const auto file = test::createNimbleFile(
+      *rootPool(), chunks, writerOptions, /*flushAfterWrite=*/false);
+  writerOptions.enableChunkStats = false;
+  const auto fileWithoutChunkStats = test::createNimbleFile(
+      *rootPool(), chunks, writerOptions, /*flushAfterWrite=*/false);
+  ASSERT_EQ(
+      getStreamChunkEncodings(file, /*columnIndex=*/1, pool()).size(),
+      kNumChunks);
+  for (const auto& chunkEncoding :
+       getStreamChunkEncodings(file, /*columnIndex=*/5, pool())) {
+    ASSERT_EQ(chunkEncoding.encodingType, EncodingType::Dictionary);
+  }
+  // A dictionary read of 'e' that skips into an odd chunk falls back to a flat
+  // read there.
+  const auto mixedEncodings =
+      getStreamChunkEncodings(file, /*columnIndex=*/6, pool());
+  ASSERT_EQ(mixedEncodings.size(), kNumChunks);
+  for (int chunk = 0; chunk < kNumChunks; ++chunk) {
+    ASSERT_EQ(
+        mixedEncodings[chunk].encodingType == EncodingType::Dictionary,
+        chunk % 2 == 0)
+        << "chunk " << chunk;
+  }
+
+  // Reads 'nimbleFile' with a filter on 'key' that keeps 'keyRows', which must
+  // be sorted, checks the rows read, and returns the decompressions of each of
+  // kNodes. With 'filterNullsOfN', a second filter on 'n' also drops the rows
+  // where 'n' is null.
+  const auto read = [&](const std::string& nimbleFile,
+                        const std::vector<int>& keyRows,
+                        int batchSize,
+                        bool scanFastPath,
+                        bool preserveDictionary,
+                        bool filterNullsOfN = false) {
+    std::vector<int64_t> keptKeys;
+    std::vector<int> keptRows;
+    for (const auto row : keyRows) {
+      keptKeys.push_back(keyAt(row));
+      if (!filterNullsOfN || row % 5 != 0) {
+        keptRows.push_back(row);
+      }
+    }
+    auto scanSpec = std::make_shared<common::ScanSpec>("root");
+    scanSpec->addAllChildFields(*expected->type());
+    scanSpec->childByName("key")->setFilter(
+        common::createBigintValues(keptKeys, /*nullAllowed=*/false));
+    if (filterNullsOfN) {
+      scanSpec->childByName("n")->setFilter(
+          std::make_unique<common::BigintRange>(
+              0,
+              std::numeric_limits<int64_t>::max(),
+              /*nullAllowed=*/false));
+    }
+    dwio::common::ReaderOptions options(pool());
+    options.setScanSpec(scanSpec);
+    Readers readers;
+    readers.reader =
+        dwio::common::getReaderFactory(dwio::common::FileFormat::NIMBLE)
+            ->createReader(
+                std::make_unique<dwio::common::BufferedInput>(
+                    std::make_shared<InMemoryReadFile>(nimbleFile), *pool()),
+                options);
+    dwio::common::RowReaderOptions rowOptions;
+    rowOptions.setScanSpec(scanSpec);
+    rowOptions.setRequestedType(asRowType(expected->type()));
+    rowOptions.setStringDecoderZeroCopy(stringDecoderZeroCopy);
+    rowOptions.setNimblePreserveDictionaryEncoding(preserveDictionary);
+    rowOptions.setNimbleScanFastPath(scanFastPath);
+    rowOptions.setCollectColumnStats(true);
+    readers.rowReader = readers.reader->createRowReader(rowOptions);
+
+    // next() leaves out the rows of chunks that chunk stats skip, so read
+    // until it returns 0 rather than until it has returned every row.
+    auto result = BaseVector::create(expected->type(), 0, pool());
+    size_t numRead{0};
+    while (readers.rowReader->next(batchSize, result) > 0) {
+      result->validate();
+      for (vector_size_t i = 0; i < result->size(); ++i, ++numRead) {
+        if (numRead < keptRows.size()) {
+          EXPECT_TRUE(
+              result->equalValueAt(expected.get(), i, keptRows[numRead]))
+              << "Mismatch at row " << keptRows[numRead];
+        }
+      }
+    }
+    EXPECT_EQ(numRead, keptRows.size());
+
+    dwio::common::RuntimeStats stats;
+    readers.rowReader->updateRuntimeStats(stats);
+    std::array<uint64_t, kNumNodes> decompressions{};
+    for (size_t index = 0; index < kNumNodes; ++index) {
+      const auto nodeStats = stats.columnStats.find(kNodes[index]);
+      if (nodeStats == stats.columnStats.end()) {
+        continue;
+      }
+      const auto format =
+          nodeStats->second.find(dwio::common::FileFormat::NIMBLE);
+      if (format != nodeStats->second.end() &&
+          format->second.decodingStats.has_value()) {
+        decompressions[index] =
+            format->second.decodingStats->decompressCPUTimeNanos.count();
+      }
+    }
+    return decompressions;
+  };
+
+  // Reading one row per batch decompresses little more than the chunks of kept
+  // rows, since each batch starts at a kept row. With chunk stats, no batch
+  // size decompresses more. Without them, one batch decompresses every chunk
+  // up to its last kept row. Row 3'998 is in the null tail of 'r', so reads of
+  // 'r.u' skip past its last value.
+  const std::vector<int> farApartRows{7, 1'234, 1'235, 2'999, 3'998};
+  const auto oneRowBatches = read(
+      file,
+      farApartRows,
+      1,
+      /*scanFastPath=*/false,
+      /*preserveDictionary=*/false);
+  const auto withoutChunkStats = read(
+      fileWithoutChunkStats,
+      farApartRows,
+      kNumRows,
+      /*scanFastPath=*/false,
+      /*preserveDictionary=*/false);
+  for (const int batchSize : {37, 1'000, kNumRows}) {
+    for (const bool scanFastPath : {false, true}) {
+      SCOPED_TRACE(
+          fmt::format("batchSize={} scanFastPath={}", batchSize, scanFastPath));
+      read(
+          file,
+          farApartRows,
+          batchSize,
+          scanFastPath,
+          /*preserveDictionary=*/stringDecoderZeroCopy);
+      const auto decompressions = read(
+          file,
+          farApartRows,
+          batchSize,
+          scanFastPath,
+          /*preserveDictionary=*/false);
+      read(
+          file,
+          farApartRows,
+          batchSize,
+          scanFastPath,
+          /*preserveDictionary=*/stringDecoderZeroCopy,
+          /*filterNullsOfN=*/true);
+      // Legacy encodings do not count decompressions.
+      if (!stringDecoderZeroCopy) {
+        continue;
+      }
+      for (size_t index = 0; index < kNumNodes; ++index) {
+        SCOPED_TRACE(fmt::format("node={}", kNodes[index]));
+        // A read stops at the next kept row even where it has no value, then
+        // opens the chunk of the next value in the batch. Kept row 7 has no map
+        // key 1, so one batch opens a chunk of key 1 that no kept row needs.
+        const uint64_t extraChunk = index == kMapValuesIndex ? 1 : 0;
+        EXPECT_GT(decompressions[index], 0);
+        EXPECT_LE(decompressions[index], oneRowBatches[index] + extraChunk);
+        EXPECT_GT(withoutChunkStats[index], decompressions[index]);
+      }
+    }
+  }
+
+  // Random kept rows and batch sizes.
+  std::mt19937 rng(common::testutil::getRandomSeed(/*fixedValue=*/3));
+  for (int iteration = 0; iteration < 10; ++iteration) {
+    const auto numKept = std::uniform_int_distribution<int>(1, 30)(rng);
+    std::vector<int> keptRows;
+    for (int index = 0; index < numKept; ++index) {
+      keptRows.push_back(
+          std::uniform_int_distribution<int>(0, kNumRows - 1)(rng));
+    }
+    std::sort(keptRows.begin(), keptRows.end());
+    keptRows.erase(
+        std::unique(keptRows.begin(), keptRows.end()), keptRows.end());
+    constexpr std::array<int, 5> kBatchSizes{1, 7, 64, 999, kNumRows};
+    const auto batchSize = kBatchSizes[std::uniform_int_distribution<size_t>(
+        0, kBatchSizes.size() - 1)(rng)];
+    SCOPED_TRACE(
+        fmt::format(
+            "iteration={} numKept={} batchSize={}",
+            iteration,
+            numKept,
+            batchSize));
+    read(
+        file,
+        keptRows,
+        batchSize,
+        /*scanFastPath=*/false,
+        /*preserveDictionary=*/stringDecoderZeroCopy);
+    read(
+        file,
+        keptRows,
+        batchSize,
+        /*scanFastPath=*/true,
+        /*preserveDictionary=*/stringDecoderZeroCopy);
+    read(
+        file,
+        keptRows,
+        batchSize,
+        /*scanFastPath=*/true,
+        /*preserveDictionary=*/stringDecoderZeroCopy,
+        /*filterNullsOfN=*/true);
+  }
 }
 
 // Within-chunk dict read with a filter on a sibling column that creates
@@ -3470,6 +3813,114 @@ TEST_P(StringColumnReaderTest, filterOnlyMultiChunkNumValuesSync) {
   const int64_t expected = kChunk1Rows + kChunk2Rows / 2;
   ASSERT_EQ(readRows(/*projectOut=*/true), expected);
   ASSERT_EQ(readRows(/*projectOut=*/false), expected);
+}
+
+// Like filterOnlyMultiChunkNumValuesSync, but a filter on 'sel' keeps no row of
+// the middle chunk, so a sparse filter-only read of 'key' in a file with chunk
+// stats skips with the stream index from the Constant first chunk past the
+// middle chunk into the last, which is not Constant. The rows read must be
+// exactly those that pass both filters.
+TEST_P(StringColumnReaderTest, filterOnlySparseSkipAcrossChunksNumValuesSync) {
+  const bool stringDecoderZeroCopy = std::get<0>(GetParam());
+  const std::string targetValue = "MATCH";
+  constexpr int kNumChunks = 3;
+  constexpr int kRowsPerChunk = 300;
+  constexpr int kRunLength = 10;
+  const StringView matchView(targetValue);
+  const StringView otherView("OTHER");
+
+  // 'sel' is the row number. 'key' matches in every row of the first two
+  // chunks and in runs of the last.
+  std::vector<VectorPtr> chunks;
+  for (int chunk = 0; chunk < kNumChunks; ++chunk) {
+    const int firstRow = chunk * kRowsPerChunk;
+    chunks.push_back(makeRowVector(
+        {"sel", "key"},
+        {makeFlatVector<int64_t>(
+             kRowsPerChunk, [&](auto i) { return firstRow + i; }),
+         makeFlatVector<StringView>(kRowsPerChunk, [&](auto i) {
+           return chunk < kNumChunks - 1 || (i / kRunLength) % 2 == 0
+               ? matchView
+               : otherView;
+         })}));
+  }
+
+  // 'sel' keeps every seventh row of the first and last chunks.
+  std::vector<int64_t> keptRows;
+  std::vector<int64_t> expected;
+  for (int row = 0; row < kNumChunks * kRowsPerChunk; ++row) {
+    if (row / kRowsPerChunk == 1 || row % 7 != 0) {
+      continue;
+    }
+    keptRows.push_back(row);
+    if (row / kRowsPerChunk < kNumChunks - 1 ||
+        (row % kRowsPerChunk / kRunLength) % 2 == 0) {
+      expected.push_back(row);
+    }
+  }
+
+  EncodingLayout constantLayout{
+      EncodingType::Constant, {}, CompressionType::Uncompressed};
+  WriterOptions writerOptions;
+  writerOptions.enableChunking = true;
+  writerOptions.minStreamChunkRawSize = 0;
+  writerOptions.enableChunkStats = true;
+  writerOptions.flushPolicyFactory = [] {
+    return std::make_unique<LambdaFlushPolicy>(
+        /*flushLambda=*/[](const StripeProgress&) { return false; },
+        /*chunkLambda=*/[](const StripeProgress&) { return true; });
+  };
+  writerOptions.encodingLayoutTree.emplace(
+      Kind::Row,
+      std::
+          unordered_map<EncodingLayoutTree::StreamIdentifier, EncodingLayout>{},
+      "",
+      std::vector<EncodingLayoutTree>{
+          EncodingLayoutTree{Kind::Scalar, {}, "sel"},
+          EncodingLayoutTree{
+              Kind::Scalar, {{0, std::move(constantLayout)}}, "key"}});
+  auto file = test::createNimbleFile(
+      *rootPool(),
+      chunks,
+      writerOptions,
+      /*flushAfterWrite=*/false);
+
+  auto type = asRowType(chunks[0]->type());
+  // Returns 'sel' of the rows read.
+  auto readRows = [&](bool projectOut, int batchSize) {
+    auto scanSpec = std::make_shared<common::ScanSpec>("root");
+    scanSpec->addAllChildFields(*type);
+    scanSpec->childByName("sel")->setFilter(
+        common::createBigintValues(keptRows, /*nullAllowed=*/false));
+    auto* keySpec = scanSpec->childByName("key");
+    keySpec->setFilter(
+        std::make_unique<common::BytesValues>(
+            std::vector<std::string>{targetValue}, false));
+    keySpec->setProjectOut(projectOut);
+    auto readers = makeReaders(
+        std::static_pointer_cast<RowVector>(chunks[0]),
+        file,
+        scanSpec,
+        stringDecoderZeroCopy);
+    auto result = BaseVector::create(type, 0, pool());
+    std::vector<int64_t> rows;
+    while (readers.rowReader->next(batchSize, result) > 0) {
+      auto* sel = result->as<RowVector>()
+                      ->childAt(0)
+                      ->loadedVector()
+                      ->as<SimpleVector<int64_t>>();
+      for (vector_size_t i = 0; i < result->size(); ++i) {
+        rows.push_back(sel->valueAt(i));
+      }
+    }
+    return rows;
+  };
+
+  for (const int batchSize : {1, 250, 100'000}) {
+    SCOPED_TRACE(fmt::format("batchSize={}", batchSize));
+    EXPECT_EQ(readRows(/*projectOut=*/true, batchSize), expected);
+    EXPECT_EQ(readRows(/*projectOut=*/false, batchSize), expected);
+  }
 }
 
 // Verifies that the dictionary alphabet is rebuilt when crossing chunk

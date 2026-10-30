@@ -221,6 +221,7 @@ ManualEncodingSelectionPolicyFactory::possibleEncodings() {
       EncodingType::BlockBitPacking,
       EncodingType::DeltaBlock,
       EncodingType::EliasFano,
+      EncodingType::PartitionedEliasFano,
       EncodingType::Fsst,
       EncodingType::Huffman,
   };

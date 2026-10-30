@@ -124,6 +124,10 @@ class VectorTestBase {
     return rowVector;
   }
 
+  /// Makes a RowVector from (name, child) pairs.
+  RowVectorPtr makeNamedRowVector(
+      const std::vector<std::pair<std::string, VectorPtr>>& children);
+
   RowVectorPtr makeRowVector(
       const std::vector<VectorPtr>& children,
       std::function<bool(vector_size_t /*row*/)> isNullAt = nullptr) {
