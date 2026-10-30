@@ -139,7 +139,7 @@ QueryCtx::~QueryCtx() {
       LOG(ERROR) << "Release callback threw unknown exception";
     }
   }
-  VELOX_CHECK(!underArbitration_);
+  VELOX_CHECK_EQ(numArbitrations_, 0);
 }
 
 /*static*/ std::string QueryCtx::generatePoolName(const std::string& queryId) {
@@ -166,7 +166,7 @@ std::shared_ptr<memory::MemoryPool> QueryCtx::customPool(
 
 void QueryCtx::maybeSetReclaimer() {
   VELOX_CHECK_NOT_NULL(pool_);
-  VELOX_CHECK(!underArbitration_);
+  VELOX_CHECK_EQ(numArbitrations_, 0);
   if (pool_->reclaimer() != nullptr) {
     return;
   }
@@ -213,21 +213,21 @@ uint64_t QueryCtx::MemoryReclaimer::reclaim(
   }
   VELOX_CHECK_EQ(pool->name(), pool_->name());
 
+  queryCtx->startArbitration();
   const auto leaveGuard =
       folly::makeGuard([&]() { queryCtx->finishArbitration(); });
-  queryCtx->startArbitration();
   return memory::MemoryReclaimer::reclaim(pool, targetBytes, maxWaitMs, stats);
 }
 
 bool QueryCtx::checkUnderArbitration(ContinueFuture* future) {
   VELOX_CHECK_NOT_NULL(future);
-  if (!underArbitration_) {
+  if (numArbitrations_ == 0) {
     return false;
   }
 
   std::lock_guard<std::mutex> l(mutex_);
   // Check again under the lock to avoid data race.
-  if (!underArbitration_) {
+  if (numArbitrations_ == 0) {
     VELOX_CHECK(arbitrationPromises_.empty());
     return false;
   }
@@ -238,17 +238,18 @@ bool QueryCtx::checkUnderArbitration(ContinueFuture* future) {
 
 void QueryCtx::startArbitration() {
   std::lock_guard<std::mutex> l(mutex_);
-  VELOX_CHECK(!underArbitration_);
-  VELOX_CHECK(arbitrationPromises_.empty());
-  underArbitration_ = true;
+  VELOX_CHECK(numArbitrations_ != 0 || arbitrationPromises_.empty());
+  ++numArbitrations_;
 }
 
 void QueryCtx::finishArbitration() {
   std::vector<ContinuePromise> promises;
   {
     std::lock_guard<std::mutex> l(mutex_);
-    VELOX_CHECK(underArbitration_);
-    underArbitration_ = false;
+    VELOX_CHECK_GT(numArbitrations_, 0);
+    if (--numArbitrations_ != 0) {
+      return;
+    }
     promises.swap(arbitrationPromises_);
   }
   for (auto& promise : promises) {

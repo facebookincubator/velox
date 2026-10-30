@@ -481,8 +481,8 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
   /// Indicates if the query is under memory arbitration or not.
   bool testingUnderArbitration() const {
     std::lock_guard<std::mutex> l(mutex_);
-    VELOX_CHECK(underArbitration_ || arbitrationPromises_.empty());
-    return underArbitration_;
+    VELOX_CHECK(numArbitrations_ != 0 || arbitrationPromises_.empty());
+    return numArbitrations_ != 0;
   }
 
  private:
@@ -581,8 +581,9 @@ class QueryCtx : public std::enable_shared_from_this<QueryCtx> {
 
   mutable std::mutex mutex_;
 
-  // Indicates if this query is under memory arbitration or not.
-  std::atomic_bool underArbitration_{false};
+  // Different resource roots may be reclaimed concurrently. Transitions and
+  // waiters are protected by mutex_; the atomic supports the driver fast path.
+  std::atomic_uint32_t numArbitrations_{0};
   std::vector<ContinuePromise> arbitrationPromises_;
   std::shared_ptr<filesystems::TokenProvider> fsTokenProvider_;
   const CredentialKeys credentialKeys_;

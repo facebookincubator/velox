@@ -801,11 +801,12 @@ void Task::initCustomTaskPools() {
         resource, "No CustomMemoryResource registered for tag: {}", tag);
     customChildPools_.push_back(root->addAggregateChild(
         fmt::format("task.{}.{}", taskId_.c_str(), tag),
-        resource->newReclaimer(
-            memory::TaskReclaimerContext{
-                shared_from_this(),
-                memoryArbitrationPriority_,
-                resource->tag()})));
+        root->reclaimer() == nullptr ? nullptr
+                                     : resource->newReclaimer(
+                                           memory::TaskReclaimerContext{
+                                               shared_from_this(),
+                                               memoryArbitrationPriority_,
+                                               resource->tag()})));
     customTaskPools_[tag] = customChildPools_.back().get();
   }
 }
@@ -844,7 +845,9 @@ memory::MemoryPool* Task::getOrAddCustomNodePool(
   VELOX_CHECK_NOT_NULL(
       resource, "No CustomMemoryResource registered for tag: {}", tag);
   customChildPools_.push_back(taskIt->second->addAggregateChild(
-      fmt::format("node.{}.{}", planNodeId, tag), resource->newReclaimer()));
+      fmt::format("node.{}.{}", planNodeId, tag),
+      taskIt->second->reclaimer() == nullptr ? nullptr
+                                             : resource->newReclaimer()));
   auto* nodePool = customChildPools_.back().get();
   nodeMap[planNodeId] = nodePool;
   return nodePool;
@@ -895,7 +898,9 @@ memory::MemoryPool* Task::getOrAddCustomJoinNodePool(
   VELOX_CHECK_NOT_NULL(
       resource, "No CustomMemoryResource registered for tag: {}", tag);
   customChildPools_.push_back(taskIt->second->addAggregateChild(
-      fmt::format("node.{}.{}", nodeId, tag), resource->newReclaimer()));
+      fmt::format("node.{}.{}", nodeId, tag),
+      taskIt->second->reclaimer() == nullptr ? nullptr
+                                             : resource->newReclaimer()));
   auto* nodePool = customChildPools_.back().get();
   nodeMap[nodeId] = nodePool;
   return nodePool;
@@ -922,6 +927,10 @@ memory::MemoryPool* Task::addCustomOperatorPool(
           driverId,
           operatorType,
           tag)));
+  // Waiting for capacity must suspend the driver even when this resource
+  // opted out of reclaiming its own buffers.
+  customChildPools_.back()->setArbitrationHooks(
+      {suspendDriverForMemoryArbitration, resumeDriverAfterMemoryArbitration});
   return customChildPools_.back().get();
 }
 
@@ -1511,6 +1520,10 @@ std::weak_ptr<OutputBufferManager> Task::outputBufferManager() const {
 
 // static
 void Task::resume(std::shared_ptr<Task> self) {
+  releasePause(std::move(self), false);
+}
+
+void Task::releasePause(std::shared_ptr<Task> self, bool scoped) {
   std::vector<std::shared_ptr<Driver>> offThreadDrivers;
   std::vector<ContinuePromise> resumePromises;
   SCOPE_EXIT {
@@ -1529,7 +1542,17 @@ void Task::resume(std::shared_ptr<Task> self) {
   std::lock_guard<std::timed_mutex> l(self->mutex_);
   // Setting pause requested must be atomic with the resuming so that
   // suspended sections do not go back on thread during resume.
-  self->pauseRequested_ = false;
+  if (scoped) {
+    VELOX_CHECK_GT(self->numScopedPauses_, 0);
+    --self->numScopedPauses_;
+  } else {
+    self->legacyPauseRequested_ = false;
+  }
+  self->pauseRequested_ =
+      self->legacyPauseRequested_ || self->numScopedPauses_ != 0;
+  if (self->pauseRequested_) {
+    return;
+  }
   if (self->isRunningLocked()) {
     for (auto& driver : self->drivers_) {
       if (driver != nullptr) {
@@ -4091,8 +4114,31 @@ StopReason Task::shouldStopLocked() {
 ContinueFuture Task::requestPause() {
   std::lock_guard<std::timed_mutex> l(mutex_);
   TestValue::adjust("facebook::velox::exec::Task::requestPauseLocked", this);
+  auto future = makeFinishFutureLocked("Task::requestPause");
+  legacyPauseRequested_ = true;
   pauseRequested_ = true;
-  return makeFinishFutureLocked("Task::requestPause");
+  return future;
+}
+
+Task::ScopedPause Task::acquirePause() {
+  auto self = shared_from_this();
+  std::lock_guard<std::timed_mutex> l(mutex_);
+  TestValue::adjust("facebook::velox::exec::Task::requestPauseLocked", this);
+  auto future = makeFinishFutureLocked("Task::acquirePause");
+  ++numScopedPauses_;
+  pauseRequested_ = true;
+  return ScopedPause(std::move(self), std::move(future));
+}
+
+Task::ScopedPause::~ScopedPause() {
+  if (task_ == nullptr) {
+    return;
+  }
+  try {
+    Task::releasePause(std::move(task_), true);
+  } catch (const VeloxRuntimeError& exception) {
+    LOG(WARNING) << "Failed to release task pause: " << exception.message();
+  }
 }
 
 bool Task::pauseRequested(ContinueFuture* future) {
@@ -4273,8 +4319,11 @@ uint64_t Task::MemoryReclaimer::reclaim(
     MicrosecondWallTimer timer{&reclaimWaitTimeUs};
     reclaimedBytes = reclaimTask(task, pool, targetBytes, maxWaitMs, stats);
   }
-  ++task->taskStats_.memoryReclaimCount;
-  task->taskStats_.memoryReclaimMs += reclaimWaitTimeUs / 1'000;
+  {
+    std::lock_guard<std::timed_mutex> l(task->mutex_);
+    ++task->taskStats_.memoryReclaimCount;
+    task->taskStats_.memoryReclaimMs += reclaimWaitTimeUs / 1'000;
+  }
   return reclaimedBytes;
 }
 
@@ -4284,23 +4333,16 @@ uint64_t Task::MemoryReclaimer::reclaimTask(
     uint64_t targetBytes,
     uint64_t maxWaitMs,
     memory::MemoryReclaimer::Stats& stats) {
-  auto resumeGuard = folly::makeGuard([&]() {
-    try {
-      Task::resume(task);
-    } catch (const VeloxRuntimeError& exception) {
-      LOG(WARNING) << "Failed to resume task " << task->taskId_
-                   << " after memory reclamation: " << exception.message();
-    }
-  });
-
+  auto pause = task->acquirePause();
   uint64_t reclaimWaitTimeUs{0};
   bool paused{true};
   {
     MicrosecondWallTimer timer{&reclaimWaitTimeUs};
     if (maxWaitMs == 0) {
-      task->requestPause().wait();
+      pause.future().wait();
     } else {
-      paused = task->requestPause().wait(std::chrono::milliseconds(maxWaitMs));
+      paused =
+          std::move(pause.future()).wait(std::chrono::milliseconds(maxWaitMs));
     }
   }
   VELOX_CHECK(paused || maxWaitMs != 0);

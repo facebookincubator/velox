@@ -15,10 +15,15 @@
  */
 
 #include <fmt/format.h>
+#include <folly/synchronization/Baton.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include <array>
+#include <cstdlib>
 #include <functional>
+#include <thread>
 
+#include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/memory/CustomMemoryResource.h"
 #include "velox/common/memory/CustomMemoryResourceRegistry.h"
 #include "velox/common/memory/MallocAllocator.h"
@@ -431,6 +436,256 @@ TEST_F(CustomMemoryHierarchyTest, taskCreationFailsWhenResourceMissing) {
       kCustomMemoryResourceRegistryKey,
       CustomMemoryResourceRegistry::createRegistry(nullptr));
   EXPECT_THROW(makeTask("t-missing", queryCtx), VeloxRuntimeError);
+}
+
+TEST_F(CustomMemoryHierarchyTest, overlappingTaskReclaimsKeepTaskPaused) {
+  for (bool cancel : {false, true}) {
+    for (bool customFirst : {false, true}) {
+      SCOPED_TRACE(cancel);
+      SCOPED_TRACE(customFirst);
+      auto queryCtx = buildQueryCtx(
+          {"device"},
+          fmt::format("overlapping-task-reclaim-{}-{}", customFirst, cancel));
+      auto task = makeTask("overlapping-task-reclaim", queryCtx);
+      auto* cpu = task->pool();
+      auto* custom = findChild(
+          queryCtx->customPool("device").get(),
+          "task.overlapping-task-reclaim.device");
+      ASSERT_NE(custom, nullptr);
+      auto* outer = customFirst ? custom : cpu;
+      auto* inner = customFirst ? cpu : custom;
+      auto innerLeaf = inner->addLeafChild(
+          "inner", true, std::make_unique<TestLeafReclaimer>([&](auto*) {
+            EXPECT_TRUE(task->pauseRequested());
+            if (cancel) {
+              task->requestCancel();
+            }
+          }));
+      ContinueFuture resumed;
+      auto outerLeaf = outer->addLeafChild(
+          "outer", true, std::make_unique<TestLeafReclaimer>([&](auto*) {
+            EXPECT_TRUE(task->pauseRequested(&resumed));
+            MemoryReclaimer::Stats innerStats;
+            inner->reclaim(1, 1000, innerStats);
+            // Completing one resource's reclaim must not release another
+            // resource's pause or its resume waiters.
+            EXPECT_TRUE(task->pauseRequested());
+            EXPECT_FALSE(resumed.isReady());
+            int drivers = 0;
+            task->testingVisitDrivers([&](auto* driver) {
+              if (driver != nullptr) {
+                ++drivers;
+              }
+            });
+            EXPECT_EQ(drivers, 1) << "Cancellation must defer operator cleanup";
+          }));
+      MemoryReclaimer::Stats stats;
+      outer->reclaim(1, 1000, stats);
+      EXPECT_FALSE(task->pauseRequested());
+      EXPECT_TRUE(resumed.isReady());
+      EXPECT_EQ(task->taskStats().memoryReclaimCount, 2);
+    }
+  }
+}
+
+TEST_F(CustomMemoryHierarchyTest, reclamationPreservesLegacyPauseOwnership) {
+  for (bool legacyFirst : {false, true}) {
+    auto queryCtx =
+        buildQueryCtx({"device"}, fmt::format("legacy-pause-{}", legacyFirst));
+    auto task = makeTask("legacy-pause", queryCtx);
+    // Existing callers can request the same legacy pause repeatedly and
+    // release it once. Reclamation must own a separate pause request.
+    if (legacyFirst) {
+      task->requestPause().wait();
+      task->requestPause().wait();
+    }
+    auto leaf = task->pool()->addLeafChild(
+        "legacy", true, std::make_unique<TestLeafReclaimer>([&](auto*) {
+          if (legacyFirst) {
+            exec::Task::resume(task);
+            EXPECT_TRUE(task->pauseRequested());
+          } else {
+            task->requestPause().wait();
+            task->requestPause().wait();
+          }
+        }));
+    MemoryReclaimer::Stats stats;
+    task->pool()->reclaim(1, 1000, stats);
+    EXPECT_EQ(task->pauseRequested(), !legacyFirst);
+    exec::Task::resume(task);
+    EXPECT_FALSE(task->pauseRequested());
+  }
+}
+
+TEST_F(
+    CustomMemoryHierarchyTest,
+    customAllocationSuspendsBeforeInitialization) {
+  auto queryCtx = buildQueryCtx({"device"}, "early-custom-allocation");
+  auto task = makeTask("early-custom-allocation", queryCtx);
+  exec::Driver* driver = nullptr;
+  task->testingVisitDrivers([&](auto* candidate) { driver = candidate; });
+  ASSERT_NE(driver, nullptr);
+  auto* leaf = task->addCustomOperatorPool(
+      "device", "early", exec::kUngroupedGroupId, 0, 0, "Test");
+  // Leave the buffer-reclaimer slot available for the operator's actual
+  // resource-specific reclamation implementation.
+  EXPECT_EQ(leaf->reclaimer(), nullptr);
+  {
+    MemoryPoolArbitrationSection arbitration(leaf);
+    EXPECT_FALSE(driver->state().suspended());
+  }
+  driver->state().isEnqueued = true;
+  ASSERT_EQ(task->enter(driver->state()), exec::StopReason::kNone);
+  auto leave = folly::makeGuard([&] { task->leave(driver->state(), nullptr); });
+  exec::ScopedDriverThreadContext context(driver->driverCtx());
+  for (bool withReclaimer : {false, true}) {
+    if (withReclaimer) {
+      leaf->setReclaimer(std::make_unique<TestLeafReclaimer>([](auto*) {}));
+    }
+    {
+      MemoryPoolArbitrationSection arbitration(leaf);
+      EXPECT_EQ(driver->state().numSuspensions, 1);
+      EXPECT_NO_THROW(exec::memoryArbitrationStateCheck(*leaf));
+      if (driver->state().suspended()) {
+        auto paused = task->requestPause();
+        EXPECT_TRUE(paused.isReady());
+        exec::Task::resume(task);
+      }
+    }
+    EXPECT_FALSE(driver->state().suspended());
+  }
+}
+
+TEST_F(CustomMemoryHierarchyTest, reclaimTimeoutReleasesOnlyItsOwnPause) {
+  auto queryCtx = buildQueryCtx({"device"}, "pause-timeout");
+  auto task = makeTask("pause-timeout", queryCtx);
+  exec::Driver* driver = nullptr;
+  task->testingVisitDrivers([&](auto* candidate) { driver = candidate; });
+  ASSERT_NE(driver, nullptr);
+  driver->state().isEnqueued = true;
+  ASSERT_EQ(task->enter(driver->state()), exec::StopReason::kNone);
+  {
+    auto pause = task->acquirePause();
+    EXPECT_FALSE(pause.future().isReady());
+    MemoryReclaimer::Stats stats;
+    VELOX_ASSERT_THROW(task->pool()->reclaim(1, 1, stats), "failed to wait");
+    EXPECT_TRUE(task->pauseRequested());
+    EXPECT_FALSE(pause.future().isReady());
+    task->leave(driver->state(), nullptr);
+    EXPECT_TRUE(pause.future().isReady());
+    auto movedPause = std::move(pause);
+    EXPECT_TRUE(task->pauseRequested());
+  }
+  EXPECT_FALSE(task->pauseRequested());
+}
+
+TEST_F(CustomMemoryHierarchyTest, nonReclaimingCustomAllocationStillSuspends) {
+  auto queryCtx = buildQueryCtx(
+      {"device"}, "non-reclaiming-allocation", [](const ReclaimerContext&) {
+        return std::unique_ptr<MemoryReclaimer>{};
+      });
+  auto task = makeTask("non-reclaiming-allocation", queryCtx);
+  exec::Driver* driver = nullptr;
+  task->testingVisitDrivers([&](auto* candidate) { driver = candidate; });
+  ASSERT_NE(driver, nullptr);
+  auto* leaf = task->addCustomOperatorPool(
+      "device", "early", exec::kUngroupedGroupId, 0, 0, "Test");
+  EXPECT_EQ(leaf->reclaimer(), nullptr);
+  EXPECT_EQ(leaf->parent()->reclaimer(), nullptr);
+  driver->state().isEnqueued = true;
+  ASSERT_EQ(task->enter(driver->state()), exec::StopReason::kNone);
+  auto leave = folly::makeGuard([&] { task->leave(driver->state(), nullptr); });
+  exec::ScopedDriverThreadContext context(driver->driverCtx());
+  {
+    // A resource that cannot reclaim its own data can still wait for capacity
+    // from other queries. Its driver must not block CPU reclamation of this
+    // Task.
+    MemoryPoolArbitrationSection arbitration(leaf);
+    EXPECT_TRUE(driver->state().suspended());
+    EXPECT_NO_THROW(exec::memoryArbitrationStateCheck(*leaf));
+  }
+  EXPECT_FALSE(driver->state().suspended());
+}
+
+TEST_F(CustomMemoryHierarchyTest, overlappingQueryReclaimsWakeAfterLastExit) {
+  // A broken leave guard can terminate the process. Isolate the scenario so
+  // that it is reported as a failed regression instead of killing the suite.
+  EXPECT_EXIT(
+      ([&]() {
+        for (int firstToFinish : {0, 1}) {
+          auto queryCtx = buildQueryCtx({"device"}, "overlapping-query");
+          std::array<MemoryPool*, 2> roots{
+              queryCtx->pool(), queryCtx->customPool("device").get()};
+          std::array<folly::Baton<>, 2> entered;
+          std::array<folly::Baton<>, 2> finish;
+          std::array<std::shared_ptr<MemoryPool>, 2> leaves;
+          std::array<std::thread, 2> threads;
+          for (int i = 0; i < 2; ++i) {
+            leaves[i] = roots[i]->addLeafChild(
+                "leaf",
+                true,
+                std::make_unique<TestLeafReclaimer>([&, i](auto*) {
+                  entered[i].post();
+                  if (!finish[i].try_wait_for(std::chrono::seconds(10))) {
+                    std::_Exit(2);
+                  }
+                }));
+            threads[i] = std::thread([&, i] {
+              MemoryReclaimer::Stats stats;
+              roots[i]->reclaim(1, 1000, stats);
+            });
+            if (!entered[i].try_wait_for(std::chrono::seconds(10))) {
+              std::_Exit(3);
+            }
+          }
+          ContinueFuture resumed;
+          EXPECT_TRUE(queryCtx->checkUnderArbitration(&resumed));
+          finish[firstToFinish].post();
+          threads[firstToFinish].join();
+          EXPECT_TRUE(queryCtx->testingUnderArbitration());
+          EXPECT_FALSE(resumed.isReady());
+          finish[1 - firstToFinish].post();
+          threads[1 - firstToFinish].join();
+          EXPECT_FALSE(queryCtx->testingUnderArbitration());
+          EXPECT_TRUE(resumed.isReady());
+        }
+        std::_Exit(HasFailure() ? 1 : 0);
+      }()),
+      ::testing::ExitedWithCode(0),
+      "");
+}
+
+TEST_F(CustomMemoryHierarchyTest, customHierarchyRespectsParentOptOut) {
+  for (bool omitQueryReclaimer : {false, true}) {
+    SCOPED_TRACE(omitQueryReclaimer);
+    int taskFactoryCalls = 0;
+    int nodeFactoryCalls = 0;
+    auto queryCtx = buildQueryCtx(
+        {"device"},
+        fmt::format("parent-opt-out-{}", omitQueryReclaimer),
+        [&](const ReclaimerContext& context) {
+          if (std::holds_alternative<QueryReclaimerContext>(context)) {
+            return omitQueryReclaimer ? std::unique_ptr<MemoryReclaimer>{}
+                                      : makeExecutionReclaimer(context);
+          }
+          if (std::holds_alternative<TaskReclaimerContext>(context)) {
+            ++taskFactoryCalls;
+            return std::unique_ptr<MemoryReclaimer>{};
+          }
+          ++nodeFactoryCalls;
+          return exec::MemoryReclaimer::create();
+        });
+    auto task = makeTask("parent-opt-out", queryCtx);
+    EXPECT_EQ(taskFactoryCalls, omitQueryReclaimer ? 0 : 1);
+    EXPECT_EQ(
+        task->getOrAddCustomNodePool("device", "project")->reclaimer(),
+        nullptr);
+    auto* leaf = task->addCustomOperatorPool(
+        "device", "join", 0, 0, 0, std::string(exec::OperatorType::kHashBuild));
+    EXPECT_EQ(leaf->parent()->reclaimer(), nullptr);
+    EXPECT_EQ(leaf->reclaimer(), nullptr);
+    EXPECT_EQ(nodeFactoryCalls, 0);
+  }
 }
 
 } // namespace

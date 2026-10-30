@@ -1022,6 +1022,30 @@ one before creating Tasks:
 Factories on a resource shared across queries must be safe to call
 concurrently.
 
+Reclamation of different resource roots may overlap. Query arbitration waiters
+are released after the last reclamation finishes. Task reclaimers acquire
+independent scoped pauses; one resource finishing cannot resume or close drivers
+that another resource is still reclaiming. The existing ``requestPause()`` and
+``resume()`` API retains its idempotent behavior and cannot release a scoped pause.
+Scoped pauses stop driver execution, but do not serialize reclamation callbacks.
+Extensions must protect mutable state shared by callbacks from different resources.
+
+Task and node factories are not called when their parent has no reclaimer.
+Custom operator leaves receive allocation-time suspension hooks at creation,
+including when reclamation is disabled: they may still wait for capacity from
+other queries. These hooks leave the leaf's reclaimer slot available for the
+extension's resource-specific implementation. Explicit hooks take precedence over
+the reclaimer's legacy enter/leave callbacks; they do not make buffers reclaimable.
+Connector leaves created outside this path must install equivalent hooks before
+driver-thread allocations can trigger arbitration.
+
+Arbitration context identifies the resource's arbitrator, including on background
+reclamation threads. A capacity exemption during reclamation applies only to that
+arbitrator. Allocations from another resource may consume already granted capacity,
+but cannot exceed it or recursively invoke another arbitrator. Such growth fails
+with a memory-capacity error; extensions must reserve that workspace before
+reclamation. A context without a resource owner grants no capacity exemption.
+
 Server OOM Prevention
 ---------------------
 
