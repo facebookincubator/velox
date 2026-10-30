@@ -354,7 +354,7 @@ class Murmur3Hash final : public Murmur3Hash32Base {
     return fmix(h1, 4);
   }
 
-  static uint32_t hashInt64(int64_t input, uint32_t seed) {
+  FOLLY_ALWAYS_INLINE static uint32_t hashInt64(int64_t input, uint32_t seed) {
     return Murmur3Hash32Base::hashInt64(input, seed);
   }
 

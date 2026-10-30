@@ -28,6 +28,7 @@ add_library(
   Types.cpp
   Varint.cpp
   Zigzag.h
+  OrderedInteger.h
   Vector.h
   Varint.h
   Types.h
@@ -59,6 +60,7 @@ target_link_libraries(
   nimble_velox_schema_fb
   nimble_common
   Folly::folly
+  fmt::fmt
 )
 
 add_library(nimble_velox_nimble_config NimbleConfig.cpp NimbleConfig.h)

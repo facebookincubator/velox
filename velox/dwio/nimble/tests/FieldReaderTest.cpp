@@ -41,23 +41,45 @@
 namespace facebook::nimble {
 namespace {
 
+// The Nimble key kind of a Hybrid FlatMap column whose keys are `keyType`.
+ScalarKind keyKindOf(const velox::Type& keyType) {
+  const auto kind = keyType.kind();
+  if (kind == velox::TypeKind::TINYINT) {
+    return ScalarKind::Int8;
+  }
+  if (kind == velox::TypeKind::SMALLINT) {
+    return ScalarKind::Int16;
+  }
+  if (kind == velox::TypeKind::INTEGER) {
+    return ScalarKind::Int32;
+  }
+  if (kind == velox::TypeKind::BIGINT) {
+    return ScalarKind::Int64;
+  }
+  if (kind == velox::TypeKind::VARCHAR) {
+    return ScalarKind::String;
+  }
+  NIMBLE_UNREACHABLE("No Hybrid FlatMap key kind for {}", keyType.toString());
+}
+
 HybridFlatMap makeHybridFlatMap(
+    ScalarKind keyKind,
     std::vector<std::vector<std::string>> explicitGroups) {
-  HybridFlatMap hybridMap;
-  hybridMap.groups.reserve(explicitGroups.size() + 1);
+  std::vector<HybridFlatMap::Group> groups;
+  groups.reserve(explicitGroups.size() + 1);
   for (uint32_t groupId = 0; groupId < explicitGroups.size(); ++groupId) {
-    hybridMap.groups.push_back(
+    groups.push_back(
         HybridFlatMap::Group{
             .groupId = groupId,
             .groupKeys = std::move(explicitGroups[groupId]),
         });
   }
-  hybridMap.groups.push_back(
+  groups.push_back(
       HybridFlatMap::Group{
           .groupId = HybridFlatMap::kDefaultGroupId,
           .groupKeys = {},
       });
-  return hybridMap;
+  return HybridFlatMap{keyKind, std::move(groups)};
 }
 
 template <typename T>
@@ -308,7 +330,8 @@ class FieldReaderTest : public ::testing::Test {
   void verifyHybridKeyType(
       const velox::TypePtr& keyType,
       const std::array<T, 4>& keyData,
-      std::string groupedKey) {
+      std::string groupedKey,
+      HybridFlatMap::KeyPresenceMode defaultGroupKeyPresenceMode) {
     constexpr velox::vector_size_t kRows{2};
     constexpr velox::vector_size_t kEntries{4};
     const auto mapType = velox::MAP(keyType, velox::BIGINT());
@@ -340,11 +363,13 @@ class FieldReaderTest : public ::testing::Test {
         map->mutableSizes(kRows)->template asMutable<velox::vector_size_t>());
 
     const auto input = vectorMaker_->rowVector({"features"}, {map});
+    auto hybridMap =
+        makeHybridFlatMap(keyKindOf(*keyType), {{std::move(groupedKey)}});
+    hybridMap.setDefaultGroupKeyPresenceMode(defaultGroupKeyPresenceMode);
     Serializer serializer{
         SerializerOptions{
             .version = SerializationVersion::kSerialization,
-            .hybridFlatMapColumns =
-                {{"features", makeHybridFlatMap({{std::move(groupedKey)}})}},
+            .hybridFlatMapColumns = {{"features", std::move(hybridMap)}},
         },
         input->type(),
         pool_.get()};
@@ -352,6 +377,12 @@ class FieldReaderTest : public ::testing::Test {
         serializer.serialize(input, OrderedRanges::of(0, kRows))};
     const auto schema =
         SchemaReader::getSchema(serializer.schemaBuilder().schemaNodes());
+    EXPECT_EQ(
+        schema->asRow()
+            .childAt(0)
+            ->asHybridFlatMap()
+            .defaultGroupKeyPresenceMode(),
+        defaultGroupKeyPresenceMode);
     Deserializer deserializer{schema, pool_.get()};
     velox::VectorPtr output;
     deserializer.deserialize(serialized, output);
@@ -366,17 +397,30 @@ class FieldReaderTest : public ::testing::Test {
 };
 
 TEST_F(FieldReaderTest, roundTripsEveryHybridKeyType) {
-  verifyHybridKeyType<int8_t>(velox::TINYINT(), {1, 9, 9, 1}, "1");
-  verifyHybridKeyType<int16_t>(velox::SMALLINT(), {1, 9, 9, 1}, "1");
-  verifyHybridKeyType<int32_t>(velox::INTEGER(), {1, 9, 9, 1}, "1");
-  verifyHybridKeyType<int64_t>(velox::BIGINT(), {1, 9, 9, 1}, "1");
-  verifyHybridKeyType<velox::StringView>(
-      velox::VARCHAR(),
-      {velox::StringView{"a"},
-       velox::StringView{"z"},
-       velox::StringView{"z"},
-       velox::StringView{"a"}},
-      "a");
+  // Default sees keys 10 and 9 in that order. A KeyList Default lists them by
+  // typed value, 9 before 10, which reorders map entries; equalValueAt
+  // compares map entries in any order.
+  for (const auto defaultGroupKeyPresenceMode :
+       {HybridFlatMap::KeyPresenceMode::kBitmap,
+        HybridFlatMap::KeyPresenceMode::kKeyList}) {
+    SCOPED_TRACE(static_cast<int>(defaultGroupKeyPresenceMode));
+    verifyHybridKeyType<int8_t>(
+        velox::TINYINT(), {1, 10, 9, 1}, "1", defaultGroupKeyPresenceMode);
+    verifyHybridKeyType<int16_t>(
+        velox::SMALLINT(), {1, 10, 9, 1}, "1", defaultGroupKeyPresenceMode);
+    verifyHybridKeyType<int32_t>(
+        velox::INTEGER(), {1, 10, 9, 1}, "1", defaultGroupKeyPresenceMode);
+    verifyHybridKeyType<int64_t>(
+        velox::BIGINT(), {1, 10, 9, 1}, "1", defaultGroupKeyPresenceMode);
+    verifyHybridKeyType<velox::StringView>(
+        velox::VARCHAR(),
+        {velox::StringView{"a"},
+         velox::StringView{"z"},
+         velox::StringView{"m"},
+         velox::StringView{"a"}},
+        "a",
+        defaultGroupKeyPresenceMode);
+  }
 }
 
 TEST_F(FieldReaderTest, createsRegularFlatMapReaderWithoutNullStream) {
@@ -413,7 +457,8 @@ TEST_F(FieldReaderTest, handlesHybridGroupsWithNoObservedKeys) {
           std::vector<std::vector<Entry>>{{}, {}})});
   Serializer serializer{
       SerializerOptions{
-          .hybridFlatMapColumns = {{"features", makeHybridFlatMap({{"1"}})}},
+          .hybridFlatMapColumns =
+              {{"features", makeHybridFlatMap(ScalarKind::Int32, {{"1"}})}},
       },
       input->type(),
       pool_.get()};
@@ -455,7 +500,8 @@ TEST_F(FieldReaderTest, handlesHybridGroupsWithNoObservedKeys) {
 TEST_F(FieldReaderTest, treatsAllFalseHybridGroupAsEmpty) {
   SchemaBuilder builder;
   auto root = builder.createRowTypeBuilder(1);
-  auto hybridMap = builder.createHybridFlatMapTypeBuilder(ScalarKind::Int32);
+  auto hybridMap = builder.createHybridFlatMapTypeBuilder(
+      ScalarKind::Int32, HybridFlatMap::KeyPresenceMode::kBitmap);
   const auto group = hybridMap->addGroup(
       7, {"1"}, builder.createScalarTypeBuilder(ScalarKind::Int64));
   hybridMap->addGroup(
@@ -497,7 +543,8 @@ TEST_F(FieldReaderTest, treatsAllFalseHybridGroupAsEmpty) {
 TEST_F(FieldReaderTest, infersOmittedHybridGroupStreams) {
   SchemaBuilder builder;
   auto root = builder.createRowTypeBuilder(1);
-  auto hybridMap = builder.createHybridFlatMapTypeBuilder(ScalarKind::Int32);
+  auto hybridMap = builder.createHybridFlatMapTypeBuilder(
+      ScalarKind::Int32, HybridFlatMap::KeyPresenceMode::kBitmap);
   auto groupValue = builder.createScalarTypeBuilder(ScalarKind::Int64);
   const auto valueOffset = groupValue->scalarDescriptor().offset();
   const auto group = hybridMap->addGroup(7, {"1"}, std::move(groupValue));
@@ -582,7 +629,8 @@ TEST_F(FieldReaderTest, infersOmittedHybridGroupStreams) {
 TEST_F(FieldReaderTest, rejectsMalformedHybridGroupStreams) {
   SchemaBuilder builder;
   auto root = builder.createRowTypeBuilder(1);
-  auto hybridMap = builder.createHybridFlatMapTypeBuilder(ScalarKind::Int32);
+  auto hybridMap = builder.createHybridFlatMapTypeBuilder(
+      ScalarKind::Int32, HybridFlatMap::KeyPresenceMode::kBitmap);
   auto groupValue = builder.createScalarTypeBuilder(ScalarKind::Int64);
   const auto groupValueOffset = groupValue->scalarDescriptor().offset();
   const auto group = hybridMap->addGroup(7, {"1", "2"}, std::move(groupValue));
@@ -668,7 +716,7 @@ TEST_F(FieldReaderTest, rejectsMalformedHybridGroupStreams) {
         folly::coro::blockingWait(reader->co_next(1, output)), message);
   };
   expectNullableMetadataFailure(
-      /*nullableKey=*/true, "key-presence stream must not contain nulls");
+      /*nullableKey=*/true, "key-presence-bits stream must not contain nulls");
   expectNullableMetadataFailure(
       /*nullableKey=*/false, "in-map stream must not contain nulls");
 
@@ -697,7 +745,7 @@ TEST_F(FieldReaderTest, rejectsMalformedHybridGroupStreams) {
       /*keyPresenceChunkRowCounts=*/{1, 1},
       /*inMap=*/{true, true},
       /*inMapChunkRowCounts=*/{2},
-      "key-presence stream must have one encoded chunk per decode run");
+      "key-presence-bits stream must have one encoded chunk per decode run");
   expectMultipleChunkFailure(
       /*keyPresence=*/{true},
       /*keyPresenceChunkRowCounts=*/{1},
@@ -722,6 +770,40 @@ TEST_F(FieldReaderTest, rejectsMalformedHybridGroupStreams) {
   EXPECT_NO_THROW(partialReader->reset());
 }
 
+TEST_F(FieldReaderTest, rejectsKeyListWithoutInMapRows) {
+  SchemaBuilder builder;
+  auto root = builder.createRowTypeBuilder(1);
+  auto hybridMap = builder.createHybridFlatMapTypeBuilder(
+      ScalarKind::Int32, HybridFlatMap::KeyPresenceMode::kKeyList);
+  hybridMap->addGroup(
+      7, {"1"}, builder.createScalarTypeBuilder(ScalarKind::Int64));
+  const auto defaultGroup = hybridMap->addGroup(
+      HybridFlatMap::kDefaultGroupId,
+      {},
+      builder.createScalarTypeBuilder(ScalarKind::Int64));
+  root->addChild("features", hybridMap);
+  const auto schema = SchemaReader::getSchema(builder.schemaNodes());
+  const std::shared_ptr<const velox::dwio::common::TypeWithId> typeWithId =
+      velox::dwio::common::TypeWithId::create(convertToVeloxType(*schema));
+  std::vector<uint32_t> streamOffsets;
+  auto factory = FieldReaderFactory::create(
+      {},
+      schema,
+      typeWithId,
+      streamOffsets,
+      [](uint32_t) { return true; },
+      pool_.get());
+
+  folly::F14FastMap<offset_size, std::unique_ptr<Decoder>> decoders;
+  decoders[defaultGroup.keyPresenceDescriptor.offset()] =
+      std::make_unique<TestDecoder<int32_t>>(std::vector<int32_t>{9});
+  auto reader = factory->createReader(decoders);
+  velox::VectorPtr output;
+  NIMBLE_ASSERT_FILE_THROW(
+      folly::coro::blockingWait(reader->co_next(1, output)),
+      "Hybrid FlatMap group lists keys without in-map rows");
+}
+
 TEST_F(FieldReaderTest, filtersDecodedHybridGroupsToRequestedFeatures) {
   using Entry = std::pair<int32_t, std::optional<int64_t>>;
   const std::vector<std::vector<Entry>> maps{
@@ -736,7 +818,8 @@ TEST_F(FieldReaderTest, filtersDecodedHybridGroupsToRequestedFeatures) {
       SerializerOptions{
           .version = SerializationVersion::kSerialization,
           .hybridFlatMapColumns =
-              {{"features", makeHybridFlatMap({{"1", "2"}})}},
+              {{"features",
+                makeHybridFlatMap(ScalarKind::Int32, {{"1", "2"}})}},
       },
       input->type(),
       pool_.get()};
@@ -813,10 +896,91 @@ TEST_F(FieldReaderTest, filtersDecodedHybridGroupsToRequestedFeatures) {
   EXPECT_EQ(output->size(), 0);
 }
 
+TEST_F(FieldReaderTest, filtersKeyListDefaultToRequestedFeatures) {
+  using Entry = std::pair<int32_t, std::optional<int64_t>>;
+  const auto input = vectorMaker_->rowVector(
+      {"features"},
+      {vectorMaker_->mapVector<int32_t, int64_t>(
+          std::vector<std::vector<Entry>>{
+              {{1, 10}, {2, 20}, {10, 100}, {9, 90}},
+              {{2, 21}, {10, 101}},
+              {{9, 92}},
+          })});
+  auto hybridMap = makeHybridFlatMap(ScalarKind::Int32, {{"1", "2"}});
+  hybridMap.setDefaultGroupKeyPresenceMode(
+      HybridFlatMap::KeyPresenceMode::kKeyList);
+  Serializer serializer{
+      SerializerOptions{
+          .version = SerializationVersion::kSerialization,
+          .hybridFlatMapColumns = {{"features", std::move(hybridMap)}},
+      },
+      input->type(),
+      pool_.get()};
+  const std::string serialized{
+      serializer.serialize(input, OrderedRanges::of(0, input->size()))};
+  const auto schema =
+      SchemaReader::getSchema(serializer.schemaBuilder().schemaNodes());
+
+  // Default may list ungrouped key 9 in any batch, so Default is read and
+  // filtered to the requested keys.
+  {
+    std::vector<Deserializer::Subfield> selected;
+    selected.emplace_back("features[1]");
+    selected.emplace_back("features[9]");
+    Deserializer deserializer{
+        schema, selected, pool_.get(), DeserializerOptions{}};
+    velox::VectorPtr output;
+    deserializer.deserialize(serialized, output);
+
+    const auto expected = vectorMaker_->rowVector(
+        {"features"},
+        {vectorMaker_->mapVector<int32_t, int64_t>(
+            std::vector<std::vector<Entry>>{
+                {{1, 10}, {9, 90}},
+                {},
+                {{9, 92}},
+            })});
+    ASSERT_EQ(output->size(), expected->size());
+    for (velox::vector_size_t row = 0; row < expected->size(); ++row) {
+      EXPECT_TRUE(expected->equalValueAt(output.get(), row, row))
+          << "row " << row << " expected " << expected->toString(row)
+          << " actual " << output->toString(row);
+    }
+  }
+
+  // A request for configured keys only never reads Default.
+  {
+    const auto& defaultGroup =
+        schema->asRow().childAt(0)->asHybridFlatMap().defaultGroup();
+    const std::shared_ptr<const velox::dwio::common::TypeWithId> typeWithId =
+        velox::dwio::common::TypeWithId::create(convertToVeloxType(*schema));
+    FieldReaderParams params;
+    params.flatMapFeatureSelector["features"] = {
+        .features = {"1", "2"}, .mode = SelectionMode::Include};
+    std::vector<uint32_t> streamOffsets;
+    const auto factory = FieldReaderFactory::create(
+        params,
+        schema,
+        typeWithId,
+        streamOffsets,
+        [](uint32_t) { return true; },
+        pool_.get());
+    ASSERT_NE(factory, nullptr);
+    EXPECT_THAT(
+        streamOffsets,
+        testing::Not(
+            testing::Contains(defaultGroup.keyPresenceDescriptor.offset())));
+    EXPECT_THAT(
+        streamOffsets,
+        testing::Not(testing::Contains(defaultGroup.inMapDescriptor.offset())));
+  }
+}
+
 TEST_F(FieldReaderTest, excludesRequestedKeysAfterWholeGroupDecode) {
   SchemaBuilder builder;
   auto root = builder.createRowTypeBuilder(1);
-  auto hybridMap = builder.createHybridFlatMapTypeBuilder(ScalarKind::Int32);
+  auto hybridMap = builder.createHybridFlatMapTypeBuilder(
+      ScalarKind::Int32, HybridFlatMap::KeyPresenceMode::kBitmap);
   auto groupValue = builder.createScalarTypeBuilder(ScalarKind::Int64);
   const auto groupValueOffset = groupValue->scalarDescriptor().offset();
   const auto group = hybridMap->addGroup(0, {"1", "2"}, std::move(groupValue));
@@ -878,7 +1042,8 @@ TEST_F(FieldReaderTest, skipsNullRowsWithoutAdvancingHybridGroups) {
   Serializer serializer{
       SerializerOptions{
           .version = SerializationVersion::kSerialization,
-          .hybridFlatMapColumns = {{"features", makeHybridFlatMap({{"1"}})}},
+          .hybridFlatMapColumns =
+              {{"features", makeHybridFlatMap(ScalarKind::Int32, {{"1"}})}},
       },
       input->type(),
       pool_.get()};
@@ -965,7 +1130,8 @@ TEST_F(FieldReaderTest, hybridFlatMapRoundTripsNestedValues) {
       SerializerOptions{
           .version = SerializationVersion::kSerialization,
           .hybridFlatMapColumns =
-              {{"features", makeHybridFlatMap({{"1", "2"}, {"3"}})}},
+              {{"features",
+                makeHybridFlatMap(ScalarKind::Int32, {{"1", "2"}, {"3"}})}},
       },
       type,
       pool_.get()};

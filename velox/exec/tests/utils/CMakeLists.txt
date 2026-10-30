@@ -21,6 +21,7 @@ add_library(
   HiveConnectorTestBase.cpp
   IndexLookupJoinTestBase.cpp
   LocalExchangeSource.cpp
+  LocalFixedPoint.cpp
   OperatorTestBase.cpp
   PlanBuilder.cpp
   QueryAssertions.cpp
@@ -47,6 +48,7 @@ velox_add_test_headers(
   HiveConnectorTestBase.h
   IndexLookupJoinTestBase.h
   LocalExchangeSource.h
+  LocalFixedPoint.h
   MergeTestBase.h
   OperatorTestBase.h
   PlanBuilder.h

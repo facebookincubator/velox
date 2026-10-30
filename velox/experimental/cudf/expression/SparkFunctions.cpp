@@ -46,6 +46,19 @@ void registerSparkArrayAccessFunctions(const std::string& prefix) {
 void registerSparkFunctions(const std::string& prefix) {
   using exec::FunctionSignatureBuilder;
 
+  registerCudfFunction(
+      prefix + "isnull",
+      [](const std::string&,
+         const core::TypedExprPtr& expr,
+         memory::MemoryPool*) {
+        return std::make_shared<IsNullFunction>(expr);
+      },
+      {FunctionSignatureBuilder()
+           .typeVariable("T")
+           .returnType("boolean")
+           .argumentType("T")
+           .build()});
+
   // CastFunction's cast from VARCHAR and cast from TIMESTAMP to VARCHAR follow
   // Presto's rules, not Spark's.
   setPrestoCastEnabled(false);

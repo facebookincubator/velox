@@ -1245,11 +1245,21 @@ TEST_F(TableScanTest, partitionTimestampMixedWithFileTimestamp) {
   const auto caseValues = makeRowVector({makeFlatVector<Timestamp>(
       {Timestamp(1'577'836'800, 0), Timestamp(1'700'000'001, 0)})});
 
+  // The reader's timestamp type is pinned to a unit distinct from both default
+  // units below, so each scan proves the key follows the reader rather than a
+  // fixed unit. The connector and session settings take the enumerator's
+  // integer value.
+  const auto readerTimestampType = std::to_string(
+      static_cast<int32_t>(cudf::type_id::TIMESTAMP_MICROSECONDS));
+
   // Projects 'projection' over the file and partition timestamps of a split
-  // in the partition 'partitionValue', expecting 'expected'.
+  // in the partition 'partitionValue', expecting 'expected'. The session pins
+  // the reader's timestamp type to 'sessionTimestampType' when that is set.
   const auto check = [&](const std::string& projection,
                          const std::optional<std::string>& partitionValue,
-                         const RowVectorPtr& expected) {
+                         const RowVectorPtr& expected,
+                         const std::optional<std::string>&
+                             sessionTimestampType) {
     SCOPED_TRACE(projection);
     auto plan =
         PlanBuilder(pool_.get())
@@ -1267,37 +1277,56 @@ TEST_F(TableScanTest, partitionTimestampMixedWithFileTimestamp) {
             .endTableScan()
             .project({projection})
             .planNode();
-    AssertQueryBuilder(plan, duckDbQueryRunner_)
-        .connectorSessionProperty(
-            kCudfHiveConnectorId,
-            hive::HiveConfig::kReadTimestampPartitionValueAsLocalTimeSession,
-            "false")
+    AssertQueryBuilder builder(plan, duckDbQueryRunner_);
+    builder.connectorSessionProperty(
+        kCudfHiveConnectorId,
+        hive::HiveConfig::kReadTimestampPartitionValueAsLocalTimeSession,
+        "false");
+    if (sessionTimestampType.has_value()) {
+      builder.connectorSessionProperty(
+          kCudfHiveConnectorId,
+          cudf_velox::connector::hive::CudfHiveConfig::kTimestampTypeSession,
+          *sessionTimestampType);
+    }
+    builder
         .splits({makePartitionedSplit(
             filePath->getPath(), {{"partition_ts", partitionValue}})})
         .assertResults(expected);
   };
 
-  // The reader's timestamp type is pinned to a unit distinct from both default
-  // units below, so each scan proves the key follows the reader rather than a
-  // fixed unit. The setting takes the enumerator's integer value.
-  resetCudfHiveConnector(
-      std::make_shared<config::ConfigBase>(
-          std::unordered_map<std::string, std::string>{
-              {cudf_velox::connector::hive::CudfHiveConfig::kTimestampType,
-               std::to_string(
-                   static_cast<int32_t>(
-                       cudf::type_id::TIMESTAMP_MICROSECONDS))}}));
   for (const auto& [unit, label] :
        {std::pair{cudf::type_id::TIMESTAMP_MILLISECONDS, "ms default unit"},
         std::pair{cudf::type_id::TIMESTAMP_NANOSECONDS, "ns default unit"}}) {
     SCOPED_TRACE(label);
     config.timestampUnit = unit;
-    check("file_ts", std::nullopt, fileValues);
-    check("coalesce(partition_ts, file_ts)", std::nullopt, fileValues);
+    check("file_ts", std::nullopt, fileValues, readerTimestampType);
+    check(
+        "coalesce(partition_ts, file_ts)",
+        std::nullopt,
+        fileValues,
+        readerTimestampType);
     check(
         "CASE WHEN flag THEN partition_ts ELSE file_ts END",
         "2020-01-01 00:00:00",
-        caseValues);
+        caseValues,
+        readerTimestampType);
+  }
+
+  // Without a session timestamp type, the key follows the connector's
+  // parquet.reader.timestamp-type.
+  {
+    SCOPED_TRACE("connector timestamp type");
+    config.timestampUnit = cudf::type_id::TIMESTAMP_MILLISECONDS;
+    resetCudfHiveConnector(
+        std::make_shared<config::ConfigBase>(
+            std::unordered_map<std::string, std::string>{
+                {cudf_velox::connector::hive::CudfHiveConfig::kTimestampType,
+                 readerTimestampType}}));
+    check(
+        "coalesce(partition_ts, file_ts)",
+        /*partitionValue=*/std::nullopt,
+        fileValues,
+        /*sessionTimestampType=*/std::nullopt);
   }
 }
 

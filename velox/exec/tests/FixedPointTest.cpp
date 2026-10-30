@@ -48,6 +48,7 @@
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 #include "velox/exec/tests/utils/LocalExchangeSource.h"
+#include "velox/exec/tests/utils/LocalFixedPoint.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/exec/tests/utils/TestIndexStorageConnector.h"
 #include "velox/type/Filter.h"
@@ -62,6 +63,7 @@ using core::PlanNodePtr;
 using core::StateDeclarationPtr;
 using core::VectorStateDeclaration;
 using exec::test::AssertQueryBuilder;
+using exec::test::LocalFixedPoint;
 using exec::test::PlanBuilder;
 
 // Appends the rows of 'result' to 'rows' as (col0, col1) BIGINT pairs.
@@ -189,62 +191,9 @@ class FixedPointTest : public exec::test::HiveConnectorTestBase {
     return node->as<FixedPointNode>()->numWorkers();
   }
 
-  // Runs the iteration loops, kept off the query executor the sub-tasks'
-  // drivers run on.  One thread serves every loop, nested or peer: a loop
-  // suspends while its sub-tasks run.
-  static folly::Executor* orchestrationExecutor() {
-    static const auto kExecutor =
-        std::make_shared<folly::CPUThreadPoolExecutor>(1);
-    return kExecutor.get();
-  }
-
-  // Formats the nesting of 'address', one "/{planNodeId}.{iteration}" per step.
-  static std::string nestingSuffix(
-      const FixedPointOptions::LoopAddress& address) {
-    std::string suffix;
-    for (const auto& step : address.nesting) {
-      suffix += fmt::format("/{}.{}", step.planNodeId, step.iteration);
-    }
-    return suffix;
-  }
-
-  // Returns the in-process "local://" task id of the producer 'planNodeId' of
-  // the loop at 'address' in 'iteration'.  LocalExchangeSource reads a task by
-  // its id, so the same string names the producer and the split reading it.
-  static std::string producerId(
-      const FixedPointOptions::LoopAddress& address,
-      int32_t iteration,
-      const std::string& planNodeId) {
-    return fmt::format(
-        "local://{}{}.it{}.{}",
-        address.worker,
-        nestingSuffix(address),
-        iteration,
-        planNodeId);
-  }
-
-  // FixedPointOptions naming sub-tasks in the in-process "local://" scheme.  A
-  // FixedPointLoop provides no defaults, so the application (here the test)
-  // supplies them.
+  // FixedPointOptions naming sub-tasks in the in-process "local://" scheme.
   static const FixedPointOptions& localOptions() {
-    static const FixedPointOptions kOptions = [] {
-      FixedPointOptions options;
-      options.orchestrationExecutor = orchestrationExecutor();
-      options.producerTaskId = producerId;
-      options.producerSplit = [](const FixedPointOptions::LoopAddress& peer,
-                                 int32_t iteration,
-                                 const std::string& planNodeId)
-          -> std::shared_ptr<connector::ConnectorSplit> {
-        return std::make_shared<exec::RemoteConnectorSplit>(
-            producerId(peer, iteration, planNodeId));
-      };
-      options.subTaskId = [](const std::string& workerTaskId, int64_t counter) {
-        return fmt::format("{}.sub{}", workerTaskId, counter);
-      };
-      return options;
-    }();
-
-    return kOptions;
+    return LocalFixedPoint::options();
   }
 
   // A publishVerdict hook that drops the verdict.
@@ -315,6 +264,16 @@ class FixedPointTest : public exec::test::HiveConnectorTestBase {
   // Same, but converges at val='target', after 'target' iterations, unless
   // 'maxIterations' runs out first.
   core::PlanNodePtr countingNodeTo(int64_t target, int32_t maxIterations) {
+    return countingNodeWith(
+        "val + 1", fmt::format("val >= {}", target), maxIterations);
+  }
+
+  // Same, but each iteration sets val to 'nextVal', and the loop converges once
+  // 'converged' holds; both are expressions over key and val.
+  core::PlanNodePtr countingNodeWith(
+      std::string_view nextVal,
+      std::string_view converged,
+      int32_t maxIterations) {
     auto schema = ROW({"key", "val"}, BIGINT());
     auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
     auto seed = makeKeyValueRow(0, 0);
@@ -327,11 +286,13 @@ class FixedPointTest : public exec::test::HiveConnectorTestBase {
                 PlanBuilder(idGenerator).values({seed}).planNode()),
             PlanBuilder(idGenerator)
                 .stateSource("values", schema)
-                .project({"key AS next_key", "val + 1 AS next_val"}),
+                .project(
+                    {"key AS next_key",
+                     fmt::format("{} AS next_val", nextVal)}),
             ConvergenceConfig::converging(
                 PlanBuilder(idGenerator)
                     .stateSource("values", schema)
-                    .project({fmt::format("val >= {} AS converged", target)})
+                    .project({fmt::format("{} AS converged", converged)})
                     .planNode(),
                 maxIterations),
             /*outputStateEntry=*/"values")
@@ -355,6 +316,63 @@ class FixedPointTest : public exec::test::HiveConnectorTestBase {
                     .planNode()),
             PlanBuilder(idGenerator).stateSource("values", schema),
             ConvergenceConfig::withMaxIterations(1))
+        .planNode();
+  }
+
+  // A single-worker fixed point to nest in a plan built with 'idGenerator'.  It
+  // counts ival up to 3 in three iterations and emits {(0, 3)} as (ikey, ival).
+  core::PlanNodePtr innerCountingNode(
+      const std::shared_ptr<core::PlanNodeIdGenerator>& idGenerator) {
+    auto schema = ROW({"ikey", "ival"}, BIGINT());
+    auto seed = makeKeyValueRow(0, 0, schema->names());
+    return PlanBuilder(idGenerator)
+        .fixedPoint(
+            std::make_shared<VectorStateDeclaration>(
+                "inner",
+                schema,
+                PlanBuilder(idGenerator).values({seed}).planNode()),
+            PlanBuilder(idGenerator)
+                .stateSource("inner", schema)
+                .project({"ikey", "ival + 1 AS ival"}),
+            ConvergenceConfig::converging(
+                PlanBuilder(idGenerator)
+                    .stateSource("inner", schema)
+                    .project({"ival >= 3 AS converged"})
+                    .planNode(),
+                100),
+            /*outputStateEntry=*/"inner")
+        .planNode();
+  }
+
+  // A single-worker fixed point whose body runs innerCountingNode() on the
+  // build side of its join.  Each outer iteration adds the inner loop's 3 to
+  // val, reaching 3 then 6 in two iterations, and emits {(0, 6)}.
+  core::PlanNodePtr nestedCountingNode() {
+    auto schema = ROW({"key", "val"}, BIGINT());
+    auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+    auto seed = makeKeyValueRow(0, 0);
+    return PlanBuilder(idGenerator)
+        .fixedPoint(
+            std::make_shared<VectorStateDeclaration>(
+                "outer",
+                schema,
+                PlanBuilder(idGenerator).values({seed}).planNode()),
+            PlanBuilder(idGenerator)
+                .stateSource("outer", schema)
+                .hashJoin(
+                    {"key"},
+                    {"ikey"},
+                    innerCountingNode(idGenerator),
+                    "",
+                    {"key", "val", "ival"})
+                .project({"key", "val + ival AS val"}),
+            ConvergenceConfig::converging(
+                PlanBuilder(idGenerator)
+                    .stateSource("outer", schema)
+                    .project({"val >= 6 AS converged"})
+                    .planNode(),
+                100),
+            /*outputStateEntry=*/"outer")
         .planNode();
   }
 
@@ -405,6 +423,40 @@ class FixedPointTest : public exec::test::HiveConnectorTestBase {
     folly::Executor* const executor_;
     const std::function<void(folly::Func, folly::Executor&)> onAdd_;
   };
+
+  // Runs 'task' until it ends: drains it in serial mode, or starts it and waits
+  // for it in parallel mode.
+  static void runToEnd(exec::Task& task) {
+    if (task.executionMode() == exec::Task::ExecutionMode::kSerial) {
+      while (task.next() != nullptr) {
+      }
+    } else {
+      task.start(/*maxDrivers=*/1);
+      task.taskCompletionFuture().wait();
+    }
+  }
+
+  // One call of FixedPointOptions::onIterationStats.
+  struct IterationReport {
+    std::vector<FixedPointOptions::NestingStep> nesting;
+    FixedPointIterationExecutionStats stats;
+  };
+
+  using IterationReports = folly::Synchronized<std::vector<IterationReport>>;
+
+  // localOptions() with an onIterationStats hook that appends each call to
+  // 'reports'.  Shared, since the loop's task holds the hook.
+  static FixedPointOptions reportingOptions(
+      std::shared_ptr<IterationReports> reports) {
+    auto options = localOptions();
+    options.onIterationStats =
+        [reports = std::move(reports)](
+            const std::vector<FixedPointOptions::NestingStep>& nesting,
+            const FixedPointIterationExecutionStats& stats) {
+          reports->wlock()->push_back({.nesting = nesting, .stats = stats});
+        };
+    return options;
+  }
 
   // Starts a task running 'plan', a producer whose partitioned output a fixed
   // point's initial plan reads through an Exchange.
@@ -490,7 +542,10 @@ class FixedPointTest : public exec::test::HiveConnectorTestBase {
     auto verdictKey = [](const FixedPointOptions::LoopAddress& workerZero,
                          int32_t iteration) {
       return fmt::format(
-          "{}{}#{}", workerZero.worker, nestingSuffix(workerZero), iteration);
+          "{}{}#{}",
+          workerZero.worker,
+          LocalFixedPoint::nestingSuffix(workerZero.nesting),
+          iteration);
     };
     if (!options.publishVerdict) {
       options.publishVerdict =
@@ -823,7 +878,7 @@ class FixedPointTest : public exec::test::HiveConnectorTestBase {
   // numWorkers * numPlans sub-task drivers live at once (producers stay up
   // while peers' consumers drain them), so this must comfortably exceed that.
   // The run() loops that block on these sub-tasks run on a separate executor
-  // (see orchestrationExecutor()).
+  // (see LocalFixedPoint::orchestrationExecutor()).
   std::shared_ptr<folly::CPUThreadPoolExecutor> cpuExecutor_{
       std::make_shared<folly::CPUThreadPoolExecutor>(16)};
 
@@ -3092,29 +3147,7 @@ TEST_F(FixedPointTest, stateHashJoinAcrossDrivers) {
 // so a loop nested there runs its own iterations on one driver too.
 TEST_F(FixedPointTest, nestedFixedPointRunsWithinItsPlansDrivers) {
   auto outerSchema = ROW({"key", "val"}, BIGINT());
-  auto innerSchema = ROW({"ikey", "ival"}, BIGINT());
   auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-
-  // Inner fixed point: counts ival up to 3, emitting {(0, 3)}.
-  auto innerSeed = makeKeyValueRow(0, 0, innerSchema->names());
-  core::PlanNodePtr innerFixedPoint =
-      PlanBuilder(idGenerator)
-          .fixedPoint(
-              std::make_shared<VectorStateDeclaration>(
-                  "inner",
-                  innerSchema,
-                  PlanBuilder(idGenerator).values({innerSeed}).planNode()),
-              PlanBuilder(idGenerator)
-                  .stateSource("inner", innerSchema)
-                  .project({"ikey", "ival + 1 AS ival"}),
-              ConvergenceConfig::converging(
-                  PlanBuilder(idGenerator)
-                      .stateSource("inner", innerSchema)
-                      .project({"ival >= 3 AS converged"})
-                      .planNode(),
-                  100),
-              /*outputStateEntry=*/"inner")
-          .planNode();
 
   // Outer fixed point: val grows by one per iteration, and the convergence
   // plan joins the inner loop's 3, so the loop stops once val reaches 3.
@@ -3135,7 +3168,7 @@ TEST_F(FixedPointTest, nestedFixedPointRunsWithinItsPlansDrivers) {
                       .hashJoin(
                           {"key"},
                           {"ikey"},
-                          innerFixedPoint,
+                          innerCountingNode(idGenerator),
                           "",
                           {"val", "ival"})
                       .project({"val + ival >= 6 AS converged"})
@@ -3241,8 +3274,7 @@ TEST_F(FixedPointTest, taskReachesTerminalStateWhenLoopFinishes) {
   {
     auto task = makeTask(
         countingNode(), exec::Task::ExecutionMode::kSerial, "terminal-serial");
-    while (task->next() != nullptr) {
-    }
+    runToEnd(*task);
     EXPECT_EQ(task->state(), exec::TaskState::kFinished);
     EXPECT_TRUE(task->taskCompletionFuture().isReady());
     EXPECT_EQ(task->error(), nullptr);
@@ -3252,8 +3284,7 @@ TEST_F(FixedPointTest, taskReachesTerminalStateWhenLoopFinishes) {
         countingNode(),
         exec::Task::ExecutionMode::kParallel,
         "terminal-parallel");
-    task->start(/*maxDrivers=*/1);
-    task->taskCompletionFuture().wait();
+    runToEnd(*task);
     EXPECT_EQ(task->state(), exec::TaskState::kFinished);
     EXPECT_EQ(task->error(), nullptr);
   }
@@ -3269,13 +3300,7 @@ TEST_F(FixedPointTest, reportsExecutionStats) {
         exec::Task::ExecutionMode::kParallel}) {
     SCOPED_TRACE(executionModeString(mode));
     auto task = makeTask(countingNode(), mode, "stats");
-    if (mode == exec::Task::ExecutionMode::kSerial) {
-      while (task->next() != nullptr) {
-      }
-    } else {
-      task->start(/*maxDrivers=*/1);
-      task->taskCompletionFuture().wait();
-    }
+    runToEnd(*task);
     ASSERT_EQ(task->error(), nullptr);
 
     auto stats = task->fixedPointExecutionStats();
@@ -3305,42 +3330,84 @@ TEST_F(FixedPointTest, reportsExecutionStats) {
       exec::Task::ExecutionMode::kSerial,
       "plain");
   EXPECT_FALSE(plainTask->fixedPointExecutionStats().has_value());
-  while (plainTask->next() != nullptr) {
-  }
+  runToEnd(*plainTask);
 }
 
 // The statistics stay readable after the loop fails, which is when a caller
-// needs them most.
+// needs them most: when an iteration's body or convergence check fails, or when
+// the loop does not converge.  onIterationStats has received the iterations
+// that completed, and not the one that failed.
 TEST_F(FixedPointTest, executionStatsSurviveFailure) {
-  auto node = countingNodeTo(/*target=*/100, /*maxIterations=*/2);
-  auto task = makeTask(node, exec::Task::ExecutionMode::kParallel, "failed");
-  task->start(/*maxDrivers=*/1);
-  task->taskCompletionFuture().wait();
-  ASSERT_EQ(task->state(), exec::TaskState::kFailed);
+  struct TestCase {
+    std::string label;
+    core::PlanNodePtr node;
+    std::string error;
+    // Iterations the statistics record, one whose convergence check failed
+    // included.
+    size_t numRecordedIterations;
+  };
+  const std::vector<TestCase> testCases{
+      {
+          .label = "maxIterations",
+          .node = countingNodeTo(/*target=*/100, /*maxIterations=*/2),
+          .error = "Fixed point did not converge within 2 iterations",
+          .numRecordedIterations = 2,
+      },
+      // The body of iteration 2 divides by zero.
+      {
+          .label = "body",
+          .node = countingNodeWith(
+              "val + 1 + 0 / (2 - val)", "val >= 100", /*maxIterations=*/100),
+          .error = "division by zero",
+          .numRecordedIterations = 2,
+      },
+      // The convergence check of iteration 2 divides by zero.
+      {
+          .label = "convergence",
+          .node = countingNodeWith(
+              "val + 1", "val / (3 - val) >= 100", /*maxIterations=*/100),
+          .error = "division by zero",
+          .numRecordedIterations = 3,
+      },
+  };
+  for (const auto& testCase : testCases) {
+    SCOPED_TRACE(testCase.label);
+    auto reports = std::make_shared<IterationReports>();
+    const auto options = reportingOptions(reports);
+    auto task = makeTask(
+        testCase.node,
+        exec::Task::ExecutionMode::kParallel,
+        fmt::format("failed-{}", testCase.label),
+        &options);
+    runToEnd(*task);
+    ASSERT_EQ(task->state(), exec::TaskState::kFailed);
+    VELOX_ASSERT_THROW(std::rethrow_exception(task->error()), testCase.error);
 
-  auto stats = task->fixedPointExecutionStats();
-  ASSERT_TRUE(stats.has_value());
-  ASSERT_THAT(stats->iterations, testing::SizeIs(2));
-  EXPECT_FALSE(stats->iterations[0].converged);
-  EXPECT_FALSE(stats->iterations[1].converged);
+    auto stats = task->fixedPointExecutionStats();
+    ASSERT_TRUE(stats.has_value());
+    ASSERT_THAT(
+        stats->iterations, testing::SizeIs(testCase.numRecordedIterations));
+    for (const auto& iteration : stats->iterations) {
+      EXPECT_FALSE(iteration.converged);
+    }
+    std::vector<int32_t> reported;
+    for (const auto& report : *reports->rlock()) {
+      reported.push_back(report.stats.iteration);
+    }
+    EXPECT_THAT(reported, testing::ElementsAre(0, 1));
+  }
 }
 
 // Only the first three iterations and the latest one keep their sub-tasks'
-// TaskStats, which bounds memory for long-running loops.
+// TaskStats, which bounds memory for long-running loops.  onIterationStats
+// receives every iteration with its TaskStats, in order.  Here the hook also
+// reads the task's statistics, whose latest iteration is the one reported, and
+// then throws, which the loop logs and ignores.
 TEST_F(FixedPointTest, executionStatsBoundDetailedIterations) {
-  auto node = countingNodeTo(/*target=*/6, /*maxIterations=*/10);
-  auto task = makeTask(node, exec::Task::ExecutionMode::kSerial, "bounded");
-  while (task->next() != nullptr) {
-  }
-
-  auto stats = task->fixedPointExecutionStats();
-  ASSERT_TRUE(stats.has_value());
-  std::vector<bool> detailed;
-  for (const auto& iteration : stats->iterations) {
-    detailed.push_back(
-        !iteration.body.plans[0].taskStats.pipelineStats.empty() &&
-        !iteration.convergence->plans[0].taskStats.pipelineStats.empty());
-  }
+  auto detailed = [](const FixedPointIterationExecutionStats& iteration) {
+    return !iteration.body.plans[0].taskStats.pipelineStats.empty() &&
+        !iteration.convergence->plans[0].taskStats.pipelineStats.empty();
+  };
   const std::vector<bool> expected{
       true,
       true,
@@ -3349,7 +3416,53 @@ TEST_F(FixedPointTest, executionStatsBoundDetailedIterations) {
       false,
       true,
   };
-  EXPECT_EQ(detailed, expected);
+  for (auto mode :
+       {exec::Task::ExecutionMode::kSerial,
+        exec::Task::ExecutionMode::kParallel}) {
+    SCOPED_TRACE(executionModeString(mode));
+    auto reports = std::make_shared<IterationReports>();
+    auto options = reportingOptions(reports);
+    const exec::Task* reportingTask = nullptr;
+    std::vector<int32_t> latestInTaskStats;
+    options.onIterationStats =
+        [record = options.onIterationStats, &reportingTask, &latestInTaskStats](
+            const std::vector<FixedPointOptions::NestingStep>& nesting,
+            const FixedPointIterationExecutionStats& stats) {
+          record(nesting, stats);
+          latestInTaskStats.push_back(reportingTask->fixedPointExecutionStats()
+                                          ->iterations.back()
+                                          .iteration);
+          throw std::runtime_error("Injected statistics failure");
+        };
+    auto task = makeTask(
+        countingNodeTo(/*target=*/6, /*maxIterations=*/10),
+        mode,
+        "bounded",
+        &options);
+    reportingTask = task.get();
+    runToEnd(*task);
+    ASSERT_EQ(task->error(), nullptr);
+
+    auto stats = task->fixedPointExecutionStats();
+    ASSERT_TRUE(stats.has_value());
+    std::vector<bool> retained;
+    for (const auto& iteration : stats->iterations) {
+      retained.push_back(detailed(iteration));
+    }
+    EXPECT_EQ(retained, expected);
+
+    const auto lockedReports = reports->rlock();
+    ASSERT_EQ(lockedReports->size(), stats->iterations.size());
+    ASSERT_EQ(latestInTaskStats.size(), stats->iterations.size());
+    for (size_t i = 0; i < lockedReports->size(); ++i) {
+      const auto& report = (*lockedReports)[i];
+      EXPECT_THAT(report.nesting, testing::IsEmpty());
+      EXPECT_EQ(report.stats.iteration, i);
+      EXPECT_EQ(report.stats.converged, stats->iterations[i].converged);
+      EXPECT_TRUE(detailed(report.stats));
+      EXPECT_EQ(latestInTaskStats[i], i);
+    }
+  }
 }
 
 // A chain records each plan's driver limit, which the sub-task's own TaskStats
@@ -3406,6 +3519,48 @@ TEST_F(FixedPointTest, executionStatsRecordDrivers) {
   EXPECT_EQ(plans[1].taskStats.numTotalDrivers, 2);
   // The Project above the fixed point runs in the task's own pipeline.
   EXPECT_EQ(task->taskStats().numTotalDrivers, 5);
+}
+
+// A nested loop inherits onIterationStats and reports its own iterations, with
+// its nesting, before the outer iteration that ran it.
+TEST_F(FixedPointTest, onIterationStatsFromNestedLoop) {
+  const auto plan = nestedCountingNode();
+  const auto& innerId = core::PlanNode::findFirstNode<FixedPointNode>(
+                            plan->as<FixedPointNode>()->plans().front().get())
+                            ->id();
+  for (auto mode :
+       {exec::Task::ExecutionMode::kSerial,
+        exec::Task::ExecutionMode::kParallel}) {
+    SCOPED_TRACE(executionModeString(mode));
+    auto reports = std::make_shared<IterationReports>();
+    const auto options = reportingOptions(reports);
+    auto task = makeTask(plan, mode, "report-nested", &options);
+    runToEnd(*task);
+    ASSERT_EQ(task->error(), nullptr);
+
+    // One "{loop}{nesting}#{iteration}" per call, marked when it converged.
+    std::vector<std::string> calls;
+    for (const auto& report : *reports->rlock()) {
+      calls.push_back(
+          fmt::format(
+              "{}{}#{}{}",
+              report.nesting.empty() ? "outer" : "inner",
+              LocalFixedPoint::nestingSuffix(report.nesting),
+              report.stats.iteration,
+              report.stats.converged ? " converged" : ""));
+    }
+    EXPECT_THAT(
+        calls,
+        testing::ElementsAre(
+            fmt::format("inner/{}.0#0", innerId),
+            fmt::format("inner/{}.0#1", innerId),
+            fmt::format("inner/{}.0#2 converged", innerId),
+            "outer#0",
+            fmt::format("inner/{}.1#0", innerId),
+            fmt::format("inner/{}.1#1", innerId),
+            fmt::format("inner/{}.1#2 converged", innerId),
+            "outer#1 converged"));
+  }
 }
 
 // A parallel fixed point needs an orchestration executor separate from the
@@ -3551,7 +3706,8 @@ void holdUntilStopped(exec::Task& owner, HeldDriver& held) {
 DEBUG_ONLY_TEST_F(FixedPointTest, loopStartsAfterDrivers) {
   std::atomic_int32_t count{0};
   InterceptingExecutor executor(
-      orchestrationExecutor(), [&](folly::Func func, folly::Executor& wrapped) {
+      LocalFixedPoint::orchestrationExecutor(),
+      [&](folly::Func func, folly::Executor& wrapped) {
         ++count;
         wrapped.add(std::move(func));
       });
@@ -3946,7 +4102,7 @@ TEST_F(FixedPointTest, abortReleasesTask) {
     std::atomic<exec::Task*> abortedTask{nullptr};
     std::atomic_size_t numTasksAtAbort{0};
     InterceptingExecutor executor(
-        orchestrationExecutor(),
+        LocalFixedPoint::orchestrationExecutor(),
         [&](folly::Func func, folly::Executor& wrapped) {
           if (auto* task = abortedTask.exchange(nullptr)) {
             task->requestAbort().wait();
@@ -4698,61 +4854,7 @@ TEST_F(FixedPointTest, initialPlanSplitsComplete) {
 // the nested FixedPointNode sits on a non-primary branch -- here the build side
 // of the outer body's join.
 TEST_F(FixedPointTest, nestedFixedPoint) {
-  auto outerSchema = ROW({"key", "val"}, BIGINT());
-  auto innerSchema = ROW({"ikey", "ival"}, BIGINT());
-  auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
-
-  // Inner fixed point: counts ival up to 3, emitting {(0, 3)}.
-  auto innerSeed = makeKeyValueRow(0, 0, innerSchema->names());
-
-  core::PlanNodePtr innerFixedPoint =
-      PlanBuilder(idGenerator)
-          .fixedPoint(
-              std::make_shared<VectorStateDeclaration>(
-                  "inner",
-                  innerSchema,
-                  PlanBuilder(idGenerator).values({innerSeed}).planNode()),
-              PlanBuilder(idGenerator)
-                  .stateSource("inner", innerSchema)
-                  .project({"ikey", "ival + 1 AS ival"}),
-              ConvergenceConfig::converging(
-                  PlanBuilder(idGenerator)
-                      .stateSource("inner", innerSchema)
-                      .project({"ival >= 3 AS converged"})
-                      .planNode(),
-                  100),
-              /*outputStateEntry=*/"inner")
-          .planNode();
-
-  // Outer fixed point: each iteration adds the inner loop's result to val,
-  // reaching 3 then 6.
-  auto outerSeed = makeKeyValueRow(0, 0);
-
-  expectBothModes(
-      PlanBuilder(idGenerator)
-          .fixedPoint(
-              std::make_shared<VectorStateDeclaration>(
-                  "outer",
-                  outerSchema,
-                  PlanBuilder(idGenerator).values({outerSeed}).planNode()),
-              PlanBuilder(idGenerator)
-                  .stateSource("outer", outerSchema)
-                  .hashJoin(
-                      {"key"},
-                      {"ikey"},
-                      innerFixedPoint,
-                      "",
-                      {"key", "val", "ival"})
-                  .project({"key", "val + ival AS val"}),
-              ConvergenceConfig::converging(
-                  PlanBuilder(idGenerator)
-                      .stateSource("outer", outerSchema)
-                      .project({"val >= 6 AS converged"})
-                      .planNode(),
-                  100),
-              /*outputStateEntry=*/"outer")
-          .planNode(),
-      {{0, 6}});
+  expectBothModes(nestedCountingNode(), {{0, 6}});
 }
 
 // Nesting where the inner loop shuffles but the outer does not.  Each outer

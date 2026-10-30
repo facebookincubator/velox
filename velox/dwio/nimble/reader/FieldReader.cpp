@@ -5182,17 +5182,15 @@ class MergedFlatMapFieldReader final
     }
 
     // Count each row's entries by walking the rows each key was found present
-    // in, rather than asking every key about every row. A key present in a row
-    // still contributes no entry when its value decoded as null. The sizes of
+    // in, rather than asking every key about every row. A present key holds an
+    // entry even when its value is null, as in a contiguous read. The sizes of
     // every selected row are already seeded to zero above, and the parent
     // ranges only ever narrow that selection, so the counts accumulate onto
     // zeros.
     for (size_t i{0}; i < this->keyNodes_.size(); ++i) {
-      const auto& nodeValue = this->nodeValues_[i];
       for (const auto& range : this->keyNodes_[i]->presentOutputRanges()) {
         for (velox::vector_size_t row{0}; row < range.count; ++row) {
-          const auto outputRow = range.targetIndex + row;
-          rawSizes[outputRow] += !nodeValue->isNullAt(outputRow);
+          ++rawSizes[range.targetIndex + row];
         }
       }
     }
@@ -5221,9 +5219,6 @@ class MergedFlatMapFieldReader final
       for (const auto& range : this->keyNodes_[i]->presentOutputRanges()) {
         for (velox::vector_size_t row{0}; row < range.count; ++row) {
           const auto outputRow = range.targetIndex + row;
-          if (this->nodeValues_[i]->isNullAt(outputRow)) {
-            continue;
-          }
           const auto outputElementOffset = nextElementOffsets_[outputRow]++;
           flatKeysVector->set(
               outputElementOffset, this->keyNodes_[i]->key().get());
@@ -5430,6 +5425,12 @@ struct HybridFlatMapGroupReaderParams {
 
   // Interprets selectedKeys as an inclusion or exclusion set.
   SelectionMode selectionMode{SelectionMode::Exclude};
+
+  // Whether the key-presence stream is a bitmap over schema keys or the
+  // batch's key list. kKeyList only for Default with
+  // HybridFlatMap::KeyPresenceMode::kKeyList.
+  HybridFlatMap::KeyPresenceMode keyPresenceMode{
+      HybridFlatMap::KeyPresenceMode::kBitmap};
 };
 
 template <typename T>
@@ -5459,9 +5460,11 @@ class HybridFlatMapGroupReader {
         hasValueStreams_{std::move(hasValueStreams)},
         selectedKeys_{parameters.selectedKeys},
         selectionMode_{parameters.selectionMode},
+        keyPresenceMode_{parameters.keyPresenceMode},
         keys_{schemaKeys(group, pool)},
         valueReader_{std::move(valueReader)},
-        keyPresence_{pool},
+        keyPresenceBits_{pool},
+        keyPresenceList_{pool},
         inMap_{pool} {}
 
   // Serializer Hybrid FlatMap batches are decode barriers, so each metadata
@@ -5497,9 +5500,16 @@ class HybridFlatMapGroupReader {
               streamName);
         };
 
-    keyPresence_.clear();
+    keyPresenceBits_.clear();
+    keyPresenceList_.clear();
     if (keyPresenceDecoder_ != nullptr) {
-      readMetadataChunk(keyPresenceDecoder_, keyPresence_, "key-presence");
+      if (hasKeyPresenceList()) {
+        readMetadataChunk(
+            keyPresenceDecoder_, keyPresenceList_, "key-presence-list");
+      } else {
+        readMetadataChunk(
+            keyPresenceDecoder_, keyPresenceBits_, "key-presence-bits");
+      }
     }
 
     inMap_.clear();
@@ -5513,22 +5523,26 @@ class HybridFlatMapGroupReader {
     // group therefore has no entries in this batch, even if key presence was
     // retained to preserve the schema prefix.
     if (inMap_.empty() && !hasValueStreams) {
-      keyPresence_.clear();
+      NIMBLE_CHECK_FILE(
+          keyPresenceList_.empty(),
+          "Hybrid FlatMap group lists keys without in-map rows.");
+      keyPresenceBits_.clear();
       co_return;
     }
 
-    if (keyPresence_.empty()) {
-      // An omitted key-presence stream with in-map rows applies to all schema
+    if (keyPresenceBits_.empty()) {
+      // A key list carries no presence bits; every listed key is present. An
+      // omitted key-presence bitmap with in-map rows applies to all schema
       // keys. All-false metadata is omitted only when the group is empty.
-      keyPresence_.resize(keys_.size(), true);
+      keyPresenceBits_.resize(keys().size(), true);
     }
 
     NIMBLE_CHECK_FILE_LE(
-        keyPresence_.size(),
-        keys_.size(),
+        keyPresenceBits_.size(),
+        keys().size(),
         "Hybrid FlatMap key-presence count exceeds schema key count.");
     const auto numPresentKeys = static_cast<uint32_t>(
-        std::count(keyPresence_.begin(), keyPresence_.end(), true));
+        std::count(keyPresenceBits_.begin(), keyPresenceBits_.end(), true));
     if (numPresentKeys == 0) {
       NIMBLE_CHECK_FILE(
           inMap_.empty(),
@@ -5536,7 +5550,7 @@ class HybridFlatMapGroupReader {
       NIMBLE_CHECK_FILE(
           !hasValueStreams,
           "Hybrid FlatMap group has value streams without present keys.");
-      keyPresence_.clear();
+      keyPresenceBits_.clear();
       co_return;
     }
     NIMBLE_CHECK_FILE(
@@ -5556,9 +5570,9 @@ class HybridFlatMapGroupReader {
                                                  : numPresentKeys);
     velox::vector_size_t numValues{0};
     uint32_t presentKeyIndex{0};
-    for (uint32_t schemaKeyIndex = 0; schemaKeyIndex < keyPresence_.size();
+    for (uint32_t schemaKeyIndex = 0; schemaKeyIndex < keyPresenceBits_.size();
          ++schemaKeyIndex) {
-      if (!keyPresence_[schemaKeyIndex]) {
+      if (!keyPresenceBits_[schemaKeyIndex]) {
         continue;
       }
       const auto keyName = keyNameAt(schemaKeyIndex);
@@ -5617,7 +5631,7 @@ class HybridFlatMapGroupReader {
       return;
     }
     // Missing key-presence and in-map streams represent an empty group.
-    if (keyPresence_.empty()) {
+    if (keyPresenceBits_.empty()) {
       nextNonNullRow_ += count;
       return;
     }
@@ -5639,7 +5653,7 @@ class HybridFlatMapGroupReader {
     if (count == 0) {
       return;
     }
-    if (!keyPresence_.empty()) {
+    if (!keyPresenceBits_.empty()) {
       NIMBLE_CHECK_LE(
           nextNonNullRow_ + count,
           nonNullRowCount_,
@@ -5666,8 +5680,9 @@ class HybridFlatMapGroupReader {
     selectedKeyIndices_.clear();
     valueIndices_.clear();
     values_.reset();
+    keyPresenceList_.clear();
     scratchBuffers_.clear();
-    keyPresence_.clear();
+    keyPresenceBits_.clear();
     inMap_.clear();
   }
 
@@ -5675,7 +5690,7 @@ class HybridFlatMapGroupReader {
   // Identifies a selected key in both the schema catalog and the compact set
   // of keys present in the current batch.
   struct SelectedKeyIndex {
-    // Locates the key in keys_.
+    // Locates the key in keys().
     uint32_t schemaKeyIndex;
     // Locates the key's row-presence bits in inMap_.
     uint32_t presentKeyIndex;
@@ -5705,21 +5720,35 @@ class HybridFlatMapGroupReader {
     return keys;
   }
 
+  // Returns whether this group's key-presence stream is a key list rather
+  // than a bitmap. Fixed by the schema when the reader is built, so it never
+  // depends on batch data and never throws.
+  bool hasKeyPresenceList() const {
+    return keyPresenceMode_ == HybridFlatMap::KeyPresenceMode::kKeyList;
+  }
+
+  // Returns the keys that key-presence bits index: the batch's listed keys,
+  // or the schema keys.
+  const Vector<DecodedKey>& keys() const {
+    return hasKeyPresenceList() ? keyPresenceList_ : keys_;
+  }
+
   std::string keyNameAt(size_t index) const {
     if constexpr (std::is_same_v<T, velox::StringView>) {
-      return std::string(keys_[index]);
+      return std::string(keys()[index]);
     } else {
-      return folly::to<std::string>(keys_[index]);
+      return folly::to<std::string>(keys()[index]);
     }
   }
 
   DecodedKey keyAt(size_t index) const {
-    return keys_[index];
+    return keys()[index];
   }
 
   // Allocates implicit null values for metadata-only groups.
   velox::memory::MemoryPool* const pool_;
-  // Non-owning decoder for the schema-ordered key-presence bitmap.
+  // Non-owning decoder for the schema-ordered key-presence bitmap, or for the
+  // batch's listed keys.
   Decoder* const keyPresenceDecoder_;
   // Non-owning decoder for key-major row-presence bits.
   Decoder* const inMapDecoder_;
@@ -5730,13 +5759,25 @@ class HybridFlatMapGroupReader {
   // Controls whether selectedKeys_ is an inclusion or exclusion set. An empty
   // exclusion set selects every key.
   const SelectionMode selectionMode_;
+  // Whether the key-presence stream is a bitmap over schema keys or the
+  // batch's key list.
+  const HybridFlatMap::KeyPresenceMode keyPresenceMode_;
   // Keeps the typed schema-key catalog in tracked memory and bitmap order.
+  // Empty for a KeyList Default, whose keys are listed per batch in
+  // keyPresenceList_.
   const Vector<DecodedKey> keys_;
   // Owns the reader for values shared by every key in this group.
   std::unique_ptr<FieldReader> valueReader_;
-  // One decoded bit per schema key. A shorter bitmap omits trailing keys that
-  // were added to the accumulated schema by later batches.
-  Vector<bool> keyPresence_;
+  // One presence bit per key in keys(), or empty when the group has no keys in
+  // this batch. Decoded from the key-presence bitmap, where a shorter bitmap
+  // omits trailing keys that were added to the accumulated schema by later
+  // batches. All set over a key-presence list.
+  Vector<bool> keyPresenceBits_;
+  // The batch's present keys, listed only by a Default group with
+  // HybridFlatMap::KeyPresenceMode::kKeyList; empty for bitmap groups. The
+  // list is the sole record of the group's keys: keys_ is empty and
+  // keyPresenceBits_ is all set. String keys view scratchBuffers_.
+  Vector<DecodedKey> keyPresenceList_;
   // Decoded key-major row-presence bits. Cell (present key, row) is at
   // key * nonNullRowCount_ + row.
   Vector<bool> inMap_;
@@ -6683,6 +6724,14 @@ std::unique_ptr<FieldReaderFactory> createHybridFlatMapFieldReaderFactory(
             return !selectedKeys.contains(key);
           });
     }
+    // A Default group that lists its keys may hold any key in no configured
+    // group.
+    if (hybridMap.useKeyPresentList(group.groupId)) {
+      return std::any_of(
+          selectedKeys.begin(), selectedKeys.end(), [&](const auto& key) {
+            return !hybridMap.findGroup(key).has_value();
+          });
+    }
     return std::any_of(
         group.groupKeys.begin(), group.groupKeys.end(), [&](const auto& key) {
           return selectedKeys.contains(key);
@@ -6719,6 +6768,9 @@ std::unique_ptr<FieldReaderFactory> createHybridFlatMapFieldReaderFactory(
             .hasValueStreams = std::move(hasValueStreams),
             .selectedKeys = selectedKeys,
             .selectionMode = selectionMode,
+            .keyPresenceMode = hybridMap.useKeyPresentList(group.groupId)
+                ? HybridFlatMap::KeyPresenceMode::kKeyList
+                : HybridFlatMap::KeyPresenceMode::kBitmap,
         });
   }
   return createHybridFlatMapReaderFactory(

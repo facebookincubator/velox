@@ -307,26 +307,18 @@ NimbleIndexProjector::NimbleIndexProjector(
 NimbleIndexProjector::~NimbleIndexProjector() = default;
 
 void NimbleIndexProjector::initStreamChecksum(bool verifyStreamChecksums) {
-  // A file that records no checksums is read unverified. Per-stream checksums
-  // use the file's ChecksumType, the same one the postscript records for the
-  // whole-file checksum, so when verifying, a type this binary cannot build is
-  // rejected outright by ChecksumFactory. Current files keep each checksum in
-  // the stream's trailer; legacy files keep them in stripe-group arrays
-  // instead. FileProperties rejects a file that claims both, so at most one
-  // branch applies.
-  const auto& properties = tablet_->properties();
-  const auto streamTrailerChecksumOffset =
-      properties.streamTrailerLayout().checksumOffset();
+  // A file whose stream trailers carry no checksum is read unverified. Each
+  // stream's checksum uses the file's ChecksumType, the same one the postscript
+  // records for the whole-file checksum, so when verifying, a type this binary
+  // cannot build is rejected outright by ChecksumFactory.
+  const auto& streamTrailerLayout = tablet_->properties().streamTrailerLayout();
   if (!verifyStreamChecksums ||
-      (!streamTrailerChecksumOffset.has_value() &&
-       !properties.hasStreamChecksums())) {
+      !streamTrailerLayout.checksumOffset().has_value()) {
     return;
   }
   streamChecksum_ = ChecksumFactory::create(tablet_->checksumType());
-  if (streamTrailerChecksumOffset.has_value()) {
-    streamTrailerSize_ = properties.streamTrailerLayout().size();
-    streamTrailerChecksumOffset_ = *streamTrailerChecksumOffset;
-  }
+  streamTrailerSize_ = streamTrailerLayout.size();
+  streamTrailerChecksumOffset_ = *streamTrailerLayout.checksumOffset();
 }
 
 void NimbleIndexProjector::loadStripes(
@@ -621,6 +613,156 @@ void NimbleIndexProjector::setResumeKey(
   }
 }
 
+namespace {
+
+// Loads stripe-group metadata while planning this projection, so the stripes
+// of a group share one load. Planning asks for the stripes its key lookups
+// found, the resolved stripes, in ascending order. The stripe groups that hold
+// them are the resolved groups. A load takes the group of the stripe asked
+// for, whatever its size, plus the next resolved groups while the load's
+// summed StripeGroupDescriptor::metadataSize stays within a byte budget. The
+// first group that does not fit ends the load. The groups of the last load
+// form the window. Stripes are asked for in ascending order, so a stripe
+// outside the window lies past all of the window's groups, and its load
+// replaces the window.
+//
+// For example, take resolved stripes {2, 3, 8, 15}, where stripes 2 and 3 are
+// in group 1, stripe 8 is in group 4 and stripe 15 is in group 7. Calls name a
+// stripe by its position in the resolved stripes, so stripeIdentifier(0) asks
+// for stripe 2. With a budget that fits two groups, stripeIdentifier(0) loads
+// groups 1 and 4. stripeIdentifier(1) and stripeIdentifier(2) use that window,
+// and stripeIdentifier(3) loads group 7.
+class StripeGroupLoader {
+ public:
+  // Groups `resolvedStripes` by stripe group from metadata held in memory, so
+  // it does no IO. `resolvedStripes` must be strictly ascending, and must
+  // outlive this object unchanged. `maxBytesPerLoad` is the byte budget of a
+  // load; see
+  // NimbleIndexProjector::Options::maxStripeGroupMetadataBytesPerLoad.
+  StripeGroupLoader(
+      const TabletReader& tablet,
+      std::span<const uint32_t> resolvedStripes,
+      uint64_t maxBytesPerLoad)
+      : tablet_{tablet},
+        resolvedStripes_{resolvedStripes},
+        maxBytesPerLoad_{maxBytesPerLoad} {
+    for (const auto& descriptor :
+         tablet_.stripeGroupDescriptors(resolvedStripes_)) {
+      if (!resolvedGroups_.empty() &&
+          resolvedGroups_.back().index == descriptor.index) {
+        ++numResolvedStripesPerGroup_.back();
+        continue;
+      }
+      resolvedGroups_.push_back(descriptor);
+      numResolvedStripesPerGroup_.push_back(1);
+    }
+
+    // Starts the cursor at the group of the first resolved stripe.
+    if (!numResolvedStripesPerGroup_.empty()) {
+      groupEndResolvedStripeIndex_ = numResolvedStripesPerGroup_.front();
+    }
+  }
+
+  // Returns the identifier of `resolvedStripes[resolvedStripeIndex]`. Loads
+  // the window that starts at the stripe's group when the window does not hold
+  // it. Calls must pass strictly ascending `resolvedStripeIndex` values.
+  StripeIdentifier stripeIdentifier(uint32_t resolvedStripeIndex) {
+    NIMBLE_CHECK_GT(
+        int64_t{resolvedStripeIndex},
+        lastResolvedStripeIndex_,
+        "Resolved stripe indices must ascend.");
+    lastResolvedStripeIndex_ = resolvedStripeIndex;
+
+    // One call can pass several groups, because planning skips the lookup of a
+    // stripe whose requests have all hit maxRowsPerRequest.
+    while (groupEndResolvedStripeIndex_ <= resolvedStripeIndex) {
+      ++resolvedGroupIndex_;
+      groupStartResolvedStripeIndex_ = groupEndResolvedStripeIndex_;
+      groupEndResolvedStripeIndex_ +=
+          numResolvedStripesPerGroup_.at(resolvedGroupIndex_);
+    }
+    if (resolvedGroupIndex_ >= loadedEndResolvedGroupIndex_) {
+      load();
+    }
+    const auto& loadedStripeGroup = loadedStripeGroups_.at(
+        resolvedGroupIndex_ - loadedStartResolvedGroupIndex_);
+    return StripeIdentifier{
+        resolvedStripes_[resolvedStripeIndex],
+        loadedStripeGroup.stripeGroup(),
+        loadedStripeGroup.chunkStats()};
+  }
+
+ private:
+  // Replaces the window with the one that starts at `resolvedGroupIndex_`,
+  // loading its groups in one TabletReader::stripeIdentifiers() call. Ending
+  // the window at the first group that does not fit keeps its groups
+  // consecutive in `resolvedGroups_`, so the next load releases only groups
+  // that planning has passed.
+  void load() {
+    // Releasing the loaded groups first keeps planning from holding more than
+    // one load's groups.
+    loadedStripeGroups_.clear();
+    std::vector<uint32_t> firstStripes;
+    uint64_t numBytes{0};
+    uint32_t resolvedStripeIndex{groupStartResolvedStripeIndex_};
+    size_t resolvedGroupIndex{resolvedGroupIndex_};
+    for (; resolvedGroupIndex < resolvedGroups_.size(); ++resolvedGroupIndex) {
+      numBytes += resolvedGroups_.at(resolvedGroupIndex).metadataSize;
+      if (resolvedGroupIndex > resolvedGroupIndex_ &&
+          numBytes > maxBytesPerLoad_) {
+        break;
+      }
+      firstStripes.push_back(resolvedStripes_[resolvedStripeIndex]);
+      resolvedStripeIndex += numResolvedStripesPerGroup_.at(resolvedGroupIndex);
+    }
+    loadedStripeGroups_ = tablet_.stripeIdentifiers(firstStripes);
+    loadedStartResolvedGroupIndex_ = resolvedGroupIndex_;
+    loadedEndResolvedGroupIndex_ = resolvedGroupIndex;
+  }
+
+  // Reads and caches the stripe groups.
+  const TabletReader& tablet_;
+
+  // Stripes the key lookups found, in ascending order. A position in it is a
+  // resolved stripe index.
+  const std::span<const uint32_t> resolvedStripes_;
+
+  // Limits the extra groups of a load by the load's summed
+  // StripeGroupDescriptor::metadataSize.
+  const uint64_t maxBytesPerLoad_;
+
+  // Descriptor of each resolved group, in order. A position in it is a
+  // resolved group index.
+  std::vector<StripeGroupDescriptor> resolvedGroups_;
+
+  // Number of resolved stripes in each resolved group. A group's resolved
+  // stripes are consecutive in `resolvedStripes_`, because it ascends.
+  std::vector<uint32_t> numResolvedStripesPerGroup_;
+
+  // Argument of the last stripeIdentifier() call, or -1 before the first.
+  // Used only to check that calls pass strictly ascending
+  // `resolvedStripeIndex` values.
+  int64_t lastResolvedStripeIndex_{-1};
+
+  // Resolved group index of the group that holds the stripe being planned.
+  size_t resolvedGroupIndex_{0};
+
+  // Resolved stripe indices of the first resolved stripe of the group at
+  // `resolvedGroupIndex_` and one past its last.
+  uint32_t groupStartResolvedStripeIndex_{0};
+  uint32_t groupEndResolvedStripeIndex_{0};
+
+  // Resolved group indices of the first loaded group and one past the last.
+  size_t loadedStartResolvedGroupIndex_{0};
+  size_t loadedEndResolvedGroupIndex_{0};
+
+  // One identifier per loaded group, in order. Each one's stripe group and
+  // chunk stats serve every stripe of its group.
+  std::vector<StripeIdentifier> loadedStripeGroups_;
+};
+
+} // namespace
+
 void NimbleIndexProjector::prepareStripes() {
   OptionalCpuWallTimer timer{
       timingEnabled_, [this](const velox::CpuWallTiming& timing) {
@@ -651,6 +793,10 @@ void NimbleIndexProjector::prepareStripes() {
       projection_->streamOffsets.size());
   ctx_.plan.stripeRanges.reserve(ctx_.stripeRanges.ranges.size());
 
+  StripeGroupLoader stripeGroupLoader{
+      *tablet_,
+      ctx_.stripeRanges.resolvedStripes,
+      ctx_.options->maxStripeGroupMetadataBytesPerLoad};
   for (uint32_t resolvedStripeIndex = 0;
        resolvedStripeIndex < numResolvedStripes;
        ++resolvedStripeIndex) {
@@ -663,10 +809,11 @@ void NimbleIndexProjector::prepareStripes() {
 
     // Located on demand by the first range that can still take rows. A stripe
     // whose requests have all hit maxRowsPerRequest retains nothing and is
-    // dropped below, so it never pays for the lookup: stripeIdentifier()
-    // loads stripe-group and chunk-stats metadata on a cache miss, and
-    // streamLocations() scans every projected stream. The old ordering got
-    // that skip for free by locating only after the numStripeRanges check.
+    // dropped below, so it skips the lookup. The old ordering got that skip for
+    // free by locating only after the numStripeRanges check. The lookup loads
+    // stripe-group and chunk-stats metadata when the stripe is outside the
+    // StripeGroupLoader's window, and TabletReader::streamLocations() scans
+    // every projected stream.
     std::optional<StripeStreams> streams;
 
     uint64_t stripeRows{0};
@@ -678,7 +825,8 @@ void NimbleIndexProjector::prepareStripes() {
       }
 
       if (!streams.has_value()) {
-        streams = locateStripeStreams(stripeIndex);
+        streams = locateStripeStreams(
+            stripeGroupLoader.stripeIdentifier(resolvedStripeIndex));
       }
       // Omit stripes with no projected streams from the serialized result.
       // These stripes contribute no slices, so charging their rows against
@@ -909,29 +1057,17 @@ void NimbleIndexProjector::lookupStripes() {
 void NimbleIndexProjector::verifyStreamChecksum(
     uint32_t enqueueIndex,
     std::string_view data) const {
-  uint32_t expected{0};
-  if (streamTrailerSize_ > 0) {
-    // The region was enqueued as the stream's bytes followed by its stream
-    // trailer.
-    NIMBLE_CHECK_GE(
-        data.size(),
-        streamTrailerSize_,
-        "Loaded stream region is shorter than its stream trailer.");
-    const auto streamSize = data.size() - streamTrailerSize_;
-    const char* checksumPos =
-        data.data() + streamSize + streamTrailerChecksumOffset_;
-    expected = encoding::readUint32(checksumPos);
-    data = data.substr(0, streamSize);
-  } else {
-    // Checked rather than debug-checked: an index past the end would otherwise
-    // read out of bounds in opt builds, and this runs once per stream, not per
-    // byte.
-    NIMBLE_CHECK_LT(
-        enqueueIndex,
-        ctx_.expectedStreamChecksums.size(),
-        "Stream checksum index exceeds the enqueued stream count.");
-    expected = ctx_.expectedStreamChecksums[enqueueIndex];
-  }
+  // The region was enqueued as the stream's bytes followed by its stream
+  // trailer.
+  NIMBLE_CHECK_GE(
+      data.size(),
+      streamTrailerSize_,
+      "Loaded stream region is shorter than its stream trailer.");
+  const auto streamSize = data.size() - streamTrailerSize_;
+  const char* checksumPos =
+      data.data() + streamSize + streamTrailerChecksumOffset_;
+  const auto expected = encoding::readUint32(checksumPos);
+  data = data.substr(0, streamSize);
   const auto computed = streamChecksum_->computeChecksum32(data);
   if (FOLLY_LIKELY(computed == expected)) {
     return;
@@ -991,15 +1127,6 @@ void NimbleIndexProjector::loadStripeStreams() {
 
   const auto numProjectedStreams = projection_->streamOffsets.size();
   ctx_.dataInputIndices.resize(numPlannedStripes * numProjectedStreams);
-
-  // Stream trailer checksums arrive with the stream's bytes; only checksums
-  // from the stripe-group arrays of legacy files are collected here.
-  const bool collectExpectedChecksums =
-      streamChecksum_ != nullptr && streamTrailerSize_ == 0;
-  ctx_.expectedStreamChecksums.clear();
-  if (collectExpectedChecksums) {
-    ctx_.expectedStreamChecksums.reserve(totalStreams);
-  }
   for (size_t stripeOffset = 0; stripeOffset < numPlannedStripes;
        ++stripeOffset) {
     if (ctx_.plan.numStreams[stripeOffset] == 0) {
@@ -1026,15 +1153,6 @@ void NimbleIndexProjector::loadStripeStreams() {
               stripeFileOffset + stream.offset,
               uint64_t{stream.size} + streamTrailerSize_});
       ctx_.dataInputIndices[dataInputBase + streamIndex] = enqueueIndex;
-      if (collectExpectedChecksums) {
-        // enqueue() hands out indices densely in call order, so appending here
-        // keeps the vector indexable by the enqueue index.
-        NIMBLE_DCHECK_EQ(
-            enqueueIndex,
-            ctx_.expectedStreamChecksums.size(),
-            "Enqueue indices must be dense and in call order.");
-        ctx_.expectedStreamChecksums.push_back(stream.checksum);
-      }
     }
   }
 
@@ -1146,11 +1264,6 @@ void NimbleIndexProjector::finalizeSliceOutputBuffer() {
   *ctx_.sliceOutputChunks = ctx_.sliceOutputBuffer->transferBuffers();
   ctx_.sliceOutputBuffer.reset();
   ctx_.sliceOutputChunks.reset();
-}
-
-NimbleIndexProjector::StripeStreams NimbleIndexProjector::locateStripeStreams(
-    uint32_t stripeIndex) {
-  return locateStripeStreams(tablet_->stripeIdentifier(stripeIndex));
 }
 
 NimbleIndexProjector::StripeStreams NimbleIndexProjector::locateStripeStreams(

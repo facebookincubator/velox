@@ -14,181 +14,222 @@
  * limitations under the License.
  */
 
-// Implements lazy row materialization and output serialization for index scans.
+// Implements the row iterator, which decodes the rows of index scans into
+// output entries.
 
 #include "velox/dwio/nimble/index/NimbleIterator.h"
 
-#include <algorithm>
-#include <cstring>
+#include <atomic>
 #include <memory>
-#include <mutex>
 #include <optional>
+#include <string>
 #include <utility>
+#include <vector>
 
 #include <folly/ScopeGuard.h>
 #include <folly/Synchronized.h>
-#include <folly/container/F14Map.h>
 #include <folly/coro/BlockingWait.h>
+#include <folly/coro/Task.h>
+#include <folly/io/IOBuf.h>
+#include <folly/io/IOBufQueue.h>
 
-#include "velox/buffer/Buffer.h"
 #include "velox/buffer/BufferPool.h"
 #include "velox/common/Casts.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/common/SchemaUtils.h"
+#include "velox/dwio/nimble/index/ClusterIndexBase.h"
 #include "velox/dwio/nimble/index/IndexScanCursor.h"
 #include "velox/dwio/nimble/index/KeyCursor.h"
 #include "velox/dwio/nimble/index/NimbleIndexProjector.h"
 #include "velox/dwio/nimble/serializer/StreamReader.h"
-#include "velox/row/CompactRow.h"
-#include "velox/row/UnsafeRowFast.h"
 
 namespace facebook::nimble {
 using detail::IndexScanCursor;
 
 namespace {
 
-using OutputRowSerializerMap = folly::F14FastMap<
-    NimbleIterator::OutputRowFormat,
-    NimbleIterator::OutputRowSerializer>;
-
-folly::Synchronized<OutputRowSerializerMap>& outputRowSerializerRegistry() {
-  static folly::Synchronized<OutputRowSerializerMap> registry;
-  return registry;
-}
-
-// Returns the serializer registered for the selected row format.
-NimbleIterator::OutputRowSerializer getOutputRowSerializer(
-    std::string_view rowFormat) {
-  registerDefaultOutputRowSerializers();
-  const auto serializers = outputRowSerializerRegistry().rlock();
-  const auto it = serializers->find(std::string{rowFormat});
-  NIMBLE_CHECK(
-      it != serializers->end(), "Unsupported output row format: {}", rowFormat);
-  return it->second;
-}
-
-// Preserves the largest serialized row allocation to avoid repeated growth. A
-// buffer that is too small goes back to the optional buffer pool, and the
-// pool, when set, supplies the replacement.
-char* ensureBuffer(
-    velox::BufferPtr& buffer,
-    size_t size,
-    velox::memory::MemoryPool* pool,
-    velox::BufferPool* bufferPool) {
-  const auto allocationSize = std::max<size_t>(size, 1);
-  if (buffer != nullptr && buffer->capacity() >= allocationSize) {
-    buffer->setSize(allocationSize);
-    return buffer->asMutable<char>();
-  }
-  if (bufferPool == nullptr) {
-    if (buffer == nullptr) {
-      buffer = velox::AlignedBuffer::allocate<char>(allocationSize, pool);
-    } else {
-      velox::AlignedBuffer::reallocate<char>(&buffer, allocationSize);
+// Allocates the chunks of an IOBufQueue from a memory pool. The pool must
+// outlive the factory and every IOBuf that it allocated.
+folly::IOBufFactory createIOBufFactory(velox::memory::MemoryPool& pool) {
+  NIMBLE_CHECK(pool.isLeaf(), "Memory pool must be a leaf");
+  return [pool = &pool](size_t capacity) {
+    if (capacity == 0) {
+      return folly::IOBuf::create(0);
     }
-    return buffer->asMutable<char>();
-  }
-  bufferPool->release(std::move(buffer));
-  buffer = bufferPool->get(allocationSize);
-  if (buffer == nullptr) {
-    buffer = velox::AlignedBuffer::allocate<char>(allocationSize, pool);
-  } else {
-    buffer->setSize(allocationSize);
-  }
-  return buffer->asMutable<char>();
+
+    auto freeBuffer = [pool, capacity](uint8_t* buffer) {
+      pool->free(buffer, static_cast<int64_t>(capacity));
+    };
+    auto data = std::unique_ptr<uint8_t, decltype(freeBuffer)>{
+        static_cast<uint8_t*>(pool->allocate(static_cast<int64_t>(capacity))),
+        std::move(freeBuffer)};
+    auto buffer = folly::IOBuf::takeOwnership(std::move(data), capacity);
+    if (buffer == nullptr) {
+      NIMBLE_FAIL("IOBuf allocation returned null");
+    }
+    buffer->trimEnd(capacity);
+    return buffer;
+  };
 }
 
-// Sets the offsets of 'numRows' rows from their sizes and prepares a zeroed
-// buffer for all of them. Returns the start of the buffer.
-template <typename RowSize>
-char* prepareSerializedRows(
-    velox::vector_size_t numRows,
-    const RowSize& rowSize,
-    velox::memory::MemoryPool* pool,
-    velox::BufferPool* bufferPool,
-    NimbleIterator::SerializedRows& output) {
-  auto& offsets = output.offsets;
-  offsets.resize(static_cast<size_t>(numRows) + 1);
-  offsets[0] = 0;
-  for (velox::vector_size_t row{0}; row < numRows; ++row) {
-    offsets[row + 1] = offsets[row] + rowSize(row);
+// Materializes the stripes that the cursor loads: decodes the selected rows of
+// a stripe into a vector, and decodes the rows into entries. A cursor that
+// prefetches materializes several stripes at once on the prefetch executor, so
+// each stripe decodes with a stream reader of its own.
+class EntryMaterializer final : public IndexScanCursor::StripeMaterializer {
+ public:
+  EntryMaterializer(
+      std::shared_ptr<const Type> schema,
+      velox::memory::MemoryPool* pool,
+      Encoding::Options encodingOptions,
+      NimbleIterator::EntryDecoder entryDecoder,
+      bool collectTimings)
+      : schema_{std::move(schema)},
+        pool_{velox::checkedNotNull(pool)},
+        encodingOptions_{std::move(encodingOptions)},
+        entryDecoder_{std::move(entryDecoder)},
+        collectTimings_{collectTimings},
+        iobufFactory_{createIOBufFactory(*pool_)} {}
+
+  EntryMaterializer(const EntryMaterializer&) = delete;
+  EntryMaterializer& operator=(const EntryMaterializer&) = delete;
+  EntryMaterializer(EntryMaterializer&&) = delete;
+  EntryMaterializer& operator=(EntryMaterializer&&) = delete;
+
+  ~EntryMaterializer() override = default;
+
+  folly::coro::Task<std::unique_ptr<Entries>> materialize(
+      ProjectedStripe stripe,
+      const index::ClusterIndexBase& clusterIndex) override {
+    const auto startRow = stripe.selection.selectedRowRange().startRow;
+    auto rows = co_await co_decode(std::move(stripe));
+    co_return convert(std::move(rows), startRow, clusterIndex);
   }
-  const auto totalBytes = offsets[numRows];
-  auto* data = ensureBuffer(output.buffer, totalBytes, pool, bufferPool);
-  std::memset(data, 0, totalBytes);
-  return data;
-}
 
-// Writes rows as CompactRows using reusable pool-backed output storage.
-void serializeCompactRows(
-    const velox::RowVectorPtr& rows,
-    velox::vector_size_t rowOffset,
-    velox::vector_size_t numRows,
-    velox::memory::MemoryPool* pool,
-    velox::BufferPool* bufferPool,
-    NimbleIterator::SerializedRows& output) {
-  velox::row::CompactRow compactRow{rows};
-  const auto fixedRowSize =
-      velox::row::CompactRow::fixedRowSize(rows->rowType());
-  auto* data = prepareSerializedRows(
-      numRows,
-      [&](velox::vector_size_t row) -> size_t {
-        return fixedRowSize.has_value() ? *fixedRowSize
-                                        : compactRow.rowSize(rowOffset + row);
-      },
-      pool,
-      bufferPool,
-      output);
-  compactRow.serialize(rowOffset, numRows, output.offsets.data(), data);
-}
-
-// Writes rows as UnsafeRows using reusable pool-backed output storage.
-void serializeUnsafeRows(
-    const velox::RowVectorPtr& rows,
-    velox::vector_size_t rowOffset,
-    velox::vector_size_t numRows,
-    velox::memory::MemoryPool* pool,
-    velox::BufferPool* bufferPool,
-    NimbleIterator::SerializedRows& output) {
-  velox::row::UnsafeRowFast unsafeRow{rows};
-  auto* data = prepareSerializedRows(
-      numRows,
-      [&](velox::vector_size_t row) -> size_t {
-        return unsafeRow.rowSize(rowOffset + row);
-      },
-      pool,
-      bufferPool,
-      output);
-  const auto& offsets = output.offsets;
-  for (velox::vector_size_t row{0}; row < numRows; ++row) {
-    const auto serializedSize =
-        unsafeRow.serialize(rowOffset + row, data + offsets[row]);
-    NIMBLE_CHECK_EQ(serializedSize, offsets[row + 1] - offsets[row]);
+  uint64_t numMaterializedRows() const {
+    return numMaterializedRows_.load(std::memory_order_relaxed);
   }
-}
 
-// Serializes selected rows on demand, reusing decoded projected-stripe rows.
+  velox::CpuWallTiming decodingTiming() const {
+    return *decodingTiming_.rlock();
+  }
+
+  velox::CpuWallTiming conversionTiming() const {
+    return *conversionTiming_.rlock();
+  }
+
+ private:
+  // Decodes the rows that the selection of 'stripe' holds, and drops the stripe
+  // when it returns.
+  folly::coro::Task<velox::RowVectorPtr> co_decode(ProjectedStripe stripe) {
+    const auto& selection = stripe.selection;
+    const auto numRows = selection.rowRange.numRows();
+    NIMBLE_CHECK_GT(numRows, 0);
+    // Reuses the scratch buffers of the encoding views within the stripe. The
+    // pool must outlive the reader, which returns the buffers to it.
+    velox::BufferPool bufferPool{velox::BufferPool::kDefaultCapacity};
+    auto encodingOptions = encodingOptions_;
+    encodingOptions.bufferPool = &bufferPool;
+    StreamReader streamReader{schema_, pool_, std::move(encodingOptions)};
+    streamReader.setStreams(stripe.streams);
+    if (selection.rowRange.startRow > 0) {
+      co_await streamReader.co_skip(selection.rowRange.startRow);
+    }
+
+    // Times the decoding of the stripe.
+    velox::OptionalCpuWallTimer timer{
+        collectTimings_, [this](const velox::CpuWallTiming& timing) {
+          decodingTiming_.wlock()->add(timing);
+        }};
+    velox::VectorPtr rows;
+    co_await streamReader.co_next(numRows, rows);
+    NIMBLE_CHECK_NOT_NULL(rows);
+    NIMBLE_CHECK_EQ(rows->size(), numRows);
+    numMaterializedRows_.fetch_add(numRows, std::memory_order_relaxed);
+    co_return std::static_pointer_cast<velox::RowVector>(std::move(rows));
+  }
+
+  // Decodes the entries of decoded rows that start at the file row 'startRow'.
+  std::unique_ptr<Entries> convert(
+      velox::RowVectorPtr rows,
+      uint32_t startRow,
+      const index::ClusterIndexBase& clusterIndex) {
+    // Times the conversion of the stripe.
+    velox::OptionalCpuWallTimer timer{
+        collectTimings_, [this](const velox::CpuWallTiming& timing) {
+          conversionTiming_.wlock()->add(timing);
+        }};
+    auto entries = std::make_unique<Entries>(iobufFactory_);
+    entries->numRows = rows->size();
+    const auto keyCursor = clusterIndex.keyCursor(
+        RowRange{startRow, startRow + static_cast<uint32_t>(rows->size())});
+    entryDecoder_(
+        rows,
+        *keyCursor,
+        entries->keyStorage,
+        entries->valueStorage,
+        entries->keys,
+        entries->values);
+    NIMBLE_CHECK_EQ(
+        entries->values.size(),
+        entries->keys.size(),
+        "Entry decoder returned different key and value counts");
+    NIMBLE_CHECK(
+        !entries->keys.empty(),
+        "Entry decoder returned no entries for a stripe");
+    return entries;
+  }
+
+  // The projected schema of the stripes.
+  const std::shared_ptr<const Type> schema_;
+  // Owns allocations made while decoding rows and entries.
+  velox::memory::MemoryPool* const pool_;
+  // Decoding options of the file, without a scratch-buffer pool, which each
+  // stripe has of its own.
+  const Encoding::Options encodingOptions_;
+  // Decodes the rows of a decoded stripe into entries.
+  const NimbleIterator::EntryDecoder entryDecoder_;
+  // Whether decoding a stripe reads the CPU and wall clocks.
+  const bool collectTimings_;
+  // Allocates the storage of the entries from the pool.
+  folly::IOBufFactory iobufFactory_;
+  // Counts the rows decoded from the selected rows of stripes.
+  std::atomic_uint64_t numMaterializedRows_{0};
+  // Track the time spent decoding stripes, and converting their rows into
+  // entries.
+  folly::Synchronized<velox::CpuWallTiming> decodingTiming_;
+  folly::Synchronized<velox::CpuWallTiming> conversionTiming_;
+};
+
+// Serves the entries of the stripes that its cursor materializes, ahead of the
+// reader when the cursor prefetches. The base class navigates the file rows,
+// and stays at the first selected row of a stripe while this class serves the
+// entries of the stripe.
 class NimbleRowIterator final : public NimbleIterator {
  public:
   NimbleRowIterator(
       std::unique_ptr<NimbleIndexProjector> projector,
       velox::memory::MemoryPool* pool,
-      NimbleIterator::OutputRowSerializer outputSerializer,
+      NimbleIterator::EntryDecoder entryDecoder,
       const NimbleIterator::Options& options)
-      : outputSerializer_{std::move(outputSerializer)},
-        pool_{pool},
-        bufferPool_{options.bufferPool},
-        collectTimings_{options.collectTimings},
-        cursor_{IndexScanCursor::create(std::move(projector), options)},
-        schema_{cursor_->projectedNimbleType()},
-        streamReader_{std::make_unique<StreamReader>(
-            schema_,
-            velox::checkedNotNull(pool_),
-            cursor_->encodingOptions(&encodingBufferPool_))} {
-    NIMBLE_CHECK_NOT_NULL(
-        outputSerializer_, "Output row serializer is not configured");
-  }
+      : materializer_{std::make_shared<EntryMaterializer>(
+            projector->projectedNimbleType(),
+            pool,
+
+            // TODO: Make velox::BufferPool thread-safe and pass one pool here,
+            // so that the stripes that materialize in parallel share scratch
+            // buffers instead of each decoding with a pool of its own.
+            IndexScanCursor::encodingOptions(
+                *projector,
+                options.cacheEncodingView,
+                /*bufferPool=*/nullptr),
+            std::move(entryDecoder),
+            options.collectTimings)},
+        cursor_{IndexScanCursor::create(
+            std::move(projector),
+            materializer_,
+            options)} {}
 
   NimbleRowIterator(const NimbleRowIterator&) = delete;
   NimbleRowIterator& operator=(const NimbleRowIterator&) = delete;
@@ -220,250 +261,116 @@ class NimbleRowIterator final : public NimbleIterator {
   }
 
   void nextRow() override {
-    advanceRows(1);
-    if (!key_.has_value()) {
-      // Keep key reads lazy by reopening at the new row after an unread key.
-      keyCursor_.reset();
+    prepareStripe();
+    if (++entryIndex_ < entries_->keys.size()) {
+      return;
     }
-    key_.reset();
+    // Moves to the first row after the stripe. The stripe after it loads when
+    // it is read.
+    entryIndex_ = 0;
+    advanceRows(stripeEndRow_ - currentRow());
   }
 
-  folly::coro::Task<bool> co_nextBatch(
-      velox::RowVectorPtr& /*output*/) override {
-    NIMBLE_UNSUPPORTED("Row iterator cannot produce batch output");
-    co_return false;
-  }
-
-  void prepareValue() override {
-    const auto row = currentRow();
-    if (row < stripeStartRow_ || row >= stripeEndRow_) {
-      loadStripe(row);
-    }
+  bool hasNext() const override {
+    prepareStripe();
+    return entryIndex_ + 1 < entries_->keys.size() ||
+        isBeforeEndRow(stripeEndRow_);
   }
 
   std::string_view value() override {
-    const auto row = currentRow();
-    if (row < stripeStartRow_ || row >= stripeEndRow_) {
-      loadStripe(row);
-    }
-    return serializedRows_.row(row - stripeStartRow_);
+    prepareStripe();
+    return entries_->values.at(entryIndex_);
   }
 
   std::string_view key() const override {
-    const auto row = currentRow();
-    if (!key_.has_value()) {
-      if (keyCursor_ == nullptr) {
-        keyCursor_ = cursor_->keyCursor(row);
-      }
-      key_ = keyCursor_->next();
-    }
-    return *key_;
-  }
-
-  uint32_t rowNumber() const override {
-    return currentRow();
+    prepareStripe();
+    return entries_->keys.at(entryIndex_);
   }
 
   NimbleIterator::Stats stats() const override {
     auto result = cursor_->stats();
-    result.numMaterializedRows = numMaterializedRows_;
-    result.materializationTiming = materializationTiming_;
+    result.numMaterializedRows = materializer_->numMaterializedRows();
+    result.decodingTiming = materializer_->decodingTiming();
+    result.conversionTiming = materializer_->conversionTiming();
     return result;
   }
 
  private:
-  // Resets navigation and key/value state while preserving reusable buffers.
+  // Drops the current stripe, preserving row navigation.
   void resetState() {
     resetValues();
     setRowRange(std::nullopt);
-    resetKeys();
   }
 
-  // Releases key chunks when navigation starts a different scan.
-  void resetKeys() {
-    key_.reset();
-    keyCursor_.reset();
-  }
-
-  // Waits for the stripe of the row, which serves all of its rows. Stays out of
-  // line to keep the blocking wait out of the per-row path of value().
-  [[gnu::noinline]] void loadStripe(uint32_t row) {
-    folly::coro::blockingWait(ensureStripe(row));
-  }
-
-  // Serializes all rows of the decoded stripe in one call.
-  void serializeRows() {
-    const auto numRows = rowVector_->size();
-    outputSerializer_(
-        velox::checkedPointerCast<velox::RowVector>(rowVector_),
-        /*rowOffset=*/0,
-        numRows,
-        pool_,
-        bufferPool_,
-        serializedRows_);
-    NIMBLE_CHECK_EQ(
-        serializedRows_.offsets.size(),
-        static_cast<size_t>(numRows) + 1,
-        "Output row serializer must set an offset per row and the end of the last row");
-    const auto serializedBytes =
-        serializedRows_.offsets.at(static_cast<size_t>(numRows));
-    NIMBLE_CHECK(
-        serializedBytes == 0 || serializedRows_.buffer != nullptr,
-        "Output row serializer returned bytes without an output buffer");
-    NIMBLE_CHECK(
-        serializedRows_.buffer == nullptr ||
-            serializedBytes <= serializedRows_.buffer->size(),
-        "Output row serializer returned more bytes than the buffer contains");
-  }
-
-  // Clears decoder views before releasing stripe storage, preserving row
-  // navigation, key state, and reusable output buffers. Returns the buffer of
-  // serialized rows to the buffer pool when there is one.
-  void resetValues() {
-    streamReader_->reset();
-    stripeStreams_.reset();
-    stripeStartRow_ = 0;
-    stripeEndRow_ = 0;
-    if (bufferPool_ != nullptr) {
-      bufferPool_->release(std::move(serializedRows_.buffer));
+  // Loads the stripe of the current row, when the previous entries did not, and
+  // checks that the iterator is on an entry. The stripe loads from const
+  // methods that read an entry.
+  void prepareStripe() const {
+    const auto row = currentRow();
+    if (row < stripeStartRow_ || row >= stripeEndRow_) {
+      loadStripe(row);
     }
   }
 
-  // Loads the projected stripe and decodes its remaining rows into one vector.
-  folly::coro::Task<void> ensureStripe(uint32_t row) {
+  // Waits for the stripe of the row, which serves all of its entries. Stays out
+  // of line to keep the blocking wait out of the per-entry path.
+  [[gnu::noinline]] void loadStripe(uint32_t row) const {
+    folly::coro::blockingWait(ensureStripe(row));
+  }
+
+  // Drops the current stripe, preserving row navigation.
+  void resetValues() const {
+    entries_.reset();
+    entryIndex_ = 0;
+    stripeStartRow_ = 0;
+    stripeEndRow_ = 0;
+  }
+
+  // Waits for the materialized stripe of the row.
+  folly::coro::Task<void> ensureStripe(uint32_t row) const {
     if (row >= stripeStartRow_ && row < stripeEndRow_) {
-      NIMBLE_CHECK_NOT_NULL(rowVector_);
       co_return;
     }
 
     resetValues();
-
-    stripeStreams_ = co_await cursor_->co_nextStripe(row);
-    const auto& streams = *stripeStreams_;
-    const auto& selection = streams.selection;
-    const auto stripeStartRow =
-        selection.startRow + selection.rowRange.startRow;
-    NIMBLE_CHECK_EQ(
-        stripeStartRow,
-        row,
-        "Projected stripe streams do not match the iterator position");
-    const auto numRows = selection.rowRange.numRows();
-    NIMBLE_CHECK_GT(numRows, 0);
-    streamReader_->setStreams(streams.streams);
-    if (selection.rowRange.startRow > 0) {
-      co_await streamReader_->co_skip(selection.rowRange.startRow);
-    }
-
-    // Times the decoding and the serialization of the stripe.
-    velox::OptionalCpuWallTimer timer{
-        collectTimings_, [this](const velox::CpuWallTiming& timing) {
-          materializationTiming_.add(timing);
-        }};
-    {
-      velox::VectorPtr decodedRows{std::move(rowVector_)};
-      SCOPE_EXIT {
-        rowVector_ =
-            std::static_pointer_cast<velox::RowVector>(std::move(decodedRows));
-      };
-      co_await streamReader_->co_next(numRows, decodedRows);
-    }
-    NIMBLE_CHECK_NOT_NULL(rowVector_);
-    NIMBLE_CHECK_EQ(rowVector_->size(), numRows);
-    numMaterializedRows_ += numRows;
-    serializeRows();
-    // Publish the materialized interval only after decoding and serializing
-    // succeed.
-    stripeStartRow_ = stripeStartRow;
-    stripeEndRow_ = stripeStartRow + numRows;
-    co_return;
+    entries_ = co_await cursor_->co_nextStripe(row);
+    NIMBLE_CHECK_NOT_NULL(entries_);
+    stripeStartRow_ = row;
+    stripeEndRow_ = row + static_cast<uint32_t>(entries_->numRows);
   }
 
-  // Serializes the rows of a decoded stripe in the format selected by the
-  // factory.
-  const NimbleIterator::OutputRowSerializer outputSerializer_;
-  // Owns allocations made while decoding rows and serializing output.
-  velox::memory::MemoryPool* const pool_;
-  // Recycles the buffer of serialized rows when it is set.
-  velox::BufferPool* const bufferPool_;
-  // Whether decoding a stripe reads the CPU and wall clocks.
-  const bool collectTimings_;
+  // Materializes the stripes of the cursor, which shares it with its prefetch.
+  // Declared before the cursor, which takes it at construction.
+  const std::shared_ptr<EntryMaterializer> materializer_;
   // Shares stripe-loading state with active prefetch operations.
   const std::shared_ptr<IndexScanCursor> cursor_;
-  // Projected Nimble schema for the stream reader.
-  const std::shared_ptr<const Type> schema_;
-  // Reuses scratch buffers created by encoding views.
-  velox::BufferPool encodingBufferPool_{velox::BufferPool::kDefaultCapacity};
-  const std::unique_ptr<StreamReader> streamReader_;
-  // Reuses decoded vectors across serialized-row requests.
-  velox::VectorPtr rowVector_;
-  // Keeps the current stripe streams alive while they are decoded.
-  std::optional<ProjectedStripe> stripeStreams_;
-  // Holds all rows of the decoded stripe serialized back to back. Row i of the
-  // stripe occupies the bytes [offsets[i], offsets[i + 1]) of the buffer, and
-  // the buffer is reused across stripes.
-  NimbleIterator::SerializedRows serializedRows_;
-  // Counts the rows decoded and serialized from the selected rows of stripes.
-  uint64_t numMaterializedRows_{0};
-  // Tracks the time spent decoding and serializing stripes.
-  velox::CpuWallTiming materializationTiming_{};
-  // File-level row represented by the first materialized row in rowVector_.
-  uint32_t stripeStartRow_{0};
-  // Exclusive file-level end of the rows materialized in rowVector_.
-  uint32_t stripeEndRow_{0};
-  // Retains decoded key chunks independently of lazy projected data streams.
-  // When present, points to the current row if key_ is unset, or the next row
-  // if key_ is cached.
-  mutable std::unique_ptr<index::KeyCursor> keyCursor_;
-  // Caches a view owned by the key cursor for the iterator's current row.
-  mutable std::optional<std::string_view> key_;
+  // The stripe loads when a read needs it, which reads do from const methods.
+  //
+  // The entries of the current stripe, or null.
+  mutable std::unique_ptr<IndexScanCursor::StripeMaterializer::Entries>
+      entries_;
+  // The position in the entries of the current stripe.
+  mutable size_t entryIndex_{0};
+  // File-level row represented by the first row of the current stripe.
+  mutable uint32_t stripeStartRow_{0};
+  // Exclusive file-level end of the rows of the current stripe.
+  mutable uint32_t stripeEndRow_{0};
 };
 
 } // namespace
 
-void registerDefaultOutputRowSerializers() {
-  static std::once_flag registered;
-  std::call_once(registered, []() {
-    auto serializers = outputRowSerializerRegistry().wlock();
-    serializers->emplace(
-        NimbleIterator::OutputRowFormat{NimbleIterator::kCompactRowFormat},
-        serializeCompactRows);
-    serializers->emplace(
-        NimbleIterator::OutputRowFormat{NimbleIterator::kUnsafeRowFormat},
-        serializeUnsafeRows);
-  });
-}
-
-void registerOutputRowSerializer(
-    NimbleIterator::OutputRowFormat rowFormat,
-    const NimbleIterator::OutputRowSerializer& serializer) {
-  NIMBLE_CHECK(!rowFormat.empty(), "Output row format cannot be empty");
-  const std::string_view formatView{rowFormat};
-  NIMBLE_CHECK(
-      formatView != NimbleIterator::kCompactRowFormat &&
-          formatView != NimbleIterator::kUnsafeRowFormat,
-      "Cannot register a built-in output row format: {}",
-      rowFormat);
-  NIMBLE_CHECK(
-      static_cast<bool>(serializer),
-      "Output row serializer cannot be empty for format: {}",
-      rowFormat);
-
-  auto serializers = outputRowSerializerRegistry().wlock();
-  const auto inserted = serializers->emplace(rowFormat, serializer).second;
-  NIMBLE_CHECK(
-      inserted,
-      "Output row serializer is already registered for format: {}",
-      rowFormat);
-}
-
 std::unique_ptr<NimbleIterator> NimbleIterator::createRowIterator(
     std::unique_ptr<NimbleIndexProjector> projector,
     velox::memory::MemoryPool* pool,
+    EntryDecoder entryDecoder,
     const Options& options) {
   NIMBLE_CHECK_NOT_NULL(pool);
-  auto outputSerializer = getOutputRowSerializer(options.rowFormat);
+  NIMBLE_CHECK_NOT_NULL(entryDecoder, "Entry decoder is not configured");
   return std::make_unique<NimbleRowIterator>(
-      std::move(projector), pool, std::move(outputSerializer), options);
+      velox::checkedNotNull(std::move(projector)),
+      pool,
+      std::move(entryDecoder),
+      options);
 }
 
 } // namespace facebook::nimble

@@ -24,7 +24,9 @@
 #include "velox/dwio/common/FileMetadata.h"
 #include "velox/dwio/parquet/writer/Writer.h"
 #include "velox/dwio/parquet/writer/arrow/Metadata.h"
+#include "velox/dwio/parquet/writer/arrow/Schema.h"
 #include "velox/dwio/parquet/writer/arrow/Statistics.h"
+#include "velox/dwio/parquet/writer/arrow/Types.h"
 #include "velox/type/Type.h"
 
 namespace facebook::velox::connector::hive::iceberg {
@@ -144,6 +146,12 @@ IcebergDataFileStatisticsPtr IcebergParquetStatsCollector::aggregate(
             }
           }
         }
+      } else if (metadata->schema()->column(j)->logicalType()->isNull()) {
+        // NullType columns have SortOrder::kUnknown so the Parquet writer
+        // never initialises a statistics object for them. All values are
+        // NULL by definition, so null_value_count equals the row count.
+        stats.nullValueCount =
+            stats.nullValueCount.value_or(0) + columnChunk->numValues();
       }
     }
   }

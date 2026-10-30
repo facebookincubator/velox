@@ -183,6 +183,14 @@ DEFINE_bool(
     true,
     "Merge copies into the columns of one tensor into a single copy of the stacked sources");
 DEFINE_bool(
+    reinplace_scatters,
+    true,
+    "Write functional select_scatter / slice_scatter chains in place");
+DEFINE_bool(
+    disjoint_write_ordering,
+    true,
+    "Leave in-place writes into provably disjoint regions unordered");
+DEFINE_bool(
     free_intermediates,
     true,
     "Release each ProjectNode's last-use value tensors right after its composite invocation executes, instead of at end-of-graph");
@@ -761,6 +769,39 @@ std::unordered_map<int32_t, int32_t> parsePreferPerSm(const std::string& spec) {
 
 } // namespace
 
+namespace {
+
+std::optional<bool> cgFromFlags() {
+  return FLAGS_cg >= 0 ? std::optional<bool>(FLAGS_cg != 0) : std::nullopt;
+}
+
+std::optional<bool> singleBlockFromFlags() {
+  return FLAGS_single_block >= 0 ? std::optional<bool>(FLAGS_single_block != 0)
+                                 : std::nullopt;
+}
+
+} // namespace
+
+ScopedPlanMode::ScopedPlanMode()
+    : savedCg_{WaveConfig::get().isCg},
+      savedSingleBlock_{WaveConfig::get().useSingleBlock} {
+  if (savedCg_ == cgFromFlags() &&
+      savedSingleBlock_ == singleBlockFromFlags()) {
+    WaveConfig::get().isCg = std::nullopt;
+    WaveConfig::get().useSingleBlock = std::nullopt;
+  }
+}
+
+ScopedPlanMode::~ScopedPlanMode() {
+  WaveConfig::get().isCg = savedCg_;
+  WaveConfig::get().useSingleBlock = savedSingleBlock_;
+}
+
+void ExecutorTestBase::SetUp() {
+  WaveConfig::get().useSingleBlock = singleBlockFromFlags();
+  WaveConfig::get().isCg = cgFromFlags();
+}
+
 void ExecutorTestBase::SetUpTestSuite() {
   // Diagnostic: print device properties and test basic CUDA ops.
   LOG(INFO) << "CUDA device count: " << at::cuda::device_count();
@@ -792,12 +833,6 @@ void ExecutorTestBase::SetUpTestSuite() {
   WaveConfig::get().allStandalone = FLAGS_standalone_kernels;
   WaveConfig::get().blockSize = FLAGS_block_dim;
   WaveConfig::get().trace = FLAGS_trace;
-  if (FLAGS_single_block >= 0) {
-    WaveConfig::get().useSingleBlock = FLAGS_single_block != 0;
-  }
-  if (FLAGS_cg >= 0) {
-    WaveConfig::get().isCg = FLAGS_cg != 0;
-  }
   WaveConfig::get().kernelCacheDir = FLAGS_kernel_cache_dir;
   WaveConfig::get().maxElementwiseVars = FLAGS_max_elementwise_vars;
   WaveConfig::get().outOfLineExprSize = FLAGS_out_of_line_expr_size;
@@ -818,6 +853,8 @@ void ExecutorTestBase::SetUpTestSuite() {
   WaveConfig::get().enableReuse = FLAGS_enable_reuse;
   WaveConfig::get().elideClones = FLAGS_elide_clones;
   WaveConfig::get().recognizeDisjointCopies = FLAGS_recognize_disjoint_copies;
+  WaveConfig::get().reinplaceScatters = FLAGS_reinplace_scatters;
+  WaveConfig::get().disjointWriteOrdering = FLAGS_disjoint_write_ordering;
   WaveConfig::get().freeIntermediates = FLAGS_free_intermediates;
   WaveConfig::get().stepLastUse = FLAGS_step_last_use;
   WaveConfig::get().syncEachStep = FLAGS_sync_each_step;
@@ -1222,6 +1259,12 @@ void ExecutorTestBase::runTest(
 
 ExecutorTestBase::ModePlans ExecutorTestBase::compilePlans(
     const std::string& pt2File) {
+  ScopedPlanMode openMode;
+  return compilePlansAsConfigured(pt2File);
+}
+
+ExecutorTestBase::ModePlans ExecutorTestBase::compilePlansAsConfigured(
+    const std::string& pt2File) {
   auto baseDir = dataDir();
   auto pt2Path =
       pt2File[0] == '/' ? pt2File : getDataFilePath(baseDir, pt2File);
@@ -1539,8 +1582,11 @@ void ExecutorTestBase::verifyOutputs(
     const auto& actual = outputs[i];
     const auto& exp = expected[i];
     if (exp.isTensor()) {
-      ASSERT_TRUE(actual.isTensor())
-          << fullLabel << " output " << i << " expected tensor, got non-tensor";
+      if (!actual.isTensor()) {
+        ADD_FAILURE() << fullLabel << " output " << i
+                      << " expected tensor, got " << actual.tagKind();
+        continue;
+      }
       auto match = tensorsMatch(actual.toTensor(), exp.toTensor());
       auto limit = WaveConfig::get().tensorPrintElementLimit;
       EXPECT_TRUE(match) << fullLabel << " output " << i

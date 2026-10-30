@@ -21,7 +21,6 @@
 #include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
 #include "velox/dwio/nimble/encodings/views/ALPEncodingView.h"
 #include "velox/dwio/nimble/encodings/views/ALPRDEncodingView.h"
-#include "velox/dwio/nimble/encodings/views/BitRangeSplitEncodingView.h"
 #include "velox/dwio/nimble/encodings/views/BlockBitPackingEncodingView.h"
 #include "velox/dwio/nimble/encodings/views/ConstantEncodingView.h"
 #include "velox/dwio/nimble/encodings/views/DeltaBlockEncodingView.h"
@@ -34,6 +33,7 @@
 #include "velox/dwio/nimble/encodings/views/MainlyConstantEncodingView.h"
 #include "velox/dwio/nimble/encodings/views/NullableEncodingView.h"
 #include "velox/dwio/nimble/encodings/views/PFOREncodingView.h"
+#include "velox/dwio/nimble/encodings/views/PartitionedEliasFanoEncodingView.h"
 #include "velox/dwio/nimble/encodings/views/RLEEncodingView.h"
 #include "velox/dwio/nimble/encodings/views/SentinelEncodingView.h"
 #include "velox/dwio/nimble/encodings/views/SimdForBitpackEncodingView.h"
@@ -43,6 +43,31 @@
 #include "velox/dwio/nimble/encodings/views/VarintEncodingView.h"
 
 namespace facebook::nimble {
+namespace {
+
+// Checks that 'data' starts with a complete encoding prefix, so that reading
+// the prefix stays inside it.
+void checkEncodingPrefix(std::string_view data, bool useVarintRowCount) {
+  if (!useVarintRowCount) {
+    NIMBLE_CHECK_FILE_GE(
+        data.size(),
+        EncodingPrefix::kFixedPrefixSize,
+        "Truncated encoding prefix.");
+    return;
+  }
+  size_t end = EncodingPrefix::kRowCountOffset;
+  while (end < data.size() && (static_cast<uint8_t>(data[end]) & 0x80) != 0) {
+    ++end;
+  }
+  NIMBLE_CHECK_FILE_LT(end, data.size(), "Truncated encoding prefix.");
+  NIMBLE_CHECK_FILE_LT(
+      end - EncodingPrefix::kRowCountOffset,
+      5,
+      "Encoding row count varint is too long.");
+}
+
+} // namespace
+
 namespace detail {
 
 template <typename T>
@@ -51,6 +76,7 @@ std::unique_ptr<TypedEncodingView<T>> createTypedEncodingView(
     velox::memory::MemoryPool* pool,
     const Encoding::Options& options) {
   using physicalType = typename TypeTraits<T>::physicalType;
+  checkEncodingPrefix(data, options.useVarintRowCount);
   if constexpr (std::is_same_v<T, bool>) {
     NIMBLE_CHECK_FILE_EQ(
         EncodingPrefix::readDataType(data),
@@ -131,6 +157,14 @@ std::unique_ptr<TypedEncodingView<T>> createTypedEncodingView(
       NIMBLE_INCOMPATIBLE_ENCODING(
           "EliasFano encoding only supports integral data types, got {}.",
           TypeTraits<T>::dataType);
+    case EncodingType::PartitionedEliasFano:
+      if constexpr (isIntegralType<T>()) {
+        return std::make_unique<PartitionedEliasFanoEncodingView<T>>(
+            data, pool, options);
+      }
+      NIMBLE_INCOMPATIBLE_ENCODING(
+          "PartitionedEliasFano encoding only supports integral data types, got {}.",
+          TypeTraits<T>::dataType);
     case EncodingType::Huffman:
       if constexpr (
           isIntegralType<physicalType>() &&
@@ -154,15 +188,6 @@ std::unique_ptr<TypedEncodingView<T>> createTypedEncodingView(
       }
       NIMBLE_INCOMPATIBLE_ENCODING(
           "SimdForBitpack encoding only supports integral data types, got {}.",
-          TypeTraits<T>::dataType);
-    case EncodingType::BitRangeSplit:
-      if constexpr (isIntegralType<T>() && (sizeof(T) == 4 || sizeof(T) == 8)) {
-        return std::make_unique<BitRangeSplitEncodingView<T>>(
-            data, pool, options);
-      }
-      NIMBLE_INCOMPATIBLE_ENCODING(
-          "BitRangeSplit encoding only supports 32- and 64-bit integer data "
-          "types, got {}.",
           TypeTraits<T>::dataType);
     case EncodingType::BlockBitPacking:
       if constexpr (isNumericType<physicalType>()) {
@@ -244,10 +269,10 @@ bool supportsEncodingView(EncodingType encodingType) {
       EncodingType::FOR,
       EncodingType::DeltaBlock,
       EncodingType::EliasFano,
+      EncodingType::PartitionedEliasFano,
       EncodingType::Huffman,
       EncodingType::PFOR,
       EncodingType::SimdForBitpack,
-      EncodingType::BitRangeSplit,
       EncodingType::BlockBitPacking,
       EncodingType::SubIntSplit,
       EncodingType::Varint,
@@ -262,6 +287,7 @@ std::unique_ptr<EncodingView> createEncodingView(
     std::string_view data,
     velox::memory::MemoryPool* pool,
     const Encoding::Options& options) {
+  checkEncodingPrefix(data, options.useVarintRowCount);
   const auto dataType = EncodingPrefix::dataType(data);
   switch (dataType) {
     case DataType::Int8:

@@ -1547,6 +1547,28 @@ TEST_F(DefaultOutputBufferManagerTest, getDataWhenCreated) {
   }
 }
 
+// Removing a task wakes a consumer that is waiting for its data.
+TEST_F(DefaultOutputBufferManagerTest, removeTaskWakesWaitingConsumer) {
+  auto task = initializeTask(
+      "t0", rowType_, PartitionedOutputNode::Kind::kPartitioned, 1, 1);
+  int64_t numPages{-1};
+  ASSERT_TRUE(bufferManager_->getData(
+      "t0",
+      0,
+      1'000'000'000,
+      0,
+      [&](std::vector<std::unique_ptr<folly::IOBuf>> pages,
+          int64_t /*sequence*/,
+          std::vector<int64_t> /*remainingBytes*/) {
+        numPages = pages.size();
+      }));
+  ASSERT_EQ(-1, numPages);
+
+  task->requestCancel();
+  bufferManager_->removeTask("t0");
+  ASSERT_EQ(0, numPages);
+}
+
 TEST_P(DefaultOutputBufferManagerSerdeTest, updateBrodcastBufferOnFailedTask) {
   // Updating broadcast buffer count in the buffer manager for a given unknown
   // task must not throw exception, instead must return FALSE.

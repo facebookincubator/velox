@@ -857,15 +857,11 @@ class VectorTest : public testing::Test, public velox::test::VectorTestBase {
 
     std::vector<IndexRange> evenIndices;
     std::vector<IndexRange> oddIndices;
-    std::vector<vector_size_t> evenRows;
-    std::vector<vector_size_t> oddRows;
     for (vector_size_t i = 0; i < source->size(); ++i) {
       if (i % 2 == 0) {
         evenIndices.push_back(IndexRange{i, 1});
-        evenRows.push_back(i);
       } else {
         oddIndices.push_back(IndexRange{i, 1});
-        oddRows.push_back(i);
       }
     }
 
@@ -881,19 +877,10 @@ class VectorTest : public testing::Test, public velox::test::VectorTestBase {
       oddSizePointers[i] = &oddSizes[i];
     }
 
-    Scratch scratch;
     VectorStreamGroup::estimateSerializedSize(
-        source.get(),
-        folly::Range(evenRows.data(), evenRows.size()),
-        nullptr,
-        evenSizePointers.data(),
-        scratch);
+        source.get(), evenIndices, nullptr, evenSizePointers.data());
     VectorStreamGroup::estimateSerializedSize(
-        source.get(),
-        folly::Range(oddRows.data(), oddRows.size()),
-        nullptr,
-        oddSizePointers.data(),
-        scratch);
+        source.get(), oddIndices, nullptr, oddSizePointers.data());
     even.append(
         sourceRow, folly::Range(evenIndices.data(), evenIndices.size() / 2));
     even.append(

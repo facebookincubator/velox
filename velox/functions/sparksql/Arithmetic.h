@@ -667,6 +667,50 @@ struct CheckedMultiplyFunction {
   }
 };
 
+/// Returns NULL on integral overflow. Corresponds to Spark's try_add. Errors
+/// from the arguments are not turned into NULL, which try(checked_add(...))
+/// would do.
+template <typename TExec>
+struct TryAddFunction {
+  template <typename T>
+  FOLLY_ALWAYS_INLINE bool call(T& result, const T& a, const T& b) {
+    if constexpr (std::is_integral_v<T>) {
+      return !__builtin_add_overflow(a, b, &result);
+    } else {
+      result = a + b;
+      return true;
+    }
+  }
+};
+
+/// Returns NULL on integral overflow. Corresponds to Spark's try_subtract.
+template <typename TExec>
+struct TrySubtractFunction {
+  template <typename T>
+  FOLLY_ALWAYS_INLINE bool call(T& result, const T& a, const T& b) {
+    if constexpr (std::is_integral_v<T>) {
+      return !__builtin_sub_overflow(a, b, &result);
+    } else {
+      result = a - b;
+      return true;
+    }
+  }
+};
+
+/// Returns NULL on integral overflow. Corresponds to Spark's try_multiply.
+template <typename TExec>
+struct TryMultiplyFunction {
+  template <typename T>
+  FOLLY_ALWAYS_INLINE bool call(T& result, const T& a, const T& b) {
+    if constexpr (std::is_integral_v<T>) {
+      return !__builtin_mul_overflow(a, b, &result);
+    } else {
+      result = a * b;
+      return true;
+    }
+  }
+};
+
 template <typename TExec>
 struct CheckedDivideFunction {
   template <typename T>
