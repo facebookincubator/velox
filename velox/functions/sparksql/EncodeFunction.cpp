@@ -17,10 +17,11 @@
 #include "velox/functions/sparksql/EncodeFunction.h"
 
 #include <algorithm>
-#include <compare>
 #include <cstring>
 #include <string>
 #include <string_view>
+
+#include <folly/Range.h>
 
 #include "velox/common/base/Exceptions.h"
 #include "velox/functions/lib/Utf8Utils.h"
@@ -30,29 +31,13 @@ namespace {
 
 constexpr char32_t kReplacementCodePoint = 0xFFFD;
 
-std::strong_ordering compareIgnoreCase(
-    const StringView& value,
-    std::string_view expected) {
-  const auto compareCharacter = [](char left, char right) {
-    const auto toUpper = [](char character) {
-      return character >= 'a' && character <= 'z'
-          ? static_cast<char>(character - ('a' - 'A'))
-          : character;
-    };
-    return toUpper(left) <=> toUpper(right);
-  };
-  const auto commonSize = std::min(value.size(), expected.size());
-  for (size_t i = 0; i < commonSize; ++i) {
-    if (const auto comparison = compareCharacter(value.data()[i], expected[i]);
-        comparison != 0) {
-      return comparison;
-    }
-  }
-  return value.size() <=> expected.size();
-}
-
-bool equalsIgnoreCase(const StringView& value, std::string_view expected) {
-  return compareIgnoreCase(value, expected) == 0;
+bool equalsIgnoreAsciiCase(std::string_view value, std::string_view expected) {
+  return value.size() == expected.size() &&
+      std::equal(
+             value.begin(),
+             value.end(),
+             expected.begin(),
+             folly::AsciiCaseInsensitive{});
 }
 
 size_t decodeCodePoint(
@@ -265,25 +250,25 @@ Status encodeUtf32(
 } // namespace
 
 CharsetType resolveCharset(const StringView& charset) {
-  if (equalsIgnoreCase(charset, "UTF-8")) {
+  if (equalsIgnoreAsciiCase(charset, "UTF-8")) {
     return CharsetType::kUtf8;
   }
-  if (equalsIgnoreCase(charset, "US-ASCII")) {
+  if (equalsIgnoreAsciiCase(charset, "US-ASCII")) {
     return CharsetType::kUsAscii;
   }
-  if (equalsIgnoreCase(charset, "ISO-8859-1")) {
+  if (equalsIgnoreAsciiCase(charset, "ISO-8859-1")) {
     return CharsetType::kIso8859_1;
   }
-  if (equalsIgnoreCase(charset, "UTF-16")) {
+  if (equalsIgnoreAsciiCase(charset, "UTF-16")) {
     return CharsetType::kUtf16;
   }
-  if (equalsIgnoreCase(charset, "UTF-16BE")) {
+  if (equalsIgnoreAsciiCase(charset, "UTF-16BE")) {
     return CharsetType::kUtf16BE;
   }
-  if (equalsIgnoreCase(charset, "UTF-16LE")) {
+  if (equalsIgnoreAsciiCase(charset, "UTF-16LE")) {
     return CharsetType::kUtf16LE;
   }
-  if (equalsIgnoreCase(charset, "UTF-32")) {
+  if (equalsIgnoreAsciiCase(charset, "UTF-32")) {
     return CharsetType::kUtf32;
   }
   return CharsetType::kUnsupported;
