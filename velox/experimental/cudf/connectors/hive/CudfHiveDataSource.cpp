@@ -423,7 +423,9 @@ CudfHiveDataSource::CudfHiveDataSource(
     // The local config above carries no cast setting, so a cast from VARCHAR
     // compiled against it follows Presto's strict rules in a session that sets
     // legacy_cast or cast_string_to_floating_point_lenient_inf_nan, and a
-    // TRY_CAST would drop the rows those settings accept.
+    // TRY_CAST would drop the rows those settings accept. A cast from
+    // TIMESTAMP to VARCHAR prints under the same legacy_cast rules and in the
+    // session time zone, which this data source cannot apply either.
     // TODO: Keep such a scan on the CPU data source instead, once the
     // connector sees the session config and checks the filter the way
     // canExprRunOnGpu() does before choosing a data source
@@ -432,6 +434,12 @@ CudfHiveDataSource::CudfHiveDataSource(
             optimizedRemainingFilter_, /*floatingPointOnly=*/false)) {
       VELOX_UNSUPPORTED(
           "Remaining filter with a cast from VARCHAR is not supported: {}",
+          optimizedRemainingFilter_->toString());
+    }
+    if (containsTimestampToVarcharCast(optimizedRemainingFilter_)) {
+      VELOX_UNSUPPORTED(
+          "Remaining filter with a cast from TIMESTAMP to VARCHAR is not "
+          "supported: {}",
           optimizedRemainingFilter_->toString());
     }
     // Add fields referenced by the filter to the columns to read. Collect from
