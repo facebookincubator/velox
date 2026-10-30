@@ -18,6 +18,7 @@
 
 #include "velox/common/base/RandomUtil.h"
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
@@ -213,7 +214,7 @@ class ApproxPercentileTest : public AggregationTestBase {
                         : makeRowVector({keys, values});
     enableTestStreaming();
     testAggregations(
-        {rows},
+        split(rows),
         {"c0"},
         {functionCall(true, weights.get(), percentile, accuracy, -1)},
         {expectedResult},
@@ -271,7 +272,7 @@ class ApproxPercentileTest : public AggregationTestBase {
 
       enableTestStreaming();
       testAggregations(
-          {rows},
+          split(rows),
           {"c0"},
           {functionCall(true, weights.get(), percentile, accuracy, 3)},
           {expected},
@@ -445,6 +446,68 @@ TEST_F(ApproxPercentileTest, partialFull) {
   });
   exec::test::assertQuery(params, {expected});
   waitForAllTasksToBeDeleted();
+}
+
+// Partial aggregation is abandoned after the first batch, so later batches go
+// through toIntermediate(). All rows are masked out in every batch but the
+// third, which covers masked inputs both before and after the percentile
+// argument is first seen.
+TEST_F(ApproxPercentileTest, toIntermediateWithMask) {
+  constexpr vector_size_t kNumKeys = 10;
+  constexpr vector_size_t kBatchSize = 10 * kNumKeys;
+  std::vector<RowVectorPtr> data;
+  for (auto batch = 0; batch < 4; ++batch) {
+    // Each key has one row with each 'j' in [0, 10). Rows with j < 5 are
+    // selected in batch 2. Of these, j = 1 has a null value and j = 2 has a
+    // null weight. j = 3 outweighs the other selected rows, so it is the
+    // median. j = 8 outweighs all rows, so it would be the median if the mask
+    // were ignored.
+    data.push_back(makeRowVector(
+        {"k", "v", "w", "m"},
+        {
+            makeFlatVector<int32_t>(
+                kBatchSize, [](auto row) { return row % kNumKeys; }),
+            makeFlatVector<int32_t>(
+                kBatchSize,
+                [](auto row) { return row / kNumKeys * 10 + row % kNumKeys; },
+                [](auto row) { return row / kNumKeys == 1; }),
+            makeFlatVector<int64_t>(
+                kBatchSize,
+                [](auto row) {
+                  const auto j = row / kNumKeys;
+                  return j == 3 ? 1'000 : j == 8 ? 5'000 : j + 1;
+                },
+                [](auto row) { return row / kNumKeys == 2; }),
+            makeFlatVector<bool>(
+                kBatchSize,
+                [&](auto row) { return batch == 2 && row / kNumKeys < 5; }),
+        }));
+  }
+
+  core::PlanNodeId partialNodeId;
+  auto plan = PlanBuilder()
+                  .values(data)
+                  .partialAggregation(
+                      {"k"}, {"approx_percentile(v, w, 0.5, 0.005)"}, {"m"})
+                  .capturePlanNodeId(partialNodeId)
+                  .finalAggregation()
+                  .planNode();
+
+  auto expected = makeRowVector({
+      makeFlatVector<int32_t>(kNumKeys, [](auto row) { return row; }),
+      makeFlatVector<int32_t>(kNumKeys, [](auto row) { return 30 + row; }),
+  });
+  auto task =
+      AssertQueryBuilder(plan)
+          .maxDrivers(1)
+          .config(core::QueryConfig::kAbandonPartialAggregationMinRows, "1")
+          .config(core::QueryConfig::kAbandonPartialAggregationMinPct, "0")
+          .assertResults(expected);
+
+  const auto stats = toPlanStats(task->taskStats());
+  const auto& partialStats = stats.at(partialNodeId).customStats;
+  EXPECT_LT(0, partialStats.at("abandonedPartialAggregationRows").sum);
+  EXPECT_LT(0, partialStats.at("toIntermediateFastPathCalls").sum);
 }
 
 TEST_F(ApproxPercentileTest, finalAggregateAccuracy) {

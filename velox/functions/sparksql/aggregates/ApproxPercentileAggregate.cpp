@@ -33,13 +33,17 @@ struct SparkAccuracyPolicy {
     return false;
   }
 
+  // Returns the sketch K that bounds the error by 1 / 'accuracy'.
+  static uint32_t toK(int32_t accuracy) {
+    // Spark accuracy is the reciprocal of epsilon.
+    return kll::kFromEpsilon(1.0 / accuracy);
+  }
+
   template <typename T>
   static void setOnAccumulator(
       detail::KllSketchAccumulator<T>* accumulator,
       int32_t accuracy) {
-    // Spark accuracy is the reciprocal of epsilon.
-    double epsilon = 1.0 / accuracy;
-    accumulator->setAccuracy(epsilon);
+    accumulator->setK(toK(accuracy));
   }
 
   static void checkSetAccuracy(
