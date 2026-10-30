@@ -748,8 +748,7 @@ class TopNRowNumberAdapter : public OperatorAdapter {
     if (!node) {
       return false;
     }
-    return node->rankFunction() ==
-        core::TopNRowNumberNode::RankFunction::kRowNumber;
+    return CudfTopNRowNumber::canRunOnGPU(*node);
   }
 
   bool acceptsGpuInput() const override {
