@@ -27,29 +27,6 @@ namespace facebook::velox::exec {
 
 using velox::common::geospatial::GeometrySerializationType;
 
-void SpatialJoinBridge::setData(SpatialBuildResult buildResult) {
-  std::vector<ContinuePromise> promises;
-  {
-    std::lock_guard<std::mutex> l(mutex_);
-    VELOX_CHECK(!buildResult_.has_value(), "setData must be called only once");
-    buildResult_ = std::move(buildResult);
-    promises = std::move(promises_);
-  }
-  notify(std::move(promises));
-}
-
-std::optional<SpatialBuildResult> SpatialJoinBridge::dataOrFuture(
-    ContinueFuture* future) {
-  std::lock_guard<std::mutex> l(mutex_);
-  VELOX_CHECK(!cancelled_, "Getting data after the build side is aborted");
-  if (buildResult_.has_value()) {
-    return buildResult_.value();
-  }
-  promises_.emplace_back("SpatialJoinBridge::dataOrFuture");
-  *future = promises_.back().getSemiFuture();
-  return std::nullopt;
-}
-
 SpatialJoinBuild::SpatialJoinBuild(
     int32_t operatorId,
     DriverCtx* driverCtx,
@@ -217,9 +194,9 @@ void SpatialJoinBuild::noMoreInput() {
   // The last Driver to hit SpatialJoinBuild::finish gathers the data from
   // all build Drivers and hands it over to the probe side. At this
   // point all build Drivers are continued and will free their
-  // state. allPeersFinished is true only for the last Driver of the
+  // state. allPeersArrived is true only for the last Driver of the
   // build pipeline.
-  if (!operatorCtx_->allPeersFinished(&future_, promises, peerOperators)) {
+  if (!operatorCtx_->allPeersArrived(&future_, promises, peerOperators)) {
     return;
   }
 

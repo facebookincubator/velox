@@ -18,6 +18,8 @@
 
 #include <atomic>
 
+#include <folly/ExceptionString.h>
+
 #include "velox/common/process/TraceContext.h"
 #include "velox/exec/Operator.h"
 #include "velox/exec/OperatorType.h"
@@ -31,14 +33,6 @@ namespace facebook::velox::exec {
 Driver::~Driver() = default;
 
 namespace {
-
-/// Returns current time in microseconds using high_resolution_clock.
-/// Used for driver-level lifecycle timing to match BlockingState::sinceUs_.
-inline uint64_t currentTimeMicrosHires() {
-  return std::chrono::duration_cast<std::chrono::microseconds>(
-             std::chrono::high_resolution_clock::now().time_since_epoch())
-      .count();
-}
 
 // Checks if output channel is produced using identity projection and returns
 // input channel if so.
@@ -74,6 +68,19 @@ std::string addContextOnException(
   }
   auto* op = static_cast<Operator*>(arg);
   return fmt::format("Operator: {}", op->toString());
+}
+
+// Fails with a message that names the operator and the method that threw.
+[[noreturn]] void failOperatorCall(
+    const char* operatorMethod,
+    const Operator& op,
+    const std::exception& e) {
+  VELOX_FAIL(
+      "Operator::{} failed for [operator: {}, plan node ID: {}]: {}",
+      operatorMethod,
+      op.operatorType(),
+      op.planNodeId(),
+      e.what());
 }
 
 std::exception_ptr makeException(
@@ -232,10 +239,7 @@ BlockingState::BlockingState(
       future_(std::move(future)),
       operator_(op),
       reason_(reason),
-      sinceUs_(
-          std::chrono::duration_cast<std::chrono::microseconds>(
-              std::chrono::high_resolution_clock::now().time_since_epoch())
-              .count()) {
+      sinceUs_(SteadyTime::now<std::chrono::microseconds>()) {
   // Set before leaving the thread.
   driver_->state().hasBlockingFuture = true;
   driver_->state().blockingStartUs = sinceUs_;
@@ -255,10 +259,9 @@ void BlockingState::setResume(std::shared_ptr<BlockingState> state) {
         std::lock_guard<std::timed_mutex> l(task->mutex());
         if (!driver->state().isTerminated) {
           state->operator_->recordBlockingTime(state->sinceUs_, state->reason_);
-          // Accumulate driver-level blocked time using high_resolution_clock,
-          // matching sinceUs_ and all other driver lifecycle timing.
           driver->addDriverBlockedTime(
-              (currentTimeMicrosHires() - state->sinceUs_) * 1'000);
+              (SteadyTime::now<std::chrono::microseconds>() - state->sinceUs_) *
+              1'000);
         }
         VELOX_CHECK(!driver->state().suspended());
         VELOX_CHECK(driver->state().hasBlockingFuture);
@@ -389,7 +392,7 @@ void Driver::enqueueInternal() {
   VELOX_CHECK(!state_.isEnqueued);
   state_.isEnqueued = true;
   // When enqueuing, starting timing the queue time.
-  queueTimeStartUs_ = currentTimeMicrosHires();
+  queueTimeStartUs_ = SteadyTime::now<std::chrono::microseconds>();
 }
 
 // Call an Operator method. record silenced throws, but not a query
@@ -408,16 +411,11 @@ void Driver::enqueueInternal() {
   } catch (const VeloxException&) {                                        \
     throw;                                                                 \
   } catch (const std::exception& e) {                                      \
-    VELOX_FAIL(                                                            \
-        "Operator::{} failed for [operator: {}, plan node ID: {}]: {}",    \
-        operatorMethod,                                                    \
-        operatorPtr->operatorType(),                                       \
-        operatorPtr->planNodeId(),                                         \
-        e.what());                                                         \
+    failOperatorCall(operatorMethod, *operatorPtr, e);                     \
   }
 
 void OpCallStatus::start(int32_t operatorId, const char* operatorMethod) {
-  timeStartMs_ = getCurrentTimeMs();
+  timeStartMs_ = SteadyTime::now<std::chrono::milliseconds>();
   opId_ = operatorId;
   method_ = operatorMethod;
 }
@@ -427,7 +425,8 @@ void OpCallStatus::stop() {
 }
 
 size_t OpCallStatusRaw::callDuration() const {
-  return empty() ? 0 : (getCurrentTimeMs() - timeStartMs);
+  return empty() ? 0
+                 : (SteadyTime::now<std::chrono::milliseconds>() - timeStartMs);
 }
 
 /*static*/ std::string OpCallStatusRaw::formatCall(
@@ -539,9 +538,7 @@ StopReason Driver::runInternal(
     std::shared_ptr<Driver>& self,
     std::shared_ptr<BlockingState>& blockingState,
     RowVectorPtr& result) {
-  // All driver timing uses high_resolution_clock consistently
-  // (matching BlockingState::sinceUs_ used for blocked time).
-  const auto now = currentTimeMicrosHires();
+  const auto now = SteadyTime::now<std::chrono::microseconds>();
   const auto queuedTimeUs = now - queueTimeStartUs_;
 
   totalDriverQueuedNanos_ += queuedTimeUs * 1'000;
@@ -552,14 +549,14 @@ StopReason Driver::runInternal(
   auto onThreadTimeGuard = folly::makeGuard([this]() {
     if (onThreadStartUs_ > 0) {
       totalDriverOnThreadNanos_ +=
-          (currentTimeMicrosHires() - onThreadStartUs_) * 1'000;
+          (SteadyTime::now<std::chrono::microseconds>() - onThreadStartUs_) *
+          1'000;
       onThreadStartUs_ = 0;
     }
   });
 
   // Update the next operator's queueTime.
-  StopReason stop =
-      closed_ ? StopReason::kTerminate : task()->enter(state_, now);
+  StopReason stop = closed_ ? StopReason::kTerminate : task()->enter(state_);
   if (stop != StopReason::kNone) {
     if (stop == StopReason::kTerminate) {
       // ctx_ still has a reference to the Task. 'this' is not on
@@ -926,10 +923,39 @@ void Driver::initializeOperatorStats(std::vector<OperatorStats>& stats) {
   }
 }
 
-void Driver::closeOperators() {
-  // Close operators.
+namespace {
+// Closes 'op', annotating exceptions with operator info as CALL_OPERATOR does
+// for the other operator methods.
+void closeOperator(Operator& op) {
+  try {
+    ExceptionContextSetter exceptionContext({addContextOnException, &op, true});
+    op.close();
+  } catch (const VeloxException&) {
+    throw;
+  } catch (const std::exception& e) {
+    failOperatorCall(kOpMethodClose, op, e);
+  }
+}
+} // namespace
+
+std::exception_ptr Driver::closeOperators() {
+  std::exception_ptr error;
   for (auto& op : operators_) {
-    op->close();
+    try {
+      closeOperator(*op);
+    } catch (...) {
+      if (!error) {
+        error = std::current_exception();
+      }
+    }
+  }
+
+  try {
+    task()->splitConsumerFinished(*ctx_);
+  } catch (...) {
+    if (!error) {
+      error = std::current_exception();
+    }
   }
 
   // Report driver-level lifecycle timing to the Task accumulator.
@@ -939,7 +965,8 @@ void Driver::closeOperators() {
   // hasn't fired yet since CancelGuard destructs before it).
   if (onThreadStartUs_ > 0) {
     totalDriverOnThreadNanos_ +=
-        (currentTimeMicrosHires() - onThreadStartUs_) * 1'000;
+        (SteadyTime::now<std::chrono::microseconds>() - onThreadStartUs_) *
+        1'000;
     onThreadStartUs_ = 0; // Prevent double-counting in the guard.
   }
   task()->addDriverLifecycleStats(
@@ -968,6 +995,7 @@ void Driver::closeOperators() {
 
     task()->addOperatorStats(stats);
   }
+  return error;
 }
 
 void Driver::updateStats() {
@@ -992,8 +1020,9 @@ void Driver::updateOperatorBlockingStats() {
   // This ensures we don't lose blocked time metrics when a query is aborted.
   if (state_.hasBlockingFuture) {
     // Accumulate driver-level blocked time unconditionally.
-    totalDriverBlockedNanos_ +=
-        (currentTimeMicrosHires() - state_.blockingStartUs) * 1'000;
+    totalDriverBlockedNanos_ += (SteadyTime::now<std::chrono::microseconds>() -
+                                 state_.blockingStartUs) *
+        1'000;
     // Record per-operator blocked time if operator is available.
     if (blockedOperatorId_ < operators_.size()) {
       operators_[blockedOperatorId_]->recordBlockingTime(
@@ -1099,9 +1128,14 @@ void Driver::close() {
   if (!isOnThread() && !isTerminated()) {
     LOG(FATAL) << "Driver::close is only allowed from the Driver's thread";
   }
-  closeOperators();
-  updateStats();
   closed_ = true;
+  // CancelGuard calls this from its destructor, where a throw aborts the
+  // process. Report the failure to the task before removing the driver, which
+  // may finish the task.
+  if (const auto error = closeOperators()) {
+    ctx_->task->setError(error);
+  }
+  updateStats();
   Task::removeDriver(ctx_->task, this);
 }
 
@@ -1109,9 +1143,15 @@ void Driver::closeByTask() {
   VELOX_CHECK(isOnThread());
   VELOX_CHECK(isTerminated());
   updateOperatorBlockingStats();
-  closeOperators();
-  updateStats();
   closed_ = true;
+  // The task is already terminated, and callers run this during task teardown
+  // (Task::terminate(), and Task::resume() from a scope guard), where a throw
+  // would skip closing the remaining drivers or abort the process.
+  if (const auto error = closeOperators()) {
+    LOG(WARNING) << "Operator close failed while the task closed the driver: "
+                 << folly::exceptionStr(error);
+  }
+  updateStats();
 }
 
 bool Driver::mayPushdownAggregation(Operator* aggregation) const {
@@ -1341,7 +1381,9 @@ folly::dynamic Driver::toJson() const {
   obj["blockingReason"] = BlockingReasonName::toName(blockingReason_);
   obj["state"] = state_.toJson();
   obj["closed"] = closed_.load();
-  obj["queueTimeStartMicros"] = queueTimeStartUs_;
+  obj["queuedUs"] = state_.isEnqueued
+      ? SteadyTime::now<std::chrono::microseconds>() - queueTimeStartUs_
+      : 0;
   const auto ocs = opCallStatus();
   if (!ocs.empty()) {
     obj["curOpCall"] =

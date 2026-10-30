@@ -45,6 +45,7 @@ add_executable(
   IndexLookupTest.cpp
   ClusterIndexTest.cpp
   KeyChunkDecoderTest.cpp
+  KeyComparatorTest.cpp
   ClusterIndexTestBase.cpp
   VectorIndexTest.cpp
   VectorIndexUtilityTest.cpp
@@ -74,3 +75,50 @@ target_link_libraries(
   gtest_main
   Folly::folly
 )
+
+# Moved from velox/index/tests/CMakeLists.txt when the nimble/velox/ folder
+# was flattened.
+add_library(nimble_velox_index_test_base NimbleIndexTestBase.cpp NimbleIndexTestBase.h)
+target_link_libraries(
+  nimble_velox_index_test_base
+  PUBLIC
+    nimble_index_iterator
+    nimble_index_projector
+    nimble_index_test_utils
+    nimble_tablet_reader_cache
+    nimble_deserializer
+    nimble_serialization_header
+    nimble_serializer
+    nimble_stream_data_writer
+    nimble_velox_common
+    nimble_shared_dictionary_test_utils
+    nimble_velox_shared_dictionary_config
+    nimble_encodings
+    nimble_writer
+    nimble_velox_selective
+    nimble_velox_schema_utils
+    velox_dwio_common
+    velox_dwio_common_test_utils
+    velox_key_encoder
+    velox_memory
+    velox_row_fast
+    velox_vector_fuzzer
+    velox_vector_test_lib
+    gtest
+)
+
+add_executable(nimble_index_projector_test NimbleIndexProjectorTest.cpp)
+add_test(nimble_index_projector_test nimble_index_projector_test)
+target_link_libraries(nimble_index_projector_test nimble_velox_index_test_base gtest_main)
+
+add_executable(nimble_index_scan_cursor_test IndexScanCursorTest.cpp)
+add_test(nimble_index_scan_cursor_test nimble_index_scan_cursor_test)
+target_link_libraries(nimble_index_scan_cursor_test nimble_velox_index_test_base Folly::folly)
+
+add_executable(nimble_row_iterator_test NimbleRowIteratorTest.cpp)
+add_test(nimble_row_iterator_test nimble_row_iterator_test)
+target_link_libraries(nimble_row_iterator_test nimble_velox_index_test_base gtest_main)
+
+add_executable(nimble_iterator_test NimbleIteratorTest.cpp)
+add_test(nimble_iterator_test nimble_iterator_test)
+target_link_libraries(nimble_iterator_test nimble_velox_index_test_base Folly::folly)

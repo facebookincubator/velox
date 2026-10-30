@@ -82,11 +82,7 @@ TEST_F(MapConcatTest, basic) {
       {{3, 30}, {8, 80}, {9, 90}},
       {{4, 40}, {5, 50}, {6, 60}, {10, 100}},
   });
-  for (int i = 0; i < 3; ++i) {
-    ASSERT_TRUE(expected->equalValueAt(result.get(), i, i))
-        << "at " << i << ": expected " << expected->toString(i) << ", got "
-        << result->toString(i);
-  }
+  test::assertEqualVectors(expected, result);
 }
 
 TEST_F(MapConcatTest, duplicateKeys) {
@@ -105,9 +101,7 @@ TEST_F(MapConcatTest, duplicateKeys) {
   auto expected = makeMapVector<int64_t, int64_t>({
       {{1, 10}, {2, 200}, {3, 300}, {4, 400}},
   });
-  ASSERT_TRUE(expected->equalValueAt(result.get(), 0, 0))
-      << "expected " << expected->toString(0) << ", got "
-      << result->toString(0);
+  test::assertEqualVectors(expected, result);
 }
 
 TEST_F(MapConcatTest, throwOnDuplicateKeys) {
@@ -227,9 +221,7 @@ TEST_F(MapConcatTest, multipleInputs) {
   auto expected = makeMapVector<int64_t, int64_t>({
       {{1, 10}, {2, 20}, {3, 30}},
   });
-  ASSERT_TRUE(expected->equalValueAt(result.get(), 0, 0))
-      << "expected " << expected->toString(0) << ", got "
-      << result->toString(0);
+  test::assertEqualVectors(expected, result);
 }
 
 TEST_F(MapConcatTest, multipleInputsDuplicateKeys) {
@@ -250,9 +242,7 @@ TEST_F(MapConcatTest, multipleInputsDuplicateKeys) {
   auto expected = makeMapVector<int64_t, int64_t>({
       {{1, 1000}, {2, 20}, {3, 30}, {4, 40}},
   });
-  ASSERT_TRUE(expected->equalValueAt(result.get(), 0, 0))
-      << "expected " << expected->toString(0) << ", got "
-      << result->toString(0);
+  test::assertEqualVectors(expected, result);
 }
 
 TEST_F(MapConcatTest, varcharKeys) {
@@ -269,9 +259,7 @@ TEST_F(MapConcatTest, varcharKeys) {
   auto expected = makeMapVector<StringView, int64_t>({
       {{StringView("a"), 1}, {StringView("b"), 20}, {StringView("c"), 3}},
   });
-  ASSERT_TRUE(expected->equalValueAt(result.get(), 0, 0))
-      << "expected " << expected->toString(0) << ", got "
-      << result->toString(0);
+  test::assertEqualVectors(expected, result);
 }
 
 TEST_F(MapConcatTest, emptyMaps) {
@@ -294,11 +282,7 @@ TEST_F(MapConcatTest, emptyMaps) {
       {{1, 10}},
       {},
   });
-  for (int i = 0; i < 3; ++i) {
-    ASSERT_TRUE(expected->equalValueAt(result.get(), i, i))
-        << "at " << i << ": expected " << expected->toString(i) << ", got "
-        << result->toString(i);
-  }
+  test::assertEqualVectors(expected, result);
 }
 
 TEST_F(MapConcatTest, dictionaryEncoded) {

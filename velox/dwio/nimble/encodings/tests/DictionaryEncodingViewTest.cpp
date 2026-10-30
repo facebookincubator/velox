@@ -25,15 +25,16 @@
 
 using namespace facebook;
 
-using EncodingViewTest = nimble::test::EncodingViewTest;
 using DictionaryEncodingViewTest = nimble::test::EncodingViewTest;
 
-TEST_F(EncodingViewTest, readsDictionaryEncoding) {
+TEST_P(DictionaryEncodingViewTest, readsDictionaryEncoding) {
   expectReads<nimble::DictionaryEncoding<int32_t>>(
       makeVector({5, 7, 5, 9, 7, 5, 11}), {6, 0, 3, 2, 5});
 }
 
-TEST_F(EncodingViewTest, readsDictionaryEncodingForSupportedTypeFamilies) {
+TEST_P(
+    DictionaryEncodingViewTest,
+    readsDictionaryEncodingForSupportedTypeFamilies) {
   expectReads<nimble::DictionaryEncoding<uint32_t>>(
       makeVector<uint32_t>({5, 7, 5, 9, 7, 5, 11}), {6, 0, 3, 2, 5});
   expectReads<nimble::DictionaryEncoding<float>>(
@@ -45,7 +46,7 @@ TEST_F(EncodingViewTest, readsDictionaryEncodingForSupportedTypeFamilies) {
       {4, 0, 3, 2, 1});
 }
 
-TEST_F(DictionaryEncodingViewTest, concurrent) {
+TEST_P(DictionaryEncodingViewTest, concurrent) {
   const auto positions = randomizedPositions(/*seed=*/8);
   std::vector<std::string> backing;
 
@@ -54,3 +55,5 @@ TEST_F(DictionaryEncodingViewTest, concurrent) {
   expectConcurrentReads<nimble::DictionaryEncoding<std::string_view>>(
       randomStringViews(backing, /*seed=*/10), positions);
 }
+
+INSTANTIATE_ENCODING_VIEW_TEST_SUITE(DictionaryEncodingViewTest);

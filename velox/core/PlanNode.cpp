@@ -20,6 +20,7 @@
 #include "velox/core/PlanNode.h"
 
 #include "velox/common/EnumDefine.h"
+#include "velox/common/vectorindex/LocalVectorIndexOptions.h"
 #include "velox/core/FixedPointPlanNodes.h"
 #include "velox/core/TableWriteTraits.h"
 #include "velox/vector/VectorSaver.h"
@@ -538,7 +539,7 @@ PlanNodePtr AggregationNode::create(const folly::dynamic& obj, void* context) {
       obj.count("mayRetainInput")
           ? std::optional<bool>(obj["mayRetainInput"].asBool())
           : std::nullopt,
-      deserializeSingleSource(obj, context));
+      std::move(source));
 }
 
 namespace {
@@ -1605,32 +1606,57 @@ AbstractJoinNode::AbstractJoinNode(
       sources_({std::move(left), std::move(right)}),
       outputType_(std::move(outputType)) {}
 
-void AbstractJoinNode::validate() const {
-  VELOX_CHECK(!leftKeys_.empty(), "JoinNode requires at least one join key");
+namespace {
+// Checks that 'leftKeys' and 'rightKeys' are columns of 'leftType' and
+// 'rightType', as many on each side, with matching types.
+void checkJoinKeys(
+    const std::vector<FieldAccessTypedExprPtr>& leftKeys,
+    const std::vector<FieldAccessTypedExprPtr>& rightKeys,
+    const RowTypePtr& leftType,
+    const RowTypePtr& rightType) {
   VELOX_CHECK_EQ(
-      leftKeys_.size(),
-      rightKeys_.size(),
+      leftKeys.size(),
+      rightKeys.size(),
       "JoinNode requires same number of join keys on left and right sides");
-  auto leftType = sources_[0]->outputType();
-  for (const auto& key : leftKeys_) {
+  for (const auto& key : leftKeys) {
     VELOX_CHECK(
         leftType->containsChild(key->name()),
         "Left side join key not found in left side output: {}",
         key->name());
   }
-  auto rightType = sources_[1]->outputType();
-  for (const auto& key : rightKeys_) {
+  for (const auto& key : rightKeys) {
     VELOX_CHECK(
         rightType->containsChild(key->name()),
         "Right side join key not found in right side output: {}",
         key->name());
   }
-  for (auto i = 0; i < leftKeys_.size(); ++i) {
+  for (auto i = 0; i < leftKeys.size(); ++i) {
     VELOX_CHECK_EQ(
-        leftKeys_[i]->type()->kind(),
-        rightKeys_[i]->type()->kind(),
+        leftKeys[i]->type()->kind(),
+        rightKeys[i]->type()->kind(),
         "Join key types on the left and right sides must match");
   }
+}
+
+// Writes the join keys as 'left=right AND ...'.
+void addJoinKeysDetails(
+    std::stringstream& stream,
+    const std::vector<FieldAccessTypedExprPtr>& leftKeys,
+    const std::vector<FieldAccessTypedExprPtr>& rightKeys) {
+  for (auto i = 0; i < leftKeys.size(); ++i) {
+    if (i > 0) {
+      stream << " AND ";
+    }
+    stream << leftKeys[i]->name() << "=" << rightKeys[i]->name();
+  }
+}
+} // namespace
+
+void AbstractJoinNode::validate() const {
+  VELOX_CHECK(!leftKeys_.empty(), "JoinNode requires at least one join key");
+  const auto& leftType = sources_[0]->outputType();
+  const auto& rightType = sources_[1]->outputType();
+  checkJoinKeys(leftKeys_, rightKeys_, leftType, rightType);
 
   auto numOutputColumns = outputType_->size();
   if (isLeftSemiProjectJoin() || isRightSemiProjectJoin()) {
@@ -1678,13 +1704,7 @@ void AbstractJoinNode::validate() const {
 
 void AbstractJoinNode::addDetails(std::stringstream& stream) const {
   stream << JoinTypeName::toName(joinType_) << " ";
-
-  for (auto i = 0; i < leftKeys_.size(); ++i) {
-    if (i > 0) {
-      stream << " AND ";
-    }
-    stream << leftKeys_[i]->name() << "=" << rightKeys_[i]->name();
-  }
+  addJoinKeysDetails(stream, leftKeys_, rightKeys_);
 
   if (filter_) {
     stream << ", filter: " << filter_->toString();
@@ -3877,6 +3897,189 @@ PlanNodePtr SpatialJoinNode::create(const folly::dynamic& obj, void* context) {
       outputType);
 }
 
+VectorSearchJoinNode::VectorSearchJoinNode(
+    const PlanNodeId& id,
+    JoinType joinType,
+    std::vector<FieldAccessTypedExprPtr> leftKeys,
+    std::vector<FieldAccessTypedExprPtr> rightKeys,
+    FieldAccessTypedExprPtr probeEmbedding,
+    FieldAccessTypedExprPtr buildIndex,
+    common::vectorindex::VectorIndexMetric metric,
+    int64_t k,
+    std::vector<std::pair<std::string, std::string>> searchOptions,
+    std::optional<std::string> idName,
+    std::optional<std::string> scoreName,
+    PlanNodePtr left,
+    PlanNodePtr right,
+    RowTypePtr outputType)
+    : PlanNode(id),
+      joinType_(joinType),
+      leftKeys_(std::move(leftKeys)),
+      rightKeys_(std::move(rightKeys)),
+      probeEmbedding_(std::move(probeEmbedding)),
+      buildIndex_(std::move(buildIndex)),
+      metric_(metric),
+      k_(k),
+      searchOptions_(std::move(searchOptions)),
+      idName_(std::move(idName)),
+      scoreName_(std::move(scoreName)),
+      sources_({std::move(left), std::move(right)}),
+      outputType_(std::move(outputType)) {
+  VELOX_USER_CHECK(
+      joinType_ == JoinType::kInner || joinType_ == JoinType::kLeft,
+      "The join type is not supported by vector search join: {}",
+      JoinTypeName::toName(joinType_));
+  const auto& leftType = sources_[0]->outputType();
+  const auto& rightType = sources_[1]->outputType();
+  checkJoinKeys(leftKeys_, rightKeys_, leftType, rightType);
+
+  VELOX_USER_CHECK(
+      leftType->containsChild(probeEmbedding_->name()),
+      "Probe embedding not found in left side output: {}",
+      probeEmbedding_->name());
+  VELOX_USER_CHECK(
+      probeEmbedding_->type()->equivalent(*ARRAY(REAL())),
+      "Probe embedding must be ARRAY(REAL): {}",
+      probeEmbedding_->type()->toString());
+  VELOX_USER_CHECK(
+      rightType->containsChild(buildIndex_->name()),
+      "Build index not found in right side output: {}",
+      buildIndex_->name());
+  VELOX_USER_CHECK(
+      buildIndex_->type()->isVarbinary(),
+      "Build index must be VARBINARY: {}",
+      buildIndex_->type()->toString());
+
+  VELOX_USER_CHECK_GE(k_, 1, "Vector search join requires k of at least 1");
+  common::vectorindex::LocalVectorIndexOptions::parseSearch(
+      {searchOptions_.begin(), searchOptions_.end()});
+
+  VELOX_USER_CHECK(
+      !idName_.has_value() || idName_ != scoreName_,
+      "Vector search join id and score must have different names: {}",
+      idName_.value_or(""));
+  std::vector<std::string> sourceNames;
+  std::vector<TypePtr> sourceTypes;
+  for (auto i = 0; i < outputType_->size(); ++i) {
+    const auto& name = outputType_->nameOf(i);
+    const auto& type = outputType_->childAt(i);
+    if (name == idName_) {
+      VELOX_USER_CHECK(
+          type->isBigint(),
+          "Vector search join id must be BIGINT: {}",
+          type->toString());
+    } else if (name == scoreName_) {
+      VELOX_USER_CHECK(
+          type->isReal(),
+          "Vector search join score must be REAL: {}",
+          type->toString());
+    } else {
+      VELOX_USER_CHECK_NE(
+          name,
+          buildIndex_->name(),
+          "Vector search join output may not include the build index");
+      sourceNames.push_back(name);
+      sourceTypes.push_back(type);
+    }
+  }
+  for (const auto& name : {idName_, scoreName_}) {
+    if (!name.has_value()) {
+      continue;
+    }
+    VELOX_USER_CHECK(
+        outputType_->containsChild(*name),
+        "Vector search join id or score is not an output column: {}",
+        *name);
+    VELOX_USER_CHECK(
+        !leftType->containsChild(*name),
+        "Vector search join id or score name is also a left side column: {}",
+        *name);
+    VELOX_USER_CHECK(
+        !rightType->containsChild(*name),
+        "Vector search join id or score name is also a right side column: {}",
+        *name);
+  }
+  const auto numSourceColumns = sourceNames.size();
+  checkJoinOutput(
+      leftType,
+      rightType,
+      ROW(std::move(sourceNames), std::move(sourceTypes)),
+      numSourceColumns);
+}
+
+void VectorSearchJoinNode::addDetails(std::stringstream& stream) const {
+  stream << JoinTypeName::toName(joinType_) << " ";
+  addJoinKeysDetails(stream, leftKeys_, rightKeys_);
+  if (!leftKeys_.empty()) {
+    stream << ", ";
+  }
+  stream << probeEmbedding_->name() << " nearest in " << buildIndex_->name()
+         << " (" << common::vectorindex::VectorIndexMetricName::toName(metric_)
+         << "), k: " << k_;
+  for (const auto& [key, value] : searchOptions_) {
+    stream << ", " << key << ": " << value;
+  }
+}
+
+folly::dynamic VectorSearchJoinNode::serialize() const {
+  auto obj = PlanNode::serialize();
+  obj["joinType"] = JoinTypeName::toName(joinType_);
+  obj["leftKeys"] = ISerializable::serialize(leftKeys_);
+  obj["rightKeys"] = ISerializable::serialize(rightKeys_);
+  obj["probeEmbedding"] = probeEmbedding_->serialize();
+  obj["buildIndex"] = buildIndex_->serialize();
+  obj["metric"] = common::vectorindex::VectorIndexMetricName::toName(metric_);
+  obj["k"] = k_;
+  auto options = folly::dynamic::array();
+  for (const auto& [key, value] : searchOptions_) {
+    options.push_back(folly::dynamic::array(key, value));
+  }
+  obj["searchOptions"] = std::move(options);
+  if (idName_.has_value()) {
+    obj["idName"] = *idName_;
+  }
+  if (scoreName_.has_value()) {
+    obj["scoreName"] = *scoreName_;
+  }
+  obj["outputType"] = outputType_->serialize();
+  return obj;
+}
+
+void VectorSearchJoinNode::accept(
+    const PlanNodeVisitor& visitor,
+    PlanNodeVisitorContext& context) const {
+  visitor.visit(*this, context);
+}
+
+PlanNodePtr VectorSearchJoinNode::create(
+    const folly::dynamic& obj,
+    void* context) {
+  auto sources = deserializeSources(obj, context);
+  VELOX_CHECK_EQ(2, sources.size());
+  std::vector<std::pair<std::string, std::string>> searchOptions;
+  for (const auto& option : obj["searchOptions"]) {
+    searchOptions.emplace_back(option[0].asString(), option[1].asString());
+  }
+  return std::make_shared<VectorSearchJoinNode>(
+      deserializePlanNodeId(obj),
+      JoinTypeName::toJoinType(obj["joinType"].asString()),
+      deserializeFields(obj["leftKeys"], context),
+      deserializeFields(obj["rightKeys"], context),
+      deserializeField(obj["probeEmbedding"]),
+      deserializeField(obj["buildIndex"]),
+      common::vectorindex::VectorIndexMetricName::toVectorIndexMetric(
+          obj["metric"].asString()),
+      obj["k"].asInt(),
+      std::move(searchOptions),
+      obj.count("idName") ? std::optional(obj["idName"].asString())
+                          : std::nullopt,
+      obj.count("scoreName") ? std::optional(obj["scoreName"].asString())
+                             : std::nullopt,
+      sources[0],
+      sources[1],
+      deserializeRowType(obj["outputType"]));
+}
+
 TopNNode::TopNNode(
     const PlanNodeId& id,
     const std::vector<FieldAccessTypedExprPtr>& sortingKeys,
@@ -4231,6 +4434,7 @@ void PlanNode::registerSerDe() {
   registry.Register("ParallelProjectNode", ParallelProjectNode::create);
   registry.Register("RowNumberNode", RowNumberNode::create);
   registry.Register("SpatialJoinNode", SpatialJoinNode::create);
+  registry.Register("VectorSearchJoinNode", VectorSearchJoinNode::create);
   registry.Register("TableScanNode", TableScanNode::create);
   registry.Register("TableWriteNode", TableWriteNode::create);
   registry.Register("TableWriteMergeNode", TableWriteMergeNode::create);

@@ -20,6 +20,7 @@
 #include "velox/dwio/dwrf/RegisterDwrfReader.h"
 #include "velox/dwio/dwrf/RegisterDwrfWriter.h"
 #include "velox/exec/Aggregate.h"
+#include "velox/exec/MemoryReclaimer.h"
 #include "velox/exec/Split.h"
 #include "velox/exec/fuzzer/FuzzerUtil.h"
 #include "velox/exec/fuzzer/InputGenerator.h"
@@ -286,11 +287,21 @@ class AggregationFuzzerBase {
   FuzzerGenerator rng_;
   size_t currentSeed_{0};
 
+  // Driver threads allocate lazily from the input vectors' pool, e.g. when
+  // peeling dictionaries. Arbitration triggered by such an allocation must
+  // suspend the driver, which exec::MemoryReclaimer does.
   std::shared_ptr<memory::MemoryPool> rootPool_{
-      memory::memoryManager()->addRootPool()};
-  std::shared_ptr<memory::MemoryPool> pool_{rootPool_->addLeafChild("leaf")};
-  std::shared_ptr<memory::MemoryPool> writerPool_{
-      rootPool_->addAggregateChild("aggregationFuzzerWriter")};
+      memory::memoryManager()->addRootPool(
+          "aggregationFuzzer",
+          memory::kMaxMemory,
+          exec::MemoryReclaimer::create())};
+  std::shared_ptr<memory::MemoryPool> pool_{rootPool_->addLeafChild(
+      "aggregationFuzzerLeaf",
+      true,
+      exec::MemoryReclaimer::create())};
+  std::shared_ptr<memory::MemoryPool> writerPool_{rootPool_->addAggregateChild(
+      "aggregationFuzzerWriter",
+      exec::MemoryReclaimer::create())};
   VectorFuzzer vectorFuzzer_;
   std::vector<TypePtr> supportedKeyTypes_;
 };

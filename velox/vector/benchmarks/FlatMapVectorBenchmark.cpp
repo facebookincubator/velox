@@ -35,6 +35,9 @@
 //    relative to `construct`, so the gap is the cost of building the key
 //    index when construction defers it.
 //  - slice: slices half of the rows.
+//  - sliceAndLookup: slices half of the rows and looks up a single key through
+//    the slice, after the original has built its key index. Reported relative
+//    to `slice`, so the gap is the cost of the slice building its own index.
 //  - lookupGeneric{Hit,Miss}: getKeyChannel() with a keys vector and an index,
 //    for keys that are present / absent.
 //  - lookupTyped{Hit,Miss}: getKeyChannel() with a C++ value. Reported
@@ -162,6 +165,18 @@ vector_size_t runSlice(const TestCase& testCase) {
   return testCase.flatMap->numDistinctKeys();
 }
 
+// The original's key index is already built, since fuzzMissingKeys() looked up
+// keys in it. `T` is the C++ type of the keys.
+template <typename T>
+vector_size_t runSliceAndLookup(const TestCase& testCase) {
+  const auto& flatMap = testCase.flatMap;
+  const auto key = flatMap->distinctKeys()->asFlatVector<T>()->valueAt(0);
+  auto slice = flatMap->slice(0, kNumRows / 2);
+  folly::doNotOptimizeAway(
+      slice->asUnchecked<FlatMapVector>()->getKeyChannel(key).value_or(0));
+  return flatMap->numDistinctKeys();
+}
+
 // Looks up every key in `keys`, passing each as a C++ value of type `T`.
 template <typename T>
 vector_size_t runLookupTyped(
@@ -193,6 +208,9 @@ vector_size_t runLookupGeneric(
   }                                                                    \
   BENCHMARK_MULTI(slice_##type##_##numKeys) {                          \
     return runSlice(data->testCase(#type, numKeys));                   \
+  }                                                                    \
+  BENCHMARK_RELATIVE_MULTI(sliceAndLookup_##type##_##numKeys) {        \
+    return runSliceAndLookup<T>(data->testCase(#type, numKeys));       \
   }                                                                    \
   BENCHMARK_MULTI(lookupGenericHit_##type##_##numKeys) {               \
     const auto& flatMap = *data->testCase(#type, numKeys).flatMap;     \

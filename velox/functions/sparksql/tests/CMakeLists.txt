@@ -45,6 +45,7 @@ add_executable(
   FactorialTest.cpp
   FilterTest.cpp
   FormatNumberTest.cpp
+  FormatStringTest.cpp
   FromJsonTest.cpp
   FromToJsonRoundTripTest.cpp
   GetArrayStructFieldsTest.cpp
@@ -56,6 +57,7 @@ add_executable(
   IntervalArithmeticTest.cpp
   JsonArrayLengthTest.cpp
   JsonObjectKeysTest.cpp
+  LastWinTest.cpp
   LeastGreatestTest.cpp
   LuhnCheckTest.cpp
   MakeDecimalTest.cpp
@@ -86,6 +88,7 @@ add_executable(
   StringToMapTest.cpp
   ToJsonTest.cpp
   ToPrettyStringTest.cpp
+  TransformKeysTest.cpp
   TransformTest.cpp
   TransformValuesTest.cpp
   UnBase64Test.cpp

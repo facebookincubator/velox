@@ -75,6 +75,21 @@ DEFINE_bool(
     false,
     "With --optimize, assume model inputs, weights, and constants are "
     "contiguous (WaveConfig::inputContiguous)");
+DEFINE_bool(
+    recognize_disjoint_copies,
+    true,
+    "With --optimize, merge copies into the columns of one tensor into a "
+    "single copy (WaveConfig::recognizeDisjointCopies)");
+DEFINE_bool(
+    reinplace_scatters,
+    true,
+    "With --optimize, write functional scatter chains in place "
+    "(WaveConfig::reinplaceScatters)");
+DEFINE_bool(
+    disjoint_write_ordering,
+    true,
+    "With --optimize, leave writes into disjoint regions unordered "
+    "(WaveConfig::disjointWriteOrdering)");
 
 int main(int argc, char** argv) {
   folly::Init init(&argc, &argv);
@@ -90,6 +105,11 @@ int main(int argc, char** argv) {
   if (FLAGS_optimize) {
     torch::wave::WaveConfig::get().enableReuse = FLAGS_enable_reuse;
     torch::wave::WaveConfig::get().inputContiguous = FLAGS_contiguous_inputs;
+    torch::wave::WaveConfig::get().recognizeDisjointCopies =
+        FLAGS_recognize_disjoint_copies;
+    torch::wave::WaveConfig::get().reinplaceScatters = FLAGS_reinplace_scatters;
+    torch::wave::WaveConfig::get().disjointWriteOrdering =
+        FLAGS_disjoint_write_ordering;
   }
 
   if (!FLAGS_describe_pt.empty()) {

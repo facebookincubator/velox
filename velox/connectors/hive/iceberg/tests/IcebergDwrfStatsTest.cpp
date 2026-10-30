@@ -484,6 +484,32 @@ TEST_F(IcebergDwrfStatsTest, arrayType) {
   verifyBoundsNotExist(stats[0], {arrayElementColId});
 }
 
+// DWRF statistics cannot give the null count of a complex column or its
+// children, so the commit message must omit it. A zero there would let Iceberg
+// prune the file for 'IS NULL' on the column.
+TEST_F(IcebergDwrfStatsTest, complexColumnOmitsNullCount) {
+  const auto outputDir = TempDirectoryPath::create();
+  auto dataSink = createDataSinkAndAppendData(
+      {makeRowVector({
+          makeFlatVector<int32_t>({1, 2, 3}),
+          makeArrayVector<int32_t>(
+              3,
+              [](vector_size_t row) { return row % 2; },
+              [](vector_size_t index) { return index; },
+              [](vector_size_t row) { return row == 2; }),
+      })},
+      outputDir->getPath());
+  const auto commitTasks = dataSink->close();
+  ASSERT_EQ(commitTasks.size(), 1);
+
+  // Field ids, depth-first from 1: int column 1, array 2, element 3.
+  const auto nullValueCounts =
+      folly::parseJson(commitTasks[0])["metrics"]["nullValueCounts"];
+  EXPECT_EQ(nullValueCounts["1"].asInt(), 0);
+  EXPECT_EQ(nullValueCounts.count("2"), 0);
+  EXPECT_EQ(nullValueCounts.count("3"), 0);
+}
+
 // Nested struct leaf fields carry bounds matched by field id.
 // Field ids (depth-first from 1):
 //   int_col: 1

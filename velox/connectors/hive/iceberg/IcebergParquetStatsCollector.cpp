@@ -24,7 +24,9 @@
 #include "velox/dwio/common/FileMetadata.h"
 #include "velox/dwio/parquet/writer/Writer.h"
 #include "velox/dwio/parquet/writer/arrow/Metadata.h"
+#include "velox/dwio/parquet/writer/arrow/Schema.h"
 #include "velox/dwio/parquet/writer/arrow/Statistics.h"
+#include "velox/dwio/parquet/writer/arrow/Types.h"
 #include "velox/type/Type.h"
 
 namespace facebook::velox::connector::hive::iceberg {
@@ -93,6 +95,7 @@ IcebergDataFileStatisticsPtr IcebergParquetStatsCollector::aggregate(
   auto dataFileStats = std::make_shared<IcebergDataFileStatistics>();
   dataFileStats->numRecords = metadata->numRows();
   const auto numRowGroups = metadata->numRowGroups();
+  dataFileStats->splitOffsets.reserve(numRowGroups);
 
   // Track global min/max statistics for each column across all row groups.
   // Key: Iceberg field ID.
@@ -112,6 +115,7 @@ IcebergDataFileStatisticsPtr IcebergParquetStatsCollector::aggregate(
   std::unordered_set<int32_t> fieldIds;
   for (auto i = 0; i < numRowGroups; ++i) {
     const auto& rowGroup = metadata->rowGroup(i);
+    dataFileStats->splitOffsets.push_back(rowGroup->fileOffset());
 
     for (auto j = 0; j < rowGroup->numColumns(); ++j) {
       const auto& columnChunk = rowGroup->columnChunk(j);
@@ -124,7 +128,8 @@ IcebergDataFileStatisticsPtr IcebergParquetStatsCollector::aggregate(
 
       const auto& columnChunkStats = columnChunk->statistics();
       if (columnChunkStats) {
-        stats.nullValueCount += columnChunkStats->nullCount();
+        stats.nullValueCount =
+            stats.nullValueCount.value_or(0) + columnChunkStats->nullCount();
 
         if (columnChunkStats->hasMinMax() && shouldStoreBounds(fieldId)) {
           auto [it, inserted] = globalMinMaxStats.emplace(
@@ -141,6 +146,12 @@ IcebergDataFileStatisticsPtr IcebergParquetStatsCollector::aggregate(
             }
           }
         }
+      } else if (metadata->schema()->column(j)->logicalType()->isNull()) {
+        // NullType columns have SortOrder::kUnknown so the Parquet writer
+        // never initialises a statistics object for them. All values are
+        // NULL by definition, so null_value_count equals the row count.
+        stats.nullValueCount =
+            stats.nullValueCount.value_or(0) + columnChunk->numValues();
       }
     }
   }

@@ -57,6 +57,14 @@ struct Launch {
   /// no registry entry).
   bool metadataOnly{false};
 
+  /// Blocks per SM this op would rather run at, or 0 for unspecified. Taken
+  /// from WaveConfig::preferBlocksPerSm by opcode when the launch is built, so
+  /// the partitioner does not have to consult the config per step. A non-zero
+  /// value both keeps the op out of launches with a different preference and
+  /// narrows its launch's capacity to numSMs times this. See the config field
+  /// for what it is for.
+  int32_t blocksPerSm{0};
+
   /// Corresponds to orderedInputs in 'op'.
   std::vector<ValueCP> values;
 
@@ -203,32 +211,56 @@ class CompositeKernel {
       const std::unordered_set<std::string>& includes,
       int32_t kernelId);
 
-  /// Launches the kernel on the given stream.
+  /// The block sizes a launch of this kernel can run at, ascending; one entry
+  /// point each. See Metadata::blockSize.
+  const std::vector<int32_t>& blockSizes() const {
+    return blockSizes_;
+  }
+
+  /// The entry point a launch at 'blockSize' threads runs: the one of
+  /// 'soleOp' when the launch holds only that op and it has an entry point of
+  /// its own (Metadata::ownEntryPoint), else the one holding every op at that
+  /// size.
+  int32_t entryFor(int32_t blockSize, const KernelOperation* soleOp) const;
+
+  /// Blocks of entry point 'entry' resident on one SM at its block size and no
+  /// dynamic shared memory. KernelInfo::maxOccupancy0 is the same figure at
+  /// 256 threads.
+  int32_t maxOccupancy(int32_t entry) const;
+
+  /// The largest maxOccupancy of any entry point, which bounds the blocks any
+  /// step of this kernel can launch.
+  int32_t maxOccupancyOfEntries() const;
+
+  /// Launches entry point 'entry' at its block size on the given stream.
   void launch(
+      int32_t entry,
       int32_t numBlocks,
-      int32_t numThreads,
       int32_t sharedMemory,
       facebook::velox::wave::Stream* stream,
       void** args);
 
-  /// Launches the kernel as a cooperative grid.
+  /// Launches entry point 'entry' as a cooperative grid.
   void launchCooperative(
+      int32_t entry,
       int32_t numBlocks,
-      int32_t numThreads,
       int32_t sharedMemory,
       facebook::velox::wave::Stream* stream,
       void** args);
 
-  /// Returns occupancy information for the compiled kernel. Returns a
-  /// default KernelInfo if no GPU is available.
+  /// Returns occupancy information for the compiled kernel's default entry
+  /// point, or for 'entry'. Returns a default KernelInfo if no GPU is
+  /// available.
   facebook::velox::wave::KernelInfo kernelInfo() const;
+  facebook::velox::wave::KernelInfo kernelInfo(int32_t entry) const;
 
-  /// Blocks of this kernel that stay resident on one SM at 'dynamicSharedBytes'
-  /// of dynamic shared memory, as the driver computes it. 0 when there is no
-  /// compiled kernel to ask. Sizing a cooperative launch by anything else risks
-  /// a grid the driver will refuse, so the launch partitioner reads this rather
-  /// than dividing KernelInfo's zero-shared figure down.
-  int32_t occupancy(int32_t numThreads, int32_t dynamicSharedBytes) const;
+  /// Blocks of entry point 'entry' that stay resident on one SM at
+  /// 'dynamicSharedBytes' of dynamic shared memory, as the driver computes it.
+  /// 0 when there is no compiled kernel to ask. Sizing a cooperative launch by
+  /// anything else risks a grid the driver will refuse, so the launch
+  /// partitioner reads this rather than dividing KernelInfo's zero-shared
+  /// figure down.
+  int32_t occupancy(int32_t entry, int32_t dynamicSharedBytes) const;
 
   std::string toString(Listing mode = kExprs) const;
 
@@ -268,6 +300,16 @@ class CompositeKernel {
   std::string text_;
   std::vector<std::unique_ptr<ProjectOperation>> ops_;
   std::vector<std::unique_ptr<KernelOperation>> kernelOpStorage_;
+  // Ascending; entry point i is compiled for blockSizes_[i] threads.
+  std::vector<int32_t> blockSizes_;
+
+  // Per entry point: its block size, and the op it is the own entry point of
+  // or nullptr for one holding every op. The first blockSizes_.size() are the
+  // latter, in blockSizes_ order.
+  std::vector<int32_t> entryBlockSize_;
+  std::vector<const KernelOperation*> entryOp_;
+
+  int32_t entryIndex(int32_t blockSize) const;
   std::vector<PerOpKernel> perOpKernels_;
 };
 

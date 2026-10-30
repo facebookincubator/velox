@@ -16,7 +16,15 @@
 
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 
+#include "velox/vector/arrow/Abi.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
+
+#include <cudf/column/column_factories.hpp>
+#include <cudf/interop.hpp>
+#include <cudf/strings/strings_column_view.hpp>
+#include <cudf/types.hpp>
+
+#include <rmm/device_buffer.hpp>
 
 using namespace facebook::velox;
 using namespace facebook::velox::test;
@@ -56,6 +64,14 @@ class InteropTest : public ::testing::Test, public VectorTestBase {
 
     // Verify.
     test::assertEqualVectors(input, result);
+  }
+
+  /// Returns the Arrow format cuDF reports for the single-column \p table.
+  static std::string exportedArrowFormat(const cudf::table_view& table) {
+    const std::vector<cudf::column_metadata> metadata{
+        cudf::column_metadata("c0")};
+    auto schema = cudf::to_arrow_schema(table, metadata);
+    return schema->children[0]->format;
   }
 };
 
@@ -124,6 +140,71 @@ TEST_F(InteropTest, varbinary) {
       {"c0"},
       {makeFlatVector<StringView>({"binary\x00data"_sv, "more"_sv, ""_sv})});
   roundTrip(input);
+}
+
+// A cuDF strings column whose offsets are INT64 (what cuDF produces for columns
+// larger than 2 GB) is exported to Arrow as "U" (large string). Make sure it is
+// restored as VARBINARY with the offsets read at their real width.
+TEST_F(InteropTest, varbinaryLargeOffsets) {
+  auto stream = cudf::get_default_stream();
+  auto mr = cudf::get_current_device_resource_ref();
+
+  const std::vector<std::string> values = {
+      std::string("binary\0data", 11), "more", "", "a longer binary value"};
+  std::string chars;
+  std::vector<int64_t> offsets{0};
+  for (const auto& value : values) {
+    chars += value;
+    offsets.push_back(static_cast<int64_t>(chars.size()));
+  }
+
+  auto offsetsColumn = std::make_unique<cudf::column>(
+      cudf::data_type{cudf::type_id::INT64},
+      static_cast<cudf::size_type>(offsets.size()),
+      rmm::device_buffer(
+          offsets.data(), offsets.size() * sizeof(int64_t), stream, mr),
+      cuda::device_buffer<std::byte>(stream, mr, 0, cuda::no_init),
+      0);
+  auto stringsColumn = cudf::make_strings_column(
+      static_cast<cudf::size_type>(values.size()),
+      std::move(offsetsColumn),
+      rmm::device_buffer(chars.data(), chars.size(), stream, mr),
+      0,
+      cuda::device_buffer<std::byte>(stream, mr, 0, cuda::no_init));
+  ASSERT_EQ(
+      cudf::strings_column_view(stringsColumn->view()).offsets().type().id(),
+      cudf::type_id::INT64);
+
+  std::vector<std::unique_ptr<cudf::column>> columns;
+  columns.push_back(std::move(stringsColumn));
+  cudf::table table(std::move(columns));
+  EXPECT_EQ(exportedArrowFormat(table.view()), "U");
+
+  std::vector<StringView> views(values.begin(), values.end());
+  auto expected =
+      makeRowVector({"c0"}, {makeFlatVector<StringView>(views, VARBINARY())});
+  auto result = cudf_velox::with_arrow::toVeloxColumn(
+      table.view(), pool_.get(), expected->type(), stream, mr);
+  stream.sync();
+
+  test::assertEqualVectors(expected, result);
+}
+
+// setArrowFormatBackToVarbinary maps the format cuDF exports for a string
+// column to its binary twin. Pin the exported formats so that a cuDF change
+// fails here with a clear message instead of deep in the importer.
+TEST_F(InteropTest, varbinaryExportedFormat) {
+  auto stream = cudf::get_default_stream();
+  auto mr = cudf::get_current_device_resource_ref();
+
+  auto input = makeRowVector(
+      {"c0"}, {makeFlatVector<StringView>({"a"_sv, "bc"_sv}, VARBINARY())});
+  auto table =
+      cudf_velox::with_arrow::toCudfTable(input, pool_.get(), stream, mr);
+  ASSERT_EQ(
+      cudf::strings_column_view(table->view().column(0)).offsets().type().id(),
+      cudf::type_id::INT32);
+  EXPECT_EQ(exportedArrowFormat(table->view()), "u");
 }
 
 // ========== With nulls ==========
@@ -293,6 +374,14 @@ TEST_F(InteropTest, arrayOfStrings) {
   roundTrip(input);
 }
 
+TEST_F(InteropTest, arrayOfVarbinary) {
+  auto input = makeRowVector(
+      {"c0"},
+      {makeArrayVector<StringView>(
+          {{"hello"_sv, "world"_sv}, {}, {"foo"_sv}}, VARBINARY())});
+  roundTrip(input);
+}
+
 TEST_F(InteropTest, arrayOfDoubles) {
   auto input = makeRowVector(
       {"c0"},
@@ -449,6 +538,15 @@ TEST_F(InteropTest, constant) {
   auto child = makeConstant<int64_t>(10, 5);
   auto input = makeRowVector({child});
   roundTrip(input);
+}
+
+TEST_F(InteropTest, unsupportedLogicalTypes) {
+  EXPECT_FALSE(isTypeSupportedByCudf(INTERVAL_YEAR_MONTH()));
+  EXPECT_FALSE(isTypeSupportedByCudf(TIME()));
+  EXPECT_FALSE(isTypeSupportedByCudf(TIME_MICRO_UTC()));
+  EXPECT_TRUE(isTypeSupportedByCudf(INTERVAL_DAY_TIME()));
+  EXPECT_EQ(
+      veloxToCudfDataType(INTERVAL_DAY_TIME()).id(), cudf::type_id::INT64);
 }
 
 } // namespace

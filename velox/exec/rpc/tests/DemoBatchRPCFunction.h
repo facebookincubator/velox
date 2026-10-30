@@ -71,6 +71,10 @@ class DemoBatchRPCFunction : public AsyncRPCFunction {
     return VARCHAR();
   }
 
+  double configuredAdaptiveFloor() const override {
+    return 0.25;
+  }
+
   /// With failOnError=true, mimics the meta_ai_on_error='fail' policy: any
   /// errored response hard-fails the query (VELOX_USER_FAIL) instead of NULLing
   /// the row. Otherwise defers to the base (errors -> NULL).

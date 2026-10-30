@@ -25,6 +25,7 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/core/Expressions.h"
+#include "velox/exec/tests/utils/ExpressionBuilder.h"
 #include "velox/exec/tests/utils/QueryAssertions.h"
 #include "velox/expression/CoalesceExpr.h"
 #include "velox/expression/ConjunctExpr.h"
@@ -407,7 +408,20 @@ class ExprTest : public testing::Test, public VectorTestBase {
   }
 
   void testToSql(const std::string& expression, const RowTypePtr& rowType) {
-    auto exprSet = compileExpression(expression, rowType);
+    testToSql(compileExpression(expression, rowType), rowType);
+  }
+
+  void testToSql(const core::ExprPtr& expression, const RowTypePtr& rowType) {
+    testToSql(
+        compileExpression(
+            core::Expressions::inferTypes(
+                expression, rowType, execCtx_->pool())),
+        rowType);
+  }
+
+  void testToSql(
+      const std::unique_ptr<exec::ExprSet>& exprSet,
+      const RowTypePtr& rowType) {
     auto sql = exprSet->expr(0)->toSql();
     auto copy = compileExpression(sql, rowType);
     ASSERT_EQ(
@@ -2158,6 +2172,35 @@ TEST_P(ParameterizedExprTest, ifWithConstant) {
   EXPECT_EQ(true, result->as<ConstantVector<bool>>()->valueAt(0));
 }
 
+TEST_P(ParameterizedExprTest, ifMixesFlatMapAndMap) {
+  auto flatMap = makeFlatMapVector<int64_t, int64_t>({
+      {{1, 10}},
+      {{1, 11}},
+      {{1, 12}},
+  });
+  auto map = makeMapVector<int64_t, int64_t>({
+      {{2, 20}},
+      {{2, 21}},
+      {{2, 22}},
+  });
+  auto input =
+      makeRowVector({makeFlatVector<bool>({true, false, true}), flatMap, map});
+
+  auto expected = makeMapVector<int64_t, int64_t>({
+      {{1, 10}},
+      {{2, 21}},
+      {{1, 12}},
+  });
+  assertEqualVectors(expected, evaluate("if(c0, c1, c2)", input));
+
+  expected = makeMapVector<int64_t, int64_t>({
+      {{2, 20}},
+      {{1, 11}},
+      {{2, 22}},
+  });
+  assertEqualVectors(expected, evaluate("if(c0, c2, c1)", input));
+}
+
 // Make sure that switch do set nulls for rows that are not evaluated by the
 // switch due to a throw.
 TEST_P(ParameterizedExprTest, switchSetNullsForThrowIndices) {
@@ -3428,8 +3471,18 @@ TEST_P(ParameterizedExprTest, toSql) {
   // Array, map and row literals.
   testToSql("contains(array[1, 2, 3], a)", rowType);
   testToSql("map(array[a, b, 5], array[10, 20, 30])", rowType);
+
+  // Not a SQL string: the parser folds a map() call over constant arrays into
+  // a map constant with flat keys and values. toSql() writes that constant as
+  // a map() call, which compiles to the same map with dictionary-encoded keys
+  // and values, so the two would print differently. Building the call
+  // directly makes both sides evaluate map().
   testToSql(
-      "element_at(map(array[1, 2, 3], array['a', 'b', 'c']), a)", rowType);
+      expr_builder::call(
+          "map",
+          expr_builder::call("array_constructor", 1L, 2L, 3L),
+          expr_builder::call("array_constructor", "a", "b", "c")),
+      rowType);
   testToSql("row_constructor(a, b, 'test')", rowType);
   testToSql("row_constructor(true, 1.5, 'abc', array[1, 2, 3])", rowType);
 
@@ -3443,7 +3496,7 @@ TEST_P(ParameterizedExprTest, toSql) {
   testToSql("pi()", rowType);
 
   // Field dereference.
-  rowType = ROW({"o"}, {ROW({"i"}, {std::move(rowType)})});
+  rowType = ROW("o", ROW("i", std::move(rowType)));
   testToSql("o.i", rowType);
   testToSql("(o).i.e", rowType);
 }

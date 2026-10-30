@@ -160,13 +160,19 @@ are summarized below.
 
 - Use `VELOX_CHECK_*` for internal errors, `VELOX_USER_CHECK_*` for user errors.
 - Prefer two-argument forms: `VELOX_CHECK_LT(idx, size)` over `VELOX_CHECK(idx < size)`.
+- One check per condition: split `VELOX_CHECK(a && b)` into `VELOX_CHECK(a)` and `VELOX_CHECK(b)`. A failure then names the condition that broke, and each check can use a two-argument form.
 - Use `VELOX_FAIL()` / `VELOX_USER_FAIL()` to throw unconditionally.
 - Use `VELOX_UNREACHABLE()` for impossible branches, `VELOX_NYI()` for unimplemented paths.
 - Put runtime information (names, values, types) at the **end** of error messages, after the static description.
   - ❌ `VELOX_USER_FAIL("Column '{}' is ambiguous", name);`
   - ✅ `VELOX_USER_FAIL("Column is ambiguous: {}", name);`
+- Pass a value whose type has an `fmt::formatter`, such as `TypeKind`, to a formatted message or `fmt::format` as is, not converted to a string first.
+  - ❌ `VELOX_FAIL("Unsupported type: {}", TypeKindName::toName(kind));`
+  - ✅ `VELOX_FAIL("Unsupported type: {}", kind);`
 
 ### Variables
+
+- Declare one variable per line, except in for-loop initializers.
 
 - Prefer value types, then `std::optional`, then `std::unique_ptr`.
 - Prefer `std::string_view` over `const std::string&` for function parameters.
@@ -177,6 +183,16 @@ are summarized below.
   function-call argument lists that span multiple lines. This produces cleaner
   diffs when items are added or reordered.
 
+### Types
+
+- Use the short `ROW` forms rather than spelling out parallel vectors:
+  - One field: `ROW("a", BIGINT())`, not `ROW({"a"}, {BIGINT()})`.
+  - Fields sharing a type: `ROW({"a", "b"}, BIGINT())`, not
+    `ROW({"a", "b"}, {BIGINT(), BIGINT()})`.
+  - Mixed types: `ROW({{"a", BIGINT()}, {"b", VARCHAR()}})`, not
+    `ROW({"a", "b"}, {BIGINT(), VARCHAR()})`, which leaves the reader pairing
+    up two lists by position.
+
 ### API Design
 
 - Keep the public API surface small.
@@ -186,7 +202,15 @@ are summarized below.
 - Avoid default arguments when all callers can pass values explicitly.
 - Never use `friend`, `FRIEND_TEST`, or any friend declarations. If a test needs access to private members, redesign the API or test through public methods instead.
 
+### Pitfalls Tests Rarely Catch
+
+- Measure durations, timeouts and deadlines with `steady_clock` (`folly::stop_watch` for an interval; `MicrosecondWallTimer` / `NanosecondWallTimer` in `velox/common/time/Timer.h` to add a scope's duration to a counter; `SteadyTime::now<Duration>()` when the start must be stored as a plain integer, such as in an atomic). `system_clock` and `EpochTime` can step backward; use them only for absolute timestamps.
+- Convert epoch seconds to calendar time with `Timestamp::epochToCalendarUtc()`. `gmtime` is not thread-safe, and glibc's `gmtime_r` serializes threads on a global lock.
+
 ### Tests
+
+- Each test file should have one test suite with a matching name. For example,
+  `FooTest.cpp` contains the `FooTest` suite.
 
 - Place new tests next to related existing tests, not at the end of the file. Group tests by topic (e.g., place `tryCast` next to `types`, `notBetween` next to `ifClause` which uses `between`).
 
@@ -211,6 +235,18 @@ Common matchers:
 - `SizeIs(n)` - collection has n elements
 
 Requires `#include <gmock/gmock.h>`.
+
+- Assert the error message, not just the type. Use
+  `VELOX_ASSERT_THROW(expression, "message")` from
+  `velox/common/base/tests/GTestUtils.h`. Spelling the message out in the test
+  forces you to read it and judge whether it is informative and actionable; in
+  production that text is the whole diagnosis.
+  `EXPECT_THROW(expression, VeloxRuntimeError)` checks the type and leaves the
+  message unread.
+- Scope each case instead of numbering names. When a test walks through several
+  cases, wrap each in braces and reuse one name. `rowType1`, `rowType2` and
+  `expected1` make the reader track which one is live, and keep dead values in
+  scope.
 
 ## Common Mistakes
 

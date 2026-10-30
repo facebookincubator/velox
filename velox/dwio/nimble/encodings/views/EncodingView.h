@@ -16,23 +16,27 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <limits>
 #include <memory>
+#include <numeric>
 #include <span>
 #include <string_view>
+#include <type_traits>
 
 #include "velox/common/memory/Memory.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
+#include "velox/dwio/nimble/common/RowRange.h"
 #include "velox/dwio/nimble/common/Types.h"
 #include "velox/dwio/nimble/common/Vector.h"
 #include "velox/dwio/nimble/compression/Compression.h"
 #include "velox/dwio/nimble/encodings/common/Encoding.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
+#include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
 #include "velox/dwio/nimble/encodings/common/EncodingType.h"
-#include "velox/dwio/nimble/velox/RowRange.h"
 
 namespace facebook::nimble {
 
@@ -147,6 +151,26 @@ class EncodingView {
       DataType dataType,
       std::string_view payload);
 
+  // Bytes of the encoding from 'pos' to its end. 'pos' must lie inside it.
+  size_t remainingBytes(const char* pos) const {
+    return static_cast<size_t>(data_.data() + data_.size() - pos);
+  }
+
+  // Reads a uint32 size and the bytes it covers from 'pos', advancing 'pos'
+  // past them. 'description' names the bytes in errors.
+  std::string_view readSizedBytes(
+      const char*& pos,
+      std::string_view description) const {
+    NIMBLE_CHECK_FILE_GE(
+        remainingBytes(pos), sizeof(uint32_t), "Truncated {}.", description);
+    const auto size = encoding::readUint32(pos);
+    NIMBLE_CHECK_FILE_LE(
+        size, remainingBytes(pos), "Truncated {}.", description);
+    const std::string_view bytes{pos, size};
+    pos += size;
+    return bytes;
+  }
+
   std::string_view data_;
   velox::memory::MemoryPool* pool_;
   Encoding::Options options_;
@@ -202,7 +226,95 @@ class TypedEncodingView : public EncodingView {
     return numRows;
   }
 
+  /// Returns the number of rows before 'end' whose value equals 'value', such
+  /// as the null rows of a null-flag stream. Reads the rows in blocks. Some
+  /// types of view, such as SparseBool, can answer without reading them and
+  /// override it.
+  virtual uint32_t count(uint32_t end, physicalType value) const {
+    this->checkReadRange(end, 0);
+    // readPhysical() fills each block before it is counted.
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-member-init)
+    std::array<physicalType, kBlockRows> block;
+    uint32_t numMatches{0};
+    for (uint32_t offset{0}; offset < end; offset += kBlockRows) {
+      const auto length = std::min(kBlockRows, end - offset);
+      readPhysical(offset, length, block.data());
+      numMatches += static_cast<uint32_t>(
+          std::count(block.begin(), block.begin() + length, value));
+    }
+    return numMatches;
+  }
+
+  /// Returns the first row in [begin, end) whose value is at least 'value', or
+  /// 'end'. Stores the value of a returned row before 'end' in 'found', so a
+  /// caller that compares it needs no second read.
+  ///
+  /// The values in [begin, end) must be non-decreasing. In debug builds the
+  /// default binary search checks the first and last rows of the range against
+  /// the result in O(1), which catches common disorder without a scan. An
+  /// EliasFano stream ascends as a whole, and a PartitionedEliasFano view
+  /// checks in O(1) that the range stays within one ascending partition.
+  uint32_t lowerBound(uint32_t begin, uint32_t end, T value, T& found) const {
+    NIMBLE_CHECK_LE(begin, end, "Invalid lowerBound range.");
+    NIMBLE_CHECK_LE(end, rowCount_, "Invalid lowerBound range.");
+    if (begin == end) {
+      return end;
+    }
+    return typedLowerBound(begin, end, value, found);
+  }
+
+  /// Returns the sum of the values in the rows [begin, end) of an integral
+  /// view, such as the row lengths of a string stream, whose sum is the byte
+  /// offset of a row. Reads the rows in blocks, so the cost follows the range
+  /// and nothing is allocated for it.
+  uint64_t sum(uint32_t begin, uint32_t end) const {
+    static_assert(
+        std::is_integral_v<physicalType> && !std::is_same_v<physicalType, bool>,
+        "sum() requires an integral view");
+    NIMBLE_CHECK_LE(begin, end);
+    this->checkReadRange(begin, end - begin);
+    // readPhysical() fills each block before it is summed.
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-member-init)
+    std::array<physicalType, kBlockRows> block;
+    uint64_t sum{0};
+    for (uint32_t offset{begin}; offset < end; offset += kBlockRows) {
+      const auto length = std::min(kBlockRows, end - offset);
+      readPhysical(offset, length, block.data());
+      sum +=
+          std::accumulate(block.begin(), block.begin() + length, uint64_t{0});
+    }
+    return sum;
+  }
+
+  /// Writes to 'sums[i]' the sum of the values before row 'indices[i]'. Reads
+  /// the rows once up to the largest index, instead of once per index, so the
+  /// cost does not multiply with the number of indices.
+  void sum(std::span<const uint32_t> indices, uint64_t* sums) const {
+    ScopedVector<uint32_t> order{
+        indices.size(), this->pool_, this->options_.bufferPool};
+    std::iota(order.data(), order.data() + order.size(), 0);
+    std::sort(
+        order.data(),
+        order.data() + order.size(),
+        [&](uint32_t lhs, uint32_t rhs) {
+          return indices[lhs] < indices[rhs];
+        });
+    uint64_t sum{0};
+    uint32_t row{0};
+    for (size_t i{0}; i < order.size(); ++i) {
+      const auto position = order[i];
+      const auto target = indices[position];
+      sum += this->sum(row, target);
+      row = target;
+      sums[position] = sum;
+    }
+  }
+
  protected:
+  // Rows that count() and sum() read at once, which fill 4 KiB of stack.
+  static constexpr uint32_t kBlockRows{
+      std::max<uint32_t>(1, 4'096 / sizeof(physicalType))};
+
   TypedEncodingView(
       std::string_view data,
       velox::memory::MemoryPool* pool,
@@ -267,6 +379,42 @@ class TypedEncodingView : public EncodingView {
   }
 
   virtual T readTypedAt(uint32_t index) const = 0;
+
+  // Implements lowerBound() for a non-empty range by binary search. Views that
+  // index their values, such as EliasFano, override it.
+  virtual uint32_t
+  typedLowerBound(uint32_t begin, uint32_t end, T value, T& found) const {
+    NIMBLE_DEBUG_ONLY const auto rangeBegin = begin;
+    NIMBLE_DEBUG_ONLY const auto rangeEnd = end;
+    while (begin < end) {
+      const auto middle = begin + (end - begin) / 2;
+      const auto middleValue = readTypedAt(middle);
+      if (middleValue < value) {
+        begin = middle + 1;
+      } else {
+        // The last value read at or above 'value' is the one at the result.
+        found = middleValue;
+        end = middle;
+      }
+    }
+#ifndef NDEBUG
+    // The rows next to the result are compared by the search itself, so check
+    // the ends of the range, which a sorted range orders the same way.
+    if (begin > rangeBegin) {
+      NIMBLE_DCHECK_LT(
+          readTypedAt(rangeBegin),
+          value,
+          "lowerBound range must be non-decreasing.");
+    }
+    if (begin < rangeEnd) {
+      NIMBLE_DCHECK_GE(
+          readTypedAt(rangeEnd - 1),
+          value,
+          "lowerBound range must be non-decreasing.");
+    }
+#endif
+    return begin;
+  }
 
   static physicalType castToPhysicalType(T value) {
     if constexpr (isFloatingPointType<T>()) {

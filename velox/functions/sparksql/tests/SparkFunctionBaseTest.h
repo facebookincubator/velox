@@ -15,10 +15,15 @@
  */
 #pragma once
 
+#include <bit>
+#include <cstdint>
+#include <vector>
+
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 #include "velox/functions/sparksql/SparkQueryConfig.h"
 #include "velox/functions/sparksql/registration/Register.h"
 #include "velox/parse/TypeResolver.h"
+#include "velox/vector/DecodedVector.h"
 
 namespace facebook::velox::functions::sparksql::test {
 
@@ -38,6 +43,34 @@ class SparkFunctionBaseTest : public FunctionBaseTest {
     queryCtx_->testingOverrideConfigUnsafe(
         {{SparkQueryConfig::qualify(SparkQueryConfig::kPartitionId),
           std::to_string(partitionId)}});
+  }
+
+  // Sets the Spark 'spark.sql.mapKeyDedupPolicy' equivalent query config.
+  void setThrowExceptionOnDuplicateMapKeys(bool value) {
+    queryCtx_->testingOverrideConfigUnsafe({
+        {core::QueryConfig::kThrowExceptionOnDuplicateMapKeys,
+         value ? "true" : "false"},
+    });
+  }
+
+  // Returns the bit pattern of each element of 'arrays', an ARRAY(DOUBLE)
+  // vector, row by row. assertEqualVectors treats 0.0 and -0.0 as equal, and
+  // their bit patterns differ.
+  static std::vector<uint64_t> elementBitPatterns(const VectorPtr& arrays) {
+    DecodedVector decodedArrays(*arrays);
+    const auto* baseArrays = decodedArrays.base()->as<ArrayVector>();
+    DecodedVector decodedElements(*baseArrays->elements());
+    std::vector<uint64_t> bitPatterns;
+    for (vector_size_t row = 0; row < arrays->size(); ++row) {
+      const auto index = decodedArrays.index(row);
+      const auto offset = baseArrays->offsetAt(index);
+      for (vector_size_t i = 0; i < baseArrays->sizeAt(index); ++i) {
+        bitPatterns.push_back(
+            std::bit_cast<uint64_t>(
+                decodedElements.valueAt<double>(offset + i)));
+      }
+    }
+    return bitPatterns;
   }
 };
 

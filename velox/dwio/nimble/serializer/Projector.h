@@ -24,8 +24,8 @@
 #include "folly/io/IOBuf.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/dwio/nimble/common/Buffer.h"
+#include "velox/dwio/nimble/common/SchemaUtils.h"
 #include "velox/dwio/nimble/serializer/Options.h"
-#include "velox/dwio/nimble/velox/SchemaUtils.h"
 #include "velox/type/Subfield.h"
 #include "velox/type/Type.h"
 

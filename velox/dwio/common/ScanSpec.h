@@ -80,6 +80,15 @@ class ScanSpec {
     filter_ = std::move(filter);
   }
 
+  /// Enables or disables the filters of 'this' and its descendants in the
+  /// readers. While disabled, filter() and numMetadataFilters() report none
+  /// and applyFilter() still evaluates them. Call resetCachedValues() on the
+  /// root afterwards. setDeltaUpdate() drives the same state, so a column
+  /// has either a delta update or a caller of this method, never both.
+  void setFilterEnabled(bool enabled) {
+    enableFilterInSubTree(enabled);
+  }
+
   void setMaxArrayElementsCount(vector_size_t count) {
     maxArrayElementsCount_ = count;
   }
@@ -280,6 +289,11 @@ class ScanSpec {
   /// method also ignores filterDisabled_.
   bool hasFilterApplicableToConstant() const;
 
+  /// Returns true if 'this' or a descendant has a filter, including one
+  /// disabled with setFilterEnabled(). Like hasFilter(), filters on array
+  /// elements and map entries do not count.
+  bool hasFilterIgnoringDisabled() const;
+
   /// Assume this field is read as null constant vector (usually due to missing
   /// field), check if any filter in the struct subtree would make the whole
   /// vector to be filtered out.  Return false when the whole vector should be
@@ -360,9 +374,11 @@ class ScanSpec {
     return deltaUpdate_;
   }
 
+  /// Installs 'update' and moves the filters of 'this' and its descendants out
+  /// of the readers; see setFilterEnabled(). Passing nullptr re-enables them.
   void setDeltaUpdate(dwio::common::DeltaColumnUpdater* update) {
     deltaUpdate_ = update;
-    enableFilterInSubTree(update == nullptr);
+    setFilterEnabled(update == nullptr);
   }
 
   void resetDeltaUpdates() {
@@ -528,6 +544,8 @@ class ScanSpec {
   // returned as flat.
   bool makeFlat_{false};
   std::shared_ptr<const common::Filter> filter_;
+  // Hides 'filter_' and 'metadataFilters_' from the readers; owned by
+  // setFilterEnabled() and setDeltaUpdate().
   bool filterDisabled_ = false;
   dwio::common::DeltaColumnUpdater* deltaUpdate_ = nullptr;
 

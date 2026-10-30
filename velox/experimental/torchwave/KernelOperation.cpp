@@ -363,6 +363,7 @@ bool hasAlwaysSingleBlock(
 int64_t maxDynamicSharedMemory(
     NodeCP node,
     const std::unordered_set<ValueCP>& inputs,
+    int32_t blockSize,
     std::unordered_set<NodeCP>& visited) {
   if (!visited.insert(node).second) {
     return 0;
@@ -370,7 +371,7 @@ int64_t maxDynamicSharedMemory(
   int64_t bytes = 0;
   auto* meta = Registry::metadata(node->target());
   if (meta && meta->dynamicSharedMemory) {
-    bytes = meta->dynamicSharedMemory(node);
+    bytes = meta->dynamicSharedMemory(node, blockSize);
   }
   for (const auto& input : node->inputs()) {
     if (inputs.count(input.value)) {
@@ -378,8 +379,8 @@ int64_t maxDynamicSharedMemory(
     }
     auto* producer = input.value->producer();
     if (producer) {
-      bytes =
-          std::max(bytes, maxDynamicSharedMemory(producer, inputs, visited));
+      bytes = std::max(
+          bytes, maxDynamicSharedMemory(producer, inputs, blockSize, visited));
     }
   }
   return bytes;
@@ -404,6 +405,35 @@ int32_t maxMinBlocksPerSm(
     }
   }
   return blocks;
+}
+
+int32_t maxBlockSizePreference(
+    NodeCP node,
+    const std::unordered_set<ValueCP>& inputs,
+    std::unordered_set<NodeCP>& visited) {
+  if (!visited.insert(node).second) {
+    return 0;
+  }
+  auto* meta = Registry::metadata(node->target());
+  int32_t threads = 0;
+  if (meta != nullptr && meta->blockSize) {
+    threads = meta->blockSize(node);
+    TORCH_CHECK(
+        threads >= 0 && threads <= 1024 && (threads & (threads - 1)) == 0,
+        node->target(),
+        ": block size must be a power of two up to 1024, got ",
+        threads);
+  }
+  for (const auto& input : node->inputs()) {
+    if (inputs.count(input.value)) {
+      continue;
+    }
+    if (auto* producer = input.value->producer()) {
+      threads =
+          std::max(threads, maxBlockSizePreference(producer, inputs, visited));
+    }
+  }
+  return threads;
 }
 
 float sumNodeCosts(
@@ -621,9 +651,19 @@ KernelOperation::KernelOperation(
   std::unordered_set<NodeCP> asbVisited;
   alwaysSingleBlock_ = hasAlwaysSingleBlock(sg.root, inputs_, asbVisited);
 
-  std::unordered_set<NodeCP> dynSharedVisited;
-  dynamicSharedBytes_ =
-      maxDynamicSharedMemory(sg.root, inputs_, dynSharedVisited);
+  for (int32_t threads = WaveConfig::get().blockSize; threads <= 1024;
+       threads *= 2) {
+    std::unordered_set<NodeCP> dynSharedVisited;
+    dynamicSharedBytes_.emplace_back(
+        threads,
+        maxDynamicSharedMemory(sg.root, inputs_, threads, dynSharedVisited));
+  }
+
+  std::unordered_set<NodeCP> blockSizeVisited;
+  blockSizePreference_ =
+      maxBlockSizePreference(sg.root, inputs_, blockSizeVisited);
+  ownEntryPoint_ = Registry::metadata(sg.root->target()) != nullptr &&
+      Registry::metadata(sg.root->target())->ownEntryPoint;
 
   std::unordered_set<NodeCP> minBlocksVisited;
   minBlocksPerSm_ = maxMinBlocksPerSm(sg.root, inputs_, minBlocksVisited);
@@ -968,6 +1008,39 @@ void collectElementwiseLeaves(
 // tensor inputs, so collectElementwiseLeaves finds no leaf to size the fused
 // subtree from; their extent lives in the `size` attribute instead and must be
 // broadcast into the output shape.
+// The length of an aten.arange whose bounds are all attributes. Its size has
+// no `size` attribute, so a fused consumer learns it only from here.
+std::optional<int64_t> constantArangeExtent(NodeCP node) {
+  const auto& target = node->target();
+  const bool hasStart = target == "torch.ops.aten.arange.start" ||
+      target == "torch.ops.aten.arange.start_step";
+  if (!hasStart && target != "torch.ops.aten.arange.default") {
+    return std::nullopt;
+  }
+  auto intAttr = [&](const char* name,
+                     int64_t missing) -> std::optional<int64_t> {
+    const auto* attr = node->tryGetAttribute(name);
+    if (attr == nullptr) {
+      return node->tryGetInput(name) ? std::nullopt
+                                     : std::optional<int64_t>(missing);
+    }
+    if (const auto* value = std::get_if<int64_t>(&attr->value)) {
+      return *value;
+    }
+    return std::nullopt;
+  };
+  const auto start = hasStart ? intAttr("start", 0) : std::optional<int64_t>(0);
+  const auto end = intAttr("end", 0);
+  const auto step = intAttr("step", 1);
+  if (!start || !end || !step || *step == 0) {
+    return std::nullopt;
+  }
+  const auto span = *end - *start;
+  const auto size =
+      *step > 0 ? (span + *step - 1) / *step : (span + *step + 1) / *step;
+  return std::max<int64_t>(size, 0);
+}
+
 void collectFactorySizes(
     NodeCP node,
     const std::unordered_set<ValueCP>& subgraphInputs,
@@ -990,6 +1063,9 @@ void collectFactorySizes(
             input.value->type().kind() == nativert::Type::Kind::Tensor;
       });
   if (isFactory) {
+    if (auto extent = constantArangeExtent(node)) {
+      constShapes.push_back({static_cast<Dim>(*extent)});
+    }
     if (const auto* sizeAttr = node->tryGetAttribute("size")) {
       if (std::holds_alternative<std::vector<int64_t>>(sizeAttr->value)) {
         const auto& sz = std::get<std::vector<int64_t>>(sizeAttr->value);
@@ -1079,6 +1155,116 @@ SizeExpr KernelOperation::makeSizeExpr(
   return result;
 }
 
+namespace {
+
+// A view whose output has its operand's element count, so a launch that covers
+// one covers the other.
+bool keepsElementCount(NodeCP node) {
+  static const folly::F14FastSet<std::string_view> kTargets{
+      "torch.ops.aten.view.default",
+      "torch.ops.aten._unsafe_view.default",
+      "torch.ops.aten.reshape.default",
+      "torch.ops.aten.alias.default",
+      "torch.ops.aten.unsqueeze.default",
+      "torch.ops.aten.squeeze.default",
+      "torch.ops.aten.squeeze.dim",
+      "torch.ops.aten.squeeze.dims",
+      "torch.ops.aten.flatten.using_ints",
+      "torch.ops.aten.unflatten.int",
+      "torch.ops.aten.permute.default",
+      "torch.ops.aten.transpose.int",
+      "torch.ops.aten.t.default"};
+  const auto* meta = Registry::metadata(node->target());
+  return meta != nullptr && meta->viewOfArg.has_value() &&
+      kTargets.count(node->target()) > 0;
+}
+
+// True when the expression rooted at 'node' is elementwise apart from
+// element-count-preserving views and tensor lists between its parts, so its
+// launch covers the broadcast of its leaves.
+bool isElementwiseThroughViews(
+    NodeCP node,
+    const std::unordered_set<ValueCP>& subgraphInputs,
+    std::unordered_set<NodeCP>& visited) {
+  if (!visited.insert(node).second) {
+    return true;
+  }
+  const bool isList = node->target() == "prim.ListPack";
+  const bool isView = keepsElementCount(node);
+  const auto* meta = Registry::metadata(node->target());
+  if (!isList && !isView && (meta == nullptr || !meta->elementwise)) {
+    return false;
+  }
+  const auto& inputs = node->inputs();
+  for (size_t i = 0; i < inputs.size(); ++i) {
+    if (isView && static_cast<int32_t>(i) != *meta->viewOfArg) {
+      continue;
+    }
+    auto* value = inputs[i].value;
+    auto* producer = value->producer();
+    if (subgraphInputs.count(value) || producer == nullptr) {
+      continue;
+    }
+    if (!isElementwiseThroughViews(producer, subgraphInputs, visited)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+void collectCountLeavesOfValue(
+    ValueCP value,
+    const std::unordered_set<ValueCP>& subgraphInputs,
+    std::unordered_set<ValueCP>& seen,
+    std::vector<nativert::ValueId>& leafIds);
+
+// The leaves whose broadcast is the element count of the expression rooted at
+// 'node', walking through the views and lists isElementwiseThroughViews admits.
+// Whole-tensor operands, read at computed offsets, do not size the launch.
+void collectCountLeaves(
+    NodeCP node,
+    const std::unordered_set<ValueCP>& subgraphInputs,
+    std::unordered_set<ValueCP>& seen,
+    std::vector<nativert::ValueId>& leafIds) {
+  const auto* meta = Registry::metadata(node->target());
+  const bool isView = keepsElementCount(node);
+  const auto& inputs = node->inputs();
+  for (size_t i = 0; i < inputs.size(); ++i) {
+    if (isView && static_cast<int32_t>(i) != *meta->viewOfArg) {
+      continue;
+    }
+    const auto* argMeta = argMetaForInput(meta, node, i);
+    if (argMeta != nullptr && argMeta->wholeTensor) {
+      continue;
+    }
+    collectCountLeavesOfValue(inputs[i].value, subgraphInputs, seen, leafIds);
+  }
+}
+
+void collectCountLeavesOfValue(
+    ValueCP value,
+    const std::unordered_set<ValueCP>& subgraphInputs,
+    std::unordered_set<ValueCP>& seen,
+    std::vector<nativert::ValueId>& leafIds) {
+  if (!seen.insert(value).second) {
+    return;
+  }
+  auto* producer = value->producer();
+  if (subgraphInputs.count(value) || producer == nullptr) {
+    leafIds.push_back(value->id());
+    return;
+  }
+  const auto* meta = Registry::metadata(producer->target());
+  if (producer->target() == "prim.ListPack" || keepsElementCount(producer) ||
+      (meta != nullptr && meta->elementwise && !meta->sizeFromOutput)) {
+    collectCountLeaves(producer, subgraphInputs, seen, leafIds);
+    return;
+  }
+  leafIds.push_back(value->id());
+}
+
+} // namespace
+
 SizeExpr KernelOperation::makeDeepSizeExpr() {
   if (expr_) {
     std::unordered_set<NodeCP> ewVisited;
@@ -1094,6 +1280,23 @@ SizeExpr KernelOperation::makeDeepSizeExpr() {
       collectFactorySizes(expr_, inputs_, factoryVisited, constShapes);
       // Multiple operands broadcast against each other; size by the broadcast
       // shape (see makeSizeExpr).
+      SizeExpr expr{SizeShortcut::kMax, std::move(leafIds), {}};
+      expr.broadcast = expr.values.size() > 1;
+      expr.constShapes = std::move(constShapes);
+      return expr;
+    }
+    // Elementwise but for reshaping views and tensor lists between its parts,
+    // e.g. clamp(add(unsqueeze(a), unsqueeze(b))) viewed flat as the index list
+    // of a gather. Sizing such an op by its largest input covers the [R,C,1]
+    // operand of an [R,C,C] broadcast, not the broadcast.
+    std::unordered_set<NodeCP> viewVisited;
+    if (isElementwiseThroughViews(expr_, inputs_, viewVisited)) {
+      std::unordered_set<ValueCP> seen;
+      std::vector<nativert::ValueId> leafIds;
+      collectCountLeaves(expr_, inputs_, seen, leafIds);
+      std::unordered_set<NodeCP> factoryVisited;
+      std::vector<std::vector<Dim>> constShapes;
+      collectFactorySizes(expr_, inputs_, factoryVisited, constShapes);
       SizeExpr expr{SizeShortcut::kMax, std::move(leafIds), {}};
       expr.broadcast = expr.values.size() > 1;
       expr.constShapes = std::move(constShapes);
@@ -1247,6 +1450,19 @@ OutputDesc KernelOperation::makeOutputDesc(
   return desc;
 }
 
+int64_t KernelOperation::dynamicSharedBytes(int32_t blockSize) const {
+  for (const auto& [threads, bytes] : dynamicSharedBytes_) {
+    if (threads == blockSize) {
+      return bytes;
+    }
+  }
+  TORCH_CHECK(
+      dynamicSharedBytes_.empty(),
+      "no dynamic shared memory size for block size ",
+      blockSize);
+  return 0;
+}
+
 bool KernelOperation::isMultiUseInput(nativert::ValueId id) const {
   // Read from the WaveGraph (persists to execution), not compileCtx_, which is
   // a stack temporary destroyed after compilation. LaunchData calls this while
@@ -1387,11 +1603,12 @@ void KernelOperation::setOutputs(
         desc.neededOnHost = meta->returnMeta[i].neededOnHost;
         desc.sizeExpr =
             makeSizeExpr(node, subgraphInputs, static_cast<int32_t>(i));
-        // In-place elementwise (Tensor(a!)): the materialized output aliases
+        // In-place elementwise (Tensor(a!)) or a device function that writes
+        // its self in place (tw.scatter_add): the materialized output aliases
         // the mutated self argument, so reserve it as a view of self instead of
         // a fresh buffer (see reserveOutputs). This makes the returned tensor
         // reflect self, including later in-place mutations of self.
-        if (meta->elementwise && i == 0) {
+        if ((meta->elementwise || meta->mutatesArg.has_value()) && i == 0) {
           auto mutated = dataMutatedInputs(node);
           if (!mutated.empty()) {
             desc.aliasSelfId = mutated[0]->id();

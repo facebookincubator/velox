@@ -20,9 +20,10 @@
 
 namespace facebook::velox::core {
 
-/// Verify integrity of the plan. Specifically, verify that expressions used in
-/// Filter, Project and ParallelProject nodes reference input columns using
-/// valid names and types.
+/// Verify integrity of the plan. Specifically, verify that plan node ids are
+/// unique across the whole plan, including the plans nested in a
+/// FixedPointNode, and that expressions used in Filter, Project and
+/// ParallelProject nodes reference input columns using valid names and types.
 class PlanConsistencyChecker {
  public:
   static void check(const core::PlanNodePtr& plan);

@@ -19,9 +19,9 @@
 #include <string>
 #include <string_view>
 #include <vector>
+#include "velox/dwio/nimble/common/ChunkedStream.h"
 #include "velox/dwio/nimble/common/Types.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
-#include "velox/dwio/nimble/velox/ChunkedStream.h"
 
 namespace facebook::nimble::tools {
 

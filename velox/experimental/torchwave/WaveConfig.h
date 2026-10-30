@@ -152,6 +152,25 @@ struct WaveConfig {
   // actual thread block clock distribution.
   bool autoAdjustCost{true};
 
+  // Ablation knobs.  Each switches one optimization off so its contribution
+  // can be measured by comparing runtimes; none is meant for production use.
+
+  // If true, share a step's blocks among its ops by element count alone,
+  // ignoring each op's declared unit cost.
+  bool uniformCost{false};
+
+  // If true, launch each op of a step on its own instead of putting all of a
+  // step's ops in one kernel launch.
+  bool launchPerOp{false};
+
+  // If false, compile every structurally identical subgraph of a node
+  // separately instead of reusing the first one's ProjectOperation.
+  bool dedupProjectOps{true};
+
+  // If true, wait for the torch stream after every standalone that does
+  // device work, so standalones stop overlapping the wave kernels.
+  bool serializeStandalones{false};
+
   // If true, reuse a value's buffer in place when an op is its unique last use
   // (turning copying ops into in-place ops), and drop clones that no consumer
   // needs. On by default.
@@ -161,6 +180,27 @@ struct WaveConfig {
   // when enableReuse is set; separated from it so the pass can be A/B'd against
   // the post-partition in-place rewrite alone.
   bool elideClones{true};
+
+  // If true, merge copies into each run of consecutive columns of one tensor
+  // into a single copy of the stacked sources (rewriteDisjointCopies). Each
+  // copy mutates the target, which otherwise orders every copy after the
+  // previous one and cuts the graph into three partition layers per copy. On by
+  // default.
+  bool recognizeDisjointCopies{true};
+
+  // If true, write a functional chain of select_scatter / slice_scatter /
+  // index_put / scatter_add into a tensor nothing else reads as in-place writes
+  // into that tensor (reinplaceScatterChains). The column merge and the
+  // disjoint-write ordering then apply to it as to an in-place graph, and no
+  // scatter copies the whole tensor first. On by default.
+  bool reinplaceScatters{true};
+
+  // If true, an in-place write is not ordered against a touch of the same
+  // storage whose region is provably disjoint from the written one (constant
+  // selects and slices). A view, which reads no data, touches only the region
+  // it selects. Disjoint writes into one tensor can then run side by side. On
+  // by default.
+  bool disjointWriteOrdering{true};
 
   // Force a launch boundary after a multi-block (non-cooperative) scan so every
   // cross-block consumer of its output reads a fully materialized buffer from a
@@ -211,8 +251,18 @@ struct WaveConfig {
   // only freed once its own completion events have been observed, so the drain
   // costs a host stall per node and buys nothing. Needs deferD2h to be of any
   // use -- otherwise every transfer still stops the host at its producing step.
-  // Off by default.
-  bool runAhead{false};
+  // On by default.
+  bool runAhead{true};
+
+  // If true, a stream does not wait again on a completion event it already
+  // waited on: stream order already puts everything after it. On by default.
+  bool skipRepeatedWaits{true};
+
+  // If true, each stream writes a step's ticket to a host-mapped counter after
+  // the step's work, and the host checks step completion by reading the
+  // counters instead of calling cudaEventQuery on the step's events. Off by
+  // default: the counter write is an API call of its own and measured no gain.
+  bool completionCounters{false};
 
   // Ceiling, in bytes, on how much freeable memory may sit in already-issued
   // but not yet completed steps. Running ahead delays every free until the
@@ -291,6 +341,32 @@ struct WaveConfig {
   // op's grid covering all of them. Also folds a chain of such ops where the
   // op supports it. On by default; the switch is for A/B against the list form.
   bool decomposeLists{true};
+
+  // Replace the sparsenn fused_datafm_merge_and_dedup_by_reference with the
+  // TorchWave CUDA variant (the "_tw" operator) when the graph is prepared for
+  // wave. The _tw operator must be registered before the graph compiles.
+  bool twMad{false};
+
+  // Split merge-and-dedup into the fused TorchWave head and final ops instead
+  // of running a standalone operator (sparsenn's or, with twMad, TorchWave's).
+  bool twFusedMad{false};
+
+  // With twFusedMad, a metadata feature that a chain gather produces is read
+  // through the chain by the merge-and-dedup head or final instead of being
+  // materialized first.
+  bool madChains{true};
+
+  // If non-zero, the fused merge-and-dedup insert asks for enough dynamic
+  // shared memory that at most this many of its blocks are resident per SM.
+  // The memory is unused ballast, as for the standalone operator's insert
+  // kernel: the insert's hash table traffic is random, and fewer resident rows
+  // per SM keep more of it in cache.
+  int32_t madInsertBlocksPerSm{0};
+
+  // If non-zero, the threads per block of the launch that runs the fused
+  // merge-and-dedup insert. It gives each row one block and scans the row
+  // in-block, so a wider block puts more threads on a row.
+  int32_t madInsertBlockSize{0};
 
   // If true, a metadata getter (aten.sym_size.int / aten.sym_numel.default)
   // that is not a subexpression of a single fusable consumer runs as a
@@ -413,8 +489,13 @@ struct WaveConfig {
   int32_t maxLaunchWaves{3};
 
   // GridStats::skew (the step's makespan over a perfectly balanced, fully
-  // occupied one) at and above which partitionLaunches splits a step.
+  // occupied one) at and above which partitionLaunches splits a step that has
+  // not been measured yet.
   float launchSkewThreshold{1.3f};
+
+  // GPU microseconds of block idle time, measured on the step's previous
+  // execution, at and above which partitionLaunches splits the step.
+  float launchSplitMinUs{30.0f};
 
   // Microseconds of GPU time a block should be worth before the packer opens
   // one. Converted to cost units with the thread-block clocks the previous
@@ -436,6 +517,36 @@ struct WaveConfig {
   // over several launches when it does not fit in one wave, which is what
   // makes the answer independent of how many ops the step happens to have.
   bool quantumGrid{false};
+
+  // Preferred blocks per SM for individual kernel ops, keyed by opcode. Absent
+  // or zero means unspecified, which is every op unless something says
+  // otherwise.
+  //
+  // An op with a preference is only packed into a launch with ops that share
+  // it, and that launch's capacity is numSMs times the preference rather than
+  // numSMs times the occupancy its shared memory allows. So a preference both
+  // segregates the op and narrows the grid it runs on.
+  //
+  // What it is for: an op whose access pattern is scattered may go faster with
+  // fewer concurrent warps -- less pressure on the memory system's outstanding
+  // requests, better L2 and TLB reuse. The other way to buy that is dynamic
+  // shared memory, which works (blocksPerSM divides sharedPerSM by the
+  // per-block request) but pays for it in L1: on an A100 shared and L1 come out
+  // of one 192 KB pool, so starving occupancy that way also starves the cache
+  // the op depends on. Narrowing the grid costs nothing but blocks.
+  //
+  // Manual for now -- set it from the command line, measure, and read the
+  // per-op block counts and clocks back out of the trace. The intent is that
+  // something eventually learns these the way autoAdjustCost learns cost
+  // multipliers, at which point this map is where the learned values land.
+  std::unordered_map<int32_t, int32_t> preferBlocksPerSm;
+
+  /// Preferred blocks per SM for the kernel op with this opcode, or 0 when
+  /// nothing is specified for it.
+  int32_t preferredBlocksPerSm(int32_t opCode) const {
+    auto it = preferBlocksPerSm.find(opCode);
+    return it == preferBlocksPerSm.end() ? 0 : it->second;
+  }
 
   /// Returns the active config: the thread-local override set by
   /// waveConfigOverride() when non-null, otherwise the process-wide singleton.

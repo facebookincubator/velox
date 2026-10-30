@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <folly/synchronization/CallOnce.h>
 #include <torch/nativert/executor/GraphExecutorBase.h>
 #include <torch/nativert/executor/Weights.h>
 #include <deque>
@@ -74,6 +75,16 @@ struct LaunchDebugInfo {
 struct StepEvents {
   int32_t sequenceNumber{0};
   int32_t stepIdx{0};
+  /// Value each stream writes to its completion counter when the step's work
+  /// on it is done. Increases across executions, so a counter left over from an
+  /// earlier run never reads as done. 0 when completion counters are off.
+  int64_t ticket{0};
+  /// Whether the step put work on the wave stream / the torch stream, i.e.
+  /// whether its completion on that stream has to be waited for.
+  bool usesWave{false};
+  bool usesTorch{false};
+  /// Device address of the run's completion counters, or null when off.
+  void* counters{nullptr};
   EventP waveBegin;
   EventP waveDone;
   EventP standaloneBegin;
@@ -321,6 +332,26 @@ struct StepVectors {
   /// can be held to what already worked.
   int32_t measuredBlocks{0};
 
+  /// Clocks of the slowest block of the previous execution. With measuredUtil
+  /// it says how much time the step's blocks spent waiting on that one, which
+  /// is the most a rebalanced grid could save. 0 until measured.
+  int64_t measuredMaxClocks{0};
+
+  /// Kernel makespan this step last measured as a single launch: the slowest
+  /// block's clocks. 0 until measured unsplit.
+  int64_t unsplitMakespanClocks{0};
+
+  /// Set once a split of this step measured no better than the single launch
+  /// by WaveConfig::launchSplitMinUs. The packer's plan is only as good as the
+  /// costs it is built from, and a split serializes its launches, so a split
+  /// the hardware says lost is not tried again.
+  bool splitRejected{false};
+
+  /// Set when a split ran before the step was ever measured as one launch, so
+  /// there is nothing to judge it against. The next execution runs it whole to
+  /// get that measurement.
+  bool measureUnsplit{false};
+
   /// Used by makeGrid (internal temporaries).
   std::vector<float> costs;
   std::vector<int32_t> maxBlocks;
@@ -335,6 +366,15 @@ struct StepVectors {
   std::vector<int64_t> sizesLower;
   std::vector<int64_t> sizesUpper;
   int32_t cachedBlockSize{0};
+
+  /// Threads per block of this step's launch: the largest
+  /// KernelOperation::blockSizePreference among its ops, and at least
+  /// WaveConfig::blockSize. Set by gatherLaunches.
+  int32_t blockSize{0};
+
+  /// The kernel entry point this step's launch runs; see
+  /// CompositeKernel::entryFor. Set by gatherLaunches.
+  int32_t entry{0};
 
   /// Bitmap of grid choices from selectGrid (1 = singleBlock, 0 = default).
   /// Used to detect when grid choice changed, invalidating all step caches.
@@ -539,6 +579,19 @@ struct ExecutionState {
   /// these are carried forward rather than indexed by step.
   facebook::velox::wave::Event* lastWaveDone{nullptr};
   facebook::velox::wave::Event* lastStandaloneDone{nullptr};
+
+  /// The completion events each stream last waited on. Waiting on the same
+  /// event again orders nothing new, so WaveConfig::skipRepeatedWaits skips it.
+  facebook::velox::wave::Event* torchWaitedFor{nullptr};
+  facebook::velox::wave::Event* waveWaitedFor{nullptr};
+
+  /// Two int64 completion counters in host-mapped memory, [0] for the wave
+  /// stream and [1] for the torch stream (WaveConfig::completionCounters). Each
+  /// stream writes a step's ticket after the step's work, so the host checks
+  /// completion with a load instead of a cudaEventQuery.
+  std::shared_ptr<volatile int64_t> completionHost;
+  void* completionDevice{nullptr};
+  int64_t lastTicket{0};
 
   /// Index into stepEvents of the oldest step not yet advanced to kSynced.
   /// advanceCompletedStages resumes from here, so the sweep costs one query per
@@ -790,6 +843,25 @@ StepEvents& newStepEvents(ExecutionState& state, int32_t seq, int32_t stepIdx);
 /// Returns every event held by 'state' to its pool. Must run only after the
 /// streams that recorded them have been waited on, so no event is recycled
 /// while still pending.
+/// Records the step's completion event for one stream ('wave' or the torch
+/// stream) and, with WaveConfig::completionCounters, enqueues the counter write
+/// behind it.
+void recordStepDone(
+    StepEvents& events,
+    facebook::velox::wave::Stream& stream,
+    bool wave);
+
+/// True once all of the step's work is complete, from the counters when they
+/// are on and from the events otherwise. Does not block.
+bool stepDone(const ExecutionState& state, const StepEvents& events);
+
+/// Makes 'stream' wait on 'event', unless it already waited on that event and
+/// WaveConfig::skipRepeatedWaits is set. 'waitedFor' is the stream's record.
+void waitOnce(
+    facebook::velox::wave::Event* event,
+    facebook::velox::wave::Stream& stream,
+    facebook::velox::wave::Event*& waitedFor);
+
 void releaseStepEvents(ExecutionState& state);
 
 /// Executes a single node via its OpKernel with tracing and error logging.
@@ -827,8 +899,10 @@ void runShortcutStandalones(
 /// Builds BlockInfo grid for a set of LaunchData entries. Uses preallocated
 /// vectors in 'sv' (blocks, launchIndices, costs, maxBlocks,
 /// numBlocksPerLaunch). Returns the block size (threads per block).
-/// 'maxBlocksPerSM' is the kernel's occupancy at zero dynamic shared memory and
-/// 'staticSharedPerBlock' its static shared memory; both are needed to bound a
+/// 'blockSize' is the kernel's threads per block, which is also what makeGrid
+/// returns. 'maxBlocksPerSM' is the kernel's occupancy at that block size and
+/// zero dynamic shared memory, and 'staticSharedPerBlock' its static shared
+/// memory; both are needed to bound a
 /// cooperative grid when an op in the step asks for dynamic shared memory.
 /// 'occupancyFor' answers the same question from the driver at a given dynamic
 /// shared memory, and supersedes the other two when given: a cooperative launch
@@ -837,6 +911,7 @@ void runShortcutStandalones(
 int32_t makeGrid(
     std::vector<LaunchData>& launches,
     StepVectors& sv,
+    int32_t blockSize,
     int32_t maxBlocksPerSM = 0,
     int32_t staticSharedPerBlock = 0,
     const std::function<int32_t(int32_t dynamicShared)>& occupancyFor =
@@ -926,6 +1001,15 @@ class WaveGraphExecutor : public nativert::GraphExecutorBase {
   /// Returns 'frame' to the pool after clearing non-persistent values.
   void returnFrame(std::unique_ptr<nativert::ExecutionFrame> frame);
 
+  /// Clears 'frame's intermediates and outputs, leaving weights and constants,
+  /// and invalidates the launch caches that resolved against them. Call this
+  /// before refilling the user inputs for a second execution over the same
+  /// frame. Skipping it leaves the previous run's outputs in place, and an
+  /// execution that starts from such a frame skips every standalone op whose
+  /// outputs are already materialized (see nodeOutputsComputed) and reports the
+  /// previous run's results as if it had recomputed them.
+  void resetFrame(nativert::ExecutionFrame& frame);
+
   /// Returns a human-readable error string from the most recent execution.
   /// Checks thread-local debug info for non-zero error lines and maps each
   /// error back to the originating kernel op via the WaveGraph structure.
@@ -989,6 +1073,12 @@ class WaveGraphExecutor : public nativert::GraphExecutorBase {
   std::unique_ptr<Pool<nativert::ExecutionFrame>> framePool_;
 
   uint64_t frameGeneration_{0};
+
+  /// The graph's producer-less values (model inputs, weights, constants),
+  /// collected once for the input_contiguous check so an execution does not
+  /// walk every value of the graph.
+  std::vector<const nativert::Value*> producerlessValues_;
+  folly::once_flag producerlessOnce_;
 
   int64_t numRefTensorsChecked_{0};
   int64_t numRefNodesChecked_{0};

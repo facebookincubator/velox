@@ -15,6 +15,9 @@
  */
 #include <gtest/gtest.h>
 
+#include <atomic>
+#include <thread>
+
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/core/QueryCtx.h"
 
@@ -110,6 +113,63 @@ TEST_F(QueryCtxTest, withSysRootPool) {
       queryPool->reclaimer()->reclaimableBytes(*queryPool, reclaimableBytes));
 }
 
+// Registry overrides follow a derived QueryCtx, and destination-only entries
+// remain in place.
+TEST_F(QueryCtxTest, copyRegistries) {
+  struct RegistryA {};
+  struct RegistryB {};
+  struct RegistryC {};
+
+  auto source = QueryCtx::create();
+  auto destination = QueryCtx::create();
+  auto registryA = std::make_shared<RegistryA>();
+  auto registryB = std::make_shared<RegistryB>();
+  auto registryC = std::make_shared<RegistryC>();
+  source->setRegistry("a", registryA);
+  source->setRegistry("b", registryB);
+  destination->setRegistry("c", registryC);
+
+  EXPECT_EQ(destination->registry<RegistryA>("a"), nullptr);
+  EXPECT_EQ(destination->registry<RegistryB>("b"), nullptr);
+  EXPECT_EQ(destination->registry<RegistryC>("c"), registryC);
+
+  destination->copyRegistriesFrom(*source);
+
+  EXPECT_EQ(destination->registry<RegistryA>("a"), registryA);
+  EXPECT_EQ(destination->registry<RegistryB>("b"), registryB);
+  EXPECT_EQ(destination->registry<RegistryC>("c"), registryC);
+}
+
+// Registry copies reject conflicts unless replacement is requested, and a
+// rejected copy leaves the destination unchanged.
+TEST_F(QueryCtxTest, copyRegistryConflicts) {
+  struct RegistryA {};
+  struct RegistryB {};
+  struct RegistryC {};
+
+  auto source = QueryCtx::create();
+  auto destination = QueryCtx::create();
+  auto registryA = std::make_shared<RegistryA>();
+  auto sourceRegistryB = std::make_shared<RegistryB>();
+  auto destinationRegistryB = std::make_shared<RegistryB>();
+  auto registryC = std::make_shared<RegistryC>();
+  source->setRegistry("a", registryA);
+  source->setRegistry("b", sourceRegistryB);
+  destination->setRegistry("b", destinationRegistryB);
+  destination->setRegistry("c", registryC);
+
+  VELOX_ASSERT_THROW(
+      destination->copyRegistriesFrom(*source), "Registry already set: b");
+  EXPECT_EQ(destination->registry<RegistryA>("a"), nullptr);
+  EXPECT_EQ(destination->registry<RegistryB>("b"), destinationRegistryB);
+  EXPECT_EQ(destination->registry<RegistryC>("c"), registryC);
+
+  destination->copyRegistriesFrom(*source, /*overwrite=*/true);
+  EXPECT_EQ(destination->registry<RegistryA>("a"), registryA);
+  EXPECT_EQ(destination->registry<RegistryB>("b"), sourceRegistryB);
+  EXPECT_EQ(destination->registry<RegistryC>("c"), registryC);
+}
+
 TEST_F(QueryCtxTest, releaseCallbacks) {
   int callbackCount = 0;
   std::string capturedQueryId;
@@ -140,6 +200,39 @@ TEST_F(QueryCtxTest, releaseCallbacks) {
   // After QueryCtx destruction, all callbacks should have been invoked.
   ASSERT_EQ(callbackCount, 2);
   ASSERT_EQ(capturedQueryId, "test_query_id");
+}
+
+TEST_F(QueryCtxTest, concurrentReleaseCallbackRegistration) {
+  constexpr int32_t kNumThreads = 8;
+  constexpr int32_t kCallbacksPerThread = 500;
+  std::atomic<int32_t> callbackCount{0};
+
+  {
+    auto queryCtx = QueryCtx::create(
+        nullptr,
+        QueryConfig{{}},
+        std::unordered_map<std::string, std::shared_ptr<config::ConfigBase>>{},
+        nullptr,
+        nullptr,
+        nullptr,
+        "test_query_id");
+
+    // Tasks of one query register release callbacks from their own threads.
+    std::vector<std::thread> threads;
+    threads.reserve(kNumThreads);
+    for (int32_t i = 0; i < kNumThreads; ++i) {
+      threads.emplace_back([&]() {
+        for (int32_t j = 0; j < kCallbacksPerThread; ++j) {
+          queryCtx->addReleaseCallback([&callbackCount]() { ++callbackCount; });
+        }
+      });
+    }
+    for (auto& thread : threads) {
+      thread.join();
+    }
+  }
+
+  ASSERT_EQ(callbackCount, kNumThreads * kCallbacksPerThread);
 }
 
 TEST_F(QueryCtxTest, releaseCallbackException) {

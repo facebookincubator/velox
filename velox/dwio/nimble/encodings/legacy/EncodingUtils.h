@@ -22,13 +22,9 @@
 #include "velox/dwio/nimble/encodings/FsstEncoding.h"
 #include "velox/dwio/nimble/encodings/HuffmanEncoding.h"
 #include "velox/dwio/nimble/encodings/PFOREncoding.h"
+#include "velox/dwio/nimble/encodings/PartitionedEliasFanoEncoding.h"
 #include "velox/dwio/nimble/encodings/SimdForBitpackEncoding.h"
-// SubIntSplit integration commented out (disabled):
-/*
-#ifdef NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
 #include "velox/dwio/nimble/encodings/SubIntSplitEncoding.h"
-#endif
-*/
 #include "velox/dwio/nimble/encodings/common/EncodingUtils.h"
 #include "velox/dwio/nimble/encodings/legacy/ConstantEncoding.h"
 #include "velox/dwio/nimble/encodings/legacy/DeltaEncoding.h"
@@ -138,11 +134,20 @@ auto encodingTypeDispatchNonString(Encoding& encoding, F&& f) {
       }
     case EncodingType::EliasFano:
       if constexpr (isIntegralType<T>()) {
-        return ::facebook::nimble::detail::dispatchEliasFano(
-            encoding, std::forward<F>(f));
+        return ::facebook::nimble::detail::dispatchBySerializedIntegerType<
+            EliasFanoEncoding>(encoding, std::forward<F>(f));
       } else {
         NIMBLE_UNREACHABLE(
             "EliasFano encoding only supports integral data types, got {}.",
+            encoding.dataType());
+      }
+    case EncodingType::PartitionedEliasFano:
+      if constexpr (isIntegralType<T>()) {
+        return ::facebook::nimble::detail::dispatchBySerializedIntegerType<
+            PartitionedEliasFanoEncoding>(encoding, std::forward<F>(f));
+      } else {
+        NIMBLE_UNREACHABLE(
+            "PartitionedEliasFano encoding only supports integral data types, got {}.",
             encoding.dataType());
       }
     case EncodingType::PFOR:
@@ -181,9 +186,6 @@ auto encodingTypeDispatchNonString(Encoding& encoding, F&& f) {
             "ALP encoding only supports float and double data types, got {}.",
             encoding.dataType());
       }
-    // SubIntSplit integration commented out (disabled):
-    /*
-#ifdef NIMBLE_ENABLE_EXPERIMENTAL_ENCODINGS
     case EncodingType::SubIntSplit:
       if constexpr (isNumericType<T>() && (sizeof(T) == 4 || sizeof(T) == 8)) {
         return f(
@@ -191,8 +193,6 @@ auto encodingTypeDispatchNonString(Encoding& encoding, F&& f) {
       } else {
         NIMBLE_UNREACHABLE("{}", encoding.dataType());
       }
-#endif
-    */
     default:
       NIMBLE_UNSUPPORTED("{}", encoding.encodingType());
   }
