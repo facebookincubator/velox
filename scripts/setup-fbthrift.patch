@@ -1,0 +1,12 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -64,7 +64,7 @@ function (thrift_configure_target target visibility)
+   # off it. Inert from GCC 11 on.
+   if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+     target_compile_options(${target} ${visibility}
+-                           $<$<COMPILE_LANGUAGE:CXX>:-fcoroutines>)
++                           $<$<COMPILE_LANG_AND_ID:CXX,GNU>:-fcoroutines>)
+   endif ()
+   target_include_directories(
+     ${target} ${visibility} $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}>

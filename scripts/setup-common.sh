@@ -122,6 +122,14 @@ function install_mvfst {
 
 function install_fbthrift {
   wget_and_untar https://github.com/facebook/fbthrift/archive/refs/tags/"${FB_OS_VERSION}".tar.gz fbthrift
+  local FBTHRIFT_PATCH
+  FBTHRIFT_PATCH="$(realpath "$SCRIPT_DIR")/setup-fbthrift.patch" || return 1
+  (
+    cd "${DEPENDENCY_DIR}/fbthrift" || exit 1
+    # Skip applying the patch if it is already applied.
+    git apply --reverse --check "$FBTHRIFT_PATCH" 2>/dev/null ||
+      git apply "$FBTHRIFT_PATCH"
+  ) || return 1
   cmake_install_dir fbthrift -Denable_tests=OFF -DBUILD_TESTS=OFF -DBUILD_SHARED_LIBS=OFF
 }
 

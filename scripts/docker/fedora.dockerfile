@@ -21,6 +21,7 @@ FROM $base AS base-build
 COPY scripts/setup-helper-functions.sh /
 COPY scripts/setup-versions.sh /
 COPY scripts/setup-common.sh /
+COPY scripts/setup-fbthrift.patch /
 COPY scripts/setup-centos9.sh /
 COPY scripts/setup-fedora.sh /
 COPY CMake/resolve_dependency_modules/arrow/cmake-compatibility.patch /
@@ -57,6 +58,7 @@ FROM $base AS fedora
 COPY scripts/setup-helper-functions.sh /
 COPY scripts/setup-versions.sh /
 COPY scripts/setup-common.sh /
+COPY scripts/setup-fbthrift.patch /
 COPY scripts/setup-centos9.sh /
 COPY scripts/setup-fedora.sh /
 
