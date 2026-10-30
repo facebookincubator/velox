@@ -2180,6 +2180,76 @@ TEST_P(ProjectorFormatTest, hybridFlatMapProjectionSkipsAbsentKey) {
   }
 }
 
+TEST_P(ProjectorFormatTest, hybridFlatMapKeyListProjectionSelectsDefault) {
+  velox::test::VectorMaker vectorMaker{pool_.get()};
+  const auto makeInput = [&](const std::vector<std::string>& maps) {
+    return vectorMaker.rowVector(
+        {"features", "id"},
+        {vectorMaker.mapVectorFromJson<int64_t, double>(maps),
+         makeIntVector<int64_t>({0, 1, 2, 3})});
+  };
+  const auto input =
+      makeInput({"{1: 10, 9: 90}", "null", "{}", "{7: 70, 2: null, 1: 11}"});
+  auto hybridMap = makeHybridFlatMap(ScalarKind::Int64, {{"1", "2"}});
+  hybridMap.setDefaultGroupKeyPresenceMode(
+      HybridFlatMap::KeyPresenceMode::kKeyList);
+  auto options = inputSerializerOptions();
+  options.hybridFlatMapColumns = {{"features", std::move(hybridMap)}};
+  const auto [serialized, inputSchema] =
+      serializeWithSchema(input, input->type(), std::move(options));
+  const auto& sourceRow = inputSchema->asRow();
+  const auto& sourceHybridMap = sourceRow.childAt(0)->asHybridFlatMap();
+  const auto& configuredGroup = sourceHybridMap.groupAt(0);
+  const auto& defaultGroup = sourceHybridMap.defaultGroup();
+  ASSERT_THAT(defaultGroup.groupKeys, IsEmpty());
+
+  // Key 7 is in no configured group, so any batch's Default may hold it and
+  // the whole Default group is selected next to configured key 1.
+  const auto subfields = makeSubfields({"features[1]", "features[7]", "id"});
+  Projector projector{inputSchema, subfields, pool_.get(), projectorOptions()};
+  EXPECT_THAT(
+      projector.testingInputStreamIndices(),
+      ElementsAre(
+          sourceRow.nullsDescriptor().offset(),
+          sourceHybridMap.nullsDescriptor().offset(),
+          configuredGroup.valueType->asScalar().scalarDescriptor().offset(),
+          configuredGroup.keyPresenceDescriptor.offset(),
+          configuredGroup.inMapDescriptor.offset(),
+          defaultGroup.valueType->asScalar().scalarDescriptor().offset(),
+          defaultGroup.keyPresenceDescriptor.offset(),
+          defaultGroup.inMapDescriptor.offset(),
+          sourceRow.childAt(1)->asScalar().scalarDescriptor().offset()));
+  const auto projectedSchema = projector.projectedSchema();
+  const auto& projectedHybridMap =
+      projectedSchema->asRow().childAt(0)->asHybridFlatMap();
+  EXPECT_EQ(
+      projectedHybridMap.defaultGroupKeyPresenceMode(),
+      HybridFlatMap::KeyPresenceMode::kKeyList);
+  ASSERT_EQ(projectedHybridMap.groupCount(), 2);
+  EXPECT_EQ(projectedHybridMap.groupAt(0).groupId, 0);
+  EXPECT_EQ(
+      projectedHybridMap.groupAt(1).groupId, HybridFlatMap::kDefaultGroupId);
+
+  for (bool useIOBuf : {false, true}) {
+    SCOPED_TRACE(fmt::format("useIOBuf={}", useIOBuf));
+    const auto projectedBytes =
+        toString(projectInput(projector, serialized, useIOBuf));
+    velox::test::assertEqualVectors(
+        input,
+        deserialize(
+            projectedBytes, projectedSchema, outputDeserializerOptions()));
+
+    // The selector drops Default key 9, which the response carries only
+    // because Default is projected whole.
+    Deserializer selectedDeserializer{
+        projectedSchema, subfields, pool_.get(), outputDeserializerOptions()};
+    VectorPtr selected;
+    selectedDeserializer.deserialize(projectedBytes, selected);
+    velox::test::assertEqualVectors(
+        makeInput({"{1: 10}", "null", "{}", "{1: 11, 7: 70}"}), selected);
+  }
+}
+
 TEST_P(ProjectorFormatTest, hybridFlatMapDefaultOnlyProjectionRoundTrip) {
   velox::test::VectorMaker vectorMaker{pool_.get()};
   const auto makeInput = [&](const std::vector<std::string>& maps) {
