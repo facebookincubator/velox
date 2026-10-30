@@ -94,8 +94,7 @@ class DateTimeFunctionsTest : public functions::test::FunctionBaseTest {
   void useSessionZoneForRendering(const std::string& timeZone) {
     queryCtx_->testingOverrideConfigUnsafe({
         {core::QueryConfig::kSessionTimezone, timeZone},
-        {core::QueryConfig::kUseSessionTimezoneForTimestampWithTimezone,
-         "true"},
+        {core::QueryConfig::kIgnoreTimeZoneLabel, "true"},
     });
   }
 
@@ -844,7 +843,7 @@ TEST_F(DateTimeFunctionsTest, timestampWithTimezoneFieldsUseSessionZone) {
 
 TEST_F(DateTimeFunctionsTest, hourTimestampWithTimezoneGmtFallback) {
   queryCtx_->testingOverrideConfigUnsafe({
-      {core::QueryConfig::kUseSessionTimezoneForTimestampWithTimezone, "true"},
+      {core::QueryConfig::kIgnoreTimeZoneLabel, "true"},
   });
 
   EXPECT_EQ(
