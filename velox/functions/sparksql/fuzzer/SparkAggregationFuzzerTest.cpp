@@ -17,6 +17,8 @@
 #include <folly/init/Init.h>
 #include <gflags/gflags.h>
 #include <gtest/gtest.h>
+#include <iostream>
+#include <set>
 #include <unordered_set>
 
 #include "velox/dwio/parquet/RegisterParquetWriter.h"
@@ -46,6 +48,11 @@ DEFINE_string(
     "If specified, Fuzzer will only choose functions from "
     "this comma separated list of function names "
     "(e.g: --only \"min\" or --only \"sum,avg\").");
+
+DEFINE_bool(
+    list_fuzzable_functions,
+    false,
+    "List aggregate names after filtering and exit without running the fuzzer.");
 
 DEFINE_int64(allocator_capacity, 8L << 30, "Allocator capacity in bytes.");
 
@@ -104,6 +111,25 @@ int main(int argc, char** argv) {
       // Correctness mismatches and OOM during KLL sketch operations.
       "approx_percentile",
   };
+
+  if (FLAGS_list_fuzzable_functions) {
+    auto signatures = facebook::velox::fuzzer::filterSignatures(
+        facebook::velox::exec::getAggregateFunctionSignatures(),
+        FLAGS_only,
+        skipFunctions);
+    if (signatures.empty()) {
+      LOG(ERROR) << "No aggregate functions eligible for fuzzing.";
+      return 1;
+    }
+    std::set<std::string> names;
+    for (const auto& entry : signatures) {
+      names.insert(entry.first);
+    }
+    for (const auto& name : names) {
+      std::cout << name << '\n';
+    }
+    return 0;
+  }
 
   using facebook::velox::exec::test::TransformResultVerifier;
 
