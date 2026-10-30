@@ -20,13 +20,13 @@
 #include "velox/exec/MemoryReclaimer.h"
 #include "velox/exec/SortBuffer.h"
 
-namespace facebook::velox::dwio::common {
+namespace facebook::velox::connector::hive {
 
 /// Sorting Writer object is used to write sorted data into a single file.
-class SortingWriter : public Writer {
+class SortingWriter : public dwio::common::Writer {
  public:
   SortingWriter(
-      std::unique_ptr<Writer> writer,
+      std::unique_ptr<dwio::common::Writer> writer,
       std::unique_ptr<exec::SortBuffer> sortBuffer,
       vector_size_t maxOutputRowsConfig,
       uint64_t maxOutputBytesConfig,
@@ -44,7 +44,7 @@ class SortingWriter : public Writer {
 
   /// Closes the writer. Returns file metadata, or null if no metadata is
   /// available (e.g. for an empty file).
-  std::unique_ptr<FileMetadata> close() override;
+  std::unique_ptr<dwio::common::FileMetadata> close() override;
 
   folly::F14FastMap<std::string, RuntimeMetric> runtimeStats() const override {
     return outputWriter_->runtimeStats();
@@ -84,7 +84,7 @@ class SortingWriter : public Writer {
 
   vector_size_t outputBatchRows();
 
-  const std::unique_ptr<Writer> outputWriter_;
+  const std::unique_ptr<dwio::common::Writer> outputWriter_;
   const vector_size_t maxOutputRowsConfig_;
   const uint64_t maxOutputBytesConfig_;
   const uint64_t finishTimeSliceLimitMs_;
@@ -94,4 +94,4 @@ class SortingWriter : public Writer {
   std::unique_ptr<exec::SortBuffer> sortBuffer_;
 };
 
-} // namespace facebook::velox::dwio::common
+} // namespace facebook::velox::connector::hive

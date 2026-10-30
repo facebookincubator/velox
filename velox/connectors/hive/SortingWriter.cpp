@@ -14,13 +14,13 @@
  * limitations under the License.
  */
 
-#include "velox/dwio/common/SortingWriter.h"
+#include "velox/connectors/hive/SortingWriter.h"
 
 #include <folly/stop_watch.h>
 
-namespace facebook::velox::dwio::common {
+namespace facebook::velox::connector::hive {
 SortingWriter::SortingWriter(
-    std::unique_ptr<Writer> writer,
+    std::unique_ptr<dwio::common::Writer> writer,
     std::unique_ptr<exec::SortBuffer> sortBuffer,
     vector_size_t maxOutputRowsConfig,
     uint64_t maxOutputBytesConfig,
@@ -88,7 +88,7 @@ bool SortingWriter::finish() {
   return true;
 }
 
-std::unique_ptr<FileMetadata> SortingWriter::close() {
+std::unique_ptr<dwio::common::FileMetadata> SortingWriter::close() {
   VELOX_CHECK(isFinishing());
   setState(State::kClosed);
   VELOX_CHECK_NULL(sortBuffer_);
@@ -187,4 +187,4 @@ uint64_t SortingWriter::MemoryReclaimer::reclaim(
 
   return writer_->reclaim(targetBytes, stats);
 }
-} // namespace facebook::velox::dwio::common
+} // namespace facebook::velox::connector::hive
