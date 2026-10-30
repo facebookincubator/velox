@@ -2109,6 +2109,104 @@ void registerInPlaceScatterBuiltins() {
   }
 }
 
+// The index getters return the broadcast of their index list: the rank of
+// the highest-rank index, laid out densely.
+std::vector<ValueConstraint> indexListConstraint(
+    NodeCP node,
+    const ValueTypes& types) {
+  auto* list = inputAt(node, 1);
+  auto* pack = list != nullptr ? list->producer() : nullptr;
+  if (pack == nullptr || pack->target() != "prim.ListPack") {
+    return {};
+  }
+  int8_t rank = -1;
+  for (const auto& element : pack->inputs()) {
+    const auto elementRank = types.rank(element.value);
+    if (elementRank < 0) {
+      return {};
+    }
+    rank = std::max(rank, elementRank);
+  }
+  return {{.rank = rank, .contiguity = Contiguity::kContiguous}};
+}
+
+// Adds a tensor output of 'dtype' to 'node'. The output is read by other
+// nodes, so it must not be newTensorValue's per-op scratch: congruent nodes
+// share one compiled op, and scratch would get a private copy per invocation.
+nativert::Value* addTensorOutput(
+    nativert::Node* node,
+    c10::ScalarType dtype,
+    WaveGraph& waveGraph) {
+  auto* graph = waveGraph.graph();
+  auto* value = node->addOutput(
+      graph->getUniqueValueName(),
+      nativert::Type(nativert::Type::Kind::Tensor));
+  waveGraph.registerTensorMeta(value, dtype);
+  return value;
+}
+
+const nativert::TensorMeta* metaOf(const ValueTypes& types, ValueCP value) {
+  auto id = value->id();
+  if (id < 0 || static_cast<size_t>(id) >= types.types.size()) {
+    return nullptr;
+  }
+  return types.types[id];
+}
+
+// x[view(c, size)] with a 1-D x is view(x[c], size): indexing a vector maps
+// each index element to one output element, so the output takes the index's
+// shape and a reshape of the index can move to the output. Indexing by 'c'
+// itself lets the index expression fuse into the gather, which a view between
+// them prevents. Returns the view of the new gather, or nullptr when the
+// pattern does not apply.
+ValueCP unflattenIndexOfVector(
+    NodeCP node,
+    ValueCP self,
+    NodeCP listPack,
+    ValueTypes& types,
+    WaveGraph& waveGraph) {
+  if (self == nullptr || listPack == nullptr ||
+      listPack->target() != "prim.ListPack" || listPack->inputs().size() != 1 ||
+      types.rank(self) != 1) {
+    return nullptr;
+  }
+  auto* flat = listPack->inputs()[0].value;
+  auto* view = flat->producer();
+  if (view == nullptr || view->target() != "torch.ops.aten.view.default") {
+    return nullptr;
+  }
+  const auto* sizeAttr = view->tryGetAttribute("size");
+  if (sizeAttr == nullptr ||
+      !std::holds_alternative<std::vector<int64_t>>(sizeAttr->value)) {
+    return nullptr;
+  }
+  auto* index = inputAt(view, 0);
+  const auto* selfMeta = metaOf(types, self);
+  const auto* indexMeta = metaOf(types, index);
+  if (selfMeta == nullptr || indexMeta == nullptr || types.rank(index) < 1 ||
+      (indexMeta->dtype() != c10::ScalarType::Long &&
+       indexMeta->dtype() != c10::ScalarType::Int)) {
+    return nullptr;
+  }
+  auto* graph = waveGraph.graph();
+  auto* mutableNode = const_cast<nativert::Node*>(node);
+  auto* pack = graph->createNode(
+      "prim.ListPack", {{"l0", const_cast<nativert::Value*>(index)}});
+  graph->insertBefore(pack, mutableNode);
+  auto* list = waveGraph.newListValue(pack, "unflat_indices");
+  auto* gather = graph->createNode(
+      "torch.ops.aten.index.Tensor",
+      {{"self", const_cast<nativert::Value*>(self)}, {"indices", list}});
+  graph->insertBefore(gather, mutableNode);
+  auto* gathered = addTensorOutput(gather, selfMeta->dtype(), waveGraph);
+  auto* reshape =
+      graph->createNode("torch.ops.aten.view.default", {{"self", gathered}});
+  reshape->addAttribute(
+      {"size", std::get<std::vector<int64_t>>(sizeAttr->value)});
+  graph->insertBefore(reshape, mutableNode);
+  return addTensorOutput(reshape, selfMeta->dtype(), waveGraph);
+}
+
 } // namespace
 
 void registerBuiltins() {
@@ -3271,6 +3369,10 @@ void registerBuiltins() {
             auto* self = inputAt(node, 0);
             auto* indices = inputAt(node, 1);
             auto* listPack = indices ? indices->producer() : nullptr;
+            if (auto* unflat = unflattenIndexOfVector(
+                    node, self, listPack, types, waveGraph)) {
+              return {{node->outputs()[0], unflat}};
+            }
             if (self && listPack && listPack->target() == "prim.ListPack") {
               auto selfId = self->id();
               // selfOk gates access to the source dtype (needed to type the new
@@ -3443,6 +3545,7 @@ void registerBuiltins() {
                 .reserveInputs = {.tensors = {1}}}})
           .typeTemplateParams({0})
           .hasBlockInfo()
+          .outputConstraints(indexListConstraint)
           .registerOp();
     }
 
@@ -3471,6 +3574,7 @@ void registerBuiltins() {
               .reserve = firstListElementReserve,
               .reserveInputs = {.tensors = {1}}}})
         .typeTemplateParams({0})
+        .outputConstraints(indexListConstraint)
         .registerOp();
   }
 
@@ -4287,6 +4391,8 @@ void registerBuiltins() {
             auto* self = inputAt(node, 0);
             ValueConstraint constraint;
             constraint.rank = static_cast<int8_t>(types.rank(self) + 1);
+            // The inserted dim has extent 1, so the layout stays dense.
+            constraint.contiguity = types.contiguity(self);
             return {constraint};
           })
       .registerOp();
@@ -6223,6 +6329,15 @@ void registerBuiltins() {
             .reserveInputs = {.tensors = {0}, .scalars = {"keep"}}}})
       .headerFile(kScanHeader)
       .deviceFunc("any_rows")
+      .rowReduction(
+          {.keepAttr = "keep",
+           .accumulatorType = "bool",
+           .init = "false",
+           .combine = "{0} |= {1}",
+           .groupCombine =
+               "(((__ballot_sync(0xffffffff, {0}) >> (lane & ~({1}u - 1))) & "
+               "(0xffffffffu >> (32 - {1}))) != 0)",
+           .blockCombine = "(__syncthreads_or({0}) != 0)"})
       .hasBlockSizeTemplateParam()
       .templateAttrs({"keep"})
       .multiBlockReturnBarrier()

@@ -152,6 +152,10 @@ DEFINE_bool(
     auto_adjust_cost,
     true,
     "Adjust per-op cost multipliers after each execution based on actual thread block clocks. Defaults to WaveConfig's own default, which this flag assigns unconditionally: a different default here would silently override the engine's");
+DEFINE_bool(
+    cost_counts_barrier_wait,
+    true,
+    "With --auto_adjust_cost, count the time blocks wait at grid barriers as part of an op's cost");
 
 DEFINE_bool(
     uniform_cost,
@@ -190,6 +194,26 @@ DEFINE_bool(
     disjoint_write_ordering,
     true,
     "Leave in-place writes into provably disjoint regions unordered");
+DEFINE_bool(
+    static_leaf_index,
+    true,
+    "Read elementwise operands whose shapes the graph fixes at literal-divisor indices");
+DEFINE_bool(
+    constant_sizes,
+    true,
+    "Compute sizing calls whose operand shapes the graph fixes once, at bind");
+DEFINE_bool(
+    verify_static_sizes,
+    false,
+    "With --constant_sizes, also run those sizing calls and fail on a difference");
+DEFINE_bool(
+    fuse_through_views,
+    true,
+    "Compute the elementwise producer of a reshaping view inline in the view's consumer");
+DEFINE_bool(
+    fuse_row_reductions,
+    true,
+    "Evaluate the elementwise input of a row reduction in its row loop");
 DEFINE_bool(
     free_intermediates,
     true,
@@ -830,6 +854,7 @@ void ExecutorTestBase::SetUpTestSuite() {
   WaveConfig::get().kernelLineInfo = FLAGS_kernel_line_info;
   WaveConfig::get().debugSingleOps = FLAGS_debug_single_ops;
   WaveConfig::get().autoAdjustCost = FLAGS_auto_adjust_cost;
+  WaveConfig::get().costCountsBarrierWait = FLAGS_cost_counts_barrier_wait;
   WaveConfig::get().uniformCost = FLAGS_uniform_cost;
   WaveConfig::get().launchPerOp = FLAGS_launch_per_op;
   WaveConfig::get().dedupProjectOps = FLAGS_dedup_project_ops;
@@ -839,6 +864,11 @@ void ExecutorTestBase::SetUpTestSuite() {
   WaveConfig::get().recognizeDisjointCopies = FLAGS_recognize_disjoint_copies;
   WaveConfig::get().reinplaceScatters = FLAGS_reinplace_scatters;
   WaveConfig::get().disjointWriteOrdering = FLAGS_disjoint_write_ordering;
+  WaveConfig::get().staticLeafIndex = FLAGS_static_leaf_index;
+  WaveConfig::get().constantSizes = FLAGS_constant_sizes;
+  WaveConfig::get().verifyStaticSizes = FLAGS_verify_static_sizes;
+  WaveConfig::get().fuseThroughViews = FLAGS_fuse_through_views;
+  WaveConfig::get().fuseRowReductions = FLAGS_fuse_row_reductions;
   WaveConfig::get().freeIntermediates = FLAGS_free_intermediates;
   WaveConfig::get().stepLastUse = FLAGS_step_last_use;
   WaveConfig::get().syncEachStep = FLAGS_sync_each_step;

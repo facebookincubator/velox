@@ -45,6 +45,9 @@ class Optimizer {
       const nativert::Value* value,
       const ValueConstraint& constraint);
 
+  // Records the dims inferStaticDims finds for the outputs of 'producer'.
+  void setStaticDims(const nativert::Node* producer);
+
   WaveGraph& waveGraph_;
   ValueTypes& types_;
   nativert::Graph* graph_{nullptr};

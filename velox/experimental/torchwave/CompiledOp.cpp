@@ -22,6 +22,7 @@
 #include "velox/experimental/torchwave/GroupAlloc.h"
 #include "velox/experimental/torchwave/NodePrinter.h"
 #include "velox/experimental/torchwave/Standalones.h"
+#include "velox/experimental/torchwave/StaticDims.h"
 #include "velox/experimental/torchwave/StepProgram.h"
 #include "velox/experimental/torchwave/StepSupport.h"
 #include "velox/experimental/torchwave/Utils.h"
@@ -79,6 +80,32 @@ c10::DeviceIndex current_device();
 namespace torch::wave {
 
 namespace {
+
+// Logs the static dims of an elementwise expression's root and leaves, the
+// coverage check for shape specialization.
+void traceStaticDims(std::string_view label, const ElementExpr& ee) {
+  const auto& types = waveGraph()->types();
+  auto describe = [&](ValueCP value) {
+    auto dims = staticDimsOf(types, value);
+    std::string text = fmt::format("%{}", value->id());
+    if (!dims) {
+      return text + "[?]";
+    }
+    text += "[";
+    for (size_t i = 0; i < dims->size(); ++i) {
+      text += fmt::format("{}{}", i > 0 ? "," : "", (*dims)[i]);
+    }
+    return text + "]";
+  };
+  std::string leaves;
+  for (auto* value : ee.inputs) {
+    if (value->type().kind() == nativert::Type::Kind::Tensor) {
+      leaves += " " + describe(value);
+    }
+  }
+  LOG(INFO) << "static dims " << label << ": root " << describe(ee.output)
+            << " leaves" << leaves;
+}
 
 // Synchronizes the CUDA default stream (stream 0), where eager ATen standalone
 // ops are dispatched. Used to order them against wave-stream work before a
@@ -743,7 +770,6 @@ int32_t makeGrid(
   for (size_t i = 0; i < launches.size(); ++i) {
     launches[i].expectedFraction = totalCost > 0 ? sv.costs[i] / totalCost : 0;
   }
-
   const auto device =
       currentGridDevice(maxBlocksPerSM, staticSharedPerBlock, occupancyFor);
   const auto gridOps = describeGridOps(launches, sv);
@@ -1540,6 +1566,9 @@ CompositeKernel::CompositeKernel(
 
       for (const auto& ee : kop->elementExprs()) {
         int32_t outputOff = kop->paramOffset(ee.output);
+        if (getenv("TW_STATIC_DIMS_TRACE") != nullptr) {
+          traceStaticDims(kop->label(), ee);
+        }
         for (auto* v : ee.inputs) {
           if (v->type().kind() != nativert::Type::Kind::Tensor) {
             continue;
@@ -1547,9 +1576,15 @@ CompositeKernel::CompositeKernel(
           inElementExpr.insert(v);
           const auto leafOff = kop->paramOffset(v);
           const auto refIt = kop->broadcastRefs().find(leafOff);
+          const auto leafRefIt = ee.leafRefs.find(v);
           paramOffs.push_back(leafOff);
-          outputOffs.push_back(
-              refIt != kop->broadcastRefs().end() ? refIt->second : outputOff);
+          if (leafRefIt != ee.leafRefs.end()) {
+            outputOffs.push_back(kop->paramOffset(leafRefIt->second));
+          } else {
+            outputOffs.push_back(
+                refIt != kop->broadcastRefs().end() ? refIt->second
+                                                    : outputOff);
+          }
           auto ait = ee.altParamOffset.find(v);
           altOffs.push_back(ait != ee.altParamOffset.end() ? ait->second : -1);
         }
@@ -1783,6 +1818,7 @@ CompositeKernel::CompositeKernel(
   // uses: a step runs with the registers its own ops need, and the modules
   // compile in parallel.
   std::vector<std::string> moduleTexts;
+  std::vector<std::string> unboundedTexts;
   std::vector<std::vector<std::string>> moduleEntryPoints;
   std::vector<std::string> moduleFiles;
   {
@@ -1866,6 +1902,10 @@ CompositeKernel::CompositeKernel(
            << "  LEAVE();\n"
            << "}\n\n";
       std::vector<std::string> points;
+      // Each "__launch_bounds__" the module's minBlocks adds, and what the
+      // entry would carry without it: the unbounded variant is compiled too,
+      // and warmup() keeps whichever fits more blocks.
+      std::vector<std::pair<std::string, std::string>> bounds;
       for (const int32_t threads : sizes) {
         const auto name = kernelName + "_s" + std::to_string(module) +
             (threads == WaveConfig::get().blockSize
@@ -1875,8 +1915,14 @@ CompositeKernel::CompositeKernel(
         text << "#define " << kBlockSizeMacro << " " << threads << "\n"
              << "__global__ ";
         if (minBlocks > 0) {
-          text << "__launch_bounds__(" << threads << ", "
-               << std::min(minBlocks, 2048 / threads) << ") ";
+          auto bounded = "__launch_bounds__(" + std::to_string(threads) + ", " +
+              std::to_string(std::min(minBlocks, 2048 / threads)) + ") ";
+          bounds.emplace_back(
+              bounded,
+              threads > WaveConfig::get().blockSize
+                  ? "__launch_bounds__(" + std::to_string(threads) + ") "
+                  : std::string());
+          text << bounded;
         } else if (threads > WaveConfig::get().blockSize) {
           text << "__launch_bounds__(" << threads << ") ";
         }
@@ -1888,6 +1934,7 @@ CompositeKernel::CompositeKernel(
       }
       text << "} // namespace torch::wave\n";
       std::string code = text.str();
+      bool overridden = false;
       if (!FLAGS_debug_kernel_dir.empty()) {
         auto debugFile = fmt::format("{}_s{}.cu", kernelName, module);
         auto debugPath =
@@ -1898,10 +1945,24 @@ CompositeKernel::CompositeKernel(
               std::istreambuf_iterator<char>(in),
               std::istreambuf_iterator<char>());
           LOG(INFO) << "Reading code of " << debugFile << " from " << debugPath;
+          overridden = true;
         } else {
           LOG(INFO) << "No debug version for " << debugFile;
         }
       }
+      // A register bound can also raise a kernel's registers: one that needs
+      // 32 left alone may take the 40 that six blocks per SM allow, and lose
+      // two blocks. So the module is compiled both ways.
+      std::string unbounded;
+      if (!bounds.empty() && !overridden) {
+        unbounded = code;
+        for (const auto& [bounded, plain] : bounds) {
+          auto pos = unbounded.find(bounded);
+          TORCH_CHECK(pos != std::string::npos);
+          unbounded.replace(pos, bounded.size(), plain);
+        }
+      }
+      unboundedTexts.push_back(std::move(unbounded));
       moduleTexts.push_back(std::move(code));
       moduleEntryPoints.push_back(std::move(points));
       moduleFiles.push_back(
@@ -1932,17 +1993,39 @@ CompositeKernel::CompositeKernel(
         spec.headers = nullptr;
         return spec;
       };
-      if (!WaveConfig::get().kernelCacheDir.empty()) {
-        static facebook::velox::wave::KernelFsCache cache(
-            WaveConfig::get().kernelCacheDir);
-        modules_.push_back(cache.getKernel(moduleTexts[m], std::move(genFunc)));
-      } else {
-        modules_.push_back(
-            facebook::velox::wave::CompiledKernel::getKernel(
-                moduleTexts[m], std::move(genFunc)));
+      modules_.push_back(compileModule(moduleTexts[m], std::move(genFunc)));
+      std::unique_ptr<facebook::velox::wave::CompiledKernel> unbounded;
+      if (!unboundedTexts[m].empty()) {
+        unbounded = compileModule(
+            unboundedTexts[m],
+            [code = unboundedTexts[m],
+             points = moduleEntryPoints[m],
+             file = moduleFiles[m] + ".unbounded"]() {
+              facebook::velox::wave::KernelSpec spec;
+              spec.code = code;
+              spec.entryPoints = points;
+              spec.filePath = file;
+              spec.numHeaders = 0;
+              spec.headers = nullptr;
+              return spec;
+            });
       }
+      unboundedModules_.push_back(std::move(unbounded));
     }
   }
+}
+
+std::unique_ptr<facebook::velox::wave::CompiledKernel>
+CompositeKernel::compileModule(
+    const std::string& text,
+    std::function<facebook::velox::wave::KernelSpec()> genFunc) {
+  if (!WaveConfig::get().kernelCacheDir.empty()) {
+    static facebook::velox::wave::KernelFsCache cache(
+        WaveConfig::get().kernelCacheDir);
+    return cache.getKernel(text, std::move(genFunc));
+  }
+  return facebook::velox::wave::CompiledKernel::getKernel(
+      text, std::move(genFunc));
 }
 
 void CompositeKernel::warmup() {
@@ -1956,7 +2039,36 @@ void CompositeKernel::warmup() {
   for (auto& module : modules_) {
     module->launch(0, 1, 1, 0, &stream, args);
   }
+  for (auto& module : unboundedModules_) {
+    if (module) {
+      module->launch(0, 1, 1, 0, &stream, args);
+    }
+  }
   stream.wait();
+  // Keep the unbounded variant of a module unless the bounded one fits more
+  // blocks per SM at some entry: at equal occupancy it cannot have spilled.
+  for (size_t m = 0; m < unboundedModules_.size(); ++m) {
+    auto& unbounded = unboundedModules_[m];
+    if (!unbounded) {
+      continue;
+    }
+    bool boundedBetter = false;
+    for (size_t e = 0; e < entryModule_.size(); ++e) {
+      if (entryModule_[e] != static_cast<int32_t>(m)) {
+        continue;
+      }
+      const auto local = entryLocal_[e];
+      const auto threads = entryBlockSize_[e];
+      if (modules_[m]->occupancy(local, threads, 0) >
+          unbounded->occupancy(local, threads, 0)) {
+        boundedBetter = true;
+      }
+    }
+    if (!boundedBetter) {
+      modules_[m] = std::move(unbounded);
+    }
+    unbounded.reset();
+  }
 }
 
 std::vector<std::pair<std::string, facebook::velox::wave::KernelInfo>>
@@ -3874,10 +3986,13 @@ void CompositeInvocation::launch(
           for (size_t li = 0; li < sv.kernels.size(); ++li) {
             if (sv.kernels[li].invocation == sv.kernels[launchIdx].invocation) {
               auto* kernelOp = sv.kernels[li].launch->op;
-              for (auto offset : kernelOp->barrierCounters()) {
-                int32_t zero = 0;
-                auto* dest = deviceBase + sv.paramOffsets.at(li) + offset;
-                stream->hostToDeviceAsync(dest, &zero, sizeof(zero));
+              for (const auto* offsets :
+                   {&kernelOp->barrierCounters(), &kernelOp->counters()}) {
+                for (auto offset : *offsets) {
+                  int32_t zero = 0;
+                  auto* dest = deviceBase + sv.paramOffsets.at(li) + offset;
+                  stream->hostToDeviceAsync(dest, &zero, sizeof(zero));
+                }
               }
             }
           }

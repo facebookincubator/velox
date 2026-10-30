@@ -82,6 +82,10 @@ struct ValueConstraint {
   bool externallyOwned{false};
   /// True when the value is a graph output.
   bool graphOutput{false};
+  /// Sizes the graph fixes for this value, one per dim, -1 for a dim known
+  /// only at run time. Valid only when its size equals 'rank'. Computed by
+  /// inferStaticDims (StaticDims.h) after the other fields.
+  std::vector<int64_t> dims{};
 };
 
 /// Per-value tensor metadata and constraints for a WaveGraph.

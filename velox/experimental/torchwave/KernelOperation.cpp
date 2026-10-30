@@ -1625,7 +1625,11 @@ void KernelOperation::setOutputs(
     auto* producer = value->producer();
     if (producer) {
       const auto* am = argMetaForInput(meta, node, i);
-      bool inputInMemory = am && !am->isRegister;
+      // The producer of a view the expression computes through is never
+      // written, but its shape is: leaves below the view index against it.
+      bool inputInMemory = am && !am->isRegister &&
+          !compileCtx_.fusesThroughView(node) &&
+          !compileCtx_.fusesRowReduction(node);
       setOutputs(
           producer,
           subgraphInputs,

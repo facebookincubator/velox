@@ -16,12 +16,15 @@
 
 #include <fmt/format.h>
 #include "velox/experimental/torchwave/Compile.h"
+#include "velox/experimental/torchwave/StaticDims.h"
 #include "velox/experimental/torchwave/Utils.h"
 
 #include "velox/experimental/torchwave/WaveConfig.h"
 
 #include <folly/ScopeGuard.h>
+#include <folly/container/F14Set.h>
 #include <algorithm>
+#include <limits>
 #include <set>
 #include <sstream>
 
@@ -148,12 +151,103 @@ void CompileCtx::generateIndexToOffset(
 // The full-block variant calls the consumer on blockDim.x-aligned iterations
 // (needed when the consumer has barriers). The non-full-block variant skips
 // alignment padding.
+namespace {
+
+// True for a view inside an elementwise expression, which the expression
+// computes through (see CompileCtx::fusesThroughView). A view that is itself
+// elementwise, like expand, is generated as an elementwise op.
+bool isFusedThroughView(const Metadata* meta) {
+  return meta != nullptr && meta->isView() && meta->elementwise == nullptr;
+}
+
+void addViewLeafRefs(
+    ValueCP value,
+    ValueCP ref,
+    const std::unordered_set<ValueCP>& leaves,
+    const std::unordered_set<ValueCP>& wholeTensors,
+    folly::F14FastMap<ValueCP, ValueCP>& refs,
+    folly::F14FastSet<ValueCP>& rootReads) {
+  if (leaves.count(value) || value->producer() == nullptr) {
+    if (value->type().kind() != nativert::Type::Kind::Tensor ||
+        wholeTensors.count(value)) {
+      return;
+    }
+    if (ref == nullptr) {
+      rootReads.insert(value);
+      return;
+    }
+    auto [it, inserted] = refs.emplace(value, ref);
+    TORCH_CHECK(
+        inserted || it->second == ref,
+        "Leaf read below two views of one expression: %",
+        value->id());
+    return;
+  }
+  auto* node = value->producer();
+  const auto* meta = nodeMeta(node);
+  if (isFusedThroughView(meta)) {
+    auto* viewInput = node->inputs()[*meta->viewOfArg].value;
+    addViewLeafRefs(
+        viewInput, viewInput, leaves, wholeTensors, refs, rootReads);
+    return;
+  }
+  for (const auto& input : node->inputs()) {
+    addViewLeafRefs(input.value, ref, leaves, wholeTensors, refs, rootReads);
+  }
+}
+
+// The test that every per-element tensor leaf is contiguous and has the loop's
+// element count, so that each reads at idx.
+std::string fastPathCondition(int32_t numFastPathVars, int32_t tensorCount) {
+  if (numFastPathVars == 0) {
+    return "true";
+  }
+  std::string condition;
+  for (int32_t i = 0; i < numFastPathVars; ++i) {
+    uint32_t mask{0xffffffff};
+    const auto bitsInLast = tensorCount - i * kBitsPerWord;
+    if (i == numFastPathVars - 1 && bitsInLast < kBitsPerWord) {
+      mask = (1u << bitsInLast) - 1;
+    }
+    if (i > 0) {
+      condition += " && ";
+    }
+    condition += fmt::format("isFastPath{} == 0x{:x}", i, mask);
+  }
+  return condition;
+}
+
+// The leaves of the expression rooted at 'root' that are read below a view it
+// computes through, each mapped to that view's input.
+folly::F14FastMap<ValueCP, ValueCP> viewLeafRefs(
+    ValueCP root,
+    const std::unordered_set<ValueCP>& leaves,
+    const std::unordered_set<ValueCP>& wholeTensors) {
+  folly::F14FastMap<ValueCP, ValueCP> refs;
+  folly::F14FastSet<ValueCP> rootReads;
+  // 'root' is itself among 'leaves', as the value the loop stores.
+  for (const auto& input : root->producer()->inputs()) {
+    addViewLeafRefs(
+        input.value, nullptr, leaves, wholeTensors, refs, rootReads);
+  }
+  for (const auto& [leaf, ref] : refs) {
+    TORCH_CHECK(
+        !rootReads.count(leaf),
+        "Leaf read both below and beside a view of one expression: %",
+        leaf->id());
+  }
+  return refs;
+}
+
+} // namespace
+
 void CompileCtx::generateElementwise(
     const std::vector<Subgraph>& subgraphs,
     const std::vector<ResultSpec>& resultSpecs,
     const std::string& resultStmt,
     bool fullBlockResult,
-    ValueCP FOLLY_NULLABLE shapeSetOnDeviceResult) {
+    ValueCP FOLLY_NULLABLE shapeSetOnDeviceResult,
+    NodeCP FOLLY_NULLABLE rowReduction) {
   auto& op = *generatingOp_;
 
   // Scalar-elementwise ops (isScalarElementwise, e.g. _operator.* / sym_size /
@@ -319,6 +413,13 @@ void CompileCtx::generateElementwise(
       leafInputs.begin(), leafInputs.end());
   std::function<void(NodeCP)> collectWholeTensor = [&](NodeCP node) {
     auto* meta = nodeMeta(node);
+    if (isFusedThroughView(meta)) {
+      auto* viewInput = node->inputs()[*meta->viewOfArg].value;
+      if (!leafInputSet.count(viewInput) && viewInput->producer()) {
+        collectWholeTensor(viewInput->producer());
+      }
+      return;
+    }
     if (!meta || !meta->elementwise) {
       return;
     }
@@ -349,6 +450,10 @@ void CompileCtx::generateElementwise(
   };
   for (const auto& sg : subgraphs) {
     collectWholeTensor(sg.root);
+  }
+  for (size_t s = 0; s < subgraphs.size(); ++s) {
+    newExprs[s].leafRefs = viewLeafRefs(
+        subgraphs[s].root->outputs()[0], leafInputSet, wholeTensorValues);
   }
 
   // Exclude output values whose return meta has both wholeTensor and
@@ -397,87 +502,115 @@ void CompileCtx::generateElementwise(
 
   separateSharedScratch(headScratch);
 
+  // With every operand at a static index, the loop bound is a literal and
+  // there is no fast path to choose.
+  const auto staticSize = staticLoopSize(
+      leafInputs,
+      wholeTensorValues,
+      sizeExcludedValues,
+      subgraphs,
+      resultSpecs,
+      shapeSetOnDeviceResult,
+      op);
+  if (staticSize.has_value()) {
+    code_ << "  if (threadIdx.x == 0) {\n"
+          << "    size = " << *staticSize << "u;\n";
+    for (size_t i = 0; i < numFastPathVars; ++i) {
+      code_ << "    isFastPath" << i << " = 0;\n";
+    }
+    code_ << "  }\n";
+  }
   // Generate the head: compute size and fast path flags from tensor leaf
   // inputs only.
-  code_ << "  if (threadIdx.x == 0) {\n";
-  for (size_t i = 0; i < numFastPathVars; ++i) {
-    code_ << "    isFastPath" << i << " = 0;\n";
-  }
-  bool firstTensor = true;
-  bool declaredSize2 = false;
-  for (size_t valueIdx = 0; valueIdx < leafInputs.size(); ++valueIdx) {
-    if (leafInputs[valueIdx]->type().kind() != nativert::Type::Kind::Tensor) {
-      continue;
+  if (!staticSize.has_value()) {
+    code_ << "  if (threadIdx.x == 0) {\n";
+    for (size_t i = 0; i < numFastPathVars; ++i) {
+      code_ << "    isFastPath" << i << " = 0;\n";
     }
-    if (wholeTensorValues.count(leafInputs[valueIdx])) {
-      continue;
+    bool firstTensor = true;
+    bool declaredSize2 = false;
+    for (size_t valueIdx = 0; valueIdx < leafInputs.size(); ++valueIdx) {
+      if (leafInputs[valueIdx]->type().kind() != nativert::Type::Kind::Tensor) {
+        continue;
+      }
+      if (wholeTensorValues.count(leafInputs[valueIdx])) {
+        continue;
+      }
+      auto bitIdx = fastPathBitIndex_[valueIdx];
+      auto W = bitIdx / kBitsPerWord;
+      auto B = bitIdx % kBitsPerWord;
+      bool skipSize = sizeExcludedValues.count(leafInputs[valueIdx]);
+      if (skipSize) {
+        code_ << "    isFastPath" << W << " |= (uint32_t)"
+              << param(leafInputs[valueIdx], op) << "->contiguous << " << B
+              << ";\n";
+      } else if (firstTensor) {
+        code_ << "    Tensor* temp = " << param(leafInputs[valueIdx], op)
+              << ";\n    size = temp->numEl;\n"
+              << "    isFastPath0 |= temp->contiguous;\n";
+        firstTensor = false;
+      } else {
+        if (!declaredSize2) {
+          code_ << "    uint32_t size2;\n";
+          declaredSize2 = true;
+        }
+        code_ << "    temp = " << param(leafInputs[valueIdx], op) << ";\n"
+              << "    size2 = temp->numEl;\n"
+              << "    isFastPath" << W << " |= (uint32_t)temp->contiguous << "
+              << B << ";\n"
+              << "    if (size2 != size) {\n"
+              << "      if (size2 > size) {\n";
+        for (int32_t I = 0; (I + 1) * kBitsPerWord <= bitIdx; ++I) {
+          code_ << "        isFastPath" << I << " = 0;\n";
+        }
+        code_ << "        isFastPath" << W << " &= ~((1 << " << B << ") - 1);\n"
+              << "      size = size2;\n"
+              << "      } else {\n"
+              << "    isFastPath" << W << " &= ~(1 << " << B << ");\n"
+              << "}"
+              << "    }\n";
+      }
     }
-    auto bitIdx = fastPathBitIndex_[valueIdx];
-    auto W = bitIdx / kBitsPerWord;
-    auto B = bitIdx % kBitsPerWord;
-    bool skipSize = sizeExcludedValues.count(leafInputs[valueIdx]);
-    if (skipSize) {
-      code_ << "    isFastPath" << W << " |= (uint32_t)"
-            << param(leafInputs[valueIdx], op) << "->contiguous << " << B
-            << ";\n";
-    } else if (firstTensor) {
-      code_ << "    Tensor* temp = " << param(leafInputs[valueIdx], op)
-            << ";\n    size = temp->numEl;\n"
-            << "    isFastPath0 |= temp->contiguous;\n";
-      firstTensor = false;
-    } else {
+    if (firstTensor) {
+      code_ << "    size = 1;\n"
+            << "    isFastPath0 = 1;\n";
+    }
+    // The elementwise loop must cover the full output.  For an outer-product
+    // broadcast ([N,1] + [1,M] -> [N,M]) the output exceeds every input, so the
+    // max-input size computed above is too small.  Fold each memory-backed
+    // tensor output's element count into `size`; if an output is larger, clear
+    // input fast-path bits so every operand uses broadcast index translation.
+    // A row reduction stores no element of the expression; its shape-only
+    // root stands in for the output.
+    std::vector<ValueCP> sizedOutputs;
+    for (const auto& spec : resultSpecs) {
+      sizedOutputs.push_back(spec.value);
+    }
+    if (rowReduction != nullptr) {
+      sizedOutputs.push_back(subgraphs.at(0).root->outputs()[0]);
+    }
+    for (auto* outVal : sizedOutputs) {
+      if (!outVal || outVal->type().kind() != nativert::Type::Kind::Tensor ||
+          sizeExcludedValues.count(outVal) || wholeTensorValues.count(outVal)) {
+        continue;
+      }
       if (!declaredSize2) {
         code_ << "    uint32_t size2;\n";
         declaredSize2 = true;
       }
-      code_ << "    temp = " << param(leafInputs[valueIdx], op) << ";\n"
-            << "    size2 = temp->numEl;\n"
-            << "    isFastPath" << W << " |= (uint32_t)temp->contiguous << "
-            << B << ";\n"
-            << "    if (size2 != size) {\n"
-            << "      if (size2 > size) {\n";
-      for (int32_t I = 0; (I + 1) * kBitsPerWord <= bitIdx; ++I) {
-        code_ << "        isFastPath" << I << " = 0;\n";
+      code_ << "    size2 = " << param(outVal, op) << "->numEl;\n"
+            << "    if (size2 == 0) {\n"
+            << "      size = 0;\n"
+            << "    } else if (size2 > size) {\n";
+      for (size_t W = 0; W < numFastPathVars; ++W) {
+        code_ << "      isFastPath" << W << " = 0;\n";
       }
-      code_ << "        isFastPath" << W << " &= ~((1 << " << B << ") - 1);\n"
-            << "      size = size2;\n"
-            << "      } else {\n"
-            << "    isFastPath" << W << " &= ~(1 << " << B << ");\n"
-            << "}"
+      code_ << "      size = size2;\n"
             << "    }\n";
     }
+    code_ << "  }\n";
   }
-  if (firstTensor) {
-    code_ << "    size = 1;\n"
-          << "    isFastPath0 = 1;\n";
-  }
-  // The elementwise loop must cover the full output.  For an outer-product
-  // broadcast ([N,1] + [1,M] -> [N,M]) the output exceeds every input, so the
-  // max-input size computed above is too small.  Fold each memory-backed
-  // tensor output's element count into `size`; if an output is larger, clear
-  // input fast-path bits so every operand uses broadcast index translation.
-  for (size_t s = 0; s < resultSpecs.size(); ++s) {
-    auto* outVal = resultSpecs[s].value;
-    if (!outVal || outVal->type().kind() != nativert::Type::Kind::Tensor ||
-        sizeExcludedValues.count(outVal) || wholeTensorValues.count(outVal)) {
-      continue;
-    }
-    if (!declaredSize2) {
-      code_ << "    uint32_t size2;\n";
-      declaredSize2 = true;
-    }
-    code_ << "    size2 = " << param(outVal, op) << "->numEl;\n"
-          << "    if (size2 == 0) {\n"
-          << "      size = 0;\n"
-          << "    } else if (size2 > size) {\n";
-    for (size_t W = 0; W < numFastPathVars; ++W) {
-      code_ << "      isFastPath" << W << " = 0;\n";
-    }
-    code_ << "      size = size2;\n"
-          << "    }\n";
-  }
-  code_ << "  }\n"
-        << "  __syncthreads();\n";
+  code_ << "  __syncthreads();\n";
 
   // If anything the subgraphs read was written earlier in this same kernel
   // without a barrier since, emit one after the size setup.
@@ -488,7 +621,8 @@ void CompileCtx::generateElementwise(
         return;
       }
       auto* node = value->producer();
-      if (callNeedsBarrier(node)) {
+      // A view the expression computes through reads nothing from memory.
+      if (!isFusedThroughView(nodeMeta(node)) && callNeedsBarrier(node)) {
         needsBarrier = true;
         return;
       }
@@ -575,41 +709,116 @@ void CompileCtx::generateElementwise(
     }
   }
 
-  bool skipFastPath = WaveConfig::get().noElementwiseFastPath;
+  bool skipFastPath =
+      WaveConfig::get().noElementwiseFastPath || staticSize.has_value();
 
-  // Generate fast path test for tensor leaf inputs.
-  if (!skipFastPath) {
-    code_ << "  if (";
-    if (numFastPathVars == 0) {
-      code_ << "true";
+  if (rowReduction != nullptr) {
+    auto* root = subgraphs.at(0).root->outputs()[0];
+    const auto rowCounter = op.allocateCounter();
+    if (!skipFastPath) {
+      code_ << "  if (" << fastPathCondition(numFastPathVars, tensorCount)
+            << ") {\n";
+      emitRowReduction(rowReduction, root, op, allInputs, rowCounter, false);
+      code_ << "  } else {\n";
     }
-    for (size_t i = 0; i < numFastPathVars; ++i) {
-      if (i > 0) {
-        code_ << " && ";
-      }
-      uint32_t mask;
-      if (i < numFastPathVars - 1) {
-        mask = 0xffffffff;
-      } else {
-        auto bitsInLast = tensorCount - i * kBitsPerWord;
-        if (bitsInLast >= kBitsPerWord) {
-          mask = 0xffffffff;
-        } else {
-          mask = (1u << bitsInLast) - 1;
+    emitRowReduction(rowReduction, root, op, allInputs, rowCounter, true);
+    if (!skipFastPath) {
+      code_ << "  }\n";
+    }
+  } else {
+    // Generate fast path test for tensor leaf inputs.
+    if (!skipFastPath) {
+      code_ << "  if (" << fastPathCondition(numFastPathVars, tensorCount)
+            << ") {\n";
+
+      // Fast path body: loop over all elements, computing all expressions.
+      if (fullBlockResult) {
+        code_
+            << "    uint32_t rounded = roundUpPwr2(size, blockDim.x);\n"
+            << "    for (uint32_t idx = blockInfo.blockInOp * blockDim.x + threadIdx.x; idx < rounded; idx += blockInfo.numBlocksInOp * blockDim.x) {\n";
+        eltTrace(
+            code_,
+            "\"%d %d idx %d blockIdx %d\\n\", blockInfo.op, blockInfo.blockInOp, idx, blockIdx.x");
+        for (size_t s = 0; s < subgraphs.size(); ++s) {
+          auto tp = resultSpecs[s].value ? cudaType(resultSpecs[s].value)
+                                         : cudaType(allInputs.at(0));
+          code_ << "      " << tp << " result" << s << ";\n";
         }
+        code_ << "      if (idx < size) {\n";
+        for (size_t s = 0; s < subgraphs.size(); ++s) {
+          auto resultVar = fmt::format("result{}", s);
+          elementwiseExpr(
+              subgraphs[s].root->outputs()[0], resultVar, op, allInputs);
+          if (resultSpecs[s].value) {
+            auto it = std::find(
+                allInputs.begin(), allInputs.end(), resultSpecs[s].value);
+            auto id = it - allInputs.begin();
+            if (resultSpecs[s].value->type().kind() ==
+                nativert::Type::Kind::Tensor) {
+              code_ << "        " << storageRef(id) << "[idx] = " << resultVar
+                    << ";\n";
+            } else {
+              code_ << "        " << storageRef(id) << "[0] = " << resultVar
+                    << ";\n";
+            }
+          } else {
+            code_ << "        " << resultSpecs[s].variable << " = " << resultVar
+                  << ";\n";
+          }
+        }
+        code_ << "      }\n";
+        if (!resultStmt.empty()) {
+          code_ << "      " << resultStmt << "\n";
+        }
+        code_ << "    }\n";
+      } else {
+        code_
+            << "    for (uint32_t idx = blockInfo.blockInOp * blockDim.x + threadIdx.x; idx < size; idx += blockInfo.numBlocksInOp * blockDim.x) {\n";
+        eltTrace(
+            code_,
+            "\"%d %d idx %d blockIdx %d\\n\", blockInfo.op, blockInfo.blockInOp, idx, blockIdx.x");
+        for (size_t s = 0; s < subgraphs.size(); ++s) {
+          auto* rootMeta = nodeMeta(subgraphs[s].root);
+          bool resultInRegister = !rootMeta || rootMeta->returnMeta.empty() ||
+              rootMeta->returnMeta[0].isRegister;
+          auto tp = resultSpecs[s].value ? cudaType(resultSpecs[s].value)
+                                         : cudaType(allInputs.at(0));
+          auto resultVar = fmt::format("result{}", s);
+          code_ << "      " << tp << " " << resultVar << ";\n";
+          elementwiseExpr(
+              subgraphs[s].root->outputs()[0], resultVar, op, allInputs);
+          if (!resultInRegister) {
+            continue;
+          }
+          if (resultSpecs[s].value) {
+            auto it = std::find(
+                allInputs.begin(), allInputs.end(), resultSpecs[s].value);
+            auto id = it - allInputs.begin();
+            if (resultSpecs[s].value->type().kind() ==
+                nativert::Type::Kind::Tensor) {
+              code_ << "      " << storageRef(id) << "[idx] = " << resultVar
+                    << ";\n";
+            } else {
+              code_ << "      " << storageRef(id) << "[0] = " << resultVar
+                    << ";\n";
+            }
+          } else {
+            code_ << "       " << resultSpecs[s].variable << " = " << resultVar
+                  << ";\n";
+          }
+        }
+        if (!resultStmt.empty()) {
+          code_ << "      " << resultStmt << "\n";
+        }
+        code_ << "    }\n";
       }
-      code_ << "isFastPath" << i << " == 0x" << std::hex << mask << std::dec;
-    }
-    code_ << ") {\n";
 
-    // Fast path body: loop over all elements, computing all expressions.
+      code_ << "  } else {\n";
+    }
     if (fullBlockResult) {
       code_
           << "    uint32_t rounded = roundUpPwr2(size, blockDim.x);\n"
           << "    for (uint32_t idx = blockInfo.blockInOp * blockDim.x + threadIdx.x; idx < rounded; idx += blockInfo.numBlocksInOp * blockDim.x) {\n";
-      eltTrace(
-          code_,
-          "\"%d %d idx %d blockIdx %d\\n\", blockInfo.op, blockInfo.blockInOp, idx, blockIdx.x");
       for (size_t s = 0; s < subgraphs.size(); ++s) {
         auto tp = resultSpecs[s].value ? cudaType(resultSpecs[s].value)
                                        : cudaType(allInputs.at(0));
@@ -617,17 +826,31 @@ void CompileCtx::generateElementwise(
       }
       code_ << "      if (idx < size) {\n";
       for (size_t s = 0; s < subgraphs.size(); ++s) {
+        auto* rootMeta = nodeMeta(subgraphs[s].root);
+        bool resultInRegister = !rootMeta || rootMeta->returnMeta.empty() ||
+            rootMeta->returnMeta[0].isRegister;
         auto resultVar = fmt::format("result{}", s);
         elementwiseExpr(
-            subgraphs[s].root->outputs()[0], resultVar, op, allInputs);
+            subgraphs[s].root->outputs()[0], resultVar, op, allInputs, true);
+        if (!resultInRegister) {
+          continue;
+        }
         if (resultSpecs[s].value) {
           auto it = std::find(
               allInputs.begin(), allInputs.end(), resultSpecs[s].value);
           auto id = it - allInputs.begin();
           if (resultSpecs[s].value->type().kind() ==
               nativert::Type::Kind::Tensor) {
-            code_ << "        " << storageRef(id) << "[idx] = " << resultVar
-                  << ";\n";
+            // The output's own contiguity, read from its descriptor, not a
+            // bit of isFastPath. That bitmask is indexed by position in
+            // leafInputs, and an output sits past the end of it in allInputs --
+            // so the bit taken here belonged to some unrelated input, or to no
+            // tensor at all. A contiguous input then made a strided output be
+            // written linearly, which fills the first numEl slots of a pitched
+            // band and leaves the rest of it untouched.
+            code_ << "        " << storageRef(id)
+                  << rootStoreIndex(resultSpecs[s].value, op) << " = "
+                  << resultVar << ";\n";
           } else {
             code_ << "        " << storageRef(id) << "[0] = " << resultVar
                   << ";\n";
@@ -645,9 +868,6 @@ void CompileCtx::generateElementwise(
     } else {
       code_
           << "    for (uint32_t idx = blockInfo.blockInOp * blockDim.x + threadIdx.x; idx < size; idx += blockInfo.numBlocksInOp * blockDim.x) {\n";
-      eltTrace(
-          code_,
-          "\"%d %d idx %d blockIdx %d\\n\", blockInfo.op, blockInfo.blockInOp, idx, blockIdx.x");
       for (size_t s = 0; s < subgraphs.size(); ++s) {
         auto* rootMeta = nodeMeta(subgraphs[s].root);
         bool resultInRegister = !rootMeta || rootMeta->returnMeta.empty() ||
@@ -657,7 +877,7 @@ void CompileCtx::generateElementwise(
         auto resultVar = fmt::format("result{}", s);
         code_ << "      " << tp << " " << resultVar << ";\n";
         elementwiseExpr(
-            subgraphs[s].root->outputs()[0], resultVar, op, allInputs);
+            subgraphs[s].root->outputs()[0], resultVar, op, allInputs, true);
         if (!resultInRegister) {
           continue;
         }
@@ -667,8 +887,11 @@ void CompileCtx::generateElementwise(
           auto id = it - allInputs.begin();
           if (resultSpecs[s].value->type().kind() ==
               nativert::Type::Kind::Tensor) {
-            code_ << "      " << storageRef(id) << "[idx] = " << resultVar
-                  << ";\n";
+            // See the store above: the output is not a leaf input, so it has
+            // no bit in isFastPath. Its own descriptor carries its contiguity.
+            code_ << "      " << storageRef(id)
+                  << rootStoreIndex(resultSpecs[s].value, op) << " = "
+                  << resultVar << ";\n";
           } else {
             code_ << "      " << storageRef(id) << "[0] = " << resultVar
                   << ";\n";
@@ -683,103 +906,9 @@ void CompileCtx::generateElementwise(
       }
       code_ << "    }\n";
     }
-
-    code_ << "  } else {\n";
-  }
-  if (fullBlockResult) {
-    code_
-        << "    uint32_t rounded = roundUpPwr2(size, blockDim.x);\n"
-        << "    for (uint32_t idx = blockInfo.blockInOp * blockDim.x + threadIdx.x; idx < rounded; idx += blockInfo.numBlocksInOp * blockDim.x) {\n";
-    for (size_t s = 0; s < subgraphs.size(); ++s) {
-      auto tp = resultSpecs[s].value ? cudaType(resultSpecs[s].value)
-                                     : cudaType(allInputs.at(0));
-      code_ << "      " << tp << " result" << s << ";\n";
+    if (!skipFastPath) {
+      code_ << "  }\n";
     }
-    code_ << "      if (idx < size) {\n";
-    for (size_t s = 0; s < subgraphs.size(); ++s) {
-      auto* rootMeta = nodeMeta(subgraphs[s].root);
-      bool resultInRegister = !rootMeta || rootMeta->returnMeta.empty() ||
-          rootMeta->returnMeta[0].isRegister;
-      auto resultVar = fmt::format("result{}", s);
-      elementwiseExpr(
-          subgraphs[s].root->outputs()[0], resultVar, op, allInputs, true);
-      if (!resultInRegister) {
-        continue;
-      }
-      if (resultSpecs[s].value) {
-        auto it =
-            std::find(allInputs.begin(), allInputs.end(), resultSpecs[s].value);
-        auto id = it - allInputs.begin();
-        if (resultSpecs[s].value->type().kind() ==
-            nativert::Type::Kind::Tensor) {
-          // The output's own contiguity, read from its descriptor, not a
-          // bit of isFastPath. That bitmask is indexed by position in
-          // leafInputs, and an output sits past the end of it in allInputs --
-          // so the bit taken here belonged to some unrelated input, or to no
-          // tensor at all. A contiguous input then made a strided output be
-          // written linearly, which fills the first numEl slots of a pitched
-          // band and leaves the rest of it untouched.
-          code_ << "        " << storageRef(id) << "[complexIdx("
-                << param(resultSpecs[s].value, op) << "->contiguous, "
-                << param(resultSpecs[s].value, op) << ", idx)] = " << resultVar
-                << ";\n";
-        } else {
-          code_ << "        " << storageRef(id) << "[0] = " << resultVar
-                << ";\n";
-        }
-      } else {
-        code_ << "        " << resultSpecs[s].variable << " = " << resultVar
-              << ";\n";
-      }
-    }
-    code_ << "      }\n";
-    if (!resultStmt.empty()) {
-      code_ << "      " << resultStmt << "\n";
-    }
-    code_ << "    }\n";
-  } else {
-    code_
-        << "    for (uint32_t idx = blockInfo.blockInOp * blockDim.x + threadIdx.x; idx < size; idx += blockInfo.numBlocksInOp * blockDim.x) {\n";
-    for (size_t s = 0; s < subgraphs.size(); ++s) {
-      auto* rootMeta = nodeMeta(subgraphs[s].root);
-      bool resultInRegister = !rootMeta || rootMeta->returnMeta.empty() ||
-          rootMeta->returnMeta[0].isRegister;
-      auto tp = resultSpecs[s].value ? cudaType(resultSpecs[s].value)
-                                     : cudaType(allInputs.at(0));
-      auto resultVar = fmt::format("result{}", s);
-      code_ << "      " << tp << " " << resultVar << ";\n";
-      elementwiseExpr(
-          subgraphs[s].root->outputs()[0], resultVar, op, allInputs, true);
-      if (!resultInRegister) {
-        continue;
-      }
-      if (resultSpecs[s].value) {
-        auto it =
-            std::find(allInputs.begin(), allInputs.end(), resultSpecs[s].value);
-        auto id = it - allInputs.begin();
-        if (resultSpecs[s].value->type().kind() ==
-            nativert::Type::Kind::Tensor) {
-          // See the store above: the output is not a leaf input, so it has
-          // no bit in isFastPath. Its own descriptor carries its contiguity.
-          code_ << "      " << storageRef(id) << "[complexIdx("
-                << param(resultSpecs[s].value, op) << "->contiguous, "
-                << param(resultSpecs[s].value, op) << ", idx)] = " << resultVar
-                << ";\n";
-        } else {
-          code_ << "      " << storageRef(id) << "[0] = " << resultVar << ";\n";
-        }
-      } else {
-        code_ << "       " << resultSpecs[s].variable << " = " << resultVar
-              << ";\n";
-      }
-    }
-    if (!resultStmt.empty()) {
-      code_ << "      " << resultStmt << "\n";
-    }
-    code_ << "    }\n";
-  }
-  if (!skipFastPath) {
-    code_ << "  }\n";
   }
   // Wait for all warps to finish before size in shared memory is reused.
   code_ << "  __syncthreads();\n";
@@ -804,6 +933,75 @@ void CompileCtx::generateElementwise(
     op.elementExprs().push_back(std::move(ee));
   }
 }
+
+namespace {
+
+// The offset of the element a contiguous 'leaf' contributes to element 'idx'
+// of 'root', as an expression over 'idx' with literal divisors, when both
+// shapes are fully static and 'leaf' broadcasts to 'root'. Adjacent dims the
+// leaf does not broadcast over merge into one divide and modulo, so a
+// [R, C, 1] leaf of an [R, C, C] root reads at idx / C.
+std::optional<std::string> staticLeafIndex(
+    const StaticDims& root,
+    const StaticDims& leaf) {
+  if (leaf.size() > root.size()) {
+    return std::nullopt;
+  }
+  const auto rank = root.size();
+  StaticDims padded(rank - leaf.size(), 1);
+  padded.insert(padded.end(), leaf.begin(), leaf.end());
+  std::vector<bool> read(rank);
+  for (size_t d = 0; d < rank; ++d) {
+    if (root[d] < 0 || padded[d] < 0 ||
+        (padded[d] != root[d] && padded[d] != 1)) {
+      return std::nullopt;
+    }
+    read[d] = padded[d] == root[d] && root[d] != 1;
+  }
+  if (std::all_of(read.begin(), read.end(), [](bool r) { return r; })) {
+    return "idx";
+  }
+  std::string expr;
+  int64_t inner = 1;
+  int64_t leafStride = 1;
+  for (int64_t d = static_cast<int64_t>(rank) - 1; d >= 0;) {
+    if (!read[d]) {
+      inner *= root[d];
+      leafStride *= padded[d];
+      --d;
+      continue;
+    }
+    int64_t extent = 1;
+    const auto runInner = inner;
+    const auto runStride = leafStride;
+    while (d >= 0 && read[d]) {
+      extent *= root[d];
+      inner *= root[d];
+      leafStride *= padded[d];
+      --d;
+    }
+    std::string term = "idx";
+    if (runInner != 1) {
+      term = fmt::format("(idx / {}u)", runInner);
+    }
+    const bool outermost =
+        std::none_of(
+            read.begin(), read.begin() + d + 1, [](bool r) { return r; }) &&
+        std::all_of(root.begin(), root.begin() + d + 1, [](int64_t r) {
+          return r == 1;
+        });
+    if (!outermost) {
+      term = fmt::format("({} % {}u)", term, extent);
+    }
+    if (runStride != 1) {
+      term = fmt::format("{} * {}u", term, runStride);
+    }
+    expr = expr.empty() ? term : fmt::format("{} + {}", term, expr);
+  }
+  return expr.empty() ? std::string("0u") : expr;
+}
+
+} // namespace
 
 std::string CompileCtx::formatLeafAccess(
     ValueCP value,
@@ -843,6 +1041,9 @@ std::string CompileCtx::formatLeafAccess(
     return fmt::format("*{}", base);
   }
   if (slowPath) {
+    if (auto index = staticLeafIndexOf(value, op)) {
+      return fmt::format("{}[{}]", base, *index);
+    }
     auto bitIdx = fastPathBitIndex_[valueIdx];
     return fmt::format(
         "{}[complexIdx(isFastPath{} & (1 << {}), {}, idx)]",
@@ -852,6 +1053,255 @@ std::string CompileCtx::formatLeafAccess(
         param(value, op));
   }
   return fmt::format("{}[idx]", base);
+}
+
+std::optional<int64_t> CompileCtx::staticLoopSize(
+    const std::vector<ValueCP>& leafInputs,
+    const std::unordered_set<ValueCP>& wholeTensorValues,
+    const std::unordered_set<ValueCP>& sizeExcludedValues,
+    const std::vector<Subgraph>& subgraphs,
+    const std::vector<ResultSpec>& resultSpecs,
+    ValueCP shapeSetOnDeviceResult,
+    const KernelOperation& op) {
+  if (!WaveConfig::get().staticLeafIndex || subgraphs.size() != 1 ||
+      shapeSetOnDeviceResult != nullptr) {
+    return std::nullopt;
+  }
+  auto* root = subgraphs[0].root->outputs()[0];
+  if (!isFullyStatic(types_, root)) {
+    return std::nullopt;
+  }
+  const auto rootDims = *staticDimsOf(types_, root);
+  for (const auto& spec : resultSpecs) {
+    auto* value = spec.value;
+    if (value == nullptr ||
+        value->type().kind() != nativert::Type::Kind::Tensor) {
+      continue;
+    }
+    if (sizeExcludedValues.count(value) || !types_.contiguous(value) ||
+        staticDimsOf(types_, value) != std::optional<StaticDims>(rootDims)) {
+      return std::nullopt;
+    }
+  }
+  const auto& leafRefs = currentElementExpr_->leafRefs;
+  for (auto* leaf : leafInputs) {
+    if (leaf->type().kind() != nativert::Type::Kind::Tensor ||
+        wholeTensorValues.count(leaf)) {
+      continue;
+    }
+    // A leaf below a view indexes against the view's input.
+    auto refIt = leafRefs.find(leaf);
+    auto* indexRoot = refIt != leafRefs.end() ? refIt->second : root;
+    if (!types_.contiguous(leaf) || !isFullyStatic(types_, leaf) ||
+        !isFullyStatic(types_, indexRoot) ||
+        generatingOp_->broadcastRefs().count(op.paramOffset(leaf)) != 0 ||
+        !staticLeafIndex(
+            *staticDimsOf(types_, indexRoot), *staticDimsOf(types_, leaf))) {
+      return std::nullopt;
+    }
+  }
+  for (const auto& spec : resultSpecs) {
+    if (spec.value != nullptr &&
+        spec.value->type().kind() == nativert::Type::Kind::Tensor) {
+      generatingOp_->addStaticShape(
+          op.paramOffset(spec.value), rootDims, /*contiguous=*/false);
+    }
+  }
+  int64_t numel = 1;
+  for (auto dim : rootDims) {
+    numel *= dim;
+  }
+  return numel;
+}
+
+namespace {
+
+// Lanes reducing one row in the warp form: the largest power of two up to 32
+// that divides a static row length, so no lane idles at the end of a row.
+// Under 8 lanes the reads of a row coalesce poorly, so the choice is then
+// whichever of 8, 16 and 32 leaves the fewest lanes idle. 32 for a row
+// length known only at run time.
+int32_t laneGroupSize(std::optional<int64_t> rowLen) {
+  if (!rowLen.has_value() || *rowLen <= 0) {
+    return 32;
+  }
+  const auto lowestBit = *rowLen & -*rowLen;
+  if (lowestBit >= 8) {
+    return static_cast<int32_t>(std::min<int64_t>(lowestBit, 32));
+  }
+  int32_t best = 32;
+  int64_t bestIdle = std::numeric_limits<int64_t>::max();
+  for (int32_t lanes : {32, 16, 8}) {
+    const auto idle = (*rowLen + lanes - 1) / lanes * lanes - *rowLen;
+    if (idle < bestIdle) {
+      best = lanes;
+      bestIdle = idle;
+    }
+  }
+  return best;
+}
+
+} // namespace
+
+void CompileCtx::emitRowReduction(
+    NodeCP reduction,
+    ValueCP root,
+    KernelOperation& op,
+    const std::vector<ValueCP>& inputs,
+    int32_t rowCounter,
+    bool slowPath) {
+  constexpr int64_t kWarpRowMax = 1024;
+  constexpr int32_t kRowsPerClaim = 4;
+  const auto& spec = *nodeMeta(reduction)->rowReduction;
+  const auto keep = *rowReductionKeep(reduction, spec);
+  auto* output = reduction->outputs()[0];
+  std::optional<int64_t> staticRowLen;
+  code_ << "  {\n";
+  if (WaveConfig::get().staticLeafIndex && isFullyStatic(types_, root)) {
+    auto dims = *staticDimsOf(types_, root);
+    int64_t numRows = 1;
+    int64_t rowLen = 1;
+    for (size_t d = 0; d < dims.size(); ++d) {
+      (static_cast<int64_t>(d) < keep ? numRows : rowLen) *= dims[d];
+    }
+    staticRowLen = rowLen;
+    code_ << "    const uint32_t numRows = " << numRows << "u;\n"
+          << "    const uint32_t rowLen = " << rowLen << "u;\n";
+    generatingOp_->addStaticShape(
+        op.paramOffset(root), std::move(dims), /*contiguous=*/false);
+  } else {
+    code_ << "    uint32_t numRows = 1;\n"
+          << "    for (int32_t d = 0; d < " << keep << "; ++d) {\n"
+          << "      numRows *= " << param(root, op) << "->dims[d];\n"
+          << "    }\n"
+          << "    const uint32_t rowLen = numRows == 0 ? 0 : size / numRows;\n";
+  }
+  const auto store = fmt::format(
+      "storage<{0}>({1})[complexIdx({1}->contiguous, {1}, row)]",
+      cudaType(output),
+      param(output, op));
+  const auto claim =
+      fmt::format("atomicAdd(param<uint32_t>(blockInfo, {}), ", rowCounter);
+  // Evaluates one row into rowAcc and stores it, its elements taken from
+  // 'firstElement' in steps of 'elementStep' while 'guard' holds.
+  auto emitRow = [&](std::string_view firstElement,
+                     std::string_view elementStep,
+                     std::string_view guard,
+                     std::string_view combineAcross,
+                     std::string_view storeIf) {
+    code_ << "      " << spec.accumulatorType << " rowAcc = " << spec.init
+          << ";\n"
+          << "      for (uint32_t k = " << firstElement << "; " << guard
+          << "k < rowLen; k += " << elementStep << ") {\n"
+          << "      const uint32_t idx = row * rowLen + k;\n"
+          << "      " << cudaType(root) << " result0;\n";
+    elementwiseExpr(root, "result0", op, inputs, slowPath);
+    code_ << "      "
+          << fmt::format(fmt::runtime(spec.combine), "rowAcc", "result0")
+          << ";\n"
+          << "      }\n"
+          << "      rowAcc = " << combineAcross << ";\n"
+          << "      if (" << storeIf << ") {\n"
+          << "        " << store << " = rowAcc;\n"
+          << "      }\n";
+  };
+  // Rows are claimed from a counter rather than dealt out by position, so
+  // the blocks that run faster take more of them.
+  // A warp reduces 32 / groupSize rows at a time, groupSize lanes on each.
+  const int32_t groupSize = laneGroupSize(staticRowLen);
+  const int32_t rowsPerStep = 32 / groupSize;
+  const int32_t rowsPerClaim = std::max(kRowsPerClaim, rowsPerStep);
+  auto emitWarpLoop = [&]() {
+    code_ << "    const uint32_t lane = threadIdx.x & 31;\n"
+          << "    for (;;) {\n"
+          << "      uint32_t firstRow = 0;\n"
+          << "      if (lane == 0) {\n"
+          << "        firstRow = " << claim << rowsPerClaim << "u);\n"
+          << "      }\n"
+          << "      firstRow = __shfl_sync(0xffffffff, firstRow, 0);\n"
+          << "      if (firstRow >= numRows) {\n"
+          << "        break;\n"
+          << "      }\n"
+          << "      const uint32_t endRow = min(firstRow + " << rowsPerClaim
+          << "u, numRows);\n"
+          << "      for (uint32_t rowBase = firstRow; rowBase < endRow; "
+          << "rowBase += " << rowsPerStep << "u) {\n"
+          << "      const uint32_t row = rowBase + lane / " << groupSize
+          << "u;\n";
+    emitRow(
+        fmt::format("lane % {}u", groupSize),
+        fmt::format("{}u", groupSize),
+        "row < endRow && ",
+        fmt::format(fmt::runtime(spec.groupCombine), "rowAcc", groupSize),
+        fmt::format("lane % {}u == 0 && row < endRow", groupSize));
+    code_ << "      }\n"
+          << "    }\n";
+  };
+  auto emitBlockLoop = [&]() {
+    op.addSharedDeclaration("  __shared__ uint32_t rowClaim;\n");
+    separateSharedScratch({"rowClaim"});
+    code_ << "    for (;;) {\n"
+          << "      if (threadIdx.x == 0) {\n"
+          << "        rowClaim = " << claim << "1u);\n"
+          << "      }\n"
+          << "      __syncthreads();\n"
+          << "      const uint32_t row = rowClaim;\n"
+          << "      __syncthreads();\n"
+          << "      if (row >= numRows) {\n"
+          << "        break;\n"
+          << "      }\n";
+    emitRow(
+        "threadIdx.x",
+        "blockDim.x",
+        "",
+        fmt::format(fmt::runtime(spec.blockCombine), "rowAcc"),
+        "threadIdx.x == 0");
+    code_ << "    }\n";
+  };
+  if (staticRowLen.has_value()) {
+    if (*staticRowLen <= kWarpRowMax) {
+      emitWarpLoop();
+    } else {
+      emitBlockLoop();
+    }
+  } else {
+    code_ << "  if (rowLen <= " << kWarpRowMax << "u) {\n";
+    emitWarpLoop();
+    code_ << "  } else {\n";
+    emitBlockLoop();
+    code_ << "  }\n";
+  }
+  code_ << "  }\n";
+}
+
+std::string CompileCtx::rootStoreIndex(ValueCP value, const KernelOperation& op)
+    const {
+  return fmt::format(
+      "[complexIdx({0}->contiguous, {0}, idx)]", param(value, op));
+}
+
+std::optional<std::string> CompileCtx::staticLeafIndexOf(
+    ValueCP value,
+    const KernelOperation& op) const {
+  if (!WaveConfig::get().staticLeafIndex || currentRootOutput_ == nullptr ||
+      !types_.contiguous(value) ||
+      generatingOp_->broadcastRefs().count(op.paramOffset(value)) != 0 ||
+      !isFullyStatic(types_, value) ||
+      !isFullyStatic(types_, currentRootOutput_)) {
+    return std::nullopt;
+  }
+  auto rootDims = *staticDimsOf(types_, currentRootOutput_);
+  auto leafDims = *staticDimsOf(types_, value);
+  auto index = staticLeafIndex(rootDims, leafDims);
+  if (index.has_value()) {
+    generatingOp_->addStaticShape(
+        op.paramOffset(value), std::move(leafDims), /*contiguous=*/true);
+    generatingOp_->addStaticShape(
+        op.paramOffset(currentRootOutput_),
+        std::move(rootDims),
+        /*contiguous=*/false);
+  }
+  return index;
 }
 
 std::string CompileCtx::buildElementwiseCall(
@@ -1080,6 +1530,20 @@ void CompileCtx::elementwiseExprImpl(
   generatingOp_->allNodes().insert(node);
 
   auto* meta = nodeMeta(node);
+  if (isFusedThroughView(meta)) {
+    TORCH_CHECK(
+        fusesThroughView(node),
+        "Elementwise expression reaches a view it does not compute through: ",
+        node->target());
+    // The ops below index against the view's input, which has the view's
+    // element order.
+    auto* viewInput = node->inputs()[*meta->viewOfArg].value;
+    auto* root = currentRootOutput_;
+    currentRootOutput_ = viewInput;
+    elementwiseExprImpl(viewInput, resultName, inputSet, inputs, op, slowPath);
+    currentRootOutput_ = root;
+    return;
+  }
   TORCH_CHECK(
       meta && meta->elementwise, "Not an elementwise op: ", node->target());
 

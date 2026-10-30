@@ -22,6 +22,7 @@
 #include <deque>
 
 #include <ATen/ATen.h>
+#include <c10/util/StringUtil.h>
 #include <folly/ScopeGuard.h>
 #include <folly/chrono/Hardware.h>
 
@@ -151,9 +152,73 @@ void runBoundConcat(
   std::copy(outShape.begin(), outShape.end(), resultShape.dims);
 }
 
+} // namespace
+
+void verifyConstantSize(
+    const SizeOp& size,
+    const StepProgram& program,
+    const ValueTable& table) {
+  const auto count = size.shapes.size;
+  std::vector<Shape> actual(count);
+  const auto args = program.code.argsOf(size, table);
+  // Builds pending operand entries, as evaluateSize does before a call.
+  TORCH_CHECK(
+      reserveOperandsReady(args),
+      "sizing: a constant Size is verified before its operands are in the table");
+  TORCH_CHECK(
+      size.fn(args, actual.data(), count),
+      "sizing: a ReserveFn declined, which it cannot");
+  const auto* expected = program.code.shapes + size.shapes.begin;
+  for (int32_t i = 0; i < count; ++i) {
+    const auto& lhs = expected[i];
+    const auto& rhs = actual[i];
+    if (lhs.rank == rhs.rank &&
+        std::equal(lhs.dims, lhs.dims + lhs.rank, rhs.dims)) {
+      continue;
+    }
+    const auto& source = program.sizes[size.source];
+    std::string operands;
+    for (int32_t g = 0; g < args.numGroups; ++g) {
+      for (size_t e = 0; e < args.groupSize(g); ++e) {
+        const auto id = args.id(g, e);
+        operands +=
+            fmt::format(" %{}{}", id, table.valid(id) ? "" : "(absent)");
+      }
+    }
+    TORCH_CHECK(
+        false,
+        "Static size differs from the reserve: ",
+        source.data != nullptr
+            ? std::string(source.data->actualOutputDescs[source.outputIdx]
+                              .reserveAttrNode->target())
+            : std::string("built-in"),
+        " operands",
+        operands,
+        ", size ",
+        size.source,
+        " shape ",
+        i,
+        ", static [",
+        c10::Join(", ", std::vector<int64_t>(lhs.dims, lhs.dims + lhs.rank)),
+        "], reserve [",
+        c10::Join(", ", std::vector<int64_t>(rhs.dims, rhs.dims + rhs.rank)),
+        "]");
+  }
+}
+
+namespace {
+
 // Runs 'size' unless it already ran this execution: its concat layout or its
 // ReserveFn.
 void evaluateSize(SizeOp& size, StepProgram& program, ExecutionState& state) {
+  if (size.constant) {
+    if (WaveConfig::get().verifyStaticSizes &&
+        size.generation != state.tableGeneration) {
+      size.generation = state.tableGeneration;
+      verifyConstantSize(size, program, state.valueTable);
+    }
+    return;
+  }
   if (size.generation == state.tableGeneration) {
     return;
   }
@@ -244,6 +309,53 @@ bool copyShapeOnly(const ValueTable& table, int32_t id, uint8_t* dest) {
   to->status = Tensor::kUninited;
   return true;
 }
+
+} // namespace
+
+void runShapeChecks(const StepProgram& program, const ValueTable& table) {
+  for (const auto& check : program.shapeChecks) {
+    if (!table.valid(check.valueId) || !table.isTensor(check.valueId)) {
+      continue;
+    }
+    const auto& tensor = table.tensor(check.valueId);
+    bool same = tensor.rank == static_cast<int8_t>(check.dims.size());
+    for (int32_t d = 0; same && d < tensor.rank; ++d) {
+      same = tensor.dims[d] == check.dims[d];
+    }
+    if (same && check.contiguous) {
+      int64_t stride = 1;
+      for (int32_t d = tensor.rank - 1; d >= 0; --d) {
+        TORCH_CHECK(
+            tensor.dims[d] == 1 || tensor.strides[d] == stride,
+            "Tensor layout differs from the dense layout its kernel was "
+            "compiled for: value %",
+            check.valueId,
+            ", dim ",
+            d,
+            " has stride ",
+            tensor.strides[d],
+            " instead of ",
+            stride);
+        stride *= tensor.dims[d];
+      }
+    }
+    if (!same) {
+      std::vector<int64_t> actual(tensor.dims, tensor.dims + tensor.rank);
+      TORCH_CHECK(
+          false,
+          "Tensor shape differs from the static shape its kernel was "
+          "compiled for: value %",
+          check.valueId,
+          ", compiled for [",
+          c10::Join(", ", check.dims),
+          "], actual [",
+          c10::Join(", ", actual),
+          "]");
+    }
+  }
+}
+
+namespace {
 
 void runFills(
     const StepProgram& program,
@@ -685,6 +797,7 @@ void CompositeInvocation::executeBound(ExecutionState& state) {
     {
       const uint64_t tFill = run.doTiming ? folly::hardware_timestamp() : 0;
       runFills(program, sv, state, frame, pinnedBase);
+      runShapeChecks(program, state.valueTable);
       if (run.doTiming) {
         sv.fillUs += static_cast<int64_t>(
             static_cast<double>(folly::hardware_timestamp() - tFill) /

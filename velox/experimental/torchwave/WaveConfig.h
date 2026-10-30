@@ -152,6 +152,12 @@ struct WaveConfig {
   // actual thread block clock distribution.
   bool autoAdjustCost{true};
 
+  // With autoAdjustCost, measures an op by its blocks' whole run times,
+  // including time spent waiting at its grid barriers. When false, the waits
+  // are left out, so an op given more blocks than it can use does not look
+  // more expensive for the blocks that only wait.
+  bool costCountsBarrierWait{true};
+
   // Ablation knobs.  Each switches one optimization off so its contribution
   // can be measured by comparing runtimes; none is meant for production use.
 
@@ -201,6 +207,29 @@ struct WaveConfig {
   // it selects. Disjoint writes into one tensor can then run side by side. On
   // by default.
   bool disjointWriteOrdering{true};
+
+  // Reads an elementwise leaf whose shape and the expression's are both fixed
+  // by the graph at an index with literal divisors, instead of decomposing
+  // 'idx' through the leaf's descriptor at run time.
+  bool staticLeafIndex{true};
+
+  // Computes once, at bind, each sizing call whose operands all have shapes
+  // fixed by the graph, and skips the call at run time.
+  bool constantSizes{true};
+
+  // With constantSizes, still runs those sizing calls and fails when a result
+  // differs from the one computed at bind. For validation runs.
+  bool verifyStaticSizes{false};
+
+  // Computes the elementwise producer of a reshaping view inline in the view's
+  // elementwise consumer, at the consumer's index, instead of writing the
+  // producer's result to memory (see CompileCtx::fusesThroughView).
+  bool fuseThroughViews{true};
+
+  // Evaluates the elementwise input of a row reduction such as tw.any_rows in
+  // the reduction's row loop instead of writing it to memory (see
+  // CompileCtx::fusesRowReduction).
+  bool fuseRowReductions{true};
 
   // Force a launch boundary after a multi-block (non-cooperative) scan so every
   // cross-block consumer of its output reads a fully materialized buffer from a

@@ -20,6 +20,7 @@
 
 #include <c10/core/ScalarType.h>
 
+#include "velox/experimental/torchwave/StaticDims.h"
 #include "velox/experimental/torchwave/WaveConfig.h"
 
 namespace torch::wave {
@@ -113,6 +114,23 @@ void Optimizer::setConstraint(
   }
 }
 
+void Optimizer::setStaticDims(const nativert::Node* producer) {
+  auto dims = inferStaticDims(producer, types_);
+  const auto& outputs = producer->outputs();
+  for (size_t i = 0; i < outputs.size() && i < dims.size(); ++i) {
+    const auto id = outputs[i]->id();
+    if (!dims[i].has_value() || id < 0) {
+      continue;
+    }
+    ensureConstraint(id);
+    auto& constraint = types_.constraints[id];
+    if (constraint.rank >= 0 &&
+        static_cast<size_t>(constraint.rank) == dims[i]->size()) {
+      constraint.dims = std::move(*dims[i]);
+    }
+  }
+}
+
 void Optimizer::optimizeGraph(nativert::Graph* graph) {
   graph_ = graph;
   types_.constraints.resize(types_.types.size());
@@ -178,6 +196,12 @@ void Optimizer::visitValue(const nativert::Value* value) {
       types_.constraints[id].rank =
           static_cast<int8_t>(types_.types[id]->dim());
       types_.constraints[id].externallyOwned = true;
+      // Weights and constants have exact sizes. A user input's TensorMeta can
+      // be a placeholder, so its dims stay unknown.
+      if (!producer && !types_.types[id]->hasSymbolicShape()) {
+        auto sizes = types_.types[id]->sizes();
+        types_.constraints[id].dims.assign(sizes.begin(), sizes.end());
+      }
       if (WaveConfig::get().inputContiguous) {
         // The caller asserts these are contiguous. executeWave verifies each
         // one at runtime and throws otherwise.
@@ -242,6 +266,7 @@ void Optimizer::visitValue(const nativert::Value* value) {
       }
     }
   }
+  setStaticDims(producer);
 
   // Insert casts where PyTorch type promotion differs from C++ rules.
   if (metadata->arithmeticPromotion) {

@@ -37,6 +37,138 @@ namespace torch::wave {
 
 namespace {
 
+// True when the value 'id' is a tensor whose dims the graph fixes.
+bool isStaticTensor(const ValueTypes& types, int32_t id) {
+  if (id < 0 || static_cast<size_t>(id) >= types.constraints.size() ||
+      types.types[id] == nullptr) {
+    return false;
+  }
+  const auto& constraint = types.constraints[id];
+  return constraint.rank >= 0 && constraint.rank <= kMaxDims &&
+      constraint.dims.size() == static_cast<size_t>(constraint.rank) &&
+      std::all_of(constraint.dims.begin(), constraint.dims.end(), [](auto dim) {
+           return dim >= 0;
+         });
+}
+
+// True when every operand of 'size' is fixed by the graph: tensors of static
+// shape, constant scalars, and no host-side tensor data.
+bool hasStaticOperands(const BoundSize& size, const ValueTypes& types) {
+  if (size.fn == nullptr || size.concat >= 0 ||
+      !size.args.hostTensors.empty()) {
+    return false;
+  }
+  auto isConstant = [](const ScalarRef& ref) {
+    return ref.kind != ScalarRef::kValue;
+  };
+  if (!std::all_of(
+          size.args.scalars.begin(), size.args.scalars.end(), isConstant)) {
+    return false;
+  }
+  for (const auto& list : size.args.intLists) {
+    if (!std::all_of(list.begin(), list.end(), isConstant)) {
+      return false;
+    }
+  }
+  for (const auto& group : size.args.tensors) {
+    for (auto id : group) {
+      if (!isStaticTensor(types, id)) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+// A table holding the static shape of every tensor the Sizes in 'candidates'
+// read, for running their ReserveFns at bind.
+std::vector<ValueEntry> staticShapeEntries(
+    const StepProgram& program,
+    const std::vector<int32_t>& candidates,
+    const ValueTypes& types) {
+  int32_t maxId = -1;
+  for (auto index : candidates) {
+    for (const auto& group : program.sizes[index].args.tensors) {
+      for (auto id : group) {
+        maxId = std::max(maxId, id);
+      }
+    }
+  }
+  std::vector<ValueEntry> entries(maxId + 1);
+  for (int32_t id = 0; id <= maxId; ++id) {
+    if (!isStaticTensor(types, id)) {
+      continue;
+    }
+    const auto& dims = types.constraints[id].dims;
+    auto& entry = entries[id];
+    entry.generation = 1;
+    entry.kind = ValueEntry::kTensor;
+    entry.t.rank = static_cast<int8_t>(dims.size());
+    entry.t.elementSize =
+        static_cast<uint8_t>(c10::elementSize(types.types[id]->dtype()));
+    int64_t stride = 1;
+    for (int32_t d = static_cast<int32_t>(dims.size()) - 1; d >= 0; --d) {
+      entry.t.dims[d] = static_cast<int32_t>(dims[d]);
+      entry.t.strides[d] = static_cast<int32_t>(stride);
+      stride *= dims[d];
+    }
+    entry.t.numEl = static_cast<uint32_t>(stride);
+  }
+  return entries;
+}
+
+bool sameShapes(const Shape* lhs, const Shape* rhs, int32_t count) {
+  for (int32_t i = 0; i < count; ++i) {
+    if (lhs[i].rank != rhs[i].rank ||
+        !std::equal(lhs[i].dims, lhs[i].dims + lhs[i].rank, rhs[i].dims)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// Computes each Size whose operands the graph fixes, once, and marks it
+// constant. A result that changes with the launch's block size (one entry per
+// block or tile) is left to run every execution.
+void foldConstantSizes(StepProgram& program, const ValueTypes& types) {
+  std::vector<int32_t> candidates;
+  for (size_t i = 0; i < program.sizes.size(); ++i) {
+    if (hasStaticOperands(program.sizes[i], types)) {
+      candidates.push_back(static_cast<int32_t>(i));
+    }
+  }
+  if (candidates.empty()) {
+    return;
+  }
+  auto entries = staticShapeEntries(program, candidates, types);
+  const ValueTable table{
+      .entries = entries.data(),
+      .size = static_cast<int32_t>(entries.size()),
+      .generation = 1};
+  auto& code = program.code;
+  for (int32_t i = 0; i < code.numSizes; ++i) {
+    auto& op = code.sizes[i];
+    if (!std::binary_search(candidates.begin(), candidates.end(), op.source)) {
+      continue;
+    }
+    const auto count = op.shapes.size;
+    std::vector<Shape> atBlockSize(count);
+    std::vector<Shape> atDoubleBlockSize(count);
+    auto args = code.argsOf(op, table);
+    if (!op.fn(args, atBlockSize.data(), count)) {
+      continue;
+    }
+    args.blockSize = std::max(1, op.blockSize) * 2;
+    if (!op.fn(args, atDoubleBlockSize.data(), count) ||
+        !sameShapes(atBlockSize.data(), atDoubleBlockSize.data(), count)) {
+      continue;
+    }
+    std::copy(
+        atBlockSize.begin(), atBlockSize.end(), code.shapes + op.shapes.begin);
+    op.constant = true;
+  }
+}
+
 int32_t actualIdOf(ValueCP value, const FormalToActual& bindings) {
   auto it = bindings.find(value->id());
   return it != bindings.end() ? it->second : value->id();
@@ -336,6 +468,22 @@ std::vector<BoundOutput> describedOutputs(
   return outputs;
 }
 
+// Adds a check for each tensor whose shape the launch's code assumes,
+// naming the value the launch fills at that offset.
+void addShapeChecks(StepProgram& program, const LaunchData& data) {
+  for (const auto& [offset, shape] : data.launch->op->staticShapes()) {
+    for (size_t i = 0; i < data.tensorOffsets.size(); ++i) {
+      if (data.tensorOffsets[i] == offset) {
+        program.shapeChecks.push_back(
+            {.valueId = data.tensorsInFrame[i],
+             .dims = shape.dims,
+             .contiguous = shape.contiguous});
+        break;
+      }
+    }
+  }
+}
+
 // Records where the launch's tensors, scalars and returns live in its
 // parameter block, and adds the
 // fill ops that rewrite them every execution. 'base' is the launch's offset in
@@ -456,10 +604,14 @@ void bindLaunchFill(
     program.fills.push_back(
         {.kind = FillOp::kUninited, .offset = base + offset, .kernel = kernel});
   }
-  for (auto offset : kernelOp->barrierCounters()) {
-    program.fills.push_back(
-        {.kind = FillOp::kZero32, .offset = base + offset, .kernel = kernel});
+  for (const auto* offsets :
+       {&kernelOp->barrierCounters(), &kernelOp->counters()}) {
+    for (auto offset : *offsets) {
+      program.fills.push_back(
+          {.kind = FillOp::kZero32, .offset = base + offset, .kernel = kernel});
+    }
   }
+  addShapeChecks(program, data);
 }
 
 // Writes what does not change between executions into the step's pinned
@@ -1285,6 +1437,9 @@ void packStepCode(
   code.numDerives = static_cast<int32_t>(derives.size());
   code.waitProducers = waitProducers;
   code.readProducers = readProducers;
+  if (WaveConfig::get().constantSizes) {
+    foldConstantSizes(program, types);
+  }
 }
 
 } // namespace torch::wave
