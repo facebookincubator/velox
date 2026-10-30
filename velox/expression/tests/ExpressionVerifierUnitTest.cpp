@@ -23,6 +23,7 @@
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/testutil/TempDirectoryPath.h"
 #include "velox/exec/fuzzer/DuckQueryRunner.h"
+#include "velox/expression/RegisterSpecialForm.h"
 #include "velox/functions/Registerer.h"
 #include "velox/parse/ExpressionsParser.h"
 #include "velox/parse/TypeResolver.h"
@@ -156,6 +157,47 @@ TEST_F(ExpressionVerifierUnitTest, subsetOfRowsToVerify) {
     rows.updateBounds();
     verifier.verify({plan}, {{data, rows}}, nullptr, false);
   }
+}
+
+TEST_F(ExpressionVerifierUnitTest, nullPropagationAfterConstantFolding) {
+  exec::registerFunctionCallToSpecialForms();
+  registerFunction<AlwaysThrowsUserErrorFunction, bool, int64_t>(
+      {"always_throws_bool"});
+  ExpressionVerifierOptions options;
+  ExpressionVerifier verifier{&execCtx_, options, nullptr};
+
+  // Constant folding in the common path rewrites "c1 OR true" to "true", so
+  // the IF propagates nulls of c0 and skips the failing condition on rows
+  // where c0 is null. The simplified path evaluates the condition on all rows.
+  const std::string sql = "if(always_throws_bool(1) AND (c1 OR true), c0, c0)";
+  const auto c1 = makeFlatVector<bool>({true, false, true});
+
+  // c0 is null on all rows, so only the simplified path throws.
+  auto data = makeRowVector(
+      {makeNullableFlatVector<int32_t>(
+           {std::nullopt, std::nullopt, std::nullopt}),
+       c1});
+  auto plan = parseExpression(sql, asRowType(data->type()));
+  auto states =
+      verifier
+          .verify(
+              {plan}, {{data, SelectivityVector(data->size())}}, nullptr, true)
+          .second;
+  ASSERT_EQ(states.size(), 1);
+  EXPECT_EQ(
+      states[0],
+      ExpressionVerifier::VerificationState::kVerifiedAgainstReference);
+
+  // c0 has a non-null row, so both paths throw.
+  data = makeRowVector(
+      {makeNullableFlatVector<int32_t>({std::nullopt, 1, std::nullopt}), c1});
+  states =
+      verifier
+          .verify(
+              {plan}, {{data, SelectivityVector(data->size())}}, nullptr, true)
+          .second;
+  ASSERT_EQ(states.size(), 1);
+  EXPECT_EQ(states[0], ExpressionVerifier::VerificationState::kBothPathsThrow);
 }
 
 TEST_F(ExpressionVerifierUnitTest, emptyActiveRowsWithReferenceRunner) {

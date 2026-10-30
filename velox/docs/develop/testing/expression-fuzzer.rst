@@ -21,6 +21,12 @@ This also verifies that results depend only on logical input values, not on
 their physical layout, catching UDFs that read the raw elements buffer or
 otherwise ignore offsets/sizes.
 
+The regular evaluation path skips rows whose result is NULL due to null
+propagation, and constant folding can extend null propagation to more
+expressions. If only the simplified evaluation throws, the fuzzer evaluates it
+again under TRY and requires the rows that failed to be NULL in the regular
+path.
+
 How to integrate
 ---------------------------------------
 
