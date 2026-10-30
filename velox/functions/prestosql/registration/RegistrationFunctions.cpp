@@ -43,7 +43,8 @@ extern void registerComparisonFunctions(
     std::string_view defaultOwner);
 extern void registerDateTimeFunctions(
     const std::string& prefix,
-    std::string_view defaultOwner);
+    std::string_view defaultOwner,
+    bool ignoreTimeZoneLabel);
 extern void registerGeneralFunctions(
     const std::string& prefix,
     std::string_view defaultOwner);
@@ -225,8 +226,10 @@ void registerGeneralFunctions(
 
 void registerDateTimeFunctions(
     const std::string& prefix,
-    std::string_view defaultOwner) {
-  functions::registerDateTimeFunctions(prefix, defaultOwner);
+    std::string_view defaultOwner,
+    bool ignoreTimeZoneLabel) {
+  functions::registerDateTimeFunctions(
+      prefix, defaultOwner, ignoreTimeZoneLabel);
 }
 
 void registerURLFunctions(
@@ -255,7 +258,8 @@ void registerBitwiseFunctions(
 
 void registerAllScalarFunctions(
     const std::string& prefix,
-    std::string_view defaultOwner) {
+    std::string_view defaultOwner,
+    bool ignoreTimeZoneLabel) {
   registerP4HyperLogLogType();
   registerArithmeticFunctions(prefix, defaultOwner);
   registerCheckedArithmeticFunctions(prefix, defaultOwner);
@@ -279,7 +283,7 @@ void registerAllScalarFunctions(
   registerS2Functions(prefix, defaultOwner);
 #endif
   registerGeneralFunctions(prefix, defaultOwner);
-  registerDateTimeFunctions(prefix, defaultOwner);
+  registerDateTimeFunctions(prefix, defaultOwner, ignoreTimeZoneLabel);
   registerURLFunctions(prefix, defaultOwner);
   registerStringFunctions(prefix, defaultOwner);
   registerBinaryFunctions(prefix, defaultOwner);
