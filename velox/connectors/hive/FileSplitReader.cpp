@@ -18,35 +18,14 @@
 
 #include "velox/common/caching/CacheTTLController.h"
 #include "velox/connectors/hive/BufferedInputBuilder.h"
+#include "velox/connectors/hive/ConstantFromString.h"
 #include "velox/connectors/hive/FileConfig.h"
 #include "velox/connectors/hive/FileConnectorSplit.h"
 #include "velox/connectors/hive/FileConnectorUtil.h"
-#include "velox/connectors/hive/PartitionValue.h"
 #include "velox/dwio/common/ReaderFactory.h"
+#include "velox/type/tz/TimeZoneMap.h"
 
 namespace facebook::velox::connector::hive {
-
-VectorPtr newConstantFromString(
-    const TypePtr& type,
-    const std::optional<std::string>& value,
-    velox::memory::MemoryPool* pool,
-    bool isLocalTimestamp,
-    bool isDaysSinceEpoch) {
-  if (!value.has_value()) {
-    return BaseVector::createNullConstant(type, 1, pool);
-  }
-  return BaseVector::createConstant(
-      type,
-      PartitionValue::fromString(
-          value.value(),
-          *type,
-          isLocalTimestamp ? PartitionValue::TimestampMode::kLocalTime
-                           : PartitionValue::TimestampMode::kUtc,
-          isDaysSinceEpoch ? PartitionValue::DateMode::kDaysSinceEpoch
-                           : PartitionValue::DateMode::kIsoString),
-      1,
-      pool);
-}
 
 std::unique_ptr<FileSplitReader> FileSplitReader::create(
     const std::shared_ptr<const hive::FileConnectorSplit>& fileSplit,
@@ -101,6 +80,12 @@ FileSplitReader::FileSplitReader(
       fileHandleFactory_(fileHandleFactory),
       ioExecutor_(ioExecutor),
       pool_(connectorQueryCtx->memoryPool()),
+      sessionTimezone_(
+          connectorQueryCtx->sessionTimezone().empty()
+              ? nullptr
+              : tz::locateZone(connectorQueryCtx->sessionTimezone())),
+      adjustTimestampToTimezone_(
+          connectorQueryCtx->adjustTimestampToTimezone()),
       scanSpec_(scanSpec),
       subfieldFiltersForValidation_(subfieldFiltersForValidation),
       fileSplit_(fileSplit),
@@ -298,8 +283,7 @@ bool FileSplitReader::filterOnStats(
           fileSplit_->filePath,
           fileSplit_->partitionKeys,
           *partitionKeys_,
-          fileConfig_->readTimestampPartitionValueAsLocalTime(
-              connectorQueryCtx_->sessionProperties()))) {
+          readTimestampValueAsLocalTime())) {
     ++runtimeStats.processedSplits;
     return true;
   }
@@ -421,10 +405,28 @@ void FileSplitReader::setPartitionValue(
       type,
       value,
       connectorQueryCtx_->memoryPool(),
-      fileConfig_->readTimestampPartitionValueAsLocalTime(
-          connectorQueryCtx_->sessionProperties()),
-      it->second->isPartitionDateValueDaysSinceEpoch());
+      readTimestampValueAsLocalTime(),
+      it->second->isPartitionDateValueDaysSinceEpoch(),
+      timestampValueTimezone());
   spec->setConstantValue(constant);
+}
+
+bool FileSplitReader::readTimestampValueAsLocalTime() const {
+  return fileConfig_->readTimestampPartitionValueAsLocalTime(
+      connectorQueryCtx_->sessionProperties());
+}
+
+const tz::TimeZone* FileSplitReader::timestampValueTimezone() const {
+  if (adjustTimestampToTimezone_) {
+    return sessionTimezone_;
+  }
+  // A query that names its session zone and still turns timezone adjustment
+  // off is saying its timestamps are UTC, so the wall clock is read as UTC --
+  // shifting by UTC leaves it alone. A query that names no session zone has
+  // said nothing about zones, and the value keeps the process-default reading
+  // readTimestampPartitionValueAsLocalTime has always given it.
+  static const tz::TimeZone* kUtc = tz::locateZone("UTC");
+  return sessionTimezone_ != nullptr ? kUtc : nullptr;
 }
 
 } // namespace facebook::velox::connector::hive

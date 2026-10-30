@@ -48,39 +48,16 @@ namespace facebook::velox::memory {
 class MemoryPool;
 }
 
+namespace facebook::velox::tz {
+class TimeZone;
+}
+
 namespace facebook::velox::connector::hive {
 
-/// Creates a constant vector of size 1 from a string representation of a value.
-///
-/// Used to materialize partition column values and info columns (e.g., $path,
-/// $file_size) when reading Hive and Iceberg tables. Partition values are
-/// stored as strings in HiveConnectorSplit::partitionKeys and need to be
-/// converted to their appropriate types.
-///
-/// @param type The target Velox type for the constant vector. Supports all
-/// scalar types including primitives, dates, timestamps.
-/// @param value The string representation of the value to convert, formatted
-/// the same way as CAST(x as VARCHAR). Date values must be formatted using ISO
-/// 8601 as YYYY-MM-DD. If nullopt, creates a null constant vector.
-/// @param pool Memory pool for allocating the constant vector.
-/// @param isLocalTimestamp If true and type is TIMESTAMP, interprets the string
-/// value as local time and converts it to GMT. If false, treats the value
-/// as already in GMT.
-/// @param isDaysSinceEpoch If true and type is DATE, treats the string value as
-/// an integer representing days since epoch (used by Iceberg). If false, parses
-/// the string as a date string in ISO 8601 format (used by Hive).
-///
-/// @return A constant vector of size 1 containing the converted value, or a
-/// null constant if value is nullopt.
-/// @throws VeloxUserError if the string cannot be converted to the target type.
-VectorPtr newConstantFromString(
-    const TypePtr& type,
-    const std::optional<std::string>& value,
-    velox::memory::MemoryPool* pool,
-    bool isLocalTimestamp,
-    bool isDaysSinceEpoch);
-
 class FileConfig;
+struct FileConnectorSplit;
+class FileTableHandle;
+class FileColumnHandle;
 
 class FileSplitReader {
  public:
@@ -204,6 +181,18 @@ class FileSplitReader {
       const std::string& partitionKey,
       const std::optional<std::string>& value) const;
 
+  /// Returns true when a TIMESTAMP partition value holds a local wall clock
+  /// that has to be shifted to UTC, per the connector's
+  /// readTimestampPartitionValueAsLocalTime config. Pair it with
+  /// timestampValueTimezone(), which says which zone that clock is in.
+  bool readTimestampValueAsLocalTime() const;
+
+  /// Returns the zone a local wall clock is read in: the session zone when the
+  /// query asks for timezone adjustment, UTC when it names a session zone and
+  /// does not, and nullptr -- the process default zone -- when the query names
+  /// no session zone at all.
+  const tz::TimeZone* timestampValueTimezone() const;
+
   /// Virtual hook called by configureReaderOptions() to set format-specific
   /// reader options on baseReaderOpts_. The base implementation calls the
   /// generic configureReaderOptions() from FileConnectorUtil. Subclasses
@@ -238,6 +227,10 @@ class FileSplitReader {
   FileHandleFactory* const fileHandleFactory_;
   folly::Executor* const ioExecutor_;
   memory::MemoryPool* const pool_;
+
+  const tz::TimeZone* const sessionTimezone_;
+  const bool adjustTimestampToTimezone_;
+
   const std::shared_ptr<common::ScanSpec> scanSpec_;
   // Subfield filters from HiveDataSource, includes both original
   // subfieldFilters and filters extracted from remainingFilter. Used by
