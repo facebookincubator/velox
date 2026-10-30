@@ -103,6 +103,10 @@ using EventP = std::unique_ptr<facebook::velox::wave::Event>;
 /// directly. Only accumulated under the kTiming trace bit.
 int64_t threadAllocCallUs();
 
+/// Allocator calls this thread made under ScopedAllocCall. Only counted under
+/// the kTiming trace bit.
+int64_t threadAllocCalls();
+
 /// Charges the enclosed allocator call to threadAllocCallUs. Wraps only the
 /// call itself, never the surrounding shape arithmetic.
 class ScopedAllocCall {

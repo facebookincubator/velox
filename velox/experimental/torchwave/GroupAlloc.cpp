@@ -145,10 +145,170 @@ void writeShapeEntry(
   state.valueCold[id].owner = -1;
 }
 
+namespace {
+
+at::Tensor allocateGroupBytes(int64_t bytes) {
+  ScopedAllocCall timed;
+  return at::empty(
+      {bytes}, at::TensorOptions().dtype(at::kByte).device(at::kCUDA));
+}
+
+// The buffer for one carve of 'group': a slot of the arena when one is free,
+// else an allocation of its own. Either way its release is recorded.
+at::Tensor
+groupBuffer(ExecutionState& state, const AllocGroup* group, int64_t bytes) {
+  if (group == nullptr || !WaveConfig::get().groupArena || bytes == 0 ||
+      bytes >= WaveConfig::get().groupArenaMaxBytes) {
+    return allocateGroupBytes(bytes);
+  }
+  if (state.groupArena == nullptr) {
+    state.groupArena = std::make_shared<GroupArena>();
+  }
+  auto arena = state.groupArena;
+  auto [it, inserted] = arena->index.try_emplace(
+      group, static_cast<int32_t>(arena->entries.size()));
+  const auto idx = it->second;
+  if (inserted) {
+    arena->entries.emplace_back();
+    arena->changed = true;
+  }
+  auto& entry = arena->entries[idx];
+  if (bytes > entry.bytes) {
+    entry.bytes = bytes;
+    arena->changed = true;
+  }
+  entry.start = ++arena->sequence;
+  entry.end = -1;
+  entry.generation = arena->generation;
+  bool fromArena = entry.offset >= 0 && !entry.inUse &&
+      bytes <= entry.capacity && arena->buffer.defined();
+  for (size_t i = 0; fromArena && i < entry.conflicts.size(); ++i) {
+    fromArena = !arena->entries[entry.conflicts[i]].inUse;
+  }
+  at::Tensor own;
+  void* data = nullptr;
+  if (fromArena) {
+    entry.inUse = true;
+    data = static_cast<uint8_t*>(arena->buffer.data_ptr()) + entry.offset;
+    ++arena->hits;
+  } else {
+    own = allocateGroupBytes(bytes);
+    data = own.data_ptr();
+    ++arena->misses;
+  }
+  // The deleter keeps the arena's buffer, or the group's own one, alive until
+  // the last reference to the group goes.
+  auto keep = fromArena ? arena->buffer : own;
+  return at::from_blob(
+      data,
+      {bytes},
+      [arena, idx, keep, fromArena](void*) {
+        auto& released = arena->entries[idx];
+        if (fromArena) {
+          released.inUse = false;
+        }
+        released.end = ++arena->sequence;
+        released.endGeneration = arena->generation;
+      },
+      at::TensorOptions().dtype(at::kByte).device(keep.device()));
+}
+
+} // namespace
+
+void beginGroupArena(ExecutionState& state) {
+  auto* arena = state.groupArena.get();
+  if (arena == nullptr) {
+    return;
+  }
+  // A group released in the generation it was carved in, after its carve, has
+  // an interval; the others get no slot.
+  struct Item {
+    int32_t entry;
+    int64_t start;
+    int64_t end;
+    int64_t bytes;
+  };
+  std::vector<Item> items;
+  bool eligibilityChanged = false;
+  for (int32_t i = 0; i < static_cast<int32_t>(arena->entries.size()); ++i) {
+    const auto& entry = arena->entries[i];
+    const bool eligible = entry.generation == arena->generation &&
+        entry.endGeneration == arena->generation && entry.end > entry.start;
+    if (eligible != (entry.offset >= 0)) {
+      eligibilityChanged = true;
+    }
+    if (eligible) {
+      items.push_back({i, entry.start, entry.end, alignAllocSize(entry.bytes)});
+    }
+  }
+  ++arena->generation;
+  arena->hits = 0;
+  arena->misses = 0;
+  if (!arena->changed && !eligibilityChanged) {
+    return;
+  }
+  arena->changed = false;
+  // Largest first, each at the lowest offset clear of every placed item whose
+  // interval overlaps its own.
+  std::sort(items.begin(), items.end(), [](const Item& a, const Item& b) {
+    return a.bytes != b.bytes ? a.bytes > b.bytes : a.start < b.start;
+  });
+  std::vector<int64_t> offsets(items.size(), 0);
+  std::vector<std::pair<int64_t, int64_t>> busy;
+  int64_t total = 0;
+  for (size_t i = 0; i < items.size(); ++i) {
+    busy.clear();
+    for (size_t j = 0; j < i; ++j) {
+      if (items[j].start < items[i].end && items[i].start < items[j].end) {
+        busy.emplace_back(offsets[j], offsets[j] + items[j].bytes);
+      }
+    }
+    std::sort(busy.begin(), busy.end());
+    int64_t offset = 0;
+    for (const auto& [begin, end] : busy) {
+      if (offset + items[i].bytes <= begin) {
+        break;
+      }
+      offset = std::max(offset, end);
+    }
+    offsets[i] = offset;
+    total = std::max(total, offset + items[i].bytes);
+  }
+  for (auto& entry : arena->entries) {
+    entry.offset = -1;
+    entry.capacity = 0;
+    entry.conflicts.clear();
+  }
+  for (size_t i = 0; i < items.size(); ++i) {
+    auto& entry = arena->entries[items[i].entry];
+    entry.offset = offsets[i];
+    entry.capacity = items[i].bytes;
+    for (size_t j = 0; j < items.size(); ++j) {
+      if (j != i && offsets[j] < offsets[i] + items[i].bytes &&
+          offsets[i] < offsets[j] + items[j].bytes) {
+        entry.conflicts.push_back(items[j].entry);
+      }
+    }
+  }
+  // A slot still held from the old layout may overlap any new one, so the new
+  // layout gets a buffer of its own; the deleters keep the old one alive.
+  bool held = false;
+  for (const auto& entry : arena->entries) {
+    held = held || entry.inUse;
+  }
+  if (held || !arena->buffer.defined() || arena->buffer.numel() < total) {
+    arena->buffer = at::Tensor();
+    if (total > 0) {
+      arena->buffer = allocateGroupBytes(total);
+    }
+  }
+}
+
 AllocGroupBuffer materializeAllocGroupTable(
     const std::vector<AllocRequest>& requests,
     nativert::ExecutionFrame& frame,
-    ExecutionState& state) {
+    ExecutionState& state,
+    const AllocGroup* group) {
   AllocGroupBuffer result;
   result.offsets.reserve(requests.size());
   int64_t cursor = 0;
@@ -162,12 +322,7 @@ AllocGroupBuffer materializeAllocGroupTable(
         numel * static_cast<int64_t>(c10::elementSize(request.dtype)));
   }
   result.totalBytes = cursor;
-  {
-    ScopedAllocCall timed;
-    result.base = at::empty(
-        {result.totalBytes},
-        at::TensorOptions().dtype(at::kByte).device(at::kCUDA));
-  }
+  result.base = groupBuffer(state, group, result.totalBytes);
   result.slots.assign(requests.size(), at::Tensor());
   auto* base = static_cast<uint8_t*>(result.base.data_ptr());
   int32_t owner = -1;

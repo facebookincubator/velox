@@ -62,13 +62,60 @@ void writeShapeEntry(
     c10::IntArrayRef dims,
     c10::ScalarType dtype);
 
+/// One buffer that the lifetime groups of every execution are carved from.
+///
+/// Each group's slot is placed from what the previous execution observed: the
+/// group's largest size, and the interval between its carve and the release of
+/// its last reference, counted on one sequence of carves and releases. Groups
+/// whose intervals do not overlap share addresses. A release is the buffer's
+/// deleter running, so a delayed free counts where it actually happens.
+///
+/// A slot is handed out only when it is large enough and no group whose
+/// addresses overlap it still holds its own slot, so a release later than last
+/// time costs an allocator call rather than a conflict. A group released in a
+/// later execution than it was carved in -- a graph output the caller keeps --
+/// gets no slot.
+struct GroupArena {
+  struct Entry {
+    /// Largest size seen.
+    int64_t bytes{0};
+    /// Offset in 'buffer', or -1 for no slot.
+    int64_t offset{-1};
+    int64_t capacity{0};
+    bool inUse{false};
+    /// Carve and release on 'sequence', in execution 'generation'.
+    int64_t start{-1};
+    int64_t end{-1};
+    int64_t generation{-1};
+    int64_t endGeneration{-1};
+    /// Entries whose slots overlap this one's.
+    std::vector<int32_t> conflicts;
+  };
+
+  at::Tensor buffer;
+  folly::F14FastMap<const AllocGroup*, int32_t> index;
+  std::vector<Entry> entries;
+  int64_t sequence{0};
+  int64_t generation{0};
+  /// Set when a group is new or larger than its slot.
+  bool changed{false};
+  int64_t hits{0};
+  int64_t misses{0};
+};
+
+/// Lays the arena out again from the execution that just ended when anything
+/// changed, and starts a new generation. Called at the start of an execution.
+void beginGroupArena(ExecutionState& state);
+
 /// Carves a lifetime group like materializeAllocGroup, except that a member
 /// in ExecutionState::tableOnly gets only its table entry. Its frame slot
-/// keeps the shape placeholder the sizing left there.
+/// keeps the shape placeholder the sizing left there. 'group' names the plan's
+/// group for the arena, or is null.
 AllocGroupBuffer materializeAllocGroupTable(
     const std::vector<AllocRequest>& requests,
     nativert::ExecutionFrame& frame,
-    ExecutionState& state);
+    ExecutionState& state,
+    const AllocGroup* group = nullptr);
 
 /// Whether this execution already gave 'id' storage of 'dims', as a launch of
 /// an earlier step that also outputs it does.

@@ -406,19 +406,6 @@ class CompileCtx {
     return generatingOp_;
   }
 
-  /// The single concat operand this op fills, or -1 when the op is the whole
-  /// concat. Set while generating one of the per-operand ops that
-  /// parallelConcatFill splits a wide cat / stack into: the special form then
-  /// emits the write for that operand alone instead of walking every operand in
-  /// one body, which is what keeps each op's parameters to just its own source.
-  int32_t concatOperandIndex() const {
-    return concatOperandIndex_;
-  }
-
-  void setConcatOperandIndex(int32_t index) {
-    concatOperandIndex_ = index;
-  }
-
   void markPlaced(NodeCP node) {
     placed_.insert(node);
     generatingOp_->allNodes().insert(node);
@@ -515,6 +502,10 @@ class CompileCtx {
       NodeCP concat,
       int64_t dim,
       c10::ScalarType resultDtype) const;
+
+  /// True when 'value' is the result of a cat or stack that gets a concat
+  /// allocation group, which owns its buffer.
+  bool isGroupedConcatResult(ValueCP value) const;
 
   /// Decides, for every operand of 'concat', whether its producer fills the
   /// operand's band of the result or a copy moves it there.
@@ -771,9 +762,6 @@ class CompileCtx {
 
   // The KernelOperation for which code is being generated.
   KernelOperation* generatingOp_{nullptr};
-
-  // See concatOperandIndex().
-  int32_t concatOperandIndex_{-1};
 
   // See concatCopyDest(). std::map because the key is a pair; there is one
   // entry per copied concat operand, not one per value.

@@ -1054,6 +1054,54 @@ return(%o)
       << firstDifference(outputs[0], reference);
 }
 
+// A column index_select of a wide 2-d input, alone and feeding an elementwise
+// op. The ads and IG dense-feature preprocs start with this. The op is sized
+// from its own output, so the launch count must come from that output and
+// spread the op over many blocks, not size it as one element.
+TEST_F(ExecutorTest, indexSelectColumnsTest) {
+  const auto savedTrace = WaveConfig::get().trace;
+  auto restoreTrace =
+      folly::makeGuard([savedTrace] { WaveConfig::get().trace = savedTrace; });
+  WaveConfig::get().trace = savedTrace | WaveConfig::kTiming;
+
+  constexpr int64_t kRows = 1000;
+  constexpr int64_t kCols = 1500;
+  auto x = at::arange(kRows * kCols, at::kFloat).reshape({kRows, kCols});
+  auto idx = (at::arange(1400, at::kLong) * 7) % kCols;
+  std::unordered_map<std::string, torch::_export::TensorMeta> meta;
+  meta["x"] = makeTensorMeta(c10::ScalarType::Float, 2);
+  meta["idx"] = makeTensorMeta(c10::ScalarType::Long, 1);
+  meta["s"] = makeTensorMeta(c10::ScalarType::Float, 2);
+  meta["o"] = makeTensorMeta(c10::ScalarType::Float, 2);
+
+  auto check = [&](const char* graph, const at::Tensor& reference) {
+    auto outputs =
+        runWaveProgrammatic(nativert::stringToGraph(graph), meta, {{x, idx}});
+    ASSERT_EQ(outputs.size(), 1);
+    EXPECT_TRUE(tensorsMatch(outputs[0], reference))
+        << firstDifference(outputs[0], reference);
+    const auto& launches = waveThreadInfo().launchMeta;
+    ASSERT_EQ(launches.size(), 1);
+    EXPECT_GT(launches[0].numBlocks, 100);
+  };
+
+  {
+    const char* kGraph = R"(graph(%x, %idx):
+%s = torch.ops.aten.index_select.default(self=%x, dim=1, index=%idx)
+return(%s)
+)";
+    check(kGraph, at::index_select(x, 1, idx));
+  }
+  {
+    const char* kGraph = R"(graph(%x, %idx):
+%s = torch.ops.aten.index_select.default(self=%x, dim=1, index=%idx)
+%o = torch.ops.aten.mul.Scalar(self=%s, other=2.0)
+return(%o)
+)";
+    check(kGraph, at::index_select(x, 1, idx) * 2);
+  }
+}
+
 TEST_F(ExecutorTest, elementTest) {
   runTest("data/element_test.pt2", "data/element_test_results.pt");
 }
@@ -1081,6 +1129,47 @@ TEST_F(ExecutorTest, numelTest) {
 TEST_F(ExecutorTest, viewInterleaveTest) {
   runTest(
       "data/view_interleave_test.pt2", "data/view_interleave_test_results.pt");
+}
+
+// aten.flatten.using_ints over all dims of a contiguous tensor, of a transposed
+// one, and over a single dim. The first is a view, the second a copy and the
+// third the input itself; none needs the eager op.
+TEST_F(ExecutorTest, flattenTest) {
+  const char* kGraph = R"(graph(%x):
+%m = torch.ops.aten.mul.Scalar(self=%x, other=2)
+%f = torch.ops.aten.flatten.using_ints(self=%m)
+%o = torch.ops.aten.add.Scalar(self=%f, other=1)
+%t = torch.ops.aten.transpose.int(self=%m, dim0=0, dim1=1)
+%g = torch.ops.aten.flatten.using_ints(self=%t)
+%p = torch.ops.aten.add.Scalar(self=%g, other=1)
+%h = torch.ops.aten.flatten.using_ints(self=%m, start_dim=1, end_dim=1)
+%q = torch.ops.aten.add.Scalar(self=%h, other=1)
+return(%o, %p, %q)
+)";
+  std::unordered_map<std::string, torch::_export::TensorMeta> meta;
+  for (const auto* name : {"x", "m", "t", "h", "q"}) {
+    meta[name] = makeTensorMeta(c10::ScalarType::Float, 3);
+  }
+  for (const auto* name : {"f", "o", "g", "p"}) {
+    meta[name] = makeTensorMeta(c10::ScalarType::Float, 1);
+  }
+
+  auto x = at::arange(2'000 * 8 * 5, at::kFloat).reshape({2'000, 8, 5});
+  const auto m = x * 2;
+  const std::vector<at::Tensor> expected = {
+      m.flatten() + 1, m.transpose(0, 1).flatten() + 1, m + 1};
+
+  auto outputs =
+      runWaveProgrammatic(nativert::stringToGraph(kGraph), meta, {{x}});
+  ASSERT_EQ(outputs.size(), expected.size());
+  for (size_t i = 0; i < expected.size(); ++i) {
+    EXPECT_TRUE(tensorsMatch(outputs[i], expected[i]))
+        << i << ": " << firstDifference(outputs[i], expected[i]);
+  }
+
+  auto plan = compilePlanProgrammatic(
+      nativert::stringToGraph(kGraph), meta, CompiledPlan::Mode::kMultiKernel);
+  EXPECT_FALSE(plan.standalone("aten.flatten.using_ints"));
 }
 
 // In-place mutation through views and clones. Validates that torchwave honors
@@ -1204,6 +1293,54 @@ TEST_F(ExecutorTest, copyInPlaceConvertTest) {
   EXPECT_TRUE(
       plans.multiKernel.fuses({"aten.copy_.default", "aten.expand.default"}));
   EXPECT_FALSE(plans.multiKernel.standalone("aten.copy_.default"));
+}
+
+// In-place nan_to_num_ on the leading columns of a scaled tensor, the shape the
+// IG dense-feature preprocs leave: the result of nan_to_num_ itself is unused
+// and the write is seen through the base. The columns outside the narrow keep
+// their NaN and infinities.
+TEST_F(ExecutorTest, nanToNumInPlaceTest) {
+  constexpr int64_t kRows = 3'000;
+  constexpr int64_t kCols = 40;
+  const char* kGraph = R"(graph(%x, %s):
+%m = torch.ops.aten.mul.Tensor(self=%x, other=%s)
+%v = torch.ops.aten.view.default(self=%m, size=[-1])
+%v2 = torch.ops.aten.view.default(self=%v, size=[-1, 40])
+%n = torch.ops.aten.narrow.default(self=%v2, dim=1, start=0, length=30)
+%z = torch.ops.aten.nan_to_num_.default(self=%n, nan=0.0)
+%o = torch.ops.aten.add.Scalar(self=%v2, other=1)
+return(%o)
+)";
+  std::unordered_map<std::string, torch::_export::TensorMeta> meta;
+  for (const auto* name : {"x", "m", "v2", "n", "z", "o"}) {
+    meta[name] = makeTensorMeta(c10::ScalarType::Float, 2);
+  }
+  meta["s"] = makeTensorMeta(c10::ScalarType::Float, 1);
+  meta["v"] = makeTensorMeta(c10::ScalarType::Float, 1);
+
+  auto x = at::arange(kRows * kCols, at::kFloat).reshape({kRows, kCols}) - 7;
+  const auto nan = std::numeric_limits<float>::quiet_NaN();
+  const auto inf = std::numeric_limits<float>::infinity();
+  for (int64_t row = 0; row < kRows; row += 97) {
+    x.index_put_({row, row % kCols}, nan);
+    x.index_put_({row, (row + 1) % kCols}, inf);
+    x.index_put_({row, (row + 2) % kCols}, -inf);
+  }
+  auto s = at::linspace(0.5, 2.0, kCols, at::kFloat);
+  auto expected = x * s;
+  expected.narrow(1, 0, 30).nan_to_num_(0);
+  expected += 1;
+
+  auto outputs =
+      runWaveProgrammatic(nativert::stringToGraph(kGraph), meta, {{x, s}});
+  ASSERT_EQ(outputs.size(), 1);
+  EXPECT_TRUE(
+      at::allclose(outputs[0], expected, 1e-5, 1e-6, /*equal_nan=*/true))
+      << firstDifference(outputs[0], expected);
+
+  auto plan = compilePlanProgrammatic(
+      nativert::stringToGraph(kGraph), meta, CompiledPlan::Mode::kMultiKernel);
+  EXPECT_FALSE(plan.standalone("aten.nan_to_num_.default"));
 }
 
 // Column copies into one target, the shape the ROO preproc graph uses to fill a
@@ -3552,6 +3689,30 @@ TEST_F(ExecutorTest, catStridedBandTest) {
   EXPECT_EQ(stats.numInConcatGroup, stats.numConcatMembers + 4);
 }
 
+// The __concatCopy calls in the kernels of 'plan' that run a cat or stack. A
+// cat or stack of more than two operands makes none: each operand writes its
+// band itself, is computed into it by the concat's own kernel, or is moved
+// there by a copy op of its own.
+int32_t concatCopyCalls(const CompiledPlan& plan) {
+  int32_t calls = 0;
+  for (const auto& node : plan.nodes()) {
+    for (const auto& step : node.steps) {
+      for (const auto& kernel : step.kernels) {
+        if (!kernel.has("aten.cat.default") &&
+            !kernel.has("aten.stack.default")) {
+          continue;
+        }
+        for (auto pos = kernel.code.find("__concatCopy");
+             pos != std::string::npos;
+             pos = kernel.code.find("__concatCopy", pos + 1)) {
+          ++calls;
+        }
+      }
+    }
+  }
+  return calls;
+}
+
 // Concats whose operands are produced by kernels of their own -- the shape of
 // the ROO preproc graph's final concat. Each operand would otherwise allocate a
 // buffer that the concat immediately copies into its result; the concat
@@ -3620,6 +3781,10 @@ TEST_F(ExecutorTest, catAllocGroupTest) {
   // its own and a member the group had to bind.
   EXPECT_EQ(stats.numConcatNoMembers, 1);
   EXPECT_EQ(stats.numConcatUnplaceableOperand, 0);
+  // A carved operand is in its band before the concat runs, so the concat's
+  // kernel has nothing to move for it. 'pair' computes both of its operands.
+  const auto& cgPlan = compilePlansAsConfigured(pt2).multiKernel;
+  EXPECT_EQ(concatCopyCalls(cgPlan), 0) << cgPlan.describe();
 
   // The same mode on the multi-kernel grid. Nothing about a lifetime or a band
   // needs the cooperative grid -- both grids are settled by compilation -- so
@@ -3639,6 +3804,8 @@ TEST_F(ExecutorTest, catAllocGroupTest) {
   EXPECT_EQ(mk.numConcatTooFew, 1);
   EXPECT_EQ(mk.numConcatNoMembers, 1);
   EXPECT_EQ(mk.numConcatUnplaceableOperand, 0);
+  const auto& mkPlan = compilePlansAsConfigured(pt2).multiKernel;
+  EXPECT_EQ(concatCopyCalls(mkPlan), 0) << mkPlan.describe();
 }
 
 // The rule the parallel fill exists for: a cat of more than two operands never
@@ -3698,6 +3865,50 @@ TEST_F(ExecutorTest, catParallelFillTest) {
   EXPECT_TRUE(
       plan.kernelBoundaryBetween("aten.cat.default", "aten.add.Scalar"));
   EXPECT_TRUE(plan.runsAfter("aten.add.Scalar", "aten.cat.default"));
+}
+
+// Concats of three operands in the forms that used to cost the concat its
+// allocation group, or leave a carved operand to the concat's own kernel:
+// the result of another grouped concat as an operand, an operand from an eager
+// op whose size is known only after it runs -- read by '1 + eager', and
+// returned without a reader -- and a stack with an eager operand. Each concat
+// is grouped, each of those operands is moved into its band by a copy op of its
+// own, and no kernel that runs a concat copies anything.
+TEST_F(ExecutorTest, catGroupRulesTest) {
+  auto& config = WaveConfig::get();
+  const auto savedFree = config.freeIntermediates;
+  auto resetConfig = folly::makeGuard([&, savedFree] {
+    config.useSingleBlock = std::nullopt;
+    config.isCg = std::nullopt;
+    config.freeIntermediates = savedFree;
+  });
+
+  const std::string pt2 = "data/cat_group_rules_test.pt2";
+  const std::string results = "data/cat_group_rules_test_results.pt";
+
+  config.useSingleBlock = false;
+  runTest(pt2, results, "multi-block");
+  config.useSingleBlock = std::nullopt;
+
+  config.freeIntermediates = true;
+  for (const bool cg : {true, false}) {
+    config.isCg = cg;
+    runTest(pt2, results, cg ? "cg alloc groups" : "multi-kernel alloc groups");
+
+    // inner, outer, eager, top and stacked.
+    auto stats = allocGroupStats(pt2, cg);
+    EXPECT_EQ(stats.numConcatGroups, 5);
+    EXPECT_EQ(stats.numConcatTooFew, 0);
+    EXPECT_EQ(stats.numConcatUnplaceableOperand, 0);
+
+    const auto& plan = compilePlansAsConfigured(pt2).multiKernel;
+    EXPECT_EQ(concatCopyCalls(plan), 0) << plan.describe();
+    // The bands are filled beside the concat, so its reader, '1 + eager', is
+    // in a later kernel.
+    EXPECT_TRUE(
+        plan.kernelBoundaryBetween("aten.cat.default", "aten.add.Scalar"))
+        << plan.describe();
+  }
 }
 
 // A wide concat whose allocation group is laid out in an earlier node than the
@@ -3921,6 +4132,58 @@ return(%o)
   auto b = at::arange(100000, at::kLong) + 7;
   EXPECT_NO_THROW(
       { runWaveProgrammatic(std::move(graph), meta, {{empty, a, b}}); });
+}
+
+// A concat of one operand that is a graph output, as fb.simple_1d_concat of a
+// single computed list leaves it in the onefeed training preproc. The operand
+// is a row of an unbind of a view of an elementwise result. The unpack's step
+// runs nothing (its work is the unbind shortcut's), and the concat comes a step
+// later: execution has to go past the empty step to reach it.
+TEST_F(ExecutorTest, catSingleOperandOutputTest) {
+  auto& config = WaveConfig::get();
+  const auto savedCg = config.isCg;
+  auto resetConfig = folly::makeGuard([&, savedCg] { config.isCg = savedCg; });
+
+  const char* kGraph = R"(graph(%x):
+%w = torch.ops.aten.add.Scalar(self=%x, other=1)
+%t = torch.ops.aten.transpose.int(self=%w, dim0=0, dim1=1)
+%v = torch.ops.aten.view.default(self=%t, size=[-1])
+%r = torch.ops.aten.view.default(self=%v, size=[1, -1])
+%u[] = torch.ops.aten.unbind.int(self=%r, dim=0)
+%g = prim.ListUnpack(input=%u)
+%list[] = prim.ListPack(l0=%g)
+%o = torch.ops.aten.cat.default(tensors=%list, dim=0)
+return(%o)
+)";
+  std::unordered_map<std::string, torch::_export::TensorMeta> meta;
+  meta["x"] = makeTensorMeta(c10::ScalarType::Long, 2);
+  meta["w"] = makeTensorMeta(c10::ScalarType::Long, 2);
+  meta["t"] = makeTensorMeta(c10::ScalarType::Long, 2);
+  meta["v"] = makeTensorMeta(c10::ScalarType::Long, 1);
+  meta["r"] = makeTensorMeta(c10::ScalarType::Long, 2);
+  meta["g"] = makeTensorMeta(c10::ScalarType::Long, 1);
+  meta["o"] = makeTensorMeta(c10::ScalarType::Long, 1);
+
+  auto x = at::arange(5000, at::kLong).reshape({1, 5000});
+  auto reference = x + 1;
+  for (const auto cg :
+       {std::optional<bool>(),
+        std::optional<bool>(false),
+        std::optional<bool>(true)}) {
+    SCOPED_TRACE(cg.has_value() ? (*cg ? "cg 1" : "cg 0") : "cg -1");
+    config.isCg = cg;
+    std::vector<at::Tensor> outputs;
+    EXPECT_NO_THROW({
+      outputs =
+          runWaveProgrammatic(nativert::stringToGraph(kGraph), meta, {{x}});
+    });
+    if (outputs.size() != 1) {
+      ADD_FAILURE() << "expected one output, got " << outputs.size();
+      continue;
+    }
+    EXPECT_TRUE(tensorsMatch(outputs[0], reference.reshape({-1})))
+        << firstDifference(outputs[0], reference.reshape({-1}));
+  }
 }
 
 // A concat that promotes one operand: the int32 lengths of an elementwise op

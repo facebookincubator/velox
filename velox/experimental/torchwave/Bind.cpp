@@ -190,6 +190,20 @@ addSizeExprSize(StepProgram& program, const SizeExpr& expr, ReserveFn fn) {
   return static_cast<int32_t>(program.sizes.size() - 1);
 }
 
+// True when 'expr' reads one of 'outputs'.
+bool readsAnyOutput(
+    const SizeExpr& expr,
+    const std::vector<nativert::ValueId>& outputs) {
+  for (auto id : expr.values) {
+    if (std::find(outputs.begin(), outputs.end(), id) != outputs.end()) {
+      return true;
+    }
+  }
+  return std::any_of(expr.args.begin(), expr.args.end(), [&](const auto& arg) {
+    return readsAnyOutput(arg, outputs);
+  });
+}
+
 int32_t addCountSize(StepProgram& program, const SizeExpr& expr) {
   const bool broadcast = expr.broadcast || !expr.constShapes.empty();
   return addSizeExprSize(
@@ -830,6 +844,7 @@ void CompositeInvocation::bindPrograms(
         launch.countFromReserve = true;
       } else {
         launch.countSize = addCountSize(program, data.sizeExpr);
+        launch.recount = readsAnyOutput(data.sizeExpr, data.actualOutputs);
         if (byLargestInput && data.sizeExpr.op == SizeShortcut::kMax &&
             !data.sizeExpr.broadcast && data.sizeExpr.constShapes.empty()) {
           launch.largestShapeSize =
@@ -1333,6 +1348,7 @@ void packStepCode(
         .countSize = launch.countSize,
         .largestShapeSize = launch.largestShapeSize,
         .countFromReserve = launch.countFromReserve,
+        .recount = launch.recount,
         .staticNumElements = launch.staticNumElements};
     op.outputs = addOutputs(launch.outputs);
     op.largestOutputs = addOutputs(launch.largestOutputs);

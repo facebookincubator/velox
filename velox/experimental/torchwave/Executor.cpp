@@ -114,6 +114,17 @@ int64_t peakAllocatedBytes() {
       .peak;
 }
 
+// Bytes the torch CUDA caching allocator has allocated now, on the active
+// device.
+int64_t currentAllocatedBytes() {
+  auto* allocator = c10::getDeviceAllocator(c10::DeviceType::CUDA);
+  auto stats = allocator->getDeviceStats(c10::cuda::current_device());
+  return stats
+      .allocated_bytes[static_cast<size_t>(
+          c10::CachingAllocator::StatType::AGGREGATE)]
+      .current;
+}
+
 struct GlobalResources {
   std::unique_ptr<facebook::velox::wave::GpuArena> deviceArena;
   std::unique_ptr<facebook::velox::wave::GpuArena> pinnedArena;
@@ -187,6 +198,9 @@ thread_local SetupCounters tSetupCounters;
 // nested phase of the same kind does not count its time twice.
 // NOLINTNEXTLINE(facebook-avoid-non-const-global-variables)
 thread_local uint32_t tOpenPhases = 0;
+// Allocator calls made under ScopedAllocCall, counted with the timing.
+// NOLINTNEXTLINE(facebook-avoid-non-const-global-variables)
+thread_local int64_t tAllocCalls = 0;
 
 bool setupTiming() {
   return WaveConfig::get().printTiming ||
@@ -199,9 +213,17 @@ int64_t threadAllocCallUs() {
       static_cast<double>(tAllocCallTicks) / tscTicksPerMicro());
 }
 
+int64_t threadAllocCalls() {
+  return tAllocCalls;
+}
+
 ScopedAllocCall::ScopedAllocCall()
     : timing_(setupTiming()),
-      start_(timing_ ? folly::hardware_timestamp() : 0) {}
+      start_(timing_ ? folly::hardware_timestamp() : 0) {
+  if (timing_) {
+    ++tAllocCalls;
+  }
+}
 
 ScopedAllocCall::~ScopedAllocCall() {
   if (timing_) {
@@ -1775,6 +1797,7 @@ void WaveGraphExecutor::executeWave(
     bindGraph(state, waveGraph);
   }
   state.tableOnlyActive = !WaveConfig::get().debugSingleOps;
+  beginGroupArena(state);
   SCOPE_EXIT {
     // Values never released -- nothing read them last in a node -- still hold
     // their allocations. Every stream has been drained by now on the normal
@@ -1833,6 +1856,8 @@ void WaveGraphExecutor::executeWave(
   // only this run's transient high-water mark.
   if (WaveConfig::get().trace & WaveConfig::kTiming) {
     resetPeakAllocatedBytes();
+    state.startAllocatedBytes = currentAllocatedBytes();
+    state.allocCallsAtStart = threadAllocCalls();
   }
 
   // Reset per-step lifecycle stages (step vectors are pooled across runs) so
@@ -1981,6 +2006,8 @@ void WaveGraphExecutor::executeWave(
       // high-water mark (reset at the start of the run above), so it captures
       // transient intra-step peaks rather than just the per-step samples.
       threadInfo.peakBytes = peakAllocatedBytes();
+      threadInfo.startBytes = state.startAllocatedBytes;
+      threadInfo.allocCalls = threadAllocCalls() - state.allocCallsAtStart;
       threadInfo.perfReport = makePerfReport(state, wallUs);
     }
     if (WaveConfig::get().throwOnError && !threadInfo.errors.empty()) {
@@ -2461,7 +2488,10 @@ std::string WaveGraphExecutor::makePerfReport(
         static_cast<double>(totalDataBytes) / 1e6);
   }
   ss << fmt::format(
-      "Peak GPU RAM: {}\n", facebook::velox::succinctBytes(info.peakBytes));
+      "Peak GPU RAM: {} ({} over the {} allocated at the run's start)\n",
+      facebook::velox::succinctBytes(info.peakBytes),
+      facebook::velox::succinctBytes(info.peakBytes - info.startBytes),
+      facebook::velox::succinctBytes(info.startBytes));
   if (WaveConfig::get().freeIntermediates) {
     ss << fmt::format(
         "Last-use release: {} values, {} before their node's last step\n",
@@ -2495,6 +2525,21 @@ std::string WaveGraphExecutor::makePerfReport(
           groups,
           tensors,
           tensors - groups);
+    }
+    // The saving above is over the grouped tensors only; this is every call
+    // the step path made, singles included.
+    ss << fmt::format(
+        "Allocator calls on the step path: {} (eager standalone ops not "
+        "counted)\n",
+        info.allocCalls);
+    if (const auto* arena = state.groupArena.get()) {
+      ss << fmt::format(
+          "Group arena: {} carves from its slots, {} by the allocator, {} "
+          "buffer\n",
+          arena->hits,
+          arena->misses,
+          facebook::velox::succinctBytes(
+              arena->buffer.defined() ? arena->buffer.numel() : int64_t{0}));
     }
   }
   if (info.maxDelayedFreeSeen > 0) {

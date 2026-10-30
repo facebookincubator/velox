@@ -178,6 +178,11 @@ struct WaveThreadInfo {
   /// the start of the run), so it captures transient intra-step peaks. Filled
   /// when trace kTiming is on.
   int64_t peakBytes{0};
+  /// Bytes allocated when the run started, so the report can give the run's
+  /// own peak over what it inherited (inputs, weights, a caller's tensors).
+  int64_t startBytes{0};
+  /// Allocator calls the step path made over the run (ScopedAllocCall).
+  int64_t allocCalls{0};
   /// Total device idle across the run, summed from the per-step gpuIdleUs: wall
   /// time in which neither the wave stream nor the eager standalones had work
   /// on the device, because the host was still preparing the next launch.
@@ -530,6 +535,8 @@ struct PendingReturn {
   facebook::velox::wave::Event* waveDone{nullptr};
 };
 
+struct GroupArena;
+
 /// Holds runtime state for executing a WaveGraph.  Pooled by WaveGraph
 /// so that reusable buffers survive across calls.
 struct ExecutionState {
@@ -655,6 +662,9 @@ struct ExecutionState {
   };
   std::vector<Allocation> allocations;
   std::vector<int32_t> freeAllocations;
+  /// Slots for the lifetime groups, laid out from the previous execution's
+  /// lifetimes. Kept across executions; see GroupArena.
+  std::shared_ptr<GroupArena> groupArena;
   /// 'valueEntries' as the sizing code reads it.
   ValueTable valueTable;
 
@@ -716,6 +726,10 @@ struct ExecutionState {
   /// Host time spent releasing frame values. Reported next to the allocation
   /// time as the part of the interpretation that compiling the host path
   /// cannot remove.
+  /// Allocator bytes allocated when the run started (trace kTiming only).
+  int64_t startAllocatedBytes{0};
+  /// threadAllocCalls() when the run started.
+  int64_t allocCallsAtStart{0};
   int64_t freeUs{0};
 
   /// Values released during this run. The fusion-coverage report needs them
