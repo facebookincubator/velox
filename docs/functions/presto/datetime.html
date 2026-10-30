@@ -154,36 +154,82 @@ negiative.</p>
 </section>
 <section id="date-and-time-functions">
 <h2>Date and Time Functions<a class="headerlink" href="#date-and-time-functions" title="Link to this heading">¶</a></h2>
+<section id="timestamp-with-time-zone-semantics">
+<h3>Timestamp With Time Zone Semantics<a class="headerlink" href="#timestamp-with-time-zone-semantics" title="Link to this heading">¶</a></h3>
+<p>Use session-zone semantics for <code class="docutils literal notranslate"><span class="pre">TIMESTAMP</span> <span class="pre">WITH</span> <span class="pre">TIME</span> <span class="pre">ZONE</span></code>. Equal values
+represent the same instant. Rendering them in the session time zone makes
+deterministic functions return equal results:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">TIMESTAMP</span> <span class="s1">'2024-01-01 00:00 UTC'</span> <span class="o">=</span>
+    <span class="n">TIMESTAMP</span> <span class="s1">'2023-12-31 16:00 America/Los_Angeles'</span><span class="p">;</span>  <span class="o">--</span> <span class="n">true</span>
+<span class="n">SELECT</span> <span class="n">hour</span><span class="p">(</span><span class="n">TIMESTAMP</span> <span class="s1">'2024-01-01 00:00 UTC'</span><span class="p">);</span>                  <span class="o">--</span> <span class="n">legacy</span><span class="p">:</span> <span class="mi">0</span>
+<span class="n">SELECT</span> <span class="n">hour</span><span class="p">(</span><span class="n">TIMESTAMP</span> <span class="s1">'2023-12-31 16:00 America/Los_Angeles'</span><span class="p">);</span>  <span class="o">--</span> <span class="n">legacy</span><span class="p">:</span> <span class="mi">16</span>
+</pre></div>
+</div>
+<p>With session-zone semantics, both <code class="docutils literal notranslate"><span class="pre">hour</span></code> calls return the hour in
+<a class="reference internal" href="../../configs.html"><span class="doc">session_timezone</span></a>.</p>
+<p>Enable session-zone semantics with
+<a class="reference internal" href="../../configs.html"><span class="doc">use_session_timezone_for_timestamp_with_timezone</span></a> and
+register date-time functions with <code class="docutils literal notranslate"><span class="pre">ignoreTimeZoneLabel</span></code> set to true. The
+query configuration controls how deterministic functions render zoned
+timestamps. The registration argument selects the <code class="docutils literal notranslate"><span class="pre">at_timezone</span></code> overloads
+that return <code class="docutils literal notranslate"><span class="pre">TIMESTAMP</span></code>. Functions that inspect the stored zone label, such
+as <code class="docutils literal notranslate"><span class="pre">timezone_hour</span></code> and <code class="docutils literal notranslate"><span class="pre">timezone_minute</span></code>, are exceptions.</p>
+<p>Use the legacy settings only to preserve existing behavior. With
+<code class="docutils literal notranslate"><span class="pre">use_session_timezone_for_timestamp_with_timezone</span></code> and
+<code class="docutils literal notranslate"><span class="pre">ignoreTimeZoneLabel</span></code> set to false, functions render each value using its
+stored zone label and <code class="docutils literal notranslate"><span class="pre">at_timezone</span></code> returns <code class="docutils literal notranslate"><span class="pre">TIMESTAMP</span> <span class="pre">WITH</span> <span class="pre">TIME</span> <span class="pre">ZONE</span></code>.</p>
+<p>For values exactly representable in both types, implicit coercion must
+preserve a function’s result. If a value of type <code class="docutils literal notranslate"><span class="pre">T</span></code> coerces to type <code class="docutils literal notranslate"><span class="pre">U</span></code>,
+calling a <code class="docutils literal notranslate"><span class="pre">T</span></code> overload produces the same value as casting to <code class="docutils literal notranslate"><span class="pre">U</span></code> and
+calling the <code class="docutils literal notranslate"><span class="pre">U</span></code> overload. <code class="docutils literal notranslate"><span class="pre">TIMESTAMP</span> <span class="pre">WITH</span> <span class="pre">TIME</span> <span class="pre">ZONE</span></code> has millisecond
+precision, so coercing a higher-precision <code class="docutils literal notranslate"><span class="pre">TIMESTAMP</span></code> loses sub-millisecond
+precision.</p>
+<p>When <a class="reference internal" href="../../configs.html"><span class="doc">adjust_timestamp_to_session_timezone</span></a> is false,
+<code class="docutils literal notranslate"><span class="pre">TIMESTAMP</span></code> stores a wall clock. Existing <code class="docutils literal notranslate"><span class="pre">to_unixtime</span></code> and field
+extraction functions can violate the coercion invariant for these values,
+including wall clocks skipped by daylight-saving transitions.</p>
 <dl class="py function">
 <dt class="sig sig-object py" id="at_timezone">
-<span class="sig-name descname"><span class="pre">at_timezone</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">timestamp</span> <span class="pre">with</span> <span class="pre">time</span> <span class="pre">zone</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">zone</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">timestamp</span> <span class="pre">with</span> <span class="pre">time</span> <span class="pre">zone</span></span></span><a class="headerlink" href="#at_timezone" title="Link to this definition">¶</a></dt>
-<dd><p>Returns the same instant as <code class="docutils literal notranslate"><span class="pre">timestamp</span> <span class="pre">with</span> <span class="pre">time</span> <span class="pre">zone</span></code>, tagged with
-<code class="docutils literal notranslate"><span class="pre">zone</span></code>.</p>
-</dd></dl>
-
-<dl class="py function">
-<dt class="sig sig-object py">
-<span class="sig-name descname"><span class="pre">at_timezone</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">time</span> <span class="pre">with</span> <span class="pre">time</span> <span class="pre">zone</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">zone</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">time</span> <span class="pre">with</span> <span class="pre">time</span> <span class="pre">zone</span></span></span></dt>
-<dd><p>Returns the same instant as <code class="docutils literal notranslate"><span class="pre">time</span> <span class="pre">with</span> <span class="pre">time</span> <span class="pre">zone</span></code>, tagged with <code class="docutils literal notranslate"><span class="pre">zone</span></code>.
-<code class="docutils literal notranslate"><span class="pre">zone</span></code> must be a <code class="docutils literal notranslate"><span class="pre">+HH:mm</span></code> offset.</p>
-</dd></dl>
-
-<dl class="py function">
-<dt class="sig sig-object py" id="at_timezone_convert">
-<span class="sig-name descname"><span class="pre">at_timezone_convert</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">timestamp</span> <span class="pre">with</span> <span class="pre">time</span> <span class="pre">zone</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">zone</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">timestamp</span></span></span><a class="headerlink" href="#at_timezone_convert" title="Link to this definition">¶</a></dt>
-<dd><p>Returns the wall clock that <code class="docutils literal notranslate"><span class="pre">timestamp</span> <span class="pre">with</span> <span class="pre">time</span> <span class="pre">zone</span></code> shows in <code class="docutils literal notranslate"><span class="pre">zone</span></code>.
-The zone the input carries is ignored; only its instant is used.
-With <a class="reference internal" href="../../configs.html"><span class="doc">adjust_timestamp_to_session_timezone</span></a> enabled,
-the result is read in <a class="reference internal" href="../../configs.html"><span class="doc">session_timezone</span></a>. Times skipped
-by a daylight-saving transition move forward, and repeated times use the
-earlier instant.</p>
-</dd></dl>
-
-<dl class="py function">
-<dt class="sig sig-object py">
-<span class="sig-name descname"><span class="pre">at_timezone_convert</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">time</span> <span class="pre">with</span> <span class="pre">time</span> <span class="pre">zone</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">zone</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">time</span> <span class="pre">with</span> <span class="pre">time</span> <span class="pre">zone</span></span></span></dt>
-<dd><p>Returns the same instant as <code class="docutils literal notranslate"><span class="pre">time</span> <span class="pre">with</span> <span class="pre">time</span> <span class="pre">zone</span></code>, tagged with <code class="docutils literal notranslate"><span class="pre">zone</span></code>.
-<code class="docutils literal notranslate"><span class="pre">zone</span></code> must be a <code class="docutils literal notranslate"><span class="pre">+HH:mm</span></code> offset.</p>
+<span class="sig-name descname"><span class="pre">at_timezone</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">value</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">zone</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#at_timezone" title="Link to this definition">¶</a></dt>
+<dd><p>Renders <code class="docutils literal notranslate"><span class="pre">value</span></code> in <code class="docutils literal notranslate"><span class="pre">zone</span></code>. Date-time function registration selects the
+result type for timestamp operands:</p>
+<table class="docutils align-default">
+<colgroup>
+<col style="width: 34.0%" />
+<col style="width: 33.0%" />
+<col style="width: 33.0%" />
+</colgroup>
+<thead>
+<tr class="row-odd"><th class="head"><p>Operand</p></th>
+<th class="head"><p><code class="docutils literal notranslate"><span class="pre">ignoreTimeZoneLabel</span> <span class="pre">=</span> <span class="pre">false</span></code></p></th>
+<th class="head"><p><code class="docutils literal notranslate"><span class="pre">ignoreTimeZoneLabel</span> <span class="pre">=</span> <span class="pre">true</span></code></p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">TIMESTAMP</span> <span class="pre">WITH</span> <span class="pre">TIME</span> <span class="pre">ZONE</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">TIMESTAMP</span> <span class="pre">WITH</span> <span class="pre">TIME</span> <span class="pre">ZONE</span></code> with the target-zone label</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">TIMESTAMP</span></code> containing the target-zone wall clock</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">TIMESTAMP</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">TIMESTAMP</span> <span class="pre">WITH</span> <span class="pre">TIME</span> <span class="pre">ZONE</span></code> with the target-zone label</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">TIMESTAMP</span></code> containing the target-zone wall clock</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">TIME</span> <span class="pre">WITH</span> <span class="pre">TIME</span> <span class="pre">ZONE</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">TIME</span> <span class="pre">WITH</span> <span class="pre">TIME</span> <span class="pre">ZONE</span></code> with the target offset</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">TIME</span> <span class="pre">WITH</span> <span class="pre">TIME</span> <span class="pre">ZONE</span></code> with the target offset</p></td>
+</tr>
+</tbody>
+</table>
+<p>For <code class="docutils literal notranslate"><span class="pre">TIMESTAMP</span> <span class="pre">WITH</span> <span class="pre">TIME</span> <span class="pre">ZONE</span></code>, only the instant is used; the stored zone
+label is ignored. With <a class="reference internal" href="../../configs.html"><span class="doc">adjust_timestamp_to_session_timezone</span></a> enabled, <code class="docutils literal notranslate"><span class="pre">TIMESTAMP</span></code> already represents a UTC instant.
+Otherwise, <code class="docutils literal notranslate"><span class="pre">TIMESTAMP</span></code> is interpreted as a wall clock in
+<a class="reference internal" href="../../configs.html"><span class="doc">session_timezone</span></a>.</p>
+<p>When the result is <code class="docutils literal notranslate"><span class="pre">TIMESTAMP</span></code> and
+<code class="docutils literal notranslate"><span class="pre">adjust_timestamp_to_session_timezone</span></code> is enabled, it is encoded to read
+as the target-zone wall clock in the session zone. Times skipped by a
+daylight-saving transition move forward, and repeated times use the earlier
+instant.</p>
+<p>For <code class="docutils literal notranslate"><span class="pre">TIME</span> <span class="pre">WITH</span> <span class="pre">TIME</span> <span class="pre">ZONE</span></code>, <code class="docutils literal notranslate"><span class="pre">zone</span></code> must be a <code class="docutils literal notranslate"><span class="pre">+HH:mm</span></code> offset.</p>
 </dd></dl>
 
 <dl class="py function">
@@ -346,6 +392,7 @@ constant throughout the query. This matches the standard SQL behavior for
 </div>
 </dd></dl>
 
+</section>
 </section>
 <section id="truncation-function">
 <h2>Truncation Function<a class="headerlink" href="#truncation-function" title="Link to this heading">¶</a></h2>
@@ -837,12 +884,14 @@ transition:</p>
 picked to be consistent with Presto.</p>
 <p><strong>Timezone Name Parsing</strong>: When parsing strings that contain timezone names, the
 list of supported timezones follow the definition <a class="reference external" href="https://en.wikipedia.org/wiki/List_of_tz_database_time_zones">here</a>.</p>
-<p><strong>Timezone Conversion</strong>: The <code class="docutils literal notranslate"><span class="pre">AT</span> <span class="pre">TIME</span> <span class="pre">ZONE</span></code> operator sets the time zone of a timestamp:</p>
+<p><strong>Timezone Conversion</strong>: The <code class="docutils literal notranslate"><span class="pre">AT</span> <span class="pre">TIME</span> <span class="pre">ZONE</span></code> operator renders an instant in a
+target time zone. Under session-zone semantics:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">timestamp</span> <span class="s1">'2012-10-31 01:00 UTC'</span><span class="p">;</span>
 <span class="o">--</span> <span class="mi">2012</span><span class="o">-</span><span class="mi">10</span><span class="o">-</span><span class="mi">31</span> <span class="mi">01</span><span class="p">:</span><span class="mi">00</span><span class="p">:</span><span class="mf">00.000</span> <span class="n">UTC</span>
 
-<span class="n">SELECT</span> <span class="n">timestamp</span> <span class="s1">'2012-10-31 01:00 UTC'</span> <span class="n">AT</span> <span class="n">TIME</span> <span class="n">ZONE</span> <span class="s1">'America/Los_Angeles'</span><span class="p">;</span>
-<span class="o">--</span> <span class="mi">2012</span><span class="o">-</span><span class="mi">10</span><span class="o">-</span><span class="mi">30</span> <span class="mi">18</span><span class="p">:</span><span class="mi">00</span><span class="p">:</span><span class="mf">00.000</span> <span class="n">America</span><span class="o">/</span><span class="n">Los_Angeles</span>
+<span class="n">SELECT</span> <span class="n">timestamp</span> <span class="s1">'2012-10-31 01:00 UTC'</span>
+    <span class="n">AT</span> <span class="n">TIME</span> <span class="n">ZONE</span> <span class="s1">'America/Los_Angeles'</span><span class="p">;</span>
+<span class="o">--</span> <span class="mi">2012</span><span class="o">-</span><span class="mi">10</span><span class="o">-</span><span class="mi">30</span> <span class="mi">18</span><span class="p">:</span><span class="mi">00</span><span class="p">:</span><span class="mf">00.000</span>
 </pre></div>
 </div>
 </section>
@@ -865,8 +914,8 @@ list of supported timezones follow the definition <a class="reference external" 
 </ul>
 </li>
 <li><a class="reference internal" href="#date-and-time-functions">Date and Time Functions</a><ul>
+<li><a class="reference internal" href="#timestamp-with-time-zone-semantics">Timestamp With Time Zone Semantics</a><ul>
 <li><a class="reference internal" href="#at_timezone"><code class="docutils literal notranslate"><span class="pre">at_timezone()</span></code></a></li>
-<li><a class="reference internal" href="#at_timezone_convert"><code class="docutils literal notranslate"><span class="pre">at_timezone_convert()</span></code></a></li>
 <li><a class="reference internal" href="#current_date"><code class="docutils literal notranslate"><span class="pre">current_date()</span></code></a></li>
 <li><a class="reference internal" href="#date"><code class="docutils literal notranslate"><span class="pre">date()</span></code></a></li>
 <li><a class="reference internal" href="#from_iso8601_date"><code class="docutils literal notranslate"><span class="pre">from_iso8601_date()</span></code></a></li>
@@ -879,6 +928,8 @@ list of supported timezones follow the definition <a class="reference external" 
 <li><a class="reference internal" href="#current_timezone"><code class="docutils literal notranslate"><span class="pre">current_timezone()</span></code></a></li>
 <li><a class="reference internal" href="#current_timestamp"><code class="docutils literal notranslate"><span class="pre">current_timestamp()</span></code></a></li>
 <li><a class="reference internal" href="#now"><code class="docutils literal notranslate"><span class="pre">now()</span></code></a></li>
+</ul>
+</li>
 </ul>
 </li>
 <li><a class="reference internal" href="#truncation-function">Truncation Function</a><ul>
