@@ -1589,7 +1589,8 @@ bool canGroupbyBeEvaluatedByCudf(
       return false;
     }
 
-    if (!maskSupportedByCudf(aggregate, step)) {
+    if (!maskSupportedByCudf(
+            aggregate, step, getGroupbyAggregationRegistry())) {
       return false;
     }
 

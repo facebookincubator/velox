@@ -861,7 +861,7 @@ bool canReduceBeEvaluatedByCudf(
       return false;
     }
 
-    if (!maskSupportedByCudf(aggregate, step)) {
+    if (!maskSupportedByCudf(aggregate, step, getReduceAggregationRegistry())) {
       return false;
     }
 

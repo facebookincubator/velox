@@ -44,22 +44,27 @@ core::AggregationNode::Step getCompanionStep(
 
 std::string getOriginalName(const std::string& kind);
 
-/// Returns true if the cuDF aggregator for 'aggregateName' honors a FILTER
-/// mask. Eligibility is declared at registration (maskSupportedAggregations)
-/// rather than hardcoded here. An aggregator that opts in excludes masked rows
-/// via null-injection (or the validity column for count(*)/count(const)); one
-/// that ignores the mask would silently produce an unmasked result, so callers
-/// must fall back to CPU for it.
-bool aggregationSupportsMask(const std::string& aggregateName);
+/// Returns true if the cuDF aggregator of 'registry', the groupby or the
+/// reduce registry, for 'aggregateName' honors a FILTER mask. Eligibility is
+/// declared at registration (maskSupportedAggregations) rather than hardcoded
+/// here. An aggregator that opts in excludes masked rows via null-injection
+/// (or the validity column for count(*)/count(const)); one that ignores the
+/// mask would silently produce an unmasked result, so callers must fall back
+/// to CPU for it.
+bool aggregationSupportsMask(
+    const std::string& aggregateName,
+    const StepAwareAggregationRegistry& registry);
 
-/// Returns true if cuDF can honor 'aggregate's FILTER mask at 'step' (no mask
-/// is trivially true). The mask must sit at a raw-input step, be a bare
-/// boolean field access, and target an aggregate in aggregationSupportsMask.
-/// Shared by groupby and reduce validation so the two paths cannot diverge on
-/// what they accept.
+/// Returns true if cuDF can honor 'aggregate's FILTER mask at 'step' on the
+/// path of 'registry' (no mask is trivially true). The mask must sit at a
+/// raw-input step, be a bare boolean field access, and target an aggregate in
+/// aggregationSupportsMask for that registry. Shared by groupby and reduce
+/// validation, so the two paths agree on the shape of a mask and differ only
+/// in the aggregates their registries declare.
 bool maskSupportedByCudf(
     const core::AggregationNode::Aggregate& aggregate,
-    core::AggregationNode::Step step);
+    core::AggregationNode::Step step,
+    const StepAwareAggregationRegistry& registry);
 
 /// Returns true if cuDF can run 'aggregate' without the sort its ORDER BY asks
 /// for: it has no sorting keys, or its function is not order sensitive, which
