@@ -34,12 +34,10 @@ class ChunkedStreamDecoder : public Decoder {
       velox::memory::MemoryPool& pool,
       std::unique_ptr<ChunkedStream> stream,
       EncodingFactoryCallback encodingFactory,
-      bool stringDecoderZeroCopy,
       const MetricsLogger& logger)
       : pool_{&pool},
         stream_{std::move(stream)},
         encodingFactory_{std::move(encodingFactory)},
-        stringDecoderZeroCopy_{stringDecoderZeroCopy},
         logger_{logger} {}
 
   uint32_t next(
@@ -81,11 +79,8 @@ class ChunkedStreamDecoder : public Decoder {
   std::unique_ptr<Encoding> encoding_;
   uint32_t remaining_{0};
   const EncodingFactoryCallback encodingFactory_;
-  const bool stringDecoderZeroCopy_;
   const MetricsLogger& logger_;
   std::vector<velox::BufferPtr> currentStringBuffers_;
-  // For compatibility with old encoding behavior.
-  std::vector<Vector<char>> stringBuffers_;
 };
 
 } // namespace facebook::nimble

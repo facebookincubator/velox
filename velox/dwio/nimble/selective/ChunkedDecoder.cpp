@@ -94,21 +94,12 @@ bool ChunkedDecoder::loadNextChunk(const ChunkBoundaryCallback& onChunkLoaded) {
   auto options = encodingFactory_->options();
   options.decodingStats = decodingStats_;
   if (hasSharedDictionaryBinding()) {
-    NIMBLE_CHECK(
-        stringDecoderZeroCopy_,
-        "Shared dictionary encoding requires non-legacy encoding dispatch.");
     ensureSharedDictionaryAlphabet();
     NIMBLE_CHECK_NOT_NULL(dictionaryAlphabet_);
     options.sharedDictionaryAlphabet = dictionaryAlphabet_;
-    // The legacy factory has no SharedDictionary concrete type. Use the native
-    // factory for dictionary-bound streams so nullable children can also use
-    // the alphabet.
-    encoding_ =
-        EncodingFactory().create(*pool_, data, stringBufferFactory, options);
-  } else {
-    encoding_ =
-        encodingFactory_->create(*pool_, data, stringBufferFactory, options);
   }
+  encoding_ =
+      encodingFactory_->create(*pool_, data, stringBufferFactory, options);
   remainingValues_ = encoding_->rowCount();
   NIMBLE_CHECK_GT(remainingValues_, 0);
   VLOG(1) << encoding_->debugString();

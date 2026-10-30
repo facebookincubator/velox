@@ -28,8 +28,6 @@
 #include "velox/dwio/nimble/common/Vector.h"
 #include "velox/dwio/nimble/encodings/NullableEncoding.h"
 #include "velox/dwio/nimble/encodings/TrivialEncoding.h"
-#include "velox/dwio/nimble/encodings/legacy/NullableEncoding.h"
-#include "velox/dwio/nimble/encodings/legacy/TrivialEncoding.h"
 #include "velox/dwio/nimble/serializer/Options.h"
 
 #include <folly/Conv.h>
@@ -1330,168 +1328,23 @@ class StringFieldReader final : public FieldReader {
   std::vector<std::string_view>& buffer_;
 };
 
-// This is the legacy string reader that is used for the legacy encodings.
-class LegacyStringFieldReader final : public FieldReader {
- public:
-  LegacyStringFieldReader(
-      velox::memory::MemoryPool& pool,
-      velox::TypePtr type,
-      Decoder* decoder,
-      std::vector<std::string_view>& buffer)
-      : FieldReader{pool, std::move(type), decoder}, buffer_{buffer} {}
-
-  std::optional<std::pair<uint32_t, uint64_t>> estimatedRowSize() const final {
-    uint64_t totalBytes{0};
-    const auto* encoding = decoder_->encoding();
-    NIMBLE_CHECK_NOT_NULL(
-        encoding, "Decoder must be loaded for output size estimation.");
-    const auto* innerEncoding = encoding;
-    const auto rowCount = encoding->rowCount();
-
-    if (encoding->isNullable()) {
-      // Adding memory for velox::BaseVector::nulls_
-      totalBytes += rowCount / 8;
-      const auto* nullableEncoding =
-          dynamic_cast<const legacy::NullableEncoding<std::string_view>*>(
-              encoding);
-      NIMBLE_CHECK_NOT_NULL(
-          nullableEncoding,
-          "NullableEncoding is not used for nullable string field.");
-      innerEncoding = nullableEncoding->nonNulls();
-    }
-
-    // TODO: support more encodings (or do encoding traversal), DICT, RLE, etc.
-    // We currently only estimate trivial encoded string field.
-    if (const auto* trivialEncoding =
-            dynamic_cast<const legacy::TrivialEncoding<std::string_view>*>(
-                innerEncoding)) {
-      // Adding overhead for velox::StringView. 4 bytes for inline, 16 bytes for
-      // non-inline
-      const auto nonNullCount = trivialEncoding->rowCount();
-      const auto payloadBytes = trivialEncoding->uncompressedDataBytes();
-      // Non-null entries overhead
-      totalBytes +=
-          ((payloadBytes / nonNullCount) > velox::StringView::kInlineSize ? 16
-                                                                          : 4) *
-          nonNullCount;
-      // Null entries overhead
-      totalBytes += (rowCount - nonNullCount) * 16;
-
-      // Adding actual string content payload size
-      totalBytes += payloadBytes;
-    } else {
-      return std::nullopt;
-    }
-
-    return rowCount == 0 ? std::optional<std::pair<uint32_t, uint64_t>>({0, 0})
-                         : std::optional<std::pair<uint32_t, uint64_t>>(
-                               {rowCount, totalBytes / rowCount});
-  }
-
-  folly::coro::Task<void> co_next(
-      uint32_t count,
-      velox::VectorPtr& output,
-      const velox::bits::Bitmap* scatterBitmap) final {
-    auto rowCount = scatterCount(count, scatterBitmap);
-    auto vector =
-        VectorInitializer<velox::FlatVector<velox::StringView>>::initialize(
-            type_, rowCount, pool_, output);
-    vector->resize(rowCount);
-    buffer_.resize(rowCount);
-
-    // Unused place holder for api.
-    std::vector<velox::BufferPtr> stringBuffers;
-    auto nonNullCount = decoder_->next(
-        count,
-        buffer_.data(),
-        [&]() { return ensureNulls(vector, rowCount); },
-        stringBuffers,
-        scatterBitmap);
-    size_t totalLength = 0;
-    const bool hasNulls = (nonNullCount != rowCount);
-    // A column that is entirely null over this batch would make both passes
-    // over |rowCount| below run only to move nothing.
-    const bool allNull = (nonNullCount == 0);
-    if (!hasNulls) {
-      vector->resetNulls();
-      for (uint32_t i = 0; i < rowCount; ++i) {
-        totalLength += buffer_[i].length();
-      }
-    } else {
-      vector->setNullCount(rowCount - nonNullCount);
-      if (!allNull) {
-        for (uint32_t i = 0; i < rowCount; ++i) {
-          if (!vector->isNullAt(i)) {
-            totalLength += buffer_[i].length();
-          }
-        }
-      }
-    }
-    // Copy the strings into a single string buffer.
-    velox::BufferPtr data =
-        velox::AlignedBuffer::allocate<char>(totalLength, pool_);
-    char* dataPtr = data->asMutable<char>();
-    auto* valuesPtr = vector->mutableValues()->asMutable<velox::StringView>();
-    size_t currentOffset = 0;
-    if (!hasNulls) {
-      for (uint32_t i = 0; i < rowCount; ++i) {
-        std::copy(
-            buffer_[i].begin(), buffer_[i].end(), dataPtr + currentOffset);
-        valuesPtr[i] =
-            velox::StringView(dataPtr + currentOffset, buffer_[i].length());
-        currentOffset += buffer_[i].length();
-      }
-    } else if (!allNull) {
-      for (uint32_t i = 0; i < rowCount; ++i) {
-        if (!vector->isNullAt(i)) {
-          std::copy(
-              buffer_[i].begin(), buffer_[i].end(), dataPtr + currentOffset);
-          valuesPtr[i] =
-              velox::StringView(dataPtr + currentOffset, buffer_[i].length());
-          currentOffset += buffer_[i].length();
-        }
-      }
-    }
-    vector->setStringBuffers({data});
-    co_return;
-  }
-
-  folly::coro::Task<void> co_skip(uint32_t count) final {
-    decoder_->skip(count);
-    co_return;
-  }
-
- private:
-  std::vector<std::string_view>& buffer_;
-};
-
 class StringFieldReaderFactory final : public FieldReaderFactory {
  public:
   StringFieldReaderFactory(
       velox::TypePtr veloxType,
       const Type* type,
-      bool optimizeStringBufferHandling,
       velox::memory::MemoryPool* pool)
-      : FieldReaderFactory{std::move(veloxType), type, pool},
-        optimizeStringBufferHandling_{optimizeStringBufferHandling} {}
+      : FieldReaderFactory{std::move(veloxType), type, pool} {}
 
   std::unique_ptr<FieldReader> createReader(
       const folly::F14FastMap<offset_size, std::unique_ptr<Decoder>>& decoders)
       final {
-    return optimizeStringBufferHandling_
-        ? createReaderImpl<StringFieldReader>(
-              decoders,
-              nimbleType_->asScalar().scalarDescriptor(),
-              wrap(buffer_))
-        : createReaderImpl<LegacyStringFieldReader>(
-              decoders,
-              nimbleType_->asScalar().scalarDescriptor(),
-              wrap(buffer_));
+    return createReaderImpl<StringFieldReader>(
+        decoders, nimbleType_->asScalar().scalarDescriptor(), wrap(buffer_));
   }
 
  private:
   std::vector<std::string_view> buffer_;
-  bool optimizeStringBufferHandling_;
 };
 
 class TimestampMicroNanoFieldReader final : public FieldReader {
@@ -6283,10 +6136,7 @@ std::unique_ptr<FieldReaderFactory> createFieldReaderFactory(
           "Provided schema doesn't match file schema.");
       offsets.emplace_back(nimbleType->asScalar().scalarDescriptor().offset());
       return std::make_unique<StringFieldReaderFactory>(
-          veloxType->type(),
-          nimbleType.get(),
-          parameters.optimizeStringBufferHandling,
-          pool);
+          veloxType->type(), nimbleType.get(), pool);
     }
     case velox::TypeKind::TIMESTAMP: {
       NIMBLE_CHECK(

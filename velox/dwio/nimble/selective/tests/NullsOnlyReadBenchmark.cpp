@@ -230,7 +230,6 @@ class NullsOnlyReadBenchmark : public velox::test::VectorTestBase {
     rowReaderOptions.setScanSpec(scanSpec);
     rowReaderOptions.setRequestedType(asRowType(rowType));
     rowReaderOptions.setEagerFirstStripeLoad(false);
-    rowReaderOptions.setStringDecoderZeroCopy(true);
     rowReaderOptions.setNimbleScanFastPath(true);
     rowReaderOptions.setCollectColumnStats(true);
     auto rowReader = reader->createRowReader(rowReaderOptions);

@@ -19,59 +19,6 @@
 
 namespace facebook::nimble {
 
-namespace {
-void bufferStringContent(
-    Vector<char>& buffer,
-    void* values,
-    void* FOLLY_NULLABLE notNulls,
-    uint32_t offset,
-    uint32_t count) {
-  auto* source = reinterpret_cast<std::string_view*>(values) + offset;
-  uint64_t size = 0;
-  if (notNulls) {
-    for (auto i = 0; i < count; ++i) {
-      if (velox::bits::isBitSet(
-              reinterpret_cast<const uint8_t*>(notNulls), i + offset)) {
-        size += (source + i)->size();
-      }
-    }
-  } else {
-    for (auto i = 0; i < count; ++i) {
-      size += (source + i)->size();
-    }
-  }
-
-  uint64_t targetOffset = 0;
-  buffer.resize(size);
-
-  if (notNulls) {
-    for (auto i = 0; i < count; ++i) {
-      if (velox::bits::isBitSet(
-              reinterpret_cast<const uint8_t*>(notNulls), i + offset)) {
-        auto* value = source + i;
-        auto* target = buffer.data() + targetOffset;
-        if (!value->empty()) {
-          std::copy(value->cbegin(), value->cend(), target);
-          targetOffset += value->size();
-        }
-        *value = std::string_view{target, value->size()};
-      }
-    }
-  } else {
-    for (auto i = 0; i < count; ++i) {
-      auto* value = source + i;
-      auto* target = buffer.data() + targetOffset;
-      if (!value->empty()) {
-        std::copy(value->cbegin(), value->cend(), target);
-        targetOffset += value->size();
-      }
-      *value = std::string_view{target, value->size()};
-    }
-  }
-}
-
-} // namespace
-
 uint32_t ChunkedStreamDecoder::next(
     uint32_t count,
     void* output,
@@ -137,24 +84,6 @@ uint32_t ChunkedStreamDecoder::next(
       // fill nulls bitmap to reflect that all values are non-null
       velox::bits::BitmapBuilder builder{nullsPtr, endOffset};
       builder.set(offset, endOffset);
-    }
-
-    if (encoding_->dataType() == DataType::String && !stringDecoderZeroCopy_ &&
-        rowsToRead != count) {
-      // We are going to load a new chunk.
-      // For string values, this means that the memory pointed by the
-      // string_views is going to be freed. Before we do so, we copy all
-      // strings to a temporary buffer and fix the string_views to point to the
-      // new location.
-      // NOTE1: Instead of copying the data, we can just hold on to
-      // the previous chunk(s) for a while. However, this means holding on to
-      // more memory, which is undesirable.
-      // NOTE2: We perform an additional copy of the strings later on, into the
-      // string buffers of the Velox Vector. Later diff will change this logic
-      // to directly copy the strings into the Velox string buffers directly.
-      auto& buffer = stringBuffers_.emplace_back(pool_);
-      bufferStringContent(
-          buffer, output, nullsPtr, offset, (endOffset - offset));
     }
 
     offset = endOffset;
