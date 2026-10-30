@@ -15,8 +15,6 @@
  */
 
 #include "velox/experimental/cudf/CudfConfig.h"
-#include "velox/experimental/cudf/connectors/hive/CudfHiveConnector.h"
-#include "velox/experimental/cudf/connectors/hive/iceberg/CudfIcebergConnector.h"
 #include "velox/experimental/cudf/exec/CudfAggregation.h"
 #include "velox/experimental/cudf/exec/CudfAssignUniqueId.h"
 #include "velox/experimental/cudf/exec/CudfBatchConcat.h"
@@ -33,9 +31,11 @@
 #include "velox/experimental/cudf/exec/CudfNestedLoopJoin.h"
 #include "velox/experimental/cudf/exec/CudfOrderBy.h"
 #include "velox/experimental/cudf/exec/CudfReduce.h"
+#include "velox/experimental/cudf/exec/CudfScanUtils.h"
 #include "velox/experimental/cudf/exec/CudfTopN.h"
 #include "velox/experimental/cudf/exec/CudfTopNRowNumber.h"
 #include "velox/experimental/cudf/exec/CudfWindow.h"
+#include "velox/experimental/cudf/exec/GpuPlacement.h"
 #include "velox/experimental/cudf/exec/OperatorAdapters.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/cudf/exec/Validation.h"
@@ -47,7 +47,6 @@
 #endif
 
 #include "velox/common/memory/Memory.h"
-#include "velox/connectors/ConnectorRegistry.h"
 #include "velox/exec/AssignUniqueId.h"
 #include "velox/exec/CallbackSink.h"
 #include "velox/exec/EnforceSingleRow.h"
@@ -75,28 +74,6 @@
 namespace facebook::velox::cudf_velox {
 
 namespace {
-
-bool containsCustomComparison(const TypePtr& type) {
-  if (type->providesCustomComparison()) {
-    return true;
-  }
-  for (size_t i = 0; i < type->size(); ++i) {
-    if (containsCustomComparison(type->childAt(i))) {
-      return true;
-    }
-  }
-  return false;
-}
-
-bool containsCustomComparison(const core::TypedExprPtr& expression) {
-  if (containsCustomComparison(expression->type())) {
-    return true;
-  }
-  return std::any_of(
-      expression->inputs().begin(),
-      expression->inputs().end(),
-      [](const auto& input) { return containsCustomComparison(input); });
-}
 
 bool subtreeHasUnsupportedType(const core::PlanNodePtr& root) {
   return core::PlanNode::findFirstNode(root.get(), [](const auto* node) {
@@ -164,25 +141,12 @@ class TableScanAdapter : public OperatorAdapter {
           planNode->id());
       return false;
     }
-    auto const& connector = velox::connector::ConnectorRegistry::tryGet(
-        tableScanNode->tableHandle()->connectorId());
-    auto cudfHiveConnector = std::dynamic_pointer_cast<
-        facebook::velox::cudf_velox::connector::hive::CudfHiveConnector>(
-        connector);
-    auto cudfIcebergConnector =
-        std::dynamic_pointer_cast<facebook::velox::cudf_velox::connector::hive::
-                                      iceberg::CudfIcebergConnector>(connector);
-
-    bool canRunOnGPU =
-        cudfHiveConnector != nullptr or cudfIcebergConnector != nullptr;
-
-    if (!canRunOnGPU) {
-      LOG_FALLBACK(
-          "TableScan connector is not CudfHiveConnector or CudfIcebergConnector, PlanNode id: {}",
-          planNode->id());
+    std::string reason;
+    if (!isGpuTableScan(*tableScanNode, &reason)) {
+      LOG_FALLBACK("{}, PlanNode id: {}", reason, planNode->id());
+      return false;
     }
-
-    return canRunOnGPU;
+    return true;
   }
 
   bool acceptsGpuInput() const override {
@@ -229,41 +193,15 @@ class FilterProjectAdapter : public OperatorAdapter {
 
     auto projectPlanNode =
         std::dynamic_pointer_cast<const core::ProjectNode>(planNode);
-    auto filterNode = filterProjectOp->filterNode();
-
-    if (projectPlanNode) {
-      if (projectPlanNode->sources()[0]->outputType()->size() == 0) {
-        if (filterNode || !projectPlanNode->projections().empty()) {
-          LOG_FALLBACK(
-              "FilterProject empty input type with filter or projections, PlanNode id: {}",
-              planNode->id());
-          return false;
-        }
-      }
-    }
-
-    // Check filter separately
-    if (filterNode) {
-      if (!canExprRunOnGpu(
-              filterNode->filter(), ctx->task->queryCtx().get(), op->pool())) {
-        LOG_FALLBACK(
-            "FilterProject filter cannot be evaluated by cuDF, PlanNode id: {}",
-            planNode->id());
-        return false;
-      }
-    }
-
-    // Check projects separately
-    if (projectPlanNode) {
-      for (const auto& projection : projectPlanNode->projections()) {
-        if (!canExprRunOnGpu(
-                projection, ctx->task->queryCtx().get(), op->pool())) {
-          LOG_FALLBACK(
-              "FilterProject projections cannot be evaluated by cuDF, PlanNode id: {}",
-              planNode->id());
-          return false;
-        }
-      }
+    std::string reason;
+    if (!canRunFilterProjectOnGpu(
+            filterProjectOp->filterNode().get(),
+            projectPlanNode.get(),
+            ctx->task->queryCtx().get(),
+            op->pool(),
+            &reason)) {
+      LOG_FALLBACK("{}, PlanNode id: {}", reason, planNode->id());
+      return false;
     }
     return true;
   }
@@ -324,14 +262,16 @@ class AggregationAdapter : public OperatorAdapter {
       return false;
     }
 
-    bool canEvaluate = canBeEvaluatedByCudf(
-        *aggregationPlanNode, ctx->task->queryCtx().get(), op->pool());
-    if (!canEvaluate) {
-      LOG_FALLBACK(
-          "Aggregation aggregation cannot be evaluated by cuDF, PlanNode id: {}",
-          planNode->id());
+    std::string reason;
+    if (!canRunAggregationOnGpu(
+            *aggregationPlanNode,
+            ctx->task->queryCtx().get(),
+            op->pool(),
+            &reason)) {
+      LOG_FALLBACK("{}, PlanNode id: {}", reason, planNode->id());
+      return false;
     }
-    return canEvaluate;
+    return true;
   }
 
   bool acceptsGpuInput() const override {
@@ -397,31 +337,11 @@ class CudfHashJoinBaseAdapter : public OperatorAdapter {
       return false;
     }
 
-    if (!CudfHashJoinProbe::isSupportedJoinType(joinPlanNode->joinType())) {
-      LOG_FALLBACK(
-          "HashJoin unsupported join type, PlanNode id: {}", planNode->id());
+    std::string reason;
+    if (!canRunHashJoinOnGpu(
+            *joinPlanNode, ctx->task->queryCtx().get(), op->pool(), &reason)) {
+      LOG_FALLBACK("{}, PlanNode id: {}", reason, planNode->id());
       return false;
-    }
-
-    // Disabling null-aware anti join with filter until we implement it right
-    if (joinPlanNode->joinType() == core::JoinType::kAnti &&
-        joinPlanNode->isNullAware() && joinPlanNode->filter()) {
-      LOG_FALLBACK(
-          "HashJoin null-aware anti join with filter not implemented, PlanNode id: {}",
-          planNode->id());
-      return false;
-    }
-
-    if (joinPlanNode->filter()) {
-      if (!canJoinFilterRunOnGpu(
-              joinPlanNode->filter(),
-              ctx->task->queryCtx().get(),
-              op->pool())) {
-        LOG_FALLBACK(
-            "HashJoin join filter cannot be evaluated by cuDF, PlanNode id: {}",
-            planNode->id());
-        return false;
-      }
     }
 
     // Reject if any join source has types that cuDF cannot represent.
@@ -536,33 +456,11 @@ class CudfNestedLoopJoinBaseAdapter : public OperatorAdapter {
       return false;
     }
 
-    if (!CudfNestedLoopJoinProbe::isSupportedJoinType(
-            joinPlanNode->joinType())) {
-      LOG_FALLBACK(
-          "NestedLoopJoin unsupported join type: {}, PlanNode id: {}",
-          static_cast<int>(joinPlanNode->joinType()),
-          planNode->id());
+    std::string reason;
+    if (!canRunNestedLoopJoinOnGpu(
+            *joinPlanNode, ctx->task->queryCtx().get(), op->pool(), &reason)) {
+      LOG_FALLBACK("{}, PlanNode id: {}", reason, planNode->id());
       return false;
-    }
-
-    // Check if join condition can be evaluated on GPU
-    if (joinPlanNode->joinCondition()) {
-      if (containsCustomComparison(joinPlanNode->joinCondition())) {
-        LOG_FALLBACK(
-            "NestedLoopJoin condition has custom comparison semantics, "
-            "PlanNode id: {}",
-            planNode->id());
-        return false;
-      }
-      if (!canJoinFilterRunOnGpu(
-              joinPlanNode->joinCondition(),
-              ctx->task->queryCtx().get(),
-              op->pool())) {
-        LOG_FALLBACK(
-            "NestedLoopJoin filter cannot be evaluated by cuDF, PlanNode id: {}",
-            planNode->id());
-        return false;
-      }
     }
 
     // Reject if any join source has types that cuDF cannot represent.
@@ -748,8 +646,12 @@ class TopNRowNumberAdapter : public OperatorAdapter {
     if (!node) {
       return false;
     }
-    return node->rankFunction() ==
-        core::TopNRowNumberNode::RankFunction::kRowNumber;
+    std::string reason;
+    if (!canRunTopNRowNumberOnGpu(*node, &reason)) {
+      LOG_FALLBACK("{}, PlanNode id: {}", reason, planNode->id());
+      return false;
+    }
+    return true;
   }
 
   bool acceptsGpuInput() const override {
@@ -830,7 +732,7 @@ class LocalPartitionAdapter : public OperatorAdapter {
     auto localPartitionPlanNode =
         std::dynamic_pointer_cast<const core::LocalPartitionNode>(planNode);
     bool canRun = canHandle(op) && localPartitionPlanNode &&
-        CudfLocalPartition::shouldReplace(localPartitionPlanNode) &&
+        canRunLocalPartitionOnGpu(localPartitionPlanNode, nullptr) &&
         !subtreeHasUnsupportedType(localPartitionPlanNode);
     if (!canRun) {
       LOG_FALLBACK(
@@ -895,7 +797,7 @@ class LocalExchangeAdapter : public OperatorAdapter {
     auto localPartitionPlanNode =
         std::dynamic_pointer_cast<const core::LocalPartitionNode>(planNode);
     bool canRun = localPartitionPlanNode &&
-        CudfLocalPartition::shouldReplace(localPartitionPlanNode) &&
+        canRunLocalPartitionOnGpu(localPartitionPlanNode, nullptr) &&
         !subtreeHasUnsupportedType(localPartitionPlanNode);
     if (!canRun) {
       LOG_FALLBACK(
