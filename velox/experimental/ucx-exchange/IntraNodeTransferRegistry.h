@@ -21,6 +21,8 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <set>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <unordered_set>
@@ -28,6 +30,15 @@
 #include "velox/vector/TypeAliases.h"
 
 namespace facebook::velox::ucx_exchange {
+
+/// Signals that the consumer stopped before retrieving an intra-node payload.
+/// Producers use this distinct completion to stop serving the destination
+/// instead of mistaking cancellation for a successful retrieval.
+class IntraNodeTransferCancelled : public std::runtime_error {
+ public:
+  IntraNodeTransferCancelled()
+      : std::runtime_error("Intra-node transfer was cancelled") {}
+};
 
 /// @brief Key for identifying intra-node transfer entries in the registry.
 /// Used when UcxExchangeServer and UcxExchangeSource are on the same node.
@@ -69,6 +80,10 @@ struct IntraNodeTransferEntry {
   std::promise<void> retrievedPromise; // Server waits on this after publishing
   std::mutex entryMutex;
   bool ready{false}; // True when data is ready to retrieve
+  /// Guarded by entryMutex. poll() and cancelTask() can race after either one
+  /// removes the registry entry, but the producer promise must be fulfilled
+  /// exactly once.
+  bool retrievalSignaled{false};
 };
 
 /// @brief Singleton registry for intra-node data transfers.
@@ -97,7 +112,8 @@ class IntraNodeTransferRegistry {
   /// @param data The packed_columns data to share (nullptr for atEnd)
   /// @param numRows Logical rows in 'data'; 0 for atEnd
   /// @param atEnd True if this is the end-of-stream marker
-  /// @return A future that completes when source has retrieved the data
+  /// @return A future that completes when the source retrieves the data, or
+  ///         throws IntraNodeTransferCancelled if the source has stopped.
   [[nodiscard]] std::future<void> publish(
       const IntraNodeTransferKey& key,
       std::shared_ptr<cudf::packed_columns> data,
@@ -111,6 +127,12 @@ class IntraNodeTransferRegistry {
   ///         Data is nullptr when atEnd is true.
   [[nodiscard]] std::optional<IntraNodeTransferResult> poll(
       const IntraNodeTransferKey& key);
+
+  /// Cancels one producer-to-destination transfer. This both releases an
+  /// already-published payload and records a tombstone so a publish racing
+  /// with consumer shutdown completes exceptionally instead of being
+  /// stranded or mistaken for a successful retrieval.
+  void cancelTransfer(const IntraNodeTransferKey& key);
 
   /// @brief Cancel all pending transfers for a task.
   /// Called when a producing task is removed. Subsequent poll() calls for
@@ -130,6 +152,7 @@ class IntraNodeTransferRegistry {
   std::map<IntraNodeTransferKey, std::shared_ptr<IntraNodeTransferEntry>>
       registry_;
   std::unordered_set<std::string> cancelledTasks_;
+  std::set<IntraNodeTransferKey> cancelledTransfers_;
   std::mutex mutex_;
 };
 

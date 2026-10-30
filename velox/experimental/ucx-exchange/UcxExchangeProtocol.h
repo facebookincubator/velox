@@ -16,6 +16,7 @@
 #pragma once
 
 #include <cinttypes>
+#include <cstddef>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -125,31 +126,17 @@ struct MetadataMsg {
   std::vector<WireRemainingElementType> remainingBytes;
   bool atEnd;
 
-  uint32_t getSerializedSize() const {
-    // The header: the magic number and the metadata length.
-    uint32_t totalSize = sizeof(kMagicNumber) + sizeof(totalSize);
-    // cudfMetadata: length info and then the data.
-    WireLengthType cudfSize = cudfMetadata ? cudfMetadata->size() : 0;
-    totalSize += sizeof(cudfSize);
-    totalSize += cudfSize;
-    // dataSizeBytes
-    totalSize += sizeof(dataSizeBytes);
-    // numRows
-    totalSize += sizeof(numRows);
-    // remainingBytes: length and then the data.
-    totalSize += sizeof(WireLengthType); // for numRemaining count
-    totalSize += remainingBytes.size() * sizeof(remainingBytes[0]);
-    // atEnd, encoded in a byte.
-    totalSize += sizeof(uint8_t);
-
-    return totalSize;
-  }
+  uint32_t getSerializedSize() const;
 
   /// Serializes this metadata record into a newly allocated buffer.
   std::pair<std::shared_ptr<uint8_t>, size_t> serialize();
 
-  /// Deserializes a MetadataMsg from a buffer produced by serialize().
-  static MetadataMsg deserializeMetadataMsg(const uint8_t* buffer);
+  /// Deserializes a MetadataMsg from a buffer produced by serialize(). The
+  /// explicit capacity is required because totalSize is received from the
+  /// peer and must be validated before it is used for pointer arithmetic.
+  static MetadataMsg deserializeMetadataMsg(
+      const uint8_t* buffer,
+      size_t bufferCapacity);
 };
 
 } // namespace facebook::velox::ucx_exchange

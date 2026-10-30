@@ -23,15 +23,23 @@ namespace facebook::velox::ucx_exchange {
 UcxExchangeClient::UcxExchangeClient(
     std::string taskId,
     int destination,
-    int32_t numberOfConsumers)
+    int32_t numberOfConsumers,
+    uint64_t receiveHighWaterBytes,
+    int32_t requestDataSizesMaxWaitSec)
     : taskId_{std::move(taskId)},
       maxQueuedColumns_(kDefaultMaxQueuedColumns),
-      queue_(std::make_shared<UcxExchangeQueue>(numberOfConsumers)) {
+      requestDataSizesMaxWaitSec_(requestDataSizesMaxWaitSec),
+      queue_(
+          std::make_shared<UcxExchangeQueue>(
+              numberOfConsumers,
+              receiveHighWaterBytes)) {
   VELOX_CHECK_GE(
       destination, 0, "Exchange client destination must not be negative");
 }
 
 void UcxExchangeClient::addRemoteTaskId(std::string_view remoteTaskId) {
+  std::shared_ptr<UcxExchangeSource> source;
+  std::shared_ptr<UcxExchangeSource> toStart;
   std::shared_ptr<UcxExchangeSource> toClose;
   {
     std::lock_guard<std::mutex> l(queue_->mutex());
@@ -44,15 +52,33 @@ void UcxExchangeClient::addRemoteTaskId(std::string_view remoteTaskId) {
       return;
     }
 
-    std::shared_ptr<UcxExchangeSource> source;
-    source = UcxExchangeSource::create(taskId_, *remoteTaskIdIt, queue_);
+    try {
+      // create() constructs a dormant source; start() below is the publication
+      // point and is intentionally outside this queue critical section.
+      source = UcxExchangeSource::create(taskId_, *remoteTaskIdIt, queue_);
+    } catch (...) {
+      remoteTaskIds_.erase(remoteTaskIdIt);
+      throw;
+    }
 
     if (closed_) {
       toClose = std::move(source);
     } else {
-      sources_.push_back(source);
-      queue_->addSourceLocked();
-      source->setRegistered();
+      try {
+        // Retain and account for the source before publishing it. A fast
+        // Communicator thread may complete the handshake immediately after
+        // start(), so setRegistered() must already be visible at that point.
+        sources_.push_back(source);
+        queue_->addSourceLocked();
+        source->setRegistered();
+        toStart = source;
+      } catch (...) {
+        if (!sources_.empty() && sources_.back() == source) {
+          sources_.pop_back();
+        }
+        remoteTaskIds_.erase(remoteTaskIdIt);
+        throw;
+      }
       VLOG(3) << "@" << taskId_
               << " Added remote split for task: " << remoteTaskId;
     }
@@ -61,6 +87,25 @@ void UcxExchangeClient::addRemoteTaskId(std::string_view remoteTaskId) {
   // Outside of lock.
   if (toClose) {
     toClose->close();
+    return;
+  }
+
+  try {
+    toStart->start();
+  } catch (...) {
+    // The source was already counted in the queue. close() delivers its end
+    // marker even if Communicator registration failed partway through.
+    try {
+      toStart->close();
+    } catch (...) {
+      try {
+        queue_->setError("Failed to start or close UCX exchange source");
+      } catch (...) {
+        LOG(ERROR) << "Failed to start or close UCX exchange source and to "
+                      "record the queue error";
+      }
+    }
+    throw;
   }
 }
 
@@ -70,18 +115,16 @@ void UcxExchangeClient::noMoreRemoteTasks() {
 }
 
 void UcxExchangeClient::close() {
-  std::vector<std::shared_ptr<UcxExchangeSource>> sources;
   {
     std::lock_guard<std::mutex> l(queue_->mutex());
-    if (closed_) {
-      return;
-    }
     closed_ = true;
-    sources = std::move(sources_);
   }
 
-  // Outside of mutex.
-  for (auto& source : sources) {
+  // Outside of mutex. Keep the stable source list until client destruction so
+  // a repeated close (including the destructor after Task shutdown) retries a
+  // cleanup handoff that may have failed under transient host allocation
+  // pressure. addRemoteTaskId() cannot mutate sources_ after closed_ is set.
+  for (auto& source : sources_) {
     source->close();
   }
   queue_->close();
@@ -102,6 +145,11 @@ UcxExchangeClient::next(int consumerId, bool* atEnd, ContinueFuture* future) {
   std::vector<std::shared_ptr<UcxExchangeSource>> sourcesToResume;
   {
     std::lock_guard<std::mutex> l(queue_->mutex());
+    if (queue_->isInError()) {
+      // A terminal receive error must not be masked as clean EOS merely
+      // because failReceive() also closed this client.
+      return queue_->dequeueLocked(consumerId, atEnd, future, &stalePromise);
+    }
     if (closed_) {
       *atEnd = true;
       return data;
@@ -150,13 +198,17 @@ UcxExchangeClient::next(int consumerId, bool* atEnd, ContinueFuture* future) {
       }
     }
 
-    // Collect sources that need resuming while holding the lock.
+    // Collect sources that need resuming while holding the lock. Sources
+    // publish their dormant state under this same mutex, making the decision
+    // atomic with respect to dequeue and preventing a lost wake-up.
     // We call resumeFromBackpressure() outside the lock to avoid a
     // lock-ordering hazard: it acquires WorkQueue::mutex_ via
     // addToWorkQueue(), and holding queue_->mutex_ here would impose
     // queue_->mutex_ → WorkQueue::mutex_ ordering.
-    if (data != nullptr &&
-        queue_->size() <= UcxExchangeSource::kBackpressureLowWaterMark) {
+    const bool shouldResume =
+        queue_->size() <= UcxExchangeSource::kBackpressureLowWaterMark &&
+        queue_->receiveCanPrefetchLocked();
+    if (shouldResume) {
       sourcesToResume.assign(sources_.begin(), sources_.end());
     }
   }
@@ -169,6 +221,41 @@ UcxExchangeClient::next(int consumerId, bool* atEnd, ContinueFuture* future) {
     stalePromise.setValue();
   }
   return data;
+}
+
+void UcxExchangeClient::releaseInFlightReceiveBytes(uint64_t bytes) {
+  std::vector<std::shared_ptr<UcxExchangeSource>> sourcesToResume;
+  {
+    std::lock_guard<std::mutex> lock(queue_->mutex());
+    queue_->releaseInFlightReceiveBytesLocked(bytes);
+    const bool shouldResume = !closed_ &&
+        queue_->size() <= UcxExchangeSource::kBackpressureLowWaterMark &&
+        queue_->receiveCanPrefetchLocked();
+    if (shouldResume) {
+      sourcesToResume.assign(sources_.begin(), sources_.end());
+    }
+  }
+
+  // addToWorkQueue() takes its own mutex, so never call it while holding the
+  // exchange queue mutex.
+  for (auto& source : sourcesToResume) {
+    source->resumeFromBackpressure();
+  }
+}
+
+void UcxExchangeClient::failReceive(std::string_view error) noexcept {
+  try {
+    queue_->setError(error);
+  } catch (...) {
+    LOG(ERROR) << "Failed to record terminal UCX receive error";
+  }
+
+  try {
+    close();
+  } catch (...) {
+    LOG(ERROR) << "Failed to close UCX exchange client after terminal receive "
+                  "error";
+  }
 }
 
 UcxExchangeClient::~UcxExchangeClient() {

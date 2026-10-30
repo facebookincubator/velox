@@ -13,6 +13,7 @@
 # limitations under the License.
 set(
   UCX_EXCHANGE_SOURCES
+  CommElement.cpp
   UcxPartitionedOutput.cpp
   UcxOutputQueueManager.cpp
   UcxQueues.cpp
@@ -45,10 +46,8 @@ configure_file(
 
 add_library(velox_ucx_exchange OBJECT ${UCX_EXCHANGE_SOURCES})
 
-# Communicator.cpp includes the generated header by its full path,
-# velox/experimental/ucx-exchange/UcxExchangeModules.h, which resolves from
-# the build tree's root.
-target_include_directories(velox_ucx_exchange PRIVATE ${PROJECT_BINARY_DIR})
+# Communicator.cpp includes the generated module header by its basename.
+target_include_directories(velox_ucx_exchange PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
 
 find_package(ucx REQUIRED)
 
