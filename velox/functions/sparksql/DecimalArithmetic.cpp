@@ -156,6 +156,14 @@ template <typename TExec>
 using CheckedMultiplyFunctionDenyPrecisionLoss =
     CheckedDecimalMultiplyFunction<TExec, false>;
 
+template <typename TExec>
+using CheckedDivideFunctionAllowPrecisionLoss =
+    CheckedDecimalDivideFunction<TExec, true>;
+
+template <typename TExec>
+using CheckedDivideFunctionDenyPrecisionLoss =
+    CheckedDecimalDivideFunction<TExec, false>;
+
 std::vector<exec::SignatureVariable> getDivideConstraintsDenyPrecisionLoss() {
   std::string wholeDigits = fmt::format(
       "min(38, {a_precision} - {a_scale} + {b_scale})",
@@ -298,6 +306,11 @@ void registerDecimalDivide(const std::string& prefix) {
       prefix + "divide", getDivideConstraintsAllowPrecisionLoss());
   registerDecimalDivide<DivideFunctionDenyPrecisionLoss>(
       prefix + "divide" + kDenyPrecisionLoss,
+      getDivideConstraintsDenyPrecisionLoss());
+  registerDecimalDivide<CheckedDivideFunctionAllowPrecisionLoss>(
+      prefix + "checked_divide", getDivideConstraintsAllowPrecisionLoss());
+  registerDecimalDivide<CheckedDivideFunctionDenyPrecisionLoss>(
+      prefix + "checked_divide" + kDenyPrecisionLoss,
       getDivideConstraintsDenyPrecisionLoss());
 }
 
