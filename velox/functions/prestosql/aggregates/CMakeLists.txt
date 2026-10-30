@@ -30,6 +30,7 @@ velox_add_library(
   CovarianceAggregates.cpp
   ChecksumAggregate.cpp
   ClassificationAggregation.cpp
+  DifferentialEntropyAggregate.cpp
   EntropyAggregates.cpp
   GeometricMeanAggregate.cpp
   HistogramAggregate.cpp
@@ -78,6 +79,7 @@ velox_add_library(
   CountAggregate.h
   CountIfAggregate.h
   CovarianceAggregates.h
+  DifferentialEntropyAggregate.h
   EntropyAggregates.h
   GeometricMeanAggregate.h
   GeometryAggregate.h

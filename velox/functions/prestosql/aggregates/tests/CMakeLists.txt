@@ -33,6 +33,7 @@ set(
   CountDistinctTest.cpp
   CountIfAggregationTest.cpp
   CovarianceAggregationTest.cpp
+  DifferentialEntropyAggregationTest.cpp
   EntropyAggregationTest.cpp
   GeometricMeanTest.cpp
   HistogramTest.cpp
