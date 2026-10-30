@@ -60,8 +60,7 @@ void registerMathFunctions(const std::string& prefix) {
       {prefix + "hex"});
   registerFunction<ExpFunction, double, double>({prefix + "exp"});
   registerFunction<Expm1Function, double, double>({prefix + "expm1"});
-  registerBinaryIntegral<PModIntFunction>({prefix + "pmod"});
-  registerBinaryFloatingPoint<PModFloatFunction>({prefix + "pmod"});
+  registerBinaryNumeric<PmodFunction>({prefix + "pmod"});
   registerFunction<PowerFunction, double, double, double>({prefix + "power"});
   registerFunction<RIntFunction, double, double>({prefix + "rint"});
   registerUnaryNumeric<RoundFunction>({prefix + "round"});
