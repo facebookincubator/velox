@@ -247,7 +247,7 @@ TEST_F(SizeTest, differentialEncodings) {
       {"size_reference"});
 
   const auto check = [&](const VectorPtr& input, const VectorPtr& reference) {
-    SCOPED_TRACE(input->toSummaryString());
+    SCOPED_TRACE(input->toString());
     const auto numRows = input->size();
     auto data = makeRowVector({input});
     for (const auto legacy : {false, true}) {
