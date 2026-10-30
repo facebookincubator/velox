@@ -238,6 +238,10 @@ class AssertQueryBuilder {
   uint64_t countResults();
 
  private:
+  void prepareCursorParams();
+
+  std::function<ContinueFuture(TaskCursor*)> createSplitCallback();
+
   std::pair<std::unique_ptr<TaskCursor>, std::vector<RowVectorPtr>>
   readCursor();
 

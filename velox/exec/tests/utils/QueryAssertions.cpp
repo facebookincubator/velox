@@ -1419,14 +1419,14 @@ std::pair<std::unique_ptr<TaskCursor>, std::vector<RowVectorPtr>> readCursor(
       maxWaitMicros);
 }
 
-std::pair<std::unique_ptr<TaskCursor>, std::vector<RowVectorPtr>>
-readCursorAsync(
+namespace {
+template <typename TConsumer>
+std::unique_ptr<TaskCursor> processCursorAsync(
     const CursorParameters& params,
     std::function<ContinueFuture(TaskCursor*)> addSplits,
-    uint64_t maxWaitMicros) {
+    uint64_t maxWaitMicros,
+    TConsumer&& consumer) {
   auto cursor = TaskCursor::create(params);
-  // 'result' borrows memory from cursor so the life cycle must be shorter.
-  std::vector<RowVectorPtr> result;
   auto* task = cursor->task().get();
   cursor->start();
   auto future = ContinueFuture::makeEmpty();
@@ -1438,7 +1438,7 @@ readCursorAsync(
     while (cursor->moveNext()) {
       auto vector = cursor->current();
       vector->loadedVector();
-      result.push_back(std::move(vector));
+      consumer(std::move(vector));
       testingMaybeTriggerAbort(task);
     }
   }
@@ -1459,7 +1459,36 @@ readCursorAsync(
           task->toString());
     }
   }
+  return cursor;
+}
+} // namespace
+
+std::pair<std::unique_ptr<TaskCursor>, std::vector<RowVectorPtr>>
+readCursorAsync(
+    const CursorParameters& params,
+    std::function<ContinueFuture(TaskCursor*)> addSplits,
+    uint64_t maxWaitMicros) {
+  // 'result' borrows memory from cursor so the life cycle must be shorter.
+  std::vector<RowVectorPtr> result;
+  auto cursor = processCursorAsync(
+      params,
+      std::move(addSplits),
+      maxWaitMicros,
+      [&](RowVectorPtr vector) { result.push_back(std::move(vector)); });
   return {std::move(cursor), std::move(result)};
+}
+
+std::pair<std::unique_ptr<TaskCursor>, uint64_t> countCursorAsync(
+    const CursorParameters& params,
+    std::function<ContinueFuture(TaskCursor*)> addSplits,
+    uint64_t maxWaitMicros) {
+  uint64_t count = 0;
+  auto cursor = processCursorAsync(
+      params,
+      std::move(addSplits),
+      maxWaitMicros,
+      [&](RowVectorPtr vector) { count += vector->size(); });
+  return {std::move(cursor), count};
 }
 
 bool waitForTaskFinish(
