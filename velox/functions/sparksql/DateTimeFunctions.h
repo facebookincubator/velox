@@ -959,32 +959,51 @@ template <typename T>
 struct MakeYMIntervalFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
-  FOLLY_ALWAYS_INLINE void call(out_type<IntervalYearMonth>& result) {
-    result = 0;
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& config,
+      const int32_t* /*year*/ = nullptr,
+      const int32_t* /*month*/ = nullptr) {
+    ansiEnabled_ = SparkQueryConfig{config}.ansiEnabled();
   }
 
-  FOLLY_ALWAYS_INLINE void call(
+  FOLLY_ALWAYS_INLINE bool call(out_type<IntervalYearMonth>& result) {
+    result = 0;
+    return true;
+  }
+
+  FOLLY_ALWAYS_INLINE bool call(
       out_type<IntervalYearMonth>& result,
       const int32_t year) {
-    VELOX_USER_CHECK(
-        !__builtin_mul_overflow(year, kMonthInYear, &result),
-        "Integer overflow in make_ym_interval({})",
-        year);
+    if (FOLLY_UNLIKELY(__builtin_mul_overflow(year, kMonthInYear, &result))) {
+      ansiUserFail(
+          ansiEnabled_,
+          "Integer overflow in make_ym_interval({})",
+          year);
+      return false;
+    }
+    return true;
   }
 
-  FOLLY_ALWAYS_INLINE void call(
+  FOLLY_ALWAYS_INLINE bool call(
       out_type<IntervalYearMonth>& result,
       const int32_t year,
       const int32_t month) {
     auto totalMonths = (int64_t)year * kMonthInYear + month;
-    VELOX_USER_CHECK_EQ(
-        totalMonths,
-        (int32_t)totalMonths,
-        "Integer overflow in make_ym_interval({}, {})",
-        year,
-        month);
+    if (FOLLY_UNLIKELY(totalMonths != (int32_t)totalMonths)) {
+      ansiUserFail(
+          ansiEnabled_,
+          "Integer overflow in make_ym_interval({}, {})",
+          year,
+          month);
+      return false;
+    }
     result = totalMonths;
+    return true;
   }
+
+ private:
+  bool ansiEnabled_{false};
 };
 
 template <typename T>
