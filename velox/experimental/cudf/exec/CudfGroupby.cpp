@@ -2102,6 +2102,50 @@ RowVectorPtr CudfGroupby::doGetOutput() {
     return nullptr;
   }
 
+  if (noMoreInput_) {
+    finished_ = true;
+  }
+
+  // Single-batch fast path (#19855). The driver requests output after every
+  // addInput(), so on the non-incremental partial step `inputs_` usually holds
+  // exactly one batch. Routing that batch through getConcatenatedTable() copies
+  // it onto a fresh pool stream and then blocks the driver thread in
+  // stream.sync() before the aggregation -- one device-to-device copy and one
+  // host stall per batch. Neither is needed for a single batch: aggregate it
+  // directly from its own table view on its own stream, exactly as the
+  // incremental partial path (computePartialGroupbyIncrementally) already does.
+  //
+  // Lifetime/stream safety mirrors that path: `input` stays alive for the whole
+  // call; the aggregation runs on the input's own stream; and its result is
+  // stamped with the same stream. The input's buffers are therefore read and
+  // freed on one stream -- the free is enqueued (when `input` goes out of scope
+  // here) after the aggregate's asynchronous reads, so it cannot race them. No
+  // copy, no synchronization, and no cross-stream deallocation hazard. Multiple
+  // pending batches still need a real concatenation and fall through below.
+  if (inputs_.size() == 1) {
+    common::testutil::TestValue::adjust(
+        "CudfGroupby::doGetOutput::singleBatchFastPath", this);
+    auto input = std::move(inputs_.front());
+    inputs_.clear();
+    const auto inputStream = input->stream();
+    auto permutedInputView = input->getTableView().select(
+        aggregationInputChannels_.begin(), aggregationInputChannels_.end());
+    return doGroupByAggregation(
+        permutedInputView,
+        groupingKeyOutputChannels_,
+        aggregators_,
+        outputType_,
+        inputStream,
+        get_output_mr());
+  }
+
+  // General path: multiple pending batches (or an empty final flush) must be
+  // concatenated into one table first. The concatenate runs on a fresh pool
+  // stream joined to every input's stream; we synchronize before releasing the
+  // inputs, then aggregate the concatenated table.
+  common::testutil::TestValue::adjust(
+      "CudfGroupby::doGetOutput::concatPath", this);
+
   auto stream = cudfGlobalStreamPool().get_stream();
 
   auto tbl = getConcatenatedTable(
@@ -2110,10 +2154,6 @@ RowVectorPtr CudfGroupby::doGetOutput() {
   // Release input data after synchronizing.
   stream.sync();
   inputs_.clear();
-
-  if (noMoreInput_) {
-    finished_ = true;
-  }
 
   VELOX_CHECK_NOT_NULL(tbl);
 

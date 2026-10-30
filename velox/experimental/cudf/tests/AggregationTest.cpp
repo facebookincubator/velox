@@ -991,6 +991,96 @@ TEST_F(AggregationTest, companionAggs) {
       op, "SELECT c0, count(c1), count(distinct c2) FROM tmp GROUP BY c0");
 }
 
+// Builds the companion-aggregate plan from the companionAggs test above.
+// Companion aggregates disable incremental aggregation, so each CudfGroupby
+// buffers its inputs in inputs_ and aggregates them in doGetOutput() -- the
+// non-incremental path optimized in #19855.
+namespace {
+core::PlanNodePtr makeCompanionAggPlan(const RowVectorPtr& rowVector) {
+  return PlanBuilder()
+      .values({rowVector})
+      .singleAggregation({"c2", "c0"}, {"count_partial(c1)"})
+      .localPartition({"c2", "c0"})
+      .singleAggregation({"c0"}, {"count_merge(a0)", "count_partial(c2)"})
+      .localPartition({"c0"})
+      .singleAggregation({"c0"}, {"count_merge(a0)", "count_merge(a1)"})
+      .planNode();
+}
+} // namespace
+
+// #19855: a single pending batch on the non-incremental path must be aggregated
+// without a concatenation copy and without a stream synchronization. With one
+// input batch per CudfGroupby the single-batch fast path must be taken and the
+// concatenation path must not run; results must still match the CPU engine.
+DEBUG_ONLY_TEST_F(AggregationTest, nonIncrementalSingleBatchFastPath) {
+  std::vector<int64_t> keys0{1, 1, 1, 2, 1, 1, 2, 2};
+  std::vector<int64_t> keys1{1, 2, 1, 2, 1, 2, 1, 2};
+  std::vector<int64_t> values{1, 2, 3, 4, 5, 6, 7, 8};
+  auto rowVector = makeRowVector(
+      {makeFlatVector<int64_t>(keys0),
+       makeFlatVector<int64_t>(keys1),
+       makeFlatVector<int64_t>(values)});
+  createDuckDbTable({rowVector});
+
+  size_t fastPath = 0;
+  size_t concatPath = 0;
+  SCOPED_TESTVALUE_SET(
+      "CudfGroupby::doGetOutput::singleBatchFastPath",
+      std::function<void(cudf_velox::CudfGroupby*)>(
+          [&](cudf_velox::CudfGroupby*) { ++fastPath; }));
+  SCOPED_TESTVALUE_SET(
+      "CudfGroupby::doGetOutput::concatPath",
+      std::function<void(cudf_velox::CudfGroupby*)>(
+          [&](cudf_velox::CudfGroupby*) { ++concatPath; }));
+
+  // A GPU batch size well above the row count keeps the whole input in a single
+  // batch per CudfGroupby, so every non-incremental getOutput() sees
+  // inputs_.size() == 1.
+  AssertQueryBuilder(duckDbQueryRunner_)
+      .maxDrivers(1)
+      .config(cudf_velox::CudfFromVelox::kGpuBatchSizeRows, "1024")
+      .plan(makeCompanionAggPlan(rowVector))
+      .assertResults(
+          "SELECT c0, count(c1), count(distinct c2) FROM tmp GROUP BY c0");
+
+  EXPECT_GE(fastPath, 1);
+  EXPECT_EQ(concatPath, 0);
+}
+
+// #19855: the multi-batch behavior must be preserved. When a non-incremental
+// CudfGroupby has more than one pending batch, it must fall back to the
+// concatenation path (and still produce correct results).
+DEBUG_ONLY_TEST_F(AggregationTest, nonIncrementalMultiBatchConcatFallback) {
+  std::vector<int64_t> keys0{1, 1, 1, 2, 1, 1, 2, 2};
+  std::vector<int64_t> keys1{1, 2, 1, 2, 1, 2, 1, 2};
+  std::vector<int64_t> values{1, 2, 3, 4, 5, 6, 7, 8};
+  auto rowVector = makeRowVector(
+      {makeFlatVector<int64_t>(keys0),
+       makeFlatVector<int64_t>(keys1),
+       makeFlatVector<int64_t>(values)});
+  createDuckDbTable({rowVector});
+
+  size_t concatPath = 0;
+  SCOPED_TESTVALUE_SET(
+      "CudfGroupby::doGetOutput::concatPath",
+      std::function<void(cudf_velox::CudfGroupby*)>(
+          [&](cudf_velox::CudfGroupby*) { ++concatPath; }));
+
+  // A tiny GPU batch size splits the source into several batches, so the first
+  // (non-incremental) CudfGroupby buffers more than one batch and must take the
+  // concatenation path.
+  AssertQueryBuilder(duckDbQueryRunner_)
+      .maxDrivers(1)
+      .config(cudf_velox::CudfFromVelox::kGpuBatchSizeRows, "2")
+      .plan(makeCompanionAggPlan(rowVector))
+      .assertResults(
+          "SELECT c0, count(c1), count(distinct c2) FROM tmp GROUP BY c0");
+
+  // Guard against a vacuous pass if batching changes and the concat path is
+  // skipped entirely.
+  EXPECT_GE(concatPath, 1);
+}
+
 TEST_F(AggregationTest, partialAggregationMemoryLimit) {
   auto vectors = {
       makeRowVector({makeFlatVector<int32_t>(
