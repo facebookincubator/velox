@@ -44,6 +44,31 @@
 #include "velox/dwio/nimble/encodings/views/VarintEncodingView.h"
 
 namespace facebook::nimble {
+namespace {
+
+// Checks that 'data' starts with a complete encoding prefix, so that reading
+// the prefix stays inside it.
+void checkEncodingPrefix(std::string_view data, bool useVarintRowCount) {
+  if (!useVarintRowCount) {
+    NIMBLE_CHECK_FILE_GE(
+        data.size(),
+        EncodingPrefix::kFixedPrefixSize,
+        "Truncated encoding prefix.");
+    return;
+  }
+  size_t end = EncodingPrefix::kRowCountOffset;
+  while (end < data.size() && (static_cast<uint8_t>(data[end]) & 0x80) != 0) {
+    ++end;
+  }
+  NIMBLE_CHECK_FILE_LT(end, data.size(), "Truncated encoding prefix.");
+  NIMBLE_CHECK_FILE_LT(
+      end - EncodingPrefix::kRowCountOffset,
+      5,
+      "Encoding row count varint is too long.");
+}
+
+} // namespace
+
 namespace detail {
 
 template <typename T>
@@ -52,6 +77,7 @@ std::unique_ptr<TypedEncodingView<T>> createTypedEncodingView(
     velox::memory::MemoryPool* pool,
     const Encoding::Options& options) {
   using physicalType = typename TypeTraits<T>::physicalType;
+  checkEncodingPrefix(data, options.useVarintRowCount);
   if constexpr (std::is_same_v<T, bool>) {
     NIMBLE_CHECK_FILE_EQ(
         EncodingPrefix::readDataType(data),
@@ -272,6 +298,7 @@ std::unique_ptr<EncodingView> createEncodingView(
     std::string_view data,
     velox::memory::MemoryPool* pool,
     const Encoding::Options& options) {
+  checkEncodingPrefix(data, options.useVarintRowCount);
   const auto dataType = EncodingPrefix::dataType(data);
   switch (dataType) {
     case DataType::Int8:

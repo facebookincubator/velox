@@ -635,4 +635,206 @@ TEST_P(EncodingViewFactoryTest, rejectsFixedBitWidthWithNonNumericDataType) {
       "FixedBitWidth encoding should not be selected for non-numeric data types");
 }
 
+namespace {
+
+// Returns a fixed-format prefix followed by 'payload'.
+std::string withPrefix(
+    nimble::EncodingType encodingType,
+    nimble::DataType dataType,
+    uint32_t rowCount,
+    std::string_view payload) {
+  std::string serialized(nimble::EncodingPrefix::kFixedPrefixSize, 0);
+  char* pos = serialized.data();
+  nimble::encoding::writeChar(static_cast<char>(encodingType), pos);
+  nimble::encoding::writeChar(static_cast<char>(dataType), pos);
+  nimble::encoding::writeUint32(rowCount, pos);
+  serialized.append(payload);
+  return serialized;
+}
+
+std::string uint32Bytes(uint32_t value) {
+  std::string bytes(sizeof(uint32_t), 0);
+  char* pos = bytes.data();
+  nimble::encoding::writeUint32(value, pos);
+  return bytes;
+}
+
+} // namespace
+
+TEST_P(EncodingViewFactoryTest, rejectsTruncatedPrefix) {
+  {
+    SCOPED_TRACE("fixed row count");
+    const nimble::Encoding::Options options{
+        .cacheEncodingView = cacheEncodingView()};
+    NIMBLE_ASSERT_FILE_THROW(
+        nimble::createEncodingView(
+            std::string_view{"\x01\x05", 2}, pool_.get(), options),
+        "Truncated encoding prefix.");
+  }
+  {
+    SCOPED_TRACE("unterminated varint row count");
+    const nimble::Encoding::Options options{
+        .useVarintRowCount = true, .cacheEncodingView = cacheEncodingView()};
+    NIMBLE_ASSERT_FILE_THROW(
+        nimble::createEncodingView(
+            std::string_view{"\x01\x05\x80", 3}, pool_.get(), options),
+        "Truncated encoding prefix.");
+  }
+}
+
+TEST_P(EncodingViewFactoryTest, rejectsCorruptTrivialPayloads) {
+  const nimble::Encoding::Options options{
+      .cacheEncodingView = cacheEncodingView()};
+  {
+    SCOPED_TRACE("missing compression type");
+    NIMBLE_ASSERT_FILE_THROW(
+        nimble::createEncodingView(
+            withPrefix(
+                nimble::EncodingType::Trivial, nimble::DataType::Int32, 4, ""),
+            pool_.get(),
+            options),
+        "Truncated Trivial encoding.");
+  }
+  {
+    SCOPED_TRACE("short values");
+    NIMBLE_ASSERT_FILE_THROW(
+        nimble::createEncodingView(
+            withPrefix(
+                nimble::EncodingType::Trivial,
+                nimble::DataType::Int32,
+                4,
+                std::string(9, '\0')),
+            pool_.get(),
+            options),
+        "Unexpected Trivial view end.");
+  }
+  {
+    SCOPED_TRACE("short bitmap");
+    NIMBLE_ASSERT_FILE_THROW(
+        nimble::createEncodingView(
+            withPrefix(
+                nimble::EncodingType::Trivial,
+                nimble::DataType::Bool,
+                20,
+                std::string(2, '\0')),
+            pool_.get(),
+            options),
+        "Unexpected Trivial bool view end.");
+  }
+  {
+    SCOPED_TRACE("string lengths past the end");
+    NIMBLE_ASSERT_FILE_THROW(
+        nimble::createEncodingView(
+            withPrefix(
+                nimble::EncodingType::Trivial,
+                nimble::DataType::String,
+                1,
+                std::string(1, '\0') + uint32Bytes(100) + "ab"),
+            pool_.get(),
+            options),
+        "Truncated Trivial string lengths.");
+  }
+}
+
+TEST_P(EncodingViewFactoryTest, rejectsCorruptFixedBitWidthPayloads) {
+  const nimble::Encoding::Options options{
+      .cacheEncodingView = cacheEncodingView()};
+  const auto header = [](uint8_t bitWidth) {
+    return std::string(1, '\0') + uint32Bytes(0) +
+        std::string(1, static_cast<char>(bitWidth));
+  };
+  {
+    SCOPED_TRACE("bit width wider than the type");
+    NIMBLE_ASSERT_FILE_THROW(
+        nimble::createEncodingView(
+            withPrefix(
+                nimble::EncodingType::FixedBitWidth,
+                nimble::DataType::Int32,
+                4,
+                header(40) + std::string(32, '\0')),
+            pool_.get(),
+            options),
+        "FixedBitWidth bit width exceeds its data type.");
+  }
+  {
+    SCOPED_TRACE("short payload");
+    NIMBLE_ASSERT_FILE_THROW(
+        nimble::createEncodingView(
+            withPrefix(
+                nimble::EncodingType::FixedBitWidth,
+                nimble::DataType::Int32,
+                64,
+                header(8) + std::string(1, '\0')),
+            pool_.get(),
+            options),
+        "FixedBitWidth payload is shorter than its rows.");
+  }
+}
+
+TEST_P(EncodingViewFactoryTest, rejectsNestedEncodingsPastTheEnd) {
+  const nimble::Encoding::Options options{
+      .cacheEncodingView = cacheEncodingView()};
+  {
+    SCOPED_TRACE("dictionary alphabet");
+    NIMBLE_ASSERT_FILE_THROW(
+        nimble::createEncodingView(
+            withPrefix(
+                nimble::EncodingType::Dictionary,
+                nimble::DataType::Int32,
+                1,
+                uint32Bytes(1'000)),
+            pool_.get(),
+            options),
+        "Truncated Dictionary alphabet.");
+  }
+  {
+    SCOPED_TRACE("mainly constant common flags");
+    NIMBLE_ASSERT_FILE_THROW(
+        nimble::createEncodingView(
+            withPrefix(
+                nimble::EncodingType::MainlyConstant,
+                nimble::DataType::Int32,
+                1,
+                uint32Bytes(1'000)),
+            pool_.get(),
+            options),
+        "Truncated MainlyConstant common flags.");
+  }
+}
+
+TEST_P(EncodingViewFactoryTest, rejectsMalformedVarints) {
+  const nimble::Encoding::Options options{
+      .cacheEncodingView = cacheEncodingView()};
+  {
+    SCOPED_TRACE("unterminated last varint");
+    NIMBLE_ASSERT_FILE_THROW(
+        nimble::createEncodingView(
+            withPrefix(
+                nimble::EncodingType::Varint,
+                nimble::DataType::Uint32,
+                1,
+                uint32Bytes(0) + "\x80"),
+            pool_.get(),
+            options),
+        "Varint payload is truncated");
+  }
+  {
+    SCOPED_TRACE("varint longer than 64 bits");
+    // An 8-byte baseline, one varint of 14 bytes and 15 one-byte varints.
+    const auto payload = std::string(sizeof(uint64_t), '\0') +
+        std::string(13, '\xff') + "\x01" + std::string(15, 1);
+    // The view points into 'encoded', so it must outlive the view.
+    const auto encoded = withPrefix(
+        nimble::EncodingType::Varint, nimble::DataType::Uint64, 16, payload);
+    // A cached view decodes every value when it is created, so the error can
+    // come from creation or from the read.
+    const auto createAndRead = [&] {
+      auto view = nimble::createEncodingView(encoded, pool_.get(), options);
+      std::array<uint64_t, 16> values{};
+      view->read(0, values.size(), values.data());
+    };
+    NIMBLE_ASSERT_FILE_THROW(createAndRead(), "Varint is longer than");
+  }
+}
+
 INSTANTIATE_ENCODING_VIEW_TEST_SUITE(EncodingViewFactoryTest);

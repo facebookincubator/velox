@@ -44,6 +44,19 @@ class VarintEncodingView final : public TypedEncodingView<T> {
       : TypedEncodingView<T>{data, pool, options},
         values_{this->template getVectorBuffer<physicalType>()} {
     NIMBLE_CHECK_EQ(this->encodingType_, EncodingType::Varint);
+    // Decoders read each varint up to its last byte, so a non-empty payload
+    // must follow the baseline and end with one.
+    NIMBLE_CHECK_FILE_GE(
+        data.size(),
+        this->dataOffset_ + sizeof(physicalType) +
+            (this->rowCount_ > 0 ? 1 : 0),
+        "Varint payload is truncated");
+    if (this->rowCount_ > 0) {
+      NIMBLE_CHECK_FILE_EQ(
+          static_cast<uint8_t>(data.back()) & 0x80,
+          0,
+          "Varint payload is truncated");
+    }
     if (!this->options_.cacheEncodingView) {
       return;
     }
