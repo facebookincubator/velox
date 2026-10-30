@@ -19,6 +19,7 @@
 
 #include "velox/common/base/Nulls.h"
 #include "velox/common/io/IoStatistics.h"
+#include "velox/dwio/common/ScanSpec.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/dwio/dwrf/reader/DwrfReader.h"
 #include "velox/dwio/dwrf/writer/FlushPolicy.h"
@@ -102,10 +103,11 @@ void verifyStats(
   }
 
   // Verify Stride Stats.
+  ColumnSelector selector(rowReader.getReader().schema());
   StripeStreamsImpl streams{
       std::make_shared<StripeReadState>(
           rowReader.readerBaseShared(), std::move(stripeMetadata)),
-      &rowReader.getColumnSelector(),
+      &selector,
       nullptr,
       rowReader.rowReaderOptions(),
       stripeInfo.offset(),
@@ -201,6 +203,7 @@ class ColumnWriterStatsTest : public ::testing::Test {
     readerOpts.setMetadataIoStats(metadataIoStats_);
     RowReaderOptions rowReaderOpts;
     auto reader = std::make_unique<DwrfReader>(readerOpts, std::move(input));
+    rowReaderOpts.setScanSpec(ScanSpec::allFieldsRoot(*reader->rowType()));
     return reader->createRowReader(rowReaderOpts);
   }
 
