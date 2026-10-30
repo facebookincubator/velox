@@ -58,7 +58,10 @@ namespace facebook::velox::cudf_velox {
 ///
 /// Rank-like functions (row_number, rank, dense_rank) use
 /// cudf::groupby::scan with cudf::make_rank_aggregation.
-/// Aggregate windows and lag/lead use cudf::grouped_rolling_window.
+/// ROWS frames and lag/lead use cudf::grouped_rolling_window. RANGE frames pass
+/// every ORDER BY key to cudf::grouped_range_rolling_window for peer matching.
+/// Full-partition AVG(DOUBLE) is computed once per partition and copied back to
+/// its rows.
 class CudfWindow : public CudfOperatorBase {
  public:
   CudfWindow(
