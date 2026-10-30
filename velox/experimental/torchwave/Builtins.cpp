@@ -508,36 +508,6 @@ std::vector<ValueConstraint> rank1Constraint(
   return {{.rank = 1, .contiguity = Contiguity::kContiguous}};
 }
 
-// Returns a scalar value from an attribute (int64_t or double) or a symint
-// input named 'name'. For double attributes, returns ceil.
-// 'attrNode' holds the attributes and 'node' the inputs. They differ when
-// congruent nodes share one compiled op: the formal node's inputs map to the
-// invocation's values, but its attributes are the representative's.
-int64_t integerParamByName(
-    NodeCP node,
-    NodeCP attrNode,
-    const char* name,
-    nativert::ExecutionFrame& frame,
-    const FormalToActual& map) {
-  const auto* attr = attrNode->tryGetAttribute(name);
-  if (attr) {
-    if (std::holds_alternative<int64_t>(attr->value)) {
-      return std::get<int64_t>(attr->value);
-    }
-    return static_cast<int64_t>(std::ceil(std::get<double>(attr->value)));
-  }
-  const auto* input = node->tryGetInput(name);
-  TORCH_CHECK(
-      input, node->target(), ": missing '", name, "' attribute or input");
-  return paramSymInt(input->value, frame, map);
-}
-
-// The node an invocation of a shared compiled op stands for.
-NodeCP invokedNode(NodeCP originalFormalNode, const NodeMap& nodeMap) {
-  auto it = nodeMap.find(originalFormalNode);
-  return it != nodeMap.end() ? it->second : originalFormalNode;
-}
-
 // Casts int64 scalar attributes to double when the first input is a
 // floating-point tensor. Without this, an attribute like other=2 (int64)
 // gets copied as raw bytes to a param slot the kernel reads as double.
@@ -853,6 +823,161 @@ bool onlyLeadingRowsUsed(ValueCP value, int64_t rows, const ValueTypes& types) {
   return true;
 }
 
+// new_full(x, size=[1], fill_value=s) with a dynamic s is the one-element
+// tensor unsqueeze(scalar_tensor(s), 0), which fuses where the eager
+// new_full is a launch of its own. The ads graph builds these as cat
+// operands from sym_size values. Empty for any other size.
+std::vector<std::pair<ValueCP, ValueCP>> newFullOfScalar(
+    NodeCP node,
+    const nativert::Attribute& sizeAttr,
+    WaveGraph& waveGraph) {
+  const auto* size = std::get_if<std::vector<int64_t>>(&sizeAttr.value);
+  const auto* fill = node->tryGetInput("fill_value");
+  if (size == nullptr || *size != std::vector<int64_t>{1} || fill == nullptr ||
+      fill->value == nullptr) {
+    return {};
+  }
+  const auto outDtype = resolveOutDtype(node, &waveGraph).first;
+  auto* graph = waveGraph.graph();
+  auto* insertAt = const_cast<nativert::Node*>(node);
+  auto* scalarNode = graph->createNode(
+      "torch.ops.aten.scalar_tensor.default", {{"s", fill->value}});
+  scalarNode->addAttribute({"dtype", outDtype});
+  if (auto* dev = facebook::velox::wave::currentDevice()) {
+    scalarNode->addAttribute(
+        {"device",
+         c10::Device(
+             c10::kCUDA, static_cast<c10::DeviceIndex>(dev->deviceId))});
+  }
+  graph->insertBefore(scalarNode, insertAt);
+  // Not newTensorValue: congruent nodes share one compiled op.
+  auto* scalar = scalarNode->addOutput(
+      graph->getUniqueValueName(),
+      nativert::Type(nativert::Type::Kind::Tensor));
+  waveGraph.registerTensorMeta(scalar, outDtype);
+  auto* unsqueezeNode =
+      graph->createNode("torch.ops.aten.unsqueeze.default", {{"self", scalar}});
+  unsqueezeNode->addAttribute({"dim", int64_t{0}});
+  graph->insertBefore(unsqueezeNode, insertAt);
+  auto* result = unsqueezeNode->addOutput(
+      graph->getUniqueValueName(),
+      nativert::Type(nativert::Type::Kind::Tensor));
+  waveGraph.registerTensorMeta(result, outDtype);
+  return {{node->outputs()[0], result}};
+}
+
+// cumsum(new_ones(x, [n]), dim=0) with an integer dtype is arange(n) + 1.
+// This catches the new_ones whose size is a dynamic value, which the new_ones
+// rewrite to a fused ones cannot express: they would run as an eager fill
+// plus a scan. The range is a tw.arange_mem, materialized and sized from n,
+// and the + 1 fuses into its consumers. Empty when the pattern does not match.
+std::vector<std::pair<ValueCP, ValueCP>> cumsumOfOnesAsArange(
+    NodeCP node,
+    const ValueTypes& types,
+    WaveGraph& waveGraph) {
+  const auto dim = constIntArg(node, "dim");
+  if (!dim.has_value() || (*dim != 0 && *dim != -1)) {
+    return {};
+  }
+  // The normalization adds the dtype a Long cumsum resolves to.
+  if (const auto* dtype = node->tryGetAttribute("dtype")) {
+    const auto* type = std::get_if<c10::ScalarType>(&dtype->value);
+    if (!std::holds_alternative<nativert::None>(dtype->value) &&
+        (type == nullptr || *type != c10::ScalarType::Long)) {
+      return {};
+    }
+  }
+  auto* ones = inputAt(node, 0);
+  auto* onesNode = ones->producer();
+  if (onesNode == nullptr ||
+      onesNode->target() != "torch.ops.aten.new_ones.default" ||
+      ones->users().size() != 1 || types.graphOutput(ones)) {
+    return {};
+  }
+  const auto* sizeInput = onesNode->tryGetInput("size");
+  if (sizeInput == nullptr || sizeInput->value == nullptr) {
+    return {};
+  }
+  auto* pack = sizeInput->value->producer();
+  if (pack == nullptr || pack->target() != "prim.ListPack" ||
+      pack->inputs().size() != 1) {
+    return {};
+  }
+  auto* extent = pack->inputs()[0].value;
+  const auto onesId = ones->id();
+  if (static_cast<size_t>(onesId) >= types.types.size() ||
+      types.types[onesId] == nullptr ||
+      !c10::isIntegralType(
+          types.types[onesId]->dtype(), /*includeBool=*/false)) {
+    return {};
+  }
+  constexpr auto kOutDtype = c10::ScalarType::Long;
+  auto* graph = waveGraph.graph();
+  auto* insertAt = const_cast<nativert::Node*>(node);
+  auto* rangeNode = graph->createNode("tw.arange_mem", {{"end", extent}});
+  rangeNode->addAttribute({"dtype", kOutDtype});
+  graph->insertBefore(rangeNode, insertAt);
+  // Not newTensorValue: congruent nodes share one compiled op.
+  auto* range = rangeNode->addOutput(
+      graph->getUniqueValueName(),
+      nativert::Type(nativert::Type::Kind::Tensor));
+  waveGraph.registerTensorMeta(range, kOutDtype);
+  auto* addNode =
+      graph->createNode("torch.ops.aten.add.Scalar", {{"self", range}});
+  addNode->addAttribute({"other", int64_t{1}});
+  addNode->addAttribute({"alpha", int64_t{1}});
+  graph->insertBefore(addNode, insertAt);
+  auto* result = addNode->addOutput(
+      graph->getUniqueValueName(),
+      nativert::Type(nativert::Type::Kind::Tensor));
+  waveGraph.registerTensorMeta(result, kOutDtype);
+  return {{node->outputs()[0], result}};
+}
+
+// any(x, dims) of a bool x over a trailing run of its dims, keepdim false,
+// rewritten to tw.any_rows over the rows the leading dims index. Empty when
+// the reduced dims are not the trailing ones or leave no leading dim.
+std::vector<std::pair<ValueCP, ValueCP>> anyRowsOf(
+    NodeCP node,
+    const ValueTypes& types,
+    WaveGraph& waveGraph,
+    std::vector<int64_t> reduced) {
+  auto* input = inputAt(node, 0);
+  const auto rank = types.rank(input);
+  if (const auto* keepdim = node->tryGetAttribute("keepdim")) {
+    const auto* flag = std::get_if<bool>(&keepdim->value);
+    if (flag == nullptr || *flag) {
+      return {};
+    }
+  }
+  const auto inputId = input->id();
+  if (static_cast<size_t>(inputId) >= types.types.size() ||
+      types.types[inputId] == nullptr ||
+      types.types[inputId]->dtype() != c10::ScalarType::Bool) {
+    return {};
+  }
+  std::sort(reduced.begin(), reduced.end());
+  const int64_t keep = rank - static_cast<int64_t>(reduced.size());
+  if (keep < 1) {
+    return {};
+  }
+  for (size_t i = 0; i < reduced.size(); ++i) {
+    if (reduced[i] != keep + static_cast<int64_t>(i)) {
+      return {};
+    }
+  }
+  auto* graph = waveGraph.graph();
+  auto* rowsNode = graph->createNode("tw.any_rows", {{"self", input}});
+  rowsNode->addAttribute({"keep", keep});
+  graph->insertBefore(rowsNode, const_cast<nativert::Node*>(node));
+  // Not newTensorValue: congruent nodes share one compiled op.
+  auto* output = rowsNode->addOutput(
+      graph->getUniqueValueName(),
+      nativert::Type(nativert::Type::Kind::Tensor));
+  waveGraph.registerTensorMeta(output, c10::ScalarType::Bool);
+  return {{node->outputs()[0], output}};
+}
+
 // A view-like op (view/slice/...) is materialized as a before-launch host view
 // (OutputDesc::viewNode), which requires every shape argument to be available
 // in the frame when the kernel's outputs are set up. If any argument other than
@@ -902,83 +1027,285 @@ bool metadataGetterIsAlone(NodeCP node, const ValueTypes& types) {
   return userMeta == nullptr || userMeta->isStandalone(users[0], types);
 }
 
-std::vector<std::vector<Dim>> sizeAttrReserveShape(
-    NodeCP /*node*/,
-    nativert::ExecutionFrame& frame,
-    const FormalToActual& map,
-    NodeCP originalFormalNode,
-    const NodeMap& nodeMap) {
-  auto size =
-      paramIntListByName(originalFormalNode, "size", frame, map, nodeMap);
-  return {{size.begin(), size.end()}};
-}
-
-std::vector<std::vector<Dim>> numBlocksShape(
-    NodeCP node,
-    nativert::ExecutionFrame& frame,
-    const FormalToActual& map,
-    NodeCP /*originalFormalNode*/,
-    const NodeMap& /*nodeMap*/) {
-  auto tensor = paramTensor(node->inputs()[0].value, frame, map);
-  auto blockSize = reserveBlockSize();
-  // At least one block: makeGrid always launches >=1 block (even for an empty
-  // input), and that block's head kernel unconditionally writes one per-block
-  // partial sum (out[blockInOp]).  A zero-length counts buffer would make that
-  // write dereference null storage.
-  auto numBlocks = std::max<Dim>(
-      1, static_cast<Dim>((tensor.numel() + blockSize - 1) / blockSize));
-  return {{numBlocks}};
-}
-
 // Elements a thread of a single-pass scan handles per tile. Mirrors
 // kScanItemsPerThread in Scan.cuh; the two must change together, since the
 // buffer sized here is indexed by a tile number the device computes.
 constexpr int32_t kSinglePassItemsPerThread = 8;
 
-// Shape of the decoupled look-back state of a single-pass scan: an int32 tensor
-// holding a status flag, an aggregate and a prefix per tile. Mirrors
-// LookbackState::numWords in Scan.cuh, but sized for the widest accumulator
-// rather than the op's own, because the accumulator type is not resolved here
-// and the device lays the three arrays out from its own sizeof. Over-sizing
-// just leaves a tail of the buffer unused.
-std::vector<std::vector<Dim>> lookbackStateShape(
-    NodeCP node,
-    nativert::ExecutionFrame& frame,
-    const FormalToActual& map,
-    NodeCP /*originalFormalNode*/,
-    const NodeMap& /*nodeMap*/) {
+// ReserveFn forms of the shape helpers above, in the same order.
+
+bool sizeAttrReserve(const ReserveArgs& args, Shape* out, int32_t /*numOut*/) {
+  const auto size = args.intList(0);
+  out[0].rank = static_cast<int8_t>(size.size());
+  for (size_t i = 0; i < size.size(); ++i) {
+    out[0].dims[i] = static_cast<Dim>(args.scalarValue(size[i]));
+  }
+  return true;
+}
+
+bool numBlocksReserve(const ReserveArgs& args, Shape* out, int32_t /*numOut*/) {
+  const int64_t numel = args.tensor(0).numEl;
+  const int64_t blockSize = args.blockSize;
+  out[0].setVector(
+      std::max<Dim>(1, static_cast<Dim>((numel + blockSize - 1) / blockSize)));
+  return true;
+}
+
+bool lookbackStateReserve(
+    const ReserveArgs& args,
+    Shape* out,
+    int32_t /*numOut*/) {
   constexpr int64_t kWidestAccumulatorWords = 2;
-  auto tensor = paramTensor(node->inputs()[0].value, frame, map);
+  const int64_t numel = args.tensor(0).numEl;
   const int64_t tileSize =
-      static_cast<int64_t>(reserveBlockSize()) * kSinglePassItemsPerThread;
-  // At least one tile: an empty input processes none, but a zero-length buffer
-  // would make the reserve produce a tensor with null storage.
+      static_cast<int64_t>(args.blockSize) * kSinglePassItemsPerThread;
   const int64_t numTiles =
-      std::max<int64_t>(1, (tensor.numel() + tileSize - 1) / tileSize);
+      std::max<int64_t>(1, (numel + tileSize - 1) / tileSize);
   const int64_t flagWords = (numTiles + 1) & ~int64_t(1);
-  return {
-      {static_cast<Dim>(flagWords + 2 * numTiles * kWidestAccumulatorWords)}};
+  out[0].setVector(
+      static_cast<Dim>(flagWords + 2 * numTiles * kWidestAccumulatorWords));
+  return true;
 }
 
-std::vector<std::vector<Dim>> inputShape(
-    NodeCP node,
-    nativert::ExecutionFrame& frame,
-    const FormalToActual& map,
-    NodeCP /*originalFormalNode*/,
-    const NodeMap& /*nodeMap*/) {
-  auto tensor = paramTensor(node->inputs()[0].value, frame, map);
-  auto sizes = tensor.sizes();
-  return {{sizes.begin(), sizes.end()}};
+bool inputShapeReserve(
+    const ReserveArgs& args,
+    Shape* out,
+    int32_t /*numOut*/) {
+  out[0].setLike(args.tensor(0));
+  return true;
 }
 
-std::vector<std::vector<Dim>> inputShapePlusOne(
-    NodeCP node,
-    nativert::ExecutionFrame& frame,
-    const FormalToActual& map,
-    NodeCP /*originalFormalNode*/,
-    const NodeMap& /*nodeMap*/) {
-  auto tensor = paramTensor(node->inputs()[0].value, frame, map);
-  return {{static_cast<Dim>(tensor.numel() + 1)}};
+// A compaction's output: 1-D, at most as long as input 0 has elements.
+bool inputNumelReserve(
+    const ReserveArgs& args,
+    Shape* out,
+    int32_t /*numOut*/) {
+  out[0].setVector(static_cast<Dim>(args.tensor(0).numEl));
+  return true;
+}
+
+bool inputShapePlusOneReserve(
+    const ReserveArgs& args,
+    Shape* out,
+    int32_t /*numOut*/) {
+  out[0].setVector(static_cast<Dim>(args.tensor(0).numEl + 1));
+  return true;
+}
+
+// The shape of the largest tensor input 0 traces back to through elementwise
+// producers, with a trailing 1 for nonzero's index column.
+bool nonzeroShape(const ReserveArgs& args, Shape* out, int32_t numOut) {
+  maxShapeReserve(args, out, numOut);
+  if (out[0].rank > 0 && out[0].rank < kMaxDims) {
+    out[0].dims[out[0].rank++] = 1;
+  }
+  return true;
+}
+
+bool arangeEndReserve(const ReserveArgs& args, Shape* out, int32_t /*numOut*/) {
+  out[0].setVector(static_cast<Dim>(args.scalar(0)));
+  return true;
+}
+
+bool arangeSpanReserve(
+    const ReserveArgs& args,
+    Shape* out,
+    int32_t /*numOut*/) {
+  out[0].setVector(static_cast<Dim>(args.scalar(1) - args.scalar(0)));
+  return true;
+}
+
+bool arangeStepReserve(
+    const ReserveArgs& args,
+    Shape* out,
+    int32_t /*numOut*/) {
+  const auto start = args.scalar(0);
+  const auto end = args.scalar(1);
+  const auto step = args.scalar(2);
+  TORCH_CHECK(step != 0, "arange: step must be nonzero");
+  const auto span = end - start;
+  const auto size =
+      step > 0 ? (span + step - 1) / step : (span + step + 1) / step;
+  out[0].setVector(static_cast<Dim>(std::max<int64_t>(size, 0)));
+  return true;
+}
+
+// A 1-d output of as many elements as the integer operand says.
+bool scalarLengthReserve(
+    const ReserveArgs& args,
+    Shape* out,
+    int32_t /*numOut*/) {
+  out[0].setVector(static_cast<Dim>(args.scalar(0)));
+  return true;
+}
+
+// The first 'keep' dims of input 0.
+bool leadingDimsReserve(
+    const ReserveArgs& args,
+    Shape* out,
+    int32_t /*numOut*/) {
+  const auto& input = args.tensor(0);
+  const auto keep = static_cast<int8_t>(args.scalar(0));
+  out[0].rank = keep;
+  for (int8_t d = 0; d < keep; ++d) {
+    out[0].dims[d] = input.dims[d];
+  }
+  return true;
+}
+
+// The dims of input 0 less the last: the rows of a last-dim reduction.
+bool allButLastDimReserve(
+    const ReserveArgs& args,
+    Shape* out,
+    int32_t /*numOut*/) {
+  const auto& input = args.tensor(0);
+  out[0].rank = static_cast<int8_t>(input.rank > 0 ? input.rank - 1 : 0);
+  for (int8_t d = 0; d < out[0].rank; ++d) {
+    out[0].dims[d] = input.dims[d];
+  }
+  return true;
+}
+
+// An open-addressing table of the smallest power of two at least twice the
+// input's element count, plus one.
+bool hashTableReserve(const ReserveArgs& args, Shape* out, int32_t /*numOut*/) {
+  const int64_t n = args.tensor(0).numEl;
+  int64_t tableSize = 1;
+  while (tableSize < n * 2) {
+    tableSize *= 2;
+  }
+  out[0].setVector(static_cast<Dim>(tableSize + 1));
+  return true;
+}
+
+bool padLastDimReserve(
+    const ReserveArgs& args,
+    Shape* out,
+    int32_t /*numOut*/) {
+  out[0].setLike(args.tensor(0));
+  const auto pad = args.intList(0);
+  out[0].dims[out[0].rank - 1] +=
+      static_cast<Dim>(args.scalarValue(pad[0]) + args.scalarValue(pad[1]));
+  return true;
+}
+
+// The shape of the first index tensor of a packed index list.
+bool firstListElementReserve(
+    const ReserveArgs& args,
+    Shape* out,
+    int32_t /*numOut*/) {
+  out[0].setLike(args.tensor(0, 0));
+  return true;
+}
+
+// self's shape with 'dim' as long as the index.
+bool indexSelectShape(const ReserveArgs& args, Shape* out, int32_t /*numOut*/) {
+  const auto& self = args.tensor(0);
+  out[0].setLike(self);
+  const auto dimArg = args.scalar(0);
+  const auto dim = dimArg < 0 ? dimArg + self.rank : dimArg;
+  out[0].dims[dim] = static_cast<Dim>(args.tensor(1).numEl);
+  return true;
+}
+
+// The repeat_interleave prefix: one entry per source segment along 'dim', or
+// per element when it flattens.
+bool repeatInterleaveBcastShape(
+    const ReserveArgs& args,
+    Shape* out,
+    int32_t /*numOut*/) {
+  const auto& input = args.tensor(0);
+  if (!args.present(0)) {
+    out[0].setVector(input.numEl);
+    return true;
+  }
+  const auto dim = args.scalar(0);
+  TORCH_CHECK(
+      dim >= 0 && dim < input.rank,
+      "repeat_interleave: dim ",
+      dim,
+      " out of range for rank ",
+      input.rank);
+  out[0].setVector(static_cast<Dim>(input.dims[dim]));
+  return true;
+}
+
+// The repeat_interleave result: 'total' along 'dim' of the input's shape, or
+// 1-d when it flattens.
+bool repeatInterleaveFinalShape(
+    const ReserveArgs& args,
+    Shape* out,
+    int32_t /*numOut*/) {
+  const auto total = args.scalar(0);
+  TORCH_CHECK(
+      total < std::numeric_limits<int32_t>::max(),
+      "repeat_interleave: result of ",
+      total,
+      " elements along the interleave axis is not representable in the "
+      "int32 prefix-sum pipeline");
+  if (!args.present(1)) {
+    out[0].setVector(static_cast<Dim>(total));
+    return true;
+  }
+  const auto& input = args.tensor(0);
+  const auto& prefix = args.tensor(1);
+  const auto dim = args.scalar(1);
+  auto checkPrefixCoversSegments = [&](int64_t segments) {
+    TORCH_CHECK(
+        prefix.numEl == segments,
+        "repeat_interleave: 'repeats' has ",
+        prefix.numEl,
+        " entries but the input has ",
+        segments,
+        " segments along the interleave axis; a length-1 broadcast 'repeats'"
+        " is not supported on the wave path");
+  };
+  if (dim < 0) {
+    checkPrefixCoversSegments(input.numEl);
+    out[0].setVector(static_cast<Dim>(total));
+    return true;
+  }
+  TORCH_CHECK(
+      dim < input.rank,
+      "repeat_interleave: dim ",
+      dim,
+      " out of range for rank ",
+      input.rank);
+  checkPrefixCoversSegments(input.dims[dim]);
+  out[0].setLike(input);
+  out[0].dims[dim] = static_cast<Dim>(total);
+  return true;
+}
+
+bool bincountFinalShape(
+    const ReserveArgs& args,
+    Shape* out,
+    int32_t /*numOut*/) {
+  const auto outSize = std::max<int64_t>(
+      std::max<int64_t>(args.scalar(0) + 1, args.scalar(1)), 0);
+  out[0].setVector(static_cast<Dim>(outSize));
+  return true;
+}
+
+bool repeatShape(const ReserveArgs& args, Shape* out, int32_t /*numOut*/) {
+  const auto& self = args.tensor(0);
+  const auto repeats = args.intList(0);
+  const auto n = static_cast<int32_t>(repeats.size());
+  const auto dimOffset = n - self.rank;
+  out[0].rank = static_cast<int8_t>(n);
+  for (int32_t d = 0; d < n; ++d) {
+    const int64_t selfDim = d < dimOffset ? 1 : self.dims[d - dimOffset];
+    out[0].dims[d] = static_cast<Dim>(args.scalarValue(repeats[d]) * selfDim);
+  }
+  return true;
+}
+
+bool scalarReserve(
+    const ReserveArgs& /*args*/,
+    Shape* out,
+    int32_t /*numOut*/) {
+  out[0].rank = 0;
+  return true;
 }
 
 // Whether 'node's memory_format attribute is contiguous_format, or nullopt when
@@ -1310,13 +1637,6 @@ void registerReduction(
     void (*normalize)(nativert::Node*, const ValueTypes&),
     nativert::Node* (*variantFn)(NodeCP, WaveGraph*),
     nativert::Node* (*cgVariantFn)(NodeCP, WaveGraph*)) {
-  auto scalarShape = [](NodeCP,
-                        nativert::ExecutionFrame&,
-                        const FormalToActual&,
-                        NodeCP,
-                        const NodeMap&) -> std::vector<std::vector<Dim>> {
-    return {{}};
-  };
   auto tensorInOut = [](const std::string& name) {
     return std::make_unique<c10::FunctionSchema>(
         name,
@@ -1335,7 +1655,10 @@ void registerReduction(
       .hasBarrier()
       .singleBlockIfFused()
       .argumentMeta({{.isRegister = true}})
-      .returnMeta({{.isRegister = false, .reserveShape = scalarShape}})
+      .returnMeta(
+          {{.isRegister = false,
+            .reserve = scalarReserve,
+            .reserveInputs = {}}})
       .normalize(normalize)
       .makeMultiKernelVariant(variantFn)
       .cgVariant(cgVariantFn)
@@ -1353,7 +1676,10 @@ void registerReduction(
   MetadataBuilder(tensorInOut("tw." + prefix + "_head"))
       .sizeOrdinal({0})
       .hasBarrier()
-      .returnMeta({{.isRegister = false, .reserveShape = numBlocksShape}})
+      .returnMeta(
+          {{.isRegister = false,
+            .reserve = numBlocksReserve,
+            .reserveInputs = {.tensors = {0}}}})
       .headerFile(scanHeader)
       .deviceFunc("tw_" + prefix + "_head")
       .sharedDecls(
@@ -1371,7 +1697,10 @@ void registerReduction(
   MetadataBuilder(tensorInOut("tw." + prefix + "_final"))
       .sizeOrdinal({0})
       .hasBarrier()
-      .returnMeta({{.isRegister = false, .reserveShape = scalarShape}})
+      .returnMeta(
+          {{.isRegister = false,
+            .reserve = scalarReserve,
+            .reserveInputs = {}}})
       .inputFromPreviousKernel(0)
       .headerFile(scanHeader)
       .deviceFunc("tw_" + prefix + "_tensor")
@@ -1401,8 +1730,10 @@ void registerReduction(
       .sizeShortcut(SizeShortcut::kMax)
       .hasBarrier()
       .returnMeta(
-          {{.isRegister = false, .reserveShape = scalarShape},
-           {.isRegister = false, .reserveShape = numBlocksShape}})
+          {{.isRegister = false, .reserve = scalarReserve, .reserveInputs = {}},
+           {.isRegister = false,
+            .reserve = numBlocksReserve,
+            .reserveInputs = {.tensors = {0}}}})
       .normalize(normalize)
       .headerFile(scanHeader)
       .deviceFunc("tw_" + prefix + "_cg")
@@ -1594,14 +1925,8 @@ void registerRowBuiltins(const std::string& scanHeader) {
       .argumentMeta({{.isRegister = false, .randomAccess = true}})
       .returnMeta(
           {{.isRegister = false,
-            .reserveShape = [](NodeCP node,
-                               nativert::ExecutionFrame& frame,
-                               const FormalToActual& map,
-                               NodeCP /*originalFormalNode*/,
-                               const NodeMap& /*nodeMap*/)
-                -> std::vector<std::vector<Dim>> {
-              return elementwiseInputShape(node, frame, map, 0);
-            },
+            .reserve = maxShapeReserve,
+            .reserveInputs = {.elementwiseLeaves = 0},
             .shapeFromInput = 0}})
       .normalize(resolveDtypeFromInput)
       .ignoreAttrs({"dim"})
@@ -1624,23 +1949,6 @@ void registerRowBuiltins(const std::string& scanHeader) {
                  .contiguity = Contiguity::kContiguous}};
           })
       .registerOp();
-  // The input's dims less the last, for each of 'numOutputs' outputs: the shape
-  // of a row reduction.
-  auto rowReduceShape = [](int32_t numOutputs) {
-    return [numOutputs](
-               NodeCP node,
-               nativert::ExecutionFrame& frame,
-               const FormalToActual& map,
-               NodeCP /*originalFormalNode*/,
-               const NodeMap& /*nodeMap*/) -> std::vector<std::vector<Dim>> {
-      auto input = paramTensor(node->inputs()[0].value, frame, map);
-      std::vector<Dim> dims;
-      for (int64_t d = 0; d + 1 < input.dim(); ++d) {
-        dims.push_back(static_cast<Dim>(input.size(d)));
-      }
-      return std::vector<std::vector<Dim>>(numOutputs, dims);
-    };
-  };
   auto rowReduceConstraint = [](int32_t numOutputs) {
     return [numOutputs](
                NodeCP node,
@@ -1655,7 +1963,10 @@ void registerRowBuiltins(const std::string& scanHeader) {
   MetadataBuilder(rowScanSchema("tw.sum_rows"))
       .sizeOrdinal({0})
       .argumentMeta({{.isRegister = false, .randomAccess = true}})
-      .returnMeta({{.isRegister = false, .reserveShape = rowReduceShape(1)}})
+      .returnMeta(
+          {{.isRegister = false,
+            .reserve = allButLastDimReserve,
+            .reserveInputs = {.tensors = {0}}}})
       .normalize(resolveDtypeFromInput)
       .headerFile(scanHeader)
       .deviceFunc("sum_rows")
@@ -1684,8 +1995,12 @@ void registerRowBuiltins(const std::string& scanHeader) {
       .sizeOrdinal({0})
       .argumentMeta({{.isRegister = false, .randomAccess = true}})
       .returnMeta(
-          {{.isRegister = false, .reserveShape = rowReduceShape(2)},
-           {.isRegister = false, .reserveShape = rowReduceShape(2)}})
+          {{.isRegister = false,
+            .reserve = allButLastDimReserve,
+            .reserveInputs = {.tensors = {0}}},
+           {.isRegister = false,
+            .reserve = allButLastDimReserve,
+            .reserveInputs = {.tensors = {0}}}})
       .ignoreAttrs({"dim", "keepdim"})
       .headerFile(scanHeader)
       .deviceFunc("min_rows")
@@ -1695,6 +2010,201 @@ void registerRowBuiltins(const std::string& scanHeader) {
       .multiBlockReturnBarrier()
       .outputConstraints(rowReduceConstraint(2))
       .registerOp();
+}
+
+} // namespace
+
+namespace {
+
+// The output of an op that returns a view of its first argument has that
+// argument's rank and contiguity.
+std::vector<ValueConstraint> viewOfFirstArgConstraint(
+    NodeCP node,
+    const ValueTypes& types) {
+  auto* self = inputAt(node, 0);
+  return {{.rank = types.rank(self), .contiguity = types.contiguity(self)}};
+}
+
+// masked_put_ and index_put_elt_*: in-place scatters. Registered from
+// registerBuiltins, out of line to keep that function within what the
+// optimizer handles.
+void registerInPlaceScatterBuiltins() {
+  // masked_put_: in-place scatter with bool mask. Shortcut for index_put_
+  // with a single 1D bool index tensor. Registered before index_put_ so
+  // the FunctionSchema is available when createNode is called.
+  {
+    MetadataBuilder(
+        std::make_unique<c10::FunctionSchema>(
+            "tw.masked_put_",
+            "",
+            std::vector<c10::Argument>{
+                c10::Argument("self", c10::TensorType::get()),
+                c10::Argument("mask", c10::TensorType::get()),
+                c10::Argument("values", c10::TensorType::get())},
+            std::vector<c10::Argument>{
+                c10::Argument("output", c10::TensorType::get())}))
+        .sizeOrdinal({0})
+        .outputConstraints(viewOfFirstArgConstraint)
+        .mutatesArg(0)
+        .indicesArg(1)
+        .valuesArg(2)
+        .deviceFunc("__masked_put")
+        .typeTemplateParams({0})
+        .returnMeta(
+            {{.reserve = maxShapeReserve,
+              .reserveInputs = {.tensors = {"self"}}}})
+        .sharedDecls({{"uint32_t", "size"}})
+        .multiBlockReturnBarrier()
+        .registerOp();
+  }
+
+  // tw.index_put_elt_one/two/three: elementwise index_put with scalar
+  // indices from a TensorList. Args: (Tensor self, TensorList indices,
+  // Tensor values, bool accumulate).
+  {
+    static const char* kNames[] = {
+        "tw.index_put_elt_one",
+        "tw.index_put_elt_two",
+        "tw.index_put_elt_three"};
+    static const char* kFuncs[] = {
+        "__index_put_elt_one", "__index_put_elt_two", "__index_put_elt_three"};
+    for (int numIdx = 1; numIdx <= 3; ++numIdx) {
+      int i = numIdx - 1;
+      MetadataBuilder(
+          std::make_unique<c10::FunctionSchema>(
+              kNames[i],
+              "",
+              std::vector<c10::Argument>{
+                  c10::Argument("self", c10::TensorType::get()),
+                  c10::Argument("indices", c10::ListType::ofTensors()),
+                  c10::Argument("values", c10::TensorType::get()),
+                  c10::Argument(
+                      "accumulate",
+                      c10::BoolType::get(),
+                      std::nullopt,
+                      c10::IValue(false))},
+              std::vector<c10::Argument>{
+                  c10::Argument("output", c10::TensorType::get())}))
+          .elementwiseFunc(kFuncs[i])
+          .outputConstraints(viewOfFirstArgConstraint)
+          .mutatesArg(0)
+          .indicesArg(1)
+          .valuesArg(2)
+          .argumentMeta(
+              {{.isRegister = false, .wholeTensor = true, .randomAccess = true},
+               {.isRegister = true},
+               {.isRegister = true},
+               {.isRegister = true}})
+          .returnMeta(
+              {{.isRegister = false,
+                .reserve = maxShapeReserve,
+                .reserveInputs = {.tensors = {"self"}},
+                .wholeTensor = true,
+                .randomAccess = true}})
+          .typeTemplateParams({0})
+          .hasBlockInfo()
+          .multiBlockReturnBarrier()
+          .registerOp();
+    }
+  }
+}
+
+// The index getters return the broadcast of their index list: the rank of
+// the highest-rank index, laid out densely.
+std::vector<ValueConstraint> indexListConstraint(
+    NodeCP node,
+    const ValueTypes& types) {
+  auto* list = inputAt(node, 1);
+  auto* pack = list != nullptr ? list->producer() : nullptr;
+  if (pack == nullptr || pack->target() != "prim.ListPack") {
+    return {};
+  }
+  int8_t rank = -1;
+  for (const auto& element : pack->inputs()) {
+    const auto elementRank = types.rank(element.value);
+    if (elementRank < 0) {
+      return {};
+    }
+    rank = std::max(rank, elementRank);
+  }
+  return {{.rank = rank, .contiguity = Contiguity::kContiguous}};
+}
+
+// Adds a tensor output of 'dtype' to 'node'. The output is read by other
+// nodes, so it must not be newTensorValue's per-op scratch: congruent nodes
+// share one compiled op, and scratch would get a private copy per invocation.
+nativert::Value* addTensorOutput(
+    nativert::Node* node,
+    c10::ScalarType dtype,
+    WaveGraph& waveGraph) {
+  auto* graph = waveGraph.graph();
+  auto* value = node->addOutput(
+      graph->getUniqueValueName(),
+      nativert::Type(nativert::Type::Kind::Tensor));
+  waveGraph.registerTensorMeta(value, dtype);
+  return value;
+}
+
+const nativert::TensorMeta* metaOf(const ValueTypes& types, ValueCP value) {
+  auto id = value->id();
+  if (id < 0 || static_cast<size_t>(id) >= types.types.size()) {
+    return nullptr;
+  }
+  return types.types[id];
+}
+
+// x[view(c, size)] with a 1-D x is view(x[c], size): indexing a vector maps
+// each index element to one output element, so the output takes the index's
+// shape and a reshape of the index can move to the output. Indexing by 'c'
+// itself lets the index expression fuse into the gather, which a view between
+// them prevents. Returns the view of the new gather, or nullptr when the
+// pattern does not apply.
+ValueCP unflattenIndexOfVector(
+    NodeCP node,
+    ValueCP self,
+    NodeCP listPack,
+    ValueTypes& types,
+    WaveGraph& waveGraph) {
+  if (self == nullptr || listPack == nullptr ||
+      listPack->target() != "prim.ListPack" || listPack->inputs().size() != 1 ||
+      types.rank(self) != 1) {
+    return nullptr;
+  }
+  auto* flat = listPack->inputs()[0].value;
+  auto* view = flat->producer();
+  if (view == nullptr || view->target() != "torch.ops.aten.view.default") {
+    return nullptr;
+  }
+  const auto* sizeAttr = view->tryGetAttribute("size");
+  if (sizeAttr == nullptr ||
+      !std::holds_alternative<std::vector<int64_t>>(sizeAttr->value)) {
+    return nullptr;
+  }
+  auto* index = inputAt(view, 0);
+  const auto* selfMeta = metaOf(types, self);
+  const auto* indexMeta = metaOf(types, index);
+  if (selfMeta == nullptr || indexMeta == nullptr || types.rank(index) < 1 ||
+      (indexMeta->dtype() != c10::ScalarType::Long &&
+       indexMeta->dtype() != c10::ScalarType::Int)) {
+    return nullptr;
+  }
+  auto* graph = waveGraph.graph();
+  auto* mutableNode = const_cast<nativert::Node*>(node);
+  auto* pack = graph->createNode(
+      "prim.ListPack", {{"l0", const_cast<nativert::Value*>(index)}});
+  graph->insertBefore(pack, mutableNode);
+  auto* list = waveGraph.newListValue(pack, "unflat_indices");
+  auto* gather = graph->createNode(
+      "torch.ops.aten.index.Tensor",
+      {{"self", const_cast<nativert::Value*>(self)}, {"indices", list}});
+  graph->insertBefore(gather, mutableNode);
+  auto* gathered = addTensorOutput(gather, selfMeta->dtype(), waveGraph);
+  auto* reshape =
+      graph->createNode("torch.ops.aten.view.default", {{"self", gathered}});
+  reshape->addAttribute(
+      {"size", std::get<std::vector<int64_t>>(sizeAttr->value)});
+  graph->insertBefore(reshape, mutableNode);
+  return addTensorOutput(reshape, selfMeta->dtype(), waveGraph);
 }
 
 } // namespace
@@ -2157,7 +2667,7 @@ void registerBuiltins() {
   // so it is `_to_copy(src.expand_as(self), dtype=self.dtype)` -- one register
   // input and a cast. self contributes metadata only: it is skipped during
   // argument iteration (ignoreAttrs) and read through rankArgument /
-  // reserveShape, the same way full_like reads the tensor it takes its shape
+  // reserve, the same way full_like reads the tensor it takes its shape
   // from. Skipping it matters beyond the saved load: reading the destination
   // would make the copy depend on its contents and force an ordering edge that
   // the op does not actually need.
@@ -2169,15 +2679,6 @@ void registerBuiltins() {
   // A copy whose src shares storage with self is retargeted to tw.copy_out --
   // see copyMayOverlap.
   {
-    // self's shape, for both the register and the materializing form.
-    auto selfShape =
-        [](NodeCP node,
-           nativert::ExecutionFrame& frame,
-           const FormalToActual& map,
-           NodeCP /*originalFormalNode*/,
-           const NodeMap& /*nodeMap*/) -> std::vector<std::vector<Dim>> {
-      return elementwiseInputShape(node, frame, map, 0);
-    };
     // The result has self's rank but is a fresh dense buffer, not self's
     // (possibly strided) layout.
     auto selfRankContiguous =
@@ -2209,7 +2710,8 @@ void registerBuiltins() {
         .argumentMeta({{}, {.isRegister = true}, {}})
         .returnMeta(
             {{.isRegister = true,
-              .reserveShape = selfShape,
+              .reserve = maxShapeReserve,
+              .reserveInputs = {.elementwiseLeaves = 0},
               .shapeFromInput = 0}})
         .normalize(resolveDtypeFromInputExact)
         .rankArgument(0)
@@ -2260,7 +2762,8 @@ void registerBuiltins() {
         .argumentMeta({{}, {.isRegister = true}})
         .returnMeta(
             {{.isRegister = false,
-              .reserveShape = selfShape,
+              .reserve = maxShapeReserve,
+              .reserveInputs = {.elementwiseLeaves = 0},
               .shapeFromInput = 0}})
         .normalize(resolveDtypeFromInputExact)
         .rankArgument(0)
@@ -2283,17 +2786,7 @@ void registerBuiltins() {
       // argumentMeta must still cover every schema argument.
       .argumentMeta({{.isRegister = true}, {}, {}, {}, {}})
       .returnMeta(
-          {{.isRegister = true,
-            .reserveShape = [](NodeCP /*node*/,
-                               nativert::ExecutionFrame& /*frame*/,
-                               const FormalToActual& /*map*/,
-                               NodeCP /*originalFormalNode*/,
-                               const NodeMap& /*nodeMap*/)
-                -> std::vector<std::vector<Dim>> {
-              // 0-d (rank-0) output: one element, matching PyTorch's
-              // scalar_tensor shape.
-              return {{}};
-            }}})
+          {{.isRegister = true, .reserve = scalarReserve, .reserveInputs = {}}})
       // The optimizer's elementwise fallback derives an output rank as the max
       // over the input ranks; this op's only input is a rankless scalar, so the
       // 0-d rank has to be stated here or the output is left rank-unknown.
@@ -2321,7 +2814,10 @@ void registerBuiltins() {
   MetadataBuilder("torch.ops.aten.zeros.default")
       .elementwiseFunc("__zero")
       .numArgs(0)
-      .returnMeta({{.isRegister = true, .reserveShape = sizeAttrReserveShape}})
+      .returnMeta(
+          {{.isRegister = true,
+            .reserve = sizeAttrReserve,
+            .reserveInputs = {.intLists = {"size"}}}})
       .normalize(resolveDefaultDtype)
       .outputConstraints(sizeAttrRankConstraint)
       .hasDtypeTemplateParam()
@@ -2334,7 +2830,10 @@ void registerBuiltins() {
   MetadataBuilder("torch.ops.aten.empty.memory_format")
       .elementwiseFunc("__zero")
       .numArgs(0)
-      .returnMeta({{.isRegister = true, .reserveShape = sizeAttrReserveShape}})
+      .returnMeta(
+          {{.isRegister = true,
+            .reserve = sizeAttrReserve,
+            .reserveInputs = {.intLists = {"size"}}}})
       .normalize(resolveDefaultDtype)
       .outputConstraints(sizeAttrRankConstraint)
       .hasDtypeTemplateParam()
@@ -2353,7 +2852,10 @@ void registerBuiltins() {
   MetadataBuilder("torch.ops.aten.ones.default")
       .elementwiseFunc("__one")
       .numArgs(0)
-      .returnMeta({{.isRegister = true, .reserveShape = sizeAttrReserveShape}})
+      .returnMeta(
+          {{.isRegister = true,
+            .reserve = sizeAttrReserve,
+            .reserveInputs = {.intLists = {"size"}}}})
       .normalize(resolveDefaultDtype)
       .outputConstraints(sizeAttrRankConstraint)
       .hasDtypeTemplateParam()
@@ -2366,7 +2868,10 @@ void registerBuiltins() {
   MetadataBuilder("torch.ops.aten.full.default")
       .elementwiseFunc("__full")
       .numArgs(1)
-      .returnMeta({{.isRegister = true, .reserveShape = sizeAttrReserveShape}})
+      .returnMeta(
+          {{.isRegister = true,
+            .reserve = sizeAttrReserve,
+            .reserveInputs = {.intLists = {"size"}}}})
       .normalize(resolveDefaultDtype)
       .outputConstraints(sizeAttrRankConstraint)
       .hasDtypeTemplateParam()
@@ -2380,14 +2885,8 @@ void registerBuiltins() {
       .defaultInputMeta()
       .returnMeta(
           {{.isRegister = true,
-            .reserveShape = [](NodeCP node,
-                               nativert::ExecutionFrame& frame,
-                               const FormalToActual& map,
-                               NodeCP /*originalFormalNode*/,
-                               const NodeMap& /*nodeMap*/)
-                -> std::vector<std::vector<Dim>> {
-              return elementwiseInputShape(node, frame, map, 0);
-            },
+            .reserve = maxShapeReserve,
+            .reserveInputs = {.elementwiseLeaves = 0},
             .shapeFromInput = 0}})
       .normalize(resolveDtypeFromInputExact)
       .rankArgument(0)
@@ -2401,14 +2900,8 @@ void registerBuiltins() {
       .defaultInputMeta()
       .returnMeta(
           {{.isRegister = true,
-            .reserveShape = [](NodeCP node,
-                               nativert::ExecutionFrame& frame,
-                               const FormalToActual& map,
-                               NodeCP /*originalFormalNode*/,
-                               const NodeMap& /*nodeMap*/)
-                -> std::vector<std::vector<Dim>> {
-              return elementwiseInputShape(node, frame, map, 0);
-            },
+            .reserve = maxShapeReserve,
+            .reserveInputs = {.elementwiseLeaves = 0},
             .shapeFromInput = 0}})
       .normalize(resolveDtypeFromInputExact)
       .rankArgument(0)
@@ -2496,20 +2989,38 @@ void registerBuiltins() {
       .hasIdxArg()
       .returnMeta(
           {{.isRegister = true,
-            .reserveShape =
-                [](NodeCP node,
-                   nativert::ExecutionFrame& frame,
-                   const FormalToActual& map,
-                   NodeCP originalFormalNode,
-                   const NodeMap& nodeMap) -> std::vector<std::vector<Dim>> {
-              auto* invoked = invokedNode(originalFormalNode, nodeMap);
-              auto end = integerParamByName(node, invoked, "end", frame, map);
-              return {{static_cast<Dim>(end)}};
-            }}})
+            .reserve = arangeEndReserve,
+            .reserveInputs = {.scalars = {"end"}}}})
       .normalize(resolveArangeDtype)
       .outputConstraints(rank1Constraint)
       .hasDtypeTemplateParam()
       .shapeAttr("end")
+      .registerOp();
+
+  // tw.arange_mem: arange(end) written to memory by a device function,
+  // sized by its reserve from 'end'. Consumers read it like any
+  // materialized tensor, so it is safe under broadcasting views, where a
+  // fused arange would see the consumer's linear index. 'end' is a size
+  // argument, so its producer is placed in an earlier kernel and the value
+  // is on the host when the reserve runs.
+  MetadataBuilder(
+      std::make_unique<c10::FunctionSchema>(
+          "tw.arange_mem",
+          "",
+          std::vector<c10::Argument>{c10::Argument("end", c10::IntType::get())},
+          std::vector<c10::Argument>{
+              c10::Argument("output", c10::TensorType::get())}))
+      .sizeOrdinal({0})
+      .argumentMeta({{.isRegister = false}})
+      .returnMeta(
+          {{.isRegister = false,
+            .reserve = arangeEndReserve,
+            .reserveInputs = {.scalars = {"end"}}}})
+      .normalize(resolveArangeDtype)
+      .headerFile("velox/experimental/torchwave/Elementwise.cuh")
+      .deviceFunc("arange_mem")
+      .outputConstraints(rank1Constraint)
+      .hasDtypeTemplateParam()
       .registerOp();
 
   MetadataBuilder("torch.ops.aten.arange.start")
@@ -2517,18 +3028,8 @@ void registerBuiltins() {
       .hasIdxArg()
       .returnMeta(
           {{.isRegister = true,
-            .reserveShape =
-                [](NodeCP node,
-                   nativert::ExecutionFrame& frame,
-                   const FormalToActual& map,
-                   NodeCP originalFormalNode,
-                   const NodeMap& nodeMap) -> std::vector<std::vector<Dim>> {
-              auto* invoked = invokedNode(originalFormalNode, nodeMap);
-              auto start =
-                  integerParamByName(node, invoked, "start", frame, map);
-              auto end = integerParamByName(node, invoked, "end", frame, map);
-              return {{static_cast<Dim>(end - start)}};
-            }}})
+            .reserve = arangeSpanReserve,
+            .reserveInputs = {.scalars = {"start", "end"}}}})
       .normalize(resolveArangeDtype)
       .outputConstraints(rank1Constraint)
       .hasDtypeTemplateParam()
@@ -2542,23 +3043,8 @@ void registerBuiltins() {
       .hasIdxArg()
       .returnMeta(
           {{.isRegister = true,
-            .reserveShape =
-                [](NodeCP node,
-                   nativert::ExecutionFrame& frame,
-                   const FormalToActual& map,
-                   NodeCP originalFormalNode,
-                   const NodeMap& nodeMap) -> std::vector<std::vector<Dim>> {
-              auto* invoked = invokedNode(originalFormalNode, nodeMap);
-              auto start =
-                  integerParamByName(node, invoked, "start", frame, map);
-              auto end = integerParamByName(node, invoked, "end", frame, map);
-              auto step = integerParamByName(node, invoked, "step", frame, map);
-              TORCH_CHECK(step != 0, "arange: step must be nonzero");
-              const auto span = end - start;
-              const auto size = step > 0 ? (span + step - 1) / step
-                                         : (span + step + 1) / step;
-              return {{static_cast<Dim>(std::max<int64_t>(size, 0))}};
-            }}})
+            .reserve = arangeStepReserve,
+            .reserveInputs = {.scalars = {"start", "end", "step"}}}})
       .normalize([](nativert::Node* node, const ValueTypes& types) {
         resolveArangeDtype(node, types);
         if (!node->tryGetAttribute("step") && !node->tryGetInput("step")) {
@@ -2732,12 +3218,6 @@ void registerBuiltins() {
   // Shared output constraint for in-place scatter ops (index_put_,
   // index_put_elt_*, masked_put_): the result aliases the first argument
   // (self), so it has self's rank and is contiguous exactly when self is.
-  auto viewOfFirstArgConstraint =
-      [](NodeCP node, const ValueTypes& types) -> std::vector<ValueConstraint> {
-    auto* self = inputAt(node, 0);
-    return {{.rank = types.rank(self), .contiguity = types.contiguity(self)}};
-  };
-
   // Clone: eliminate unless a user mutates the output in place.
   MetadataBuilder("torch.ops.aten.clone.default")
       .sizeOrdinal({0})
@@ -2889,6 +3369,10 @@ void registerBuiltins() {
             auto* self = inputAt(node, 0);
             auto* indices = inputAt(node, 1);
             auto* listPack = indices ? indices->producer() : nullptr;
+            if (auto* unflat = unflattenIndexOfVector(
+                    node, self, listPack, types, waveGraph)) {
+              return {{node->outputs()[0], unflat}};
+            }
             if (self && listPack && listPack->target() == "prim.ListPack") {
               auto selfId = self->id();
               // selfOk gates access to the source dtype (needed to type the new
@@ -2943,11 +3427,13 @@ void registerBuiltins() {
                     newNode, "index_select", types.types[selfId]->dtype());
                 return {{node->outputs()[0], newOutput}};
               }
-              // x[bool_mask] with a 1-D source and a single 1-D boolean index
-              // is masked_select: a data-dependent 1-D gather of the positions
-              // where the mask is true. Retarget to the standalone
-              // masked_select op (a boolean mask is not a fusable gather).
-              if (selfOk && sourceRank == 1) {
+              // x[bool_mask] with a single boolean index of the source's own
+              // rank is masked_select: a data-dependent 1-D gather of the
+              // positions where the mask is true. Indexing requires the mask's
+              // shape to equal the source's when it covers every dim, which is
+              // masked_select's no-broadcast case. Retarget to masked_select,
+              // whose stream compaction has fused forms.
+              if (selfOk && sourceRank >= 1) {
                 nativert::Value* maskVal = nullptr;
                 int32_t numMask = 0;
                 for (const auto& idxEntry : idxInputs) {
@@ -2960,7 +3446,7 @@ void registerBuiltins() {
                   auto maskValueId = maskValue->id();
                   if (maskValue->type().kind() ==
                           nativert::Type::Kind::Tensor &&
-                      types.rank(maskValue) == 1 && maskValueId >= 0 &&
+                      types.rank(maskValue) == sourceRank && maskValueId >= 0 &&
                       static_cast<size_t>(maskValueId) < types.types.size() &&
                       types.types[maskValueId] &&
                       types.types[maskValueId]->dtype() ==
@@ -3037,25 +3523,6 @@ void registerBuiltins() {
         "tw.index_elt_one", "tw.index_elt_two", "tw.index_elt_three"};
     static const char* kFuncs[] = {
         "__index_elt_one", "__index_elt_two", "__index_elt_three"};
-    auto indexEltReserve =
-        [](NodeCP node,
-           nativert::ExecutionFrame& frame,
-           const FormalToActual& map,
-           NodeCP /*originalFormalNode*/,
-           const NodeMap& /*nodeMap*/) -> std::vector<std::vector<Dim>> {
-      auto* indicesValue = node->inputs()[1].value;
-      auto* listPack = indicesValue->producer();
-      TORCH_CHECK(
-          listPack && listPack->target() == "prim.ListPack",
-          "index_elt_* expects prim.ListPack for indices");
-      auto* firstIdx = listPack->inputs()[0].value;
-      auto firstId = firstIdx->id();
-      auto it = map.find(firstId);
-      auto actualId = it != map.end() ? it->second : firstId;
-      auto& idxTensor = frame.getIValue(actualId).toTensor();
-      auto sizes = idxTensor.sizes();
-      return {{sizes.begin(), sizes.end()}};
-    };
     for (int numIdx = 1; numIdx <= 3; ++numIdx) {
       (void)numIdx;
       int i = numIdx - 1;
@@ -3072,9 +3539,13 @@ void registerBuiltins() {
           .argumentMeta(
               {{.isRegister = false, .wholeTensor = true, .randomAccess = true},
                {.isRegister = true}})
-          .returnMeta({{.isRegister = true, .reserveShape = indexEltReserve}})
+          .returnMeta(
+              {{.isRegister = true,
+                .reserve = firstListElementReserve,
+                .reserveInputs = {.tensors = {1}}}})
           .typeTemplateParams({0})
           .hasBlockInfo()
+          .outputConstraints(indexListConstraint)
           .registerOp();
     }
 
@@ -3098,8 +3569,12 @@ void registerBuiltins() {
             {{.isRegister = false, .wholeTensor = true, .randomAccess = true},
              {.isRegister = true},
              {.isRegister = true}})
-        .returnMeta({{.isRegister = true, .reserveShape = indexEltReserve}})
+        .returnMeta(
+            {{.isRegister = true,
+              .reserve = firstListElementReserve,
+              .reserveInputs = {.tensors = {1}}}})
         .typeTemplateParams({0})
+        .outputConstraints(indexListConstraint)
         .registerOp();
   }
 
@@ -3119,37 +3594,6 @@ void registerBuiltins() {
   // enclosing expression's output tensor so the device function knows the shape
   // it iterates over, distinct from index_select's own (broadcast) shape.
   {
-    auto indexSelectReserve =
-        [](NodeCP node,
-           nativert::ExecutionFrame& frame,
-           const FormalToActual& map,
-           NodeCP /*originalFormalNode*/,
-           const NodeMap& /*nodeMap*/) -> std::vector<std::vector<Dim>> {
-      auto* selfValue = node->inputs()[0].value;
-      auto selfId = selfValue->id();
-      auto selfActual = map.find(selfId);
-      auto& selfTensor =
-          frame.getIValue(selfActual != map.end() ? selfActual->second : selfId)
-              .toTensor();
-      auto* indexValue = node->inputs()[1].value;
-      auto indexId = indexValue->id();
-      auto indexActual = map.find(indexId);
-      auto& indexTensor =
-          frame
-              .getIValue(
-                  indexActual != map.end() ? indexActual->second : indexId)
-              .toTensor();
-      auto dimOpt = constIntArg(node, "dim");
-      TORCH_CHECK(
-          dimOpt.has_value(), "tw.index_select requires a constant dim");
-      int64_t rank = selfTensor.dim();
-      int64_t dim = *dimOpt < 0 ? *dimOpt + rank : *dimOpt;
-      std::vector<Dim> shape(
-          selfTensor.sizes().begin(), selfTensor.sizes().end());
-      shape.at(dim) = static_cast<Dim>(indexTensor.numel());
-      return {shape};
-    };
-
     MetadataBuilder(
         std::make_unique<c10::FunctionSchema>(
             "tw.index_select",
@@ -3179,7 +3623,10 @@ void registerBuiltins() {
             {{.isRegister = false, .wholeTensor = true, .randomAccess = true},
              {.isRegister = false, .wholeTensor = true, .randomAccess = true},
              {.isRegister = true}})
-        .returnMeta({{.isRegister = true, .reserveShape = indexSelectReserve}})
+        .returnMeta(
+            {{.isRegister = true,
+              .reserve = indexSelectShape,
+              .reserveInputs = {.tensors = {0, 1}, .scalars = {"dim"}}}})
         .typeTemplateParams({0})
         // The output shape (source shape with 'dim' resized to the index
         // length) is not derivable from the operands, so when fused the output
@@ -3520,121 +3967,7 @@ void registerBuiltins() {
           })
       .registerOp();
 
-  // masked_put_: in-place scatter with bool mask. Shortcut for index_put_
-  // with a single 1D bool index tensor. Registered before index_put_ so
-  // the FunctionSchema is available when createNode is called.
-  {
-    auto maskedPutReserve =
-        [](NodeCP node,
-           nativert::ExecutionFrame& frame,
-           const FormalToActual& map,
-           NodeCP /*originalFormalNode*/,
-           const NodeMap& /*nodeMap*/) -> std::vector<std::vector<Dim>> {
-      auto* selfValue = node->inputs()[0].value;
-      auto selfId = selfValue->id();
-      auto it = map.find(selfId);
-      auto actualId = it != map.end() ? it->second : selfId;
-      auto& selfTensor = frame.getIValue(actualId).toTensor();
-      auto* outputValue = node->outputs()[0];
-      auto outputId = outputValue->id();
-      auto outputIt = map.find(outputId);
-      auto actualOutputId = outputIt != map.end() ? outputIt->second : outputId;
-      frame.setIValue(actualOutputId, selfTensor);
-      auto sizes = selfTensor.sizes();
-      return {{sizes.begin(), sizes.end()}};
-    };
-
-    MetadataBuilder(
-        std::make_unique<c10::FunctionSchema>(
-            "tw.masked_put_",
-            "",
-            std::vector<c10::Argument>{
-                c10::Argument("self", c10::TensorType::get()),
-                c10::Argument("mask", c10::TensorType::get()),
-                c10::Argument("values", c10::TensorType::get())},
-            std::vector<c10::Argument>{
-                c10::Argument("output", c10::TensorType::get())}))
-        .sizeOrdinal({0})
-        .outputConstraints(viewOfFirstArgConstraint)
-        .mutatesArg(0)
-        .indicesArg(1)
-        .valuesArg(2)
-        .deviceFunc("__masked_put")
-        .typeTemplateParams({0})
-        .returnMeta({{.reserveShape = maskedPutReserve}})
-        .sharedDecls({{"uint32_t", "size"}})
-        .multiBlockReturnBarrier()
-        .registerOp();
-  }
-
-  // tw.index_put_elt_one/two/three: elementwise index_put with scalar
-  // indices from a TensorList. Args: (Tensor self, TensorList indices,
-  // Tensor values, bool accumulate).
-  {
-    static const char* kNames[] = {
-        "tw.index_put_elt_one",
-        "tw.index_put_elt_two",
-        "tw.index_put_elt_three"};
-    static const char* kFuncs[] = {
-        "__index_put_elt_one", "__index_put_elt_two", "__index_put_elt_three"};
-    for (int numIdx = 1; numIdx <= 3; ++numIdx) {
-      auto indexPutEltReserve =
-          [](NodeCP node,
-             nativert::ExecutionFrame& frame,
-             const FormalToActual& map,
-             NodeCP /*originalFormalNode*/,
-             const NodeMap& /*nodeMap*/) -> std::vector<std::vector<Dim>> {
-        auto* selfValue = node->inputs()[0].value;
-        auto selfId = selfValue->id();
-        auto it = map.find(selfId);
-        auto actualId = it != map.end() ? it->second : selfId;
-        auto& selfTensor = frame.getIValue(actualId).toTensor();
-        auto* outputValue = node->outputs()[0];
-        auto outputId = outputValue->id();
-        auto outputIt = map.find(outputId);
-        auto actualOutputId =
-            outputIt != map.end() ? outputIt->second : outputId;
-        frame.setIValue(actualOutputId, selfTensor);
-        auto sizes = selfTensor.sizes();
-        return {{sizes.begin(), sizes.end()}};
-      };
-      int i = numIdx - 1;
-      MetadataBuilder(
-          std::make_unique<c10::FunctionSchema>(
-              kNames[i],
-              "",
-              std::vector<c10::Argument>{
-                  c10::Argument("self", c10::TensorType::get()),
-                  c10::Argument("indices", c10::ListType::ofTensors()),
-                  c10::Argument("values", c10::TensorType::get()),
-                  c10::Argument(
-                      "accumulate",
-                      c10::BoolType::get(),
-                      std::nullopt,
-                      c10::IValue(false))},
-              std::vector<c10::Argument>{
-                  c10::Argument("output", c10::TensorType::get())}))
-          .elementwiseFunc(kFuncs[i])
-          .outputConstraints(viewOfFirstArgConstraint)
-          .mutatesArg(0)
-          .indicesArg(1)
-          .valuesArg(2)
-          .argumentMeta(
-              {{.isRegister = false, .wholeTensor = true, .randomAccess = true},
-               {.isRegister = true},
-               {.isRegister = true},
-               {.isRegister = true}})
-          .returnMeta(
-              {{.isRegister = false,
-                .reserveShape = indexPutEltReserve,
-                .wholeTensor = true,
-                .randomAccess = true}})
-          .typeTemplateParams({0})
-          .hasBlockInfo()
-          .multiBlockReturnBarrier()
-          .registerOp();
-    }
-  }
+  registerInPlaceScatterBuiltins();
 
   // index_put_: in-place scatter.
   {
@@ -3849,7 +4182,7 @@ void registerBuiltins() {
   // element and scatters each into the output at its strided slice position;
   // the pass-through elements are supplied by the clone/in-place base and are
   // never touched. The output aliases self in place (mutatesArg -> aliasSelfId,
-  // no reserveShape); the aten.slice_scatter rewrite inserts a clone of self
+  // no reserve); the aten.slice_scatter rewrite inserts a clone of self
   // that clone-elision drops when self is dead. hasOutputArg passes the output
   // so the destination offset is decomposed with its magic dividers.
   MetadataBuilder(
@@ -3902,7 +4235,7 @@ void registerBuiltins() {
   // self's with 'dim' removed; the destination inserts 'index' at 'dim'); the
   // pass-through elements are supplied by the clone/in-place base and are never
   // touched. The output aliases self in place (mutatesArg -> aliasSelfId, no
-  // reserveShape); the aten.select_scatter rewrite inserts a clone of self that
+  // reserve); the aten.select_scatter rewrite inserts a clone of self that
   // clone-elision drops when self is dead. hasOutputArg passes the output so
   // the destination offset is decomposed with its magic dividers.
   MetadataBuilder(
@@ -3941,7 +4274,7 @@ void registerBuiltins() {
   // leaf), one iteration per src element; 'index' (same shape as src, checked
   // by the rewrite when both shapes are static) is read whole to supply the
   // destination coordinate along 'dim'. The output aliases self in place
-  // (mutatesArg -> aliasSelfId, no reserveShape); the functional rewrite
+  // (mutatesArg -> aliasSelfId, no reserve); the functional rewrite
   // inserts a clone of self that clone-elision drops when self is dead.
   MetadataBuilder(
       std::make_unique<c10::FunctionSchema>(
@@ -4058,6 +4391,8 @@ void registerBuiltins() {
             auto* self = inputAt(node, 0);
             ValueConstraint constraint;
             constraint.rank = static_cast<int8_t>(types.rank(self) + 1);
+            // The inserted dim has extent 1, so the layout stays dense.
+            constraint.contiguity = types.contiguity(self);
             return {constraint};
           })
       .registerOp();
@@ -4206,12 +4541,8 @@ void registerBuiltins() {
       .argumentMeta({{.isRegister = true}, {}})
       .returnMeta(
           {{.isRegister = false,
-            .reserveShape = [](NodeCP /*node*/,
-                               nativert::ExecutionFrame& /*frame*/,
-                               const FormalToActual& /*map*/,
-                               NodeCP /*originalFormalNode*/,
-                               const NodeMap& /*nodeMap*/)
-                -> std::vector<std::vector<Dim>> { return {{}}; }}})
+            .reserve = scalarReserve,
+            .reserveInputs = {}}})
       .normalize(resolveDtypeFromInput)
       .makeMultiKernelVariant(makeSumVariant)
       .cgVariant(makeSumCgVariant)
@@ -4238,7 +4569,10 @@ void registerBuiltins() {
               c10::Argument("output", c10::TensorType::get())}))
       .sizeOrdinal({0})
       .hasBarrier()
-      .returnMeta({{.isRegister = false, .reserveShape = numBlocksShape}})
+      .returnMeta(
+          {{.isRegister = false,
+            .reserve = numBlocksReserve,
+            .reserveInputs = {.tensors = {0}}}})
       .headerFile(kScanHeader)
       .deviceFunc("tw_sum_head")
       .sharedDecls(
@@ -4265,12 +4599,8 @@ void registerBuiltins() {
       .hasBarrier()
       .returnMeta(
           {{.isRegister = false,
-            .reserveShape = [](NodeCP /*node*/,
-                               nativert::ExecutionFrame& /*frame*/,
-                               const FormalToActual& /*map*/,
-                               NodeCP /*originalFormalNode*/,
-                               const NodeMap& /*nodeMap*/)
-                -> std::vector<std::vector<Dim>> { return {{}}; }}})
+            .reserve = scalarReserve,
+            .reserveInputs = {}}})
       .inputFromPreviousKernel(0)
       .headerFile(kScanHeader)
       .deviceFunc("tw_sum_tensor")
@@ -4294,14 +4624,8 @@ void registerBuiltins() {
       .argumentMeta({{.isRegister = true}, {.isRegister = true}})
       .returnMeta(
           {{.isRegister = false,
-            .reserveShape = [](NodeCP node,
-                               nativert::ExecutionFrame& frame,
-                               const FormalToActual& map,
-                               NodeCP /*originalFormalNode*/,
-                               const NodeMap& /*nodeMap*/)
-                -> std::vector<std::vector<Dim>> {
-              return elementwiseInputShape(node, frame, map, 0);
-            },
+            .reserve = maxShapeReserve,
+            .reserveInputs = {.elementwiseLeaves = 0},
             .shapeSetOnDevice = true}})
       .makeMultiKernelVariant(
           singlePass ? makeMaskedSelectSinglePassVariant
@@ -4332,7 +4656,10 @@ void registerBuiltins() {
               c10::Argument("output", c10::TensorType::get())}))
       .sizeOrdinal({0})
       .hasBarrier()
-      .returnMeta({{.isRegister = false, .reserveShape = numBlocksShape}})
+      .returnMeta(
+          {{.isRegister = false,
+            .reserve = numBlocksReserve,
+            .reserveInputs = {.tensors = {0}}}})
       .headerFile(kScanHeader)
       .deviceFunc("masked_select_head")
       .sharedDecls(
@@ -4386,15 +4713,8 @@ void registerBuiltins() {
       .sizeOrdinal({0})
       .returnMeta(
           {{.isRegister = false,
-            .reserveShape = [](NodeCP node,
-                               nativert::ExecutionFrame& frame,
-                               const FormalToActual& map,
-                               NodeCP /*originalFormalNode*/,
-                               const NodeMap& /*nodeMap*/)
-                -> std::vector<std::vector<Dim>> {
-              auto total = paramSymInt(node->inputs()[3].value, frame, map);
-              return {{static_cast<Dim>(total)}};
-            }}})
+            .reserve = scalarLengthReserve,
+            .reserveInputs = {.scalars = {3}}}})
       .inputFromPreviousKernel(3)
       .headerFile(kScanHeader)
       .deviceFunc("masked_select_final")
@@ -4416,8 +4736,13 @@ void registerBuiltins() {
       .hasBarrier()
       .singleBlockIfFused()
       .maybeReplace(
-          [](NodeCP node, ValueTypes& types, WaveGraph& /*waveGraph*/)
-              -> std::vector<std::pair<ValueCP, ValueCP>> {
+          [](NodeCP node,
+             ValueTypes& types,
+             WaveGraph& waveGraph) -> std::vector<std::pair<ValueCP, ValueCP>> {
+            if (auto replaced = cumsumOfOnesAsArange(node, types, waveGraph);
+                !replaced.empty()) {
+              return replaced;
+            }
             if (isLastDimOfRows(node, types)) {
               const_cast<nativert::Node*>(node)->setTarget("tw.cumsum_rows");
             }
@@ -4425,14 +4750,8 @@ void registerBuiltins() {
           })
       .returnMeta(
           {{.isRegister = false,
-            .reserveShape = [](NodeCP node,
-                               nativert::ExecutionFrame& frame,
-                               const FormalToActual& map,
-                               NodeCP /*originalFormalNode*/,
-                               const NodeMap& /*nodeMap*/)
-                -> std::vector<std::vector<Dim>> {
-              return elementwiseInputShape(node, frame, map, 0);
-            },
+            .reserve = maxShapeReserve,
+            .reserveInputs = {.elementwiseLeaves = 0},
             .shapeFromInput = 0}})
       .normalize(resolveDtypeFromInput)
       .makeMultiKernelVariant(
@@ -4467,7 +4786,10 @@ void registerBuiltins() {
               c10::Argument("output", c10::TensorType::get())}))
       .sizeOrdinal({0})
       .hasBarrier()
-      .returnMeta({{.isRegister = false, .reserveShape = numBlocksShape}})
+      .returnMeta(
+          {{.isRegister = false,
+            .reserve = numBlocksReserve,
+            .reserveInputs = {.tensors = {0}}}})
       .headerFile(kScanHeader)
       .deviceFunc("cumsum_head")
       .sharedDecls(
@@ -4525,7 +4847,8 @@ void registerBuiltins() {
           {{.isRegister = false}, {.isRegister = false}, {.linkOnly = true}})
       .returnMeta(
           {{.isRegister = false,
-            .reserveShape = inputShape,
+            .reserve = inputShapeReserve,
+            .reserveInputs = {.tensors = {0}},
             .shapeFromInput = 0}})
       .inputFromPreviousKernel(2)
       .headerFile(kScanHeader)
@@ -4566,7 +4889,8 @@ void registerBuiltins() {
       .singleBlockIfFused()
       .returnMeta(
           {{.isRegister = false,
-            .reserveShape = inputShapePlusOne,
+            .reserve = inputShapePlusOneReserve,
+            .reserveInputs = {.tensors = {0}},
             .shapeFromInput = 0}})
       .normalize(resolveDtypeFromInput)
       .makeMultiKernelVariant(
@@ -4602,7 +4926,10 @@ void registerBuiltins() {
               c10::Argument("output", c10::TensorType::get())}))
       .sizeOrdinal({0})
       .hasBarrier()
-      .returnMeta({{.isRegister = false, .reserveShape = numBlocksShape}})
+      .returnMeta(
+          {{.isRegister = false,
+            .reserve = numBlocksReserve,
+            .reserveInputs = {.tensors = {0}}}})
       .headerFile(kScanHeader)
       .deviceFunc("exclusive_sum_head")
       .sharedDecls(
@@ -4660,7 +4987,8 @@ void registerBuiltins() {
           {{.isRegister = false}, {.isRegister = false}, {.linkOnly = true}})
       .returnMeta(
           {{.isRegister = false,
-            .reserveShape = inputShapePlusOne,
+            .reserve = inputShapePlusOneReserve,
+            .reserveInputs = {.tensors = {0}},
             .shapeFromInput = 0}})
       .inputFromPreviousKernel(2)
       .headerFile(kScanHeader)
@@ -4701,7 +5029,8 @@ void registerBuiltins() {
       .singleBlockIfFused()
       .returnMeta(
           {{.isRegister = false,
-            .reserveShape = inputShape,
+            .reserve = inputShapeReserve,
+            .reserveInputs = {.tensors = {0}},
             .shapeFromInput = 0}})
       .normalize(resolveDtypeFromInputExact)
       .headerFile(kScanHeader)
@@ -4736,14 +5065,10 @@ void registerBuiltins() {
       .sizeShortcut(SizeShortcut::kMax)
       .hasBarrier()
       .returnMeta(
-          {{.isRegister = false,
-            .reserveShape = [](NodeCP /*node*/,
-                               nativert::ExecutionFrame& /*frame*/,
-                               const FormalToActual& /*map*/,
-                               NodeCP /*originalFormalNode*/,
-                               const NodeMap& /*nodeMap*/)
-                -> std::vector<std::vector<Dim>> { return {{}}; }},
-           {.isRegister = false, .reserveShape = numBlocksShape}})
+          {{.isRegister = false, .reserve = scalarReserve, .reserveInputs = {}},
+           {.isRegister = false,
+            .reserve = numBlocksReserve,
+            .reserveInputs = {.tensors = {0}}}})
       .normalize(resolveDtypeFromInput)
       .headerFile(kScanHeader)
       .deviceFunc("tw_sum_cg")
@@ -4773,9 +5098,12 @@ void registerBuiltins() {
       .hasBarrier()
       .returnMeta(
           {{.isRegister = false,
-            .reserveShape = inputShape,
+            .reserve = inputShapeReserve,
+            .reserveInputs = {.tensors = {0}},
             .shapeFromInput = 0},
-           {.isRegister = false, .reserveShape = numBlocksShape}})
+           {.isRegister = false,
+            .reserve = numBlocksReserve,
+            .reserveInputs = {.tensors = {0}}}})
       .normalize(resolveDtypeFromInput)
       .headerFile(kScanHeader)
       .deviceFunc("cumsum_cg")
@@ -4809,9 +5137,12 @@ void registerBuiltins() {
       .hasBarrier()
       .returnMeta(
           {{.isRegister = false,
-            .reserveShape = inputShapePlusOne,
+            .reserve = inputShapePlusOneReserve,
+            .reserveInputs = {.tensors = {0}},
             .shapeFromInput = 0},
-           {.isRegister = false, .reserveShape = numBlocksShape}})
+           {.isRegister = false,
+            .reserve = numBlocksReserve,
+            .reserveInputs = {.tensors = {0}}}})
       .normalize(resolveDtypeFromInput)
       .headerFile(kScanHeader)
       .deviceFunc("exclusive_sum_cg")
@@ -4844,10 +5175,13 @@ void registerBuiltins() {
       .hasBarrier()
       .returnMeta(
           {{.isRegister = false,
-            .reserveShape = inputShape,
+            .reserve = inputNumelReserve,
+            .reserveInputs = {.tensors = {0}},
             .shapeFromInput = 0,
             .shapeSetOnDevice = true},
-           {.isRegister = false, .reserveShape = numBlocksShape}})
+           {.isRegister = false,
+            .reserve = numBlocksReserve,
+            .reserveInputs = {.tensors = {0}}}})
       .headerFile(kScanHeader)
       .deviceFunc("masked_select_cg")
       .sharedDecls(
@@ -4886,9 +5220,12 @@ void registerBuiltins() {
       .hasBarrier()
       .returnMeta(
           {{.isRegister = false,
-            .reserveShape = inputShape,
+            .reserve = inputShapeReserve,
+            .reserveInputs = {.tensors = {0}},
             .shapeFromInput = 0},
-           {.isRegister = false, .reserveShape = lookbackStateShape}})
+           {.isRegister = false,
+            .reserve = lookbackStateReserve,
+            .reserveInputs = {.tensors = {0}}}})
       .normalize(resolveDtypeFromInput)
       .headerFile(kScanHeader)
       .deviceFunc("cumsum_1pass")
@@ -4934,9 +5271,12 @@ void registerBuiltins() {
       .hasBarrier()
       .returnMeta(
           {{.isRegister = false,
-            .reserveShape = inputShapePlusOne,
+            .reserve = inputShapePlusOneReserve,
+            .reserveInputs = {.tensors = {0}},
             .shapeFromInput = 0},
-           {.isRegister = false, .reserveShape = lookbackStateShape}})
+           {.isRegister = false,
+            .reserve = lookbackStateReserve,
+            .reserveInputs = {.tensors = {0}}}})
       .normalize(resolveDtypeFromInput)
       .headerFile(kScanHeader)
       .deviceFunc("exclusive_sum_1pass")
@@ -4984,10 +5324,13 @@ void registerBuiltins() {
       .hasBarrier()
       .returnMeta(
           {{.isRegister = false,
-            .reserveShape = inputShape,
+            .reserve = inputNumelReserve,
+            .reserveInputs = {.tensors = {0}},
             .shapeFromInput = 0,
             .shapeSetOnDevice = true},
-           {.isRegister = false, .reserveShape = lookbackStateShape}})
+           {.isRegister = false,
+            .reserve = lookbackStateReserve,
+            .reserveInputs = {.tensors = {0}}}})
       .headerFile(kScanHeader)
       .deviceFunc("masked_select_1pass")
       .multiBlockReturnBarrier()
@@ -5007,26 +5350,14 @@ void registerBuiltins() {
 
   // --- nonzero (1D) ---
 
-  auto nonzeroReserve =
-      [](NodeCP node,
-         nativert::ExecutionFrame& frame,
-         const FormalToActual& map,
-         NodeCP /*originalFormalNode*/,
-         const NodeMap& /*nodeMap*/) -> std::vector<std::vector<Dim>> {
-    auto shapes = elementwiseInputShape(node, frame, map, 0);
-    if (!shapes.empty() && !shapes[0].empty()) {
-      shapes[0].push_back(1);
-    }
-    return shapes;
-  };
-
   MetadataBuilder("torch.ops.aten.nonzero.default")
       .sizeOrdinal({0})
       .hasBarrier()
       .singleBlockIfFused()
       .returnMeta(
           {{.isRegister = false,
-            .reserveShape = nonzeroReserve,
+            .reserve = nonzeroShape,
+            .reserveInputs = {.elementwiseLeaves = 0},
             .shapeSetOnDevice = true}})
       .headerFile(kScanHeader)
       .deviceFunc("nonzero1d")
@@ -5064,7 +5395,10 @@ void registerBuiltins() {
               c10::Argument("output", c10::TensorType::get())}))
       .sizeOrdinal({0})
       .hasBarrier()
-      .returnMeta({{.isRegister = false, .reserveShape = numBlocksShape}})
+      .returnMeta(
+          {{.isRegister = false,
+            .reserve = numBlocksReserve,
+            .reserveInputs = {.tensors = {0}}}})
       .headerFile(kScanHeader)
       .deviceFunc("nonzero1d_head")
       .sharedDecls(
@@ -5091,15 +5425,8 @@ void registerBuiltins() {
       .sizeOrdinal({0})
       .returnMeta(
           {{.isRegister = false,
-            .reserveShape = [](NodeCP node,
-                               nativert::ExecutionFrame& frame,
-                               const FormalToActual& map,
-                               NodeCP /*originalFormalNode*/,
-                               const NodeMap& /*nodeMap*/)
-                -> std::vector<std::vector<Dim>> {
-              auto total = paramSymInt(node->inputs()[2].value, frame, map);
-              return {{static_cast<Dim>(total)}};
-            },
+            .reserve = scalarLengthReserve,
+            .reserveInputs = {.scalars = {2}},
             .shapeSetOnDevice = true}})
       .inputFromPreviousKernel(2)
       .headerFile(kScanHeader)
@@ -5131,9 +5458,12 @@ void registerBuiltins() {
       .hasBarrier()
       .returnMeta(
           {{.isRegister = false,
-            .reserveShape = nonzeroReserve,
+            .reserve = nonzeroShape,
+            .reserveInputs = {.elementwiseLeaves = 0},
             .shapeSetOnDevice = true},
-           {.isRegister = false, .reserveShape = numBlocksShape}})
+           {.isRegister = false,
+            .reserve = numBlocksReserve,
+            .reserveInputs = {.tensors = {0}}}})
       .headerFile(kScanHeader)
       .deviceFunc("nonzero1d_cg")
       .sharedDecls(
@@ -5213,7 +5543,7 @@ void registerBuiltins() {
                 {{"input", input},
                  {"prefix", prefixOutput},
                  {"total", totalOutput}});
-            // Propagate the interleave axis so the final's reserveShape and
+            // Propagate the interleave axis so the final's reserve and
             // rank constraint reconstruct the full (multi-dim) output shape,
             // and so the kernel knows the axis without re-deriving it from the
             // shapes (which is ambiguous when the repeats sum back to
@@ -5242,7 +5572,8 @@ void registerBuiltins() {
       .hasBarrier()
       .returnMeta(
           {{.isRegister = false,
-            .reserveShape = inputShape,
+            .reserve = inputShapeReserve,
+            .reserveInputs = {.tensors = {0}},
             .shapeFromInput = 0},
            {.neededOnHost = true}})
       .headerFile(kScanHeader)
@@ -5263,33 +5594,6 @@ void registerBuiltins() {
           })
       .registerOp();
 
-  auto repeatInterleaveBcastReserve =
-      [](NodeCP node,
-         nativert::ExecutionFrame& frame,
-         const FormalToActual& map,
-         NodeCP /*originalFormalNode*/,
-         const NodeMap& /*nodeMap*/) -> std::vector<std::vector<Dim>> {
-    // prefix length = number of source segments = size(input, dim), or
-    // numEl(input) when flattening (dim=None).
-    auto inputTensor = paramTensor(node->inputs()[1].value, frame, map);
-    auto dimOpt = constIntArg(node, "dim");
-    if (!dimOpt.has_value()) {
-      return {{static_cast<Dim>(inputTensor.numel())}};
-    }
-    // 'dim' arrives already normalized to a non-negative axis -- the rewrite
-    // resolves it once for both this head and the final -- so this only
-    // re-checks it against the runtime rank.
-    int64_t rank = inputTensor.dim();
-    int64_t dim = *dimOpt;
-    TORCH_CHECK(
-        dim >= 0 && dim < rank,
-        "repeat_interleave: dim ",
-        dim,
-        " out of range for rank ",
-        rank);
-    return {{static_cast<Dim>(inputTensor.size(dim))}};
-  };
-
   // Broadcast (0-dim repeat count) head: prefix[i] = (i+1)*r, sized to the
   // segment count. Reused for both dim-given and flatten (dim=None) cases.
   MetadataBuilder(
@@ -5305,7 +5609,9 @@ void registerBuiltins() {
       .sizeOrdinal({0})
       .hasBarrier()
       .returnMeta(
-          {{.isRegister = false, .reserveShape = repeatInterleaveBcastReserve},
+          {{.isRegister = false,
+            .reserve = repeatInterleaveBcastShape,
+            .reserveInputs = {.tensors = {1}, .optionalScalars = {"dim"}}},
            {.neededOnHost = true}})
       .headerFile(kScanHeader)
       .deviceFunc("repeat_interleave_bcast_head")
@@ -5318,73 +5624,6 @@ void registerBuiltins() {
             return {{.rank = 1}, {}};
           })
       .registerOp();
-
-  auto repeatInterleaveFinalReserve =
-      [](NodeCP node,
-         nativert::ExecutionFrame& frame,
-         const FormalToActual& map,
-         NodeCP /*originalFormalNode*/,
-         const NodeMap& /*nodeMap*/) -> std::vector<std::vector<Dim>> {
-    auto total = paramSymInt(node->inputs()[2].value, frame, map);
-    // The whole scan pipeline indexes prefixes with int32, so a result at or
-    // past INT32_MAX cannot be represented no matter how it arose. The
-    // broadcast head saturates to INT32_MAX on an overflowing segments *
-    // repeatCount and reports it through debugInfo, but that report is
-    // diagnostic only -- errorString() is gated on keepStatsOnThread and never
-    // throws -- so without this the gather would run on a clamped prefix and
-    // return wrong data. 'total' is already neededOnHost, so gating here costs
-    // no extra device round trip.
-    TORCH_CHECK(
-        total < std::numeric_limits<int32_t>::max(),
-        "repeat_interleave: result of ",
-        total,
-        " elements along the interleave axis is not representable in the "
-        "int32 prefix-sum pipeline");
-    auto dimOpt = constIntArg(node, "dim");
-    // The gather walks prefix[0 .. segments), where segments is size(input,
-    // dim) or numEl(input) when flattening. A per-segment 'repeats' sizes the
-    // prefix by its own length, so a mismatch (notably torch's length-1
-    // broadcast form, which the rewrite cannot recognize -- see the comment
-    // there) would read past the end of the prefix on device. Checked here,
-    // where the real extents are known, so it surfaces as a host-side error.
-    // The index_final overload shares this reserve, carries no 'dim' at all,
-    // and sizes its prefix from the same repeats it iterates, so it is exempt.
-    auto checkPrefixCoversSegments = [&](int64_t segments) {
-      auto prefixTensor = paramTensor(node->inputs()[1].value, frame, map);
-      TORCH_CHECK(
-          prefixTensor.numel() == segments,
-          "repeat_interleave: 'repeats' has ",
-          prefixTensor.numel(),
-          " entries but the input has ",
-          segments,
-          " segments along the interleave axis; a length-1 broadcast 'repeats'"
-          " is not supported on the wave path");
-    };
-    // dim=None: repeat_interleave flattens to a 1-D output of 'total'
-    // elements. The index_final overload shares this reserve and never carries
-    // a 'dim'; the gather final always does, using -1 for the flatten case.
-    if (!dimOpt.has_value()) {
-      return {{static_cast<Dim>(total)}};
-    }
-    auto inputTensor = paramTensor(node->inputs()[0].value, frame, map);
-    if (*dimOpt < 0) {
-      checkPrefixCoversSegments(inputTensor.numel());
-      return {{static_cast<Dim>(total)}};
-    }
-    int64_t rank = inputTensor.dim();
-    int64_t dim = *dimOpt;
-    TORCH_CHECK(
-        dim < rank,
-        "repeat_interleave: dim ",
-        dim,
-        " out of range for rank ",
-        rank);
-    checkPrefixCoversSegments(inputTensor.size(dim));
-    std::vector<Dim> shape(
-        inputTensor.sizes().begin(), inputTensor.sizes().end());
-    shape.at(dim) = static_cast<Dim>(total);
-    return {shape};
-  };
 
   // tw.repeat_interleave_final: (Tensor, Tensor, int) -> Tensor
   MetadataBuilder(
@@ -5399,7 +5638,12 @@ void registerBuiltins() {
               c10::Argument("output", c10::TensorType::get())}))
       .sizeOrdinal({0})
       .returnMeta(
-          {{.isRegister = false, .reserveShape = repeatInterleaveFinalReserve}})
+          {{.isRegister = false,
+            .reserve = repeatInterleaveFinalShape,
+            .reserveInputs =
+                {.tensors = {0, 1},
+                 .scalars = {2},
+                 .optionalScalars = {"dim"}}}})
       // The gather decomposes the output index and maps it through the
       // output's strides, so it fills a pitched concat band correctly.
       .mayWriteStrided()
@@ -5478,7 +5722,12 @@ void registerBuiltins() {
               c10::Argument("output", c10::TensorType::get())}))
       .sizeOrdinal({0})
       .returnMeta(
-          {{.isRegister = false, .reserveShape = repeatInterleaveFinalReserve}})
+          {{.isRegister = false,
+            .reserve = repeatInterleaveFinalShape,
+            .reserveInputs =
+                {.tensors = {0, 1},
+                 .scalars = {2},
+                 .optionalScalars = {"dim"}}}})
       // No mayWriteStrided: unlike repeat_interleave_final, this one writes the
       // run of repeated indices as out[j] for j in [start, end), a linear walk
       // that ignores the output's strides. A pitched concat band would land in
@@ -5555,20 +5804,8 @@ void registerBuiltins() {
       .singleBlockIfFused()
       .returnMeta(
           {{.isRegister = false,
-            .reserveShape = [](NodeCP node,
-                               nativert::ExecutionFrame& frame,
-                               const FormalToActual& map,
-                               NodeCP /*originalFormalNode*/,
-                               const NodeMap& /*nodeMap*/)
-                -> std::vector<std::vector<Dim>> {
-              auto tensor = paramTensor(node->inputs()[0].value, frame, map);
-              auto n = tensor.numel();
-              int64_t tableSize = 1;
-              while (tableSize < n * 2) {
-                tableSize *= 2;
-              }
-              return {{static_cast<Dim>(tableSize + 1)}};
-            }}})
+            .reserve = hashTableReserve,
+            .reserveInputs = {.tensors = {0}}}})
       .headerFile(kHashHeader)
       .deviceFunc("tw_isin_head")
       .typeTemplateParams({0})
@@ -5606,7 +5843,7 @@ void registerBuiltins() {
   // 'pad' carries the whole list for the host-side output width only and is
   // kept out of the kernel arguments (ignoreAttrs); the kernel takes the two
   // amounts as 'left'/'right' registers. Reading the list rather than the two
-  // elements matters: paramIntListByName resolves the packed list from the
+  // elements matters: the reserve binding resolves the packed list from the
   // frame, which a dynamic pad amount populates before an element-wise read of
   // the prim.ListPack operands would see it.
   MetadataBuilder(
@@ -5632,20 +5869,8 @@ void registerBuiltins() {
            {.isRegister = true}})
       .returnMeta(
           {{.isRegister = true,
-            .reserveShape =
-                [](NodeCP node,
-                   nativert::ExecutionFrame& frame,
-                   const FormalToActual& map,
-                   NodeCP originalFormalNode,
-                   const NodeMap& nodeMap) -> std::vector<std::vector<Dim>> {
-              auto self = paramTensor(node->inputs()[0].value, frame, map);
-              auto pad = paramIntListByName(
-                  originalFormalNode, "pad", frame, map, nodeMap);
-              auto sizes = self.sizes();
-              std::vector<Dim> shape(sizes.begin(), sizes.end());
-              shape.back() += static_cast<Dim>(pad[0] + pad[1]);
-              return {std::move(shape)};
-            }}})
+            .reserve = padLastDimReserve,
+            .reserveInputs = {.tensors = {0}, .intLists = {"pad"}}}})
       .typeTemplateParams({0})
       // The output extent (self's, widened by the pad amounts) is not derivable
       // from the operands: self is a whole-tensor operand, which the
@@ -6084,15 +6309,85 @@ void registerBuiltins() {
          .contiguity = Contiguity::kContiguous}};
   };
 
+  // tw.any_rows: any() over the trailing dims of a bool input from 'keep' on,
+  // one block per output element. The input is read across lanes, so it
+  // needs a kernel-wide barrier against a producer in the same kernel, as
+  // tw.sum_rows does.
+  MetadataBuilder(
+      std::make_unique<c10::FunctionSchema>(
+          "tw.any_rows",
+          "",
+          std::vector<c10::Argument>{
+              c10::Argument("self", c10::TensorType::get())},
+          std::vector<c10::Argument>{
+              c10::Argument("output", c10::TensorType::get())}))
+      .sizeOrdinal({0})
+      .argumentMeta({{.isRegister = false, .randomAccess = true}})
+      .returnMeta(
+          {{.isRegister = false,
+            .reserve = leadingDimsReserve,
+            .reserveInputs = {.tensors = {0}, .scalars = {"keep"}}}})
+      .headerFile(kScanHeader)
+      .deviceFunc("any_rows")
+      .rowReduction(
+          {.keepAttr = "keep",
+           .accumulatorType = "bool",
+           .init = "false",
+           .combine = "{0} |= {1}",
+           .groupCombine =
+               "(((__ballot_sync(0xffffffff, {0}) >> (lane & ~({1}u - 1))) & "
+               "(0xffffffffu >> (32 - {1}))) != 0)",
+           .blockCombine = "(__syncthreads_or({0}) != 0)"})
+      .hasBlockSizeTemplateParam()
+      .templateAttrs({"keep"})
+      .multiBlockReturnBarrier()
+      .outputConstraints(
+          [](NodeCP node,
+             const ValueTypes& /*types*/) -> std::vector<ValueConstraint> {
+            return {
+                {.rank = static_cast<int8_t>(*constIntArg(node, "keep")),
+                 .contiguity = Contiguity::kContiguous}};
+          })
+      .registerOp();
   MetadataBuilder("torch.ops.aten.any.dim")
       .sizeOrdinal({0})
       .isStandalone()
       .outputConstraints(singleDimReduceConstraint)
+      .maybeReplace(
+          [](NodeCP node,
+             ValueTypes& types,
+             WaveGraph& waveGraph) -> std::vector<std::pair<ValueCP, ValueCP>> {
+            const auto rank = types.rank(inputAt(node, 0));
+            auto dim = constIntArg(node, "dim");
+            if (!dim.has_value() || rank <= 0) {
+              return {};
+            }
+            return anyRowsOf(
+                node, types, waveGraph, {*dim < 0 ? *dim + rank : *dim});
+          })
       .registerOp();
   MetadataBuilder("torch.ops.aten.any.dims")
       .sizeOrdinal({0})
       .isStandalone()
       .outputConstraints(listDimReduceConstraint)
+      .maybeReplace(
+          [](NodeCP node,
+             ValueTypes& types,
+             WaveGraph& waveGraph) -> std::vector<std::pair<ValueCP, ValueCP>> {
+            const auto rank = types.rank(inputAt(node, 0));
+            const auto* dimAttr = node->tryGetAttribute("dim");
+            const auto* dims = dimAttr == nullptr
+                ? nullptr
+                : std::get_if<std::vector<int64_t>>(&dimAttr->value);
+            if (dims == nullptr || rank <= 0) {
+              return {};
+            }
+            std::vector<int64_t> reduced;
+            for (auto dim : *dims) {
+              reduced.push_back(dim < 0 ? dim + rank : dim);
+            }
+            return anyRowsOf(node, types, waveGraph, std::move(reduced));
+          })
       .registerOp();
   MetadataBuilder("torch.ops.aten.sum.dim_IntList")
       .sizeOrdinal({0})
@@ -6546,28 +6841,6 @@ void registerBuiltins() {
       .alwaysSingleBlock()
       .registerOp();
 
-  // Output length = max(maxval + 1, minlength). An empty input reduces to
-  // INT_MIN in the head, so maxval + 1 is negative and minlength wins.
-  // minlength is read from the actual node (via nodeMap): bincount_final nodes
-  // over the same input dedup to one kernel, so reading the captured formal
-  // node's minlength would size every deduped instance from the first one's.
-  auto bincountFinalReserve =
-      [](NodeCP node,
-         nativert::ExecutionFrame& frame,
-         const FormalToActual& map,
-         NodeCP originalFormalNode,
-         const NodeMap& nodeMap) -> std::vector<std::vector<Dim>> {
-    int64_t maxval =
-        paramSymInt(node->tryGetInput("maxval")->value, frame, map);
-    int64_t minlength =
-        paramIntByName(originalFormalNode, "minlength", frame, map, nodeMap);
-    int64_t outSize = std::max<int64_t>(maxval + 1, minlength);
-    if (outSize < 0) {
-      outSize = 0;
-    }
-    return {{static_cast<Dim>(outSize)}};
-  };
-
   // tw.bincount_final: single-block clear + atomic-add scatter into the bins.
   MetadataBuilder(
       std::make_unique<c10::FunctionSchema>(
@@ -6580,7 +6853,10 @@ void registerBuiltins() {
               c10::Argument("output", c10::TensorType::get())}))
       .sizeOrdinal({0})
       .ignoreAttrs({"minlength"})
-      .returnMeta({{.isRegister = false, .reserveShape = bincountFinalReserve}})
+      .returnMeta(
+          {{.isRegister = false,
+            .reserve = bincountFinalShape,
+            .reserveInputs = {.scalars = {"maxval", "minlength"}}}})
       .inputFromPreviousKernel(1)
       .headerFile(kScanHeader)
       .deviceFunc("bincount_final")
@@ -6610,7 +6886,10 @@ void registerBuiltins() {
               c10::Argument("output", c10::TensorType::get())}))
       .sizeOrdinal({0})
       .ignoreAttrs({"minlength"})
-      .returnMeta({{.isRegister = false, .reserveShape = bincountFinalReserve}})
+      .returnMeta(
+          {{.isRegister = false,
+            .reserve = bincountFinalShape,
+            .reserveInputs = {.scalars = {"maxval", "minlength"}}}})
       .inputFromPreviousKernel(1)
       .headerFile(kScanHeader)
       .deviceFunc("bincount_final_cg")
@@ -6638,37 +6917,6 @@ void registerBuiltins() {
   // used only by the host-side shape math, so it is skipped as a kernel
   // argument.
   {
-    // 'repeats' is read via paramIntListByName from the actual node (resolved
-    // through nodeMap), not the captured formal node: repeat ops that share an
-    // input value dedup to one kernel (correctly -- __repeat uses out->dims,
-    // not repeats), so reading the formal node's repeats would size every
-    // deduped instance from the first one's repeats. self's runtime dims come
-    // from the frame via 'map', as in indexSelectReserve.
-    auto repeatReserve =
-        [](NodeCP node,
-           nativert::ExecutionFrame& frame,
-           const FormalToActual& map,
-           NodeCP originalFormalNode,
-           const NodeMap& nodeMap) -> std::vector<std::vector<Dim>> {
-      auto* selfValue = node->inputs()[0].value;
-      auto selfId = selfValue->id();
-      auto selfActual = map.find(selfId);
-      auto& selfTensor =
-          frame.getIValue(selfActual != map.end() ? selfActual->second : selfId)
-              .toTensor();
-      auto repeats = paramIntListByName(
-          originalFormalNode, "repeats", frame, map, nodeMap);
-      int64_t n = static_cast<int64_t>(repeats.size());
-      int64_t rank = selfTensor.dim();
-      int64_t dimOffset = n - rank;
-      std::vector<Dim> shape(n);
-      for (int64_t d = 0; d < n; ++d) {
-        int64_t selfDim = d < dimOffset ? 1 : selfTensor.sizes()[d - dimOffset];
-        shape[d] = static_cast<Dim>(repeats[d] * selfDim);
-      }
-      return {std::move(shape)};
-    };
-
     MetadataBuilder("torch.ops.aten.repeat.default")
         .elementwiseFunc("__repeat")
         .ignoreAttrs({"repeats"})
@@ -6694,7 +6942,10 @@ void registerBuiltins() {
         .argumentMeta(
             {{.isRegister = false, .wholeTensor = true, .randomAccess = true},
              {.isRegister = true}})
-        .returnMeta({{.isRegister = true, .reserveShape = repeatReserve}})
+        .returnMeta(
+            {{.isRegister = true,
+              .reserve = repeatShape,
+              .reserveInputs = {.tensors = {0}, .intLists = {"repeats"}}}})
         .typeTemplateParams({0})
         // The output shape (repeats * rank-aligned self dims) is not derivable
         // from the operands, so when fused the output is kept as a shape-only
@@ -6728,7 +6979,7 @@ void registerBuiltins() {
   // full_like: self-shaped tensor filled with a scalar. Like ones_like, but the
   // fill value arrives as the "fill_value" scalar attribute param consumed by
   // __full. self is used only for the output shape, so it is skipped during
-  // argument iteration (ignoreAttrs) and read via rankArgument/reserveShape.
+  // argument iteration (ignoreAttrs) and read via rankArgument/reserve.
   MetadataBuilder("torch.ops.aten.full_like.default")
       .elementwiseFunc("__full")
       .numArgs(1)
@@ -6736,14 +6987,8 @@ void registerBuiltins() {
       .defaultInputMeta()
       .returnMeta(
           {{.isRegister = true,
-            .reserveShape = [](NodeCP node,
-                               nativert::ExecutionFrame& frame,
-                               const FormalToActual& map,
-                               NodeCP /*originalFormalNode*/,
-                               const NodeMap& /*nodeMap*/)
-                -> std::vector<std::vector<Dim>> {
-              return elementwiseInputShape(node, frame, map, 0);
-            },
+            .reserve = maxShapeReserve,
+            .reserveInputs = {.elementwiseLeaves = 0},
             .shapeFromInput = 0}})
       .normalize(resolveDtypeFromInputExact)
       .rankArgument(0)
@@ -6775,8 +7020,11 @@ void registerBuiltins() {
              WaveGraph& waveGraph) -> std::vector<std::pair<ValueCP, ValueCP>> {
             const auto* sizeAttr = node->tryGetAttribute("size");
             const auto* fillAttr = node->tryGetAttribute("fill_value");
+            if (sizeAttr && !fillAttr) {
+              return newFullOfScalar(node, *sizeAttr, waveGraph);
+            }
             if (!sizeAttr || !fillAttr) {
-              // Dynamic size or fill: leave the node for the eager standalone.
+              // Dynamic size: leave the node for the eager standalone.
               return {};
             }
             // The Constant variant is move-only (it has a unique_ptr<Graph>
