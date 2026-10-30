@@ -435,6 +435,35 @@ __device__ void scanRows(
   }
   TIn* in = storage<TIn>(input);
   TOut* out = storage<TOut>(output);
+  if constexpr (kSumOnly) {
+    // A row of up to kWarpRowMax elements is summed by one warp, rows striding
+    // over the op's warps, as any_rows does. A block per row would run one
+    // block-wide scan per row, which dominates when there are many short rows
+    // and few blocks.
+    constexpr uint32_t kWarpRowMax = 1024;
+    if (size <= kWarpRowMax) {
+      const uint32_t lane = threadIdx.x & 31;
+      const int64_t warpsPerBlock = blockDim.x / 32;
+      for (int64_t row = block.blockInOp * warpsPerBlock + threadIdx.x / 32;
+           row < numRows;
+           row += block.numBlocksInOp * warpsPerBlock) {
+        TOut sum = 0;
+        for (uint32_t i = lane; i < size; i += 32) {
+          sum += static_cast<TOut>(in[rowOffset(input, lastDim, row, i)]);
+        }
+        for (int32_t offset = 16; offset > 0; offset /= 2) {
+          sum += __shfl_xor_sync(0xffffffff, sum, offset);
+        }
+        if (lane == 0) {
+          const int64_t outLast = output->dims[lastDim - 1];
+          out[rowOffset(output, lastDim - 1, row / outLast, row % outLast)] =
+              sum;
+        }
+      }
+      __syncthreads();
+      return;
+    }
+  }
   for (int64_t row = block.blockInOp; row < numRows;
        row += block.numBlocksInOp) {
     if (threadIdx.x == 0) {
