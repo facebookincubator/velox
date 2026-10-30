@@ -29,6 +29,22 @@ find_package_handle_standard_args(Xxhash DEFAULT_MSG Xxhash_LIBRARY Xxhash_INCLU
 
 if(Xxhash_FOUND)
   message(STATUS "Found xxhash: ${Xxhash_LIBRARY}")
+  if(NOT TARGET Xxhash::xxhash)
+    add_library(Xxhash::xxhash UNKNOWN IMPORTED)
+    set_target_properties(
+      Xxhash::xxhash
+      PROPERTIES INTERFACE_INCLUDE_DIRECTORIES "${Xxhash_INCLUDE_DIR}"
+    )
+    foreach(config RELEASE DEBUG)
+      if(Xxhash_LIBRARY_${config})
+        set_property(TARGET Xxhash::xxhash APPEND PROPERTY IMPORTED_CONFIGURATIONS ${config})
+        set_target_properties(
+          Xxhash::xxhash
+          PROPERTIES IMPORTED_LOCATION_${config} "${Xxhash_LIBRARY_${config}}"
+        )
+      endif()
+    endforeach()
+  endif()
 endif()
 
 mark_as_advanced(Xxhash_INCLUDE_DIR Xxhash_LIBRARY)
