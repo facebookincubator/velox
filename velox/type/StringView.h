@@ -17,6 +17,7 @@
 #pragma once
 
 #include <functional>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -201,23 +202,28 @@ struct StringView {
   ///       < 0, if this < other
   ///       > 0, if this > other
   int32_t compare(const StringView& other) const {
+    if (auto result = comparePrefix(other)) {
+      return *result;
+    }
+    const int32_t size = std::min(size_, other.size_) - kPrefixSize;
+    int32_t result =
+        memcmp(data() + kPrefixSize, other.data() + kPrefixSize, size);
+    return (result != 0) ? result : size_ - other.size_;
+  }
+
+  /// Returns compare(other) if the sizes and prefixes decide it, std::nullopt
+  /// otherwise.
+  std::optional<int32_t> comparePrefix(const StringView& other) const {
     if (prefixAsInt() != other.prefixAsInt()) {
       // The result is decided on prefix. The shorter will be less because the
       // prefix is padded with zeros.
       return memcmp(prefix_, other.prefix_, kPrefixSize);
     }
-    int32_t size = std::min(size_, other.size_) - kPrefixSize;
-    if (size <= 0) {
+    if (std::min(size_, other.size_) <= kPrefixSize) {
       // One ends within the prefix.
-      return size_ - other.size_;
+      return static_cast<int32_t>(size_ - other.size_);
     }
-    if (isInline() && other.isInline()) {
-      int32_t result = memcmp(value_.inlined, other.value_.inlined, size);
-      return (result != 0) ? result : size_ - other.size_;
-    }
-    int32_t result =
-        memcmp(data() + kPrefixSize, other.data() + kPrefixSize, size);
-    return (result != 0) ? result : size_ - other.size_;
+    return std::nullopt;
   }
 
   auto operator<=>(const StringView& other) const {
