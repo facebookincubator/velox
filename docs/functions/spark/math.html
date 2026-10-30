@@ -654,6 +654,47 @@ Corresponds to Spark’s operator <code class="docutils literal notranslate"><sp
 </dd></dl>
 
 <dl class="spark function">
+<dt class="sig sig-object spark" id="try_add">
+<span class="sig-name descname"><span class="pre">try_add</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">x]</span></span></span><a class="headerlink" href="#try_add" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the result of adding <code class="docutils literal notranslate"><span class="pre">x</span></code> to <code class="docutils literal notranslate"><span class="pre">y</span></code>. The types of <code class="docutils literal notranslate"><span class="pre">x</span></code> and <code class="docutils literal notranslate"><span class="pre">y</span></code>
+must be the same. For integral types, overflow returns NULL. Corresponds to
+Spark’s <code class="docutils literal notranslate"><span class="pre">try_add</span></code>. Unlike <code class="docutils literal notranslate"><span class="pre">try(checked_add(x,</span> <span class="pre">y))</span></code>, errors from <code class="docutils literal notranslate"><span class="pre">x</span></code>
+and <code class="docutils literal notranslate"><span class="pre">y</span></code> are not turned into NULL.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">try_add</span><span class="p">(</span><span class="mi">2147483647</span><span class="p">,</span> <span class="mi">1</span><span class="p">);</span> <span class="o">--</span> <span class="n">NULL</span>
+<span class="n">SELECT</span> <span class="n">try_add</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">);</span> <span class="o">--</span> <span class="mi">3</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="spark function">
+<dt class="sig sig-object spark" id="try_multiply">
+<span class="sig-name descname"><span class="pre">try_multiply</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">x]</span></span></span><a class="headerlink" href="#try_multiply" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the result of multiplying <code class="docutils literal notranslate"><span class="pre">x</span></code> by <code class="docutils literal notranslate"><span class="pre">y</span></code>. The types of <code class="docutils literal notranslate"><span class="pre">x</span></code> and
+<code class="docutils literal notranslate"><span class="pre">y</span></code> must be the same. For integral types, overflow returns NULL.
+Corresponds to Spark’s <code class="docutils literal notranslate"><span class="pre">try_multiply</span></code>. Unlike
+<code class="docutils literal notranslate"><span class="pre">try(checked_multiply(x,</span> <span class="pre">y))</span></code>, errors from <code class="docutils literal notranslate"><span class="pre">x</span></code> and <code class="docutils literal notranslate"><span class="pre">y</span></code> are not turned
+into NULL.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">try_multiply</span><span class="p">(</span><span class="mi">2147483647</span><span class="p">,</span> <span class="mi">2</span><span class="p">);</span> <span class="o">--</span> <span class="n">NULL</span>
+<span class="n">SELECT</span> <span class="n">try_multiply</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span> <span class="o">-</span><span class="mi">4</span><span class="p">);</span> <span class="o">--</span> <span class="o">-</span><span class="mi">12</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="spark function">
+<dt class="sig sig-object spark" id="try_subtract">
+<span class="sig-name descname"><span class="pre">try_subtract</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">x]</span></span></span><a class="headerlink" href="#try_subtract" title="Link to this definition">¶</a></dt>
+<dd><p>Returns the result of subtracting <code class="docutils literal notranslate"><span class="pre">y</span></code> from <code class="docutils literal notranslate"><span class="pre">x</span></code>. The types of <code class="docutils literal notranslate"><span class="pre">x</span></code> and
+<code class="docutils literal notranslate"><span class="pre">y</span></code> must be the same. For integral types, overflow returns NULL.
+Corresponds to Spark’s <code class="docutils literal notranslate"><span class="pre">try_subtract</span></code>. Unlike
+<code class="docutils literal notranslate"><span class="pre">try(checked_subtract(x,</span> <span class="pre">y))</span></code>, errors from <code class="docutils literal notranslate"><span class="pre">x</span></code> and <code class="docutils literal notranslate"><span class="pre">y</span></code> are not turned
+into NULL.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">SELECT</span> <span class="n">try_subtract</span><span class="p">(</span><span class="o">-</span><span class="mi">2147483648</span><span class="p">,</span> <span class="mi">1</span><span class="p">);</span> <span class="o">--</span> <span class="n">NULL</span>
+<span class="n">SELECT</span> <span class="n">try_subtract</span><span class="p">(</span><span class="mi">5</span><span class="p">,</span> <span class="mi">2</span><span class="p">);</span> <span class="o">--</span> <span class="mi">3</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="spark function">
 <dt class="sig sig-object spark" id="unaryminus">
 <span class="sig-name descname"><span class="pre">unaryminus</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x)</span> <span class="pre">-&gt;</span> <span class="pre">[same</span> <span class="pre">as</span> <span class="pre">x]</span> <span class="pre">(ANSI</span> <span class="pre">compliant</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#unaryminus" title="Link to this definition">¶</a></dt>
 <dd><p>Returns the negative of <code class="docutils literal notranslate"><span class="pre">x</span></code>. Corresponds to Spark’s operator <code class="docutils literal notranslate"><span class="pre">-</span></code>.
@@ -775,6 +816,9 @@ Otherwise, the function will return NULL.</p>
 <li><a class="reference internal" href="#id8"><code class="docutils literal notranslate"><span class="pre">subtract()</span></code></a></li>
 <li><a class="reference internal" href="#tan"><code class="docutils literal notranslate"><span class="pre">tan()</span></code></a></li>
 <li><a class="reference internal" href="#tanh"><code class="docutils literal notranslate"><span class="pre">tanh()</span></code></a></li>
+<li><a class="reference internal" href="#try_add"><code class="docutils literal notranslate"><span class="pre">try_add()</span></code></a></li>
+<li><a class="reference internal" href="#try_multiply"><code class="docutils literal notranslate"><span class="pre">try_multiply()</span></code></a></li>
+<li><a class="reference internal" href="#try_subtract"><code class="docutils literal notranslate"><span class="pre">try_subtract()</span></code></a></li>
 <li><a class="reference internal" href="#unaryminus"><code class="docutils literal notranslate"><span class="pre">unaryminus()</span></code></a></li>
 <li><a class="reference internal" href="#unhex"><code class="docutils literal notranslate"><span class="pre">unhex()</span></code></a></li>
 <li><a class="reference internal" href="#width_bucket"><code class="docutils literal notranslate"><span class="pre">width_bucket()</span></code></a></li>
