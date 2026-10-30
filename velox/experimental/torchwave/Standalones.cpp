@@ -23,6 +23,7 @@
 #include <ATen/ATen.h>
 #include <c10/core/WrapDimMinimal.h>
 
+#include "velox/experimental/torchwave/Executor.h"
 #include "velox/experimental/torchwave/Registry.h"
 #include "velox/experimental/torchwave/Utils.h"
 
@@ -93,7 +94,7 @@ void runStandaloneShortcut(
     return intAt(i);
   };
   auto setOutput = [&](c10::IValue value) {
-    frame.setIValue(data.actualOutputs[0], std::move(value));
+    writeFrame(frame, data.actualOutputs[0], std::move(value));
   };
 
   switch (data.launch->standaloneShortcut) {
@@ -392,7 +393,7 @@ void runStandaloneShortcut(
           data.actualOutputs.size(),
           " outputs");
       for (size_t i = 0; i < data.actualOutputs.size(); ++i) {
-        frame.setIValue(data.actualOutputs[i], list.get(i));
+        writeFrame(frame, data.actualOutputs[i], list.get(i));
       }
       break;
     }

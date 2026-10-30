@@ -351,7 +351,7 @@ class CompileCtx {
   bool breakConcatOperandIntoOwnKernel(ValueCP operand, ValueCP concatOutput);
 
   /// The value a copy of 'concat's operand at 'occurrence' writes: a band of
-  /// the result, bound at run time by reserveConcatOutput. Creates the copy
+  /// the result, bound at run time by the concat layout. Creates the copy
   /// node that holds the source, and the value on the first grid variant to
   /// ask. Null when the result has no type to take a dtype from.
   nativert::Value* FOLLY_NULLABLE
@@ -468,7 +468,7 @@ class CompileCtx {
 
     /// A copy op of this operand's own moves it into its band. False both for
     /// an operand the group carves and for one the concat's own kernel writes
-    /// in place -- that one is bound to its band by reserveConcatOutput and is
+    /// in place -- that one is bound to its band by the concat layout and is
     /// neither a group member nor a copy.
     bool needsCopy{false};
 
@@ -724,10 +724,13 @@ class CompileCtx {
   // the first concat in graph order takes it and any later one copies.
   std::unordered_set<nativert::ValueId> carvedOperands_;
 
-  // The kernel op generated for the first concat-operand copy of each element
-  // type, so the rest are launches of that same op with their own parameters
-  // rather than another copy of the code. See emitConcatOperandCopy.
-  std::map<c10::ScalarType, KernelOperation*> concatCopyOp_;
+  // The kernel op generated for the first concat-operand copy of each pair of
+  // source and destination element types, so the rest are launches of that
+  // same op with their own parameters rather than another copy of the code.
+  // The source type is part of the key because the op reads its source with
+  // the element type it was generated for. See emitConcatOperandCopy.
+  std::map<std::pair<c10::ScalarType, c10::ScalarType>, KernelOperation*>
+      concatCopyOp_;
 
   // Why each wide-cat operand did or did not get a kernel op of its own,
   // tallied per concat result id under the timing trace. An operand left fused
@@ -756,9 +759,9 @@ class CompileCtx {
   // storage expression instead.
   std::unordered_map<size_t, std::string> elementwiseVarNames_;
 
-  // Output values of nodes placed before the last emitBarrier. A
-  // randomAccess input whose value is in this set does not need a new
-  // barrier because its producer is already separated by one.
+  // Output values of nodes placed before the last emitBarrier of the op being
+  // generated. A randomAccess input whose value is in this set does not need a
+  // new barrier because its producer is already separated by one.
   std::unordered_set<ValueCP> preBarrierValues_;
 
   // Names of the __shared__ variables that device calls and loop heads of the

@@ -720,6 +720,18 @@ __device__ inline T __arange(int64_t idx) {
   return __arange_start<T>(idx, T(0));
 }
 
+// tw.arange_mem: writes 0 .. end - 1 to 'output', elements striding over the
+// op's threads.
+template <typename T, typename TEnd>
+__device__ void arange_mem(TEnd* end, Tensor* output, BlockInfo& block) {
+  T* out = storage<T>(output);
+  const int64_t n = static_cast<int64_t>(*end);
+  for (int64_t i = block.blockInOp * blockDim.x + threadIdx.x; i < n;
+       i += static_cast<int64_t>(block.numBlocksInOp) * blockDim.x) {
+    out[i] = static_cast<T>(i);
+  }
+}
+
 template <typename T>
 __device__ inline T __arange_start_step(int64_t idx, T start, T step) {
   return start + static_cast<T>(idx) * step;

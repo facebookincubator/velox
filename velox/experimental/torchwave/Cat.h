@@ -119,23 +119,19 @@ struct ConcatInputInfo {
   }
 
   SizeExpr sizeExpr;
-  OutputReserveFunc reserveShape;
+  /// The operand is an output of the concat's own kernel sized by its own
+  /// reserve.
+  bool hasReserve{false};
   /// The operand's extent is settled by device code, so the host cannot lay it
   /// out ahead of the launch that produces it.
   bool hasShapeOnDevice{false};
-  /// The operand's own reserve function with this invocation's bindings already
-  /// bound to it, so the allocation group can measure the operand with nothing
-  /// but a frame. Set alongside 'reserveShape' when the concat's footprint is
-  /// built, which is the last point that still has the invocation. Null when
-  /// the operand has no reserve of its own.
-  std::function<std::vector<Dim>(nativert::ExecutionFrame&)> boundReserve;
 
   /// A producer inside the concat's own kernel sizes its output with a reserve
   /// function. The extent is the host's to compute, but only once that
   /// producer's launch is sized, which is after the allocation-group pass
   /// carves the result -- so the operand cannot be measured in time. An operand
   /// whose own descriptor carries a reserve function is caught by
-  /// 'reserveShape'; this is the case where an elementwise op stands between
+  /// 'hasReserve'; this is the case where an elementwise op stands between
   /// the two and lends the operand a size expression the producer never had.
   bool hasReserveInChain{false};
   /// The kernel that produces the operand writes through its output's strides,
@@ -150,7 +146,7 @@ struct ConcatInputInfo {
   /// its own to place.
   bool isView{false};
   /// Where a copy op of this operand's own writes, or -1 when the concat's
-  /// kernel still moves it. The value has no storage: reserveConcatOutput binds
+  /// kernel still moves it. The value has no storage: the concat layout binds
   /// it to a view of the band the operand occupies, so the copy fills the
   /// result in place and nothing walks a running offset. One per OCCURRENCE, so
   /// cat([x, y, x]) fills its two x bands through two different values.
@@ -165,6 +161,13 @@ struct ConcatInputInfo {
   /// What decided 'carve', for the per-concat report.
   std::string carveReason;
 };
+
+/// 'shape' of operand 'info' coerced to 'rank' dimensions: zeros for an empty
+/// shape, the element count for rank 1, leading 1-dims restored otherwise.
+std::vector<Dim> coerceConcatShape(
+    const ConcatInputInfo& info,
+    std::vector<Dim> shape,
+    int8_t rank);
 
 /// The shape of a concat result whose operands have 'operandShapes', in join
 /// order and each of the operand rank.
@@ -220,5 +223,11 @@ struct ConcatLayout {
   /// the formal subgraph.
   std::pair<ConcatSpec, c10::ScalarType> resolve(const NodeMap& nodeMap) const;
 };
+
+/// The operands' size expressions of 'layout' translated through an
+/// invocation's binding map; an empty SizeExpr for an operand sized otherwise.
+std::vector<SizeExpr> translateConcatSizeExprs(
+    const ConcatLayout& layout,
+    const FormalToActual& map);
 
 } // namespace torch::wave
