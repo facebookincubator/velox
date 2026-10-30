@@ -394,36 +394,6 @@ bool HybridFlatMapTypeBuilder::useKeyPresentList(uint32_t groupId) const {
       defaultGroupKeyPresenceMode_, groupId);
 }
 
-namespace {
-
-// Rejects Default keys that repeat or already belong to a configured group.
-// Default can arrive with thousands of keys from a projected schema, so the
-// configured keys are probed against the Default keys rather than binary
-// searching every configured group for each Default key.
-template <typename StoredGroups>
-void checkNewDefaultGroupKeys(
-    const std::vector<std::string>& groupKeys,
-    const StoredGroups& configuredGroups) {
-  folly::F14FastSet<std::string_view> defaultKeys;
-  defaultKeys.reserve(groupKeys.size());
-  for (const auto& key : groupKeys) {
-    NIMBLE_CHECK(
-        defaultKeys.insert(key).second,
-        "Duplicate Hybrid FlatMap key: '{}'.",
-        key);
-  }
-  for (const auto& group : configuredGroups) {
-    for (const auto& key : group.groupKeys) {
-      NIMBLE_CHECK(
-          !defaultKeys.contains(key),
-          "Duplicate Hybrid FlatMap key: '{}'.",
-          key);
-    }
-  }
-}
-
-} // namespace
-
 HybridFlatMapTypeBuilder::GroupDescriptor HybridFlatMapTypeBuilder::addGroup(
     uint32_t groupId,
     std::vector<std::string> groupKeys,
@@ -442,13 +412,12 @@ HybridFlatMapTypeBuilder::GroupDescriptor HybridFlatMapTypeBuilder::addGroup(
   detail::checkHybridFlatMapGroupKeys(groupId, groupKeys);
   detail::checkHybridFlatMapDefaultKeys(
       defaultGroupKeyPresenceMode_, groupId, groupKeys);
-  if (isDefaultGroup) {
-    checkNewDefaultGroupKeys(groupKeys, groups_);
-  } else {
-    for (const auto& key : groupKeys) {
-      NIMBLE_CHECK(
-          !containsKey(key), "Duplicate Hybrid FlatMap key: '{}'.", key);
-    }
+
+  // Inserting also rejects a key repeated within this group, which the sorted
+  // check above does not cover for Default keys in first-seen order.
+  for (const auto& key : groupKeys) {
+    const bool isNewKey = keys_.insert(key).second;
+    NIMBLE_CHECK(isNewKey, "Duplicate Hybrid FlatMap key: '{}'.", key);
   }
   schemaBuilder_.registerChild(valueType);
   auto& group = groups_.emplace_back(
@@ -464,7 +433,6 @@ HybridFlatMapTypeBuilder::GroupDescriptor HybridFlatMapTypeBuilder::addGroup(
       });
   if (isDefaultGroup) {
     defaultGroupIndex_ = groups_.size() - 1;
-    defaultGroupKeys_.insert(group.groupKeys.begin(), group.groupKeys.end());
   }
   NIMBLE_CHECK_NOT_NULL(
       group.keyPresenceDescriptor,
@@ -484,20 +452,9 @@ void HybridFlatMapTypeBuilder::appendDefaultGroupKey(std::string key) {
       HybridFlatMap::KeyPresenceMode::kBitmap,
       "Hybrid FlatMap Default keys are listed per batch, not in the schema.");
   NIMBLE_CHECK(!key.empty(), "Hybrid FlatMap key cannot be empty.");
-  NIMBLE_CHECK(!containsKey(key), "Duplicate Hybrid FlatMap key: '{}'.", key);
-  defaultGroupKeys_.insert(key);
+  const bool isNewKey = keys_.insert(key).second;
+  NIMBLE_CHECK(isNewKey, "Duplicate Hybrid FlatMap key: '{}'.", key);
   groups_[*defaultGroupIndex_].groupKeys.push_back(std::move(key));
-}
-
-bool HybridFlatMapTypeBuilder::containsKey(std::string_view key) const {
-  for (const auto& group : groups_) {
-    if (!HybridFlatMap::isDefaultGroup(group.groupId) &&
-        std::binary_search(
-            group.groupKeys.begin(), group.groupKeys.end(), key)) {
-      return true;
-    }
-  }
-  return defaultGroupKeys_.contains(key);
 }
 
 size_t HybridFlatMapTypeBuilder::groupCount() const {

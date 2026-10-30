@@ -40,26 +40,25 @@
 /// Read wall time in ms (opt mode, 100K rows, ~100 chunks per column), no
 /// chunk stats -> chunk stats. Each cell takes the fastest of kNumRuns reads.
 /// With 400 kept rows every chunk holds one, so all chunks are decoded either
-/// way. A batch still opens the chunk where it starts, which shows with 40 kept
-/// rows in batches of 1,024.
+/// way.
 ///  kept rows  batch 1024   batch 10000  stripe
-///  4          121 -> 40    121 -> 43    122 -> 39
-///  40         132 -> 96    134 -> 86    134 -> 77
-///  400        133 -> 131   130 -> 132   129 -> 130
-///  all        132 -> 131   134 -> 133   139 -> 135
+///  4          118 -> 35    119 -> 36    120 -> 36
+///  40         129 -> 74    131 -> 73    130 -> 73
+///  400        129 -> 126   125 -> 126   125 -> 126
+///  all        128 -> 129   130 -> 130   130 -> 132
 ///
 /// Dictionary-encoded 'v' (400K rows, ~100 chunks), read wall time in ms, no
 /// chunk stats -> chunk stats. Reading VARCHAR as a dictionary still loads
 /// every chunk between the kept rows of a batch.
 ///  type     distinct  kept rows  batch 1024    batch 10000   stripe
-///  VARCHAR  64        4          6.1 -> 4.0    6.0 -> 3.8    6.0 -> 5.9
-///  VARCHAR  64        40         6.9 -> 5.4    6.8 -> 6.5    6.7 -> 6.7
-///  VARCHAR  1024      4          19.1 -> 5.9   18.8 -> 5.6   20.0 -> 19.8
-///  VARCHAR  1024      40         21.2 -> 12.5  21.5 -> 19.8  22.1 -> 22.0
-///  BIGINT   64        4          4.8 -> 4.3    4.6 -> 4.1    4.6 -> 4.0
-///  BIGINT   64        40         5.4 -> 5.0    5.2 -> 5.1    5.0 -> 4.7
-///  BIGINT   1024      4          5.4 -> 4.4    5.2 -> 4.2    5.1 -> 4.2
-///  BIGINT   1024      40         6.0 -> 5.3    5.8 -> 5.7    5.8 -> 5.0
+///  VARCHAR  64        4          6.1 -> 4.0    5.9 -> 3.8    6.0 -> 5.9
+///  VARCHAR  64        40         6.8 -> 5.4    6.8 -> 6.5    6.7 -> 6.7
+///  VARCHAR  1024      4          18.6 -> 5.8   18.2 -> 5.5   19.6 -> 19.6
+///  VARCHAR  1024      40         21.1 -> 12.3  21.4 -> 19.7  22.0 -> 22.0
+///  BIGINT   64        4          4.9 -> 4.3    4.6 -> 4.1    4.6 -> 4.0
+///  BIGINT   64        40         5.4 -> 5.0    5.2 -> 4.8    5.0 -> 4.6
+///  BIGINT   1024      4          5.4 -> 4.4    5.2 -> 4.2    5.1 -> 4.1
+///  BIGINT   1024      40         6.0 -> 5.3    5.8 -> 5.1    5.7 -> 4.9
 
 #include <algorithm>
 #include <numeric>
