@@ -115,6 +115,16 @@ class Aggregate {
   virtual void setConstantInputs(
       const std::vector<VectorPtr>& /*constantInputs*/) {}
 
+  /// Returns true if the aggregate needs to inspect raw input arguments even
+  /// when an aggregation mask excludes every row or a window frame is empty.
+  virtual bool requiresRawInputMetadata() const {
+    return false;
+  }
+
+  /// Called with raw input arguments before a fully masked input batch is
+  /// skipped or an empty window frame result is computed.
+  virtual void setRawInputMetadata(const std::vector<VectorPtr>& /*args*/) {}
+
   /// Called for functions that take one or more lambda expression as input.
   /// These expressions must appear after all non-lambda inputs.
   /// These expressions cannot use captures.

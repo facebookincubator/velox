@@ -41,6 +41,10 @@ class AggregateCompanionFunctionBase : public Aggregate {
   /// Forwards the constant inputs to the wrapped aggregate.
   void setConstantInputs(const std::vector<VectorPtr>& constantInputs) override;
 
+  bool requiresRawInputMetadata() const override final;
+
+  void setRawInputMetadata(const std::vector<VectorPtr>& args) override final;
+
   void addRawInput(
       char** groups,
       const SelectivityVector& rows,
