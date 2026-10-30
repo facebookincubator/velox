@@ -39,10 +39,10 @@ enum class CharsetType : uint8_t {
   kUnsupported,
 };
 
-/// Resolves one of the seven standard Spark charset names, ignoring case.
+// Resolves one of the seven standard Spark charset names, ignoring case.
 CharsetType resolveCharset(const StringView& charset);
 
-/// Encodes input using the selected charset and Spark coding-error behavior.
+// Encodes input using the selected charset and Spark coding-error behavior.
 Status encode(
     exec::StringWriter& result,
     const StringView& input,
@@ -52,7 +52,7 @@ Status encode(
 
 } // namespace detail
 
-/// Encodes a VARCHAR into VARBINARY using Spark-compatible charset semantics.
+// Encodes a VARCHAR into VARBINARY using Spark-compatible charset semantics.
 template <typename T>
 struct EncodeFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
