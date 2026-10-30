@@ -33,7 +33,7 @@ std::shared_ptr<MemoryAllocator> makeAllocator() {
 }
 
 CustomMemoryResource::ReclaimerFactory makeReclaimerFactory() {
-  return []() { return MemoryReclaimer::create(0); };
+  return [](const ReclaimerContext&) { return MemoryReclaimer::create(0); };
 }
 
 std::shared_ptr<CustomMemoryResource> makeResource(const std::string& tag) {

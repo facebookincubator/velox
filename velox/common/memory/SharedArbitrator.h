@@ -347,7 +347,7 @@ class SharedArbitrator : public memory::MemoryArbitrator {
     SharedArbitrator* const arbitrator_;
 
     // Default to global arbitration context.
-    const memory::ScopedMemoryArbitrationContext arbitrationCtx_{};
+    const memory::ScopedMemoryArbitrationContext arbitrationCtx_;
   };
 
   FOLLY_ALWAYS_INLINE void checkRunning() {

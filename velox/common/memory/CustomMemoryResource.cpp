@@ -45,8 +45,15 @@ CustomMemoryResource::CustomMemoryResource(
       tag_);
 }
 
-std::unique_ptr<MemoryReclaimer> CustomMemoryResource::newReclaimer() const {
-  return reclaimerFactory_();
+std::unique_ptr<MemoryReclaimer> CustomMemoryResource::newReclaimer(
+    const ReclaimerContext& context) const {
+  if (const auto* query = std::get_if<QueryReclaimerContext>(&context)) {
+    VELOX_CHECK_NOT_NULL(query->queryCtx);
+    VELOX_CHECK_NOT_NULL(query->pool);
+  } else if (const auto* task = std::get_if<TaskReclaimerContext>(&context)) {
+    VELOX_CHECK_NOT_NULL(task->task);
+  }
+  return reclaimerFactory_(context);
 }
 
 } // namespace facebook::velox::memory
