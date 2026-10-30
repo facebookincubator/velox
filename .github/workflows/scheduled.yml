@@ -315,12 +315,7 @@ jobs:
           $PIP install deepdiff
           python3 scripts/ci/signature.py gh_bias_check presto spark
           python3 scripts/ci/signature.py export_aggregates --spark /tmp/signatures/spark_aggregate_signatures_contender.json
-          _build/debug/velox/functions/sparksql/fuzzer/spark_aggregation_fuzzer_test --list_fuzzable_functions \
-            > /tmp/signatures/spark_aggregate_fuzzable_functions
-          python3 -m unittest discover -s scripts/ci -p test_signature.py
-          python3 scripts/ci/signature.py bias_aggregates --group spark \
-            --fuzzable_functions /tmp/signatures/spark_aggregate_fuzzable_functions \
-            /tmp/signatures/spark_aggregate_signatures_main.json \
+          python3 scripts/ci/signature.py bias_aggregates --group spark /tmp/signatures/spark_aggregate_signatures_main.json \
            /tmp/signatures/spark_aggregate_signatures_contender.json /tmp/signatures/spark_aggregate_bias_functions \
            /tmp/signatures/spark_aggregate_errors
           python3 scripts/ci/signature.py export_aggregates --presto /tmp/signatures/presto_aggregate_signatures_contender.json

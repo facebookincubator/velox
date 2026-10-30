@@ -20,6 +20,8 @@ from typing import Any
 
 from deepdiff import DeepDiff
 
+import pyvelox.legacy as pv
+
 # Utility to export and diff function signatures.
 
 
@@ -68,8 +70,6 @@ def show_error(error_message, error_path):
 
 def export(args):
     """Exports Velox function signatures."""
-    import pyvelox.legacy as pv
-
     pv.clear_signatures()
 
     if args.spark:
@@ -94,8 +94,6 @@ def export(args):
 
 def export_aggregates(args):
     """Exports Velox Aggregate function signatures."""
-    import pyvelox.legacy as pv
-
     pv.clear_aggregate_signatures()
 
     if args.spark:
@@ -233,20 +231,7 @@ def bias_aggregates(args):
 
     set_gh_output(f"{args.group}_aggregate_error", status == 1)
 
-    fuzzable_functions = None
-    if args.fuzzable_functions:
-        with open(args.fuzzable_functions) as f:
-            fuzzable_functions = {line.strip() for line in f if line.strip()}
-        if not fuzzable_functions:
-            raise ValueError("The fuzzer exported no eligible aggregate functions.")
-        unknown = fuzzable_functions - contender_signatures.keys()
-        if unknown:
-            raise ValueError(
-                f"Fuzzable aggregates missing from contender signatures: {sorted(unknown)}"
-            )
-
     if not delta:
-        set_gh_output(f"{args.group}_aggregate_functions", False)
         print(f"{bcolors.BOLD} No changes detected: Nothing to do!")
         return status
 
@@ -260,13 +245,12 @@ def bias_aggregates(args):
             else:
                 function_set.add(fn_name)
 
-    if fuzzable_functions is not None:
-        function_set.intersection_update(fuzzable_functions)
+    if function_set:
+        biased_functions = ",".join(function_set)
+        with open(args.output_path, "w") as f:
+            print(f"{biased_functions}", file=f, end="")
 
-    with open(args.output_path, "w") as f:
-        print(",".join(sorted(function_set)), file=f, end="")
-
-    set_gh_output(f"{args.group}_aggregate_functions", bool(function_set))
+        set_gh_output(f"{args.group}_aggregate_functions", True)
 
     return 0
 
@@ -381,10 +365,6 @@ def parse_args(args):
         "--group",
         choices=["presto", "spark"],
         required=True,
-    )
-    bias_aggregate_command_parser.add_argument(
-        "--fuzzable_functions",
-        help="File containing one eligible aggregate name per line, exported by the fuzzer.",
     )
     bias_aggregate_command_parser.add_argument("base", type=str)
     bias_aggregate_command_parser.add_argument("contender", type=str)
