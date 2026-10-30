@@ -16,6 +16,7 @@ set(
   DeletionVectorReader.cpp
   DeletionVectorWriter.cpp
   EqualityDeleteFileReader.cpp
+  IcebergChangelogSplitReader.cpp
   IcebergColumnHandle.cpp
   IcebergConfig.cpp
   IcebergConnector.cpp
@@ -49,7 +50,7 @@ endif()
 # the read with a clear message instead. The format-generic Parquet/DWRF readers stay free of any
 # geospatial dependency.
 if(VELOX_ENABLE_GEO)
-  list(APPEND ICEBERG_SOURCES IcebergGeometryConverter.cpp)
+  list(APPEND ICEBERG_SOURCES IcebergGeospatialConverter.cpp)
 endif()
 
 velox_add_library(
@@ -60,6 +61,8 @@ velox_add_library(
   DeletionVectorReader.h
   DeletionVectorWriter.h
   EqualityDeleteFileReader.h
+  IcebergChangelogSplitInfo.h
+  IcebergChangelogSplitReader.h
   IcebergColumnHandle.h
   IcebergConfig.h
   IcebergConnector.h
@@ -86,7 +89,7 @@ velox_add_library(
   WriterOptionsAdapter.h
   IcebergFieldId.h
   IcebergFieldMetadata.h
-  IcebergGeometryConverter.h
+  IcebergGeospatialConverter.h
 )
 
 velox_link_libraries(

@@ -804,6 +804,8 @@ TEST_F(LegacyCastTest, constantFloatingDecimalCastFallback) {
             cast},
         "decimal_lessthan");
     EXPECT_FALSE(canExprRunOnGpu(comparison, execCtx_.queryCtx(), pool_.get()));
+    EXPECT_FALSE(
+        canJoinFilterRunOnGpu(comparison, execCtx_.queryCtx(), pool_.get()));
   }
   auto cast = std::make_shared<core::CallTypedExpr>(
       DECIMAL(15, 4),
@@ -844,6 +846,8 @@ TEST_F(LegacyCastTest, constantFloatingIntegralCastFallback) {
             "lessthan");
         EXPECT_FALSE(
             canExprRunOnGpu(comparison, execCtx_.queryCtx(), pool_.get()));
+        EXPECT_FALSE(canJoinFilterRunOnGpu(
+            comparison, execCtx_.queryCtx(), pool_.get()));
       }
       auto cast = std::make_shared<core::CallTypedExpr>(
           target,

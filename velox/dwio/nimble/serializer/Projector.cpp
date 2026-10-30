@@ -23,12 +23,12 @@
 
 #include "folly/io/Cursor.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
+#include "velox/dwio/nimble/common/SchemaUtils.h"
 #include "velox/dwio/nimble/common/Varint.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
 #include "velox/dwio/nimble/serializer/StreamDataParser.h"
 #include "velox/dwio/nimble/serializer/StreamDataWriter.h"
 #include "velox/dwio/nimble/serializer/legacy/TrailerReader.h"
-#include "velox/dwio/nimble/velox/SchemaUtils.h"
 #include "velox/type/Type.h"
 
 namespace facebook::nimble::serde {
@@ -246,7 +246,7 @@ std::shared_ptr<const Type> updateHybridFlatMapColumnNames(
         HybridFlatMapType::Group{
             .groupId = group.groupId,
             .groupKeys = group.groupKeys,
-            .keyDescriptor = group.keyDescriptor,
+            .keyPresenceDescriptor = group.keyPresenceDescriptor,
             .inMapDescriptor = group.inMapDescriptor,
             .valueType = std::move(valueType),
         });
@@ -258,6 +258,7 @@ std::shared_ptr<const Type> updateHybridFlatMapColumnNames(
       hybridMap.nullsDescriptor(),
       hybridMap.keyScalarKind(),
       std::move(groups),
+      hybridMap.defaultGroupKeyPresenceMode(),
       hybridMap.attributes());
 }
 

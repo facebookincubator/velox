@@ -164,7 +164,7 @@ uint32_t maxStreamOffset(const Type& type) {
         const auto& group = hybridFlatMap.groupAt(i);
         offset = std::max(
             {offset,
-             maxStreamOffset(group.keyDescriptor),
+             maxStreamOffset(group.keyPresenceDescriptor),
              maxStreamOffset(group.inMapDescriptor),
              maxStreamOffset(*group.valueType)});
       }
@@ -467,14 +467,17 @@ void StreamSlicer::sliceType(
             outputBuffer,
             encodingOptions);
       }
-      sliceDescriptor(
-          timestamp.nanosDescriptor(),
-          nanosRange,
-          inputStreams,
-          /*isRowOrFlatMapNullStream=*/false,
-          outputStreams,
-          outputBuffer,
-          encodingOptions);
+      // A range of null rows has no nanoseconds to slice.
+      if (nanosRange.length > 0) {
+        sliceDescriptor(
+            timestamp.nanosDescriptor(),
+            nanosRange,
+            inputStreams,
+            /*isRowOrFlatMapNullStream=*/false,
+            outputStreams,
+            outputBuffer,
+            encodingOptions);
+      }
       return;
     }
     case Kind::Row: {
@@ -586,6 +589,10 @@ void StreamSlicer::sliceType(
             range,
             outputBuffer,
             encodingOptions);
+      }
+      // A range of null maps has no keys to slice.
+      if (mapRange.length == 0) {
+        return;
       }
       for (size_t i = 0; i < flatMap.childrenCount(); ++i) {
         const auto& inMapDescriptor = flatMap.inMapDescriptorAt(i);

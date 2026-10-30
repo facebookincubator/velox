@@ -16,6 +16,8 @@
 
 #pragma once
 
+#include <folly/stop_watch.h>
+
 #include "velox/common/base/Counters.h"
 #include "velox/common/base/StatsReporter.h"
 #include "velox/common/future/VeloxPromise.h"
@@ -105,16 +107,16 @@ class ArbitrationOperation {
   /// Invoked to mark the start of global arbitration. This is used to measure
   /// how much time spent in waiting for global arbitration.
   void recordGlobalArbitrationStartTime() {
-    VELOX_CHECK_EQ(globalArbitrationStartTimeNs_, 0);
+    VELOX_CHECK(!globalArbitrationStartTimeNs_.has_value());
     VELOX_CHECK_EQ(state_, State::kRunning);
-    globalArbitrationStartTimeNs_ = getCurrentTimeNano();
+    globalArbitrationStartTimeNs_ = creationWatch_.elapsed().count();
   }
 
   /// Holds the execution timing of this arbitration operation, valid only
   /// after it finishes. The four fields are the gaps between consecutive
-  /// timestamps:
+  /// points in time, each measured since creation:
   ///
-  ///   createTimeNs_                  created / enqueued
+  ///   creation                       created / enqueued
   ///     |
   ///     |  localArbitrationWaitTimeNs
   ///     v
@@ -128,9 +130,9 @@ class ArbitrationOperation {
   ///     v
   ///   finishTimeNs_                  finished (kFinished)
   ///
-  /// executionTimeNs spans createTimeNs_..finishTimeNs_, i.e. the sum of the
+  /// executionTimeNs spans creation..finishTimeNs_, i.e. the sum of the
   /// three gaps. When no global arbitration happens,
-  /// globalArbitrationStartTimeNs_ is 0, localArbitrationExecTimeNs spans
+  /// globalArbitrationStartTimeNs_ is unset, localArbitrationExecTimeNs spans
   /// startTimeNs_..finishTimeNs_, and globalArbitrationWaitTimeNs is 0.
   struct Stats {
     /// Time queued on the participant before this operation starts running.
@@ -155,25 +157,26 @@ class ArbitrationOperation {
   const uint64_t requestBytes_;
   const uint64_t timeoutNs_;
 
-  // Time when this operation was created and enqueued, before it starts
-  // running. See Stats for how the timestamps carve the timeline.
-  const uint64_t createTimeNs_;
+  // Started when this operation is created and enqueued, before it starts
+  // running. The times below are measured on it. See Stats for how they carve
+  // the timeline.
+  const folly::stop_watch<std::chrono::nanoseconds> creationWatch_;
   const ScopedArbitrationParticipant participant_;
 
   State state_{State::kInit};
 
-  // Time when this operation starts running (kRunning), after waiting its turn
-  // on the participant.
+  // Time since creation when this operation starts running (kRunning), after
+  // waiting its turn on the participant.
   uint64_t startTimeNs_{0};
-  // Time when this operation finishes (kFinished).
+  // Time since creation when this operation finishes (kFinished).
   uint64_t finishTimeNs_{0};
 
   uint64_t maxGrowBytes_{0};
   uint64_t minGrowBytes_{0};
 
-  // Time when this operation starts waiting for global arbitration. Zero if
-  // global arbitration does not happen.
-  uint64_t globalArbitrationStartTimeNs_{};
+  // Time since creation when this operation starts waiting for global
+  // arbitration. Unset if global arbitration does not happen.
+  std::optional<uint64_t> globalArbitrationStartTimeNs_;
 
   friend class ArbitrationParticipant;
 };

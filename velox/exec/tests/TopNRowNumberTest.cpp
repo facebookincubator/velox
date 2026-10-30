@@ -171,6 +171,69 @@ TEST_P(MultiTopNRowNumberTest, basicWithPeers) {
   testLimit(5);
 }
 
+TEST_P(MultiTopNRowNumberTest, newRowAfterPeersReplacesTopRank) {
+  // Each partition receives 1, 2, 2, 9, 5 in that order (partition 2 is offset
+  // by 10). 9 fills the partition past the limit, then 5 replaces it and ranks
+  // after the two peers at 2.
+  auto data = makeRowVector({
+      // Partitioning key.
+      makeFlatVector<int64_t>({1, 2, 1, 2, 1, 2, 1, 2, 1, 2}),
+      // Sorting key.
+      makeFlatVector<int64_t>({1, 11, 2, 12, 2, 12, 9, 19, 5, 15}),
+      // Data. Mapping data to matching sorting keys to avoid ordering issues.
+      makeFlatVector<int64_t>({10, 110, 20, 120, 20, 120, 90, 190, 50, 150}),
+  });
+
+  createDuckDbTable({data});
+
+  auto testLimit = [&](auto limit) {
+    // Emit row numbers.
+    auto plan = PlanBuilder()
+                    .values({data})
+                    .topNRank(functionName_, {"c0"}, {"c1"}, limit, true)
+                    .planNode();
+    assertQuery(
+        plan,
+        fmt::format(
+            "SELECT * FROM (SELECT *, {}() over (partition by c0 order by c1) as rn FROM tmp) "
+            " WHERE rn <= {}",
+            functionName_,
+            limit));
+
+    // Do not emit row numbers.
+    plan = PlanBuilder()
+               .values({data})
+               .topNRank(functionName_, {"c0"}, {"c1"}, limit, false)
+               .planNode();
+    assertQuery(
+        plan,
+        fmt::format(
+            "SELECT c0, c1, c2 FROM (SELECT *, {}() over (partition by c0 order by c1) as rn FROM tmp) "
+            " WHERE rn <= {}",
+            functionName_,
+            limit));
+
+    // No partitioning keys.
+    plan = PlanBuilder()
+               .values({data})
+               .topNRank(functionName_, {}, {"c1"}, limit, true)
+               .planNode();
+    assertQuery(
+        plan,
+        fmt::format(
+            "SELECT * FROM (SELECT *, {}() over (order by c1) as rn FROM tmp) "
+            " WHERE rn <= {}",
+            functionName_,
+            limit));
+  };
+
+  testLimit(1);
+  testLimit(2);
+  testLimit(3);
+  testLimit(4);
+  testLimit(5);
+}
+
 TEST_P(MultiTopNRowNumberTest, largeOutput) {
   // Make 10 vectors. Use different types for partitioning key, sorting key and
   // data. Use order of columns different from partitioning keys, followed by
@@ -397,24 +460,40 @@ TEST_P(MultiTopNRowNumberTest, fewPartitions) {
   testLimit(100);
 }
 
-TEST_P(MultiTopNRowNumberTest, abandonPartialEarly) {
+TEST_P(MultiTopNRowNumberTest, abandonPartial) {
   auto data = makeRowVector(
       {"p", "s"},
       {
           makeFlatVector<int64_t>(1'000, [](auto row) { return row % 10; }),
-          makeFlatVector<int64_t>(1'000, [](auto row) { return row; }),
+          makeFlatIdentityVector<int64_t>(1'000),
       });
 
   createDuckDbTable({data});
 
-  core::PlanNodeId topNRowNumberId;
-  auto runPlan = [&](int32_t minRows) {
+  // Runs a partial and a final TopNRowNumber over 'data' split into 10 batches
+  // and verifies whether the partial was abandoned and how many rows it
+  // produced.
+  auto testAbandon = [&](const std::vector<std::string>& partitionKeys,
+                         int32_t minRows,
+                         bool expectAbandoned,
+                         int64_t expectedOutputRows) {
+    SCOPED_TRACE(
+        fmt::format(
+            "Partition keys: [{}], minRows: {}",
+            folly::join(", ", partitionKeys),
+            minRows));
+
+    core::PlanNodeId topNRowNumberId;
     auto plan = PlanBuilder()
                     .values(split(data, 10))
-                    .topNRank(functionName_, {"p"}, {"s"}, 99, false)
+                    .topNRank(functionName_, partitionKeys, {"s"}, 99, false)
                     .capturePlanNodeId(topNRowNumberId)
-                    .topNRank(functionName_, {"p"}, {"s"}, 99, true)
+                    .topNRank(functionName_, partitionKeys, {"s"}, 99, true)
                     .planNode();
+
+    const auto partitionBy = partitionKeys.empty()
+        ? std::string()
+        : fmt::format("partition by {} ", folly::join(", ", partitionKeys));
     auto task =
         AssertQueryBuilder(plan, duckDbQueryRunner_)
             .config(
@@ -423,28 +502,35 @@ TEST_P(MultiTopNRowNumberTest, abandonPartialEarly) {
             .config(core::QueryConfig::kAbandonPartialTopNRowNumberMinPct, "80")
             .assertResults(
                 fmt::format(
-                    "SELECT * FROM (SELECT *, {}() over (partition by p order by s) as rn FROM tmp) "
+                    "SELECT * FROM (SELECT *, {}() over ({}order by s) as rn FROM tmp) "
                     "WHERE rn <= 99",
-                    functionName_));
+                    functionName_,
+                    partitionBy));
 
-    return exec::toPlanStats(task->taskStats());
+    const auto planStats = exec::toPlanStats(task->taskStats());
+    const auto& stats = planStats.at(topNRowNumberId);
+    ASSERT_EQ(stats.outputRows, expectedOutputRows);
+    if (expectAbandoned) {
+      ASSERT_EQ(stats.customStats.at("abandonedPartial").sum, 1);
+    } else {
+      ASSERT_EQ(stats.customStats.count("abandonedPartial"), 0);
+    }
   };
 
   // Partial operator is abandoned after 2 input batches.
-  {
-    auto taskStats = runPlan(100);
-    const auto& stats = taskStats.at(topNRowNumberId);
-    ASSERT_EQ(stats.outputRows, 1'000);
-    ASSERT_EQ(stats.customStats.at("abandonedPartial").sum, 1);
-  }
+  testAbandon({"p"}, 100, true, 1'000);
 
   // Partial operator continues for all of input.
-  {
-    auto taskStats = runPlan(100'000);
-    const auto& stats = taskStats.at(topNRowNumberId);
-    ASSERT_EQ(stats.outputRows, 990);
-    ASSERT_EQ(stats.customStats.count("abandonedPartial"), 0);
-  }
+  testAbandon({"p"}, 100'000, false, 990);
+
+  // With no partition keys, the limit is close to the input batch size, so the
+  // partial retains 99 of the first 100 rows and is abandoned. The 99
+  // accumulated rows are flushed, then the remaining 900 input rows pass
+  // through.
+  testAbandon({}, 100, true, 999);
+
+  // Partial operator with no partition keys continues for all of input.
+  testAbandon({}, 100'000, false, 99);
 }
 
 TEST_P(MultiTopNRowNumberTest, planNodeValidation) {

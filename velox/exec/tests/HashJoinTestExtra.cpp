@@ -2854,11 +2854,17 @@ DEBUG_ONLY_TEST_P(HashJoinTest, reclaimDuringReserve) {
         })
         .run();
   });
+  // Release the blocked build driver and join the task thread on every exit
+  // path so a failed assertion fails this test instead of aborting the binary.
+  SCOPE_EXIT {
+    driverWaitFlag = false;
+    driverWait.notifyAll();
+    taskThread.join();
+  };
 
   testWait.await([&]() { return !testWaitFlag.load(); });
   ASSERT_TRUE(op != nullptr);
   auto task = op->operatorCtx()->task();
-  task->requestPause().wait();
 
   uint64_t reclaimableBytes{0};
   const bool reclaimable = op->reclaimableBytes(reclaimableBytes);
@@ -2866,6 +2872,8 @@ DEBUG_ONLY_TEST_P(HashJoinTest, reclaimDuringReserve) {
   ASSERT_TRUE(reclaimable);
   ASSERT_GT(reclaimableBytes, 0);
 
+  // The task pool reclaimer pauses the task before reclaiming and resumes it
+  // afterwards, so the test must not pause or resume the task itself.
   {
     memory::ScopedMemoryArbitrationContext ctx(op->pool());
     uint64_t reclaimedBytes = task->pool()->reclaim(
@@ -2877,13 +2885,7 @@ DEBUG_ONLY_TEST_P(HashJoinTest, reclaimDuringReserve) {
   ASSERT_GT(reclaimerStats_.reclaimedBytes, 0);
   ASSERT_GT(reclaimerStats_.reclaimExecTimeUs, 0);
   ASSERT_EQ(op->pool()->usedBytes(), 0);
-
-  driverWaitFlag = false;
-  driverWait.notifyAll();
-  Task::resume(task);
   task.reset();
-
-  taskThread.join();
 }
 
 DEBUG_ONLY_TEST_P(HashJoinTest, reclaimDuringAllocation) {

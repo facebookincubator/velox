@@ -185,7 +185,6 @@ function install_faiss {
 
 function install_velox_deps {
   run_and_time install_velox_deps_from_brew
-  run_and_time install_ranges_v3
   run_and_time install_double_conversion
   run_and_time install_re2
   run_and_time install_gflags

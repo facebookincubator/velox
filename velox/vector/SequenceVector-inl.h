@@ -103,7 +103,8 @@ std::unique_ptr<SimpleVector<uint64_t>> SequenceVector<T>::hashAll() const {
       std::nullopt /*distinctValueCount*/,
       0 /* nullCount */,
       false /* sorted */,
-      sizeof(uint64_t) * sequenceCount /* representedBytes */);
+      static_cast<ByteCount>(
+          sizeof(uint64_t) * sequenceCount) /* representedBytes */);
 
   return std::make_unique<SequenceVector<uint64_t>>(
       BaseVector::pool_,
@@ -114,7 +115,8 @@ std::unique_ptr<SimpleVector<uint64_t>> SequenceVector<T>::hashAll() const {
       std::nullopt /*distinctCount*/,
       0 /* nullCount */,
       false /* sorted */,
-      sizeof(uint64_t) * BaseVector::length_ /* representedBytes */,
+      static_cast<ByteCount>(
+          sizeof(uint64_t) * BaseVector::length_) /* representedBytes */,
       0 /* nullSequenceCount */);
 }
 

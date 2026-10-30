@@ -14,6 +14,9 @@
  * limitations under the License.
  */
 #include "velox/exec/LocalPlanner.h"
+
+#include <folly/Conv.h>
+
 #include "velox/core/PlanFragment.h"
 #include "velox/exec/ArrowStream.h"
 #include "velox/exec/AssignUniqueId.h"
@@ -21,6 +24,7 @@
 #include "velox/exec/EnforceDistinct.h"
 #include "velox/exec/EnforceSingleRow.h"
 #include "velox/exec/Exchange.h"
+#include "velox/exec/ExchangeTransportRegistry.h"
 #include "velox/exec/Expand.h"
 #include "velox/exec/FilterProject.h"
 #include "velox/exec/FixedPointOperators.h"
@@ -56,11 +60,20 @@
 #include "velox/exec/TopNRowNumber.h"
 #include "velox/exec/Unnest.h"
 #include "velox/exec/Values.h"
+#ifdef VELOX_ENABLE_FAISS
+#include "velox/exec/VectorSearchJoinBuild.h"
+#include "velox/exec/VectorSearchJoinProbe.h"
+#endif
 #include "velox/exec/Window.h"
 
 namespace facebook::velox::exec {
 
 namespace {
+
+#ifndef VELOX_ENABLE_FAISS
+constexpr std::string_view kVectorSearchUnsupported{
+    "Vector search join requires Velox built with VELOX_ENABLE_FAISS"};
+#endif
 
 // If the upstream is partial limit, downstream is final limit and we want to
 // flush as soon as we can to reach the limit and do as little work as possible.
@@ -262,6 +275,17 @@ OperatorSupplier makeOperatorSupplier(const core::PlanNodePtr& planNode) {
     return [join](int32_t operatorId, DriverCtx* ctx) {
       return std::make_unique<SpatialJoinBuild>(operatorId, ctx, join);
     };
+  }
+
+  if (auto join = std::dynamic_pointer_cast<const core::VectorSearchJoinNode>(
+          planNode)) {
+#ifdef VELOX_ENABLE_FAISS
+    return [join](int32_t operatorId, DriverCtx* ctx) {
+      return std::make_unique<VectorSearchJoinBuild>(operatorId, ctx, join);
+    };
+#else
+    VELOX_UNSUPPORTED(kVectorSearchUnsupported);
+#endif
   }
 
   if (auto join =
@@ -499,6 +523,11 @@ void LocalPlanner::markMixedJoinBridges(
                      planNode)) {
         markIfMixed(
             planNode, &DriverFactory::mixedExecutionModeNestedLoopJoinNodeIds);
+      } else if (std::dynamic_pointer_cast<const core::VectorSearchJoinNode>(
+                     planNode)) {
+        markIfMixed(
+            planNode,
+            &DriverFactory::mixedExecutionModeVectorSearchJoinNodeIds);
       } else if (std::dynamic_pointer_cast<const core::SpatialJoinNode>(
                      planNode)) {
         VELOX_FAIL("Spatial joins do not support grouped execution.");
@@ -514,7 +543,8 @@ void LocalPlanner::markMixedJoinBridges(
 
 std::shared_ptr<Driver> DriverFactory::createDriver(
     std::unique_ptr<DriverCtx> ctx,
-    std::shared_ptr<InMemoryExchangeClient> exchangeClient,
+    std::shared_ptr<ExchangeClient> exchangeClient,
+    std::shared_ptr<ExchangeTransportEntry> exchangeTransportEntry,
     const PartitionedOutputFactory& outputOperatorFactory,
     std::shared_ptr<PipelinePushdownFilters> filters,
     std::function<int(int pipelineId)> numDrivers) {
@@ -526,7 +556,7 @@ std::shared_ptr<Driver> DriverFactory::createDriver(
   for (int32_t i = 0; i < planNodes.size(); ++i) {
     // Id of the Operator being made. This is not the same as 'i'
     // because some PlanNodes may get fused.
-    auto id = operators.size();
+    const auto id = folly::to<int32_t>(operators.size());
     auto planNode = planNodes[i];
     if (auto filterNode =
             std::dynamic_pointer_cast<const core::FilterNode>(planNode)) {
@@ -584,16 +614,38 @@ std::shared_ptr<Driver> DriverFactory::createDriver(
         auto mergeExchangeNode =
             std::dynamic_pointer_cast<const core::MergeExchangeNode>(
                 planNode)) {
-      operators.push_back(
-          std::make_unique<MergeExchange>(i, ctx.get(), mergeExchangeNode));
+      // Task validated merge support when it resolved the entry.
+      VELOX_CHECK_NOT_NULL(
+          exchangeTransportEntry,
+          "No exchange transport entry was resolved for transport '{}'",
+          mergeExchangeNode->transportKind());
+      VELOX_CHECK(
+          exchangeTransportEntry->makeMergeExchangeOperator != nullptr,
+          "Exchange transport does not support merge exchange: {}",
+          mergeExchangeNode->transportKind());
+      auto mergeExchange = exchangeTransportEntry->makeMergeExchangeOperator(
+          id, ctx.get(), mergeExchangeNode, exchangeClient);
+      VELOX_CHECK_NOT_NULL(
+          mergeExchange,
+          "Exchange transport built no operator for plan node: {}",
+          planNode->id());
+      operators.push_back(std::move(mergeExchange));
     } else if (
         auto exchangeNode =
             std::dynamic_pointer_cast<const core::ExchangeNode>(planNode)) {
       // NOTE: the exchange client can only be used by one operator in a driver.
       VELOX_CHECK_NOT_NULL(exchangeClient);
-      operators.push_back(
-          std::make_unique<Exchange>(
-              id, ctx.get(), exchangeNode, std::move(exchangeClient)));
+      VELOX_CHECK_NOT_NULL(
+          exchangeTransportEntry,
+          "No exchange transport entry was resolved for transport '{}'",
+          exchangeNode->transportKind());
+      auto exchange = exchangeTransportEntry->makeExchangeOperator(
+          id, ctx.get(), exchangeNode, std::move(exchangeClient));
+      VELOX_CHECK_NOT_NULL(
+          exchange,
+          "Exchange transport built no operator for plan node: {}",
+          planNode->id());
+      operators.push_back(std::move(exchange));
     } else if (
         auto partitionedOutputNode =
             std::dynamic_pointer_cast<const core::PartitionedOutputNode>(
@@ -615,6 +667,17 @@ std::shared_ptr<Driver> DriverFactory::createDriver(
             std::dynamic_pointer_cast<const core::SpatialJoinNode>(planNode)) {
       operators.push_back(
           std::make_unique<SpatialJoinProbe>(id, ctx.get(), spatialJoinNode));
+    } else if (
+        auto vectorSearchJoinNode =
+            std::dynamic_pointer_cast<const core::VectorSearchJoinNode>(
+                planNode)) {
+#ifdef VELOX_ENABLE_FAISS
+      operators.push_back(
+          std::make_unique<VectorSearchJoinProbe>(
+              id, ctx.get(), vectorSearchJoinNode));
+#else
+      VELOX_UNSUPPORTED(kVectorSearchUnsupported);
+#endif
     } else if (
         auto joinNode =
             std::dynamic_pointer_cast<const core::IndexLookupJoinNode>(
@@ -771,8 +834,16 @@ std::shared_ptr<Driver> DriverFactory::createDriver(
         // NOTE: the exchange client can only be used by one operator in a
         // driver.
         VELOX_CHECK_NOT_NULL(exchangeClient);
+        // PlanNodeTranslator takes an InMemoryExchangeClient, and Task always
+        // uses the built-in transport for custom nodes.
+        auto inMemoryExchangeClient =
+            std::dynamic_pointer_cast<InMemoryExchangeClient>(exchangeClient);
+        VELOX_CHECK_NOT_NULL(
+            inMemoryExchangeClient,
+            "Plan node requires an in-memory exchange client: {}",
+            planNode->toString());
         extended = Operator::fromPlanNode(
-            ctx.get(), id, planNode, std::move(exchangeClient));
+            ctx.get(), id, planNode, std::move(inMemoryExchangeClient));
       } else {
         extended = Operator::fromPlanNode(ctx.get(), id, planNode);
       }
@@ -852,6 +923,18 @@ std::vector<core::PlanNodeId> DriverFactory::needsNestedLoopJoinBridges()
       mixedExecutionModeNestedLoopJoinNodeIds,
       [](const core::PlanNodePtr& node) {
         return std::dynamic_pointer_cast<const core::NestedLoopJoinNode>(
+                   node) != nullptr;
+      });
+}
+
+std::vector<core::PlanNodeId> DriverFactory::needsVectorSearchJoinBridges()
+    const {
+  return collectJoinBridgeNodeIds(
+      planNodes,
+      groupedExecution,
+      mixedExecutionModeVectorSearchJoinNodeIds,
+      [](const core::PlanNodePtr& node) {
+        return std::dynamic_pointer_cast<const core::VectorSearchJoinNode>(
                    node) != nullptr;
       });
 }

@@ -25,6 +25,7 @@
 #include "velox/connectors/Connector.h"
 #include "velox/connectors/hive/FileConnectorSplit.h"
 #include "velox/connectors/hive/FileHandle.h"
+#include "velox/connectors/hive/FileScanState.h"
 #include "velox/connectors/hive/FileSplitReader.h"
 #include "velox/connectors/hive/FileTableHandle.h"
 #include "velox/connectors/hive/HiveConnectorUtil.h"
@@ -120,7 +121,7 @@ class FileDataSource : public DataSource {
   int64_t estimatedRowSize() override;
 
   const common::SubfieldFilters* getFilters() const override {
-    return &filters_;
+    return &fileScanState_->filters;
   }
 
   const ConnectorQueryCtx* testingConnectorQueryCtx() const {
@@ -136,9 +137,12 @@ class FileDataSource : public DataSource {
   const std::shared_ptr<FileConfig> fileConfig_;
   memory::MemoryPool* const pool_;
 
+  // Heap allocation keeps the validation filter map's address stable when
+  // ownership moves. Declare before splitReader_ so the reader is destroyed
+  // first.
+  std::unique_ptr<FileScanState> fileScanState_;
   std::shared_ptr<FileConnectorSplit> split_;
   FileTableHandlePtr tableHandle_;
-  std::shared_ptr<common::ScanSpec> scanSpec_;
   VectorPtr output_;
   std::unique_ptr<FileSplitReader> splitReader_;
 
@@ -166,20 +170,21 @@ class FileDataSource : public DataSource {
   /// Subfield pruning info collected from column handles and remaining filter.
   folly::F14FastMap<std::string, std::vector<const common::Subfield*>>
       subfields_;
-  common::SubfieldFilters filters_;
 
   const exec::ExprSet* remainingFilterExprSet() const {
     return remainingFilterExprSet_.get();
   }
 
   const std::shared_ptr<common::MetadataFilter>& metadataFilter() const {
-    return metadataFilter_;
+    return fileScanState_->metadataFilter;
   }
 
-  // Actual type produced by the reader after extraction pushdown.  Differs
-  // from readerOutputType_ when the reader handles extraction natively
-  // (e.g., MapKeys -> ARRAY).  Null if no extraction pushdown is active.
-  RowTypePtr readerProducedType_;
+  /// The row type for the data source output, not including filter-only
+  /// columns. Subclasses may call this from createSplitReader() to obtain
+  /// the output schema when constructing a split reader.
+  const RowTypePtr& outputType() const {
+    return outputType_;
+  }
 
   // Output columns that have extraction chains.  Maps output column index to
   // the column handle.  These columns are read with schemaType and transformed
@@ -189,9 +194,8 @@ class FileDataSource : public DataSource {
   dwio::common::RuntimeStats runtimeStats_;
 
  private:
-  // Configure extraction columns on the ScanSpec and build
-  // readerProducedType_.  Called from the constructor after scanSpec_ is
-  // created.
+  // Configure extraction columns on the state's ScanSpec and build its
+  // readerProducedType. Called from the constructor after the tree is created.
   void configureExtractionColumns();
 
   /// Adds the information from column handle to the corresponding fields in
@@ -225,7 +229,6 @@ class FileDataSource : public DataSource {
   /// HiveColumnHandle::postProcessor(). Applied after reading and filtering to
   /// transform column values. Indexed by output column position.
   std::vector<std::function<void(VectorPtr&)>> columnPostProcessors_;
-  std::shared_ptr<common::MetadataFilter> metadataFilter_;
   std::unique_ptr<exec::ExprSet> remainingFilterExprSet_;
   RowVectorPtr emptyOutput_;
   std::atomic_uint64_t totalRemainingFilterTime_{0};

@@ -38,6 +38,8 @@ class EliasFanoEncodingView final : public TypedEncodingView<T> {
     NIMBLE_CHECK_EQ(this->encodingType_, EncodingType::EliasFano);
   }
 
+  using TypedEncodingView<T>::lowerBound;
+
   /// Returns the first row whose value is at least `value`.
   uint32_t lowerBound(physicalType value) const {
     return encoding_.lowerBound(value);
@@ -51,6 +53,18 @@ class EliasFanoEncodingView final : public TypedEncodingView<T> {
   void readPhysical(uint32_t offset, uint32_t length, physicalType* output)
       const final {
     encoding_.materializeAt(offset, length, output);
+  }
+
+  // Needs no order check: the stream ascends as a whole.
+  uint32_t typedLowerBound(uint32_t begin, uint32_t end, T value, T& found)
+      const final {
+    physicalType physicalFound;
+    const auto row = encoding_.lowerBound(
+        begin, end, static_cast<physicalType>(value), physicalFound);
+    if (row < end) {
+      found = static_cast<T>(physicalFound);
+    }
+    return row;
   }
 
   // Owns the parsed list. Random reads reuse a thread-local cursor, preserving

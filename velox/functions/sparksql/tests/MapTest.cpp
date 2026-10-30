@@ -21,6 +21,11 @@
 #include "velox/type/Variant.h"
 
 #include <stdint.h>
+#include <bit>
+#include <limits>
+
+#include <fmt/ranges.h>
+#include <gmock/gmock.h>
 
 namespace facebook::velox::functions::sparksql::test {
 namespace {
@@ -123,7 +128,7 @@ TEST_F(MapTest, duplicateMapKey) {
   testMapFails(
       "map(c0, c1, c2, c3)",
       {inputVector3, inputVector4, inputVector5, inputVector6},
-      "Duplicate map key (30) was found.");
+      "Duplicate map key was found: 30");
 
   testMapFails(
       "map(c0, c1, c2, c3, c4, c5)",
@@ -133,7 +138,7 @@ TEST_F(MapTest, duplicateMapKey) {
        inputVector4,
        inputVector5,
        inputVector6},
-      "Duplicate map key (20) was found.");
+      "Duplicate map key was found: 20");
 }
 
 TEST_F(MapTest, duplicateMapKeyThreeOrMoreOccurrences) {
@@ -175,7 +180,7 @@ TEST_F(MapTest, duplicateMapKeyThreeOrMoreOccurrences) {
   testMapFails(
       "map(c0, c1, c0, c2, c0, c3)",
       {key, value1, value2, value3},
-      "Duplicate map key (7) was found.");
+      "Duplicate map key was found: 7");
 }
 
 TEST_F(MapTest, wide) {
@@ -254,6 +259,24 @@ TEST_F(MapTest, tenKeyValuePairs) {
       expectedMap);
 }
 
+TEST_F(MapTest, manyKeyValuePairs) {
+  constexpr int32_t kNumPairs{11};
+  std::vector<VectorPtr> args;
+  std::vector<std::string> names;
+  std::vector<std::pair<int32_t, std::optional<double>>> entries;
+  for (int32_t i{0}; i < kNumPairs; ++i) {
+    args.push_back(makeFlatVector<int32_t>({i}));
+    args.push_back(makeFlatVector<double>({i * 0.5}));
+    names.push_back(fmt::format("c{}", 2 * i));
+    names.push_back(fmt::format("c{}", 2 * i + 1));
+    entries.emplace_back(i, i * 0.5);
+  }
+  testMap(
+      fmt::format("map({})", fmt::join(names, ", ")),
+      args,
+      makeMapVector<int32_t, double>({entries}));
+}
+
 TEST_F(MapTest, errorCases) {
   auto inputVectorInt64 = makeNullableFlatVector<int64_t>({1, 2, 3});
   auto inputVectorDouble = makeNullableFlatVector<double>({4.0, 5.0, 6.0});
@@ -267,21 +290,7 @@ TEST_F(MapTest, errorCases) {
   testMapFails(
       "map(c0, c1, c2)",
       {inputVectorInt64, inputVectorDouble, inputVectorInt64},
-      "Scalar function signature is not supported: map(BIGINT, DOUBLE, BIGINT)");
-
-  // Test with 22 arguments (11 pairs) - exceeds the maximum of 10 key-value
-  // pairs supported by the map function.
-  testMapFails(
-      "map(c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15, c16, c17, c18, c19, c20, c21)",
-      {inputVectorDouble, inputVectorDouble, inputVectorDouble,
-       inputVectorDouble, inputVectorDouble, inputVectorDouble,
-       inputVectorDouble, inputVectorDouble, inputVectorDouble,
-       inputVectorDouble, inputVectorDouble, inputVectorDouble,
-       inputVectorDouble, inputVectorDouble, inputVectorDouble,
-       inputVectorDouble, inputVectorDouble, inputVectorDouble,
-       inputVectorDouble, inputVectorDouble, inputVectorDouble,
-       inputVectorDouble},
-      "Scalar function signature is not supported: map(DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE)");
+      "Map function must take an even number of arguments");
 
   // Types of args.
   testMapFails(
@@ -290,14 +299,14 @@ TEST_F(MapTest, errorCases) {
        inputVectorDouble,
        inputVectorDouble,
        inputVectorDouble},
-      "Scalar function signature is not supported: map(BIGINT, DOUBLE, DOUBLE, DOUBLE)");
+      "All the key arguments in Map function must be the same!");
   testMapFails(
       "map(c0, c1, c2, c3)",
       {inputVectorDouble,
        inputVectorInt64,
        inputVectorDouble,
        inputVectorDouble},
-      "Scalar function signature is not supported: map(DOUBLE, BIGINT, DOUBLE, DOUBLE)");
+      "All the value arguments in Map function must be the same!");
 
   testMapFails(
       "map(c0, c1)",
@@ -411,7 +420,7 @@ TEST_F(MapTest, complexTypesDuplicateMapKey) {
   testMapFails(
       "map(c0, c1, c2, c3)",
       {arrayKey, arrayValue, arrayKey, arrayValue},
-      "Duplicate map key ({1, 2, 3}) was found.");
+      "Duplicate map key was found: {1, 2, 3}");
 }
 
 TEST_F(MapTest, complexTypesWithNestedNullsDuplicateMapKey) {
@@ -516,12 +525,111 @@ TEST_F(MapTest, complexTypesWithNestedNullsDuplicateMapKey) {
   testMapFails(
       "map(c0, c1, c2, c3)",
       {arrayKeysWithNull1, valuesForKey1, arrayKeysWithNull2, valuesForKey2},
-      "Duplicate map key ({1, null, 3}) was found.");
+      "Duplicate map key was found: {1, null, 3}");
 
   testMapFails(
       "map(c0, c1, c2, c3)",
       {mapKey1, valueForMapKey1, mapKey2, valueForMapKey2},
-      "Duplicate map key ({1 => 10, 2 => null}) was found.");
+      "Duplicate map key was found: {1 => 10, 2 => null}");
+}
+
+TEST_F(MapTest, lastWinKeepsFirstPositionAndLastValue) {
+  const auto data = makeRowVector({
+      makeFlatVector<int64_t>({1}),
+      makeFlatVector<int64_t>({10}),
+      makeFlatVector<int64_t>({2}),
+      makeFlatVector<int64_t>({20}),
+      makeFlatVector<int64_t>({1}),
+      makeFlatVector<int64_t>({30}),
+  });
+  setThrowExceptionOnDuplicateMapKeys(false);
+  ::facebook::velox::test::assertEqualVectors(
+      makeArrayVector<int64_t>({{1, 2}}),
+      evaluate("map_keys(map(c0, c1, c2, c3, c4, c5))", data));
+  ::facebook::velox::test::assertEqualVectors(
+      makeArrayVector<int64_t>({{30, 20}}),
+      evaluate("map_values(map(c0, c1, c2, c3, c4, c5))", data));
+}
+
+TEST_F(MapTest, topLevelSignedZeroKeysStayDistinct) {
+  const auto data = makeRowVector({
+      makeFlatVector<double>({-0.0}),
+      makeFlatVector<int32_t>({1}),
+      makeFlatVector<double>({0.0}),
+      makeFlatVector<int32_t>({2}),
+  });
+  for (const bool throwOnDuplicate : {false, true}) {
+    SCOPED_TRACE(fmt::format("throwOnDuplicate: {}", throwOnDuplicate));
+    setThrowExceptionOnDuplicateMapKeys(throwOnDuplicate);
+    EXPECT_THAT(
+        elementBitPatterns(evaluate("map_keys(map(c0, c1, c2, c3))", data)),
+        testing::ElementsAre(
+            std::bit_cast<uint64_t>(-0.0), std::bit_cast<uint64_t>(0.0)));
+    ::facebook::velox::test::assertEqualVectors(
+        makeArrayVector<int32_t>({{1, 2}}),
+        evaluate("map_values(map(c0, c1, c2, c3))", data));
+  }
+}
+
+TEST_F(MapTest, nanKeysAreOneKey) {
+  constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
+  const auto otherNaN =
+      std::bit_cast<double>(std::bit_cast<uint64_t>(kNaN) | uint64_t{1});
+  const auto data = makeRowVector({
+      makeFlatVector<double>({kNaN}),
+      makeFlatVector<int32_t>({1}),
+      makeFlatVector<double>({otherNaN}),
+      makeFlatVector<int32_t>({2}),
+  });
+  setThrowExceptionOnDuplicateMapKeys(false);
+  EXPECT_THAT(
+      elementBitPatterns(evaluate("map_keys(map(c0, c1, c2, c3))", data)),
+      testing::ElementsAre(std::bit_cast<uint64_t>(kNaN)));
+  ::facebook::velox::test::assertEqualVectors(
+      makeArrayVector<int32_t>({{2}}),
+      evaluate("map_values(map(c0, c1, c2, c3))", data));
+
+  setThrowExceptionOnDuplicateMapKeys(true);
+  VELOX_ASSERT_THROW(
+      evaluate("map(c0, c1, c2, c3)", data),
+      "Duplicate map key was found: NaN");
+}
+
+TEST_F(MapTest, nestedSignedZeroKeysAreOneKey) {
+  const auto data = makeRowVector({
+      makeArrayVector<double>({{-0.0}}),
+      makeFlatVector<int32_t>({1}),
+      makeArrayVector<double>({{0.0}}),
+      makeFlatVector<int32_t>({2}),
+  });
+  setThrowExceptionOnDuplicateMapKeys(false);
+  EXPECT_THAT(
+      elementBitPatterns(
+          evaluate("element_at(map_keys(map(c0, c1, c2, c3)), 1)", data)),
+      testing::ElementsAre(std::bit_cast<uint64_t>(-0.0)));
+  ::facebook::velox::test::assertEqualVectors(
+      makeArrayVector<int32_t>({{2}}),
+      evaluate("map_values(map(c0, c1, c2, c3))", data));
+}
+
+TEST_F(MapTest, constantKeys) {
+  const auto data = makeRowVector({
+      makeFlatVector<int64_t>({10, 11}),
+      makeFlatVector<int64_t>({20, 21}),
+      makeFlatVector<int64_t>({30, 31}),
+  });
+  setThrowExceptionOnDuplicateMapKeys(false);
+  ::facebook::velox::test::assertEqualVectors(
+      makeArrayVector<int64_t>({{1, 2}, {1, 2}}),
+      evaluate("map_keys(map(1, c0, 2, c1, 1, c2))", data));
+  ::facebook::velox::test::assertEqualVectors(
+      makeArrayVector<int64_t>({{30, 20}, {31, 21}}),
+      evaluate("map_values(map(1, c0, 2, c1, 1, c2))", data));
+
+  setThrowExceptionOnDuplicateMapKeys(true);
+  VELOX_ASSERT_THROW(
+      evaluate("map(1, c0, 2, c1, 1, c2)", data),
+      "Duplicate map key was found: 1");
 }
 
 TEST_F(MapTest, resultSize) {
@@ -534,6 +642,35 @@ TEST_F(MapTest, resultSize) {
       "if(greaterthan(c2, 2), map(c0, c1), map(c1, c0))",
       {keys, values, condition},
       mapVector);
+}
+
+TEST_F(MapTest, sparseRows) {
+  auto data = makeRowVector({
+      makeFlatVector<int64_t>(1'000, [](auto row) { return row; }),
+      makeFlatVector<int64_t>(1'000, [](auto row) { return row * 10; }),
+  });
+  SelectivityVector rows(1'000, false);
+  rows.setValid(10, true);
+  rows.setValid(990, true);
+  rows.updateBounds();
+  auto expected = makeMapVector<int64_t, int64_t>(
+      1'000,
+      [](auto /*row*/) { return 2; },
+      [](auto index) { return index % 2 == 0 ? index / 2 : index / 2 * 10; },
+      [](auto index) { return index % 2 == 0 ? index / 2 * 10 : index / 2; });
+
+  {
+    setThrowExceptionOnDuplicateMapKeys(true);
+    auto result = evaluate<MapVector>("map(c0, c1, c1, c0)", data, rows);
+    ::facebook::velox::test::assertEqualVectors(expected, result, rows);
+    EXPECT_EQ(result->mapKeys()->size(), 4);
+  }
+  {
+    setThrowExceptionOnDuplicateMapKeys(false);
+    auto result = evaluate<MapVector>("map(c0, c1, c1, c0)", data, rows);
+    ::facebook::velox::test::assertEqualVectors(expected, result, rows);
+    EXPECT_EQ(result->mapKeys()->valueVector()->size(), 4);
+  }
 }
 
 } // namespace

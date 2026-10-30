@@ -244,32 +244,30 @@ void TopNRowNumber::addInput(RowVectorPtr input) {
 
     // Initialize new partitions.
     initializeNewPartitions();
+  }
 
-    // Process input rows. For each row, lookup the partition. If the highest
-    // (top) rank in that partition is less than limit, add the new row.
-    // Otherwise, check if row should replace an existing row or be discarded.
-    RANK_FUNCTION_DISPATCH(processInputRowLoop, rankFunction_, numInput);
+  // Process input rows. For each row, lookup the partition. If the highest
+  // (top) rank in that partition is less than limit, add the new row.
+  // Otherwise, check if row should replace an existing row or be discarded.
+  RANK_FUNCTION_DISPATCH(processInputRowLoop, rankFunction_, numInput);
 
-    // It is determined that the TopNRowNumber (as a partial) is not rejecting
-    // enough input rows to make the duplicate detection worthwhile. Hence,
-    // abandon the processing at this partial TopN and let the final TopN do
-    // the processing.
-    if (abandonPartialEarly()) {
-      abandonedPartial_ = true;
-      addRuntimeStat(
-          std::string(TopNRowNumber::kAbandonedPartial), RuntimeCounter(1));
+  // It is determined that the TopNRowNumber (as a partial) is not rejecting
+  // enough input rows to make the duplicate detection worthwhile. Hence,
+  // abandon the processing at this partial TopN and let the final TopN do
+  // the processing.
+  if (abandonPartialEarly()) {
+    abandonedPartial_ = true;
+    addRuntimeStat(
+        std::string(TopNRowNumber::kAbandonedPartial), RuntimeCounter(1));
 
-      updateEstimatedOutputRowSize();
-      outputBatchSize_ = outputBatchRows(estimatedOutputRowSize_);
-      outputRows_.resize(outputBatchSize_);
-    }
-  } else {
-    RANK_FUNCTION_DISPATCH(processInputRowLoop, rankFunction_, numInput);
+    updateEstimatedOutputRowSize();
+    outputBatchSize_ = outputBatchRows(estimatedOutputRowSize_);
+    outputRows_.resize(outputBatchSize_);
   }
 }
 
 bool TopNRowNumber::abandonPartialEarly() const {
-  if (table_ == nullptr || generateRowNumber_ || spiller_ != nullptr) {
+  if (generateRowNumber_ || spiller_ != nullptr) {
     return false;
   }
 
@@ -368,13 +366,18 @@ char* TopNRowNumber::processRowExceedingLimit<
   } else {
     // The new top rank value depends on the number of peers of the top ranking
     // row. If the current row also has the same value as the new top ranking
-    // row then it has to be counted as a peer as well.
+    // row then it has to be counted as a peer as well. If the current row
+    // sorts after the new top ranking rows, it becomes the only top ranking
+    // row and every remaining row ranks before it.
     auto numNewTopRankRows = partition.numTopRankRows();
     topRow = topRows.top();
-    if (comparator_.compare(decodedVectors_, index, topRow) == 0) {
+    const auto result = comparator_.compare(decodedVectors_, index, topRow);
+    if (result == 0) {
       partition.topRank = topRows.size() - numNewTopRankRows + 1;
-    } else {
+    } else if (result < 0) {
       partition.topRank = topRows.size() - numNewTopRankRows + 2;
+    } else {
+      partition.topRank = topRows.size() + 1;
     }
   }
   return newRow;

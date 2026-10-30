@@ -28,9 +28,9 @@
 #include "folly/container/F14Set.h"
 #include "velox/buffer/BufferPool.h"
 #include "velox/dwio/nimble/common/Buffer.h"
+#include "velox/dwio/nimble/common/HybridFlatMap.h"
 #include "velox/dwio/nimble/common/Types.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
-#include "velox/dwio/nimble/velox/HybridFlatMap.h"
 #include "velox/dwio/nimble/writer/EncodingLayoutTree.h"
 
 #include <set>
@@ -171,10 +171,25 @@ struct SerializerOptions {
   folly::F14FastMap<std::string, std::set<std::string>> flatMapColumns{};
 
   /// Opt-in Hybrid FlatMap grouping for MapVector-backed MAP input. Configured
-  /// group keys are stored in schema metadata; Default has no schema keys.
-  /// Every block carries its observed typed keys, key-major in-map bits, and
-  /// values in one complete value subtree per group.
+  /// group keys are stored in schema metadata, and every block marks the
+  /// present ones in a key-presence bitmap.
+  /// Each column's `HybridFlatMap::defaultGroupKeyPresenceMode` selects how its
+  /// blocks record Default keys: `kBitmap`, a bitmap over Default keys appended
+  /// to the schema in first-seen order, or `kKeyList`, a typed list of each
+  /// block's Default keys with no Default keys in the schema. Every group
+  /// carries key-major in-map bits and values in one complete value subtree.
+  /// Default is required and may be the only group, in which case it holds
+  /// every key.
   folly::F14FastMap<std::string, HybridFlatMap> hybridFlatMapColumns{};
+
+  /// Omits all-false Hybrid FlatMap in-map and key-presence streams from
+  /// serialized values. All-true in-map streams stay explicit so the reader
+  /// can derive each batch's row count. All-true key-presence streams stay
+  /// explicit so later Default-group keys do not appear in earlier batches.
+  /// This option never omits a Default key list; a block without Default keys
+  /// writes no list either way. Disabled by default for compatibility with
+  /// readers that require explicit metadata streams.
+  bool skipConstantHybridFlatMapMetadataStreams{false};
 
   /// Factory for creating encoding selection policies.
   /// Used by encoded serializer writes.

@@ -109,25 +109,11 @@ class StripeGroup {
   /// `stripeIndex`. Stateless. `streamId` must be less than streamCount().
   uint32_t streamSize(uint32_t stripeIndex, uint32_t streamId) const;
 
-  /// O(1) random-access read of the stored checksum of `streamId` within
-  /// `stripeIndex`. Only meaningful when hasStreamChecksums() is true;
-  /// otherwise returns 0. Stateless.
-  uint32_t streamChecksum(uint32_t stripeIndex, uint32_t streamId) const;
-
-  /// Whether this group carries per-stream checksums.
-  bool hasStreamChecksums() const {
-    return hasStreamChecksums_;
-  }
-
   /// Relative byte location of one stream within a stripe. A zero size means
   /// the stream is absent.
   struct StreamMetadata {
     uint32_t offset{0};
     uint32_t size{0};
-    /// Checksum of the stream's on-disk bytes. Zero when the group carries no
-    /// checksums, so callers must gate on hasStreamChecksums() rather than on
-    /// this being non-zero.
-    uint32_t checksum{0};
   };
 
   /// Reads locations for all streams in one stripe. `locations.size()` must
@@ -155,8 +141,6 @@ class StripeGroup {
   struct RawMetadata {
     const uint32_t* offsets{nullptr};
     const uint32_t* sizes{nullptr};
-    // nullptr when the group carries no checksums.
-    const uint32_t* checksums{nullptr};
   };
 
   // kStreamMajor: streamCount entries, one EncodingView per leaf stream, each
@@ -164,10 +148,6 @@ class StripeGroup {
   struct StreamMajorMetadata {
     std::vector<std::unique_ptr<EncodingView>> offsets;
     std::vector<std::unique_ptr<EncodingView>> sizes;
-    // One array of stripeCount x streamCount values, stream-major, so stream S
-    // of local stripe T sits at S * stripeCount + T. Null when the group
-    // carries no checksums.
-    std::unique_ptr<EncodingView> checksums;
   };
 
   const std::unique_ptr<MetadataBuffer> metadata_;
@@ -179,9 +159,6 @@ class StripeGroup {
   // encoding provides a stateless O(1) const readAt, so point access needs no
   // auxiliary state and is safe for concurrent reads.
   const EncodingLayout encodingLayout_;
-  // Whether the group carries per-stream checksums. Which member above holds
-  // them follows encodingLayout_, exactly as offsets and sizes do.
-  bool hasStreamChecksums_{false};
   uint32_t streamCount_{0};
   uint32_t stripeCount_{0};
   uint32_t firstStripe_{0};

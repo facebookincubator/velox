@@ -32,8 +32,10 @@ add_library(
   JitExpression.cpp
   NullMask.cpp
   PrestoFunctions.cpp
+  prestosql/ArrayJoinFunction.cpp
   prestosql/DateAddFunction.cpp
   prestosql/DatePlusIntervalFunction.cpp
+  prestosql/UnixtimeFunctions.cpp
   SparkFunctions.cpp
   sparksql/DateAddFunction.cpp
   sparksql/FloatingPointToDecimal.cuh

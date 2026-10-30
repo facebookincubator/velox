@@ -21,6 +21,7 @@
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 
 #include "velox/common/caching/CacheTTLController.h"
+#include "velox/common/file/FileSystems.h"
 #include "velox/common/time/Timer.h"
 #include "velox/connectors/hive/BufferedInputBuilder.h"
 #include "velox/connectors/hive/FileHandle.h"
@@ -28,6 +29,7 @@
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/HiveDataSource.h"
 #include "velox/connectors/hive/TableHandle.h"
+#include "velox/functions/lib/string/StringImpl.h"
 #ifdef VELOX_ENABLE_ABFS
 #include "velox/connectors/hive/storage_adapters/abfs/AbfsUtil.h"
 #endif
@@ -47,10 +49,15 @@
 #include <cuda_runtime.h>
 #include <nvtx3/nvtx3.hpp>
 
+#include <algorithm>
+#include <limits>
 #include <memory>
 #include <numeric>
 #include <ranges>
 #include <span>
+#include <system_error>
+#include <tuple>
+#include <utility>
 
 namespace facebook::velox::cudf_velox::connector::hive {
 
@@ -165,6 +172,16 @@ std::unique_ptr<cudf::table> castDecimalColumnsToVeloxTypes(
   return std::make_unique<cudf::table>(std::move(columns));
 }
 
+std::optional<cudf::type_id> constantTimestampType(
+    const CudfHiveConfig& config,
+    const config::ConfigBase* session) {
+  const auto timestampType = config.timestampTypeSession(session).id();
+  if (timestampType == cudf::type_id::TIMESTAMP_DAYS) {
+    return std::nullopt;
+  }
+  return timestampType;
+}
+
 CudfSplitReader::CudfSplitReader(
     std::shared_ptr<CudfHiveConnectorSplit> split,
     std::shared_ptr<const HiveTableHandle> tableHandle,
@@ -225,6 +242,8 @@ CudfSplitReader::CudfSplitReader(
       hiveConfig.maxCoalescedBytes(sessionProperties));
   baseReaderOpts_.setMaxCoalesceDistance(
       hiveConfig.maxCoalescedDistanceBytes(sessionProperties));
+  caseInsensitiveColumnNames_ =
+      hiveConfig.isFileColumnNamesReadAsLowerCase(sessionProperties);
 }
 
 CudfSplitReader::~CudfSplitReader() {
@@ -247,17 +266,94 @@ CudfSplitReader::~CudfSplitReader() {
 
 void CudfSplitReader::prepareSplitInternal(
     dwio::common::RuntimeStats& /*runtimeStats*/) {
+  // Read file metadata and cache schema information
+  cacheSchemaFromMetadata();
+
+  // No columns to read (e.g. `count(*)`): take the row count from the footer.
+  noColumnsToRead_ = readColumnNames_.empty();
+  if (noColumnsToRead_) {
+    VELOX_CHECK_NULL(
+        pushdownFilter(),
+        "A footer-derived row count cannot honor a pushed-down filter");
+    return;
+  }
+
   createCudfReader();
 }
 
+void CudfSplitReader::cacheSchemaFromMetadata() {
+  fileMetaDatas();
+
+  VELOX_CHECK_EQ(
+      fileMetaDatas_.size(),
+      1,
+      "Expected a single parquet footer for the split's data file");
+  const auto& meta = fileMetaDatas_.front();
+  VELOX_CHECK(not meta.schema.empty(), "Parquet footer schema is empty");
+  VELOX_CHECK_GE(meta.num_rows, 0, "Parquet footer reports negative row count");
+  std::tie(baseReadOffset_, splitRowCount_) = computeSplitRowRange();
+
+  const auto& root = meta.schema.front();
+  fileColumnNames_.clear();
+  fileColumnNames_.reserve(root.children_idx.size());
+  for (const auto childIdx : root.children_idx) {
+    VELOX_CHECK_LT(
+        childIdx,
+        meta.schema.size(),
+        "Parquet schema child index out of range");
+    const auto& name = meta.schema[childIdx].name;
+    fileColumnNames_.insert(
+        caseInsensitiveColumnNames_
+            ? ::facebook::velox::functions::stringImpl::utf8StrToLowerCopy(name)
+            : name);
+  }
+}
+
+std::pair<std::size_t, std::size_t> CudfSplitReader::computeSplitRowRange()
+    const {
+  // Note: This function implements the same logic as cuDF's hybrid scan
+  // reader's `filter_row_groups_with_byte_range()` API
+  const auto rowGroupOffset = [](const auto& rowGroup) {
+    if (rowGroup.file_offset.has_value()) {
+      return rowGroup.file_offset.value();
+    }
+    if (rowGroup.columns.front().file_offset != 0) {
+      return rowGroup.columns.front().file_offset;
+    }
+    const auto& column = rowGroup.columns.front().meta_data;
+    return column.dictionary_page_offset != 0
+        ? std::min(column.dictionary_page_offset, column.data_page_offset)
+        : column.data_page_offset;
+  };
+
+  std::size_t startRow{0};
+  std::size_t numRows{0};
+  for (const auto& rowGroup : fileMetaDatas_.front().row_groups) {
+    VELOX_CHECK(
+        not rowGroup.columns.empty(),
+        "Parquet footer reports a row group with no column chunks");
+    const auto offset = rowGroupOffset(rowGroup);
+    if (std::cmp_less(offset, split_->start)) {
+      startRow += rowGroup.num_rows;
+    } else if (offset - split_->start < split_->size()) {
+      numRows += rowGroup.num_rows;
+    }
+  }
+  return {startRow, numRows};
+}
+
+void CudfSplitReader::setPushdownFilter(const cudf::ast::expression* filter) {
+  VELOX_CHECK_NOT_NULL(filter);
+  pushdownFilterExpr_ = filter;
+  hasSplitSpecificPushdownFilter_ = true;
+}
+
 void CudfSplitReader::prepareSplit(dwio::common::RuntimeStats& runtimeStats) {
-  // Reset existing split and split readers, if any
-  resetSplit();
-
-  // Acquire a stream from the global stream pool
   stream_ = cudfGlobalStreamPool().get_stream();
-
-  // Perform split-specific setup.
+  fileMetaDatas();
+  if (emptySplit_) {
+    return;
+  }
   prepareSplitInternal(runtimeStats);
 
   // Update runtime stats.
@@ -273,12 +369,12 @@ void CudfSplitReader::prepareSplit(dwio::common::RuntimeStats& runtimeStats) {
   }
 }
 
-std::optional<std::unique_ptr<cudf::table>> CudfSplitReader::next(
+std::optional<CudfSplitReader::TableChunk> CudfSplitReader::next(
     uint64_t /*size*/) {
   VELOX_NVTX_OPERATOR_FUNC_RANGE();
 
   // Record start time before reading chunk
-  auto startTimeUs = getCurrentTimeMicro();
+  auto startTimeUs = SteadyTime::now<std::chrono::microseconds>();
 
   auto chunkOpt = readNextChunk();
   if (!chunkOpt.has_value()) {
@@ -292,7 +388,7 @@ std::optional<std::unique_ptr<cudf::table>> CudfSplitReader::next(
   cudaLaunchHostFunc(
       stream_.get(), &CudfSplitReader::totalScanTimeCalculator, callbackData);
 
-  return std::move(chunkOpt.value());
+  return chunkOpt;
 }
 
 void CudfSplitReader::setConnectorQueryCtx(
@@ -304,7 +400,23 @@ void CudfSplitReader::setConnectorQueryCtx(
   connectorQueryCtx_ = connectorQueryCtx;
 }
 
-std::optional<std::unique_ptr<cudf::table>> CudfSplitReader::readNextChunk() {
+std::optional<CudfSplitReader::TableChunk> CudfSplitReader::readNextChunk() {
+  if (noColumnsToRead_) {
+    // A Velox vector holds at most `vector_size_t` rows, so the footer row
+    // count of a larger split is returned over several tables.
+    const auto numRows = std::min<std::size_t>(
+        splitRowCount_,
+        static_cast<std::size_t>(std::numeric_limits<cudf::size_type>::max()));
+    if (numRows == 0) {
+      return std::nullopt;
+    }
+    splitRowCount_ -= numRows;
+    return TableChunk{
+        std::make_unique<cudf::table>(
+            std::vector<std::unique_ptr<cudf::column>>{}),
+        static_cast<vector_size_t>(numRows)};
+  }
+
   VELOX_CHECK_NOT_NULL(splitReader_, "cuDF parquet reader not present");
   VELOX_CHECK_NOT_NULL(passState_, "Row group pass state not present");
 
@@ -336,12 +448,14 @@ std::optional<std::unique_ptr<cudf::table>> CudfSplitReader::readNextChunk() {
     }
   }
 
-  return castDecimalColumnsToVeloxTypes(
+  auto table = castDecimalColumnsToVeloxTypes(
       std::move(tableWithMetadata.tbl),
       readColumnTypes_,
       prependRowIndex_ ? 1 : 0,
       stream_,
       outputMr);
+  const auto numRows = table->num_rows();
+  return TableChunk{std::move(table), numRows};
 }
 
 void CudfSplitReader::startColumnChunkFetch() {
@@ -405,9 +519,15 @@ void CudfSplitReader::resetSplit() {
   splitReader_.reset();
   passState_.reset();
   dataSource_.reset();
-  fileMetaData_.clear();
+  fileMetaDatas_.clear();
   pushdownFilterExpr_ = subfieldFilterAst_;
   hasSplitSpecificPushdownFilter_ = false;
+  emptySplit_ = false;
+  fileColumnNames_.clear();
+  baseReadOffset_ = 0;
+  splitRowCount_ = 0;
+  readAllFileColumns_ = false;
+  noColumnsToRead_ = false;
 }
 
 cudf::ast::expression const* CudfSplitReader::pushdownFilter() const {
@@ -426,8 +546,34 @@ bool CudfSplitReader::hasSplitSpecificPushdownFilter() const {
   return hasSplitSpecificPushdownFilter_;
 }
 
+namespace {
+
+// Names the split's file for cuDF, with its size when the split carries one,
+// so that a remote open skips the request for the size.
+cudf::io::source_info makeSourceInfo(const CudfHiveConnectorSplit& split) {
+  cudf::io::filepath_source source{.path = split.filePath};
+  if (const auto fileSize = split.fileSize()) {
+    source.size = static_cast<std::size_t>(*fileSize);
+  }
+  return cudf::io::source_info{
+      std::vector<cudf::io::filepath_source>{std::move(source)}};
+}
+
+} // namespace
+
+bool CudfSplitReader::ignoreMissingFiles() const {
+  const HiveConfig hiveConfig(cudfHiveConfig_->config());
+  return hiveConfig.ignoreMissingFiles(connectorQueryCtx_->sessionProperties());
+}
+
+void CudfSplitReader::markSplitEmpty() {
+  emptySplit_ = true;
+  dataSource_.reset();
+  fileMetaDatas_.clear();
+}
+
 void CudfSplitReader::setupCudfDataSource() {
-  if (dataSource_) {
+  if (dataSource_ or emptySplit_) {
     return;
   }
 
@@ -443,13 +589,31 @@ void CudfSplitReader::setupCudfDataSource() {
       CudfHiveConfig::kUseBufferedInput,
       split_->filePath);
 
+  const bool ignoreMissingFiles = this->ignoreMissingFiles();
+
+  // Helper to create a KvikIO data source.
+  auto makeKvikioDataSource = [&]() {
+    try {
+      dataSource_ = std::move(
+          cudf::io::make_datasources(makeSourceInfo(*split_)).front());
+    } catch (const std::system_error& e) {
+      // KvikIO preserves errno for local opens only.
+      // TODO: Ignore missing remote files once KvikIO reports them
+      // distinctly.
+      if (ignoreMissingFiles and
+          e.code() == std::errc::no_such_file_or_directory) {
+        markSplitEmpty();
+        return;
+      }
+      throw;
+    }
+  };
+
   // Use KvikIO data source if we don't want to use the BufferedInput source
   if (not useBufferedInput) {
     VLOG(1) << fmt::format(
         "Using KvikIO data source for file: {}", split_->filePath);
-    dataSource_ = std::move(
-        cudf::io::make_datasources(cudf::io::source_info{split_->filePath})
-            .front());
+    makeKvikioDataSource();
     return;
   }
 
@@ -458,11 +622,25 @@ void CudfSplitReader::setupCudfDataSource() {
     const auto fileHandleKey = FileHandleKey{
         .filename = split_->filePath,
         .tokenProvider = connectorQueryCtx_->fsTokenProvider()};
-    auto fileProperties = FileProperties{};
+    auto fileProperties = split_->properties.value_or(FileProperties{});
+    // The size can also come from the $file_size info column.
+    fileProperties.fileSize = split_->fileSize();
     fileHandleCachePtr = fileHandleFactory_->generate(
         fileHandleKey, &fileProperties, ioStats_ ? ioStats_.get() : nullptr);
     VELOX_CHECK_NOT_NULL(fileHandleCachePtr.get());
   } catch (const VeloxRuntimeError& e) {
+    if (ignoreMissingFiles) {
+      if (e.errorCode() == error_code::kFileNotFound) {
+        markSplitEmpty();
+        return;
+      }
+      // Rethrow actual filesystem errors only. Unsupported paths may fall back
+      // to KvikIO.
+      if (filesystems::isPathSupportedByRegisteredFileSystems(
+              split_->filePath)) {
+        throw;
+      }
+    }
     // ABFS blobs can not fall back to KvikIO. Throw the original error.
     if (isAbfsPath(split_->filePath)) {
       VELOX_USER_FAIL(
@@ -477,9 +655,7 @@ void CudfSplitReader::setupCudfDataSource() {
     LOG(WARNING) << fmt::format(
         "Failed to generate file handle cache for file. Falling back to KvikIO. Path: {}",
         split_->filePath);
-    dataSource_ = std::move(
-        cudf::io::make_datasources(cudf::io::source_info{split_->filePath})
-            .front());
+    makeKvikioDataSource();
     return;
   }
 
@@ -511,9 +687,7 @@ void CudfSplitReader::setupCudfDataSource() {
     LOG(WARNING) << fmt::format(
         "Failed to create buffered input data source for file. Falling back to the KvikIO. Path: {}",
         split_->filePath);
-    dataSource_ = std::move(
-        cudf::io::make_datasources(cudf::io::source_info{split_->filePath})
-            .front());
+    makeKvikioDataSource();
     return;
   }
   dataSource_ =
@@ -525,14 +699,24 @@ void CudfSplitReader::setupReaderOptions() {
       dataSource_,
       "CudfSplitReader does not have a datasource. Call setupCudfDataSource() first");
 
+  const auto* sessionProperties = connectorQueryCtx_->sessionProperties();
+
   // Reader options
   readerOptions_ =
       cudf::io::parquet_reader_options::builder()
-          .use_pandas_metadata(cudfHiveConfig_->isUsePandasMetadata())
-          .use_arrow_schema(cudfHiveConfig_->isUseArrowSchema())
+          .use_pandas_metadata(
+              cudfHiveConfig_->isUsePandasMetadataSession(sessionProperties))
+          .use_arrow_schema(
+              cudfHiveConfig_->isUseArrowSchemaSession(sessionProperties))
           .allow_mismatched_pq_schemas(
-              cudfHiveConfig_->isAllowMismatchedCudfHiveSchemas())
-          .timestamp_type(cudfHiveConfig_->timestampType())
+              cudfHiveConfig_->isAllowMismatchedCudfHiveSchemasSession(
+                  sessionProperties))
+          .timestamp_type(
+              cudfHiveConfig_->timestampTypeSession(sessionProperties))
+          // cuDF currently only folds ASCII letters, unlike the CPU reader's
+          // UTF-8 folding, so non-ASCII names (rare case) that differ in case
+          // do not match.
+          .case_sensitive_names(not caseInsensitiveColumnNames_)
           .build();
 
   // Set skip_bytes and num_bytes if available
@@ -547,8 +731,8 @@ void CudfSplitReader::setupReaderOptions() {
     readerOptions_.set_filter(*filter);
   }
 
-  // Set column projection if needed
-  if (readColumnNames_.size()) {
+  // Skip column selection when reading every file column in file order
+  if (not readAllFileColumns_) {
     readerOptions_.set_column_names(readColumnNames_);
   }
 
@@ -562,13 +746,17 @@ rmm::device_async_resource_ref CudfSplitReader::determineCudfMemoryResource()
   return get_output_mr();
 }
 
-void CudfSplitReader::fileMetaDatas() {
-  if (not fileMetaData_.empty()) {
-    return;
+const std::vector<cudf::io::parquet::FileMetaData>&
+CudfSplitReader::fileMetaDatas() {
+  if (not fileMetaDatas_.empty()) {
+    return fileMetaDatas_;
   }
 
   // Setup the datasource
   setupCudfDataSource();
+  if (emptySplit_) {
+    return fileMetaDatas_;
+  }
 
   // Check that the datasource is set up
   VELOX_CHECK_NOT_NULL(
@@ -578,28 +766,36 @@ void CudfSplitReader::fileMetaDatas() {
   // Wrap the existing datasource without transferring ownership.
   std::vector<std::unique_ptr<cudf::io::datasource>> sources;
   sources.push_back(cudf::io::datasource::create(dataSource_.get()));
-  fileMetaData_ = cudf::io::read_parquet_footers(sources);
+  try {
+    fileMetaDatas_ = cudf::io::read_parquet_footers(sources);
+  } catch (const VeloxRuntimeError& e) {
+    // An open that knows the file size sends no request to the storage, so a
+    // missing file first shows at this read.
+    if (ignoreMissingFiles() and e.errorCode() == error_code::kFileNotFound) {
+      markSplitEmpty();
+      return fileMetaDatas_;
+    }
+    throw;
+  }
   VELOX_CHECK_GE(
-      fileMetaData_.size(),
+      fileMetaDatas_.size(),
       1,
       "CudfSplitReader failed to read any parquet metadatas");
-
-  if (pushdownFilterBuilder_) {
-    VELOX_CHECK_EQ(
-        fileMetaData_.size(),
-        1,
-        "Split-specific pushdown filters require exactly one Parquet metadata");
-    pushdownFilterExpr_ = pushdownFilterBuilder_(fileMetaData_.front());
-    VELOX_CHECK_NOT_NULL(
-        pushdownFilterExpr_,
-        "Split-specific pushdown filter builder must return an expression");
-    hasSplitSpecificPushdownFilter_ = true;
-  }
+  return fileMetaDatas_;
 }
 
 void CudfSplitReader::createCudfReader() {
-  // Read file metadatas
   fileMetaDatas();
+
+  // Check if we are reading all columns in order
+  const auto& schema = fileMetaDatas_.front().schema;
+  readAllFileColumns_ = std::ranges::equal(
+      schema.front().children_idx, readColumnNames_, {}, [&](auto childIdx) {
+        const auto& name = schema[childIdx].name;
+        return caseInsensitiveColumnNames_
+            ? ::facebook::velox::functions::stringImpl::utf8StrToLowerCopy(name)
+            : name;
+      });
 
   // Setup reader options
   setupReaderOptions();
@@ -607,7 +803,7 @@ void CudfSplitReader::createCudfReader() {
   // A reader spanning multiple sources also needs the byte range source index
   // map to fetch column chunks from the matching data source.
   VELOX_CHECK_EQ(
-      fileMetaData_.size(),
+      fileMetaDatas_.size(),
       1,
       "cuDF parquet reader supports a single parquet metadata per split");
 
@@ -620,7 +816,7 @@ void CudfSplitReader::createCudfReader() {
 
   // Create a hybrid scan reader over all sources of the split
   splitReader_ = std::make_unique<CudfParquetReader>(
-      std::move(fileMetaData_), readerOptions_);
+      std::move(fileMetaDatas_), readerOptions_);
 
   setupPageIndexes();
 
@@ -643,7 +839,7 @@ void CudfSplitReader::setupPageIndexes() {
   splitReader_->setup_page_indexes(pageIndexData);
 }
 
-CudfSplitReader::RowGroupPasses CudfSplitReader::selectRowGroupPasses() const {
+CudfSplitReader::RowGroupPasses CudfSplitReader::selectRowGroupPasses() {
   auto rowGroupIndices = splitReader_->all_row_groups(readerOptions_);
 
   // Filter row groups using row group byte ranges
@@ -672,8 +868,13 @@ CudfSplitReader::RowGroupPasses CudfSplitReader::selectRowGroupPasses() const {
     return {};
   }
 
+  // Construct row group passes using all (or selected) columns for pass memory
+  // estimation.
   return splitReader_->construct_row_group_passes(
-      rowGroupIndices, passReadLimit_);
+      cudf::io::parquet::experimental::read_columns_mode::ALL_COLUMNS,
+      rowGroupIndices,
+      passReadLimit_,
+      readerOptions_);
 }
 
 void CudfSplitReader::totalScanTimeCalculator(void* userData) {
@@ -681,7 +882,7 @@ void CudfSplitReader::totalScanTimeCalculator(void* userData) {
       static_cast<TotalScanTimeCallbackData*>(userData);
 
   // Record end time in callback
-  auto endTimeUs = getCurrentTimeMicro();
+  auto endTimeUs = SteadyTime::now<std::chrono::microseconds>();
 
   // Calculate elapsed time in microseconds and convert to nanoseconds
   auto elapsedUs = endTimeUs - data->startTimeUs;

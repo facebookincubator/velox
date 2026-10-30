@@ -69,6 +69,13 @@ std::shared_ptr<HiveBucketProperty> buildHiveBucketProperty(
 }
 } // namespace
 
+PlanBuilder PlanBuilder::newPlan() const {
+  PlanBuilder builder(planNodeIdGenerator_, pool_);
+  builder.options_ = options_;
+  builder.filtersAsNode_ = filtersAsNode_;
+  return builder;
+}
+
 PlanBuilder& PlanBuilder::tableScan(
     const RowTypePtr& outputType,
     const std::vector<std::string>& subfieldFilters,
@@ -1392,7 +1399,8 @@ PlanBuilder& PlanBuilder::fixedPoint(
     std::vector<core::StateDeclarationPtr> stateDeclarations,
     std::vector<core::PlanNodePtr> plans,
     core::ConvergenceConfig convergenceConfig,
-    std::string outputStateEntry) {
+    std::string outputStateEntry,
+    bool outputOnWorkerZero) {
   VELOX_CHECK_NULL(
       planNode_, "FixedPoint is a leaf node and cannot have an input");
   planNode_ = std::make_shared<core::FixedPointNode>(
@@ -1400,7 +1408,8 @@ PlanBuilder& PlanBuilder::fixedPoint(
       std::move(stateDeclarations),
       std::move(plans),
       std::move(convergenceConfig),
-      std::move(outputStateEntry));
+      std::move(outputStateEntry),
+      outputOnWorkerZero);
   return *this;
 }
 
@@ -2021,6 +2030,52 @@ PlanBuilder& PlanBuilder::spatialJoin(
       right,
       outputType);
   VELOX_CHECK(!planNode_->supportsBarrier());
+  return *this;
+}
+
+PlanBuilder& PlanBuilder::vectorSearchJoin(
+    const std::vector<std::string>& leftKeys,
+    const std::vector<std::string>& rightKeys,
+    const core::PlanNodePtr& right,
+    const std::string& probeEmbedding,
+    const std::string& buildIndex,
+    int64_t k,
+    const std::vector<std::string>& outputLayout,
+    const std::optional<std::string>& id,
+    const std::optional<std::string>& score,
+    core::JoinType joinType,
+    std::vector<std::pair<std::string, std::string>> searchOptions,
+    common::vectorindex::VectorIndexMetric metric) {
+  VELOX_CHECK_NOT_NULL(planNode_, "VectorSearchJoin cannot be the source node");
+  const auto& probeType = planNode_->outputType();
+  const auto& buildType = right->outputType();
+  const auto inputType = concat(probeType, buildType);
+  std::vector<TypePtr> types;
+  for (const auto& name : outputLayout) {
+    if (name == id) {
+      types.push_back(BIGINT());
+    } else if (name == score) {
+      types.push_back(REAL());
+    } else {
+      types.push_back(inputType->findChild(name));
+    }
+  }
+
+  planNode_ = std::make_shared<core::VectorSearchJoinNode>(
+      nextPlanNodeId(),
+      joinType,
+      fields(probeType, leftKeys),
+      fields(buildType, rightKeys),
+      field(probeType, probeEmbedding),
+      field(buildType, buildIndex),
+      metric,
+      k,
+      std::move(searchOptions),
+      id,
+      score,
+      std::move(planNode_),
+      right,
+      ROW(outputLayout, std::move(types)));
   return *this;
 }
 

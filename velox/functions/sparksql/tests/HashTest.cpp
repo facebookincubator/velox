@@ -77,6 +77,17 @@ TEST_F(HashTest, string) {
   EXPECT_EQ(hash<std::string>(std::nullopt), 42);
 }
 
+TEST_F(HashTest, unalignedString) {
+  // Non-inlined strings are stored back to back in the string buffer, so the
+  // second string starts at an odd offset.
+  auto input =
+      makeFlatVector<std::string>({"abcdefghijklm", "nopqrstuvwxyz0123456789"});
+  auto expected = makeFlatVector<int32_t>(
+      {hash<std::string>("abcdefghijklm").value(),
+       hash<std::string>("nopqrstuvwxyz0123456789").value()});
+  assertEqualVectors(expected, hash(input));
+}
+
 TEST_F(HashTest, longDecimal) {
   EXPECT_EQ(hash<int128_t>(12345678), -277285195);
   EXPECT_EQ(hash<int128_t>(0), -783713497);

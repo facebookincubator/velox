@@ -69,6 +69,7 @@ TEST(IndexConfigTest, buildersPreserveDefaults) {
   EXPECT_EQ(clusterOptions.maxRowsPerKeyChunk, 10'000);
   EXPECT_EQ(
       clusterOptions.keyChunkCompressionType, CompressionType::Uncompressed);
+  EXPECT_TRUE(clusterOptions.hierarchicalKeyEncodingReadFactors.empty());
 
   const auto hash = HashIndexConfigBuilder{}.build();
   const auto& hashOptions = checkedIndexConfig<HashIndexConfig>(*hash);
@@ -122,6 +123,8 @@ TEST(IndexConfigTest, buildersPreserveConfiguredValues) {
           .withNoDuplicateKey(true)
           .withMaxRowsPerKeyChunk(456)
           .withKeyChunkCompressionType(CompressionType::Zstd)
+          .withHierarchicalKeyEncodingReadFactors(
+              {{EncodingType::Trivial, 0.5}})
           .build();
   const auto& hierarchicalOptions =
       checkedIndexConfig<ClusterIndexConfig>(*hierarchical);
@@ -134,6 +137,10 @@ TEST(IndexConfigTest, buildersPreserveConfiguredValues) {
   EXPECT_EQ(hierarchicalOptions.name, kHierarchicalClusterIndexName);
   EXPECT_EQ(hierarchicalOptions.maxRowsPerKeyChunk, 456);
   EXPECT_EQ(hierarchicalOptions.keyChunkCompressionType, CompressionType::Zstd);
+  EXPECT_EQ(
+      hierarchicalOptions.hierarchicalKeyEncodingReadFactors,
+      (std::vector<std::pair<EncodingType, float>>{
+          {EncodingType::Trivial, 0.5}}));
 
   const auto hash = HashIndexConfigBuilder{}
                         .withKeyColumns({"key"})

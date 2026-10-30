@@ -87,6 +87,29 @@ TEST(ScopedRegistryTest, clear) {
   EXPECT_EQ(registry.find("b"), nullptr);
 }
 
+TEST(ScopedRegistryTest, replaceAllReplacesOnlyLocalEntries) {
+  ScopedRegistry<std::string, TestEntry> parent;
+  auto parentShared = std::make_shared<TestEntry>("parent-shared");
+  auto parentOnly = std::make_shared<TestEntry>("parent-only");
+  parent.insert("shared", parentShared);
+  parent.insert("parent-only", parentOnly);
+
+  ScopedRegistry<std::string, TestEntry> child(&parent);
+  child.insert("shared", std::make_shared<TestEntry>("child-shared"));
+  child.insert("old", std::make_shared<TestEntry>("old"));
+
+  auto replacement = std::make_shared<TestEntry>("replacement");
+  ScopedRegistry<std::string, TestEntry>::Map entries;
+  entries.emplace("new", replacement);
+  child.replaceAll(std::move(entries));
+
+  EXPECT_EQ(child.find("old"), nullptr);
+  EXPECT_EQ(child.find("new"), replacement);
+  EXPECT_EQ(child.find("shared"), parentShared);
+  EXPECT_EQ(child.find("parent-only"), parentOnly);
+  EXPECT_EQ(parent.find("new"), nullptr);
+}
+
 TEST(ScopedRegistryTest, snapshot) {
   ScopedRegistry<std::string, TestEntry> registry;
   registry.insert("a", std::make_shared<TestEntry>("a"));

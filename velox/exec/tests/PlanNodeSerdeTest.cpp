@@ -113,6 +113,15 @@ class PlanNodeSerdeTest : public testing::Test,
   std::vector<RowVectorPtr> data_;
 };
 
+TEST_F(PlanNodeSerdeTest, nestedAggregations) {
+  // Deep enough that deserializing each source more than once would not finish.
+  auto builder = PlanBuilder().values({data_});
+  for (int i = 0; i < 40; ++i) {
+    builder.singleAggregation({"c0"}, {});
+  }
+  testSerde(builder.planNode());
+}
+
 TEST_F(PlanNodeSerdeTest, aggregation) {
   auto plan = PlanBuilder()
                   .values({data_})
@@ -591,6 +600,55 @@ TEST_F(PlanNodeSerdeTest, parallelProjet) {
                  {{"c0 + 1", "c0 * 2"}, {"c1 + 1", "c1 * 2"}}, {"c2", "c3"})
              .planNode();
 
+  testSerde(plan);
+}
+
+TEST_F(PlanNodeSerdeTest, vectorSearchJoin) {
+  auto probe = makeRowVector(
+      {"t0", "t1"},
+      {
+          makeFlatVector<int64_t>({1, 2}),
+          makeArrayVector<float>({{1, 0}, {0, 1}}),
+      });
+  auto build = makeRowVector(
+      {"u0", "u1", "u2"},
+      {
+          makeFlatVector<int64_t>({1, 2}),
+          makeFlatVector<std::string>({"a", "b"}, VARBINARY()),
+          makeFlatVector<int64_t>({10, 20}),
+      });
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan =
+      PlanBuilder(planNodeIdGenerator)
+          .values({probe})
+          .vectorSearchJoin(
+              {"t0"},
+              {"u0"},
+              PlanBuilder(planNodeIdGenerator).values({build}).planNode(),
+              "t1",
+              "u1",
+              /*k=*/2,
+              {"cluster_id", "t0", "u2"},
+              "cluster_id")
+          .planNode();
+  testSerde(plan);
+
+  plan = PlanBuilder(planNodeIdGenerator)
+             .values({probe})
+             .vectorSearchJoin(
+                 /*leftKeys=*/{},
+                 /*rightKeys=*/{},
+                 PlanBuilder(planNodeIdGenerator).values({build}).planNode(),
+                 "t1",
+                 "u1",
+                 /*k=*/10,
+                 {"t0", "id", "score"},
+                 "id",
+                 "score",
+                 core::JoinType::kLeft,
+                 {{"ivf.nprobe", "4"}})
+             .planNode();
   testSerde(plan);
 }
 
@@ -1272,13 +1330,12 @@ TEST_F(PlanNodeSerdeTest, fixedPointWhenDeltaEmpty) {
   testSerde(plan);
 }
 
-// Shape (5): a convergence criterion that is itself a shuffling sequence --
-// the only serde case where convergenceConfig carries more than one plan.
+// Shape (5): a convergence criterion decided on worker 0 -- the only serde case
+// whose convergenceConfig carries a verdict plan.
 // Every other fixed point test round-trips a single convergence plan.
 TEST_F(PlanNodeSerdeTest, fixedPointConvergenceSequence) {
   auto idGenerator = std::make_shared<core::PlanNodeIdGenerator>();
   auto schema = ROW({"key", "val"}, BIGINT());
-  auto shuffleType = ROW({"partial"}, BIGINT());
   auto seed =
       PlanBuilder(idGenerator)
           .values({makeRowVector(
@@ -1286,31 +1343,52 @@ TEST_F(PlanNodeSerdeTest, fixedPointConvergenceSequence) {
               {makeFlatVector<int64_t>({0}), makeFlatVector<int64_t>({0})})})
           .planNode();
   auto body = PlanBuilder(idGenerator)
-                  .stateSource("vals", schema)
+                  .stateSource("values", schema)
                   .project({"key", "val + 1 AS val"})
                   .planNode();
-  // Each worker reduces its shard, then every worker sums the peers' partials
-  // and emits the same verdict.
-  auto partial = PlanBuilder(idGenerator)
-                     .stateSource("vals", schema)
-                     .singleAggregation({}, {"sum(val)"})
-                     .project({"a0 AS partial"})
-                     .partitionedOutput({}, 2)
-                     .planNode();
-  auto verdict = PlanBuilder(idGenerator)
-                     .exchange(shuffleType, "Presto")
-                     .singleAggregation({}, {"sum(partial)"})
-                     .project({"a0 >= 16 AS converged"})
-                     .planNode();
-  auto plan =
-      PlanBuilder(idGenerator)
-          .fixedPoint(
-              {core::VectorState("vals", schema).initial(seed)},
-              {body},
-              core::ConvergenceConfig::converging({partial, verdict}, 100),
-              "vals")
-          .planNode();
-  testSerde(plan);
+  // Each worker reduces its shard, and worker 0 sums every worker's partial.
+  auto gather = PlanBuilder(idGenerator)
+                    .stateSource("values", schema)
+                    .singleAggregation({}, {"sum(val)"})
+                    .partitionedOutput({}, 1)
+                    .planNode();
+  auto sumPartials = PlanBuilder(idGenerator)
+                         .exchange(ROW("a0", BIGINT()), "Presto")
+                         .singleAggregation({}, {"sum(a0) AS total"})
+                         .project({"total >= 16"})
+                         .planNode();
+  testSerde(PlanBuilder(idGenerator)
+                .fixedPoint(
+                    {core::VectorState("values", schema).initial(seed)},
+                    {body},
+                    core::ConvergenceConfig::globalVerdict(
+                        {gather}, sumPartials, 100),
+                    "values")
+                .planNode());
+
+  // Every worker sums every worker's values into the same replicated state;
+  // worker 0 decides over its own copy and alone emits the output.
+  auto broadcast = PlanBuilder(idGenerator)
+                       .stateSource("values", schema)
+                       .partitionedOutputBroadcast()
+                       .planNode();
+  auto sumAll = PlanBuilder(idGenerator)
+                    .exchange(schema, "Presto")
+                    .singleAggregation({}, {"sum(val)"})
+                    .project({"CAST(0 AS BIGINT) AS key", "a0 AS val"})
+                    .planNode();
+  auto ownVerdict = PlanBuilder(idGenerator)
+                        .stateSource("values", schema)
+                        .project({"val >= 16"})
+                        .planNode();
+  testSerde(PlanBuilder(idGenerator)
+                .fixedPoint(
+                    {core::VectorState("values", schema).initial(seed)},
+                    {broadcast, sumAll},
+                    core::ConvergenceConfig::workerZeroVerdict(ownVerdict, 100),
+                    "values",
+                    /*outputOnWorkerZero=*/true)
+                .planNode());
 }
 
 TEST_F(PlanNodeSerdeTest, fixedPointThreeDegrees) {

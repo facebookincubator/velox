@@ -54,6 +54,13 @@ class FunctionBaseTest : public testing::Test,
     });
   }
 
+  void setCastStringToFloatingPointLenientInfNan(bool value) {
+    queryCtx_->testingOverrideConfigUnsafe({
+        {core::QueryConfig::kCastStringToFloatingPointLenientInfNan,
+         std::to_string(value)},
+    });
+  }
+
   void setTimezone(const std::string& value) {
     queryCtx_->testingOverrideConfigUnsafe({
         {core::QueryConfig::kSessionTimezone, value},

@@ -23,18 +23,19 @@
 
 #include <gtest/gtest.h>
 
+#include "folly/Conv.h"
 #include "folly/container/F14Map.h"
 #include "velox/common/memory/Memory.h"
+#include "velox/dwio/nimble/common/HybridFlatMap.h"
+#include "velox/dwio/nimble/common/SchemaBuilder.h"
+#include "velox/dwio/nimble/common/SchemaReader.h"
+#include "velox/dwio/nimble/common/SchemaSerialization.h"
 #include "velox/dwio/nimble/common/tests/GTestUtils.h"
 #include "velox/dwio/nimble/serializer/BatchedStreamDecoder.h"
 #include "velox/dwio/nimble/serializer/Options.h"
 #include "velox/dwio/nimble/serializer/Serializer.h"
 #include "velox/dwio/nimble/serializer/StreamDataParser.h"
 #include "velox/dwio/nimble/serializer/StreamDataWriter.h"
-#include "velox/dwio/nimble/velox/HybridFlatMap.h"
-#include "velox/dwio/nimble/velox/SchemaBuilder.h"
-#include "velox/dwio/nimble/velox/SchemaReader.h"
-#include "velox/dwio/nimble/velox/SchemaSerialization.h"
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/FlatVector.h"
 
@@ -266,14 +267,16 @@ TEST_F(BatchedStreamDecoderTest, rejectsSelectedReads) {
 
 TEST_F(BatchedStreamDecoderTest, hybridFlatMapGroupStreamsRoundTrip) {
   SchemaBuilder schemaBuilder;
-  auto hybridMap =
-      schemaBuilder.createHybridFlatMapTypeBuilder(ScalarKind::String);
+  auto hybridMap = schemaBuilder.createHybridFlatMapTypeBuilder(
+      ScalarKind::String, HybridFlatMap::KeyPresenceMode::kBitmap);
   hybridMap->addGroup(
       0, {"A", "B"}, schemaBuilder.createScalarTypeBuilder(ScalarKind::String));
   hybridMap->addGroup(
       HybridFlatMap::kDefaultGroupId,
       {},
       schemaBuilder.createScalarTypeBuilder(ScalarKind::String));
+  hybridMap->appendDefaultGroupKey("new:X");
+  hybridMap->appendDefaultGroupKey("new:Y");
 
   SchemaSerializer schemaSerializer;
   const auto schema = SchemaDeserializer::deserialize(
@@ -328,46 +331,58 @@ TEST_F(BatchedStreamDecoderTest, hybridFlatMapGroupStreamsRoundTrip) {
     return decoded;
   };
 
-  const std::vector<std::string> expectedKeys{"A", "B"};
-  const auto encodedKeys = encodeStrings(expectedKeys);
-  const auto decodedKeys =
-      decodeStrings(group.keyDescriptor, encodedKeys, expectedKeys.size());
-  EXPECT_EQ(decodedKeys, expectedKeys);
+  const auto encodeBools = [&](std::span<const bool> values) {
+    const std::string_view raw{
+        reinterpret_cast<const char*>(values.data()),
+        values.size() * sizeof(bool)};
+    Buffer buffer{*pool_};
+    return std::string{serde::detail::encodeScalar<std::string>(
+        options,
+        ScalarKind::Bool,
+        raw,
+        *pool_,
+        buffer,
+        /*encodingLayout=*/nullptr,
+        options.encodingOptions)};
+  };
+  const auto decodeBools = [&](const StreamDescriptor& descriptor,
+                               std::string_view encoded,
+                               size_t count) {
+    ScalarType type{descriptor};
+    BatchedStreamDecoder decoder{
+        type, /*isInMapStream=*/false, kNoBufferPool, pool_.get()};
+    decoder.addBatch(
+        /*startRow=*/0,
+        encoded,
+        /*legacyHeaderless=*/false,
+        options.encodingOptions.useVarintRowCount);
+    const auto numValues = folly::to<uint32_t>(count);
+    std::vector<uint8_t> decoded(count);
+    std::vector<facebook::velox::BufferPtr> stringBuffers;
+    EXPECT_EQ(
+        decoder.next(
+            numValues,
+            decoded.data(),
+            /*getOutputNulls=*/nullptr,
+            stringBuffers),
+        numValues);
+    return std::vector<bool>(decoded.begin(), decoded.end());
+  };
+
+  const std::array<bool, 2> expectedKeyPresence{true, true};
+  const auto decodedKeyPresence = decodeBools(
+      group.keyPresenceDescriptor,
+      encodeBools(expectedKeyPresence),
+      expectedKeyPresence.size());
+  EXPECT_EQ(
+      decodedKeyPresence,
+      std::vector<bool>(
+          expectedKeyPresence.begin(), expectedKeyPresence.end()));
 
   const std::array<bool, 6> expectedInMap{
       true, false, false, true, false, true};
-  const std::string_view rawInMap{
-      reinterpret_cast<const char*>(expectedInMap.data()),
-      expectedInMap.size() * sizeof(bool)};
-  Buffer inMapBuffer{*pool_};
-  const std::string encodedInMap{serde::detail::encodeScalar<std::string>(
-      options,
-      ScalarKind::Bool,
-      rawInMap,
-      *pool_,
-      inMapBuffer,
-      /*encodingLayout=*/nullptr,
-      options.encodingOptions)};
-  ScalarType inMapType{group.inMapDescriptor};
-  BatchedStreamDecoder inMapDecoder{
-      inMapType, /*isInMapStream=*/true, kNoBufferPool, pool_.get()};
-  inMapDecoder.addBatch(
-      /*startRow=*/0,
-      encodedInMap,
-      /*legacyHeaderless=*/false,
-      options.encodingOptions.useVarintRowCount);
-  std::vector<uint8_t> decodedInMap(expectedInMap.size());
-  std::vector<facebook::velox::BufferPtr> stringBuffers;
-  EXPECT_EQ(
-      inMapDecoder.next(
-          decodedInMap.size(),
-          decodedInMap.data(),
-          /*getOutputNulls=*/nullptr,
-          stringBuffers),
-      expectedInMap.size());
-  EXPECT_EQ(
-      std::vector<bool>(decodedInMap.begin(), decodedInMap.end()),
-      std::vector<bool>(expectedInMap.begin(), expectedInMap.end()));
+  const auto decodedInMap = decodeBools(
+      group.inMapDescriptor, encodeBools(expectedInMap), expectedInMap.size());
 
   const std::vector<std::string> expectedValues{"x", "u", "v"};
   const auto encodedValues = encodeStrings(expectedValues);
@@ -379,11 +394,14 @@ TEST_F(BatchedStreamDecoderTest, hybridFlatMapGroupStreamsRoundTrip) {
 
   std::vector<std::vector<std::pair<std::string, std::string>>> rows(3);
   size_t valueIndex{0};
-  for (size_t keyIndex = 0; keyIndex < decodedKeys.size(); ++keyIndex) {
+  for (size_t keyIndex = 0; keyIndex < group.groupKeys.size(); ++keyIndex) {
+    if (!decodedKeyPresence[keyIndex]) {
+      continue;
+    }
     for (size_t row = 0; row < rows.size(); ++row) {
       if (decodedInMap[keyIndex * rows.size() + row]) {
         rows[row].emplace_back(
-            decodedKeys[keyIndex], decodedValues[valueIndex]);
+            group.groupKeys[keyIndex], decodedValues[valueIndex]);
         ++valueIndex;
       }
     }
@@ -397,20 +415,23 @@ TEST_F(BatchedStreamDecoderTest, hybridFlatMapGroupStreamsRoundTrip) {
   EXPECT_EQ(rows, expectedRows);
 
   const auto& defaultGroup = schema->asHybridFlatMap().defaultGroup();
-  const std::vector<std::string> expectedDefaultKeys{"new:X", "new:Y"};
-  const auto encodedDefaultKeys = encodeStrings(expectedDefaultKeys);
   EXPECT_EQ(
-      decodeStrings(
-          defaultGroup.keyDescriptor,
-          encodedDefaultKeys,
-          expectedDefaultKeys.size()),
-      expectedDefaultKeys);
+      defaultGroup.groupKeys, (std::vector<std::string>{"new:X", "new:Y"}));
+  const std::array<bool, 2> expectedDefaultKeyPresence{true, false};
+  EXPECT_EQ(
+      decodeBools(
+          defaultGroup.keyPresenceDescriptor,
+          encodeBools(expectedDefaultKeyPresence),
+          expectedDefaultKeyPresence.size()),
+      std::vector<bool>(
+          expectedDefaultKeyPresence.begin(),
+          expectedDefaultKeyPresence.end()));
 }
 
 TEST_F(BatchedStreamDecoderTest, hybridFlatMapOmittedNullsAreAllNonNull) {
   SchemaBuilder schemaBuilder;
-  auto hybridMap =
-      schemaBuilder.createHybridFlatMapTypeBuilder(ScalarKind::String);
+  auto hybridMap = schemaBuilder.createHybridFlatMapTypeBuilder(
+      ScalarKind::String, HybridFlatMap::KeyPresenceMode::kBitmap);
   hybridMap->addGroup(
       0,
       {"configured"},
@@ -453,6 +474,81 @@ TEST_F(BatchedStreamDecoderTest, nextStitchesSegmentsFromMultipleBatches) {
   addBatches(decoder, input, valueOffset);
 
   EXPECT_EQ(readInts(decoder, 12), expectedInts(0, 12));
+}
+
+TEST_F(BatchedStreamDecoderTest, timestampStreamsStitchAcrossBatches) {
+  // A timestamp's 8-byte microseconds carry its nulls; its 2-byte
+  // sub-microsecond nanoseconds hold one value per non-null row. Each decoder
+  // places later segments by the width of its own stream.
+  namespace vx = facebook::velox;
+  auto rowType = vx::ROW({{"ts", vx::TIMESTAMP()}});
+  const auto timestampAt = [](int64_t row) {
+    return vx::Timestamp(
+        row - 6, static_cast<uint64_t>(row) * 1'001'001 % 1'000'000'000);
+  };
+  const auto isNullAt = [](int64_t row) { return row == 5; };
+  const auto makeBatch = [&](int64_t firstRow, vx::vector_size_t numRows) {
+    auto values = vx::BaseVector::create(vx::TIMESTAMP(), numRows, pool_.get());
+    for (vx::vector_size_t i = 0; i < numRows; ++i) {
+      if (isNullAt(firstRow + i)) {
+        values->setNull(i, true);
+      } else {
+        values->asFlatVector<vx::Timestamp>()->set(
+            i, timestampAt(firstRow + i));
+      }
+    }
+    return std::make_shared<vx::RowVector>(
+        pool_.get(),
+        rowType,
+        /*nulls=*/nullptr,
+        numRows,
+        std::vector<vx::VectorPtr>{values});
+  };
+  auto input = serializeBatches(
+      rowType,
+      {makeBatch(0, 4), makeBatch(4, 3), makeBatch(7, 5)},
+      serializerOptions());
+
+  const auto& tsType = *input.schema->asRow().childAt(0);
+  const auto& timestamp = tsType.asTimestampMicroNano();
+  BatchedStreamDecoder microsDecoder{
+      tsType, /*isInMapStream=*/false, kNoBufferPool, pool_.get()};
+  addBatches(microsDecoder, input, timestamp.microsDescriptor().offset());
+  const ScalarType nanosType{timestamp.nanosDescriptor()};
+  BatchedStreamDecoder nanosDecoder{
+      nanosType, /*isInMapStream=*/false, kNoBufferPool, pool_.get()};
+  addBatches(nanosDecoder, input, timestamp.nanosDescriptor().offset());
+
+  constexpr uint32_t kRows = 12;
+  std::vector<int64_t> micros(kRows);
+  std::vector<uint64_t> nulls(vx::bits::nwords(kRows), 0);
+  std::vector<vx::BufferPtr> stringBuffers;
+  const auto numNonNulls = microsDecoder.next(
+      kRows,
+      micros.data(),
+      [&]() -> void* { return nulls.data(); },
+      stringBuffers);
+  ASSERT_EQ(numNonNulls, kRows - 1);
+  std::vector<uint16_t> nanos(numNonNulls);
+  nanosDecoder.next(
+      numNonNulls, nanos.data(), /*getOutputNulls=*/nullptr, stringBuffers);
+
+  std::vector<int64_t> expectedMicros;
+  std::vector<uint16_t> expectedNanos;
+  std::vector<int64_t> actualMicros;
+  for (uint32_t row = 0; row < kRows; ++row) {
+    ASSERT_EQ(vx::bits::isBitSet(nulls.data(), row), !isNullAt(row));
+    if (isNullAt(row)) {
+      continue;
+    }
+    const auto expected = timestampAt(row);
+    expectedMicros.push_back(
+        expected.getSeconds() * 1'000'000 + expected.getNanos() / 1'000);
+    expectedNanos.push_back(static_cast<uint16_t>(expected.getNanos() % 1'000));
+    actualMicros.push_back(micros[row]);
+  }
+  EXPECT_EQ(actualMicros, expectedMicros);
+  EXPECT_EQ(nanos, expectedNanos);
 }
 
 TEST_F(BatchedStreamDecoderTest, remainingRowsTracksCurrentSegment) {

@@ -14,43 +14,52 @@
  * limitations under the License.
  */
 
+#include <fmt/format.h>
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <algorithm>
 #include <array>
 #include <map>
+#include <set>
+#include <string>
+#include <vector>
 
 #include "velox/common/memory/Memory.h"
+#include "velox/dwio/nimble/common/HybridFlatMap.h"
+#include "velox/dwio/nimble/common/SchemaBuilder.h"
+#include "velox/dwio/nimble/common/SchemaReader.h"
+#include "velox/dwio/nimble/common/SchemaSerialization.h"
 #include "velox/dwio/nimble/serializer/Deserializer.h"
 #include "velox/dwio/nimble/serializer/SerializationHeader.h"
 #include "velox/dwio/nimble/serializer/Serializer.h"
-#include "velox/dwio/nimble/velox/HybridFlatMap.h"
-#include "velox/dwio/nimble/velox/SchemaBuilder.h"
-#include "velox/dwio/nimble/velox/SchemaReader.h"
-#include "velox/dwio/nimble/velox/SchemaSerialization.h"
+#include "velox/dwio/nimble/serializer/StreamDataParser.h"
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/FlatVector.h"
+#include "velox/vector/tests/utils/VectorMaker.h"
+#include "velox/vector/tests/utils/VectorTestBase.h"
 
 namespace facebook::nimble {
 namespace {
 
 HybridFlatMap makeHybridFlatMap(
+    ScalarKind keyKind,
     std::vector<std::vector<std::string>> explicitGroups) {
-  HybridFlatMap hybridMap;
-  hybridMap.groups.reserve(explicitGroups.size() + 1);
+  std::vector<HybridFlatMap::Group> groups;
+  groups.reserve(explicitGroups.size() + 1);
   for (uint32_t groupId = 0; groupId < explicitGroups.size(); ++groupId) {
-    hybridMap.groups.push_back(
+    groups.push_back(
         HybridFlatMap::Group{
             .groupId = groupId,
             .groupKeys = std::move(explicitGroups[groupId]),
         });
   }
-  hybridMap.groups.push_back(
+  groups.push_back(
       HybridFlatMap::Group{
           .groupId = HybridFlatMap::kDefaultGroupId,
           .groupKeys = {},
       });
-  return hybridMap;
+  return HybridFlatMap{keyKind, std::move(groups)};
 }
 
 std::shared_ptr<TypeBuilder> makeComplexValueType(SchemaBuilder& builder) {
@@ -80,6 +89,85 @@ class DeserializerTest : public ::testing::Test {
     pool_ = rootPool_->addLeafChild("leaf");
   }
 
+  // Maps one selected key subfield to the JSON maps it decodes to.
+  struct KeySelection {
+    std::string subfield;
+    std::vector<std::string> expectedMaps;
+  };
+
+  // Serializes `inputMaps` as a `features` column whose Hybrid FlatMap has
+  // only the Default group, then checks a full decode and one decode per entry
+  // of `selections` against the expected maps.
+  template <typename TKey>
+  void verifyDefaultOnlyRoundTrip(
+      const std::vector<std::string>& inputMaps,
+      const std::vector<std::string>& expectedGroupKeys,
+      const std::vector<KeySelection>& selections) {
+    velox::test::VectorMaker vectorMaker{pool_.get()};
+    const auto makeInput = [&](const std::vector<std::string>& maps) {
+      return vectorMaker.rowVector(
+          {"features"}, {vectorMaker.mapVectorFromJson<TKey, double>(maps)});
+    };
+    const auto input = makeInput(inputMaps);
+    Serializer serializer{
+        SerializerOptions{
+            .version = SerializationVersion::kSerialization,
+            .hybridFlatMapColumns =
+                {{"features",
+                  makeHybridFlatMap(
+                      std::is_same_v<TKey, std::string> ? ScalarKind::String
+                                                        : ScalarKind::Int64,
+                      {})}},
+        },
+        input->type(),
+        pool_.get()};
+    const std::string serialized{
+        serializer.serialize(input, OrderedRanges::of(0, input->size()))};
+
+    // A batch of only empty and null maps observes no Default keys.
+    const auto emptyInput = makeInput({"{}", "null"});
+    const std::string emptySerialized{serializer.serialize(
+        emptyInput, OrderedRanges::of(0, emptyInput->size()))};
+    for (const auto* slice : {&serialized, &emptySerialized}) {
+      const auto* pos = slice->data();
+      const auto header =
+          serde::readSerializationHeader(pos, slice->data() + slice->size());
+      EXPECT_TRUE(header.flags.requiredBarrier);
+    }
+
+    const auto schema =
+        SchemaReader::getSchema(serializer.schemaBuilder().schemaNodes());
+    SchemaSerializer schemaSerializer;
+    const auto deserializerSchema =
+        SchemaDeserializer::deserialize(schemaSerializer.serialize(*schema));
+    for (const auto* roundTripSchema :
+         {schema.get(), deserializerSchema.get()}) {
+      const auto& hybridMap =
+          roundTripSchema->asRow().childAt(0)->asHybridFlatMap();
+      ASSERT_EQ(hybridMap.groupCount(), 1);
+      EXPECT_EQ(hybridMap.groupAt(0).groupId, HybridFlatMap::kDefaultGroupId);
+      EXPECT_EQ(hybridMap.groupAt(0).groupKeys, expectedGroupKeys);
+    }
+
+    Deserializer deserializer{deserializerSchema, pool_.get()};
+    velox::VectorPtr output;
+    deserializer.deserialize(serialized, output);
+    velox::test::assertEqualVectors(input, output);
+    deserializer.deserialize(emptySerialized, output);
+    velox::test::assertEqualVectors(emptyInput, output);
+
+    for (const auto& selection : selections) {
+      SCOPED_TRACE(selection.subfield);
+      std::vector<Deserializer::Subfield> subfields;
+      subfields.emplace_back(selection.subfield);
+      Deserializer selectedDeserializer{
+          deserializerSchema, subfields, pool_.get(), DeserializerOptions{}};
+      selectedDeserializer.deserialize(serialized, output);
+      velox::test::assertEqualVectors(
+          makeInput(selection.expectedMaps), output);
+    }
+  }
+
   std::shared_ptr<velox::memory::MemoryPool> rootPool_;
   std::shared_ptr<velox::memory::MemoryPool> pool_;
 };
@@ -103,7 +191,8 @@ TEST_F(DeserializerTest, acceptsRegularFlatMapSchema) {
 TEST_F(DeserializerTest, traversesComplexHybridValueSubtrees) {
   SchemaBuilder builder;
   auto root = builder.createRowTypeBuilder(1);
-  auto hybridMap = builder.createHybridFlatMapTypeBuilder(ScalarKind::Int32);
+  auto hybridMap = builder.createHybridFlatMapTypeBuilder(
+      ScalarKind::Int32, HybridFlatMap::KeyPresenceMode::kBitmap);
   hybridMap->addGroup(0, {"1"}, makeComplexValueType(builder));
   hybridMap->addGroup(
       HybridFlatMap::kDefaultGroupId, {}, makeComplexValueType(builder));
@@ -111,6 +200,376 @@ TEST_F(DeserializerTest, traversesComplexHybridValueSubtrees) {
   const auto schema = SchemaReader::getSchema(builder.schemaNodes());
 
   EXPECT_NO_THROW(Deserializer(schema, pool_.get()));
+}
+
+TEST_F(DeserializerTest, hybridFlatMapOmitsConstantGroupMetadata) {
+  velox::test::VectorMaker vectorMaker{pool_.get()};
+  const auto makeInput = [&](const std::vector<std::string>& maps) {
+    return vectorMaker.rowVector(
+        {"features"}, {vectorMaker.mapVectorFromJson<int64_t, double>(maps)});
+  };
+
+  struct Batch {
+    std::string_view name;
+    std::vector<std::string> maps;
+    bool keyPresenceExpected;
+    bool inMapExpected;
+    bool valueExpected;
+    std::string serialized;
+  };
+  std::vector<Batch> batches{
+      {
+          .name = "allPresent",
+          .maps = {"{1: 10, 2: 20}", "{1: 11, 2: 21}"},
+          .keyPresenceExpected = false,
+          .inMapExpected = true,
+          .valueExpected = true,
+          .serialized = {},
+      },
+      {
+          .name = "presentKeySubset",
+          .maps = {"{1: 10}", "{1: 11}"},
+          .keyPresenceExpected = true,
+          .inMapExpected = true,
+          .valueExpected = true,
+          .serialized = {},
+      },
+      {
+          .name = "mixedRowPresence",
+          .maps = {"{1: 10}", "{2: 20}"},
+          .keyPresenceExpected = false,
+          .inMapExpected = true,
+          .valueExpected = true,
+          .serialized = {},
+      },
+      {
+          .name = "allAbsent",
+          .maps = {"{}", "{}"},
+          .keyPresenceExpected = false,
+          .inMapExpected = false,
+          .valueExpected = false,
+          .serialized = {},
+      },
+      {
+          .name = "allNullValues",
+          .maps = {"{1: null, 2: null}", "{1: null, 2: null}"},
+          .keyPresenceExpected = false,
+          .inMapExpected = true,
+          .valueExpected = true,
+          .serialized = {},
+      },
+  };
+
+  const auto type = makeInput(batches.front().maps)->type();
+  Serializer serializer{
+      SerializerOptions{
+          .version = SerializationVersion::kSerialization,
+          .hybridFlatMapColumns =
+              {{"features",
+                makeHybridFlatMap(ScalarKind::Int64, {{"1", "2"}})}},
+          .skipConstantHybridFlatMapMetadataStreams = true,
+      },
+      type,
+      pool_.get()};
+  std::vector<std::string> expectedMaps;
+  for (auto& batch : batches) {
+    const auto input = makeInput(batch.maps);
+    batch.serialized =
+        serializer.serialize(input, OrderedRanges::of(0, input->size()));
+    expectedMaps.insert(
+        expectedMaps.end(), batch.maps.begin(), batch.maps.end());
+  }
+
+  const auto schema =
+      SchemaReader::getSchema(serializer.schemaBuilder().schemaNodes());
+  const auto& group = schema->asRow().childAt(0)->asHybridFlatMap().groupAt(0);
+  const auto keyPresenceOffset = group.keyPresenceDescriptor.offset();
+  const auto inMapOffset = group.inMapDescriptor.offset();
+  const auto valueOffset =
+      group.valueType->asScalar().scalarDescriptor().offset();
+  for (const auto& batch : batches) {
+    SCOPED_TRACE(batch.name);
+    serde::StreamDataParser parser{pool_.get()};
+    parser.initialize(batch.serialized);
+    std::set<uint32_t> offsets;
+    parser.iterateStreams(
+        [&](uint32_t offset, std::string_view) { offsets.insert(offset); });
+    EXPECT_EQ(offsets.contains(keyPresenceOffset), batch.keyPresenceExpected);
+    EXPECT_EQ(offsets.contains(inMapOffset), batch.inMapExpected);
+    EXPECT_EQ(offsets.contains(valueOffset), batch.valueExpected);
+  }
+
+  std::vector<std::string_view> serializedBatches;
+  serializedBatches.reserve(batches.size());
+  for (const auto& batch : batches) {
+    serializedBatches.push_back(batch.serialized);
+  }
+  Deserializer deserializer{schema, pool_.get()};
+  velox::VectorPtr output;
+  deserializer.deserialize(serializedBatches, output);
+  velox::test::assertEqualVectors(makeInput(expectedMaps), output);
+}
+
+TEST_F(DeserializerTest, hybridFlatMapOmitsAllTrueKeyPresenceForFixedGroups) {
+  velox::test::VectorMaker vectorMaker{pool_.get()};
+  const auto makeInput = [&](const std::vector<std::string>& maps) {
+    return vectorMaker.rowVector(
+        {"features"}, {vectorMaker.mapVectorFromJson<int64_t, double>(maps)});
+  };
+
+  // The Default catalog grows from {99} to {99, 100} after the first batch is
+  // serialized. Its first all-true key-presence stream must remain explicit so
+  // key 100 is not inferred as present in that earlier batch.
+  const std::array<std::vector<std::string>, 2> batchMaps{
+      std::vector<std::string>{"{1: 10, 99: 90}"},
+      std::vector<std::string>{"{1: 11, 100: 100}"},
+  };
+  const auto type = makeInput(batchMaps.front())->type();
+  Serializer serializer{
+      SerializerOptions{
+          .version = SerializationVersion::kSerialization,
+          .hybridFlatMapColumns =
+              {{"features", makeHybridFlatMap(ScalarKind::Int64, {{"1"}})}},
+          .skipConstantHybridFlatMapMetadataStreams = true,
+      },
+      type,
+      pool_.get()};
+
+  std::vector<std::string> serialized;
+  std::vector<std::string> expectedMaps;
+  for (const auto& maps : batchMaps) {
+    const auto input = makeInput(maps);
+    const auto encoded =
+        serializer.serialize(input, OrderedRanges::of(0, input->size()));
+    serialized.emplace_back(encoded.data(), encoded.size());
+    expectedMaps.insert(expectedMaps.end(), maps.begin(), maps.end());
+  }
+
+  const auto schema =
+      SchemaReader::getSchema(serializer.schemaBuilder().schemaNodes());
+  const auto& hybridMap = schema->asRow().childAt(0)->asHybridFlatMap();
+  const HybridFlatMapType::Group* fixedGroup{nullptr};
+  const HybridFlatMapType::Group* defaultGroup{nullptr};
+  for (size_t i = 0; i < hybridMap.groupCount(); ++i) {
+    const auto& group = hybridMap.groupAt(i);
+    if (HybridFlatMap::isDefaultGroup(group.groupId)) {
+      defaultGroup = &group;
+    } else {
+      fixedGroup = &group;
+    }
+  }
+  ASSERT_NE(fixedGroup, nullptr);
+  ASSERT_NE(defaultGroup, nullptr);
+  ASSERT_EQ(defaultGroup->groupKeys.size(), 2);
+
+  const auto streamOffsets = [&](const std::string& batch) {
+    serde::StreamDataParser parser{pool_.get()};
+    parser.initialize(batch);
+    std::set<uint32_t> offsets;
+    parser.iterateStreams(
+        [&](uint32_t offset, std::string_view) { offsets.insert(offset); });
+    return offsets;
+  };
+  const auto firstBatchOffsets = streamOffsets(serialized[0]);
+  EXPECT_FALSE(
+      firstBatchOffsets.contains(fixedGroup->keyPresenceDescriptor.offset()));
+  EXPECT_TRUE(
+      firstBatchOffsets.contains(defaultGroup->keyPresenceDescriptor.offset()));
+  EXPECT_TRUE(streamOffsets(serialized[1])
+                  .contains(defaultGroup->keyPresenceDescriptor.offset()));
+
+  std::vector<std::string_view> serializedBatches;
+  serializedBatches.reserve(serialized.size());
+  for (const auto& batch : serialized) {
+    serializedBatches.push_back(batch);
+  }
+  Deserializer deserializer{schema, pool_.get()};
+  velox::VectorPtr output;
+  deserializer.deserialize(serializedBatches, output);
+  velox::test::assertEqualVectors(makeInput(expectedMaps), output);
+}
+
+TEST_F(DeserializerTest, hybridFlatMapOmitsAllFalseDefaultGroupMetadata) {
+  velox::test::VectorMaker vectorMaker{pool_.get()};
+  const auto makeInput = [&](const std::vector<std::string>& maps) {
+    return vectorMaker.rowVector(
+        {"features"}, {vectorMaker.mapVectorFromJson<int64_t, double>(maps)});
+  };
+
+  Serializer serializer{
+      SerializerOptions{
+          .version = SerializationVersion::kSerialization,
+          .hybridFlatMapColumns =
+              {{"features", makeHybridFlatMap(ScalarKind::Int64, {{"1"}})}},
+          .skipConstantHybridFlatMapMetadataStreams = true,
+      },
+      makeInput({"{99: 90}"})->type(),
+      pool_.get()};
+  const std::array<std::vector<std::string>, 3> batchMaps{
+      std::vector<std::string>{"{99: 90}"},
+      std::vector<std::string>{"{1: 10}"},
+      std::vector<std::string>{"{100: 100}"},
+  };
+  std::vector<std::string> serialized;
+  std::vector<std::string> expectedMaps;
+  serialized.reserve(batchMaps.size());
+  for (size_t i = 0; i < batchMaps.size(); ++i) {
+    SCOPED_TRACE(i);
+    const auto input = makeInput(batchMaps[i]);
+    const auto encoded =
+        serializer.serialize(input, OrderedRanges::of(0, input->size()));
+    serialized.emplace_back(encoded.data(), encoded.size());
+    expectedMaps.insert(
+        expectedMaps.end(), batchMaps[i].begin(), batchMaps[i].end());
+  }
+
+  const auto schema =
+      SchemaReader::getSchema(serializer.schemaBuilder().schemaNodes());
+  const auto& hybridMap = schema->asRow().childAt(0)->asHybridFlatMap();
+  const HybridFlatMapType::Group* defaultGroup{nullptr};
+  for (size_t i = 0; i < hybridMap.groupCount(); ++i) {
+    const auto& group = hybridMap.groupAt(i);
+    if (HybridFlatMap::isDefaultGroup(group.groupId)) {
+      defaultGroup = &group;
+      break;
+    }
+  }
+  ASSERT_NE(defaultGroup, nullptr);
+  const auto keyPresenceOffset = defaultGroup->keyPresenceDescriptor.offset();
+  const auto inMapOffset = defaultGroup->inMapDescriptor.offset();
+  const auto valueOffset =
+      defaultGroup->valueType->asScalar().scalarDescriptor().offset();
+
+  const auto streamOffsets = [&](const std::string& batch) {
+    serde::StreamDataParser parser{pool_.get()};
+    parser.initialize(batch);
+    std::set<uint32_t> offsets;
+    parser.iterateStreams(
+        [&](uint32_t offset, std::string_view) { offsets.insert(offset); });
+    return offsets;
+  };
+  EXPECT_TRUE(streamOffsets(serialized[0]).contains(keyPresenceOffset));
+  EXPECT_TRUE(streamOffsets(serialized[0]).contains(inMapOffset));
+  EXPECT_FALSE(streamOffsets(serialized[1]).contains(keyPresenceOffset));
+  EXPECT_FALSE(streamOffsets(serialized[1]).contains(inMapOffset));
+  EXPECT_FALSE(streamOffsets(serialized[1]).contains(valueOffset));
+
+  std::vector<std::string_view> serializedBatches;
+  serializedBatches.reserve(serialized.size());
+  for (const auto& batch : serialized) {
+    serializedBatches.push_back(batch);
+  }
+  Deserializer deserializer{schema, pool_.get()};
+  velox::VectorPtr output;
+  deserializer.deserialize(serializedBatches, output);
+  velox::test::assertEqualVectors(makeInput(expectedMaps), output);
+}
+
+TEST_F(DeserializerTest, hybridFlatMapKeyListKeepsSchemaAcrossBatches) {
+  velox::test::VectorMaker vectorMaker{pool_.get()};
+  const auto makeInput = [&](const std::vector<std::string>& maps) {
+    return vectorMaker.rowVector(
+        {"features"}, {vectorMaker.mapVectorFromJson<int64_t, double>(maps)});
+  };
+
+  // Default keys differ across batches and are given out of key order; batch 1
+  // has none. No Default key has a byte equal to 1, so a key list checked as a
+  // boolean stream would look all-false and be omitted.
+  const std::array<std::vector<std::string>, 4> batchMaps{
+      std::vector<std::string>{"{1: 10, 99: 90}", "null"},
+      std::vector<std::string>{"{1: 13}", "{}"},
+      std::vector<std::string>{"{150: 15, 100: 100}", "{1: 11}"},
+      std::vector<std::string>{"{200: 20, 1: 12, 99: 91}"},
+  };
+  std::vector<std::string> expectedMaps;
+  for (const auto& maps : batchMaps) {
+    expectedMaps.insert(expectedMaps.end(), maps.begin(), maps.end());
+  }
+  auto hybridMap = makeHybridFlatMap(ScalarKind::Int64, {{"1"}});
+  hybridMap.setDefaultGroupKeyPresenceMode(
+      HybridFlatMap::KeyPresenceMode::kKeyList);
+
+  const auto streamOffsets = [&](const std::string& batch) {
+    serde::StreamDataParser parser{pool_.get()};
+    parser.initialize(batch);
+    std::set<uint32_t> offsets;
+    parser.iterateStreams(
+        [&](uint32_t offset, std::string_view) { offsets.insert(offset); });
+    return offsets;
+  };
+  for (const bool skipConstantMetadata : {false, true}) {
+    SCOPED_TRACE(fmt::format("skipConstantMetadata={}", skipConstantMetadata));
+    Serializer serializer{
+        SerializerOptions{
+            .version = SerializationVersion::kSerialization,
+            .hybridFlatMapColumns = {{"features", hybridMap}},
+            .skipConstantHybridFlatMapMetadataStreams = skipConstantMetadata,
+        },
+        makeInput(batchMaps.front())->type(),
+        pool_.get()};
+    SchemaSerializer schemaSerializer;
+    const std::string serializedSchema{
+        schemaSerializer.serialize(serializer.schemaBuilder())};
+    const auto schema = SchemaDeserializer::deserialize(serializedSchema);
+    const auto& defaultGroup =
+        schema->asRow().childAt(0)->asHybridFlatMap().defaultGroup();
+    EXPECT_THAT(defaultGroup.groupKeys, testing::IsEmpty());
+
+    std::vector<std::string> serialized;
+    serialized.reserve(batchMaps.size());
+    for (size_t i = 0; i < batchMaps.size(); ++i) {
+      SCOPED_TRACE(i);
+      const auto input = makeInput(batchMaps[i]);
+      const auto encoded =
+          serializer.serialize(input, OrderedRanges::of(0, input->size()));
+      serialized.emplace_back(encoded.data(), encoded.size());
+      EXPECT_EQ(
+          schemaSerializer.serialize(serializer.schemaBuilder()),
+          serializedSchema);
+      // A batch without Default keys omits its empty key list.
+      EXPECT_EQ(
+          streamOffsets(serialized.back())
+              .contains(defaultGroup.keyPresenceDescriptor.offset()),
+          i != 1);
+    }
+
+    const std::vector<std::string_view> serializedBatches(
+        serialized.begin(), serialized.end());
+    Deserializer deserializer{schema, pool_.get()};
+    velox::VectorPtr output;
+    deserializer.deserialize(serializedBatches, output);
+    velox::test::assertEqualVectors(makeInput(expectedMaps), output);
+  }
+}
+
+TEST_F(DeserializerTest, hybridFlatMapMetadataIsRetainedByDefault) {
+  velox::test::VectorMaker vectorMaker{pool_.get()};
+  const auto input = vectorMaker.rowVector(
+      {"features"},
+      {vectorMaker.mapVectorFromJson<int64_t, double>(
+          {"{1: 10, 2: 20}", "{1: 11, 2: 21}"})});
+  Serializer serializer{
+      SerializerOptions{
+          .hybridFlatMapColumns =
+              {{"features",
+                makeHybridFlatMap(ScalarKind::Int64, {{"1", "2"}})}},
+      },
+      input->type(),
+      pool_.get()};
+  const auto serialized =
+      serializer.serialize(input, OrderedRanges::of(0, input->size()));
+
+  const auto schema =
+      SchemaReader::getSchema(serializer.schemaBuilder().schemaNodes());
+  const auto& group = schema->asRow().childAt(0)->asHybridFlatMap().groupAt(0);
+  serde::StreamDataParser parser{pool_.get()};
+  parser.initialize(serialized);
+  std::set<uint32_t> offsets;
+  parser.iterateStreams(
+      [&](uint32_t offset, std::string_view) { offsets.insert(offset); });
+
+  EXPECT_TRUE(offsets.contains(group.keyPresenceDescriptor.offset()));
+  EXPECT_TRUE(offsets.contains(group.inMapDescriptor.offset()));
 }
 
 TEST_F(DeserializerTest, hybridFlatMapRoundTripsMixedDefault) {
@@ -156,7 +615,10 @@ TEST_F(DeserializerTest, hybridFlatMapRoundTripsMixedDefault) {
       SerializerOptions{
           .version = SerializationVersion::kSerialization,
           .hybridFlatMapColumns =
-              {{"features", makeHybridFlatMap({{"1", "2", "4"}, {"3"}})}},
+              {{"features",
+                makeHybridFlatMap(
+                    ScalarKind::Int32, {{"1", "2", "4"}, {"3"}})}},
+          .skipConstantHybridFlatMapMetadataStreams = true,
       },
       type,
       pool_.get()};
@@ -218,7 +680,9 @@ TEST_F(DeserializerTest, hybridFlatMapRoundTripsMixedDefault) {
   EXPECT_EQ(hybridMap.groupAt(1).groupId, 1);
   EXPECT_EQ(hybridMap.groupAt(1).groupKeys, (std::vector<std::string>{"3"}));
   EXPECT_EQ(hybridMap.groupAt(2).groupId, HybridFlatMap::kDefaultGroupId);
-  EXPECT_TRUE(hybridMap.groupAt(2).groupKeys.empty());
+  EXPECT_EQ(
+      hybridMap.groupAt(2).groupKeys,
+      (std::vector<std::string>{"99", "100", "101"}));
 
   SchemaSerializer schemaSerializer;
   const auto deserializerSchema =
@@ -295,8 +759,8 @@ TEST_F(DeserializerTest, hybridFlatMapRoundTripsMixedDefault) {
       std::vector<std::string_view>{
           serialized, newDefaultSerialized, secondSerialized},
       output);
-  // The first and third batches repeat keys, but each decode barrier must load
-  // an independent key catalog.
+  // Every batch decodes against the final accumulated schema. Earlier
+  // key-presence bitmaps omit later trailing Default keys.
   ASSERT_EQ(
       output->size(),
       input->size() + newDefaultInput->size() + secondInput->size());
@@ -320,6 +784,29 @@ TEST_F(DeserializerTest, hybridFlatMapRoundTripsMixedDefault) {
   ASSERT_EQ(output->size(), 2);
   EXPECT_TRUE(input->equalValueAt(output.get(), 1, 0));
   EXPECT_TRUE(input->equalValueAt(output.get(), 2, 1));
+}
+
+TEST_F(DeserializerTest, hybridFlatMapRoundTripsDefaultOnly) {
+  // The rows cover a non-empty map, a null map, an empty map and a null value,
+  // and one key repeats across rows.
+  verifyDefaultOnlyRoundTrip<int64_t>(
+      {"{1: 10, 9: 90}", "null", "{}", "{2: null, 1: 11}"},
+      {"9", "1", "2"},
+      {
+          {.subfield = "features[1]",
+           .expectedMaps = {"{1: 10}", "null", "{}", "{1: 11}"}},
+          {.subfield = "features[99]",
+           .expectedMaps = {"{}", "null", "{}", "{}"}},
+      });
+  verifyDefaultOnlyRoundTrip<std::string>(
+      {R"({"a": 10, "i": 90})", "null", "{}", R"({"b": null, "a": 11})"},
+      {"i", "a", "b"},
+      {
+          {.subfield = R"(features["a"])",
+           .expectedMaps = {R"({"a": 10})", "null", "{}", R"({"a": 11})"}},
+          {.subfield = R"(features["missing"])",
+           .expectedMaps = {"{}", "null", "{}", "{}"}},
+      });
 }
 
 } // namespace

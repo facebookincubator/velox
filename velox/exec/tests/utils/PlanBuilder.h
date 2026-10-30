@@ -123,6 +123,11 @@ class PlanBuilder {
 
   virtual ~PlanBuilder() = default;
 
+  /// Returns an empty PlanBuilder that shares this builder's
+  /// PlanNodeIdGenerator, memory pool and parse options, to build another
+  /// input of the same plan, e.g. a join's build side.
+  PlanBuilder newPlan() const;
+
   static constexpr const std::string_view kHiveDefaultConnectorId{"test-hive"};
   static constexpr const std::string_view kTpchDefaultConnectorId{"test-tpch"};
   static constexpr const std::string_view kTpcdsDefaultConnectorId{
@@ -1230,11 +1235,14 @@ class PlanBuilder {
   /// @param outputStateEntry The mutable vector state entry whose final
   /// contents are emitted and into which each iteration's last plan output is
   /// written.
+  /// @param outputOnWorkerZero Whether only worker 0 emits the output (see
+  /// core::FixedPointNode::outputOnWorkerZero).
   PlanBuilder& fixedPoint(
       std::vector<core::StateDeclarationPtr> stateDeclarations,
       std::vector<core::PlanNodePtr> plans,
       core::ConvergenceConfig convergenceConfig,
-      std::string outputStateEntry);
+      std::string outputStateEntry,
+      bool outputOnWorkerZero = false);
 
   /// Add a FixedPointNode with a single per-iteration body plan (the common
   /// case: no in-iteration shuffle).  `outputStateEntry` defaults to the last
@@ -1482,6 +1490,40 @@ class PlanBuilder {
       const std::optional<std::string>& radius,
       const std::vector<std::string>& outputLayout,
       core::JoinType joinType = core::JoinType::kInner);
+
+  /// Adds a VectorSearchJoinNode to search, for each row of the preceding
+  /// plan node, the vector indexes of the matching rows of 'right' (see
+  /// core::VectorSearchJoinNode).
+  ///
+  /// @param leftKeys Join keys from the probe side. May be empty.
+  /// @param rightKeys Join keys from the build side, 'right', as many as
+  /// 'leftKeys'.
+  /// @param probeEmbedding Probe column with the query embedding.
+  /// @param buildIndex Build column with the packed local index.
+  /// @param k The number of entries to find in each matching index.
+  /// @param outputLayout The output columns, in order: probe and build
+  /// columns, and the columns named by 'id' and 'score'.
+  /// @param id Name of the output column with the id of each embedding found.
+  /// @param score Name of the output column with the score of each embedding
+  /// found.
+  /// @param joinType kInner or kLeft.
+  /// @param searchOptions Settings that override the ones recorded in the
+  /// indexes.
+  /// @param metric The metric the indexes were built for.
+  PlanBuilder& vectorSearchJoin(
+      const std::vector<std::string>& leftKeys,
+      const std::vector<std::string>& rightKeys,
+      const core::PlanNodePtr& right,
+      const std::string& probeEmbedding,
+      const std::string& buildIndex,
+      int64_t k,
+      const std::vector<std::string>& outputLayout,
+      const std::optional<std::string>& id,
+      const std::optional<std::string>& score = std::nullopt,
+      core::JoinType joinType = core::JoinType::kInner,
+      std::vector<std::pair<std::string, std::string>> searchOptions = {},
+      common::vectorindex::VectorIndexMetric metric =
+          common::vectorindex::VectorIndexMetric::kCosine);
 
   static core::IndexLookupConditionPtr parseIndexJoinCondition(
       const std::string& joinCondition,

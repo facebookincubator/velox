@@ -22,22 +22,25 @@
 #include <atomic>
 #include <numeric>
 #include <optional>
+#include <random>
 #include <string_view>
 #include <thread>
 
+#include "folly/container/F14Map.h"
 #include "folly/container/F14Set.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/dwio/common/BufferedInput.h"
+#include "velox/dwio/nimble/common/SchemaSerialization.h"
+#include "velox/dwio/nimble/common/SchemaUtils.h"
 #include "velox/dwio/nimble/common/tests/GTestUtils.h"
 #include "velox/dwio/nimble/serializer/Deserializer.h"
+#include "velox/dwio/nimble/serializer/Projector.h"
 #include "velox/dwio/nimble/serializer/SerializationHeader.h"
 #include "velox/dwio/nimble/serializer/Serializer.h"
 #include "velox/dwio/nimble/serializer/StreamDataParser.h"
 #include "velox/dwio/nimble/serializer/StreamDataWriter.h"
 #include "velox/dwio/nimble/tablet/TabletReader.h"
 #include "velox/dwio/nimble/tablet/tests/TabletTestUtils.h"
-#include "velox/dwio/nimble/velox/SchemaSerialization.h"
-#include "velox/dwio/nimble/velox/SchemaUtils.h"
 #include "velox/dwio/nimble/writer/EncodingLayoutTree.h"
 #include "velox/dwio/nimble/writer/Writer.h"
 
@@ -355,7 +358,7 @@ TEST_P(SerializationTest, fuzzSimple) {
       {"double_val", velox::DOUBLE()},
       {"string_val", velox::VARCHAR()},
       {"binary_val", velox::VARBINARY()},
-      // {"ts_val", velox::TIMESTAMP()},
+      {"ts_val", velox::TIMESTAMP()},
   });
   auto seed = folly::Random::rand32();
   LOG(INFO) << "seed: " << seed;
@@ -411,6 +414,7 @@ TEST_P(SerializationTest, fuzzNullableStreams) {
       velox::DOUBLE(),
       velox::VARCHAR(),
       velox::VARBINARY(),
+      velox::TIMESTAMP(),
   };
 
   folly::detail::DefaultGenerator rng{seed};
@@ -972,7 +976,7 @@ void collectStreamOffsets(
       offsets.insert(hybridMap.nullsDescriptor().offset());
       for (size_t i = 0; i < hybridMap.groupCount(); ++i) {
         const auto& group = hybridMap.groupAt(i);
-        offsets.insert(group.keyDescriptor.offset());
+        offsets.insert(group.keyPresenceDescriptor.offset());
         offsets.insert(group.inMapDescriptor.offset());
         collectStreamOffsets(*group.valueType, offsets);
       }
@@ -1290,6 +1294,648 @@ TEST_P(SerializationTest, flatMapEncodingFuzz) {
   }
 }
 
+namespace {
+
+// Which of a batch's keys the Hybrid FlatMap grouping configures.
+enum class HybridFlatMapGroupingKind {
+  // Only the Default group, which receives every key.
+  kDefaultOnly,
+  // Some keys are configured and the rest land in Default.
+  kPartlyConfigured,
+  // Every key is configured, so Default stays empty.
+  kFullyConfigured,
+};
+
+// The keys of one fuzzed map column and the map shapes it holds.
+struct HybridFlatMapColumnKeys {
+  // Keys in the order the Hybrid FlatMap writer first sees them: rows in order,
+  // then each row's entries by offset.
+  std::vector<std::string> orderedKeys;
+  // Number of rows holding each key.
+  folly::F14FastMap<std::string, size_t> numRowsByKey;
+  // Whether some row holds a null map.
+  bool hasNullMap{false};
+  // Whether some row holds a non-null map with no entries.
+  bool hasEmptyMap{false};
+  // Whether some map entry holds a null value.
+  bool hasNullValue{false};
+};
+
+// Returns the canonical Hybrid FlatMap key of entry 'index' of 'keys', the
+// string the writer stores in the schema.
+std::string canonicalHybridFlatMapKey(
+    const velox::DecodedVector& keys,
+    velox::vector_size_t index) {
+  const auto keyKind = keys.base()->typeKind();
+  if (keyKind == velox::TypeKind::TINYINT) {
+    return std::to_string(keys.valueAt<int8_t>(index));
+  }
+  if (keyKind == velox::TypeKind::SMALLINT) {
+    return std::to_string(keys.valueAt<int16_t>(index));
+  }
+  if (keyKind == velox::TypeKind::INTEGER) {
+    return std::to_string(keys.valueAt<int32_t>(index));
+  }
+  if (keyKind == velox::TypeKind::BIGINT) {
+    return std::to_string(keys.valueAt<int64_t>(index));
+  }
+  NIMBLE_CHECK_EQ(
+      keyKind, velox::TypeKind::VARCHAR, "Unexpected Hybrid FlatMap key type.");
+  return std::string{keys.valueAt<velox::StringView>(index)};
+}
+
+// Collects the keys and map shapes of one fuzzed map column.
+HybridFlatMapColumnKeys hybridFlatMapColumnKeys(
+    const velox::VectorPtr& mapColumn) {
+  const velox::DecodedVector maps{*mapColumn};
+  const auto* base = maps.base()->as<velox::MapVector>();
+  NIMBLE_CHECK_NOT_NULL(base, "Hybrid FlatMap input must be a MapVector.");
+  const velox::DecodedVector keys{*base->mapKeys()};
+  HybridFlatMapColumnKeys result;
+  for (velox::vector_size_t row = 0; row < mapColumn->size(); ++row) {
+    if (maps.isNullAt(row)) {
+      result.hasNullMap = true;
+      continue;
+    }
+    const auto index = maps.index(row);
+    const auto begin = base->offsetAt(index);
+    const auto end = begin + base->sizeAt(index);
+    result.hasEmptyMap |= begin == end;
+    for (auto entry = begin; entry < end; ++entry) {
+      result.hasNullValue |= base->mapValues()->isNullAt(entry);
+      auto key = canonicalHybridFlatMapKey(keys, entry);
+      if (result.numRowsByKey[key]++ == 0) {
+        result.orderedKeys.push_back(std::move(key));
+      }
+    }
+  }
+  return result;
+}
+
+// Returns 'numKeys' distinct canonical keys that no row holds. Candidates are
+// negative integers or 7-character strings, which this test's VectorFuzzer
+// never produces: it draws integers from [0, max] (boost's default
+// uniform_int_distribution range) and 8-character strings. The membership
+// check guards against any overlap regardless. The negative keys also put "-"
+// into the string sort of configured keys.
+std::vector<std::string> keysWithoutData(
+    velox::TypeKind keyKind,
+    const HybridFlatMapColumnKeys& columnKeys,
+    size_t numKeys) {
+  std::vector<std::string> keys;
+  for (int64_t candidate = -1; keys.size() < numKeys; --candidate) {
+    auto key = keyKind == velox::TypeKind::VARCHAR
+        ? fmt::format("nodata{}", -candidate)
+        : std::to_string(candidate);
+    if (!columnKeys.numRowsByKey.contains(key)) {
+      keys.push_back(std::move(key));
+    }
+  }
+  return keys;
+}
+
+// The Hybrid FlatMap key kind of a map column whose keys are `keyType`.
+ScalarKind keyKindOf(const velox::Type& keyType) {
+  const auto kind = keyType.kind();
+  if (kind == velox::TypeKind::TINYINT) {
+    return ScalarKind::Int8;
+  }
+  if (kind == velox::TypeKind::SMALLINT) {
+    return ScalarKind::Int16;
+  }
+  if (kind == velox::TypeKind::INTEGER) {
+    return ScalarKind::Int32;
+  }
+  if (kind == velox::TypeKind::BIGINT) {
+    return ScalarKind::Int64;
+  }
+  if (kind == velox::TypeKind::VARCHAR) {
+    return ScalarKind::String;
+  }
+  NIMBLE_UNREACHABLE("No Hybrid FlatMap key kind for {}", keyType.toString());
+}
+
+// A grouping for one Hybrid FlatMap column and the schema it must produce.
+struct HybridFlatMapGroupingCase {
+  // The groups of the grouping passed to the Serializer.
+  std::vector<HybridFlatMap::Group> groups;
+  // Keys the writer must append to the Default group, in first-seen order.
+  std::vector<std::string> expectedDefaultKeys;
+};
+
+// Configures the keys 'kind' selects in 1-2 groups, preceded by a group holding
+// only keysWithoutData[0], which must keep its place in the schema although no
+// row writes to it. With 'mixKeysWithoutData', the first of those groups also
+// holds keysWithoutData[1], so its key-presence bitmap mixes present and absent
+// keys, as a configured catalog larger than one batch does. Group IDs ascend
+// with random gaps; Default comes last.
+HybridFlatMapGroupingCase makeHybridFlatMapGrouping(
+    HybridFlatMapGroupingKind kind,
+    const std::vector<std::string>& observedKeys,
+    std::vector<std::string> keysWithoutData,
+    bool mixKeysWithoutData,
+    std::mt19937& rng) {
+  HybridFlatMapGroupingCase result;
+  if (kind == HybridFlatMapGroupingKind::kDefaultOnly) {
+    result.expectedDefaultKeys = observedKeys;
+    result.groups.push_back(
+        {.groupId = HybridFlatMap::kDefaultGroupId, .groupKeys = {}});
+    return result;
+  }
+
+  std::vector<std::string> configuredKeys;
+  for (const auto& key : observedKeys) {
+    const bool configure =
+        kind == HybridFlatMapGroupingKind::kFullyConfigured ||
+        folly::Random::oneIn(2, rng);
+    (configure ? configuredKeys : result.expectedDefaultKeys).push_back(key);
+  }
+
+  // Configured keys need not arrive sorted; the writer sorts them.
+  std::shuffle(configuredKeys.begin(), configuredKeys.end(), rng);
+  const auto numGroups = std::min<size_t>(
+      configuredKeys.size(), 1 + folly::Random::rand32(2, rng));
+
+  uint32_t groupId{folly::Random::rand32(3, rng)};
+  result.groups.push_back(
+      {.groupId = groupId, .groupKeys = {std::move(keysWithoutData[0])}});
+  for (size_t group = 0; group < numGroups; ++group) {
+    groupId += 1 + folly::Random::rand32(3, rng);
+    result.groups.push_back({.groupId = groupId, .groupKeys = {}});
+  }
+  for (size_t i = 0; i < configuredKeys.size(); ++i) {
+    result.groups[1 + i % numGroups].groupKeys.push_back(
+        std::move(configuredKeys[i]));
+  }
+  if (mixKeysWithoutData) {
+    result.groups[numGroups > 0 ? 1 : 0].groupKeys.push_back(
+        std::move(keysWithoutData[1]));
+  }
+  result.groups.push_back(
+      {.groupId = HybridFlatMap::kDefaultGroupId, .groupKeys = {}});
+  return result;
+}
+
+// Checks that the written schema's groups match the grouping: group IDs in
+// order, configured keys sorted as strings and Default keys in first-seen
+// order.
+void verifyHybridFlatMapGroups(
+    const HybridFlatMapType& actual,
+    const HybridFlatMapGroupingCase& expected) {
+  ASSERT_EQ(actual.groupCount(), expected.groups.size());
+  for (size_t i = 0; i < actual.groupCount(); ++i) {
+    const auto& expectedGroup = expected.groups[i];
+    auto expectedKeys = expectedGroup.groupKeys;
+    if (HybridFlatMap::isDefaultGroup(expectedGroup.groupId)) {
+      expectedKeys = expected.expectedDefaultKeys;
+    } else {
+      // Configured keys are stored sorted as strings, so "10" precedes "9".
+      std::sort(expectedKeys.begin(), expectedKeys.end());
+    }
+    EXPECT_EQ(actual.groupAt(i).groupId, expectedGroup.groupId);
+    EXPECT_EQ(actual.groupAt(i).groupKeys, expectedKeys);
+  }
+}
+
+// Shapes the fuzzed batches must include for the test to cover Hybrid FlatMap.
+struct HybridFlatMapCoverage {
+  // A Default-only grouping whose Default group holds keys.
+  bool defaultOnlyWithKeys{false};
+  // Configured groups hold every present key, so Default stays empty.
+  bool emptyDefault{false};
+  // Present keys in configured groups and in Default.
+  bool configuredAndDefaultKeys{false};
+  // At least two configured groups with present keys.
+  bool multipleConfiguredGroups{false};
+  // A configured group none of whose keys any row holds.
+  bool configuredGroupWithoutPresentKeys{false};
+  // A configured group holding keys some rows hold and keys no row holds, so
+  // its key-presence bitmap has true and false bits.
+  bool configuredGroupWithPresentAndAbsentKeys{false};
+  // A configured key held by several rows.
+  bool configuredKeyInSeveralRows{false};
+  // A null map.
+  bool nullMap{false};
+  // A non-null map with no entries.
+  bool emptyMap{false};
+  // A null map value.
+  bool nullValue{false};
+  // skipConstantHybridFlatMapMetadataStreams on, with a configured group whose
+  // keys are all present, so its all-true key-presence stream is omitted.
+  bool skippedAllPresentKeyPresence{false};
+};
+
+// Records which shapes one column of one batch, with its grouping, covers.
+void recordHybridFlatMapCoverage(
+    const HybridFlatMapColumnKeys& columnKeys,
+    const HybridFlatMapGroupingCase& groupingCase,
+    bool skipConstantMetadataStreams,
+    HybridFlatMapCoverage& coverage) {
+  size_t numConfiguredGroups{0};
+  size_t numPresentConfiguredGroups{0};
+  for (const auto& group : groupingCase.groups) {
+    if (HybridFlatMap::isDefaultGroup(group.groupId)) {
+      continue;
+    }
+    ++numConfiguredGroups;
+    size_t numPresentKeys{0};
+    for (const auto& key : group.groupKeys) {
+      const auto keyEntry = columnKeys.numRowsByKey.find(key);
+      if (keyEntry != columnKeys.numRowsByKey.end()) {
+        ++numPresentKeys;
+        coverage.configuredKeyInSeveralRows |= keyEntry->second > 1;
+      }
+    }
+    const bool allPresent = numPresentKeys == group.groupKeys.size();
+    numPresentConfiguredGroups += numPresentKeys > 0;
+    coverage.configuredGroupWithoutPresentKeys |= numPresentKeys == 0;
+    coverage.configuredGroupWithPresentAndAbsentKeys |=
+        numPresentKeys > 0 && !allPresent;
+    coverage.skippedAllPresentKeyPresence |=
+        skipConstantMetadataStreams && allPresent;
+  }
+  const bool hasDefaultKeys = !groupingCase.expectedDefaultKeys.empty();
+  coverage.defaultOnlyWithKeys |= numConfiguredGroups == 0 && hasDefaultKeys;
+  coverage.emptyDefault |= numPresentConfiguredGroups > 0 && !hasDefaultKeys;
+  coverage.configuredAndDefaultKeys |=
+      numPresentConfiguredGroups > 0 && hasDefaultKeys;
+  coverage.multipleConfiguredGroups |= numPresentConfiguredGroups > 1;
+  coverage.nullMap |= columnKeys.hasNullMap;
+  coverage.emptyMap |= columnKeys.hasEmptyMap;
+  coverage.nullValue |= columnKeys.hasNullValue;
+}
+
+} // namespace
+
+TEST_P(SerializationTest, hybridFlatMapEncodingFuzz) {
+  // Test Hybrid FlatMap encoding with fuzzer-generated data. As in production,
+  // every batch uses a fresh Serializer and is read back with its own schema.
+  // Each batch draws its grouping from its own keys, cycling through
+  // Default-only, partly configured and fully configured (empty Default)
+  // groupings, with skipConstantHybridFlatMapMetadataStreams off and on, and
+  // with and without configured keys that no row holds next to present ones.
+  // The test fails if the fuzzed data misses any shape in
+  // HybridFlatMapCoverage.
+
+  auto seed = folly::Random::rand32();
+  LOG(INFO) << "hybridFlatMapEncodingFuzz seed: " << seed;
+  SCOPED_TRACE(fmt::format("seed {}", seed));
+  std::mt19937 rng{seed};
+
+  // Schema 1: Scalar value types, one column per key type. TINYINT keys repeat
+  // across rows, so configured keys appear in several rows.
+  auto scalarType = velox::ROW({
+      {"id", velox::BIGINT()},
+      {"tinyint_features", velox::MAP(velox::TINYINT(), velox::REAL())},
+      {"smallint_features", velox::MAP(velox::SMALLINT(), velox::REAL())},
+      {"int_features", velox::MAP(velox::INTEGER(), velox::REAL())},
+      {"bigint_features", velox::MAP(velox::BIGINT(), velox::DOUBLE())},
+      {"string_features", velox::MAP(velox::VARCHAR(), velox::DOUBLE())},
+  });
+
+  // Schema 2: Map value types (Map<K, Map<K2, V>>).
+  auto nestedType = velox::ROW({
+      {"id", velox::BIGINT()},
+      {"nested_features",
+       velox::MAP(
+           velox::INTEGER(), velox::MAP(velox::INTEGER(), velox::REAL()))},
+  });
+
+  // Schema 3: Mix of scalar and map value types.
+  auto mixedType = velox::ROW({
+      {"id", velox::BIGINT()},
+      {"scalar_features", velox::MAP(velox::INTEGER(), velox::DOUBLE())},
+      {"nested_features",
+       velox::MAP(
+           velox::VARCHAR(), velox::MAP(velox::INTEGER(), velox::REAL()))},
+  });
+
+  // Schema 4: Map of Array (Map<K, Array<V>>).
+  auto mapOfArrayType = velox::ROW({
+      {"id", velox::BIGINT()},
+      {"array_features",
+       velox::MAP(velox::INTEGER(), velox::ARRAY(velox::BIGINT()))},
+  });
+
+  // Schema 5: Map of Array of Array (Map<K, Array<Array<V>>>).
+  auto mapOfNestedArrayType = velox::ROW({
+      {"id", velox::BIGINT()},
+      {"nested_array_features",
+       velox::MAP(
+           velox::INTEGER(), velox::ARRAY(velox::ARRAY(velox::BIGINT())))},
+  });
+
+  struct TestCase {
+    // Label for failure messages.
+    std::string name;
+    // Row type of the fuzzed batches.
+    velox::TypePtr type;
+    // Top-level MAP columns written as Hybrid FlatMap.
+    std::vector<std::string> hybridFlatMapColumns;
+  };
+
+  std::vector<TestCase> testCases = {
+      {"scalar",
+       scalarType,
+       {"tinyint_features",
+        "smallint_features",
+        "int_features",
+        "bigint_features",
+        "string_features"}},
+      {"nested", nestedType, {"nested_features"}},
+      {"mixed", mixedType, {"scalar_features", "nested_features"}},
+      {"mapOfArray", mapOfArrayType, {"array_features"}},
+      {"mapOfNestedArray", mapOfNestedArrayType, {"nested_array_features"}},
+  };
+
+  HybridFlatMapCoverage coverage;
+  for (const auto& testCase : testCases) {
+    SCOPED_TRACE(testCase.name);
+    const auto rowType = velox::asRowType(testCase.type);
+
+    size_t batchSize{50};
+    velox::VectorFuzzer fuzzer(
+        {
+            .vectorSize = batchSize,
+            // Null maps and null values.
+            .nullRatio = 0.1,
+            // Use fixed non-zero string length to avoid empty string keys.
+            .stringLength = 8,
+            .stringVariableLength = false,
+            .containerLength = 5,
+            .containerVariableLength = true,
+            // Remove duplicate keys from maps.
+            .normalizeMapKeys = true,
+        },
+        pool_.get(),
+        seed);
+
+    // Every 12 iterations cover each grouping kind with the skip option off
+    // and on, with and without keys that no row holds in data groups.
+    constexpr int kNumGroupingKinds{3};
+    constexpr int kIterations{20};
+    for (int i = 0; i < kIterations; ++i) {
+      SCOPED_TRACE(fmt::format("iteration {}", i));
+      auto input = fuzzer.fuzzInputRow(rowType);
+
+      const auto kind =
+          static_cast<HybridFlatMapGroupingKind>(i % kNumGroupingKinds);
+      const bool skipConstantMetadataStreams = (i / kNumGroupingKinds) % 2 == 1;
+      const bool mixKeysWithoutData = (i / (2 * kNumGroupingKinds)) % 2 == 1;
+      SerializerOptions options{
+          .version = version(),
+          .skipConstantHybridFlatMapMetadataStreams =
+              skipConstantMetadataStreams,
+          .streamIndicesEncodingType = streamSizesEncodingType(),
+          .streamSizesEncodingType = streamSizesEncodingType(),
+      };
+      folly::F14FastMap<std::string, HybridFlatMapGroupingCase> groupings;
+      for (const auto& column : testCase.hybridFlatMapColumns) {
+        const auto& mapColumn = input->childAt(column);
+        const auto columnKeys = hybridFlatMapColumnKeys(mapColumn);
+        auto grouping = makeHybridFlatMapGrouping(
+            kind,
+            columnKeys.orderedKeys,
+            keysWithoutData(
+                mapColumn->type()->asMap().keyType()->kind(),
+                columnKeys,
+                /*numKeys=*/2),
+            mixKeysWithoutData,
+            rng);
+        recordHybridFlatMapCoverage(
+            columnKeys, grouping, skipConstantMetadataStreams, coverage);
+        options.hybridFlatMapColumns.emplace(
+            column,
+            HybridFlatMap{
+                keyKindOf(*mapColumn->type()->asMap().keyType()),
+                grouping.groups});
+        groupings.emplace(column, std::move(grouping));
+      }
+
+      // A fresh Serializer per batch, like the production writer.
+      Serializer serializer{options, testCase.type, pool_.get()};
+      const std::string serialized{
+          serializer.serialize(input, OrderedRanges::of(0, input->size()))};
+      const auto schema =
+          SchemaReader::getSchema(serializer.schemaBuilder().schemaNodes());
+      for (const auto& [column, grouping] : groupings) {
+        SCOPED_TRACE(column);
+        verifyHybridFlatMapGroups(
+            schema->asRow()
+                .childAt(rowType->getChildIdx(column))
+                ->asHybridFlatMap(),
+            grouping);
+      }
+
+      Deserializer deserializer{schema, pool_.get(), deserializerOptions()};
+      velox::VectorPtr output;
+      deserializer.deserialize(serialized, output);
+
+      ASSERT_EQ(output->size(), input->size());
+      for (velox::vector_size_t j = 0; j < input->size(); ++j) {
+        ASSERT_TRUE(vectorEquals(output, input, j))
+            << "Content mismatch at index " << j
+            << "\nReference: " << input->toString(j)
+            << "\nResult: " << output->toString(j);
+      }
+    }
+
+    // KeyList Default keeps the schema to the configured groups, so batches
+    // written with one grouping share their schema bytes and one Projector
+    // built from the first batch's schema projects them all. The grouping
+    // configures the first batch's keys, so keys first seen later land in
+    // Default; the projection selects a configured key and such Default keys.
+    constexpr int kKeyListBatches{5};
+    std::vector<velox::RowVectorPtr> keyListInputs;
+    keyListInputs.reserve(kKeyListBatches);
+    for (int i = 0; i < kKeyListBatches; ++i) {
+      keyListInputs.push_back(fuzzer.fuzzInputRow(rowType));
+    }
+
+    // Builds 'column[key]' from path elements, because fuzzed VARCHAR keys may
+    // hold characters the subfield parser treats as syntax.
+    const auto hybridFlatMapSubfield = [](const std::string& column,
+                                          velox::TypeKind keyKind,
+                                          const std::string& key) {
+      std::vector<std::unique_ptr<velox::common::Subfield::PathElement>> path;
+      path.push_back(
+          std::make_unique<velox::common::Subfield::NestedField>(column));
+      if (keyKind == velox::TypeKind::VARCHAR) {
+        path.push_back(
+            std::make_unique<velox::common::Subfield::StringSubscript>(key));
+      } else {
+        path.push_back(
+            std::make_unique<velox::common::Subfield::LongSubscript>(
+                std::stol(key)));
+      }
+      return velox::common::Subfield(std::move(path));
+    };
+    folly::F14FastMap<std::string, HybridFlatMap> keyListColumns;
+    folly::F14FastMap<std::string, std::set<std::string>> selectedKeys;
+    // Keeps the projection non-empty when no column has a key to select.
+    std::vector<Deserializer::Subfield> subfields;
+    subfields.emplace_back("id");
+    for (const auto& column : testCase.hybridFlatMapColumns) {
+      const auto& mapColumn = keyListInputs.front()->childAt(column);
+      const auto keyKind = mapColumn->type()->asMap().keyType()->kind();
+      const auto columnKeys = hybridFlatMapColumnKeys(mapColumn);
+      // Configures the first batch's keys in one group; a column whose first
+      // batch holds no keys has only Default.
+      HybridFlatMap grouping{keyKindOf(*mapColumn->type()->asMap().keyType())};
+      if (!columnKeys.orderedKeys.empty()) {
+        grouping.addGroup(0, columnKeys.orderedKeys);
+      }
+      grouping.setDefaultGroupKeyPresenceMode(
+          HybridFlatMap::KeyPresenceMode::kKeyList);
+      keyListColumns.emplace(column, std::move(grouping));
+
+      std::set<std::string> keys;
+      if (!columnKeys.orderedKeys.empty()) {
+        keys.insert(columnKeys.orderedKeys.front());
+      }
+      for (int i = 1; i < kKeyListBatches; ++i) {
+        const auto batchKeys =
+            hybridFlatMapColumnKeys(keyListInputs[i]->childAt(column));
+        const auto defaultKey = std::find_if(
+            batchKeys.orderedKeys.begin(),
+            batchKeys.orderedKeys.end(),
+            [&](const auto& key) {
+              return !columnKeys.numRowsByKey.contains(key);
+            });
+        if (defaultKey != batchKeys.orderedKeys.end()) {
+          keys.insert(*defaultKey);
+        }
+      }
+      for (const auto& key : keys) {
+        subfields.push_back(hybridFlatMapSubfield(column, keyKind, key));
+      }
+      if (!keys.empty()) {
+        selectedKeys.emplace(column, std::move(keys));
+      }
+    }
+
+    std::vector<std::string> keyListSerialized;
+    std::vector<std::string> keyListSchemas;
+    for (int i = 0; i < kKeyListBatches; ++i) {
+      const auto& input = keyListInputs[i];
+      Serializer serializer{
+          SerializerOptions{
+              .version = version(),
+              .hybridFlatMapColumns = keyListColumns,
+              .skipConstantHybridFlatMapMetadataStreams = i % 2 == 1,
+              .streamIndicesEncodingType = streamSizesEncodingType(),
+              .streamSizesEncodingType = streamSizesEncodingType(),
+          },
+          testCase.type,
+          pool_.get()};
+      keyListSerialized.emplace_back(
+          serializer.serialize(input, OrderedRanges::of(0, input->size())));
+      SchemaSerializer schemaSerializer;
+      keyListSchemas.emplace_back(
+          schemaSerializer.serialize(serializer.schemaBuilder()));
+    }
+
+    // Checks that each map of 'actual' holds exactly the entries of the same
+    // map of 'expected' whose keys are in 'keys', with the same null maps.
+    const auto verifySelectedKeys = [](const velox::VectorPtr& expected,
+                                       const velox::VectorPtr& actual,
+                                       const std::set<std::string>& keys) {
+      ASSERT_EQ(actual->size(), expected->size());
+      const velox::DecodedVector expectedMaps{*expected};
+      const velox::DecodedVector actualMaps{*actual};
+      const auto* expectedBase = expectedMaps.base()->as<velox::MapVector>();
+      const auto* actualBase = actualMaps.base()->as<velox::MapVector>();
+      ASSERT_NE(actualBase, nullptr);
+      const velox::DecodedVector expectedKeys{*expectedBase->mapKeys()};
+      const velox::DecodedVector actualKeys{*actualBase->mapKeys()};
+      for (velox::vector_size_t row = 0; row < expected->size(); ++row) {
+        SCOPED_TRACE(fmt::format("row {}", row));
+        ASSERT_EQ(actualMaps.isNullAt(row), expectedMaps.isNullAt(row));
+        if (expectedMaps.isNullAt(row)) {
+          continue;
+        }
+        folly::F14FastMap<std::string, velox::vector_size_t> expectedEntries;
+        const auto expectedIndex = expectedMaps.index(row);
+        const auto expectedBegin = expectedBase->offsetAt(expectedIndex);
+        const auto expectedEnd =
+            expectedBegin + expectedBase->sizeAt(expectedIndex);
+        for (auto entry = expectedBegin; entry < expectedEnd; ++entry) {
+          auto key = canonicalHybridFlatMapKey(expectedKeys, entry);
+          if (keys.contains(key)) {
+            expectedEntries.emplace(std::move(key), entry);
+          }
+        }
+        const auto actualIndex = actualMaps.index(row);
+        const auto actualBegin = actualBase->offsetAt(actualIndex);
+        const auto actualEnd = actualBegin + actualBase->sizeAt(actualIndex);
+        for (auto entry = actualBegin; entry < actualEnd; ++entry) {
+          const auto key = canonicalHybridFlatMapKey(actualKeys, entry);
+          const auto expectedEntry = expectedEntries.find(key);
+          ASSERT_TRUE(expectedEntry != expectedEntries.end())
+              << "Unexpected key " << key;
+          EXPECT_TRUE(actualBase->mapValues()->equalValueAt(
+              expectedBase->mapValues().get(), entry, expectedEntry->second))
+              << "Value mismatch for key " << key;
+          expectedEntries.erase(expectedEntry);
+        }
+        EXPECT_TRUE(expectedEntries.empty());
+      }
+    };
+
+    // Built once from the first batch's schema bytes and reused for every
+    // batch.
+    const auto keyListSchema =
+        SchemaDeserializer::deserialize(keyListSchemas.front());
+    const serde::Projector projector{keyListSchema, subfields, pool_.get(), {}};
+    const Deserializer keyListDeserializer{
+        keyListSchema, pool_.get(), deserializerOptions()};
+    const Deserializer selectedDeserializer{
+        projector.projectedSchema(),
+        subfields,
+        pool_.get(),
+        deserializerOptions()};
+    for (int i = 0; i < kKeyListBatches; ++i) {
+      SCOPED_TRACE(fmt::format("KeyList batch {}", i));
+      // Reusing the Projector is valid only for identical schema bytes.
+      ASSERT_EQ(keyListSchemas[i], keyListSchemas.front());
+      const auto& input = keyListInputs[i];
+      velox::VectorPtr output;
+      keyListDeserializer.deserialize(keyListSerialized[i], output);
+      ASSERT_EQ(output->size(), input->size());
+      for (velox::vector_size_t j = 0; j < input->size(); ++j) {
+        ASSERT_TRUE(vectorEquals(output, input, j))
+            << "Content mismatch at index " << j
+            << "\nReference: " << input->toString(j)
+            << "\nResult: " << output->toString(j);
+      }
+
+      const auto projected =
+          projector.project(keyListSerialized[i]).to<std::string>();
+      velox::VectorPtr selected;
+      selectedDeserializer.deserialize(projected, selected);
+      const auto* selectedRow = selected->as<velox::RowVector>();
+      ASSERT_NE(selectedRow, nullptr);
+      for (const auto& [column, keys] : selectedKeys) {
+        SCOPED_TRACE(column);
+        verifySelectedKeys(
+            input->childAt(column), selectedRow->childAt(column), keys);
+      }
+    }
+  }
+
+  EXPECT_TRUE(coverage.defaultOnlyWithKeys);
+  EXPECT_TRUE(coverage.emptyDefault);
+  EXPECT_TRUE(coverage.configuredAndDefaultKeys);
+  EXPECT_TRUE(coverage.multipleConfiguredGroups);
+  EXPECT_TRUE(coverage.configuredGroupWithoutPresentKeys);
+  EXPECT_TRUE(coverage.configuredGroupWithPresentAndAbsentKeys);
+  EXPECT_TRUE(coverage.configuredKeyInSeveralRows);
+  EXPECT_TRUE(coverage.nullMap);
+  EXPECT_TRUE(coverage.emptyMap);
+  EXPECT_TRUE(coverage.nullValue);
+  EXPECT_TRUE(coverage.skippedAllPresentKeyPresence);
+}
+
 TEST_P(SerializationTest, fuzzComplex) {
   auto type = velox::ROW({
       {"array", velox::ARRAY(velox::REAL())},
@@ -1338,6 +1984,137 @@ TEST_P(SerializationTest, fuzzComplex) {
         vectorEquals,
         {},
         batches);
+  }
+}
+
+TEST_P(SerializationTest, timestampRoundTrip) {
+  // A timestamp travels as a microseconds stream, which carries the nulls, and
+  // a sub-microsecond nanoseconds stream with one value per non-null row.
+  const auto type = velox::ROW({
+      {"ts", velox::TIMESTAMP()},
+      {"row", velox::ROW({{"ts", velox::TIMESTAMP()}})},
+      {"array", velox::ARRAY(velox::TIMESTAMP())},
+      {"map", velox::MAP(velox::INTEGER(), velox::TIMESTAMP())},
+      {"features", velox::MAP(velox::INTEGER(), velox::TIMESTAMP())},
+  });
+  const std::vector<velox::Timestamp> timestamps{
+      velox::Timestamp(0, 0),
+      velox::Timestamp(-1, 999'999'999),
+      velox::Timestamp(-86'400, 1),
+      velox::Timestamp(1'700'000'000, 123'456'789),
+      velox::Timestamp(2'000'000'000, 999),
+  };
+  const auto timestampAt = [&](velox::vector_size_t index) {
+    return timestamps[index % timestamps.size()];
+  };
+  velox::test::VectorMaker maker{pool_.get()};
+  const auto makeBatch =
+      [&](velox::vector_size_t numRows,
+          const std::function<bool(velox::vector_size_t)>& isNullAt) {
+        return maker.rowVector(
+            {"ts", "row", "array", "map", "features"},
+            {
+                maker.flatVector<velox::Timestamp>(
+                    numRows, timestampAt, isNullAt),
+                maker.rowVector(
+                    {"ts"},
+                    {maker.flatVector<velox::Timestamp>(
+                        numRows, timestampAt, isNullAt)}),
+                maker.arrayVector<velox::Timestamp>(
+                    numRows,
+                    [](auto row) { return row % 3; },
+                    timestampAt,
+                    /*isNullAt=*/nullptr,
+                    isNullAt),
+                maker.mapVector<int32_t, velox::Timestamp>(
+                    numRows,
+                    [](auto row) { return row % 3; },
+                    [](auto index) { return static_cast<int32_t>(index); },
+                    timestampAt,
+                    /*isNullAt=*/nullptr,
+                    isNullAt),
+                maker.mapVector<int32_t, velox::Timestamp>(
+                    numRows,
+                    [](auto /*row*/) { return 2; },
+                    [](auto index) { return static_cast<int32_t>(index % 2); },
+                    timestampAt,
+                    /*isNullAt=*/nullptr,
+                    isNullAt),
+            });
+      };
+  // An all-null batch writes no nanoseconds at all.
+  const std::vector<velox::VectorPtr> inputs{
+      makeBatch(13, [](auto row) { return row % 4 == 1; }),
+      makeBatch(7, [](auto /*row*/) { return true; }),
+      makeBatch(11, [](auto /*row*/) { return false; }),
+  };
+
+  SerializerOptions options{
+      .version = version(),
+      .flatMapColumns = {{"features", {}}},
+      .streamIndicesEncodingType = streamSizesEncodingType(),
+      .streamSizesEncodingType = streamSizesEncodingType(),
+  };
+  Serializer serializer{options, type, pool_.get()};
+  std::vector<std::string> serialized;
+  serialized.reserve(inputs.size());
+  for (const auto& input : inputs) {
+    serialized.emplace_back(
+        serializer.serialize(input, OrderedRanges::of(0, input->size())));
+  }
+  Deserializer deserializer{
+      SchemaReader::getSchema(serializer.schemaBuilder().schemaNodes()),
+      pool_.get(),
+      deserializerOptions()};
+  const auto verify = [](const velox::VectorPtr& expected,
+                         const velox::VectorPtr& actual) {
+    ASSERT_EQ(actual->size(), expected->size());
+    for (velox::vector_size_t row = 0; row < expected->size(); ++row) {
+      ASSERT_TRUE(expected->equalValueAt(actual.get(), row, row))
+          << "Mismatch at row " << row
+          << "\nExpected: " << expected->toString(row)
+          << "\nActual: " << actual->toString(row);
+    }
+  };
+
+  for (size_t i = 0; i < inputs.size(); ++i) {
+    SCOPED_TRACE(fmt::format("batch {}", i));
+    velox::VectorPtr output;
+    deserializer.deserialize(serialized[i], output);
+    verify(inputs[i], output);
+  }
+
+  // Decoding the batches in one call reads each stream from several segments.
+  auto expected = velox::BaseVector::create(type, 0, pool_.get());
+  for (const auto& input : inputs) {
+    const auto offset = expected->size();
+    expected->resize(offset + input->size());
+    expected->copy(input.get(), offset, 0, input->size());
+  }
+  const std::vector<std::string_view> batches{
+      serialized.begin(), serialized.end()};
+  velox::VectorPtr output;
+  deserializer.deserialize(batches, output);
+  verify(expected, output);
+
+  // Column projection decodes the timestamp streams of selected columns only.
+  for (const std::string column : {"ts", "map"}) {
+    SCOPED_TRACE(fmt::format("projection {}", column));
+    std::vector<Deserializer::Subfield> subfields;
+    subfields.emplace_back(column);
+    Deserializer projectingDeserializer{
+        SchemaReader::getSchema(serializer.schemaBuilder().schemaNodes()),
+        subfields,
+        pool_.get(),
+        deserializerOptions()};
+    velox::VectorPtr projected;
+    projectingDeserializer.deserialize(batches, projected);
+    auto* projectedRow = projected->as<velox::RowVector>();
+    ASSERT_NE(projectedRow, nullptr);
+    ASSERT_EQ(projectedRow->childrenSize(), 1);
+    verify(
+        expected->as<velox::RowVector>()->childAt(column),
+        projectedRow->childAt(0));
   }
 }
 
@@ -4890,6 +5667,57 @@ TEST_F(SerializationTest, tabletDeserialization) {
     ASSERT_TRUE(input->equalValueAt(deserialized.get(), i, i))
         << "Mismatch at row " << i << "\nExpected: " << input->toString(i)
         << "\nActual: " << deserialized->toString(i);
+  }
+}
+
+TEST_F(SerializationTest, tabletTimestampDeserialization) {
+  // File streams keep a timestamp's sub-microsecond nanoseconds apart from its
+  // microseconds, as kTablet slices of an index projection carry them.
+  const auto rowType = velox::ROW({
+      {"id", velox::INTEGER()},
+      {"ts", velox::TIMESTAMP()},
+      {"nested", velox::ROW({{"ts", velox::TIMESTAMP()}})},
+      {"list", velox::ARRAY(velox::TIMESTAMP())},
+  });
+  constexpr velox::vector_size_t kRows{100};
+  const auto timestampAt = [](velox::vector_size_t index) {
+    return velox::Timestamp(
+        static_cast<int64_t>(index) * 86'400 - 4'000'000,
+        static_cast<uint64_t>(index) * 1'000'001 % 1'000'000'000);
+  };
+  velox::test::VectorMaker maker{pool_.get()};
+  auto input = maker.rowVector(
+      {"id", "ts", "nested", "list"},
+      {
+          maker.flatVector<int32_t>(kRows, [](auto row) { return row; }),
+          maker.flatVector<velox::Timestamp>(
+              kRows, timestampAt, [](auto row) { return row % 3 == 0; }),
+          maker.rowVector(
+              {"ts"},
+              {maker.flatVector<velox::Timestamp>(
+                  kRows, timestampAt, [](auto row) { return row % 5 == 2; })}),
+          maker.arrayVector<velox::Timestamp>(
+              kRows,
+              [](auto row) { return row % 4; },
+              timestampAt,
+              [](auto row) { return row % 7 == 3; },
+              [](auto index) { return index % 6 == 1; }),
+      });
+
+  auto tablet = serializeTablet(rowType, {input}, /*enableChunking=*/true);
+  ASSERT_EQ(tablet.serialized.size(), 1);
+
+  nimble::Deserializer deserializer{
+      tablet.schema, pool_.get(), DeserializerOptions{}};
+  velox::VectorPtr output;
+  deserializer.deserialize(std::string_view(tablet.serialized[0]), output);
+
+  ASSERT_NE(output, nullptr);
+  ASSERT_EQ(output->size(), kRows);
+  for (velox::vector_size_t i = 0; i < kRows; ++i) {
+    ASSERT_TRUE(input->equalValueAt(output.get(), i, i))
+        << "Mismatch at row " << i << "\nExpected: " << input->toString(i)
+        << "\nActual: " << output->toString(i);
   }
 }
 
