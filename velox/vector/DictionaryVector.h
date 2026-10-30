@@ -209,23 +209,21 @@ class DictionaryVector : public SimpleVector<T> {
     setInternalState();
   }
 
-  /// Resizes the vector to be of size 'size'. If setNotNull is true
-  /// the newly added elements point to the value at the 0th index.
+  /// Resizes the vector to be of size 'size'. If setNotNull is true, the
+  /// newly added elements point to the value at the 0th index, or are null if
+  /// the base vector is empty.
   /// If setNotNull is false then the values and isNull is undefined.
   void resize(vector_size_t size, bool setNotNull = true) override {
-    if (size > BaseVector::length_) {
+    const auto oldSize = BaseVector::length_;
+    if (size > oldSize) {
       BaseVector::resizeIndices(
-          BaseVector::length_,
-          size,
-          BaseVector::pool(),
-          indices_,
-          &rawIndices_);
+          oldSize, size, BaseVector::pool(), indices_, &rawIndices_);
     }
 
-    // TODO Fix the case when base vector is empty.
-    // https://github.com/facebookincubator/velox/issues/7828
-
     BaseVector::resize(size, setNotNull);
+    if (setNotNull && size > oldSize && dictionaryValues_->size() == 0) {
+      bits::fillBits(BaseVector::mutableRawNulls(), oldSize, size, bits::kNull);
+    }
   }
 
   VectorPtr slice(vector_size_t offset, vector_size_t length) const override;
