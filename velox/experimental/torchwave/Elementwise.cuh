@@ -647,6 +647,14 @@ __nan_to_num(double a1, double nan_val, double posinf_val, double neginf_val) {
   return a1;
 }
 
+// In-place nan_to_num_: writes the replacement into self.
+template <typename T>
+__device__ inline T
+__nan_to_num_(T& a1, double nan_val, double posinf_val, double neginf_val) {
+  a1 = __nan_to_num(a1, nan_val, posinf_val, neginf_val);
+  return a1;
+}
+
 // Min/max.
 
 template <typename T>
@@ -718,6 +726,18 @@ __device__ inline T __arange_start(int64_t idx, T start) {
 template <typename T>
 __device__ inline T __arange(int64_t idx) {
   return __arange_start<T>(idx, T(0));
+}
+
+// tw.arange_mem: writes 0 .. end - 1 to 'output', elements striding over the
+// op's threads.
+template <typename T, typename TEnd>
+__device__ void arange_mem(TEnd* end, Tensor* output, BlockInfo& block) {
+  T* out = storage<T>(output);
+  const int64_t n = static_cast<int64_t>(*end);
+  for (int64_t i = block.blockInOp * blockDim.x + threadIdx.x; i < n;
+       i += static_cast<int64_t>(block.numBlocksInOp) * blockDim.x) {
+    out[i] = static_cast<T>(i);
+  }
 }
 
 template <typename T>

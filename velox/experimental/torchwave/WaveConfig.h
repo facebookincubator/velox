@@ -152,6 +152,38 @@ struct WaveConfig {
   // actual thread block clock distribution.
   bool autoAdjustCost{true};
 
+  // With autoAdjustCost, measures an op by its blocks' whole run times,
+  // including time spent waiting at its grid barriers. When false, the waits
+  // are left out, so an op given more blocks than it can use does not look
+  // more expensive for the blocks that only wait.
+  bool costCountsBarrierWait{true};
+
+  // A concat result that the allocation plan put in a lifetime group takes its
+  // slot there: the concat sizes it into the step's collector and writes its
+  // operands' bands once the group is carved. When false, every such result is
+  // allocated on its own, as the plan's group then holds no slot for it.
+  bool concatResultSlots{true};
+
+  // Groups the values that are never released, and are not graph outputs, with
+  // the others produced at the same point. They all live until the frame is
+  // cleared, so sharing a buffer holds nothing longer than before.
+  bool groupUnreleasedValues{true};
+
+  // Lets a value join a group when its own node only takes a table-derived
+  // view of it. The view is derived for its shape while the step is sized and
+  // again, with storage, once the group is carved.
+  bool groupViewedValues{true};
+
+  // Carves lifetime groups out of one persistent buffer, laid out from the
+  // previous execution's lifetimes, instead of one allocator call per group.
+  bool groupArena{true};
+
+  // Groups of at least this many bytes are allocated on their own rather than
+  // given an arena slot. A few such allocations cost little, and leaving them
+  // to the allocator lets other buffers use their space while they are dead,
+  // which a slot of the arena never does.
+  int64_t groupArenaMaxBytes{16 << 20};
+
   // Ablation knobs.  Each switches one optimization off so its contribution
   // can be measured by comparing runtimes; none is meant for production use.
 
@@ -201,6 +233,29 @@ struct WaveConfig {
   // it selects. Disjoint writes into one tensor can then run side by side. On
   // by default.
   bool disjointWriteOrdering{true};
+
+  // Reads an elementwise leaf whose shape and the expression's are both fixed
+  // by the graph at an index with literal divisors, instead of decomposing
+  // 'idx' through the leaf's descriptor at run time.
+  bool staticLeafIndex{true};
+
+  // Computes once, at bind, each sizing call whose operands all have shapes
+  // fixed by the graph, and skips the call at run time.
+  bool constantSizes{true};
+
+  // With constantSizes, still runs those sizing calls and fails when a result
+  // differs from the one computed at bind. For validation runs.
+  bool verifyStaticSizes{false};
+
+  // Computes the elementwise producer of a reshaping view inline in the view's
+  // elementwise consumer, at the consumer's index, instead of writing the
+  // producer's result to memory (see CompileCtx::fusesThroughView).
+  bool fuseThroughViews{true};
+
+  // Evaluates the elementwise input of a row reduction such as tw.any_rows in
+  // the reduction's row loop instead of writing it to memory (see
+  // CompileCtx::fusesRowReduction).
+  bool fuseRowReductions{true};
 
   // Force a launch boundary after a multi-block (non-cooperative) scan so every
   // cross-block consumer of its output reads a fully materialized buffer from a
@@ -271,21 +326,6 @@ struct WaveConfig {
   // trading the run-ahead back for the memory. 0 disables the check. Only
   // meaningful with freeIntermediates, which is what makes the frees delayable.
   int64_t maxDelayedFree{1LL << 30};
-
-  // If true, hold a released wave-kernel buffer instead of returning it to the
-  // caching allocator, and hand it to a later wave kernel that needs exactly
-  // the same number of bytes. Allocation costs roughly the same per call at any
-  // size, so skipping the call is the win, not the memory. Safe without a sync
-  // because the wave stream is in order and the buffer is never unowned. Off by
-  // default.
-  bool donateBuffers{false};
-
-  // Bytes of donatable buffers carried between executions. The pool is trimmed
-  // to this at the end of each run. Distinct from maxDelayedFree, which bounds
-  // freeing held up by run-ahead within a run: carrying buffers across runs
-  // keeps them out of the caching allocator entirely, so hoarding the big ones
-  // makes every allocation the pool does NOT serve more expensive.
-  int64_t donationCarryBytes{64LL << 20};
 
   // If true, run the pre-partition metadata-duplication pass: rematerialize a
   // multiply-used metadata getter (sym_size / sym_numel) once per use site so
@@ -419,41 +459,6 @@ struct WaveConfig {
   // cg grid because each names its predecessor through inputFromPreviousKernel,
   // which breaks that producer into its own kernel whatever the grid mode.
   bool mkSelect{false};
-
-  // If true, allocate the outputs that share a lifetime out of one buffer
-  // instead of one allocator call each. Allocation costs roughly the same per
-  // call at any size, so the win is the call count: a step's outputs that all
-  // die at the same later step become one allocation carved into views. Only
-  // consulted in the cooperative-grid mode, where the grid -- and with it the
-  // step boundaries an allocation's lifetime is expressed in -- is settled
-  // before the first execution. Selects a separate execute path
-  // (executeAllocGroups) rather than branching inside the per-op one, and turns
-  // off buffer donation, whose size-matched reuse assumes per-output
-  // allocations.
-  bool enableAllocGroup{true};
-
-  // If true, a fused cat / stack of more than two operands gets an allocation
-  // group of its own: the whole result is allocated at the step that produces
-  // its operands, and each operand's frame slot is the region of the result it
-  // occupies, so the kernel that produces it writes in place and the concat
-  // copies nothing. Separate from enableAllocGroup, which it rides on, so the
-  // two can be measured apart.
-  bool enableConcatAllocGroup{true};
-
-  // If false, the lifetime grouping is skipped and only the concat groups are
-  // formed. Both still ride on enableAllocGroup, which they need for the plan
-  // to be installed at all; this splits the two apart so the concat grouping's
-  // own cost and benefit can be read off without the lifetime grouping's much
-  // larger numbers on top of it.
-  bool enableLifetimeAllocGroup{true};
-
-  // If true, a fused cat / stack of more than two operands stops emitting one
-  // copy per operand into its own kernel and instead pushes every operand into
-  // a kernel op of its own in the previous step. Each of those is sized by the
-  // operand it writes and gets its own share of the grid, so the operands fill
-  // the result side by side instead of walking a chain of __concatCopy calls in
-  // one block. The concat then becomes a kernel break that copies nothing.
-  bool parallelConcatFill{false};
 
   // If true, alongside each composite kernel also compile one single-op kernel
   // per op it contains, named <composite>_op_<opCode>. Diagnostic only: the

@@ -91,6 +91,11 @@ void addDuplicateExtraBindings(
     WaveGraph& waveGraph);
 
 /// Hash functor for Subgraph, used to deduplicate identical subgraphs.
+/// The number of leading dims a row reduction keeps, from its attribute.
+std::optional<int64_t> rowReductionKeep(
+    NodeCP node,
+    const RowReduction& reduction);
+
 struct SubgraphHash {
   size_t operator()(const Subgraph& sg) const;
 };
@@ -170,7 +175,12 @@ class CompileCtx {
       // Output Value of a data-dependent scan op (masked_select / nonzero)
       // whose size is written on device; its dims[0] is forced to 0 for an
       // empty input (the element loop that would set it runs zero iterations).
-      ValueCP FOLLY_NULLABLE shapeSetOnDeviceResult = nullptr);
+      ValueCP FOLLY_NULLABLE shapeSetOnDeviceResult = nullptr,
+      // A row reduction (Metadata::rowReduction) taking the expression as its
+      // input. The loop then runs over the reduction's rows and combines the
+      // expression's values into the reduction's output instead of storing
+      // them; 'resultSpecs' carry no value.
+      NodeCP FOLLY_NULLABLE rowReduction = nullptr);
 
   /// Recurses through inputs of 'node', stopping at placed_ and inputs of
   /// generatingOp_'s subgraph. Calls fusedCode on non-elementwise ops with
@@ -351,7 +361,7 @@ class CompileCtx {
   bool breakConcatOperandIntoOwnKernel(ValueCP operand, ValueCP concatOutput);
 
   /// The value a copy of 'concat's operand at 'occurrence' writes: a band of
-  /// the result, bound at run time by reserveConcatOutput. Creates the copy
+  /// the result, bound at run time by the concat layout. Creates the copy
   /// node that holds the source, and the value on the first grid variant to
   /// ask. Null when the result has no type to take a dtype from.
   nativert::Value* FOLLY_NULLABLE
@@ -396,19 +406,6 @@ class CompileCtx {
     return generatingOp_;
   }
 
-  /// The single concat operand this op fills, or -1 when the op is the whole
-  /// concat. Set while generating one of the per-operand ops that
-  /// parallelConcatFill splits a wide cat / stack into: the special form then
-  /// emits the write for that operand alone instead of walking every operand in
-  /// one body, which is what keeps each op's parameters to just its own source.
-  int32_t concatOperandIndex() const {
-    return concatOperandIndex_;
-  }
-
-  void setConcatOperandIndex(int32_t index) {
-    concatOperandIndex_ = index;
-  }
-
   void markPlaced(NodeCP node) {
     placed_.insert(node);
     generatingOp_->allNodes().insert(node);
@@ -424,6 +421,21 @@ class CompileCtx {
     auto it = variantToOriginal_.find(node);
     return it != variantToOriginal_.end() ? it->second : node;
   }
+
+  /// True when 'view' is a reshaping view that the elementwise expression
+  /// reading it computes through: its elementwise producer is generated inline
+  /// at the consumer's index and never written to memory. A reshape keeps the
+  /// row-major order of the elements, so element idx of the view is element
+  /// idx of its input. Requires that the view and its input have no other
+  /// reader, and that the view's output is not broadcast in the expression,
+  /// both decided from the graph and its static dims.
+  bool fusesThroughView(NodeCP view) const;
+
+  /// True when 'node' is a row reduction (Metadata::rowReduction) whose input
+  /// is computed by an inline elementwise expression with no other reader. The
+  /// expression is then evaluated in the reduction's row loop and never
+  /// written to memory.
+  bool fusesRowReduction(NodeCP node) const;
 
   /// Creates a new nativert::Graph with a deep copy of the contents of 'sg'.
   /// In kSingle mode, copies as-is. In kMulti/kCG, expands nodes that have
@@ -468,7 +480,7 @@ class CompileCtx {
 
     /// A copy op of this operand's own moves it into its band. False both for
     /// an operand the group carves and for one the concat's own kernel writes
-    /// in place -- that one is bound to its band by reserveConcatOutput and is
+    /// in place -- that one is bound to its band by the concat layout and is
     /// neither a group member nor a copy.
     bool needsCopy{false};
 
@@ -490,6 +502,10 @@ class CompileCtx {
       NodeCP concat,
       int64_t dim,
       c10::ScalarType resultDtype) const;
+
+  /// True when 'value' is the result of a cat or stack that gets a concat
+  /// allocation group, which owns its buffer.
+  bool isGroupedConcatResult(ValueCP value) const;
 
   /// Decides, for every operand of 'concat', whether its producer fills the
   /// operand's band of the result or a copy moves it there.
@@ -621,6 +637,47 @@ class CompileCtx {
       const KernelOperation& op,
       bool slowPath);
 
+  // The literal loop bound of an elementwise op whose single root and every
+  // per-element operand have static shapes and contiguous layouts, so each
+  // operand reads at a static index. Records the outputs' shapes for the
+  // launch check. Nullopt otherwise.
+  std::optional<int64_t> staticLoopSize(
+      const std::vector<ValueCP>& leafInputs,
+      const std::unordered_set<ValueCP>& wholeTensorValues,
+      const std::unordered_set<ValueCP>& sizeExcludedValues,
+      const std::vector<Subgraph>& subgraphs,
+      const std::vector<ResultSpec>& resultSpecs,
+      ValueCP shapeSetOnDeviceResult,
+      const KernelOperation& op);
+
+  // Emits the loop of the row reduction 'reduction' over the expression rooted
+  // at 'root': each element of a row is evaluated at idx = row * rowLen + k
+  // and combined, and lane or thread 0 stores the row's result. A row of up to
+  // 1024 elements is reduced by a warp, a longer one by a block. Warps or
+  // blocks claim rows from the zeroed counter at 'rowCounter'.
+  void emitRowReduction(
+      NodeCP reduction,
+      ValueCP root,
+      KernelOperation& op,
+      const std::vector<ValueCP>& inputs,
+      int32_t rowCounter,
+      bool slowPath);
+
+  // Places a row reduction whose input expression it evaluates in its own row
+  // loop (see fusesRowReduction).
+  void fusedRowReduction(NodeCP node);
+
+  // The index text at which the slow path stores an output element. The
+  // output's layout is read at run time: a concat operand written in place is
+  // a strided band of the result, whatever its static layout says.
+  std::string rootStoreIndex(ValueCP value, const KernelOperation& op) const;
+
+  // Index expression with literal divisors for leaf 'value' of the current
+  // root, when both shapes are static and 'value' is contiguous.
+  std::optional<std::string> staticLeafIndexOf(
+      ValueCP value,
+      const KernelOperation& op) const;
+
   std::string buildElementwiseCall(
       const Metadata& meta,
       NodeCP node,
@@ -706,9 +763,6 @@ class CompileCtx {
   // The KernelOperation for which code is being generated.
   KernelOperation* generatingOp_{nullptr};
 
-  // See concatOperandIndex().
-  int32_t concatOperandIndex_{-1};
-
   // See concatCopyDest(). std::map because the key is a pair; there is one
   // entry per copied concat operand, not one per value.
   std::map<std::pair<NodeCP, int32_t>, nativert::ValueId> concatCopyDest_;
@@ -724,10 +778,13 @@ class CompileCtx {
   // the first concat in graph order takes it and any later one copies.
   std::unordered_set<nativert::ValueId> carvedOperands_;
 
-  // The kernel op generated for the first concat-operand copy of each element
-  // type, so the rest are launches of that same op with their own parameters
-  // rather than another copy of the code. See emitConcatOperandCopy.
-  std::map<c10::ScalarType, KernelOperation*> concatCopyOp_;
+  // The kernel op generated for the first concat-operand copy of each pair of
+  // source and destination element types, so the rest are launches of that
+  // same op with their own parameters rather than another copy of the code.
+  // The source type is part of the key because the op reads its source with
+  // the element type it was generated for. See emitConcatOperandCopy.
+  std::map<std::pair<c10::ScalarType, c10::ScalarType>, KernelOperation*>
+      concatCopyOp_;
 
   // Why each wide-cat operand did or did not get a kernel op of its own,
   // tallied per concat result id under the timing trace. An operand left fused
@@ -756,9 +813,9 @@ class CompileCtx {
   // storage expression instead.
   std::unordered_map<size_t, std::string> elementwiseVarNames_;
 
-  // Output values of nodes placed before the last emitBarrier. A
-  // randomAccess input whose value is in this set does not need a new
-  // barrier because its producer is already separated by one.
+  // Output values of nodes placed before the last emitBarrier of the op being
+  // generated. A randomAccess input whose value is in this set does not need a
+  // new barrier because its producer is already separated by one.
   std::unordered_set<ValueCP> preBarrierValues_;
 
   // Names of the __shared__ variables that device calls and loop heads of the

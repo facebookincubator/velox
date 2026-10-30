@@ -51,11 +51,17 @@ struct ElementExpr {
   ValueCP output{nullptr};
   std::vector<ValueCP> inputs;
   std::unordered_map<ValueCP, int32_t> altParamOffset;
+  /// Leaves read below a view the expression computes through, each mapped to
+  /// that view's input. The leaf broadcasts against the view input's shape,
+  /// not against 'output'.
+  folly::F14FastMap<ValueCP, ValueCP> leafRefs;
   bool shapeFromThisOp{false};
 };
 
 /// Describes how to determine the number of blocks to run for a
 /// KernelOperation based on input sizes.
+struct ViewRecipe;
+
 struct SizeExpr {
   SizeShortcut op{SizeShortcut::kNone};
   std::vector<nativert::ValueId> values;
@@ -87,6 +93,13 @@ struct SizeExpr {
   /// kSum.
   std::vector<Dim> dims(FrameP frame) const;
 
+  /// numElements() and dims() over the pre-resolved value table. A value
+  /// absent from the table counts as None, as in the frame.
+  int64_t numElements(
+      const ValueTable& table,
+      nativert::ValueId* largestOut = nullptr) const;
+  void dims(const ValueTable& table, std::vector<Dim>& result) const;
+
   /// Substitutes Values in 'this' according to 'bindings' and returns a deep
   /// copy with the Values replaced.
   SizeExpr toActual(
@@ -96,10 +109,14 @@ struct SizeExpr {
 
 /// Describes a single output of a KernelOperation.
 struct OutputDesc {
-  /// Determines the shape to allocate for this output.
-  std::function<std::vector<std::vector<
-      Dim>>(nativert::ExecutionFrame&, const FormalToActual&, const NodeMap&)>
-      reserveShape;
+  /// Computes the shape to allocate for this output (ArgumentMeta::reserve),
+  /// with the nodes its operand names resolve against: inputs by ordinal on
+  /// 'reserveNode', names on 'reserveAttrNode'.
+  /// Null for an output sized another way.
+  ReserveFn reserveFn{nullptr};
+  std::shared_ptr<const ReserveInputs> reserveInputs;
+  NodeCP reserveNode{nullptr};
+  NodeCP reserveAttrNode{nullptr};
 
   /// True if device code sets the dims. If reserveFunc is nullptr,
   /// and shapeSetOnDevice is true, then the device code does a view and
@@ -122,6 +139,12 @@ struct OutputDesc {
   /// If set, this output is produced by executing a standalone view node
   /// (e.g. view, reshape) rather than allocating a new tensor.
   NodeCP viewNode{nullptr};
+
+  /// 'viewNode' as a metadata shortcut, built the first time the view runs.
+  /// Null for a view op the shortcuts do not
+  /// cover, which keeps going through the op's kernel.
+  mutable std::shared_ptr<const ViewRecipe> viewRecipe;
+  mutable bool viewRecipeTried{false};
 
   /// If set, this output is the result of an in-place op (e.g. add_/clamp_)
   /// whose return aliases its mutated self argument. Instead of allocating a
@@ -154,9 +177,31 @@ struct OutputDesc {
   /// pointer because a descriptor is copied per launch and the operand list is
   /// not small; null for every other output.
   std::shared_ptr<const ConcatLayout> concatLayout;
+
+  /// The output's shape is computed on the host before its launch: by its
+  /// reserve, or by the concat layout.
+  bool sizedByReserve() const {
+    return reserveFn != nullptr || concatLayout != nullptr;
+  }
 };
 
 void mergeOutputDesc(OutputDesc& dst, OutputDesc&& src);
+
+/// The values 'desc''s ReserveFn reads the elements of, translated through an
+/// invocation's 'bindings'. Empty when it reads none.
+std::vector<int32_t> hostTensorIds(
+    const OutputDesc& desc,
+    const FormalToActual& bindings);
+
+/// Resolves the operands 'desc.reserveInputs' names to actual value ids and
+/// constants for the launch 'bindings' and 'nodeMap' describe. Returns false
+/// when an operand has no table form, e.g. an integer list the frame holds as
+/// a list, which is a bind error.
+bool bindReserve(
+    const OutputDesc& desc,
+    const FormalToActual& bindings,
+    const NodeMap& nodeMap,
+    ReserveBinding& args);
 
 bool addOrUpdateOutput(
     std::vector<ValueCP>& outputValues,
@@ -352,6 +397,21 @@ class KernelOperation {
     return barrierCounters_;
   }
 
+  /// Allocates a 32-bit counter in the parameter block, zeroed before every
+  /// launch like a barrier counter. Unlike one, it does not make the op need a
+  /// cooperative launch.
+  int32_t allocateCounter() {
+    auto offset = altParamOffset_;
+    counters_.push_back(offset);
+    altParamOffset_ += 8;
+    return offset;
+  }
+
+  /// Offsets of the counters from allocateCounter().
+  const std::vector<int32_t>& counters() const {
+    return counters_;
+  }
+
   const std::vector<int32_t>& altTensorOffsets() const {
     return altTensorOffsets_;
   }
@@ -391,6 +451,28 @@ class KernelOperation {
     return broadcastRefs_;
   }
 
+  /// Records that the generated code assumes the tensor at 'offset' has
+  /// exactly 'dims', and with 'contiguous' also a dense layout. Code that
+  /// indexes with literal divisors depends on it, and each launch checks it
+  /// before running (runShapeChecks).
+  void
+  addStaticShape(int32_t offset, std::vector<int64_t> dims, bool contiguous) {
+    auto [it, inserted] =
+        staticShapes_.emplace(offset, StaticShape{std::move(dims), contiguous});
+    it->second.contiguous |= contiguous;
+  }
+
+  /// A shape the generated code assumes for one of its tensors.
+  struct StaticShape {
+    std::vector<int64_t> dims;
+    bool contiguous{false};
+  };
+
+  /// Param offset -> the shape the generated code assumes for that tensor.
+  const folly::F14FastMap<int32_t, StaticShape>& staticShapes() const {
+    return staticShapes_;
+  }
+
   const std::unordered_set<NodeCP>& allNodes() const {
     return allNodes_;
   }
@@ -422,12 +504,6 @@ class KernelOperation {
   /// that size.
   int32_t blockSizePreference() const {
     return blockSizePreference_;
-  }
-
-  /// True if a node of this op has Metadata::ownEntryPoint, so the kernel
-  /// gets an entry point holding only this op.
-  bool ownEntryPoint() const {
-    return ownEntryPoint_;
   }
 
   /// Blocks per SM this op wants the containing kernel compiled for, i.e. the
@@ -493,7 +569,7 @@ class KernelOperation {
   /// given node and return index. Copies sizeShortcut, shapeSetOnDevice, and
   /// neededOnHost. Expands sizeArgs ordinals to Value pointers from the node's
   /// inputs: for non-list ordinals takes the single Value, for list ordinals
-  /// expands via getListElements(). Wraps reserveShape in a lambda if present.
+  /// expands via getListElements(). Takes the reserve, if any.
   OutputDesc makeOutputDesc(
       const ArgumentMeta& returnMeta,
       NodeCP node,
@@ -578,6 +654,7 @@ class KernelOperation {
 
   std::vector<int32_t> altTensorOffsets_;
   std::vector<int32_t> barrierCounters_;
+  std::vector<int32_t> counters_;
 
   std::vector<ElementExpr> elementExprs_;
 
@@ -588,6 +665,9 @@ class KernelOperation {
 
   // See broadcastRefs().
   folly::F14FastMap<int32_t, int32_t> broadcastRefs_;
+
+  // See staticShapes().
+  folly::F14FastMap<int32_t, StaticShape> staticShapes_;
 
   std::unordered_set<NodeCP> allNodes_;
 
@@ -600,9 +680,6 @@ class KernelOperation {
 
   // Max Metadata::blockSize over the nodes in the subgraph.
   int32_t blockSizePreference_{0};
-
-  // Any Metadata::ownEntryPoint over the nodes in the subgraph.
-  bool ownEntryPoint_{false};
 
   // Max Metadata::minBlocksPerSm over the nodes in the subgraph.
   int32_t minBlocksPerSm_{0};

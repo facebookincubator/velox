@@ -25,9 +25,16 @@
 #include <folly/ScopeGuard.h>
 #include <folly/init/Init.h>
 #include <glog/logging.h>
+#include <gmock/gmock.h>
+#include <functional>
+#include <numeric>
 
 #include "velox/experimental/torchwave/Registry.h"
+#include "velox/experimental/torchwave/StaticDims.h"
+#include "velox/experimental/torchwave/StepProgram.h"
+#include "velox/experimental/torchwave/StepSupport.h"
 #include "velox/experimental/torchwave/Utils.h"
+#include "velox/experimental/torchwave/ValueTable.h"
 #include "velox/experimental/torchwave/WaveConfig.h"
 #include "velox/experimental/torchwave/WaveGraph.h"
 
@@ -444,8 +451,9 @@ TEST_F(ExecutorTest, viewBroadcastSizingTest) {
 
 // The ads id-matching index: clamp(add(unsqueeze(a), unsqueeze(b))) flattened
 // to the index list of a gather from cat(src, zeros). The gather becomes
-// tw.index_elt_one_default with the clamp fused in through the view and the
-// list, so the op's root is a view. Its launch has to cover the [R,C,C]
+// tw.index_elt_one_default. The flattening view moves from the index to the
+// gather's output, so the clamp is computed in the gather's loop and the
+// [R,C,C] index is never written. The launch has to cover the [R,C,C]
 // broadcast; sized by its largest input it covered the [R,C,1] side alone.
 const char* kViewBroadcastGatherGraph = R"(graph(%src, %a, %b):
 %z = torch.ops.aten.new_zeros.default(self=%src, size=[1])
@@ -463,7 +471,8 @@ const char* kViewBroadcastGatherGraph = R"(graph(%src, %a, %b):
 return(%o)
 )";
 
-TEST_F(ExecutorTest, viewBroadcastGatherSizingTest) {
+std::unordered_map<std::string, torch::_export::TensorMeta>
+viewBroadcastGatherMeta() {
   std::unordered_map<std::string, torch::_export::TensorMeta> meta;
   for (const auto* name : {"src", "z", "cat", "b", "f", "g"}) {
     meta[name] = makeTensorMeta(c10::ScalarType::Long, 1);
@@ -474,6 +483,199 @@ TEST_F(ExecutorTest, viewBroadcastGatherSizingTest) {
   for (const auto* name : {"u1", "u2", "s", "c"}) {
     meta[name] = makeTensorMeta(c10::ScalarType::Long, 3);
   }
+  return meta;
+}
+
+// The gather indexes by the clamp itself: the flattening view of the index
+// moves to the gather's output, so no view separates the index expression from
+// the gather that consumes it.
+TEST_F(ExecutorTest, flattenedIndexMovesToGatherOutputTest) {
+  auto graph = nativert::stringToGraph(kViewBroadcastGatherGraph);
+  graph->setTensorValuesMeta(viewBroadcastGatherMeta());
+  setGraphDevice(graph.get(), /*isCuda=*/true);
+  auto ctx = std::make_unique<ModelContext>();
+  ctx->weights = std::make_shared<nativert::Weights>(graph.get());
+  ctx->graph = std::move(graph);
+  WaveGraphExecutor exec(std::move(ctx));
+
+  std::vector<std::string> indexProducers;
+  for (const auto& node : exec.graph().nodes()) {
+    if (node.target() == "tw.index_elt_one_default") {
+      const auto* pack = node.inputs()[1].value->producer();
+      indexProducers.emplace_back(
+          pack->inputs()[0].value->producer()->target());
+    }
+  }
+  EXPECT_THAT(
+      indexProducers, testing::ElementsAre("torch.ops.aten.clamp.default"));
+}
+
+// Sizes come from an arange bound, a factory size list, a view with an
+// inferred dim and an expand of an input of unknown length. The optimizer
+// carries them through unsqueeze and broadcast; the input's own length stays
+// unknown.
+TEST_F(ExecutorTest, staticDimsTest) {
+  const char* kGraph = R"(graph(%x):
+%r = torch.ops.aten.arange.default(end=200)
+%u = torch.ops.aten.unsqueeze.default(self=%r, dim=0)
+%o = torch.ops.aten.new_ones.default(self=%x, size=[1000, 1])
+%s = torch.ops.aten.add.Tensor(self=%o, other=%u)
+%v = torch.ops.aten.view.default(self=%s, size=[-1, 40])
+%c = torch.ops.aten.unsqueeze.default(self=%x, dim=1)
+%e = torch.ops.aten.expand.default(self=%c, size=[-1, 200])
+return(%v, %e)
+)";
+  std::unordered_map<std::string, torch::_export::TensorMeta> meta;
+  for (const auto* name : {"x", "r"}) {
+    meta[name] = makeTensorMeta(c10::ScalarType::Long, 1);
+  }
+  for (const auto* name : {"u", "o", "s", "v", "c", "e"}) {
+    meta[name] = makeTensorMeta(c10::ScalarType::Long, 2);
+  }
+  auto graph = nativert::stringToGraph(kGraph);
+  graph->setTensorValuesMeta(meta);
+  setGraphDevice(graph.get(), /*isCuda=*/true);
+  auto ctx = std::make_unique<ModelContext>();
+  ctx->weights = std::make_shared<nativert::Weights>(graph.get());
+  ctx->graph = std::move(graph);
+  WaveGraphExecutor exec(std::move(ctx));
+
+  const auto& types = exec.waveGraph()->types();
+  const auto outputs = exec.graph().outputs();
+  ASSERT_EQ(outputs.size(), 2);
+  EXPECT_EQ(staticDimsOf(types, outputs[0]), StaticDims({5000, 40}));
+  EXPECT_EQ(staticDimsOf(types, outputs[1]), StaticDims({-1, 200}));
+}
+
+// A broadcast add whose operand shapes come from view sizes reads each operand
+// at an index with literal divisors, not through its runtime descriptor, and
+// loops to a literal bound.
+TEST_F(ExecutorTest, staticLeafIndexTest) {
+  const char* kGraph = R"(graph(%x, %y):
+%a = torch.ops.aten.view.default(self=%x, size=[100, 20, 1])
+%b = torch.ops.aten.view.default(self=%y, size=[1, 1, 20])
+%s = torch.ops.aten.add.Tensor(self=%a, other=%b)
+return(%s)
+)";
+  auto resetConfig =
+      folly::makeGuard([] { WaveConfig::get().inputContiguous = false; });
+  WaveConfig::get().inputContiguous = true;
+  std::unordered_map<std::string, torch::_export::TensorMeta> meta;
+  for (const auto* name : {"x", "y"}) {
+    meta[name] = makeTensorMeta(c10::ScalarType::Long, 1);
+  }
+  for (const auto* name : {"a", "b", "s"}) {
+    meta[name] = makeTensorMeta(c10::ScalarType::Long, 3);
+  }
+  auto plan = compilePlanProgrammatic(
+      nativert::stringToGraph(kGraph), meta, CompiledPlan::Mode::kMultiKernel);
+  int32_t addKernels = 0;
+  for (const auto& node : plan.nodes()) {
+    for (const auto& step : node.steps) {
+      for (const auto& kernel : step.kernels) {
+        if (kernel.has("aten.add.Tensor")) {
+          ++addKernels;
+          EXPECT_NE(kernel.code.find("[(idx / 20u)]"), std::string::npos)
+              << kernel.code;
+          EXPECT_NE(kernel.code.find("[(idx % 20u)]"), std::string::npos)
+              << kernel.code;
+          EXPECT_NE(kernel.code.find("size = 40000u;"), std::string::npos)
+              << kernel.code;
+          EXPECT_EQ(
+              kernel.code.find("complexIdx(isFastPath"), std::string::npos)
+              << kernel.code;
+        }
+      }
+    }
+  }
+  EXPECT_EQ(addKernels, 1) << plan.describe();
+
+  auto x = at::arange(2000, at::kLong);
+  auto y = at::arange(20, at::kLong) * 10000;
+  auto outputs =
+      runWaveProgrammatic(nativert::stringToGraph(kGraph), meta, {{x, y}});
+  ASSERT_EQ(outputs.size(), 1);
+  auto reference = x.view({100, 20, 1}) + y.view({1, 1, 20});
+  EXPECT_TRUE(tensorsMatch(outputs[0], reference))
+      << firstDifference(outputs[0], reference);
+}
+
+// A launch compiled for static shapes fails before running when a tensor's
+// actual shape differs, or when a tensor read at literal indices is strided.
+TEST_F(ExecutorTest, staticShapeCheckTest) {
+  ValueEntry entry;
+  entry.kind = ValueEntry::kTensor;
+  entry.t.rank = 2;
+  entry.t.dims[0] = 1000;
+  entry.t.dims[1] = 200;
+  entry.t.strides[0] = 200;
+  entry.t.strides[1] = 1;
+  ValueTable table{.entries = &entry, .size = 1};
+  StepProgram program;
+
+  program.shapeChecks = {
+      {.valueId = 0, .dims = {1000, 200}, .contiguous = true}};
+  runShapeChecks(program, table);
+
+  program.shapeChecks = {{.valueId = 0, .dims = {1000, 40}}};
+  EXPECT_THAT(
+      [&] { runShapeChecks(program, table); },
+      testing::ThrowsMessage<c10::Error>(testing::HasSubstr(
+          "static shape its kernel was compiled for: value %0, compiled for "
+          "[1000, 40], actual [1000, 200]")));
+
+  // A band of a wider tensor: right dims, strided rows.
+  entry.t.strides[0] = 400;
+  program.shapeChecks = {
+      {.valueId = 0, .dims = {1000, 200}, .contiguous = true}};
+  EXPECT_THAT(
+      [&] { runShapeChecks(program, table); },
+      testing::ThrowsMessage<c10::Error>(testing::HasSubstr(
+          "dense layout its kernel was compiled for: value %0, dim 0 has "
+          "stride 400 instead of 200")));
+}
+
+// A sizing call folded to a constant at bind is still run with
+// --verify_static_sizes, which fails when its result differs from the
+// constant.
+TEST_F(ExecutorTest, constantSizeVerifyTest) {
+  ValueEntry entry;
+  entry.kind = ValueEntry::kTensor;
+  entry.t.rank = 1;
+  entry.t.dims[0] = 7;
+  ValueTable table{.entries = &entry, .size = 1};
+  int32_t ids[] = {0};
+  Span groups[] = {{0, 1}};
+  Shape constantShape;
+  StepProgram program;
+  program.sizes.emplace_back();
+  program.code.ids = ids;
+  program.code.spans = groups;
+  program.code.shapes = &constantShape;
+  const SizeOp size{
+      .fn =
+          +[](const ReserveArgs& args, Shape* out, int32_t /*numOut*/) {
+            out[0].setLike(args.tensor(0));
+            return true;
+          },
+      .groups = {0, 1},
+      .shapes = {0, 1},
+      .source = 0,
+      .constant = true};
+
+  constantShape.setVector(7);
+  verifyConstantSize(size, program, table);
+
+  constantShape.setVector(5);
+  EXPECT_THAT(
+      [&] { verifyConstantSize(size, program, table); },
+      testing::ThrowsMessage<c10::Error>(testing::HasSubstr(
+          "Static size differs from the reserve: built-in operands %0, "
+          "size 0 shape 0, static [5], reserve [7]")));
+}
+
+TEST_F(ExecutorTest, viewBroadcastGatherSizingTest) {
+  const auto meta = viewBroadcastGatherMeta();
   auto plan = compilePlanProgrammatic(
       nativert::stringToGraph(kViewBroadcastGatherGraph),
       meta,
@@ -504,6 +706,306 @@ TEST_F(ExecutorTest, viewBroadcastGatherSizingTest) {
   auto padded = at::cat({src, at::zeros({1}, at::kLong)});
   auto reference =
       padded.index_select(0, index.reshape({-1})).view({1000, 40000});
+  EXPECT_TRUE(tensorsMatch(outputs[0], reference))
+      << firstDifference(outputs[0], reference);
+}
+
+// The same gather with its offsets made by a 1-D cumsum, which builds a cg
+// variant. There a materialized clamp would be its own loop writing the
+// [R,C,C] index, read by the gather after an opBarrier.
+const char* kCumsumBroadcastGatherGraph = R"(graph(%src, %d, %b):
+%e = torch.ops.aten.cumsum.default(self=%d, dim=0)
+%a = torch.ops.aten.view.default(self=%e, size=[1000, 200])
+%z = torch.ops.aten.new_zeros.default(self=%src, size=[1])
+%l[] = prim.ListPack(l0=%src, l1=%z)
+%cat = torch.ops.aten.cat.default(tensors=%l, dim=0)
+%u1 = torch.ops.aten.unsqueeze.default(self=%a, dim=2)
+%u0 = torch.ops.aten.unsqueeze.default(self=%b, dim=0)
+%u2 = torch.ops.aten.unsqueeze.default(self=%u0, dim=0)
+%s = torch.ops.aten.add.Tensor(self=%u1, other=%u2)
+%c = torch.ops.aten.clamp.default(self=%s, min=0, max=300000)
+%f = torch.ops.aten.view.default(self=%c, size=[40000000])
+%il[] = prim.ListPack(l0=%f)
+%g = torch.ops.aten.index.Tensor(self=%cat, indices=%il)
+%o = torch.ops.aten.view.default(self=%g, size=[1000, 40000])
+return(%o)
+)";
+
+TEST_F(ExecutorTest, cumsumBroadcastGatherCgTest) {
+  auto resetConfig =
+      folly::makeGuard([] { WaveConfig::get().isCg = std::nullopt; });
+  auto meta = viewBroadcastGatherMeta();
+  meta["d"] = makeTensorMeta(c10::ScalarType::Long, 1);
+  meta["e"] = makeTensorMeta(c10::ScalarType::Long, 1);
+  auto plan = compilePlanProgrammatic(
+      nativert::stringToGraph(kCumsumBroadcastGatherGraph),
+      meta,
+      CompiledPlan::Mode::kCG);
+  int32_t gatherKernels = 0;
+  for (const auto& node : plan.nodes()) {
+    for (const auto& step : node.steps) {
+      for (const auto& kernel : step.kernels) {
+        if (kernel.has("tw.index_elt_one_default")) {
+          ++gatherKernels;
+          EXPECT_EQ(
+              kernel.code.find("// torch.ops.aten.clamp.default("),
+              std::string::npos)
+              << kernel.code;
+          EXPECT_EQ(kernel.numBarriers, 0) << kernel.code;
+        }
+      }
+    }
+  }
+  EXPECT_EQ(gatherKernels, 1) << plan.describe();
+
+  WaveConfig::get().isCg = true;
+  auto src = at::arange(300000, at::kLong) % 991;
+  auto d = at::arange(200000, at::kLong) % 3;
+  auto b = at::arange(200, at::kLong);
+  auto outputs = runWaveProgrammatic(
+      nativert::stringToGraph(kCumsumBroadcastGatherGraph),
+      meta,
+      {{src, d, b}});
+  ASSERT_EQ(outputs.size(), 1);
+  auto index = at::clamp(
+      at::cumsum(d, 0).view({1000, 200}).unsqueeze(2) +
+          b.unsqueeze(0).unsqueeze(0),
+      0,
+      300000);
+  auto padded = at::cat({src, at::zeros({1}, at::kLong)});
+  auto reference =
+      padded.index_select(0, index.reshape({-1})).view({1000, 40000});
+  EXPECT_TRUE(tensorsMatch(outputs[0], reference))
+      << firstDifference(outputs[0], reference);
+}
+
+// The ads id-matching search: eq(searchsorted(sorted, q), vals) reshaped to
+// rank 3 and masked. All shapes are fixed by the views, so the view is
+// computed through: the eq is evaluated in the masking loop at its index and
+// never written. The searchsorted picks its sorted row from the eq's shape,
+// [R, C * C], which differs from the loop's [R, C, C].
+const char* kViewFusionGraph = R"(graph(%z, %x, %y, %m):
+%q = torch.ops.aten.view.default(self=%x, size=[100, 400])
+%r = torch.ops.aten.view.default(self=%y, size=[100, 400])
+%s = torch.ops.aten.searchsorted.Tensor(sorted_sequence=%z, self=%q)
+%e = torch.ops.aten.eq.Tensor(self=%s, other=%r)
+%v = torch.ops.aten.view.default(self=%e, size=[100, 20, 20])
+%w = torch.ops.aten.view.default(self=%m, size=[1, 1, 20])
+%a = torch.ops.aten.bitwise_and.Tensor(self=%v, other=%w)
+return(%a)
+)";
+
+std::unordered_map<std::string, torch::_export::TensorMeta> viewFusionMeta() {
+  std::unordered_map<std::string, torch::_export::TensorMeta> meta;
+  meta["z"] = makeTensorMeta(c10::ScalarType::Long, 2);
+  for (const auto* name : {"x", "y"}) {
+    meta[name] = makeTensorMeta(c10::ScalarType::Long, 1);
+  }
+  meta["m"] = makeTensorMeta(c10::ScalarType::Bool, 1);
+  for (const auto* name : {"q", "r", "s"}) {
+    meta[name] = makeTensorMeta(c10::ScalarType::Long, 2);
+  }
+  meta["e"] = makeTensorMeta(c10::ScalarType::Bool, 2);
+  for (const auto* name : {"v", "w", "a"}) {
+    meta[name] = makeTensorMeta(c10::ScalarType::Bool, 3);
+  }
+  return meta;
+}
+
+TEST_F(ExecutorTest, viewFusionTest) {
+  auto resetConfig = folly::makeGuard([] {
+    WaveConfig::get().isCg = std::nullopt;
+    WaveConfig::get().fuseThroughViews = true;
+  });
+  const auto meta = viewFusionMeta();
+  auto plan = compilePlanProgrammatic(
+      nativert::stringToGraph(kViewFusionGraph),
+      meta,
+      CompiledPlan::Mode::kMultiKernel);
+  int32_t maskKernels = 0;
+  for (const auto& node : plan.nodes()) {
+    for (const auto& step : node.steps) {
+      for (const auto& kernel : step.kernels) {
+        if (kernel.has("aten.bitwise_and.Tensor")) {
+          ++maskKernels;
+          EXPECT_TRUE(kernel.has("aten.eq.Tensor")) << plan.describe();
+          EXPECT_EQ(
+              kernel.code.find("// torch.ops.aten.eq.Tensor("),
+              std::string::npos)
+              << kernel.code;
+          EXPECT_EQ(kernel.numBarriers, 0) << kernel.code;
+        }
+      }
+    }
+  }
+  EXPECT_EQ(maskKernels, 1) << plan.describe();
+
+  auto z = std::get<0>(at::sort(at::randint(0, 1000, {100, 50}, at::kLong), 1));
+  auto x = at::randint(-5, 1005, {40000}, at::kLong);
+  auto m = at::arange(20, at::kLong) % 3 != 0;
+  auto q = x.view({100, 400});
+  auto s = at::searchsorted(z, q);
+  // About a third of the positions match.
+  auto y = at::where(
+               at::arange(40000, at::kLong).view({100, 400}) % 3 == 0, s, s + 1)
+               .reshape({-1});
+  auto reference =
+      (s == y.view({100, 400})).view({100, 20, 20}) & m.view({1, 1, 20});
+  for (bool fuse : {true, false}) {
+    for (bool cg : {false, true}) {
+      SCOPED_TRACE(fmt::format("fuse {} cg {}", fuse, cg));
+      WaveConfig::get().fuseThroughViews = fuse;
+      WaveConfig::get().isCg = cg;
+      auto outputs = runWaveProgrammatic(
+          nativert::stringToGraph(kViewFusionGraph), meta, {{z, x, y, m}});
+      ASSERT_EQ(outputs.size(), 1);
+      EXPECT_TRUE(tensorsMatch(outputs[0], reference))
+          << firstDifference(outputs[0], reference);
+    }
+  }
+}
+
+// any() over the trailing dims of a fused elementwise expression is evaluated
+// in the reduction's row loop, and the expression is never written. Covers
+// the ads search shape (static, a warp per row of 20), and runtime shapes
+// with rows of 300 (a warp) and 3000 (a block).
+TEST_F(ExecutorTest, rowReductionFusionTest) {
+  auto resetConfig = folly::makeGuard([] {
+    WaveConfig::get().isCg = std::nullopt;
+    WaveConfig::get().fuseRowReductions = true;
+  });
+  auto expectFused = [](const CompiledPlan& plan) {
+    int32_t anyKernels = 0;
+    for (const auto& node : plan.nodes()) {
+      for (const auto& step : node.steps) {
+        for (const auto& kernel : step.kernels) {
+          if (kernel.has("tw.any_rows")) {
+            ++anyKernels;
+            EXPECT_EQ(kernel.code.find("any_rows<"), std::string::npos)
+                << kernel.code;
+            EXPECT_EQ(kernel.numBarriers, 0) << kernel.code;
+          }
+        }
+      }
+    }
+    EXPECT_EQ(anyKernels, 1) << plan.describe();
+  };
+  auto runModes =
+      [](const char* graph,
+         const std::unordered_map<std::string, torch::_export::TensorMeta>&
+             meta,
+         const std::vector<at::Tensor>& inputs,
+         const at::Tensor& reference) {
+        for (bool fuse : {true, false}) {
+          for (bool cg : {false, true}) {
+            SCOPED_TRACE(fmt::format("fuse {} cg {}", fuse, cg));
+            WaveConfig::get().fuseRowReductions = fuse;
+            WaveConfig::get().isCg = cg;
+            auto outputs = runWaveProgrammatic(
+                nativert::stringToGraph(graph), meta, {inputs});
+            ASSERT_EQ(outputs.size(), 1);
+            EXPECT_TRUE(tensorsMatch(outputs[0], reference))
+                << firstDifference(outputs[0], reference);
+          }
+        }
+        WaveConfig::get().fuseRowReductions = true;
+        WaveConfig::get().isCg = std::nullopt;
+      };
+
+  {
+    const std::string graph =
+        std::string(kViewFusionGraph)
+            .replace(
+                std::string(kViewFusionGraph).find("return(%a)"),
+                10,
+                "%o = torch.ops.aten.any.dim(self=%a, "
+                "dim=2)\nreturn(%o)");
+    auto meta = viewFusionMeta();
+    meta["o"] = makeTensorMeta(c10::ScalarType::Bool, 2);
+    expectFused(compilePlanProgrammatic(
+        nativert::stringToGraph(graph),
+        meta,
+        CompiledPlan::Mode::kMultiKernel));
+    auto z =
+        std::get<0>(at::sort(at::randint(0, 1000, {100, 50}, at::kLong), 1));
+    auto x = at::randint(-5, 1005, {40000}, at::kLong);
+    auto m = at::arange(20, at::kLong) % 7 == 0;
+    auto s = at::searchsorted(z, x.view({100, 400}));
+    // A match in about one row in ten.
+    auto y =
+        at::where(
+            at::arange(40000, at::kLong).view({100, 400}) % 97 == 0, s, s + 1)
+            .reshape({-1});
+    auto reference =
+        ((s == y.view({100, 400})).view({100, 20, 20}) & m.view({1, 1, 20}))
+            .any(2);
+    runModes(graph.c_str(), meta, {z, x, y, m}, reference);
+  }
+
+  const char* kRuntimeShapeGraph = R"(graph(%x, %y):
+%l = torch.ops.aten.lt.Tensor(self=%x, other=%y)
+%o = torch.ops.aten.any.dim(self=%l, dim=1)
+return(%o)
+)";
+  std::unordered_map<std::string, torch::_export::TensorMeta> meta;
+  for (const auto* name : {"x", "y"}) {
+    meta[name] = makeTensorMeta(c10::ScalarType::Long, 2);
+  }
+  meta["l"] = makeTensorMeta(c10::ScalarType::Bool, 2);
+  meta["o"] = makeTensorMeta(c10::ScalarType::Bool, 1);
+  expectFused(compilePlanProgrammatic(
+      nativert::stringToGraph(kRuntimeShapeGraph),
+      meta,
+      CompiledPlan::Mode::kMultiKernel));
+  for (int64_t rowLen : {300, 3000}) {
+    SCOPED_TRACE(rowLen);
+    auto x = at::randint(0, 1000, {500, rowLen}, at::kLong);
+    // Rows with an odd index have no element where x < y.
+    auto y = at::where(
+        at::arange(500, at::kLong).view({500, 1}) % 2 == 1,
+        at::zeros_like(x),
+        at::randint(0, 3, {500, rowLen}, at::kLong));
+    runModes(kRuntimeShapeGraph, meta, {x, y}, at::lt(x, y).any(1));
+  }
+}
+
+// x[mask] with a boolean mask of x's own rank is masked_select. The ads
+// id-matching graph compacts the matched positions this way, over an expanded
+// [1, C] -> [R, C] source, so the source is a stride-0 view.
+const char* kFullRankMaskIndexGraph = R"(graph(%r, %m):
+%u = torch.ops.aten.unsqueeze.default(self=%r, dim=0)
+%e = torch.ops.aten.expand.default(self=%u, size=[1000, 200])
+%l[] = prim.ListPack(l0=%m)
+%o = torch.ops.aten.index.Tensor(self=%e, indices=%l)
+return(%o)
+)";
+
+TEST_F(ExecutorTest, fullRankMaskIndexTest) {
+  std::unordered_map<std::string, torch::_export::TensorMeta> meta;
+  meta["r"] = makeTensorMeta(c10::ScalarType::Long, 1);
+  meta["m"] = makeTensorMeta(c10::ScalarType::Bool, 2);
+  meta["u"] = makeTensorMeta(c10::ScalarType::Long, 2);
+  meta["e"] = makeTensorMeta(c10::ScalarType::Long, 2);
+  meta["o"] = makeTensorMeta(c10::ScalarType::Long, 1);
+  auto plan = compilePlanProgrammatic(
+      nativert::stringToGraph(kFullRankMaskIndexGraph),
+      meta,
+      CompiledPlan::Mode::kMultiKernel);
+  for (const auto& node : plan.nodes()) {
+    for (const auto& step : node.steps) {
+      for (const auto& kernel : step.kernels) {
+        EXPECT_FALSE(kernel.standalone && kernel.has("aten.index.Tensor"))
+            << plan.describe();
+      }
+    }
+  }
+
+  auto r = at::arange(200, at::kLong) * 3;
+  auto m = (at::arange(200000, at::kLong) * 7919 % 13 < 5).reshape({1000, 200});
+  auto outputs = runWaveProgrammatic(
+      nativert::stringToGraph(kFullRankMaskIndexGraph), meta, {{r, m}});
+  ASSERT_EQ(outputs.size(), 1);
+  auto reference = r.unsqueeze(0).expand({1000, 200}).index({m});
   EXPECT_TRUE(tensorsMatch(outputs[0], reference))
       << firstDifference(outputs[0], reference);
 }
@@ -552,6 +1054,54 @@ return(%o)
       << firstDifference(outputs[0], reference);
 }
 
+// A column index_select of a wide 2-d input, alone and feeding an elementwise
+// op. The ads and IG dense-feature preprocs start with this. The op is sized
+// from its own output, so the launch count must come from that output and
+// spread the op over many blocks, not size it as one element.
+TEST_F(ExecutorTest, indexSelectColumnsTest) {
+  const auto savedTrace = WaveConfig::get().trace;
+  auto restoreTrace =
+      folly::makeGuard([savedTrace] { WaveConfig::get().trace = savedTrace; });
+  WaveConfig::get().trace = savedTrace | WaveConfig::kTiming;
+
+  constexpr int64_t kRows = 1000;
+  constexpr int64_t kCols = 1500;
+  auto x = at::arange(kRows * kCols, at::kFloat).reshape({kRows, kCols});
+  auto idx = (at::arange(1400, at::kLong) * 7) % kCols;
+  std::unordered_map<std::string, torch::_export::TensorMeta> meta;
+  meta["x"] = makeTensorMeta(c10::ScalarType::Float, 2);
+  meta["idx"] = makeTensorMeta(c10::ScalarType::Long, 1);
+  meta["s"] = makeTensorMeta(c10::ScalarType::Float, 2);
+  meta["o"] = makeTensorMeta(c10::ScalarType::Float, 2);
+
+  auto check = [&](const char* graph, const at::Tensor& reference) {
+    auto outputs =
+        runWaveProgrammatic(nativert::stringToGraph(graph), meta, {{x, idx}});
+    ASSERT_EQ(outputs.size(), 1);
+    EXPECT_TRUE(tensorsMatch(outputs[0], reference))
+        << firstDifference(outputs[0], reference);
+    const auto& launches = waveThreadInfo().launchMeta;
+    ASSERT_EQ(launches.size(), 1);
+    EXPECT_GT(launches[0].numBlocks, 100);
+  };
+
+  {
+    const char* kGraph = R"(graph(%x, %idx):
+%s = torch.ops.aten.index_select.default(self=%x, dim=1, index=%idx)
+return(%s)
+)";
+    check(kGraph, at::index_select(x, 1, idx));
+  }
+  {
+    const char* kGraph = R"(graph(%x, %idx):
+%s = torch.ops.aten.index_select.default(self=%x, dim=1, index=%idx)
+%o = torch.ops.aten.mul.Scalar(self=%s, other=2.0)
+return(%o)
+)";
+    check(kGraph, at::index_select(x, 1, idx) * 2);
+  }
+}
+
 TEST_F(ExecutorTest, elementTest) {
   runTest("data/element_test.pt2", "data/element_test_results.pt");
 }
@@ -579,6 +1129,47 @@ TEST_F(ExecutorTest, numelTest) {
 TEST_F(ExecutorTest, viewInterleaveTest) {
   runTest(
       "data/view_interleave_test.pt2", "data/view_interleave_test_results.pt");
+}
+
+// aten.flatten.using_ints over all dims of a contiguous tensor, of a transposed
+// one, and over a single dim. The first is a view, the second a copy and the
+// third the input itself; none needs the eager op.
+TEST_F(ExecutorTest, flattenTest) {
+  const char* kGraph = R"(graph(%x):
+%m = torch.ops.aten.mul.Scalar(self=%x, other=2)
+%f = torch.ops.aten.flatten.using_ints(self=%m)
+%o = torch.ops.aten.add.Scalar(self=%f, other=1)
+%t = torch.ops.aten.transpose.int(self=%m, dim0=0, dim1=1)
+%g = torch.ops.aten.flatten.using_ints(self=%t)
+%p = torch.ops.aten.add.Scalar(self=%g, other=1)
+%h = torch.ops.aten.flatten.using_ints(self=%m, start_dim=1, end_dim=1)
+%q = torch.ops.aten.add.Scalar(self=%h, other=1)
+return(%o, %p, %q)
+)";
+  std::unordered_map<std::string, torch::_export::TensorMeta> meta;
+  for (const auto* name : {"x", "m", "t", "h", "q"}) {
+    meta[name] = makeTensorMeta(c10::ScalarType::Float, 3);
+  }
+  for (const auto* name : {"f", "o", "g", "p"}) {
+    meta[name] = makeTensorMeta(c10::ScalarType::Float, 1);
+  }
+
+  auto x = at::arange(2'000 * 8 * 5, at::kFloat).reshape({2'000, 8, 5});
+  const auto m = x * 2;
+  const std::vector<at::Tensor> expected = {
+      m.flatten() + 1, m.transpose(0, 1).flatten() + 1, m + 1};
+
+  auto outputs =
+      runWaveProgrammatic(nativert::stringToGraph(kGraph), meta, {{x}});
+  ASSERT_EQ(outputs.size(), expected.size());
+  for (size_t i = 0; i < expected.size(); ++i) {
+    EXPECT_TRUE(tensorsMatch(outputs[i], expected[i]))
+        << i << ": " << firstDifference(outputs[i], expected[i]);
+  }
+
+  auto plan = compilePlanProgrammatic(
+      nativert::stringToGraph(kGraph), meta, CompiledPlan::Mode::kMultiKernel);
+  EXPECT_FALSE(plan.standalone("aten.flatten.using_ints"));
 }
 
 // In-place mutation through views and clones. Validates that torchwave honors
@@ -702,6 +1293,54 @@ TEST_F(ExecutorTest, copyInPlaceConvertTest) {
   EXPECT_TRUE(
       plans.multiKernel.fuses({"aten.copy_.default", "aten.expand.default"}));
   EXPECT_FALSE(plans.multiKernel.standalone("aten.copy_.default"));
+}
+
+// In-place nan_to_num_ on the leading columns of a scaled tensor, the shape the
+// IG dense-feature preprocs leave: the result of nan_to_num_ itself is unused
+// and the write is seen through the base. The columns outside the narrow keep
+// their NaN and infinities.
+TEST_F(ExecutorTest, nanToNumInPlaceTest) {
+  constexpr int64_t kRows = 3'000;
+  constexpr int64_t kCols = 40;
+  const char* kGraph = R"(graph(%x, %s):
+%m = torch.ops.aten.mul.Tensor(self=%x, other=%s)
+%v = torch.ops.aten.view.default(self=%m, size=[-1])
+%v2 = torch.ops.aten.view.default(self=%v, size=[-1, 40])
+%n = torch.ops.aten.narrow.default(self=%v2, dim=1, start=0, length=30)
+%z = torch.ops.aten.nan_to_num_.default(self=%n, nan=0.0)
+%o = torch.ops.aten.add.Scalar(self=%v2, other=1)
+return(%o)
+)";
+  std::unordered_map<std::string, torch::_export::TensorMeta> meta;
+  for (const auto* name : {"x", "m", "v2", "n", "z", "o"}) {
+    meta[name] = makeTensorMeta(c10::ScalarType::Float, 2);
+  }
+  meta["s"] = makeTensorMeta(c10::ScalarType::Float, 1);
+  meta["v"] = makeTensorMeta(c10::ScalarType::Float, 1);
+
+  auto x = at::arange(kRows * kCols, at::kFloat).reshape({kRows, kCols}) - 7;
+  const auto nan = std::numeric_limits<float>::quiet_NaN();
+  const auto inf = std::numeric_limits<float>::infinity();
+  for (int64_t row = 0; row < kRows; row += 97) {
+    x.index_put_({row, row % kCols}, nan);
+    x.index_put_({row, (row + 1) % kCols}, inf);
+    x.index_put_({row, (row + 2) % kCols}, -inf);
+  }
+  auto s = at::linspace(0.5, 2.0, kCols, at::kFloat);
+  auto expected = x * s;
+  expected.narrow(1, 0, 30).nan_to_num_(0);
+  expected += 1;
+
+  auto outputs =
+      runWaveProgrammatic(nativert::stringToGraph(kGraph), meta, {{x, s}});
+  ASSERT_EQ(outputs.size(), 1);
+  EXPECT_TRUE(
+      at::allclose(outputs[0], expected, 1e-5, 1e-6, /*equal_nan=*/true))
+      << firstDifference(outputs[0], expected);
+
+  auto plan = compilePlanProgrammatic(
+      nativert::stringToGraph(kGraph), meta, CompiledPlan::Mode::kMultiKernel);
+  EXPECT_FALSE(plan.standalone("aten.nan_to_num_.default"));
 }
 
 // Column copies into one target, the shape the ROO preproc graph uses to fill a
@@ -1793,8 +2432,16 @@ TEST_F(ExecutorTest, scatterAddCgConsumerTest) {
   auto outputs = exec.executeWithPrefilledFrame(*frame);
 
   const auto& consumerValue = frame->getIValue(consumerOutput->id());
-  ASSERT_TRUE(consumerValue.isTensor());
-  EXPECT_EQ(consumerValue.toTensor().numel(), 256)
+  int64_t consumerNumel = -1;
+  if (consumerValue.isTensor()) {
+    consumerNumel = consumerValue.toTensor().numel();
+  } else {
+    const auto sizes = exec.waveGraph()->lastValueSizes(consumerOutput->id());
+    ASSERT_FALSE(sizes.empty()) << "the consumer's output was not produced";
+    consumerNumel = std::accumulate(
+        sizes.begin(), sizes.end(), int64_t{1}, std::multiplies<>());
+  }
+  EXPECT_EQ(consumerNumel, 256)
       << "the consumer of a materialized elementwise border is sized by that "
          "border's output, not by the scatter's 4096-element src/index";
 
@@ -2130,6 +2777,202 @@ return (%e)
       << firstDifference(outputs[0], expected);
 }
 
+// any over trailing dims as the fused row reduction tw.any_rows: any.dim on
+// the last dim (also given as -1) of a fused bool producer, and any.dims over
+// [1, 2] and [2]. No any may run standalone, and the results match eager.
+// Programmatic graph, no .pt2.
+TEST_F(ExecutorTest, anyRowsTest) {
+  const char* kGraph = R"(graph(%a, %b, %m):
+%e = torch.ops.aten.eq.Tensor(self=%a, other=%b)
+%h = torch.ops.aten.bitwise_and.Tensor(self=%e, other=%m)
+%r0 = torch.ops.aten.any.dim(self=%h, dim=2)
+%r1 = torch.ops.aten.any.dim(self=%h, dim=-1)
+%r2 = torch.ops.aten.any.dims(self=%h, dim=[1, 2])
+%r3 = torch.ops.aten.any.dims(self=%m, dim=[2])
+return (%r0, %r1, %r2, %r3)
+)";
+  std::unordered_map<std::string, torch::_export::TensorMeta> meta;
+  meta["a"] = makeTensorMeta(c10::ScalarType::Long, 3);
+  meta["b"] = makeTensorMeta(c10::ScalarType::Long, 3);
+  for (const char* name : {"m", "e", "h"}) {
+    meta[name] = makeTensorMeta(c10::ScalarType::Bool, 3);
+  }
+  for (const char* name : {"r0", "r1", "r3"}) {
+    meta[name] = makeTensorMeta(c10::ScalarType::Bool, 2);
+  }
+  meta["r2"] = makeTensorMeta(c10::ScalarType::Bool, 1);
+
+  auto plan = compilePlanProgrammatic(
+      nativert::stringToGraph(kGraph), meta, CompiledPlan::Mode::kMultiKernel);
+  for (const auto& node : plan.nodes()) {
+    for (const auto& step : node.steps) {
+      for (const auto& kernel : step.kernels) {
+        EXPECT_FALSE(kernel.standalone && kernel.has("aten.any"))
+            << plan.describe();
+      }
+    }
+  }
+
+  auto a = at::randint(0, 50, {20, 30, 40}, at::kLong);
+  auto b = at::randint(0, 50, {20, 30, 40}, at::kLong);
+  auto m = at::rand({20, 30, 40}) < 0.3;
+  auto outputs =
+      runWaveProgrammatic(nativert::stringToGraph(kGraph), meta, {{a, b, m}});
+  ASSERT_EQ(outputs.size(), 4);
+  auto h = at::eq(a, b) & m;
+  std::vector<at::Tensor> expected{
+      h.any(2), h.any(-1), h.any(at::IntArrayRef{1, 2}), m.any(2)};
+  for (size_t i = 0; i < outputs.size(); ++i) {
+    EXPECT_TRUE(tensorsMatch(outputs[i], expected[i]))
+        << i << ": " << firstDifference(outputs[i], expected[i]);
+  }
+}
+
+// cumsum(new_ones(x, [n])) with a dynamic n, the range generator of the ads
+// graph, expanded to [30, n] and added to a per-row operand. It rewrites to a
+// materialized tw.arange_mem plus one, so no new_ones runs standalone, and
+// the result matches eager in every mode. The text format cannot type a
+// SymInt list, so the graph is parsed with a static-size new_ones and its
+// size is then replaced by [sym_size(y, 1)] of a 2-D y (the size of a 1-D
+// tensor would take the new_ones -> ones_like rewrite instead). Programmatic
+// graph, no .pt2.
+std::unique_ptr<nativert::Graph> makeDynamicOnesRangeGraph() {
+  const char* kGraph = R"(graph(%x, %y, %b):
+%o = torch.ops.aten.new_ones.default(self=%x, size=[17])
+%c = torch.ops.aten.cumsum.default(self=%o, dim=0)
+%r = torch.ops.aten.sub.Tensor(self=%c, other=1)
+%u = torch.ops.aten.unsqueeze.default(self=%r, dim=0)
+%e = torch.ops.aten.expand.default(self=%u, size=[30, -1])
+%bu = torch.ops.aten.unsqueeze.default(self=%b, dim=1)
+%a = torch.ops.aten.add.Tensor(self=%bu, other=%e)
+%v = torch.ops.aten.view.default(self=%a, size=[-1])
+return (%v)
+)";
+  auto graph = nativert::stringToGraph(kGraph);
+  nativert::Node* ones = nullptr;
+  for (auto& node : graph->nodes()) {
+    if (node.target() == "torch.ops.aten.new_ones.default") {
+      ones = &node;
+    }
+  }
+  auto* y = graph->tryGetValue("y");
+  auto* size = graph->createNode("torch.ops.aten.sym_size.int", {{"self", y}});
+  size->addAttribute({"dim", int64_t{1}});
+  auto* n = size->addOutput("n", nativert::Type(nativert::Type::Kind::SymInt));
+  graph->insertBefore(size, ones);
+  auto* pack =
+      graph->createListPack({n}, nativert::Type(nativert::Type::Kind::SymInt));
+  graph->insertBefore(pack, ones);
+  auto* dynamicOnes = graph->createNode(
+      "torch.ops.aten.new_ones.default",
+      {{"self", ones->inputs()[0].value}, {"size", pack->outputs()[0]}});
+  auto* onesOut = dynamicOnes->addOutput(
+      "o2", nativert::Type(nativert::Type::Kind::Tensor));
+  graph->insertBefore(dynamicOnes, ones);
+  graph->replaceAllUses(ones->outputs()[0], onesOut);
+  graph->removeNode(ones);
+  graph->renumberValues();
+  return graph;
+}
+
+TEST_F(ExecutorTest, dynamicOnesRangeTest) {
+  std::unordered_map<std::string, torch::_export::TensorMeta> meta;
+  for (const char* name : {"x", "b", "o", "o2", "c", "r"}) {
+    meta[name] = makeTensorMeta(c10::ScalarType::Long, 1);
+  }
+  for (const char* name : {"y", "u", "e", "bu", "a"}) {
+    meta[name] = makeTensorMeta(c10::ScalarType::Long, 2);
+  }
+  meta["v"] = makeTensorMeta(c10::ScalarType::Long, 1);
+
+  auto plan = compilePlanProgrammatic(
+      makeDynamicOnesRangeGraph(), meta, CompiledPlan::Mode::kMultiKernel);
+  bool sawRange = false;
+  for (const auto& node : plan.nodes()) {
+    for (const auto& step : node.steps) {
+      for (const auto& kernel : step.kernels) {
+        EXPECT_FALSE(kernel.has("aten.new_ones.default")) << plan.describe();
+        sawRange = sawRange || kernel.has("tw.arange_mem");
+      }
+    }
+  }
+  EXPECT_TRUE(sawRange) << plan.describe();
+
+  auto x = at::randint(0, 10, {30}, at::kLong);
+  auto y = at::randint(0, 10, {3, 17}, at::kLong);
+  auto b = at::randint(0, 1000, {30}, at::kLong) * 100;
+  auto outputs =
+      runWaveProgrammatic(makeDynamicOnesRangeGraph(), meta, {{x, y, b}});
+  ASSERT_EQ(outputs.size(), 1);
+  auto range = at::arange(17, at::kLong);
+  auto expected =
+      (b.unsqueeze(1) + range.unsqueeze(0).expand({30, 17})).view({-1});
+  EXPECT_TRUE(tensorsMatch(outputs[0], expected))
+      << firstDifference(outputs[0], expected);
+}
+
+// cat([x, new_full(x, size=[1], fill_value=n)]) with a dynamic n, as the ads
+// graph appends a total to offsets. The one-element fill rewrites to a fused
+// unsqueeze(scalar_tensor(n)), so no new_full runs standalone, and the result
+// matches eager in every mode. The graph is parsed with a constant fill that
+// is then replaced by sym_size(y, 1), a SymInt the text format cannot type.
+// Programmatic graph, no .pt2.
+std::unique_ptr<nativert::Graph> makeDynamicFillGraph() {
+  const char* kGraph = R"(graph(%x, %y):
+%f = torch.ops.aten.new_full.default(self=%x, size=[1], fill_value=7)
+%l[] = prim.ListPack(l0=%x, l1=%f)
+%c = torch.ops.aten.cat.default(tensors=%l)
+return (%c)
+)";
+  auto graph = nativert::stringToGraph(kGraph);
+  nativert::Node* full = nullptr;
+  for (auto& node : graph->nodes()) {
+    if (node.target() == "torch.ops.aten.new_full.default") {
+      full = &node;
+    }
+  }
+  auto* size = graph->createNode(
+      "torch.ops.aten.sym_size.int", {{"self", graph->tryGetValue("y")}});
+  size->addAttribute({"dim", int64_t{1}});
+  auto* n = size->addOutput("n", nativert::Type(nativert::Type::Kind::SymInt));
+  graph->insertBefore(size, full);
+  auto* dynamicFull = graph->createNode(
+      "torch.ops.aten.new_full.default",
+      {{"self", full->inputs()[0].value}, {"fill_value", n}});
+  dynamicFull->addAttribute({"size", std::vector<int64_t>{1}});
+  auto* fullOut = dynamicFull->addOutput(
+      "f2", nativert::Type(nativert::Type::Kind::Tensor));
+  graph->insertBefore(dynamicFull, full);
+  graph->replaceAllUses(full->outputs()[0], fullOut);
+  graph->removeNode(full);
+  graph->renumberValues();
+  return graph;
+}
+
+TEST_F(ExecutorTest, dynamicFillTest) {
+  std::unordered_map<std::string, torch::_export::TensorMeta> meta;
+  for (const char* name : {"x", "f", "f2", "c"}) {
+    meta[name] = makeTensorMeta(c10::ScalarType::Long, 1);
+  }
+  meta["y"] = makeTensorMeta(c10::ScalarType::Long, 2);
+  auto plan = compilePlanProgrammatic(
+      makeDynamicFillGraph(), meta, CompiledPlan::Mode::kMultiKernel);
+  for (const auto& node : plan.nodes()) {
+    for (const auto& step : node.steps) {
+      for (const auto& kernel : step.kernels) {
+        EXPECT_FALSE(kernel.has("aten.new_full.default")) << plan.describe();
+      }
+    }
+  }
+  auto x = at::randint(0, 100, {40}, at::kLong);
+  auto y = at::zeros({3, 23}, at::kLong);
+  auto outputs = runWaveProgrammatic(makeDynamicFillGraph(), meta, {{x, y}});
+  ASSERT_EQ(outputs.size(), 1);
+  auto expected = at::cat({x, at::full({1}, 23, at::kLong)});
+  EXPECT_TRUE(tensorsMatch(outputs[0], expected))
+      << firstDifference(outputs[0], expected);
+}
+
 TEST_F(ExecutorTest, maskedSelectTest) {
   WaveConfig::get().useSingleBlock = false;
   runTest(
@@ -2207,12 +3050,11 @@ void registerSum2() {
       .argumentMeta({{.isRegister = true}})
       .returnMeta(
           {{.isRegister = false,
-            .reserveShape = [](NodeCP,
-                               nativert::ExecutionFrame&,
-                               const FormalToActual&,
-                               NodeCP,
-                               const NodeMap&)
-                -> std::vector<std::vector<Dim>> { return {{}}; }}})
+            .reserve =
+                [](const ReserveArgs&, Shape* out, int32_t) {
+                  out[0].rank = 0;
+                  return true;
+                }}})
       .headerFile("velox/experimental/torchwave/Scan.cuh")
       .deviceFunc("tw_sum")
       .sharedDecls({{"Int32X32", "warpSums"}})
@@ -2448,10 +3290,7 @@ TEST_F(ExecutorTest, cumsumOffsetsReproTest) {
 // reusing one executor and its pooled state. Run 1's small input makes the
 // grid-choice kernel pick the single-block variant; run 2's large input should
 // be multi-block. Verifies run 2 is correct after run 1 cached a single-block
-// choice. Note: reverting the gridChoices reset alone does not
-// deterministically break this (the grid-swap bounds guard in gatherLaunches
-// compensates on run 2), so this exercises the reuse path rather than isolating
-// that one fix. Programmatic graph, no external .pt2.
+// choice. Programmatic graph, no external .pt2.
 TEST_F(ExecutorTest, scanRepeatGridChoiceTest) {
   auto resetConfig = folly::makeGuard([] {
     WaveConfig::get().useSingleBlock = std::nullopt;
@@ -2669,11 +3508,14 @@ TEST_F(ExecutorTest, repeatTest) {
 TEST_F(ExecutorTest, catTest) {
   auto& config = WaveConfig::get();
   const auto savedFree = config.freeIntermediates;
-  auto resetConfig = folly::makeGuard([&, savedFree] {
-    config.useSingleBlock = std::nullopt;
-    config.isCg = std::nullopt;
-    config.freeIntermediates = savedFree;
-  });
+  const auto savedSingleBlock = config.useSingleBlock;
+  const auto savedCg = config.isCg;
+  auto resetConfig =
+      folly::makeGuard([&, savedFree, savedSingleBlock, savedCg] {
+        config.useSingleBlock = savedSingleBlock;
+        config.isCg = savedCg;
+        config.freeIntermediates = savedFree;
+      });
 
   WaveConfig::get().useSingleBlock = false;
   runTest("data/cat_test.pt2", "data/cat_test_results.pt", "multi-block");
@@ -2691,6 +3533,17 @@ TEST_F(ExecutorTest, catTest) {
   config.freeIntermediates = true;
   runTest("data/cat_test.pt2", "data/cat_test_results.pt", "cg groups");
   config.freeIntermediates = savedFree;
+
+  // Allocation groups over the single-block grid, which they are on for
+  // whenever isCg is set. There the cumsum feeding o2 is computed inside the
+  // concat's own kernel and sized only by that launch, while another operand
+  // is written a node earlier. The group must not lay the result out before
+  // the cumsum is sized.
+  WaveConfig::get().isCg = false;
+  WaveConfig::get().useSingleBlock = true;
+  runTest(
+      "data/cat_test.pt2", "data/cat_test_results.pt", "single-block groups");
+  WaveConfig::get().useSingleBlock = std::nullopt;
   WaveConfig::get().isCg = std::nullopt;
 
   // Plan structure. o3 = cat([ms1, ms2, ms3]) joins three operands, which is
@@ -2791,14 +3644,10 @@ TEST_F(ExecutorTest, catNdTest) {
 TEST_F(ExecutorTest, catStridedBandTest) {
   auto& config = WaveConfig::get();
   const auto savedFree = config.freeIntermediates;
-  const auto savedGroup = config.enableAllocGroup;
-  const auto savedConcat = config.enableConcatAllocGroup;
-  auto resetConfig = folly::makeGuard([&, savedFree, savedGroup, savedConcat] {
+  auto resetConfig = folly::makeGuard([&, savedFree] {
     config.useSingleBlock = std::nullopt;
     config.isCg = std::nullopt;
     config.freeIntermediates = savedFree;
-    config.enableAllocGroup = savedGroup;
-    config.enableConcatAllocGroup = savedConcat;
   });
 
   const std::string pt2 = "data/cat_strided_band_test.pt2";
@@ -2814,14 +3663,9 @@ TEST_F(ExecutorTest, catStridedBandTest) {
   runTest(pt2, results, "cg");
 
   // The arm that actually carves the bands: the group needs the cooperative
-  // grid and the freeing, and the A/B against it switched off is what shows the
-  // values do not depend on the copy being placed there.
+  // grid and the freeing.
   config.freeIntermediates = true;
-  config.enableAllocGroup = true;
-  config.enableConcatAllocGroup = false;
-  runTest(pt2, results, "cg groups, concat groups off");
-  config.enableConcatAllocGroup = true;
-  runTest(pt2, results, "cg groups, concat groups on");
+  runTest(pt2, results, "cg groups");
 
   // Ten operands carved over four concats: the copies -- three each in o1, o2
   // and o4, and o3's middle one.
@@ -2845,6 +3689,30 @@ TEST_F(ExecutorTest, catStridedBandTest) {
   EXPECT_EQ(stats.numInConcatGroup, stats.numConcatMembers + 4);
 }
 
+// The __concatCopy calls in the kernels of 'plan' that run a cat or stack. A
+// cat or stack of more than two operands makes none: each operand writes its
+// band itself, is computed into it by the concat's own kernel, or is moved
+// there by a copy op of its own.
+int32_t concatCopyCalls(const CompiledPlan& plan) {
+  int32_t calls = 0;
+  for (const auto& node : plan.nodes()) {
+    for (const auto& step : node.steps) {
+      for (const auto& kernel : step.kernels) {
+        if (!kernel.has("aten.cat.default") &&
+            !kernel.has("aten.stack.default")) {
+          continue;
+        }
+        for (auto pos = kernel.code.find("__concatCopy");
+             pos != std::string::npos;
+             pos = kernel.code.find("__concatCopy", pos + 1)) {
+          ++calls;
+        }
+      }
+    }
+  }
+  return calls;
+}
+
 // Concats whose operands are produced by kernels of their own -- the shape of
 // the ROO preproc graph's final concat. Each operand would otherwise allocate a
 // buffer that the concat immediately copies into its result; the concat
@@ -2857,14 +3725,10 @@ TEST_F(ExecutorTest, catStridedBandTest) {
 TEST_F(ExecutorTest, catAllocGroupTest) {
   auto& config = WaveConfig::get();
   const auto savedFree = config.freeIntermediates;
-  const auto savedGroup = config.enableAllocGroup;
-  const auto savedConcat = config.enableConcatAllocGroup;
-  auto resetConfig = folly::makeGuard([&, savedFree, savedGroup, savedConcat] {
+  auto resetConfig = folly::makeGuard([&, savedFree] {
     config.useSingleBlock = std::nullopt;
     config.isCg = std::nullopt;
     config.freeIntermediates = savedFree;
-    config.enableAllocGroup = savedGroup;
-    config.enableConcatAllocGroup = savedConcat;
   });
 
   const std::string pt2 = "data/cat_alloc_group_test.pt2";
@@ -2881,12 +3745,7 @@ TEST_F(ExecutorTest, catAllocGroupTest) {
   // released.
   config.isCg = true;
   config.freeIntermediates = true;
-  config.enableAllocGroup = true;
-
-  config.enableConcatAllocGroup = false;
-  runTest(pt2, results, "cg alloc groups, concat groups off");
-  config.enableConcatAllocGroup = true;
-  runTest(pt2, results, "cg alloc groups, concat groups on");
+  runTest(pt2, results, "cg alloc groups");
 
   // What the pass made of it. Every cat above the threshold forms a group, and
   // nothing is left to the offset walk: an operand reaches its region one of
@@ -2922,21 +3781,17 @@ TEST_F(ExecutorTest, catAllocGroupTest) {
   // its own and a member the group had to bind.
   EXPECT_EQ(stats.numConcatNoMembers, 1);
   EXPECT_EQ(stats.numConcatUnplaceableOperand, 0);
-
-  // Nothing is placed with the mode's concat half switched off, which is what
-  // makes the arm above an A/B rather than two runs of the same thing.
-  config.enableConcatAllocGroup = false;
-  auto without = allocGroupStats(pt2);
-  EXPECT_EQ(without.numConcatGroups, 0);
-  EXPECT_EQ(without.numInConcatGroup, 0);
-  config.enableConcatAllocGroup = true;
+  // A carved operand is in its band before the concat runs, so the concat's
+  // kernel has nothing to move for it. 'pair' computes both of its operands.
+  const auto& cgPlan = compilePlansAsConfigured(pt2).multiKernel;
+  EXPECT_EQ(concatCopyCalls(cgPlan), 0) << cgPlan.describe();
 
   // The same mode on the multi-kernel grid. Nothing about a lifetime or a band
   // needs the cooperative grid -- both grids are settled by compilation -- so
   // the plan is built against whichever one the config names, and the values
   // have to come out the same on either.
   config.isCg = false;
-  runTest(pt2, results, "multi-kernel alloc groups, concat groups on");
+  runTest(pt2, results, "multi-kernel alloc groups");
 
   auto mk = allocGroupStats(pt2, /*cg=*/false);
   // Every concat that grouped under the cooperative grid still groups here: a
@@ -2949,6 +3804,8 @@ TEST_F(ExecutorTest, catAllocGroupTest) {
   EXPECT_EQ(mk.numConcatTooFew, 1);
   EXPECT_EQ(mk.numConcatNoMembers, 1);
   EXPECT_EQ(mk.numConcatUnplaceableOperand, 0);
+  const auto& mkPlan = compilePlansAsConfigured(pt2).multiKernel;
+  EXPECT_EQ(concatCopyCalls(mkPlan), 0) << mkPlan.describe();
 }
 
 // The rule the parallel fill exists for: a cat of more than two operands never
@@ -2965,14 +3822,10 @@ TEST_F(ExecutorTest, catAllocGroupTest) {
 TEST_F(ExecutorTest, catParallelFillTest) {
   auto& config = WaveConfig::get();
   const auto savedFree = config.freeIntermediates;
-  const auto savedGroup = config.enableAllocGroup;
-  const auto savedConcat = config.enableConcatAllocGroup;
-  auto resetConfig = folly::makeGuard([&, savedFree, savedGroup, savedConcat] {
+  auto resetConfig = folly::makeGuard([&, savedFree] {
     config.useSingleBlock = std::nullopt;
     config.isCg = std::nullopt;
     config.freeIntermediates = savedFree;
-    config.enableAllocGroup = savedGroup;
-    config.enableConcatAllocGroup = savedConcat;
   });
 
   const std::string pt2 = "data/cat_parallel_fill_test.pt2";
@@ -2984,8 +3837,6 @@ TEST_F(ExecutorTest, catParallelFillTest) {
 
   config.isCg = true;
   config.freeIntermediates = true;
-  config.enableAllocGroup = true;
-  config.enableConcatAllocGroup = true;
   runTest(pt2, results, "cg alloc groups");
 
   // Both concats are grouped even though 'handed' has nothing to carve: the
@@ -3016,6 +3867,85 @@ TEST_F(ExecutorTest, catParallelFillTest) {
   EXPECT_TRUE(plan.runsAfter("aten.add.Scalar", "aten.cat.default"));
 }
 
+// Concats of three operands in the forms that used to cost the concat its
+// allocation group, or leave a carved operand to the concat's own kernel:
+// the result of another grouped concat as an operand, an operand from an eager
+// op whose size is known only after it runs -- read by '1 + eager', and
+// returned without a reader -- and a stack with an eager operand. Each concat
+// is grouped, each of those operands is moved into its band by a copy op of its
+// own, and no kernel that runs a concat copies anything.
+TEST_F(ExecutorTest, catGroupRulesTest) {
+  auto& config = WaveConfig::get();
+  const auto savedFree = config.freeIntermediates;
+  auto resetConfig = folly::makeGuard([&, savedFree] {
+    config.useSingleBlock = std::nullopt;
+    config.isCg = std::nullopt;
+    config.freeIntermediates = savedFree;
+  });
+
+  const std::string pt2 = "data/cat_group_rules_test.pt2";
+  const std::string results = "data/cat_group_rules_test_results.pt";
+
+  config.useSingleBlock = false;
+  runTest(pt2, results, "multi-block");
+  config.useSingleBlock = std::nullopt;
+
+  config.freeIntermediates = true;
+  for (const bool cg : {true, false}) {
+    config.isCg = cg;
+    runTest(pt2, results, cg ? "cg alloc groups" : "multi-kernel alloc groups");
+
+    // inner, outer, eager, top and stacked.
+    auto stats = allocGroupStats(pt2, cg);
+    EXPECT_EQ(stats.numConcatGroups, 5);
+    EXPECT_EQ(stats.numConcatTooFew, 0);
+    EXPECT_EQ(stats.numConcatUnplaceableOperand, 0);
+
+    const auto& plan = compilePlansAsConfigured(pt2).multiKernel;
+    EXPECT_EQ(concatCopyCalls(plan), 0) << plan.describe();
+    // The bands are filled beside the concat, so its reader, '1 + eager', is
+    // in a later kernel.
+    EXPECT_TRUE(
+        plan.kernelBoundaryBetween("aten.cat.default", "aten.add.Scalar"))
+        << plan.describe();
+  }
+}
+
+// A wide concat whose allocation group is laid out in an earlier node than the
+// one the concat runs in, at a step past that node's last launch. Its 11
+// operands are the prim.ListUnpack outputs of an unbind, which the first node
+// writes after its kernel grids; the sort that follows is an eager standalone,
+// so the concat, added to a value computed after it, lands in a later node.
+// The group is carved at the empty step past the first node's grids, and the
+// later node's copies of the 11 operands write into its bands. A step loop that
+// stops at its first empty step drops the group, and those copies get empty
+// parameters: an illegal address, or garbage in 'joined'.
+TEST_F(ExecutorTest, catLateGroupTest) {
+  auto& config = WaveConfig::get();
+  const auto savedFree = config.freeIntermediates;
+  auto resetConfig = folly::makeGuard([&, savedFree] {
+    config.useSingleBlock = std::nullopt;
+    config.isCg = std::nullopt;
+    config.freeIntermediates = savedFree;
+  });
+
+  const std::string pt2 = "data/cat_late_group_test.pt2";
+  const std::string results = "data/cat_late_group_test_results.pt";
+
+  config.useSingleBlock = false;
+  runTest(pt2, results, "multi-block");
+  config.useSingleBlock = true;
+  runTest(pt2, results, "single-block");
+  config.useSingleBlock = std::nullopt;
+
+  config.isCg = true;
+  config.freeIntermediates = true;
+  runTest(pt2, results, "cg alloc groups");
+
+  auto stats = allocGroupStats(pt2);
+  EXPECT_EQ(stats.numConcatGroups, 1);
+}
+
 // Two wide concats of the same shape over different operands. They deduplicate
 // to one project operation that runs twice, so everything the concat works
 // with is formal and each instance has to be handed its own actual -- including
@@ -3030,14 +3960,10 @@ TEST_F(ExecutorTest, catParallelFillTest) {
 TEST_F(ExecutorTest, catDedupTest) {
   auto& config = WaveConfig::get();
   const auto savedFree = config.freeIntermediates;
-  const auto savedGroup = config.enableAllocGroup;
-  const auto savedConcat = config.enableConcatAllocGroup;
-  auto resetConfig = folly::makeGuard([&, savedFree, savedGroup, savedConcat] {
+  auto resetConfig = folly::makeGuard([&, savedFree] {
     config.useSingleBlock = std::nullopt;
     config.isCg = std::nullopt;
     config.freeIntermediates = savedFree;
-    config.enableAllocGroup = savedGroup;
-    config.enableConcatAllocGroup = savedConcat;
   });
 
   const std::string pt2 = "data/cat_dedup_test.pt2";
@@ -3052,8 +3978,6 @@ TEST_F(ExecutorTest, catDedupTest) {
   // instances would be a mix-up between two runs of the same code.
   config.isCg = true;
   config.freeIntermediates = true;
-  config.enableAllocGroup = true;
-  config.enableConcatAllocGroup = true;
   runTest(pt2, results, "cg alloc groups");
 
   // Both concats are grouped, and each carves the one operand written at the
@@ -3208,6 +4132,104 @@ return(%o)
   auto b = at::arange(100000, at::kLong) + 7;
   EXPECT_NO_THROW(
       { runWaveProgrammatic(std::move(graph), meta, {{empty, a, b}}); });
+}
+
+// A concat of one operand that is a graph output, as fb.simple_1d_concat of a
+// single computed list leaves it in the onefeed training preproc. The operand
+// is a row of an unbind of a view of an elementwise result. The unpack's step
+// runs nothing (its work is the unbind shortcut's), and the concat comes a step
+// later: execution has to go past the empty step to reach it.
+TEST_F(ExecutorTest, catSingleOperandOutputTest) {
+  auto& config = WaveConfig::get();
+  const auto savedCg = config.isCg;
+  auto resetConfig = folly::makeGuard([&, savedCg] { config.isCg = savedCg; });
+
+  const char* kGraph = R"(graph(%x):
+%w = torch.ops.aten.add.Scalar(self=%x, other=1)
+%t = torch.ops.aten.transpose.int(self=%w, dim0=0, dim1=1)
+%v = torch.ops.aten.view.default(self=%t, size=[-1])
+%r = torch.ops.aten.view.default(self=%v, size=[1, -1])
+%u[] = torch.ops.aten.unbind.int(self=%r, dim=0)
+%g = prim.ListUnpack(input=%u)
+%list[] = prim.ListPack(l0=%g)
+%o = torch.ops.aten.cat.default(tensors=%list, dim=0)
+return(%o)
+)";
+  std::unordered_map<std::string, torch::_export::TensorMeta> meta;
+  meta["x"] = makeTensorMeta(c10::ScalarType::Long, 2);
+  meta["w"] = makeTensorMeta(c10::ScalarType::Long, 2);
+  meta["t"] = makeTensorMeta(c10::ScalarType::Long, 2);
+  meta["v"] = makeTensorMeta(c10::ScalarType::Long, 1);
+  meta["r"] = makeTensorMeta(c10::ScalarType::Long, 2);
+  meta["g"] = makeTensorMeta(c10::ScalarType::Long, 1);
+  meta["o"] = makeTensorMeta(c10::ScalarType::Long, 1);
+
+  auto x = at::arange(5000, at::kLong).reshape({1, 5000});
+  auto reference = x + 1;
+  for (const auto cg :
+       {std::optional<bool>(),
+        std::optional<bool>(false),
+        std::optional<bool>(true)}) {
+    SCOPED_TRACE(cg.has_value() ? (*cg ? "cg 1" : "cg 0") : "cg -1");
+    config.isCg = cg;
+    std::vector<at::Tensor> outputs;
+    EXPECT_NO_THROW({
+      outputs =
+          runWaveProgrammatic(nativert::stringToGraph(kGraph), meta, {{x}});
+    });
+    if (outputs.size() != 1) {
+      ADD_FAILURE() << "expected one output, got " << outputs.size();
+      continue;
+    }
+    EXPECT_TRUE(tensorsMatch(outputs[0], reference.reshape({-1})))
+        << firstDifference(outputs[0], reference.reshape({-1}));
+  }
+}
+
+// A concat that promotes one operand: the int32 lengths of an elementwise op
+// joined with int64 tensors, so the result is int64. The narrow operand can be
+// computed by the concat's own kernel, but it must not write its band there
+// with its own element type, nor be copied in raw: either puts pairs of int32
+// values into each int64 slot. Without a forced grid there are no allocation
+// groups and the concat's own fill moves the operand; with one, the concat
+// group places the result and a copy op of the operand's own fills its band.
+TEST_F(ExecutorTest, catPromotedOperandTest) {
+  auto& config = WaveConfig::get();
+  const auto savedCg = config.isCg;
+  auto resetConfig = folly::makeGuard([&, savedCg] { config.isCg = savedCg; });
+
+  const char* kGraph = R"(graph(%a, %b, %c):
+%d = torch.ops.aten.sub.Tensor(self=%a, other=%a, alpha=-1)
+%list[] = prim.ListPack(l0=%b, l1=%d, l2=%c)
+%o = torch.ops.aten.cat.default(tensors=%list, dim=0)
+return(%o)
+)";
+  std::unordered_map<std::string, torch::_export::TensorMeta> meta;
+  meta["a"] = makeTensorMeta(c10::ScalarType::Int, 1);
+  meta["d"] = makeTensorMeta(c10::ScalarType::Int, 1);
+  meta["b"] = makeTensorMeta(c10::ScalarType::Long, 1);
+  meta["c"] = makeTensorMeta(c10::ScalarType::Long, 1);
+  meta["o"] = makeTensorMeta(c10::ScalarType::Long, 1);
+
+  auto a = (at::arange(10000, at::kInt) % 5) + 1;
+  auto b = at::arange(3000, at::kLong) * 3;
+  auto c = at::arange(4000, at::kLong) + 11;
+  auto reference = at::cat({b, (a + a).to(at::kLong), c});
+  auto check = [&](const char* label) {
+    SCOPED_TRACE(label);
+    auto outputs =
+        runWaveProgrammatic(nativert::stringToGraph(kGraph), meta, {{a, b, c}});
+    ASSERT_EQ(outputs.size(), 1);
+    EXPECT_TRUE(tensorsMatch(outputs[0], reference))
+        << firstDifference(outputs[0], reference);
+  };
+
+  config.isCg = std::nullopt;
+  check("auto, no allocation groups");
+  config.isCg = true;
+  check("cg, concat group");
+  config.isCg = false;
+  check("multi-kernel, concat group");
 }
 
 // aten.cat and its aten.concat alias over the same pair of 2-D inputs on

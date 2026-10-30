@@ -152,6 +152,30 @@ DEFINE_bool(
     auto_adjust_cost,
     true,
     "Adjust per-op cost multipliers after each execution based on actual thread block clocks. Defaults to WaveConfig's own default, which this flag assigns unconditionally: a different default here would silently override the engine's");
+DEFINE_bool(
+    cost_counts_barrier_wait,
+    true,
+    "With --auto_adjust_cost, count the time blocks wait at grid barriers as part of an op's cost");
+DEFINE_bool(
+    concat_result_slots,
+    true,
+    "Give a concat result the slot its lifetime group plans for it instead of a separate allocation");
+DEFINE_bool(
+    group_unreleased_values,
+    true,
+    "Group values that are never released with the others produced at the same point");
+DEFINE_bool(
+    group_viewed_values,
+    true,
+    "Group a value whose own node takes a table-derived view of it");
+DEFINE_bool(
+    group_arena,
+    true,
+    "Carve lifetime groups out of one persistent buffer laid out from the previous execution");
+DEFINE_int64(
+    group_arena_max_bytes,
+    16 << 20,
+    "Groups of at least this many bytes are allocated on their own, outside the group arena");
 
 DEFINE_bool(
     uniform_cost,
@@ -191,6 +215,26 @@ DEFINE_bool(
     true,
     "Leave in-place writes into provably disjoint regions unordered");
 DEFINE_bool(
+    static_leaf_index,
+    true,
+    "Read elementwise operands whose shapes the graph fixes at literal-divisor indices");
+DEFINE_bool(
+    constant_sizes,
+    true,
+    "Compute sizing calls whose operand shapes the graph fixes once, at bind");
+DEFINE_bool(
+    verify_static_sizes,
+    false,
+    "With --constant_sizes, also run those sizing calls and fail on a difference");
+DEFINE_bool(
+    fuse_through_views,
+    true,
+    "Compute the elementwise producer of a reshaping view inline in the view's consumer");
+DEFINE_bool(
+    fuse_row_reductions,
+    true,
+    "Evaluate the elementwise input of a row reduction in its row loop");
+DEFINE_bool(
     free_intermediates,
     true,
     "Release each ProjectNode's last-use value tensors right after its composite invocation executes, instead of at end-of-graph");
@@ -215,6 +259,10 @@ DEFINE_bool(
     false,
     "Check step completion through host-mapped counters the streams write, instead of cudaEventQuery");
 DEFINE_bool(
+    verify_repeats,
+    false,
+    "Check the outputs of every timed repeat against the expected values, not only the first run's");
+DEFINE_bool(
     skip_repeated_waits,
     true,
     "Skip a stream wait on a completion event the stream already waited on");
@@ -222,14 +270,6 @@ DEFINE_int64(
     max_delayed_free,
     1LL << 30,
     "Ceiling in bytes on freeable memory sitting in already-issued but incomplete steps; exceeding it drains both streams before the next allocation. 0 disables");
-DEFINE_bool(
-    donate_buffers,
-    false,
-    "Hold a released wave-kernel buffer and hand it to a later wave kernel needing exactly the same byte size, instead of returning it to the caching allocator");
-DEFINE_int64(
-    donation_carry_bytes,
-    64LL << 20,
-    "Bytes of donatable buffers carried between executions; the pool is trimmed to this at the end of each run");
 DEFINE_bool(
     duplicate_metadata,
     false,
@@ -287,18 +327,6 @@ DEFINE_bool(
     mk_select,
     false,
     "In cg mode, expand tw.masked_select_jagged into its multi-kernel stages so the output list is sized to the exact selected count instead of the mask length");
-DEFINE_bool(
-    enable_alloc_group,
-    true,
-    "Allocate the outputs that share a lifetime out of one buffer instead of one allocator call each. Cooperative grid only, where the step boundaries a lifetime is expressed in are fixed before the first execution");
-DEFINE_bool(
-    enable_concat_alloc_group,
-    true,
-    "Give a fused cat/stack of more than two operands an allocation group of its own: the result is allocated at the step that produces the operands and each operand writes straight into the region it occupies, so the concat copies nothing");
-DEFINE_bool(
-    enable_lifetime_alloc_group,
-    true,
-    "With --enable_alloc_group, also group the outputs that merely share a lifetime. Off leaves only the concat groups, which isolates what the concat grouping costs and saves on its own");
 DEFINE_bool(
     order_blocks_by_cost,
     false,
@@ -846,6 +874,12 @@ void ExecutorTestBase::SetUpTestSuite() {
   WaveConfig::get().kernelLineInfo = FLAGS_kernel_line_info;
   WaveConfig::get().debugSingleOps = FLAGS_debug_single_ops;
   WaveConfig::get().autoAdjustCost = FLAGS_auto_adjust_cost;
+  WaveConfig::get().costCountsBarrierWait = FLAGS_cost_counts_barrier_wait;
+  WaveConfig::get().concatResultSlots = FLAGS_concat_result_slots;
+  WaveConfig::get().groupUnreleasedValues = FLAGS_group_unreleased_values;
+  WaveConfig::get().groupViewedValues = FLAGS_group_viewed_values;
+  WaveConfig::get().groupArena = FLAGS_group_arena;
+  WaveConfig::get().groupArenaMaxBytes = FLAGS_group_arena_max_bytes;
   WaveConfig::get().uniformCost = FLAGS_uniform_cost;
   WaveConfig::get().launchPerOp = FLAGS_launch_per_op;
   WaveConfig::get().dedupProjectOps = FLAGS_dedup_project_ops;
@@ -855,6 +889,11 @@ void ExecutorTestBase::SetUpTestSuite() {
   WaveConfig::get().recognizeDisjointCopies = FLAGS_recognize_disjoint_copies;
   WaveConfig::get().reinplaceScatters = FLAGS_reinplace_scatters;
   WaveConfig::get().disjointWriteOrdering = FLAGS_disjoint_write_ordering;
+  WaveConfig::get().staticLeafIndex = FLAGS_static_leaf_index;
+  WaveConfig::get().constantSizes = FLAGS_constant_sizes;
+  WaveConfig::get().verifyStaticSizes = FLAGS_verify_static_sizes;
+  WaveConfig::get().fuseThroughViews = FLAGS_fuse_through_views;
+  WaveConfig::get().fuseRowReductions = FLAGS_fuse_row_reductions;
   WaveConfig::get().freeIntermediates = FLAGS_free_intermediates;
   WaveConfig::get().stepLastUse = FLAGS_step_last_use;
   WaveConfig::get().syncEachStep = FLAGS_sync_each_step;
@@ -866,8 +905,6 @@ void ExecutorTestBase::SetUpTestSuite() {
   WaveConfig::get().duplicateMetadata = FLAGS_duplicate_metadata;
   WaveConfig::get().configPerOp = FLAGS_config_per_op;
   WaveConfig::get().deferSizeOutputs = FLAGS_defer_size_outputs;
-  WaveConfig::get().donateBuffers = FLAGS_donate_buffers;
-  WaveConfig::get().donationCarryBytes = FLAGS_donation_carry_bytes;
   WaveConfig::get().inputContiguous = FLAGS_input_contiguous;
   WaveConfig::get().cseCompute = FLAGS_cse_compute;
   WaveConfig::get().cseViews = FLAGS_cse_views;
@@ -877,10 +914,6 @@ void ExecutorTestBase::SetUpTestSuite() {
   WaveConfig::get().foldSharedChains = FLAGS_fold_shared_chains;
   WaveConfig::get().preferBlocksPerSm = parsePreferPerSm(FLAGS_prefer_per_sm);
   WaveConfig::get().mkSelect = FLAGS_mk_select;
-  WaveConfig::get().enableAllocGroup = FLAGS_enable_alloc_group;
-  WaveConfig::get().enableConcatAllocGroup = FLAGS_enable_concat_alloc_group;
-  WaveConfig::get().enableLifetimeAllocGroup =
-      FLAGS_enable_lifetime_alloc_group;
   WaveConfig::get().orderBlocksByCost = FLAGS_order_blocks_by_cost;
   WaveConfig::get().partitionLaunches = FLAGS_partition_launches;
   WaveConfig::get().maxLaunchWaves = FLAGS_max_launch_waves;
@@ -1299,15 +1332,12 @@ AllocGroupStats ExecutorTestBase::allocGroupStats(
   auto& config = WaveConfig::get();
   const auto savedCg = config.isCg;
   const auto savedFree = config.freeIntermediates;
-  const auto savedGroup = config.enableAllocGroup;
-  auto restore = folly::makeGuard([&, savedCg, savedFree, savedGroup] {
+  auto restore = folly::makeGuard([&, savedCg, savedFree] {
     config.isCg = savedCg;
     config.freeIntermediates = savedFree;
-    config.enableAllocGroup = savedGroup;
   });
   config.isCg = cg;
   config.freeIntermediates = true;
-  config.enableAllocGroup = true;
 
   WaveGraphExecutor waveExec(fixture->makeModelContext());
   auto* wave = waveExec.waveGraph();
@@ -1423,10 +1453,16 @@ void ExecutorTestBase::runTestWithFixture(
 
       syncBeforeTiming();
       auto start = Clock::now();
-      waveExec.executeWithPrefilledFrame(*pooledFrame);
+      auto repeatOutputs = waveExec.executeWithPrefilledFrame(*pooledFrame);
       auto us = std::chrono::duration_cast<std::chrono::microseconds>(
                     Clock::now() - start)
                     .count();
+      if (FLAGS_verify_repeats) {
+        verifyOutputs(
+            outputsToHost(repeatOutputs, "wave repeat"),
+            expected,
+            "wave repeat");
+      }
       waveTimes[i] = us;
       waveMin = std::min(waveMin, us);
       waveMax = std::max(waveMax, us);

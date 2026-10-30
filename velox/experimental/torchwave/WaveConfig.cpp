@@ -88,6 +88,12 @@ std::string WaveConfig::toString() const {
   addBool("kernelLineInfo", &WaveConfig::kernelLineInfo);
   addBool("debugSingleOps", &WaveConfig::debugSingleOps);
   addBool("autoAdjustCost", &WaveConfig::autoAdjustCost);
+  addBool("costCountsBarrierWait", &WaveConfig::costCountsBarrierWait);
+  addBool("concatResultSlots", &WaveConfig::concatResultSlots);
+  addBool("groupUnreleasedValues", &WaveConfig::groupUnreleasedValues);
+  addBool("groupViewedValues", &WaveConfig::groupViewedValues);
+  addBool("groupArena", &WaveConfig::groupArena);
+  addInt("groupArenaMaxBytes", &WaveConfig::groupArenaMaxBytes);
   addBool("uniformCost", &WaveConfig::uniformCost);
   addBool("launchPerOp", &WaveConfig::launchPerOp);
   addBool("dedupProjectOps", &WaveConfig::dedupProjectOps);
@@ -97,6 +103,11 @@ std::string WaveConfig::toString() const {
   addBool("recognizeDisjointCopies", &WaveConfig::recognizeDisjointCopies);
   addBool("reinplaceScatters", &WaveConfig::reinplaceScatters);
   addBool("disjointWriteOrdering", &WaveConfig::disjointWriteOrdering);
+  addBool("staticLeafIndex", &WaveConfig::staticLeafIndex);
+  addBool("constantSizes", &WaveConfig::constantSizes);
+  addBool("verifyStaticSizes", &WaveConfig::verifyStaticSizes);
+  addBool("fuseThroughViews", &WaveConfig::fuseThroughViews);
+  addBool("fuseRowReductions", &WaveConfig::fuseRowReductions);
   addBool("skipRepeatedWaits", &WaveConfig::skipRepeatedWaits);
   addBool("completionCounters", &WaveConfig::completionCounters);
   addBool("scanOutputReturnBarrier", &WaveConfig::scanOutputReturnBarrier);
@@ -122,11 +133,6 @@ std::string WaveConfig::toString() const {
   addBool("duplicateMetadata", &WaveConfig::duplicateMetadata);
   addBool("configPerOp", &WaveConfig::configPerOp);
   addBool("deferSizeOutputs", &WaveConfig::deferSizeOutputs);
-  addBool("donateBuffers", &WaveConfig::donateBuffers);
-  addInt("donationCarryBytes", &WaveConfig::donationCarryBytes);
-  addBool("enableAllocGroup", &WaveConfig::enableAllocGroup);
-  addBool("enableConcatAllocGroup", &WaveConfig::enableConcatAllocGroup);
-  addBool("enableLifetimeAllocGroup", &WaveConfig::enableLifetimeAllocGroup);
   addBool("orderBlocksByCost", &WaveConfig::orderBlocksByCost);
   addBool("partitionLaunches", &WaveConfig::partitionLaunches);
   addInt("maxLaunchWaves", &WaveConfig::maxLaunchWaves);
