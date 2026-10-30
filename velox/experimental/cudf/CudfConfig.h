@@ -65,6 +65,10 @@ struct CudfConfig {
   static constexpr const char* kUcxExchangeLogLevel{"cudf.exchange_log_level"};
   static constexpr const char* kUcxPartitionedOutputBatchRows{
       "cudf.partitioned_output_batch_rows"};
+  static constexpr const char* kCudfPrestoOutputEnabled{
+      "cudf.presto_output_enabled"};
+  static constexpr const char* kCudfPrestoOutputPageBytes{
+      "cudf.presto_output_page_bytes"};
   /// Query session configs for the cuDF Operators.
   static constexpr const char* kCudfTopNBatchSize{"cudf.topk_batch_size"};
 
@@ -120,6 +124,16 @@ struct CudfConfig {
   /// is reached, avoiding pathologically small exchange chunks. Set to 0 to
   /// disable accumulation.
   int64_t partitionedOutputBatchRows{10'000};
+
+  /// Serialize a single-destination task output into Presto pages on the GPU
+  /// with CudfPrestoOutput instead of CudfToVelox + PartitionedOutput. Also a
+  /// query config key.
+  bool prestoOutputEnabled{true};
+
+  /// Serialized bytes per Presto page built on the GPU; a page exceeds it by
+  /// less than one row. CudfPrestoOutput gathers input until it fills a page,
+  /// unless the output flushes eagerly. Also a query config key.
+  int64_t prestoOutputPageBytes{8LL << 20};
 
   /// Memory resource for cuDF.
   /// Possible values are (cuda, pool, async, arena, managed, managed_pool).

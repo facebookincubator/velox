@@ -95,6 +95,14 @@ class OperatorAdapter {
     return false;
   }
 
+  /// Whether 'op' may stay on the CPU when canRunOnGPU() is false without
+  /// counting as a failed GPU replacement. A kept operator always may. An
+  /// adapter whose GPU operator serves only some plan nodes, such as the
+  /// single-destination case of PartitionedOutput, returns true as well.
+  virtual bool allowsCpuOperator() const {
+    return keepOperator();
+  }
+
   /// Get the name of this adapter for debugging.
   const std::string& name() const {
     return name_;

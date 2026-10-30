@@ -1643,11 +1643,19 @@ Note: These configurations are experimental and subject to change.
    * - cudf.function_engine
      - string
      - presto
+     - Register the function for a specific engine. The optional values are presto or spark.
    * - cudf.timestamp_unit
      - string
      - ns
      - Timestamp precision unit for cuDF timestamp types. Valid values are: "s" (seconds), "ms" (milliseconds), "us" (microseconds), "ns" (nanoseconds). This controls the precision of timestamp data when converting between Velox and cuDF formats.
-     - Register the function for a specific engine. The optional values are presto or spark.
+   * - cudf.presto_output_enabled
+     - bool
+     - true
+     - If true, a task output with one destination buffer (a single, broadcast or arbitrary output without partition keys) that uses the Presto serde without compression is serialized into Presto pages on the GPU by CudfPrestoOutput. Otherwise the GPU batches are converted to Velox vectors and serialized by PartitionedOutput on the CPU. The pages carry a checksum when the output buffer manager has a Presto output stream listener, as the pages of PartitionedOutput do. Also a query config key.
+   * - cudf.presto_output_page_bytes
+     - integer
+     - 8388608
+     - Serialized bytes per Presto page built on the GPU; a page exceeds it by less than one row and holds at most 1048576 rows. CudfPrestoOutput gathers input until it fills a page, unless the output flushes eagerly. Also a query config key.
 
 Cudf Hive Connector Configuration (Experimental)
 ------------------------------------------------
