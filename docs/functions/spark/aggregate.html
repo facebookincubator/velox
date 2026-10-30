@@ -224,13 +224,17 @@ greater than or equal to 2, a non-null output will be generated.</p>
 <dl class="spark function">
 <dt class="sig sig-object spark" id="first">
 <span class="sig-name descname"><span class="pre">first</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">x</span></span></span><a class="headerlink" href="#first" title="Link to this definition">¶</a></dt>
-<dd><p>Returns the first value of <cite>x</cite>.</p>
+<dd><p>Returns the first value of <code class="docutils literal notranslate"><span class="pre">x</span></code>. Supported scalar types are BOOLEAN, TINYINT,
+SMALLINT, INTEGER, BIGINT, REAL, DOUBLE, DECIMAL, DATE, TIME, TIMESTAMP,
+INTERVAL DAY TO SECOND, INTERVAL YEAR TO MONTH, and UNKNOWN. VARCHAR,
+VARBINARY, ARRAY, MAP, and ROW are also supported.</p>
 </dd></dl>
 
 <dl class="spark function">
 <dt class="sig sig-object spark" id="first_ignore_null">
 <span class="sig-name descname"><span class="pre">first_ignore_null</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">x</span></span></span><a class="headerlink" href="#first_ignore_null" title="Link to this definition">¶</a></dt>
-<dd><p>Returns the first non-null value of <cite>x</cite>.</p>
+<dd><p>Returns the first non-null value of <code class="docutils literal notranslate"><span class="pre">x</span></code>. Supports the same types as
+<a class="reference internal" href="#first" title="first"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">first()</span></code></a>.</p>
 </dd></dl>
 
 <dl class="spark function">
@@ -244,13 +248,17 @@ output will be generated.</p>
 <dl class="spark function">
 <dt class="sig sig-object spark" id="last">
 <span class="sig-name descname"><span class="pre">last</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">x</span></span></span><a class="headerlink" href="#last" title="Link to this definition">¶</a></dt>
-<dd><p>Returns the last value of <cite>x</cite>.</p>
+<dd><p>Returns the last value of <code class="docutils literal notranslate"><span class="pre">x</span></code>. Supported scalar types are BOOLEAN, TINYINT,
+SMALLINT, INTEGER, BIGINT, REAL, DOUBLE, DECIMAL, DATE, TIME, TIMESTAMP,
+INTERVAL DAY TO SECOND, INTERVAL YEAR TO MONTH, and UNKNOWN. VARCHAR,
+VARBINARY, ARRAY, MAP, and ROW are also supported.</p>
 </dd></dl>
 
 <dl class="spark function">
 <dt class="sig sig-object spark" id="last_ignore_null">
 <span class="sig-name descname"><span class="pre">last_ignore_null</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">x</span></span></span><a class="headerlink" href="#last_ignore_null" title="Link to this definition">¶</a></dt>
-<dd><p>Returns the last non-null value of <cite>x</cite>.</p>
+<dd><p>Returns the last non-null value of <code class="docutils literal notranslate"><span class="pre">x</span></code>. Supports the same types as
+<a class="reference internal" href="#last" title="last"><code class="xref spark spark-func docutils literal notranslate"><span class="pre">last()</span></code></a>.</p>
 </dd></dl>
 
 <dl class="spark function">
