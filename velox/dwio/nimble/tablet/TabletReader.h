@@ -481,6 +481,13 @@ class TabletReader {
       std::span<const uint32_t> streamIds,
       std::span<StreamMetadata> locations) const;
 
+  /// Returns the location of `streamId` in `stripe`, absent when the stream has
+  /// no data there or `streamId >= streamCount(stripe)`. One lookup, unlike
+  /// streamOffset() plus streamSize().
+  StreamMetadata streamLocation(
+      const StripeIdentifier& stripe,
+      uint32_t streamId) const;
+
   /// Returns the schema's leaf-stream count at the time `stripe`'s stripe
   /// group was written. May be less than the final schema's node count.
   uint32_t streamCount(const StripeIdentifier& stripe) const;

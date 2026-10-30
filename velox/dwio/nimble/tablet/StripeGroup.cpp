@@ -326,6 +326,14 @@ void StripeGroup::streamLocations(
       fmt::format("Unknown StripeGroup encoding layout: {}", encodingLayout_));
 }
 
+StripeGroup::StreamMetadata StripeGroup::streamLocation(
+    uint32_t stripeIndex,
+    uint32_t streamId) const {
+  StreamMetadata location;
+  streamLocations(stripeIndex, {&streamId, 1}, {&location, 1});
+  return location;
+}
+
 std::string_view toString(StripeGroup::EncodingLayout layout) {
   switch (layout) {
     case StripeGroup::EncodingLayout::kRaw:

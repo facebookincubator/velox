@@ -140,6 +140,11 @@ class StripeGroup {
       std::span<const uint32_t> streamIds,
       std::span<StreamMetadata> locations) const;
 
+  /// Returns the location of `streamId` within `stripeIndex`. The location is
+  /// absent (size 0) when the stream has no data in the stripe or `streamId` is
+  /// beyond this group's stream count.
+  StreamMetadata streamLocation(uint32_t stripeIndex, uint32_t streamId) const;
+
  private:
   // Maps an absolute stripe index to this group's local [0, stripeCount_)
   // index. Debug-checks that the stripe belongs to this group.
