@@ -103,17 +103,17 @@ With session-zone semantics, both ``hour`` calls return the hour in
 :doc:`session_timezone <../../configs>`.
 
 Enable session-zone semantics with
-:doc:`use_session_timezone_for_timestamp_with_timezone <../../configs>` and
+:doc:`ignore_time_zone_label <../../configs>` and
 register date-time functions with ``ignoreTimeZoneLabel`` set to true. The
-query configuration controls how deterministic functions render zoned
-timestamps. The registration argument selects the ``at_timezone`` overloads
-that return ``TIMESTAMP``. Functions that inspect the stored zone label, such
-as ``timezone_hour`` and ``timezone_minute``, are exceptions.
+two settings apply the same semantic choice at different stages. The query
+configuration controls how deterministic functions render zoned timestamps.
+The registration argument selects the ``at_timezone`` overloads that return
+``TIMESTAMP``. Functions that inspect the stored zone label, such as
+``timezone_hour`` and ``timezone_minute``, are exceptions.
 
-Use the legacy settings only to preserve existing behavior. With
-``use_session_timezone_for_timestamp_with_timezone`` and
-``ignoreTimeZoneLabel`` set to false, functions render each value using its
-stored zone label and ``at_timezone`` returns ``TIMESTAMP WITH TIME ZONE``.
+Use the false settings only to preserve existing behavior. Functions then
+render each value using its stored zone label, and ``at_timezone`` returns
+``TIMESTAMP WITH TIME ZONE``.
 
 For values exactly representable in both types, implicit coercion must
 preserve a function's result. If a value of type ``T`` coerces to type ``U``,

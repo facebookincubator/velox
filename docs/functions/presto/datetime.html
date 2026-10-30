@@ -168,16 +168,16 @@ deterministic functions return equal results:</p>
 <p>With session-zone semantics, both <code class="docutils literal notranslate"><span class="pre">hour</span></code> calls return the hour in
 <a class="reference internal" href="../../configs.html"><span class="doc">session_timezone</span></a>.</p>
 <p>Enable session-zone semantics with
-<a class="reference internal" href="../../configs.html"><span class="doc">use_session_timezone_for_timestamp_with_timezone</span></a> and
+<a class="reference internal" href="../../configs.html"><span class="doc">ignore_time_zone_label</span></a> and
 register date-time functions with <code class="docutils literal notranslate"><span class="pre">ignoreTimeZoneLabel</span></code> set to true. The
-query configuration controls how deterministic functions render zoned
-timestamps. The registration argument selects the <code class="docutils literal notranslate"><span class="pre">at_timezone</span></code> overloads
-that return <code class="docutils literal notranslate"><span class="pre">TIMESTAMP</span></code>. Functions that inspect the stored zone label, such
-as <code class="docutils literal notranslate"><span class="pre">timezone_hour</span></code> and <code class="docutils literal notranslate"><span class="pre">timezone_minute</span></code>, are exceptions.</p>
-<p>Use the legacy settings only to preserve existing behavior. With
-<code class="docutils literal notranslate"><span class="pre">use_session_timezone_for_timestamp_with_timezone</span></code> and
-<code class="docutils literal notranslate"><span class="pre">ignoreTimeZoneLabel</span></code> set to false, functions render each value using its
-stored zone label and <code class="docutils literal notranslate"><span class="pre">at_timezone</span></code> returns <code class="docutils literal notranslate"><span class="pre">TIMESTAMP</span> <span class="pre">WITH</span> <span class="pre">TIME</span> <span class="pre">ZONE</span></code>.</p>
+two settings apply the same semantic choice at different stages. The query
+configuration controls how deterministic functions render zoned timestamps.
+The registration argument selects the <code class="docutils literal notranslate"><span class="pre">at_timezone</span></code> overloads that return
+<code class="docutils literal notranslate"><span class="pre">TIMESTAMP</span></code>. Functions that inspect the stored zone label, such as
+<code class="docutils literal notranslate"><span class="pre">timezone_hour</span></code> and <code class="docutils literal notranslate"><span class="pre">timezone_minute</span></code>, are exceptions.</p>
+<p>Use the false settings only to preserve existing behavior. Functions then
+render each value using its stored zone label, and <code class="docutils literal notranslate"><span class="pre">at_timezone</span></code> returns
+<code class="docutils literal notranslate"><span class="pre">TIMESTAMP</span> <span class="pre">WITH</span> <span class="pre">TIME</span> <span class="pre">ZONE</span></code>.</p>
 <p>For values exactly representable in both types, implicit coercion must
 preserve a function’s result. If a value of type <code class="docutils literal notranslate"><span class="pre">T</span></code> coerces to type <code class="docutils literal notranslate"><span class="pre">U</span></code>,
 calling a <code class="docutils literal notranslate"><span class="pre">T</span></code> overload produces the same value as casting to <code class="docutils literal notranslate"><span class="pre">U</span></code> and
