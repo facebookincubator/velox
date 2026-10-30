@@ -144,6 +144,15 @@ class SparkQueryConfig {
       false,
       "Return NaN instead of NULL for Spark statistical aggregation on divide-by-zero.")
 
+  /// If true, encode replaces unmappable characters instead of failing.
+  VELOX_SPARK_CONFIG(
+      kLegacyCodingErrorAction,
+      legacyCodingErrorAction,
+      "legacy_coding_error_action",
+      bool,
+      false,
+      "Replace unmappable characters in the Spark encode function.")
+
   /// If true, ignore null fields when generating JSON string.
   VELOX_SPARK_CONFIG(
       kJsonIgnoreNullFields,

@@ -1524,6 +1524,13 @@ Spark-specific Configuration
      - integer
      -
      - The current task's Spark partition ID. It's set by the query engine (Spark) prior to task execution.
+   * - spark.legacy_coding_error_action
+     - bool
+     - false
+     - If true, the Spark ``encode`` function replaces unmappable characters instead of reporting an error.
+       Corresponds to Spark 4.0's ``spark.sql.legacy.codingErrorAction``.
+       Set to true to match Spark 3.x's replacement behavior for the supported charsets.
+       Additional JDK charset names and aliases remain unsupported in either mode.
    * - spark.legacy_date_formatter
      - bool
      - false
