@@ -102,6 +102,14 @@ class HierarchicalKeyReaderTest : public testing::Test {
 
   std::unique_ptr<HierarchicalKeyReader> build(
       const std::vector<std::vector<uint64_t>>& columns) {
+    return build(columns, /*readFactors=*/{});
+  }
+
+  // Writes 'columns' as one chunk whose sequences select their encodings from
+  // 'readFactors' and opens it.
+  std::unique_ptr<HierarchicalKeyReader> build(
+      const std::vector<std::vector<uint64_t>>& columns,
+      std::vector<std::pair<EncodingType, float>> readFactors) {
     std::vector<std::string> names;
     std::vector<velox::VectorPtr> children;
     names.reserve(columns.size());
@@ -120,19 +128,24 @@ class HierarchicalKeyReaderTest : public testing::Test {
     }
 
     return buildInput(
-        vectorMaker.rowVector(names, children), /*sortOrders=*/{});
+        vectorMaker.rowVector(names, children),
+        /*sortOrders=*/{},
+        std::move(readFactors));
   }
 
   // Writes 'input' as one hierarchical key chunk and opens it.
   std::unique_ptr<HierarchicalKeyReader> buildInput(
       const velox::RowVectorPtr& input,
-      std::vector<SortOrder> sortOrders) {
+      std::vector<SortOrder> sortOrders,
+      std::vector<std::pair<EncodingType, float>> readFactors) {
     const auto& names = asRowType(input->type())->names();
-    const auto config = ClusterIndexConfigBuilder{kHierarchicalClusterIndexName}
-                            .withKeyColumns(names)
-                            .withSortOrders(std::move(sortOrders))
-                            .withEnforceKeyOrder(true)
-                            .build();
+    const auto config =
+        ClusterIndexConfigBuilder{kHierarchicalClusterIndexName}
+            .withKeyColumns(names)
+            .withSortOrders(std::move(sortOrders))
+            .withEnforceKeyOrder(true)
+            .withHierarchicalKeyEncodingReadFactors(std::move(readFactors))
+            .build();
     auto writer = HierarchicalClusterIndexWriter::create(
         *config, input->type(), pool_.get());
     writer->write(input);
@@ -169,7 +182,8 @@ class HierarchicalKeyReaderTest : public testing::Test {
     // rest of the test.
     built_ = *builtChunks_.emplace_back(
         std::make_unique<std::string>(position, header.length));
-    return std::make_unique<HierarchicalKeyReader>(built_, pool_.get());
+    return std::make_unique<HierarchicalKeyReader>(
+        built_, pool_.get(), cacheEncodingViews_);
   }
 
   // Row-major view of the same data, for round-trip expectations.
@@ -384,7 +398,8 @@ class HierarchicalKeyReaderTest : public testing::Test {
         const std::vector<std::string> expected{
             encodedKeys.begin(), encodedKeys.end()};
 
-        checkReads(*buildInput(input, sortOrders), expected);
+        checkReads(
+            *buildInput(input, sortOrders, /*readFactors=*/{}), expected);
       }
     }
   }
@@ -394,6 +409,8 @@ class HierarchicalKeyReaderTest : public testing::Test {
   std::string chunkData_;
   std::vector<std::unique_ptr<std::string>> builtChunks_;
   std::string_view built_;
+  // Whether readers opened by buildInput() cache their encoding views.
+  bool cacheEncodingViews_{false};
 };
 
 // Assembles chunks by hand. 'values0_', 'childOffsets_' and 'values1_' encode
@@ -651,6 +668,87 @@ TEST_F(HierarchicalKeyReaderTest, picksPartitionedEliasFanoForLongRuns) {
   }
 }
 
+TEST_F(HierarchicalKeyReaderTest, encodesSequencesWithConfiguredReadFactors) {
+  const std::vector<std::vector<uint64_t>> columns{
+      {1, 1, 2, 3}, {10, 20, 30, 40}};
+  for (const auto encoding :
+       {EncodingType::Trivial, EncodingType::FixedBitWidth}) {
+    SCOPED_TRACE(toString(encoding));
+    const auto index = build(columns, {{encoding, 1.0}});
+    for (uint32_t level = 0; level < 2; ++level) {
+      EXPECT_EQ(index->testingValuesEncodingType(level), encoding);
+    }
+    EXPECT_EQ(index->materialize(0, 4), packRows(columns));
+  }
+}
+
+TEST_F(HierarchicalKeyReaderTest, configuredReadFactorsReplaceDefaults) {
+  // Long ascending runs pick PartitionedEliasFano by default, which read
+  // factors without it rule out.
+  constexpr uint64_t kNumRows{600};
+  std::vector<std::vector<uint64_t>> columns(2);
+  for (uint64_t row = 0; row < kNumRows; ++row) {
+    columns[0].push_back(row / 200);
+    columns[1].push_back(1'000 + (row % 200) * 37);
+  }
+  EXPECT_EQ(
+      build(columns)->testingValuesEncodingType(1),
+      EncodingType::PartitionedEliasFano);
+  const auto index = build(columns, {{EncodingType::FixedBitWidth, 1.0}});
+  EXPECT_EQ(index->testingValuesEncodingType(1), EncodingType::FixedBitWidth);
+  EXPECT_EQ(index->materialize(0, kNumRows), packRows(columns));
+}
+
+TEST_F(HierarchicalKeyReaderTest, readFactorsOptIntoPolicyDefaults) {
+  // Every parent owns the same three wide child values. The policy defaults
+  // store them as a Dictionary, which the default candidates leave out.
+  constexpr uint64_t kNumRows{3'000};
+  std::vector<std::vector<uint64_t>> columns(2);
+  for (uint64_t row = 0; row < kNumRows; ++row) {
+    columns[0].push_back(row / 3);
+    columns[1].push_back((row % 3 + 1) * 1'000'000'000'000);
+  }
+  EXPECT_NE(
+      build(columns)->testingValuesEncodingType(1), EncodingType::Dictionary);
+  const auto index = build(
+      columns,
+      ManualEncodingSelectionPolicyFactory::defaultEncodingReadFactors());
+  EXPECT_EQ(index->testingValuesEncodingType(1), EncodingType::Dictionary);
+  EXPECT_EQ(index->materialize(0, kNumRows), packRows(columns));
+}
+
+TEST_F(HierarchicalKeyReaderTest, rejectsUnsupportedReadFactors) {
+  NIMBLE_ASSERT_USER_THROW(
+      build({{1, 2}}, {{EncodingType::Prefix, 1.0}}),
+      "Hierarchical key read factors name an encoding the selection does not support: Prefix");
+}
+
+TEST_F(HierarchicalKeyReaderTest, cachesEncodingViewsOnRequest) {
+  // A cached Varint view decodes its values from the pool, while an uncached
+  // one reads them in place. Both read the same keys.
+  constexpr uint32_t kNumRows{1'024};
+  std::vector<std::vector<uint64_t>> columns(2);
+  for (uint32_t row = 0; row < kNumRows; ++row) {
+    columns[0].push_back(row / 8);
+    columns[1].push_back(row % 8);
+  }
+  const auto expected = packRows(columns);
+
+  cacheEncodingViews_ = false;
+  const auto uncachedStart = pool_->usedBytes();
+  const auto uncached = build(columns, {{EncodingType::Varint, 1.0}});
+  const auto uncachedBytes = pool_->usedBytes() - uncachedStart;
+  checkReads(*uncached, expected);
+
+  cacheEncodingViews_ = true;
+  const auto cachedStart = pool_->usedBytes();
+  const auto cached = build(columns, {{EncodingType::Varint, 1.0}});
+  const auto cachedBytes = pool_->usedBytes() - cachedStart;
+  checkReads(*cached, expected);
+
+  EXPECT_GT(cachedBytes, uncachedBytes);
+}
+
 TEST_F(HierarchicalKeyReaderTest, rejectsMalformedInput) {
   EXPECT_THROW(build({{3, 1}}), NimbleUserError);
 
@@ -674,7 +772,8 @@ TEST_F(HierarchicalKeyReaderTest, rejectsMalformedInput) {
     std::string unsupportedVersion{built_};
     unsupportedVersion.at(0) = static_cast<char>(version);
     NIMBLE_ASSERT_FILE_THROW(
-        HierarchicalKeyReader(unsupportedVersion, pool_.get()),
+        HierarchicalKeyReader(
+            unsupportedVersion, pool_.get(), /*cacheEncodingViews=*/false),
         "Unsupported HierarchicalKeyReader format version");
   }
 }
@@ -691,7 +790,8 @@ TEST_F(HierarchicalKeyReaderTest, rejectsInvalidFormatMetadata) {
         HierarchicalKeyReader(
             std::string_view{validPayload}.substr(
                 0, HierarchicalKeyFormat::kHeaderSize - 1),
-            pool_.get()),
+            pool_.get(),
+            /*cacheEncodingViews=*/false),
         "Truncated HierarchicalKeyReader metadata");
   }
   {
@@ -699,7 +799,8 @@ TEST_F(HierarchicalKeyReaderTest, rejectsInvalidFormatMetadata) {
     auto malformed = validPayload;
     malformed.at(1) = 0;
     NIMBLE_ASSERT_FILE_THROW(
-        HierarchicalKeyReader(malformed, pool_.get()),
+        HierarchicalKeyReader(
+            malformed, pool_.get(), /*cacheEncodingViews=*/false),
         "HierarchicalKeyReader needs a level");
   }
   {
@@ -707,7 +808,8 @@ TEST_F(HierarchicalKeyReaderTest, rejectsInvalidFormatMetadata) {
     auto malformed = validPayload;
     setUint32(malformed, HierarchicalKeyFormat::kRowCountOffset, 0);
     NIMBLE_ASSERT_FILE_THROW(
-        HierarchicalKeyReader(malformed, pool_.get()),
+        HierarchicalKeyReader(
+            malformed, pool_.get(), /*cacheEncodingViews=*/false),
         "HierarchicalKeyReader has no rows");
   }
   {
@@ -715,7 +817,8 @@ TEST_F(HierarchicalKeyReaderTest, rejectsInvalidFormatMetadata) {
     auto malformed = validPayload;
     malformed.at(HierarchicalKeyFormat::kHeaderSize) = 3;
     NIMBLE_ASSERT_FILE_THROW(
-        HierarchicalKeyReader(malformed, pool_.get()),
+        HierarchicalKeyReader(
+            malformed, pool_.get(), /*cacheEncodingViews=*/false),
         "Unsupported HierarchicalKeyReader key value width");
   }
   {
@@ -723,7 +826,8 @@ TEST_F(HierarchicalKeyReaderTest, rejectsInvalidFormatMetadata) {
     auto malformed = validPayload;
     setUint32(malformed, kLevelCountsOffset, 0);
     NIMBLE_ASSERT_FILE_THROW(
-        HierarchicalKeyReader(malformed, pool_.get()),
+        HierarchicalKeyReader(
+            malformed, pool_.get(), /*cacheEncodingViews=*/false),
         "HierarchicalKeyReader root level has no values");
   }
   {
@@ -731,7 +835,8 @@ TEST_F(HierarchicalKeyReaderTest, rejectsInvalidFormatMetadata) {
     auto malformed = validPayload;
     setUint32(malformed, kLevelCountsOffset + sizeof(uint32_t), 1);
     NIMBLE_ASSERT_FILE_THROW(
-        HierarchicalKeyReader(malformed, pool_.get()),
+        HierarchicalKeyReader(
+            malformed, pool_.get(), /*cacheEncodingViews=*/false),
         "HierarchicalKeyReader level value counts must be non-decreasing");
   }
   {
@@ -739,7 +844,8 @@ TEST_F(HierarchicalKeyReaderTest, rejectsInvalidFormatMetadata) {
     auto malformed = validPayload;
     malformed.push_back('\0');
     NIMBLE_ASSERT_FILE_THROW(
-        HierarchicalKeyReader(malformed, pool_.get()),
+        HierarchicalKeyReader(
+            malformed, pool_.get(), /*cacheEncodingViews=*/false),
         "HierarchicalKeyReader contains trailing data");
   }
 }
@@ -749,7 +855,9 @@ TEST_F(HierarchicalKeyReaderTest, rejectsInvalidFormatMetadata) {
 TEST_F(HierarchicalKeyReaderChunkTest, readsAssembledChunk) {
   EXPECT_EQ(
       HierarchicalKeyReader(
-          makeChunk(3, {values0_, childOffsets_, values1_}), pool_.get())
+          makeChunk(3, {values0_, childOffsets_, values1_}),
+          pool_.get(),
+          /*cacheEncodingViews=*/false)
           .materialize(0, 3),
       (std::vector<std::string>{
           makeKey({1, 5}), makeKey({2, 6}), makeKey({2, 7})}));
@@ -775,7 +883,8 @@ TEST_F(HierarchicalKeyReaderChunkTest, rejectsInvalidChildOffsets) {
         HierarchicalKeyReader(
             makeChunk(
                 3, {values0_, encodeTrivial<uint32_t>(offsets), values1_}),
-            pool_.get()),
+            pool_.get(),
+            /*cacheEncodingViews=*/false),
         message);
   }
 }
@@ -792,7 +901,8 @@ TEST_F(HierarchicalKeyReaderChunkTest, rejectsCompactOffsetsWithHugeRowCount) {
                encodeConstant<uint32_t>(0, kNumValues + 1),
                encodeConstant<uint64_t>(5, kNumValues)},
               {kNumValues, kNumValues}),
-          pool_.get()),
+          pool_.get(),
+          /*cacheEncodingViews=*/false),
       "offsets contain an empty range: child offsets.");
   EXPECT_LT(pool_->peakBytes(), 16 << 20);
 }
@@ -822,7 +932,8 @@ TEST_F(HierarchicalKeyReaderChunkTest, rejectsInvalidLeafRowOffsets) {
                  childOffsets_,
                  values1_,
                  encodeTrivial<uint32_t>(offsets)}),
-            pool_.get()),
+            pool_.get(),
+            /*cacheEncodingViews=*/false),
         message);
   }
 }
@@ -831,7 +942,9 @@ TEST_F(HierarchicalKeyReaderChunkTest, rejectsMissingLeafRowOffsets) {
   // Four rows over three distinct keys need leaf row offsets.
   NIMBLE_ASSERT_FILE_THROW(
       HierarchicalKeyReader(
-          makeChunk(4, {values0_, childOffsets_, values1_}), pool_.get()),
+          makeChunk(4, {values0_, childOffsets_, values1_}),
+          pool_.get(),
+          /*cacheEncodingViews=*/false),
       "Truncated HierarchicalKeyReader metadata.");
 }
 
@@ -840,7 +953,8 @@ TEST_F(HierarchicalKeyReaderChunkTest, rejectsWrongPhysicalType) {
       HierarchicalKeyReader(
           makeChunk(
               3, {values0_, childOffsets_, encodeTrivial<uint32_t>({5, 6, 7})}),
-          pool_.get()),
+          pool_.get(),
+          /*cacheEncodingViews=*/false),
       "HierarchicalKeyReader child physical type does not match its level.");
 }
 
@@ -850,7 +964,8 @@ TEST_F(HierarchicalKeyReaderChunkTest, rejectsWrongRowCount) {
           makeChunk(
               3,
               {values0_, childOffsets_, encodeTrivial<uint64_t>({5, 6, 7, 8})}),
-          pool_.get()),
+          pool_.get(),
+          /*cacheEncodingViews=*/false),
       "HierarchicalKeyReader child row count does not match its directory.");
 }
 
@@ -886,7 +1001,8 @@ TEST_F(HierarchicalKeyReaderTest, mutatedMetadataPreservesReaderContract) {
     }
 
     try {
-      HierarchicalKeyReader reader{mutated, pool_.get()};
+      HierarchicalKeyReader reader{
+          mutated, pool_.get(), /*cacheEncodingViews=*/false};
       const auto materialized = reader.materialize(0, reader.rowCount());
       std::vector<std::string> cursorValues;
       auto cursor = reader.cursor(0);
@@ -924,7 +1040,8 @@ TEST_F(HierarchicalKeyReaderTest, rejectsTruncatedMetadataBeforeAllocation) {
       sizeof(kOversizedCount));
 
   NIMBLE_ASSERT_FILE_THROW(
-      HierarchicalKeyReader(malformed, pool_.get()),
+      HierarchicalKeyReader(
+          malformed, pool_.get(), /*cacheEncodingViews=*/false),
       "HierarchicalKeyReader child row count does not match its directory");
 }
 
@@ -940,7 +1057,8 @@ TEST_F(HierarchicalKeyReaderTest, rejectsEmptySequence) {
       sizeof(emptySequenceSize));
 
   NIMBLE_ASSERT_THROW(
-      HierarchicalKeyReader(malformed, pool_.get()),
+      HierarchicalKeyReader(
+          malformed, pool_.get(), /*cacheEncodingViews=*/false),
       "Truncated HierarchicalKeyReader sequence");
 }
 
@@ -954,7 +1072,8 @@ TEST_F(HierarchicalKeyReaderTest, rejectsLevelValueCountOverflow) {
   setUint32(malformed, kLevelCountsOffset + sizeof(uint32_t), kMaxCount);
 
   NIMBLE_ASSERT_FILE_THROW(
-      HierarchicalKeyReader(malformed, pool_.get()),
+      HierarchicalKeyReader(
+          malformed, pool_.get(), /*cacheEncodingViews=*/false),
       "HierarchicalKeyReader level value count is too large.");
 }
 
