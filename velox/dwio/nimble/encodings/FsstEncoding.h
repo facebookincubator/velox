@@ -15,6 +15,8 @@
  */
 #pragma once
 
+#include <array>
+#include <cstdint>
 #include <optional>
 #include <span>
 #include <vector>
@@ -52,6 +54,9 @@
 #pragma clang diagnostic pop
 #endif
 
+#include "folly/Portability.h"
+#include "folly/lang/Bits.h"
+#include "velox/common/base/BitUtil.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/dwio/nimble/common/Buffer.h"
 #include "velox/dwio/nimble/common/Types.h"
@@ -198,6 +203,154 @@ class FsstEncoding final
     size_t capacity;
   };
 
+  // Maps a compressed payload to its cached decompressed string for this call.
+  struct DecodeCacheEntry {
+    // References the encoded blob, whose symbol table is fixed for this call.
+    std::string_view compressed;
+    // References decoded bytes in the existing output pages.
+    std::string_view decoded;
+    // Hash of the compressed bytes, used to confirm lookup matches.
+    uint64_t hash{0};
+  };
+
+  // Stores lookup metadata separately from the string views.
+  struct DecodeCacheBucket {
+    // -1 marks an unused bucket. Other values are zero-based entries_ indices.
+    int32_t entryIndex{-1};
+    // Rejects hash mismatches before reading the entry.
+    uint32_t hashFingerprint{0};
+  };
+
+  // Stores encoded and decoded string references while checking for repeats.
+  struct DecodeCacheProbeEntry {
+    // References the encoded payload without copying it.
+    const char* compressedData;
+    // Delimits the encoded payload for binary-safe comparisons.
+    size_t compressedSize;
+    // References decoded bytes in output pages for reuse on a cache hit.
+    const char* decodedData;
+    // Delimits the decoded value, including any embedded null bytes.
+    size_t decodedSize;
+    // Avoids hashing the payload again when initializing the full cache.
+    uint64_t hash;
+  };
+
+  // Caches decompressed strings keyed by their compressed payloads within one
+  // encoding read call, using that encoding's fixed symbol table.
+  class DecodeCache {
+   public:
+    // Starts sampling when this read can reuse cached values.
+    DecodeCache(FsstEncoding& encoding, uint32_t numCandidates);
+    // Resets this call's entries while retaining metadata capacity.
+    ~DecodeCache();
+
+    DecodeCache(const DecodeCache&) = delete;
+    DecodeCache& operator=(const DecodeCache&) = delete;
+    DecodeCache(DecodeCache&&) = delete;
+    DecodeCache& operator=(DecodeCache&&) = delete;
+
+    // Whether this call still samples or reuses cached decompressed strings.
+    bool enabled() const {
+      return enabled_;
+    }
+
+    // Returns stable decoded bytes, reusing earlier payloads when available.
+    // Kept inline so materialize and templated visitors can dispatch each value
+    // without a separate call; sampling and full-table lookups stay out of
+    // line.
+    FOLLY_ALWAYS_INLINE std::string_view decode(std::string_view compressed) {
+      if (compressed.empty()) {
+        // Empty strings have no decompression work to reuse or cache.
+        return encoding_.decompressToStringBuffer(compressed);
+      }
+      if (sampling_) {
+        return decodeWhileSampling(compressed);
+      }
+      if (numEntries_ == maxEntries_) {
+        if (!velox::bits::isBitSet(
+                hashFilter_.data(), hashFilterIndex(compressed))) {
+          return encoding_.decompressToStringBuffer(compressed);
+        }
+        return decodeAtCapacity(compressed);
+      }
+      return decodeAndCache(compressed);
+    }
+
+   private:
+    // Limits the unique prefix examined before the first repeated payload.
+    static constexpr size_t kProbeEntryLimit = 64;
+    // Keeps the probe table less than half full.
+    static constexpr size_t kNumProbeBuckets = 2 * kProbeEntryLimit + 1;
+    // The 64-bit golden ratio multiplier spreads suffix bits across the
+    // filter index.
+    static constexpr uint64_t kHashFilterMultiplier = 0x9e3779b97f4a7c15ULL;
+
+    // Builds the full lookup table after the sample contains a duplicate.
+    void initializeCache();
+
+    // Tracks initial payloads and builds the full cache on the first repeat.
+    std::string_view decodeWhileSampling(std::string_view compressed);
+
+    // Reuses cached bytes or adds a new entry.
+    std::string_view decodeAndCache(std::string_view compressed);
+
+    // Reuses cached bytes and decodes misses without adding entries.
+    std::string_view decodeAtCapacity(std::string_view compressed);
+
+    // Computes a filter bit index to avoid full lookups on definite misses.
+    // Kept inline for cache lookups at capacity.
+    FOLLY_ALWAYS_INLINE size_t
+    hashFilterIndex(std::string_view compressed) const {
+      const auto size = compressed.size();
+      const auto suffix = size >= sizeof(uint64_t)
+          ? folly::loadUnaligned<uint64_t>(
+                compressed.data() + size - sizeof(uint64_t))
+          : velox::bits::loadPartialWord(
+                reinterpret_cast<const uint8_t*>(compressed.data()),
+                static_cast<int32_t>(size));
+      const auto fingerprint =
+          (suffix ^ static_cast<uint64_t>(size)) * kHashFilterMultiplier;
+      return fingerprint >> hashFilterShift_;
+    }
+
+    // Finds an exact payload match or an empty bucket for insertion.
+    DecodeCacheBucket& findBucket(std::string_view compressed, uint64_t hash);
+
+    // Decodes a new payload and stores it in the cache.
+    std::string_view decodeWithCacheMiss(
+        std::string_view compressed,
+        uint64_t hash,
+        DecodeCacheBucket& bucket);
+
+    // Provides the symbol table, decoded pages and memory pool for this call.
+    FsstEncoding& encoding_;
+    // Entries are assigned before their bucket indices are set.
+    Vector<DecodeCacheEntry>& entries_;
+    // Compact lookup metadata avoids reading entries_ on most misses.
+    Vector<DecodeCacheBucket>& buckets_;
+    // Unset bits rule out cached payloads; set bits require an exact lookup.
+    Vector<uint64_t>& hashFilter_;
+    // Selects the high fingerprint bits used to index the hash filter.
+    int32_t hashFilterShift_{0};
+    // Only entries below numProbeEntries_ are read, after all fields are set.
+    // @lint-ignore CLANGTIDY cppcoreguidelines-pro-type-member-init
+    std::array<DecodeCacheProbeEntry, kProbeEntryLimit> probeEntries_;
+    // Zero means empty; other values are one-based probeEntries_ indices.
+    // Initialized only when this cache is enabled.
+    // @lint-ignore CLANGTIDY cppcoreguidelines-pro-type-member-init
+    std::array<uint16_t, kNumProbeBuckets> probeBuckets_;
+    // Bounds the number of distinct payloads retained during this call.
+    size_t maxEntries_{0};
+    // Entries below this index have been fully assigned and can be read.
+    size_t numProbeEntries_{0};
+    // Counts distinct payloads retained during sampling or full-cache lookup.
+    size_t numEntries_{0};
+    // Sampling is enabled only for reads with at least two candidate values.
+    bool enabled_{false};
+    // Stops sampling when the first duplicate initializes the full table.
+    bool sampling_{true};
+  };
+
   struct CompressedValues {
     explicit CompressedValues(velox::memory::MemoryPool* pool);
 
@@ -222,13 +375,25 @@ class FsstEncoding final
   // Verifies the blob cursor when all rows have been consumed.
   void checkFinalBlobPosition() const;
 
+  // Materializes rows while reusing decoded bytes within this call.
+  void materializeWithDecodeCache(
+      uint32_t numRows,
+      std::span<std::string_view> output);
+
+  // Reads selected rows while reusing decoded bytes within this call.
+  template <typename V, typename Skip, typename ReadCompressed>
+  void readWithDecodeCache(
+      V& visitor,
+      ReadWithVisitorParams& params,
+      Skip skip,
+      ReadCompressed readCompressed);
+
   // Trains FSST and compresses each input string independently.
   static CompressedValues compressValues(
       std::span<const physicalType> values,
       velox::memory::MemoryPool* pool);
 
-  // Checks whether the native FSST representation meets the compression target
-  // before optional encoding-layer compression is applied.
+  // Checks the compression target using the final serialized FSST size.
   static bool meetsCompressionTarget(
       uint64_t uncompressedSize,
       uint64_t encodedSize,
@@ -251,9 +416,17 @@ class FsstEncoding final
 
   // Decompresses a validated row payload into stable page storage, using
   // scratch space when the page cannot hold the maximum possible expansion.
+  // Returned views never reference decompressBuffer_. Output pages are owned by
+  // stringBufferFactory_ and stay at fixed addresses until the caller releases
+  // them; reset() may reuse their contents after a read has completed.
   // The caller must first validate the containing range with
   // validateCompressedLengths().
   std::string_view decompressToStringBuffer(std::string_view compressed);
+
+  // Compares the bytes represented by a row's symbols with a byte range.
+  bool testCompressedRange(
+      std::string_view compressed,
+      const velox::common::BytesRange& filter) const;
 
   // Returns writable storage when the current page has enough room.
   std::optional<std::span<char>> availablePageRange(size_t requiredBytes) const;
@@ -293,7 +466,28 @@ class FsstEncoding final
   // Scratch buffer used when the remaining page capacity cannot hold the
   // maximum possible expansion of a compressed string.
   Vector<char> decompressBuffer_;
+
+  // Retains entry capacity; cache contents are cleared after each call.
+  Vector<DecodeCacheEntry> decodeCacheEntries_;
+  // Retains bucket capacity to avoid allocating on each promotion.
+  Vector<DecodeCacheBucket> decodeCacheBuckets_;
+  // Retains hash filter capacity to avoid allocating on each promotion.
+  Vector<uint64_t> decodeCacheHashFilter_;
 };
+
+template <typename V, typename Skip, typename ReadCompressed>
+FOLLY_NOINLINE void FsstEncoding::readWithDecodeCache(
+    V& visitor,
+    ReadWithVisitorParams& params,
+    Skip skip,
+    ReadCompressed readCompressed) {
+  DecodeCache decodeCache{*this, static_cast<uint32_t>(visitor.numRows())};
+  detail::readWithVisitorSlow(visitor, params, skip, [&] {
+    const auto compressed = readCompressed();
+    return decodeCache.enabled() ? decodeCache.decode(compressed)
+                                 : decompressToStringBuffer(compressed);
+  });
+}
 
 template <typename V>
 void FsstEncoding::readWithVisitor(V& visitor, ReadWithVisitorParams& params) {
@@ -315,28 +509,71 @@ void FsstEncoding::readWithVisitor(V& visitor, ReadWithVisitorParams& params) {
       static_cast<uint32_t>(numSelected), "Reading past end of FSST encoding.");
   lengthBuffer_.resize(numSelected);
   lengths_->materialize(numSelected, lengthBuffer_.data());
-  auto* lengths = lengthBuffer_.data();
   validateCompressedLengths(
       {lengthBuffer_.data(), lengthBuffer_.size()}, blob_, blobOffset_);
 
-  detail::readWithVisitorSlow(
-      visitor,
-      params,
-      [&](auto toSkip) {
-        const auto compressedBytes =
-            std::accumulate(lengths, lengths + toSkip, static_cast<size_t>(0));
-        row_ += toSkip;
-        blobOffset_ += compressedBytes;
-        lengths += toSkip;
-      },
-      [&] {
-        const auto compressedLen = *lengths++;
-        auto result =
-            decompressToStringBuffer(blob_.substr(blobOffset_, compressedLen));
-        ++row_;
-        blobOffset_ += compressedLen;
-        return result;
-      });
+  auto* lengths = lengthBuffer_.data();
+  const auto skip = [&](auto toSkip) {
+    const auto compressedBytes =
+        std::accumulate(lengths, lengths + toSkip, static_cast<size_t>(0));
+    row_ += toSkip;
+    blobOffset_ += compressedBytes;
+    lengths += toSkip;
+  };
+  const auto readCompressed = [&] {
+    const auto compressedLen = *lengths++;
+    const auto compressed = blob_.substr(blobOffset_, compressedLen);
+    ++row_;
+    blobOffset_ += compressedLen;
+    return compressed;
+  };
+
+  // Deterministic filter-only ranges do not need decoded strings.
+  if constexpr (requires { typename V::FilterType; }) {
+    if constexpr (
+        (std::is_same_v<typename V::FilterType, velox::common::BytesRange> ||
+         std::is_same_v<
+             typename V::FilterType,
+             velox::common::NegatedBytesRange>) &&
+        std::is_same_v<typename V::Extract, velox::dwio::common::DropValues>) {
+      if (visitor.filter().isDeterministic()) {
+        detail::readWithVisitorSlow(
+            visitor,
+            params,
+            skip,
+            readCompressed,
+            [&](std::string_view compressed, bool& atEnd) {
+              const bool passesFilter = [&] {
+                if constexpr (std::is_same_v<
+                                  typename V::FilterType,
+                                  velox::common::NegatedBytesRange>) {
+                  return !testCompressedRange(
+                      compressed, *visitor.filter().getNonNegated());
+                } else {
+                  return testCompressedRange(compressed, visitor.filter());
+                }
+              }();
+              if (passesFilter) {
+                visitor.filterPassed(std::string_view{});
+              } else {
+                visitor.filterFailed();
+              }
+              visitor.addRowIndex(1);
+              atEnd = visitor.atEnd();
+            });
+        checkFinalBlobPosition();
+        return;
+      }
+    }
+  }
+
+  if (!options_.fsstDecodeCacheEnabled()) {
+    detail::readWithVisitorSlow(visitor, params, skip, [&] {
+      return decompressToStringBuffer(readCompressed());
+    });
+  } else {
+    readWithDecodeCache(visitor, params, skip, readCompressed);
+  }
   checkFinalBlobPosition();
 }
 
