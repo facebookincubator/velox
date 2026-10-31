@@ -16,8 +16,10 @@
 
 #include "velox/functions/lib/DateTimeFormatter.h"
 #include <folly/String.h>
+#include <algorithm>
 #include <charconv>
 #include <cstring>
+#include <limits>
 #include "velox/common/base/CountBits.h"
 #include "velox/external/date/date.h"
 #include "velox/external/date/iso_week.h"
@@ -72,8 +74,11 @@ struct Date {
   bool isHourOfHalfDay =
       true; // Whether most recent hour specifier is of half day.
 
-  std::vector<int32_t> dayOfMonthValues;
-  std::vector<int32_t> dayOfYearValues;
+  // An empty range has its minimum greater than its maximum.
+  int32_t minDayOfMonth = std::numeric_limits<int32_t>::max();
+  int32_t maxDayOfMonth = std::numeric_limits<int32_t>::min();
+  int32_t minDayOfYear = std::numeric_limits<int32_t>::max();
+  int32_t maxDayOfYear = std::numeric_limits<int32_t>::min();
 };
 
 constexpr std::string_view weekdaysFull[] = {
@@ -1014,8 +1019,9 @@ int32_t parseFromPattern(
         break;
 
       case DateTimeFormatSpecifier::DAY_OF_MONTH:
-        date.dayOfMonthValues.push_back(number);
         date.day = number;
+        date.minDayOfMonth = std::min(date.minDayOfMonth, date.day);
+        date.maxDayOfMonth = std::max(date.maxDayOfMonth, date.day);
         date.weekDateFormat = false;
         date.dayOfYearFormat = false;
         date.weekOfMonthDateFormat = false;
@@ -1029,8 +1035,9 @@ int32_t parseFromPattern(
         break;
 
       case DateTimeFormatSpecifier::DAY_OF_YEAR:
-        date.dayOfYearValues.push_back(number);
         date.dayOfYear = number;
+        date.minDayOfYear = std::min(date.minDayOfYear, date.dayOfYear);
+        date.maxDayOfYear = std::max(date.maxDayOfYear, date.dayOfYear);
         date.dayOfYearFormat = true;
         date.weekDateFormat = false;
         date.weekOfMonthDateFormat = false;
@@ -1613,9 +1620,12 @@ Expected<DateTimeResult> DateTimeFormatter::parse(
     }
   }
 
-  // Ensure all day of month values are valid for ending month value
-  for (int i = 0; i < date.dayOfMonthValues.size(); i++) {
-    if (!util::isValidDate(date.year, date.month, date.dayOfMonthValues[i])) {
+  // All parsed days must be valid for the final year and month. If the minimum
+  // is at least 1, checking the maximum validates the whole range.
+  if (date.minDayOfMonth <= date.maxDayOfMonth) {
+    const auto day =
+        date.minDayOfMonth < 1 ? date.minDayOfMonth : date.maxDayOfMonth;
+    if (!util::isValidDate(date.year, date.month, day)) {
       if (threadSkipErrorDetails()) {
         return folly::makeUnexpected(Status::UserError());
       }
@@ -1623,27 +1633,28 @@ Expected<DateTimeResult> DateTimeFormatter::parse(
           Status::UserError(
               "Value {} for dayOfMonth must be in the range [1,{}] "
               "for year {} and month {}.",
-              date.dayOfMonthValues[i],
+              day,
               util::getMaxDayOfMonth(date.year, date.month),
               date.year,
               date.month));
     }
   }
 
-  // Ensure all day of year values are valid for ending year value
-  for (int i = 0; i < date.dayOfYearValues.size(); i++) {
-    if (!util::isValidDayOfYear(date.year, date.dayOfYearValues[i])) {
+  // Apply the same range check to all day-of-year values for the final year.
+  if (date.minDayOfYear <= date.maxDayOfYear) {
+    const auto day =
+        date.minDayOfYear < 1 ? date.minDayOfYear : date.maxDayOfYear;
+    if (!util::isValidDayOfYear(date.year, day)) {
       if (threadSkipErrorDetails()) {
         return folly::makeUnexpected(Status::UserError());
       }
       return folly::makeUnexpected(
           Status::UserError(
-              "Value {} for dayOfMonth must be in the range [1,{}] "
-              "for year {} and month {}.",
-              date.dayOfYearValues[i],
+              "Value {} for dayOfYear must be in the range [1,{}] "
+              "for year {}.",
+              day,
               util::isLeapYear(date.year) ? 366 : 365,
-              date.year,
-              date.month));
+              date.year));
     }
   }
 
