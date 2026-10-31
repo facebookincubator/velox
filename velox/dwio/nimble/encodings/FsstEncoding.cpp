@@ -732,22 +732,22 @@ std::string_view FsstEncoding::encode(
         varint::varintSize(serializedLengths.size()) +
         serializedLengths.size() + compressedValues.totalCompressedSize;
 
+    auto compressionPolicy = selection.compressionPolicy();
+    const auto* checkedCompressionPolicy =
+        velox::checkedNotNull(compressionPolicy.get());
+    CompressionEncoder<std::string_view> compressionEncoder{
+        buffer.getMemoryPool(),
+        *checkedCompressionPolicy,
+        DataType::String,
+        {reinterpret_cast<const char*>(
+             compressedValues.compressedBuffer.data()),
+         compressedValues.totalCompressedSize}};
+    encodingSize = encodingSize - compressedValues.totalCompressedSize +
+        compressionEncoder.getSize();
     if (meetsCompressionTarget(
             compressedValues.totalInputSize,
             encodingSize,
             options.fsstCompressionTargetRatio)) {
-      auto compressionPolicy = selection.compressionPolicy();
-      const auto* checkedCompressionPolicy =
-          velox::checkedNotNull(compressionPolicy.get());
-      CompressionEncoder<std::string_view> compressionEncoder{
-          buffer.getMemoryPool(),
-          *checkedCompressionPolicy,
-          DataType::String,
-          {reinterpret_cast<const char*>(
-               compressedValues.compressedBuffer.data()),
-           compressedValues.totalCompressedSize}};
-      encodingSize = encodingSize - compressedValues.totalCompressedSize +
-          compressionEncoder.getSize();
       char* reserved = buffer.reserve(encodingSize);
       char* pos = reserved;
       Encoding::serializePrefix(
