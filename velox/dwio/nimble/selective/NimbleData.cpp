@@ -37,7 +37,6 @@ NimbleData::NimbleData(
     memory::MemoryPool& memoryPool,
     ChunkedDecoder* inMapDecoder,
     const EncodingFactory& encodingFactory,
-    bool stringDecoderZeroCopy,
     bool nimblePreserveDictionaryEncoding,
     bool lazyColumnIo,
     velox::dwio::common::DecodingStats* decodingStats,
@@ -100,14 +99,14 @@ NimbleData::NimbleData(
     default:
       NIMBLE_UNSUPPORTED("{}", toString(nimbleType->kind()));
   }
-  stringDecoderZeroCopy_ = stringDecoderZeroCopy;
+  // Nimble encodings hand out StringViews into decoder-owned buffers, which the
+  // reader keeps alive via setStringBuffers, so values are never copied.
+  stringDecoderZeroCopy_ = true;
   nimblePreserveDictionaryEncoding_ = nimblePreserveDictionaryEncoding;
 }
 
 void NimbleData::setNullsOnlyDecoder(ChunkedDecoder* decoder) {
-  // stringDecoderZeroCopy_ selects the non-legacy encodings; the legacy
-  // NullableEncoding does not implement readNulls.
-  if (scanFastPath_ && inMapDecoder_ == nullptr && stringDecoderZeroCopy_) {
+  if (scanFastPath_ && inMapDecoder_ == nullptr) {
     nullsOnlyDecoder_ = decoder;
   }
 }
@@ -209,7 +208,6 @@ ChunkedDecoder NimbleData::makeScalarDecoder() {
       /*decodeValuesWithNulls=*/false,
       encodingFactory_,
       pool_,
-      stringDecoderZeroCopy_,
       decodingStats_,
       streams_->dictionaryAlphabetLoader(streamId),
       dictionaryAwareReads_,
@@ -227,7 +225,6 @@ ChunkedDecoder NimbleData::makeMicrosDecoder() {
       /*decodeValuesWithNulls=*/false,
       encodingFactory_,
       pool_,
-      stringDecoderZeroCopy_,
       decodingStats_,
       streams_->dictionaryAlphabetLoader(streamId),
       dictionaryAwareReads_,
@@ -245,7 +242,6 @@ ChunkedDecoder NimbleData::makeNanosDecoder() {
       /*decodeValuesWithNulls=*/false,
       encodingFactory_,
       pool_,
-      stringDecoderZeroCopy_,
       decodingStats_,
       streams_->dictionaryAlphabetLoader(streamId),
       dictionaryAwareReads_,
@@ -279,7 +275,6 @@ std::unique_ptr<ChunkedDecoder> NimbleData::makeDecoder(
       decodeValuesWithNulls,
       encodingFactory_,
       pool_,
-      stringDecoderZeroCopy_,
       decodingStats_,
       streams_->dictionaryAlphabetLoader(descriptor.offset()),
       dictionaryAwareReads_,
@@ -301,7 +296,6 @@ std::unique_ptr<velox::dwio::common::FormatData> NimbleParams::toFormatData(
       pool(),
       inMapDecoder_,
       *encodingFactory_,
-      stringDecoderZeroCopy_,
       nimblePreserveDictionaryEncoding_,
       lazyColumnIo_,
       decodingStats,

@@ -34,7 +34,6 @@
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
-#include "velox/dwio/nimble/encodings/legacy/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/tests/TestUtils.h"
 
 // Tests the Encoding API for all nullable Encoding implementations + data
@@ -818,24 +817,6 @@ TEST_F(NullableEncodingSliceTest, materializeNullableBoolChildren) {
     checkNullableMaterialization(
         *pool_, toBoolVector({true, true, false, true}), serializedNulls);
   }
-}
-
-// legacy::NullableEncoding has no readNulls, so nulls-only reads stay off with
-// the legacy encodings.
-TEST_F(NullableEncodingSliceTest, legacyReadNullsThrows) {
-  nimble::Buffer buffer{*pool_};
-  const auto encoded =
-      nimble::test::Encoder<nimble::NullableEncoding<int32_t>>::encodeNullable(
-          buffer, toInt32Vector({10, 20}), toBoolVector({true, false, true}));
-  const auto encoding = nimble::legacy::EncodingFactory().create(
-      *pool_, encoded, [](uint32_t /*totalLength*/) -> void* {
-        return nullptr;
-      });
-  ASSERT_TRUE(encoding->isNullable());
-  uint64_t nulls{0};
-  NIMBLE_ASSERT_THROW(
-      encoding->readNulls(3, &nulls, 0),
-      "Nullable encoding must override readNulls: Nullable");
 }
 
 // A chunk without nulls is written without NullableEncoding. The base

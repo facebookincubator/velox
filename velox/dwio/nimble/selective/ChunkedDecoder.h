@@ -27,7 +27,6 @@
 #include "velox/dwio/nimble/encodings/MainlyConstantEncoding.h"
 #include "velox/dwio/nimble/encodings/NullableEncoding.h"
 #include "velox/dwio/nimble/encodings/common/EncodingUtils.h"
-#include "velox/dwio/nimble/encodings/legacy/EncodingTrait.h"
 #include "velox/dwio/nimble/index/ChunkStatsGroup.h"
 #include "velox/dwio/nimble/selective/NimbleData.h"
 #include "velox/dwio/nimble/selective/ReaderBase.h"
@@ -62,7 +61,6 @@ class ChunkedDecoder {
       bool decodeValuesWithNulls,
       const EncodingFactory* encodingFactory,
       velox::memory::MemoryPool* pool,
-      bool stringDecoderZeroCopy = false,
       velox::dwio::common::DecodingStats* decodingStats = nullptr,
       DictionaryAlphabetLoader dictionaryAlphabetLoader = nullptr,
       bool dictionaryAwareReads = false,
@@ -71,7 +69,6 @@ class ChunkedDecoder {
         pool_{pool},
         decodeValuesWithNulls_{decodeValuesWithNulls},
         encodingFactory_(encodingFactory),
-        stringDecoderZeroCopy_{stringDecoderZeroCopy},
         dictionaryAwareReads_{dictionaryAwareReads},
         scanFastPath_{scanFastPath},
         streamIndex_{std::move(streamIndex)},
@@ -129,9 +126,6 @@ class ChunkedDecoder {
       DecoderVisitor& visitor,
       velox::vector_size_t readOffset = 0,
       const SaveStringBufferCallback& saveStringBuffersFn = nullptr) {
-    NIMBLE_CHECK(
-        readOffset == 0 || stringDecoderZeroCopy_,
-        "readOffset is only valid for dict→flat encoding fallback reads");
     // The visitor always carries the complete output row set. When a read is
     // resumed mid-range (readOffset > 0 — e.g. the dict→flat abandon-dictionary
     // fallback), the caller advances the visitor's rowIndex past the
@@ -351,9 +345,6 @@ class ChunkedDecoder {
   bool readDictionaryIndices(
       DictionaryVisitor& visitor,
       const ChunkBoundaryCallback& onChunkBoundary) {
-    NIMBLE_CHECK(
-        stringDecoderZeroCopy_,
-        "Dictionary indices reading requires non-legacy encoding path");
     NIMBLE_CHECK_NOT_NULL(encoding_);
 
     const velox::RowSet rows(visitor.rows(), visitor.numRows());
@@ -448,9 +439,7 @@ class ChunkedDecoder {
 
     std::vector<velox::BufferPtr> stringBuffers;
     SCOPE_EXIT {
-      if (stringDecoderZeroCopy_) {
-        visitor.reader().setStringBuffers(std::move(stringBuffers));
-      }
+      visitor.reader().setStringBuffers(std::move(stringBuffers));
     };
 
     // For kHasNulls, count the value-stream rows this read will consume, once
@@ -566,12 +555,10 @@ class ChunkedDecoder {
         remainingValues -= numNonNulls;
       }
 
-      if (stringDecoderZeroCopy_) {
-        stringBuffers.reserve(
-            stringBuffers.size() + currentStringBuffers_.size());
-        for (const auto& buf : currentStringBuffers_) {
-          stringBuffers.emplace_back(buf);
-        }
+      stringBuffers.reserve(
+          stringBuffers.size() + currentStringBuffers_.size());
+      for (const auto& buf : currentStringBuffers_) {
+        stringBuffers.emplace_back(buf);
       }
     }
     return true;
@@ -764,21 +751,15 @@ class ChunkedDecoder {
     params.numScanned = nextRow;
   }
 
-  // Selects the encoding trait based on stringDecoderZeroCopy_ and
-  // forwards to the fully-monomorphic readWithVisitorImpl.
+  // Forwards to the fully-monomorphic readWithVisitorImpl.
   template <bool kHasNulls, typename V>
   void dispatchReadWithVisitorImpl(
       V& visitor,
       const uint64_t* nulls,
       ReadWithVisitorParams& params,
       const SaveStringBufferCallback& saveStringBuffersFn) {
-    if (stringDecoderZeroCopy_) {
-      readWithVisitorImpl<kHasNulls, DefaultEncodingTrait>(
-          visitor, nulls, params, saveStringBuffersFn);
-    } else {
-      readWithVisitorImpl<kHasNulls, legacy::LegacyEncodingTrait>(
-          visitor, nulls, params, saveStringBuffersFn);
-    }
+    readWithVisitorImpl<kHasNulls, DefaultEncodingTrait>(
+        visitor, nulls, params, saveStringBuffersFn);
   }
 
   template <bool kHasNulls, typename EncodingTrait, typename V>
@@ -860,12 +841,10 @@ class ChunkedDecoder {
     }
 
     // Flush accumulated string buffers to the reader.
-    if (stringDecoderZeroCopy_) {
-      if (saveStringBuffersFn) {
-        saveStringBuffersFn(std::move(stringBuffers));
-      } else {
-        visitor.reader().setStringBuffers(std::move(stringBuffers));
-      }
+    if (saveStringBuffersFn) {
+      saveStringBuffersFn(std::move(stringBuffers));
+    } else {
+      visitor.reader().setStringBuffers(std::move(stringBuffers));
     }
   }
 
@@ -963,7 +942,6 @@ class ChunkedDecoder {
   // (standard case for scalar types).
   const bool decodeValuesWithNulls_;
   const EncodingFactory* const encodingFactory_;
-  const bool stringDecoderZeroCopy_{false};
   const bool dictionaryAwareReads_{false};
   const bool scanFastPath_{false};
   // Optional stream index for accelerating skip operations

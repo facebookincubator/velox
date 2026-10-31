@@ -16,7 +16,7 @@
 
 #include "velox/dwio/nimble/selective/IntegerColumnReader.h"
 
-#include "velox/dwio/nimble/encodings/legacy/EncodingUtils.h" // NOLINT(facebook-unused-include-check)
+#include "velox/dwio/nimble/encodings/common/EncodingUtils.h" // NOLINT(facebook-unused-include-check)
 
 namespace facebook::velox::dwio::common {
 

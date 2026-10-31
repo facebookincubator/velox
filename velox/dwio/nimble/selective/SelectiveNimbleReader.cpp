@@ -20,7 +20,6 @@
 #include <algorithm>
 #include <cmath>
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
-#include "velox/dwio/nimble/encodings/legacy/EncodingFactory.h"
 #include "velox/dwio/nimble/index/ClusterIndex.h"
 #include "velox/dwio/nimble/index/IndexConstants.h"
 #include "velox/dwio/nimble/index/IndexFilter.h"
@@ -358,11 +357,8 @@ class SelectiveNimbleRowReader : public dwio::common::RowReader {
             FeatureGate::FeatureSet::kStripeStatsPruning,
             /*defaultValue=*/false)},
         encodingFactory_(
-            options.stringDecoderZeroCopy()
-                ? std::make_unique<const EncodingFactory>(
-                      encodingOptions(readerBase_->tablet()))
-                : std::make_unique<const legacy::EncodingFactory>(
-                      encodingOptions(readerBase_->tablet()))),
+            std::make_unique<const EncodingFactory>(
+                encodingOptions(readerBase_->tablet()))),
         streams_(readerBase_),
         rowSizeTracker_{
             std::make_unique<RowSizeTracker>(readerBase->fileSchemaWithId())} {
@@ -952,7 +948,6 @@ void SelectiveNimbleRowReader::loadCurrentStripe() {
       streams_,
       options_.trackRowSize() ? rowSizeTracker_.get() : nullptr,
       *encodingFactory_,
-      options_.stringDecoderZeroCopy(),
       options_.preserveFlatMapsInMemory(),
       options_.nimblePreserveDictionaryEncoding(),
       lazyIoColumns_.empty() ? nullptr : &lazyIoColumns_,

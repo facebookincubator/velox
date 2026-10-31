@@ -1222,10 +1222,6 @@ Nimble Options (prefix ``hive.nimble.``)
        not be triggered. NOTE: lazy IO applies the same restriction as lazy materialization which doesn't
        allow lazy IO across stripes. Configure as ``nimble.lazy-column-io``; do not prepend ``hive.``.
        Session: ``nimble_lazy_column_io``.
-   * - ``string-decoder-zero-copy``
-     - bool
-     - false
-     - Enable zero-copy string decoding in Nimble selective reader. Configure as ``nimble.string-decoder-zero-copy``; do not prepend ``hive.``. Session: ``nimble_string_decoder_zero_copy``.
    * - ``preserve-dictionary-encoding``
      - bool
      - false

@@ -379,7 +379,6 @@ class SparseReadChunkSkipBenchmark : public velox::test::VectorTestBase {
     rowReaderOptions.setScanSpec(scanSpec);
     rowReaderOptions.setRequestedType(rowType);
     rowReaderOptions.setEagerFirstStripeLoad(false);
-    rowReaderOptions.setStringDecoderZeroCopy(true);
     rowReaderOptions.setNimblePreserveDictionaryEncoding(
         options.dictionaryReads);
     rowReaderOptions.setNimbleDictionaryAwareReads(options.dictionaryReads);

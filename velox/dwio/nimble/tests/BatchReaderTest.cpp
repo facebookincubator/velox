@@ -466,15 +466,13 @@ std::unordered_set<nimble::offset_size> existingStreamOffsets(
 } // namespace
 
 struct TestParam {
-  bool optimizeStringBufferHandling;
   bool skipConstantFlatMapInMapStreams;
   bool enableCache{false};
   bool pinMetadata{false};
 
   std::string debugString() const {
     return fmt::format(
-        "optimizeStringBuffer_{}_skipConstantInMap_{}_cache_{}_pinMetadata_{}",
-        optimizeStringBufferHandling,
+        "skipConstantInMap_{}_cache_{}_pinMetadata_{}",
         skipConstantFlatMapInMapStreams,
         enableCache,
         pinMetadata);
@@ -487,18 +485,8 @@ class BatchReaderTest : public ::testing::TestWithParam<TestParam> {
     std::vector<TestParam> params;
     for (bool cache : {false, true}) {
       for (bool pin : {false, true}) {
-        if (!cache && !pin) {
-          // Base case: test all combinations of the first two bools.
-          for (bool optimize : {false, true}) {
-            for (bool skip : {false, true}) {
-              params.emplace_back(TestParam{optimize, skip, cache, pin});
-            }
-          }
-        } else {
-          // Cache/pin modes: test with both false and both true for the
-          // first two bools to keep the test matrix manageable.
-          params.emplace_back(TestParam{false, false, cache, pin});
-          params.emplace_back(TestParam{true, true, cache, pin});
+        for (bool skip : {false, true}) {
+          params.emplace_back(TestParam{skip, cache, pin});
         }
       }
     }
@@ -506,13 +494,7 @@ class BatchReaderTest : public ::testing::TestWithParam<TestParam> {
   }
 
   static std::vector<TestParam> getFsstTestParams() {
-    std::vector<TestParam> params;
-    for (const auto& param : getTestParams()) {
-      if (param.optimizeStringBufferHandling) {
-        params.push_back(param);
-      }
-    }
-    return params;
+    return getTestParams();
   }
 
   // Pruned set for the chunked rerun. Chunking is a writer-side concern and
@@ -524,8 +506,7 @@ class BatchReaderTest : public ::testing::TestWithParam<TestParam> {
     std::vector<TestParam> params;
     for (const bool skip : {false, true}) {
       params.emplace_back(
-          TestParam{/*optimizeStringBufferHandling=*/false,
-                    /*skipConstantFlatMapInMapStreams=*/skip,
+          TestParam{/*skipConstantFlatMapInMapStreams=*/skip,
                     /*enableCache=*/false,
                     /*pinMetadata=*/false});
     }
@@ -569,10 +550,6 @@ class BatchReaderTest : public ::testing::TestWithParam<TestParam> {
     }
     cache_.reset();
     allocator_.reset();
-  }
-
-  bool optimizeStringBufferHandling() const {
-    return GetParam().optimizeStringBufferHandling;
   }
 
   bool skipConstantFlatMapInMapStreams() const {
@@ -658,32 +635,17 @@ class BatchReaderTest : public ::testing::TestWithParam<TestParam> {
 
   nimble::BatchReadParams configureWithTestParam(
       nimble::BatchReadParams params) const {
-    params.optimizeStringBufferHandling = optimizeStringBufferHandling();
-    if (params.optimizeStringBufferHandling) {
-      params.encodingFactory =
-          [](velox::memory::MemoryPool& pool,
-             std::string_view data,
-             std::function<void*(uint32_t)> stringBufferFactory)
-          -> std::unique_ptr<nimble::Encoding> {
-        return nimble::EncodingFactory().create(
-            pool,
-            data,
-            std::move(stringBufferFactory),
-            nimble::Encoding::Options{});
-      };
-    } else {
-      params.encodingFactory =
-          [](velox::memory::MemoryPool& pool,
-             std::string_view data,
-             std::function<void*(uint32_t)> stringBufferFactory)
-          -> std::unique_ptr<nimble::Encoding> {
-        return nimble::legacy::EncodingFactory().create(
-            pool,
-            data,
-            std::move(stringBufferFactory),
-            nimble::Encoding::Options{});
-      };
-    }
+    params.encodingFactory =
+        [](velox::memory::MemoryPool& pool,
+           std::string_view data,
+           std::function<void*(uint32_t)> stringBufferFactory)
+        -> std::unique_ptr<nimble::Encoding> {
+      return nimble::EncodingFactory().create(
+          pool,
+          data,
+          std::move(stringBufferFactory),
+          nimble::Encoding::Options{});
+    };
     return params;
   }
 
@@ -954,8 +916,7 @@ class BatchReaderTest : public ::testing::TestWithParam<TestParam> {
       std::function<void(const velox::VectorPtr&)> comparator = nullptr,
       bool multiSkip = false,
       bool checkMemoryLeak = false) {
-    // Merge the base parameter (optimizeStringBufferHandling) with any
-    // additional params
+    // Merge the base parameters with any additional params
     readParams = configureWithTestParam(std::move(readParams));
 
     std::string file;
@@ -1062,7 +1023,7 @@ class BatchReaderTest : public ::testing::TestWithParam<TestParam> {
       std::mt19937& rng,
       nimble::WriterOptions writerOptions = {},
       nimble::BatchReadParams readParams = {}) {
-    // Merge the base parameter (optimizeStringBufferHandling)
+    // Merge the base parameters
     readParams = configureWithTestParam(std::move(readParams));
 
     velox::VectorFuzzer fuzzer(
@@ -1105,7 +1066,7 @@ class BatchReaderTest : public ::testing::TestWithParam<TestParam> {
           generators,
       int& decodeCounter) {
     nimble::WriterOptions writerOptions;
-    // Merge the base parameter (optimizeStringBufferHandling)
+    // Merge the base parameters
     nimble::BatchReadParams readParams = createReadParams();
 
     std::string file;
