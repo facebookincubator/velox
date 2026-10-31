@@ -94,7 +94,7 @@ add_library(
   views/EncodingView.h
   views/DictionaryEncodingView.h
   views/ConstantEncodingView.h
-  views/BlockBitPackingEncodingView.h
+  views/BlockBitPackingV2EncodingView.h
   views/ALPEncodingView.h
   views/ALPRDEncodingView.h
   selection/Statistics.h
@@ -112,6 +112,8 @@ add_library(
   common/EncodingFactory.h
   common/Encoding.h
   common/BufferedEncoding.h
+  legacy/BlockBitPackingEncodingView.h
+  legacy/BlockBitPackingEncoding.h
   VarintEncoding.h
   TrivialEncoding.h
   SubIntSplitEncoding.h
@@ -137,7 +139,7 @@ add_library(
   DeltaEncoding.h
   DeltaBlockEncoding.h
   ConstantEncoding.h
-  BlockBitPackingEncoding.h
+  BlockBitPackingV2Encoding.h
   ALPEncoding.h
   ALPRDEncoding.h
 )

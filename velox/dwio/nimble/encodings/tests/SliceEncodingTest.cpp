@@ -26,7 +26,6 @@
 #include "velox/dwio/nimble/common/Varint.h"
 #include "velox/dwio/nimble/common/Vector.h"
 #include "velox/dwio/nimble/common/Zigzag.h"
-#include "velox/dwio/nimble/encodings/BlockBitPackingEncoding.h"
 #include "velox/dwio/nimble/encodings/ConstantEncoding.h"
 #include "velox/dwio/nimble/encodings/DictionaryEncoding.h"
 #include "velox/dwio/nimble/encodings/EliasFanoEncoding.h"
@@ -41,6 +40,7 @@
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
+#include "velox/dwio/nimble/encodings/legacy/BlockBitPackingEncoding.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
 #include "velox/dwio/nimble/encodings/tests/SharedDictionaryEncodingTestUtils.h"
 #include "velox/dwio/nimble/encodings/tests/TestUtils.h"
@@ -396,8 +396,8 @@ TEST_F(SliceEncodingTest, deferredBlockBitPackingMatchesSourceRows) {
   // partial-front, partial-back and single-block-interior cases are all
   // covered against a raw block, a constant block, and two bit-packed ones.
   nimble::Encoding::Options writeOptions{.blockBitPackingBlockSize = 8};
-  const auto encoded =
-      nimble::test::Encoder<nimble::BlockBitPackingEncoding<int32_t>>::encode(
+  const auto encoded = nimble::test::
+      Encoder<nimble::legacy::BlockBitPackingEncoding<int32_t>>::encode(
           *buffer_,
           values,
           nimble::CompressionType::Uncompressed,
@@ -425,8 +425,8 @@ TEST_F(SliceEncodingTest, deferredBlockBitPackingWrapsOnlyWhenPartial) {
   // single-block interior -- comes back wrapped in a SliceEncoding.
   const auto values = makeBlockBitPackingSource(pool_.get());
   nimble::Encoding::Options writeOptions{.blockBitPackingBlockSize = 8};
-  const auto encoded =
-      nimble::test::Encoder<nimble::BlockBitPackingEncoding<int32_t>>::encode(
+  const auto encoded = nimble::test::
+      Encoder<nimble::legacy::BlockBitPackingEncoding<int32_t>>::encode(
           *buffer_,
           values,
           nimble::CompressionType::Uncompressed,
@@ -470,8 +470,8 @@ TEST_F(SliceEncodingTest, deferredBlockBitPackingWrapsOnlyWhenPartial) {
 TEST_F(SliceEncodingTest, deferredBlockBitPackingWrapperTrimsToLength) {
   const auto values = makeBlockBitPackingSource(pool_.get());
   nimble::Encoding::Options writeOptions{.blockBitPackingBlockSize = 8};
-  const auto encoded =
-      nimble::test::Encoder<nimble::BlockBitPackingEncoding<int32_t>>::encode(
+  const auto encoded = nimble::test::
+      Encoder<nimble::legacy::BlockBitPackingEncoding<int32_t>>::encode(
           *buffer_,
           values,
           nimble::CompressionType::Uncompressed,
@@ -507,8 +507,8 @@ TEST_F(SliceEncodingTest, deferredBlockBitPackingHandlesInt64) {
                          : int64_t{1} << (16 + i))); // raw, bitWidth == 255
   }
   nimble::Encoding::Options writeOptions{.blockBitPackingBlockSize = 8};
-  const auto encoded =
-      nimble::test::Encoder<nimble::BlockBitPackingEncoding<int64_t>>::encode(
+  const auto encoded = nimble::test::
+      Encoder<nimble::legacy::BlockBitPackingEncoding<int64_t>>::encode(
           *buffer_,
           values,
           nimble::CompressionType::Uncompressed,
@@ -539,8 +539,8 @@ TEST_F(SliceEncodingTest, deferredBlockBitPackingHandlesPartialLastBlock) {
     values.push_back(500 + i);
   }
   nimble::Encoding::Options writeOptions{.blockBitPackingBlockSize = 8};
-  const auto encoded =
-      nimble::test::Encoder<nimble::BlockBitPackingEncoding<int32_t>>::encode(
+  const auto encoded = nimble::test::
+      Encoder<nimble::legacy::BlockBitPackingEncoding<int32_t>>::encode(
           *buffer_,
           values,
           nimble::CompressionType::Uncompressed,
@@ -570,8 +570,8 @@ TEST_F(SliceEncodingTest, deferredBlockBitPackingHandlesShortSource) {
     values.push_back(7000 + i);
   }
   nimble::Encoding::Options writeOptions{.blockBitPackingBlockSize = 8};
-  const auto encoded =
-      nimble::test::Encoder<nimble::BlockBitPackingEncoding<int32_t>>::encode(
+  const auto encoded = nimble::test::
+      Encoder<nimble::legacy::BlockBitPackingEncoding<int32_t>>::encode(
           *buffer_,
           values,
           nimble::CompressionType::Uncompressed,
@@ -598,8 +598,8 @@ TEST_F(SliceEncodingTest, deferredBlockBitPackingHandlesVarintRowCount) {
   const auto values = makeBlockBitPackingSource(pool_.get());
   nimble::Encoding::Options writeOptions{
       .useVarintRowCount = true, .blockBitPackingBlockSize = 8};
-  const auto encoded =
-      nimble::test::Encoder<nimble::BlockBitPackingEncoding<int32_t>>::encode(
+  const auto encoded = nimble::test::
+      Encoder<nimble::legacy::BlockBitPackingEncoding<int32_t>>::encode(
           *buffer_,
           values,
           nimble::CompressionType::Uncompressed,

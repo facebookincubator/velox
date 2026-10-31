@@ -15,7 +15,8 @@
  */
 #pragma once
 
-#include "velox/dwio/nimble/encodings/views/BlockBitPackingEncodingView.h"
+#include "velox/dwio/nimble/encodings/legacy/BlockBitPackingEncodingView.h"
+#include "velox/dwio/nimble/encodings/views/BlockBitPackingV2EncodingView.h"
 #include "velox/dwio/nimble/encodings/views/ConstantEncodingView.h"
 #include "velox/dwio/nimble/encodings/views/DeltaBlockEncodingView.h"
 #include "velox/dwio/nimble/encodings/views/DictionaryEncodingView.h"
@@ -47,18 +48,19 @@ namespace facebook::nimble {
 //
 // SparseBoolEncodingView is also omitted: it is fixed to bool (not templated
 // on T). A bool-only dispatch macro can add it if needed.
-#define NIMBLE_FAST_VIEW_TYPES(X)                 \
-  X(Trivial, TrivialEncodingView)                 \
-  X(FixedBitWidth, FixedBitWidthEncodingView)     \
-  X(MainlyConstant, MainlyConstantEncodingView)   \
-  X(BlockBitPacking, BlockBitPackingEncodingView) \
-  X(RLE, RLEEncodingView)                         \
-  X(Dictionary, DictionaryEncodingView)           \
-  X(Constant, ConstantEncodingView)               \
-  X(PFOR, PFOREncodingView)                       \
-  X(SimdForBitpack, SimdForBitpackEncodingView)   \
-  X(FOR, FOREncodingView)                         \
-  X(Huffman, HuffmanEncodingView)                 \
+#define NIMBLE_FAST_VIEW_TYPES(X)                         \
+  X(Trivial, TrivialEncodingView)                         \
+  X(FixedBitWidth, FixedBitWidthEncodingView)             \
+  X(MainlyConstant, MainlyConstantEncodingView)           \
+  X(BlockBitPacking, legacy::BlockBitPackingEncodingView) \
+  X(BlockBitPackingV2, BlockBitPackingV2EncodingView)     \
+  X(RLE, RLEEncodingView)                                 \
+  X(Dictionary, DictionaryEncodingView)                   \
+  X(Constant, ConstantEncodingView)                       \
+  X(PFOR, PFOREncodingView)                               \
+  X(SimdForBitpack, SimdForBitpackEncodingView)           \
+  X(FOR, FOREncodingView)                                 \
+  X(Huffman, HuffmanEncodingView)                         \
   X(DeltaBlock, DeltaBlockEncodingView)
 
 /// Reads a single value at `index` from `view` without a vtable dispatch when

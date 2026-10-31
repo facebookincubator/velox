@@ -219,6 +219,7 @@ ManualEncodingSelectionPolicyFactory::possibleEncodings() {
       EncodingType::SimdForBitpack,
       EncodingType::SubIntSplit,
       EncodingType::BlockBitPacking,
+      EncodingType::BlockBitPackingV2,
       EncodingType::DeltaBlock,
       EncodingType::EliasFano,
       EncodingType::PartitionedEliasFano,
