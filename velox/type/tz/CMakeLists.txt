@@ -25,3 +25,7 @@ velox_add_library(
 )
 
 velox_link_libraries(velox_type_tz velox_exception velox_external_tzdb fmt::fmt Folly::folly)
+
+if(${VELOX_ENABLE_BENCHMARKS})
+  add_subdirectory(benchmarks)
+endif()
