@@ -34,9 +34,12 @@ using RuntimeCounter = velox::RuntimeCounter;
 
 namespace {
 
-Encoding::Options encodingOptions(const TabletReader& tablet) {
+Encoding::Options encodingOptions(
+    const TabletReader& tablet,
+    const dwio::common::RowReaderOptions& rowOptions) {
   Encoding::Options options;
   options.useVarintRowCount = tablet.properties().compactRowCountEncoding();
+  options.enableFsstDecodeCache = rowOptions.nimbleFsstDecodeRepeatedPayloads();
   return options;
 }
 
@@ -135,9 +138,9 @@ SelectiveNimbleIndexReader::SelectiveNimbleIndexReader(
       encodingFactory_(
           options.stringDecoderZeroCopy()
               ? std::make_unique<const EncodingFactory>(
-                    encodingOptions(readerBase_->tablet()))
+                    encodingOptions(readerBase_->tablet(), options))
               : std::make_unique<const legacy::EncodingFactory>(
-                    encodingOptions(readerBase_->tablet()))),
+                    encodingOptions(readerBase_->tablet(), options))),
       rowSizeTracker_(
           std::make_unique<RowSizeTracker>(readerBase_->fileSchemaWithId())),
       hasFilters_(options.scanSpec()->hasFilter()),
