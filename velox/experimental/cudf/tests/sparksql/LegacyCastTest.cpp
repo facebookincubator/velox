@@ -24,6 +24,7 @@
 #include "velox/type/DecimalUtil.h"
 
 #include <cudf/copying.hpp>
+
 #include <folly/ScopeGuard.h>
 
 #include <bit>

@@ -23,8 +23,8 @@
 #include <cudf/utilities/bit.hpp>
 #include <cudf/utilities/error.hpp>
 
-#include <cuda_runtime.h>
 #include <cuda/std/limits>
+#include <cuda_runtime.h>
 
 #include <cmath>
 #include <type_traits>

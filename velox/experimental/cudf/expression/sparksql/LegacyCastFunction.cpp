@@ -14,9 +14,9 @@
  * limitations under the License.
  */
 
-#include "velox/experimental/cudf/expression/sparksql/LegacyCastFunction.h"
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
+#include "velox/experimental/cudf/expression/sparksql/LegacyCastFunction.h"
 #include "velox/experimental/cudf/expression/sparksql/LegacyCastKernel.h"
 
 #include <cudf/unary.hpp>
