@@ -28,6 +28,7 @@
 
 #include <fmt/format.h>
 #include <folly/Benchmark.h>
+#include <folly/CppAttributes.h>
 #include <folly/init/Init.h>
 
 #include "velox/buffer/Buffer.h"
@@ -406,6 +407,206 @@ BENCHMARK(FSST_SkipSeek_String_SortedStructuredTextMixedLengths, iterations) {
   }
 }
 
+// Fast and decoded controls share an artifact, selection and range. The
+// control deliberately uses a different FilterType to retain the previous
+// decompress-then-filter path while applying the same BytesRange predicate.
+class RangeBenchmarkReader {
+ public:
+  const facebook::velox::BufferPtr& nullsInReadRange() const {
+    return nulls_;
+  }
+  const uint64_t* FOLLY_NULLABLE rawNullsInReadRange() const {
+    return nullptr;
+  }
+  bool returnReaderNulls() const {
+    return false;
+  }
+
+ private:
+  facebook::velox::BufferPtr nulls_;
+};
+
+template <bool compressed>
+class RangeBenchmarkVisitor {
+ public:
+  using DataType = std::string_view;
+  using FilterType =
+      std::conditional_t<compressed, facebook::velox::common::BytesRange, void>;
+  using Extract = facebook::velox::dwio::common::DropValues;
+
+  RangeBenchmarkVisitor(
+      const std::vector<facebook::velox::vector_size_t>& rows,
+      const facebook::velox::common::BytesRange& filter,
+      std::vector<facebook::velox::vector_size_t>& passingRows)
+      : rows_{rows}, filter_{filter}, passingRows_{passingRows} {
+    passingRows_.clear();
+  }
+  RangeBenchmarkReader& reader() {
+    return reader_;
+  }
+  const facebook::velox::common::BytesRange& filter() const {
+    return filter_;
+  }
+  auto numRows() const {
+    return rows_.size();
+  }
+  auto rowAt(size_t index) const {
+    return rows_[index];
+  }
+  auto currentRow() const {
+    return rows_[rowIndex_];
+  }
+  bool allowNulls() const {
+    return false;
+  }
+  void filterPassed(std::string_view) {
+    passingRows_.push_back(currentRow());
+  }
+  void filterFailed() {}
+  void addRowIndex(size_t count) {
+    rowIndex_ += count;
+  }
+  void addNumValues(size_t) {}
+  bool atEnd() const {
+    return rowIndex_ == rows_.size();
+  }
+  void process(std::string_view value, bool& atEnd) {
+    if (filter_.testBytes(value.data(), static_cast<int32_t>(value.size()))) {
+      filterPassed(value);
+    }
+    addRowIndex(1);
+    atEnd = this->atEnd();
+  }
+  [[noreturn]] void processNull(bool&) {
+    throw std::runtime_error{"Unexpected null in range benchmark"};
+  }
+
+ private:
+  const std::vector<facebook::velox::vector_size_t>& rows_;
+  const facebook::velox::common::BytesRange& filter_;
+  std::vector<facebook::velox::vector_size_t>& passingRows_;
+  RangeBenchmarkReader reader_;
+  size_t rowIndex_{0};
+};
+
+template <bool compressed>
+void benchmarkRange(
+    uint32_t iterations,
+    uint32_t stride,
+    int selectivity,
+    bool shortValues) {
+  constexpr uint32_t kRows = 12'000;
+  std::vector<std::string> storage;
+  std::vector<std::string_view> values;
+  std::vector<facebook::velox::vector_size_t> rows;
+  std::vector<facebook::velox::vector_size_t> expected;
+  std::vector<facebook::velox::vector_size_t> passing;
+  std::string encoded;
+  StringPageArena pages;
+  std::unique_ptr<FsstEncoding> decoder;
+  const std::string prefix =
+      shortValues ? "key/" : "https://www.example.com/api/v2/";
+  const std::string lower = selectivity == 0 ? prefix + "missing/"
+      : selectivity == 100                   ? prefix
+                                             : prefix + "match/";
+  facebook::velox::common::BytesRange filter{
+      lower, false, false, lower + "\xff", false, true, false};
+  BENCHMARK_SUSPEND {
+    storage.reserve(kRows);
+    values.reserve(kRows);
+    rows.reserve(kRows);
+    passing.reserve(kRows);
+    for (uint32_t row = 0; row < kRows; ++row) {
+      storage.push_back(
+          shortValues
+              ? fmt::format(
+                    "{}{}{}", prefix, row % 10 == 0 ? "match/" : "other/", row)
+              : fmt::format(
+                    "{}{}{}?payload={}",
+                    prefix,
+                    row % 10 == 0 ? "match/" : "other/",
+                    row,
+                    std::string(
+                        128 + row % 64, static_cast<char>('a' + row % 26))));
+    }
+    for (uint32_t row = 0; row < kRows; ++row) {
+      values.emplace_back(storage.at(row));
+      if (row % stride == 0) {
+        rows.push_back(static_cast<vector_size_t>(row));
+        if (filter.testBytes(
+                values.at(row).data(),
+                static_cast<int32_t>(values.at(row).size()))) {
+          expected.push_back(static_cast<vector_size_t>(row));
+        }
+      }
+    }
+    encoded = encodeFsstFixture(values);
+    decoder = std::make_unique<FsstEncoding>(
+        *benchmarkPool(), encoded, [&](uint32_t bytes) {
+          return pages.allocate(bytes);
+        });
+    if (decoder->encodingType() != EncodingType::Fsst ||
+        decoder->rowCount() != kRows) {
+      throw std::runtime_error{"Range benchmark must use FSST"};
+    }
+    RangeBenchmarkVisitor<compressed> visitor{rows, filter, passing};
+    ReadWithVisitorParams params{};
+    decoder->readWithVisitor(visitor, params);
+    if (passing != expected || (compressed && pages.pageCount() != 0)) {
+      throw std::runtime_error{"FSST range benchmark validation failed"};
+    }
+  }
+  while (iterations--) {
+    decoder->reset();
+    RangeBenchmarkVisitor<compressed> visitor{rows, filter, passing};
+    ReadWithVisitorParams params{};
+    decoder->readWithVisitor(visitor, params);
+    folly::doNotOptimizeAway(passing.size());
+  }
+  BENCHMARK_SUSPEND {
+    if (passing != expected || (compressed && pages.pageCount() != 0)) {
+      throw std::runtime_error{"FSST range benchmark result mismatch"};
+    }
+  }
+}
+
+BENCHMARK(FSST_Range_Dense_NoHit_Decoded, iters) {
+  benchmarkRange<false>(iters, 1, 0, false);
+}
+BENCHMARK_RELATIVE(FSST_Range_Dense_NoHit_Compressed, iters) {
+  benchmarkRange<true>(iters, 1, 0, false);
+}
+BENCHMARK(FSST_Range_Dense_TenPercent_Decoded, iters) {
+  benchmarkRange<false>(iters, 1, 10, false);
+}
+BENCHMARK_RELATIVE(FSST_Range_Dense_TenPercent_Compressed, iters) {
+  benchmarkRange<true>(iters, 1, 10, false);
+}
+BENCHMARK(FSST_Range_Dense_All_Decoded, iters) {
+  benchmarkRange<false>(iters, 1, 100, false);
+}
+BENCHMARK_RELATIVE(FSST_Range_Dense_All_Compressed, iters) {
+  benchmarkRange<true>(iters, 1, 100, false);
+}
+BENCHMARK(FSST_Range_Sparse_NoHit_Decoded, iters) {
+  benchmarkRange<false>(iters, 31, 0, false);
+}
+BENCHMARK_RELATIVE(FSST_Range_Sparse_NoHit_Compressed, iters) {
+  benchmarkRange<true>(iters, 31, 0, false);
+}
+BENCHMARK(FSST_Range_Sparse_TenPercent_Decoded, iters) {
+  benchmarkRange<false>(iters, 31, 10, false);
+}
+BENCHMARK_RELATIVE(FSST_Range_Sparse_TenPercent_Compressed, iters) {
+  benchmarkRange<true>(iters, 31, 10, false);
+}
+BENCHMARK(FSST_Range_Sparse_All_Decoded, iters) {
+  benchmarkRange<false>(iters, 31, 100, false);
+}
+BENCHMARK_RELATIVE(FSST_Range_Sparse_All_Compressed, iters) {
+  benchmarkRange<true>(iters, 31, 100, false);
+}
+
 void printArtifactRatio() {
   // Keep shared setup encode-only. Decode benchmarks validate their fixtures.
   const auto corpus = makeFsstBenchmarkCorpus();
@@ -417,6 +618,31 @@ void printArtifactRatio() {
       encoded.size(),
       static_cast<double>(encoded.size()) / corpus.rawBytes,
       static_cast<double>(corpus.rawBytes) / encoded.size());
+}
+
+BENCHMARK(FSST_Range_Short_Dense_NoHit_Decoded, iterations) {
+  benchmarkRange<false>(iterations, 1, 0, true);
+}
+BENCHMARK_RELATIVE(FSST_Range_Short_Dense_NoHit_Compressed, iterations) {
+  benchmarkRange<true>(iterations, 1, 0, true);
+}
+BENCHMARK(FSST_Range_Short_Dense_TenPercent_Decoded, iterations) {
+  benchmarkRange<false>(iterations, 1, 10, true);
+}
+BENCHMARK_RELATIVE(FSST_Range_Short_Dense_TenPercent_Compressed, iterations) {
+  benchmarkRange<true>(iterations, 1, 10, true);
+}
+BENCHMARK(FSST_Range_Short_Dense_All_Decoded, iterations) {
+  benchmarkRange<false>(iterations, 1, 100, true);
+}
+BENCHMARK_RELATIVE(FSST_Range_Short_Dense_All_Compressed, iterations) {
+  benchmarkRange<true>(iterations, 1, 100, true);
+}
+BENCHMARK(FSST_Range_Short_Sparse_TenPercent_Decoded, iterations) {
+  benchmarkRange<false>(iterations, 31, 10, true);
+}
+BENCHMARK_RELATIVE(FSST_Range_Short_Sparse_TenPercent_Compressed, iterations) {
+  benchmarkRange<true>(iterations, 31, 10, true);
 }
 
 } // namespace
