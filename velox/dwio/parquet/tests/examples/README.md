@@ -190,6 +190,17 @@ annotation, definition level, repetition level, and compression when useful.
   advance by a constant multiple of the fixed width. A skip that instead read the
   value bytes as a 4-byte length prefix would misalign or read out of bounds.
 
+### `flba_dictionary_string_binary.parquet`
+
+- Metadata: `created_by=parquet-cpp-arrow version 25.0.1`, 8 rows, 1 row group,
+  optional column `value: FIXED_LEN_BYTE_ARRAY` (5-byte width) with no logical
+  annotation, dictionary-encoded (`RLE_DICTIONARY`), Snappy. Values are
+  `apple, null, b\0rry, cider, apple, null, cider, b\0rry`, where `\0` is a NUL
+  byte, so the dictionary page holds 3 distinct values.
+- Purpose: Tests dictionary-encoded FIXED_LEN_BYTE_ARRAY pages read as Velox
+  VARBINARY, as VARCHAR through the requested file schema, and with a filter on
+  the dictionary values.
+
 ### `uuid.parquet`
 
 - Metadata: `created_by=parquet-mr version 1.12.2`, 3 rows, 1 row group,
