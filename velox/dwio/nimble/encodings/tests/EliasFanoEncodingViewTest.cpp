@@ -18,6 +18,7 @@
 
 #include <cstdint>
 #include <limits>
+#include <optional>
 #include <random>
 #include <tuple>
 
@@ -99,6 +100,30 @@ TEST_P(EliasFanoEncodingViewTest, lowerBoundInRange) {
     if (row < end) {
       EXPECT_EQ(found, values[row]);
     }
+  }
+}
+
+TEST_P(EliasFanoEncodingViewTest, find) {
+  const auto values = makeVector<uint64_t>({3, 7, 7, 20});
+  const auto serialized =
+      nimble::test::Encoder<nimble::EliasFanoEncoding<uint64_t>>::encode(
+          *buffer_, values);
+  auto view = nimble::createEncodingView(serialized, pool_.get());
+  const auto* eliasFanoView =
+      dynamic_cast<const nimble::EliasFanoEncodingView<uint64_t>*>(view.get());
+  ASSERT_NE(eliasFanoView, nullptr);
+
+  for (const auto& [value, expected] : {
+           std::pair<uint64_t, std::optional<uint32_t>>{0, std::nullopt},
+           {3, 0},
+           {6, std::nullopt},
+           {7, 1},
+           {8, std::nullopt},
+           {20, 3},
+           {21, std::nullopt},
+       }) {
+    SCOPED_TRACE(value);
+    EXPECT_EQ(eliasFanoView->find(value), expected);
   }
 }
 

@@ -91,6 +91,10 @@ class EliasFanoEncoding final
       physicalType value,
       physicalType& found) const;
 
+  /// Returns the first row whose value equals 'value', or std::nullopt when no
+  /// row holds it.
+  std::optional<uint32_t> find(physicalType value) const;
+
   /// Decodes selected rows through the generic visitor interface.
   template <typename DecoderVisitor>
   void readWithVisitor(DecoderVisitor& visitor, ReadWithVisitorParams& params);
@@ -530,6 +534,16 @@ uint32_t EliasFanoEncoding<T>::List::lowerBound(
   }
   found = fromOrdered<T>(base_ + reader.value());
   return static_cast<uint32_t>(reader.position());
+}
+
+template <typename T>
+std::optional<uint32_t> EliasFanoEncoding<T>::find(physicalType value) const {
+  physicalType found;
+  const auto row = lowerBound(0, this->rowCount(), value, found);
+  if (row == this->rowCount() || found != value) {
+    return std::nullopt;
+  }
+  return row;
 }
 
 template <typename T>
