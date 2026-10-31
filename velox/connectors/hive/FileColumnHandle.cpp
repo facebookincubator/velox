@@ -17,6 +17,168 @@
 #include "velox/connectors/hive/FileColumnHandle.h"
 
 namespace facebook::velox::connector::hive {
+
+FileColumnHandle::FileColumnHandle(
+    std::string name,
+    ColumnType columnType,
+    TypePtr dataType,
+    TypePtr schemaType,
+    std::vector<common::Subfield> requiredSubfields,
+    std::vector<NamedExtraction> extractions,
+    bool partitionDateValueDaysSinceEpoch,
+    std::function<void(VectorPtr&)> postProcessor)
+    : name_(std::move(name)),
+      columnType_(columnType),
+      dataType_(std::move(dataType)),
+      schemaType_(std::move(schemaType)),
+      requiredSubfields_(std::move(requiredSubfields)),
+      extractions_(std::move(extractions)),
+      partitionDateValueDaysSinceEpoch_(partitionDateValueDaysSinceEpoch),
+      postProcessor_(std::move(postProcessor)) {
+  VELOX_USER_CHECK(
+      extractions_.empty() || requiredSubfields_.empty(),
+      "Extractions and requiredSubfields are mutually exclusive on column: {}",
+      name_);
+}
+
+folly::dynamic FileColumnHandle::serializeFileFields(
+    std::string_view typeName) const {
+  folly::dynamic obj = ColumnHandle::serializeBase(typeName);
+  obj["columnType"] = columnTypeName(columnType());
+  folly::dynamic requiredSubfields = folly::dynamic::array;
+  for (const auto& subfield : this->requiredSubfields()) {
+    requiredSubfields.push_back(serializeSubfield(subfield));
+  }
+  obj["requiredSubfields"] = requiredSubfields;
+  if (!extractions().empty()) {
+    folly::dynamic extractions = folly::dynamic::array;
+    for (const auto& extraction : this->extractions()) {
+      extractions.push_back(serializeNamedExtraction(extraction));
+    }
+    obj["extractions"] = extractions;
+  }
+  return obj;
+}
+
+void FileColumnHandle::deserializeFileFields(
+    const folly::dynamic& obj,
+    ColumnType& columnType,
+    std::vector<common::Subfield>& requiredSubfields,
+    std::vector<NamedExtraction>& extractions) {
+  columnType = columnTypeFromName(obj["columnType"].asString());
+  const auto& arr = obj["requiredSubfields"];
+  requiredSubfields.reserve(arr.size());
+  for (const auto& subfield : arr) {
+    requiredSubfields.push_back(deserializeSubfield(subfield));
+  }
+  if (auto it = obj.find("extractions"); it != obj.items().end()) {
+    for (const auto& extraction : it->second) {
+      extractions.push_back(deserializeNamedExtraction(extraction));
+    }
+  }
+}
+
+namespace {
+
+folly::dynamic serializeExtractionPathElement(
+    const ExtractionPathElement& element) {
+  folly::dynamic obj = folly::dynamic::object;
+  obj["step"] = extractionStepName(element.step());
+  if (element.step() == ExtractionStep::kStructField) {
+    obj["fieldName"] =
+        static_cast<const StructFieldExtractionPathElement&>(element)
+            .fieldName();
+  }
+  if (element.step() == ExtractionStep::kMapKeyFilter) {
+    if (auto* stringFilter =
+            dynamic_cast<const StringMapKeyFilterExtractionPathElement*>(
+                &element)) {
+      folly::dynamic keys = folly::dynamic::array;
+      for (const auto& key : stringFilter->filterKeys()) {
+        keys.push_back(key);
+      }
+      obj["stringFilterKeys"] = keys;
+    } else if (
+        auto* intFilter =
+            dynamic_cast<const IntMapKeyFilterExtractionPathElement*>(
+                &element)) {
+      folly::dynamic keys = folly::dynamic::array;
+      for (const auto& key : intFilter->filterKeys()) {
+        keys.push_back(key);
+      }
+      obj["intFilterKeys"] = keys;
+    }
+  }
+  return obj;
+}
+
+ExtractionPathElementPtr deserializeExtractionPathElement(
+    const folly::dynamic& obj) {
+  auto step = extractionStepFromName(obj["step"].asString());
+  switch (step) {
+    case ExtractionStep::kStructField:
+      return ExtractionPathElement::structField(obj["fieldName"].asString());
+    case ExtractionStep::kMapKeyFilter: {
+      std::vector<std::string> stringKeys;
+      std::vector<int64_t> intKeys;
+      if (auto it = obj.find("stringFilterKeys"); it != obj.items().end()) {
+        for (const auto& key : it->second) {
+          stringKeys.push_back(key.asString());
+        }
+      }
+      if (auto it = obj.find("intFilterKeys"); it != obj.items().end()) {
+        for (const auto& key : it->second) {
+          intKeys.push_back(key.asInt());
+        }
+      }
+      if (!stringKeys.empty()) {
+        return ExtractionPathElement::mapKeyFilter(std::move(stringKeys));
+      }
+      return ExtractionPathElement::mapKeyFilter(std::move(intKeys));
+    }
+    case ExtractionStep::kMapKeys:
+    case ExtractionStep::kMapValues:
+    case ExtractionStep::kArrayElements:
+    case ExtractionStep::kSize:
+      return ExtractionPathElement::simple(step);
+  }
+  VELOX_UNREACHABLE();
+}
+
+} // namespace
+
+folly::dynamic serializeNamedExtraction(const NamedExtraction& extraction) {
+  folly::dynamic obj = folly::dynamic::object;
+  obj["outputName"] = extraction.outputName;
+  obj["dataType"] = extraction.dataType->serialize();
+  folly::dynamic chain = folly::dynamic::array;
+  for (const auto& element : extraction.chain) {
+    chain.push_back(serializeExtractionPathElement(*element));
+  }
+  obj["chain"] = chain;
+  return obj;
+}
+
+NamedExtraction deserializeNamedExtraction(const folly::dynamic& obj) {
+  NamedExtraction extraction;
+  extraction.outputName = obj["outputName"].asString();
+  extraction.dataType = ISerializable::deserialize<Type>(obj["dataType"]);
+  const auto& chainArr = obj["chain"];
+  extraction.chain.reserve(chainArr.size());
+  for (const auto& element : chainArr) {
+    extraction.chain.push_back(deserializeExtractionPathElement(element));
+  }
+  return extraction;
+}
+
+folly::dynamic serializeSubfield(const common::Subfield& subfield) {
+  return subfield.toString();
+}
+
+common::Subfield deserializeSubfield(const folly::dynamic& obj) {
+  return common::Subfield(obj.asString());
+}
+
 namespace {
 
 const std::unordered_map<FileColumnHandle::ColumnType, std::string>&

@@ -23,41 +23,95 @@
 
 namespace facebook::velox::connector::hive {
 
-/// Base class for table handles in file-based connectors.
-///
-/// Define the common interface for table-level metadata needed by
-/// FileDataSource and FileSplitReader. Connector-specific table handles
-/// (HiveTableHandle, etc.) extend this class.
+/// Common table metadata and accessors for file-based connectors. Used by
+/// FileDataSource and FileSplitReader. Connector-specific handles extend this
+/// class with their own metadata and serialization.
 class FileTableHandle : public ConnectorTableHandle {
  public:
   using ConnectorTableHandle::ConnectorTableHandle;
 
+  const std::string& tableName() const {
+    return tableName_;
+  }
+
+  const std::string& name() const override {
+    return tableName_;
+  }
+
   /// Single-field filters that can be applied efficiently during file reading.
-  virtual const common::SubfieldFilters& subfieldFilters() const = 0;
+  virtual const common::SubfieldFilters& subfieldFilters() const {
+    return subfieldFilters_;
+  }
 
   /// Remaining filter expression that cannot be converted into subfield
   /// filters. Usually less efficient but supports arbitrary boolean
   /// expressions.
-  virtual const core::TypedExprPtr& remainingFilter() const = 0;
+  virtual const core::TypedExprPtr& remainingFilter() const {
+    return remainingFilter_;
+  }
 
   /// Sampling rate between 0 and 1 (excluding 0). 0.1 means 10% sampling.
   /// 1.0 means no sampling.
-  virtual double sampleRate() const = 0;
+  virtual double sampleRate() const {
+    return sampleRate_;
+  }
 
   /// Subset of schema stored in data files (non-partitioning columns).
   /// Needed for reading TEXTFILE, handling schema evolution, etc.
-  virtual const RowTypePtr& dataColumns() const = 0;
+  virtual const RowTypePtr& dataColumns() const {
+    return dataColumns_;
+  }
 
   /// Extra parameters passed down to the file format reader layer.
   virtual const std::unordered_map<std::string, std::string>& tableParameters()
-      const = 0;
+      const {
+    return tableParameters_;
+  }
 
   /// Extra columns used in filters but not in the output. Returns column
   /// handles as FileColumnHandlePtr for use in the generic scan pipeline.
+  /// Concrete handles own the storage to also support typed accessors.
   virtual std::vector<FileColumnHandlePtr> filterColumnHandles() const = 0;
 
   /// Database or namespace name for this table.
-  virtual const std::string& dbName() const = 0;
+  virtual const std::string& dbName() const {
+    return dbName_;
+  }
+
+ protected:
+  FileTableHandle(
+      std::string connectorId,
+      std::string tableName,
+      common::SubfieldFilters subfieldFilters,
+      core::TypedExprPtr remainingFilter,
+      RowTypePtr dataColumns,
+      std::unordered_map<std::string, std::string> tableParameters,
+      double sampleRate,
+      std::string dbName);
+
+  /// Serializes table identity, filters and sampling fields. Derived handles
+  /// append their own fields without changing the shared query-plan format.
+  folly::dynamic serializeFileFields(std::string_view typeName) const;
+
+  static void deserializeFileFields(
+      const folly::dynamic& obj,
+      void* context,
+      std::string& connectorId,
+      std::string& tableName,
+      common::SubfieldFilters& subfieldFilters,
+      core::TypedExprPtr& remainingFilter,
+      std::vector<FileColumnHandlePtr>& filterColumnHandles,
+      double& sampleRate,
+      std::string& dbName);
+
+ private:
+  const std::string tableName_;
+  const common::SubfieldFilters subfieldFilters_;
+  const core::TypedExprPtr remainingFilter_;
+  const RowTypePtr dataColumns_;
+  const std::unordered_map<std::string, std::string> tableParameters_;
+  const double sampleRate_{1.0};
+  const std::string dbName_;
 };
 
 using FileTableHandlePtr = std::shared_ptr<const FileTableHandle>;
