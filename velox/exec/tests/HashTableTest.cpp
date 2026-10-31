@@ -1019,6 +1019,116 @@ TEST_P(HashTableTest, listJoinResultsSize) {
   }
 }
 
+TEST_P(HashTableTest, listJoinResultsConstantSize) {
+  if (GetParam()) {
+    GTEST_SKIP() << "No need to run this in multi-threaded mode";
+  }
+
+  // Duplicate keys keep listJoinResults() off the fast path, so these cases
+  // exercise the bound where results used to be sized one at a time.
+  constexpr int32_t kNumKeys = 8;
+  constexpr int32_t kRowsPerKey = 16;
+  constexpr int32_t kNumRows = kNumKeys * kRowsPerKey;
+  // One BIGINT dependent column, so every result projects to this many bytes.
+  constexpr uint64_t kRowSize = 8;
+
+  std::vector<std::unique_ptr<VectorHasher>> keyHashers;
+  keyHashers.emplace_back(std::make_unique<VectorHasher>(BIGINT(), 0));
+  auto table = HashTable<true>::createForJoin(
+      std::move(keyHashers),
+      {BIGINT()},
+      /*allowDuplicates=*/true,
+      /*hasProbedFlag=*/false,
+      /*hasCountFlag=*/false,
+      1'000,
+      pool());
+  std::vector<RowVectorPtr> batches{makeRowVector(
+      {makeFlatVector<int64_t>(
+           kNumRows, [](vector_size_t row) { return row % kNumKeys; }),
+       makeFlatVector<int64_t>(
+           kNumRows, [](vector_size_t row) { return row; })})};
+  copyVectorsToTable(batches, 0, table.get());
+  table->prepareJoinTable(
+      {},
+      BaseHashTable::kNoSpillInputStartPartitionBit,
+      1'000'000,
+      false,
+      executor_.get());
+  ASSERT_TRUE(table->hasDuplicateKeys());
+
+  auto probeVector = makeRowVector({makeFlatVector<int64_t>(
+      kNumKeys, [](vector_size_t row) { return row; })});
+  SelectivityVector selectivity(kNumKeys);
+  HashLookup lookup(table->hashers(), pool());
+  table->prepareForJoinProbe(lookup, probeVector, selectivity, false);
+  lookup.hits.resize(kNumKeys);
+  std::fill(lookup.hits.begin(), lookup.hits.end(), nullptr);
+  table->joinProbe(lookup);
+  lookup.rows.resize(kNumKeys);
+  std::iota(lookup.rows.begin(), lookup.rows.end(), 0);
+
+  struct TestCase {
+    std::optional<int64_t> estimatedRowSize;
+    std::vector<vector_size_t> varSizeListColumns;
+    uint64_t maxBytes;
+    int32_t expectedFirstBatch;
+    std::string description;
+  };
+
+  const std::vector<TestCase> cases{
+      // maxBytes divides evenly, so the last result that fits is the last one
+      // emitted.
+      {std::nullopt, {}, 10 * kRowSize, 10, "exact multiple"},
+      // A partial result still consumes a whole row, so the bound rounds up.
+      {std::nullopt, {}, 10 * kRowSize + 1, 11, "rounds up"},
+      {std::nullopt, {}, 10 * kRowSize - 1, 10, "rounds up below multiple"},
+      // Smaller than one result, and zero: one result is always emitted.
+      {std::nullopt, {}, 1, 1, "smaller than one result"},
+      {std::nullopt, {}, 0, 1, "zero budget"},
+      // A size estimate stands in for the projected columns.
+      {std::make_optional(32), {}, 32 * 5, 5, "estimated size"},
+      {std::make_optional(0), {}, 16, kNumRows, "zero estimated size"},
+      // Variable sized columns have to be measured per result, so the output
+      // is bounded by the accumulated bytes instead.
+      {std::nullopt, {1}, 0, 1, "variable size falls back"},
+  };
+
+  for (const auto& testCase : cases) {
+    SCOPED_TRACE(testCase.description);
+    BaseHashTable::JoinResultIterator iter(
+        std::vector<vector_size_t>(testCase.varSizeListColumns),
+        testCase.varSizeListColumns.empty() ? kRowSize : 0,
+        testCase.estimatedRowSize);
+    iter.reset(lookup);
+    std::vector<vector_size_t> probeRows(kNumRows);
+    std::vector<char*> hits(kNumRows);
+    const auto numOutput = table->listJoinResults(
+        iter,
+        /*includeMisses=*/false,
+        folly::Range(probeRows.data(), kNumRows),
+        folly::Range(hits.data(), kNumRows),
+        testCase.maxBytes);
+    EXPECT_EQ(numOutput, testCase.expectedFirstBatch);
+
+    // Whatever the bound, resuming has to yield every build row exactly once.
+    int32_t total = numOutput;
+    while (!iter.atEnd()) {
+      const auto more = table->listJoinResults(
+          iter,
+          /*includeMisses=*/false,
+          folly::Range(probeRows.data(), kNumRows),
+          folly::Range(hits.data(), kNumRows),
+          testCase.maxBytes);
+      if (more == 0) {
+        EXPECT_TRUE(iter.atEnd());
+        break;
+      }
+      total += more;
+    }
+    EXPECT_EQ(total, kNumRows);
+  }
+}
+
 TEST_P(HashTableTest, listJoinResultsInterleaved) {
   if (GetParam()) {
     // The fixture's `GetParam()==true` variant creates a threading executor,
