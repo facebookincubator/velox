@@ -69,9 +69,11 @@ class WindowFuzzerRunner {
         windowSignatures, options.onlyFunctions, options.skipFunctions);
     if (filteredAggregationSignatures.empty() &&
         filteredWindowSignatures.empty()) {
+      // Not a failure: the CI bias jobs pass every changed function in 'only',
+      // including functions on the skip list.
       LOG(ERROR)
           << "No function left after filtering using 'only' and 'skip' lists.";
-      return 1;
+      return 0;
     }
 
     facebook::velox::parse::registerTypeResolver();
