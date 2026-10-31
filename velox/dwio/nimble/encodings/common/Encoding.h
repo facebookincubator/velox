@@ -665,12 +665,17 @@ void readSparseMaterializedIndices(
   visitor.setRowIndex(visitor.numRows());
 }
 
-template <typename DecoderVisitor, typename Skip, typename F>
+template <
+    typename DecoderVisitor,
+    typename Skip,
+    typename F,
+    typename Process = std::nullptr_t>
 void readWithVisitorSlow(
     DecoderVisitor& visitor,
     const ReadWithVisitorParams& params,
     Skip skip,
-    F decodeOne) {
+    F decodeOne,
+    Process process = nullptr) {
   using T = typename DecoderVisitor::DataType;
   constexpr bool kExtractToReader = std::is_same_v<
       typename DecoderVisitor::Extract,
@@ -705,7 +710,11 @@ void readWithVisitorSlow(
         visitor.processNull(atEnd);
       }
     } else {
-      visitor.process(castFromPhysicalType<T>(decodeOne()), atEnd);
+      if constexpr (std::is_null_pointer_v<Process>) {
+        visitor.process(castFromPhysicalType<T>(decodeOne()), atEnd);
+      } else {
+        process(decodeOne(), atEnd);
+      }
     }
   }
 }
