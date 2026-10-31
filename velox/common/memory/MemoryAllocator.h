@@ -265,6 +265,8 @@ class MemoryAllocator : public std::enable_shared_from_this<MemoryAllocator> {
     /// mmap and madvise, to optimize the memory fragmentation in the
     /// long-running service such as Prestissimo.
     kMmap,
+    /// An externally supplied allocator with its own backing storage.
+    kCustom,
   };
 
   static std::string kindString(Kind kind);
