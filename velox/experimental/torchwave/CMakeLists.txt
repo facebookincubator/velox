@@ -26,26 +26,38 @@ endif()
 
 add_library(
   torch_wave
+  AllocGroup.cpp
+  Bind.cpp
   Builtins.cpp
   Cat.cpp
   Compile.cpp
+  Derive.cpp
   CompiledOp.cpp
   Elementwise.cpp
+  GroupAlloc.cpp
   Executor.cpp
   GraphOptimizer.cpp
+  GraphPrep.cpp
   KernelOperation.cpp
+  LaunchPartition.cpp
+  Model.cpp
   NodePrinter.cpp
   ParallelExpr.cpp
   Project.cpp
   Pt2Load.cpp
   Registry.cpp
+  Reserve.cpp
   Standalones.cpp
+  StepRunner.cpp
   Utils.cpp
+  ValueTable.cpp
+  WaveConfig.cpp
   WaveGraph.cpp
 )
 
 target_link_libraries(
   torch_wave
+  velox_common_base
   velox_wave_common
   torch
   torch_cpu
@@ -67,6 +79,12 @@ target_include_directories(torch_wave_describe_pt SYSTEM PUBLIC ${TORCH_INCLUDE_
 add_library(torch_wave_graph_view GraphView.cpp)
 
 target_link_libraries(torch_wave_graph_view torch_wave)
+
+if(${VELOX_BUILD_PYTHON_PACKAGE})
+  find_library(TORCH_PYTHON_LIBRARY torch_python PATHS "${TORCH_INSTALL_PREFIX}/lib" REQUIRED)
+  pybind11_add_module(_torchwave MODULE pybind.cpp)
+  target_link_libraries(_torchwave PRIVATE torch_wave ${TORCH_PYTHON_LIBRARY})
+endif()
 
 if(${VELOX_BUILD_TESTING})
   add_subdirectory(tests)

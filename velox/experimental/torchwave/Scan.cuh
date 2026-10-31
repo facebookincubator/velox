@@ -190,8 +190,8 @@ __device__ void masked_select(
   bool* flags = storage<bool>(mask);
   T* in = storage<T>(input);
   masked_select<kBlockSize, T>(
-      idx < size ? in[idx] : T(),
-      idx < size ? flags[idx] : false,
+      idx < size ? in[complexIdx(input->contiguous, input, idx)] : T(),
+      idx < size ? flags[complexIdx(mask->contiguous, mask, idx)] : false,
       output,
       temp,
       counter,
@@ -229,7 +229,9 @@ __device__ void masked_select_head(
   uint32_t blockIdx = block.blockInOp;
   for (uint32_t idx = block.blockInOp * blockDim.x + threadIdx.x; idx < rounded;
        idx += block.numBlocksInOp * blockDim.x) {
-    uint32_t flag = (idx < size) ? static_cast<uint32_t>(flags[idx]) : 0;
+    uint32_t flag = (idx < size)
+        ? static_cast<uint32_t>(flags[complexIdx(mask->contiguous, mask, idx)])
+        : 0;
     auto count = reduce<kBlockSize, uint32_t>(
         flag, [](uint32_t a, uint32_t b) { return a + b; }, temp);
     if (threadIdx.x == 0) {
@@ -328,7 +330,8 @@ __device__ void masked_select_final(
   uint32_t blockIdx = block.blockInOp;
   for (uint32_t idx = block.blockInOp * blockDim.x + threadIdx.x; idx < rounded;
        idx += block.numBlocksInOp * blockDim.x) {
-    bool flag = (idx < size) ? flags[idx] : false;
+    bool flag =
+        (idx < size) ? flags[complexIdx(mask->contiguous, mask, idx)] : false;
     auto base = blockIdx == 0 ? 0 : cnt[blockIdx - 1];
     int32_t val = static_cast<int32_t>(flag);
     if (threadIdx.x == 0) {
@@ -337,7 +340,7 @@ __device__ void masked_select_final(
     int32_t sum = facebook::velox::wave::inclusiveSum<int32_t, kBlockSize>(
         val, nullptr, static_cast<int32_t*>(temp));
     if (flag) {
-      out[sum - 1] = in[idx];
+      out[sum - 1] = in[complexIdx(input->contiguous, input, idx)];
     }
     if (idx == size - 1) {
       output->dims[0] = sum;
@@ -461,6 +464,55 @@ __device__ void scanRows(
           counter;
     }
     __syncthreads();
+  }
+}
+
+// any() over the dims of 'input' from kKeep on: output[r] is true if any
+// element of row r is, where a row is one index into the first kKeep dims.
+// A row of up to kWarpRowMax elements is taken by one warp, rows striding
+// over the op's warps, and combined with __any_sync. A longer row is taken
+// by a whole block, each thread ORing its share and __syncthreads_or
+// combining them.
+template <int32_t kBlockSize, int32_t kKeep>
+__device__ void any_rows(Tensor* input, Tensor* output, BlockInfo& block) {
+  constexpr uint32_t kWarpRowMax = 1024;
+  int64_t numRows = 1;
+  for (int32_t d = 0; d < kKeep; ++d) {
+    numRows *= input->dims[d];
+  }
+  const uint32_t rowLen =
+      numRows == 0 ? 0 : static_cast<uint32_t>(input->numEl / numRows);
+  const bool* in = storage<bool>(input);
+  bool* out = storage<bool>(output);
+  if (rowLen <= kWarpRowMax) {
+    const uint32_t lane = threadIdx.x & 31;
+    const int64_t warpsPerBlock = blockDim.x / 32;
+    for (int64_t row = block.blockInOp * warpsPerBlock + threadIdx.x / 32;
+         row < numRows;
+         row += block.numBlocksInOp * warpsPerBlock) {
+      bool found = false;
+      const uint32_t first = static_cast<uint32_t>(row) * rowLen;
+      for (uint32_t i = lane; i < rowLen; i += 32) {
+        found |= in[complexIdx(input->contiguous, input, first + i)];
+      }
+      found = __any_sync(0xffffffff, found);
+      if (lane == 0) {
+        out[row] = found;
+      }
+    }
+    return;
+  }
+  for (int64_t row = block.blockInOp; row < numRows;
+       row += block.numBlocksInOp) {
+    int32_t found = 0;
+    const uint32_t first = static_cast<uint32_t>(row) * rowLen;
+    for (uint32_t i = threadIdx.x; i < rowLen; i += blockDim.x) {
+      found |= in[complexIdx(input->contiguous, input, first + i)] ? 1 : 0;
+    }
+    found = __syncthreads_or(found);
+    if (threadIdx.x == 0) {
+      out[row] = found != 0;
+    }
   }
 }
 
@@ -1197,8 +1249,8 @@ __device__ void tw_reduce_head(
     // Empty input: the loop below runs zero iterations, so this block's partial
     // slot would keep whatever the buffer already held and the final stage
     // would reduce over that. The host reserves the slot expecting this write
-    // (numBlocksShape in Builtins.cpp), so write the identity -- the same guard
-    // masked_select_head needs, for the same reason.
+    // (numBlocksReserve in Builtins.cpp), so write the identity -- the same
+    // guard masked_select_head needs, for the same reason.
     if (threadIdx.x == 0) {
       out[block.blockInOp] = Op::identity();
     }
@@ -1829,7 +1881,8 @@ __device__ void masked_select_1pass_lane(
   for (uint32_t tile = block.blockInOp; tile < numTiles;
        tile += block.numBlocksInOp) {
     const uint32_t idx = tile * kBlockSize + threadIdx.x;
-    const bool flag = idx < size && flags[idx];
+    const bool flag =
+        idx < size && flags[complexIdx(mask->contiguous, mask, idx)];
     const int32_t inclusive =
         facebook::velox::wave::inclusiveSum<int32_t, kBlockSize>(
             static_cast<int32_t>(flag),
@@ -1857,7 +1910,8 @@ __device__ void masked_select_1pass_lane(
     }
     __syncthreads();
     if (flag) {
-      out[tileExclusive + inclusive - 1] = in[idx];
+      out[tileExclusive + inclusive - 1] =
+          in[complexIdx(input->contiguous, input, idx)];
     }
     if (tile == numTiles - 1 && threadIdx.x == 0) {
       output->dims[0] = tileExclusive + tileTotal;
@@ -1913,7 +1967,8 @@ __device__ void masked_select_1pass_shared(
     int32_t threadCount = 0;
 #pragma unroll
     for (int32_t i = 0; i < kItemsPerThread; ++i) {
-      flagItems[i] = (base + i) < size && flags[base + i];
+      flagItems[i] = (base + i) < size &&
+          flags[complexIdx(mask->contiguous, mask, base + i)];
       threadCount += static_cast<int32_t>(flagItems[i]);
     }
     const int32_t threadExclusive =
@@ -1923,7 +1978,7 @@ __device__ void masked_select_1pass_shared(
 #pragma unroll
     for (int32_t i = 0; i < kItemsPerThread; ++i) {
       if (flagItems[i]) {
-        shared[slot++] = in[base + i];
+        shared[slot++] = in[complexIdx(input->contiguous, input, base + i)];
       }
     }
     if (threadIdx.x < kWarpThreads) {

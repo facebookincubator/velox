@@ -22,6 +22,7 @@
 
 #include <folly/container/F14Set.h>
 #include <algorithm>
+#include <cmath>
 #include <sstream>
 
 namespace torch::wave {
@@ -30,6 +31,7 @@ namespace torch::wave {
 
 int64_t SizeExpr::numElements(FrameP frame, nativert::ValueId* largestOut)
     const {
+  ScopedSetupPhase phase(SetupPhase::kSizeExpr);
   // A pure factory expression (e.g. zeros(size=[1000])) has no tensor leaves to
   // size from -- its extent lives entirely in constShapes.  Fall through to the
   // constShapes path below rather than returning the scalar default.
@@ -92,6 +94,7 @@ int64_t SizeExpr::numElements(FrameP frame, nativert::ValueId* largestOut)
 }
 
 std::vector<Dim> SizeExpr::dims(FrameP frame) const {
+  ScopedSetupPhase phase(SetupPhase::kSizeExpr);
   TORCH_CHECK(
       op == SizeShortcut::kMax,
       "SizeExpr::dims only supported for kMax, got ",
@@ -167,6 +170,135 @@ std::vector<Dim> SizeExpr::dims(FrameP frame) const {
     }
   }
   return bestDims;
+}
+
+int64_t SizeExpr::numElements(
+    const ValueTable& table,
+    nativert::ValueId* largestOut) const {
+  ScopedSetupPhase phase(SetupPhase::kSizeExpr);
+  if (values.empty() && args.empty() && constShapes.empty()) {
+    return 1;
+  }
+  if (broadcast || !constShapes.empty()) {
+    std::vector<Dim> shape;
+    dims(table, shape);
+    int64_t n = 1;
+    for (auto dim : shape) {
+      n *= dim;
+    }
+    return n;
+  }
+  int64_t result = 0;
+  for (auto valueId : values) {
+    if (!table.valid(valueId)) {
+      continue;
+    }
+    int64_t n;
+    if (table.isTensor(valueId)) {
+      n = table.tensor(valueId).numEl;
+    } else if (table.isInt(valueId)) {
+      n = table.scalar(valueId);
+    } else {
+      continue;
+    }
+    if (op == SizeShortcut::kMax) {
+      if (n > result) {
+        result = n;
+        if (largestOut && table.isTensor(valueId)) {
+          *largestOut = valueId;
+        }
+      }
+    } else {
+      result += n;
+    }
+  }
+  for (auto& child : args) {
+    int64_t n = child.numElements(table, largestOut);
+    if (op == SizeShortcut::kMax) {
+      if (n > result) {
+        result = n;
+      }
+    } else {
+      result += n;
+    }
+  }
+  return result;
+}
+
+void SizeExpr::dims(const ValueTable& table, std::vector<Dim>& result) const {
+  ScopedSetupPhase phase(SetupPhase::kSizeExpr);
+  TORCH_CHECK(
+      op == SizeShortcut::kMax,
+      "SizeExpr::dims only supported for kMax, got ",
+      static_cast<int>(op));
+  result.clear();
+  if (values.empty() && args.empty() && constShapes.empty()) {
+    result.push_back(1);
+    return;
+  }
+  auto isTensor = [&](nativert::ValueId id) {
+    return table.valid(id) && table.isTensor(id);
+  };
+  if (broadcast || !constShapes.empty()) {
+    auto combine = [&result](const Dim* shape, size_t rank) {
+      if (rank > result.size()) {
+        result.insert(result.begin(), rank - result.size(), 1);
+      }
+      for (size_t i = 0; i < rank; ++i) {
+        auto& resultDim = result[result.size() - rank + i];
+        if (resultDim == 1) {
+          resultDim = shape[i];
+        } else if (shape[i] != 1) {
+          resultDim = std::max<Dim>(resultDim, shape[i]);
+        }
+      }
+    };
+    Dim shape[kMaxDims];
+    for (auto valueId : values) {
+      if (isTensor(valueId)) {
+        const auto& t = table.tensor(valueId);
+        for (int32_t i = 0; i < t.rank; ++i) {
+          shape[i] = static_cast<Dim>(t.dims[i]);
+        }
+        combine(shape, t.rank);
+      }
+    }
+    std::vector<Dim> childDims;
+    for (auto& child : args) {
+      child.dims(table, childDims);
+      combine(childDims.data(), childDims.size());
+    }
+    for (const auto& constShape : constShapes) {
+      combine(constShape.data(), constShape.size());
+    }
+    if (result.empty()) {
+      result.push_back(1);
+    }
+    return;
+  }
+  int64_t bestNumel = -1;
+  for (auto valueId : values) {
+    if (!isTensor(valueId)) {
+      continue;
+    }
+    const auto& t = table.tensor(valueId);
+    if (static_cast<int64_t>(t.numEl) > bestNumel) {
+      bestNumel = t.numEl;
+      result.assign(t.dims, t.dims + t.rank);
+    }
+  }
+  std::vector<Dim> childDims;
+  for (auto& child : args) {
+    child.dims(table, childDims);
+    int64_t numel = 1;
+    for (auto dim : childDims) {
+      numel *= dim;
+    }
+    if (numel > bestNumel) {
+      bestNumel = numel;
+      result = childDims;
+    }
+  }
 }
 
 SizeExpr SizeExpr::toActual(
@@ -662,8 +794,6 @@ KernelOperation::KernelOperation(
   std::unordered_set<NodeCP> blockSizeVisited;
   blockSizePreference_ =
       maxBlockSizePreference(sg.root, inputs_, blockSizeVisited);
-  ownEntryPoint_ = Registry::metadata(sg.root->target()) != nullptr &&
-      Registry::metadata(sg.root->target())->ownEntryPoint;
 
   std::unordered_set<NodeCP> minBlocksVisited;
   minBlocksPerSm_ = maxMinBlocksPerSm(sg.root, inputs_, minBlocksVisited);
@@ -676,7 +806,7 @@ KernelOperation::KernelOperation(
       // prim.ListPack), the kernel emits no device code to compute it, so it
       // must be materialized on the host before the kernel reads it. Keep the
       // output desc, set its viewNode, and reuse the existing input offset (do
-      // not re-assign) so allocateLaunchOutputs executes the view before
+      // not re-assign) so the step program executes the view before
       // launch. Without this the value stays None in the frame.
       auto* producer = value->producer();
       auto* producerMeta =
@@ -720,16 +850,16 @@ KernelOperation::KernelOperation(
   if (!outputValues.empty() && isAllElementwise(sg.root, inputs_, ewVisited) &&
       !hasElementwiseBorder(sg.root, inputs_, borderVisited)) {
     // Size each memory-backed output by its largest input, unless the output
-    // declares its own shape expression (reserveShape, e.g. index_select,
+    // declares its own reserve (e.g. index_select,
     // slice_scatter, the factory ops), in which case that shape wins.
     // collectElementwiseLeaves already drops wholeTensor operands from the size
-    // leaves, so an op that reads a wholeTensor but has no reserveShape -- e.g.
+    // leaves, so an op that reads a wholeTensor but has no reserve -- e.g.
     // searchsorted / bucketize / isin, whose output has the query's shape while
     // the searched array is the wholeTensor -- is still sized correctly from
     // its remaining inputs, even when the query is a fused register that a
-    // reserveShape could not read.
+    // reserve could not read.
     for (size_t i = 0; i < outputDescs_.size(); ++i) {
-      if (!outputDescs_[i].shapeOnly && !outputDescs_[i].reserveShape) {
+      if (!outputDescs_[i].shapeOnly && !outputDescs_[i].sizedByReserve()) {
         outputDescs_[i].byLargestInput = true;
       }
     }
@@ -881,11 +1011,11 @@ void KernelOperation::setCode(std::stringstream& code) {
 
   // The loop above collects ordering inputs from this op's (possibly lowered)
   // variant nodes.  When an op is lowered to tw.* helpers, a boundary tensor
-  // input can be read only via reserveShape / sizeExpr at gatherLaunches time
+  // input can be read only via its reserve / sizeExpr at sizing time
   // rather than as a tracked variant node input, so its id is missing here.
   // Add the op's actual boundary inputs (orderedInputs_) so placeKernelLaunch
   // orders this op after their producers -- otherwise a standalone producer can
-  // be co-scheduled in the same step and its output read during gatherLaunches
+  // be co-scheduled in the same step and its output read during sizing
   // before the standalone has run.
   for (int32_t i = 0; i < numInputs_; ++i) {
     orderingInputs_.insert(orderedInputs_[i]->id());
@@ -1334,8 +1464,11 @@ SizeExpr KernelOperation::makeDeepSizeExpr() {
 }
 
 void mergeOutputDesc(OutputDesc& dst, OutputDesc&& src) {
-  if (src.reserveShape) {
-    dst.reserveShape = std::move(src.reserveShape);
+  if (src.reserveFn) {
+    dst.reserveFn = src.reserveFn;
+    dst.reserveInputs = std::move(src.reserveInputs);
+    dst.reserveNode = src.reserveNode;
+    dst.reserveAttrNode = src.reserveAttrNode;
   }
   if (src.sizeExpr.op != SizeShortcut::kNone) {
     dst.sizeExpr = std::move(src.sizeExpr);
@@ -1416,9 +1549,9 @@ OutputDesc KernelOperation::makeOutputDesc(
   desc.sizeExpr.op = returnMeta.sizeShortcut;
 
   // Expand sizeArgs ordinals to ValueIds from the node's inputs.
-  // Skip when reserveShape is set — it handles sizing independently.
+  // Skip when a reserve is set: it handles sizing independently.
   if (returnMeta.sizeShortcut != SizeShortcut::kNone &&
-      !returnMeta.reserveShape) {
+      returnMeta.reserve == nullptr) {
     const auto& sizeArgs = returnMeta.sizeArgs;
     for (size_t j = 0; j < sizeArgs.ordinal.size(); ++j) {
       auto ordinal = sizeArgs.ordinal[j];
@@ -1436,15 +1569,12 @@ OutputDesc KernelOperation::makeOutputDesc(
     }
   }
 
-  if (returnMeta.reserveShape) {
-    auto reserveShape = returnMeta.reserveShape;
-    auto* originalNode = compileCtx_.originalFromVariant(node);
-    desc.reserveShape = [node, originalNode, reserveShape](
-                            nativert::ExecutionFrame& frame,
-                            const FormalToActual& map,
-                            const NodeMap& nodeMap) {
-      return reserveShape(node, frame, map, originalNode, nodeMap);
-    };
+  if (returnMeta.reserve != nullptr) {
+    desc.reserveNode = node;
+    desc.reserveAttrNode = compileCtx_.originalFromVariant(node);
+    desc.reserveFn = returnMeta.reserve;
+    desc.reserveInputs =
+        std::make_shared<const ReserveInputs>(returnMeta.reserveInputs);
   }
 
   return desc;
@@ -1589,15 +1719,24 @@ void KernelOperation::setOutputs(
     if (!meta->returnMeta[i].isRegister || inMemory || needsShapeOnly) {
       OutputDesc desc;
       if (needsShapeOnly && meta->returnMeta[i].isRegister) {
-        if (meta->returnMeta[i].reserveShape) {
+        if (meta->returnMeta[i].reserve != nullptr) {
           desc = makeOutputDesc(meta->returnMeta[i], node, subgraphInputs);
         } else {
           desc.sizeExpr =
               makeSizeExpr(node, subgraphInputs, static_cast<int32_t>(i));
         }
         desc.shapeOnly = true;
-      } else if (meta->returnMeta[i].reserveShape) {
+      } else if (meta->returnMeta[i].reserve != nullptr) {
         desc = makeOutputDesc(meta->returnMeta[i], node, subgraphInputs);
+        // An op that mutates its self argument in place returns self: the
+        // output aliases it rather than taking a buffer of its own.
+        if (i == 0 && meta->mutatesArg.has_value()) {
+          auto ord = *meta->mutatesArg;
+          if (ord >= 0 && static_cast<size_t>(ord) < node->inputs().size() &&
+              node->inputs()[ord].value != nullptr) {
+            desc.aliasSelfId = node->inputs()[ord].value->id();
+          }
+        }
       } else {
         desc.shapeSetOnDevice = meta->returnMeta[i].shapeSetOnDevice;
         desc.neededOnHost = meta->returnMeta[i].neededOnHost;
