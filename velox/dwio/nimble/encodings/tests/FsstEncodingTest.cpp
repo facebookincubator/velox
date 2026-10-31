@@ -467,18 +467,25 @@ class StringReadWithVisitor {
   std::vector<std::string_view> values_;
 };
 
+template <typename Filter>
 class RangeReadWithVisitor : public StringReadWithVisitor {
  public:
-  using FilterType = velox::common::BytesRange;
+  using FilterType = Filter;
   using Extract = velox::dwio::common::DropValues;
 
-  RangeReadWithVisitor(
-      std::vector<vector_size_t> rows,
-      const FilterType& filter)
+  RangeReadWithVisitor(std::vector<vector_size_t> rows, const Filter& filter)
       : StringReadWithVisitor(std::move(rows)), filter_{filter} {}
 
   const FilterType& filter() const {
     return filter_;
+  }
+
+  void process(std::string_view value, bool& atEnd) {
+    if (filter_.testBytes(value.data(), static_cast<int32_t>(value.size()))) {
+      filterPassed(value);
+    }
+    addRowIndex(1);
+    atEnd = this->atEnd();
   }
 
   void filterPassed(std::string_view) {
@@ -556,35 +563,68 @@ TEST_F(
                 exclusive,
                 false,
             };
-            for (const bool sparse : {false, true}) {
-              std::vector<vector_size_t> rows;
-              std::vector<vector_size_t> expected;
-              for (vector_size_t row = 0; row < values.size(); ++row) {
-                if (!sparse || row % 3 == 0) {
-                  rows.push_back(row);
-                  if (filter.testBytes(
-                          decoded[row].data(),
-                          static_cast<int32_t>(decoded[row].size()))) {
-                    expected.push_back(row);
+            const auto check = [&](const auto& predicate) {
+              for (const bool sparse : {false, true}) {
+                std::vector<vector_size_t> rows;
+                std::vector<vector_size_t> expected;
+                for (vector_size_t row = 0; row < values.size(); ++row) {
+                  if (!sparse || row % 3 == 0) {
+                    rows.push_back(row);
+                    if (predicate.testBytes(
+                            decoded[row].data(),
+                            static_cast<int32_t>(decoded[row].size()))) {
+                      expected.push_back(row);
+                    }
                   }
                 }
+                size_t allocations{0};
+                FsstEncoding encoding{
+                    *pool_, input, [&](uint32_t size) {
+                      ++allocations;
+                      return createStringBufferFactory()(size);
+                    }};
+                RangeReadWithVisitor visitor{rows, predicate};
+                ReadWithVisitorParams params{};
+                encoding.readWithVisitor(visitor, params);
+                EXPECT_EQ(visitor.passingRows(), expected);
+                EXPECT_EQ(allocations, 0);
               }
-              size_t allocations{0};
-              FsstEncoding encoding{*pool_, input, [&](uint32_t size) {
-                                      ++allocations;
-                                      return createStringBufferFactory()(size);
-                                    }};
-              RangeReadWithVisitor visitor{rows, filter};
-              ReadWithVisitorParams params{};
-              encoding.readWithVisitor(visitor, params);
-              EXPECT_EQ(visitor.passingRows(), expected);
-              EXPECT_EQ(allocations, 0);
-            }
+            };
+            check(filter);
+            check(
+                velox::common::NegatedBytesRange{
+                    bound,
+                    lowerUnbounded,
+                    exclusive,
+                    bound,
+                    upperUnbounded,
+                    exclusive,
+                    false,
+                });
           }
         }
       }
     }
   }
+}
+
+TEST_F(FsstEncodingTest, negatedEqualityUsesCompressedComparison) {
+  const std::string bound(2'048, 'a');
+  const std::vector<std::string_view> values{bound, "different", bound};
+  Buffer buffer{*pool_};
+  const auto encoded = encodeFsst(values, buffer);
+  velox::common::NegatedBytesRange filter{
+      bound, false, false, bound, false, false, false};
+  size_t allocations{0};
+  FsstEncoding encoding{*pool_, encoded, [&](uint32_t size) {
+                          ++allocations;
+                          return createStringBufferFactory()(size);
+                        }};
+  RangeReadWithVisitor visitor{{0, 1, 2}, filter};
+  ReadWithVisitorParams params{};
+  encoding.readWithVisitor(visitor, params);
+  EXPECT_EQ(visitor.passingRows(), (std::vector<vector_size_t>{1}));
+  EXPECT_EQ(allocations, 0);
 }
 
 TEST_F(FsstEncodingTest, compressedRangesRejectMalformedRowsAndSparseGaps) {
@@ -597,14 +637,23 @@ TEST_F(FsstEncodingTest, compressedRangesRejectMalformedRowsAndSparseGaps) {
   for (const int malformedRow : {0, 1, 2}) {
     const auto malformed =
         buildIncompleteEscapeEncoding(splitFsst(encoded), malformedRow);
-    FsstEncoding encoding{*pool_, malformed, createStringBufferFactory()};
-    RangeReadWithVisitor visitor{{0, 2}, filter};
-    ReadWithVisitorParams params{};
-    NIMBLE_ASSERT_THROW(
-        encoding.readWithVisitor(visitor, params),
-        "FSST compressed string ends with an incomplete escape code.");
-    EXPECT_TRUE(visitor.passingRows().empty());
-    EXPECT_TRUE(stringBuffers_.empty());
+    const auto check = [&](const auto& predicate) {
+      FsstEncoding encoding{*pool_, malformed, createStringBufferFactory()};
+      RangeReadWithVisitor visitor{{0, 2}, predicate};
+      ReadWithVisitorParams params{};
+      NIMBLE_ASSERT_THROW(
+          encoding.readWithVisitor(visitor, params),
+          "FSST compressed string ends with an incomplete escape code.");
+      EXPECT_TRUE(visitor.passingRows().empty());
+      EXPECT_TRUE(stringBuffers_.empty());
+    };
+    check(filter);
+    check(
+        velox::common::NegatedBytesRange{
+            "no/a", false, false, "no/z", false, false, false});
+    check(
+        velox::common::NegatedBytesRange{
+            "no/match", false, false, "no/match", false, false, false});
   }
 }
 
@@ -613,20 +662,42 @@ TEST_F(FsstEncodingTest, compressedRangesPreserveSparseNullsAndReset) {
       "prefix/a", "prefix/b", "other", "prefix/c"};
   Buffer buffer{*pool_};
   const auto encoded = encodeFsst(values, buffer);
-  velox::common::BytesRange filter{
-      "prefix/", false, false, "prefix0", false, true, true};
-  FsstEncoding encoding{*pool_, encoded, createStringBufferFactory()};
-  for (int iteration = 0; iteration < 2; ++iteration) {
-    encoding.reset();
-    RangeReadWithVisitor visitor{{0, 1, 4, 5}, filter};
-    auto nulls = velox::allocateNulls(6, pool_.get(), velox::bits::kNotNull);
-    velox::bits::setNull(nulls->asMutable<uint64_t>(), 1);
-    velox::bits::setNull(nulls->asMutable<uint64_t>(), 4);
-    visitor.reader().nullsInReadRange() = std::move(nulls);
-    ReadWithVisitorParams params{};
-    encoding.readWithVisitor(visitor, params);
-    EXPECT_EQ(visitor.passingRows(), (std::vector<vector_size_t>{0, 1, 4, 5}));
-    EXPECT_TRUE(stringBuffers_.empty());
+  for (const bool nullAllowed : {false, true}) {
+    const auto check = [&](const auto& predicate) {
+      FsstEncoding encoding{*pool_, encoded, createStringBufferFactory()};
+      for (int iteration = 0; iteration < 2; ++iteration) {
+        encoding.reset();
+        const std::vector<vector_size_t> rows{0, 1, 3, 4, 5};
+        RangeReadWithVisitor visitor{rows, predicate};
+        auto nulls =
+            velox::allocateNulls(6, pool_.get(), velox::bits::kNotNull);
+        velox::bits::setNull(nulls->asMutable<uint64_t>(), 1);
+        velox::bits::setNull(nulls->asMutable<uint64_t>(), 4);
+        visitor.reader().nullsInReadRange() = std::move(nulls);
+        ReadWithVisitorParams params{};
+        encoding.readWithVisitor(visitor, params);
+        const std::vector<std::string_view> logical{
+            values[0], {}, values[1], values[2], {}, values[3]};
+        std::vector<vector_size_t> expected;
+        for (auto row : rows) {
+          if (row == 1 || row == 4
+                  ? predicate.testNull()
+                  : predicate.testBytes(
+                        logical[row].data(),
+                        static_cast<int32_t>(logical[row].size()))) {
+            expected.push_back(row);
+          }
+        }
+        EXPECT_EQ(visitor.passingRows(), expected);
+        EXPECT_TRUE(stringBuffers_.empty());
+      }
+    };
+    check(
+        velox::common::BytesRange{
+            "prefix/", false, false, "prefix0", false, true, nullAllowed});
+    check(
+        velox::common::NegatedBytesRange{
+            "prefix/", false, false, "prefix0", false, true, nullAllowed});
   }
 }
 
