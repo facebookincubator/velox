@@ -44,6 +44,7 @@
 #include "velox/dwio/nimble/encodings/FixedBitWidthEncoding.h"
 #include "velox/dwio/nimble/encodings/ForEncoding.h"
 #include "velox/dwio/nimble/encodings/FrequencyPartitionEncoding.h"
+#include "velox/dwio/nimble/encodings/FsstEncoding.h"
 #include "velox/dwio/nimble/encodings/HuffmanEncoding.h"
 #include "velox/dwio/nimble/encodings/MainlyConstantEncoding.h"
 #include "velox/dwio/nimble/encodings/RLEEncoding.h"
@@ -377,6 +378,22 @@ TYPED_TEST(ALPFuzzerTest, correctness) {
       FLAGS_fuzzer_seed,
       FLAGS_fuzzer_compression);
   fuzzer.run();
+}
+
+TEST(FsstFuzzerTest, correctness) {
+  for (const bool useVarint : {false, true}) {
+    SCOPED_TRACE(::testing::Message() << "useVarint=" << useVarint);
+    Encoding::Options options{};
+    options.fsstCompressionTargetRatio = std::numeric_limits<double>::max();
+    options.useVarintRowCount = useVarint;
+    EncodingFuzzer<FsstEncoding> fuzzer(
+        FLAGS_fuzzer_iterations,
+        FLAGS_fuzzer_max_rows,
+        FLAGS_fuzzer_seed,
+        FLAGS_fuzzer_compression,
+        options);
+    fuzzer.run();
+  }
 }
 
 // Huffman: all integral types.
