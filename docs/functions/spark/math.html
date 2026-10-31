@@ -469,6 +469,26 @@ Overflow results return null. Corresponds to Spark’s operator <code class="doc
 </dd></dl>
 
 <dl class="spark function">
+<dt class="sig sig-object spark" id="normalize_nan_and_zero">
+<span class="sig-name descname"><span class="pre">normalize_nan_and_zero</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">[same</span> <span class="pre">as</span> <span class="pre">x]</span></span></span><a class="headerlink" href="#normalize_nan_and_zero" title="Link to this definition">¶</a></dt>
+<dd><p>Returns 0.0 if <code class="docutils literal notranslate"><span class="pre">x</span></code> is -0.0, the canonical NaN if <code class="docutils literal notranslate"><span class="pre">x</span></code> is any NaN, and <code class="docutils literal notranslate"><span class="pre">x</span></code> otherwise.
+The canonical NaN is Java’s <code class="docutils literal notranslate"><span class="pre">Double.NaN</span></code> (<code class="docutils literal notranslate"><span class="pre">0x7ff8000000000000</span></code>) for DOUBLE and
+<code class="docutils literal notranslate"><span class="pre">Float.NaN</span></code> (<code class="docutils literal notranslate"><span class="pre">0x7fc00000</span></code>) for REAL. Returns NULL if <code class="docutils literal notranslate"><span class="pre">x</span></code> is NULL.
+Supported types are: REAL, DOUBLE.
+Note: This function is not directly callable in Spark SQL, but is used internally by
+<a class="reference external" href="https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/optimizer/NormalizeFloatingNumbers.scala">Spark’s NormalizeFloatingNumbers</a>.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">--</span> <span class="n">Function</span> <span class="n">call</span> <span class="n">examples</span> <span class="p">(</span><span class="n">this</span> <span class="n">function</span> <span class="ow">is</span> <span class="ow">not</span> <span class="n">directly</span> <span class="nb">callable</span> <span class="ow">in</span> <span class="n">Spark</span> <span class="n">SQL</span><span class="p">)</span><span class="o">.</span>
+<span class="n">normalize_nan_and_zero</span><span class="p">(</span><span class="o">-</span><span class="mf">0.0</span><span class="p">)</span> <span class="o">--</span> <span class="mf">0.0</span>
+<span class="n">normalize_nan_and_zero</span><span class="p">(</span><span class="mf">0.0</span><span class="p">)</span> <span class="o">--</span> <span class="mf">0.0</span>
+<span class="n">normalize_nan_and_zero</span><span class="p">(</span><span class="mf">1.5</span><span class="p">)</span> <span class="o">--</span> <span class="mf">1.5</span>
+<span class="n">normalize_nan_and_zero</span><span class="p">(</span><span class="n">NaN</span><span class="p">)</span> <span class="o">--</span> <span class="n">NaN</span>
+<span class="n">normalize_nan_and_zero</span><span class="p">(</span><span class="o">-</span><span class="n">NaN</span><span class="p">)</span> <span class="o">--</span> <span class="n">NaN</span>
+<span class="n">normalize_nan_and_zero</span><span class="p">(</span><span class="n">NULL</span><span class="p">)</span> <span class="o">--</span> <span class="n">NULL</span>
+</pre></div>
+</div>
+</dd></dl>
+
+<dl class="spark function">
 <dt class="sig sig-object spark" id="not">
 <span class="sig-name descname"><span class="pre">not</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">boolean</span></span></span><a class="headerlink" href="#not" title="Link to this definition">¶</a></dt>
 <dd><p>Logical not.</p>
@@ -809,6 +829,7 @@ Otherwise, the function will return NULL.</p>
 <li><a class="reference internal" href="#sqrt"><code class="docutils literal notranslate"><span class="pre">sqrt()</span></code></a></li>
 <li><a class="reference internal" href="#multiply"><code class="docutils literal notranslate"><span class="pre">multiply()</span></code></a></li>
 <li><a class="reference internal" href="#id4"><code class="docutils literal notranslate"><span class="pre">multiply()</span></code></a></li>
+<li><a class="reference internal" href="#normalize_nan_and_zero"><code class="docutils literal notranslate"><span class="pre">normalize_nan_and_zero()</span></code></a></li>
 <li><a class="reference internal" href="#not"><code class="docutils literal notranslate"><span class="pre">not()</span></code></a></li>
 <li><a class="reference internal" href="#pmod"><code class="docutils literal notranslate"><span class="pre">pmod()</span></code></a></li>
 <li><a class="reference internal" href="#power"><code class="docutils literal notranslate"><span class="pre">power()</span></code></a></li>
