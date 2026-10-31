@@ -142,6 +142,53 @@ TEST(AllocGroupTest, valuesBorrowedByTheirOwnNodeAreNotGrouped) {
   EXPECT_THAT(groups[0].actualIds, ElementsAre(51, 52));
 }
 
+// Graph outputs are never released, so they are grouped only among themselves:
+// the outputs a step produces form one group with no release point, apart from
+// the values the same step produces that are freed later. A value nothing reads
+// and that is not a graph output still stays out.
+TEST(AllocGroupTest, graphOutputsAreGroupedAmongThemselves) {
+  const std::vector<NodeFootprint> nodes = {
+      {.node = 0,
+       .lastStep = 1,
+       .launches =
+           {{.step = 0,
+             .writes = {10, 11, 12, 13, 14},
+             .writeDtypes =
+                 {at::kFloat, at::kFloat, at::kLong, at::kFloat, at::kFloat},
+             .writeNeedsSync = {false, false, false, false, false}},
+            {.step = 1,
+             .writes = {15},
+             .writeDtypes = {at::kFloat},
+             .writeNeedsSync = {false}}}},
+      {.node = 1,
+       .launches = {{.step = 0, .reads = {10}}},
+       .releasedIds = {10},
+       .releaseSteps = {0}},
+  };
+  const folly::F14FastSet<nativert::ValueId> graphOutputs = {11, 12, 13, 15};
+
+  AllocGroupStats stats;
+  auto lifetimes =
+      graphAllocLifetimes(nodes, &stats, /*claimed=*/nullptr, &graphOutputs);
+  std::vector<nativert::ValueId> ungrouped;
+  auto groups = buildAllocGroups(lifetimes, &ungrouped);
+
+  EXPECT_EQ(stats.numAllocated, 6);
+  EXPECT_EQ(stats.numGrouped, 5);
+  EXPECT_EQ(stats.numGraphOutputsGrouped, 4);
+  EXPECT_EQ(stats.numEscaping, 1);
+  EXPECT_THAT(ungrouped, ElementsAre(14));
+  ASSERT_EQ(groups.size(), 3);
+  // At node 0 step 0: the graph outputs, whose missing release point sorts
+  // first, then the freed value.
+  EXPECT_THAT(groups[0].actualIds, ElementsAre(11, 12, 13));
+  EXPECT_EQ(groups[0].freeStep, -1);
+  EXPECT_THAT(groups[1].actualIds, ElementsAre(10));
+  EXPECT_EQ(groups[1].freeNode, 1);
+  EXPECT_THAT(groups[2].actualIds, ElementsAre(15));
+  EXPECT_EQ(groups[2].allocStep, 1);
+}
+
 // The point of the whole-graph scan: a value produced by one node and released
 // by a later one is grouped with the others that share both points, which a
 // per-node scan cannot see because the release is not in the node that
@@ -463,17 +510,11 @@ TEST(AllocGroupTest, concatCarvesEveryOperand) {
 // puts the wrong values back on the table without failing anything else.
 TEST(AllocGroupTest, planReportsWhatAConcatGroupPlaces) {
   auto& config = WaveConfig::get();
-  const auto savedAlloc = config.enableAllocGroup;
-  const auto savedConcat = config.enableConcatAllocGroup;
   const auto savedFree = config.freeIntermediates;
   const auto savedCg = config.isCg;
-  config.enableAllocGroup = true;
-  config.enableConcatAllocGroup = true;
   config.freeIntermediates = true;
   config.isCg = true;
   SCOPE_EXIT {
-    config.enableAllocGroup = savedAlloc;
-    config.enableConcatAllocGroup = savedConcat;
     config.freeIntermediates = savedFree;
     config.isCg = savedCg;
   };
@@ -611,11 +652,10 @@ TEST(AllocGroupTest, concatMeasuresAnInternalOperandFromItsSizeExpression) {
   EXPECT_THAT(groups[0].concat->memberOfOperand, ElementsAre(0, 1, -1));
 }
 
-// An operand sized by its own reserve function does not sink the concat. The
-// reserve is how that operand's extent is computed everywhere else, and the
-// group measures it the same way -- with the invocation's bindings already
-// bound to it, so only a frame is needed. The operand is still not carved: the
-// concat's own kernel writes it, so there is no separate buffer to redirect.
+// An operand sized by its own reserve does not sink the concat: the group
+// measures it from its table entry, which the reserve wrote. The operand is
+// still not carved: the concat's own kernel writes it, so there is no separate
+// buffer to redirect.
 TEST(AllocGroupTest, concatMeasuresAnOperandFromItsOwnReserve) {
   auto concat = oneDimCat(
       13,
@@ -624,13 +664,7 @@ TEST(AllocGroupTest, concatMeasuresAnOperandFromItsOwnReserve) {
        internalOperand(20, 10, /*carve=*/false)},
       /*layoutNode=*/1,
       /*layoutStep=*/0);
-  concat.operands[2].reserveShape = [](NodeCP,
-                                       nativert::ExecutionFrame&,
-                                       const FormalToActual&,
-                                       NodeCP,
-                                       const NodeMap&) {
-    return std::vector<std::vector<Dim>>{};
-  };
+  concat.operands[2].hasReserve = true;
   const std::vector<NodeFootprint> nodes = {
       {.node = 0,
        .launches =

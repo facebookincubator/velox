@@ -118,6 +118,56 @@ class ScopedAllocCall {
   const uint64_t start_;
 };
 
+/// What this thread has spent on the parts of a step's setup that a
+/// pre-resolved tensor table would replace: calls to reserve functions and
+/// size expressions, creating the frame tensors of outputs, building host
+/// views, writing the frame, and filling Tensor parameters. Times are in
+/// timestamp ticks and exclude the allocator calls made inside them, which
+/// threadAllocCallUs counts. Monotonic over the thread's life; read a pair and
+/// subtract. Counts always accumulate; times only under the kTiming trace bit.
+struct SetupCounters {
+  int64_t reserveTicks{0};
+  int64_t reserveCalls{0};
+  int64_t sizeExprTicks{0};
+  int64_t sizeExprCalls{0};
+  int64_t tensorTicks{0};
+  int64_t tensorCalls{0};
+  int64_t viewTicks{0};
+  int64_t viewCalls{0};
+  // Carving the members of alloc and concat groups out of their buffers.
+  int64_t carveTicks{0};
+  int64_t carveCalls{0};
+  int64_t frameWrites{0};
+  int64_t fills{0};
+
+  SetupCounters operator-(const SetupCounters& other) const;
+  SetupCounters& operator+=(const SetupCounters& other);
+};
+
+SetupCounters& threadSetupCounters();
+
+enum class SetupPhase : uint8_t { kReserve, kSizeExpr, kTensor, kView, kCarve };
+
+/// Charges the enclosed code to one SetupCounters phase, minus the allocator
+/// time inside it. A phase nested in one of the same kind counts as a call but
+/// adds no time, which the outermost already includes.
+class ScopedSetupPhase {
+ public:
+  explicit ScopedSetupPhase(SetupPhase phase);
+  ~ScopedSetupPhase();
+
+  ScopedSetupPhase(const ScopedSetupPhase&) = delete;
+  ScopedSetupPhase& operator=(const ScopedSetupPhase&) = delete;
+  ScopedSetupPhase(ScopedSetupPhase&&) = delete;
+  ScopedSetupPhase& operator=(ScopedSetupPhase&&) = delete;
+
+ private:
+  const SetupPhase phase_;
+  bool outermost_;
+  uint64_t start_{0};
+  int64_t allocTicksBefore_{0};
+};
+
 at::Tensor aliasTensor(
     const at::Tensor& base,
     c10::IntArrayRef sizes,

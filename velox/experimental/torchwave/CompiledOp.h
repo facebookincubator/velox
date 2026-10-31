@@ -17,6 +17,7 @@
 #pragma once
 
 #include <memory>
+#include <mutex>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -27,6 +28,7 @@
 #include <ATen/core/ivalue.h>
 #include <folly/container/F14Set.h>
 
+#include "velox/experimental/torchwave/Utils.h"
 #include "velox/experimental/torchwave/WaveGraph.h"
 #include "velox/experimental/wave/common/Cuda.h"
 
@@ -36,7 +38,13 @@ class OpInvocation;
 struct StepVectors;
 struct StepEvents;
 // Defined in AllocGroup.h, which includes this file.
+class AllocGroupCollector;
 struct AllocGroupPlan;
+struct ConcatGroupLayout;
+struct LaunchOp;
+struct OutputOp;
+struct StepCode;
+struct StepProgram;
 
 /// Represents launch of a single KernelOperation or standalone Node.
 struct Launch {
@@ -211,17 +219,8 @@ class CompositeKernel {
       const std::unordered_set<std::string>& includes,
       int32_t kernelId);
 
-  /// The block sizes a launch of this kernel can run at, ascending; one entry
-  /// point each. See Metadata::blockSize.
-  const std::vector<int32_t>& blockSizes() const {
-    return blockSizes_;
-  }
-
-  /// The entry point a launch at 'blockSize' threads runs: the one of
-  /// 'soleOp' when the launch holds only that op and it has an entry point of
-  /// its own (Metadata::ownEntryPoint), else the one holding every op at that
-  /// size.
-  int32_t entryFor(int32_t blockSize, const KernelOperation* soleOp) const;
+  /// The entry point of the module of step 'stepIdx' at 'blockSize' threads.
+  int32_t entryFor(int32_t blockSize, int32_t stepIdx) const;
 
   /// Blocks of entry point 'entry' resident on one SM at its block size and no
   /// dynamic shared memory. KernelInfo::maxOccupancy0 is the same figure at
@@ -248,11 +247,17 @@ class CompositeKernel {
       facebook::velox::wave::Stream* stream,
       void** args);
 
-  /// Returns occupancy information for the compiled kernel's default entry
-  /// point, or for 'entry'. Returns a default KernelInfo if no GPU is
-  /// available.
-  facebook::velox::wave::KernelInfo kernelInfo() const;
+  /// Returns occupancy information for entry point 'entry'. Returns a default
+  /// KernelInfo if no GPU is available.
   facebook::velox::wave::KernelInfo kernelInfo(int32_t entry) const;
+
+  int32_t numEntries() const {
+    return static_cast<int32_t>(entryBlockSize_.size());
+  }
+
+  /// Names entry point 'entry' by its module and block size, followed by its
+  /// KernelInfo, for logs.
+  std::string entryInfoString(int32_t entry) const;
 
   /// Blocks of entry point 'entry' that stay resident on one SM at
   /// 'dynamicSharedBytes' of dynamic shared memory, as the driver computes it.
@@ -266,10 +271,6 @@ class CompositeKernel {
 
   const std::string& entryPoint() const {
     return entryPoint_;
-  }
-
-  const std::string& text() const {
-    return text_;
   }
 
   void warmup();
@@ -295,21 +296,29 @@ class CompositeKernel {
     std::unique_ptr<facebook::velox::wave::CompiledKernel> kernel;
   };
 
-  std::unique_ptr<facebook::velox::wave::CompiledKernel> kernel_;
+  static std::unique_ptr<facebook::velox::wave::CompiledKernel> compileModule(
+      const std::string& text,
+      std::function<facebook::velox::wave::KernelSpec()> genFunc);
+
+  // The compiled modules, one per distinct set of ops that share a step.
+  std::vector<std::unique_ptr<facebook::velox::wave::CompiledKernel>> modules_;
+  // Per module: the variant compiled without its ops' minimum blocks per SM,
+  // or null. warmup() keeps one of the two and clears these.
+  std::vector<std::unique_ptr<facebook::velox::wave::CompiledKernel>>
+      unboundedModules_;
   std::string entryPoint_;
-  std::string text_;
   std::vector<std::unique_ptr<ProjectOperation>> ops_;
   std::vector<std::unique_ptr<KernelOperation>> kernelOpStorage_;
-  // Ascending; entry point i is compiled for blockSizes_[i] threads.
-  std::vector<int32_t> blockSizes_;
 
-  // Per entry point: its block size, and the op it is the own entry point of
-  // or nullptr for one holding every op. The first blockSizes_.size() are the
-  // latter, in blockSizes_ order.
+  // Per entry point: its block size.
   std::vector<int32_t> entryBlockSize_;
-  std::vector<const KernelOperation*> entryOp_;
+  // Per entry point: its module, and its index among that module's entries.
+  std::vector<int32_t> entryModule_;
+  std::vector<int32_t> entryLocal_;
+  // The module of each step of the node, -1 for a step that launches no
+  // kernel op.
+  std::vector<int32_t> stepModule_;
 
-  int32_t entryIndex(int32_t blockSize) const;
   std::vector<PerOpKernel> perOpKernels_;
 };
 
@@ -399,8 +408,22 @@ struct LaunchData {
   /// before the step runs.
   int32_t d2hProducer{-1};
 
+  /// The operands of the host-side views of the outputs (OutputDesc::viewNode,
+  /// e.g. a leaf-input slice) other than the viewed tensor: a view takes its
+  /// shape and offset from them, not from this op's inputs -- a slice end is
+  /// typically an item() of a device result. Set by setViewReadIds at bind.
+  std::vector<nativert::ValueId> viewReadIds;
+
   float costAdjustFactor{1};
   float expectedFraction{0};
+};
+
+/// A host-side view of a fused output (OutputDesc::viewNode) as a metadata
+/// shortcut: the same direct tensor arithmetic a standalone shortcut op runs,
+/// in place of a boxed dispatch to the view op's kernel.
+struct ViewRecipe {
+  Launch launch;
+  LaunchData data;
 };
 
 class CompositeInvocation {
@@ -464,7 +487,25 @@ class CompositeInvocation {
   /// graph before its first execution.
   void setAllocGroupPlan(std::unique_ptr<AllocGroupPlan> plan);
 
+  /// Bound path, first pass of binding: fixes each op's grid, builds the
+  /// launches of every step of this node for 'state' and adds the values they
+  /// bring back to the host to 'returned'.
+  void bindLaunches(
+      ExecutionState& state,
+      folly::F14FastSet<int32_t>& returned);
+
+  /// Bound path, second pass: builds each step's program -- sizes, outputs,
+  /// fills, the wait -- and writes the parameters that never change. 'returned'
+  /// is every value any launch of the graph brings back.
+  void bindPrograms(
+      ExecutionState& state,
+      const folly::F14FastSet<int32_t>& returned);
+
   /// The groups this invocation allocates, or null while none are installed.
+  const std::vector<Launch>& prePassStandalones() const {
+    return prePassStandalones_;
+  }
+
   const AllocGroupPlan* allocGroupPlan() const {
     return allocGroupPlan_.get();
   }
@@ -501,121 +542,98 @@ class CompositeInvocation {
   /// are built once per step.
   void layoutParamSlots(int32_t stepIdx, StepVectors& sv);
 
-  /// Why an op's setup was left for the second pass.
-  enum class DeferReason {
-    /// Reads a value whose device-to-host transfer has not landed.
-    kTransfer,
-    /// Allocating it would push past WaveConfig::maxDelayedFree.
-    kMemory,
+  /// Per-execution state of one node's step loop: what the step setup of either
+  /// path and the shared step epilogue both read and update.
+  struct NodeRun {
+    ExecutionState& state;
+    bool doTiming{false};
+    bool doEventTiming{false};
+    bool ranStandalones{false};
+    bool countElidedClones{false};
+    std::vector<bool> elidedCounted;
+    bool stepLastUse{false};
+    std::vector<int32_t> lastUseReleaseStep;
+    int32_t lastExecStep{-1};
+    int32_t blockSize{0};
+    int64_t reuseCount0{0};
+    int64_t reuseBytes0{0};
   };
 
-  /// Running position over the three parallel per-launch arrays a step fills:
-  /// sv.kernels, sv.standalones and sv.shortcutStandalones. It advances over a
-  /// deferred op as well, whose launches keep their indices so that deferring
-  /// one op cannot move a later op's parameter offsets.
-  struct LaunchCursor {
-    int32_t kernel{0};
-    int32_t standalone{0};
-    int32_t shortcut{0};
-  };
+  NodeRun startNodeRun(ExecutionState& state);
 
-  /// Picks the grid variant 'data' should launch under -- single-block,
-  /// multi-block or cooperative -- from its element count, and rebuilds 'data'
-  /// and 'largestId' from the new variant if the choice moved. Returns true if
-  /// it moved, in which case the caller re-reads the grid and step it cached.
-  /// Only meaningful for a launch whose op isGridChoice().
-  bool chooseGridVariant(
+  /// Carves the step's allocation groups that are ready: before the host waits
+  /// on a transfer, the complete groups that need none; after, all the rest.
+  void materializeStepGroups(
       ExecutionState& state,
-      GridChoice& gridChoice,
-      OpInvocation& op,
-      int32_t stepIdx,
-      size_t launchIndex,
-      bool hasByLargestInput,
-      LaunchData& data,
-      nativert::ValueId& largestId);
+      AllocGroupCollector& collector,
+      StepVectors& sv,
+      bool afterWait,
+      bool doTiming);
 
-  /// Zeroes 'data.numElements' when a tensor the launch reads or writes but
-  /// does not produce itself is still None, which makes makeGrid give it no
-  /// blocks. Under a cooperative grid, where the whole step launches as one
-  /// kernel and an op therefore cannot be skipped, recovers a grid size from
-  /// the static input shapes instead.
-  void sizeForUnreadyOperands(
-      LaunchData& data,
-      const Launch& launch,
-      nativert::ExecutionFrame& frame);
+  /// Writes the shape of each value 'concat's operand sizes read that has no
+  /// table entry yet but is an output of a later launch of this node -- a
+  /// chain gather in a later step whose extent a fused elementwise operand
+  /// takes. Runs that output's own Size early, which its inputs allow once
+  /// they are in the table; the launch that writes it sizes it again later.
+  void sizeConcatReadsAhead(
+      const ConcatGroupLayout& concat,
+      ExecutionState& state);
 
-  /// Fills 'data's parameter block at 'paramOffset', patches its TensorList
-  /// pointers to device addresses, and folds the offsets of the return values
-  /// it writes into 'returnBegin' / 'returnEnd'.
-  void fillLaunchParamBlock(
-      LaunchData& data,
-      nativert::ExecutionFrame& frame,
-      uint8_t* pinnedBase,
-      uint8_t* deviceBase,
-      int64_t paramOffset,
-      int32_t& returnBegin,
-      int32_t& returnEnd);
+  /// Adds the bytes of this node's elided clones to the first step where their
+  /// inputs exist.
+  void addElidedClones(NodeRun& run, StepVectors& sv);
 
-  /// Sets up the ops at 'stepIdx' that can be set up now: sizes them, allocates
-  /// their outputs and fills their parameter blocks, all in one pass per op so
-  /// each is touched once and tested for dependencies once.
-  ///
-  /// An op that reads a value a pending transfer has not delivered, or that
-  /// would allocate past the delayed-free ceiling, is skipped and appended to
-  /// 'deferred'; run the pass again with 'deferredOnly' after resolving what
-  /// they need. The LaunchData, parameter offsets and launch indices of every
-  /// op are established on the first pass regardless, so the second pass
-  /// cannot move another op's parameters.
-  ///
-  /// 'returnBegin' / 'returnEnd' accumulate as min/max over absolute offsets
-  /// rather than assuming the ops are filled in ascending order, which the
-  /// two-pass split breaks.
-  void gatherLaunches(
-      ExecutionState& state,
-      std::vector<GridChoice>& grids,
+  /// Everything a step does once its parameter blocks are filled: D2H
+  /// bookkeeping, step-level release, the grid and BlockInfo array, the
+  /// launch with the step's standalones, return data and reference checks.
+  void finishStep(
+      NodeRun& run,
       int32_t stepIdx,
       StepVectors& sv,
       uint8_t* pinnedBase,
       uint8_t* deviceBase,
-      bool deferredOnly,
-      std::vector<std::pair<size_t, DeferReason>>& deferred,
-      int32_t& returnBegin,
-      int32_t& returnEnd);
+      int64_t totalPinnedBytes,
+      int32_t returnBegin,
+      int32_t returnEnd,
+      const SetupCounters& setupBefore,
+      std::vector<GridChoice>& currentGridChoices);
 
-  /// Fills the parameter block of every kernel launch in 'sv' in one sweep,
-  /// accumulating the return-data span the same way the inline fill does.
-  ///
-  /// Only the allocation-group path uses this. The ordinary path fills each
-  /// launch in the pass that sizes it, which it can because that pass also
-  /// allocates the launch's outputs; a grouped launch has no output tensor
-  /// until its whole group has been sized and carved, so its fill has to wait
-  /// for every group of the step.
-  void fillStepParams(
-      ExecutionState& state,
+  /// The node's end: the default-stream sync and the release of the values
+  /// whose last use is this node.
+  void finishNode(NodeRun& run);
+
+  /// Runs the node's steps from their bound programs.
+  void executeBound(ExecutionState& state);
+
+  /// Sizes a bound launch and places its outputs.
+  void runBoundLaunch(
+      const LaunchOp& launch,
+      StepProgram& program,
       StepVectors& sv,
-      uint8_t* pinnedBase,
-      uint8_t* deviceBase,
-      int32_t& returnBegin,
-      int32_t& returnEnd);
+      ExecutionState& state);
 
-  /// The allocation-group execute path, selected by WaveConfig at the top of
-  /// execute(). Defined in AllocGroup.cpp: it is a parallel implementation of
-  /// the step loop, not a variant of it, and keeping it out of this file is
-  /// what stops the two from growing shared branches.
-  ///
-  /// Differs from execute() only in how outputs are allocated. Instead of one
-  /// allocator call per output as each op is sized, the step's outputs that
-  /// share a lifetime are sized first and carved out of one buffer, sync-free
-  /// groups before the host waits on any transfer and the rest after.
-  void executeAllocGroups(ExecutionState& state);
+  void runBoundOutput(
+      const OutputOp& output,
+      StepProgram& program,
+      ExecutionState& state);
+
+  /// A launch whose tensor input it does not produce itself, or whose output,
+  /// is absent this execution runs on no blocks.
+  void checkUnreadyOperands(
+      const LaunchOp& launch,
+      const StepCode& code,
+      LaunchData& data,
+      ExecutionState& state);
+
+  /// Fills lastUseByStep_ from the bound grids.
+  void bindLastUseSteps(const std::vector<GridChoice>& grids, int32_t numSteps);
 
   /// Stamps onto step 'stepIdx' every last-use value not yet released whose
   /// reading ops have all run out of grid steps, recording the step in
   /// 'releaseStep' (parallel to lastUseIds_, -1 until released). Called once
-  /// per executed step, after gatherLaunches has settled its grid choices.
+  /// per executed step.
   void releaseLastUseAtStep(
       ExecutionState& state,
-      const std::vector<GridChoice>& grids,
       int32_t stepIdx,
       StepVectors& sv,
       std::vector<int32_t>& releaseStep);
@@ -626,6 +644,9 @@ class CompositeInvocation {
       const StepVectors& sv,
       const std::vector<GridChoice>& gridChoices);
 
+  /// By step, the indices into lastUseIds_ of the values whose readers are all
+  /// done after that step.
+  std::vector<std::vector<int32_t>> lastUseByStep_;
   std::unique_ptr<CompositeKernel> kernel_;
   std::vector<OpInvocation> ops_;
   std::deque<c10::IValue> ivalueStorage_;
