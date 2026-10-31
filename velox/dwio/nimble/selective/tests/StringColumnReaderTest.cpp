@@ -602,47 +602,61 @@ TEST_P(StringColumnReaderTest, fsstFilterOnlyRangeAcrossChunks) {
       });
   auto file =
       test::createNimbleFile(*rootPool(), {first, second}, options, false);
-  for (const bool projectOut : {false, true}) {
-    for (const bool nullAllowed : {false, true}) {
-      for (const int batchSize : {137, 1500}) {
-        auto spec = std::make_shared<common::ScanSpec>("root");
-        spec->addAllChildFields(*first->type());
-        auto* keySpec = spec->childByName("key");
-        keySpec->setProjectOut(projectOut);
-        keySpec->setFilter(
-            std::make_unique<common::BytesRange>(
-                "common/match/",
-                false,
-                false,
-                "common/match0",
-                false,
-                true,
-                nullAllowed));
-        spec->childByName("value")->setFilter(
-            std::make_unique<common::BigintRange>(100, 999, false));
-        auto readers = makeReaders(first, file, spec, zeroCopy);
-        auto result = BaseVector::create(first->type(), 0, pool());
-        std::vector<int64_t> actual;
-        while (readers.rowReader->next(batchSize, result) > 0) {
-          auto rows = result->as<RowVector>();
-          auto value = rows->childAt(1)->as<FlatVector<int64_t>>();
-          for (vector_size_t row = 0; row < rows->size(); ++row) {
-            actual.push_back(value->valueAt(row));
-            if (projectOut) {
-              auto source = actual.back() < kRows ? first : second;
-              EXPECT_TRUE(rows->childAt(0)->equalValueAt(
-                  source->childAt(0).get(), row, actual.back() % kRows));
+  for (const bool negated : {false, true}) {
+    for (const bool projectOut : {false, true}) {
+      for (const bool nullAllowed : {false, true}) {
+        for (const int batchSize : {137, 1'500}) {
+          auto spec = std::make_shared<common::ScanSpec>("root");
+          spec->addAllChildFields(*first->type());
+          auto* keySpec = spec->childByName("key");
+          keySpec->setProjectOut(projectOut);
+          if (negated) {
+            keySpec->setFilter(
+                std::make_unique<common::NegatedBytesRange>(
+                    "common/match/",
+                    false,
+                    false,
+                    "common/match0",
+                    false,
+                    true,
+                    nullAllowed));
+          } else {
+            keySpec->setFilter(
+                std::make_unique<common::BytesRange>(
+                    "common/match/",
+                    false,
+                    false,
+                    "common/match0",
+                    false,
+                    true,
+                    nullAllowed));
+          }
+          spec->childByName("value")->setFilter(
+              std::make_unique<common::BigintRange>(100, 999, false));
+          auto readers = makeReaders(first, file, spec, zeroCopy);
+          auto result = BaseVector::create(first->type(), 0, pool());
+          std::vector<int64_t> actual;
+          while (readers.rowReader->next(batchSize, result) > 0) {
+            auto rows = result->as<RowVector>();
+            auto value = rows->childAt(1)->as<FlatVector<int64_t>>();
+            for (vector_size_t row = 0; row < rows->size(); ++row) {
+              actual.push_back(value->valueAt(row));
+              if (projectOut) {
+                auto source = actual.back() < kRows ? first : second;
+                EXPECT_TRUE(rows->childAt(0)->equalValueAt(
+                    source->childAt(0).get(), row, actual.back() % kRows));
+              }
             }
           }
-        }
-        std::vector<int64_t> expected;
-        for (int row = 100; row <= 999; ++row) {
-          const auto local = row % kRows;
-          if (local % 7 == 0 ? nullAllowed : local % 3 == 0) {
-            expected.push_back(row);
+          std::vector<int64_t> expected;
+          for (int row = 100; row <= 999; ++row) {
+            const auto local = row % kRows;
+            if (local % 7 == 0 ? nullAllowed : (local % 3 == 0) != negated) {
+              expected.push_back(row);
+            }
           }
+          EXPECT_EQ(actual, expected);
         }
-        EXPECT_EQ(actual, expected);
       }
     }
   }
