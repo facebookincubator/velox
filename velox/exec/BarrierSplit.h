@@ -15,6 +15,8 @@
  */
 #pragma once
 
+#include <cstdint>
+
 namespace facebook::velox::exec {
 
 /// A special split used by task barrier processing to signal output drain
@@ -23,6 +25,12 @@ namespace facebook::velox::exec {
 /// node receives the barrier split, it will produce output and propagate the
 /// barrier down to the root node of a pipeline (typically exchange or
 /// partitioned output).
-struct BarrierSplit {};
+struct BarrierSplit {
+  /// Fan-out for markers submitted through Task::addSplit() or
+  /// addSplitWithSequence(): source-local driver IDs [0, numDrivers).
+  /// Each delivered marker has numDrivers == 1. This does not determine the
+  /// number of drivers participating in a Task::requestBarrier() round.
+  uint32_t numDrivers;
+};
 
 } // namespace facebook::velox::exec

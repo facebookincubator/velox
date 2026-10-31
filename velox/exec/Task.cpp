@@ -1794,13 +1794,6 @@ void Task::removeDriver(std::shared_ptr<Task> self, Driver* driver) {
       // ungrouped execution mode).
       const auto splitGroupId = driver->driverCtx()->splitGroupId;
       if (self->isRunningLocked() && driver->hasBarrier()) {
-        auto splits =
-            self->splitsStates_.find(driver->sourceOperator()->planNodeId());
-        if (splits != self->splitsStates_.end() &&
-            splits->second.sourceIsTableScan) {
-          self->getOrCreateSplitsStoreLocked(splits->second, splitGroupId)
-              ->removeBarrier(driver->driverCtx()->driverId);
-        }
         // A driver may finish before consuming its barrier marker.
         self->finishDriverBarrierLocked(barrierPromises);
       }
@@ -2072,8 +2065,13 @@ bool Task::addSplitLocked(
       it->second->allConsumersFinished()) {
     return false;
   }
-  VELOX_CHECK(
-      !split.isBarrier(), "Use Task::requestBarrier() to start a barrier");
+  if (split.isBarrier()) {
+    ensureBarrierSupport();
+    VELOX_CHECK(splitsState.sourceIsTableScan);
+    VELOX_CHECK(!splitsState.noMoreSplits);
+    addSplitToStoreLocked(splitsState, kUngroupedGroupId, split, promises);
+    return true;
+  }
   VELOX_CHECK(
       !barrierRequested_, "Can't add new split under barrier processing");
 
@@ -2113,6 +2111,10 @@ void Task::addSplitToStoreLocked(
     const exec::Split& split,
     std::vector<ContinuePromise>& promises) {
   auto* splitsStore = getOrCreateSplitsStoreLocked(splitsState, groupId);
+  if (split.isBarrier()) {
+    splitsStore->requestBarrier(split.barrier->numDrivers, promises);
+    return;
+  }
   auto* queueSplitsStore = checkedPointerCast<QueueSplitsStore>(splitsStore);
   queueSplitsStore->addSplit(split, promises);
 }

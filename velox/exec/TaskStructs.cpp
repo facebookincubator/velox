@@ -16,7 +16,17 @@
 
 #include "velox/exec/TaskStructs.h"
 
+#include <numeric>
+
 namespace facebook::velox::exec {
+
+void SplitsStore::requestBarrier(
+    uint32_t numDrivers,
+    std::vector<ContinuePromise>& promises) {
+  std::vector<uint32_t> driverIds(numDrivers);
+  std::iota(driverIds.begin(), driverIds.end(), uint32_t{0});
+  requestBarrier(driverIds, promises);
+}
 
 void SplitsStore::requestBarrier(
     const std::vector<uint32_t>& driverIds,
@@ -25,7 +35,9 @@ void SplitsStore::requestBarrier(
   VELOX_CHECK(!remoteSplit_);
   VELOX_CHECK(barrierSplits_.empty());
   for (const auto driverId : driverIds) {
-    barrierSplits_.emplace(driverId, Split::createBarrier());
+    if (finishedConsumers_.count(driverId) == 0) {
+      barrierSplits_.emplace(driverId, Split::createBarrier());
+    }
   }
   VELOX_CHECK_LE(promises_.size(), driverIds.size());
   // Wake up all blocked drivers to consume their markers.
@@ -36,6 +48,10 @@ void SplitsStore::requestBarrier(
 void SplitsStore::addSplit(
     Split split,
     std::vector<ContinuePromise>& promises) {
+  if (split.isBarrier()) {
+    SplitsStore::requestBarrier(split.barrier->numDrivers, promises);
+    return;
+  }
   VELOX_CHECK(!noMoreSplits_);
   VELOX_CHECK(barrierSplits_.empty());
   splits_.push_back(std::move(split));
@@ -58,6 +74,7 @@ std::deque<Split> SplitsStore::finishConsumer(
     std::vector<ContinuePromise>& promises) {
   VELOX_CHECK(finishedConsumers_.insert(driverId).second);
   VELOX_CHECK_LE(finishedConsumers_.size(), numConsumers);
+  barrierSplits_.erase(driverId);
   taskStats_->numAbandonedSplits += releaseRunningSplits(driverId);
   if (finishedConsumers_.size() != numConsumers) {
     return {};
@@ -108,10 +125,6 @@ void SplitsStore::removeQueuedSplitStats(const Split& split) {
     taskStats_->queuedTableScanSplitWeights -=
         split.connectorSplit->splitWeight;
   }
-}
-
-void SplitsStore::removeBarrier(uint32_t driverId) {
-  barrierSplits_.erase(driverId);
 }
 
 Split SplitsStore::getSplit(
