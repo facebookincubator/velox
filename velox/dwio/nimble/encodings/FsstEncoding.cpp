@@ -631,6 +631,9 @@ bool FsstEncoding::testCompressedRange(
     }
     return boundOffset < bound.size() ? -1 : 0;
   };
+  if (filter.isSingleValue()) {
+    return compareToBound(filter.lower()) == 0;
+  }
   if (!filter.isLowerUnbounded()) {
     const auto lowerBoundComparison = compareToBound(filter.lower());
     const bool rejectEqualToLowerBound =
