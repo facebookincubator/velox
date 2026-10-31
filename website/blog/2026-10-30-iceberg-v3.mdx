@@ -256,15 +256,52 @@ encoded geometries, so the two runtimes produce identical bytes.
 Writing these types is rejected for now. Velox's internal encoding isn't WKB,
 and writing it as-is would produce files no other engine can read.
 
+## Benchmark
+
+We ran a Velox micro-benchmark comparing deletion vectors with V2 positional
+deletes. It reads every row of one 1M-row, single-column DWRF file on local
+disk. The same deleted rows are stored three ways: one positional delete file,
+ten positional delete files, or one deletion vector. Times are the median of
+three runs.
+
+| Read time | 1 positional file | 10 positional files | Deletion vector |
+| --- | --- | --- | --- |
+| 1% deleted | 22.6 ms | 23.9 ms | 23.3 ms |
+| 5% deleted | 24.4 ms | 25.1 ms | 24.5 ms |
+| 20% deleted | 26.7 ms | 27.7 ms | 28.0 ms |
+| 50% deleted | 29.8 ms | 30.6 ms | 32.4 ms |
+
+| Delete file size | 1 positional file | 10 positional files | Deletion vector |
+| --- | --- | --- | --- |
+| 1% deleted | 30 KB | 39 KB | 20 KB |
+| 5% deleted | 144 KB | 157 KB | 100 KB |
+| 20% deleted | 524 KB | 597 KB | 130 KB |
+| 50% deleted | 1,237 KB | 1,442 KB | 131 KB |
+
+<figure style={{textAlign: 'center'}}>
+  <img
+    src="/img/iceberg-v3-delete-benchmark.png"
+    alt="Bar charts of read time and delete file size for one positional delete file, ten positional delete files, and one deletion vector"
+    width="100%"
+  />
+  <figcaption>
+    <em>Read time and delete file size at 1%, 5%, 20% and 50% of rows deleted.</em>
+  </figcaption>
+</figure>
+
+Read times were within 10% of each other, and the deletion vector was slightly
+slower at 20% and 50% deleted. Both formats feed the same skip-bitmap, so they
+differ only in reading the delete file, which is cheap on local disk. Deletion
+vectors were up to 9× smaller, though, staying around 130 KB however many rows
+were deleted. We haven't yet measured remote storage, where opening many small
+V2 delete files costs the most.
+
 ## What's left
 
-Several parts of V3 aren't in Velox yet: the variant type; nanosecond
-timestamps (the type attributes are passed through, but the read and write
-paths aren't finished); multi-argument transforms and `source-ids` in partition
-specs; table encryption; and writing lineage columns and geospatial types. We
-also don't have deletion vector benchmarks yet. `IcebergSplitReaderBenchmark`
-measures V2 positional deletes, and extending it to deletion vectors is next.
-Once that's done, we'll follow up with V2 vs. V3 numbers.
+Several parts of V3 aren't in Velox yet: the variant type, nanosecond
+timestamps (`timestamp_ns` and `timestamptz_ns`), multi-argument transforms and
+`source-ids` in partition specs, table encryption, and writing lineage columns
+and geospatial types.
 
 ## Thanks
 
