@@ -38,7 +38,13 @@ add_library(
   prestosql/UnixtimeFunctions.cpp
   SparkFunctions.cpp
   sparksql/DateAddFunction.cpp
+  sparksql/FloatingPointToDecimal.cuh
+  sparksql/NumericFloatingPointToDecimal.cuh
   sparksql/HashFunction.cpp
+  sparksql/LegacyCastFunction.cpp
+  sparksql/LegacyCastFunction.h
+  sparksql/LegacyCastKernel.cu
+  sparksql/LegacyCastKernel.h
   sparksql/SubStringFunction.cpp
   SubfieldFiltersToAst.cpp
 )
