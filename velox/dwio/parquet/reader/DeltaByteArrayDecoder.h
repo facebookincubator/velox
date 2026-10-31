@@ -20,6 +20,7 @@
 
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/base/Nulls.h"
+#include "velox/dwio/parquet/reader/BigEndianDecimal.h"
 #include "velox/dwio/parquet/reader/DeltaBpDecoder.h"
 
 namespace facebook::velox::parquet {
@@ -204,7 +205,13 @@ class DeltaByteArrayDecoder {
         }
 
         // We are at a non-null value on a row to visit.
-        toSkip = visitor.process(readString(), atEnd);
+        using T = typename Visitor::DataType;
+        if constexpr (kIsDecimalValueType<T>) {
+          toSkip =
+              visitor.process(decimalFromBigEndian<T>(readString()), atEnd);
+        } else {
+          toSkip = visitor.process(readString(), atEnd);
+        }
       }
       ++current;
       if (toSkip) {

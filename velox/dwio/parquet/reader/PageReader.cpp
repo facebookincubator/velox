@@ -494,6 +494,25 @@ void PageReader::prepareDataPageV2(const PageHeader& pageHeader, int64_t row) {
   }
 }
 
+namespace {
+
+// Converts 'numValues' big-endian decimals of 'typeLength' bytes each, packed
+// at the start of 'data', to 'T' in place. Goes from the end because each
+// output value is at least as wide as its input.
+template <typename T>
+void decimalsFromBigEndianInPlace(
+    char* data,
+    int32_t numValues,
+    int32_t typeLength) {
+  auto* values = reinterpret_cast<T*>(data);
+  for (auto i = numValues - 1; i >= 0; --i) {
+    values[i] = decimalFromBigEndian<T>(std::string_view(
+        data + static_cast<int64_t>(i) * typeLength, typeLength));
+  }
+}
+
+} // namespace
+
 void PageReader::prepareDictionary(const PageHeader& pageHeader) {
   dictionary_.numValues = *pageHeader.dictionary_page_header()->num_values();
   dictionaryEncoding_ = *pageHeader.dictionary_page_header()->encoding();
@@ -663,51 +682,15 @@ void PageReader::prepareDictionary(const PageHeader& pageHeader) {
         stats_.accumulateStat(
             ParquetRuntimeStats::kPageLoadTimeNsMetric, readNs);
       }
+      // Parquet decimal values have a fixed typeLength_ and are in big-endian
+      // layout.
       if (type_->type()->isShortDecimal()) {
-        // Parquet decimal values have a fixed typeLength_ and are in big-endian
-        // layout.
-        if (numParquetBytes < numVeloxBytes) {
-          auto values = dictionary_.values->asMutable<int64_t>();
-          for (auto i = dictionary_.numValues - 1; i >= 0; --i) {
-            // Expand the Parquet type length values to Velox type length.
-            // We start from the end to allow in-place expansion.
-            auto sourceValue = data + (i * parquetTypeLength);
-            int64_t value = *sourceValue >= 0 ? 0 : -1;
-            memcpy(
-                reinterpret_cast<uint8_t*>(&value) + veloxTypeLength -
-                    parquetTypeLength,
-                sourceValue,
-                parquetTypeLength);
-            values[i] = value;
-          }
-        }
-        auto values = dictionary_.values->asMutable<int64_t>();
-        for (auto i = 0; i < dictionary_.numValues; ++i) {
-          values[i] = __builtin_bswap64(values[i]);
-        }
+        decimalsFromBigEndianInPlace<int64_t>(
+            data, dictionary_.numValues, parquetTypeLength);
         break;
       } else if (type_->type()->isLongDecimal()) {
-        // Parquet decimal values have a fixed typeLength_ and are in big-endian
-        // layout.
-        if (numParquetBytes < numVeloxBytes) {
-          auto values = dictionary_.values->asMutable<int128_t>();
-          for (auto i = dictionary_.numValues - 1; i >= 0; --i) {
-            // Expand the Parquet type length values to Velox type length.
-            // We start from the end to allow in-place expansion.
-            auto sourceValue = data + (i * parquetTypeLength);
-            int128_t value = *sourceValue >= 0 ? 0 : -1;
-            memcpy(
-                reinterpret_cast<uint8_t*>(&value) + veloxTypeLength -
-                    parquetTypeLength,
-                sourceValue,
-                parquetTypeLength);
-            values[i] = value;
-          }
-        }
-        auto values = dictionary_.values->asMutable<int128_t>();
-        for (auto i = 0; i < dictionary_.numValues; ++i) {
-          values[i] = bits::builtin_bswap128(values[i]);
-        }
+        decimalsFromBigEndianInPlace<int128_t>(
+            data, dictionary_.numValues, parquetTypeLength);
         break;
       }
       VELOX_UNSUPPORTED(
@@ -961,15 +944,26 @@ void PageReader::makeDecoder() {
           VELOX_UNSUPPORTED("RLE decoder only supports BOOLEAN");
       }
       break;
-    case Encoding::DELTA_BYTE_ARRAY:
-      if (parquetType == thrift::Type::BYTE_ARRAY) {
-        if (!deltaByteArrDecoder_) {
-          deltaByteArrDecoder_ = std::make_unique<DeltaByteArrayDecoder>();
-        }
-        deltaByteArrDecoder_->reset(pageData_);
-        break;
+    case Encoding::DELTA_BYTE_ARRAY: {
+      // Decimals are supported as FIXED_LEN_BYTE_ARRAY only. Other types are
+      // read as strings and are supported as BYTE_ARRAY only.
+      // TODO: Support BYTE_ARRAY decimals and FIXED_LEN_BYTE_ARRAY strings,
+      // which also need PLAIN and dictionary page support.
+      const auto supportedType = type_->type()->isDecimal()
+          ? thrift::Type::FIXED_LEN_BYTE_ARRAY
+          : thrift::Type::BYTE_ARRAY;
+      if (parquetType != supportedType) {
+        VELOX_UNSUPPORTED(
+            "DELTA_BYTE_ARRAY encoding is supported only for FIXED_LEN_BYTE_ARRAY decimals and BYTE_ARRAY non-decimals. Parquet type: {}, Velox type: {}",
+            parquetType,
+            type_->type());
       }
-      [[fallthrough]];
+      if (!deltaByteArrDecoder_) {
+        deltaByteArrDecoder_ = std::make_unique<DeltaByteArrayDecoder>();
+      }
+      deltaByteArrDecoder_->reset(pageData_);
+      break;
+    }
     case Encoding::BYTE_STREAM_SPLIT: {
       // Decode the split byte streams into a flat buffer, then use
       // DirectDecoder to serve values through the standard visitor path.
