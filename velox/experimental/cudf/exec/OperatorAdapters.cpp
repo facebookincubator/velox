@@ -32,6 +32,7 @@
 #include "velox/experimental/cudf/exec/CudfMarkDistinct.h"
 #include "velox/experimental/cudf/exec/CudfNestedLoopJoin.h"
 #include "velox/experimental/cudf/exec/CudfOrderBy.h"
+#include "velox/experimental/cudf/exec/CudfPrestoOutput.h"
 #include "velox/experimental/cudf/exec/CudfReduce.h"
 #include "velox/experimental/cudf/exec/CudfTopN.h"
 #include "velox/experimental/cudf/exec/CudfTopNRowNumber.h"
@@ -1190,7 +1191,11 @@ class LocalMergeAdapter : public OperatorAdapter {
   }
 };
 
-/// PartitionedOutputAdapter - Keeps original operator (CPU sink for shuffle)
+/// PartitionedOutputAdapter - Replaces a single-destination PartitionedOutput
+/// with CudfPrestoOutput, which serializes Presto pages from the GPU table.
+/// Declines, which keeps the CPU operator behind a CudfToVelox, for
+/// partitioned, compressed and non-Presto outputs and for output columns
+/// without a flat Presto encoding.
 class PartitionedOutputAdapter : public OperatorAdapter {
  public:
   PartitionedOutputAdapter() : OperatorAdapter("PartitionedOutput") {}
@@ -1201,28 +1206,59 @@ class PartitionedOutputAdapter : public OperatorAdapter {
 
   bool canRunOnGPU(
       const exec::Operator* /*op*/,
-      const core::PlanNodePtr& /*planNode*/,
-      exec::DriverCtx* /*ctx*/) const override {
+      const core::PlanNodePtr& planNode,
+      exec::DriverCtx* ctx) const override {
+    auto node =
+        std::dynamic_pointer_cast<const core::PartitionedOutputNode>(planNode);
+    if (!node) {
+      return false;
+    }
+    const auto& queryCtx = *ctx->task->queryCtx();
+    const auto reason = CudfPrestoOutput::cpuFallbackReason(*node, queryCtx);
+    if (!reason.has_value()) {
+      return true;
+    }
+    // Turning the operator off is no unsupported operation.
+    if (CudfPrestoOutput::isEnabled(queryCtx.queryConfig())) {
+      LOG_FALLBACK(
+          "PartitionedOutput {} stays on the CPU: {}", node->id(), *reason);
+    }
     return false;
   }
 
   bool acceptsGpuInput() const override {
-    return false;
+    return true;
   }
 
   bool producesGpuOutput() const override {
+    // Terminal operator: getOutput() always returns nullptr, so no conversion
+    // operator may be appended after it.
     return false;
   }
 
   std::vector<std::unique_ptr<exec::Operator>> createReplacements(
-      const exec::Operator* /*op*/,
-      const core::PlanNodePtr& /*planNode*/,
-      exec::DriverCtx* /*ctx*/,
-      int32_t /*operatorId*/) const override {
-    return {}; // Keep original operator
+      const exec::Operator* op,
+      const core::PlanNodePtr& planNode,
+      exec::DriverCtx* ctx,
+      int32_t operatorId) const override {
+    auto node =
+        std::dynamic_pointer_cast<const core::PartitionedOutputNode>(planNode);
+    const auto* output = op->as<exec::PartitionedOutput>();
+    VELOX_CHECK_NOT_NULL(output);
+    std::vector<std::unique_ptr<exec::Operator>> result;
+    result.push_back(
+        std::make_unique<CudfPrestoOutput>(
+            operatorId,
+            ctx,
+            node,
+            output->eagerFlush(),
+            CudfPrestoOutput::bufferManagerFor(*node, *ctx->task->queryCtx())));
+    return result;
   }
 
-  bool keepOperator() const override {
+  /// A partitioned, compressed or non-Presto output has no GPU form, so the
+  /// CPU operator is not a failed replacement.
+  bool allowsCpuOperator() const override {
     return true;
   }
 };
