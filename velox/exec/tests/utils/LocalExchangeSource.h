@@ -15,6 +15,9 @@
  */
 #pragma once
 
+#include <string>
+#include <string_view>
+
 #include "velox/exec/ExchangeSource.h"
 
 namespace facebook::velox::exec::test {
@@ -26,6 +29,21 @@ std::unique_ptr<exec::ExchangeSource> createLocalExchangeSource(
     int destination,
     std::shared_ptr<exec::ExchangeQueue> queue,
     memory::MemoryPool* pool);
+
+/// Reads a task's output buffers from the in-process
+/// DefaultOutputBufferManager, for task ids that start with local://.
+class LocalExchangeSource : public exec::ExchangeSource {
+ public:
+  /// Returns the location from which a local exchange source reads 'taskId', a
+  /// sub-task that the existing task 'parentTaskId' creates and that a consumer
+  /// may read before it exists, such as a fixed point's producer.
+  static std::string subTaskLocation(
+      std::string_view taskId,
+      std::string_view parentTaskId);
+
+ protected:
+  using ExchangeSource::ExchangeSource;
+};
 
 /// Sets the local exchange source to start by clearing 'stop_'. This is used
 /// when we run multiple test cases sequentially and restarts the local exchange
