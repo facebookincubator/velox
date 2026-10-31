@@ -42,6 +42,9 @@ void ChunkedDecoder::ensureSharedDictionaryAlphabet() {
 }
 
 bool ChunkedDecoder::loadNextChunk(const ChunkBoundaryCallback& onChunkLoaded) {
+  if (hasLazyChunkSeek_) {
+    return loadLazySeekChunk(onChunkLoaded);
+  }
   // Free the previous chunk first so that it is not alive while the next chunk
   // is decompressed.
   encoding_.reset();
@@ -91,21 +94,12 @@ bool ChunkedDecoder::loadNextChunk(const ChunkBoundaryCallback& onChunkLoaded) {
   auto options = encodingFactory_->options();
   options.decodingStats = decodingStats_;
   if (hasSharedDictionaryBinding()) {
-    NIMBLE_CHECK(
-        stringDecoderZeroCopy_,
-        "Shared dictionary encoding requires non-legacy encoding dispatch.");
     ensureSharedDictionaryAlphabet();
     NIMBLE_CHECK_NOT_NULL(dictionaryAlphabet_);
     options.sharedDictionaryAlphabet = dictionaryAlphabet_;
-    // The legacy factory has no SharedDictionary concrete type. Use the native
-    // factory for dictionary-bound streams so nullable children can also use
-    // the alphabet.
-    encoding_ =
-        EncodingFactory().create(*pool_, data, stringBufferFactory, options);
-  } else {
-    encoding_ =
-        encodingFactory_->create(*pool_, data, stringBufferFactory, options);
   }
+  encoding_ =
+      encodingFactory_->create(*pool_, data, stringBufferFactory, options);
   remainingValues_ = encoding_->rowCount();
   NIMBLE_CHECK_GT(remainingValues_, 0);
   VLOG(1) << encoding_->debugString();
@@ -304,6 +298,7 @@ void ChunkedDecoder::skipWithIndex(
     encoding_ = nullptr;
     remainingValues_ = 0;
     rowPosition_ = targetRow;
+    hasLazyChunkSeek_ = false;
     inputData_ += inputSize_;
     inputSize_ = 0;
     input_->SkipInt64(std::numeric_limits<int64_t>::max());
@@ -311,17 +306,32 @@ void ChunkedDecoder::skipWithIndex(
     return;
   }
 
+  rowPosition_ = targetRow;
+  encoding_ = nullptr;
+  currentStringBuffers_.clear();
+  remainingValues_ = 0;
+  hasLazyChunkSeek_ = true;
+  onChunkBoundary();
+}
+
+bool ChunkedDecoder::loadLazySeekChunk(
+    const ChunkBoundaryCallback& onChunkLoaded) {
+  NIMBLE_CHECK(hasLazyChunkSeek_);
+  hasLazyChunkSeek_ = false;
+  const uint32_t targetRow = rowPosition_;
+
   // Lookup the chunk containing targetRow.
   const auto location = streamIndex_->lookupChunk(targetRow);
 
   // Seek to the chunk and skip within it.
-  seekToChunk(location.chunkOffset, onChunkBoundary);
+  seekToChunk(location.chunkOffset);
   rowPosition_ = location.rowOffset;
 
   const uint32_t rowsToSkipInChunk = targetRow - rowPosition_;
   NIMBLE_DCHECK_LT(rowsToSkipInChunk, remainingValues_);
   encoding_->skip(rowsToSkipInChunk);
   advancePosition(rowsToSkipInChunk);
+  return onChunkLoaded();
 }
 
 void ChunkedDecoder::skipWithoutIndex(
@@ -360,7 +370,9 @@ void ChunkedDecoder::seekToChunk(
 }
 
 std::optional<size_t> ChunkedDecoder::estimateRowCount() const {
-  if (encoding_ != nullptr) {
+  // Peek at the chunk header only at the stream start. With a chunk open, the
+  // input is past its header, and after a skip it can be at the stream end.
+  if (encoding_ != nullptr || rowPosition_ != 0) {
     return rowCountEstimate_;
   }
   constexpr int kChunkCompressionTypeOffset = 4;
@@ -382,7 +394,7 @@ std::optional<size_t> ChunkedDecoder::estimateRowCount() const {
 }
 
 std::optional<size_t> ChunkedDecoder::estimateStringDataSize() const {
-  if (encoding_) {
+  if (encoding_ || rowPosition_ != 0) {
     return stringDataSizeEstimate_;
   }
   constexpr int kChunkCompressionTypeOffset{4};

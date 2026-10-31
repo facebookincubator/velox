@@ -34,6 +34,7 @@
 #include "velox/dwio/nimble/common/SchemaUtils.h"
 #include "velox/dwio/nimble/common/tests/GTestUtils.h"
 #include "velox/dwio/nimble/serializer/Deserializer.h"
+#include "velox/dwio/nimble/serializer/Projector.h"
 #include "velox/dwio/nimble/serializer/SerializationHeader.h"
 #include "velox/dwio/nimble/serializer/Serializer.h"
 #include "velox/dwio/nimble/serializer/StreamDataParser.h"
@@ -1736,6 +1737,188 @@ TEST_P(SerializationTest, hybridFlatMapEncodingFuzz) {
             << "Content mismatch at index " << j
             << "\nReference: " << input->toString(j)
             << "\nResult: " << output->toString(j);
+      }
+    }
+
+    // KeyList Default keeps the schema to the configured groups, so batches
+    // written with one grouping share their schema bytes and one Projector
+    // built from the first batch's schema projects them all. The grouping
+    // configures the first batch's keys, so keys first seen later land in
+    // Default; the projection selects a configured key and such Default keys.
+    constexpr int kKeyListBatches{5};
+    std::vector<velox::RowVectorPtr> keyListInputs;
+    keyListInputs.reserve(kKeyListBatches);
+    for (int i = 0; i < kKeyListBatches; ++i) {
+      keyListInputs.push_back(fuzzer.fuzzInputRow(rowType));
+    }
+
+    // Builds 'column[key]' from path elements, because fuzzed VARCHAR keys may
+    // hold characters the subfield parser treats as syntax.
+    const auto hybridFlatMapSubfield = [](const std::string& column,
+                                          velox::TypeKind keyKind,
+                                          const std::string& key) {
+      std::vector<std::unique_ptr<velox::common::Subfield::PathElement>> path;
+      path.push_back(
+          std::make_unique<velox::common::Subfield::NestedField>(column));
+      if (keyKind == velox::TypeKind::VARCHAR) {
+        path.push_back(
+            std::make_unique<velox::common::Subfield::StringSubscript>(key));
+      } else {
+        path.push_back(
+            std::make_unique<velox::common::Subfield::LongSubscript>(
+                std::stol(key)));
+      }
+      return velox::common::Subfield(std::move(path));
+    };
+    folly::F14FastMap<std::string, HybridFlatMap> keyListColumns;
+    folly::F14FastMap<std::string, std::set<std::string>> selectedKeys;
+    // Keeps the projection non-empty when no column has a key to select.
+    std::vector<Deserializer::Subfield> subfields;
+    subfields.emplace_back("id");
+    for (const auto& column : testCase.hybridFlatMapColumns) {
+      const auto& mapColumn = keyListInputs.front()->childAt(column);
+      const auto keyKind = mapColumn->type()->asMap().keyType()->kind();
+      const auto columnKeys = hybridFlatMapColumnKeys(mapColumn);
+      // Configures the first batch's keys in one group; a column whose first
+      // batch holds no keys has only Default.
+      HybridFlatMap grouping{keyKindOf(*mapColumn->type()->asMap().keyType())};
+      if (!columnKeys.orderedKeys.empty()) {
+        grouping.addGroup(0, columnKeys.orderedKeys);
+      }
+      grouping.setDefaultGroupKeyPresenceMode(
+          HybridFlatMap::KeyPresenceMode::kKeyList);
+      keyListColumns.emplace(column, std::move(grouping));
+
+      std::set<std::string> keys;
+      if (!columnKeys.orderedKeys.empty()) {
+        keys.insert(columnKeys.orderedKeys.front());
+      }
+      for (int i = 1; i < kKeyListBatches; ++i) {
+        const auto batchKeys =
+            hybridFlatMapColumnKeys(keyListInputs[i]->childAt(column));
+        const auto defaultKey = std::find_if(
+            batchKeys.orderedKeys.begin(),
+            batchKeys.orderedKeys.end(),
+            [&](const auto& key) {
+              return !columnKeys.numRowsByKey.contains(key);
+            });
+        if (defaultKey != batchKeys.orderedKeys.end()) {
+          keys.insert(*defaultKey);
+        }
+      }
+      for (const auto& key : keys) {
+        subfields.push_back(hybridFlatMapSubfield(column, keyKind, key));
+      }
+      if (!keys.empty()) {
+        selectedKeys.emplace(column, std::move(keys));
+      }
+    }
+
+    std::vector<std::string> keyListSerialized;
+    std::vector<std::string> keyListSchemas;
+    for (int i = 0; i < kKeyListBatches; ++i) {
+      const auto& input = keyListInputs[i];
+      Serializer serializer{
+          SerializerOptions{
+              .version = version(),
+              .hybridFlatMapColumns = keyListColumns,
+              .skipConstantHybridFlatMapMetadataStreams = i % 2 == 1,
+              .streamIndicesEncodingType = streamSizesEncodingType(),
+              .streamSizesEncodingType = streamSizesEncodingType(),
+          },
+          testCase.type,
+          pool_.get()};
+      keyListSerialized.emplace_back(
+          serializer.serialize(input, OrderedRanges::of(0, input->size())));
+      SchemaSerializer schemaSerializer;
+      keyListSchemas.emplace_back(
+          schemaSerializer.serialize(serializer.schemaBuilder()));
+    }
+
+    // Checks that each map of 'actual' holds exactly the entries of the same
+    // map of 'expected' whose keys are in 'keys', with the same null maps.
+    const auto verifySelectedKeys = [](const velox::VectorPtr& expected,
+                                       const velox::VectorPtr& actual,
+                                       const std::set<std::string>& keys) {
+      ASSERT_EQ(actual->size(), expected->size());
+      const velox::DecodedVector expectedMaps{*expected};
+      const velox::DecodedVector actualMaps{*actual};
+      const auto* expectedBase = expectedMaps.base()->as<velox::MapVector>();
+      const auto* actualBase = actualMaps.base()->as<velox::MapVector>();
+      ASSERT_NE(actualBase, nullptr);
+      const velox::DecodedVector expectedKeys{*expectedBase->mapKeys()};
+      const velox::DecodedVector actualKeys{*actualBase->mapKeys()};
+      for (velox::vector_size_t row = 0; row < expected->size(); ++row) {
+        SCOPED_TRACE(fmt::format("row {}", row));
+        ASSERT_EQ(actualMaps.isNullAt(row), expectedMaps.isNullAt(row));
+        if (expectedMaps.isNullAt(row)) {
+          continue;
+        }
+        folly::F14FastMap<std::string, velox::vector_size_t> expectedEntries;
+        const auto expectedIndex = expectedMaps.index(row);
+        const auto expectedBegin = expectedBase->offsetAt(expectedIndex);
+        const auto expectedEnd =
+            expectedBegin + expectedBase->sizeAt(expectedIndex);
+        for (auto entry = expectedBegin; entry < expectedEnd; ++entry) {
+          auto key = canonicalHybridFlatMapKey(expectedKeys, entry);
+          if (keys.contains(key)) {
+            expectedEntries.emplace(std::move(key), entry);
+          }
+        }
+        const auto actualIndex = actualMaps.index(row);
+        const auto actualBegin = actualBase->offsetAt(actualIndex);
+        const auto actualEnd = actualBegin + actualBase->sizeAt(actualIndex);
+        for (auto entry = actualBegin; entry < actualEnd; ++entry) {
+          const auto key = canonicalHybridFlatMapKey(actualKeys, entry);
+          const auto expectedEntry = expectedEntries.find(key);
+          ASSERT_TRUE(expectedEntry != expectedEntries.end())
+              << "Unexpected key " << key;
+          EXPECT_TRUE(actualBase->mapValues()->equalValueAt(
+              expectedBase->mapValues().get(), entry, expectedEntry->second))
+              << "Value mismatch for key " << key;
+          expectedEntries.erase(expectedEntry);
+        }
+        EXPECT_TRUE(expectedEntries.empty());
+      }
+    };
+
+    // Built once from the first batch's schema bytes and reused for every
+    // batch.
+    const auto keyListSchema =
+        SchemaDeserializer::deserialize(keyListSchemas.front());
+    const serde::Projector projector{keyListSchema, subfields, pool_.get(), {}};
+    const Deserializer keyListDeserializer{
+        keyListSchema, pool_.get(), deserializerOptions()};
+    const Deserializer selectedDeserializer{
+        projector.projectedSchema(),
+        subfields,
+        pool_.get(),
+        deserializerOptions()};
+    for (int i = 0; i < kKeyListBatches; ++i) {
+      SCOPED_TRACE(fmt::format("KeyList batch {}", i));
+      // Reusing the Projector is valid only for identical schema bytes.
+      ASSERT_EQ(keyListSchemas[i], keyListSchemas.front());
+      const auto& input = keyListInputs[i];
+      velox::VectorPtr output;
+      keyListDeserializer.deserialize(keyListSerialized[i], output);
+      ASSERT_EQ(output->size(), input->size());
+      for (velox::vector_size_t j = 0; j < input->size(); ++j) {
+        ASSERT_TRUE(vectorEquals(output, input, j))
+            << "Content mismatch at index " << j
+            << "\nReference: " << input->toString(j)
+            << "\nResult: " << output->toString(j);
+      }
+
+      const auto projected =
+          projector.project(keyListSerialized[i]).to<std::string>();
+      velox::VectorPtr selected;
+      selectedDeserializer.deserialize(projected, selected);
+      const auto* selectedRow = selected->as<velox::RowVector>();
+      ASSERT_NE(selectedRow, nullptr);
+      for (const auto& [column, keys] : selectedKeys) {
+        SCOPED_TRACE(column);
+        verifySelectedKeys(
+            input->childAt(column), selectedRow->childAt(column), keys);
       }
     }
   }

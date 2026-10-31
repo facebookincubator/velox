@@ -204,7 +204,6 @@ class ConstantEncodingBenchmark : public velox::test::VectorTestBase {
     rowReaderOptions.setRequestedType(inputType);
     rowReaderOptions.setEagerFirstStripeLoad(true);
     // Constant chunks take the bulk path only through the non-legacy encodings.
-    rowReaderOptions.setStringDecoderZeroCopy(true);
     rowReaderOptions.setNimbleScanFastPath(scanFastPath);
     readers.rowReader = readers.reader->createRowReader(rowReaderOptions);
     readers.result = BaseVector::create(

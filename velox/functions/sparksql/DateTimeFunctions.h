@@ -565,6 +565,8 @@ struct DateFromUnixDateFunction {
 
 /// Truncates a timestamp to a specified time unit. Return NULL if the format is
 /// invalid. Format as abbreviated unit string and "microseconds" are allowed.
+/// Throws if the result is outside the range of int64 microseconds since the
+/// epoch.
 template <typename T>
 struct DateTruncFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
@@ -591,6 +593,11 @@ struct DateTruncFunction {
       return false;
     }
     result = truncateTimestamp(timestamp, unitOption.value(), timeZone_);
+    // Spark timestamps are int64 microseconds since the epoch, so truncating
+    // the minimum timestamp to a coarser unit cannot be represented.
+    if (result < Timestamp::minMicros() || result > Timestamp::maxMicros()) {
+      VELOX_ARITHMETIC_ERROR("long overflow");
+    }
     return true;
   }
 
@@ -1077,9 +1084,9 @@ struct SecondsToTimestampFunction {
       const double secondsD = static_cast<double>(seconds);
 
       if (secondsD >= kMaxSecondsD) {
-        result = Timestamp(kMaxSeconds, kMaxNanoseconds);
+        result = Timestamp::maxMicros();
       } else if (secondsD <= kMinSecondsD) {
-        result = Timestamp(kMinSeconds, kMinNanoseconds);
+        result = Timestamp::minMicros();
       } else {
         // Scale to microseconds and truncate toward zero.
         const double microsD = secondsD * Timestamp::kMicrosecondsInSecond;
@@ -1110,12 +1117,6 @@ struct SecondsToTimestampFunction {
       kMaxMicrosD / Timestamp::kMicrosecondsInSecond;
   static constexpr double kMinSecondsD =
       kMinMicrosD / Timestamp::kMicrosecondsInSecond;
-
-  // Cutoff values are based on Java's Long.MAX_VALUE and Long.MIN_VALUE.
-  static constexpr int64_t kMaxSeconds = 9223372036854LL;
-  static constexpr int64_t kMaxNanoseconds = 775807000LL;
-  static constexpr int64_t kMinSeconds = -9223372036855LL;
-  static constexpr int64_t kMinNanoseconds = 224192000LL;
 };
 
 template <typename T>

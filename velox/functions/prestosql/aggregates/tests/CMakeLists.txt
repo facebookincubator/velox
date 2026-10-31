@@ -109,15 +109,22 @@ if(${VELOX_ENABLE_GEO})
 endif()
 
 if(VELOX_ENABLE_FAISS)
-  add_executable(velox_aggregates_VectorIndexPackTest VectorIndexPackTest.cpp Main.cpp)
+  add_executable(
+    velox_aggregates_VectorIndexTest
+    VectorIndexBuildTest.cpp
+    VectorIndexPackTest.cpp
+    Main.cpp
+  )
   add_test(
-    NAME velox_aggregates_VectorIndexPackTest
-    COMMAND velox_aggregates_VectorIndexPackTest
+    NAME velox_aggregates_VectorIndexTest
+    COMMAND velox_aggregates_VectorIndexTest
     WORKING_DIRECTORY .
   )
   target_link_libraries(
-    velox_aggregates_VectorIndexPackTest
+    velox_aggregates_VectorIndexTest
     ${VELOX_AGGREGATES_TEST_DEPS}
     velox_vector_index
+    FAISS::faiss
+    GTest::gmock
   )
 endif()

@@ -79,6 +79,10 @@ class NimbleReaderOptions : public velox::dwio::common::FormatSpecificOptions {
  public:
   /// Resolves External shared integer dictionaries referenced by this file.
   std::shared_ptr<const ExternalDictionaryResolver> externalDictionaryResolver;
+
+  /// Whether key chunk readers cache their encoding views. See
+  /// TabletReader::Options::cacheKeyEncodingViews.
+  bool cacheKeyEncodingViews{false};
 };
 
 namespace test {
@@ -177,6 +181,10 @@ class TabletReader {
     /// (chunks would otherwise be evicted before any lookup runs).
     /// Default false.
     bool preloadIndex{false};
+
+    /// Whether key chunk readers cache their encoding views. See
+    /// index::IndexLookup::Options::cacheKeyEncodingViews. Default false.
+    bool cacheKeyEncodingViews{false};
 
     /// Whether to load the chunk stats during initialization. Default true.
     bool loadChunkStats{true};

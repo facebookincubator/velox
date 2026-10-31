@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include <bit>
 #include <cstdint>
 #include <limits>
 
@@ -248,6 +249,14 @@ class ArithmeticTest : public SparkFunctionBaseTest {
       const std::optional<T> a,
       const std::optional<T> b) {
     return evaluateOnce<T>("checked_subtract(c0, c1)", a, b);
+  }
+
+  template <typename T>
+  std::optional<T> tryArithmetic(
+      const std::string& func,
+      const std::optional<T> a,
+      const std::optional<T> b) {
+    return evaluateOnce<T>(fmt::format("{}(c0, c1)", func), a, b);
   }
 
   template <typename T>
@@ -751,6 +760,50 @@ TEST_F(ArithmeticTest, isNanDouble) {
   EXPECT_EQ(false, isNan(std::nullopt));
 }
 
+TEST_F(ArithmeticTest, normalizeNaNAndZero) {
+  const auto testNormalize = [&]<typename T, typename TBits>(
+                                 T input, TBits expectedBits) {
+    SCOPED_TRACE(fmt::format("input bits: {:#x}", std::bit_cast<TBits>(input)));
+    const auto result =
+        evaluateOnce<T>("normalize_nan_and_zero(c0)", std::optional<T>(input));
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(expectedBits, std::bit_cast<TBits>(result.value()));
+  };
+
+  // Cases shared by REAL and DOUBLE. 'canonicalNaN' is the bit pattern of
+  // Java's Float.NaN or Double.NaN.
+  const auto testSharedCases = [&]<typename T, typename TBits>(
+                                   T /*type*/, TBits canonicalNaN) {
+    using Limits = std::numeric_limits<T>;
+    const auto bits = [](T value) { return std::bit_cast<TBits>(value); };
+    testNormalize(T(-0.0), TBits{0});
+    testNormalize(T(0.0), TBits{0});
+    testNormalize(T(1.5), bits(T(1.5)));
+    testNormalize(T(-1.5), bits(T(-1.5)));
+    testNormalize(Limits::infinity(), bits(Limits::infinity()));
+    testNormalize(-Limits::infinity(), bits(-Limits::infinity()));
+    testNormalize(Limits::denorm_min(), bits(Limits::denorm_min()));
+    testNormalize(Limits::quiet_NaN(), canonicalNaN);
+    testNormalize(-Limits::quiet_NaN(), canonicalNaN);
+    EXPECT_EQ(
+        std::nullopt,
+        evaluateOnce<T>("normalize_nan_and_zero(c0)", std::optional<T>()));
+  };
+
+  constexpr uint64_t kDoubleNaN = 0x7ff8000000000000;
+  constexpr uint32_t kFloatNaN = 0x7fc00000;
+  testSharedCases(double{}, kDoubleNaN);
+  testSharedCases(float{}, kFloatNaN);
+
+  // Signaling and payload NaNs.
+  testNormalize(
+      std::bit_cast<double>(uint64_t{0x7ff0000000000001}), kDoubleNaN);
+  testNormalize(
+      std::bit_cast<double>(uint64_t{0xfff8dead0000beef}), kDoubleNaN);
+  testNormalize(std::bit_cast<float>(uint32_t{0x7f800001}), kFloatNaN);
+  testNormalize(std::bit_cast<float>(uint32_t{0xffc0beef}), kFloatNaN);
+}
+
 TEST_F(ArithmeticTest, hexWithBigint) {
   const auto toHex = [&](std::optional<int64_t> value) {
     return evaluateOnce<std::string>("hex(c0)", value);
@@ -860,6 +913,63 @@ TEST_F(ArithmeticTest, checkedMultiply) {
       INT64_MAX, 2, "Arithmetic overflow: 9223372036854775807 * 2");
   EXPECT_EQ(checkedMultiply<float>(kInf, 1), kInf);
   EXPECT_EQ(checkedMultiply<double>(kInfDouble, 1), kInfDouble);
+}
+
+TEST_F(ArithmeticTest, tryAdd) {
+  EXPECT_EQ(tryArithmetic<int8_t>("try_add", INT8_MAX, 1), std::nullopt);
+  EXPECT_EQ(tryArithmetic<int16_t>("try_add", INT16_MAX, 1), std::nullopt);
+  EXPECT_EQ(tryArithmetic<int32_t>("try_add", INT32_MAX, 1), std::nullopt);
+  EXPECT_EQ(tryArithmetic<int64_t>("try_add", INT64_MAX, 1), std::nullopt);
+  EXPECT_EQ(tryArithmetic<int64_t>("try_add", INT64_MIN, -1), std::nullopt);
+  EXPECT_EQ(tryArithmetic<int32_t>("try_add", 1, 2), 3);
+  EXPECT_EQ(tryArithmetic<int32_t>("try_add", std::nullopt, 2), std::nullopt);
+  EXPECT_EQ(tryArithmetic<float>("try_add", kInf, 1), kInf);
+  EXPECT_EQ(tryArithmetic<double>("try_add", kInfDouble, 1), kInfDouble);
+}
+
+TEST_F(ArithmeticTest, trySubtract) {
+  EXPECT_EQ(tryArithmetic<int8_t>("try_subtract", INT8_MIN, 1), std::nullopt);
+  EXPECT_EQ(tryArithmetic<int16_t>("try_subtract", INT16_MIN, 1), std::nullopt);
+  EXPECT_EQ(tryArithmetic<int32_t>("try_subtract", INT32_MIN, 1), std::nullopt);
+  EXPECT_EQ(tryArithmetic<int64_t>("try_subtract", INT64_MIN, 1), std::nullopt);
+  EXPECT_EQ(
+      tryArithmetic<int32_t>("try_subtract", INT32_MAX, -1), std::nullopt);
+  EXPECT_EQ(
+      tryArithmetic<int64_t>("try_subtract", INT64_MAX, -1), std::nullopt);
+  EXPECT_EQ(tryArithmetic<int32_t>("try_subtract", 5, 2), 3);
+  EXPECT_EQ(
+      tryArithmetic<int32_t>("try_subtract", 5, std::nullopt), std::nullopt);
+  EXPECT_EQ(tryArithmetic<double>("try_subtract", kInfDouble, 1), kInfDouble);
+}
+
+TEST_F(ArithmeticTest, tryMultiply) {
+  EXPECT_EQ(tryArithmetic<int8_t>("try_multiply", INT8_MAX, 2), std::nullopt);
+  EXPECT_EQ(tryArithmetic<int16_t>("try_multiply", INT16_MAX, 2), std::nullopt);
+  EXPECT_EQ(tryArithmetic<int32_t>("try_multiply", INT32_MAX, 2), std::nullopt);
+  EXPECT_EQ(
+      tryArithmetic<int64_t>("try_multiply", INT64_MIN, -1), std::nullopt);
+  EXPECT_EQ(tryArithmetic<int32_t>("try_multiply", 3, -4), -12);
+  EXPECT_EQ(
+      tryArithmetic<int32_t>("try_multiply", std::nullopt, 2), std::nullopt);
+  EXPECT_EQ(tryArithmetic<double>("try_multiply", kInfDouble, 2), kInfDouble);
+}
+
+// Unlike try(checked_add(...)), the try_ functions return NULL only for their
+// own overflow. An error from an argument is still thrown.
+TEST_F(ArithmeticTest, tryArithmeticKeepsArgumentErrors) {
+  const std::optional<int32_t> max = INT32_MAX;
+  const std::optional<int32_t> one = 1;
+  EXPECT_EQ(
+      evaluateOnce<int32_t>(
+          "try(checked_add(checked_add(c0, c1), c1))", max, one),
+      std::nullopt);
+  for (const auto& func : {"try_add", "try_subtract", "try_multiply"}) {
+    SCOPED_TRACE(func);
+    VELOX_ASSERT_THROW(
+        evaluateOnce<int32_t>(
+            fmt::format("{}(checked_add(c0, c1), c1)", func), max, one),
+        "Arithmetic overflow: 2147483647 + 1");
+  }
 }
 
 TEST_F(ArithmeticTest, checkedDivide) {

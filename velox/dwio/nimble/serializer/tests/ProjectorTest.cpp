@@ -2180,6 +2180,76 @@ TEST_P(ProjectorFormatTest, hybridFlatMapProjectionSkipsAbsentKey) {
   }
 }
 
+TEST_P(ProjectorFormatTest, hybridFlatMapKeyListProjectionSelectsDefault) {
+  velox::test::VectorMaker vectorMaker{pool_.get()};
+  const auto makeInput = [&](const std::vector<std::string>& maps) {
+    return vectorMaker.rowVector(
+        {"features", "id"},
+        {vectorMaker.mapVectorFromJson<int64_t, double>(maps),
+         makeIntVector<int64_t>({0, 1, 2, 3})});
+  };
+  const auto input =
+      makeInput({"{1: 10, 9: 90}", "null", "{}", "{7: 70, 2: null, 1: 11}"});
+  auto hybridMap = makeHybridFlatMap(ScalarKind::Int64, {{"1", "2"}});
+  hybridMap.setDefaultGroupKeyPresenceMode(
+      HybridFlatMap::KeyPresenceMode::kKeyList);
+  auto options = inputSerializerOptions();
+  options.hybridFlatMapColumns = {{"features", std::move(hybridMap)}};
+  const auto [serialized, inputSchema] =
+      serializeWithSchema(input, input->type(), std::move(options));
+  const auto& sourceRow = inputSchema->asRow();
+  const auto& sourceHybridMap = sourceRow.childAt(0)->asHybridFlatMap();
+  const auto& configuredGroup = sourceHybridMap.groupAt(0);
+  const auto& defaultGroup = sourceHybridMap.defaultGroup();
+  ASSERT_THAT(defaultGroup.groupKeys, IsEmpty());
+
+  // Key 7 is in no configured group, so any batch's Default may hold it and
+  // the whole Default group is selected next to configured key 1.
+  const auto subfields = makeSubfields({"features[1]", "features[7]", "id"});
+  Projector projector{inputSchema, subfields, pool_.get(), projectorOptions()};
+  EXPECT_THAT(
+      projector.testingInputStreamIndices(),
+      ElementsAre(
+          sourceRow.nullsDescriptor().offset(),
+          sourceHybridMap.nullsDescriptor().offset(),
+          configuredGroup.valueType->asScalar().scalarDescriptor().offset(),
+          configuredGroup.keyPresenceDescriptor.offset(),
+          configuredGroup.inMapDescriptor.offset(),
+          defaultGroup.valueType->asScalar().scalarDescriptor().offset(),
+          defaultGroup.keyPresenceDescriptor.offset(),
+          defaultGroup.inMapDescriptor.offset(),
+          sourceRow.childAt(1)->asScalar().scalarDescriptor().offset()));
+  const auto projectedSchema = projector.projectedSchema();
+  const auto& projectedHybridMap =
+      projectedSchema->asRow().childAt(0)->asHybridFlatMap();
+  EXPECT_EQ(
+      projectedHybridMap.defaultGroupKeyPresenceMode(),
+      HybridFlatMap::KeyPresenceMode::kKeyList);
+  ASSERT_EQ(projectedHybridMap.groupCount(), 2);
+  EXPECT_EQ(projectedHybridMap.groupAt(0).groupId, 0);
+  EXPECT_EQ(
+      projectedHybridMap.groupAt(1).groupId, HybridFlatMap::kDefaultGroupId);
+
+  for (bool useIOBuf : {false, true}) {
+    SCOPED_TRACE(fmt::format("useIOBuf={}", useIOBuf));
+    const auto projectedBytes =
+        toString(projectInput(projector, serialized, useIOBuf));
+    velox::test::assertEqualVectors(
+        input,
+        deserialize(
+            projectedBytes, projectedSchema, outputDeserializerOptions()));
+
+    // The selector drops Default key 9, which the response carries only
+    // because Default is projected whole.
+    Deserializer selectedDeserializer{
+        projectedSchema, subfields, pool_.get(), outputDeserializerOptions()};
+    VectorPtr selected;
+    selectedDeserializer.deserialize(projectedBytes, selected);
+    velox::test::assertEqualVectors(
+        makeInput({"{1: 10}", "null", "{}", "{1: 11, 7: 70}"}), selected);
+  }
+}
+
 TEST_P(ProjectorFormatTest, hybridFlatMapDefaultOnlyProjectionRoundTrip) {
   velox::test::VectorMaker vectorMaker{pool_.get()};
   const auto makeInput = [&](const std::vector<std::string>& maps) {
@@ -2992,7 +3062,8 @@ TEST_P(ProjectorFormatTest, hybridFlatMapProjectionFuzz) {
 TEST_F(ProjectorTest, hybridFlatMapProjectTypePreservesAttributes) {
   SchemaBuilder builder;
   auto root = builder.createRowTypeBuilder(1);
-  auto hybridMap = builder.createHybridFlatMapTypeBuilder(ScalarKind::Int64);
+  auto hybridMap = builder.createHybridFlatMapTypeBuilder(
+      ScalarKind::Int64, HybridFlatMap::KeyPresenceMode::kBitmap);
   hybridMap->setAttributes({{"test.attribute", "preserved"}});
   const auto makeValueType = [&]() {
     auto value = builder.createRowTypeBuilder(1);
@@ -3022,6 +3093,42 @@ TEST_F(ProjectorTest, hybridFlatMapProjectTypePreservesAttributes) {
           {"test.attribute", "preserved"}}));
   EXPECT_EQ(projected.groupAt(0).valueType->asRow().nameAt(0), "new_value");
   EXPECT_EQ(projected.groupAt(0).groupKeys, (std::vector<std::string>{"1"}));
+}
+
+TEST_F(ProjectorTest, hybridFlatMapProjectTypeKeepsKeyList) {
+  SchemaBuilder builder;
+  auto root = builder.createRowTypeBuilder(1);
+  auto hybridMap = builder.createHybridFlatMapTypeBuilder(
+      ScalarKind::Int64, HybridFlatMap::KeyPresenceMode::kKeyList);
+  const auto makeValueType = [&]() {
+    auto value = builder.createRowTypeBuilder(1);
+    value->addChild(
+        "old_value", builder.createScalarTypeBuilder(ScalarKind::Int64));
+    return value;
+  };
+  hybridMap->addGroup(0, {"1"}, makeValueType());
+  hybridMap->addGroup(HybridFlatMap::kDefaultGroupId, {}, makeValueType());
+  root->addChild("features", hybridMap);
+  const auto inputSchema = SchemaReader::getSchema(builder.schemaNodes());
+  const auto projectType =
+      ROW({{"features", MAP(BIGINT(), ROW({{"new_value", BIGINT()}}))}});
+  // Key 7 is in no configured group, so it selects Default, whose key-presence
+  // stream lists Int64 keys.
+  Projector projector{
+      inputSchema,
+      makeSubfields({"features[7]"}),
+      pool_.get(),
+      {.projectVersion = SerializationVersion::kProjection,
+       .projectType = projectType}};
+
+  const auto& projected =
+      projector.projectedSchema()->asRow().childAt(0)->asHybridFlatMap();
+  EXPECT_EQ(
+      projected.defaultGroupKeyPresenceMode(),
+      HybridFlatMap::KeyPresenceMode::kKeyList);
+  ASSERT_EQ(projected.groupCount(), 1);
+  EXPECT_EQ(projected.groupAt(0).groupId, HybridFlatMap::kDefaultGroupId);
+  EXPECT_EQ(projected.groupAt(0).valueType->asRow().nameAt(0), "new_value");
 }
 
 TEST_F(ProjectorTest, projectTypeRenamesEveryNestedContainerKind) {

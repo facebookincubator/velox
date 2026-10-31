@@ -128,20 +128,35 @@ class QueryConfig {
       false,
       "Adjust timezone-less timestamp conversions to session timezone and cast TIMESTAMP WITH TIME ZONE to TIMESTAMP as a UTC instant.")
 
-  /// If true, operations that render a TIMESTAMP WITH TIME ZONE use the session
-  /// time zone, so values that compare equal produce equal results. If false,
-  /// they use each value's embedded time zone. The timezone_hour and
-  /// timezone_minute functions always report the offset stored in the value.
-  /// When adjust_timestamp_to_session_timezone is false, casts to TIMESTAMP use
-  /// the session zone when this property is true and the embedded zone when it
-  /// is false.
-  VELOX_QUERY_CONFIG(
-      kUseSessionTimezoneForTimestampWithTimezone,
-      useSessionTimezoneForTimestampWithTimezone,
-      "use_session_timezone_for_timestamp_with_timezone",
+  /// If true, operations that render a TIMESTAMP WITH TIME ZONE ignore the
+  /// stored time zone label and use the session time zone, so values that
+  /// compare equal produce equal results. If false, they use each value's
+  /// stored time zone label. The timezone_hour and timezone_minute functions
+  /// always report the offset stored in the value. When
+  /// adjust_timestamp_to_session_timezone is false, casts to TIMESTAMP use the
+  /// session zone when this property is true and the stored zone when it is
+  /// false.
+  VELOX_QUERY_CONFIG_PROPERTY(
+      kIgnoreTimeZoneLabel,
+      "ignore_time_zone_label",
       bool,
       false,
-      "Render TIMESTAMP WITH TIME ZONE values in the session timezone (true) or each value's embedded zone (false); when adjust_timestamp_to_session_timezone is false, casts to TIMESTAMP use the session zone (true) or embedded zone (false).")
+      "Ignore TIMESTAMP WITH TIME ZONE labels and render values in the session timezone (true), or render each value using its stored label (false); when adjust_timestamp_to_session_timezone is false, casts to TIMESTAMP use the session zone (true) or stored zone (false).")
+
+  /// Returns the explicitly configured value, or the deprecated property's
+  /// value when the new property is absent.
+  bool ignoreTimeZoneLabel() const;
+
+#ifdef VELOX_ENABLE_BACKWARD_COMPATIBILITY
+  /// Deprecated config key retained while downstream callers migrate.
+  static constexpr const char* kUseSessionTimezoneForTimestampWithTimezone =
+      "use_session_timezone_for_timestamp_with_timezone";
+
+  /// Legacy API. Prefer ignoreTimeZoneLabel().
+  bool useSessionTimezoneForTimestampWithTimezone() const {
+    return ignoreTimeZoneLabel();
+  }
+#endif // VELOX_ENABLE_BACKWARD_COMPATIBILITY
 
   /// Whether to use the simplified expression evaluation path. False by
   /// default.

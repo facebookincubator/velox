@@ -65,6 +65,19 @@ VectorPtr VectorTestBase::wrapInDictionary(
       indices, indices->size() / sizeof(vector_size_t), vector);
 }
 
+RowVectorPtr VectorTestBase::makeNamedRowVector(
+    const std::vector<std::pair<std::string, VectorPtr>>& children) {
+  std::vector<std::string> names;
+  std::vector<VectorPtr> vectors;
+  names.reserve(children.size());
+  vectors.reserve(children.size());
+  for (const auto& [name, child] : children) {
+    names.push_back(name);
+    vectors.push_back(child);
+  }
+  return makeRowVector(names, vectors);
+}
+
 BufferPtr VectorTestBase::makeOddIndices(vector_size_t size) {
   return makeIndices(size, [](vector_size_t i) { return 2 * i + 1; });
 }

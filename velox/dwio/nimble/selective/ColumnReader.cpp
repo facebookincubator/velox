@@ -18,7 +18,7 @@
 
 #include <memory>
 #include "folly/ScopeGuard.h"
-#include "velox/dwio/nimble/encodings/legacy/EncodingUtils.h"
+#include "velox/dwio/nimble/encodings/common/EncodingUtils.h"
 
 #include "velox/dwio/common/TypeUtils.h"
 #include "velox/dwio/nimble/selective/ByteColumnReader.h"

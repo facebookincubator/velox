@@ -73,9 +73,9 @@ of available functions [can be found here.](https://facebookincubator.github.io/
 
 Recent blog posts ([all posts](https://velox-lib.io/blog)):
 
+- [Iceberg V3 in Velox](https://velox-lib.io/blog/iceberg-v3) (2026-10-30)
 - [Hybrid FlatMap: Group-Level Feature Projection in Nimble](https://velox-lib.io/blog/nimble-hybrid-flatmap) (2026-10-09)
 - [Parallel Encoding and Decoding in Nimble: Faster Flushes and Reads](https://velox-lib.io/blog/nimble-parallel-encoding-decoding) (2026-10-05)
-- [Slicing Encoded Streams Efficiently in Velox Nimble](https://velox-lib.io/blog/nimble-stream-slicing) (2026-09-08)
 
 ## Community
 

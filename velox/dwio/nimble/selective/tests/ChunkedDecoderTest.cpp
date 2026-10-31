@@ -19,6 +19,7 @@
 #include "velox/common/base/Nulls.h"
 #include "velox/common/io/IoStatistics.h"
 #include "velox/dwio/common/DirectBufferedInput.h"
+#include "velox/dwio/common/Statistics.h"
 #include "velox/dwio/nimble/common/Buffer.h"
 #include "velox/dwio/nimble/common/ChunkHeader.h"
 #include "velox/dwio/nimble/common/tests/GTestUtils.h"
@@ -26,7 +27,7 @@
 #include "velox/dwio/nimble/encodings/TrivialEncoding.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/common/EncodingLayout.h"
-#include "velox/dwio/nimble/encodings/legacy/EncodingUtils.h"
+#include "velox/dwio/nimble/encodings/common/EncodingUtils.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelection.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
 #include "velox/dwio/nimble/encodings/tests/EncodingLayoutTestHelper.h"
@@ -890,50 +891,27 @@ TEST_F(ChunkedDecoderDataTest, loadNextChunkReleasesPreviousChunk) {
   }
 }
 
-TEST_F(ChunkedDecoderDataTest, sharedDictionaryRequiresNonLegacyDispatch) {
+TEST_F(ChunkedDecoderDataTest, sharedDictionaryDecodesIndices) {
   const std::vector<int32_t> alphabet{10, 20, 30, 40};
   const std::vector<uint32_t> indices{2, 0, 3, 1, 2};
   const std::vector<int32_t> expected{30, 10, 40, 20, 30};
   const auto streamData = encodeSharedDictionaryChunkedStream(indices);
-  auto makeAlphabetLoader = [&] {
-    auto sharedDictionaryAlphabet =
-        test::createSharedDictionaryAlphabet<int32_t>(
-            alphabet, /*candidateEncodings=*/{}, pool_.get());
-    return [sharedDictionaryAlphabet] { return sharedDictionaryAlphabet; };
-  };
+  auto sharedDictionaryAlphabet = test::createSharedDictionaryAlphabet<int32_t>(
+      alphabet, /*candidateEncodings=*/{}, pool_.get());
 
-  {
-    ChunkedDecoder decoder(
-        std::make_unique<dwio::common::SeekableArrayInputStream>(
-            streamData.data(), streamData.size()),
-        /*streamIndex=*/nullptr,
-        /*decodeValuesWithNulls=*/false,
-        &encodingFactory(),
-        pool_.get(),
-        /*stringDecoderZeroCopy=*/false,
-        /*decodingStats=*/nullptr,
-        makeAlphabetLoader());
-    NIMBLE_ASSERT_THROW(
-        decoder.ensureLoaded(),
-        "Shared dictionary encoding requires non-legacy encoding dispatch");
-  }
-
-  {
-    ChunkedDecoder decoder(
-        std::make_unique<dwio::common::SeekableArrayInputStream>(
-            streamData.data(), streamData.size()),
-        /*streamIndex=*/nullptr,
-        /*decodeValuesWithNulls=*/false,
-        &encodingFactory(),
-        pool_.get(),
-        /*stringDecoderZeroCopy=*/true,
-        /*decodingStats=*/nullptr,
-        makeAlphabetLoader());
-    std::vector<int32_t> result(indices.size());
-    decoder.nextIndices(
-        result.data(), static_cast<int64_t>(result.size()), nullptr);
-    EXPECT_EQ(result, expected);
-  }
+  ChunkedDecoder decoder(
+      std::make_unique<dwio::common::SeekableArrayInputStream>(
+          streamData.data(), streamData.size()),
+      /*streamIndex=*/nullptr,
+      /*decodeValuesWithNulls=*/false,
+      &encodingFactory(),
+      pool_.get(),
+      /*decodingStats=*/nullptr,
+      [sharedDictionaryAlphabet] { return sharedDictionaryAlphabet; });
+  std::vector<int32_t> result(indices.size());
+  decoder.nextIndices(
+      result.data(), static_cast<int64_t>(result.size()), nullptr);
+  EXPECT_EQ(result, expected);
 }
 
 TEST_P(ChunkedDecoderDataTest, skipMultipleChunks) {
@@ -1149,6 +1127,28 @@ TEST_P(ChunkedDecoderDataTest, skipEntireStream) {
   NIMBLE_ASSERT_THROW(
       decoder.nextIndices(result.data(), 1, nullptr),
       "Failed to read chunk header");
+}
+
+// The row-size estimates peek at a chunk header only before anything is read
+// or skipped. A skip with the index to exactly the end of the stream leaves no
+// header to peek at, so they keep their last values.
+TEST_F(ChunkedDecoderDataTest, skipWithIndexToStreamEndKeepsEstimates) {
+  auto [streamData, chunkInfos] =
+      encodeChunkedStream<uint32_t>({{1, 2, 3}, {4, 5}, {6, 7, 8, 9}});
+  ChunkedDecoder decoder(
+      std::make_unique<dwio::common::SeekableArrayInputStream>(
+          streamData.data(), streamData.size()),
+      createTestStreamIndexInternal(chunkInfos),
+      /*decodeValuesWithNulls=*/false,
+      &encodingFactory(),
+      pool_.get());
+  EXPECT_EQ(decoder.estimateRowCount(), 3);
+
+  // Into the second chunk, then across the third to the end of the stream.
+  decoder.skip(4);
+  decoder.skip(5);
+  EXPECT_EQ(decoder.estimateRowCount(), 3);
+  EXPECT_EQ(decoder.estimateStringDataSize(), std::nullopt);
 }
 
 TEST_P(ChunkedDecoderDataTest, skipAndReadMixed) {
@@ -1528,7 +1528,6 @@ TEST_P(ChunkedDecoderDataTest, scanFastPathPropagation) {
       /*decodeValuesWithNulls=*/false,
       &encodingFactory(),
       pool_.get(),
-      /*stringDecoderZeroCopy=*/false,
       /*decodingStats=*/nullptr,
       /*dictionaryAlphabetLoader=*/nullptr,
       /*dictionaryAwareReads=*/false,
@@ -1552,7 +1551,6 @@ TEST_P(ChunkedDecoderDataTest, scanFastPathWithNullable) {
       /*decodeValuesWithNulls=*/false,
       &encodingFactory(),
       pool_.get(),
-      /*stringDecoderZeroCopy=*/false,
       /*decodingStats=*/nullptr,
       /*dictionaryAlphabetLoader=*/nullptr,
       /*dictionaryAwareReads=*/false,
@@ -1572,6 +1570,207 @@ TEST_P(ChunkedDecoderDataTest, scanFastPathWithNullable) {
   EXPECT_EQ(result[4], 5);
 }
 
+// With a stream index, a skip into another chunk opens that chunk only when a
+// value is read, so a chunk that a later skip steps past is never
+// decompressed. Without the index, a skip loads every chunk it passes.
+TEST_F(ChunkedDecoderDataTest, skipWithIndexOpensChunkOnRead) {
+  constexpr uint32_t kNumChunks{5};
+  constexpr uint32_t kRowsPerChunk{1'000};
+  std::vector<std::vector<uint32_t>> chunks(kNumChunks);
+  for (uint32_t chunk = 0; chunk < kNumChunks; ++chunk) {
+    chunks[chunk].resize(kRowsPerChunk);
+    std::iota(
+        chunks[chunk].begin(), chunks[chunk].end(), chunk * kRowsPerChunk);
+  }
+  auto [streamData, chunkInfos] = encodeChunkedStream<uint32_t>(
+      chunks,
+      /*compressionType=*/CompressionType::Uncompressed,
+      /*valuesCompressionType=*/CompressionType::Zstd);
+  const auto streamIndex = createTestStreamIndexInternal(chunkInfos);
+
+  // Skips or reads 'numRows' rows.
+  struct Step {
+    bool read;
+    uint32_t numRows;
+  };
+  struct TestCase {
+    std::string name;
+    std::vector<Step> steps;
+    uint64_t decompressionsWithoutIndex;
+    uint64_t decompressionsWithIndex;
+  };
+  const std::vector<TestCase> testCases{
+      {"readAll", {{true, kNumChunks * kRowsPerChunk}}, 5, 5},
+      {"skipIntoChunkThenRead", {{false, 2'500}, {true, 10}}, 3, 1},
+      {"skipPastChunkSkippedInto",
+       {{false, 2'500}, {false, 1'000}, {true, 10}},
+       4,
+       1},
+      {"skipTwiceIntoSameChunk",
+       {{false, 2'500}, {false, 100}, {true, 10}},
+       3,
+       1},
+      {"skipWithinLoadedChunk", {{true, 10}, {false, 100}, {true, 10}}, 1, 1},
+      {"readAcrossChunksAfterSkip", {{false, 2'990}, {true, 20}}, 4, 2},
+      {"skipToEnd", {{false, 2'500}, {false, 2'500}}, 5, 0},
+  };
+  for (const auto& testCase : testCases) {
+    for (const bool withIndex : {false, true}) {
+      SCOPED_TRACE(fmt::format("{} withIndex={}", testCase.name, withIndex));
+      dwio::common::DecodingStats stats;
+      ChunkedDecoder decoder(
+          std::make_unique<dwio::common::SeekableArrayInputStream>(
+              streamData.data(), streamData.size()),
+          withIndex ? streamIndex : nullptr,
+          /*decodeValuesWithNulls=*/false,
+          &encodingFactory(),
+          pool_.get(),
+          &stats);
+      uint32_t row{0};
+      for (const auto& step : testCase.steps) {
+        if (step.read) {
+          std::vector<int32_t> values(step.numRows);
+          decoder.nextIndices(values.data(), step.numRows, nullptr);
+          std::vector<int32_t> expected(step.numRows);
+          std::iota(expected.begin(), expected.end(), row);
+          EXPECT_EQ(values, expected);
+        } else {
+          decoder.skip(step.numRows);
+        }
+        row += step.numRows;
+      }
+      EXPECT_EQ(
+          stats.decompressCPUTimeNanos.count(),
+          withIndex ? testCase.decompressionsWithIndex
+                    : testCase.decompressionsWithoutIndex);
+    }
+  }
+}
+
+// A skip into another chunk fires the chunk-boundary callback once, and
+// ensureLoaded then opens the chunk at the row skipped to, so a caller that
+// inspects the current encoding after a skip sees the chunk it will read.
+TEST_F(ChunkedDecoderDataTest, skipWithIndexThenEnsureLoaded) {
+  auto [streamData, chunkInfos] =
+      encodeChunkedStream<uint32_t>({{1, 2, 3}, {4, 5}, {6, 7, 8}});
+  ChunkedDecoder decoder(
+      std::make_unique<dwio::common::SeekableArrayInputStream>(
+          streamData.data(), streamData.size()),
+      createTestStreamIndexInternal(chunkInfos),
+      /*decodeValuesWithNulls=*/false,
+      &encodingFactory(),
+      pool_.get());
+  decoder.ensureLoaded();
+
+  int numCallbacks{0};
+  decoder.skip(4, [&] {
+    ++numCallbacks;
+    return true;
+  });
+  EXPECT_EQ(numCallbacks, 1);
+
+  decoder.ensureLoaded();
+  ASSERT_NE(decoder.currentEncoding(), nullptr);
+  EXPECT_EQ(decoder.remainingValues(), 1);
+  std::vector<int32_t> values(4);
+  decoder.nextIndices(values.data(), 4, nullptr);
+  EXPECT_THAT(values, testing::ElementsAre(5, 6, 7, 8));
+}
+
+// A skip to the end of the stream drops the chunk an earlier skip left to open,
+// so ensureLoaded has nothing to load.
+TEST_F(ChunkedDecoderDataTest, skipWithIndexToStreamEndDropsLazyChunkSeek) {
+  auto [streamData, chunkInfos] =
+      encodeChunkedStream<uint32_t>({{1, 2, 3}, {4, 5}, {6, 7, 8}});
+  ChunkedDecoder decoder(
+      std::make_unique<dwio::common::SeekableArrayInputStream>(
+          streamData.data(), streamData.size()),
+      createTestStreamIndexInternal(chunkInfos),
+      /*decodeValuesWithNulls=*/false,
+      &encodingFactory(),
+      pool_.get());
+
+  // Into the second chunk, then to the end of the stream.
+  decoder.skip(4);
+  decoder.skip(4);
+
+  decoder.ensureLoaded();
+  EXPECT_EQ(decoder.currentEncoding(), nullptr);
+  EXPECT_EQ(decoder.remainingValues(), 0);
+}
+
+// A read whose rows are all null in 'incomingNulls' reads no values, so the
+// chunk a skip landed in stays unopened and the next read starts at the row
+// skipped to.
+TEST_F(ChunkedDecoderDataTest, skipWithIndexThenAllNullRead) {
+  auto [streamData, chunkInfos] =
+      encodeChunkedStream<uint32_t>({{1, 2, 3}, {4, 5}, {6, 7, 8}});
+  ChunkedDecoder decoder(
+      std::make_unique<dwio::common::SeekableArrayInputStream>(
+          streamData.data(), streamData.size()),
+      createTestStreamIndexInternal(chunkInfos),
+      /*decodeValuesWithNulls=*/false,
+      &encodingFactory(),
+      pool_.get());
+  decoder.skip(4);
+
+  const std::vector<uint64_t> allNulls(1, velox::bits::kNull64);
+  std::vector<int32_t> values(4);
+  decoder.nextIndices(values.data(), 4, allNulls.data());
+  EXPECT_EQ(decoder.currentEncoding(), nullptr);
+
+  decoder.nextIndices(values.data(), 4, nullptr);
+  EXPECT_THAT(values, testing::ElementsAre(5, 6, 7, 8));
+}
+
+// nextNulls opens the chunk a skip landed in, at the row skipped to.
+TEST_F(ChunkedDecoderDataTest, skipWithIndexThenNextNulls) {
+  auto [streamData, chunkInfos] = encodeNullableChunkedStream<uint32_t>(
+      {{1, std::nullopt, 3}, {std::nullopt, 5, 6, std::nullopt}});
+  ChunkedDecoder decoder(
+      std::make_unique<dwio::common::SeekableArrayInputStream>(
+          streamData.data(), streamData.size()),
+      createTestStreamIndexInternal(chunkInfos),
+      /*decodeValuesWithNulls=*/false,
+      &encodingFactory(),
+      pool_.get());
+  decoder.skip(4);
+
+  std::vector<uint64_t> nulls(1);
+  decoder.nextNulls(nulls.data(), 3, nullptr);
+  std::vector<bool> notNull(3);
+  for (int i = 0; i < 3; ++i) {
+    notNull[i] = velox::bits::isBitSet(nulls.data(), i);
+  }
+  EXPECT_THAT(notNull, testing::ElementsAre(true, true, false));
+}
+
+// The row count estimate peeks at the first chunk's header only before anything
+// is read or skipped. After a skip that leaves a chunk to open, or that reaches
+// the end of the stream, it keeps the last estimate.
+TEST_F(ChunkedDecoderDataTest, skipWithIndexKeepsRowCountEstimate) {
+  auto [streamData, chunkInfos] =
+      encodeChunkedStream<uint32_t>({{1, 2, 3}, {4, 5}, {6, 7, 8, 9}});
+  ChunkedDecoder decoder(
+      std::make_unique<dwio::common::SeekableArrayInputStream>(
+          streamData.data(), streamData.size()),
+      createTestStreamIndexInternal(chunkInfos),
+      /*decodeValuesWithNulls=*/false,
+      &encodingFactory(),
+      pool_.get());
+  EXPECT_EQ(decoder.estimateRowCount(), 3);
+  std::vector<int32_t> values(3);
+  decoder.nextIndices(values.data(), 3, nullptr);
+
+  // Rows 3 to 5 lead into the third chunk, which stays unopened.
+  decoder.skip(3);
+  EXPECT_EQ(decoder.estimateRowCount(), 3);
+
+  // Rows 6 to 8 end the stream.
+  decoder.skip(3);
+  EXPECT_EQ(decoder.estimateRowCount(), 3);
+}
+
 TEST_P(ChunkedDecoderDataTest, ensureLoadedAndAccessors) {
   auto [streamData, chunkInfos] =
       encodeChunkedStream<uint32_t>({{1, 2, 3, 4, 5}});
@@ -1579,12 +1778,7 @@ TEST_P(ChunkedDecoderDataTest, ensureLoadedAndAccessors) {
   auto input = std::make_unique<velox::dwio::common::SeekableArrayInputStream>(
       streamData.data(), streamData.size());
   ChunkedDecoder decoder(
-      std::move(input),
-      streamIndex,
-      false,
-      &encodingFactory(),
-      pool_.get(),
-      true);
+      std::move(input), streamIndex, false, &encodingFactory(), pool_.get());
 
   EXPECT_EQ(decoder.currentEncoding(), nullptr);
   EXPECT_EQ(decoder.remainingValues(), 0);
@@ -1798,8 +1992,7 @@ class ChunkedDecoderDictTest : public ChunkedDecoderTest {
         /*streamIndex=*/nullptr,
         /*decodeValuesWithNulls=*/false,
         &encodingFactory(),
-        &pool(),
-        /*stringDecoderZeroCopy=*/true);
+        &pool());
   }
 };
 

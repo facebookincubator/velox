@@ -37,21 +37,34 @@ namespace facebook::nimble::index {
 /// | physicalWidth[level]   | valueCount[level]              |
 /// | u8 * numLevels         | u32 * numLevels                |
 /// +------------------------+--------------------------------+
-/// | childOffsets[level] for levels [0, numLevels - 1)       |
-/// | u32 * (valueCount[level] + 1) per level                 |
-/// +---------------------------------------------------------+
-/// | leafRowOffsets (present when rowCount > leaf value count) |
-/// | u32 * (valueCount[lastLevel] + 1)                       |
-/// +---------------------------------------------------------+
-/// | sequenceSize[sequence] | encodedSequence[sequence]      |
-/// | u32 * numSequences     | bytes * numSequences           |
+///
+/// Sequences, in order
+/// +------------------------+--------------------------------+
+/// | sequenceSize           | values[0]                      |
+/// | u32                    | valueCount[0] values           |
+/// +------------------------+--------------------------------+
+/// | for each level N in [1, numLevels):                     |
+/// +------------------------+--------------------------------+
+/// | sequenceSize           | childOffsets[N - 1]            |
+/// | u32                    | valueCount[N - 1] + 1 values   |
+/// +------------------------+--------------------------------+
+/// | sequenceSize           | values[N]                      |
+/// | u32                    | valueCount[N] values           |
+/// +------------------------+--------------------------------+
+/// | sequenceSize           | leafRowOffsets (present when   |
+/// | u32                    | rowCount > leaf value count)   |
+/// |                        | valueCount[lastLevel] + 1      |
 /// +------------------------+--------------------------------+
 /// ```
 ///
-/// Level 0 has one sequence. Each value at level N owns one sequence at level
-/// N + 1, so `numSequences` is 1 plus the value counts of all non-leaf levels.
-/// Child offsets delimit those owned sequences. Leaf row offsets map each
-/// distinct complete key to the source rows it represents.
+/// Level 0 holds the distinct values of the first key column. Each value at
+/// level N owns a run of children at level N + 1, and childOffsets[N] delimits
+/// those runs. Leaf row offsets map each distinct complete key to the source
+/// rows it represents.
+///
+/// values[N] concatenates every run of level N, so a level takes one encoding
+/// header however many runs it has. Readers validate the child offsets but
+/// trust each run of values to ascend, as the writer enforces key order.
 class HierarchicalKeyFormat final {
  public:
   HierarchicalKeyFormat() = delete;

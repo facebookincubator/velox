@@ -116,6 +116,7 @@ velox_add_library(
   SumDataSizeForStatsAggregate.h
   TDigestAccumulator.h
   VarianceAggregates.h
+  VectorIndexBuildAggregate.h
   VectorIndexPackAggregate.h
   VectorSumAggregate.h
 )
@@ -136,7 +137,7 @@ velox_link_libraries(
 )
 
 if(VELOX_ENABLE_FAISS)
-  velox_sources(velox_aggregates PRIVATE VectorIndexPackAggregate.cpp)
+  velox_sources(velox_aggregates PRIVATE VectorIndexBuildAggregate.cpp VectorIndexPackAggregate.cpp)
   velox_link_libraries(velox_aggregates velox_vector_index)
   velox_compile_definitions(velox_aggregates PRIVATE VELOX_ENABLE_FAISS)
 endif()
