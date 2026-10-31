@@ -65,9 +65,16 @@ class Buffer {
     return *pool_;
   }
 
+  /// Adopted chunks remain occupied until reset.
   std::string_view takeOwnership(velox::BufferPtr&& bufferPtr) {
+    std::scoped_lock<std::mutex> l(mutex_);
     std::string_view chunk{bufferPtr->as<char>(), bufferPtr->size()};
-    chunks_.push_back(std::move(bufferPtr));
+    if (chunks_.empty()) {
+      chunks_.push_back(std::move(bufferPtr));
+    } else {
+      chunks_.insert(chunks_.begin() + chunkIndex_, std::move(bufferPtr));
+      ++chunkIndex_;
+    }
     return chunk;
   }
 
@@ -112,6 +119,12 @@ class Buffer {
   char* chunkEnd_;
   char* pos_;
   char* reserveEnd_;
+  // Occupied-prefix invariant: when chunks_ is non-empty, chunks at indices
+  // [0, chunkIndex_] are unavailable for reuse in the current reset epoch;
+  // chunks at [chunkIndex_ + 1, chunks_.size()) are retained reuse candidates.
+  // Reordering chunks_ can change which chunk is stored at a given index, but
+  // does not move the chunks' backing allocations or invalidate pointers into
+  // them.
   uint32_t chunkIndex_{0};
   std::vector<velox::BufferPtr> chunks_;
 };
