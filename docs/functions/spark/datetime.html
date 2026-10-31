@@ -127,7 +127,12 @@ Supported types for <code class="docutils literal notranslate"><span class="pre"
 <dt class="sig sig-object spark" id="date_trunc">
 <span class="sig-name descname"><span class="pre">date_trunc</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">fmt</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">ts</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">timestamp</span></span></span><a class="headerlink" href="#date_trunc" title="Link to this definition">¶</a></dt>
 <dd><p>Returns timestamp <code class="docutils literal notranslate"><span class="pre">ts</span></code> truncated to the unit specified by the format model <code class="docutils literal notranslate"><span class="pre">fmt</span></code>.
-Returns NULL if <code class="docutils literal notranslate"><span class="pre">fmt</span></code> is invalid. <code class="docutils literal notranslate"><span class="pre">fmt</span></code> as “MICROSECOND” and abbreviated unit string are allowed.</p>
+Returns NULL if <code class="docutils literal notranslate"><span class="pre">fmt</span></code> is invalid. <code class="docutils literal notranslate"><span class="pre">fmt</span></code> as “MICROSECOND” and abbreviated unit string are allowed.
+Throws “long overflow” if the result is outside the range of int64 microseconds since the epoch,
+[-290308-12-21 19:59:05.224192, 294247-01-10 04:00:54.775807] UTC, e.g. when truncating the
+minimum timestamp to a unit coarser than “MICROSECOND”.
+For “SECOND” and “MILLISECOND”, this matches Spark 4.2 and later; Spark 3.5 to 4.1 return a
+wrapped-around value instead.</p>
 <dl class="simple">
 <dt><code class="docutils literal notranslate"><span class="pre">fmt</span></code> is case insensitive and must be one of the following:</dt><dd><ul class="simple">
 <li><p>“YEAR”, “YYYY”, “YY” - truncate to the first date of the year that the <code class="docutils literal notranslate"><span class="pre">ts</span></code> falls in, the time part will be zero out</p></li>
