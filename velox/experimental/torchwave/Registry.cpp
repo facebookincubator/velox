@@ -519,31 +519,8 @@ MetadataBuilder& MetadataBuilder::minBlocksPerSm(int32_t blocks) {
   return *this;
 }
 
-namespace {
-thread_local int32_t tlReserveBlockSize = 0;
-} // namespace
-
-int32_t reserveBlockSize() {
-  return tlReserveBlockSize > 0 ? tlReserveBlockSize
-                                : WaveConfig::get().blockSize;
-}
-
-ReserveBlockSizeScope::ReserveBlockSizeScope(int32_t blockSize)
-    : saved_(tlReserveBlockSize) {
-  tlReserveBlockSize = blockSize;
-}
-
-ReserveBlockSizeScope::~ReserveBlockSizeScope() {
-  tlReserveBlockSize = saved_;
-}
-
 MetadataBuilder& MetadataBuilder::sharedWithinNode(bool value) {
   md_.sharedWithinNode = value;
-  return *this;
-}
-
-MetadataBuilder& MetadataBuilder::ownEntryPoint(bool value) {
-  md_.ownEntryPoint = value;
   return *this;
 }
 
