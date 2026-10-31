@@ -78,6 +78,8 @@ class UcxExchangeServer
   }
 
  private:
+  friend class UcxExchangeFocusedTest;
+
   explicit UcxExchangeServer(
       const std::shared_ptr<Communicator> communicator,
       std::shared_ptr<EndpointRef> endpointRef,
@@ -92,6 +94,18 @@ class UcxExchangeServer
 
   /// @brief Completion handler after data has been sent.
   void sendComplete(ucs_status_t status, std::shared_ptr<void> arg);
+
+  // Records a metadata send completion for communicator-thread finalization.
+  void metadataSendComplete(ucs_status_t status, bool endOfStream);
+
+  // Waits for the consumer to abandon this destination.
+  void receiveDestinationCancellation();
+
+  // Records a destination cancellation for communicator-thread finalization.
+  void destinationCancellationComplete(ucs_status_t status);
+
+  // Finalizes terminal delivery or destination cancellation exactly once.
+  void finalizeTerminalMetadata();
 
   /// @brief Completion handler for intra-node transfer after source retrieves
   /// data.
@@ -122,11 +136,31 @@ class UcxExchangeServer
   /// the packed table, which reports zero rows when it has no columns.
   vector_size_t dataNumRows_{0};
   /// Protects dataPtr_. Must be recursive because sendData() holds the lock
-  /// when calling tagSend(), and for small messages UCX completes inline via
-  /// its fast-completion path, firing the sendComplete() callback on the same
-  /// thread while the lock is still held.
+  /// when submitting a tag send, and for small messages UCX completes inline
+  /// via its fast-completion path, firing the sendComplete() callback on the
+  /// same thread while the lock is still held.
   std::recursive_mutex dataMutex_;
   std::atomic<bool> closed_{false};
+
+  // Terminal send state is confined to the communicator thread, including
+  // UCXX callbacks and close().
+  enum class TerminalMetadataState : uint8_t {
+    NotStarted,
+    Pending,
+    Succeeded,
+    Failed,
+    Finalized,
+  };
+
+  // Records terminal send completion until close() finalizes the output.
+  TerminalMetadataState terminalMetadataState_{
+      TerminalMetadataState::NotStarted};
+
+  // Also read by the output queue callback, which may run on a driver thread.
+  std::atomic<bool> destinationCancelled_{false};
+
+  // Binds asynchronous completion to the original task generation.
+  std::shared_ptr<UcxOutputQueue> outputQueue_;
 
   /// Future for intra-node transfer - signaled when source retrieves data.
   std::future<void> intraNodeRetrieveFuture_;
@@ -143,6 +177,7 @@ class UcxExchangeServer
   // and must therefore exist until the upcall is done.
   std::shared_ptr<ucxx::Request> metaRequest_{nullptr};
   std::shared_ptr<ucxx::Request> dataRequest_{nullptr};
+  std::shared_ptr<ucxx::Request> cancellationRequest_{nullptr};
 
   // Completed UCXX requests are kept alive here to prevent use-after-free.
   // UCP's ucp_wireup_replay_pending_requests can fire callbacks on already-

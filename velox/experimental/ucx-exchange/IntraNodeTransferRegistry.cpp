@@ -189,6 +189,27 @@ void IntraNodeTransferRegistry::cancelTask(std::string_view taskId) {
           << " entriesCleaned=" << entriesToFulfill.size();
 }
 
+void IntraNodeTransferRegistry::cancelTransfer(
+    const IntraNodeTransferKey& key) {
+  std::shared_ptr<IntraNodeTransferEntry> entry;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto node = registry_.extract(key);
+    if (node.empty()) {
+      return;
+    }
+    entry = std::move(node.mapped());
+  }
+  std::lock_guard<std::mutex> lock(entry->entryMutex);
+  entry->data.reset();
+  entry->ready = false;
+  try {
+    entry->retrievedPromise.set_value();
+  } catch (const std::future_error&) {
+    // A racing retrieval may already have fulfilled this promise.
+  }
+}
+
 void IntraNodeTransferRegistry::clearCancelledTask(std::string_view taskId) {
   std::lock_guard<std::mutex> lock(mutex_);
   cancelledTasks_.erase(std::string{taskId});
