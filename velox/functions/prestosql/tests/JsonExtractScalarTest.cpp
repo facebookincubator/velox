@@ -93,6 +93,8 @@ TEST_F(JsonExtractScalarTest, simple) {
   EXPECT_EQ(jsonExtractScalar(R"({"k1":"v1"})", "$.k1.k3"), std::nullopt);
   EXPECT_EQ(jsonExtractScalar(R"({"k1":[0,1,2]})", "$.k1"), std::nullopt);
   EXPECT_EQ(jsonExtractScalar(R"({"k1":""})", "$.k1"), "");
+  EXPECT_EQ(jsonExtractScalar(R"({"":123})", R"($[""])"), "123");
+  EXPECT_EQ(jsonExtractScalar(R"({"":123})", R"($[''])"), "123");
 
   // Nested
   EXPECT_EQ(jsonExtractScalar(R"({"k1":{"k2": 999}})", "$.k1.k2"), "999");
