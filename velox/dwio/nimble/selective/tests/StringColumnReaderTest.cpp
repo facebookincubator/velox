@@ -561,6 +561,93 @@ TEST_P(StringColumnReaderTest, fsstWithSiblingFilter) {
   }
 }
 
+TEST_P(StringColumnReaderTest, fsstFilterOnlyRangeAcrossChunks) {
+  const bool zeroCopy = std::get<0>(GetParam());
+  if (!zeroCopy) {
+    GTEST_SKIP() << "FSST requires the current encoding factory.";
+  }
+  constexpr int kRows = 600;
+  auto makeChunk = [&](int offset) {
+    return makeRowVector(
+        {"key", "value"},
+        {makeFlatVector<std::string>(
+             kRows,
+             [&](auto i) {
+               return fmt::format(
+                   "common/{}/payload/{}", i % 3 == 0 ? "match" : "other", i);
+             },
+             [](auto i) { return i % 7 == 0; }),
+         makeFlatVector<int64_t>(kRows, [&](auto i) { return offset + i; })});
+  };
+  auto first = makeChunk(0);
+  auto second = makeChunk(kRows);
+  WriterOptions options;
+  options.fsstCompressionTargetRatio = 10.0;
+  options.enableChunking = true;
+  options.minStreamChunkRawSize = 0;
+  options.flushPolicyFactory = [] {
+    return std::make_unique<LambdaFlushPolicy>(
+        [](const StripeProgress&) { return false; },
+        [](const StripeProgress&) { return true; });
+  };
+  options.encodingLayoutTree.emplace(
+      Kind::Row,
+      std::
+          unordered_map<EncodingLayoutTree::StreamIdentifier, EncodingLayout>{},
+      "",
+      std::vector<EncodingLayoutTree>{
+          EncodingLayoutTree{
+              Kind::Scalar, {{0, makeFsstEncodingLayout()}}, "key"},
+          EncodingLayoutTree{Kind::Scalar, {}, "value"},
+      });
+  auto file =
+      test::createNimbleFile(*rootPool(), {first, second}, options, false);
+  for (const bool projectOut : {false, true}) {
+    for (const bool nullAllowed : {false, true}) {
+      for (const int batchSize : {137, 1500}) {
+        auto spec = std::make_shared<common::ScanSpec>("root");
+        spec->addAllChildFields(*first->type());
+        auto* keySpec = spec->childByName("key");
+        keySpec->setProjectOut(projectOut);
+        keySpec->setFilter(
+            std::make_unique<common::BytesRange>(
+                "common/match/",
+                false,
+                false,
+                "common/match0",
+                false,
+                true,
+                nullAllowed));
+        spec->childByName("value")->setFilter(
+            std::make_unique<common::BigintRange>(100, 999, false));
+        auto readers = makeReaders(first, file, spec, zeroCopy);
+        auto result = BaseVector::create(first->type(), 0, pool());
+        std::vector<int64_t> actual;
+        while (readers.rowReader->next(batchSize, result) > 0) {
+          auto rows = result->as<RowVector>();
+          auto value = rows->childAt(1)->as<FlatVector<int64_t>>();
+          for (vector_size_t row = 0; row < rows->size(); ++row) {
+            actual.push_back(value->valueAt(row));
+            if (projectOut) {
+              auto source = actual.back() < kRows ? first : second;
+              EXPECT_TRUE(rows->childAt(0)->equalValueAt(
+                  source->childAt(0).get(), row, actual.back() % kRows));
+            }
+          }
+        }
+        std::vector<int64_t> expected;
+        for (int row = 100; row <= 999; ++row) {
+          const auto local = row % kRows;
+          if (local % 7 == 0 ? nullAllowed : local % 3 == 0) {
+            expected.push_back(row);
+          }
+        }
+        EXPECT_EQ(actual, expected);
+      }
+    }
+  }
+}
+
 // Filter that passes all rows — verifies no-op filtering doesn't corrupt.
 TEST_P(StringColumnReaderTest, stringFilterPassesAll) {
   const bool stringDecoderZeroCopy = std::get<0>(GetParam());
