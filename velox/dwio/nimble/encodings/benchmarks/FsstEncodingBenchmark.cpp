@@ -19,6 +19,7 @@
 #include <limits>
 #include <memory>
 #include <optional>
+#include <random>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -1001,63 +1002,82 @@ struct RangeBenchmarkParams {
   std::string_view lower;
   // Predicate used to compute the expected passing rows.
   const facebook::velox::common::Filter& filter;
+  // Byte offset changed to produce non-matches in a single-value corpus.
   std::optional<size_t> mismatchOffset{};
 };
+
+// Builds the shared range-filter corpus, with optional long payloads or
+// repeated values and a controlled fraction of single-value matches.
+std::vector<std::string> makeRangeBenchmarkValues(
+    const RangeBenchmarkParams& params) {
+  constexpr uint32_t kRows = 12'000;
+  std::vector<std::string> storage;
+  storage.reserve(kRows);
+  for (uint32_t row = 0; row < kRows; ++row) {
+    storage.push_back(
+        params.shortValues
+            ? fmt::format(
+                  "{}{}{}",
+                  params.prefix,
+                  row % 10 == 0 ? "match/" : "other/",
+                  row)
+            : fmt::format(
+                  "{}{}{}?payload={}",
+                  params.prefix,
+                  row % 10 == 0 ? "match/" : "other/",
+                  row,
+                  std::string(
+                      128 + row % 64, static_cast<char>('a' + row % 26))));
+  }
+  if (params.singleValue) {
+    for (uint32_t row = 0; row < kRows; ++row) {
+      auto& value = storage.at(row);
+      if (params.selectivity == 10
+              ? row % 10 == 0
+              : static_cast<int>(row % 100) < params.selectivity) {
+        value = params.lower;
+      } else {
+        if (params.mismatchOffset) {
+          value = params.lower;
+          value.at(*params.mismatchOffset) = 'y';
+        } else {
+          value = std::string(params.prefix) + "other/";
+          if (!params.shortValues) {
+            value.append(160, 'x');
+          }
+        }
+      }
+    }
+  }
+  return storage;
+}
 
 // Shares untimed corpus setup across the decoded and compressed filter
 // variants.
 class RangeBenchmarkFixture {
  public:
   // Builds one encoded workload for decoded and compressed filtering.
-  explicit RangeBenchmarkFixture(const RangeBenchmarkParams& params) {
-    constexpr uint32_t kRows = 12'000;
-    std::vector<std::string> storage;
+  explicit RangeBenchmarkFixture(const RangeBenchmarkParams& params)
+      : RangeBenchmarkFixture(
+            makeRangeBenchmarkValues(params),
+            params.stride,
+            params.filter) {}
+
+  // Encodes a supplied corpus and computes expected matches for selected rows.
+  RangeBenchmarkFixture(
+      const std::vector<std::string>& storage,
+      uint32_t stride,
+      const facebook::velox::common::Filter& filter) {
+    const auto numRows = storage.size();
     std::vector<std::string_view> values;
-    storage.reserve(kRows);
-    values.reserve(kRows);
-    rows_.reserve(kRows);
-    passingRows_.reserve(kRows);
-    for (uint32_t row = 0; row < kRows; ++row) {
-      storage.push_back(
-          params.shortValues
-              ? fmt::format(
-                    "{}{}{}",
-                    params.prefix,
-                    row % 10 == 0 ? "match/" : "other/",
-                    row)
-              : fmt::format(
-                    "{}{}{}?payload={}",
-                    params.prefix,
-                    row % 10 == 0 ? "match/" : "other/",
-                    row,
-                    std::string(
-                        128 + row % 64, static_cast<char>('a' + row % 26))));
-    }
-    if (params.singleValue) {
-      for (uint32_t row = 0; row < kRows; ++row) {
-        auto& value = storage.at(row);
-        if (params.selectivity == 10
-                ? row % 10 == 0
-                : static_cast<int>(row % 100) < params.selectivity) {
-          value = params.lower;
-        } else {
-          if (params.mismatchOffset) {
-            value = params.lower;
-            value.at(*params.mismatchOffset) = 'y';
-          } else {
-            value = std::string(params.prefix) + "other/";
-            if (!params.shortValues) {
-              value.append(160, 'x');
-            }
-          }
-        }
-      }
-    }
-    for (uint32_t row = 0; row < kRows; ++row) {
+    values.reserve(numRows);
+    rows_.reserve(numRows);
+    passingRows_.reserve(numRows);
+    for (uint32_t row = 0; row < numRows; ++row) {
       values.emplace_back(storage.at(row));
-      if (row % params.stride == 0) {
+      if (row % stride == 0) {
         rows_.push_back(static_cast<vector_size_t>(row));
-        if (params.filter.testBytes(
+        if (filter.testBytes(
                 values.at(row).data(),
                 static_cast<int32_t>(values.at(row).size()))) {
           expectedRows_.push_back(static_cast<vector_size_t>(row));
@@ -1070,7 +1090,7 @@ class RangeBenchmarkFixture {
           return pages_.allocate(bytes);
         });
     if (decoder_->encodingType() != EncodingType::Fsst ||
-        decoder_->rowCount() != kRows) {
+        decoder_->rowCount() != numRows) {
       throw std::runtime_error{"Range benchmark must use FSST"};
     }
   }
@@ -1480,6 +1500,20 @@ BENCHMARK_RELATIVE(FSST_EqualityShape_B192_Early_Ne_Compressed, iterations) {
   benchmarkEqualityShape<true, true>(iterations, 192, 0, 0, 1);
 }
 
+BENCHMARK(FSST_EqualityShape_B192_Middle_Eq_Decoded, iterations) {
+  benchmarkEqualityShape<false, false>(iterations, 192, 96, 0, 1);
+}
+BENCHMARK_RELATIVE(FSST_EqualityShape_B192_Middle_Eq_Compressed, iterations) {
+  benchmarkEqualityShape<true, false>(iterations, 192, 96, 0, 1);
+}
+
+BENCHMARK(FSST_EqualityShape_B192_Middle_Ne_Decoded, iterations) {
+  benchmarkEqualityShape<false, true>(iterations, 192, 96, 0, 1);
+}
+BENCHMARK_RELATIVE(FSST_EqualityShape_B192_Middle_Ne_Compressed, iterations) {
+  benchmarkEqualityShape<true, true>(iterations, 192, 96, 0, 1);
+}
+
 BENCHMARK(FSST_EqualityShape_B192_Late_Eq_Decoded, iterations) {
   benchmarkEqualityShape<false, false>(iterations, 192, 191, 0, 1);
 }
@@ -1810,11 +1844,481 @@ BENCHMARK_RELATIVE(
   benchmarkRangeShape<true, true>(iterations, 1'024, 3);
 }
 
+// Selects mixed strings, URLs, or JSON logs for general filter workloads.
+enum class GeneralCorpus { kMixed, kUrl, kJson };
+
+// Owns the input strings and byte bounds for a general filter workload.
+struct GeneralFilterWorkload {
+  // Retains source strings used by the decoded and compressed fixtures.
+  std::vector<std::string> storage;
+  // Defines the inclusive lower bound, or the equality target.
+  std::string lower;
+  // Defines the inclusive upper bound; ignored for one-sided workloads.
+  std::string upper;
+};
+
+// Builds a shuffled corpus with percent exact equality matches, or inclusive
+// bounds spanning percent of its sorted rows. Duplicate bounds can increase
+// range selectivity; one-sided ranges leave the upper bound unbounded.
+GeneralFilterWorkload makeGeneralFilterWorkload(
+    GeneralCorpus family,
+    int percent,
+    bool equality,
+    bool oneSided) {
+  constexpr uint32_t kRows = 12'000;
+  const auto corpusKind = family == GeneralCorpus::kMixed
+      ? FsstBenchmarkCorpusKind::kMixed
+      : family == GeneralCorpus::kUrl ? FsstBenchmarkCorpusKind::kUrl
+                                      : FsstBenchmarkCorpusKind::kJsonLog;
+  auto storage =
+      makeFsstBenchmarkCorpus(kRows, kFsstBenchmarkDefaultSeed, corpusKind)
+          .storage;
+  GeneralFilterWorkload workload;
+  if (equality) {
+    workload.lower = storage.at(kRows / 2);
+    workload.upper = workload.lower;
+    std::vector<std::string> unequal;
+    unequal.reserve(kRows);
+    for (auto& value : storage) {
+      if (value != workload.lower) {
+        unequal.push_back(std::move(value));
+      }
+    }
+    for (uint32_t row = 0; row < kRows; ++row) {
+      workload.storage.push_back(
+          static_cast<int>(row % 100) < percent
+              ? workload.lower
+              : unequal.at(row % unequal.size()));
+    }
+  } else {
+    const size_t insideRows = kRows * percent / 100;
+    const size_t lowerIndex =
+        oneSided ? kRows - insideRows : (kRows - insideRows) / 2;
+    workload.lower = storage.at(lowerIndex);
+    workload.upper = storage.at(lowerIndex + insideRows - 1);
+    workload.storage = std::move(storage);
+  }
+  std::mt19937 random{kFsstBenchmarkDefaultSeed};
+  std::shuffle(workload.storage.begin(), workload.storage.end(), random);
+  return workload;
+}
+
+// Measures filtered reads with setup and scalar row-oracle validation excluded
+// from timing. Dense equality fixtures also verify their exact match
+// percentage.
+template <bool compressed, bool negated>
+void benchmarkGeneralFilter(
+    uint32_t iterations,
+    GeneralCorpus family,
+    int percent,
+    bool equality,
+    bool oneSided,
+    uint32_t stride) {
+  folly::BenchmarkSuspender suspender;
+  auto workload =
+      makeGeneralFilterWorkload(family, percent, equality, oneSided);
+  using Filter = std::conditional_t<
+      negated,
+      facebook::velox::common::NegatedBytesRange,
+      facebook::velox::common::BytesRange>;
+  Filter filter{
+      workload.lower, false, false, workload.upper, oneSided, false, false};
+  RangeBenchmarkFixture fixture{workload.storage, stride, filter};
+  {
+    RangeBenchmarkVisitor<compressed, Filter> visitor{
+        fixture.rows(), filter, fixture.passingRows()};
+    ReadWithVisitorParams params{};
+    fixture.decoder().readWithVisitor(visitor, params);
+    fixture.validate(compressed);
+    // Inclusive ranges can include duplicates beyond the chosen index window;
+    // fixture.validate() checks their actual matches against original rows.
+    if (equality && stride == 1 &&
+        fixture.passingRows().size() !=
+            workload.storage.size() * (negated ? 100 - percent : percent) /
+                100) {
+      throw std::runtime_error{"General filter selectivity mismatch"};
+    }
+  }
+  suspender.dismiss();
+  while (iterations--) {
+    fixture.decoder().reset();
+    RangeBenchmarkVisitor<compressed, Filter> visitor{
+        fixture.rows(), filter, fixture.passingRows()};
+    ReadWithVisitorParams params{};
+    fixture.decoder().readWithVisitor(visitor, params);
+    folly::doNotOptimizeAway(fixture.passingRows().size());
+  }
+  suspender.rehire();
+  fixture.validate(compressed);
+}
+
+// Prints selected and passing row counts, corpus byte sizes, and bound lengths
+// outside benchmark timing.
+void printGeneralFilterMetadata(
+    std::string_view name,
+    GeneralCorpus family,
+    int percent,
+    bool equality,
+    bool oneSided,
+    uint32_t stride) {
+  const auto workload =
+      makeGeneralFilterWorkload(family, percent, equality, oneSided);
+  facebook::velox::common::BytesRange filter{
+      workload.lower, false, false, workload.upper, oneSided, false, false};
+  size_t selected{0};
+  size_t passing{0};
+  size_t rawBytes{0};
+  size_t minBytes{std::numeric_limits<size_t>::max()};
+  size_t maxBytes{0};
+  for (size_t row = 0; row < workload.storage.size(); ++row) {
+    const auto& value = workload.storage.at(row);
+    rawBytes += value.size();
+    minBytes = std::min(minBytes, value.size());
+    maxBytes = std::max(maxBytes, value.size());
+    if (row % stride == 0) {
+      ++selected;
+      passing +=
+          filter.testBytes(value.data(), static_cast<int32_t>(value.size()));
+    }
+  }
+  fmt::print(
+      "FSST_GENERAL_METADATA {} {} {} {} {} {} {} {}\n",
+      name,
+      selected,
+      passing,
+      rawBytes,
+      minBytes,
+      maxBytes,
+      workload.lower.size(),
+      workload.upper.size());
+}
+
+// Prints metadata for every general filter corpus before running benchmarks.
+void printGeneralFilterMetadata() {
+  printGeneralFilterMetadata(
+      "Mixed_Dense_Central10", GeneralCorpus::kMixed, 10, false, false, 1);
+  printGeneralFilterMetadata(
+      "Mixed_Dense_Central50", GeneralCorpus::kMixed, 50, false, false, 1);
+  printGeneralFilterMetadata(
+      "Mixed_Dense_Central90", GeneralCorpus::kMixed, 90, false, false, 1);
+  printGeneralFilterMetadata(
+      "Mixed_Sparse_Central10", GeneralCorpus::kMixed, 10, false, false, 31);
+  printGeneralFilterMetadata(
+      "Mixed_Sparse_Central50", GeneralCorpus::kMixed, 50, false, false, 31);
+  printGeneralFilterMetadata(
+      "Mixed_Sparse_Central90", GeneralCorpus::kMixed, 90, false, false, 31);
+  printGeneralFilterMetadata(
+      "Url_Dense_Central50", GeneralCorpus::kUrl, 50, false, false, 1);
+  printGeneralFilterMetadata(
+      "Json_Dense_Central50", GeneralCorpus::kJson, 50, false, false, 1);
+  printGeneralFilterMetadata(
+      "Mixed_Dense_OneSided50", GeneralCorpus::kMixed, 50, false, true, 1);
+  printGeneralFilterMetadata(
+      "Mixed_Dense_Equal10", GeneralCorpus::kMixed, 10, true, false, 1);
+  printGeneralFilterMetadata(
+      "Mixed_Dense_Equal50", GeneralCorpus::kMixed, 50, true, false, 1);
+  printGeneralFilterMetadata(
+      "Mixed_Dense_Equal90", GeneralCorpus::kMixed, 90, true, false, 1);
+  printGeneralFilterMetadata(
+      "Url_Dense_Equal50", GeneralCorpus::kUrl, 50, true, false, 1);
+  printGeneralFilterMetadata(
+      "Json_Dense_Equal50", GeneralCorpus::kJson, 50, true, false, 1);
+}
+
+BENCHMARK(FSST_General_Mixed_Dense_Central10_Positive_Decoded, iterations) {
+  benchmarkGeneralFilter<false, false>(
+      iterations, GeneralCorpus::kMixed, 10, false, false, 1);
+}
+BENCHMARK_RELATIVE(
+    FSST_General_Mixed_Dense_Central10_Positive_Compressed,
+    iterations) {
+  benchmarkGeneralFilter<true, false>(
+      iterations, GeneralCorpus::kMixed, 10, false, false, 1);
+}
+
+BENCHMARK(FSST_General_Mixed_Dense_Central10_Negated_Decoded, iterations) {
+  benchmarkGeneralFilter<false, true>(
+      iterations, GeneralCorpus::kMixed, 10, false, false, 1);
+}
+BENCHMARK_RELATIVE(
+    FSST_General_Mixed_Dense_Central10_Negated_Compressed,
+    iterations) {
+  benchmarkGeneralFilter<true, true>(
+      iterations, GeneralCorpus::kMixed, 10, false, false, 1);
+}
+
+BENCHMARK(FSST_General_Mixed_Dense_Central50_Positive_Decoded, iterations) {
+  benchmarkGeneralFilter<false, false>(
+      iterations, GeneralCorpus::kMixed, 50, false, false, 1);
+}
+BENCHMARK_RELATIVE(
+    FSST_General_Mixed_Dense_Central50_Positive_Compressed,
+    iterations) {
+  benchmarkGeneralFilter<true, false>(
+      iterations, GeneralCorpus::kMixed, 50, false, false, 1);
+}
+
+BENCHMARK(FSST_General_Mixed_Dense_Central50_Negated_Decoded, iterations) {
+  benchmarkGeneralFilter<false, true>(
+      iterations, GeneralCorpus::kMixed, 50, false, false, 1);
+}
+BENCHMARK_RELATIVE(
+    FSST_General_Mixed_Dense_Central50_Negated_Compressed,
+    iterations) {
+  benchmarkGeneralFilter<true, true>(
+      iterations, GeneralCorpus::kMixed, 50, false, false, 1);
+}
+
+BENCHMARK(FSST_General_Mixed_Dense_Central90_Positive_Decoded, iterations) {
+  benchmarkGeneralFilter<false, false>(
+      iterations, GeneralCorpus::kMixed, 90, false, false, 1);
+}
+BENCHMARK_RELATIVE(
+    FSST_General_Mixed_Dense_Central90_Positive_Compressed,
+    iterations) {
+  benchmarkGeneralFilter<true, false>(
+      iterations, GeneralCorpus::kMixed, 90, false, false, 1);
+}
+
+BENCHMARK(FSST_General_Mixed_Dense_Central90_Negated_Decoded, iterations) {
+  benchmarkGeneralFilter<false, true>(
+      iterations, GeneralCorpus::kMixed, 90, false, false, 1);
+}
+BENCHMARK_RELATIVE(
+    FSST_General_Mixed_Dense_Central90_Negated_Compressed,
+    iterations) {
+  benchmarkGeneralFilter<true, true>(
+      iterations, GeneralCorpus::kMixed, 90, false, false, 1);
+}
+
+BENCHMARK(FSST_General_Mixed_Sparse_Central10_Positive_Decoded, iterations) {
+  benchmarkGeneralFilter<false, false>(
+      iterations, GeneralCorpus::kMixed, 10, false, false, 31);
+}
+BENCHMARK_RELATIVE(
+    FSST_General_Mixed_Sparse_Central10_Positive_Compressed,
+    iterations) {
+  benchmarkGeneralFilter<true, false>(
+      iterations, GeneralCorpus::kMixed, 10, false, false, 31);
+}
+
+BENCHMARK(FSST_General_Mixed_Sparse_Central10_Negated_Decoded, iterations) {
+  benchmarkGeneralFilter<false, true>(
+      iterations, GeneralCorpus::kMixed, 10, false, false, 31);
+}
+BENCHMARK_RELATIVE(
+    FSST_General_Mixed_Sparse_Central10_Negated_Compressed,
+    iterations) {
+  benchmarkGeneralFilter<true, true>(
+      iterations, GeneralCorpus::kMixed, 10, false, false, 31);
+}
+
+BENCHMARK(FSST_General_Mixed_Sparse_Central50_Positive_Decoded, iterations) {
+  benchmarkGeneralFilter<false, false>(
+      iterations, GeneralCorpus::kMixed, 50, false, false, 31);
+}
+BENCHMARK_RELATIVE(
+    FSST_General_Mixed_Sparse_Central50_Positive_Compressed,
+    iterations) {
+  benchmarkGeneralFilter<true, false>(
+      iterations, GeneralCorpus::kMixed, 50, false, false, 31);
+}
+
+BENCHMARK(FSST_General_Mixed_Sparse_Central50_Negated_Decoded, iterations) {
+  benchmarkGeneralFilter<false, true>(
+      iterations, GeneralCorpus::kMixed, 50, false, false, 31);
+}
+BENCHMARK_RELATIVE(
+    FSST_General_Mixed_Sparse_Central50_Negated_Compressed,
+    iterations) {
+  benchmarkGeneralFilter<true, true>(
+      iterations, GeneralCorpus::kMixed, 50, false, false, 31);
+}
+
+BENCHMARK(FSST_General_Mixed_Sparse_Central90_Positive_Decoded, iterations) {
+  benchmarkGeneralFilter<false, false>(
+      iterations, GeneralCorpus::kMixed, 90, false, false, 31);
+}
+BENCHMARK_RELATIVE(
+    FSST_General_Mixed_Sparse_Central90_Positive_Compressed,
+    iterations) {
+  benchmarkGeneralFilter<true, false>(
+      iterations, GeneralCorpus::kMixed, 90, false, false, 31);
+}
+
+BENCHMARK(FSST_General_Mixed_Sparse_Central90_Negated_Decoded, iterations) {
+  benchmarkGeneralFilter<false, true>(
+      iterations, GeneralCorpus::kMixed, 90, false, false, 31);
+}
+BENCHMARK_RELATIVE(
+    FSST_General_Mixed_Sparse_Central90_Negated_Compressed,
+    iterations) {
+  benchmarkGeneralFilter<true, true>(
+      iterations, GeneralCorpus::kMixed, 90, false, false, 31);
+}
+
+BENCHMARK(FSST_General_Url_Dense_Central50_Positive_Decoded, iterations) {
+  benchmarkGeneralFilter<false, false>(
+      iterations, GeneralCorpus::kUrl, 50, false, false, 1);
+}
+BENCHMARK_RELATIVE(
+    FSST_General_Url_Dense_Central50_Positive_Compressed,
+    iterations) {
+  benchmarkGeneralFilter<true, false>(
+      iterations, GeneralCorpus::kUrl, 50, false, false, 1);
+}
+
+BENCHMARK(FSST_General_Url_Dense_Central50_Negated_Decoded, iterations) {
+  benchmarkGeneralFilter<false, true>(
+      iterations, GeneralCorpus::kUrl, 50, false, false, 1);
+}
+BENCHMARK_RELATIVE(
+    FSST_General_Url_Dense_Central50_Negated_Compressed,
+    iterations) {
+  benchmarkGeneralFilter<true, true>(
+      iterations, GeneralCorpus::kUrl, 50, false, false, 1);
+}
+
+BENCHMARK(FSST_General_Json_Dense_Central50_Positive_Decoded, iterations) {
+  benchmarkGeneralFilter<false, false>(
+      iterations, GeneralCorpus::kJson, 50, false, false, 1);
+}
+BENCHMARK_RELATIVE(
+    FSST_General_Json_Dense_Central50_Positive_Compressed,
+    iterations) {
+  benchmarkGeneralFilter<true, false>(
+      iterations, GeneralCorpus::kJson, 50, false, false, 1);
+}
+
+BENCHMARK(FSST_General_Json_Dense_Central50_Negated_Decoded, iterations) {
+  benchmarkGeneralFilter<false, true>(
+      iterations, GeneralCorpus::kJson, 50, false, false, 1);
+}
+BENCHMARK_RELATIVE(
+    FSST_General_Json_Dense_Central50_Negated_Compressed,
+    iterations) {
+  benchmarkGeneralFilter<true, true>(
+      iterations, GeneralCorpus::kJson, 50, false, false, 1);
+}
+
+BENCHMARK(FSST_General_Mixed_Dense_OneSided50_Positive_Decoded, iterations) {
+  benchmarkGeneralFilter<false, false>(
+      iterations, GeneralCorpus::kMixed, 50, false, true, 1);
+}
+BENCHMARK_RELATIVE(
+    FSST_General_Mixed_Dense_OneSided50_Positive_Compressed,
+    iterations) {
+  benchmarkGeneralFilter<true, false>(
+      iterations, GeneralCorpus::kMixed, 50, false, true, 1);
+}
+
+BENCHMARK(FSST_General_Mixed_Dense_OneSided50_Negated_Decoded, iterations) {
+  benchmarkGeneralFilter<false, true>(
+      iterations, GeneralCorpus::kMixed, 50, false, true, 1);
+}
+BENCHMARK_RELATIVE(
+    FSST_General_Mixed_Dense_OneSided50_Negated_Compressed,
+    iterations) {
+  benchmarkGeneralFilter<true, true>(
+      iterations, GeneralCorpus::kMixed, 50, false, true, 1);
+}
+
+BENCHMARK(FSST_General_Mixed_Dense_Equal10_Eq_Decoded, iterations) {
+  benchmarkGeneralFilter<false, false>(
+      iterations, GeneralCorpus::kMixed, 10, true, false, 1);
+}
+BENCHMARK_RELATIVE(FSST_General_Mixed_Dense_Equal10_Eq_Compressed, iterations) {
+  benchmarkGeneralFilter<true, false>(
+      iterations, GeneralCorpus::kMixed, 10, true, false, 1);
+}
+
+BENCHMARK(FSST_General_Mixed_Dense_Equal10_Ne_Decoded, iterations) {
+  benchmarkGeneralFilter<false, true>(
+      iterations, GeneralCorpus::kMixed, 10, true, false, 1);
+}
+BENCHMARK_RELATIVE(FSST_General_Mixed_Dense_Equal10_Ne_Compressed, iterations) {
+  benchmarkGeneralFilter<true, true>(
+      iterations, GeneralCorpus::kMixed, 10, true, false, 1);
+}
+
+BENCHMARK(FSST_General_Mixed_Dense_Equal50_Eq_Decoded, iterations) {
+  benchmarkGeneralFilter<false, false>(
+      iterations, GeneralCorpus::kMixed, 50, true, false, 1);
+}
+BENCHMARK_RELATIVE(FSST_General_Mixed_Dense_Equal50_Eq_Compressed, iterations) {
+  benchmarkGeneralFilter<true, false>(
+      iterations, GeneralCorpus::kMixed, 50, true, false, 1);
+}
+
+BENCHMARK(FSST_General_Mixed_Dense_Equal50_Ne_Decoded, iterations) {
+  benchmarkGeneralFilter<false, true>(
+      iterations, GeneralCorpus::kMixed, 50, true, false, 1);
+}
+BENCHMARK_RELATIVE(FSST_General_Mixed_Dense_Equal50_Ne_Compressed, iterations) {
+  benchmarkGeneralFilter<true, true>(
+      iterations, GeneralCorpus::kMixed, 50, true, false, 1);
+}
+
+BENCHMARK(FSST_General_Mixed_Dense_Equal90_Eq_Decoded, iterations) {
+  benchmarkGeneralFilter<false, false>(
+      iterations, GeneralCorpus::kMixed, 90, true, false, 1);
+}
+BENCHMARK_RELATIVE(FSST_General_Mixed_Dense_Equal90_Eq_Compressed, iterations) {
+  benchmarkGeneralFilter<true, false>(
+      iterations, GeneralCorpus::kMixed, 90, true, false, 1);
+}
+
+BENCHMARK(FSST_General_Mixed_Dense_Equal90_Ne_Decoded, iterations) {
+  benchmarkGeneralFilter<false, true>(
+      iterations, GeneralCorpus::kMixed, 90, true, false, 1);
+}
+BENCHMARK_RELATIVE(FSST_General_Mixed_Dense_Equal90_Ne_Compressed, iterations) {
+  benchmarkGeneralFilter<true, true>(
+      iterations, GeneralCorpus::kMixed, 90, true, false, 1);
+}
+
+BENCHMARK(FSST_General_Url_Dense_Equal50_Eq_Decoded, iterations) {
+  benchmarkGeneralFilter<false, false>(
+      iterations, GeneralCorpus::kUrl, 50, true, false, 1);
+}
+BENCHMARK_RELATIVE(FSST_General_Url_Dense_Equal50_Eq_Compressed, iterations) {
+  benchmarkGeneralFilter<true, false>(
+      iterations, GeneralCorpus::kUrl, 50, true, false, 1);
+}
+
+BENCHMARK(FSST_General_Url_Dense_Equal50_Ne_Decoded, iterations) {
+  benchmarkGeneralFilter<false, true>(
+      iterations, GeneralCorpus::kUrl, 50, true, false, 1);
+}
+BENCHMARK_RELATIVE(FSST_General_Url_Dense_Equal50_Ne_Compressed, iterations) {
+  benchmarkGeneralFilter<true, true>(
+      iterations, GeneralCorpus::kUrl, 50, true, false, 1);
+}
+
+BENCHMARK(FSST_General_Json_Dense_Equal50_Eq_Decoded, iterations) {
+  benchmarkGeneralFilter<false, false>(
+      iterations, GeneralCorpus::kJson, 50, true, false, 1);
+}
+BENCHMARK_RELATIVE(FSST_General_Json_Dense_Equal50_Eq_Compressed, iterations) {
+  benchmarkGeneralFilter<true, false>(
+      iterations, GeneralCorpus::kJson, 50, true, false, 1);
+}
+
+BENCHMARK(FSST_General_Json_Dense_Equal50_Ne_Decoded, iterations) {
+  benchmarkGeneralFilter<false, true>(
+      iterations, GeneralCorpus::kJson, 50, true, false, 1);
+}
+BENCHMARK_RELATIVE(FSST_General_Json_Dense_Equal50_Ne_Compressed, iterations) {
+  benchmarkGeneralFilter<true, true>(
+      iterations, GeneralCorpus::kJson, 50, true, false, 1);
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
   const folly::Init init{&argc, &argv};
   facebook::velox::memory::MemoryManager::initialize({});
   printArtifactRatio();
+  printGeneralFilterMetadata();
   folly::runBenchmarks();
 }
