@@ -1534,6 +1534,11 @@ void RPCOperator::recordRuntimeStats() {
       lockedStats->addRuntimeStat(
           kRpcCapacityRetries, RuntimeCounter(snapshot.numCapacityRetries));
     }
+    if (snapshot.numCapacityRetryFloorRetries > 0) {
+      lockedStats->addRuntimeStat(
+          kRpcCapacityRetryFloorRetries,
+          RuntimeCounter(snapshot.numCapacityRetryFloorRetries));
+    }
     if (snapshot.baselineRttNs > 0) {
       lockedStats->addRuntimeStat(
           kRpcBaselineRttNanos,
