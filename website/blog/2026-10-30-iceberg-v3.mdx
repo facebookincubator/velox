@@ -1,0 +1,272 @@
+---
+slug: iceberg-v3
+title: "Iceberg V3 in Velox"
+authors: [apurvak, zzhao, nmahadevuni, Joe-Abraham, agrawalreetika, KcGo007]
+tags: [tech-blog, iceberg, connectors]
+description: "How the Velox Iceberg connector reads and writes Iceberg V3 deletion vectors, and reads row lineage, default values, and geospatial types."
+---
+
+Iceberg V3 changes how row-level deletes are stored, gives every row a stable
+identity, and lets you add a column with a default value without rewriting
+data. Over the past six months we added most of this to the Velox Iceberg
+connector. Deletion vectors work on both read and write, including DELETE,
+UPDATE and MERGE. Row lineage, default values and the new geospatial types work
+on read, and write defaults work on write.
+
+This post covers how each of those works, and a few places where the
+implementation was less obvious than the spec made it look.
+
+<!-- truncate -->
+
+| Feature | Read | Write |
+| --- | --- | --- |
+| Deletion vectors | Yes | Yes |
+| Row lineage | Yes | No |
+| Default values | Yes (initial-default) | Yes (write-default) |
+| geometry, geography | Yes (Parquet) | No |
+| variant, timestamp_ns, multi-argument transforms, encryption | No | No |
+
+## Deletion vectors
+
+In V2, a row-level delete is a file of `(file_path, pos)` pairs. Every DELETE,
+UPDATE or MERGE adds more of these files. To scan one data file, a reader has
+to open every delete file that might reference it, filter by path, and merge
+the sorted positions. Until compaction catches up, the cost of reading a table
+grows with the number of writes to it.
+
+<figure style={{textAlign: 'center'}}>
+  <img
+    src="/img/iceberg-v3-v2-vs-v3-deletes.png"
+    alt="V2 positional delete files compared with a single V3 deletion vector for one data file"
+    width="90%"
+  />
+  <figcaption>
+    <em>V2 positional delete files vs. a V3 deletion vector for one data file.</em>
+  </figcaption>
+</figure>
+
+V3 replaces this with deletion vectors. A deletion vector is a Roaring bitmap
+of deleted row positions, stored as a `deletion-vector-v1` blob inside a Puffin
+file. The spec allows at most one per data file. The manifest entry records the
+blob's offset and length, so a reader makes one ranged read and never has to
+parse the Puffin footer.
+
+<figure style={{textAlign: 'center'}}>
+  <img
+    src="/img/iceberg-v3-puffin-layout.png"
+    alt="Puffin file layout with one deletion-vector-v1 blob and a JSON footer"
+    width="90%"
+  />
+  <figcaption>
+    <em>Puffin file layout. The manifest entry points straight at the blob.</em>
+  </figcaption>
+</figure>
+
+The blob wraps the bitmap in a big-endian length, a 4-byte magic number and a
+big-endian CRC-32. The bitmap uses the 64-bit portable Roaring format: a group
+count, then for each group a 32-bit key holding the high bits of the positions,
+followed by an ordinary 32-bit Roaring bitmap holding the low bits. A data file
+with fewer than 2<sup>32</sup> rows has exactly one group, so in practice this
+is the standard 32-bit format with a 12-byte prefix.
+
+<figure style={{textAlign: 'center'}}>
+  <img
+    src="/img/iceberg-v3-dv-blob-layout.png"
+    alt="Byte layout of a deletion-vector-v1 blob and its 64-bit Roaring serialization"
+    width="85%"
+  />
+  <figcaption>
+    <em>The deletion-vector-v1 blob and its 64-bit Roaring serialization.</em>
+  </figcaption>
+</figure>
+
+### Reading
+
+The main design question on the read side was where to apply the bitmap. We
+could have decoded every row and filtered afterwards. But the Parquet and DWRF
+readers already take a bitmap of rows to skip, and V2 positional deletes were
+already using it. So `DeletionVectorReader` decodes the blob once per split
+into a sorted list of positions. For each batch, it sets the bits for the
+positions that fall inside that batch's row range, and the file reader skips
+those rows while decoding.
+
+V2 positional deletes write into the same bitmap. A table upgraded from V2 can
+have old delete files sitting next to new deletion vectors, and it needs no
+special handling: both feed the same bitmap before the batch is decoded.
+Equality deletes match on values rather than positions, so they stay on their
+own path after the read.
+
+Sequence numbers decide which deletes apply to which data files, and the rule
+differs by delete type. A positional delete or deletion vector applies when its
+sequence number is greater than or equal to the data file's. An equality delete
+applies only when its sequence number is strictly greater. That asymmetry is
+what lets a single commit delete a key with an equality delete and insert it
+again.
+
+We check the length, magic number and CRC before trusting a bitmap. If a
+deletion vector is corrupt, the query should fail. It should not return rows
+that were deleted.
+
+We went back and forth on one case. When a blob's `referenced-data-file`
+doesn't match the path of the split being read, we log a warning and apply the
+deletes anyway. Engines and catalogs don't all normalize paths the same way.
+The manifest has already told us which data file this deletion vector belongs
+to, and failing the query or dropping the deletes would both be worse than
+trusting it.
+
+<figure style={{textAlign: 'center'}}>
+  <img
+    src="/img/iceberg-v3-read-path.png"
+    alt="Read path: sequence-number filter, delete readers, shared delete bitmap, file reader, post-read steps"
+    width="50%"
+  />
+  <figcaption>
+    <em>How deletes are applied in IcebergSplitReader.</em>
+  </figcaption>
+</figure>
+
+### Writing
+
+The write side is harder because of the one-per-file rule. If a data file
+already has a deletion vector, a new delete can't add a second one; it has to
+replace it. `IcebergDeletionVectorSink` reads the existing deletion vector,
+adds the new positions to it, and writes a new Puffin file next to the data
+file. The commit message carries the referenced data file, the blob's offset
+and length, the number of deleted rows (after removing duplicates: Iceberg
+treats a deletion vector's cardinality as authoritative, and merging in the old
+vector can repeat positions), and the data file's partition spec and partition
+data. The coordinator then commits the new deletion vector in place of the old
+one.
+
+To build a deletion vector, the sink needs to know which file each deleted row
+came from and where in that file it was. The scan adds a hidden
+`$target_table_row_id` column,
+`ROW(file_path, row_position, spec_id, partition_data)`, in the same shape the
+Presto Java connector uses. We got the partition fields wrong twice, and both
+times the coordinator rejected the commit on a partitioned table. First, the
+MERGE path copied only the file path and position out of the row ID, which
+dropped the partition data. Second, the sink stamped every deletion vector with
+the table's current spec ID, which is wrong for a data file written before the
+spec evolved. The row ID is now passed through unchanged, and each deletion
+vector is committed under its data file's own spec.
+
+UPDATE and MERGE follow the same model as Presto's
+`DeleteAndInsertMergeProcessor`. `IcebergMergeProcessor` turns each input row
+into an insert, a delete, or both, since an UPDATE is a delete of the old row
+plus an insert of the new one. `IcebergMergeSink` sends deletes to the deletion
+vector sink and inserts to the normal data sink. It then returns both sets of
+commit messages together, so new data files and new deletion vectors land in
+the same snapshot. Because an UPDATE produces two rows, the changed-row count
+has to count it only once. We got that wrong the first time too.
+
+<figure style={{textAlign: 'center'}}>
+  <img
+    src="/img/iceberg-v3-merge-write-path.png"
+    alt="DELETE, UPDATE and MERGE write path through IcebergMergeProcessor and IcebergMergeSink"
+    width="55%"
+  />
+  <figcaption>
+    <em>The DELETE, UPDATE and MERGE write path.</em>
+  </figcaption>
+</figure>
+
+### Matching Iceberg Java
+
+Most of the time we spent on the writer went into matching Iceberg Java byte
+for byte, since in practice it is the reference implementation. Some examples:
+
+- Our first CRC used `folly::crc32`, which skips the final inversion that
+  standard CRC-32 applies. Because the reader and writer used the same
+  function, Velox-to-Velox round trips passed, and the bug only showed up when
+  we read a deletion vector written by Spark. We now use zlib's `crc32`, which
+  matches `java.util.zip.CRC32`.
+- Java's `RoaringPositionBitmap` stores the high 32-bit key as a signed int and
+  caps it at `Integer.MAX_VALUE - 1`. We reject larger positions at write time
+  so we never write a file Java can't read, and the reader enforces the same
+  cap. Without it, a key of 2<sup>31</sup> or more would shift into the sign bit
+  and produce a negative row position.
+- Java has no `"none"` compression codec, so for an uncompressed blob the
+  Puffin footer has to leave out `compression-codec` entirely.
+- We write only array and bitmap containers, never run containers. The reader
+  accepts all three, because other writers may use runs.
+
+## Row lineage
+
+V3 gives every row a `_row_id` and a `_last_updated_sequence_number`. Writers
+don't have to store them. When the stored value is null, the reader works it
+out: `_row_id` is the data file's `first_row_id` plus the row's position in the
+file, and `_last_updated_sequence_number` is the file's data sequence number. A
+stored non-null value always wins, which is how a row keeps its identity after
+compaction rewrites it. If the manifest entry has no `first_row_id`, which is
+the case for files written before the upgrade to V3, both columns read as null.
+
+The easy mistake is in "position in the file." Once a deletion vector removes
+rows, a row's index in the output batch is no longer its position in the file.
+Computing `_row_id` from the output index gives wrong IDs without any error. So
+whenever lineage columns are projected, the reader adds a hidden row-number
+column and computes `_row_id` from that.
+
+<figure style={{textAlign: 'center'}}>
+  <img
+    src="/img/iceberg-v3-row-lineage.png"
+    alt="Worked example of row lineage inheritance with one row removed by a deletion vector"
+    width="90%"
+  />
+  <figcaption>
+    <em>Lineage for one data file, with position 1 removed by a deletion vector.</em>
+  </figcaption>
+</figure>
+
+Filters on lineage columns can't be pushed into the file reader, because it
+would evaluate them against the stored nulls. We turn off pushdown for those
+columns and apply the filter after the values have been filled in.
+
+## Default values
+
+`initial-default` and `write-default` let you add a column with a default value
+without rewriting the table. On read, a column that is missing from an older
+file gets its `initial-default` instead of null, and filters on that column
+still prune correctly. On write, if an INSERT leaves out a column that has a
+`write-default`, `IcebergDataSink` fills in the default.
+
+The write path has one guard worth mentioning. The sink only fills in a default
+when the column was actually left out of the INSERT, and it checks that every
+value it is about to replace is null. If the planner ever wrongly marks a
+column as omitted, the query fails rather than overwriting user data. Timestamp
+defaults are parsed as UTC, not session-local time. That was another bug we
+fixed along the way.
+
+## Geospatial types
+
+V3 adds `geometry` and `geography`, stored as WKB. With `VELOX_ENABLE_GEO` on,
+the connector reads Parquet `GEOMETRY` and `GEOGRAPHY` columns into Velox's
+`GEOMETRY` and `SPHERICAL_GEOGRAPHY` types. The conversion happens in exactly
+one place, the Iceberg connector. The Parquet reader returns plain `VARBINARY`,
+and Hive tables never go through the conversion. That keeps WKB parsing out of
+the generic readers and makes it impossible to convert the same value twice.
+
+Before converting, we validate the WKB. We reject EWKB, Z and M coordinates,
+truncated input, and nesting deeper than 100 levels. The GEOS version Velox
+pins (3.10.7) doesn't limit recursion depth (newer releases do), so without
+that check a crafted file could overflow the stack. Geography coordinates must
+fall within [-180, 180] × [-90, 90], the same rule Presto's
+`to_spherical_geography` applies. Velox and Presto Java share a golden file of
+encoded geometries, so the two runtimes produce identical bytes.
+
+Writing these types is rejected for now. Velox's internal encoding isn't WKB,
+and writing it as-is would produce files no other engine can read.
+
+## What's left
+
+Several parts of V3 aren't in Velox yet: the variant type; nanosecond
+timestamps (the type attributes are passed through, but the read and write
+paths aren't finished); multi-argument transforms and `source-ids` in partition
+specs; table encryption; and writing lineage columns and geospatial types. We
+also don't have deletion vector benchmarks yet. `IcebergSplitReaderBenchmark`
+measures V2 positional deletes, and extending it to deletion vectors is next.
+Once that's done, we'll follow up with V2 vs. V3 numbers.
+
+## Thanks
+
+This work was done by Apurva Kumar, Zhenyuan Zhao, Naveen Kumar Mahadevuni,
+Joe Abraham, Reetika Agrawal, Kevin Gu. Thanks also to the Iceberg community.
