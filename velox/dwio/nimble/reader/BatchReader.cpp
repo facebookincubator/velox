@@ -467,7 +467,6 @@ void BatchReader::loadNextStripe() {
               pool_,
               std::make_unique<InMemoryChunkedStream>(pool_, std::move(stream)),
               std::move(streamEncodingFactory),
-              parameters_.optimizeStringBufferHandling,
               *logger_);
           decoder->ensureLoaded();
           decoders_[offsets_[i]] = std::move(decoder);

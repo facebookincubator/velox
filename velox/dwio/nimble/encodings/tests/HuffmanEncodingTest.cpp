@@ -28,7 +28,6 @@
 #include "velox/dwio/nimble/common/Vector.h"
 #include "velox/dwio/nimble/common/tests/GTestUtils.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
-#include "velox/dwio/nimble/encodings/legacy/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/tests/TestUtils.h"
 
 namespace facebook::nimble::test {
@@ -66,13 +65,9 @@ class HuffmanEncodingTest : public ::testing::Test {
     }
 
     const auto encoded = encodeData(values);
-    for (const auto useLegacy : {false, true}) {
-      SCOPED_TRACE(fmt::format("legacy={}", useLegacy));
-      std::unique_ptr<Encoding> encoding = useLegacy
-          ? legacy::EncodingFactory().create(
-                *pool_, encoded, nullptr, Encoding::Options{})
-          : EncodingFactory().create(
-                *pool_, encoded, nullptr, Encoding::Options{});
+    {
+      std::unique_ptr<Encoding> encoding = EncodingFactory().create(
+          *pool_, encoded, nullptr, Encoding::Options{});
       EXPECT_EQ(encoding->encodingType(), EncodingType::Huffman);
       EXPECT_EQ(encoding->dataType(), TypeTraits<T>::dataType);
       EXPECT_EQ(encoding->rowCount(), values.size());

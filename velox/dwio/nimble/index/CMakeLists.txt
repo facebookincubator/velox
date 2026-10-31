@@ -107,8 +107,6 @@ target_link_libraries(
   Folly::folly
 )
 
-find_package(OpenMP REQUIRED)
-
 add_library(
   nimble_vector_index
   VectorIndex.cpp

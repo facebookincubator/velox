@@ -301,8 +301,28 @@ if(${VELOX_ENABLE_DUCKDB})
 endif()
 
 if(VELOX_ENABLE_FAISS OR VELOX_ENABLE_NIMBLE)
+  # On macOS, OpenMP and BLAS for FAISS come from Homebrew, which installs
+  # them outside the default search paths.
+  if(CMAKE_SYSTEM_NAME MATCHES "Darwin")
+    foreach(formula libomp openblas)
+      execute_process(
+        COMMAND brew --prefix ${formula}
+        RESULT_VARIABLE BREW_RESULT
+        OUTPUT_VARIABLE BREW_PREFIX
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+      )
+      if(BREW_RESULT EQUAL 0 AND EXISTS "${BREW_PREFIX}")
+        list(APPEND CMAKE_PREFIX_PATH "${BREW_PREFIX}")
+      endif()
+    endforeach()
+  endif()
+  # The installed FAISS package links OpenMP::OpenMP_CXX without defining it,
+  # so the target must exist in this scope before FAISS is resolved.
+  find_package(OpenMP REQUIRED)
   velox_set_source(faiss)
-  velox_resolve_dependency(faiss)
+  # FAISS 1.11.0 does not install faiss/impl/zerocopy_io.h, which the vector
+  # index includes.
+  velox_resolve_dependency(faiss 1.12.0)
   if(NOT TARGET FAISS::faiss)
     add_library(FAISS::faiss ALIAS faiss)
   endif()

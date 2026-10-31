@@ -22,7 +22,7 @@
 #include "velox/common/testutil/TestValue.h"
 #include "velox/dwio/common/ColumnVisitors.h"
 #include "velox/dwio/common/SelectiveColumnReaderInternal.h"
-#include "velox/dwio/nimble/encodings/legacy/EncodingUtils.h"
+#include "velox/dwio/nimble/encodings/common/EncodingUtils.h"
 #include "velox/dwio/nimble/selective/NimbleData.h"
 #include "velox/dwio/nimble/selective/NimbleReaderFuzzerStats.h"
 #include "velox/vector/DictionaryVector.h"
@@ -33,7 +33,6 @@ using namespace facebook::velox;
 
 bool StringColumnReader::dictionaryPreservable() {
   return scanSpec_->valueHook() == nullptr &&
-      formatData().stringDecoderZeroCopy() &&
       static_cast<const NimbleData&>(formatData())
           .nimblePreserveDictionaryEncoding();
 }
