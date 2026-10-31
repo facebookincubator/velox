@@ -16,6 +16,7 @@
 
 #include "velox/functions/lib/DateTimeFormatter.h"
 #include <folly/String.h>
+#include <folly/small_vector.h>
 #include <charconv>
 #include <cstring>
 #include "velox/common/base/CountBits.h"
@@ -72,8 +73,8 @@ struct Date {
   bool isHourOfHalfDay =
       true; // Whether most recent hour specifier is of half day.
 
-  std::vector<int32_t> dayOfMonthValues;
-  std::vector<int32_t> dayOfYearValues;
+  folly::small_vector<int32_t, 1> dayOfMonthValues;
+  folly::small_vector<int32_t, 1> dayOfYearValues;
 };
 
 constexpr std::string_view weekdaysFull[] = {
