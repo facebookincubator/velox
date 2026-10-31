@@ -1679,6 +1679,106 @@ TEST_F(FsstEncodingTest, fsstCompressionTargetRatioFallsBackToTrivial) {
   EXPECT_EQ(decoded, values);
 }
 
+TEST_F(FsstEncodingTest, compressionTargetUsesFinalSerializedSize) {
+  std::vector<std::string> storage;
+  storage.reserve(4'096);
+  for (uint32_t row = 0; row < 4'096; ++row) {
+    storage.push_back(
+        fmt::format(
+            "common/prefix/with/repeated/fsst/data/{:04}/common/suffix",
+            row % 32));
+  }
+  const std::vector<std::string_view> values(storage.begin(), storage.end());
+  const auto rawBytes = std::accumulate(
+      values.begin(), values.end(), size_t{0}, [](size_t sum, auto value) {
+        return sum + value.size();
+      });
+  const auto decodeAndCheck = [&](std::string_view encoded) {
+    auto decoder = EncodingFactory{}.create(
+        *pool_, encoded, createStringBufferFactory(), Encoding::Options{});
+    std::vector<std::string_view> decoded(values.size());
+    decoder->materialize(static_cast<uint32_t>(values.size()), decoded.data());
+    EXPECT_EQ(decoded, values);
+  };
+
+  CompressionOptions compressionOptions;
+  compressionOptions.compressionAcceptRatio = 1.0;
+  compressionOptions.zstdMinCompressionSize = 0;
+  compressionOptions.lz4MinCompressionSize = 0;
+  for (const auto type : {CompressionType::Zstd, CompressionType::Lz4}) {
+    SCOPED_TRACE(toString(type));
+    compressionOptions.compressionType = type;
+    Buffer fsstBuffer{*pool_};
+    const auto fsst = encodeFsst(values, fsstBuffer);
+    Buffer compressedBuffer{*pool_};
+    const auto compressed = EncodingFactory::encode<std::string_view>(
+        createSelectionPolicy(compressionOptions, type),
+        values,
+        compressedBuffer,
+        {.fsstCompressionTargetRatio = std::numeric_limits<double>::max()});
+    ASSERT_EQ(EncodingPrefix::encodingType(compressed), EncodingType::Fsst);
+    ASSERT_EQ(serializedCompressionType(compressed), type);
+    ASSERT_LT(compressed.size(), fsst.size());
+    const double finalRatio =
+        static_cast<double>(compressed.size()) / static_cast<double>(rawBytes);
+    const double midpointTargetRatio = (static_cast<double>(compressed.size()) +
+                                        static_cast<double>(fsst.size())) /
+        static_cast<double>(2 * rawBytes);
+    for (const auto ratio : {midpointTargetRatio, finalRatio}) {
+      Buffer buffer{*pool_};
+      const auto encoded = EncodingFactory::encode<std::string_view>(
+          createSelectionPolicy(compressionOptions, type),
+          values,
+          buffer,
+          {.fsstCompressionTargetRatio = ratio});
+      ASSERT_EQ(EncodingPrefix::encodingType(encoded), EncodingType::Fsst);
+      EXPECT_EQ(encoded, compressed);
+      decodeAndCheck(encoded);
+      Buffer sliceBuffer{*pool_};
+      const auto sliced = EncodingFactory::slice(encoded, 17, 83, sliceBuffer);
+      auto decoder = EncodingFactory{}.create(
+          *pool_, sliced, createStringBufferFactory(), Encoding::Options{});
+      std::vector<std::string_view> decoded(83);
+      decoder->materialize(
+          static_cast<uint32_t>(decoded.size()), decoded.data());
+      EXPECT_EQ(
+          decoded,
+          std::vector<std::string_view>(
+              values.begin() + 17, values.begin() + 100));
+    }
+
+    Buffer strictBuffer{*pool_};
+    const auto strict = EncodingFactory::encode<std::string_view>(
+        createSelectionPolicy(compressionOptions, type),
+        values,
+        strictBuffer,
+        {.fsstCompressionTargetRatio = finalRatio * 0.99});
+    EXPECT_EQ(EncodingPrefix::encodingType(strict), EncodingType::Trivial);
+    decodeAndCheck(strict);
+
+    auto rejectedCompression = compressionOptions;
+    rejectedCompression.compressionAcceptRatio = 0;
+    Buffer rejectedBuffer{*pool_};
+    const auto rejected = EncodingFactory::encode<std::string_view>(
+        createSelectionPolicy(rejectedCompression, type),
+        values,
+        rejectedBuffer,
+        {.fsstCompressionTargetRatio = midpointTargetRatio});
+    EXPECT_EQ(EncodingPrefix::encodingType(rejected), EncodingType::Trivial);
+    decodeAndCheck(rejected);
+
+    Buffer uncompressedBuffer{*pool_};
+    const auto uncompressed = EncodingFactory::encode<std::string_view>(
+        createSelectionPolicy(),
+        values,
+        uncompressedBuffer,
+        {.fsstCompressionTargetRatio = midpointTargetRatio});
+    EXPECT_EQ(
+        EncodingPrefix::encodingType(uncompressed), EncodingType::Trivial);
+    decodeAndCheck(uncompressed);
+  }
+}
+
 TEST_F(FsstEncodingTest, encodeWithReusableBuffers) {
   std::vector<std::string> storage;
   for (int i = 0; i < 256; ++i) {
