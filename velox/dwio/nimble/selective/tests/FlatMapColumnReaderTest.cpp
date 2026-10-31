@@ -121,7 +121,6 @@ class FlatMapColumnReaderTest : public ::testing::TestWithParam<bool>,
       bool preserveFlatMapsInMemory = false,
       bool lazyColumnIo = false,
       const folly::F14FastSet<std::string>& remainingFilterColumns = {},
-      bool stringDecoderZeroCopy = false,
       bool scanFastPath = false) {
     auto readFile = std::make_shared<InMemoryReadFile>(file);
     auto factory =
@@ -140,7 +139,6 @@ class FlatMapColumnReaderTest : public ::testing::TestWithParam<bool>,
     rowOptions.setRequestedType(type);
     rowOptions.setPreserveFlatMapsInMemory(preserveFlatMapsInMemory);
     rowOptions.setLazyColumnIo(lazyColumnIo);
-    rowOptions.setStringDecoderZeroCopy(stringDecoderZeroCopy);
     rowOptions.setNimbleScanFastPath(scanFastPath);
     if (!remainingFilterColumns.empty()) {
       rowOptions.setRemainingFilterColumns(remainingFilterColumns);
@@ -331,7 +329,6 @@ TEST_P(FlatMapColumnReaderTest, asStructNullFilterOnKeyInEveryRow) {
       /*preserveFlatMapsInMemory=*/false,
       /*lazyColumnIo=*/false,
       /*remainingFilterColumns=*/{},
-      /*stringDecoderZeroCopy=*/true,
       /*scanFastPath=*/true);
 
   auto expected = makeRowVector(

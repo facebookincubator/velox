@@ -36,7 +36,6 @@ class NimbleData : public velox::dwio::common::FormatData {
       velox::memory::MemoryPool& memoryPool,
       ChunkedDecoder* inMapDecoder,
       const EncodingFactory& encodingFactory,
-      bool stringDecoderZeroCopy,
       bool nimblePreserveDictionaryEncoding = false,
       bool lazyColumnIo = false,
       velox::dwio::common::DecodingStats* decodingStats = nullptr,
@@ -165,7 +164,6 @@ class NimbleParams : public velox::dwio::common::FormatParams {
       StripeStreams& streams,
       RowSizeTracker* rowSizeTracker,
       const EncodingFactory& encodingFactory,
-      bool stringDecoderZeroCopy = false,
       bool preserveFlatMapsInMemory = false,
       bool nimblePreserveDictionaryEncoding = false,
       const folly::F14FastSet<std::string>* lazyIoColumns = nullptr,
@@ -180,7 +178,6 @@ class NimbleParams : public velox::dwio::common::FormatParams {
         lazyIoColumns_(lazyIoColumns),
         encodingFactory_(&encodingFactory),
         lazyColumnIo_(lazyColumnIo),
-        stringDecoderZeroCopy_{stringDecoderZeroCopy},
         nimblePreserveDictionaryEncoding_{nimblePreserveDictionaryEncoding},
         dictionaryAwareReads_{dictionaryAwareReads},
         scanFastPath_{scanFastPath} {}
@@ -197,7 +194,6 @@ class NimbleParams : public velox::dwio::common::FormatParams {
         *streams_,
         rowSizeTracker_,
         *encodingFactory_,
-        stringDecoderZeroCopy_,
         preserveFlatMapsInMemory_,
         nimblePreserveDictionaryEncoding_,
         /*lazyIoColumns=*/nullptr,
@@ -272,7 +268,6 @@ class NimbleParams : public velox::dwio::common::FormatParams {
   // makeChildParams() so nested streams inherit the parent's routing.
   bool lazyColumnIo_{false};
   ChunkedDecoder* inMapDecoder_{nullptr};
-  bool stringDecoderZeroCopy_{false};
   bool nimblePreserveDictionaryEncoding_{false};
   bool dictionaryAwareReads_{false};
   bool scanFastPath_{false};

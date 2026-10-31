@@ -29,7 +29,6 @@
 #include "velox/dwio/nimble/common/Types.h"
 #include "velox/dwio/nimble/common/Vector.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
-#include "velox/dwio/nimble/encodings/legacy/EncodingFactory.h"
 #include "velox/dwio/nimble/reader/FieldReader.h"
 #include "velox/dwio/nimble/tablet/TabletReader.h"
 #include "velox/type/Type.h"
@@ -85,7 +84,7 @@ struct BatchReadParams : public FieldReaderParams {
          std::string_view data,
          const std::function<void*(uint32_t)>& stringBufferFactory)
       -> std::unique_ptr<Encoding> {
-    return legacy::EncodingFactory().create(
+    return EncodingFactory().create(
         pool, data, stringBufferFactory, Encoding::Options{});
   };
 };

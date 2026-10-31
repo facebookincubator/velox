@@ -1498,13 +1498,134 @@ struct AtTimezoneFunction {
   }
 };
 
+namespace detail {
+// Renders an instant in the target zone and encodes the resulting wall clock
+// using the query's TIMESTAMP representation.
+FOLLY_ALWAYS_INLINE Timestamp renderTimestampInTimeZone(
+    Timestamp instant,
+    const tz::TimeZone& targetTimeZone,
+    const tz::TimeZone* sessionTimeZone) {
+  instant.toTimezone(targetTimeZone);
+  if (sessionTimeZone != nullptr) {
+    instant = Timestamp{
+        sessionTimeZone
+            ->correct_nonexistent_time(
+                std::chrono::seconds(instant.getSeconds()))
+            .count(),
+        instant.getNanos(),
+    };
+    instant.toGMT(*sessionTimeZone);
+  }
+  return instant;
+}
+} // namespace detail
+
+/// Interprets a TIMESTAMP using the query's timestamp semantics and tags the
+/// resulting instant with the target zone.
+template <typename T>
+struct AtTimezoneFromTimestampFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  // Session zone used to interpret local input timestamps.
+  const tz::TimeZone* sessionTimeZone_{nullptr};
+
+  // Cached target zone ID when the zone argument is constant.
+  std::optional<int64_t> targetTimezoneID_;
+
+  // Whether input timestamps already represent UTC instants.
+  bool adjustTimestampToTimezone_{false};
+
+  // Caches query storage semantics and a constant target zone.
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& config,
+      const arg_type<Timestamp>* /*timestamp*/,
+      const arg_type<Varchar>* timezone) {
+    sessionTimeZone_ = getSessionTimeZone(config);
+    adjustTimestampToTimezone_ = config.adjustTimestampToTimezone();
+    if (timezone) {
+      targetTimezoneID_ = tz::getTimeZoneID(
+          std::string_view(timezone->data(), timezone->size()));
+    }
+  }
+
+  // Interprets the stored TIMESTAMP and tags its instant with the target zone.
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
+      out_type<TimestampWithTimezone>& result,
+      const arg_type<Timestamp>& timestamp,
+      const arg_type<Varchar>& timezone) {
+    auto instant = timestamp;
+    if (!adjustTimestampToTimezone_) {
+      instant.toGMT(*sessionTimeZone_);
+    }
+    const auto targetTimezoneID = targetTimezoneID_.has_value()
+        ? targetTimezoneID_.value()
+        : tz::getTimeZoneID(std::string_view(timezone.data(), timezone.size()));
+    result = pack(instant.toMillis(), targetTimezoneID);
+  }
+};
+
+/// Interprets a TIMESTAMP using the query's timestamp semantics and returns
+/// the wall clock read in the target zone.
+template <typename T>
+struct AtTimezoneFromTimestampToTimestampFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  // Session zone used to interpret local input timestamps.
+  const tz::TimeZone* inputSessionTimeZone_{nullptr};
+
+  // Session zone used to encode the output wall clock.
+  const tz::TimeZone* outputSessionTimeZone_{nullptr};
+
+  // Target zone when the timezone argument is constant; null otherwise.
+  const tz::TimeZone* targetTimeZone_{nullptr};
+
+  // Whether input timestamps already represent UTC instants.
+  bool adjustTimestampToTimezone_{false};
+
+  // Caches query timestamp semantics and a constant target zone.
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& config,
+      const arg_type<Timestamp>* /*timestamp*/,
+      const arg_type<Varchar>* timezone) {
+    inputSessionTimeZone_ = getSessionTimeZone(config);
+    outputSessionTimeZone_ = getTimeZoneFromConfig(config);
+    adjustTimestampToTimezone_ = config.adjustTimestampToTimezone();
+    if (timezone) {
+      targetTimeZone_ =
+          tz::locateZone(std::string_view(timezone->data(), timezone->size()));
+    }
+  }
+
+  // Matches an explicit cast to TIMESTAMP WITH TIME ZONE before applying the
+  // target zone.
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void call(
+      out_type<Timestamp>& result,
+      const arg_type<Timestamp>& timestamp,
+      const arg_type<Varchar>& timezone) {
+    auto instant = timestamp;
+    if (!adjustTimestampToTimezone_) {
+      instant.toGMT(*inputSessionTimeZone_);
+    }
+    // Match TIMESTAMP WITH TIME ZONE precision so direct and casted inputs
+    // produce the same result.
+    instant = Timestamp::fromMillis(instant.toMillis());
+    const auto* targetTimeZone = targetTimeZone_ != nullptr
+        ? targetTimeZone_
+        : tz::locateZone(std::string_view(timezone.data(), timezone.size()));
+    result = detail::renderTimestampInTimeZone(
+        instant, *targetTimeZone, outputSessionTimeZone_);
+  }
+};
+
 /// Converts a TIMESTAMP WITH TIME ZONE to the wall clock read in the target
 /// zone, dropping the zone. The zone the input carries is ignored; only its
 /// instant is used.
 /// With adjust_timestamp_to_session_timezone enabled, the result is the instant
 /// that reads as this wall clock in the session zone.
 template <typename T>
-struct AtTimezoneConvertToTimestampFunction {
+struct AtTimezoneToTimestampFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
 
   // Target zone when the timezone argument is constant; null otherwise.
@@ -1533,21 +1654,10 @@ struct AtTimezoneConvertToTimestampFunction {
         ? targetTimeZone_
         : tz::locateZone(std::string_view(timezone.data(), timezone.size()));
 
-    Timestamp timestamp = unpackTimestampUtc(*timestampWithTimezone);
-    timestamp.toTimezone(*targetTimeZone);
-    // Preserve the wall clock across session-zone encoding, resolving overlaps
-    // to the earlier instant and normalizing gaps forward.
-    if (sessionTimeZone_ != nullptr) {
-      timestamp = Timestamp{
-          sessionTimeZone_
-              ->correct_nonexistent_time(
-                  std::chrono::seconds(timestamp.getSeconds()))
-              .count(),
-          timestamp.getNanos(),
-      };
-      timestamp.toGMT(*sessionTimeZone_);
-    }
-    result = timestamp;
+    result = detail::renderTimestampInTimeZone(
+        unpackTimestampUtc(*timestampWithTimezone),
+        *targetTimeZone,
+        sessionTimeZone_);
   }
 };
 

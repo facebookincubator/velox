@@ -426,6 +426,24 @@ void runStandaloneShortcut(
       setOutput(c10::IValue(tensorAt(0).numel()));
       break;
     }
+    case StandaloneShortcut::kEmptyFactory: {
+      // (Tensor self, int[] size, ScalarType? dtype, ...): self gives the
+      // device, and the dtype unless one is given. No elements, so no storage.
+      auto self = tensorAt(0);
+      auto dtype = self.scalar_type();
+      if (const auto* attr = data.standalone->tryGetAttribute("dtype");
+          attr != nullptr &&
+          std::holds_alternative<c10::ScalarType>(attr->value)) {
+        dtype = std::get<c10::ScalarType>(attr->value);
+      }
+      setOutput(
+          c10::IValue(
+              at::empty(
+                  std::vector<int64_t>(
+                      data.intList.begin(), data.intList.end()),
+                  self.options().dtype(dtype))));
+      break;
+    }
     case StandaloneShortcut::kNone:
       break;
   }

@@ -571,14 +571,6 @@ class RowReaderOptions {
     indexEnabled_ = enabled;
   }
 
-  bool stringDecoderZeroCopy() const {
-    return stringDecoderZeroCopy_;
-  }
-
-  void setStringDecoderZeroCopy(bool stringDecoderZeroCopy) {
-    stringDecoderZeroCopy_ = stringDecoderZeroCopy;
-  }
-
   bool nimblePreserveDictionaryEncoding() const {
     return nimblePreserveDictionaryEncoding_;
   }
@@ -697,7 +689,6 @@ class RowReaderOptions {
   bool indexEnabled_{false};
   // Enables zero-copy string decoding in the Nimble selective reader,
   // using the non-legacy encoding path. Controlled via session property.
-  bool stringDecoderZeroCopy_{false};
   // Controls whether dictionary-encoded Nimble string columns return
   // DictionaryVector instead of FlatVector.
   bool nimblePreserveDictionaryEncoding_{false};

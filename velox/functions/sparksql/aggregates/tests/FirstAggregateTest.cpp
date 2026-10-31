@@ -149,6 +149,71 @@ TEST_F(FirstAggregateTest, bigint) {
   testAggregate<int64_t>();
 }
 
+TEST_F(FirstAggregateTest, unknownInput) {
+  const std::vector<std::string> aggregates{
+      "spark_first(c1)", "spark_first_ignore_null(c1)"};
+  auto expectedGlobal = makeRowVector({
+      makeAllNullFlatVector<UnknownValue>(1),
+      makeAllNullFlatVector<UnknownValue>(1),
+  });
+
+  const std::vector<VectorPtr> inputs{
+      makeAllNullFlatVector<UnknownValue>(4),
+      BaseVector::createNullConstant(UNKNOWN(), 4, pool()),
+      makeAllNullFlatVector<UnknownValue>(0),
+  };
+  for (const auto& values : inputs) {
+    SCOPED_TRACE(values->toString());
+    auto input = makeRowVector({
+        makeFlatVector<int32_t>(
+            values->size(), [](auto row) { return row % 2; }),
+        values,
+    });
+    const auto numGroups = values->size() == 0 ? 0 : 2;
+    auto expectedGrouped = makeRowVector({
+        makeFlatVector<int32_t>(numGroups, [](auto row) { return row; }),
+        makeAllNullFlatVector<UnknownValue>(numGroups),
+        makeAllNullFlatVector<UnknownValue>(numGroups),
+    });
+
+    testAggregations({input}, {}, aggregates, {expectedGlobal});
+    testAggregations({input}, {"c0"}, aggregates, {expectedGrouped});
+  }
+}
+
+TEST_F(FirstAggregateTest, unknownIntermediateAndFinalInputs) {
+  auto intermediateType = ROW({UNKNOWN(), BOOLEAN()});
+  auto intermediateRows = makeRowVector({
+      makeAllNullFlatVector<UnknownValue>(2),
+      makeFlatVector<bool>({false, true}),
+  });
+  auto intermediateInput = makeRowVector({intermediateRows});
+  auto intermediatePlan =
+      PlanBuilder()
+          .values({intermediateInput})
+          .singleAggregation(
+              {},
+              {"spark_first_merge(c0)", "spark_first_ignore_null_merge(c0)"})
+          .planNode();
+  AssertQueryBuilder(intermediatePlan)
+      .assertResults(makeRowVector({
+          BaseVector::createNullConstant(intermediateType, 1, pool()),
+          BaseVector::createNullConstant(intermediateType, 1, pool()),
+      }));
+
+  auto finalPlan = PlanBuilder()
+                       .values({intermediateInput})
+                       .finalAggregation(
+                           {},
+                           {"spark_first(c0)", "spark_first_ignore_null(c0)"},
+                           {{UNKNOWN()}, {UNKNOWN()}})
+                       .planNode();
+  AssertQueryBuilder(finalPlan).assertResults(makeRowVector({
+      makeAllNullFlatVector<UnknownValue>(1),
+      makeAllNullFlatVector<UnknownValue>(1),
+  }));
+}
+
 TEST_F(FirstAggregateTest, real) {
   testAggregate<float>();
 }

@@ -20,7 +20,6 @@
 #include <random>
 
 #include "velox/dwio/nimble/encodings/ALPRDEncoding.h"
-#include "velox/dwio/nimble/encodings/legacy/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
 #include "velox/dwio/nimble/encodings/selection/NestedAlpSizeEstimation.h"
 #include "velox/dwio/nimble/encodings/selection/tests/RandomEncodingSelectionPolicy.h"
@@ -198,25 +197,14 @@ class ALPRDSelectionTest : public ::testing::Test {
   }
 
   void check(std::string_view encoded, std::span<const PhysicalType> values) {
-    for (auto useLegacy : {false, true}) {
-      SCOPED_TRACE(useLegacy);
-      // Legacy containers use fixed prefixes. The shared ALPRD decoder accepts
-      // both formats; compact-prefix container trees use the native factory.
-      if (useLegacy && Config::useVarint &&
-          EncodingPrefix::encodingType(encoded) != EncodingType::ALPRD) {
-        continue;
-      }
-      auto decoder = useLegacy
-          ? legacy::EncodingFactory(options_).create(*pool_, encoded, nullptr)
-          : EncodingFactory(options_).create(*pool_, encoded, nullptr);
-      ScopedVector<PhysicalType> actual{
-          values.size(), pool_.get(), options_.bufferPool};
-      std::fill(actual.begin(), actual.end(), 0);
-      decoder->materialize(values.size(), actual.data());
-      EXPECT_THAT(
-          (std::span<const PhysicalType>{actual}),
-          ::testing::ElementsAreArray(values));
-    }
+    auto decoder = EncodingFactory(options_).create(*pool_, encoded, nullptr);
+    ScopedVector<PhysicalType> actual{
+        values.size(), pool_.get(), options_.bufferPool};
+    std::fill(actual.begin(), actual.end(), 0);
+    decoder->materialize(values.size(), actual.data());
+    EXPECT_THAT(
+        (std::span<const PhysicalType>{actual}),
+        ::testing::ElementsAreArray(values));
   }
 
   std::shared_ptr<velox::memory::MemoryPool> pool_;

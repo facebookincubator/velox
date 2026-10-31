@@ -65,8 +65,6 @@ struct FieldReaderParams {
   /// presence from the decoder map.
   std::function<bool(uint32_t)> hybridFlatMapValueStreamsPresent{nullptr};
 
-  bool optimizeStringBufferHandling{false};
-
   /// Executor for parallel decoding of child fields.
   folly::Executor* decodeExecutor{nullptr};
 

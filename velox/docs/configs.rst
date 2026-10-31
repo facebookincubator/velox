@@ -81,17 +81,18 @@ Generic Configuration
        supplied "America/Los_Angeles", then "1970-01-01" will be converted to -28800 instead of 0. Similarly, timestamp
        to date conversions will adhere to user 'session_timezone', e.g: Timestamp(0) to Date will be -1 (number of days
        since epoch) for "America/Los_Angeles".
-   * - use_session_timezone_for_timestamp_with_timezone
+   * - ignore_time_zone_label
      - bool
      - false
-     - Selects the time zone used to render a TIMESTAMP WITH TIME ZONE value. If true, values render the UTC instant in
-       the session time zone, so values that compare equal produce equal results. If false, each value renders in its
-       own embedded time zone. Covers field extraction (except ``timezone_hour`` and ``timezone_minute``, which report
+     - Selects whether to ignore a TIMESTAMP WITH TIME ZONE value's stored time zone label. If true, values render the
+       UTC instant in the session time zone, so values that compare equal produce equal results. If false, each value
+       renders using its stored time zone label. Covers field extraction (except ``timezone_hour`` and
+       ``timezone_minute``, which report
        the offset stored in the value), formatting, date arithmetic, and ``CAST`` to ``VARCHAR``, ``DATE``, ``TIME``
        and ``TIMESTAMP``. Of the interval operators only ``INTERVAL YEAR TO MONTH`` is affected; ``INTERVAL DAY TO
        SECOND`` operates on milliseconds and never consults a time zone. For ``CAST`` to ``TIMESTAMP``,
        ``adjust_timestamp_to_session_timezone=true`` returns the UTC instant. When that property is false, this
-       property selects the session or embedded time zone.
+       property selects the session or stored time zone.
    * - track_operator_cpu_usage
      - bool
      - true
@@ -1221,10 +1222,6 @@ Nimble Options (prefix ``hive.nimble.``)
        not be triggered. NOTE: lazy IO applies the same restriction as lazy materialization which doesn't
        allow lazy IO across stripes. Configure as ``nimble.lazy-column-io``; do not prepend ``hive.``.
        Session: ``nimble_lazy_column_io``.
-   * - ``string-decoder-zero-copy``
-     - bool
-     - false
-     - Enable zero-copy string decoding in Nimble selective reader. Configure as ``nimble.string-decoder-zero-copy``; do not prepend ``hive.``. Session: ``nimble_string_decoder_zero_copy``.
    * - ``preserve-dictionary-encoding``
      - bool
      - false

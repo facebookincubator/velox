@@ -109,9 +109,12 @@ struct NimbleTypeProjection {
 /// Builds a projected Nimble schema and its source-stream mapping. A projected
 /// Hybrid FlatMap contains only selected physical groups and compacts their
 /// descriptors into the response-local stream namespace. A requested key in no
-/// group selects no group; a column with no selected group holds a keyless
-/// Default group whose streams map to no source stream, so non-null rows decode
-/// as empty maps and null rows stay null.
+/// group selects no group, unless batches list their Default keys
+/// (HybridFlatMap::KeyPresenceMode::kKeyList): then a key in no configured
+/// group selects the whole Default group and callers filter its keys. A column
+/// with no selected group holds a keyless Default group whose streams map to no
+/// source stream, so non-null rows decode as empty maps and null rows stay
+/// null.
 NimbleTypeProjection buildProjectedNimbleType(
     const Type* type,
     const std::vector<velox::common::Subfield>& projectedSubfields);
