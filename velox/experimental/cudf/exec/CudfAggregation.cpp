@@ -18,6 +18,7 @@
 #include "velox/experimental/cudf/exec/CudfAggregation.h"
 #include "velox/experimental/cudf/exec/CudfGroupby.h"
 #include "velox/experimental/cudf/exec/CudfReduce.h"
+#include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
 
 #include "velox/core/Expressions.h"
@@ -127,6 +128,17 @@ bool maskSupportedByCudf(
   // Aggregates that ignore the mask must fall back to CPU rather than silently
   // produce an unmasked result.
   return aggregationSupportsMask(aggregate.call->name());
+}
+
+bool sortingKeysSupportedByCudf(
+    const core::AggregationNode::Aggregate& aggregate) {
+  if (aggregate.sortingKeys.empty()) {
+    return true;
+  }
+  // A function the CPU registry does not know counts as order sensitive.
+  const auto* entry =
+      exec::getAggregateFunctionEntry(getOriginalName(aggregate.call->name()));
+  return entry != nullptr && !entry->metadata.orderSensitive;
 }
 
 namespace {
@@ -422,8 +434,10 @@ bool canAggregationBeEvaluatedByRegistry(
     return false;
   }
 
-  // Validate against step-specific signatures from registry.
-  return matchTypedCallAgainstSignatures(call, stepIt->second);
+  // Validate against step-specific signatures from registry. A type variable
+  // in a signature binds any type, so the result must still be one cuDF holds.
+  return matchTypedCallAgainstSignatures(call, stepIt->second) &&
+      isTypeSupportedByCudf(call.type());
 }
 
 bool canBeEvaluatedByCudf(
