@@ -17,7 +17,7 @@
 #include "velox/connectors/hive/iceberg/EqualityDeleteFileReader.h"
 
 #include "velox/common/base/BitUtil.h"
-#include "velox/connectors/hive/BufferedInputBuilder.h"
+#include "velox/connectors/common/BufferedInputBuilder.h"
 #include "velox/connectors/hive/HiveConnectorUtil.h"
 #include "velox/connectors/hive/iceberg/IcebergGeospatialConverter.h"
 #include "velox/connectors/hive/iceberg/IcebergMetadataColumns.h"
@@ -144,7 +144,7 @@ EqualityDeleteFileReader::EqualityDeleteFileReader(
     FileHandleFactory* fileHandleFactory,
     const ConnectorQueryCtx* connectorQueryCtx,
     folly::Executor* executor,
-    const std::shared_ptr<const FileConfig>& fileConfig,
+    const std::shared_ptr<const file::FileConfig>& fileConfig,
     const std::shared_ptr<io::IoStatistics>& ioStatistics,
     const std::shared_ptr<IoStats>& ioStats,
     dwio::common::RuntimeStats& runtimeStats,
@@ -215,7 +215,7 @@ EqualityDeleteFileReader::EqualityDeleteFileReader(
       .filename = deleteFile.filePath,
       .tokenProvider = connectorQueryCtx->fsTokenProvider()};
   auto deleteFileHandleCachePtr = fileHandleFactory->generate(fileHandleKey);
-  auto deleteFileInput = BufferedInputBuilder::getInstance()->create(
+  auto deleteFileInput = file::BufferedInputBuilder::getInstance()->create(
       *deleteFileHandleCachePtr,
       deleteReaderOpts,
       connectorQueryCtx,
@@ -227,7 +227,7 @@ EqualityDeleteFileReader::EqualityDeleteFileReader(
       dwio::common::getReaderFactory(deleteReaderOpts.fileFormat())
           ->createReader(std::move(deleteFileInput), deleteReaderOpts);
 
-  if (!testFilters(
+  if (!file::testFilters(
           scanSpec.get(),
           deleteReader.get(),
           deleteSplit->filePath,

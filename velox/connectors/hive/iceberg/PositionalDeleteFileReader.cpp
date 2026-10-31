@@ -16,8 +16,8 @@
 
 #include "velox/connectors/hive/iceberg/PositionalDeleteFileReader.h"
 
-#include "velox/connectors/hive/BufferedInputBuilder.h"
-#include "velox/connectors/hive/FileConnectorUtil.h"
+#include "velox/connectors/common/BufferedInputBuilder.h"
+#include "velox/connectors/common/FileConnectorUtil.h"
 #include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
 #include "velox/connectors/hive/iceberg/IcebergMetadataColumns.h"
 #include "velox/dwio/common/ReaderFactory.h"
@@ -30,7 +30,7 @@ PositionalDeleteFileReader::PositionalDeleteFileReader(
     FileHandleFactory* fileHandleFactory,
     const ConnectorQueryCtx* connectorQueryCtx,
     folly::Executor* executor,
-    const std::shared_ptr<const FileConfig>& fileConfig,
+    const std::shared_ptr<const file::FileConfig>& fileConfig,
     const std::shared_ptr<io::IoStatistics>& ioStatistics,
     const std::shared_ptr<IoStats>& ioStats,
     dwio::common::RuntimeStats& runtimeStats,
@@ -97,7 +97,7 @@ PositionalDeleteFileReader::PositionalDeleteFileReader(
       .filename = deleteFile_.filePath,
       .tokenProvider = connectorQueryCtx_->fsTokenProvider()};
   auto deleteFileHandleCachePtr = fileHandleFactory_->generate(fileHandleKey);
-  auto deleteFileInput = BufferedInputBuilder::getInstance()->create(
+  auto deleteFileInput = file::BufferedInputBuilder::getInstance()->create(
       *deleteFileHandleCachePtr,
       deleteReaderOpts,
       connectorQueryCtx,
@@ -113,7 +113,7 @@ PositionalDeleteFileReader::PositionalDeleteFileReader(
   // 1) the delete file doesn't contain the base file that is being read; 2) The
   // delete file does not contain the positions in the current batch for the
   // base file.
-  if (!testFilters(
+  if (!file::testFilters(
           scanSpec.get(),
           deleteReader.get(),
           deleteSplit_->filePath,

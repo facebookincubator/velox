@@ -17,7 +17,7 @@
 
 #include <optional>
 #include <unordered_map>
-#include "velox/connectors/hive/FileConnectorSplit.h"
+#include "velox/connectors/common/FileConnectorSplit.h"
 #include "velox/connectors/hive/TableHandle.h"
 
 namespace facebook::velox::connector::hive {
@@ -40,7 +40,7 @@ struct RowIdProperties {
   std::string tableGuid;
 };
 
-struct HiveConnectorSplit : public FileConnectorSplit {
+struct HiveConnectorSplit : public file::FileConnectorSplit {
   /// Synthesized columns like $path, $file_size associated with the split.
   std::unordered_map<std::string, std::string> infoColumns;
 
@@ -77,7 +77,7 @@ struct HiveConnectorSplit : public FileConnectorSplit {
           std::nullopt,
       std::optional<dwio::common::ColumnMappingMode> _columnMappingMode =
           std::nullopt)
-      : FileConnectorSplit(
+      : file::FileConnectorSplit(
             connectorId,
             _filePath,
             _fileFormat,

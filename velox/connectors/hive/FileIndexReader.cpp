@@ -17,8 +17,8 @@
 #include "velox/connectors/hive/FileIndexReader.h"
 
 #include "velox/common/Casts.h"
-#include "velox/connectors/hive/BufferedInputBuilder.h"
-#include "velox/connectors/hive/FileConfig.h"
+#include "velox/connectors/common/BufferedInputBuilder.h"
+#include "velox/connectors/common/FileConfig.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/HiveConnectorUtil.h"
 #include "velox/connectors/hive/TableHandle.h"
@@ -74,7 +74,7 @@ FileIndexReader::FileIndexReader(
     std::shared_ptr<const HiveConnectorSplit> hiveSplit,
     const std::shared_ptr<const HiveTableHandle>& hiveTableHandle,
     const ConnectorQueryCtx* connectorQueryCtx,
-    const std::shared_ptr<const FileConfig>& fileConfig,
+    const std::shared_ptr<const file::FileConfig>& fileConfig,
     const std::shared_ptr<common::ScanSpec>& scanSpec,
     const std::vector<core::IndexLookupConditionPtr>& indexLookupConditions,
     const RowTypePtr& requestType,
@@ -271,7 +271,7 @@ std::unique_ptr<dwio::common::Reader> FileIndexReader::createFileReader() {
       fileHandleKey, &fileProperties, ioStats_ ? ioStats_.get() : nullptr);
   VELOX_CHECK_NOT_NULL(fileHandleCachePtr.get());
 
-  auto baseFileInput = BufferedInputBuilder::getInstance()->create(
+  auto baseFileInput = file::BufferedInputBuilder::getInstance()->create(
       *fileHandleCachePtr,
       readerOpts,
       connectorQueryCtx_,

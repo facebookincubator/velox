@@ -18,9 +18,9 @@
 #include "velox/common/config/Config.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/testutil/TempDirectoryPath.h"
+#include "velox/connectors/common/PartitionValue.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/HivePartitionFunction.h"
-#include "velox/connectors/hive/PartitionValue.h"
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/core/Expressions.h"
 #include "velox/core/QueryCtx.h"
@@ -326,7 +326,7 @@ std::vector<TableEvolutionFuzzer::InputFile> extractInputFiles(
   files.reserve(splits.size());
   for (const auto& split : splits) {
     auto fileSplit =
-        std::dynamic_pointer_cast<connector::hive::FileConnectorSplit>(
+        std::dynamic_pointer_cast<connector::file::FileConnectorSplit>(
             split.connectorSplit);
     VELOX_CHECK_NOT_NULL(fileSplit);
     files.push_back({fileSplit->filePath, fileSplit->fileFormat});
@@ -785,7 +785,7 @@ void buildScanSplitFromTableWriteResult(
       for (auto bucketColumnIndex : bucketColumnIndices) {
         auto handle = std::make_unique<connector::hive::HiveColumnHandle>(
             tableSchema->nameOf(bucketColumnIndex),
-            connector::hive::FileColumnHandle::ColumnType::kRegular,
+            connector::file::FileColumnHandle::ColumnType::kRegular,
             tableSchema->childAt(bucketColumnIndex),
             tableSchema->childAt(bucketColumnIndex));
         bucketConversion.bucketColumnHandles.push_back(std::move(handle));
@@ -2766,12 +2766,12 @@ std::unique_ptr<TaskCursor> TableEvolutionFuzzer::makeValuesTask(
                     std::make_shared<core::FieldAccessExpr>(name, std::nullopt),
                     std::make_shared<core::ConstantExpr>(
                         mapType.keyType(),
-                        connector::hive::PartitionValue::fromString(
+                        connector::file::PartitionValue::fromString(
                             key,
                             *mapType.keyType(),
-                            connector::hive::PartitionValue::TimestampMode::
+                            connector::file::PartitionValue::TimestampMode::
                                 kUtc,
-                            connector::hive::PartitionValue::DateMode::
+                            connector::file::PartitionValue::DateMode::
                                 kIsoString),
                         std::nullopt)},
                 std::nullopt));
@@ -2876,7 +2876,7 @@ std::unique_ptr<TaskCursor> TableEvolutionFuzzer::makeScanTask(
           name,
           std::make_shared<connector::hive::HiveColumnHandle>(
               name,
-              connector::hive::FileColumnHandle::ColumnType::kRegular,
+              connector::file::FileColumnHandle::ColumnType::kRegular,
               type,
               type));
     }

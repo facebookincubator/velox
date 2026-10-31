@@ -14,11 +14,11 @@
  * limitations under the License.
  */
 
-#include "velox/connectors/hive/FileConnectorSplit.h"
+#include "velox/connectors/common/FileConnectorSplit.h"
 #include <gtest/gtest.h>
 
 using namespace facebook::velox;
-using namespace facebook::velox::connector::hive;
+using facebook::velox::connector::file::FileConnectorSplit;
 
 TEST(FileConnectorSplitTest, construction) {
   FileConnectorSplit split(

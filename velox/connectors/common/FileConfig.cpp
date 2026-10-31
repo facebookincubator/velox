@@ -1,0 +1,127 @@
+/*
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+#include "velox/connectors/common/FileConfig.h"
+
+#include "velox/common/config/Config.h"
+#include "velox/dwio/common/Options.h"
+#include "velox/dwio/dwrf/common/Config.h"
+#include "velox/dwio/parquet/common/ParquetConfig.h"
+
+namespace facebook::velox::connector::file {
+
+void FileConfig::registerFormatProperties(
+    std::vector<config::ConfigProperty>& properties) {
+  parquet::ParquetConfig::registerProperties(
+      properties,
+      dwio::common::formatConfigPrefix(dwio::common::FileFormat::PARQUET, "_"));
+  dwrf::Config::registerProperties(
+      properties,
+      dwio::common::formatConfigPrefix(dwio::common::FileFormat::ORC, "_"));
+}
+
+int32_t FileConfig::numCacheFileHandles() const {
+  return config_->get<int32_t>(kNumCacheFileHandles, 20'000);
+}
+
+uint64_t FileConfig::fileHandleExpirationDurationMs() const {
+  return config_->get<uint64_t>(kFileHandleExpirationDurationMs, 0);
+}
+
+bool FileConfig::isFileHandleCacheEnabled() const {
+  return config_->get<bool>(kEnableFileHandleCache, true);
+}
+
+const std::vector<config::ConfigProperty>& FileConfig::registeredProperties() {
+  static const std::vector<config::ConfigProperty> kProperties = [] {
+    std::vector<config::ConfigProperty> properties;
+#define VELOX_FILE_CONFIG_REGISTER(constName) \
+  config::registerConfigProperty<FileConfig::constName##Property>(properties)
+
+    VELOX_FILE_CONFIG_REGISTER(kReadTimestampPartitionValueAsLocalTimeSession);
+    VELOX_FILE_CONFIG_REGISTER(kPreserveFlatMapsInMemorySession);
+    VELOX_FILE_CONFIG_REGISTER(kReaderCollectColumnCpuMetricsSession);
+    VELOX_FILE_CONFIG_REGISTER(kUseColumnNamesSession);
+    VELOX_FILE_CONFIG_REGISTER(kNimbleFooterSpeculativeIoSizeSession);
+    VELOX_FILE_CONFIG_REGISTER(kNimblePreserveDictionaryEncodingSession);
+    VELOX_FILE_CONFIG_REGISTER(kNimbleDictionaryAwareReadsSession);
+    VELOX_FILE_CONFIG_REGISTER(kNimbleLazyColumnIoSession);
+    VELOX_FILE_CONFIG_REGISTER(kFileColumnNamesReadAsLowerCaseSession);
+    VELOX_FILE_CONFIG_REGISTER(kIgnoreMissingFilesSession);
+    VELOX_FILE_CONFIG_REGISTER(kMaxCoalescedBytesSession);
+    VELOX_FILE_CONFIG_REGISTER(kLoadQuantumSession);
+    VELOX_FILE_CONFIG_REGISTER(kReadStatsBasedFilterReorderDisabledSession);
+    VELOX_FILE_CONFIG_REGISTER(kIndexEnabledSession);
+    VELOX_FILE_CONFIG_REGISTER(kCacheMetadataSession);
+    VELOX_FILE_CONFIG_REGISTER(kPinMetadataSession);
+    VELOX_FILE_CONFIG_REGISTER(kCacheIndexSession);
+    VELOX_FILE_CONFIG_REGISTER(kPinIndexSession);
+    VELOX_FILE_CONFIG_REGISTER(kSelectiveNimbleReaderEnabledSession);
+    VELOX_FILE_CONFIG_REGISTER(kNimbleDirectBufferedInputEnabledSession);
+    VELOX_FILE_CONFIG_REGISTER(kMaxCoalescedDistanceSession);
+    VELOX_FILE_CONFIG_REGISTER(kParallelUnitLoadCountSession);
+    VELOX_FILE_CONFIG_REGISTER(kReadTimestampUnitSession);
+
+#undef VELOX_FILE_CONFIG_REGISTER
+
+    return properties;
+  }();
+  return kProperties;
+}
+
+int32_t FileConfig::maxCoalescedDistanceBytes(
+    const config::ConfigBase* session) const {
+  const auto distance = config::toCapacity(
+      session->get<std::string>(
+          kMaxCoalescedDistanceSession,
+          config_->get<std::string>(kMaxCoalescedDistance, "512kB")),
+      config::CapacityUnit::BYTE);
+  VELOX_USER_CHECK_LE(
+      distance,
+      std::numeric_limits<int32_t>::max(),
+      "The max merge distance to combine read requests must be less than 2GB."
+      " Got {} bytes.",
+      distance);
+  return int32_t(distance);
+}
+
+int32_t FileConfig::prefetchRowGroups() const {
+  return config_->get<int32_t>(kPrefetchRowGroups, 1);
+}
+
+size_t FileConfig::parallelUnitLoadCount(
+    const config::ConfigBase* session) const {
+  auto count = session->get<size_t>(
+      kParallelUnitLoadCountSession,
+      config_->get<size_t>(kParallelUnitLoadCount, 0));
+  VELOX_CHECK_LE(count, 100, "parallelUnitLoadCount too large: {}", count);
+  return count;
+}
+
+uint64_t FileConfig::filePreloadThreshold() const {
+  return config_->get<uint64_t>(kFilePreloadThreshold, 8UL << 20);
+}
+
+uint8_t FileConfig::readTimestampUnit(const config::ConfigBase* session) const {
+  const auto unit = sessionValue<uint8_t>(
+      session, kReadTimestampUnitSession, kReadTimestampUnit, 3 /*milli*/);
+  VELOX_CHECK(
+      unit == 3 || unit == 6 /*micro*/ || unit == 9 /*nano*/,
+      "Invalid timestamp unit.");
+  return unit;
+}
+
+} // namespace facebook::velox::connector::file

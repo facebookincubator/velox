@@ -15,7 +15,7 @@
  */
 #pragma once
 
-#include "velox/common/config/ConfigProvider.h"
+#include "velox/connectors/common/FileConfigProvider.h"
 
 namespace facebook::velox::config {
 class ConfigBase;
@@ -28,29 +28,17 @@ namespace facebook::velox::connector::hive {
 /// .properties file. When provided, config-file values override code
 /// defaults in ConfigProperty::defaultValue, enabling a three-layer
 /// cascade: code default → config file → session override.
-class HiveConfigProvider : public config::ConfigProvider {
+class HiveConfigProvider : public file::FileConfigProvider {
  public:
   /// Creates a provider with code defaults only.
-  HiveConfigProvider() = default;
+  HiveConfigProvider();
 
   /// Creates a provider with config-file overrides. For each session
   /// property, the corresponding config-file key is looked up via
   /// ConfigBase::toConfigKey() (underscore → dash conversion).
   HiveConfigProvider(
       const std::string& catalogName,
-      const config::ConfigBase* catalogConfig)
-      : catalogName_(catalogName), catalogConfig_(catalogConfig) {}
-
-  /// Returns all session-overridable Hive connector properties.
-  std::vector<config::ConfigProperty> properties() const override;
-
-  /// Validates and normalizes a property value.
-  std::string normalize(std::string_view name, std::string_view value)
-      const override;
-
- private:
-  std::string catalogName_;
-  const config::ConfigBase* catalogConfig_{nullptr};
+      const config::ConfigBase* catalogConfig);
 };
 
 } // namespace facebook::velox::connector::hive

@@ -196,8 +196,8 @@ void addColumnHandles(
         std::make_shared<const IcebergColumnHandle>(
             columnName,
             partitionColumnIds.contains(i)
-                ? FileColumnHandle::ColumnType::kPartitionKey
-                : FileColumnHandle::ColumnType::kRegular,
+                ? file::FileColumnHandle::ColumnType::kPartitionKey
+                : file::FileColumnHandle::ColumnType::kRegular,
             type,
             field));
   }
@@ -478,7 +478,7 @@ core::PlanNodePtr IcebergTestBase::makeIcebergTableScanPlan(
         name,
         std::make_shared<IcebergColumnHandle>(
             name,
-            FileColumnHandle::ColumnType::kRegular,
+            file::FileColumnHandle::ColumnType::kRegular,
             type,
             parquet::ParquetFieldId{fieldId, {}}));
   }
@@ -516,7 +516,7 @@ core::PlanNodePtr IcebergTestBase::makeIcebergTableScanPlan(
       filterHandles.push_back(
           std::make_shared<IcebergColumnHandle>(
               name,
-              FileColumnHandle::ColumnType::kRegular,
+              file::FileColumnHandle::ColumnType::kRegular,
               type,
               parquet::ParquetFieldId{fieldId, {}}));
     }
@@ -548,8 +548,8 @@ ColumnHandleMap IcebergTestBase::makeColumnHandles(
     const auto& columnName = rowType->nameOf(i);
     const auto& columnType = rowType->childAt(i);
     const auto columnHandleType = partitionIndices.contains(i)
-        ? FileColumnHandle::ColumnType::kPartitionKey
-        : FileColumnHandle::ColumnType::kRegular;
+        ? file::FileColumnHandle::ColumnType::kPartitionKey
+        : file::FileColumnHandle::ColumnType::kRegular;
     assignments.insert(
         {columnName,
          std::make_shared<HiveColumnHandle>(

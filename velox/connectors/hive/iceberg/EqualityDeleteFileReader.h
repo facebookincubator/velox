@@ -21,7 +21,7 @@
 #include <unordered_set>
 
 #include "velox/connectors/Connector.h"
-#include "velox/connectors/hive/FileConfig.h"
+#include "velox/connectors/common/FileConfig.h"
 #include "velox/connectors/hive/FileHandle.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
@@ -75,7 +75,7 @@ class EqualityDeleteFileReader {
       FileHandleFactory* fileHandleFactory,
       const ConnectorQueryCtx* connectorQueryCtx,
       folly::Executor* executor,
-      const std::shared_ptr<const FileConfig>& fileConfig,
+      const std::shared_ptr<const file::FileConfig>& fileConfig,
       const std::shared_ptr<io::IoStatistics>& ioStatistics,
       const std::shared_ptr<IoStats>& ioStats,
       dwio::common::RuntimeStats& runtimeStats,

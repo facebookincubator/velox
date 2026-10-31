@@ -33,7 +33,7 @@ HiveDataSource::HiveDataSource(
     folly::Executor* ioExecutor,
     const ConnectorQueryCtx* connectorQueryCtx,
     const std::shared_ptr<HiveConfig>& hiveConfig)
-    : FileDataSource(
+    : file::FileDataSource(
           outputType,
           tableHandle,
           assignments,
@@ -56,7 +56,8 @@ std::vector<column_index_t> HiveDataSource::setupBucketConversion() {
   std::vector<TypePtr> types;
   std::vector<column_index_t> bucketChannels;
   for (auto& handle : hiveSplit->bucketConversion->bucketColumnHandles) {
-    VELOX_CHECK(handle->columnType() == FileColumnHandle::ColumnType::kRegular);
+    VELOX_CHECK(
+        handle->columnType() == file::FileColumnHandle::ColumnType::kRegular);
     if (subfields_.erase(handle->name()) > 0) {
       rebuildScanSpec = true;
     }
@@ -77,7 +78,7 @@ std::vector<column_index_t> HiveDataSource::setupBucketConversion() {
     readerOutputType_ = ROW(std::move(names), std::move(types));
   }
   if (rebuildScanSpec) {
-    auto newScanSpec = makeScanSpec(
+    auto newScanSpec = file::makeScanSpec(
         readerOutputType_,
         subfields_,
         fileScanState_->filters,
@@ -133,7 +134,7 @@ std::vector<column_index_t> HiveDataSource::prepareSplit() {
   return bucketChannels;
 }
 
-std::unique_ptr<FileSplitReader> HiveDataSource::createSplitReader() {
+std::unique_ptr<file::FileSplitReader> HiveDataSource::createSplitReader() {
   auto bucketChannels = prepareSplit();
   auto hiveSplit = checkedPointerCast<const HiveConnectorSplit>(split_);
 
@@ -157,7 +158,7 @@ std::unique_ptr<FileSplitReader> HiveDataSource::createSplitReader() {
 
 std::unordered_map<std::string, RuntimeMetric>
 HiveDataSource::getRuntimeStats() {
-  auto result = FileDataSource::getRuntimeStats();
+  auto result = file::FileDataSource::getRuntimeStats();
   if (numBucketConversion_ > 0) {
     result.insert(
         {std::string(kNumBucketConversion),
@@ -179,7 +180,7 @@ void HiveDataSource::setFromDataSource(
   for (const auto& [format, count] : source->numSplitsByFileFormat_) {
     numSplitsByFileFormat_[format] += count;
   }
-  FileDataSource::setFromDataSource(std::move(sourceUnique));
+  file::FileDataSource::setFromDataSource(std::move(sourceUnique));
 }
 
 HiveDataSource::WaveDelegateHookFunction HiveDataSource::waveDelegateHook_;

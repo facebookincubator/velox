@@ -16,8 +16,8 @@
 #pragma once
 
 #include "velox/connectors/Connector.h"
-#include "velox/connectors/hive/FileColumnHandle.h"
-#include "velox/connectors/hive/FileTableHandle.h"
+#include "velox/connectors/common/FileColumnHandle.h"
+#include "velox/connectors/common/FileTableHandle.h"
 #include "velox/core/ITypedExpr.h"
 #include "velox/type/Filter.h"
 #include "velox/type/Subfield.h"
@@ -25,7 +25,7 @@
 
 namespace facebook::velox::connector::hive {
 
-class HiveColumnHandle : public FileColumnHandle {
+class HiveColumnHandle : public file::FileColumnHandle {
  public:
   struct ColumnParseParameters {
     enum PartitionDateValueFormat {
@@ -51,7 +51,7 @@ class HiveColumnHandle : public FileColumnHandle {
       TypePtr dataType,
       TypePtr hiveType,
       std::vector<common::Subfield> requiredSubfields = {},
-      std::vector<NamedExtraction> extractions = {},
+      std::vector<file::NamedExtraction> extractions = {},
       ColumnParseParameters columnParseParameters = {},
       std::function<void(VectorPtr&)> postProcessor = {});
 
@@ -99,7 +99,7 @@ using HiveColumnHandlePtr = std::shared_ptr<const HiveColumnHandle>;
 using HiveColumnHandleMap =
     std::unordered_map<std::string, HiveColumnHandlePtr>;
 
-class HiveTableHandle : public FileTableHandle {
+class HiveTableHandle : public file::FileTableHandle {
  public:
   /// @param sampleRate Sampling rate in (0, 1] range. 0.1 means 10% sampling.
   /// 1.0 means no sampling. Default is no sampling.
@@ -149,7 +149,7 @@ class HiveTableHandle : public FileTableHandle {
 
   /// Return filter column handles as FileColumnHandlePtr for the generic scan
   /// pipeline.
-  std::vector<FileColumnHandlePtr> filterColumnHandles() const override {
+  std::vector<file::FileColumnHandlePtr> filterColumnHandles() const override {
     return {filterColumnHandles_.begin(), filterColumnHandles_.end()};
   }
 

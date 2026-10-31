@@ -297,7 +297,7 @@ TEST_F(TableScanReplayerTest, subfieldPrunning) {
   connector::ColumnHandleMap assignments;
   assignments["e"] = std::make_shared<HiveColumnHandle>(
       "e",
-      FileColumnHandle::ColumnType::kRegular,
+      connector::file::FileColumnHandle::ColumnType::kRegular,
       columnType,
       columnType,
       std::move(requiredSubfields));

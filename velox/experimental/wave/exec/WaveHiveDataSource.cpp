@@ -172,7 +172,8 @@ void WaveHiveDataSource::registerConnector() {
       [](const HiveTableHandlePtr& hiveTableHandle,
          const std::shared_ptr<common::ScanSpec>& scanSpec,
          const RowTypePtr& readerOutputType,
-         std::unordered_map<std::string, FileColumnHandlePtr>* partitionKeys,
+         std::unordered_map<std::string, connector::file::FileColumnHandlePtr>*
+             partitionKeys,
          FileHandleFactory* fileHandleFactory,
          folly::Executor* executor,
          const connector::ConnectorQueryCtx* connectorQueryCtx,

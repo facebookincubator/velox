@@ -392,7 +392,7 @@ std::shared_ptr<const connector::ColumnHandle> makeIcebergColumnHandle(
     const TypePtr& type,
     const parquet::ParquetFieldId& field) {
   return std::make_shared<const IcebergColumnHandle>(
-      name, FileColumnHandle::ColumnType::kRegular, type, field);
+      name, file::FileColumnHandle::ColumnType::kRegular, type, field);
 }
 
 // Schema evolution: a top-level column is renamed (c -> c2, id 3) and

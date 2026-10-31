@@ -26,7 +26,7 @@
 #include "velox/common/base/BitUtil.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/encode/Base64.h"
-#include "velox/connectors/hive/FileSplitReader.h"
+#include "velox/connectors/common/FileSplitReader.h"
 #include "velox/connectors/hive/iceberg/IcebergMetadataColumns.h"
 #include "velox/dwio/common/BufferUtil.h"
 #include "velox/type/Type.h"
@@ -874,7 +874,7 @@ bool CudfIcebergSplitReader::readTimestampAsLocalTime() const {
 std::unique_ptr<cudf::scalar> CudfIcebergSplitReader::makeInjectedScalar(
     const InjectedColumn& col) const {
   try {
-    const VectorPtr constant = velox::connector::hive::newConstantFromString(
+    const VectorPtr constant = velox::connector::file::newConstantFromString(
         col.veloxType,
         col.partitionValue,
         connectorQueryCtx_->memoryPool(),

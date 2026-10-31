@@ -330,7 +330,8 @@ class HiveIndexSource : public IndexSource,
   // - feed partition handles into makeScanSpec()
   // - look up dataType() and isPartitionDateValueDaysSinceEpoch() when
   //   parsing partition value strings into typed constants
-  std::unordered_map<std::string, FileColumnHandlePtr> partitionKeyHandles_;
+  std::unordered_map<std::string, file::FileColumnHandlePtr>
+      partitionKeyHandles_;
 
   // Filters for pushdown. Includes subfield filters from table handle and
   // filters converted from constant index lookup conditions.

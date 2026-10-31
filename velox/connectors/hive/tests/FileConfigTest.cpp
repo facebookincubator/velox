@@ -14,14 +14,14 @@
  * limitations under the License.
  */
 
-#include "velox/connectors/hive/FileConfig.h"
+#include "velox/connectors/common/FileConfig.h"
 #include <gtest/gtest.h>
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/config/Config.h"
 
 using namespace facebook::velox;
-using namespace facebook::velox::connector::hive;
+using facebook::velox::connector::file::FileConfig;
 
 TEST(FileConfigTest, defaultConfig) {
   FileConfig config(

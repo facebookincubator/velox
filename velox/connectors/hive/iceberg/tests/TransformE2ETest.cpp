@@ -758,14 +758,14 @@ TEST_F(TransformE2ETest, dateIdentityPartitionWithFilter) {
       {"c_date",
        std::make_shared<IcebergColumnHandle>(
            "c_date",
-           FileColumnHandle::ColumnType::kPartitionKey,
+           file::FileColumnHandle::ColumnType::kPartitionKey,
            DATE(),
            parquet::ParquetFieldId{0, {}},
            std::vector<common::Subfield>{})},
       {"c_value",
        std::make_shared<IcebergColumnHandle>(
            "c_value",
-           FileColumnHandle::ColumnType::kRegular,
+           file::FileColumnHandle::ColumnType::kRegular,
            INTEGER(),
            parquet::ParquetFieldId{1, {}})},
   };

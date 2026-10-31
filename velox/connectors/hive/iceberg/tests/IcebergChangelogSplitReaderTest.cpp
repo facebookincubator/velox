@@ -46,14 +46,14 @@ class IcebergChangelogSplitReaderTest : public test::IcebergTestBase {
     ChangelogScanContext scanContext{
         std::make_shared<ColumnHandleMap>(makeColumnHandles(dataType)),
         dataType,
-        makeScanSpec(
+        file::makeScanSpec(
             dataType,
             /*outputSubfields=*/{},
             /*subfieldFilters=*/{},
             dataType,
             /*partitionKeys=*/{},
             /*infoColumns=*/{},
-            SpecialColumnNames{},
+            file::SpecialColumnNames{},
             /*disableStatsBasedFilterReorder=*/false,
             pool())};
     return std::make_unique<IcebergChangelogSplitReader>(

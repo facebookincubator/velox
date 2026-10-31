@@ -19,8 +19,6 @@
 #include <boost/algorithm/string.hpp>
 #include "velox/common/config/Config.h"
 #include "velox/dwio/common/Options.h"
-#include "velox/dwio/dwrf/common/Config.h"
-#include "velox/dwio/parquet/common/ParquetConfig.h"
 
 namespace facebook::velox::connector::hive {
 
@@ -44,35 +42,29 @@ stringToInsertExistingPartitionsBehavior(const std::string& strValue) {
 const std::vector<config::ConfigProperty>& HiveConfig::registeredProperties() {
   static const std::vector<config::ConfigProperty> kProperties = [] {
     // Start with FileConfig properties.
-    auto properties = FileConfig::registeredProperties();
-#define VELOX_HIVE_CONFIG_REGISTER(constName) \
+    auto properties = file::FileConfig::registeredProperties();
+#define VELOX_FILE_CONFIG_REGISTER(constName) \
   config::registerConfigProperty<HiveConfig::constName##Property>(properties)
 
-    VELOX_HIVE_CONFIG_REGISTER(kInsertExistingPartitionsBehaviorSession);
-    VELOX_HIVE_CONFIG_REGISTER(kSortWriterMaxOutputBytesSession);
-    VELOX_HIVE_CONFIG_REGISTER(kParquetMaxTargetFileSizeSession);
-    VELOX_HIVE_CONFIG_REGISTER(kOrcMaxTargetFileSizeSession);
-    VELOX_HIVE_CONFIG_REGISTER(kNimbleMaxTargetFileSizeSession);
-    VELOX_HIVE_CONFIG_REGISTER(kMaxPartitionsPerWritersSession);
-    VELOX_HIVE_CONFIG_REGISTER(kAllowNullPartitionKeysSession);
-    VELOX_HIVE_CONFIG_REGISTER(kPartitionPathAsLowerCaseSession);
-    VELOX_HIVE_CONFIG_REGISTER(kSortWriterMaxOutputRowsSession);
-    VELOX_HIVE_CONFIG_REGISTER(kSortWriterFinishTimeSliceLimitMsSession);
-    VELOX_HIVE_CONFIG_REGISTER(kUser);
-    VELOX_HIVE_CONFIG_REGISTER(kSource);
-    VELOX_HIVE_CONFIG_REGISTER(kSchema);
-    VELOX_HIVE_CONFIG_REGISTER(kMaxBucketCountSession);
-    VELOX_HIVE_CONFIG_REGISTER(kMaxRowsPerIndexRequestSession);
+    VELOX_FILE_CONFIG_REGISTER(kInsertExistingPartitionsBehaviorSession);
+    VELOX_FILE_CONFIG_REGISTER(kSortWriterMaxOutputBytesSession);
+    VELOX_FILE_CONFIG_REGISTER(kParquetMaxTargetFileSizeSession);
+    VELOX_FILE_CONFIG_REGISTER(kOrcMaxTargetFileSizeSession);
+    VELOX_FILE_CONFIG_REGISTER(kNimbleMaxTargetFileSizeSession);
+    VELOX_FILE_CONFIG_REGISTER(kMaxPartitionsPerWritersSession);
+    VELOX_FILE_CONFIG_REGISTER(kAllowNullPartitionKeysSession);
+    VELOX_FILE_CONFIG_REGISTER(kPartitionPathAsLowerCaseSession);
+    VELOX_FILE_CONFIG_REGISTER(kSortWriterMaxOutputRowsSession);
+    VELOX_FILE_CONFIG_REGISTER(kSortWriterFinishTimeSliceLimitMsSession);
+    VELOX_FILE_CONFIG_REGISTER(kUser);
+    VELOX_FILE_CONFIG_REGISTER(kSource);
+    VELOX_FILE_CONFIG_REGISTER(kSchema);
+    VELOX_FILE_CONFIG_REGISTER(kMaxBucketCountSession);
+    VELOX_FILE_CONFIG_REGISTER(kMaxRowsPerIndexRequestSession);
 
-#undef VELOX_HIVE_CONFIG_REGISTER
+#undef VELOX_FILE_CONFIG_REGISTER
 
-    parquet::ParquetConfig::registerProperties(
-        properties,
-        dwio::common::formatConfigPrefix(
-            dwio::common::FileFormat::PARQUET, "_"));
-    dwrf::Config::registerProperties(
-        properties,
-        dwio::common::formatConfigPrefix(dwio::common::FileFormat::ORC, "_"));
+    registerFormatProperties(properties);
     return properties;
   }();
   return kProperties;
@@ -132,18 +124,6 @@ std::optional<std::string> HiveConfig::gcsAuthAccessTokenProvider() const {
   }
   return config_->get<std::string>(
       std::string(kLegacyPrefix) + kGcsAuthAccessTokenProvider);
-}
-
-int32_t HiveConfig::numCacheFileHandles() const {
-  return config_->get<int32_t>(kNumCacheFileHandles, 20'000);
-}
-
-uint64_t HiveConfig::fileHandleExpirationDurationMs() const {
-  return config_->get<uint64_t>(kFileHandleExpirationDurationMs, 0);
-}
-
-bool HiveConfig::isFileHandleCacheEnabled() const {
-  return config_->get<bool>(kEnableFileHandleCache, true);
 }
 
 std::string HiveConfig::writeFileCreateConfig() const {

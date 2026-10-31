@@ -24,7 +24,7 @@
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/encode/Base64.h"
 #include "velox/common/file/FileSystems.h"
-#include "velox/connectors/hive/BufferedInputBuilder.h"
+#include "velox/connectors/common/BufferedInputBuilder.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
@@ -62,10 +62,10 @@ namespace facebook::velox::cudf_velox::exec::test {
 namespace {
 
 class CountingBufferedInputBuilder final
-    : public ::facebook::velox::connector::hive::BufferedInputBuilder {
+    : public ::facebook::velox::connector::file::BufferedInputBuilder {
  public:
   explicit CountingBufferedInputBuilder(
-      std::shared_ptr<::facebook::velox::connector::hive::BufferedInputBuilder>
+      std::shared_ptr<::facebook::velox::connector::file::BufferedInputBuilder>
           delegate)
       : delegate_(std::move(delegate)) {}
 
@@ -94,7 +94,7 @@ class CountingBufferedInputBuilder final
   }
 
  private:
-  std::shared_ptr<::facebook::velox::connector::hive::BufferedInputBuilder>
+  std::shared_ptr<::facebook::velox::connector::file::BufferedInputBuilder>
       delegate_;
   std::atomic_uint64_t createCount_{0};
 };
@@ -571,13 +571,13 @@ TEST_F(CudfIcebergReadTest, reusesFooterMetadataDuringReaderSetup) {
   writeToFile(dataFile->getPath(), data);
 
   auto originalBuilder =
-      ::facebook::velox::connector::hive::BufferedInputBuilder::getInstance();
+      ::facebook::velox::connector::file::BufferedInputBuilder::getInstance();
   auto countingBuilder =
       std::make_shared<CountingBufferedInputBuilder>(originalBuilder);
-  ::facebook::velox::connector::hive::BufferedInputBuilder::registerBuilder(
+  ::facebook::velox::connector::file::BufferedInputBuilder::registerBuilder(
       countingBuilder);
   SCOPE_EXIT {
-    ::facebook::velox::connector::hive::BufferedInputBuilder::registerBuilder(
+    ::facebook::velox::connector::file::BufferedInputBuilder::registerBuilder(
         originalBuilder);
   };
 

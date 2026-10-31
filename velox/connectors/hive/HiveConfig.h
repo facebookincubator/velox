@@ -17,8 +17,8 @@
 
 #include <limits>
 
-#include "velox/connectors/hive/FileConfig.h"
-#include "velox/connectors/hive/HiveConfigMacrosDefine.h"
+#include "velox/connectors/common/FileConfig.h"
+#include "velox/connectors/common/FileConfigMacrosDefine.h"
 
 namespace facebook::velox::dwio::common {
 enum class FileFormat;
@@ -29,7 +29,7 @@ namespace facebook::velox::connector::hive {
 /// Hive connector configs. Extends FileConfig with Hive-specific settings
 /// for partitioning, bucketing, write-path options, GCS storage, and other
 /// Hive table format concerns.
-class HiveConfig : public FileConfig {
+class HiveConfig : public file::FileConfig {
  public:
   /// Returns all registered session-overridable properties from both
   /// FileConfig and HiveConfig.
@@ -43,9 +43,9 @@ class HiveConfig : public FileConfig {
   static std::string insertExistingPartitionsBehaviorString(
       InsertExistingPartitionsBehavior behavior);
 
-  // --- VELOX_HIVE_CONFIG_PROPERTY properties ---
+  // --- VELOX_FILE_CONFIG_PROPERTY properties ---
 
-  VELOX_HIVE_CONFIG_PROPERTY(
+  VELOX_FILE_CONFIG_PROPERTY(
       kInsertExistingPartitionsBehaviorSession,
       "insert_existing_partitions_behavior",
       std::string,
@@ -54,7 +54,7 @@ class HiveConfig : public FileConfig {
   static constexpr const char* kInsertExistingPartitionsBehavior =
       "insert-existing-partitions-behavior";
 
-  VELOX_HIVE_CONFIG_PROPERTY(
+  VELOX_FILE_CONFIG_PROPERTY(
       kSortWriterMaxOutputBytesSession,
       "sort_writer_max_output_bytes",
       std::string,
@@ -63,7 +63,7 @@ class HiveConfig : public FileConfig {
   static constexpr const char* kSortWriterMaxOutputBytes =
       "sort-writer-max-output-bytes";
 
-  VELOX_HIVE_CONFIG_PROPERTY(
+  VELOX_FILE_CONFIG_PROPERTY(
       kParquetMaxTargetFileSizeSession,
       "parquet_writer_max_target_file_size",
       std::string,
@@ -72,7 +72,7 @@ class HiveConfig : public FileConfig {
   static constexpr const char* kParquetMaxTargetFileSize =
       "hive.parquet.writer.max-target-file-size";
 
-  VELOX_HIVE_CONFIG_PROPERTY(
+  VELOX_FILE_CONFIG_PROPERTY(
       kOrcMaxTargetFileSizeSession,
       "orc_writer_max_target_file_size",
       std::string,
@@ -81,7 +81,7 @@ class HiveConfig : public FileConfig {
   static constexpr const char* kOrcMaxTargetFileSize =
       "hive.orc.writer.max-target-file-size";
 
-  VELOX_HIVE_CONFIG_PROPERTY(
+  VELOX_FILE_CONFIG_PROPERTY(
       kNimbleMaxTargetFileSizeSession,
       "nimble_writer_max_target_file_size",
       std::string,
@@ -90,7 +90,7 @@ class HiveConfig : public FileConfig {
   static constexpr const char* kNimbleMaxTargetFileSize =
       "hive.nimble.writer.max-target-file-size";
 
-  VELOX_HIVE_CONFIG_PROPERTY(
+  VELOX_FILE_CONFIG_PROPERTY(
       kAllowInt32NarrowingSession,
       "parquet_allow_int32_narrowing",
       bool,
@@ -101,7 +101,7 @@ class HiveConfig : public FileConfig {
 
   static constexpr uint64_t kDefaultParquetFooterMemoryTrackingThreshold =
       std::numeric_limits<uint64_t>::max();
-  VELOX_HIVE_CONFIG_PROPERTY(
+  VELOX_FILE_CONFIG_PROPERTY(
       kParquetFooterMemoryTrackingThresholdSession,
       "parquet_footer_memory_tracking_threshold",
       uint64_t,
@@ -112,9 +112,9 @@ class HiveConfig : public FileConfig {
   static constexpr const char* kParquetFooterMemoryTrackingThreshold =
       "hive.parquet.footer-memory-tracking-threshold";
 
-  // --- VELOX_HIVE_CONFIG properties ---
+  // --- VELOX_FILE_CONFIG properties ---
 
-  VELOX_HIVE_CONFIG(
+  VELOX_FILE_CONFIG(
       kMaxPartitionsPerWritersSession,
       maxPartitionsPerWriters,
       "max_partitions_per_writers",
@@ -124,7 +124,7 @@ class HiveConfig : public FileConfig {
   static constexpr const char* kMaxPartitionsPerWriters =
       "max-partitions-per-writers";
 
-  VELOX_HIVE_CONFIG(
+  VELOX_FILE_CONFIG(
       kAllowNullPartitionKeysSession,
       allowNullPartitionKeys,
       "allow_null_partition_keys",
@@ -134,7 +134,7 @@ class HiveConfig : public FileConfig {
   static constexpr const char* kAllowNullPartitionKeys =
       "allow-null-partition-keys";
 
-  VELOX_HIVE_CONFIG_PROPERTY(
+  VELOX_FILE_CONFIG_PROPERTY(
       kPartitionPathAsLowerCaseSession,
       "partition_path_as_lower_case",
       bool,
@@ -146,7 +146,7 @@ class HiveConfig : public FileConfig {
         kPartitionPathAsLowerCaseSessionProperty::defaultValue);
   }
 
-  VELOX_HIVE_CONFIG(
+  VELOX_FILE_CONFIG(
       kSortWriterMaxOutputRowsSession,
       sortWriterMaxOutputRows,
       "sort_writer_max_output_rows",
@@ -156,7 +156,7 @@ class HiveConfig : public FileConfig {
   static constexpr const char* kSortWriterMaxOutputRows =
       "sort-writer-max-output-rows";
 
-  VELOX_HIVE_CONFIG(
+  VELOX_FILE_CONFIG(
       kSortWriterFinishTimeSliceLimitMsSession,
       sortWriterFinishTimeSliceLimitMs,
       "sort_writer_finish_time_slice_limit_ms",
@@ -166,9 +166,9 @@ class HiveConfig : public FileConfig {
   static constexpr const char* kSortWriterFinishTimeSliceLimitMs =
       "sort-writer-finish-time-slice-limit-ms";
 
-  VELOX_HIVE_CONFIG(kUser, user, "user", std::string, "", "User of the query.")
+  VELOX_FILE_CONFIG(kUser, user, "user", std::string, "", "User of the query.")
 
-  VELOX_HIVE_CONFIG(
+  VELOX_FILE_CONFIG(
       kSource,
       source,
       "source",
@@ -176,7 +176,7 @@ class HiveConfig : public FileConfig {
       "",
       "Source of the query.")
 
-  VELOX_HIVE_CONFIG(
+  VELOX_FILE_CONFIG(
       kSchema,
       schema,
       "schema",
@@ -184,9 +184,9 @@ class HiveConfig : public FileConfig {
       "",
       "Schema of the query.")
 
-  // --- VELOX_HIVE_CONFIG_LEGACY properties ---
+  // --- VELOX_FILE_CONFIG_LEGACY properties ---
 
-  VELOX_HIVE_CONFIG_LEGACY(
+  VELOX_FILE_CONFIG_LEGACY(
       kMaxBucketCountSession,
       kMaxBucketCount,
       maxBucketCount,
@@ -196,7 +196,7 @@ class HiveConfig : public FileConfig {
       100'000,
       "Maximum bucket count.")
 
-  VELOX_HIVE_CONFIG_LEGACY(
+  VELOX_FILE_CONFIG_LEGACY(
       kMaxRowsPerIndexRequestSession,
       kMaxRowsPerIndexRequest,
       maxRowsPerIndexRequest,
@@ -226,19 +226,6 @@ class HiveConfig : public FileConfig {
   static constexpr const char* kGcsAuthAccessTokenProvider =
       "gcs.auth.access-token-provider";
 
-  /// Maximum number of entries in the file handle cache.
-  static constexpr const char* kNumCacheFileHandles = "num_cached_file_handles";
-
-  /// Expiration time in ms for a file handle in the cache. A value of 0
-  /// means cache will not evict the handle after kFileHandleExprationDurationMs
-  /// has passed.
-  static constexpr const char* kFileHandleExpirationDurationMs =
-      "file-handle-expiration-duration-ms";
-
-  /// Enable file handle cache.
-  static constexpr const char* kEnableFileHandleCache =
-      "file-handle-cache-enabled";
-
   /// Config used to create write files. This config is provided to underlying
   /// file system through hive connector and data sink. The config is free form.
   /// The form should be defined by the underlying file system.
@@ -260,12 +247,6 @@ class HiveConfig : public FileConfig {
 
   std::optional<std::string> gcsAuthAccessTokenProvider() const;
 
-  int32_t numCacheFileHandles() const;
-
-  uint64_t fileHandleExpirationDurationMs() const;
-
-  bool isFileHandleCacheEnabled() const;
-
   uint64_t fileWriterFlushThresholdBytes() const;
 
   std::string writeFileCreateConfig() const;
@@ -280,11 +261,11 @@ class HiveConfig : public FileConfig {
   static constexpr std::string_view kConnectorName = "hive";
 
   explicit HiveConfig(std::shared_ptr<const config::ConfigBase> config)
-      : FileConfig(
+      : file::FileConfig(
             std::move(config),
             makeConnectorConfigPrefix(kConnectorName)) {}
 };
 
 } // namespace facebook::velox::connector::hive
 
-#include "velox/connectors/hive/HiveConfigMacrosUndef.h"
+#include "velox/connectors/common/FileConfigMacrosUndef.h"

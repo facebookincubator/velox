@@ -23,7 +23,7 @@
 #include "velox/common/caching/CacheTTLController.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/common/time/Timer.h"
-#include "velox/connectors/hive/BufferedInputBuilder.h"
+#include "velox/connectors/common/BufferedInputBuilder.h"
 #include "velox/connectors/hive/FileHandle.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
@@ -668,7 +668,7 @@ void CudfSplitReader::setupCudfDataSource() {
   }
 
   auto bufferedInput =
-      velox::connector::hive::BufferedInputBuilder::getInstance()->create(
+      velox::connector::file::BufferedInputBuilder::getInstance()->create(
           *fileHandleCachePtr,
           baseReaderOpts_,
           connectorQueryCtx_,

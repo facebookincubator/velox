@@ -68,7 +68,7 @@ class IcebergDataSource : public HiveDataSource {
  protected:
   /// Creates an IcebergSplitReader (regular) or IcebergChangelogSplitReader
   /// (changelog) depending on the table handle's isChangelogQuery() flag.
-  std::unique_ptr<FileSplitReader> createSplitReader() override;
+  std::unique_ptr<file::FileSplitReader> createSplitReader() override;
 
  private:
   /// Column handles for the output columns as passed to the constructor.

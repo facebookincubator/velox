@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "velox/connectors/hive/FileDataSource.h"
+#include "velox/connectors/common/FileDataSource.h"
 
 #include <functional>
 #include <utility>
@@ -31,7 +31,7 @@ class InspectableDataSource : public DataSourceType {
   using DataSourceType::DataSourceType;
   using DataSourceType::remainingFilterExprSet;
 
-  FileScanState* scanState() const {
+  file::FileScanState* scanState() const {
     return this->fileScanState_.get();
   }
 
@@ -45,13 +45,13 @@ class InspectableDataSource : public DataSourceType {
 };
 
 using InspectableHiveDataSource = InspectableDataSource<HiveDataSource>;
-using InspectableFileDataSource = InspectableDataSource<FileDataSource>;
+using InspectableFileDataSource = InspectableDataSource<file::FileDataSource>;
 
-class BorrowingFileSplitReader : public FileSplitReader {
+class BorrowingFileSplitReader : public file::FileSplitReader {
  public:
   template <typename... Args>
   explicit BorrowingFileSplitReader(Args&&... args)
-      : FileSplitReader(std::forward<Args>(args)...) {}
+      : file::FileSplitReader(std::forward<Args>(args)...) {}
 
   BorrowingFileSplitReader(const BorrowingFileSplitReader&) = delete;
   BorrowingFileSplitReader& operator=(const BorrowingFileSplitReader&) = delete;
@@ -76,7 +76,7 @@ class BorrowingFileDataSource : public InspectableFileDataSource {
   }
 
  private:
-  std::unique_ptr<FileSplitReader> createSplitReader() override {
+  std::unique_ptr<file::FileSplitReader> createSplitReader() override {
     return std::make_unique<BorrowingFileSplitReader>(
         split_,
         tableHandle_,
@@ -191,7 +191,7 @@ class FileDataSourceTest : public exec::test::HiveConnectorTestBase {
   const std::shared_ptr<config::ConfigBase> config_ =
       std::make_shared<config::ConfigBase>(
           std::unordered_map<std::string, std::string>{
-              {FileConfig::kUseColumnNamesSession, "true"}});
+              {file::FileConfig::kUseColumnNamesSession, "true"}});
   const std::shared_ptr<HiveConfig> hiveConfig_ =
       std::make_shared<HiveConfig>(config_);
   FileHandleFactory fileFactory_{
@@ -476,9 +476,9 @@ TEST_F(FileDataSourceTest, extractionProducedTypeStaysInState) {
            BIGINT(),
            nested->type(),
            std::vector<common::Subfield>{},
-           std::vector<NamedExtraction>{
+           std::vector<file::NamedExtraction>{
                {"value",
-                {ExtractionPathElement::structField("x")},
+                {file::ExtractionPathElement::structField("x")},
                 BIGINT()}})}};
   auto source = makeSource(
       outputType, makeTableHandle({}, nullptr, "test", schema), assignments);

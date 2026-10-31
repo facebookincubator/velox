@@ -14,12 +14,12 @@
  * limitations under the License.
  */
 
-#include "velox/connectors/hive/FileColumnHandle.h"
+#include "velox/connectors/common/FileColumnHandle.h"
 #include <fmt/format.h>
 #include <gtest/gtest.h>
 #include "velox/common/base/tests/GTestUtils.h"
 
-using namespace facebook::velox::connector::hive;
+using facebook::velox::connector::file::FileColumnHandle;
 
 TEST(FileColumnHandleTest, columnTypeName) {
   EXPECT_EQ(

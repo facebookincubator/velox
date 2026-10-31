@@ -97,7 +97,7 @@ class IcebergInsertTest : public test::IcebergTestBase {
       columnHandles.push_back(
           std::make_shared<const IcebergColumnHandle>(
               name,
-              FileColumnHandle::ColumnType::kRegular,
+              file::FileColumnHandle::ColumnType::kRegular,
               type,
               field,
               /*requiredSubfields=*/std::vector<common::Subfield>{},
@@ -753,13 +753,13 @@ TEST_F(IcebergInsertTest, writeDefaultPartitionedTable) {
   columnHandles.push_back(
       std::make_shared<const IcebergColumnHandle>(
           "id",
-          FileColumnHandle::ColumnType::kPartitionKey,
+          file::FileColumnHandle::ColumnType::kPartitionKey,
           BIGINT(),
           parquet::ParquetFieldId{1, {}}));
   columnHandles.push_back(
       std::make_shared<const IcebergColumnHandle>(
           "country",
-          FileColumnHandle::ColumnType::kRegular,
+          file::FileColumnHandle::ColumnType::kRegular,
           VARCHAR(),
           parquet::ParquetFieldId{2, {}},
           /*requiredSubfields=*/std::vector<common::Subfield>{},
@@ -880,7 +880,7 @@ TEST_F(IcebergInsertTest, writeDefaultMixedCaseColumnName) {
 TEST_F(IcebergInsertTest, columnHandleToStringIncludesWriteDefault) {
   auto col = std::make_shared<IcebergColumnHandle>(
       "country",
-      FileColumnHandle::ColumnType::kRegular,
+      file::FileColumnHandle::ColumnType::kRegular,
       VARCHAR(),
       parquet::ParquetFieldId{3, {}},
       /*requiredSubfields=*/std::vector<common::Subfield>{},
@@ -904,7 +904,7 @@ TEST_F(IcebergInsertTest, writeDefaultOnPartitionColumn) {
   columnHandles.push_back(
       std::make_shared<const IcebergColumnHandle>(
           "region",
-          FileColumnHandle::ColumnType::kPartitionKey,
+          file::FileColumnHandle::ColumnType::kPartitionKey,
           VARCHAR(),
           parquet::ParquetFieldId{1, {}},
           /*requiredSubfields=*/std::vector<common::Subfield>{},
@@ -915,7 +915,7 @@ TEST_F(IcebergInsertTest, writeDefaultOnPartitionColumn) {
   columnHandles.push_back(
       std::make_shared<const IcebergColumnHandle>(
           "value",
-          FileColumnHandle::ColumnType::kRegular,
+          file::FileColumnHandle::ColumnType::kRegular,
           BIGINT(),
           parquet::ParquetFieldId{2, {}}));
 

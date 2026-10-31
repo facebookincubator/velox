@@ -16,7 +16,7 @@
 
 #include "velox/connectors/hive/HiveSplitReader.h"
 
-#include "velox/connectors/hive/FileConfig.h"
+#include "velox/connectors/common/FileConfig.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/HiveConnectorUtil.h"
 
@@ -24,10 +24,11 @@ namespace facebook::velox::connector::hive {
 
 HiveSplitReader::HiveSplitReader(
     const std::shared_ptr<const HiveConnectorSplit>& hiveSplit,
-    const FileTableHandlePtr& tableHandle,
-    const std::unordered_map<std::string, FileColumnHandlePtr>* partitionKeys,
+    const file::FileTableHandlePtr& tableHandle,
+    const std::unordered_map<std::string, file::FileColumnHandlePtr>*
+        partitionKeys,
     const ConnectorQueryCtx* connectorQueryCtx,
-    const std::shared_ptr<const FileConfig>& fileConfig,
+    const std::shared_ptr<const file::FileConfig>& fileConfig,
     const RowTypePtr& readerOutputType,
     const std::shared_ptr<io::IoStatistics>& dataIoStats,
     const std::shared_ptr<io::IoStatistics>& metadataIoStats,
@@ -35,10 +36,11 @@ HiveSplitReader::HiveSplitReader(
     FileHandleFactory* fileHandleFactory,
     folly::Executor* ioExecutor,
     const std::shared_ptr<common::ScanSpec>& scanSpec,
-    const std::unordered_map<std::string, FileColumnHandlePtr>* infoColumns,
+    const std::unordered_map<std::string, file::FileColumnHandlePtr>*
+        infoColumns,
     std::vector<column_index_t> bucketChannels,
     const common::SubfieldFilters* subfieldFiltersForValidation)
-    : FileSplitReader(
+    : file::FileSplitReader(
           hiveSplit,
           tableHandle,
           partitionKeys,
@@ -67,7 +69,7 @@ void HiveSplitReader::prepareSplit(
     dwio::common::RuntimeStats& runtimeStats,
     const folly::F14FastMap<std::string, std::string>& fileReadOps) {
   validateSynthesizedColumnFilters();
-  FileSplitReader::prepareSplit(
+  file::FileSplitReader::prepareSplit(
       std::move(metadataFilter), runtimeStats, fileReadOps);
 }
 
@@ -131,7 +133,7 @@ std::vector<TypePtr> HiveSplitReader::adaptColumns(
       auto iter = hiveSplit_->infoColumns.find(fieldName);
       auto infoColumnType =
           readerOutputType_->childAt(readerOutputType_->getChildIdx(fieldName));
-      auto constant = newConstantFromString(
+      auto constant = file::newConstantFromString(
           infoColumnType,
           iter->second,
           connectorQueryCtx_->memoryPool(),
@@ -240,7 +242,7 @@ void HiveSplitReader::applyBucketConversion(
 }
 
 uint64_t HiveSplitReader::next(uint64_t size, VectorPtr& output) {
-  auto numScanned = FileSplitReader::next(size, output);
+  auto numScanned = file::FileSplitReader::next(size, output);
   if (numScanned > 0 && output->size() > 0 && partitionFunction_) {
     applyBucketConversion(
         output, bucketConversionRows(*output->asChecked<RowVector>()));

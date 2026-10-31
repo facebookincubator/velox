@@ -43,10 +43,11 @@ std::string_view operationName(ChangelogOperation operation) {
 
 IcebergChangelogSplitReader::IcebergChangelogSplitReader(
     const std::shared_ptr<const HiveIcebergSplit>& icebergSplit,
-    const FileTableHandlePtr& tableHandle,
-    const std::unordered_map<std::string, FileColumnHandlePtr>* partitionKeys,
+    const file::FileTableHandlePtr& tableHandle,
+    const std::unordered_map<std::string, file::FileColumnHandlePtr>*
+        partitionKeys,
     const ConnectorQueryCtx* connectorQueryCtx,
-    const std::shared_ptr<const FileConfig>& fileConfig,
+    const std::shared_ptr<const file::FileConfig>& fileConfig,
     const ChangelogScanContext& scanContext,
     const std::shared_ptr<io::IoStatistics>& dataIoStats,
     const std::shared_ptr<io::IoStatistics>& metadataIoStats,
@@ -230,7 +231,7 @@ uint64_t IcebergChangelogSplitReader::next(uint64_t size, VectorPtr& output) {
     // output and physical names.
     auto it = changelogColumnHandles_.find(outputColName);
     const auto& fieldName = (it != changelogColumnHandles_.end())
-        ? static_cast<const FileColumnHandle*>(it->second.get())->name()
+        ? static_cast<const file::FileColumnHandle*>(it->second.get())->name()
         : outputColName;
 
     changelogColumns.push_back(

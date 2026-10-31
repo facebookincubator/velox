@@ -20,7 +20,7 @@
 #include <memory>
 
 #include "velox/connectors/Connector.h"
-#include "velox/connectors/hive/FileConfig.h"
+#include "velox/connectors/common/FileConfig.h"
 #include "velox/connectors/hive/FileHandle.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
@@ -75,7 +75,7 @@ class PositionalDeleteFileReader {
       FileHandleFactory* fileHandleFactory,
       const ConnectorQueryCtx* connectorQueryCtx,
       folly::Executor* executor,
-      const std::shared_ptr<const FileConfig>& fileConfig,
+      const std::shared_ptr<const file::FileConfig>& fileConfig,
       const std::shared_ptr<io::IoStatistics>& ioStatistics,
       const std::shared_ptr<IoStats>& ioStats,
       dwio::common::RuntimeStats& runtimeStats,
@@ -125,7 +125,7 @@ class PositionalDeleteFileReader {
   FileHandleFactory* const fileHandleFactory_;
   folly::Executor* const executor_;
   const ConnectorQueryCtx* const connectorQueryCtx_;
-  const std::shared_ptr<const FileConfig> fileConfig_;
+  const std::shared_ptr<const file::FileConfig> fileConfig_;
   const std::shared_ptr<io::IoStatistics> ioStatistics_;
   const std::shared_ptr<IoStats> ioStats_;
   memory::MemoryPool* const pool_;

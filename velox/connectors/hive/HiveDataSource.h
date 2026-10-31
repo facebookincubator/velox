@@ -15,14 +15,14 @@
  */
 #pragma once
 
-#include "velox/connectors/hive/FileDataSource.h"
+#include "velox/connectors/common/FileDataSource.h"
 #include "velox/connectors/hive/TableHandle.h"
 
 namespace facebook::velox::connector::hive {
 
 class HiveConfig;
 
-class HiveDataSource : public FileDataSource {
+class HiveDataSource : public file::FileDataSource {
  public:
   static constexpr std::string_view kNumBucketConversion{"numBucketConversion"};
   static constexpr std::string_view kFileFormat{"fileFormat."};
@@ -47,7 +47,8 @@ class HiveDataSource : public FileDataSource {
           const HiveTableHandlePtr& hiveTableHandle,
           const std::shared_ptr<common::ScanSpec>& scanSpec,
           const RowTypePtr& readerOutputType,
-          std::unordered_map<std::string, FileColumnHandlePtr>* partitionKeys,
+          std::unordered_map<std::string, file::FileColumnHandlePtr>*
+              partitionKeys,
           FileHandleFactory* fileHandleFactory,
           folly::Executor* executor,
           const ConnectorQueryCtx* connectorQueryCtx,
@@ -61,7 +62,7 @@ class HiveDataSource : public FileDataSource {
   static void registerWaveDelegateHook(WaveDelegateHookFunction hook);
 
  protected:
-  std::unique_ptr<FileSplitReader> createSplitReader() override;
+  std::unique_ptr<file::FileSplitReader> createSplitReader() override;
 
   /// Pre-creation setup: stats tracking, bucket conversion, rowId.
   /// Returns bucket channels (empty if none).

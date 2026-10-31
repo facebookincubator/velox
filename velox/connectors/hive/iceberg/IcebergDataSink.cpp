@@ -31,7 +31,7 @@
 #include "velox/common/encode/Base64.h"
 #include "velox/common/memory/MemoryArbitrator.h"
 #include "velox/common/testutil/TestValue.h"
-#include "velox/connectors/hive/FileSplitReader.h"
+#include "velox/connectors/common/FileSplitReader.h"
 #include "velox/connectors/hive/PartitionIdGenerator.h"
 #include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
 #include "velox/connectors/hive/iceberg/IcebergFieldId.h"
@@ -417,7 +417,7 @@ IcebergDataSink::IcebergDataSink(
     if (writeDefaultValue.has_value() && isOmittedColumn) {
       writeDefaultColumns_.push_back(
           {static_cast<column_index_t>(i),
-           newConstantFromString(
+           file::newConstantFromString(
                inputType_->childAt(i),
                writeDefaultValue.value(),
                connectorQueryCtx_->memoryPool(),

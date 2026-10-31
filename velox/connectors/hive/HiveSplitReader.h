@@ -15,7 +15,7 @@
  */
 #pragma once
 
-#include "velox/connectors/hive/FileSplitReader.h"
+#include "velox/connectors/common/FileSplitReader.h"
 #include "velox/connectors/hive/HivePartitionFunction.h"
 
 namespace facebook::velox::connector::hive {
@@ -28,14 +28,15 @@ struct HiveConnectorSplit;
 /// old partitions still use the original bucket count. In that case, a single
 /// file may contain rows for multiple new buckets, and the reader must filter
 /// to keep only rows belonging to the target bucket.
-class HiveSplitReader : public FileSplitReader {
+class HiveSplitReader : public file::FileSplitReader {
  public:
   HiveSplitReader(
       const std::shared_ptr<const HiveConnectorSplit>& hiveSplit,
-      const FileTableHandlePtr& tableHandle,
-      const std::unordered_map<std::string, FileColumnHandlePtr>* partitionKeys,
+      const file::FileTableHandlePtr& tableHandle,
+      const std::unordered_map<std::string, file::FileColumnHandlePtr>*
+          partitionKeys,
       const ConnectorQueryCtx* connectorQueryCtx,
-      const std::shared_ptr<const FileConfig>& fileConfig,
+      const std::shared_ptr<const file::FileConfig>& fileConfig,
       const RowTypePtr& readerOutputType,
       const std::shared_ptr<io::IoStatistics>& dataIoStats,
       const std::shared_ptr<io::IoStatistics>& metadataIoStats,
@@ -43,7 +44,8 @@ class HiveSplitReader : public FileSplitReader {
       FileHandleFactory* fileHandleFactory,
       folly::Executor* ioExecutor,
       const std::shared_ptr<common::ScanSpec>& scanSpec,
-      const std::unordered_map<std::string, FileColumnHandlePtr>* infoColumns,
+      const std::unordered_map<std::string, file::FileColumnHandlePtr>*
+          infoColumns,
       std::vector<column_index_t> bucketChannels = {},
       const common::SubfieldFilters* subfieldFiltersForValidation = nullptr);
 
@@ -84,8 +86,8 @@ class HiveSplitReader : public FileSplitReader {
       const RowTypePtr& fileType,
       const RowTypePtr& tableSchema) const override;
 
-  const std::unordered_map<std::string, FileColumnHandlePtr>* infoColumns_{
-      nullptr};
+  const std::unordered_map<std::string, file::FileColumnHandlePtr>*
+      infoColumns_{nullptr};
   folly::F14FastSet<column_index_t> bucketChannels_;
   std::unique_ptr<HivePartitionFunction> partitionFunction_;
   std::vector<uint32_t> partitions_;

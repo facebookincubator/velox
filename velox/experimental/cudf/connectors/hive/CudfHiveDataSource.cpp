@@ -30,13 +30,13 @@
 #include "velox/common/Casts.h"
 #include "velox/common/io/IoStatisticsRuntimeStats.h"
 #include "velox/common/time/Timer.h"
-#include "velox/connectors/hive/FileColumnHandle.h"
+#include "velox/connectors/common/FileColumnHandle.h"
+#include "velox/connectors/common/FileSplitReader.h"
+#include "velox/connectors/common/PartitionValue.h"
 #include "velox/connectors/hive/FileHandle.h"
-#include "velox/connectors/hive/FileSplitReader.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/HiveConnectorUtil.h"
-#include "velox/connectors/hive/PartitionValue.h"
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/core/Expressions.h"
 #include "velox/core/QueryCtx.h"
@@ -225,13 +225,19 @@ bool testPartitionKeyFilter(
   }
   return common::applyFilter(
       filter,
-      PartitionValue::fromString(
+      facebook::velox::connector::file::PartitionValue::fromString(
           *value,
           *type,
-          timestampValueAsLocalTime ? PartitionValue::TimestampMode::kLocalTime
-                                    : PartitionValue::TimestampMode::kUtc,
-          dateValueDaysSinceEpoch ? PartitionValue::DateMode::kDaysSinceEpoch
-                                  : PartitionValue::DateMode::kIsoString));
+          timestampValueAsLocalTime
+              ? facebook::velox::connector::file::PartitionValue::
+                    TimestampMode::kLocalTime
+              : facebook::velox::connector::file::PartitionValue::
+                    TimestampMode::kUtc,
+          dateValueDaysSinceEpoch
+              ? facebook::velox::connector::file::PartitionValue::DateMode::
+                    kDaysSinceEpoch
+              : facebook::velox::connector::file::PartitionValue::DateMode::
+                    kIsoString));
 }
 
 } // namespace
@@ -282,10 +288,15 @@ CudfHiveDataSource::CudfHiveDataSource(
 
   // Column handles by table column name, including those of the columns only
   // the filters read.
-  std::unordered_map<std::string, const FileColumnHandle*> columnHandlesByName;
+  std::unordered_map<
+      std::string,
+      const facebook::velox::connector::file::FileColumnHandle*>
+      columnHandlesByName;
   for (const auto& [_, handle] : columnHandles) {
     const auto* fileColumnHandle =
-        checkedPointerCast<const FileColumnHandle>(handle).get();
+        checkedPointerCast<
+            const facebook::velox::connector::file::FileColumnHandle>(handle)
+            .get();
     columnHandlesByName.emplace(fileColumnHandle->name(), fileColumnHandle);
   }
   for (const auto& handle : tableHandle_->hiveFilterColumnHandles()) {
@@ -293,8 +304,8 @@ CudfHiveDataSource::CudfHiveDataSource(
   }
 
   // Returns the handle of a partition key the data source resolves, or null.
-  const auto partitionKeyHandle =
-      [&](const std::string& name) -> const FileColumnHandle* {
+  const auto partitionKeyHandle = [&](const std::string& name)
+      -> const facebook::velox::connector::file::FileColumnHandle* {
     if (partitionKeySource_ != PartitionKeySource::kDataSource) {
       return nullptr;
     }
@@ -303,17 +314,19 @@ CudfHiveDataSource::CudfHiveDataSource(
         ? it->second
         : nullptr;
   };
-  const auto addPartitionKey = [&](const std::string& name,
-                                   const TypePtr& type,
-                                   const FileColumnHandle& handle) {
-    if (partitionKeys_
-            .emplace(
-                name,
-                PartitionKey{type, handle.isPartitionDateValueDaysSinceEpoch()})
-            .second) {
-      columnTypes_.emplace(name, type);
-    }
-  };
+  const auto addPartitionKey =
+      [&](const std::string& name,
+          const TypePtr& type,
+          const facebook::velox::connector::file::FileColumnHandle& handle) {
+        if (partitionKeys_
+                .emplace(
+                    name,
+                    PartitionKey{
+                        type, handle.isPartitionDateValueDaysSinceEpoch()})
+                .second) {
+          columnTypes_.emplace(name, type);
+        }
+      };
   const auto materializePartitionKey = [&](const std::string& name) {
     if (std::find(partitionKeyNames_.begin(), partitionKeyNames_.end(), name) ==
         partitionKeyNames_.end()) {
@@ -354,7 +367,7 @@ CudfHiveDataSource::CudfHiveDataSource(
   // complex expressions and adds them to subfieldFilters_ for pushdown.
   double sampleRate = tableHandle_->sampleRate();
   auto remainingFilter =
-      facebook::velox::connector::hive::extractFiltersFromRemainingFilter(
+      facebook::velox::connector::file::extractFiltersFromRemainingFilter(
           tableHandle_->remainingFilter(),
           expressionEvaluator_,
           subfieldFilters_,
@@ -930,12 +943,13 @@ CudfHiveDataSource::makePartitionKeyScalars(cuda::stream_ref stream) const {
   scalars.reserve(partitionKeyNames_.size());
   for (const auto& name : partitionKeyNames_) {
     const auto& partitionKey = partitionKeys_.at(name);
-    const auto constant = newConstantFromString(
-        partitionKey.type,
-        partitionKeyValue(name),
-        pool_,
-        timestampValueAsLocalTime,
-        partitionKey.dateValueDaysSinceEpoch);
+    const auto constant =
+        facebook::velox::connector::file::newConstantFromString(
+            partitionKey.type,
+            partitionKeyValue(name),
+            pool_,
+            timestampValueAsLocalTime,
+            partitionKey.dateValueDaysSinceEpoch);
     scalars.push_back(makeScalarFromConstantExpr(
         std::make_shared<core::ConstantTypedExpr>(constant),
         pool_,

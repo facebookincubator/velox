@@ -17,7 +17,7 @@
 #include "velox/experimental/cudf/connectors/hive/iceberg/CudfIcebergFilterTransform.h"
 
 #include "velox/common/base/Exceptions.h"
-#include "velox/connectors/hive/PartitionValue.h"
+#include "velox/connectors/common/PartitionValue.h"
 
 #include <cudf/ast/detail/expression_transformer.hpp>
 #include <cudf/utilities/traits.hpp>
@@ -422,15 +422,20 @@ ConstantFilterFold foldFilterOnConstant(
   }
 
   namespace velox_hive = ::facebook::velox::connector::hive;
-  const auto typedValue = velox_hive::PartitionValue::fromString(
-      value.value(),
-      *type,
-      readTimestampAsLocalTime
-          ? velox_hive::PartitionValue::TimestampMode::kLocalTime
-          : velox_hive::PartitionValue::TimestampMode::kUtc,
-      isDaysSinceEpoch(type, value)
-          ? velox_hive::PartitionValue::DateMode::kDaysSinceEpoch
-          : velox_hive::PartitionValue::DateMode::kIsoString);
+  const auto typedValue =
+      facebook::velox::connector::file::PartitionValue::fromString(
+          value.value(),
+          *type,
+          readTimestampAsLocalTime
+              ? facebook::velox::connector::file::PartitionValue::
+                    TimestampMode::kLocalTime
+              : facebook::velox::connector::file::PartitionValue::
+                    TimestampMode::kUtc,
+          isDaysSinceEpoch(type, value)
+              ? facebook::velox::connector::file::PartitionValue::DateMode::
+                    kDaysSinceEpoch
+              : facebook::velox::connector::file::PartitionValue::DateMode::
+                    kIsoString);
 
   return common::applyFilter(filter, typedValue)
       ? ConstantFilterFold::kAlwaysTrue

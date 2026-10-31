@@ -18,8 +18,8 @@
 #include <gtest/gtest.h>
 #include "velox/common/io/IoStatistics.h"
 #include "velox/connectors/ConnectorRegistry.h"
-#include "velox/connectors/hive/FileConfig.h"
-#include "velox/connectors/hive/FileConnectorUtil.h"
+#include "velox/connectors/common/FileConfig.h"
+#include "velox/connectors/common/FileConnectorUtil.h"
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
 #include "velox/connectors/hive/iceberg/IcebergSplit.h"
@@ -86,11 +86,12 @@ TEST_F(IcebergConnectorTest, splitColumnMappingMode) {
 }
 
 TEST_F(IcebergConnectorTest, splitMappingOverridesSession) {
-  auto fileConfig = std::make_shared<FileConfig>(
+  auto fileConfig = std::make_shared<file::FileConfig>(
       std::make_shared<config::ConfigBase>(
           std::unordered_map<std::string, std::string>{}),
       "hive.");
-  setConnectorSessionProperty(FileConfig::kUseColumnNamesSession, "false");
+  setConnectorSessionProperty(
+      file::FileConfig::kUseColumnNamesSession, "false");
   auto split = IcebergSplitBuilder("/tmp/testfile")
                    .connectorId(test::kIcebergConnectorId)
                    .fileFormat(dwio::common::FileFormat::PARQUET)
@@ -150,10 +151,10 @@ TEST_F(IcebergConnectorTest, columnHandlePartitionMetadata) {
   IcebergColumnHandle::registerSerDe();
   const IcebergColumnHandle column(
       "day",
-      FileColumnHandle::ColumnType::kPartitionKey,
+      file::FileColumnHandle::ColumnType::kPartitionKey,
       DATE(),
       parquet::ParquetFieldId{7, {}});
-  const FileColumnHandle& fileColumn = column;
+  const file::FileColumnHandle& fileColumn = column;
   EXPECT_EQ(fileColumn.name(), "day");
   EXPECT_EQ(fileColumn.schemaType(), DATE());
   EXPECT_EQ(fileColumn.dataType(), DATE());

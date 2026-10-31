@@ -236,7 +236,9 @@ TEST_F(ParquetSchemaEvolutionTest, schemaMatchWithComplexTypes) {
     const auto result =
         AssertQueryBuilder(plan)
             .connectorSessionProperty(
-                kHiveConnectorId, FileConfig::kUseColumnNamesSession, "true")
+                kHiveConnectorId,
+                connector::file::FileConfig::kUseColumnNamesSession,
+                "true")
             .split(makeSplit(filePath))
             .copyResults(pool());
     assertEqualVectors(expected, result);
@@ -289,7 +291,9 @@ TEST_F(ParquetSchemaEvolutionTest, schemaMatch) {
     const auto result =
         AssertQueryBuilder(plan)
             .connectorSessionProperty(
-                kHiveConnectorId, FileConfig::kUseColumnNamesSession, "true")
+                kHiveConnectorId,
+                connector::file::FileConfig::kUseColumnNamesSession,
+                "true")
             .split(makeSplit(filePath))
             .copyResults(pool());
     assertEqualVectors(expected, result);
@@ -358,7 +362,9 @@ TEST_F(ParquetSchemaEvolutionTest, schemaMatch) {
     const auto result =
         AssertQueryBuilder(plan)
             .connectorSessionProperty(
-                kHiveConnectorId, FileConfig::kUseColumnNamesSession, "true")
+                kHiveConnectorId,
+                connector::file::FileConfig::kUseColumnNamesSession,
+                "true")
             .split(makeSplit(filePath))
             .copyResults(pool());
     assertEqualVectors(expected, result);

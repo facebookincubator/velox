@@ -23,7 +23,7 @@
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
 
 #include "velox/common/base/Exceptions.h"
-#include "velox/connectors/hive/BufferedInputBuilder.h"
+#include "velox/connectors/common/BufferedInputBuilder.h"
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/connectors/hive/HiveConnectorUtil.h"
 #include "velox/connectors/hive/TableHandle.h"
@@ -100,13 +100,14 @@ CudfEqualityDeleteFileReader::CudfEqualityDeleteFileReader(
       .tokenProvider = connectorQueryCtx->fsTokenProvider()};
   auto deleteFileHandleCachePtr = fileHandleFactory->generate(fileHandleKey);
   auto deleteFileInput =
-      velox_hive::BufferedInputBuilder::getInstance()->create(
-          *deleteFileHandleCachePtr,
-          deleteReaderOpts,
-          connectorQueryCtx,
-          ioStatistics,
-          ioStats,
-          executor);
+      facebook::velox::connector::file::BufferedInputBuilder::getInstance()
+          ->create(
+              *deleteFileHandleCachePtr,
+              deleteReaderOpts,
+              connectorQueryCtx,
+              ioStatistics,
+              ioStats,
+              executor);
 
   // Directly read the Parquet-format equality delete file to the
   // deleteKeyTable_ using cuDF
@@ -123,7 +124,7 @@ CudfEqualityDeleteFileReader::CudfEqualityDeleteFileReader(
       dwio::common::getReaderFactory(deleteReaderOpts.fileFormat())
           ->createReader(std::move(deleteFileInput), deleteReaderOpts);
 
-  if (!velox_hive::testFilters(
+  if (!facebook::velox::connector::file::testFilters(
           scanSpec.get(),
           deleteReader.get(),
           deleteSplit->filePath,

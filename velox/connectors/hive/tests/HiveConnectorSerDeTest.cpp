@@ -180,11 +180,11 @@ TEST_F(HiveConnectorSerDeTest, hiveColumnHandle) {
   });
 
   auto columnHandleTypes = {
-      FileColumnHandle::ColumnType::kPartitionKey,
-      FileColumnHandle::ColumnType::kRegular,
-      FileColumnHandle::ColumnType::kSynthesized,
-      FileColumnHandle::ColumnType::kRowIndex,
-      FileColumnHandle::ColumnType::kRowId,
+      file::FileColumnHandle::ColumnType::kPartitionKey,
+      file::FileColumnHandle::ColumnType::kRegular,
+      file::FileColumnHandle::ColumnType::kSynthesized,
+      file::FileColumnHandle::ColumnType::kRowIndex,
+      file::FileColumnHandle::ColumnType::kRowId,
   };
 
   for (auto columnHandleType : columnHandleTypes) {

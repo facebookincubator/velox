@@ -825,11 +825,11 @@ connector::ColumnHandleMap WriterFuzzer::getTableColumnHandles(
     const int32_t bucketCount) {
   connector::ColumnHandleMap columnHandle;
   for (int i = 0; i < names.size(); ++i) {
-    FileColumnHandle::ColumnType columnType;
+    connector::file::FileColumnHandle::ColumnType columnType;
     if (i < partitionOffset) {
-      columnType = FileColumnHandle::ColumnType::kRegular;
+      columnType = connector::file::FileColumnHandle::ColumnType::kRegular;
     } else {
-      columnType = FileColumnHandle::ColumnType::kPartitionKey;
+      columnType = connector::file::FileColumnHandle::ColumnType::kPartitionKey;
     }
     columnHandle.insert(
         {names.at(i),
@@ -842,7 +842,7 @@ connector::ColumnHandleMap WriterFuzzer::getTableColumnHandles(
         {"$bucket",
          std::make_shared<HiveColumnHandle>(
              "$bucket",
-             FileColumnHandle::ColumnType::kSynthesized,
+             connector::file::FileColumnHandle::ColumnType::kSynthesized,
              INTEGER(),
              INTEGER())});
   }

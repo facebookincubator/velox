@@ -19,7 +19,7 @@
 #include <folly/container/F14Set.h>
 
 #include "velox/connectors/Connector.h"
-#include "velox/connectors/hive/FileSplitReader.h"
+#include "velox/connectors/common/FileSplitReader.h"
 #include "velox/connectors/hive/iceberg/DeletionVectorReader.h"
 #include "velox/connectors/hive/iceberg/EqualityDeleteFileReader.h"
 #include "velox/connectors/hive/iceberg/PositionalDeleteFileReader.h"
@@ -42,14 +42,15 @@ struct IcebergScanSpecState {
   folly::F14FastSet<std::string> splitConstantColumns;
 };
 
-class IcebergSplitReader : public FileSplitReader {
+class IcebergSplitReader : public file::FileSplitReader {
  public:
   IcebergSplitReader(
       const std::shared_ptr<const HiveIcebergSplit>& icebergSplit,
-      const FileTableHandlePtr& tableHandle,
-      const std::unordered_map<std::string, FileColumnHandlePtr>* partitionKeys,
+      const file::FileTableHandlePtr& tableHandle,
+      const std::unordered_map<std::string, file::FileColumnHandlePtr>*
+          partitionKeys,
       const ConnectorQueryCtx* connectorQueryCtx,
-      const std::shared_ptr<const FileConfig>& fileConfig,
+      const std::shared_ptr<const file::FileConfig>& fileConfig,
       const RowTypePtr& readerOutputType,
       const std::shared_ptr<io::IoStatistics>& dataIoStats,
       const std::shared_ptr<io::IoStatistics>& metadataIoStats,

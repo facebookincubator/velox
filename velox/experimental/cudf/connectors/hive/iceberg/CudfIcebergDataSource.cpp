@@ -50,20 +50,24 @@ CudfIcebergDataSource::CudfIcebergDataSource(
           // The Iceberg split reader resolves partition columns per data file.
           PartitionKeySource::kSplitReader),
       hiveConfig_(hiveConfig) {
-  const auto recordColumn = [this](const velox_hive::FileColumnHandle& handle) {
-    if (handle.columnType() ==
-        velox_hive::FileColumnHandle::ColumnType::kPartitionKey) {
-      partitionColumnNames_.insert(handle.name());
-    }
-    if (const auto* icebergHandle =
-            dynamic_cast<const velox_iceberg::IcebergColumnHandle*>(&handle)) {
-      sourceFieldIds_.emplace(
-          icebergHandle->name(), icebergHandle->field().fieldId);
-    }
-  };
+  const auto recordColumn =
+      [this](const facebook::velox::connector::file::FileColumnHandle& handle) {
+        if (handle.columnType() ==
+            facebook::velox::connector::file::FileColumnHandle::ColumnType::
+                kPartitionKey) {
+          partitionColumnNames_.insert(handle.name());
+        }
+        if (const auto* icebergHandle =
+                dynamic_cast<const velox_iceberg::IcebergColumnHandle*>(
+                    &handle)) {
+          sourceFieldIds_.emplace(
+              icebergHandle->name(), icebergHandle->field().fieldId);
+        }
+      };
   for (const auto& [_, handle] : columnHandles) {
     recordColumn(
-        *checkedPointerCast<const velox_hive::FileColumnHandle>(handle));
+        *checkedPointerCast<
+            const facebook::velox::connector::file::FileColumnHandle>(handle));
   }
   for (const auto& handle : tableHandle_->filterColumnHandles()) {
     recordColumn(*handle);

@@ -18,6 +18,7 @@
 
 #include "velox/common/file/FileSystems.h"
 #include "velox/connectors/Connector.h"
+#include "velox/connectors/common/FileConfig.h"
 #include "velox/connectors/hive/FileHandle.h"
 #include "velox/connectors/hive/IndexReader.h"
 #include "velox/core/PlanNode.h"
@@ -33,7 +34,6 @@ namespace facebook::velox::connector::hive {
 struct HiveConnectorSplit;
 class HiveTableHandle;
 class HiveColumnHandle;
-class FileConfig;
 
 /// Handles index lookups for a single Nimble file with cluster indexes.
 /// Focuses on:
@@ -53,7 +53,7 @@ class FileIndexReader : public SplitIndexReader {
       std::shared_ptr<const HiveConnectorSplit> hiveSplit,
       const std::shared_ptr<const HiveTableHandle>& hiveTableHandle,
       const ConnectorQueryCtx* connectorQueryCtx,
-      const std::shared_ptr<const FileConfig>& fileConfig,
+      const std::shared_ptr<const file::FileConfig>& fileConfig,
       const std::shared_ptr<common::ScanSpec>& scanSpec,
       const std::vector<core::IndexLookupConditionPtr>& indexLookupConditions,
       const RowTypePtr& requestType,
@@ -108,7 +108,7 @@ class FileIndexReader : public SplitIndexReader {
 
   const std::shared_ptr<const HiveTableHandle> tableHandle_;
   const ConnectorQueryCtx* connectorQueryCtx_;
-  const std::shared_ptr<const FileConfig> fileConfig_;
+  const std::shared_ptr<const file::FileConfig> fileConfig_;
   FileHandleFactory* const fileHandleFactory_;
   const RowTypePtr requestType_;
   const RowTypePtr outputType_;
