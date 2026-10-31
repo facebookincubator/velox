@@ -584,6 +584,20 @@ Returns <code class="docutils literal notranslate"><span class="pre">x</span></c
 <dd><p>Returns <code class="docutils literal notranslate"><span class="pre">x</span></code> rounded to <code class="docutils literal notranslate"><span class="pre">d</span></code> decimal places using HALF_UP rounding mode.
 In HALF_UP rounding, the digit 5 is rounded up.
 Supported types for <code class="docutils literal notranslate"><span class="pre">x</span></code> are integral and floating point types.</p>
+<p>Omitting <code class="docutils literal notranslate"><span class="pre">d</span></code> is equivalent to <code class="docutils literal notranslate"><span class="pre">d</span> <span class="pre">=</span> <span class="pre">0</span></code>. For integral inputs, nonnegative
+<code class="docutils literal notranslate"><span class="pre">d</span></code> returns <code class="docutils literal notranslate"><span class="pre">x</span></code> unchanged. Negative <code class="docutils literal notranslate"><span class="pre">d</span></code> rounds to a multiple of
+<code class="docutils literal notranslate"><span class="pre">10^(-d)</span></code>, with halfway values rounded away from zero. Integral overflow
+raises an error when <code class="docutils literal notranslate"><span class="pre">spark.ansi_enabled</span></code> is true; otherwise the result
+wraps to the input type’s two’s-complement representation.</p>
+<p>Integral inputs accept every INTEGER scale, including a scale column.
+Column scales are a native extension: Spark 4.1 requires a foldable scale
+expression, which need not be a literal.</p>
+<p>Extreme-scale behavior is not fully compatible with Spark 4.1. For BIGINT
+input <code class="docutils literal notranslate"><span class="pre">25</span></code> and scale <code class="docutils literal notranslate"><span class="pre">-2147483648</span></code>, Velox returns zero whereas Spark’s
+interpreted and generated evaluators throw. At scale <code class="docutils literal notranslate"><span class="pre">2147483647</span></code>, Velox
+and Spark’s generated evaluator return <code class="docutils literal notranslate"><span class="pre">25</span></code>, but Spark’s interpreted
+evaluator throws. Velox does not reproduce JVM BigDecimal/BigInteger
+scale and resource limits.</p>
 </dd></dl>
 
 <dl class="spark function">
