@@ -588,6 +588,68 @@ std::string_view FsstEncoding::decompressToStringBuffer(
   return {outputData, decompressedSize};
 }
 
+bool FsstEncoding::testCompressedRange(
+    std::string_view compressed,
+    const velox::common::BytesRange& filter) const {
+  const auto compareToBound = [&](std::string_view bound) {
+    size_t boundOffset{0};
+    for (size_t compressedOffset = 0; compressedOffset < compressed.size();
+         ++compressedOffset) {
+      const auto symbolCode =
+          static_cast<uint8_t>(compressed[compressedOffset]);
+      const char* symbolBytes;
+      size_t symbolLength{0};
+      if (symbolCode == FSST_ESC) {
+        // An escape introduces one literal byte instead of a symbol-table
+        // code. Consume that byte before comparing it with the range bound.
+        ++compressedOffset;
+        NIMBLE_CHECK_FILE_LT(
+            compressedOffset,
+            compressed.size(),
+            "FSST compressed string ends with an incomplete escape code.");
+        symbolBytes =
+            velox::checkedNotNull(compressed.data()) + compressedOffset;
+        symbolLength = 1;
+      } else {
+        symbolBytes =
+            reinterpret_cast<const char*>(&decoder_.symbol[symbolCode]);
+        symbolLength = decoder_.len[symbolCode];
+      }
+      const auto remainingBoundBytes = bound.size() - boundOffset;
+      const auto bytesToCompare = std::min(symbolLength, remainingBoundBytes);
+      if (bytesToCompare != 0) {
+        const auto comparisonResult = std::memcmp(
+            symbolBytes, bound.data() + boundOffset, bytesToCompare);
+        if (comparisonResult != 0) {
+          return comparisonResult;
+        }
+      }
+      if (symbolLength > remainingBoundBytes) {
+        return 1;
+      }
+      boundOffset += bytesToCompare;
+    }
+    return boundOffset < bound.size() ? -1 : 0;
+  };
+  if (!filter.isLowerUnbounded()) {
+    const auto lowerBoundComparison = compareToBound(filter.lower());
+    const bool rejectEqualToLowerBound =
+        lowerBoundComparison == 0 && filter.isLowerExclusive();
+    if (lowerBoundComparison < 0 || rejectEqualToLowerBound) {
+      return false;
+    }
+  }
+  if (!filter.isUpperUnbounded()) {
+    const auto upperBoundComparison = compareToBound(filter.upper());
+    const bool rejectEqualToUpperBound =
+        upperBoundComparison == 0 && filter.isUpperExclusive();
+    if (upperBoundComparison > 0 || rejectEqualToUpperBound) {
+      return false;
+    }
+  }
+  return true;
+}
+
 std::optional<std::span<char>> FsstEncoding::availablePageRange(
     size_t requiredBytes) const {
   NIMBLE_CHECK_LE(
