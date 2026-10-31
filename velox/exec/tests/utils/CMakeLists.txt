@@ -12,6 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+add_library(velox_local_exchange_source LocalExchangeSource.cpp)
+velox_add_test_headers(velox_local_exchange_source LocalExchangeSource.h)
+target_link_libraries(velox_local_exchange_source velox_exec velox_test_util fmt::fmt)
+
 add_library(
   velox_exec_test_lib
   AggregationResolver.cpp
@@ -20,7 +24,6 @@ add_library(
   FilterToExpression.cpp
   HiveConnectorTestBase.cpp
   IndexLookupJoinTestBase.cpp
-  LocalExchangeSource.cpp
   LocalFixedPoint.cpp
   OperatorTestBase.cpp
   PlanBuilder.cpp
@@ -47,7 +50,6 @@ velox_add_test_headers(
   HashJoinTestBase.h
   HiveConnectorTestBase.h
   IndexLookupJoinTestBase.h
-  LocalExchangeSource.h
   LocalFixedPoint.h
   MergeTestBase.h
   OperatorTestBase.h
@@ -68,6 +70,7 @@ velox_add_test_headers(
 
 target_link_libraries(
   velox_exec_test_lib
+  velox_local_exchange_source
   velox_vector_test_lib
   velox_vector_fuzzer
   velox_cursor

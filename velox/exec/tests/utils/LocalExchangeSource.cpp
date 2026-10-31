@@ -14,10 +14,12 @@
  * limitations under the License.
  */
 #include "velox/exec/tests/utils/LocalExchangeSource.h"
+#include <fmt/format.h>
 #include <folly/executors/IOThreadPoolExecutor.h>
 #include <atomic>
 #include <condition_variable>
 #include <optional>
+#include <string_view>
 #include "velox/common/testutil/TestValue.h"
 #include "velox/exec/DefaultOutputBufferManager.h"
 #include "velox/exec/Operator.h"
@@ -25,14 +27,24 @@
 namespace facebook::velox::exec::test {
 namespace {
 
-class LocalExchangeSource : public exec::ExchangeSource {
+constexpr std::string_view kParentSeparator{"?parent="};
+
+class LocalExchangeSourceImpl : public LocalExchangeSource {
  public:
-  LocalExchangeSource(
+  LocalExchangeSourceImpl(
       const std::string& taskId,
       int destination,
       std::shared_ptr<exec::ExchangeQueue> queue,
       memory::MemoryPool* pool)
-      : ExchangeSource(taskId, destination, queue, pool) {}
+      : LocalExchangeSource(taskId, destination, queue, pool) {
+    if (const auto separator = taskId.find(kParentSeparator);
+        separator != std::string::npos) {
+      producerTaskId_ = taskId.substr(0, separator);
+      parentTaskId_ = taskId.substr(separator + kParentSeparator.size());
+    } else {
+      producerTaskId_ = taskId;
+    }
+  }
 
   bool supportsMetrics() const override {
     return true;
@@ -150,7 +162,7 @@ class LocalExchangeSource : public exec::ExchangeSource {
       }
       // Outside of queue mutex.
       if (atEnd_) {
-        buffers->deleteResults(remoteTaskId_, destination_);
+        buffers->deleteResults(producerTaskId_, destination_);
       }
 
       if (!requestPromise.isFulfilled()) {
@@ -171,10 +183,17 @@ class LocalExchangeSource : public exec::ExchangeSource {
     common::testutil::TestValue::adjust(
         "facebook::velox::exec::test::LocalExchangeSource::request", this);
 
-    // The producer may not have started yet: a fixed point's peers read each
-    // other's producers in the same iteration.
+    if (!parentTaskId_.has_value()) {
+      // A producer that does not exist yet answers nothing, and the timeout
+      // above completes the request.
+      buffers->getData(
+          producerTaskId_, destination_, maxBytes, sequence_, resultCallback);
+      return future;
+    }
+
     buffers->getDataWhenCreated(
-        remoteTaskId_,
+        *parentTaskId_,
+        producerTaskId_,
         destination_,
         maxBytes,
         sequence_,
@@ -189,7 +208,8 @@ class LocalExchangeSource : public exec::ExchangeSource {
       closed = closed_;
     }
     if (closed) {
-      buffers->deleteResults(remoteTaskId_, destination_);
+      buffers->deleteResultsWhenCreated(
+          *parentTaskId_, producerTaskId_, destination_);
     }
 
     return future;
@@ -210,7 +230,7 @@ class LocalExchangeSource : public exec::ExchangeSource {
       std::lock_guard<std::mutex> l(queue_->mutex());
       ackSequence = sequence_;
     }
-    buffers->acknowledge(remoteTaskId_, destination_, ackSequence);
+    buffers->acknowledge(producerTaskId_, destination_, ackSequence);
   }
 
   void close() override {
@@ -229,8 +249,23 @@ class LocalExchangeSource : public exec::ExchangeSource {
       timeouts_.erase(shared_from_this());
     }
 
+    bool atEnd{false};
+    {
+      std::lock_guard<std::mutex> l(queue_->mutex());
+      atEnd = atEnd_;
+    }
+    // At end, the results are already deleted, and the producer may be gone:
+    // deleting them again would record a delete that no producer consumes.
+    if (atEnd) {
+      return;
+    }
     auto buffers = DefaultOutputBufferManager::getInstanceRef();
-    buffers->deleteResults(remoteTaskId_, destination_);
+    if (parentTaskId_.has_value()) {
+      buffers->deleteResultsWhenCreated(
+          *parentTaskId_, producerTaskId_, destination_);
+    } else {
+      buffers->deleteResults(producerTaskId_, destination_);
+    }
   }
 
   folly::F14FastMap<std::string, RuntimeMetric> metrics() const override {
@@ -375,8 +410,20 @@ class LocalExchangeSource : public exec::ExchangeSource {
   // Set by close(), guarded by the static 'mutex_'. Once set, request() will
   // not register a new timeout for this source.
   bool closed_{false};
+  // The task whose output buffer this source reads.
+  std::string producerTaskId_;
+  // The existing task that creates 'producerTaskId_', when this source may read
+  // it before it exists. See subTaskLocation().
+  std::optional<std::string> parentTaskId_;
 };
 } // namespace
+
+// static
+std::string LocalExchangeSource::subTaskLocation(
+    std::string_view taskId,
+    std::string_view parentTaskId) {
+  return fmt::format("{}{}{}", taskId, kParentSeparator, parentTaskId);
+}
 
 std::unique_ptr<ExchangeSource> createLocalExchangeSource(
     const std::string& taskId,
@@ -384,7 +431,7 @@ std::unique_ptr<ExchangeSource> createLocalExchangeSource(
     std::shared_ptr<ExchangeQueue> queue,
     memory::MemoryPool* pool) {
   if (strncmp(taskId.c_str(), "local://", 8) == 0) {
-    return std::make_unique<LocalExchangeSource>(
+    return std::make_unique<LocalExchangeSourceImpl>(
         taskId, destination, std::move(queue), pool);
   } else if (strncmp(taskId.c_str(), "bad://", 6) == 0) {
     throw std::runtime_error("Testing error");
@@ -393,11 +440,11 @@ std::unique_ptr<ExchangeSource> createLocalExchangeSource(
 }
 
 void testingStartLocalExchangeSource() {
-  LocalExchangeSource::start();
+  LocalExchangeSourceImpl::start();
 }
 
 void testingShutdownLocalExchangeSource() {
-  LocalExchangeSource::stop();
+  LocalExchangeSourceImpl::stop();
 }
 
 } // namespace facebook::velox::exec::test
