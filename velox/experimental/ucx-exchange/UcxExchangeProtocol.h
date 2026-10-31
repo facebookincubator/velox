@@ -17,6 +17,7 @@
 
 #include <cinttypes>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -105,6 +106,9 @@ constexpr uint32_t kMetaHeaderSize = sizeof(kMagicNumber) + sizeof(uint32_t);
 /// Wire-format types for MetadataMsg serialization. Using shared type aliases
 /// ensures serialize() and deserializeMetadataMsg() agree on field widths.
 using WireLengthType = uint64_t;
+/// Length of MetadataMsg::producerError on the wire. Signed, because -1 means
+/// there is no producer error, while 0 is an error with an empty message.
+using WireErrorLengthType = int64_t;
 using WireDataSizeType = int64_t;
 using WireRemainingElementType = int64_t;
 /// A cuDF table's row count is a cudf::size_type, so it cannot exceed
@@ -125,6 +129,10 @@ struct MetadataMsg {
   std::vector<WireRemainingElementType> remainingBytes;
   bool atEnd;
 
+  /// Why the producer ended before sending all its output; set only with
+  /// 'atEnd'. The consumer fails instead of treating the stream as complete.
+  std::optional<std::string> producerError;
+
   uint32_t getSerializedSize() const {
     // The header: the magic number and the metadata length.
     uint32_t totalSize = sizeof(kMagicNumber) + sizeof(totalSize);
@@ -141,6 +149,11 @@ struct MetadataMsg {
     totalSize += remainingBytes.size() * sizeof(remainingBytes[0]);
     // atEnd, encoded in a byte.
     totalSize += sizeof(uint8_t);
+    // producerError: its length, -1 if absent, then the text.
+    totalSize += sizeof(WireErrorLengthType);
+    if (producerError.has_value()) {
+      totalSize += producerError->size();
+    }
 
     return totalSize;
   }

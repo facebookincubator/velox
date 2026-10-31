@@ -22,6 +22,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <string>
 #include <vector>
 #include "velox/core/PlanNode.h"
 #include "velox/exec/OutputBuffer.h" // for the Stats structure
@@ -30,7 +31,9 @@
 namespace facebook::velox::ucx_exchange {
 
 /// @brief  Callback function for getting data from the queues.
-/// A nullptr indicates that there is no more data.
+/// A nullptr 'data' ends the stream. Without 'producerError' the producer sent
+/// all its output. With it, the producer ended early and 'producerError' says
+/// why; the consumer must fail rather than treat the stream as complete.
 /// 'numRows' is the logical row count of 'data', supplied by the producer
 /// because a packed table with no columns cannot report one: cuDF derives
 /// num_rows() from the columns. It is 0 for the end-of-stream marker.
@@ -41,17 +44,20 @@ namespace facebook::velox::ucx_exchange {
 using UcxDataAvailableCallback = std::function<void(
     std::shared_ptr<cudf::packed_columns> data,
     vector_size_t numRows,
-    std::vector<int64_t> remainingBytes)>;
+    std::vector<int64_t> remainingBytes,
+    std::optional<std::string> producerError)>;
 
 struct UcxDataAvailable {
   UcxDataAvailableCallback callback{nullptr};
   std::shared_ptr<cudf::packed_columns> data;
   vector_size_t numRows{0};
   std::vector<int64_t> remainingBytes;
+  std::optional<std::string> producerError;
 
   void notify() {
     if (callback) {
-      callback(std::move(data), numRows, remainingBytes);
+      callback(
+          std::move(data), numRows, remainingBytes, std::move(producerError));
     }
   }
 };
@@ -85,6 +91,11 @@ class UcxDestinationQueue {
       std::shared_ptr<cudf::packed_columns> data,
       vector_size_t numRows);
 
+  /// @brief Appends a marker that ends the stream because the producer ended
+  /// early, carrying 'producerError'. Ignored if the queue already ends with a
+  /// marker.
+  void enqueueProducerError(std::string producerError);
+
   /// @brief Enqueues the data to the front of the queue. This is needed when
   /// a transfer fails.
   /// @param data
@@ -97,6 +108,9 @@ class UcxDestinationQueue {
     std::shared_ptr<cudf::packed_columns> data;
     vector_size_t numRows{0};
     std::vector<int64_t> remainingBytes;
+    /// Set on the marker that ends a stream early; see
+    /// UcxDataAvailableCallback.
+    std::optional<std::string> producerError;
     /// Whether the result is returned immediately without invoking the `notify'
     /// callback.
     bool immediate{false};
@@ -105,8 +119,21 @@ class UcxDestinationQueue {
   /// @brief Removes the data from the front of the queue and transfers
   /// ownership to the caller. If there is no data, 'notify' is installed and it
   /// will be called when data becomes available. In this case, a nullptr is
-  /// returned.
-  [[nodiscard]] Data getData(UcxDataAvailableCallback notify);
+  /// returned. With 'intraNode', a page handed over, now or later through
+  /// 'notify', counts in intraNodePagesInFlight() until
+  /// intraNodePageRetrieved(): the caller delivers it through
+  /// IntraNodeTransferRegistry, which drops it if the producer is removed.
+  [[nodiscard]] Data getData(UcxDataAvailableCallback notify, bool intraNode);
+
+  /// @brief Records that the consumer read a page counted in
+  /// intraNodePagesInFlight().
+  void intraNodePageRetrieved();
+
+  /// @brief Returns the number of pages handed to an intra-node getter that
+  /// its consumer has not read yet.
+  int64_t intraNodePagesInFlight() const {
+    return intraNodePagesInFlight_;
+  }
 
   /// Removes all remaining data from the queue.
   void deleteResults();
@@ -132,10 +159,18 @@ class UcxDestinationQueue {
   struct QueuedPage {
     std::shared_ptr<cudf::packed_columns> data;
     vector_size_t numRows{0};
+    // Set only on an end marker queued because the producer ended early.
+    std::optional<std::string> producerError;
   };
 
   std::deque<QueuedPage> queue_;
   UcxDataAvailableCallback notify_{nullptr};
+  // Whether 'notify_' belongs to an intra-node getter; see getData().
+  bool notifyIntraNode_{false};
+  // Pages handed to an intra-node getter and not read by its consumer yet.
+  // Counted in the same step that takes them out of 'queue_', so that a task
+  // removal never sees a page in neither place.
+  int64_t intraNodePagesInFlight_{0};
   Stats stats_;
 };
 
@@ -238,9 +273,29 @@ class UcxOutputQueue : public std::enable_shared_from_this<UcxOutputQueue> {
   /// for 'destination' return empty results.
   void deleteResults(int destination);
 
-  /// Continues any possibly waiting producers. Called when the producer task
-  /// has an error or is cancelled.
-  void terminate();
+  /// @brief Same as getData(), for a server that hands pages to its consumer
+  /// through IntraNodeTransferRegistry. Each page it receives counts as
+  /// undelivered until intraNodePageRetrieved().
+  void getIntraNodeData(int destination, UcxDataAvailableCallback notify);
+
+  /// @brief Records that the consumer of 'destination' read a page it got
+  /// through getIntraNodeData().
+  void intraNodePageRetrieved(int destination);
+
+  /// @brief Returns why this queue's consumers will not receive all of the
+  /// producer's output if the task is removed now, or nullopt if they will:
+  /// every producing driver called noMoreData(), nothing is still queued, no
+  /// intra-node page is waiting to be read, and no broadcast destination is
+  /// still expected.
+  /// Reads the task's state and error, so it must be called with no queue lock
+  /// held.
+  std::optional<std::string> incompleteOutputError();
+
+  /// Ends every destination's stream and continues any possibly waiting
+  /// producers. Called when the producer task is removed. With
+  /// 'producerError', each destination ends with a marker that carries it, so
+  /// its consumer fails; without, each ends with a clean end marker.
+  void terminate(const std::optional<std::string>& producerError);
 
   std::string toString();
 
@@ -288,8 +343,18 @@ class UcxOutputQueue : public std::enable_shared_from_this<UcxOutputQueue> {
 
   int64_t getAverageQueueTimeMsLocked() const;
 
+  // Shared by getData() and getIntraNodeData().
+  void
+  getDataImpl(int destination, UcxDataAvailableCallback notify, bool intraNode);
+
   // internal function that is called when all drivers are done.
   void noMoreDrivers();
+
+  // Returns the error that ends a destination's stream once its results were
+  // deleted before every producing driver called noMoreData(), or nullopt if
+  // they were deleted after the end marker. Must hold 'mutex_'; reads only
+  // the task id, which needs no Task lock.
+  std::optional<std::string> discardedOutputErrorLocked() const;
 
   // If this is called due to a driver processed all its data (no more data),
   // we increment the number of finished drivers. If it is called due to us
