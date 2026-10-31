@@ -308,6 +308,21 @@ struct Timestamp {
         INT64_MAX % kMillisecondsInSecond * kNanosecondsInMillisecond);
   }
 
+  VELOX_GPU_COMPATIBLE static const Timestamp minMicros() {
+    // The minimum Timestamp that toMicros() method will not overflow.
+    return Timestamp(
+        INT64_MIN / kMicrosecondsInSecond - 1,
+        (INT64_MIN % kMicrosecondsInSecond + kMicrosecondsInSecond) *
+            kNanosecondsInMicrosecond);
+  }
+
+  VELOX_GPU_COMPATIBLE static const Timestamp maxMicros() {
+    // The maximum Timestamp that toMicros() method will not overflow.
+    return Timestamp(
+        INT64_MAX / kMicrosecondsInSecond,
+        INT64_MAX % kMicrosecondsInSecond * kNanosecondsInMicrosecond);
+  }
+
   VELOX_GPU_COMPATIBLE static const Timestamp min() {
     return Timestamp(kMinSeconds, 0);
   }
