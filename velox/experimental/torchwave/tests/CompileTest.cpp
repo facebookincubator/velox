@@ -574,10 +574,9 @@ TEST_F(CompileTest, allocGroupPlanIsBuiltWhileCompiling) {
 return(%o)
 )";
 
-  // The three flags allocGroupEnabled() reads. Without all of them the mode is
-  // off and there is no plan to build at any point.
+  // allocGroupEnabled() needs the grid mode decided; the freeing lets group
+  // buffers be released.
   auto config = std::make_shared<WaveConfig>();
-  config->enableAllocGroup = true;
   config->isCg = true;
   config->freeIntermediates = true;
 

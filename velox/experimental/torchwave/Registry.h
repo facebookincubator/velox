@@ -29,6 +29,9 @@
 #include <torch/nativert/executor/OpKernel.h>
 #include <torch/nativert/graph/Graph.h>
 
+#include "velox/experimental/torchwave/KernelParams.h"
+#include "velox/experimental/torchwave/Reserve.h"
+
 namespace torch::wave {
 
 using GraphP = nativert::Graph*;
@@ -113,43 +116,12 @@ struct SizeArguments {
   std::vector<bool> isList;
 };
 
-using Dim = uint32_t;
-
-/// A map from value ids in a lambda matching OutputReserveFunc and
-/// the value ids in the frame passed to OutputReserveFunc. The same
-/// kernel operation can be invoked with many different sets of
-/// inputs to produce sizes for each.
+/// A map from the value ids of a kernel operation's formal subgraph to the
+/// value ids of one invocation of it. The same kernel operation can be invoked
+/// with many different sets of inputs.
 using FormalToActual = folly::F14FastMap<int32_t, int32_t>;
 
 using NodeMap = folly::F14FastMap<NodeCP, NodeCP>;
-
-// Returns shapes to reserve for outputs given inputs. Can return multiple
-// shapes for output params that are tuples of tensors.
-using OutputReserveFunc = std::function<std::vector<std::vector<Dim>>(
-    NodeCP node,
-    nativert::ExecutionFrame&,
-    const FormalToActual& map,
-    NodeCP originalFormalNode,
-    const NodeMap& nodeMap)>;
-
-/// Threads per block of the kernel whose output an OutputReserveFunc is
-/// sizing, for a buffer with one entry per block or per tile. Set around each
-/// call by ReserveBlockSizeScope; WaveConfig::blockSize outside one.
-int32_t reserveBlockSize();
-
-class ReserveBlockSizeScope {
- public:
-  explicit ReserveBlockSizeScope(int32_t blockSize);
-  ~ReserveBlockSizeScope();
-
-  ReserveBlockSizeScope(const ReserveBlockSizeScope&) = delete;
-  ReserveBlockSizeScope& operator=(const ReserveBlockSizeScope&) = delete;
-  ReserveBlockSizeScope(ReserveBlockSizeScope&&) = delete;
-  ReserveBlockSizeScope& operator=(ReserveBlockSizeScope&&) = delete;
-
- private:
-  int32_t saved_;
-};
 
 /// Per-argument metadata controlling how an argument is passed to device code.
 struct ArgumentMeta {
@@ -157,11 +129,12 @@ struct ArgumentMeta {
   /// to tensor if needed.
   bool isRegister{false};
 
-  /// For outputs that are materialized tensors, function that determines the
-  /// size to allocate based on inputs and execution state.
-  OutputReserveFunc reserveShape{nullptr};
+  /// For outputs that are materialized tensors, the function that computes the
+  /// shape to allocate from table entries, with the operands it reads.
+  ReserveFn reserve{nullptr};
+  ReserveInputs reserveInputs{};
 
-  /// Ordinal of the input whose shape 'reserveShape' returns, or -1 when the
+  /// Ordinal of the input whose shape 'reserve' returns, or -1 when the
   /// shape is the reserve's own business. An elementwise or *_like output has
   /// the extent of an operand, so anything that only needs to know WHEN the
   /// shape becomes computable -- rather than what it is -- can look at that
@@ -519,12 +492,6 @@ struct Metadata {
   /// consecutive steps of one node.
   bool sharedWithinNode{false};
 
-  /// If true, the kernel holding this node gets an entry point with only this
-  /// node's op in it, which a step launching nothing else runs. A heavy op that
-  /// has a step to itself then uses only the registers it needs, and the other
-  /// ops of the kernel do not pay for them either.
-  bool ownEntryPoint{false};
-
   /// If set, returns the threads per block this node's device function wants,
   /// or 0 for no preference. A kernel runs at one block size, so it takes the
   /// largest any of its nodes asks for and WaveConfig::blockSize, and every
@@ -771,7 +738,6 @@ class MetadataBuilder {
       std::function<int64_t(NodeCP, int32_t blockSize)> func);
   MetadataBuilder& minBlocksPerSm(int32_t blocks);
   MetadataBuilder& sharedWithinNode(bool value = true);
-  MetadataBuilder& ownEntryPoint(bool value = true);
   MetadataBuilder& blockSize(int32_t threads);
   MetadataBuilder& blockSize(std::function<int32_t(NodeCP)> func);
   MetadataBuilder& typeTemplateParams(std::vector<int32_t> params);

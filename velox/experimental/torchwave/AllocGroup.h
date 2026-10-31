@@ -89,8 +89,9 @@ struct AllocLifetime {
 
   /// Node that releases the value -- the one its last use in the whole graph
   /// falls in. -1 for a value that is never released (a graph output, or one
-  /// nothing reads), which is never grouped: its buffer would pin the whole
-  /// group for as long as it lives.
+  /// nothing reads), which is grouped only when it is a graph output, and then
+  /// only with graph outputs: its buffer would pin the whole group for as long
+  /// as it lives.
   int32_t freeNode{-1};
 
   /// Step of 'freeNode' at whose end the value is released. -1 alongside
@@ -102,6 +103,10 @@ struct AllocLifetime {
   /// sizes. Groups holding one of these cannot be laid out until the host has
   /// waited, so they are ordered after the ones that can.
   bool needsSync{false};
+
+  /// A graph output, not a concat result. Never released; grouped with the
+  /// graph outputs produced at the same point.
+  bool graphOutput{false};
 };
 
 /// Lays a group out as the result of a fused cat / stack instead of packing its
@@ -163,8 +168,8 @@ std::vector<AllocGroup> buildAllocGroups(
     const std::vector<AllocLifetime>& lifetimes,
     std::vector<nativert::ValueId>* ungrouped = nullptr);
 
-/// True when the allocation-group path should run: the config selects it and
-/// the grid mode is decided, which is what fixes the step boundaries an
+/// True when the allocation-group path runs: the grid mode is decided, which is
+/// what fixes the step boundaries an
 /// allocation's lifetime is expressed in before the first execution.
 ///
 /// What the mode needs is not the cooperative grid specifically but a grid that
@@ -185,7 +190,7 @@ bool allocGroupEnabled();
 /// step index in the plan indexes into.
 ///
 /// Single source of truth for that choice. The plan is built from this at
-/// compile time and executeAllocGroups pins the op to it at run time, so the
+/// compile time and the step program pins the op to it at bind, so the
 /// two cannot disagree; when they did, a lifetime pointed at a step of a grid
 /// the op was not running and the group carved a buffer nothing wrote.
 ///
@@ -193,6 +198,7 @@ bool allocGroupEnabled();
 /// where the mode asks for it and the op has one, then the multi-block grid an
 /// op always has.
 LaunchGrid& allocGroupGrid(OpInvocation& op);
+LaunchGrid& allocGroupGrid(ProjectOperation& projectOp);
 
 /// A fused cat / stack as the whole-graph scan sees it: the result and the
 /// operands it joins, in frame values, with every id already translated out of
@@ -274,8 +280,11 @@ struct AllocGroupStats {
 
   // Why the rest were left out, summing to numAllocated - numGrouped.
 
-  /// Never released: a graph output, or a value nothing reads.
+  /// Never released and not a graph output: a value nothing reads.
   int32_t numEscaping{0};
+  /// Graph outputs grouped with the graph outputs produced at the same point.
+  /// Counted in numGrouped.
+  int32_t numGraphOutputsGrouped{0};
   /// Its tensor object is taken and kept by the sizing pass of the node that
   /// allocates it.
   ///
@@ -340,11 +349,13 @@ struct AllocGroupStats {
 /// offset on every execution.
 /// 'claimed' names the values a concat group already allocates, which are left
 /// out of the lifetime grouping and counted under numInConcatGroup: allocating
-/// them twice would replace what the concat placed.
+/// them twice would replace what the concat placed. 'graphOutputs' names the
+/// graph's outputs, which are grouped among themselves.
 std::vector<AllocLifetime> graphAllocLifetimes(
     const std::vector<NodeFootprint>& nodes,
     AllocGroupStats* stats = nullptr,
-    const folly::F14FastSet<nativert::ValueId>* claimed = nullptr);
+    const folly::F14FastSet<nativert::ValueId>* claimed = nullptr,
+    const folly::F14FastSet<nativert::ValueId>* graphOutputs = nullptr);
 
 /// Turns the fused concats the scan saw into the groups that place a concat
 /// result ahead of the operands that fill it, and adds every value those groups
@@ -437,7 +448,8 @@ struct GraphAllocGroupPlan {
 /// per graph and never again; it touches no frame and allocates nothing on the
 /// device.
 GraphAllocGroupPlan buildGraphAllocGroupPlan(
-    const std::vector<NodeFootprint>& nodes);
+    const std::vector<NodeFootprint>& nodes,
+    const folly::F14FastSet<nativert::ValueId>* graphOutputs = nullptr);
 
 /// Renders what the plan folded together and what it could not, as the lines
 /// the mode prints once per graph under the kTiming trace bit.
@@ -470,9 +482,27 @@ class AllocGroupCollector {
   /// An empty list is legal and collects nothing: it is what a step with no
   /// groups installs, so the parameter fill is suppressed uniformly for every
   /// step of the mode rather than only for the steps that group something.
-  explicit AllocGroupCollector(const std::vector<const AllocGroup*>& groups);
+  ///
+  /// With 'install' false the collector is built once, before the first
+  /// execution, and a Scope installs it for each use.
+  explicit AllocGroupCollector(
+      const std::vector<const AllocGroup*>& groups,
+      bool install = true);
   explicit AllocGroupCollector(const AllocGroup& group);
   ~AllocGroupCollector();
+
+  /// Installs a collector built with 'install' false for one step, after
+  /// clearing what its previous use collected.
+  class Scope {
+   public:
+    explicit Scope(AllocGroupCollector& collector);
+    ~Scope();
+
+    Scope(const Scope&) = delete;
+    Scope& operator=(const Scope&) = delete;
+    Scope(Scope&&) = delete;
+    Scope& operator=(Scope&&) = delete;
+  };
 
   // The installed pointer is this object's address, so a copy or a move would
   // leave the thread-local naming an object that is not the one collecting.
@@ -600,24 +630,5 @@ AllocGroupCollector* currentAllocCollector();
 AllocGroupBuffer materializeAllocGroup(
     const std::vector<AllocRequest>& requests,
     nativert::ExecutionFrame& frame);
-
-/// Allocates the concat result 'layout' describes and writes it to the frame,
-/// then hands every member the region of it its operand occupies.
-///
-/// 'requests' are the group's members in the group's own order and 'sized' says
-/// which of them the sizing pass reached; an operand the group meant to carve
-/// but the pass never sized keeps whatever the ordinary path gave it and is
-/// measured from the frame like any other uncarved operand, so the result is
-/// still laid out correctly -- that operand's data is simply copied in by the
-/// concat rather than written in place.
-AllocGroupBuffer materializeConcatGroup(
-    const ConcatGroupLayout& layout,
-    const std::vector<AllocRequest>& requests,
-    const std::vector<bool>& sized,
-    nativert::ExecutionFrame& frame);
-
-/// True when the concat groups of graphConcatGroups should be built: the
-/// allocation-group mode is running and the config selects them.
-bool concatAllocGroupEnabled();
 
 } // namespace torch::wave
