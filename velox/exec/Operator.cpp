@@ -86,6 +86,7 @@ OperatorCtx::createConnectorQueryCtx(
           .build();
   connectorQueryCtx->setSelectiveNimbleReaderEnabled(
       driverCtx_->queryConfig().selectiveNimbleReaderEnabled());
+  connectorQueryCtx->setQueryConfig(&driverCtx_->queryConfig());
   connectorQueryCtx->setRowSizeTrackingMode(
       driverCtx_->queryConfig().rowSizeTrackingMode());
   return connectorQueryCtx;
