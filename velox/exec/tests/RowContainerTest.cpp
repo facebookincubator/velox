@@ -2800,6 +2800,10 @@ TEST_P(RowContainerTest, storeAndCollectColumnStats) {
       EXPECT_EQ(stats.minBytes(), 12);
       EXPECT_EQ(stats.sumBytes(), 11905);
       EXPECT_EQ(stats.avgBytes(), 13);
+    } else {
+      EXPECT_EQ(stats.maxBytes(), sizeof(int64_t));
+      EXPECT_EQ(stats.minBytes(), sizeof(int64_t));
+      EXPECT_EQ(stats.sumBytes(), 857 * sizeof(int64_t));
     }
   }
 
@@ -2812,10 +2816,107 @@ TEST_P(RowContainerTest, storeAndCollectColumnStats) {
     if (rowVector->childAt(i)->typeKind() == TypeKind::VARCHAR) {
       EXPECT_EQ(stats.sumBytes(), 11809);
       EXPECT_EQ(stats.avgBytes(), 13);
+    } else {
+      EXPECT_EQ(stats.sumBytes(), 849 * sizeof(int64_t));
     }
   }
   rowContainer->clear();
   for (int i = 0; i < rowContainer->columnTypes().size(); ++i) {
+    EXPECT_EQ(rowContainer->columnStats(i).value().numCells(), 0);
+  }
+}
+
+// Fixed-width column stats come from a per-column size computed at
+// construction. Check every fixed-width kind next to variable-width ones.
+TEST_P(RowContainerTest, columnStatsMixedTypes) {
+  const vector_size_t kNumRows = 1000;
+  const auto nulls = nullEvery(7);
+  auto rowVector = makeRowVector({
+      makeFlatVector<bool>(
+          kNumRows, [](auto row) { return row % 2 == 0; }, nulls),
+      makeFlatVector<int8_t>(
+          kNumRows, [](auto row) { return row; }, nulls),
+      makeFlatVector<int16_t>(
+          kNumRows, [](auto row) { return row; }, nulls),
+      makeFlatVector<int32_t>(
+          kNumRows, [](auto row) { return row; }, nulls),
+      makeFlatVector<int64_t>(
+          kNumRows, [](auto row) { return row; }, nulls),
+      makeFlatVector<int128_t>(
+          kNumRows, [](auto row) { return row; }, nulls),
+      makeFlatVector<float>(
+          kNumRows, [](auto row) { return row; }, nulls),
+      makeFlatVector<double>(
+          kNumRows, [](auto row) { return row; }, nulls),
+      makeFlatVector<Timestamp>(
+          kNumRows, [](auto row) { return Timestamp(row, 0); }, nulls),
+      makeFlatVector<std::string>(
+          kNumRows,
+          [](auto row) { return fmt::format("abcdefg123_{}", row); },
+          nulls),
+      makeArrayVector<int64_t>(
+          kNumRows,
+          [](auto row) { return row % 4; },
+          [](auto row) { return row; },
+          nulls),
+  });
+  const std::vector<int32_t> fixedSizes = {
+      sizeof(bool),
+      sizeof(int8_t),
+      sizeof(int16_t),
+      sizeof(int32_t),
+      sizeof(int64_t),
+      sizeof(int128_t),
+      sizeof(float),
+      sizeof(double),
+      sizeof(Timestamp)};
+  const auto numCols = rowVector->childrenSize();
+  const auto numFixed = fixedSizes.size();
+
+  // Split the columns between keys and dependents to cover both layouts.
+  const auto& types = asRowType(rowVector->type())->children();
+  const std::vector<TypePtr> keyTypes(types.begin(), types.begin() + 5);
+  const std::vector<TypePtr> dependentTypes(types.begin() + 5, types.end());
+  auto rowContainer =
+      makeRowContainer(keyTypes, dependentTypes, false, GetParam());
+  std::vector<char*> rows;
+  rows.reserve(kNumRows);
+  for (auto i = 0; i < kNumRows; ++i) {
+    rows.push_back(rowContainer->newRow());
+  }
+  SelectivityVector allRows(kNumRows);
+  for (auto i = 0; i < numCols; ++i) {
+    DecodedVector decoded(*rowVector->childAt(i), allRows);
+    rowContainer->store(decoded, folly::Range(rows.data(), kNumRows), i);
+  }
+
+  auto checkStats = [&](int32_t numRows, int32_t numNonNull) {
+    for (auto i = 0; i < numCols; ++i) {
+      SCOPED_TRACE(fmt::format("column {}", i));
+      const auto stats = rowContainer->columnStats(i).value();
+      EXPECT_EQ(stats.numCells(), numRows);
+      EXPECT_EQ(stats.nonNullCount(), numNonNull);
+      EXPECT_EQ(stats.nullCount(), numRows - numNonNull);
+      if (i < numFixed) {
+        EXPECT_EQ(stats.minBytes(), fixedSizes[i]);
+        EXPECT_EQ(stats.maxBytes(), fixedSizes[i]);
+        EXPECT_EQ(stats.sumBytes(), numNonNull * fixedSizes[i]);
+        EXPECT_EQ(stats.avgBytes(), fixedSizes[i]);
+      } else {
+        EXPECT_GT(stats.sumBytes(), 0);
+        EXPECT_GE(stats.maxBytes(), stats.minBytes());
+      }
+    }
+  };
+  checkStats(kNumRows, 857);
+
+  // The first 10 rows have 2 nulls.
+  rowContainer->eraseRows(folly::Range(rows.data(), 10));
+  checkStats(kNumRows - 10, 849);
+
+  // clear() resets the stats.
+  rowContainer->clear();
+  for (auto i = 0; i < numCols; ++i) {
     EXPECT_EQ(rowContainer->columnStats(i).value().numCells(), 0);
   }
 }
