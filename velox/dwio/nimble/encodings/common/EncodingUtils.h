@@ -20,7 +20,7 @@
 #include "velox/dwio/nimble/common/DataTypeDispatch.h"
 #include "velox/dwio/nimble/encodings/ALPEncoding.h"
 #include "velox/dwio/nimble/encodings/ALPRDEncoding.h"
-#include "velox/dwio/nimble/encodings/BlockBitPackingEncoding.h"
+#include "velox/dwio/nimble/encodings/BlockBitPackingV2Encoding.h"
 #include "velox/dwio/nimble/encodings/ConstantEncoding.h"
 #include "velox/dwio/nimble/encodings/DeltaBlockEncoding.h"
 #include "velox/dwio/nimble/encodings/DeltaEncoding.h"
@@ -42,6 +42,7 @@
 #include "velox/dwio/nimble/encodings/TrivialEncoding.h"
 #include "velox/dwio/nimble/encodings/VarintEncoding.h"
 #include "velox/dwio/nimble/encodings/common/SortedPositionSlots.h"
+#include "velox/dwio/nimble/encodings/legacy/BlockBitPackingEncoding.h"
 
 namespace facebook::nimble {
 
@@ -203,7 +204,9 @@ auto encodingTypeDispatchNonString(Encoding& encoding, F&& f) {
           "ALP encoding only supports float and double data types, got {}.",
           encoding.dataType());
     case EncodingType::BlockBitPacking:
-      return f(static_cast<BlockBitPackingEncoding<T>&>(encoding));
+      return f(static_cast<legacy::BlockBitPackingEncoding<T>&>(encoding));
+    case EncodingType::BlockBitPackingV2:
+      return f(static_cast<BlockBitPackingV2Encoding<T>&>(encoding));
     case EncodingType::PFOR:
       if constexpr (isIntegralType<T>()) {
         return f(static_cast<PFOREncoding<T>&>(encoding));

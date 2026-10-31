@@ -17,6 +17,7 @@
 
 #include "velox/dwio/nimble/encodings/ALPEncoding.h"
 #include "velox/dwio/nimble/encodings/ALPRDEncoding.h"
+#include "velox/dwio/nimble/encodings/BlockBitPackingV2Encoding.h"
 #include "velox/dwio/nimble/encodings/DeltaBlockEncoding.h"
 #include "velox/dwio/nimble/encodings/EliasFanoEncoding.h"
 #include "velox/dwio/nimble/encodings/FsstEncoding.h"
@@ -26,6 +27,7 @@
 #include "velox/dwio/nimble/encodings/SimdForBitpackEncoding.h"
 #include "velox/dwio/nimble/encodings/SubIntSplitEncoding.h"
 #include "velox/dwio/nimble/encodings/common/EncodingUtils.h"
+#include "velox/dwio/nimble/encodings/legacy/BlockBitPackingEncoding.h"
 #include "velox/dwio/nimble/encodings/legacy/ConstantEncoding.h"
 #include "velox/dwio/nimble/encodings/legacy/DeltaEncoding.h"
 #include "velox/dwio/nimble/encodings/legacy/DictionaryEncoding.h"
@@ -119,10 +121,13 @@ auto encodingTypeDispatchNonString(Encoding& encoding, F&& f) {
     case EncodingType::Delta:
       return f(static_cast<DeltaEncoding<T>&>(encoding));
     case EncodingType::BlockBitPacking:
-      return f(
-          static_cast<facebook::nimble::BlockBitPackingEncoding<T>&>(encoding));
+      return f(static_cast<BlockBitPackingEncoding<T>&>(encoding));
     // New Encoding has no legacy-specialised class; legacy reads dispatch into
     // the modern Encoding classes
+    case EncodingType::BlockBitPackingV2:
+      return f(
+          static_cast<::facebook::nimble::BlockBitPackingV2Encoding<T>&>(
+              encoding));
     case EncodingType::DeltaBlock:
       if constexpr (isIntegralType<T>()) {
         return f(

@@ -855,7 +855,7 @@ std::vector<std::string_view> parseStreams(
   NIMBLE_CHECK(!isTabletVersion(version), "Unexpected serialization version");
 
   auto [streamIds, streamSizes] = usesLegacyTrailer(version)
-      ? legacy::readLegacyTrailerStreamMetadata(end)
+      ? serde::legacy::readLegacyTrailerStreamMetadata(end)
       : serde::detail::readTrailerStreamMetadata(end);
   std::vector<std::string_view> streams;
   if (!streamIds.empty()) {

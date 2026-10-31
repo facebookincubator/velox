@@ -20,7 +20,7 @@
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/encodings/ALPEncoding.h"
 #include "velox/dwio/nimble/encodings/ALPRDEncoding.h"
-#include "velox/dwio/nimble/encodings/BlockBitPackingEncoding.h"
+#include "velox/dwio/nimble/encodings/BlockBitPackingV2Encoding.h"
 #include "velox/dwio/nimble/encodings/ConstantEncoding.h"
 #include "velox/dwio/nimble/encodings/DeltaBlockEncoding.h"
 #include "velox/dwio/nimble/encodings/DeltaEncoding.h"
@@ -47,6 +47,7 @@
 #include "velox/dwio/nimble/encodings/common/EncodingLayout.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
 #include "velox/dwio/nimble/encodings/common/EncodingTypeDispatch.h"
+#include "velox/dwio/nimble/encodings/legacy/BlockBitPackingEncoding.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelection.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
 
@@ -194,7 +195,11 @@ std::unique_ptr<Encoding> EncodingFactory::create(
       }
     }
     case EncodingType::BlockBitPacking: {
-      RETURN_ENCODING_BY_NUMERIC_TYPE(BlockBitPackingEncoding, dataType);
+      RETURN_ENCODING_BY_NUMERIC_TYPE(
+          legacy::BlockBitPackingEncoding, dataType);
+    }
+    case EncodingType::BlockBitPackingV2: {
+      RETURN_ENCODING_BY_NUMERIC_TYPE(BlockBitPackingV2Encoding, dataType);
     }
     case EncodingType::PFOR: {
       RETURN_ENCODING_BY_NUMERIC_TYPE(PFOREncoding, dataType);
@@ -479,11 +484,19 @@ std::string_view EncodingFactory::encode(
     }
     case EncodingType::BlockBitPacking: {
       if constexpr (isNumericType<physicalType>()) {
-        return BlockBitPackingEncoding<T>::encode(
+        return legacy::BlockBitPackingEncoding<T>::encode(
             selection, castedValues, buffer, options);
       }
       NIMBLE_INCOMPATIBLE_ENCODING(
           "BlockBitPacking encoding should not be selected for non-numeric data types.");
+    }
+    case EncodingType::BlockBitPackingV2: {
+      if constexpr (isNumericType<physicalType>()) {
+        return BlockBitPackingV2Encoding<T>::encode(
+            selection, castedValues, buffer, options);
+      }
+      NIMBLE_INCOMPATIBLE_ENCODING(
+          "BlockBitPackingV2 encoding should not be selected for non-numeric data types.");
     }
     case EncodingType::PFOR: {
       if constexpr (isIntegralType<physicalType>()) {

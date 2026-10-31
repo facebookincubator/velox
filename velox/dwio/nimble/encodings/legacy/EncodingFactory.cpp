@@ -15,7 +15,7 @@
  */
 #include "velox/dwio/nimble/encodings/legacy/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/ALPEncoding.h"
-#include "velox/dwio/nimble/encodings/BlockBitPackingEncoding.h"
+#include "velox/dwio/nimble/encodings/BlockBitPackingV2Encoding.h"
 #include "velox/dwio/nimble/encodings/DeltaBlockEncoding.h"
 #include "velox/dwio/nimble/encodings/EliasFanoEncoding.h"
 #include "velox/dwio/nimble/encodings/FsstEncoding.h"
@@ -23,6 +23,7 @@
 #include "velox/dwio/nimble/encodings/PFOREncoding.h"
 #include "velox/dwio/nimble/encodings/PartitionedEliasFanoEncoding.h"
 #include "velox/dwio/nimble/encodings/SimdForBitpackEncoding.h"
+#include "velox/dwio/nimble/encodings/legacy/BlockBitPackingEncoding.h"
 #include "velox/dwio/nimble/encodings/legacy/ConstantEncoding.h"
 #include "velox/dwio/nimble/encodings/legacy/DeltaEncoding.h"
 #include "velox/dwio/nimble/encodings/legacy/DictionaryEncoding.h"
@@ -298,8 +299,11 @@ std::unique_ptr<Encoding> EncodingFactory::create(
           ::facebook::nimble::PartitionedEliasFanoEncoding, dataType);
     }
     case EncodingType::BlockBitPacking: {
+      RETURN_ENCODING_BY_NUMERIC_TYPE(BlockBitPackingEncoding, dataType);
+    }
+    case EncodingType::BlockBitPackingV2: {
       RETURN_ENCODING_BY_NUMERIC_TYPE(
-          facebook::nimble::BlockBitPackingEncoding, dataType);
+          ::facebook::nimble::BlockBitPackingV2Encoding, dataType);
     }
     case EncodingType::Prefix: {
       NIMBLE_CHECK_EQ(

@@ -7680,6 +7680,112 @@ TEST_P(
 }
 
 // ---------------------------------------------------------------------------
+// BlockBitPackingV2Encoding<int32_t> + AlwaysTrue + FAST PATH
+// Reads every row, every 3rd row, and a few rows at block boundaries, so the
+// dense and sparse bulkScan paths see each block mode and the short last
+// block.
+// ---------------------------------------------------------------------------
+TEST_P(
+    ReadWithVisitorTest,
+    encodingLevelBlockBitPackingV2AlwaysTrueInt32FastPath) {
+  // blockSize 1024: a packed, a constant and a raw block, then a short packed
+  // block of 428 rows.
+  constexpr int kBlockSize = 1024;
+  constexpr int kRows = kBlockSize * 3 + 428;
+  std::vector<int32_t> data(kRows);
+  for (int i = 0; i < kRows; ++i) {
+    if (i < kBlockSize) {
+      data[i] = 100 + (i % 4);
+    } else if (i < kBlockSize * 2) {
+      data[i] = 42;
+    } else if (i < kBlockSize * 3) {
+      // Small positive and negative values span the full uint32 physical
+      // range.
+      data[i] = i % 2 == 0 ? i : -i;
+    } else {
+      data[i] = i % 16;
+    }
+  }
+  const EncodingLayout layout{
+      EncodingType::BlockBitPackingV2,
+      {},
+      CompressionType::Uncompressed,
+      {std::nullopt, std::nullopt, std::nullopt}};
+
+  auto input = makeRowVector(
+      {makeFlatVector<int32_t>(kRows, [&](auto i) { return data[i]; })});
+  auto rowType = asRowType(input->type());
+  auto ctx = makeFileContext(input);
+  auto scanSpec = std::make_shared<common::ScanSpec>("root");
+  scanSpec->addAllChildFields(*rowType);
+  scanSpec->childByName("c0")->setFilter(
+      std::make_unique<common::AlwaysTrue>());
+
+  const auto expectReads = [&](auto isDense,
+                               std::vector<vector_size_t> rowVec) {
+    constexpr bool kIsDense = decltype(isDense)::value;
+    auto root = buildReader(*ctx, rowType, *scanSpec);
+    auto* structReader =
+        dynamic_cast<dwio::common::SelectiveStructColumnReaderBase*>(
+            root.get());
+    auto* reader = static_cast<IntegerColumnReaderTestAccessor*>(
+        dynamic_cast<IntegerColumnReader*>(structReader->children()[0]));
+    ASSERT_NE(reader, nullptr);
+
+    RowSet rows(rowVec.data(), rowVec.size());
+    reader->doPrepareRead<int32_t>(0, rows, nullptr);
+
+    Buffer buffer(*pool());
+    auto encoding =
+        createFromCustomLayout<int32_t>(layout, data, *pool(), buffer);
+    ASSERT_EQ(encoding->encodingType(), EncodingType::BlockBitPackingV2);
+
+    common::AlwaysTrue filter;
+    dwio::common::ExtractToReader extractValues(reader);
+    DecoderVisitor<
+        int32_t,
+        common::AlwaysTrue,
+        dwio::common::ExtractToReader,
+        kIsDense>
+        visitor(filter, reader, rows, extractValues);
+    auto params = makeReadWithVisitorParams(visitor, rows, pool());
+    dispatchCallReadWithVisitor(*encoding, visitor, params);
+
+    ASSERT_EQ(reader->numValues(), static_cast<vector_size_t>(rowVec.size()));
+    auto values = getValues<int32_t>(reader);
+    for (size_t i = 0; i < rowVec.size(); ++i) {
+      EXPECT_EQ(values[i], data[rowVec[i]]) << "row " << rowVec[i];
+    }
+  };
+
+  {
+    SCOPED_TRACE("all rows");
+    std::vector<vector_size_t> rowVec(kRows);
+    std::iota(rowVec.begin(), rowVec.end(), 0);
+    expectReads(std::true_type{}, std::move(rowVec));
+  }
+  {
+    SCOPED_TRACE("every 3rd row");
+    std::vector<vector_size_t> rowVec;
+    for (int i = 0; i < kRows; i += 3) {
+      rowVec.push_back(i);
+    }
+    expectReads(std::false_type{}, std::move(rowVec));
+  }
+  {
+    SCOPED_TRACE("block boundaries");
+    expectReads(
+        std::false_type{},
+        {0,
+         kBlockSize - 1,
+         kBlockSize,
+         kBlockSize * 2 + 5,
+         kBlockSize * 3,
+         kRows - 1});
+  }
+}
+
+// ---------------------------------------------------------------------------
 // SubIntSplitEncoding<int64_t> + AlwaysTrue + dense
 // Exercises the no-filter dense fast path for the 8-byte physical type.
 // ---------------------------------------------------------------------------

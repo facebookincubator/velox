@@ -61,6 +61,7 @@ TEST_P(
       nimble::EncodingType::PFOR,
       nimble::EncodingType::SimdForBitpack,
       nimble::EncodingType::BlockBitPacking,
+      nimble::EncodingType::BlockBitPackingV2,
       nimble::EncodingType::SubIntSplit,
       nimble::EncodingType::Varint,
       nimble::EncodingType::Fsst};

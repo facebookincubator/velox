@@ -13,24 +13,32 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/dwio/nimble/encodings/BlockBitPackingEncoding.h"
+#include "velox/dwio/nimble/encodings/legacy/BlockBitPackingEncoding.h"
 #include <gtest/gtest.h>
 #include <algorithm>
+#include <array>
+#include <limits>
 #include <random>
+#include <span>
+#include <string>
 #include <vector>
 #include "velox/buffer/BufferPool.h"
 #include "velox/common/base/BitUtil.h"
 #include "velox/dwio/common/Lemire/BitPacking/bitpackinghelpers.h"
 #include "velox/dwio/nimble/common/Buffer.h"
+#include "velox/dwio/nimble/common/FixedBitArray.h"
 #include "velox/dwio/nimble/common/Types.h"
 #include "velox/dwio/nimble/common/Varint.h"
 #include "velox/dwio/nimble/common/tests/GTestUtils.h"
 #include "velox/dwio/nimble/encodings/SliceEncoding.h"
 #include "velox/dwio/nimble/encodings/SparseBoolEncoding.h"
+#include "velox/dwio/nimble/encodings/TrivialEncoding.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
+#include "velox/dwio/nimble/encodings/legacy/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/tests/EncodingLayoutTestHelper.h"
 #include "velox/dwio/nimble/encodings/tests/TestUtils.h"
+#include "velox/dwio/nimble/encodings/views/EncodingViewFactory.h"
 
 using namespace facebook;
 
@@ -51,7 +59,7 @@ class BlockBitPackingEncodingTest : public ::testing::Test {
   template <typename T>
   void roundTrip(const std::vector<T>& input) {
     auto values = toVector(input);
-    using Enc = nimble::BlockBitPackingEncoding<T>;
+    using Enc = nimble::legacy::BlockBitPackingEncoding<T>;
     auto encoding =
         nimble::test::Encoder<Enc>::createEncoding(*buffer_, values, nullptr);
 
@@ -67,7 +75,7 @@ class BlockBitPackingEncodingTest : public ::testing::Test {
       uint32_t skipRows,
       uint32_t readRows) {
     auto values = toVector(input);
-    using Enc = nimble::BlockBitPackingEncoding<T>;
+    using Enc = nimble::legacy::BlockBitPackingEncoding<T>;
     auto encoding =
         nimble::test::Encoder<Enc>::createEncoding(*buffer_, values, nullptr);
 
@@ -193,7 +201,7 @@ TEST_F(BlockBitPackingEncodingTest, skipToChunkBoundary) {
 TEST_F(BlockBitPackingEncodingTest, resetAndReread) {
   std::vector<uint32_t> values = {10, 20, 30, 40, 50};
   auto nv = toVector(values);
-  using Enc = nimble::BlockBitPackingEncoding<uint32_t>;
+  using Enc = nimble::legacy::BlockBitPackingEncoding<uint32_t>;
   auto encoding =
       nimble::test::Encoder<Enc>::createEncoding(*buffer_, nv, nullptr);
 
@@ -209,7 +217,7 @@ TEST_F(BlockBitPackingEncodingTest, resetAndReread) {
 }
 
 TEST_F(BlockBitPackingEncodingTest, bufferPoolReusesMetadataBuffers) {
-  using Enc = nimble::BlockBitPackingEncoding<uint32_t>;
+  using Enc = nimble::legacy::BlockBitPackingEncoding<uint32_t>;
   constexpr uint32_t blockSize = Enc::kMaxBlockSize;
   std::vector<uint32_t> input(blockSize * 8);
   for (uint32_t i = 0; i < input.size(); ++i) {
@@ -270,9 +278,8 @@ TEST_F(BlockBitPackingEncodingTest, sizeVsFixedBitWidth) {
 
   // Encode with BlockBitPacking
   nimble::Buffer cbpBuffer(*pool_);
-  auto cbpEncoded =
-      nimble::test::Encoder<nimble::BlockBitPackingEncoding<uint32_t>>::encode(
-          cbpBuffer, nv);
+  auto cbpEncoded = nimble::test::Encoder<
+      nimble::legacy::BlockBitPackingEncoding<uint32_t>>::encode(cbpBuffer, nv);
 
   // Encode with FixedBitWidth
   nimble::Buffer fbwBuffer(*pool_);
@@ -292,7 +299,7 @@ TEST_F(BlockBitPackingEncodingTest, compressionRoundTrip) {
     values[i] = i % 100;
   }
   auto nv = toVector(values);
-  using Enc = nimble::BlockBitPackingEncoding<uint32_t>;
+  using Enc = nimble::legacy::BlockBitPackingEncoding<uint32_t>;
 
   // Round-trip works with Zstd compression requested.
   auto encoding = nimble::test::Encoder<Enc>::createEncoding(
@@ -304,7 +311,7 @@ TEST_F(BlockBitPackingEncodingTest, compressionRoundTrip) {
 }
 
 TEST_F(BlockBitPackingEncodingTest, slice) {
-  using Enc = nimble::BlockBitPackingEncoding<uint32_t>;
+  using Enc = nimble::legacy::BlockBitPackingEncoding<uint32_t>;
   constexpr uint32_t blockSize = Enc::kMaxBlockSize;
   // Ranges whose boundaries sit inside a block come back wrapped in a
   // SliceEncoding; ranges that hit block boundaries stay a plain
@@ -364,7 +371,7 @@ TEST_F(BlockBitPackingEncodingTest, slice) {
 }
 
 TEST_F(BlockBitPackingEncodingTest, rejectsZeroLengthSlice) {
-  using Enc = nimble::BlockBitPackingEncoding<uint32_t>;
+  using Enc = nimble::legacy::BlockBitPackingEncoding<uint32_t>;
   constexpr uint32_t blockSize = Enc::kMaxBlockSize;
   std::vector<uint32_t> input(blockSize + 17);
   for (uint32_t i = 0; i < input.size(); ++i) {
@@ -385,7 +392,7 @@ TEST_F(BlockBitPackingEncodingTest, rejectsZeroLengthSlice) {
 }
 
 TEST_F(BlockBitPackingEncodingTest, sliceRandomRanges) {
-  using Enc = nimble::BlockBitPackingEncoding<uint32_t>;
+  using Enc = nimble::legacy::BlockBitPackingEncoding<uint32_t>;
   constexpr uint32_t blockSize = Enc::kMaxBlockSize;
   constexpr uint32_t rowCount = blockSize * 5 + 333;
   constexpr uint32_t iterations = 100;
@@ -454,7 +461,7 @@ TEST_F(BlockBitPackingEncodingTest, sliceRandomRanges) {
 }
 
 TEST_F(BlockBitPackingEncodingTest, sliceInterleavedConstantAndPayloadBlocks) {
-  using Enc = nimble::BlockBitPackingEncoding<uint32_t>;
+  using Enc = nimble::legacy::BlockBitPackingEncoding<uint32_t>;
   constexpr uint32_t blockSize = Enc::kMaxBlockSize;
   constexpr uint32_t rowCount = blockSize * 5;
 
@@ -489,7 +496,7 @@ TEST_F(BlockBitPackingEncodingTest, sliceInterleavedConstantAndPayloadBlocks) {
 }
 
 TEST_F(BlockBitPackingEncodingTest, sliceCompressedSource) {
-  using Enc = nimble::BlockBitPackingEncoding<uint32_t>;
+  using Enc = nimble::legacy::BlockBitPackingEncoding<uint32_t>;
   constexpr uint32_t blockSize = Enc::kMaxBlockSize;
 
   std::vector<uint32_t> input(blockSize * 2);
@@ -527,7 +534,7 @@ TEST_F(BlockBitPackingEncodingTest, sliceCompressedSource) {
 }
 
 TEST_F(BlockBitPackingEncodingTest, sliceAlignedPartialRawAndConstantPrefixes) {
-  using Enc = nimble::BlockBitPackingEncoding<uint32_t>;
+  using Enc = nimble::legacy::BlockBitPackingEncoding<uint32_t>;
   constexpr uint32_t blockSize = Enc::kMaxBlockSize;
 
   auto verifySlice = [&](const std::vector<uint32_t>& input) {
@@ -591,13 +598,193 @@ TEST_F(BlockBitPackingEncodingTest, partialLastChunk) {
   roundTrip(values);
 }
 
+namespace {
+
+void appendVarint(std::string& output, uint32_t value) {
+  char bytes[nimble::varint::maxVarintSizeForBitWidth(32)];
+  char* pos = bytes;
+  nimble::varint::writeVarint(value, &pos);
+  output.append(bytes, pos - bytes);
+}
+
+// Serializes 'values' as a BlockBitPacking stream whose first block holds
+// 'firstBlockRows' rows and whose later blocks hold 'blockSize' rows, except
+// the last. The writer never starts a multi-block stream with a short block,
+// so the bytes are built by hand. Block i is stored as 'bitWidths[i]' says:
+// 0 = constant, kRawBlockBitWidth = raw values, otherwise packed above the
+// block minimum. The metadata streams are Trivial.
+std::string encodeWithShortFirstBlock(
+    std::span<const uint32_t> values,
+    uint16_t blockSize,
+    uint32_t firstBlockRows,
+    std::span<const uint8_t> bitWidths,
+    velox::memory::MemoryPool& pool) {
+  using Enc = nimble::legacy::BlockBitPackingEncoding<uint32_t>;
+  const auto rowCount = static_cast<uint32_t>(values.size());
+  nimble::Vector<uint32_t> baselines{&pool};
+  nimble::Vector<uint8_t> blockBitWidths{&pool};
+  nimble::Vector<uint32_t> blockOffsets{&pool};
+  std::string payload;
+  uint32_t blockStart{0};
+  for (const auto bitWidth : bitWidths) {
+    const auto numRows = blockStart == 0
+        ? firstBlockRows
+        : std::min<uint32_t>(blockSize, rowCount - blockStart);
+    const auto block = values.subspan(blockStart, numRows);
+    const uint32_t baseline = bitWidth == Enc::kRawBlockBitWidth
+        ? 0
+        : *std::min_element(block.begin(), block.end());
+    baselines.push_back(baseline);
+    blockBitWidths.push_back(bitWidth);
+    blockOffsets.push_back(static_cast<uint32_t>(payload.size()));
+    if (bitWidth == Enc::kRawBlockBitWidth) {
+      payload.append(
+          reinterpret_cast<const char*>(block.data()),
+          block.size() * sizeof(uint32_t));
+    } else if (bitWidth > 0) {
+      std::string packed(
+          nimble::FixedBitArray::bufferSize(numRows, bitWidth), '\0');
+      nimble::FixedBitArray bits{packed.data(), bitWidth};
+      for (uint32_t row = 0; row < numRows; ++row) {
+        bits.set(row, block[row] - baseline);
+      }
+      payload += packed;
+    }
+    blockStart += numRows;
+  }
+
+  nimble::Buffer buffer{pool};
+  const auto encodedBaselines =
+      nimble::test::Encoder<nimble::TrivialEncoding<uint32_t>>::encode(
+          buffer, baselines);
+  const auto encodedBitWidths =
+      nimble::test::Encoder<nimble::TrivialEncoding<uint8_t>>::encode(
+          buffer, blockBitWidths);
+  const auto encodedBlockOffsets =
+      nimble::test::Encoder<nimble::TrivialEncoding<uint32_t>>::encode(
+          buffer, blockOffsets);
+
+  std::string encoded(
+      nimble::EncodingPrefix::serializedSize(rowCount, /*useVarint=*/false),
+      '\0');
+  char* pos = encoded.data();
+  nimble::EncodingPrefix::serialize(
+      nimble::EncodingType::BlockBitPacking,
+      nimble::TypeTraits<uint32_t>::dataType,
+      rowCount,
+      /*useVarint=*/false,
+      pos);
+  encoded.push_back(static_cast<char>(nimble::CompressionType::Uncompressed));
+  appendVarint(encoded, blockSize);
+  appendVarint(encoded, static_cast<uint32_t>(bitWidths.size()));
+  for (const auto stream :
+       {encodedBaselines, encodedBitWidths, encodedBlockOffsets}) {
+    appendVarint(encoded, static_cast<uint32_t>(stream.size()));
+    encoded.append(stream);
+  }
+  appendVarint(encoded, firstBlockRows);
+  return encoded + payload;
+}
+
+// Rows of three blocks with blockSize 8: 3 bit-packed rows, 8 constant rows and
+// 5 raw rows.
+std::vector<uint32_t> shortFirstBlockValues() {
+  constexpr auto kMax = std::numeric_limits<uint32_t>::max();
+  return {100, 103, 101, 7, 7, 7, 7, 7, 7, 7, 7, 0, kMax, 5, 1U << 31, 9};
+}
+
+constexpr std::array<uint8_t, 3> kShortFirstBlockBitWidths{
+    2,
+    0,
+    nimble::legacy::BlockBitPackingEncoding<uint32_t>::kRawBlockBitWidth,
+};
+
+} // namespace
+
+TEST_F(BlockBitPackingEncodingTest, readsShortFirstBlock) {
+  const auto values = shortFirstBlockValues();
+  const auto encoded = encodeWithShortFirstBlock(
+      values,
+      /*blockSize=*/8,
+      /*firstBlockRows=*/3,
+      kShortFirstBlockBitWidths,
+      *pool_);
+
+  const auto expectReads = [&](const nimble::EncodingFactory& factory) {
+    auto encoding = factory.create(*pool_, encoded, nullptr);
+    EXPECT_EQ(encoding->encodingType(), nimble::EncodingType::BlockBitPacking);
+    ASSERT_EQ(encoding->rowCount(), values.size());
+    std::vector<uint32_t> output(values.size());
+    encoding->materialize(encoding->rowCount(), output.data());
+    EXPECT_EQ(output, values);
+
+    // Starts inside the short first block and ends in the next one.
+    encoding->reset();
+    encoding->skip(2);
+    std::vector<uint32_t> range(4);
+    encoding->materialize(/*rowCount=*/4, range.data());
+    EXPECT_EQ(
+        range, std::vector<uint32_t>(values.begin() + 2, values.begin() + 6));
+  };
+  {
+    SCOPED_TRACE("EncodingFactory");
+    expectReads(nimble::EncodingFactory{});
+  }
+  {
+    SCOPED_TRACE("legacy::EncodingFactory");
+    expectReads(nimble::legacy::EncodingFactory{});
+  }
+
+  for (const bool cacheEncodingView : {false, true}) {
+    SCOPED_TRACE(
+        testing::Message() << "cacheEncodingView=" << cacheEncodingView);
+    nimble::Encoding::Options options;
+    options.cacheEncodingView = cacheEncodingView;
+    const auto view = nimble::createEncodingView(encoded, pool_.get(), options);
+    std::vector<uint32_t> output(values.size());
+    for (uint32_t row = 0; row < values.size(); ++row) {
+      view->readAt(row, &output[row]);
+    }
+    EXPECT_EQ(output, values);
+  }
+}
+
+TEST_F(BlockBitPackingEncodingTest, slicesShortFirstBlock) {
+  const auto values = shortFirstBlockValues();
+  const auto encoded = encodeWithShortFirstBlock(
+      values,
+      /*blockSize=*/8,
+      /*firstBlockRows=*/3,
+      kShortFirstBlockBitWidths,
+      *pool_);
+
+  for (uint32_t offset = 0; offset < values.size(); ++offset) {
+    for (uint32_t length = 1; offset + length <= values.size(); ++length) {
+      nimble::Buffer sliceBuffer{*pool_};
+      auto encoding = nimble::EncodingFactory{}.create(
+          *pool_,
+          nimble::EncodingFactory::slice(encoded, offset, length, sliceBuffer),
+          nullptr);
+      ASSERT_EQ(encoding->rowCount(), length)
+          << "offset=" << offset << " length=" << length;
+      std::vector<uint32_t> output(length);
+      encoding->materialize(length, output.data());
+      ASSERT_EQ(
+          output,
+          std::vector<uint32_t>(
+              values.begin() + offset, values.begin() + offset + length))
+          << "offset=" << offset << " length=" << length;
+    }
+  }
+}
+
 TEST_F(BlockBitPackingEncodingTest, debugString) {
   std::vector<uint32_t> values(2048);
   for (uint32_t i = 0; i < values.size(); ++i) {
     values[i] = i % 100;
   }
   auto nv = toVector(values);
-  using Enc = nimble::BlockBitPackingEncoding<uint32_t>;
+  using Enc = nimble::legacy::BlockBitPackingEncoding<uint32_t>;
   auto encoding =
       nimble::test::Encoder<Enc>::createEncoding(*buffer_, nv, nullptr);
   auto debugStr = encoding->debugString(0);
@@ -1035,7 +1222,7 @@ std::string_view blockBitPackingOffsetsBytes(
 // on-wire valueDelta is zero. Complements the correctness-only slice tests
 // above with a push-down "did it apply" assertion.
 TEST_F(BlockBitPackingEncodingTest, sliceOffsetsPushDownDelta) {
-  using Enc = nimble::BlockBitPackingEncoding<uint32_t>;
+  using Enc = nimble::legacy::BlockBitPackingEncoding<uint32_t>;
   constexpr uint32_t blockSize = Enc::kMaxBlockSize;
 
   // 5 full blocks. Different per-block value distributions produce a
