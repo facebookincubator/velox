@@ -97,7 +97,9 @@ class StringColumnReaderTest
       const RowVectorPtr& expected,
       const std::string& file,
       const std::shared_ptr<common::ScanSpec>& scanSpec,
-      bool stringDecoderZeroCopy) {
+      bool stringDecoderZeroCopy,
+      bool scanFastPath,
+      bool fsstDecodeCacheEnabled) {
     auto readFile = std::make_shared<InMemoryReadFile>(file);
     auto factory =
         dwio::common::getReaderFactory(dwio::common::FileFormat::NIMBLE);
@@ -114,9 +116,21 @@ class StringColumnReaderTest
     rowOptions.setScanSpec(scanSpec);
     rowOptions.setRequestedType(type);
     rowOptions.setStringDecoderZeroCopy(stringDecoderZeroCopy);
+    rowOptions.setNimbleScanFastPath(scanFastPath);
+    rowOptions.setNimbleFsstDecodeRepeatedPayloads(fsstDecodeCacheEnabled);
     rowOptions.setNimblePreserveDictionaryEncoding(stringDecoderZeroCopy);
     readers.rowReader = readers.reader->createRowReader(rowOptions);
     return readers;
+  }
+
+  Readers makeReaders(
+      const RowVectorPtr& expected,
+      const std::string& file,
+      const std::shared_ptr<common::ScanSpec>& scanSpec,
+      bool stringDecoderZeroCopy,
+      bool scanFastPath) {
+    return makeReaders(
+        expected, file, scanSpec, stringDecoderZeroCopy, scanFastPath, false);
   }
 
   Readers makeReaders(
@@ -127,7 +141,8 @@ class StringColumnReaderTest
         input,
         test::createNimbleFile(*rootPool(), input),
         scanSpec,
-        stringDecoderZeroCopy);
+        stringDecoderZeroCopy,
+        false);
   }
 
   void validate(
@@ -270,6 +285,101 @@ EncodingLayout makeFsstEncodingLayout() {
       CompressionType::Uncompressed,
       {EncodingLayout{
           EncodingType::Trivial, {}, CompressionType::Uncompressed}}};
+}
+
+TEST_P(StringColumnReaderTest, fsstDecodeCacheUsesReaderOption) {
+  if (!std::get<0>(GetParam())) {
+    GTEST_SKIP() << "The FSST decoder requires the current encoding factory.";
+  }
+
+  constexpr vector_size_t kChunkSize = 64;
+  const auto input = makeRowVector({
+      makeFlatIdentityVector<int64_t>(2 * kChunkSize),
+      makeFlatVector<std::string>(
+          2 * kChunkSize,
+          [](auto row) {
+            return row % 2 == 0
+                ? "long/repeated/fsst/value/with/common/prefix/alpha"
+                : "long/repeated/fsst/value/with/common/prefix/beta";
+          }),
+  });
+  WriterOptions options;
+  options.fsstCompressionTargetRatio = 10.0;
+  options.enableChunking = true;
+  options.minStreamChunkRawSize = 0;
+  options.flushPolicyFactory = [] {
+    return std::make_unique<LambdaFlushPolicy>(
+        [](const StripeProgress&) { return false; },
+        [](const StripeProgress&) { return true; });
+  };
+  options.encodingLayoutTree.emplace(
+      Kind::Row,
+      std::
+          unordered_map<EncodingLayoutTree::StreamIdentifier, EncodingLayout>{},
+      "",
+      std::vector<EncodingLayoutTree>{
+          EncodingLayoutTree{Kind::Scalar, {}, "c0"},
+          EncodingLayoutTree{
+              Kind::Scalar, {{0, makeFsstEncodingLayout()}}, "c1"},
+      });
+  const auto file = test::createNimbleFile(
+      *rootPool(),
+      {input->slice(0, kChunkSize), input->slice(kChunkSize, kChunkSize)},
+      options,
+      /*flushAfterWrite=*/false);
+  const auto encodings = getStreamChunkEncodings(file, 1, pool());
+  ASSERT_EQ(encodings.size(), 2);
+  ASSERT_EQ(encodings[0].encodingType, EncodingType::Fsst);
+  ASSERT_EQ(encodings[1].encodingType, EncodingType::Fsst);
+
+  for (const bool fastPath : {false, true}) {
+    for (const bool cacheEnabled : {false, true}) {
+      SCOPED_TRACE(
+          fmt::format("fastPath={}, cacheEnabled={}", fastPath, cacheEnabled));
+      auto scanSpec = std::make_shared<common::ScanSpec>("root");
+      scanSpec->addAllChildFields(*input->type());
+      auto readers = makeReaders(
+          input,
+          file,
+          scanSpec,
+          /*stringDecoderZeroCopy=*/true,
+          /*scanFastPath=*/fastPath,
+          /*fsstDecodeCacheEnabled=*/cacheEnabled);
+      std::vector<VectorPtr> results;
+      for (int chunk = 0; chunk < 2; ++chunk) {
+        auto result = BaseVector::create(input->type(), 0, pool());
+        ASSERT_EQ(readers.rowReader->next(kChunkSize, result), kChunkSize);
+        result->validate();
+        ASSERT_EQ(result->size(), kChunkSize);
+        for (int row = 0; row < kChunkSize; ++row) {
+          ASSERT_TRUE(
+              result->equalValueAt(input.get(), row, chunk * kChunkSize + row));
+        }
+        results.push_back(std::move(result));
+      }
+
+      const auto strings = [&](int chunk) {
+        auto loaded = BaseVector::loadedVectorShared(
+            results[chunk]->asUnchecked<RowVector>()->childAt(1));
+        EXPECT_EQ(loaded->encoding(), VectorEncoding::Simple::FLAT);
+        return loaded->as<FlatVector<StringView>>();
+      };
+      const auto* firstChunk = strings(0);
+      const auto* secondChunk = strings(1);
+      ASSERT_NE(firstChunk, nullptr);
+      ASSERT_NE(secondChunk, nullptr);
+      if (cacheEnabled) {
+        EXPECT_EQ(firstChunk->valueAt(0).data(), firstChunk->valueAt(2).data());
+        EXPECT_EQ(
+            secondChunk->valueAt(0).data(), secondChunk->valueAt(2).data());
+      } else {
+        EXPECT_NE(firstChunk->valueAt(0).data(), firstChunk->valueAt(2).data());
+        EXPECT_NE(
+            secondChunk->valueAt(0).data(), secondChunk->valueAt(2).data());
+      }
+      EXPECT_NE(firstChunk->valueAt(0).data(), secondChunk->valueAt(0).data());
+    }
+  }
 }
 
 // Validates correctness and checks the expected encoding per batch.
@@ -536,7 +646,8 @@ TEST_P(StringColumnReaderTest, fsstWithSiblingFilter) {
     scanSpec->childByName("c0")->setFilter(
         std::make_unique<common::BigintRange>(
             250, 1'249, /*nullAllowed=*/false));
-    auto readers = makeReaders(input, file, scanSpec, stringDecoderZeroCopy);
+    auto readers =
+        makeReaders(input, file, scanSpec, stringDecoderZeroCopy, false);
 
     validateWithFilter(*input, *readers.rowReader, 137, [](auto i) {
       return i >= 250 && i <= 1'249;
@@ -553,11 +664,113 @@ TEST_P(StringColumnReaderTest, fsstWithSiblingFilter) {
                 "common/prefix/for/fsst/selective/3",
                 "common/prefix/for/fsst/selective/17"},
             false));
-    auto readers = makeReaders(input, file, scanSpec, stringDecoderZeroCopy);
+    auto readers =
+        makeReaders(input, file, scanSpec, stringDecoderZeroCopy, false);
 
     validateWithFilter(*input, *readers.rowReader, 137, [](auto i) {
       return i % 32 == 3 || i % 32 == 17;
     });
+  }
+}
+
+TEST_P(StringColumnReaderTest, fsstFilterOnlyRangeAcrossChunks) {
+  const bool zeroCopy = std::get<0>(GetParam());
+  if (!zeroCopy) {
+    GTEST_SKIP() << "FSST requires the current encoding factory.";
+  }
+  constexpr int kRows = 600;
+  auto makeChunk = [&](int offset) {
+    return makeRowVector(
+        {"key", "value"},
+        {makeFlatVector<std::string>(
+             kRows,
+             [&](auto i) {
+               return fmt::format(
+                   "common/{}/payload/{}", i % 3 == 0 ? "match" : "other", i);
+             },
+             [](auto i) { return i % 7 == 0; }),
+         makeFlatVector<int64_t>(kRows, [&](auto i) { return offset + i; })});
+  };
+  auto first = makeChunk(0);
+  auto second = makeChunk(kRows);
+  WriterOptions options;
+  options.fsstCompressionTargetRatio = 10.0;
+  options.enableChunking = true;
+  options.minStreamChunkRawSize = 0;
+  options.flushPolicyFactory = [] {
+    return std::make_unique<LambdaFlushPolicy>(
+        [](const StripeProgress&) { return false; },
+        [](const StripeProgress&) { return true; });
+  };
+  options.encodingLayoutTree.emplace(
+      Kind::Row,
+      std::
+          unordered_map<EncodingLayoutTree::StreamIdentifier, EncodingLayout>{},
+      "",
+      std::vector<EncodingLayoutTree>{
+          EncodingLayoutTree{
+              Kind::Scalar, {{0, makeFsstEncodingLayout()}}, "key"},
+          EncodingLayoutTree{Kind::Scalar, {}, "value"},
+      });
+  auto file =
+      test::createNimbleFile(*rootPool(), {first, second}, options, false);
+  for (const bool negated : {false, true}) {
+    for (const bool projectOut : {false, true}) {
+      for (const bool nullAllowed : {false, true}) {
+        for (const int batchSize : {137, 1'500}) {
+          auto spec = std::make_shared<common::ScanSpec>("root");
+          spec->addAllChildFields(*first->type());
+          auto* keySpec = spec->childByName("key");
+          keySpec->setProjectOut(projectOut);
+          if (negated) {
+            keySpec->setFilter(
+                std::make_unique<common::NegatedBytesRange>(
+                    "common/match/",
+                    false,
+                    false,
+                    "common/match0",
+                    false,
+                    true,
+                    nullAllowed));
+          } else {
+            keySpec->setFilter(
+                std::make_unique<common::BytesRange>(
+                    "common/match/",
+                    false,
+                    false,
+                    "common/match0",
+                    false,
+                    true,
+                    nullAllowed));
+          }
+          spec->childByName("value")->setFilter(
+              std::make_unique<common::BigintRange>(100, 999, false));
+          auto readers = makeReaders(first, file, spec, zeroCopy, false);
+          auto result = BaseVector::create(first->type(), 0, pool());
+          std::vector<int64_t> actual;
+          while (readers.rowReader->next(batchSize, result) > 0) {
+            auto rows = result->as<RowVector>();
+            auto value = rows->childAt(1)->as<FlatVector<int64_t>>();
+            for (vector_size_t row = 0; row < rows->size(); ++row) {
+              actual.push_back(value->valueAt(row));
+              if (projectOut) {
+                auto source = actual.back() < kRows ? first : second;
+                EXPECT_TRUE(rows->childAt(0)->equalValueAt(
+                    source->childAt(0).get(), row, actual.back() % kRows));
+              }
+            }
+          }
+          std::vector<int64_t> expected;
+          for (int row = 100; row <= 999; ++row) {
+            const auto local = row % kRows;
+            if (local % 7 == 0 ? nullAllowed : (local % 3 == 0) != negated) {
+              expected.push_back(row);
+            }
+          }
+          EXPECT_EQ(actual, expected);
+        }
+      }
+    }
   }
 }
 
@@ -763,7 +976,8 @@ TEST_P(StringColumnReaderTest, skipAcrossChunkBoundary) {
 
   auto scanSpec = std::make_shared<common::ScanSpec>("root");
   scanSpec->addAllChildFields(*expected->type());
-  auto readers = makeReaders(expected, file, scanSpec, stringDecoderZeroCopy);
+  auto readers =
+      makeReaders(expected, file, scanSpec, stringDecoderZeroCopy, false);
 
   // Use a batch size that forces the reader to skip across the chunk boundary.
   // Read batch 1 (rows 0-199) from chunk 1, then skip to batch 3 (rows 400+)
@@ -812,7 +1026,8 @@ TEST_P(StringColumnReaderTest, flatFallbackClearsDictionaryState) {
 
   auto scanSpec = std::make_shared<common::ScanSpec>("root");
   scanSpec->addAllChildFields(*expected->type());
-  auto readers = makeReaders(expected, file, scanSpec, stringDecoderZeroCopy);
+  auto readers =
+      makeReaders(expected, file, scanSpec, stringDecoderZeroCopy, false);
   using E = VectorEncoding::Simple;
   validateWithEncodingChecks(
       *expected->childAt(0),
@@ -885,7 +1100,8 @@ TEST_P(StringColumnReaderTest, skipAcrossChunkBoundaryMidFile) {
     return std::vector<std::string>{"xxx", "yyy"}[chunk2Offset % 2];
   });
 
-  auto readers = makeReaders(chunk1, file, scanSpec, stringDecoderZeroCopy);
+  auto readers =
+      makeReaders(chunk1, file, scanSpec, stringDecoderZeroCopy, false);
 
   using E = VectorEncoding::Simple;
   validateWithEncodingChecks(
@@ -1271,7 +1487,8 @@ TEST_P(StringColumnReaderTest, skipWithinChunkReturnsDictionary) {
     return std::vector<std::string>{"aaa", "bbb", "ccc"}[i % 3];
   });
 
-  auto readers = makeReaders(input, file, scanSpec, stringDecoderZeroCopy);
+  auto readers =
+      makeReaders(input, file, scanSpec, stringDecoderZeroCopy, false);
 
   using E = VectorEncoding::Simple;
   validateWithEncodingChecks(
@@ -1354,7 +1571,8 @@ TEST_P(StringColumnReaderTest, skipAcrossChunkBoundaryDictRecovery) {
       return std::vector<std::string>{"xxx", "yyy"}[chunk2Offset % 2];
     });
 
-    auto readers = makeReaders(chunk1, file, scanSpec, stringDecoderZeroCopy);
+    auto readers =
+        makeReaders(chunk1, file, scanSpec, stringDecoderZeroCopy, false);
     validateWithEncodingChecks(
         *expectedStrings,
         *readers.rowReader,
@@ -1427,7 +1645,8 @@ TEST_P(StringColumnReaderTest, skipAcrossChunkBoundaryDictRecovery) {
       return std::vector<std::string>{"xxx", "yyy"}[chunk2Offset % 2];
     });
 
-    auto readers = makeReaders(chunk1, file, scanSpec, stringDecoderZeroCopy);
+    auto readers =
+        makeReaders(chunk1, file, scanSpec, stringDecoderZeroCopy, false);
     validateWithEncodingChecks(
         *expectedStrings,
         *readers.rowReader,
@@ -1518,7 +1737,8 @@ TEST_P(StringColumnReaderTest, abandonDictionaryAfterSkip) {
     return fmt::format("unique_string_value_{}", chunk2Index);
   });
 
-  auto readers = makeReaders(chunk1, file, scanSpec, stringDecoderZeroCopy);
+  auto readers =
+      makeReaders(chunk1, file, scanSpec, stringDecoderZeroCopy, false);
 
   using E = VectorEncoding::Simple;
   // Batches: [0,249] dict, [250,349] dict (chunk 1), [600,749] flat,
@@ -1610,7 +1830,8 @@ TEST_P(StringColumnReaderTest, abandonDictionaryAfterSkipWithNulls) {
   }
   auto expectedStrings = makeNullableFlatVector<std::string>(expectedData);
 
-  auto readers = makeReaders(chunk1, file, scanSpec, stringDecoderZeroCopy);
+  auto readers =
+      makeReaders(chunk1, file, scanSpec, stringDecoderZeroCopy, false);
   using E = VectorEncoding::Simple;
   validateWithEncodingChecks(
       *expectedStrings,
@@ -1724,7 +1945,8 @@ TEST_P(StringColumnReaderTest, abandonDictionaryAfterFilterCompaction) {
   }
   auto expectedStrings = makeFlatVector<std::string>(expectedData);
 
-  auto readers = makeReaders(chunk1, file, scanSpec, stringDecoderZeroCopy);
+  auto readers =
+      makeReaders(chunk1, file, scanSpec, stringDecoderZeroCopy, false);
   using E = VectorEncoding::Simple;
   // One batch covering both chunks: the dictionary prefix is filtered and
   // compacted, then the abandon hands off to the flat continuation.
@@ -1848,7 +2070,8 @@ TEST_P(StringColumnReaderTest, abandonDictionaryAfterNullFreePrefixCompaction) {
   }
   auto expectedStrings = makeNullableFlatVector<std::string>(expectedData);
 
-  auto readers = makeReaders(chunk1, file, scanSpec, stringDecoderZeroCopy);
+  auto readers =
+      makeReaders(chunk1, file, scanSpec, stringDecoderZeroCopy, false);
   using E = VectorEncoding::Simple;
   // Batch 1 covers chunks 1-2 and stays in dictionary mode; batch 2 starts in
   // chunk 2 (the null-free prefix) and abandons into chunk 3.
@@ -1895,7 +2118,8 @@ TEST_P(StringColumnReaderTest, abandonDictionaryNoSkipWithNulls) {
   scanSpec->addAllChildFields(*readType);
 
   auto expected = makeNullableFlatVector<std::string>(data);
-  auto readers = makeReaders(chunk, file, scanSpec, stringDecoderZeroCopy);
+  auto readers =
+      makeReaders(chunk, file, scanSpec, stringDecoderZeroCopy, false);
   using E = VectorEncoding::Simple;
   validateWithEncodingChecks(
       *expected,
@@ -1978,7 +2202,8 @@ TEST_P(StringColumnReaderTest, abandonDictionaryAfterSkipFlatMap) {
       std::make_unique<common::BigintMultiRange>(
           std::move(ranges), /*nullAllowed=*/false));
 
-  auto readers = makeReaders(combined, file, scanSpec, stringDecoderZeroCopy);
+  auto readers =
+      makeReaders(combined, file, scanSpec, stringDecoderZeroCopy, false);
   validateWithFilter(
       *combined, *readers.rowReader, /*batchSize=*/250, [](int i) {
         return i <= 349 || i >= 600;
@@ -2096,7 +2321,8 @@ TEST_P(StringColumnReaderTest, skipAcrossChunkBoundaryRleDictionaryPreserved) {
     return chunk2Values[((fileRow - kChunkRows) / kRunLength) % 3];
   });
 
-  auto readers = makeReaders(chunk1, file, scanSpec, stringDecoderZeroCopy);
+  auto readers =
+      makeReaders(chunk1, file, scanSpec, stringDecoderZeroCopy, false);
   using E = VectorEncoding::Simple;
   // Batches: [0,249] dict, [250,349] dict (chunk 1), [600,749] dict,
   // [750,799] dict (chunk 2 — read in dictionary mode across the skip).
@@ -2262,7 +2488,7 @@ TEST_P(
     auto scanSpec = std::make_shared<common::ScanSpec>("root");
     scanSpec->addAllChildFields(*readType);
     auto readers =
-        makeReaders(schemaSample, file, scanSpec, stringDecoderZeroCopy);
+        makeReaders(schemaSample, file, scanSpec, stringDecoderZeroCopy, false);
     validateWithEncodingChecks(
         *expectedFor([](int) { return true; }),
         *readers.rowReader,
@@ -2280,7 +2506,7 @@ TEST_P(
     auto scanSpec = std::make_shared<common::ScanSpec>("root");
     scanSpec->addAllChildFields(*readType);
     auto readers =
-        makeReaders(schemaSample, file, scanSpec, stringDecoderZeroCopy);
+        makeReaders(schemaSample, file, scanSpec, stringDecoderZeroCopy, false);
     validateWithEncodingChecks(
         *expectedFor([](int) { return true; }),
         *readers.rowReader,
@@ -2300,7 +2526,7 @@ TEST_P(
     auto accept = [](int g) { return g <= 599 || g >= 1200; };
     auto scanSpec = makeC0RangeFilter({{0, 599}, {1200, kTotalRows - 1}});
     auto readers =
-        makeReaders(schemaSample, file, scanSpec, stringDecoderZeroCopy);
+        makeReaders(schemaSample, file, scanSpec, stringDecoderZeroCopy, false);
     validateWithEncodingChecks(
         *expectedFor(accept),
         *readers.rowReader,
@@ -2319,7 +2545,7 @@ TEST_P(
     auto accept = [](int g) { return g >= 400; };
     auto scanSpec = makeC0RangeFilter({{400, kTotalRows - 1}});
     auto readers =
-        makeReaders(schemaSample, file, scanSpec, stringDecoderZeroCopy);
+        makeReaders(schemaSample, file, scanSpec, stringDecoderZeroCopy, false);
     validateWithEncodingChecks(
         *expectedFor(accept),
         *readers.rowReader,
@@ -2350,7 +2576,7 @@ TEST_P(
     auto accept = [](int g) { return g <= 899 || g >= 1200; };
     auto scanSpec = makeC0RangeFilter({{0, 899}, {1200, kTotalRows - 1}});
     auto readers =
-        makeReaders(schemaSample, file, scanSpec, stringDecoderZeroCopy);
+        makeReaders(schemaSample, file, scanSpec, stringDecoderZeroCopy, false);
     validateWithEncodingChecks(
         *expectedFor(accept),
         *readers.rowReader,
@@ -2404,7 +2630,8 @@ TEST_P(StringColumnReaderTest, readAcrossChunkBoundary) {
 
   auto scanSpec = std::make_shared<common::ScanSpec>("root");
   scanSpec->addAllChildFields(*expected->type());
-  auto readers = makeReaders(expected, file, scanSpec, stringDecoderZeroCopy);
+  auto readers =
+      makeReaders(expected, file, scanSpec, stringDecoderZeroCopy, false);
   using E = VectorEncoding::Simple;
   validateWithEncodingChecks(
       *expected->childAt(0),
@@ -2460,7 +2687,8 @@ TEST_P(StringColumnReaderTest, readAcrossStripeBoundary) {
 
   auto scanSpec = std::make_shared<common::ScanSpec>("root");
   scanSpec->addAllChildFields(*expected->type());
-  auto readers = makeReaders(expected, file, scanSpec, stringDecoderZeroCopy);
+  auto readers =
+      makeReaders(expected, file, scanSpec, stringDecoderZeroCopy, false);
   using E = VectorEncoding::Simple;
   validateWithEncodingChecks(
       *expected->childAt(0),
@@ -2902,7 +3130,8 @@ TEST_P(StringColumnReaderTest, mainlyConstantDictionaryMultiChunk) {
 
   auto scanSpec = std::make_shared<common::ScanSpec>("root");
   scanSpec->addAllChildFields(*input->type());
-  auto readers = makeReaders(input, file, scanSpec, stringDecoderZeroCopy);
+  auto readers =
+      makeReaders(input, file, scanSpec, stringDecoderZeroCopy, false);
   using E = VectorEncoding::Simple;
   validateWithEncodingChecks(
       *input->childAt(0),
@@ -2960,7 +3189,8 @@ TEST_P(StringColumnReaderTest, mainlyConstantDictionaryMultiChunkWithNulls) {
 
   auto scanSpec = std::make_shared<common::ScanSpec>("root");
   scanSpec->addAllChildFields(*input->type());
-  auto readers = makeReaders(input, file, scanSpec, stringDecoderZeroCopy);
+  auto readers =
+      makeReaders(input, file, scanSpec, stringDecoderZeroCopy, false);
   using E = VectorEncoding::Simple;
   validateWithEncodingChecks(
       *input->childAt(0),
@@ -3101,7 +3331,8 @@ TEST_P(StringColumnReaderTest, mainlyConstantDictionaryAcrossStripes) {
 
   auto scanSpec = std::make_shared<common::ScanSpec>("root");
   scanSpec->addAllChildFields(*expected->type());
-  auto readers = makeReaders(expected, file, scanSpec, stringDecoderZeroCopy);
+  auto readers =
+      makeReaders(expected, file, scanSpec, stringDecoderZeroCopy, false);
   using E = VectorEncoding::Simple;
   validateWithEncodingChecks(
       *expected->childAt(0),
@@ -3162,7 +3393,8 @@ TEST_P(StringColumnReaderTest, mainlyConstantAllNullReadRange) {
 
   auto scanSpec = std::make_shared<common::ScanSpec>("root");
   scanSpec->addAllChildFields(*input->type());
-  auto readers = makeReaders(input, file, scanSpec, stringDecoderZeroCopy);
+  auto readers =
+      makeReaders(input, file, scanSpec, stringDecoderZeroCopy, false);
   validate(*input, *readers.rowReader, kBatchSize);
 }
 
@@ -3206,7 +3438,8 @@ TEST_P(StringColumnReaderTest, dictionaryIsNullFilterProjected) {
   scanSpec->addAllChildFields(*input->type());
   scanSpec->childByName("c0")->setFilter(std::make_unique<common::IsNull>());
 
-  auto readers = makeReaders(input, file, scanSpec, stringDecoderZeroCopy);
+  auto readers =
+      makeReaders(input, file, scanSpec, stringDecoderZeroCopy, false);
   // IsNull passes exactly the null rows (every 3rd).
   validateWithFilter(
       *input, *readers.rowReader, 23, [](auto i) { return i % 3 == 0; });
@@ -3282,7 +3515,8 @@ TEST_P(StringColumnReaderTest, dictionaryFilterSparseNoNullsAfterNullBatch) {
       std::make_unique<common::BytesValues>(
           std::vector<std::string>{"v_1", "v_3"}, false));
 
-  auto readers = makeReaders(input, file, scanSpec, stringDecoderZeroCopy);
+  auto readers =
+      makeReaders(input, file, scanSpec, stringDecoderZeroCopy, false);
   // Batch size 100 splits into batch 1 = rows [0,99] (c1 has nulls) and
   // batch 2 = rows [100,199] (c1 no nulls, sparse). A row survives only when
   // c0 is even, c1 is non-null, and c1 in {"v_1","v_3"}.
@@ -3352,7 +3586,8 @@ TEST_P(StringColumnReaderTest, dictionaryIsNullFilterSparseRows) {
           /*nullAllowed=*/false));
   scanSpec->childByName("c1")->setFilter(std::make_unique<common::IsNull>());
 
-  auto readers = makeReaders(input, file, scanSpec, stringDecoderZeroCopy);
+  auto readers =
+      makeReaders(input, file, scanSpec, stringDecoderZeroCopy, false);
   // A row survives only when c0 is even and c1 is null (every 3rd row).
   validateWithFilter(*input, *readers.rowReader, 100, [](int i) {
     return i % 2 == 0 && i % 3 == 0;
@@ -3409,7 +3644,8 @@ TEST_P(StringColumnReaderTest, mainlyConstantDictionaryAlignedChunks) {
 
   auto scanSpec = std::make_shared<common::ScanSpec>("root");
   scanSpec->addAllChildFields(*input->type());
-  auto readers = makeReaders(input, file, scanSpec, stringDecoderZeroCopy);
+  auto readers =
+      makeReaders(input, file, scanSpec, stringDecoderZeroCopy, false);
   // Batch size fits within a single chunk (1000 rows per chunk), so all
   // batches use the dictionary path. With 10 chunks of 1000 rows and
   // batch size 500, we get 20 batches — each within a single chunk.
@@ -3473,7 +3709,8 @@ TEST_P(StringColumnReaderTest, mainlyConstantDictionaryAlignedChunksWithNulls) {
 
   auto scanSpec = std::make_shared<common::ScanSpec>("root");
   scanSpec->addAllChildFields(*input->type());
-  auto readers = makeReaders(input, file, scanSpec, stringDecoderZeroCopy);
+  auto readers =
+      makeReaders(input, file, scanSpec, stringDecoderZeroCopy, false);
   std::vector<VectorEncoding::Simple> expectedEncodings(
       20, VectorEncoding::Simple::DICTIONARY);
   validateWithEncodingChecks(
@@ -3527,7 +3764,8 @@ TEST_P(StringColumnReaderTest, rleDictionaryVector) {
 
   auto scanSpec = std::make_shared<common::ScanSpec>("root");
   scanSpec->addAllChildFields(*data->type());
-  auto readers = makeReaders(data, file, scanSpec, stringDecoderZeroCopy);
+  auto readers =
+      makeReaders(data, file, scanSpec, stringDecoderZeroCopy, false);
   using E = VectorEncoding::Simple;
   validateWithEncodingChecks(
       *data->childAt(0),
@@ -3586,7 +3824,8 @@ TEST_P(StringColumnReaderTest, rleDictionaryMidRunBatchResume) {
 
   auto scanSpec = std::make_shared<common::ScanSpec>("root");
   scanSpec->addAllChildFields(*data->type());
-  auto readers = makeReaders(data, file, scanSpec, stringDecoderZeroCopy);
+  auto readers =
+      makeReaders(data, file, scanSpec, stringDecoderZeroCopy, false);
   validate(*data, *readers.rowReader, /*batchSize=*/75);
 }
 
@@ -3617,7 +3856,8 @@ TEST_P(StringColumnReaderTest, rleDictionaryMidRunBatchResumeWithNulls) {
 
   auto scanSpec = std::make_shared<common::ScanSpec>("root");
   scanSpec->addAllChildFields(*data->type());
-  auto readers = makeReaders(data, file, scanSpec, stringDecoderZeroCopy);
+  auto readers =
+      makeReaders(data, file, scanSpec, stringDecoderZeroCopy, false);
   validate(*data, *readers.rowReader, /*batchSize=*/75);
 }
 
@@ -3660,7 +3900,8 @@ TEST_P(StringColumnReaderTest, rleDictionaryMidRunResumeAcrossChunk) {
 
   auto scanSpec = std::make_shared<common::ScanSpec>("root");
   scanSpec->addAllChildFields(*expected->type());
-  auto readers = makeReaders(expected, file, scanSpec, stringDecoderZeroCopy);
+  auto readers =
+      makeReaders(expected, file, scanSpec, stringDecoderZeroCopy, false);
   validate(*expected, *readers.rowReader, /*batchSize=*/70);
 }
 
@@ -3799,7 +4040,8 @@ TEST_P(StringColumnReaderTest, filterOnlyMultiChunkNumValuesSync) {
         std::make_unique<common::BytesValues>(
             std::vector<std::string>{targetValue}, false));
     keySpec->setProjectOut(projectOut);
-    auto readers = makeReaders(chunk1, file, scanSpec, stringDecoderZeroCopy);
+    auto readers =
+        makeReaders(chunk1, file, scanSpec, stringDecoderZeroCopy, false);
     auto result = BaseVector::create(type, 0, pool());
     int64_t totalRows = 0;
     // Large batch so a single next() spans the chunk boundary.
@@ -3901,7 +4143,8 @@ TEST_P(StringColumnReaderTest, filterOnlySparseSkipAcrossChunksNumValuesSync) {
         std::static_pointer_cast<RowVector>(chunks[0]),
         file,
         scanSpec,
-        stringDecoderZeroCopy);
+        stringDecoderZeroCopy,
+        false);
     auto result = BaseVector::create(type, 0, pool());
     std::vector<int64_t> rows;
     while (readers.rowReader->next(batchSize, result) > 0) {
@@ -3976,7 +4219,8 @@ DEBUG_ONLY_TEST_P(
 
   auto scanSpec = std::make_shared<common::ScanSpec>("root");
   scanSpec->addAllChildFields(*expected->type());
-  auto readers = makeReaders(expected, file, scanSpec, stringDecoderZeroCopy);
+  auto readers =
+      makeReaders(expected, file, scanSpec, stringDecoderZeroCopy, false);
 
   int dictPathEntries = 0;
   SCOPED_TESTVALUE_SET(
@@ -4093,7 +4337,8 @@ TEST_P(StringColumnReaderTest, flatEncodingFallback) {
 
   auto scanSpec = std::make_shared<common::ScanSpec>("root");
   scanSpec->addAllChildFields(*expected->type());
-  auto readers = makeReaders(expected, file, scanSpec, stringDecoderZeroCopy);
+  auto readers =
+      makeReaders(expected, file, scanSpec, stringDecoderZeroCopy, false);
   // Batch size 1000 spans both chunks. The reader starts with dict,
   // hits the trivial chunk, and must fall back to flat for the whole batch.
   validate(*expected, *readers.rowReader, 1000);
@@ -4152,7 +4397,8 @@ TEST_P(StringColumnReaderTest, flatEncodingFallbackWithNulls) {
 
   auto scanSpec = std::make_shared<common::ScanSpec>("root");
   scanSpec->addAllChildFields(*expected->type());
-  auto readers = makeReaders(expected, file, scanSpec, stringDecoderZeroCopy);
+  auto readers =
+      makeReaders(expected, file, scanSpec, stringDecoderZeroCopy, false);
   validate(*expected, *readers.rowReader, 1000);
 }
 
@@ -4204,7 +4450,8 @@ TEST_P(StringColumnReaderTest, variableReadRangeTransitions) {
 
     auto scanSpec = std::make_shared<common::ScanSpec>("root");
     scanSpec->addAllChildFields(*expected->type());
-    auto readers = makeReaders(expected, file, scanSpec, stringDecoderZeroCopy);
+    auto readers =
+        makeReaders(expected, file, scanSpec, stringDecoderZeroCopy, false);
     validateWithEncodingChecks(
         *expected->childAt(0),
         *readers.rowReader,
@@ -4238,7 +4485,8 @@ TEST_P(StringColumnReaderTest, variableReadRangeTransitions) {
 
     auto scanSpec = std::make_shared<common::ScanSpec>("root");
     scanSpec->addAllChildFields(*input->type());
-    auto readers = makeReaders(input, file, scanSpec, stringDecoderZeroCopy);
+    auto readers =
+        makeReaders(input, file, scanSpec, stringDecoderZeroCopy, false);
     validateWithEncodingChecks(
         *input->childAt(0),
         *readers.rowReader,
@@ -4295,7 +4543,8 @@ TEST_P(StringColumnReaderTest, variableReadRangeTransitions) {
 
     auto scanSpec = std::make_shared<common::ScanSpec>("root");
     scanSpec->addAllChildFields(*expected->type());
-    auto readers = makeReaders(expected, file, scanSpec, stringDecoderZeroCopy);
+    auto readers =
+        makeReaders(expected, file, scanSpec, stringDecoderZeroCopy, false);
     // Batch 1: flat (chunk 1 is trivial). Batch 2: dict (mid-chunk 2).
     validateWithEncodingChecks(
         *expected->childAt(0),
@@ -4359,7 +4608,8 @@ TEST_P(StringColumnReaderTest, variableReadRangeTransitions) {
 
     auto scanSpec = std::make_shared<common::ScanSpec>("root");
     scanSpec->addAllChildFields(*expected->type());
-    auto readers = makeReaders(expected, file, scanSpec, stringDecoderZeroCopy);
+    auto readers =
+        makeReaders(expected, file, scanSpec, stringDecoderZeroCopy, false);
     validateWithEncodingChecks(
         *expected->childAt(0),
         *readers.rowReader,
@@ -4443,7 +4693,8 @@ TEST_P(StringColumnReaderTest, sparseRowsAcrossChunkAbandonPreservesNulls) {
           [](auto i) { return i < 300 && i % 7 == 0; }),
   });
 
-  auto readers = makeReaders(expected, file, scanSpec, stringDecoderZeroCopy);
+  auto readers =
+      makeReaders(expected, file, scanSpec, stringDecoderZeroCopy, false);
   // Single batch spans both chunks → the dict read is abandoned mid-batch on
   // a sparse row set.
   validateWithFilter(*expected, *readers.rowReader, 600, [](int i) {
@@ -4526,7 +4777,8 @@ TEST_P(StringColumnReaderTest, sparseRowsAcrossChunkAbandonNullsBothPortions) {
           }),
   });
 
-  auto readers = makeReaders(expected, file, scanSpec, stringDecoderZeroCopy);
+  auto readers =
+      makeReaders(expected, file, scanSpec, stringDecoderZeroCopy, false);
   validateWithFilter(*expected, *readers.rowReader, 600, [](int i) {
     return (i >= 50 && i <= 199) || (i >= 400 && i <= 549);
   });
@@ -4610,7 +4862,8 @@ TEST_P(
           [](auto i) { return i >= 300 && (i - 300) % 5 == 0; }),
   });
 
-  auto readers = makeReaders(expected, file, scanSpec, stringDecoderZeroCopy);
+  auto readers =
+      makeReaders(expected, file, scanSpec, stringDecoderZeroCopy, false);
   validateWithFilter(*expected, *readers.rowReader, 600, [](int i) {
     return (i >= 50 && i <= 199) || (i >= 400 && i <= 549);
   });
@@ -4717,7 +4970,8 @@ TEST_P(StringColumnReaderTest, fuzzMultiChunkDictionary) {
 
     auto scanSpec = std::make_shared<common::ScanSpec>("root");
     scanSpec->addAllChildFields(*expected->type());
-    auto readers = makeReaders(expected, file, scanSpec, stringDecoderZeroCopy);
+    auto readers =
+        makeReaders(expected, file, scanSpec, stringDecoderZeroCopy, false);
     validate(*expected, *readers.rowReader, batchSize);
   }
 }
@@ -4800,7 +5054,8 @@ TEST_P(StringColumnReaderTest, fuzzMultiChunkReadCorrectness) {
 
     auto scanSpec = std::make_shared<common::ScanSpec>("root");
     scanSpec->addAllChildFields(*expected->type());
-    auto readers = makeReaders(expected, file, scanSpec, stringDecoderZeroCopy);
+    auto readers =
+        makeReaders(expected, file, scanSpec, stringDecoderZeroCopy, false);
     validate(*expected, *readers.rowReader, batchSize);
   }
 }
@@ -4889,7 +5144,8 @@ TEST_P(StringColumnReaderTest, multiChunkLateNullPreparationDictPath) {
           }),
   });
 
-  auto readers = makeReaders(input, file, scanSpec, stringDecoderZeroCopy);
+  auto readers =
+      makeReaders(input, file, scanSpec, stringDecoderZeroCopy, false);
   validateWithFilter(
       *input,
       *readers.rowReader,
@@ -4965,7 +5221,8 @@ TEST_P(StringColumnReaderTest, multiChunkLateNullPreparationFlatPath) {
           }),
   });
 
-  auto readers = makeReaders(input, file, scanSpec, stringDecoderZeroCopy);
+  auto readers =
+      makeReaders(input, file, scanSpec, stringDecoderZeroCopy, false);
   validateWithFilter(
       *input,
       *readers.rowReader,

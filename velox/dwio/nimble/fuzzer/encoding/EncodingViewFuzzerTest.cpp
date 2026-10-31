@@ -31,6 +31,7 @@
 #include "velox/dwio/nimble/encodings/DeltaBlockEncoding.h"
 #include "velox/dwio/nimble/encodings/DictionaryEncoding.h"
 #include "velox/dwio/nimble/encodings/FixedBitWidthEncoding.h"
+#include "velox/dwio/nimble/encodings/FsstEncoding.h"
 #include "velox/dwio/nimble/encodings/HuffmanEncoding.h"
 #include "velox/dwio/nimble/encodings/PFOREncoding.h"
 #include "velox/dwio/nimble/encodings/RLEEncoding.h"
@@ -132,7 +133,12 @@ std::vector<Vector<typename EncodingClass::cppDataType>> makeDatasets(
     uint32_t rowCount,
     Buffer* buffer) {
   using T = typename EncodingClass::cppDataType;
-  if constexpr (
+  if constexpr (Encoder<EncodingClass>::encodingType() == EncodingType::Fsst) {
+    std::vector<Vector<T>> datasets;
+    datasets.push_back(makeFsstData(pool, rng, rowCount, buffer, true));
+    datasets.push_back(makeFsstData(pool, rng, rowCount, buffer, false));
+    return datasets;
+  } else if constexpr (
       Encoder<EncodingClass>::encodingType() == EncodingType::Constant) {
     return makeConstantViewDatasets<T>(pool, rng, rowCount, buffer);
   } else if constexpr (
@@ -179,7 +185,9 @@ template <typename EncodingClass>
 void runEncodingViewFuzzer(
     uint32_t iterations,
     uint32_t maxRows,
-    uint32_t seed) {
+    uint32_t seed,
+    Encoding::Options options,
+    CompressionType compressionType) {
   using T = typename EncodingClass::cppDataType;
   auto pool = velox::memory::deprecatedAddDefaultLeafMemoryPool();
   auto dataBuffer = std::make_unique<Buffer>(*pool);
@@ -194,6 +202,7 @@ void runEncodingViewFuzzer(
   std::mt19937 rng(seed);
 
   for (uint32_t iter = 0; iter < iterations; ++iter) {
+    dataBuffer->reset();
     const auto rowCount = 1 + folly::Random::rand32(rng) % maxRows;
     auto datasets =
         makeDatasets<EncodingClass>(*pool, rng, rowCount, dataBuffer.get());
@@ -207,12 +216,12 @@ void runEncodingViewFuzzer(
         SCOPED_TRACE(
             ::testing::Message() << "iter=" << iter << " useVarint="
                                  << useVarint << " rowCount=" << data.size());
-        const Encoding::Options options{.useVarintRowCount = useVarint};
+        options.useVarintRowCount = useVarint;
         Buffer encodeBuffer(*pool);
         std::string_view serialized;
         try {
           serialized = Encoder<EncodingClass>::encode(
-              encodeBuffer, data, CompressionType::Uncompressed, options);
+              encodeBuffer, data, compressionType, options);
         } catch (const NimbleUserError& e) {
           if (e.errorCode() == error_code::IncompatibleEncoding) {
             continue;
@@ -233,7 +242,7 @@ void runEncodingViewFuzzer(
             *pool, serialized, stringBufferFactory, options);
         ASSERT_NE(encoding, nullptr);
 
-        const auto probeRows = makeProbeRows(rng, data.size());
+        const auto probeRows = makeProbeRows(rng, encoding->rowCount());
         T expected;
         T actual;
         for (const auto row : probeRows) {
@@ -266,6 +275,27 @@ void runEncodingViewFuzzer(
 
 } // namespace
 
+TEST(FsstViewFuzzerTest, correctness) {
+  for (const auto cacheEnabled : {false, true}) {
+    for (const auto compression :
+         {CompressionType::Uncompressed, CompressionType::Zstd}) {
+      SCOPED_TRACE(
+          ::testing::Message() << "cache=" << cacheEnabled << " compression="
+                               << static_cast<int>(compression));
+      Encoding::Options options{};
+      options.fsstCompressionTargetRatio = std::numeric_limits<double>::max();
+      options.enableFsstDecodeCache = cacheEnabled;
+      options.cacheEncodingView = cacheEnabled;
+      runEncodingViewFuzzer<FsstEncoding>(
+          FLAGS_view_fuzzer_iterations,
+          FLAGS_view_fuzzer_max_rows,
+          FLAGS_view_fuzzer_seed,
+          options,
+          compression);
+    }
+  }
+}
+
 using TrivialViewTypes = ::testing::Types<
     TrivialEncoding<bool>,
     TrivialEncoding<int8_t>,
@@ -288,7 +318,9 @@ TYPED_TEST(TrivialEncodingViewFuzzerTest, readAtMatchesMaterialize) {
   runEncodingViewFuzzer<TypeParam>(
       FLAGS_view_fuzzer_iterations,
       FLAGS_view_fuzzer_max_rows,
-      FLAGS_view_fuzzer_seed);
+      FLAGS_view_fuzzer_seed,
+      Encoding::Options{},
+      CompressionType::Uncompressed);
 }
 
 using ConstantViewTypes = ::testing::Types<
@@ -313,7 +345,9 @@ TYPED_TEST(ConstantEncodingViewFuzzerTest, readAtMatchesMaterialize) {
   runEncodingViewFuzzer<TypeParam>(
       FLAGS_view_fuzzer_iterations,
       FLAGS_view_fuzzer_max_rows,
-      FLAGS_view_fuzzer_seed);
+      FLAGS_view_fuzzer_seed,
+      Encoding::Options{},
+      CompressionType::Uncompressed);
 }
 
 using RleViewTypes = ::testing::Types<
@@ -338,7 +372,9 @@ TYPED_TEST(RleEncodingViewFuzzerTest, readAtMatchesMaterialize) {
   runEncodingViewFuzzer<TypeParam>(
       FLAGS_view_fuzzer_iterations,
       FLAGS_view_fuzzer_max_rows,
-      FLAGS_view_fuzzer_seed);
+      FLAGS_view_fuzzer_seed,
+      Encoding::Options{},
+      CompressionType::Uncompressed);
 }
 
 using DictionaryViewTypes = ::testing::Types<
@@ -362,7 +398,9 @@ TYPED_TEST(DictionaryEncodingViewFuzzerTest, readAtMatchesMaterialize) {
   runEncodingViewFuzzer<TypeParam>(
       FLAGS_view_fuzzer_iterations,
       FLAGS_view_fuzzer_max_rows,
-      FLAGS_view_fuzzer_seed);
+      FLAGS_view_fuzzer_seed,
+      Encoding::Options{},
+      CompressionType::Uncompressed);
 }
 
 using FixedBitWidthViewTypes = ::testing::Types<
@@ -385,7 +423,9 @@ TYPED_TEST(FixedBitWidthEncodingViewFuzzerTest, readAtMatchesMaterialize) {
   runEncodingViewFuzzer<TypeParam>(
       FLAGS_view_fuzzer_iterations,
       FLAGS_view_fuzzer_max_rows,
-      FLAGS_view_fuzzer_seed);
+      FLAGS_view_fuzzer_seed,
+      Encoding::Options{},
+      CompressionType::Uncompressed);
 }
 
 using PforViewTypes = ::testing::Types<
@@ -406,7 +446,9 @@ TYPED_TEST(PforEncodingViewFuzzerTest, readAtMatchesMaterialize) {
   runEncodingViewFuzzer<TypeParam>(
       FLAGS_view_fuzzer_iterations,
       FLAGS_view_fuzzer_max_rows,
-      FLAGS_view_fuzzer_seed);
+      FLAGS_view_fuzzer_seed,
+      Encoding::Options{},
+      CompressionType::Uncompressed);
 }
 
 using DeltaBlockViewTypes = ::testing::Types<
@@ -427,7 +469,9 @@ TYPED_TEST(DeltaBlockEncodingViewFuzzerTest, readAtMatchesMaterialize) {
   runEncodingViewFuzzer<TypeParam>(
       FLAGS_view_fuzzer_iterations,
       FLAGS_view_fuzzer_max_rows,
-      FLAGS_view_fuzzer_seed);
+      FLAGS_view_fuzzer_seed,
+      Encoding::Options{},
+      CompressionType::Uncompressed);
 }
 
 using HuffmanViewTypes = ::testing::Types<
@@ -448,7 +492,9 @@ TYPED_TEST(HuffmanEncodingViewFuzzerTest, readAtMatchesMaterialize) {
   runEncodingViewFuzzer<TypeParam>(
       FLAGS_view_fuzzer_iterations,
       FLAGS_view_fuzzer_max_rows,
-      FLAGS_view_fuzzer_seed);
+      FLAGS_view_fuzzer_seed,
+      Encoding::Options{},
+      CompressionType::Uncompressed);
 }
 
 using SimdForBitpackViewTypes = ::testing::Types<
@@ -465,7 +511,9 @@ TYPED_TEST(SimdForBitpackEncodingViewFuzzerTest, readAtMatchesMaterialize) {
   runEncodingViewFuzzer<TypeParam>(
       FLAGS_view_fuzzer_iterations,
       FLAGS_view_fuzzer_max_rows,
-      FLAGS_view_fuzzer_seed);
+      FLAGS_view_fuzzer_seed,
+      Encoding::Options{},
+      CompressionType::Uncompressed);
 }
 
 using BlockBitPackingViewTypes = ::testing::Types<
@@ -490,7 +538,9 @@ TYPED_TEST(BlockBitPackingEncodingViewFuzzerTest, readAtMatchesMaterialize) {
   runEncodingViewFuzzer<TypeParam>(
       FLAGS_view_fuzzer_iterations,
       FLAGS_view_fuzzer_max_rows,
-      FLAGS_view_fuzzer_seed);
+      FLAGS_view_fuzzer_seed,
+      Encoding::Options{},
+      CompressionType::Uncompressed);
 }
 
 using AlpViewTypes = ::testing::Types<ALPEncoding<float>, ALPEncoding<double>>;
@@ -503,7 +553,9 @@ TYPED_TEST(AlpEncodingViewFuzzerTest, readAtMatchesMaterialize) {
   runEncodingViewFuzzer<TypeParam>(
       FLAGS_view_fuzzer_iterations,
       FLAGS_view_fuzzer_max_rows,
-      FLAGS_view_fuzzer_seed);
+      FLAGS_view_fuzzer_seed,
+      Encoding::Options{},
+      CompressionType::Uncompressed);
 }
 
 using AlprdViewTypes =
@@ -517,5 +569,7 @@ TYPED_TEST(AlprdEncodingViewFuzzerTest, readAtMatchesMaterialize) {
   runEncodingViewFuzzer<TypeParam>(
       FLAGS_view_fuzzer_iterations,
       FLAGS_view_fuzzer_max_rows,
-      FLAGS_view_fuzzer_seed);
+      FLAGS_view_fuzzer_seed,
+      Encoding::Options{},
+      CompressionType::Uncompressed);
 }

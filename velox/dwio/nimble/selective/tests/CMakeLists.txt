@@ -51,3 +51,24 @@ target_link_libraries(
   gtest_main
   Folly::folly
 )
+
+# Query tests use the execution engine, which minimal DWIO builds disable.
+if(VELOX_ENABLE_EXEC AND VELOX_BUILD_TEST_UTILS)
+  add_executable(nimble_fsst_query_test FsstQueryTest.cpp)
+  target_link_libraries(
+    nimble_fsst_query_test
+    nimble_velox_selective
+    nimble_common_file_writer
+    nimble_velox_chunked_stream
+    nimble_velox_schema_serialization
+    nimble_encodings
+    nimble_tablet_reader
+    nimble_writer
+    velox_exec_test_lib
+    velox_hive_connector
+    velox_vector_test_lib
+    gtest
+    gtest_main
+  )
+  add_test(nimble_fsst_query_test nimble_fsst_query_test)
+endif()
