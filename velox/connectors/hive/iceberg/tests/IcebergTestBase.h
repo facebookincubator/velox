@@ -31,6 +31,7 @@
 #include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
 #include "velox/connectors/hive/iceberg/IcebergSplit.h"
 #include "velox/connectors/hive/iceberg/IcebergTableHandle.h"
+#include "velox/connectors/hive/iceberg/tests/utils/IcebergPlanBuilder.h"
 #include "velox/dwio/common/FileSink.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
@@ -46,8 +47,6 @@
 namespace facebook::velox::connector::hive::iceberg::test {
 
 using TempDirectoryPath = common::testutil::TempDirectoryPath;
-
-extern const std::string kIcebergConnectorId;
 
 struct PartitionField {
   // 0-based column index.
@@ -127,19 +126,11 @@ class IcebergTestBase : public exec::test::HiveConnectorTestBase {
       const std::vector<int32_t>& icebergFieldIds = {});
 #endif
 
-  /// Builds an Iceberg table scan plan.
-  /// Field IDs are derived from each output column's 1-based position in
-  /// 'dataColumns' (the full table schema), which is the authoritative source
-  /// for Iceberg field IDs regardless of file format or projection.
+  /// Convenience wrapper that builds an Iceberg table-scan plan node for the
+  /// common case of a plain scan with no filters.
   core::PlanNodePtr makeIcebergTableScanPlan(
       const RowTypePtr& outputType,
-      const RowTypePtr& dataColumns,
-      const std::vector<int32_t>& dataColumnFieldIds = {},
-      const std::vector<std::string>& subfieldFilters = {},
-      const std::string& remainingFilter = "");
-
-  /// Convenience overload: outputType == dataColumns (full-projection scan).
-  core::PlanNodePtr makeIcebergTableScanPlan(const RowTypePtr& rowType);
+      const RowTypePtr& dataColumns = nullptr);
 
   /// Creates Hive column handles for all columns in 'rowType', marking
   /// specified columns as partition keys.

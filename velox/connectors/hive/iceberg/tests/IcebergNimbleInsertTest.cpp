@@ -24,10 +24,10 @@
 #include "velox/connectors/hive/HiveConfig.h"
 #include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
 #include "velox/connectors/hive/iceberg/tests/IcebergTestBase.h"
+#include "velox/connectors/hive/iceberg/tests/utils/IcebergPlanBuilder.h"
 #include "velox/dwio/nimble/reader/NimbleReaderFactory.h"
 #include "velox/dwio/nimble/writer/WriterFactory.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
-#include "velox/exec/tests/utils/PlanBuilder.h"
 
 using namespace facebook::velox::common::testutil;
 
@@ -75,9 +75,8 @@ class IcebergNimbleInsertTest : public test::IcebergTestBase {
 
     auto splits = createSplitsForDirectory(dataPath);
     ASSERT_EQ(splits.size(), commitTasks.size());
-    auto plan = exec::test::PlanBuilder()
+    auto plan = test::IcebergPlanBuilder()
                     .startTableScan()
-                    .connectorId(test::kIcebergConnectorId)
                     .outputType(rowType)
                     .endTableScan()
                     .planNode();
@@ -154,9 +153,8 @@ TEST_F(IcebergNimbleInsertTest, fieldIdRenameReorderDropAdd) {
               {"a", makeIcebergColumnHandle("a", BIGINT(), {1, {}})},
               {"d", makeIcebergColumnHandle("d", INTEGER(), {9, {}})}};
 
-  auto plan = exec::test::PlanBuilder()
+  auto plan = test::IcebergPlanBuilder()
                   .startTableScan()
-                  .connectorId(test::kIcebergConnectorId)
                   .outputType(readSchema)
                   .dataColumns(readSchema)
                   .assignments(assignments)
@@ -194,9 +192,8 @@ TEST_F(IcebergNimbleInsertTest, fieldIdDropReaddSameName) {
       unordered_map<std::string, std::shared_ptr<const connector::ColumnHandle>>
           assignments{{"c", makeIcebergColumnHandle("c", INTEGER(), {9, {}})}};
 
-  auto plan = exec::test::PlanBuilder()
+  auto plan = test::IcebergPlanBuilder()
                   .startTableScan()
-                  .connectorId(test::kIcebergConnectorId)
                   .outputType(readSchema)
                   .dataColumns(readSchema)
                   .assignments(assignments)
@@ -243,9 +240,8 @@ TEST_F(IcebergNimbleInsertTest, fieldIdNestedStructReorderDrop) {
                    ROW({"z", "x"}, {INTEGER(), INTEGER()}),
                    {1, {{4, {}}, {2, {}}}})}};
 
-  auto plan = exec::test::PlanBuilder()
+  auto plan = test::IcebergPlanBuilder()
                   .startTableScan()
-                  .connectorId(test::kIcebergConnectorId)
                   .outputType(readSchema)
                   .dataColumns(readSchema)
                   .assignments(assignments)
@@ -313,9 +309,8 @@ TEST_F(IcebergNimbleInsertTest, fieldIdRenameInsideArrayStruct) {
                makeIcebergColumnHandle(
                    "items", readItemsType, {1, {{2, {{3, {}}, {4, {}}}}}})}};
 
-  auto plan = exec::test::PlanBuilder()
+  auto plan = test::IcebergPlanBuilder()
                   .startTableScan()
-                  .connectorId(test::kIcebergConnectorId)
                   .outputType(readSchema)
                   .dataColumns(readSchema)
                   .assignments(assignments)
