@@ -1349,6 +1349,73 @@ TEST_F(CudfDecimalTest, decimalSumMaskedGlobalAllMasked) {
       .assertResults("SELECT sum(d) FILTER (WHERE m) AS s FROM tmp");
 }
 
+// Masked decimal avg: the mask null-injects raw input so the sum and count
+// behind the average skip masked rows, and a group or an input left with no
+// row yields NULL. Runs on GPU (fallback off).
+TEST_F(CudfDecimalTest, decimalAvgMasked) {
+  auto input = makeRowVector(
+      {"k", "d", "m"},
+      {
+          makeFlatVector<int32_t>({1, 1, 2, 2, 3}),
+          makeFlatVector<int64_t>(
+              {12'345, -2'500, 10'000, 200, -300}, DECIMAL(12, 2)),
+          makeFlatVector<bool>({true, false, true, true, false}),
+      });
+  auto expectedGrouped = makeRowVector(
+      {"k", "a"},
+      {
+          makeFlatVector<int32_t>({1, 2, 3}),
+          makeNullableFlatVector<int64_t>(
+              {12'345, 5'100, std::nullopt}, DECIMAL(12, 2)),
+      });
+  auto assertPlan = [&](const core::PlanNodePtr& plan,
+                        const RowVectorPtr& expected) {
+    auto result =
+        facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(
+            pool());
+    facebook::velox::test::assertEqualVectors(expected, result);
+  };
+
+  assertPlan(
+      exec::test::PlanBuilder()
+          .values({input})
+          .singleAggregation({"k"}, {"avg(d) AS a"}, {"m"})
+          .orderBy({"k"}, false)
+          .planNode(),
+      expectedGrouped);
+  assertPlan(
+      exec::test::PlanBuilder()
+          .values({input})
+          .partialAggregation({"k"}, {"avg(d) AS a"}, {"m"})
+          .finalAggregation()
+          .orderBy({"k"}, false)
+          .planNode(),
+      expectedGrouped);
+
+  // Every row is masked out on the reduce path, so the average is NULL.
+  auto allMasked = makeRowVector(
+      {"d", "m"},
+      {
+          makeFlatVector<int64_t>({12'345, -2'500}, DECIMAL(12, 2)),
+          makeFlatVector<bool>({false, false}),
+      });
+  auto expectedNull = makeRowVector(
+      {"a"}, {makeNullableFlatVector<int64_t>({std::nullopt}, DECIMAL(12, 2))});
+  assertPlan(
+      exec::test::PlanBuilder()
+          .values({allMasked})
+          .singleAggregation({}, {"avg(d) AS a"}, {"m"})
+          .planNode(),
+      expectedNull);
+  assertPlan(
+      exec::test::PlanBuilder()
+          .values({allMasked})
+          .partialAggregation({}, {"avg(d) AS a"}, {"m"})
+          .finalAggregation()
+          .planNode(),
+      expectedNull);
+}
+
 TEST_F(CudfDecimalTest, decimalSumGroupbySingleDecimal64Overflow) {
   // One group of 12 values of 9e17 (DECIMAL(18,0)) sums to 1.08e19, past 2^63.
   // sum(decimal(18,0)) -> decimal(38,0), computed in 128 bits, no wrap.

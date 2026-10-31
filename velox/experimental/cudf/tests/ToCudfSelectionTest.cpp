@@ -681,6 +681,42 @@ TEST_F(ToCudfSelectionTest, unsupportedAggregationFallsBack) {
   ASSERT_TRUE(wasDefaultHashAggregationUsed(task));
 }
 
+// A plain array_agg runs on the GPU, which keeps each group's rows in arrival
+// order; one with ORDER BY falls back to the CPU, which sorts each group.
+TEST_F(ToCudfSelectionTest, arrayAggOrderByFallsBack) {
+  auto data = makeRowVector(
+      {"k", "v", "position"},
+      {
+          makeFlatVector<int64_t>({1, 2, 1, 2}),
+          makeFlatVector<int64_t>({30, 20, 10, 40}),
+          makeFlatVector<int64_t>({0, 1, 2, 3}),
+      });
+  createDuckDbTable({data});
+
+  auto run = [&](const std::string& aggregate, const std::string& sql) {
+    auto plan = PlanBuilder()
+                    .values({data})
+                    .singleAggregation({"k"}, {aggregate})
+                    .planNode();
+    return AssertQueryBuilder(duckDbQueryRunner_)
+        .config("cudf.enabled", true)
+        .plan(plan)
+        .assertResults(sql);
+  };
+
+  auto gpuTask =
+      run("array_agg(v)",
+          "SELECT k, array_agg(v ORDER BY position) FROM tmp GROUP BY k");
+  ASSERT_TRUE(wasCudfAggregationUsed(gpuTask));
+  ASSERT_FALSE(wasDefaultHashAggregationUsed(gpuTask));
+
+  auto cpuTask =
+      run("array_agg(v ORDER BY v DESC)",
+          "SELECT k, array_agg(v ORDER BY v DESC) FROM tmp GROUP BY k");
+  ASSERT_FALSE(wasCudfAggregationUsed(cpuTask));
+  ASSERT_TRUE(wasDefaultHashAggregationUsed(cpuTask));
+}
+
 // Test mixed supported/unsupported should fall back
 TEST_F(ToCudfSelectionTest, mixedSupportFallsBack) {
   auto vectors = makeVectors(rowType_, 10, 100);

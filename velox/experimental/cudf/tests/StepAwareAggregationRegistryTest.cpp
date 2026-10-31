@@ -29,6 +29,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <unordered_set>
 
 using namespace facebook::velox;
 
@@ -95,6 +96,8 @@ TEST_F(StepAwareAggregationRegistryTest, allFunctionsAreRegisteredInGroupby) {
   // approx_distinct should NOT be in the groupby registry
   EXPECT_TRUE(registry.find("approx_distinct") == registry.end())
       << "approx_distinct should NOT be registered in groupby registry";
+  EXPECT_TRUE(registry.find("array_agg") != registry.end())
+      << "array_agg function should be registered in groupby registry";
 }
 
 TEST_F(StepAwareAggregationRegistryTest, allFunctionsAreRegisteredInReduce) {
@@ -114,6 +117,69 @@ TEST_F(StepAwareAggregationRegistryTest, allFunctionsAreRegisteredInReduce) {
   // approx_distinct should be in the reduce registry
   EXPECT_TRUE(registry.find("approx_distinct") != registry.end())
       << "approx_distinct should be registered in reduce registry";
+  // array_agg has no reduce implementation.
+  EXPECT_TRUE(registry.find("array_agg") == registry.end())
+      << "array_agg should NOT be registered in reduce registry";
+}
+
+// FILTER mask support is declared per registry: the aggregates that honor a
+// mask on the groupby path, those that do on the reduce path, and every one
+// of them has an aggregator on that path. An aggregator added later for a
+// function that is mask-capable on the other path starts without a mask.
+TEST_F(StepAwareAggregationRegistryTest, maskSupportIsDeclaredPerRegistry) {
+  const std::unordered_set<std::string> groupbyNames = {
+      "sum", "count", "min", "max", "avg", "stddev_samp", "stddev"};
+  const std::unordered_set<std::string> reduceNames = {
+      "sum", "count", "min", "max", "avg", "approx_distinct"};
+  EXPECT_EQ(
+      maskSupportedAggregations(getGroupbyAggregationRegistry()), groupbyNames);
+  EXPECT_EQ(
+      maskSupportedAggregations(getReduceAggregationRegistry()), reduceNames);
+  for (const auto& name : groupbyNames) {
+    EXPECT_TRUE(getGroupbyAggregationRegistry().count(name))
+        << name << " honors a mask on the groupby path without an aggregator";
+  }
+  for (const auto& name : reduceNames) {
+    EXPECT_TRUE(getReduceAggregationRegistry().count(name))
+        << name << " honors a mask on the reduce path without an aggregator";
+  }
+}
+
+// array_agg binds any element type at the raw-input steps and an array, not
+// an element, at the merge steps, in the groupby registry alone.
+TEST_F(StepAwareAggregationRegistryTest, arrayAggStepsBindElementAndArray) {
+  auto rawCall = std::make_shared<core::CallTypedExpr>(
+      ARRAY(VARCHAR()),
+      std::vector<core::TypedExprPtr>{
+          std::make_shared<core::FieldAccessTypedExpr>(VARCHAR(), "input")},
+      "array_agg");
+  auto mergeCall = std::make_shared<core::CallTypedExpr>(
+      ARRAY(VARCHAR()),
+      std::vector<core::TypedExprPtr>{
+          std::make_shared<core::FieldAccessTypedExpr>(
+              ARRAY(VARCHAR()), "input")},
+      "array_agg");
+
+  for (const auto step : {
+           core::AggregationNode::Step::kSingle,
+           core::AggregationNode::Step::kPartial,
+       }) {
+    SCOPED_TRACE(core::AggregationNode::toName(step));
+    EXPECT_TRUE(canGroupbyAggregationBeEvaluatedByCudf(
+        *rawCall, step, {VARCHAR()}, queryCtx_.get()));
+    EXPECT_FALSE(canReduceAggregationBeEvaluatedByCudf(
+        *rawCall, step, {VARCHAR()}, queryCtx_.get()));
+  }
+  for (const auto step : {
+           core::AggregationNode::Step::kIntermediate,
+           core::AggregationNode::Step::kFinal,
+       }) {
+    SCOPED_TRACE(core::AggregationNode::toName(step));
+    EXPECT_TRUE(canGroupbyAggregationBeEvaluatedByCudf(
+        *mergeCall, step, {VARCHAR()}, queryCtx_.get()));
+    EXPECT_FALSE(canGroupbyAggregationBeEvaluatedByCudf(
+        *rawCall, step, {VARCHAR()}, queryCtx_.get()));
+  }
 }
 
 TEST_F(StepAwareAggregationRegistryTest, allStepsAreRegisteredForAvg) {
