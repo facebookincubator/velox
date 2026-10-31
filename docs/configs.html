@@ -1530,17 +1530,12 @@ not be triggered. NOTE: lazy IO applies the same restriction as lazy materializa
 allow lazy IO across stripes. Configure as <code class="docutils literal notranslate"><span class="pre">nimble.lazy-column-io</span></code>; do not prepend <code class="docutils literal notranslate"><span class="pre">hive.</span></code>.
 Session: <code class="docutils literal notranslate"><span class="pre">nimble_lazy_column_io</span></code>.</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">string-decoder-zero-copy</span></code></p></td>
-<td><p>bool</p></td>
-<td><p>false</p></td>
-<td><p>Enable zero-copy string decoding in Nimble selective reader. Configure as <code class="docutils literal notranslate"><span class="pre">nimble.string-decoder-zero-copy</span></code>; do not prepend <code class="docutils literal notranslate"><span class="pre">hive.</span></code>. Session: <code class="docutils literal notranslate"><span class="pre">nimble_string_decoder_zero_copy</span></code>.</p></td>
-</tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">preserve-dictionary-encoding</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">preserve-dictionary-encoding</span></code></p></td>
 <td><p>bool</p></td>
 <td><p>false</p></td>
 <td><p>Preserve dictionary encoding for Nimble string column reads. Configure as <code class="docutils literal notranslate"><span class="pre">nimble.preserve-dictionary-encoding</span></code>; do not prepend <code class="docutils literal notranslate"><span class="pre">hive.</span></code>. Session: <code class="docutils literal notranslate"><span class="pre">nimble_preserve_dictionary_encoding</span></code>.</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">writer.max-target-file-size</span></code></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">writer.max-target-file-size</span></code></p></td>
 <td><p>capacity</p></td>
 <td><p>0B</p></td>
 <td><p>Maximum target file size for Nimble writers. When a file exceeds this size during writing, the writer
