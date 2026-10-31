@@ -74,8 +74,12 @@ CudfHiveConnectorSplit::CudfHiveConnectorSplit(
     const std::unordered_map<std::string, std::string>& _infoColumns,
     const std::unordered_map<std::string, std::optional<std::string>>&
         _partitionKeys,
-    std::optional<FileProperties> _properties)
-    : facebook::velox::connector::ConnectorSplit(connectorId, _splitWeight),
+    std::optional<FileProperties> _properties,
+    bool _cacheable)
+    : facebook::velox::connector::ConnectorSplit(
+          connectorId,
+          _splitWeight,
+          _cacheable),
       filePath(stripFilePrefix(_filePath)),
       start(_start),
       length(_length),
@@ -92,6 +96,7 @@ std::shared_ptr<CudfHiveConnectorSplit> CudfHiveConnectorSplit::create(
   const auto start = static_cast<uint64_t>(obj["start"].asInt());
   const auto length = static_cast<uint64_t>(obj["length"].asInt());
   const auto splitWeight = obj["splitWeight"].asInt();
+  const auto cacheable = obj.getDefault("cacheable", true).asBool();
 
   std::unordered_map<std::string, std::string> infoColumns;
   for (const auto& [key, value] : obj["infoColumns"].items()) {
@@ -119,7 +124,8 @@ std::shared_ptr<CudfHiveConnectorSplit> CudfHiveConnectorSplit::create(
       splitWeight,
       infoColumns,
       partitionKeys,
-      std::move(properties));
+      std::move(properties),
+      cacheable);
 }
 
 folly::dynamic CudfHiveConnectorSplit::serialize() const {
@@ -129,6 +135,7 @@ folly::dynamic CudfHiveConnectorSplit::serialize() const {
   obj["start"] = start;
   obj["length"] = length;
   obj["splitWeight"] = splitWeight;
+  obj["cacheable"] = cacheable;
 
   folly::dynamic infoColumnsObj = folly::dynamic::object;
   for (const auto& [key, value] : infoColumns) {
