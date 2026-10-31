@@ -38,6 +38,13 @@ FetchContent_Declare(
   URL_HASH ${VELOX_GRPC_BUILD_SHA256_CHECKSUM}
   OVERRIDE_FIND_PACKAGE
   EXCLUDE_FROM_ALL
+  # Mark gRPC's include dirs as SYSTEM so -Werror=deprecated-declarations
+  # in Velox builds does not fire on the warnings gRPC 1.83's own headers
+  # emit (grpcpp/security/tls_credentials_options.h still references
+  # IdentityKeyCertPair / set_certificate_provider, which it marks as
+  # deprecated). The SYSTEM path (find_package via imported target)
+  # already does this; keep BUNDLED consistent.
+  SYSTEM
 )
 
 # We need to specify CACHE explicitly even when we have
