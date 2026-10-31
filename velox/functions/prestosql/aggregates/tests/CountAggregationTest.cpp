@@ -54,6 +54,14 @@ TEST_F(CountAggregationTest, count) {
 
   // count over column with nulls; only non-null rows should be counted
   testAggregations(vectors, {}, {"count(c1)"}, "SELECT count(c1) FROM tmp");
+  testAggregationsWithCompanion(
+      vectors,
+      [](auto&) {},
+      {},
+      {"count()", "count(1)", "count(c1)"},
+      {{}, {BIGINT()}, {SMALLINT()}},
+      {},
+      "SELECT count(1), count(1), count(c1) FROM tmp");
 
   // count over zero rows; the result should be 0, not null
   testAggregations(

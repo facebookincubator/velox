@@ -396,6 +396,26 @@ bool hasOrderSensitive(
   return hasOrderSensitive(
       [&](PlanBuilder& builder) { builder.values(data); }, aggregates, pool);
 }
+
+// Require every aggregate's fast path so tests can compare partial states.
+bool allSupportToIntermediate(
+    const core::AggregationNode& node,
+    const core::QueryConfig& config) {
+  return !node.aggregates().empty() &&
+      std::all_of(
+          node.aggregates().begin(),
+          node.aggregates().end(),
+          [&](const auto& aggregate) {
+            return exec::Aggregate::create(
+                       aggregate.call->name(),
+                       core::AggregationNode::Step::kPartial,
+                       aggregate.rawInputTypes,
+                       aggregate.call->type(),
+                       config,
+                       {})
+                ->supportsToIntermediate();
+          });
+}
 } // namespace
 
 void AggregationTestBase::testAggregationsWithCompanion(
@@ -495,6 +515,245 @@ void AggregationTestBase::testAggregationsWithCompanion(
     AssertQueryBuilder queryBuilder(builder.planNode(), duckDbQueryRunner_);
     queryBuilder.configs(config);
     assertResults(queryBuilder);
+  }
+
+  {
+    SCOPED_TRACE("Run abandoned partial merge without mask");
+    PlanBuilder builder(pool());
+    builder.values(dataWithExtraGroupingKey);
+    preAggregationProcessing(builder);
+    builder.partialAggregation(groupingKeysWithPartialKey, partialAggregates)
+        .finalAggregation();
+
+    // Group by k0 because global partial aggregations cannot be abandoned.
+    core::PlanNodeId mergeNodeId;
+    builder.partialAggregation(groupingKeysWithPartialKey, mergeAggregates)
+        .capturePlanNodeId(mergeNodeId);
+    const auto& mergeNode =
+        static_cast<const core::AggregationNode&>(*builder.planNode());
+    // Compare partial states so a final merge cannot hide incorrect empty
+    // values such as NULL instead of COUNT's 0. Skip unsupported fast paths.
+    if (allSupportToIntermediate(mergeNode, core::QueryConfig(config))) {
+      AssertQueryBuilder queryBuilder(builder.planNode(), duckDbQueryRunner_);
+      queryBuilder.configs(config)
+          .maxDrivers(1)
+          .config(core::QueryConfig::kMaxOutputBatchRows, "2")
+          .config(core::QueryConfig::kMaxPartialAggregationMemory, 1ULL << 60)
+          .config(
+              core::QueryConfig::kMaxExtendedPartialAggregationMemory,
+              1ULL << 60)
+          .config(core::QueryConfig::kAbandonPartialAggregationMinPct, "101");
+      auto expected = queryBuilder.copyResults(pool());
+      enableAbandonPartialAggregation(queryBuilder);
+      auto task = queryBuilder.assertResults({expected});
+      const auto stats = toPlanStats(task->taskStats());
+      if (stats.at(mergeNodeId).inputVectors > 1) {
+        EXPECT_GT(
+            stats.at(mergeNodeId)
+                .customStats.at("abandonedPartialAggregationRows")
+                .sum,
+            0);
+        EXPECT_GE(
+            stats.at(mergeNodeId)
+                .customStats.at("toIntermediateFastPathCalls")
+                .sum,
+            mergeAggregates.size() * (stats.at(mergeNodeId).inputVectors - 1));
+      }
+    }
+  }
+
+  {
+    SCOPED_TRACE("Run abandoned partial merge with mixed mask");
+    PlanBuilder builder(pool());
+    builder.values(dataWithExtraGroupingKey);
+    preAggregationProcessing(builder);
+    builder.partialAggregation(groupingKeysWithPartialKey, partialAggregates)
+        .finalAggregation();
+
+    builder.rowNumber({});
+    auto projections = groupingKeysWithPartialKey;
+    for (auto i = 0; i < mergeAggregates.size(); ++i) {
+      projections.push_back(fmt::format("a{}", i));
+    }
+    projections.push_back("row_number % 2 = 0 AS __merge_mask");
+    builder.project(projections);
+
+    // Group by k0 because global partial aggregations cannot be abandoned.
+    core::PlanNodeId mergeNodeId;
+    builder
+        .partialAggregation(
+            groupingKeysWithPartialKey,
+            mergeAggregates,
+            std::vector<std::string>(mergeAggregates.size(), "__merge_mask"))
+        .capturePlanNodeId(mergeNodeId);
+    const auto& mergeNode =
+        static_cast<const core::AggregationNode&>(*builder.planNode());
+    // Compare partial states so a final merge cannot hide incorrect empty
+    // values such as NULL instead of COUNT's 0. Skip unsupported fast paths.
+    if (allSupportToIntermediate(mergeNode, core::QueryConfig(config))) {
+      AssertQueryBuilder queryBuilder(builder.planNode(), duckDbQueryRunner_);
+      queryBuilder.configs(config)
+          .maxDrivers(1)
+          .config(core::QueryConfig::kMaxOutputBatchRows, "2")
+          .config(core::QueryConfig::kMaxPartialAggregationMemory, 1ULL << 60)
+          .config(
+              core::QueryConfig::kMaxExtendedPartialAggregationMemory,
+              1ULL << 60)
+          .config(core::QueryConfig::kAbandonPartialAggregationMinPct, "101");
+      auto expected = queryBuilder.copyResults(pool());
+      enableAbandonPartialAggregation(queryBuilder);
+      auto task = queryBuilder.assertResults({expected});
+      const auto stats = toPlanStats(task->taskStats());
+      if (stats.at(mergeNodeId).inputVectors > 1) {
+        EXPECT_GT(
+            stats.at(mergeNodeId)
+                .customStats.at("abandonedPartialAggregationRows")
+                .sum,
+            0);
+        EXPECT_GE(
+            stats.at(mergeNodeId)
+                .customStats.at("toIntermediateFastPathCalls")
+                .sum,
+            mergeAggregates.size() * (stats.at(mergeNodeId).inputVectors - 1));
+      }
+    }
+  }
+
+  {
+    SCOPED_TRACE("Run abandoned partial merge with all-false mask");
+    PlanBuilder builder(pool());
+    builder.values(dataWithExtraGroupingKey);
+    preAggregationProcessing(builder);
+    builder.partialAggregation(groupingKeysWithPartialKey, partialAggregates)
+        .finalAggregation();
+
+    auto projections = groupingKeysWithPartialKey;
+    for (auto i = 0; i < mergeAggregates.size(); ++i) {
+      projections.push_back(fmt::format("a{}", i));
+    }
+    projections.push_back("false AS __merge_mask");
+    builder.project(projections);
+
+    // Group by k0 because global partial aggregations cannot be abandoned.
+    core::PlanNodeId mergeNodeId;
+    builder
+        .partialAggregation(
+            groupingKeysWithPartialKey,
+            mergeAggregates,
+            std::vector<std::string>(mergeAggregates.size(), "__merge_mask"))
+        .capturePlanNodeId(mergeNodeId);
+    const auto& mergeNode =
+        static_cast<const core::AggregationNode&>(*builder.planNode());
+    // Compare partial states so a final merge cannot hide incorrect empty
+    // values such as NULL instead of COUNT's 0. Skip unsupported fast paths.
+    if (allSupportToIntermediate(mergeNode, core::QueryConfig(config))) {
+      AssertQueryBuilder queryBuilder(builder.planNode(), duckDbQueryRunner_);
+      queryBuilder.configs(config)
+          .maxDrivers(1)
+          .config(core::QueryConfig::kMaxOutputBatchRows, "2")
+          .config(core::QueryConfig::kMaxPartialAggregationMemory, 1ULL << 60)
+          .config(
+              core::QueryConfig::kMaxExtendedPartialAggregationMemory,
+              1ULL << 60)
+          .config(core::QueryConfig::kAbandonPartialAggregationMinPct, "101");
+      auto expected = queryBuilder.copyResults(pool());
+      enableAbandonPartialAggregation(queryBuilder);
+      auto task = queryBuilder.assertResults({expected});
+      const auto stats = toPlanStats(task->taskStats());
+      if (stats.at(mergeNodeId).inputVectors > 1) {
+        EXPECT_GT(
+            stats.at(mergeNodeId)
+                .customStats.at("abandonedPartialAggregationRows")
+                .sum,
+            0);
+        EXPECT_GE(
+            stats.at(mergeNodeId)
+                .customStats.at("toIntermediateFastPathCalls")
+                .sum,
+            mergeAggregates.size() * (stats.at(mergeNodeId).inputVectors - 1));
+      }
+    }
+  }
+
+  {
+    SCOPED_TRACE("Run abandoned partial merge with selected nulls");
+    PlanBuilder builder(pool());
+    builder.values(dataWithExtraGroupingKey);
+    preAggregationProcessing(builder);
+    builder.partialAggregation(groupingKeysWithPartialKey, partialAggregates)
+        .finalAggregation();
+
+    // Preserve child encodings during NULL injection because some merges
+    // require constant intermediate fields.
+    CursorParameters params;
+    params.planNode = builder.planNode();
+    params.queryConfigs = config;
+    params.queryConfigs[core::QueryConfig::kMaxOutputBatchRows] = "2";
+    params.copyResult = false;
+    auto [cursor, intermediateInputs] = exec::test::readCursor(params);
+    std::vector<RowVectorPtr> nullableInputs;
+    for (const auto& input : intermediateInputs) {
+      if (input->size() == 0) {
+        continue;
+      }
+      auto children = input->children();
+      auto indices = allocateIndices(input->size(), pool());
+      auto* rawIndices = indices->asMutable<vector_size_t>();
+      std::iota(rawIndices, rawIndices + input->size(), 0);
+      auto nulls = allocateNulls(input->size(), pool(), bits::kNotNull);
+      bits::setNull(nulls->asMutable<uint64_t>(), 0);
+      for (auto i = groupingKeysWithPartialKey.size(); i < children.size();
+           ++i) {
+        children[i] = BaseVector::wrapInDictionary(
+            nulls, indices, input->size(), children[i]);
+      }
+      nullableInputs.push_back(
+          makeRowVector(input->rowType()->names(), children));
+    }
+    if (nullableInputs.empty()) {
+      nullableInputs.push_back(
+          BaseVector::create<RowVector>(
+              builder.planNode()->outputType(), 0, pool()));
+    }
+    PlanBuilder mergeBuilder(pool());
+    mergeBuilder.values(nullableInputs);
+
+    // Group by k0 because global partial aggregations cannot be abandoned.
+    core::PlanNodeId mergeNodeId;
+    mergeBuilder.partialAggregation(groupingKeysWithPartialKey, mergeAggregates)
+        .capturePlanNodeId(mergeNodeId);
+    const auto& mergeNode =
+        static_cast<const core::AggregationNode&>(*mergeBuilder.planNode());
+    // Compare partial states so a final merge cannot hide incorrect empty
+    // values such as NULL instead of COUNT's 0. Skip unsupported fast paths.
+    if (allSupportToIntermediate(mergeNode, core::QueryConfig(config))) {
+      AssertQueryBuilder queryBuilder(
+          mergeBuilder.planNode(), duckDbQueryRunner_);
+      queryBuilder.configs(config)
+          .maxDrivers(1)
+          .config(core::QueryConfig::kMaxOutputBatchRows, "2")
+          .config(core::QueryConfig::kMaxPartialAggregationMemory, 1ULL << 60)
+          .config(
+              core::QueryConfig::kMaxExtendedPartialAggregationMemory,
+              1ULL << 60)
+          .config(core::QueryConfig::kAbandonPartialAggregationMinPct, "101");
+      auto expected = queryBuilder.copyResults(pool());
+      enableAbandonPartialAggregation(queryBuilder);
+      auto task = queryBuilder.assertResults({expected});
+      const auto stats = toPlanStats(task->taskStats());
+      if (stats.at(mergeNodeId).inputVectors > 1) {
+        EXPECT_GT(
+            stats.at(mergeNodeId)
+                .customStats.at("abandonedPartialAggregationRows")
+                .sum,
+            0);
+        EXPECT_GE(
+            stats.at(mergeNodeId)
+                .customStats.at("toIntermediateFastPathCalls")
+                .sum,
+            mergeAggregates.size() * (stats.at(mergeNodeId).inputVectors - 1));
+      }
+    }
   }
 
   if (!groupingKeys.empty() && !hasOrderSensitive(data, aggregates, pool())) {

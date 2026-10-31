@@ -136,6 +136,14 @@ TEST_F(AverageAggregationTest, avgAllNulls) {
       {"c0"},
       {"spark_avg(c1)"},
       "SELECT c0, avg(c1) FROM tmp GROUP BY c0");
+  testAggregationsWithCompanion(
+      vectors,
+      [](auto&) {},
+      {"c0"},
+      {"spark_avg(c1)"},
+      {{BIGINT()}},
+      {},
+      "SELECT c0, avg(c1) FROM tmp GROUP BY c0");
 
   plan = PlanBuilder()
              .values(vectors)
@@ -382,6 +390,15 @@ TEST_F(AverageAggregationTest, abandonPartialAggregation) {
              kBatchSize, [](auto row) { return row % 3 != 0; })}));
   }
   createDuckDbTable(data);
+
+  testAggregationsWithCompanion(
+      data,
+      [](auto&) {},
+      {},
+      {"spark_avg(i)", "spark_avg(d)"},
+      {{INTEGER()}, {DOUBLE()}},
+      {},
+      "SELECT avg(i), avg(d) FROM tmp");
 
   core::PlanNodeId partialNodeId;
   auto plan = PlanBuilder()

@@ -50,9 +50,13 @@ class DecimalSumAggregate {
     if (in.has_value()) {
       out.copy_from(std::make_tuple(static_cast<TSumType>(in.value()), false));
     } else {
-      out.copy_from(std::make_tuple(static_cast<TSumType>(0), true));
+      fillEmptyIntermediate(out);
     }
     return true;
+  }
+
+  static void fillEmptyIntermediate(exec::out_type<IntermediateType>& out) {
+    out.copy_from(std::make_tuple(static_cast<TSumType>(0), true));
   }
 
   /// This struct stores the sum of input values, overflow during accumulation,

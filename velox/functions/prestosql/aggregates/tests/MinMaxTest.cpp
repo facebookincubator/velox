@@ -63,6 +63,14 @@ class MinMaxTest : public functions::aggregate::test::AggregationTestBase {
     // Global aggregation.
     testAggregations(
         vectors, {}, {agg(c1)}, fmt::format("SELECT {} FROM tmp", agg(c1)));
+    testAggregationsWithCompanion(
+        vectors,
+        [](auto&) {},
+        {},
+        {agg(c1)},
+        {{inputType}},
+        {},
+        fmt::format("SELECT {} FROM tmp", agg(c1)));
 
     // Group by aggregation.
     testAggregations(
