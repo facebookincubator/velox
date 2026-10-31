@@ -417,12 +417,10 @@ IcebergDataSink::IcebergDataSink(
     if (writeDefaultValue.has_value() && isOmittedColumn) {
       writeDefaultColumns_.push_back(
           {static_cast<column_index_t>(i),
-           newConstantFromString(
+           newIcebergDefaultValueConstant(
                inputType_->childAt(i),
                writeDefaultValue.value(),
-               connectorQueryCtx_->memoryPool(),
-               /*isLocalTimestamp=*/false,
-               /*isDaysSinceEpoch=*/false)});
+               connectorQueryCtx_->memoryPool())});
     }
   }
 

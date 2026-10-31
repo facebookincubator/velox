@@ -20,11 +20,13 @@
 #include <string>
 #include <vector>
 
+#include "velox/common/memory/Memory.h"
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/connectors/hive/iceberg/IcebergFieldMetadata.h"
 #include "velox/dwio/common/ParquetFieldId.h"
 #include "velox/type/Subfield.h"
 #include "velox/type/Type.h"
+#include "velox/vector/BaseVector.h"
 
 namespace facebook::velox::connector::hive::iceberg {
 
@@ -78,5 +80,13 @@ class IcebergColumnHandle : public HiveColumnHandle {
 };
 
 using IcebergColumnHandlePtr = std::shared_ptr<const IcebergColumnHandle>;
+
+/// Creates a constant vector of size 1 for an Iceberg column default value
+/// (initial-default or write-default) as serialized.
+/// Returns a null constant if 'value' is not set.
+VectorPtr newIcebergDefaultValueConstant(
+    const TypePtr& type,
+    const std::optional<std::string>& value,
+    memory::MemoryPool* pool);
 
 } // namespace facebook::velox::connector::hive::iceberg
