@@ -40,6 +40,7 @@ velox_add_library(
   ArrayPosition.cpp
   ArraySort.cpp
   ArraySum.cpp
+  ArrayTopNTransform.cpp
   Comparisons.cpp
   DecimalFunctions.cpp
   DestructureTDigest.cpp
