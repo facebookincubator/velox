@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#include <cstring>
+
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
@@ -87,26 +89,84 @@ TEST_F(BitmapOrAggAggregateTest, groupBy) {
   testAggregations({input}, {"c0"}, {"bitmap_or_agg(c1)"}, {expectedResult});
 }
 
-TEST_F(BitmapOrAggAggregateTest, invalidInputSize) {
-  // Inputs not exactly 4096 bytes should trigger a check failure.
+TEST_F(BitmapOrAggAggregateTest, variableLengthInput) {
+  // Spark's bitmap_or_agg accepts bitmaps shorter than 4096 bytes (e.g. from
+  // to_binary('...', 'hex')); only the provided bytes are merged and the rest
+  // of the 4096-byte accumulator stays zero. Matches
+  // BitmapExpressionUtils.bitmapMerge, which ORs min(input, buffer) bytes.
   auto shortBitmap = std::string(100, '\x01');
   auto input = makeRowVector({makeFlatVector({shortBitmap}, VARBINARY())});
 
-  VELOX_ASSERT_THROW(
-      testAggregations(
-          {input}, {}, {"bitmap_or_agg(c0)"}, std::vector<RowVectorPtr>{}),
-      "bitmap_or_agg expects exactly 4096 byte bitmaps");
+  std::string expectedBitmap(kBitmapNumBytes, '\0');
+  std::memcpy(expectedBitmap.data(), shortBitmap.data(), shortBitmap.size());
+  auto expectedResult =
+      makeRowVector({makeFlatVector({expectedBitmap}, VARBINARY())});
+
+  testAggregations({input}, {}, {"bitmap_or_agg(c0)"}, {expectedResult});
 }
 
-TEST_F(BitmapOrAggAggregateTest, emptyBitmapRejected) {
-  // A zero-length VARBINARY is invalid input, not silently skipped.
+TEST_F(BitmapOrAggAggregateTest, overLengthInput) {
+  // Inputs longer than 4096 bytes contribute only their first 4096 bytes; the
+  // remainder is ignored, matching Spark's min(input, buffer) merge.
+  auto longBitmap =
+      std::string(kBitmapNumBytes, '\x0F') + std::string(1000, '\xFF');
+  auto input = makeRowVector({makeFlatVector({longBitmap}, VARBINARY())});
+
+  auto expectedBitmap = std::string(kBitmapNumBytes, '\x0F');
+  auto expectedResult =
+      makeRowVector({makeFlatVector({expectedBitmap}, VARBINARY())});
+
+  testAggregations({input}, {}, {"bitmap_or_agg(c0)"}, {expectedResult});
+}
+
+TEST_F(BitmapOrAggAggregateTest, emptyBitmapAccepted) {
+  // A zero-length VARBINARY contributes no bits; the group still yields the
+  // non-null all-zeros bitmap.
   auto emptyBitmap = std::string();
   auto input = makeRowVector({makeFlatVector({emptyBitmap}, VARBINARY())});
 
-  VELOX_ASSERT_THROW(
-      testAggregations(
-          {input}, {}, {"bitmap_or_agg(c0)"}, std::vector<RowVectorPtr>{}),
-      "bitmap_or_agg expects exactly 4096 byte bitmaps");
+  auto expectedResult =
+      makeRowVector({BitmapBuilder::vectorFromBits(pool(), {{}})});
+
+  testAggregations({input}, {}, {"bitmap_or_agg(c0)"}, {expectedResult});
+}
+
+TEST_F(BitmapOrAggAggregateTest, singleByteInput) {
+  // Guards the exact regression: a 1-byte input such as to_binary('10', 'hex')
+  // must merge rather than throw. Exercises the tail-only byte path (size < 8).
+  auto oneByte = std::string(1, '\x10');
+  auto input = makeRowVector({makeFlatVector({oneByte}, VARBINARY())});
+
+  std::string expectedBitmap(kBitmapNumBytes, '\0');
+  expectedBitmap[0] = '\x10';
+  auto expectedResult =
+      makeRowVector({makeFlatVector({expectedBitmap}, VARBINARY())});
+
+  testAggregations({input}, {}, {"bitmap_or_agg(c0)"}, {expectedResult});
+}
+
+TEST_F(BitmapOrAggAggregateTest, mixedLengthInputs) {
+  // Bitmaps of different lengths in the same group must OR together without
+  // clobbering bytes contributed by other rows.
+  std::string shortA(3, '\0');
+  shortA[0] = static_cast<char>(0xF0);
+  shortA[2] = static_cast<char>(0x0F);
+  std::string full = BitmapBuilder::fromBytes({{1, 0x0F}, {500, 0xFF}});
+  std::string shortB(2, '\0');
+  shortB[1] = static_cast<char>(0xFF);
+
+  auto input =
+      makeRowVector({makeFlatVector({shortA, full, shortB}, VARBINARY())});
+
+  std::string expectedBitmap(kBitmapNumBytes, '\0');
+  expectedBitmap[0] = static_cast<char>(0xF0);
+  expectedBitmap[1] = static_cast<char>(0xFF);
+  expectedBitmap[2] = static_cast<char>(0x0F);
+  expectedBitmap[500] = static_cast<char>(0xFF);
+  auto expectedResult =
+      makeRowVector({makeFlatVector({expectedBitmap}, VARBINARY())});
+
+  testAggregations({input}, {}, {"bitmap_or_agg(c0)"}, {expectedResult});
 }
 
 TEST_F(BitmapOrAggAggregateTest, mergeIntermediate) {
