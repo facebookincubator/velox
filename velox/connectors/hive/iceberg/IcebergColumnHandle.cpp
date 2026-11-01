@@ -19,11 +19,21 @@
 #include <utility>
 #include <vector>
 
+#include <boost/lexical_cast.hpp>
+#include <boost/uuid/uuid.hpp>
+#include <boost/uuid/uuid_io.hpp>
+
+#include "velox/common/encode/Base64.h"
+#include "velox/connectors/hive/PartitionValue.h"
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/connectors/hive/iceberg/IcebergColumnHandle.h"
 #include "velox/dwio/common/ParquetFieldId.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
+#include "velox/functions/prestosql/types/UuidType.h"
+#include "velox/type/DecimalUtil.h"
 #include "velox/type/Subfield.h"
 #include "velox/type/Type.h"
+#include "velox/type/tz/TimeZoneMap.h"
 
 namespace facebook::velox::connector::hive::iceberg {
 
@@ -285,6 +295,58 @@ ColumnHandlePtr IcebergColumnHandle::create(const folly::dynamic& obj) {
 void IcebergColumnHandle::registerSerDe() {
   auto& registry = DeserializationRegistryForSharedPtr();
   registry.Register("IcebergColumnHandle", IcebergColumnHandle::create);
+}
+
+namespace {
+
+Variant parseDefaultValue(const std::string& value, const Type& type) {
+  return PartitionValue::fromString(
+      value,
+      type,
+      PartitionValue::TimestampMode::kUtc,
+      PartitionValue::DateMode::kIsoString);
+}
+
+Variant icebergDefaultValueToVariant(
+    const std::string& value,
+    const TypePtr& type) {
+  if (type->isVarbinary()) {
+    return Variant::binary(encoding::Base64::decode(value));
+  }
+  if (isUuidType(type)) {
+    // Same conversion as CAST(varchar AS uuid) in UuidRegistration.cpp.
+    const auto uuid = boost::lexical_cast<boost::uuids::uuid>(value);
+    int128_t parsed;
+    memcpy(&parsed, &uuid, sizeof(parsed));
+    return Variant::create<TypeKind::HUGEINT>(DecimalUtil::bigEndian(parsed));
+  }
+  if (type->isTime()) {
+    // Iceberg time is microseconds since midnight; Presto TIME is milliseconds.
+    const auto micros =
+        parseDefaultValue(value, *BIGINT()).value<TypeKind::BIGINT>();
+    return Variant(type.get() == TIME().get() ? micros / 1'000 : micros);
+  }
+  if (isTimestampWithTimeZoneType(type)) {
+    // Iceberg stores timestamptz values in UTC.
+    static const auto kUtcZoneId = tz::getTimeZoneID("UTC");
+    return Variant(pack(
+        parseDefaultValue(value, *TIMESTAMP()).value<TypeKind::TIMESTAMP>(),
+        kUtcZoneId));
+  }
+  return parseDefaultValue(value, *type);
+}
+
+} // namespace
+
+VectorPtr newIcebergDefaultValueConstant(
+    const TypePtr& type,
+    const std::optional<std::string>& value,
+    memory::MemoryPool* pool) {
+  if (!value.has_value()) {
+    return BaseVector::createNullConstant(type, 1, pool);
+  }
+  return BaseVector::createConstant(
+      type, icebergDefaultValueToVariant(value.value(), type), 1, pool);
 }
 
 } // namespace facebook::velox::connector::hive::iceberg

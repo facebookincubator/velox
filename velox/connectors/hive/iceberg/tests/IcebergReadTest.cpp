@@ -35,6 +35,9 @@
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
+#include "velox/functions/prestosql/types/UuidType.h"
+#include "velox/type/tz/TimeZoneMap.h"
 
 namespace facebook::velox::connector::hive::iceberg {
 
@@ -1661,7 +1664,11 @@ TEST_F(IcebergReadTest, addColumnWithDefaultAllTypes) {
            "short_decimal",
            "long_decimal",
            "date_val",
-           "timestamp_val"},
+           "timestamp_val",
+           "varbinary_val",
+           "uuid_val",
+           "time_val",
+           "timestamptz_val"},
           {BIGINT(),
            TINYINT(),
            SMALLINT(),
@@ -1674,7 +1681,11 @@ TEST_F(IcebergReadTest, addColumnWithDefaultAllTypes) {
            DECIMAL(10, 2),
            DECIMAL(38, 10),
            DATE(),
-           TIMESTAMP()});
+           TIMESTAMP(),
+           VARBINARY(),
+           UUID(),
+           TIME(),
+           TIMESTAMP_WITH_TIME_ZONE()});
 
   std::vector<RowVectorPtr> dataVectors = {
       makeRowVector({makeFlatVector<int64_t>({1, 2, 3})})};
@@ -1703,6 +1714,22 @@ TEST_F(IcebergReadTest, addColumnWithDefaultAllTypes) {
       makeIcebergHandle("date_val", DATE(), 12, "2024-01-15");
   assignments["timestamp_val"] = makeIcebergHandle(
       "timestamp_val", TIMESTAMP(), 13, "2024-01-15 10:30:00");
+  // Base64 of the bytes 0x0A 0xFF.
+  assignments["varbinary_val"] =
+      makeIcebergHandle("varbinary_val", VARBINARY(), 14, "Cv8=");
+  assignments["uuid_val"] = makeIcebergHandle(
+      "uuid_val", UUID(), 15, "12151fd2-7586-11e9-8f9e-2a86e4085a59");
+  // 10:30:00 as microseconds since midnight.
+  assignments["time_val"] =
+      makeIcebergHandle("time_val", TIME(), 16, "37800000000");
+  assignments["timestamptz_val"] = makeIcebergHandle(
+      "timestamptz_val",
+      TIMESTAMP_WITH_TIME_ZONE(),
+      17,
+      "2024-01-15 10:30:00.000000");
+
+  const auto uuid = HugeInt::build(0x12151fd2758611e9, 0x8f9e2a86e4085a59);
+  const auto timestampTz = pack(1705314600000, tz::getTimeZoneID("UTC"));
 
   std::vector<RowVectorPtr> expectedVectors = {makeRowVector(
       newRowType->names(),
@@ -1726,7 +1753,15 @@ TEST_F(IcebergReadTest, addColumnWithDefaultAllTypes) {
        makeFlatVector<Timestamp>(
            {Timestamp(1705314600, 0),
             Timestamp(1705314600, 0),
-            Timestamp(1705314600, 0)})})};
+            Timestamp(1705314600, 0)}),
+       makeFlatVector<std::string>(
+           {"\x0A\xFF", "\x0A\xFF", "\x0A\xFF"}, VARBINARY()),
+       makeFlatVector<int128_t>({uuid, uuid, uuid}, UUID()),
+       // Presto TIME is milliseconds since midnight.
+       makeFlatVector<int64_t>({37800000, 37800000, 37800000}, TIME()),
+       makeFlatVector<int64_t>(
+           {timestampTz, timestampTz, timestampTz},
+           TIMESTAMP_WITH_TIME_ZONE())})};
 
   assertDefaultValues(
       newRowType, newRowType, assignments, dataVectors, expectedVectors);
