@@ -146,15 +146,33 @@ struct NeqFunction {
 template <typename TExec>
 struct BetweenFunction {
   template <typename T>
-  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE void
-  call(bool& result, const T& value, const T& low, const T& high) {
-    if constexpr (std::is_floating_point_v<T>) {
-      result =
-          util::floating_point::NaNAwareGreaterThanEqual<T>{}(value, low) &&
-          util::floating_point::NaNAwareLessThanEqual<T>{}(value, high);
-      return;
+  VELOX_GPU_COMPATIBLE FOLLY_ALWAYS_INLINE bool
+  callNullable(bool& result, const T* value, const T* low, const T* high) {
+    if (!value) {
+      return false;
     }
-    result = value >= low && value <= high;
+
+    bool satisfiesLow;
+    bool satisfiesHigh;
+    if constexpr (std::is_floating_point_v<T>) {
+      satisfiesLow = !low ||
+          util::floating_point::NaNAwareGreaterThanEqual<T>{}(*value, *low);
+      satisfiesHigh = !high ||
+          util::floating_point::NaNAwareLessThanEqual<T>{}(*value, *high);
+    } else {
+      satisfiesLow = !low || *value >= *low;
+      satisfiesHigh = !high || *value <= *high;
+    }
+
+    if (!satisfiesLow || !satisfiesHigh) {
+      result = false;
+      return true;
+    }
+    if (!low || !high) {
+      return false;
+    }
+    result = true;
+    return true;
   }
 };
 
