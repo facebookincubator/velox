@@ -301,7 +301,11 @@ void registerMapFunctions(
   VELOX_REGISTER_VECTOR_FUNCTION_WITH_OWNER(
       udf_map_keys, prefix + "map_keys", defaultOwner);
   VELOX_REGISTER_VECTOR_FUNCTION_WITH_OWNER(
+      udf_map_top_n_keys, prefix + "map_top_n_keys", defaultOwner);
+  VELOX_REGISTER_VECTOR_FUNCTION_WITH_OWNER(
       udf_map_values, prefix + "map_values", defaultOwner);
+  VELOX_REGISTER_VECTOR_FUNCTION_WITH_OWNER(
+      udf_map_top_n_values, prefix + "map_top_n_values", defaultOwner);
   VELOX_REGISTER_VECTOR_FUNCTION_WITH_OWNER(
       udf_map_zip_with, prefix + "map_zip_with", defaultOwner);
 
