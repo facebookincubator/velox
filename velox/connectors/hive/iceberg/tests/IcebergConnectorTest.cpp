@@ -145,6 +145,34 @@ TEST_F(IcebergConnectorTest, columnHandleDefaultsToNoPostProcessor) {
   EXPECT_FALSE(handle.postProcessor());
 }
 
+TEST_F(IcebergConnectorTest, columnHandlePartitionMetadata) {
+  Type::registerSerDe();
+  IcebergColumnHandle::registerSerDe();
+  const IcebergColumnHandle column(
+      "day",
+      FileColumnHandle::ColumnType::kPartitionKey,
+      DATE(),
+      parquet::ParquetFieldId{7, {}});
+  const FileColumnHandle& fileColumn = column;
+  EXPECT_EQ(fileColumn.name(), "day");
+  EXPECT_EQ(fileColumn.schemaType(), DATE());
+  EXPECT_EQ(fileColumn.dataType(), DATE());
+  EXPECT_EQ(column.hiveType(), DATE());
+  EXPECT_TRUE(fileColumn.isPartitionKey());
+  EXPECT_TRUE(fileColumn.isPartitionDateValueDaysSinceEpoch());
+  EXPECT_TRUE(fileColumn.requiredSubfields().empty());
+  EXPECT_TRUE(fileColumn.extractions().empty());
+  EXPECT_FALSE(fileColumn.postProcessor());
+
+  const auto obj = fileColumn.serialize();
+  const auto copy = ISerializable::deserialize<IcebergColumnHandle>(obj);
+  EXPECT_EQ(copy->serialize(), obj);
+  EXPECT_EQ(copy->schemaType(), DATE());
+  EXPECT_EQ(copy->field().fieldId, 7);
+  EXPECT_TRUE(copy->isPartitionKey());
+  EXPECT_TRUE(copy->isPartitionDateValueDaysSinceEpoch());
+}
+
 } // namespace
 
 } // namespace facebook::velox::connector::hive::iceberg

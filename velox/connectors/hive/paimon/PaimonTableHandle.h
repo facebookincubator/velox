@@ -44,14 +44,6 @@ class PaimonTableHandle final : public FileTableHandle {
       double sampleRate = 1.0,
       std::string dbName = "");
 
-  const std::string& name() const override {
-    return tableName_;
-  }
-
-  const std::string& dbName() const override {
-    return dbName_;
-  }
-
   /// Identifier of the fixed table schema, distinct from a snapshot ID.
   int64_t schemaId() const {
     return schemaId_;
@@ -82,27 +74,6 @@ class PaimonTableHandle final : public FileTableHandle {
     return options_;
   }
 
-  const common::SubfieldFilters& subfieldFilters() const override {
-    return subfieldFilters_;
-  }
-
-  const core::TypedExprPtr& remainingFilter() const override {
-    return remainingFilter_;
-  }
-
-  double sampleRate() const override {
-    return sampleRate_;
-  }
-
-  /// Non-partition table columns in schema order.
-  const RowTypePtr& dataColumns() const override {
-    return dataColumns_;
-  }
-
-  /// File-reader parameters; empty for Paimon tables.
-  const std::unordered_map<std::string, std::string>& tableParameters()
-      const override;
-
   std::vector<FileColumnHandlePtr> filterColumnHandles() const override {
     return filterColumnHandles_;
   }
@@ -115,19 +86,13 @@ class PaimonTableHandle final : public FileTableHandle {
   static void registerSerDe();
 
  private:
-  const std::string tableName_;
-  const std::string dbName_;
   const int64_t schemaId_;
   const RowTypePtr rowType_;
   const std::vector<int32_t> fieldIds_;
   const PaimonTableType tableType_;
   const std::vector<std::string> partitionKeys_;
   const std::unordered_map<std::string, std::string> options_;
-  const common::SubfieldFilters subfieldFilters_;
-  const core::TypedExprPtr remainingFilter_;
   const std::vector<FileColumnHandlePtr> filterColumnHandles_;
-  const double sampleRate_;
-  const RowTypePtr dataColumns_;
 };
 
 } // namespace facebook::velox::connector::hive::paimon

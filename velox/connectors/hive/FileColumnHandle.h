@@ -165,11 +165,17 @@ TypePtr deriveExtractionOutputType(
     const TypePtr& inputType,
     const std::vector<ExtractionPathElementPtr>& chain);
 
-/// Base class for column handles in file-based connectors.
-///
-/// Define the common interface for column metadata needed by
-/// FileDataSource and FileSplitReader. Connector-specific column handles
-/// (HiveColumnHandle, etc.) extend this class.
+folly::dynamic serializeNamedExtraction(const NamedExtraction& extraction);
+
+NamedExtraction deserializeNamedExtraction(const folly::dynamic& obj);
+
+/// Subfield serde using the string representation in file-based query plans.
+folly::dynamic serializeSubfield(const common::Subfield& subfield);
+common::Subfield deserializeSubfield(const folly::dynamic& obj);
+
+/// Common column metadata and accessors for file-based connectors. Used by
+/// FileDataSource and FileSplitReader. Connector-specific handles extend this
+/// class with their own metadata and serialization.
 class FileColumnHandle : public ColumnHandle {
  public:
   /// Classify columns by their role in the scan pipeline.
@@ -183,22 +189,40 @@ class FileColumnHandle : public ColumnHandle {
     kRowId,
   };
 
-  virtual ColumnType columnType() const = 0;
+  const std::string& name() const override {
+    return name_;
+  }
+
+  virtual ColumnType columnType() const {
+    return columnType_;
+  }
 
   /// The type of this column as defined in the table schema (metastore).
   /// May differ from dataType() when extraction changes the output type.
-  /// Subclasses must provide this.
-  virtual const TypePtr& schemaType() const = 0;
-
-  /// The target data type for this column in the output.  Defaults to
-  /// schemaType() (no extraction or type coercion).  Override when the
-  /// output type differs from the table schema type.
-  virtual const TypePtr& dataType() const {
-    return schemaType();
+  virtual const TypePtr& schemaType() const {
+    return schemaType_;
   }
 
-  /// Subfields required by the query for pruning complex types.
-  virtual const std::vector<common::Subfield>& requiredSubfields() const = 0;
+  /// The target data type for this column in the output.
+  virtual const TypePtr& dataType() const {
+    return dataType_;
+  }
+
+  /// Applies to columns of complex types: arrays, maps and structs. When a
+  /// query uses only some of the subfields, the engine provides the complete
+  /// list of required subfields and the connector is free to prune the rest.
+  ///
+  /// Examples:
+  ///  - SELECT a[1], b['x'], x.y FROM t
+  ///  - SELECT a FROM t WHERE b['y'] > 10
+  ///
+  /// Pruning a struct means populating some of the members with null values.
+  /// Pruning a map means dropping keys not listed in the required subfields.
+  /// Pruning arrays means dropping values with indices larger than maximum
+  /// required index.
+  virtual const std::vector<common::Subfield>& requiredSubfields() const {
+    return requiredSubfields_;
+  }
 
   virtual bool isPartitionKey() const {
     return columnType() == ColumnType::kPartitionKey;
@@ -206,21 +230,68 @@ class FileColumnHandle : public ColumnHandle {
 
   /// Return true if partition date values are encoded as days since epoch
   /// (e.g., Iceberg) rather than ISO 8601 strings (e.g., Hive).
-  virtual bool isPartitionDateValueDaysSinceEpoch() const = 0;
-
-  /// Named extraction chains.  Empty means no extraction (default behavior).
-  virtual const std::vector<NamedExtraction>& extractions() const {
-    static const std::vector<NamedExtraction> kEmpty;
-    return kEmpty;
+  virtual bool isPartitionDateValueDaysSinceEpoch() const {
+    return partitionDateValueDaysSinceEpoch_;
   }
 
-  /// Optional row-wise post processor applied to this column after reading and
-  /// filtering. Must not change the vector size.
-  virtual const std::function<void(VectorPtr&)>& postProcessor() const = 0;
+  /// Named extraction chains. Empty means no extraction. When a single entry
+  /// is present, dataType() is that entry's dataType. For multiple entries,
+  /// dataType() is a ROW with their outputNames and dataTypes. Mutually
+  /// exclusive with requiredSubfields.
+  virtual const std::vector<NamedExtraction>& extractions() const {
+    return extractions_;
+  }
+
+  /// Optional row-wise post processor applied to this column when it is
+  /// present in output.
+  ///
+  /// Must not change the vector size. The top level vector is guaranteed to
+  /// be safe to change. Inner vectors and buffers need to check the reference
+  /// count before changing in place, or allocate new vectors and buffers.
+  ///
+  /// For lazy vectors, this is applied after the vector is loaded. It runs
+  /// after all filtering, so filters see values before post processing.
+  /// ValueHook usage is disabled when a post processor is present.
+  virtual const std::function<void(VectorPtr&)>& postProcessor() const {
+    return postProcessor_;
+  }
+
+  folly::dynamic serialize() const override = 0;
 
   static std::string columnTypeName(ColumnType columnType);
 
   static ColumnType columnTypeFromName(const std::string& name);
+
+ protected:
+  FileColumnHandle(
+      std::string name,
+      ColumnType columnType,
+      TypePtr dataType,
+      TypePtr schemaType,
+      std::vector<common::Subfield> requiredSubfields,
+      std::vector<NamedExtraction> extractions,
+      bool partitionDateValueDaysSinceEpoch,
+      std::function<void(VectorPtr&)> postProcessor);
+
+  /// Serializes the shared column role, subfields and extractions. Derived
+  /// handles add names, types and metadata using their existing wire fields.
+  folly::dynamic serializeFileFields(std::string_view typeName) const;
+
+  static void deserializeFileFields(
+      const folly::dynamic& obj,
+      ColumnType& columnType,
+      std::vector<common::Subfield>& requiredSubfields,
+      std::vector<NamedExtraction>& extractions);
+
+ private:
+  const std::string name_;
+  const ColumnType columnType_;
+  const TypePtr dataType_;
+  const TypePtr schemaType_;
+  const std::vector<common::Subfield> requiredSubfields_;
+  const std::vector<NamedExtraction> extractions_;
+  const bool partitionDateValueDaysSinceEpoch_;
+  const std::function<void(VectorPtr&)> postProcessor_;
 };
 
 using FileColumnHandlePtr = std::shared_ptr<const FileColumnHandle>;

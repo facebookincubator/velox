@@ -13,11 +13,23 @@
 # limitations under the License.
 
 if(NOT VELOX_DISABLE_GOOGLETEST)
+  add_executable(velox_hive_paimon_column_handle_test PaimonColumnHandleTest.cpp)
+  add_test(velox_hive_paimon_column_handle_test velox_hive_paimon_column_handle_test)
+  target_link_libraries(
+    velox_hive_paimon_column_handle_test
+    velox_hive_paimon_column_handle
+    velox_hive_connector
+    GTest::gtest
+    GTest::gtest_main
+  )
+
   add_executable(velox_hive_paimon_table_handle_test PaimonTableHandleTest.cpp)
   add_test(velox_hive_paimon_table_handle_test velox_hive_paimon_table_handle_test)
   target_link_libraries(
     velox_hive_paimon_table_handle_test
     velox_hive_paimon_table_handle
+    velox_hive_paimon_column_handle
+    velox_hive_connector
     GTest::gtest
     GTest::gtest_main
   )
