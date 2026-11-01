@@ -528,47 +528,27 @@ endif()
 if(ENABLE_ALL_WARNINGS)
   if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     set(
-      KNOWN_COMPILER_SPECIFIC_WARNINGS
-      "-Wno-range-loop-analysis \
+      KNOWN_WARNINGS
+      "-Wno-unused \
+         -Wno-unused-parameter \
+         -Wno-sign-compare \
+         -Wno-ignored-qualifiers \
+         -Wno-range-loop-analysis \
          -Wno-mismatched-tags \
          -Wno-nullability-completeness"
     )
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra ${KNOWN_WARNINGS}")
   elseif(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-    set(
-      KNOWN_COMPILER_SPECIFIC_WARNINGS
-      "-Wno-implicit-fallthrough \
-         -Wno-class-memaccess \
-         -Wno-comment \
-         -Wno-int-in-bool-context \
-         -Wno-redundant-move \
-         -Wno-array-bounds \
-         -Wno-maybe-uninitialized \
-         -Wno-unused-result \
-         -Wno-format-overflow \
-         -Wno-strict-aliasing"
+    set(VELOX_GCC_WARNING_FLAGS_FILE "${CMAKE_CURRENT_SOURCE_DIR}/CMake/GccWarningFlags.txt")
+    file(STRINGS "${VELOX_GCC_WARNING_FLAGS_FILE}" VELOX_GCC_WARNING_FLAGS REGEX "^-")
+    set_property(
+      DIRECTORY
+      APPEND
+      PROPERTY CMAKE_CONFIGURE_DEPENDS "${VELOX_GCC_WARNING_FLAGS_FILE}"
     )
-    # Avoid compiler bug for GCC 12.2.1
-    # https://gcc.gnu.org/bugzilla/show_bug.cgi?id=105329
-    if(CMAKE_CXX_COMPILER_VERSION VERSION_EQUAL "12.2.1")
-      string(APPEND KNOWN_COMPILER_SPECIFIC_WARNINGS " -Wno-restrict")
-    endif()
-    if(CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL "14.0.0")
-      string(APPEND KNOWN_COMPILER_SPECIFIC_WARNINGS " -Wno-error=template-id-cdtor")
-      string(APPEND KNOWN_COMPILER_SPECIFIC_WARNINGS " -Wno-overloaded-virtual")
-      string(APPEND KNOWN_COMPILER_SPECIFIC_WARNINGS " -Wno-error=tautological-compare")
-    endif()
+    list(JOIN VELOX_GCC_WARNING_FLAGS " " VELOX_GCC_WARNING_FLAGS)
+    string(APPEND CMAKE_CXX_FLAGS " ${VELOX_GCC_WARNING_FLAGS}")
   endif()
-
-  set(
-    KNOWN_WARNINGS
-    "-Wno-unused \
-       -Wno-unused-parameter \
-       -Wno-sign-compare \
-       -Wno-ignored-qualifiers \
-       ${KNOWN_COMPILER_SPECIFIC_WARNINGS}"
-  )
-
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra ${KNOWN_WARNINGS}")
 endif()
 
 if(VELOX_ENABLE_WAVE OR VELOX_ENABLE_CUDF)
@@ -906,7 +886,29 @@ include_directories(.)
 # Adding this down here prevents warnings in dependencies from stopping the
 # build
 if("${TREAT_WARNINGS_AS_ERRORS}")
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror")
+  if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    # The file lists the only GCC warnings that fail the build and explains
+    # how they were chosen.
+    set(VELOX_GCC_FATAL_WARNINGS_FILE "${CMAKE_CURRENT_SOURCE_DIR}/CMake/GccFatalWarnings.txt")
+    file(STRINGS "${VELOX_GCC_FATAL_WARNINGS_FILE}" VELOX_GCC_FATAL_WARNINGS REGEX "^[^#]")
+    set_property(
+      DIRECTORY
+      APPEND
+      PROPERTY CMAKE_CONFIGURE_DEPENDS "${VELOX_GCC_FATAL_WARNINGS_FILE}"
+    )
+    include(CheckCXXCompilerFlag)
+    foreach(warning IN LISTS VELOX_GCC_FATAL_WARNINGS)
+      # GCC rejects -Werror= for a warning it does not know, and newer GCC
+      # releases add warnings to this list.
+      string(MAKE_C_IDENTIFIER "VELOX_GCC_HAS_WERROR_${warning}" supported)
+      check_cxx_compiler_flag("-Werror=${warning}" ${supported})
+      if(${supported})
+        string(APPEND CMAKE_CXX_FLAGS " -Werror=${warning}")
+      endif()
+    endforeach()
+  else()
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror")
+  endif()
 endif()
 
 # Enable the ASAN and UBSAN sanitzers for Clang 20 and above.
