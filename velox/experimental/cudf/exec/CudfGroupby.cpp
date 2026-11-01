@@ -17,6 +17,7 @@
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/exec/CudfGroupby.h"
+#include "velox/experimental/cudf/exec/CudfPlanNodeConversion.h"
 #include "velox/experimental/cudf/exec/DecimalAggregationHostOps.h"
 #include "velox/experimental/cudf/exec/DecimalAggregationState.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
@@ -1320,7 +1321,7 @@ cudf::column_view GroupbyAggregator::materializeMaskedInput(
 }
 
 std::vector<std::unique_ptr<GroupbyAggregator>> toGroupbyAggregators(
-    core::AggregationNode const& aggregationNode,
+    const CudfAggregationNode& aggregationNode,
     core::AggregationNode::Step step,
     TypePtr const& outputType,
     std::vector<VectorPtr> const& constants,
@@ -1338,7 +1339,7 @@ std::vector<std::unique_ptr<GroupbyAggregator>> toGroupbyAggregators(
 
 std::optional<std::vector<std::unique_ptr<StreamingGroupbyAggregator>>>
 toStreamingGroupbyAggregators(
-    const core::AggregationNode& aggregationNode,
+    const CudfAggregationNode& aggregationNode,
     const RowTypePtr& inputType,
     const std::vector<column_index_t>& aggregationInputChannels,
     const TypePtr& outputType,
@@ -1433,6 +1434,15 @@ CudfGroupby::CudfGroupby(
     int32_t operatorId,
     exec::DriverCtx* driverCtx,
     std::shared_ptr<core::AggregationNode const> const& aggregationNode)
+    : CudfGroupby(
+          operatorId,
+          driverCtx,
+          toCudfPlanNode<CudfAggregationNode>(aggregationNode)) {}
+
+CudfGroupby::CudfGroupby(
+    int32_t operatorId,
+    exec::DriverCtx* driverCtx,
+    std::shared_ptr<const CudfAggregationNode> aggregationNode)
     : CudfOperatorBase(
           operatorId,
           driverCtx,
