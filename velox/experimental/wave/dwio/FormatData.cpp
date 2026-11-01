@@ -49,7 +49,7 @@ void SplitStaging::registerPointerInternal(
     VELOX_CHECK(pair.second != ptr, "Must not register the same pointer twice");
   }
 #endif
-  patch_.push_back(std::make_pair(id, ptr));
+  patch_.emplace_back(id, ptr);
 }
 
 void SplitStaging::copyColumns(
