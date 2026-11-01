@@ -15,6 +15,8 @@
  */
 #pragma once
 
+#include <unordered_set>
+
 #include "velox/core/Expressions.h"
 #include "velox/vector/ConstantVector.h"
 
@@ -97,8 +99,30 @@ class AnySingleInputMatcher : public Matcher {
   core::FieldAccessTypedExprPtr* const input_;
 };
 
-/// Matches constant expression that represents values 1, 0, or -1 of type
-/// BIGINT.
+/// Matches an expression that depends on exactly one of 'lambdaInputs'. Unlike
+/// AnySingleInputMatcher, the expression may also reference captured columns.
+/// Nested lambdas that shadow any of 'lambdaInputs' are rejected.
+class AnySingleLambdaInputMatcher : public Matcher {
+ public:
+  AnySingleLambdaInputMatcher(
+      core::TypedExprPtr* expr,
+      core::FieldAccessTypedExprPtr* input,
+      std::unordered_set<std::string> lambdaInputs)
+      : expr_{expr}, input_{input}, lambdaInputs_{std::move(lambdaInputs)} {}
+
+  bool match(const core::TypedExprPtr& expr) override;
+
+ private:
+  bool collectInputs(
+      const core::TypedExprPtr& expr,
+      std::unordered_set<core::FieldAccessTypedExprPtr>& inputs) const;
+
+  core::TypedExprPtr* const expr_;
+  core::FieldAccessTypedExprPtr* const input_;
+  const std::unordered_set<std::string> lambdaInputs_;
+};
+
+/// Matches a non-null INTEGER or BIGINT constant expression.
 class ComparisonConstantMatcher : public Matcher {
  public:
   explicit ComparisonConstantMatcher(int64_t* value) : value_{value} {}
@@ -125,6 +149,14 @@ class SimpleComparisonChecker {
       core::TypedExprPtr* expr,
       core::FieldAccessTypedExprPtr* input) {
     return std::make_shared<AnySingleInputMatcher>(expr, input);
+  }
+
+  std::shared_ptr<Matcher> anySingleInput(
+      core::TypedExprPtr* expr,
+      core::FieldAccessTypedExprPtr* input,
+      const std::unordered_set<std::string>& lambdaInputs) {
+    return std::make_shared<AnySingleLambdaInputMatcher>(
+        expr, input, lambdaInputs);
   }
 
   std::shared_ptr<Matcher> comparisonConstant(int64_t* value) {
@@ -185,9 +217,18 @@ class SimpleComparisonChecker {
   ///
   /// Can be used to re-write generic lambda expressions passed to array_sort
   /// into simpler ones that can be evaluated more efficiently.
+  ///
+  /// The transform may reference captured columns as long as both sides of
+  /// each comparison use the same transform. Non-deterministic transforms are
+  /// not recognized.
+  ///
+  /// @param supportsArbitraryComparatorResults If true, the comparator may
+  /// return any negative value, zero, and any positive value. Otherwise, only
+  /// -1, 0, and 1 are recognized.
   std::optional<SimpleComparison> isSimpleComparison(
       const std::string& prefix,
-      const core::LambdaTypedExpr& expr);
+      const core::LambdaTypedExpr& expr,
+      bool supportsArbitraryComparatorResults = false);
 };
 
 } // namespace facebook::velox::functions
