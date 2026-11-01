@@ -22,6 +22,7 @@
 #include "velox/connectors/hive/HiveConnectorSplit.h"
 #include "velox/dwio/dwrf/writer/Writer.h"
 #include "velox/exec/Spill.h"
+#include "velox/exec/fuzzer/PrestoSql.h"
 #include "velox/expression/SignatureBinder.h"
 #include "velox/expression/fuzzer/ArgumentTypeFuzzer.h"
 #include "velox/vector/VectorSaver.h"
@@ -142,7 +143,7 @@ bool AggregationFuzzerBase::addSignature(
         .args = {},
         .returnType =
             SignatureBinder::tryResolveType(signature->returnType(), {}, {}),
-        .constantArgs = {}};
+        .constantArgs = signature->constantArguments()};
     VELOX_CHECK_NOT_NULL(callable.returnType);
 
     // Process each argument and figure out its type.
@@ -204,6 +205,7 @@ AggregationFuzzerBase::pickSignature() {
         referenceQueryRunner_->supportedScalarTypes());
     VELOX_CHECK(typeFuzzer.fuzzArgumentTypes(FLAGS_max_num_varargs));
     signature.args = typeFuzzer.argumentTypes();
+    signature.constantArgs = signatureTemplate.signature->constantArguments();
   }
 
   return {signature, signatureStats_[idx]};
@@ -286,6 +288,7 @@ std::vector<RowVectorPtr> AggregationFuzzerBase::generateInputData(
     const std::optional<CallableSignature>& signature) {
   std::shared_ptr<InputGenerator> generator;
   if (signature.has_value()) {
+    VELOX_CHECK_EQ(signature->args.size(), signature->constantArgs.size());
     generator = findInputGenerator(signature.value());
   }
 
@@ -293,6 +296,8 @@ std::vector<RowVectorPtr> AggregationFuzzerBase::generateInputData(
 
   auto inputType = ROW(std::move(names), std::move(types));
   std::vector<RowVectorPtr> input;
+  std::vector<VectorPtr> constantInputs(
+      signature.has_value() ? signature->args.size() : 0);
   for (auto i = 0; i < FLAGS_num_batches; ++i) {
     std::vector<VectorPtr> children;
 
@@ -303,6 +308,17 @@ std::vector<RowVectorPtr> AggregationFuzzerBase::generateInputData(
 
     for (auto j = children.size(); j < inputType->size(); ++j) {
       children.push_back(vectorFuzzer_.fuzz(inputType->childAt(j), size));
+    }
+
+    for (auto j = 0; j < constantInputs.size(); ++j) {
+      if (signature->constantArgs[j]) {
+        if (constantInputs[j] == nullptr) {
+          VELOX_CHECK_GT(
+              size, 0, "Constant arguments require a non-empty batch");
+          constantInputs[j] = BaseVector::wrapInConstant(size, 0, children[j]);
+        }
+        children[j] = constantInputs[j];
+      }
     }
 
     input.push_back(
@@ -728,6 +744,34 @@ std::string makeFunctionCall(
   call << ")";
 
   return call.str();
+}
+
+std::string makeFunctionCall(
+    const CallableSignature& signature,
+    const RowVectorPtr& input,
+    bool sortedInputs,
+    bool distinctInputs) {
+  VELOX_CHECK_EQ(signature.args.size(), signature.constantArgs.size());
+  const auto argNames = makeNames(signature.args.size());
+  auto arguments = argNames;
+  for (auto i = 0; i < arguments.size(); ++i) {
+    if (signature.constantArgs[i]) {
+      const auto& values = input->childAt(i);
+      VELOX_CHECK_GT(values->size(), 0);
+      arguments[i] = toConstantSql(
+          core::ConstantTypedExpr(BaseVector::wrapInConstant(1, 0, values)));
+    }
+  }
+
+  if (sortedInputs) {
+    // Keep ORDER BY keys as columns, even when arguments become literals.
+    return fmt::format(
+        "{}({} ORDER BY {})",
+        signature.name,
+        folly::join(", ", arguments),
+        folly::join(", ", argNames));
+  }
+  return makeFunctionCall(signature.name, arguments, false, distinctInputs);
 }
 
 std::vector<std::string> makeNames(size_t n) {

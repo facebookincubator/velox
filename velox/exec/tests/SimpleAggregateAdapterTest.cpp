@@ -19,6 +19,8 @@
 #include "velox/exec/Aggregate.h"
 #include "velox/exec/SimpleAggregateAdapter.h"
 #include "velox/exec/tests/SimpleAggregateFunctionsRegistration.h"
+#include "velox/exec/tests/utils/AssertQueryBuilder.h"
+#include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
 
 using namespace facebook::velox::exec;
@@ -674,6 +676,19 @@ TEST_F(SimpleAggregateAdapterTest, forwardsConstantInputs) {
       {{BIGINT(), BIGINT()}},
       {},
       {expected});
+}
+
+TEST_F(SimpleAggregateAdapterTest, windowForwardsConstantInputs) {
+  auto input = makeRowVector({makeFlatVector<int64_t>({1, 2, 3})});
+  auto expected = makeRowVector({makeFlatVector<int64_t>({11, 23, 36})});
+  auto plan =
+      PlanBuilder()
+          .values({input})
+          .window(
+              {"simple_const_fwd(c0, 10) over (order by c0 rows between unbounded preceding and current row)"})
+          .project({"w0"})
+          .planNode();
+  AssertQueryBuilder(plan).assertResults(expected);
 }
 
 TEST_F(SimpleAggregateAdapterTest, functionLevelVariables) {

@@ -14,11 +14,18 @@
  * limitations under the License.
  */
 
+#include <algorithm>
+#include <utility>
+
 #include <folly/init/Init.h>
+#include <gflags/gflags.h>
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/dwio/parquet/RegisterParquetWriter.h"
+#include "velox/exec/AggregateFunctionRegistry.h"
+#include "velox/exec/fuzzer/AggregationFuzzerBase.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/prestosql/aggregates/RegisterAggregateFunctions.h"
@@ -34,6 +41,34 @@ using namespace facebook::velox::test;
 
 namespace facebook::velox::functions::sparksql::test {
 namespace {
+
+// Exercises signature binding and input generation without a Spark server.
+class AggregationFuzzerHarness : public exec::test::AggregationFuzzerBase {
+ public:
+  explicit AggregationFuzzerHarness(
+      std::unique_ptr<exec::test::ReferenceQueryRunner> queryRunner)
+      : AggregationFuzzerBase(
+            19'360,
+            {},
+            {},
+            VectorFuzzer::Options::TimestampPrecision::kMicroSeconds,
+            {},
+            {},
+            true,
+            std::move(queryRunner)) {}
+
+  velox::fuzzer::CallableSignature bind(
+      const std::string& name,
+      const exec::FunctionSignaturePtr& signature) {
+    signatures_.clear();
+    signatureTemplates_.clear();
+    VELOX_CHECK(addSignature(name, signature));
+    signatureStats_.resize(1);
+    return pickSignature().first;
+  }
+
+  using AggregationFuzzerBase::generateInputData;
+};
 
 class SparkQueryRunnerTest : public ::testing::Test,
                              public velox::test::VectorTestBase {
@@ -171,6 +206,87 @@ TEST_F(SparkQueryRunnerTest, toSql) {
              .planNode();
   EXPECT_EQ(
       queryRunner->toSql(plan), "SELECT sum(distinct c0) as a0 FROM (t_0)");
+}
+
+TEST_F(SparkQueryRunnerTest, histogramFuzzerConstantArguments) {
+  gflags::FlagSaver flagSaver;
+  FLAGS_batch_size = 4;
+  FLAGS_num_batches = 3;
+  FLAGS_null_ratio = 0;
+
+  auto aggregatePool = rootPool_->addAggregateChild("histogramFuzzer");
+  AggregationFuzzerHarness harness(
+      std::make_unique<fuzzer::SparkQueryRunner>(
+          aggregatePool.get(), "unused", "unused", "unused"));
+
+  for (const auto* name : {"histogram_numeric", "histogram_numeric_legacy"}) {
+    const auto signatures = exec::getAggregateFunctionSignatures(name);
+    ASSERT_TRUE(signatures.has_value());
+    auto signature = std::find_if(
+        signatures->begin(), signatures->end(), [](const auto& candidate) {
+          return candidate->argumentTypes()[0].baseName() == "double";
+        });
+    ASSERT_NE(signature, signatures->end());
+    const auto callable = harness.bind(name, *signature);
+    EXPECT_THAT(callable.constantArgs, testing::ElementsAre(false, true));
+
+    const auto input = harness.generateInputData(
+        {"c0", "c1", "m0"}, {DOUBLE(), INTEGER(), BOOLEAN()}, callable);
+    ASSERT_EQ(input.size(), 3);
+    const auto& firstConstant = input.front()->childAt(1);
+    for (const auto& batch : input) {
+      const auto& constant = batch->childAt(1);
+      ASSERT_TRUE(constant->isConstantEncoding());
+      for (auto row = 0; row < batch->size(); ++row) {
+        EXPECT_TRUE(constant->equalValueAt(firstConstant.get(), row, 0));
+      }
+    }
+
+    auto data = makeRowVector(
+        {makeConstant<double>(1, 3), makeConstant<int32_t>(4, 3)});
+    for (const auto& [sorted, distinct] :
+         {std::pair{false, false},
+          std::pair{false, true},
+          std::pair{true, false}}) {
+      auto bins = makeRowVector(
+          {"x", "y"},
+          {makeFlatVector<double>({1}),
+           makeFlatVector<double>({distinct ? 1.0 : 3.0})});
+      auto expected = makeRowVector({makeArrayVector({0}, bins)});
+      const auto call =
+          exec::test::makeFunctionCall(callable, data, sorted, distinct);
+      auto plan = exec::test::PlanBuilder()
+                      .values({data})
+                      .singleAggregation({}, {call})
+                      .planNode();
+      const auto aggregation =
+          std::dynamic_pointer_cast<const core::AggregationNode>(plan);
+      ASSERT_NE(aggregation, nullptr);
+      const auto& arguments = aggregation->aggregates()[0].call->inputs();
+      EXPECT_TRUE(arguments[0]->isFieldAccessKind());
+      ASSERT_TRUE(arguments[1]->isConstantKind());
+      EXPECT_TRUE(arguments[1]->type()->isInteger());
+      exec::test::AssertQueryBuilder(plan).assertResults(expected);
+
+      if (!sorted && !distinct) {
+        auto partialFinal = exec::test::PlanBuilder()
+                                .values({data})
+                                .partialAggregation({}, {call})
+                                .finalAggregation()
+                                .planNode();
+        exec::test::AssertQueryBuilder(partialFinal).assertResults(expected);
+      }
+    }
+  }
+  const auto signature = exec::AggregateFunctionSignatureBuilder()
+                             .typeVariable("T")
+                             .returnType("bigint")
+                             .intermediateType("varbinary")
+                             .argumentType("T")
+                             .constantArgumentType("integer")
+                             .build();
+  const auto callable = harness.bind("test_aggregate", signature);
+  EXPECT_THAT(callable.constantArgs, testing::ElementsAre(false, true));
 }
 
 } // namespace
