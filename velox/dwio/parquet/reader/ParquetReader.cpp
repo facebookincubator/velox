@@ -1547,6 +1547,7 @@ void ReaderBase::scheduleRowGroups(
 
   if (currentGroup >= 1) {
     inputs_.erase(rowGroupIds[currentGroup - 1]);
+    reader.releaseRowGroup(rowGroupIds[currentGroup - 1]);
   }
 }
 
@@ -1636,6 +1637,9 @@ class ParquetRowReader::Impl {
         params,
         *options_.scanSpec());
     columnReader_->setIsTopLevel();
+    // The root of a Parquet column reader tree is always a StructColumnReader.
+    static_cast<StructColumnReader&>(*columnReader_)
+        .setDeferLazyColumnPrefetch(options_.deferLazyColumnPrefetch());
 
     filterRowGroups();
     if (!rowGroupIds_.empty()) {
@@ -1796,6 +1800,10 @@ class ParquetRowReader::Impl {
     stats.mergeFrom(splitStats_);
   }
 
+  void hintLazyColumnsNeeded() {
+    static_cast<StructColumnReader&>(*columnReader_).markAllLazyColumnsNeeded();
+  }
+
   void resetFilterCaches() {
     columnReader_->resetFilterCaches();
   }
@@ -1878,6 +1886,10 @@ uint64_t ParquetRowReader::next(
 void ParquetRowReader::updateRuntimeStats(
     dwio::common::RuntimeStats& stats) const {
   impl_->updateRuntimeStats(stats);
+}
+
+void ParquetRowReader::hintLazyColumnsNeeded() {
+  impl_->hintLazyColumnsNeeded();
 }
 
 void ParquetRowReader::resetFilterCaches() {
