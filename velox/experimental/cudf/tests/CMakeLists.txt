@@ -329,6 +329,12 @@ velox_add_cudf_test(
 )
 
 velox_add_cudf_test(
+  NAME velox_cudf_physical_plan_test
+  SOURCES Main.cpp PhysicalPlanTest.cpp
+  LIBS ${CUDF_TEST_DEFAULT_LIBS} velox_window fmt::fmt
+)
+
+velox_add_cudf_test(
   NAME velox_cudf_topn_test
   SOURCES Main.cpp TopNTest.cpp
   LIBS ${CUDF_TEST_DEFAULT_LIBS} fmt::fmt
