@@ -455,8 +455,12 @@ ExpressionVerifier::verify(
                 } else {
                   auto referenceSql =
                       referenceQueryRunner_->toSql(projectionPlan);
-                  VELOX_FAIL(
-                      "Reference path throws for query: {}", *referenceSql);
+                  if (referenceSql.has_value()) {
+                    VELOX_FAIL(
+                        "Reference path throws for query: {}", *referenceSql);
+                  }
+                  LOG(INFO) << "No sql generated";
+                  VELOX_FAIL("Reference path throws");
                 }
               }
             }
