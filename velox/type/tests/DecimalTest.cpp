@@ -332,6 +332,72 @@ TEST(DecimalTest, valueInPrecisionRange) {
           DecimalUtil::kLongDecimalMin - 1, LongDecimalType::kMaxPrecision));
 }
 
+TEST(DecimalTest, divideWithRoundHalfEven) {
+  EXPECT_EQ(DecimalUtil::divideWithRoundHalfEven(0, 10), 0);
+  EXPECT_EQ(DecimalUtil::divideWithRoundHalfEven(10, 10), 1);
+  EXPECT_EQ(DecimalUtil::divideWithRoundHalfEven(-10, 10), -1);
+  EXPECT_EQ(DecimalUtil::divideWithRoundHalfEven(14, 10), 1);
+  EXPECT_EQ(DecimalUtil::divideWithRoundHalfEven(15, 10), 2);
+  EXPECT_EQ(DecimalUtil::divideWithRoundHalfEven(25, 10), 2);
+  EXPECT_EQ(DecimalUtil::divideWithRoundHalfEven(26, 10), 3);
+
+  EXPECT_EQ(DecimalUtil::divideWithRoundHalfEven(-14, 10), -1);
+  EXPECT_EQ(DecimalUtil::divideWithRoundHalfEven(-15, 10), -2);
+  EXPECT_EQ(DecimalUtil::divideWithRoundHalfEven(-25, 10), -2);
+  EXPECT_EQ(DecimalUtil::divideWithRoundHalfEven(-26, 10), -3);
+
+  // Odd divisors cannot produce ties for integer dividends.
+  EXPECT_EQ(DecimalUtil::divideWithRoundHalfEven(4, 3), 1);
+  EXPECT_EQ(DecimalUtil::divideWithRoundHalfEven(5, 3), 2);
+  EXPECT_EQ(DecimalUtil::divideWithRoundHalfEven(-4, 3), -1);
+  EXPECT_EQ(DecimalUtil::divideWithRoundHalfEven(-5, 3), -2);
+
+  const int128_t largeDivisor = DecimalUtil::kPowersOfTen[38];
+  const int128_t largeHalf = largeDivisor / 2;
+  EXPECT_EQ(
+      DecimalUtil::divideWithRoundHalfEven(largeHalf - 1, largeDivisor), 0);
+  EXPECT_EQ(DecimalUtil::divideWithRoundHalfEven(largeHalf, largeDivisor), 0);
+  EXPECT_EQ(
+      DecimalUtil::divideWithRoundHalfEven(largeHalf + 1, largeDivisor), 1);
+  EXPECT_EQ(
+      DecimalUtil::divideWithRoundHalfEven(-largeHalf + 1, largeDivisor), 0);
+  EXPECT_EQ(DecimalUtil::divideWithRoundHalfEven(-largeHalf, largeDivisor), 0);
+  EXPECT_EQ(
+      DecimalUtil::divideWithRoundHalfEven(-largeHalf - 1, largeDivisor), -1);
+}
+
+TEST(DecimalTest, divideWithRoundUpLargeRemainder) {
+  const int128_t divisor = DecimalUtil::kPowersOfTen[38];
+  const int128_t half = divisor / 2;
+  int128_t result;
+
+  DecimalUtil::divideWithRoundUp<int128_t, int128_t, int128_t>(
+      result, half - 1, divisor, false, 0, 0);
+  EXPECT_EQ(result, 0);
+  DecimalUtil::divideWithRoundUp<int128_t, int128_t, int128_t>(
+      result, half, divisor, false, 0, 0);
+  EXPECT_EQ(result, 1);
+  DecimalUtil::divideWithRoundUp<int128_t, int128_t, int128_t>(
+      result, half + 1, divisor, false, 0, 0);
+  EXPECT_EQ(result, 1);
+  DecimalUtil::divideWithRoundUp<int128_t, int128_t, int128_t>(
+      result, divisor - 1, divisor, false, 0, 0);
+  EXPECT_EQ(result, 1);
+
+  DecimalUtil::divideWithRoundUp<int128_t, int128_t, int128_t>(
+      result, -half + 1, divisor, false, 0, 0);
+  EXPECT_EQ(result, 0);
+  DecimalUtil::divideWithRoundUp<int128_t, int128_t, int128_t>(
+      result, -half, divisor, false, 0, 0);
+  EXPECT_EQ(result, -1);
+  DecimalUtil::divideWithRoundUp<int128_t, int128_t, int128_t>(
+      result, -half - 1, divisor, false, 0, 0);
+  EXPECT_EQ(result, -1);
+  DecimalUtil::divideWithRoundUp<int128_t, int128_t, int128_t>(
+      result, -divisor + 1, divisor, false, 0, 0);
+  EXPECT_EQ(result, -1);
+}
+
 TEST(DecimalTest, computeAverage) {
   auto validateSameValues = [](int128_t value, int64_t maxCount) {
     SCOPED_TRACE(fmt::format("value={} maxCount={}", value, maxCount));
