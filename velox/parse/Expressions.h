@@ -389,6 +389,55 @@ class ConstantExpr : public IExpr,
   const Variant value_;
 };
 
+/// A value of 'type' bound after the expression is built: the value at
+/// 'position', 1-based, of the values the caller binds, such as a prepared
+/// statement's parameters.
+class PlaceholderExpr : public IExpr {
+ public:
+  PlaceholderExpr(
+      TypePtr type,
+      int32_t position,
+      std::optional<std::string> alias = std::nullopt)
+      : IExpr{IExpr::Kind::kPlaceholder, {}, std::move(alias)},
+        type_{std::move(type)},
+        position_{position} {
+    VELOX_USER_CHECK_GE(position_, 1, "Placeholder position must be positive");
+  }
+
+  std::string toString() const override;
+
+  const TypePtr& type() const {
+    return type_;
+  }
+
+  int32_t position() const {
+    return position_;
+  }
+
+  ExprPtr replaceInputs(std::vector<ExprPtr> newInputs) const override {
+    VELOX_CHECK_EQ(newInputs.size(), 0);
+    return std::make_shared<PlaceholderExpr>(type_, position_, alias());
+  }
+
+  ExprPtr withAlias(const std::string& alias) const override {
+    return std::make_shared<PlaceholderExpr>(type_, position_, alias);
+  }
+
+  ExprPtr dropAlias() const override {
+    return std::make_shared<PlaceholderExpr>(type_, position_);
+  }
+
+  bool operator==(const IExpr& other) const override;
+
+  size_t localHash() const override;
+
+  VELOX_DEFINE_CLASS_NAME(PlaceholderExpr)
+
+ private:
+  const TypePtr type_;
+  const int32_t position_;
+};
+
 class CastExpr : public IExpr, public std::enable_shared_from_this<CastExpr> {
  public:
   CastExpr(

@@ -37,7 +37,7 @@ class VectorIndexPackTest : public AggregationTestBase {
     std::iota(clusterIds.begin(), clusterIds.end(), 0);
     std::string result;
     common::vectorindex::LocalVectorIndex::build(
-        common::vectorindex::VectorIndexType::kFlat,
+        common::vectorindex::VectorIndexKind::kFlat,
         common::vectorindex::VectorIndexMetric::kCosine,
         common::vectorindex::LocalVectorIndexOptions{},
         common::vectorindex::Embeddings(centroids, /*dimension=*/2),
@@ -76,7 +76,7 @@ TEST_F(VectorIndexPackTest, global) {
   });
 
   auto expected = makeRowVector({
-      makeFlatVector<std::string>({codec({1, 0, 0, 1, -1, 0})}, VARBINARY()),
+      makeFlatVector<std::string>({codec({1, 0, 0, 1, -1, 0})}, VECTOR_INDEX()),
   });
 
   testAggregations(
@@ -95,7 +95,7 @@ TEST_F(VectorIndexPackTest, groupBy) {
   auto expected = makeRowVector({
       makeFlatVector<std::string>({"a", "b"}),
       makeFlatVector<std::string>(
-          {codec({1, 0, 0, 1}), codec({0, 1, 1, 0})}, VARBINARY()),
+          {codec({1, 0, 0, 1}), codec({0, 1, 1, 0})}, VECTOR_INDEX()),
   });
 
   // The incremental check aggregates all rows into one group, where each
