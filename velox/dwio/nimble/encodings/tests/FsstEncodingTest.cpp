@@ -467,6 +467,240 @@ class StringReadWithVisitor {
   std::vector<std::string_view> values_;
 };
 
+template <typename Filter>
+class RangeReadWithVisitor : public StringReadWithVisitor {
+ public:
+  using FilterType = Filter;
+  using Extract = velox::dwio::common::DropValues;
+
+  RangeReadWithVisitor(std::vector<vector_size_t> rows, const Filter& filter)
+      : StringReadWithVisitor(std::move(rows)), filter_{filter} {}
+
+  const FilterType& filter() const {
+    return filter_;
+  }
+
+  void process(std::string_view value, bool& atEnd) {
+    if (filter_.testBytes(value.data(), static_cast<int32_t>(value.size()))) {
+      filterPassed(value);
+    }
+    addRowIndex(1);
+    atEnd = this->atEnd();
+  }
+
+  void filterPassed(std::string_view) {
+    passingRows_.push_back(currentRow());
+  }
+
+  void filterFailed() {}
+
+  bool allowNulls() const {
+    return filter_.testNull();
+  }
+
+  void processNull(bool& atEnd) {
+    if (filter_.testNull()) {
+      filterPassed({});
+    }
+    StringReadWithVisitor::processNull(atEnd);
+  }
+
+  const std::vector<vector_size_t>& passingRows() const {
+    return passingRows_;
+  }
+
+ private:
+  const FilterType& filter_;
+  std::vector<vector_size_t> passingRows_;
+};
+
+TEST_F(
+    FsstEncodingTest,
+    compressedRangesMatchDecodedBytesWithoutStringBuffers) {
+  std::vector<std::string> storage{
+      "",
+      "a",
+      "ab",
+      "abc",
+      "abcd",
+      "common/prefix/one",
+      "common/prefix/two",
+      "common/prefix/three",
+      "z",
+      std::string("a\0b", 3),
+      std::string("a\xff", 2),
+      std::string("\xff\0\xff", 3),
+      std::string(2'048, 'a')};
+  std::vector<std::string_view> values(storage.begin(), storage.end());
+  Buffer buffer{*pool_};
+  const std::string encoded{encodeFsst(values, buffer)};
+  for (const bool zeroTerminated : {false, true}) {
+    const auto zeroTerminatedEncoding =
+        zeroTerminated ? encodeZeroTerminatedFsst(values) : std::string{};
+    const std::string_view input =
+        zeroTerminated ? zeroTerminatedEncoding : encoded;
+    // Compare against the ordinary decoder, including zero-terminated tables.
+    // The upstream zero-terminated encoder may stop at embedded NUL bytes.
+    FsstEncoding oracle{*pool_, input, createStringBufferFactory()};
+    std::vector<std::string_view> decoded(values.size());
+    oracle.materialize(static_cast<uint32_t>(values.size()), decoded.data());
+    if (!zeroTerminated) {
+      EXPECT_EQ(decoded, values);
+    }
+    for (const auto& bound : storage) {
+      for (const bool lowerUnbounded : {false, true}) {
+        for (const bool upperUnbounded : {false, true}) {
+          if (lowerUnbounded && upperUnbounded) {
+            continue;
+          }
+          for (const bool exclusive : {false, true}) {
+            velox::common::BytesRange filter{
+                bound,
+                lowerUnbounded,
+                exclusive,
+                bound,
+                upperUnbounded,
+                exclusive,
+                false,
+            };
+            const auto check = [&](const auto& predicate) {
+              for (const bool sparse : {false, true}) {
+                std::vector<vector_size_t> rows;
+                std::vector<vector_size_t> expected;
+                for (vector_size_t row = 0; row < values.size(); ++row) {
+                  if (!sparse || row % 3 == 0) {
+                    rows.push_back(row);
+                    if (predicate.testBytes(
+                            decoded[row].data(),
+                            static_cast<int32_t>(decoded[row].size()))) {
+                      expected.push_back(row);
+                    }
+                  }
+                }
+                size_t allocations{0};
+                FsstEncoding encoding{
+                    *pool_, input, [&](uint32_t size) {
+                      ++allocations;
+                      return createStringBufferFactory()(size);
+                    }};
+                RangeReadWithVisitor visitor{rows, predicate};
+                ReadWithVisitorParams params{};
+                encoding.readWithVisitor(visitor, params);
+                EXPECT_EQ(visitor.passingRows(), expected);
+                EXPECT_EQ(allocations, 0);
+              }
+            };
+            check(filter);
+            check(
+                velox::common::NegatedBytesRange{
+                    bound,
+                    lowerUnbounded,
+                    exclusive,
+                    bound,
+                    upperUnbounded,
+                    exclusive,
+                    false,
+                });
+          }
+        }
+      }
+    }
+  }
+}
+
+TEST_F(FsstEncodingTest, negatedEqualityUsesCompressedComparison) {
+  const std::string bound(2'048, 'a');
+  const std::vector<std::string_view> values{bound, "different", bound};
+  Buffer buffer{*pool_};
+  const auto encoded = encodeFsst(values, buffer);
+  velox::common::NegatedBytesRange filter{
+      bound, false, false, bound, false, false, false};
+  size_t allocations{0};
+  FsstEncoding encoding{*pool_, encoded, [&](uint32_t size) {
+                          ++allocations;
+                          return createStringBufferFactory()(size);
+                        }};
+  RangeReadWithVisitor visitor{{0, 1, 2}, filter};
+  ReadWithVisitorParams params{};
+  encoding.readWithVisitor(visitor, params);
+  EXPECT_EQ(visitor.passingRows(), (std::vector<vector_size_t>{1}));
+  EXPECT_EQ(allocations, 0);
+}
+
+TEST_F(FsstEncodingTest, compressedRangesRejectMalformedRowsAndSparseGaps) {
+  const std::vector<std::string_view> values{
+      "zero/value", "one/value", "two/value"};
+  Buffer buffer{*pool_};
+  const auto encoded = encodeFsst(values, buffer);
+  velox::common::BytesRange filter{
+      "no/match", false, false, "no/match", false, false, false};
+  for (const int malformedRow : {0, 1, 2}) {
+    const auto malformed =
+        buildIncompleteEscapeEncoding(splitFsst(encoded), malformedRow);
+    const auto check = [&](const auto& predicate) {
+      FsstEncoding encoding{*pool_, malformed, createStringBufferFactory()};
+      RangeReadWithVisitor visitor{{0, 2}, predicate};
+      ReadWithVisitorParams params{};
+      NIMBLE_ASSERT_THROW(
+          encoding.readWithVisitor(visitor, params),
+          "FSST compressed string ends with an incomplete escape code.");
+      EXPECT_TRUE(visitor.passingRows().empty());
+      EXPECT_TRUE(stringBuffers_.empty());
+    };
+    check(filter);
+    check(
+        velox::common::NegatedBytesRange{
+            "no/a", false, false, "no/z", false, false, false});
+    check(
+        velox::common::NegatedBytesRange{
+            "no/match", false, false, "no/match", false, false, false});
+  }
+}
+
+TEST_F(FsstEncodingTest, compressedRangesPreserveSparseNullsAndReset) {
+  const std::vector<std::string_view> values{
+      "prefix/a", "prefix/b", "other", "prefix/c"};
+  Buffer buffer{*pool_};
+  const auto encoded = encodeFsst(values, buffer);
+  for (const bool nullAllowed : {false, true}) {
+    const auto check = [&](const auto& predicate) {
+      FsstEncoding encoding{*pool_, encoded, createStringBufferFactory()};
+      for (int iteration = 0; iteration < 2; ++iteration) {
+        encoding.reset();
+        const std::vector<vector_size_t> rows{0, 1, 3, 4, 5};
+        RangeReadWithVisitor visitor{rows, predicate};
+        auto nulls =
+            velox::allocateNulls(6, pool_.get(), velox::bits::kNotNull);
+        velox::bits::setNull(nulls->asMutable<uint64_t>(), 1);
+        velox::bits::setNull(nulls->asMutable<uint64_t>(), 4);
+        visitor.reader().nullsInReadRange() = std::move(nulls);
+        ReadWithVisitorParams params{};
+        encoding.readWithVisitor(visitor, params);
+        const std::vector<std::string_view> logical{
+            values[0], {}, values[1], values[2], {}, values[3]};
+        std::vector<vector_size_t> expected;
+        for (auto row : rows) {
+          if (row == 1 || row == 4
+                  ? predicate.testNull()
+                  : predicate.testBytes(
+                        logical[row].data(),
+                        static_cast<int32_t>(logical[row].size()))) {
+            expected.push_back(row);
+          }
+        }
+        EXPECT_EQ(visitor.passingRows(), expected);
+        EXPECT_TRUE(stringBuffers_.empty());
+      }
+    };
+    check(
+        velox::common::BytesRange{
+            "prefix/", false, false, "prefix0", false, true, nullAllowed});
+    check(
+        velox::common::NegatedBytesRange{
+            "prefix/", false, false, "prefix0", false, true, nullAllowed});
+  }
+}
+
 TEST_F(FsstEncodingTest, roundTripStrings) {
   struct TestCase {
     std::string name;
@@ -1445,6 +1679,106 @@ TEST_F(FsstEncodingTest, fsstCompressionTargetRatioFallsBackToTrivial) {
   EXPECT_EQ(decoded, values);
 }
 
+TEST_F(FsstEncodingTest, compressionTargetUsesFinalSerializedSize) {
+  std::vector<std::string> storage;
+  storage.reserve(4'096);
+  for (uint32_t row = 0; row < 4'096; ++row) {
+    storage.push_back(
+        fmt::format(
+            "common/prefix/with/repeated/fsst/data/{:04}/common/suffix",
+            row % 32));
+  }
+  const std::vector<std::string_view> values(storage.begin(), storage.end());
+  const auto rawBytes = std::accumulate(
+      values.begin(), values.end(), size_t{0}, [](size_t sum, auto value) {
+        return sum + value.size();
+      });
+  const auto decodeAndCheck = [&](std::string_view encoded) {
+    auto decoder = EncodingFactory{}.create(
+        *pool_, encoded, createStringBufferFactory(), Encoding::Options{});
+    std::vector<std::string_view> decoded(values.size());
+    decoder->materialize(static_cast<uint32_t>(values.size()), decoded.data());
+    EXPECT_EQ(decoded, values);
+  };
+
+  CompressionOptions compressionOptions;
+  compressionOptions.compressionAcceptRatio = 1.0;
+  compressionOptions.zstdMinCompressionSize = 0;
+  compressionOptions.lz4MinCompressionSize = 0;
+  for (const auto type : {CompressionType::Zstd, CompressionType::Lz4}) {
+    SCOPED_TRACE(toString(type));
+    compressionOptions.compressionType = type;
+    Buffer fsstBuffer{*pool_};
+    const auto fsst = encodeFsst(values, fsstBuffer);
+    Buffer compressedBuffer{*pool_};
+    const auto compressed = EncodingFactory::encode<std::string_view>(
+        createSelectionPolicy(compressionOptions, type),
+        values,
+        compressedBuffer,
+        {.fsstCompressionTargetRatio = std::numeric_limits<double>::max()});
+    ASSERT_EQ(EncodingPrefix::encodingType(compressed), EncodingType::Fsst);
+    ASSERT_EQ(serializedCompressionType(compressed), type);
+    ASSERT_LT(compressed.size(), fsst.size());
+    const double finalRatio =
+        static_cast<double>(compressed.size()) / static_cast<double>(rawBytes);
+    const double midpointTargetRatio = (static_cast<double>(compressed.size()) +
+                                        static_cast<double>(fsst.size())) /
+        static_cast<double>(2 * rawBytes);
+    for (const auto ratio : {midpointTargetRatio, finalRatio}) {
+      Buffer buffer{*pool_};
+      const auto encoded = EncodingFactory::encode<std::string_view>(
+          createSelectionPolicy(compressionOptions, type),
+          values,
+          buffer,
+          {.fsstCompressionTargetRatio = ratio});
+      ASSERT_EQ(EncodingPrefix::encodingType(encoded), EncodingType::Fsst);
+      EXPECT_EQ(encoded, compressed);
+      decodeAndCheck(encoded);
+      Buffer sliceBuffer{*pool_};
+      const auto sliced = EncodingFactory::slice(encoded, 17, 83, sliceBuffer);
+      auto decoder = EncodingFactory{}.create(
+          *pool_, sliced, createStringBufferFactory(), Encoding::Options{});
+      std::vector<std::string_view> decoded(83);
+      decoder->materialize(
+          static_cast<uint32_t>(decoded.size()), decoded.data());
+      EXPECT_EQ(
+          decoded,
+          std::vector<std::string_view>(
+              values.begin() + 17, values.begin() + 100));
+    }
+
+    Buffer strictBuffer{*pool_};
+    const auto strict = EncodingFactory::encode<std::string_view>(
+        createSelectionPolicy(compressionOptions, type),
+        values,
+        strictBuffer,
+        {.fsstCompressionTargetRatio = finalRatio * 0.99});
+    EXPECT_EQ(EncodingPrefix::encodingType(strict), EncodingType::Trivial);
+    decodeAndCheck(strict);
+
+    auto rejectedCompression = compressionOptions;
+    rejectedCompression.compressionAcceptRatio = 0;
+    Buffer rejectedBuffer{*pool_};
+    const auto rejected = EncodingFactory::encode<std::string_view>(
+        createSelectionPolicy(rejectedCompression, type),
+        values,
+        rejectedBuffer,
+        {.fsstCompressionTargetRatio = midpointTargetRatio});
+    EXPECT_EQ(EncodingPrefix::encodingType(rejected), EncodingType::Trivial);
+    decodeAndCheck(rejected);
+
+    Buffer uncompressedBuffer{*pool_};
+    const auto uncompressed = EncodingFactory::encode<std::string_view>(
+        createSelectionPolicy(),
+        values,
+        uncompressedBuffer,
+        {.fsstCompressionTargetRatio = midpointTargetRatio});
+    EXPECT_EQ(
+        EncodingPrefix::encodingType(uncompressed), EncodingType::Trivial);
+    decodeAndCheck(uncompressed);
+  }
+}
+
 TEST_F(FsstEncodingTest, encodeWithReusableBuffers) {
   std::vector<std::string> storage;
   for (int i = 0; i < 256; ++i) {
@@ -1687,6 +2021,454 @@ TEST_F(FsstEncodingTest, readWithVisitorReadsSelectedRows) {
   }
 }
 
+TEST_F(FsstEncodingTest, decodeCacheIsOptInAndBinarySafe) {
+  std::string binary{"common/prefix/"};
+  binary.push_back('\0');
+  binary.push_back(static_cast<char>(0xff));
+  binary.append("/suffix");
+  std::string escaped;
+  for (int byte = 0; byte < 256; ++byte) {
+    escaped.push_back(static_cast<char>(byte));
+  }
+  const std::vector<std::string_view> values{binary, escaped, binary, escaped};
+
+  Buffer buffer{*pool_};
+  const auto encoded = encodeFsst(values, buffer);
+
+  {
+    stringBuffers_.clear();
+    auto encoding = EncodingFactory().create(
+        *pool_, encoded, createStringBufferFactory(), Encoding::Options{});
+    std::vector<std::string_view> decoded(values.size());
+    encoding->materialize(
+        static_cast<uint32_t>(decoded.size()), decoded.data());
+
+    EXPECT_EQ(decoded, values);
+    EXPECT_NE(decoded[0].data(), decoded[2].data());
+    EXPECT_NE(decoded[1].data(), decoded[3].data());
+  }
+
+  {
+    stringBuffers_.clear();
+    Encoding::Options options;
+    options.enableFsstDecodeCache = true;
+    auto encoding = EncodingFactory().create(
+        *pool_, encoded, createStringBufferFactory(), options);
+    std::vector<std::string_view> decoded(values.size());
+    encoding->materialize(
+        static_cast<uint32_t>(decoded.size()), decoded.data());
+
+    EXPECT_EQ(decoded, values);
+    EXPECT_EQ(decoded[0].data(), decoded[2].data());
+    EXPECT_EQ(decoded[1].data(), decoded[3].data());
+  }
+}
+
+TEST_F(FsstEncodingTest, decodeCacheHandlesEscapedPayloadLengths) {
+  std::vector<std::string> storage;
+  storage.reserve(7);
+  for (size_t byteCount = 3; byteCount <= 9; ++byteCount) {
+    auto& value = storage.emplace_back(byteCount, static_cast<char>(byteCount));
+    value.at(0) = '\0';
+    value.at(byteCount - 1) = static_cast<char>(0xff);
+  }
+  std::vector<std::string_view> values;
+  for (const auto& value : storage) {
+    values.push_back(value);
+    values.push_back(value);
+  }
+
+  Buffer buffer{*pool_};
+  const auto encoded = encodeFsst(values, buffer);
+  const auto sections = splitFsst(encoded);
+  std::vector<uint32_t> lengths;
+  std::string blob;
+  for (const auto value : values) {
+    lengths.push_back(static_cast<uint32_t>(2 * value.size()));
+    for (const char byte : value) {
+      blob.push_back(static_cast<char>(FSST_ESC));
+      blob.push_back(byte);
+    }
+  }
+  const auto serializedLengths = encodeTrivialChild<uint32_t>(lengths);
+  const auto escapedEncoding =
+      rebuildFsst(sections, sections.symbolTable, serializedLengths, blob);
+
+  Encoding::Options options;
+  options.enableFsstDecodeCache = true;
+  options.fsstMaxDecodeCacheEntries = static_cast<uint32_t>(storage.size());
+  auto encoding = EncodingFactory().create(
+      *pool_, escapedEncoding, createStringBufferFactory(), options);
+  std::vector<std::string_view> decoded(values.size());
+  encoding->materialize(static_cast<uint32_t>(decoded.size()), decoded.data());
+
+  ASSERT_EQ(decoded, values);
+  for (size_t i = 0; i + 1 < decoded.size(); i += 2) {
+    EXPECT_EQ(decoded.at(i).data(), decoded.at(i + 1).data());
+  }
+}
+
+TEST_F(FsstEncodingTest, decodeCachePreservesZeroTerminatedValues) {
+  const std::vector<std::string_view> values{
+      "zero/terminated/common/prefix/alpha",
+      "zero/terminated/common/prefix/beta",
+      "zero/terminated/common/prefix/alpha",
+      "zero/terminated/common/prefix/beta"};
+  const auto encoded = encodeZeroTerminatedFsst(values);
+
+  Encoding::Options options;
+  options.enableFsstDecodeCache = true;
+  auto encoding = EncodingFactory().create(
+      *pool_, encoded, createStringBufferFactory(), options);
+  std::vector<std::string_view> decoded(values.size());
+  encoding->materialize(static_cast<uint32_t>(decoded.size()), decoded.data());
+
+  EXPECT_EQ(decoded, values);
+  EXPECT_EQ(decoded[0].data(), decoded[2].data());
+  EXPECT_EQ(decoded[1].data(), decoded[3].data());
+}
+
+TEST_F(FsstEncodingTest, readWithVisitorReusesSelectedPayloads) {
+  const std::vector<std::string_view> values{
+      "repeated/value",
+      "skipped/value/one",
+      "repeated/value",
+      "skipped/value/two",
+      "repeated/value"};
+  Buffer buffer{*pool_};
+  const auto encoded = encodeFsst(values, buffer);
+
+  Encoding::Options options;
+  options.enableFsstDecodeCache = true;
+  FsstEncoding encoding{*pool_, encoded, createStringBufferFactory(), options};
+  StringReadWithVisitor visitor{{0, 2, 4}};
+  ReadWithVisitorParams params;
+  params.numScanned = 0;
+
+  encoding.readWithVisitor(visitor, params);
+
+  const auto decoded = visitor.values();
+  ASSERT_EQ(
+      decoded,
+      (std::vector<std::string_view>{values[0], values[2], values[4]}));
+  EXPECT_EQ(decoded[0].data(), decoded[1].data());
+  EXPECT_EQ(decoded[0].data(), decoded[2].data());
+}
+
+TEST_F(FsstEncodingTest, decodeCacheIsResetForEachCall) {
+  const std::vector<std::string_view> values{
+      "first/value",
+      "second/value",
+      "first/value",
+      "second/value",
+      "first/value",
+      "second/value"};
+  Buffer buffer{*pool_};
+  const auto encoded = encodeFsst(values, buffer);
+
+  Encoding::Options options;
+  options.enableFsstDecodeCache = true;
+  auto encoding = EncodingFactory().create(
+      *pool_, encoded, createStringBufferFactory(), options);
+
+  std::vector<std::string_view> firstCall(3);
+  encoding->materialize(
+      static_cast<uint32_t>(firstCall.size()), firstCall.data());
+  ASSERT_EQ(
+      firstCall,
+      (std::vector<std::string_view>{values[0], values[1], values[2]}));
+  EXPECT_EQ(firstCall[0].data(), firstCall[2].data());
+  const auto* firstValueData = firstCall[0].data();
+
+  std::vector<std::string_view> secondCall(3);
+  encoding->materialize(
+      static_cast<uint32_t>(secondCall.size()), secondCall.data());
+  ASSERT_EQ(
+      secondCall,
+      (std::vector<std::string_view>{values[3], values[4], values[5]}));
+  EXPECT_EQ(secondCall[0].data(), secondCall[2].data());
+  EXPECT_NE(firstValueData, secondCall[1].data());
+
+  encoding->reset();
+  std::vector<std::string_view> afterReset(3);
+  encoding->materialize(
+      static_cast<uint32_t>(afterReset.size()), afterReset.data());
+  EXPECT_EQ(
+      afterReset,
+      (std::vector<std::string_view>{values[0], values[1], values[2]}));
+  EXPECT_EQ(afterReset[0].data(), afterReset[2].data());
+}
+
+TEST_F(FsstEncodingTest, decodeCacheReusesEntriesAtEntryLimit) {
+  const std::vector<std::string_view> values{
+      "first/value",
+      "second/value",
+      "first/value",
+      "third/value",
+      "first/value",
+      "third/value",
+      "second/value"};
+  Buffer buffer{*pool_};
+  const auto encoded = encodeFsst(values, buffer);
+
+  Encoding::Options options;
+  options.enableFsstDecodeCache = true;
+  options.fsstMaxDecodeCacheEntries = 2;
+  for (const bool useVisitor : {false, true}) {
+    SCOPED_TRACE(useVisitor ? "visitor" : "materialize");
+    stringBuffers_.clear();
+    FsstEncoding encoding{
+        *pool_, encoded, createStringBufferFactory(), options};
+    std::vector<std::string_view> decoded(values.size());
+    if (useVisitor) {
+      StringReadWithVisitor visitor{{0, 1, 2, 3, 4, 5, 6}};
+      ReadWithVisitorParams params;
+      params.numScanned = 0;
+      encoding.readWithVisitor(visitor, params);
+      decoded = visitor.values();
+    } else {
+      encoding.materialize(
+          static_cast<uint32_t>(decoded.size()), decoded.data());
+    }
+
+    ASSERT_EQ(decoded, values);
+    EXPECT_EQ(decoded.at(0).data(), decoded.at(2).data());
+    EXPECT_EQ(decoded.at(0).data(), decoded.at(4).data());
+    EXPECT_EQ(decoded.at(1).data(), decoded.at(6).data());
+    EXPECT_NE(decoded.at(3).data(), decoded.at(5).data());
+  }
+}
+
+TEST_F(FsstEncodingTest, decodeCacheReusesLargePayloads) {
+  constexpr size_t kLargeValueSize = 2 * 1'024 * 1'024;
+  const std::string firstLargeValue(kLargeValueSize, 'a');
+  const std::string secondLargeValue(kLargeValueSize, 'b');
+  const std::vector<std::string_view> values{
+      firstLargeValue,
+      firstLargeValue,
+      secondLargeValue,
+      "cached/value",
+      firstLargeValue,
+      secondLargeValue,
+      "cached/value"};
+  Buffer buffer{*pool_};
+  const auto encoded = encodeFsst(values, buffer);
+
+  Encoding::Options options;
+  options.enableFsstDecodeCache = true;
+  options.fsstMaxDecodeCacheEntries = 3;
+  for (const bool useVisitor : {false, true}) {
+    SCOPED_TRACE(useVisitor ? "visitor" : "materialize");
+    stringBuffers_.clear();
+    FsstEncoding encoding{
+        *pool_, encoded, createStringBufferFactory(), options};
+    std::vector<std::string_view> decoded(values.size());
+    if (useVisitor) {
+      StringReadWithVisitor visitor{{0, 1, 2, 3, 4, 5, 6}};
+      ReadWithVisitorParams params;
+      params.numScanned = 0;
+      encoding.readWithVisitor(visitor, params);
+      decoded = visitor.values();
+    } else {
+      encoding.materialize(
+          static_cast<uint32_t>(decoded.size()), decoded.data());
+    }
+
+    ASSERT_EQ(decoded, values);
+    EXPECT_EQ(decoded.at(0).data(), decoded.at(1).data());
+    EXPECT_EQ(decoded.at(0).data(), decoded.at(4).data());
+    EXPECT_EQ(decoded.at(2).data(), decoded.at(5).data());
+    EXPECT_EQ(decoded.at(3).data(), decoded.at(6).data());
+  }
+}
+
+TEST_F(FsstEncodingTest, zeroDecodeCacheEntriesUsesDecodedFallback) {
+  const std::vector<std::string_view> values{
+      "repeated/value", "repeated/value", "different/value", "repeated/value"};
+  Buffer buffer{*pool_};
+  const auto encoded = encodeFsst(values, buffer);
+  Encoding::Options options;
+  options.enableFsstDecodeCache = true;
+  options.fsstMaxDecodeCacheEntries = 0;
+  for (const bool useVisitor : {false, true}) {
+    SCOPED_TRACE(useVisitor ? "visitor" : "materialize");
+    stringBuffers_.clear();
+    FsstEncoding encoding{
+        *pool_, encoded, createStringBufferFactory(), options};
+    std::vector<std::string_view> decoded(values.size());
+    if (useVisitor) {
+      StringReadWithVisitor visitor{{0, 1, 2, 3}};
+      ReadWithVisitorParams params{};
+      encoding.readWithVisitor(visitor, params);
+      decoded = visitor.values();
+    } else {
+      encoding.materialize(
+          static_cast<uint32_t>(decoded.size()), decoded.data());
+    }
+    ASSERT_EQ(decoded, values);
+    EXPECT_NE(decoded[0].data(), decoded[1].data());
+    EXPECT_NE(decoded[0].data(), decoded[3].data());
+  }
+}
+
+TEST_F(FsstEncodingTest, decodeCacheHandlesOneEntryAndProbeBounds) {
+  {
+    const std::vector<std::string_view> values{
+        "single/entry/value",
+        "single/entry/value",
+        "different/value",
+        "single/entry/value"};
+    Buffer buffer{*pool_};
+    const auto encoded = encodeFsst(values, buffer);
+
+    Encoding::Options options;
+    options.enableFsstDecodeCache = true;
+    options.fsstMaxDecodeCacheEntries = 1;
+    auto encoding = EncodingFactory().create(
+        *pool_, encoded, createStringBufferFactory(), options);
+    std::vector<std::string_view> decoded(values.size());
+    encoding->materialize(
+        static_cast<uint32_t>(decoded.size()), decoded.data());
+
+    EXPECT_EQ(decoded, values);
+    EXPECT_EQ(decoded[0].data(), decoded[1].data());
+    EXPECT_EQ(decoded[0].data(), decoded[3].data());
+  }
+
+  {
+    std::vector<std::string> storage;
+    std::vector<std::string_view> values;
+    storage.reserve(130);
+    values.reserve(131);
+    for (uint32_t i = 0; i < 130; ++i) {
+      storage.push_back(fmt::format("distinct/probe/value/{:08d}", i));
+      values.push_back(storage.back());
+    }
+    values.push_back(storage.front());
+    Buffer buffer{*pool_};
+    const auto encoded = encodeFsst(values, buffer);
+
+    Encoding::Options options;
+    options.enableFsstDecodeCache = true;
+    auto encoding = EncodingFactory().create(
+        *pool_, encoded, createStringBufferFactory(), options);
+    std::vector<std::string_view> decoded(values.size());
+    encoding->materialize(
+        static_cast<uint32_t>(decoded.size()), decoded.data());
+
+    EXPECT_EQ(decoded, values);
+    EXPECT_NE(decoded.front().data(), decoded.back().data());
+  }
+}
+
+TEST_F(FsstEncodingTest, decodeCacheHandlesHashFilterCollisionAtEntryLimit) {
+  const std::string cachedValue{"a12345678"};
+  const std::string collisionValue{"b12345678"};
+  const std::vector<std::string_view> values{
+      cachedValue, cachedValue, collisionValue, cachedValue};
+  Buffer buffer{*pool_};
+  const auto encoded = encodeFsst(values, buffer);
+  ASSERT_EQ(EncodingPrefix::encodingType(encoded), EncodingType::Fsst);
+  const auto sections = splitFsst(encoded);
+
+  // Fully escaping the nine-byte values gives equal-length payloads with the
+  // same final eight encoded bytes, so they share the cache filter bit.
+  constexpr uint32_t kCompressedSize = 18;
+  const std::vector<uint32_t> lengths(values.size(), kCompressedSize);
+  const auto serializedLengths = encodeTrivialChild<uint32_t>(lengths);
+  std::string blob;
+  blob.reserve(kCompressedSize * values.size());
+  for (const auto value : values) {
+    ASSERT_EQ(value.size(), kCompressedSize / 2);
+    for (const char byte : value) {
+      blob.push_back(static_cast<char>(FSST_ESC));
+      blob.push_back(byte);
+    }
+  }
+  const auto escapedEncoding =
+      rebuildFsst(sections, sections.symbolTable, serializedLengths, blob);
+
+  Encoding::Options options;
+  options.enableFsstDecodeCache = true;
+  options.fsstMaxDecodeCacheEntries = 1;
+  for (const bool useVisitor : {false, true}) {
+    SCOPED_TRACE(useVisitor ? "visitor" : "materialize");
+    stringBuffers_.clear();
+    FsstEncoding encoding{
+        *pool_, escapedEncoding, createStringBufferFactory(), options};
+    std::vector<std::string_view> decoded(values.size());
+    if (useVisitor) {
+      StringReadWithVisitor visitor{{0, 1, 2, 3}};
+      ReadWithVisitorParams params;
+      params.numScanned = 0;
+      encoding.readWithVisitor(visitor, params);
+      decoded = visitor.values();
+    } else {
+      encoding.materialize(
+          static_cast<uint32_t>(decoded.size()), decoded.data());
+    }
+
+    ASSERT_EQ(decoded, values);
+    EXPECT_EQ(decoded.at(0).data(), decoded.at(1).data());
+    EXPECT_EQ(decoded.at(0).data(), decoded.at(3).data());
+  }
+}
+
+TEST_F(FsstEncodingTest, decodeCacheHandlesEmptyPayloadsAtEntryLimit) {
+  const std::vector<std::string_view> values{
+      "",
+      "cached/value",
+      "",
+      "cached/value",
+      "different/value",
+      "",
+      "cached/value"};
+  Buffer buffer{*pool_};
+  const auto encoded = encodeFsst(values, buffer);
+
+  Encoding::Options options;
+  options.enableFsstDecodeCache = true;
+  options.fsstMaxDecodeCacheEntries = 1;
+  auto encoding = EncodingFactory().create(
+      *pool_, encoded, createStringBufferFactory(), options);
+  std::vector<std::string_view> decoded(values.size());
+  encoding->materialize(static_cast<uint32_t>(decoded.size()), decoded.data());
+
+  ASSERT_EQ(decoded, values);
+  EXPECT_EQ(decoded[1].data(), decoded[3].data());
+  EXPECT_EQ(decoded[1].data(), decoded[6].data());
+}
+
+TEST_F(FsstEncodingTest, decodeCacheDoesNotCrossEncodingInstances) {
+  const std::vector<std::string_view> firstValues{
+      "first/table/value", "first/table/value"};
+  const std::vector<std::string_view> secondValues{
+      "second/table/value", "second/table/value"};
+  Buffer firstBuffer{*pool_};
+  Buffer secondBuffer{*pool_};
+  const auto firstEncoded = encodeFsst(firstValues, firstBuffer);
+  const auto secondEncoded = encodeFsst(secondValues, secondBuffer);
+
+  Encoding::Options options;
+  options.enableFsstDecodeCache = true;
+  auto firstEncoding = EncodingFactory().create(
+      *pool_, firstEncoded, createStringBufferFactory(), options);
+  auto secondEncoding = EncodingFactory().create(
+      *pool_, secondEncoded, createStringBufferFactory(), options);
+  std::vector<std::string_view> firstDecoded(firstValues.size());
+  std::vector<std::string_view> secondDecoded(secondValues.size());
+  firstEncoding->materialize(
+      static_cast<uint32_t>(firstDecoded.size()), firstDecoded.data());
+  secondEncoding->materialize(
+      static_cast<uint32_t>(secondDecoded.size()), secondDecoded.data());
+
+  EXPECT_EQ(firstDecoded, firstValues);
+  EXPECT_EQ(secondDecoded, secondValues);
+  EXPECT_EQ(firstDecoded[0].data(), firstDecoded[1].data());
+  EXPECT_EQ(secondDecoded[0].data(), secondDecoded[1].data());
+  EXPECT_NE(firstDecoded[0].data(), secondDecoded[0].data());
+}
+
 TEST_F(FsstEncodingTest, readWithVisitorRejectsMalformedSelectedRow) {
   const std::vector<std::string_view> values{
       "zero/value", "one/value", "two/value"};
@@ -1751,21 +2533,30 @@ TEST_F(FsstEncodingTest, readWithVisitorHandlesNullsInSparseRange) {
   Buffer buffer{*pool_};
   const auto encoded = encodeFsst(nonNullValues, buffer);
 
-  FsstEncoding encoding{*pool_, encoded, createStringBufferFactory()};
-  StringReadWithVisitor visitor{{0, 4}};
-  auto nulls = velox::allocateNulls(5, pool_.get(), velox::bits::kNotNull);
-  auto* rawNulls = nulls->asMutable<uint64_t>();
-  velox::bits::setNull(rawNulls, 1);
-  velox::bits::setNull(rawNulls, 3);
-  visitor.reader().nullsInReadRange() = std::move(nulls);
-  ReadWithVisitorParams params;
-  params.numScanned = 0;
+  for (const bool cacheEnabled : {false, true}) {
+    SCOPED_TRACE(cacheEnabled ? "cache enabled" : "cache disabled");
+    stringBuffers_.clear();
+    Encoding::Options options;
+    options.enableFsstDecodeCache = cacheEnabled;
+    FsstEncoding encoding{
+        *pool_, encoded, createStringBufferFactory(), options};
+    StringReadWithVisitor visitor{{0, 4}};
+    auto nulls = velox::allocateNulls(5, pool_.get(), velox::bits::kNotNull);
+    auto* rawNulls = nulls->asMutable<uint64_t>();
+    velox::bits::setNull(rawNulls, 1);
+    velox::bits::setNull(rawNulls, 3);
+    visitor.reader().nullsInReadRange() = std::move(nulls);
+    ReadWithVisitorParams params;
+    params.numScanned = 0;
 
-  encoding.readWithVisitor(visitor, params);
+    encoding.readWithVisitor(visitor, params);
 
-  EXPECT_EQ(
-      visitor.values(),
-      (std::vector<std::string_view>{nonNullValues[0], nonNullValues[2]}));
+    EXPECT_EQ(
+        visitor.values(),
+        (std::vector<std::string_view>{nonNullValues[0], nonNullValues[2]}));
+    NIMBLE_ASSERT_THROW(
+        encoding.skip(1), "Skipping past end of FSST encoding.");
+  }
 }
 
 TEST_F(FsstEncodingTest, resetAndRematerialize) {
