@@ -49,6 +49,7 @@ velox_add_library(
   Map.cpp
   MapFromArrays.cpp
   MapFromEntries.cpp
+  Murmur3Hash.cpp
   RegexFunctions.cpp
   Size.cpp
   String.cpp
@@ -102,6 +103,7 @@ velox_add_library(
   MaskFunction.h
   MightContain.h
   MonotonicallyIncreasingId.h
+  Murmur3Hash.h
   RaiseError.h
   Rand.h
   RandStr.h

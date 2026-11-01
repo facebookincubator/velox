@@ -22,6 +22,7 @@ velox_add_library(
   CentralMomentsAggregate.cpp
   CollectListAggregate.cpp
   CollectSetAggregate.cpp
+  CountMinSketchAggregate.cpp
   CovarianceAggregate.cpp
   FirstLastAggregate.cpp
   MinMaxAggregate.cpp
@@ -40,6 +41,7 @@ velox_add_library(
   BloomFilterAggAggregate.h
   CentralMomentsAggregate.h
   CollectListAggregate.h
+  CountMinSketchAggregate.h
   CovarianceAggregate.h
   DecimalAverageAggregate.h
   DecimalSumAggregate.h
@@ -55,6 +57,8 @@ velox_link_libraries(
   velox_exec
   velox_expression_functions
   velox_aggregates
+  velox_functions_lib
+  velox_functions_spark_impl
   velox_vector
 )
 
