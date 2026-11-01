@@ -16,6 +16,7 @@
 
 #include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/connectors/hive/BufferedInputDataSource.h"
+#include "velox/experimental/cudf/connectors/hive/CachingDataSource.h"
 #include "velox/experimental/cudf/connectors/hive/CudfSplitReader.h"
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
@@ -559,6 +560,21 @@ cudf::io::source_info makeSourceInfo(const CudfHiveConnectorSplit& split) {
       std::vector<cudf::io::filepath_source>{std::move(source)}};
 }
 
+// Opens the split's file with KvikIO. Its reads go through the async data
+// cache when the split is cacheable.
+std::unique_ptr<cudf::io::datasource> createKvikioDataSource(
+    const CudfHiveConnectorSplit& split,
+    const std::shared_ptr<IoStats>& ioStats) {
+  auto source =
+      std::move(cudf::io::make_datasources(makeSourceInfo(split)).front());
+  return maybeCacheKvikioDataSource(
+      std::move(source),
+      split.filePath,
+      velox::cache::AsyncDataCache::getInstance(),
+      split.cacheable,
+      ioStats);
+}
+
 } // namespace
 
 bool CudfSplitReader::ignoreMissingFiles() const {
@@ -594,8 +610,7 @@ void CudfSplitReader::setupCudfDataSource() {
   // Helper to create a KvikIO data source.
   auto makeKvikioDataSource = [&]() {
     try {
-      dataSource_ = std::move(
-          cudf::io::make_datasources(makeSourceInfo(*split_)).front());
+      dataSource_ = createKvikioDataSource(*split_, ioStats_);
     } catch (const std::system_error& e) {
       // KvikIO preserves errno for local opens only.
       // TODO: Ignore missing remote files once KvikIO reports them
