@@ -18,6 +18,7 @@
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/core/Expressions.h"
+#include "velox/expression/Expr.h"
 #include "velox/expression/ExprOptimizer.h"
 #include "velox/expression/ExprRewriteRegistry.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
@@ -297,6 +298,31 @@ TEST_F(ExprOptimizerTest, queryCtx) {
   testFromUnixtime("hour", "America/Los_Angeles", "7");
   testFromUnixtime("minute", "Pacific/Apia", "4");
   testFromUnixtime("minute", "America/Los_Angeles", "4");
+}
+
+TEST_F(ExprOptimizerTest, expressionEvaluatorOverload) {
+  // The evaluator's time zone differs from the default (UTC), so folding with
+  // the wrong QueryCtx gives a different hour.
+  const auto evaluatorQueryCtx = core::QueryCtx::create(
+      nullptr,
+      core::QueryConfig({
+          {core::QueryConfig::kSessionTimezone, "Pacific/Apia"},
+          {core::QueryConfig::kAdjustTimestampToTimezone, "true"},
+      }));
+  exec::SimpleExpressionEvaluator evaluator(evaluatorQueryCtx.get(), pool());
+
+  const auto typedExpr =
+      makeTypedExpr("hour(from_unixtime(9.98489045321E8))", ROW({}));
+  ASSERT_TRUE(
+      *expression::optimize(typedExpr, &evaluator) ==
+      *makeTypedExpr("3", ROW({})));
+
+  const auto defaultQueryCtx = core::QueryCtx::create();
+  exec::SimpleExpressionEvaluator defaultEvaluator(
+      defaultQueryCtx.get(), pool());
+  ASSERT_TRUE(
+      *expression::optimize(typedExpr, &defaultEvaluator) ==
+      *makeTypedExpr("14", ROW({})));
 }
 
 /// Test cast optimization that avoids expression evaluation when input to
