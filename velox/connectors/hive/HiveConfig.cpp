@@ -134,6 +134,10 @@ std::optional<std::string> HiveConfig::gcsAuthAccessTokenProvider() const {
       std::string(kLegacyPrefix) + kGcsAuthAccessTokenProvider);
 }
 
+std::optional<std::string> HiveConfig::gcsUserAgent() const {
+  return config_->get<std::string>(kGcsUserAgent);
+}
+
 int32_t HiveConfig::numCacheFileHandles() const {
   return config_->get<int32_t>(kNumCacheFileHandles, 20'000);
 }

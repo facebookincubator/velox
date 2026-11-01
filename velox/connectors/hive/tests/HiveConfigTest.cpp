@@ -65,6 +65,7 @@ TEST(HiveConfigTest, defaultConfig) {
   ASSERT_EQ(hiveConfig.immutablePartitions(), false);
   ASSERT_EQ(hiveConfig.gcsEndpoint(), "");
   ASSERT_EQ(hiveConfig.gcsCredentialsPath(), "");
+  ASSERT_FALSE(hiveConfig.gcsUserAgent().has_value());
   ASSERT_FALSE(hiveConfig.isFileColumnNamesReadAsLowerCase(emptySession.get()));
 
   ASSERT_EQ(hiveConfig.maxCoalescedBytes(emptySession.get()), 128 << 20);
@@ -101,6 +102,7 @@ TEST(HiveConfigTest, overrideConfig) {
       {HiveConfig::kImmutablePartitions, "true"},
       {HiveConfig::kGcsEndpoint, "hey"},
       {HiveConfig::kGcsCredentialsPath, "hey"},
+      {HiveConfig::kGcsUserAgent, "custom-agent"},
       {HiveConfig::kFileColumnNamesReadAsLowerCase, "true"},
       {HiveConfig::kAllowNullPartitionKeys, "false"},
       {HiveConfig::kMaxCoalescedBytes, "100"},
@@ -135,6 +137,7 @@ TEST(HiveConfigTest, overrideConfig) {
   ASSERT_TRUE(hiveConfig.immutablePartitions());
   ASSERT_EQ(hiveConfig.gcsEndpoint(), "hey");
   ASSERT_EQ(hiveConfig.gcsCredentialsPath(), "hey");
+  ASSERT_EQ(hiveConfig.gcsUserAgent(), "custom-agent");
   ASSERT_TRUE(hiveConfig.isFileColumnNamesReadAsLowerCase(emptySession.get()));
   ASSERT_FALSE(hiveConfig.allowNullPartitionKeys(emptySession.get()));
   ASSERT_EQ(hiveConfig.maxCoalescedBytes(emptySession.get()), 100);
@@ -201,6 +204,7 @@ TEST(HiveConfigTest, overrideSession) {
   ASSERT_FALSE(hiveConfig.immutablePartitions());
   ASSERT_EQ(hiveConfig.gcsEndpoint(), "");
   ASSERT_EQ(hiveConfig.gcsCredentialsPath(), "");
+  ASSERT_FALSE(hiveConfig.gcsUserAgent().has_value());
   ASSERT_TRUE(hiveConfig.isFileColumnNamesReadAsLowerCase(session.get()));
 
   ASSERT_EQ(hiveConfig.maxCoalescedBytes(session.get()), 128 << 20);
