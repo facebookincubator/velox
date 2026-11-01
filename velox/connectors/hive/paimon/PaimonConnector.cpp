@@ -26,8 +26,15 @@ PaimonConnector::PaimonConnector(
     const std::string& id,
     std::shared_ptr<const config::ConfigBase> config,
     folly::Executor* ioExecutor)
-    : HiveConnector(id, config, ioExecutor),
-      paimonConfig_(std::make_shared<PaimonConfig>(connectorConfig())) {}
+    : FileConnector(
+          id,
+          std::make_shared<PaimonConfig>(std::move(config)),
+          ioExecutor),
+      paimonConfig_(std::static_pointer_cast<PaimonConfig>(fileConfig_)),
+      configProvider_(
+          PaimonConfig::registeredProperties(),
+          id,
+          connectorConfig().get()) {}
 
 std::unique_ptr<DataSource> PaimonConnector::createDataSource(
     const RowTypePtr& outputType,

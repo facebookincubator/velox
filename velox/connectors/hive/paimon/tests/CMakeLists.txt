@@ -39,6 +39,7 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
   target_link_libraries(
     velox_hive_paimon_connector_test
     velox_hive_paimon_connector
+    velox_hive_connector
     velox_exec_test_lib
     velox_dwio_orc_reader
     GTest::gtest

@@ -18,8 +18,8 @@
 #include <optional>
 #include <unordered_map>
 
+#include "velox/common/caching/FileProperties.h"
 #include "velox/connectors/Connector.h"
-#include "velox/connectors/hive/FileProperties.h"
 #include "velox/dwio/common/Options.h"
 
 namespace facebook::velox::connector::hive {

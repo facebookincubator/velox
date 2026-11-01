@@ -19,8 +19,6 @@
 #include <boost/algorithm/string.hpp>
 #include "velox/common/config/Config.h"
 #include "velox/dwio/common/Options.h"
-#include "velox/dwio/dwrf/common/Config.h"
-#include "velox/dwio/parquet/common/ParquetConfig.h"
 
 namespace facebook::velox::connector::hive {
 
@@ -66,13 +64,7 @@ const std::vector<config::ConfigProperty>& HiveConfig::registeredProperties() {
 
 #undef VELOX_HIVE_CONFIG_REGISTER
 
-    parquet::ParquetConfig::registerProperties(
-        properties,
-        dwio::common::formatConfigPrefix(
-            dwio::common::FileFormat::PARQUET, "_"));
-    dwrf::Config::registerProperties(
-        properties,
-        dwio::common::formatConfigPrefix(dwio::common::FileFormat::ORC, "_"));
+    registerFormatProperties(properties);
     return properties;
   }();
   return kProperties;
@@ -132,18 +124,6 @@ std::optional<std::string> HiveConfig::gcsAuthAccessTokenProvider() const {
   }
   return config_->get<std::string>(
       std::string(kLegacyPrefix) + kGcsAuthAccessTokenProvider);
-}
-
-int32_t HiveConfig::numCacheFileHandles() const {
-  return config_->get<int32_t>(kNumCacheFileHandles, 20'000);
-}
-
-uint64_t HiveConfig::fileHandleExpirationDurationMs() const {
-  return config_->get<uint64_t>(kFileHandleExpirationDurationMs, 0);
-}
-
-bool HiveConfig::isFileHandleCacheEnabled() const {
-  return config_->get<bool>(kEnableFileHandleCache, true);
 }
 
 std::string HiveConfig::writeFileCreateConfig() const {
