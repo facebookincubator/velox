@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/row/UnsafeRowFast.h"
+#include <cstring>
 #include "velox/vector/FlatVector.h"
 
 namespace facebook::velox::row {
@@ -345,14 +346,15 @@ int32_t UnsafeRowFast::serializeAsArray(
   int64_t variableWidthOffset = fixedWidthOffset + alignBytes(size * childSize);
 
   if (elements.supportsBulkCopy_) {
+    elements.serializeFixedWidth(offset, size, buffer + fixedWidthOffset);
     if (elements.decoded_.mayHaveNulls()) {
       for (auto i = 0; i < size; ++i) {
         if (elements.isNullAt(offset + i)) {
           bits::setBit(buffer + nullsOffset, i, true);
+          std::memset(buffer + fixedWidthOffset + i * childSize, 0, childSize);
         }
       }
     }
-    elements.serializeFixedWidth(offset, size, buffer + fixedWidthOffset);
     return variableWidthOffset;
   }
 
