@@ -183,7 +183,9 @@ CudfTopNRowNumber::CudfTopNRowNumber(
       generateRowNumber_(node->generateRowNumber()),
       inputType_(node->sources()[0]->outputType()),
       cudaEvent_(std::make_unique<CudaEvent>(cudaEventDisableTiming)) {
-  VELOX_CHECK(canRunOnGPU(*node), "Unsupported CudfTopNRowNumber keys");
+  VELOX_CHECK(
+      canRunOnGPU(*node),
+      "Unsupported ranking function or partitioning/sorting key types for CudfTopNRowNumber");
 
   partitionKeyIndices_.reserve(node->partitionKeys().size());
   for (const auto& key : node->partitionKeys()) {
