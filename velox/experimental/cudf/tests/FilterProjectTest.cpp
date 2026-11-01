@@ -2934,6 +2934,24 @@ TEST_F(CudfFilterProjectTest, greatestLeastWithNulls) {
   assertQuery(plan, "SELECT greatest(c0, c1, c2), least(c0, c1, c2) FROM tmp");
 }
 
+TEST_F(CudfFilterProjectTest, arraySubscriptGuardedByConditional) {
+  // c0[2] is out of bounds on row 1, which the condition routes to the else
+  // branch, so the subscript must not see it.
+  auto data = makeRowVector({
+      makeArrayVector<int64_t>({{1, 2}, {3}, {4, 5}}),
+  });
+  auto plan =
+      PlanBuilder()
+          .values({data})
+          .project(
+              {"if(cardinality(c0) > 1, c0[2], CAST(-1 AS BIGINT)) AS result"})
+          .planNode();
+  auto expected = makeRowVector({
+      makeFlatVector<int64_t>({2, -1, 5}),
+  });
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
 TEST_F(CudfFilterProjectTest, betweenDouble) {
   auto data = makeRowVector({
       makeFlatVector<double>({-1.0, 0.5, 1.5, 3.0}),
