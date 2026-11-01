@@ -41,9 +41,13 @@ class CommElement {
   /// specific communication pattern.
   virtual void process() = 0;
 
-  // Called when the underlying endpoint was closed
-  // or the communicator is finished.
+  /// Stops processing this communication element.
   virtual void close() = 0;
+
+  /// Called on the communicator thread when the transport becomes unavailable.
+  virtual void onEndpointClosed() {
+    close();
+  }
 
  protected:
   const std::shared_ptr<Communicator> communicator_;
