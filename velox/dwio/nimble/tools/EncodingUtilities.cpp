@@ -170,6 +170,28 @@ void traverseEncodings(
       }
       break;
     }
+    case EncodingType::SubIntSplit: {
+      const char* position = stream.data() + dataOffset;
+      const auto streamHeader = subintsplit::readStreamHeader(position);
+      std::vector<subintsplit::SectionHeader> sectionHeaders;
+      sectionHeaders.reserve(streamHeader.numSections);
+      for (uint8_t section{0}; section < streamHeader.numSections; ++section) {
+        sectionHeaders.push_back(subintsplit::readSectionHeader(position));
+      }
+      for (uint8_t section{0}; section < streamHeader.numSections; ++section) {
+        const auto& header = sectionHeaders[section];
+        traverseEncodings(
+            {position, header.encodedSize},
+            level + 1,
+            section,
+            "Bits" + std::to_string(header.range.bitStart) + "-" +
+                std::to_string(header.range.bitEnd),
+            useVarintRowCount,
+            visitor);
+        position += header.encodedSize;
+      }
+      break;
+    }
     case EncodingType::ALPRD: {
       Encoding::Options options;
       options.useVarintRowCount = useVarintRowCount;
