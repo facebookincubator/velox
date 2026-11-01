@@ -134,6 +134,48 @@ String Functions
         SELECT empty2null(''); -- NULL
         SELECT empty2null('abc'); -- 'abc'
 
+.. spark:function:: encode(string, charset) -> varbinary
+
+    Encodes the first argument into a binary using the provided ``charset``.
+    Returns NULL if either argument is NULL.
+    Supported charsets (case-insensitive) are ``US-ASCII``, ``ISO-8859-1``,
+    ``UTF-8``, ``UTF-16BE``, ``UTF-16LE``, ``UTF-16``, and ``UTF-32``. Throws
+    an exception when ``charset`` is not supported or a character cannot be
+    represented by the selected charset, following Spark 4.0's default behavior.
+    Other charset names and aliases require the opt-in setting below.
+
+    With ``spark.legacy_java_charsets`` enabled, also accepts JDK 17 names and
+    aliases for these standard charsets and the following single-byte encoders:
+    ``IBM037``, ``IBM437``, ``ISO-8859-2`` through ``ISO-8859-9``,
+    ``x-iso-8859-11``, ``ISO-8859-13``, ``ISO-8859-15``, ``ISO-8859-16``,
+    ``KOI8-R``, ``KOI8-U``, and ``windows-1250`` through ``windows-1258``.
+    Names follow Spark's locale-independent lowercasing: ASCII case and the
+    Kelvin sign (U+212A) match, but names must otherwise match exactly. The
+    allowlist and encoder mappings are generated from JDK 17, including
+    encoder-only mappings. This is a bounded subset, not arbitrary Java charset
+    support.
+    Unlisted multibyte and stateful encodings, such as ``Shift_JIS``, ``Big5``,
+    ``GBK``, ``EUC-JP``, ``EUC-KR``, and ``ISO-2022-JP``, and decode-only
+    charsets remain unsupported.
+
+    ``spark.legacy_coding_error_action`` corresponds to Spark 4.0's
+    ``spark.sql.legacy.codingErrorAction``. When enabled, unmappable characters
+    in the single-byte encoders are replaced with their JDK replacement byte,
+    ``3F`` in hexadecimal. Spark 3.x always replaces unmappable characters; set
+    ``spark.legacy_coding_error_action=true`` to match that behavior for the
+    supported charsets. This does not enable additional JDK charset names or
+    aliases. Unsupported charsets remain errors in either mode.
+    ``UTF-16`` prepends a big-endian byte-order mark; ``UTF-32`` emits big-endian
+    data without a byte-order mark. Empty input returns empty output without a
+    byte-order mark.
+    Malformed UTF-8 in ``string`` is normalized to the replacement character
+    ``U+FFFD`` before encoding. ::
+
+        SELECT encode('Spark SQL', 'UTF-8'); -- [53 70 61 72 6B 20 53 51 4C]
+        SELECT encode('A', 'UTF-16BE'); -- [00 41]
+        SELECT encode('A', 'UTF-16LE'); -- [41 00]
+        SELECT encode('A', 'UTF-32'); -- [00 00 00 41]
+
 .. spark:function:: endswith(left, right) -> boolean
 
     Returns true if 'left' ends with 'right'. Otherwise, returns false. ::
