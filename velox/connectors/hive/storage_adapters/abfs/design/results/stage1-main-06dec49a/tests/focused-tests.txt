@@ -1,0 +1,30 @@
+configuration=Debug
+target=velox_abfs_stage1_transport_test
+
+Final complete CTest entry:
+result=PASS
+tests=1/1
+elapsed_seconds=7.15
+total_outer_seconds=7.20
+
+Final functional matrix:
+filter=FollyHttpTransportTest.*
+result=PASS
+tests=54/54
+coverage=contracts; Baton post-before-wait; plaintext real sockets; request serialization; Content-Length; chunked; close-delimited; informational responses; HEAD/204/304; parser errors and limits; timeout and abandon; keep-alive reuse; pool cap/FIFO/timeout; off-thread pool destruction; Azure adapter/body stream; real BlobClient Download; TLS positive/unknown-CA/hostname-mismatch/timeout
+
+Final TLS stress:
+result=PASS
+iterations=20
+tests_per_iteration=4
+executions=80
+
+Additional stress before final formatting, followed by final full validation:
+chunked_valid_response=100/100 PASS
+pool_fifo=50/50 PASS
+pool_matrix=10 iterations x 7 tests PASS
+
+Formatting:
+tool=repository-pinned clang-format v21.1.2
+result=PASS
+files=12 Stage 1 C++ sources/headers/tests
