@@ -24,6 +24,7 @@ set(
   VELOX_CACHE_TEST_SOURCES
   AsyncDataCacheTest.cpp
   CacheTTLControllerTest.cpp
+  EvictionPolicyTest.cpp
   SsdFileTest.cpp
   SsdFileTrackerTest.cpp
   StringIdMapTest.cpp
@@ -41,6 +42,7 @@ set(
   glog::glog
   GTest::gtest
   GTest::gtest_main
+  GTest::gmock
 )
 
 velox_add_grouped_tests(
