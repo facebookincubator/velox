@@ -438,6 +438,23 @@ TEST(DuckParserTest, cast) {
       parseExpr("cast(c0 as struct(a bigint, b real, c varchar))")->toString());
 }
 
+// A cast of a parameter is a placeholder of the cast's type.
+TEST(DuckParserTest, placeholder) {
+  auto expr = parseExpr("a + ?2::BIGINT");
+  EXPECT_EQ("plus(\"a\",?2)", expr->toString());
+  const auto* placeholder = expr->inputs()[1]->as<core::PlaceholderExpr>();
+  ASSERT_NE(placeholder, nullptr);
+  EXPECT_EQ(2, placeholder->position());
+  EXPECT_EQ(*BIGINT(), *placeholder->type());
+
+  EXPECT_EQ("?1 AS x", parseExpr("cast(?1 as varchar) AS x")->toString());
+  EXPECT_EQ("?3", parseExpr("$3::BIGINT")->toString());
+
+  VELOX_ASSERT_THROW(
+      parseExpr("a + ?1"),
+      "A placeholder needs a type, such as ?1::BIGINT: ?1");
+}
+
 TEST(DuckParserTest, castToJson) {
   registerJsonType();
   EXPECT_EQ("cast(\"c0\" as JSON)", parseExpr("cast(c0 as json)")->toString());

@@ -55,8 +55,10 @@ const auto& kindNames() {
       {IExpr::Kind::kConstant, "Constant"},
       {IExpr::Kind::kLambda, "Lambda"},
       {IExpr::Kind::kSubquery, "Subquery"},
+      {IExpr::Kind::kConcat, "Concat"},
       {IExpr::Kind::kAggregate, "Aggregate"},
       {IExpr::Kind::kWindow, "Window"},
+      {IExpr::Kind::kPlaceholder, "Placeholder"},
   };
   return kNames;
 }
@@ -424,6 +426,24 @@ size_t ConstantExpr::localHash() const {
 
 std::string ConstantExpr::toString() const {
   return appendAliasIfExists(value_.toStringAsVector(type_));
+}
+
+bool PlaceholderExpr::operator==(const IExpr& other) const {
+  if (!other.is(Kind::kPlaceholder)) {
+    return false;
+  }
+
+  const auto* otherPlaceholder = other.as<PlaceholderExpr>();
+  return *type_ == *otherPlaceholder->type_ &&
+      position_ == otherPlaceholder->position_ && compareAliasAndInputs(other);
+}
+
+size_t PlaceholderExpr::localHash() const {
+  return bits::hashMix(type_->hashKind(), position_);
+}
+
+std::string PlaceholderExpr::toString() const {
+  return appendAliasIfExists(fmt::format("?{}", position_));
 }
 
 bool LambdaExpr::operator==(const IExpr& other) const {

@@ -28,6 +28,22 @@ ExprPtr parse(const std::string& sql) {
   return duckdb::parseExpr(sql, {});
 }
 
+TEST_F(ExprTest, placeholder) {
+  const ExprPtr placeholder = std::make_shared<PlaceholderExpr>(BIGINT(), 1);
+  EXPECT_EQ(placeholder->kind(), IExpr::Kind::kPlaceholder);
+  EXPECT_EQ(placeholder->toString(), "?1");
+
+  const ExprPtr same = std::make_shared<PlaceholderExpr>(BIGINT(), 1);
+  EXPECT_EQ(*placeholder, *same);
+  EXPECT_EQ(placeholder->hash(), same->hash());
+  EXPECT_NE(*placeholder, *std::make_shared<PlaceholderExpr>(BIGINT(), 2));
+  EXPECT_NE(*placeholder, *std::make_shared<PlaceholderExpr>(VARCHAR(), 1));
+
+  const auto aliased = placeholder->withAlias("a");
+  EXPECT_EQ(aliased->toString(), "?1 AS a");
+  EXPECT_EQ(*aliased->dropAlias(), *placeholder);
+}
+
 TEST_F(ExprTest, hashMap) {
   folly::F14FastMap<ExprPtr, int, IExprHash, IExprEqual> exprs;
 
