@@ -2300,6 +2300,57 @@ TEST_F(ParquetReaderTest, readNullTypeWithRequestedSchema) {
   assertReadWithReaderAndExpected(rowType, *rowReader, data, *leafPool_);
 }
 
+// A column with the UNKNOWN annotation can be read as any requested type. All
+// values are null.
+TEST_F(ParquetReaderTest, readNullTypeAsRequestedType) {
+  constexpr vector_size_t kRows = 7;
+  const std::vector<std::string> names = {
+      "unknown", "struct_unknown", "array_unknown", "map_unknown"};
+  auto makeType = [&](const TypePtr& type) {
+    return ROW(
+        names, {type, ROW({"n"}, {type}), ARRAY(type), MAP(VARCHAR(), type)});
+  };
+  auto makeData = [&](const TypePtr& type) {
+    return makeRowVector(
+        names,
+        {BaseVector::createNullConstant(type, kRows, pool_.get()),
+         makeRowVector(
+             {"n"},
+             {BaseVector::createNullConstant(type, kRows, pool_.get())},
+             [](vector_size_t row) { return row == 3; }),
+         makeArrayVector(
+             {0, 2, 2, 3, 3, 6, 6},
+             BaseVector::createNullConstant(type, 6, pool_.get()),
+             {1}),
+         makeMapVector(
+             {0, 1, 1, 3, 3, 4, 4},
+             makeFlatVector<std::string>({"a", "b", "c", "d"}),
+             BaseVector::createNullConstant(type, 4, pool_.get()),
+             {1, 5})});
+  };
+
+  // The writer stores UNKNOWN as INT32 with the UNKNOWN annotation.
+  auto* sink = write(makeData(UNKNOWN()));
+
+  for (const TypePtr& type :
+       std::vector<TypePtr>{UNKNOWN(), INTEGER(), BOOLEAN(), VARCHAR()}) {
+    SCOPED_TRACE(type->toString());
+    const auto requestedType = makeType(type);
+    auto readerOptions = makeDefaultReaderOptions();
+    readerOptions.setFileSchema(requestedType);
+    auto reader = createReaderInMemory(*sink, readerOptions);
+    // The file schema keeps UNKNOWN. The column reader returns nulls of the
+    // requested type.
+    EXPECT_EQ(reader->rowType()->toString(), makeType(UNKNOWN())->toString());
+
+    auto rowReaderOpts = makeRowReaderOpts(requestedType);
+    rowReaderOpts.setScanSpec(makeScanSpec(requestedType));
+    auto rowReader = reader->createRowReader(rowReaderOpts);
+    assertReadWithReaderAndExpected(
+        requestedType, *rowReader, makeData(type), *leafPool_);
+  }
+}
+
 TEST_F(ParquetReaderTest, timestampFilters) {
   constexpr vector_size_t kNumRows = 4'096;
   std::vector<int64_t> denseRows(kNumRows);
