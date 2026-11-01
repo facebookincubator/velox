@@ -22,6 +22,7 @@
 #include "velox/core/PlanNode.h"
 #include "velox/exec/fuzzer/FuzzerUtil.h"
 #include "velox/expression/Expr.h"
+#include "velox/expression/ExprConstants.h"
 #include "velox/parse/TypeResolver.h"
 #include "velox/vector/VectorSaver.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
@@ -307,6 +308,8 @@ ExpressionVerifier::verify(
   exec::ExprSet exprSetCommon =
       createExprSetCommon(plans, execCtx_, options_.disableConstantFolding);
   exec::ExprSetSimplified exprSetSimplified(plans, execCtx_);
+  // 'plans' wrapped in TRY. Created on first use.
+  std::unique_ptr<exec::ExprSetSimplified> exprSetSimplifiedWithTry;
 
   int testCaseItr = 0;
   for (auto [rowVector, rows] : transformedInputTestCases) {
@@ -555,6 +558,49 @@ ExpressionVerifier::verify(
             sql,
             complexConstants);
         throw;
+      }
+
+      // The common path doesn't evaluate rows whose result is NULL due to null
+      // propagation. Constant folding can enable null propagation, e.g. by
+      // rewriting "c1 OR true" to "true", which removes c1 from a SWITCH
+      // condition. The simplified path doesn't fold, so it may throw on rows
+      // that the common path skipped. Re-evaluate the simplified path under TRY
+      // to turn errors into NULLs. The comparison below then requires these
+      // rows to be NULL in the common path and fails on any other difference.
+      if (exceptionSimplifiedPtr && !exceptionCommonPtr &&
+          !unsupportedInputUncatchableError) {
+        if (!exprSetSimplifiedWithTry) {
+          std::vector<core::TypedExprPtr> tryPlans;
+          tryPlans.reserve(plans.size());
+          for (const auto& plan : plans) {
+            tryPlans.push_back(
+                std::make_shared<core::CallTypedExpr>(
+                    plan->type(), expression::kTry, plan));
+          }
+          exprSetSimplifiedWithTry =
+              std::make_unique<exec::ExprSetSimplified>(tryPlans, execCtx_);
+        }
+        try {
+          RowVectorPtr simplifiedInput =
+              std::static_pointer_cast<RowVector>(BaseVector::copy(*rowVector));
+          exec::EvalCtx evalCtxSimplifiedWithTry(
+              execCtx_, exprSetSimplifiedWithTry.get(), simplifiedInput.get());
+          std::vector<VectorPtr> simplifiedWithTryResult;
+          exprSetSimplifiedWithTry->eval(
+              0,
+              exprSetSimplifiedWithTry->size(),
+              true /*initialize*/,
+              rows,
+              evalCtxSimplifiedWithTry,
+              simplifiedWithTryResult);
+          simplifiedEvalResult = std::move(simplifiedWithTryResult);
+          exceptionSimplifiedPtr = nullptr;
+          LOG(INFO) << "Only simplified path threw. Comparing common path "
+                       "results with simplified path results under TRY.";
+        } catch (const std::exception& e) {
+          // Report the original exception below.
+          LOG(WARNING) << "Simplified eval under TRY failed: " << e.what();
+        }
       }
 
       try {
