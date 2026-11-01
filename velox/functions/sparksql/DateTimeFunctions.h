@@ -39,7 +39,7 @@ Expected<std::shared_ptr<DateTimeFormatter>> getDateTimeFormatter(
       return buildSimpleDateTimeFormatter(format, /*lenient=*/true);
     default:
       return buildJodaDateTimeFormatter(
-          std::string_view(format.data(), format.size()));
+          std::string_view(format.data(), format.size()), type);
   }
 }
 
@@ -49,15 +49,16 @@ Expected<std::shared_ptr<DateTimeFormatter>> getDateTimeFormatter(
 //
 // @param format The format string to be used for initializing the formatter.
 // @param legacyFormatter Whether legacy formatter is used.
+// @param nonLegacyType Formatter type to use when legacyFormatter is false.
 // @return A shared pointer to a DateTimeFormatter. If the formatter
 // initialization fails and the legacy formatter is used, nullptr is returned.
 inline std::shared_ptr<DateTimeFormatter> initializeFormatter(
     const std::string_view format,
-    bool legacyFormatter) {
+    bool legacyFormatter,
+    DateTimeFormatterType nonLegacyType = DateTimeFormatterType::JODA) {
   auto formatter = detail::getDateTimeFormatter(
       std::string_view(format),
-      legacyFormatter ? DateTimeFormatterType::STRICT_SIMPLE
-                      : DateTimeFormatterType::JODA);
+      legacyFormatter ? DateTimeFormatterType::STRICT_SIMPLE : nonLegacyType);
   // When legacy formatter is used, returns nullptr for invalid format;
   // otherwise, throws a user error.
   if (formatter.hasError()) {
@@ -423,74 +424,6 @@ struct FromUtcTimestampFunction {
 
  private:
   const tz::TimeZone* timeZone_{nullptr};
-};
-
-/// Converts date string to Timestamp type.
-template <typename T>
-struct GetTimestampFunction {
-  VELOX_DEFINE_FUNCTION_TYPES(T);
-
-  FOLLY_ALWAYS_INLINE void initialize(
-      const std::vector<TypePtr>& /*inputTypes*/,
-      const core::QueryConfig& config,
-      const arg_type<Varchar>* /*input*/,
-      const arg_type<Varchar>* format) {
-    legacyFormatter_ = SparkQueryConfig{config}.legacyDateFormatter();
-    auto sessionTimezoneName = config.sessionTimezone();
-    if (!sessionTimezoneName.empty()) {
-      sessionTimeZone_ = tz::locateZone(sessionTimezoneName);
-    }
-    if (format != nullptr) {
-      auto formatter = detail::initializeFormatter(
-          std::string_view(*format), legacyFormatter_);
-      if (formatter) {
-        formatter_ = formatter;
-      } else {
-        invalidFormat_ = true;
-      }
-      isConstantTimeFormat_ = true;
-    }
-  }
-
-  FOLLY_ALWAYS_INLINE bool call(
-      out_type<Timestamp>& result,
-      const arg_type<Varchar>& input,
-      const arg_type<Varchar>& format) {
-    if (invalidFormat_) {
-      return false;
-    }
-    if (!isConstantTimeFormat_) {
-      auto formatter = detail::initializeFormatter(
-          std::string_view(format), legacyFormatter_);
-      if (formatter) {
-        formatter_ = formatter;
-      } else {
-        return false;
-      }
-    }
-    auto dateTimeResult = formatter_->parse(std::string_view(input));
-    // Null as result for parsing error.
-    if (dateTimeResult.hasError()) {
-      return false;
-    }
-    toGMTWithGapCorrection(
-        (*dateTimeResult).timestamp, *getTimeZone(*dateTimeResult));
-    result = (*dateTimeResult).timestamp;
-    return true;
-  }
-
- private:
-  const tz::TimeZone* getTimeZone(const DateTimeResult& result) const {
-    // If timezone was not parsed, fallback to the session timezone. If there's
-    // no session timezone, fallback to 0 (GMT).
-    return result.timezone ? result.timezone : sessionTimeZone_;
-  }
-
-  std::shared_ptr<DateTimeFormatter> formatter_{nullptr};
-  bool isConstantTimeFormat_{false};
-  const tz::TimeZone* sessionTimeZone_{tz::locateZone(0)}; // default to GMT.
-  bool legacyFormatter_{false};
-  bool invalidFormat_{false};
 };
 
 template <typename T>
