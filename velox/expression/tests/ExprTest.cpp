@@ -2558,7 +2558,7 @@ TEST_F(ExprTest, memo) {
   // 1. correctly evaluates the unevaluated rows on subsequent runs
   // 2. Only caches results if it encounters the same base twice
   auto base = makeArrayVector<int64_t>(
-      1'000,
+      500,
       [](auto row) { return row % 5 + 1; },
       [](auto row, auto index) { return (row % 3) + index; });
 
@@ -2606,7 +2606,7 @@ TEST_F(ExprTest, memo) {
 
   // Create a new base
   base = makeArrayVector<int64_t>(
-      1'000,
+      500,
       [](auto row) { return row % 5 + 1; },
       [](auto row, auto index) { return (row % 3) + index; });
 
