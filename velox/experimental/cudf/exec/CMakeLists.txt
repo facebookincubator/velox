@@ -33,6 +33,7 @@ add_library(
   CudfMarkDistinct.cpp
   CudfNestedLoopJoin.cpp
   CudfOrderBy.cpp
+  CudfPrestoOutput.cpp
   CudfReduce.cpp
   CudfTopN.cpp
   CudfTopNRowNumber.cpp
@@ -45,6 +46,7 @@ add_library(
   GpuResources.cpp
   OperatorAdapters.cpp
   PrestoAggregateFunctions.cpp
+  PrestoPageDevice.cu
   SparkAggregateFunctions.cpp
   ToCudf.cpp
   Utilities.cpp

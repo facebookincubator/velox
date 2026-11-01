@@ -205,6 +205,12 @@ class PartitionedOutput : public Operator {
 
   void close() override;
 
+  /// Whether each input is serialized and flushed as it arrives: set by the
+  /// planner under a small partial limit or by partitioned_output_eager_flush.
+  bool eagerFlush() const {
+    return eagerFlush_;
+  }
+
   static void testingSetMinCompressionRatio(float ratio) {
     minCompressionRatio_ = ratio;
   }

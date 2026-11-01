@@ -230,13 +230,9 @@ bool CompileState::compile(bool allowCpuFallback) {
         }
       }
 
-      if (keepOperator == 0) {
-        // Only a declined GPU path requires CPU fallback.
-        isPureCpuOperator = !canUseGpuPath;
-      } else {
-        // A kept operator is valid with or without appended operators.
-        isPureCpuOperator = false;
-      }
+      // A kept operator is valid with or without appended operators, and so
+      // is a declined operator that its adapter allows on the CPU.
+      isPureCpuOperator = !canUseGpuPath && !adapter->allowsCpuOperator();
     } else {
       // special case for CudfOperator
       if (isAnyOf<CudfOperator>(oper)) {
@@ -529,6 +525,18 @@ void CudfConfig::initialize(
   if (config.find(kUcxPartitionedOutputBatchRows) != config.end()) {
     partitionedOutputBatchRows =
         folly::to<int64_t>(config[kUcxPartitionedOutputBatchRows]);
+  }
+  if (config.find(kCudfPrestoOutputEnabled) != config.end()) {
+    prestoOutputEnabled = folly::to<bool>(config[kCudfPrestoOutputEnabled]);
+  }
+  if (config.find(kCudfPrestoOutputPageBytes) != config.end()) {
+    prestoOutputPageBytes =
+        folly::to<int64_t>(config[kCudfPrestoOutputPageBytes]);
+    VELOX_USER_CHECK_GT(
+        prestoOutputPageBytes,
+        0,
+        "{} must be positive",
+        kCudfPrestoOutputPageBytes);
   }
   if (config.find(kCudfLogFallback) != config.end()) {
     logFallback = folly::to<bool>(config[kCudfLogFallback]);
