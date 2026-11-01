@@ -227,8 +227,7 @@ class FsstEncoding final
       std::span<const physicalType> values,
       velox::memory::MemoryPool* pool);
 
-  // Checks whether the native FSST representation meets the compression target
-  // before optional encoding-layer compression is applied.
+  // Checks the compression target using the final serialized FSST size.
   static bool meetsCompressionTarget(
       uint64_t uncompressedSize,
       uint64_t encodedSize,
@@ -254,6 +253,11 @@ class FsstEncoding final
   // The caller must first validate the containing range with
   // validateCompressedLengths().
   std::string_view decompressToStringBuffer(std::string_view compressed);
+
+  // Compares the bytes represented by a row's symbols with a byte range.
+  bool testCompressedRange(
+      std::string_view compressed,
+      const velox::common::BytesRange& filter) const;
 
   // Returns writable storage when the current page has enough room.
   std::optional<std::span<char>> availablePageRange(size_t requiredBytes) const;
@@ -319,24 +323,63 @@ void FsstEncoding::readWithVisitor(V& visitor, ReadWithVisitorParams& params) {
   validateCompressedLengths(
       {lengthBuffer_.data(), lengthBuffer_.size()}, blob_, blobOffset_);
 
-  detail::readWithVisitorSlow(
-      visitor,
-      params,
-      [&](auto toSkip) {
-        const auto compressedBytes =
-            std::accumulate(lengths, lengths + toSkip, static_cast<size_t>(0));
-        row_ += toSkip;
-        blobOffset_ += compressedBytes;
-        lengths += toSkip;
-      },
-      [&] {
-        const auto compressedLen = *lengths++;
-        auto result =
-            decompressToStringBuffer(blob_.substr(blobOffset_, compressedLen));
-        ++row_;
-        blobOffset_ += compressedLen;
-        return result;
-      });
+  const auto skip = [&](auto toSkip) {
+    const auto compressedBytes =
+        std::accumulate(lengths, lengths + toSkip, static_cast<size_t>(0));
+    row_ += toSkip;
+    blobOffset_ += compressedBytes;
+    lengths += toSkip;
+  };
+  const auto readCompressed = [&] {
+    const auto compressedLen = *lengths++;
+    const auto compressed = blob_.substr(blobOffset_, compressedLen);
+    ++row_;
+    blobOffset_ += compressedLen;
+    return compressed;
+  };
+
+  // Deterministic filter-only ranges do not need decoded strings.
+  if constexpr (requires { typename V::FilterType; }) {
+    if constexpr (
+        (std::is_same_v<typename V::FilterType, velox::common::BytesRange> ||
+         std::is_same_v<
+             typename V::FilterType,
+             velox::common::NegatedBytesRange>) &&
+        std::is_same_v<typename V::Extract, velox::dwio::common::DropValues>) {
+      if (visitor.filter().isDeterministic()) {
+        detail::readWithVisitorSlow(
+            visitor,
+            params,
+            skip,
+            readCompressed,
+            [&](std::string_view compressed, bool& atEnd) {
+              const bool passesFilter = [&] {
+                if constexpr (std::is_same_v<
+                                  typename V::FilterType,
+                                  velox::common::NegatedBytesRange>) {
+                  return !testCompressedRange(
+                      compressed, *visitor.filter().getNonNegated());
+                } else {
+                  return testCompressedRange(compressed, visitor.filter());
+                }
+              }();
+              if (passesFilter) {
+                visitor.filterPassed(std::string_view{});
+              } else {
+                visitor.filterFailed();
+              }
+              visitor.addRowIndex(1);
+              atEnd = visitor.atEnd();
+            });
+        checkFinalBlobPosition();
+        return;
+      }
+    }
+  }
+
+  detail::readWithVisitorSlow(visitor, params, skip, [&] {
+    return decompressToStringBuffer(readCompressed());
+  });
   checkFinalBlobPosition();
 }
 
