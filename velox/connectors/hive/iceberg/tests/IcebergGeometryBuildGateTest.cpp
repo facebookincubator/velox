@@ -35,7 +35,6 @@
 #include "velox/connectors/hive/iceberg/EqualityDeleteFileReader.h"
 #include "velox/connectors/hive/iceberg/IcebergDeleteFile.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
-#include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/prestosql/types/GeometryType.h"
 #include "velox/functions/prestosql/types/SphericalGeographyType.h"
 #include "velox/vector/DecodedVector.h"
@@ -114,11 +113,7 @@ TEST_P(IcebergGeospatialBuildGateTest, readDependsOnBuildFlag) {
   auto dataSink = createDataSinkAndAppendData({data}, dataPath);
   dataSink->close();
 
-  auto plan = exec::test::PlanBuilder()
-                  .startTableScan(test::kIcebergConnectorId)
-                  .outputType(ROW({"geom"}, {type}))
-                  .endTableScan()
-                  .planNode();
+  auto plan = makeIcebergTableScanPlan(ROW({"geom"}, {type}));
   auto splits = createSplitsForDirectory(dataPath);
 
 #ifdef VELOX_ENABLE_GEO
@@ -166,12 +161,7 @@ TEST_P(IcebergGeospatialBuildGateTest, equalityDeleteDependsOnBuildFlag) {
       /*equalityFieldIds=*/{2});
 
   const auto tableSchema = ROW({"id", "geom"}, {BIGINT(), type});
-  auto plan = exec::test::PlanBuilder()
-                  .startTableScan(test::kIcebergConnectorId)
-                  .outputType(ROW({"id"}, {BIGINT()}))
-                  .dataColumns(tableSchema)
-                  .endTableScan()
-                  .planNode();
+  auto plan = makeIcebergTableScanPlan(ROW({"id"}, {BIGINT()}), tableSchema);
   auto splits = makeIcebergSplits(baseFilePath, {equalityDelete});
 
 #ifdef VELOX_ENABLE_GEO
@@ -250,11 +240,7 @@ TEST_F(IcebergGeometryBuildGateTest, plainBinaryReadWorksInEitherBuild) {
   auto dataSink = createDataSinkAndAppendData({data}, dataPath);
   dataSink->close();
 
-  auto plan = exec::test::PlanBuilder()
-                  .startTableScan(test::kIcebergConnectorId)
-                  .outputType(ROW({"geom"}, {VARBINARY()}))
-                  .endTableScan()
-                  .planNode();
+  auto plan = makeIcebergTableScanPlan(ROW({"geom"}, {VARBINARY()}));
   auto result = exec::test::AssertQueryBuilder(plan)
                     .splits(createSplitsForDirectory(dataPath))
                     .copyResults(pool());
