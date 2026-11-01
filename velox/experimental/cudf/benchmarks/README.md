@@ -1,6 +1,6 @@
 # CuDF Benchmarks
 
-Benchmark binaries for TPC-H and TPC-DS queries with optional CuDF GPU acceleration.
+Benchmark binaries for cast expressions and TPC-H/TPC-DS queries with cuDF GPU acceleration.
 
 ## Binaries
 
@@ -10,8 +10,9 @@ Benchmark binaries for TPC-H and TPC-DS queries with optional CuDF GPU accelerat
 | `velox_cudf_tpch_benchmark` | TPC-H (Q1-Q22) | GPU | `CudfTpchBenchmark.cpp` |
 | `velox_tpcds_benchmark` | TPC-DS (Q1-Q99) | CPU | `velox/benchmarks/tpcds/` |
 | `velox_cudf_tpcds_benchmark` | TPC-DS (Q1-Q99) | GPU | `CudfTpcdsBenchmark.cpp` |
+| `velox_cudf_cast_benchmark` | Spark numeric casts | CPU and GPU | `CudfCastBenchmark.cpp` |
 
-CPU binaries use HiveConnector. GPU binaries use CudfHiveConnector and register
+CPU query binaries use HiveConnector. GPU query binaries use CudfHiveConnector and register
 cuDF GPU operator replacements.
 
 ## Build
@@ -24,6 +25,72 @@ ninja velox_cudf_tpch_benchmark velox_cudf_tpcds_benchmark
 
 # CPU-only binaries (no CUDA required)
 ninja velox_tpch_benchmark velox_tpcds_benchmark
+```
+
+---
+
+## Cast Expression Benchmark
+
+`velox_cudf_cast_benchmark` compares native CPU Spark expressions with the
+production cuDF expression evaluator in exact and experimental numeric modes.
+It constructs a separate typed `spark_legacy_cast` evaluator for each GPU mode
+and disables CPU fallback. It does not change the default conversion mode.
+
+Configure with the cuDF benchmark settings above and
+`-DVELOX_ENABLE_SPARK_FUNCTIONS=ON` (the default). From the repository root,
+build and run:
+
+```bash
+cmake --build _build/release --parallel 8 --target velox_cudf_cast_benchmark
+
+export CUDA_DEVICE_ORDER=PCI_BUS_ID
+export CUDA_VISIBLE_DEVICES=1
+benchmark=_build/release/velox/experimental/cudf/benchmarks/velox_cudf_cast_benchmark
+
+# Validate all inputs and both GPU modes before collecting timings.
+"$benchmark" --cast_validate_only
+
+# Five independent processes; each callback performs 100 conversion calls.
+mkdir -p /tmp/cudf-cast-results
+for run in 1 2 3 4 5; do
+  "$benchmark" --cast_warmups=3 --cast_iterations=100 \
+    --bm_min_iters=1 --bm_max_iters=2 --bm_max_trials=1 \
+    --bm_json_verbose="/tmp/cudf-cast-results/run-$run.json" \
+    > "/tmp/cudf-cast-results/run-$run.log" 2>&1
+done
+```
+
+The cases cover supported numeric casts from the CPU benchmarks, decimal
+rescaling, and REAL/DOUBLE to short and long decimals. Each uses 1,000, 65,536,
+and 1,048,576 rows, with either no input NULLs or 20% NULLs. Inputs repeat
+deterministic common values or rounding, nonfinite, and precision-overflow
+fixtures. Java 17 decimal expectations use
+`BigDecimal.valueOf((double) input).setScale(scale, HALF_UP)` followed by a
+precision check. Explicit fixture expectations distinguish known CPU and numeric
+mode differences from unexpected value or NULL-mask differences, which fail the
+run. Validation prints difference counts and example input bits and outputs.
+
+Folly reports elapsed time **per conversion call**, with units shown in its
+output. Input generation, expression construction, input/output column transfers,
+and validation are outside the timer. GPU calls include output allocation,
+destruction, and stream synchronization. Production validity work, including
+internal scalar/metadata transfers, remains timed. CPU calls include flattening and
+`prepareForReuse`, reuse output buffers within each sample, and include the
+sample's initial output allocation and final destruction. Each engine receives
+untimed warmups. These are expression timings, not kernel-only measurements or
+whole-query speedups.
+
+Use `--cast_case_filter=double_rounding_and_nonfinite_rows1000_null0` to select
+one input configuration, or Folly's `--bm_regex` to filter timed engine entries.
+The case filter also limits validation; `--bm_regex` does not. The program prints
+the CUDA device UUID and PCI address. A separate Nsight Systems run can confirm
+the production `castKernel` exact and numeric specializations without adding
+profiler overhead to timing runs:
+
+```bash
+nsys profile --trace=cuda --sample=none --cpuctxsw=none \
+  --output=/tmp/cudf-cast-proof "$benchmark" --cast_validate_only \
+  --cast_case_filter=double_rounding_and_nonfinite_rows1000_null0
 ```
 
 ---

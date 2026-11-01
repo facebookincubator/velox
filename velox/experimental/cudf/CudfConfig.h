@@ -42,6 +42,8 @@ struct CudfConfig {
   static constexpr const char* kCudfJitExpressionPriority{
       "cudf.jit_expression_priority"};
   static constexpr const char* kCudfOutputMr{"cudf.output_mr"};
+  static constexpr const char* kCudfNumericFloatToDecimalEnabled{
+      "cudf.numeric_float_to_decimal_enabled"};
   static constexpr const char* kCudfAllowCpuFallback{"cudf.allow_cpu_fallback"};
   static constexpr const char* kCudfLogFallback{"cudf.log_fallback"};
   static constexpr const char* kCudfBatchSizeMinThreshold{
@@ -81,6 +83,10 @@ struct CudfConfig {
 
   /// Enable debug printing.
   bool debugEnabled{false};
+
+  /// Opt into numeric floating-to-decimal arithmetic instead of exact
+  /// Java decimal reconstruction. May change rounded values and overflow NULLs.
+  bool numericFloatToDecimalEnabled{false};
 
   /// Allow fallback to CPU operators if GPU operator replacement fails.
   bool allowCpuFallback{true};

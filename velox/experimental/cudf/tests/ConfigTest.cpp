@@ -38,11 +38,13 @@ TEST(ConfigTest, cudfConfig) {
       {CudfConfig::kCudfFunctionNamePrefix, "presto"},
       {CudfConfig::kCudfStreamingGroupbyEnabled, "true"},
       {CudfConfig::kCudfStreamingGroupbyCapacityMultiplier, "3.5"},
+      {CudfConfig::kCudfNumericFloatToDecimalEnabled, "true"},
       {CudfConfig::kCudfAllowCpuFallback, "false"},
       {CudfConfig::kCudfBatchSizeMinThreshold, "123456"},
       {CudfConfig::kCudfBatchSizeMinBytes, "2147483648"}};
 
   CudfConfig config;
+  ASSERT_FALSE(config.numericFloatToDecimalEnabled);
   ASSERT_FALSE(config.streamingGroupbyEnabled);
   ASSERT_EQ(config.streamingGroupbyCapacityMultiplier, 2.0);
   config.initialize(std::move(options));
@@ -56,6 +58,9 @@ TEST(ConfigTest, cudfConfig) {
   ASSERT_EQ(config.allowCpuFallback, false);
   ASSERT_EQ(config.batchSizeMinThreshold, 123'456);
   ASSERT_EQ(config.batchSizeMinBytes.value(), 2'147'483'648);
+  ASSERT_TRUE(config.numericFloatToDecimalEnabled);
+  config.initialize({{CudfConfig::kCudfNumericFloatToDecimalEnabled, "false"}});
+  ASSERT_FALSE(config.numericFloatToDecimalEnabled);
 }
 
 TEST(ConfigTest, rejectsNonPositiveBatchConcatTargets) {
