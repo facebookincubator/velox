@@ -25,7 +25,7 @@
 
 #include "fmt/core.h"
 #include "velox/dwio/nimble/common/tests/GTestUtils.h"
-#include "velox/dwio/nimble/encodings/BlockBitPackingEncoding.h"
+#include "velox/dwio/nimble/encodings/deprecated/BlockBitPackingEncoding.h"
 
 using namespace facebook;
 
@@ -39,7 +39,7 @@ TEST_P(BlockBitPackingEncodingViewTest, readsBlockBitPackingEncoding) {
 
   nimble::Encoding::Options options;
   options.blockBitPackingBlockSize = 8;
-  expectReads<nimble::BlockBitPackingEncoding<int32_t>>(
+  expectReads<nimble::deprecated::BlockBitPackingEncoding<int32_t>>(
       values, {17, 0, 8, 9, 19, 3}, options);
 }
 
@@ -51,7 +51,7 @@ TEST_P(BlockBitPackingEncodingViewTest, readsInternallyCompressedPayload) {
   for (const auto compressionType :
        {nimble::CompressionType::Zstd, nimble::CompressionType::MetaInternal}) {
     SCOPED_TRACE(nimble::toString(compressionType));
-    expectReads<nimble::BlockBitPackingEncoding<uint32_t>>(
+    expectReads<nimble::deprecated::BlockBitPackingEncoding<uint32_t>>(
         values, positions, options, compressionType);
   }
 }
@@ -59,7 +59,7 @@ TEST_P(BlockBitPackingEncodingViewTest, readsInternallyCompressedPayload) {
 DEBUG_ONLY_TEST_P(
     BlockBitPackingEncodingViewTest,
     rejectsTruncatedPackedPayload) {
-  using Encoding = nimble::BlockBitPackingEncoding<uint32_t>;
+  using Encoding = nimble::deprecated::BlockBitPackingEncoding<uint32_t>;
   const auto values = randomNarrowUnsigned<uint32_t>(/*seed=*/42);
   nimble::Encoding::Options options;
   options.blockBitPackingBlockSize = 64;
@@ -86,7 +86,7 @@ DEBUG_ONLY_TEST_P(
 }
 
 TEST_P(BlockBitPackingEncodingViewTest, readsIndexedBlockRuns) {
-  using Encoding = nimble::BlockBitPackingEncoding<uint32_t>;
+  using Encoding = nimble::deprecated::BlockBitPackingEncoding<uint32_t>;
   auto values = makeVector<uint32_t>({
       42,  42,
       42,  42,
@@ -137,7 +137,7 @@ TEST_P(BlockBitPackingEncodingViewTest, concurrent) {
   nimble::Encoding::Options options;
   options.blockBitPackingBlockSize = 64;
 
-  expectConcurrentReads<nimble::BlockBitPackingEncoding<uint32_t>>(
+  expectConcurrentReads<nimble::deprecated::BlockBitPackingEncoding<uint32_t>>(
       randomNarrowUnsigned<uint32_t>(/*seed=*/23),
       randomizedPositions(/*seed=*/24),
       options);

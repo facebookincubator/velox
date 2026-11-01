@@ -20,7 +20,7 @@
 
 #include "velox/dwio/nimble/encodings/ALPEncoding.h"
 #include "velox/dwio/nimble/encodings/ALPRDEncoding.h"
-#include "velox/dwio/nimble/encodings/BlockBitPackingEncoding.h"
+#include "velox/dwio/nimble/encodings/BlockBitPackingV2Encoding.h"
 #include "velox/dwio/nimble/encodings/ConstantEncoding.h"
 #include "velox/dwio/nimble/encodings/DeltaBlockEncoding.h"
 #include "velox/dwio/nimble/encodings/DeltaEncoding.h"
@@ -46,6 +46,7 @@
 #include "velox/dwio/nimble/encodings/VarintEncoding.h"
 #include "velox/dwio/nimble/encodings/common/Encoding.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
+#include "velox/dwio/nimble/encodings/deprecated/BlockBitPackingEncoding.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
 
 namespace facebook::nimble::test {
@@ -66,9 +67,15 @@ struct EncodingTypeTraits<nimble::ALPRDEncoding<T>> {
 };
 
 template <typename T>
-struct EncodingTypeTraits<nimble::BlockBitPackingEncoding<T>> {
+struct EncodingTypeTraits<nimble::deprecated::BlockBitPackingEncoding<T>> {
   static constexpr inline nimble::EncodingType encodingType =
       nimble::EncodingType::BlockBitPacking;
+};
+
+template <typename T>
+struct EncodingTypeTraits<nimble::BlockBitPackingV2Encoding<T>> {
+  static constexpr inline nimble::EncodingType encodingType =
+      nimble::EncodingType::BlockBitPackingV2;
 };
 
 template <typename T>

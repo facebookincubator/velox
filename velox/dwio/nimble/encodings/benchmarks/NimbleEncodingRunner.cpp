@@ -47,7 +47,7 @@
 #include "velox/dwio/nimble/common/FixedBitArray.h"
 #include "velox/dwio/nimble/common/Types.h"
 #include "velox/dwio/nimble/common/Vector.h"
-#include "velox/dwio/nimble/encodings/BlockBitPackingEncoding.h"
+#include "velox/dwio/nimble/encodings/BlockBitPackingV2Encoding.h"
 #include "velox/dwio/nimble/encodings/FsstEncoding.h"
 #include "velox/dwio/nimble/encodings/PrefixEncoding.h"
 #include "velox/dwio/nimble/encodings/SimdForBitpackEncoding.h"
@@ -80,7 +80,7 @@ enum class RunnerEncoding {
   SparseBool,
   PFOR,
   SimdForBitpack,
-  BlockBitPacking,
+  BlockBitPackingV2,
   Varint,
   Prefix,
   Fsst,
@@ -121,7 +121,7 @@ constexpr uint16_t kPforLaneMask = laneBit(RunnerLane::Encode) |
     laneBit(RunnerLane::DecodeDense) | laneBit(RunnerLane::SkipSeek);
 constexpr uint16_t kSimdForBitpackLaneMask = laneBit(RunnerLane::Encode) |
     laneBit(RunnerLane::DecodeDense) | laneBit(RunnerLane::SkipSeek);
-constexpr uint16_t kBlockBitPackingLaneMask = laneBit(RunnerLane::Encode) |
+constexpr uint16_t kBlockBitPackingV2LaneMask = laneBit(RunnerLane::Encode) |
     laneBit(RunnerLane::DecodeDense) | laneBit(RunnerLane::SkipSeek);
 constexpr uint16_t kVarintLaneMask = laneBit(RunnerLane::Encode) |
     laneBit(RunnerLane::DecodeDense) | laneBit(RunnerLane::SkipSeek);
@@ -188,11 +188,11 @@ constexpr std::array<EncodingSpec, 14> kEncodings{{
      EncodingType::SimdForBitpack,
      "uint32",
      kSimdForBitpackLaneMask},
-    {"block_bit_packing",
-     RunnerEncoding::BlockBitPacking,
-     EncodingType::BlockBitPacking,
+    {"block_bit_packing_v2",
+     RunnerEncoding::BlockBitPackingV2,
+     EncodingType::BlockBitPackingV2,
      "uint32",
-     kBlockBitPackingLaneMask},
+     kBlockBitPackingV2LaneMask},
     {"varint",
      RunnerEncoding::Varint,
      EncodingType::Varint,
@@ -857,27 +857,28 @@ void validateSimdForBitpackArtifactStructure(
       "SIMD_FOR packed payload size is invalid");
 }
 
-void validateBlockBitPackingArtifactStructure(
+void validateBlockBitPackingV2ArtifactStructure(
     std::string_view artifact,
     uint32_t rowCount) {
   size_t offset = EncodingPrefix::kFixedPrefixSize;
-  require(offset < artifact.size(), "BlockBitPacking compression is truncated");
+  require(
+      offset < artifact.size(), "BlockBitPackingV2 compression is truncated");
   const auto compression = static_cast<CompressionType>(artifact[offset++]);
   require(
       compression == CompressionType::Uncompressed,
-      "BlockBitPacking payload must be uncompressed");
+      "BlockBitPackingV2 payload must be uncompressed");
 
   const auto blockSize =
-      readBoundedVarint32(artifact, offset, "BlockBitPacking block size");
+      readBoundedVarint32(artifact, offset, "BlockBitPackingV2 block size");
   require(
       blockSize == kBlockBitPackingBlockSize,
-      "BlockBitPacking block size does not match the benchmark profile");
+      "BlockBitPackingV2 block size does not match the benchmark profile");
   const auto blockCount =
-      readBoundedVarint32(artifact, offset, "BlockBitPacking block count");
+      readBoundedVarint32(artifact, offset, "BlockBitPackingV2 block count");
   require(
       blockCount > 0 &&
-          blockCount <= BlockBitPackingEncoding<uint32_t>::kMaxBlockCount,
-      "BlockBitPacking block count is invalid");
+          blockCount <= BlockBitPackingV2Encoding<uint32_t>::kMaxBlockCount,
+      "BlockBitPackingV2 block count is invalid");
 
   const auto readChild = [&](std::string_view field) {
     const auto childSize = readBoundedVarint32(artifact, offset, field);
@@ -888,87 +889,80 @@ void validateBlockBitPackingArtifactStructure(
     offset += childSize;
     return child;
   };
-  const auto baselines = readChild("BlockBitPacking baselines size");
-  const auto bitWidths = readChild("BlockBitPacking bit widths size");
-  const auto blockOffsets = readChild("BlockBitPacking offsets size");
-  const auto firstBlockRows =
-      readBoundedVarint32(artifact, offset, "BlockBitPacking first block rows");
-  require(
-      firstBlockRows == std::min(rowCount, blockSize),
-      "BlockBitPacking first block row count is invalid");
-  const uint64_t remainingRows = rowCount - firstBlockRows;
+  const auto baselines = readChild("BlockBitPackingV2 baselines size");
+  const auto bitWidths = readChild("BlockBitPackingV2 bit widths size");
+  const auto blockOffsets = readChild("BlockBitPackingV2 offsets size");
   const uint64_t expectedBlockCount =
-      1 + (remainingRows + blockSize - 1) / blockSize;
+      (static_cast<uint64_t>(rowCount) + blockSize - 1) / blockSize;
   require(
       blockCount == expectedBlockCount,
-      "BlockBitPacking block count does not match root rows");
+      "BlockBitPackingV2 block count does not match root rows");
 
   validateUncompressedTrivialChild<uint32_t>(
       baselines,
       DataType::Uint32,
       blockCount,
-      "BlockBitPacking baselines child");
+      "BlockBitPackingV2 baselines child");
   validateUncompressedTrivialChild<uint8_t>(
       bitWidths,
       DataType::Uint8,
       blockCount,
-      "BlockBitPacking bit widths child");
+      "BlockBitPackingV2 bit widths child");
   validateUncompressedTrivialChild<uint32_t>(
       blockOffsets,
       DataType::Uint32,
       blockCount,
-      "BlockBitPacking offsets child");
+      "BlockBitPackingV2 offsets child");
 
   const auto packed = artifact.substr(offset);
   uint64_t expectedOffset{0};
   for (uint32_t block = 0; block < blockCount; ++block) {
     const auto baseline = readUncompressedNumericChildValue<uint32_t>(
-        baselines, block, "BlockBitPacking baselines child");
+        baselines, block, "BlockBitPackingV2 baselines child");
     const auto bitWidth = readUncompressedNumericChildValue<uint8_t>(
-        bitWidths, block, "BlockBitPacking bit widths child");
+        bitWidths, block, "BlockBitPackingV2 bit widths child");
     const auto actualOffset = readUncompressedNumericChildValue<uint32_t>(
-        blockOffsets, block, "BlockBitPacking offsets child");
+        blockOffsets, block, "BlockBitPackingV2 offsets child");
     require(
         actualOffset == expectedOffset,
-        "BlockBitPacking offsets are not contiguous");
+        "BlockBitPackingV2 offsets are not contiguous");
 
-    const uint32_t blockRows = block == 0 ? firstBlockRows
-        : block + 1 == blockCount
-        ? rowCount - firstBlockRows - (blockCount - 2) * blockSize
+    const uint32_t blockRows = block + 1 == blockCount
+        ? rowCount - (blockCount - 1) * blockSize
         : blockSize;
     uint64_t packedSize{0};
-    if (bitWidth == BlockBitPackingEncoding<uint32_t>::kRawBlockBitWidth) {
+    if (bitWidth == BlockBitPackingV2Encoding<uint32_t>::kRawBlockBitWidth) {
       packedSize = static_cast<uint64_t>(blockRows) * sizeof(uint32_t);
     } else {
       require(
           bitWidth <= std::numeric_limits<uint32_t>::digits,
-          "BlockBitPacking bit width exceeds uint32");
+          "BlockBitPackingV2 bit width exceeds uint32");
       packedSize =
           bitWidth == 0 ? 0 : FixedBitArray::bufferSize(blockRows, bitWidth);
     }
     require(
         packedSize <= packed.size() - expectedOffset,
-        "BlockBitPacking block payload exceeds artifact bounds");
+        "BlockBitPackingV2 block payload exceeds artifact bounds");
 
     if (bitWidth > 0 &&
-        bitWidth != BlockBitPackingEncoding<uint32_t>::kRawBlockBitWidth) {
+        bitWidth != BlockBitPackingV2Encoding<uint32_t>::kRawBlockBitWidth) {
       const auto blockPayload = packed.substr(expectedOffset, packedSize);
       validateFixedBitArrayPadding(
-          blockPayload, blockRows, bitWidth, "BlockBitPacking block payload");
+          blockPayload, blockRows, bitWidth, "BlockBitPackingV2 block payload");
       const FixedBitArray residuals{blockPayload, bitWidth};
       const uint32_t maxResidual =
           std::numeric_limits<uint32_t>::max() - baseline;
       for (uint32_t row = 0; row < blockRows; ++row) {
         require(
             residuals.get(row) <= maxResidual,
-            "BlockBitPacking residual overflows uint32");
+            "BlockBitPackingV2 residual overflows uint32");
       }
     }
     expectedOffset += packedSize;
   }
   require(
       expectedOffset == packed.size(),
-      "BlockBitPacking packed payload size is invalid");
+      "BlockBitPackingV2 packed payload size is invalid");
 }
 
 void validateVarintArtifactStructure(
@@ -1189,7 +1183,7 @@ TaskSpec parseTaskId(std::string_view taskId) {
   }
   throw std::invalid_argument(
       "encoding runner currently supports RLE, Dictionary, FixedBitWidth, "
-      "Delta, SparseBool, PFOR, SimdForBitpack, BlockBitPacking, Varint, "
+      "Delta, SparseBool, PFOR, SimdForBitpack, BlockBitPackingV2, Varint, "
       "Prefix, Fsst, Nullable, ALP, and DeltaBlock");
 }
 
@@ -1447,7 +1441,7 @@ Corpus<uint32_t> makeSimdForBitpackCorpus(
   return corpus;
 }
 
-Corpus<uint32_t> makeBlockBitPackingCorpus(
+Corpus<uint32_t> makeBlockBitPackingV2Corpus(
     const EncodingRunnerConfig& config,
     velox::memory::MemoryPool& pool) {
   Corpus<uint32_t> corpus{pool, config.rowCount};
@@ -1535,9 +1529,9 @@ EncodingLayout replayLayout(RunnerEncoding encoding) {
     case RunnerEncoding::SimdForBitpack:
       return EncodingLayout{
           EncodingType::SimdForBitpack, {}, CompressionType::Uncompressed};
-    case RunnerEncoding::BlockBitPacking:
+    case RunnerEncoding::BlockBitPackingV2:
       return EncodingLayout{
-          EncodingType::BlockBitPacking,
+          EncodingType::BlockBitPackingV2,
           {},
           CompressionType::Uncompressed,
           {trivialLayout(), trivialLayout(), trivialLayout()}};
@@ -2381,8 +2375,8 @@ class TypedRunner {
       if (spec_.encoding == RunnerEncoding::SimdForBitpack) {
         return makeSimdForBitpackCorpus(config_, pool_);
       }
-      if (spec_.encoding == RunnerEncoding::BlockBitPacking) {
-        return makeBlockBitPackingCorpus(config_, pool_);
+      if (spec_.encoding == RunnerEncoding::BlockBitPackingV2) {
+        return makeBlockBitPackingV2Corpus(config_, pool_);
       }
       if (spec_.encoding == RunnerEncoding::Varint) {
         return makeVarintCorpus(config_, pool_);
@@ -2490,13 +2484,13 @@ class TypedRunner {
           config_.rowCount);
       validateSimdForBitpackArtifactStructure(
           encodedArtifact_, config_.rowCount);
-    } else if (spec_.encoding == RunnerEncoding::BlockBitPacking) {
+    } else if (spec_.encoding == RunnerEncoding::BlockBitPackingV2) {
       validateArtifactPrefix(
           encodedArtifact_,
           spec_.encodingType,
           TypeTraits<T>::dataType,
           config_.rowCount);
-      validateBlockBitPackingArtifactStructure(
+      validateBlockBitPackingV2ArtifactStructure(
           encodedArtifact_, config_.rowCount);
     } else if (spec_.encoding == RunnerEncoding::Varint) {
       validateArtifactPrefix(
@@ -3071,7 +3065,7 @@ EncodingRunnerMeasurement runEncodingBenchmark(
   if (spec.encoding == RunnerEncoding::Delta ||
       spec.encoding == RunnerEncoding::PFOR ||
       spec.encoding == RunnerEncoding::SimdForBitpack ||
-      spec.encoding == RunnerEncoding::BlockBitPacking ||
+      spec.encoding == RunnerEncoding::BlockBitPackingV2 ||
       spec.encoding == RunnerEncoding::Varint) {
     return TypedRunner<uint32_t>{config, spec, pool, benchmarkArtifact}.run();
   }
@@ -3111,7 +3105,7 @@ EncodingArtifactVerification verifyEncodingArtifact(
   if (spec.encoding == RunnerEncoding::Delta ||
       spec.encoding == RunnerEncoding::PFOR ||
       spec.encoding == RunnerEncoding::SimdForBitpack ||
-      spec.encoding == RunnerEncoding::BlockBitPacking ||
+      spec.encoding == RunnerEncoding::BlockBitPackingV2 ||
       spec.encoding == RunnerEncoding::Varint) {
     return TypedRunner<uint32_t>{
         config, spec, pool, std::optional{encodedArtifact}}

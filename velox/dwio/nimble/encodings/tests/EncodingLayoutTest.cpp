@@ -391,6 +391,30 @@ TEST(EncodingLayoutTests, blockBitPacking) {
   EXPECT_TRUE(captured.child(2).has_value());
 }
 
+TEST(EncodingLayoutTests, blockBitPackingV2) {
+  // BlockBitPackingV2 nests the same three per-block metadata sub-streams as
+  // BlockBitPacking, and capture records each of them.
+  nimble::EncodingLayout layout{
+      nimble::EncodingType::BlockBitPackingV2,
+      {},
+      nimble::CompressionType::Uncompressed,
+      {std::nullopt, std::nullopt, std::nullopt}};
+  testSerialization(layout);
+
+  std::vector<uint32_t> data;
+  data.reserve(1000);
+  for (uint32_t i = 0; i < 1000; ++i) {
+    data.push_back((i / 200) * 1000 + (i % 37));
+  }
+
+  auto captured = encodeAndCapture<uint32_t>(layout, data);
+  ASSERT_EQ(captured.encodingType(), nimble::EncodingType::BlockBitPackingV2);
+  ASSERT_EQ(captured.childrenCount(), 3);
+  EXPECT_TRUE(captured.child(0).has_value());
+  EXPECT_TRUE(captured.child(1).has_value());
+  EXPECT_TRUE(captured.child(2).has_value());
+}
+
 TEST(EncodingLayoutTests, partitionedEliasFano) {
   // PartitionedEliasFano nests three directories (partition starts, partition
   // bases, group starts). Its group streams are always EliasFano, so capture

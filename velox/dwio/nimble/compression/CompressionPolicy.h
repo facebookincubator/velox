@@ -146,10 +146,12 @@ struct CompressionOptions {
   int32_t openzlDecompressionLevel = 3;
   int32_t openzlFormatVersion = 25;
   /// Per-encoding overrides for compressionAcceptRatio.
-  /// BlockBitPacking default 0.7: data is already well-packed via per-block
-  /// baselines, so compression must save at least 30% to justify CPU cost.
+  /// BlockBitPacking and BlockBitPackingV2 default 0.7: data is already
+  /// well-packed via per-block baselines, so compression must save at least 30%
+  /// to justify CPU cost.
   std::vector<std::pair<EncodingType, float>> compressionAcceptRatioOverrides =
-      {{EncodingType::BlockBitPacking, 0.7f}};
+      {{EncodingType::BlockBitPacking, 0.7f},
+       {EncodingType::BlockBitPackingV2, 0.7f}};
 };
 
 class CompressionPolicy {

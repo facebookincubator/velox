@@ -15,7 +15,7 @@
  */
 
 #include "folly/Benchmark.h"
-#include "velox/dwio/nimble/encodings/BlockBitPackingEncoding.h"
+#include "velox/dwio/nimble/encodings/BlockBitPackingV2Encoding.h"
 #include "velox/dwio/nimble/encodings/benchmarks/BenchmarkUtils.h"
 
 using namespace facebook::nimble;
@@ -36,24 +36,24 @@ Vector<uint32_t> makeNarrowBlocks() {
   return data;
 }
 
-#define BBP_BENCH(Pattern, DataExpr)                           \
-  BENCHMARK(BBP_Encode_##Pattern, iters) {                     \
-    Vector<uint32_t> data{benchmarkPool().get()};              \
-    BENCHMARK_SUSPEND {                                        \
-      data = DataExpr;                                         \
-    }                                                          \
-    encodeBenchmark<BlockBitPackingEncoding<uint32_t>>(        \
-        EncodingType::BlockBitPacking, data, iters);           \
-  }                                                            \
-  BENCHMARK(BBP_Decode_##Pattern, iters) {                     \
-    std::string encoded;                                       \
-    BENCHMARK_SUSPEND {                                        \
-      auto data = DataExpr;                                    \
-      encoded = encodeData<BlockBitPackingEncoding<uint32_t>>( \
-          EncodingType::BlockBitPacking, data);                \
-    }                                                          \
-    decodeBenchmark<uint32_t>(encoded, kRowCount, iters);      \
-  }                                                            \
+#define BBP_BENCH(Pattern, DataExpr)                             \
+  BENCHMARK(BBP_Encode_##Pattern, iters) {                       \
+    Vector<uint32_t> data{benchmarkPool().get()};                \
+    BENCHMARK_SUSPEND {                                          \
+      data = DataExpr;                                           \
+    }                                                            \
+    encodeBenchmark<BlockBitPackingV2Encoding<uint32_t>>(        \
+        EncodingType::BlockBitPackingV2, data, iters);           \
+  }                                                              \
+  BENCHMARK(BBP_Decode_##Pattern, iters) {                       \
+    std::string encoded;                                         \
+    BENCHMARK_SUSPEND {                                          \
+      auto data = DataExpr;                                      \
+      encoded = encodeData<BlockBitPackingV2Encoding<uint32_t>>( \
+          EncodingType::BlockBitPackingV2, data);                \
+    }                                                            \
+    decodeBenchmark<uint32_t>(encoded, kRowCount, iters);        \
+  }                                                              \
   BENCHMARK_DRAW_LINE()
 
 BBP_BENCH(NarrowBlocks, makeNarrowBlocks());

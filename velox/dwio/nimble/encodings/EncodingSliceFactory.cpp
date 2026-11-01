@@ -24,7 +24,7 @@
 #include "velox/dwio/nimble/common/Vector.h"
 #include "velox/dwio/nimble/encodings/ALPEncoding.h"
 #include "velox/dwio/nimble/encodings/ALPRDEncoding.h"
-#include "velox/dwio/nimble/encodings/BlockBitPackingEncoding.h"
+#include "velox/dwio/nimble/encodings/BlockBitPackingV2Encoding.h"
 #include "velox/dwio/nimble/encodings/ConstantEncoding.h"
 #include "velox/dwio/nimble/encodings/DictionaryEncoding.h"
 #include "velox/dwio/nimble/encodings/EliasFanoEncoding.h"
@@ -44,6 +44,7 @@
 #include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
 #include "velox/dwio/nimble/encodings/common/EncodingTypeDispatch.h"
+#include "velox/dwio/nimble/encodings/deprecated/BlockBitPackingEncoding.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
 
 namespace facebook::nimble {
@@ -247,7 +248,21 @@ std::string_view sliceBlockBitPacking(
   NIMBLE_RETURN_BY_NUMERIC_DATA_TYPE(
       dataType,
       T,
-      BlockBitPackingEncoding<T>::slice(
+      deprecated::BlockBitPackingEncoding<T>::slice(
+          encoded, offset, length, buffer, options));
+}
+
+std::string_view sliceBlockBitPackingV2(
+    std::string_view encoded,
+    DataType dataType,
+    uint32_t offset,
+    uint32_t length,
+    Buffer& buffer,
+    const Encoding::Options& options) {
+  NIMBLE_RETURN_BY_NUMERIC_DATA_TYPE(
+      dataType,
+      T,
+      BlockBitPackingV2Encoding<T>::slice(
           encoded, offset, length, buffer, options));
 }
 
@@ -388,6 +403,9 @@ std::string_view EncodingSliceFactory::slice(
           encoded, dataType, offset, length, buffer, options);
     case EncodingType::BlockBitPacking:
       return sliceBlockBitPacking(
+          encoded, dataType, offset, length, buffer, options);
+    case EncodingType::BlockBitPackingV2:
+      return sliceBlockBitPackingV2(
           encoded, dataType, offset, length, buffer, options);
     case EncodingType::EliasFano:
       return sliceEliasFano(encoded, dataType, offset, length, buffer, options);

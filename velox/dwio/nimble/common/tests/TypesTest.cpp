@@ -54,6 +54,7 @@ TEST(TypesTest, encodingTypeStringConversion) {
       {EncodingType::DeltaBlock, "DeltaBlock"},
       {EncodingType::EliasFano, "EliasFano"},
       {EncodingType::PartitionedEliasFano, "PartitionedEliasFano"},
+      {EncodingType::BlockBitPackingV2, "BlockBitPackingV2"},
   };
   for (const auto& [type, name] : testCases) {
     SCOPED_TRACE(name);
