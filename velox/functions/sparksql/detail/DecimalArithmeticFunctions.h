@@ -559,6 +559,23 @@ struct DecimalDivideFunction {
   uint8_t rPrecision_;
 };
 
+/// Spark decimal division for ANSI mode, registered as checked_divide. Errors
+/// where DecimalDivideFunction returns a null.
+template <typename TExec, bool allowPrecisionLoss>
+struct CheckedDecimalDivideFunction
+    : DecimalDivideFunction<TExec, allowPrecisionLoss> {
+  VELOX_DEFINE_FUNCTION_TYPES(TExec);
+
+  template <typename R, typename A, typename B>
+  Status call(R& out, const A& a, const B& b) {
+    VELOX_USER_RETURN_EQ(b, 0, "Division by zero");
+    bool valid = DecimalDivideFunction<TExec, allowPrecisionLoss>::
+        template call<R, A, B>(out, a, b);
+    VELOX_USER_RETURN(!valid, "Decimal overflow in divide");
+    return Status::OK();
+  }
+};
+
 /// The quotient itself, shared by the two integral divide functions below,
 /// which differ only in whether a zero divisor and overflow are a null or an
 /// error.
