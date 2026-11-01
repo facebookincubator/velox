@@ -77,15 +77,20 @@ void configureRowReaderOptions(
 
 /// Tests whether a file should be read based on partition key values and
 /// column statistics. Returns true if the file passes all filters, false
-/// if it can be skipped.
+/// if it can be skipped. 'requestedType' holds the types that file columns are
+/// read as; a column missing from it is read as its file type. Throws a user
+/// error if a filter tests the values of a Parquet column read as a decimal
+/// with a different scale, because its statistics are in the file scale.
 bool testFilters(
     const common::ScanSpec* scanSpec,
     const dwio::common::Reader* reader,
+    const RowTypePtr& requestedType,
     const std::string& filePath,
     const std::unordered_map<std::string, std::optional<std::string>>&
         partitionKey,
     const std::unordered_map<std::string, FileColumnHandlePtr>&
         partitionKeysHandle,
-    bool asLocalTime);
+    bool asLocalTime,
+    dwio::common::FileFormat fileFormat);
 
 } // namespace facebook::velox::connector::hive

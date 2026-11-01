@@ -1987,7 +1987,7 @@ TEST_F(ParquetTableScanTest, shortAndLongDecimalReadWithLargerPrecision) {
   // 20 rows (10 rows per group). Data is in plain uncompressed format:
   //   a: [100.01 .. 100.20]
   //   b: [100000000000000.00001 .. 100000000000000.00020]
-  // This test reads the DECIMAL(5, 2)a and DECIMAL(20, 5) file columns
+  // This test reads the DECIMAL(5, 2) and DECIMAL(20, 5) file columns
   // with DECIMAL(8, 2) and DECIMAL(22, 5) row types.
   vector_size_t kSize = 20;
   std::vector<int64_t> unscaledShortValues(kSize);
@@ -2026,6 +2026,110 @@ TEST_F(ParquetTableScanTest, shortAndLongDecimalReadWithLargerPrecision) {
 
   assertEqualVectors(expectedDecimalVectors->childAt(0), rows->childAt(0));
   assertEqualVectors(expectedDecimalVectors->childAt(1), rows->childAt(1));
+}
+
+TEST_F(ParquetTableScanTest, decimalRescale) {
+  // decimal.parquet holds two columns (a: DECIMAL(5, 2), b: DECIMAL(20, 5)) and
+  // 20 rows (10 rows per group). Data is in plain uncompressed format:
+  //   a: [100.01 .. 100.20]
+  //   b: [100000000000000.00001 .. 100000000000000.00020]
+  std::vector<int64_t> unscaledShortValues(20);
+  std::iota(unscaledShortValues.begin(), unscaledShortValues.end(), 10001);
+  for (auto i = 0; i < unscaledShortValues.size(); ++i) {
+    unscaledShortValues[i] *= 1000;
+  }
+
+  // Read the DECIMAL(5, 2) file column with DECIMAL(16, 5) row type, which
+  // requires rescaling the unscaled value.
+  loadData(
+      ROW({"a"}, {DECIMAL(16, 5)}),
+      makeRowVector(
+          {"a"},
+          {
+              makeFlatVector(unscaledShortValues, DECIMAL(16, 5)),
+          }));
+
+  assertSelectWithFilter(
+      {makeSplit(getExampleFilePath("decimal.parquet"))},
+      {"a"},
+      {},
+      "",
+      "SELECT a FROM tmp");
+
+  // Statistics are in the file scale, so filters on values are rejected
+  // instead of being tested on the statistics, including filters that the
+  // statistics would exclude.
+  for (const auto* filter :
+       {"a < 100.07000", "a > 100.07000", "a = 100.07000"}) {
+    SCOPED_TRACE(filter);
+    VELOX_ASSERT_USER_THROW(
+        assertSelectWithFilter(
+            {makeSplit(getExampleFilePath("decimal.parquet"))},
+            {"a"},
+            {fmt::format("{}::DECIMAL(16, 5)", filter)},
+            "",
+            fmt::format("SELECT a FROM tmp WHERE {}", filter)),
+        "Filter pushdown is not accepted. Requested type: DECIMAL(16, 5), file type: DECIMAL(5, 2).");
+  }
+
+  // An OR across columns stays in the remaining filter, which evaluates the
+  // rescaled values. Its leaves are still tested on the statistics as metadata
+  // filters, and the leaf on 'a' must not skip row groups.
+  parse::ParseOptions options;
+  options.parseDecimalAsDouble = false;
+  auto plan =
+      PlanBuilder(pool_.get())
+          .setParseOptions(options)
+          .tableScan(
+              ROW({{"a", DECIMAL(16, 5)}, {"b", DECIMAL(20, 5)}}),
+              {},
+              "a > 100.07000::DECIMAL(16, 5) OR b < 0.00000::DECIMAL(20, 5)",
+              nullptr)
+          .project({"a"})
+          .planNode();
+  AssertQueryBuilder(plan)
+      .splits({makeSplit(getExampleFilePath("decimal.parquet"))})
+      .assertResults(makeRowVector(
+          {"a"},
+          {
+              makeFlatVector(
+                  std::vector<int64_t>(
+                      unscaledShortValues.begin() + 7,
+                      unscaledShortValues.end()),
+                  DECIMAL(16, 5)),
+          }));
+}
+
+TEST_F(ParquetTableScanTest, decimalRowGroupSkip) {
+  std::vector<int128_t> longDecimalValues;
+  loadData(
+      ROW({"b"}, {DECIMAL(20, 5)}),
+      makeRowVector(
+          {"b"},
+          {
+              makeFlatVector(longDecimalValues, DECIMAL(20, 5)),
+          }));
+
+  parse::ParseOptions options;
+  options.parseDecimalAsDouble = false;
+  auto plan = PlanBuilder(pool_.get())
+                  .setParseOptions(options)
+                  .tableScan(
+                      ROW({"b"}, {DECIMAL(20, 5)}),
+                      {},
+                      "b < 100000000000000.00001",
+                      nullptr)
+                  .planNode();
+  auto task = AssertQueryBuilder(plan, duckDbQueryRunner_)
+                  .splits({makeSplit(getExampleFilePath("decimal.parquet"))})
+                  .assertResults("SELECT b FROM tmp");
+  ASSERT_EQ(
+      task->taskStats()
+          .pipelineStats[0]
+          .operatorStats[0]
+          .runtimeStats["skippedStrides"]
+          .sum,
+      2);
 }
 
 TEST_F(ParquetTableScanTest, inFilter) {
