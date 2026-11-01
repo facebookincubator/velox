@@ -877,6 +877,35 @@ class Task : public std::enable_shared_from_this<Task> {
   /// can be resumed with resume() after the future is realized.
   ContinueFuture requestPause();
 
+  /// Owns one pause request independently of requestPause()/resume(). The task
+  /// stays paused until all scoped pauses and the legacy pause are released.
+  /// Destruction also permits deferred driver cleanup if the task terminated.
+  class ScopedPause {
+   public:
+    ScopedPause(ScopedPause&&) noexcept = default;
+    ScopedPause& operator=(ScopedPause&&) = delete;
+    ScopedPause(const ScopedPause&) = delete;
+    ScopedPause& operator=(const ScopedPause&) = delete;
+    ~ScopedPause();
+
+    /// Becomes ready when running drivers have stopped or entered suspension.
+    ContinueFuture& future() {
+      return future_;
+    }
+
+   private:
+    friend class Task;
+    ScopedPause(std::shared_ptr<Task> task, ContinueFuture future)
+        : task_(std::move(task)), future_(std::move(future)) {}
+
+    std::shared_ptr<Task> task_;
+    ContinueFuture future_;
+  };
+
+  /// Acquires a pause that cannot be released by another pause owner. The
+  /// caller must wait for its future before accessing stopped driver state.
+  [[nodiscard]] ScopedPause acquirePause();
+
   /// Requests activity of 'this' to stop. The returned future will be
   /// realized when the last thread stops running for 'this'. This is used to
   /// mark cancellation by the user.
@@ -1149,11 +1178,14 @@ class Task : public std::enable_shared_from_this<Task> {
 
   folly::dynamic toShortJsonLocked() const;
 
+ public:
+  /// Task pause/resume reclamation, reusable by custom-resource factories.
   class MemoryReclaimer : public exec::MemoryReclaimer {
    public:
     static std::unique_ptr<memory::MemoryReclaimer> create(
         const std::shared_ptr<Task>& task,
-        int64_t priority = 0);
+        int64_t priority = 0,
+        std::optional<std::string> customPoolTag = std::nullopt);
 
     uint64_t reclaim(
         memory::MemoryPool* pool,
@@ -1165,8 +1197,13 @@ class Task : public std::enable_shared_from_this<Task> {
         override;
 
    private:
-    MemoryReclaimer(const std::shared_ptr<Task>& task, int64_t priority)
-        : exec::MemoryReclaimer(priority), task_(task) {
+    MemoryReclaimer(
+        const std::shared_ptr<Task>& task,
+        int64_t priority,
+        std::optional<std::string> customPoolTag)
+        : exec::MemoryReclaimer(priority),
+          task_(task),
+          customPoolTag_(std::move(customPoolTag)) {
       VELOX_CHECK_NOT_NULL(task);
     }
 
@@ -1178,17 +1215,24 @@ class Task : public std::enable_shared_from_this<Task> {
       return task_.lock();
     }
 
+    memory::MemoryPool* memoryPool(const std::shared_ptr<Task>& task) const;
+
     uint64_t reclaimTask(
         const std::shared_ptr<Task>& task,
+        memory::MemoryPool* pool,
         uint64_t targetBytes,
         uint64_t maxWaitMs,
         memory::MemoryReclaimer::Stats& stats);
 
     std::weak_ptr<Task> task_;
+    const std::optional<std::string> customPoolTag_;
   };
 
+ private:
   /// Returns true if state is 'running'.
   bool isRunningLocked() const;
+
+  static void releasePause(std::shared_ptr<Task> self, bool scoped);
 
   /// Returns true if state is 'finished'.
   bool isFinishedLocked() const;
@@ -1728,6 +1772,9 @@ class Task : public std::enable_shared_from_this<Task> {
   // which is safe to access without acquiring 'mutex_'.Thread counts
   // and promises are guarded by 'mutex_'
   std::atomic_bool pauseRequested_{false};
+  // Protected by mutex_. pauseRequested_ is their combined fast-path state.
+  bool legacyPauseRequested_{false};
+  uint32_t numScopedPauses_{0};
   std::atomic_bool terminateRequested_{false};
 
   // If true, indicate this task is under barrier processing.

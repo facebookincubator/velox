@@ -36,7 +36,7 @@ std::shared_ptr<CustomMemoryResource> makeResource(
       tag,
       std::make_shared<MallocAllocator>(allocatorOptions),
       MemoryArbitrator::create({}),
-      []() { return MemoryReclaimer::create(0); },
+      [](const ReclaimerContext&) { return MemoryReclaimer::create(0); },
       maxCapacity);
 }
 
@@ -239,7 +239,9 @@ TEST_F(CustomMemoryPoolTest, deviceReclaimerSpillsToHostSibling) {
       "device",
       std::make_shared<MallocAllocator>(deviceAllocatorOptions),
       MemoryArbitrator::create({}),
-      [hostPool]() { return SpillToSiblingReclaimer::create(hostPool); });
+      [hostPool](const ReclaimerContext&) {
+        return SpillToSiblingReclaimer::create(hostPool);
+      });
 
   auto devicePool =
       manager->addCustomRootPool("q-spill.device", deviceResource);

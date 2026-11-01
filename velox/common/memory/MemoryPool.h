@@ -560,19 +560,30 @@ class MemoryPool : public std::enable_shared_from_this<MemoryPool> {
   // Overrides getPreferredSize to allow specializing behavior for this pool.
   void setPreferredSize(std::function<size_t(size_t)> getPreferredSizeFunc);
 
+  /// Allocation-time hooks are independent of whether this pool owns any
+  /// reclaimable data. Execution pools use them to suspend an allocating
+  /// driver before arbitration can wait for that same driver to stop.
+  struct ArbitrationHooks {
+    void (*enter)();
+    void (*leave)() noexcept;
+  };
+
+  /// Installs hooks once, before publishing or using the pool. When present,
+  /// these replace the legacy reclaimer enter/leave callbacks, without changing
+  /// reclaimableBytes(), reclaim(), or abort().
+  virtual void setArbitrationHooks(ArbitrationHooks hooks) = 0;
+
  protected:
   static constexpr uint64_t kMB = 1 << 20;
 
   static size_t getPreferredSize(size_t size);
 
   /// Invoked by the memory arbitrator to enter memory arbitration processing.
-  /// It is a noop if 'reclaimer' is not set, otherwise invoke the reclaimer's
-  /// corresponding method.
+  /// Uses explicit hooks when installed, otherwise the reclaimer's callbacks.
   virtual void enterArbitration() = 0;
 
   /// Invoked by the memory arbitrator to leave memory arbitration processing.
-  /// It is a noop if 'reclaimer' is not set, otherwise invoke the reclaimer's
-  /// corresponding method.
+  /// Uses the same hooks as enterArbitration().
   virtual void leaveArbitration() noexcept = 0;
 
   /// Invoked to free up to the specified amount of free memory by reducing
@@ -811,6 +822,8 @@ class MemoryPoolImpl : public MemoryPool {
 
  private:
   void enterArbitration() override;
+
+  void setArbitrationHooks(ArbitrationHooks hooks) override;
 
   void leaveArbitration() noexcept override;
 
@@ -1129,6 +1142,8 @@ class MemoryPoolImpl : public MemoryPool {
   // from a spillable operator through disk spilling. If null, we can't reclaim
   // memory from this memory pool.
   std::unique_ptr<MemoryReclaimer> reclaimer_;
+
+  std::optional<ArbitrationHooks> arbitrationHooks_;
 
   // The memory cap in bytes to enforce.
   tsan_atomic<int64_t> capacity_;

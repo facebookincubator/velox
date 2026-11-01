@@ -1041,10 +1041,19 @@ bool MemoryPoolImpl::maybeIncrementReservation(uint64_t size) {
     // arbitration process. The memory arbitration process itself needs to
     // ensure the memory pool usage of the memory pool is within the capacity
     // limit after the arbitration operation completes.
-    if (FOLLY_UNLIKELY(
-            (reservationBytes_ + size > capacity_) &&
-            !underMemoryArbitration())) {
-      return false;
+    if (FOLLY_UNLIKELY(reservationBytes_ + size > capacity_)) {
+      const auto* context = memoryArbitrationContext();
+      if (context == nullptr) {
+        return false;
+      }
+      if (context->arbitrator != arbitrator_) {
+        // Reclaim may use already admitted capacity in another resource, but
+        // must not silently overcommit it or recursively enter its arbitrator.
+        VELOX_MEM_POOL_CAP_EXCEEDED(
+            "Cannot grow pool {} in another resource during memory arbitration; "
+            "reserve its workspace before reclamation",
+            name_);
+      }
     }
   }
   incrementReservationLocked(size);
@@ -1234,15 +1243,26 @@ uint64_t MemoryPoolImpl::reclaim(
 }
 
 void MemoryPoolImpl::enterArbitration() {
-  if (reclaimer() != nullptr) {
+  if (arbitrationHooks_.has_value()) {
+    arbitrationHooks_->enter();
+  } else if (reclaimer() != nullptr) {
     reclaimer()->enterArbitration();
   }
 }
 
 void MemoryPoolImpl::leaveArbitration() noexcept {
-  if (reclaimer() != nullptr) {
+  if (arbitrationHooks_.has_value()) {
+    arbitrationHooks_->leave();
+  } else if (reclaimer() != nullptr) {
     reclaimer()->leaveArbitration();
   }
+}
+
+void MemoryPoolImpl::setArbitrationHooks(ArbitrationHooks hooks) {
+  VELOX_CHECK_NOT_NULL(hooks.enter);
+  VELOX_CHECK_NOT_NULL(hooks.leave);
+  VELOX_CHECK(!arbitrationHooks_.has_value());
+  arbitrationHooks_ = hooks;
 }
 
 uint64_t MemoryPoolImpl::shrink(uint64_t targetBytes) {

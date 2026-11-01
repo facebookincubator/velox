@@ -19,6 +19,10 @@
 #include "velox/common/memory/MemoryArbitrator.h"
 
 namespace facebook::velox::exec {
+/// Allocation-time suspension hooks. These do not make any buffers reclaimable.
+void suspendDriverForMemoryArbitration();
+void resumeDriverAfterMemoryArbitration() noexcept;
+
 /// Provides the default leaf memory reclaimer implementation for velox task
 /// execution.
 class MemoryReclaimer : public memory::MemoryReclaimer {
