@@ -288,12 +288,12 @@ bool containsCustomComparison(const TypePtr& type) {
 }
 
 // ARRAY and MAP both map to cuDF lists, including when nested in structs.
-bool containsList(const TypePtr& type) {
+bool containsListOrMap(const TypePtr& type) {
   if (type->isArray() || type->isMap()) {
     return true;
   }
   for (uint32_t i = 0; i < type->size(); ++i) {
-    if (containsList(type->childAt(i))) {
+    if (containsListOrMap(type->childAt(i))) {
       return true;
     }
   }
@@ -509,7 +509,7 @@ bool CudfWindow::canRunOnGPU(
         (windowNode.sortingKeys().size() > 1 || baseName == "rank" ||
          !windowNode.partitionKeys().empty())) {
       for (const auto& key : windowNode.sortingKeys()) {
-        if (containsList(key->type())) {
+        if (containsListOrMap(key->type())) {
           if (reason) {
             *reason = "Ranking with ARRAY or MAP sort keys is not supported";
           }
@@ -523,7 +523,7 @@ bool CudfWindow::canRunOnGPU(
     // this rank method does not inspect values for ties.
     if (baseName == "row_number" && windowNode.sortingKeys().empty() &&
         !windowNode.partitionKeys().empty() &&
-        containsList(windowNode.partitionKeys()[0]->type())) {
+        containsListOrMap(windowNode.partitionKeys()[0]->type())) {
       if (reason) {
         *reason =
             "ROW_NUMBER without ORDER BY with an ARRAY or MAP partition key "
@@ -1270,14 +1270,14 @@ RowVectorPtr CudfWindow::doGetOutput() {
 
   if (!rangeRollingBatches.empty()) {
     ColumnOrView orderbyColHolder{cudf::column_view{}};
-    auto orderby = sortedView.select(sortKeyIndices_);
+    auto orderbyCol = sortedView.select(sortKeyIndices_);
     auto orders = sortOrders_;
     auto nullOrders = nullOrders_;
     if (sortKeyIndices_.empty()) {
       auto oneScalar = cudf::numeric_scalar<int64_t>(1, true, stream_, mr);
       orderbyColHolder =
           cudf::sequence(logicalRowCount_, oneScalar, oneScalar, stream_, mr);
-      orderby = cudf::table_view{{asView(orderbyColHolder)}};
+      orderbyCol = cudf::table_view{{asView(orderbyColHolder)}};
       orders = {cudf::order::ASCENDING};
       nullOrders = {cudf::null_order::BEFORE};
     }
@@ -1291,7 +1291,7 @@ RowVectorPtr CudfWindow::doGetOutput() {
       }
       auto batchResult = cudf::grouped_range_rolling_window(
           partKeys,
-          orderby,
+          orderbyCol,
           cudf::host_span<cudf::order const>{orders.data(), orders.size()},
           cudf::host_span<cudf::null_order const>{
               nullOrders.data(), nullOrders.size()},
