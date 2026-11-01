@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <memory>
 #include <tuple>
 
@@ -200,6 +201,28 @@ void LocalVectorIndex::build(
     }
   }
   VELOX_UNREACHABLE();
+}
+
+// static
+int64_t LocalVectorIndex::size(std::string_view bytes) {
+  // Every layout build() writes starts with a four-character code, then the
+  // index header: the dimension, an int32, and the number of embeddings, an
+  // int64.
+  static constexpr size_t kNumEmbeddingsOffset{8};
+  VELOX_USER_CHECK_GE(
+      bytes.size(),
+      kNumEmbeddingsOffset + sizeof(int64_t),
+      "Invalid local vector index: too short");
+  const auto code = bytes.substr(0, 4);
+  VELOX_USER_CHECK(
+      code == "IxMp" || code == "IwFl" || code == "IwSq",
+      "Invalid local vector index: unsupported FAISS index");
+  int64_t numEmbeddings;
+  std::memcpy(
+      &numEmbeddings, bytes.data() + kNumEmbeddingsOffset, sizeof(int64_t));
+  VELOX_USER_CHECK_GT(
+      numEmbeddings, 0, "Local vector index must have at least one embedding");
+  return numEmbeddings;
 }
 
 LocalVectorIndex::LocalVectorIndex(

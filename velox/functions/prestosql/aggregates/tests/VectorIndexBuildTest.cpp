@@ -172,6 +172,65 @@ TEST_F(VectorIndexBuildTest, nullRows) {
   });
 }
 
+// vector_index_build returns a VECTOR_INDEX. cardinality returns the number of
+// embeddings in one, and vector_count the number in a group of them.
+TEST_F(VectorIndexBuildTest, count) {
+  auto data = makeRowVector({
+      makeArrayVector<float>({{1, 0}, {0, 1}, {1, 1}, {1, 0}}),
+      makeFlatVector<int64_t>({10, 20, 30, 40}),
+      makeFlatVector<int64_t>({1, 1, 1, 2}),
+  });
+  auto indexes =
+      AssertQueryBuilder(
+          PlanBuilder(pool())
+              .values({data})
+              .singleAggregation({"c2"}, {aggregate("flat", kNoOptions)})
+              .orderBy({"c2"}, false)
+              .planNode())
+          .copyResults(pool());
+  ASSERT_EQ(*indexes->childAt(1)->type(), *VECTOR_INDEX());
+
+  AssertQueryBuilder(PlanBuilder(pool())
+                         .values({indexes})
+                         .project({"cardinality(a0)"})
+                         .planNode())
+      .assertResults(makeRowVector({makeFlatVector<int64_t>({3, 1})}));
+
+  // vector_count ignores null indexes; a group with none gets null.
+  const auto* values = indexes->childAt(1)->as<SimpleVector<StringView>>();
+  const std::string first(values->valueAt(0));
+  const std::string second(values->valueAt(1));
+  auto counted = makeRowVector({
+      makeFlatVector<int64_t>({1, 1, 2, 3}),
+      makeNullableFlatVector<std::string>(
+          {first, std::nullopt, second, std::nullopt}, VECTOR_INDEX()),
+  });
+  testAggregations(
+      {counted},
+      /*groupingKeys=*/{},
+      {"vector_count(c1)"},
+      {makeRowVector({makeFlatVector<int64_t>(std::vector<int64_t>{4})})});
+  testAggregations(
+      {counted},
+      /*groupingKeys=*/{"c0"},
+      {"vector_count(c1)"},
+      {makeRowVector({
+          makeFlatVector<int64_t>({1, 2, 3}),
+          makeNullableFlatVector<int64_t>({3, 1, std::nullopt}),
+      })});
+
+  auto invalid = makeRowVector(
+      {makeFlatVector<std::string>({"not an index"}, VECTOR_INDEX())});
+  VELOX_ASSERT_THROW(
+      AssertQueryBuilder(
+          PlanBuilder()
+              .values({invalid})
+              .project({"cardinality(c0)"})
+              .planNode())
+          .copyResults(pool()),
+      "Invalid local vector index");
+}
+
 TEST_F(VectorIndexBuildTest, options) {
   // 80 embeddings give each of 2 lists at least 39 embeddings.
   auto embeddings = makeArrayVector<float>(

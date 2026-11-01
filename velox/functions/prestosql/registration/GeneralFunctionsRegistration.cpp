@@ -22,6 +22,9 @@
 #include "velox/functions/prestosql/GreatestLeast.h"
 #include "velox/functions/prestosql/InPredicate.h"
 #include "velox/functions/prestosql/Reduce.h"
+#ifdef VELOX_ENABLE_FAISS
+#include "velox/functions/prestosql/VectorIndexFunctions.h"
+#endif
 #include "velox/functions/prestosql/types/IPAddressType.h"
 #include "velox/functions/prestosql/types/TimeWithTimezoneType.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
@@ -123,6 +126,10 @@ void registerGeneralFunctions(
       {prefix + "cardinality"}, {}, true, defaultOwner);
   registerFunction<CardinalityFunction, int64_t, Map<Generic<T1>, Generic<T2>>>(
       {prefix + "cardinality"}, {}, true, defaultOwner);
+#ifdef VELOX_ENABLE_FAISS
+  registerFunction<VectorIndexCardinalityFunction, int64_t, VectorIndex>(
+      {prefix + "cardinality"}, {}, true, defaultOwner);
+#endif
 
   registerFailFunction({prefix + "fail"}, defaultOwner);
 

@@ -65,6 +65,7 @@ TEST_F(LocalVectorIndexTest, search) {
     EXPECT_EQ(kind, index.kind());
     EXPECT_EQ(2, index.dimension());
     EXPECT_EQ(3, index.size());
+    EXPECT_EQ(3, LocalVectorIndex::size(bytes));
 
     // Nearest (0.8, 0.6) are ids 10, then 20. 'k' exceeds the size of the
     // index, so the last entry is missing.
@@ -115,6 +116,18 @@ TEST_F(LocalVectorIndexTest, errors) {
           VectorIndexMetric::kCosine,
           {}),
       "Invalid local vector index: unsupported FAISS index");
+  VELOX_ASSERT_THROW(
+      LocalVectorIndex::size(
+          std::string(writer.data.begin(), writer.data.end())),
+      "Invalid local vector index: unsupported FAISS index");
+  VELOX_ASSERT_THROW(
+      LocalVectorIndex::size("IxMp"), "Invalid local vector index: too short");
+  auto negative = build(VectorIndexKind::kFlat);
+  const int64_t numEmbeddings{-1};
+  std::memcpy(negative.data() + 8, &numEmbeddings, sizeof(numEmbeddings));
+  VELOX_ASSERT_THROW(
+      LocalVectorIndex::size(negative),
+      "Local vector index must have at least one embedding");
 
   const auto flat = build(VectorIndexKind::kFlat);
   VELOX_ASSERT_THROW(

@@ -89,6 +89,7 @@ const char* const kTDigestAgg = "tdigest_agg";
 const char* const kVariance = "variance"; // Alias for var_samp.
 const char* const kVarPop = "var_pop";
 const char* const kVarSamp = "var_samp";
+const char* const kVectorCount = "vector_count";
 const char* const kVectorIndexBuild = "vector_index_build";
 const char* const kVectorIndexPack = "vector_index_pack";
 const char* const kVectorSum = "vector_sum";
