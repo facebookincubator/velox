@@ -30,7 +30,7 @@ FMT_VERSION="11.2.0"
 BOOST_VERSION="boost-1.84.0"
 ARROW_VERSION="18.0.0"
 DUCKDB_VERSION="v0.8.1"
-PROTOBUF_VERSION="21.8"
+PROTOBUF_VERSION="35.1"
 XSIMD_VERSION="10.0.0"
 SIMDJSON_VERSION="4.1.0"
 CPR_VERSION="1.10.5"
@@ -62,11 +62,19 @@ FLATBUFFERS_VERSION="24.3.25"
 OPENZL_VERSION="7340a712cce1b8331bec3467600dba99a562e052"
 
 # Adapter related versions.
-ABSEIL_VERSION="20240116.2"
-GRPC_VERSION="1.48.1"
+ABSEIL_VERSION="20250512.1"
+GRPC_VERSION="1.83.0"
 CRC32_VERSION="1.1.2"
 NLOHMAN_JSON_VERSION="3.11.3"
-GOOGLE_CLOUD_CPP_VERSION="2.22.0"
+# google-cloud-cpp 3.11.0 requires libcurl >= 8.7.1 for its REST transport.
+# CentOS 9's system libcurl is 7.76.1, so build the minimum documented version
+# from source. See google-cloud-cpp doc/packaging.md.
+CURL_VERSION="8.7.1"
+# opentelemetry-cpp is a required dependency of google-cloud-cpp 3.x's common
+# library (unconditional, no CMake switch to disable). Version pinned to what
+# google-cloud-cpp 3.11.0's doc/packaging.md recommends.
+OPENTELEMETRY_CPP_VERSION="1.24.0"
+GOOGLE_CLOUD_CPP_VERSION="3.11.0"
 HADOOP_VERSION="3.3.6"
 AZURE_SDK_VERSION="12.8.0"
 # dl.min.io is gone; S3 test storage now comes from pgsty/silo, a MinIO
