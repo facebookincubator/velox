@@ -439,7 +439,7 @@ TEST_F(VectorIndexBuildTest, mergeExtractErrors) {
       "Intermediate vector index settings must include the metric");
   testFailingSettings(
       "[9, 0, null, null, null, null, null]",
-      "Invalid vector index type value: 9");
+      "Invalid vector index kind value: 9");
   testFailingSettings(
       "[0, 9, null, null, null, null, null]",
       "Invalid vector index metric value: 9");

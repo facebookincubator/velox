@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "velox/common/vectorindex/VectorIndexType.h"
+#include "velox/common/vectorindex/VectorIndexKind.h"
 
 #include <folly/container/F14Map.h>
 
@@ -25,30 +25,30 @@ namespace facebook::velox::common::vectorindex {
 
 namespace {
 
-const auto& vectorIndexTypeNames() {
-  static const folly::F14FastMap<VectorIndexType, std::string_view> kNames = {
-      {VectorIndexType::kFlat, "flat"},
-      {VectorIndexType::kIvfFlat, "ivf_flat"},
-      {VectorIndexType::kIvfSq, "ivf_sq"},
-      {VectorIndexType::kHnswSq, "hnsw_sq"},
+const auto& vectorIndexKindNames() {
+  static const folly::F14FastMap<VectorIndexKind, std::string_view> kNames = {
+      {VectorIndexKind::kFlat, "flat"},
+      {VectorIndexKind::kIvfFlat, "ivf_flat"},
+      {VectorIndexKind::kIvfSq, "ivf_sq"},
+      {VectorIndexKind::kHnswSq, "hnsw_sq"},
   };
   return kNames;
 }
 
 } // namespace
 
-VELOX_DEFINE_ENUM_NAME(VectorIndexType, vectorIndexTypeNames);
+VELOX_DEFINE_ENUM_NAME(VectorIndexKind, vectorIndexKindNames);
 
-VectorIndexType VectorIndexTypeValue::fromValue(int32_t value) {
-  const auto type = static_cast<VectorIndexType>(value);
-  switch (type) {
-    case VectorIndexType::kFlat:
-    case VectorIndexType::kIvfFlat:
-    case VectorIndexType::kIvfSq:
-    case VectorIndexType::kHnswSq:
-      return type;
+VectorIndexKind VectorIndexKindValue::fromValue(int32_t value) {
+  const auto kind = static_cast<VectorIndexKind>(value);
+  switch (kind) {
+    case VectorIndexKind::kFlat:
+    case VectorIndexKind::kIvfFlat:
+    case VectorIndexKind::kIvfSq:
+    case VectorIndexKind::kHnswSq:
+      return kind;
   }
-  VELOX_USER_FAIL("Invalid vector index type value: {}", value);
+  VELOX_USER_FAIL("Invalid vector index kind value: {}", value);
 }
 
 } // namespace facebook::velox::common::vectorindex

@@ -37,7 +37,7 @@ class VectorIndexPackTest : public AggregationTestBase {
     std::iota(clusterIds.begin(), clusterIds.end(), 0);
     std::string result;
     common::vectorindex::LocalVectorIndex::build(
-        common::vectorindex::VectorIndexType::kFlat,
+        common::vectorindex::VectorIndexKind::kFlat,
         common::vectorindex::VectorIndexMetric::kCosine,
         common::vectorindex::LocalVectorIndexOptions{},
         common::vectorindex::Embeddings(centroids, /*dimension=*/2),

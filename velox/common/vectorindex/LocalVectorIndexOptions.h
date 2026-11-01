@@ -22,7 +22,7 @@
 #include <utility>
 #include <vector>
 
-#include "velox/common/vectorindex/VectorIndexType.h"
+#include "velox/common/vectorindex/VectorIndexKind.h"
 
 namespace facebook::velox::common::vectorindex {
 
@@ -56,25 +56,25 @@ struct LocalVectorIndexOptions {
 
   bool operator==(const LocalVectorIndexOptions&) const = default;
 
-  /// Parses options, a list of key-value pairs, for an index of 'type'.
+  /// Parses options, a list of key-value pairs, for an index of 'kind'.
   /// Throws a user error for an unknown key or a value that is not an
   /// integer, and the errors of validate().
   static LocalVectorIndexOptions parse(
-      VectorIndexType type,
+      VectorIndexKind kind,
       const std::vector<std::pair<std::string_view, std::string_view>>&
           options);
 
   /// Parses search settings, a list of key-value pairs that may set only
   /// 'ivf.nprobe' and 'hnsw.efSearch'. Throws a user error for any other key
   /// or a value that is not a positive integer. Whether a setting applies to
-  /// an index depends on the index's type (see validate()).
+  /// an index depends on the index's kind (see validate()).
   static LocalVectorIndexOptions parseSearch(
       const std::vector<std::pair<std::string_view, std::string_view>>&
           options);
 
-  /// Throws a user error for a setting that does not apply to 'type', a value
+  /// Throws a user error for a setting that does not apply to 'kind', a value
   /// that is not positive or an 'hnsw.M' outside [kMinM, kMaxM].
-  void validate(VectorIndexType type) const;
+  void validate(VectorIndexKind kind) const;
 };
 
 } // namespace facebook::velox::common::vectorindex
