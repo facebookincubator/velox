@@ -19,6 +19,8 @@
 #include <algorithm>
 #include <array>
 #include <limits>
+#include <memory>
+#include <numeric>
 #include <random>
 #include <span>
 #include <string>
@@ -230,6 +232,38 @@ TEST_P(FsstEncodingViewTest, readsAcrossLazyChunkBoundaries) {
       values, positions, forceFsstOptions(), CompressionType::Lz4);
 }
 
+TEST_P(FsstEncodingViewTest, decodedChunksUseMemoryPool) {
+  if (!cacheEncodingView()) {
+    GTEST_SKIP() << "Only cached views allocate decoded chunks.";
+  }
+  std::vector<std::string> storage;
+  auto values = makeValues(storage, 256);
+  const auto encoded = encodeFsst(values);
+  velox::memory::MemoryManager manager;
+  const auto rootPool = manager.addRootPool();
+  const auto decodePool = rootPool->addLeafChild("fsst-decoded-chunks");
+  ASSERT_TRUE(decodePool->trackUsage());
+  const auto bytesBeforeView = decodePool->usedBytes();
+  auto view = createEncodingView(
+      encoded, decodePool.get(), {.cacheEncodingView = true});
+  const auto bytesBeforeDecode = decodePool->usedBytes();
+  size_t decodedBytes{0};
+  for (const auto value : values) {
+    decodedBytes += value.size();
+  }
+
+  std::string_view actual;
+  view->readAt(0, &actual);
+  EXPECT_EQ(actual, values[0]);
+  EXPECT_GE(decodePool->usedBytes(), bytesBeforeDecode + decodedBytes);
+  const auto bytesAfterDecode = decodePool->usedBytes();
+  view->readAt(1, &actual);
+  EXPECT_EQ(actual, values[1]);
+  EXPECT_EQ(decodePool->usedBytes(), bytesAfterDecode);
+  view.reset();
+  EXPECT_EQ(decodePool->usedBytes(), bytesBeforeView);
+}
+
 TEST_P(FsstEncodingViewTest, supportsConcurrentReadsAcrossChunks) {
   std::vector<std::string> storage;
   auto values = makeValues(storage, 2'048);
@@ -279,6 +313,88 @@ TEST_P(FsstEncodingViewTest, readsScatteredAndRepeatedIndices) {
   view->readAt(indices, output.data());
   for (size_t i = 0; i < indices.size(); ++i) {
     EXPECT_EQ(output[i], values[indices[i]]) << "index " << indices[i];
+  }
+}
+
+TEST_P(FsstEncodingViewTest, readsZeroTerminatedSymbolTable) {
+  std::vector<std::string> storage{
+      "", "alpha", "repeated production-shaped value"};
+  for (auto& value : storage) {
+    value.push_back('\0');
+  }
+
+  std::vector<size_t> inputLengths;
+  std::vector<const unsigned char*> inputPointers;
+  inputLengths.reserve(storage.size());
+  inputPointers.reserve(storage.size());
+  for (const auto& value : storage) {
+    inputLengths.push_back(value.size());
+    inputPointers.push_back(
+        reinterpret_cast<const unsigned char*>(value.data()));
+  }
+
+  std::unique_ptr<fsst_encoder_t, decltype(&nimble_fsst_destroy)> encoder{
+      nimble_fsst_create(
+          storage.size(), inputLengths.data(), inputPointers.data(), 1),
+      &nimble_fsst_destroy};
+  ASSERT_NE(encoder, nullptr);
+
+  std::array<unsigned char, FSST_MAXHEADER> symbolTable{};
+  const auto symbolTableSize =
+      nimble_fsst_export(encoder.get(), symbolTable.data());
+  ASSERT_GT(symbolTableSize, 0);
+
+  const auto totalInputBytes =
+      std::accumulate(inputLengths.begin(), inputLengths.end(), size_t{0});
+  std::vector<unsigned char> compressedBytes(
+      totalInputBytes * 2 + storage.size() * 7);
+  std::vector<size_t> compressedLengths(storage.size());
+  std::vector<unsigned char*> compressedPointers(storage.size());
+  ASSERT_EQ(
+      nimble_fsst_compress(
+          encoder.get(),
+          storage.size(),
+          inputLengths.data(),
+          inputPointers.data(),
+          compressedBytes.size(),
+          compressedBytes.data(),
+          compressedLengths.data(),
+          compressedPointers.data()),
+      storage.size());
+
+  std::string blob;
+  std::vector<uint32_t> encodedLengths;
+  encodedLengths.reserve(storage.size());
+  for (size_t row = 0; row < storage.size(); ++row) {
+    ASSERT_LE(compressedLengths[row], std::numeric_limits<uint32_t>::max());
+    encodedLengths.push_back(static_cast<uint32_t>(compressedLengths[row]));
+    blob.append(
+        reinterpret_cast<const char*>(compressedPointers[row]),
+        compressedLengths[row]);
+  }
+
+  Vector<std::string_view> values{pool_.get()};
+  values.reserve(storage.size());
+  for (const auto& value : storage) {
+    values.emplace_back(value);
+  }
+  const auto templateEncoding = encodeFsst(values);
+  const auto sections = splitFsst(templateEncoding);
+  const auto lengthsEncoding = encodeTrivialChild<uint32_t>(encodedLengths);
+  const auto encoded = rebuildFsst(
+      sections,
+      std::string_view{
+          reinterpret_cast<const char*>(symbolTable.data()), symbolTableSize},
+      lengthsEncoding,
+      blob);
+
+  auto view = createEncodingView(
+      encoded, pool_.get(), {.cacheEncodingView = cacheEncodingView()});
+  ASSERT_NE(view, nullptr);
+  for (uint32_t row = 0; row < values.size(); ++row) {
+    std::string_view actual;
+    view->readAt(row, &actual);
+    EXPECT_EQ(actual, values[row]);
   }
 }
 

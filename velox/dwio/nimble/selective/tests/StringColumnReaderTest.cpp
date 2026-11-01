@@ -95,7 +95,9 @@ class StringColumnReaderTest : public ::testing::Test,
   Readers makeReaders(
       const RowVectorPtr& expected,
       const std::string& file,
-      const std::shared_ptr<common::ScanSpec>& scanSpec) {
+      const std::shared_ptr<common::ScanSpec>& scanSpec,
+      bool scanFastPath = false,
+      bool fsstDecodeCacheEnabled = false) {
     auto readFile = std::make_shared<InMemoryReadFile>(file);
     auto factory =
         dwio::common::getReaderFactory(dwio::common::FileFormat::NIMBLE);
@@ -111,6 +113,8 @@ class StringColumnReaderTest : public ::testing::Test,
     dwio::common::RowReaderOptions rowOptions;
     rowOptions.setScanSpec(scanSpec);
     rowOptions.setRequestedType(type);
+    rowOptions.setNimbleScanFastPath(scanFastPath);
+    rowOptions.setNimbleFsstDecodeRepeatedPayloads(fsstDecodeCacheEnabled);
     rowOptions.setNimblePreserveDictionaryEncoding(true);
     readers.rowReader = readers.reader->createRowReader(rowOptions);
     return readers;
@@ -263,6 +267,96 @@ EncodingLayout makeFsstEncodingLayout() {
       CompressionType::Uncompressed,
       {EncodingLayout{
           EncodingType::Trivial, {}, CompressionType::Uncompressed}}};
+}
+
+TEST_P(StringColumnReaderTest, fsstDecodeCacheUsesReaderOption) {
+  constexpr vector_size_t kChunkSize = 64;
+  const auto input = makeRowVector({
+      makeFlatIdentityVector<int64_t>(2 * kChunkSize),
+      makeFlatVector<std::string>(
+          2 * kChunkSize,
+          [](auto row) {
+            return row % 2 == 0
+                ? "long/repeated/fsst/value/with/common/prefix/alpha"
+                : "long/repeated/fsst/value/with/common/prefix/beta";
+          }),
+  });
+  WriterOptions options;
+  options.fsstCompressionTargetRatio = 10.0;
+  options.enableChunking = true;
+  options.minStreamChunkRawSize = 0;
+  options.flushPolicyFactory = [] {
+    return std::make_unique<LambdaFlushPolicy>(
+        [](const StripeProgress&) { return false; },
+        [](const StripeProgress&) { return true; });
+  };
+  options.encodingLayoutTree.emplace(
+      Kind::Row,
+      std::
+          unordered_map<EncodingLayoutTree::StreamIdentifier, EncodingLayout>{},
+      "",
+      std::vector<EncodingLayoutTree>{
+          EncodingLayoutTree{Kind::Scalar, {}, "c0"},
+          EncodingLayoutTree{
+              Kind::Scalar, {{0, makeFsstEncodingLayout()}}, "c1"},
+      });
+  const auto file = test::createNimbleFile(
+      *rootPool(),
+      {input->slice(0, kChunkSize), input->slice(kChunkSize, kChunkSize)},
+      options,
+      /*flushAfterWrite=*/false);
+  const auto encodings = getStreamChunkEncodings(file, 1, pool());
+  ASSERT_EQ(encodings.size(), 2);
+  ASSERT_EQ(encodings[0].encodingType, EncodingType::Fsst);
+  ASSERT_EQ(encodings[1].encodingType, EncodingType::Fsst);
+
+  for (const bool fastPath : {false, true}) {
+    for (const bool cacheEnabled : {false, true}) {
+      SCOPED_TRACE(
+          fmt::format("fastPath={}, cacheEnabled={}", fastPath, cacheEnabled));
+      auto scanSpec = std::make_shared<common::ScanSpec>("root");
+      scanSpec->addAllChildFields(*input->type());
+      auto readers = makeReaders(
+          input,
+          file,
+          scanSpec,
+          /*scanFastPath=*/fastPath,
+          /*fsstDecodeCacheEnabled=*/cacheEnabled);
+      std::vector<VectorPtr> results;
+      for (int chunk = 0; chunk < 2; ++chunk) {
+        auto result = BaseVector::create(input->type(), 0, pool());
+        ASSERT_EQ(readers.rowReader->next(kChunkSize, result), kChunkSize);
+        result->validate();
+        ASSERT_EQ(result->size(), kChunkSize);
+        for (int row = 0; row < kChunkSize; ++row) {
+          ASSERT_TRUE(
+              result->equalValueAt(input.get(), row, chunk * kChunkSize + row));
+        }
+        results.push_back(std::move(result));
+      }
+
+      const auto strings = [&](int chunk) {
+        auto loaded = BaseVector::loadedVectorShared(
+            results[chunk]->asUnchecked<RowVector>()->childAt(1));
+        EXPECT_EQ(loaded->encoding(), VectorEncoding::Simple::FLAT);
+        return loaded->as<FlatVector<StringView>>();
+      };
+      const auto* firstChunk = strings(0);
+      const auto* secondChunk = strings(1);
+      ASSERT_NE(firstChunk, nullptr);
+      ASSERT_NE(secondChunk, nullptr);
+      if (cacheEnabled) {
+        EXPECT_EQ(firstChunk->valueAt(0).data(), firstChunk->valueAt(2).data());
+        EXPECT_EQ(
+            secondChunk->valueAt(0).data(), secondChunk->valueAt(2).data());
+      } else {
+        EXPECT_NE(firstChunk->valueAt(0).data(), firstChunk->valueAt(2).data());
+        EXPECT_NE(
+            secondChunk->valueAt(0).data(), secondChunk->valueAt(2).data());
+      }
+      EXPECT_NE(firstChunk->valueAt(0).data(), secondChunk->valueAt(0).data());
+    }
+  }
 }
 
 // Validates correctness and checks the expected encoding per batch.
@@ -536,6 +630,103 @@ TEST_P(StringColumnReaderTest, fsstWithSiblingFilter) {
     validateWithFilter(*input, *readers.rowReader, 137, [](auto i) {
       return i % 32 == 3 || i % 32 == 17;
     });
+  }
+}
+
+TEST_P(StringColumnReaderTest, fsstFilterOnlyRangeAcrossChunks) {
+  constexpr int kRows = 600;
+  auto makeChunk = [&](int offset) {
+    return makeRowVector(
+        {"key", "value"},
+        {makeFlatVector<std::string>(
+             kRows,
+             [&](auto i) {
+               return fmt::format(
+                   "common/{}/payload/{}", i % 3 == 0 ? "match" : "other", i);
+             },
+             [](auto i) { return i % 7 == 0; }),
+         makeFlatVector<int64_t>(kRows, [&](auto i) { return offset + i; })});
+  };
+  auto first = makeChunk(0);
+  auto second = makeChunk(kRows);
+  WriterOptions options;
+  options.fsstCompressionTargetRatio = 10.0;
+  options.enableChunking = true;
+  options.minStreamChunkRawSize = 0;
+  options.flushPolicyFactory = [] {
+    return std::make_unique<LambdaFlushPolicy>(
+        [](const StripeProgress&) { return false; },
+        [](const StripeProgress&) { return true; });
+  };
+  options.encodingLayoutTree.emplace(
+      Kind::Row,
+      std::
+          unordered_map<EncodingLayoutTree::StreamIdentifier, EncodingLayout>{},
+      "",
+      std::vector<EncodingLayoutTree>{
+          EncodingLayoutTree{
+              Kind::Scalar, {{0, makeFsstEncodingLayout()}}, "key"},
+          EncodingLayoutTree{Kind::Scalar, {}, "value"},
+      });
+  auto file =
+      test::createNimbleFile(*rootPool(), {first, second}, options, false);
+  for (const bool negated : {false, true}) {
+    for (const bool projectOut : {false, true}) {
+      for (const bool nullAllowed : {false, true}) {
+        for (const int batchSize : {137, 1'500}) {
+          auto spec = std::make_shared<common::ScanSpec>("root");
+          spec->addAllChildFields(*first->type());
+          auto* keySpec = spec->childByName("key");
+          keySpec->setProjectOut(projectOut);
+          if (negated) {
+            keySpec->setFilter(
+                std::make_unique<common::NegatedBytesRange>(
+                    "common/match/",
+                    false,
+                    false,
+                    "common/match0",
+                    false,
+                    true,
+                    nullAllowed));
+          } else {
+            keySpec->setFilter(
+                std::make_unique<common::BytesRange>(
+                    "common/match/",
+                    false,
+                    false,
+                    "common/match0",
+                    false,
+                    true,
+                    nullAllowed));
+          }
+          spec->childByName("value")->setFilter(
+              std::make_unique<common::BigintRange>(100, 999, false));
+          auto readers = makeReaders(first, file, spec);
+          auto result = BaseVector::create(first->type(), 0, pool());
+          std::vector<int64_t> actual;
+          while (readers.rowReader->next(batchSize, result) > 0) {
+            auto rows = result->as<RowVector>();
+            auto value = rows->childAt(1)->as<FlatVector<int64_t>>();
+            for (vector_size_t row = 0; row < rows->size(); ++row) {
+              actual.push_back(value->valueAt(row));
+              if (projectOut) {
+                auto source = actual.back() < kRows ? first : second;
+                EXPECT_TRUE(rows->childAt(0)->equalValueAt(
+                    source->childAt(0).get(), row, actual.back() % kRows));
+              }
+            }
+          }
+          std::vector<int64_t> expected;
+          for (int row = 100; row <= 999; ++row) {
+            const auto local = row % kRows;
+            if (local % 7 == 0 ? nullAllowed : (local % 3 == 0) != negated) {
+              expected.push_back(row);
+            }
+          }
+          EXPECT_EQ(actual, expected);
+        }
+      }
+    }
   }
 }
 
