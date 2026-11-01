@@ -18,7 +18,9 @@
 #include <cudf/detail/nvtx/ranges.hpp>
 #include <cudf/io/types.hpp>
 #include <cudf/table/table.hpp>
+#include <folly/ScopeGuard.h>
 #include <rmm/exec_policy.hpp>
+#include "velox/common/testutil/TestValue.h"
 #include "velox/experimental/ucx-exchange/IntraNodeTransferRegistry.h"
 
 namespace facebook::velox::ucx_exchange {
@@ -106,8 +108,24 @@ void UcxOutputQueueManager::getData(
     std::string_view taskId,
     int destination,
     UcxDataAvailableCallback notify) {
+  getDataImpl(taskId, destination, std::move(notify), /*intraNode=*/false);
+}
+
+void UcxOutputQueueManager::getIntraNodeData(
+    std::string_view taskId,
+    int destination,
+    UcxDataAvailableCallback notify) {
+  getDataImpl(taskId, destination, std::move(notify), /*intraNode=*/true);
+}
+
+void UcxOutputQueueManager::getDataImpl(
+    std::string_view taskId,
+    int destination,
+    UcxDataAvailableCallback notify,
+    bool intraNode) {
   std::shared_ptr<UcxOutputQueue> outputQueue;
   bool taskRemoved = false;
+  std::optional<std::string> producerError;
   std::string taskIdStr{taskId};
   queues_.withLock([&](auto& queues) {
     auto it = queues.find(taskIdStr);
@@ -116,8 +134,14 @@ void UcxOutputQueueManager::getData(
       // placeholder — the task is dead and any server calling getData() is a
       // stale leftover. Re-creating would produce an undersized queue that
       // crashes when deleteResults() is called for other destinations.
-      if (removedTasks_.withLock(
-              [&](auto& removed) { return removed.count(taskIdStr) > 0; })) {
+      if (removedTasks_.withLock([&](auto& removed) {
+            auto removedIt = removed.find(taskIdStr);
+            if (removedIt == removed.end()) {
+              return false;
+            }
+            producerError = removedIt->second;
+            return true;
+          })) {
         VLOG(2) << "[QUEUE-MGR] task=" << taskId << " dest=" << destination
                 << " getData ignored (task already removed)";
         taskRemoved = true;
@@ -136,13 +160,26 @@ void UcxOutputQueueManager::getData(
     }
   });
   if (taskRemoved) {
-    // Fire callback immediately with nullptr to signal end-of-stream.
-    notify(nullptr, /*numRows=*/0, {});
+    // Fire callback immediately with the end marker the task was removed with.
+    notify(nullptr, /*numRows=*/0, {}, std::move(producerError));
     return;
   }
   // outside of lock. Queue must exist.
   // get the data or install the notify callback.
-  outputQueue->getData(destination, notify);
+  if (intraNode) {
+    outputQueue->getIntraNodeData(destination, std::move(notify));
+  } else {
+    outputQueue->getData(destination, std::move(notify));
+  }
+}
+
+void UcxOutputQueueManager::intraNodePageRetrieved(
+    std::string_view taskId,
+    int destination) {
+  // After removeTask() the queue is gone and the count no longer matters.
+  if (auto queue = getQueueIfExists(taskId)) {
+    queue->intraNodePageRetrieved(destination);
+  }
 }
 
 bool UcxOutputQueueManager::canUseIntraNode(std::string_view taskId) {
@@ -153,33 +190,63 @@ bool UcxOutputQueueManager::canUseIntraNode(std::string_view taskId) {
 
 void UcxOutputQueueManager::removeTask(const std::string& taskId) {
   std::string taskIdStr{taskId};
-  auto queue =
-      queues_.withLock([&](auto& queues) -> std::shared_ptr<UcxOutputQueue> {
-        auto it = queues.find(taskIdStr);
-        if (it == queues.end()) {
-          // Already removed. Clear any stale "removed" state so the task ID
-          // can be reused.
-          removedTasks_.withLock(
-              [&](auto& removed) { removed.erase(taskIdStr); });
-          return nullptr;
-        }
-        auto taskQueue = it->second;
-        queues.erase(it);
-        // Insert into removedTasks_ while still holding the queues_ lock
-        // to prevent getData() from seeing a gap between erase and insert,
-        // which would cause it to create a zombie placeholder queue.
+  auto registry = IntraNodeTransferRegistry::getInstance();
+  // Intra-node sources stop reading until cancelTask() publishes the outcome:
+  // a page read after the decision below would be counted as lost although
+  // its consumer has it.
+  registry->freezeTask(taskId);
+  auto unfreeze = folly::makeGuard(
+      [&registry, &taskId]() { registry->unfreezeTask(taskId); });
+  // Decided before the queue is unpublished, and with no manager lock held:
+  // reading the task's state takes the task's mutex, and a getData() that
+  // finds the task removed must already see the reason. The reason must come
+  // from the queue that is removed, so it is decided again if the queue
+  // changed meanwhile, as when a consumer left a placeholder for a task that
+  // registered none. This ends because a task's queue is created at most once
+  // and removed at most once.
+  std::shared_ptr<UcxOutputQueue> queue;
+  std::optional<std::string> producerError;
+  auto expectedQueue = getQueueIfExists(taskIdStr);
+  for (bool decided = false; !decided;) {
+    producerError = expectedQueue != nullptr
+        ? expectedQueue->incompleteOutputError()
+        : std::nullopt;
+    common::testutil::TestValue::adjust(
+        "facebook::velox::ucx_exchange::UcxOutputQueueManager::removeTask::afterProducerError",
+        this);
+    decided = queues_.withLock([&](auto& queues) {
+      auto it = queues.find(taskIdStr);
+      auto currentQueue = it == queues.end() ? nullptr : it->second;
+      if (currentQueue != expectedQueue) {
+        expectedQueue = std::move(currentQueue);
+        return false;
+      }
+      if (it == queues.end()) {
+        // Already removed. Clear any stale "removed" state so the task ID
+        // can be reused.
         removedTasks_.withLock(
-            [&](auto& removed) { removed.insert(taskIdStr); });
-        return taskQueue;
+            [&](auto& removed) { removed.erase(taskIdStr); });
+        return true;
+      }
+      queues.erase(it);
+      // Insert into removedTasks_ while still holding the queues_ lock
+      // to prevent getData() from seeing a gap between erase and insert,
+      // which would cause it to create a zombie placeholder queue.
+      removedTasks_.withLock([&](auto& removed) {
+        removed.insert_or_assign(taskIdStr, producerError);
       });
+      queue = std::move(currentQueue);
+      return true;
+    });
+  }
   VLOG(2) << "[QUEUE-MGR] removeTask=" << taskId
           << " queueExists=" << (queue != nullptr);
   if (queue != nullptr) {
-    queue->terminate();
+    queue->terminate(producerError);
   }
   // Notify the intra-node registry so that any sources polling for this
   // task get an atEnd result instead of spinning forever.
-  IntraNodeTransferRegistry::getInstance()->cancelTask(taskId);
+  registry->cancelTask(taskId, producerError);
 }
 
 std::shared_ptr<UcxOutputQueue> UcxOutputQueueManager::getQueueIfExists(
