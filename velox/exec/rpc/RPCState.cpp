@@ -19,6 +19,7 @@
 #include <algorithm>
 #include <chrono>
 #include <exception>
+#include <limits>
 #include <utility>
 
 #include <folly/Random.h>
@@ -60,8 +61,8 @@ int64_t hintNanos(std::chrono::milliseconds duration) {
 
 // The wait before a row's next attempt, after its 'numAttempts'-th rejection:
 // the nominal wait starts at the hint's retryAfter and doubles for each
-// rejection after the first, up to its maxRetryAfter; with jitter, the wait is
-// drawn uniformly from [0, nominal wait].
+// rejection after the first, up to its maxRetryAfter; the hint's jitter then
+// draws the wait from [0, nominal wait] or [nominal wait / 2, nominal wait].
 int64_t retryWaitNanos(
     const velox::rpc::CapacityRetry& hint,
     int32_t numAttempts) {
@@ -70,11 +71,18 @@ int64_t retryWaitNanos(
   for (int32_t i = 1; i < numAttempts && nominal < cap; ++i) {
     nominal = std::min(cap, nominal * 2);
   }
-  if (!hint.jitter) {
-    return nominal;
+  switch (hint.jitter) {
+    case velox::rpc::CapacityRetryJitter::kNone:
+      return nominal;
+    case velox::rpc::CapacityRetryJitter::kFull:
+      return static_cast<int64_t>(
+          folly::Random::rand64(static_cast<uint64_t>(nominal) + 1));
+    case velox::rpc::CapacityRetryJitter::kEqual:
+      return nominal / 2 +
+          static_cast<int64_t>(
+                 folly::Random::rand64(static_cast<uint64_t>(nominal / 2) + 1));
   }
-  return static_cast<int64_t>(
-      folly::Random::rand64(static_cast<uint64_t>(nominal) + 1));
+  VELOX_UNREACHABLE();
 }
 
 // Wake blocked drivers by fulfilling their promises. Must run with no RPCState
@@ -374,6 +382,8 @@ void RPCState::addRetriedRow(
           .lease = std::move(admissionLease),
           .firstAttemptNs = retry.firstAttemptNs,
           .numAttempts = retry.numAttempts + 1,
+          .numCountLimitedRetries = retry.numCountLimitedRetries,
+          .numTimeLimitedRetries = retry.numTimeLimitedRetries,
       });
 }
 
@@ -495,16 +505,42 @@ void RPCState::completeRow(
   const auto& retryHint = readyRow.response.capacityRetry();
   if (capacityRetryEnabled && pending.has_value() && retryHint.has_value()) {
     const auto nowNs = steadyNowNs();
+    // Both kinds count the retries the transport made in place during each
+    // attempt, so the operator and the transport share one retry count. A
+    // count-limited hint limits the row by that count. A time-limited hint
+    // limits it by its budget, but grants at least its minRetries, so a budget
+    // too short for slow attempts cannot leave the row fewer retries than that.
+    // The two kinds count and back off their retries apart, as a transport
+    // keeps rate-limit retries apart from overload retries.
+    const auto& maxRetries = retryHint->maxRetries;
+    const bool countLimited = maxRetries.has_value();
+    const int32_t numKindRetries =
+        (countLimited ? pending->numCountLimitedRetries
+                      : pending->numTimeLimitedRetries) +
+        retryHint->numInPlaceRetries;
     const auto notBeforeNs =
-        nowNs + retryWaitNanos(*retryHint, pending->numAttempts);
-    const auto deadlineNs =
-        pending->firstAttemptNs + hintNanos(retryHint->budget);
-    if (notBeforeNs <= deadlineNs) {
+        nowNs + retryWaitNanos(*retryHint, numKindRetries + 1);
+    const bool withinRetryFloor =
+        !countLimited && numKindRetries < retryHint->minRetries;
+    // A floor outlasts the budget, but not the longest a single call may take.
+    const auto budget = withinRetryFloor
+        ? std::max(retryHint->budget, kMaxRetryFloorWindow)
+        : retryHint->budget;
+    const auto deadlineNs = countLimited
+        ? std::numeric_limits<int64_t>::max()
+        : pending->firstAttemptNs + hintNanos(budget);
+    const bool retriesLeft = !countLimited || numKindRetries < *maxRetries;
+    if (retriesLeft && notBeforeNs <= deadlineNs) {
+      const bool pastBudget = withinRetryFloor &&
+          notBeforeNs > pending->firstAttemptNs + hintNanos(retryHint->budget);
       std::vector<ContinuePromise> retryWaiters;
       {
         std::lock_guard<std::mutex> l(mutex_);
         inFlight_--;
         ++numCompletionsSignaled_;
+        if (pastBudget) {
+          ++numCapacityRetryFloorRetries_;
+        }
         if (!closed_) {
           retryRows_.push_back(
               RetryRow{
@@ -512,6 +548,12 @@ void RPCState::completeRow(
                   .location = location,
                   .firstAttemptNs = pending->firstAttemptNs,
                   .numAttempts = pending->numAttempts,
+                  .numCountLimitedRetries = countLimited
+                      ? numKindRetries + 1
+                      : pending->numCountLimitedRetries,
+                  .numTimeLimitedRetries = countLimited
+                      ? pending->numTimeLimitedRetries
+                      : numKindRetries + 1,
                   .notBeforeNs = notBeforeNs,
                   .deadlineNs = deadlineNs,
                   .error = readyRow.response.error(),
@@ -1159,6 +1201,7 @@ RPCState::OperatorSnapshot RPCState::operatorSnapshot() const {
       .inFlight = inFlight_,
       .numCompletionsSignaled = numCompletionsSignaled_,
       .numCapacityRetries = numCapacityRetries_,
+      .numCapacityRetryFloorRetries = numCapacityRetryFloorRetries_,
   };
 }
 
