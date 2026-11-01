@@ -776,7 +776,8 @@ void HashBuild::computeSpillPartitions(const RowVectorPtr& input) {
 
   spillPartitions_.resize(input->size());
   activeRows_.applyToSelected([&](int32_t row) {
-    spillPartitions_[row] = spiller_->hashBits().partition(hashes_[row]);
+    spillPartitions_[row] =
+        spiller_->hashBits().partition(spillHash(hashes_[row]));
   });
 }
 
