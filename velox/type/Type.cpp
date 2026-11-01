@@ -391,7 +391,7 @@ folly::dynamic ArrayType::serialize() const {
 
   folly::dynamic children = folly::dynamic::array;
   children.push_back(child_->serialize());
-  obj["cTypes"] = children;
+  obj["cTypes"] = std::move(children);
 
   return obj;
 }
@@ -435,7 +435,7 @@ folly::dynamic MapType::serialize() const {
   folly::dynamic children = folly::dynamic::array;
   children.push_back(keyType()->serialize());
   children.push_back(valueType()->serialize());
-  obj["cTypes"] = children;
+  obj["cTypes"] = std::move(children);
 
   return obj;
 }
