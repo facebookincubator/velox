@@ -175,6 +175,51 @@ TEST(SelectivityVectorTest, deselect) {
   ASSERT_NO_FATAL_FAILURE(assertState(expected, vector));
 }
 
+TEST(SelectivityVectorTest, complement) {
+  // Checks complement() within each target size against the expected rows.
+  auto testComplement = [](const SelectivityVector& rows) {
+    std::vector<bool> original(rows.size());
+    for (auto row = 0; row < rows.size(); ++row) {
+      original[row] = rows.isValid(row);
+    }
+    for (const auto size : {0, 1, 63, 64, 65, 129, 130, 131}) {
+      SCOPED_TRACE(fmt::format("size: {}", size));
+      std::vector<bool> expected(size);
+      for (auto row = 0; row < size; ++row) {
+        expected[row] = row >= rows.size() || !rows.isValid(row);
+      }
+      assertState(expected, rows.complement(size));
+      if (size == rows.size()) {
+        assertState(expected, rows.complement());
+      }
+    }
+    assertState(original, rows);
+  };
+
+  // All rows selected.
+  testComplement(SelectivityVector(130));
+
+  // No rows selected.
+  testComplement(SelectivityVector(130, false));
+
+  // Every third row selected.
+  SelectivityVector rows(130, false);
+  for (auto row = 0; row < 130; row += 3) {
+    rows.setValid(row, true);
+  }
+  rows.updateBounds();
+  testComplement(rows);
+
+  // setFromBits can shrink the logical size while retaining stale words.
+  {
+    SelectivityVector rows(130);
+    const uint64_t words[] = {0, 0};
+    rows.setFromBits(words, 65);
+    assertState(std::vector<bool>(65, true), rows.complement());
+    assertState(std::vector<bool>(131, true), rows.complement(131));
+  }
+}
+
 TEST(SelectivityVectorTest, deselectTwice) {
   const size_t vectorSize = 1;
   SelectivityVector vector(vectorSize);
