@@ -88,16 +88,22 @@ class SplitsStore {
 
   virtual ~SplitsStore() = default;
 
-  /// Add a barrier split to this store.  Some of the waiters previously waiting
-  /// on the ContinueFuture after the nextSplit() call should be notified by the
-  /// caller of this function by setting values on the `promises` output
-  /// parameter.
+  /// Compatibility entry point for markers targeting source-local driver IDs
+  /// [0, numDrivers). Delegates to the driver-ID overload.
+  virtual void requestBarrier(
+      uint32_t numDrivers,
+      std::vector<ContinuePromise>& promises);
+
+  /// Add a barrier marker for each participating driver supplied by Task.
+  /// Driver IDs are not necessarily contiguous. Finished consumers are
+  /// excluded. Waiters on nextSplit() are returned in `promises` for the caller
+  /// to notify.
   ///
   /// `promises` should be set by caller (potentially outside a lock), to notify
   /// any waiters on the splits.
   virtual void requestBarrier(
-      uint32_t numDrivers,
-      std::vector<ContinuePromise>& promises) = 0;
+      const std::vector<uint32_t>& driverIds,
+      std::vector<ContinuePromise>& promises);
 
   /// Returns the next split to process.
   ///
@@ -133,7 +139,8 @@ class SplitsStore {
   /// Marks all splits acquired by the specified consumer as fully processed.
   void finishSplits(uint32_t driverId);
 
-  /// Records one consumer closing and abandons its unfinished splits.
+  /// Records one consumer closing, abandons its unfinished splits, and removes
+  /// its pending barrier marker, if any.
   /// When all 'numConsumers' consumers have closed, abandons queued splits
   /// and returns them for disposal outside the task lock. Appends outstanding
   /// split waiters to 'promises'. Each consumer

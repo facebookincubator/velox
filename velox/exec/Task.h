@@ -846,8 +846,8 @@ class Task : public std::enable_shared_from_this<Task> {
   /// Requests barrier on task execution to drain out all the buffered data
   /// after finishing processing all the queued source splits. The returned
   /// future is realized when the drain operation completes. This API is
-  /// supported only with single threaded execution mode and only when all plan
-  /// nodes support barrier processing.
+  /// supported when all plan nodes support barrier processing. Drivers that
+  /// finish before reaching the barrier no longer participate in it.
   ContinueFuture requestBarrier();
 
   /// Returns true if this task is under barrier processing.
@@ -1315,8 +1315,7 @@ class Task : public std::enable_shared_from_this<Task> {
   // user barrier request 'promises' to resume.
   void endBarrierLocked(std::vector<ContinuePromise>& promises);
 
-  // Invoked to start a barrier processig on a driver.
-  void startDriverBarriersLocked();
+  void finishDriverBarrierLocked(std::vector<ContinuePromise>& promises);
 
   // Set to drop input for drivers that containing the operator instantiated
   // from the given plan node.
@@ -1383,8 +1382,7 @@ class Task : public std::enable_shared_from_this<Task> {
   void initSplitListeners();
 
   /// Checks if the task supports barrier processing. Barrier processing is
-  /// supported when the task is under single threaded execution mode and all
-  /// its plan nodes support barrier processing.
+  /// supported when all its plan nodes support barrier processing.
   void ensureBarrierSupport() const;
 
   // Universally unique identifier of the task. Used to identify the task when
@@ -1410,8 +1408,7 @@ class Task : public std::enable_shared_from_this<Task> {
   core::PlanFragment planFragment_;
 
   // First node in the plan fragment that does not support barrier processing.
-  // Barrier is supported when the task is under single threaded execution mode
-  // and all its plan nodes support barrier processing.
+  // Barrier is supported when all its plan nodes support barrier processing.
   const core::PlanNode* firstNodeNotSupportingBarrier_{};
 
   const std::unique_ptr<trace::TraceCtx> traceCtx_;
@@ -1524,7 +1521,6 @@ class Task : public std::enable_shared_from_this<Task> {
   // A slot holds its driver until the driver has closed. A terminated driver
   // cannot run but may still be closing, so getDriver() returns null for it.
   std::vector<std::shared_ptr<Driver>> drivers_;
-  std::unordered_map<core::PlanNodeId, uint32_t> numDriversPerLeafNode_;
 
   // Tracks the blocking state for each driver under serialized execution mode.
   class DriverBlockingState {

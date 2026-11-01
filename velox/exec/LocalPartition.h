@@ -102,11 +102,13 @@ class LocalExchangeQueue {
   enqueue(RowVectorPtr input, int64_t inputBytes, ContinueFuture* future);
 
   /// Called by a producer to indicate the producer pipeline has been drained
-  /// under barrier processing.
-  void drain();
+  /// under barrier processing. Updates the producer's queue-local round stamp,
+  /// which must start at zero and be passed to noMoreData() on completion.
+  void drain(uint64_t& lastDrainRound);
 
   /// Called by a producer to indicate that no more data will be added.
-  void noMoreData();
+  /// Each producer calls this once, with its last drain round (zero if none).
+  void noMoreData(uint64_t lastDrainRound);
 
   /// Used by a consumer to fetch some data. Returns kNotBlocked and sets data
   /// to nullptr if all data has been fetched and all producers are done
@@ -115,8 +117,8 @@ class LocalExchangeQueue {
   /// once there is data to fetch or if all producers report completion.
   ///
   /// @param pool Memory pool used to copy the data before returning.
-  /// @param drained Set to true if all the producers of this queue have been
-  /// drained under barrier processing.
+  /// @param drained Set to true when the queue is empty and every producer has
+  /// drained or finished, but at least one producer can run in later rounds.
   BlockingReason next(
       ContinueFuture* future,
       memory::MemoryPool* pool,
@@ -145,22 +147,29 @@ class LocalExchangeQueue {
 
   bool testAndClearDrainedLocked();
 
+  bool allProducersArrivedLocked() const {
+    return noMoreProducers_ &&
+        numDrainedProducers_ + numUndrainedFinishedProducers_ == numProducers_;
+  }
+
   const std::shared_ptr<LocalExchangeMemoryManager> memoryManager_;
   const std::shared_ptr<LocalExchangeVectorPool> vectorPool_;
   const int partition_;
 
   folly::Synchronized<Queue> queue_;
-  // Satisfied when data becomes available or all producers report that they
-  // finished producing, e.g. queue_ is not empty or noMoreProducers_ is true
-  // and pendingProducers_ is zero.
+  // Satisfied when data arrives, all producers have arrived, or the queue is
+  // closed. Producer counts and round are guarded by 'queue_'.
   std::vector<ContinuePromise> consumerPromises_;
-  int pendingProducers_{0};
+  // Fixed by noMoreProducers(), never decremented on producer exit.
+  int numProducers_{0};
   bool noMoreProducers_{false};
-  // The number of drained producers when the task is under barrier processing.
-  // If it equals to 'pendingProducers_', then the queue is drained. The
-  // consumer receives the drained signal on the next call to 'next', and
-  // 'drainedProducers_' is reset to zero.
-  int drainedProducers_{0};
+  int numFinishedProducers_{0};
+  // Producers that drained in this round, even if they subsequently finished.
+  int numDrainedProducers_{0};
+  // Finished producers that did not drain in this round, including those that
+  // finished in earlier rounds. Disjoint from numDrainedProducers_.
+  int numUndrainedFinishedProducers_{0};
+  uint64_t currentRound_{1};
   bool closed_{false};
 };
 
@@ -320,6 +329,8 @@ class LocalPartition : public Operator {
   std::vector<BaseVector::CopyRange> copyRanges_;
   std::vector<VectorPtr> partitionBuffers_;
   const bool partitionBufferPreserveEncoding_;
+  // Consumers may advance their queues to the next round independently.
+  std::vector<uint64_t> lastDrainRounds_;
 };
 
 } // namespace facebook::velox::exec

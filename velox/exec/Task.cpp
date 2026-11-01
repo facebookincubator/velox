@@ -240,12 +240,6 @@ class QueueSplitsStore : public SplitsStore {
  public:
   using SplitsStore::SplitsStore;
 
-  void requestBarrier(
-      uint32_t numDrivers,
-      std::vector<ContinuePromise>& promises) override {
-    addSplit(Split::createBarrier(numDrivers), promises);
-  }
-
   bool nextSplit(
       uint32_t driverId,
       int maxPreloadSplits,
@@ -644,7 +638,6 @@ void Task::init(std::optional<common::SpillDiskOptions>&& spillDiskOpts) {
     taskStats_.pipelineStats.emplace_back(
         factory->inputDriver, factory->outputDriver);
     VELOX_CHECK_EQ(factory->numDrivers, 1);
-    numDriversPerLeafNode_[factory->leafNodeId()] = factory->numDrivers;
   }
 
   initDriverLifecycleStatsLocked();
@@ -1314,7 +1307,6 @@ void Task::createDriverFactoriesLocked(uint32_t maxDrivers) {
       numDriversUngrouped_ += factory->numDrivers;
     }
     numTotalDrivers_ += factory->numTotalDrivers;
-    numDriversPerLeafNode_[factory->leafNodeId()] = factory->numDrivers;
     taskStats_.pipelineStats.emplace_back(
         factory->inputDriver, factory->outputDriver);
   }
@@ -1783,6 +1775,12 @@ std::vector<std::shared_ptr<Driver>> Task::createDriversLocked(
 void Task::removeDriver(std::shared_ptr<Task> self, Driver* driver) {
   bool foundDriver = false;
   bool allFinished = true;
+  std::vector<ContinuePromise> barrierPromises;
+  SCOPE_EXIT {
+    for (auto& promise : barrierPromises) {
+      promise.setValue();
+    }
+  };
   EventCompletionNotifier stateChangeNotifier;
   EventCompletionNotifier allDriversClosedNotifier;
   {
@@ -1795,6 +1793,10 @@ void Task::removeDriver(std::shared_ptr<Task> self, Driver* driver) {
       // Mark the closure of another driver for its split group (even in
       // ungrouped execution mode).
       const auto splitGroupId = driver->driverCtx()->splitGroupId;
+      if (self->isRunningLocked() && driver->hasBarrier()) {
+        // A driver may finish before consuming its barrier marker.
+        self->finishDriverBarrierLocked(barrierPromises);
+      }
       auto& splitGroupState = self->splitGroupStates_[splitGroupId];
       --splitGroupState.numRunningDrivers;
 
@@ -2281,28 +2283,33 @@ ContinueFuture Task::startBarrier(std::string_view comment) {
   barrierWatch_.reset();
   ++taskStats_.numBarriers;
 
-  promises.reserve(leafPlanNodeIds.size());
-  for (const auto& leafPlanNode : leafPlanNodeIds) {
-    const auto barrierSplit =
-        Split::createBarrier(numDriversPerLeafNode_.at(leafPlanNode));
-    auto& splitState = getPlanNodeSplitsStateLocked(leafPlanNode);
-    addSplitLocked(splitState, barrierSplit, promises);
-  }
-  startDriverBarriersLocked();
-  return std::move(future);
-}
-
-void Task::startDriverBarriersLocked() {
-  VELOX_CHECK(underBarrier());
+  std::unordered_map<core::PlanNodeId, std::vector<uint32_t>> driverIdsBySource;
   VELOX_CHECK_EQ(numDriversUnderBarrier_, 0);
   for (auto& driver : drivers_) {
-    // We only support barrier on sequential mode so all the drivers must
-    // present when task is still running.
-    VELOX_CHECK_NOT_NULL(driver);
+    if (driver == nullptr) {
+      continue;
+    }
     driver->startBarrier();
     ++numDriversUnderBarrier_;
+    const auto& sourceId = driver->sourceOperator()->planNodeId();
+    if (leafPlanNodeIds.contains(sourceId)) {
+      driverIdsBySource[sourceId].push_back(driver->driverCtx()->driverId);
+    }
   }
-  VELOX_CHECK_EQ(numDriversUnderBarrier_, drivers_.size());
+
+  promises.reserve(leafPlanNodeIds.size());
+  for (const auto& leafPlanNode : leafPlanNodeIds) {
+    auto& splitState = getPlanNodeSplitsStateLocked(leafPlanNode);
+    auto* store = getOrCreateSplitsStoreLocked(splitState, kUngroupedGroupId);
+    // A source can close its split store before its last driver is removed.
+    if (!store->allConsumersFinished()) {
+      store->requestBarrier(driverIdsBySource[leafPlanNode], promises);
+    }
+  }
+  if (numDriversUnderBarrier_ == 0) {
+    endBarrierLocked(promises);
+  }
+  return std::move(future);
 }
 
 void Task::finishDriverBarrier() {
@@ -2314,11 +2321,14 @@ void Task::finishDriverBarrier() {
   };
   {
     std::lock_guard<std::timed_mutex> l(mutex_);
-    VELOX_CHECK(underBarrier());
-    VELOX_CHECK_GT(numDriversUnderBarrier_, 0);
-    if (--numDriversUnderBarrier_ > 0) {
-      return;
-    }
+    finishDriverBarrierLocked(promises);
+  }
+}
+
+void Task::finishDriverBarrierLocked(std::vector<ContinuePromise>& promises) {
+  VELOX_CHECK(underBarrier());
+  VELOX_CHECK_GT(numDriversUnderBarrier_, 0);
+  if (--numDriversUnderBarrier_ == 0) {
     endBarrierLocked(promises);
   }
 }
@@ -2353,7 +2363,7 @@ void Task::dropInput(Operator* op) {
     }
     drivers.reserve(drivers_.size());
     for (const auto& driver : drivers_) {
-      if (driver.get() != dropDriver) {
+      if (driver != nullptr && driver.get() != dropDriver) {
         drivers.push_back(driver.get());
       }
     }
@@ -2366,7 +2376,9 @@ void Task::dropInput(const core::PlanNodeId& planNodeId) {
   std::lock_guard<std::timed_mutex> l(mutex_);
   drivers.reserve(drivers_.size());
   for (const auto& driver : drivers_) {
-    drivers.push_back(driver.get());
+    if (driver != nullptr) {
+      drivers.push_back(driver.get());
+    }
   }
   dropInputLocked(planNodeId, drivers);
 }
@@ -2376,16 +2388,13 @@ void Task::dropInputLocked(
     std::vector<Driver*>& drivers) {
   VELOX_CHECK(underBarrier());
   std::unordered_set<core::PlanNodeId> dropNodeIds{planNodeId};
-  while (!dropNodeIds.empty()) {
-    VELOX_CHECK(!drivers.empty());
+  while (!dropNodeIds.empty() && !drivers.empty()) {
     const auto dropNodeId = *dropNodeIds.begin();
-    bool foundDriver{false};
     auto it = drivers.cbegin();
     while (it != drivers.cend()) {
       Driver* driver = *it;
       VELOX_CHECK_NOT_NULL(driver);
       if (auto* dropOp = driver->findOperator(dropNodeId)) {
-        foundDriver = true;
         driver->dropInput(0);
         // Recursively drop the source operator's upstream operators.
         const auto* sourceOp = driver->sourceOperator();
@@ -2398,7 +2407,7 @@ void Task::dropInputLocked(
         ++it;
       }
     }
-    VELOX_CHECK(foundDriver);
+    // All drivers for this node may have finished before the drop request.
     dropNodeIds.erase(dropNodeId);
   }
 }
