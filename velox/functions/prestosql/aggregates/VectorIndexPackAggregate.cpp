@@ -31,10 +31,10 @@ using common::vectorindex::EmbeddingNormalizer;
 using common::vectorindex::Embeddings;
 using common::vectorindex::LocalVectorIndex;
 using common::vectorindex::LocalVectorIndexOptions;
+using common::vectorindex::VectorIndexKind;
 using common::vectorindex::VectorIndexMetric;
 using common::vectorindex::VectorIndexMetricName;
 using common::vectorindex::VectorIndexMetricValue;
-using common::vectorindex::VectorIndexType;
 
 class VectorIndexPackAggregate {
  public:
@@ -55,7 +55,7 @@ class VectorIndexPackAggregate {
   static constexpr int32_t kClusterIds = 1;
   static constexpr int32_t kCentroids = 2;
 
-  using OutputType = Varbinary;
+  using OutputType = VectorIndex;
 
   // Reads and checks the constant 'metric' argument once, before any rows
   // arrive.
@@ -213,7 +213,7 @@ class VectorIndexPackAggregate {
       out.reserve(
           centroids.size() * sizeof(float) + numClusters * sizeof(int64_t));
       LocalVectorIndex::build(
-          VectorIndexType::kFlat,
+          VectorIndexKind::kFlat,
           groupMetric(),
           LocalVectorIndexOptions{},
           Embeddings(centroids, dimension),
@@ -263,7 +263,7 @@ void registerVectorIndexPackAggregate(
     bool overwrite) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures{
       exec::AggregateFunctionSignatureBuilder()
-          .returnType("varbinary")
+          .returnType("vector_index")
           .intermediateType("row(integer,array(bigint),array(real))")
           .argumentType("bigint")
           .argumentType("array(real)")
