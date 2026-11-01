@@ -30,8 +30,8 @@ using namespace facebook::velox::exec::test;
 using common::vectorindex::Embeddings;
 using common::vectorindex::LocalVectorIndex;
 using common::vectorindex::LocalVectorIndexOptions;
+using common::vectorindex::VectorIndexKind;
 using common::vectorindex::VectorIndexMetric;
-using common::vectorindex::VectorIndexType;
 
 class VectorSearchJoinTest : public OperatorTestBase {
  protected:
@@ -40,18 +40,18 @@ class VectorSearchJoinTest : public OperatorTestBase {
   static std::string pack(const std::vector<float>& centroids) {
     std::vector<int64_t> clusterIds(centroids.size() / 2);
     std::iota(clusterIds.begin(), clusterIds.end(), 0);
-    return build(centroids, clusterIds, VectorIndexType::kFlat);
+    return build(centroids, clusterIds, VectorIndexKind::kFlat);
   }
 
   // Builds a local index over unit-length embeddings of 'dimension' values.
   static std::string build(
       const std::vector<float>& embeddings,
       const std::vector<int64_t>& ids,
-      VectorIndexType type = VectorIndexType::kIvfFlat,
+      VectorIndexKind kind = VectorIndexKind::kIvfFlat,
       int32_t dimension = 2) {
     std::string bytes;
     LocalVectorIndex::build(
-        type,
+        kind,
         VectorIndexMetric::kCosine,
         LocalVectorIndexOptions{},
         Embeddings(embeddings, dimension),
@@ -352,7 +352,7 @@ TEST_F(VectorSearchJoinTest, errors) {
       {
           makeFlatVector<int64_t>({1, 2}),
           makeFlatVector<std::string>(
-              {pack({1, 0}), build({1, 0, 0}, {0}, VectorIndexType::kFlat, 3)},
+              {pack({1, 0}), build({1, 0, 0}, {0}, VectorIndexKind::kFlat, 3)},
               VARBINARY()),
       });
   VELOX_ASSERT_THROW(
