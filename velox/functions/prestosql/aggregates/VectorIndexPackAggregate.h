@@ -24,7 +24,7 @@ namespace facebook::velox::aggregate::prestosql {
 /// Registers the vector_index_pack aggregate:
 ///
 ///   (cluster_id BIGINT, cluster_centroid ARRAY(REAL), metric VARCHAR)
-///       -> VARBINARY
+///       -> VECTOR_INDEX
 ///
 /// Packs cluster centroids into a codec: a kFlat local index over the
 /// centroids, with each cluster's id as its centroid's id (see

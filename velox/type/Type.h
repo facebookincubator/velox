@@ -1211,6 +1211,40 @@ class TimestampUtcType final : public TimestampType {
   constexpr TimestampUtcType() = default;
 };
 
+/// A local vector index (see common::vectorindex::LocalVectorIndex), stored as
+/// VARBINARY.
+class VectorIndexType final : public VarbinaryType {
+ public:
+  static std::shared_ptr<const VectorIndexType> create() = delete;
+
+  static std::shared_ptr<const VectorIndexType> get() {
+    VELOX_CONSTEXPR_SINGLETON VectorIndexType kInstance;
+    return {std::shared_ptr<const VectorIndexType>{}, &kInstance};
+  }
+
+  const char* name() const override {
+    return "VECTOR_INDEX";
+  }
+
+  bool equivalent(const Type& other) const override {
+    // Pointer comparison works since this type is a singleton.
+    return this == &other;
+  }
+
+  std::string toString() const override {
+    return name();
+  }
+
+  folly::dynamic serialize() const override;
+
+  static TypePtr deserialize(const folly::dynamic& /*obj*/) {
+    return VectorIndexType::get();
+  }
+
+ protected:
+  constexpr VectorIndexType() = default;
+};
+
 constexpr long kMillisInSecond = 1000;
 constexpr long kMillisInMinute = 60 * kMillisInSecond;
 constexpr long kMillisInHour = 60 * kMillisInMinute;
@@ -2057,6 +2091,8 @@ VELOX_SCALAR_ACCESSOR(VARCHAR);
 VELOX_SCALAR_ACCESSOR(VARBINARY);
 
 TypePtr TIMESTAMP_UTC();
+
+TypePtr VECTOR_INDEX();
 
 TypePtr UNKNOWN();
 
