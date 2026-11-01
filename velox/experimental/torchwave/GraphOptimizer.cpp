@@ -251,7 +251,7 @@ void Optimizer::visitValue(const nativert::Value* value) {
       auto inputId = producer->inputs()[i].value->id();
       if (inputId >= 0 && static_cast<size_t>(inputId) < types_.types.size() &&
           types_.types[inputId]) {
-        tensorInputs.push_back({i, types_.types[inputId]->dtype()});
+        tensorInputs.emplace_back(i, types_.types[inputId]->dtype());
       }
     }
     const nativert::TensorMeta* outMeta = nullptr;
