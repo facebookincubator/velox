@@ -32,12 +32,12 @@ using common::vectorindex::EmbeddingNormalizer;
 using common::vectorindex::Embeddings;
 using common::vectorindex::LocalVectorIndex;
 using common::vectorindex::LocalVectorIndexOptions;
+using common::vectorindex::VectorIndexKind;
+using common::vectorindex::VectorIndexKindName;
+using common::vectorindex::VectorIndexKindValue;
 using common::vectorindex::VectorIndexMetric;
 using common::vectorindex::VectorIndexMetricName;
 using common::vectorindex::VectorIndexMetricValue;
-using common::vectorindex::VectorIndexType;
-using common::vectorindex::VectorIndexTypeName;
-using common::vectorindex::VectorIndexTypeValue;
 
 // Reads an option at 'position' in an intermediate settings array. Positions
 // past the end of the array are unset.
@@ -56,7 +56,7 @@ std::optional<int32_t> readOption(
 // unset.
 struct Settings {
   // Positions in the array.
-  static constexpr int32_t kIndexType = 0;
+  static constexpr int32_t kIndexKind = 0;
   static constexpr int32_t kMetric = 1;
   static constexpr int32_t kNlist = 2;
   static constexpr int32_t kNprobe = 3;
@@ -67,7 +67,7 @@ struct Settings {
   // The size of the array before any option.
   static constexpr int32_t kMinSize = 2;
 
-  VectorIndexType indexType;
+  VectorIndexKind indexKind;
   VectorIndexMetric metric;
   LocalVectorIndexOptions options;
 
@@ -86,13 +86,13 @@ struct Settings {
         kSize,
         "Too many entries in intermediate vector index settings");
     VELOX_USER_CHECK(
-        array[kIndexType].has_value(),
+        array[kIndexKind].has_value(),
         "Intermediate vector index settings must include the index type");
     VELOX_USER_CHECK(
         array[kMetric].has_value(),
         "Intermediate vector index settings must include the metric");
     Settings settings{
-        .indexType = VectorIndexTypeValue::fromValue(array[kIndexType].value()),
+        .indexKind = VectorIndexKindValue::fromValue(array[kIndexKind].value()),
         .metric = VectorIndexMetricValue::fromValue(array[kMetric].value()),
         .options =
             {
@@ -103,12 +103,12 @@ struct Settings {
                 .efSearch = readOption(array, kEfSearch),
             },
     };
-    settings.options.validate(settings.indexType);
+    settings.options.validate(settings.indexKind);
     return settings;
   }
 
   void write(exec::out_type<Array<int32_t>>& array) const {
-    array.add_item() = VectorIndexTypeValue::toValue(indexType);
+    array.add_item() = VectorIndexKindValue::toValue(indexKind);
     array.add_item() = VectorIndexMetricValue::toValue(metric);
     for (const auto& option :
          {options.nlist,
@@ -165,10 +165,10 @@ class VectorIndexBuildAggregate {
 
     const auto indexTypeName =
         indexType->as<ConstantVector<StringView>>()->valueAt(0);
-    const auto parsedIndexType =
-        VectorIndexTypeName::tryToVectorIndexType(indexTypeName);
+    const auto parsedIndexKind =
+        VectorIndexKindName::tryToVectorIndexKind(indexTypeName);
     VELOX_USER_CHECK(
-        parsedIndexType.has_value(),
+        parsedIndexKind.has_value(),
         "Unsupported vector index type: {}",
         indexTypeName);
     const auto metricName =
@@ -198,10 +198,10 @@ class VectorIndexBuildAggregate {
     }
 
     constantSettings_ = Settings{
-        .indexType = *parsedIndexType,
+        .indexKind = *parsedIndexKind,
         .metric = *parsedMetric,
         .options =
-            LocalVectorIndexOptions::parse(*parsedIndexType, optionPairs),
+            LocalVectorIndexOptions::parse(*parsedIndexKind, optionPairs),
     };
   }
 
@@ -309,7 +309,7 @@ class VectorIndexBuildAggregate {
       const auto& finalSettings = groupSettings();
       out.reserve(embeddings.size() * sizeof(float));
       LocalVectorIndex::build(
-          finalSettings.indexType,
+          finalSettings.indexKind,
           finalSettings.metric,
           finalSettings.options,
           Embeddings(embeddings, dimension),

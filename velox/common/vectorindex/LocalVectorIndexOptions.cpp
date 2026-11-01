@@ -24,15 +24,15 @@ namespace facebook::velox::common::vectorindex {
 
 namespace {
 
-bool isIvf(VectorIndexType type) {
-  return type == VectorIndexType::kIvfFlat || type == VectorIndexType::kIvfSq;
+bool isIvf(VectorIndexKind kind) {
+  return kind == VectorIndexKind::kIvfFlat || kind == VectorIndexKind::kIvfSq;
 }
 
 void validateSetting(
     const std::optional<int32_t>& value,
     std::string_view key,
     bool applies,
-    VectorIndexType type) {
+    VectorIndexKind kind) {
   if (!value.has_value()) {
     return;
   }
@@ -40,12 +40,12 @@ void validateSetting(
       applies,
       "Vector index option does not apply to the index type. Option: {}. Index type: {}",
       key,
-      VectorIndexTypeName::toName(type));
+      VectorIndexKindName::toName(kind));
   VELOX_USER_CHECK_GT(
       *value, 0, "Vector index option must be positive: {}", key);
 }
 
-// Parses 'options' without checking whether they apply to an index type.
+// Parses 'options' without checking whether they apply to an index kind.
 // With 'searchOnly', accepts only search settings.
 LocalVectorIndexOptions parseOptions(
     const std::vector<std::pair<std::string_view, std::string_view>>& options,
@@ -85,10 +85,10 @@ LocalVectorIndexOptions parseOptions(
 } // namespace
 
 LocalVectorIndexOptions LocalVectorIndexOptions::parse(
-    VectorIndexType type,
+    VectorIndexKind kind,
     const std::vector<std::pair<std::string_view, std::string_view>>& options) {
   auto result = parseOptions(options, /*searchOnly=*/false);
-  result.validate(type);
+  result.validate(kind);
   return result;
 }
 
@@ -106,19 +106,19 @@ LocalVectorIndexOptions LocalVectorIndexOptions::parseSearch(
   return result;
 }
 
-void LocalVectorIndexOptions::validate(VectorIndexType type) const {
-  validateSetting(nlist, kNlist, isIvf(type), type);
-  validateSetting(nprobe, kNprobe, isIvf(type), type);
+void LocalVectorIndexOptions::validate(VectorIndexKind kind) const {
+  validateSetting(nlist, kNlist, isIvf(kind), kind);
+  validateSetting(nprobe, kNprobe, isIvf(kind), kind);
 
-  const bool hnsw = type == VectorIndexType::kHnswSq;
-  validateSetting(m, kM, hnsw, type);
+  const bool hnsw = kind == VectorIndexKind::kHnswSq;
+  validateSetting(m, kM, hnsw, kind);
   if (m.has_value()) {
     VELOX_USER_CHECK_GE(*m, kMinM, "Vector index option is too small: {}", kM);
     VELOX_USER_CHECK_LE(*m, kMaxM, "Vector index option is too large: {}", kM);
   }
 
-  validateSetting(efConstruction, kEfConstruction, hnsw, type);
-  validateSetting(efSearch, kEfSearch, hnsw, type);
+  validateSetting(efConstruction, kEfConstruction, hnsw, kind);
+  validateSetting(efSearch, kEfSearch, hnsw, kind);
 }
 
 } // namespace facebook::velox::common::vectorindex

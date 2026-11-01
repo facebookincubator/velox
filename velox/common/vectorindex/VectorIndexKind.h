@@ -22,10 +22,10 @@
 
 namespace facebook::velox::common::vectorindex {
 
-/// Type of a local index (see LocalVectorIndex): the FAISS index that holds
+/// Kind of a local index (see LocalVectorIndex): the FAISS index that holds
 /// its embeddings. The values are stored in intermediate results, so new types
 /// take new values.
-enum class VectorIndexType {
+enum class VectorIndexKind {
   /// Every embedding stored in full; a search compares the query with each
   /// one.
   kFlat = 0,
@@ -40,17 +40,17 @@ enum class VectorIndexType {
   kHnswSq = 3,
 };
 
-VELOX_DECLARE_ENUM_NAME(VectorIndexType);
+VELOX_DECLARE_ENUM_NAME(VectorIndexKind);
 
-/// The integer form of VectorIndexType, stored in intermediate results.
-class VectorIndexTypeValue {
+/// The integer form of VectorIndexKind, stored in intermediate results.
+class VectorIndexKindValue {
  public:
-  static int32_t toValue(VectorIndexType type) {
-    return static_cast<int32_t>(type);
+  static int32_t toValue(VectorIndexKind kind) {
+    return static_cast<int32_t>(kind);
   }
 
-  /// Throws a user error for a value that names no index type.
-  static VectorIndexType fromValue(int32_t value);
+  /// Throws a user error for a value that names no index kind.
+  static VectorIndexKind fromValue(int32_t value);
 };
 
 } // namespace facebook::velox::common::vectorindex
