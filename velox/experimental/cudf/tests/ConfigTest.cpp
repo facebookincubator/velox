@@ -40,7 +40,9 @@ TEST(ConfigTest, cudfConfig) {
       {CudfConfig::kCudfStreamingGroupbyCapacityMultiplier, "3.5"},
       {CudfConfig::kCudfAllowCpuFallback, "false"},
       {CudfConfig::kCudfBatchSizeMinThreshold, "123456"},
-      {CudfConfig::kCudfBatchSizeMinBytes, "2147483648"}};
+      {CudfConfig::kCudfBatchSizeMinBytes, "2147483648"},
+      // Whitespace and empty entries are tolerated; names are exact otherwise.
+      {CudfConfig::kCudfAllowedCpuOperators, " Exchange, MergeExchange,, "}};
 
   CudfConfig config;
   ASSERT_FALSE(config.streamingGroupbyEnabled);
@@ -56,6 +58,17 @@ TEST(ConfigTest, cudfConfig) {
   ASSERT_EQ(config.allowCpuFallback, false);
   ASSERT_EQ(config.batchSizeMinThreshold, 123'456);
   ASSERT_EQ(config.batchSizeMinBytes.value(), 2'147'483'648);
+  ASSERT_EQ(config.allowedCpuOperators.size(), 2);
+  ASSERT_TRUE(config.isAllowedCpuOperator("Exchange"));
+  ASSERT_TRUE(config.isAllowedCpuOperator("MergeExchange"));
+  ASSERT_FALSE(config.isAllowedCpuOperator("Unnest"));
+  ASSERT_FALSE(config.isAllowedCpuOperator("exchange"));
+}
+
+TEST(ConfigTest, allowedCpuOperatorsDefaultsEmpty) {
+  CudfConfig config;
+  ASSERT_TRUE(config.allowedCpuOperators.empty());
+  ASSERT_FALSE(config.isAllowedCpuOperator("Exchange"));
 }
 
 TEST(ConfigTest, rejectsNonPositiveBatchConcatTargets) {
