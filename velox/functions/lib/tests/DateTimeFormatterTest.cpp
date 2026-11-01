@@ -689,6 +689,10 @@ TEST_F(JodaDateTimeFormatterTest, parseDayOfMonth) {
   EXPECT_EQ(
       fromTimestampString("2000-01-31"),
       parseJoda("2 31 1", "M d M").timestamp);
+  EXPECT_EQ(
+      fromTimestampString("2000-02-29"),
+      parseJoda("2000-02-27 28 29", "y-M-d d d").timestamp);
+  EXPECT_THROW(parseJoda("2001-02-29 28 27", "y-M-d d d"), VeloxUserError);
 
   // Probe around leap year.
   EXPECT_EQ(
@@ -762,6 +766,10 @@ TEST_F(JodaDateTimeFormatterTest, parseDayOfYear) {
   EXPECT_EQ(
       fromTimestampString("2000-12-31"),
       parseJoda("2001 366 2000", "y D y").timestamp);
+  EXPECT_EQ(
+      fromTimestampString("2000-12-31"),
+      parseJoda("2000 364 365 366", "y D D D").timestamp);
+  EXPECT_THROW(parseJoda("2001 366 365 364", "y D D D"), VeloxUserError);
 
   EXPECT_THROW(parseJoda("0", "d"), VeloxUserError);
   EXPECT_THROW(parseJoda("367", "d"), VeloxUserError);
@@ -1939,6 +1947,11 @@ TEST_F(MysqlDateTimeTest, parseDayOfMonth) {
   EXPECT_THROW(parseMysql("2 31 20 4", "%m %d %d %m"), VeloxUserError);
   EXPECT_EQ(
       fromTimestampString("2000-01-31"), parseMysql("2 31 1", "%m %d %m"));
+  EXPECT_EQ(
+      fromTimestampString("2000-02-29"),
+      parseMysql("2000-02-27 28 29", "%Y-%m-%d %d %d"));
+  EXPECT_THROW(
+      parseMysql("2001-02-29 28 27", "%Y-%m-%d %d %d"), VeloxUserError);
 
   // Probe around leap year.
   EXPECT_EQ(
@@ -1991,6 +2004,10 @@ TEST_F(MysqlDateTimeTest, parseDayOfYear) {
   EXPECT_EQ(
       fromTimestampString("2000-12-31"),
       parseMysql("2001 366 2000", "%Y %j %Y"));
+  EXPECT_EQ(
+      fromTimestampString("2000-12-31"),
+      parseMysql("2000 364 365 366", "%Y %j %j %j"));
+  EXPECT_THROW(parseMysql("2001 366 365 364", "%Y %j %j %j"), VeloxUserError);
 
   EXPECT_THROW(parseMysql("0", "%j"), VeloxUserError);
   EXPECT_THROW(parseMysql("367", "%j"), VeloxUserError);
