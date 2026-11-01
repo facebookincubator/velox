@@ -61,6 +61,8 @@ struct DwrfWriterOptions : public dwio::common::FormatSpecificOptions {
     config = Config::fromMap(mergedConfigs);
   }
 
+  std::shared_ptr<dwio::common::FormatSpecificOptions> clone() const override;
+
   std::shared_ptr<const Config> config = std::make_shared<Config>();
   /// Changes the interface to stream list and encoding iter.
   std::function<std::unique_ptr<LayoutPlanner>(const dwio::common::TypeWithId&)>
