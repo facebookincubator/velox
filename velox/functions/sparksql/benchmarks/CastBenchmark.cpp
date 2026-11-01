@@ -19,7 +19,6 @@
 
 #include "velox/benchmarks/ExpressionBenchmarkBuilder.h"
 #include "velox/core/Expressions.h"
-#include "velox/core/QueryCtx.h"
 #include "velox/functions/sparksql/SparkQueryConfig.h"
 #include "velox/functions/sparksql/registration/Register.h"
 
@@ -37,35 +36,6 @@ core::TypedExprPtr makeCastExpr(
       std::make_shared<const core::FieldAccessTypedExpr>(fromType, fieldName);
   return std::make_shared<const core::CastTypedExpr>(
       toType, std::move(input), false);
-}
-
-// Add a benchmark for a cast expression. The benchmark will evaluate the cast
-// expression on the input row vector for a number of iterations.
-// This is used when 'DuckSqlExpressionsParser' cannot be used to parse the
-// expression, e.g. when the input type is TIMESTAMP_UTC.
-void addTypedCastBenchmark(
-    const std::string& name,
-    const RowVectorPtr& input,
-    core::TypedExprPtr castExpr,
-    core::ExecCtx& execCtx,
-    int32_t iterations) {
-  auto exprSet = std::make_shared<exec::ExprSet>(
-      std::vector<core::TypedExprPtr>{std::move(castExpr)}, &execCtx);
-  folly::addBenchmark(__FILE__, name, [input, exprSet, &execCtx, iterations]() {
-    exec::EvalCtx evalCtx(&execCtx, exprSet.get(), input.get());
-    SelectivityVector rows(input->size());
-    std::vector<VectorPtr> results(1);
-
-    int64_t count = 0;
-    for (auto i = 0; i < iterations; ++i) {
-      exprSet->eval(rows, evalCtx, results);
-      BaseVector::flattenVector(results[0]);
-      results[0]->prepareForReuse();
-      count += results[0]->size();
-    }
-    folly::doNotOptimizeAway(count);
-    return 1;
-  });
 }
 
 } // namespace
@@ -158,20 +128,17 @@ int main(int argc, char** argv) {
       .withIterations(iterations)
       .disableTesting();
 
-  auto queryCtx = core::QueryCtx::create();
-  core::ExecCtx execCtx(benchmarkBuilder.pool(), queryCtx.get());
-  addTypedCastBenchmark(
-      setName + "##cast_timestamp_as_timestamp_utc",
-      timestampInput,
-      makeCastExpr(TIMESTAMP(), "timestamp", TIMESTAMP_UTC()),
-      execCtx,
-      iterations);
-  addTypedCastBenchmark(
-      setName + "##cast_timestamp_utc_as_timestamp",
-      timestampInput,
-      makeCastExpr(TIMESTAMP_UTC(), "timestamp_utc", TIMESTAMP()),
-      execCtx,
-      iterations);
+  // Build the casts as typed expressions because the SQL parser does not
+  // support TIMESTAMP_UTC.
+  benchmarkBuilder.addBenchmarkSet("spark cast timestamp", timestampInput)
+      .addExpression(
+          "cast_timestamp_as_timestamp_utc",
+          makeCastExpr(TIMESTAMP(), "timestamp", TIMESTAMP_UTC()))
+      .addExpression(
+          "cast_timestamp_utc_as_timestamp",
+          makeCastExpr(TIMESTAMP_UTC(), "timestamp_utc", TIMESTAMP()))
+      .withIterations(iterations)
+      .disableTesting();
 
   benchmarkBuilder.registerBenchmarks();
   folly::runBenchmarks();

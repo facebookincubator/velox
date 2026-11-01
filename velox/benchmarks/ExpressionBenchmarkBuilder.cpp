@@ -28,6 +28,14 @@ ExpressionBenchmarkSet& ExpressionBenchmarkSet::addExpression(
   return *this;
 }
 
+ExpressionBenchmarkSet& ExpressionBenchmarkSet::addExpression(
+    const std::string& name,
+    const core::TypedExprPtr& expression) {
+  expressions_.push_back(
+      std::make_pair(name, builder_.compileExpression(expression)));
+  return *this;
+}
+
 ExpressionBenchmarkSet& ExpressionBenchmarkSet::addExpressions(
     const std::vector<std::pair<std::string, std::string>>& expressions) {
   for (auto& [name, expression] : expressions) {
