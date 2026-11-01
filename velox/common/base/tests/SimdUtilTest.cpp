@@ -20,10 +20,46 @@
 #include "velox/common/time/Timer.h"
 
 #include <gtest/gtest.h>
+#include <sys/mman.h>
+#include <unistd.h>
 
 using namespace facebook::velox;
 
 namespace {
+
+// Maps a readable and writable page followed by an inaccessible one, so a read
+// past the end of the page faults instead of quietly succeeding.
+class PageBeforeGuard {
+ public:
+  PageBeforeGuard() : pageSize_(::sysconf(_SC_PAGESIZE)) {
+    begin_ = static_cast<uint8_t*>(::mmap(
+        nullptr,
+        2 * pageSize_,
+        PROT_READ | PROT_WRITE,
+        MAP_PRIVATE | MAP_ANONYMOUS,
+        -1,
+        0));
+    VELOX_CHECK_NE(static_cast<void*>(begin_), MAP_FAILED);
+    VELOX_CHECK_EQ(::mprotect(end(), pageSize_, PROT_NONE), 0);
+  }
+
+  ~PageBeforeGuard() {
+    ::munmap(begin_, 2 * pageSize_);
+  }
+
+  PageBeforeGuard(const PageBeforeGuard&) = delete;
+  PageBeforeGuard& operator=(const PageBeforeGuard&) = delete;
+
+  // Returns the end of the accessible page, which is the start of the guard.
+  uint8_t* end() const {
+    return begin_ + pageSize_;
+  }
+
+ private:
+  const size_t pageSize_;
+  // Start of the accessible page and of the mapping.
+  uint8_t* begin_{nullptr};
+};
 
 class SimdUtilTest : public testing::Test {
  protected:
@@ -238,6 +274,36 @@ TEST_F(SimdUtilTest, gatherBits) {
   for (auto i = 0; i < bitIndices.size(); ++i) {
     EXPECT_EQ(
         bits::isBitSet(&source, bitIndices[i]), bits::isBitSet(&result, i));
+  }
+}
+
+TEST_F(SimdUtilTest, gatherBitsAtEndOfMapping) {
+  // A bitmap that wraps external memory can end flush against an unmapped
+  // page, with no padding after its last byte.
+  PageBeforeGuard page;
+  constexpr int32_t kNumBytes = 512;
+  std::vector<uint64_t> source(kNumBytes / sizeof(uint64_t));
+  randomBits(source, 500);
+  auto* bits = page.end() - kNumBytes;
+  std::memcpy(bits, source.data(), kNumBytes);
+  constexpr int32_t kNumBits = kNumBytes * 8;
+  // 32 indices take the SIMD path in full batches, 13 end with a partial one,
+  // and 4 take the scalar path. All of them reach the bitmap's last byte.
+  for (auto numIndices : {32, 13, 4}) {
+    SCOPED_TRACE(fmt::format("numIndices: {}", numIndices));
+    raw_vector<int32_t> indices;
+    for (auto i = kNumBits - numIndices; i < kNumBits; ++i) {
+      indices.push_back(i);
+    }
+    uint64_t result = 0;
+    simd::gatherBits(
+        reinterpret_cast<const uint64_t*>(bits),
+        folly::Range<int32_t*>(indices.data(), indices.size()),
+        &result);
+    for (auto i = 0; i < indices.size(); ++i) {
+      EXPECT_EQ(bits::isBitSet(bits, indices[i]), bits::isBitSet(&result, i))
+          << i;
+    }
   }
 }
 
