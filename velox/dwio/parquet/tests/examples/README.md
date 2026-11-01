@@ -750,6 +750,26 @@ annotation, definition level, repetition level, and compression when useful.
 - Purpose: Tests DELTA_BYTE_ARRAY decoding. Expected strings are
   `axis, axle, babble, babyhood`.
 
+### `decimal_delta_byte_array.parquet`
+
+- Metadata: `created_by=parquet-mr version 1.13.1`, 500 rows, 1 row group,
+  data page v2, Snappy. Columns are required `id: INT64` and optional
+  `short5: FIXED_LEN_BYTE_ARRAY(5) Decimal(10,2)`,
+  `short8: FIXED_LEN_BYTE_ARRAY(8) Decimal(18,2)`,
+  `long13: FIXED_LEN_BYTE_ARRAY(13) Decimal(30,10)` and
+  `long16: FIXED_LEN_BYTE_ARRAY(16) Decimal(38,10)`.
+- Generation: Spark 3.5.1 with `spark.sql.parquet.writeLegacyFormat=true`,
+  `parquet.writer.version=v2`, `parquet.page.row.count.limit=100` and
+  `parquet.dictionary.page.size=1024`. Each decimal column chunk starts with a
+  dictionary page and RLE_DICTIONARY pages, then falls back to
+  DELTA_BYTE_ARRAY pages once the dictionary is full.
+- Purpose: Tests reading FIXED_LEN_BYTE_ARRAY decimals across the dictionary to
+  DELTA_BYTE_ARRAY fallback that parquet-mr v2 writers produce. Values are
+  null when `id % 11 == 5`; otherwise the unscaled value is `b * m`, negated
+  when `b / 4` is odd, where `b = id % 10` for `id < 200` and `b = id`
+  otherwise. `m` is `10'000'001`, `999'999'999'999'999`, `10^26 + 7'919` and
+  `10^34 + 7'919` for the four decimal columns.
+
 ### `bss_float.parquet`
 
 - Metadata: `created_by=parquet-cpp-arrow`, 100 rows, 1 row group, required

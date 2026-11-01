@@ -584,6 +584,92 @@ TEST_F(E2EFilterTest, longDecimalDirect) {
       20);
 }
 
+TEST_F(E2EFilterTest, decimalDeltaByteArray) {
+  options_.enableDictionary = false;
+  options_.dataPageSize = 4 * 1024;
+  options_.encoding =
+      facebook::velox::parquet::arrow::Encoding::kDeltaByteArray;
+  options_.enableStoreDecimalAsInteger = false;
+  const auto expectedEncoding = options_.encoding;
+
+  // decimal(8, 5) maps to 4 bytes FLBA in Parquet.
+  // decimal(10, 5) maps to 5 bytes FLBA in Parquet.
+  // decimal(17, 5) maps to 8 bytes FLBA in Parquet.
+  for (const auto& type : {
+           "shortdecimal_val:decimal(8, 5)",
+           "shortdecimal_val:decimal(10, 5)",
+           "shortdecimal_val:decimal(17, 5)",
+       }) {
+    testWithTypes(
+        type,
+        [&]() {
+          makeIntDistribution<int64_t>(
+              "shortdecimal_val",
+              10, // min
+              100, // max
+              22, // repeats
+              19, // rareFrequency
+              -40'000'000, // rareMin
+              40'000'000, // rareMax
+              true);
+        },
+        false,
+        {"shortdecimal_val"},
+        20);
+    EXPECT_TRUE(columnChunkUsesEncoding(expectedEncoding));
+  }
+
+  testWithTypes(
+      "shortdecimal_val:decimal(17, 5)",
+      [&]() {
+        useSuppliedValues<int64_t>(
+            "shortdecimal_val",
+            0,
+            {-479, 99'999'999'999'999'999, -99'999'999'999'999'999});
+      },
+      false,
+      {"shortdecimal_val"},
+      20);
+  EXPECT_TRUE(columnChunkUsesEncoding(expectedEncoding));
+
+  // decimal(30, 10) maps to 13 bytes FLBA in Parquet.
+  // decimal(37, 15) maps to 16 bytes FLBA in Parquet.
+  for (const auto& type : {
+           "longdecimal_val:decimal(30, 10)",
+           "longdecimal_val:decimal(37, 15)",
+       }) {
+    testWithTypes(
+        type,
+        [&]() {
+          makeIntDistribution<int128_t>(
+              "longdecimal_val",
+              10, // min
+              100, // max
+              22, // repeats
+              19, // rareFrequency
+              -999, // rareMin
+              30'000, // rareMax
+              true);
+        },
+        false,
+        {"longdecimal_val"},
+        20);
+    EXPECT_TRUE(columnChunkUsesEncoding(expectedEncoding));
+  }
+
+  const auto large = HugeInt::build(1'546'093'991, 4'054'979'645);
+  testWithTypes(
+      "longdecimal_val:decimal(30, 10)",
+      [&]() {
+        useSuppliedValues<int128_t>(
+            "longdecimal_val", 0, {-479, large, -large});
+      },
+      false,
+      {"longdecimal_val"},
+      20);
+  EXPECT_TRUE(columnChunkUsesEncoding(expectedEncoding));
+}
+
 TEST_F(E2EFilterTest, stringDirect) {
   options_.enableDictionary = false;
   options_.dataPageSize = 4 * 1024;
