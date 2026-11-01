@@ -73,7 +73,7 @@ void CudfLocalMerge::addMergeSources() {
   }
 }
 
-exec::BlockingReason CudfLocalMerge::isBlocked(ContinueFuture* future) {
+exec::BlockingReason CudfLocalMerge::doIsBlocked(ContinueFuture* future) {
   addMergeSources();
 
   if (sources_.empty()) {
