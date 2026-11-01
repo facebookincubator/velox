@@ -53,6 +53,7 @@ block()
   set(LIBXML2_WITH_HTTP OFF)
   set(LIBXML2_WITH_MODULES OFF)
   set(LIBXML2_WITH_THREADS ON)
+  set(LIBXML2_WITH_SAX1 ON)
   set(LIBXML2_WITH_XPATH ON)
 
   FetchContent_Declare(
