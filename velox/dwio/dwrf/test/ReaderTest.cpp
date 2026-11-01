@@ -27,6 +27,7 @@
 #include "velox/connectors/hive/HiveConnectorUtil.h"
 #include "velox/dwio/common/ExecutorBarrier.h"
 #include "velox/dwio/common/FileSink.h"
+#include "velox/dwio/common/ScanSpec.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
 #include "velox/dwio/dwrf/common/Common.h"
 #include "velox/dwio/dwrf/common/DwrfRuntimeStats.h"
@@ -736,8 +737,16 @@ TEST_F(TestReader, testStatsCallbackFiredWithFiltering) {
   auto reader = DwrfReader::create(
       createFileBufferedInput(getFMSmallFile(), readerOpts.memoryPool()),
       readerOpts);
+  auto scanSpec = std::make_shared<common::ScanSpec>("root");
+  scanSpec->addFieldRecursively("map2", *getFlatmapSchema()->childAt(2), 2);
+  scanSpec->childByName("map2")
+      ->childByName(common::ScanSpec::kMapKeysFieldName)
+      ->setFilter(
+          std::make_unique<common::BytesValues>(
+              std::vector<std::string>{"key-1"}, false));
+  rowReaderOpts.setScanSpec(scanSpec);
   auto rowReader = reader->createRowReader(rowReaderOpts);
-  VectorPtr batch;
+  VectorPtr batch = BaseVector::create(getFlatmapSchema(), 0, pool());
 
   do {
     bool result = rowReader->next(1000, batch);
@@ -746,7 +755,7 @@ TEST_F(TestReader, testStatsCallbackFiredWithFiltering) {
     }
   } while (true);
 
-  // Features were projected, so we expect selected keys > total keys
+  // Features were projected, so we expect selected keys < total keys
   EXPECT_EQ(totalKeyStreamsAggregate, 16);
   EXPECT_EQ(selectedKeyStreamsAggregate, 4);
 }
@@ -776,10 +785,11 @@ TEST_F(TestReader, testBlockedIoCallbackFiredBlocking) {
   auto reader = DwrfReader::create(
       createFileBufferedInput(getFMLargeFile(), readerOpts.memoryPool()),
       readerOpts);
+  rowReaderOpts.setScanSpec(ScanSpec::allFieldsRoot(*getFlatmapSchema()));
   auto rowReader = reader->createRowReader(rowReaderOpts);
   // We didn't preload first stripe, so we expect metric to not be populated yet
   EXPECT_EQ(metricToIncrement, std::nullopt);
-  VectorPtr batch;
+  VectorPtr batch = BaseVector::create(getFlatmapSchema(), 0, pool());
 
   auto lastMetric = metricToIncrement;
   do {
@@ -1015,8 +1025,11 @@ TEST_F(TestReader, testStatsCallbackFiredWithoutFiltering) {
   auto reader = DwrfReader::create(
       createFileBufferedInput(getFMSmallFile(), readerOpts.memoryPool()),
       readerOpts);
+  auto scanSpec = std::make_shared<common::ScanSpec>("root");
+  scanSpec->addFieldRecursively("map2", *getFlatmapSchema()->childAt(2), 2);
+  rowReaderOpts.setScanSpec(scanSpec);
   auto rowReader = reader->createRowReader(rowReaderOpts);
-  VectorPtr batch;
+  VectorPtr batch = BaseVector::create(getFlatmapSchema(), 0, pool());
 
   do {
     bool result = rowReader->next(1000, batch);
