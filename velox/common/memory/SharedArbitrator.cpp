@@ -179,6 +179,14 @@ double SharedArbitrator::ExtraConfig::memoryReclaimThreadsHwMultiplier(
       kDefaultMemoryReclaimThreadsHwMultiplier);
 }
 
+bool SharedArbitrator::ExtraConfig::globalArbitrationBoundedVictimReclaim(
+    const std::unordered_map<std::string, std::string>& configs) {
+  return getConfig<bool>(
+      configs,
+      kGlobalArbitrationBoundedVictimReclaim,
+      kDefaultGlobalArbitrationBoundedVictimReclaim);
+}
+
 uint32_t SharedArbitrator::ExtraConfig::globalArbitrationMemoryReclaimPct(
     const std::unordered_map<std::string, std::string>& configs) {
   return getConfig<uint32_t>(
@@ -227,6 +235,9 @@ SharedArbitrator::SharedArbitrator(const Config& config)
           ExtraConfig::globalArbitrationEnabled(config.extraConfigs)),
       globalArbitrationMemoryReclaimPct_(
           ExtraConfig::globalArbitrationMemoryReclaimPct(config.extraConfigs)),
+      globalArbitrationBoundedVictimReclaim_(
+          ExtraConfig::globalArbitrationBoundedVictimReclaim(
+              config.extraConfigs)),
       globalArbitrationAbortTimeRatio_(
           ExtraConfig::globalArbitrationAbortTimeRatio(config.extraConfigs)),
       globalArbitrationWithoutSpill_(
@@ -1266,7 +1277,11 @@ uint64_t SharedArbitrator::reclaimUsedMemoryBySpill(
   const uint64_t prevReclaimedBytes = reclaimedUsedBytes_;
 
   auto candidates = getCandidates();
-  std::vector<ArbitrationCandidate> victims;
+  struct SpillVictim {
+    ArbitrationCandidate candidate;
+    uint64_t targetBytes;
+  };
+  std::vector<SpillVictim> victims;
   victims.reserve(candidates.size());
   auto candidateGroups = sortAndGroupSpillCandidates(std::move(candidates));
 
@@ -1275,6 +1290,10 @@ uint64_t SharedArbitrator::reclaimUsedMemoryBySpill(
     for (auto& candidate : candidateGroup) {
       if (candidate.reclaimableUsedCapacity <
           participantConfig_.minReclaimBytes) {
+        continue;
+      }
+      if (globalArbitrationBoundedVictimReclaim_ &&
+          candidate.reclaimableUsedCapacity == 0) {
         continue;
       }
       if (failedParticipants.count(candidate.participant->id()) != 0) {
@@ -1288,9 +1307,24 @@ uint64_t SharedArbitrator::reclaimUsedMemoryBySpill(
         }
         continue;
       }
-      bytesToReclaim += candidate.reclaimableUsedCapacity;
+      const auto victimTarget = globalArbitrationBoundedVictimReclaim_
+          ? std::min<uint64_t>(
+                candidate.reclaimableUsedCapacity, targetBytes - bytesToReclaim)
+          : candidate.reclaimableUsedCapacity;
+      if (globalArbitrationBoundedVictimReclaim_ &&
+          victimTarget < candidate.reclaimableUsedCapacity) {
+        allParticipantsReclaimed = false;
+      }
+      bytesToReclaim += victimTarget;
       reclaimedParticipants.insert(candidate.participant->id());
-      victims.push_back(std::move(candidate));
+      if (globalArbitrationBoundedVictimReclaim_) {
+        VELOX_MEM_LOG(INFO)
+            << "Bounded global spill victim " << candidate.participant->name()
+            << " global_target_bytes=" << targetBytes
+            << " reclaimable_bytes=" << candidate.reclaimableUsedCapacity
+            << " assigned_bytes=" << victimTarget;
+      }
+      victims.push_back({std::move(candidate), victimTarget});
     }
   }
   if (victims.empty()) {
@@ -1314,10 +1348,10 @@ uint64_t SharedArbitrator::reclaimUsedMemoryBySpill(
   for (auto& victim : victims) {
     reclaimTasks.push_back(
         memory::createAsyncMemoryReclaimTask<ReclaimResult>([this, victim]() {
-          const auto participant = victim.participant;
+          const auto participant = victim.candidate.participant;
           const uint64_t reclaimedBytes = reclaim(
               participant,
-              victim.reclaimableUsedCapacity,
+              victim.targetBytes,
               maxArbitrationTimeNs_,
               /*localArbitration=*/false);
           return std::make_unique<ReclaimResult>(
