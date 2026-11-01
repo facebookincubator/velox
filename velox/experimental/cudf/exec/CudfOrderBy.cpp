@@ -47,6 +47,23 @@ CudfOrderBy::CudfOrderBy(
 CudfOrderBy::CudfOrderBy(
     int32_t operatorId,
     exec::DriverCtx* driverCtx,
+    const std::shared_ptr<const CudfOrderByNode>& orderByNode)
+    : CudfOperatorBase(
+          operatorId,
+          driverCtx,
+          orderByNode->outputType(),
+          orderByNode->id(),
+          "CudfOrderBy",
+          nvtx3::rgb{64, 224, 208}, // Turquoise
+          NvtxMethodFlag::kAll,
+          std::nullopt,
+          orderByNode) {
+  initializeSortKeys(orderByNode->sortingKeys(), orderByNode->sortingOrders());
+}
+
+CudfOrderBy::CudfOrderBy(
+    int32_t operatorId,
+    exec::DriverCtx* driverCtx,
     const std::shared_ptr<const core::MergeExchangeNode>& mergeExchangeNode)
     : CudfOperatorBase(
           operatorId,
