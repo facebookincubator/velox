@@ -17,6 +17,7 @@
 #include "velox/serializers/RowSerializer.h"
 
 #include <folly/lang/Bits.h>
+#include <cstring>
 #include "velox/common/base/Exceptions.h"
 #include "velox/row/CompactRow.h"
 
@@ -42,8 +43,8 @@ class CompactRowVectorSerializer : public RowSerializer<row::CompactRow> {
     for (const auto& range : ranges) {
       if (range.size == 1) {
         // Fast path for single-row serialization.
-        *reinterpret_cast<TRowSize*>(rawBuffer + offset) =
-            folly::Endian::big(rowSize[index]);
+        const TRowSize bigEndianSize = folly::Endian::big(rowSize[index]);
+        std::memcpy(rawBuffer + offset, &bigEndianSize, sizeof(bigEndianSize));
         auto size =
             row.serialize(range.begin, rawBuffer + offset + sizeof(TRowSize));
         offset += size + sizeof(TRowSize);
@@ -51,8 +52,10 @@ class CompactRowVectorSerializer : public RowSerializer<row::CompactRow> {
       } else {
         raw_vector<size_t> offsets(range.size, pool_);
         for (auto i = 0; i < range.size; ++i, ++index) {
-          // Write raw size. Needs to be in big endian order.
-          *(TRowSize*)(rawBuffer + offset) = folly::Endian::big(rowSize[index]);
+          // Packed row headers need not be aligned to TRowSize.
+          const TRowSize bigEndianSize = folly::Endian::big(rowSize[index]);
+          std::memcpy(
+              rawBuffer + offset, &bigEndianSize, sizeof(bigEndianSize));
           offsets[i] = offset + sizeof(TRowSize);
           offset += rowSize[index] + sizeof(TRowSize);
         }
