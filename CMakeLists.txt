@@ -466,8 +466,7 @@ endif()
 # Required so velox code can be used in a dynamic library
 set(CMAKE_POSITION_INDEPENDENT_CODE TRUE)
 
-# For C++20 support we need GNU GCC11 (or later versions) or Clang/AppleClang 15
-# (or later versions) to get support for the used features.
+# C++20 requires GCC 11+, Clang/AppleClang 15+, or MSVC 19.30+.
 if(
   NOT
     (
@@ -483,6 +482,11 @@ if(
           )
           AND CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 15
         )
+      OR
+        (
+          CMAKE_CXX_COMPILER_ID STREQUAL "MSVC"
+          AND CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 19.30
+        )
     )
 )
   message(
@@ -491,24 +495,29 @@ if(
   )
 endif()
 
-execute_process(
-  COMMAND
-    bash -c
-    "( source ${CMAKE_CURRENT_SOURCE_DIR}/scripts/setup-helper-functions.sh && echo -n $(get_cxx_flags $ENV{CPU_TARGET}))"
-  OUTPUT_VARIABLE SCRIPT_CXX_FLAGS
-  RESULT_VARIABLE COMMAND_STATUS
-)
+set(VELOX_WARNINGS_AS_ERRORS_FLAG -Werror)
+if(WIN32)
+  include(VeloxWindows)
+else()
+  execute_process(
+    COMMAND
+      bash -c
+      "( source ${CMAKE_CURRENT_SOURCE_DIR}/scripts/setup-helper-functions.sh && echo -n $(get_cxx_flags $ENV{CPU_TARGET}))"
+    OUTPUT_VARIABLE SCRIPT_CXX_FLAGS
+    RESULT_VARIABLE COMMAND_STATUS
+  )
 
-if(COMMAND_STATUS EQUAL "1")
-  message(FATAL_ERROR "Unable to determine compiler flags!")
+  if(COMMAND_STATUS EQUAL "1")
+    message(FATAL_ERROR "Unable to determine compiler flags!")
+  endif()
+  message("Setting CMAKE_CXX_FLAGS=${SCRIPT_CXX_FLAGS}")
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${SCRIPT_CXX_FLAGS}")
 endif()
-message("Setting CMAKE_CXX_FLAGS=${SCRIPT_CXX_FLAGS}")
 
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${SCRIPT_CXX_FLAGS}")
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DUSE_VELOX_COMMON_BASE")
 
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DHAS_UNCAUGHT_EXCEPTIONS")
-if(${CMAKE_SYSTEM_PROCESSOR} MATCHES "aarch64")
+if(${CMAKE_SYSTEM_PROCESSOR} MATCHES "aarch64" AND NOT MSVC)
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsigned-char")
 endif()
 
@@ -526,17 +535,20 @@ if("${MAX_LINK_JOBS}")
 endif()
 
 if(ENABLE_ALL_WARNINGS)
-  if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-    set(
-      KNOWN_COMPILER_SPECIFIC_WARNINGS
-      "-Wno-range-loop-analysis \
+  if(MSVC)
+    string(APPEND CMAKE_CXX_FLAGS " ${VELOX_WINDOWS_ALL_WARNINGS_FLAG}")
+  else()
+    if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+      set(
+        KNOWN_COMPILER_SPECIFIC_WARNINGS
+        "-Wno-range-loop-analysis \
          -Wno-mismatched-tags \
          -Wno-nullability-completeness"
-    )
-  elseif(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-    set(
-      KNOWN_COMPILER_SPECIFIC_WARNINGS
-      "-Wno-implicit-fallthrough \
+      )
+    elseif(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+      set(
+        KNOWN_COMPILER_SPECIFIC_WARNINGS
+        "-Wno-implicit-fallthrough \
          -Wno-class-memaccess \
          -Wno-comment \
          -Wno-int-in-bool-context \
@@ -546,29 +558,30 @@ if(ENABLE_ALL_WARNINGS)
          -Wno-unused-result \
          -Wno-format-overflow \
          -Wno-strict-aliasing"
-    )
-    # Avoid compiler bug for GCC 12.2.1
-    # https://gcc.gnu.org/bugzilla/show_bug.cgi?id=105329
-    if(CMAKE_CXX_COMPILER_VERSION VERSION_EQUAL "12.2.1")
-      string(APPEND KNOWN_COMPILER_SPECIFIC_WARNINGS " -Wno-restrict")
+      )
+      # Avoid compiler bug for GCC 12.2.1
+      # https://gcc.gnu.org/bugzilla/show_bug.cgi?id=105329
+      if(CMAKE_CXX_COMPILER_VERSION VERSION_EQUAL "12.2.1")
+        string(APPEND KNOWN_COMPILER_SPECIFIC_WARNINGS " -Wno-restrict")
+      endif()
+      if(CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL "14.0.0")
+        string(APPEND KNOWN_COMPILER_SPECIFIC_WARNINGS " -Wno-error=template-id-cdtor")
+        string(APPEND KNOWN_COMPILER_SPECIFIC_WARNINGS " -Wno-overloaded-virtual")
+        string(APPEND KNOWN_COMPILER_SPECIFIC_WARNINGS " -Wno-error=tautological-compare")
+      endif()
     endif()
-    if(CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL "14.0.0")
-      string(APPEND KNOWN_COMPILER_SPECIFIC_WARNINGS " -Wno-error=template-id-cdtor")
-      string(APPEND KNOWN_COMPILER_SPECIFIC_WARNINGS " -Wno-overloaded-virtual")
-      string(APPEND KNOWN_COMPILER_SPECIFIC_WARNINGS " -Wno-error=tautological-compare")
-    endif()
-  endif()
 
-  set(
-    KNOWN_WARNINGS
-    "-Wno-unused \
+    set(
+      KNOWN_WARNINGS
+      "-Wno-unused \
        -Wno-unused-parameter \
        -Wno-sign-compare \
        -Wno-ignored-qualifiers \
        ${KNOWN_COMPILER_SPECIFIC_WARNINGS}"
-  )
+    )
 
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra ${KNOWN_WARNINGS}")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra ${KNOWN_WARNINGS}")
+  endif()
 endif()
 
 if(VELOX_ENABLE_WAVE OR VELOX_ENABLE_CUDF)
@@ -893,8 +906,10 @@ endif()
 velox_set_source(xsimd)
 velox_resolve_dependency(xsimd 10.0.0)
 
-velox_set_source(stemmer)
-velox_resolve_dependency(stemmer)
+if(VELOX_ENABLE_PRESTO_FUNCTIONS)
+  velox_set_source(stemmer)
+  velox_resolve_dependency(stemmer)
+endif()
 
 if(VELOX_BUILD_TESTING)
   set(BUILD_TESTING ON)
@@ -906,7 +921,7 @@ include_directories(.)
 # Adding this down here prevents warnings in dependencies from stopping the
 # build
 if("${TREAT_WARNINGS_AS_ERRORS}")
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror")
+  string(APPEND CMAKE_CXX_FLAGS " ${VELOX_WARNINGS_AS_ERRORS_FLAG}")
 endif()
 
 # Enable the ASAN and UBSAN sanitzers for Clang 20 and above.
@@ -984,4 +999,5 @@ if(VELOX_ENABLE_NIMBLE)
   endif()
 endif()
 
+add_compile_options(${VELOX_WINDOWS_COMPILE_OPTIONS})
 add_subdirectory(velox)
