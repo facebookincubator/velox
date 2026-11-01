@@ -40,8 +40,9 @@ class ArrowStream : public SourceOperator {
   void close() override;
 
  private:
-  /// Return last error in Arrow array stream.
-  const char* getError() const;
+  /// Returns the last error message of the Arrow array stream. Falls back to
+  /// describing 'errorCode', an errno value, when the stream has no message.
+  std::string getError(int errorCode) const;
 
   bool finished_ = false;
   std::shared_ptr<ArrowArrayStream> arrowStream_;
