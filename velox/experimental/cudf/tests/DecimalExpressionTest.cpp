@@ -1709,10 +1709,10 @@ TEST_F(CudfDecimalTest, decimalCoalesceColumnWithLiteral) {
   facebook::velox::test::assertEqualVectors(cpuResult, gpuResult);
 }
 
-// Disabled: a non-null literal in the first position makes the entire coalesce
-// trivially constant. For simple types Velox folds this away before it reaches
-// cuDF, but the CAST wrapper needed for decimal literals prevents that folding,
-// causing the cuDF compiler to reject the expression.
+// Disabled: expression optimization folds this coalesce into a bare DECIMAL
+// constant. No cuDF evaluator accepts a DECIMAL constant as a whole
+// projection, so the project stays on the CPU.
+// TODO: Re-enable once a projection that is just a constant can run on the GPU.
 TEST_F(CudfDecimalTest, DISABLED_decimalCoalesceLiteralFirst) {
   auto input = makeRowVector(
       {"a"}, {makeFlatVector<int64_t>({100, 200, 300}, DECIMAL(10, 2))});
