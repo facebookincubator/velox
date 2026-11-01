@@ -59,6 +59,10 @@ class PartitionValue {
   /// - VARCHAR, VARBINARY: taken verbatim.
   /// - TIMESTAMP: parsed as TimestampParseMode::kPrestoCast, then shifted per
   ///   'timestampMode'.
+  /// - TIMESTAMP WITH TIME ZONE: parsed as CAST(varchar AS TIMESTAMP WITH TIME
+  ///   ZONE) with a zone-less value taken as UTC (no session to interpret it
+  ///   in); returned as its packed int64 layout. A non-timestamp string is
+  ///   accepted as an already packed integer.
   /// - DATE: parsed per 'dateMode'.
   ///
   /// Fails for a non-scalar type, and for a value that does not parse as
