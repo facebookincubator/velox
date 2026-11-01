@@ -18,7 +18,11 @@
 #include <limits>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <utility>
+
+#include <folly/Conv.h>
+
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/config/Config.h"
 #include "velox/common/config/ConfigProperty.h"
@@ -154,6 +158,15 @@ class FileConfig {
     return session->get<bool>(
         kIgnoreMissingFilesSession,
         kIgnoreMissingFilesSessionProperty::defaultValue);
+  }
+
+  bool ignoreMissingFiles(
+      const config::ConfigBase* session,
+      const std::unordered_map<std::string, std::string>& tableParameters)
+      const {
+    const auto it = tableParameters.find(kIgnoreMissingFilesSession);
+    return it == tableParameters.end() ? ignoreMissingFiles(session)
+                                       : folly::to<bool>(it->second);
   }
 
   VELOX_HIVE_CONFIG(

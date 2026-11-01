@@ -248,7 +248,8 @@ void FileSplitReader::createReader(
   } catch (const VeloxRuntimeError& e) {
     if (e.errorCode() == error_code::kFileNotFound &&
         fileConfig_->ignoreMissingFiles(
-            connectorQueryCtx_->sessionProperties())) {
+            connectorQueryCtx_->sessionProperties(),
+            tableHandle_->tableParameters())) {
       emptySplit_ = true;
       return;
     }

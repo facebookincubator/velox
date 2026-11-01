@@ -2193,10 +2193,11 @@ TEST_F(TableScanTest, splitOffsetAndLength) {
 }
 
 TEST_F(TableScanTest, fileNotFound) {
-  auto assertMissingFile = [&](bool ignoreMissingFiles) {
+  auto assertMissingFile = [&](bool ignoreMissingFiles,
+                               core::PlanNodePtr plan = nullptr) {
     auto split =
         exec::test::HiveConnectorSplitBuilder("/path/to/nowhere.orc").build();
-    AssertQueryBuilder(tableScanNode())
+    AssertQueryBuilder(plan ? plan : tableScanNode())
         .connectorSessionProperty(
             kHiveConnectorId,
             connector::hive::HiveConfig::kIgnoreMissingFilesSession,
@@ -2207,6 +2208,25 @@ TEST_F(TableScanTest, fileNotFound) {
   assertMissingFile(true);
   VELOX_ASSERT_RUNTIME_THROW_CODE(
       assertMissingFile(false),
+      error_code::kFileNotFound,
+      "No such file or directory");
+
+  const auto tableScanWithIgnoreMissingFiles = [&](bool value) {
+    const std::unordered_map<std::string, std::string> tableParameters = {
+        {connector::hive::HiveConfig::kIgnoreMissingFilesSession,
+         std::to_string(value)}};
+    const auto tableHandle = makeTableHandle(
+        {}, nullptr, "hive_table", nullptr, {}, tableParameters);
+    return PlanBuilder()
+        .startTableScan()
+        .outputType(rowType_)
+        .tableHandle(tableHandle)
+        .endTableScan()
+        .planNode();
+  };
+  assertMissingFile(false, tableScanWithIgnoreMissingFiles(true));
+  VELOX_ASSERT_RUNTIME_THROW_CODE(
+      assertMissingFile(true, tableScanWithIgnoreMissingFiles(false)),
       error_code::kFileNotFound,
       "No such file or directory");
 }
