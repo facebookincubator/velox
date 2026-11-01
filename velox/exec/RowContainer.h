@@ -1604,6 +1604,9 @@ class RowContainer {
   // to 'typeKinds_' and 'rowColumns_'.
   std::vector<TypePtr> types_;
   std::vector<TypeKind> typeKinds_;
+  // Per column, the size of a cell for fixed width types and -1 otherwise.
+  // Used to update the column stats without looking at the type of each cell.
+  std::vector<int32_t> columnFixedSizes_;
   int32_t nextOffset_ = 0;
   // Indicates if this row container has rows with duplicate keys. This only
   // applies if 'nextOffset_' is set.
