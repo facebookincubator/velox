@@ -837,6 +837,10 @@ bool canReduceBeEvaluatedByCudf(
       return false;
     }
 
+    if (!sortingKeysSupportedByCudf(aggregate)) {
+      return false;
+    }
+
     if (!maskSupportedByCudf(aggregate, step)) {
       return false;
     }
