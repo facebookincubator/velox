@@ -16,6 +16,8 @@
 
 #include <folly/container/F14Set.h>
 
+#include <string_view>
+
 #include "velox/expression/EvalCtx.h"
 #include "velox/expression/Expr.h"
 #include "velox/functions/lib/ArraySort.h"
@@ -466,11 +468,23 @@ std::shared_ptr<exec::VectorFunction> makeArraySortAscNoThrowOnNestedNull(
       false /*throwOnNestedNull=*/);
 }
 
-core::CallTypedExprPtr asArraySortCall(
+// Returns true if 'name' equals 'prefix' + 'suffix'. Equivalent to
+// 'name == prefix + suffix' without allocating a temporary string. This runs
+// on every call expression during expression compilation.
+bool equalsConcat(
+    std::string_view name,
+    std::string_view prefix,
+    std::string_view suffix) {
+  return name.size() == prefix.size() + suffix.size() &&
+      name.starts_with(prefix) && name.ends_with(suffix);
+}
+
+const core::CallTypedExpr* asArraySortCall(
     const std::string& prefix,
     const core::TypedExprPtr& expr) {
-  if (auto call = std::dynamic_pointer_cast<const core::CallTypedExpr>(expr)) {
-    if (call->name() == prefix + "array_sort") {
+  if (expr->isCallKind()) {
+    auto* call = expr->asUnchecked<core::CallTypedExpr>();
+    if (equalsConcat(call->name(), prefix, "array_sort")) {
       return call;
     }
   }
