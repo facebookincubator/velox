@@ -524,7 +524,7 @@ void appendConstantArrayElement(
         // A typed NULL (e.g. CAST(NULL AS BIGINT)) has no value to cast;
         // represent it as an UNKNOWN null and let the non-null elements
         // determine the array element type.
-        values.emplace_back(Variant(TypeKind::UNKNOWN));
+        values.emplace_back(TypeKind::UNKNOWN);
       } else {
         auto value = constExpr->value.DefaultCastAs(
             castExpr->cast_type, !castExpr->try_cast);
