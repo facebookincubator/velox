@@ -202,6 +202,23 @@ tryGetUtf8CharLength(const char* input, int64_t size, int32_t& codePoint) {
   return -1;
 }
 
+int32_t decodeUtf8CodePointOrReplacement(
+    const char* input,
+    int64_t size,
+    int32_t& codePoint) {
+  const auto charLength = tryGetUtf8CharLength(input, size, codePoint);
+  if (charLength > 0) {
+    return charLength;
+  }
+
+  codePoint = 0xFFFD;
+  const auto invalidLength = -charLength;
+  if (invalidLength >= 2 && isMultipleInvalidSequences(input, 0)) {
+    return 1;
+  }
+  return invalidLength;
+}
+
 size_t replaceInvalidUTF8Characters(
     char* outputBuffer,
     const char* input,
