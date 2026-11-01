@@ -21,10 +21,14 @@
 #include <ucxx/utils/ucx.h>
 #include <velox/exec/Task.h>
 #include <velox/experimental/ucx-exchange/UcxOutputQueueManager.h>
+#include <atomic>
 #include <chrono>
 #include <future>
 #include <memory>
+#include <mutex>
+#include <string>
 #include <tuple>
+#include <vector>
 #include "velox/common/EnumDeclare.h"
 #include "velox/common/EnumDefine.h"
 #include "velox/experimental/ucx-exchange/CommElement.h"
@@ -64,7 +68,7 @@ class UcxExchangeServer
 
   void process() override;
 
-  void close() override;
+  void close() noexcept override;
 
   std::string toString();
 
@@ -91,11 +95,31 @@ class UcxExchangeServer
   void sendData();
 
   /// @brief Completion handler after data has been sent.
-  void sendComplete(ucs_status_t status, std::shared_ptr<void> arg);
+  void sendComplete(ucs_status_t status);
+
+  /// Handles metadata completion on the serialized state-machine thread.
+  void metadataSendComplete(ucs_status_t status, uint64_t metadataTag);
+
+  /// Contains failures while handing a C/UCXX callback to process().
+  void handleCallbackDispatchFailure(const char* callback) noexcept;
+
+  /// Contains all other state-machine failures so Communicator::run() cannot
+  /// be unwound by an exchange-specific allocation or lifecycle error.
+  void handleProcessFailure(const char* error) noexcept;
 
   /// @brief Completion handler for intra-node transfer after source retrieves
   /// data.
   void onIntraNodeRetrieveComplete();
+
+  /// Releases a committed intra-node payload exactly once.
+  void releaseIntraNodeInFlightBytes();
+
+  /// Releases a dequeued payload that was never committed to a transport.
+  void releasePendingData();
+
+  /// Releases a completed phase request immediately, or hands a genuinely
+  /// in-flight request to Communicator until UCXX marks it complete.
+  void retireRequest(std::shared_ptr<ucxx::Request>& request);
 
   /// @brief Sets the new state of this exchange server using
   /// sequential consistency. Logs transitions at VLOG(2).
@@ -116,7 +140,7 @@ class UcxExchangeServer
   /// via IntraNodeTransferRegistry instead of UCXX transfer.
   bool isIntraNodeTransfer_{false};
 
-  std::atomic<ServerState> state_;
+  std::atomic<ServerState> state_{ServerState::Created};
   std::shared_ptr<cudf::packed_columns> dataPtr_{nullptr};
   /// Logical rows in 'dataPtr_', taken from the output queue rather than from
   /// the packed table, which reports zero rows when it has no columns.
@@ -126,7 +150,17 @@ class UcxExchangeServer
   /// its fast-completion path, firing the sendComplete() callback on the same
   /// thread while the lock is still held.
   std::recursive_mutex dataMutex_;
+  /// Excludes process() from close() and serializes callback event dispatch.
+  /// Recursive because process() reaches close() in the Done state.
+  std::recursive_mutex processMutex_;
+  /// True while the communicator thread is inside process(). Inline UCXX
+  /// callbacks defer emergency close until the active send call has returned
+  /// and published its Request member.
+  std::atomic<bool> processing_{false};
   std::atomic<bool> closed_{false};
+  /// Protected by processMutex_. A separate guard makes cleanup retryable
+  /// after closed_ has already stopped new work.
+  bool cleanupComplete_{false};
 
   /// Future for intra-node transfer - signaled when source retrieves data.
   std::future<void> intraNodeRetrieveFuture_;
@@ -144,16 +178,14 @@ class UcxExchangeServer
   std::shared_ptr<ucxx::Request> metaRequest_{nullptr};
   std::shared_ptr<ucxx::Request> dataRequest_{nullptr};
 
-  // Completed UCXX requests are kept alive here to prevent use-after-free.
-  // UCP's ucp_wireup_replay_pending_requests can fire callbacks on already-
-  // completed requests; if the ucxx::Request has been freed, the callback
-  // lambda is in freed memory and crashes. Retaining them here ensures the
-  // Request (and its callback lambda) stays valid for the lifetime of this
-  // server.
-  std::vector<std::shared_ptr<ucxx::Request>> completedRequests_;
-
   std::chrono::time_point<std::chrono::high_resolution_clock> sendStart_;
-  std::size_t bytes_;
+  std::size_t bytes_{0};
+
+  // Keeps the output queue alive across manager removal and async callbacks so
+  // committed byte accounting can always be released exactly once.
+  std::shared_ptr<UcxOutputQueue> outputQueue_;
+  std::atomic<bool> intraNodeBytesInFlight_{false};
+  bool outputResultsDeleted_{false};
 
   std::shared_ptr<UcxOutputQueueManager> queueMgr_;
 };

@@ -247,10 +247,12 @@ TEST_F(UcxTransportRegistrationTest, ucxEntryBuildsUcxExchange) {
 
   auto clientContext = makeClientContext(task);
   clientContext.numberOfConsumers = 2;
+  clientContext.maxExchangeBufferSize = 1 << 20;
   auto client = entry->makeClient(clientContext);
   auto ucxClient =
       std::dynamic_pointer_cast<ucx_exchange::UcxExchangeClient>(client);
   ASSERT_NE(ucxClient, nullptr);
+  EXPECT_EQ(ucxClient->queue()->receiveHighWaterBytes(), 1 << 20);
 
   auto exchangeOperator =
       entry->makeExchangeOperator(0, driverCtx.get(), exchangeNode, client);

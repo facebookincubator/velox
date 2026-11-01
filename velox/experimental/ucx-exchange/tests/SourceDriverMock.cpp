@@ -23,6 +23,26 @@ namespace facebook::velox::ucx_exchange {
 constexpr int kPipelineId = 0;
 constexpr uint32_t kPartitionId = 0;
 
+namespace {
+
+void driveUntilNeedsInput(UcxPartitionedOutput* partitionedOutput) {
+  while (!partitionedOutput->needsInput() && !partitionedOutput->isFinished()) {
+    ContinueFuture future;
+    const auto blocked = partitionedOutput->isBlocked(&future);
+    if (blocked != exec::BlockingReason::kNotBlocked) {
+      future.wait();
+      continue;
+    }
+    // needsInput() can remain false with no queue future when the operator has
+    // an internal input suffix or partition batch to drain. Real Driver calls
+    // getOutput() in this state; the mock must do the same before offering the
+    // next input.
+    partitionedOutput->getOutput();
+  }
+}
+
+} // namespace
+
 SourceDriverMock::SourceDriverMock(
     std::shared_ptr<facebook::velox::exec::Task> task,
     uint32_t numDrivers,
@@ -77,6 +97,9 @@ void SourceDriverMock::run() {
 }
 
 void SourceDriverMock::sendAllData(UcxPartitionedOutput* partitionedOutput) {
+  // Empty input allocates no device buffers, so it cannot rely on an
+  // allocation to initialize this thread's CUDA context before stream.sync().
+  CUDF_CUDA_TRY(cudaSetDevice(0));
   auto stream = cudf::get_default_stream();
   // Use tableGenerator's rowType if available, otherwise get from task
   auto rowType = tableGenerator_ ? tableGenerator_->getRowType()
@@ -86,31 +109,27 @@ void SourceDriverMock::sendAllData(UcxPartitionedOutput* partitionedOutput) {
   auto* pool = partitionedOutput->pool();
 
   for (uint32_t chunk = 0; chunk < numChunks_; ++chunk) {
-    // 1. Create CudfVector with test data using makeCudfVector helper
+    // Match Driver's input contract: an unblocked operator may still be
+    // draining internal state and therefore not need input yet.
+    driveUntilNeedsInput(partitionedOutput);
+    VELOX_CHECK(
+        partitionedOutput->needsInput(),
+        "Source operator finished before all mock inputs were consumed");
+
+    // Create CudfVector only after the operator is ready, so the mock does not
+    // retain an extra device batch while waiting for output backpressure.
     auto cudfVector = makeCudfVector(
         pool, numRowsPerChunk_, rowType, tableGenerator_, stream);
 
-    // 2. Check isBlocked() - if blocked, wait on future
-    while (true) {
-      ContinueFuture future;
-      auto blocked = partitionedOutput->isBlocked(&future);
-      if (blocked == exec::BlockingReason::kNotBlocked) {
-        break;
-      }
-      // Wait for the operator to become unblocked
-      future.wait();
-    }
-
-    // 3. Call addInput() now that we're not blocked
     partitionedOutput->addInput(cudfVector);
-
-    // 4. Call getOutput() to advance operator state
-    partitionedOutput->getOutput();
 
     VLOG(3) << "SourceDriverMock: sent chunk " << chunk << " of " << numChunks_;
   }
 
-  // Signal no more input and finalize
+  // Driver signals end-of-input only after the sink asks for another batch.
+  // This also exercises multi-chunk inputs whose previous addInput initiated
+  // more than one internal output chunk.
+  driveUntilNeedsInput(partitionedOutput);
   partitionedOutput->noMoreInput();
 
   // Continue calling getOutput() until finished
