@@ -487,13 +487,13 @@ int main(int argc, char* argv[]) {
     // firstBlockRows, both of which parseHeader requires to be greater than
     // zero.
     if (match("BlockBitPacking") && rowCount != 0) {
-      WRITE_NUMERIC_FILES(BlockBitPackingEncoding, rowCount);
+      WRITE_NUMERIC_FILES(deprecated::BlockBitPackingEncoding, rowCount);
       // 4096 rows over the 1024-row default block size, sliced from row 100, so
       // the first block holds 924 rows and the stream spans four blocks. This
       // is the only shape that exercises the firstBlockRows boundary.
-      writeFileSliced<nimble::BlockBitPackingEncoding<int32_t>>(
+      writeFileSliced<nimble::deprecated::BlockBitPackingEncoding<int32_t>>(
           rng, FLAGS_output_dir, 4096, 100, 3000);
-      writeFileSliced<nimble::BlockBitPackingEncoding<int64_t>>(
+      writeFileSliced<nimble::deprecated::BlockBitPackingEncoding<int64_t>>(
           rng, FLAGS_output_dir, 4096, 100, 3000);
     }
     if (match("SparseBool")) {

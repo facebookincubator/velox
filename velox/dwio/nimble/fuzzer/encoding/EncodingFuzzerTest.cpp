@@ -36,7 +36,7 @@
 #include <vector>
 
 #include "velox/dwio/nimble/encodings/ALPEncoding.h"
-#include "velox/dwio/nimble/encodings/BlockBitPackingEncoding.h"
+#include "velox/dwio/nimble/encodings/BlockBitPackingV2Encoding.h"
 #include "velox/dwio/nimble/encodings/ConstantEncoding.h"
 #include "velox/dwio/nimble/encodings/DeltaBlockEncoding.h"
 #include "velox/dwio/nimble/encodings/DeltaEncoding.h"
@@ -62,6 +62,7 @@
 #endif
 #include "velox/dwio/nimble/encodings/TrivialEncoding.h"
 #include "velox/dwio/nimble/encodings/VarintEncoding.h"
+#include "velox/dwio/nimble/encodings/deprecated/BlockBitPackingEncoding.h"
 #include "velox/dwio/nimble/fuzzer/encoding/EncodingFuzzer.h"
 
 DEFINE_uint32(fuzzer_iterations, 50, "Number of fuzzer iterations per test");
@@ -339,22 +340,48 @@ TYPED_TEST(MainlyConstantFuzzerTest, correctness) {
 
 // BlockBitPacking: all numeric types
 using BlockBitPackingTypes = ::testing::Types<
-    BlockBitPackingEncoding<int8_t>,
-    BlockBitPackingEncoding<uint8_t>,
-    BlockBitPackingEncoding<int16_t>,
-    BlockBitPackingEncoding<uint16_t>,
-    BlockBitPackingEncoding<int32_t>,
-    BlockBitPackingEncoding<uint32_t>,
-    BlockBitPackingEncoding<int64_t>,
-    BlockBitPackingEncoding<uint64_t>,
-    BlockBitPackingEncoding<float>,
-    BlockBitPackingEncoding<double>>;
+    deprecated::BlockBitPackingEncoding<int8_t>,
+    deprecated::BlockBitPackingEncoding<uint8_t>,
+    deprecated::BlockBitPackingEncoding<int16_t>,
+    deprecated::BlockBitPackingEncoding<uint16_t>,
+    deprecated::BlockBitPackingEncoding<int32_t>,
+    deprecated::BlockBitPackingEncoding<uint32_t>,
+    deprecated::BlockBitPackingEncoding<int64_t>,
+    deprecated::BlockBitPackingEncoding<uint64_t>,
+    deprecated::BlockBitPackingEncoding<float>,
+    deprecated::BlockBitPackingEncoding<double>>;
 
 template <typename E>
 class BlockBitPackingFuzzerTest : public ::testing::Test {};
 TYPED_TEST_SUITE(BlockBitPackingFuzzerTest, BlockBitPackingTypes);
 
 TYPED_TEST(BlockBitPackingFuzzerTest, correctness) {
+  EncodingFuzzer<TypeParam> fuzzer(
+      FLAGS_fuzzer_iterations,
+      FLAGS_fuzzer_max_rows,
+      FLAGS_fuzzer_seed,
+      FLAGS_fuzzer_compression);
+  fuzzer.run();
+}
+
+// BlockBitPackingV2: all numeric types
+using BlockBitPackingV2Types = ::testing::Types<
+    BlockBitPackingV2Encoding<int8_t>,
+    BlockBitPackingV2Encoding<uint8_t>,
+    BlockBitPackingV2Encoding<int16_t>,
+    BlockBitPackingV2Encoding<uint16_t>,
+    BlockBitPackingV2Encoding<int32_t>,
+    BlockBitPackingV2Encoding<uint32_t>,
+    BlockBitPackingV2Encoding<int64_t>,
+    BlockBitPackingV2Encoding<uint64_t>,
+    BlockBitPackingV2Encoding<float>,
+    BlockBitPackingV2Encoding<double>>;
+
+template <typename E>
+class BlockBitPackingV2FuzzerTest : public ::testing::Test {};
+TYPED_TEST_SUITE(BlockBitPackingV2FuzzerTest, BlockBitPackingV2Types);
+
+TYPED_TEST(BlockBitPackingV2FuzzerTest, correctness) {
   EncodingFuzzer<TypeParam> fuzzer(
       FLAGS_fuzzer_iterations,
       FLAGS_fuzzer_max_rows,

@@ -19,9 +19,10 @@
 #include <array>
 
 #include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
+#include "velox/dwio/nimble/encodings/deprecated/BlockBitPackingEncodingView.h"
 #include "velox/dwio/nimble/encodings/views/ALPEncodingView.h"
 #include "velox/dwio/nimble/encodings/views/ALPRDEncodingView.h"
-#include "velox/dwio/nimble/encodings/views/BlockBitPackingEncodingView.h"
+#include "velox/dwio/nimble/encodings/views/BlockBitPackingV2EncodingView.h"
 #include "velox/dwio/nimble/encodings/views/ConstantEncodingView.h"
 #include "velox/dwio/nimble/encodings/views/DeltaBlockEncodingView.h"
 #include "velox/dwio/nimble/encodings/views/DictionaryEncodingView.h"
@@ -191,11 +192,18 @@ std::unique_ptr<TypedEncodingView<T>> createTypedEncodingView(
           TypeTraits<T>::dataType);
     case EncodingType::BlockBitPacking:
       if constexpr (isNumericType<physicalType>()) {
-        return std::make_unique<BlockBitPackingEncodingView<T>>(
+        return std::make_unique<deprecated::BlockBitPackingEncodingView<T>>(
             data, pool, options);
       }
       NIMBLE_INCOMPATIBLE_ENCODING(
           "BlockBitPacking encoding should not be selected for non-numeric data types.");
+    case EncodingType::BlockBitPackingV2:
+      if constexpr (isNumericType<physicalType>()) {
+        return std::make_unique<BlockBitPackingV2EncodingView<T>>(
+            data, pool, options);
+      }
+      NIMBLE_INCOMPATIBLE_ENCODING(
+          "BlockBitPackingV2 encoding should not be selected for non-numeric data types.");
     case EncodingType::SubIntSplit:
       if constexpr (
           isNumericType<physicalType>() &&
@@ -274,6 +282,7 @@ bool supportsEncodingView(EncodingType encodingType) {
       EncodingType::PFOR,
       EncodingType::SimdForBitpack,
       EncodingType::BlockBitPacking,
+      EncodingType::BlockBitPackingV2,
       EncodingType::SubIntSplit,
       EncodingType::Varint,
       EncodingType::Fsst};

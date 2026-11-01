@@ -1459,6 +1459,33 @@ TEST(ManualEncodingSelectionPolicyTest, perEncodingCompressionAcceptRatio) {
       nimble::CompressionType::MetaInternal, 100, 80));
 }
 
+TEST(
+    ManualEncodingSelectionPolicyTest,
+    blockBitPackingV2CompressionAcceptRatio) {
+  // BlockBitPackingV2 can be named in read factors, is selectable, and shares
+  // the 0.7 accept ratio of BlockBitPacking.
+  auto policy = std::make_unique<
+      nimble::ManualEncodingSelectionPolicy<uint32_t>>(
+      nimble::ManualEncodingSelectionPolicyFactory::parseEncodingReadFactors(
+          "BlockBitPackingV2=1.0"),
+      nimble::CompressionOptions{},
+      std::nullopt);
+  std::vector<uint32_t> data(2048);
+  for (uint32_t i = 0; i < data.size(); ++i) {
+    data[i] = i % 100;
+  }
+  auto result = policy->select(
+      data,
+      nimble::Statistics<uint32_t>::create(data),
+      nimble::Encoding::Options{});
+  EXPECT_EQ(result.encodingType, nimble::EncodingType::BlockBitPackingV2);
+  auto compressionPolicy = result.compressionPolicyFactory();
+  EXPECT_FALSE(compressionPolicy->shouldAccept(
+      nimble::CompressionType::MetaInternal, 100, 80));
+  EXPECT_TRUE(compressionPolicy->shouldAccept(
+      nimble::CompressionType::MetaInternal, 100, 60));
+}
+
 TEST(ManualEncodingSelectionPolicyTest, customCompressionAcceptRatioOverride) {
   // Override: FixedBitWidth=0.0 (reject all compression).
   nimble::CompressionOptions options;

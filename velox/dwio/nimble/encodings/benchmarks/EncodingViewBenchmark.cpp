@@ -35,7 +35,7 @@
 #include "velox/dwio/nimble/common/Vector.h"
 #include "velox/dwio/nimble/encodings/ALPEncoding.h"
 #include "velox/dwio/nimble/encodings/ALPRDEncoding.h"
-#include "velox/dwio/nimble/encodings/BlockBitPackingEncoding.h"
+#include "velox/dwio/nimble/encodings/BlockBitPackingV2Encoding.h"
 #include "velox/dwio/nimble/encodings/ConstantEncoding.h"
 #include "velox/dwio/nimble/encodings/DeltaBlockEncoding.h"
 #include "velox/dwio/nimble/encodings/DictionaryEncoding.h"
@@ -196,7 +196,7 @@ std::shared_ptr<const SharedDictionaryAlphabet> createSharedDictionaryAlphabet(
   Buffer buffer{*benchmarkPool()};
   const auto encoded = SharedDictionaryAlphabet::encode<T>(
       {values.data(), values.size()},
-      std::array{EncodingType::BlockBitPacking},
+      std::array{EncodingType::BlockBitPackingV2},
       buffer);
   auto encodedOwner = std::make_shared<const std::string>(encoded);
   const std::string_view encodedAlphabet{*encodedOwner};
@@ -1505,43 +1505,43 @@ MATERIALIZE_BENCHMARK(
 VIEW_BENCHMARK(
     View_BlockBitPackingUint32_Random130,
     uint32_t,
-    encodeWithSelection<BlockBitPackingEncoding<uint32_t>>(
-        EncodingType::BlockBitPacking,
+    encodeWithSelection<BlockBitPackingV2Encoding<uint32_t>>(
+        EncodingType::BlockBitPackingV2,
         pforData(kRows)),
     randomPositions(kRows))
 VIEW_BENCHMARK(
     View_BlockBitPackingUint32_Sorted130,
     uint32_t,
-    encodeWithSelection<BlockBitPackingEncoding<uint32_t>>(
-        EncodingType::BlockBitPacking,
+    encodeWithSelection<BlockBitPackingV2Encoding<uint32_t>>(
+        EncodingType::BlockBitPackingV2,
         pforData(kRows)),
     sortedRandomPositions(kRows))
 VIEW_BENCHMARK(
     View_BlockBitPackingUint32_Clustered130,
     uint32_t,
-    encodeWithSelection<BlockBitPackingEncoding<uint32_t>>(
-        EncodingType::BlockBitPacking,
+    encodeWithSelection<BlockBitPackingV2Encoding<uint32_t>>(
+        EncodingType::BlockBitPackingV2,
         pforData(kRows)),
     clusteredPositions(kRows))
 BATCH_VIEW_BENCHMARK(
     BatchView_BlockBitPackingUint32_Random130,
     uint32_t,
-    encodeWithSelection<BlockBitPackingEncoding<uint32_t>>(
-        EncodingType::BlockBitPacking,
+    encodeWithSelection<BlockBitPackingV2Encoding<uint32_t>>(
+        EncodingType::BlockBitPackingV2,
         pforData(kRows)),
     randomPositions(kRows))
 BATCH_VIEW_BENCHMARK(
     BatchView_BlockBitPackingUint32_Sorted130,
     uint32_t,
-    encodeWithSelection<BlockBitPackingEncoding<uint32_t>>(
-        EncodingType::BlockBitPacking,
+    encodeWithSelection<BlockBitPackingV2Encoding<uint32_t>>(
+        EncodingType::BlockBitPackingV2,
         pforData(kRows)),
     sortedRandomPositions(kRows))
 BATCH_VIEW_BENCHMARK(
     BatchView_BlockBitPackingUint32_Clustered130,
     uint32_t,
-    encodeWithSelection<BlockBitPackingEncoding<uint32_t>>(
-        EncodingType::BlockBitPacking,
+    encodeWithSelection<BlockBitPackingV2Encoding<uint32_t>>(
+        EncodingType::BlockBitPackingV2,
         pforData(kRows)),
     clusteredPositions(kRows))
 SHARED_DICTIONARY_ALPHABET_BENCHMARK(
@@ -1583,26 +1583,26 @@ SHARED_DICTIONARY_ALPHABET_BENCHMARK(
 RANGE_VIEW_BENCHMARK(
     RangeView_BlockBitPackingUint32_Range1024,
     uint32_t,
-    encodeWithSelection<BlockBitPackingEncoding<uint32_t>>(
-        EncodingType::BlockBitPacking,
+    encodeWithSelection<BlockBitPackingV2Encoding<uint32_t>>(
+        EncodingType::BlockBitPackingV2,
         pforData(kRows)))
 UNALIGNED_RANGE_VIEW_BENCHMARK(
     RangeView_BlockBitPackingUint32_UnalignedRange1024,
     uint32_t,
-    encodeWithSelection<BlockBitPackingEncoding<uint32_t>>(
-        EncodingType::BlockBitPacking,
+    encodeWithSelection<BlockBitPackingV2Encoding<uint32_t>>(
+        EncodingType::BlockBitPackingV2,
         pforData(kRows)))
 UNALIGNED_RANGE_VIEW_BENCHMARK(
     RangeView_BlockBitPackingUint16_UnalignedRange1024,
     uint16_t,
-    encodeWithSelection<BlockBitPackingEncoding<uint16_t>>(
-        EncodingType::BlockBitPacking,
+    encodeWithSelection<BlockBitPackingV2Encoding<uint16_t>>(
+        EncodingType::BlockBitPackingV2,
         makeNarrow<uint16_t>(10, kRows)))
 MATERIALIZE_BENCHMARK(
     Materialize_BlockBitPackingUint32_Random130,
     uint32_t,
-    encodeWithSelection<BlockBitPackingEncoding<uint32_t>>(
-        EncodingType::BlockBitPacking,
+    encodeWithSelection<BlockBitPackingV2Encoding<uint32_t>>(
+        EncodingType::BlockBitPackingV2,
         pforData(kRows)),
     randomPositions(kRows))
 
@@ -1787,8 +1787,8 @@ const std::vector<CreateReadCase>& createReadCases() {
     result.push_back(
         makeCreateReadCase<uint32_t>(
             "BlockBitPacking_uint32", [](uint32_t rows) {
-              return encodeWithSelection<BlockBitPackingEncoding<uint32_t>>(
-                  EncodingType::BlockBitPacking, pforData(rows));
+              return encodeWithSelection<BlockBitPackingV2Encoding<uint32_t>>(
+                  EncodingType::BlockBitPackingV2, pforData(rows));
             }));
     result.push_back(
         makeCreateReadCase<uint32_t>("DeltaBlock_uint32", [](uint32_t rows) {
