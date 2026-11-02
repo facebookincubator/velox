@@ -29,6 +29,7 @@
 #include "velox/dwio/parquet/tests/ParquetTestBase.h"
 #include "velox/dwio/parquet/thrift/ParquetThrift.h"
 #include "velox/expression/ExprToSubfieldFilter.h"
+#include "velox/type/DecimalUtil.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
 
 using namespace facebook::velox;
@@ -1012,6 +1013,92 @@ TEST_F(ParquetReaderTest, parseIntDecimal) {
     EXPECT_EQ(b[index], expectValues[i]);
     EXPECT_EQ(b[index + 1], expectValues[i]);
   }
+}
+
+// Reads FIXED_LEN_BYTE_ARRAY decimals whose column chunks start with
+// dictionary-encoded pages and fall back to DELTA_BYTE_ARRAY pages, the layout
+// parquet-mr writes with v2 pages. See decimal_delta_byte_array.parquet in
+// examples/README.md for the fixture.
+TEST_F(ParquetReaderTest, decimalDictionaryFallbackToDeltaByteArray) {
+  const std::string fileName("decimal_delta_byte_array.parquet");
+  const auto rowType = ROW({
+      {"id", BIGINT()},
+      {"short5", DECIMAL(10, 2)},
+      {"short8", DECIMAL(18, 2)},
+      {"long13", DECIMAL(30, 10)},
+      {"long16", DECIMAL(38, 10)},
+  });
+
+  {
+    auto reader = createReader(fileName);
+    const auto rowGroup = reader->fileMetaData().rowGroup(0);
+    for (auto column = 1; column < rowType->size(); ++column) {
+      EXPECT_THAT(
+          rowGroup.columnChunk(column).encodings(),
+          testing::IsSupersetOf({
+              thrift::Encoding::RLE_DICTIONARY,
+              thrift::Encoding::DELTA_BYTE_ARRAY,
+          }));
+    }
+  }
+
+  const auto unscaledValue = [](int64_t id, int128_t multiplier) {
+    const int64_t base = id < 200 ? id % 10 : id;
+    const int128_t value = base * multiplier;
+    return (base / 4) % 2 == 1 ? -value : value;
+  };
+  const auto makeExpected = [&](const std::vector<int64_t>& ids) {
+    const auto size = static_cast<vector_size_t>(ids.size());
+    const auto isNullAt = [&](vector_size_t row) { return ids[row] % 11 == 5; };
+    const auto makeShortDecimals = [&](int64_t multiplier,
+                                       const TypePtr& type) {
+      return makeFlatVector<int64_t>(
+          size,
+          [&](auto row) {
+            return static_cast<int64_t>(unscaledValue(ids[row], multiplier));
+          },
+          isNullAt,
+          type);
+    };
+    const auto makeLongDecimals = [&](int128_t multiplier,
+                                      const TypePtr& type) {
+      return makeFlatVector<int128_t>(
+          size,
+          [&](auto row) { return unscaledValue(ids[row], multiplier); },
+          isNullAt,
+          type);
+    };
+    return makeRowVector(
+        rowType->names(),
+        {
+            makeFlatVector<int64_t>(ids),
+            makeShortDecimals(10'000'001, rowType->childAt(1)),
+            makeShortDecimals(999'999'999'999'999, rowType->childAt(2)),
+            makeLongDecimals(
+                DecimalUtil::kPowersOfTen[26] + 7'919, rowType->childAt(3)),
+            makeLongDecimals(
+                DecimalUtil::kPowersOfTen[34] + 7'919, rowType->childAt(4)),
+        });
+  };
+
+  constexpr int64_t kNumRows = 500;
+  std::vector<int64_t> ids(kNumRows);
+  std::iota(ids.begin(), ids.end(), 0);
+  assertReadWithExpected(fileName, rowType, makeExpected(ids));
+
+  // Selecting every third row makes the decimal readers skip values within and
+  // across both dictionary and DELTA_BYTE_ARRAY pages.
+  std::vector<int64_t> selectedIds;
+  for (int64_t id = 0; id < kNumRows; id += 3) {
+    selectedIds.push_back(id);
+  }
+  FilterMap filters;
+  filters.insert(
+      {"id",
+       std::make_unique<common::BigintValuesUsingBitmask>(
+           0, kNumRows - 1, selectedIds, false)});
+  assertReadWithFilters(
+      fileName, rowType, std::move(filters), makeExpected(selectedIds));
 }
 
 TEST_F(ParquetReaderTest, parseMapKeyValueAsMap) {
