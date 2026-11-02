@@ -296,9 +296,8 @@ AggregationInputChannels buildAggregationInputChannels(
       aggInputs.push_back(fallbackChannel);
     }
 
-    if (aggregate.distinct) {
-      VELOX_NYI("De-dup before aggregation is not yet supported");
-    }
+    VELOX_NYI_CHECK(
+        !aggregate.distinct, "De-dup before aggregation is not yet supported");
 
     result.channels.push_back(aggInputs[0]);
   }
