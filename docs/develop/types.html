@@ -212,6 +212,9 @@ their corresponding physical type.</p>
 <tr class="row-even"><td><p>TIMESTAMP_UTC</p></td>
 <td><p>TIMESTAMP</p></td>
 </tr>
+<tr class="row-odd"><td><p>VECTOR_INDEX</p></td>
+<td><p>VARBINARY</p></td>
+</tr>
 </tbody>
 </table>
 <p>DECIMAL type carries additional <cite>precision</cite>,
@@ -229,6 +232,10 @@ decimal value.</p>
 TIME_MICRO_UTC represents time in microseconds since midnight in UTC, not subject to session timezone adjustment. Thus min/max value can range from 00:00:00.000000 to 23:59:59.999999.
 The TIME and TIME_MICRO_UTC types are backed by BIGINT physical type.</p>
 <p>TIMESTAMP represents a timestamp subject to session timezone interpretation. TIMESTAMP_UTC represents a timestamp in UTC, not subject to session timezone adjustment. Both types are backed by TIMESTAMP physical type.</p>
+<p>VECTOR_INDEX represents a local vector index: a FAISS index over embeddings,
+with each embedding’s id, serialized as <code class="docutils literal notranslate"><span class="pre">faiss::write_index</span></code> writes it. It is
+backed by VARBINARY physical type. See <a class="reference internal" href="../functions/presto/vectorindex.html"><span class="doc">Vector Index Functions</span></a>
+for the functions that produce and read it.</p>
 </section>
 <section id="custom-types">
 <h2>Custom Types<a class="headerlink" href="#custom-types" title="Link to this heading">¶</a></h2>

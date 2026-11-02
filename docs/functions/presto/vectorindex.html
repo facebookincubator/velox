@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+
+<html lang="en" data-content_root="../../">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>Vector Index Functions &#8212; Velox  documentation</title>
+    <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=8f2a1f02" />
+    <link rel="stylesheet" type="text/css" href="../../_static/nature.css?v=0f882399" />
+    <script src="../../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../../_static/doctools.js?v=9a2dae69"></script>
+    <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+    <link rel="next" title="Geospatial Operators" href="geospatial.html" />
+    <link rel="prev" title="Quantile Digest Functions" href="qdigest.html" /> 
+  </head><body>
+    <div class="related" role="navigation" aria-label="Related">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../../genindex.html" title="General Index"
+             accesskey="I">index</a></li>
+        <li class="right" >
+          <a href="geospatial.html" title="Geospatial Operators"
+             accesskey="N">next</a> |</li>
+        <li class="right" >
+          <a href="qdigest.html" title="Quantile Digest Functions"
+             accesskey="P">previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../../functions.html" accesskey="U">Presto Functions</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">Vector Index Functions</a></li> 
+      </ul>
+    </div>  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          <div class="body" role="main">
+            
+  <section id="vector-index-functions">
+<h1>Vector Index Functions<a class="headerlink" href="#vector-index-functions" title="Link to this heading">¶</a></h1>
+<p>A <code class="docutils literal notranslate"><span class="pre">VECTOR_INDEX</span></code> is a local vector index: a FAISS index over embeddings, with
+each embedding’s id, serialized as <code class="docutils literal notranslate"><span class="pre">faiss::write_index</span></code> writes it and stored
+as <code class="docutils literal notranslate"><span class="pre">VARBINARY</span></code>. <a class="reference internal" href="aggregate.html#vector_index_build" title="vector_index_build"><code class="xref py py-func docutils literal notranslate"><span class="pre">vector_index_build()</span></code></a> and <a class="reference internal" href="aggregate.html#vector_index_pack" title="vector_index_pack"><code class="xref py py-func docutils literal notranslate"><span class="pre">vector_index_pack()</span></code></a>
+return it, and <a class="reference internal" href="aggregate.html#vector_count" title="vector_count"><code class="xref py py-func docutils literal notranslate"><span class="pre">vector_count()</span></code></a> counts the embeddings of many.</p>
+<p>This function is available when Velox is built with FAISS
+(<code class="docutils literal notranslate"><span class="pre">VELOX_ENABLE_FAISS</span></code>).</p>
+<dl class="py function">
+<dt class="sig sig-object py">
+<span class="sig-name descname"><span class="pre">cardinality</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">index</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">bigint</span></span></span></dt>
+<dd><blockquote>
+<div><p>Returns the number of embeddings in the vector index <code class="docutils literal notranslate"><span class="pre">index</span></code>.</p>
+</div></blockquote>
+</dd></dl>
+
+</section>
+
+
+            <div class="clearer"></div>
+          </div>
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="Main">
+        <div class="sphinxsidebarwrapper">
+  <div>
+    <h4>Previous topic</h4>
+    <p class="topless"><a href="qdigest.html"
+                          title="previous chapter">Quantile Digest Functions</a></p>
+  </div>
+  <div>
+    <h4>Next topic</h4>
+    <p class="topless"><a href="geospatial.html"
+                          title="next chapter">Geospatial Operators</a></p>
+  </div>
+  <div role="note" aria-label="source link">
+    <h3>This Page</h3>
+    <ul class="this-page-menu">
+      <li><a href="../../_sources/functions/presto/vectorindex.rst.txt"
+            rel="nofollow">Show Source</a></li>
+    </ul>
+   </div>
+<search id="searchbox" style="display: none" role="search">
+  <h3 id="searchlabel">Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../../search.html" method="get">
+      <input type="text" name="q" aria-labelledby="searchlabel" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"/>
+      <input type="submit" value="Go" />
+    </form>
+    </div>
+</search>
+<script>document.getElementById('searchbox').style.display = "block"</script>
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="related" role="navigation" aria-label="Related">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="../../genindex.html" title="General Index"
+             >index</a></li>
+        <li class="right" >
+          <a href="geospatial.html" title="Geospatial Operators"
+             >next</a> |</li>
+        <li class="right" >
+          <a href="qdigest.html" title="Quantile Digest Functions"
+             >previous</a> |</li>
+        <li class="nav-item nav-item-0"><a href="../../index.html">Velox  documentation</a> &#187;</li>
+          <li class="nav-item nav-item-1"><a href="../../functions.html" >Presto Functions</a> &#187;</li>
+        <li class="nav-item nav-item-this"><a href="">Vector Index Functions</a></li> 
+      </ul>
+    </div>
+    <div class="footer" role="contentinfo">
+    &#169; Copyright TBD.
+      Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 7.4.7.
+    </div>
+  </body>
+</html>

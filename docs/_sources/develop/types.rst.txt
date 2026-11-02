@@ -118,6 +118,7 @@ INTERVAL YEAR TO MONTH  INTEGER
 TIME                    BIGINT
 TIME_MICRO_UTC          BIGINT
 TIMESTAMP_UTC           TIMESTAMP
+VECTOR_INDEX            VARBINARY
 ======================  ======================================================
 
 DECIMAL type carries additional `precision`,
@@ -138,6 +139,11 @@ TIME_MICRO_UTC represents time in microseconds since midnight in UTC, not subjec
 The TIME and TIME_MICRO_UTC types are backed by BIGINT physical type.
 
 TIMESTAMP represents a timestamp subject to session timezone interpretation. TIMESTAMP_UTC represents a timestamp in UTC, not subject to session timezone adjustment. Both types are backed by TIMESTAMP physical type.
+
+VECTOR_INDEX represents a local vector index: a FAISS index over embeddings,
+with each embedding's id, serialized as ``faiss::write_index`` writes it. It is
+backed by VARBINARY physical type. See :doc:`/functions/presto/vectorindex`
+for the functions that produce and read it.
 
 Custom Types
 ~~~~~~~~~~~~
