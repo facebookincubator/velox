@@ -27,6 +27,7 @@
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/functions/prestosql/PrestoQueryConfig.h"
 #include "velox/type/Timestamp.h"
 
 #include <cmath>
@@ -35,6 +36,7 @@ namespace facebook::velox::exec::test {
 
 using core::QueryConfig;
 using facebook::velox::test::BatchMaker;
+using functions::prestosql::PrestoQueryConfig;
 using namespace common::testutil;
 
 class AggregationTest : public OperatorTestBase {
@@ -175,13 +177,13 @@ class AggregationTest : public OperatorTestBase {
     }
   }
 
-  void testAggregation(
-      const std::vector<RowVectorPtr>& data,
+  // Appends the aggregation of 'groupingKeys' and 'aggregates' in 'steps' to
+  // 'builder' and returns the plan.
+  core::PlanNodePtr makeAggregationPlan(
+      PlanBuilder builder,
       const std::vector<std::string>& groupingKeys,
       const std::vector<std::string>& aggregates,
-      const std::string& expectedSql,
       AggSteps steps) {
-    auto builder = PlanBuilder().values(data);
     switch (steps) {
       case AggSteps::kSingle:
         builder.singleAggregation(groupingKeys, aggregates);
@@ -195,7 +197,34 @@ class AggregationTest : public OperatorTestBase {
             .finalAggregation();
         break;
     }
-    assertQuery(builder.planNode(), expectedSql);
+    return builder.planNode();
+  }
+
+  void testAggregation(
+      const std::vector<RowVectorPtr>& data,
+      const std::vector<std::string>& groupingKeys,
+      const std::vector<std::string>& aggregates,
+      const std::string& expectedSql,
+      AggSteps steps,
+      const std::unordered_map<std::string, std::string>& configs = {}) {
+    AssertQueryBuilder(
+        makeAggregationPlan(
+            PlanBuilder().values(data), groupingKeys, aggregates, steps),
+        duckDbQueryRunner_)
+        .configs(configs)
+        .assertResults(expectedSql);
+  }
+
+  // Runs 'plan' on the CPU operators and returns its rows, the reference for
+  // a GPU run of the same plan.
+  RowVectorPtr cpuResults(
+      const core::PlanNodePtr& plan,
+      const std::unordered_map<std::string, std::string>& configs = {}) {
+    return AssertQueryBuilder(plan)
+        .configs(configs)
+        .config(cudf_velox::CudfConfig::kCudfEnabled, "false")
+        .config(cudf_velox::CudfConfig::kCudfAllowCpuFallback, "true")
+        .copyResults(pool());
   }
 
   void testGlobalCountStarZeroColumns(AggSteps steps) {
@@ -2168,6 +2197,451 @@ TEST_F(AggregationTest, stddevSampAllNulls) {
                  .planNode();
 
   assertQuery(op2, "SELECT c0, stddev_samp(c2) FROM tmp GROUP BY c0");
+}
+
+// array_agg keeps nulls as elements and, inside each list, the order the rows
+// arrived in, which cuDF preserves within a group. 'position' numbers the rows
+// so DuckDB can reproduce that order. With one Values vector per GPU batch,
+// the single step collects both batches at once, and the partial step emits
+// each batch's lists for the intermediate and final steps to merge.
+TEST_F(AggregationTest, arrayAggGrouped) {
+  auto first = makeRowVector(
+      {"k", "v", "s", "position"},
+      {
+          makeFlatVector<int64_t>({1, 1, 2, 2}),
+          makeNullableFlatVector<int64_t>({10, std::nullopt, std::nullopt, 40}),
+          makeNullableFlatVector<std::string>({"a", "b", std::nullopt, "d"}),
+          makeFlatVector<int64_t>({0, 1, 2, 3}),
+      });
+  auto second = makeRowVector(
+      {"k", "v", "s", "position"},
+      {
+          makeFlatVector<int64_t>({2, 3, 1}),
+          makeNullableFlatVector<int64_t>({std::nullopt, 60, 70}),
+          makeNullableFlatVector<std::string>({"e", std::nullopt, "g"}),
+          makeFlatVector<int64_t>({4, 5, 6}),
+      });
+  createDuckDbTable({first, second});
+
+  for (const auto steps : {
+           AggSteps::kSingle,
+           AggSteps::kPartialFinal,
+           AggSteps::kPartialIntermediateFinal,
+       }) {
+    SCOPED_TRACE(static_cast<int>(steps));
+    testAggregation(
+        {first, second},
+        {"k"},
+        {"array_agg(v)", "array_agg(s)", "count(v)"},
+        "SELECT k, array_agg(v ORDER BY position), "
+        "array_agg(s ORDER BY position), count(v) FROM tmp GROUP BY k",
+        steps,
+        {{cudf_velox::CudfFromVelox::kGpuBatchSizeRows, "1"}});
+  }
+}
+
+// array_agg over an ARRAY column nests the lists and keeps a NULL input array
+// as a NULL element. With one Values vector per GPU batch, the single step
+// collects both batches at once and the merge steps join nested lists.
+TEST_F(AggregationTest, arrayAggOfArrays) {
+  auto first = makeRowVector(
+      {"k", "a"},
+      {
+          makeFlatVector<int64_t>({1, 1, 2}),
+          makeArrayVectorFromJson<int64_t>({"[1, 2]", "null", "[]"}),
+      });
+  auto second = makeRowVector(
+      {"k", "a"},
+      {
+          makeFlatVector<int64_t>({1}),
+          makeArrayVectorFromJson<int64_t>({"[null, 3]"}),
+      });
+  auto expected = makeRowVector(
+      {"k", "a0"},
+      {
+          makeFlatVector<int64_t>({1, 2}),
+          makeNestedArrayVectorFromJson<int64_t>(
+              {"[[1, 2], null, [null, 3]]", "[[]]"}),
+      });
+
+  for (const auto steps : {
+           AggSteps::kSingle,
+           AggSteps::kPartialFinal,
+           AggSteps::kPartialIntermediateFinal,
+       }) {
+    SCOPED_TRACE(static_cast<int>(steps));
+    AssertQueryBuilder(makeAggregationPlan(
+                           PlanBuilder().values({first, second}),
+                           {"k"},
+                           {"array_agg(a)"},
+                           steps))
+        .config(cudf_velox::CudfFromVelox::kGpuBatchSizeRows, "1")
+        .assertResults(expected);
+  }
+}
+
+// With presto.array_agg.ignore_nulls set, nulls stay out of the lists and a
+// group with no other value yields NULL at every step. With one Values vector
+// per GPU batch, the merge steps see a NULL partial list before a value, after
+// one, and alone.
+TEST_F(AggregationTest, arrayAggIgnoreNulls) {
+  auto first = makeRowVector(
+      {"k", "v", "position"},
+      {
+          makeFlatVector<int64_t>({1, 1, 2, 4}),
+          makeNullableFlatVector<int64_t>(
+              {10, std::nullopt, std::nullopt, std::nullopt}),
+          makeFlatVector<int64_t>({0, 1, 2, 3}),
+      });
+  auto second = makeRowVector(
+      {"k", "v", "position"},
+      {
+          makeFlatVector<int64_t>({2, 3, 1, 4}),
+          makeNullableFlatVector<int64_t>({std::nullopt, 50, std::nullopt, 40}),
+          makeFlatVector<int64_t>({4, 5, 6, 7}),
+      });
+  createDuckDbTable({first, second});
+
+  const std::unordered_map<std::string, std::string> configs{
+      {PrestoQueryConfig::qualify(PrestoQueryConfig::kArrayAggIgnoreNulls),
+       "true"},
+      {cudf_velox::CudfFromVelox::kGpuBatchSizeRows, "1"},
+  };
+  for (const auto steps : {
+           AggSteps::kSingle,
+           AggSteps::kPartialFinal,
+           AggSteps::kPartialIntermediateFinal,
+       }) {
+    SCOPED_TRACE(static_cast<int>(steps));
+    testAggregation(
+        {first, second},
+        {"k"},
+        {"array_agg(v)"},
+        "SELECT k, array_agg(v ORDER BY position) "
+        "FILTER (WHERE v IS NOT NULL) FROM tmp GROUP BY k",
+        steps,
+        configs);
+  }
+}
+
+// A CPU partial step emits NULL for a group it collected nothing for, and once
+// it abandons partial aggregation it keeps one element under every row, NULL
+// rows included. The final step takes such partials with their null mask,
+// keeps the elements under NULL rows out of the merged lists, and yields NULL
+// for a group that had only NULL partials.
+TEST_F(AggregationTest, arrayAggFinalOverNullPartials) {
+  // Rows 1 to 3 are NULL but each spans one element, 99, 98 or 97.
+  auto elements =
+      makeNullableFlatVector<int64_t>({1, 2, 99, 98, 97, std::nullopt, 5});
+  auto partials = makeRowVector(
+      {"k", "a"},
+      {
+          makeFlatVector<int64_t>({1, 1, 2, 2, 3}),
+          std::make_shared<ArrayVector>(
+              pool(),
+              ARRAY(BIGINT()),
+              makeNulls({false, true, true, true, false}),
+              5,
+              makeIndices({0, 2, 3, 4, 5}),
+              makeIndices({2, 1, 1, 1, 2}),
+              elements),
+      });
+  auto plan = PlanBuilder()
+                  .values({partials})
+                  .finalAggregation({"k"}, {"array_agg(a)"}, {{BIGINT()}})
+                  .planNode();
+
+  auto expected = makeRowVector(
+      {"k", "a0"},
+      {
+          makeFlatVector<int64_t>({1, 2, 3}),
+          makeArrayVectorFromJson<int64_t>({"[1, 2]", "null", "[null, 5]"}),
+      });
+  AssertQueryBuilder(plan).assertResults(expected);
+}
+
+// array_agg takes every element type the GPU operators convert. The types
+// whose cuDF form differs from the Velox one run through every step, with one
+// Values vector per GPU batch so the merge steps join lists across batches,
+// and the result is compared with the CPU operator's.
+TEST_F(AggregationTest, arrayAggElementTypes) {
+  const auto hugeValue = static_cast<int128_t>(1) << 70;
+  auto first = makeRowVector(
+      {"k", "bin", "dec", "ldec", "ts", "day", "flag", "rec"},
+      {
+          makeFlatVector<int64_t>({1, 1, 2}),
+          makeNullableFlatVector<std::string>(
+              {std::string("\0\x01", 2), std::nullopt, "abc"}, VARBINARY()),
+          makeNullableFlatVector<int64_t>(
+              {12345, std::nullopt, -6789}, DECIMAL(10, 2)),
+          makeNullableFlatVector<int128_t>(
+              {hugeValue + 5, std::nullopt, -hugeValue}, DECIMAL(30, 5)),
+          makeNullableFlatVector<Timestamp>(
+              {Timestamp(1609459200, 500000000),
+               std::nullopt,
+               Timestamp(1609459199, 900000000)},
+              TIMESTAMP()),
+          makeNullableFlatVector<int32_t>(
+              {DATE()->toDays("2021-01-01"),
+               std::nullopt,
+               DATE()->toDays("1969-12-31")},
+              DATE()),
+          makeNullableFlatVector<bool>({true, std::nullopt, false}),
+          makeRowVector(
+              {"a", "b"},
+              {
+                  makeNullableFlatVector<int64_t>({1, std::nullopt, 3}),
+                  makeNullableFlatVector<std::string>({"x", "y", std::nullopt}),
+              },
+              [](auto row) { return row == 1; }),
+      });
+  auto second = makeRowVector(
+      {"k", "bin", "dec", "ldec", "ts", "day", "flag", "rec"},
+      {
+          makeFlatVector<int64_t>({2, 3, 1}),
+          makeNullableFlatVector<std::string>(
+              {"", "zz", std::nullopt}, VARBINARY()),
+          makeNullableFlatVector<int64_t>(
+              {0, 99, std::nullopt}, DECIMAL(10, 2)),
+          makeNullableFlatVector<int128_t>(
+              {1, hugeValue * 1000, std::nullopt}, DECIMAL(30, 5)),
+          makeNullableFlatVector<Timestamp>(
+              {Timestamp(0, 0), Timestamp(86400, 1), std::nullopt},
+              TIMESTAMP()),
+          makeNullableFlatVector<int32_t>(
+              {DATE()->toDays("2000-02-29"),
+               DATE()->toDays("2021-01-03"),
+               std::nullopt},
+              DATE()),
+          makeNullableFlatVector<bool>({false, true, std::nullopt}),
+          makeRowVector(
+              {"a", "b"},
+              {
+                  makeNullableFlatVector<int64_t>({std::nullopt, 5, 7}),
+                  makeNullableFlatVector<std::string>({"y", "w", "v"}),
+              },
+              [](auto row) { return row == 2; }),
+      });
+
+  const std::vector<std::string> aggregates{
+      "array_agg(bin)",
+      "array_agg(dec)",
+      "array_agg(ldec)",
+      "array_agg(ts)",
+      "array_agg(day)",
+      "array_agg(flag)",
+      "array_agg(rec)",
+  };
+  for (const auto steps : {
+           AggSteps::kSingle,
+           AggSteps::kPartialFinal,
+           AggSteps::kPartialIntermediateFinal,
+       }) {
+    SCOPED_TRACE(static_cast<int>(steps));
+    auto plan = makeAggregationPlan(
+        PlanBuilder().values({first, second}), {"k"}, aggregates, steps);
+    AssertQueryBuilder(plan)
+        .config(cudf_velox::CudfFromVelox::kGpuBatchSizeRows, "1")
+        .assertResults(cpuResults(plan));
+  }
+}
+
+// The companion forms share the aggregator: array_agg_partial collects raw
+// values, array_agg_merge joins partial lists and array_agg_merge_extract
+// does so for a final result. Each yields NULL for a group without elements,
+// as the CPU companion does.
+TEST_F(AggregationTest, arrayAggCompanionFunctions) {
+  const std::unordered_map<std::string, std::string> ignoreNulls{
+      {PrestoQueryConfig::qualify(PrestoQueryConfig::kArrayAggIgnoreNulls),
+       "true"}};
+  auto keys = makeFlatVector<int64_t>({1, 2, 3});
+
+  auto values = makeRowVector(
+      {"k", "v"},
+      {
+          makeFlatVector<int64_t>({1, 1, 2, 3}),
+          makeNullableFlatVector<int64_t>({10, std::nullopt, std::nullopt, 30}),
+      });
+  auto partialPlan = PlanBuilder()
+                         .values({values})
+                         .singleAggregation({"k"}, {"array_agg_partial(v)"})
+                         .planNode();
+  auto partials = makeRowVector(
+      {"k", "a0"},
+      {keys,
+       makeArrayVectorFromJson<int64_t>({"[10, null]", "[null]", "[30]"})});
+  ASSERT_TRUE(assertEqualResults({partials}, {cpuResults(partialPlan)}));
+  AssertQueryBuilder(partialPlan).assertResults(partials);
+
+  auto partialsWithoutNulls = makeRowVector(
+      {"k", "a0"},
+      {keys, makeArrayVectorFromJson<int64_t>({"[10]", "null", "[30]"})});
+  ASSERT_TRUE(assertEqualResults(
+      {partialsWithoutNulls}, {cpuResults(partialPlan, ignoreNulls)}));
+  AssertQueryBuilder(partialPlan)
+      .configs(ignoreNulls)
+      .assertResults(partialsWithoutNulls);
+
+  // Groups 2 and 3 hold NULL and empty lists alone.
+  auto lists = makeRowVector(
+      {"k", "a"},
+      {
+          makeFlatVector<int64_t>({1, 1, 2, 2, 3}),
+          makeArrayVectorFromJson<int64_t>(
+              {"[1, 2]", "null", "[]", "null", "[]"}),
+      });
+  auto merged = makeRowVector(
+      {"k", "a0"},
+      {keys, makeArrayVectorFromJson<int64_t>({"[1, 2]", "null", "null"})});
+  for (const auto* merge :
+       {"array_agg_merge(a)", "array_agg_merge_extract(a)"}) {
+    SCOPED_TRACE(merge);
+    auto plan = PlanBuilder()
+                    .values({lists})
+                    .singleAggregation({"k"}, {merge})
+                    .planNode();
+    ASSERT_TRUE(assertEqualResults({merged}, {cpuResults(plan)}));
+    AssertQueryBuilder(plan).assertResults(merged);
+  }
+}
+
+// A node with array_agg skips incremental aggregation, which would copy every
+// element collected so far with each batch: its partial step emits each
+// batch's lists as they come, where a count(v) partial compacts the batches
+// into one output and reports that flush.
+TEST_F(AggregationTest, arrayAggPartialSkipsIncrementalAggregation) {
+  auto first = makeRowVector(
+      {"k", "v", "position"},
+      {
+          makeFlatVector<int64_t>({1, 2}),
+          makeFlatVector<int64_t>({10, 20}),
+          makeFlatVector<int64_t>({0, 1}),
+      });
+  auto second = makeRowVector(
+      {"k", "v", "position"},
+      {
+          makeFlatVector<int64_t>({2, 1}),
+          makeFlatVector<int64_t>({30, 40}),
+          makeFlatVector<int64_t>({2, 3}),
+      });
+  createDuckDbTable({first, second});
+
+  struct PartialStats {
+    uint64_t outputVectors{0};
+    bool flushed{false};
+  };
+  // Reads the partial CudfGroupby operator's own stats: the CudfFromVelox
+  // before it reports under the same plan node id.
+  auto partialStats = [&](const std::string& aggregate,
+                          const std::string& sql) {
+    core::PlanNodeId partialId;
+    auto task = AssertQueryBuilder(duckDbQueryRunner_)
+                    .maxDrivers(1)
+                    .config(cudf_velox::CudfFromVelox::kGpuBatchSizeRows, "1")
+                    .plan(
+                        PlanBuilder()
+                            .values({first, second})
+                            .partialAggregation({"k"}, {aggregate})
+                            .capturePlanNodeId(partialId)
+                            .finalAggregation()
+                            .planNode())
+                    .assertResults(sql);
+    for (const auto& pipeline : task->taskStats().pipelineStats) {
+      for (const auto& operatorStats : pipeline.operatorStats) {
+        if (operatorStats.planNodeId == partialId &&
+            operatorStats.operatorType.starts_with("CudfGroupby")) {
+          return PartialStats{
+              operatorStats.outputVectors,
+              operatorStats.runtimeStats.count("flushRowCount") > 0};
+        }
+      }
+    }
+    ADD_FAILURE() << "No CudfGroupby operator ran " << aggregate;
+    return PartialStats{};
+  };
+
+  const auto arrayAgg = partialStats(
+      "array_agg(v)",
+      "SELECT k, array_agg(v ORDER BY position) FROM tmp GROUP BY k");
+  EXPECT_EQ(arrayAgg.outputVectors, 2);
+  EXPECT_FALSE(arrayAgg.flushed);
+
+  const auto count =
+      partialStats("count(v)", "SELECT k, count(v) FROM tmp GROUP BY k");
+  EXPECT_EQ(count.outputVectors, 1);
+  EXPECT_TRUE(count.flushed);
+}
+
+// Every other aggregate of a single-step node with array_agg runs its
+// single-step form on the non-incremental path, which the incremental path
+// never used. The mix runs through the three step shapes, with one Values
+// vector per GPU batch, and is compared with the CPU operator's result.
+TEST_F(AggregationTest, arrayAggWithOtherAggregates) {
+  auto first = makeRowVector(
+      {"k", "i", "r", "d", "dec"},
+      {
+          makeFlatVector<int64_t>({1, 1, 2}),
+          makeNullableFlatVector<int64_t>({10, std::nullopt, 30}),
+          makeNullableFlatVector<float>({1.5, std::nullopt, 2.0}),
+          makeNullableFlatVector<double>({1.0, 2.0, 4.0}),
+          makeNullableFlatVector<int64_t>(
+              {100, std::nullopt, 350}, DECIMAL(10, 2)),
+      });
+  auto second = makeRowVector(
+      {"k", "i", "r", "d", "dec"},
+      {
+          makeFlatVector<int64_t>({2, 3, 1}),
+          makeNullableFlatVector<int64_t>({40, 50, 20}),
+          makeNullableFlatVector<float>({4.0, 0.5, 2.5}),
+          makeNullableFlatVector<double>({std::nullopt, 5.0, 3.0}),
+          makeNullableFlatVector<int64_t>({250, 199, 300}, DECIMAL(10, 2)),
+      });
+  const std::vector<std::string> aggregates{
+      "array_agg(i)",
+      "avg(r)",
+      "avg(d)",
+      "avg(i)",
+      "avg(dec)",
+      "sum(i)",
+      "sum(dec)",
+      "min(d)",
+      "max(r)",
+      "count(r)",
+      "count(1)",
+      "stddev_samp(d)",
+  };
+  for (const auto steps : {
+           AggSteps::kSingle,
+           AggSteps::kPartialFinal,
+           AggSteps::kPartialIntermediateFinal,
+       }) {
+    SCOPED_TRACE(static_cast<int>(steps));
+    auto plan = makeAggregationPlan(
+        PlanBuilder().values({first, second}), {"k"}, aggregates, steps);
+    AssertQueryBuilder(plan)
+        .config(cudf_velox::CudfFromVelox::kGpuBatchSizeRows, "1")
+        .assertResults(cpuResults(plan));
+  }
+}
+
+// A node whose input turns out empty yields no rows at every step.
+TEST_F(AggregationTest, arrayAggWithoutInputRows) {
+  auto data = makeRowVector(
+      {"k", "v"},
+      {makeFlatVector<int64_t>({1, 2}), makeFlatVector<int64_t>({10, 20})});
+  for (const auto steps : {
+           AggSteps::kSingle,
+           AggSteps::kPartialFinal,
+           AggSteps::kPartialIntermediateFinal,
+       }) {
+    SCOPED_TRACE(static_cast<int>(steps));
+    AssertQueryBuilder(makeAggregationPlan(
+                           PlanBuilder().values({data}).filter("k > 2"),
+                           {"k"},
+                           {"array_agg(v)"},
+                           steps))
+        .assertEmptyResults();
+  }
 }
 
 // Masked count(col) + unmasked sum, single-stage (the reproducer shape).
