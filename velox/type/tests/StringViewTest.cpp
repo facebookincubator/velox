@@ -14,8 +14,10 @@
  * limitations under the License.
  */
 
+#include <folly/Benchmark.h>
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include <algorithm>
 #include <optional>
 #include <sstream>
 #include <tuple>
@@ -51,6 +53,16 @@ TEST(StringView, basic) {
     viewAsSteam << view;
     EXPECT_EQ(subText, viewAsSteam.str());
   }
+
+  // Construct an empty string over a full inline string to check that the
+  // constructor zeroes the inline part. Keep the compiler from dropping the
+  // full string as a dead store.
+  const std::string dirty(StringView::kInlineSize, '\xff');
+  StringView view(dirty);
+  folly::doNotOptimizeAway(view);
+  new (&view) StringView("", 0);
+  const auto* bytes = reinterpret_cast<const char*>(&view);
+  EXPECT_EQ(std::count(bytes + 4, bytes + sizeof(view), 0), 12);
 }
 
 TEST(StringView, comparison) {

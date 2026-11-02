@@ -335,6 +335,10 @@ class ArrowBridgeArrayExportTest : public testing::Test {
         const char* data;
         if (StringView::isInline(size)) {
           data = reinterpret_cast<const char*>(view + 1);
+          // Arrow requires the unused bytes of an inline view to be zero.
+          for (auto j = size; j < StringView::kInlineSize; ++j) {
+            EXPECT_EQ(data[j], 0) << "nonzero padding at index " << i;
+          }
         } else {
           ASSERT_LT(view[2], numDataBuffers) << "mismatch at index " << i;
           data = static_cast<const char*>(arrowArray.buffers[2 + view[2]]) +
