@@ -805,6 +805,62 @@ TEST_F(HiveConnectorUtilTest, configureRowReaderOptionsFromConfig) {
   }
 }
 
+TEST_F(HiveConnectorUtilTest, checkColumnNameLowerCaseTypedExpr) {
+  const auto mixedCaseRow = ROW({"Id"}, {BIGINT()});
+
+  // Null expression is accepted.
+  EXPECT_NO_THROW(hive::checkColumnNameLowerCase(core::TypedExprPtr{}));
+
+  // Column reference with lowercase names is accepted.
+  auto lowerColumn = std::make_shared<core::FieldAccessTypedExpr>(
+      ROW({"id"}, {BIGINT()}), "c0");
+  EXPECT_NO_THROW(hive::checkColumnNameLowerCase(lowerColumn));
+
+  // Column reference whose type has uppercase names is rejected, including
+  // when nested in a call.
+  auto mixedColumn =
+      std::make_shared<core::FieldAccessTypedExpr>(mixedCaseRow, "c0");
+  VELOX_ASSERT_THROW(hive::checkColumnNameLowerCase(mixedColumn), "");
+  auto nestedMixedColumn = std::make_shared<core::CallTypedExpr>(
+      BOOLEAN(), std::vector<core::TypedExprPtr>{mixedColumn}, "is_not_null");
+  VELOX_ASSERT_THROW(hive::checkColumnNameLowerCase(nestedMixedColumn), "");
+
+  // Nested type of a column reference is also checked.
+  auto nestedTypeColumn =
+      std::make_shared<core::FieldAccessTypedExpr>(ARRAY(mixedCaseRow), "c0");
+  VELOX_ASSERT_THROW(hive::checkColumnNameLowerCase(nestedTypeColumn), "");
+
+  // Input expression is checked.
+  VELOX_ASSERT_THROW(
+      hive::checkColumnNameLowerCase(
+          std::make_shared<core::InputTypedExpr>(mixedCaseRow)),
+      "");
+
+  // The result type of a computed expression is not checked, e.g. from_json
+  // with a mixed-case schema over a VARCHAR column.
+  const auto mixedCaseNestedRow = ROW({"Id"}, {ROW({"Inner"}, {BIGINT()})});
+  auto fromJson = std::make_shared<core::CallTypedExpr>(
+      mixedCaseNestedRow,
+      std::vector<core::TypedExprPtr>{
+          std::make_shared<core::FieldAccessTypedExpr>(VARCHAR(), "c0")},
+      "from_json");
+  EXPECT_NO_THROW(hive::checkColumnNameLowerCase(fromJson));
+
+  // A field access on a computed struct is not a file column either.
+  auto fromJsonField = std::make_shared<core::FieldAccessTypedExpr>(
+      ROW({"Inner"}, {BIGINT()}), fromJson, "Id");
+  EXPECT_NO_THROW(hive::checkColumnNameLowerCase(fromJsonField));
+  auto isNotNull = std::make_shared<core::CallTypedExpr>(
+      BOOLEAN(), std::vector<core::TypedExprPtr>{fromJsonField}, "is_not_null");
+  EXPECT_NO_THROW(hive::checkColumnNameLowerCase(isNotNull));
+
+  // A mixed-case file column used as input of a computed expression is still
+  // rejected.
+  auto castColumn = std::make_shared<core::CallTypedExpr>(
+      VARCHAR(), std::vector<core::TypedExprPtr>{mixedColumn}, "to_json");
+  VELOX_ASSERT_THROW(hive::checkColumnNameLowerCase(castColumn), "");
+}
+
 TEST_F(HiveConnectorUtilTest, checkColumnHandleConsistent) {
   // Create two consistent column handles
   auto handle1 = std::make_shared<hive::HiveColumnHandle>(

@@ -22,6 +22,7 @@
 #include "velox/connectors/hive/FileConnectorSplit.h"
 #include "velox/connectors/hive/FileConnectorUtil.h"
 #include "velox/connectors/hive/FileTableHandle.h"
+#include "velox/core/Expressions.h"
 #include "velox/dwio/common/CachedBufferedInput.h"
 #include "velox/dwio/common/DirectBufferedInput.h"
 #include "velox/expression/Expr.h"
@@ -312,7 +313,16 @@ void checkColumnNameLowerCase(const core::TypedExprPtr& typeExpr) {
   if (typeExpr == nullptr) {
     return;
   }
-  checkColumnNameLowerCase(typeExpr->type());
+  // Only the types of column references come from the file. The type of a
+  // computed expression, e.g. the result of Spark's from_json, whose field
+  // names are given by the query, is not subject to the lowercase requirement.
+  // This also applies to a field access on a computed struct, e.g.
+  // from_json(...).a, which is not an input column.
+  if (typeExpr->isInputKind() ||
+      (typeExpr->isFieldAccessKind() &&
+       typeExpr->asUnchecked<core::FieldAccessTypedExpr>()->isInputColumn())) {
+    checkColumnNameLowerCase(typeExpr->type());
+  }
   for (auto& type : typeExpr->inputs()) {
     checkColumnNameLowerCase(type);
   }
