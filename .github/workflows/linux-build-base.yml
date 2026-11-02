@@ -124,7 +124,6 @@ jobs:
       VELOX_DEPENDENCY_SOURCE: SYSTEM
       cudf_SOURCE: BUNDLED
       CUDA_VERSION: '12.9'
-      faiss_SOURCE: BUNDLED
       USE_CLANG: "${{ inputs.use-clang && 'true' || 'false' }}"
       # Empty when full mode (or when the plan emitted no targets);
       # space-separated cmake target names when running selective.
@@ -679,10 +678,6 @@ jobs:
         env:
           VELOX_DEPENDENCY_SOURCE: SYSTEM
           ICU_SOURCE: SYSTEM
-          # Mirror the adapters and fedora-debug jobs: build FAISS from
-          # source. The image's FAISS is older than the 1.12.0 Velox
-          # requires. Remove once the images have FAISS 1.12.0.
-          faiss_SOURCE: BUNDLED
           LibXml2_SOURCE: BUNDLED
           # Use BUNDLED gflags to provide PIC static gflags for .so plugins.
           # The container's folly is built with -DGFLAGS_SHARED=FALSE so its
@@ -934,7 +929,6 @@ jobs:
         id: build
         env:
           VELOX_DEPENDENCY_SOURCE: SYSTEM
-          faiss_SOURCE: BUNDLED
           LibXml2_SOURCE: BUNDLED
           simdjson_SOURCE: BUNDLED
           gRPC_SOURCE: SYSTEM
@@ -1014,7 +1008,6 @@ jobs:
     env:
       CCACHE_DIR: ${{ github.workspace }}/ccache
       VELOX_DEPENDENCY_SOURCE: SYSTEM
-      faiss_SOURCE: BUNDLED
     outputs:
       build-outcome: ${{ steps.build.outcome }}
       build-failure-details: ${{ steps.build-errors.outputs.build-failure-details }}
