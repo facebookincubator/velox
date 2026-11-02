@@ -34,9 +34,10 @@ namespace {
 // By default, the AWS SDK reads object data into an auto-growing StringStream.
 // To avoid copies, read directly into a pre-allocated buffer instead.
 // See https://github.com/aws/aws-sdk-cpp/issues/64 for an alternative but
-// functionally similar recipe.
-Aws::IOStreamFactory AwsWriteableStreamFactory(void* data, int64_t nbytes) {
-  return [=]() { return Aws::New<StringViewStream>("", data, nbytes); };
+// functionally similar recipe. The SDK calls the factory once per attempt, so
+// a retry starts over at the beginning of the buffer.
+Aws::IOStreamFactory AwsWriteableStreamFactory(char* data, size_t nbytes) {
+  return [=]() { return Aws::New<ResponseBufferStream>("", data, nbytes); };
 }
 
 } // namespace
@@ -183,6 +184,19 @@ class S3ReadFile ::Impl {
     RECORD_METRIC_VALUE(kMetricS3GetObjectRetries, outcome.GetRetryCount());
     RECORD_METRIC_VALUE(kMetricS3ActiveConnections, -1);
     VELOX_CHECK_AWS_OUTCOME(outcome, "Failed to get S3 object", bucket_, key_);
+    // The body of the attempt that succeeded must have filled the buffer
+    // exactly; a server that ignores the range sends more.
+    const auto& body = dynamic_cast<const ResponseBufferStream&>(
+        outcome.GetResult().GetBody());
+    VELOX_CHECK_EQ(
+        body.bytesReceived(),
+        length,
+        "S3 object s3://{}/{} returned {} bytes for the {} bytes requested at offset {}",
+        bucket_,
+        key_,
+        body.bytesReceived(),
+        length,
+        offset);
   }
 
   Aws::S3::S3Client* client_;
