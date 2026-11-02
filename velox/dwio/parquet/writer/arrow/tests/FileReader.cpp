@@ -85,6 +85,23 @@ std::shared_ptr<ColumnReader> RowGroupReader::column(int i) {
       const_cast<ReaderProperties*>(contents_->properties())->memoryPool());
 }
 
+std::shared_ptr<internal::RecordReader> RowGroupReader::recordReader(int i) {
+  if (i >= metadata()->numColumns()) {
+    std::stringstream ss;
+    ss << "Trying to read column index " << i
+       << " but row group metadata has only " << metadata()->numColumns()
+       << " columns";
+    throw ParquetException(ss.str());
+  }
+  const ColumnDescriptor* descr = metadata()->schema()->column(i);
+  auto reader = internal::RecordReader::make(
+      descr,
+      descr->levelInfo(),
+      const_cast<ReaderProperties*>(contents_->properties())->memoryPool());
+  reader->setPageReader(contents_->getColumnPageReader(i));
+  return reader;
+}
+
 std::shared_ptr<ColumnReader> RowGroupReader::columnWithExposeEncoding(
     int i,
     ExposedEncoding encodingToExpose) {
