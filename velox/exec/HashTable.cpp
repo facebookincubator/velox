@@ -721,7 +721,7 @@ void HashTable<ignoreNullKeys>::allocateTables(
       memory::AllocationTraits::numPages(size * tableSlotSize());
   rows_->pool()->allocateContiguous(numPages, tableAllocation_);
   table_ = tableAllocation_.data<char*>();
-  ::memset(table_, 0, capacity_ * sizeof(char*));
+  clearTable(capacity_ * sizeof(char*));
 }
 
 template <bool ignoreNullKeys>
@@ -936,6 +936,50 @@ void syncWorkItems(
 }
 
 } // namespace
+
+template <bool ignoreNullKeys>
+void HashTable<ignoreNullKeys>::clearTable(uint64_t bytes) {
+  if (buildExecutor_ == nullptr || bytes < 2 * kParallelClearRangeBytes) {
+    ::memset(table_, 0, bytes);
+    return;
+  }
+
+  // Passing driver context directly to avoid cross thread access to thread
+  // local driver thread context.
+  const DriverCtx* driverCtx{nullptr};
+  if (const auto* driverThreadCtx = driverThreadContext()) {
+    driverCtx = driverThreadCtx->driverCtx();
+  }
+  const auto numRanges = bits::divRoundUp(bytes, kParallelClearRangeBytes);
+  std::vector<std::shared_ptr<AsyncSource<bool>>> clearSteps;
+  clearSteps.reserve(numRanges);
+  // Reserved up front, so that syncWorkItems() does not allocate while
+  // unwinding.
+  auto& timings = parallelJoinBuildStats_.clearTimings;
+  timings.reserve(timings.size() + numRanges);
+  auto sync = folly::makeGuard([&]() {
+    // The steps write to 'table_', so they must finish before returning, also
+    // when unwinding. Must not throw.
+    syncWorkItems(clearSteps, timings, false);
+  });
+  auto* const begin = reinterpret_cast<char*>(table_);
+  for (uint64_t offset = 0; offset < bytes;
+       offset += kParallelClearRangeBytes) {
+    auto* const start = begin + offset;
+    const auto size = std::min(kParallelClearRangeBytes, bytes - offset);
+    auto step = std::make_shared<AsyncSource<bool>>([start, size]() {
+      ::memset(start, 0, size);
+      return std::make_unique<bool>(true);
+    });
+    clearSteps.push_back(step);
+    buildExecutor_->add([driverCtx, step]() {
+      ScopedDriverThreadContext scopedDriverThreadContext(driverCtx);
+      step->prepare();
+    });
+  }
+  sync.dismiss();
+  syncWorkItems(clearSteps, timings, true);
+}
 
 template <>
 bool HashTable<true>::bloomFilterSupported() const {

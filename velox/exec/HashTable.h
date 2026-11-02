@@ -123,6 +123,7 @@ struct HashTableStats {
 };
 
 struct ParallelJoinBuildStats {
+  std::vector<CpuWallTiming> clearTimings;
   std::vector<CpuWallTiming> partitionTimings;
   std::vector<CpuWallTiming> buildTimings;
   std::vector<CpuWallTiming> bloomFilterPartitionTimings;
@@ -145,6 +146,11 @@ class BaseHashTable {
   /// 2M entries, i.e. 16MB is the largest array based hash table.
   static constexpr uint64_t kArrayHashMaxSize = 2L << 20;
 
+  /// Size of the ranges in which a join build with an executor zeroes a newly
+  /// allocated table in parallel. Tables smaller than two ranges are zeroed on
+  /// the calling thread.
+  static constexpr uint64_t kParallelClearRangeBytes = 64L << 20;
+
   /// Specifies the hash mode of a table.
   enum class HashMode { kHash, kArray, kNormalizedKey };
 
@@ -160,6 +166,10 @@ class BaseHashTable {
 
   /// The same as above but only reported by the HashBuild operator.
   static constexpr std::string_view kBuildWallNanos{"hashtable.buildWallNanos"};
+  static constexpr std::string_view kParallelJoinClearWallNanos{
+      "hashtable.parallelJoinClearWallNanos"};
+  static constexpr std::string_view kParallelJoinClearCpuNanos{
+      "hashtable.parallelJoinClearCpuNanos"};
   static constexpr std::string_view kParallelJoinPartitionWallNanos{
       "hashtable.parallelJoinPartitionWallNanos"};
   static constexpr std::string_view kParallelJoinPartitionCpuNanos{
@@ -1044,6 +1054,12 @@ class HashTable : public BaseHashTable {
   // Allocates new tables for tags and payload pointers. The size must
   // a power of 2.
   void allocateTables(uint64_t size, int8_t spillInputStartPartitionBit);
+
+  // Zeroes the first 'bytes' of 'table_'. With 'buildExecutor_' set, a table
+  // of at least two kParallelClearRangeBytes ranges is zeroed by one task per
+  // range on 'buildExecutor_'. Returns after all tasks have finished, also on
+  // error.
+  void clearTable(uint64_t bytes);
 
   // 'initNormalizedKeys' is passed to 'rehash' --> 'rehash' --> 'insertBatch'.
   // If it's false and the table is in normalized keys mode,
