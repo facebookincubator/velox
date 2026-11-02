@@ -217,7 +217,7 @@ folly::dynamic IcebergColumnHandle::serialize() const {
 
   folly::dynamic requiredSubfieldsArr = folly::dynamic::array;
   for (const auto& subfield : requiredSubfields()) {
-    requiredSubfieldsArr.push_back(subfield.toString());
+    requiredSubfieldsArr.push_back(serializeSubfield(subfield));
   }
   obj["requiredSubfields"] = requiredSubfieldsArr;
 
@@ -249,7 +249,7 @@ ColumnHandlePtr IcebergColumnHandle::create(const folly::dynamic& obj) {
 
   std::vector<common::Subfield> requiredSubfields;
   for (const auto& s : obj["requiredSubfields"]) {
-    requiredSubfields.emplace_back(s.asString());
+    requiredSubfields.push_back(deserializeSubfield(s));
   }
 
   auto field = deserializeFieldId(obj["field"]);

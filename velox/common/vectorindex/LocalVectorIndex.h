@@ -28,8 +28,8 @@
 
 #include "velox/common/vectorindex/Embeddings.h"
 #include "velox/common/vectorindex/LocalVectorIndexOptions.h"
+#include "velox/common/vectorindex/VectorIndexKind.h"
 #include "velox/common/vectorindex/VectorIndexMetric.h"
-#include "velox/common/vectorindex/VectorIndexType.h"
 
 namespace faiss {
 struct Index;
@@ -40,7 +40,7 @@ namespace facebook::velox::common::vectorindex {
 /// A local index: a FAISS index over a group of embeddings, with each
 /// embedding's id as its FAISS id. A vector index keeps one local index per
 /// group of nearby embeddings; a search looks only in the groups nearest to
-/// the query. VectorIndexType names the kind of FAISS
+/// the query. VectorIndexKind names the kind of FAISS
 /// index. The local index is the plain FAISS serialization, as
 /// faiss::write_index writes it, so faiss::read_index rebuilds it with no
 /// container around it.
@@ -53,7 +53,7 @@ class LocalVectorIndex {
   /// does. No embedding may have it.
   static constexpr int64_t kPaddingId{-1};
 
-  /// Builds a local index of 'type' over 'embeddings', with 'ids' giving each
+  /// Builds a local index of 'kind' over 'embeddings', with 'ids' giving each
   /// embedding's id, on the calling thread. Throws a user error for an id of
   /// kPaddingId. The same input gives the same bytes. The embeddings must be
   /// normalized for 'metric' (see
@@ -68,7 +68,7 @@ class LocalVectorIndex {
   /// of the lists, rounded up, and is capped at the number of lists. 'hnsw.M',
   /// 'hnsw.efConstruction' and 'hnsw.efSearch' default to 32, 200 and 64.
   static void build(
-      VectorIndexType type,
+      VectorIndexKind kind,
       VectorIndexMetric metric,
       const LocalVectorIndexOptions& options,
       const Embeddings& embeddings,
@@ -82,7 +82,7 @@ class LocalVectorIndex {
   /// index: 'ivf.nprobe' for IVF types, capped at the number of lists, and
   /// 'hnsw.efSearch' for kHnswSq. Throws a user error if 'bytes' is not such
   /// a local index, if an embedding has kPaddingId, or for a setting that does
-  /// not apply to its type. A local index has at least one embedding.
+  /// not apply to its kind. A local index has at least one embedding.
   LocalVectorIndex(
       std::string_view bytes,
       VectorIndexMetric metric,
@@ -90,7 +90,12 @@ class LocalVectorIndex {
 
   ~LocalVectorIndex();
 
-  VectorIndexType type() const;
+  /// Returns the number of embeddings in the local index 'bytes', which
+  /// build() wrote, from its header, without reading the rest. Throws a user
+  /// error if 'bytes' does not start as a local index does.
+  static int64_t size(std::string_view bytes);
+
+  VectorIndexKind kind() const;
 
   int32_t dimension() const;
 
@@ -112,7 +117,7 @@ class LocalVectorIndex {
 
  private:
   std::unique_ptr<faiss::Index> index_;
-  VectorIndexType type_;
+  VectorIndexKind kind_;
 };
 
 } // namespace facebook::velox::common::vectorindex

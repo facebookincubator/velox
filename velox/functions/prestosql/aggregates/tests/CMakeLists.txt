@@ -125,5 +125,6 @@ if(VELOX_ENABLE_FAISS)
     ${VELOX_AGGREGATES_TEST_DEPS}
     velox_vector_index
     FAISS::faiss
+    GTest::gmock
   )
 endif()

@@ -27,7 +27,6 @@ target_link_libraries(nimble_velox_reader_factory nimble_velox_selective velox_d
 add_library(nimble_velox_field_reader FieldReader.cpp FieldReader.h Decoder.h)
 target_link_libraries(
   nimble_velox_field_reader
-  nimble_encodings_legacy
   nimble_velox_schema_reader
   nimble_common
   Folly::folly
@@ -54,7 +53,6 @@ target_link_libraries(
   nimble_velox_field_reader
   nimble_tablet_reader
   nimble_common
-  nimble_encodings_legacy
   velox_common_base
   Folly::folly
 )

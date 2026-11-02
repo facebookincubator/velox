@@ -60,9 +60,11 @@ endif()
 
 if(VELOX_ENABLE_FAISS)
   set_source_files_properties(
+    GeneralFunctionsRegistration.cpp
     MathematicalFunctionsRegistration.cpp
     PROPERTIES COMPILE_DEFINITIONS VELOX_ENABLE_FAISS
   )
+  velox_link_libraries(velox_functions_prestosql velox_vector_index)
 endif()
 
 # GCC 12 has a bug where it does not respect "pragma ignore" directives and ends
