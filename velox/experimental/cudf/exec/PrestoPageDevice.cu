@@ -17,7 +17,10 @@
 #include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/exec/PrestoPageDevice.h"
 
+#include <cudf/detail/offsets_iterator.cuh>
+#include <cudf/detail/utilities/integer_utils.hpp>
 #include <cudf/detail/utilities/vector_factories.hpp>
+#include <cudf/utilities/bit.hpp>
 #include <cudf/utilities/error.hpp>
 #include <cudf/utilities/span.hpp>
 
@@ -27,6 +30,8 @@
 #include <rmm/exec_policy.hpp>
 
 #include <cub/device/device_memcpy.cuh>
+#include <cuda/numeric>
+#include <cuda/std/cstring>
 #include <cuda/std/functional>
 #include <cuda_runtime.h>
 #include <thrust/copy.h>
@@ -36,6 +41,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <string>
 
 namespace facebook::velox::cudf_velox::detail {
 namespace {
@@ -43,26 +49,16 @@ namespace {
 constexpr int kBlockSize = 256;
 constexpr size_t kMaxGridY = 65535;
 
-__device__ __forceinline__ bool isValidBit(
-    const cudf::bitmask_type* mask,
-    int64_t bit) {
-  return (mask[bit >> 5] >> (bit & 31)) & 1u;
-}
-
+// Offsets indices fit cudf::size_type, as the bits of a cuDF column do.
 __device__ __forceinline__ int64_t
 offsetAt(const StringOffsets& offsets, int64_t index) {
-  return offsets.offsetsInt64
-      ? static_cast<const int64_t*>(offsets.offsets)[index]
-      : static_cast<int64_t>(
-            static_cast<const int32_t*>(offsets.offsets)[index]);
+  return cudf::detail::input_offsetalator(
+      offsets.offsets,
+      offsets.offsetsType)[static_cast<cudf::size_type>(index)];
 }
 
 __device__ __forceinline__ void storeInt32Unaligned(uint8_t* dst, int32_t v) {
-  const auto u = static_cast<uint32_t>(v);
-  dst[0] = static_cast<uint8_t>(u);
-  dst[1] = static_cast<uint8_t>(u >> 8);
-  dst[2] = static_cast<uint8_t>(u >> 16);
-  dst[3] = static_cast<uint8_t>(u >> 24);
+  cuda::std::memcpy(dst, &v, sizeof(v));
 }
 
 // Serialized bits of one row: the fixed part plus 8 bits per string byte.
@@ -99,7 +95,7 @@ __global__ void nullBytesKernel(
     const NullBytesTask* tasks,
     int32_t taskOffset) {
   const NullBytesTask t = tasks[taskOffset + blockIdx.y];
-  const int32_t numBytes = (t.numRows + 7) >> 3;
+  const int32_t numBytes = cudf::util::div_rounding_up_safe(t.numRows, 8);
   for (int32_t j = blockIdx.x * blockDim.x + threadIdx.x; j < numBytes;
        j += gridDim.x * blockDim.x) {
     uint8_t out = 0;
@@ -107,7 +103,9 @@ __global__ void nullBytesKernel(
     const int32_t count = min(8, t.numRows - row0);
 #pragma unroll
     for (int k = 0; k < 8; ++k) {
-      if (k < count && !isValidBit(t.mask, t.firstBit + row0 + k)) {
+      if (k < count &&
+          !cudf::bit_is_set(
+              t.mask, static_cast<cudf::size_type>(t.firstBit + row0 + k))) {
         out |= static_cast<uint8_t>(0x80u >> k);
       }
     }
@@ -115,68 +113,60 @@ __global__ void nullBytesKernel(
   }
 }
 
+// Flags a range whose string bytes exceed what an int32 offset holds.
 __global__ void stringOffsetsKernel(
     const StringOffsetsTask* tasks,
-    int32_t taskOffset) {
+    int32_t taskOffset,
+    int32_t* overflow) {
   const StringOffsetsTask t = tasks[taskOffset + blockIdx.y];
   const int64_t first = t.offsets.firstIndex + t.firstRow;
   const int64_t start = offsetAt(t.offsets, first);
   for (int32_t i = blockIdx.x * blockDim.x + threadIdx.x; i < t.numRows;
        i += gridDim.x * blockDim.x) {
-    const int64_t end = offsetAt(t.offsets, first + 1 + i);
+    const int64_t bytes = offsetAt(t.offsets, first + 1 + i) - start;
+    if (bytes > INT32_MAX) {
+      *overflow = 1;
+    }
     storeInt32Unaligned(
-        t.dst + 4 * static_cast<int64_t>(i), static_cast<int32_t>(end - start));
+        t.dst + 4 * static_cast<int64_t>(i), static_cast<int32_t>(bytes));
   }
 }
 
-__global__ void gatherOffsetsKernel(
-    StringOffsets offsets,
-    const int64_t* rows,
-    int32_t n,
-    int64_t* out) {
-  for (int32_t i = blockIdx.x * blockDim.x + threadIdx.x; i < n;
-       i += gridDim.x * blockDim.x) {
-    out[i] = offsetAt(offsets, offsets.firstIndex + rows[i]);
+struct GatherOffset {
+  StringOffsets offsets;
+
+  __device__ int64_t operator()(int64_t row) const {
+    return offsetAt(offsets, offsets.firstIndex + row);
   }
-}
+};
 
 // Exactly one of mul, div is 1. Flags a product outside int64.
-__global__ void toMillisKernel(
-    const int64_t* src,
-    int32_t n,
-    int64_t mul,
-    int64_t div,
-    int64_t* dst,
-    int32_t* overflow) {
-  for (int32_t i = blockIdx.x * blockDim.x + threadIdx.x; i < n;
-       i += gridDim.x * blockDim.x) {
-    const int64_t v = src[i];
+struct ToMillis {
+  int64_t mul;
+  int64_t div;
+  int32_t* overflow;
+
+  __device__ int64_t operator()(int64_t v) const {
     if (mul != 1) {
-      if (v > INT64_MAX / mul || v < INT64_MIN / mul) {
+      const auto product = cuda::mul_overflow(v, mul);
+      if (product.overflow) {
         *overflow = 1;
-        dst[i] = 0;
-      } else {
-        dst[i] = v * mul;
+        return 0;
       }
-    } else if (div == 1) {
-      dst[i] = v;
-    } else {
-      // Floor division, as Timestamp::toMillis() rounds.
-      int64_t q = v / div;
-      if (v - q * div != 0 && v < 0) {
-        --q;
-      }
-      dst[i] = q;
+      return product.value;
     }
+    // Floor division, as Timestamp::toMillis() rounds; div == 1 passes v.
+    const int64_t q = v / div;
+    return (v % div != 0 && v < 0) ? q - 1 : q;
   }
-}
+};
 
 struct ValidPredicate {
   const cudf::bitmask_type* mask;
   int64_t firstBit;
 
   __device__ bool operator()(int32_t i) const {
-    return isValidBit(mask, firstBit + i);
+    return cudf::bit_is_set(mask, static_cast<cudf::size_type>(firstBit + i));
   }
 };
 
@@ -216,8 +206,15 @@ int32_t compactValidTyped(
 }
 
 uint32_t gridXFor(int64_t maxItems) {
-  const int64_t blocks = (maxItems + kBlockSize - 1) / kBlockSize;
+  const int64_t blocks =
+      cudf::util::div_rounding_up_safe<int64_t>(maxItems, kBlockSize);
   return static_cast<uint32_t>(std::clamp<int64_t>(blocks, 1, 128));
+}
+
+void expectAligned(const void* pointer, int64_t alignment, const char* name) {
+  CUDF_EXPECTS(
+      reinterpret_cast<uintptr_t>(pointer) % alignment == 0,
+      std::string(name) + " must be aligned to the element width");
 }
 
 } // namespace
@@ -230,6 +227,8 @@ std::vector<int64_t> prestoPageBoundaries(
     int64_t maxRows,
     cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
+  CUDF_EXPECTS(pageBytes > 0, "pageBytes must be positive");
+  CUDF_EXPECTS(maxRows > 0, "maxRows must be positive");
   std::vector<int64_t> bounds{0};
   if (numRows == 0) {
     return bounds;
@@ -304,7 +303,8 @@ void fillPrestoNullBytes(
       mr);
   int64_t maxBytes = 0;
   for (const auto& t : tasks) {
-    maxBytes = std::max<int64_t>(maxBytes, (t.numRows + 7) / 8);
+    maxBytes = std::max<int64_t>(
+        maxBytes, cudf::util::div_rounding_up_safe<int64_t>(t.numRows, 8));
   }
   const auto gridX = gridXFor(maxBytes);
   for (size_t offset = 0; offset < tasks.size(); offset += kMaxGridY) {
@@ -316,12 +316,12 @@ void fillPrestoNullBytes(
   }
 }
 
-void fillPrestoStringOffsets(
+bool fillPrestoStringOffsets(
     std::span<const StringOffsetsTask> tasks,
     cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   if (tasks.empty()) {
-    return;
+    return true;
   }
   auto deviceTasks = cudf::detail::make_device_uvector(
       cudf::host_span<StringOffsetsTask const>{tasks.data(), tasks.size()},
@@ -331,14 +331,18 @@ void fillPrestoStringOffsets(
   for (const auto& t : tasks) {
     maxRows = std::max<int64_t>(maxRows, t.numRows);
   }
+  // The initial value is copied asynchronously, so it outlives the kernels.
+  const int32_t zero = 0;
+  rmm::device_scalar<int32_t> overflow(zero, stream, mr);
   const auto gridX = gridXFor(maxRows);
   for (size_t offset = 0; offset < tasks.size(); offset += kMaxGridY) {
     const auto count =
         static_cast<uint32_t>(std::min(kMaxGridY, tasks.size() - offset));
     stringOffsetsKernel<<<dim3(gridX, count), kBlockSize, 0, stream.get()>>>(
-        deviceTasks.data(), static_cast<int32_t>(offset));
+        deviceTasks.data(), static_cast<int32_t>(offset), overflow.data());
     CUDF_CHECK_CUDA(stream.get());
   }
+  return overflow.value(stream) == 0;
 }
 
 void batchedDeviceCopy(
@@ -370,6 +374,8 @@ void batchedDeviceCopy(
       cudf::host_span<uint8_t* const>{dsts.data(), dsts.size()}, stream, mr);
   auto deviceSizes = cudf::detail::make_device_uvector(
       cudf::host_span<size_t const>{sizes.data(), sizes.size()}, stream, mr);
+  // cudf::detail::batched_memcpy_async would take its scratch from the
+  // current device resource; the caller's 'mr' is used here instead.
   size_t tempBytes = 0;
   CUDF_CUDA_TRY(
       cub::DeviceMemcpy::Batched(
@@ -404,12 +410,12 @@ std::vector<int64_t> gatherStringOffsets(
   auto deviceRows = cudf::detail::make_device_uvector(
       cudf::host_span<int64_t const>{rows.data(), rows.size()}, stream, mr);
   rmm::device_uvector<int64_t> out(rows.size(), stream, mr);
-  gatherOffsetsKernel<<<gridXFor(rows.size()), kBlockSize, 0, stream.get()>>>(
-      offsets,
-      deviceRows.data(),
-      static_cast<int32_t>(rows.size()),
-      out.data());
-  CUDF_CHECK_CUDA(stream.get());
+  thrust::transform(
+      rmm::exec_policy(stream),
+      deviceRows.begin(),
+      deviceRows.end(),
+      out.begin(),
+      GatherOffset{offsets});
   return cudf::detail::make_std_vector(
       cudf::device_span<int64_t const>{out.data(), out.size()}, stream);
 }
@@ -422,15 +428,23 @@ bool timestampsToMillis(
     int64_t* dst,
     cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
+  CUDF_EXPECTS(
+      mul >= 1 && div >= 1 && (mul == 1 || div == 1),
+      "mul and div must be positive and one of them 1");
+  expectAligned(src, sizeof(int64_t), "src");
+  expectAligned(dst, sizeof(int64_t), "dst");
   if (numRows == 0) {
     return true;
   }
   // The initial value is copied asynchronously, so it outlives the kernel.
   const int32_t zero = 0;
   rmm::device_scalar<int32_t> overflow(zero, stream, mr);
-  toMillisKernel<<<gridXFor(numRows), kBlockSize, 0, stream.get()>>>(
-      src, numRows, mul, div, dst, overflow.data());
-  CUDF_CHECK_CUDA(stream.get());
+  thrust::transform(
+      rmm::exec_policy(stream),
+      src,
+      src + numRows,
+      dst,
+      ToMillis{mul, div, overflow.data()});
   return overflow.value(stream) == 0;
 }
 
@@ -439,6 +453,8 @@ void decimalsToJava(
     int32_t numRows,
     __int128_t* dst,
     cuda::stream_ref stream) {
+  expectAligned(src, sizeof(__int128_t), "src");
+  expectAligned(dst, sizeof(__int128_t), "dst");
   if (numRows == 0) {
     return;
   }
@@ -454,6 +470,11 @@ int32_t compactValid(
     int32_t numRows,
     uint8_t* dst,
     cuda::stream_ref stream) {
+  CUDF_EXPECTS(
+      width == 1 || width == 2 || width == 4 || width == 8 || width == 16,
+      "Unsupported fixed width for Presto page compaction");
+  expectAligned(src, width, "src");
+  expectAligned(dst, width, "dst");
   if (numRows == 0) {
     return 0;
   }
@@ -485,7 +506,7 @@ int32_t compactValid(
           numRows,
           reinterpret_cast<uint64_t*>(dst),
           stream);
-    case 16:
+    default:
       return compactValidTyped<Bytes16>(
           reinterpret_cast<const Bytes16*>(src),
           mask,
@@ -493,8 +514,6 @@ int32_t compactValid(
           numRows,
           reinterpret_cast<Bytes16*>(dst),
           stream);
-    default:
-      CUDF_FAIL("Unsupported fixed width for Presto page compaction");
   }
 }
 

@@ -15,8 +15,8 @@
  */
 #pragma once
 
-// Device primitives with which CudfPrestoOutput lays out Presto SerializedPage
-// bytes on the GPU. Needs only cuDF, RMM and CUDA headers.
+// Device primitives for laying out Presto SerializedPage bytes on the GPU.
+// Needs only cuDF, RMM and CUDA headers.
 
 #include <cudf/types.hpp>
 
@@ -35,7 +35,8 @@ namespace facebook::velox::cudf_velox::detail {
 /// int32 or int64 offsets child that the column's slice offset indexes into.
 struct StringOffsets {
   const void* offsets;
-  bool offsetsInt64;
+  /// INT32 or INT64.
+  cudf::data_type offsetsType;
   /// Offsets index of the column's first row.
   int64_t firstIndex;
 };
@@ -49,6 +50,7 @@ struct NullBytesTask {
   /// Mask bit of the first row of the range.
   int64_t firstBit;
   int32_t numRows;
+  /// Receives ceil(numRows / 8) bytes.
   uint8_t* dst;
 };
 
@@ -59,6 +61,7 @@ struct StringOffsetsTask {
   /// First row of the range, counted from the column's first row.
   int64_t firstRow;
   int32_t numRows;
+  /// Receives numRows int32 offsets.
   uint8_t* dst;
 };
 
@@ -73,7 +76,7 @@ struct CopyTask {
 /// 1 values from 0 to numRows, or {0} without rows. A row costs
 /// 'fixedBitsPerRow' bits plus the bytes of its strings. A page holds at least
 /// one row and at most 'maxRows' rows, and exceeds 'pageBytes' by less than
-/// one row.
+/// one row. 'pageBytes' and 'maxRows' are positive.
 std::vector<int64_t> prestoPageBoundaries(
     int32_t numRows,
     int64_t fixedBitsPerRow,
@@ -89,8 +92,10 @@ void fillPrestoNullBytes(
     cuda::stream_ref stream,
     rmm::device_async_resource_ref mr);
 
-/// Runs every StringOffsetsTask.
-void fillPrestoStringOffsets(
+/// Runs every StringOffsetsTask. Returns false when the strings of a range
+/// take more bytes than an int32 offset holds, so that no Presto page can
+/// carry the range; 'dst' is unspecified in that case.
+bool fillPrestoStringOffsets(
     std::span<const StringOffsetsTask> tasks,
     cuda::stream_ref stream,
     rmm::device_async_resource_ref mr);
@@ -109,8 +114,9 @@ std::vector<int64_t> gatherStringOffsets(
     cuda::stream_ref stream,
     rmm::device_async_resource_ref mr);
 
-/// dst[i] = floor(src[i] * mul / div). Exactly one of mul, div is 1, and
-/// 'dst' may be 'src'. Returns false when a product does not fit in int64, as
+/// dst[i] = floor(src[i] * mul / div). 'mul' and 'div' are positive and one
+/// of them is 1; 'src' and 'dst' are 8-byte aligned and may be the same.
+/// Returns false when a product does not fit in int64, as
 /// Timestamp::toMillis() fails then; 'dst' is unspecified in that case.
 bool timestampsToMillis(
     const int64_t* src,
@@ -123,7 +129,8 @@ bool timestampsToMillis(
 
 /// Rewrites two's complement decimals as the sign-magnitude values Presto Java
 /// reads from an INT128_ARRAY block: a negative value becomes its magnitude
-/// with the top bit set. 'dst' may be 'src'.
+/// with the top bit set. 'src' and 'dst' are 16-byte aligned and may be the
+/// same.
 void decimalsToJava(
     const __int128_t* src,
     int32_t numRows,
@@ -131,8 +138,8 @@ void decimalsToJava(
     cuda::stream_ref stream);
 
 /// Copies the values of the valid rows into 'dst' back to back. 'width' is
-/// the element size in bytes, one of 1, 2, 4, 8, 16. Returns the number of
-/// values copied.
+/// the element size in bytes, one of 1, 2, 4, 8, 16, and 'src' and 'dst' are
+/// aligned to it. Returns the number of values copied.
 int32_t compactValid(
     const uint8_t* src,
     int32_t width,

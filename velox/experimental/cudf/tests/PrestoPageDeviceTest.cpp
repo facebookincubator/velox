@@ -17,7 +17,9 @@
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/exec/PrestoPageDevice.h"
 
+#include <cudf/detail/utilities/integer_utils.hpp>
 #include <cudf/detail/utilities/vector_factories.hpp>
+#include <cudf/utilities/error.hpp>
 #include <cudf/utilities/memory_resource.hpp>
 #include <cudf/utilities/span.hpp>
 
@@ -37,6 +39,8 @@ namespace {
 using detail::StringOffsets;
 
 constexpr int64_t kNoRowCap = std::numeric_limits<int64_t>::max();
+constexpr cudf::data_type kInt32{cudf::type_id::INT32};
+constexpr cudf::data_type kInt64{cudf::type_id::INT64};
 
 // Checks the device primitives on hand-built, sliced inputs: offsets children
 // that start before the column's first row and masks whose first bit is not
@@ -59,7 +63,8 @@ class PrestoPageDeviceTest : public testing::Test {
   static std::vector<cudf::bitmask_type> makeMask(
       int64_t numBits,
       const std::function<bool(int64_t)>& valid) {
-    std::vector<cudf::bitmask_type> words((numBits + 31) / 32, 0);
+    std::vector<cudf::bitmask_type> words(
+        cudf::util::div_rounding_up_safe<int64_t>(numBits, 32), 0);
     for (int64_t i = 0; i < numBits; ++i) {
       if (valid(i)) {
         words[i / 32] |= 1u << (i % 32);
@@ -103,17 +108,21 @@ TEST_F(PrestoPageDeviceTest, pageBoundariesWithoutStrings) {
   EXPECT_EQ(bounds(7, 0, {}, 1024, 3), (Bounds{0, 3, 6, 7}));
   EXPECT_EQ(bounds(1, 0, {}, 1024, 3), (Bounds{0, 1}));
   EXPECT_EQ(bounds(0, 64, {}, 16, kNoRowCap), (Bounds{0}));
+  // Pages need a positive size and row cap.
+  EXPECT_THROW(bounds(3, 64, {}, 0, kNoRowCap), cudf::logic_error);
+  EXPECT_THROW(bounds(3, 64, {}, 16, 0), cudf::logic_error);
 }
 
 TEST_F(PrestoPageDeviceTest, pageBoundariesWithStrings) {
   using Bounds = std::vector<int64_t>;
   auto offsets32 = toDevice(offsets32_);
   auto offsets64 = toDevice(offsets64_);
-  const StringOffsets strings32{offsets32.data(), false, kFirstIndex};
-  const StringOffsets strings64{offsets64.data(), true, kFirstIndex};
+  const StringOffsets strings32{offsets32.data(), kInt32, kFirstIndex};
+  const StringOffsets strings64{offsets64.data(), kInt64, kFirstIndex};
   for (const auto& strings : {strings32, strings64}) {
     SCOPED_TRACE(
-        testing::Message() << "int64 offsets = " << strings.offsetsInt64);
+        testing::Message() << "int64 offsets = "
+                           << (strings.offsetsType == kInt64));
     // 8-byte pages and only the string bytes: the cumulative bytes are 3, 3,
     // 13, 14, 15, 55, 57, 59, so the pages end before rows 2 and 5, and the
     // 40-byte row 5 is a page by itself.
@@ -137,7 +146,7 @@ TEST_F(PrestoPageDeviceTest, pageBoundariesWithStrings) {
   // Two string columns; the second starts at index 0, so its rows are 5, 4,
   // 3, 0, 10, 1, 1, 40 bytes long and the rows cost 8, 4, 13, 1, 11, 41, 3,
   // 42 bytes in all.
-  const StringOffsets second{offsets32.data(), false, 0};
+  const StringOffsets second{offsets32.data(), kInt32, 0};
   EXPECT_EQ(
       bounds(kNumStrings, 0, {strings32, second}, 8, kNoRowCap),
       (Bounds{0, 1, 2, 4, 5, 6, 7, 8}));
@@ -160,7 +169,7 @@ TEST_F(PrestoPageDeviceTest, nullBytes) {
   size_t position = 0;
   for (const auto& task : tasks) {
     SCOPED_TRACE(testing::Message() << "firstBit = " << task.firstBit);
-    const size_t numBytes = (task.numRows + 7) / 8;
+    const size_t numBytes = cudf::util::div_rounding_up_safe(task.numRows, 8);
     std::vector<uint8_t> expected(numBytes, 0);
     for (int32_t row = 0; row < task.numRows; ++row) {
       if (!valid(task.firstBit + row)) {
@@ -177,11 +186,12 @@ TEST_F(PrestoPageDeviceTest, nullBytes) {
 TEST_F(PrestoPageDeviceTest, stringOffsets) {
   auto offsets32 = toDevice(offsets32_);
   auto offsets64 = toDevice(offsets64_);
-  const StringOffsets strings32{offsets32.data(), false, kFirstIndex};
-  const StringOffsets strings64{offsets64.data(), true, kFirstIndex};
+  const StringOffsets strings32{offsets32.data(), kInt32, kFirstIndex};
+  const StringOffsets strings64{offsets64.data(), kInt64, kFirstIndex};
   for (const auto& strings : {strings32, strings64}) {
     SCOPED_TRACE(
-        testing::Message() << "int64 offsets = " << strings.offsetsInt64);
+        testing::Message() << "int64 offsets = "
+                           << (strings.offsetsType == kInt64));
     rmm::device_uvector<uint8_t> out(5 * sizeof(int32_t), stream_, mr_);
     const std::vector<detail::StringOffsetsTask> tasks = {
         // Rows 2 to 5 start at offset 12 and end at 22, 23, 24 and 64.
@@ -189,7 +199,7 @@ TEST_F(PrestoPageDeviceTest, stringOffsets) {
         // Row 0 alone.
         {strings, 0, 1, out.data() + 4 * sizeof(int32_t)},
     };
-    detail::fillPrestoStringOffsets(tasks, stream_, mr_);
+    EXPECT_TRUE(detail::fillPrestoStringOffsets(tasks, stream_, mr_));
     const auto bytes = toHost(out);
     std::vector<int32_t> actual(5);
     std::memcpy(actual.data(), bytes.data(), bytes.size());
@@ -200,6 +210,30 @@ TEST_F(PrestoPageDeviceTest, stringOffsets) {
         detail::gatherStringOffsets(strings, rows, stream_, mr_),
         (std::vector<int64_t>{9, 12, 24, 68}));
   }
+}
+
+TEST_F(PrestoPageDeviceTest, stringOffsetsBeyondInt32) {
+  // A row of 2^31 - 1 bytes, which only int64 offsets can describe, is the
+  // most an int32 Presto offset holds; a range with one byte more is refused.
+  constexpr int64_t kLimit = std::numeric_limits<int32_t>::max();
+  auto offsets = toDevice(std::vector<int64_t>{0, 4, 4 + kLimit, 5 + kLimit});
+  const StringOffsets strings{offsets.data(), kInt64, 0};
+  rmm::device_uvector<uint8_t> out(2 * sizeof(int32_t), stream_, mr_);
+  EXPECT_TRUE(
+      detail::fillPrestoStringOffsets(
+          std::vector<detail::StringOffsetsTask>{{strings, 1, 1, out.data()}},
+          stream_,
+          mr_));
+  EXPECT_FALSE(
+      detail::fillPrestoStringOffsets(
+          std::vector<detail::StringOffsetsTask>{{strings, 0, 2, out.data()}},
+          stream_,
+          mr_));
+  EXPECT_FALSE(
+      detail::fillPrestoStringOffsets(
+          std::vector<detail::StringOffsetsTask>{{strings, 1, 2, out.data()}},
+          stream_,
+          mr_));
 }
 
 TEST_F(PrestoPageDeviceTest, compactValid) {
@@ -240,6 +274,58 @@ TEST_F(PrestoPageDeviceTest, compactValid) {
   check(uint32_t{});
   check(uint64_t{});
   check(__int128_t{});
+}
+
+TEST_F(PrestoPageDeviceTest, alignmentAndArgumentChecks) {
+  // Values follow the null bitmap in a Presto page, so a destination inside
+  // a page is generally unaligned; the primitives work on aligned scratch
+  // buffers and refuse anything else.
+  rmm::device_uvector<uint8_t> buffer(64, stream_, mr_);
+  auto mask = toDevice(makeMask(8, [](int64_t) { return true; }));
+  auto* aligned = buffer.data();
+  auto* shifted = buffer.data() + 1;
+  for (int32_t width : {2, 4, 8, 16}) {
+    SCOPED_TRACE(testing::Message() << "width = " << width);
+    EXPECT_THROW(
+        detail::compactValid(
+            aligned, width, mask.data(), 0, 2, shifted, stream_),
+        cudf::logic_error);
+    EXPECT_THROW(
+        detail::compactValid(
+            shifted, width, mask.data(), 0, 2, aligned, stream_),
+        cudf::logic_error);
+  }
+  EXPECT_EQ(
+      detail::compactValid(shifted, 1, mask.data(), 0, 2, aligned, stream_), 2);
+  EXPECT_THROW(
+      detail::compactValid(aligned, 3, mask.data(), 0, 2, aligned, stream_),
+      cudf::logic_error);
+
+  auto* const i64 = reinterpret_cast<int64_t*>(aligned);
+  auto* const i64Shifted = reinterpret_cast<int64_t*>(buffer.data() + 4);
+  EXPECT_THROW(
+      detail::timestampsToMillis(i64, 2, 1'000, 1, i64Shifted, stream_, mr_),
+      cudf::logic_error);
+  EXPECT_THROW(
+      detail::timestampsToMillis(i64Shifted, 2, 1'000, 1, i64, stream_, mr_),
+      cudf::logic_error);
+  // mul and div: positive, and at most one of them differs from 1.
+  EXPECT_THROW(
+      detail::timestampsToMillis(i64, 2, 0, 1, i64, stream_, mr_),
+      cudf::logic_error);
+  EXPECT_THROW(
+      detail::timestampsToMillis(i64, 2, 1, 0, i64, stream_, mr_),
+      cudf::logic_error);
+  EXPECT_THROW(
+      detail::timestampsToMillis(i64, 2, 1'000, 1'000, i64, stream_, mr_),
+      cudf::logic_error);
+
+  auto* const i128 = reinterpret_cast<__int128_t*>(aligned);
+  auto* const i128Shifted = reinterpret_cast<__int128_t*>(buffer.data() + 8);
+  EXPECT_THROW(
+      detail::decimalsToJava(i128, 2, i128Shifted, stream_), cudf::logic_error);
+  EXPECT_THROW(
+      detail::decimalsToJava(i128Shifted, 2, i128, stream_), cudf::logic_error);
 }
 
 TEST_F(PrestoPageDeviceTest, timestampsToMillis) {
