@@ -14,9 +14,15 @@
  * limitations under the License.
  */
 #include <glog/logging.h>
+#include <array>
+#include <bit>
 #include <cstddef>
+#include <cstdint>
+#include <fstream>
+#include <initializer_list>
 #include <limits>
 #include <optional>
+#include <span>
 #include <type_traits>
 #include <vector>
 
@@ -119,6 +125,443 @@ inline void randomZero(RNG&& rng, std::vector<T>& data) {
       data[i] = 0;
     }
   }
+}
+
+template <typename Physical>
+void writeLittleEndianValues(
+    const std::string& fileName,
+    std::span<const Physical> values) {
+  std::ofstream file{
+      fileName, std::ios::out | std::ios::binary | std::ios::trunc};
+  for (const auto value : values) {
+    for (uint8_t byte = 0; byte < sizeof(Physical); ++byte) {
+      file.put(static_cast<char>(value >> (8 * byte)));
+    }
+  }
+  NIMBLE_CHECK(file.good(), fmt::format("Failed to write {}", fileName));
+}
+
+template <typename T>
+nimble::Vector<T> logicalValues(
+    velox::memory::MemoryPool& pool,
+    std::span<const typename nimble::TypeTraits<T>::physicalType> bits) {
+  nimble::Vector<T> values{&pool};
+  values.reserve(bits.size());
+  for (const auto value : bits) {
+    values.push_back(std::bit_cast<T>(value));
+  }
+  return values;
+}
+
+void writeEncoding(
+    const std::string& path,
+    std::string_view identifier,
+    nimble::CompressionType compressionType,
+    std::string_view encoded) {
+  const auto fileName = fmt::format(
+      "{}/{}_{}.encoding", path, identifier, toString(compressionType));
+  std::ofstream file{
+      fileName, std::ios::out | std::ios::binary | std::ios::trunc};
+  file.write(encoded.data(), static_cast<std::streamsize>(encoded.size()));
+  NIMBLE_CHECK(file.good(), fmt::format("Failed to write {}", fileName));
+}
+
+void validateExceptionCount(
+    uint32_t exceptionCount,
+    std::optional<uint32_t> minimumExceptions) {
+  if (!minimumExceptions.has_value()) {
+    return;
+  }
+  NIMBLE_CHECK_GE(exceptionCount, minimumExceptions.value());
+  if (minimumExceptions.value() == 0) {
+    NIMBLE_CHECK_EQ(exceptionCount, 0);
+  }
+}
+
+// Checks that every child is Trivial with either no compression or the
+// requested one, and that a compressed variant compresses at least one child.
+void validateChildren(
+    std::span<const std::string_view> children,
+    nimble::CompressionType compressionType,
+    std::string_view encodingName) {
+  uint8_t compressedChildren = 0;
+  for (const auto child : children) {
+    NIMBLE_CHECK_EQ(
+        nimble::EncodingPrefix::encodingType(child),
+        nimble::EncodingType::Trivial);
+    NIMBLE_CHECK_GT(child.size(), nimble::EncodingPrefix::kFixedPrefixSize);
+    const auto childCompression = static_cast<nimble::CompressionType>(
+        static_cast<uint8_t>(child[nimble::EncodingPrefix::kFixedPrefixSize]));
+    NIMBLE_CHECK(
+        childCompression == nimble::CompressionType::Uncompressed ||
+        childCompression == compressionType);
+    compressedChildren += childCompression == compressionType;
+  }
+  NIMBLE_CHECK(
+      compressionType == nimble::CompressionType::Uncompressed ||
+          compressedChildren > 0,
+      fmt::format(
+          "{} fixture must contain at least one compressed child",
+          encodingName));
+}
+
+template <typename Physical>
+void validateRoundTrip(
+    std::string_view encoded,
+    std::span<const Physical> expected,
+    std::string_view encodingName,
+    velox::memory::MemoryPool& pool) {
+  auto decoder = nimble::EncodingFactory().create(pool, encoded, nullptr);
+  nimble::Vector<Physical> actual{&pool};
+  actual.resize(expected.size());
+  decoder->materialize(static_cast<uint32_t>(actual.size()), actual.data());
+  NIMBLE_CHECK(
+      std::equal(
+          actual.begin(), actual.end(), expected.begin(), expected.end()),
+      fmt::format("{} fixture failed raw-bit round trip", encodingName));
+}
+
+template <typename T>
+void validateALPRD(
+    std::string_view encoded,
+    std::span<const typename nimble::TypeTraits<T>::physicalType> expected,
+    nimble::CompressionType compressionType,
+    std::optional<uint32_t> minimumExceptions,
+    velox::memory::MemoryPool& pool) {
+  NIMBLE_CHECK_EQ(
+      nimble::EncodingPrefix::encodingType(encoded),
+      nimble::EncodingType::ALPRD);
+  NIMBLE_CHECK_EQ(
+      nimble::EncodingPrefix::prefixSize(encoded, false),
+      nimble::EncodingPrefix::kFixedPrefixSize);
+  const auto metadata = nimble::ALPRDEncodingBase::readMetadata(encoded, {});
+  NIMBLE_CHECK_EQ(metadata.rowCount, expected.size());
+  validateExceptionCount(metadata.exceptionCount, minimumExceptions);
+  validateChildren(
+      {metadata.children.data(), metadata.childrenCount()},
+      compressionType,
+      "ALPRD");
+  validateRoundTrip(encoded, expected, "ALPRD", pool);
+}
+
+// Returns the length-prefixed nested encoding at 'pos' and advances past it.
+std::string_view readNestedEncoding(const char*& pos) {
+  const auto size = nimble::varint::readVarint32(&pos);
+  const std::string_view nested{pos, size};
+  pos += size;
+  return nested;
+}
+
+template <typename T>
+void validateALP(
+    std::string_view encoded,
+    std::span<const typename nimble::TypeTraits<T>::physicalType> expected,
+    nimble::CompressionType compressionType,
+    std::optional<uint32_t> minimumExceptions,
+    velox::memory::MemoryPool& pool) {
+  using Physical = typename nimble::TypeTraits<T>::physicalType;
+  NIMBLE_CHECK_EQ(
+      nimble::EncodingPrefix::encodingType(encoded), nimble::EncodingType::ALP);
+  NIMBLE_CHECK_EQ(
+      nimble::EncodingPrefix::prefixSize(encoded, false),
+      nimble::EncodingPrefix::kFixedPrefixSize);
+  NIMBLE_CHECK_EQ(
+      nimble::EncodingPrefix::readRowCount(encoded, false), expected.size());
+  const char* pos = encoded.data() + nimble::EncodingPrefix::kFixedPrefixSize;
+  const auto header = nimble::detail::alp::readHeader(pos);
+  const uint32_t exceptionCount =
+      header.hasExceptions ? nimble::varint::readVarint32(&pos) : 0;
+  validateExceptionCount(exceptionCount, minimumExceptions);
+  // The digits, then the exception positions and the exceptions' raw bits.
+  std::vector<std::string_view> children{readNestedEncoding(pos)};
+  std::vector<nimble::DataType> childTypes{nimble::DataType::Uint64};
+  if (exceptionCount > 0) {
+    children.push_back(readNestedEncoding(pos));
+    childTypes.push_back(nimble::DataType::Uint32);
+    children.push_back(readNestedEncoding(pos));
+    childTypes.push_back(nimble::TypeTraits<Physical>::dataType);
+  }
+  NIMBLE_CHECK_EQ(static_cast<size_t>(pos - encoded.data()), encoded.size());
+  for (size_t i = 0; i < children.size(); ++i) {
+    NIMBLE_CHECK_EQ(
+        nimble::EncodingPrefix::dataType(children[i]), childTypes[i]);
+  }
+  validateChildren(children, compressionType, "ALP");
+  validateRoundTrip(encoded, expected, "ALP", pool);
+}
+
+template <typename T>
+using FixtureValidator = void (*)(
+    std::string_view,
+    std::span<const typename nimble::TypeTraits<T>::physicalType>,
+    nimble::CompressionType,
+    std::optional<uint32_t>,
+    velox::memory::MemoryPool&);
+
+// Writes the raw bits and one encoding per compression type, after 'validate'
+// checks each encoding.
+template <template <typename> class Encoding, typename T>
+void writeFixture(
+    const std::string& path,
+    std::string_view encodingName,
+    FixtureValidator<T> validate,
+    std::span<const typename nimble::TypeTraits<T>::physicalType> bits,
+    std::string_view suffix,
+    std::optional<uint32_t> minimumExceptions,
+    std::initializer_list<nimble::CompressionType> compressionTypes) {
+  const auto identifier = fmt::format(
+      "{}_{}_{}_{}",
+      encodingName,
+      toString(nimble::TypeTraits<T>::dataType),
+      bits.size(),
+      suffix);
+  LOG(INFO) << "Writing " << identifier;
+  writeLittleEndianValues(fmt::format("{}/{}.data", path, identifier), bits);
+
+  auto pool = facebook::velox::memory::deprecatedAddDefaultLeafMemoryPool();
+  const auto values = logicalValues<T>(*pool, bits);
+  for (const auto compressionType : compressionTypes) {
+    nimble::Buffer buffer{*pool};
+    const auto encoded = nimble::test::Encoder<Encoding<T>>::encode(
+        buffer, values, compressionType);
+    validate(encoded, bits, compressionType, minimumExceptions, *pool);
+    writeEncoding(path, identifier, compressionType, encoded);
+  }
+}
+
+// Writes a 256-row Nullable FLOAT fixture in which every fourth row is null and
+// the non-null values repeat 'pattern' in 'Encoding'.
+template <template <typename> class Encoding>
+void writeNullableFloatFixture(
+    const std::string& path,
+    std::string_view identifier,
+    FixtureValidator<float> validate,
+    std::span<const uint32_t> pattern,
+    std::optional<uint32_t> minimumExceptions) {
+  std::array<bool, 256> validityBits{};
+  std::array<uint32_t, 192> bits{};
+  uint32_t valueIndex = 0;
+  for (uint32_t row = 0; row < validityBits.size(); ++row) {
+    validityBits[row] = row % 4 != 1;
+    if (validityBits[row]) {
+      bits[valueIndex] = pattern[valueIndex % pattern.size()];
+      ++valueIndex;
+    }
+  }
+  NIMBLE_CHECK_EQ(valueIndex, bits.size());
+
+  LOG(INFO) << "Writing " << identifier;
+  writeLittleEndianValues(
+      fmt::format("{}/{}.data", path, identifier),
+      std::span<const uint32_t>{bits});
+  writeLittleEndianValues(
+      fmt::format("{}/{}.nulls", path, identifier),
+      std::span<const bool>{validityBits});
+
+  auto pool = facebook::velox::memory::deprecatedAddDefaultLeafMemoryPool();
+  const auto values = logicalValues<float>(*pool, bits);
+  nimble::Vector<bool> validity{pool.get()};
+  validity.reserve(validityBits.size());
+  for (const auto value : validityBits) {
+    validity.push_back(value);
+  }
+  for (const auto compressionType :
+       {nimble::CompressionType::Uncompressed, nimble::CompressionType::Zstd}) {
+    nimble::Buffer valuesBuffer{*pool};
+    nimble::Buffer validityBuffer{*pool};
+    nimble::Buffer outerBuffer{*pool};
+    const auto encodedValues = nimble::test::Encoder<Encoding<float>>::encode(
+        valuesBuffer, values, compressionType);
+    validate(encodedValues, bits, compressionType, minimumExceptions, *pool);
+    const auto encodedValidity =
+        nimble::test::Encoder<nimble::TrivialEncoding<bool>>::encode(
+            validityBuffer, validity, compressionType);
+    const auto encoded = nimble::NullableEncoding<float>::encodeNullable(
+        validityBits.size(), encodedValues, encodedValidity, outerBuffer, {});
+    NIMBLE_CHECK_EQ(
+        nimble::EncodingPrefix::encodingType(encoded),
+        nimble::EncodingType::Nullable);
+    NIMBLE_CHECK_EQ(
+        nimble::EncodingPrefix::prefixSize(encoded, false),
+        nimble::EncodingPrefix::kFixedPrefixSize);
+    NIMBLE_CHECK_EQ(
+        nimble::EncodingPrefix::readRowCount(encoded, false),
+        static_cast<uint32_t>(validityBits.size()));
+    writeEncoding(path, identifier, compressionType, encoded);
+  }
+}
+
+constexpr std::array<uint64_t, 11> kDoubleSpecialBits{
+    0x0000000000000000,
+    0x8000000000000000,
+    0x7ff0000000000000,
+    0xfff0000000000000,
+    0x7ff8000000000000,
+    0x7ff8000000000025,
+    0x7ff0000000000001,
+    0x0000000000000001,
+    0x7fefffffffffffff,
+    0x0000000000000001,
+    0xffffffffffffffff,
+};
+
+void writeALPRDFixtures(const std::string& path) {
+  constexpr std::array<uint32_t, 12> kZeroExceptionFloatPattern{
+      0x3f800000,
+      0x3f800001,
+      0x3f800002,
+      0x3f800003,
+      0x3f800005,
+      0x3f800008,
+      0x3f80000d,
+      0x3f800015,
+      0x3f800022,
+      0x3f800037,
+      0x3f800059,
+      0x3f800090,
+  };
+  constexpr std::array<uint64_t, 16> kManyExceptionDoublePattern{
+      0x0000000000000000,
+      0x1000000000000000,
+      0x2000000000000000,
+      0x3000000000000000,
+      0x4000000000000000,
+      0x5000000000000000,
+      0x6000000000000000,
+      0x7000000000000000,
+      0x8000000000000000,
+      0x9000000000000000,
+      0xa000000000000000,
+      0xb000000000000000,
+      0xc000000000000000,
+      0xd000000000000000,
+      0xe000000000000000,
+      0xf000000000000000,
+  };
+  constexpr std::array<uint32_t, 8> kNullablePattern{
+      0x00000000,
+      0x80000000,
+      0x7f800000,
+      0xff800000,
+      0x7fc00025,
+      0x7f800001,
+      0x00000001,
+      0x7f7fffff,
+  };
+  std::array<uint32_t, 256> zeroExceptionFloatBits{};
+  std::array<uint64_t, 256> manyExceptionDoubleBits{};
+  for (uint32_t i = 0; i < zeroExceptionFloatBits.size(); ++i) {
+    zeroExceptionFloatBits[i] =
+        kZeroExceptionFloatPattern[i % kZeroExceptionFloatPattern.size()];
+    manyExceptionDoubleBits[i] =
+        kManyExceptionDoublePattern[i % kManyExceptionDoublePattern.size()];
+  }
+  writeFixture<nimble::ALPRDEncoding, float>(
+      path,
+      "ALPRD",
+      validateALPRD<float>,
+      zeroExceptionFloatBits,
+      "zero-exceptions",
+      0,
+      {nimble::CompressionType::Uncompressed, nimble::CompressionType::Zstd});
+  writeFixture<nimble::ALPRDEncoding, double>(
+      path,
+      "ALPRD",
+      validateALPRD<double>,
+      manyExceptionDoubleBits,
+      "many-exceptions",
+      4,
+      {nimble::CompressionType::Uncompressed, nimble::CompressionType::Zstd});
+  writeFixture<nimble::ALPRDEncoding, double>(
+      path,
+      "ALPRD",
+      validateALPRD<double>,
+      kDoubleSpecialBits,
+      "ieee-specials",
+      std::nullopt,
+      {nimble::CompressionType::Uncompressed});
+  writeNullableFloatFixture<nimble::ALPRDEncoding>(
+      path,
+      "Nullable_Float_256_alprd",
+      validateALPRD<float>,
+      kNullablePattern,
+      std::nullopt);
+}
+
+void writeALPFixtures(const std::string& path) {
+  // Two-decimal values that exponent 2 represents exactly.
+  constexpr std::array<double, 12> kDecimals{
+      1.25,
+      3.5,
+      -2.75,
+      10.01,
+      0.1,
+      99.99,
+      -0.5,
+      1'234.56,
+      7.0,
+      0.0,
+      -42.42,
+      5.55,
+  };
+  // Magnitudes beyond the int64 range at every exponent, which ALP stores as
+  // exceptions.
+  constexpr std::array<double, 4> kOutOfRange{
+      1.5e20,
+      -3.25e25,
+      7e100,
+      std::numeric_limits<double>::max(),
+  };
+  // Decimals alternating with IEEE values that ALP stores as exceptions.
+  constexpr std::array<float, 8> kNullableValues{
+      1.25f,
+      -0.0f,
+      3.5f,
+      std::numeric_limits<float>::infinity(),
+      0.1f,
+      std::bit_cast<float>(uint32_t{0x7fc00025}),
+      99.99f,
+      std::numeric_limits<float>::denorm_min(),
+  };
+  std::array<uint32_t, 256> zeroExceptionFloatBits{};
+  std::array<uint64_t, 256> manyExceptionDoubleBits{};
+  for (uint32_t i = 0; i < zeroExceptionFloatBits.size(); ++i) {
+    zeroExceptionFloatBits[i] = std::bit_cast<uint32_t>(
+        static_cast<float>(kDecimals[i % kDecimals.size()]));
+    manyExceptionDoubleBits[i] = std::bit_cast<uint64_t>(
+        i % 4 == 3 ? kOutOfRange[i / 4 % kOutOfRange.size()]
+                   : kDecimals[i % kDecimals.size()]);
+  }
+  std::array<uint32_t, kNullableValues.size()> nullablePattern{};
+  for (size_t i = 0; i < kNullableValues.size(); ++i) {
+    nullablePattern[i] = std::bit_cast<uint32_t>(kNullableValues[i]);
+  }
+  writeFixture<nimble::ALPEncoding, float>(
+      path,
+      "ALP",
+      validateALP<float>,
+      zeroExceptionFloatBits,
+      "zero-exceptions",
+      0,
+      {nimble::CompressionType::Uncompressed, nimble::CompressionType::Zstd});
+  writeFixture<nimble::ALPEncoding, double>(
+      path,
+      "ALP",
+      validateALP<double>,
+      manyExceptionDoubleBits,
+      "many-exceptions",
+      64,
+      {nimble::CompressionType::Uncompressed, nimble::CompressionType::Zstd});
+  writeFixture<nimble::ALPEncoding, double>(
+      path,
+      "ALP",
+      validateALP<double>,
+      kDoubleSpecialBits,
+      "ieee-specials",
+      std::nullopt,
+      {nimble::CompressionType::Uncompressed});
+  writeNullableFloatFixture<nimble::ALPEncoding>(
+      path, "Nullable_Float_256_alp", validateALP<float>, nullablePattern, 96);
 }
 
 } // namespace
@@ -462,6 +905,12 @@ int main(int argc, char* argv[]) {
   }
   if (match("FixedBitWidth")) {
     WRITE_FBW_FILES(256);
+  }
+  if (match("ALPRD")) {
+    writeALPRDFixtures(FLAGS_output_dir);
+  }
+  if (match("ALP")) {
+    writeALPFixtures(FLAGS_output_dir);
   }
   if (match("MainlyConstant")) {
     WRITE_NON_BOOL_FILES(MainlyConstantEncoding, 256);

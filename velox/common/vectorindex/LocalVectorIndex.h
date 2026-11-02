@@ -90,6 +90,11 @@ class LocalVectorIndex {
 
   ~LocalVectorIndex();
 
+  /// Returns the number of embeddings in the local index 'bytes', which
+  /// build() wrote, from its header, without reading the rest. Throws a user
+  /// error if 'bytes' does not start as a local index does.
+  static int64_t size(std::string_view bytes);
+
   VectorIndexKind kind() const;
 
   int32_t dimension() const;
