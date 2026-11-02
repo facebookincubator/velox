@@ -246,7 +246,7 @@ jobs:
       - name: Ccache after
         run: ccache -s
 
-      - uses: apache/infrastructure-actions/stash/save@b1b1ab191498302581efdef55279706f79249c0e
+      - uses: apache/infrastructure-actions/stash/save@bd72894b857767d42834c186c90767d5c86624bb
         continue-on-error: true
         timeout-minutes: 20
         with:
@@ -752,7 +752,7 @@ jobs:
         run: |
           ccache -vs
 
-      - uses: apache/infrastructure-actions/stash/save@b1b1ab191498302581efdef55279706f79249c0e
+      - uses: apache/infrastructure-actions/stash/save@bd72894b857767d42834c186c90767d5c86624bb
         continue-on-error: true
         timeout-minutes: 20
         with:
@@ -945,7 +945,7 @@ jobs:
         run: |
           ccache -vs
 
-      - uses: apache/infrastructure-actions/stash/save@b1b1ab191498302581efdef55279706f79249c0e
+      - uses: apache/infrastructure-actions/stash/save@bd72894b857767d42834c186c90767d5c86624bb
         continue-on-error: true
         timeout-minutes: 20
         with:
@@ -1125,7 +1125,7 @@ jobs:
       - name: Ccache after
         run: ccache -s
 
-      - uses: apache/infrastructure-actions/stash/save@b1b1ab191498302581efdef55279706f79249c0e
+      - uses: apache/infrastructure-actions/stash/save@bd72894b857767d42834c186c90767d5c86624bb
         continue-on-error: true
         timeout-minutes: 20
         with:

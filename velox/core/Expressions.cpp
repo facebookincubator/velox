@@ -54,7 +54,7 @@ folly::dynamic ITypedExpr::serializeBase(std::string_view name) const {
       serializedInputs.push_back(input->serialize());
     }
 
-    obj["inputs"] = serializedInputs;
+    obj["inputs"] = std::move(serializedInputs);
   }
 
   return obj;

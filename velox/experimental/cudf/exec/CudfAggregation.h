@@ -61,6 +61,14 @@ bool maskSupportedByCudf(
     const core::AggregationNode::Aggregate& aggregate,
     core::AggregationNode::Step step);
 
+/// Returns true if cuDF can run 'aggregate' without the sort its ORDER BY asks
+/// for: it has no sorting keys, or its function is not order sensitive, which
+/// is when the CPU operator skips that sort as well. cuDF aggregates each group
+/// in input order, so an order-sensitive aggregate with ORDER BY stays on the
+/// CPU. Shared by groupby and reduce validation.
+bool sortingKeysSupportedByCudf(
+    const core::AggregationNode::Aggregate& aggregate);
+
 enum class CountInputKind {
   kColumn,
   kCountAll,
