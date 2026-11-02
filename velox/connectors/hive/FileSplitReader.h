@@ -18,10 +18,10 @@
 
 #include <folly/container/F14Set.h>
 #include "velox/common/base/RandomUtil.h"
+#include "velox/common/caching/FileHandle.h"
 #include "velox/common/file/FileSystems.h"
 #include "velox/connectors/hive/FileColumnHandle.h"
 #include "velox/connectors/hive/FileConnectorSplit.h"
-#include "velox/connectors/hive/FileHandle.h"
 #include "velox/connectors/hive/FileTableHandle.h"
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/Reader.h"

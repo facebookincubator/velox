@@ -26,6 +26,15 @@ class PaimonConfig : public FileConfig {
   /// Canonical connector name used to scope format-specific config keys.
   static constexpr std::string_view kConnectorName = "paimon";
 
+  static const std::vector<config::ConfigProperty>& registeredProperties() {
+    static const auto kProperties = [] {
+      auto properties = FileConfig::registeredProperties();
+      registerFormatProperties(properties);
+      return properties;
+    }();
+    return kProperties;
+  }
+
   explicit PaimonConfig(std::shared_ptr<const config::ConfigBase> config)
       : FileConfig(
             std::move(config),
