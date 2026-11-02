@@ -165,6 +165,84 @@ std::string zeros(uint32_t numZeros) {
   return std::string(numZeros, '0');
 }
 
+TEST(DecimalTest, divideWithRoundUpLargeDivisor) {
+  constexpr auto power = "100000000000000000000000000000000000000";
+  constexpr auto negativePower = "-100000000000000000000000000000000000000";
+  constexpr auto belowHalf = "49999999999999999999999999999999999999";
+  constexpr auto half = "50000000000000000000000000000000000000";
+  constexpr auto negativeHalf = "-50000000000000000000000000000000000000";
+  constexpr auto aboveHalf = "50000000000000000000000000000000000001";
+  constexpr auto oddDivisor = "99999999999999999999999999999999999999";
+  constexpr auto evenDivisor = "99999999999999999999999999999999999998";
+  struct TestCase {
+    const char* dividend;
+    const char* divisor;
+    bool noRoundUp;
+    int128_t expected;
+    const char* expectedRemainder;
+  };
+  const std::vector<TestCase> cases{
+      {belowHalf, power, false, 0, belowHalf},
+      {half, power, false, 1, half},
+      {aboveHalf, power, false, 1, aboveHalf},
+      {oddDivisor, power, false, 1, oddDivisor},
+      {oddDivisor, power, true, 0, oddDivisor},
+      {negativeHalf, power, false, -1, negativeHalf},
+      {half, negativePower, false, -1, negativeHalf},
+      {negativeHalf, negativePower, false, 1, half},
+      {belowHalf, oddDivisor, false, 0, belowHalf},
+      {half, oddDivisor, false, 1, half},
+      {belowHalf, evenDivisor, false, 1, belowHalf},
+      {evenDivisor, oddDivisor, false, 1, evenDivisor}};
+  for (const auto& test : cases) {
+    SCOPED_TRACE(
+        fmt::format(
+            "{}/{} noRoundUp={}", test.dividend, test.divisor, test.noRoundUp));
+    int128_t result;
+    const auto remainder = DecimalUtil::divideWithRoundUp(
+        result,
+        HugeInt::parse(test.dividend),
+        HugeInt::parse(test.divisor),
+        test.noRoundUp,
+        0,
+        0);
+    EXPECT_EQ(result, test.expected);
+    EXPECT_EQ(remainder, HugeInt::parse(test.expectedRemainder));
+  }
+}
+
+TEST(DecimalTest, divideWithRoundUpMixedWidthsAndRescaling) {
+  const auto check = []<typename R, typename A, typename B>(
+                         R,
+                         A dividend,
+                         B divisor,
+                         uint8_t rescale,
+                         R expected,
+                         R expectedRemainder) {
+    R result;
+    const auto remainder = DecimalUtil::divideWithRoundUp(
+        result, dividend, divisor, false, rescale, 0);
+    EXPECT_EQ(result, expected);
+    EXPECT_EQ(remainder, expectedRemainder);
+  };
+  check(
+      int128_t{},
+      int64_t{9},
+      DecimalUtil::kPowersOfTen[38],
+      37,
+      int128_t{1},
+      9 * DecimalUtil::kPowersOfTen[37]);
+  check(int64_t{}, int64_t{-45}, int128_t{90}, 0, int64_t{-1}, int64_t{-45});
+  check(int128_t{}, int128_t{14}, int64_t{-9}, 0, int128_t{-2}, int128_t{-5});
+  check(int64_t{}, int64_t{4}, int64_t{9}, 0, int64_t{0}, int64_t{4});
+  check(int64_t{}, int64_t{5}, int64_t{9}, 0, int64_t{1}, int64_t{5});
+  int64_t result;
+  VELOX_ASSERT_USER_THROW(
+      DecimalUtil::divideWithRoundUp(
+          result, int64_t{1}, int64_t{0}, false, 0, 0),
+      "Division by zero");
+}
+
 TEST(DecimalTest, toString) {
   EXPECT_EQ(std::to_string(HugeInt::build(0, 0)), "0");
   EXPECT_EQ(std::to_string(HugeInt::build(0, 1)), "1");
