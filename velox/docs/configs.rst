@@ -1411,6 +1411,10 @@ The CRT uses the value as the host, so a URL with a scheme fails to resolve.
      - A custom OAuth credential provider, if specified, will be used to create the client in favor of other
        authentication mechanisms.
        The provider must be registered using "registerGcsOAuthCredentialsProvider" before it can be used.
+   * - gcs.user-agent
+     - string
+     -
+     - Custom user agent product string to include in GCS requests. "velox" is appended by default unless already present in the string.
 
 ``Azure Blob Storage Configuration``
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

@@ -226,6 +226,10 @@ class HiveConfig : public FileConfig {
   static constexpr const char* kGcsAuthAccessTokenProvider =
       "gcs.auth.access-token-provider";
 
+  /// The custom GCS user-agent product string. "velox" is appended unless
+  /// already present.
+  static constexpr const char* kGcsUserAgent = "gcs.user-agent";
+
   /// Maximum number of entries in the file handle cache.
   static constexpr const char* kNumCacheFileHandles = "num_cached_file_handles";
 
@@ -259,6 +263,8 @@ class HiveConfig : public FileConfig {
   std::optional<std::string> gcsMaxRetryTime() const;
 
   std::optional<std::string> gcsAuthAccessTokenProvider() const;
+
+  std::optional<std::string> gcsUserAgent() const;
 
   int32_t numCacheFileHandles() const;
 
