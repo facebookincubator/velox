@@ -2381,14 +2381,12 @@ RowTypePtr getWindowOutputType(
       windowFunctions.size(),
       "Number of window column names must be equal to number of window functions");
 
-  std::vector<std::string> names = inputType->names();
-  std::vector<TypePtr> types = inputType->children();
-
-  for (int32_t i = 0; i < windowColumnNames.size(); i++) {
-    names.push_back(windowColumnNames[i]);
-    types.push_back(windowFunctions[i].functionCall->type());
+  std::vector<TypePtr> types;
+  types.reserve(windowFunctions.size());
+  for (const auto& windowFunction : windowFunctions) {
+    types.push_back(windowFunction.functionCall->type());
   }
-  return ROW(std::move(names), std::move(types));
+  return inputType->unionWith(windowColumnNames, types);
 }
 
 void addWindowFunction(
@@ -2641,13 +2639,7 @@ PlanNodePtr WindowNode::create(const folly::dynamic& obj, void* context) {
 RowTypePtr getMarkDistinctOutputType(
     const RowTypePtr& inputType,
     const std::vector<std::string>& markerNames) {
-  std::vector<std::string> names = inputType->names();
-  std::vector<TypePtr> types = inputType->children();
-  for (const auto& name : markerNames) {
-    names.emplace_back(name);
-    types.emplace_back(BOOLEAN());
-  }
-  return ROW(std::move(names), std::move(types));
+  return inputType->unionWith(markerNames, BOOLEAN());
 }
 
 MarkDistinctNode::MarkDistinctNode(
@@ -2803,12 +2795,7 @@ PlanNodePtr EnforceDistinctNode::create(
 RowTypePtr getMarkSortedOutputType(
     const RowTypePtr& inputType,
     const std::string& markerName) {
-  std::vector<std::string> names = inputType->names();
-  std::vector<TypePtr> types = inputType->children();
-
-  names.emplace_back(markerName);
-  types.emplace_back(BOOLEAN());
-  return ROW(std::move(names), std::move(types));
+  return inputType->unionWith(markerName, BOOLEAN());
 }
 
 MarkSortedNode::MarkSortedNode(
@@ -2876,13 +2863,7 @@ namespace {
 RowTypePtr getRowNumberOutputType(
     const RowTypePtr& inputType,
     const std::string& rowNumberColumnName) {
-  std::vector<std::string> names = inputType->names();
-  std::vector<TypePtr> types = inputType->children();
-
-  names.push_back(rowNumberColumnName);
-  types.push_back(BIGINT());
-
-  return ROW(std::move(names), std::move(types));
+  return inputType->unionWith(rowNumberColumnName, BIGINT());
 }
 
 RowTypePtr getOptionalRowNumberOutputType(

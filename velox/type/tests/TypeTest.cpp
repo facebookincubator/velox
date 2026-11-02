@@ -1298,6 +1298,38 @@ TEST(TypeTest, unionWith) {
       childRowType1->unionWith(childRowType2)->equivalent(*resultRowType));
   ASSERT_TRUE(
       childRowType1->unionWith(childRowType1)->equivalent(*resultRowType2));
+
+  const auto rowType = ROW({"a", "b"}, {TINYINT(), VARCHAR()});
+
+  ASSERT_EQ(
+      *rowType->unionWith({"c", "d"}, {BIGINT(), DOUBLE()}),
+      *ROW(
+          {{"a", TINYINT()},
+           {"b", VARCHAR()},
+           {"c", BIGINT()},
+           {"d", DOUBLE()}}));
+  VELOX_ASSERT_THROW(
+      rowType->unionWith({"c", "d"}, std::vector<TypePtr>{BIGINT()}),
+      "Mismatch names/types sizes");
+
+  const auto sameTypeResult = ROW(
+      {{"a", TINYINT()}, {"b", VARCHAR()}, {"c", BOOLEAN()}, {"d", BOOLEAN()}});
+  ASSERT_EQ(*rowType->unionWith({"c", "d"}, BOOLEAN()), *sameTypeResult);
+  ASSERT_EQ(
+      *rowType->unionWith(std::vector<std::string>{"c", "d"}, BOOLEAN()),
+      *sameTypeResult);
+
+  ASSERT_EQ(
+      *rowType->unionWith(std::string_view{"c"}, BIGINT()),
+      *ROW({{"a", TINYINT()}, {"b", VARCHAR()}, {"c", BIGINT()}}));
+
+  ASSERT_EQ(
+      *rowType->unionWith({{"c", BIGINT()}, {"d", DOUBLE()}}),
+      *ROW(
+          {{"a", TINYINT()},
+           {"b", VARCHAR()},
+           {"c", BIGINT()},
+           {"d", DOUBLE()}}));
 }
 
 TEST(TypeTest, orderableComparable) {
