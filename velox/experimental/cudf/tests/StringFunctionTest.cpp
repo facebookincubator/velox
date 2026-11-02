@@ -183,9 +183,8 @@ TEST_F(CudfStringFunctionTest, likeUnicode) {
 }
 
 // Input: {"café", "cafe", "cafés"}, pattern: 'caf_'
-// DuckDB before 0.10.1 matches `_` against a single byte rather than a single
-// UTF-8 character, so it returns false for "café". Compare with DuckDB only
-// when it matches whole characters, and with explicit values otherwise.
+// Compared with explicit values because DuckDB 0.8.1 matches `_` against a
+// single byte rather than a single UTF-8 character.
 TEST_F(CudfStringFunctionTest, likeUnicodeSingleCharWildcard) {
   auto input = makeRowVector(
       {makeFlatVector<std::string>({"caf\xc3\xa9", "cafe", "caf\xc3\xa9s"})});
@@ -195,18 +194,9 @@ TEST_F(CudfStringFunctionTest, likeUnicodeSingleCharWildcard) {
                   .project({"c0 LIKE 'caf_' AS result"})
                   .planNode();
 
-  const auto duckDbProbe = duckDbQueryRunner_.execute(
-      "SELECT '\xc3\xa9' LIKE '_'", ROW("result", BOOLEAN()));
-  const bool duckDbMatchesUtf8Chars =
-      duckDbProbe.begin()->at(0).value<TypeKind::BOOLEAN>();
-
-  if (duckDbMatchesUtf8Chars) {
-    createDuckDbTable({input});
-    assertQuery(plan, "SELECT c0 LIKE 'caf_' AS result FROM tmp");
-  } else {
-    AssertQueryBuilder(plan).assertResults(
-        makeRowVector({makeFlatVector<bool>({true, true, false})}));
-  }
+  // 'caf_' matches one UTF-8 character, so "café" matches.
+  AssertQueryBuilder(plan).assertResults(
+      makeRowVector({makeFlatVector<bool>({true, true, false})}));
 }
 
 // ---- UPPER tests ----------------------------------------------------------
