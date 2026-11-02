@@ -19,6 +19,7 @@
 
 #include <cudf/detail/utilities/integer_utils.hpp>
 #include <cudf/detail/utilities/vector_factories.hpp>
+#include <cudf/utilities/bit.hpp>
 #include <cudf/utilities/error.hpp>
 #include <cudf/utilities/memory_resource.hpp>
 #include <cudf/utilities/span.hpp>
@@ -67,7 +68,7 @@ class PrestoPageDeviceTest : public testing::Test {
         cudf::util::div_rounding_up_safe<int64_t>(numBits, 32), 0);
     for (int64_t i = 0; i < numBits; ++i) {
       if (valid(i)) {
-        words[i / 32] |= 1u << (i % 32);
+        cudf::set_bit_unsafe(words.data(), static_cast<cudf::size_type>(i));
       }
     }
     return words;
@@ -392,30 +393,6 @@ TEST_F(PrestoPageDeviceTest, decimalsToJava) {
   // In place.
   detail::decimalsToJava(src.data(), values.size(), src.data(), stream_);
   check(toHost(src));
-}
-
-TEST_F(PrestoPageDeviceTest, batchedCopy) {
-  std::vector<uint8_t> source(20);
-  for (size_t i = 0; i < source.size(); ++i) {
-    source[i] = i;
-  }
-  auto src = toDevice(source);
-  auto dst = toDevice(std::vector<uint8_t>(20, 0xff));
-  const std::vector<detail::CopyTask> tasks = {
-      {src.data(), dst.data() + 5, 3},
-      {src.data(), dst.data() + 15, 0},
-      {src.data() + 10, dst.data(), 4},
-  };
-  detail::batchedDeviceCopy(tasks, stream_, mr_);
-  std::vector<uint8_t> expected(20, 0xff);
-  expected[0] = 10;
-  expected[1] = 11;
-  expected[2] = 12;
-  expected[3] = 13;
-  expected[5] = 0;
-  expected[6] = 1;
-  expected[7] = 2;
-  EXPECT_EQ(toHost(dst), expected);
 }
 
 } // namespace

@@ -57,10 +57,6 @@ offsetAt(const StringOffsets& offsets, int64_t index) {
       offsets.offsetsType)[static_cast<cudf::size_type>(index)];
 }
 
-__device__ __forceinline__ void storeInt32Unaligned(uint8_t* dst, int32_t v) {
-  cuda::std::memcpy(dst, &v, sizeof(v));
-}
-
 // Serialized bits of one row: the fixed part plus 8 bits per string byte.
 struct RowBits {
   int64_t fixedBits;
@@ -127,8 +123,10 @@ __global__ void stringOffsetsKernel(
     if (bytes > INT32_MAX) {
       *overflow = 1;
     }
-    storeInt32Unaligned(
-        t.dst + 4 * static_cast<int64_t>(i), static_cast<int32_t>(bytes));
+    // The destination follows a null bitmap, so it is not int32 aligned.
+    const auto offset = static_cast<int32_t>(bytes);
+    cuda::std::memcpy(
+        t.dst + 4 * static_cast<int64_t>(i), &offset, sizeof(offset));
   }
 }
 
