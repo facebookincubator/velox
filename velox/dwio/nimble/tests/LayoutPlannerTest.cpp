@@ -283,8 +283,9 @@ TEST(DefaultLayoutPlannerTests, reorderFlatMap) {
 TEST(DefaultLayoutPlannerTests, hybridFlatMapUsesPhysicalGroups) {
   nimble::SchemaBuilder builder;
   auto root = builder.createRowTypeBuilder(1);
-  auto hybridMap =
-      builder.createHybridFlatMapTypeBuilder(nimble::ScalarKind::Int32);
+  auto hybridMap = builder.createHybridFlatMapTypeBuilder(
+      nimble::ScalarKind::Int32,
+      nimble::HybridFlatMap::KeyPresenceMode::kBitmap);
   auto groupValue = builder.createScalarTypeBuilder(nimble::ScalarKind::Int64);
   const auto groupStreams = hybridMap->addGroup(0, {"1"}, groupValue);
   auto defaultValue =

@@ -299,6 +299,13 @@ std::shared_ptr<const Payload> payload;
   | ❌ Avoid | ✅ Prefer |
   |----------|-----------|
   | `VELOX_USER_FAIL("Column '{}' is ambiguous", name);` | `VELOX_USER_FAIL("Column is ambiguous: {}", name);` |
+* Pass a value to a formatted message or `fmt::format` as is when its type has
+  an `fmt::formatter`, such as `TypeKind`. The formatter already produces the
+  text, so converting the value to a string first only repeats it.
+
+  | ❌ Avoid | ✅ Prefer |
+  |----------|-----------|
+  | `VELOX_FAIL("Unsupported type: {}", TypeKindName::toName(kind));` | `VELOX_FAIL("Unsupported type: {}", kind);` |
 
 ## Variables
 

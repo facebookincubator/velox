@@ -104,6 +104,7 @@ target_link_libraries(
     velox_row_fast
     velox_vector_fuzzer
     velox_vector_test_lib
+    gmock
     gtest
 )
 
@@ -118,10 +119,6 @@ target_link_libraries(nimble_index_scan_cursor_test nimble_velox_index_test_base
 add_executable(nimble_row_iterator_test NimbleRowIteratorTest.cpp)
 add_test(nimble_row_iterator_test nimble_row_iterator_test)
 target_link_libraries(nimble_row_iterator_test nimble_velox_index_test_base gtest_main)
-
-add_executable(nimble_batch_iterator_test NimbleBatchIteratorTest.cpp)
-add_test(nimble_batch_iterator_test nimble_batch_iterator_test)
-target_link_libraries(nimble_batch_iterator_test nimble_velox_index_test_base gtest_main)
 
 add_executable(nimble_iterator_test NimbleIteratorTest.cpp)
 add_test(nimble_iterator_test nimble_iterator_test)

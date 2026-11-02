@@ -1,0 +1,46 @@
+/*
+ * Copyright (c) Meta Platforms, Inc. and its affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+#pragma once
+
+#include <cstdint>
+
+#include "velox/common/EnumDeclare.h"
+
+namespace facebook::velox::common::vectorindex {
+
+/// Distance metric of a vector index: how the index compares embeddings. The
+/// values are stored in intermediate results, so new metrics take new values.
+enum class VectorIndexMetric {
+  /// The angle between embeddings, ignoring their length. Embeddings are
+  /// normalized to length 1 and compared by dot product.
+  kCosine = 0,
+};
+
+VELOX_DECLARE_ENUM_NAME(VectorIndexMetric);
+
+/// The integer form of VectorIndexMetric, stored in intermediate results.
+class VectorIndexMetricValue {
+ public:
+  static int32_t toValue(VectorIndexMetric metric) {
+    return static_cast<int32_t>(metric);
+  }
+
+  /// Throws a user error for a value that names no metric.
+  static VectorIndexMetric fromValue(int32_t value);
+};
+
+} // namespace facebook::velox::common::vectorindex

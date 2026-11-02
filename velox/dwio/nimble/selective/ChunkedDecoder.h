@@ -27,7 +27,6 @@
 #include "velox/dwio/nimble/encodings/MainlyConstantEncoding.h"
 #include "velox/dwio/nimble/encodings/NullableEncoding.h"
 #include "velox/dwio/nimble/encodings/common/EncodingUtils.h"
-#include "velox/dwio/nimble/encodings/legacy/EncodingTrait.h"
 #include "velox/dwio/nimble/index/ChunkStatsGroup.h"
 #include "velox/dwio/nimble/selective/NimbleData.h"
 #include "velox/dwio/nimble/selective/ReaderBase.h"
@@ -62,7 +61,6 @@ class ChunkedDecoder {
       bool decodeValuesWithNulls,
       const EncodingFactory* encodingFactory,
       velox::memory::MemoryPool* pool,
-      bool stringDecoderZeroCopy = false,
       velox::dwio::common::DecodingStats* decodingStats = nullptr,
       DictionaryAlphabetLoader dictionaryAlphabetLoader = nullptr,
       bool dictionaryAwareReads = false,
@@ -71,7 +69,6 @@ class ChunkedDecoder {
         pool_{pool},
         decodeValuesWithNulls_{decodeValuesWithNulls},
         encodingFactory_(encodingFactory),
-        stringDecoderZeroCopy_{stringDecoderZeroCopy},
         dictionaryAwareReads_{dictionaryAwareReads},
         scanFastPath_{scanFastPath},
         streamIndex_{std::move(streamIndex)},
@@ -129,9 +126,6 @@ class ChunkedDecoder {
       DecoderVisitor& visitor,
       velox::vector_size_t readOffset = 0,
       const SaveStringBufferCallback& saveStringBuffersFn = nullptr) {
-    NIMBLE_CHECK(
-        readOffset == 0 || stringDecoderZeroCopy_,
-        "readOffset is only valid for dict→flat encoding fallback reads");
     // The visitor always carries the complete output row set. When a read is
     // resumed mid-range (readOffset > 0 — e.g. the dict→flat abandon-dictionary
     // fallback), the caller advances the visitor's rowIndex past the
@@ -289,7 +283,9 @@ class ChunkedDecoder {
   /// A temporary solution to estimate row size before column statistics are
   /// implemented.  This is based on the first chunk so is only accurate when
   /// there is a single chunk in the stripe, or all the first chunks of all
-  /// streams are aligned at the same row count (unlikely).
+  /// streams are aligned at the same row count (unlikely). It reads a chunk
+  /// header only before anything is read or skipped, and returns its last value
+  /// after that.
   ///
   /// TODO: Remove after column statistics are added.
   std::optional<size_t> estimateRowCount() const;
@@ -349,9 +345,6 @@ class ChunkedDecoder {
   bool readDictionaryIndices(
       DictionaryVisitor& visitor,
       const ChunkBoundaryCallback& onChunkBoundary) {
-    NIMBLE_CHECK(
-        stringDecoderZeroCopy_,
-        "Dictionary indices reading requires non-legacy encoding path");
     NIMBLE_CHECK_NOT_NULL(encoding_);
 
     const velox::RowSet rows(visitor.rows(), visitor.numRows());
@@ -446,9 +439,7 @@ class ChunkedDecoder {
 
     std::vector<velox::BufferPtr> stringBuffers;
     SCOPE_EXIT {
-      if (stringDecoderZeroCopy_) {
-        visitor.reader().setStringBuffers(std::move(stringBuffers));
-      }
+      visitor.reader().setStringBuffers(std::move(stringBuffers));
     };
 
     // For kHasNulls, count the value-stream rows this read will consume, once
@@ -564,12 +555,10 @@ class ChunkedDecoder {
         remainingValues -= numNonNulls;
       }
 
-      if (stringDecoderZeroCopy_) {
-        stringBuffers.reserve(
-            stringBuffers.size() + currentStringBuffers_.size());
-        for (const auto& buf : currentStringBuffers_) {
-          stringBuffers.emplace_back(buf);
-        }
+      stringBuffers.reserve(
+          stringBuffers.size() + currentStringBuffers_.size());
+      for (const auto& buf : currentStringBuffers_) {
+        stringBuffers.emplace_back(buf);
       }
     }
     return true;
@@ -731,21 +720,46 @@ class ChunkedDecoder {
     }
   }
 
-  // Selects the encoding trait based on stringDecoderZeroCopy_ and
-  // forwards to the fully-monomorphic readWithVisitorImpl.
+  // If the next row 'visitor' reads is past the current chunk, jumps to the
+  // destination chunk with the stream index, so the chunks in between are never
+  // loaded.
+  template <bool kHasNulls, typename V>
+  void skipToNextRowChunk(
+      const V& visitor,
+      const uint64_t* nulls,
+      ReadWithVisitorParams& params) {
+    if (streamIndex_ == nullptr) {
+      return;
+    }
+    const auto nextRow = visitor.rowAt(visitor.rowIndex());
+    // Already at the next row: nothing to skip.
+    if (nextRow <= params.numScanned) {
+      NIMBLE_CHECK_EQ(nextRow, params.numScanned);
+      return;
+    }
+    const int64_t rowsToSkip = nextRow - params.numScanned;
+    // Rows with a null parent or an absent flat-map key have no row in this
+    // stream.
+    const int64_t streamRowsToSkip = kHasNulls
+        ? velox::bits::countNonNulls(nulls, params.numScanned, nextRow)
+        : rowsToSkip;
+    // No jump: nothing to skip, or the skip stays within the current chunk.
+    if (streamRowsToSkip == 0 || streamRowsToSkip < remainingValues_) {
+      return;
+    }
+    skipWithIndex(streamRowsToSkip, kNoopAtChunkBoundary);
+    params.numScanned = nextRow;
+  }
+
+  // Forwards to the fully-monomorphic readWithVisitorImpl.
   template <bool kHasNulls, typename V>
   void dispatchReadWithVisitorImpl(
       V& visitor,
       const uint64_t* nulls,
       ReadWithVisitorParams& params,
       const SaveStringBufferCallback& saveStringBuffersFn) {
-    if (stringDecoderZeroCopy_) {
-      readWithVisitorImpl<kHasNulls, DefaultEncodingTrait>(
-          visitor, nulls, params, saveStringBuffersFn);
-    } else {
-      readWithVisitorImpl<kHasNulls, legacy::LegacyEncodingTrait>(
-          visitor, nulls, params, saveStringBuffersFn);
-    }
+    readWithVisitorImpl<kHasNulls, DefaultEncodingTrait>(
+        visitor, nulls, params, saveStringBuffersFn);
   }
 
   template <bool kHasNulls, typename EncodingTrait, typename V>
@@ -761,6 +775,9 @@ class ChunkedDecoder {
     std::vector<velox::BufferPtr> stringBuffers;
 
     while (visitor.rowIndex() < numRows) {
+      if constexpr (!V::dense) {
+        skipToNextRowChunk<kHasNulls>(visitor, nulls, params);
+      }
       if constexpr (!kHasNulls) {
         if (FOLLY_UNLIKELY(remainingValues_ == 0)) {
           loadNextChunk();
@@ -824,19 +841,18 @@ class ChunkedDecoder {
     }
 
     // Flush accumulated string buffers to the reader.
-    if (stringDecoderZeroCopy_) {
-      if (saveStringBuffersFn) {
-        saveStringBuffersFn(std::move(stringBuffers));
-      } else {
-        visitor.reader().setStringBuffers(std::move(stringBuffers));
-      }
+    if (saveStringBuffersFn) {
+      saveStringBuffersFn(std::move(stringBuffers));
+    } else {
+      visitor.reader().setStringBuffers(std::move(stringBuffers));
     }
   }
 
-  // Returns true if the input stream has at least one more chunk header
-  // available, indicating that loadNextChunk() can be called.
+  // Returns true if loadNextChunk() can be called:
+  // - a skip left a chunk to open, or
+  // - the input stream has at least one more chunk header available.
   bool hasMoreChunks() {
-    return ensureInput(kChunkHeaderSize);
+    return hasLazyChunkSeek_ || ensureInput(kChunkHeaderSize);
   }
 
   // Ensures that the input buffer has at least 'size' bytes available for
@@ -850,13 +866,21 @@ class ChunkedDecoder {
   // TODO: remove with row size estimate hacks.
   bool ensureInputIncremental_hack(int size, const char*& pos);
 
-  // Loads the next chunk from the input stream and creates a new encoding.
+  // Loads a chunk and creates a new encoding:
+  // - If hasLazyChunkSeek_ is set, loadLazySeekChunk() loads the chunk holding
+  //   rowPosition_ and skips to it.
+  // - Otherwise, loads the next chunk from the input stream.
   //
   // @param onChunkLoaded Callback invoked after loading. Returns true to
   //   continue reading, false to stop (e.g., the new chunk is not
   //   dictionary-compatible). Defaults to kNoopAtChunkBoundary.
   bool loadNextChunk(
       const ChunkBoundaryCallback& onChunkLoaded = kNoopAtChunkBoundary);
+
+  // Seeks with the stream index to the chunk holding rowPosition_, loads it
+  // and skips to rowPosition_ in it, then returns the result of
+  // 'onChunkLoaded'.
+  bool loadLazySeekChunk(const ChunkBoundaryCallback& onChunkLoaded);
 
   void prepareInputBuffer(int32_t size);
 
@@ -889,6 +913,9 @@ class ChunkedDecoder {
         streamRowCount_.value_or(std::numeric_limits<uint32_t>::max()));
   }
 
+  // Skips with the stream index.
+  // - A skip into another chunk only records the target row.
+  // - The next loadNextChunk() looks that chunk up and opens it.
   void skipWithIndex(
       int64_t numValues,
       const ChunkBoundaryCallback& onChunkBoundary);
@@ -915,7 +942,6 @@ class ChunkedDecoder {
   // (standard case for scalar types).
   const bool decodeValuesWithNulls_;
   const EncodingFactory* const encodingFactory_;
-  const bool stringDecoderZeroCopy_{false};
   const bool dictionaryAwareReads_{false};
   const bool scanFastPath_{false};
   // Optional stream index for accelerating skip operations
@@ -940,6 +966,8 @@ class ChunkedDecoder {
 
   // Tracks the current row position in the stream.
   uint32_t rowPosition_{0};
+  // Set when a skip lands in a chunk but hasn't loaded it yet.
+  bool hasLazyChunkSeek_{false};
 
   // Per-column decoding statistics. Owned by SplitStats; valid for
   // the lifetime of this decoder.

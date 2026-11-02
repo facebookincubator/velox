@@ -128,6 +128,7 @@ void CudfIcebergSplitReader::resetSplit() {
   equalityDeleteFileReaders_.clear();
   extraEqualityColumns_.clear();
   injectedColumns_.clear();
+  injectedTimestampType_.reset();
   skipSplit_ = false;
   transformedPushdownFilter_.reset();
   transformedLogicalFilter_.reset();
@@ -860,6 +861,8 @@ void CudfIcebergSplitReader::adaptColumns() {
         [](const auto& a, const auto& b) {
           return a.outputIndex < b.outputIndex;
         });
+    injectedTimestampType_ = constantTimestampType(
+        cudfHiveConfig(), connectorQueryCtx_->sessionProperties());
   }
 }
 
@@ -880,7 +883,7 @@ std::unique_ptr<cudf::scalar> CudfIcebergSplitReader::makeInjectedScalar(
     return cudf_velox::makeScalarFromConstantExpr(
         std::make_shared<core::ConstantTypedExpr>(constant),
         connectorQueryCtx_->memoryPool(),
-        std::nullopt,
+        col.veloxType->isTimestamp() ? injectedTimestampType_ : std::nullopt,
         stream_);
   } catch (const std::exception& e) {
     VELOX_USER_FAIL(

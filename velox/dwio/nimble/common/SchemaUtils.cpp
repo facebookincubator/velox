@@ -488,14 +488,19 @@ using VeloxSelectedChildrenMap =
 // Resolves a single subfield path against a velox type tree, populating
 // selectedChildren with which children to include at each Row/Map node.
 // Similar to resolveSubfield for nimble types but walks velox types instead.
+// Appends to 'wholeStructs' the struct the path selects whole: the ROW it ends
+// at when it names that ROW by field names only. Map subscripts are excluded
+// because all keys of a map share one velox value type.
 void resolveVeloxSubfield(
     const velox::Type* type,
     const velox::common::Subfield& subfield,
-    VeloxSelectedChildrenMap& selectedChildren) {
+    VeloxSelectedChildrenMap& selectedChildren,
+    std::vector<const velox::RowType*>& wholeStructs) {
   const auto& path = subfield.path();
   NIMBLE_CHECK(!path.empty(), "Empty subfield path");
 
   const auto* current = type;
+  bool throughSubscript{false};
 
   for (const auto& element : path) {
     const auto kind = element->kind();
@@ -536,12 +541,46 @@ void resolveVeloxSubfield(
       selectedChildren[current].insert(keyName);
       // All map keys share the same value type, so descend into it.
       current = current->asMap().valueType().get();
+      throughSubscript = true;
     } else {
       NIMBLE_FAIL(
           "Unsupported subfield kind {} in subfield path '{}'",
           kind,
           subfield.toString());
     }
+  }
+  if (!throughSubscript && current->kind() == velox::TypeKind::ROW) {
+    wholeStructs.push_back(&current->asRow());
+  }
+}
+
+// Drops the child selections recorded at and under 'row', so a struct that a
+// subfield selects whole keeps every field. Under a struct only structs carry
+// selections, because key subscripts apply to top-level map columns only.
+void selectWhole(
+    const velox::RowType& row,
+    VeloxSelectedChildrenMap& selectedChildren) {
+  selectedChildren.erase(&row);
+  for (const auto& child : row.children()) {
+    if (child->kind() == velox::TypeKind::ROW) {
+      selectWhole(child->asRow(), selectedChildren);
+    }
+  }
+}
+
+// Resolves 'projectedSubfields' against 'type' into 'selectedChildren'. A
+// struct that some subfield selects whole keeps every field, whatever other
+// subfields select inside it.
+void resolveVeloxSubfields(
+    const velox::RowType& type,
+    const std::vector<velox::common::Subfield>& projectedSubfields,
+    VeloxSelectedChildrenMap& selectedChildren) {
+  std::vector<const velox::RowType*> wholeStructs;
+  for (const auto& subfield : projectedSubfields) {
+    resolveVeloxSubfield(&type, subfield, selectedChildren, wholeStructs);
+  }
+  for (const auto* wholeStruct : wholeStructs) {
+    selectWhole(*wholeStruct, selectedChildren);
   }
 }
 
@@ -800,7 +839,9 @@ std::shared_ptr<HybridFlatMapTypeBuilder> buildProjectedHybridFlatMapType(
     const ProjectedHybridFlatMap& projectedHybridFlatMap) {
   NIMBLE_CHECK_NOT_NULL(projectedHybridFlatMap.source);
   auto result = builder.createHybridFlatMapTypeBuilder(
-      projectedHybridFlatMap.source->keyScalarKind(), /*projection=*/true);
+      projectedHybridFlatMap.source->keyScalarKind(),
+      projectedHybridFlatMap.source->defaultGroupKeyPresenceMode(),
+      /*projection=*/true);
   result->setAttributes(projectedHybridFlatMap.source->attributes());
   if (projectedHybridFlatMap.groupIndices.empty()) {
     result->addGroup(
@@ -831,9 +872,7 @@ std::shared_ptr<const Type> buildProjectedNimbleType(
       !projectedSubfields.empty(), "projectedSubfields must not be empty");
 
   VeloxSelectedChildrenMap selectedChildren;
-  for (const auto& subfield : projectedSubfields) {
-    resolveVeloxSubfield(&type, subfield, selectedChildren);
-  }
+  resolveVeloxSubfields(type, projectedSubfields, selectedChildren);
 
   const auto& selectedTopLevelColumns = selectedChildren[&type];
   NIMBLE_CHECK(
@@ -930,16 +969,19 @@ void validateProjectedHybridFlatMapSchema(const Type& schema) {
 // source index) and missingChildren for FlatMap keys absent from the source
 // (by name). A Hybrid FlatMap key selects the index of the group containing
 // it; a key in no group leaves the column's group set unchanged, possibly
-// empty.
+// empty. Appends to 'wholeStructs' the struct the path selects whole, under
+// the same rule as resolveVeloxSubfield().
 void resolveSubfield(
     const Type* type,
     const velox::common::Subfield& subfield,
     SelectedChildrenMap& selectedChildren,
-    MissingChildrenMap& missingChildren) {
+    MissingChildrenMap& missingChildren,
+    std::vector<const RowType*>& wholeStructs) {
   const auto& path = subfield.path();
   NIMBLE_CHECK(!path.empty(), "Empty subfield path");
 
   const auto* current = type;
+  bool throughSubscript{false};
 
   for (size_t pathIndex = 0; pathIndex < path.size(); ++pathIndex) {
     const auto& element = path[pathIndex];
@@ -980,12 +1022,13 @@ void resolveSubfield(
             "Nested projection inside hybrid FlatMap key '{}' is not supported.",
             keyName);
 
-        // Default's keys list every key the payload stores in Default, so a
-        // key in no group is absent and selects nothing. The group set is
-        // created even when it stays empty, so a column whose requested keys
-        // are all absent projects as a keyless Default group.
+        // With a bitmap, Default's keys list every key the payload stores in
+        // Default, so a key in no group is absent and selects nothing. The
+        // group set is created even when it stays empty, so a column with no
+        // selected group projects as a keyless Default group.
         auto& selectedGroups = selectedChildren[current];
-        const auto groupIndex = current->asHybridFlatMap().findGroup(keyName);
+        const auto groupIndex =
+            current->asHybridFlatMap().findProjectionGroup(keyName);
         if (groupIndex.has_value()) {
           selectedGroups.insert(*groupIndex);
         }
@@ -1008,6 +1051,7 @@ void resolveSubfield(
       }
       selectedChildren[current].insert(*childIdx);
       current = flatMap.childAt(*childIdx).get();
+      throughSubscript = true;
     } else {
       NIMBLE_FAIL(
           "Unsupported subfield kind {} in subfield path '{}'",
@@ -1026,6 +1070,40 @@ void resolveSubfield(
     for (size_t i = 0; i < hybridMap.groupCount(); ++i) {
       selectedGroups.insert(i);
     }
+  }
+  if (!throughSubscript && current->isRow()) {
+    wholeStructs.push_back(&current->asRow());
+  }
+}
+
+// Drops the child selections recorded at and under 'row', so a struct that a
+// subfield selects whole keeps every field. Under a struct only structs carry
+// selections, because key subscripts apply to top-level FlatMap columns only.
+void selectWhole(const RowType& row, SelectedChildrenMap& selectedChildren) {
+  selectedChildren.erase(&row);
+  for (size_t i = 0; i < row.childrenCount(); ++i) {
+    const auto& child = row.childAt(i);
+    if (child->isRow()) {
+      selectWhole(child->asRow(), selectedChildren);
+    }
+  }
+}
+
+// Resolves 'projectedSubfields' against 'type' into 'selectedChildren' and
+// 'missingChildren'. A struct that some subfield selects whole keeps every
+// field, whatever other subfields select inside it.
+void resolveSubfields(
+    const Type* type,
+    const std::vector<velox::common::Subfield>& projectedSubfields,
+    SelectedChildrenMap& selectedChildren,
+    MissingChildrenMap& missingChildren) {
+  std::vector<const RowType*> wholeStructs;
+  for (const auto& subfield : projectedSubfields) {
+    resolveSubfield(
+        type, subfield, selectedChildren, missingChildren, wholeStructs);
+  }
+  for (const auto* wholeStruct : wholeStructs) {
+    selectWhole(*wholeStruct, selectedChildren);
   }
 }
 
@@ -1373,9 +1451,7 @@ NimbleTypeProjection buildProjectedNimbleType(
   // the two per FlatMap node before emitting.
   SelectedChildrenMap selectedChildren;
   MissingChildrenMap missingChildren;
-  for (const auto& subfield : projectedSubfields) {
-    resolveSubfield(type, subfield, selectedChildren, missingChildren);
-  }
+  resolveSubfields(type, projectedSubfields, selectedChildren, missingChildren);
 
   // An all-missing-keys projection is allowed: the projected FlatMap contains
   // a placeholder child per requested key, and the byte-copy pipeline emits

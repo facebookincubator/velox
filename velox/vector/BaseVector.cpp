@@ -829,8 +829,7 @@ void BaseVector::ensureWritable(
         BaseVector::create(isUnknownType ? type : resultType, targetSize, pool);
   }
 
-  SelectivityVector copyRows(result->size());
-  copyRows.deselect(rows);
+  auto copyRows = rows.complement(result->size());
 
   if (copyRows.hasSelections()) {
     copy->copy(result.get(), copyRows, nullptr);

@@ -14,8 +14,10 @@
  * limitations under the License.
  */
 
-#include "velox/exec/SimpleAggregateAdapter.h"
+#include <folly/CPortability.h>
+
 #include "velox/exec/Aggregate.h"
+#include "velox/exec/SimpleAggregateAdapter.h"
 #include "velox/exec/tests/SimpleAggregateFunctionsRegistration.h"
 #include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
 
@@ -24,6 +26,7 @@ using namespace facebook::velox::exec::test;
 using facebook::velox::functions::aggregate::test::AggregationTestBase;
 
 namespace facebook::velox::aggregate::test {
+
 namespace {
 
 const char* const kSimpleAvg = "simple_avg";
@@ -232,6 +235,93 @@ exec::AggregateRegistrationResult registerFuncLevelVariableTestAggregate(
       true /*registerCompanionFunctions*/,
       true /*overwrite*/);
 }
+
+// The classes below check that SimpleAggregateFunction rejects interfaces the
+// adapter cannot call. A concept checks declarations only, so their members
+// have no definitions and are never used.
+FOLLY_PUSH_WARNING
+FOLLY_CLANG_DISABLE_WARNING("-Wunused-member-function")
+FOLLY_CLANG_DISABLE_WARNING("-Wunneeded-member-function")
+
+// Takes VARCHAR input, which addInput does not accept.
+class MismatchedInputAggregate {
+ public:
+  using InputType = Row<Varchar>;
+  using IntermediateType = int64_t;
+  using OutputType = int64_t;
+
+  struct AccumulatorType {
+    AccumulatorType(HashStringAllocator*, MismatchedInputAggregate*);
+    void addInput(HashStringAllocator*, int64_t);
+    void combine(HashStringAllocator*, int64_t);
+    bool writeIntermediateResult(int64_t&);
+    bool writeFinalResult(int64_t&);
+  };
+};
+
+static_assert(!SimpleAggregateFunction<MismatchedInputAggregate>);
+
+// Has default null behavior but declares the write methods with the
+// 'nonNullGroup' flag.
+class MismatchedNullBehaviorAggregate {
+ public:
+  using InputType = Row<int64_t>;
+  using IntermediateType = int64_t;
+  using OutputType = int64_t;
+
+  struct AccumulatorType {
+    AccumulatorType(HashStringAllocator*, MismatchedNullBehaviorAggregate*);
+    void addInput(HashStringAllocator*, int64_t);
+    void combine(HashStringAllocator*, int64_t);
+    bool writeIntermediateResult(bool, int64_t&);
+    bool writeFinalResult(bool, int64_t&);
+  };
+};
+
+static_assert(!SimpleAggregateFunction<MismatchedNullBehaviorAggregate>);
+
+// Handles nulls itself but declares addInput without optional arguments and
+// without a result.
+class MismatchedOptionalInputAggregate {
+ public:
+  using InputType = Row<int64_t>;
+  using IntermediateType = int64_t;
+  using OutputType = int64_t;
+
+  static constexpr bool default_null_behavior_ = false;
+
+  struct AccumulatorType {
+    AccumulatorType(HashStringAllocator*, MismatchedOptionalInputAggregate*);
+    void addInput(HashStringAllocator*, int64_t);
+    bool combine(HashStringAllocator*, exec::optional_arg_type<int64_t>);
+    bool writeIntermediateResult(bool, int64_t&);
+    bool writeFinalResult(bool, int64_t&);
+  };
+};
+
+static_assert(!SimpleAggregateFunction<MismatchedOptionalInputAggregate>);
+
+// Declares setConstantInputs with a parameter the adapter does not pass.
+class MismatchedConstantInputsAggregate {
+ public:
+  using InputType = Row<int64_t>;
+  using IntermediateType = int64_t;
+  using OutputType = int64_t;
+
+  void setConstantInputs(const VectorPtr&);
+
+  struct AccumulatorType {
+    AccumulatorType(HashStringAllocator*, MismatchedConstantInputsAggregate*);
+    void addInput(HashStringAllocator*, int64_t);
+    void combine(HashStringAllocator*, int64_t);
+    bool writeIntermediateResult(int64_t&);
+    bool writeFinalResult(int64_t&);
+  };
+};
+
+static_assert(!SimpleAggregateFunction<MismatchedConstantInputsAggregate>);
+
+FOLLY_POP_WARNING
 
 class SimpleAggregateAdapterTest : public AggregationTestBase {
  protected:

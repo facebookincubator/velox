@@ -968,6 +968,84 @@ TEST_F(ToCudfSelectionTest, zeroColumnCountConstantUsesGpu) {
   ASSERT_FALSE(wasDefaultHashAggregationUsed(task));
 }
 
+// Constant projections over a zero-column input run on the GPU, which fills
+// them to the row count of each batch.
+TEST_F(ToCudfSelectionTest, zeroColumnConstantProjectionsUseCudf) {
+  auto data = makeRowVector({makeFlatVector<int64_t>({1, 2, 3, 4})});
+  createDuckDbTable({data});
+
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .filter("c0 > 1")
+                  .project({})
+                  .project({"'x' AS s", "7 AS n"})
+                  .singleAggregation({"s", "n"}, {"count(1)"})
+                  .planNode();
+
+  auto task =
+      AssertQueryBuilder(duckDbQueryRunner_)
+          .config("cudf.enabled", true)
+          .plan(plan)
+          .assertResults("SELECT 'x', 7, count(1) FROM tmp WHERE c0 > 1");
+
+  ASSERT_TRUE(wasCudfFilterProjectUsed(task));
+  ASSERT_FALSE(wasDefaultFilterProjectUsed(task));
+}
+
+// A filter over a zero-column input has no column to evaluate against and
+// stays on the CPU, whether a projection follows it or not. The filter is one
+// the GPU could otherwise evaluate, so the test fails if the rule is dropped.
+TEST_F(ToCudfSelectionTest, zeroColumnFilterFallsBack) {
+  auto data = makeRowVector({makeFlatVector<int64_t>({1, 2, 3, 4})});
+  createDuckDbTable({data});
+
+  auto fusedPlan = PlanBuilder()
+                       .values({data})
+                       .project({})
+                       .filter("1 < 2")
+                       .project({"'x' AS s"})
+                       .singleAggregation({"s"}, {"count(1)"})
+                       .planNode();
+  auto task = AssertQueryBuilder(duckDbQueryRunner_)
+                  .config("cudf.enabled", true)
+                  .plan(fusedPlan)
+                  .assertResults("SELECT 'x', count(1) FROM tmp");
+  ASSERT_TRUE(wasDefaultFilterProjectUsed(task));
+
+  auto filterOnlyPlan = PlanBuilder()
+                            .values({data})
+                            .project({})
+                            .filter("1 < 2")
+                            .singleAggregation({}, {"count(1)"})
+                            .planNode();
+  task = AssertQueryBuilder(duckDbQueryRunner_)
+             .config("cudf.enabled", true)
+             .plan(filterOnlyPlan)
+             .assertResults("SELECT count(1) FROM tmp");
+  ASSERT_TRUE(wasDefaultFilterProjectUsed(task));
+}
+
+// So does a projection over a zero-column input that is not a plain constant
+// in the plan, even one that folds to a constant.
+TEST_F(ToCudfSelectionTest, zeroColumnNonConstantProjectionFallsBack) {
+  auto data = makeRowVector({makeFlatVector<int64_t>({1, 2, 3, 4})});
+  createDuckDbTable({data});
+
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .project({})
+                  .project({"1 + 2 AS n"})
+                  .singleAggregation({"n"}, {"count(1)"})
+                  .planNode();
+
+  auto task = AssertQueryBuilder(duckDbQueryRunner_)
+                  .config("cudf.enabled", true)
+                  .plan(plan)
+                  .assertResults("SELECT 3, count(1) FROM tmp");
+
+  ASSERT_TRUE(wasDefaultFilterProjectUsed(task));
+}
+
 // Count-only aggregation plans (single and partial/final) should use
 // CudfAggregation.
 TEST_F(ToCudfSelectionTest, countAggregatesOnlyUsesCudf) {

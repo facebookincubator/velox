@@ -33,15 +33,11 @@ class DictionaryEncodingView final : public TypedEncodingView<T> {
       : TypedEncodingView<T>{data, pool, options} {
     NIMBLE_CHECK_EQ(this->encodingType_, EncodingType::Dictionary);
     const char* pos = data.data() + this->dataOffset_;
-    const auto alphabetSize = encoding::readUint32(pos);
     alphabet_ = detail::createTypedEncodingView<T>(
-        {pos, alphabetSize}, this->pool_, options);
+        this->readSizedBytes(pos, "Dictionary alphabet"), this->pool_, options);
     NIMBLE_CHECK_NOT_NULL(alphabet_);
-    pos += alphabetSize;
     indices_ = detail::createTypedEncodingView<uint32_t>(
-        {pos, static_cast<size_t>(data.data() + data.size() - pos)},
-        this->pool_,
-        options);
+        {pos, this->remainingBytes(pos)}, this->pool_, options);
     NIMBLE_CHECK_NOT_NULL(indices_);
   }
 

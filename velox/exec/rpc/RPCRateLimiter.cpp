@@ -19,10 +19,12 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <numbers>
 #include <string_view>
 #include <utility>
 #include <vector>
 
+#include <folly/Random.h>
 #include <folly/executors/InlineExecutor.h>
 #include <folly/futures/Future.h>
 
@@ -43,6 +45,16 @@ std::atomic<int64_t>& defaultCapacityRef() {
 }
 
 constexpr int64_t kBootstrapServiceHorizonNanos{1'000'000'000};
+
+// Highest floor the probe interval may impose. A floor of one would end pacing,
+// letting probes go out as fast as rejections return; a backend whose calls
+// outlast the probe interval is probed every two horizons instead.
+constexpr double kMaxProbeFloor{0.5};
+
+// Largest fraction by which a back-off probe comes early. Probes are never
+// later than the interval, so the maximum probe interval still holds.
+constexpr double kProbeJitter{0.2};
+
 constexpr int64_t kServiceHorizonEwmaWeight{8};
 constexpr double kInitialAdaptiveLimit{200.0};
 
@@ -177,14 +189,17 @@ RPCRateLimiter::RPCRateLimiter(std::string admissionKey)
     : RPCRateLimiter(
           std::move(admissionKey),
           [] { return std::chrono::steady_clock::now(); },
-          nullptr) {}
+          nullptr,
+          [] { return folly::Random::randDouble01(); }) {}
 
 RPCRateLimiter::RPCRateLimiter(
     std::string admissionKey,
     std::function<std::chrono::steady_clock::time_point()> now,
-    folly::Timekeeper* timekeeper)
+    folly::Timekeeper* timekeeper,
+    std::function<double()> random)
     : admissionKey_{std::move(admissionKey)},
       now_{std::move(now)},
+      random_{std::move(random)},
       timekeeper_{timekeeper} {}
 
 void RPCRateLimiter::setDefaultCapacity(int64_t capacity) {
@@ -201,7 +216,15 @@ int64_t RPCRateLimiter::ceilingLocked() const {
 }
 
 double RPCRateLimiter::floorLocked(double ceiling) const {
-  return std::min(std::max(0.001, config_.floor), ceiling);
+  const double probeFloor = config_.maxProbeInterval.count() == 0
+      ? 0.0
+      : std::min(
+            kMaxProbeFloor,
+            static_cast<double>(serviceHorizonNanos_) /
+                std::chrono::duration<double, std::nano>(
+                    config_.maxProbeInterval)
+                    .count());
+  return std::min(std::max({0.001, config_.floor, probeFloor}), ceiling);
 }
 
 double RPCRateLimiter::limitLocked() const {
@@ -218,9 +241,48 @@ bool RPCRateLimiter::isPacingLocked() const {
 
 std::chrono::steady_clock::duration RPCRateLimiter::pacingIntervalLocked()
     const {
+  const double window = limitLocked();
+  // A recovering window w doubling every horizon H accumulates admissions at
+  // w(t) / H. One admission takes H * log2(1 + ln2 / w) while w stays below
+  // one. A window above 1 - ln2 reaches one first, after H * log2(1 / w), and
+  // then admits at 1 / H for the remaining credit.
+  const double horizons = !recovering_ ? 1.0 / window
+      : window <= 1.0 - std::numbers::ln2
+      ? std::log2(1.0 + std::numbers::ln2 / window)
+      : std::log2(1.0 / window) + 1.0 - (1.0 - window) / std::numbers::ln2;
   return std::chrono::ceil<std::chrono::steady_clock::duration>(
       std::chrono::duration<double, std::nano>{
-          static_cast<double>(serviceHorizonNanos_) / limitLocked()});
+          static_cast<double>(serviceHorizonNanos_) * horizons});
+}
+
+std::chrono::steady_clock::duration RPCRateLimiter::nextPacedDelayLocked()
+    const {
+  const auto interval = pacingIntervalLocked();
+  if (recovering_) {
+    return interval;
+  }
+  const double fraction = 1.0 - kProbeJitter * (1.0 - random_());
+  return std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+      interval * fraction);
+}
+
+double RPCRateLimiter::grownLimitLocked(
+    std::chrono::steady_clock::time_point now) const {
+  const double window = limitLocked();
+  if (!recovering_ || !isPacingLocked() || now <= limitChangedAt_) {
+    return window;
+  }
+  const double horizons =
+      std::chrono::duration<double, std::nano>(now - limitChangedAt_).count() /
+      static_cast<double>(serviceHorizonNanos_);
+  return std::min(1.0, window * std::exp2(horizons));
+}
+
+void RPCRateLimiter::commitGrowthLocked() {
+  const double grown = grownLimitLocked(now_());
+  if (grown > limitLocked()) {
+    setLimitLocked(grown);
+  }
 }
 
 void RPCRateLimiter::setLimitLocked(double limit) {
@@ -230,12 +292,15 @@ void RPCRateLimiter::setLimitLocked(double limit) {
   limit_ = limit > 0.0 && limit < ceiling
       ? std::clamp(limit, floorLocked(ceiling), ceiling)
       : 0.0;
+  const auto now = now_();
+  limitChangedAt_ = now;
   if (isPacingLocked()) {
-    const auto now = now_();
+    const auto delay = nextPacedDelayLocked();
     nextPacedAdmission_ = lastAdmission_.has_value()
-        ? std::max(now, lastAdmission_.value() + pacingIntervalLocked())
-        : now + pacingIntervalLocked();
+        ? std::max(now, lastAdmission_.value() + delay)
+        : now + delay;
   } else {
+    recovering_ = false;
     nextPacedAdmission_ = std::chrono::steady_clock::time_point{};
   }
 }
@@ -246,43 +311,55 @@ int64_t RPCRateLimiter::capacityLocked() const {
       static_cast<int64_t>(std::floor(limitLocked())), 1, ceiling);
 }
 
+namespace {
+// Clamps 'config' into its valid ranges and replaces a NaN floor or decrease
+// factor with its default.
+RPCRateLimiter::Config clamped(RPCRateLimiter::Config config) {
+  const RPCRateLimiter::Config defaults;
+  config.floor =
+      std::isnan(config.floor) ? defaults.floor : std::max(0.001, config.floor);
+  config.decreaseFactor = std::isnan(config.decreaseFactor)
+      ? defaults.decreaseFactor
+      : std::clamp(config.decreaseFactor, 0.01, 0.99);
+  config.maxProbeInterval =
+      std::max(config.maxProbeInterval, std::chrono::milliseconds{0});
+  return config;
+}
+
+// Reduces 'policy' to the fields a limiter reads, so policies that differ only
+// in fields it ignores compare equal.
+RPCRateLimiter::Config canonicalize(const RPCRateLimiter::Config& policy) {
+  auto canonical = clamped(policy);
+  if (canonical.ceiling > 0 &&
+      canonical.floor >= static_cast<double>(canonical.ceiling)) {
+    canonical.adaptive = false;
+  }
+  if (!canonical.adaptive) {
+    const RPCRateLimiter::Config defaults;
+    canonical.floor = defaults.floor;
+    canonical.decreaseFactor = defaults.decreaseFactor;
+    canonical.maxProbeInterval = defaults.maxProbeInterval;
+  }
+  return canonical;
+}
+} // namespace
+
 void RPCRateLimiter::configure(const Config& config) {
   // Replacing the whole config is one kind of amendment, so it shares
   // amend()'s clamping and adaptive-flip logging rather than repeating them.
   amend([&config](Config& target) { target = config; });
 }
 
-void RPCRateLimiter::initializeOnce(
-    const std::function<void(Config&)>& mutate) {
+bool RPCRateLimiter::initializeOrMatch(const Config& policy) {
   std::vector<ContinuePromise> toNotify;
   std::optional<PacingTimerRequest> timerRequest;
+  bool matches{true};
   {
     std::lock_guard<std::mutex> l(mutex_);
     if (initialized_) {
-      // Compare what the caller would actually get, not what they passed: an
-      // out-of-range floor or factor clamps to the same effective value and is
-      // not a divergent request.
-      Config wanted = config_;
-      mutate(wanted);
-      clampLocked(wanted);
-      if (wanted.adaptive != config_.adaptive ||
-          wanted.floor != config_.floor ||
-          wanted.decreaseFactor != config_.decreaseFactor ||
-          wanted.ceiling != config_.ceiling) {
-        // Per backend, not LOG_FIRST_N: that is process-wide, so the first
-        // backend to take this path would silence the warning for every other
-        // one even though the message names a specific backend.
-        if (!loggedDivergentSettings_) {
-          loggedDivergentSettings_ = true;
-          RPC_RATE_LIMITER_LOG(WARNING)
-              << "admission key " << admissionKey_
-              << " is already initialized; ignoring different settings from a "
-                 "later query. One configuration is shared by every query on a "
-                 "backend, and it is fixed by the first of them.";
-        }
-      }
+      matches = canonicalize(policy) == canonicalize(config_);
     } else {
-      applyMutationLocked(mutate);
+      applyMutationLocked([&policy](Config& config) { config = policy; });
       timerRequest = collectWakeableLocked(toNotify);
       // Sealed here rather than by a second call: two calls left a window in
       // which another query saw initialized_ still false and overwrote.
@@ -293,14 +370,16 @@ void RPCRateLimiter::initializeOnce(
   if (timerRequest.has_value()) {
     schedulePacingTimer(timerRequest.value());
   }
+  return matches;
 }
 
 void RPCRateLimiter::testingReset() {
   std::lock_guard<std::mutex> l(mutex_);
   config_ = Config{};
   initialized_ = false;
-  loggedDivergentSettings_ = false;
   limit_ = 0.0;
+  limitChangedAt_ = std::chrono::steady_clock::time_point{};
+  recovering_ = false;
   lowWaterLimit_ = 0.0;
   serviceHorizonNanos_ = kBootstrapServiceHorizonNanos;
   hasServiceHorizonSample_ = false;
@@ -312,11 +391,6 @@ void RPCRateLimiter::testingReset() {
   pending_.store(0);
   peakPending_.store(0);
   waiters_.clear();
-}
-
-void RPCRateLimiter::clampLocked(Config& config) {
-  config.floor = std::max(0.001, config.floor);
-  config.decreaseFactor = std::clamp(config.decreaseFactor, 0.01, 0.99);
 }
 
 std::optional<RPCRateLimiter::PacingTimerRequest>
@@ -434,7 +508,7 @@ void RPCRateLimiter::applyMutationLocked(
     const std::function<void(Config&)>& mutate) {
   const bool wasAdaptive = config_.adaptive;
   mutate(config_);
-  clampLocked(config_);
+  config_ = clamped(config_);
   if (!config_.adaptive) {
     setLimitLocked(0.0);
   } else if (!wasAdaptive) {
@@ -444,13 +518,15 @@ void RPCRateLimiter::applyMutationLocked(
       lowWaterLimit_ = limitLocked();
     }
   } else if (limit_ > 0.0) {
+    commitGrowthLocked();
     setLimitLocked(limit_);
   }
   if (wasAdaptive != config_.adaptive) {
     RPC_RATE_LIMITER_LOG(WARNING)
         << "adaptive capacity " << (config_.adaptive ? "ENABLED" : "DISABLED")
         << " for admission key " << admissionKey_ << " (floor=" << config_.floor
-        << ", decrease=" << config_.decreaseFactor << ")";
+        << ", decrease=" << config_.decreaseFactor
+        << ", max probe interval=" << config_.maxProbeInterval.count() << "ms)";
   }
 }
 
@@ -543,11 +619,14 @@ std::vector<RPCRateLimiter::Token> RPCRateLimiter::tryAcquireUpTo(
     if (pending_.load() > 0 || now < nextPacedAdmission_) {
       return granted;
     }
+    commitGrowthLocked();
     const int64_t pending = ++pending_;
     ++pacingGeneration_;
     pacingTimerArmed_ = false;
     lastAdmission_ = now;
-    nextPacedAdmission_ = now + pacingIntervalLocked();
+    nextPacedAdmission_ = isPacingLocked()
+        ? now + nextPacedDelayLocked()
+        : std::chrono::steady_clock::time_point{};
     notePeakPending(pending);
     granted.emplace_back(tokenConstructionKey_, this, overloadEpoch_);
     return granted;
@@ -641,6 +720,9 @@ void RPCRateLimiter::onOutcome(Outcome outcome, int64_t units, int64_t rttNs) {
     case Outcome::kSuccess:
       onSuccess(units, rttNs);
       return;
+    case Outcome::kFailure:
+      onFailure();
+      return;
     case Outcome::kNone:
       return;
   }
@@ -650,12 +732,18 @@ void RPCRateLimiter::applyOverloadLocked() {
   if (!config_.adaptive) {
     return;
   }
+  // Cut the window committed when the rejected call was admitted. Growth
+  // projected while it was in flight is discarded: a rejection that arrives
+  // late, as timeouts and transport-retried rate limits do, must still cut.
+  recovering_ = false;
   const double current = limitLocked();
   const double next = std::max(
       floorLocked(static_cast<double>(ceilingLocked())),
       current * config_.decreaseFactor);
+  // Reschedule even when the window is already at its floor, so the next
+  // probe waits the back-off interval rather than the recovery one.
+  setLimitLocked(next);
   if (next < current) {
-    setLimitLocked(next);
     if (lowWaterLimit_ == 0.0 || next < lowWaterLimit_) {
       lowWaterLimit_ = next;
     }
@@ -716,20 +804,46 @@ bool RPCRateLimiter::updateServiceHorizonLocked(int64_t rttNs) {
 }
 
 void RPCRateLimiter::applySuccessLocked(int64_t units, int64_t rttNs) {
+  if (isPacingLocked()) {
+    // Growth earned so far is measured on the old horizon; commit it before
+    // the sample moves the horizon. Rescheduling restarts growth from now.
+    // Committed growth may already have ended pacing.
+    commitGrowthLocked();
+    updateServiceHorizonLocked(rttNs);
+    if (isPacingLocked()) {
+      recovering_ = true;
+      setLimitLocked(limitLocked());
+    }
+    return;
+  }
   updateServiceHorizonLocked(rttNs);
   if (units <= 0 || !config_.adaptive || limit_ <= 0.0) {
     return;
   }
-  double next = limitLocked();
-  int64_t remainingUnits = units;
-  while (remainingUnits > 0 && next < 1.0) {
-    next = std::min(1.0, next * 2.0);
-    --remainingUnits;
-  }
-  if (remainingUnits > 0) {
-    next = std::sqrt(next * next + 2.0 * static_cast<double>(remainingUnits));
-  }
+  const double current = limitLocked();
+  const double next =
+      std::sqrt(current * current + 2.0 * static_cast<double>(units));
   setLimitLocked(next >= static_cast<double>(ceilingLocked()) ? 0.0 : next);
+}
+
+void RPCRateLimiter::onFailure() {
+  std::vector<ContinuePromise> toNotify;
+  std::optional<PacingTimerRequest> timerRequest;
+  {
+    std::lock_guard<std::mutex> l(mutex_);
+    if (!config_.adaptive || !recovering_) {
+      return;
+    }
+    // Growth since the failed call's admission is not committed: the backend
+    // did not serve it.
+    recovering_ = false;
+    setLimitLocked(limitLocked());
+    timerRequest = collectWakeableLocked(toNotify);
+  }
+  fulfillWaitersNoThrow(toNotify, admissionKey_);
+  if (timerRequest.has_value()) {
+    schedulePacingTimer(timerRequest.value());
+  }
 }
 
 void RPCRateLimiter::onSuccess(int64_t units, int64_t rttNs) {
@@ -761,6 +875,7 @@ void RPCRateLimiter::onSuccessForEpoch(
   {
     std::lock_guard<std::mutex> l(mutex_);
     if (overloadEpoch != overloadEpoch_) {
+      commitGrowthLocked();
       if (updateServiceHorizonLocked(rttNs) && isPacingLocked()) {
         setLimitLocked(limitLocked());
       }
@@ -821,6 +936,7 @@ RPCRateLimiter::Stats RPCRateLimiter::stats() const {
       .lowWaterLimitMilli =
           static_cast<int64_t>(std::llround(lowWaterLimit * 1'000)),
       .serviceHorizonNanos = serviceHorizonNanos_,
+      .recovering = recovering_,
   };
 }
 
@@ -856,6 +972,66 @@ RPCRateLimiter& RPCRateLimiterRegistry::get(const std::string& admissionKey) {
   return *inserted->second;
 }
 
+RPCRateLimiterRegistry::Lookup RPCRateLimiterRegistry::getForPolicy(
+    std::string_view admissionKey,
+    const RPCRateLimiter::Config& policy) {
+  const std::string key{admissionKey};
+  auto& shared = get(key);
+  if (shared.initializeOrMatch(policy)) {
+    return {.limiter = &shared, .policyScoped = false};
+  }
+
+  const auto canonical = canonicalize(policy);
+  // Caller holds mutex_, shared or exclusive.
+  auto findLocked = [&]() -> RPCRateLimiter* {
+    const auto it = policyScopedLimiters_.find(key);
+    if (it == policyScopedLimiters_.end()) {
+      return nullptr;
+    }
+    for (const auto& [scopedPolicy, limiter] : it->second) {
+      if (scopedPolicy == canonical) {
+        return limiter.get();
+      }
+    }
+    return nullptr;
+  };
+  {
+    std::shared_lock<std::shared_mutex> rl(mutex_);
+    if (auto* limiter = findLocked()) {
+      return {.limiter = limiter, .policyScoped = true};
+    }
+  }
+  common::testutil::TestValue::adjust(
+      "facebook::velox::exec::rpc::RPCRateLimiterRegistry::getForPolicy", this);
+
+  // Sealed before it is published, so no other query can reach it unsealed.
+  // Discarded unused if another thread publishes one for this policy first.
+  auto created = std::make_shared<RPCRateLimiter>(key + " (policy-scoped)");
+  const bool sealed = created->initializeOrMatch(policy);
+  VELOX_CHECK(sealed, "A new rate limiter refused its first policy: {}", key);
+
+  size_t numPolicies{0};
+  {
+    std::unique_lock<std::shared_mutex> wl(mutex_);
+    if (auto* limiter = findLocked()) {
+      return {.limiter = limiter, .policyScoped = true};
+    }
+    auto& limiters = policyScopedLimiters_[key];
+    limiters.emplace_back(canonical, created);
+    // The shared limiter runs one more policy.
+    numPolicies = limiters.size() + 1;
+  }
+  const auto sealedPolicy = created->config();
+  RPC_RATE_LIMITER_LOG(INFO)
+      << "admission key '" << key << "' runs " << numPolicies
+      << " rate-limiter policies on this worker; added adaptive="
+      << (sealedPolicy.adaptive ? "true" : "false")
+      << ", ceiling=" << sealedPolicy.ceiling
+      << ", floor=" << sealedPolicy.floor
+      << ", decrease=" << sealedPolicy.decreaseFactor;
+  return {.limiter = created.get(), .policyScoped = true};
+}
+
 void RPCRateLimiterRegistry::testingReset() {
   std::unique_lock<std::shared_mutex> wl(mutex_);
   defaultCapacityRef().store(20);
@@ -865,6 +1041,16 @@ void RPCRateLimiterRegistry::testingReset() {
   // them writing through a dangling pointer.
   for (auto& [admissionKey, admission] : backends_) {
     admission->testingReset();
+  }
+  // A policy-scoped limiter stays listed under its policy, so it is sealed
+  // with the policy it ran before the reset.
+  for (auto& [admissionKey, limiters] : policyScopedLimiters_) {
+    for (auto& entry : limiters) {
+      auto& limiter = entry.second;
+      const auto sealedPolicy = limiter->config();
+      limiter->testingReset();
+      limiter->initializeOrMatch(sealedPolicy);
+    }
   }
 }
 

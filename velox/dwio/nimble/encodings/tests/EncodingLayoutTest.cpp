@@ -391,6 +391,35 @@ TEST(EncodingLayoutTests, blockBitPacking) {
   EXPECT_TRUE(captured.child(2).has_value());
 }
 
+TEST(EncodingLayoutTests, partitionedEliasFano) {
+  // PartitionedEliasFano nests three directories (partition starts, partition
+  // bases, group starts). Its group streams are always EliasFano, so capture
+  // records only the directories.
+  nimble::EncodingLayout pefLayout{
+      nimble::EncodingType::PartitionedEliasFano,
+      {},
+      nimble::CompressionType::Uncompressed,
+      {std::nullopt, std::nullopt, std::nullopt}};
+  testSerialization(pefLayout);
+
+  // Three ascending runs of 300 rows, each starting below the previous end.
+  std::vector<uint32_t> data;
+  data.reserve(900);
+  for (uint32_t run = 0; run < 3; ++run) {
+    for (uint32_t i = 0; i < 300; ++i) {
+      data.push_back(run * 7 + i * 3);
+    }
+  }
+
+  auto captured = encodeAndCapture<uint32_t>(pefLayout, data);
+  ASSERT_EQ(
+      captured.encodingType(), nimble::EncodingType::PartitionedEliasFano);
+  ASSERT_EQ(captured.childrenCount(), 3);
+  EXPECT_TRUE(captured.child(0).has_value());
+  EXPECT_TRUE(captured.child(1).has_value());
+  EXPECT_TRUE(captured.child(2).has_value());
+}
+
 TEST(EncodingLayoutTests, sparseBool) {
   nimble::EncodingLayout expected{
       nimble::EncodingType::SparseBool,

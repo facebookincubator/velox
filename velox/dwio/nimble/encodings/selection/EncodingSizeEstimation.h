@@ -35,6 +35,7 @@
 #include "velox/dwio/nimble/encodings/HuffmanEncoding.h"
 #include "velox/dwio/nimble/encodings/MainlyConstantEncoding.h"
 #include "velox/dwio/nimble/encodings/PFOREncoding.h"
+#include "velox/dwio/nimble/encodings/PartitionedEliasFanoEncoding.h"
 #include "velox/dwio/nimble/encodings/RLEEncoding.h"
 #include "velox/dwio/nimble/encodings/SimdForBitpackEncoding.h"
 #include "velox/dwio/nimble/encodings/SparseBoolEncoding.h"
@@ -238,6 +239,13 @@ struct EncodingSizeEstimation {
         if constexpr (isIntegralType<T>()) {
           return EliasFanoEncoding<T>::estimateSize(
               values, statistics, options);
+        } else {
+          return std::nullopt;
+        }
+      }
+      case EncodingType::PartitionedEliasFano: {
+        if constexpr (isIntegralType<T>()) {
+          return PartitionedEliasFanoEncoding<T>::estimateSize(values, options);
         } else {
           return std::nullopt;
         }

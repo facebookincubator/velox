@@ -1209,11 +1209,21 @@ TEST_F(TableScanTest, partitionTimestampMixedWithFileTimestamp) {
   const auto caseValues = makeRowVector({makeFlatVector<Timestamp>(
       {Timestamp(1'577'836'800, 0), Timestamp(1'700'000'001, 0)})});
 
+  // The reader's timestamp type is pinned to a unit distinct from both default
+  // units below, so each scan proves the key follows the reader rather than a
+  // fixed unit. The connector and session settings take the enumerator's
+  // integer value.
+  const auto readerTimestampType = std::to_string(
+      static_cast<int32_t>(cudf::type_id::TIMESTAMP_MICROSECONDS));
+
   // Projects 'projection' over the file and partition timestamps of a split
-  // in the partition 'partitionValue', expecting 'expected'.
+  // in the partition 'partitionValue', expecting 'expected'. The session pins
+  // the reader's timestamp type to 'sessionTimestampType' when that is set.
   const auto check = [&](const std::string& projection,
                          const std::optional<std::string>& partitionValue,
-                         const RowVectorPtr& expected) {
+                         const RowVectorPtr& expected,
+                         const std::optional<std::string>&
+                             sessionTimestampType) {
     SCOPED_TRACE(projection);
     auto plan =
         PlanBuilder(pool_.get())
@@ -1231,37 +1241,56 @@ TEST_F(TableScanTest, partitionTimestampMixedWithFileTimestamp) {
             .endTableScan()
             .project({projection})
             .planNode();
-    AssertQueryBuilder(plan, duckDbQueryRunner_)
-        .connectorSessionProperty(
-            kCudfHiveConnectorId,
-            hive::HiveConfig::kReadTimestampPartitionValueAsLocalTimeSession,
-            "false")
+    AssertQueryBuilder builder(plan, duckDbQueryRunner_);
+    builder.connectorSessionProperty(
+        kCudfHiveConnectorId,
+        hive::HiveConfig::kReadTimestampPartitionValueAsLocalTimeSession,
+        "false");
+    if (sessionTimestampType.has_value()) {
+      builder.connectorSessionProperty(
+          kCudfHiveConnectorId,
+          cudf_velox::connector::hive::CudfHiveConfig::kTimestampTypeSession,
+          *sessionTimestampType);
+    }
+    builder
         .splits({makePartitionedSplit(
             filePath->getPath(), {{"partition_ts", partitionValue}})})
         .assertResults(expected);
   };
 
-  // The reader's timestamp type is pinned to a unit distinct from both default
-  // units below, so each scan proves the key follows the reader rather than a
-  // fixed unit. The setting takes the enumerator's integer value.
-  resetCudfHiveConnector(
-      std::make_shared<config::ConfigBase>(
-          std::unordered_map<std::string, std::string>{
-              {cudf_velox::connector::hive::CudfHiveConfig::kTimestampType,
-               std::to_string(
-                   static_cast<int32_t>(
-                       cudf::type_id::TIMESTAMP_MICROSECONDS))}}));
   for (const auto& [unit, label] :
        {std::pair{cudf::type_id::TIMESTAMP_MILLISECONDS, "ms default unit"},
         std::pair{cudf::type_id::TIMESTAMP_NANOSECONDS, "ns default unit"}}) {
     SCOPED_TRACE(label);
     config.timestampUnit = unit;
-    check("file_ts", std::nullopt, fileValues);
-    check("coalesce(partition_ts, file_ts)", std::nullopt, fileValues);
+    check("file_ts", std::nullopt, fileValues, readerTimestampType);
+    check(
+        "coalesce(partition_ts, file_ts)",
+        std::nullopt,
+        fileValues,
+        readerTimestampType);
     check(
         "CASE WHEN flag THEN partition_ts ELSE file_ts END",
         "2020-01-01 00:00:00",
-        caseValues);
+        caseValues,
+        readerTimestampType);
+  }
+
+  // Without a session timestamp type, the key follows the connector's
+  // parquet.reader.timestamp-type.
+  {
+    SCOPED_TRACE("connector timestamp type");
+    config.timestampUnit = cudf::type_id::TIMESTAMP_MILLISECONDS;
+    resetCudfHiveConnector(
+        std::make_shared<config::ConfigBase>(
+            std::unordered_map<std::string, std::string>{
+                {cudf_velox::connector::hive::CudfHiveConfig::kTimestampType,
+                 readerTimestampType}}));
+    check(
+        "coalesce(partition_ts, file_ts)",
+        /*partitionValue=*/std::nullopt,
+        fileValues,
+        /*sessionTimestampType=*/std::nullopt);
   }
 }
 
@@ -1634,6 +1663,54 @@ TEST_F(TableScanTest, filterPushdown) {
           .planNode(),
       filePaths,
       "SELECT count(*) FROM tmp");
+}
+
+// Presto pushes an equality on a column into the scan and re-creates the
+// column above it as a constant projection. When the scan reads no other
+// column, that projection sits over a zero-column input and still runs on the
+// GPU, filled to the row count of each batch.
+TEST_F(TableScanTest, constantProjectionOverZeroColumnScan) {
+  auto rowType = ROW({"c0", "c1"}, {BIGINT(), VARCHAR()});
+  auto data = makeRowVector(
+      {"c0", "c1"},
+      {makeFlatVector<int64_t>({1, 2, 3, 4, 5}),
+       makeFlatVector<std::string>({"a", "b", "a", "c", "a"})});
+  auto filePath = TempFilePath::create();
+  writeToFile(filePath->getPath(), data);
+
+  common::SubfieldFilters subfieldFilters =
+      common::test::SubfieldFiltersBuilder()
+          .add(
+              "c1",
+              std::make_unique<common::BytesValues>(
+                  std::vector<std::string>{"a"}, false))
+          .build();
+  auto plan = PlanBuilder(pool_.get())
+                  .startTableScan()
+                  .outputType(ROW({}, {}))
+                  .tableHandle(makeTableHandle(
+                      "parquet_table", rowType, std::move(subfieldFilters)))
+                  .endTableScan()
+                  .project({"'a' AS c1"})
+                  .singleAggregation({"c1"}, {"count(1)"})
+                  .planNode();
+
+  std::shared_ptr<Task> task;
+  auto result = AssertQueryBuilder(plan)
+                    .split(makeCudfHiveSplit(filePath->getPath()))
+                    .copyResults(pool_.get(), task);
+  assertEqualResults(
+      {makeRowVector(
+          {makeFlatVector<std::string>({"a"}), makeFlatVector<int64_t>({3})})},
+      {result});
+
+  bool cudfFilterProjectUsed = false;
+  for (const auto& pipeline : task->taskStats().pipelineStats) {
+    for (const auto& op : pipeline.operatorStats) {
+      cudfFilterProjectUsed |= op.operatorType == "CudfFilterProject";
+    }
+  }
+  EXPECT_TRUE(cudfFilterProjectUsed);
 }
 
 // Disable this test and the one below for now, pending a CUDF fix.
@@ -2428,6 +2505,34 @@ TEST_F(TableScanTest, decimalRemainingFilter) {
       plan,
       {filePath},
       "SELECT c0, c1 FROM tmp WHERE c0 = CAST('-5.00' AS DECIMAL(5, 2))");
+}
+
+// The data source cannot apply the session's cast settings, so it rejects a
+// remaining filter that casts from VARCHAR.
+TEST_F(TableScanTest, remainingFilterCastFromVarchar) {
+  auto rowType = ROW({"c0"}, {VARCHAR()});
+  auto filePath = TempFilePath::create();
+  writeToFile(
+      filePath->getPath(),
+      makeRowVector({"c0"}, {makeFlatVector<std::string>({"1.5", "x"})}));
+
+  auto plan = PlanBuilder(pool_.get())
+                  .startTableScan()
+                  .connectorId(kCudfHiveConnectorId)
+                  .outputType(rowType)
+                  .dataColumns(rowType)
+                  .assignments(
+                      facebook::velox::exec::test::HiveConnectorTestBase::
+                          allRegularColumns(rowType))
+                  .remainingFilter("try_cast(c0 as double) > 1.0")
+                  .endTableScan()
+                  .planNode();
+
+  VELOX_ASSERT_UNSUPPORTED_THROW(
+      AssertQueryBuilder(plan)
+          .splits(makeCudfHiveConnectorSplits({filePath}))
+          .copyResults(pool_.get()),
+      "Remaining filter with a cast from VARCHAR is not supported");
 }
 
 TEST_F(TableScanTest, unsupportedScanColumnProjectedOut) {

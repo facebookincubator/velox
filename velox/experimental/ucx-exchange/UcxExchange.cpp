@@ -137,8 +137,8 @@ BlockingReason UcxExchange::isBlocked(ContinueFuture* future) {
       getSplits(&splitFuture_);
     }
     if (atEnd_ && noMoreSplits_) {
-      const auto numSplits = stats_.rlock()->numSplits;
-      operatorCtx_->task()->multipleSplitsFinished(false, numSplits, 0);
+      operatorCtx_->task()->splitsFinished(
+          planNodeId(), *operatorCtx_->driverCtx());
     }
     recordExchangeClientStats();
     return BlockingReason::kNotBlocked;

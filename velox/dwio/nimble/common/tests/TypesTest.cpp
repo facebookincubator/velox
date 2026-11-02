@@ -53,7 +53,7 @@ TEST(TypesTest, encodingTypeStringConversion) {
       {EncodingType::Huffman, "Huffman"},
       {EncodingType::DeltaBlock, "DeltaBlock"},
       {EncodingType::EliasFano, "EliasFano"},
-      {EncodingType::BitRangeSplit, "BitRangeSplit"},
+      {EncodingType::PartitionedEliasFano, "PartitionedEliasFano"},
   };
   for (const auto& [type, name] : testCases) {
     SCOPED_TRACE(name);
@@ -69,6 +69,14 @@ TEST(TypesTest, encodingTypeToStringUnknown) {
 
 TEST(TypesTest, toEncodingTypeUnknown) {
   EXPECT_ANY_THROW(toEncodingType("unknown"));
+}
+
+TEST(TypesTest, removedBitRangeSplit) {
+  EXPECT_NE(
+      toString(kRemovedBitRangeSplitEncodingType).find("Unknown"),
+      std::string::npos);
+  NIMBLE_ASSERT_USER_THROW(
+      toEncodingType("BitRangeSplit"), "Unknown encoding type: BitRangeSplit");
 }
 
 TEST(TypesTest, readOnlyEncoding) {

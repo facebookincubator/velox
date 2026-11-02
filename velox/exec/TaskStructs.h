@@ -24,6 +24,7 @@
 #include "velox/exec/TaskStats.h"
 
 #include <folly/CPortability.h>
+#include <folly/container/F14Map.h>
 
 #include <limits>
 #include <memory>
@@ -100,10 +101,8 @@ class SplitsStore {
 
   /// Returns the next split to process.
   ///
-  /// @param driverId The driver id requesting the split. If set, a barrier
-  /// split will be delivered exactly once for each driver. If not set, all
-  /// barrier splits are cleared and no barrier split is returned. This is
-  /// used when cleaning up remaining remote splits during task termination.
+  /// @param driverId The driver id requesting the split. Barrier splits are
+  /// delivered exactly once for each driver.
   /// @param maxPreloadSplits Maximum number of splits to preload.
   /// @param preload Function to preload connector splits.
   /// @param split Output parameter for the next split.
@@ -112,7 +111,7 @@ class SplitsStore {
   /// @return true if a split is set or there are no more splits; false if the
   /// caller should retry when the future is fulfilled.
   virtual bool nextSplit(
-      std::optional<uint32_t> driverId,
+      uint32_t driverId,
       int maxPreloadSplits,
       const ConnectorSplitPreloadFunc& preload,
       Split& split,
@@ -130,6 +129,28 @@ class SplitsStore {
   /// `promises` should be set by caller (potentially outside a lock), to notify
   /// any waiters on the splits.
   void addSplit(Split split, std::vector<ContinuePromise>& promises);
+
+  /// Marks all splits acquired by the specified consumer as fully processed.
+  void finishSplits(uint32_t driverId);
+
+  /// Records one consumer closing and abandons its unfinished splits.
+  /// When all 'numConsumers' consumers have closed, abandons queued splits
+  /// and returns them for disposal outside the task lock. Appends outstanding
+  /// split waiters to 'promises'. Each consumer
+  /// must call this exactly once. Consumers that have not started still count.
+  std::deque<Split> finishConsumer(
+      uint32_t driverId,
+      uint32_t numConsumers,
+      std::vector<ContinuePromise>& promises);
+
+  /// Signals no more splits and abandons the queue. Returns queued splits for
+  /// disposal outside the task lock and appends split waiters to 'promises'.
+  /// Acquired splits remain owned by their consumers until completion or close.
+  std::deque<Split> discardQueuedSplits(std::vector<ContinuePromise>& promises);
+
+  bool allConsumersFinished() const {
+    return allConsumersFinished_;
+  }
 
   /// Returns the splits added but not yet returned by nextSplit().
   const std::deque<Split>& queuedSplits() const {
@@ -158,29 +179,54 @@ class SplitsStore {
   }
 
  protected:
+  // Removes a queued split and records its count and weight for 'driverId'.
   Split getSplit(
+      uint32_t driverId,
       int maxPreloadSplits,
       const ConnectorSplitPreloadFunc& preload);
 
   ContinueFuture makeFuture();
 
-  bool tryGetBarrier(std::optional<uint32_t> driverId, Split& split);
+  bool tryGetBarrier(uint32_t driverId, Split& split);
+
+  // Arrived (added), but not distributed yet, splits.
+  std::deque<Split> splits_;
+  // Signal, that no more splits will arrive.
+  bool noMoreSplits_{false};
+
+ private:
+  // Removes a driver's acquired work from running counters and returns its
+  // split count.
+  int32_t releaseRunningSplits(uint32_t driverId);
+
+  // Removes one split's count and weight from the queued counters.
+  void removeQueuedSplitStats(const Split& split);
 
   const bool remoteSplit_;
   TaskStats* taskStats_{};
   folly::F14FastSet<std::shared_ptr<connector::ConnectorSplit>>*
       preloadingSplits_{};
 
-  // Arrived (added), but not distributed yet, splits.
-  std::deque<Split> splits_;
   // The map from driver id to barrier splits.
   std::unordered_map<uint32_t, Split> barrierSplits_;
 
-  // Signal, that no more splits will arrive.
-  bool noMoreSplits_{false};
-
   // Blocking promises given out when out of splits to distribute.
   std::vector<ContinuePromise> promises_;
+
+  // Work acquired by a consumer until it completes or the consumer closes.
+  struct RunningSplits {
+    int32_t numSplits{0};
+    // Excludes weights of remote and index splits.
+    int64_t weight{0};
+  };
+  // Prevents one consumer's closure from releasing another consumer's work.
+  folly::F14FastMap<uint32_t, RunningSplits> runningSplits_;
+
+  // Consumers that have closed for this source and split group.
+  std::unordered_set<uint32_t> finishedConsumers_;
+
+  // Prevents accepting more work after the last consumer closes.
+  bool allConsumersFinished_{false};
 };
 
 /// Structure contains the current info on splits for a particular plan node.

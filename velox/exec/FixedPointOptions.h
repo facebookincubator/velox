@@ -31,6 +31,9 @@ struct ConnectorSplit;
 
 namespace facebook::velox::exec {
 
+/// Defined in FixedPointLoop.h.
+struct FixedPointIterationExecutionStats;
+
 /// Hooks an application passes to Task::create for a plan containing a
 /// FixedPointNode.  The fixed point generates no task ids and reaches no
 /// worker by itself: the application names the workers of a loop with a
@@ -144,6 +147,38 @@ struct FixedPointOptions {
   /// produce a single verdict row.  The default of 1 runs all of them
   /// single-driver.
   uint32_t iterationMaxDrivers{1};
+
+  /// Experimental, like FixedPointIterationExecutionStats.  Optional.  Called
+  /// with the statistics of each iteration a loop completes, after its
+  /// convergence check.  They include every plan's TaskStats, which
+  /// Task::fixedPointExecutionStats() keeps only for the first iterations and
+  /// the latest one.  A TaskListener also receives each sub-task's TaskStats,
+  /// but for every task in the process, and a sub-task named by 'subTaskId',
+  /// such as the last plan of a chain, carries no iteration.  Only the loop
+  /// joins a sub-task's TaskStats to its iteration, verdict and nesting, in a
+  /// record that it trims and that, for a nested loop, ends with the internal
+  /// sub-task running it.
+  ///
+  /// A loop nested in a plan inherits these options, so 'nesting' tells the
+  /// loops of the task apart, as in LoopAddress: empty for the top-level loop.
+  /// An application that shares one FixedPointOptions between tasks binds each
+  /// task's identity into its own copy.  Runs on the loop's thread -- the
+  /// orchestration executor, or the caller of next() in serial mode -- outside
+  /// the statistics lock, so it may read Task::fixedPointExecutionStats(), and
+  /// must not block.  Calls for one loop come in iteration order, but calls
+  /// from different loops -- loops nested in the plans of one chain, or peer
+  /// tasks whose copies share state -- may overlap, so it must be thread-safe.
+  /// It must own, or share ownership of, whatever it captures: a nested loop
+  /// runs in an internal sub-task that can outlive the task, and may call it
+  /// after the task has ended, even after the task is destroyed.  Once the
+  /// task ends, a parallel loop stops at its next wait, while a serial loop
+  /// runs to completion and reports every iteration.  An iteration whose body
+  /// or convergence check fails is not reported.  A std::exception it throws
+  /// is logged and ignored, as for a TaskListener.
+  std::function<void(
+      const std::vector<NestingStep>& nesting,
+      const FixedPointIterationExecutionStats& stats)>
+      onIterationStats;
 };
 
 } // namespace facebook::velox::exec

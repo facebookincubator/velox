@@ -122,6 +122,13 @@ static_assert(
         static_cast<uint8_t>(serialization::StreamTrailerFieldKind_Checksum32),
     "StreamTrailerFieldKind must mirror the on-disk enum.");
 
+// FlatBuffers numbers table fields by position. Deleting the deprecated field
+// before stream_trailer would move stream_trailer to another slot, and existing
+// files would read as having no trailer.
+static_assert(
+    serialization::FileProperties::VT_STREAM_TRAILER == 12,
+    "stream_trailer must keep its on-disk slot.");
+
 StreamTrailerLayout::StreamTrailerLayout(std::vector<StreamTrailerField> fields)
     : fields_{std::move(fields)} {
   std::bitset<std::numeric_limits<uint8_t>::max() + 1> seenKinds;
@@ -152,7 +159,6 @@ FileProperties::FileProperties(
     bool compactRowCountEncoding,
     bool clusterIndexKeyColumnStorageOmitted,
     std::vector<std::string> clusterIndexKeyColumnsWithOmittedStorage,
-    bool hasStreamChecksums,
     StreamTrailerLayout streamTrailerLayout,
     bool hasTopLevelNulls,
     std::vector<RequiredFeature> requiredFeatures)
@@ -160,7 +166,6 @@ FileProperties::FileProperties(
       clusterIndexKeyColumnStorageOmitted_{clusterIndexKeyColumnStorageOmitted},
       clusterIndexKeyColumnsWithOmittedStorage_{
           std::move(clusterIndexKeyColumnsWithOmittedStorage)},
-      hasStreamChecksums_{hasStreamChecksums},
       streamTrailerLayout_{std::move(streamTrailerLayout)},
       hasTopLevelNulls_{hasTopLevelNulls},
       requiredFeatures_{std::move(requiredFeatures)} {
@@ -168,10 +173,6 @@ FileProperties::FileProperties(
       clusterIndexKeyColumnStorageOmitted_,
       !clusterIndexKeyColumnsWithOmittedStorage_.empty(),
       "clusterIndexKeyColumnStorageOmitted must match clusterIndexKeyColumnsWithOmittedStorage presence");
-  NIMBLE_CHECK(
-      !(hasStreamChecksums_ &&
-        streamTrailerLayout_.checksumOffset().has_value()),
-      "Stream checksums cannot be recorded both in stripe groups and in stream trailers");
   NIMBLE_CHECK(
       std::ranges::adjacent_find(
           requiredFeatures_, std::ranges::greater_equal{}) ==
@@ -220,7 +221,6 @@ std::string FileProperties::serialize() const {
           clusterIndexKeyColumnStorageOmitted_,
           clusterIndexKeyColumnsWithOmittedStorage,
           compactEncodingOffset,
-          hasStreamChecksums_,
           streamTrailer,
           hasTopLevelNulls_,
           requiredFeatures));
@@ -271,16 +271,11 @@ FileProperties FileProperties::deserialize(std::string_view data) {
     }
     streamTrailerLayout = StreamTrailerLayout{std::move(parsed)};
   }
-  NIMBLE_CHECK_FILE(
-      !(serialized->has_stream_checksums() &&
-        streamTrailerLayout.checksumOffset().has_value()),
-      "File properties record per-stream checksums both in stripe groups and in stream trailers");
 
   return FileProperties{
       compactRowCountEncoding,
       serialized->cluster_index_key_column_storage_omitted(),
       std::move(clusterIndexKeyColumnsWithOmittedStorage),
-      serialized->has_stream_checksums(),
       std::move(streamTrailerLayout),
       serialized->has_top_level_nulls(),
       std::move(requiredFeatures)};

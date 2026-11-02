@@ -32,15 +32,9 @@
 #include "velox/common/base/SimdUtil.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/common/Vector.h"
-#include "velox/dwio/nimble/encodings/ConstantEncoding.h"
-#include "velox/dwio/nimble/encodings/EliasFanoEncoding.h"
-#include "velox/dwio/nimble/encodings/FixedBitWidthEncoding.h"
-#include "velox/dwio/nimble/encodings/TrivialEncoding.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
-#include "velox/dwio/nimble/encodings/common/EncodingLayout.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
-#include "velox/dwio/nimble/encodings/selection/Statistics.h"
 #include "velox/dwio/nimble/index/ClusterIndexConfig.h"
 #include "velox/dwio/nimble/index/HierarchicalKeyFormat.h"
 #include "velox/dwio/nimble/index/IndexKeyEncoder.h"
@@ -82,9 +76,48 @@ std::vector<SortOrder> getSortOrders(const ClusterIndexConfig& config) {
       config.columns.size(), SortOrder{.ascending = true});
 }
 
+// Candidate encodings of every key sequence. PartitionedEliasFano stores a
+// level's concatenated runs, which are no longer monotone as a whole.
+constexpr std::array<EncodingType, 5> kLevelEncodings{
+    EncodingType::Constant,
+    EncodingType::EliasFano,
+    EncodingType::FixedBitWidth,
+    EncodingType::Trivial,
+    EncodingType::PartitionedEliasFano,
+};
+
+// Returns kLevelEncodings, each at read factor 1.0.
+std::vector<std::pair<EncodingType, float>> defaultLevelEncodingReadFactors() {
+  std::vector<std::pair<EncodingType, float>> readFactors;
+  readFactors.reserve(kLevelEncodings.size());
+  for (const auto encodingType : kLevelEncodings) {
+    readFactors.emplace_back(encodingType, 1.0f);
+  }
+  return readFactors;
+}
+
 // Returns whether adjacent keys satisfy the configured duplicate policy.
 bool isKeyOrdered(int32_t comparison, bool noDuplicateKey) {
   return noDuplicateKey ? comparison > 0 : comparison >= 0;
+}
+
+// Returns the configured read factors of key sequences after checking that the
+// selection supports every encoding they name. Empty selects
+// defaultLevelEncodingReadFactors().
+std::vector<std::pair<EncodingType, float>> keySequenceEncodingReadFactors(
+    const ClusterIndexConfig& config) {
+  const auto possibleEncodings =
+      ManualEncodingSelectionPolicyFactory::possibleEncodings();
+  for (const auto& [encoding, readFactor] :
+       config.hierarchicalKeyEncodingReadFactors) {
+    NIMBLE_USER_CHECK(
+        std::find(
+            possibleEncodings.begin(), possibleEncodings.end(), encoding) !=
+            possibleEncodings.end(),
+        "Hierarchical key read factors name an encoding the selection does not support: {}",
+        encoding);
+  }
+  return config.hierarchicalKeyEncodingReadFactors;
 }
 
 // Reports an order violation using normalized key components.
@@ -115,11 +148,17 @@ class HierarchicalKeyChunkBuilder final : public KeyChunkBuilder {
       std::span<const SortOrder> sortOrders,
       bool enforceKeyOrder,
       bool noDuplicateKey,
+      std::vector<std::pair<EncodingType, float>> levelEncodingReadFactors,
       velox::memory::MemoryPool* pool)
       : keyEncoder_{std::move(keyEncoder)},
         keyColumnIndices_{keyColumnIndices.begin(), keyColumnIndices.end()},
         sortOrders_{sortOrders.begin(), sortOrders.end()},
         noDuplicateKey_{noDuplicateKey},
+        encodingPolicyFactory_{
+            levelEncodingReadFactors.empty()
+                ? defaultLevelEncodingReadFactors()
+                : std::move(levelEncodingReadFactors),
+            /*compressionOptions=*/std::nullopt},
         encodedKeyStream_{pool},
         keyBuffer_{*velox::checkedNotNull(pool)},
         childBuffer_{*velox::checkedNotNull(pool)} {
@@ -155,7 +194,8 @@ class HierarchicalKeyChunkBuilder final : public KeyChunkBuilder {
     }
     keyColumnInputs_.reserve(keyColumns_.size());
     index_.levels.resize(keyColumns_.size());
-    encodedLevelSequences_.reserve(keyColumns_.size());
+    encodedLevelKeySequences_.reserve(keyColumns_.size());
+    encodedLevelOffsetSequences_.reserve(keyColumns_.size());
   }
 
   void append(const velox::VectorPtr& input) override {
@@ -244,76 +284,20 @@ class HierarchicalKeyChunkBuilder final : public KeyChunkBuilder {
     }
   };
 
-  inline static constexpr std::array<EncodingType, 4> kLevelEncodings{
-      EncodingType::Constant,
-      EncodingType::EliasFano,
-      EncodingType::FixedBitWidth,
-      EncodingType::Trivial,
-  };
-
+  // Encodes one sequence, which holds every run of a level or the child
+  // offsets into it, with the standard selection of 'encodingPolicyFactory_'.
   template <typename T>
-  static std::optional<uint64_t> estimateSequenceSize(
-      std::span<const T> values,
-      const Statistics<T>& statistics,
-      EncodingType encodingType) {
-    const Encoding::Options options{};
-    if (encodingType == EncodingType::Constant) {
-      return ConstantEncoding<T>::estimateSize(values, statistics, options);
-    }
-    if (encodingType == EncodingType::EliasFano) {
-      return EliasFanoEncoding<T>::estimateSize(values, statistics, options);
-    }
-    if (encodingType == EncodingType::FixedBitWidth) {
-      return FixedBitWidthEncoding<T>::estimateSize(
-          values.size(), statistics, options);
-    }
-    NIMBLE_CHECK_EQ(encodingType, EncodingType::Trivial);
-    return TrivialEncoding<T>::estimateSize(values.size());
-  }
-
-  template <typename T>
-  static EncodingType selectSequenceEncoding(std::span<const T> values) {
-    const auto statistics = Statistics<T>::create(values);
-    EncodingType selected{EncodingType::Trivial};
-    uint64_t selectedBytes{std::numeric_limits<uint64_t>::max()};
-    for (uint32_t candidate = 0; candidate < kLevelEncodings.size();
-         ++candidate) {
-      const auto estimate =
-          estimateSequenceSize(values, statistics, kLevelEncodings[candidate]);
-      if (estimate.has_value() && estimate.value() < selectedBytes) {
-        selectedBytes = estimate.value();
-        selected = kLevelEncodings[candidate];
-      }
-    }
-    return selected;
-  }
-
-  static EncodingLayout childEncodingLayout(EncodingType encodingType) {
-    return {encodingType, {}, CompressionType::Uncompressed};
-  }
-
-  template <typename T>
-  static std::unique_ptr<EncodingSelectionPolicy<T>> sequencePolicy(
-      EncodingType encodingType) {
-    return std::make_unique<ReplayedEncodingSelectionPolicy<T>>(
-        childEncodingLayout(encodingType),
-        CompressionOptions{},
-        [](DataType dataType) {
-          return ManualEncodingSelectionPolicyFactory{
-              ManualEncodingSelectionPolicyFactory::
-                  defaultEncodingReadFactors(),
-              std::nullopt}
-              .createPolicy(dataType);
-        });
-  }
-
-  template <typename T>
-  std::string_view encodeSequence(
-      std::span<const T> values,
-      EncodingType encodingType) const {
+  std::string_view encodeSequence(std::span<const T> values) const {
     NIMBLE_CHECK(!values.empty());
+    auto policy = encodingPolicyFactory_.createPolicy(TypeTraits<T>::dataType);
     return EncodingFactory::encode<T>(
-        sequencePolicy<T>(encodingType), values, childBuffer_);
+        std::unique_ptr<EncodingSelectionPolicy<T>>(
+            static_cast<EncodingSelectionPolicy<T>*>(policy.release())),
+        values,
+        childBuffer_,
+        // Key chunks stay resident, so the bytes that exact bit widths save
+        // over byte-rounded FixedBitWidth and PFOR are memory saved.
+        Encoding::Options{.fixedBitWidthUseExactBits = true});
   }
 
   template <typename T>
@@ -336,22 +320,15 @@ class HierarchicalKeyChunkBuilder final : public KeyChunkBuilder {
     return {output, values.size()};
   }
 
+  // Encodes the child offsets into 'level', then the values of 'level'.
   template <typename T>
   void encodeIndexLevel(size_t level) const {
-    const auto values = physicalValues<T>(index_.levels.at(level).values);
-    const std::array<uint32_t, 2> rootOffsets{
-        0, static_cast<uint32_t>(values.size())};
-    const std::span<const uint32_t> parentOffsets = level == 0
-        ? rootOffsets
-        : std::span<const uint32_t>{index_.levels.at(level - 1).childOffsets};
-    for (uint32_t parent = 0; parent + 1 < parentOffsets.size(); ++parent) {
-      const auto begin = parentOffsets[parent];
-      const auto end = parentOffsets[parent + 1];
-      NIMBLE_CHECK_LT(begin, end);
-      const auto sequence = values.subspan(begin, end - begin);
-      encodedLevelSequences_.push_back(
-          encodeSequence(sequence, selectSequenceEncoding(sequence)));
+    if (level > 0) {
+      encodedLevelOffsetSequences_.push_back(
+          encodeSequence<uint32_t>(index_.levels.at(level - 1).childOffsets));
     }
+    encodedLevelKeySequences_.push_back(
+        encodeSequence<T>(physicalValues<T>(index_.levels.at(level).values)));
   }
 
   // Clears per-encode state while retaining allocated capacity for reuse.
@@ -362,7 +339,8 @@ class HierarchicalKeyChunkBuilder final : public KeyChunkBuilder {
       level.childOffsets.clear();
     }
     childBuffer_.reset();
-    encodedLevelSequences_.clear();
+    encodedLevelKeySequences_.clear();
+    encodedLevelOffsetSequences_.clear();
   }
 
   // Returns the first key level that differs from the preceding row. Returns
@@ -420,10 +398,12 @@ class HierarchicalKeyChunkBuilder final : public KeyChunkBuilder {
     }
   }
 
-  // Selects and encodes each parent-group sequence independently.
+  // Encodes each level's values and the child offsets into each level as one
+  // sequence apiece, in HierarchicalKeyFormat order.
   void encodeIndex() const {
     const auto numLevels = index_.levels.size();
-    NIMBLE_CHECK(encodedLevelSequences_.empty());
+    NIMBLE_CHECK(encodedLevelKeySequences_.empty());
+    NIMBLE_CHECK(encodedLevelOffsetSequences_.empty());
     for (size_t level = 0; level < numLevels; ++level) {
       switch (keyColumnBytes_.at(level)) {
         case sizeof(uint8_t):
@@ -444,37 +424,31 @@ class HierarchicalKeyChunkBuilder final : public KeyChunkBuilder {
               keyColumnBytes_.at(level));
       }
     }
+    if (index_.hasDuplicateKeys()) {
+      // Leaf offsets map each distinct complete key to its source-row range.
+      // Without duplicates this mapping is identity and need not be stored.
+      encodedLevelOffsetSequences_.push_back(
+          encodeSequence<uint32_t>(
+              index_.levels.at(numLevels - 1).childOffsets));
+    }
   }
 
   // Serializes the in-memory index and encoded sequences into `buffer`.
   std::string_view serializeIndex(Buffer& buffer) const {
     const auto numLevels = static_cast<uint32_t>(index_.levels.size());
     const auto numRows = static_cast<uint32_t>(keyColumnInputs_.at(0).size());
-    const bool hasDuplicateKeys = index_.hasDuplicateKeys();
-
-    uint64_t numOffsets{0};
-    for (uint32_t level = 0; level + 1 < numLevels; ++level) {
-      numOffsets += index_.levels.at(level).childOffsets.size();
-    }
-    if (hasDuplicateKeys) {
-      // Leaf offsets map each distinct complete key to its source-row range.
-      // Without duplicates this mapping is identity and need not be stored.
-      numOffsets +=
-          index_.levels.at(index_.levels.size() - 1).childOffsets.size();
-    }
     // Serialized layout:
     // [version:u8][levels:u8][rowCount:u32]
     // [physicalWidth:u8] * levels
     // [valueCount:u32] * levels
-    // [childOrRowOffset:u32] * numOffsets
-    // [sequenceSize:u32] * sequences
-    // [encodedSequenceBytes] * sequences
+    // [sequenceSize:u32][encodedSequenceBytes] * sequences
     uint64_t encodingBytes = HierarchicalKeyFormat::kHeaderSize +
-        numLevels * sizeof(uint8_t) + numLevels * sizeof(uint32_t) +
-        numOffsets * sizeof(uint32_t) +
-        encodedLevelSequences_.size() * sizeof(uint32_t);
-    for (const auto sequence : encodedLevelSequences_) {
-      encodingBytes += sequence.size();
+        numLevels * sizeof(uint8_t) + numLevels * sizeof(uint32_t);
+    for (const auto sequence : encodedLevelKeySequences_) {
+      encodingBytes += sizeof(uint32_t) + sequence.size();
+    }
+    for (const auto sequence : encodedLevelOffsetSequences_) {
+      encodingBytes += sizeof(uint32_t) + sequence.size();
     }
     NIMBLE_CHECK_LE(encodingBytes, std::numeric_limits<uint32_t>::max());
     const auto encodedSize = static_cast<uint32_t>(encodingBytes);
@@ -492,23 +466,17 @@ class HierarchicalKeyChunkBuilder final : public KeyChunkBuilder {
           static_cast<uint32_t>(index_.levels.at(level).values.size()),
           position);
     }
-    const auto writeOffsets = [&position](std::span<const uint32_t> offsets) {
-      for (const auto offset : offsets) {
-        encoding::writeUint32(offset, position);
-      }
-    };
-    for (uint32_t level = 0; level + 1 < numLevels; ++level) {
-      writeOffsets(index_.levels.at(level).childOffsets);
-    }
-    if (hasDuplicateKeys) {
-      writeOffsets(index_.levels.at(index_.levels.size() - 1).childOffsets);
-    }
-    for (const auto sequence : encodedLevelSequences_) {
-      encoding::writeUint32(static_cast<uint32_t>(sequence.size()), position);
-    }
-    for (const auto sequence : encodedLevelSequences_) {
+    const auto writeSequence = [&](std::string_view sequence) {
       NIMBLE_CHECK(!sequence.empty());
-      encoding::writeBytes(sequence, position);
+      encoding::writeString(sequence, position);
+    };
+    writeSequence(encodedLevelKeySequences_.at(0));
+    for (uint32_t level = 1; level < numLevels; ++level) {
+      writeSequence(encodedLevelOffsetSequences_.at(level - 1));
+      writeSequence(encodedLevelKeySequences_.at(level));
+    }
+    if (index_.hasDuplicateKeys()) {
+      writeSequence(encodedLevelOffsetSequences_.back());
     }
     return {reserved, encodedSize};
   }
@@ -633,6 +601,9 @@ class HierarchicalKeyChunkBuilder final : public KeyChunkBuilder {
   const std::vector<velox::column_index_t> keyColumnIndices_;
   const std::vector<SortOrder> sortOrders_;
   const bool noDuplicateKey_;
+  // Selects the encoding of each key sequence from its candidates and read
+  // factors.
+  const ManualEncodingSelectionPolicyFactory encodingPolicyFactory_;
   Vector<std::string_view> encodedKeyStream_;
   Buffer keyBuffer_;
   std::vector<std::string_view> encodedKeys_;
@@ -643,7 +614,11 @@ class HierarchicalKeyChunkBuilder final : public KeyChunkBuilder {
   mutable Index index_;
   mutable Buffer childBuffer_;
   mutable velox::BufferPtr physicalValuesBuffer_;
-  mutable std::vector<std::string_view> encodedLevelSequences_;
+  // Encoded values of each level, one sequence per level.
+  mutable std::vector<std::string_view> encodedLevelKeySequences_;
+  // Encoded child offsets of levels [0, numLevels - 1), then the leaf row
+  // offsets when complete keys repeat.
+  mutable std::vector<std::string_view> encodedLevelOffsetSequences_;
   std::optional<std::vector<uint64_t>> lastKey_;
 };
 
@@ -655,6 +630,7 @@ std::unique_ptr<KeyChunkBuilder> createHierarchicalKeyChunkBuilder(
     std::span<const SortOrder> sortOrders,
     bool enforceKeyOrder,
     bool noDuplicateKey,
+    std::vector<std::pair<EncodingType, float>> levelEncodingReadFactors,
     velox::memory::MemoryPool* pool) {
   return std::make_unique<HierarchicalKeyChunkBuilder>(
       std::move(keyEncoder),
@@ -663,6 +639,7 @@ std::unique_ptr<KeyChunkBuilder> createHierarchicalKeyChunkBuilder(
       sortOrders,
       enforceKeyOrder,
       noDuplicateKey,
+      std::move(levelEncodingReadFactors),
       pool);
 }
 
@@ -710,6 +687,7 @@ HierarchicalClusterIndexWriter::HierarchicalClusterIndexWriter(
               sortOrders,
               config.enforceKeyOrder,
               config.noDuplicateKey,
+              keySequenceEncodingReadFactors(config),
               pool),
           pool} {}
 

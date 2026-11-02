@@ -109,6 +109,12 @@ class IndexLookup {
     /// first lookup.
     bool preloadIndex{false};
 
+    /// If true, key chunk readers build their encoding views with
+    /// Encoding::Options::cacheEncodingView, trading memory for faster repeated
+    /// seeks into chunks that stay resident. Only hierarchical key chunks read
+    /// through encoding views.
+    bool cacheKeyEncodingViews{false};
+
     /// Order of the encoded keys of a cluster index, or null for bytewise
     /// order. The cluster index factory sets it from
     /// ClusterIndexFactory::keyComparator(), which owns the comparator.

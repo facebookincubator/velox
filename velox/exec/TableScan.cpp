@@ -301,7 +301,7 @@ RowVectorPtr TableScan::getOutput() {
     const bool emptySplit = currNumRawInputRows == rawInputRowsSinceLastSplit_;
     rawInputRowsSinceLastSplit_ = currNumRawInputRows;
 
-    driverCtx_->task->splitFinished(true, currentSplitWeight_);
+    driverCtx_->task->splitsFinished(planNodeId(), *driverCtx_);
     needNewSplit_ = true;
 
     // We only update scaled controller when we have finished a non-empty split.
@@ -351,7 +351,6 @@ bool TableScan::getSplit() {
       std::string(TableScan::kConnectorSplitSize),
       RuntimeCounter(static_cast<int64_t>(split.connectorSplit->size())));
   const auto& connectorSplit = split.connectorSplit;
-  currentSplitWeight_ = connectorSplit->splitWeight;
   splitBatchSizeHint_ = connectorSplit->batchSizeHint;
   needNewSplit_ = false;
 

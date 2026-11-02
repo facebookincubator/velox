@@ -192,7 +192,6 @@ class IcebergMergeSinkTest : public IcebergTestBase {
 
   // Lookup keys for commit-message JSON entries.
   static constexpr const char* kContentKey = "content";
-  static constexpr const char* kFileFormatKey = "fileFormat";
 
   static std::vector<std::optional<StringView>> toStringViews(
       const std::vector<std::optional<std::string>>& values) {

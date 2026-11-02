@@ -115,6 +115,12 @@ class StreamData {
     decode(output, /*offset=*/0, count, sizeof(T));
   }
 
+  /// Decodes the next `count` rows of a non-nullable bool stream as bits,
+  /// overwriting bits [0, count) of `bits`. Sparse bool encodings fill words
+  /// and set only their sparse positions, so a caller that needs the set rows
+  /// can visit them with ctz instead of scanning one bool per row.
+  void decodeBoolsAsBits(uint32_t count, uint64_t* bits);
+
   void reset(std::string_view data, bool streamEncodingUsesVarintRowCount);
 
   /// Advance the encoded stream cursor by `count` rows without materializing
