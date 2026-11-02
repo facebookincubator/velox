@@ -85,10 +85,13 @@ is the standard 32-bit format with a 12-byte prefix.
 The main design question on the read side was where to apply the bitmap. We
 could have decoded every row and filtered afterwards. But the Parquet and DWRF
 readers already take a bitmap of rows to skip, and V2 positional deletes were
-already using it. So `DeletionVectorReader` decodes the blob once per split
-into a sorted list of positions. For each batch, it sets the bits for the
-positions that fall inside that batch's row range, and the file reader skips
-those rows while decoding.
+already using it. So `DeletionVectorReader` keeps the bitmap's containers
+compressed, the way they are stored, and for each batch sets the bits of the
+deleted rows in that batch's range straight from them. The file reader then
+skips those rows while decoding. Our first version expanded every deleted row
+into a sorted list of 64-bit positions instead. With half of a 1M-row file
+deleted, that took about 5 ms to load; reading the compressed containers takes
+about 0.04 ms.
 
 V2 positional deletes write into the same bitmap. A table upgraded from V2 can
 have old delete files sitting next to new deletion vectors, and it needs no
@@ -103,9 +106,10 @@ applies only when its sequence number is strictly greater. That asymmetry is
 what lets a single commit delete a key with an equality delete and insert it
 again.
 
-We check the length, magic number and CRC before trusting a bitmap. If a
-deletion vector is corrupt, the query should fail. It should not return rows
-that were deleted.
+We check the length, magic number and CRC before trusting a bitmap, and that
+each container is well formed. For example, array values must be in increasing
+order, because each batch binary-searches them. If a deletion vector is
+corrupt, the query should fail. It should not return rows that were deleted.
 
 We went back and forth on one case. When a blob's `referenced-data-file`
 doesn't match the path of the split being read, we log a warning and apply the
@@ -261,15 +265,38 @@ and writing it as-is would produce files no other engine can read.
 We ran a Velox micro-benchmark comparing deletion vectors with V2 positional
 deletes. It reads every row of one 1M-row, single-column DWRF file on local
 disk. The same deleted rows are stored three ways: one positional delete file,
-ten positional delete files, or one deletion vector. Times are the median of
-three runs.
+ten positional delete files, or one deletion vector. Each case ran five times,
+each time in its own process pinned to one core, and the times below are the
+medians. Reading the file with no deletes takes 19.6 ms.
 
 | Read time | 1 positional file | 10 positional files | Deletion vector |
 | --- | --- | --- | --- |
-| 1% deleted | 22.6 ms | 23.9 ms | 23.3 ms |
-| 5% deleted | 24.4 ms | 25.1 ms | 24.5 ms |
-| 20% deleted | 26.7 ms | 27.7 ms | 28.0 ms |
-| 50% deleted | 29.8 ms | 30.6 ms | 32.4 ms |
+| 1% deleted | 22.8 ms | 23.4 ms | 22.9 ms |
+| 5% deleted | 24.0 ms | 24.7 ms | 23.8 ms |
+| 20% deleted | 27.1 ms | 27.6 ms | 26.0 ms |
+| 50% deleted | 29.4 ms | 29.9 ms | 26.8 ms |
+
+<figure style={{textAlign: 'center'}}>
+  <img
+    src="/img/iceberg-v3-delete-read-time.png"
+    alt="Line chart of read time against rows deleted for one positional delete file, ten positional delete files and one deletion vector, with a no-deletes reference line at 19.6 ms"
+    width="100%"
+  />
+  <figcaption>
+    <em>Read time as the share of deleted rows grows.</em>
+  </figcaption>
+</figure>
+
+At 1% and 5% deleted, the deletion vector and one positional delete file were
+within 1% of each other. From there the deletion vector was faster: about 4% at
+20% deleted and 9% at 50%. Ten positional delete files were about 2-3% slower
+than one at every rate.
+
+Most of the time deletes add to the scan goes into handling the deleted rows,
+not into loading the deletes. Measured on its own, loading and applying the
+deletion vector takes about 0.03 ms at 1% deleted and 0.6 ms at 50%. A
+positional delete file has to be read and decoded like a small data file, and
+it grows with every deleted row.
 
 | Delete file size | 1 positional file | 10 positional files | Deletion vector |
 | --- | --- | --- | --- |
@@ -280,21 +307,64 @@ three runs.
 
 <figure style={{textAlign: 'center'}}>
   <img
-    src="/img/iceberg-v3-delete-benchmark.png"
-    alt="Bar charts of read time and delete file size for one positional delete file, ten positional delete files, and one deletion vector"
+    src="/img/iceberg-v3-delete-file-size.png"
+    alt="Line chart of delete file size against rows deleted: positional delete files grow to 1,237 and 1,442 KB while the deletion vector levels off near 131 KB"
     width="100%"
   />
   <figcaption>
-    <em>Read time and delete file size at 1%, 5%, 20% and 50% of rows deleted.</em>
+    <em>Delete file size as the share of deleted rows grows.</em>
   </figcaption>
 </figure>
 
-Read times were within 10% of each other, and the deletion vector was slightly
-slower at 20% and 50% deleted. Both formats feed the same skip-bitmap, so they
-differ only in reading the delete file, which is cheap on local disk. Deletion
-vectors were up to 9× smaller, though, staying around 130 KB however many rows
-were deleted. We haven't yet measured remote storage, where opening many small
-V2 delete files costs the most.
+Deletion vectors were smaller at every rate, and the gap widens as more rows
+are deleted. At 50% deleted, the deletion vector was 131 KB against 1,237 KB
+for one positional delete file, about 9× smaller. It stops growing near 131 KB
+because a 1M-row file spans 16 blocks of 64K rows, and a block with many
+deletes is stored as an 8 KB bitmap however many of its rows are deleted.
+
+These are local files, so the benchmark doesn't capture the cost of opening
+many small V2 delete files on remote storage, which is where accumulated
+deletes hurt most.
+
+### Compared with Iceberg Java
+
+Since the bytes are the same on both sides, we can also compare Velox with
+Iceberg Java 1.10 directly. We wrote the deletion vectors with Iceberg Java's
+`BitmapPositionDeleteIndex` and checked that Velox writes byte-identical ones
+for the same rows. Then, on the same machine, we timed loading one deletion
+vector and checking every row of the 1M-row file against it. Each
+implementation ran five times in its own process pinned to one core, on JDK 21
+for Java, and the times below are the medians.
+
+Iceberg Java can apply a deletion vector in two ways. Its `forEach` walks the
+deleted positions once, which is the closest match to what Velox does.
+`isDeleted` looks up one row at a time.
+
+| Load and apply | Velox | Iceberg Java, `forEach` | Iceberg Java, `isDeleted` |
+| --- | --- | --- | --- |
+| 1% deleted | 30 µs | 131 µs | 20.1 ms |
+| 5% deleted | 99 µs | 204 µs | 25.3 ms |
+| 20% deleted | 288 µs | 582 µs | 13.6 ms |
+| 50% deleted | 600 µs | 829 µs | 18.0 ms |
+
+<figure style={{textAlign: 'center'}}>
+  <img
+    src="/img/iceberg-v3-java-comparison.png"
+    alt="Bar chart of the time to load and apply one deletion vector in Velox and in Iceberg Java's forEach path at 1%, 5%, 20% and 50% of rows deleted"
+    width="100%"
+  />
+  <figcaption>
+    <em>Loading and applying the same deletion vector in Velox and Iceberg Java.</em>
+  </figcaption>
+</figure>
+
+Velox was 1.4 to 4.3 times faster than Iceberg Java's `forEach` path, and the
+gap is widest at low delete rates, where loading dominates. Velox checks the
+blob and indexes its containers without building an in-memory bitmap, which
+took 15 µs at 1% deleted, against 110 µs for Iceberg Java to read the blob and
+build its bitmap. These numbers cover the deletion vector alone: in the Velox
+scan above, loading and applying it is about 2% of the read time at 50%
+deleted.
 
 ## What's left
 

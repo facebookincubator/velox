@@ -82,6 +82,12 @@ struct InputBatchRef {
 ///   for uniform-latency workloads.
 class RPCState : public std::enable_shared_from_this<RPCState> {
  public:
+  /// The longest a capacity-retry hint's minRetries keeps a row retrying, from
+  /// its first attempt: the operator's limit on a single call, so a row inside
+  /// its floor still ends.
+  static constexpr std::chrono::milliseconds kMaxRetryFloorWindow{
+      std::chrono::hours(1)};
+
   // ===== Data structures =====
 
   /// Accounts response-retained bytes while the operator owns them.
@@ -145,6 +151,11 @@ class RPCState : public std::enable_shared_from_this<RPCState> {
     int64_t firstAttemptNs{0};
     /// Number of attempts made so far.
     int32_t numAttempts{0};
+    /// Retries under hints with a maxRetries, including this one and those the
+    /// transport made in place.
+    int32_t numCountLimitedRetries{0};
+    /// Retries granted under hints without a maxRetries, including this one.
+    int32_t numTimeLimitedRetries{0};
     /// Monotonic time (nanos) before which the row must not be dispatched.
     int64_t notBeforeNs{0};
     /// Monotonic time (nanos) after which no retry may start. A row still
@@ -251,6 +262,8 @@ class RPCState : public std::enable_shared_from_this<RPCState> {
     int64_t numCompletionsSignaled{0};
     // Rejected rows admitted again for another attempt.
     int64_t numCapacityRetries{0};
+    // Retries a hint's minRetries granted after its budget ran out.
+    int64_t numCapacityRetryFloorRetries{0};
   };
 
   explicit RPCState(std::shared_ptr<memory::MemoryPool> pool)
@@ -556,6 +569,11 @@ class RPCState : public std::enable_shared_from_this<RPCState> {
     int64_t firstAttemptNs{0};
     // Attempts made so far, including the one in flight.
     int32_t numAttempts{1};
+    // Retries granted so far under hints with a maxRetries, including those
+    // the transport made in place.
+    int32_t numCountLimitedRetries{0};
+    // Retries granted so far under hints without a maxRetries.
+    int32_t numTimeLimitedRetries{0};
   };
 
   // Registers a pending row and attaches its completion callbacks.
@@ -640,6 +658,8 @@ class RPCState : public std::enable_shared_from_this<RPCState> {
   RetryFeedback retryFeedback_;
   // Rejected attempts sent back for another admission.
   int64_t numCapacityRetries_{0};
+  // Retries scheduled past their hint's budget because of its minRetries.
+  int64_t numCapacityRetryFloorRetries_{0};
   // Deadline (nanos) of the armed retry wake-up timer, or 0 when none is
   // armed.
   int64_t retryWakeDeadlineNs_{0};

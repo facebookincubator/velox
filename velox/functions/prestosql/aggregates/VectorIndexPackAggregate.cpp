@@ -31,10 +31,10 @@ using common::vectorindex::EmbeddingNormalizer;
 using common::vectorindex::Embeddings;
 using common::vectorindex::LocalVectorIndex;
 using common::vectorindex::LocalVectorIndexOptions;
+using common::vectorindex::VectorIndexKind;
 using common::vectorindex::VectorIndexMetric;
 using common::vectorindex::VectorIndexMetricName;
 using common::vectorindex::VectorIndexMetricValue;
-using common::vectorindex::VectorIndexType;
 
 class VectorIndexPackAggregate {
  public:
@@ -213,7 +213,7 @@ class VectorIndexPackAggregate {
       out.reserve(
           centroids.size() * sizeof(float) + numClusters * sizeof(int64_t));
       LocalVectorIndex::build(
-          VectorIndexType::kFlat,
+          VectorIndexKind::kFlat,
           groupMetric(),
           LocalVectorIndexOptions{},
           Embeddings(centroids, dimension),
