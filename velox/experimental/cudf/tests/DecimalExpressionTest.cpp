@@ -1670,7 +1670,8 @@ TEST_F(CudfDecimalTest, decimalCoalesceColumnWithLiteral) {
 // Disabled: expression optimization folds this coalesce into a bare DECIMAL
 // constant. No cuDF evaluator accepts a DECIMAL constant as a whole
 // projection, so the project stays on the CPU.
-// TODO: Re-enable once a projection that is just a constant can run on the GPU.
+// TODO: Re-enable once https://github.com/facebookincubator/velox/issues/20008
+// is fixed.
 TEST_F(CudfDecimalTest, DISABLED_decimalCoalesceLiteralFirst) {
   auto input = makeRowVector(
       {"a"}, {makeFlatVector<int64_t>({100, 200, 300}, DECIMAL(10, 2))});
