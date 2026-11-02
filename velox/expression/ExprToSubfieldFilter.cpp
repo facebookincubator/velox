@@ -569,23 +569,20 @@ std::unique_ptr<common::Filter> ExprToSubfieldFilterParser::makeNotEqualFilter(
         excluded, excluded, false);
   }
 
-  if (typeKind == TypeKind::HUGEINT) {
-    VELOX_NYI();
-  } else {
-    if (lessThanFilter->kind() == common::FilterKind::kAlwaysFalse ||
-        lessThanFilter->kind() == common::FilterKind::kIsNull) {
-      return greaterThanFilter;
-    }
-    if (greaterThanFilter->kind() == common::FilterKind::kAlwaysFalse ||
-        greaterThanFilter->kind() == common::FilterKind::kIsNull) {
-      return lessThanFilter;
-    }
-    std::vector<std::unique_ptr<common::Filter>> filters;
-    filters.emplace_back(std::move(lessThanFilter));
-    filters.emplace_back(std::move(greaterThanFilter));
-
-    return std::make_unique<common::MultiRange>(std::move(filters), false);
+  VELOX_NYI_CHECK_NE(typeKind, TypeKind::HUGEINT);
+  if (lessThanFilter->kind() == common::FilterKind::kAlwaysFalse ||
+      lessThanFilter->kind() == common::FilterKind::kIsNull) {
+    return greaterThanFilter;
   }
+  if (greaterThanFilter->kind() == common::FilterKind::kAlwaysFalse ||
+      greaterThanFilter->kind() == common::FilterKind::kIsNull) {
+    return lessThanFilter;
+  }
+  std::vector<std::unique_ptr<common::Filter>> filters;
+  filters.emplace_back(std::move(lessThanFilter));
+  filters.emplace_back(std::move(greaterThanFilter));
+
+  return std::make_unique<common::MultiRange>(std::move(filters), false);
 }
 
 // static

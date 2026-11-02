@@ -495,59 +495,68 @@ TEST(ExceptionTest, expressionString) {
       fmt::format(msgTemplate, "i + j * 2 >= 1000", "201 vs. 1000"));
 }
 
-TEST(ExceptionTest, notImplemented) {
-  verifyVeloxException(
-      []() { VELOX_NYI(); },
-      "Exception: VeloxRuntimeError\nError Source: RUNTIME\n"
-      "Error Code: NOT_IMPLEMENTED\n"
-      "Retriable: False\nFunction: operator()\nFile: ");
+// Verifies that 'f' throws a not-implemented error with the given failing
+// expression and message.
+void verifyNotImplemented(
+    std::function<void()> f,
+    std::string_view expression,
+    std::string_view message) {
+  verifyException<VeloxRuntimeError>(f, [&](const auto& e) {
+    EXPECT_EQ(e.errorCode(), error_code::kNotImplemented);
+    EXPECT_EQ(e.failingExpression(), expression);
+    EXPECT_EQ(e.message(), message);
+  });
+}
 
-  verifyVeloxException(
-      []() { VELOX_NYI("Message 1"); },
-      "Exception: VeloxRuntimeError\nError Source: RUNTIME\n"
-      "Error Code: NOT_IMPLEMENTED\nReason: Message 1\nRetriable: False\n"
-      "Function: operator()\nFile: ");
+TEST(ExceptionTest, notImplemented) {
+  verifyNotImplemented([] { VELOX_NYI(); }, "", "");
+  verifyNotImplemented([] { VELOX_NYI("Window frames"); }, "", "Window frames");
+
+  verifyNotImplemented(
+      [] {
+        const int numKeys = 2;
+        VELOX_NYI_CHECK(numKeys < 2, "Multiple keys");
+      },
+      "numKeys < 2",
+      "Multiple keys");
+  verifyNotImplemented(
+      [] {
+        const int numKeys = 2;
+        VELOX_NYI_CHECK_EQ(numKeys, 1, "Multiple keys");
+      },
+      "numKeys == 1",
+      "(2 vs. 1) Multiple keys");
+  verifyNotImplemented(
+      [] {
+        auto filter = std::make_shared<int>(5);
+        VELOX_NYI_CHECK_NULL(filter, "Filters");
+      },
+      "filter == nullptr",
+      "Filters");
+
+  VELOX_NYI_CHECK(2 > 1);
+  VELOX_NYI_CHECK_EQ(1, 1);
+  VELOX_NYI_CHECK_NULL(nullptr);
 }
 
 TEST(ExceptionTest, errorCode) {
-  std::string msgTemplate =
-      "Exception: {}"
-      "\nError Source: {}"
-      "\nError Code: {}"
-      "\nRetriable: {}"
-      "\nExpression: {}"
-      "\nFunction: {}"
-      "\nFile: ";
-
   verifyVeloxException(
       [&]() { VELOX_FAIL(); },
-      fmt::format(
-          "Exception: {}"
-          "\nError Source: {}"
-          "\nError Code: {}"
-          "\nRetriable: {}"
-          "\nFunction: {}"
-          "\nFile: ",
-          "VeloxRuntimeError",
-          "RUNTIME",
-          "INVALID_STATE",
-          "False",
-          "operator()"));
+      "Exception: VeloxRuntimeError"
+      "\nError Source: RUNTIME"
+      "\nError Code: INVALID_STATE"
+      "\nRetriable: False"
+      "\nFunction: operator()"
+      "\nFile: ");
 
   verifyVeloxException(
       [&]() { VELOX_USER_FAIL(); },
-      fmt::format(
-          "Exception: {}"
-          "\nError Source: {}"
-          "\nError Code: {}"
-          "\nRetriable: {}"
-          "\nFunction: {}"
-          "\nFile: ",
-          "VeloxUserError",
-          "USER",
-          "INVALID_ARGUMENT",
-          "False",
-          "operator()"));
+      "Exception: VeloxUserError"
+      "\nError Source: USER"
+      "\nError Code: INVALID_ARGUMENT"
+      "\nRetriable: False"
+      "\nFunction: operator()"
+      "\nFile: ");
 }
 
 TEST(ExceptionTest, context) {
