@@ -182,6 +182,22 @@ TEST(TypeTest, timestampUtc) {
   EXPECT_FALSE(TIMESTAMP()->equivalent(*t));
 }
 
+TEST(TypeTest, vectorIndex) {
+  const auto t = VECTOR_INDEX();
+  ASSERT_EQ(t->toString(), "VECTOR_INDEX");
+  ASSERT_EQ(t->size(), 0);
+  ASSERT_EQ(t->kind(), TypeKind::VARBINARY);
+  EXPECT_STREQ(t->kindName(), "VARBINARY");
+
+  testTypeSerde(t);
+
+  EXPECT_TRUE(t->isVarbinary());
+  EXPECT_TRUE(t->equivalent(*VectorIndexType::get()));
+  EXPECT_FALSE(t->equivalent(*VARBINARY()));
+  EXPECT_FALSE(VARBINARY()->equivalent(*t));
+  EXPECT_EQ(*getType("VECTOR_INDEX", {}), *t);
+}
+
 TEST(TypeTest, date) {
   const auto date = DATE();
   ASSERT_EQ(date->toString(), "DATE");
@@ -1550,6 +1566,7 @@ TEST(TypeTest, derivedScalarTypesHaveNoCreate) {
   static_assert(!HasCreate<IntervalDayTimeType>);
   static_assert(!HasCreate<IntervalYearMonthType>);
   static_assert(!HasCreate<TimestampUtcType>);
+  static_assert(!HasCreate<VectorIndexType>);
   static_assert(!HasCreate<TimeMilliPrecisionType>);
   static_assert(!HasCreate<TimeMicroPrecisionUtcType>);
   static_assert(!HasCreate<ShortDecimalType>);

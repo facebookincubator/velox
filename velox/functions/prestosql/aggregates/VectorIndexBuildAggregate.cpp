@@ -146,7 +146,7 @@ class VectorIndexBuildAggregate {
   static constexpr int32_t kIds = 1;
   static constexpr int32_t kEmbeddings = 2;
 
-  using OutputType = Varbinary;
+  using OutputType = VectorIndex;
 
   static constexpr bool is_reducing_ = false;
 
@@ -370,7 +370,7 @@ void registerVectorIndexBuildAggregate(
     bool overwrite) {
   std::vector<std::shared_ptr<exec::AggregateFunctionSignature>> signatures{
       exec::AggregateFunctionSignatureBuilder()
-          .returnType("varbinary")
+          .returnType("vector_index")
           .intermediateType("row(array(integer),array(bigint),array(real))")
           .argumentType("array(real)")
           .argumentType("bigint")
