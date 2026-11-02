@@ -1917,7 +1917,15 @@ function.</p></td>
 <td></td>
 <td><p>The current task’s Spark partition ID. It’s set by the query engine (Spark) prior to task execution.</p></td>
 </tr>
-<tr class="row-even"><td><p>spark.legacy_date_formatter</p></td>
+<tr class="row-even"><td><p>spark.legacy_coding_error_action</p></td>
+<td><p>bool</p></td>
+<td><p>false</p></td>
+<td><p>If true, the Spark <code class="docutils literal notranslate"><span class="pre">encode</span></code> function replaces unmappable characters instead of reporting an error.
+Corresponds to Spark 4.0’s <code class="docutils literal notranslate"><span class="pre">spark.sql.legacy.codingErrorAction</span></code>.
+Set to true to match Spark 3.x’s replacement behavior for the supported charsets.
+Additional JDK charset names and aliases remain unsupported in either mode.</p></td>
+</tr>
+<tr class="row-odd"><td><p>spark.legacy_date_formatter</p></td>
 <td><p>bool</p></td>
 <td><p>false</p></td>
 <td><p>If true, <a class="reference external" href="https://docs.oracle.com/javase/8/docs/api/java/text/SimpleDateFormat.html">Simple Date Format</a> is used for time formatting and parsing. Joda date formatter is used by default.
@@ -1925,23 +1933,23 @@ Joda date formatter performs strict checking of its input and uses different pat
 For example, the 2015-07-22 10:00:00 timestamp cannot be parsed if pattern is yyyy-MM-dd because the parser does not consume whole input.
 Another example is that the ‘W’ pattern, which means week in month, is not supported. For more differences, see <a class="reference external" href="https://github.com/facebookincubator/velox/issues/10354">#10354</a>.</p></td>
 </tr>
-<tr class="row-odd"><td><p>spark.legacy_statistical_aggregate</p></td>
+<tr class="row-even"><td><p>spark.legacy_statistical_aggregate</p></td>
 <td><p>bool</p></td>
 <td><p>false</p></td>
 <td><p>If true, Spark statistical aggregation functions including skewness, kurtosis, stddev, stddev_samp, variance,
 var_samp, covar_samp and corr will return NaN instead of NULL when dividing by zero during expression evaluation.</p></td>
 </tr>
-<tr class="row-even"><td><p>spark.json_ignore_null_fields</p></td>
+<tr class="row-odd"><td><p>spark.json_ignore_null_fields</p></td>
 <td><p>bool</p></td>
 <td><p>true</p></td>
 <td><p>If true, ignore null fields when generating JSON string. If false, null fields are included with a null value.</p></td>
 </tr>
-<tr class="row-odd"><td><p>spark.collect_list.ignore_nulls</p></td>
+<tr class="row-even"><td><p>spark.collect_list.ignore_nulls</p></td>
 <td><p>bool</p></td>
 <td><p>true</p></td>
 <td><p>If true, Spark <code class="docutils literal notranslate"><span class="pre">collect_list</span></code> aggregate function ignores nulls in the input.</p></td>
 </tr>
-<tr class="row-even"><td><p>spark.decimal_to_float_high_precision_cast_enabled</p></td>
+<tr class="row-odd"><td><p>spark.decimal_to_float_high_precision_cast_enabled</p></td>
 <td><p>bool</p></td>
 <td><p>false</p></td>
 <td><p>If true, casts from <code class="docutils literal notranslate"><span class="pre">DECIMAL</span></code> to <code class="docutils literal notranslate"><span class="pre">REAL</span></code>/<code class="docutils literal notranslate"><span class="pre">DOUBLE</span></code> use a high-precision conversion
