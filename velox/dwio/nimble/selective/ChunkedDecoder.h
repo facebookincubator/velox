@@ -882,6 +882,9 @@ class ChunkedDecoder {
   // 'onChunkLoaded'.
   bool loadLazySeekChunk(const ChunkBoundaryCallback& onChunkLoaded);
 
+  // Drops the open chunk: its encoding and the buffers its values point into.
+  void dropChunk();
+
   void prepareInputBuffer(int32_t size);
 
   // Returns true if inputData_ points into inputBuffer_.
