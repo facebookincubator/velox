@@ -253,6 +253,44 @@ struct ReduceMeanAggregator : ReduceAggregator {
             0,
             std::move(children));
       }
+      case core::AggregationNode::Step::kIntermediate: {
+        // Merges the sums and the counts like the final step, but returns the
+        // merged state instead of dividing. GPU is required to match CPU
+        // results. The CPU returns a NULL state when no rows were counted.
+        VELOX_CHECK(outputType->isRow());
+        auto const& rowType = outputType->asRow();
+        auto const cudfSumType =
+            cudf_velox::veloxToCudfDataType(rowType.childAt(0));
+        auto const cudfCountType =
+            cudf_velox::veloxToCudfDataType(rowType.childAt(1));
+        auto const sumCol = input.column(inputIndex).child(0);
+        auto const countCol = input.column(inputIndex).child(1);
+
+        auto const aggRequest =
+            cudf::make_sum_aggregation<cudf::reduce_aggregation>();
+        auto const sumResultScalar = cudf::reduce(
+            sumCol, *aggRequest, cudfSumType, stream, get_temp_mr());
+        auto const countResultScalar = cudf::reduce(
+            countCol, *aggRequest, cudfCountType, stream, get_temp_mr());
+        auto const& count = static_cast<cudf::numeric_scalar<int64_t> const&>(
+            *countResultScalar);
+        auto const hasCountedRows =
+            count.is_valid(stream) && count.value(stream) > 0;
+
+        auto children = std::vector<std::unique_ptr<cudf::column>>();
+        children.push_back(
+            cudf::make_column_from_scalar(
+                *sumResultScalar, 1, stream, get_temp_mr()));
+        children.push_back(
+            cudf::make_column_from_scalar(
+                *countResultScalar, 1, stream, get_temp_mr()));
+        auto const state = cudf::struct_scalar(
+            cudf::table(std::move(children)),
+            /*is_valid=*/hasCountedRows,
+            stream,
+            get_temp_mr());
+        return cudf::make_column_from_scalar(state, 1, stream, mr);
+      }
       case core::AggregationNode::Step::kFinal: {
         // Input column has two children: sum and count
         auto const sumCol = input.column(inputIndex).child(0);
