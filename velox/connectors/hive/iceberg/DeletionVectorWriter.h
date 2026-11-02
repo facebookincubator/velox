@@ -109,10 +109,6 @@ class DeletionVectorWriter {
   void clear();
 
  private:
-  /// Serializes a single 32-bit roaring bitmap from sorted, deduplicated
-  /// values in the range [0, 2^32).
-  std::string serialize32(const std::vector<uint32_t>& sorted) const;
-
   std::vector<int64_t> positions_;
 };
 
