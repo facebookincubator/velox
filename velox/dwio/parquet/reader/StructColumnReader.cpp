@@ -23,6 +23,7 @@
 #include "velox/dwio/common/BufferedInput.h"
 #include "velox/dwio/parquet/reader/ParquetColumnReader.h"
 #include "velox/dwio/parquet/reader/ParquetData.h"
+#include "velox/dwio/parquet/reader/ParquetTypeWithId.h"
 #include "velox/dwio/parquet/reader/RepeatedColumnReader.h"
 
 namespace facebook::velox::common {
@@ -311,9 +312,59 @@ std::shared_ptr<dwio::common::BufferedInput> StructColumnReader::loadRowGroup(
     return input;
   }
   auto newInput = input->clone();
+  const auto& lazyStreams = lazyColumnStreamIds();
+  if (!lazyStreams.empty()) {
+    newInput->setLazyColumnStreams(lazyStreams);
+  }
   enqueueRowGroup(index, *newInput);
   newInput->load(dwio::common::LogType::STRIPE);
   return newInput;
+}
+
+namespace {
+// Collects the column ordinals of the physical (leaf) columns under 'type',
+// which are the StreamIdentifier ids ParquetData::enqueueRowGroup() uses.
+void collectLeafColumns(
+    const dwio::common::TypeWithId& type,
+    std::vector<int32_t>& columns) {
+  const auto& children = type.getChildren();
+  if (children.empty()) {
+    const auto& parquetType = static_cast<const ParquetTypeWithId&>(type);
+    if (parquetType.isLeaf()) {
+      columns.push_back(static_cast<int32_t>(parquetType.column()));
+    }
+    return;
+  }
+  for (const auto& child : children) {
+    if (child != nullptr) {
+      collectLeafColumns(*child, columns);
+    }
+  }
+}
+} // namespace
+
+const std::vector<int32_t>& StructColumnReader::lazyColumnStreamIds() {
+  if (lazyColumnStreamIds_.has_value()) {
+    return *lazyColumnStreamIds_;
+  }
+  lazyColumnStreamIds_.emplace();
+  for (auto* child : children_) {
+    if (child == nullptr) {
+      continue;
+    }
+    const auto* childSpec = child->scanSpec();
+    // Same condition as SelectiveStructColumnReaderBase::read() uses to
+    // produce the child as a LazyVector instead of reading it eagerly, minus
+    // the columns the remaining filter reads in every row group (the rule the
+    // selective Nimble reader applies to produce lazy children).
+    if (generateLazyChildren() && child->isTopLevel() &&
+        childSpec->projectOut() && !childSpec->hasFilter() &&
+        !childSpec->isConstant() &&
+        remainingFilterColumns_.count(childSpec->fieldName()) == 0) {
+      collectLeafColumns(child->fileType(), *lazyColumnStreamIds_);
+    }
+  }
+  return *lazyColumnStreamIds_;
 }
 
 bool StructColumnReader::isRowGroupBuffered(
