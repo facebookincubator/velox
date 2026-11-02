@@ -360,7 +360,8 @@ class FlatMapColumnReader
 
     for (int i = 0; i < keyNodes_.size(); ++i) {
       auto& nimbleData = children_[i]->formatData().template as<NimbleData>();
-      flatMapVector->inMapsAt(i, true) = nimbleData.inMapBuffer();
+      flatMapVector->inMapsAt(i, true) =
+          selectInMap(nimbleData.inMapBuffer(), rows, flatMapVector->pool());
     }
   }
 
