@@ -48,8 +48,6 @@ export OS_CXXFLAGS
 OPENSSL_ROOT_DIR=${OPENSSL_ROOT_DIR:-"$(brew --prefix openssl@3)"}
 export OPENSSL_ROOT_DIR
 export CMAKE_POLICY_VERSION_MINIMUM="3.5"
-OPENSSL_ROOT_DIR="${OPENSSL_ROOT_DIR:-$(brew --prefix openssl@3)}"
-export OPENSSL_ROOT_DIR
 
 DEPENDENCY_DIR=${DEPENDENCY_DIR:-$(pwd)}
 # gflags and glog are installed from source to ensure version compatibility.
