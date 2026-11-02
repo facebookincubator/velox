@@ -64,13 +64,15 @@ void registerMathFunctions(const std::string& prefix) {
   registerBinaryFloatingPoint<PModFloatFunction>({prefix + "pmod"});
   registerFunction<PowerFunction, double, double, double>({prefix + "power"});
   registerFunction<RIntFunction, double, double>({prefix + "rint"});
-  registerUnaryNumeric<RoundFunction>({prefix + "round"});
-  registerFunction<RoundFunction, int8_t, int8_t, int32_t>({prefix + "round"});
-  registerFunction<RoundFunction, int16_t, int16_t, int32_t>(
+  registerUnaryIntegral<IntegralRoundFunction>({prefix + "round"});
+  registerUnaryFloatingPoint<RoundFunction>({prefix + "round"});
+  registerFunction<IntegralRoundFunction, int8_t, int8_t, int32_t>(
       {prefix + "round"});
-  registerFunction<RoundFunction, int32_t, int32_t, int32_t>(
+  registerFunction<IntegralRoundFunction, int16_t, int16_t, int32_t>(
       {prefix + "round"});
-  registerFunction<RoundFunction, int64_t, int64_t, int32_t>(
+  registerFunction<IntegralRoundFunction, int32_t, int32_t, int32_t>(
+      {prefix + "round"});
+  registerFunction<IntegralRoundFunction, int64_t, int64_t, int32_t>(
       {prefix + "round"});
   registerFunction<RoundFunction, double, double, int32_t>({prefix + "round"});
   registerFunction<RoundFunction, float, float, int32_t>({prefix + "round"});
@@ -162,11 +164,18 @@ void registerMathFunctions(const std::string& prefix) {
   registerDecimalIntegralDivide(prefix);
   registerFunction<sparksql::IsNanFunction, bool, float>({prefix + "isnan"});
   registerFunction<sparksql::IsNanFunction, bool, double>({prefix + "isnan"});
+  registerFunction<sparksql::NormalizeNaNAndZeroFunction, float, float>(
+      {prefix + "normalize_nan_and_zero"});
+  registerFunction<sparksql::NormalizeNaNAndZeroFunction, double, double>(
+      {prefix + "normalize_nan_and_zero"});
 
   registerBinaryNumeric<CheckedAddFunction>({prefix + "checked_add"});
   registerBinaryNumeric<CheckedSubtractFunction>({prefix + "checked_subtract"});
   registerBinaryNumeric<CheckedMultiplyFunction>({prefix + "checked_multiply"});
   registerBinaryNumeric<CheckedDivideFunction>({prefix + "checked_divide"});
+  registerBinaryNumeric<TryAddFunction>({prefix + "try_add"});
+  registerBinaryNumeric<TrySubtractFunction>({prefix + "try_subtract"});
+  registerBinaryNumeric<TryMultiplyFunction>({prefix + "try_multiply"});
   registerBinaryIntegralWithTReturn<CheckedIntegralDivideFunction, int64_t>(
       {prefix + "checked_div"});
   registerFunction<sparksql::FactorialFunction, int64_t, int32_t>(

@@ -166,6 +166,9 @@ are summarized below.
 - Put runtime information (names, values, types) at the **end** of error messages, after the static description.
   - ❌ `VELOX_USER_FAIL("Column '{}' is ambiguous", name);`
   - ✅ `VELOX_USER_FAIL("Column is ambiguous: {}", name);`
+- Name the mistake in an error message, or the requirement it broke with "must"; a sentence describing only the correct state reads as documentation.
+  - ❌ `VELOX_USER_FAIL("A placeholder's type is declared with CAST, not TRY_CAST: {}", name);`
+  - ✅ `VELOX_USER_FAIL("TRY_CAST of a placeholder is not supported: {}", name);`
 - Pass a value whose type has an `fmt::formatter`, such as `TypeKind`, to a formatted message or `fmt::format` as is, not converted to a string first.
   - ❌ `VELOX_FAIL("Unsupported type: {}", TypeKindName::toName(kind));`
   - ✅ `VELOX_FAIL("Unsupported type: {}", kind);`

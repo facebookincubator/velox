@@ -172,11 +172,8 @@ enum class EncodingType {
   // EXPERIMENTAL: Not production-ready. Do not enable for production tables
   // without consulting the Nimble team (oncall: dwios).
   EliasFano = 24,
-  /// Splits 32- or 64-bit integers into configured, independently encoded
-  /// bit-range child streams inside one self-describing encoded chunk.
-  /// EXPERIMENTAL: Not production-ready. Do not enable for production tables
-  /// without consulting the Nimble team (oncall: dwios).
-  BitRangeSplit = 25,
+  // 25 was BitRangeSplit, which SubIntSplit replaces. Never reuse it; see
+  // kRemovedBitRangeSplitEncodingType.
   /// Encodes floating-point high bits using a small dictionary and preserves
   /// low bits in a separate integer stream. Selected through explicit layouts.
   /// EXPERIMENTAL: Not production-ready. Do not enable for production tables
@@ -189,6 +186,12 @@ enum class EncodingType {
   /// without consulting the Nimble team (oncall: dwios).
   PartitionedEliasFano = 27,
 };
+
+/// Serialized value of the removed BitRangeSplit encoding. It stays reserved so
+/// that no other encoding takes it, and decoders reject data that uses it.
+inline constexpr auto kRemovedBitRangeSplitEncodingType =
+    static_cast<EncodingType>(25);
+
 std::string toString(EncodingType encodingType);
 /// Returns the encoding type for 'name'. Throws if 'name' is unknown.
 EncodingType toEncodingType(std::string_view name);

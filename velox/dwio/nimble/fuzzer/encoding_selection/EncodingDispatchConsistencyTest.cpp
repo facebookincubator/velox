@@ -14,15 +14,14 @@
  * limitations under the License.
  */
 
-// Deterministic counterpart to NimbleWriterFuzzer. Nimble has four
-// independent encoding read paths -- EncodingFactory, legacy::EncodingFactory,
-// and the DefaultEncodingTrait and legacy::LegacyEncodingTrait visitor tables
-// -- and an encoding can be writable while one of them cannot decode it.
+// Deterministic counterpart to NimbleWriterFuzzer. Nimble has two independent
+// encoding read paths -- EncodingFactory and the DefaultEncodingTrait visitor
+// table -- and an encoding can be writable while one of them cannot decode it.
 // Adding ALP and FSST to the writer's candidate set previously required
-// repairing two legacy tables by hand (D114295784).
+// repairing the dispatch tables by hand (D114295784).
 //
 // This test pins that invariant: for every (encoding, column type) pair the
-// writer accepts, all four read paths must decode the file. It covers the same
+// writer accepts, both read paths must decode the file. It covers the same
 // ground as the fuzzer but with fixed data and a fixed writer configuration, so
 // it runs in seconds, names the failing pair exactly, and cannot flake.
 

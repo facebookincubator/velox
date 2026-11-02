@@ -347,6 +347,7 @@ void Type::registerSerDe() {
       "IntervalYearMonthType", IntervalYearMonthType::deserialize);
   registry.Register("DateType", DateType::deserialize);
   registry.Register("TimestampUtcType", TimestampUtcType::deserialize);
+  registry.Register("VectorIndexType", VectorIndexType::deserialize);
   registry.Register("TimeType", TimeTypeFactory::deserialize);
 }
 
@@ -1109,6 +1110,10 @@ TypePtr TIMESTAMP_UTC() {
   return TimestampUtcType::get();
 }
 
+TypePtr VECTOR_INDEX() {
+  return VectorIndexType::get();
+}
+
 TypePtr UNKNOWN() {
   return TypeFactory<TypeKind::UNKNOWN>::create();
 }
@@ -1453,6 +1458,7 @@ const SingletonTypeMap& singletonBuiltInTypes() {
       {"TIME", TIME()},
       {"TIME MICRO UTC", TIME_MICRO_UTC()},
       {"UNKNOWN", UNKNOWN()},
+      {"VECTOR_INDEX", VECTOR_INDEX()},
   };
   return kTypes;
 }
@@ -1630,6 +1636,13 @@ const auto& typeParameterKindNames() {
 } // namespace
 
 VELOX_DEFINE_ENUM_NAME(TypeParameterKind, typeParameterKindNames);
+
+folly::dynamic VectorIndexType::serialize() const {
+  folly::dynamic obj = folly::dynamic::object;
+  obj["name"] = "VectorIndexType";
+  obj["type"] = name();
+  return obj;
+}
 
 folly::dynamic TimestampUtcType::serialize() const {
   folly::dynamic obj = folly::dynamic::object;

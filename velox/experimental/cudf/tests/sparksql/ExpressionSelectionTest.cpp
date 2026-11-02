@@ -16,7 +16,9 @@
 
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
+#include "velox/experimental/cudf/expression/AstExpression.h"
 #include "velox/experimental/cudf/expression/ExpressionEvaluator.h"
+#include "velox/experimental/cudf/expression/JitExpression.h"
 #include "velox/experimental/cudf/expression/PrestoFunctions.h"
 #include "velox/experimental/cudf/expression/SparkFunctions.h"
 #include "velox/experimental/cudf/tests/utils/ExpressionTestUtil.h"
@@ -99,6 +101,76 @@ TEST_F(
       expr, rowType_, pool_.get(), queryCtx_->queryConfig());
   auto* functionExpr = dynamic_cast<FunctionExpression*>(cudfExpr.get());
   ASSERT_NE(functionExpr, nullptr);
+}
+
+TEST_F(CudfSparkExpressionSelectionTest, isNull) {
+  auto& config = CudfConfig::getInstance();
+  const auto originalPrefix = config.functionNamePrefix;
+  SCOPE_EXIT {
+    config.functionNamePrefix = originalPrefix;
+  };
+  for (const std::string prefix : {"", "test_"}) {
+    SCOPED_TRACE(prefix);
+    config.functionNamePrefix = prefix;
+    registerBuiltinFunctions(prefix);
+    registerSparkFunctions(prefix);
+    for (const auto& type : std::vector<TypePtr>{INTEGER(), DECIMAL(18, 2)}) {
+      SCOPED_TRACE(type->toString());
+      auto inputType = ROW({{"value", type}});
+      auto expression = std::make_shared<core::CallTypedExpr>(
+          BOOLEAN(),
+          std::vector<core::TypedExprPtr>{
+              std::make_shared<core::FieldAccessTypedExpr>(type, "value")},
+          prefix + "isnull");
+
+      ASSERT_TRUE(FunctionExpression::canEvaluate(expression));
+      ASSERT_EQ(ASTExpression::canEvaluate(expression), !type->isDecimal());
+      ASSERT_TRUE(canExprRunOnGpu(expression, nullptr, nullptr));
+      auto evaluator = createCudfExpression(
+          expression, inputType, pool_.get(), queryCtx_->queryConfig());
+      if (type->isDecimal()) {
+        ASSERT_NE(dynamic_cast<FunctionExpression*>(evaluator.get()), nullptr);
+      } else {
+        ASSERT_NE(dynamic_cast<JitExpression*>(evaluator.get()), nullptr);
+      }
+    }
+  }
+}
+
+TEST_F(CudfSparkExpressionSelectionTest, isNullDialectRegistration) {
+  for (const std::string prefix : {"", "test_"}) {
+    SCOPED_TRACE(prefix);
+    auto check = [&](const std::string& name, bool expected) {
+      SCOPED_TRACE(name);
+      auto expression = std::make_shared<core::CallTypedExpr>(
+          BOOLEAN(),
+          std::vector<core::TypedExprPtr>{
+              std::make_shared<core::FieldAccessTypedExpr>(INTEGER(), "value")},
+          name);
+      EXPECT_EQ(FunctionExpression::canEvaluate(expression), expected);
+      EXPECT_EQ(
+          createCudfFunction(name, expression, pool_.get()) != nullptr,
+          expected);
+    };
+
+    unregisterFunctions();
+    registerBuiltinFunctions(prefix);
+    check(prefix + "isnull", false);
+    check("is_null", false);
+
+    unregisterFunctions();
+    registerSparkFunctions(prefix);
+    check(prefix + "isnull", true);
+    check("is_null", false);
+
+    unregisterFunctions();
+    registerPrestoFunctions(prefix);
+    check(prefix + "isnull", false);
+    check("is_null", true);
+    if (!prefix.empty()) {
+      check(prefix + "is_null", false);
+    }
+  }
 }
 
 TEST_F(CudfSparkExpressionSelectionTest, signatureAllowsColumnArgsStartswith) {

@@ -13,10 +13,10 @@
 # limitations under the License.
 include_guard(GLOBAL)
 
-set(VELOX_FAISS_BUILD_VERSION 1.11.0)
+set(VELOX_FAISS_BUILD_VERSION 1.12.0)
 set(
   VELOX_FAISS_BUILD_SHA256_CHECKSUM
-  c5d517da6deb6a6d74290d7145331fc7474426025e2d826fa4a6d40670f4493c
+  561376d1a44771bf1230fabeef9c81643468009b45a585382cf38d3a7a94990a
 )
 set(
   VELOX_FAISS_SOURCE_URL
@@ -24,30 +24,6 @@ set(
 )
 
 velox_resolve_dependency_url(FAISS)
-
-# We need these hints for macos to build.
-if(CMAKE_SYSTEM_NAME MATCHES "Darwin")
-  message(STATUS "Detected Apple platform")
-  execute_process(
-    COMMAND brew --prefix libomp
-    RESULT_VARIABLE BREW_LIBOMP_RESULT
-    OUTPUT_VARIABLE BREW_LIBOMP_PREFIX
-    OUTPUT_STRIP_TRAILING_WHITESPACE
-  )
-  if(BREW_LIBOMP_RESULT EQUAL 0 AND EXISTS "${BREW_LIBOMP_PREFIX}")
-    list(APPEND CMAKE_PREFIX_PATH "${BREW_LIBOMP_PREFIX}")
-  endif()
-
-  execute_process(
-    COMMAND brew --prefix openblas
-    RESULT_VARIABLE BREW_OPENBLAS_RESULT
-    OUTPUT_VARIABLE BREW_OPENBLAS_PREFIX
-    OUTPUT_STRIP_TRAILING_WHITESPACE
-  )
-  if(BREW_OPENBLAS_RESULT EQUAL 0 AND EXISTS "${BREW_OPENBLAS_PREFIX}")
-    list(APPEND CMAKE_PREFIX_PATH "${BREW_OPENBLAS_PREFIX}")
-  endif()
-endif()
 
 FetchContent_Declare(
   faiss

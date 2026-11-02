@@ -375,8 +375,7 @@ TEST_F(FileConnectorUtilTest, configureRowReaderOptionsNimbleFlags) {
   // Session flags enabled => RowReaderOptions flags true.
   {
     auto holder = makeConnectorQueryCtx(
-        {{hive::FileConfig::kNimbleStringDecoderZeroCopySession, "true"},
-         {hive::FileConfig::kNimblePreserveDictionaryEncodingSession, "true"},
+        {{hive::FileConfig::kNimblePreserveDictionaryEncodingSession, "true"},
          {hive::FileConfig::kNimbleDictionaryAwareReadsSession, "true"}});
     dwio::common::RowReaderOptions rowReaderOptions;
     hive::configureRowReaderOptions(
@@ -390,7 +389,6 @@ TEST_F(FileConnectorUtilTest, configureRowReaderOptionsNimbleFlags) {
         /*ioExecutor=*/nullptr,
         rowReaderOptions);
 
-    EXPECT_TRUE(rowReaderOptions.stringDecoderZeroCopy());
     EXPECT_TRUE(rowReaderOptions.nimblePreserveDictionaryEncoding());
     EXPECT_TRUE(rowReaderOptions.nimbleDictionaryAwareReads());
   }
@@ -410,7 +408,6 @@ TEST_F(FileConnectorUtilTest, configureRowReaderOptionsNimbleFlags) {
         /*ioExecutor=*/nullptr,
         rowReaderOptions);
 
-    EXPECT_FALSE(rowReaderOptions.stringDecoderZeroCopy());
     EXPECT_FALSE(rowReaderOptions.nimblePreserveDictionaryEncoding());
     EXPECT_FALSE(rowReaderOptions.nimbleDictionaryAwareReads());
   }

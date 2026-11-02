@@ -47,6 +47,7 @@ std::unique_ptr<HierarchicalClusterIndex> HierarchicalClusterIndex::create(
       createIndexDataInput(options),
       options.pinIndex,
       options.preloadIndex,
+      options.cacheKeyEncodingViews,
       pool));
 }
 
@@ -56,12 +57,22 @@ HierarchicalClusterIndex::HierarchicalClusterIndex(
     std::shared_ptr<velox::dwio::common::BufferedInput> dataInput,
     bool pinIndex,
     bool preloadIndex,
+    bool cacheKeyEncodingViews,
     velox::memory::MemoryPool* pool)
     : ClusterIndexBase(
           std::move(rootSection),
           std::move(metadataInput),
           std::move(dataInput),
-          createHierarchicalKeyReader,
+          [cacheKeyEncodingViews](
+              std::string_view encodedKeys,
+              std::function<void*(uint32_t)> stringBufferFactory,
+              velox::memory::MemoryPool* keyPool) {
+            return createHierarchicalKeyReader(
+                encodedKeys,
+                stringBufferFactory,
+                keyPool,
+                cacheKeyEncodingViews);
+          },
           /*keyComparator=*/nullptr,
           pinIndex,
           preloadIndex,

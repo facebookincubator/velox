@@ -21,7 +21,6 @@ endif()
 if(NIMBLE_BUILD_TESTING)
   add_subdirectory(tests)
 endif()
-add_subdirectory(legacy)
 if(NIMBLE_BUILD_TESTING)
   add_subdirectory(selection/tests)
 endif()
@@ -95,7 +94,6 @@ add_library(
   views/DictionaryEncodingView.h
   views/ConstantEncodingView.h
   views/BlockBitPackingEncodingView.h
-  views/BitRangeSplitEncodingView.h
   views/ALPEncodingView.h
   views/ALPRDEncodingView.h
   selection/Statistics.h
@@ -139,7 +137,6 @@ add_library(
   DeltaBlockEncoding.h
   ConstantEncoding.h
   BlockBitPackingEncoding.h
-  BitRangeSplitEncoding.h
   ALPEncoding.h
   ALPRDEncoding.h
 )

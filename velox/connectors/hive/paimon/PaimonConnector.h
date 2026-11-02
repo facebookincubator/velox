@@ -52,7 +52,7 @@ class PaimonConnector final : public HiveConnector {
       ConnectorQueryCtx* connectorQueryCtx,
       CommitStrategy commitStrategy) override;
 
-  /// Registers serde for Paimon table/split handles and HiveColumnHandle.
+  /// Registers serde for Paimon table, column and split handles.
   /// Callers must register type, filter and expression serde separately.
   static void registerSerDe();
 

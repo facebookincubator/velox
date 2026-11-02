@@ -6633,6 +6633,22 @@ TEST_P(TabletTest, configureOptionsIndexFlags) {
   }
 }
 
+TEST_P(TabletTest, configureOptionsCacheKeyEncodingViews) {
+  velox::dwio::common::ReaderOptions readerOptions(pool_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
+  EXPECT_FALSE(
+      nimble::TabletReader::configureOptions(readerOptions)
+          .cacheKeyEncodingViews);
+
+  auto nimbleOptions = std::make_shared<nimble::NimbleReaderOptions>();
+  nimbleOptions->cacheKeyEncodingViews = true;
+  readerOptions.setFormatSpecificOptions(std::move(nimbleOptions));
+  EXPECT_TRUE(
+      nimble::TabletReader::configureOptions(readerOptions)
+          .cacheKeyEncodingViews);
+}
+
 TEST_P(TabletTest, configureOptionsCacheFields) {
   // Verify configureOptions wires fileHandle and cache from
   // ReaderOptions into TabletReader::Options, and that a TabletReader

@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/connectors/hive/paimon/PaimonTableHandle.h"
+#include "velox/connectors/hive/paimon/PaimonColumnHandle.h"
 
 #include <gtest/gtest.h>
 #include <limits>
@@ -31,7 +32,7 @@ class PaimonTableHandleTest : public testing::Test {
     Type::registerSerDe();
     common::Filter::registerSerDe();
     core::ITypedExpr::registerSerDe();
-    HiveColumnHandle::registerSerDe();
+    PaimonColumnHandle::registerSerDe();
     PaimonTableHandle::registerSerDe();
   }
 
@@ -104,8 +105,8 @@ TEST_F(PaimonTableHandleTest, roundTrip) {
       std::make_unique<common::BigintRange>(1, 9, false));
   const auto remaining =
       std::make_shared<core::ConstantTypedExpr>(BOOLEAN(), Variant(true));
-  const auto filterColumn = std::make_shared<HiveColumnHandle>(
-      "value", FileColumnHandle::ColumnType::kRegular, BIGINT(), BIGINT());
+  const auto filterColumn = std::make_shared<PaimonColumnHandle>(
+      "value", 20, FileColumnHandle::ColumnType::kRegular, BIGINT());
   const std::unordered_map<std::string, std::string> options{
       {"deletion-vectors.enabled", "false"},
       {"data-evolution.enabled", "false"},
@@ -127,6 +128,20 @@ TEST_F(PaimonTableHandleTest, roundTrip) {
       {filterColumn},
       0.5,
       "analytics");
+  const FileTableHandle& fileHandle = original;
+  EXPECT_EQ(fileHandle.name(), "orders");
+  EXPECT_EQ(fileHandle.tableName(), "orders");
+  EXPECT_EQ(fileHandle.dbName(), "analytics");
+  EXPECT_EQ(fileHandle.sampleRate(), 0.5);
+  EXPECT_EQ(fileHandle.remainingFilter(), remaining);
+  EXPECT_TRUE(fileHandle.tableParameters().empty());
+  EXPECT_EQ(
+      *fileHandle.dataColumns(), *ROW({{"id", BIGINT()}, {"value", BIGINT()}}));
+  ASSERT_EQ(fileHandle.filterColumnHandles().size(), 1);
+  EXPECT_EQ(fileHandle.filterColumnHandles()[0], filterColumn);
+  EXPECT_EQ(
+      fileHandle.subfieldFilters().at(common::Subfield("id"))->serialize(),
+      common::BigintRange(1, 9, false).serialize());
   const auto obj = original.serialize();
   const auto copy = ISerializable::deserialize<PaimonTableHandle>(obj);
   ASSERT_NE(copy, nullptr);
@@ -145,35 +160,172 @@ TEST_F(PaimonTableHandleTest, roundTrip) {
   EXPECT_EQ(copy->dbName(), "analytics");
   EXPECT_EQ(copy->sampleRate(), 0.5);
   EXPECT_FALSE(obj.count("dataColumns"));
+  EXPECT_FALSE(obj.count("tableParameters"));
   EXPECT_FALSE(obj.count("schema"));
   EXPECT_FALSE(obj.count("readProfile"));
   EXPECT_FALSE(obj.count("queryOptions"));
 }
 
-TEST_F(PaimonTableHandleTest, literalFilterNameRoundTrip) {
+TEST_F(PaimonTableHandleTest, defaultValues) {
+  const folly::dynamic requiredFields = folly::dynamic::object(
+      "name", "PaimonTableHandle")("version", 1)("connectorId", "test-paimon")(
+      "tableName", "orders")("schemaId", int64_t{1} << 40)(
+      "rowType", rowType()->serialize())(
+      "fieldIds", folly::dynamic::array(7, 8, 20))("tableType", "APPEND_ONLY")(
+      "partitionKeys", folly::dynamic::array("p"))(
+      "options", folly::dynamic::object)(
+      "subfieldFilters", folly::dynamic::array);
+  for (bool explicitDefaults : {false, true}) {
+    auto obj = requiredFields;
+    if (explicitDefaults) {
+      obj["remainingFilter"] = nullptr;
+      obj["sampleRate"] = 1.0;
+      obj["dbName"] = "";
+      obj["filterColumnHandles"] = folly::dynamic::array;
+    }
+    const auto copy = ISerializable::deserialize<PaimonTableHandle>(obj);
+    EXPECT_EQ(copy->remainingFilter(), nullptr);
+    EXPECT_EQ(copy->sampleRate(), 1.0);
+    EXPECT_TRUE(copy->dbName().empty());
+    EXPECT_TRUE(copy->filterColumnHandles().empty());
+    EXPECT_EQ(copy->serialize(), requiredFields);
+  }
+}
+
+TEST_F(PaimonTableHandleTest, commonFieldsMatchHive) {
+  HiveColumnHandle::registerSerDe();
+  HiveTableHandle::registerSerDe();
+  const auto hiveColumn = std::make_shared<HiveColumnHandle>(
+      "value", FileColumnHandle::ColumnType::kRegular, BIGINT(), BIGINT());
+  const auto paimonColumn = std::make_shared<PaimonColumnHandle>(
+      "value", 20, FileColumnHandle::ColumnType::kRegular, BIGINT());
+
+  for (bool withFilters : {false, true}) {
+    SCOPED_TRACE(withFilters);
+    const auto makeFilters = [&]() {
+      common::SubfieldFilters filters;
+      if (withFilters) {
+        filters.emplace(
+            common::Subfield("id"), std::make_unique<common::IsNotNull>());
+      }
+      return filters;
+    };
+    const core::TypedExprPtr remaining = withFilters
+        ? std::make_shared<core::ConstantTypedExpr>(BOOLEAN(), Variant(true))
+        : nullptr;
+    const double sampleRate = withFilters ? 0.5 : 1.0;
+    const std::string dbName = withFilters ? "analytics" : "";
+    const HiveTableHandle hive(
+        "test-connector",
+        "orders",
+        makeFilters(),
+        remaining,
+        rowType(),
+        {},
+        {},
+        withFilters ? std::vector<HiveColumnHandlePtr>{hiveColumn}
+                    : std::vector<HiveColumnHandlePtr>{},
+        sampleRate,
+        dbName);
+    const PaimonTableHandle paimon(
+        "test-connector",
+        "orders",
+        0,
+        rowType(),
+        {7, 8, 20},
+        PaimonTableType::kAppendOnly,
+        {},
+        {},
+        makeFilters(),
+        remaining,
+        withFilters ? std::vector<FileColumnHandlePtr>{paimonColumn}
+                    : std::vector<FileColumnHandlePtr>{},
+        sampleRate,
+        dbName);
+    const auto hiveObj = hive.serialize();
+    const auto paimonObj = paimon.serialize();
+    for (const auto* field :
+         {"connectorId",
+          "tableName",
+          "subfieldFilters",
+          "remainingFilter",
+          "sampleRate",
+          "dbName"}) {
+      ASSERT_EQ(hiveObj.count(field), paimonObj.count(field)) << field;
+      if (hiveObj.count(field)) {
+        EXPECT_EQ(hiveObj[field], paimonObj[field]) << field;
+      }
+    }
+    EXPECT_EQ(hiveObj.count("filterColumnHandles"), withFilters);
+    EXPECT_EQ(paimonObj.count("filterColumnHandles"), withFilters);
+    if (withFilters) {
+      EXPECT_EQ(
+          hiveObj["filterColumnHandles"],
+          folly::dynamic::array(hiveColumn->serialize()));
+      EXPECT_EQ(
+          paimonObj["filterColumnHandles"],
+          folly::dynamic::array(paimonColumn->serialize()));
+    }
+    const auto hiveCopy = ISerializable::deserialize<HiveTableHandle>(hiveObj);
+    const auto paimonCopy =
+        ISerializable::deserialize<PaimonTableHandle>(paimonObj);
+    EXPECT_EQ(hiveCopy->serialize(), hiveObj);
+    EXPECT_EQ(paimonCopy->serialize(), paimonObj);
+    if (withFilters) {
+      ASSERT_EQ(hiveCopy->hiveFilterColumnHandles().size(), 1);
+      EXPECT_EQ(
+          hiveCopy->hiveFilterColumnHandles()[0]->serialize(),
+          hiveColumn->serialize());
+      ASSERT_EQ(paimonCopy->filterColumnHandles().size(), 1);
+      EXPECT_NE(
+          std::dynamic_pointer_cast<const PaimonColumnHandle>(
+              paimonCopy->filterColumnHandles()[0]),
+          nullptr);
+    }
+  }
+}
+
+TEST_F(PaimonTableHandleTest, subfieldStringSerde) {
+  const auto nestedType = ROW({{"a", BIGINT()}});
   common::SubfieldFilters filters;
   filters.emplace(
-      std::move(*common::Subfield::create("a.b")),
-      std::make_unique<common::IsNotNull>());
+      common::Subfield("r.a"), std::make_unique<common::IsNotNull>());
+  std::vector<common::Subfield> requiredSubfields;
+  requiredSubfields.emplace_back("r.a");
+  const auto filterColumn = std::make_shared<PaimonColumnHandle>(
+      "r",
+      7,
+      FileColumnHandle::ColumnType::kRegular,
+      nestedType,
+      std::move(requiredSubfields));
   const PaimonTableHandle original(
       "test-paimon",
       "orders",
       0,
-      ROW({{"a.b", BIGINT()}}),
+      ROW({{"r", nestedType}}),
       {7},
       PaimonTableType::kAppendOnly,
       {},
       {},
-      std::move(filters));
-  const auto copy =
-      ISerializable::deserialize<PaimonTableHandle>(original.serialize());
+      std::move(filters),
+      nullptr,
+      {filterColumn});
+  const auto obj = original.serialize();
+  EXPECT_EQ(obj["subfieldFilters"][0]["subfield"].asString(), "r.a");
+  EXPECT_EQ(
+      obj["filterColumnHandles"][0]["requiredSubfields"],
+      folly::dynamic::array("r.a"));
+  const auto copy = ISerializable::deserialize<PaimonTableHandle>(obj);
   ASSERT_EQ(copy->subfieldFilters().size(), 1);
   const auto& path = copy->subfieldFilters().begin()->first;
-  ASSERT_EQ(path.path().size(), 1);
-  EXPECT_EQ(path.baseName(), "a.b");
+  EXPECT_EQ(path, common::Subfield("r.a"));
   EXPECT_EQ(
       copy->subfieldFilters().begin()->second->serialize(),
       original.subfieldFilters().begin()->second->serialize());
+  ASSERT_EQ(copy->filterColumnHandles().size(), 1);
+  EXPECT_EQ(
+      copy->filterColumnHandles()[0]->requiredSubfields(),
+      filterColumn->requiredSubfields());
 }
 
 TEST_F(PaimonTableHandleTest, invalidDefinition) {
@@ -242,17 +394,75 @@ TEST_F(PaimonTableHandleTest, malformedWire) {
   obj = good;
   obj["rowType"] = nullptr;
   EXPECT_THROW(PaimonTableHandle::create(obj, nullptr), VeloxUserError);
+
+  obj = good;
+  obj["remainingFilter"] = rowType()->serialize();
+  VELOX_ASSERT_USER_THROW(
+      PaimonTableHandle::create(obj, nullptr),
+      "Invalid Paimon remaining filter");
+
+  obj = good;
+  obj["subfieldFilters"].push_back(
+      folly::dynamic::object("subfield", "id")(
+          "filter", rowType()->serialize()));
+  VELOX_ASSERT_USER_THROW(
+      PaimonTableHandle::create(obj, nullptr), "Missing subfield filter");
+
+  obj = good;
+  const folly::dynamic entry = folly::dynamic::object("subfield", "id")(
+      "filter", common::IsNotNull().serialize());
+  obj["subfieldFilters"] = folly::dynamic::array(entry, entry);
+  VELOX_ASSERT_USER_THROW(
+      PaimonTableHandle::create(obj, nullptr),
+      "Duplicate Paimon subfield filter");
+}
+
+TEST_F(PaimonTableHandleTest, serializeNullSubfieldFilter) {
+  common::SubfieldFilters filters;
+  filters.emplace(common::Subfield("r.a"), nullptr);
+  const PaimonTableHandle handle(
+      "test-paimon",
+      "orders",
+      0,
+      ROW({{"r", ROW({{"a", BIGINT()}})}}),
+      {7},
+      PaimonTableType::kAppendOnly,
+      {},
+      {},
+      std::move(filters));
+  VELOX_ASSERT_USER_THROW(
+      handle.serialize(), "Null filter for subfield 'r.a' in table 'orders'");
+}
+
+TEST_F(PaimonTableHandleTest, serializeNullFilterColumnHandle) {
+  const auto column = std::make_shared<PaimonColumnHandle>(
+      "id", 7, FileColumnHandle::ColumnType::kRegular, BIGINT());
+  const PaimonTableHandle handle(
+      "test-paimon",
+      "orders",
+      0,
+      rowType(),
+      {7, 8, 20},
+      PaimonTableType::kAppendOnly,
+      {"p"},
+      {},
+      {},
+      nullptr,
+      {column, nullptr});
+  VELOX_ASSERT_USER_THROW(
+      handle.serialize(),
+      "Null filter column handle at index 1 in table 'orders'");
 }
 
 TEST_F(PaimonTableHandleTest, localCallbackIsNotWireState) {
-  const auto column = std::make_shared<HiveColumnHandle>(
+  const auto column = std::make_shared<PaimonColumnHandle>(
       "id",
+      7,
       FileColumnHandle::ColumnType::kRegular,
-      BIGINT(),
       BIGINT(),
       std::vector<common::Subfield>{},
       std::vector<NamedExtraction>{},
-      HiveColumnHandle::ColumnParseParameters{},
+      /*partitionDateValueDaysSinceEpoch=*/false,
       [](VectorPtr&) {});
   const PaimonTableHandle handle(
       "test-paimon",
@@ -268,8 +478,7 @@ TEST_F(PaimonTableHandleTest, localCallbackIsNotWireState) {
       {column});
   EXPECT_TRUE(handle.filterColumnHandles()[0]->postProcessor());
   VELOX_ASSERT_USER_THROW(
-      handle.serialize(),
-      "Paimon filter column callbacks cannot be serialized");
+      handle.serialize(), "Paimon column callbacks cannot be serialized");
 }
 
 } // namespace

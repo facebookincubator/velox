@@ -21,7 +21,6 @@
 #include "velox/dwio/nimble/common/Varint.h"
 #include "velox/dwio/nimble/encodings/ALPEncoding.h"
 #include "velox/dwio/nimble/encodings/ALPRDEncoding.h"
-#include "velox/dwio/nimble/encodings/BitRangeSplitEncoding.h"
 #include "velox/dwio/nimble/encodings/FsstEncoding.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
@@ -210,19 +209,6 @@ EncodingLayout EncodingLayoutCapture::capture(
       // stream, and the layout tree describes how data is encoded, not how a
       // slice was deferred. Reported as childless.
       break;
-    case EncodingType::BitRangeSplit: {
-      using Base = detail::BitRangeSplitEncodingBase;
-      Base::captureLayout(
-          encoding,
-          options,
-          [&](NestedEncodingIdentifier /* sectionIndex */,
-              const Base::Section& section) {
-            const char* position = section.data;
-            captureChild(children, position, section.dataBytes, options);
-          },
-          encodingConfig);
-      break;
-    }
     case EncodingType::SubIntSplit: {
       const auto dataType = EncodingPrefix::dataType(encoding);
       const auto physicalBits = detail::dataTypeSize(dataType) * 8;

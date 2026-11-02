@@ -27,15 +27,7 @@ struct SpatialBuildResult {
   std::shared_ptr<SpatialIndex> spatialIndex;
 };
 
-class SpatialJoinBridge : public JoinBridge {
- public:
-  void setData(SpatialBuildResult buildResult);
-
-  std::optional<SpatialBuildResult> dataOrFuture(ContinueFuture* future);
-
- private:
-  std::optional<SpatialBuildResult> buildResult_;
-};
+class SpatialJoinBridge : public BuildResultBridge<SpatialBuildResult> {};
 
 class SpatialJoinBuild : public Operator {
  public:

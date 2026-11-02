@@ -115,16 +115,11 @@ auto format_as(FilterType filterType) {
 }
 
 struct TestParam {
-  bool stringDecoderZeroCopy;
   bool enableCache;
   bool pinMetadata{false};
 
   std::string debugString() const {
-    return fmt::format(
-        "passStringBuffers_{}_cache_{}_pinMetadata_{}",
-        stringDecoderZeroCopy,
-        enableCache,
-        pinMetadata);
+    return fmt::format("cache_{}_pinMetadata_{}", enableCache, pinMetadata);
   }
 };
 
@@ -139,11 +134,9 @@ class SelectiveNimbleReaderTest
  public:
   static std::vector<TestParam> getTestParams() {
     std::vector<TestParam> params;
-    for (bool passStringBuffers : {false, true}) {
-      for (bool cache : {false, true}) {
-        for (bool pin : {false, true}) {
-          params.emplace_back(TestParam{passStringBuffers, cache, pin});
-        }
+    for (bool cache : {false, true}) {
+      for (bool pin : {false, true}) {
+        params.emplace_back(TestParam{cache, pin});
       }
     }
     return params;
@@ -187,10 +180,6 @@ class SelectiveNimbleReaderTest
     return rootPool_.get();
   }
 
-  bool stringDecoderZeroCopy() const {
-    return GetParam().stringDecoderZeroCopy;
-  }
-
   struct Readers {
     std::unique_ptr<dwio::common::Reader> reader;
     std::unique_ptr<dwio::common::RowReader> rowReader;
@@ -200,7 +189,6 @@ class SelectiveNimbleReaderTest
       const RowVectorPtr& expected,
       const std::string& file,
       const std::shared_ptr<common::ScanSpec>& scanSpec,
-      bool stringDecoderZeroCopy,
       bool preserveFlatMapsInMemory = false,
       bool lazyColumnIo = false,
       std::shared_ptr<const ExternalDictionaryResolver>
@@ -264,7 +252,6 @@ class SelectiveNimbleReaderTest
     rowOptions.setScanSpec(scanSpec);
     rowOptions.setRequestedType(type);
     rowOptions.setPreserveFlatMapsInMemory(preserveFlatMapsInMemory);
-    rowOptions.setStringDecoderZeroCopy(stringDecoderZeroCopy);
     rowOptions.setLazyColumnIo(lazyColumnIo);
     rowOptions.setNimbleDictionaryAwareReads(dictionaryAwareReads);
     readers.rowReader = readers.reader->createRowReader(rowOptions);
@@ -273,13 +260,9 @@ class SelectiveNimbleReaderTest
 
   Readers makeReaders(
       const RowVectorPtr& input,
-      const std::shared_ptr<common::ScanSpec>& scanSpec,
-      bool stringDecoderZeroCopy) {
+      const std::shared_ptr<common::ScanSpec>& scanSpec) {
     return makeReaders(
-        input,
-        test::createNimbleFile(*rootPool(), input),
-        scanSpec,
-        stringDecoderZeroCopy);
+        input, test::createNimbleFile(*rootPool(), input), scanSpec);
   }
 
   // Writes 'input', which has columns c0 and c1, to a Nimble file with c0
@@ -403,7 +386,6 @@ class SelectiveNimbleReaderTest
           input,
           file,
           scanSpec,
-          stringDecoderZeroCopy(),
           /*preserveFlatMapsInMemory=*/false,
           /*lazyColumnIo=*/false,
           /*externalDictionaryResolver=*/nullptr,
@@ -448,7 +430,6 @@ class SelectiveNimbleReaderTest
           input,
           file,
           scanSpec,
-          stringDecoderZeroCopy(),
           /*preserveFlatMapsInMemory=*/false,
           /*lazyColumnIo=*/false,
           /*externalDictionaryResolver=*/nullptr,
@@ -473,7 +454,6 @@ class SelectiveNimbleReaderTest
           input,
           file,
           scanSpec,
-          stringDecoderZeroCopy(),
           /*preserveFlatMapsInMemory=*/false,
           /*lazyColumnIo=*/true,
           /*externalDictionaryResolver=*/nullptr,
@@ -497,7 +477,6 @@ class SelectiveNimbleReaderTest
           input,
           file,
           scanSpec,
-          stringDecoderZeroCopy(),
           /*preserveFlatMapsInMemory=*/false,
           /*lazyColumnIo=*/true,
           /*externalDictionaryResolver=*/nullptr,
@@ -605,7 +584,6 @@ class SelectiveNimbleReaderTest
       const common::Filter& filter,
       int batchSize,
       ValidationFilter&& validationFilter,
-      bool stringDecoderZeroCopy,
       const std::function<VectorPtr(bool)>& makeExpectedData = nullptr) {
     for (bool hasNulls : {false, true}) {
       auto data = makeData(hasNulls);
@@ -634,8 +612,7 @@ class SelectiveNimbleReaderTest
             dropColumn = 0;
           }
         }
-        auto readers =
-            makeReaders(expected, file, scanSpec, stringDecoderZeroCopy);
+        auto readers = makeReaders(expected, file, scanSpec);
         validate(
             *expected, *readers.rowReader, batchSize, dropColumn, [&](auto i) {
               return filterType == kNone || validationFilter(data, i);
@@ -688,7 +665,6 @@ class SelectiveNimbleReaderTest
           data,
       const std::vector<bool>& filter,
       const std::vector<int>& readSizes,
-      bool stringDecoderZeroCopy,
       std::optional<int> maxArrayElementsCount = std::nullopt,
       bool filterAfterRead = false) {
     RowVectorPtr vector;
@@ -727,7 +703,7 @@ class SelectiveNimbleReaderTest
       scanSpec->childByName("c0")->setMaxArrayElementsCount(
           *maxArrayElementsCount);
     }
-    auto readers = makeReaders(vector, file, scanSpec, stringDecoderZeroCopy);
+    auto readers = makeReaders(vector, file, scanSpec);
     auto result = BaseVector::create(rowType, 0, pool());
     int totalScanned = 0;
     std::vector<bool> selected(data.size(), true);
@@ -795,7 +771,6 @@ class SelectiveNimbleReaderTest
       std::initializer_list<NullableArrayData> data,
       const std::vector<bool>& filter,
       const std::vector<int>& readSizes,
-      bool stringDecoderZeroCopy,
       std::optional<int> maxArrayElementsCount = std::nullopt,
       bool filterAfterRead = false) {
     std::vector<std::optional<std::vector<std::optional<int64_t>>>> converted;
@@ -804,12 +779,7 @@ class SelectiveNimbleReaderTest
       converted.push_back(item);
     }
     checkArrayWithOffsets(
-        converted,
-        filter,
-        readSizes,
-        stringDecoderZeroCopy,
-        maxArrayElementsCount,
-        filterAfterRead);
+        converted, filter, readSizes, maxArrayElementsCount, filterAfterRead);
   }
 
   void checkSlidingWindowMap(
@@ -818,7 +788,6 @@ class SelectiveNimbleReaderTest
       const std::vector<bool>& rowFilter,
       const common::Filter* keyFilter,
       const std::vector<int>& readSizes,
-      bool stringDecoderZeroCopy,
       bool filterAfterRead = false) {
     RowVectorPtr vector;
     if (rowFilter.empty()) {
@@ -857,7 +826,7 @@ class SelectiveNimbleReaderTest
           ->childByName(common::ScanSpec::kMapKeysFieldName)
           ->setFilter(keyFilter->clone());
     }
-    auto readers = makeReaders(vector, file, scanSpec, stringDecoderZeroCopy);
+    auto readers = makeReaders(vector, file, scanSpec);
     auto result = BaseVector::create(rowType, 0, pool());
     int totalScanned = 0;
     std::vector<bool> selected(data.size(), true);
@@ -932,7 +901,6 @@ class SelectiveNimbleReaderTest
       const std::vector<bool>& rowFilter,
       const common::Filter* keyFilter,
       const std::vector<int>& readSizes,
-      bool stringDecoderZeroCopy,
       bool filterAfterRead = false) {
     std::vector<
         std::optional<std::vector<std::pair<int64_t, std::optional<int64_t>>>>>
@@ -942,12 +910,7 @@ class SelectiveNimbleReaderTest
       converted.push_back(item);
     }
     checkSlidingWindowMap(
-        converted,
-        rowFilter,
-        keyFilter,
-        readSizes,
-        stringDecoderZeroCopy,
-        filterAfterRead);
+        converted, rowFilter, keyFilter, readSizes, filterAfterRead);
   }
 
  private:
@@ -973,7 +936,6 @@ class SelectiveNimbleReaderTest
 //   - Sparse + No nulls
 //   - Sparse + Nulls
 TEST_P(SelectiveNimbleReaderTest, basic) {
-  const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   auto c0 = makeFlatIdentityVector<int64_t>(1009);
   auto* rawC0 = c0->mutableRawValues();
   std::default_random_engine rng(42);
@@ -988,7 +950,7 @@ TEST_P(SelectiveNimbleReaderTest, basic) {
   scanSpec->addAllChildFields(*input->type());
   scanSpec->childByName("c0")->setFilter(
       std::make_unique<common::BigintRange>(0, 502, false));
-  auto readers = makeReaders(input, scanSpec, stringDecoderZeroCopy);
+  auto readers = makeReaders(input, scanSpec);
   auto estimatedRowSize = readers.rowReader->estimatedRowSize();
   ASSERT_TRUE(estimatedRowSize.has_value());
   ASSERT_EQ(*estimatedRowSize, 21);
@@ -998,13 +960,12 @@ TEST_P(SelectiveNimbleReaderTest, basic) {
 }
 
 TEST_P(SelectiveNimbleReaderTest, currentStripe) {
-  const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   auto input = makeRowVector({
       makeFlatIdentityVector<int64_t>(200),
   });
   auto scanSpec = std::make_shared<common::ScanSpec>("root");
   scanSpec->addAllChildFields(*input->type());
-  auto readers = makeReaders(input, scanSpec, stringDecoderZeroCopy);
+  auto readers = makeReaders(input, scanSpec);
   EXPECT_EQ(readers.rowReader->currentStripe(), 0u);
 }
 
@@ -1038,19 +999,17 @@ TEST_P(SelectiveNimbleReaderTest, readsWithoutMetadataIoStats) {
 }
 
 TEST_P(SelectiveNimbleReaderTest, denseWithNulls) {
-  const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   auto input = makeRowVector({
       makeRowVector({makeFlatIdentityVector<int64_t>(103)}, nullEvery(11)),
   });
   auto scanSpec = std::make_shared<common::ScanSpec>("root");
   scanSpec->addAllChildFields(*input->type());
-  auto readers = makeReaders(input, scanSpec, stringDecoderZeroCopy);
+  auto readers = makeReaders(input, scanSpec);
   auto result = BaseVector::create(input->type(), 0, pool());
   validate(*input, *readers.rowReader, 7, [](auto) { return true; });
 }
 
 TEST_P(SelectiveNimbleReaderTest, sharedDictionary) {
-  const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   const auto valueUniverse = sharedDictionaryValueUniverse();
 
   for (const bool nullableData : {false, true}) {
@@ -1099,21 +1058,9 @@ TEST_P(SelectiveNimbleReaderTest, sharedDictionary) {
             input,
             file,
             scanSpec,
-            stringDecoderZeroCopy,
             /*preserveFlatMapsInMemory=*/false,
             lazyColumnIo,
             resolver);
-        if (!stringDecoderZeroCopy) {
-          NIMBLE_ASSERT_THROW(
-              validate(
-                  *input,
-                  *readers.rowReader,
-                  /*batchSize=*/127,
-                  [](auto /*row*/) { return true; }),
-              "Shared dictionary encoding requires non-legacy encoding "
-              "dispatch.");
-          continue;
-        }
         validate(
             *input,
             *readers.rowReader,
@@ -1136,10 +1083,6 @@ TEST_P(SelectiveNimbleReaderTest, sharedDictionary) {
 // alphabet through different paths: a stripe auxiliary stream versus the file
 // dictionary catalog.
 TEST_P(SelectiveNimbleReaderTest, sharedDictionaryStringColumn) {
-  if (!this->stringDecoderZeroCopy()) {
-    GTEST_SKIP() << "Shared dictionary encoding requires non-legacy dispatch";
-  }
-
   constexpr velox::vector_size_t kRowCount = 2'000;
   const std::vector<std::string> alphabet{
       "alpha", "bravo", "charlie", "delta", "echo"};
@@ -1181,8 +1124,7 @@ TEST_P(SelectiveNimbleReaderTest, sharedDictionaryStringColumn) {
         const auto file = test::createNimbleFile(*rootPool(), input, options);
         auto scanSpec = std::make_shared<common::ScanSpec>("root");
         scanSpec->addAllChildFields(*input->type());
-        auto readers =
-            makeReaders(input, file, scanSpec, /*stringDecoderZeroCopy=*/true);
+        auto readers = makeReaders(input, file, scanSpec);
         validate(
             *input,
             *readers.rowReader,
@@ -1194,7 +1136,6 @@ TEST_P(SelectiveNimbleReaderTest, sharedDictionaryStringColumn) {
 }
 
 TEST_P(SelectiveNimbleReaderTest, sharedDictionaryRandomizedSourcesAndStripes) {
-  const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   constexpr uint32_t kSeed{0x51A9D1C7};
   SCOPED_TRACE(fmt::format("seed={}", kSeed));
 
@@ -1252,20 +1193,9 @@ TEST_P(SelectiveNimbleReaderTest, sharedDictionaryRandomizedSourcesAndStripes) {
         input,
         file,
         scanSpec,
-        stringDecoderZeroCopy,
         /*preserveFlatMapsInMemory=*/false,
         lazyColumnIo,
         resolver);
-    if (!stringDecoderZeroCopy) {
-      NIMBLE_ASSERT_THROW(
-          validate(
-              *input,
-              *readers.rowReader,
-              /*batchSize=*/89,
-              [](auto /*row*/) { return true; }),
-          "Shared dictionary encoding requires non-legacy encoding dispatch.");
-      continue;
-    }
     validate(
         *input,
         *readers.rowReader,
@@ -1275,19 +1205,17 @@ TEST_P(SelectiveNimbleReaderTest, sharedDictionaryRandomizedSourcesAndStripes) {
 }
 
 TEST_P(SelectiveNimbleReaderTest, denseMostlyNulls) {
-  const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   auto isNull = [](auto i) { return i != 53; };
   auto input = makeRowVector({
       makeRowVector({makeFlatIdentityVector<int64_t>(103)}, isNull),
   });
   auto scanSpec = std::make_shared<common::ScanSpec>("root");
   scanSpec->addAllChildFields(*input->type());
-  auto readers = makeReaders(input, scanSpec, stringDecoderZeroCopy);
+  auto readers = makeReaders(input, scanSpec);
   validate(*input, *readers.rowReader, 11, [](auto) { return true; });
 }
 
 TEST_P(SelectiveNimbleReaderTest, sparseMostlyNulls) {
-  const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   auto c0 = makeFlatIdentityVector<int64_t>(101);
   auto input = makeRowVector({
       c0,
@@ -1297,14 +1225,13 @@ TEST_P(SelectiveNimbleReaderTest, sparseMostlyNulls) {
   scanSpec->addAllChildFields(*input->type());
   scanSpec->childByName("c0")->setFilter(
       std::make_unique<common::BigintRange>(47, 100, true));
-  auto readers = makeReaders(input, scanSpec, stringDecoderZeroCopy);
+  auto readers = makeReaders(input, scanSpec);
   validate(*input, *readers.rowReader, 13, [&](auto i) {
     return c0->isNullAt(i) || i >= 47;
   });
 }
 
 TEST_P(SelectiveNimbleReaderTest, allNulls) {
-  const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   std::vector<vector_size_t> offsets(104);
   std::iota(offsets.begin(), offsets.end(), 0);
   auto input = makeRowVector({
@@ -1330,23 +1257,21 @@ TEST_P(SelectiveNimbleReaderTest, allNulls) {
 
   auto scanSpec = std::make_shared<common::ScanSpec>("root");
   scanSpec->addAllChildFields(*input->type());
-  auto readers =
-      makeReaders(input, fileContent, scanSpec, stringDecoderZeroCopy);
+  auto readers = makeReaders(input, fileContent, scanSpec);
   validate(*input, *readers.rowReader, 11, [](auto) { return true; });
 
   scanSpec->resetCachedValues(false);
   scanSpec->childByName("c0")->setFilter(std::make_unique<common::IsNull>());
-  readers = makeReaders(input, scanSpec, stringDecoderZeroCopy);
+  readers = makeReaders(input, scanSpec);
   validate(*input, *readers.rowReader, 11, [](auto) { return true; });
 
   scanSpec->resetCachedValues(false);
   scanSpec->childByName("c0")->setFilter(std::make_unique<common::IsNotNull>());
-  readers = makeReaders(input, scanSpec, stringDecoderZeroCopy);
+  readers = makeReaders(input, scanSpec);
   validate(*input, *readers.rowReader, 11, [](auto) { return false; });
 }
 
 TEST_P(SelectiveNimbleReaderTest, multiChunkNulls) {
-  const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   auto chunk1 = makeRowVector({
       makeFlatVector<StringView>(
           2, [](auto) { return "foo"; }, [](auto i) { return i == 1; }),
@@ -1388,27 +1313,25 @@ TEST_P(SelectiveNimbleReaderTest, multiChunkNulls) {
   scanSpec->addAllChildFields(*input->type());
   scanSpec->childByName("c1")->setFilter(
       std::make_unique<common::BoolValue>(true, true));
-  auto readers = makeReaders(input, file, scanSpec, stringDecoderZeroCopy);
+  auto readers = makeReaders(input, file, scanSpec);
   validate(
       *input, *readers.rowReader, input->size(), [](auto i) { return i != 9; });
 }
 
 TEST_P(SelectiveNimbleReaderTest, filterIsNull) {
-  const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   auto c0 = makeFlatVector<int64_t>(11, folly::identity, nullEvery(2));
   auto input = makeRowVector({makeRowVector({c0}, nullEvery(3))});
   auto scanSpec = std::make_shared<common::ScanSpec>("root");
   scanSpec->addAllChildFields(*input->type());
   scanSpec->childByName("c0")->childByName("c0")->setFilter(
       std::make_unique<common::IsNull>());
-  auto readers = makeReaders(input, scanSpec, stringDecoderZeroCopy);
+  auto readers = makeReaders(input, scanSpec);
   validate(*input, *readers.rowReader, 5, [&](auto i) {
     return i % 2 == 0 || i % 3 == 0;
   });
 }
 
 TEST_P(SelectiveNimbleReaderTest, multiChunkInt16RowSetOverBoundary) {
-  const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   auto chunk1 = makeRowVector({
       makeFlatIdentityVector<int16_t>(10),
   });
@@ -1435,13 +1358,12 @@ TEST_P(SelectiveNimbleReaderTest, multiChunkInt16RowSetOverBoundary) {
   auto scanSpec = std::make_shared<common::ScanSpec>("root");
   scanSpec->addAllChildFields(*input->type());
   scanSpec->childByName("c0")->setFilter(std::make_unique<common::IsNotNull>());
-  auto readers = makeReaders(input, file, scanSpec, stringDecoderZeroCopy);
+  auto readers = makeReaders(input, file, scanSpec);
   validate(
       *input, *readers.rowReader, input->size(), [](auto) { return true; });
 }
 
 TEST_P(SelectiveNimbleReaderTest, strings) {
-  const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   const std::string longPrefix(17, 'x');
   auto c0 = makeFlatVector<std::string>(
       13,
@@ -1453,12 +1375,11 @@ TEST_P(SelectiveNimbleReaderTest, strings) {
   auto input = makeRowVector({c0});
   auto scanSpec = std::make_shared<common::ScanSpec>("root");
   scanSpec->addAllChildFields(*input->type());
-  auto readers = makeReaders(input, scanSpec, stringDecoderZeroCopy);
+  auto readers = makeReaders(input, scanSpec);
   validate(*input, *readers.rowReader, 3, [](auto) { return true; });
 }
 
 TEST_P(SelectiveNimbleReaderTest, bools) {
-  const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   auto input = makeRowVector({
       makeFlatVector<bool>(
           67, [](auto i) { return i % 3 != 0; }, nullEvery(7)),
@@ -1467,14 +1388,13 @@ TEST_P(SelectiveNimbleReaderTest, bools) {
   scanSpec->addAllChildFields(*input->type());
   scanSpec->childByName("c0")->setFilter(
       std::make_unique<common::BoolValue>(true, true));
-  auto readers = makeReaders(input, scanSpec, stringDecoderZeroCopy);
+  auto readers = makeReaders(input, scanSpec);
   validate(*input, *readers.rowReader, 13, [&](auto i) {
     return i % 7 == 0 || i % 3 != 0;
   });
 }
 
 TEST_P(SelectiveNimbleReaderTest, floats) {
-  const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   runTestCase(
       [&](bool hasNulls) {
         return makeFlatVector<double>(
@@ -1485,12 +1405,10 @@ TEST_P(SelectiveNimbleReaderTest, floats) {
       common::FloatingPointRange<double>(
           -INFINITY, true, false, 0.5, false, false, false),
       23,
-      [&](auto& data, auto i) { return !data->isNullAt(i) && sin(i) <= 0.5; },
-      stringDecoderZeroCopy);
+      [&](auto& data, auto i) { return !data->isNullAt(i) && sin(i) <= 0.5; });
 }
 
 TEST_P(SelectiveNimbleReaderTest, rle) {
-  const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   runTestCase(
       [&](bool hasNulls) {
         return makeFlatVector<double>(
@@ -1503,12 +1421,10 @@ TEST_P(SelectiveNimbleReaderTest, rle) {
       23,
       [&](auto& data, auto i) {
         return !data->isNullAt(i) && sin(i / 13) <= 0.5;
-      },
-      stringDecoderZeroCopy);
+      });
 }
 
 TEST_P(SelectiveNimbleReaderTest, byteRle) {
-  const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   runTestCase(
       [&](bool hasNulls) {
         return makeFlatVector<int8_t>(
@@ -1520,15 +1436,13 @@ TEST_P(SelectiveNimbleReaderTest, byteRle) {
       23,
       [&](auto& data, auto i) {
         return !data->isNullAt(i) && 4 <= i / 13 && i / 13 <= 6;
-      },
-      stringDecoderZeroCopy);
+      });
 }
 
 // Pushes down a BIGINT IN-list filter (createBigintValues). The batch reader
 // covers IN-lists, but the selective path only exercised BigintRange; migration
 // workloads use IN heavily, so cover it here.
 TEST_P(SelectiveNimbleReaderTest, bigintInList) {
-  const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   const std::vector<int64_t> inList{3, 17, 42, 88, 500};
   auto inValue = [&](int64_t v) {
     return std::find(inList.begin(), inList.end(), v) != inList.end();
@@ -1540,14 +1454,12 @@ TEST_P(SelectiveNimbleReaderTest, bigintInList) {
       },
       *common::createBigintValues(inList, /*nullAllowed=*/false),
       101,
-      [&](auto& data, auto i) { return !data->isNullAt(i) && inValue(i); },
-      stringDecoderZeroCopy);
+      [&](auto& data, auto i) { return !data->isNullAt(i) && inValue(i); });
 }
 
 // Pushes down a VARCHAR IN-list filter (BytesValues). Strings were only
 // read-verified before; equality/IN pushdown on VARCHAR was untested.
 TEST_P(SelectiveNimbleReaderTest, stringInList) {
-  const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   static constexpr std::array<const char*, 5> kValues{
       "aaa", "bbb", "ccc", "ddd", "eee"};
   const std::vector<std::string> inList{"aaa", "ccc", "eee"};
@@ -1563,14 +1475,12 @@ TEST_P(SelectiveNimbleReaderTest, stringInList) {
       [&](auto& data, auto i) {
         // kValues at even offsets (aaa/ccc/eee) are in the IN-list.
         return !data->isNullAt(i) && (i % kValues.size()) % 2 == 0;
-      },
-      stringDecoderZeroCopy);
+      });
 }
 
 // Pushes down a VARCHAR bounded range filter (BytesRange), i.e. WHERE col
 // BETWEEN 'bbb' AND 'ddd'.
 TEST_P(SelectiveNimbleReaderTest, stringRange) {
-  const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   static constexpr std::array<const char*, 5> kValues{
       "aaa", "bbb", "ccc", "ddd", "eee"};
   runTestCase(
@@ -1593,14 +1503,12 @@ TEST_P(SelectiveNimbleReaderTest, stringRange) {
         // Keeps bbb/ccc/ddd (offsets 1..3).
         const auto offset = i % kValues.size();
         return !data->isNullAt(i) && offset >= 1 && offset <= 3;
-      },
-      stringDecoderZeroCopy);
+      });
 }
 
 // Pushes down a REAL (float32) range filter. The double range path is covered
 // by `floats`; REAL is a distinct decoder path used by migration workloads.
 TEST_P(SelectiveNimbleReaderTest, realRange) {
-  const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   runTestCase(
       [&](bool hasNulls) {
         return makeFlatVector<float>(
@@ -1613,34 +1521,30 @@ TEST_P(SelectiveNimbleReaderTest, realRange) {
       23,
       [&](auto& data, auto i) {
         return !data->isNullAt(i) && static_cast<float>(sin(i)) <= 0.5f;
-      },
-      stringDecoderZeroCopy);
+      });
 }
 
 TEST_P(SelectiveNimbleReaderTest, rleString) {
-  const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   auto c0 = makeFlatVector<std::string>(
       101, [](auto i) { return std::to_string(sin(i / 13)); }, nullEvery(17));
   auto input = makeRowVector({c0});
   auto scanSpec = std::make_shared<common::ScanSpec>("root");
   scanSpec->addAllChildFields(*input->type());
-  auto readers = makeReaders(input, scanSpec, stringDecoderZeroCopy);
+  auto readers = makeReaders(input, scanSpec);
   validate(*input, *readers.rowReader, 23, [](auto) { return true; });
 }
 
 TEST_P(SelectiveNimbleReaderTest, rleBool) {
-  const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   auto c0 =
       makeFlatVector<bool>(67, [](auto i) { return i >= 31; }, nullEvery(17));
   auto input = makeRowVector({c0});
   auto scanSpec = std::make_shared<common::ScanSpec>("root");
   scanSpec->addAllChildFields(*input->type());
-  auto readers = makeReaders(input, scanSpec, stringDecoderZeroCopy);
+  auto readers = makeReaders(input, scanSpec);
   validate(*input, *readers.rowReader, 23, [](auto) { return true; });
 }
 
 TEST_P(SelectiveNimbleReaderTest, mainlyConstant) {
-  const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   const std::string longPrefix(17, 'x');
   auto makeData = [&](bool hasNulls) {
     return makeFlatVector<std::string>(
@@ -1659,8 +1563,7 @@ TEST_P(SelectiveNimbleReaderTest, mainlyConstant) {
         23,
         [&](auto& data, auto i) {
           return !data->isNullAt(i) && (i % 11 != 0 || i == 11);
-        },
-        stringDecoderZeroCopy);
+        });
   }
   {
     SCOPED_TRACE("Drop common value");
@@ -1668,20 +1571,18 @@ TEST_P(SelectiveNimbleReaderTest, mainlyConstant) {
         makeData,
         common::BytesValues({fmt::format("{}{}", longPrefix, 11)}, false),
         23,
-        [&](auto& data, auto i) { return !data->isNullAt(i) && i == 11; },
-        stringDecoderZeroCopy);
+        [&](auto& data, auto i) { return !data->isNullAt(i) && i == 11; });
   }
 }
 
 TEST_P(SelectiveNimbleReaderTest, dictionary) {
-  const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   const std::string alphabet[] = {"foo", "bar", "quux"};
   auto c0 = makeFlatVector<std::string>(
       1009, [&](auto i) { return alphabet[i % 3]; }, nullEvery(17));
   auto input = makeRowVector({c0});
   auto scanSpec = std::make_shared<common::ScanSpec>("root");
   scanSpec->addAllChildFields(*input->type());
-  auto readers = makeReaders(input, scanSpec, stringDecoderZeroCopy);
+  auto readers = makeReaders(input, scanSpec);
   validate(*input, *readers.rowReader, 23, [](auto) { return true; });
 }
 
@@ -1728,7 +1629,6 @@ TEST_P(SelectiveNimbleReaderTest, dictionaryAwareReadsFilterChange) {
       input,
       file,
       scanSpec,
-      stringDecoderZeroCopy(),
       /*preserveFlatMapsInMemory=*/false,
       /*lazyColumnIo=*/false,
       /*externalDictionaryResolver=*/nullptr,
@@ -1762,7 +1662,6 @@ TEST_P(SelectiveNimbleReaderTest, dictionaryAwareReadsFilterChange) {
 }
 
 TEST_P(SelectiveNimbleReaderTest, smallDictionaryValue) {
-  const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   auto c0 = makeFlatIdentityVector<int8_t>(257);
   auto input = makeRowVector({c0});
   auto scanSpec = std::make_shared<common::ScanSpec>("root");
@@ -1777,26 +1676,21 @@ TEST_P(SelectiveNimbleReaderTest, smallDictionaryValue) {
     return encodingFactory.createPolicy(dataType);
   };
   auto readers = makeReaders(
-      input,
-      test::createNimbleFile(*rootPool(), input, options),
-      scanSpec,
-      stringDecoderZeroCopy);
+      input, test::createNimbleFile(*rootPool(), input, options), scanSpec);
   validate(*input, *readers.rowReader, 257, [](auto) { return true; });
 }
 
 TEST_P(SelectiveNimbleReaderTest, constant) {
-  const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   auto c0 = makeFlatVector<std::string>(
       101, [&](auto) { return "foo"; }, nullEvery(17));
   auto input = makeRowVector({c0});
   auto scanSpec = std::make_shared<common::ScanSpec>("root");
   scanSpec->addAllChildFields(*input->type());
-  auto readers = makeReaders(input, scanSpec, stringDecoderZeroCopy);
+  auto readers = makeReaders(input, scanSpec);
   validate(*input, *readers.rowReader, 23, [](auto) { return true; });
 }
 
 TEST_P(SelectiveNimbleReaderTest, array) {
-  const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   runTestCase(
       [&](bool hasNulls) {
         return makeArrayVector<double>(
@@ -1807,19 +1701,17 @@ TEST_P(SelectiveNimbleReaderTest, array) {
       },
       common::IsNotNull(),
       5,
-      [](auto& data, auto i) { return !data->isNullAt(i); },
-      stringDecoderZeroCopy);
+      [](auto& data, auto i) { return !data->isNullAt(i); });
 }
 
 TEST_P(SelectiveNimbleReaderTest, arrayPruning) {
-  const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   auto input = makeRowVector({
       makeArrayVector<int64_t>({{1, 2, 3, 4, 5}, {1, 2}}),
   });
   auto scanSpec = std::make_shared<common::ScanSpec>("root");
   scanSpec->addAllChildFields(*input->type());
   scanSpec->childByName("c0")->setMaxArrayElementsCount(3);
-  auto readers = makeReaders(input, scanSpec, stringDecoderZeroCopy);
+  auto readers = makeReaders(input, scanSpec);
   auto expected = makeRowVector({
       makeArrayVector<int64_t>({{1, 2, 3}, {1, 2}}),
   });
@@ -1827,7 +1719,6 @@ TEST_P(SelectiveNimbleReaderTest, arrayPruning) {
 }
 
 TEST_P(SelectiveNimbleReaderTest, arrayElementFilter) {
-  const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   auto input = makeRowVector({
       makeArrayVector<int64_t>({{1, 2, 3, 4, 5}, {6, 7, 8, 9, 10}}),
   });
@@ -1836,7 +1727,7 @@ TEST_P(SelectiveNimbleReaderTest, arrayElementFilter) {
   scanSpec->childByName("c0")
       ->childByName(common::ScanSpec::kArrayElementsFieldName)
       ->setFilter(std::make_unique<common::BigintRange>(4, 7, false));
-  auto readers = makeReaders(input, scanSpec, stringDecoderZeroCopy);
+  auto readers = makeReaders(input, scanSpec);
   auto expected = makeRowVector({makeArrayVector<int64_t>({
       {4, 5},
       {6, 7},
@@ -1845,7 +1736,6 @@ TEST_P(SelectiveNimbleReaderTest, arrayElementFilter) {
 }
 
 TEST_P(SelectiveNimbleReaderTest, map) {
-  const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   runTestCase(
       [&](bool hasNulls) {
         return makeMapVector<int64_t, double>(
@@ -1857,12 +1747,10 @@ TEST_P(SelectiveNimbleReaderTest, map) {
       },
       common::IsNotNull(),
       5,
-      [](auto& data, auto i) { return !data->isNullAt(i); },
-      stringDecoderZeroCopy);
+      [](auto& data, auto i) { return !data->isNullAt(i); });
 }
 
 TEST_P(SelectiveNimbleReaderTest, mapKeyFilter) {
-  const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   auto input = makeRowVector({makeMapVector<int64_t, double>({
       {{1, 0.5}, {2, 1.0}, {3, 1.5}, {4, 2.0}, {5, 2.5}},
       {{6, 3.0}, {7, 3.5}, {20, 10.0}},
@@ -1872,7 +1760,7 @@ TEST_P(SelectiveNimbleReaderTest, mapKeyFilter) {
   scanSpec->childByName("c0")
       ->childByName(common::ScanSpec::kMapKeysFieldName)
       ->setFilter(std::make_unique<common::BigintRange>(4, 10, false));
-  auto readers = makeReaders(input, scanSpec, stringDecoderZeroCopy);
+  auto readers = makeReaders(input, scanSpec);
   auto expected = makeRowVector({makeMapVector<int64_t, double>({
       {{4, 2.0}, {5, 2.5}},
       {{6, 3.0}, {7, 3.5}},
@@ -1881,7 +1769,6 @@ TEST_P(SelectiveNimbleReaderTest, mapKeyFilter) {
 }
 
 TEST_P(SelectiveNimbleReaderTest, mapValueFilter) {
-  const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   auto input = makeRowVector({makeMapVector<int64_t, double>({
       {{1, 0.5}, {2, 1.0}, {3, 1.5}, {4, 2.0}, {5, 2.5}},
       {{6, 3.0}, {7, 3.5}, {20, 10.0}},
@@ -1893,7 +1780,7 @@ TEST_P(SelectiveNimbleReaderTest, mapValueFilter) {
       ->setFilter(
           std::make_unique<common::DoubleRange>(
               2.0, false, false, 5.0, false, true, false));
-  auto readers = makeReaders(input, scanSpec, stringDecoderZeroCopy);
+  auto readers = makeReaders(input, scanSpec);
   auto expected = makeRowVector({makeMapVector<int64_t, double>({
       {{4, 2.0}, {5, 2.5}},
       {{6, 3.0}, {7, 3.5}},
@@ -1902,7 +1789,6 @@ TEST_P(SelectiveNimbleReaderTest, mapValueFilter) {
 }
 
 TEST_P(SelectiveNimbleReaderTest, estimatedRowSize) {
-  const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   constexpr int kSize = 13;
   auto input = makeRowVector({
       makeFlatVector<bool>(
@@ -1925,8 +1811,7 @@ TEST_P(SelectiveNimbleReaderTest, estimatedRowSize) {
   WriterOptions writerOptions;
   writerOptions.flatMapColumns = {{"c2", {}}};
   auto fileContent = test::createNimbleFile(*rootPool(), input, writerOptions);
-  auto readers =
-      makeReaders(input, fileContent, scanSpec, stringDecoderZeroCopy);
+  auto readers = makeReaders(input, fileContent, scanSpec);
   auto estimatedRowSize = readers.rowReader->estimatedRowSize();
   ASSERT_TRUE(estimatedRowSize.has_value());
   ASSERT_EQ(*estimatedRowSize, 37);
@@ -1974,13 +1859,12 @@ TEST_P(SelectiveNimbleReaderTest, estimatedRowSize) {
 }
 
 TEST_P(SelectiveNimbleReaderTest, estimatedRowSizeNullableString) {
-  const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   auto input = makeRowVector({
       makeNullableFlatVector<std::string>({{"foo"}, std::nullopt, {"bar"}}),
   });
   auto scanSpec = std::make_shared<common::ScanSpec>("root");
   scanSpec->addAllChildFields(*input->type());
-  auto readers = makeReaders(input, scanSpec, stringDecoderZeroCopy);
+  auto readers = makeReaders(input, scanSpec);
   auto estimatedRowSize = readers.rowReader->estimatedRowSize();
   ASSERT_TRUE(estimatedRowSize.has_value());
   ASSERT_EQ(*estimatedRowSize, 2);
@@ -1990,7 +1874,6 @@ TEST_P(SelectiveNimbleReaderTest, estimatedRowSizeNullableString) {
 // Verifies that estimatedRowSize only counts projected columns, not all
 // columns in the file.
 TEST_P(SelectiveNimbleReaderTest, estimatedRowSizePartialProjection) {
-  const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   constexpr int kSize = 100;
   auto input = makeRowVector({
       makeFlatIdentityVector<int64_t>(kSize),
@@ -2004,8 +1887,7 @@ TEST_P(SelectiveNimbleReaderTest, estimatedRowSizePartialProjection) {
   {
     auto allSpec = std::make_shared<common::ScanSpec>("root");
     allSpec->addAllChildFields(*input->type());
-    auto readers =
-        makeReaders(input, fileContent, allSpec, stringDecoderZeroCopy);
+    auto readers = makeReaders(input, fileContent, allSpec);
     auto allSize = readers.rowReader->estimatedRowSize();
     ASSERT_TRUE(allSize.has_value());
     ASSERT_EQ(*allSize, 20);
@@ -2038,7 +1920,6 @@ TEST_P(SelectiveNimbleReaderTest, estimatedRowSizePartialProjection) {
 // Verifies estimatedRowSize for nested types (array, map) uses the
 // already-rolled-up column stats without double-counting.
 TEST_P(SelectiveNimbleReaderTest, estimatedRowSizeNestedTypes) {
-  const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   constexpr int kSize = 20;
 
   // Array<int64_t> with 3 elements each.
@@ -2052,7 +1933,7 @@ TEST_P(SelectiveNimbleReaderTest, estimatedRowSizeNestedTypes) {
     });
     auto scanSpec = std::make_shared<common::ScanSpec>("root");
     scanSpec->addAllChildFields(*input->type());
-    auto readers = makeReaders(input, scanSpec, stringDecoderZeroCopy);
+    auto readers = makeReaders(input, scanSpec);
     auto estimatedRowSize = readers.rowReader->estimatedRowSize();
     ASSERT_TRUE(estimatedRowSize.has_value());
     // At least 24 bytes per row (3 elements * 8 bytes each).
@@ -2073,7 +1954,7 @@ TEST_P(SelectiveNimbleReaderTest, estimatedRowSizeNestedTypes) {
     });
     auto scanSpec = std::make_shared<common::ScanSpec>("root");
     scanSpec->addAllChildFields(*input->type());
-    auto readers = makeReaders(input, scanSpec, stringDecoderZeroCopy);
+    auto readers = makeReaders(input, scanSpec);
     auto estimatedRowSize = readers.rowReader->estimatedRowSize();
     ASSERT_TRUE(estimatedRowSize.has_value());
     // At least 24 bytes per row (2 * (4 + 8)).
@@ -2086,7 +1967,6 @@ TEST_P(SelectiveNimbleReaderTest, estimatedRowSizeNestedTypes) {
 // Projects only one subfield of a nested struct, ensuring we don't count the
 // entire struct's rolled-up logicalSize.
 TEST_P(SelectiveNimbleReaderTest, estimatedRowSizeNestedRowPartialProjection) {
-  const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   constexpr int kSize = 100;
 
   // Schema: ROW{a: BIGINT, b: ROW{x: INT, y: DOUBLE}}
@@ -2104,8 +1984,7 @@ TEST_P(SelectiveNimbleReaderTest, estimatedRowSizeNestedRowPartialProjection) {
   {
     auto allSpec = std::make_shared<common::ScanSpec>("root");
     allSpec->addAllChildFields(*input->type());
-    auto readers =
-        makeReaders(input, fileContent, allSpec, stringDecoderZeroCopy);
+    auto readers = makeReaders(input, fileContent, allSpec);
     auto allSize = readers.rowReader->estimatedRowSize();
     ASSERT_TRUE(allSize.has_value());
     auto fullSize = *allSize;
@@ -2142,7 +2021,6 @@ TEST_P(SelectiveNimbleReaderTest, estimatedRowSizeNestedRowPartialProjection) {
 // Verifies estimatedRowSize with nullable nested types includes null overhead
 // from intermediate container nodes.
 TEST_P(SelectiveNimbleReaderTest, estimatedRowSizeNullableNested) {
-  const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   constexpr int kSize = 100;
 
   // Nested ROW with 50% nulls — the null overhead should be reflected.
@@ -2151,7 +2029,7 @@ TEST_P(SelectiveNimbleReaderTest, estimatedRowSizeNullableNested) {
   });
   auto scanSpec = std::make_shared<common::ScanSpec>("root");
   scanSpec->addAllChildFields(*input->type());
-  auto readers = makeReaders(input, scanSpec, stringDecoderZeroCopy);
+  auto readers = makeReaders(input, scanSpec);
   auto estimatedRowSize = readers.rowReader->estimatedRowSize();
   ASSERT_TRUE(estimatedRowSize.has_value());
   // With 50% nulls on the outer ROW, the non-null rows contribute int64 (8)
@@ -2162,7 +2040,6 @@ TEST_P(SelectiveNimbleReaderTest, estimatedRowSizeNullableNested) {
 // Verifies that estimatedRowSize falls back gracefully when vectorized stats
 // are not available in the file.
 TEST_P(SelectiveNimbleReaderTest, estimatedRowSizeNoStats) {
-  const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   constexpr int kSize = 100;
   auto input = makeRowVector({
       makeFlatIdentityVector<int64_t>(kSize),
@@ -2175,8 +2052,7 @@ TEST_P(SelectiveNimbleReaderTest, estimatedRowSizeNoStats) {
 
   auto scanSpec = std::make_shared<common::ScanSpec>("root");
   scanSpec->addAllChildFields(*input->type());
-  auto readers =
-      makeReaders(input, fileContent, scanSpec, stringDecoderZeroCopy);
+  auto readers = makeReaders(input, fileContent, scanSpec);
   // The fallback may or may not return a value depending on whether
   // estimateMaterializedSize succeeds, but it should not crash.
   ASSERT_NO_THROW(readers.rowReader->estimatedRowSize());
@@ -2185,7 +2061,6 @@ TEST_P(SelectiveNimbleReaderTest, estimatedRowSizeNoStats) {
 // Lazy FlatMap child uses stream-based estimate, not RowSizeTracker
 // fallback.
 TEST_P(SelectiveNimbleReaderTest, estimatedRowSizeLazyColumn) {
-  const bool passStringBuffersFromDecoder = GetParam().stringDecoderZeroCopy;
   constexpr int kSize = 200;
 
   auto input = makeRowVector({
@@ -2211,7 +2086,6 @@ TEST_P(SelectiveNimbleReaderTest, estimatedRowSizeLazyColumn) {
       input,
       fileContent,
       scanSpec,
-      passStringBuffersFromDecoder,
       /*preserveFlatMapsInMemory=*/false,
       /*lazyColumnIo=*/true);
 
@@ -2225,7 +2099,6 @@ TEST_P(SelectiveNimbleReaderTest, estimatedRowSizeLazyColumn) {
 
 // Map-key-only filter must not cause all children to be lazy.
 TEST_P(SelectiveNimbleReaderTest, estimatedRowSizeMapKeyFilterOnly) {
-  const bool passStringBuffersFromDecoder = GetParam().stringDecoderZeroCopy;
   constexpr int kSize = 200;
 
   auto input = makeRowVector({
@@ -2256,7 +2129,6 @@ TEST_P(SelectiveNimbleReaderTest, estimatedRowSizeMapKeyFilterOnly) {
       input,
       fileContent,
       scanSpec,
-      passStringBuffersFromDecoder,
       /*preserveFlatMapsInMemory=*/false,
       /*lazyColumnIo=*/true);
 
@@ -2271,7 +2143,6 @@ TEST_P(SelectiveNimbleReaderTest, estimatedRowSizeMapKeyFilterOnly) {
 // Lazy VARCHAR MAP column: estimate doesn't crash on string decoder,
 // laziness is preserved (data reads correctly after estimate).
 TEST_P(SelectiveNimbleReaderTest, estimatedRowSizeLazyStringColumn) {
-  const bool passStringBuffersFromDecoder = GetParam().stringDecoderZeroCopy;
   constexpr int kSize = 200;
 
   auto input = makeRowVector({
@@ -2301,7 +2172,6 @@ TEST_P(SelectiveNimbleReaderTest, estimatedRowSizeLazyStringColumn) {
       input,
       fileContent,
       scanSpec,
-      passStringBuffersFromDecoder,
       /*preserveFlatMapsInMemory=*/false,
       /*lazyColumnIo=*/true);
 
@@ -2316,7 +2186,6 @@ TEST_P(SelectiveNimbleReaderTest, estimatedRowSizeLazyStringColumn) {
 // All columns lazy (no scalar projected): estimateMaterializedSize returns
 // false gracefully when rowCount=0, doesn't crash.
 TEST_P(SelectiveNimbleReaderTest, estimatedRowSizeAllLazy) {
-  const bool passStringBuffersFromDecoder = GetParam().stringDecoderZeroCopy;
   constexpr int kSize = 200;
 
   auto input = makeRowVector({
@@ -2339,7 +2208,6 @@ TEST_P(SelectiveNimbleReaderTest, estimatedRowSizeAllLazy) {
       input,
       fileContent,
       scanSpec,
-      passStringBuffersFromDecoder,
       /*preserveFlatMapsInMemory=*/false,
       /*lazyColumnIo=*/true);
 
@@ -2351,7 +2219,6 @@ TEST_P(SelectiveNimbleReaderTest, estimatedRowSizeAllLazy) {
 
 // Lazy VARCHAR MAP with vectorized stats enabled and disabled.
 TEST_P(SelectiveNimbleReaderTest, estimatedRowSizeLazyStringWithStats) {
-  const bool passStringBuffersFromDecoder = GetParam().stringDecoderZeroCopy;
   constexpr int kSize = 200;
 
   auto input = makeRowVector({
@@ -2384,7 +2251,6 @@ TEST_P(SelectiveNimbleReaderTest, estimatedRowSizeLazyStringWithStats) {
         input,
         fileContent,
         scanSpec,
-        passStringBuffersFromDecoder,
         /*preserveFlatMapsInMemory=*/false,
         /*lazyColumnIo=*/true);
 
@@ -2397,59 +2263,48 @@ TEST_P(SelectiveNimbleReaderTest, estimatedRowSizeLazyStringWithStats) {
 }
 
 TEST_P(SelectiveNimbleReaderTest, arrayWithOffsetsLastRunFilteredOut) {
-  const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   checkArrayWithOffsets(
       {NullableArrayData{1}, NullableArrayData{}, NullableArrayData{}},
       {false, true, true},
-      {1, 1, 1},
-      stringDecoderZeroCopy);
+      {1, 1, 1});
 }
 
 TEST_P(SelectiveNimbleReaderTest, arrayWithOffsetsLastRunNotLoaded) {
-  const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   checkArrayWithOffsets(
       {std::vector<std::optional<int64_t>>{1},
        std::nullopt,
        std::vector<std::optional<int64_t>>{1}},
       {false, true, true},
-      {1, 1, 1},
-      stringDecoderZeroCopy);
+      {1, 1, 1});
 }
 
 TEST_P(SelectiveNimbleReaderTest, arrayWithOffsetsNoSeekBackward) {
-  const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   checkArrayWithOffsets(
       {std::vector<std::optional<int64_t>>{1},
        std::nullopt,
        std::vector<std::optional<int64_t>>{1}},
       {},
-      {1, 1, 1},
-      stringDecoderZeroCopy);
+      {1, 1, 1});
 }
 
 TEST_P(SelectiveNimbleReaderTest, arrayWithOffsetsLastRunResize) {
-  const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   checkArrayWithOffsets(
       {NullableArrayData{1},
        NullableArrayData{1},
        NullableArrayData{},
        NullableArrayData{}},
       {},
-      {1, 2, 1},
-      stringDecoderZeroCopy);
+      {1, 2, 1});
 }
 
 // Exercises the dense fast path in makeNestedRowSet and setAlphabet: all rows
 // are selected, selectedIndices_ is dense, and nestedRows_ is built via iota.
 TEST_P(SelectiveNimbleReaderTest, arrayWithOffsetsDenseAllSelected) {
-  const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
-  checkArrayWithOffsets(
-      {{{1, 2}}, {{3, 4}}, {{5, 6}}, {{7, 8}}}, {}, {4}, stringDecoderZeroCopy);
+  checkArrayWithOffsets({{{1, 2}}, {{3, 4}}, {{5, 6}}, {{7, 8}}}, {}, {4});
 }
 
 // Dense path across multiple batches: nestedRows built via iota on each batch.
 TEST_P(SelectiveNimbleReaderTest, arrayWithOffsetsDenseMultiBatch) {
-  const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   checkArrayWithOffsets(
       {std::vector<std::optional<int64_t>>{1},
        std::vector<std::optional<int64_t>>{2},
@@ -2458,24 +2313,18 @@ TEST_P(SelectiveNimbleReaderTest, arrayWithOffsetsDenseMultiBatch) {
        std::vector<std::optional<int64_t>>{5},
        std::vector<std::optional<int64_t>>{6}},
       {},
-      {2, 2, 2},
-      stringDecoderZeroCopy);
+      {2, 2, 2});
 }
 
 // Dense path with nulls interspersed: nulls are not part of the alphabet, so
 // selectedIndices_ remains dense for the non-null entries.
 TEST_P(SelectiveNimbleReaderTest, arrayWithOffsetsDenseWithNulls) {
-  const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   checkArrayWithOffsets(
-      {{{1, 2}}, std::nullopt, {{3, 4}}, std::nullopt, {{5, 6}}},
-      {},
-      {5},
-      stringDecoderZeroCopy);
+      {{{1, 2}}, std::nullopt, {{3, 4}}, std::nullopt, {{5, 6}}}, {}, {5});
 }
 
 // Dense path with empty arrays: empty arrays still occupy alphabet entries.
 TEST_P(SelectiveNimbleReaderTest, arrayWithOffsetsDenseWithEmpties) {
-  const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   checkArrayWithOffsets(
       {std::vector<std::optional<int64_t>>{},
        std::vector<std::optional<int64_t>>{1},
@@ -2483,33 +2332,24 @@ TEST_P(SelectiveNimbleReaderTest, arrayWithOffsetsDenseWithEmpties) {
        std::vector<std::optional<int64_t>>{2},
        std::vector<std::optional<int64_t>>{}},
       {},
-      {5},
-      stringDecoderZeroCopy);
+      {5});
 }
 
 // When subfield pruning is enabled, the dense fast path in makeNestedRowSet is
 // disabled (nestedRowsAllSelected is false), exercising the non-dense path even
 // though all rows are selected.
 TEST_P(SelectiveNimbleReaderTest, arrayWithOffsetsDenseWithSubfieldPruning) {
-  const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
-  checkArrayWithOffsets(
-      {{{1, 2, 3}}, {{4, 5, 6}}, {{7, 8, 9}}},
-      {},
-      {3},
-      stringDecoderZeroCopy,
-      2);
+  checkArrayWithOffsets({{{1, 2, 3}}, {{4, 5, 6}}, {{7, 8, 9}}}, {}, {3}, 2);
 }
 
 // Filter drops first rows, making selectedIndices_ sparse.  Exercises the
 // non-dense (original) path in both makeNestedRowSet and setAlphabet, as a
 // contrast to the dense cases above.
 TEST_P(SelectiveNimbleReaderTest, arrayWithOffsetsSparseFilter) {
-  const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   checkArrayWithOffsets(
       {{{1, 2}}, {{3, 4}}, {{5, 6}}, {{7, 8}}},
       {false, true, false, true},
-      {2, 2},
-      stringDecoderZeroCopy);
+      {2, 2});
 }
 
 // --- Batch boundary interaction tests for the dense fast path ---
@@ -2521,19 +2361,13 @@ TEST_P(SelectiveNimbleReaderTest, arrayWithOffsetsSparseFilter) {
 // the end of batch 1 and start of batch 2, triggering startFromLastRun_=true
 // and copyLastRun_=true in batch 2.
 TEST_P(SelectiveNimbleReaderTest, arrayWithOffsetsDenseContinuedRun) {
-  const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
-  checkArrayWithOffsets(
-      {{{1, 2}}, {{1, 2}}, {{3, 4}}, {{3, 4}}},
-      {},
-      {2, 2},
-      stringDecoderZeroCopy);
+  checkArrayWithOffsets({{{1, 2}}, {{1, 2}}, {{3, 4}}, {{3, 4}}}, {}, {2, 2});
 }
 
 // Single-row batches through a dense deduplicated sequence: every batch
 // boundary triggers the last-run cache. Forces copyLastRun_ or skipLastRun
 // transitions on every read.
 TEST_P(SelectiveNimbleReaderTest, arrayWithOffsetsDenseSingleRowBatches) {
-  const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   checkArrayWithOffsets(
       {std::vector<std::optional<int64_t>>{1},
        std::vector<std::optional<int64_t>>{2},
@@ -2541,14 +2375,12 @@ TEST_P(SelectiveNimbleReaderTest, arrayWithOffsetsDenseSingleRowBatches) {
        std::vector<std::optional<int64_t>>{4},
        std::vector<std::optional<int64_t>>{5}},
       {},
-      {1, 1, 1, 1, 1},
-      stringDecoderZeroCopy);
+      {1, 1, 1, 1, 1});
 }
 
 // Single-row batches with duplicate values: adjacent rows share the same
 // alphabet entry, so the run spans batch boundaries repeatedly.
 TEST_P(SelectiveNimbleReaderTest, arrayWithOffsetsDenseSingleRowDuplicates) {
-  const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   checkArrayWithOffsets(
       {std::vector<std::optional<int64_t>>{1},
        std::vector<std::optional<int64_t>>{1},
@@ -2557,8 +2389,7 @@ TEST_P(SelectiveNimbleReaderTest, arrayWithOffsetsDenseSingleRowDuplicates) {
        std::vector<std::optional<int64_t>>{3},
        std::vector<std::optional<int64_t>>{3}},
       {},
-      {1, 1, 1, 1, 1, 1},
-      stringDecoderZeroCopy);
+      {1, 1, 1, 1, 1, 1});
 }
 
 // Last run unloaded then new run: batch 1 reads row 0, the alphabet has
@@ -2567,19 +2398,14 @@ TEST_P(SelectiveNimbleReaderTest, arrayWithOffsetsDenseSingleRowDuplicates) {
 // (startFromLastRun_=false), so skipLastRun=true, disabling the dense path.
 // Batch 3 continues normally. This tests the transition through skipLastRun.
 TEST_P(SelectiveNimbleReaderTest, arrayWithOffsetsDenseSkipLastRunTransition) {
-  const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   checkArrayWithOffsets(
-      {{{1, 2}}, {{3, 4}}, {{5, 6}}, {{7, 8}}, {{9, 10}}},
-      {},
-      {1, 1, 1, 1, 1},
-      stringDecoderZeroCopy);
+      {{{1, 2}}, {{3, 4}}, {{5, 6}}, {{7, 8}}, {{9, 10}}}, {}, {1, 1, 1, 1, 1});
 }
 
 // Uneven batch sizes splitting deduplicated runs at different points. Tests
 // that the dense path and last-run cache interact correctly when batches are
 // of varying sizes.
 TEST_P(SelectiveNimbleReaderTest, arrayWithOffsetsDenseUnevenBatches) {
-  const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   checkArrayWithOffsets(
       {std::vector<std::optional<int64_t>>{1},
        std::vector<std::optional<int64_t>>{2},
@@ -2589,15 +2415,13 @@ TEST_P(SelectiveNimbleReaderTest, arrayWithOffsetsDenseUnevenBatches) {
        std::vector<std::optional<int64_t>>{3},
        std::vector<std::optional<int64_t>>{4}},
       {},
-      {1, 3, 2, 1},
-      stringDecoderZeroCopy);
+      {1, 3, 2, 1});
 }
 
 // Null at batch boundary: batch 1 ends with a non-null, batch 2 starts with
 // a null. Nulls are not in the alphabet, so this tests that the dense path
 // handles the boundary when the alphabet is smaller than the row count.
 TEST_P(SelectiveNimbleReaderTest, arrayWithOffsetsDenseNullAtBatchBoundary) {
-  const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   checkArrayWithOffsets(
       {std::vector<std::optional<int64_t>>{1},
        std::vector<std::optional<int64_t>>{2},
@@ -2605,24 +2429,20 @@ TEST_P(SelectiveNimbleReaderTest, arrayWithOffsetsDenseNullAtBatchBoundary) {
        std::vector<std::optional<int64_t>>{3},
        std::vector<std::optional<int64_t>>{4}},
       {},
-      {2, 1, 2},
-      stringDecoderZeroCopy);
+      {2, 1, 2});
 }
 
 // Dense multi-element arrays with run continuation: tests that offsets and
 // sizes are computed correctly in setAlphabet when a multi-element array run
 // spans a batch boundary.
 TEST_P(SelectiveNimbleReaderTest, arrayWithOffsetsDenseMultiElementContinued) {
-  const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   checkArrayWithOffsets(
       {{{1, 2, 3}}, {{1, 2, 3}}, {{4, 5}}, {{4, 5}}, {{6, 7, 8, 9}}},
       {},
-      {2, 2, 1},
-      stringDecoderZeroCopy);
+      {2, 2, 1});
 }
 
 TEST_P(SelectiveNimbleReaderTest, arrayWithOffsetsCopyLastRunAfterSkip) {
-  const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   checkArrayWithOffsets(
       {std::vector<std::optional<int64_t>>{1},
        std::vector<std::optional<int64_t>>{1},
@@ -2630,12 +2450,10 @@ TEST_P(SelectiveNimbleReaderTest, arrayWithOffsetsCopyLastRunAfterSkip) {
        std::nullopt,
        std::vector<std::optional<int64_t>>{3}},
       {true, false, false, true, true},
-      {1, 2, 1, 1},
-      stringDecoderZeroCopy);
+      {1, 2, 1, 1});
 }
 
 TEST_P(SelectiveNimbleReaderTest, arrayWithOffsetsSubfieldPruning) {
-  const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   checkArrayWithOffsets(
       {std::vector<std::optional<int64_t>>{1, 2},
        std::vector<std::optional<int64_t>>{1, 2},
@@ -2644,24 +2462,20 @@ TEST_P(SelectiveNimbleReaderTest, arrayWithOffsetsSubfieldPruning) {
        std::vector<std::optional<int64_t>>{1, 2, 3}},
       {},
       {1, 1, 3},
-      stringDecoderZeroCopy,
       1);
 }
 
 TEST_P(SelectiveNimbleReaderTest, arrayWithOffsetsLastRunFilteredOutAfterRead) {
-  const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   checkArrayWithOffsets(
       {std::vector<std::optional<int64_t>>{1},
        std::vector<std::optional<int64_t>>{1}},
       {false, true},
       {1, 1},
-      stringDecoderZeroCopy,
       std::nullopt,
       true);
 }
 
 TEST_P(SelectiveNimbleReaderTest, arrayWithOffsetsReuseNullResult) {
-  const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   auto vector = makeRowVector({
       std::make_shared<MapVector>(
           pool(),
@@ -2688,14 +2502,12 @@ TEST_P(SelectiveNimbleReaderTest, arrayWithOffsetsReuseNullResult) {
   auto fileContent = test::createNimbleFile(*rootPool(), vector, writerOptions);
   auto scanSpec = std::make_shared<common::ScanSpec>("root");
   scanSpec->addAllChildFields(*vector->type());
-  auto readers =
-      makeReaders(vector, fileContent, scanSpec, stringDecoderZeroCopy);
+  auto readers = makeReaders(vector, fileContent, scanSpec);
   validate(*vector, *readers.rowReader, 2, [](auto) { return true; });
 }
 
 /*
 TEST_P(SelectiveNimbleReaderTest, arrayWithOffsetsLastRowSetLifeCycle) {
-  const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   std::vector<std::optional<std::vector<std::optional<int64_t>>>> c0, c1, c2;
   // First batch, one row after filtering, and allocate outputRows_ with a
   // smaller size.
@@ -2747,7 +2559,7 @@ TEST_P(SelectiveNimbleReaderTest, arrayWithOffsetsLastRowSetLifeCycle) {
   scanSpec->childByName("c2")->setFilter(std::make_shared<common::IsNotNull>());
   scanSpec->disableStatsBasedFilterReorder();
   auto readers =
-      makeReaders(vector, fileContent, scanSpec, stringDecoderZeroCopy);
+      makeReaders(vector, fileContent, scanSpec);
   validate(*vector, *readers.rowReader, 17, [](auto i) {
     return i == 16 || i >= 34;
   });
@@ -2755,7 +2567,6 @@ TEST_P(SelectiveNimbleReaderTest, arrayWithOffsetsLastRowSetLifeCycle) {
 */
 
 TEST_P(SelectiveNimbleReaderTest, slidingWindowMapSubfieldPruning) {
-  const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   common::BigintRange keyFilter(2, 2, false);
   checkSlidingWindowMap(
       {
@@ -2768,12 +2579,10 @@ TEST_P(SelectiveNimbleReaderTest, slidingWindowMapSubfieldPruning) {
       },
       {},
       &keyFilter,
-      {1, 1, 2, 2},
-      stringDecoderZeroCopy);
+      {1, 1, 2, 2});
 }
 
 TEST_P(SelectiveNimbleReaderTest, slidingWindowMapLengthDedup) {
-  const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   checkSlidingWindowMap(
       {
           {{{1, {2}}}},
@@ -2784,13 +2593,11 @@ TEST_P(SelectiveNimbleReaderTest, slidingWindowMapLengthDedup) {
       },
       {},
       nullptr,
-      {3, 1, 1},
-      stringDecoderZeroCopy);
+      {3, 1, 1});
 }
 
 // Dense path for deduplicated maps: all rows selected, no filter, single batch.
 TEST_P(SelectiveNimbleReaderTest, slidingWindowMapDenseAllSelected) {
-  const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   checkSlidingWindowMap(
       {
           {{{1, {10}}, {2, {20}}}},
@@ -2799,13 +2606,11 @@ TEST_P(SelectiveNimbleReaderTest, slidingWindowMapDenseAllSelected) {
       },
       {},
       nullptr,
-      {3},
-      stringDecoderZeroCopy);
+      {3});
 }
 
 // Dense path for deduplicated maps across multiple batches.
 TEST_P(SelectiveNimbleReaderTest, slidingWindowMapDenseMultiBatch) {
-  const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   checkSlidingWindowMap(
       {
           {{{1, {10}}}},
@@ -2815,13 +2620,11 @@ TEST_P(SelectiveNimbleReaderTest, slidingWindowMapDenseMultiBatch) {
       },
       {},
       nullptr,
-      {2, 2},
-      stringDecoderZeroCopy);
+      {2, 2});
 }
 
 // Dense path with nulls: selectedIndices_ stays dense for non-null entries.
 TEST_P(SelectiveNimbleReaderTest, slidingWindowMapDenseWithNulls) {
-  const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   checkSlidingWindowMap(
       {
           {{{1, {10}}}},
@@ -2832,13 +2635,11 @@ TEST_P(SelectiveNimbleReaderTest, slidingWindowMapDenseWithNulls) {
       },
       {},
       nullptr,
-      {5},
-      stringDecoderZeroCopy);
+      {5});
 }
 
 // Sparse filter on deduplicated maps: exercises the non-dense fallback.
 TEST_P(SelectiveNimbleReaderTest, slidingWindowMapSparseFilter) {
-  const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   checkSlidingWindowMap(
       {
           {{{1, {10}}}},
@@ -2848,23 +2649,15 @@ TEST_P(SelectiveNimbleReaderTest, slidingWindowMapSparseFilter) {
       },
       {true, false, true, false},
       nullptr,
-      {2, 2},
-      stringDecoderZeroCopy);
+      {2, 2});
 }
 
 TEST_P(SelectiveNimbleReaderTest, slidingWindowMapLastRunFilteredOutAfterRead) {
-  const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   checkSlidingWindowMap(
-      {{{{1, {2}}}}, {{{1, {2}}}}},
-      {false, true},
-      nullptr,
-      {1, 1},
-      stringDecoderZeroCopy,
-      true);
+      {{{{1, {2}}}}, {{{1, {2}}}}}, {false, true}, nullptr, {1, 1}, true);
 }
 
 TEST_P(SelectiveNimbleReaderTest, schemaEvolutionRealToDouble) {
-  const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   runTestCase(
       [&](bool hasNulls) {
         return makeFlatVector<float>(
@@ -2875,7 +2668,6 @@ TEST_P(SelectiveNimbleReaderTest, schemaEvolutionRealToDouble) {
       common::DoubleRange(-INFINITY, true, false, 0.5, false, false, false),
       23,
       [&](auto& data, auto i) { return !data->isNullAt(i) && sin(i) <= 0.5; },
-      stringDecoderZeroCopy,
       [&](bool hasNulls) {
         return makeFlatVector<double>(
             101,
@@ -2885,7 +2677,6 @@ TEST_P(SelectiveNimbleReaderTest, schemaEvolutionRealToDouble) {
 }
 
 TEST_P(SelectiveNimbleReaderTest, schemaEvolutionBoolToTinyint) {
-  const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   runTestCase(
       [&](bool hasNulls) {
         return makeFlatVector<bool>(
@@ -2896,7 +2687,6 @@ TEST_P(SelectiveNimbleReaderTest, schemaEvolutionBoolToTinyint) {
       common::BigintRange(1, 100, false),
       23,
       [&](auto& data, auto i) { return !data->isNullAt(i) && i % 3 == 0; },
-      stringDecoderZeroCopy,
       [&](bool hasNulls) {
         return makeFlatVector<int8_t>(
             101,
@@ -2906,7 +2696,6 @@ TEST_P(SelectiveNimbleReaderTest, schemaEvolutionBoolToTinyint) {
 }
 
 TEST_P(SelectiveNimbleReaderTest, schemaEvolutionBoolToBigint) {
-  const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   runTestCase(
       [&](bool hasNulls) {
         return makeFlatVector<bool>(
@@ -2917,7 +2706,6 @@ TEST_P(SelectiveNimbleReaderTest, schemaEvolutionBoolToBigint) {
       common::BigintRange(1, 100, false),
       23,
       [&](auto& data, auto i) { return !data->isNullAt(i) && i % 3 == 0; },
-      stringDecoderZeroCopy,
       [&](bool hasNulls) {
         return makeFlatVector<int64_t>(
             101,
@@ -2927,7 +2715,6 @@ TEST_P(SelectiveNimbleReaderTest, schemaEvolutionBoolToBigint) {
 }
 
 TEST_P(SelectiveNimbleReaderTest, schemaEvolutionTinyintToBigint) {
-  const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   runTestCase(
       [&](bool hasNulls) {
         return makeFlatVector<int8_t>(
@@ -2938,7 +2725,6 @@ TEST_P(SelectiveNimbleReaderTest, schemaEvolutionTinyintToBigint) {
       [&](auto& data, auto i) {
         return !data->isNullAt(i) && 20 <= i && i <= 80;
       },
-      stringDecoderZeroCopy,
       [&](bool hasNulls) {
         return makeFlatVector<int64_t>(
             101, [](auto i) { return i; }, hasNulls ? nullEvery(11) : nullptr);
@@ -2946,7 +2732,6 @@ TEST_P(SelectiveNimbleReaderTest, schemaEvolutionTinyintToBigint) {
 }
 
 TEST_P(SelectiveNimbleReaderTest, schemaEvolutionIntegerToBigint) {
-  const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   runTestCase(
       [&](bool hasNulls) {
         return makeFlatVector<int32_t>(
@@ -2957,7 +2742,6 @@ TEST_P(SelectiveNimbleReaderTest, schemaEvolutionIntegerToBigint) {
       [&](auto& data, auto i) {
         return !data->isNullAt(i) && 20 <= i && i <= 80;
       },
-      stringDecoderZeroCopy,
       [&](bool hasNulls) {
         return makeFlatVector<int64_t>(
             101, [](auto i) { return i; }, hasNulls ? nullEvery(11) : nullptr);
@@ -2965,7 +2749,6 @@ TEST_P(SelectiveNimbleReaderTest, schemaEvolutionIntegerToBigint) {
 }
 
 TEST_P(SelectiveNimbleReaderTest, schemaEvolutionAddPrimitiveField) {
-  const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   runTestCase(
       [&](bool hasNulls) {
         return makeRowVector(
@@ -2977,7 +2760,6 @@ TEST_P(SelectiveNimbleReaderTest, schemaEvolutionAddPrimitiveField) {
       common::IsNotNull(),
       23,
       [&](auto& data, auto i) { return !data->isNullAt(i); },
-      stringDecoderZeroCopy,
       [&](bool hasNulls) {
         return makeRowVector(
             {
@@ -2989,7 +2771,6 @@ TEST_P(SelectiveNimbleReaderTest, schemaEvolutionAddPrimitiveField) {
 }
 
 TEST_P(SelectiveNimbleReaderTest, schemaEvolutionAddComplexField) {
-  const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   runTestCase(
       [&](bool hasNulls) {
         return makeRowVector(
@@ -3001,7 +2782,6 @@ TEST_P(SelectiveNimbleReaderTest, schemaEvolutionAddComplexField) {
       common::IsNotNull(),
       23,
       [&](auto& data, auto i) { return !data->isNullAt(i); },
-      stringDecoderZeroCopy,
       [&](bool hasNulls) {
         return makeRowVector(
             {
@@ -3013,7 +2793,6 @@ TEST_P(SelectiveNimbleReaderTest, schemaEvolutionAddComplexField) {
 }
 
 TEST_P(SelectiveNimbleReaderTest, schemaEvolutionAddNestedStruct) {
-  const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   runTestCase(
       [&](bool hasNulls) {
         return makeRowVector(
@@ -3028,7 +2807,6 @@ TEST_P(SelectiveNimbleReaderTest, schemaEvolutionAddNestedStruct) {
       common::IsNotNull(),
       23,
       [&](auto& data, auto i) { return !data->isNullAt(i); },
-      stringDecoderZeroCopy,
       [&](bool hasNulls) {
         return makeRowVector(
             {
@@ -3045,7 +2823,6 @@ TEST_P(SelectiveNimbleReaderTest, schemaEvolutionAddNestedStruct) {
 }
 
 TEST_P(SelectiveNimbleReaderTest, schemaEvolutionFilterOnMissingSubfield) {
-  const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   // Toplevel missing fields are checked and the whole file is potentially
   // skipped in SplitReader::filterOnStats.  Maybe we should check subfields
   // there as well to avoid unnecessary IO.  For now let's make sure subfield is
@@ -3065,15 +2842,14 @@ TEST_P(SelectiveNimbleReaderTest, schemaEvolutionFilterOnMissingSubfield) {
       BaseVector::createNullConstant(ROW({"c1c0"}, {BIGINT()}), 1, pool()));
   auto* c1c0 = c1->childByName("c1c0");
   c1c0->setFilter(std::make_unique<common::BigintRange>(0, 50, false));
-  auto readers = makeReaders(expected, file, scanSpec, stringDecoderZeroCopy);
+  auto readers = makeReaders(expected, file, scanSpec);
   validate(*expected, *readers.rowReader, 101, [&](auto) { return false; });
   c1c0->setFilter(std::make_unique<common::BigintRange>(0, 50, true));
-  readers = makeReaders(expected, file, scanSpec, stringDecoderZeroCopy);
+  readers = makeReaders(expected, file, scanSpec);
   validate(*expected, *readers.rowReader, 101, [&](auto) { return true; });
 }
 
 TEST_P(SelectiveNimbleReaderTest, nativeFlatMap) {
-  const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   // Roundtrip test that takes a flat map vector and writes it to a file as a
   // storage flat map. Then reads the storage flat map as a flat map vector, and
   // compares with the initial input.
@@ -3086,8 +2862,7 @@ TEST_P(SelectiveNimbleReaderTest, nativeFlatMap) {
         test::createNimbleFile(*rootPool(), input, writerOptions);
     auto scanSpec = std::make_shared<common::ScanSpec>("root");
     scanSpec->addAllChildFields(*input->type());
-    auto readers =
-        makeReaders(input, fileContent, scanSpec, stringDecoderZeroCopy, true);
+    auto readers = makeReaders(input, fileContent, scanSpec, true);
 
     // We invert the order on purpose to cross-compare MapVector with
     // FlatMapVectors; logically they are the same.
@@ -3252,7 +3027,6 @@ TEST_P(SelectiveNimbleReaderTest, nativeFlatMapSharesKeyIndexAcrossBatches) {
       input,
       file,
       scanSpec,
-      stringDecoderZeroCopy(),
       /*preserveFlatMapsInMemory=*/true);
 
   VectorPtr result = BaseVector::create(input->type(), 0, pool());
@@ -3270,7 +3044,6 @@ TEST_P(SelectiveNimbleReaderTest, nativeFlatMapSharesKeyIndexAcrossBatches) {
 }
 
 TEST_P(SelectiveNimbleReaderTest, mapAsStruct) {
-  const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   auto input = makeRowVector({
       makeMapVector<int32_t, int64_t>({{{1, 4}, {2, 5}}, {{1, 6}, {3, 7}}}),
   });
@@ -3278,7 +3051,7 @@ TEST_P(SelectiveNimbleReaderTest, mapAsStruct) {
   auto spec = std::make_shared<common::ScanSpec>("<root>");
   spec->addAllChildFields(*outType);
   spec->childByName("c0")->setFlatMapAsStruct(true);
-  auto readers = makeReaders(input, spec, stringDecoderZeroCopy);
+  auto readers = makeReaders(input, spec);
   VectorPtr batch = BaseVector::create(outType, 0, pool());
   ASSERT_EQ(readers.rowReader->next(10, batch), 2);
   auto expected = makeRowVector({
@@ -3293,7 +3066,6 @@ TEST_P(SelectiveNimbleReaderTest, mapAsStruct) {
 }
 
 TEST_P(SelectiveNimbleReaderTest, mapAsStructFilterAfterRead) {
-  const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   auto input = makeRowVector({
       makeMapVector<int32_t, int64_t>({{{1, 4}, {2, 5}}, {}, {{1, 6}, {3, 7}}}),
       makeRowVector(
@@ -3307,7 +3079,7 @@ TEST_P(SelectiveNimbleReaderTest, mapAsStructFilterAfterRead) {
   c0Spec->setFlatMapAsStruct(true);
   c0Spec->setFilter(std::make_shared<common::IsNotNull>());
   spec->childByName("c1")->setFilter(std::make_shared<common::IsNotNull>());
-  auto readers = makeReaders(input, spec, stringDecoderZeroCopy);
+  auto readers = makeReaders(input, spec);
   VectorPtr batch = BaseVector::create(outType, 0, pool());
   ASSERT_EQ(readers.rowReader->next(10, batch), 3);
   auto expected = makeRowVector({
@@ -3323,13 +3095,12 @@ TEST_P(SelectiveNimbleReaderTest, mapAsStructFilterAfterRead) {
 }
 
 TEST_P(SelectiveNimbleReaderTest, mapAsStructAllEmpty) {
-  const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   auto input = makeRowVector({makeMapVector<int32_t, int64_t>({{}, {}})});
   auto outType = ROW({"c0"}, {ROW({"1"}, BIGINT())});
   auto spec = std::make_shared<common::ScanSpec>("<root>");
   spec->addAllChildFields(*outType);
   spec->childByName("c0")->setFlatMapAsStruct(true);
-  auto readers = makeReaders(input, spec, stringDecoderZeroCopy);
+  auto readers = makeReaders(input, spec);
   VectorPtr batch = BaseVector::create(outType, 0, pool());
   ASSERT_EQ(readers.rowReader->next(10, batch), 2);
   auto expected = makeRowVector({
@@ -3339,14 +3110,13 @@ TEST_P(SelectiveNimbleReaderTest, mapAsStructAllEmpty) {
 }
 
 TEST_P(SelectiveNimbleReaderTest, mapAsStructAllNulls) {
-  const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   auto input = makeRowVector(
       {makeNullableMapVector<int32_t, int64_t>({std::nullopt, std::nullopt})});
   auto outType = ROW({"c0"}, {ROW({"1"}, BIGINT())});
   auto spec = std::make_shared<common::ScanSpec>("<root>");
   spec->addAllChildFields(*outType);
   spec->childByName("c0")->setFlatMapAsStruct(true);
-  auto readers = makeReaders(input, spec, stringDecoderZeroCopy);
+  auto readers = makeReaders(input, spec);
   VectorPtr batch = BaseVector::create(outType, 0, pool());
   ASSERT_EQ(readers.rowReader->next(10, batch), 2);
   auto expected = makeRowVector({
@@ -3388,7 +3158,6 @@ TEST_P(SelectiveNimbleReaderTest, columnDecodeMetrics) {
   dwio::common::RowReaderOptions rowOptions;
   rowOptions.setScanSpec(scanSpec);
   rowOptions.setRequestedType(asRowType(input->type()));
-  rowOptions.setStringDecoderZeroCopy(true);
   rowOptions.setCollectColumnStats(true);
   rowOptions.setEagerFirstStripeLoad(true);
   auto rowReader = reader->createRowReader(rowOptions);
@@ -3435,7 +3204,6 @@ TEST_P(SelectiveNimbleReaderTest, columnDecodeMetrics) {
 TEST_P(SelectiveNimbleReaderTest, fixedBitWidthFastPathSameType) {
   // Tests that the fast path works correctly for same-type reads (int32 →
   // int32). This exercises the memcpy branch in bulkScan.
-  const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   for (bool hasNulls : {false, true}) {
     SCOPED_TRACE(fmt::format("hasNulls={}", hasNulls));
     auto data = makeFlatVector<int32_t>(
@@ -3444,7 +3212,7 @@ TEST_P(SelectiveNimbleReaderTest, fixedBitWidthFastPathSameType) {
     auto file = test::createNimbleFile(*rootPool(), input);
     auto scanSpec = std::make_shared<common::ScanSpec>("root");
     scanSpec->addAllChildFields(*input->type());
-    auto readers = makeReaders(input, file, scanSpec, stringDecoderZeroCopy);
+    auto readers = makeReaders(input, file, scanSpec);
     // Read in a single large batch to exercise the dense fast path.
     validate(*input, *readers.rowReader, 1000, -1, [](auto) { return true; });
   }
@@ -3453,7 +3221,6 @@ TEST_P(SelectiveNimbleReaderTest, fixedBitWidthFastPathSameType) {
 TEST_P(SelectiveNimbleReaderTest, fixedBitWidthFastPathUpcast) {
   // Tests that the fast path works correctly for upcast reads (int32 →
   // int64). This exercises the upcast loop branch in bulkScan.
-  const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   for (bool hasNulls : {false, true}) {
     SCOPED_TRACE(fmt::format("hasNulls={}", hasNulls));
     // Write as int32.
@@ -3468,7 +3235,7 @@ TEST_P(SelectiveNimbleReaderTest, fixedBitWidthFastPathUpcast) {
     auto expected = makeRowVector({readData});
     auto scanSpec = std::make_shared<common::ScanSpec>("root");
     scanSpec->addAllChildFields(*expected->type());
-    auto readers = makeReaders(expected, file, scanSpec, stringDecoderZeroCopy);
+    auto readers = makeReaders(expected, file, scanSpec);
     // Read in a single large batch to exercise the dense fast path.
     validate(
         *expected, *readers.rowReader, 1000, -1, [](auto) { return true; });
@@ -3478,7 +3245,6 @@ TEST_P(SelectiveNimbleReaderTest, fixedBitWidthFastPathUpcast) {
 TEST_P(SelectiveNimbleReaderTest, fixedBitWidthFastPathMultipleBatches) {
   // Tests that the fast path works correctly with multiple batches.
   // This exercises the row tracking and position management.
-  const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   for (bool hasNulls : {false, true}) {
     SCOPED_TRACE(fmt::format("hasNulls={}", hasNulls));
     auto data = makeFlatVector<int32_t>(
@@ -3489,7 +3255,7 @@ TEST_P(SelectiveNimbleReaderTest, fixedBitWidthFastPathMultipleBatches) {
     auto file = test::createNimbleFile(*rootPool(), input);
     auto scanSpec = std::make_shared<common::ScanSpec>("root");
     scanSpec->addAllChildFields(*input->type());
-    auto readers = makeReaders(input, file, scanSpec, stringDecoderZeroCopy);
+    auto readers = makeReaders(input, file, scanSpec);
     // Read in small batches to test batch boundary handling.
     validate(*input, *readers.rowReader, 37, -1, [](auto) { return true; });
   }
@@ -3498,7 +3264,6 @@ TEST_P(SelectiveNimbleReaderTest, fixedBitWidthFastPathMultipleBatches) {
 TEST_P(SelectiveNimbleReaderTest, fixedBitWidthFastPathLargeValues) {
   // Tests that the fast path handles large values correctly.
   // This verifies baseline handling in the encoding.
-  const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   for (bool hasNulls : {false, true}) {
     SCOPED_TRACE(fmt::format("hasNulls={}", hasNulls));
     auto data = makeFlatVector<int32_t>(
@@ -3509,14 +3274,13 @@ TEST_P(SelectiveNimbleReaderTest, fixedBitWidthFastPathLargeValues) {
     auto file = test::createNimbleFile(*rootPool(), input);
     auto scanSpec = std::make_shared<common::ScanSpec>("root");
     scanSpec->addAllChildFields(*input->type());
-    auto readers = makeReaders(input, file, scanSpec, stringDecoderZeroCopy);
+    auto readers = makeReaders(input, file, scanSpec);
     validate(*input, *readers.rowReader, 200, -1, [](auto) { return true; });
   }
 }
 
 TEST_P(SelectiveNimbleReaderTest, fixedBitWidthFastPathNegativeValues) {
   // Tests that the fast path handles negative values correctly.
-  const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   for (bool hasNulls : {false, true}) {
     SCOPED_TRACE(fmt::format("hasNulls={}", hasNulls));
     auto data = makeFlatVector<int32_t>(
@@ -3527,7 +3291,7 @@ TEST_P(SelectiveNimbleReaderTest, fixedBitWidthFastPathNegativeValues) {
     auto file = test::createNimbleFile(*rootPool(), input);
     auto scanSpec = std::make_shared<common::ScanSpec>("root");
     scanSpec->addAllChildFields(*input->type());
-    auto readers = makeReaders(input, file, scanSpec, stringDecoderZeroCopy);
+    auto readers = makeReaders(input, file, scanSpec);
     validate(*input, *readers.rowReader, 300, -1, [](auto) { return true; });
   }
 }
@@ -3535,7 +3299,6 @@ TEST_P(SelectiveNimbleReaderTest, fixedBitWidthFastPathNegativeValues) {
 TEST_P(SelectiveNimbleReaderTest, fixedBitWidthFastPathUpcastNegative) {
   // Tests that the fast path handles upcast with negative values correctly.
   // This verifies sign extension works properly.
-  const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   for (bool hasNulls : {false, true}) {
     SCOPED_TRACE(fmt::format("hasNulls={}", hasNulls));
     // Write as int32.
@@ -3554,13 +3317,12 @@ TEST_P(SelectiveNimbleReaderTest, fixedBitWidthFastPathUpcastNegative) {
     auto expected = makeRowVector({readData});
     auto scanSpec = std::make_shared<common::ScanSpec>("root");
     scanSpec->addAllChildFields(*expected->type());
-    auto readers = makeReaders(expected, file, scanSpec, stringDecoderZeroCopy);
+    auto readers = makeReaders(expected, file, scanSpec);
     validate(*expected, *readers.rowReader, 200, -1, [](auto) { return true; });
   }
 }
 
 TEST_P(SelectiveNimbleReaderTest, pinMetadata) {
-  const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   auto data = makeFlatVector<int64_t>(100, [](auto i) { return i; });
   auto input = makeRowVector({data});
   auto file = test::createNimbleFile(*rootPool(), input);
@@ -3590,7 +3352,6 @@ TEST_P(SelectiveNimbleReaderTest, pinMetadata) {
     dwio::common::RowReaderOptions rowOptions;
     rowOptions.setScanSpec(scanSpec);
     rowOptions.setRequestedType(type);
-    rowOptions.setStringDecoderZeroCopy(stringDecoderZeroCopy);
     readers.rowReader = readers.reader->createRowReader(rowOptions);
     validate(*input, *readers.rowReader, 100, [](auto) { return true; });
   }
@@ -3866,7 +3627,6 @@ TEST_P(SelectiveNimbleReaderTest, metadataReuseCrossReaders) {
 // DeltaEncoding: monotonically increasing data with filter
 // ---------------------------------------------------------------------------
 TEST_P(SelectiveNimbleReaderTest, delta) {
-  const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   runTestCase(
       [&](bool hasNulls) {
         return makeFlatVector<int64_t>(
@@ -3879,15 +3639,13 @@ TEST_P(SelectiveNimbleReaderTest, delta) {
       [&](auto& data, auto i) {
         return !data->isNullAt(i) && data->valueAt(i) >= 50 &&
             data->valueAt(i) <= 200;
-      },
-      stringDecoderZeroCopy);
+      });
 }
 
 // ---------------------------------------------------------------------------
 // HuffmanEncoding: filtered reads across random-access checkpoints
 // ---------------------------------------------------------------------------
 TEST_P(SelectiveNimbleReaderTest, huffmanFilteredAcrossCheckpoints) {
-  const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   auto c0 = makeFlatVector<int64_t>(1025, [](auto i) {
     return i % 10 == 0 ? static_cast<int64_t>(100 + i % 7)
                        : static_cast<int64_t>(i % 4);
@@ -3912,7 +3670,7 @@ TEST_P(SelectiveNimbleReaderTest, huffmanFilteredAcrossCheckpoints) {
              ""}}}});
   verifyEncodingOnDisk(file, EncodingType::Huffman, /*isNullable=*/false);
 
-  auto readers = makeReaders(input, file, scanSpec, stringDecoderZeroCopy);
+  auto readers = makeReaders(input, file, scanSpec);
   validate(*input, *readers.rowReader, 73, [&](auto i) {
     return c0->valueAt(i) >= 102 && c0->valueAt(i) <= 104;
   });
@@ -3922,7 +3680,6 @@ TEST_P(SelectiveNimbleReaderTest, huffmanFilteredAcrossCheckpoints) {
 // DeltaEncoding: forced via encoding layout
 // ---------------------------------------------------------------------------
 TEST_P(SelectiveNimbleReaderTest, deltaForcedEncoding) {
-  const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   // Monotonically increasing data ideal for delta encoding.
   auto c0 =
       makeFlatVector<int64_t>(501, [](auto i) { return i * 7; }, nullEvery(13));
@@ -3958,7 +3715,7 @@ TEST_P(SelectiveNimbleReaderTest, deltaForcedEncoding) {
                         CompressionType::Uncompressed}}}}},
              ""}}}});
   verifyEncodingOnDisk(file, EncodingType::Delta, /*isNullable=*/false);
-  auto readers = makeReaders(input, file, scanSpec, stringDecoderZeroCopy);
+  auto readers = makeReaders(input, file, scanSpec);
   validate(*input, *readers.rowReader, 101, [&](auto i) {
     return !c0->isNullAt(i) && c0->valueAt(i) >= 100 && c0->valueAt(i) <= 2000;
   });
@@ -3968,7 +3725,6 @@ TEST_P(SelectiveNimbleReaderTest, deltaForcedEncoding) {
 // DeltaEncoding: data with restatements (non-monotonic)
 // ---------------------------------------------------------------------------
 TEST_P(SelectiveNimbleReaderTest, deltaWithRestatements) {
-  const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   // Data that resets periodically, causing restatements in delta encoding.
   auto c0 = makeFlatVector<int64_t>(
       301,
@@ -4006,7 +3762,7 @@ TEST_P(SelectiveNimbleReaderTest, deltaWithRestatements) {
                         CompressionType::Uncompressed}}}}},
              ""}}}});
   verifyEncodingOnDisk(file, EncodingType::Delta, /*isNullable=*/false);
-  auto readers = makeReaders(input, file, scanSpec, stringDecoderZeroCopy);
+  auto readers = makeReaders(input, file, scanSpec);
   validate(*input, *readers.rowReader, 50, [&](auto i) {
     return !c0->isNullAt(i) && c0->valueAt(i) >= 20 && c0->valueAt(i) <= 80;
   });
@@ -4017,7 +3773,6 @@ TEST_P(SelectiveNimbleReaderTest, deltaWithRestatements) {
 // selective reader with Delta encoding).
 // ---------------------------------------------------------------------------
 TEST_P(SelectiveNimbleReaderTest, deltaInt32) {
-  const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   auto c0 =
       makeFlatVector<int32_t>(401, [](auto i) { return i * 3; }, nullEvery(11));
   auto input = makeRowVector({c0});
@@ -4052,7 +3807,7 @@ TEST_P(SelectiveNimbleReaderTest, deltaInt32) {
                         CompressionType::Uncompressed}}}}},
              ""}}}});
   verifyEncodingOnDisk(file, EncodingType::Delta, /*isNullable=*/false);
-  auto readers = makeReaders(input, file, scanSpec, stringDecoderZeroCopy);
+  auto readers = makeReaders(input, file, scanSpec);
   validate(*input, *readers.rowReader, 80, [&](auto i) {
     return !c0->isNullAt(i) && c0->valueAt(i) >= 50 && c0->valueAt(i) <= 800;
   });
@@ -4062,7 +3817,6 @@ TEST_P(SelectiveNimbleReaderTest, deltaInt32) {
 // DeltaEncoding: no filter applied — reads all rows from a delta-encoded file.
 // ---------------------------------------------------------------------------
 TEST_P(SelectiveNimbleReaderTest, deltaNoFilter) {
-  const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   auto c0 = makeFlatVector<int64_t>(200, [](auto i) { return i * 5; });
   auto input = makeRowVector({c0});
   auto scanSpec = std::make_shared<common::ScanSpec>("root");
@@ -4094,7 +3848,7 @@ TEST_P(SelectiveNimbleReaderTest, deltaNoFilter) {
                         CompressionType::Uncompressed}}}}},
              ""}}}});
   verifyEncodingOnDisk(file, EncodingType::Delta, /*isNullable=*/false);
-  auto readers = makeReaders(input, file, scanSpec, stringDecoderZeroCopy);
+  auto readers = makeReaders(input, file, scanSpec);
   validate(*input, *readers.rowReader, 50, [](auto) { return true; });
 }
 
@@ -4103,7 +3857,6 @@ TEST_P(SelectiveNimbleReaderTest, deltaNoFilter) {
 // patterns, verifying multi-column delta support in selective reader.
 // ---------------------------------------------------------------------------
 TEST_P(SelectiveNimbleReaderTest, deltaTwoColumns) {
-  const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   auto c0 = makeFlatVector<int64_t>(300, [](auto i) { return i * 7; });
   auto c1 = makeFlatVector<int32_t>(
       300, [](auto i) { return static_cast<int32_t>((i % 30) * 2); });
@@ -4129,7 +3882,7 @@ TEST_P(SelectiveNimbleReaderTest, deltaTwoColumns) {
            "",
            {{Kind::Scalar, {{0, deltaLayout}}, ""},
             {Kind::Scalar, {{0, deltaLayout}}, ""}}}});
-  auto readers = makeReaders(input, file, scanSpec, stringDecoderZeroCopy);
+  auto readers = makeReaders(input, file, scanSpec);
   validate(*input, *readers.rowReader, 60, [&](auto i) {
     return c0->valueAt(i) >= 100 && c0->valueAt(i) <= 1500;
   });
@@ -4140,7 +3893,6 @@ TEST_P(SelectiveNimbleReaderTest, deltaTwoColumns) {
 // chunk boundary handling.
 // ---------------------------------------------------------------------------
 TEST_P(SelectiveNimbleReaderTest, deltaSawtoothSmallBatches) {
-  const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
   auto c0 = makeFlatVector<int64_t>(
       200, [](auto i) { return static_cast<int64_t>((i % 20) * 5); });
   auto input = makeRowVector({c0});
@@ -4173,7 +3925,7 @@ TEST_P(SelectiveNimbleReaderTest, deltaSawtoothSmallBatches) {
                         CompressionType::Uncompressed}}}}},
              ""}}}});
   verifyEncodingOnDisk(file, EncodingType::Delta, /*isNullable=*/false);
-  auto readers = makeReaders(input, file, scanSpec, stringDecoderZeroCopy);
+  auto readers = makeReaders(input, file, scanSpec);
   // Small batch size (7) to exercise partial-read boundaries.
   validate(*input, *readers.rowReader, 7, [](auto) { return true; });
 }
@@ -4206,8 +3958,7 @@ TEST_P(SelectiveNimbleReaderTest, stripeStatsPruneIntegralFilter) {
   scanSpec->addAllChildFields(*input->type());
   scanSpec->childByName("c0")->setFilter(
       std::make_unique<common::BigintRange>(10, 20, false));
-  auto readers =
-      makeReaders(input, fileContent, scanSpec, this->stringDecoderZeroCopy());
+  auto readers = makeReaders(input, fileContent, scanSpec);
 
   validate(
       *input,
@@ -4254,8 +4005,7 @@ TEST_P(SelectiveNimbleReaderTest, stripeStatsPruningDisabledReadsAllStripes) {
   scanSpec->addAllChildFields(*input->type());
   scanSpec->childByName("c0")->setFilter(
       std::make_unique<common::BigintRange>(10, 20, false));
-  auto readers =
-      makeReaders(input, fileContent, scanSpec, this->stringDecoderZeroCopy());
+  auto readers = makeReaders(input, fileContent, scanSpec);
 
   validate(
       *input,
@@ -4342,8 +4092,7 @@ TEST_P(SelectiveNimbleReaderTest, corruptStripeStatsSectionStillReads) {
 
   test::ScopedFeatureGate stripeStatsGate{
       FeatureGate::FeatureSet::kStripeStatsPruning};
-  auto readers =
-      makeReaders(input, fileContent, scanSpec, this->stringDecoderZeroCopy());
+  auto readers = makeReaders(input, fileContent, scanSpec);
 
   // Falls back to a full scan and returns exactly the matching rows.
   validate(
@@ -4402,8 +4151,7 @@ TEST_P(SelectiveNimbleReaderTest, bigintAsLongDecimalWithFilter) {
 
   test::ScopedFeatureGate stripeStatsGate{
       FeatureGate::FeatureSet::kStripeStatsPruning};
-  auto readers = makeReaders(
-      requested, fileContent, scanSpec, this->stringDecoderZeroCopy());
+  auto readers = makeReaders(requested, fileContent, scanSpec);
 
   validate(
       *requested,
@@ -4456,8 +4204,7 @@ TEST_P(SelectiveNimbleReaderTest, stripeStatsPruneStringFilter) {
   scanSpec->childByName("c0")->setFilter(
       std::make_unique<common::BytesRange>(
           "aaa010", false, false, "aaa020", false, false, false));
-  auto readers =
-      makeReaders(input, fileContent, scanSpec, this->stringDecoderZeroCopy());
+  auto readers = makeReaders(input, fileContent, scanSpec);
 
   validate(
       *input,
@@ -4502,8 +4249,7 @@ TEST_P(SelectiveNimbleReaderTest, stripeStatsPruneFloatingPointFilter) {
   scanSpec->childByName("c0")->setFilter(
       std::make_unique<common::DoubleRange>(
           10.0, false, false, 20.0, false, false, false));
-  auto readers =
-      makeReaders(input, fileContent, scanSpec, this->stringDecoderZeroCopy());
+  auto readers = makeReaders(input, fileContent, scanSpec);
 
   validate(
       *input,
@@ -4548,10 +4294,8 @@ TEST_P(SelectiveNimbleReaderTest, stripeStatsMergeDeduplicatedArray) {
 
   auto scanSpec = std::make_shared<common::ScanSpec>("root");
   scanSpec->addAllChildFields(*combined->type());
-  auto multiReaders = makeReaders(
-      combined, multiStripeFile, scanSpec, this->stringDecoderZeroCopy());
-  auto singleReaders = makeReaders(
-      combined, singleStripeFile, scanSpec, this->stringDecoderZeroCopy());
+  auto multiReaders = makeReaders(combined, multiStripeFile, scanSpec);
+  auto singleReaders = makeReaders(combined, singleStripeFile, scanSpec);
 
   // Column 1 is the deduplicated array; column 2 is its integral element.
   for (uint32_t column : {1u, 2u}) {
@@ -4584,8 +4328,7 @@ TEST_P(SelectiveNimbleReaderTest, columnStatisticsInteger) {
   auto fileContent = test::createNimbleFile(*rootPool(), input, writerOptions);
   auto scanSpec = std::make_shared<common::ScanSpec>("root");
   scanSpec->addAllChildFields(*input->type());
-  auto readers =
-      makeReaders(input, fileContent, scanSpec, this->stringDecoderZeroCopy());
+  auto readers = makeReaders(input, fileContent, scanSpec);
 
   // Column 0 is the root ROW -- column 1 is the first child (c0).
   auto stats = readers.reader->columnStatistics(1);
@@ -4614,8 +4357,7 @@ TEST_P(SelectiveNimbleReaderTest, columnStatisticsDouble) {
   auto fileContent = test::createNimbleFile(*rootPool(), input, writerOptions);
   auto scanSpec = std::make_shared<common::ScanSpec>("root");
   scanSpec->addAllChildFields(*input->type());
-  auto readers =
-      makeReaders(input, fileContent, scanSpec, this->stringDecoderZeroCopy());
+  auto readers = makeReaders(input, fileContent, scanSpec);
 
   auto stats = readers.reader->columnStatistics(1);
   ASSERT_NE(stats, nullptr);
@@ -4640,8 +4382,7 @@ TEST_P(SelectiveNimbleReaderTest, columnStatisticsString) {
   auto fileContent = test::createNimbleFile(*rootPool(), input, writerOptions);
   auto scanSpec = std::make_shared<common::ScanSpec>("root");
   scanSpec->addAllChildFields(*input->type());
-  auto readers =
-      makeReaders(input, fileContent, scanSpec, this->stringDecoderZeroCopy());
+  auto readers = makeReaders(input, fileContent, scanSpec);
 
   auto stats = readers.reader->columnStatistics(1);
   ASSERT_NE(stats, nullptr);
@@ -4668,8 +4409,7 @@ TEST_P(SelectiveNimbleReaderTest, columnStatisticsOutOfRange) {
   auto fileContent = test::createNimbleFile(*rootPool(), input, writerOptions);
   auto scanSpec = std::make_shared<common::ScanSpec>("root");
   scanSpec->addAllChildFields(*input->type());
-  auto readers =
-      makeReaders(input, fileContent, scanSpec, this->stringDecoderZeroCopy());
+  auto readers = makeReaders(input, fileContent, scanSpec);
 
   // Out-of-range index returns nullptr.
   EXPECT_EQ(readers.reader->columnStatistics(999), nullptr);
@@ -4691,8 +4431,7 @@ TEST_P(SelectiveNimbleReaderTest, columnStatisticsNoStats) {
   auto fileContent = test::createNimbleFile(*rootPool(), input, writerOptions);
   auto scanSpec = std::make_shared<common::ScanSpec>("root");
   scanSpec->addAllChildFields(*input->type());
-  auto readers =
-      makeReaders(input, fileContent, scanSpec, this->stringDecoderZeroCopy());
+  auto readers = makeReaders(input, fileContent, scanSpec);
 
   EXPECT_EQ(readers.reader->columnStatistics(0), nullptr);
   EXPECT_EQ(readers.reader->columnStatistics(1), nullptr);
@@ -4709,8 +4448,7 @@ TEST_P(SelectiveNimbleReaderTest, columnStatisticsWithNulls) {
   auto fileContent = test::createNimbleFile(*rootPool(), input, writerOptions);
   auto scanSpec = std::make_shared<common::ScanSpec>("root");
   scanSpec->addAllChildFields(*input->type());
-  auto readers =
-      makeReaders(input, fileContent, scanSpec, this->stringDecoderZeroCopy());
+  auto readers = makeReaders(input, fileContent, scanSpec);
 
   auto stats = readers.reader->columnStatistics(1);
   ASSERT_NE(stats, nullptr);
@@ -4731,8 +4469,7 @@ TEST_P(SelectiveNimbleReaderTest, columnStatisticsAllNull) {
   auto fileContent = test::createNimbleFile(*rootPool(), input, writerOptions);
   auto scanSpec = std::make_shared<common::ScanSpec>("root");
   scanSpec->addAllChildFields(*input->type());
-  auto readers =
-      makeReaders(input, fileContent, scanSpec, this->stringDecoderZeroCopy());
+  auto readers = makeReaders(input, fileContent, scanSpec);
 
   auto stats = readers.reader->columnStatistics(1);
   ASSERT_NE(stats, nullptr);
@@ -4759,8 +4496,7 @@ TEST_P(SelectiveNimbleReaderTest, extractionTransformMapKeys) {
   scanSpec->childByName("col")->setExtractionType(
       common::ScanSpec::ExtractionType::kKeys);
 
-  auto readers =
-      makeReaders(input, file, scanSpec, GetParam().stringDecoderZeroCopy);
+  auto readers = makeReaders(input, file, scanSpec);
   auto result = BaseVector::create(input->type(), 0, pool());
   ASSERT_EQ(readers.rowReader->next(10, result), 3);
   auto* row = result->as<RowVector>();
@@ -4784,8 +4520,7 @@ TEST_P(SelectiveNimbleReaderTest, extractionTransformSize) {
   scanSpec->childByName("col")->setExtractionType(
       common::ScanSpec::ExtractionType::kSize);
 
-  auto readers =
-      makeReaders(input, file, scanSpec, GetParam().stringDecoderZeroCopy);
+  auto readers = makeReaders(input, file, scanSpec);
   auto result = BaseVector::create(input->type(), 0, pool());
   ASSERT_EQ(readers.rowReader->next(10, result), 2);
   auto* row = result->as<RowVector>();
@@ -4824,8 +4559,7 @@ TEST_P(SelectiveNimbleReaderTest, extractionTransformMapValuesStructField) {
   valuesSpec->childByName("y")->setConstantValue(
       BaseVector::createNullConstant(INTEGER(), 1, pool()));
 
-  auto readers =
-      makeReaders(input, file, scanSpec, GetParam().stringDecoderZeroCopy);
+  auto readers = makeReaders(input, file, scanSpec);
   auto result = BaseVector::create(input->type(), 0, pool());
   ASSERT_EQ(readers.rowReader->next(10, result), 2);
   auto* row = result->as<RowVector>();
@@ -4862,8 +4596,7 @@ TEST_P(SelectiveNimbleReaderTest, extractionSizeResultVectorReuse) {
   scanSpec->childByName("col")->setExtractionType(
       common::ScanSpec::ExtractionType::kSize);
 
-  auto readers =
-      makeReaders(input, file, scanSpec, GetParam().stringDecoderZeroCopy);
+  auto readers = makeReaders(input, file, scanSpec);
   auto result = BaseVector::create(input->type(), 0, pool());
 
   // Read first batch.
@@ -4900,8 +4633,7 @@ TEST_P(SelectiveNimbleReaderTest, extractionTransformMapValues) {
   scanSpec->childByName("col")->setExtractionType(
       common::ScanSpec::ExtractionType::kValues);
 
-  auto readers =
-      makeReaders(input, file, scanSpec, GetParam().stringDecoderZeroCopy);
+  auto readers = makeReaders(input, file, scanSpec);
   auto result = BaseVector::create(input->type(), 0, pool());
   ASSERT_EQ(readers.rowReader->next(10, result), 3);
   auto* row = result->as<RowVector>();
@@ -4936,8 +4668,7 @@ TEST_P(SelectiveNimbleReaderTest, extractionTransformMapKeyFilter) {
       std::make_unique<common::BytesValues>(
           std::vector<std::string>{"a", "b"}, /*nullAllowed=*/false));
 
-  auto readers =
-      makeReaders(input, file, scanSpec, GetParam().stringDecoderZeroCopy);
+  auto readers = makeReaders(input, file, scanSpec);
   auto result = BaseVector::create(input->type(), 0, pool());
   ASSERT_EQ(readers.rowReader->next(10, result), 2);
   auto* row = result->as<RowVector>();
@@ -4968,8 +4699,7 @@ TEST_P(SelectiveNimbleReaderTest, extractionTransformStructField) {
   colSpec->childByName("y")->setConstantValue(
       BaseVector::createNullConstant(VARCHAR(), 1, pool()));
 
-  auto readers =
-      makeReaders(input, file, scanSpec, GetParam().stringDecoderZeroCopy);
+  auto readers = makeReaders(input, file, scanSpec);
   auto result = BaseVector::create(input->type(), 0, pool());
   ASSERT_EQ(readers.rowReader->next(10, result), 3);
   auto* row = result->as<RowVector>();
@@ -4992,8 +4722,7 @@ TEST_P(SelectiveNimbleReaderTest, extractionTransformArraySize) {
   scanSpec->childByName("col")->setExtractionType(
       common::ScanSpec::ExtractionType::kSize);
 
-  auto readers =
-      makeReaders(input, file, scanSpec, GetParam().stringDecoderZeroCopy);
+  auto readers = makeReaders(input, file, scanSpec);
   auto result = BaseVector::create(input->type(), 0, pool());
   ASSERT_EQ(readers.rowReader->next(10, result), 3);
   auto* row = result->as<RowVector>();
@@ -5017,8 +4746,7 @@ TEST_P(SelectiveNimbleReaderTest, extractionDeduplicatedArraySize) {
   scanSpec->childByName("col")->setExtractionType(
       common::ScanSpec::ExtractionType::kSize);
 
-  auto readers =
-      makeReaders(input, file, scanSpec, GetParam().stringDecoderZeroCopy);
+  auto readers = makeReaders(input, file, scanSpec);
   auto result = BaseVector::create(input->type(), 0, pool());
   ASSERT_EQ(readers.rowReader->next(10, result), 4);
   auto* row = result->as<RowVector>();
@@ -5045,8 +4773,7 @@ TEST_P(SelectiveNimbleReaderTest, extractionDeduplicatedMapSize) {
   scanSpec->childByName("col")->setExtractionType(
       common::ScanSpec::ExtractionType::kSize);
 
-  auto readers =
-      makeReaders(input, file, scanSpec, GetParam().stringDecoderZeroCopy);
+  auto readers = makeReaders(input, file, scanSpec);
   auto result = BaseVector::create(input->type(), 0, pool());
   ASSERT_EQ(readers.rowReader->next(10, result), 2);
   auto* row = result->as<RowVector>();
@@ -5057,8 +4784,6 @@ TEST_P(SelectiveNimbleReaderTest, extractionDeduplicatedMapSize) {
 }
 
 TEST_P(SelectiveNimbleReaderTest, readGapTracking) {
-  const bool stringDecoderZeroCopy = this->stringDecoderZeroCopy();
-
   // Schema with many columns — projecting a sparse subset creates gaps.
   auto input = makeRowVector(
       {"a", "b", "c", "d", "e"},
@@ -5095,7 +4820,7 @@ TEST_P(SelectiveNimbleReaderTest, readGapTracking) {
     for (const auto& col : testCase.projectedColumns) {
       scanSpec->addField(col, rowType->getChildIdx(col));
     }
-    auto readers = makeReaders(input, file, scanSpec, stringDecoderZeroCopy);
+    auto readers = makeReaders(input, file, scanSpec);
 
     VectorPtr result = BaseVector::create(rowType, 0, pool());
     while (readers.rowReader->next(1'000, result)) {

@@ -20,7 +20,6 @@
 
 #include "velox/common/time/CpuWallTimer.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
-#include "velox/dwio/nimble/encodings/legacy/EncodingFactory.h"
 #include "velox/dwio/nimble/index/ClusterIndex.h"
 #include "velox/dwio/nimble/selective/ColumnReader.h"
 #include "velox/dwio/nimble/selective/ReaderBase.h"
@@ -133,11 +132,8 @@ SelectiveNimbleIndexReader::SelectiveNimbleIndexReader(
     : readerBase_(std::move(readerBase)),
       options_(options),
       encodingFactory_(
-          options.stringDecoderZeroCopy()
-              ? std::make_unique<const EncodingFactory>(
-                    encodingOptions(readerBase_->tablet()))
-              : std::make_unique<const legacy::EncodingFactory>(
-                    encodingOptions(readerBase_->tablet()))),
+          std::make_unique<const EncodingFactory>(
+              encodingOptions(readerBase_->tablet()))),
       rowSizeTracker_(
           std::make_unique<RowSizeTracker>(readerBase_->fileSchemaWithId())),
       hasFilters_(options.scanSpec()->hasFilter()),
@@ -504,7 +500,6 @@ void SelectiveNimbleIndexReader::initStripeColumnReader(uint32_t stripeIndex) {
         streams_,
         options_.trackRowSize() ? rowSizeTracker_.get() : nullptr,
         *encodingFactory_,
-        options_.stringDecoderZeroCopy(),
         options_.preserveFlatMapsInMemory(),
         /*nimblePreserveDictionaryEncoding=*/false,
         /*lazyIoColumns=*/nullptr,

@@ -603,6 +603,55 @@ TEST_F(PlanNodeSerdeTest, parallelProjet) {
   testSerde(plan);
 }
 
+TEST_F(PlanNodeSerdeTest, vectorSearchJoin) {
+  auto probe = makeRowVector(
+      {"t0", "t1"},
+      {
+          makeFlatVector<int64_t>({1, 2}),
+          makeArrayVector<float>({{1, 0}, {0, 1}}),
+      });
+  auto build = makeRowVector(
+      {"u0", "u1", "u2"},
+      {
+          makeFlatVector<int64_t>({1, 2}),
+          makeFlatVector<std::string>({"a", "b"}, VARBINARY()),
+          makeFlatVector<int64_t>({10, 20}),
+      });
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan =
+      PlanBuilder(planNodeIdGenerator)
+          .values({probe})
+          .vectorSearchJoin(
+              {"t0"},
+              {"u0"},
+              PlanBuilder(planNodeIdGenerator).values({build}).planNode(),
+              "t1",
+              "u1",
+              /*k=*/2,
+              {"cluster_id", "t0", "u2"},
+              "cluster_id")
+          .planNode();
+  testSerde(plan);
+
+  plan = PlanBuilder(planNodeIdGenerator)
+             .values({probe})
+             .vectorSearchJoin(
+                 /*leftKeys=*/{},
+                 /*rightKeys=*/{},
+                 PlanBuilder(planNodeIdGenerator).values({build}).planNode(),
+                 "t1",
+                 "u1",
+                 /*k=*/10,
+                 {"t0", "id", "score"},
+                 "id",
+                 "score",
+                 core::JoinType::kLeft,
+                 {{"ivf.nprobe", "4"}})
+             .planNode();
+  testSerde(plan);
+}
+
 TEST_F(PlanNodeSerdeTest, hashJoin) {
   auto probe = makeRowVector(
       {"t0", "t1", "t2", "t3"},

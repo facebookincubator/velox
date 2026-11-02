@@ -62,6 +62,43 @@ TEST(StringView, comparison) {
       StringView("in hoc signo vinces, Constantinus"));
 }
 
+int32_t sign(int32_t value) {
+  return (value > 0) - (value < 0);
+}
+
+void testCompare(std::string_view left, std::string_view right) {
+  SCOPED_TRACE(testing::Message() << left << " vs " << right);
+  EXPECT_EQ(
+      sign(StringView(left).compare(StringView(right))),
+      sign(left.compare(right)));
+}
+
+TEST(StringView, compare) {
+  const std::vector<std::pair<std::string, std::string>> pairs = {
+      {"", "a"},
+      {"a", "b"},
+      {"abc", "abd"},
+      {"\xff", "a"},
+      {"ab", "abc"},
+      {"abc", "abcd"},
+      {"abcd", "abcde"},
+      {"ab", std::string("ab\0", 3)},
+      {"abcdef", "abcdeg"},
+      {"abcdef", "abcdefg"},
+      {"abcdefghijkl", "abcdefghijkm"},
+      {"abcdefghijkl", "abcdefghijklm"},
+      {"abcdefghijkz", "abcdefghijklm"},
+      {"abcdXfghijklmnop", "abcdYfghijklmnop"},
+      {"abcdefghijklmnop", "abcdefghijklmnoq"},
+      {"abcdefghijklmnop", "abcdefghijklmnopq"},
+  };
+  for (const auto& [left, right] : pairs) {
+    testCompare(left, right);
+    testCompare(right, left);
+    testCompare(left, left);
+  }
+}
+
 TEST(StringView, container) {
   std::vector<std::string> strings = {
       "May",
