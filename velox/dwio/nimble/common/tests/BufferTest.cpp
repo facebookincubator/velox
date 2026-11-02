@@ -16,8 +16,10 @@
 
 #include <gtest/gtest.h>
 
+#include <atomic>
 #include <cstring>
 #include <optional>
+#include <thread>
 #include <vector>
 
 #include "velox/common/memory/Memory.h"
@@ -105,6 +107,149 @@ TEST_F(BufferTest, writeStringBasic) {
     EXPECT_EQ(result.size(), 0);
   }
 }
+TEST_F(BufferTest, parallelMixedReservationsKeepViewsAcrossResets) {
+  Buffer buffer(*pool_);
+  constexpr uint32_t tasks = 8;
+  constexpr uint32_t smallBytes = 300'000;
+  constexpr uint32_t largeBytes = 1'500'000;
+  for (uint32_t stripe = 0; stripe < 3; ++stripe) {
+    buffer.reset();
+    std::vector<char*> views(tasks);
+    std::vector<std::thread> threads;
+    threads.reserve(tasks);
+    for (uint32_t i = 0; i < tasks; ++i) {
+      threads.emplace_back([&, i] {
+        const auto bytes = i % 2 == 0 ? smallBytes : largeBytes;
+        views[i] = buffer.reserve(bytes);
+        std::memset(views[i], static_cast<char>('A' + i), bytes);
+      });
+    }
+    for (auto& thread : threads) {
+      thread.join();
+    }
+    for (uint32_t i = 0; i < tasks; ++i) {
+      const auto bytes = i % 2 == 0 ? smallBytes : largeBytes;
+      EXPECT_EQ(
+          std::string_view(views[i], bytes),
+          std::string(bytes, static_cast<char>('A' + i)));
+    }
+  }
+}
+
+TEST_F(BufferTest, adoptedChunkRemainsOccupiedUntilReset) {
+  constexpr uint64_t adoptedSize = 2ULL << 20;
+  Buffer buffer(*pool_);
+  auto* first = buffer.reserve(100);
+  std::memset(first, 'A', 100);
+  auto owned =
+      velox::AlignedBuffer::allocateExact<char>(adoptedSize, pool_.get());
+  std::memset(owned->asMutable<char>(), 'O', adoptedSize);
+  auto adopted = buffer.takeOwnership(std::move(owned));
+
+  std::memset(buffer.reserve(3ULL << 20), 'B', 3ULL << 20);
+  std::memset(buffer.reserve(adoptedSize), 'S', adoptedSize);
+  EXPECT_EQ(
+      std::string_view(adopted.data(), adoptedSize),
+      std::string(adoptedSize, 'O'));
+  EXPECT_EQ(std::string_view(first, 100), std::string(100, 'A'));
+
+  buffer.reset();
+  EXPECT_EQ(buffer.reserve(adoptedSize), adopted.data());
+}
+
+TEST_F(BufferTest, parallelReservationsAndAdoptionsKeepViews) {
+  constexpr uint32_t tasks = 4;
+  constexpr uint32_t iterations = 32;
+  constexpr uint64_t adoptedBytes = 4'096;
+  constexpr uint64_t reservedBytes = 64'000;
+  Buffer buffer(*pool_);
+  std::vector<std::vector<velox::BufferPtr>> owned(tasks);
+  std::vector<std::vector<std::string_view>> adopted(
+      tasks, std::vector<std::string_view>(iterations));
+  std::vector<std::vector<std::string_view>> reserved(
+      tasks, std::vector<std::string_view>(iterations));
+  for (uint32_t i = 0; i < tasks; ++i) {
+    owned[i].reserve(iterations);
+    for (uint32_t j = 0; j < iterations; ++j) {
+      auto chunk =
+          velox::AlignedBuffer::allocateExact<char>(adoptedBytes, pool_.get());
+      std::memset(
+          chunk->asMutable<char>(), static_cast<char>('a' + i), adoptedBytes);
+      owned[i].push_back(std::move(chunk));
+    }
+  }
+  std::atomic<uint32_t> ready{0};
+  std::vector<std::thread> threads;
+  threads.reserve(tasks);
+  for (uint32_t i = 0; i < tasks; ++i) {
+    threads.emplace_back([&, i] {
+      ++ready;
+      while (ready.load() != tasks) {
+        std::this_thread::yield();
+      }
+      for (uint32_t j = 0; j < iterations; ++j) {
+        adopted[i][j] = buffer.takeOwnership(std::move(owned[i][j]));
+        auto* data = buffer.reserve(reservedBytes);
+        std::memset(data, static_cast<char>('A' + i), reservedBytes);
+        reserved[i][j] = {data, reservedBytes};
+      }
+    });
+  }
+  for (auto& thread : threads) {
+    thread.join();
+  }
+  for (uint32_t i = 0; i < tasks; ++i) {
+    for (uint32_t j = 0; j < iterations; ++j) {
+      EXPECT_EQ(
+          adopted[i][j], std::string(adoptedBytes, static_cast<char>('a' + i)));
+      EXPECT_EQ(
+          reserved[i][j],
+          std::string(reservedBytes, static_cast<char>('A' + i)));
+    }
+  }
+}
+
+TEST_F(BufferTest, adoptionPreservesCurrentTailAndUnusedChunks) {
+  constexpr uint64_t smallSize = 2ULL << 20;
+  constexpr uint64_t bigSize = 3ULL << 20;
+  constexpr uint64_t adoptedSize = 4ULL << 20;
+  Buffer buffer(*pool_);
+  auto* small = buffer.reserve(smallSize);
+  auto* big = buffer.reserve(bigSize);
+  buffer.reset();
+
+  auto* first = buffer.reserve(100);
+  std::memset(first, 'A', 100);
+  auto owned =
+      velox::AlignedBuffer::allocateExact<char>(adoptedSize, pool_.get());
+  std::memset(owned->asMutable<char>(), 'O', adoptedSize);
+  auto adopted = buffer.takeOwnership(std::move(owned));
+  auto* tail = buffer.reserve(100);
+  EXPECT_EQ(tail, first + 100);
+  std::memset(tail, 'T', 100);
+
+  auto* reusedBig = buffer.reserve(bigSize);
+  EXPECT_EQ(reusedBig, big);
+  std::memset(reusedBig, 'B', bigSize);
+  auto* reusedSmall = buffer.reserve(smallSize);
+  EXPECT_EQ(reusedSmall, small);
+  std::memset(reusedSmall, 'S', smallSize);
+  auto* fresh = buffer.reserve(adoptedSize);
+  std::memset(fresh, 'X', adoptedSize);
+  EXPECT_EQ(buffer.testingChunkCount(), 5);
+  EXPECT_EQ(std::string_view(first, 100), std::string(100, 'A'));
+  EXPECT_EQ(std::string_view(tail, 100), std::string(100, 'T'));
+  EXPECT_EQ(adopted, std::string(adoptedSize, 'O'));
+  EXPECT_EQ(std::string_view(reusedBig, bigSize), std::string(bigSize, 'B'));
+  EXPECT_EQ(
+      std::string_view(reusedSmall, smallSize), std::string(smallSize, 'S'));
+
+  auto transferred = buffer.transferBuffers();
+  ASSERT_EQ(transferred.size(), 5);
+  EXPECT_EQ(adopted, std::string(adoptedSize, 'O'));
+  EXPECT_EQ(std::string_view(first, 100), std::string(100, 'A'));
+}
+
 TEST_F(BufferTest, takeOwnership) {
   Buffer buffer(*pool_);
 
@@ -220,7 +365,47 @@ TEST_F(BufferTest, tryAdvanceSkipsTooSmallChunks) {
   buffer.reset();
   buffer.reserve(hugeSize);
   EXPECT_EQ(buffer.testingChunkCount(), 3);
-  EXPECT_EQ(buffer.testingCurrentChunkIndex(), 2);
+  EXPECT_EQ(buffer.testingCurrentChunkIndex(), 1);
+}
+
+TEST_F(BufferTest, skippedChunkRemainsAvailableForSmallerReservations) {
+  constexpr uint64_t smallSize = 2ULL << 20;
+  constexpr uint64_t bigSize = 3ULL << 20;
+  Buffer buffer(*pool_, 4096);
+  auto* small = buffer.reserve(smallSize);
+  auto* big = buffer.reserve(bigSize);
+  ASSERT_EQ(buffer.testingChunkCount(), 3);
+
+  for (uint32_t stripe = 0; stripe < 20; ++stripe) {
+    buffer.reset();
+    auto* reusedBig = buffer.reserve(bigSize);
+    auto* reusedSmall = buffer.reserve(smallSize);
+    EXPECT_EQ(reusedBig, big);
+    EXPECT_EQ(reusedSmall, small);
+    std::memset(reusedBig, 'B', bigSize);
+    std::memset(reusedSmall, 'S', smallSize);
+    EXPECT_EQ(std::string_view(reusedBig, bigSize), std::string(bigSize, 'B'));
+    EXPECT_EQ(
+        std::string_view(reusedSmall, smallSize), std::string(smallSize, 'S'));
+    EXPECT_EQ(buffer.testingChunkCount(), 3);
+  }
+}
+
+TEST_F(BufferTest, newChunkPreservesUnusedRetainedChunks) {
+  constexpr uint64_t smallSize = 2ULL << 20;
+  constexpr uint64_t bigSize = 3ULL << 20;
+  Buffer buffer(*pool_, 4096);
+  auto* small = buffer.reserve(smallSize);
+  buffer.reset();
+  auto* big = buffer.reserve(bigSize);
+  auto* reusedSmall = buffer.reserve(smallSize);
+  EXPECT_EQ(reusedSmall, small);
+  std::memset(big, 'B', bigSize);
+  std::memset(reusedSmall, 'S', smallSize);
+  EXPECT_EQ(std::string_view(big, bigSize), std::string(bigSize, 'B'));
+  EXPECT_EQ(
+      std::string_view(reusedSmall, smallSize), std::string(smallSize, 'S'));
+  EXPECT_EQ(buffer.testingChunkCount(), 3);
 }
 
 TEST_F(BufferTest, resetMultipleTimes) {
