@@ -19,13 +19,16 @@
 #include <algorithm>
 #include <array>
 #include <limits>
-#include <string>
+#include <memory>
 #include <utility>
+
+#include "velox/buffer/Buffer.h"
 
 namespace facebook::nimble {
 
 struct FsstEncodingView::DecodedChunk {
-  std::string data;
+  // Pool-owned decompressed strings remain valid until the chunk is released.
+  velox::BufferPtr data;
   std::vector<size_t> offsets;
 };
 
@@ -259,7 +262,10 @@ std::string_view FsstEncodingView::valueAt(
     uint32_t rowInChunk) {
   const auto begin = chunk.offsets[rowInChunk];
   const auto end = chunk.offsets[rowInChunk + 1];
-  return {chunk.data.data() + begin, end - begin};
+  if (begin == end) {
+    return {};
+  }
+  return {chunk.data->as<char>() + begin, end - begin};
 }
 
 std::shared_ptr<const FsstEncodingView::DecodedChunk>
@@ -289,50 +295,76 @@ FsstEncodingView::decodeChunk(uint32_t chunkIndex) const {
   auto chunk = std::make_shared<DecodedChunk>();
   chunk->offsets.resize(endRow - firstRow + 1);
 
-  size_t maxOutputBytes{0};
+  size_t decodedBytes{0};
   for (auto row = firstRow; row < endRow; ++row) {
-    const auto compressedSize =
-        compressedOffsets_[row + 1] - compressedOffsets_[row];
-    const size_t padding = compressedSize == 0 ? 0 : 1;
-    NIMBLE_CHECK_FILE_LE(
-        maxOutputBytes,
-        std::numeric_limits<size_t>::max() - padding,
-        "FSST decoded chunk exceeds the supported size.");
-    NIMBLE_CHECK_FILE_LE(
-        compressedSize,
-        (std::numeric_limits<size_t>::max() - maxOutputBytes - padding) /
-            kMaxSymbolLength,
-        "FSST decoded chunk exceeds the supported size.");
-    maxOutputBytes += compressedSize * kMaxSymbolLength + padding;
+    const auto compressedEnd = compressedOffsets_[row + 1];
+    for (auto position = compressedOffsets_[row]; position < compressedEnd;
+         ++position) {
+      const auto code = static_cast<uint8_t>(blob_[position]);
+      size_t symbolLength{1};
+      if (code == FSST_ESC) {
+        ++position;
+        NIMBLE_CHECK_FILE_LT(
+            position,
+            compressedEnd,
+            "Invalid FSST compressed data: incomplete trailing escape code.");
+      } else {
+        symbolLength = decoder_.len[code];
+      }
+      NIMBLE_CHECK_FILE_LE(
+          decodedBytes,
+          std::numeric_limits<size_t>::max() - symbolLength,
+          "FSST decoded chunk exceeds the supported size.");
+      decodedBytes += symbolLength;
+    }
+    chunk->offsets[row - firstRow + 1] = decodedBytes;
   }
-  chunk->data.resize(maxOutputBytes);
 
-  size_t outputOffset{0};
+  // Keep the decoder's four-symbol loop constrained by input length rather
+  // than output capacity. Its tail assumes at most three codes remain and
+  // can otherwise interpret an escape as a symbol. The final symbol stores
+  // may also write beyond their logical lengths.
+  // fsst_decompress in velox/external/fsst/fsst.h guards four 8-byte stores
+  // with posOut + 32 <= size, and its three-code tail with posOut + 24 <= size.
+  // A final one-byte symbol therefore needs 32 - 1 bytes of spare capacity.
+  constexpr size_t kDecoderPadding{31};
+  const size_t padding = decodedBytes == 0 ? 0 : kDecoderPadding;
+  NIMBLE_CHECK_FILE_LE(
+      decodedBytes,
+      std::numeric_limits<size_t>::max() - padding,
+      "FSST decoded chunk exceeds the supported size.");
+  const auto allocationSize = decodedBytes + padding;
+  if (allocationSize != 0) {
+    chunk->data =
+        velox::AlignedBuffer::allocate<char>(allocationSize, this->pool_);
+  }
+
   for (auto row = firstRow; row < endRow; ++row) {
     const auto compressedBegin = compressedOffsets_[row];
     const auto compressedSize = compressedOffsets_[row + 1] - compressedBegin;
     if (compressedSize != 0) {
-      const auto maxDecodedSize = compressedSize * kMaxSymbolLength;
+      const auto rowInChunk = row - firstRow;
+      const auto outputOffset = chunk->offsets[rowInChunk];
+      const auto expectedDecodedSize =
+          chunk->offsets[rowInChunk + 1] - outputOffset;
       const auto decodedSize = nimble_fsst_decompress(
           &decoder_,
           compressedSize,
           reinterpret_cast<const unsigned char*>(
               blob_.data() + compressedBegin),
-          maxDecodedSize + 1,
-          reinterpret_cast<unsigned char*>(chunk->data.data() + outputOffset));
+          expectedDecodedSize + padding,
+          reinterpret_cast<unsigned char*>(
+              chunk->data->asMutable<char>() + outputOffset));
       NIMBLE_CHECK_GT(
           decodedSize,
           0,
           "FSST decompression failed for non-empty compressed string.");
-      NIMBLE_CHECK_FILE_LE(
+      NIMBLE_CHECK_FILE_EQ(
           decodedSize,
-          maxDecodedSize,
-          "FSST decompressed string exceeds the maximum expansion bound.");
-      outputOffset += decodedSize;
+          expectedDecodedSize,
+          "FSST decompressed size does not match its symbol codes.");
     }
-    chunk->offsets[row - firstRow + 1] = outputOffset;
   }
-  chunk->data.resize(outputOffset);
   return chunk;
 }
 
