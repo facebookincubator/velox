@@ -98,8 +98,10 @@ class JoinFuzzer {
 
   void seed(size_t seed) {
     currentSeed_ = seed;
-    vectorFuzzer_.reSeed(seed);
     rng_.seed(currentSeed_);
+    // Use different seeds so join type and null-aware selection are
+    // independent.
+    vectorFuzzer_.reSeed(rng_());
   }
 
   void reSeed() {
@@ -774,6 +776,9 @@ void JoinFuzzer::verify(core::JoinType joinType) {
 
   if (joinMaker.supportsTableScan()) {
     const int32_t numGroups = randInt(1, probeSource->batches().size());
+    // Null-aware joins need the full build side, including keys in other
+    // groups.
+    const int32_t numUnmixedGroups = nullAware ? 1 : numGroups;
 
     // Use ungrouped execution.
     altPlans.push_back(joinMaker.makeHashJoinWithTableScan(
@@ -781,7 +786,7 @@ void JoinFuzzer::verify(core::JoinType joinType) {
 
     // Use unmixed mode grouped execution.
     altPlans.push_back(joinMaker.makeHashJoinWithTableScan(
-        numGroups, false, JoinMaker::JoinOrder::NATURAL));
+        numUnmixedGroups, false, JoinMaker::JoinOrder::NATURAL));
 
     // Use mixed mode grouped execution.
     if (!needRightSideJoin(joinType)) {
@@ -798,7 +803,7 @@ void JoinFuzzer::verify(core::JoinType joinType) {
 
       // Use unmixed mode grouped execution.
       altPlans.push_back(joinMaker.makeHashJoinWithTableScan(
-          numGroups, false, JoinMaker::JoinOrder::FLIPPED));
+          numUnmixedGroups, false, JoinMaker::JoinOrder::FLIPPED));
 
       // Use mixed mode grouped execution.
       if (!needRightSideJoin(flipJoinType(joinType))) {
