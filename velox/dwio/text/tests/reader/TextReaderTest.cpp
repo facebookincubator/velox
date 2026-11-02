@@ -1140,6 +1140,72 @@ TEST_F(TextReaderTest, readFloatAsInt) {
   }
 }
 
+TEST_F(TextReaderTest, readIntegerWithLeadingPlus) {
+  auto textFile = TempFilePath::create();
+  {
+    auto writeFile =
+        std::make_unique<LocalWriteFile>(textFile->getPath(), true, false);
+    writeFile->append(
+        "+1,+2,+3,+4\n"
+        "+127,+32767,+2147483647,+9223372036854775807\n"
+        "+1.5,+2.5,+3.5,+4.5\n"
+        "+128,+2,+3,+4\n"
+        "+1,+32768,+3,+4\n"
+        "+1,+2,+2147483648,+4\n"
+        "+1,+2,+3,+9223372036854775808\n"
+        "+,+2,+3,+4\n"
+        "+1,++2,+3,+4\n"
+        "+1,+2,+3x,+4\n"
+        "+1,+2,+3,+-4\n");
+    writeFile->close();
+  }
+
+  auto expected = makeRowVector({
+      makeNullableFlatVector<int8_t>(
+          {1, 127, 1, std::nullopt, 1, 1, 1, std::nullopt, 1, 1, 1}),
+      makeNullableFlatVector<int16_t>(
+          {2, 32'767, 2, 2, std::nullopt, 2, 2, 2, std::nullopt, 2, 2}),
+      makeNullableFlatVector<int32_t>(
+          {3, 2'147'483'647, 3, 3, 3, std::nullopt, 3, 3, 3, std::nullopt, 3}),
+      makeNullableFlatVector<int64_t>(
+          {4,
+           9'223'372'036'854'775'807LL,
+           4,
+           4,
+           4,
+           4,
+           std::nullopt,
+           4,
+           4,
+           4,
+           std::nullopt}),
+  });
+  auto type = ROW(
+      {{"tinyint", TINYINT()},
+       {"smallint", SMALLINT()},
+       {"integer", INTEGER()},
+       {"bigint", BIGINT()}});
+
+  auto factory = dwio::common::getReaderFactory(dwio::common::FileFormat::TEXT);
+  auto readFile = std::make_shared<LocalReadFile>(textFile->getPath());
+  dwio::common::ReaderOptions readerOptions(pool());
+  readerOptions.setFileSchema(type);
+  readerOptions.setSerDeOptions(dwio::common::SerDeOptions(',', '\2', '\3'));
+
+  auto input =
+      std::make_unique<dwio::common::BufferedInput>(readFile, poolRef());
+  auto reader = factory->createReader(std::move(input), readerOptions);
+  dwio::common::RowReaderOptions rowReaderOptions;
+  setScanSpec(*type, rowReaderOptions);
+  auto rowReader = reader->createRowReader(rowReaderOptions);
+
+  VectorPtr result;
+  ASSERT_EQ(rowReader->next(11, result), 11);
+  for (int i = 0; i < 11; ++i) {
+    EXPECT_TRUE(result->equalValueAt(expected.get(), i, i));
+  }
+}
+
 TEST_F(TextReaderTest, simpleTypes) {
   const auto tzOffsetPST = 28'800;
   const auto tzOffsetPDT = 25'200;
