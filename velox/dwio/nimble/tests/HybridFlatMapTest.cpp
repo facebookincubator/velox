@@ -222,6 +222,13 @@ TEST(HybridFlatMapTest, constructorSortsKeys) {
           ScalarKind::String, config({{0, {"b", "a"}}, {kDefault, {}}}))
           .groups(),
       config({{0, {"a", "b"}}, {kDefault, {}}}));
+  // Only the last key is out of order, so the whole group must be checked.
+  EXPECT_EQ(
+      HybridFlatMap(
+          ScalarKind::String,
+          config({{0, {"b", "c", "d", "a"}}, {kDefault, {}}}))
+          .groups(),
+      config({{0, {"a", "b", "c", "d"}}, {kDefault, {}}}));
   // A Default-only configuration is valid: Default holds every key.
   EXPECT_EQ(
       HybridFlatMap(ScalarKind::Int32, config({{kDefault, {}}})).groups(),
