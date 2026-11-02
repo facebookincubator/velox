@@ -639,6 +639,52 @@ TEST_F(ArrowBridgeArrayExportTest, flatString) {
   }
 }
 
+TEST_F(ArrowBridgeArrayExportTest, flatStringView) {
+  const std::vector<std::optional<std::string>> inputData = {
+      "my string",
+      "another slightly longer string",
+      std::nullopt,
+      "",
+      "a",
+      "another even longer string to ensure it's for sure not stored inline!!!",
+      std::nullopt,
+  };
+  auto flatVector = vectorMaker_.flatVectorNullable(inputData);
+  options_.varTypeLayout = ArrowOptions::VarTypeLayout::kStringView;
+
+  ArrowArray arrowArray;
+  velox::exportToArrow(flatVector, arrowArray, pool_.get(), options_);
+
+  // Exporting must leave the source vector unchanged.
+  for (vector_size_t i = 0; i < inputData.size(); ++i) {
+    if (inputData[i].has_value()) {
+      EXPECT_EQ(flatVector->valueAt(i), StringView(inputData[i].value()))
+          << "mismatch at index " << i;
+    }
+  }
+
+  // Each Arrow view is [length, prefix, buffer index, buffer offset], or
+  // [length, inline data] for strings of 12 bytes or less.
+  const auto* nulls = static_cast<const uint64_t*>(arrowArray.buffers[0]);
+  const auto* views = static_cast<const uint32_t*>(arrowArray.buffers[1]);
+  for (vector_size_t i = 0; i < inputData.size(); ++i) {
+    if (!inputData[i].has_value()) {
+      EXPECT_TRUE(bits::isBitNull(nulls, i));
+      continue;
+    }
+    const auto* view = views + 4 * i;
+    const auto size = view[0];
+    ASSERT_EQ(size, inputData[i]->size());
+    const char* data = StringView::isInline(size)
+        ? reinterpret_cast<const char*>(view + 1)
+        : static_cast<const char*>(arrowArray.buffers[2 + view[2]]) + view[3];
+    EXPECT_EQ(std::string_view(data, size), inputData[i].value())
+        << "mismatch at index " << i;
+  }
+
+  arrowArray.release(&arrowArray);
+}
+
 TEST_F(ArrowBridgeArrayExportTest, rowVector) {
   std::vector<std::optional<int64_t>> col1 = {1, 2, 3, 4};
   std::vector<std::optional<double>> col2 = {99.9, 88.8, 77.7, std::nullopt};
@@ -876,6 +922,40 @@ TEST_F(ArrowBridgeArrayExportTest, arrayGap) {
   EXPECT_TRUE(values.IsNull(2));
   EXPECT_FALSE(values.IsNull(3));
   EXPECT_EQ(values.Value(3), 5);
+}
+
+TEST_F(ArrowBridgeArrayExportTest, arrayGapStringView) {
+  // The gap makes the elements export a subset of rows, so the exported views
+  // are gathered and no longer line up with the element row numbers.
+  auto elements = vectorMaker_.flatVectorNullable<std::string>({
+      "first string that is not inline",
+      "short",
+      "skipped string that is not inline",
+      std::nullopt,
+      "last string that is not inline",
+  });
+  auto offsets = makeBuffer<vector_size_t>({0, 3});
+  auto sizes = makeBuffer<vector_size_t>({2, 2});
+  auto vec = std::make_shared<ArrayVector>(
+      pool_.get(), ARRAY(VARCHAR()), nullptr, 2, offsets, sizes, elements);
+  options_.varTypeLayout = ArrowOptions::VarTypeLayout::kStringView;
+
+  auto array = toArrow(vec, options_, pool_.get());
+  ASSERT_OK(array->ValidateFull());
+  ASSERT_EQ(*array->type(), *arrow::list(arrow::utf8_view()));
+  auto& listArray = static_cast<const arrow::ListArray&>(*array);
+  validateOffsets(listArray, {0, 2, 4});
+  auto& values =
+      static_cast<const arrow::StringViewArray&>(*listArray.values());
+  ASSERT_EQ(values.length(), 4);
+  EXPECT_EQ(values.GetView(0), "first string that is not inline");
+  EXPECT_EQ(values.GetView(1), "short");
+  EXPECT_TRUE(values.IsNull(2));
+  EXPECT_EQ(values.GetView(3), "last string that is not inline");
+
+  // Exporting must leave the source vector unchanged.
+  EXPECT_EQ(elements->valueAt(0), "first string that is not inline");
+  EXPECT_EQ(elements->valueAt(4), "last string that is not inline");
 }
 
 TEST_F(ArrowBridgeArrayExportTest, allNullTimestampValues) {
