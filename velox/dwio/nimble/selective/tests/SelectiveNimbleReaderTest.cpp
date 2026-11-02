@@ -1917,6 +1917,64 @@ TEST_P(SelectiveNimbleReaderTest, estimatedRowSizePartialProjection) {
   }
 }
 
+// The row size estimate for a flat map read as a struct counts only the
+// selected keys.
+TEST_P(SelectiveNimbleReaderTest, estimatedRowSizeFlatMapKeySubset) {
+  constexpr int kSize = 40;
+  static constexpr int kNumKeys = 8;
+  // Every row has all 8 keys, so each key is an equal share of the column.
+  auto input = makeRowVector({
+      makeMapVector<int32_t, double>(
+          kSize,
+          [](auto /*row*/) { return kNumKeys; },
+          [](auto j) { return j % kNumKeys; },
+          [](auto j) { return j * 1.5; }),
+  });
+  WriterOptions writerOptions;
+  writerOptions.flatMapColumns = {{"c0", {}}};
+  auto fileContent = test::createNimbleFile(*rootPool(), input, writerOptions);
+
+  auto rowSize = [&](const std::shared_ptr<common::ScanSpec>& scanSpec) {
+    auto readFile = std::make_shared<InMemoryReadFile>(fileContent);
+    auto factory =
+        dwio::common::getReaderFactory(dwio::common::FileFormat::NIMBLE);
+    dwio::common::ReaderOptions options(pool());
+    options.setDataIoStats(dataIoStats_);
+    options.setMetadataIoStats(metadataIoStats_);
+    options.setScanSpec(scanSpec);
+    auto reader = factory->createReader(
+        std::make_unique<dwio::common::BufferedInput>(readFile, *pool()),
+        options);
+    dwio::common::RowReaderOptions rowOptions;
+    rowOptions.setScanSpec(scanSpec);
+    auto estimate = reader->createRowReader(rowOptions)->estimatedRowSize();
+    EXPECT_TRUE(estimate.has_value());
+    return estimate.value_or(0);
+  };
+  auto rowSizeForKeys = [&](const std::vector<std::string>& keys) {
+    auto scanSpec = std::make_shared<common::ScanSpec>("root");
+    scanSpec->addAllChildFields(*ROW("c0", ROW(keys, DOUBLE())));
+    scanSpec->childByName("c0")->setFlatMapAsStruct(true);
+    return rowSize(scanSpec);
+  };
+
+  const auto allKeys = rowSizeForKeys({"0", "1", "2", "3", "4", "5", "6", "7"});
+  ASSERT_GT(allKeys, 0);
+  // Two of eight keys should cost a quarter of all eight.
+  EXPECT_EQ(rowSizeForKeys({"0", "1"}), allKeys / 4);
+  // Four of eight, half.
+  EXPECT_EQ(rowSizeForKeys({"0", "1", "2", "3"}), allKeys / 2);
+
+  // A map-shaped read selects keys through a filter on 'keys', which gives no
+  // key count, so it stays unscaled.
+  auto mapSpec = std::make_shared<common::ScanSpec>("root");
+  mapSpec->addAllChildFields(*ROW("c0", MAP(INTEGER(), DOUBLE())));
+  mapSpec->childByName("c0")
+      ->childByName(common::ScanSpec::kMapKeysFieldName)
+      ->setFilter(common::createBigintValues({0, 1}, /*nullAllowed=*/false));
+  EXPECT_EQ(rowSize(mapSpec), allKeys);
+}
+
 // Verifies estimatedRowSize for nested types (array, map) uses the
 // already-rolled-up column stats without double-counting.
 TEST_P(SelectiveNimbleReaderTest, estimatedRowSizeNestedTypes) {
