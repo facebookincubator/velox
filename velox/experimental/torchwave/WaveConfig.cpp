@@ -122,11 +122,6 @@ std::string WaveConfig::toString() const {
   addBool("duplicateMetadata", &WaveConfig::duplicateMetadata);
   addBool("configPerOp", &WaveConfig::configPerOp);
   addBool("deferSizeOutputs", &WaveConfig::deferSizeOutputs);
-  addBool("donateBuffers", &WaveConfig::donateBuffers);
-  addInt("donationCarryBytes", &WaveConfig::donationCarryBytes);
-  addBool("enableAllocGroup", &WaveConfig::enableAllocGroup);
-  addBool("enableConcatAllocGroup", &WaveConfig::enableConcatAllocGroup);
-  addBool("enableLifetimeAllocGroup", &WaveConfig::enableLifetimeAllocGroup);
   addBool("orderBlocksByCost", &WaveConfig::orderBlocksByCost);
   addBool("partitionLaunches", &WaveConfig::partitionLaunches);
   addInt("maxLaunchWaves", &WaveConfig::maxLaunchWaves);

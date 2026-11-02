@@ -18,11 +18,11 @@ velox_add_library(
   velox_vector_index_settings
   LocalVectorIndexOptions.cpp
   VectorIndexMetric.cpp
-  VectorIndexType.cpp
+  VectorIndexKind.cpp
   HEADERS
   LocalVectorIndexOptions.h
   VectorIndexMetric.h
-  VectorIndexType.h
+  VectorIndexKind.h
 )
 
 velox_link_libraries(
@@ -34,8 +34,6 @@ velox_link_libraries(
 )
 
 if(VELOX_ENABLE_FAISS)
-  find_package(OpenMP REQUIRED)
-
   velox_add_library(
     velox_vector_index
     Embeddings.cpp

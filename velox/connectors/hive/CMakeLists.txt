@@ -35,6 +35,7 @@ velox_add_library(
   FileDataSource.cpp
   FileIndexReader.cpp
   FileSplitReader.cpp
+  FileTableHandle.cpp
   HiveConfig.cpp
   HiveConfigProvider.cpp
   HiveConnector.cpp

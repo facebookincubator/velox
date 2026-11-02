@@ -25,6 +25,7 @@ Presto Functions
     functions/presto/setdigest
     functions/presto/tdigest
     functions/presto/qdigest
+    functions/presto/vectorindex
     functions/presto/geospatial
     functions/presto/ipaddress
     functions/presto/uuid

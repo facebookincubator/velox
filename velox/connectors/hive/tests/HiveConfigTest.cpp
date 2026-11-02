@@ -91,7 +91,6 @@ TEST(HiveConfigTest, defaultConfig) {
   ASSERT_FALSE(hiveConfig.useColumnNames(emptySession.get()));
   ASSERT_EQ(
       hiveConfig.nimbleFooterSpeculativeIoSize(emptySession.get()), 8UL << 20);
-  ASSERT_FALSE(hiveConfig.nimbleStringDecoderZeroCopy(emptySession.get()));
   ASSERT_FALSE(hiveConfig.nimblePreserveDictionaryEncoding(emptySession.get()));
 }
 
@@ -122,7 +121,6 @@ TEST(HiveConfigTest, overrideConfig) {
       {HiveConfig::kOrcFooterSpeculativeIoSize, std::to_string(512UL << 10)},
       {"hive.use-column-names", "true"},
       {HiveConfig::kNimbleFooterSpeculativeIoSize, std::to_string(4UL << 20)},
-      {HiveConfig::kNimbleStringDecoderZeroCopy, "true"},
       {HiveConfig::kNimblePreserveDictionaryEncoding, "true"},
   };
   HiveConfig hiveConfig(
@@ -163,7 +161,6 @@ TEST(HiveConfigTest, overrideConfig) {
   ASSERT_TRUE(hiveConfig.useColumnNames(emptySession.get()));
   ASSERT_EQ(
       hiveConfig.nimbleFooterSpeculativeIoSize(emptySession.get()), 4UL << 20);
-  ASSERT_TRUE(hiveConfig.nimbleStringDecoderZeroCopy(emptySession.get()));
   ASSERT_TRUE(hiveConfig.nimblePreserveDictionaryEncoding(emptySession.get()));
 }
 
@@ -192,7 +189,6 @@ TEST(HiveConfigTest, overrideSession) {
       {HiveConfig::kUseColumnNamesSession, "true"},
       {HiveConfig::kNimbleFooterSpeculativeIoSizeSession,
        std::to_string(2UL << 20)},
-      {HiveConfig::kNimbleStringDecoderZeroCopySession, "true"},
       {HiveConfig::kNimblePreserveDictionaryEncodingSession, "true"},
   };
   const auto session =
@@ -226,7 +222,6 @@ TEST(HiveConfigTest, overrideSession) {
   ASSERT_EQ(hiveConfig.orcFooterSpeculativeIoSize(session.get()), 128UL << 10);
   ASSERT_TRUE(hiveConfig.useColumnNames(session.get()));
   ASSERT_EQ(hiveConfig.nimbleFooterSpeculativeIoSize(session.get()), 2UL << 20);
-  ASSERT_TRUE(hiveConfig.nimbleStringDecoderZeroCopy(session.get()));
   ASSERT_TRUE(hiveConfig.nimblePreserveDictionaryEncoding(session.get()));
 }
 

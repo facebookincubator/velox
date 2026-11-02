@@ -136,6 +136,9 @@ class RPCOperator : public exec::Operator {
       "rpcCongestionOverloadShrinks"};
   /// Attempts rejected for capacity and admitted again for another attempt.
   static inline const std::string kRpcCapacityRetries{"rpcCapacityRetries"};
+  /// Capacity retries a hint's minRetries granted after its budget ran out.
+  static inline const std::string kRpcCapacityRetryFloorRetries{
+      "rpcCapacityRetryFloorRetries"};
   static inline const std::string kRpcBaselineRttNanos{"rpcBaselineRttNanos"};
   static inline const std::string kRpcPeakInFlight{"rpcPeakInFlight"};
   static inline const std::string kRpcRttMinWallNanos{"rpcRttMinWallNanos"};

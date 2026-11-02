@@ -248,6 +248,373 @@ TEST_F(RPCStateTest, capacityRetryDispatchesOnlyWithinBudget) {
   }
 }
 
+namespace {
+// A rejection of row 1 with a capacity-retry hint.
+RPCResponse hintedRejection(velox::rpc::CapacityRetry hint) {
+  auto response = RPCResponse::failed(
+      1, velox::rpc::RPCErrorKind::kRateLimited, "rejected");
+  response.setCapacityRetry(hint);
+  return response;
+}
+
+// A rejection of row 1 with 'hint' that arrives after 'delay'.
+folly::SemiFuture<RPCResponse> delayedRejection(
+    velox::rpc::CapacityRetry hint,
+    std::chrono::milliseconds delay) {
+  return folly::futures::sleep(delay).deferValue(
+      [hint](auto&&) { return hintedRejection(hint); });
+}
+} // namespace
+
+// A hint's maxRetries ends the row's retries once that many have run, with
+// most of the budget left.
+TEST_F(RPCStateTest, capacityRetryStopsAfterMaxRetries) {
+  state_->setStreamingMode(RPCStreamingMode::kPerRow);
+  state_->setCapacityRetryEnabled(true);
+  const velox::rpc::CapacityRetry hint{
+      .retryAfter = std::chrono::milliseconds(0),
+      .budget = std::chrono::minutes(10),
+      .maxRetries = 1,
+  };
+
+  state_->addPendingRow(
+      state_,
+      1,
+      RPCState::RowLocation{0, 0},
+      folly::makeSemiFuture(hintedRejection(hint)));
+  waitFor([&]() { return state_->numInFlight() == 0; });
+  auto retries = state_->takeDueRetries(1);
+  ASSERT_EQ(retries.size(), 1);
+
+  state_->addRetriedRow(
+      state_,
+      retries[0],
+      folly::makeSemiFuture(hintedRejection(hint)),
+      nullptr);
+  waitFor([&]() { return state_->numInFlight() == 0; });
+  EXPECT_FALSE(state_->hasRetries());
+  const auto failed = state_->tryClaimReady();
+  ASSERT_TRUE(failed.has_value());
+  EXPECT_EQ(
+      failed->response.errorKind(), velox::rpc::RPCErrorKind::kRateLimited);
+}
+
+// A hint with a maxRetries needs no budget: the count alone limits the row,
+// so a zero budget still lets it retry.
+TEST_F(RPCStateTest, capacityRetryWithMaxRetriesNeedsNoBudget) {
+  state_->setStreamingMode(RPCStreamingMode::kPerRow);
+  state_->setCapacityRetryEnabled(true);
+  state_->addPendingRow(
+      state_,
+      1,
+      RPCState::RowLocation{0, 0},
+      folly::makeSemiFuture(hintedRejection({
+          .retryAfter = std::chrono::milliseconds(0),
+          .maxRetries = 1,
+      })));
+  waitFor([&]() { return state_->numInFlight() == 0; });
+  /* sleep override */
+  std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+  EXPECT_EQ(state_->takeDueRetries(1).size(), 1);
+}
+
+TEST_F(RPCStateTest, capacityRetryRejectsInvalidCounts) {
+  VELOX_ASSERT_THROW(
+      hintedRejection({
+          .retryAfter = std::chrono::milliseconds(0),
+          .maxRetries = 0,
+      }),
+      "Capacity retry maxRetries must be positive");
+  VELOX_ASSERT_THROW(
+      hintedRejection({
+          .retryAfter = std::chrono::milliseconds(0),
+          .maxRetries = 1,
+          .numInPlaceRetries = -1,
+      }),
+      "Capacity retry numInPlaceRetries must not be negative");
+  VELOX_ASSERT_THROW(
+      hintedRejection({
+          .retryAfter = std::chrono::milliseconds(0),
+          .budget = std::chrono::seconds(1),
+          .minRetries = -1,
+      }),
+      "Capacity retry minRetries must not be negative");
+  VELOX_ASSERT_THROW(
+      hintedRejection({
+          .retryAfter = std::chrono::milliseconds(0),
+          .maxRetries = 1,
+          .minRetries = 1,
+      }),
+      "Capacity retry minRetries applies only without maxRetries");
+  VELOX_ASSERT_THROW(
+      hintedRejection({.retryAfter = std::chrono::milliseconds(0)}),
+      "Capacity retry without maxRetries needs a positive budget or minRetries");
+  // A floor alone is a valid limit: that many retries, with no time budget.
+  EXPECT_NO_THROW(hintedRejection({
+      .retryAfter = std::chrono::milliseconds(0),
+      .minRetries = 1,
+  }));
+}
+
+// A time-limited hint's minRetries grants retries after its budget runs out,
+// so attempts slower than the budget still get that many retries.
+TEST_F(RPCStateTest, capacityRetryFloorOutlastsTheBudget) {
+  state_->setStreamingMode(RPCStreamingMode::kPerRow);
+  state_->setCapacityRetryEnabled(true);
+  const velox::rpc::CapacityRetry hint{
+      .retryAfter = std::chrono::milliseconds(0),
+      .budget = std::chrono::milliseconds(1),
+      .minRetries = 2,
+  };
+  const auto slowAttempt = std::chrono::milliseconds(20);
+
+  state_->addPendingRow(
+      state_,
+      1,
+      RPCState::RowLocation{0, 0},
+      delayedRejection(hint, slowAttempt));
+  for (int retry = 0; retry < 2; ++retry) {
+    SCOPED_TRACE(retry);
+    waitFor([&]() { return state_->numInFlight() == 0; });
+    auto retries = state_->takeDueRetries(1);
+    ASSERT_EQ(retries.size(), 1);
+    state_->addRetriedRow(
+        state_, retries[0], delayedRejection(hint, slowAttempt), nullptr);
+  }
+
+  // Two retries ran and the budget is long gone, so the third rejection ends
+  // the row.
+  waitFor([&]() { return state_->numInFlight() == 0; });
+  EXPECT_FALSE(state_->hasRetries());
+  const auto failed = state_->tryClaimReady();
+  ASSERT_TRUE(failed.has_value());
+  EXPECT_EQ(
+      failed->response.errorKind(), velox::rpc::RPCErrorKind::kRateLimited);
+  // Both retries started after the 1 ms budget, so the floor granted both.
+  EXPECT_EQ(state_->operatorSnapshot().numCapacityRetryFloorRetries, 2);
+}
+
+// The transport's in-place retries count toward minRetries.
+TEST_F(RPCStateTest, capacityRetryFloorCountsInPlaceRetries) {
+  state_->setStreamingMode(RPCStreamingMode::kPerRow);
+  state_->setCapacityRetryEnabled(true);
+  state_->addPendingRow(
+      state_,
+      1,
+      RPCState::RowLocation{0, 0},
+      delayedRejection(
+          {
+              .retryAfter = std::chrono::milliseconds(0),
+              .budget = std::chrono::milliseconds(1),
+              .numInPlaceRetries = 2,
+              .minRetries = 2,
+          },
+          std::chrono::milliseconds(20)));
+  waitFor([&]() { return state_->numInFlight() == 0; });
+
+  EXPECT_FALSE(state_->hasRetries());
+  const auto failed = state_->tryClaimReady();
+  ASSERT_TRUE(failed.has_value());
+  EXPECT_EQ(
+      failed->response.errorKind(), velox::rpc::RPCErrorKind::kRateLimited);
+}
+
+// A floor keeps a row retrying past its budget, but no longer than an hour from
+// its first attempt, the longest a single call may take. A longer budget wins.
+TEST_F(RPCStateTest, capacityRetryFloorEndsWithinAnHour) {
+  state_->setStreamingMode(RPCStreamingMode::kPerRow);
+  state_->setCapacityRetryEnabled(true);
+  auto deadlineAfterFirstAttempt = [&](int64_t rowId,
+                                       std::chrono::milliseconds budget) {
+    auto response = RPCResponse::failed(
+        rowId, velox::rpc::RPCErrorKind::kRateLimited, "rejected");
+    response.setCapacityRetry({
+        .retryAfter = std::chrono::milliseconds(0),
+        .budget = budget,
+        .minRetries = 100,
+    });
+    state_->addPendingRow(
+        state_,
+        rowId,
+        RPCState::RowLocation{0, 0},
+        folly::makeSemiFuture(std::move(response)));
+    waitFor([&]() { return state_->numInFlight() == 0; });
+    const auto retries = state_->takeDueRetries(1);
+    EXPECT_EQ(retries.size(), 1);
+    return retries.empty()
+        ? std::chrono::nanoseconds(0)
+        : std::chrono::nanoseconds(
+              retries[0].deadlineNs - retries[0].firstAttemptNs);
+  };
+
+  EXPECT_EQ(
+      deadlineAfterFirstAttempt(1, std::chrono::milliseconds(1)),
+      std::chrono::hours(1));
+  EXPECT_EQ(
+      deadlineAfterFirstAttempt(2, std::chrono::hours(2)),
+      std::chrono::hours(2));
+}
+
+// In-place retries add up across attempts toward the floor: with one in-place
+// retry per attempt and minRetries 3, one operator retry reaches the floor.
+TEST_F(RPCStateTest, capacityRetryFloorAddsUpInPlaceRetries) {
+  state_->setStreamingMode(RPCStreamingMode::kPerRow);
+  state_->setCapacityRetryEnabled(true);
+  const velox::rpc::CapacityRetry hint{
+      .retryAfter = std::chrono::milliseconds(0),
+      .budget = std::chrono::milliseconds(1),
+      .numInPlaceRetries = 1,
+      .minRetries = 3,
+  };
+  const auto slowAttempt = std::chrono::milliseconds(20);
+
+  state_->addPendingRow(
+      state_,
+      1,
+      RPCState::RowLocation{0, 0},
+      delayedRejection(hint, slowAttempt));
+  waitFor([&]() { return state_->numInFlight() == 0; });
+  auto retries = state_->takeDueRetries(1);
+  ASSERT_EQ(retries.size(), 1);
+  state_->addRetriedRow(
+      state_, retries[0], delayedRejection(hint, slowAttempt), nullptr);
+
+  // One in-place retry, one operator retry, one more in-place retry: the floor
+  // of 3 is met and the budget is gone, so the row ends.
+  waitFor([&]() { return state_->numInFlight() == 0; });
+  EXPECT_FALSE(state_->hasRetries());
+  const auto failed = state_->tryClaimReady();
+  ASSERT_TRUE(failed.has_value());
+  EXPECT_EQ(
+      failed->response.errorKind(), velox::rpc::RPCErrorKind::kRateLimited);
+}
+
+// The transport's in-place retries count toward maxRetries: the operator and
+// the transport share one retry count.
+TEST_F(RPCStateTest, capacityRetryCountsInPlaceRetries) {
+  state_->setStreamingMode(RPCStreamingMode::kPerRow);
+  state_->setCapacityRetryEnabled(true);
+  auto hint = [](int32_t numInPlaceRetries) {
+    return hintedRejection({
+        .retryAfter = std::chrono::milliseconds(0),
+        .maxRetries = 3,
+        .numInPlaceRetries = numInPlaceRetries,
+    });
+  };
+
+  // The first attempt retried twice in place, so one retry is left.
+  state_->addPendingRow(
+      state_, 1, RPCState::RowLocation{0, 0}, folly::makeSemiFuture(hint(2)));
+  waitFor([&]() { return state_->numInFlight() == 0; });
+  auto retries = state_->takeDueRetries(1);
+  ASSERT_EQ(retries.size(), 1);
+
+  state_->addRetriedRow(
+      state_, retries[0], folly::makeSemiFuture(hint(0)), nullptr);
+  waitFor([&]() { return state_->numInFlight() == 0; });
+  EXPECT_FALSE(state_->hasRetries());
+  const auto failed = state_->tryClaimReady();
+  ASSERT_TRUE(failed.has_value());
+  EXPECT_EQ(
+      failed->response.errorKind(), velox::rpc::RPCErrorKind::kRateLimited);
+}
+
+// Retries under hints without a maxRetries, such as overloads on a deadline,
+// neither spend a later rate limit's maxRetries nor lengthen its first wait.
+TEST_F(RPCStateTest, capacityRetryCountsHintKindsApart) {
+  state_->setStreamingMode(RPCStreamingMode::kPerRow);
+  state_->setCapacityRetryEnabled(true);
+  const velox::rpc::CapacityRetry overload{
+      .retryAfter = std::chrono::milliseconds(0),
+      .budget = std::chrono::minutes(10),
+  };
+
+  state_->addPendingRow(
+      state_,
+      1,
+      RPCState::RowLocation{0, 0},
+      folly::makeSemiFuture(hintedRejection(overload)));
+  waitFor([&]() { return state_->numInFlight() == 0; });
+  auto retries = state_->takeDueRetries(1);
+  ASSERT_EQ(retries.size(), 1);
+  for (int i = 0; i < 2; ++i) {
+    state_->addRetriedRow(
+        state_,
+        retries[0],
+        folly::makeSemiFuture(hintedRejection(overload)),
+        nullptr);
+    waitFor([&]() { return state_->numInFlight() == 0; });
+    retries = state_->takeDueRetries(1);
+    ASSERT_EQ(retries.size(), 1);
+  }
+
+  // A 200 ms first wait, which three earlier rejections of the same kind
+  // would have doubled to 1.6 s.
+  state_->addRetriedRow(
+      state_,
+      retries[0],
+      folly::makeSemiFuture(hintedRejection({
+          .retryAfter = std::chrono::milliseconds(200),
+          .budget = std::chrono::minutes(10),
+          .maxRetryAfter = std::chrono::seconds(10),
+          .maxRetries = 3,
+      })),
+      nullptr);
+  waitFor([&]() { return state_->numInFlight() == 0; });
+  EXPECT_TRUE(state_->hasRetries());
+  /* sleep override */
+  std::this_thread::sleep_for(std::chrono::milliseconds(400));
+  EXPECT_EQ(state_->takeDueRetries(1).size(), 1);
+}
+
+// The other order: rate-limit retries leave an overload's backoff at its first
+// wait.
+TEST_F(RPCStateTest, capacityRetryCountsHintKindsApartAfterRateLimits) {
+  state_->setStreamingMode(RPCStreamingMode::kPerRow);
+  state_->setCapacityRetryEnabled(true);
+  const velox::rpc::CapacityRetry rateLimit{
+      .retryAfter = std::chrono::milliseconds(0),
+      .maxRetries = 5,
+  };
+
+  state_->addPendingRow(
+      state_,
+      1,
+      RPCState::RowLocation{0, 0},
+      folly::makeSemiFuture(hintedRejection(rateLimit)));
+  waitFor([&]() { return state_->numInFlight() == 0; });
+  auto retries = state_->takeDueRetries(1);
+  ASSERT_EQ(retries.size(), 1);
+  for (int i = 0; i < 2; ++i) {
+    state_->addRetriedRow(
+        state_,
+        retries[0],
+        folly::makeSemiFuture(hintedRejection(rateLimit)),
+        nullptr);
+    waitFor([&]() { return state_->numInFlight() == 0; });
+    retries = state_->takeDueRetries(1);
+    ASSERT_EQ(retries.size(), 1);
+  }
+
+  // A 200 ms first wait, which three earlier rejections of the same kind
+  // would have doubled to 1.6 s.
+  state_->addRetriedRow(
+      state_,
+      retries[0],
+      folly::makeSemiFuture(hintedRejection({
+          .retryAfter = std::chrono::milliseconds(200),
+          .budget = std::chrono::minutes(10),
+          .maxRetryAfter = std::chrono::seconds(10),
+      })),
+      nullptr);
+  waitFor([&]() { return state_->numInFlight() == 0; });
+  EXPECT_TRUE(state_->hasRetries());
+  /* sleep override */
+  std::this_thread::sleep_for(std::chrono::milliseconds(400));
+  EXPECT_EQ(state_->takeDueRetries(1).size(), 1);
+}
+
 // A row past its budget fails as soon as the driver claims, without waiting
 // for an admission slot to dispatch it.
 TEST_F(RPCStateTest, expiredCapacityRetryFailsOnClaim) {
@@ -486,6 +853,32 @@ TEST_F(RPCStateTest, repeatedRejectionsGrowTheWaitUpToItsCap) {
   EXPECT_FALSE(secondWaitExceeds400Ms(2, std::chrono::milliseconds(0)));
 }
 
+// A count-limited row backs off from the retries it has had, the transport's
+// in-place ones included: two in-place retries make the first operator wait
+// 100 ms * 2^2 = 400 ms.
+TEST_F(RPCStateTest, countLimitedBackoffGrowsWithInPlaceRetries) {
+  state_->setStreamingMode(RPCStreamingMode::kPerRow);
+  state_->setCapacityRetryEnabled(true);
+  auto response = RPCResponse::failed(
+      1, velox::rpc::RPCErrorKind::kRateLimited, "rejected");
+  response.setCapacityRetry({
+      .retryAfter = std::chrono::milliseconds(100),
+      .maxRetryAfter = std::chrono::seconds(2),
+      .maxRetries = 5,
+      .numInPlaceRetries = 2,
+  });
+  state_->addPendingRow(
+      state_,
+      1,
+      RPCState::RowLocation{0, 0},
+      folly::makeSemiFuture(std::move(response)));
+  waitFor([&]() { return state_->hasRetries(); });
+  /* sleep override */
+  std::this_thread::sleep_for(std::chrono::milliseconds(250));
+  EXPECT_EQ(state_->numDueRetries(), 0);
+  waitFor([&]() { return state_->numDueRetries() == 1; });
+}
+
 // With jitter, rows rejected together draw their waits from [0, retryAfter],
 // so their retries spread over the window instead of coming due at once.
 TEST_F(RPCStateTest, jitterSpreadsRetries) {
@@ -498,7 +891,7 @@ TEST_F(RPCStateTest, jitterSpreadsRetries) {
     response.setCapacityRetry(
         {.retryAfter = std::chrono::milliseconds(800),
          .budget = std::chrono::seconds(60),
-         .jitter = true});
+         .jitter = velox::rpc::CapacityRetryJitter::kFull});
     state_->addPendingRow(
         state_,
         rowId,
@@ -513,6 +906,44 @@ TEST_F(RPCStateTest, jitterSpreadsRetries) {
   EXPECT_GT(dueAtMidpoint, 0);
   EXPECT_LT(dueAtMidpoint, kRows);
   waitFor([&]() { return state_->numDueRetries() == kRows; });
+}
+
+// Equal jitter draws each wait from [nominal / 2, nominal]: rows rejected
+// together come due no earlier than half the nominal wait, spread over the
+// second half, and all by the nominal wait.
+TEST_F(RPCStateTest, equalJitterWaitsAtLeastHalf) {
+  constexpr int32_t kRows = 40;
+  state_->setStreamingMode(RPCStreamingMode::kPerRow);
+  state_->setCapacityRetryEnabled(true);
+  const auto start = std::chrono::steady_clock::now();
+  for (int32_t rowId = 0; rowId < kRows; ++rowId) {
+    auto response = RPCResponse::failed(
+        rowId, velox::rpc::RPCErrorKind::kRateLimited, "rejected");
+    response.setCapacityRetry({
+        .retryAfter = std::chrono::milliseconds(800),
+        .budget = std::chrono::seconds(60),
+        .jitter = velox::rpc::CapacityRetryJitter::kEqual,
+    });
+    state_->addPendingRow(
+        state_,
+        rowId,
+        RPCState::RowLocation{0, 0},
+        folly::makeSemiFuture(std::move(response)));
+  }
+  waitFor([&]() { return state_->numInFlight() == 0; });
+  auto sleepUntil = [&](std::chrono::milliseconds sinceStart) {
+    /* sleep override */
+    std::this_thread::sleep_until(start + sinceStart);
+  };
+
+  sleepUntil(std::chrono::milliseconds(300));
+  EXPECT_EQ(state_->numDueRetries(), 0);
+  sleepUntil(std::chrono::milliseconds(600));
+  const auto dueAtThreeQuarters = state_->numDueRetries();
+  EXPECT_GT(dueAtThreeQuarters, 0);
+  EXPECT_LT(dueAtThreeQuarters, kRows);
+  sleepUntil(std::chrono::milliseconds(950));
+  EXPECT_EQ(state_->numDueRetries(), kRows);
 }
 
 // A rejection is counted as a capacity retry once it is admitted again, not

@@ -272,21 +272,6 @@ struct WaveConfig {
   // meaningful with freeIntermediates, which is what makes the frees delayable.
   int64_t maxDelayedFree{1LL << 30};
 
-  // If true, hold a released wave-kernel buffer instead of returning it to the
-  // caching allocator, and hand it to a later wave kernel that needs exactly
-  // the same number of bytes. Allocation costs roughly the same per call at any
-  // size, so skipping the call is the win, not the memory. Safe without a sync
-  // because the wave stream is in order and the buffer is never unowned. Off by
-  // default.
-  bool donateBuffers{false};
-
-  // Bytes of donatable buffers carried between executions. The pool is trimmed
-  // to this at the end of each run. Distinct from maxDelayedFree, which bounds
-  // freeing held up by run-ahead within a run: carrying buffers across runs
-  // keeps them out of the caching allocator entirely, so hoarding the big ones
-  // makes every allocation the pool does NOT serve more expensive.
-  int64_t donationCarryBytes{64LL << 20};
-
   // If true, run the pre-partition metadata-duplication pass: rematerialize a
   // multiply-used metadata getter (sym_size / sym_numel) once per use site so
   // it stops being a shared value. A value with more than one user is a CSE
@@ -419,33 +404,6 @@ struct WaveConfig {
   // cg grid because each names its predecessor through inputFromPreviousKernel,
   // which breaks that producer into its own kernel whatever the grid mode.
   bool mkSelect{false};
-
-  // If true, allocate the outputs that share a lifetime out of one buffer
-  // instead of one allocator call each. Allocation costs roughly the same per
-  // call at any size, so the win is the call count: a step's outputs that all
-  // die at the same later step become one allocation carved into views. Only
-  // consulted in the cooperative-grid mode, where the grid -- and with it the
-  // step boundaries an allocation's lifetime is expressed in -- is settled
-  // before the first execution. Selects a separate execute path
-  // (executeAllocGroups) rather than branching inside the per-op one, and turns
-  // off buffer donation, whose size-matched reuse assumes per-output
-  // allocations.
-  bool enableAllocGroup{true};
-
-  // If true, a fused cat / stack of more than two operands gets an allocation
-  // group of its own: the whole result is allocated at the step that produces
-  // its operands, and each operand's frame slot is the region of the result it
-  // occupies, so the kernel that produces it writes in place and the concat
-  // copies nothing. Separate from enableAllocGroup, which it rides on, so the
-  // two can be measured apart.
-  bool enableConcatAllocGroup{true};
-
-  // If false, the lifetime grouping is skipped and only the concat groups are
-  // formed. Both still ride on enableAllocGroup, which they need for the plan
-  // to be installed at all; this splits the two apart so the concat grouping's
-  // own cost and benefit can be read off without the lifetime grouping's much
-  // larger numbers on top of it.
-  bool enableLifetimeAllocGroup{true};
 
   // If true, a fused cat / stack of more than two operands stops emitting one
   // copy per operand into its own kernel and instead pushes every operand into
