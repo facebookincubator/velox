@@ -170,6 +170,32 @@ class RPCOperator : public exec::Operator {
   /// runs another policy and this operator runs under the limiter for its own.
   static inline const std::string kRpcRateLimiterPolicyScoped{
       "rpcRateLimiterPolicyScoped"};
+  /// Time from this driver's first admission request until the stats sample
+  /// or close. The pacing and window stats below cover the same span, and a
+  /// driver that never requests admission reports none of the three. These
+  /// three and rpcStaleSuccessUnits are per-driver counters that sum across
+  /// drivers and tasks on Prestissimo and on Presto-on-Spark; the sums are
+  /// driver time, not wall time. sum(PacingNanos) / sum(AttachedNanos) is the
+  /// share of attached time during which the shared limiter paced. It bounds
+  /// pacing delay from above, because it includes time a driver was idle or
+  /// waiting on upstream. sum(LimitMilliUnitSeconds) / (sum(AttachedNanos) /
+  /// 1e9) is the average window in milli-admission-units.
+  static inline const std::string kRpcRateLimiterAttachedNanos{
+      "rpcRateLimiterAttachedNanos"};
+  /// Part of that span during which the shared limiter paced admission.
+  static inline const std::string kRpcRateLimiterPacingNanos{
+      "rpcRateLimiterPacingNanos"};
+  /// The shared limiter's committed window, the one rpcRateLimiterLimitMilli
+  /// shows, integrated over that span, in milli-admission-units times seconds.
+  /// Recovery growth counts once the limiter commits it to the window.
+  static inline const std::string kRpcRateLimiterLimitMilliUnitSeconds{
+      "rpcRateLimiterLimitMilliUnitSeconds"};
+  /// This driver's successful units whose recovery credit the shared limiter
+  /// discarded because an overload, including one in the same completion,
+  /// arrived after their admission. PER_ROW counts error-free rows; BATCH
+  /// counts the admission units of a flush with at least one successful row
+  /// as a whole, as the limiter credits them.
+  static inline const std::string kRpcStaleSuccessUnits{"rpcStaleSuccessUnits"};
 
   /// Live liveness stats, refreshed on every stats() call rather than only at
   /// close(). Units dispatched but not yet completed.
@@ -262,6 +288,10 @@ class RPCOperator : public exec::Operator {
   // the same key.
   void initializeRateLimiter();
 
+  // Reserves up to 'want' admission units. The first call records the limiter
+  // snapshot that the span stats are measured from.
+  std::vector<RPCRateLimiter::Token> tryAcquireAdmission(int64_t want);
+
   // Resolves an input whose selected rows all complete synchronously without a
   // backend. The function's preparation result guarantees the futures are
   // ready and lets these rows bypass admission and congestion accounting.
@@ -288,7 +318,10 @@ class RPCOperator : public exec::Operator {
   // window and the shared admission cap. They must back off together: a
   // rate-limit storm is low-latency, so the latency gradient alone is blind to
   // it and only the error verdict makes the window shrink.
-  void recordCongestion(
+  //
+  // Returns the units in 'successUnitsByEpoch' that the shared limiter
+  // discarded because an overload arrived after their admission.
+  int64_t recordCongestion(
       AsyncRPCFunction::CongestionSignal signal,
       const std::vector<int64_t>& roundTripTimesNs,
       const std::vector<std::pair<uint64_t, int64_t>>& successUnitsByEpoch,
@@ -358,10 +391,13 @@ class RPCOperator : public exec::Operator {
   // state_ and function_), and racing on the pointers themselves is undefined
   // behaviour. Holding the read lock across the sample also keeps close() from
   // freeing RPCState or the function underneath an in-progress read. Off every
-  // hot path: written twice per operator, read once per stats sample.
+  // hot path: written a few times per operator, read once per stats sample.
   struct LiveStatsSources {
     std::shared_ptr<RPCState> state;
     RPCRateLimiter* limiter{nullptr};
+    // The limiter's stats at this driver's first admission request. The span
+    // stats are reported as the change since then.
+    std::optional<RPCRateLimiter::Stats> limiterBaseline{};
     std::shared_ptr<AsyncRPCFunction> function;
     // True when 'limiter' is the controller for this operator's policy rather
     // than the backend's shared one.
@@ -384,6 +420,9 @@ class RPCOperator : public exec::Operator {
   RPCRateLimiter* limiter_{nullptr};
   // PER_ROW and AsyncRPCFunction::mayReturnCapacityRetries().
   bool capacityRetryEnabled_{false};
+
+  // Set by the first tryAcquireAdmission() call.
+  bool admissionRequested_{false};
 
   // Precomputed per-argument sources, in call()->inputs() order. Built once in
   // initialize() by walking the RPC call's argument expressions. A
@@ -412,6 +451,9 @@ class RPCOperator : public exec::Operator {
   // stats collector thread, hence atomic. Relaxed ordering is enough: these
   // are independent counters, not a handshake.
   std::atomic<int64_t> numRequestsDispatched_{0};
+  // Success units the shared limiter discarded as stale; see
+  // kRpcStaleSuccessUnits.
+  std::atomic<int64_t> numStaleSuccessUnits_{0};
   int64_t numResponsesReceived_{0};
   int64_t numErrors_{0};
   // Per-error-kind breakdown of numErrors_, populated by recordErrorKind().

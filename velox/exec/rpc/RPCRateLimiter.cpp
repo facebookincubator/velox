@@ -200,7 +200,8 @@ RPCRateLimiter::RPCRateLimiter(
     : admissionKey_{std::move(admissionKey)},
       now_{std::move(now)},
       random_{std::move(random)},
-      timekeeper_{timekeeper} {}
+      timekeeper_{timekeeper},
+      lastAccrual_{now_()} {}
 
 void RPCRateLimiter::setDefaultCapacity(int64_t capacity) {
   defaultCapacityRef().store(capacity);
@@ -285,7 +286,19 @@ void RPCRateLimiter::commitGrowthLocked() {
   }
 }
 
+void RPCRateLimiter::accrueLocked() {
+  const auto now = now_();
+  const auto elapsed = now - lastAccrual_;
+  if (isPacingLocked()) {
+    pacingTime_ += elapsed;
+  }
+  windowUnitSeconds_ +=
+      limitLocked() * std::chrono::duration<double>(elapsed).count();
+  lastAccrual_ = now;
+}
+
 void RPCRateLimiter::setLimitLocked(double limit) {
+  accrueLocked();
   ++pacingGeneration_;
   pacingTimerArmed_ = false;
   const double ceiling = static_cast<double>(ceilingLocked());
@@ -381,6 +394,9 @@ void RPCRateLimiter::testingReset() {
   limitChangedAt_ = std::chrono::steady_clock::time_point{};
   recovering_ = false;
   lowWaterLimit_ = 0.0;
+  pacingTime_ = std::chrono::steady_clock::duration::zero();
+  windowUnitSeconds_ = 0.0;
+  lastAccrual_ = now_();
   serviceHorizonNanos_ = kBootstrapServiceHorizonNanos;
   hasServiceHorizonSample_ = false;
   nextPacedAdmission_ = std::chrono::steady_clock::time_point{};
@@ -507,6 +523,7 @@ void RPCRateLimiter::onPacingTimerFailure(
 void RPCRateLimiter::applyMutationLocked(
     const std::function<void(Config&)>& mutate) {
   const bool wasAdaptive = config_.adaptive;
+  accrueLocked();
   mutate(config_);
   config_ = clamped(config_);
   if (!config_.adaptive) {
@@ -791,6 +808,7 @@ bool RPCRateLimiter::updateServiceHorizonLocked(int64_t rttNs) {
   if (rttNs <= 0) {
     return false;
   }
+  accrueLocked();
   const int64_t previous = serviceHorizonNanos_;
   if (!hasServiceHorizonSample_) {
     serviceHorizonNanos_ = rttNs;
@@ -801,6 +819,11 @@ bool RPCRateLimiter::updateServiceHorizonLocked(int64_t rttNs) {
       ((kServiceHorizonEwmaWeight - 1) * serviceHorizonNanos_ + rttNs) /
       kServiceHorizonEwmaWeight;
   return serviceHorizonNanos_ != previous;
+}
+
+bool RPCRateLimiter::successEarnsCreditLocked() const {
+  return config_.adaptive && limit_ > 0.0 &&
+      limitLocked() < static_cast<double>(ceilingLocked());
 }
 
 void RPCRateLimiter::applySuccessLocked(int64_t units, int64_t rttNs) {
@@ -863,20 +886,23 @@ void RPCRateLimiter::onSuccess(int64_t units, int64_t rttNs) {
   }
 }
 
-void RPCRateLimiter::onSuccessForEpoch(
+bool RPCRateLimiter::onSuccessForEpoch(
     uint64_t overloadEpoch,
     int64_t units,
     int64_t rttNs) {
   if (units <= 0) {
-    return;
+    return true;
   }
   std::vector<ContinuePromise> toNotify;
   std::optional<PacingTimerRequest> timerRequest;
+  bool discarded{false};
   {
     std::lock_guard<std::mutex> l(mutex_);
     if (overloadEpoch != overloadEpoch_) {
       commitGrowthLocked();
-      if (updateServiceHorizonLocked(rttNs) && isPacingLocked()) {
+      const bool horizonMoved = updateServiceHorizonLocked(rttNs);
+      discarded = successEarnsCreditLocked();
+      if (horizonMoved && isPacingLocked()) {
         setLimitLocked(limitLocked());
       }
     } else {
@@ -888,6 +914,7 @@ void RPCRateLimiter::onSuccessForEpoch(
   if (timerRequest.has_value()) {
     schedulePacingTimer(timerRequest.value());
   }
+  return !discarded;
 }
 
 void RPCRateLimiter::release() noexcept {
@@ -922,9 +949,13 @@ void RPCRateLimiter::release() noexcept {
 
 RPCRateLimiter::Stats RPCRateLimiter::stats() const {
   std::lock_guard<std::mutex> l(mutex_);
+  const auto now = now_();
+  const auto sinceAccrual = now - lastAccrual_;
   const double currentLimit = limitLocked();
   const double lowWaterLimit =
       lowWaterLimit_ > 0.0 ? lowWaterLimit_ : currentLimit;
+  const auto pacingTime =
+      isPacingLocked() ? pacingTime_ + sinceAccrual : pacingTime_;
   return Stats{
       .capacity = capacityLocked(),
       .hardLimit = ceilingLocked(),
@@ -937,6 +968,14 @@ RPCRateLimiter::Stats RPCRateLimiter::stats() const {
           static_cast<int64_t>(std::llround(lowWaterLimit * 1'000)),
       .serviceHorizonNanos = serviceHorizonNanos_,
       .recovering = recovering_,
+      .pacingNanos =
+          std::chrono::duration_cast<std::chrono::nanoseconds>(pacingTime)
+              .count(),
+      .windowUnitSeconds = windowUnitSeconds_ +
+          currentLimit * std::chrono::duration<double>(sinceAccrual).count(),
+      .clockNanos = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                        now.time_since_epoch())
+                        .count(),
   };
 }
 
