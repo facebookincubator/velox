@@ -527,6 +527,24 @@ struct IsNanFunction {
   }
 };
 
+/// Spark's NormalizeNaNAndZero, which the optimizer inserts before operations
+/// that compare floating-point values by their bits, e.g. join and grouping
+/// keys and array set operations. Maps -0.0 to 0.0 and every NaN to the
+/// canonical NaN, so values that are equal in Spark have the same bits.
+template <typename T>
+struct NormalizeNaNAndZeroFunction {
+  template <typename TInput>
+  FOLLY_ALWAYS_INLINE void call(TInput& result, TInput value) {
+    if (std::isnan(value)) {
+      result = std::numeric_limits<TInput>::quiet_NaN();
+    } else if (value == TInput(0)) {
+      result = TInput(0);
+    } else {
+      result = value;
+    }
+  }
+};
+
 template <typename T>
 struct ToHexVarbinaryFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);

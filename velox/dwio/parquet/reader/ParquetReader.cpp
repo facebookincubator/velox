@@ -1211,13 +1211,18 @@ TypePtr ReaderBase::convertType(
             *schemaElement.name());
         return BIGINT();
 
-      case thrift::ConvertedType::DATE:
+      case thrift::ConvertedType::DATE: {
         VELOX_CHECK_EQ(
             *schemaElement.type(),
             thrift::Type::INT32,
             "DATE converted type can only be set for value of thrift::Type::INT32");
+        const bool readAsTimestamp =
+            requestedType &&
+            isCompatible(requestedType, isRepeated, [](const TypePtr& type) {
+              return type->equivalent(*TIMESTAMP_UTC());
+            });
         VELOX_CHECK(
-            !requestedType ||
+            !requestedType || readAsTimestamp ||
                 isCompatible(
                     requestedType,
                     isRepeated,
@@ -1226,7 +1231,10 @@ TypePtr ReaderBase::convertType(
             "DATE",
             requestedType->toString(),
             *schemaElement.name());
-        return DATE();
+        // Use timestamp decoding and statistics for widened dates while
+        // retaining the physical INT32 type and DATE annotation.
+        return readAsTimestamp ? TIMESTAMP_UTC() : DATE();
+      }
 
       case thrift::ConvertedType::TIMESTAMP_MICROS:
       case thrift::ConvertedType::TIMESTAMP_MILLIS:

@@ -35,14 +35,14 @@ namespace {
 
 class LocalVectorIndexTest : public testing::Test {
  protected:
-  // Builds a local index of 'type' over 2-dimensional unit-length embeddings
+  // Builds a local index of 'kind' over 2-dimensional unit-length embeddings
   // (1, 0), (0, 1) and (-1, 0) with ids 10, 20 and 30.
-  static std::string build(VectorIndexType type) {
+  static std::string build(VectorIndexKind kind) {
     const std::vector<float> embeddings{1, 0, 0, 1, -1, 0};
     const std::vector<int64_t> ids{10, 20, 30};
     std::string bytes;
     LocalVectorIndex::build(
-        type,
+        kind,
         VectorIndexMetric::kCosine,
         LocalVectorIndexOptions{},
         Embeddings(embeddings, /*dimension=*/2),
@@ -53,18 +53,19 @@ class LocalVectorIndexTest : public testing::Test {
 };
 
 TEST_F(LocalVectorIndexTest, search) {
-  for (const auto type :
-       {VectorIndexType::kFlat,
-        VectorIndexType::kIvfFlat,
-        VectorIndexType::kIvfSq,
-        VectorIndexType::kHnswSq}) {
-    SCOPED_TRACE(VectorIndexTypeName::toName(type));
-    const auto bytes = build(type);
+  for (const auto kind :
+       {VectorIndexKind::kFlat,
+        VectorIndexKind::kIvfFlat,
+        VectorIndexKind::kIvfSq,
+        VectorIndexKind::kHnswSq}) {
+    SCOPED_TRACE(VectorIndexKindName::toName(kind));
+    const auto bytes = build(kind);
     const LocalVectorIndex index(
         bytes, VectorIndexMetric::kCosine, /*searchOptions=*/{});
-    EXPECT_EQ(type, index.type());
+    EXPECT_EQ(kind, index.kind());
     EXPECT_EQ(2, index.dimension());
     EXPECT_EQ(3, index.size());
+    EXPECT_EQ(3, LocalVectorIndex::size(bytes));
 
     // Nearest (0.8, 0.6) are ids 10, then 20. 'k' exceeds the size of the
     // index, so the last entry is missing.
@@ -79,12 +80,12 @@ TEST_F(LocalVectorIndexTest, search) {
 }
 
 TEST_F(LocalVectorIndexTest, searchOptions) {
-  const auto ivfBytes = build(VectorIndexType::kIvfFlat);
+  const auto ivfBytes = build(VectorIndexKind::kIvfFlat);
   const LocalVectorIndex ivf(
       ivfBytes,
       VectorIndexMetric::kCosine,
       LocalVectorIndexOptions{.nprobe = 5});
-  const auto hnswBytes = build(VectorIndexType::kHnswSq);
+  const auto hnswBytes = build(VectorIndexKind::kHnswSq);
   const LocalVectorIndex hnsw(
       hnswBytes,
       VectorIndexMetric::kCosine,
@@ -115,8 +116,20 @@ TEST_F(LocalVectorIndexTest, errors) {
           VectorIndexMetric::kCosine,
           {}),
       "Invalid local vector index: unsupported FAISS index");
+  VELOX_ASSERT_THROW(
+      LocalVectorIndex::size(
+          std::string(writer.data.begin(), writer.data.end())),
+      "Invalid local vector index: unsupported FAISS index");
+  VELOX_ASSERT_THROW(
+      LocalVectorIndex::size("IxMp"), "Invalid local vector index: too short");
+  auto negative = build(VectorIndexKind::kFlat);
+  const int64_t numEmbeddings{-1};
+  std::memcpy(negative.data() + 8, &numEmbeddings, sizeof(numEmbeddings));
+  VELOX_ASSERT_THROW(
+      LocalVectorIndex::size(negative),
+      "Local vector index must have at least one embedding");
 
-  const auto flat = build(VectorIndexType::kFlat);
+  const auto flat = build(VectorIndexKind::kFlat);
   VELOX_ASSERT_THROW(
       LocalVectorIndex(
           flat,
@@ -129,7 +142,7 @@ TEST_F(LocalVectorIndexTest, errors) {
   const std::vector<int64_t> missingId{-1};
   VELOX_ASSERT_THROW(
       LocalVectorIndex::build(
-          VectorIndexType::kFlat,
+          VectorIndexKind::kFlat,
           VectorIndexMetric::kCosine,
           LocalVectorIndexOptions{},
           Embeddings(embeddings, 2),

@@ -1021,7 +1021,19 @@ Vector Index Aggregate Functions
 These functions are available when Velox is built with FAISS
 (``VELOX_ENABLE_FAISS``).
 
-.. function:: vector_index_build(embedding, id, index_type, metric, options) -> varbinary
+.. function:: vector_count(index) -> bigint
+
+    Returns the number of embeddings in the group's vector indexes: the sum of
+    ``cardinality(index)``. Rows with a null ``index`` are ignored. Returns
+    NULL if the group has no non-null ``index``.
+
+    Example::
+
+        SELECT ds, vector_count(local_index)
+        FROM local_indexes
+        GROUP BY ds;
+
+.. function:: vector_index_build(embedding, id, index_type, metric, options) -> vector_index
 
     Builds a local vector index over the group's rows: a FAISS index holding
     each embedding with its ``id``, serialized as ``faiss::write_index``
@@ -1072,7 +1084,7 @@ These functions are available when Velox is built with FAISS
         FROM items
         GROUP BY cluster_id;
 
-.. function:: vector_index_pack(cluster_id, cluster_centroid, metric) -> varbinary
+.. function:: vector_index_pack(cluster_id, cluster_centroid, metric) -> vector_index
 
     Packs the centroids of ``n`` clusters into a vector index codec: a
     ``'flat'`` local index over the centroids, as :func:`vector_index_build`

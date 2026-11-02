@@ -586,8 +586,7 @@ class VectorTest : public testing::Test, public velox::test::VectorTestBase {
     }
     rowsToCopy.updateBounds();
 
-    SelectivityVector rowsToKeep(size);
-    rowsToKeep.deselect(rowsToCopy);
+    auto rowsToKeep = rowsToCopy.complement(size);
 
     // Copy from row N to N - 10 for N >= 0 and from row N to N for N < 10;
     std::vector<vector_size_t> toSourceRow(size);

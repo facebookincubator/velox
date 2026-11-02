@@ -164,6 +164,10 @@ void registerMathFunctions(const std::string& prefix) {
   registerDecimalIntegralDivide(prefix);
   registerFunction<sparksql::IsNanFunction, bool, float>({prefix + "isnan"});
   registerFunction<sparksql::IsNanFunction, bool, double>({prefix + "isnan"});
+  registerFunction<sparksql::NormalizeNaNAndZeroFunction, float, float>(
+      {prefix + "normalize_nan_and_zero"});
+  registerFunction<sparksql::NormalizeNaNAndZeroFunction, double, double>(
+      {prefix + "normalize_nan_and_zero"});
 
   registerBinaryNumeric<CheckedAddFunction>({prefix + "checked_add"});
   registerBinaryNumeric<CheckedSubtractFunction>({prefix + "checked_subtract"});
