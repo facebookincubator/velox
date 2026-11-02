@@ -107,14 +107,13 @@ void BloomFilterReader::maybeContains(
 
 std::unique_ptr<BloomFilterBuilder> createBloomFilterBuilder(
     const BloomFilterConfig& config,
-    uint64_t numKeys,
     velox::memory::MemoryPool* pool) {
   const auto* factory = bloomFilterFactory(config.type);
   NIMBLE_USER_CHECK_NOT_NULL(
       factory,
       "No bloom filter factory is registered for type: {}",
       static_cast<uint32_t>(config.type));
-  return factory->createBuilder(config, numKeys, pool);
+  return factory->createBuilder(config, pool);
 }
 
 std::unique_ptr<BloomFilterReader> createBloomFilterReader(

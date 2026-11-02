@@ -56,12 +56,33 @@ struct BloomFilterConfig {
 
   virtual ~BloomFilterConfig() = default;
 
+  /// Returns a copy that keeps this config's concrete type, so a caller
+  /// holding only the base can adjust a field such as numKeys and still pass
+  /// the copy to the factory that expects the derived type.
+  virtual std::unique_ptr<BloomFilterConfig> clone() const = 0;
+
   /// Selects the registered factory that builds the filter.
   BloomFilterType type;
 
   /// Filter size per distinct key. Larger values trade memory for a lower
   /// false positive rate; 10 bits per key gives roughly 1%.
   float bitsPerKey;
+
+  /// Distinct keys the filter will hold, when the caller knows the count
+  /// before the first insert. When set, the builder sizes the filter up front.
+  /// When unset, it sizes the filter in finish() from the keys it received,
+  /// holding state for each key until then (8 bytes per key for the blocked
+  /// layout). Leave unset in a config shared across files, since each file
+  /// holds a different number of keys.
+  std::optional<uint64_t> numKeys;
+
+ protected:
+  // Derived configs copy through these, as clone() does. They are protected
+  // so that a copy made through the base cannot drop the derived part.
+  BloomFilterConfig(const BloomFilterConfig&) = default;
+  BloomFilterConfig& operator=(const BloomFilterConfig&) = default;
+  BloomFilterConfig(BloomFilterConfig&&) = default;
+  BloomFilterConfig& operator=(BloomFilterConfig&&) = default;
 };
 
 /// Casts 'config' to the concrete type a factory expects, checking the cast.
@@ -142,11 +163,11 @@ class BloomFilterFactory {
   /// Layout this factory handles, as recorded in the filter trailer.
   virtual BloomFilterType type() const = 0;
 
-  /// Creates a builder sized for 'numKeys' expected distinct keys. 'config'
-  /// must be the concrete type this factory expects.
+  /// Creates a builder for 'config', which must be the concrete type this
+  /// factory expects. The builder sizes the filter from config.numKeys when it
+  /// is set, and otherwise from the keys it receives, when finish() is called.
   virtual std::unique_ptr<BloomFilterBuilder> createBuilder(
       const BloomFilterConfig& config,
-      uint64_t numKeys,
       velox::memory::MemoryPool* pool) const = 0;
 
   /// Creates a reader over 'payload', the filter body with the trailer already
@@ -167,14 +188,14 @@ void registerBloomFilterFactory(
 /// registration is permanent.
 const BloomFilterFactory* bloomFilterFactory(BloomFilterType type);
 
-/// Creates a builder for 'config', sized for 'numKeys' expected distinct keys.
-/// The count is a sizing hint: inserting more keys raises the false positive
-/// rate but stays correct. Throws if no factory is registered for the
-/// configured type, because a writer that cannot honor its own config should
-/// not silently produce a filter of some other shape.
+/// Creates a builder for 'config'. When config.numKeys is set it is a sizing
+/// hint: inserting more keys raises the false positive rate but stays correct.
+/// When it is unset, the builder sizes the filter from the keys it receives.
+/// Throws if no factory is registered for the configured type, because a
+/// writer that cannot honor its own config should not silently produce a
+/// filter of some other shape.
 std::unique_ptr<BloomFilterBuilder> createBloomFilterBuilder(
     const BloomFilterConfig& config,
-    uint64_t numKeys,
     velox::memory::MemoryPool* pool);
 
 /// Creates a reader over 'serialized', which must come from
