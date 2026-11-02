@@ -387,6 +387,13 @@ doubles every service horizon back to 1, then additive growth resumes, clamped
 at the hard limit. A non-overload failure stops that growth until the next
 success, and an overload cuts the window as it stood when the rejected call was
 admitted.</p>
+<p>To see how this query paced, read three per-driver counters per plan node:
+<code class="docutils literal notranslate"><span class="pre">rpcRateLimiterAttachedNanos</span></code>, <code class="docutils literal notranslate"><span class="pre">rpcRateLimiterPacingNanos</span></code>, and
+<code class="docutils literal notranslate"><span class="pre">rpcRateLimiterLimitMilliUnitSeconds</span></code>. Sum each across drivers and tasks, then
+divide: pacing time over attached time is the share of attached time spent
+pacing, and the window integral over attached seconds is the average committed
+window in thousandths of a unit; recovery growth counts once the limiter commits
+it to the window. Prestissimo publishes them as <code class="docutils literal notranslate"><span class="pre">RPC.&lt;planNodeId&gt;.&lt;name&gt;</span></code>.</p>
 <p><code class="docutils literal notranslate"><span class="pre">evaluateCongestion()</span></code> returns one of five verdicts. Canonical typed overload
 backs off shared admission at completion time before its lease is released; the
 driver later consumes the recorded marker to back off its local window without
