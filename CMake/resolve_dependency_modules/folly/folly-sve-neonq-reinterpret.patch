@@ -1,0 +1,49 @@
+Fix the aarch64 SVE tag-match path in folly's ConcurrentHashMap so it builds
+under GCC.
+
+SIMDTable::Chunk::tagMatchIter() packs the two 64-bit tag words into a
+uint64x2_t and hands it straight to svset_neonq_u8(), whose second parameter is
+a uint8x16_t. clang's default of -flax-vector-conversions=integer lets that
+implicit bitcast through; GCC defaults to no lax vector conversions and rejects
+it:
+
+  folly/concurrency/detail/ConcurrentHashMap-detail.h:1035:57:
+  error: cannot convert 'uint64x2_t' to '__Uint8x16_t'
+
+So under GCC every translation unit that instantiates ConcurrentHashMap fails to
+compile once the guard around this path (FOLLY_F14_DETAIL_ISA_SVE2_WITH_BRIDGE:
+SVE2 plus a <arm_neon_sve_bridge.h> that only GCC 14 and newer ship) is on -
+that is Neoverse N2/V2, NVIDIA Grace and Olympus hosts, for which
+get_cxx_flags() selects -mcpu=neoverse-v2 and friends out of MIDR_EL1. Velox CI
+has no aarch64 Linux job that builds Velox itself, and the arm64 dependency
+image compiles folly with gcc-toolset-12, which has no bridge header, so the
+guarded block is compiled out there.
+
+Introduced upstream in folly 12fa4cb487 ("Enhance concurrent hashmap with SVE",
+2026-03-02), so it first bites at FB_OS_VERSION v2026.07.13.00. folly CI builds
+with clang only and never sees it either.
+
+Add the explicit reinterpret. It is a pure type pun that emits no instruction,
+and it is exactly what the NEON fallback branch of the same function already
+does a dozen lines below (vceqq_u8(vreinterpretq_u8_u64(vec), needleV)), so
+codegen under clang is unchanged.
+
+Generated against folly v2026.09.07.00; regenerate if a FB_OS_VERSION bump moves
+the context. Upstream: https://github.com/facebook/folly/pull/2698
+Drop this patch once folly carries the fix.
+
+--- a/folly/concurrency/detail/ConcurrentHashMap-detail.h
++++ b/folly/concurrency/detail/ConcurrentHashMap-detail.h
+@@ -1031,8 +1031,10 @@ class alignas(64) SIMDTable {
+       uint64x2_t vec;
+       vec[0] = low;
+       vec[1] = hi;
+-      svbool_t matchPred =
+-          svmatch_u8(pred, svset_neonq_u8(svundef_u8(), vec), needleV);
++      svbool_t matchPred = svmatch_u8(
++          pred,
++          svset_neonq_u8(svundef_u8(), vreinterpretq_u8_u64(vec)),
++          needleV);
+       // get info from every byte into the bottom half of every uint16_t
+       // by shifting right 4, then round to get it into a 64-bit vector
+       uint8x8_t maskV = vshrn_n_u16(
