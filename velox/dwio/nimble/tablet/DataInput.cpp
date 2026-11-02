@@ -26,6 +26,7 @@
 #include "velox/common/testutil/TestValue.h"
 #include "velox/common/time/Timer.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
+#include "velox/dwio/nimble/tablet/IoAlignment.h"
 
 namespace facebook::nimble {
 
@@ -36,20 +37,6 @@ namespace {
 velox::ReadFile* checkedFile(velox::ReadFile* file) {
   NIMBLE_CHECK_NOT_NULL(file);
   return file;
-}
-
-uint64_t readAlignment(const velox::ReadFile& file) {
-  uint64_t alignment{0};
-  return file.directIo(/*alignment=*/alignment) ? alignment : 1;
-}
-
-DataInput::Region alignedRegion(DataInput::Region region, uint64_t alignment) {
-  NIMBLE_DCHECK_GT(alignment, 0);
-  NIMBLE_DCHECK(velox::bits::isPowerOfTwo(alignment));
-  const auto alignedOffset = region.offset & ~(alignment - 1);
-  const auto alignedEnd =
-      (region.offset + region.length + alignment - 1) & ~(alignment - 1);
-  return {alignedOffset, alignedEnd - alignedOffset};
 }
 
 } // namespace
