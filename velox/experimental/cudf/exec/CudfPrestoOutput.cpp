@@ -407,10 +407,7 @@ void CudfPrestoOutput::startSerializer() {
       }
       cudf::strings_column_view strings(col);
       auto offsetsView = strings.offsets();
-      column.offsets = {
-          offsetsView.head(),
-          offsetsView.type().id() == cudf::type_id::INT64,
-          col.offset()};
+      column.offsets = {offsetsView.head(), offsetsView.type(), col.offset()};
       column.chars = strings.chars_begin(stream);
       stringOffsets.push_back(column.offsets);
       fixedBitsPerRow += 8 * sizeof(int32_t);
@@ -692,7 +689,9 @@ void CudfPrestoOutput::buildNextWave() {
   }
   detail::batchedDeviceCopy(copies, stream, mr);
   detail::fillPrestoNullBytes(nullTasks, stream, mr);
-  detail::fillPrestoStringOffsets(offsetTasks, stream, mr);
+  VELOX_USER_CHECK(
+      detail::fillPrestoStringOffsets(offsetTasks, stream, mr),
+      "The strings of one page exceed what Presto's int32 offsets hold");
   // The pageable blob was staged by cudaMemcpyAsync before it returned, and
   // 'deviceBlob' is freed in stream order after the batched copy.
 

@@ -31,6 +31,7 @@
 #include <duckdb/parser/expression/function_expression.hpp> // @manual
 #include <duckdb/parser/expression/lambda_expression.hpp> // @manual
 #include <duckdb/parser/expression/operator_expression.hpp> // @manual
+#include <duckdb/parser/expression/parameter_expression.hpp> // @manual
 #include <duckdb/parser/expression/window_expression.hpp> // @manual
 #include <duckdb/parser/parser.hpp> // @manual
 #include <duckdb/parser/parser_options.hpp> // @manual
@@ -801,10 +802,27 @@ core::ExprPtr parseCastExpr(
     ParsedExpression& expr,
     const ParseOptions& options) {
   const auto& castExpr = dynamic_cast<CastExpression&>(expr);
-  std::vector<core::ExprPtr> params{parseExpr(*castExpr.child, options)};
   // We may need to expand toVeloxType in the future to support
   // Map and Array and Struct properly.
   auto targetType = toVeloxType(castExpr.cast_type);
+
+  // A cast of a parameter, '?1::BIGINT', is a placeholder of that type. The
+  // caller binds a value of that type, so nothing converts and TRY_CAST, which
+  // only changes how a conversion fails, does not apply.
+  if (castExpr.child->GetExpressionClass() == ExpressionClass::PARAMETER) {
+    const auto& parameter =
+        dynamic_cast<const ::duckdb::ParameterExpression&>(*castExpr.child);
+    VELOX_USER_CHECK(
+        !castExpr.try_cast,
+        "TRY_CAST of a placeholder is not supported: ?{}",
+        parameter.parameter_nr);
+    return std::make_shared<const core::PlaceholderExpr>(
+        targetType,
+        static_cast<int32_t>(parameter.parameter_nr),
+        getAlias(expr));
+  }
+
+  std::vector<core::ExprPtr> params{parseExpr(*castExpr.child, options)};
   VELOX_CHECK(!params.empty());
 
   // Convert cast(NULL as <type>) into a constant NULL.
@@ -933,6 +951,12 @@ core::ExprPtr parseExpr(ParsedExpression& expr, const ParseOptions& options) {
 
     case ExpressionClass::LAMBDA:
       return parseLambdaExpr(expr, options);
+
+    case ExpressionClass::PARAMETER:
+      VELOX_USER_FAIL(
+          "A placeholder needs a type, such as ?1::BIGINT: ?{}",
+          dynamic_cast<const ::duckdb::ParameterExpression&>(expr)
+              .parameter_nr);
 
     default:
       throw std::invalid_argument(

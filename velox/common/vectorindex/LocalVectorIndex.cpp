@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <memory>
 #include <tuple>
 
@@ -59,7 +60,7 @@ int32_t resolveNlist(std::optional<int32_t> nlist, int64_t numEmbeddings) {
 }
 
 std::unique_ptr<faiss::Index> makeIvfIndex(
-    VectorIndexType type,
+    VectorIndexKind kind,
     faiss::MetricType metric,
     bool spherical,
     const LocalVectorIndexOptions& options,
@@ -68,7 +69,7 @@ std::unique_ptr<faiss::Index> makeIvfIndex(
   const auto nlist = resolveNlist(options.nlist, numEmbeddings);
   auto quantizer = std::make_unique<faiss::IndexFlat>(dimension, metric);
   std::unique_ptr<faiss::IndexIVF> index;
-  if (type == VectorIndexType::kIvfFlat) {
+  if (kind == VectorIndexKind::kIvfFlat) {
     index = std::make_unique<faiss::IndexIVFFlat>(
         quantizer.get(), dimension, nlist, metric);
   } else {
@@ -99,20 +100,20 @@ std::unique_ptr<faiss::Index> withIds(std::unique_ptr<faiss::Index> index) {
 }
 
 std::unique_ptr<faiss::Index> makeIndex(
-    VectorIndexType type,
+    VectorIndexKind kind,
     faiss::MetricType metric,
     bool spherical,
     const LocalVectorIndexOptions& options,
     int64_t numEmbeddings,
     int32_t dimension) {
-  switch (type) {
-    case VectorIndexType::kFlat:
+  switch (kind) {
+    case VectorIndexKind::kFlat:
       return withIds(std::make_unique<faiss::IndexFlat>(dimension, metric));
-    case VectorIndexType::kIvfFlat:
-    case VectorIndexType::kIvfSq:
+    case VectorIndexKind::kIvfFlat:
+    case VectorIndexKind::kIvfSq:
       return makeIvfIndex(
-          type, metric, spherical, options, numEmbeddings, dimension);
-    case VectorIndexType::kHnswSq: {
+          kind, metric, spherical, options, numEmbeddings, dimension);
+    case VectorIndexKind::kHnswSq: {
       auto graph = std::make_unique<faiss::IndexHNSWSQ>(
           dimension,
           faiss::ScalarQuantizer::QT_8bit,
@@ -127,21 +128,21 @@ std::unique_ptr<faiss::Index> makeIndex(
   VELOX_UNREACHABLE();
 }
 
-// Returns the type of a local index in the layout build() writes (see
+// Returns the kind of a local index in the layout build() writes (see
 // makeIndex), and the index that holds its search settings. Throws a user
 // error for any other FAISS index.
-std::pair<VectorIndexType, faiss::Index*> classify(faiss::Index* index) {
+std::pair<VectorIndexKind, faiss::Index*> classify(faiss::Index* index) {
   if (auto* idMap = dynamic_cast<faiss::IndexIDMap*>(index)) {
     if (dynamic_cast<faiss::IndexHNSWSQ*>(idMap->index)) {
-      return {VectorIndexType::kHnswSq, idMap->index};
+      return {VectorIndexKind::kHnswSq, idMap->index};
     }
     if (dynamic_cast<faiss::IndexFlat*>(idMap->index)) {
-      return {VectorIndexType::kFlat, idMap->index};
+      return {VectorIndexKind::kFlat, idMap->index};
     }
   } else if (dynamic_cast<faiss::IndexIVFScalarQuantizer*>(index)) {
-    return {VectorIndexType::kIvfSq, index};
+    return {VectorIndexKind::kIvfSq, index};
   } else if (dynamic_cast<faiss::IndexIVFFlat*>(index)) {
-    return {VectorIndexType::kIvfFlat, index};
+    return {VectorIndexKind::kIvfFlat, index};
   }
   VELOX_USER_FAIL("Invalid local vector index: unsupported FAISS index");
 }
@@ -172,7 +173,7 @@ bool hasMissingId(const faiss::Index* index) {
 } // namespace
 
 void LocalVectorIndex::build(
-    VectorIndexType type,
+    VectorIndexKind kind,
     VectorIndexMetric metric,
     const LocalVectorIndexOptions& options,
     const Embeddings& embeddings,
@@ -186,7 +187,7 @@ void LocalVectorIndex::build(
   switch (metric) {
     case VectorIndexMetric::kCosine: {
       auto index = makeIndex(
-          type,
+          kind,
           faiss::METRIC_INNER_PRODUCT,
           /*spherical=*/true,
           options,
@@ -200,6 +201,28 @@ void LocalVectorIndex::build(
     }
   }
   VELOX_UNREACHABLE();
+}
+
+// static
+int64_t LocalVectorIndex::size(std::string_view bytes) {
+  // Every layout build() writes starts with a four-character code, then the
+  // index header: the dimension, an int32, and the number of embeddings, an
+  // int64.
+  static constexpr size_t kNumEmbeddingsOffset{8};
+  VELOX_USER_CHECK_GE(
+      bytes.size(),
+      kNumEmbeddingsOffset + sizeof(int64_t),
+      "Invalid local vector index: too short");
+  const auto code = bytes.substr(0, 4);
+  VELOX_USER_CHECK(
+      code == "IxMp" || code == "IwFl" || code == "IwSq",
+      "Invalid local vector index: unsupported FAISS index");
+  int64_t numEmbeddings;
+  std::memcpy(
+      &numEmbeddings, bytes.data() + kNumEmbeddingsOffset, sizeof(int64_t));
+  VELOX_USER_CHECK_GT(
+      numEmbeddings, 0, "Local vector index must have at least one embedding");
+  return numEmbeddings;
 }
 
 LocalVectorIndex::LocalVectorIndex(
@@ -235,12 +258,12 @@ LocalVectorIndex::LocalVectorIndex(
   VELOX_USER_CHECK_GT(
       index_->ntotal, 0, "Local vector index must have at least one embedding");
 
-  const auto [type, index] = classify(index_.get());
-  type_ = type;
+  const auto [kind, index] = classify(index_.get());
+  kind_ = kind;
   VELOX_USER_CHECK(
       !hasMissingId(index_.get()),
       "Local vector index embedding id must not be -1");
-  searchOptions.validate(type_);
+  searchOptions.validate(kind_);
   if (searchOptions.nprobe.has_value()) {
     auto* ivf = dynamic_cast<faiss::IndexIVF*>(index);
     ivf->nprobe = std::min<size_t>(*searchOptions.nprobe, ivf->nlist);
@@ -253,8 +276,8 @@ LocalVectorIndex::LocalVectorIndex(
 
 LocalVectorIndex::~LocalVectorIndex() = default;
 
-VectorIndexType LocalVectorIndex::type() const {
-  return type_;
+VectorIndexKind LocalVectorIndex::kind() const {
+  return kind_;
 }
 
 int32_t LocalVectorIndex::dimension() const {

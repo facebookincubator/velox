@@ -777,12 +777,11 @@ void CudfIcebergSplitReader::setupEqualityColumnKeys() {
       // A physical key column is read even if a partition field shares its
       // name. Keys absent from the file, including Hive partition columns,
       // are unsupported.
-      if (not fileColumnNames_.contains(columnName)) {
-        VELOX_NYI(
-            "Equality deletes on partition columns or columns "
-            "missing from the data file are not yet supported: {}",
-            columnName);
-      }
+      VELOX_NYI_CHECK(
+          fileColumnNames_.contains(columnName),
+          "Equality deletes on partition columns or columns "
+          "missing from the data file are not yet supported: {}",
+          columnName);
       // Insert column name into readColumnSet if not already present
       if (readColumnSet.insert(columnName).second) {
         extraEqualityColumns_.push_back(columnName);

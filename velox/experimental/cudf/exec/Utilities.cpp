@@ -391,11 +391,10 @@ std::unique_ptr<cudf::column> makeAllNullColumn(
     default: {
       // Flat types (including STRING): use the scalar approach.
       auto cudfType = tryVeloxToCudfDataType(type);
-      if (!cudfType) {
-        VELOX_NYI(
-            "All-null column creation is not implemented for type {}",
-            type->toString());
-      }
+      VELOX_NYI_CHECK(
+          cudfType,
+          "All-null column creation is not implemented for type {}",
+          type->toString());
       auto nullScalar = cudf::make_default_constructed_scalar(
           *cudfType, stream, get_temp_mr());
       return cudf::make_column_from_scalar(*nullScalar, numRows, stream, mr);

@@ -20,13 +20,13 @@
 #include <folly/executors/CPUThreadPoolExecutor.h>
 
 #include "velox/exec/Exchange.h"
+#include "velox/exec/tests/utils/LocalExchangeSource.h"
 
 namespace facebook::velox::exec::test {
 namespace {
 
 // Returns the "local://" task id of the producer 'planNodeId' of the loop at
-// 'address' in 'iteration'. LocalExchangeSource reads a task by its id, so the
-// same string names the producer and the split reading it.
+// 'address' in 'iteration'.
 std::string producerId(
     const FixedPointOptions::LoopAddress& address,
     int32_t iteration,
@@ -52,7 +52,8 @@ const FixedPointOptions& LocalFixedPoint::options() {
                                const std::string& planNodeId)
         -> std::shared_ptr<connector::ConnectorSplit> {
       return std::make_shared<RemoteConnectorSplit>(
-          producerId(peer, iteration, planNodeId));
+          LocalExchangeSource::subTaskLocation(
+              producerId(peer, iteration, planNodeId), peer.worker));
     };
     options.subTaskId = [](const std::string& workerTaskId, int64_t counter) {
       return fmt::format("{}.sub{}", workerTaskId, counter);

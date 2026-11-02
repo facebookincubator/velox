@@ -340,6 +340,23 @@ Mathematical Functions
         SELECT CAST(1 as DECIMAL(20, 3)) * CAST(0 as DECIMAL(20, 3)); -- decimal 0.000000
         SELECT CAST(201e-38 as DECIMAL(38, 38)) * CAST(301e-38 as DECIMAL(38, 38)); -- decimal 0.0000000000000000000000000000000000000
 
+.. spark:function:: normalize_nan_and_zero(x) -> [same as x]
+
+    Returns 0.0 if ``x`` is -0.0, the canonical NaN if ``x`` is any NaN, and ``x`` otherwise.
+    The canonical NaN is Java's ``Double.NaN`` (``0x7ff8000000000000``) for DOUBLE and
+    ``Float.NaN`` (``0x7fc00000``) for REAL. Returns NULL if ``x`` is NULL.
+    Supported types are: REAL, DOUBLE.
+    Note: This function is not directly callable in Spark SQL, but is used internally by
+    `Spark's NormalizeFloatingNumbers <https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/optimizer/NormalizeFloatingNumbers.scala>`_. ::
+
+        -- Function call examples (this function is not directly callable in Spark SQL).
+        normalize_nan_and_zero(-0.0) -- 0.0
+        normalize_nan_and_zero(0.0) -- 0.0
+        normalize_nan_and_zero(1.5) -- 1.5
+        normalize_nan_and_zero(NaN) -- NaN
+        normalize_nan_and_zero(-NaN) -- NaN
+        normalize_nan_and_zero(NULL) -- NULL
+
 .. spark:function:: not(x) -> boolean
 
     Logical not. ::
@@ -425,6 +442,23 @@ Mathematical Functions
     Returns ``x`` rounded to ``d`` decimal places using HALF_UP rounding mode.
     In HALF_UP rounding, the digit 5 is rounded up.
     Supported types for ``x`` are integral and floating point types.
+
+    Omitting ``d`` is equivalent to ``d = 0``. For integral inputs, nonnegative
+    ``d`` returns ``x`` unchanged. Negative ``d`` rounds to a multiple of
+    ``10^(-d)``, with halfway values rounded away from zero. Integral overflow
+    raises an error when ``spark.ansi_enabled`` is true; otherwise the result
+    wraps to the input type's two's-complement representation.
+
+    Integral inputs accept every INTEGER scale, including a scale column.
+    Column scales are a native extension: Spark 4.1 requires a foldable scale
+    expression, which need not be a literal.
+
+    Extreme-scale behavior is not fully compatible with Spark 4.1. For BIGINT
+    input ``25`` and scale ``-2147483648``, Velox returns zero whereas Spark's
+    interpreted and generated evaluators throw. At scale ``2147483647``, Velox
+    and Spark's generated evaluator return ``25``, but Spark's interpreted
+    evaluator throws. Velox does not reproduce JVM BigDecimal/BigInteger
+    scale and resource limits.
 
 .. spark:function:: sec(x) -> double
 

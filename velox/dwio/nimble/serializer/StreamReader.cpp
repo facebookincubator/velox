@@ -197,7 +197,6 @@ void StreamReader::init() {
       std::shared_ptr<const velox::dwio::common::TypeWithId>{
           velox::dwio::common::TypeWithId::create(outputType_)};
   auto readerParams = FieldReaderParams{};
-  readerParams.optimizeStringBufferHandling = true;
   std::vector<uint32_t> readerOffsets;
   readerFactory_ = FieldReaderFactory::create(
       readerParams,

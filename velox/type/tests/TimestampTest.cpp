@@ -157,8 +157,8 @@ TEST(TimestampTest, arithmeticOverflow) {
           0));
   ASSERT_NO_THROW(Timestamp::minMillis().toMillis());
   ASSERT_NO_THROW(Timestamp::maxMillis().toMillis());
-  ASSERT_NO_THROW(Timestamp(-9223372036855, 224'192'000).toMicros());
-  ASSERT_NO_THROW(Timestamp(9223372036854, 775'807'000).toMicros());
+  EXPECT_EQ(INT64_MIN, Timestamp::minMicros().toMicros());
+  EXPECT_EQ(INT64_MAX, Timestamp::maxMicros().toMicros());
 }
 
 TEST(TimestampTest, toAppend) {

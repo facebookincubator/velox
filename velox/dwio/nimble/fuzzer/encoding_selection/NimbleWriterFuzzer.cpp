@@ -1110,14 +1110,10 @@ std::string makeCappingJsonValue(uint64_t seed, uint64_t rowIndex) {
 
 std::string_view toString(ReaderPath readerPath) {
   switch (readerPath) {
-    case ReaderPath::kLegacyFactory:
-      return "BatchReader/legacyFactory";
-    case ReaderPath::kDefaultFactory:
-      return "BatchReader/defaultFactory";
-    case ReaderPath::kSelectiveLegacyDispatch:
-      return "selective/legacyDispatch";
-    case ReaderPath::kSelectiveDefaultDispatch:
-      return "selective/defaultDispatch";
+    case ReaderPath::kBatchReader:
+      return "BatchReader";
+    case ReaderPath::kSelectiveReader:
+      return "selective";
   }
   NIMBLE_UNREACHABLE("Unknown reader path: {}.", static_cast<int>(readerPath));
 }
@@ -1963,17 +1959,8 @@ void NimbleWriterFuzzer::readAndVerify(
   uint64_t rowsRead{0};
   auto readFile = std::make_shared<velox::InMemoryReadFile>(file);
 
-  if (readerPath == ReaderPath::kLegacyFactory ||
-      readerPath == ReaderPath::kDefaultFactory) {
+  if (readerPath == ReaderPath::kBatchReader) {
     BatchReadParams params;
-    if (readerPath == ReaderPath::kDefaultFactory) {
-      params.encodingFactory =
-          [](velox::memory::MemoryPool& pool,
-             std::string_view data,
-             std::function<void*(uint32_t)> stringBufferFactory) {
-            return EncodingFactory().create(pool, data, stringBufferFactory);
-          };
-    }
     BatchReader reader(readFile, *leafPool_, /*selector=*/nullptr, params);
     checkSchema(*reader.type());
 
@@ -2002,8 +1989,6 @@ void NimbleWriterFuzzer::readAndVerify(
     velox::dwio::common::RowReaderOptions rowOptions;
     rowOptions.setScanSpec(scanSpec);
     rowOptions.setRequestedType(schema);
-    rowOptions.setStringDecoderZeroCopy(
-        readerPath == ReaderPath::kSelectiveDefaultDispatch);
     auto rowReader = reader->createRowReader(rowOptions);
 
     auto result = velox::BaseVector::create(schema, 0, leafPool_.get());

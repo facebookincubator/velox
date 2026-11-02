@@ -901,10 +901,14 @@ class BaseVector {
 
   /// Creates a vector from a list of Variant values. The result is a flat
   /// vector with one element per value.
-  static VectorPtr createFromVariants(
+  template <typename T = BaseVector>
+  static std::shared_ptr<T> createFromVariants(
       const TypePtr& type,
       const std::vector<Variant>& values,
-      velox::memory::MemoryPool* pool);
+      velox::memory::MemoryPool* pool) {
+    return std::static_pointer_cast<T>(
+        createFromVariantsInternal(type, values, pool));
+  }
 
   /// Returns string representation of the value in the specified row.
   virtual std::string toString(vector_size_t index) const;
@@ -1057,6 +1061,11 @@ class BaseVector {
   std::optional<ByteCount> storageByteCount_;
 
  private:
+  static VectorPtr createFromVariantsInternal(
+      const TypePtr& type,
+      const std::vector<Variant>& values,
+      velox::memory::MemoryPool* pool);
+
   static VectorPtr createInternal(
       const TypePtr& type,
       vector_size_t size,
