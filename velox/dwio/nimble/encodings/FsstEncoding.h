@@ -227,8 +227,7 @@ class FsstEncoding final
       std::span<const physicalType> values,
       velox::memory::MemoryPool* pool);
 
-  // Checks whether the native FSST representation meets the compression target
-  // before optional encoding-layer compression is applied.
+  // Checks the compression target using the final serialized FSST size.
   static bool meetsCompressionTarget(
       uint64_t uncompressedSize,
       uint64_t encodedSize,
