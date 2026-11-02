@@ -573,6 +573,67 @@ TEST_P(NimbleIndexProjectorTest, projectsFlatRowsWithEncodingViews) {
   EXPECT_EQ(projector->stats().numProjectedRows, 3);
 }
 
+TEST_P(NimbleIndexProjectorTest, projectsRowsWithCachedEncodingViews) {
+  auto rowType =
+      ROW({"key", "value", "nullable_value"}, {BIGINT(), INTEGER(), TINYINT()});
+
+  constexpr int kRowsPerBatch{100};
+  std::vector<RowVectorPtr> batches;
+  for (int batchIndex{0}; batchIndex < 2; ++batchIndex) {
+    std::vector<int64_t> keys(kRowsPerBatch);
+    std::vector<int32_t> values(kRowsPerBatch);
+    std::vector<std::optional<int8_t>> nullableValues(kRowsPerBatch);
+    for (int row{0}; row < kRowsPerBatch; ++row) {
+      const auto sourceRow = batchIndex * kRowsPerBatch + row;
+      keys[row] = sourceRow;
+      values[row] = sourceRow * 10;
+      nullableValues[row] = sourceRow == 5
+          ? std::nullopt
+          : std::optional<int8_t>{static_cast<int8_t>(sourceRow % 100)};
+    }
+    batches.push_back(vectorMaker_->rowVector(
+        {"key", "value", "nullable_value"},
+        {vectorMaker_->flatVector<int64_t>(keys),
+         vectorMaker_->flatVector<int32_t>(values),
+         vectorMaker_->flatVectorNullable<int8_t>(nullableValues)}));
+  }
+  writeData(
+      batches,
+      {"key"},
+      /*flatMapColumns=*/{},
+      /*stripeSize=*/1 << 20);
+
+  std::vector<Subfield> subfields;
+  subfields.emplace_back("value");
+  subfields.emplace_back("nullable_value");
+  auto projector = createProjector(subfields);
+
+  NimbleIndexProjector::Request request;
+  request.keyBounds = {
+      makeRangeLookup(rowType, {"key"}, 3, 8),
+      makePointLookup(rowType, {"key"}, 150),
+  };
+  const auto expected = vectorMaker_->rowVector(
+      {"value", "nullable_value"},
+      {vectorMaker_->flatVector<int32_t>({30, 40, 50, 60, 70, 1'500}),
+       vectorMaker_->flatVectorNullable<int8_t>({
+           int8_t{3},
+           int8_t{4},
+           std::nullopt,
+           int8_t{6},
+           int8_t{7},
+           int8_t{50},
+       })});
+  // The last call switches back, so the projector rebuilds its reader twice.
+  for (const bool cacheEncodingView : {false, true, false}) {
+    SCOPED_TRACE(fmt::format("cacheEncodingView={}", cacheEncodingView));
+    const auto result = projectRows(
+        *projector, request, {.cacheEncodingView = cacheEncodingView});
+    ASSERT_NE(result.values, nullptr);
+    velox::test::assertEqualVectors(expected, result.values);
+  }
+}
+
 TEST_P(NimbleIndexProjectorTest, projectsRowsWithCachedData) {
   auto rowType = ROW({"key", "value"}, {BIGINT(), INTEGER()});
   constexpr vector_size_t kNumRows{100};
