@@ -87,6 +87,14 @@ ArrayVectorPtr flattenArray(
     const VectorPtr& vector,
     DecodedVector& decodedVector);
 
+/// Flattens array wrappings and overlapping ranges so that selected rows have
+/// disjoint element ranges. Returns the original vector if it is flat and has
+/// no overlapping ranges. Elements may remain dictionary-encoded.
+ArrayVectorPtr flattenArrayWithOverlappingRanges(
+    const SelectivityVector& rows,
+    const VectorPtr& vector,
+    DecodedVector& decodedVector);
+
 // Given possibly wrapped map vector, flattens the wrappings and returns a flat
 // map vector. Returns the original vector unmodified if the vector is not
 // wrapped. Flattening is shallow, e.g. keys and values vectors may still be

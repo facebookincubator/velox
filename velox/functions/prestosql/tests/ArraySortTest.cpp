@@ -43,6 +43,15 @@ const std::unordered_set<TypeKind> kSupportedTypes = {
 using TestArrayType = std::vector<std::optional<StringView>>;
 using TestRowType = variant;
 
+template <typename T>
+struct AlwaysThrowArraySortFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(int64_t& /*result*/, int64_t /*value*/) {
+    VELOX_USER_FAIL("array_sort lambda was evaluated");
+  }
+};
+
 class ArraySortTest : public FunctionBaseTest,
                       public testing::WithParamInterface<TypeKind> {
  protected:
@@ -599,6 +608,32 @@ TEST_F(ArraySortTest, lambda) {
       "(x, y) -> if(length(x) < length(y), 1, if(length(x) = length(y), 0, -1))");
 }
 
+TEST_F(ArraySortTest, lambdaEvaluatesSingletonArray) {
+  registerFunction<AlwaysThrowArraySortFunction, int64_t, int64_t>(
+      {"always_throw_array_sort"});
+
+  auto input = makeArrayVector<int64_t>({{1}});
+  VELOX_ASSERT_THROW(
+      evaluate(
+          "array_sort(c0, x -> always_throw_array_sort(x))",
+          makeRowVector({input})),
+      "array_sort lambda was evaluated");
+}
+
+TEST_F(ArraySortTest, comparatorWithCapturedColumn) {
+  auto data = makeRowVector({
+      makeArrayVector<int64_t>({{1, 5, 3}, {1, 5, 3}}),
+      makeFlatVector<int64_t>({4, 0}),
+  });
+
+  // Elements with equal sort keys keep their original order.
+  auto result = evaluate(
+      "array_sort(c0, (x, y) -> if(abs(x - c1) < abs(y - c1), -1, "
+      "if(abs(x - c1) > abs(y - c1), 1, 0)))",
+      data);
+  assertEqualVectors(makeArrayVector<int64_t>({{5, 3, 1}, {1, 3, 5}}), result);
+}
+
 TEST_F(ArraySortTest, unsupporteLambda) {
   auto data = makeRowVector({
       makeArrayVectorFromJson<int32_t>({
@@ -609,6 +644,11 @@ TEST_F(ArraySortTest, unsupporteLambda) {
 
   VELOX_ASSERT_THROW(
       evaluate("array_sort(c0, (a, b) -> 0)", data),
+      "array_sort with comparator lambda that cannot be rewritten into a transform is not supported");
+
+  VELOX_ASSERT_THROW(
+      evaluate(
+          "array_sort(c0, (a, b) -> if(a < b, -10, if(a > b, 10, 0)))", data),
       "array_sort with comparator lambda that cannot be rewritten into a transform is not supported");
 }
 

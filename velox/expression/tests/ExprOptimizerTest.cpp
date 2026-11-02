@@ -240,6 +240,17 @@ TEST_F(ExprOptimizerTest, rewritesWithConstantFolding) {
       "array_sort_desc(c0, x -> length(x))",
       type);
 
+  // Comparators returning INTEGER constants are rewritten.
+  type = ROW({"c0"}, {ARRAY(BIGINT())});
+  testExpression(
+      "array_sort(c0, (x, y) -> if(x < y, (-1)::integer, if(x > y, 1::integer, 0::integer)))",
+      "array_sort(c0, x -> x)",
+      type);
+  testExpression(
+      "array_sort(c0, (x, y) -> if(x > y, (-1)::integer, if(x < y, 1::integer, 0::integer)))",
+      "array_sort_desc(c0, x -> x)",
+      type);
+
   testExpression(
       "reduce(c0, 8 / 2, (s, x) -> if(x % 2 = 0, s + 1, s), s -> s)",
       "4 + cast(array_sum_propagate_element_null(transform(c0, x -> if(x % 2 = 0, 1, 0))) AS BIGINT)",

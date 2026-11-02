@@ -74,14 +74,17 @@ void flattenBuffers(
     }
   });
 }
-} // namespace
 
-ArrayVectorPtr flattenArray(
+ArrayVectorPtr flattenArrayImpl(
     const SelectivityVector& rows,
     const VectorPtr& vector,
-    DecodedVector& decodedVector) {
+    DecodedVector& decodedVector,
+    bool flattenOverlappingRanges) {
   if (decodedVector.isIdentityMapping()) {
-    return std::dynamic_pointer_cast<ArrayVector>(vector);
+    auto array = std::dynamic_pointer_cast<ArrayVector>(vector);
+    if (!flattenOverlappingRanges || !array->hasOverlappingRanges()) {
+      return array;
+    }
   }
 
   auto newNumElements = countElements<ArrayVector>(rows, decodedVector);
@@ -112,6 +115,23 @@ ArrayVectorPtr flattenArray(
           elementIndices,
           newNumElements,
           array->elements()));
+}
+} // namespace
+
+ArrayVectorPtr flattenArray(
+    const SelectivityVector& rows,
+    const VectorPtr& vector,
+    DecodedVector& decodedVector) {
+  return flattenArrayImpl(
+      rows, vector, decodedVector, /*flattenOverlappingRanges=*/false);
+}
+
+ArrayVectorPtr flattenArrayWithOverlappingRanges(
+    const SelectivityVector& rows,
+    const VectorPtr& vector,
+    DecodedVector& decodedVector) {
+  return flattenArrayImpl(
+      rows, vector, decodedVector, /*flattenOverlappingRanges=*/true);
 }
 
 MapVectorPtr flattenMap(
