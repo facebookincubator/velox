@@ -25,6 +25,10 @@
 #include "velox/exec/AdaptivePrefetch.h"
 #include "velox/exec/OperatorUtils.h"
 
+#include <algorithm>
+#include <limits>
+#include <optional>
+
 using facebook::velox::common::testutil::TestValue;
 
 namespace facebook::velox::exec {
@@ -2070,18 +2074,55 @@ struct JoinResultEmitter {
   uint64_t& totalBytes;
   const size_t maxOut;
   const uint64_t maxBytes;
+  // False when 'maxOut' already bounds the output by bytes, which spares the
+  // size lookup for every result.
+  const bool countBytes;
   const SizeFunction sizeFunction;
 
   bool operator()(vector_size_t probeRow, char* hit) {
     inputRows[numOut] = probeRow; // NOLINT
     hits[numOut] = hit;
-    if (hit != nullptr) {
+    if (countBytes && hit != nullptr) {
       totalBytes += sizeFunction(hit);
     }
     ++numOut;
+    // With 'countBytes' false 'totalBytes' stays zero and 'maxOut' already
+    // carries the byte bound, so the second test only fires for maxBytes 0,
+    // where the counting form also stops after one result.
     return numOut < maxOut && totalBytes < maxBytes;
   }
 };
+
+// Returns the number of results at which 'maxBytes' is reached, when every
+// result projects to the same number of bytes, or nullopt when the size
+// varies per result and has to be accumulated as results are emitted.
+//
+// listJoinResultsFastPath() derives the same bound. Doing it here too lets
+// the other two paths drop the per-result size lookup.
+std::optional<size_t> constantResultSize(
+    const BaseHashTable::JoinResultIterator& iter,
+    bool includeMisses,
+    uint64_t maxBytes) {
+  // A miss projects no bytes, so once misses are in the output the byte total
+  // no longer follows from the number of results.
+  if (includeMisses) {
+    return std::nullopt;
+  }
+  if (!iter.estimatedRowSize.has_value() && !iter.varSizeListColumns.empty()) {
+    return std::nullopt;
+  }
+  const uint64_t rowSize =
+      iter.estimatedRowSize.value_or(iter.fixedSizeListColumnsSizeSum);
+  if (rowSize == 0) {
+    return std::numeric_limits<size_t>::max();
+  }
+  // Emitting k results uses k * rowSize bytes and the emitter stops once that
+  // reaches maxBytes, so the bound is the ceiling of the division. Dividing
+  // rather than multiplying keeps it from overflowing. One result is always
+  // emitted, as it is when the bytes are counted.
+  const uint64_t limit = maxBytes / rowSize + (maxBytes % rowSize != 0 ? 1 : 0);
+  return std::max<uint64_t>(limit, 1);
+}
 
 template <typename SizeFunction>
 JoinResultEmitter<SizeFunction> makeJoinResultEmitter(
@@ -2090,14 +2131,18 @@ JoinResultEmitter<SizeFunction> makeJoinResultEmitter(
     size_t& numOut,
     uint64_t& totalBytes,
     uint64_t maxBytes,
+    std::optional<size_t> constantSizeLimit,
     SizeFunction sizeFunction) {
   return {
       inputRows,
       hits,
       numOut,
       totalBytes,
-      inputRows.size(),
+      constantSizeLimit.has_value()
+          ? std::min(inputRows.size(), constantSizeLimit.value())
+          : inputRows.size(),
       maxBytes,
+      !constantSizeLimit.has_value(),
       std::move(sizeFunction),
   };
 }
@@ -2137,9 +2182,13 @@ int32_t HashTable<ignoreNullKeys>::listJoinResultsSingleHit(
   size_t numOut = 0;
   uint64_t totalBytes{0};
   auto emit = makeJoinResultEmitter(
-      inputRows, hits, numOut, totalBytes, maxBytes, [&](char* hit) {
-        return projectedRowSize(iter, hit);
-      });
+      inputRows,
+      hits,
+      numOut,
+      totalBytes,
+      maxBytes,
+      constantResultSize(iter, includeMisses, maxBytes),
+      [&](char* hit) { return projectedRowSize(iter, hit); });
 
   // Dispatch guarantees at most one hit per probe row: either
   // nextOffset_ == 0 (no chain pointer) or !hasDuplicates_.
@@ -2179,9 +2228,13 @@ int32_t HashTable<ignoreNullKeys>::listJoinResultsInterleaved(
   auto& walker = iter.walker;
 
   auto emit = makeJoinResultEmitter(
-      inputRows, hits, numOut, totalBytes, maxBytes, [&](char* hit) {
-        return projectedRowSize(iter, hit);
-      });
+      inputRows,
+      hits,
+      numOut,
+      totalBytes,
+      maxBytes,
+      constantResultSize(iter, includeMisses, maxBytes),
+      [&](char* hit) { return projectedRowSize(iter, hit); });
 
   while (true) {
     if (walker.slotHead >= walker.numActive) {
