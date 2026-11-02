@@ -992,7 +992,24 @@ static bool sizeNeedsReserve(NodeCP producer) {
     return false;
   }
   const auto& ret = meta->returnMeta.front();
-  return ret.reserveShape != nullptr && ret.shapeFromInput < 0;
+  return ret.reserve != nullptr && ret.shapeFromInput < 0;
+}
+
+// True when 'value' is an output its producer sizes with a reserve function,
+// which is what makes it a hasReserve operand of a concat (Cat.cpp).
+static bool outputSizedByReserve(ValueCP value) {
+  auto* producer = value->producer();
+  const auto* meta = producer == nullptr ? nullptr : nodeMeta(producer);
+  if (meta == nullptr) {
+    return false;
+  }
+  const auto& outputs = producer->outputs();
+  for (size_t i = 0; i < outputs.size() && i < meta->returnMeta.size(); ++i) {
+    if (outputs[i] == value) {
+      return meta->returnMeta[i].reserve != nullptr;
+    }
+  }
+  return false;
 }
 
 // True when a node other than 'reader' overwrites 'value' in place (it is that
@@ -1265,11 +1282,19 @@ Context CompileCtx::placeKernels(NodeCP node, Context /*context*/) {
         // "already placed" when the carve is decided, and an already-placed
         // operand cannot be given a band -- it is copied instead. When its
         // producer could write the band itself, leave it here: placeInput then
-        // fuses it into the concat's own kernel, reserveConcatOutput binds it
+        // fuses it into the concat's own kernel, the concat layout binds it
         // to its band, and the copy disappears.
         const bool inPlace =
             concatOperandFusesInPlace(listInput, node, concatDim, resultDtype);
-        if (parallelFill && !inPlace) {
+        // An operand fused into the concat's kernel writes its band with its
+        // own element type. When the concat promotes it to a wider one, that
+        // write would land raw in the result, so the operand has to be
+        // materialized on its own and converted by __concatCopy, whether the
+        // concat fills in parallel or not.
+        const bool promoted =
+            concatOperandCopyCause(listInput, concatDim, resultDtype, types_) ==
+            ConcatCopyCause::kDtype;
+        if ((parallelFill && !inPlace) || promoted) {
           breakConcatOperandIntoOwnKernel(listInput, node->outputs()[0]);
         }
         placeInput(listInput, isScalarSize);
@@ -1279,7 +1304,7 @@ Context CompileCtx::placeKernels(NodeCP node, Context /*context*/) {
       // from these verdicts either way, and the flag decides only whether a
       // copy op fills the bands the group does not carve or the concat's own
       // kernel does.
-      if (concatAllocGroupEnabled()) {
+      if (allocGroupEnabled()) {
         decideConcatCarve(node, operands, concatDim, resultDtype);
       }
       // An operand the concat allocation group will carve writes its band
@@ -1580,7 +1605,7 @@ bool CompileCtx::concatOperandFusesInPlace(
       return false;
     }
     for (const auto& ret : meta->returnMeta) {
-      if (ret.reserveShape != nullptr && ret.shapeFromInput < 0) {
+      if (ret.reserve != nullptr && ret.shapeFromInput < 0) {
         return true;
       }
     }
@@ -1877,6 +1902,22 @@ void CompileCtx::decideConcatCarve(
                   .c_str());
   }
 
+  // An operand this kernel computes with a reserve function is sized only
+  // when the concat's own launch is: its Size runs inside the concat's
+  // layout, and the group reads it from the value table. Laying the result
+  // out at an earlier point would read an entry nothing has written yet, so
+  // such an operand holds the layout at the concat's own launch.
+  const WaveGraph::SchedulePoint ownPoint{
+      compileNodeIndex_, static_cast<int32_t>(grid_.size())};
+  if (layoutPoint != nullptr && *layoutPoint < ownPoint) {
+    for (auto* operand : operands) {
+      if (computedByThisKernel(operand) && outputSizedByReserve(operand)) {
+        layoutPoint = nullptr;
+        break;
+      }
+    }
+  }
+
   // A concat may join one value at more than one position -- cat([x, y, x]) --
   // and one buffer cannot be two bands of the result.
   std::unordered_map<nativert::ValueId, int32_t> occurrences;
@@ -1889,12 +1930,15 @@ void CompileCtx::decideConcatCarve(
   opCarvesAConcat_ = true;
 
   // Where the group will be created. With no operand fixing an earlier point
-  // the layout happens at the concat's own launch, which is the next step this
-  // grid will place -- every operand of it is written there or in place.
-  concatLayoutPoint_[original] = layoutPoint != nullptr
-      ? *layoutPoint
-      : WaveGraph::SchedulePoint{
-            compileNodeIndex_, static_cast<int32_t>(grid_.size())};
+  // the layout happens at the concat's own launch. That is not necessarily the
+  // next step this grid will place: the concat lands at the level its inputs
+  // allow, which can be a step the grid already holds. So no point is recorded
+  // and the allocation-group pass uses the launch's own step.
+  if (layoutPoint != nullptr) {
+    concatLayoutPoint_[original] = *layoutPoint;
+  } else {
+    concatLayoutPoint_.erase(original);
+  }
 
   int32_t occurrence = -1;
   for (auto* operand : operands) {
@@ -1939,7 +1983,7 @@ void CompileCtx::decideConcatCarve(
           ? std::string(concatCopyCauseText(cause))
           : fmt::format("{} ({})", concatCopyCauseText(cause), blame->target());
     } else if (computedByThisKernel(operand)) {
-      // The concat's own kernel computes it, so reserveConcatOutput binds it
+      // The concat's own kernel computes it, so the concat layout binds it
       // to its band and the expression writes the result in place. Neither a
       // group member -- the group allocates no buffer for it -- nor a copy.
       decision.needsCopy = false;
@@ -2108,10 +2152,19 @@ nativert::Value* FOLLY_NULLABLE CompileCtx::makeConcatCopyDestination(
   // A node of its own so the copy has an expression to generate from, holding
   // the source it reads. Its output is not consumed by anything: the concat's
   // operand list still names the original operand, which is what the layout
-  // measures, and the copy only fills the band that operand occupies.
+  // measures, and the copy only fills the band that operand occupies. A clone
+  // copies raw elements, so an operand the concat promotes is cast instead.
+  const auto operandId = operand->id();
+  const bool promotes = operandId >= 0 &&
+      static_cast<size_t>(operandId) < types_.types.size() &&
+      types_.types[operandId] != nullptr &&
+      types_.types[operandId]->dtype() != dtype;
   auto* copyNode = graph->createNode(
-      "torch.ops.aten.clone.default",
+      promotes ? "torch.ops.aten.to.dtype" : "torch.ops.aten.clone.default",
       {{"self", const_cast<nativert::Value*>(operand)}});
+  if (promotes) {
+    copyNode->addAttribute({"dtype", dtype});
+  }
   graph->insertBefore(copyNode, const_cast<nativert::Node*>(concat));
 
   if (known >= 0) {
@@ -2167,7 +2220,14 @@ bool CompileCtx::emitConcatOperandCopy(
       destId,
       " has no copy node");
 
-  auto it = concatCopyOp_.find(dtype);
+  const auto operandId = operand->id();
+  const auto sourceDtype = operandId >= 0 &&
+          static_cast<size_t>(operandId) < types_.types.size() &&
+          types_.types[operandId] != nullptr
+      ? types_.types[operandId]->dtype()
+      : dtype;
+  const std::pair<c10::ScalarType, c10::ScalarType> copyKey{sourceDtype, dtype};
+  auto it = concatCopyOp_.find(copyKey);
   const bool traceCopy = (WaveConfig::get().trace & WaveConfig::kTiming) != 0;
   auto traceLevel = [&](int32_t level, const char* how) {
     if (traceCopy) {
@@ -2192,7 +2252,7 @@ bool CompileCtx::emitConcatOperandCopy(
     // The band is the concat group's, put in the frame before this runs, so
     // the copy must not have a buffer reserved for it.
     kernelOpStorage_.back()->delegateOutputs();
-    concatCopyOp_[dtype] = kernelOpStorage_.back().get();
+    concatCopyOp_[copyKey] = kernelOpStorage_.back().get();
     return true;
   }
 
@@ -2239,6 +2299,7 @@ void CompileCtx::breakProducerIntoOwnKernel(NodeCP producer) {
 std::unique_ptr<KernelOperation> CompileCtx::generateFused(const Subgraph& sg) {
   auto op = std::make_unique<KernelOperation>(sg, nextOpCode(), *this);
   generatingOp_ = op.get();
+  preBarrierValues_.clear();
   generateFusedInner(sg);
   for (auto& [type, count] : typeTemps_) {
     for (int32_t i = 0; i < count; ++i) {

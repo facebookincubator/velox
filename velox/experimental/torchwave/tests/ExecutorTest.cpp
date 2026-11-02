@@ -25,6 +25,8 @@
 #include <folly/ScopeGuard.h>
 #include <folly/init/Init.h>
 #include <glog/logging.h>
+#include <functional>
+#include <numeric>
 
 #include "velox/experimental/torchwave/Registry.h"
 #include "velox/experimental/torchwave/Utils.h"
@@ -504,6 +506,47 @@ TEST_F(ExecutorTest, viewBroadcastGatherSizingTest) {
   auto padded = at::cat({src, at::zeros({1}, at::kLong)});
   auto reference =
       padded.index_select(0, index.reshape({-1})).view({1000, 40000});
+  EXPECT_TRUE(tensorsMatch(outputs[0], reference))
+      << firstDifference(outputs[0], reference);
+}
+
+// x[mask] with a boolean mask of x's own rank is masked_select. The ads
+// id-matching graph compacts the matched positions this way, over an expanded
+// [1, C] -> [R, C] source, so the source is a stride-0 view.
+const char* kFullRankMaskIndexGraph = R"(graph(%r, %m):
+%u = torch.ops.aten.unsqueeze.default(self=%r, dim=0)
+%e = torch.ops.aten.expand.default(self=%u, size=[1000, 200])
+%l[] = prim.ListPack(l0=%m)
+%o = torch.ops.aten.index.Tensor(self=%e, indices=%l)
+return(%o)
+)";
+
+TEST_F(ExecutorTest, fullRankMaskIndexTest) {
+  std::unordered_map<std::string, torch::_export::TensorMeta> meta;
+  meta["r"] = makeTensorMeta(c10::ScalarType::Long, 1);
+  meta["m"] = makeTensorMeta(c10::ScalarType::Bool, 2);
+  meta["u"] = makeTensorMeta(c10::ScalarType::Long, 2);
+  meta["e"] = makeTensorMeta(c10::ScalarType::Long, 2);
+  meta["o"] = makeTensorMeta(c10::ScalarType::Long, 1);
+  auto plan = compilePlanProgrammatic(
+      nativert::stringToGraph(kFullRankMaskIndexGraph),
+      meta,
+      CompiledPlan::Mode::kMultiKernel);
+  for (const auto& node : plan.nodes()) {
+    for (const auto& step : node.steps) {
+      for (const auto& kernel : step.kernels) {
+        EXPECT_FALSE(kernel.standalone && kernel.has("aten.index.Tensor"))
+            << plan.describe();
+      }
+    }
+  }
+
+  auto r = at::arange(200, at::kLong) * 3;
+  auto m = (at::arange(200000, at::kLong) * 7919 % 13 < 5).reshape({1000, 200});
+  auto outputs = runWaveProgrammatic(
+      nativert::stringToGraph(kFullRankMaskIndexGraph), meta, {{r, m}});
+  ASSERT_EQ(outputs.size(), 1);
+  auto reference = r.unsqueeze(0).expand({1000, 200}).index({m});
   EXPECT_TRUE(tensorsMatch(outputs[0], reference))
       << firstDifference(outputs[0], reference);
 }
@@ -1793,8 +1836,16 @@ TEST_F(ExecutorTest, scatterAddCgConsumerTest) {
   auto outputs = exec.executeWithPrefilledFrame(*frame);
 
   const auto& consumerValue = frame->getIValue(consumerOutput->id());
-  ASSERT_TRUE(consumerValue.isTensor());
-  EXPECT_EQ(consumerValue.toTensor().numel(), 256)
+  int64_t consumerNumel = -1;
+  if (consumerValue.isTensor()) {
+    consumerNumel = consumerValue.toTensor().numel();
+  } else {
+    const auto sizes = exec.waveGraph()->lastValueSizes(consumerOutput->id());
+    ASSERT_FALSE(sizes.empty()) << "the consumer's output was not produced";
+    consumerNumel = std::accumulate(
+        sizes.begin(), sizes.end(), int64_t{1}, std::multiplies<>());
+  }
+  EXPECT_EQ(consumerNumel, 256)
       << "the consumer of a materialized elementwise border is sized by that "
          "border's output, not by the scatter's 4096-element src/index";
 
@@ -2130,6 +2181,202 @@ return (%e)
       << firstDifference(outputs[0], expected);
 }
 
+// any over trailing dims as the fused row reduction tw.any_rows: any.dim on
+// the last dim (also given as -1) of a fused bool producer, and any.dims over
+// [1, 2] and [2]. No any may run standalone, and the results match eager.
+// Programmatic graph, no .pt2.
+TEST_F(ExecutorTest, anyRowsTest) {
+  const char* kGraph = R"(graph(%a, %b, %m):
+%e = torch.ops.aten.eq.Tensor(self=%a, other=%b)
+%h = torch.ops.aten.bitwise_and.Tensor(self=%e, other=%m)
+%r0 = torch.ops.aten.any.dim(self=%h, dim=2)
+%r1 = torch.ops.aten.any.dim(self=%h, dim=-1)
+%r2 = torch.ops.aten.any.dims(self=%h, dim=[1, 2])
+%r3 = torch.ops.aten.any.dims(self=%m, dim=[2])
+return (%r0, %r1, %r2, %r3)
+)";
+  std::unordered_map<std::string, torch::_export::TensorMeta> meta;
+  meta["a"] = makeTensorMeta(c10::ScalarType::Long, 3);
+  meta["b"] = makeTensorMeta(c10::ScalarType::Long, 3);
+  for (const char* name : {"m", "e", "h"}) {
+    meta[name] = makeTensorMeta(c10::ScalarType::Bool, 3);
+  }
+  for (const char* name : {"r0", "r1", "r3"}) {
+    meta[name] = makeTensorMeta(c10::ScalarType::Bool, 2);
+  }
+  meta["r2"] = makeTensorMeta(c10::ScalarType::Bool, 1);
+
+  auto plan = compilePlanProgrammatic(
+      nativert::stringToGraph(kGraph), meta, CompiledPlan::Mode::kMultiKernel);
+  for (const auto& node : plan.nodes()) {
+    for (const auto& step : node.steps) {
+      for (const auto& kernel : step.kernels) {
+        EXPECT_FALSE(kernel.standalone && kernel.has("aten.any"))
+            << plan.describe();
+      }
+    }
+  }
+
+  auto a = at::randint(0, 50, {20, 30, 40}, at::kLong);
+  auto b = at::randint(0, 50, {20, 30, 40}, at::kLong);
+  auto m = at::rand({20, 30, 40}) < 0.3;
+  auto outputs =
+      runWaveProgrammatic(nativert::stringToGraph(kGraph), meta, {{a, b, m}});
+  ASSERT_EQ(outputs.size(), 4);
+  auto h = at::eq(a, b) & m;
+  std::vector<at::Tensor> expected{
+      h.any(2), h.any(-1), h.any(at::IntArrayRef{1, 2}), m.any(2)};
+  for (size_t i = 0; i < outputs.size(); ++i) {
+    EXPECT_TRUE(tensorsMatch(outputs[i], expected[i]))
+        << i << ": " << firstDifference(outputs[i], expected[i]);
+  }
+}
+
+// cumsum(new_ones(x, [n])) with a dynamic n, the range generator of the ads
+// graph, expanded to [30, n] and added to a per-row operand. It rewrites to a
+// materialized tw.arange_mem plus one, so no new_ones runs standalone, and
+// the result matches eager in every mode. The text format cannot type a
+// SymInt list, so the graph is parsed with a static-size new_ones and its
+// size is then replaced by [sym_size(y, 1)] of a 2-D y (the size of a 1-D
+// tensor would take the new_ones -> ones_like rewrite instead). Programmatic
+// graph, no .pt2.
+std::unique_ptr<nativert::Graph> makeDynamicOnesRangeGraph() {
+  const char* kGraph = R"(graph(%x, %y, %b):
+%o = torch.ops.aten.new_ones.default(self=%x, size=[17])
+%c = torch.ops.aten.cumsum.default(self=%o, dim=0)
+%r = torch.ops.aten.sub.Tensor(self=%c, other=1)
+%u = torch.ops.aten.unsqueeze.default(self=%r, dim=0)
+%e = torch.ops.aten.expand.default(self=%u, size=[30, -1])
+%bu = torch.ops.aten.unsqueeze.default(self=%b, dim=1)
+%a = torch.ops.aten.add.Tensor(self=%bu, other=%e)
+%v = torch.ops.aten.view.default(self=%a, size=[-1])
+return (%v)
+)";
+  auto graph = nativert::stringToGraph(kGraph);
+  nativert::Node* ones = nullptr;
+  for (auto& node : graph->nodes()) {
+    if (node.target() == "torch.ops.aten.new_ones.default") {
+      ones = &node;
+    }
+  }
+  auto* y = graph->tryGetValue("y");
+  auto* size = graph->createNode("torch.ops.aten.sym_size.int", {{"self", y}});
+  size->addAttribute({"dim", int64_t{1}});
+  auto* n = size->addOutput("n", nativert::Type(nativert::Type::Kind::SymInt));
+  graph->insertBefore(size, ones);
+  auto* pack =
+      graph->createListPack({n}, nativert::Type(nativert::Type::Kind::SymInt));
+  graph->insertBefore(pack, ones);
+  auto* dynamicOnes = graph->createNode(
+      "torch.ops.aten.new_ones.default",
+      {{"self", ones->inputs()[0].value}, {"size", pack->outputs()[0]}});
+  auto* onesOut = dynamicOnes->addOutput(
+      "o2", nativert::Type(nativert::Type::Kind::Tensor));
+  graph->insertBefore(dynamicOnes, ones);
+  graph->replaceAllUses(ones->outputs()[0], onesOut);
+  graph->removeNode(ones);
+  graph->renumberValues();
+  return graph;
+}
+
+TEST_F(ExecutorTest, dynamicOnesRangeTest) {
+  std::unordered_map<std::string, torch::_export::TensorMeta> meta;
+  for (const char* name : {"x", "b", "o", "o2", "c", "r"}) {
+    meta[name] = makeTensorMeta(c10::ScalarType::Long, 1);
+  }
+  for (const char* name : {"y", "u", "e", "bu", "a"}) {
+    meta[name] = makeTensorMeta(c10::ScalarType::Long, 2);
+  }
+  meta["v"] = makeTensorMeta(c10::ScalarType::Long, 1);
+
+  auto plan = compilePlanProgrammatic(
+      makeDynamicOnesRangeGraph(), meta, CompiledPlan::Mode::kMultiKernel);
+  bool sawRange = false;
+  for (const auto& node : plan.nodes()) {
+    for (const auto& step : node.steps) {
+      for (const auto& kernel : step.kernels) {
+        EXPECT_FALSE(kernel.has("aten.new_ones.default")) << plan.describe();
+        sawRange = sawRange || kernel.has("tw.arange_mem");
+      }
+    }
+  }
+  EXPECT_TRUE(sawRange) << plan.describe();
+
+  auto x = at::randint(0, 10, {30}, at::kLong);
+  auto y = at::randint(0, 10, {3, 17}, at::kLong);
+  auto b = at::randint(0, 1000, {30}, at::kLong) * 100;
+  auto outputs =
+      runWaveProgrammatic(makeDynamicOnesRangeGraph(), meta, {{x, y, b}});
+  ASSERT_EQ(outputs.size(), 1);
+  auto range = at::arange(17, at::kLong);
+  auto expected =
+      (b.unsqueeze(1) + range.unsqueeze(0).expand({30, 17})).view({-1});
+  EXPECT_TRUE(tensorsMatch(outputs[0], expected))
+      << firstDifference(outputs[0], expected);
+}
+
+// cat([x, new_full(x, size=[1], fill_value=n)]) with a dynamic n, as the ads
+// graph appends a total to offsets. The one-element fill rewrites to a fused
+// unsqueeze(scalar_tensor(n)), so no new_full runs standalone, and the result
+// matches eager in every mode. The graph is parsed with a constant fill that
+// is then replaced by sym_size(y, 1), a SymInt the text format cannot type.
+// Programmatic graph, no .pt2.
+std::unique_ptr<nativert::Graph> makeDynamicFillGraph() {
+  const char* kGraph = R"(graph(%x, %y):
+%f = torch.ops.aten.new_full.default(self=%x, size=[1], fill_value=7)
+%l[] = prim.ListPack(l0=%x, l1=%f)
+%c = torch.ops.aten.cat.default(tensors=%l)
+return (%c)
+)";
+  auto graph = nativert::stringToGraph(kGraph);
+  nativert::Node* full = nullptr;
+  for (auto& node : graph->nodes()) {
+    if (node.target() == "torch.ops.aten.new_full.default") {
+      full = &node;
+    }
+  }
+  auto* size = graph->createNode(
+      "torch.ops.aten.sym_size.int", {{"self", graph->tryGetValue("y")}});
+  size->addAttribute({"dim", int64_t{1}});
+  auto* n = size->addOutput("n", nativert::Type(nativert::Type::Kind::SymInt));
+  graph->insertBefore(size, full);
+  auto* dynamicFull = graph->createNode(
+      "torch.ops.aten.new_full.default",
+      {{"self", full->inputs()[0].value}, {"fill_value", n}});
+  dynamicFull->addAttribute({"size", std::vector<int64_t>{1}});
+  auto* fullOut = dynamicFull->addOutput(
+      "f2", nativert::Type(nativert::Type::Kind::Tensor));
+  graph->insertBefore(dynamicFull, full);
+  graph->replaceAllUses(full->outputs()[0], fullOut);
+  graph->removeNode(full);
+  graph->renumberValues();
+  return graph;
+}
+
+TEST_F(ExecutorTest, dynamicFillTest) {
+  std::unordered_map<std::string, torch::_export::TensorMeta> meta;
+  for (const char* name : {"x", "f", "f2", "c"}) {
+    meta[name] = makeTensorMeta(c10::ScalarType::Long, 1);
+  }
+  meta["y"] = makeTensorMeta(c10::ScalarType::Long, 2);
+  auto plan = compilePlanProgrammatic(
+      makeDynamicFillGraph(), meta, CompiledPlan::Mode::kMultiKernel);
+  for (const auto& node : plan.nodes()) {
+    for (const auto& step : node.steps) {
+      for (const auto& kernel : step.kernels) {
+        EXPECT_FALSE(kernel.has("aten.new_full.default")) << plan.describe();
+      }
+    }
+  }
+  auto x = at::randint(0, 100, {40}, at::kLong);
+  auto y = at::zeros({3, 23}, at::kLong);
+  auto outputs = runWaveProgrammatic(makeDynamicFillGraph(), meta, {{x, y}});
+  ASSERT_EQ(outputs.size(), 1);
+  auto expected = at::cat({x, at::full({1}, 23, at::kLong)});
+  EXPECT_TRUE(tensorsMatch(outputs[0], expected))
+      << firstDifference(outputs[0], expected);
+}
+
 TEST_F(ExecutorTest, maskedSelectTest) {
   WaveConfig::get().useSingleBlock = false;
   runTest(
@@ -2207,12 +2454,11 @@ void registerSum2() {
       .argumentMeta({{.isRegister = true}})
       .returnMeta(
           {{.isRegister = false,
-            .reserveShape = [](NodeCP,
-                               nativert::ExecutionFrame&,
-                               const FormalToActual&,
-                               NodeCP,
-                               const NodeMap&)
-                -> std::vector<std::vector<Dim>> { return {{}}; }}})
+            .reserve =
+                [](const ReserveArgs&, Shape* out, int32_t) {
+                  out[0].rank = 0;
+                  return true;
+                }}})
       .headerFile("velox/experimental/torchwave/Scan.cuh")
       .deviceFunc("tw_sum")
       .sharedDecls({{"Int32X32", "warpSums"}})
@@ -2448,10 +2694,7 @@ TEST_F(ExecutorTest, cumsumOffsetsReproTest) {
 // reusing one executor and its pooled state. Run 1's small input makes the
 // grid-choice kernel pick the single-block variant; run 2's large input should
 // be multi-block. Verifies run 2 is correct after run 1 cached a single-block
-// choice. Note: reverting the gridChoices reset alone does not
-// deterministically break this (the grid-swap bounds guard in gatherLaunches
-// compensates on run 2), so this exercises the reuse path rather than isolating
-// that one fix. Programmatic graph, no external .pt2.
+// choice. Programmatic graph, no external .pt2.
 TEST_F(ExecutorTest, scanRepeatGridChoiceTest) {
   auto resetConfig = folly::makeGuard([] {
     WaveConfig::get().useSingleBlock = std::nullopt;
@@ -2669,11 +2912,14 @@ TEST_F(ExecutorTest, repeatTest) {
 TEST_F(ExecutorTest, catTest) {
   auto& config = WaveConfig::get();
   const auto savedFree = config.freeIntermediates;
-  auto resetConfig = folly::makeGuard([&, savedFree] {
-    config.useSingleBlock = std::nullopt;
-    config.isCg = std::nullopt;
-    config.freeIntermediates = savedFree;
-  });
+  const auto savedSingleBlock = config.useSingleBlock;
+  const auto savedCg = config.isCg;
+  auto resetConfig =
+      folly::makeGuard([&, savedFree, savedSingleBlock, savedCg] {
+        config.useSingleBlock = savedSingleBlock;
+        config.isCg = savedCg;
+        config.freeIntermediates = savedFree;
+      });
 
   WaveConfig::get().useSingleBlock = false;
   runTest("data/cat_test.pt2", "data/cat_test_results.pt", "multi-block");
@@ -2691,6 +2937,17 @@ TEST_F(ExecutorTest, catTest) {
   config.freeIntermediates = true;
   runTest("data/cat_test.pt2", "data/cat_test_results.pt", "cg groups");
   config.freeIntermediates = savedFree;
+
+  // Allocation groups over the single-block grid, which they are on for
+  // whenever isCg is set. There the cumsum feeding o2 is computed inside the
+  // concat's own kernel and sized only by that launch, while another operand
+  // is written a node earlier. The group must not lay the result out before
+  // the cumsum is sized.
+  WaveConfig::get().isCg = false;
+  WaveConfig::get().useSingleBlock = true;
+  runTest(
+      "data/cat_test.pt2", "data/cat_test_results.pt", "single-block groups");
+  WaveConfig::get().useSingleBlock = std::nullopt;
   WaveConfig::get().isCg = std::nullopt;
 
   // Plan structure. o3 = cat([ms1, ms2, ms3]) joins three operands, which is
@@ -2791,14 +3048,10 @@ TEST_F(ExecutorTest, catNdTest) {
 TEST_F(ExecutorTest, catStridedBandTest) {
   auto& config = WaveConfig::get();
   const auto savedFree = config.freeIntermediates;
-  const auto savedGroup = config.enableAllocGroup;
-  const auto savedConcat = config.enableConcatAllocGroup;
-  auto resetConfig = folly::makeGuard([&, savedFree, savedGroup, savedConcat] {
+  auto resetConfig = folly::makeGuard([&, savedFree] {
     config.useSingleBlock = std::nullopt;
     config.isCg = std::nullopt;
     config.freeIntermediates = savedFree;
-    config.enableAllocGroup = savedGroup;
-    config.enableConcatAllocGroup = savedConcat;
   });
 
   const std::string pt2 = "data/cat_strided_band_test.pt2";
@@ -2814,14 +3067,9 @@ TEST_F(ExecutorTest, catStridedBandTest) {
   runTest(pt2, results, "cg");
 
   // The arm that actually carves the bands: the group needs the cooperative
-  // grid and the freeing, and the A/B against it switched off is what shows the
-  // values do not depend on the copy being placed there.
+  // grid and the freeing.
   config.freeIntermediates = true;
-  config.enableAllocGroup = true;
-  config.enableConcatAllocGroup = false;
-  runTest(pt2, results, "cg groups, concat groups off");
-  config.enableConcatAllocGroup = true;
-  runTest(pt2, results, "cg groups, concat groups on");
+  runTest(pt2, results, "cg groups");
 
   // Ten operands carved over four concats: the copies -- three each in o1, o2
   // and o4, and o3's middle one.
@@ -2857,14 +3105,10 @@ TEST_F(ExecutorTest, catStridedBandTest) {
 TEST_F(ExecutorTest, catAllocGroupTest) {
   auto& config = WaveConfig::get();
   const auto savedFree = config.freeIntermediates;
-  const auto savedGroup = config.enableAllocGroup;
-  const auto savedConcat = config.enableConcatAllocGroup;
-  auto resetConfig = folly::makeGuard([&, savedFree, savedGroup, savedConcat] {
+  auto resetConfig = folly::makeGuard([&, savedFree] {
     config.useSingleBlock = std::nullopt;
     config.isCg = std::nullopt;
     config.freeIntermediates = savedFree;
-    config.enableAllocGroup = savedGroup;
-    config.enableConcatAllocGroup = savedConcat;
   });
 
   const std::string pt2 = "data/cat_alloc_group_test.pt2";
@@ -2881,12 +3125,7 @@ TEST_F(ExecutorTest, catAllocGroupTest) {
   // released.
   config.isCg = true;
   config.freeIntermediates = true;
-  config.enableAllocGroup = true;
-
-  config.enableConcatAllocGroup = false;
-  runTest(pt2, results, "cg alloc groups, concat groups off");
-  config.enableConcatAllocGroup = true;
-  runTest(pt2, results, "cg alloc groups, concat groups on");
+  runTest(pt2, results, "cg alloc groups");
 
   // What the pass made of it. Every cat above the threshold forms a group, and
   // nothing is left to the offset walk: an operand reaches its region one of
@@ -2923,20 +3162,12 @@ TEST_F(ExecutorTest, catAllocGroupTest) {
   EXPECT_EQ(stats.numConcatNoMembers, 1);
   EXPECT_EQ(stats.numConcatUnplaceableOperand, 0);
 
-  // Nothing is placed with the mode's concat half switched off, which is what
-  // makes the arm above an A/B rather than two runs of the same thing.
-  config.enableConcatAllocGroup = false;
-  auto without = allocGroupStats(pt2);
-  EXPECT_EQ(without.numConcatGroups, 0);
-  EXPECT_EQ(without.numInConcatGroup, 0);
-  config.enableConcatAllocGroup = true;
-
   // The same mode on the multi-kernel grid. Nothing about a lifetime or a band
   // needs the cooperative grid -- both grids are settled by compilation -- so
   // the plan is built against whichever one the config names, and the values
   // have to come out the same on either.
   config.isCg = false;
-  runTest(pt2, results, "multi-kernel alloc groups, concat groups on");
+  runTest(pt2, results, "multi-kernel alloc groups");
 
   auto mk = allocGroupStats(pt2, /*cg=*/false);
   // Every concat that grouped under the cooperative grid still groups here: a
@@ -2965,14 +3196,10 @@ TEST_F(ExecutorTest, catAllocGroupTest) {
 TEST_F(ExecutorTest, catParallelFillTest) {
   auto& config = WaveConfig::get();
   const auto savedFree = config.freeIntermediates;
-  const auto savedGroup = config.enableAllocGroup;
-  const auto savedConcat = config.enableConcatAllocGroup;
-  auto resetConfig = folly::makeGuard([&, savedFree, savedGroup, savedConcat] {
+  auto resetConfig = folly::makeGuard([&, savedFree] {
     config.useSingleBlock = std::nullopt;
     config.isCg = std::nullopt;
     config.freeIntermediates = savedFree;
-    config.enableAllocGroup = savedGroup;
-    config.enableConcatAllocGroup = savedConcat;
   });
 
   const std::string pt2 = "data/cat_parallel_fill_test.pt2";
@@ -2984,8 +3211,6 @@ TEST_F(ExecutorTest, catParallelFillTest) {
 
   config.isCg = true;
   config.freeIntermediates = true;
-  config.enableAllocGroup = true;
-  config.enableConcatAllocGroup = true;
   runTest(pt2, results, "cg alloc groups");
 
   // Both concats are grouped even though 'handed' has nothing to carve: the
@@ -3016,6 +3241,41 @@ TEST_F(ExecutorTest, catParallelFillTest) {
   EXPECT_TRUE(plan.runsAfter("aten.add.Scalar", "aten.cat.default"));
 }
 
+// A wide concat whose allocation group is laid out in an earlier node than the
+// one the concat runs in, at a step past that node's last launch. Its 11
+// operands are the prim.ListUnpack outputs of an unbind, which the first node
+// writes after its kernel grids; the sort that follows is an eager standalone,
+// so the concat, added to a value computed after it, lands in a later node.
+// The group is carved at the empty step past the first node's grids, and the
+// later node's copies of the 11 operands write into its bands. A step loop that
+// stops at its first empty step drops the group, and those copies get empty
+// parameters: an illegal address, or garbage in 'joined'.
+TEST_F(ExecutorTest, catLateGroupTest) {
+  auto& config = WaveConfig::get();
+  const auto savedFree = config.freeIntermediates;
+  auto resetConfig = folly::makeGuard([&, savedFree] {
+    config.useSingleBlock = std::nullopt;
+    config.isCg = std::nullopt;
+    config.freeIntermediates = savedFree;
+  });
+
+  const std::string pt2 = "data/cat_late_group_test.pt2";
+  const std::string results = "data/cat_late_group_test_results.pt";
+
+  config.useSingleBlock = false;
+  runTest(pt2, results, "multi-block");
+  config.useSingleBlock = true;
+  runTest(pt2, results, "single-block");
+  config.useSingleBlock = std::nullopt;
+
+  config.isCg = true;
+  config.freeIntermediates = true;
+  runTest(pt2, results, "cg alloc groups");
+
+  auto stats = allocGroupStats(pt2);
+  EXPECT_EQ(stats.numConcatGroups, 1);
+}
+
 // Two wide concats of the same shape over different operands. They deduplicate
 // to one project operation that runs twice, so everything the concat works
 // with is formal and each instance has to be handed its own actual -- including
@@ -3030,14 +3290,10 @@ TEST_F(ExecutorTest, catParallelFillTest) {
 TEST_F(ExecutorTest, catDedupTest) {
   auto& config = WaveConfig::get();
   const auto savedFree = config.freeIntermediates;
-  const auto savedGroup = config.enableAllocGroup;
-  const auto savedConcat = config.enableConcatAllocGroup;
-  auto resetConfig = folly::makeGuard([&, savedFree, savedGroup, savedConcat] {
+  auto resetConfig = folly::makeGuard([&, savedFree] {
     config.useSingleBlock = std::nullopt;
     config.isCg = std::nullopt;
     config.freeIntermediates = savedFree;
-    config.enableAllocGroup = savedGroup;
-    config.enableConcatAllocGroup = savedConcat;
   });
 
   const std::string pt2 = "data/cat_dedup_test.pt2";
@@ -3052,8 +3308,6 @@ TEST_F(ExecutorTest, catDedupTest) {
   // instances would be a mix-up between two runs of the same code.
   config.isCg = true;
   config.freeIntermediates = true;
-  config.enableAllocGroup = true;
-  config.enableConcatAllocGroup = true;
   runTest(pt2, results, "cg alloc groups");
 
   // Both concats are grouped, and each carves the one operand written at the
@@ -3208,6 +3462,52 @@ return(%o)
   auto b = at::arange(100000, at::kLong) + 7;
   EXPECT_NO_THROW(
       { runWaveProgrammatic(std::move(graph), meta, {{empty, a, b}}); });
+}
+
+// A concat that promotes one operand: the int32 lengths of an elementwise op
+// joined with int64 tensors, so the result is int64. The narrow operand can be
+// computed by the concat's own kernel, but it must not write its band there
+// with its own element type, nor be copied in raw: either puts pairs of int32
+// values into each int64 slot. Without a forced grid there are no allocation
+// groups and the concat's own fill moves the operand; with one, the concat
+// group places the result and a copy op of the operand's own fills its band.
+TEST_F(ExecutorTest, catPromotedOperandTest) {
+  auto& config = WaveConfig::get();
+  const auto savedCg = config.isCg;
+  auto resetConfig = folly::makeGuard([&, savedCg] { config.isCg = savedCg; });
+
+  const char* kGraph = R"(graph(%a, %b, %c):
+%d = torch.ops.aten.sub.Tensor(self=%a, other=%a, alpha=-1)
+%list[] = prim.ListPack(l0=%b, l1=%d, l2=%c)
+%o = torch.ops.aten.cat.default(tensors=%list, dim=0)
+return(%o)
+)";
+  std::unordered_map<std::string, torch::_export::TensorMeta> meta;
+  meta["a"] = makeTensorMeta(c10::ScalarType::Int, 1);
+  meta["d"] = makeTensorMeta(c10::ScalarType::Int, 1);
+  meta["b"] = makeTensorMeta(c10::ScalarType::Long, 1);
+  meta["c"] = makeTensorMeta(c10::ScalarType::Long, 1);
+  meta["o"] = makeTensorMeta(c10::ScalarType::Long, 1);
+
+  auto a = (at::arange(10000, at::kInt) % 5) + 1;
+  auto b = at::arange(3000, at::kLong) * 3;
+  auto c = at::arange(4000, at::kLong) + 11;
+  auto reference = at::cat({b, (a + a).to(at::kLong), c});
+  auto check = [&](const char* label) {
+    SCOPED_TRACE(label);
+    auto outputs =
+        runWaveProgrammatic(nativert::stringToGraph(kGraph), meta, {{a, b, c}});
+    ASSERT_EQ(outputs.size(), 1);
+    EXPECT_TRUE(tensorsMatch(outputs[0], reference))
+        << firstDifference(outputs[0], reference);
+  };
+
+  config.isCg = std::nullopt;
+  check("auto, no allocation groups");
+  config.isCg = true;
+  check("cg, concat group");
+  config.isCg = false;
+  check("multi-kernel, concat group");
 }
 
 // aten.cat and its aten.concat alias over the same pair of 2-D inputs on

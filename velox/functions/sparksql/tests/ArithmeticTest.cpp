@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include <bit>
 #include <cstdint>
 #include <limits>
 
@@ -757,6 +758,50 @@ TEST_F(ArithmeticTest, isNanDouble) {
   EXPECT_EQ(true, isNan(kNanDouble));
   EXPECT_EQ(true, isNan(0.0 / 0.0));
   EXPECT_EQ(false, isNan(std::nullopt));
+}
+
+TEST_F(ArithmeticTest, normalizeNaNAndZero) {
+  const auto testNormalize = [&]<typename T, typename TBits>(
+                                 T input, TBits expectedBits) {
+    SCOPED_TRACE(fmt::format("input bits: {:#x}", std::bit_cast<TBits>(input)));
+    const auto result =
+        evaluateOnce<T>("normalize_nan_and_zero(c0)", std::optional<T>(input));
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(expectedBits, std::bit_cast<TBits>(result.value()));
+  };
+
+  // Cases shared by REAL and DOUBLE. 'canonicalNaN' is the bit pattern of
+  // Java's Float.NaN or Double.NaN.
+  const auto testSharedCases = [&]<typename T, typename TBits>(
+                                   T /*type*/, TBits canonicalNaN) {
+    using Limits = std::numeric_limits<T>;
+    const auto bits = [](T value) { return std::bit_cast<TBits>(value); };
+    testNormalize(T(-0.0), TBits{0});
+    testNormalize(T(0.0), TBits{0});
+    testNormalize(T(1.5), bits(T(1.5)));
+    testNormalize(T(-1.5), bits(T(-1.5)));
+    testNormalize(Limits::infinity(), bits(Limits::infinity()));
+    testNormalize(-Limits::infinity(), bits(-Limits::infinity()));
+    testNormalize(Limits::denorm_min(), bits(Limits::denorm_min()));
+    testNormalize(Limits::quiet_NaN(), canonicalNaN);
+    testNormalize(-Limits::quiet_NaN(), canonicalNaN);
+    EXPECT_EQ(
+        std::nullopt,
+        evaluateOnce<T>("normalize_nan_and_zero(c0)", std::optional<T>()));
+  };
+
+  constexpr uint64_t kDoubleNaN = 0x7ff8000000000000;
+  constexpr uint32_t kFloatNaN = 0x7fc00000;
+  testSharedCases(double{}, kDoubleNaN);
+  testSharedCases(float{}, kFloatNaN);
+
+  // Signaling and payload NaNs.
+  testNormalize(
+      std::bit_cast<double>(uint64_t{0x7ff0000000000001}), kDoubleNaN);
+  testNormalize(
+      std::bit_cast<double>(uint64_t{0xfff8dead0000beef}), kDoubleNaN);
+  testNormalize(std::bit_cast<float>(uint32_t{0x7f800001}), kFloatNaN);
+  testNormalize(std::bit_cast<float>(uint32_t{0xffc0beef}), kFloatNaN);
 }
 
 TEST_F(ArithmeticTest, hexWithBigint) {
