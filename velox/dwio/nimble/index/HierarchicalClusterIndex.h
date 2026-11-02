@@ -36,6 +36,7 @@ class HierarchicalClusterIndex final : public ClusterIndexBase {
       std::shared_ptr<velox::dwio::common::BufferedInput> dataInput,
       bool pinIndex,
       bool preloadIndex,
+      bool cacheKeyEncodingViews,
       velox::memory::MemoryPool* pool);
 };
 

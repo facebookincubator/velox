@@ -249,7 +249,7 @@ bool hasReserveShapeInChain(
   auto* meta = Registry::metadata(node->target());
   if (meta) {
     for (const auto& rm : meta->returnMeta) {
-      if (rm.reserveShape != nullptr && rm.shapeFromInput < 0) {
+      if (rm.reserve != nullptr && rm.shapeFromInput < 0) {
         return true;
       }
     }
@@ -264,150 +264,6 @@ bool hasReserveShapeInChain(
     }
   }
   return false;
-}
-
-// The launch-time shape of one operand, coerced to 'rank' dimensions.
-std::vector<Dim> concatInputShape(
-    const ConcatInputInfo& info,
-    int8_t rank,
-    nativert::ExecutionFrame& frame,
-    const FormalToActual& map) {
-  std::vector<Dim> shape;
-  if (info.reserveShape) {
-    static const NodeMap emptyNodeMap;
-    auto shapes = info.reserveShape(nullptr, frame, map, nullptr, emptyNodeMap);
-    TORCH_CHECK(
-        !shapes.empty(), "reserveShape returned no shape for a concat operand");
-    shape = std::move(shapes[0]);
-  } else if (info.sizeExpr.op != SizeShortcut::kNone) {
-    shape = translateSizeExpr(info.sizeExpr, map).dims(&frame);
-  }
-  if (shape.empty()) {
-    // No size expression resolved: the operand contributes nothing, as for the
-    // undefined tensor a zero-length cat operand arrives as.
-    return std::vector<Dim>(rank, 0);
-  }
-  auto shapeRank = static_cast<int8_t>(shape.size());
-  if (shapeRank == rank) {
-    return shape;
-  }
-  if (rank == 1) {
-    Dim numElements = 1;
-    for (auto extent : shape) {
-      numElements *= extent;
-    }
-    return {numElements};
-  }
-  TORCH_CHECK(
-      shapeRank < rank,
-      "Concat operand %",
-      info.valueId,
-      " resolved to a rank-",
-      static_cast<int>(shapeRank),
-      " shape, expected rank ",
-      static_cast<int>(rank));
-  // A broadcast size expression drops leading 1-dims; restore them.
-  shape.insert(shape.begin(), rank - shapeRank, 1);
-  return shape;
-}
-
-// Computes the operand shapes, allocates or resizes the concat output, and
-// hands every operand this kernel computes a view of the output region it
-// occupies, so the producing expression writes its result in place. Operands
-// the kernel copies (boundary inputs and views) get no view; __concatCopy moves
-// them at kernel time.
-std::vector<std::vector<Dim>> reserveConcatOutput(
-    const std::vector<ConcatInputInfo>& inputInfos,
-    const ConcatSpec& spec,
-    nativert::ValueId concatFormalId,
-    c10::ScalarType dtype,
-    nativert::ExecutionFrame& frame,
-    const FormalToActual& map) {
-  const auto elementRank = spec.elementRank();
-  std::vector<std::vector<Dim>> shapes;
-  shapes.reserve(inputInfos.size());
-  for (const auto& info : inputInfos) {
-    shapes.push_back(concatInputShape(info, elementRank, frame, map));
-  }
-  auto outShape = concatResultShape(spec, shapes);
-
-  auto concatActualId = concatFormalId;
-  if (auto it = map.find(concatFormalId); it != map.end()) {
-    concatActualId = it->second;
-  }
-  const std::vector<int64_t> outSizes(outShape.begin(), outShape.end());
-  auto& existing = frame.getIValue(concatActualId);
-  at::Tensor concatTensor;
-  if (existing.isTensor() && existing.toTensor().is_cuda() &&
-      (existing.toTensor().sizes() == c10::IntArrayRef(outSizes) ||
-       existing.toTensor().storage().use_count() == 1)) {
-    concatTensor = existing.toTensor();
-    if (concatTensor.sizes() != c10::IntArrayRef(outSizes)) {
-      concatTensor.resize_(outSizes);
-    }
-  } else {
-    // Either there is nothing to keep, or the result is a different shape than
-    // the tensor already there AND something else holds its storage -- views of
-    // it a concat allocation group carved for the operands, which resize_ would
-    // reallocate out from under. Those views stay valid on their own reference,
-    // so starting again leaves the operands to be copied in rather than losing
-    // what they wrote.
-    concatTensor =
-        at::empty(outSizes, at::TensorOptions().dtype(dtype).device(at::kCUDA));
-    frame.setIValue(concatActualId, concatTensor);
-  }
-
-  bool canComputeOffset = true;
-  int64_t offset = 0;
-  for (size_t i = 0; i < inputInfos.size(); ++i) {
-    // 'shapes' is filled one entry per inputInfos above, so .at(i) is in range;
-    // spelled as a checked access so the invariant is enforced rather than
-    // assumed.
-    const int64_t extent =
-        spec.isStack ? 1 : static_cast<int64_t>(shapes.at(i).at(spec.dim));
-    if (inputInfos[i].isSubgraphInput || inputInfos[i].isView) {
-      // An operand a copy op of its own fills gets the band from the concat's
-      // allocation group, which is materialized ahead of the copy. Binding it
-      // here instead would be too late: the copy has already run by the time
-      // the concat's own reserve executes, so the band would replace what it
-      // wrote. See materializeConcatGroup.
-      offset += extent;
-      continue;
-    }
-    auto inputActualId = inputInfos[i].valueId;
-    if (auto it = map.find(inputInfos[i].valueId); it != map.end()) {
-      inputActualId = it->second;
-    }
-    // An earlier operand whose length the kernel itself computes leaves this
-    // one's offset unknown on the host; the kernel then patches the view's base
-    // (see the view fixup in concatSpecialForm). Only a 1-d cat gets here -- a
-    // wider concat keeps device-sized operands out of its kernel entirely.
-    const bool pending = !canComputeOffset || inputInfos[i].hasShapeOnDevice;
-    // A cat operand spans 'extent' positions along the join axis; a stack
-    // operand occupies the single position 'i', which drops that axis.
-    const int64_t start =
-        spec.isStack ? static_cast<int64_t>(i) : (pending ? 0 : offset);
-    auto view = concatOperandView(concatTensor, spec, start, extent);
-    if (WaveConfig::get().trace & WaveConfig::kTensors) {
-      std::cout << "  concat view v" << inputActualId << " of v"
-                << concatActualId << " dim=" << spec.dim << " offset=";
-      if (pending) {
-        std::cout << "pending";
-      } else {
-        std::cout << offset;
-      }
-      std::cout << " size=" << extent << " " << traceIValue(c10::IValue(view))
-                << std::endl;
-    }
-    frame.setIValue(inputActualId, std::move(view));
-    if (pending) {
-      canComputeOffset = false;
-    } else {
-      offset += extent;
-    }
-  }
-
-  return {std::move(outShape)};
 }
 
 void concatSetOutputs(
@@ -456,7 +312,7 @@ void concatSetOutputs(
       sizeExpr.op = SizeShortcut::kMax;
       sizeExpr.values.push_back(elem->id());
       // Placement gives an operand no launch here writes a copy of its own.
-      // Recording where that copy lands is what lets reserveConcatOutput bind
+      // Recording where that copy lands is what lets the concat layout bind
       // it to the band, and tells the kernel below not to move the operand.
       const auto copyDest = compileCtx != nullptr
           ? compileCtx->concatCopyDest(
@@ -513,23 +369,11 @@ void concatSetOutputs(
       inputSizeExpr.op = SizeShortcut::kMax;
       inputSizeExpr.values.push_back(elem->id());
     }
-    OutputReserveFunc catReserve;
-    if (desc.reserveShape) {
-      auto inner = desc.reserveShape;
-      catReserve = [inner](
-                       NodeCP /*unused*/,
-                       nativert::ExecutionFrame& frame,
-                       const FormalToActual& map,
-                       NodeCP /*originalFormalNode*/,
-                       const NodeMap& nodeMap) {
-        return inner(frame, map, nodeMap);
-      };
-    }
     inputInfos.push_back(
         {.valueId = elem->id(),
          .writerId = writerId,
          .sizeExpr = std::move(inputSizeExpr),
-         .reserveShape = std::move(catReserve),
+         .hasReserve = desc.reserveFn != nullptr,
          .hasShapeOnDevice = hasSod,
          .hasReserveInChain = hasReserveInChain,
          .mayWriteStrided = producerMayWriteStrided(elem),
@@ -603,15 +447,6 @@ void concatSetOutputs(
       .layoutNode = layoutPoint != nullptr ? layoutPoint->node : -1,
       .layoutStep = layoutPoint != nullptr ? layoutPoint->step : -1});
 
-  concatDesc.reserveShape =
-      [layout, concatFormalId](
-          nativert::ExecutionFrame& frame,
-          const FormalToActual& map,
-          const NodeMap& nodeMap) -> std::vector<std::vector<Dim>> {
-    auto [actualSpec, actualDtype] = layout->resolve(nodeMap);
-    return reserveConcatOutput(
-        layout->inputs, actualSpec, concatFormalId, actualDtype, frame, map);
-  };
   concatDesc.concatLayout = std::move(layout);
 
   addOrUpdateOutput(
@@ -798,7 +633,7 @@ void concatSpecialForm(
 
   // The destination type is the result's, not the first operand's: torch
   // promotes a mixed-dtype concat, and __concatCopy value-converts each element
-  // into the buffer reserveConcatOutput allocated with that dtype.
+  // into the buffer the concat layout allocated with that dtype.
   auto outputId = concatOutput->id();
   TORCH_CHECK(
       outputId >= 0 && static_cast<size_t>(outputId) < types.types.size() &&
@@ -966,6 +801,39 @@ void concatSpecialForm(
 
 } // namespace
 
+std::vector<Dim> coerceConcatShape(
+    const ConcatInputInfo& info,
+    std::vector<Dim> shape,
+    int8_t rank) {
+  if (shape.empty()) {
+    // No size expression resolved: the operand contributes nothing, as for the
+    // undefined tensor a zero-length cat operand arrives as.
+    return std::vector<Dim>(rank, 0);
+  }
+  auto shapeRank = static_cast<int8_t>(shape.size());
+  if (shapeRank == rank) {
+    return shape;
+  }
+  if (rank == 1) {
+    Dim numElements = 1;
+    for (auto extent : shape) {
+      numElements *= extent;
+    }
+    return {numElements};
+  }
+  TORCH_CHECK(
+      shapeRank < rank,
+      "Concat operand %",
+      info.valueId,
+      " resolved to a rank-",
+      static_cast<int>(shapeRank),
+      " shape, expected rank ",
+      static_cast<int>(rank));
+  // A broadcast size expression drops leading 1-dims; restore them.
+  shape.insert(shape.begin(), rank - shapeRank, 1);
+  return shape;
+}
+
 const char* concatCopyCauseText(ConcatCopyCause cause) {
   switch (cause) {
     case ConcatCopyCause::kNone:
@@ -1124,7 +992,7 @@ bool concatFillsInParallel(NodeCP node, const ValueTypes& types) {
   // allocation group's: it is the group that allocates it early enough to hand
   // each operand its region before the copy runs. Without the group there is
   // no band to write, so the operands stay on the concat's own fill.
-  if (!concatAllocGroupEnabled()) {
+  if (!allocGroupEnabled()) {
     return false;
   }
   if (node->target() != kCatTarget && node->target() != kStackTarget) {
@@ -1173,6 +1041,20 @@ void registerConcatMetadata() {
       .setOutputs(concatSetOutputs)
       .specialForm(concatSpecialForm)
       .registerOp();
+}
+
+std::vector<SizeExpr> translateConcatSizeExprs(
+    const ConcatLayout& layout,
+    const FormalToActual& map) {
+  std::vector<SizeExpr> result;
+  result.reserve(layout.inputs.size());
+  for (const auto& info : layout.inputs) {
+    result.push_back(
+        info.sizeExpr.op != SizeShortcut::kNone
+            ? translateSizeExpr(info.sizeExpr, map)
+            : SizeExpr{});
+  }
+  return result;
 }
 
 } // namespace torch::wave

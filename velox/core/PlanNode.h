@@ -22,6 +22,7 @@
 
 #include "velox/common/EnumDeclare.h"
 #include "velox/common/rpc/RPCTypes.h"
+#include "velox/common/vectorindex/VectorIndexMetric.h"
 #include "velox/connectors/Connector.h"
 #include "velox/core/Expressions.h"
 #include "velox/core/QueryConfig.h"
@@ -4770,6 +4771,150 @@ class SpatialJoinNode : public PlanNode {
 
 using SpatialJoinNodePtr = std::shared_ptr<const SpatialJoinNode>;
 
+/// Joins each probe row with the entries of vector indexes nearest to its
+/// embedding. Translates to an exec::VectorSearchJoinProbe and an
+/// exec::VectorSearchJoinBuild, which Velox builds only with
+/// VELOX_ENABLE_FAISS. A separate pipeline is produced for the build side when
+/// generating exec::Operators.
+///
+/// Each build row holds a packed local vector index over embeddings with ids
+/// (see common::vectorindex::LocalVectorIndex). A vector index's codec is a
+/// local index over its centroids, with cluster ids as ids. All indexes of the
+/// build side must have the same dimension, the length of the probe
+/// embeddings; a build side with indexes of different dimensions is a user
+/// error. The join runs in two steps:
+///
+/// 1. The equality conditions on 'leftKeys' and 'rightKeys' match each probe
+///    row to build rows, as in a hash join. With no keys, every probe row
+///    matches every build row.
+/// 2. Within each match, the probe row's embedding, normalized for the metric,
+///    is searched in the build row's index for its 'k' nearest embeddings. A
+///    probe row matching several build rows gets up to 'k' from each.
+///
+/// Each embedding found gives an output row of the probe row's and the build
+/// row's columns, the embedding's id and its score: the similarity the metric
+/// defines, where larger is nearer. Probe and build rows with a
+/// null key, probe rows with a null embedding and build rows with a null index
+/// match nothing. A left join outputs a probe row that finds no embeddings
+/// once, with nulls for the build columns, the id and the score. A probe
+/// embedding of another length, or with a null element, is a user error.
+///
+/// Unlike inner and left joins of AbstractJoinNode (see
+/// isPreservingProbeOrder()), the join does not preserve the order of the
+/// probe rows within an input batch: it outputs the results of one local index
+/// at a time.
+class VectorSearchJoinNode : public PlanNode {
+ public:
+  /// @param probeEmbedding Probe column of type ARRAY(REAL) with the query
+  /// embedding.
+  /// @param buildIndex Build column of type VARBINARY with the packed local
+  /// index. It may not appear in the output.
+  /// @param metric The metric the indexes were built for.
+  /// @param k The number of embeddings to find in each matching index, at
+  /// least 1. At most the size of the index are found.
+  /// @param searchOptions Search settings that override the ones recorded in
+  /// the indexes (see LocalVectorIndexOptions::parseSearch).
+  /// @param idName Name of the output column with the id of each embedding
+  /// found, of type BIGINT. Not set if the output does not include it.
+  /// @param scoreName Name of the output column with the score of each
+  /// embedding found, of type REAL. Not set if the output does not include it.
+  /// @param outputType Probe and build columns, and the id and score columns,
+  /// in any order.
+  VectorSearchJoinNode(
+      const PlanNodeId& id,
+      JoinType joinType,
+      std::vector<FieldAccessTypedExprPtr> leftKeys,
+      std::vector<FieldAccessTypedExprPtr> rightKeys,
+      FieldAccessTypedExprPtr probeEmbedding,
+      FieldAccessTypedExprPtr buildIndex,
+      common::vectorindex::VectorIndexMetric metric,
+      int64_t k,
+      std::vector<std::pair<std::string, std::string>> searchOptions,
+      std::optional<std::string> idName,
+      std::optional<std::string> scoreName,
+      PlanNodePtr left,
+      PlanNodePtr right,
+      RowTypePtr outputType);
+
+  const std::vector<PlanNodePtr>& sources() const override {
+    return sources_;
+  }
+
+  void accept(const PlanNodeVisitor& visitor, PlanNodeVisitorContext& context)
+      const override;
+
+  const RowTypePtr& outputType() const override {
+    return outputType_;
+  }
+
+  std::string_view name() const override {
+    return "VectorSearchJoin";
+  }
+
+  JoinType joinType() const {
+    return joinType_;
+  }
+
+  const std::vector<FieldAccessTypedExprPtr>& leftKeys() const {
+    return leftKeys_;
+  }
+
+  const std::vector<FieldAccessTypedExprPtr>& rightKeys() const {
+    return rightKeys_;
+  }
+
+  const FieldAccessTypedExprPtr& probeEmbedding() const {
+    return probeEmbedding_;
+  }
+
+  const FieldAccessTypedExprPtr& buildIndex() const {
+    return buildIndex_;
+  }
+
+  common::vectorindex::VectorIndexMetric metric() const {
+    return metric_;
+  }
+
+  int64_t k() const {
+    return k_;
+  }
+
+  const std::vector<std::pair<std::string, std::string>>& searchOptions()
+      const {
+    return searchOptions_;
+  }
+
+  const std::optional<std::string>& idName() const {
+    return idName_;
+  }
+
+  const std::optional<std::string>& scoreName() const {
+    return scoreName_;
+  }
+
+  folly::dynamic serialize() const override;
+
+  static PlanNodePtr create(const folly::dynamic& obj, void* context);
+
+ private:
+  void addDetails(std::stringstream& stream) const override;
+
+  const JoinType joinType_;
+  const std::vector<FieldAccessTypedExprPtr> leftKeys_;
+  const std::vector<FieldAccessTypedExprPtr> rightKeys_;
+  const FieldAccessTypedExprPtr probeEmbedding_;
+  const FieldAccessTypedExprPtr buildIndex_;
+  const common::vectorindex::VectorIndexMetric metric_;
+  const int64_t k_;
+  const std::vector<std::pair<std::string, std::string>> searchOptions_;
+  const std::optional<std::string> idName_;
+  const std::optional<std::string> scoreName_;
+  const std::vector<PlanNodePtr> sources_;
+  const RowTypePtr outputType_;
+};
+
+using VectorSearchJoinNodePtr = std::shared_ptr<const VectorSearchJoinNode>;
+
 class TopNNode : public PlanNode {
  public:
   TopNNode(
@@ -6605,6 +6750,10 @@ class PlanNodeVisitor {
 
   virtual void visit(const SpatialJoinNode& node, PlanNodeVisitorContext& ctx)
       const = 0;
+
+  virtual void visit(
+      const VectorSearchJoinNode& node,
+      PlanNodeVisitorContext& ctx) const = 0;
 
   virtual void visit(const OrderByNode& node, PlanNodeVisitorContext& ctx)
       const = 0;

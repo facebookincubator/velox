@@ -1,0 +1,42 @@
+/*
+ * Copyright (c) Meta Platforms, Inc. and its affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+#pragma once
+
+#include <string>
+#include <vector>
+
+namespace facebook::velox::aggregate::prestosql {
+
+/// Registers the vector_index_pack aggregate:
+///
+///   (cluster_id BIGINT, cluster_centroid ARRAY(REAL), metric VARCHAR)
+///       -> VARBINARY
+///
+/// Packs cluster centroids into a codec: a kFlat local index over the
+/// centroids, with each cluster's id as its centroid's id (see
+/// LocalVectorIndex).
+///  - Cluster ids must be 0 to n - 1, each once.
+///  - Cluster centroids must all have the same, non-zero length.
+///  - Cluster centroids must not contain null, NaN or infinite elements.
+///  - Rows with a null cluster_id or cluster_centroid are ignored.
+///  - 'metric' is a constant: 'cosine'.
+void registerVectorIndexPackAggregate(
+    const std::vector<std::string>& names,
+    bool withCompanionFunctions,
+    bool overwrite);
+
+} // namespace facebook::velox::aggregate::prestosql

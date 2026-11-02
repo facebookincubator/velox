@@ -43,6 +43,8 @@ add_executable(
   DictionaryEncodingViewTest.cpp
   EliasFanoEncodingTest.cpp
   EliasFanoEncodingViewTest.cpp
+  PartitionedEliasFanoEncodingTest.cpp
+  PartitionedEliasFanoEncodingViewTest.cpp
   EncodingLayoutTest.cpp
   EncodingSelectionTest.cpp
   EncodingSliceTest.cpp
@@ -50,7 +52,6 @@ add_executable(
   EncodingViewUtilsTest.cpp
   CompressionTest.cpp
   EncodingTest.cpp
-  EncodingLegacyTest.cpp
   EncodingPrefixTest.cpp
   EncodingTypeDispatchTest.cpp
   FixedBitWidthEncodingViewTest.cpp
@@ -97,7 +98,6 @@ target_link_libraries(
   nimble_encoding_layout_test_helper
   nimble_encodings_tests_utils
   nimble_encodings
-  nimble_encodings_legacy
   nimble_common
   nimble_tools_common
   velox_common_base

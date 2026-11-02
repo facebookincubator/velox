@@ -21,6 +21,7 @@
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/ComplexVector.h"
 #include "velox/vector/DecodedVector.h"
+#include "velox/vector/FlatMapVector.h"
 #include "velox/vector/SimpleVector.h"
 
 namespace facebook::velox::functions {
@@ -146,8 +147,9 @@ class MakeRowFromMap {
         allowTopLevelNulls_(options.allowTopLevelNulls),
         throwOnDuplicateKeys_(options.throwOnDuplicateKeys),
         outputFieldNames_(options.outputFieldNames),
-        inputKeyType_(options.keysToProject->type()) {
-    VELOX_USER_CHECK_NOT_NULL(options.keysToProject);
+        keysToProject_(options.keysToProject) {
+    VELOX_USER_CHECK_NOT_NULL(
+        options.keysToProject, "Keys to project cannot be null");
     VELOX_USER_CHECK_GT(
         options.keysToProject->size(), 0, "Keys to project cannot be empty");
     VELOX_USER_CHECK_EQ(
@@ -156,13 +158,12 @@ class MakeRowFromMap {
         "Number of keys to project and output field names must be the same");
     ensureValidFieldNames(options.outputFieldNames);
 
-    VELOX_USER_CHECK_EQ(
-        KeyKind, inputKeyType_->kind(), "Unexptected key TypeKind");
-    if (inputKeyType_ != SMALLINT() && inputKeyType_ != INTEGER() &&
-        inputKeyType_ != BIGINT()) {
+    const auto& keyType = keysToProject_->type();
+    VELOX_USER_CHECK_EQ(KeyKind, keyType->kind(), "Unexptected key TypeKind");
+    if (keyType != SMALLINT() && keyType != INTEGER() && keyType != BIGINT()) {
       VELOX_NYI(
           "Only SMALLINT, INTEGER, BIGINT keys are currently supported, instead got {}",
-          inputKeyType_->toString());
+          keyType->toString());
     }
     createKeyToFieldIndexMap(options.keysToProject);
   }
@@ -182,7 +183,7 @@ class MakeRowFromMap {
     const auto& keyType = map.type()->asMap().keyType();
     VELOX_USER_CHECK_EQ(
         keyType,
-        inputKeyType_,
+        keysToProject_->type(),
         "Map key type and the type of keys to project are not the same");
 
     return toRowVectorImpl(map, rows, evalCtx);
@@ -212,6 +213,8 @@ class MakeRowFromMap {
     const auto encoding = decodedMap->base()->encoding();
     if (encoding == VectorEncoding::Simple::MAP) {
       return toRowVectorFromMap(vector, *decodedMap.get(), rows, evalCtx);
+    } else if (encoding == VectorEncoding::Simple::FLAT_MAP) {
+      return toRowVectorFromFlatMap(vector, *decodedMap.get(), rows, evalCtx);
     }
     VELOX_FAIL("Unsupported encoding for a map: {}", encoding);
   }
@@ -317,6 +320,112 @@ class MakeRowFromMap {
     return field;
   }
 
+  // Projects a flat map one field at a time: the field of each key is built
+  // from the map values of that key, without visiting the entries of each row.
+  VectorPtr toRowVectorFromFlatMap(
+      const BaseVector& vector,
+      DecodedVector& decodedMap,
+      const SelectivityVector& rows,
+      exec::EvalCtx* evalCtx) {
+    const auto& flatMap = *decodedMap.base()->asUnchecked<FlatMapVector>();
+    const auto& valueType = flatMap.valueType();
+    const auto outputSize = rows.end();
+
+    // Fail on value types without defaults even if no row needs one, as the
+    // map path does.
+    if (replaceNulls_) {
+      MakeRowFromMapDefaults::createFlat(
+          valueType, 0, *flatMap.pool(), nullptr);
+    }
+
+    // Build each field from the projected values of its key.
+    std::vector<VectorPtr> children;
+    children.reserve(keysToProject_->size());
+    for (vector_size_t i = 0; i < keysToProject_->size(); ++i) {
+      children.push_back(projectedField(
+          flatMap.projectKey(keysToProject_, i),
+          valueType,
+          decodedMap,
+          rows,
+          evalCtx));
+    }
+
+    return makeOutput(
+        vector.pool(),
+        valueType,
+        makeOutputNulls(decodedMap, rows, flatMap.pool()),
+        outputSize,
+        std::move(children));
+  }
+
+  // Returns the field of a key from its projected values, or a constant field
+  // if the flat map does not have the key.
+  VectorPtr projectedField(
+      VectorPtr values,
+      const TypePtr& valueType,
+      DecodedVector& decodedMap,
+      const SelectivityVector& rows,
+      exec::EvalCtx* evalCtx) const {
+    if (values == nullptr) {
+      return constantField(valueType, rows.end(), decodedMap.base()->pool());
+    }
+    return replaceNulls_
+        ? fieldWithDefaults(std::move(values), decodedMap, rows, evalCtx)
+        : fieldWithNulls(std::move(values), decodedMap, rows);
+  }
+
+  // Returns a field with no value in any row: default values, or nulls.
+  VectorPtr constantField(
+      const TypePtr& type,
+      vector_size_t size,
+      memory::MemoryPool* pool) const {
+    return replaceNulls_
+        ? MakeRowFromMapDefaults::createConstant(type, size, *pool)
+        : BaseVector::createNullConstant(type, size, pool);
+  }
+
+  // Returns the field of a key from its projected values, which are null in
+  // the rows whose map lacks the key: the projected values themselves for
+  // unwrapped maps, or with the wrapping of the maps otherwise.
+  static VectorPtr fieldWithNulls(
+      VectorPtr values,
+      DecodedVector& decodedMap,
+      const SelectivityVector& rows) {
+    if (decodedMap.isIdentityMapping()) {
+      return values;
+    }
+    auto* pool = values->pool();
+    return decodedMap.wrap(std::move(values), *pool, rows);
+  }
+
+  // Returns the field of a key from its projected values, with default values
+  // in the rows without a value: rows whose map is null or lacks the key, or
+  // whose value is null.
+  static VectorPtr fieldWithDefaults(
+      VectorPtr values,
+      DecodedVector& decodedMap,
+      const SelectivityVector& rows,
+      exec::EvalCtx* evalCtx) {
+    // The values of the key in the rows of the output, null without a value.
+    auto withNulls = fieldWithNulls(std::move(values), decodedMap, rows);
+
+    // Every row has a value: they are the field.
+    if (!withNulls->mayHaveNulls()) {
+      return withNulls;
+    }
+
+    // Copy the rows that have a value over default values, in one copy.
+    DecodedVector decoded(*withNulls, rows);
+    SelectivityVector rowsWithValue(rows);
+    if (const auto* nulls = decoded.nulls(&rows)) {
+      rowsWithValue.deselectNulls(nulls, rows.begin(), rows.end());
+    }
+    auto field = MakeRowFromMapDefaults::createFlat(
+        withNulls->type(), rows.end(), *withNulls->pool(), vectorPool(evalCtx));
+    field->copy(withNulls.get(), rowsWithValue, nullptr);
+    return field;
+  }
+
   // Returns the nulls of the output: null rows for null maps when allowed, or
   // none.
   BufferPtr makeOutputNulls(
@@ -376,7 +485,8 @@ class MakeRowFromMap {
   const bool allowTopLevelNulls_{false};
   const bool throwOnDuplicateKeys_{true};
   const std::vector<std::string> outputFieldNames_;
-  const TypePtr inputKeyType_;
+  // The i-th key fills the i-th field of the output.
+  const VectorPtr keysToProject_;
   folly::F14FastMap<KeyType, size_t> keyToIndex_;
 };
 } // namespace facebook::velox::functions

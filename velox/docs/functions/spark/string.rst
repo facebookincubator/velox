@@ -429,6 +429,11 @@ String Functions
 
     Returns input string with characters in reverse order.
 
+.. spark:function:: right(string, length) -> string
+
+    Returns the rightmost ``length`` characters from ``string``.
+    If ``length`` is less than or equal to 0, the result is an empty string.
+
 .. spark:function:: rpad(string, len, pad) -> string
 
     Returns ``string``, right-padded with ``pad`` to a length of ``len``.

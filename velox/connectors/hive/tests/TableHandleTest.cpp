@@ -20,10 +20,21 @@
 #include "gtest/gtest.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/connectors/hive/ExtractionUtils.h"
+#include "velox/core/Expressions.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 
 using namespace facebook::velox;
 using namespace facebook::velox::connector::hive;
+
+TEST(FileHandleTest, subfieldSerde) {
+  for (const auto* path :
+       {"c", "c.a", "c.items[2]", "c.labels[\"a.b[0]\"]", "c.items[*]"}) {
+    const common::Subfield subfield(path);
+    const folly::dynamic serialized = path;
+    EXPECT_EQ(serializeSubfield(subfield), serialized);
+    EXPECT_EQ(deserializeSubfield(serialized), subfield);
+  }
+}
 
 TEST(FileHandleTest, hiveColumnHandle) {
   Type::registerSerDe();
@@ -41,13 +52,24 @@ TEST(FileHandleTest, hiveColumnHandle) {
       connector::hive::FileColumnHandle::ColumnType::kRegular);
   ASSERT_EQ(columnHandle->dataType(), columnType);
   ASSERT_EQ(columnHandle->hiveType(), columnType);
+  ASSERT_EQ(columnHandle->schemaType(), columnType);
   ASSERT_FALSE(columnHandle->isPartitionKey());
+  ASSERT_FALSE(columnHandle->isPartitionDateValueDaysSinceEpoch());
+  ASSERT_FALSE(columnHandle->postProcessor());
 
   auto str = columnHandle->toString();
   auto obj = columnHandle->serialize();
+  const folly::dynamic expected = folly::dynamic::object(
+      "name", "HiveColumnHandle")("hiveColumnHandleName", "columnHandle")(
+      "columnType", "Regular")("dataType", columnType->serialize())(
+      "hiveType", columnType->serialize())(
+      "requiredSubfields",
+      folly::dynamic::array(columnHandle->requiredSubfields()[0].toString()));
+  ASSERT_EQ(obj, expected);
   auto clone =
       ISerializable::deserialize<connector::hive::HiveColumnHandle>(obj);
   ASSERT_EQ(clone->toString(), str);
+  ASSERT_EQ(clone->serialize(), expected);
 
   auto incompatibleHiveType = ROW({{"c0c0", BIGINT()}, {"c0c1", BIGINT()}});
   VELOX_ASSERT_THROW(
@@ -57,6 +79,39 @@ TEST(FileHandleTest, hiveColumnHandle) {
           incompatibleHiveType,
           {"c0.c0c1[3][\"foo\"].c0c1c0"}),
       "data type ROW<c0c0:BIGINT,c0c1:ARRAY<MAP<VARCHAR,ROW<c0c1c0:BIGINT,c0c1c1:BIGINT>>>> and hive type ROW<c0c0:BIGINT,c0c1:BIGINT> do not match");
+}
+
+TEST(FileHandleTest, hiveColumnHandlePartitionMetadata) {
+  using ParseParameters = HiveColumnHandle::ColumnParseParameters;
+  for (auto format :
+       {ParseParameters::kISO8601, ParseParameters::kDaysSinceEpoch}) {
+    bool called = false;
+    const HiveColumnHandle column(
+        "day",
+        FileColumnHandle::ColumnType::kPartitionKey,
+        DATE(),
+        DATE(),
+        {},
+        {},
+        ParseParameters{format},
+        [&called](VectorPtr&) { called = true; });
+    const FileColumnHandle& fileColumn = column;
+    EXPECT_EQ(fileColumn.name(), "day");
+    EXPECT_EQ(
+        fileColumn.columnType(), FileColumnHandle::ColumnType::kPartitionKey);
+    EXPECT_EQ(fileColumn.schemaType(), DATE());
+    EXPECT_EQ(fileColumn.dataType(), DATE());
+    EXPECT_TRUE(fileColumn.isPartitionKey());
+    EXPECT_EQ(
+        fileColumn.isPartitionDateValueDaysSinceEpoch(),
+        format == ParseParameters::kDaysSinceEpoch);
+    EXPECT_TRUE(fileColumn.requiredSubfields().empty());
+    EXPECT_TRUE(fileColumn.extractions().empty());
+    ASSERT_TRUE(fileColumn.postProcessor());
+    VectorPtr unused;
+    fileColumn.postProcessor()(unused);
+    EXPECT_TRUE(called);
+  }
 }
 
 TEST(TableHandleTest, hiveTableHandleDbName) {
@@ -99,6 +154,128 @@ TEST(TableHandleTest, hiveTableHandleDbName) {
   auto cloneNoDb = ISerializable::deserialize<connector::hive::HiveTableHandle>(
       objNoDb, /*context=*/nullptr);
   ASSERT_TRUE(cloneNoDb->dbName().empty());
+}
+
+TEST(FileHandleTest, hiveTableMetadata) {
+  Type::registerSerDe();
+  common::Filter::registerSerDe();
+  core::ITypedExpr::registerSerDe();
+  HiveColumnHandle::registerSerDe();
+  HiveTableHandle::registerSerDe();
+
+  const auto rowType = ROW({{"a", BIGINT()}});
+  const auto column = std::make_shared<HiveColumnHandle>(
+      "a", FileColumnHandle::ColumnType::kRegular, BIGINT(), BIGINT());
+  const auto remainingFilter =
+      std::make_shared<core::ConstantTypedExpr>(BOOLEAN(), Variant(true));
+  common::SubfieldFilters filters;
+  filters.emplace(common::Subfield("a"), std::make_unique<common::IsNotNull>());
+  const auto serializedFilter = filters.begin()->second->serialize();
+  const std::unordered_map<std::string, std::string> parameters{
+      {"skip.header.line.count", "1"}};
+  const auto handle = std::make_shared<HiveTableHandle>(
+      "test-connector",
+      "orders",
+      std::move(filters),
+      remainingFilter,
+      rowType,
+      std::vector<std::string>{"a"},
+      parameters,
+      std::vector<HiveColumnHandlePtr>{column},
+      0.5,
+      "analytics",
+      std::vector<int32_t>{7});
+
+  const FileTableHandle& fileHandle = *handle;
+  EXPECT_EQ(fileHandle.connectorId(), "test-connector");
+  EXPECT_EQ(fileHandle.name(), "orders");
+  EXPECT_EQ(fileHandle.tableName(), "orders");
+  EXPECT_EQ(fileHandle.dbName(), "analytics");
+  EXPECT_EQ(fileHandle.sampleRate(), 0.5);
+  EXPECT_EQ(fileHandle.dataColumns(), rowType);
+  EXPECT_EQ(fileHandle.remainingFilter(), remainingFilter);
+  EXPECT_EQ(fileHandle.tableParameters(), parameters);
+  EXPECT_EQ(
+      fileHandle.subfieldFilters().at(common::Subfield("a"))->serialize(),
+      serializedFilter);
+  ASSERT_EQ(fileHandle.filterColumnHandles().size(), 1);
+  EXPECT_EQ(fileHandle.filterColumnHandles()[0], column);
+  const std::vector<HiveColumnHandlePtr>& typedColumns =
+      handle->hiveFilterColumnHandles();
+  ASSERT_EQ(typedColumns.size(), 1);
+  EXPECT_EQ(typedColumns[0], column);
+
+  const folly::dynamic expected = folly::dynamic::object(
+      "name", "HiveTableHandle")("connectorId", "test-connector")(
+      "tableName", "orders")("dbName", "analytics")("sampleRate", 0.5)(
+      "remainingFilter", remainingFilter->serialize())(
+      "subfieldFilters",
+      folly::dynamic::array(
+          folly::dynamic::object("subfield", "a")("filter", serializedFilter)))(
+      "dataColumns", rowType->serialize())(
+      "tableParameters", folly::dynamic::object("skip.header.line.count", "1"))(
+      "filterColumnHandles", folly::dynamic::array(column->serialize()))(
+      "indexColumns", folly::dynamic::array("a"))(
+      "dataColumnFieldIds", folly::dynamic::array(7));
+  EXPECT_EQ(handle->serialize(), expected);
+  const auto copy = ISerializable::deserialize<HiveTableHandle>(expected);
+  EXPECT_EQ(copy->serialize(), expected);
+  EXPECT_EQ(copy->toString(), handle->toString());
+  ASSERT_EQ(copy->hiveFilterColumnHandles().size(), 1);
+  EXPECT_EQ(
+      copy->hiveFilterColumnHandles()[0]->serialize(), column->serialize());
+}
+
+TEST(FileHandleTest, hiveTableDefaults) {
+  HiveTableHandle::registerSerDe();
+  const folly::dynamic requiredFields = folly::dynamic::object(
+      "name", "HiveTableHandle")("connectorId", "test-connector")(
+      "tableName", "orders")("subfieldFilters", folly::dynamic::array)(
+      "tableParameters", folly::dynamic::object);
+  for (bool explicitDefaults : {false, true}) {
+    auto obj = requiredFields;
+    if (explicitDefaults) {
+      obj["sampleRate"] = 1.0;
+      obj["dbName"] = "";
+      obj["filterColumnHandles"] = folly::dynamic::array;
+    }
+    const auto copy = ISerializable::deserialize<HiveTableHandle>(obj);
+    const FileTableHandle& fileHandle = *copy;
+    EXPECT_EQ(fileHandle.name(), "orders");
+    EXPECT_EQ(fileHandle.sampleRate(), 1.0);
+    EXPECT_TRUE(fileHandle.dbName().empty());
+    EXPECT_TRUE(fileHandle.subfieldFilters().empty());
+    EXPECT_EQ(fileHandle.remainingFilter(), nullptr);
+    EXPECT_EQ(fileHandle.dataColumns(), nullptr);
+    EXPECT_TRUE(fileHandle.tableParameters().empty());
+    EXPECT_TRUE(fileHandle.filterColumnHandles().empty());
+    EXPECT_EQ(copy->serialize(), requiredFields);
+  }
+
+  auto obj = requiredFields;
+  obj["remainingFilter"] = nullptr;
+  VELOX_ASSERT_USER_THROW(
+      ISerializable::deserialize<HiveTableHandle>(obj),
+      "Hive remaining filter must not be null when present");
+}
+
+TEST(FileHandleTest, hiveTableDuplicateFilters) {
+  HiveTableHandle::registerSerDe();
+  common::Filter::registerSerDe();
+  const folly::dynamic obj = folly::dynamic::object("name", "HiveTableHandle")(
+      "connectorId", "test-connector")("tableName", "orders")(
+      "subfieldFilters",
+      folly::dynamic::array(
+          folly::dynamic::object("subfield", "a")(
+              "filter", common::IsNull().serialize()),
+          folly::dynamic::object("subfield", "a")(
+              "filter", common::IsNotNull().serialize())))(
+      "tableParameters", folly::dynamic::object);
+  const auto copy = ISerializable::deserialize<HiveTableHandle>(obj);
+  ASSERT_EQ(copy->subfieldFilters().size(), 1);
+  EXPECT_EQ(
+      copy->subfieldFilters().at(common::Subfield("a"))->serialize(),
+      common::IsNotNull().serialize());
 }
 
 TEST(TableHandleTest, hiveTableHandleDataColumnFieldIds) {
@@ -431,6 +608,9 @@ TEST(ColumnExtractionTest, singleExtraction) {
   ASSERT_EQ(handle->name(), "col");
   ASSERT_TRUE(handle->dataType()->equivalent(*ARRAY(VARCHAR())));
   ASSERT_TRUE(handle->hiveType()->equivalent(*MAP(VARCHAR(), BIGINT())));
+  const FileColumnHandle& fileColumn = *handle;
+  EXPECT_EQ(fileColumn.schemaType(), hiveType);
+  EXPECT_EQ(fileColumn.dataType(), outputType);
   ASSERT_TRUE(handle->requiredSubfields().empty());
   ASSERT_EQ(handle->extractions().size(), 1);
   ASSERT_EQ(handle->extractions()[0].outputName, "keys");
@@ -443,6 +623,9 @@ TEST(ColumnExtractionTest, singleExtraction) {
   auto obj = handle->serialize();
   auto clone = ISerializable::deserialize<HiveColumnHandle>(obj);
   ASSERT_EQ(clone->toString(), handle->toString());
+  EXPECT_EQ(clone->serialize(), obj);
+  EXPECT_EQ(*clone->schemaType(), *hiveType);
+  EXPECT_EQ(*clone->dataType(), *outputType);
   ASSERT_EQ(clone->extractions().size(), 1);
   ASSERT_EQ(clone->extractions()[0].outputName, "keys");
   ASSERT_TRUE(clone->extractions()[0].dataType->equivalent(*ARRAY(VARCHAR())));

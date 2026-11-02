@@ -957,7 +957,6 @@ std::unique_ptr<ColumnIndex> ColumnIndex::make(
       return nullptr;
   }
   ::arrow::Unreachable("Cannot make ColumnIndex of an unknown type");
-  return nullptr;
 }
 
 std::unique_ptr<OffsetIndex> OffsetIndex::make(
@@ -1005,7 +1004,6 @@ std::unique_ptr<ColumnIndexBuilder> ColumnIndexBuilder::make(
       return nullptr;
   }
   ::arrow::Unreachable("Cannot make ColumnIndexBuilder of an unknown type");
-  return nullptr;
 }
 
 std::unique_ptr<OffsetIndexBuilder> OffsetIndexBuilder::make() {

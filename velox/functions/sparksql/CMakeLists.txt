@@ -44,13 +44,17 @@ velox_add_library(
   GetJsonObject.cpp
   Hash.cpp
   In.cpp
+  LastWin.cpp
   LeastGreatest.cpp
   Map.cpp
+  MapFromArrays.cpp
+  MapFromEntries.cpp
   RegexFunctions.cpp
   Size.cpp
   String.cpp
   TimestampUtils.cpp
   Transform.cpp
+  TransformKeys.cpp
   UnscaledValueFunction.cpp
   XxHash64.cpp
   HEADERS
@@ -88,9 +92,13 @@ velox_add_library(
   InitcapFunction.h
   JsonObjectKeys.h
   LambdaIndexUtil.h
+  LastWin.h
   LeastGreatest.h
   LuhnCheckFunction.h
   MakeTimestamp.h
+  Map.h
+  MapFromArrays.h
+  MapFromEntries.h
   MaskFunction.h
   MightContain.h
   MonotonicallyIncreasingId.h
@@ -108,6 +116,7 @@ velox_add_library(
   TimestampUtils.h
   ToJson.h
   ToPrettyString.h
+  TransformKeys.h
   UnBase64Function.h
   UnscaledValueFunction.h
   Uuid.h

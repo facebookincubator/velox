@@ -35,6 +35,7 @@ velox_add_library(
   FileDataSource.cpp
   FileIndexReader.cpp
   FileSplitReader.cpp
+  FileTableHandle.cpp
   HiveConfig.cpp
   HiveConfigProvider.cpp
   HiveConnector.cpp
@@ -48,6 +49,7 @@ velox_add_library(
   HiveSplitReader.cpp
   PartitionIdGenerator.cpp
   PartitionValue.cpp
+  SortingWriter.cpp
   TableHandle.cpp
   HEADERS
   BufferedInputBuilder.h
@@ -80,6 +82,7 @@ velox_add_library(
   IndexReader.h
   PartitionIdGenerator.h
   PartitionValue.h
+  SortingWriter.h
   TableHandle.h
 )
 

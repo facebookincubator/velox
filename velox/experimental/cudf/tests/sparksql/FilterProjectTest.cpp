@@ -17,6 +17,7 @@
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/exec/CudfFilterProject.h"
 #include "velox/experimental/cudf/exec/ToCudf.h"
+#include "velox/experimental/cudf/expression/AstExpression.h"
 #include "velox/experimental/cudf/expression/SparkFunctions.h"
 #include "velox/experimental/cudf/tests/CudfFunctionBaseTest.h"
 #include "velox/experimental/cudf/tests/utils/ExpressionTestUtil.h"
@@ -138,6 +139,78 @@ class CudfFilterProjectTest : public CudfFunctionBaseTest {
     }
   }
 };
+
+TEST_F(CudfFilterProjectTest, isNull) {
+  const std::vector<VectorPtr> inputs{
+      makeNullableFlatVector<int32_t>({1, std::nullopt, 0, std::nullopt}),
+      makeFlatVector<int32_t>({1, 0}),
+      makeNullableFlatVector<int32_t>({std::nullopt, std::nullopt}),
+      makeFlatVector<int32_t>({}),
+      makeConstant<int32_t>(7, 3),
+      BaseVector::createNullConstant(INTEGER(), 3, pool_.get()),
+      makeNullableFlatVector<std::string>({"", std::nullopt, "spark"}),
+      makeNullableFlatVector<int64_t>({0, std::nullopt, 123}, DECIMAL(18, 2))};
+  for (const auto& input : inputs) {
+    SCOPED_TRACE(input->toString());
+    auto data = makeRowVector({input});
+    auto expression = std::make_shared<core::CallTypedExpr>(
+        BOOLEAN(),
+        std::vector<core::TypedExprPtr>{
+            std::make_shared<core::FieldAccessTypedExpr>(input->type(), "c0")},
+        "isnull");
+    exec::ExprSet expressions({expression}, &execCtx_);
+    auto expected =
+        functions::test::FunctionBaseTest::evaluate(expressions, data);
+    auto stream = cudfGlobalStreamPool().get_stream();
+    auto resource = get_output_mr();
+    auto table = with_arrow::toCudfTable(data, pool_.get(), stream, resource);
+
+    for (const bool useAst : {false, true}) {
+      SCOPED_TRACE(useAst ? "AST evaluator" : "function evaluator");
+      if (useAst && input->type()->isDecimal()) {
+        continue;
+      }
+      std::shared_ptr<CudfExpression> evaluator;
+      if (useAst) {
+        ASSERT_TRUE(ASTExpression::canEvaluate(expression));
+        evaluator = std::make_shared<ASTExpression>(
+            expression, data->rowType(), pool_.get(), queryCtx_->queryConfig());
+      } else {
+        ASSERT_TRUE(FunctionExpression::canEvaluate(expression));
+        evaluator = FunctionExpression::create(
+            expression, data->rowType(), pool_.get(), queryCtx_->queryConfig());
+      }
+      auto result = evaluator->eval(
+          tableViewToColumnViews(table->view()), stream, resource);
+      auto actual = with_arrow::toVeloxColumn(
+          cudf::table_view({asView(result)}),
+          pool_.get(),
+          ROW({{"c0", BOOLEAN()}}),
+          "",
+          stream,
+          resource);
+      velox::test::assertEqualVectors(expected, actual->childAt(0));
+    }
+    velox::test::assertEqualVectors(expected, evaluate(expression, data));
+  }
+}
+
+// The GPU cast from VARCHAR follows Presto's rules, so a Spark session keeps
+// such casts on the CPU.
+TEST_F(CudfFilterProjectTest, castFromVarcharStaysOnCpu) {
+  const auto rowType = ROW({{"c0", VARCHAR()}});
+  for (const auto* expr :
+       {"cast(c0 as integer)",
+        "try_cast(c0 as double)",
+        "cast(c0 as boolean)"}) {
+    SCOPED_TRACE(expr);
+    EXPECT_FALSE(
+        cudf_velox::canExprRunOnGpu(
+            makeTypedExpr(expr, rowType),
+            execCtx_.queryCtx(),
+            execCtx_.pool()));
+  }
+}
 
 TEST_F(CudfFilterProjectTest, hashWithSeed) {
   auto input = makeFlatVector<int64_t>({INT64_MAX, INT64_MIN});

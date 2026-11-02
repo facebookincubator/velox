@@ -129,12 +129,14 @@ FixedPointNode::FixedPointNode(
     std::vector<StateDeclarationPtr> stateDeclarations,
     std::vector<PlanNodePtr> plans,
     ConvergenceConfig convergenceConfig,
-    std::string outputStateEntry)
+    std::string outputStateEntry,
+    bool outputOnWorkerZero)
     : PlanNode{std::move(id)},
       stateDeclarations_{std::move(stateDeclarations)},
       plans_{std::move(plans)},
       convergenceConfig_{std::move(convergenceConfig)},
       outputStateEntry_{std::move(outputStateEntry)},
+      outputOnWorkerZero_{outputOnWorkerZero},
       outputType_{outputEntrySchema(stateDeclarations_, outputStateEntry_)} {
   // Contradictions in the config itself are reported before anything validates
   // the structure they describe, so the message names the contradiction rather
@@ -153,6 +155,18 @@ FixedPointNode::FixedPointNode(
         "FixedPointNode: stopWhenDeltaEmpty requires a non-shuffling fixed "
         "point, because the delta is local to a worker");
   }
+  // Worker 0 publishes iteration t+1's verdict only after every worker has
+  // received t's (see FixedPointOptions::publishVerdict).  Gathering the
+  // convergence plans' rows ensures that; for a verdict plan alone, the body's
+  // shuffle does: worker 0's iteration reads rows every peer produces in the
+  // same iteration.
+  if (convergenceConfig_.verdict != nullptr &&
+      convergenceConfig_.plans.empty()) {
+    VELOX_USER_CHECK(
+        plans_.front()->is<PartitionedOutputNode>(),
+        "FixedPointNode: a verdict plan without convergence plans requires a "
+        "body that shuffles");
+  }
 }
 
 void FixedPointNode::addDetails(std::stringstream& stream) const {
@@ -160,6 +174,9 @@ void FixedPointNode::addDetails(std::stringstream& stream) const {
          << declarationsToString(stateDeclarations_)
          << "], plans: " << plans_.size() << ", "
          << convergenceConfig_.toString();
+  if (outputOnWorkerZero_) {
+    stream << ", outputOnWorkerZero";
+  }
 }
 
 namespace {
@@ -861,6 +878,16 @@ ConvergenceConfig ConvergenceConfig::globalVerdict(
       .errorWhenMaxIterationReached = true};
 }
 
+// static
+ConvergenceConfig ConvergenceConfig::workerZeroVerdict(
+    PlanNodePtr verdict,
+    int32_t maxIterations) {
+  return ConvergenceConfig{
+      .verdict = std::move(verdict),
+      .maxIterations = maxIterations,
+      .errorWhenMaxIterationReached = true};
+}
+
 void ConvergenceConfig::checkConsistency() const {
   VELOX_USER_CHECK_GT(
       maxIterations, 0, "FixedPointNode: maxIterations must be positive");
@@ -869,10 +896,6 @@ void ConvergenceConfig::checkConsistency() const {
       !stopWhenDeltaEmpty || convergencePlans.empty(),
       "FixedPointNode: stopWhenDeltaEmpty and a convergence sequence are "
       "mutually exclusive; the delta row count is already the verdict");
-  VELOX_USER_CHECK(
-      verdict == nullptr || !plans.empty(),
-      "FixedPointNode: a verdict plan requires convergence plans that "
-      "gather to it");
   // Workers that each decide after a shuffle could disagree; one verdict plan
   // decides for all of them.
   VELOX_USER_CHECK(
@@ -883,7 +906,8 @@ void ConvergenceConfig::checkConsistency() const {
   // meaningful with a convergence criterion: with none the loop never
   // converges, so it would always fail.
   VELOX_USER_CHECK(
-      !errorWhenMaxIterationReached || !plans.empty() || stopWhenDeltaEmpty,
+      !errorWhenMaxIterationReached || !convergencePlans.empty() ||
+          stopWhenDeltaEmpty,
       "FixedPointNode: errorWhenMaxIterationReached requires a convergence "
       "criterion; set it false for a fixed-count loop with no convergence "
       "plan");
@@ -897,19 +921,21 @@ void ConvergenceConfig::checkConsistency() const {
       convergencePlans,
       "convergence plan",
       "the BOOLEAN convergence verdict",
-      /*lastLinkGathers=*/verdict != nullptr);
+      /*lastLinkGathers=*/verdict != nullptr && !plans.empty());
 
-  // The verdict plan reads every worker's rows, so they must all reach the one
-  // worker that runs it.
   if (verdict != nullptr) {
-    static constexpr std::string_view kGatherRequired =
-        "FixedPointNode: the convergence plans before a verdict plan must end "
-        "in a PartitionedOutput with one partition";
-    // validatePlanChain checked that the last of 'plans' ends in a
-    // PartitionedOutput.
-    const auto* gather = plans.back()->as<PartitionedOutputNode>();
-    VELOX_USER_CHECK(gather->isPartitioned(), kGatherRequired);
-    VELOX_USER_CHECK_EQ(gather->numPartitions(), 1, "{}", kGatherRequired);
+    // A verdict plan after 'plans' reads every worker's rows, so they must all
+    // reach the one worker that runs it.
+    if (!plans.empty()) {
+      static constexpr std::string_view kGatherRequired =
+          "FixedPointNode: the convergence plans before a verdict plan must "
+          "end in a PartitionedOutput with one partition";
+      // validatePlanChain checked that the last of 'plans' ends in a
+      // PartitionedOutput.
+      const auto* gather = plans.back()->as<PartitionedOutputNode>();
+      VELOX_USER_CHECK(gather->isPartitioned(), kGatherRequired);
+      VELOX_USER_CHECK_EQ(gather->numPartitions(), 1, "{}", kGatherRequired);
+    }
     VELOX_USER_CHECK_EQ(
         nestedWorkers(verdict),
         1,
@@ -959,7 +985,8 @@ std::string ConvergenceConfig::toString() const {
   }
   // Without a criterion the flag must be false, so it says something only
   // when a criterion exists.
-  const bool hasCriterion = stopWhenDeltaEmpty || !plans.empty();
+  const bool hasCriterion =
+      stopWhenDeltaEmpty || !plans.empty() || verdict != nullptr;
   if (hasCriterion && !errorWhenMaxIterationReached) {
     result += ", errorWhenMaxIterationReached: false";
   }
@@ -999,6 +1026,9 @@ folly::dynamic FixedPointNode::serialize() const {
   obj["plans"] = std::move(plans);
   obj["convergenceConfig"] = convergenceConfig_.serialize();
   obj["outputStateEntry"] = outputStateEntry_;
+  if (outputOnWorkerZero_) {
+    obj["outputOnWorkerZero"] = true;
+  }
   return obj;
 }
 
@@ -1018,7 +1048,8 @@ PlanNodePtr FixedPointNode::create(const folly::dynamic& obj, void* context) {
       std::move(stateDeclarations),
       std::move(plans),
       ConvergenceConfig::deserialize(obj["convergenceConfig"], context),
-      obj["outputStateEntry"].asString());
+      obj["outputStateEntry"].asString(),
+      obj.getDefault("outputOnWorkerZero", false).asBool());
 }
 
 folly::dynamic StateSourceNode::serialize() const {

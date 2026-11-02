@@ -71,15 +71,27 @@ table StringPair {
   value:string;
 }
 
-// Typed Hybrid FlatMap metadata. Physical stream descriptors and value types
-// are represented by the group's child schema nodes, following FlatMap. The
-// parallel ID and count vectors describe consecutive slices in group_keys.
-// Every group's key order defines the corresponding key-presence bitmap.
-// Default starts empty and appends keys in first-seen order while writing.
+/// How a Hybrid FlatMap batch records the keys of its Default group.
+enum HybridFlatMapKeyPresenceMode:uint8 {
+  /// A bitmap over Default's schema keys, which grow in first-seen order.
+  Bitmap = 0,
+  /// A typed list of the batch's Default keys; Default lists no schema keys.
+  KeyList,
+}
+
+/// Typed Hybrid FlatMap metadata. Physical stream descriptors and value types
+/// are represented by the group's child schema nodes, following FlatMap. The
+/// parallel ID and count vectors describe consecutive slices in group_keys.
+/// Every configured group's key order defines its key-presence bitmap.
 table HybridFlatMap {
   group_ids:[uint32];
   group_key_counts:[uint32];
   group_keys:[string];
+  /// How batches record Default keys. With Bitmap, Default starts empty and
+  /// appends keys in first-seen order while writing; with KeyList, Default
+  /// lists no keys and each batch lists its own. Always written: readers
+  /// reject metadata without it.
+  default_group_key_presence_mode:HybridFlatMapKeyPresenceMode;
 }
 
 table SchemaNode {

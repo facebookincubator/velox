@@ -46,6 +46,22 @@ void registerSparkArrayAccessFunctions(const std::string& prefix) {
 void registerSparkFunctions(const std::string& prefix) {
   using exec::FunctionSignatureBuilder;
 
+  registerCudfFunction(
+      prefix + "isnull",
+      [](const std::string&,
+         const core::TypedExprPtr& expr,
+         memory::MemoryPool*) {
+        return std::make_shared<IsNullFunction>(expr);
+      },
+      {FunctionSignatureBuilder()
+           .typeVariable("T")
+           .returnType("boolean")
+           .argumentType("T")
+           .build()});
+
+  // The GPU cast from VARCHAR follows Presto's rules, not Spark's.
+  setCastFromVarcharEnabled(false);
+
   const std::vector<exec::FunctionSignaturePtr> subStringSignatures{
       FunctionSignatureBuilder()
           .returnType("varchar")

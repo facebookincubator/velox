@@ -55,6 +55,7 @@ velox_link_libraries(
     velox_memory
     velox_type
     velox_vector
+    velox_vector_index_settings
     Boost::headers
     Folly::folly
     fmt::fmt

@@ -426,6 +426,7 @@ class E2EIndexTestBase : public ::testing::Test {
   struct ChunkStatsReadResult {
     std::vector<RowVectorPtr> rows;
     RuntimeStats stats;
+    int64_t numStripeLoads{0};
   };
 
   void writeChunkStatsData(
@@ -435,7 +436,8 @@ class E2EIndexTestBase : public ::testing::Test {
           ChunkStatsWriter::Options::kDefaultMaxChunkStringStatSize,
       uint64_t minStreamChunkRawSize = 0,
       uint32_t batchesPerStripe = 0,
-      ChunkStatsVersion chunkStatsVersion = ChunkStatsVersion::kV2) {
+      ChunkStatsVersion chunkStatsVersion = ChunkStatsVersion::kV2,
+      const std::vector<std::string>& indexColumns = {}) {
     sinkData_.clear();
     auto writeFile = std::make_unique<InMemoryWriteFile>(&sinkData_);
     auto batchesInStripe = std::make_shared<uint32_t>(0);
@@ -448,6 +450,16 @@ class E2EIndexTestBase : public ::testing::Test {
             .chunkStatsVersion = chunkStatsVersion,
             .chunkStatsMinAvgChunks = 0,
             .maxChunkStringStatSize = maxChunkStringStatSize,
+            .clusterIndexConfig = indexColumns.empty()
+                ? nullptr
+                : ClusterIndexConfigBuilder{}
+                      .withKeyColumns(indexColumns)
+                      .withSortOrders(
+                          std::vector<SortOrder>(
+                              indexColumns.size(),
+                              SortOrder{.ascending = true}))
+                      .withEnforceKeyOrder(true)
+                      .build(),
             .minStreamChunkRawSize = minStreamChunkRawSize,
             .flushPolicyFactory =
                 [batchesInStripe, batchesPerStripe]() {
@@ -476,11 +488,17 @@ class E2EIndexTestBase : public ::testing::Test {
       const RowTypePtr& rowType,
       const std::unordered_map<std::string, std::unique_ptr<Filter>>& filters,
       double sampleRate = 1.0,
-      uint32_t randomSeed = 0) {
+      uint32_t randomSeed = 0,
+      bool lazyColumnIo = false,
+      bool indexEnabled = false) {
     auto reader = createReader(sampleRate, randomSeed);
     RowReaderOptions rowReaderOptions;
     rowReaderOptions.setRequestedType(rowType);
     rowReaderOptions.setScanSpec(createScanSpec(rowType, filters));
+    rowReaderOptions.setLazyColumnIo(lazyColumnIo);
+    rowReaderOptions.setIndexEnabled(indexEnabled);
+    ConcurrentRuntimeStatWriter statWriter;
+    RuntimeStatWriterScopeGuard guard(&statWriter);
     auto rowReader = reader->createRowReader(rowReaderOptions);
 
     ChunkStatsReadResult readResult;
@@ -490,6 +508,9 @@ class E2EIndexTestBase : public ::testing::Test {
       readResult.rows.push_back(std::dynamic_pointer_cast<RowVector>(result));
     }
     rowReader->updateRuntimeStats(readResult.stats);
+    const auto runtimeStats = statWriter.runtimeStats();
+    const auto it = runtimeStats.find(std::string(RowReader::kNumStripeLoads));
+    readResult.numStripeLoads = it != runtimeStats.end() ? it->second.sum : 0;
     return readResult;
   }
 
@@ -846,6 +867,154 @@ TEST_F(E2EIndexTestBase, v2ChunkStatsPruneOnlyAlignedStripes) {
 
   verifyResultsEqual(result.rows, {batches[3]});
   EXPECT_EQ(result.stats.chunkSkippedRows, 4);
+  EXPECT_EQ(result.stats.processedRows, 16);
+}
+
+TEST_F(E2EIndexTestBase, v2ChunkStatsSkipPrunedStripeBeforeLoad) {
+  const auto rowType = ROW("value", BIGINT());
+  std::vector<RowVectorPtr> batches{
+      vectorMaker_->rowVector(
+          {"value"}, {vectorMaker_->flatVector<int64_t>({0, 1, 2, 3})}),
+      vectorMaker_->rowVector(
+          {"value"}, {vectorMaker_->flatVector<int64_t>({100, 101, 102, 103})}),
+      vectorMaker_->rowVector(
+          {"value"}, {vectorMaker_->flatVector<int64_t>({200, 201, 202, 203})}),
+      vectorMaker_->rowVector(
+          {"value"}, {vectorMaker_->flatVector<int64_t>({300, 301, 302, 303})}),
+  };
+  writeChunkStatsData(
+      batches,
+      /*enableChunkStats=*/true,
+      ChunkStatsWriter::Options::kDefaultMaxChunkStringStatSize,
+      /*minStreamChunkRawSize=*/0,
+      /*batchesPerStripe=*/2);
+
+  // Every chunk of the first stripe is below the filter range.
+  std::unordered_map<std::string, std::unique_ptr<Filter>> filters;
+  filters["value"] = std::make_unique<BigintRange>(200, 303, false);
+  const auto result = readChunkStatsData(rowType, filters);
+
+  verifyResultsEqual(result.rows, {batches[2], batches[3]});
+  EXPECT_EQ(result.numStripeLoads, 1);
+  EXPECT_EQ(result.stats.skippedStrides, 1);
+  EXPECT_EQ(result.stats.chunkSkippedRows, 8);
+  EXPECT_EQ(result.stats.processedRows, 16);
+}
+
+TEST_F(E2EIndexTestBase, v2ChunkStatsSkipMiddleAndLastStripesWithLazyColumnIo) {
+  const auto rowType = ROW({"value", "payload"}, BIGINT());
+  std::vector<RowVectorPtr> batches;
+  batches.reserve(4);
+  for (int64_t stripe = 0; stripe < 4; ++stripe) {
+    batches.push_back(vectorMaker_->rowVector(
+        {"value", "payload"},
+        {vectorMaker_->flatVector<int64_t>(
+             4, [stripe](auto row) { return stripe * 100 + row; }),
+         vectorMaker_->flatVector<int64_t>(
+             4, [stripe](auto row) { return stripe * 10 + row; })}));
+  }
+  writeChunkStatsData(
+      batches,
+      /*enableChunkStats=*/true,
+      ChunkStatsWriter::Options::kDefaultMaxChunkStringStatSize,
+      /*minStreamChunkRawSize=*/0,
+      /*batchesPerStripe=*/1);
+
+  // The second and last stripes match neither range. Each is skipped while the
+  // previous stripe's reader, which reads 'payload' lazily, is still alive.
+  std::vector<std::unique_ptr<BigintRange>> ranges;
+  ranges.push_back(std::make_unique<BigintRange>(0, 3, false));
+  ranges.push_back(std::make_unique<BigintRange>(200, 203, false));
+  std::unordered_map<std::string, std::unique_ptr<Filter>> filters;
+  filters["value"] =
+      std::make_unique<BigintMultiRange>(std::move(ranges), false);
+  const auto result = readChunkStatsData(
+      rowType,
+      filters,
+      /*sampleRate=*/1.0,
+      /*randomSeed=*/0,
+      /*lazyColumnIo=*/true);
+
+  verifyResultsEqual(result.rows, {batches[0], batches[2]});
+  EXPECT_EQ(result.numStripeLoads, 2);
+  EXPECT_EQ(result.stats.skippedStrides, 2);
+  EXPECT_EQ(result.stats.chunkSkippedRows, 8);
+  EXPECT_EQ(result.stats.processedRows, 16);
+}
+
+TEST_F(E2EIndexTestBase, v2ChunkStatsSkipLoadedStripeAfterDynamicFilter) {
+  const auto rowType = ROW("value", BIGINT());
+  writeChunkStatsData({vectorMaker_->rowVector(
+      {"value"}, {vectorMaker_->flatVector<int64_t>({0, 1, 2, 3})})});
+
+  auto scanSpec = std::make_shared<ScanSpec>("root");
+  auto* valueSpec = scanSpec->addField("value", 0);
+  auto reader = createReader();
+  RowReaderOptions rowReaderOptions;
+  rowReaderOptions.setRequestedType(rowType);
+  rowReaderOptions.setScanSpec(scanSpec);
+  ConcurrentRuntimeStatWriter statWriter;
+  RuntimeStatWriterScopeGuard guard(&statWriter);
+  auto rowReader = reader->createRowReader(rowReaderOptions);
+
+  // The stripe is loaded before a filter that rules it out arrives.
+  EXPECT_EQ(rowReader->nextRowNumber(), 0);
+  valueSpec->setFilter(std::make_unique<BigintRange>(100, 103, false));
+  rowReader->resetFilterCaches();
+  EXPECT_EQ(rowReader->nextRowNumber(), RowReader::kAtEnd);
+
+  RuntimeStats stats;
+  rowReader->updateRuntimeStats(stats);
+  EXPECT_EQ(
+      statWriter.runtimeStats().at(std::string(RowReader::kNumStripeLoads)).sum,
+      1);
+  EXPECT_EQ(stats.skippedStrides, 1);
+  EXPECT_EQ(stats.chunkSkippedRows, 4);
+  EXPECT_EQ(stats.processedRows, 4);
+}
+
+TEST_F(E2EIndexTestBase, v2ChunkStatsSkipStripeInsideIndexBounds) {
+  const auto rowType = ROW({"key", "value"}, BIGINT());
+  // Three stripes of two 4-row chunks; each value below fills one chunk.
+  const std::vector<int64_t> chunkValues{0, 1'000, 0, 0, 1'000, 0};
+  std::vector<RowVectorPtr> batches;
+  batches.reserve(chunkValues.size());
+  for (size_t chunk = 0; chunk < chunkValues.size(); ++chunk) {
+    const auto firstKey = static_cast<int64_t>(chunk * 4);
+    const auto value = chunkValues[chunk];
+    batches.push_back(vectorMaker_->rowVector(
+        {"key", "value"},
+        {vectorMaker_->flatVector<int64_t>(
+             4, [firstKey](auto row) { return firstKey + row; }),
+         vectorMaker_->flatVector<int64_t>(
+             4, [value](auto /*row*/) { return value; })}));
+  }
+  writeChunkStatsData(
+      batches,
+      /*enableChunkStats=*/true,
+      ChunkStatsWriter::Options::kDefaultMaxChunkStringStatSize,
+      /*minStreamChunkRawSize=*/0,
+      /*batchesPerStripe=*/2,
+      ChunkStatsVersion::kV2,
+      /*indexColumns=*/{"key"});
+
+  // The index bounds keep rows 4-19. The middle stripe has no matching value,
+  // so it is skipped before it loads.
+  std::unordered_map<std::string, std::unique_ptr<Filter>> filters;
+  filters["key"] = std::make_unique<BigintRange>(4, 19, false);
+  filters["value"] = std::make_unique<BigintRange>(1'000, 1'000, false);
+  const auto result = readChunkStatsData(
+      rowType,
+      filters,
+      /*sampleRate=*/1.0,
+      /*randomSeed=*/0,
+      /*lazyColumnIo=*/false,
+      /*indexEnabled=*/true);
+
+  verifyResultsEqual(result.rows, {batches[1], batches[4]});
+  EXPECT_EQ(result.numStripeLoads, 2);
+  EXPECT_EQ(result.stats.skippedStrides, 1);
+  EXPECT_EQ(result.stats.chunkSkippedRows, 8);
   EXPECT_EQ(result.stats.processedRows, 16);
 }
 

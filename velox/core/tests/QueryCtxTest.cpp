@@ -113,6 +113,63 @@ TEST_F(QueryCtxTest, withSysRootPool) {
       queryPool->reclaimer()->reclaimableBytes(*queryPool, reclaimableBytes));
 }
 
+// Registry overrides follow a derived QueryCtx, and destination-only entries
+// remain in place.
+TEST_F(QueryCtxTest, copyRegistries) {
+  struct RegistryA {};
+  struct RegistryB {};
+  struct RegistryC {};
+
+  auto source = QueryCtx::create();
+  auto destination = QueryCtx::create();
+  auto registryA = std::make_shared<RegistryA>();
+  auto registryB = std::make_shared<RegistryB>();
+  auto registryC = std::make_shared<RegistryC>();
+  source->setRegistry("a", registryA);
+  source->setRegistry("b", registryB);
+  destination->setRegistry("c", registryC);
+
+  EXPECT_EQ(destination->registry<RegistryA>("a"), nullptr);
+  EXPECT_EQ(destination->registry<RegistryB>("b"), nullptr);
+  EXPECT_EQ(destination->registry<RegistryC>("c"), registryC);
+
+  destination->copyRegistriesFrom(*source);
+
+  EXPECT_EQ(destination->registry<RegistryA>("a"), registryA);
+  EXPECT_EQ(destination->registry<RegistryB>("b"), registryB);
+  EXPECT_EQ(destination->registry<RegistryC>("c"), registryC);
+}
+
+// Registry copies reject conflicts unless replacement is requested, and a
+// rejected copy leaves the destination unchanged.
+TEST_F(QueryCtxTest, copyRegistryConflicts) {
+  struct RegistryA {};
+  struct RegistryB {};
+  struct RegistryC {};
+
+  auto source = QueryCtx::create();
+  auto destination = QueryCtx::create();
+  auto registryA = std::make_shared<RegistryA>();
+  auto sourceRegistryB = std::make_shared<RegistryB>();
+  auto destinationRegistryB = std::make_shared<RegistryB>();
+  auto registryC = std::make_shared<RegistryC>();
+  source->setRegistry("a", registryA);
+  source->setRegistry("b", sourceRegistryB);
+  destination->setRegistry("b", destinationRegistryB);
+  destination->setRegistry("c", registryC);
+
+  VELOX_ASSERT_THROW(
+      destination->copyRegistriesFrom(*source), "Registry already set: b");
+  EXPECT_EQ(destination->registry<RegistryA>("a"), nullptr);
+  EXPECT_EQ(destination->registry<RegistryB>("b"), destinationRegistryB);
+  EXPECT_EQ(destination->registry<RegistryC>("c"), registryC);
+
+  destination->copyRegistriesFrom(*source, /*overwrite=*/true);
+  EXPECT_EQ(destination->registry<RegistryA>("a"), registryA);
+  EXPECT_EQ(destination->registry<RegistryB>("b"), sourceRegistryB);
+  EXPECT_EQ(destination->registry<RegistryC>("c"), registryC);
+}
+
 TEST_F(QueryCtxTest, releaseCallbacks) {
   int callbackCount = 0;
   std::string capturedQueryId;

@@ -42,16 +42,18 @@ class TrivialEncodingView final : public TypedEncodingView<T> {
       : TypedEncodingView<T>{data, pool, options} {
     NIMBLE_CHECK_EQ(this->encodingType_, EncodingType::Trivial);
     const char* pos = data.data() + this->dataOffset_;
+    NIMBLE_CHECK_FILE_GE(
+        this->remainingBytes(pos), 1, "Truncated Trivial encoding.");
     const auto compressionType =
         static_cast<CompressionType>(encoding::readChar(pos));
     const auto payload = this->decompressPayload(
         compressionType,
         TypeTraits<T>::dataType,
-        {pos, static_cast<size_t>(data.data() + data.size() - pos)});
+        {pos, this->remainingBytes(pos)});
     values_ = reinterpret_cast<const physicalType*>(payload.data());
-    NIMBLE_CHECK_EQ(
-        reinterpret_cast<const char*>(values_ + this->rowCount_),
-        payload.data() + payload.size(),
+    NIMBLE_CHECK_FILE_EQ(
+        payload.size(),
+        static_cast<size_t>(this->rowCount_) * sizeof(physicalType),
         "Unexpected Trivial view end.");
   }
 
@@ -80,16 +82,16 @@ class TrivialEncodingView<bool> final : public TypedEncodingView<bool> {
       : TypedEncodingView<bool>{data, pool, options} {
     NIMBLE_CHECK_EQ(this->encodingType_, EncodingType::Trivial);
     const char* pos = data.data() + this->dataOffset_;
+    NIMBLE_CHECK_FILE_GE(
+        this->remainingBytes(pos), 1, "Truncated Trivial encoding.");
     const auto compressionType =
         static_cast<CompressionType>(encoding::readChar(pos));
     const auto payload = this->decompressPayload(
-        compressionType,
-        DataType::Undefined,
-        {pos, static_cast<size_t>(data.data() + data.size() - pos)});
+        compressionType, DataType::Undefined, {pos, this->remainingBytes(pos)});
     bitmap_ = payload.data();
-    NIMBLE_CHECK_EQ(
-        bitmap_ + FixedBitArray::bufferSize(this->rowCount_, 1),
-        payload.data() + payload.size(),
+    NIMBLE_CHECK_FILE_EQ(
+        payload.size(),
+        static_cast<size_t>(FixedBitArray::bufferSize(this->rowCount_, 1)),
         "Unexpected Trivial bool view end.");
   }
 
@@ -146,15 +148,14 @@ class TrivialEncodingView<std::string_view> final
         offsets_{this->template getVectorBuffer<uint32_t>()} {
     NIMBLE_CHECK_EQ(this->encodingType_, EncodingType::Trivial);
     const char* pos = data.data() + this->dataOffset_;
+    NIMBLE_CHECK_FILE_GE(
+        this->remainingBytes(pos), 1, "Truncated Trivial encoding.");
     const auto compressionType =
         static_cast<CompressionType>(encoding::readChar(pos));
-    const auto lengthsSize = encoding::readUint32(pos);
-    const std::string_view encodedLengths{pos, lengthsSize};
-    pos += lengthsSize;
+    const auto encodedLengths =
+        this->readSizedBytes(pos, "Trivial string lengths");
     const auto payload = this->decompressPayload(
-        compressionType,
-        DataType::String,
-        {pos, static_cast<size_t>(data.data() + data.size() - pos)});
+        compressionType, DataType::String, {pos, this->remainingBytes(pos)});
     blob_ = payload.data();
     blobSize_ = payload.size();
     if (options.cacheEncodingView) {
@@ -182,7 +183,7 @@ class TrivialEncodingView<std::string_view> final
     for (uint32_t i = 0; i < this->rowCount_; ++i) {
       offsets_[i + 1] += offsets_[i];
     }
-    NIMBLE_CHECK_EQ(
+    NIMBLE_CHECK_FILE_EQ(
         offsets_.back(), blobSize_, "Unexpected Trivial string view end.");
   }
 
@@ -192,7 +193,7 @@ class TrivialEncodingView<std::string_view> final
     lengths_ = detail::createTypedEncodingView<uint32_t>(
         encodedLengths, this->pool_, this->options_);
     NIMBLE_CHECK_NOT_NULL(lengths_);
-    NIMBLE_CHECK_EQ(
+    NIMBLE_CHECK_FILE_EQ(
         lengths_->rowCount(),
         this->rowCount_,
         "Trivial string lengths must match the row count.");

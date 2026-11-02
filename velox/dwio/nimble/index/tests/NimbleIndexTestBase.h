@@ -55,9 +55,9 @@ serde::TabletChunkHeader readEmbeddedTabletChunkHeader(
     const folly::IOBuf& slice);
 RowRange readEmbeddedRowRange(const folly::IOBuf& slice);
 std::optional<std::string> readEmbeddedResumeKey(const folly::IOBuf& slice);
-std::string nextTestOutputRowFormat(std::string_view prefix);
 folly::IOBuf coalesceChunkSlice(const folly::IOBuf& slice);
 HybridFlatMap makeHybridFlatMapConfig(
+    ScalarKind keyKind,
     const std::vector<std::vector<std::string>>& explicitGroups);
 NimbleIndexProjector::RowProjectionResult projectRows(
     NimbleIndexProjector& projector,
@@ -86,24 +86,16 @@ class TestNimbleIterator final {
     iterator_->nextRow();
   }
 
-  bool next(velox::RowVectorPtr& output) {
-    return folly::coro::blockingWait(iterator_->co_nextBatch(output));
+  bool hasNext() const {
+    return iterator_->hasNext();
   }
 
   std::string_view key() const {
     return iterator_->key();
   }
 
-  void prepareValue() {
-    iterator_->prepareValue();
-  }
-
   std::string_view value() {
     return iterator_->value();
-  }
-
-  uint32_t rowNumber() const {
-    return iterator_->rowNumber();
   }
 
   bool valid() const {
@@ -272,12 +264,19 @@ class NimbleIndexProjectorTestBase : public ::testing::Test {
     return iteratorFactory(std::move(projector), leafPool_.get(), options);
   }
 
+  // Returns the decoder of the tests, which makes one entry of each row: the
+  // cluster-index key of the row, and the CompactRow of the row as the value.
+  static NimbleIterator::EntryDecoder compactRowDecoder();
+
+  // Creates a row iterator over the entries of 'compactRowDecoder()'.
   std::unique_ptr<NimbleIterator> createRowIterator(
       const std::vector<Subfield>& projectedSubfields,
       const NimbleIterator::Options& options);
 
-  std::unique_ptr<NimbleIterator> createBatchIterator(
+  // Creates a row iterator over the entries that 'entryDecoder' decodes.
+  std::unique_ptr<NimbleIterator> createEntryIterator(
       const std::vector<Subfield>& projectedSubfields,
+      const NimbleIterator::EntryDecoder& entryDecoder,
       const NimbleIterator::Options& options);
 
   std::unique_ptr<NimbleIndexProjector> createProjectorWithFileHandle(

@@ -41,6 +41,7 @@ class HashJoinBridge;
 class IndexLookupJoinBridge;
 class NestedLoopJoinBridge;
 class SpatialJoinBridge;
+class VectorSearchJoinBridge;
 class SplitListener;
 
 class FixedPointLoop;
@@ -48,6 +49,25 @@ struct FixedPointExecutionStats;
 struct FixedPointOptions;
 struct NestedFixedPoint;
 class PersistentState;
+
+/// Runs a task's deletion promises once the task and every fixed-point
+/// sub-task created under it are destroyed.  Each task holds its own latch, and
+/// a sub-task's latch holds its owner's, so the owner's latch goes only after
+/// the latches of all its sub-tasks.  Nothing blocks on this: the promises run
+/// on the thread that releases the last reference.
+struct TaskDeletionLatch {
+  explicit TaskDeletionLatch(std::shared_ptr<TaskDeletionLatch> owner)
+      : owner{std::move(owner)} {}
+
+  ~TaskDeletionLatch();
+
+  /// The latch of the task whose fixed point created this one's task, or null.
+  /// Held so the owner's deletion is reported only after this task's.
+  const std::shared_ptr<TaskDeletionLatch> owner;
+
+  /// The task's deletion promises, handed over when the task is destroyed.
+  std::vector<ContinuePromise> promises;
+};
 
 /// Runs one plan fragment.  By default it compiles the fragment into a
 /// Driver/Operator pipeline and executes that.  A fragment containing a
@@ -294,6 +314,9 @@ class Task : public std::enable_shared_from_this<Task> {
   /// duplicate.
   /// Note, that this method does NOT update max split sequence id.
   /// Returns true if split was added, false if it was ignored.
+  /// Throws if 'split' has neither a connector split nor a barrier.
+  /// Empty splits are reserved for getSplitOrFuture()'s end-of-stream result.
+  /// Use noMoreSplits() to signal completion.
   /// A remote split for a node with an exchange client goes to the client
   /// right away, or when the task starts if added before that. The task fails
   /// if the client rejects it, and start() throws if that happens at start.
@@ -306,7 +329,8 @@ class Task : public std::enable_shared_from_this<Task> {
 
   /// Adds split for a source operator corresponding to plan node with
   /// specified ID. Does not require sequential id. Remote splits are handled
-  /// as in addSplitWithSequence().
+  /// as in addSplitWithSequence(). Throws if 'split' has neither a connector
+  /// split nor a barrier.
   void addSplit(const core::PlanNodeId& planNodeId, exec::Split&& split);
 
   /// We mark that for the given group there would be no more splits coming.
@@ -367,8 +391,19 @@ class Task : public std::enable_shared_from_this<Task> {
   ContinueFuture taskCompletionFuture();
 
   /// Returns a future which is realized when the task has been deleted, and all
-  /// the background activities have finished at that point.
+  /// the background activities have finished at that point.  For a task that
+  /// runs a fixed point, it is realized only once every sub-task the loop
+  /// created is deleted too, since a sub-task can outlive its owner.
   ContinueFuture taskDeletionFuture();
+
+  /// Returns a future which is realized once the task is no longer running and
+  /// every driver it created has closed, so taskStats() includes the stats of
+  /// all its operators. This can be well after taskCompletionFuture(): a task
+  /// finishes when its output pipeline does, and drivers that are on thread or
+  /// paused when it stops close later. The future is realized immediately if
+  /// this already holds. Wait with a timeout if a driver may never return from
+  /// an operator call.
+  ContinueFuture allDriversClosedFuture();
 
   /// Returns task execution error or nullptr if no error occurred.
   std::exception_ptr error() const {
@@ -539,14 +574,14 @@ class Task : public std::enable_shared_from_this<Task> {
   /// task manager and threads are left to finish themselves.
   static void removeDriver(std::shared_ptr<Task> self, Driver* instance);
 
-  /// Returns a split for the source operator corresponding to plan
-  /// node with specified ID. If there are no splits and no-more-splits
-  /// signal has been received, sets split to null and returns
-  /// kNotBlocked. Otherwise, returns kWaitForSplit and sets a future
-  /// that will complete when split becomes available or no-more-splits
-  /// signal is received. If 'maxPreloadSplits' is given, ensures that
-  /// so many of splits at the head of the queue are preloading. If
-  /// they are not, calls preload on them to start preload.
+  /// Returns a split for the source operator corresponding to the specified
+  /// plan node ID. Returns kNotBlocked when a split is available or the source
+  /// is exhausted. An empty 'split', with neither a connector split nor a
+  /// barrier, signals that the queue is empty and no-more-splits was received.
+  /// Returns kWaitForSplit and sets a future when the queue is empty and more
+  /// splits may arrive. The future completes when a split becomes available or
+  /// no-more-splits is received. Calls 'preload' to start preloading up to
+  /// 'maxPreloadSplits' splits at the head of the queue.
   BlockingReason getSplitOrFuture(
       uint32_t driverId,
       uint32_t splitGroupId,
@@ -562,12 +597,18 @@ class Task : public std::enable_shared_from_this<Task> {
       uint32_t splitGroupId,
       const core::PlanNodeId& planNodeId);
 
-  void splitFinished(bool fromTableScan, int64_t splitWeight);
+  /// Marks all splits acquired by 'driverCtx' for this source as fully
+  /// processed. The source operator calls this after consuming its split or
+  /// batch of splits. Count and weight come from the recorded acquisitions.
+  void splitsFinished(
+      const core::PlanNodeId& planNodeId,
+      const DriverCtx& driverCtx);
 
-  void multipleSplitsFinished(
-      bool fromTableScan,
-      int32_t numSplits,
-      int64_t splitsWeight);
+  /// Records a driver closing for each split source in its pipeline. Abandons
+  /// acquired splits, and on the last consumer's closure also abandons queued
+  /// splits, releases preloads, and wakes status waiters. Called exactly once
+  /// by Driver, including on cancellation and failure.
+  void splitConsumerFinished(const DriverCtx& driverCtx);
 
   /// Adds a MergeSource for the specified splitGroupId and planNodeId.
   std::shared_ptr<MergeSource> addLocalMergeSource(
@@ -681,23 +722,9 @@ class Task : public std::enable_shared_from_this<Task> {
       const core::PlanNodeId& planNodeId,
       Driver* caller);
 
-  /// Adds HashJoinBridge's for all the specified plan node IDs.
-  void addHashJoinBridgesLocked(
-      uint32_t splitGroupId,
-      const std::vector<core::PlanNodeId>& planNodeIds);
-
-  /// Adds NestedLoopJoinBridge's for all the specified plan node IDs.
-  void addNestedLoopJoinBridgesLocked(
-      uint32_t splitGroupId,
-      const std::vector<core::PlanNodeId>& planNodeIds);
-
-  /// Adds SpatialJoinBridge's for all the specified plan node IDs.
-  void addSpatialJoinBridgesLocked(
-      uint32_t splitGroupId,
-      const std::vector<core::PlanNodeId>& planNodeIds);
-
-  /// Adds IndexLookupJoinBridge's for all the specified plan node IDs.
-  void addIndexLookupJoinBridgesLocked(
+  /// Adds join bridges of type 'TBridge' for all the specified plan node IDs.
+  template <typename TBridge>
+  void addJoinBridgesLocked(
       uint32_t splitGroupId,
       const std::vector<core::PlanNodeId>& planNodeIds);
 
@@ -725,6 +752,11 @@ class Task : public std::enable_shared_from_this<Task> {
 
   /// Returns a SpatialJoinBridge for 'planNodeId'.
   std::shared_ptr<SpatialJoinBridge> getSpatialJoinBridge(
+      uint32_t splitGroupId,
+      const core::PlanNodeId& planNodeId);
+
+  /// Returns a VectorSearchJoinBridge for 'planNodeId'.
+  std::shared_ptr<VectorSearchJoinBridge> getVectorSearchJoinBridge(
       uint32_t splitGroupId,
       const core::PlanNodeId& planNodeId);
 
@@ -979,7 +1011,8 @@ class Task : public std::enable_shared_from_this<Task> {
       int32_t memoryArbitrationPriority = 0,
       std::function<void(std::exception_ptr)> onError = nullptr,
       std::weak_ptr<PersistentState> fixedPointState = {},
-      std::shared_ptr<memory::MemoryPool> fixedPointStatePool = nullptr);
+      std::shared_ptr<memory::MemoryPool> fixedPointStatePool = nullptr,
+      std::shared_ptr<TaskDeletionLatch> ownerDeletionLatch = nullptr);
 
   // Invoked to do post-create initialization.
   void init(std::optional<common::SpillDiskOptions>&& spillDiskOpts);
@@ -1193,6 +1226,14 @@ class Task : public std::enable_shared_from_this<Task> {
 
   void driverClosedLocked();
 
+  // Returns true if 'this' is not running and 'drivers_' holds no drivers.
+  bool allDriversClosedLocked() const;
+
+  // Closes 'drivers', which terminate() or resume() has terminated off thread,
+  // one at a time with Driver::closeByTask(). Clears each driver's slot as soon
+  // as that driver has closed, so taskStats() stops reading its operators.
+  void closeDriversByTask(const std::vector<std::shared_ptr<Driver>>& drivers);
+
   // Returns true if Task is in kRunning state, but all output drivers finished
   // processing and all output has been consumed. In other words, returns true
   // if task should transition to kFinished state.
@@ -1217,7 +1258,8 @@ class Task : public std::enable_shared_from_this<Task> {
   // splits coming for the task.
   bool isAllSplitsFinishedLocked();
 
-  void addSplitLocked(
+  // Returns false if all consumers of the source and split group have closed.
+  bool addSplitLocked(
       SplitsState& splitsState,
       const exec::Split& split,
       std::vector<ContinuePromise>& promises);
@@ -1470,11 +1512,17 @@ class Task : public std::enable_shared_from_this<Task> {
   // destroyed.  Released in ~Task after the drivers.
   std::shared_ptr<memory::MemoryPool> fixedPointStatePool_;
 
+  // Runs taskDeletionPromises_, which ~Task hands over, once this task and
+  // every sub-task created under it are destroyed.
+  std::shared_ptr<TaskDeletionLatch> deletionLatch_;
+
   // The function that is executed when the task encounters its first error,
   // that is, setError() is called for the first time.
   std::function<void(std::exception_ptr)> onError_;
 
   std::vector<std::unique_ptr<DriverFactory>> driverFactories_;
+  // A slot holds its driver until the driver has closed. A terminated driver
+  // cannot run but may still be closing, so getDriver() returns null for it.
   std::vector<std::shared_ptr<Driver>> drivers_;
   std::unordered_map<core::PlanNodeId, uint32_t> numDriversPerLeafNode_;
 
@@ -1607,6 +1655,10 @@ class Task : public std::enable_shared_from_this<Task> {
 
   // Promises that are fulfilled when the task is destroyed.
   std::vector<ContinuePromise> taskDeletionPromises_;
+
+  // Promises that are fulfilled when the task is no longer running and every
+  // driver has closed.
+  std::vector<ContinuePromise> allDriversClosedPromises_;
 
   // Promises that are fulfilled when the task's state has changed and ready to
   // report some progress (such as split group finished or task is completed).

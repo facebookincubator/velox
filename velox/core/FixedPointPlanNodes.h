@@ -239,34 +239,51 @@ class HashTableState {
 ///
 /// Multi-worker contract: for a fixed point that runs as N > 1 peers, every
 /// worker must reach the same verdict on the same iteration, or lockstep breaks
-/// and the shuffle deadlocks.  There are two ways to get it.  With a
-/// 'verdict' plan, every worker reduces its shard to partial rows, worker 0
-/// alone combines them into the verdict, and the loop shares that verdict --
-/// the way to decide on a statistic known only after the body's last exchange,
-/// such as PageRank's post-update RMSE or the size of a partitioned walk's
-/// delta.  Without one, each worker evaluates its single plan itself, so it
-/// must read state the body keeps identical on every worker, e.g. replicated.
+/// and the shuffle deadlocks.  There are three ways to get it:
+///
+///  - A 'verdict' plan after convergence plans: every worker reduces its shard
+///    to partial rows, worker 0 alone combines them into the verdict, and the
+///    loop shares that verdict -- the way to decide on a statistic known only
+///    after the body's last exchange, such as PageRank's post-update RMSE or
+///    the size of a partitioned walk's delta.
+///  - A 'verdict' plan alone: worker 0 evaluates it over its own state, and the
+///    loop shares that verdict -- for state every worker holds in full, such as
+///    a replicated one.  Replicas need not be identical: workers can compute
+///    the same floating-point expression differently.  Requires a body that
+///    shuffles, which keeps worker 0 from finishing an iteration before every
+///    worker has received the previous verdict.
+///  - A single plan with no verdict: each worker evaluates it itself, so it
+///    must read state the body keeps identical on every worker.
+///
 /// An empty sequence means "never converge" (the loop is bounded only by
 /// maxIterations) and is always safe.
 struct ConvergenceConfig {
   /// Plans every worker runs after each iteration.  Without a 'verdict' plan,
   /// a single plan that starts with a StateSourceNode reading the state the
   /// iteration just committed and produces exactly one BOOLEAN output column,
-  /// which the framework reads; true stops the loop.  With one, plans chained
-  /// by shuffle exactly as FixedPointNode::plans() are: the first starts with
-  /// a StateSourceNode, every later one starts with an Exchange, every one
-  /// ends with a PartitionedOutput, and the last has one partition, which
-  /// gathers every worker's rows to worker 0.  Convergence plans never write
-  /// state.  Empty means never converge (loop bounded by maxIterations).
+  /// which the framework reads; true stops the loop.  With one, either empty
+  /// or plans chained by shuffle exactly as FixedPointNode::plans() are: the
+  /// first starts with a StateSourceNode, every later one starts with an
+  /// Exchange, every one ends with a PartitionedOutput, and the last has one
+  /// partition, which gathers every worker's rows to worker 0.  Convergence
+  /// plans never write state.  Empty, with no 'verdict', means never converge
+  /// (loop bounded by maxIterations).
   std::vector<PlanNodePtr> plans{};
 
-  /// Runs only on worker 0, after 'plans' run on every worker.  Starts with an
-  /// Exchange that reads the rows the last of 'plans' gathered from every
-  /// worker, and produces exactly one row with one BOOLEAN output column, the
-  /// verdict.  Worker 0 shares it with the other workers (see
-  /// FixedPointOptions::publishVerdict), so all of them stop on the same
-  /// iteration.  Requires non-empty 'plans'.  A fixed point nested in it runs
-  /// on worker 0 alone, so it cannot shuffle across workers.
+  /// Runs only on worker 0, after 'plans' run on every worker, and produces
+  /// exactly one row with one BOOLEAN output column, the verdict.  Worker 0
+  /// shares it with the other workers (see FixedPointOptions::publishVerdict),
+  /// so all of them stop on the same iteration.  It reads one of:
+  ///
+  ///  - The rows the last of 'plans' gathered from every worker: it starts
+  ///    with an Exchange.
+  ///  - Worker 0's own state, when 'plans' is empty: it starts with a
+  ///    StateSourceNode.  For state every worker holds in full, such as a
+  ///    replicated one, worker 0's copy is all of it.  The body must shuffle
+  ///    (see the multi-worker contract above).
+  ///
+  /// A fixed point nested in it runs on worker 0 alone, so it cannot shuffle
+  /// across workers.
   ///
   /// A verdict can differ between runs of the same query, for two reasons:
   ///
@@ -283,7 +300,8 @@ struct ConvergenceConfig {
   PlanNodePtr verdict{nullptr};
 
   /// Maximum iterations the loop runs -- always active as a safety bound, and
-  /// the sole bound when `plans` is empty (a fixed-count loop).
+  /// the sole bound when there is no convergence criterion (a fixed-count
+  /// loop).
   int32_t maxIterations{0};
 
   /// Decides what happens when `maxIterations` is reached before the
@@ -292,10 +310,11 @@ struct ConvergenceConfig {
   /// result.  When false, the loop instead stops at the cap and returns the
   /// current approximate result without failing: best-effort convergence (run
   /// toward convergence, but accept the partial result if the cap is hit
-  /// first), as in an early-stopped KMeans or PageRank.  Requires a non-empty
-  /// `plans` (FixedPointNode validates this) -- an empty sequence never
-  /// converges, so set this false for a fixed-count loop, where the cap is the
-  /// intended stopping point rather than a best-effort cutoff.
+  /// first), as in an early-stopped KMeans or PageRank.  Requires a
+  /// convergence criterion, `plans` or `verdict` (FixedPointNode validates
+  /// this) -- with neither the loop never converges, so set this false for a
+  /// fixed-count loop, where the cap is the intended stopping point rather than
+  /// a best-effort cutoff.
   bool errorWhenMaxIterationReached{true};
 
   /// Stops the loop on the first iteration that writes no rows into the output
@@ -337,6 +356,16 @@ struct ConvergenceConfig {
       PlanNodePtr verdict,
       int32_t maxIterations);
 
+  /// Builds a convergence loop config with one verdict for every worker, read
+  /// from worker 0's own state: worker 0 runs 'verdict' over its state and
+  /// shares the result.  For state every worker holds in full, such as a
+  /// replicated one, with a body that shuffles.  'verdict' starts with a
+  /// StateSourceNode and produces one row with one BOOLEAN column; true stops
+  /// the loop.  Fails if `maxIterations` is reached first.
+  static ConvergenceConfig workerZeroVerdict(
+      PlanNodePtr verdict,
+      int32_t maxIterations);
+
   /// Throws a user error when the config contradicts itself or its plans do not
   /// form a valid convergence sequence.  Checks that need the fixed point's
   /// body or state declarations are FixedPointNode's.
@@ -366,7 +395,9 @@ struct ConvergenceConfig {
 /// loop variable: the framework writes each iteration's last plan output back
 /// into it (appending or replacing per its declaration) and emits its final
 /// contents as the node's output; every other state entry is seeded once and
-/// read-only thereafter.
+/// read-only thereafter.  Every worker emits its contents, unless
+/// `outputOnWorkerZero` is set: then only worker 0 does, for an output entry
+/// every worker holds in full, such as a replicated one.
 ///
 /// A coordinator may run the body, convergence and trailing plans with several
 /// drivers per worker (exec::FixedPointOptions::iterationMaxDrivers).  Those
@@ -375,12 +406,17 @@ struct ConvergenceConfig {
 /// convergence plan always runs with one driver.
 class FixedPointNode : public PlanNode {
  public:
+  /// Builds a fixed point over 'stateDeclarations' that runs 'plans' each
+  /// iteration until 'convergenceConfig' stops it, and emits the state entry
+  /// named 'outputStateEntry': from every worker, or from worker 0 only when
+  /// 'outputOnWorkerZero' is true.
   FixedPointNode(
       PlanNodeId id,
       std::vector<StateDeclarationPtr> stateDeclarations,
       std::vector<PlanNodePtr> plans,
       ConvergenceConfig convergenceConfig,
-      std::string outputStateEntry);
+      std::string outputStateEntry,
+      bool outputOnWorkerZero = false);
 
   const RowTypePtr& outputType() const override {
     return outputType_;
@@ -426,6 +462,14 @@ class FixedPointNode : public PlanNode {
   /// framework output mode.
   const std::string& outputStateEntry() const {
     return outputStateEntry_;
+  }
+
+  /// True when only worker 0 emits the final contents of the output state
+  /// entry, and the other workers emit nothing.  For state every worker holds
+  /// in full, such as a replicated one: every worker emitting its copy would
+  /// return each row once per worker.
+  bool outputOnWorkerZero() const {
+    return outputOnWorkerZero_;
   }
 
   /// A fixed point is a split source when the coordinator must assign it
@@ -487,6 +531,9 @@ class FixedPointNode : public PlanNode {
 
   // Name of the mutable vector state entry this node writes and outputs.
   std::string outputStateEntry_;
+
+  // See outputOnWorkerZero().
+  bool outputOnWorkerZero_;
 
   // Derived in the constructor from the schema of the VectorStateDeclaration
   // named by outputStateEntry_.

@@ -228,6 +228,7 @@ void checkRunning(
 
 FixedPointLoop::FixedPointLoop(
     exec::Task* owner,
+    std::shared_ptr<TaskDeletionLatch> ownerDeletionLatch,
     const core::FixedPointNode& node,
     const FixedPointOptions* fixedPointOptions,
     const NestedFixedPoint* nested)
@@ -237,6 +238,7 @@ FixedPointLoop::FixedPointLoop(
       nested_(nested != nullptr ? *nested : NestedFixedPoint{}),
       executionMode_(owner->executionMode()),
       owner_(owner),
+      ownerDeletionLatch_(std::move(ownerDeletionLatch)),
       node_(&node) {
   VELOX_CHECK_NOT_NULL(owner_);
   if (nested_.statePool != nullptr) {
@@ -548,7 +550,25 @@ folly::coro::Task<void> FixedPointLoop::run() {
   for (int32_t iteration = 0; iteration < node_->maxIterations(); ++iteration) {
     co_await runIteration(iteration);
     const bool iterationConverged = co_await converged();
-    executionStats_.wlock()->iterations.back().converged = iterationConverged;
+    // Copied, so the application runs outside the statistics lock.
+    std::optional<FixedPointIterationExecutionStats> completed;
+    {
+      auto stats = executionStats_.wlock();
+      auto& latest = stats->iterations.back();
+      latest.converged = iterationConverged;
+      if (options_.onIterationStats) {
+        completed = latest;
+      }
+    }
+    if (completed.has_value()) {
+      try {
+        options_.onIterationStats(nesting_, *completed);
+      } catch (const std::exception& e) {
+        LOG(ERROR) << "FixedPointOptions::onIterationStats threw for task "
+                   << owner_->taskId() << ", iteration " << iteration << ": "
+                   << e.what();
+      }
+    }
     if (iterationConverged) {
       hasConverged = true;
       break;
@@ -643,9 +663,11 @@ folly::coro::Task<void> FixedPointLoop::finalize() {
   // down after its taskCompletionFuture() has resolved, and even after this
   // loop and its task are destroyed, holding vectors and hash tables from the
   // state.  So each sub-task holds the pool, which goes once the last of this
-  // loop and its sub-tasks is destroyed.  (Waiting on each sub-task's
-  // taskDeletionFuture() instead is not viable: a shuffle producer is read by
-  // peer workers, so a peer must outlive it -- the wait would deadlock.)
+  // loop and its sub-tasks is destroyed.  Likewise, the loop's task reports its
+  // deletion only after every sub-task is deleted (see TaskDeletionLatch).
+  // (Waiting on each sub-task's taskDeletionFuture() instead is not viable: a
+  // shuffle producer is read by peer workers, so a peer must outlive it -- the
+  // wait would deadlock.)
 }
 
 folly::coro::Task<void> FixedPointLoop::initializeState(
@@ -851,6 +873,7 @@ NestedFixedPoint FixedPointLoop::subTaskNesting(
   return NestedFixedPoint{
       .state = state_,
       .statePool = state_->pool(),
+      .ownerDeletionLatch = ownerDeletionLatch_,
       .workers = std::move(workers),
       .nesting = nesting_,
       .iteration = iteration,
@@ -1166,7 +1189,9 @@ folly::coro::Task<std::vector<RowVectorPtr>> FixedPointLoop::runParallelChain(
   // here.  A producer sub-task (PartitionedOutput) is read by peer workers, so
   // a peer must outlive it -- waiting for its full teardown would deadlock
   // against the peer.  Each sub-task instead holds the pool of the persistent
-  // state it reads, which therefore outlives the sub-task's teardown.
+  // state it reads, which therefore outlives the sub-task's teardown, and the
+  // deletion latch of the loop's task, which reports its deletion only after
+  // the sub-task's.
   stats.outputRows = countRows(output);
   stats.totalNanos = chainTimer.elapsed().count();
   co_return output;
@@ -1295,7 +1320,7 @@ folly::coro::Task<bool> FixedPointLoop::converged() {
     co_return lastDeltaEmpty_;
   }
 
-  if (config.plans.empty()) {
+  if (convergencePlans_.empty()) {
     // No convergence sequence: the loop is bounded only by maxIterations.
     co_return false;
   }
