@@ -2554,16 +2554,27 @@ TEST_F(TableScanTest, remainingFilterCastFromVarchar) {
 
 // The data source cannot apply the session's legacy_cast or time zone to the
 // text of a TIMESTAMP, so it rejects a remaining filter that casts one to
-// VARCHAR.
+// VARCHAR, a constant included: a constant beside a column becomes a pushed
+// down filter through the session's evaluator, but one anywhere else, here
+// under an OR, would be folded by the data source without legacy_cast and the
+// cast lost.
 TEST_F(TableScanTest, remainingFilterCastTimestampToVarchar) {
-  assertRemainingFilterUnsupported(
-      makeRowVector(
-          {"c0"},
-          {makeFlatVector<Timestamp>(
-              {Timestamp(0, 0), Timestamp(1'767'314'700, 0)})}),
-      "cast(c0 as varchar) like '2026-%'",
-      "Remaining filter with a cast from TIMESTAMP to VARCHAR is not "
-      "supported");
+  const auto data = makeRowVector(
+      {"c0", "c1"},
+      {makeFlatVector<Timestamp>(
+           {Timestamp(0, 0), Timestamp(1'767'314'700, 0)}),
+       makeFlatVector<std::string>({"1970-01-01 00:00:00.000", "x"})});
+  for (
+      const auto* filter :
+      {"cast(c0 as varchar) like '2026-%'",
+       "c1 = cast(TIMESTAMP '1970-01-01 00:00:00' as varchar) or c0 is null"}) {
+    SCOPED_TRACE(filter);
+    assertRemainingFilterUnsupported(
+        data,
+        filter,
+        "Remaining filter with a cast from TIMESTAMP to VARCHAR is not "
+        "supported");
+  }
 }
 
 // The text of a DATE depends on no session setting, so a remaining filter that

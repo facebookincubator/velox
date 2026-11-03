@@ -384,6 +384,24 @@ CudfHiveDataSource::CudfHiveDataSource(
       readColumnNames_.emplace_back(field.toString());
     }
   }
+  // A cast of a TIMESTAMP constant to VARCHAR beside a column became a
+  // subfield filter above, through the session's evaluator; one anywhere else
+  // reaches the fold below, whose local config carries the session time zone
+  // but not legacy_cast, under which the CPU prints a TIMESTAMP with a 'T'
+  // separator. Folding would fold such a cast with the default rules and
+  // leave no cast to find, so the check runs on the filter as it stands here.
+  // The data source cannot apply the session time zone to a column's text
+  // either.
+  // TODO: Keep such a scan on the CPU data source instead, once the connector
+  // sees the session config and checks the filter the way canExprRunOnGpu()
+  // does before choosing a data source (facebookincubator/velox#19476,
+  // facebookincubator/velox#18238).
+  if (remainingFilter && containsTimestampToVarcharCast(remainingFilter)) {
+    VELOX_UNSUPPORTED(
+        "Remaining filter with a cast from TIMESTAMP to VARCHAR is not "
+        "supported: {}",
+        remainingFilter->toString());
+  }
   // Optimize (rewrites + constant folding) the remaining filter before
   // evaluator selection so CudfFunctions never see scalar-only operand sets.
   // ConnectorQueryCtx exposes no session QueryConfig, only the session time
@@ -423,9 +441,9 @@ CudfHiveDataSource::CudfHiveDataSource(
     // The local config above carries no cast setting, so a cast from VARCHAR
     // compiled against it follows Presto's strict rules in a session that sets
     // legacy_cast or cast_string_to_floating_point_lenient_inf_nan, and a
-    // TRY_CAST would drop the rows those settings accept. A cast from
-    // TIMESTAMP to VARCHAR prints under the same legacy_cast rules and in the
-    // session time zone, which this data source cannot apply either.
+    // TRY_CAST would drop the rows those settings accept. The check runs on
+    // the folded filter so that a cast of a VARCHAR constant, the form a plan
+    // gives a DECIMAL constant, keeps folding to that constant.
     // TODO: Keep such a scan on the CPU data source instead, once the
     // connector sees the session config and checks the filter the way
     // canExprRunOnGpu() does before choosing a data source
@@ -434,12 +452,6 @@ CudfHiveDataSource::CudfHiveDataSource(
             optimizedRemainingFilter_, /*floatingPointOnly=*/false)) {
       VELOX_UNSUPPORTED(
           "Remaining filter with a cast from VARCHAR is not supported: {}",
-          optimizedRemainingFilter_->toString());
-    }
-    if (containsTimestampToVarcharCast(optimizedRemainingFilter_)) {
-      VELOX_UNSUPPORTED(
-          "Remaining filter with a cast from TIMESTAMP to VARCHAR is not "
-          "supported: {}",
           optimizedRemainingFilter_->toString());
     }
     // Add fields referenced by the filter to the columns to read. Collect from

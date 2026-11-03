@@ -33,6 +33,9 @@
 #include "velox/parse/TypeResolver.h"
 #include "velox/type/Time.h"
 
+#include <cudf/table/table.hpp>
+#include <cudf/unary.hpp>
+
 #include <fmt/format.h>
 #include <folly/ScopeGuard.h>
 
@@ -3072,23 +3075,58 @@ TEST_F(CudfSimpleFilterProjectTest, castToSmallInt) {
 }
 
 // The GPU casts that follow Presto's rules, from VARCHAR and from TIMESTAMP to
-// VARCHAR, are on in a session with the Presto functions registered.
+// VARCHAR, are on in a session with the Presto functions registered, and off
+// again for the suites that follow once this one unregisters them.
 class CudfPrestoCastTest : public CudfSimpleFilterProjectTest {
  protected:
-  void SetUp() override {
-    CudfSimpleFilterProjectTest::SetUp();
+  static void SetUpTestCase() {
+    CudfSimpleFilterProjectTest::SetUpTestCase();
     cudf_velox::registerPrestoFunctions(
         cudf_velox::CudfConfig::getInstance().functionNamePrefix);
+  }
+
+  static void TearDownTestCase() {
+    cudf_velox::unregisterFunctions();
+    CudfSimpleFilterProjectTest::TearDownTestCase();
+  }
+
+  // Evaluates 'expr' over 'input', a TIMESTAMP column, with the column stored
+  // at day resolution, cuDF's TIMESTAMP_DAYS, the way a reader set to that
+  // unit stores it.
+  VectorPtr evaluateOverDays(
+      const std::string& expr,
+      const RowVectorPtr& input) {
+    auto& config = cudf_velox::CudfConfig::getInstance();
+    const auto originalUnit = config.timestampUnit;
+    SCOPE_EXIT {
+      config.timestampUnit = originalUnit;
+    };
+    config.timestampUnit = cudf::type_id::TIMESTAMP_SECONDS;
+    auto stream = cudf_velox::cudfGlobalStreamPool().get_stream();
+    auto mr = cudf_velox::get_output_mr();
+    auto columns =
+        cudf_velox::with_arrow::toCudfTable(input, pool_.get(), stream, mr)
+            ->release();
+    columns.front() = cudf::cast(
+        columns.front()->view(),
+        cudf::data_type{cudf::type_id::TIMESTAMP_DAYS},
+        stream,
+        mr);
+    return evaluate(
+        makeTypedExpr(expr, input->rowType()),
+        input->rowType(),
+        std::make_unique<cudf::table>(std::move(columns)),
+        stream);
   }
 };
 
 // A DATE or TIMESTAMP cast to VARCHAR prints as the CPU prints it. cuDF's %Y
 // covers the years 0 to 9999, so a batch holding a year outside that range,
 // negative or five digits long, takes the path that formats the year apart,
-// and a year past cuDF's 16-bit calendar year fails the cast.
+// and a day past the calendar cuDF places a day on fails the cast.
 TEST_F(CudfPrestoCastTest, castTemporalToVarchar) {
   const auto check = [&](const VectorPtr& values) {
-    const auto rowType = ROW({{"c0", values->type()}});
+    const auto rowType = ROW("c0", values->type());
     for (const auto* expr :
          {"cast(c0 as varchar)", "try_cast(c0 as varchar)"}) {
       SCOPED_TRACE(expr);
@@ -3163,7 +3201,7 @@ TEST_F(CudfPrestoCastTest, castTemporalToVarchar) {
             },
             TIMESTAMP()));
     // -32768-01-01 and 32767-12-31 are the first and last days of cuDF's
-    // calendar year.
+    // 16-bit calendar year; -32769-12-31 23:59:59 and 32768-01-01 lie past it.
     check(
         makeNullableFlatVector<Timestamp>(
             {
@@ -3171,19 +3209,39 @@ TEST_F(CudfPrestoCastTest, castTemporalToVarchar) {
                 Timestamp(0, 0),
                 std::nullopt,
                 Timestamp(971'890'876'800, 0),
+                Timestamp(-1'096'225'401'601, 0),
+                Timestamp(971'890'963'200, 0),
             },
             TIMESTAMP()));
-    // -32769-12-31 23:59:59 and 32768-01-01 lie past it, so the cast fails
-    // rather than print a wrong year.
-    for (const int64_t seconds : {-1'096'225'401'601, 971'890'963'200}) {
+  }
+
+  // The seconds and milliseconds units reach the edges of the calendar cuDF
+  // places a day on: -5877641-06-23, day -2^31, and 5879610-09-09 23:59:59,
+  // the last second of day 2^31 - 719469, print as on the CPU, and the second
+  // before the first and the day after the last fail the cast.
+  for (const auto unit :
+       {cudf::type_id::TIMESTAMP_SECONDS,
+        cudf::type_id::TIMESTAMP_MILLISECONDS}) {
+    SCOPED_TRACE(static_cast<int>(unit));
+    config.timestampUnit = unit;
+    check(
+        makeNullableFlatVector<Timestamp>(
+            {
+                Timestamp(-185'542'587'187'200, 0),
+                Timestamp(0, 0),
+                std::nullopt,
+                Timestamp(185'480'425'151'999, 0),
+            },
+            TIMESTAMP()));
+    for (const int64_t seconds : {-185'542'587'187'201, 185'480'425'152'000}) {
       SCOPED_TRACE(seconds);
       VELOX_ASSERT_UNSUPPORTED_THROW(
           evaluate(
-              makeTypedExpr("cast(c0 as varchar)", ROW({{"c0", TIMESTAMP()}})),
+              makeTypedExpr("cast(c0 as varchar)", ROW("c0", TIMESTAMP())),
               makeRowVector({makeFlatVector<Timestamp>(
                   {Timestamp(seconds, 0), Timestamp(0, 0)})})),
-          "year outside -32768 to 32767 is not supported on the GPU: "
-          "TIMESTAMP");
+          "Cast to VARCHAR of a TIMESTAMP before day -2147483648 or after "
+          "day 2146764179 of 1970-01-01 is not supported on the GPU");
     }
   }
 
@@ -3230,8 +3288,8 @@ TEST_F(CudfPrestoCastTest, castTemporalToVarchar) {
       makeNullableFlatVector<int32_t>(
           {2'932'897, -719'162, 0, std::nullopt}, DATE()));
   check(makeNullableFlatVector<int32_t>({-719'529, 0, std::nullopt}, DATE()));
-  // -32768-01-01 and 32767-12-31 are the first and last days of cuDF's
-  // calendar year.
+  // -32768-01-01 and 32767-12-31 are the first and last days of cuDF's 16-bit
+  // calendar year; -32769-12-31, 32768-01-01 and 33000-01-01 lie past it.
   check(
       makeNullableFlatVector<int32_t>(
           {
@@ -3239,17 +3297,32 @@ TEST_F(CudfPrestoCastTest, castTemporalToVarchar) {
               0,
               std::nullopt,
               11'248'737,
+              -12'687'795,
+              11'248'738,
+              11'333'475,
           },
           DATE()));
-  // -32769-12-31, 32768-01-01 and 33000-01-01 lie past it, so the cast fails
-  // rather than print a wrong year.
-  for (const int32_t day : {-12'687'795, 11'248'738, 11'333'475}) {
+  // The first day a DATE can hold, -5877641-06-23, and the last day cuDF
+  // places on the calendar, 5879610-09-09, print as on the CPU; the day after
+  // the latter and the last day a DATE can hold fail the cast.
+  check(
+      makeNullableFlatVector<int32_t>(
+          {
+              std::numeric_limits<int32_t>::min(),
+              0,
+              std::nullopt,
+              2'146'764'179,
+          },
+          DATE()));
+  for (const int32_t day :
+       {2'146'764'180, std::numeric_limits<int32_t>::max()}) {
     SCOPED_TRACE(day);
     VELOX_ASSERT_UNSUPPORTED_THROW(
         evaluate(
-            makeTypedExpr("cast(c0 as varchar)", ROW({{"c0", DATE()}})),
+            makeTypedExpr("cast(c0 as varchar)", ROW("c0", DATE())),
             makeRowVector({makeFlatVector<int32_t>({day, 0}, DATE())})),
-        "year outside -32768 to 32767 is not supported on the GPU: DATE");
+        "Cast to VARCHAR of a DATE before day -2147483648 or after day "
+        "2146764179 of 1970-01-01 is not supported on the GPU");
   }
 
   // A DATE prints the same under legacy_cast and under a session time zone.
@@ -3257,6 +3330,27 @@ TEST_F(CudfPrestoCastTest, castTemporalToVarchar) {
   check(dates);
   setTimezone("Asia/Kolkata");
   check(dates);
+}
+
+// A TIMESTAMP column a reader stores at day resolution shares cuDF's
+// TIMESTAMP_DAYS with DATE and still prints as a TIMESTAMP.
+TEST_F(CudfPrestoCastTest, castTimestampStoredAsDaysToVarchar) {
+  // 2026-01-02, 1969-12-31, 0000-01-01 and 10000-01-01 at midnight: whole
+  // days, which day resolution holds exactly.
+  const auto input = makeRowVector({makeNullableFlatVector<Timestamp>(
+      {Timestamp(1'767'312'000, 0),
+       Timestamp(-86'400, 0),
+       std::nullopt,
+       Timestamp(-62'167'219'200, 0),
+       Timestamp(253'402'300'800, 0)},
+      TIMESTAMP())});
+  for (const auto* expr : {"cast(c0 as varchar)", "try_cast(c0 as varchar)"}) {
+    SCOPED_TRACE(expr);
+    auto exprSet = compileExpression(expr, input->rowType());
+    facebook::velox::test::assertEqualVectors(
+        functions::test::FunctionBaseTest::evaluate(*exprSet, input),
+        evaluateOverDays(expr, input));
+  }
 }
 
 // The DATE and TIMESTAMP casts to VARCHAR run on the GPU unless the session

@@ -71,9 +71,13 @@
 #include <cudf/transform.hpp>
 #include <cudf/types.hpp>
 #include <cudf/unary.hpp>
+#include <cudf/utilities/error.hpp>
 #include <cudf/utilities/traits.hpp>
+#include <cudf/utilities/type_dispatcher.hpp>
 
 #include <rmm/device_uvector.hpp>
+
+#include <cuda/std/chrono>
 
 #include <cctype>
 #include <cmath>
@@ -708,128 +712,182 @@ bool isTemporalToVarcharCastEnabled(
       isPlainType(sourceType);
 }
 
-// The day numbers, counted from 1970-01-01, of the first days of the years 0,
-// 10000, -32768 and 32768. cuDF's %Y prints the years 0 to 9999 as the CPU
-// does, and cuDF holds a calendar year in 16 bits.
+// The day numbers, counted from 1970-01-01, of the first days of the years 0
+// and 10000: cuDF's %Y prints the years between them as the CPU does.
 constexpr int64_t kFirstDayOfYear0{-719'528};
 constexpr int64_t kFirstDayOfYear10000{2'932'897};
-constexpr int64_t kFirstDayOfYearMinus32768{-12'687'794};
-constexpr int64_t kFirstDayOfYear32768{11'248'738};
 
-// Returns the ticks per day of the cuDF timestamp type 'type'.
-int64_t ticksPerDay(cudf::data_type type) {
-  switch (type.id()) {
-    case cudf::type_id::TIMESTAMP_DAYS:
-      return 1;
-    case cudf::type_id::TIMESTAMP_SECONDS:
-      return 86'400;
-    case cudf::type_id::TIMESTAMP_MILLISECONDS:
-      return 86'400'000;
-    case cudf::type_id::TIMESTAMP_MICROSECONDS:
-      return 86'400'000'000;
-    case cudf::type_id::TIMESTAMP_NANOSECONDS:
-      return 86'400'000'000'000;
-    default:
-      VELOX_UNREACHABLE(
-          "Not a timestamp type: {}", static_cast<int>(type.id()));
+// The days cudf::strings::from_timestamps places on the calendar: it floors a
+// timestamp to a 32-bit day count and, as cuda::std::chrono::year_month_day,
+// adds 719468 to it in 32-bit arithmetic.
+constexpr int64_t kFirstDayOnCalendar{std::numeric_limits<int32_t>::min()};
+constexpr int64_t kLastDayOnCalendar{
+    std::numeric_limits<int32_t>::max() - 719'468};
+
+// A count of days wide enough for the ticks of any timestamp type.
+using Days = cuda::std::chrono::duration<int64_t, cuda::std::ratio<86'400>>;
+
+// Finds the first and last day, counted from 1970-01-01, that the valid rows
+// of a timestamp column fall on, from the column's minimum and maximum. The
+// two values reach the host in one copy, after one wait for the reduction.
+struct DaySpanOf {
+  template <typename T, CUDF_ENABLE_IF(cudf::is_timestamp<T>())>
+  std::pair<int64_t, int64_t> operator()(
+      cudf::column_view input,
+      cuda::stream_ref stream) const {
+    using Rep = typename T::rep;
+    auto tempMr = get_temp_mr();
+    auto [minimum, maximum] = cudf::minmax(input, stream, tempMr);
+    rmm::device_uvector<Rep> extremes(2, stream, tempMr);
+    CUDF_CUDA_TRY(cudaMemcpyAsync(
+        extremes.data(),
+        static_cast<cudf::timestamp_scalar<T>&>(*minimum).data(),
+        sizeof(Rep),
+        cudaMemcpyDeviceToDevice,
+        stream.get()));
+    CUDF_CUDA_TRY(cudaMemcpyAsync(
+        extremes.data() + 1,
+        static_cast<cudf::timestamp_scalar<T>&>(*maximum).data(),
+        sizeof(Rep),
+        cudaMemcpyDeviceToDevice,
+        stream.get()));
+    Rep ticks[2];
+    CUDF_CUDA_TRY(cudaMemcpyAsync(
+        ticks,
+        extremes.data(),
+        sizeof(ticks),
+        cudaMemcpyDeviceToHost,
+        stream.get()));
+    stream.sync();
+    const auto dayOf = [](Rep rep) {
+      return cuda::std::chrono::floor<Days>(typename T::duration{rep}).count();
+    };
+    return {dayOf(ticks[0]), dayOf(ticks[1])};
   }
-}
 
-// Returns the ticks the timestamp 'scalar' holds.
-int64_t ticksOf(cudf::scalar& scalar, cuda::stream_ref stream) {
-  switch (scalar.type().id()) {
-    case cudf::type_id::TIMESTAMP_DAYS:
-      return static_cast<cudf::timestamp_scalar<cudf::timestamp_D>&>(scalar)
-          .ticks_since_epoch(stream);
-    case cudf::type_id::TIMESTAMP_SECONDS:
-      return static_cast<cudf::timestamp_scalar<cudf::timestamp_s>&>(scalar)
-          .ticks_since_epoch(stream);
-    case cudf::type_id::TIMESTAMP_MILLISECONDS:
-      return static_cast<cudf::timestamp_scalar<cudf::timestamp_ms>&>(scalar)
-          .ticks_since_epoch(stream);
-    case cudf::type_id::TIMESTAMP_MICROSECONDS:
-      return static_cast<cudf::timestamp_scalar<cudf::timestamp_us>&>(scalar)
-          .ticks_since_epoch(stream);
-    case cudf::type_id::TIMESTAMP_NANOSECONDS:
-      return static_cast<cudf::timestamp_scalar<cudf::timestamp_ns>&>(scalar)
-          .ticks_since_epoch(stream);
-    default:
-      VELOX_UNREACHABLE(
-          "Not a timestamp type: {}", static_cast<int>(scalar.type().id()));
+  template <typename T, CUDF_ENABLE_IF(!cudf::is_timestamp<T>())>
+  std::pair<int64_t, int64_t> operator()(cudf::column_view, cuda::stream_ref)
+      const {
+    VELOX_UNREACHABLE("Not a timestamp column");
   }
-}
+};
 
-// Returns the day, counted from 1970-01-01, that holds the tick 'ticks' of a
-// type with 'perDay' ticks per day. Floors without negating 'ticks', which
-// would overflow near INT64_MIN.
-int64_t dayOf(int64_t ticks, int64_t perDay) {
-  return ticks / perDay - (ticks % perDay < 0 ? 1 : 0);
-}
-
-// What cuDF can print of the years a batch of DATE or TIMESTAMP values spans.
+// How a batch of DATE or TIMESTAMP values prints its years.
 enum class YearRange {
   // Every year lies in 0 to 9999, which %Y prints as the CPU does.
   kFourDigits,
-  // Some year needs its own formatting, and every year fits cuDF's 16-bit
-  // calendar year.
-  kSixteenBits,
-  // Some year lies outside -32768 to 32767.
+  // Some year lies outside 0 to 9999, so the batch formats its years apart.
+  kFormatted,
+  // Some day lies off the calendar from_timestamps places a day on.
   kBeyond,
 };
 
-// Classifies the years 'input' spans from the minimum and maximum of its
-// ticks. An empty or all-null column spans no year and takes the %Y path.
+// Classifies the years 'input' spans. An empty or all-null column spans no
+// year and takes the %Y path.
 YearRange yearRangeOf(cudf::column_view input, cuda::stream_ref stream) {
-  auto [minimum, maximum] = cudf::minmax(input, stream, get_temp_mr());
-  if (!minimum->is_valid(stream)) {
+  if (input.size() == input.null_count()) {
     return YearRange::kFourDigits;
   }
-  const auto perDay = ticksPerDay(input.type());
-  const auto firstDay = dayOf(ticksOf(*minimum, stream), perDay);
-  const auto lastDay = dayOf(ticksOf(*maximum, stream), perDay);
+  const auto [firstDay, lastDay] =
+      cudf::type_dispatcher(input.type(), DaySpanOf{}, input, stream);
   if (firstDay >= kFirstDayOfYear0 && lastDay < kFirstDayOfYear10000) {
     return YearRange::kFourDigits;
   }
-  if (firstDay >= kFirstDayOfYearMinus32768 && lastDay < kFirstDayOfYear32768) {
-    return YearRange::kSixteenBits;
+  if (firstDay >= kFirstDayOnCalendar && lastDay <= kLastDayOnCalendar) {
+    return YearRange::kFormatted;
   }
   return YearRange::kBeyond;
 }
 
-// Formats a DATE as YYYY-MM-DD and a TIMESTAMP as YYYY-MM-DD HH:MM:SS.mmm, as
-// the CPU's Presto cast prints them: the year padded to four digits and led by
-// a minus sign when negative, the fraction cut to milliseconds. cuDF's %Y
-// writes the low four digits of a year and nothing for a negative one, so a
-// batch with a year outside 0 to 9999 formats its years apart, and a batch
-// with a year cuDF's 16-bit calendar year cannot hold fails rather than print
-// a wrong year.
-std::unique_ptr<cudf::column> castTemporalToVarchar(
+// Writes the proleptic Gregorian year of a timestamp, found the way
+// cuda::std::chrono::year_month_day finds it (Howard Hinnant's
+// civil_from_days) but in 64-bit arithmetic, since cuda::std::chrono::year
+// holds 16 bits. makeYearUdf() defines T, the timestamp type, ahead of it.
+constexpr std::string_view kYearUdf = R"***(
+__device__ void velox_year(int32_t* year, T timestamp) {
+  using Days = cuda::std::chrono::duration<int64_t, cuda::std::ratio<86400>>;
+  const int64_t days =
+      cuda::std::chrono::floor<Days>(timestamp.time_since_epoch()).count();
+  const int64_t z = days + 719468;
+  const int64_t era = (z >= 0 ? z : z - 146096) / 146097;
+  const int64_t doe = z - era * 146097;
+  const int64_t yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+  const int64_t doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+  const int64_t mp = (5 * doy + 2) / 153;
+  const int64_t month = mp < 10 ? mp + 3 : mp - 9;
+  *year = static_cast<int32_t>(yoe + era * 400 + (month <= 2 ? 1 : 0));
+}
+)***";
+
+// Returns kYearUdf for the timestamp 'type', with T defined ahead of it.
+std::string makeYearUdf(cudf::data_type type) {
+  return fmt::format("using T = {};\n{}", cudf::type_to_name(type), kYearUdf);
+}
+
+// Returns the year of each row of the timestamp column 'input' as INT32, with
+// the input's nulls.
+std::unique_ptr<cudf::column> yearsOf(
     cudf::column_view input,
     cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
-  const bool isDate{input.type().id() == cudf::type_id::TIMESTAMP_DAYS};
+  const cudf::transform_input inputs[] = {input};
+  const cudf::transform_output outputs[] = {
+      {cudf::data_type{cudf::type_id::INT32},
+       cudf::output_nullability::PRESERVE}};
+  return std::move(
+      cudf::transform(
+          makeYearUdf(input.type()),
+          cudf::udf_source_type::CUDA,
+          cudf::null_aware::NO,
+          std::nullopt,
+          inputs,
+          outputs,
+          {},
+          std::nullopt,
+          stream,
+          mr)
+          ->release()
+          .front());
+}
+
+// Formats a DATE as YYYY-MM-DD and a TIMESTAMP as YYYY-MM-DD HH:MM:SS.mmm, as
+// the CPU's Presto cast prints them: the year padded to four digits and led by
+// a minus sign when negative, the fraction cut to milliseconds. 'isDate' comes
+// from the Velox type, since a TIMESTAMP a reader stores at day resolution is
+// a TIMESTAMP_DAYS column as well. cuDF's %Y writes the low four digits of a
+// year and nothing for a negative one, so a batch with a year outside 0 to
+// 9999 takes its years from velox_year and the rest of the text from
+// from_timestamps; a batch with a day the latter cannot place on the calendar,
+// which only a TIMESTAMP in the seconds or milliseconds unit reaches, fails
+// rather than print a wrong date.
+std::unique_ptr<cudf::column> castTemporalToVarchar(
+    cudf::column_view input,
+    bool isDate,
+    cuda::stream_ref stream,
+    rmm::device_async_resource_ref mr) {
   const std::string afterYear{isDate ? "-%m-%d" : "-%m-%d %H:%M:%S.%3f"};
   switch (yearRangeOf(input, stream)) {
     case YearRange::kFourDigits:
       return cudf::strings::from_timestamps(
           input, "%Y" + afterYear, cudf::strings_column_view{}, stream, mr);
-    case YearRange::kSixteenBits:
+    case YearRange::kFormatted:
       break;
     case YearRange::kBeyond:
       VELOX_UNSUPPORTED(
-          "Cast to VARCHAR of a year outside -32768 to 32767 is not supported "
-          "on the GPU: {}",
-          isDate ? "DATE" : "TIMESTAMP");
+          "Cast to VARCHAR of a {} before day {} or after day {} of "
+          "1970-01-01 is not supported on the GPU",
+          isDate ? "DATE" : "TIMESTAMP",
+          kFirstDayOnCalendar,
+          kLastDayOnCalendar);
   }
 
   auto tempMr = get_temp_mr();
-  auto years = cudf::datetime::extract_datetime_component(
-      input, cudf::datetime::datetime_component::YEAR, stream, tempMr);
+  auto years = yearsOf(input, stream, tempMr);
   auto yearStrings =
       cudf::strings::from_integers(years->view(), stream, tempMr);
   // zfill_by_widths() counts the minus sign toward the width, so a negative
   // year needs five.
-  cudf::numeric_scalar<int16_t> zero(0, /*is_valid=*/true, stream, tempMr);
+  cudf::numeric_scalar<int32_t> zero(0, /*is_valid=*/true, stream, tempMr);
   auto negative = cudf::binary_operation(
       years->view(),
       zero,
@@ -886,6 +944,7 @@ class CastFunction : public CudfFunction {
     temporalToVarchar_ =
         isTemporalToVarcharCastEnabled(sourceType, expr->type());
     if (temporalToVarchar_) {
+      isDate_ = sourceType->isDate();
       return;
     }
     const auto sourceCudfType = cudf_velox::veloxToCudfDataType(sourceType);
@@ -905,7 +964,7 @@ class CastFunction : public CudfFunction {
       return castFromVarchar(inputCol, stream, mr);
     }
     if (temporalToVarchar_) {
-      return castTemporalToVarchar(inputCol, stream, mr);
+      return castTemporalToVarchar(inputCol, isDate_, stream, mr);
     }
     return cudf::cast(inputCol, targetCudfType_, stream, mr);
   }
@@ -1043,8 +1102,10 @@ class CastFunction : public CudfFunction {
   // Set when the source is VARCHAR.
   bool fromVarchar_{false};
   // Set when eval() formats a DATE or TIMESTAMP as text itself, which
-  // cudf::cast cannot.
+  // cudf::cast cannot, and whether that source is the DATE: a TIMESTAMP a
+  // reader stores at day resolution shares cuDF's TIMESTAMP_DAYS with it.
   bool temporalToVarchar_{false};
+  bool isDate_{false};
   bool isTryCast_{false};
   std::string targetTypeName_;
   // The kernel casting strings to the integral target type.
