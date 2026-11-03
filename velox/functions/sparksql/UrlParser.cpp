@@ -27,7 +27,7 @@
 #endif
 
 #include "folly/CPortability.h"
-#include "velox/external/utf8proc/utf8procImpl.h"
+#include "velox/functions/lib/Utf8Utils.h"
 
 namespace facebook::velox::functions::sparksql {
 
@@ -37,7 +37,7 @@ namespace {
 // (unreserved, reserved) build up the per-component sets (path, query,
 // userinfo, authority). Predicates over ASCII characters take char and
 // are evaluated per byte; the two code-point predicates (isSpaceChar,
-// isIsoControl) take the int32_t produced by utf8proc_codepoint and
+// isIsoControl) take the int32_t produced by tryGetUtf8CharLength and
 // classify decoded non-ASCII characters.
 
 // ASCII letters. A scheme and a hostname label must both start with one.
@@ -212,7 +212,7 @@ FOLLY_ALWAYS_INLINE std::string_view leadingHexDigits(std::string_view input) {
 
 // ASCII and Unicode control characters (C0, plus DEL and the C1 range):
 // never acceptable in a URL, not even escaped.
-FOLLY_ALWAYS_INLINE constexpr bool isIsoControl(utf8proc_int32_t codePoint) {
+FOLLY_ALWAYS_INLINE constexpr bool isIsoControl(int32_t codePoint) {
   return codePoint <= 0x1F || (codePoint >= 0x7F && codePoint <= 0x9F);
 }
 
@@ -220,7 +220,7 @@ FOLLY_ALWAYS_INLINE constexpr bool isIsoControl(utf8proc_int32_t codePoint) {
 // includes plain space): never acceptable in a URL. Together with the
 // control characters above, these are the only non-ASCII code points a
 // URL may not contain.
-FOLLY_ALWAYS_INLINE constexpr bool isSpaceChar(utf8proc_int32_t codePoint) {
+FOLLY_ALWAYS_INLINE constexpr bool isSpaceChar(int32_t codePoint) {
   switch (codePoint) {
     case 0x20:
     case 0xA0:
@@ -423,16 +423,17 @@ FOLLY_ALWAYS_INLINE ScanResult scanComponent(
       continue;
     }
     if (stop == ScanStop::kMultibyte && allowEscape) {
-      int length;
-      const auto codePoint =
-          utf8proc_codepoint(input.data(), input.data() + input.size(), length);
-      // Invalid UTF-8 sequence is accepted like any other non-ASCII character
-      // and skipped per the replacement granularity: one byte for a bad lead
-      // byte or a truncated sequence, the full length for a decoded code point.
-      const bool accepted = codePoint < 0 ||
-          (!isSpaceChar(codePoint) && !isIsoControl(codePoint));
-      if (accepted) {
-        input.remove_prefix(codePoint < 0 ? 1 : length);
+      int32_t codePoint;
+      const auto length =
+          tryGetUtf8CharLength(input.data(), input.size(), codePoint);
+      // Accept malformed bytes as replacement characters, but scan the next
+      // byte independently so an illegal ASCII character is not swallowed.
+      if (length < 0) {
+        input.remove_prefix(1);
+        continue;
+      }
+      if (!isSpaceChar(codePoint) && !isIsoControl(codePoint)) {
+        input.remove_prefix(length);
         continue;
       }
     }
@@ -449,7 +450,7 @@ FOLLY_ALWAYS_INLINE ScanResult scanComponent(
 
 // Checks that every character of component is accepted (with escapes
 // when allowEscape). Malformed escape pairs fail the check just like
-// rejected characters: Spark maps both to a null result.
+// rejected characters; the caller applies the ANSI-mode error policy.
 template <bool (*Pred)(char)>
 FOLLY_ALWAYS_INLINE bool checkComponent(
     std::string_view component,

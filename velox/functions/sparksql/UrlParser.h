@@ -48,8 +48,8 @@ struct ParsedUrl {
 // - scheme-less relative references and the empty string are valid;
 // - a '#' inside the fragment is rejected;
 // - authorities that are not server-based fall back to registry form.
-// Returns false when the URL is invalid. Error details are dropped:
-// Spark's ParseUrl maps every failure to null.
+// Returns false when the URL is invalid. The caller returns null or raises
+// an error according to Spark's ANSI-mode setting.
 bool parseUrl(std::string_view url, ParsedUrl& parsed);
 
 } // namespace facebook::velox::functions::sparksql

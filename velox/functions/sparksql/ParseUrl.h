@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <array>
 #include <memory>
 #include <optional>
 #include <string>
@@ -72,15 +73,24 @@ struct ParseUrlFunction {
     cache_.setMaxCompiledRegexes(config.exprMaxCompiledRegexes());
     ansiEnabled_ = SparkQueryConfig{config}.ansiEnabled();
 
-    // A constant URL is copied into owned storage and parsed once here;
-    // the adapter passes a stack-local value to initialize, and a short
-    // URL's bytes live inside that value (StringView inline storage), so
-    // views into it would dangle after initialize returns.
+    // Parse a constant URL once, but retain offsets rather than views into
+    // initialize's temporary StringView or storage owned by this function.
     if (urlStr) {
-      constUrlStorage_ = std::string(urlStr->data(), urlStr->size());
-      constUrl_ = ParsedUrl{};
-      if (!parseUrl(constUrlStorage_, *constUrl_)) {
-        constUrl_.reset();
+      const std::string_view url(urlStr->data(), urlStr->size());
+      ParsedUrl parsed;
+      if (parseUrl(url, parsed)) {
+        constUrl_.emplace();
+        for (size_t i = 0; i < kComponents.size(); ++i) {
+          const auto& component = parsed.*kComponents[i];
+          if (component.has_value()) {
+            (*constUrl_)[i] = UrlSlice{
+                component->empty() && url.empty()
+                    ? 0
+                    : static_cast<size_t>(component->data() - url.data()),
+                component->size()};
+          }
+        }
+      } else {
         constUrlInvalid_ = true;
       }
     }
@@ -171,6 +181,22 @@ struct ParseUrlFunction {
   }
 
  private:
+  // Identifies a component within the URL without retaining its storage.
+  struct UrlSlice {
+    size_t offset;
+    size_t size;
+  };
+
+  static constexpr std::array kComponents = {
+      &ParsedUrl::protocol,
+      &ParsedUrl::host,
+      &ParsedUrl::path,
+      &ParsedUrl::query,
+      &ParsedUrl::ref,
+      &ParsedUrl::authority,
+      &ParsedUrl::userInfo};
+  using UrlOffsets = std::array<std::optional<UrlSlice>, kComponents.size()>;
+
   // Regex metacharacters; a key containing any of them must go through the
   // regex path. The same set the regexp functions use for their fast paths.
   static constexpr std::string_view kReservedChars = ".$|()[{^?*+\\";
@@ -215,7 +241,16 @@ struct ParseUrlFunction {
   // the query instead, matching Spark's ParseUrl failOnError behavior.
   ParsedUrl* parseUrlArg(const arg_type<Varchar>& urlStr) {
     if (constUrl_.has_value()) {
-      return &*constUrl_;
+      const std::string_view url(urlStr.data(), urlStr.size());
+      for (size_t i = 0; i < kComponents.size(); ++i) {
+        const auto& slice = (*constUrl_)[i];
+        auto& component = parsedScratch_.*kComponents[i];
+        component = slice.has_value()
+            ? std::optional<std::string_view>(
+                  url.substr(slice->offset, slice->size))
+            : std::nullopt;
+      }
+      return &parsedScratch_;
     }
     if (constUrlInvalid_) {
       if (ansiEnabled_) {
@@ -293,8 +328,7 @@ struct ParseUrlFunction {
     return fmt::format("{}{}{}", kRegexPrefix, key, kRegexSuffix);
   }
 
-  // Returns the requested part, or false for null. A view field with
-  // data() == nullptr means the component is absent.
+  // Returns the requested part, or false when its optional is unset.
   static bool
   extractPart(out_type<Varchar>& output, const ParsedUrl& parsed, Part part) {
     switch (part) {
@@ -360,13 +394,11 @@ struct ParseUrlFunction {
     return false;
   }
 
-  // The parse of a constant URL, or an empty optional after initialize()
-  // when the constant URL is invalid. Unset when the URL is not constant.
-  // The views point into constUrlStorage_.
-  std::optional<ParsedUrl> constUrl_;
+  // Component offsets for a valid constant URL. Unset for non-constant or
+  // invalid URLs; slices are resolved against the current call's argument.
+  std::optional<UrlOffsets> constUrl_;
 
-  // Owned copy of the constant URL.
-  std::string constUrlStorage_;
+  // Remembers a constant parse failure without re-parsing on each row.
   bool constUrlInvalid_ = false;
 
   // Scratch space for parsing a non-constant URL, reused across calls;

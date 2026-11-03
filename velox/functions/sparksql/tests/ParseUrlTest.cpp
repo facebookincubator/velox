@@ -123,9 +123,8 @@ TEST_F(ParseUrlTest, allParts) {
   EXPECT_EQ("f", parseUrl("mailto:a@b#f", "REF"));
   EXPECT_EQ("mailto", parseUrl("mailto:a@b#f", "PROTOCOL"));
 
-  // An invalid URL yields null for every part. The ANSI-on error path is a
-  // Spark-layer concern (the Velox function has no ANSI mode), so only the
-  // ANSI-off behavior is asserted here.
+  // An invalid URL yields null for every part with ANSI mode disabled.
+  // The ansiMode test covers errors with ANSI mode enabled.
   const auto invalidUrl = "inva lid://user:pass@host/file;param?query;p2";
   EXPECT_EQ(std::nullopt, parseUrl(invalidUrl, "HOST"));
   EXPECT_EQ(std::nullopt, parseUrl(invalidUrl, "PATH"));
@@ -256,6 +255,35 @@ TEST_F(ParseUrlTest, nonAsciiAndSpecialChars) {
       "a=\xED\xA0\x80",
       parseUrl(std::string("http://h/p?a=\xED\xA0\x80"), "QUERY"));
   EXPECT_EQ("/p\xE4\xB8", parseUrl(std::string("http://h/p\xE4\xB8"), "PATH"));
+}
+
+TEST_F(ParseUrlTest, malformedUtf8) {
+  const std::vector<std::string> invalidUrls = {
+      "http://h/p\xC3 x",
+      "http://h/p\xC3<",
+      "http://h/p\xC2%zz",
+      "http://h/p?a=\xC3\""};
+  const std::vector<std::string> validUrls = {
+      "http://h/p\xC0\xA0", "http://h/p\xC0\x80"};
+  for (const bool ansiEnabled : {false, true}) {
+    queryCtx_->testingOverrideConfigUnsafe(
+        {{SparkQueryConfig::qualify(SparkQueryConfig::kAnsiEnabled),
+          ansiEnabled ? "true" : "false"}});
+    for (const auto& url : invalidUrls) {
+      SCOPED_TRACE(url);
+      if (ansiEnabled) {
+        VELOX_ASSERT_THROW(parseUrl(url, "PATH"), "The url is invalid");
+        VELOX_ASSERT_THROW(parseUrlQuery(url, "a"), "The url is invalid");
+      } else {
+        EXPECT_EQ(std::nullopt, parseUrl(url, "PATH"));
+        EXPECT_EQ(std::nullopt, parseUrlQuery(url, "a"));
+      }
+    }
+    for (const auto& url : validUrls) {
+      SCOPED_TRACE(url);
+      EXPECT_EQ(url.substr(8), parseUrl(url, "PATH"));
+    }
+  }
 }
 
 // An empty authority yields a null HOST rather than an empty string, and
@@ -511,8 +539,8 @@ TEST_F(ParseUrlTest, lazyKeyCompilation) {
       evaluateOnce<std::string>(
           "parse_url(c0, 'QUERY', 'a[')", std::optional<std::string>("#a#b")));
   // A URL with an empty query still extracts, so the key is compiled and
-  // an invalid one fails the query, as in Spark. The message matches the
-  // non-constant key path: both shapes go through the same regex cache.
+  // an invalid one fails the query, as in Spark. The dedicated constant
+  // pattern and the non-constant regex cache report the same error.
   VELOX_ASSERT_THROW(
       evaluateOnce<std::string>(
           "parse_url(c0, 'QUERY', 'a[')",
@@ -520,9 +548,8 @@ TEST_F(ParseUrlTest, lazyKeyCompilation) {
       "invalid regular expression");
 }
 
-// Pins the non-constant key path: a per-row key column bypasses
-// initialize()'s constant-key compilation and goes through the bounded
-// regex cache in call().
+// Pins the non-constant key path: a per-row key column uses the bounded
+// regex cache in call() rather than the dedicated constant pattern.
 TEST_F(ParseUrlTest, nonConstantKey) {
   const auto run = [&](std::vector<std::optional<StringView>> urls,
                        std::vector<std::optional<StringView>> keys) {
@@ -626,6 +653,11 @@ TEST_F(ParseUrlTest, shortConstantUrl) {
   EXPECT_EQ("h", constUrlPart("http://h/p", "HOST"));
   EXPECT_EQ("/p", constUrlPart("http://h/p", "PATH"));
   EXPECT_EQ("http", constUrlPart("http://h/p", "PROTOCOL"));
+  EXPECT_EQ("", constUrlPart("", "PATH"));
+  EXPECT_EQ("", constUrlPart("", "FILE"));
+  EXPECT_EQ(std::nullopt, constUrlPart("", "HOST"));
+  EXPECT_EQ("", constUrlPart("?", "QUERY"));
+  EXPECT_EQ("", constUrlPart("#", "REF"));
 
   // A multi-row run over the same instance: a constant URL with a
   // non-constant part column.
@@ -640,6 +672,56 @@ TEST_F(ParseUrlTest, shortConstantUrl) {
   EXPECT_EQ("/p", std::string(result->valueAt(1)));
   EXPECT_FALSE(result->isNullAt(2));
   EXPECT_EQ("http", std::string(result->valueAt(2)));
+}
+
+// Long slices must remain valid after the expression that produced them dies.
+TEST_F(ParseUrlTest, constantUrlResultLifetime) {
+  const std::string url =
+      "http://long-user-info@long-host.example/long-path-component"
+      "?key=long-query-value#long-fragment-value";
+  const auto input = makeRowVector({makeFlatVector<StringView>(
+      {"USERINFO", "HOST", "PATH", "QUERY", "REF", "AUTHORITY"})});
+  auto exprSet = compileExpression(
+      fmt::format("parse_url('{}', c0)", url), input->rowType());
+  auto result = evaluate(*exprSet, input);
+  const auto keys = makeRowVector({makeFlatVector<StringView>({"key", "k.y"})});
+  auto queryExprSet = compileExpression(
+      fmt::format("parse_url('{}', 'QUERY', c0)", url), keys->rowType());
+  auto queryResult = evaluate(*queryExprSet, keys);
+  exprSet.reset();
+  queryExprSet.reset();
+
+  const auto assertOwned = [](const VectorPtr& vector) {
+    const auto* flat = vector->as<FlatVector<StringView>>();
+    ASSERT_NE(flat, nullptr);
+    for (vector_size_t row = 0; row < vector->size(); ++row) {
+      ASSERT_FALSE(flat->isNullAt(row));
+      const auto value = flat->valueAt(row);
+      ASSERT_FALSE(value.isInline());
+      const auto address = reinterpret_cast<uintptr_t>(value.data());
+      bool owned = false;
+      for (const auto& buffer : flat->stringBuffers()) {
+        const auto start = reinterpret_cast<uintptr_t>(buffer->as<char>());
+        owned |= address >= start &&
+            address + value.size() <= start + buffer->size();
+      }
+      ASSERT_TRUE(owned) << "Result slice must be backed by a vector buffer";
+    }
+  };
+  assertOwned(result);
+  assertOwned(queryResult);
+  assertEqualVectors(
+      makeFlatVector<StringView>(
+          {"long-user-info",
+           "long-host.example",
+           "/long-path-component",
+           "key=long-query-value",
+           "long-fragment-value",
+           "long-user-info@long-host.example"}),
+      result);
+  assertEqualVectors(
+      makeFlatVector<StringView>({"long-query-value", "long-query-value"}),
+      queryResult);
 }
 
 // Pins that an empty URL, which a non-null column value represents as a
@@ -803,28 +885,30 @@ TEST_F(ParseUrlTest, plainKeyFastPath) {
                makeNullableFlatVector<StringView>(std::move(keys))})));
 }
 
-// Pins that an invalid constant key fails the query even when an earlier
-// call of the same function instance already attempted the compilation:
-// a failed compilation must never be published to the pattern cache, or
-// later calls would silently yield nulls instead of the error.
+// Every affected row must fail, including after another row's error is
+// suppressed and when the same expression instance is reused across batches.
 TEST_F(ParseUrlTest, invalidConstantKeyFailsEveryBatch) {
-  // Two separate evaluations share nothing, so run one evaluation whose
-  // first row already triggers the compile error; the exception must
-  // surface rather than degrade to null results.
+  // Keep the parse expression first so errors are recorded before suppression.
+  queryCtx_->testingOverrideConfigUnsafe(
+      {{core::QueryConfig::kAdaptiveFilterReorderingEnabled, "false"}});
+  const auto input = makeRowVector(
+      {makeFlatVector<StringView>({"http://h/p?a=1", "http://h/p?b=2"}),
+       makeFlatVector<bool>({false, true})});
+  const std::string expression = "isnull(parse_url(c0, 'QUERY', 'a[')) AND c1";
+  auto exprSet = compileExpression(expression, input->rowType());
+  VELOX_ASSERT_THROW(evaluate(*exprSet, input), "invalid regular expression");
+
+  const auto suppressed = makeRowVector(
+      {makeFlatVector<StringView>({"http://h/p?a=1", "http://h/p?b=2"}),
+       makeFlatVector<bool>({false, false})});
+  auto batchExprSet = compileExpression(expression, suppressed->rowType());
+  assertEqualVectors(
+      makeFlatVector<bool>({false, false}),
+      evaluate(*batchExprSet, suppressed));
   VELOX_ASSERT_THROW(
-      evaluateOnce<std::string>(
-          "parse_url(c0, 'QUERY', 'a[')",
-          std::optional<std::string>("http://h/p?a=1")),
-      "invalid regular expression");
-  // A second evaluation on the same expression shape must fail the same
-  // way, proving the failure is not a once-per-instance event that later
-  // calls skip.
-  VELOX_ASSERT_THROW(
-      evaluateOnce<std::string>(
-          "parse_url(c0, 'QUERY', 'a[')",
-          std::optional<std::string>("http://h/p?b=2")),
-      "invalid regular expression");
+      evaluate(*batchExprSet, input), "invalid regular expression");
 }
+
 // Pins that the key is a regex fragment, not a literal: no escaping.
 TEST_F(ParseUrlTest, regexMetacharacterKey) {
   // '.' matches any character, so 'a.b' hits 'aXb=1'.
