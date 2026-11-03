@@ -77,6 +77,10 @@ void UcxPartitionedOutputMock::publishDataChunks() {
       stream.sync();
       queueManager_->enqueue(
           taskId_, partition, std::move(packedCols), numRowsPerChunk_);
+      ContinueFuture future;
+      if (queueManager_->checkBlocked(taskId_, &future)) {
+        future.wait();
+      }
     }
   }
   // tell the queue manager that we are done.
