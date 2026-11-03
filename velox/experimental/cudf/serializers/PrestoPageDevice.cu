@@ -15,7 +15,7 @@
  */
 
 #include "velox/experimental/cudf/CudfNoDefaults.h"
-#include "velox/experimental/cudf/exec/PrestoPageDevice.h"
+#include "velox/experimental/cudf/serializers/PrestoPageDevice.h"
 
 #include <cudf/detail/offsets_iterator.cuh>
 #include <cudf/detail/utilities/integer_utils.hpp>
@@ -30,17 +30,20 @@
 #include <rmm/exec_policy.hpp>
 
 #include <cub/device/device_memcpy.cuh>
+#include <cuda/iterator>
 #include <cuda/numeric>
 #include <cuda/std/cstring>
 #include <cuda/std/functional>
 #include <cuda_runtime.h>
 #include <thrust/copy.h>
 #include <thrust/iterator/counting_iterator.h>
+#include <thrust/iterator/transform_iterator.h>
 #include <thrust/transform.h>
 #include <thrust/transform_scan.h>
 
 #include <algorithm>
 #include <cstdint>
+#include <limits>
 #include <string>
 
 namespace facebook::velox::cudf_velox::detail {
@@ -74,15 +77,23 @@ struct RowBits {
   }
 };
 
-// Whether row i starts a page: its last bit falls into a later span of
-// pageBits than the last bit of row i - 1.
-struct StartsPage {
-  const int64_t* cumulativeBits;
+// Receives the inclusive scan of RowBits row by row and marks the rows that
+// start a page, those whose last bit falls into a later span of pageBits than
+// the last bit of the row before; keeps the scan's last value as 'total'.
+struct MarkPageStarts {
+  RowBits rowBits;
   int64_t pageBits;
+  int32_t numRows;
+  bool* starts;
+  int64_t* total;
 
-  __device__ bool operator()(int32_t i) const {
-    return (cumulativeBits[i] - 1) / pageBits !=
-        (cumulativeBits[i - 1] - 1) / pageBits;
+  __device__ void operator()(int32_t i, int64_t cumulative) const {
+    const int64_t previous = cumulative - rowBits(i);
+    starts[i] =
+        i > 0 && (cumulative - 1) / pageBits != (previous - 1) / pageBits;
+    if (i == numRows - 1) {
+      *total = cumulative;
+    }
   }
 };
 
@@ -159,6 +170,25 @@ struct ToMillis {
   }
 };
 
+// The three views of a CopyTask that cub::DeviceMemcpy::Batched reads.
+struct CopySource {
+  __device__ const uint8_t* operator()(const CopyTask& t) const {
+    return t.src;
+  }
+};
+
+struct CopyDestination {
+  __device__ uint8_t* operator()(const CopyTask& t) const {
+    return t.dst;
+  }
+};
+
+struct CopySize {
+  __device__ size_t operator()(const CopyTask& t) const {
+    return t.size;
+  }
+};
+
 struct ValidPredicate {
   const cudf::bitmask_type* mask;
   int64_t firstBit;
@@ -194,7 +224,7 @@ int32_t compactValidTyped(
     T* dst,
     cuda::stream_ref stream) {
   auto end = thrust::copy_if(
-      rmm::exec_policy(stream),
+      rmm::exec_policy_nosync(stream),
       src,
       src + numRows,
       thrust::counting_iterator<int32_t>(0),
@@ -226,7 +256,11 @@ std::vector<int64_t> prestoPageBoundaries(
     cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
   CUDF_EXPECTS(pageBytes > 0, "pageBytes must be positive");
+  CUDF_EXPECTS(
+      pageBytes <= std::numeric_limits<int64_t>::max() / 8,
+      "pageBytes must fit in bits");
   CUDF_EXPECTS(maxRows > 0, "maxRows must be positive");
+  CUDF_EXPECTS(fixedBitsPerRow >= 0, "fixedBitsPerRow must not be negative");
   std::vector<int64_t> bounds{0};
   if (numRows == 0) {
     return bounds;
@@ -243,31 +277,47 @@ std::vector<int64_t> prestoPageBoundaries(
     return bounds;
   }
 
-  auto deviceStrings = cudf::detail::make_device_uvector(
+  // The scan of the row bits is consumed as it is produced: one flag per row
+  // and the last value, not the 8 bytes per row of the scan itself. The
+  // buffers are allocated before the upload of 'strings', which the function
+  // reads back from the device below, so that nothing can throw while the
+  // stream still has the caller's span to read.
+  rmm::device_uvector<bool> starts(numRows, stream, mr);
+  rmm::device_scalar<int64_t> total(stream, mr);
+  auto deviceStrings = cudf::detail::make_device_uvector_async(
       cudf::host_span<StringOffsets const>{strings.data(), strings.size()},
       stream,
       mr);
-  rmm::device_uvector<int64_t> cumulativeBits(numRows, stream, mr);
+  const RowBits rowBits{
+      fixedBitsPerRow,
+      deviceStrings.data(),
+      static_cast<int32_t>(strings.size())};
   thrust::transform_inclusive_scan(
-      rmm::exec_policy(stream),
+      rmm::exec_policy_nosync(stream, mr),
       thrust::counting_iterator<int32_t>(0),
       thrust::counting_iterator<int32_t>(numRows),
-      cumulativeBits.begin(),
-      RowBits{
-          fixedBitsPerRow,
-          deviceStrings.data(),
-          static_cast<int32_t>(strings.size())},
+      cuda::make_tabulate_output_iterator(
+          MarkPageStarts{
+              rowBits, pageBits, numRows, starts.data(), total.data()}),
+      rowBits,
       cuda::std::plus<int64_t>{});
   // Page k holds the rows whose last bit lies in (k * pageBits, (k + 1) *
   // pageBits], so a page exceeds pageBits by less than one row and a row
-  // larger than a page forms one page.
-  rmm::device_uvector<int32_t> cuts(numRows, stream, mr);
+  // larger than a page forms one page. The scan never decreases, since no row
+  // costs less than nothing, so the page of its last value bounds the number
+  // of cuts, and they take that much space rather than one slot per row.
+  const int64_t totalBits = total.value(stream);
+  const int64_t maxCuts = std::min<int64_t>(
+      totalBits > 0 ? (totalBits - 1) / pageBits : 0,
+      static_cast<int64_t>(numRows) - 1);
+  rmm::device_uvector<int32_t> cuts(maxCuts, stream, mr);
   auto cutsEnd = thrust::copy_if(
-      rmm::exec_policy(stream),
+      rmm::exec_policy_nosync(stream, mr),
       thrust::counting_iterator<int32_t>(1),
       thrust::counting_iterator<int32_t>(numRows),
+      starts.begin() + 1,
       cuts.begin(),
-      StartsPage{cumulativeBits.data(), pageBits});
+      cuda::std::identity{});
   const auto hostCuts = cudf::detail::make_std_vector(
       cudf::device_span<int32_t const>{
           cuts.data(), static_cast<size_t>(cutsEnd - cuts.begin())},
@@ -295,6 +345,8 @@ void fillPrestoNullBytes(
   if (tasks.empty()) {
     return;
   }
+  // Nothing below waits for the stream and the caller may free 'tasks' on
+  // return, so the upload waits.
   auto deviceTasks = cudf::detail::make_device_uvector(
       cudf::host_span<NullBytesTask const>{tasks.data(), tasks.size()},
       stream,
@@ -321,7 +373,11 @@ bool fillPrestoStringOffsets(
   if (tasks.empty()) {
     return true;
   }
-  auto deviceTasks = cudf::detail::make_device_uvector(
+  // The flag is cleared on the device, and allocated before the upload of
+  // 'tasks', which the read of the flag below waits for.
+  rmm::device_scalar<int32_t> overflow(stream, mr);
+  overflow.set_value_to_zero_async(stream);
+  auto deviceTasks = cudf::detail::make_device_uvector_async(
       cudf::host_span<StringOffsetsTask const>{tasks.data(), tasks.size()},
       stream,
       mr);
@@ -329,9 +385,6 @@ bool fillPrestoStringOffsets(
   for (const auto& t : tasks) {
     maxRows = std::max<int64_t>(maxRows, t.numRows);
   }
-  // The initial value is copied asynchronously, so it outlives the kernels.
-  const int32_t zero = 0;
-  rmm::device_scalar<int32_t> overflow(zero, stream, mr);
   const auto gridX = gridXFor(maxRows);
   for (size_t offset = 0; offset < tasks.size(); offset += kMaxGridY) {
     const auto count =
@@ -347,53 +400,31 @@ void batchedDeviceCopy(
     std::span<const CopyTask> tasks,
     cuda::stream_ref stream,
     rmm::device_async_resource_ref mr) {
-  std::vector<const uint8_t*> srcs;
-  std::vector<uint8_t*> dsts;
-  std::vector<size_t> sizes;
-  srcs.reserve(tasks.size());
-  dsts.reserve(tasks.size());
-  sizes.reserve(tasks.size());
-  for (const auto& t : tasks) {
-    if (t.size == 0) {
-      continue;
-    }
-    srcs.push_back(t.src);
-    dsts.push_back(t.dst);
-    sizes.push_back(t.size);
-  }
-  if (srcs.empty()) {
+  if (tasks.empty()) {
     return;
   }
-  auto deviceSrcs = cudf::detail::make_device_uvector(
-      cudf::host_span<const uint8_t* const>{srcs.data(), srcs.size()},
-      stream,
-      mr);
-  auto deviceDsts = cudf::detail::make_device_uvector(
-      cudf::host_span<uint8_t* const>{dsts.data(), dsts.size()}, stream, mr);
-  auto deviceSizes = cudf::detail::make_device_uvector(
-      cudf::host_span<size_t const>{sizes.data(), sizes.size()}, stream, mr);
+  // One upload for the three arrays cub reads, which it takes from the tasks
+  // in place; cub skips a task of zero bytes. The upload waits for the
+  // stream, since the caller may free 'tasks' on return.
+  auto deviceTasks = cudf::detail::make_device_uvector(
+      cudf::host_span<CopyTask const>{tasks.data(), tasks.size()}, stream, mr);
+  const auto srcs =
+      thrust::make_transform_iterator(deviceTasks.data(), CopySource{});
+  const auto dsts =
+      thrust::make_transform_iterator(deviceTasks.data(), CopyDestination{});
+  const auto sizes =
+      thrust::make_transform_iterator(deviceTasks.data(), CopySize{});
+  const auto count = static_cast<int64_t>(tasks.size());
   // cudf::detail::batched_memcpy_async would take its scratch from the
   // current device resource; the caller's 'mr' is used here instead.
   size_t tempBytes = 0;
   CUDF_CUDA_TRY(
       cub::DeviceMemcpy::Batched(
-          nullptr,
-          tempBytes,
-          deviceSrcs.data(),
-          deviceDsts.data(),
-          deviceSizes.data(),
-          srcs.size(),
-          stream.get()));
+          nullptr, tempBytes, srcs, dsts, sizes, count, stream.get()));
   rmm::device_buffer temp(tempBytes, stream, mr);
   CUDF_CUDA_TRY(
       cub::DeviceMemcpy::Batched(
-          temp.data(),
-          tempBytes,
-          deviceSrcs.data(),
-          deviceDsts.data(),
-          deviceSizes.data(),
-          srcs.size(),
-          stream.get()));
+          temp.data(), tempBytes, srcs, dsts, sizes, count, stream.get()));
   CUDF_CHECK_CUDA(stream.get());
 }
 
@@ -405,11 +436,13 @@ std::vector<int64_t> gatherStringOffsets(
   if (rows.empty()) {
     return {};
   }
-  auto deviceRows = cudf::detail::make_device_uvector(
-      cudf::host_span<int64_t const>{rows.data(), rows.size()}, stream, mr);
+  // The output is allocated before the upload of 'rows', which the read of
+  // the result below waits for.
   rmm::device_uvector<int64_t> out(rows.size(), stream, mr);
+  auto deviceRows = cudf::detail::make_device_uvector_async(
+      cudf::host_span<int64_t const>{rows.data(), rows.size()}, stream, mr);
   thrust::transform(
-      rmm::exec_policy(stream),
+      rmm::exec_policy_nosync(stream, mr),
       deviceRows.begin(),
       deviceRows.end(),
       out.begin(),
@@ -434,11 +467,10 @@ bool timestampsToMillis(
   if (numRows == 0) {
     return true;
   }
-  // The initial value is copied asynchronously, so it outlives the kernel.
-  const int32_t zero = 0;
-  rmm::device_scalar<int32_t> overflow(zero, stream, mr);
+  rmm::device_scalar<int32_t> overflow(stream, mr);
+  overflow.set_value_to_zero_async(stream);
   thrust::transform(
-      rmm::exec_policy(stream),
+      rmm::exec_policy_nosync(stream, mr),
       src,
       src + numRows,
       dst,
@@ -457,7 +489,11 @@ void decimalsToJava(
     return;
   }
   thrust::transform(
-      rmm::exec_policy(stream), src, src + numRows, dst, ToJavaDecimal{});
+      rmm::exec_policy_nosync(stream),
+      src,
+      src + numRows,
+      dst,
+      ToJavaDecimal{});
 }
 
 int32_t compactValid(

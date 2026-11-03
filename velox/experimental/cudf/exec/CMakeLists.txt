@@ -46,7 +46,6 @@ add_library(
   GpuResources.cpp
   OperatorAdapters.cpp
   PrestoAggregateFunctions.cpp
-  PrestoPageDevice.cu
   SparkAggregateFunctions.cpp
   ToCudf.cpp
   Utilities.cpp

@@ -193,6 +193,11 @@ for byte, since in practice it is the reference implementation. Some examples:
   Puffin footer has to leave out `compression-codec` entirely.
 - We write only array and bitmap containers, never run containers. The reader
   accepts all three, because other writers may use runs.
+- We check this in CI. Eleven deletion vectors written by Iceberg Java 1.10
+  are checked in as test files, along with what Iceberg Java decodes from each,
+  plus one bitmap in the older 32-bit format. They include run containers and
+  positions on both sides of the 2<sup>32</sup> boundary, and the reader has to
+  decode every one to exactly the same positions.
 
 ## Row lineage
 
@@ -365,6 +370,47 @@ took 15 µs at 1% deleted, against 110 µs for Iceberg Java to read the blob and
 build its bitmap. These numbers cover the deletion vector alone: in the Velox
 scan above, loading and applying it is about 2% of the read time at 50%
 deleted.
+
+Building a deletion vector is the other half. For each data file that a
+DELETE, UPDATE or MERGE touches, the sink collects the deleted positions,
+serializes them, and counts the distinct positions for the commit message. For
+the first deletion vector of a data file the positions come from a scan in
+order, so the writer skips sorting and writes each Roaring container straight
+from its run of positions. When the data file already has a deletion vector,
+the sink seeds the writer with the old positions and then adds the new ones.
+The writer keeps track of the sorted prefix, sorts only the new positions,
+merges them in place, and reuses the result for the count.
+
+We timed both cases the same way as above, with the same rows on both sides.
+For the merge case, every tenth deleted row is new.
+
+| Build and serialize | First deletion vector: Velox | Iceberg Java | Merging into an existing one: Velox | Iceberg Java |
+| --- | --- | --- | --- | --- |
+| 1% deleted | 43 µs | 237 µs | 50 µs | 371 µs |
+| 5% deleted | 214 µs | 675 µs | 253 µs | 1.07 ms |
+| 20% deleted | 1.00 ms | 1.73 ms | 1.17 ms | 2.02 ms |
+| 50% deleted | 2.43 ms | 4.20 ms | 2.82 ms | 4.33 ms |
+
+<figure style={{textAlign: 'center'}}>
+  <img
+    src="/img/iceberg-v3-java-write-comparison.png"
+    alt="Two bar charts of the time to build and serialize one deletion vector in Velox and Iceberg Java at 1%, 5%, 20% and 50% of rows deleted: on the left the first deletion vector for a data file, on the right merging into an existing deletion vector; Velox is faster in every case"
+    width="100%"
+  />
+  <figcaption>
+    <em>Building and serializing the same deletion vector in Velox and Iceberg Java.</em>
+  </figcaption>
+</figure>
+
+Velox was 1.7 to 5.5 times faster for the first deletion vector and 1.5 to 7.4
+times faster when merging. Iceberg Java adds each position straight into its
+bitmap, so the order doesn't matter to it. New deletes that reach Velox in
+random order pay for a sort of the new positions, and there Velox is behind
+from 20% deleted up: 15.8 ms against 12.3 ms at 20%, and 41.5 ms against 20.4
+ms at 50%. Building containers as positions arrive, the way Iceberg Java does,
+is the next thing to try. Iceberg Java's times also cover the blob's length,
+magic number and CRC, which take about 0.01 ms for a 131 KB bitmap, so they
+don't change the comparison.
 
 ## What's left
 

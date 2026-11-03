@@ -840,9 +840,14 @@ int32_t RowContainer::compareStringAsc(
     StringView left,
     const DecodedVector& decoded,
     vector_size_t index) {
+  auto right = decoded.valueAt<StringView>(index);
+  // Decides from the prefix without contiguousString(), which reads the
+  // allocator header of an out-of-line 'left'.
+  if (auto result = left.comparePrefix(right)) {
+    return *result;
+  }
   std::string storage;
-  return HashStringAllocator::contiguousString(left, storage)
-      .compare(decoded.valueAt<StringView>(index));
+  return HashStringAllocator::contiguousString(left, storage).compare(right);
 }
 
 // static
@@ -859,6 +864,9 @@ int RowContainer::compareComplexType(
 }
 
 int32_t RowContainer::compareStringAsc(StringView left, StringView right) {
+  if (auto result = left.comparePrefix(right)) {
+    return *result;
+  }
   std::string leftStorage;
   std::string rightStorage;
   return HashStringAllocator::contiguousString(left, leftStorage)

@@ -26,6 +26,7 @@
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/OperatorTestBase.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/type/Time.h"
 
 #include <gmock/gmock.h>
@@ -679,6 +680,69 @@ TEST_F(ToCudfSelectionTest, unsupportedAggregationFallsBack) {
 
   ASSERT_FALSE(wasCudfAggregationUsed(task));
   ASSERT_TRUE(wasDefaultHashAggregationUsed(task));
+}
+
+// A plain array_agg runs on the GPU, which keeps each group's rows in arrival
+// order; one with ORDER BY falls back to the CPU, which sorts each group.
+TEST_F(ToCudfSelectionTest, arrayAggOrderByFallsBack) {
+  auto data = makeRowVector(
+      {"k", "v", "position"},
+      {
+          makeFlatVector<int64_t>({1, 2, 1, 2}),
+          makeFlatVector<int64_t>({30, 20, 10, 40}),
+          makeFlatVector<int64_t>({0, 1, 2, 3}),
+      });
+  createDuckDbTable({data});
+
+  auto run = [&](const std::string& aggregate, const std::string& sql) {
+    auto plan = PlanBuilder()
+                    .values({data})
+                    .singleAggregation({"k"}, {aggregate})
+                    .planNode();
+    return AssertQueryBuilder(duckDbQueryRunner_)
+        .config("cudf.enabled", true)
+        .plan(plan)
+        .assertResults(sql);
+  };
+
+  auto gpuTask =
+      run("array_agg(v)",
+          "SELECT k, array_agg(v ORDER BY position) FROM tmp GROUP BY k");
+  ASSERT_TRUE(wasCudfAggregationUsed(gpuTask));
+  ASSERT_FALSE(wasDefaultHashAggregationUsed(gpuTask));
+
+  auto cpuTask =
+      run("array_agg(v ORDER BY v DESC)",
+          "SELECT k, array_agg(v ORDER BY v DESC) FROM tmp GROUP BY k");
+  ASSERT_FALSE(wasCudfAggregationUsed(cpuTask));
+  ASSERT_TRUE(wasDefaultHashAggregationUsed(cpuTask));
+}
+
+// array_agg over an element type cuDF cannot hold, a MAP or a type with a
+// custom comparison, runs on the CPU.
+TEST_F(ToCudfSelectionTest, arrayAggUnsupportedElementTypeFallsBack) {
+  auto keys = makeFlatVector<int64_t>({1, 2});
+  const std::vector<std::pair<std::string, VectorPtr>> columns{
+      {"m", makeMapVectorFromJson<int64_t, int64_t>({"{1: 10}", "{2: 20}"})},
+      {"tz",
+       makeFlatVector<int64_t>(
+           {pack(0, 0), pack(1, 0)}, TIMESTAMP_WITH_TIME_ZONE())},
+  };
+  for (const auto& [name, column] : columns) {
+    SCOPED_TRACE(name);
+    auto plan = PlanBuilder()
+                    .values({makeRowVector({"k", name}, {keys, column})})
+                    .singleAggregation({"k"}, {"array_agg(" + name + ")"})
+                    .planNode();
+    // Each key has one row, so its array holds that row's value.
+    auto expected =
+        makeRowVector({"k", "a0"}, {keys, makeArrayVector({0, 1}, column)});
+    auto task = AssertQueryBuilder(plan)
+                    .config("cudf.enabled", true)
+                    .assertResults(expected);
+    ASSERT_FALSE(wasCudfAggregationUsed(task));
+    ASSERT_TRUE(wasDefaultHashAggregationUsed(task));
+  }
 }
 
 // Test mixed supported/unsupported should fall back
