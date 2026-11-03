@@ -1639,6 +1639,20 @@ encodeBounds(
   return keys;
 }
 
+// The built-in hierarchical index and every default-constructed factory share
+// nimbleKeyCodec(), whose keys sort bytewise.
+TEST_F(ClusterIndexWriterTest, builtInHierarchicalFactoryUsesNimbleKeyCodec) {
+  const auto* builtInFactory =
+      dynamic_cast<const NimbleHierarchicalClusterIndexFactory*>(
+          &clusterIndexFactory(kHierarchicalClusterIndexName));
+  ASSERT_NE(builtInFactory, nullptr);
+  EXPECT_EQ(builtInFactory->testingKeyCodec(), nimbleKeyCodec());
+  EXPECT_EQ(
+      NimbleHierarchicalClusterIndexFactory{}.testingKeyCodec(),
+      nimbleKeyCodec());
+  EXPECT_EQ(nimbleKeyCodec()->keyComparator(), nullptr);
+}
+
 // The built-in hierarchical index has the default key format, whose key encoder
 // writes the keys and the lookup bounds of the Velox key encoder byte for byte.
 // An exclusive lower bound and an inclusive upper bound move to the next values

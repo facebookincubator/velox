@@ -97,6 +97,10 @@ class HierarchicalKeyCodec {
   }
 };
 
+/// Returns the codec of Nimble's key encoding, which every factory of the
+/// built-in index, kHierarchicalClusterIndexName, shares.
+const std::shared_ptr<const HierarchicalKeyCodec>& nimbleKeyCodec();
+
 /// Creates the writers, readers and key encoders of a hierarchical cluster
 /// index, whose keys its codec defines. An index over keys of another format
 /// registers a factory of its codec under its own name.
