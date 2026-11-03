@@ -21,12 +21,71 @@
 #include "velox/expression/SwitchRewrite.h"
 
 namespace facebook::velox::expression {
+namespace {
+
+// Removes trailing (condition, value) pairs in 'inputs[begin, end - 1)' whose
+// value equals the else value 'inputs[end - 1]'. Such a pair returns the else
+// value whether its condition is true or not. Returns the new end of 'inputs'.
+size_t dropCasesEqualToElse(
+    std::vector<core::TypedExprPtr>& inputs,
+    size_t begin) {
+  const auto& elseValue = inputs.back();
+  auto end = inputs.size() - 1;
+  // When the expression runs, a failing condition raises its error unless the
+  // values it can select are equal. Values that aren't comparable, e.g.
+  // lambdas, can't be checked, so keep their conditions.
+  if (!elseValue->type()->isComparable()) {
+    return end;
+  }
+  while (end - begin >= 2 && *inputs[end - 1] == *elseValue) {
+    end -= 2;
+  }
+  inputs.erase(inputs.begin() + end, inputs.end() - 1);
+  return end;
+}
+
+// Rewrites a simple CASE expression with inputs `subject, when1, value1, ..,
+// whenN, valueN, elseValue`. Returns nullptr if nothing changes.
+core::TypedExprPtr rewriteCase(const core::CallTypedExpr& callExpr) {
+  const auto& inputs = callExpr.inputs();
+  if (inputs.size() % 2 == 1) {
+    // No else value.
+    return nullptr;
+  }
+
+  // The subject is compared to the WHEN values in their common supertype. A
+  // WHEN value of another type can widen it, e.g. to DOUBLE for a BIGINT
+  // subject, while WHEN values of the subject's type don't change it. So only
+  // drop cases after the last WHEN value of another type.
+  const auto& subjectType = inputs[0]->type();
+  size_t begin = 1;
+  for (size_t i = 1; i < inputs.size() - 1; i += 2) {
+    if (*inputs[i]->type() != *subjectType) {
+      begin = i + 2;
+    }
+  }
+
+  auto optimizedInputs = inputs;
+  if (dropCasesEqualToElse(optimizedInputs, begin) == 1) {
+    return optimizedInputs.back();
+  }
+  if (optimizedInputs.size() == inputs.size()) {
+    return nullptr;
+  }
+  return std::make_shared<core::CallTypedExpr>(
+      callExpr.type(), std::move(optimizedInputs), callExpr.name());
+}
+
+} // namespace
 
 core::TypedExprPtr SwitchRewrite::rewrite(const core::TypedExprPtr& expr) {
   if (!expr->isCallKind()) {
     return nullptr;
   }
   const auto* callExpr = expr->asUnchecked<core::CallTypedExpr>();
+  if (callExpr->name() == kCase) {
+    return rewriteCase(*callExpr);
+  }
   if (!(callExpr->name() == kSwitch) && !(callExpr->name() == kIf)) {
     return nullptr;
   }
@@ -82,6 +141,11 @@ core::TypedExprPtr SwitchRewrite::rewrite(const core::TypedExprPtr& expr) {
   // Return NULL if there are no conditions and `else` value is not present.
   if (optimizedInputs.empty()) {
     return core::ConstantTypedExpr::makeNull(expr->type());
+  }
+
+  if (optimizedInputs.size() % 2 == 1 &&
+      dropCasesEqualToElse(optimizedInputs, 0) == 0) {
+    return optimizedInputs.back();
   }
 
   // No condition was dropped: report no rewrite.
