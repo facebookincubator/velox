@@ -32,6 +32,7 @@
 #include <folly/init/Init.h>
 
 #include "velox/buffer/Buffer.h"
+#include "velox/common/Casts.h"
 #include "velox/dwio/nimble/common/Buffer.h"
 #include "velox/dwio/nimble/common/Vector.h"
 #include "velox/dwio/nimble/encodings/FsstEncoding.h"
@@ -128,13 +129,110 @@ class StringPageArena {
 
 std::unique_ptr<Encoding> createFsstDecoder(
     std::string_view encoded,
-    StringPageArena& stringPages) {
+    StringPageArena& stringPages,
+    const Encoding::Options& options) {
   auto stringBufferFactory = [&stringPages](uint32_t bytes) -> void* {
     return stringPages.allocate(bytes);
   };
   return EncodingFactory{}.create(
-      *benchmarkPool(), encoded, std::move(stringBufferFactory));
+      *benchmarkPool(), encoded, std::move(stringBufferFactory), options);
 }
+
+// Provides the reader interface for benchmarks with no null values.
+class BenchmarkReader {
+ public:
+  facebook::velox::BufferPtr& nullsInReadRange() {
+    return nullsInReadRange_;
+  }
+
+  const uint64_t* FOLLY_NULLABLE rawNullsInReadRange() const {
+    return nullptr;
+  }
+
+  bool returnReaderNulls() const {
+    return false;
+  }
+
+ private:
+  // Stays empty because the fixture has no null values.
+  facebook::velox::BufferPtr nullsInReadRange_;
+};
+
+// Collects selected strings for validation of sparse cache reads.
+class BenchmarkStringVisitor {
+ public:
+  using DataType = std::string_view;
+  using Extract = std::nullptr_t;
+
+  // Reserves output space before decode timing begins.
+  explicit BenchmarkStringVisitor(const std::vector<vector_size_t>& rows)
+      : rows_{rows} {
+    values_.reserve(rows.size());
+  }
+
+  BenchmarkReader& reader() {
+    return reader_;
+  }
+
+  vector_size_t numRows() const {
+    return static_cast<vector_size_t>(rows_.size());
+  }
+
+  vector_size_t rowAt(vector_size_t index) const {
+    return rows_[index];
+  }
+
+  vector_size_t currentRow() const {
+    return rowAt(rowIndex_);
+  }
+
+  // Records one decoded value and advances to the next selected row.
+  void process(std::string_view value, bool& atEnd) {
+    values_.push_back(value);
+    ++rowIndex_;
+    atEnd = this->atEnd();
+  }
+
+  // Advances the cursor for nulls reported by the visitor protocol.
+  void processNull(bool& atEnd) {
+    ++rowIndex_;
+    atEnd = this->atEnd();
+  }
+
+  bool allowNulls() const {
+    return false;
+  }
+
+  void addRowIndex(vector_size_t count) {
+    rowIndex_ += count;
+  }
+
+  void addNumValues(vector_size_t /* count */) {}
+
+  bool atEnd() const {
+    return rowIndex_ >= rows_.size();
+  }
+
+  // Reuses output capacity across timed decode iterations.
+  void reset() {
+    rowIndex_ = 0;
+    values_.clear();
+  }
+
+  const std::vector<std::string_view>& values() const {
+    return values_;
+  }
+
+ private:
+  // Supplies null handling required by readWithVisitor().
+  BenchmarkReader reader_;
+  // Refers to selected row numbers owned by the fixture.
+  const std::vector<vector_size_t>& rows_;
+  // Indexes the next selected entry in rows_.
+  vector_size_t rowIndex_{0};
+  // Stores views into the decoder's string pages for validation.
+  std::vector<std::string_view> values_;
+};
 
 uint32_t runFsstSkipSeek(
     Encoding& encoding,
@@ -163,7 +261,8 @@ class FsstBenchmarkFixture {
   FsstBenchmarkFixture()
       : corpus_{makeFsstBenchmarkCorpus()},
         encoded_{encodeFsstFixture(corpus_.values)},
-        decoder_{createFsstDecoder(encoded_, stringPages_)},
+        decoder_{
+            createFsstDecoder(encoded_, stringPages_, Encoding::Options{})},
         output_{benchmarkPool().get(), corpus_.values.size()} {
     validateMetadata();
     decodeDense();
@@ -271,6 +370,215 @@ class FsstBenchmarkFixture {
   uint64_t stablePageBytes_{0};
 };
 
+// Defines the payload distributions used to exercise cache behavior.
+enum class FsstDecodeCacheInput {
+  kRepeated,
+  kUnique,
+  kEntryLimitMixed,
+  kEntryLimitHits,
+  kEarlyDuplicateUniqueTail,
+};
+
+// Primes and validates dense and sparse FSST cache workloads.
+class FsstDecodeCacheBenchmarkFixture {
+ public:
+  // Builds the fixture and allocates output pages before timed iterations.
+  FsstDecodeCacheBenchmarkFixture(
+      uint32_t numRows,
+      FsstDecodeCacheInput input,
+      bool sparse,
+      bool cacheEnabled)
+      : output_{benchmarkPool().get()} {
+    constexpr uint32_t kRepeatedCardinality = 64;
+    constexpr uint32_t kCacheMaxEntries = 256;
+    const uint32_t storageSize = input == FsstDecodeCacheInput::kRepeated
+        ? kRepeatedCardinality
+        : numRows;
+    storage_.reserve(storageSize);
+    for (uint32_t i = 0; i < storageSize; ++i) {
+      storage_.push_back(
+          fmt::format(
+              "fsst/cache/benchmark/common/prefix/value/{:08d}/long/suffix",
+              i));
+    }
+    values_.reserve(numRows);
+    if (input == FsstDecodeCacheInput::kRepeated) {
+      for (uint32_t i = 0; i < numRows; ++i) {
+        values_.push_back(storage_.at(i % kRepeatedCardinality));
+      }
+    } else if (input == FsstDecodeCacheInput::kUnique) {
+      for (uint32_t i = 0; i < numRows; ++i) {
+        values_.push_back(storage_.at(i));
+      }
+    } else if (
+        input == FsstDecodeCacheInput::kEntryLimitMixed ||
+        input == FsstDecodeCacheInput::kEntryLimitHits) {
+      if (numRows <= kCacheMaxEntries) {
+        throw std::runtime_error{
+            "FSST cache limit benchmark needs more rows than entries"};
+      }
+      for (uint32_t i = 0; i < kRepeatedCardinality; ++i) {
+        values_.push_back(storage_.at(i));
+      }
+      values_.push_back(storage_.at(0));
+      for (uint32_t i = kRepeatedCardinality; i < kCacheMaxEntries; ++i) {
+        values_.push_back(storage_.at(i));
+      }
+      uint32_t nextRepeated = 0;
+      if (input == FsstDecodeCacheInput::kEntryLimitHits) {
+        while (values_.size() < numRows) {
+          values_.push_back(storage_.at(nextRepeated++ % kCacheMaxEntries));
+        }
+      } else {
+        uint32_t nextUnique = kCacheMaxEntries;
+        while (values_.size() < numRows) {
+          values_.push_back(storage_.at(nextUnique++));
+          if (values_.size() < numRows) {
+            values_.push_back(
+                storage_.at(nextRepeated++ % kRepeatedCardinality));
+          }
+        }
+      }
+    } else {
+      values_.push_back(storage_.at(0));
+      values_.push_back(storage_.at(0));
+      for (uint32_t i = 1; values_.size() < numRows; ++i) {
+        values_.push_back(storage_.at(i));
+      }
+    }
+    if (sparse) {
+      for (uint32_t row = 0; row < numRows; row += 4) {
+        sparseRows_.push_back(static_cast<vector_size_t>(row));
+      }
+      sparseVisitor_.emplace(sparseRows_);
+    }
+
+    encoded_ = encodeFsstFixture(values_);
+    auto options = fsstOptions();
+    options.enableFsstDecodeCache = cacheEnabled;
+    if (input == FsstDecodeCacheInput::kEntryLimitMixed ||
+        input == FsstDecodeCacheInput::kEntryLimitHits ||
+        input == FsstDecodeCacheInput::kEarlyDuplicateUniqueTail) {
+      options.fsstMaxDecodeCacheEntries = kCacheMaxEntries;
+    }
+    decoder_ = createFsstDecoder(encoded_, stringPages_, options);
+    auto& decoder = *facebook::velox::checkedNotNull(decoder_.get());
+    if (decoder.encodingType() != EncodingType::Fsst ||
+        decoder.rowCount() != numRows) {
+      throw std::runtime_error{"FSST cache benchmark metadata mismatch"};
+    }
+    output_.resize(numRows);
+    decode();
+    validate();
+    decoder.reset();
+    numStablePages_ = stringPages_.pageCount();
+    stablePageBytes_ = stringPages_.allocatedBytes();
+  }
+
+  // Decodes the same input once using the configured row selection.
+  void decode() {
+    decoder_->reset();
+    if (!sparseVisitor_) {
+      decoder_->materialize(
+          static_cast<uint32_t>(output_.size()), output_.data());
+      return;
+    }
+    sparseVisitor_->reset();
+    ReadWithVisitorParams params{};
+    static_cast<FsstEncoding&>(*decoder_).readWithVisitor(
+        *sparseVisitor_, params);
+  }
+
+  std::string_view lastOutput() const {
+    return sparseVisitor_ ? sparseVisitor_->values().back() : output_.back();
+  }
+
+  // Checks decoded values and verifies that timed reads reused string pages.
+  void validate() const {
+    if (!sparseVisitor_) {
+      if (!std::equal(output_.begin(), output_.end(), values_.begin())) {
+        throw std::runtime_error{"FSST cache benchmark decode mismatch"};
+      }
+    } else {
+      const auto& decoded = sparseVisitor_->values();
+      if (decoded.size() != sparseRows_.size()) {
+        throw std::runtime_error{
+            "FSST sparse cache benchmark row-count mismatch"};
+      }
+      for (size_t i = 0; i < sparseRows_.size(); ++i) {
+        if (decoded[i] != values_.at(sparseRows_[i])) {
+          throw std::runtime_error{
+              "FSST sparse cache benchmark decode mismatch"};
+        }
+      }
+    }
+    if (stringPages_.pageCount() != numStablePages_ && numStablePages_ != 0) {
+      throw std::runtime_error{
+          "FSST cache benchmark allocated string pages during timing"};
+    }
+    if (stringPages_.allocatedBytes() != stablePageBytes_ &&
+        stablePageBytes_ != 0) {
+      throw std::runtime_error{
+          "FSST cache benchmark changed string page bytes during timing"};
+    }
+  }
+
+ private:
+  // Owns the string bytes referenced by values_.
+  std::vector<std::string> storage_;
+  // Specifies the logical input, including repeated payloads.
+  std::vector<std::string_view> values_;
+  // Selects every fourth input row for sparse reads.
+  std::vector<vector_size_t> sparseRows_;
+  // Collects sparse results when a sparse read is requested.
+  std::optional<BenchmarkStringVisitor> sparseVisitor_;
+  // Owns the serialized bytes read by decoder_.
+  std::string encoded_;
+  // Keeps decoded string views valid during validation.
+  StringPageArena stringPages_;
+  // Reuses the same FSST symbol table and buffers between iterations.
+  std::unique_ptr<Encoding> decoder_;
+  // Collects dense results when all rows are read.
+  Vector<std::string_view> output_;
+  // Records the number of pages allocated during priming.
+  size_t numStablePages_{0};
+  // Records the page bytes allocated during priming.
+  uint64_t stablePageBytes_{0};
+};
+
+// Measures decode time with fixture setup and validation excluded.
+void benchmarkDecodeCache(
+    uint32_t iterations,
+    uint32_t numRows,
+    FsstDecodeCacheInput input,
+    bool sparse,
+    bool cacheEnabled) {
+  folly::BenchmarkSuspender suspender;
+  FsstDecodeCacheBenchmarkFixture fixture{numRows, input, sparse, cacheEnabled};
+  suspender.dismiss();
+  while (iterations--) {
+    fixture.decode();
+    folly::doNotOptimizeAway(fixture.lastOutput());
+  }
+  suspender.rehire();
+  fixture.validate();
+}
+
+// Measures repeated or unique inputs with 16K rows.
+void benchmarkDecodeCache(
+    uint32_t iterations,
+    bool repeated,
+    bool sparse,
+    bool cacheEnabled) {
+  benchmarkDecodeCache(
+      iterations,
+      16 * 1'024,
+      repeated ? FsstDecodeCacheInput::kRepeated
+               : FsstDecodeCacheInput::kUnique,
+      sparse,
+      cacheEnabled);
+}
+
 BENCHMARK(FSST_Encode_String_SortedStructuredTextMixedLengths, iterations) {
   folly::BenchmarkSuspender suspender;
   FsstBenchmarkFixture fixture;
@@ -363,7 +671,8 @@ BENCHMARK(
   // Time the complete decoder lifecycle. Pausing and resuming the benchmark
   // around every destruction would distort this sub-microsecond operation.
   while (iterations--) {
-    auto decoder = createFsstDecoder(fixture->encoded(), *stringPages);
+    auto decoder = createFsstDecoder(
+        fixture->encoded(), *stringPages, Encoding::Options{});
     folly::doNotOptimizeAway(decoder.get());
   }
 }
@@ -383,6 +692,200 @@ BENCHMARK(
   suspender.rehire();
   fixture.validateDenseResult();
   fixture.validateStablePages();
+}
+
+BENCHMARK(FSST_DecodeDenseRepeated_CacheOff, iterations) {
+  benchmarkDecodeCache(
+      iterations,
+      /*repeated=*/true,
+      /*sparse=*/false,
+      /*cacheEnabled=*/false);
+}
+
+BENCHMARK_RELATIVE(FSST_DecodeDenseRepeated_CacheOn, iterations) {
+  benchmarkDecodeCache(
+      iterations,
+      /*repeated=*/true,
+      /*sparse=*/false,
+      /*cacheEnabled=*/true);
+}
+
+BENCHMARK_DRAW_LINE();
+
+BENCHMARK(FSST_DecodeDenseUnique_CacheOff, iterations) {
+  benchmarkDecodeCache(
+      iterations,
+      /*repeated=*/false,
+      /*sparse=*/false,
+      /*cacheEnabled=*/false);
+}
+
+BENCHMARK_RELATIVE(FSST_DecodeDenseUnique_CacheOn, iterations) {
+  benchmarkDecodeCache(
+      iterations,
+      /*repeated=*/false,
+      /*sparse=*/false,
+      /*cacheEnabled=*/true);
+}
+
+BENCHMARK_DRAW_LINE();
+
+BENCHMARK(FSST_DecodeDenseEntryLimitMixed_1024_CacheOff, iterations) {
+  benchmarkDecodeCache(
+      iterations,
+      1'024,
+      FsstDecodeCacheInput::kEntryLimitMixed,
+      /*sparse=*/false,
+      /*cacheEnabled=*/false);
+}
+
+BENCHMARK_RELATIVE(FSST_DecodeDenseEntryLimitMixed_1024_CacheOn, iterations) {
+  benchmarkDecodeCache(
+      iterations,
+      1'024,
+      FsstDecodeCacheInput::kEntryLimitMixed,
+      /*sparse=*/false,
+      /*cacheEnabled=*/true);
+}
+
+BENCHMARK_DRAW_LINE();
+
+BENCHMARK(FSST_DecodeDenseEntryLimitMixed_16384_CacheOff, iterations) {
+  benchmarkDecodeCache(
+      iterations,
+      16 * 1'024,
+      FsstDecodeCacheInput::kEntryLimitMixed,
+      /*sparse=*/false,
+      /*cacheEnabled=*/false);
+}
+
+BENCHMARK_RELATIVE(FSST_DecodeDenseEntryLimitMixed_16384_CacheOn, iterations) {
+  benchmarkDecodeCache(
+      iterations,
+      16 * 1'024,
+      FsstDecodeCacheInput::kEntryLimitMixed,
+      /*sparse=*/false,
+      /*cacheEnabled=*/true);
+}
+
+BENCHMARK_DRAW_LINE();
+
+BENCHMARK(FSST_DecodeDenseEntryLimitHits_1024_CacheOff, iterations) {
+  benchmarkDecodeCache(
+      iterations,
+      1'024,
+      FsstDecodeCacheInput::kEntryLimitHits,
+      /*sparse=*/false,
+      /*cacheEnabled=*/false);
+}
+
+BENCHMARK_RELATIVE(FSST_DecodeDenseEntryLimitHits_1024_CacheOn, iterations) {
+  benchmarkDecodeCache(
+      iterations,
+      1'024,
+      FsstDecodeCacheInput::kEntryLimitHits,
+      /*sparse=*/false,
+      /*cacheEnabled=*/true);
+}
+
+BENCHMARK_DRAW_LINE();
+
+BENCHMARK(FSST_DecodeDenseEntryLimitHits_16384_CacheOff, iterations) {
+  benchmarkDecodeCache(
+      iterations,
+      16 * 1'024,
+      FsstDecodeCacheInput::kEntryLimitHits,
+      /*sparse=*/false,
+      /*cacheEnabled=*/false);
+}
+
+BENCHMARK_RELATIVE(FSST_DecodeDenseEntryLimitHits_16384_CacheOn, iterations) {
+  benchmarkDecodeCache(
+      iterations,
+      16 * 1'024,
+      FsstDecodeCacheInput::kEntryLimitHits,
+      /*sparse=*/false,
+      /*cacheEnabled=*/true);
+}
+
+BENCHMARK_DRAW_LINE();
+
+BENCHMARK(FSST_DecodeDenseEarlyDuplicateUniqueTail_1024_CacheOff, iterations) {
+  benchmarkDecodeCache(
+      iterations,
+      1'024,
+      FsstDecodeCacheInput::kEarlyDuplicateUniqueTail,
+      /*sparse=*/false,
+      /*cacheEnabled=*/false);
+}
+
+BENCHMARK_RELATIVE(
+    FSST_DecodeDenseEarlyDuplicateUniqueTail_1024_CacheOn,
+    iterations) {
+  benchmarkDecodeCache(
+      iterations,
+      1'024,
+      FsstDecodeCacheInput::kEarlyDuplicateUniqueTail,
+      /*sparse=*/false,
+      /*cacheEnabled=*/true);
+}
+
+BENCHMARK_DRAW_LINE();
+
+BENCHMARK(FSST_DecodeDenseEarlyDuplicateUniqueTail_16384_CacheOff, iterations) {
+  benchmarkDecodeCache(
+      iterations,
+      16 * 1'024,
+      FsstDecodeCacheInput::kEarlyDuplicateUniqueTail,
+      /*sparse=*/false,
+      /*cacheEnabled=*/false);
+}
+
+BENCHMARK_RELATIVE(
+    FSST_DecodeDenseEarlyDuplicateUniqueTail_16384_CacheOn,
+    iterations) {
+  benchmarkDecodeCache(
+      iterations,
+      16 * 1'024,
+      FsstDecodeCacheInput::kEarlyDuplicateUniqueTail,
+      /*sparse=*/false,
+      /*cacheEnabled=*/true);
+}
+
+BENCHMARK_DRAW_LINE();
+
+BENCHMARK(FSST_DecodeSparseRepeated_CacheOff, iterations) {
+  benchmarkDecodeCache(
+      iterations,
+      /*repeated=*/true,
+      /*sparse=*/true,
+      /*cacheEnabled=*/false);
+}
+
+BENCHMARK_RELATIVE(FSST_DecodeSparseRepeated_CacheOn, iterations) {
+  benchmarkDecodeCache(
+      iterations,
+      /*repeated=*/true,
+      /*sparse=*/true,
+      /*cacheEnabled=*/true);
+}
+
+BENCHMARK_DRAW_LINE();
+
+BENCHMARK(FSST_DecodeSparseUnique_CacheOff, iterations) {
+  benchmarkDecodeCache(
+      iterations,
+      /*repeated=*/false,
+      /*sparse=*/true,
+      /*cacheEnabled=*/false);
+}
+
+BENCHMARK_RELATIVE(FSST_DecodeSparseUnique_CacheOn, iterations) {
+  benchmarkDecodeCache(
+      iterations,
+      /*repeated=*/false,
+      /*sparse=*/true,
+      /*cacheEnabled=*/true);
 }
 
 BENCHMARK(FSST_SkipSeek_String_SortedStructuredTextMixedLengths, iterations) {
