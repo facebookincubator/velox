@@ -1022,14 +1022,25 @@ void exportViews(
             reinterpret_cast<uint64_t*>(&out.buffers[2])[rhs];
       });
 
-  auto utf8Views = reinterpret_cast<const uint64_t*>(out.buffers[1]);
+  // Write the views into a new buffer. The vector's values buffer cannot be
+  // exported as is because the conversion replaces its pointers, and 'rows'
+  // may select a subset of the vector.
+  BufferPtr utf8Views = AlignedBuffer::allocate<StringView>(out.length, pool);
+  auto* rawUtf8Views = utf8Views->asMutable<StringView>();
+  holder.setBuffer(1, utf8Views);
   int32_t bufferIdxCache = 0;
   uint64_t bufferAddrCache = 0;
 
+  vector_size_t outputIndex = 0;
   rows.apply([&](vector_size_t i) {
-    auto view = const_cast<uint32_t*>(
-        reinterpret_cast<const uint32_t*>(&utf8Views[2 * i]));
-    if (!vec.isNullAt(i) && view[0] > 12) {
+    auto* outputView = &rawUtf8Views[outputIndex++];
+    if (vec.isNullAt(i)) {
+      std::memset(outputView, 0, sizeof(StringView));
+      return;
+    }
+    std::memcpy(outputView, &vec.rawValues()[i], sizeof(StringView));
+    auto* view = reinterpret_cast<uint32_t*>(outputView);
+    if (view[0] > 12) {
       const uint64_t currAddr = *reinterpret_cast<uint64_t*>(&view[2]);
       // 2. Search for correct index with the buffer-pointer as key. Cache the
       // found buffer's address and index in bufferAddrCache and bufferIdxCache
@@ -1121,7 +1132,6 @@ void exportFlat(
           exportStrings(stringVector, rows, out, pool, holder);
           break;
         case ArrowOptions::VarTypeLayout::kStringView:
-          exportValues(vec, rows, options, out, pool, holder);
           exportViews(stringVector, rows, out, pool, holder);
           break;
         case ArrowOptions::VarTypeLayout::kLarge:

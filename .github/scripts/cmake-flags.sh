@@ -68,14 +68,11 @@ adapters | dep-graph)
     -DVELOX_ENABLE_S3=ON
     -DVELOX_ENABLE_GCS=ON
     -DVELOX_ENABLE_ABFS=ON
+    -DVELOX_ENABLE_FAISS=ON
   )
   if [[ ${USE_CLANG:-false} != "true" ]]; then
-    # Faiss has a link issue under Clang; the remote function service
-    # has open issues under Clang too (#13897).
-    CMAKE_FLAGS+=(
-      -DVELOX_ENABLE_FAISS=ON
-      -DVELOX_ENABLE_REMOTE_FUNCTIONS=ON
-    )
+    # The remote function service has open issues under Clang (#13897).
+    CMAKE_FLAGS+=(-DVELOX_ENABLE_REMOTE_FUNCTIONS=ON)
   fi
   if [[ $BUILD_PROFILE == "adapters" ]]; then
     # WAVE / CUDF gate code under velox/experimental/, which the
@@ -100,10 +97,8 @@ ubuntu-debug | ubuntu-bundled-deps)
     -DVELOX_ENABLE_GEO=ON
     -DVELOX_ENABLE_PARQUET=ON
     -DVELOX_MONO_LIBRARY=ON
+    -DVELOX_ENABLE_FAISS=ON
   )
-  if [[ ${USE_CLANG:-false} != "true" ]]; then
-    CMAKE_FLAGS+=(-DVELOX_ENABLE_FAISS=ON)
-  fi
   if [[ $BUILD_PROFILE == "ubuntu-debug" ]]; then
     # libnuma is baked into the velox-dev:ubuntu-22.04 image. ubuntu-bundled-deps
     # runs on a bare runner that doesn't install it, so it can't enable CXL.

@@ -1506,48 +1506,6 @@ TEST_F(CudfDecimalTest, decimalArithmeticNullScalar) {
   facebook::velox::test::assertEqualVectors(cpuResult, gpuResult);
 }
 
-// Velox comparison functions require both arguments to have the same type
-// (Generic<T1>, Generic<T1>), so raw different-scale comparisons fail at the
-// type-resolution stage before cuDF evaluation.
-TEST_F(CudfDecimalTest, DISABLED_decimalCompareDifferentScales) {
-  auto input = makeRowVector(
-      {"a", "b"},
-      {
-          makeFlatVector<int64_t>({120, 150, 100}, DECIMAL(10, 2)),
-          makeFlatVector<int64_t>({12, 10, 20}, DECIMAL(10, 1)),
-      });
-
-  std::vector<RowVectorPtr> vectors = {input};
-
-  auto plan = exec::test::PlanBuilder()
-                  .values(vectors)
-                  .project({
-                      "a = b AS eq",
-                      "a != b AS neq",
-                      "a < b AS lt",
-                      "a <= b AS lte",
-                      "a > b AS gt",
-                      "a >= b AS gte",
-                  })
-                  .planNode();
-
-  // 1.20 == 1.2, 1.50 > 1.0, 1.00 < 2.0
-  auto expected = makeRowVector(
-      {"eq", "neq", "lt", "lte", "gt", "gte"},
-      {
-          makeNullableFlatVector<bool>({true, false, false}, BOOLEAN()),
-          makeNullableFlatVector<bool>({false, true, true}, BOOLEAN()),
-          makeNullableFlatVector<bool>({false, false, true}, BOOLEAN()),
-          makeNullableFlatVector<bool>({true, false, true}, BOOLEAN()),
-          makeNullableFlatVector<bool>({false, true, false}, BOOLEAN()),
-          makeNullableFlatVector<bool>({true, true, false}, BOOLEAN()),
-      });
-
-  auto result =
-      facebook::velox::exec::test::AssertQueryBuilder(plan).copyResults(pool());
-  facebook::velox::test::assertEqualVectors(expected, result);
-}
-
 TEST_F(CudfDecimalTest, decimalCompareDifferentScalesWithCast) {
   auto input = makeRowVector(
       {"a", "b"},
@@ -1709,10 +1667,11 @@ TEST_F(CudfDecimalTest, decimalCoalesceColumnWithLiteral) {
   facebook::velox::test::assertEqualVectors(cpuResult, gpuResult);
 }
 
-// Disabled: a non-null literal in the first position makes the entire coalesce
-// trivially constant. For simple types Velox folds this away before it reaches
-// cuDF, but the CAST wrapper needed for decimal literals prevents that folding,
-// causing the cuDF compiler to reject the expression.
+// Disabled: expression optimization folds this coalesce into a bare DECIMAL
+// constant. No cuDF evaluator accepts a DECIMAL constant as a whole
+// projection, so the project stays on the CPU.
+// TODO: Re-enable once https://github.com/facebookincubator/velox/issues/20008
+// is fixed.
 TEST_F(CudfDecimalTest, DISABLED_decimalCoalesceLiteralFirst) {
   auto input = makeRowVector(
       {"a"}, {makeFlatVector<int64_t>({100, 200, 300}, DECIMAL(10, 2))});

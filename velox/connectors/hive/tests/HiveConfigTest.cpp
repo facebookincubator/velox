@@ -17,6 +17,7 @@
 #include "velox/connectors/hive/HiveConfig.h"
 #include "gtest/gtest.h"
 #include "velox/common/config/Config.h"
+#include "velox/connectors/hive/HiveConfigProvider.h"
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/dwrf/common/Config.h"
 
@@ -343,4 +344,36 @@ TEST(HiveConfigTest, registeredPropertiesHaveUniqueNames) {
       countProperty(
           properties, HiveConfig::kNimbleFooterSpeculativeIoSizeSession),
       1);
+}
+
+TEST(HiveConfigTest, configProviderDefaultsAndOverrides) {
+  const auto& expected = HiveConfig::registeredProperties();
+  const auto defaults = HiveConfigProvider().properties();
+  ASSERT_EQ(defaults.size(), expected.size());
+  for (size_t i = 0; i < expected.size(); ++i) {
+    EXPECT_EQ(defaults[i].name, expected[i].name);
+    EXPECT_EQ(defaults[i].type, expected[i].type);
+    EXPECT_EQ(defaults[i].defaultValue, expected[i].defaultValue);
+    EXPECT_EQ(defaults[i].description, expected[i].description);
+  }
+  const config::ConfigBase config(
+      std::unordered_map<std::string, std::string>{
+          {HiveConfig::kCacheMetadata, "true"},
+          {HiveConfig::kInsertExistingPartitionsBehavior, "OVERWRITE"}});
+  const HiveConfigProvider provider("hive-config", &config);
+  const auto properties = provider.properties();
+  ASSERT_EQ(properties.size(), expected.size());
+  for (size_t i = 0; i < expected.size(); ++i) {
+    EXPECT_EQ(properties[i].name, expected[i].name);
+    if (properties[i].name == HiveConfig::kCacheMetadataSession) {
+      EXPECT_EQ(properties[i].defaultValue, "true");
+    } else if (
+        properties[i].name ==
+        HiveConfig::kInsertExistingPartitionsBehaviorSession) {
+      EXPECT_EQ(properties[i].defaultValue, "OVERWRITE");
+    } else {
+      EXPECT_EQ(properties[i].defaultValue, expected[i].defaultValue);
+    }
+  }
+  EXPECT_EQ(provider.normalize("cache_metadata", "false"), "false");
 }

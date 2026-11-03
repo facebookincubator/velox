@@ -219,10 +219,13 @@ jobs:
           source /opt/rh/gcc-toolset-14/enable
           g++ --version
           # CC/CXX are set to GCC12 in the adapters image build and it needs to be overridden
-          # after sourcing GCC14.
+          # after sourcing GCC14. Keep clang-15 for the Clang build.
+          if [[ "${USE_CLANG}" != "true" ]]; then
+            export CC=gcc CXX=g++
+          fi
           # Empty TARGETS = full build (push, approved review, sticky).
           # Non-empty = selective build of the requested targets.
-          CC=gcc CXX=g++ make release \
+          make release \
             EXTRA_CMAKE_FLAGS="${EXTRA_CMAKE_FLAGS[*]}" \
             TARGETS="$BUILD_TARGETS" \
             2>&1 | tee /tmp/build-output.log

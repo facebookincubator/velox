@@ -1308,6 +1308,57 @@ TEST_F(RPCRateLimiterTest, staleSuccessUpdatesHorizonWithoutGrowingWindow) {
   EXPECT_TRUE(wait.wait.isReady());
 }
 
+TEST_F(RPCRateLimiterTest, staleSuccessIsReportedAsDiscarded) {
+  const std::string backend = "test.backend";
+  setCeiling(backend, 16);
+  setAdaptive(backend, /*enabled=*/true, /*floor=*/1, /*decreaseFactor=*/0.5);
+  auto& limiter = limiterFor(backend);
+  const auto staleEpoch = limiter.acquire().overloadEpoch();
+  limiter.onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  const auto currentEpoch = limiter.acquire().overloadEpoch();
+  ASSERT_EQ(limiter.stats().limitMilli, 8'000);
+
+  EXPECT_FALSE(limiter.onSuccessForEpoch(staleEpoch, 1, 0));
+  EXPECT_EQ(limiter.stats().limitMilli, 8'000);
+
+  EXPECT_TRUE(limiter.onSuccessForEpoch(currentEpoch, 1, 0));
+}
+
+TEST_F(RPCRateLimiterTest, staleSuccessWithNoCreditToLoseIsNotReported) {
+  const std::string backend = "test.backend";
+  setCeiling(backend, 16);
+  auto& limiter = limiterFor(backend);
+
+  // In fixed mode an overload still opens a new epoch, but success earns
+  // nothing.
+  const auto fixedEpoch = limiter.acquire().overloadEpoch();
+  limiter.onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  EXPECT_TRUE(limiter.onSuccessForEpoch(fixedEpoch, 1, 0));
+
+  // At the ceiling, recovery has nowhere to go.
+  setAdaptive(backend, /*enabled=*/true, /*floor=*/1, /*decreaseFactor=*/0.5);
+  const auto ceilingEpoch = limiter.acquire().overloadEpoch();
+  limiter.onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  limiter.onOutcome(RPCRateLimiter::Outcome::kSuccess, 1'000);
+  ASSERT_EQ(limiter.stats().limitMilli, 16'000);
+  EXPECT_TRUE(limiter.onSuccessForEpoch(ceilingEpoch, 1, 0));
+}
+
+TEST_F(RPCRateLimiterTest, staleSuccessAfterDefaultCapacityDropIsNotReported) {
+  RPCRateLimiter::setDefaultCapacity(16);
+  const std::string backend = "test.default.backend";
+  setAdaptive(backend, /*enabled=*/true, /*floor=*/1, /*decreaseFactor=*/0.5);
+  auto& limiter = limiterFor(backend);
+  const auto staleEpoch = limiter.acquire().overloadEpoch();
+  limiter.onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+
+  // Lowering the default capacity below the stored window leaves it at the
+  // new ceiling, where recovery has nowhere to go.
+  RPCRateLimiter::setDefaultCapacity(4);
+  ASSERT_EQ(limiter.stats().limitMilli, 4'000);
+  EXPECT_TRUE(limiter.onSuccessForEpoch(staleEpoch, 1, 0));
+}
+
 TEST_F(RPCRateLimiterTest, timerSchedulingFailureFailsEveryWaiter) {
   ThrowingTimekeeper timekeeper;
   auto limiter = std::make_shared<RPCRateLimiter>(
@@ -1479,6 +1530,84 @@ TEST_F(RPCRateLimiterTest, fractionalLimitRecoversWithTimeAfterASuccess) {
   EXPECT_EQ(limiter->stats().limitMilli, 1'000);
   EXPECT_EQ(limiter->stats().capacity, 1);
   EXPECT_EQ(limiter->stats().lowWaterLimitMilli, 250);
+}
+
+TEST_F(RPCRateLimiterTest, pacingTimeAccruesOnlyWhileTheWindowIsFractional) {
+  ManualPacingClock clock;
+  auto limiter = makePacingLimiter("test.paced.time", clock);
+  enableFractionalLimit(*limiter, 0.25);
+  limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  ASSERT_EQ(limiter->stats().limitMilli, 1'000);
+  clock.advance(5s);
+  EXPECT_EQ(limiter->stats().pacingNanos, 0);
+
+  limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  ASSERT_EQ(limiter->stats().limitMilli, 500);
+  clock.advance(3s);
+  // The stretch still in progress counts.
+  EXPECT_EQ(limiter->stats().pacingNanos, std::chrono::nanoseconds{3s}.count());
+
+  // A success starts recovery. The window grows back to one unit, and
+  // admission stays paced until the next paced admission commits the growth.
+  limiter->onOutcome(RPCRateLimiter::Outcome::kSuccess, 1);
+  clock.advance(2s);
+  ASSERT_FALSE(limiter->tryAcquireUpTo(1).empty());
+  ASSERT_EQ(limiter->stats().limitMilli, 1'000);
+  clock.advance(7s);
+  EXPECT_EQ(limiter->stats().pacingNanos, std::chrono::nanoseconds{5s}.count());
+}
+
+TEST_F(RPCRateLimiterTest, windowUnitSecondsIntegratesTheWindowOverTime) {
+  ManualPacingClock clock;
+  auto limiter = makePacingLimiter("test.window.integral", clock);
+  enableFractionalLimit(*limiter, 0.25);
+  const auto start = limiter->stats();
+  ASSERT_EQ(start.limitMilli, 2'000);
+
+  // Two units for 3s; four for 1s once the ceiling grows; two for 2s once an
+  // overload halves the window.
+  clock.advance(3s);
+  limiter->amend([](RPCRateLimiter::Config& config) { config.ceiling = 4; });
+  ASSERT_EQ(limiter->stats().limitMilli, 4'000);
+  clock.advance(1s);
+  limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  ASSERT_EQ(limiter->stats().limitMilli, 2'000);
+  clock.advance(2s);
+
+  const auto end = limiter->stats();
+  EXPECT_DOUBLE_EQ(
+      end.windowUnitSeconds - start.windowUnitSeconds, 2 * 3 + 4 * 1 + 2 * 2);
+  EXPECT_EQ(
+      end.clockNanos - start.clockNanos, std::chrono::nanoseconds{6s}.count());
+}
+
+TEST_F(RPCRateLimiterTest, windowUnitSecondsAccruesBeforeAHorizonSample) {
+  ManualPacingClock clock;
+  auto limiter = makePacingLimiter("test.window.probe-floor", clock);
+  limiter->configure(
+      RPCRateLimiter::Config{
+          .adaptive = true,
+          .ceiling = 2,
+          .floor = 0.001,
+          .decreaseFactor = 0.5,
+          .maxProbeInterval = 10s,
+      });
+  // The 1s bootstrap horizon over the 10s probe interval sets a floor of 0.1.
+  for (int i = 0; i < 5; ++i) {
+    limiter->onOutcome(RPCRateLimiter::Outcome::kOverload, 0);
+  }
+  ASSERT_EQ(limiter->stats().limitMilli, 100);
+  const auto start = limiter->stats();
+  clock.advance(10s);
+
+  // A 2s horizon sample raises the probe floor, and the window with it.
+  limiter->onOutcome(
+      RPCRateLimiter::Outcome::kSuccess,
+      1,
+      std::chrono::nanoseconds{2s}.count());
+  const auto end = limiter->stats();
+  ASSERT_EQ(end.limitMilli, 200);
+  EXPECT_DOUBLE_EQ(end.windowUnitSeconds - start.windowUnitSeconds, 0.1 * 10);
 }
 
 TEST_F(RPCRateLimiterTest, fractionalLimitRecoversWithCeilingOne) {

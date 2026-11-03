@@ -25,7 +25,7 @@ velox_add_library(
   PaimonRowKind.h
 )
 
-velox_link_libraries(velox_hive_paimon_split velox_connector velox_hive_connector fmt::fmt)
+velox_link_libraries(velox_hive_paimon_split velox_connector velox_dwio_common fmt::fmt)
 
 velox_add_library(
   velox_hive_paimon_column_handle
@@ -34,14 +34,14 @@ velox_add_library(
   PaimonColumnHandle.h
 )
 
-velox_link_libraries(velox_hive_paimon_column_handle velox_hive_connector velox_type)
+velox_link_libraries(velox_hive_paimon_column_handle velox_file_connector velox_type)
 
 velox_add_library(velox_hive_paimon_table_handle PaimonTableHandle.cpp HEADERS PaimonTableHandle.h)
 
 velox_link_libraries(
   velox_hive_paimon_table_handle
   velox_hive_paimon_split
-  velox_hive_connector
+  velox_file_connector
   velox_core
   velox_type
 )
@@ -63,7 +63,7 @@ velox_link_libraries(
   velox_hive_paimon_split
   velox_hive_paimon_table_handle
   velox_hive_paimon_column_handle
-  velox_hive_connector
+  velox_file_connector
 )
 
 if(${VELOX_BUILD_TESTING})

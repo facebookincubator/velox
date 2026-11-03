@@ -194,6 +194,10 @@ void DeletionVectorWriter::addDeletedPosition(int64_t position) {
       "Deleted position exceeds the maximum the Iceberg deletion-vector "
       "format can represent: {}",
       position);
+  if (sortedPrefix_ == positions_.size() &&
+      (positions_.empty() || position > positions_.back())) {
+    ++sortedPrefix_;
+  }
   positions_.push_back(position);
 }
 
@@ -204,28 +208,28 @@ void DeletionVectorWriter::addDeletedPositions(
   }
 }
 
-size_t DeletionVectorWriter::numDistinctPositions() const {
-  if (std::is_sorted(positions_.begin(), positions_.end())) {
-    size_t distinct = 0;
-    for (size_t i = 0; i < positions_.size(); ++i) {
-      distinct += i == 0 || positions_[i] != positions_[i - 1];
-    }
-    return distinct;
+void DeletionVectorWriter::normalize() {
+  if (sortedPrefix_ == positions_.size()) {
+    return;
   }
-  std::vector<int64_t> sorted = positions_;
-  std::sort(sorted.begin(), sorted.end());
-  return static_cast<size_t>(
-      std::unique(sorted.begin(), sorted.end()) - sorted.begin());
+  const auto middle = positions_.begin() + sortedPrefix_;
+  if (!std::is_sorted(middle, positions_.end())) {
+    std::sort(middle, positions_.end());
+  }
+  std::inplace_merge(positions_.begin(), middle, positions_.end());
+  positions_.erase(
+      std::unique(positions_.begin(), positions_.end()), positions_.end());
+  sortedPrefix_ = positions_.size();
 }
 
-std::string DeletionVectorWriter::serialize() const {
-  // Scans produce positions in increasing order, so the sort is usually
-  // skipped.
-  std::vector<int64_t> sorted = positions_;
-  if (!std::is_sorted(sorted.begin(), sorted.end())) {
-    std::sort(sorted.begin(), sorted.end());
-  }
-  sorted.erase(std::unique(sorted.begin(), sorted.end()), sorted.end());
+size_t DeletionVectorWriter::numDistinctPositions() {
+  normalize();
+  return positions_.size();
+}
+
+std::string DeletionVectorWriter::serialize() {
+  normalize();
+  const auto& sorted = positions_;
 
   // Roaring64Bitmap portable format: [numGroups: uint64] then for each group
   // of positions sharing the high 32 bits: [highBits: uint32] [32-bit
@@ -255,6 +259,7 @@ std::string DeletionVectorWriter::serialize() const {
 
 void DeletionVectorWriter::clear() {
   positions_.clear();
+  sortedPrefix_ = 0;
 }
 
 std::pair<uint64_t, uint64_t> writePuffinFile(

@@ -226,19 +226,6 @@ class HiveConfig : public FileConfig {
   static constexpr const char* kGcsAuthAccessTokenProvider =
       "gcs.auth.access-token-provider";
 
-  /// Maximum number of entries in the file handle cache.
-  static constexpr const char* kNumCacheFileHandles = "num_cached_file_handles";
-
-  /// Expiration time in ms for a file handle in the cache. A value of 0
-  /// means cache will not evict the handle after kFileHandleExprationDurationMs
-  /// has passed.
-  static constexpr const char* kFileHandleExpirationDurationMs =
-      "file-handle-expiration-duration-ms";
-
-  /// Enable file handle cache.
-  static constexpr const char* kEnableFileHandleCache =
-      "file-handle-cache-enabled";
-
   /// Config used to create write files. This config is provided to underlying
   /// file system through hive connector and data sink. The config is free form.
   /// The form should be defined by the underlying file system.
@@ -259,12 +246,6 @@ class HiveConfig : public FileConfig {
   std::optional<std::string> gcsMaxRetryTime() const;
 
   std::optional<std::string> gcsAuthAccessTokenProvider() const;
-
-  int32_t numCacheFileHandles() const;
-
-  uint64_t fileHandleExpirationDurationMs() const;
-
-  bool isFileHandleCacheEnabled() const;
 
   uint64_t fileWriterFlushThresholdBytes() const;
 

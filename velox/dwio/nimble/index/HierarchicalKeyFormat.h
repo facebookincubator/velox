@@ -15,7 +15,9 @@
  */
 #pragma once
 
+#include <bit>
 #include <cstdint>
+#include <type_traits>
 
 namespace facebook::nimble::index {
 
@@ -79,6 +81,26 @@ class HierarchicalKeyFormat final {
   /// Returns whether a level can store values with the specified byte width.
   static constexpr bool isSupportedKeyValueBytes(uint8_t bytes) {
     return bytes == 1 || bytes == 2 || bytes == 4 || bytes == 8;
+  }
+
+  /// Returns the value that a level stores for 'value', a key column value. A
+  /// level orders its values as unsigned integers, so an integer has its sign
+  /// bit flipped, and false is 1 and true is 2. A descending column has every
+  /// bit of its values inverted.
+  ///
+  /// For an ascending TINYINT column, -1 is 0x7F and 1 is 0x81.
+  template <typename T>
+  static uint64_t normalizeKeyValue(T value, bool ascending) {
+    static_assert(std::is_integral_v<T>);
+    if constexpr (std::is_same_v<T, bool>) {
+      const uint8_t normalized = value ? 2 : 1;
+      return ascending ? normalized : static_cast<uint8_t>(~normalized);
+    } else {
+      using Unsigned = std::make_unsigned_t<T>;
+      const auto normalized =
+          std::bit_cast<Unsigned>(value) ^ (Unsigned{1} << (sizeof(T) * 8 - 1));
+      return ascending ? normalized : static_cast<Unsigned>(~normalized);
+    }
   }
 };
 

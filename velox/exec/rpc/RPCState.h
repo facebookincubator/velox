@@ -264,6 +264,10 @@ class RPCState : public std::enable_shared_from_this<RPCState> {
     int64_t numCapacityRetries{0};
     // Retries a hint's minRetries granted after its budget ran out.
     int64_t numCapacityRetryFloorRetries{0};
+    // Transport-reported overloaded attempts summed over completed rows.
+    int64_t numOverloadedAttempts{0};
+    // Successes whose response reported overloaded attempts.
+    int64_t numSuccessesAfterOverload{0};
   };
 
   explicit RPCState(std::shared_ptr<memory::MemoryPool> pool)
@@ -697,6 +701,10 @@ class RPCState : public std::enable_shared_from_this<RPCState> {
   int64_t rttMinNs_{std::numeric_limits<int64_t>::max()};
   int64_t rttMaxNs_{0};
   int64_t numRttSamples_{0};
+
+  // Reported as the OperatorSnapshot fields of the same names.
+  int64_t numOverloadedAttempts_{0};
+  int64_t numSuccessesAfterOverload_{0};
 
   // Latency-gradient concurrency window, fed RTT via onUnitSample(). Both modes
   // use the same learner; setStreamingMode() only picks the (start, max) pair:
