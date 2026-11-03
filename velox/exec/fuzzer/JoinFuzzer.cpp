@@ -369,7 +369,7 @@ RowVectorPtr JoinFuzzer::execute(
             << (plan.executionStrategy == core::ExecutionStrategy::kGrouped
                     ? fmt::format(
                           "({})",
-                          plan.mixedGroupedExecution ? "mixed" : "unmixed")
+                          plan.mixedGroupedExecution ? "mixed" : "uniform")
                     : "")
             << " strategy["
             << (plan.executionStrategy == core::ExecutionStrategy::kGrouped
@@ -778,15 +778,15 @@ void JoinFuzzer::verify(core::JoinType joinType) {
     const int32_t numGroups = randInt(1, probeSource->batches().size());
     // Null-aware joins need the full build side, including keys in other
     // groups.
-    const int32_t numUnmixedGroups = nullAware ? 1 : numGroups;
+    const int32_t numUniformModeGroups = nullAware ? 1 : numGroups;
 
     // Use ungrouped execution.
     altPlans.push_back(joinMaker.makeHashJoinWithTableScan(
         std::nullopt, false, JoinMaker::JoinOrder::NATURAL));
 
-    // Use unmixed mode grouped execution.
+    // Use uniform mode grouped execution.
     altPlans.push_back(joinMaker.makeHashJoinWithTableScan(
-        numUnmixedGroups, false, JoinMaker::JoinOrder::NATURAL));
+        numUniformModeGroups, false, JoinMaker::JoinOrder::NATURAL));
 
     // Use mixed mode grouped execution.
     if (!needRightSideJoin(joinType)) {
@@ -801,9 +801,9 @@ void JoinFuzzer::verify(core::JoinType joinType) {
       altPlans.push_back(joinMaker.makeHashJoinWithTableScan(
           std::nullopt, false, JoinMaker::JoinOrder::FLIPPED));
 
-      // Use unmixed mode grouped execution.
+      // Use uniform mode grouped execution.
       altPlans.push_back(joinMaker.makeHashJoinWithTableScan(
-          numUnmixedGroups, false, JoinMaker::JoinOrder::FLIPPED));
+          numUniformModeGroups, false, JoinMaker::JoinOrder::FLIPPED));
 
       // Use mixed mode grouped execution.
       if (!needRightSideJoin(flipJoinType(joinType))) {
