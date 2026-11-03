@@ -27,6 +27,7 @@
 #include "velox/core/QueryCtx.h"
 #include "velox/expression/Expr.h"
 #include "velox/functions/prestosql/registration/RegistrationFunctions.h"
+#include "velox/functions/prestosql/types/JsonType.h"
 #include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 #include "velox/type/Type.h"
 
@@ -240,11 +241,7 @@ TEST_F(
       nullptr);
 }
 
-// Disabled because this test segfaults in CI while building the typed
-// not use cudf code.
-TEST_F(
-    CudfExpressionSelectionTest,
-    DISABLED_signatureEnforcesConstantArgsSplit) {
+TEST_F(CudfExpressionSelectionTest, signatureEnforcesConstantArgsSplit) {
   // OK: delimiter and limit are constants
   auto ok = optimizeTypedExpr(
       "split(name, ',', 3)",
@@ -385,6 +382,36 @@ TEST_F(CudfExpressionSelectionTest, signatureArrayAccess) {
   }
 }
 
+TEST_F(CudfExpressionSelectionTest, signatureArrayJoin) {
+  auto arrayRowType = ROW({
+      {"names", ARRAY(VARCHAR())},
+      {"documents", ARRAY(JSON())},
+      {"ids", ARRAY(BIGINT())},
+      {"sep", VARCHAR()},
+  });
+
+  for (const auto* ok : {"array_join(names, ', ')", "array_join(names, '')"}) {
+    SCOPED_TRACE(ok);
+    auto expr =
+        optimizeTypedExpr(ok, arrayRowType, queryCtx_.get(), execCtx_.get());
+    ASSERT_TRUE(canExprRunOnGpu(expr, queryCtx_.get(), pool_.get()));
+  }
+
+  // Stays on the CPU: a separator column or a null separator, the null
+  // replacement form, elements that are not plain VARCHAR.
+  for (const auto* bad :
+       {"array_join(names, sep)",
+        "array_join(names, cast(null as varchar))",
+        "array_join(names, ', ', 'n/a')",
+        "array_join(ids, ', ')",
+        "array_join(documents, ', ')"}) {
+    SCOPED_TRACE(bad);
+    auto expr =
+        optimizeTypedExpr(bad, arrayRowType, queryCtx_.get(), execCtx_.get());
+    ASSERT_FALSE(canExprRunOnGpu(expr, queryCtx_.get(), pool_.get()));
+  }
+}
+
 TEST_F(CudfExpressionSelectionTest, signatureUnixtime) {
   auto unixtimeRowType = ROW({
       {"seconds", DOUBLE()},
@@ -519,12 +546,7 @@ TEST_F(CudfExpressionSelectionTest, switchWithElseRetainsNestedTypes) {
   }
 }
 
-TEST_F(CudfExpressionSelectionTest, DISABLED_castAndTryCast) {
-  // TODO (dm): This is required for passing of castAndTryCast test but breaks
-  // others. This is because ASTExpr agrees to support bad casts. remove after
-  // ASTExpr checks cast types
-  // CudfConfig::getInstance().astExpressionEnabled = false;
-
+TEST_F(CudfExpressionSelectionTest, castAndTryCast) {
   // OK: cast bigint -> double (supported by cuDF)
   auto okCast = optimizeTypedExpr(
       "cast(a AS double)", rowType_, queryCtx_.get(), execCtx_.get());

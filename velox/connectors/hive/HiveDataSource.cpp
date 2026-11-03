@@ -80,7 +80,7 @@ std::vector<column_index_t> HiveDataSource::setupBucketConversion() {
     auto newScanSpec = makeScanSpec(
         readerOutputType_,
         subfields_,
-        filters_,
+        fileScanState_->filters,
         /*indexColumns=*/{},
         tableHandle_->dataColumns(),
         partitionKeys_,
@@ -89,8 +89,8 @@ std::vector<column_index_t> HiveDataSource::setupBucketConversion() {
         fileConfig_->readStatsBasedFilterReorderDisabled(
             connectorQueryCtx_->sessionProperties()),
         pool_);
-    newScanSpec->moveAdaptationFrom(*scanSpec_);
-    scanSpec_ = std::move(newScanSpec);
+    newScanSpec->moveAdaptationFrom(*fileScanState_->scanSpec);
+    fileScanState_->scanSpec = std::move(newScanSpec);
   }
   return bucketChannels;
 }
@@ -99,7 +99,7 @@ void HiveDataSource::setupRowIdColumn() {
   auto hiveSplit = checkedPointerCast<const HiveConnectorSplit>(split_);
   VELOX_CHECK(hiveSplit->rowIdProperties.has_value());
   const auto& props = *hiveSplit->rowIdProperties;
-  auto* rowId = scanSpec_->childByName(*specialColumns_.rowId);
+  auto* rowId = fileScanState_->scanSpec->childByName(*specialColumns_.rowId);
   VELOX_CHECK_NOT_NULL(rowId);
   auto& rowIdType =
       readerOutputType_->findChild(*specialColumns_.rowId)->asRow();
@@ -149,10 +149,10 @@ std::unique_ptr<FileSplitReader> HiveDataSource::createSplitReader() {
       ioStats_,
       fileHandleFactory_,
       ioExecutor_,
-      scanSpec_,
+      fileScanState_->scanSpec,
       &infoColumns_,
       std::move(bucketChannels),
-      /*subfieldFiltersForValidation=*/&filters_);
+      /*subfieldFiltersForValidation=*/&fileScanState_->filters);
 }
 
 std::unordered_map<std::string, RuntimeMetric>
@@ -191,7 +191,7 @@ std::shared_ptr<wave::WaveDataSource> HiveDataSource::toWaveDataSource() {
         checkedPointerCast<const HiveTableHandle>(tableHandle_);
     waveDataSource_ = waveDelegateHook_(
         hiveTableHandle,
-        scanSpec_,
+        fileScanState_->scanSpec,
         readerOutputType_,
         &partitionKeys_,
         fileHandleFactory_,

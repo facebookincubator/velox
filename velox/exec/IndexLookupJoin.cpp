@@ -1525,6 +1525,12 @@ void IndexLookupJoin::prepareOutputRowMappings(size_t outputBatchSize) {
 }
 
 void IndexLookupJoin::close() {
+  // Only the collector owns split records. Early closure leaves unfinished
+  // splits for Driver's abandonment path.
+  if (isIndexSplitCollector_ && noMoreIndexSplits_ && isFinished()) {
+    operatorCtx_->task()->splitsFinished(
+        indexSourceNodeId_, *operatorCtx_->driverCtx());
+  }
   recordConnectorStats();
   // TODO: add close method for index source if needed to free up resource
   // or shutdown index source gracefully.

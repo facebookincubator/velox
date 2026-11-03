@@ -119,7 +119,7 @@ jobs:
 
       - name: Bake Images
         id: bake
-        uses: docker/bake-action@018cb6412ab401ebaa809aa5f85966b74628600f # v7.4.0
+        uses: docker/bake-action@59cb1203cd42bcefd40a1b6d73b589e48c86040e # v7.5.0
         with:
           targets: ${{ matrix.target }}-${{ matrix.os.platform }}
           push: ${{ github.repository == 'facebookincubator/velox' && github.event_name != 'pull_request'}}
@@ -243,7 +243,7 @@ jobs:
           rm /tmp/centos9.tar
 
       - name: Build and Push
-        uses: docker/bake-action@018cb6412ab401ebaa809aa5f85966b74628600f # v7.4.0
+        uses: docker/bake-action@59cb1203cd42bcefd40a1b6d73b589e48c86040e # v7.5.0
         with:
           targets: ${{ matrix.target }}
           push: ${{ github.repository == 'facebookincubator/velox' && github.event_name != 'pull_request'}}

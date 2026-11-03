@@ -91,6 +91,10 @@ struct MetaInternalCompressionParameters {
   int16_t decompressionLevel = 0;
   bool useVariableBitWidthCompressor = true;
   MetaInternalCompressionKey compressionKey;
+  /// Copied from
+  /// CompressionOptions::internalDecompressionVerificationRateOverrides.
+  std::vector<std::pair<DataType, int32_t>>
+      decompressionVerificationRateOverrides{};
 };
 
 struct OpenZLCompressionParameters {
@@ -131,6 +135,12 @@ struct CompressionOptions {
   uint32_t internalDecompressionLevel = 2;
   bool useVariableBitWidthCompressor = false;
   MetaInternalCompressionKey metaInternalCompressionKey{};
+  /// Per-data-type rates for the MetaInternal compressor's decompression
+  /// verification, which decompresses the output of one in every `rate`
+  /// compress calls and compares it with the input. Data types without an entry
+  /// skip the verification, as does a rate of 0.
+  std::vector<std::pair<DataType, int32_t>>
+      internalDecompressionVerificationRateOverrides{};
   uint64_t openzlMinCompressionSize = kOpenZLMinCompressionSize;
   int32_t openzlCompressionLevel = 6;
   int32_t openzlDecompressionLevel = 3;

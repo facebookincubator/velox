@@ -467,8 +467,10 @@ TEST_F(FixedPointPlanNodesTest, chainValidation) {
         "use ConvergenceConfig::globalVerdict");
   }
 
-  // A verdict plan reads every worker's rows, so plans before it must gather
-  // them to the one worker that runs it.
+  // A verdict plan after convergence plans reads every worker's rows, so they
+  // must gather them to the one worker that runs it.  Without convergence
+  // plans, it reads worker 0's own state, starting with a StateSourceNode, and
+  // the body must shuffle, which keeps the workers in step.
   {
     auto convergenceSource =
         std::make_shared<StateSourceNode>("cs", "n", schema, /*delta=*/false);
@@ -484,9 +486,29 @@ TEST_F(FixedPointPlanNodesTest, chainValidation) {
     VELOX_ASSERT_USER_THROW(
         fixedPoint(
             {stateSource()},
-            ConvergenceConfig::globalVerdict({}, exchange("ce", schema), 5)),
-        "FixedPointNode: a verdict plan requires convergence plans that gather "
-        "to it");
+            ConvergenceConfig::workerZeroVerdict(exchange("ce", schema), 5)),
+        "the first convergence plan must start with a StateSourceNode");
+
+    auto ownVerdict = [&] {
+      return ConvergenceConfig::workerZeroVerdict(
+          std::make_shared<ProjectNode>(
+              "cv",
+              std::vector<std::string>{"c"},
+              std::vector<TypedExprPtr>{std::make_shared<ConstantTypedExpr>(
+                  BOOLEAN(), Variant(true))},
+              convergenceSource),
+          5);
+    };
+    VELOX_ASSERT_USER_THROW(
+        fixedPoint({stateSource()}, ownVerdict()),
+        "FixedPointNode: a verdict plan without convergence plans requires a "
+        "body that shuffles");
+
+    auto node = fixedPoint(
+        {shuffleOut("p", stateSource(), 2, schema), exchange("e", schema)},
+        ownVerdict());
+    EXPECT_EQ(node->numWorkers(), 2);
+    EXPECT_TRUE(node->readsPeers());
   }
 }
 

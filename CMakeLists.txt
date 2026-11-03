@@ -301,8 +301,28 @@ if(${VELOX_ENABLE_DUCKDB})
 endif()
 
 if(VELOX_ENABLE_FAISS OR VELOX_ENABLE_NIMBLE)
+  # On macOS, OpenMP and BLAS for FAISS come from Homebrew, which installs
+  # them outside the default search paths.
+  if(CMAKE_SYSTEM_NAME MATCHES "Darwin")
+    foreach(formula libomp openblas)
+      execute_process(
+        COMMAND brew --prefix ${formula}
+        RESULT_VARIABLE BREW_RESULT
+        OUTPUT_VARIABLE BREW_PREFIX
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+      )
+      if(BREW_RESULT EQUAL 0 AND EXISTS "${BREW_PREFIX}")
+        list(APPEND CMAKE_PREFIX_PATH "${BREW_PREFIX}")
+      endif()
+    endforeach()
+  endif()
+  # The installed FAISS package links OpenMP::OpenMP_CXX without defining it,
+  # so the target must exist in this scope before FAISS is resolved.
+  find_package(OpenMP REQUIRED)
   velox_set_source(faiss)
-  velox_resolve_dependency(faiss)
+  # FAISS 1.11.0 does not install faiss/impl/zerocopy_io.h, which the vector
+  # index includes.
+  velox_resolve_dependency(faiss 1.12.0)
   if(NOT TARGET FAISS::faiss)
     add_library(FAISS::faiss ALIAS faiss)
   endif()
@@ -315,9 +335,43 @@ if(DEFINED ENV{INSTALL_PREFIX})
   include_directories(BEFORE "$ENV{INSTALL_PREFIX}/include")
 endif()
 
+# Homebrew's unversioned openssl formula is OpenSSL 4, which Folly at
+# FB_OS_VERSION and the bundled gRPC do not build against. On macOS, default to
+# Homebrew's OpenSSL 3 unless the caller already chose an OpenSSL root, as a
+# CMake variable or in the environment.
+if(APPLE AND NOT OPENSSL_ROOT_DIR AND "$ENV{OPENSSL_ROOT_DIR}" STREQUAL "")
+  find_program(VELOX_BREW_EXECUTABLE brew)
+  if(VELOX_BREW_EXECUTABLE)
+    execute_process(
+      COMMAND ${VELOX_BREW_EXECUTABLE} --prefix openssl@3
+      RESULT_VARIABLE VELOX_BREW_OPENSSL3_RESULT
+      OUTPUT_VARIABLE VELOX_BREW_OPENSSL3_PREFIX
+      OUTPUT_STRIP_TRAILING_WHITESPACE
+      ERROR_QUIET
+    )
+    if(VELOX_BREW_OPENSSL3_RESULT EQUAL 0 AND IS_DIRECTORY "${VELOX_BREW_OPENSSL3_PREFIX}")
+      message(STATUS "Using Homebrew OpenSSL 3 from ${VELOX_BREW_OPENSSL3_PREFIX}")
+      set(OPENSSL_ROOT_DIR "${VELOX_BREW_OPENSSL3_PREFIX}")
+    else()
+      message(
+        WARNING
+        "Homebrew openssl@3 was not found. Folly at FB_OS_VERSION and the bundled gRPC do not build against OpenSSL 4; run scripts/setup-macos.sh or set OPENSSL_ROOT_DIR."
+      )
+    endif()
+  endif()
+endif()
+
 # We look for OpenSSL here to cache the result enforce the version across our
 # dependencies.
 find_package(OpenSSL REQUIRED)
+
+if(APPLE)
+  # Folly::folly_deps exports $(brew --prefix)/include (for libevent) ahead of
+  # the OpenSSL include directory. With Homebrew's OpenSSL 4 linked there, Velox
+  # sources that include <openssl/*.h> would compile against OpenSSL 4 headers
+  # while linking the OpenSSL found above, so put its headers first.
+  include_directories(SYSTEM ${OPENSSL_INCLUDE_DIR})
+endif()
 
 if(
   VELOX_ENABLE_CCACHE

@@ -35,6 +35,7 @@
 #include <cudf/io/parquet_schema.hpp>
 #include <cudf/io/types.hpp>
 
+#include <optional>
 #include <span>
 #include <string>
 #include <unordered_set>
@@ -57,6 +58,14 @@ std::unique_ptr<cudf::table> castDecimalColumnsToVeloxTypes(
     size_t numPrependedColumns,
     cuda::stream_ref stream,
     rmm::device_async_resource_ref mr);
+
+/// Returns the type a TIMESTAMP constant takes to match the split reader's
+/// timestamp columns: the session's timestamp type setting, or the connector's
+/// when the session sets none. Returns nullopt when that setting is
+/// TIMESTAMP_DAYS, a unit no TIMESTAMP scalar can take.
+std::optional<cudf::type_id> constantTimestampType(
+    const CudfHiveConfig& config,
+    const config::ConfigBase* session);
 
 class CudfSplitReader : public NvtxHelper {
  public:
@@ -124,6 +133,11 @@ class CudfSplitReader : public NvtxHelper {
   virtual void resetSplit();
 
  protected:
+  // Returns the connector config the reader was built with.
+  const CudfHiveConfig& cudfHiveConfig() const {
+    return *cudfHiveConfig_;
+  }
+
   // Performs split-specific setup after the Parquet footer is loaded.
   virtual void prepareSplitInternal(dwio::common::RuntimeStats& runtimeStats);
 
@@ -147,6 +161,13 @@ class CudfSplitReader : public NvtxHelper {
   // Setup the cuDF data source. Marks the split empty when its missing data
   // file is ignored.
   void setupCudfDataSource();
+
+  // Returns whether the session ignores missing files.
+  bool ignoreMissingFiles() const;
+
+  // Marks the split empty after an ignored missing data file, dropping its
+  // data source and footer metadata.
+  void markSplitEmpty();
 
   // Create the parquet reader and select the row group passes to read.
   void createCudfReader();

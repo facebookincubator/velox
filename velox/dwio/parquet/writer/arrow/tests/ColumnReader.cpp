@@ -159,7 +159,6 @@ int LevelDecoder::setData(
     default:
       throw ParquetException("Unknown encoding type for levels.");
   }
-  return -1;
 }
 
 void LevelDecoder::setDataV2(
@@ -1467,8 +1466,6 @@ std::shared_ptr<ColumnReader> ColumnReader::make(
     default:
       ParquetException::NYI("type reader not implemented");
   }
-  // Unreachable code, but suppress compiler warning.
-  return std::shared_ptr<ColumnReader>(nullptr);
 }
 
 // ----------------------------------------------------------------------.
@@ -2517,8 +2514,6 @@ std::shared_ptr<RecordReader> RecordReader::make(
       throw ParquetException(ss.str());
     }
   }
-  // Unreachable code, but suppress compiler warning.
-  return nullptr;
 }
 
 } // namespace internal

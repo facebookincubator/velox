@@ -189,11 +189,6 @@ function install_double_conversion {
   cmake_install_dir double-conversion -DBUILD_TESTING=OFF
 }
 
-function install_ranges_v3 {
-  wget_and_untar https://github.com/ericniebler/range-v3/archive/refs/tags/"${RANGE_V3_VERSION}".tar.gz ranges_v3
-  cmake_install_dir ranges_v3 -DRANGES_ENABLE_WERROR=OFF -DRANGE_V3_TESTS=OFF -DRANGE_V3_EXAMPLES=OFF
-}
-
 function install_abseil {
   # Abseil is a dependency of multiple libraries, so install_abseil can be
   # invoked more than once per run. Build it only on the first call within a

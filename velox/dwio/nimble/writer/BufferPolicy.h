@@ -18,7 +18,7 @@
 #include <memory>
 #include <vector>
 
-#include "velox/dwio/nimble/velox/RowRange.h"
+#include "velox/dwio/nimble/common/RowRange.h"
 #include "velox/vector/ComplexVector.h"
 
 namespace facebook::nimble {

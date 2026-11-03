@@ -17,6 +17,7 @@
 #include "velox/core/Expressions.h"
 #include "velox/expression/Expr.h"
 #include "velox/expression/ExprRewriteRegistry.h"
+#include "velox/expression/ExprUtils.h"
 
 namespace facebook::velox::expression {
 
@@ -54,23 +55,28 @@ core::TypedExprPtr tryConstantFold(
 }
 
 // Optimizes all inputs to expr and returns an expression that is of the same
-// kind as expr but with optimized inputs.
+// kind as expr but with optimized inputs. Returns expr itself when no input
+// changed.
 core::TypedExprPtr optimizeInputs(
     const core::TypedExprPtr& expr,
     core::QueryCtx* queryCtx,
     memory::MemoryPool* pool,
     const MakeFailExpr& makeFailExpr) {
+  // Calls and NULLIF: rebuild the node only if an input changed.
   if (expr->isCallKind() || expr->isNullIfKind()) {
     std::vector<core::TypedExprPtr> optimizedInputs;
     optimizedInputs.reserve(expr->inputs().size());
     for (const auto& input : expr->inputs()) {
       optimizedInputs.push_back(optimize(input, queryCtx, pool, makeFailExpr));
     }
+    if (utils::sameInputs(expr, optimizedInputs)) {
+      return expr;
+    }
 
     if (expr->isCallKind()) {
       const auto* callExpr = expr->asUnchecked<core::CallTypedExpr>();
       return std::make_shared<core::CallTypedExpr>(
-          callExpr->type(), optimizedInputs, callExpr->name());
+          callExpr->type(), std::move(optimizedInputs), callExpr->name());
     }
 
     const auto* nullIfExpr = expr->asUnchecked<core::NullIfTypedExpr>();
@@ -78,20 +84,28 @@ core::TypedExprPtr optimizeInputs(
         optimizedInputs[0], optimizedInputs[1], nullIfExpr->commonType());
   }
 
+  // Casts: rebuild only if the input changed.
   if (expr->isCastKind()) {
-    const auto optimizedInput =
-        optimize(expr->inputs().at(0), queryCtx, pool, makeFailExpr);
+    const auto& input = expr->inputs().at(0);
+    auto optimizedInput = optimize(input, queryCtx, pool, makeFailExpr);
+    if (optimizedInput.get() == input.get()) {
+      return expr;
+    }
     const auto* castExpr = expr->asUnchecked<core::CastTypedExpr>();
     return std::make_shared<core::CastTypedExpr>(
-        expr->type(), optimizedInput, castExpr->isTryCast());
+        expr->type(), std::move(optimizedInput), castExpr->isTryCast());
   }
 
+  // Lambdas: rebuild only if the body changed.
   if (expr->isLambdaKind()) {
     const auto* lambdaExpr = expr->asUnchecked<core::LambdaTypedExpr>();
-    const auto foldedBody =
+    auto foldedBody =
         optimize(lambdaExpr->body(), queryCtx, pool, makeFailExpr);
+    if (foldedBody.get() == lambdaExpr->body().get()) {
+      return expr;
+    }
     return std::make_shared<core::LambdaTypedExpr>(
-        lambdaExpr->signature(), foldedBody);
+        lambdaExpr->signature(), std::move(foldedBody));
   }
 
   return expr;

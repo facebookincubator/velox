@@ -22,7 +22,7 @@
 #include "dwio/utils/BufferedWriteFile.h"
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/file/File.h"
-#include "velox/dwio/nimble/velox/NimbleConfig.h"
+#include "velox/dwio/nimble/common/NimbleConfig.h"
 #include "velox/dwio/nimble/writer/Writer.h"
 #include "velox/dwio/nimble/writer/fb/NimbleWriterOptionBuilder.h"
 

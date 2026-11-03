@@ -47,7 +47,7 @@
 #include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSizeEstimation.h"
 #include "velox/dwio/nimble/encodings/tests/SharedDictionaryEncodingTestUtils.h"
-#include "velox/dwio/nimble/velox/SharedDictionaryWriter.h"
+#include "velox/dwio/nimble/writer/SharedDictionaryWriter.h"
 
 namespace facebook::nimble {
 namespace {

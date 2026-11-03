@@ -177,7 +177,6 @@ void mk_detail(
   genrand_integer(
       &nTemp, DIST_UNIFORM, 0, 99, 0, WR_IS_RETURNED, dsdGenContext);
   if (nTemp < WR_RETURN_PCT) {
-    struct W_WEB_RETURNS_TBL w_web_returns;
     struct W_WEB_RETURNS_TBL* rr = &dsdGenContext.g_w_web_returns;
     mk_w_web_returns(rr, 1, dsdGenContext);
 

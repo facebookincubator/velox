@@ -15,7 +15,10 @@
  */
 #include "velox/connectors/hive/paimon/PaimonConnector.h"
 
+#include "velox/common/Casts.h"
+#include "velox/connectors/hive/paimon/PaimonColumnHandle.h"
 #include "velox/connectors/hive/paimon/PaimonDataSource.h"
+#include "velox/connectors/hive/paimon/PaimonTableHandle.h"
 
 namespace facebook::velox::connector::hive::paimon {
 
@@ -23,22 +26,50 @@ PaimonConnector::PaimonConnector(
     const std::string& id,
     std::shared_ptr<const config::ConfigBase> config,
     folly::Executor* ioExecutor)
-    : HiveConnector(id, config, ioExecutor),
-      paimonConfig_(std::make_shared<PaimonConfig>(connectorConfig())) {}
+    : FileConnector(
+          id,
+          std::make_shared<PaimonConfig>(std::move(config)),
+          ioExecutor),
+      paimonConfig_(std::static_pointer_cast<PaimonConfig>(fileConfig_)),
+      configProvider_(
+          PaimonConfig::registeredProperties(),
+          id,
+          connectorConfig().get()) {}
 
 std::unique_ptr<DataSource> PaimonConnector::createDataSource(
     const RowTypePtr& outputType,
     const ConnectorTableHandlePtr& tableHandle,
     const ColumnHandleMap& columnHandles,
     ConnectorQueryCtx* connectorQueryCtx) {
+  VELOX_CHECK_NOT_NULL(tableHandle, "Missing Paimon table handle");
+  const auto paimonTableHandle =
+      checkedPointerCast<const PaimonTableHandle>(tableHandle);
+  VELOX_USER_CHECK_EQ(
+      paimonTableHandle->connectorId(),
+      connectorId(),
+      "Paimon table handle connector does not match connector instance");
   return std::make_unique<PaimonDataSource>(
       outputType,
-      tableHandle,
+      paimonTableHandle,
       columnHandles,
       &fileHandleFactory_,
       ioExecutor_,
       connectorQueryCtx,
       paimonConfig_);
+}
+
+std::unique_ptr<DataSink> PaimonConnector::createDataSink(
+    RowTypePtr /*inputType*/,
+    ConnectorInsertTableHandlePtr /*connectorInsertTableHandle*/,
+    ConnectorQueryCtx* /*connectorQueryCtx*/,
+    CommitStrategy /*commitStrategy*/) {
+  VELOX_UNSUPPORTED("Paimon connector does not support writes");
+}
+
+void PaimonConnector::registerSerDe() {
+  PaimonColumnHandle::registerSerDe();
+  PaimonConnectorSplit::registerSerDe();
+  PaimonTableHandle::registerSerDe();
 }
 
 } // namespace facebook::velox::connector::hive::paimon

@@ -36,7 +36,7 @@
 #include "velox/common/memory/MallocAllocator.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/dwio/common/SeekableInputStream.h"
-#include "velox/dwio/nimble/velox/ChunkedStreamWriter.h"
+#include "velox/dwio/nimble/writer/ChunkedStreamWriter.h"
 #include "velox/serializers/KeyEncoder.h"
 
 namespace facebook::nimble::index::test {

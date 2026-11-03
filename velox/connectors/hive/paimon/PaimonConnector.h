@@ -15,22 +15,28 @@
  */
 #pragma once
 
-#include "velox/connectors/hive/HiveConnector.h"
+#include "velox/connectors/hive/FileConfigProvider.h"
+#include "velox/connectors/hive/FileConnector.h"
 #include "velox/connectors/hive/paimon/PaimonConfig.h"
 
 namespace facebook::velox::connector::hive::paimon {
 
-/// Provides Paimon table format support by extending HiveConnector.
-///
-/// Creates PaimonDataSource instances that handle Paimon's multi-file splits
-/// (one split = one bucket with multiple data files across LSM-tree levels).
-/// Reuses HiveConnector's ORC/Parquet readers directly — no Arrow bridge.
-class PaimonConnector final : public HiveConnector {
+/// Connector for Paimon table scans. Creates PaimonDataSource and reuses the
+/// common File scan pipeline and DWIO readers for physical file access.
+class PaimonConnector final : public FileConnector {
  public:
   PaimonConnector(
       const std::string& id,
       std::shared_ptr<const config::ConfigBase> config,
       folly::Executor* ioExecutor);
+
+  const config::ConfigProvider* configProvider() const override {
+    return &configProvider_;
+  }
+
+  bool canAddDynamicFilter() const override {
+    return true;
+  }
 
   /// Creates PaimonDataSource for reading from Paimon tables.
   std::unique_ptr<DataSource> createDataSource(
@@ -39,8 +45,29 @@ class PaimonConnector final : public HiveConnector {
       const ColumnHandleMap& columnHandles,
       ConnectorQueryCtx* connectorQueryCtx) override;
 
+  bool supportsSplitPreload() const override {
+    // TODO: Support asynchronous preparation of multi-file splits.
+    return false;
+  }
+
+  bool supportsIndexLookup() const override {
+    return false;
+  }
+
+  /// Paimon writes are not supported.
+  std::unique_ptr<DataSink> createDataSink(
+      RowTypePtr inputType,
+      ConnectorInsertTableHandlePtr connectorInsertTableHandle,
+      ConnectorQueryCtx* connectorQueryCtx,
+      CommitStrategy commitStrategy) override;
+
+  /// Registers serde for Paimon table, column and split handles.
+  /// Callers must register type, filter and expression serde separately.
+  static void registerSerDe();
+
  private:
   const std::shared_ptr<PaimonConfig> paimonConfig_;
+  FileConfigProvider configProvider_;
 };
 
 class PaimonConnectorFactory final : public ConnectorFactory {

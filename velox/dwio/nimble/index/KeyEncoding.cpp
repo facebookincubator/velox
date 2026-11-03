@@ -37,7 +37,8 @@ namespace facebook::nimble::index {
 std::unique_ptr<KeyEncoding> KeyEncoding::create(
     velox::memory::MemoryPool& pool,
     std::string_view encodedData,
-    std::function<void*(uint32_t)> stringBufferFactory) {
+    std::function<void*(uint32_t)> stringBufferFactory,
+    const KeyComparator* comparator) {
   NIMBLE_CHECK_GE(
       encodedData.size(),
       EncodingPrefix::kRowCountOffset,
@@ -53,11 +54,15 @@ std::unique_ptr<KeyEncoding> KeyEncoding::create(
       const uint32_t count = encoding->rowCount();
       std::vector<std::string_view> values(count);
       encoding->materialize(count, values.data());
-      return std::make_unique<TrivialKeyEncoding>(std::move(values));
+      return std::make_unique<TrivialKeyEncoding>(
+          std::move(values), comparator);
     }
     case EncodingType::Prefix:
       return std::make_unique<PrefixKeyEncoding>(
-          encodedData, encoding->rowCount(), encoding->dataOffset());
+          encodedData,
+          encoding->rowCount(),
+          encoding->dataOffset(),
+          comparator);
     default:
       NIMBLE_FAIL(
           "Unsupported key encoding type: {}",
@@ -95,15 +100,19 @@ class TrivialKeyCursor final : public KeyCursor {
 
 } // namespace
 
-TrivialKeyEncoding::TrivialKeyEncoding(std::vector<std::string_view> values)
-    : values_{std::move(values)} {}
+TrivialKeyEncoding::TrivialKeyEncoding(
+    std::vector<std::string_view> values,
+    const KeyComparator* comparator)
+    : values_{std::move(values)}, comparator_{comparator} {}
 
 std::optional<uint32_t> TrivialKeyEncoding::seek(
     std::string_view value,
     bool inclusive) const {
-  const auto it = inclusive
-      ? std::lower_bound(values_.begin(), values_.end(), value)
-      : std::upper_bound(values_.begin(), values_.end(), value);
+  const auto it = withKeyOrder(comparator_, [&](auto keyOrder) {
+    return inclusive
+        ? std::lower_bound(values_.begin(), values_.end(), value, keyOrder)
+        : std::upper_bound(values_.begin(), values_.end(), value, keyOrder);
+  });
   if (it == values_.end()) {
     return std::nullopt;
   }
@@ -257,7 +266,8 @@ std::string_view PrefixKeyEncoding::decodeEntryAt(
 PrefixKeyEncoding::PrefixKeyEncoding(
     std::string_view encodedData,
     uint32_t rowCount,
-    uint32_t dataOffset)
+    uint32_t dataOffset,
+    const KeyComparator* comparator)
     : rowCount_{rowCount},
       restartInterval_{[&] {
         const auto* pos = encodedData.data() + dataOffset;
@@ -266,7 +276,8 @@ PrefixKeyEncoding::PrefixKeyEncoding(
       numRestarts_{velox::bits::divRoundUp(rowCount_, restartInterval_)},
       restartOffsets_{encodedData.data() + dataOffset + sizeof(uint32_t)},
       dataStart_{restartOffsets_ + numRestarts_ * sizeof(uint32_t)},
-      dataEnd_{encodedData.data() + encodedData.size()} {}
+      dataEnd_{encodedData.data() + encodedData.size()},
+      comparator_{comparator} {}
 
 uint32_t PrefixKeyEncoding::restartOffset(uint32_t restartIndex) const {
   NIMBLE_CHECK_LT(restartIndex, numRestarts_, "Restart index out of bounds");
@@ -277,6 +288,16 @@ uint32_t PrefixKeyEncoding::restartOffset(uint32_t restartIndex) const {
 std::optional<uint32_t> PrefixKeyEncoding::seek(
     std::string_view targetValue,
     bool inclusive) const {
+  return withKeyOrder(comparator_, [&](auto keyOrder) {
+    return seekWithOrder(targetValue, inclusive, keyOrder);
+  });
+}
+
+template <typename KeyOrder>
+std::optional<uint32_t> PrefixKeyEncoding::seekWithOrder(
+    std::string_view targetValue,
+    bool inclusive,
+    KeyOrder keyOrder) const {
   auto& scratch = scanScratch();
   const char* pos{nullptr};
   uint32_t row{0};
@@ -293,7 +314,7 @@ std::optional<uint32_t> PrefixKeyEncoding::seek(
     scratch.clear();
     const auto restartValue = decodeEntryAt(pos, dataEnd_, row, scratch);
 
-    if (restartValue.compare(targetValue) < 0) {
+    if (keyOrder.compare(restartValue, targetValue) < 0) {
       left = mid + 1;
     } else {
       right = mid;
@@ -313,13 +334,15 @@ std::optional<uint32_t> PrefixKeyEncoding::seek(
 
   if (inclusive) {
     while (row < rowCount_) {
-      if (decodeEntryAt(pos, dataEnd_, row, scratch) >= targetValue) {
+      if (keyOrder.compare(
+              decodeEntryAt(pos, dataEnd_, row, scratch), targetValue) >= 0) {
         return row - 1;
       }
     }
   } else {
     while (row < rowCount_) {
-      if (decodeEntryAt(pos, dataEnd_, row, scratch) > targetValue) {
+      if (keyOrder.compare(
+              decodeEntryAt(pos, dataEnd_, row, scratch), targetValue) > 0) {
         return row - 1;
       }
     }

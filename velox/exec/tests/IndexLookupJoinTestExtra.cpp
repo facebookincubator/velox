@@ -282,7 +282,9 @@ TEST_P(IndexLookupJoinTest, leftJoinTrailingMissesWithNoSplitOutput) {
         planWithMatchColumn,
         probeScanNodeId_,
         probeFiles,
-        GetParam().needsIndexSplit);
+        GetParam().needsIndexSplit,
+        /*serialExecution=*/false,
+        /*maxDrivers=*/1);
   }
 }
 
@@ -659,10 +661,11 @@ DEBUG_ONLY_TEST_P(IndexLookupJoinTest, statsSplitterWithFilter) {
       << "IndexLookupJoin (after filter)";
 }
 
-TEST_P(IndexLookupJoinTest, DISABLED_barrier) {
+TEST_P(IndexLookupJoinTest, barrier) {
   if (GetParam().needsIndexSplit) {
     return;
   }
+  const int maxDrivers = GetParam().serialExecution ? 1 : 4;
   IndexTableData tableData;
   generateIndexTableData({100, 1, 1}, tableData, pool_);
   const int numProbeSplits{5};
@@ -710,32 +713,22 @@ TEST_P(IndexLookupJoinTest, DISABLED_barrier) {
   struct {
     int numPrefetches;
     bool barrierExecution;
-    bool serialExecution;
 
     std::string debugString() const {
       return fmt::format(
-          "numPrefetches {}, barrierExecution {}, serialExecution {}",
+          "numPrefetches {}, barrierExecution {}",
           numPrefetches,
-          barrierExecution,
-          serialExecution);
+          barrierExecution);
     }
   } testSettings[] = {
-      {0, false, false},
-      {0, false, true},
-      {1, true, true},
-      {1, false, true},
-      {4, true, true},
-      {4, false, true},
-      {256, true, true},
-      {256, false, true},
-      {0, true, false},
-      {0, false, false},
-      {1, true, false},
-      {1, false, false},
-      {4, true, false},
-      {4, false, false},
-      {256, true, false},
-      {256, false, false},
+      {0, true},
+      {0, false},
+      {1, true},
+      {1, false},
+      {4, true},
+      {4, false},
+      {256, true},
+      {256, false},
   };
 
   for (const auto& testData : testSettings) {
@@ -743,14 +736,16 @@ TEST_P(IndexLookupJoinTest, DISABLED_barrier) {
     auto task = runLookupQuery(
         plan,
         probeFiles,
-        testData.serialExecution,
+        GetParam().serialExecution,
         testData.barrierExecution,
         32,
         testData.numPrefetches,
         GetParam().needsIndexSplit,
-        "SELECT u.c3, t.c5 FROM t, u WHERE t.c0 = u.c0 AND t.c1 = u.c1 AND t.c2 = u.c2");
+        "SELECT u.c3, t.c5 FROM t, u WHERE t.c0 = u.c0 AND t.c1 = u.c1 AND t.c2 = u.c2",
+        maxDrivers);
 
     const auto taskStats = task->taskStats();
+    ASSERT_EQ(taskStats.numTotalDrivers, maxDrivers);
     ASSERT_EQ(
         taskStats.numBarriers, testData.barrierExecution ? numProbeSplits : 0);
     ASSERT_EQ(taskStats.numFinishedSplits, numProbeSplits);
@@ -860,7 +855,9 @@ TEST_P(IndexLookupJoinTest, nullKeys) {
       planWithMatchColumn,
       probeScanNodeId_,
       probeFiles,
-      GetParam().needsIndexSplit);
+      GetParam().needsIndexSplit,
+      /*serialExecution=*/false,
+      /*maxDrivers=*/1);
 }
 
 TEST_P(IndexLookupJoinTest, joinFuzzer) {
@@ -1261,7 +1258,9 @@ TEST_P(IndexLookupJoinTest, withFilter) {
         planWithMatchColumn,
         probeScanNodeId_,
         probeFiles,
-        GetParam().needsIndexSplit);
+        GetParam().needsIndexSplit,
+        /*serialExecution=*/false,
+        /*maxDrivers=*/1);
   }
 }
 
@@ -1487,6 +1486,13 @@ DEBUG_ONLY_TEST_P(IndexLookupJoinTest, needsIndexSplit) {
     }
 
     queryThread.join();
+
+    const auto stats = task->taskStats();
+    EXPECT_EQ(
+        stats.numFinishedSplits, probeFiles.size() + testData.numIndexSplits);
+    EXPECT_EQ(stats.numAbandonedSplits, 0);
+    EXPECT_EQ(stats.numRunningSplits, 0);
+    EXPECT_EQ(stats.numQueuedSplits, 0);
 
     // Verify collectIndexSplits was called the expected number of times:
     // once initially when blocked, plus once after splits are available.

@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include <fmt/core.h>
+#include <fmt/format.h>
 #include <optional>
 #include <sstream>
 #include <string>

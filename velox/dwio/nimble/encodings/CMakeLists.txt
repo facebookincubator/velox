@@ -21,7 +21,6 @@ endif()
 if(NIMBLE_BUILD_TESTING)
   add_subdirectory(tests)
 endif()
-add_subdirectory(legacy)
 if(NIMBLE_BUILD_TESTING)
   add_subdirectory(selection/tests)
 endif()
@@ -72,6 +71,7 @@ add_library(
   views/EncodingView.cpp
   views/DeltaBlockEncodingView.h
   views/EliasFanoEncodingView.h
+  views/PartitionedEliasFanoEncodingView.h
   views/EncodingViewFactory.cpp
   views/FsstEncodingView.cpp
   views/HuffmanEncodingView.h
@@ -94,7 +94,6 @@ add_library(
   views/DictionaryEncodingView.h
   views/ConstantEncodingView.h
   views/BlockBitPackingEncodingView.h
-  views/BitRangeSplitEncodingView.h
   views/ALPEncodingView.h
   views/ALPRDEncodingView.h
   selection/Statistics.h
@@ -132,12 +131,12 @@ add_library(
   FixedBitWidthEncoding.h
   EncodingSliceFactory.h
   EliasFanoEncoding.h
+  PartitionedEliasFanoEncoding.h
   DictionaryEncoding.h
   DeltaEncoding.h
   DeltaBlockEncoding.h
   ConstantEncoding.h
   BlockBitPackingEncoding.h
-  BitRangeSplitEncoding.h
   ALPEncoding.h
   ALPRDEncoding.h
 )

@@ -108,17 +108,17 @@ if(NOT VELOX_DISABLE_GOOGLETEST)
   # same flag. This keeps a VELOX_ENABLE_GEO=OFF build free of any reference to GEOS targets.
   if(VELOX_ENABLE_GEO AND VELOX_ENABLE_PARQUET)
     add_executable(
-      velox_hive_iceberg_geometry_test
+      velox_hive_iceberg_geospatial_test
       IcebergGeometryCrossRuntimeEncodingTest.cpp
-      IcebergGeometryReadTest.cpp
+      IcebergGeospatialReadTest.cpp
       IcebergTestBase.cpp
       Main.cpp
     )
-    velox_add_test_headers(velox_hive_iceberg_geometry_test IcebergTestBase.h)
-    add_test(velox_hive_iceberg_geometry_test velox_hive_iceberg_geometry_test)
+    velox_add_test_headers(velox_hive_iceberg_geospatial_test IcebergTestBase.h)
+    add_test(velox_hive_iceberg_geospatial_test velox_hive_iceberg_geospatial_test)
 
     target_link_libraries(
-      velox_hive_iceberg_geometry_test
+      velox_hive_iceberg_geospatial_test
       velox_exec_test_lib
       velox_hive_connector
       velox_hive_iceberg_splitreader

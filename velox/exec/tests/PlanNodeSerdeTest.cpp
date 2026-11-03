@@ -603,6 +603,55 @@ TEST_F(PlanNodeSerdeTest, parallelProjet) {
   testSerde(plan);
 }
 
+TEST_F(PlanNodeSerdeTest, vectorSearchJoin) {
+  auto probe = makeRowVector(
+      {"t0", "t1"},
+      {
+          makeFlatVector<int64_t>({1, 2}),
+          makeArrayVector<float>({{1, 0}, {0, 1}}),
+      });
+  auto build = makeRowVector(
+      {"u0", "u1", "u2"},
+      {
+          makeFlatVector<int64_t>({1, 2}),
+          makeFlatVector<std::string>({"a", "b"}, VARBINARY()),
+          makeFlatVector<int64_t>({10, 20}),
+      });
+
+  auto planNodeIdGenerator = std::make_shared<core::PlanNodeIdGenerator>();
+  auto plan =
+      PlanBuilder(planNodeIdGenerator)
+          .values({probe})
+          .vectorSearchJoin(
+              {"t0"},
+              {"u0"},
+              PlanBuilder(planNodeIdGenerator).values({build}).planNode(),
+              "t1",
+              "u1",
+              /*k=*/2,
+              {"cluster_id", "t0", "u2"},
+              "cluster_id")
+          .planNode();
+  testSerde(plan);
+
+  plan = PlanBuilder(planNodeIdGenerator)
+             .values({probe})
+             .vectorSearchJoin(
+                 /*leftKeys=*/{},
+                 /*rightKeys=*/{},
+                 PlanBuilder(planNodeIdGenerator).values({build}).planNode(),
+                 "t1",
+                 "u1",
+                 /*k=*/10,
+                 {"t0", "id", "score"},
+                 "id",
+                 "score",
+                 core::JoinType::kLeft,
+                 {{"ivf.nprobe", "4"}})
+             .planNode();
+  testSerde(plan);
+}
+
 TEST_F(PlanNodeSerdeTest, hashJoin) {
   auto probe = makeRowVector(
       {"t0", "t1", "t2", "t3"},
@@ -1315,6 +1364,30 @@ TEST_F(PlanNodeSerdeTest, fixedPointConvergenceSequence) {
                     core::ConvergenceConfig::globalVerdict(
                         {gather}, sumPartials, 100),
                     "values")
+                .planNode());
+
+  // Every worker sums every worker's values into the same replicated state;
+  // worker 0 decides over its own copy and alone emits the output.
+  auto broadcast = PlanBuilder(idGenerator)
+                       .stateSource("values", schema)
+                       .partitionedOutputBroadcast()
+                       .planNode();
+  auto sumAll = PlanBuilder(idGenerator)
+                    .exchange(schema, "Presto")
+                    .singleAggregation({}, {"sum(val)"})
+                    .project({"CAST(0 AS BIGINT) AS key", "a0 AS val"})
+                    .planNode();
+  auto ownVerdict = PlanBuilder(idGenerator)
+                        .stateSource("values", schema)
+                        .project({"val >= 16"})
+                        .planNode();
+  testSerde(PlanBuilder(idGenerator)
+                .fixedPoint(
+                    {core::VectorState("values", schema).initial(seed)},
+                    {broadcast, sumAll},
+                    core::ConvergenceConfig::workerZeroVerdict(ownVerdict, 100),
+                    "values",
+                    /*outputOnWorkerZero=*/true)
                 .planNode());
 }
 

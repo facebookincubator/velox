@@ -39,8 +39,7 @@ class AggregateCompanionFunctionBase : public Aggregate {
   bool isReducing() const override final;
 
   /// Forwards the constant inputs to the wrapped aggregate.
-  void setConstantInputs(
-      const std::vector<VectorPtr>& constantInputs) override final;
+  void setConstantInputs(const std::vector<VectorPtr>& constantInputs) override;
 
   void addRawInput(
       char** groups,
@@ -116,6 +115,11 @@ struct AggregateCompanionAdapter {
         std::unique_ptr<Aggregate> fn,
         const TypePtr& resultType)
         : AggregateCompanionFunctionBase{std::move(fn), resultType} {}
+
+    /// Does nothing: the inputs are intermediate results, which carry none of
+    /// the wrapped aggregate's raw arguments.
+    void setConstantInputs(
+        const std::vector<VectorPtr>& /*constantInputs*/) override {}
 
     void addRawInput(
         char** groups,

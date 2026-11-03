@@ -47,6 +47,10 @@ class HiveConnectorTestBase : public OperatorTestBase {
 
   void writeToFile(const std::string& filePath, RowVectorPtr vector);
 
+  /// Writes 'data' to a temporary DWRF file and returns its handle. Keep the
+  /// handle alive while reading the file.
+  std::shared_ptr<TempFilePath> writeToFile(const RowVectorPtr& data);
+
   void writeToFile(
       const std::string& filePath,
       const std::vector<RowVectorPtr>& vectors,

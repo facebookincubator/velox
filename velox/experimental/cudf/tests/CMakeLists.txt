@@ -272,6 +272,7 @@ if(VELOX_ENABLE_S3)
       velox_exec_test_lib
       velox_file
       velox_s3fs
+      velox_stats_reporter_utils
       velox_test_util
   )
 endif()

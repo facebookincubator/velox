@@ -20,12 +20,21 @@
 #include "velox/dwio/nimble/common/Buffer.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
+#include "velox/dwio/nimble/index/KeyComparator.h"
 #include "velox/dwio/nimble/index/KeyReader.h"
 
 namespace facebook::nimble::index {
 namespace {
 
 using testing::ElementsAre;
+
+// Orders keys in reverse bytewise order.
+class ReverseKeyComparator final : public KeyComparator {
+ public:
+  int compare(std::string_view lhs, std::string_view rhs) const override {
+    return rhs.compare(lhs);
+  }
+};
 
 class KeyReaderTest : public testing::TestWithParam<EncodingType> {
  protected:
@@ -80,6 +89,7 @@ TEST_P(KeyReaderTest, readsFlatKeys) {
             velox::AlignedBuffer::allocate<char>(bytes, pool_.get()));
         return buffer->asMutable<void>();
       },
+      /*comparator=*/nullptr,
       pool_.get());
 
   ASSERT_NE(reader, nullptr);
@@ -94,6 +104,29 @@ TEST_P(KeyReaderTest, readsFlatKeys) {
   EXPECT_EQ(cursor->next(), "bb");
   EXPECT_EQ(cursor->next(), "cc");
   EXPECT_FALSE(cursor->hasNext());
+}
+
+TEST_P(KeyReaderTest, readsFlatKeysWithComparator) {
+  // The keys ascend under the reverse comparator, so seeks follow it.
+  const ReverseKeyComparator comparator;
+  const std::vector<std::string_view> keys{"cc", "bb", "bb", "aa"};
+  const auto encodedKeys = encode(GetParam(), keys);
+  std::vector<velox::BufferPtr> stringBuffers;
+  const auto reader = createFlatKeyReader(
+      encodedKeys,
+      [&](uint32_t bytes) -> void* {
+        auto& buffer = stringBuffers.emplace_back(
+            velox::AlignedBuffer::allocate<char>(bytes, pool_.get()));
+        return buffer->asMutable<void>();
+      },
+      &comparator,
+      pool_.get());
+
+  ASSERT_NE(reader, nullptr);
+  EXPECT_EQ(reader->seek("bb", /*inclusive=*/true), 1);
+  EXPECT_EQ(reader->seek("bb", /*inclusive=*/false), 3);
+  EXPECT_EQ(reader->seek("ccc", /*inclusive=*/true), 0);
+  EXPECT_EQ(reader->seek("a", /*inclusive=*/true), std::nullopt);
 }
 
 INSTANTIATE_TEST_SUITE_P(

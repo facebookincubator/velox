@@ -337,7 +337,7 @@ loadNextChunk()
 
 options.recordDecompressNanos(decompressNanos)
 
-velox/dwio/nimble/velox/selective/NimbleData.cpp • ChunkedDecoder.cpp
+velox/dwio/nimble/selective/NimbleData.cpp • ChunkedDecoder.cpp
 
 2 Cache Stats
 -------------

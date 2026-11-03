@@ -43,6 +43,12 @@
 #include "velox/dwio/nimble/common/ChunkHeader.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/common/FeatureGate.h"
+#include "velox/dwio/nimble/common/MetadataGenerated.h"
+#include "velox/dwio/nimble/common/SchemaBuilder.h"
+#include "velox/dwio/nimble/common/SchemaReader.h"
+#include "velox/dwio/nimble/common/SchemaSerialization.h"
+#include "velox/dwio/nimble/common/SchemaTypes.h"
+#include "velox/dwio/nimble/common/SchemaUtils.h"
 #include "velox/dwio/nimble/common/Types.h"
 #include "velox/dwio/nimble/encodings/SharedDictionaryCatalog.h"
 #include "velox/dwio/nimble/encodings/SharedDictionaryEncoding.h"
@@ -57,22 +63,16 @@
 #include "velox/dwio/nimble/tablet/Constants.h"
 #include "velox/dwio/nimble/tablet/FileProperties.h"
 #include "velox/dwio/nimble/tablet/IndexGenerated.h"
-#include "velox/dwio/nimble/velox/BufferGrowthPolicy.h"
-#include "velox/dwio/nimble/velox/ChunkedStreamWriter.h"
-#include "velox/dwio/nimble/velox/FieldWriter.h"
-#include "velox/dwio/nimble/velox/LayoutPlanner.h"
-#include "velox/dwio/nimble/velox/MetadataGenerated.h"
-#include "velox/dwio/nimble/velox/SchemaBuilder.h"
-#include "velox/dwio/nimble/velox/SchemaReader.h"
-#include "velox/dwio/nimble/velox/SchemaSerialization.h"
-#include "velox/dwio/nimble/velox/SchemaTypes.h"
-#include "velox/dwio/nimble/velox/SchemaUtils.h"
+#include "velox/dwio/nimble/writer/BufferGrowthPolicy.h"
+#include "velox/dwio/nimble/writer/ChunkedStreamWriter.h"
+#include "velox/dwio/nimble/writer/FieldWriter.h"
+#include "velox/dwio/nimble/writer/LayoutPlanner.h"
 
-#include "velox/dwio/nimble/velox/SharedDictionaryWriter.h"
-#include "velox/dwio/nimble/velox/StatsGenerated.h"
-#include "velox/dwio/nimble/velox/stats/VectorizedStatistics.h"
+#include "velox/dwio/nimble/common/StatsGenerated.h"
+#include "velox/dwio/nimble/stats/VectorizedStatistics.h"
 #include "velox/dwio/nimble/writer/EncodingLayoutTree.h"
 #include "velox/dwio/nimble/writer/FlushPolicy.h"
+#include "velox/dwio/nimble/writer/SharedDictionaryWriter.h"
 #include "velox/dwio/nimble/writer/StreamChunker.h"
 #include "velox/exec/Driver.h"
 #include "velox/exec/Operator.h"
@@ -2142,6 +2142,8 @@ Writer::Writer(
            .stripeGroupEncodingLayoutReadFactors =
                context_->options()
                    .experimentalStripeGroupEncodingLayoutReadFactors,
+           .stripeGroupMetadataDeduplicationEnabled =
+               context_->options().experimentalStripeGroupMetadataDeduplication,
            .stripeGroupFlushCallback =
                (clusterIndexWriter_ != nullptr || !denseIndexWriters_.empty())
                ? TabletWriter::StripeGroupFlushCallback(
@@ -2272,6 +2274,7 @@ void Writer::checkTopLevelNulls(const velox::VectorPtr& input) {
   const auto numRows = input->size();
   bool batchHasTopLevelNulls{false};
   const bool mustCheckTopLevelNulls = clusterIndexWriter_ != nullptr ||
+      context_->options().enableChunkStats ||
       !context_->options().ignoreTopLevelNulls;
   if (mustCheckTopLevelNulls && input->mayHaveNulls()) {
     for (velox::vector_size_t row = 0; row < numRows; ++row) {
@@ -2284,6 +2287,11 @@ void Writer::checkTopLevelNulls(const velox::VectorPtr& input) {
   NIMBLE_USER_CHECK(
       clusterIndexWriter_ == nullptr || !batchHasTopLevelNulls,
       "Cluster-indexed Nimble files cannot contain top-level null rows");
+  if (context_->options().enableChunkStats) {
+    NIMBLE_USER_CHECK(
+        !batchHasTopLevelNulls,
+        "Nimble files with chunk stats cannot contain top-level null rows");
+  }
   hasTopLevelNulls_ = hasTopLevelNulls_ || batchHasTopLevelNulls;
 }
 
@@ -2561,7 +2569,6 @@ void Writer::writeProperties(const WriteOptionalSectionFn& writeMetadataFn) {
           compactRowCountEncoding,
           clusterIndexKeyColumnStorageOmitted,
           std::move(clusterIndexKeyColumnsWithOmittedStorage),
-          /*hasStreamChecksums=*/false,
           std::move(streamTrailerLayout),
           hasTopLevelNulls_}
           .serialize();

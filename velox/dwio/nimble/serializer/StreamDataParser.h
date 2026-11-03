@@ -27,12 +27,12 @@
 #include "velox/buffer/Buffer.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
+#include "velox/dwio/nimble/common/RowRange.h"
 #include "velox/dwio/nimble/common/Types.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrimitives.h"
 #include "velox/dwio/nimble/serializer/ChunkedStreamPayload.h"
 #include "velox/dwio/nimble/serializer/Options.h"
 #include "velox/dwio/nimble/serializer/legacy/TrailerReader.h"
-#include "velox/dwio/nimble/velox/RowRange.h"
 
 namespace facebook::nimble::serde {
 

@@ -22,7 +22,7 @@ namespace facebook::velox::connector::hive::paimon {
 PaimonSplitReader::PaimonSplitReader(
     const std::shared_ptr<const FileConnectorSplit>& fileSplit,
     std::shared_ptr<const PaimonConnectorSplit> paimonSplit,
-    const FileTableHandlePtr& tableHandle,
+    const std::shared_ptr<const PaimonTableHandle>& tableHandle,
     const std::unordered_map<std::string, FileColumnHandlePtr>* partitionKeys,
     const ConnectorQueryCtx* connectorQueryCtx,
     const std::shared_ptr<const FileConfig>& fileConfig,
@@ -47,23 +47,7 @@ PaimonSplitReader::PaimonSplitReader(
           executor,
           scanSpec),
       paimonSplit_(std::move(paimonSplit)) {
-  // Validate all data files upfront.
-  for (const auto& dataFile : paimonSplit_->dataFiles()) {
-    VELOX_CHECK(
-        !dataFile.deletionFile.has_value(),
-        "Paimon deletion vector reading is not yet implemented. "
-        "File '{}' has a deletion vector with {} deleted rows.",
-        dataFile.path,
-        dataFile.deletionFile.has_value() ? dataFile.deletionFile->cardinality
-                                          : 0);
-    VELOX_CHECK_EQ(
-        dataFile.type,
-        PaimonDataFile::Type::kData,
-        "Paimon changelog file reading is not yet supported. "
-        "File '{}' has type {}.",
-        dataFile.path,
-        dataFile.type);
-  }
+  VELOX_CHECK_NOT_NULL(paimonSplit_);
 
   // Build FileConnectorSplits for all data files so we can switch between
   // them during multi-file iteration.
@@ -85,9 +69,9 @@ void PaimonSplitReader::prepareSplit(
 
 uint64_t PaimonSplitReader::next(uint64_t size, VectorPtr& output) {
   while (ensureFileSplitReader()) {
-    // When deletion vectors are implemented, apply the deletion bitmap
-    // here via Mutation.deletedRows, following the same pattern as
-    // IcebergSplitReader::next().
+    // TODO: Apply deletion vectors using original physical file row positions.
+    // TODO: Decode internal columns and row kinds for primary-key/changelog
+    // files.
     const auto rowsRead = FileSplitReader::next(size, output);
     if (rowsRead > 0) {
       return rowsRead;
@@ -109,11 +93,15 @@ bool PaimonSplitReader::ensureFileSplitReader() {
     // Point to the current file.
     fileSplit_ = fileSplits_[currentFileIndex_];
 
-    // Initialize the base reader for this file.
+    // TODO: Add historical-schema adaptation using per-file schema metadata.
     FileSplitReader::prepareSplit(metadataFilter_, *runtimeStats_);
     if (!emptySplit_) {
       return true;
     }
+    // Empty preparation may leave a file reader but no row reader. Reset
+    // the per-file state before advancing so the next file is prepared.
+    baseReader_.reset();
+    emptySplit_ = false;
     ++currentFileIndex_;
   }
   return false; // All files exhausted.

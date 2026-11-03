@@ -420,6 +420,20 @@ CudfHiveDataSource::CudfHiveDataSource(
     optimizedRemainingFilter_ = nullptr;
   }
   if (optimizedRemainingFilter_) {
+    // The local config above carries no cast setting, so a cast from VARCHAR
+    // compiled against it follows Presto's strict rules in a session that sets
+    // legacy_cast or cast_string_to_floating_point_lenient_inf_nan, and a
+    // TRY_CAST would drop the rows those settings accept.
+    // TODO: Keep such a scan on the CPU data source instead, once the
+    // connector sees the session config and checks the filter the way
+    // canExprRunOnGpu() does before choosing a data source
+    // (facebookincubator/velox#19476, facebookincubator/velox#18238).
+    if (containsCastFromVarchar(
+            optimizedRemainingFilter_, /*floatingPointOnly=*/false)) {
+      VELOX_UNSUPPORTED(
+          "Remaining filter with a cast from VARCHAR is not supported: {}",
+          optimizedRemainingFilter_->toString());
+    }
     // Add fields referenced by the filter to the columns to read. Collect from
     // the optimized expression since folding may drop branches and the columns
     // they reference. Read-column order does not affect results: the data
@@ -540,6 +554,9 @@ void CudfHiveDataSource::convertSplit(std::shared_ptr<ConnectorSplit> split) {
   for (const auto& [name, value] : hiveSplit->partitionKeys) {
     cudfHiveSplitBuilder.partitionKey(name, value);
   }
+  if (hiveSplit->properties.has_value()) {
+    cudfHiveSplitBuilder.fileProperties(hiveSplit->properties.value());
+  }
   split_ = cudfHiveSplitBuilder.build();
 
   VLOG(1) << "Adding split " << split_->toString();
@@ -613,6 +630,12 @@ void CudfHiveDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
 
   // TODO: `completedBytes_` should be updated in `next()` as we read more and
   // more table bytes
+  if (const auto fileSize = split_->fileSize()) {
+    completedBytes_ += static_cast<size_t>(*fileSize);
+    return;
+  }
+  // The split does not carry the size, so open the file for it. On S3 the
+  // open costs a HEAD request.
   try {
     const auto fileHandleKey = FileHandleKey{
         .filename = split_->filePath,
@@ -900,14 +923,9 @@ CudfHiveDataSource::makePartitionKeyScalars(cuda::stream_ref stream) const {
       readTimestampPartitionValueAsLocalTime();
   // A TIMESTAMP key takes the type the split reader gives file timestamps
   // rather than the unit cuDF expressions default to, so that an expression
-  // can combine the two. Day resolution is no unit a TIMESTAMP scalar can
-  // take, so the key keeps the default unit when the reader casts timestamps
-  // to days.
-  const auto readerTimestampType = cudfHiveConfig_->timestampType().id();
-  const std::optional<cudf::type_id> timestampType =
-      readerTimestampType == cudf::type_id::TIMESTAMP_DAYS
-      ? std::nullopt
-      : std::optional<cudf::type_id>{readerTimestampType};
+  // can combine the two.
+  const auto timestampType = constantTimestampType(
+      *cudfHiveConfig_, connectorQueryCtx_->sessionProperties());
   std::vector<std::unique_ptr<cudf::scalar>> scalars;
   scalars.reserve(partitionKeyNames_.size());
   for (const auto& name : partitionKeyNames_) {

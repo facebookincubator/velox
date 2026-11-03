@@ -365,6 +365,7 @@ bulkVarintDecodeBmi2Table(uint64_t& n, const char* pos, T*& output) {
     if (FOLLY_UNLIKELY(cb == 63)) {
       carryover |= pext_u64(word, 0x00007f7f7f7f7f7fULL) << carryoverBits;
       carryoverBits += 42;
+      NIMBLE_CHECK_FILE_LT(carryoverBits, 64, "Varint is longer than 64 bits.");
       continue;
     }
 
@@ -392,6 +393,7 @@ bulkVarintDecodeBmi2Table(uint64_t& n, const char* pos, T*& output) {
   pos += kChunkLen;
   if (n > 0) {
     if constexpr (std::is_same_v<T, uint32_t>) {
+      NIMBLE_CHECK_FILE_LT(carryoverBits, 32, "Varint is longer than 32 bits.");
       *output++ = readVarint32(&pos) << carryoverBits | carryover;
       for (uint64_t i = 1; i < n; ++i) {
         *output++ = readVarint32(&pos);

@@ -572,6 +572,52 @@ TEST_F(IcebergParquetStatsTest, nullValues) {
   }
 }
 
+TEST_F(IcebergParquetStatsTest, nullTypeColumn) {
+  // Parquet NullType columns (Velox UNKNOWN type) carry SortOrder::kUnknown, so
+  // the Parquet writer never initialises a statistics object for them. Verify
+  // that null_value_count still equals the row count so that the Iceberg
+  // aggregate optimizer can correctly compute COUNT(unknown_col) = 0.
+  constexpr vector_size_t size = 100;
+  constexpr int32_t intColId = 1;
+  constexpr int32_t unknownColId = 2;
+
+  const auto& stats = writeDataAndGetAllStats(makeRowVector({
+      makeFlatVector<int32_t>(size, [](auto row) { return row; }),
+      makeNullConstant(TypeKind::UNKNOWN, size),
+  }));
+  verifyBasicStats(
+      stats[0],
+      size,
+      {{intColId, size}, {unknownColId, size}},
+      {{intColId, 0}, {unknownColId, size}});
+  verifyBoundsNotExist(stats[0], {unknownColId});
+}
+
+TEST_F(IcebergParquetStatsTest, nullTypeColumnMultipleRowGroups) {
+  // Verify null_value_count accumulates correctly across multiple row groups.
+  setConnectorSessionProperty("parquet_writer_row_group_size", "1B");
+  constexpr vector_size_t size = 100;
+  constexpr int32_t intColId = 1;
+  constexpr int32_t unknownColId = 2;
+
+  const auto batch = makeRowVector({
+      makeFlatVector<int32_t>(size, [](auto row) { return row; }),
+      makeNullConstant(TypeKind::UNKNOWN, size),
+  });
+  const auto outputDir = TempDirectoryPath::create();
+  auto commitTasks =
+      createDataSinkAndAppendData({batch, batch, batch}, outputDir->getPath())
+          ->close();
+  ASSERT_EQ(commitTasks.size(), 1);
+  const auto& stats = statsFromCommitTasks(commitTasks);
+  verifyBasicStats(
+      stats[0],
+      3 * size,
+      {{intColId, 3 * size}, {unknownColId, 3 * size}},
+      {{intColId, 0}, {unknownColId, 3 * size}});
+  verifyBoundsNotExist(stats[0], {unknownColId});
+}
+
 TEST_F(IcebergParquetStatsTest, real) {
   constexpr vector_size_t size = 100;
   constexpr int32_t expectedNulls = 20;

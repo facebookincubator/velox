@@ -34,6 +34,10 @@ class FileConfig {
  public:
   static const std::vector<config::ConfigProperty>& registeredProperties();
 
+  /// Appends DWIO format properties using their format-scoped session names.
+  static void registerFormatProperties(
+      std::vector<config::ConfigProperty>& properties);
+
   // --- VELOX_HIVE_CONFIG_LEGACY properties ---
 
   VELOX_HIVE_CONFIG_LEGACY(
@@ -85,16 +89,6 @@ class FileConfig {
       uint64_t,
       8UL << 20,
       "Speculative tail-read size in bytes for Nimble files.")
-
-  VELOX_HIVE_CONFIG_LEGACY(
-      kNimbleStringDecoderZeroCopySession,
-      kNimbleStringDecoderZeroCopy,
-      nimbleStringDecoderZeroCopy,
-      "nimble_string_decoder_zero_copy",
-      "nimble.string-decoder-zero-copy",
-      bool,
-      false,
-      "Enable zero-copy string decoding in Nimble selective reader.")
 
   VELOX_HIVE_CONFIG_LEGACY(
       kNimblePreserveDictionaryEncodingSession,
@@ -288,6 +282,17 @@ class FileConfig {
 
   // --- Server-only properties (no macro) ---
 
+  /// Maximum number of entries in the file handle cache.
+  static constexpr const char* kNumCacheFileHandles = "num_cached_file_handles";
+
+  /// Expiration time in ms for a cached file handle. Zero disables expiration.
+  static constexpr const char* kFileHandleExpirationDurationMs =
+      "file-handle-expiration-duration-ms";
+
+  /// Enable file handle cache.
+  static constexpr const char* kEnableFileHandleCache =
+      "file-handle-cache-enabled";
+
   /// The number of prefetch rowgroups.
   static constexpr const char* kPrefetchRowGroups = "prefetch-rowgroups";
 
@@ -319,6 +324,12 @@ class FileConfig {
   size_t parallelUnitLoadCount(const config::ConfigBase* session) const;
 
   uint64_t filePreloadThreshold() const;
+
+  int32_t numCacheFileHandles() const;
+
+  uint64_t fileHandleExpirationDurationMs() const;
+
+  bool isFileHandleCacheEnabled() const;
 
   bool useColumnNames(const config::ConfigBase* session) const {
     return session->get<bool>(

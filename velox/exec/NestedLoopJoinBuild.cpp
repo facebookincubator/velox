@@ -19,29 +19,6 @@
 
 namespace facebook::velox::exec {
 
-void NestedLoopJoinBridge::setData(std::vector<RowVectorPtr> buildVectors) {
-  std::vector<ContinuePromise> promises;
-  {
-    std::lock_guard<std::mutex> l(mutex_);
-    VELOX_CHECK(!buildVectors_.has_value(), "setData must be called only once");
-    buildVectors_ = std::move(buildVectors);
-    promises = std::move(promises_);
-  }
-  notify(std::move(promises));
-}
-
-std::optional<std::vector<RowVectorPtr>> NestedLoopJoinBridge::dataOrFuture(
-    ContinueFuture* future) {
-  std::lock_guard<std::mutex> l(mutex_);
-  VELOX_CHECK(!cancelled_, "Getting data after the build side is aborted");
-  if (buildVectors_.has_value()) {
-    return buildVectors_;
-  }
-  promises_.emplace_back("NestedLoopJoinBridge::tableOrFuture");
-  *future = promises_.back().getSemiFuture();
-  return std::nullopt;
-}
-
 NestedLoopJoinBuild::NestedLoopJoinBuild(
     int32_t operatorId,
     DriverCtx* driverCtx,

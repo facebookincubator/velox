@@ -23,6 +23,7 @@
 #include "velox/common/memory/Memory.h"
 #include "velox/dwio/nimble/common/Buffer.h"
 #include "velox/dwio/nimble/encodings/common/EncodingLayout.h"
+#include "velox/dwio/nimble/index/KeyComparator.h"
 #include "velox/dwio/nimble/index/SortOrder.h"
 #include "velox/type/Type.h"
 #include "velox/vector/BaseVector.h"
@@ -61,12 +62,15 @@ std::string_view encodeFlatKeys(
     std::span<const std::string_view> keys,
     Buffer& buffer);
 
-/// Creates a builder for flat Prefix or Trivial encoded keys.
+/// Creates a builder for flat Prefix or Trivial encoded keys. When
+/// 'enforceKeyOrder' is set, the builder validates that the keys ascend under
+/// 'keyComparator', or bytewise when it is null.
 std::unique_ptr<KeyChunkBuilder> createFlatKeyChunkBuilder(
     std::unique_ptr<IndexKeyEncoder> keyEncoder,
     EncodingLayout encodingLayout,
     bool enforceKeyOrder,
     bool noDuplicateKey,
+    const KeyComparator* keyComparator,
     velox::memory::MemoryPool* pool);
 
 } // namespace facebook::nimble::index

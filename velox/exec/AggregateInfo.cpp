@@ -103,7 +103,8 @@ std::vector<AggregateInfo> toAggregateInfo(
         aggregate.rawInputTypes,
         aggResultType,
         operatorCtx.driverCtx()->queryConfig(),
-        constants);
+        // Steps that merge intermediate results have no raw arguments.
+        isRawInput(step) ? constants : std::vector<VectorPtr>{});
 
     auto lambdas = extractLambdaInputs(aggregate);
     if (!lambdas.empty()) {

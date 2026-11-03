@@ -25,10 +25,11 @@ namespace facebook::nimble::index {
 std::unique_ptr<KeyReader> createFlatKeyReader(
     std::string_view encodedKeys,
     std::function<void*(uint32_t)> stringBufferFactory,
+    const KeyComparator* comparator,
     velox::memory::MemoryPool* pool) {
   NIMBLE_CHECK_NOT_NULL(pool);
-  return std::make_unique<FlatKeyReader>(
-      KeyEncoding::create(*pool, encodedKeys, std::move(stringBufferFactory)));
+  return std::make_unique<FlatKeyReader>(KeyEncoding::create(
+      *pool, encodedKeys, std::move(stringBufferFactory), comparator));
 }
 
 FlatKeyReader::FlatKeyReader(std::unique_ptr<KeyEncoding> encoding)

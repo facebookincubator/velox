@@ -11,10 +11,21 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+add_executable(velox_file_connector_test FileConnectorTest.cpp)
+add_test(velox_file_connector_test velox_file_connector_test)
+target_link_libraries(
+  velox_file_connector_test
+  velox_file_connector
+  velox_test_util
+  GTest::gtest
+  GTest::gtest_main
+)
+
 add_executable(
   velox_hive_connector_test
   FileColumnHandleTest.cpp
   FileConfigTest.cpp
+  FileDataSourceTest.cpp
   HiveIndexSourceUtilsTest.cpp
   FileConnectorSplitTest.cpp
   FileConnectorUtilTest.cpp
@@ -29,6 +40,7 @@ add_executable(
   HiveSplitTest.cpp
   PartitionIdGeneratorTest.cpp
   PartitionValueTest.cpp
+  SortingWriterTest.cpp
   TableHandleTest.cpp
 )
 add_test(velox_hive_connector_test velox_hive_connector_test)

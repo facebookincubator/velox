@@ -678,4 +678,4 @@ CPU time before and after ALP+CBP encodings
 
 11 of 15 queries improved by ≥1.4x
 
-Stride stats write: D103095055 • Stride stats read: D103095054 StrideIndex FBS: velox/dwio/nimble/tablet/StrideIndex.fbs • Writer: velox/dwio/nimble/tablet/StrideIndexWriter.cpp Reader: velox/dwio/nimble/velox/selective/NimbleData.cpp • Skip logic: SelectiveNimbleReader.cpp VectorizedFileStats: velox/dwio/nimble/velox/stats/VectorizedStatistics.h
+Stride stats write: D103095055 • Stride stats read: D103095054 StrideIndex FBS: velox/dwio/nimble/tablet/StrideIndex.fbs • Writer: velox/dwio/nimble/tablet/StrideIndexWriter.cpp Reader: velox/dwio/nimble/selective/NimbleData.cpp • Skip logic: SelectiveNimbleReader.cpp VectorizedFileStats: velox/dwio/nimble/stats/VectorizedStatistics.h

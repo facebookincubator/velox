@@ -19,6 +19,7 @@ velox_add_library(
   FromJson.cpp
   GetArrayStructFields.cpp
   GetStructField.cpp
+  JavaFloatingDecimal.cpp
   MakeDecimal.cpp
   SparkCastExpr.cpp
   SparkCastHooks.cpp
@@ -28,6 +29,7 @@ velox_add_library(
   FromJson.h
   GetArrayStructFields.h
   GetStructField.h
+  JavaFloatingDecimal.h
   MakeDecimal.h
   SparkCastExpr.h
   SparkCastHooks.h

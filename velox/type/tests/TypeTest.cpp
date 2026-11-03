@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "velox/type/Type.h"
+#include <fmt/format.h>
 #include <sstream>
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/type/CppToType.h"
@@ -179,6 +180,22 @@ TEST(TypeTest, timestampUtc) {
   EXPECT_TRUE(TIMESTAMP_UTC()->equivalent(*TimestampUtcType::get()));
   EXPECT_FALSE(t->equivalent(*TIMESTAMP()));
   EXPECT_FALSE(TIMESTAMP()->equivalent(*t));
+}
+
+TEST(TypeTest, vectorIndex) {
+  const auto t = VECTOR_INDEX();
+  ASSERT_EQ(t->toString(), "VECTOR_INDEX");
+  ASSERT_EQ(t->size(), 0);
+  ASSERT_EQ(t->kind(), TypeKind::VARBINARY);
+  EXPECT_STREQ(t->kindName(), "VARBINARY");
+
+  testTypeSerde(t);
+
+  EXPECT_TRUE(t->isVarbinary());
+  EXPECT_TRUE(t->equivalent(*VectorIndexType::get()));
+  EXPECT_FALSE(t->equivalent(*VARBINARY()));
+  EXPECT_FALSE(VARBINARY()->equivalent(*t));
+  EXPECT_EQ(*getType("VECTOR_INDEX", {}), *t);
 }
 
 TEST(TypeTest, date) {
@@ -1194,27 +1211,26 @@ TEST(TypeTest, function) {
 }
 
 TEST(TypeTest, follySformat) {
-  EXPECT_EQ("BOOLEAN", folly::sformat("{}", BOOLEAN()));
-  EXPECT_EQ("TINYINT", folly::sformat("{}", TINYINT()));
-  EXPECT_EQ("SMALLINT", folly::sformat("{}", SMALLINT()));
-  EXPECT_EQ("INTEGER", folly::sformat("{}", INTEGER()));
-  EXPECT_EQ("BIGINT", folly::sformat("{}", BIGINT()));
-  EXPECT_EQ("REAL", folly::sformat("{}", REAL()));
-  EXPECT_EQ("DOUBLE", folly::sformat("{}", DOUBLE()));
-  EXPECT_EQ("VARCHAR", folly::sformat("{}", VARCHAR()));
-  EXPECT_EQ("VARBINARY", folly::sformat("{}", VARBINARY()));
-  EXPECT_EQ("TIMESTAMP", folly::sformat("{}", TIMESTAMP()));
-  EXPECT_EQ("DATE", folly::sformat("{}", DATE()));
+  EXPECT_EQ("BOOLEAN", fmt::format("{}", BOOLEAN()));
+  EXPECT_EQ("TINYINT", fmt::format("{}", TINYINT()));
+  EXPECT_EQ("SMALLINT", fmt::format("{}", SMALLINT()));
+  EXPECT_EQ("INTEGER", fmt::format("{}", INTEGER()));
+  EXPECT_EQ("BIGINT", fmt::format("{}", BIGINT()));
+  EXPECT_EQ("REAL", fmt::format("{}", REAL()));
+  EXPECT_EQ("DOUBLE", fmt::format("{}", DOUBLE()));
+  EXPECT_EQ("VARCHAR", fmt::format("{}", VARCHAR()));
+  EXPECT_EQ("VARBINARY", fmt::format("{}", VARBINARY()));
+  EXPECT_EQ("TIMESTAMP", fmt::format("{}", TIMESTAMP()));
+  EXPECT_EQ("DATE", fmt::format("{}", DATE()));
 
-  EXPECT_EQ("ARRAY<VARCHAR>", folly::sformat("{}", ARRAY(VARCHAR())));
-  EXPECT_EQ(
-      "MAP<VARCHAR,BIGINT>", folly::sformat("{}", MAP(VARCHAR(), BIGINT())));
+  EXPECT_EQ("ARRAY<VARCHAR>", fmt::format("{}", ARRAY(VARCHAR())));
+  EXPECT_EQ("MAP<VARCHAR,BIGINT>", fmt::format("{}", MAP(VARCHAR(), BIGINT())));
   EXPECT_EQ(
       "ROW<\"\":BOOLEAN,\"\":VARCHAR,\"\":BIGINT>",
-      folly::sformat("{}", ROW({BOOLEAN(), VARCHAR(), BIGINT()})));
+      fmt::format("{}", ROW({BOOLEAN(), VARCHAR(), BIGINT()})));
   EXPECT_EQ(
       "ROW<a:BOOLEAN,b:VARCHAR,c:BIGINT>",
-      folly::sformat(
+      fmt::format(
           "{}", ROW({{"a", BOOLEAN()}, {"b", VARCHAR()}, {"c", BIGINT()}})));
 }
 
@@ -1282,6 +1298,38 @@ TEST(TypeTest, unionWith) {
       childRowType1->unionWith(childRowType2)->equivalent(*resultRowType));
   ASSERT_TRUE(
       childRowType1->unionWith(childRowType1)->equivalent(*resultRowType2));
+
+  const auto rowType = ROW({"a", "b"}, {TINYINT(), VARCHAR()});
+
+  ASSERT_EQ(
+      *rowType->unionWith({"c", "d"}, {BIGINT(), DOUBLE()}),
+      *ROW(
+          {{"a", TINYINT()},
+           {"b", VARCHAR()},
+           {"c", BIGINT()},
+           {"d", DOUBLE()}}));
+  VELOX_ASSERT_THROW(
+      rowType->unionWith({"c", "d"}, std::vector<TypePtr>{BIGINT()}),
+      "Mismatch names/types sizes");
+
+  const auto sameTypeResult = ROW(
+      {{"a", TINYINT()}, {"b", VARCHAR()}, {"c", BOOLEAN()}, {"d", BOOLEAN()}});
+  ASSERT_EQ(*rowType->unionWith({"c", "d"}, BOOLEAN()), *sameTypeResult);
+  ASSERT_EQ(
+      *rowType->unionWith(std::vector<std::string>{"c", "d"}, BOOLEAN()),
+      *sameTypeResult);
+
+  ASSERT_EQ(
+      *rowType->unionWith(std::string_view{"c"}, BIGINT()),
+      *ROW({{"a", TINYINT()}, {"b", VARCHAR()}, {"c", BIGINT()}}));
+
+  ASSERT_EQ(
+      *rowType->unionWith({{"c", BIGINT()}, {"d", DOUBLE()}}),
+      *ROW(
+          {{"a", TINYINT()},
+           {"b", VARCHAR()},
+           {"c", BIGINT()},
+           {"d", DOUBLE()}}));
 }
 
 TEST(TypeTest, orderableComparable) {
@@ -1550,6 +1598,7 @@ TEST(TypeTest, derivedScalarTypesHaveNoCreate) {
   static_assert(!HasCreate<IntervalDayTimeType>);
   static_assert(!HasCreate<IntervalYearMonthType>);
   static_assert(!HasCreate<TimestampUtcType>);
+  static_assert(!HasCreate<VectorIndexType>);
   static_assert(!HasCreate<TimeMilliPrecisionType>);
   static_assert(!HasCreate<TimeMicroPrecisionUtcType>);
   static_assert(!HasCreate<ShortDecimalType>);

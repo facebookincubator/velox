@@ -44,21 +44,21 @@
 #include "velox/dwio/common/Statistics.h"
 #include "velox/dwio/nimble/common/Buffer.h"
 #include "velox/dwio/nimble/common/ChunkHeader.h"
+#include "velox/dwio/nimble/common/ChunkedStream.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/common/FixedBitArray.h"
+#include "velox/dwio/nimble/common/SchemaSerialization.h"
 #include "velox/dwio/nimble/common/tests/NimbleFileWriter.h"
 #include "velox/dwio/nimble/encodings/common/EncodingFactory.h"
 #include "velox/dwio/nimble/encodings/common/EncodingLayout.h"
 #include "velox/dwio/nimble/encodings/common/EncodingPrefix.h"
 #include "velox/dwio/nimble/encodings/selection/EncodingSelectionPolicy.h"
 #include "velox/dwio/nimble/encodings/selection/tests/RandomEncodingSelectionPolicy.h"
+#include "velox/dwio/nimble/reader/BatchReader.h"
+#include "velox/dwio/nimble/stats/ColumnStatistics.h"
+#include "velox/dwio/nimble/stats/VectorizedStatistics.h"
 #include "velox/dwio/nimble/tablet/TabletReader.h"
 #include "velox/dwio/nimble/tablet/tests/TabletTestUtils.h"
-#include "velox/dwio/nimble/velox/BatchReader.h"
-#include "velox/dwio/nimble/velox/ChunkedStream.h"
-#include "velox/dwio/nimble/velox/SchemaSerialization.h"
-#include "velox/dwio/nimble/velox/stats/ColumnStatistics.h"
-#include "velox/dwio/nimble/velox/stats/VectorizedStatistics.h"
 #include "velox/dwio/nimble/writer/EncodingSelectionPolicyFactory.h"
 #include "velox/dwio/nimble/writer/FlushPolicy.h"
 #include "velox/dwio/nimble/writer/WriterOptions.h"
@@ -213,6 +213,7 @@ bool hasDataPrecondition(EncodingType encodingType) {
   return encodingType == EncodingType::Constant ||
       encodingType == EncodingType::DeltaBlock ||
       encodingType == EncodingType::EliasFano ||
+      encodingType == EncodingType::PartitionedEliasFano ||
       encodingType == EncodingType::Huffman;
 }
 
@@ -1109,14 +1110,10 @@ std::string makeCappingJsonValue(uint64_t seed, uint64_t rowIndex) {
 
 std::string_view toString(ReaderPath readerPath) {
   switch (readerPath) {
-    case ReaderPath::kLegacyFactory:
-      return "BatchReader/legacyFactory";
-    case ReaderPath::kDefaultFactory:
-      return "BatchReader/defaultFactory";
-    case ReaderPath::kSelectiveLegacyDispatch:
-      return "selective/legacyDispatch";
-    case ReaderPath::kSelectiveDefaultDispatch:
-      return "selective/defaultDispatch";
+    case ReaderPath::kBatchReader:
+      return "BatchReader";
+    case ReaderPath::kSelectiveReader:
+      return "selective";
   }
   NIMBLE_UNREACHABLE("Unknown reader path: {}.", static_cast<int>(readerPath));
 }
@@ -1152,7 +1149,8 @@ bool isTypeCompatible(EncodingType encodingType, DataType dataType) {
     return isFloatingPointDataType(dataType);
   }
   if (encodingType == EncodingType::DeltaBlock ||
-      encodingType == EncodingType::EliasFano) {
+      encodingType == EncodingType::EliasFano ||
+      encodingType == EncodingType::PartitionedEliasFano) {
     return !isFloatingPointDataType(dataType);
   }
   // Varint's gate is isIntegralType<physicalType>() && sizeof(T) >= 4, so the
@@ -1167,6 +1165,7 @@ bool isTypeCompatible(EncodingType encodingType, DataType dataType) {
 bool isIntegralOnlyEncoding(EncodingType encodingType) {
   return encodingType == EncodingType::DeltaBlock ||
       encodingType == EncodingType::EliasFano ||
+      encodingType == EncodingType::PartitionedEliasFano ||
       encodingType == EncodingType::PFOR ||
       encodingType == EncodingType::SimdForBitpack ||
       encodingType == EncodingType::Huffman;
@@ -1960,17 +1959,8 @@ void NimbleWriterFuzzer::readAndVerify(
   uint64_t rowsRead{0};
   auto readFile = std::make_shared<velox::InMemoryReadFile>(file);
 
-  if (readerPath == ReaderPath::kLegacyFactory ||
-      readerPath == ReaderPath::kDefaultFactory) {
+  if (readerPath == ReaderPath::kBatchReader) {
     BatchReadParams params;
-    if (readerPath == ReaderPath::kDefaultFactory) {
-      params.encodingFactory =
-          [](velox::memory::MemoryPool& pool,
-             std::string_view data,
-             std::function<void*(uint32_t)> stringBufferFactory) {
-            return EncodingFactory().create(pool, data, stringBufferFactory);
-          };
-    }
     BatchReader reader(readFile, *leafPool_, /*selector=*/nullptr, params);
     checkSchema(*reader.type());
 
@@ -1999,8 +1989,6 @@ void NimbleWriterFuzzer::readAndVerify(
     velox::dwio::common::RowReaderOptions rowOptions;
     rowOptions.setScanSpec(scanSpec);
     rowOptions.setRequestedType(schema);
-    rowOptions.setStringDecoderZeroCopy(
-        readerPath == ReaderPath::kSelectiveDefaultDispatch);
     auto rowReader = reader->createRowReader(rowOptions);
 
     auto result = velox::BaseVector::create(schema, 0, leafPool_.get());

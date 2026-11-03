@@ -59,8 +59,6 @@ std::shared_ptr<Scanner> Scanner::make(
     default:
       ParquetException::NYI("type reader not implemented");
   }
-  // Unreachable code, but suppress compiler warning.
-  return std::shared_ptr<Scanner>(nullptr);
 }
 
 int64_t scanAllValues(
@@ -98,8 +96,6 @@ int64_t scanAllValues(
     default:
       ParquetException::NYI("type reader not implemented");
   }
-  // Unreachable code, but suppress compiler warning.
-  return 0;
 }
 
 } // namespace facebook::velox::parquet::arrow

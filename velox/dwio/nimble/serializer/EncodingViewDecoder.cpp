@@ -133,12 +133,25 @@ EncodingViewDecoder::EncodingViewDecoder(
     velox::memory::MemoryPool* pool,
     velox::BufferPool* bufferPool,
     const EncodingViewFactory& encodingViewFactory)
-    : pool_{velox::checkedNotNull(pool)}, bufferPool_{bufferPool} {
+    : pool_{velox::checkedNotNull(pool)},
+      bufferPool_{bufferPool},
+      encodingViewFactory_{encodingViewFactory} {
   NIMBLE_CHECK(
-      encodingViewFactory != nullptr,
+      encodingViewFactory_ != nullptr,
       "EncodingViewDecoder requires an EncodingView factory");
-  encodingView_ = encodingViewFactory(encoded);
-  NIMBLE_CHECK_NOT_NULL(encodingView_);
+  rebind(encoded);
+}
+
+void EncodingViewDecoder::rebind(std::string_view encoded) {
+  auto encodingView = encodingViewFactory_(encoded);
+  NIMBLE_CHECK_NOT_NULL(encodingView);
+  encodingView_ = std::move(encodingView);
+  nextRow_ = 0;
+}
+
+void EncodingViewDecoder::release() {
+  encodingView_.reset();
+  nextRow_ = 0;
 }
 
 uint32_t EncodingViewDecoder::next(

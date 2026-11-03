@@ -19,6 +19,7 @@
 #include "velox/exec/FixedPointLoop.h"
 #include "velox/exec/HashTable.h"
 #include "velox/exec/Operator.h"
+#include "velox/exec/OperatorType.h"
 #include "velox/exec/PersistentState.h"
 #include "velox/exec/Task.h"
 #include "velox/exec/VectorHasher.h"
@@ -30,35 +31,32 @@ using core::FixedPointNode;
 using core::StateHashJoinNode;
 using core::StateSourceNode;
 
-// Resolves the PersistentState holding entry 'name' for this sub-task.  The
-// state belongs to the FixedPointLoop that created the sub-task and linked
-// itself as the parent task.  When one fixed point is nested inside another's
-// body, the enclosing loops are that task's own ancestors, so the search walks
-// up the parent chain to the nearest one declaring 'name' -- innermost wins,
-// as lexical scoping of the state names in the plan implies.
-PersistentState* stateOf(
-    const exec::OperatorCtx* operatorCtx,
+// Returns the PersistentState holding entry 'name' for this sub-task: the
+// state of the FixedPointLoop that created it.  A FixedPointNode resolves the
+// entries its plans read against its own declarations only
+// (FixedPointNode::resolveAndValidateStateReferences()), so a sub-task never
+// reads the state of a loop enclosing that one.
+//
+// Called from the operator constructors, which run in the sub-task's start()
+// or first next(), both called by that loop, so the state is alive.
+// initialize() runs when a driver first runs, which can be after the sub-task
+// has completed and the loop has ended.
+std::shared_ptr<PersistentState> stateOf(
+    const exec::DriverCtx* driverCtx,
     const std::string& name,
     bool hashTable) {
-  auto* parent = operatorCtx->task()->parentFixedPoint();
-  VELOX_CHECK_NOT_NULL(
-      parent, "Fixed point sub-task has no FixedPointLoop parent");
-  for (auto* loop = parent; loop != nullptr;
-       loop = loop->owner()->parentFixedPoint()) {
-    auto* state = loop->state();
-    VELOX_CHECK_NOT_NULL(state, "FixedPointLoop has no persistent state");
-    if (hashTable ? state->hasHashTable(name) : state->hasVector(name)) {
-      return state;
-    }
-  }
-  VELOX_FAIL(
-      "No enclosing fixed point declares {} state entry '{}'",
+  auto state = driverCtx->task->fixedPointState();
+  VELOX_CHECK_NOT_NULL(state, "Fixed point sub-task has no persistent state");
+  VELOX_CHECK(
+      hashTable ? state->hasHashTable(name) : state->hasVector(name),
+      "The fixed point declares no {} state entry '{}'",
       hashTable ? "hash table" : "vector",
       name);
+  return state;
 }
 
-// Emits the batches of a Vector persistent state entry, snapshotted at
-// initialize() time so concurrent writes to the same entry do not affect this
+// Emits the batches of a Vector persistent state entry, snapshotted when the
+// operator is created so later writes to the same entry do not affect this
 // read.  A delta source reads what an iteration consumes -- an append entry's
 // latest delta (the frontier) or a replace entry's full contents; a non-delta
 // source reads the entry's whole contents (the fixed point's output, an append
@@ -69,21 +67,31 @@ PersistentState* stateOf(
 // task: it waits for the loop to finish, then reads the loop's output entry.
 class StateSourceOperator : public exec::SourceOperator {
  public:
+  // With 'emits' false, the operator waits for 'loop' and then emits nothing.
   StateSourceOperator(
       int32_t operatorId,
       exec::DriverCtx* driverCtx,
       const core::StateSourceNodePtr& node,
-      FixedPointLoop* loop = nullptr)
+      FixedPointLoop* loop,
+      bool emits)
       : SourceOperator(
             driverCtx,
             node->outputType(),
             operatorId,
             node->id(),
-            "FixedPointStateSource"),
+            OperatorType::kFixedPointStateSource),
         stateName_{node->stateName()},
         delta_{node->delta()},
         loop_{loop},
-        driverIndex_{driverCtx->partitionId} {}
+        emits_{emits},
+        driverIndex_{driverCtx->partitionId} {
+    if (loop_ == nullptr) {
+      const auto state = stateOf(driverCtx, stateName_, /*hashTable=*/false);
+      batches_ =
+          delta_ ? state->readVector(stateName_) : state->getVector(stateName_);
+      read_ = true;
+    }
+  }
 
   void initialize() override {
     Operator::initialize();
@@ -91,13 +99,6 @@ class StateSourceOperator : public exec::SourceOperator {
         operatorCtx_->task()->numDrivers(operatorCtx_->driverCtx()->driver);
     VELOX_CHECK_LT(driverIndex_, numDrivers_);
     current_ = driverIndex_;
-    if (loop_ == nullptr) {
-      auto* state =
-          stateOf(operatorCtx_.get(), stateName_, /*hashTable=*/false);
-      batches_ =
-          delta_ ? state->readVector(stateName_) : state->getVector(stateName_);
-      read_ = true;
-    }
   }
 
   RowVectorPtr getOutput() override {
@@ -128,7 +129,9 @@ class StateSourceOperator : public exec::SourceOperator {
     }
     // A failed loop fails the task, which stops this driver.
     VELOX_CHECK(loop_->succeeded(), "The fixed point failed");
-    batches_ = loop_->state()->getVector(stateName_);
+    if (emits_) {
+      batches_ = loop_->state()->getVector(stateName_);
+    }
     read_ = true;
     return exec::BlockingReason::kNotBlocked;
   }
@@ -139,13 +142,9 @@ class StateSourceOperator : public exec::SourceOperator {
 
   void close() override {
     SourceOperator::close();
-    // 'batches_' holds shared references to vectors allocated from the owning
-    // FixedPointLoop's state pool.  Release them here rather than in the
-    // destructor: the loop waits only on each sub-task's taskCompletionFuture,
-    // which fires when drivers close, while this operator object can be
-    // destroyed later on an executor thread, after the loop and its pool are
-    // gone.  Releasing in close() keeps every state-pool reference inside the
-    // loop's lifetime.
+    // The operator is destroyed only with its driver, which can be well after
+    // it closes, and the batches may be the last references to what an
+    // iteration has since overwritten.
     batches_.clear();
   }
 
@@ -156,13 +155,17 @@ class StateSourceOperator : public exec::SourceOperator {
   // entry's full contents (the output).
   const bool delta_;
 
-  // Snapshot of the state entry, taken in initialize() or, for a loop's
+  // Snapshot of the state entry, taken at construction or, for a loop's
   // output, once the loop finishes.
   std::vector<RowVectorPtr> batches_;
   bool read_{false};
 
   // The loop whose output this reads, if it is a FixedPointNode leaf.
   FixedPointLoop* const loop_;
+
+  // False when this worker emits none of the loop's output (see
+  // core::FixedPointNode::outputOnWorkerZero).
+  const bool emits_;
 
   // This driver emits batches driverIndex_, driverIndex_ + numDrivers_, and so
   // on.
@@ -202,19 +205,19 @@ class StateHashJoinOperator : public exec::Operator {
             node->outputType(),
             operatorId,
             node->id(),
-            "FixedPointStateHashJoin"),
+            OperatorType::kFixedPointStateHashJoin),
         stateName_{node->stateName()},
         probeType_{node->sources()[0]->outputType()},
-        hashers_{createProbeHashers(*node)} {}
+        hashers_{createProbeHashers(*node)} {
+    entry_ = stateOf(driverCtx, stateName_, /*hashTable=*/true)
+                 ->getHashTable(stateName_);
+    VELOX_CHECK(
+        entry_.has_value(), "No hash table state registered: {}", stateName_);
+    table_ = entry_->table.get();
+  }
 
   void initialize() override {
     Operator::initialize();
-    auto entry = stateOf(operatorCtx_.get(), stateName_, /*hashTable=*/true)
-                     ->getHashTable(stateName_);
-    VELOX_CHECK(
-        entry.has_value(), "No hash table state registered: {}", stateName_);
-    entry_ = std::move(entry);
-    table_ = entry_->table.get();
     lookup_ = std::make_unique<exec::HashLookup>(hashers_, pool());
   }
 
@@ -281,13 +284,10 @@ class StateHashJoinOperator : public exec::Operator {
 
   void close() override {
     Operator::close();
-    // 'entry_' is a hash table built in the owning FixedPointLoop's state
-    // pool, and 'input_'/'probe_' can also reference state-pool vectors when
-    // this operator reads behind a StateSource.  Release them here rather
-    // than in the destructor: the loop waits only on each sub-task's
-    // taskCompletionFuture, which fires when drivers close, while this
-    // operator object can be destroyed later on an executor thread, after
-    // the loop and its pool are gone.
+    // 'entry_' is a hash table built in the state's pool, and 'input_' and
+    // 'probe_' can hold state vectors when this operator reads behind a
+    // StateSource.  The operator is destroyed only with its driver, which can
+    // be well after it closes.
     input_ = nullptr;
     probe_ = nullptr;
     lookup_.reset();
@@ -370,14 +370,20 @@ std::unique_ptr<Operator> FixedPointOperators::create(
   auto* loop = driverCtx->task->fixedPoint();
   VELOX_CHECK_NOT_NULL(loop, "A FixedPointNode leaf needs its task's loop");
   return std::make_unique<StateSourceOperator>(
-      operatorId, driverCtx, stateSource, loop);
+      operatorId,
+      driverCtx,
+      stateSource,
+      loop,
+      /*emits=*/!node->outputOnWorkerZero() ||
+          driverCtx->task->destination() == 0);
 }
 
 std::unique_ptr<Operator> FixedPointOperators::create(
     int32_t operatorId,
     DriverCtx* driverCtx,
     const core::StateSourceNodePtr& node) {
-  return std::make_unique<StateSourceOperator>(operatorId, driverCtx, node);
+  return std::make_unique<StateSourceOperator>(
+      operatorId, driverCtx, node, /*loop=*/nullptr, /*emits=*/true);
 }
 
 std::unique_ptr<Operator> FixedPointOperators::create(

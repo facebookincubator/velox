@@ -124,7 +124,6 @@ jobs:
       VELOX_DEPENDENCY_SOURCE: SYSTEM
       cudf_SOURCE: BUNDLED
       CUDA_VERSION: '12.9'
-      faiss_SOURCE: BUNDLED
       USE_CLANG: "${{ inputs.use-clang && 'true' || 'false' }}"
       # Empty when full mode (or when the plan emitted no targets);
       # space-separated cmake target names when running selective.
@@ -247,7 +246,7 @@ jobs:
       - name: Ccache after
         run: ccache -s
 
-      - uses: apache/infrastructure-actions/stash/save@b1b1ab191498302581efdef55279706f79249c0e
+      - uses: apache/infrastructure-actions/stash/save@bd72894b857767d42834c186c90767d5c86624bb
         continue-on-error: true
         timeout-minutes: 20
         with:
@@ -679,14 +678,6 @@ jobs:
         env:
           VELOX_DEPENDENCY_SOURCE: SYSTEM
           ICU_SOURCE: SYSTEM
-          # Mirror the adapters and fedora-debug jobs: build FAISS from
-          # source instead of resolving the system-installed package.
-          # The system FAISS config (/usr/local/share/faiss/faiss-config.cmake)
-          # sets the link interface of the imported `faiss` target to
-          # include OpenMP::OpenMP_CXX without ever calling
-          # find_package(OpenMP) to define it, so a SYSTEM resolution
-          # fails the configure.
-          faiss_SOURCE: BUNDLED
           LibXml2_SOURCE: BUNDLED
           # Use BUNDLED gflags to provide PIC static gflags for .so plugins.
           # The container's folly is built with -DGFLAGS_SHARED=FALSE so its
@@ -761,7 +752,7 @@ jobs:
         run: |
           ccache -vs
 
-      - uses: apache/infrastructure-actions/stash/save@b1b1ab191498302581efdef55279706f79249c0e
+      - uses: apache/infrastructure-actions/stash/save@bd72894b857767d42834c186c90767d5c86624bb
         continue-on-error: true
         timeout-minutes: 20
         with:
@@ -938,7 +929,6 @@ jobs:
         id: build
         env:
           VELOX_DEPENDENCY_SOURCE: SYSTEM
-          faiss_SOURCE: BUNDLED
           LibXml2_SOURCE: BUNDLED
           simdjson_SOURCE: BUNDLED
           gRPC_SOURCE: SYSTEM
@@ -955,7 +945,7 @@ jobs:
         run: |
           ccache -vs
 
-      - uses: apache/infrastructure-actions/stash/save@b1b1ab191498302581efdef55279706f79249c0e
+      - uses: apache/infrastructure-actions/stash/save@bd72894b857767d42834c186c90767d5c86624bb
         continue-on-error: true
         timeout-minutes: 20
         with:
@@ -1018,7 +1008,6 @@ jobs:
     env:
       CCACHE_DIR: ${{ github.workspace }}/ccache
       VELOX_DEPENDENCY_SOURCE: SYSTEM
-      faiss_SOURCE: BUNDLED
     outputs:
       build-outcome: ${{ steps.build.outcome }}
       build-failure-details: ${{ steps.build-errors.outputs.build-failure-details }}
@@ -1136,7 +1125,7 @@ jobs:
       - name: Ccache after
         run: ccache -s
 
-      - uses: apache/infrastructure-actions/stash/save@b1b1ab191498302581efdef55279706f79249c0e
+      - uses: apache/infrastructure-actions/stash/save@bd72894b857767d42834c186c90767d5c86624bb
         continue-on-error: true
         timeout-minutes: 20
         with:

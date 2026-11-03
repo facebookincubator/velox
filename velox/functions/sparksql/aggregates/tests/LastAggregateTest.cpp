@@ -22,6 +22,9 @@ namespace facebook::velox::functions::aggregate::sparksql::test {
 
 namespace {
 
+using facebook::velox::exec::test::AssertQueryBuilder;
+using facebook::velox::exec::test::PlanBuilder;
+
 class LastAggregateTest : public aggregate::test::AggregationTestBase {
  protected:
   void SetUp() override {
@@ -140,6 +143,70 @@ TEST_F(LastAggregateTest, integer) {
 
 TEST_F(LastAggregateTest, bigint) {
   testAggregate<int64_t>();
+}
+
+TEST_F(LastAggregateTest, unknownInput) {
+  const std::vector<std::string> aggregates{
+      "spark_last(c1)", "spark_last_ignore_null(c1)"};
+  auto expectedGlobal = makeRowVector({
+      makeAllNullFlatVector<UnknownValue>(1),
+      makeAllNullFlatVector<UnknownValue>(1),
+  });
+
+  const std::vector<VectorPtr> inputs{
+      makeAllNullFlatVector<UnknownValue>(4),
+      BaseVector::createNullConstant(UNKNOWN(), 4, pool()),
+      makeAllNullFlatVector<UnknownValue>(0),
+  };
+  for (const auto& values : inputs) {
+    SCOPED_TRACE(values->toString());
+    auto input = makeRowVector({
+        makeFlatVector<int32_t>(
+            values->size(), [](auto row) { return row % 2; }),
+        values,
+    });
+    const auto numGroups = values->size() == 0 ? 0 : 2;
+    auto expectedGrouped = makeRowVector({
+        makeFlatVector<int32_t>(numGroups, [](auto row) { return row; }),
+        makeAllNullFlatVector<UnknownValue>(numGroups),
+        makeAllNullFlatVector<UnknownValue>(numGroups),
+    });
+
+    testAggregations({input}, {}, aggregates, {expectedGlobal});
+    testAggregations({input}, {"c0"}, aggregates, {expectedGrouped});
+  }
+}
+
+TEST_F(LastAggregateTest, unknownIntermediateAndFinalInputs) {
+  auto intermediateType = ROW({UNKNOWN(), BOOLEAN()});
+  auto intermediateRows = makeRowVector({
+      makeAllNullFlatVector<UnknownValue>(2),
+      makeFlatVector<bool>({false, true}),
+  });
+  auto intermediateInput = makeRowVector({intermediateRows});
+  auto intermediatePlan =
+      PlanBuilder()
+          .values({intermediateInput})
+          .singleAggregation(
+              {}, {"spark_last_merge(c0)", "spark_last_ignore_null_merge(c0)"})
+          .planNode();
+  AssertQueryBuilder(intermediatePlan)
+      .assertResults(makeRowVector({
+          BaseVector::createNullConstant(intermediateType, 1, pool()),
+          BaseVector::createNullConstant(intermediateType, 1, pool()),
+      }));
+
+  auto finalPlan = PlanBuilder()
+                       .values({intermediateInput})
+                       .finalAggregation(
+                           {},
+                           {"spark_last(c0)", "spark_last_ignore_null(c0)"},
+                           {{UNKNOWN()}, {UNKNOWN()}})
+                       .planNode();
+  AssertQueryBuilder(finalPlan).assertResults(makeRowVector({
+      makeAllNullFlatVector<UnknownValue>(1),
+      makeAllNullFlatVector<UnknownValue>(1),
+  }));
 }
 
 TEST_F(LastAggregateTest, real) {

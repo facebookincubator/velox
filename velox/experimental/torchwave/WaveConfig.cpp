@@ -95,6 +95,8 @@ std::string WaveConfig::toString() const {
   addBool("enableReuse", &WaveConfig::enableReuse);
   addBool("elideClones", &WaveConfig::elideClones);
   addBool("recognizeDisjointCopies", &WaveConfig::recognizeDisjointCopies);
+  addBool("reinplaceScatters", &WaveConfig::reinplaceScatters);
+  addBool("disjointWriteOrdering", &WaveConfig::disjointWriteOrdering);
   addBool("skipRepeatedWaits", &WaveConfig::skipRepeatedWaits);
   addBool("completionCounters", &WaveConfig::completionCounters);
   addBool("scanOutputReturnBarrier", &WaveConfig::scanOutputReturnBarrier);
@@ -104,6 +106,10 @@ std::string WaveConfig::toString() const {
   addBool("cseViews", &WaveConfig::cseViews);
   addBool("decomposeLists", &WaveConfig::decomposeLists);
   addBool("twMad", &WaveConfig::twMad);
+  addBool("twFusedMad", &WaveConfig::twFusedMad);
+  addBool("madChains", &WaveConfig::madChains);
+  addInt("madInsertBlocksPerSm", &WaveConfig::madInsertBlocksPerSm);
+  addInt("madInsertBlockSize", &WaveConfig::madInsertBlockSize);
   addBool("metadataGetterStandalone", &WaveConfig::metadataGetterStandalone);
   addBool("concatOperandsInPlace", &WaveConfig::concatOperandsInPlace);
   addBool("foldSharedChains", &WaveConfig::foldSharedChains);
@@ -116,11 +122,6 @@ std::string WaveConfig::toString() const {
   addBool("duplicateMetadata", &WaveConfig::duplicateMetadata);
   addBool("configPerOp", &WaveConfig::configPerOp);
   addBool("deferSizeOutputs", &WaveConfig::deferSizeOutputs);
-  addBool("donateBuffers", &WaveConfig::donateBuffers);
-  addInt("donationCarryBytes", &WaveConfig::donationCarryBytes);
-  addBool("enableAllocGroup", &WaveConfig::enableAllocGroup);
-  addBool("enableConcatAllocGroup", &WaveConfig::enableConcatAllocGroup);
-  addBool("enableLifetimeAllocGroup", &WaveConfig::enableLifetimeAllocGroup);
   addBool("orderBlocksByCost", &WaveConfig::orderBlocksByCost);
   addBool("partitionLaunches", &WaveConfig::partitionLaunches);
   addInt("maxLaunchWaves", &WaveConfig::maxLaunchWaves);

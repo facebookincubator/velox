@@ -20,7 +20,7 @@
 #include "velox/dwio/nimble/common/Vector.h"
 #include "velox/dwio/nimble/serializer/Options.h"
 #include "velox/dwio/nimble/serializer/StreamDataWriter.h"
-#include "velox/dwio/nimble/velox/FieldWriter.h"
+#include "velox/dwio/nimble/writer/FieldWriter.h"
 #include "velox/vector/BaseVector.h"
 
 namespace facebook::nimble {
