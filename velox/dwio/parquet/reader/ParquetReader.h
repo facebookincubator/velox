@@ -108,6 +108,8 @@ class ParquetRowReader : public dwio::common::RowReader {
 
   std::optional<size_t> estimatedRowSize() const override;
 
+  void hintLazyColumnsNeeded() override;
+
   bool allPrefetchIssued() const override {
     //  Allow opening the next split while this is reading.
     return true;
