@@ -52,6 +52,11 @@ using namespace facebook::velox::core;
 
 namespace facebook::velox::ucx_exchange {
 
+// Per-task output buffer limit for tests driven by UcxPartitionedOutputMock.
+// Up to 10 upstream tasks share one GPU (16 GB in CI), so the total queued
+// output must stay well below device memory.
+constexpr uint64_t kMockOutputBufferSize = 512ULL << 20;
+
 struct ExchangeTestParams {
   int numSrcDrivers;
   int numDstDrivers;
@@ -226,8 +231,8 @@ TEST_P(UcxExchangeTest, basicTest) {
   for (int i = 0; i < numUpstreamTasks; i++) {
     const std::string srcTaskId = taskPrefix + "sourceTask" + std::to_string(i);
     srcTaskIds.push_back(srcTaskId);
-    auto srcTask =
-        createSourceTask(srcTaskId, pool_, UcxTestData::kTestRowType);
+    auto srcTask = createSourceTask(
+        srcTaskId, pool_, UcxTestData::kTestRowType, kMockOutputBufferSize);
 
     // tell the queue manager that a new source task exists.
     queueManager()->initializeTask(
@@ -335,8 +340,8 @@ TEST_P(UcxExchangeTest, dataIntegrityTest) {
   for (int i = 0; i < numUpstreamTasks; i++) {
     const std::string srcTaskId = taskPrefix + "sourceTask" + std::to_string(i);
     srcTaskIds.push_back(srcTaskId);
-    auto srcTask =
-        createSourceTask(srcTaskId, pool_, UcxTestData::kTestRowType);
+    auto srcTask = createSourceTask(
+        srcTaskId, pool_, UcxTestData::kTestRowType, kMockOutputBufferSize);
 
     // tell the queue manager that a new source task exists.
     queueManager()->initializeTask(
