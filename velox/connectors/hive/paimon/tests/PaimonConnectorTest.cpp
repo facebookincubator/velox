@@ -1369,12 +1369,17 @@ TEST_F(PaimonConnectorTest, taskCancellationAndLimit) {
         {files[0]->getPath()}, PaimonTableType::kAppendOnly, format);
     exec::CursorParameters params;
     params.planNode = plan;
-    params.queryConfigs[core::QueryConfig::kMaxOutputBufferSize] = "1";
+    // Keep the scan in progress after the first batch, even if the producer
+    // runs ahead of the cursor.
+    params.bufferedBytes = 1024;
+    params.queryConfigs[core::QueryConfig::kMaxOutputBatchRows] = "1024";
     auto cursor = exec::TaskCursor::create(params);
     cursor->task()->addSplit(plan->id(), exec::Split(split));
     cursor->task()->noMoreSplits(plan->id());
     ASSERT_TRUE(cursor->moveNext());
+    ASSERT_TRUE(cursor->task()->isRunning());
     cursor->task()->requestCancel().wait();
+    ASSERT_EQ(cursor->task()->state(), exec::TaskState::kCanceled);
     EXPECT_THROW(cursor->moveNext(), folly::OperationCancelled);
     cursor.reset();
     exec::test::waitForAllTasksToBeDeleted();
