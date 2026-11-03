@@ -24,3 +24,27 @@ target_link_libraries(
     GTest::gtest
     GTest::gtest_main
 )
+# container-deps/include can hold an older faiss. These tests include FAISS
+# headers, so the faiss Velox built has to win.
+if(faiss_SOURCE_DIR)
+  target_include_directories(velox_vector_index_test BEFORE PRIVATE "${faiss_SOURCE_DIR}")
+endif()
+
+if(VELOX_ENABLE_FAISS_GPU)
+  add_executable(velox_vector_index_gpu_test GpuLocalVectorIndexTest.cpp)
+  add_test(velox_vector_index_gpu_test velox_vector_index_gpu_test)
+  target_link_libraries(
+    velox_vector_index_gpu_test
+    PRIVATE
+      velox_vector_index_gpu
+      velox_vector_index
+      velox_exception
+      FAISS::faiss
+      GTest::gmock
+      GTest::gtest
+      GTest::gtest_main
+  )
+  if(faiss_SOURCE_DIR)
+    target_include_directories(velox_vector_index_gpu_test BEFORE PRIVATE "${faiss_SOURCE_DIR}")
+  endif()
+endif()

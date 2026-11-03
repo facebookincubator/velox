@@ -31,6 +31,7 @@ const auto& vectorIndexKindNames() {
       {VectorIndexKind::kIvfFlat, "ivf_flat"},
       {VectorIndexKind::kIvfSq, "ivf_sq"},
       {VectorIndexKind::kHnswSq, "hnsw_sq"},
+      {VectorIndexKind::kCagra, "cagra"},
   };
   return kNames;
 }
@@ -46,6 +47,7 @@ VectorIndexKind VectorIndexKindValue::fromValue(int32_t value) {
     case VectorIndexKind::kIvfFlat:
     case VectorIndexKind::kIvfSq:
     case VectorIndexKind::kHnswSq:
+    case VectorIndexKind::kCagra:
       return kind;
   }
   VELOX_USER_FAIL("Invalid vector index kind value: {}", value);

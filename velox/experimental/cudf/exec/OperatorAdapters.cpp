@@ -36,6 +36,9 @@
 #include "velox/experimental/cudf/exec/CudfTopN.h"
 #include "velox/experimental/cudf/exec/CudfTopNRowNumber.h"
 #include "velox/experimental/cudf/exec/CudfWindow.h"
+#ifdef VELOX_ENABLE_FAISS_GPU
+#include "velox/experimental/cudf/exec/CudfVectorSearchJoin.h"
+#endif
 #include "velox/experimental/cudf/exec/OperatorAdapters.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/cudf/exec/Validation.h"
@@ -70,6 +73,8 @@
 #include "velox/exec/TopN.h"
 #include "velox/exec/TopNRowNumber.h"
 #include "velox/exec/Values.h"
+#include "velox/exec/VectorSearchJoinBuild.h"
+#include "velox/exec/VectorSearchJoinProbe.h"
 #include "velox/exec/Window.h"
 
 namespace facebook::velox::cudf_velox {
@@ -668,6 +673,130 @@ class NestedLoopJoinProbeAdapter : public CudfNestedLoopJoinBaseAdapter {
     return result;
   }
 };
+
+#ifdef VELOX_ENABLE_FAISS_GPU
+class CudfVectorSearchJoinBaseAdapter : public OperatorAdapter {
+ public:
+  using OperatorAdapter::OperatorAdapter;
+
+  bool canRunOnGPU(
+      const exec::Operator* op,
+      const core::PlanNodePtr& planNode,
+      exec::DriverCtx* /*ctx*/) const override {
+    if (!canHandle(op)) {
+      return false;
+    }
+    auto joinPlanNode =
+        std::dynamic_pointer_cast<const core::VectorSearchJoinNode>(planNode);
+    if (!joinPlanNode) {
+      LOG_FALLBACK(
+          "VectorSearchJoin planNode is not VectorSearchJoinNode, "
+          "PlanNode id: {}",
+          planNode->id());
+      return false;
+    }
+    if (!CudfVectorSearchJoinProbe::isSupportedJoinType(
+            joinPlanNode->joinType())) {
+      LOG_FALLBACK(
+          "VectorSearchJoin unsupported join type: {}, PlanNode id: {}",
+          static_cast<int>(joinPlanNode->joinType()),
+          planNode->id());
+      return false;
+    }
+    for (const auto& key : joinPlanNode->leftKeys()) {
+      if (containsCustomComparison(key->type())) {
+        LOG_FALLBACK(
+            "VectorSearchJoin key has custom comparison semantics, "
+            "PlanNode id: {}",
+            planNode->id());
+        return false;
+      }
+    }
+    if (!isTypeSupportedByCudf(joinPlanNode->outputType()) ||
+        std::any_of(
+            joinPlanNode->sources().begin(),
+            joinPlanNode->sources().end(),
+            [](const auto& source) {
+              return subtreeHasUnsupportedType(source);
+            })) {
+      LOG_FALLBACK(
+          "VectorSearchJoin has column types unsupported by cuDF, "
+          "PlanNode id: {}",
+          planNode->id());
+      return false;
+    }
+    return true;
+  }
+};
+
+/// VectorSearchJoinBuildAdapter - Replaces with CudfVectorSearchJoinBuild
+class VectorSearchJoinBuildAdapter : public CudfVectorSearchJoinBaseAdapter {
+ public:
+  VectorSearchJoinBuildAdapter()
+      : CudfVectorSearchJoinBaseAdapter("VectorSearchJoinBuild") {}
+
+  bool canHandle(const exec::Operator* op) const override {
+    return op->is<exec::VectorSearchJoinBuild>();
+  }
+
+  bool acceptsGpuInput() const override {
+    return true;
+  }
+
+  bool producesGpuOutput() const override {
+    return false;
+  }
+
+  std::vector<std::unique_ptr<exec::Operator>> createReplacements(
+      const exec::Operator* /*op*/,
+      const core::PlanNodePtr& planNode,
+      exec::DriverCtx* ctx,
+      int32_t operatorId) const override {
+    std::vector<std::unique_ptr<exec::Operator>> result;
+    result.push_back(
+        std::make_unique<CudfVectorSearchJoinBuild>(
+            operatorId,
+            ctx,
+            std::dynamic_pointer_cast<const core::VectorSearchJoinNode>(
+                planNode)));
+    return result;
+  }
+};
+
+/// VectorSearchJoinProbeAdapter - Replaces with CudfVectorSearchJoinProbe
+class VectorSearchJoinProbeAdapter : public CudfVectorSearchJoinBaseAdapter {
+ public:
+  VectorSearchJoinProbeAdapter()
+      : CudfVectorSearchJoinBaseAdapter("VectorSearchJoinProbe") {}
+
+  bool canHandle(const exec::Operator* op) const override {
+    return op->is<exec::VectorSearchJoinProbe>();
+  }
+
+  bool acceptsGpuInput() const override {
+    return true;
+  }
+
+  bool producesGpuOutput() const override {
+    return true;
+  }
+
+  std::vector<std::unique_ptr<exec::Operator>> createReplacements(
+      const exec::Operator* /*op*/,
+      const core::PlanNodePtr& planNode,
+      exec::DriverCtx* ctx,
+      int32_t operatorId) const override {
+    std::vector<std::unique_ptr<exec::Operator>> result;
+    result.push_back(
+        std::make_unique<CudfVectorSearchJoinProbe>(
+            operatorId,
+            ctx,
+            std::dynamic_pointer_cast<const core::VectorSearchJoinNode>(
+                planNode)));
+    return result;
+  }
+};
+#endif // VELOX_ENABLE_FAISS_GPU
 
 /// OrderByAdapter - Replaces with CudfOrderBy
 class OrderByAdapter : public OperatorAdapter {
@@ -1463,6 +1592,10 @@ void registerAllOperatorAdapters() {
   registry.registerAdapter(std::make_unique<HashJoinProbeAdapter>());
   registry.registerAdapter(std::make_unique<NestedLoopJoinBuildAdapter>());
   registry.registerAdapter(std::make_unique<NestedLoopJoinProbeAdapter>());
+#ifdef VELOX_ENABLE_FAISS_GPU
+  registry.registerAdapter(std::make_unique<VectorSearchJoinBuildAdapter>());
+  registry.registerAdapter(std::make_unique<VectorSearchJoinProbeAdapter>());
+#endif
   registry.registerAdapter(std::make_unique<OrderByAdapter>());
   registry.registerAdapter(std::make_unique<TopNAdapter>());
   registry.registerAdapter(std::make_unique<TopNRowNumberAdapter>());

@@ -65,6 +65,12 @@ struct CudfConfig {
   static constexpr const char* kUcxExchangeLogLevel{"cudf.exchange_log_level"};
   static constexpr const char* kUcxPartitionedOutputBatchRows{
       "cudf.partitioned_output_batch_rows"};
+  static constexpr const char* kCudfVectorSearchEnabled{
+      "cudf.vector_search_enabled"};
+  static constexpr const char* kCudfVectorSearchMinIndexSize{
+      "cudf.vector_search_min_index_size"};
+  static constexpr const char* kCudfVectorIndexBuildEnabled{
+      "cudf.vector_index_build_enabled"};
   /// Query session configs for the cuDF Operators.
   static constexpr const char* kCudfTopNBatchSize{"cudf.topk_batch_size"};
 
@@ -198,6 +204,22 @@ struct CudfConfig {
   std::optional<int32_t> batchSizeMaxThreshold;
   // Query config key for the TopN batch size in the cuDF TopN operator.
   int32_t topNBatchSize{5};
+
+  /// Search the local vector indexes of VectorSearchJoin on the GPU. Read once
+  /// at registerCudf(), on builds with VELOX_ENABLE_FAISS_GPU. The indexes keep
+  /// their FAISS serialization, so plans and intermediate results are the same
+  /// on the CPU and the GPU.
+  bool vectorSearchEnabled{false};
+
+  /// Local vector indexes with fewer embeddings are searched on the CPU, where
+  /// the copies of queries and results to and from the GPU outweigh the search.
+  int64_t vectorSearchMinIndexSize{1'024};
+
+  /// Train and fill local indexes of vector_index_build on the GPU. kIvfFlat
+  /// and kIvfSq are written as the FAISS serialization the CPU build writes,
+  /// though GPU k-means is not bit-reproducible. kCagra is written as an
+  /// IndexHNSWCagra, which the CPU searches too. Needs vectorSearchEnabled.
+  bool vectorIndexBuildEnabled{false};
 
   /// Timestamp unit for cuDF timestamp types.
   /// Can be configured via kCudfTimestampUnit with string values:
