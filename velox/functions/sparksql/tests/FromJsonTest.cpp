@@ -938,6 +938,93 @@ TEST_F(FromJsonTest, failedComplexStructFieldDoesNotLeak) {
   testFromJson(input, expected);
 }
 
+TEST_F(FromJsonTest, keyCaseSensitive) {
+  // Keys are matched against schema field names exactly, regardless of
+  // spark.sql.caseSensitive.
+  // Schema field 'Id': only the exact-case key matches.
+  auto input = makeFlatVector<std::string>(
+      {R"({"Id": 1})", // Exact case.
+       R"({"id": 2})", // Lowercase key, uppercase field.
+       R"({"ID": 3})", // Different case.
+       R"({"Id": 4, "id": 5})"}); // Both present, only exact case is used.
+  testFromJson(
+      input,
+      makeRowVector(
+          {"Id"},
+          {makeNullableFlatVector<int64_t>(
+              {1, std::nullopt, std::nullopt, 4})}));
+
+  // Schema field 'id': uppercase key does not match.
+  input = makeFlatVector<std::string>(
+      {R"({"id": 1})", R"({"Id": 2})", R"({"ID": 3})"});
+  testFromJson(
+      input,
+      makeRowVector(
+          {"id"},
+          {makeNullableFlatVector<int64_t>({1, std::nullopt, std::nullopt})}));
+
+  // Mixed-case field names; fields differing only by case are distinct.
+  input = makeFlatVector<std::string>(
+      {R"({"aB": 1, "Ab": 2, "AB": 3})",
+       R"({"ab": 1, "aB": 2})",
+       R"({"AB": 3})"});
+  testFromJson(
+      input,
+      makeRowVector(
+          {"aB", "Ab", "AB"},
+          {makeNullableFlatVector<int64_t>({1, 2, std::nullopt}),
+           makeNullableFlatVector<int64_t>({2, std::nullopt, std::nullopt}),
+           makeNullableFlatVector<int64_t>({3, std::nullopt, 3})}));
+
+  // Non-ASCII field names are also matched exactly.
+  input = makeFlatVector<std::string>(
+      {R"({"Ä": 1})", R"({"ä": 2})", R"({"Ä": 3, "ä": 4})"});
+  testFromJson(
+      input,
+      makeRowVector(
+          {"Ä"}, {makeNullableFlatVector<int64_t>({1, std::nullopt, 3})}));
+}
+
+TEST_F(FromJsonTest, keyCaseSensitiveNested) {
+  // ROW(Outer ROW(Inner BIGINT), other BIGINT).
+  auto input = makeFlatVector<std::string>(
+      {R"({"Outer": {"Inner": 1}, "other": 10})", // Exact case.
+       R"({"outer": {"Inner": 2}, "other": 20})", // Outer key mismatch.
+       R"({"Outer": {"inner": 3}, "OTHER": 30})", // Inner and other mismatch.
+       R"({"Outer": {"Inner": 4, "INNER": 5}, "other": 40, "extra": 1})"});
+  auto inner = makeRowVector(
+      {"Inner"},
+      {makeNullableFlatVector<int64_t>({1, std::nullopt, std::nullopt, 4})});
+  inner->setNull(1, true);
+  auto expected = makeRowVector(
+      {"Outer", "other"},
+      {inner, makeNullableFlatVector<int64_t>({10, 20, std::nullopt, 40})});
+  testFromJson(input, expected);
+}
+
+TEST_F(FromJsonTest, keyCaseSensitiveNullAndMalformed) {
+  // A NULL input produces a NULL row. Malformed input, a missing key and a
+  // null value produce a row with NULL fields, and an extra key is ignored.
+  auto input = makeNullableFlatVector<std::string>(
+      {std::nullopt,
+       R"({"Id": 1)", // Malformed.
+       R"(not json)",
+       R"({})", // Missing key.
+       R"({"Id": null})",
+       R"({"Id": 5, "extra": 6})"}); // Extra key.
+  auto expected = makeRowVector(
+      {"Id"},
+      {makeNullableFlatVector<int64_t>(
+          {std::nullopt,
+           std::nullopt,
+           std::nullopt,
+           std::nullopt,
+           std::nullopt,
+           5})});
+  expected->setNull(0, true);
+  testFromJson(input, expected);
+}
+
 TEST_F(FromJsonTest, basicArray) {
   auto expected = makeArrayVector<int64_t>({{1}, {2}, {}});
   auto input = makeFlatVector<std::string>({R"([1])", R"([2])", R"([])"});
