@@ -20,12 +20,12 @@
 namespace facebook::velox::connector::hive {
 
 HiveConfigProvider::HiveConfigProvider()
-    : FileConfigProvider(HiveConfig::registeredProperties()) {}
+    : connector::FileConfigProvider(HiveConfig::registeredProperties()) {}
 
 HiveConfigProvider::HiveConfigProvider(
     const std::string& catalogName,
     const config::ConfigBase* catalogConfig)
-    : FileConfigProvider(
+    : connector::FileConfigProvider(
           HiveConfig::registeredProperties(),
           catalogName,
           catalogConfig) {}

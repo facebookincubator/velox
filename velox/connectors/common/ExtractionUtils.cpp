@@ -14,12 +14,12 @@
  * limitations under the License.
  */
 
-#include "velox/connectors/hive/ExtractionUtils.h"
+#include "velox/connectors/common/ExtractionUtils.h"
 
 #include "velox/type/Filter.h"
 #include "velox/vector/FlatVector.h"
 
-namespace facebook::velox::connector::hive {
+namespace facebook::velox::connector {
 
 namespace {
 
@@ -528,4 +528,4 @@ void configureExtractionScanSpec(
   }
 }
 
-} // namespace facebook::velox::connector::hive
+} // namespace facebook::velox::connector

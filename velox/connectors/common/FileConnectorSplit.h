@@ -22,7 +22,7 @@
 #include "velox/connectors/Connector.h"
 #include "velox/dwio/common/Options.h"
 
-namespace facebook::velox::connector::hive {
+namespace facebook::velox::connector {
 
 /// Base split for file-based connectors. Represents a byte range within a
 /// single data file. Connector-specific splits (HiveConnectorSplit,
@@ -93,4 +93,4 @@ struct FileConnectorSplit : public ConnectorSplit {
   }
 };
 
-} // namespace facebook::velox::connector::hive
+} // namespace facebook::velox::connector

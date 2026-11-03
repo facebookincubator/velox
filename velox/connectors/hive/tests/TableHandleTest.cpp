@@ -19,7 +19,7 @@
 #include <gmock/gmock.h>
 #include "gtest/gtest.h"
 #include "velox/common/base/tests/GTestUtils.h"
-#include "velox/connectors/hive/ExtractionUtils.h"
+#include "velox/connectors/common/ExtractionUtils.h"
 #include "velox/core/Expressions.h"
 #include "velox/exec/tests/utils/HiveConnectorTestBase.h"
 
@@ -31,8 +31,8 @@ TEST(FileHandleTest, subfieldSerde) {
        {"c", "c.a", "c.items[2]", "c.labels[\"a.b[0]\"]", "c.items[*]"}) {
     const common::Subfield subfield(path);
     const folly::dynamic serialized = path;
-    EXPECT_EQ(serializeSubfield(subfield), serialized);
-    EXPECT_EQ(deserializeSubfield(serialized), subfield);
+    EXPECT_EQ(connector::serializeSubfield(subfield), serialized);
+    EXPECT_EQ(connector::deserializeSubfield(serialized), subfield);
   }
 }
 
@@ -49,7 +49,7 @@ TEST(FileHandleTest, hiveColumnHandle) {
   ASSERT_EQ(columnHandle->name(), "columnHandle");
   ASSERT_EQ(
       columnHandle->columnType(),
-      connector::hive::FileColumnHandle::ColumnType::kRegular);
+      connector::FileColumnHandle::ColumnType::kRegular);
   ASSERT_EQ(columnHandle->dataType(), columnType);
   ASSERT_EQ(columnHandle->hiveType(), columnType);
   ASSERT_EQ(columnHandle->schemaType(), columnType);
@@ -88,17 +88,18 @@ TEST(FileHandleTest, hiveColumnHandlePartitionMetadata) {
     bool called = false;
     const HiveColumnHandle column(
         "day",
-        FileColumnHandle::ColumnType::kPartitionKey,
+        connector::FileColumnHandle::ColumnType::kPartitionKey,
         DATE(),
         DATE(),
         {},
         {},
         ParseParameters{format},
         [&called](VectorPtr&) { called = true; });
-    const FileColumnHandle& fileColumn = column;
+    const connector::FileColumnHandle& fileColumn = column;
     EXPECT_EQ(fileColumn.name(), "day");
     EXPECT_EQ(
-        fileColumn.columnType(), FileColumnHandle::ColumnType::kPartitionKey);
+        fileColumn.columnType(),
+        connector::FileColumnHandle::ColumnType::kPartitionKey);
     EXPECT_EQ(fileColumn.schemaType(), DATE());
     EXPECT_EQ(fileColumn.dataType(), DATE());
     EXPECT_TRUE(fileColumn.isPartitionKey());
@@ -165,7 +166,10 @@ TEST(FileHandleTest, hiveTableMetadata) {
 
   const auto rowType = ROW({{"a", BIGINT()}});
   const auto column = std::make_shared<HiveColumnHandle>(
-      "a", FileColumnHandle::ColumnType::kRegular, BIGINT(), BIGINT());
+      "a",
+      connector::FileColumnHandle::ColumnType::kRegular,
+      BIGINT(),
+      BIGINT());
   const auto remainingFilter =
       std::make_shared<core::ConstantTypedExpr>(BOOLEAN(), Variant(true));
   common::SubfieldFilters filters;
@@ -186,7 +190,7 @@ TEST(FileHandleTest, hiveTableMetadata) {
       "analytics",
       std::vector<int32_t>{7});
 
-  const FileTableHandle& fileHandle = *handle;
+  const connector::FileTableHandle& fileHandle = *handle;
   EXPECT_EQ(fileHandle.connectorId(), "test-connector");
   EXPECT_EQ(fileHandle.name(), "orders");
   EXPECT_EQ(fileHandle.tableName(), "orders");
@@ -240,7 +244,7 @@ TEST(FileHandleTest, hiveTableDefaults) {
       obj["filterColumnHandles"] = folly::dynamic::array;
     }
     const auto copy = ISerializable::deserialize<HiveTableHandle>(obj);
-    const FileTableHandle& fileHandle = *copy;
+    const connector::FileTableHandle& fileHandle = *copy;
     EXPECT_EQ(fileHandle.name(), "orders");
     EXPECT_EQ(fileHandle.sampleRate(), 1.0);
     EXPECT_TRUE(fileHandle.dbName().empty());
@@ -346,64 +350,73 @@ TEST(TableHandleTest, hiveTableHandleIndexSupport) {
 
 // --- Column extraction pushdown tests ---
 
-using EPE = ExtractionPathElementPtr;
+using EPE = connector::ExtractionPathElementPtr;
 
 TEST(ExtractionStepTest, nameRoundTrip) {
   // Verify all extraction steps can be converted to names and back.
-  std::vector<ExtractionStep> steps = {
-      ExtractionStep::kStructField,
-      ExtractionStep::kMapKeys,
-      ExtractionStep::kMapValues,
-      ExtractionStep::kMapKeyFilter,
-      ExtractionStep::kArrayElements,
-      ExtractionStep::kSize,
+  std::vector<connector::ExtractionStep> steps = {
+      connector::ExtractionStep::kStructField,
+      connector::ExtractionStep::kMapKeys,
+      connector::ExtractionStep::kMapValues,
+      connector::ExtractionStep::kMapKeyFilter,
+      connector::ExtractionStep::kArrayElements,
+      connector::ExtractionStep::kSize,
   };
   for (auto step : steps) {
-    auto name = extractionStepName(step);
-    ASSERT_EQ(extractionStepFromName(name), step);
+    auto name = connector::extractionStepName(step);
+    ASSERT_EQ(connector::extractionStepFromName(name), step);
   }
 }
 
 TEST(ExtractionStepTest, nameValues) {
-  ASSERT_EQ(extractionStepName(ExtractionStep::kStructField), "STRUCT_FIELD");
-  ASSERT_EQ(extractionStepName(ExtractionStep::kMapKeys), "MAP_KEYS");
-  ASSERT_EQ(extractionStepName(ExtractionStep::kMapValues), "MAP_VALUES");
   ASSERT_EQ(
-      extractionStepName(ExtractionStep::kMapKeyFilter), "MAP_KEY_FILTER");
+      connector::extractionStepName(connector::ExtractionStep::kStructField),
+      "STRUCT_FIELD");
   ASSERT_EQ(
-      extractionStepName(ExtractionStep::kArrayElements), "ARRAY_ELEMENTS");
-  ASSERT_EQ(extractionStepName(ExtractionStep::kSize), "SIZE");
+      connector::extractionStepName(connector::ExtractionStep::kMapKeys),
+      "MAP_KEYS");
+  ASSERT_EQ(
+      connector::extractionStepName(connector::ExtractionStep::kMapValues),
+      "MAP_VALUES");
+  ASSERT_EQ(
+      connector::extractionStepName(connector::ExtractionStep::kMapKeyFilter),
+      "MAP_KEY_FILTER");
+  ASSERT_EQ(
+      connector::extractionStepName(connector::ExtractionStep::kArrayElements),
+      "ARRAY_ELEMENTS");
+  ASSERT_EQ(
+      connector::extractionStepName(connector::ExtractionStep::kSize), "SIZE");
 }
 
 TEST(DeriveExtractionOutputTypeTest, mapKeys) {
   // map_keys(col) where col: MAP(VARCHAR, BIGINT) -> ARRAY(VARCHAR).
   auto hiveType = MAP(VARCHAR(), BIGINT());
-  std::vector<EPE> chain = {
-      ExtractionPathElement::simple(ExtractionStep::kMapKeys)};
-  auto outputType = deriveExtractionOutputType(hiveType, chain);
+  std::vector<EPE> chain = {connector::ExtractionPathElement::simple(
+      connector::ExtractionStep::kMapKeys)};
+  auto outputType = connector::deriveExtractionOutputType(hiveType, chain);
   ASSERT_TRUE(outputType->equivalent(*ARRAY(VARCHAR())));
 }
 
 TEST(DeriveExtractionOutputTypeTest, mapValues) {
   // map_values(col) where col: MAP(VARCHAR, BIGINT) -> ARRAY(BIGINT).
   auto hiveType = MAP(VARCHAR(), BIGINT());
-  std::vector<EPE> chain = {
-      ExtractionPathElement::simple(ExtractionStep::kMapValues)};
-  auto outputType = deriveExtractionOutputType(hiveType, chain);
+  std::vector<EPE> chain = {connector::ExtractionPathElement::simple(
+      connector::ExtractionStep::kMapValues)};
+  auto outputType = connector::deriveExtractionOutputType(hiveType, chain);
   ASSERT_TRUE(outputType->equivalent(*ARRAY(BIGINT())));
 }
 
 TEST(DeriveExtractionOutputTypeTest, size) {
   // cardinality(col) where col: MAP(VARCHAR, BIGINT) -> BIGINT.
   auto mapType = MAP(VARCHAR(), BIGINT());
-  std::vector<EPE> chain = {
-      ExtractionPathElement::simple(ExtractionStep::kSize)};
-  auto outputType = deriveExtractionOutputType(mapType, chain);
+  std::vector<EPE> chain = {connector::ExtractionPathElement::simple(
+      connector::ExtractionStep::kSize)};
+  auto outputType = connector::deriveExtractionOutputType(mapType, chain);
   ASSERT_TRUE(outputType->equivalent(*BIGINT()));
 
   // cardinality(col) where col: ARRAY(BIGINT) -> BIGINT.
   auto arrayType = ARRAY(BIGINT());
-  outputType = deriveExtractionOutputType(arrayType, chain);
+  outputType = connector::deriveExtractionOutputType(arrayType, chain);
   ASSERT_TRUE(outputType->equivalent(*BIGINT()));
 }
 
@@ -411,10 +424,11 @@ TEST(DeriveExtractionOutputTypeTest, structFieldMapKeys) {
   // map_keys(col.a.b) where col: ROW(a: ROW(b: MAP(K, V))) -> ARRAY(K).
   auto hiveType = ROW({{"a", ROW({{"b", MAP(VARCHAR(), BIGINT())}})}});
   std::vector<EPE> chain = {
-      ExtractionPathElement::structField("a"),
-      ExtractionPathElement::structField("b"),
-      ExtractionPathElement::simple(ExtractionStep::kMapKeys)};
-  auto outputType = deriveExtractionOutputType(hiveType, chain);
+      connector::ExtractionPathElement::structField("a"),
+      connector::ExtractionPathElement::structField("b"),
+      connector::ExtractionPathElement::simple(
+          connector::ExtractionStep::kMapKeys)};
+  auto outputType = connector::deriveExtractionOutputType(hiveType, chain);
   ASSERT_TRUE(outputType->equivalent(*ARRAY(VARCHAR())));
 }
 
@@ -423,9 +437,10 @@ TEST(DeriveExtractionOutputTypeTest, structFieldSize) {
   // label: INT) -> BIGINT.
   auto hiveType = ROW({{"features", ARRAY(REAL())}, {"label", INTEGER()}});
   std::vector<EPE> chain = {
-      ExtractionPathElement::structField("features"),
-      ExtractionPathElement::simple(ExtractionStep::kSize)};
-  auto outputType = deriveExtractionOutputType(hiveType, chain);
+      connector::ExtractionPathElement::structField("features"),
+      connector::ExtractionPathElement::simple(
+          connector::ExtractionStep::kSize)};
+  auto outputType = connector::deriveExtractionOutputType(hiveType, chain);
   ASSERT_TRUE(outputType->equivalent(*BIGINT()));
 }
 
@@ -434,10 +449,13 @@ TEST(DeriveExtractionOutputTypeTest, mapValuesArrayElementsMapKeys) {
   // -> ARRAY(ARRAY(K2)).
   auto hiveType = MAP(VARCHAR(), MAP(INTEGER(), DOUBLE()));
   std::vector<EPE> chain = {
-      ExtractionPathElement::simple(ExtractionStep::kMapValues),
-      ExtractionPathElement::simple(ExtractionStep::kArrayElements),
-      ExtractionPathElement::simple(ExtractionStep::kMapKeys)};
-  auto outputType = deriveExtractionOutputType(hiveType, chain);
+      connector::ExtractionPathElement::simple(
+          connector::ExtractionStep::kMapValues),
+      connector::ExtractionPathElement::simple(
+          connector::ExtractionStep::kArrayElements),
+      connector::ExtractionPathElement::simple(
+          connector::ExtractionStep::kMapKeys)};
+  auto outputType = connector::deriveExtractionOutputType(hiveType, chain);
   ASSERT_TRUE(outputType->equivalent(*ARRAY(ARRAY(INTEGER()))));
 }
 
@@ -446,11 +464,15 @@ TEST(DeriveExtractionOutputTypeTest, nestedArrayElements) {
   // where col: MAP(K1, ARRAY(MAP(K2, V))) -> ARRAY(ARRAY(ARRAY(K2))).
   auto hiveType = MAP(VARCHAR(), ARRAY(MAP(INTEGER(), DOUBLE())));
   std::vector<EPE> chain = {
-      ExtractionPathElement::simple(ExtractionStep::kMapValues),
-      ExtractionPathElement::simple(ExtractionStep::kArrayElements),
-      ExtractionPathElement::simple(ExtractionStep::kArrayElements),
-      ExtractionPathElement::simple(ExtractionStep::kMapKeys)};
-  auto outputType = deriveExtractionOutputType(hiveType, chain);
+      connector::ExtractionPathElement::simple(
+          connector::ExtractionStep::kMapValues),
+      connector::ExtractionPathElement::simple(
+          connector::ExtractionStep::kArrayElements),
+      connector::ExtractionPathElement::simple(
+          connector::ExtractionStep::kArrayElements),
+      connector::ExtractionPathElement::simple(
+          connector::ExtractionStep::kMapKeys)};
+  auto outputType = connector::deriveExtractionOutputType(hiveType, chain);
   ASSERT_TRUE(outputType->equivalent(*ARRAY(ARRAY(ARRAY(INTEGER())))));
 }
 
@@ -459,10 +481,12 @@ TEST(DeriveExtractionOutputTypeTest, mapValuesStructField) {
   // -> ARRAY(INT).
   auto hiveType = MAP(VARCHAR(), ROW({{"x", INTEGER()}, {"y", INTEGER()}}));
   std::vector<EPE> chain = {
-      ExtractionPathElement::simple(ExtractionStep::kMapValues),
-      ExtractionPathElement::simple(ExtractionStep::kArrayElements),
-      ExtractionPathElement::structField("x")};
-  auto outputType = deriveExtractionOutputType(hiveType, chain);
+      connector::ExtractionPathElement::simple(
+          connector::ExtractionStep::kMapValues),
+      connector::ExtractionPathElement::simple(
+          connector::ExtractionStep::kArrayElements),
+      connector::ExtractionPathElement::structField("x")};
+  auto outputType = connector::deriveExtractionOutputType(hiveType, chain);
   ASSERT_TRUE(outputType->equivalent(*ARRAY(INTEGER())));
 }
 
@@ -470,9 +494,9 @@ TEST(DeriveExtractionOutputTypeTest, mapKeyFilter) {
   // map_subset(col, ARRAY['a', 'b']) where col: MAP(VARCHAR, BIGINT)
   // -> MAP(VARCHAR, BIGINT).
   auto hiveType = MAP(VARCHAR(), BIGINT());
-  std::vector<EPE> chain = {
-      ExtractionPathElement::mapKeyFilter(std::vector<std::string>{"a", "b"})};
-  auto outputType = deriveExtractionOutputType(hiveType, chain);
+  std::vector<EPE> chain = {connector::ExtractionPathElement::mapKeyFilter(
+      std::vector<std::string>{"a", "b"})};
+  auto outputType = connector::deriveExtractionOutputType(hiveType, chain);
   ASSERT_TRUE(outputType->equivalent(*MAP(VARCHAR(), BIGINT())));
 }
 
@@ -482,11 +506,14 @@ TEST(DeriveExtractionOutputTypeTest, mapKeyFilterMapValuesStructField) {
   // where col: MAP(VARCHAR, ROW(x: INT, y: INT)) -> ARRAY(INT).
   auto hiveType = MAP(VARCHAR(), ROW({{"x", INTEGER()}, {"y", INTEGER()}}));
   std::vector<EPE> chain = {
-      ExtractionPathElement::mapKeyFilter(std::vector<std::string>{"foo"}),
-      ExtractionPathElement::simple(ExtractionStep::kMapValues),
-      ExtractionPathElement::simple(ExtractionStep::kArrayElements),
-      ExtractionPathElement::structField("x")};
-  auto outputType = deriveExtractionOutputType(hiveType, chain);
+      connector::ExtractionPathElement::mapKeyFilter(
+          std::vector<std::string>{"foo"}),
+      connector::ExtractionPathElement::simple(
+          connector::ExtractionStep::kMapValues),
+      connector::ExtractionPathElement::simple(
+          connector::ExtractionStep::kArrayElements),
+      connector::ExtractionPathElement::structField("x")};
+  auto outputType = connector::deriveExtractionOutputType(hiveType, chain);
   ASSERT_TRUE(outputType->equivalent(*ARRAY(INTEGER())));
 }
 
@@ -498,13 +525,18 @@ TEST(DeriveExtractionOutputTypeTest, nestedKeyFilter) {
   auto hiveType =
       MAP(VARCHAR(), MAP(VARCHAR(), ROW({{"x", INTEGER()}, {"y", DOUBLE()}})));
   std::vector<EPE> chain = {
-      ExtractionPathElement::simple(ExtractionStep::kMapValues),
-      ExtractionPathElement::simple(ExtractionStep::kArrayElements),
-      ExtractionPathElement::mapKeyFilter(std::vector<std::string>{"foo"}),
-      ExtractionPathElement::simple(ExtractionStep::kMapValues),
-      ExtractionPathElement::simple(ExtractionStep::kArrayElements),
-      ExtractionPathElement::structField("x")};
-  auto outputType = deriveExtractionOutputType(hiveType, chain);
+      connector::ExtractionPathElement::simple(
+          connector::ExtractionStep::kMapValues),
+      connector::ExtractionPathElement::simple(
+          connector::ExtractionStep::kArrayElements),
+      connector::ExtractionPathElement::mapKeyFilter(
+          std::vector<std::string>{"foo"}),
+      connector::ExtractionPathElement::simple(
+          connector::ExtractionStep::kMapValues),
+      connector::ExtractionPathElement::simple(
+          connector::ExtractionStep::kArrayElements),
+      connector::ExtractionPathElement::structField("x")};
+  auto outputType = connector::deriveExtractionOutputType(hiveType, chain);
   ASSERT_TRUE(outputType->equivalent(*ARRAY(ARRAY(INTEGER()))));
 }
 
@@ -512,7 +544,7 @@ TEST(DeriveExtractionOutputTypeTest, emptyChain) {
   // Empty chain means pass-through.
   auto hiveType = MAP(VARCHAR(), BIGINT());
   std::vector<EPE> chain = {};
-  auto outputType = deriveExtractionOutputType(hiveType, chain);
+  auto outputType = connector::deriveExtractionOutputType(hiveType, chain);
   ASSERT_TRUE(outputType->equivalent(*hiveType));
 }
 
@@ -521,10 +553,12 @@ TEST(DeriveExtractionOutputTypeTest, errorMissingArrayElementsAfterMapValues) {
   // ArrayElements.
   auto hiveType = MAP(VARCHAR(), ARRAY(MAP(INTEGER(), DOUBLE())));
   std::vector<EPE> chain = {
-      ExtractionPathElement::simple(ExtractionStep::kMapValues),
-      ExtractionPathElement::simple(ExtractionStep::kMapKeys)};
+      connector::ExtractionPathElement::simple(
+          connector::ExtractionStep::kMapValues),
+      connector::ExtractionPathElement::simple(
+          connector::ExtractionStep::kMapKeys)};
   VELOX_ASSERT_THROW(
-      deriveExtractionOutputType(hiveType, chain),
+      connector::deriveExtractionOutputType(hiveType, chain),
       "MapKeys requires MAP input, got: ARRAY");
 }
 
@@ -533,10 +567,11 @@ TEST(DeriveExtractionOutputTypeTest, errorMissingArrayElementsAfterMapKeys) {
   // ArrayElements.
   auto hiveType = MAP(ROW({{"x", INTEGER()}, {"y", INTEGER()}}), BIGINT());
   std::vector<EPE> chain = {
-      ExtractionPathElement::simple(ExtractionStep::kMapKeys),
-      ExtractionPathElement::structField("x")};
+      connector::ExtractionPathElement::simple(
+          connector::ExtractionStep::kMapKeys),
+      connector::ExtractionPathElement::structField("x")};
   VELOX_ASSERT_THROW(
-      deriveExtractionOutputType(hiveType, chain),
+      connector::deriveExtractionOutputType(hiveType, chain),
       "StructField requires ROW input, got: ARRAY");
 }
 
@@ -544,44 +579,47 @@ TEST(DeriveExtractionOutputTypeTest, errorSizeNotTerminal) {
   // Size must be the last step.
   auto hiveType = MAP(VARCHAR(), BIGINT());
   std::vector<EPE> chain = {
-      ExtractionPathElement::simple(ExtractionStep::kSize),
-      ExtractionPathElement::simple(ExtractionStep::kMapKeys)};
+      connector::ExtractionPathElement::simple(
+          connector::ExtractionStep::kSize),
+      connector::ExtractionPathElement::simple(
+          connector::ExtractionStep::kMapKeys)};
   VELOX_ASSERT_THROW(
-      deriveExtractionOutputType(hiveType, chain),
+      connector::deriveExtractionOutputType(hiveType, chain),
       "Size must be the last step");
 }
 
 TEST(DeriveExtractionOutputTypeTest, errorStructFieldOnMap) {
   auto hiveType = MAP(VARCHAR(), BIGINT());
-  std::vector<EPE> chain = {ExtractionPathElement::structField("x")};
+  std::vector<EPE> chain = {connector::ExtractionPathElement::structField("x")};
   VELOX_ASSERT_THROW(
-      deriveExtractionOutputType(hiveType, chain),
+      connector::deriveExtractionOutputType(hiveType, chain),
       "StructField requires ROW input");
 }
 
 TEST(DeriveExtractionOutputTypeTest, errorMapKeysOnArray) {
   auto hiveType = ARRAY(BIGINT());
-  std::vector<EPE> chain = {
-      ExtractionPathElement::simple(ExtractionStep::kMapKeys)};
+  std::vector<EPE> chain = {connector::ExtractionPathElement::simple(
+      connector::ExtractionStep::kMapKeys)};
   VELOX_ASSERT_THROW(
-      deriveExtractionOutputType(hiveType, chain),
+      connector::deriveExtractionOutputType(hiveType, chain),
       "MapKeys requires MAP input");
 }
 
 TEST(DeriveExtractionOutputTypeTest, errorSizeOnScalar) {
   auto hiveType = BIGINT();
-  std::vector<EPE> chain = {
-      ExtractionPathElement::simple(ExtractionStep::kSize)};
+  std::vector<EPE> chain = {connector::ExtractionPathElement::simple(
+      connector::ExtractionStep::kSize)};
   VELOX_ASSERT_THROW(
-      deriveExtractionOutputType(hiveType, chain),
+      connector::deriveExtractionOutputType(hiveType, chain),
       "Size requires MAP or ARRAY input");
 }
 
 TEST(DeriveExtractionOutputTypeTest, errorNonExistentField) {
   auto hiveType = ROW({{"a", INTEGER()}});
-  std::vector<EPE> chain = {ExtractionPathElement::structField("nonexistent")};
+  std::vector<EPE> chain = {
+      connector::ExtractionPathElement::structField("nonexistent")};
   VELOX_ASSERT_THROW(
-      deriveExtractionOutputType(hiveType, chain),
+      connector::deriveExtractionOutputType(hiveType, chain),
       "non-existent field: nonexistent");
 }
 
@@ -592,9 +630,10 @@ TEST(ColumnExtractionTest, singleExtraction) {
 
   auto hiveType = MAP(VARCHAR(), BIGINT());
   auto outputType = ARRAY(VARCHAR());
-  std::vector<NamedExtraction> extractions = {
+  std::vector<connector::NamedExtraction> extractions = {
       {"keys",
-       {ExtractionPathElement::simple(ExtractionStep::kMapKeys)},
+       {connector::ExtractionPathElement::simple(
+           connector::ExtractionStep::kMapKeys)},
        outputType}};
 
   auto handle = std::make_shared<HiveColumnHandle>(
@@ -608,7 +647,7 @@ TEST(ColumnExtractionTest, singleExtraction) {
   ASSERT_EQ(handle->name(), "col");
   ASSERT_TRUE(handle->dataType()->equivalent(*ARRAY(VARCHAR())));
   ASSERT_TRUE(handle->hiveType()->equivalent(*MAP(VARCHAR(), BIGINT())));
-  const FileColumnHandle& fileColumn = *handle;
+  const connector::FileColumnHandle& fileColumn = *handle;
   EXPECT_EQ(fileColumn.schemaType(), hiveType);
   EXPECT_EQ(fileColumn.dataType(), outputType);
   ASSERT_TRUE(handle->requiredSubfields().empty());
@@ -616,7 +655,8 @@ TEST(ColumnExtractionTest, singleExtraction) {
   ASSERT_EQ(handle->extractions()[0].outputName, "keys");
   ASSERT_EQ(handle->extractions()[0].chain.size(), 1);
   ASSERT_EQ(
-      handle->extractions()[0].chain[0]->step(), ExtractionStep::kMapKeys);
+      handle->extractions()[0].chain[0]->step(),
+      connector::ExtractionStep::kMapKeys);
   ASSERT_TRUE(handle->extractions()[0].dataType->equivalent(*ARRAY(VARCHAR())));
 
   // Serialization round-trip.
@@ -641,12 +681,14 @@ TEST(ColumnExtractionTest, multipleExtractions) {
   auto keysType = ARRAY(VARCHAR());
   auto sizeType = BIGINT();
   auto rowOutputType = ROW({{"keys", keysType}, {"size", sizeType}});
-  std::vector<NamedExtraction> extractions = {
+  std::vector<connector::NamedExtraction> extractions = {
       {"keys",
-       {ExtractionPathElement::simple(ExtractionStep::kMapKeys)},
+       {connector::ExtractionPathElement::simple(
+           connector::ExtractionStep::kMapKeys)},
        keysType},
       {"size",
-       {ExtractionPathElement::simple(ExtractionStep::kSize)},
+       {connector::ExtractionPathElement::simple(
+           connector::ExtractionStep::kSize)},
        sizeType}};
 
   auto handle = std::make_shared<HiveColumnHandle>(
@@ -679,13 +721,15 @@ TEST(ColumnExtractionTest, complexChainWithKeyFilter) {
 
   auto hiveType = MAP(VARCHAR(), ROW({{"x", INTEGER()}, {"y", INTEGER()}}));
   auto outputType = ARRAY(INTEGER());
-  std::vector<NamedExtraction> extractions = {
+  std::vector<connector::NamedExtraction> extractions = {
       {"col_x",
-       {ExtractionPathElement::mapKeyFilter(
+       {connector::ExtractionPathElement::mapKeyFilter(
             std::vector<std::string>{"foo", "bar"}),
-        ExtractionPathElement::simple(ExtractionStep::kMapValues),
-        ExtractionPathElement::simple(ExtractionStep::kArrayElements),
-        ExtractionPathElement::structField("x")},
+        connector::ExtractionPathElement::simple(
+            connector::ExtractionStep::kMapValues),
+        connector::ExtractionPathElement::simple(
+            connector::ExtractionStep::kArrayElements),
+        connector::ExtractionPathElement::structField("x")},
        outputType}};
 
   auto handle = std::make_shared<HiveColumnHandle>(
@@ -701,7 +745,7 @@ TEST(ColumnExtractionTest, complexChainWithKeyFilter) {
 
   // Verify key filter keys are preserved.
   ASSERT_THAT(
-      static_cast<const StringMapKeyFilterExtractionPathElement&>(
+      static_cast<const connector::StringMapKeyFilterExtractionPathElement&>(
           *handle->extractions()[0].chain[0])
           .filterKeys(),
       testing::ElementsAre("foo", "bar"));
@@ -712,7 +756,7 @@ TEST(ColumnExtractionTest, complexChainWithKeyFilter) {
   ASSERT_EQ(clone->extractions().size(), 1);
   ASSERT_EQ(clone->extractions()[0].chain.size(), 4);
   ASSERT_THAT(
-      static_cast<const StringMapKeyFilterExtractionPathElement&>(
+      static_cast<const connector::StringMapKeyFilterExtractionPathElement&>(
           *clone->extractions()[0].chain[0])
           .filterKeys(),
       testing::ElementsAre("foo", "bar"));
@@ -725,9 +769,10 @@ TEST(ColumnExtractionTest, intFilterKeys) {
 
   auto hiveType = MAP(BIGINT(), VARCHAR());
   auto outputType = MAP(BIGINT(), VARCHAR());
-  std::vector<NamedExtraction> extractions = {
+  std::vector<connector::NamedExtraction> extractions = {
       {"filtered",
-       {ExtractionPathElement::mapKeyFilter(std::vector<int64_t>{1, 2, 3})},
+       {connector::ExtractionPathElement::mapKeyFilter(
+           std::vector<int64_t>{1, 2, 3})},
        outputType}};
 
   auto handle = std::make_shared<HiveColumnHandle>(
@@ -739,7 +784,7 @@ TEST(ColumnExtractionTest, intFilterKeys) {
       std::move(extractions));
 
   ASSERT_THAT(
-      static_cast<const IntMapKeyFilterExtractionPathElement&>(
+      static_cast<const connector::IntMapKeyFilterExtractionPathElement&>(
           *handle->extractions()[0].chain[0])
           .filterKeys(),
       testing::ElementsAre(1, 2, 3));
@@ -748,7 +793,7 @@ TEST(ColumnExtractionTest, intFilterKeys) {
   auto obj = handle->serialize();
   auto clone = ISerializable::deserialize<HiveColumnHandle>(obj);
   ASSERT_THAT(
-      static_cast<const IntMapKeyFilterExtractionPathElement&>(
+      static_cast<const connector::IntMapKeyFilterExtractionPathElement&>(
           *clone->extractions()[0].chain[0])
           .filterKeys(),
       testing::ElementsAre(1, 2, 3));
@@ -759,9 +804,10 @@ TEST(ColumnExtractionTest, mutualExclusivity) {
   auto hiveType = MAP(VARCHAR(), BIGINT());
   std::vector<common::Subfield> requiredSubfields;
   requiredSubfields.emplace_back("col[\"foo\"]");
-  std::vector<NamedExtraction> extractions = {
+  std::vector<connector::NamedExtraction> extractions = {
       {"keys",
-       {ExtractionPathElement::simple(ExtractionStep::kMapKeys)},
+       {connector::ExtractionPathElement::simple(
+           connector::ExtractionStep::kMapKeys)},
        ARRAY(VARCHAR())}};
 
   VELOX_ASSERT_THROW(
@@ -778,9 +824,10 @@ TEST(ColumnExtractionTest, mutualExclusivity) {
 TEST(ColumnExtractionTest, extractionOutputTypeMismatch) {
   // Declared output type doesn't match derived type.
   auto hiveType = MAP(VARCHAR(), BIGINT());
-  std::vector<NamedExtraction> extractions = {
+  std::vector<connector::NamedExtraction> extractions = {
       {"keys",
-       {ExtractionPathElement::simple(ExtractionStep::kMapKeys)},
+       {connector::ExtractionPathElement::simple(
+           connector::ExtractionStep::kMapKeys)},
        // Wrong: should be ARRAY(VARCHAR), not ARRAY(BIGINT).
        ARRAY(BIGINT())}};
 
@@ -820,15 +867,21 @@ TEST(ColumnExtractionTest, threeExtractionsFromSameColumn) {
   auto rowOutputType =
       ROW({{"sz", szType}, {"keys", keysType}, {"vals_a", valsAType}});
 
-  std::vector<NamedExtraction> extractions = {
-      {"sz", {ExtractionPathElement::simple(ExtractionStep::kSize)}, szType},
+  std::vector<connector::NamedExtraction> extractions = {
+      {"sz",
+       {connector::ExtractionPathElement::simple(
+           connector::ExtractionStep::kSize)},
+       szType},
       {"keys",
-       {ExtractionPathElement::simple(ExtractionStep::kMapKeys)},
+       {connector::ExtractionPathElement::simple(
+           connector::ExtractionStep::kMapKeys)},
        keysType},
       {"vals_a",
-       {ExtractionPathElement::simple(ExtractionStep::kMapValues),
-        ExtractionPathElement::simple(ExtractionStep::kArrayElements),
-        ExtractionPathElement::structField("a")},
+       {connector::ExtractionPathElement::simple(
+            connector::ExtractionStep::kMapValues),
+        connector::ExtractionPathElement::simple(
+            connector::ExtractionStep::kArrayElements),
+        connector::ExtractionPathElement::structField("a")},
        valsAType}};
 
   auto handle = std::make_shared<HiveColumnHandle>(
@@ -866,9 +919,9 @@ TEST_F(ExtractionUtilsTest, mapKeys) {
   auto mapVector = makeMapVector<std::string, int64_t>(
       {{{{"a", 1}, {"b", 2}}}, {{{"c", 3}}}});
 
-  std::vector<EPE> chain = {
-      ExtractionPathElement::simple(ExtractionStep::kMapKeys)};
-  auto result = applyExtractionChain(mapVector, chain, pool());
+  std::vector<EPE> chain = {connector::ExtractionPathElement::simple(
+      connector::ExtractionStep::kMapKeys)};
+  auto result = connector::applyExtractionChain(mapVector, chain, pool());
 
   ASSERT_TRUE(result->type()->isArray());
   auto* array = result->as<ArrayVector>();
@@ -883,9 +936,9 @@ TEST_F(ExtractionUtilsTest, mapValues) {
   auto mapVector = makeMapVector<std::string, int64_t>(
       {{{{"a", 10}, {"b", 20}}}, {{{"c", 30}}}});
 
-  std::vector<EPE> chain = {
-      ExtractionPathElement::simple(ExtractionStep::kMapValues)};
-  auto result = applyExtractionChain(mapVector, chain, pool());
+  std::vector<EPE> chain = {connector::ExtractionPathElement::simple(
+      connector::ExtractionStep::kMapValues)};
+  auto result = connector::applyExtractionChain(mapVector, chain, pool());
 
   ASSERT_TRUE(result->type()->isArray());
   auto* array = result->as<ArrayVector>();
@@ -904,9 +957,9 @@ TEST_F(ExtractionUtilsTest, sizeOnMap) {
   auto mapVector = makeMapVector<std::string, int64_t>(
       {{{{"a", 1}, {"b", 2}, {"c", 3}}}, {{{"d", 4}}}});
 
-  std::vector<EPE> chain = {
-      ExtractionPathElement::simple(ExtractionStep::kSize)};
-  auto result = applyExtractionChain(mapVector, chain, pool());
+  std::vector<EPE> chain = {connector::ExtractionPathElement::simple(
+      connector::ExtractionStep::kSize)};
+  auto result = connector::applyExtractionChain(mapVector, chain, pool());
 
   ASSERT_TRUE(result->type()->isBigint());
   auto* sizes = result->as<FlatVector<int64_t>>();
@@ -919,9 +972,9 @@ TEST_F(ExtractionUtilsTest, sizeOnArray) {
   // Apply Size to an ArrayVector.
   auto arrayVector = makeArrayVector<int64_t>({{1, 2, 3}, {4, 5}});
 
-  std::vector<EPE> chain = {
-      ExtractionPathElement::simple(ExtractionStep::kSize)};
-  auto result = applyExtractionChain(arrayVector, chain, pool());
+  std::vector<EPE> chain = {connector::ExtractionPathElement::simple(
+      connector::ExtractionStep::kSize)};
+  auto result = connector::applyExtractionChain(arrayVector, chain, pool());
 
   ASSERT_TRUE(result->type()->isBigint());
   auto* sizes = result->as<FlatVector<int64_t>>();
@@ -936,8 +989,8 @@ TEST_F(ExtractionUtilsTest, structField) {
       {"x", "y"},
       {makeFlatVector<int32_t>({10, 20}), makeFlatVector<int32_t>({30, 40})});
 
-  std::vector<EPE> chain = {ExtractionPathElement::structField("x")};
-  auto result = applyExtractionChain(rowVector, chain, pool());
+  std::vector<EPE> chain = {connector::ExtractionPathElement::structField("x")};
+  auto result = connector::applyExtractionChain(rowVector, chain, pool());
 
   ASSERT_TRUE(result->type()->isInteger());
   auto* flat = result->as<FlatVector<int32_t>>();
@@ -950,9 +1003,9 @@ TEST_F(ExtractionUtilsTest, mapKeyFilter) {
   auto mapVector = makeMapVector<std::string, int64_t>(
       {{{{"a", 1}, {"b", 2}, {"c", 3}}}, {{{"a", 10}, {"d", 40}}}});
 
-  std::vector<EPE> chain = {
-      ExtractionPathElement::mapKeyFilter(std::vector<std::string>{"a", "c"})};
-  auto result = applyExtractionChain(mapVector, chain, pool());
+  std::vector<EPE> chain = {connector::ExtractionPathElement::mapKeyFilter(
+      std::vector<std::string>{"a", "c"})};
+  auto result = connector::applyExtractionChain(mapVector, chain, pool());
 
   ASSERT_TRUE(result->type()->isMap());
   auto* filteredMap = result->as<MapVector>();
@@ -974,10 +1027,12 @@ TEST_F(ExtractionUtilsTest, chainMapValuesStructField) {
   auto mapVector = makeMapVector({0, 2}, keys, structValues);
 
   std::vector<EPE> chain = {
-      ExtractionPathElement::simple(ExtractionStep::kMapValues),
-      ExtractionPathElement::simple(ExtractionStep::kArrayElements),
-      ExtractionPathElement::structField("x")};
-  auto result = applyExtractionChain(mapVector, chain, pool());
+      connector::ExtractionPathElement::simple(
+          connector::ExtractionStep::kMapValues),
+      connector::ExtractionPathElement::simple(
+          connector::ExtractionStep::kArrayElements),
+      connector::ExtractionPathElement::structField("x")};
+  auto result = connector::applyExtractionChain(mapVector, chain, pool());
 
   // Output should be ARRAY(INT).
   ASSERT_TRUE(result->type()->isArray());
@@ -996,6 +1051,6 @@ TEST_F(ExtractionUtilsTest, emptyChain) {
   // Empty chain should return the input unchanged.
   auto mapVector = makeMapVector<std::string, int64_t>({{{{"a", 1}}}});
   std::vector<EPE> chain = {};
-  auto result = applyExtractionChain(mapVector, chain, pool());
+  auto result = connector::applyExtractionChain(mapVector, chain, pool());
   ASSERT_EQ(result.get(), mapVector.get());
 }

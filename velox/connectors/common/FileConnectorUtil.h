@@ -30,7 +30,7 @@ class Expr;
 class FieldReference;
 } // namespace facebook::velox::exec
 
-namespace facebook::velox::connector::hive {
+namespace facebook::velox::connector {
 
 class FileColumnHandle;
 using FileColumnHandlePtr = std::shared_ptr<const FileColumnHandle>;
@@ -271,4 +271,4 @@ std::unique_ptr<common::Filter> createRangeFilter(
     const variant& lower,
     const variant& upper);
 
-} // namespace facebook::velox::connector::hive
+} // namespace facebook::velox::connector

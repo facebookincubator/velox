@@ -15,7 +15,7 @@
  */
 #pragma once
 
-#include "velox/connectors/hive/FileConfigProvider.h"
+#include "velox/connectors/common/FileConfigProvider.h"
 
 namespace facebook::velox::config {
 class ConfigBase;
@@ -28,7 +28,7 @@ namespace facebook::velox::connector::hive {
 /// .properties file. When provided, config-file values override code
 /// defaults in ConfigProperty::defaultValue, enabling a three-layer
 /// cascade: code default → config file → session override.
-class HiveConfigProvider : public FileConfigProvider {
+class HiveConfigProvider : public connector::FileConfigProvider {
  public:
   /// Creates a provider with code defaults only.
   HiveConfigProvider();

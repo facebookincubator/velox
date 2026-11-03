@@ -15,20 +15,20 @@
  */
 #pragma once
 
-#include "velox/connectors/hive/FileConfig.h"
+#include "velox/connectors/common/FileConfig.h"
 
 namespace facebook::velox::connector::hive::paimon {
 
 /// Paimon-specific connector configuration.
 /// Extends FileConfig with Paimon-specific settings.
-class PaimonConfig : public FileConfig {
+class PaimonConfig : public connector::FileConfig {
  public:
   /// Canonical connector name used to scope format-specific config keys.
   static constexpr std::string_view kConnectorName = "paimon";
 
   static const std::vector<config::ConfigProperty>& registeredProperties() {
     static const auto kProperties = [] {
-      auto properties = FileConfig::registeredProperties();
+      auto properties = connector::FileConfig::registeredProperties();
       registerFormatProperties(properties);
       return properties;
     }();
@@ -36,7 +36,7 @@ class PaimonConfig : public FileConfig {
   }
 
   explicit PaimonConfig(std::shared_ptr<const config::ConfigBase> config)
-      : FileConfig(
+      : connector::FileConfig(
             std::move(config),
             makeConnectorConfigPrefix(kConnectorName)) {}
 };

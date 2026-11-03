@@ -19,20 +19,20 @@
 //
 // No #pragma once — this file is intentionally included multiple times
 // (once per header that defines config properties). Each inclusion must
-// be paired with HiveConfigMacrosUndef.h to scope the macros.
+// be paired with FileConfigMacrosUndef.h to scope the macros.
 //
 // To add a new property, add two lines (order doesn't matter, but
 // grouping related properties together helps readability):
 //
 // 1. In FileConfig.h or HiveConfig.h (inside the class body):
-//   VELOX_HIVE_CONFIG(kMaxPartitionsPerWritersSession,
+//   VELOX_FILE_CONFIG(kMaxPartitionsPerWritersSession,
 //       maxPartitionsPerWriters, "max_partitions_per_writers",
 //       uint32_t, 128, "Maximum partitions per writer.")
 //
 // 2. In the matching .cpp file (inside registeredProperties()):
-//   VELOX_HIVE_CONFIG_REGISTER(kMaxPartitionsPerWritersSession);
+//   VELOX_FILE_CONFIG_REGISTER(kMaxPartitionsPerWritersSession);
 //
-// VELOX_HIVE_CONFIG generates:
+// VELOX_FILE_CONFIG generates:
 //   - struct kMaxPartitionsPerWritersSessionProperty {
 //         using type = uint32_t;
 //         static constexpr const char* key = "max_partitions_per_writers";
@@ -46,25 +46,25 @@
 //             config_->get<uint32_t>(toConfigKey(...), 128));
 //     }
 //
-// VELOX_HIVE_CONFIG_PROPERTY generates the same but without the accessor.
+// VELOX_FILE_CONFIG_PROPERTY generates the same but without the accessor.
 // Used for properties with custom accessor logic: capacity parsing,
 // validation, or session-only properties that should not fall back to
 // connector config (e.g., ignoreMissingFiles, isPartitionPathAsLowerCase).
-// New properties should use VELOX_HIVE_CONFIG and put validation in
+// New properties should use VELOX_FILE_CONFIG and put validation in
 // HiveConfigProvider::normalize() and HiveConnector constructor.
 // TODO: Unify validation into a single path.
 //
-// VELOX_HIVE_CONFIG_LEGACY is the same as VELOX_HIVE_CONFIG but takes an
+// VELOX_FILE_CONFIG_LEGACY is the same as VELOX_FILE_CONFIG but takes an
 // explicit config key and uses sessionValue() for legacy 'hive.' prefix
 // fallback.
 
-#ifdef VELOX_HIVE_CONFIG_MACROS_DEFINED
-#error "HiveConfigMacrosDefine.h included twice without HiveConfigMacrosUndef.h"
+#ifdef VELOX_FILE_CONFIG_MACROS_DEFINED
+#error "FileConfigMacrosDefine.h included twice without FileConfigMacrosUndef.h"
 #endif
 // NOLINTBEGIN(facebook-modularize-issue-check)
-#define VELOX_HIVE_CONFIG_MACROS_DEFINED
+#define VELOX_FILE_CONFIG_MACROS_DEFINED
 
-#define VELOX_HIVE_CONFIG_PROPERTY(                  \
+#define VELOX_FILE_CONFIG_PROPERTY(                  \
     constName, keyStr, CppType, defaultVal, desc)    \
   struct constName##Property {                       \
     using type = CppType;                            \
@@ -74,9 +74,9 @@
   };                                                 \
   static constexpr const char* constName = keyStr;
 
-#define VELOX_HIVE_CONFIG(                                              \
+#define VELOX_FILE_CONFIG(                                              \
     constName, accessorName, key, CppType, defaultVal, desc)            \
-  VELOX_HIVE_CONFIG_PROPERTY(constName, key, CppType, defaultVal, desc) \
+  VELOX_FILE_CONFIG_PROPERTY(constName, key, CppType, defaultVal, desc) \
   CppType accessorName(const config::ConfigBase* session) const {       \
     return session->get<CppType>(                                       \
         constName,                                                      \
@@ -84,7 +84,7 @@
             config::ConfigBase::toConfigKey(constName), defaultVal));   \
   }
 
-#define VELOX_HIVE_CONFIG_LEGACY(                                       \
+#define VELOX_FILE_CONFIG_LEGACY(                                       \
     constName,                                                          \
     configConstName,                                                    \
     accessorName,                                                       \
@@ -93,7 +93,7 @@
     CppType,                                                            \
     defaultVal,                                                         \
     desc)                                                               \
-  VELOX_HIVE_CONFIG_PROPERTY(constName, key, CppType, defaultVal, desc) \
+  VELOX_FILE_CONFIG_PROPERTY(constName, key, CppType, defaultVal, desc) \
   static constexpr const char* configConstName = configKey;             \
   CppType accessorName(const config::ConfigBase* session) const {       \
     return sessionValue<CppType>(                                       \

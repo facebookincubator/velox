@@ -16,12 +16,12 @@
 #pragma once
 
 #include "velox/connectors/Connector.h"
-#include "velox/connectors/hive/FileColumnHandle.h"
+#include "velox/connectors/common/FileColumnHandle.h"
 #include "velox/core/ITypedExpr.h"
 #include "velox/type/Filter.h"
 #include "velox/type/Subfield.h"
 
-namespace facebook::velox::connector::hive {
+namespace facebook::velox::connector {
 
 /// Common table metadata and accessors for file-based connectors. Used by
 /// FileDataSource and FileSplitReader. Connector-specific handles extend this
@@ -116,4 +116,4 @@ class FileTableHandle : public ConnectorTableHandle {
 
 using FileTableHandlePtr = std::shared_ptr<const FileTableHandle>;
 
-} // namespace facebook::velox::connector::hive
+} // namespace facebook::velox::connector

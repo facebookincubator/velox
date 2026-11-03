@@ -16,23 +16,23 @@
 
 #pragma once
 
-#include "velox/connectors/hive/FileConnectorUtil.h"
+#include "velox/connectors/common/FileConnectorUtil.h"
 
 namespace facebook::velox::connector::hive {
 
 void configureReaderOptions(
-    const std::shared_ptr<const FileConfig>& config,
+    const std::shared_ptr<const connector::FileConfig>& config,
     const ConnectorQueryCtx* connectorQueryCtx,
-    const FileTableHandlePtr& tableHandle,
-    const std::shared_ptr<const FileConnectorSplit>& fileSplit,
+    const connector::FileTableHandlePtr& tableHandle,
+    const std::shared_ptr<const connector::FileConnectorSplit>& fileSplit,
     const std::unordered_map<std::string, std::string>& serdeParameters,
     dwio::common::ReaderOptions& readerOptions);
 
 void configureReaderOptions(
-    const std::shared_ptr<const FileConfig>& fileConfig,
+    const std::shared_ptr<const connector::FileConfig>& fileConfig,
     const ConnectorQueryCtx* connectorQueryCtx,
     const RowTypePtr& fileSchema,
-    const std::shared_ptr<const FileConnectorSplit>& fileSplit,
+    const std::shared_ptr<const connector::FileConnectorSplit>& fileSplit,
     const std::unordered_map<std::string, std::string>& tableParameters,
     const std::unordered_map<std::string, std::string>& serdeParameters,
     dwio::common::ReaderOptions& readerOptions);
@@ -42,9 +42,9 @@ void configureRowReaderOptions(
     const std::shared_ptr<common::ScanSpec>& scanSpec,
     std::shared_ptr<common::MetadataFilter> metadataFilter,
     const RowTypePtr& rowType,
-    const std::shared_ptr<const FileConnectorSplit>& fileSplit,
+    const std::shared_ptr<const connector::FileConnectorSplit>& fileSplit,
     const std::unordered_map<std::string, std::string>& serdeParameters,
-    const std::shared_ptr<const FileConfig>& fileConfig,
+    const std::shared_ptr<const connector::FileConfig>& fileConfig,
     const config::ConfigBase* sessionProperties,
     folly::Executor* ioExecutor,
     dwio::common::RowReaderOptions& rowReaderOptions);

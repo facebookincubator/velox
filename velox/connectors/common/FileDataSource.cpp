@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "velox/connectors/hive/FileDataSource.h"
+#include "velox/connectors/common/FileDataSource.h"
 
 #include <fmt/ranges.h>
 #include <string>
@@ -24,13 +24,13 @@
 #include "velox/common/io/IoStatisticsRuntimeStats.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/common/time/CpuWallTimer.h"
-#include "velox/connectors/hive/ExtractionUtils.h"
-#include "velox/connectors/hive/FileConfig.h"
+#include "velox/connectors/common/ExtractionUtils.h"
+#include "velox/connectors/common/FileConfig.h"
 #include "velox/expression/FieldReference.h"
 
 using facebook::velox::common::testutil::TestValue;
 
-namespace facebook::velox::connector::hive {
+namespace facebook::velox::connector {
 
 namespace {
 
@@ -456,8 +456,7 @@ std::optional<RowVectorPtr> FileDataSource::next(
   VELOX_CHECK(split_ != nullptr, "No split to process. Call addSplit first.");
   VELOX_CHECK_NOT_NULL(splitReader_, "No split reader present");
 
-  TestValue::adjust(
-      "facebook::velox::connector::hive::FileDataSource::next", this);
+  TestValue::adjust("facebook::velox::connector::FileDataSource::next", this);
 
   if (splitReader_->emptySplit()) {
     resetSplit();
@@ -645,8 +644,7 @@ int64_t FileDataSource::estimatedRowSize() {
   }
   auto rowSize = splitReader_->estimatedRowSize();
   TestValue::adjust(
-      "facebook::velox::connector::hive::FileDataSource::estimatedRowSize",
-      &rowSize);
+      "facebook::velox::connector::FileDataSource::estimatedRowSize", &rowSize);
   return rowSize;
 }
 
@@ -680,4 +678,4 @@ void FileDataSource::resetSplit() {
   // Keep readers around to hold adaptation.
 }
 
-} // namespace facebook::velox::connector::hive
+} // namespace facebook::velox::connector

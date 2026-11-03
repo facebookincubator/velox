@@ -14,9 +14,9 @@
  * limitations under the License.
  */
 
-#include "velox/connectors/hive/FileColumnHandle.h"
+#include "velox/connectors/common/FileColumnHandle.h"
 
-namespace facebook::velox::connector::hive {
+namespace facebook::velox::connector {
 
 FileColumnHandle::FileColumnHandle(
     std::string name,
@@ -455,4 +455,4 @@ FileColumnHandle::ColumnType FileColumnHandle::columnTypeFromName(
   VELOX_FAIL("Unknown column type name: {}", name);
 }
 
-} // namespace facebook::velox::connector::hive
+} // namespace facebook::velox::connector

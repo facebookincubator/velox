@@ -17,9 +17,9 @@
 
 #include "velox/common/caching/FileHandle.h"
 #include "velox/connectors/Connector.h"
-#include "velox/connectors/hive/FileConfig.h"
+#include "velox/connectors/common/FileConfig.h"
 
-namespace facebook::velox::connector::hive {
+namespace facebook::velox::connector {
 
 /// Owns file-access resources shared by file-based connectors. Derived
 /// connectors provide table-specific scan, write and capability entry points.
@@ -49,4 +49,4 @@ class FileConnector : public Connector {
   folly::Executor* ioExecutor_;
 };
 
-} // namespace facebook::velox::connector::hive
+} // namespace facebook::velox::connector

@@ -13,12 +13,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/connectors/hive/FileConfigProvider.h"
+#include "velox/connectors/common/FileConfigProvider.h"
 
 #include <glog/logging.h>
 #include "velox/common/config/Config.h"
 
-namespace facebook::velox::connector::hive {
+namespace facebook::velox::connector {
 
 std::vector<config::ConfigProperty> FileConfigProvider::properties() const {
   auto props = properties_;
@@ -54,4 +54,4 @@ std::string FileConfigProvider::normalize(
   return std::string(value);
 }
 
-} // namespace facebook::velox::connector::hive
+} // namespace facebook::velox::connector
