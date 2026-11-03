@@ -153,6 +153,16 @@ class RPCOperator : public exec::Operator {
   static inline const std::string kRpcErrorKindInvalidRequest{
       "rpcErrorKindInvalidRequest"};
   static inline const std::string kRpcErrorKindInternal{"rpcErrorKindInternal"};
+  /// Overloaded attempts the transport reported before each completed PER_ROW
+  /// row's final attempt (RPCResponse::numOverloadedAttempts), failed rows
+  /// included. BATCH completions are not counted.
+  /// This and kRpcSuccessesAfterOverload are per-driver live counters that sum
+  /// across drivers.
+  static inline const std::string kRpcOverloadedAttempts{
+      "rpcOverloadedAttempts"};
+  /// Successes whose response reported at least one overloaded attempt.
+  static inline const std::string kRpcSuccessesAfterOverload{
+      "rpcSuccessesAfterOverload"};
   // Shared rate-limiter stats, refreshed on every stats() call.
   static inline const std::string kRpcRateLimiterCap{"rpcRateLimiterCap"};
   static inline const std::string kRpcRateLimiterHardLimit{

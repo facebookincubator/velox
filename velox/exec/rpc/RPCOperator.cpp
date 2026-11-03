@@ -1509,6 +1509,10 @@ void RPCOperator::addLiveProgressStats(
     stats.runtimeStats[kRpcStaleSuccessUnits] =
         RuntimeMetric(numStaleSuccessUnits_.load(std::memory_order_relaxed));
   }
+  stats.runtimeStats[kRpcOverloadedAttempts] =
+      RuntimeMetric(snapshot.numOverloadedAttempts);
+  stats.runtimeStats[kRpcSuccessesAfterOverload] =
+      RuntimeMetric(snapshot.numSuccessesAfterOverload);
   if (!includeGauges) {
     return;
   }
