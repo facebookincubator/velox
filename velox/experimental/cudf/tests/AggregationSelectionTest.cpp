@@ -126,9 +126,12 @@ class CudfAggregationSelectionTest : public ::testing::Test,
     return std::dynamic_pointer_cast<const core::AggregationNode>(plan);
   }
 
-  // Groups one aggregate by c0 with the boolean column c2 as its FILTER mask.
+  // One aggregate over c1, grouped by 'groupingKeys' (c0 for the groupby
+  // path, none for the reduce path), with the boolean column c2 as its FILTER
+  // mask.
   std::shared_ptr<const core::AggregationNode> createMaskedAggregationNode(
-      const std::string& aggregate) {
+      const std::string& aggregate,
+      const std::vector<std::string>& groupingKeys = {"c0"}) {
     auto plan = PlanBuilder()
                     .values({makeRowVector({
                         makeFlatVector<int64_t>({1, 2, 3}),
@@ -136,7 +139,7 @@ class CudfAggregationSelectionTest : public ::testing::Test,
                         makeFlatVector<bool>({true, false, true}),
                     })})
                     .aggregation(
-                        {"c0"},
+                        groupingKeys,
                         {aggregate},
                         {},
                         core::AggregationNode::Step::kSingle,
@@ -788,21 +791,81 @@ TEST_F(CudfAggregationSelectionTest, orderByAggregations) {
       canBeEvaluatedByCudf(*globalUnordered, queryCtx_.get(), pool_.get()));
 }
 
-// Masked sum is supported at raw-input steps.
-TEST_F(CudfAggregationSelectionTest, maskedSumAccepted) {
-  ASSERT_TRUE(canBeEvaluatedByCudf(
-      *createMaskedAggregationNode("sum(c1)"), queryCtx_.get(), pool_.get()));
+// Which aggregates accept a FILTER mask on each path. stddev has an
+// aggregator on the groupby path alone and approx_distinct on the reduce path
+// alone, and each is mask-capable there alone: an aggregator added later for
+// the other path accepts no mask until its registration declares one.
+// array_agg collects every row or every non-null row of a group and cannot
+// honor a mask (see GroupbyArrayAggAggregator).
+TEST_F(CudfAggregationSelectionTest, maskedAggregatesByPath) {
+  struct Case {
+    std::string aggregate;
+    bool groupby;
+    bool reduce;
+  };
+  const std::vector<Case> cases = {
+      {"sum(c1)", true, true},
+      {"count(c1)", true, true},
+      {"min(c1)", true, true},
+      {"max(c1)", true, true},
+      {"avg(c1)", true, true},
+      {"stddev_samp(c1)", true, false},
+      {"stddev(c1)", true, false},
+      {"approx_distinct(c1)", false, true},
+      {"array_agg(c1)", false, false},
+  };
+  for (const auto& testCase : cases) {
+    SCOPED_TRACE(testCase.aggregate);
+    EXPECT_EQ(
+        canBeEvaluatedByCudf(
+            *createMaskedAggregationNode(testCase.aggregate, {"c0"}),
+            queryCtx_.get(),
+            pool_.get()),
+        testCase.groupby);
+    EXPECT_EQ(
+        canBeEvaluatedByCudf(
+            *createMaskedAggregationNode(testCase.aggregate, {}),
+            queryCtx_.get(),
+            pool_.get()),
+        testCase.reduce);
+  }
 }
 
-// Masked avg and array_agg fall back to CPU: neither opts into
-// maskSupportedAggregations(), and array_agg cannot (see
-// GroupbyArrayAggAggregator).
-TEST_F(CudfAggregationSelectionTest, maskedAggregationsRejected) {
-  for (const auto* aggregate : {"avg(c1)", "array_agg(c1)"}) {
-    SCOPED_TRACE(aggregate);
-    ASSERT_FALSE(canBeEvaluatedByCudf(
-        *createMaskedAggregationNode(aggregate), queryCtx_.get(), pool_.get()));
-  }
+// A function that honors a mask on one path does not do so on the other until
+// an aggregator there declares it: with only a signature added for the other
+// path, the unmasked aggregate is accepted and the masked one is not.
+TEST_F(CudfAggregationSelectionTest, maskSupportNotInheritedAcrossPaths) {
+  appendReduceAggregationFunctionForStep(
+      "stddev_samp",
+      core::AggregationNode::Step::kSingle,
+      exec::FunctionSignatureBuilder()
+          .returnType("double")
+          .argumentType("bigint")
+          .build());
+  ASSERT_TRUE(canBeEvaluatedByCudf(
+      *createAggregationNode({}, {"stddev_samp(c1)"}),
+      queryCtx_.get(),
+      pool_.get()));
+  EXPECT_FALSE(canBeEvaluatedByCudf(
+      *createMaskedAggregationNode("stddev_samp(c1)", {}),
+      queryCtx_.get(),
+      pool_.get()));
+
+  appendGroupbyAggregationFunctionForStep(
+      "approx_distinct",
+      core::AggregationNode::Step::kSingle,
+      exec::FunctionSignatureBuilder()
+          .returnType("bigint")
+          .argumentType("bigint")
+          .build());
+  ASSERT_TRUE(canBeEvaluatedByCudf(
+      *createAggregationNode({"c0"}, {"approx_distinct(c1)"}),
+      queryCtx_.get(),
+      pool_.get()));
+  EXPECT_FALSE(canBeEvaluatedByCudf(
+      *createMaskedAggregationNode("approx_distinct(c1)", {"c0"}),
+      queryCtx_.get(),
+      pool_.get()));
 }
 
 // A non-boolean mask falls back to CPU.
@@ -822,32 +885,6 @@ TEST_F(CudfAggregationSelectionTest, maskedNonBooleanRejected) {
   auto node = std::dynamic_pointer_cast<const core::AggregationNode>(plan);
   auto aggs = node->aggregates();
   aggs[0].mask = std::make_shared<core::FieldAccessTypedExpr>(BIGINT(), "c1");
-  auto masked =
-      core::AggregationNode::Builder(*node).aggregates(std::move(aggs)).build();
-  ASSERT_FALSE(canBeEvaluatedByCudf(*masked, queryCtx_.get(), pool_.get()));
-}
-
-// Masked approx_distinct falls back: it is reduce-only and ignores the mask,
-// so the allowlist gate (sum/count/min/max only) must reject it.
-TEST_F(CudfAggregationSelectionTest, maskedApproxDistinctRejected) {
-  auto plan = PlanBuilder()
-                  .values({makeRowVector({
-                      makeFlatVector<int64_t>({1, 2, 3}),
-                      makeFlatVector<int64_t>({10, 20, 30}),
-                      makeFlatVector<bool>({true, false, true}),
-                  })})
-                  .aggregation(
-                      {},
-                      {"approx_distinct(c1)"},
-                      {},
-                      core::AggregationNode::Step::kSingle,
-                      false)
-                  .planNode();
-  auto node = std::dynamic_pointer_cast<const core::AggregationNode>(plan);
-  // Unmasked approx_distinct is supported on the cuDF reduce path.
-  ASSERT_TRUE(canBeEvaluatedByCudf(*node, queryCtx_.get(), pool_.get()));
-  auto aggs = node->aggregates();
-  aggs[0].mask = std::make_shared<core::FieldAccessTypedExpr>(BOOLEAN(), "c2");
   auto masked =
       core::AggregationNode::Builder(*node).aggregates(std::move(aggs)).build();
   ASSERT_FALSE(canBeEvaluatedByCudf(*masked, queryCtx_.get(), pool_.get()));
