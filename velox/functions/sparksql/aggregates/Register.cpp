@@ -27,6 +27,7 @@
 #include "velox/functions/sparksql/aggregates/CovarianceAggregate.h"
 #include "velox/functions/sparksql/aggregates/RegrReplacementAggregate.h"
 #include "velox/functions/sparksql/aggregates/SumAggregate.h"
+#include "velox/functions/sparksql/aggregates/TrySumAggregate.h"
 #include "velox/functions/sparksql/aggregates/VarianceAggregate.h"
 
 namespace facebook::velox::functions::aggregate::sparksql {
@@ -68,6 +69,7 @@ void registerAggregateFunctions(
       prefix + "bloom_filter_agg", withCompanionFunctions, overwrite);
   registerAverage(prefix + "avg", withCompanionFunctions, overwrite);
   registerSum(prefix + "sum", withCompanionFunctions, overwrite);
+  registerTrySum(prefix + "try_sum", withCompanionFunctions, overwrite);
   registerCentralMomentsAggregate(prefix, withCompanionFunctions, overwrite);
   registerCollectSetAggAggregate(prefix, withCompanionFunctions, overwrite);
   registerCollectListAggregate(

@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <fmt/ranges.h>
 #include <functional>
 
 #include "velox/exec/AggregateUtil.h"
@@ -278,6 +279,133 @@ TEST_F(SumAggregationTest, ansiDecimalOverflow) {
         .withCompanion()
         .assertResults(makeRowVector({makeFlatVector<int128_t>(
             {DecimalUtil::kLongDecimalMax}, DECIMAL(38, 0))}));
+  }
+}
+
+TEST_F(SumAggregationTest, trySum) {
+  constexpr auto kMax = std::numeric_limits<int64_t>::max();
+
+  // Without overflow, try_sum is sum.
+  {
+    auto input = makeRowVector(
+        {makeNullableFlatVector<int32_t>({1, std::nullopt, 2, 3})});
+    AggregationTester(*this)
+        .inputs(input)
+        .aggregates({"spark_try_sum(c0)"})
+        .withCompanion()
+        .assertResults(makeRowVector({makeFlatVector<int64_t>({6})}));
+  }
+
+  // Overflow returns NULL, also in ANSI mode.
+  for (const auto& values :
+       std::vector<std::vector<int64_t>>{{kMax, 1}, {1, kMax}}) {
+    SCOPED_TRACE(fmt::format("{}", fmt::join(values, ", ")));
+    auto input = makeRowVector({makeFlatVector<int64_t>(values)});
+    auto expected =
+        makeRowVector({makeNullableFlatVector<int64_t>({std::nullopt})});
+    AggregationTester(*this)
+        .inputs(input)
+        .aggregates({"spark_try_sum(c0)"})
+        .withCompanion()
+        .assertResults(expected);
+    AggregationTester(*this)
+        .inputs(input)
+        .aggregates({"spark_try_sum(c0)"})
+        .config(kAnsiEnabled, "true")
+        .assertResults(expected);
+  }
+
+  // Once the sum overflows, it stays NULL even when later input would bring it
+  // back into range. This holds only while one accumulator adds the input in
+  // order. The companion plans add the rows in separate partial groups, and
+  // merging kMax with -1 before 1 does not overflow.
+  {
+    auto input = makeRowVector({makeFlatVector<int64_t>({kMax, 1, -1})});
+    AggregationTester(*this)
+        .inputs(input)
+        .aggregates({"spark_try_sum(c0)"})
+        .assertResults(
+            makeRowVector({makeNullableFlatVector<int64_t>({std::nullopt})}));
+  }
+
+  // All-NULL input returns NULL.
+  {
+    auto input = makeRowVector(
+        {makeNullableFlatVector<int64_t>({std::nullopt, std::nullopt})});
+    AggregationTester(*this)
+        .inputs(input)
+        .aggregates({"spark_try_sum(c0)"})
+        .withCompanion()
+        .assertResults(
+            makeRowVector({makeNullableFlatVector<int64_t>({std::nullopt})}));
+  }
+
+  // Grouped: one group overflows, one does not, one is all NULL.
+  {
+    auto input = makeRowVector(
+        {makeFlatVector<int32_t>({1, 1, 2, 2, 3}),
+         makeNullableFlatVector<int64_t>({kMax, 1, 5, 6, std::nullopt})});
+    AggregationTester(*this)
+        .inputs(input)
+        .groupBy({"c0"})
+        .aggregates({"spark_try_sum(c1)"})
+        .withCompanion()
+        .assertResults(makeRowVector(
+            {makeFlatVector<int32_t>({1, 2, 3}),
+             makeNullableFlatVector<int64_t>(
+                 {std::nullopt, 11, std::nullopt})}));
+  }
+}
+
+TEST_F(SumAggregationTest, trySumIntermediate) {
+  // The intermediate result is Spark's buffer: ROW(sum, isEmpty), with sum
+  // NULL after an overflow and isEmpty true for all-NULL input.
+  constexpr auto kMax = std::numeric_limits<int64_t>::max();
+  auto input = makeRowVector(
+      {makeFlatVector<int32_t>({1, 1, 2, 2, 3}),
+       makeNullableFlatVector<int64_t>({kMax, 1, 5, 6, std::nullopt})});
+  auto plan = PlanBuilder()
+                  .values({input})
+                  .partialAggregation({"c0"}, {"spark_try_sum(c1)"})
+                  .planNode();
+  AssertQueryBuilder(plan).assertResults(makeRowVector(
+      {makeFlatVector<int32_t>({1, 2, 3}),
+       makeRowVector(
+           {makeNullableFlatVector<int64_t>({std::nullopt, 11, 0}),
+            makeFlatVector<bool>({false, false, true})})}));
+}
+
+TEST_F(SumAggregationTest, trySumDecimal) {
+  // Without overflow, try_sum is sum.
+  {
+    auto input = makeRowVector({makeNullableFlatVector<int64_t>(
+        {100, std::nullopt, 250}, DECIMAL(10, 2))});
+    AggregationTester(*this)
+        .inputs(input)
+        .aggregates({"spark_try_sum(c0)"})
+        .withCompanion()
+        .assertResults(
+            makeRowVector({makeFlatVector<int128_t>({350}, DECIMAL(20, 2))}));
+  }
+
+  // Overflow returns NULL, also in ANSI mode, where sum throws.
+  {
+    auto input = makeRowVector({makeFlatVector<int128_t>(
+        {DecimalUtil::kLongDecimalMax, DecimalUtil::kLongDecimalMax},
+        DECIMAL(38, 0))});
+    auto expected = makeRowVector(
+        {makeNullableFlatVector<int128_t>({std::nullopt}, DECIMAL(38, 0))});
+    AggregationTester(*this)
+        .inputs(input)
+        .aggregates({"spark_try_sum(c0)"})
+        .withCompanion()
+        .assertResults(expected);
+    AggregationTester(*this)
+        .inputs(input)
+        .aggregates({"spark_try_sum(c0)"})
+        .config(kAnsiEnabled, "true")
+        .withCompanion()
+        .assertResults(expected);
   }
 }
 

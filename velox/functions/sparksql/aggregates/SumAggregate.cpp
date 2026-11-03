@@ -144,6 +144,26 @@ std::unique_ptr<exec::Aggregate> createSumAggregate(
 }
 } // namespace
 
+std::unique_ptr<exec::Aggregate> createNonThrowingDecimalSum(
+    core::AggregationNode::Step step,
+    const std::vector<TypePtr>& argTypes,
+    const TypePtr& resultType) {
+  VELOX_CHECK_EQ(argTypes.size(), 1);
+  const auto& inputType = argTypes[0];
+  if (inputType->isRow()) {
+    checkAccumulatorRowType(inputType);
+    return constructDecimalSumAgg<false>(
+        step,
+        argTypes,
+        resultType,
+        inputType->childAt(0),
+        inputType->childAt(0));
+  }
+  VELOX_CHECK(inputType->isDecimal());
+  return constructDecimalSumAgg<false>(
+      step, argTypes, resultType, inputType, getDecimalSumType(resultType));
+}
+
 exec::AggregateRegistrationResult registerSum(
     const std::string& name,
     bool withCompanionFunctions,
