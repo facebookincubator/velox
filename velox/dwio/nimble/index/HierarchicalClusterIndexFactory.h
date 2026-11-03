@@ -64,11 +64,27 @@ class HierarchicalKeyCodec {
       std::span<const uint8_t> levelWidths,
       char* keys) const;
 
-  /// Stores in 'levels' where a seek to 'target' starts among keys whose
-  /// levels are 'levelWidths' bytes wide, and returns whether the seek lands
-  /// past the keys equal to 'levels' rather than on the first of them. A target
-  /// that is no key of the index, such as a prefix of one, starts at the first
-  /// key that sorts at or after it.
+  /// Stores in 'levels' the levels of 'target', the key of a seek, among keys
+  /// whose levels are 'levelWidths' bytes wide, and returns whether the seek
+  /// starts past the keys with those levels:
+  ///   - false when 'target' is a key of the index, with its own levels. An
+  ///     inclusive seek starts at the first key equal to it, and an exclusive
+  ///     seek at the first key after it.
+  ///   - false when 'target' is no key of the index and sorts right before the
+  ///     keys of 'levels', such as a prefix of a key before its padding with
+  ///     zeros. A seek starts at the first key at or after 'levels'. An
+  ///     exclusive seek starts after the keys equal to 'levels', so 'levels'
+  ///     must be the levels of no key.
+  ///   - true when 'target' is no key of the index and sorts right after the
+  ///     keys of 'levels', such as a target longer than the keys after the keys
+  ///     of its leading bytes. A seek starts at the first key after 'levels',
+  ///     inclusive or not.
+  ///
+  /// For keys of the big-endian bytes of levels 4 and 1 bytes wide, the target
+  /// 00000007 01 is the key of levels [7, 1] and returns false. Its prefix
+  /// 00000007 takes the levels [7, 0] of its padding and returns false, and
+  /// 00000007 01 05 takes the levels [7, 1] of its leading bytes and returns
+  /// true.
   virtual bool parseKey(
       std::string_view target,
       std::span<const uint8_t> levelWidths,
