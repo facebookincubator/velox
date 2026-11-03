@@ -143,6 +143,11 @@ General Aggregate Functions
         ) AS t(elements);
         -- ARRAY[ARRAY[1, 2], ARRAY[1, null]]
 
+.. spark:function:: corr(x, y) -> double
+
+    Returns Pearson coefficient of correlation between a set of number pairs. When the count of pairs is
+    greater than or equal to 2, a non-null output will be generated.
+
 .. spark:function:: count_min_sketch(x, eps, confidence, seed) -> varbinary
 
     Returns a Count-min sketch of the input column ``x`` serialized into
@@ -164,13 +169,14 @@ General Aggregate Functions
     ``seed`` is a constant ``INTEGER`` or ``BIGINT`` used to seed the hash
     functions.
 
+    ``eps``, ``confidence``, and ``seed`` must be non-null constant arguments,
+    not input columns, even if a column contains the same value in every row.
+
     The serialized output is byte-compatible with Spark's ``CountMinSketch``
     (version 1, big-endian), so it can be merged with or consumed by Spark.
 
-.. spark:function:: corr(x, y) -> double
-
-    Returns Pearson coefficient of correlation between a set of number pairs. When the count of pairs is
-    greater than or equal to 2, a non-null output will be generated.
+    See the `Spark count_min_sketch reference
+    <https://spark.apache.org/docs/4.1.1/api/sql/index.html#count_min_sketch>`_.
 
 .. spark:function:: covar_samp(x, y) -> double
 

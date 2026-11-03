@@ -33,7 +33,7 @@ class SparkMurmur3Hash final : private Murmur3Hash32Base {
   static uint32_t hashBytes(const StringView& input, uint32_t seed);
 
  private:
-  /// Loads a 32-bit block using Spark's little-endian byte order.
+  // Loads a 32-bit block using Spark's little-endian byte order.
   static uint32_t loadLittleEndian32(const char* data);
 };
 

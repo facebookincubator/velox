@@ -323,12 +323,6 @@ void GroupingSet::addInputForActiveRows(
     }
 
     const auto& rows = getSelectivityVector(i);
-    auto& function = aggregates_[i].function;
-    if (!rows.hasSelections() && isRawInput_ &&
-        function->requiresRawInputMetadata()) {
-      populateTempVectors(i, input);
-      function->setRawInputMetadata(tempVectors_);
-    }
 
     if (aggregates_[i].distinct) {
       if (!newGroups.empty()) {
@@ -341,6 +335,7 @@ void GroupingSet::addInputForActiveRows(
       continue;
     }
 
+    auto& function = aggregates_[i].function;
     if (!newGroups.empty()) {
       function->initializeNewGroups(groups, newGroups);
     }
@@ -684,12 +679,6 @@ void GroupingSet::addGlobalAggregationInput(
       continue;
     }
     const auto& rows = getSelectivityVector(i);
-    auto& function = aggregates_[i].function;
-    if (!rows.hasSelections() && isRawInput_ &&
-        function->requiresRawInputMetadata()) {
-      populateTempVectors(i, input);
-      function->setRawInputMetadata(tempVectors_);
-    }
 
     // Check is mask is false for all rows.
     if (!rows.hasSelections()) {
@@ -700,6 +689,8 @@ void GroupingSet::addGlobalAggregationInput(
       distinctAggregations_[i]->addSingleGroupInput(group, input, rows);
       continue;
     }
+
+    auto& function = aggregates_[i].function;
 
     populateTempVectors(i, input);
     const bool canPushdown =
@@ -1701,17 +1692,9 @@ void GroupingSet::toIntermediate(
     auto& aggregateVector = result->childAt(i + keyChannels_.size());
     recursiveResizeChildren(aggregateVector, input->size());
     const auto& rows = getSelectivityVector(i);
-    bool tempVectorsPopulated{false};
-    if (!rows.hasSelections() && function->requiresRawInputMetadata()) {
-      populateTempVectors(i, input);
-      function->setRawInputMetadata(tempVectors_);
-      tempVectorsPopulated = true;
-    }
 
     if (function->supportsToIntermediate()) {
-      if (!tempVectorsPopulated) {
-        populateTempVectors(i, input);
-      }
+      populateTempVectors(i, input);
       VELOX_DCHECK(aggregateVector);
       function->toIntermediate(rows, tempVectors_, aggregateVector);
       ++numToIntermediateFastPathCalls_;
@@ -1738,9 +1721,7 @@ void GroupingSet::toIntermediate(
       continue;
     }
 
-    if (!tempVectorsPopulated) {
-      populateTempVectors(i, input);
-    }
+    populateTempVectors(i, input);
 
     function->addRawInput(
         intermediateGroups_.data(), rows, tempVectors_, false);

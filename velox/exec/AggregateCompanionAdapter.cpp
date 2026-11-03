@@ -66,15 +66,6 @@ bool AggregateCompanionFunctionBase::isReducing() const {
   return fn_->isReducing();
 }
 
-bool AggregateCompanionFunctionBase::requiresRawInputMetadata() const {
-  return fn_->requiresRawInputMetadata();
-}
-
-void AggregateCompanionFunctionBase::setRawInputMetadata(
-    const std::vector<VectorPtr>& args) {
-  fn_->setRawInputMetadata(args);
-}
-
 void AggregateCompanionFunctionBase::setAllocatorInternal(
     HashStringAllocator* allocator) {
   fn_->setAllocator(allocator);

@@ -104,9 +104,7 @@ class AggregateWindowFunction : public exec::WindowFunction {
     // the aggregate to the final result.
     aggregateResultVector_ = BaseVector::create(resultType, 1, pool_);
 
-    if (!aggregate_->requiresRawInputMetadata()) {
-      computeDefaultAggregateValue(resultType);
-    }
+    computeDefaultAggregateValue(resultType);
   }
 
   ~AggregateWindowFunction() {
@@ -132,13 +130,6 @@ class AggregateWindowFunction : public exec::WindowFunction {
       const SelectivityVector& validRows,
       vector_size_t resultOffset,
       const VectorPtr& result) override {
-    if (emptyResult_ == nullptr) {
-      // Field-backed parameters are available only after a partition is set.
-      fillArgVectors(0, 0);
-      aggregate_->setRawInputMetadata(argVectors_);
-      computeDefaultAggregateValue(result->type());
-    }
-
     if (handleAllEmptyFrames(validRows, resultOffset, result)) {
       return;
     }

@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 #include <memory>
-#include <stdexcept>
 #include <string>
 
 #include "velox/functions/sparksql/fuzzer/SparkQueryRunner.h"
@@ -170,11 +169,6 @@ SparkQueryRunner::executeAndReturnVector(const core::PlanNodePtr& plan) {
           execute(*sql), exec::test::ReferenceQueryErrorCode::kSuccess);
     } catch (const VeloxRuntimeError&) {
       throw;
-    } catch (const std::exception& error) {
-      LOG(WARNING) << "Query failed in Spark: " << error.what();
-      return std::make_pair(
-          std::nullopt,
-          exec::test::ReferenceQueryErrorCode::kReferenceQueryFail);
     } catch (...) {
       LOG(WARNING) << "Query failed in Spark";
       return std::make_pair(
@@ -223,14 +217,6 @@ std::vector<RowVectorPtr> SparkQueryRunner::execute(
       const auto batchResults = readArrowData(data);
       results.insert(results.end(), batchResults.begin(), batchResults.end());
     }
-  }
-  const auto status = reader->Finish();
-  if (!status.ok()) {
-    throw std::runtime_error(
-        fmt::format(
-            "Spark query failed with gRPC status {}: {}",
-            static_cast<int32_t>(status.error_code()),
-            status.error_message()));
   }
   return results;
 }

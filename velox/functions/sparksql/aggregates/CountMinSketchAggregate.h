@@ -22,6 +22,9 @@
 
 namespace facebook::velox::functions::aggregate::sparksql {
 
+/// Registers Spark-compatible count_min_sketch under the supplied name.
+/// Registers companion functions when withCompanionFunctions is true.
+/// Replaces existing registrations when overwrite is true.
 exec::AggregateRegistrationResult registerCountMinSketchAggregate(
     const std::string& name,
     bool withCompanionFunctions,

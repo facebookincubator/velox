@@ -14,15 +14,20 @@
  * limitations under the License.
  */
 
+#include <array>
 #include <bit>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <limits>
-#include <map>
 #include <string>
+#include <utility>
 
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/core/QueryConfig.h"
 #include "velox/exec/Aggregate.h"
+#include "velox/exec/RowContainer.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/functions/lib/aggregates/tests/utils/AggregationTestBase.h"
@@ -32,32 +37,43 @@ namespace facebook::velox::functions::aggregate::sparksql::test {
 namespace {
 
 // Big-endian helpers.
-inline int64_t readBE64(const char*& buf) {
-  uint64_t v = (static_cast<uint64_t>(static_cast<uint8_t>(buf[0])) << 56) |
-      (static_cast<uint64_t>(static_cast<uint8_t>(buf[1])) << 48) |
-      (static_cast<uint64_t>(static_cast<uint8_t>(buf[2])) << 40) |
-      (static_cast<uint64_t>(static_cast<uint8_t>(buf[3])) << 32) |
-      (static_cast<uint64_t>(static_cast<uint8_t>(buf[4])) << 24) |
-      (static_cast<uint64_t>(static_cast<uint8_t>(buf[5])) << 16) |
-      (static_cast<uint64_t>(static_cast<uint8_t>(buf[6])) << 8) |
-      static_cast<uint64_t>(static_cast<uint8_t>(buf[7]));
-  buf += 8;
-  return std::bit_cast<int64_t>(v);
+inline int64_t readBigEndianLong(const char*& buffer) {
+  uint64_t unsignedValue =
+      (static_cast<uint64_t>(static_cast<uint8_t>(buffer[0])) << 56) |
+      (static_cast<uint64_t>(static_cast<uint8_t>(buffer[1])) << 48) |
+      (static_cast<uint64_t>(static_cast<uint8_t>(buffer[2])) << 40) |
+      (static_cast<uint64_t>(static_cast<uint8_t>(buffer[3])) << 32) |
+      (static_cast<uint64_t>(static_cast<uint8_t>(buffer[4])) << 24) |
+      (static_cast<uint64_t>(static_cast<uint8_t>(buffer[5])) << 16) |
+      (static_cast<uint64_t>(static_cast<uint8_t>(buffer[6])) << 8) |
+      static_cast<uint64_t>(static_cast<uint8_t>(buffer[7]));
+  buffer += 8;
+  return std::bit_cast<int64_t>(unsignedValue);
 }
 
-inline int32_t readBE32(const char*& buf) {
-  uint32_t v = (static_cast<uint32_t>(static_cast<uint8_t>(buf[0])) << 24) |
-      (static_cast<uint32_t>(static_cast<uint8_t>(buf[1])) << 16) |
-      (static_cast<uint32_t>(static_cast<uint8_t>(buf[2])) << 8) |
-      static_cast<uint32_t>(static_cast<uint8_t>(buf[3]));
-  buf += 4;
-  return static_cast<int32_t>(v);
+inline int32_t readBigEndianInt(const char*& buffer) {
+  uint32_t unsignedValue =
+      (static_cast<uint32_t>(static_cast<uint8_t>(buffer[0])) << 24) |
+      (static_cast<uint32_t>(static_cast<uint8_t>(buffer[1])) << 16) |
+      (static_cast<uint32_t>(static_cast<uint8_t>(buffer[2])) << 8) |
+      static_cast<uint32_t>(static_cast<uint8_t>(buffer[3]));
+  buffer += 4;
+  return static_cast<int32_t>(unsignedValue);
 }
 
-void writeBE64(std::string& data, size_t offset, int64_t value) {
-  uint64_t v = static_cast<uint64_t>(value);
+void writeBigEndianLong(std::string& data, size_t offset, int64_t value) {
+  uint64_t unsignedValue = static_cast<uint64_t>(value);
   for (int32_t i = 0; i < 8; ++i) {
-    data[offset + i] = static_cast<char>((v >> (56 - i * 8)) & uint64_t{0xFF});
+    data[offset + i] =
+        static_cast<char>((unsignedValue >> (56 - i * 8)) & uint64_t{0xFF});
+  }
+}
+
+void writeBigEndianInt(std::string& data, size_t offset, int32_t value) {
+  const auto unsignedValue = static_cast<uint32_t>(value);
+  for (int32_t i = 0; i < 4; ++i) {
+    data[offset + i] =
+        static_cast<char>((unsignedValue >> (24 - i * 8)) & uint32_t{0xFF});
   }
 }
 
@@ -70,13 +86,14 @@ class CountMinSketchAggregateTest
   }
 
   // Parse a serialized sketch and return (depth, width, totalCount).
-  std::tuple<int32_t, int32_t, int64_t> parseSketch(const StringView& sv) {
-    const char* buf = sv.data();
-    int32_t version = readBE32(buf);
+  std::tuple<int32_t, int32_t, int64_t> parseSketch(
+      const StringView& serializedSketch) {
+    const char* buffer = serializedSketch.data();
+    int32_t version = readBigEndianInt(buffer);
     EXPECT_EQ(version, 1);
-    int64_t totalCount = readBE64(buf);
-    int32_t depth = readBE32(buf);
-    int32_t width = readBE32(buf);
+    int64_t totalCount = readBigEndianLong(buffer);
+    int32_t depth = readBigEndianInt(buffer);
+    int32_t width = readBigEndianInt(buffer);
     return {depth, width, totalCount};
   }
 
@@ -100,8 +117,8 @@ class CountMinSketchAggregateTest
     EXPECT_EQ(result->size(), 1);
     auto resultFlat = result->childAt(0)->asFlatVector<StringView>();
     EXPECT_FALSE(resultFlat->isNullAt(0));
-    auto sv = resultFlat->valueAt(0);
-    return std::string(sv.data(), sv.size());
+    auto serializedSketch = resultFlat->valueAt(0);
+    return std::string(serializedSketch.data(), serializedSketch.size());
   }
 
   // Verifies that merging the supplied serialized sketches fails.
@@ -128,12 +145,15 @@ class CountMinSketchAggregateTest
 
   // Returns the uppercase hex encoding of a serialized sketch, matching the
   // format of Spark's hex(count_min_sketch(...)) reference output.
-  std::string toHex(const StringView& sv) {
+  std::string toHex(const StringView& serializedSketch) {
     std::string hex;
-    for (size_t i = 0; i < sv.size(); ++i) {
+    for (size_t i = 0; i < serializedSketch.size(); ++i) {
       char byteHex[3];
       snprintf(
-          byteHex, sizeof(byteHex), "%02X", static_cast<uint8_t>(sv.data()[i]));
+          byteHex,
+          sizeof(byteHex),
+          "%02X",
+          static_cast<uint8_t>(serializedSketch.data()[i]));
       hex += byteHex;
     }
     return hex;
@@ -141,104 +161,66 @@ class CountMinSketchAggregateTest
 };
 
 TEST_F(CountMinSketchAggregateTest, bigintInput) {
-  // Test with bigint input: VALUES (1), (2), (1) with eps=0.5, conf=0.5,
-  // seed=1.
-  // This matches the Spark doc example:
-  // hex(count_min_sketch(col, 0.5d, 0.5d, 1)) =
-  // 0000000100000000000000030000000100000004000000005D8D6AB9
-  //   00000000000000000000000000000002000000000000000100000000
-  //   00000000
-  auto vectors = {makeRowVector({makeFlatVector<int64_t>({1, 2, 1})})};
+  // Match Spark's documented bigint example.
+  auto serializedSketch = serializeSketch(makeFlatVector<int64_t>({1, 2, 1}));
 
-  auto planNode =
-      exec::test::PlanBuilder(pool())
-          .values(vectors)
-          .singleAggregation({}, {"count_min_sketch(c0, 0.5, 0.5, 1)"})
-          .planNode();
-  auto result = exec::test::AssertQueryBuilder(planNode).copyResults(pool());
-
-  ASSERT_EQ(result->size(), 1);
-  auto resultFlat = result->childAt(0)->asFlatVector<StringView>();
-  ASSERT_FALSE(resultFlat->isNullAt(0));
-  auto sv = resultFlat->valueAt(0);
-
-  auto [depth, width, totalCount] = parseSketch(sv);
+  auto [depth, width, totalCount] = parseSketch(StringView(serializedSketch));
   EXPECT_EQ(depth, 1); // ceil(-log1p(-0.5) / log(2)) = 1
   EXPECT_EQ(width, 4); // ceil(2 / 0.5) = 4
   EXPECT_EQ(totalCount, 3);
 
-  // Verify it matches the known Spark hex output.
   std::string expectedHex =
       "0000000100000000000000030000000100000004000000005D8D6AB9"
       "0000000000000000000000000000000200000000000000010000000000000000";
-  std::string actualHex;
-  for (size_t i = 0; i < sv.size(); ++i) {
-    char hex[3];
-    snprintf(hex, sizeof(hex), "%02X", static_cast<uint8_t>(sv.data()[i]));
-    actualHex += hex;
-  }
-  EXPECT_EQ(actualHex, expectedHex);
+  EXPECT_EQ(toHex(StringView(serializedSketch)), expectedHex);
+
+  // Match Spark 4.1.1 at depth 3 and width 7, including integral extremes and a
+  // negative seed to exercise independent hash rows.
+  auto extremeSketch = serializeSketch(
+      makeFlatVector<int64_t>(
+          {std::numeric_limits<int64_t>::min(),
+           std::numeric_limits<int64_t>::max(),
+           -1,
+           0,
+           1,
+           1}),
+      "count_min_sketch(c0, 0.3, 0.875, -7)");
+  EXPECT_EQ(
+      toHex(StringView(extremeSketch)),
+      "0000000100000000000000060000000300000007000000002272954600000000"
+      "736445C100000000562ACD160000000000000002000000000000000000000000"
+      "0000000000000000000000000000000000000004000000000000000000000000"
+      "0000000000000000000000040000000000000002000000000000000000000000"
+      "0000000000000000000000000000000000000000000000000000000000000000"
+      "0000000200000000000000000000000000000000000000000000000000000000"
+      "0000000400000000000000000000000000000000");
 }
 
 TEST_F(CountMinSketchAggregateTest, integerInput) {
-  // Test with integer input.
-  auto vectors = {makeRowVector({makeFlatVector<int32_t>({1, 2, 1})})};
+  auto serializedSketch = serializeSketch(makeFlatVector<int32_t>({1, 2, 1}));
 
-  auto planNode =
-      exec::test::PlanBuilder(pool())
-          .values(vectors)
-          .singleAggregation({}, {"count_min_sketch(c0, 0.5, 0.5, 1)"})
-          .planNode();
-  auto result = exec::test::AssertQueryBuilder(planNode).copyResults(pool());
-
-  ASSERT_EQ(result->size(), 1);
-  auto resultFlat = result->childAt(0)->asFlatVector<StringView>();
-  ASSERT_FALSE(resultFlat->isNullAt(0));
-  auto sv = resultFlat->valueAt(0);
-
-  auto [depth, width, totalCount] = parseSketch(sv);
+  auto [depth, width, totalCount] = parseSketch(StringView(serializedSketch));
   EXPECT_EQ(depth, 1);
   EXPECT_EQ(width, 4);
   EXPECT_EQ(totalCount, 3);
 }
 
 TEST_F(CountMinSketchAggregateTest, smallintInput) {
-  auto vectors = {makeRowVector({makeFlatVector<int16_t>({1, 2, 3, 4, 5})})};
+  auto serializedSketch = serializeSketch(
+      makeFlatVector<int16_t>({1, 2, 3, 4, 5}),
+      "count_min_sketch(c0, 0.1, 0.9, 42)");
 
-  auto planNode =
-      exec::test::PlanBuilder(pool())
-          .values(vectors)
-          .singleAggregation({}, {"count_min_sketch(c0, 0.1, 0.9, 42)"})
-          .planNode();
-  auto result = exec::test::AssertQueryBuilder(planNode).copyResults(pool());
-
-  ASSERT_EQ(result->size(), 1);
-  auto resultFlat = result->childAt(0)->asFlatVector<StringView>();
-  ASSERT_FALSE(resultFlat->isNullAt(0));
-  auto sv = resultFlat->valueAt(0);
-
-  auto [depth, width, totalCount] = parseSketch(sv);
+  auto [depth, width, totalCount] = parseSketch(StringView(serializedSketch));
   EXPECT_EQ(width, 20); // ceil(2 / 0.1) = 20
   EXPECT_GT(depth, 0);
   EXPECT_EQ(totalCount, 5);
 }
 
 TEST_F(CountMinSketchAggregateTest, tinyintInput) {
-  auto vectors = {makeRowVector({makeFlatVector<int8_t>({1, 2, 3, 4, 5})})};
+  auto serializedSketch =
+      serializeSketch(makeFlatVector<int8_t>({1, 2, 3, 4, 5}));
 
-  auto planNode =
-      exec::test::PlanBuilder(pool())
-          .values(vectors)
-          .singleAggregation({}, {"count_min_sketch(c0, 0.5, 0.5, 1)"})
-          .planNode();
-  auto result = exec::test::AssertQueryBuilder(planNode).copyResults(pool());
-
-  ASSERT_EQ(result->size(), 1);
-  auto resultFlat = result->childAt(0)->asFlatVector<StringView>();
-  ASSERT_FALSE(resultFlat->isNullAt(0));
-  auto sv = resultFlat->valueAt(0);
-
-  auto [depth, width, totalCount] = parseSketch(sv);
+  auto [depth, width, totalCount] = parseSketch(StringView(serializedSketch));
   EXPECT_EQ(depth, 1);
   EXPECT_EQ(width, 4);
   EXPECT_EQ(totalCount, 5);
@@ -259,8 +241,8 @@ TEST_F(CountMinSketchAggregateTest, integralTypeSignExtension) {
   EXPECT_EQ(
       serializeSketch(
           makeFlatVector<int16_t>(
-              {int16_t(-32768), int16_t(32767), int16_t(-1), int16_t(0)})),
-      serializeSketch(makeFlatVector<int64_t>({-32768, 32767, -1, 0})));
+              {int16_t(-32'768), int16_t(32'767), int16_t(-1), int16_t(0)})),
+      serializeSketch(makeFlatVector<int64_t>({-32'768, 32'767, -1, 0})));
 
   EXPECT_EQ(
       serializeSketch(
@@ -291,42 +273,35 @@ TEST_F(CountMinSketchAggregateTest, varcharInput) {
   ASSERT_EQ(result->size(), 1);
   auto resultFlat = result->childAt(0)->asFlatVector<StringView>();
   ASSERT_FALSE(resultFlat->isNullAt(0));
-  auto sv = resultFlat->valueAt(0);
+  auto serializedSketch = resultFlat->valueAt(0);
 
-  auto [depth, width, totalCount] = parseSketch(sv);
+  auto [depth, width, totalCount] = parseSketch(serializedSketch);
   EXPECT_EQ(totalCount, 3);
 }
 
 TEST_F(CountMinSketchAggregateTest, varcharGoldenParity) {
-  // Byte-for-byte parity of the string (addBinary / murmurHash3) path against a
-  // reference sketch produced by Spark's own
-  // org.apache.spark.util.sketch.CountMinSketch (spark-sketch 4.1.1):
-  //   CountMinSketch.create(0.5, 0.5, 42);
-  //   addString("hello"); addString("world"); addString("hello");
-  //   .toByteArray()
-  // This locks Spark's hashUnsafeBytes murmur3 (signed-byte tail mixing),
-  // double hashing and Math.abs(hash % width) bucketing, complementing the
-  // long-path golden covered by the bigintInput test.
-  auto vectors = {
-      makeRowVector({makeFlatVector<StringView>({"hello", "world", "hello"})})};
-
-  auto planNode =
-      exec::test::PlanBuilder(pool())
-          .values(vectors)
-          .singleAggregation({}, {"count_min_sketch(c0, 0.5, 0.5, 42)"})
-          .planNode();
-  auto result = exec::test::AssertQueryBuilder(planNode).copyResults(pool());
-
-  ASSERT_EQ(result->size(), 1);
-  auto resultFlat = result->childAt(0)->asFlatVector<StringView>();
-  ASSERT_FALSE(resultFlat->isNullAt(0));
-  auto sv = resultFlat->valueAt(0);
-
-  std::string expectedHex =
-      "000000010000000000000003000000010000000400000000"
-      "5D20CE9A00000000000000020000000000000000000000000000000100000000"
-      "00000000";
-  EXPECT_EQ(toHex(sv), expectedHex);
+  // Match Spark 4.1.1 CountMinSketch.addString for one and three hash rows.
+  // Multiple rows exercise the second Murmur3 hash in double hashing.
+  auto column = makeFlatVector<StringView>({"hello", "world", "hello"});
+  const std::vector<std::pair<std::string, std::string>> testCases = {
+      {"count_min_sketch(c0, 0.5, 0.5, 42)",
+       "000000010000000000000003000000010000000400000000"
+       "5D20CE9A00000000000000020000000000000000000000000000000100000000"
+       "00000000"},
+      {"count_min_sketch(c0, 0.3, 0.875, 42)",
+       "0000000100000000000000030000000300000007000000005D20CE9A00000000"
+       "06FF457B000000005773DDF00000000000000000000000000000000000000000"
+       "0000000000000000000000030000000000000000000000000000000000000000"
+       "0000000000000000000000020000000000000001000000000000000000000000"
+       "0000000000000000000000000000000000000000000000000000000000000000"
+       "0000000000000000000000030000000000000000000000000000000000000000"
+       "0000000000000000000000000000000000000000"},
+  };
+  for (const auto& [expression, expectedHex] : testCases) {
+    SCOPED_TRACE(expression);
+    auto serializedSketch = serializeSketch(column, expression);
+    EXPECT_EQ(toHex(StringView(serializedSketch)), expectedHex);
+  }
 }
 
 TEST_F(CountMinSketchAggregateTest, varbinaryInput) {
@@ -343,9 +318,9 @@ TEST_F(CountMinSketchAggregateTest, varbinaryInput) {
   ASSERT_EQ(result->size(), 1);
   auto resultFlat = result->childAt(0)->asFlatVector<StringView>();
   ASSERT_FALSE(resultFlat->isNullAt(0));
-  auto sv = resultFlat->valueAt(0);
+  auto serializedSketch = resultFlat->valueAt(0);
 
-  auto [depth, width, totalCount] = parseSketch(sv);
+  auto [depth, width, totalCount] = parseSketch(serializedSketch);
   EXPECT_EQ(totalCount, 2);
 }
 
@@ -363,13 +338,8 @@ TEST_F(CountMinSketchAggregateTest, varbinaryMatchesVarchar) {
 }
 
 TEST_F(CountMinSketchAggregateTest, varbinarySignedHighByteTailGolden) {
-  // Byte-for-byte parity against a Spark 4.1.1 CountMinSketch generated with:
-  //   CountMinSketch.create(0.5, 0.5, 1)
-  //   addBinary([0x80])
-  //   addBinary([0x01, 0x80])
-  //   addBinary([0x01, 0x02, 0xFF])
-  // The one-, two-, and three-byte Murmur3 tails all contain a signed high
-  // byte, locking Spark's signed-byte promotion behavior.
+  // Match Spark 4.1.1 CountMinSketch.addBinary for one and three hash rows.
+  // The one-, two-, and three-byte Murmur3 tails contain signed high bytes.
   std::vector<std::string> raw = {
       std::string("\x80", 1),
       std::string("\x01\x80", 2),
@@ -378,12 +348,25 @@ TEST_F(CountMinSketchAggregateTest, varbinarySignedHighByteTailGolden) {
       {StringView(raw[0]), StringView(raw[1]), StringView(raw[2])},
       VARBINARY());
 
-  std::string expectedHex =
-      "000000010000000000000003000000010000000400000000"
-      "5D8D6AB900000000000000000000000000000000000000000000000200000000"
-      "00000001";
-  auto serialized = serializeSketch(varbinary);
-  EXPECT_EQ(toHex(StringView(serialized)), expectedHex);
+  const std::vector<std::pair<std::string, std::string>> testCases = {
+      {"count_min_sketch(c0, 0.5, 0.5, 1)",
+       "000000010000000000000003000000010000000400000000"
+       "5D8D6AB900000000000000000000000000000000000000000000000200000000"
+       "00000001"},
+      {"count_min_sketch(c0, 0.3, 0.875, 1)",
+       "0000000100000000000000030000000300000007000000005D8D6AB900000000"
+       "0CDC4E6C00000000347D87370000000000000000000000000000000000000000"
+       "0000000200000000000000000000000000000000000000000000000100000000"
+       "0000000000000000000000000000000000000001000000000000000000000000"
+       "0000000100000000000000000000000000000000000000000000000100000000"
+       "0000000000000000000000010000000000000000000000000000000100000000"
+       "0000000100000000000000000000000000000000"},
+  };
+  for (const auto& [expression, expectedHex] : testCases) {
+    SCOPED_TRACE(expression);
+    auto serializedSketch = serializeSketch(varbinary, expression);
+    EXPECT_EQ(toHex(StringView(serializedSketch)), expectedHex);
+  }
 }
 
 TEST_F(CountMinSketchAggregateTest, nullInputsSkipped) {
@@ -401,9 +384,9 @@ TEST_F(CountMinSketchAggregateTest, nullInputsSkipped) {
   ASSERT_EQ(result->size(), 1);
   auto resultFlat = result->childAt(0)->asFlatVector<StringView>();
   ASSERT_FALSE(resultFlat->isNullAt(0));
-  auto sv = resultFlat->valueAt(0);
+  auto serializedSketch = resultFlat->valueAt(0);
 
-  auto [depth, width, totalCount] = parseSketch(sv);
+  auto [depth, width, totalCount] = parseSketch(serializedSketch);
   EXPECT_EQ(totalCount, 3); // Only non-null values counted.
 }
 
@@ -422,9 +405,9 @@ TEST_F(CountMinSketchAggregateTest, emptyInput) {
   // Spark's count_min_sketch is non-nullable: empty input produces a
   // serialized empty sketch, not null.
   ASSERT_FALSE(resultFlat->isNullAt(0));
-  auto sv = resultFlat->valueAt(0);
+  auto serializedSketch = resultFlat->valueAt(0);
 
-  auto [depth, width, totalCount] = parseSketch(sv);
+  auto [depth, width, totalCount] = parseSketch(serializedSketch);
   EXPECT_EQ(depth, 1);
   EXPECT_EQ(width, 4);
   EXPECT_EQ(totalCount, 0);
@@ -485,33 +468,233 @@ TEST_F(CountMinSketchAggregateTest, emptyInputCompanionFunctions) {
   EXPECT_EQ(finalTotalCount, 0);
 }
 
-TEST_F(CountMinSketchAggregateTest, groupBy) {
-  auto vectors = {makeRowVector({
-      makeFlatVector<int32_t>({1, 1, 2, 2, 2}), // grouping key
-      makeFlatVector<int64_t>({10, 20, 30, 40, 50}), // values
-  })};
+TEST_F(CountMinSketchAggregateTest, accumulatorRowAlignment) {
+  auto aggregate = exec::Aggregate::create(
+      "count_min_sketch",
+      core::AggregationNode::Step::kSingle,
+      {BIGINT(), DOUBLE(), DOUBLE(), INTEGER()},
+      VARBINARY(),
+      core::QueryConfig({}),
+      {nullptr,
+       makeConstant<double>(0.5, 1),
+       makeConstant<double>(0.5, 1),
+       makeConstant<int32_t>(1, 1)});
+  exec::RowContainer groups(
+      {SMALLINT()},
+      /*nullableKeys=*/true,
+      {exec::Accumulator(aggregate.get(), VARBINARY())},
+      {},
+      /*hasNext=*/false,
+      /*isJoinBuild=*/false,
+      /*hasProbedFlag=*/false,
+      /*hasCountFlag=*/false,
+      /*hasNormalizedKey=*/false,
+      /*useListRowIndex=*/false,
+      pool());
 
-  auto planNode =
-      exec::test::PlanBuilder(pool())
-          .values(vectors)
-          .singleAggregation({"c0"}, {"count_min_sketch(c1, 0.5, 0.5, 1)"})
-          .planNode();
-  auto result = exec::test::AssertQueryBuilder(planNode).copyResults(pool());
-
-  ASSERT_EQ(result->size(), 2);
-  auto keyFlat = result->childAt(0)->asFlatVector<int32_t>();
-  auto resultFlat = result->childAt(1)->asFlatVector<StringView>();
-  std::map<int32_t, int64_t> counts;
-
-  for (vector_size_t i = 0; i < 2; ++i) {
-    ASSERT_FALSE(resultFlat->isNullAt(i));
-    auto sv = resultFlat->valueAt(i);
-    auto [depth, width, totalCount] = parseSketch(sv);
-    EXPECT_EQ(depth, 1);
-    EXPECT_EQ(width, 4);
-    ASSERT_TRUE(counts.emplace(keyFlat->valueAt(i), totalCount).second);
+  const auto accumulatorOffset = groups.accumulatorColumnAt(0).offset();
+  for (int32_t i = 0; i < 16; ++i) {
+    SCOPED_TRACE(i);
+    const auto* accumulator = groups.newRow() + accumulatorOffset;
+    EXPECT_EQ(reinterpret_cast<uintptr_t>(accumulator) % alignof(int64_t), 0);
   }
-  EXPECT_EQ(counts, (std::map<int32_t, int64_t>{{1, 2}, {2, 3}}));
+}
+
+TEST_F(CountMinSketchAggregateTest, destroyAfterPartialInitialization) {
+  for (vector_size_t numInitialized : {0, 1, 2}) {
+    SCOPED_TRACE(numInitialized);
+    const std::vector<VectorPtr> arguments{
+        makeFlatVector<int64_t>({11, 22}),
+        makeConstant<double>(0.5, 2),
+        makeConstant<double>(0.5, 2),
+        makeConstant<int32_t>(1, 2),
+    };
+    auto aggregate = exec::Aggregate::create(
+        "count_min_sketch",
+        core::AggregationNode::Step::kSingle,
+        {BIGINT(), DOUBLE(), DOUBLE(), INTEGER()},
+        VARBINARY(),
+        core::QueryConfig({}),
+        {nullptr, arguments[1], arguments[2], arguments[3]});
+    exec::RowContainer groups(
+        {},
+        /*nullableKeys=*/false,
+        {exec::Accumulator(aggregate.get(), VARBINARY())},
+        {},
+        /*hasNext=*/false,
+        /*isJoinBuild=*/false,
+        /*hasProbedFlag=*/false,
+        /*hasCountFlag=*/false,
+        /*hasNormalizedKey=*/false,
+        /*useListRowIndex=*/false,
+        pool());
+
+    const auto column = groups.accumulatorColumnAt(0);
+    aggregate->setOffsets(
+        column.offset(),
+        column.nullByte(),
+        column.nullMask(),
+        column.initializedByte(),
+        column.initializedMask(),
+        groups.rowSizeOffset());
+    aggregate->setAllocator(&groups.stringAllocator());
+    std::array<char*, 2> rows{groups.newRow(), groups.newRow()};
+    for (auto* row : rows) {
+      // Prevent zeroed vector internals from hiding invalid destructor calls.
+      std::memset(
+          row + column.offset(), 0xA5, aggregate->accumulatorFixedWidthSize());
+    }
+
+    if (numInitialized > 0) {
+      const std::array<vector_size_t, 2> indices{0, 1};
+      aggregate->initializeNewGroups(
+          rows.data(),
+          folly::Range<const vector_size_t*>(indices.data(), numInitialized));
+      aggregate->addRawInput(
+          rows.data(), SelectivityVector(numInitialized), arguments, false);
+      EXPECT_GT(groups.stringAllocator().currentBytes(), 0);
+    }
+
+    // Unlike clear(), eraseRows() always runs accumulator destruction.
+    groups.eraseRows(folly::Range<char**>(rows.data(), rows.size()));
+    EXPECT_TRUE(groups.stringAllocator().isEmpty());
+  }
+}
+
+TEST_F(CountMinSketchAggregateTest, groupBy) {
+  // Keep multiple batches so the harness also checks partial abandonment.
+  auto vectors = {
+      makeRowVector({
+          makeFlatVector<int32_t>({1, 2, 1, 2, 3, 1, 2, 3}),
+          makeNullableFlatVector<int64_t>(
+              {std::numeric_limits<int64_t>::min(),
+               42,
+               -1,
+               42,
+               std::nullopt,
+               0,
+               std::nullopt,
+               std::nullopt}),
+          makeNullableFlatVector<StringView>(
+              {StringView("\x80", 1),
+               StringView("hello"),
+               StringView("\x01\x80", 2),
+               StringView("world"),
+               std::nullopt,
+               StringView(""),
+               std::nullopt,
+               std::nullopt},
+              VARBINARY()),
+      }),
+      makeRowVector({
+          makeFlatVector<int32_t>({2, 1, 3, 2, 1, 1, 2, 3}),
+          makeNullableFlatVector<int64_t>(
+              {7,
+               std::numeric_limits<int64_t>::max(),
+               std::nullopt,
+               0,
+               1,
+               1,
+               -7,
+               std::nullopt}),
+          makeNullableFlatVector<StringView>(
+              {StringView("\x00\x01\x80\xFF", 4),
+               StringView("\x01\x02\xFF", 3),
+               std::nullopt,
+               StringView(""),
+               StringView("hello"),
+               StringView("\x00\xFF", 2),
+               StringView("\xFF\xFE\xFD\xFC", 4),
+               std::nullopt},
+              VARBINARY()),
+      }),
+      makeRowVector({
+          makeFlatVector<int32_t>({1, 2, 1, 2, 3, 1, 2, 3}),
+          makeNullableFlatVector<int64_t>(
+              {std::numeric_limits<int64_t>::min(),
+               42,
+               std::nullopt,
+               -1,
+               std::nullopt,
+               7,
+               0,
+               std::nullopt}),
+          makeNullableFlatVector<StringView>(
+              {StringView("\x80", 1),
+               StringView("hello"),
+               std::nullopt,
+               StringView("\x00\x00", 2),
+               std::nullopt,
+               StringView("world"),
+               StringView("\x81", 1),
+               std::nullopt},
+              VARBINARY()),
+      }),
+  };
+
+  // Match complete Spark 4.1.1 sketches at depth 3, width 7, and seed -7,
+  // including the empty sketch for the all-null group.
+  const StringView emptySketchHex(
+      "0000000100000000000000000000000300000007000000002272954600000000"
+      "736445C100000000562ACD160000000000000000000000000000000000000000"
+      "0000000000000000000000000000000000000000000000000000000000000000"
+      "0000000000000000000000000000000000000000000000000000000000000000"
+      "0000000000000000000000000000000000000000000000000000000000000000"
+      "0000000000000000000000000000000000000000000000000000000000000000"
+      "0000000000000000000000000000000000000000");
+  auto expected = makeRowVector({
+      makeFlatVector<int32_t>({1, 2, 3}),
+      makeFlatVector<StringView>({
+          "0000000100000000000000080000000300000007000000002272954600000000"
+          "736445C100000000562ACD160000000000000003000000000000000000000000"
+          "0000000000000000000000000000000000000004000000000000000100000000"
+          "0000000000000000000000050000000000000002000000000000000000000000"
+          "0000000000000000000000000000000000000001000000000000000000000000"
+          "0000000300000000000000010000000000000000000000000000000000000000"
+          "0000000400000000000000000000000000000000",
+          "0000000100000000000000080000000300000007000000002272954600000000"
+          "736445C100000000562ACD160000000000000002000000000000000000000000"
+          "0000000000000000000000010000000000000004000000000000000100000000"
+          "0000000000000000000000050000000000000001000000000000000000000000"
+          "0000000100000000000000000000000000000001000000000000000000000000"
+          "0000000600000000000000010000000000000000000000000000000000000000"
+          "0000000100000000000000000000000000000000",
+          emptySketchHex,
+      }),
+      makeFlatVector<StringView>({
+          "0000000100000000000000080000000300000007000000002272954600000000"
+          "736445C100000000562ACD160000000000000001000000000000000000000000"
+          "0000000200000000000000030000000000000000000000000000000200000000"
+          "0000000000000000000000020000000000000003000000000000000000000000"
+          "0000000100000000000000010000000000000000000000000000000100000000"
+          "0000000100000000000000030000000000000001000000000000000100000000"
+          "0000000200000000000000000000000000000000",
+          "0000000100000000000000080000000300000007000000002272954600000000"
+          "736445C100000000562ACD160000000000000001000000000000000000000000"
+          "0000000200000000000000030000000000000001000000000000000100000000"
+          "0000000000000000000000030000000000000002000000000000000200000000"
+          "0000000000000000000000000000000000000001000000000000000000000000"
+          "0000000200000000000000030000000000000000000000000000000100000000"
+          "0000000100000000000000010000000000000000",
+          emptySketchHex,
+      }),
+  });
+  const std::vector<std::string> aggregates = {
+      "count_min_sketch(c1, 0.3, 0.875, -7)",
+      "count_min_sketch(c2, 0.3, 0.875, -7)",
+  };
+  const std::vector<std::string> projections = {
+      "c0", "to_hex(a0)", "to_hex(a1)"};
+  testAggregations(vectors, {"c0"}, aggregates, projections, {expected});
+  testAggregationsWithCompanion(
+      vectors,
+      [](auto& /*builder*/) {},
+      {"c0"},
+      aggregates,
+      {{BIGINT(), DOUBLE(), DOUBLE(), INTEGER()},
+       {VARBINARY(), DOUBLE(), DOUBLE(), INTEGER()}},
+      projections,
+      {expected});
 }
 
 TEST_F(CountMinSketchAggregateTest, differentParameters) {
@@ -528,8 +711,8 @@ TEST_F(CountMinSketchAggregateTest, differentParameters) {
 
   auto resultFlat = result->childAt(0)->asFlatVector<StringView>();
   ASSERT_FALSE(resultFlat->isNullAt(0));
-  auto sv = resultFlat->valueAt(0);
-  auto [depth, width, totalCount] = parseSketch(sv);
+  auto serializedSketch = resultFlat->valueAt(0);
+  auto [depth, width, totalCount] = parseSketch(serializedSketch);
 
   EXPECT_EQ(width, 20); // ceil(2/0.1)
   EXPECT_EQ(depth, 7); // ceil(-log1p(-0.99)/log(2))
@@ -537,96 +720,117 @@ TEST_F(CountMinSketchAggregateTest, differentParameters) {
 }
 
 TEST_F(CountMinSketchAggregateTest, seedInputTypes) {
-  auto vectors = {makeRowVector({makeFlatVector<int64_t>({1, 2, 3})})};
+  auto input = makeRowVector({
+      makeNullableFlatVector<int8_t>({1, std::nullopt, 2, 1}),
+      makeNullableFlatVector<int16_t>({1, std::nullopt, 2, 1}),
+      makeNullableFlatVector<int32_t>({1, std::nullopt, 2, 1}),
+      makeNullableFlatVector<int64_t>({1, std::nullopt, 2, 1}),
+      makeNullableFlatVector<StringView>(
+          {"\x80", std::nullopt, "\x01\x80", "\x01\x02\xFF"}),
+      makeNullableFlatVector<StringView>(
+          {"\x80", std::nullopt, "\x01\x80", "\x01\x02\xFF"}, VARBINARY()),
+  });
+  // Match independent Spark bytes for every value-type and seed-type pair.
+  const StringView integralHex(
+      "0000000100000000000000030000000100000004000000005D8D6AB9"
+      "0000000000000000000000000000000200000000000000010000000000000000");
+  const StringView binaryHex(
+      "000000010000000000000003000000010000000400000000"
+      "5D8D6AB900000000000000000000000000000000000000000000000200000000"
+      "00000001");
+  std::vector<VectorPtr> expectedColumns;
+  for (const auto& hex :
+       {integralHex,
+        integralHex,
+        integralHex,
+        integralHex,
+        binaryHex,
+        binaryHex}) {
+    expectedColumns.push_back(makeFlatVector<StringView>({hex}));
+  }
+  auto expected = makeRowVector(expectedColumns);
 
-  auto planNode = exec::test::PlanBuilder(pool())
-                      .values(vectors)
-                      .project(
-                          {"c0",
-                           "cast(1 as integer) as integer_seed",
-                           "cast(1 as bigint) as bigint_seed"})
-                      .singleAggregation(
-                          {},
-                          {
-                              "count_min_sketch(c0, 0.5, 0.5, integer_seed)",
-                              "count_min_sketch(c0, 0.5, 0.5, bigint_seed)",
-                          })
-                      .planNode();
-  auto result = exec::test::AssertQueryBuilder(planNode).copyResults(pool());
-
-  ASSERT_EQ(result->size(), 1);
-  auto integerSeed = result->childAt(0)->asFlatVector<StringView>();
-  auto bigintSeed = result->childAt(1)->asFlatVector<StringView>();
-  ASSERT_FALSE(integerSeed->isNullAt(0));
-  ASSERT_FALSE(bigintSeed->isNullAt(0));
-  EXPECT_EQ(toHex(integerSeed->valueAt(0)), toHex(bigintSeed->valueAt(0)));
+  for (const auto bigintSeed : {false, true}) {
+    SCOPED_TRACE(bigintSeed);
+    parse::ParseOptions options;
+    options.parseIntegerAsBigint = bigintSeed;
+    auto planNode = exec::test::PlanBuilder(pool())
+                        .setParseOptions(options)
+                        .values({input})
+                        .singleAggregation(
+                            {},
+                            {"count_min_sketch(c0, 0.5, 0.5, 1)",
+                             "count_min_sketch(c1, 0.5, 0.5, 1)",
+                             "count_min_sketch(c2, 0.5, 0.5, 1)",
+                             "count_min_sketch(c3, 0.5, 0.5, 1)",
+                             "count_min_sketch(c4, 0.5, 0.5, 1)",
+                             "count_min_sketch(c5, 0.5, 0.5, 1)"})
+                        .project(
+                            {"to_hex(a0)",
+                             "to_hex(a1)",
+                             "to_hex(a2)",
+                             "to_hex(a3)",
+                             "to_hex(a4)",
+                             "to_hex(a5)"})
+                        .planNode();
+    exec::test::AssertQueryBuilder(planNode).assertResults(expected);
+  }
 }
 
-TEST_F(CountMinSketchAggregateTest, flatConstantParameters) {
-  auto values = makeFlatVector<int64_t>({1, 2, 1});
-  auto vectors = {makeRowVector(
-      {values,
-       makeFlatVector<double>({0.5, 0.5, 0.5}),
-       makeFlatVector<double>({0.5, 0.5, 0.5}),
-       makeFlatVector<int32_t>({1, 1, 1})})};
-
-  auto planNode =
-      exec::test::PlanBuilder(pool())
-          .values(vectors)
-          .singleAggregation({}, {"count_min_sketch(c0, c1, c2, c3)"})
-          .planNode();
-  auto result = exec::test::AssertQueryBuilder(planNode).copyResults(pool());
-  auto resultFlat = result->childAt(0)->asFlatVector<StringView>();
-  auto resultValue = resultFlat->valueAt(0);
-
-  EXPECT_EQ(
-      std::string(resultValue.data(), resultValue.size()),
-      serializeSketch(values));
-}
-
-TEST_F(CountMinSketchAggregateTest, changedParametersAcrossBatchesRejected) {
-  auto vectors = {
-      makeRowVector(
-          {makeFlatVector<int64_t>({1, 2}),
-           makeFlatVector<double>({0.5, 0.5}),
-           makeFlatVector<double>({0.5, 0.5}),
-           makeFlatVector<int32_t>({1, 1})}),
-      makeRowVector(
-          {makeFlatVector<int64_t>({3, 4}),
-           makeFlatVector<double>({0.25, 0.25}),
-           makeFlatVector<double>({0.5, 0.5}),
-           makeFlatVector<int32_t>({1, 1})}),
+TEST_F(CountMinSketchAggregateTest, columnParametersRejected) {
+  const std::vector<std::pair<std::string, std::string>> cases = {
+      {"count_min_sketch(c0, c1, 0.5, 1)", "eps"},
+      {"count_min_sketch(c0, 0.5, c2, 1)", "confidence"},
+      {"count_min_sketch(c0, 0.5, 0.5, c3)", "seed"},
   };
-
-  auto planNode =
-      exec::test::PlanBuilder(pool())
-          .values(vectors)
-          .singleAggregation({}, {"count_min_sketch(c0, c1, c2, c3)"})
-          .planNode();
-  VELOX_ASSERT_THROW(
-      exec::test::AssertQueryBuilder(planNode).copyResults(pool()),
-      "eps argument must be constant for all input rows");
+  for (const auto constantEncoding : {false, true}) {
+    SCOPED_TRACE(constantEncoding);
+    for (const vector_size_t size : {0, 3}) {
+      SCOPED_TRACE(size);
+      auto input = makeRowVector({
+          makeFlatVector<int64_t>(size, [](auto row) { return row; }),
+          makeFlatVector<double>(size, [](auto) { return 0.5; }),
+          makeFlatVector<double>(size, [](auto) { return 0.5; }),
+          makeFlatVector<int32_t>(size, [](auto) { return 1; }),
+      });
+      if (constantEncoding) {
+        input->childAt(1) = makeConstant<double>(0.5, size);
+        input->childAt(2) = makeConstant<double>(0.5, size);
+        input->childAt(3) = makeConstant<int32_t>(1, size);
+      }
+      for (const auto& [aggregate, parameter] : cases) {
+        SCOPED_TRACE(aggregate);
+        const auto error =
+            fmt::format("{} argument must be constant", parameter);
+        testFailingAggregations({input}, {}, {aggregate}, error);
+        if (size > 0) {
+          auto planNode = exec::test::PlanBuilder(pool())
+                              .values({input})
+                              .window({aggregate + " OVER ()"})
+                              .planNode();
+          VELOX_ASSERT_THROW(
+              exec::test::AssertQueryBuilder(planNode).copyResults(pool()),
+              error);
+        }
+      }
+    }
+  }
 }
 
-TEST_F(CountMinSketchAggregateTest, windowEmptyFramesWithColumnParameters) {
+TEST_F(CountMinSketchAggregateTest, windowEmptyFramesWithLiteralParameters) {
   const auto emptySketch = serializeSketch(makeFlatVector<int64_t>({}));
   const auto singleValueSketch = serializeSketch(makeFlatVector<int64_t>({1}));
   const auto emptySketchView = StringView(emptySketch);
   const auto singleValueSketchView = StringView(singleValueSketch);
   const vector_size_t numRows = 6;
 
-  const std::vector<VectorPtr> seeds = {
-      makeFlatVector<int32_t>(numRows, [](auto) { return 1; }),
-      makeFlatVector<int64_t>(numRows, [](auto) { return 1; }),
-  };
-  for (const auto& seed : seeds) {
-    SCOPED_TRACE(seed->type()->toString());
+  for (const auto bigintSeed : {false, true}) {
+    SCOPED_TRACE(bigintSeed);
+    parse::ParseOptions options;
+    options.parseIntegerAsBigint = bigintSeed;
     auto input = makeRowVector({
         makeNullableFlatVector<int64_t>(
             {1, std::nullopt, 3, 1, std::nullopt, 3}),
-        makeFlatVector<double>(numRows, [](auto) { return 0.5; }),
-        makeFlatVector<double>(numRows, [](auto) { return 0.5; }),
-        seed,
         makeFlatVector<int32_t>({0, 1, 2, 0, 1, 2}),
         makeFlatVector<int32_t>({0, 0, 0, 1, 1, 1}),
     });
@@ -658,19 +862,19 @@ TEST_F(CountMinSketchAggregateTest, windowEmptyFramesWithColumnParameters) {
     auto expected = makeRowVector(expectedColumns);
 
     const std::vector<std::string> windowFunctions = {
-        "count_min_sketch(c0, c1, c2, c3) OVER (PARTITION BY c5 ORDER BY c4 "
+        "count_min_sketch(c0, 0.5, 0.5, 1) OVER (PARTITION BY c2 ORDER BY c1 "
         "ROWS BETWEEN 1 PRECEDING AND 1 PRECEDING)",
-        "count_min_sketch(c0, c1, c2, c3) OVER (PARTITION BY c5 ORDER BY c4 "
+        "count_min_sketch(c0, 0.5, 0.5, 1) OVER (PARTITION BY c2 ORDER BY c1 "
         "ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING)",
-        "count_min_sketch(c0, c1, c2, c3) OVER (PARTITION BY c5 ORDER BY c4 "
+        "count_min_sketch(c0, 0.5, 0.5, 1) OVER (PARTITION BY c2 ORDER BY c1 "
         "ROWS BETWEEN 10 PRECEDING AND 9 PRECEDING)",
     };
     for (const auto streaming : {false, true}) {
       SCOPED_TRACE(streaming);
-      for (const auto batchSize : {1, 1024}) {
+      for (const auto batchSize : {1, 1'024}) {
         SCOPED_TRACE(batchSize);
         exec::test::PlanBuilder builder(pool());
-        builder.values({input});
+        builder.setParseOptions(options).values({input});
         if (streaming) {
           builder.streamingWindow(windowFunctions);
         } else {
@@ -688,9 +892,6 @@ TEST_F(CountMinSketchAggregateTest, maskedGroupsProduceEmptySketches) {
   const auto makeInput = [&](int32_t group, bool mask) {
     return makeRowVector({
         makeFlatVector<int64_t>({group}),
-        makeFlatVector<double>({0.5}),
-        makeFlatVector<double>({0.5}),
-        makeFlatVector<int32_t>({1}),
         makeFlatVector<int32_t>({group}),
         makeFlatVector<bool>({mask}),
     });
@@ -699,10 +900,10 @@ TEST_F(CountMinSketchAggregateTest, maskedGroupsProduceEmptySketches) {
       makeInput(1, false),
       makeInput(0, true),
   };
-  const std::vector<std::string> groupingKeys = {"c4"};
+  const std::vector<std::string> groupingKeys = {"c1"};
   const std::vector<std::string> aggregates = {
-      "count_min_sketch(c0, c1, c2, c3)"};
-  const std::vector<std::string> masks = {"c5"};
+      "count_min_sketch(c0, 0.5, 0.5, 1)"};
+  const std::vector<std::string> masks = {"c2"};
 
   auto globalMaskedPartialPlan = exec::test::PlanBuilder(pool())
                                      .values({vectors[0]})
@@ -780,7 +981,7 @@ TEST_F(CountMinSketchAggregateTest, maskedGroupsProduceEmptySketches) {
           .values({vectors[0]})
           .singleAggregation(
               groupingKeys,
-              {"sorted_count_min_sketch(c0, c1, c2, c3 ORDER BY c0)"},
+              {"sorted_count_min_sketch(c0, 0.5, 0.5, 1 ORDER BY c0)"},
               masks)
           .planNode();
   auto sortedMasked =
@@ -799,7 +1000,9 @@ TEST_F(CountMinSketchAggregateTest, maskedGroupsProduceEmptySketches) {
       exec::test::PlanBuilder(pool())
           .values({vectors[0]})
           .singleAggregation(
-              groupingKeys, {"count_min_sketch_partial(c0, c1, c2, c3)"}, masks)
+              groupingKeys,
+              {"count_min_sketch_partial(c0, 0.5, 0.5, 1)"},
+              masks)
           .planNode();
   auto maskedCompanion =
       exec::test::AssertQueryBuilder(maskedCompanionPlan).copyResults(pool());
@@ -863,11 +1066,12 @@ TEST_F(CountMinSketchAggregateTest, mergeCounterOverflowWraps) {
   // Version(4), totalCount(8), depth(4), width(4), hashA(8), table.
   constexpr size_t kTotalCountOffset = 4;
   constexpr size_t kFirstTableCountOffset = 28;
-  writeBE64(maxSketch, kTotalCountOffset, std::numeric_limits<int64_t>::max());
-  writeBE64(
+  writeBigEndianLong(
+      maxSketch, kTotalCountOffset, std::numeric_limits<int64_t>::max());
+  writeBigEndianLong(
       maxSketch, kFirstTableCountOffset, std::numeric_limits<int64_t>::max());
-  writeBE64(oneSketch, kTotalCountOffset, 1);
-  writeBE64(oneSketch, kFirstTableCountOffset, 1);
+  writeBigEndianLong(oneSketch, kTotalCountOffset, 1);
+  writeBigEndianLong(oneSketch, kFirstTableCountOffset, 1);
 
   auto input = makeFlatVector<StringView>(
       {StringView(maxSketch), StringView(oneSketch)}, VARBINARY());
@@ -888,7 +1092,8 @@ TEST_F(CountMinSketchAggregateTest, mergeCounterOverflowWraps) {
   EXPECT_EQ(totalCount, std::numeric_limits<int64_t>::min());
 
   const char* firstTableCount = serialized.data() + kFirstTableCountOffset;
-  EXPECT_EQ(readBE64(firstTableCount), std::numeric_limits<int64_t>::min());
+  EXPECT_EQ(
+      readBigEndianLong(firstTableCount), std::numeric_limits<int64_t>::min());
 }
 
 TEST_F(CountMinSketchAggregateTest, malformedMergeInputRejected) {
@@ -902,6 +1107,43 @@ TEST_F(CountMinSketchAggregateTest, malformedMergeInputRejected) {
   auto truncatedTable = sketch.substr(0, sketch.size() - 1);
   assertMergeFails(
       {truncatedTable}, "CountMinSketch serialized data truncated");
+
+  constexpr size_t kVersionOffset = 0;
+  constexpr size_t kDepthOffset = 12;
+  constexpr size_t kWidthOffset = 16;
+  for (const int32_t version : {-1, 0, 2}) {
+    SCOPED_TRACE(version);
+    auto invalidSketch = sketch;
+    writeBigEndianInt(invalidSketch, kVersionOffset, version);
+    assertMergeFails({invalidSketch}, "Unexpected CountMinSketch version");
+  }
+
+  for (const int32_t dimension : {-1, 0}) {
+    SCOPED_TRACE(dimension);
+    {
+      auto invalidSketch = sketch;
+      writeBigEndianInt(invalidSketch, kDepthOffset, dimension);
+      assertMergeFails(
+          {invalidSketch}, "CountMinSketch depth must be positive");
+    }
+    {
+      auto invalidSketch = sketch;
+      writeBigEndianInt(invalidSketch, kWidthOffset, dimension);
+      assertMergeFails(
+          {invalidSketch}, "CountMinSketch width must be positive");
+    }
+  }
+
+  {
+    auto invalidSketch = sketch;
+    writeBigEndianInt(
+        invalidSketch, kDepthOffset, std::numeric_limits<int32_t>::max());
+    writeBigEndianInt(
+        invalidSketch, kWidthOffset, std::numeric_limits<int32_t>::max());
+    assertMergeFails(
+        {invalidSketch},
+        "CountMinSketch dimensions too large: 2147483647 x 2147483647");
+  }
 }
 
 TEST_F(CountMinSketchAggregateTest, incompatibleMergeInputRejected) {
@@ -945,6 +1187,11 @@ TEST_F(CountMinSketchAggregateTest, nullParametersRejected) {
       data,
       {},
       {"count_min_sketch(c0, 0.5, 0.5, cast(null as integer))"},
+      "seed argument must not be null");
+  testFailingAggregations(
+      data,
+      {},
+      {"count_min_sketch(c0, 0.5, 0.5, cast(null as bigint))"},
       "seed argument must not be null");
 }
 
