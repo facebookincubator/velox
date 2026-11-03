@@ -189,6 +189,30 @@ mergeMeanStates(cudf::column_view const& states, cuda::stream_ref stream) {
   return {std::move(sumTotal), std::move(countTotal)};
 }
 
+// Builds avg's one-row ROW(sum, count) state from one-row sum and count
+// columns. Shared by the partial and intermediate reduce steps.
+std::unique_ptr<cudf::column> makeMeanState(
+    std::unique_ptr<cudf::column> sum,
+    std::unique_ptr<cudf::column> count,
+    bool isNull,
+    cuda::stream_ref stream,
+    rmm::device_async_resource_ref mr) {
+  auto children = std::vector<std::unique_ptr<cudf::column>>();
+  children.push_back(std::move(sum));
+  children.push_back(std::move(count));
+  return cudf::make_structs_column(
+      /*num_rows=*/1,
+      std::move(children),
+      /*null_count=*/isNull ? 1 : 0,
+      cudf::create_null_mask(
+          /*size=*/1,
+          isNull ? cudf::mask_state::ALL_NULL : cudf::mask_state::UNALLOCATED,
+          stream,
+          cudf::memory_resources{mr, get_temp_mr()}),
+      stream,
+      mr);
+}
+
 struct ReduceMeanAggregator : ReduceAggregator {
   ReduceMeanAggregator(
       core::AggregationNode::Step step,
@@ -251,21 +275,12 @@ struct ReduceMeanAggregator : ReduceAggregator {
             stream,
             mr);
 
-        // Assemble into struct as expected by velox.
-        auto children = std::vector<std::unique_ptr<cudf::column>>();
-        children.push_back(std::move(sumCol));
-        children.push_back(std::move(countCol));
-        return std::make_unique<cudf::column>(
-            cudf::data_type(cudf::type_id::STRUCT),
-            1,
-            rmm::device_buffer{},
-            cudf::create_null_mask(
-                0,
-                cudf::mask_state::UNALLOCATED,
-                stream,
-                cudf::memory_resources{mr, get_temp_mr()}),
-            0,
-            std::move(children));
+        return makeMeanState(
+            std::move(sumCol),
+            std::move(countCol),
+            /*isNull=*/false,
+            stream,
+            mr);
       }
       case core::AggregationNode::Step::kIntermediate: {
         // Returns the merged state instead of dividing. GPU is required to
@@ -278,18 +293,12 @@ struct ReduceMeanAggregator : ReduceAggregator {
         auto const hasCountedRows =
             count.is_valid(stream) && count.value(stream) > 0;
 
-        auto children = std::vector<std::unique_ptr<cudf::column>>();
-        children.push_back(
-            cudf::make_column_from_scalar(*sumTotal, 1, stream, get_temp_mr()));
-        children.push_back(
-            cudf::make_column_from_scalar(
-                *countTotal, 1, stream, get_temp_mr()));
-        auto const state = cudf::struct_scalar(
-            cudf::table(std::move(children)),
-            /*is_valid=*/hasCountedRows,
+        return makeMeanState(
+            cudf::make_column_from_scalar(*sumTotal, 1, stream, mr),
+            cudf::make_column_from_scalar(*countTotal, 1, stream, mr),
+            /*isNull=*/!hasCountedRows,
             stream,
-            get_temp_mr());
-        return cudf::make_column_from_scalar(state, 1, stream, mr);
+            mr);
       }
       case core::AggregationNode::Step::kFinal: {
         auto [sumTotal, countTotal] =
