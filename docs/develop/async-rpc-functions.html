@@ -221,7 +221,11 @@ result), a projection above the RPC node performs that conversion.</p>
 one outcome: a function-owned <code class="docutils literal notranslate"><span class="pre">RpcPayload</span></code> on success, or an <code class="docutils literal notranslate"><span class="pre">RpcError</span></code>
 containing an <code class="docutils literal notranslate"><span class="pre">RPCErrorKind</span></code> and diagnostic message on failure. A
 default-constructed response contains the defensive <code class="docutils literal notranslate"><span class="pre">kUnset</span></code> error, so
-“neither payload nor error” is not representable.</p>
+“neither payload nor error” is not representable. A transport that retries
+internally may also report <code class="docutils literal notranslate"><span class="pre">numOverloadedAttempts</span></code>, the number of earlier
+attempts it counted as overloaded, such as rate-limited, timed-out or shed
+attempts, and <code class="docutils literal notranslate"><span class="pre">lastAttemptNanos</span></code>, the duration of its final attempt. The
+operator counts the first and does not read the second.</p>
 <p><code class="docutils literal notranslate"><span class="pre">RpcPayload</span></code> is a move-only, type-erased value whose object representation is
 stored inline in the response, avoiding a wrapper allocation. The framework
 moves it from the function’s dispatch to the function’s <code class="docutils literal notranslate"><span class="pre">buildOutput</span></code> and
@@ -478,7 +482,9 @@ failures may become <code class="docutils literal notranslate"><span class="pre"
 normally become <code class="docutils literal notranslate"><span class="pre">kNonOverloadError</span></code>. Framework failures are handled below. A
 canonical typed overload or a function-specific <code class="docutils literal notranslate"><span class="pre">kOverloaded</span></code> verdict causes
 admission backoff. This keeps request-level reliability separate from
-cluster-level flow control.</p>
+cluster-level flow control. The overloaded attempts a transport reports are
+only counted, in the <code class="docutils literal notranslate"><span class="pre">rpcOverloadedAttempts</span></code> and <code class="docutils literal notranslate"><span class="pre">rpcSuccessesAfterOverload</span></code>
+runtime stats; they do not feed flow control.</p>
 <p>Classified row failures reach <code class="docutils literal notranslate"><span class="pre">buildOutput()</span></code>, where the function applies its
 configured policy by emitting null or error output, or by failing the query.</p>
 <p>A framework failure is different: a wrong response count, a duplicate or
