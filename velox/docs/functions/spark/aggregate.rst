@@ -314,6 +314,26 @@ General Aggregate Functions
 
     Returns -9223372036854775808
 
+.. spark:function:: try_sum(x) -> bigint
+
+    Returns the sum of `x`, or NULL if the sum overflows the BIGINT range. Supported types
+    of `x` are TINYINT, SMALLINT, INTEGER and BIGINT. Corresponds to Spark's ``try_sum`` on
+    integral types; for DECIMAL, REAL and DOUBLE input Spark's ``try_sum`` gives the same
+    result as :spark:func:`sum`. The intermediate result is Spark's aggregation buffer
+    ``ROW(sum, isEmpty)``, where ``sum`` is NULL after an overflow and ``isEmpty`` is true
+    while no non-NULL input has been seen.
+
+    Example::
+
+        SELECT try_sum(x)
+        FROM (
+            VALUES
+                (9223372036854775807),
+                (1)
+        ) AS t(x);
+
+    Returns NULL
+
 .. spark:function:: var_samp(x) -> double
 
     Returns the sample variance calculated of all input values. The type of `x` should be DOUBLE.

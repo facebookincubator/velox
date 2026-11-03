@@ -260,6 +260,92 @@ TEST_F(SumAggregationTest, overflow) {
   SumTestBase::testAggregateOverflow<int64_t, int64_t, int64_t>("spark_sum");
 }
 
+// Runs spark_try_sum over 'input' with a single aggregation and with a
+// partial and a final aggregation.
+std::vector<core::PlanNodePtr> makeTrySumPlans(const RowVectorPtr& input) {
+  return {
+      PlanBuilder()
+          .values({input})
+          .singleAggregation({}, {"spark_try_sum(c0)"})
+          .planNode(),
+      PlanBuilder()
+          .values({input})
+          .partialAggregation({}, {"spark_try_sum(c0)"})
+          .finalAggregation()
+          .planNode(),
+  };
+}
+
+TEST_F(SumAggregationTest, trySum) {
+  constexpr auto kMax = std::numeric_limits<int64_t>::max();
+
+  // Without overflow, try_sum is sum.
+  auto input =
+      makeRowVector({makeNullableFlatVector<int32_t>({1, std::nullopt, 2, 3})});
+  for (const auto& plan : makeTrySumPlans(input)) {
+    AssertQueryBuilder(plan).assertResults(
+        makeRowVector({makeFlatVector<int64_t>({6})}));
+  }
+
+  // Overflow returns NULL, also when later inputs would bring the sum back
+  // into range.
+  for (const auto& values :
+       std::vector<std::vector<int64_t>>{{kMax, 1}, {kMax, 1, -1}, {1, kMax}}) {
+    input = makeRowVector({makeFlatVector<int64_t>(values)});
+    for (const auto& plan : makeTrySumPlans(input)) {
+      AssertQueryBuilder(plan).assertResults(
+          makeRowVector({makeNullableFlatVector<int64_t>({std::nullopt})}));
+    }
+  }
+
+  // All-NULL input returns NULL.
+  input = makeRowVector(
+      {makeNullableFlatVector<int64_t>({std::nullopt, std::nullopt})});
+  for (const auto& plan : makeTrySumPlans(input)) {
+    AssertQueryBuilder(plan).assertResults(
+        makeRowVector({makeNullableFlatVector<int64_t>({std::nullopt})}));
+  }
+
+  // Grouped: one group overflows, one does not, one is all NULL.
+  input = makeRowVector(
+      {makeFlatVector<int32_t>({1, 1, 2, 2, 3}),
+       makeNullableFlatVector<int64_t>({kMax, 1, 5, 6, std::nullopt})});
+  auto expected = makeRowVector(
+      {makeFlatVector<int32_t>({1, 2, 3}),
+       makeNullableFlatVector<int64_t>({std::nullopt, 11, std::nullopt})});
+  AssertQueryBuilder(
+      PlanBuilder()
+          .values({input})
+          .singleAggregation({"c0"}, {"spark_try_sum(c1)"})
+          .planNode())
+      .assertResults(expected);
+  AssertQueryBuilder(
+      PlanBuilder()
+          .values({input})
+          .partialAggregation({"c0"}, {"spark_try_sum(c1)"})
+          .finalAggregation()
+          .planNode())
+      .assertResults(expected);
+}
+
+TEST_F(SumAggregationTest, trySumIntermediate) {
+  // The intermediate result is Spark's buffer: ROW(sum, isEmpty), with sum
+  // NULL after an overflow and isEmpty true for all-NULL input.
+  constexpr auto kMax = std::numeric_limits<int64_t>::max();
+  auto input = makeRowVector(
+      {makeFlatVector<int32_t>({1, 1, 2, 2, 3}),
+       makeNullableFlatVector<int64_t>({kMax, 1, 5, 6, std::nullopt})});
+  auto plan = PlanBuilder()
+                  .values({input})
+                  .partialAggregation({"c0"}, {"spark_try_sum(c1)"})
+                  .planNode();
+  AssertQueryBuilder(plan).assertResults(makeRowVector(
+      {makeFlatVector<int32_t>({1, 2, 3}),
+       makeRowVector(
+           {makeNullableFlatVector<int64_t>({std::nullopt, 11, 0}),
+            makeFlatVector<bool>({false, false, true})})}));
+}
+
 TEST_F(SumAggregationTest, hookLimits) {
   testHookLimits<int64_t, int64_t, true>();
 }

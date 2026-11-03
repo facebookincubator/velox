@@ -30,6 +30,7 @@ velox_add_library(
   Register.cpp
   RegrReplacementAggregate.cpp
   SumAggregate.cpp
+  TrySumAggregate.cpp
   VarianceAggregate.cpp
   HEADERS
   ApproxPercentileAggregate.h
@@ -46,6 +47,7 @@ velox_add_library(
   Register.h
   RegrReplacementAggregate.h
   SumAggregate.h
+  TrySumAggregate.h
   VarianceAggregate.h
 )
 
