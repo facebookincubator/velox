@@ -15,6 +15,9 @@
  */
 
 #include "velox/expression/ExprUtils.h"
+
+#include <algorithm>
+
 #include "velox/core/Expressions.h"
 
 namespace facebook::velox::expression::utils {
@@ -37,6 +40,18 @@ void flattenInput(
   } else {
     flat.emplace_back(input);
   }
+}
+
+bool sameInputs(
+    const core::TypedExprPtr& expr,
+    const std::vector<core::TypedExprPtr>& inputs) {
+  const auto& exprInputs = expr->inputs();
+  return std::equal(
+      exprInputs.begin(),
+      exprInputs.end(),
+      inputs.begin(),
+      inputs.end(),
+      [](const auto& lhs, const auto& rhs) { return lhs.get() == rhs.get(); });
 }
 
 bool allInputTypesEquivalent(const core::TypedExprPtr& expr) {
