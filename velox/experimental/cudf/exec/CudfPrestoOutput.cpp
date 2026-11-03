@@ -17,9 +17,9 @@
 #include "velox/experimental/cudf/CudfConfig.h"
 #include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/exec/CudfPrestoOutput.h"
-#include "velox/experimental/cudf/exec/PrestoPageDevice.h"
 #include "velox/experimental/cudf/exec/Utilities.h"
 #include "velox/experimental/cudf/exec/VeloxCudfInterop.h"
+#include "velox/experimental/cudf/serializers/PrestoPageDevice.h"
 
 #include "velox/common/compression/Compression.h"
 #include "velox/common/time/Timer.h"
