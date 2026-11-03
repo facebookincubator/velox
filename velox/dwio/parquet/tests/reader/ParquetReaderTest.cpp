@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <arrow/io/file.h>
 #include <gmock/gmock.h>
 #include <numeric>
 
@@ -28,6 +29,9 @@
 #include "velox/dwio/parquet/reader/StructColumnReader.h"
 #include "velox/dwio/parquet/tests/ParquetTestBase.h"
 #include "velox/dwio/parquet/thrift/ParquetThrift.h"
+#include "velox/dwio/parquet/writer/arrow/ColumnWriter.h"
+#include "velox/dwio/parquet/writer/arrow/FileWriter.h"
+#include "velox/dwio/parquet/writer/arrow/Schema.h"
 #include "velox/expression/ExprToSubfieldFilter.h"
 #include "velox/vector/tests/utils/VectorMaker.h"
 
@@ -425,6 +429,107 @@ TEST_F(ParquetReaderTest, parseEmptyNestedList) {
       schema, *readerBundle.rowReader, expected, *leafPool_);
 }
 
+namespace {
+
+// Writes a legacy two-level LIST whose repeated group is the row element, with
+// Parquet field IDs on every node. The Velox writer always emits three-level
+// LISTs, so use the low-level writer to control the physical schema.
+//
+//   message schema {
+//     optional group <listName> (LIST) = 1 {
+//       repeated group <elementName> = 2 {
+//         optional int64 id = 3;
+//         optional binary name (STRING) = 4; // Only if 'withNameField'.
+//       }
+//     }
+//   }
+//
+// Rows: [{1, "a"}, {null, "b"}], [], null, [{3, null}].
+void writeLegacyListOfRow(
+    const std::string& filePath,
+    const std::string& listName,
+    const std::string& elementName,
+    bool withNameField) {
+  namespace parquet_arrow = facebook::velox::parquet::arrow;
+  using parquet_arrow::ConvertedType;
+  using parquet_arrow::Repetition;
+  using parquet_arrow::schema::GroupNode;
+  using parquet_arrow::schema::PrimitiveNode;
+
+  parquet_arrow::schema::NodeVector fields{
+      PrimitiveNode::make(
+          "id",
+          Repetition::kOptional,
+          parquet_arrow::Type::kInt64,
+          ConvertedType::kNone,
+          /*length=*/-1,
+          /*precision=*/-1,
+          /*scale=*/-1,
+          /*fieldId=*/3),
+  };
+  if (withNameField) {
+    fields.push_back(
+        PrimitiveNode::make(
+            "name",
+            Repetition::kOptional,
+            parquet_arrow::Type::kByteArray,
+            ConvertedType::kUtf8,
+            /*length=*/-1,
+            /*precision=*/-1,
+            /*scale=*/-1,
+            /*fieldId=*/4));
+  }
+  auto element = GroupNode::make(
+      elementName,
+      Repetition::kRepeated,
+      fields,
+      ConvertedType::kNone,
+      /*fieldId=*/2);
+  auto list = GroupNode::make(
+      listName,
+      Repetition::kOptional,
+      {element},
+      ConvertedType::kList,
+      /*fieldId=*/1);
+  auto schema = std::static_pointer_cast<GroupNode>(
+      GroupNode::make("schema", Repetition::kRequired, {list}));
+
+  auto sink = ::arrow::io::FileOutputStream::Open(filePath).ValueOrDie();
+  auto fileWriter = parquet_arrow::ParquetFileWriter::open(sink, schema);
+  auto* rowGroupWriter = fileWriter->appendRowGroup();
+
+  // Definition levels: 0 = null list, 1 = empty list, 2 = null leaf in a
+  // present element, 3 = non-null leaf.
+  const std::vector<int16_t> repetitionLevels{0, 1, 0, 0, 0};
+  const std::vector<int16_t> idDefinitionLevels{3, 2, 1, 0, 3};
+  const std::vector<int64_t> ids{1, 3};
+  static_cast<parquet_arrow::Int64Writer*>(rowGroupWriter->nextColumn())
+      ->writeBatch(
+          repetitionLevels.size(),
+          idDefinitionLevels.data(),
+          repetitionLevels.data(),
+          ids.data());
+
+  if (withNameField) {
+    const std::vector<int16_t> nameDefinitionLevels{3, 3, 1, 0, 2};
+    const std::vector<parquet_arrow::ByteArray> names{
+        parquet_arrow::ByteArray("a"),
+        parquet_arrow::ByteArray("b"),
+    };
+    static_cast<parquet_arrow::ByteArrayWriter*>(rowGroupWriter->nextColumn())
+        ->writeBatch(
+            repetitionLevels.size(),
+            nameDefinitionLevels.data(),
+            repetitionLevels.data(),
+            names.data());
+  }
+
+  fileWriter->close();
+  VELOX_CHECK(sink->Close().ok());
+}
+
+} // namespace
+
 TEST_F(ParquetReaderTest, parseUnannotatedList) {
   // unannotated_list.parquet has the following the schema
   // the list is defined without the middle layer
@@ -475,6 +580,47 @@ TEST_F(ParquetReaderTest, parseUnannotatedList) {
           col0->childAt(0)->childAt(2))
           ->name_,
       "c");
+
+  {
+    // A single-field "<list>_tuple" group is the element. The match uses the
+    // physical names, so reading names as lowercase does not change it.
+    SCOPED_TRACE("Single-field <list>_tuple element read as lowercase");
+    const auto filePath = tempPath_->getPath() + "/tuple_list_of_row.parquet";
+    writeLegacyListOfRow(
+        filePath, "Items", "Items_tuple", /*withNameField=*/false);
+
+    const auto itemType = ROW("id", BIGINT());
+    const auto outputType = ROW("items", ARRAY(itemType));
+    auto readerOptions = makeDefaultReaderOptions();
+    readerOptions.setFileSchema(outputType);
+    readerOptions.setColumnMappingMode(ColumnMappingMode::kName);
+    readerOptions.setFileColumnNamesReadAsLowerCase(true);
+    auto readerBundle = ParquetReaderBuilder(
+                            leafPool_.get(),
+                            dataIoStats_,
+                            metadataIoStats_,
+                            filePath,
+                            outputType)
+                            .options(readerOptions)
+                            .build();
+    EXPECT_EQ(
+        readerBundle.reader->rowType()->toString(), outputType->toString());
+
+    auto expected = makeRowVector(
+        outputType->names(),
+        {
+            makeArrayVector(
+                {0, 2, 2, 2},
+                makeRowVector(
+                    itemType->names(),
+                    {
+                        makeNullableFlatVector<int64_t>({1, std::nullopt, 3}),
+                    }),
+                /*nulls=*/{2}),
+        });
+    assertReadWithReaderAndExpected(
+        outputType, *readerBundle.rowReader, expected, *leafPool_);
+  }
 }
 
 TEST_F(ParquetReaderTest, parseUnannotatedMap) {
@@ -630,32 +776,181 @@ TEST_F(ParquetReaderTest, parseArrayOfRowHiveReservedKeywords) {
 }
 
 TEST_F(ParquetReaderTest, parseArrayOfRowWithPositionMapping) {
-  // Covers kPosition when requested names differ from physical names for a
-  // legacy LIST layout. The LIST shape must still be inferred from the physical
-  // repeated-node names, not the requested positional names.
-  const auto itemType =
-      ROW({"renamed_name", "renamed_quantity", "renamed_price"},
-          {VARCHAR(), INTEGER(), DOUBLE()});
-  const auto outputType =
-      ROW({"renamed_id", "renamed_items"}, {INTEGER(), ARRAY(itemType)});
-  auto readerOptions = makeDefaultReaderOptions();
-  readerOptions.setFileSchema(outputType);
-  readerOptions.setColumnMappingMode(ColumnMappingMode::kPosition);
-  auto readerBundle =
-      readerBuilder("array_of_row_hive_reserved_keywords.parquet", outputType)
-          .options(readerOptions)
-          .build();
+  // Covers kPosition when requested names differ from physical names for
+  // legacy LIST layouts. The LIST shape must still be inferred from the
+  // physical repeated-node names, not the requested positional names.
+  {
+    SCOPED_TRACE("Three-level LIST with reserved names");
+    const auto itemType =
+        ROW({"renamed_name", "renamed_quantity", "renamed_price"},
+            {VARCHAR(), INTEGER(), DOUBLE()});
+    const auto outputType =
+        ROW({"renamed_id", "renamed_items"}, {INTEGER(), ARRAY(itemType)});
+    auto readerOptions = makeDefaultReaderOptions();
+    readerOptions.setFileSchema(outputType);
+    readerOptions.setColumnMappingMode(ColumnMappingMode::kPosition);
+    auto readerBundle =
+        readerBuilder("array_of_row_hive_reserved_keywords.parquet", outputType)
+            .options(readerOptions)
+            .build();
 
-  EXPECT_EQ(readerBundle.reader->rowType()->toString(), outputType->toString());
-  auto type = readerBundle.reader->typeWithId();
-  ASSERT_EQ(type->size(), 2ULL);
+    EXPECT_EQ(
+        readerBundle.reader->rowType()->toString(), outputType->toString());
+    auto type = readerBundle.reader->typeWithId();
+    ASSERT_EQ(type->size(), 2ULL);
 
-  auto items = type->childByName("renamed_items");
-  ASSERT_EQ(items->type()->kind(), TypeKind::ARRAY);
-  ASSERT_EQ(items->size(), 1ULL);
-  auto arrayElement = items->childAt(0);
-  EXPECT_EQ(arrayElement->type()->kind(), TypeKind::ROW);
-  EXPECT_EQ(arrayElement->type()->toString(), itemType->toString());
+    auto items = type->childByName("renamed_items");
+    ASSERT_EQ(items->type()->kind(), TypeKind::ARRAY);
+    ASSERT_EQ(items->size(), 1ULL);
+    auto arrayElement = items->childAt(0);
+    EXPECT_EQ(arrayElement->type()->kind(), TypeKind::ROW);
+    EXPECT_EQ(arrayElement->type()->toString(), itemType->toString());
+  }
+
+  {
+    SCOPED_TRACE("Two-level LIST whose repeated group is the element");
+    const auto filePath = tempPath_->getPath() + "/legacy_list_of_row.parquet";
+    writeLegacyListOfRow(filePath, "items", "array", /*withNameField=*/true);
+
+    const auto itemType =
+        ROW({{"renamed_id", BIGINT()}, {"renamed_name", VARCHAR()}});
+    const auto outputType = ROW("renamed_items", ARRAY(itemType));
+    auto readerOptions = makeDefaultReaderOptions();
+    readerOptions.setFileSchema(outputType);
+    readerOptions.setColumnMappingMode(ColumnMappingMode::kPosition);
+    auto readerBundle = ParquetReaderBuilder(
+                            leafPool_.get(),
+                            dataIoStats_,
+                            metadataIoStats_,
+                            filePath,
+                            outputType)
+                            .options(readerOptions)
+                            .build();
+    EXPECT_EQ(
+        readerBundle.reader->rowType()->toString(), outputType->toString());
+
+    auto expected = makeRowVector(
+        outputType->names(),
+        {
+            makeArrayVector(
+                {0, 2, 2, 2},
+                makeRowVector(
+                    itemType->names(),
+                    {
+                        makeNullableFlatVector<int64_t>({1, std::nullopt, 3}),
+                        makeNullableFlatVector<std::string>(
+                            {"a", "b", std::nullopt}),
+                    }),
+                /*nulls=*/{2}),
+        });
+    assertReadWithReaderAndExpected(
+        outputType, *readerBundle.rowReader, expected, *leafPool_);
+  }
+}
+
+TEST_F(ParquetReaderTest, parseArrayOfRowWithParquetFieldIdMapping) {
+  // Covers kParquetFieldId for a legacy two-level LIST whose repeated group is
+  // the row element.
+  auto buildReader = [this](
+                         const std::string& filePath,
+                         const RowTypePtr& outputType,
+                         std::vector<ParquetFieldId> fieldIds) {
+    auto readerOptions = makeDefaultReaderOptions();
+    readerOptions.setFileSchema(outputType);
+    readerOptions.setColumnMappingMode(ColumnMappingMode::kParquetFieldId);
+    readerOptions.setFieldIds(std::move(fieldIds));
+    return ParquetReaderBuilder(
+               leafPool_.get(),
+               dataIoStats_,
+               metadataIoStats_,
+               filePath,
+               outputType)
+        .options(readerOptions)
+        .build();
+  };
+
+  {
+    SCOPED_TRACE("Renamed, reordered and missing element fields");
+    const auto filePath = tempPath_->getPath() + "/legacy_list_of_row.parquet";
+    writeLegacyListOfRow(filePath, "items", "array", /*withNameField=*/true);
+
+    const auto itemType =
+        ROW({{"label", VARCHAR()}, {"missing", DOUBLE()}, {"key", BIGINT()}});
+    const auto outputType = ROW("renamed_items", ARRAY(itemType));
+    auto readerBundle = buildReader(
+        filePath,
+        outputType,
+        {
+            ParquetFieldId{
+                1,
+                {ParquetFieldId{
+                    2,
+                    {
+                        ParquetFieldId{4, {}},
+                        ParquetFieldId{99, {}},
+                        ParquetFieldId{3, {}},
+                    }}}},
+        });
+
+    // The file schema keeps physical field order and takes requested names.
+    EXPECT_EQ(
+        readerBundle.reader->rowType()->toString(),
+        "ROW<renamed_items:ARRAY<ROW<key:BIGINT,label:VARCHAR>>>");
+
+    auto expected = makeRowVector(
+        outputType->names(),
+        {
+            makeArrayVector(
+                {0, 2, 2, 2},
+                makeRowVector(
+                    itemType->names(),
+                    {
+                        makeNullableFlatVector<std::string>(
+                            {"a", "b", std::nullopt}),
+                        makeNullableFlatVector<double>(
+                            {std::nullopt, std::nullopt, std::nullopt}),
+                        makeNullableFlatVector<int64_t>({1, std::nullopt, 3}),
+                    }),
+                /*nulls=*/{2}),
+        });
+    assertReadWithReaderAndExpected(
+        outputType, *readerBundle.rowReader, expected, *leafPool_);
+  }
+
+  {
+    // The repeated group is named neither "array" nor "items_tuple", so only
+    // its physical field count makes it the element. Selecting one of its two
+    // fields must keep it a row element.
+    SCOPED_TRACE("Subset of element fields");
+    const auto filePath = tempPath_->getPath() + "/record_list_of_row.parquet";
+    writeLegacyListOfRow(filePath, "items", "record", /*withNameField=*/true);
+
+    const auto itemType = ROW("key", BIGINT());
+    const auto outputType = ROW("items", ARRAY(itemType));
+    auto readerBundle = buildReader(
+        filePath,
+        outputType,
+        {
+            ParquetFieldId{1, {ParquetFieldId{2, {ParquetFieldId{3, {}}}}}},
+        });
+    EXPECT_EQ(
+        readerBundle.reader->rowType()->toString(), outputType->toString());
+
+    auto expected = makeRowVector(
+        outputType->names(),
+        {
+            makeArrayVector(
+                {0, 2, 2, 2},
+                makeRowVector(
+                    itemType->names(),
+                    {
+                        makeNullableFlatVector<int64_t>({1, std::nullopt, 3}),
+                    }),
+                /*nulls=*/{2}),
+        });
+    assertReadWithReaderAndExpected(
+        outputType, *readerBundle.rowReader, expected, *leafPool_);
+  }
 }
 
 TEST_F(ParquetReaderTest, parseSampleRange1) {
