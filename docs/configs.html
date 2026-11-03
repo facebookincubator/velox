@@ -1492,6 +1492,15 @@ Parquet through the Arrow bridge. When enabled, per-page statistics are stored i
 index instead of the data page headers, letting readers skip pages that cannot match a filter.
 Session: <code class="docutils literal notranslate"><span class="pre">hive.parquet.writer.enable_page_index</span></code>.</p></td>
 </tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">writer.size-statistics-level</span></code></p></td>
+<td><p>string</p></td>
+<td><p>PAGE_AND_COLUMN_CHUNK</p></td>
+<td><p>Controls Parquet size statistics written by the Arrow bridge. <code class="docutils literal notranslate"><span class="pre">NONE</span></code> disables size
+statistics; <code class="docutils literal notranslate"><span class="pre">COLUMN_CHUNK</span></code> writes only column-chunk statistics; and
+<code class="docutils literal notranslate"><span class="pre">PAGE_AND_COLUMN_CHUNK</span></code> writes both column-chunk and page-level statistics. Page-level
+statistics require <code class="docutils literal notranslate"><span class="pre">writer.enable-page-index</span></code> to be enabled.
+Session: <code class="docutils literal notranslate"><span class="pre">hive.parquet.writer.size_statistics_level</span></code>.</p></td>
+</tr>
 </tbody>
 </table>
 </section>
