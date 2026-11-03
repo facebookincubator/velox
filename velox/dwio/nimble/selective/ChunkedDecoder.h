@@ -338,9 +338,10 @@ class ChunkedDecoder {
   // non-nulls across chunk boundaries and produces incorrect index reads.
   //
   // Returns true if all requested rows were consumed. Returns false if
-  // reading stopped early at a chunk boundary (the callback returned false);
-  // in that case it advances the reader's readOffset_ to the boundary so the
-  // flat encoding fallback resumes the decode there.
+  // reading stopped early at a chunk (the callback returned false); in that
+  // case it advances the reader's readOffset_ to where the read stopped, the
+  // chunk boundary or the kept row a jump landed on, so the flat encoding
+  // fallback resumes the decode there.
   template <typename T, typename DictionaryVisitor>
   bool readDictionaryIndices(
       DictionaryVisitor& visitor,
@@ -486,6 +487,16 @@ class ChunkedDecoder {
       // chunk is not dictionary-compatible. Hoisting the load here gives those
       // a clean seam.
       if (FOLLY_UNLIKELY(remainingValues_ == 0)) {
+        // Jumps to the chunk holding the next row, so the load below opens it
+        // instead of the next chunk. The chunk left behind was read in an
+        // earlier pass, so its string buffers are already kept.
+        if constexpr (!V::dense) {
+          const auto numSkipped =
+              skipToNextRowChunk<kHasNulls>(visitor, nulls, params);
+          if constexpr (kHasNulls) {
+            remainingValues -= numSkipped;
+          }
+        }
         // With nulls, load only if a value-stream row still remains; without a
         // null bitmap every remaining row is a value, so always load (as the
         // flat !kHasNulls path does).
@@ -723,32 +734,35 @@ class ChunkedDecoder {
   // If the next row 'visitor' reads is past the current chunk, jumps to the
   // destination chunk with the stream index, so the chunks in between are never
   // loaded.
+  // Returns the number of values skipped.
   template <bool kHasNulls, typename V>
-  void skipToNextRowChunk(
+  int64_t skipToNextRowChunk(
       const V& visitor,
       const uint64_t* nulls,
       ReadWithVisitorParams& params) {
     if (streamIndex_ == nullptr) {
-      return;
+      return 0;
     }
     const auto nextRow = visitor.rowAt(visitor.rowIndex());
     // Already at the next row: nothing to skip.
     if (nextRow <= params.numScanned) {
       NIMBLE_CHECK_EQ(nextRow, params.numScanned);
-      return;
+      return 0;
     }
     const int64_t rowsToSkip = nextRow - params.numScanned;
     // Rows with a null parent or an absent flat-map key have no row in this
     // stream.
     const int64_t streamRowsToSkip = kHasNulls
-        ? velox::bits::countNonNulls(nulls, params.numScanned, nextRow)
+        ? static_cast<int64_t>(
+              velox::bits::countNonNulls(nulls, params.numScanned, nextRow))
         : rowsToSkip;
     // No jump: nothing to skip, or the skip stays within the current chunk.
     if (streamRowsToSkip == 0 || streamRowsToSkip < remainingValues_) {
-      return;
+      return 0;
     }
     skipWithIndex(streamRowsToSkip, kNoopAtChunkBoundary);
     params.numScanned = nextRow;
+    return streamRowsToSkip;
   }
 
   // Forwards to the fully-monomorphic readWithVisitorImpl.

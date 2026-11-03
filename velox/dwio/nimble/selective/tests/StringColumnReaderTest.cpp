@@ -1052,10 +1052,11 @@ TEST_P(StringColumnReaderTest, skipAcrossChunkBoundaryMidFile) {
 // array elements) and in streams with values only where an outer nulls bitmap
 // is set (a nullable struct's children, flat-map values). Preserving
 // dictionaries reads the dictionary strings through the dictionary read path,
-// which falls back to a flat read at a chunk that is not a dictionary. A second
-// filter on the nullable 'n' drops more rows. The rows read must not change,
-// and without preserved dictionaries no batch size may decompress more chunks
-// than reading one row per batch.
+// which falls back to a flat read when it skips into a chunk that is not a
+// dictionary. A second filter on the nullable 'n' drops more rows. The rows
+// read must not change, and no batch size may decompress more chunks than
+// reading one row per batch, apart from the chunk where a batch starts when
+// preserving dictionaries.
 TEST_P(StringColumnReaderTest, sparseFilterSkipsToChunksOfKeptRows) {
   constexpr int kNumChunks = 40;
   constexpr int kRowsPerChunk = 100;
@@ -1064,6 +1065,8 @@ TEST_P(StringColumnReaderTest, sparseFilterSkipsToChunksOfKeptRows) {
   // 'r.u' and 'd'. The root is node 0.
   constexpr size_t kNumNodes{6};
   constexpr std::array<uint32_t, kNumNodes> kNodes{2, 4, 6, 11, 7, 12};
+  // Indices in kNodes of the dictionary-encoded 'r.u' and 'd'.
+  constexpr std::array<size_t, 2> kDictionaryIndices{4, 5};
   // Index in kNodes of the values of 'm'.
   constexpr size_t kMapValuesIndex{3};
 
@@ -1283,13 +1286,23 @@ TEST_P(StringColumnReaderTest, sparseFilterSkipsToChunksOfKeptRows) {
 
   // Reading one row per batch decompresses little more than the chunks of kept
   // rows, since each batch starts at a kept row. With chunk stats, no batch
-  // size decompresses more. Without them, one batch decompresses every chunk
-  // up to its last kept row. Row 3'998 is in the null tail of 'r', so reads of
-  // 'r.u' skip past its last value.
+  // size decompresses more, except that preserving dictionaries also
+  // decompresses the chunk where a batch starts when no kept row is in it.
+  // Without chunk stats, one batch decompresses every chunk up to its last kept
+  // row. Row 3'998 is in the null tail of 'r', so reads of 'r.u' skip past its
+  // last value.
   const std::vector<int> farApartRows{7, 1'234, 1'235, 2'999, 3'998};
   const auto oneRowBatches = read(
       file,
       farApartRows,
+      1,
+      /*scanFastPath=*/false,
+      /*preserveDictionary=*/false);
+  // Rows in the three chunks where batches of 1'000 rows start without a kept
+  // row, each with an entry in every stream.
+  const auto batchStartChunks = read(
+      file,
+      {1'001, 2'003, 3'002},
       1,
       /*scanFastPath=*/false,
       /*preserveDictionary=*/false);
@@ -1303,7 +1316,7 @@ TEST_P(StringColumnReaderTest, sparseFilterSkipsToChunksOfKeptRows) {
     for (const bool scanFastPath : {false, true}) {
       SCOPED_TRACE(
           fmt::format("batchSize={} scanFastPath={}", batchSize, scanFastPath));
-      read(
+      const auto dictionaryReads = read(
           file,
           farApartRows,
           batchSize,
@@ -1322,6 +1335,9 @@ TEST_P(StringColumnReaderTest, sparseFilterSkipsToChunksOfKeptRows) {
           scanFastPath,
           /*preserveDictionary=*/true,
           /*filterNullsOfN=*/true);
+      const auto batchStart = batchSize == 1'000
+          ? batchStartChunks
+          : std::array<uint64_t, kNumNodes>{};
       for (size_t index = 0; index < kNumNodes; ++index) {
         SCOPED_TRACE(fmt::format("node={}", kNodes[index]));
         // A read stops at the next kept row even where it has no value, then
@@ -1330,7 +1346,15 @@ TEST_P(StringColumnReaderTest, sparseFilterSkipsToChunksOfKeptRows) {
         const uint64_t extraChunk = index == kMapValuesIndex ? 1 : 0;
         EXPECT_GT(decompressions[index], 0);
         EXPECT_LE(decompressions[index], oneRowBatches[index] + extraChunk);
+        EXPECT_LE(
+            dictionaryReads[index],
+            oneRowBatches[index] + extraChunk + batchStart[index]);
         EXPECT_GT(withoutChunkStats[index], decompressions[index]);
+      }
+      for (const auto index : kDictionaryIndices) {
+        SCOPED_TRACE(fmt::format("dictionary node={}", kNodes[index]));
+        EXPECT_EQ(
+            dictionaryReads[index], oneRowBatches[index] + batchStart[index]);
       }
     }
   }
