@@ -18,8 +18,10 @@
 
 #include <fmt/core.h>
 #include <folly/executors/CPUThreadPoolExecutor.h>
+
 #include <folly/synchronization/Baton.h>
 #include <gtest/gtest.h>
+#include <algorithm>
 #include <thread>
 
 #include "velox/common/base/tests/GTestUtils.h"
@@ -77,6 +79,114 @@ class DirectBufferedInputTest : public testing::Test {
   std::shared_ptr<MemoryPool> pool_;
   std::shared_ptr<ScanTracker> tracker_;
 };
+
+// A subclass that plans coalesced loads without scheduling them and schedules
+// them later, as an input that delays loading some streams does. Exercises
+// the protected groupRequests(), readRegion() and prefetchLoad(), and the
+// virtual coalescedLoad().
+class PlanningInput : public DirectBufferedInput {
+ public:
+  using DirectBufferedInput::DirectBufferedInput;
+
+  // Plans one load per group of the enqueued requests; nothing is scheduled.
+  void plan() {
+    auto requests = std::move(requests_);
+    std::vector<LoadRequest*> sorted;
+    for (auto& request : requests) {
+      sorted.push_back(&request);
+    }
+    std::sort(
+        sorted.begin(), sorted.end(), [](auto* a, auto* b) { return *a < *b; });
+    int32_t i = 0;
+    std::vector<LoadRequest*> group;
+    for (auto end : groupRequests(sorted, true)) {
+      while (i < end) {
+        group.push_back(sorted[i++]);
+      }
+      readRegion(group, true);
+      group.clear();
+    }
+  }
+
+  void prefetchAll() {
+    for (auto& load : coalescedLoads_) {
+      prefetchLoad(load);
+    }
+  }
+
+  std::shared_ptr<DirectCoalescedLoad> coalescedLoad(
+      const SeekableInputStream* stream) override {
+    ++lookups;
+    return DirectBufferedInput::coalescedLoad(stream);
+  }
+
+  int32_t lookups{0};
+};
+
+TEST_F(DirectBufferedInputTest, subclassPlansLoadsWithoutScheduling) {
+  constexpr int32_t kRegion = 64 << 10;
+  constexpr int32_t kContentSize = 4 << 20;
+  std::string content(kContentSize, ' ');
+  for (int32_t i = 0; i < kContentSize; ++i) {
+    content[i] = static_cast<char>('a' + (i % 26));
+  }
+  auto readFile = std::make_shared<InMemoryReadFile>(content);
+
+  io::ReaderOptions readerOptions(pool_.get());
+  readerOptions.setDataIoStats(dataIoStats_);
+  readerOptions.setMetadataIoStats(metadataIoStats_);
+  readerOptions.setLoadQuantum(1 << 20);
+  readerOptions.setMaxCoalesceDistance(1 << 20);
+
+  auto& ids = fileIds();
+  PlanningInput input(
+      readFile,
+      MetricsLog::voidLog(),
+      StringIdLease(ids, "testFile"),
+      tracker_,
+      StringIdLease(ids, "testGroup"),
+      dataIoStats_,
+      nullptr,
+      executor_.get(),
+      readerOptions);
+
+  // Two adjacent regions coalesce into one load; a third one far away makes
+  // a second load.
+  auto stream1 = input.enqueue(common::Region{0, kRegion}, nullptr);
+  auto stream2 = input.enqueue(common::Region{kRegion, kRegion}, nullptr);
+  auto stream3 =
+      input.enqueue(common::Region{kContentSize - kRegion, kRegion}, nullptr);
+  input.plan();
+
+  const auto& loads = input.testingCoalescedLoads();
+  ASSERT_EQ(loads.size(), 2);
+  EXPECT_EQ(input.testingStreamToCoalescedLoadSize(), 3);
+  // Planned, and with no scheduling they stay planned.
+  for (const auto& load : loads) {
+    EXPECT_EQ(load->state(), CoalescedLoad::State::kPlanned);
+  }
+
+  // The first read of a stream goes through the virtual lookup and loads
+  // its planned load synchronously.
+  EXPECT_EQ(input.lookups, 0);
+  auto next1 = getNext(*stream1);
+  ASSERT_TRUE(next1.has_value());
+  EXPECT_EQ(next1.value(), content.substr(0, kRegion));
+  EXPECT_EQ(input.lookups, 1);
+  EXPECT_EQ(loads[0]->state(), CoalescedLoad::State::kLoaded);
+  EXPECT_EQ(loads[1]->state(), CoalescedLoad::State::kPlanned);
+
+  // Scheduling later picks up only the loads still planned.
+  input.prefetchAll();
+  auto next3 = getNext(*stream3);
+  ASSERT_TRUE(next3.has_value());
+  EXPECT_EQ(next3.value(), content.substr(kContentSize - kRegion, kRegion));
+  EXPECT_EQ(loads[1]->state(), CoalescedLoad::State::kLoaded);
+  auto next2 = getNext(*stream2);
+  ASSERT_TRUE(next2.has_value());
+  EXPECT_EQ(next2.value(), content.substr(kRegion, kRegion));
+  EXPECT_EQ(input.lookups, 3);
+}
 
 TEST_F(DirectBufferedInputTest, reset) {
   constexpr int32_t kContentSize = 4 << 20; // 4MB

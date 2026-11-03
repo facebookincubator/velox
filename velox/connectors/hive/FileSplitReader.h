@@ -48,6 +48,10 @@ namespace facebook::velox::memory {
 class MemoryPool;
 }
 
+namespace facebook::velox::dwio::common {
+class BufferedInput;
+}
+
 namespace facebook::velox::connector::hive {
 
 /// Creates a constant vector of size 1 from a string representation of a value.
@@ -116,6 +120,11 @@ class FileSplitReader {
       const folly::F14FastMap<std::string, std::string>& fileReadOps = {});
 
   virtual uint64_t next(uint64_t size, VectorPtr& output);
+
+  /// A row passed all filters of the scan, so the lazily loaded columns will
+  /// be read. Forwards to the file's BufferedInput, which may have delayed
+  /// loading those columns (BufferedInput::hintLazyColumnsNeeded()).
+  void hintLazyColumnsNeeded();
 
   void resetFilterCaches();
 
@@ -254,6 +263,9 @@ class FileSplitReader {
   /// type that was actually passed to the row reader.
   RowTypePtr readerOutputType_;
   std::unique_ptr<dwio::common::Reader> baseReader_;
+  // The BufferedInput given to 'baseReader_', which owns it for its lifetime.
+  // Reset together with 'baseReader_'.
+  dwio::common::BufferedInput* baseFileInput_{nullptr};
   std::unique_ptr<dwio::common::RowReader> baseRowReader_;
   dwio::common::ReaderOptions baseReaderOpts_;
   dwio::common::RowReaderOptions baseRowReaderOpts_;

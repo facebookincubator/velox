@@ -171,6 +171,20 @@ class BufferedInput {
 
   virtual void setNumStripes(int32_t /*numStripes*/) {}
 
+  /// Tells the input which streams belong to the columns the reader produces
+  /// as LazyVectors (projected, no filter): 'streamIds' are their
+  /// StreamIdentifier ids. The operator loads such a column only for the rows
+  /// that passed all filters, so an input may delay loading these streams
+  /// until hintLazyColumnsNeeded() or until one of them is first read. The
+  /// reader calls this on every input it enqueues row groups (stripes) into,
+  /// before enqueueing. No-op by default.
+  virtual void setLazyColumnStreams(const std::vector<int32_t>& /*streamIds*/) {
+  }
+
+  /// A row passed all filters of the scan, so the lazy columns will be read.
+  /// Applies to this input and all its clones. No-op by default.
+  virtual void hintLazyColumnsNeeded() {}
+
   // Create a new (clean) instance of BufferedInput sharing the same
   // underlying file and memory pool.  The enqueued regions are NOT copied.
   virtual std::unique_ptr<BufferedInput> clone() const {

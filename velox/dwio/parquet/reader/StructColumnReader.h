@@ -16,7 +16,10 @@
 
 #pragma once
 
+#include <folly/container/F14Set.h>
+
 #include <memory>
+#include <optional>
 
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/SelectiveStructColumnReader.h"
@@ -85,6 +88,14 @@ class StructColumnReader : public dwio::common::SelectiveStructColumnReader {
       const dwio::common::StatsContext&,
       dwio::common::FormatData::FilterRowGroupsResult&) const override;
 
+  /// Root reader only. Columns the connector reads for its remaining filter
+  /// (RowReaderOptions::remainingFilterColumns()). They are produced as
+  /// LazyVectors like the projected columns but read in every row group, so
+  /// their streams are not reported to the BufferedInput as lazy.
+  void setRemainingFilterColumns(folly::F14FastSet<std::string> columns) {
+    remainingFilterColumns_ = std::move(columns);
+  }
+
  private:
   struct SyntheticRepDefSource;
 
@@ -103,6 +114,15 @@ class StructColumnReader : public dwio::common::SelectiveStructColumnReader {
   void enqueueRowGroup(uint32_t index, dwio::common::BufferedInput& input);
 
   bool isRowGroupBuffered(uint32_t index, dwio::common::BufferedInput& input);
+
+  // Root reader only. StreamIdentifier ids of the physical columns under the
+  // top-level children that are produced as LazyVectors (projected, no
+  // filter), the rule SelectiveStructColumnReaderBase::read() applies.
+  // Resolved on first use because isTopLevel is set after construction.
+  const std::vector<int32_t>& lazyColumnStreamIds();
+
+  std::optional<std::vector<int32_t>> lazyColumnStreamIds_;
+  folly::F14FastSet<std::string> remainingFilterColumns_;
 
   // Reader subtree used for getting nullability information for 'this'.
   dwio::common::SelectiveColumnReader* repDefSourceReader_{nullptr};

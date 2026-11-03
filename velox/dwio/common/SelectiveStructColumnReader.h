@@ -138,6 +138,11 @@ class SelectiveStructColumnReaderBase : public SelectiveColumnReader {
     return hasDeletion_;
   }
 
+  /// Whether this reader produces its children as LazyVectors.
+  bool generateLazyChildren() const {
+    return generateLazyChildren_;
+  }
+
   // Reads physical flat-map value streams directly without interpreting the
   // logical children in the scan spec.
   void readFlatMapChildren(

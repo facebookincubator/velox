@@ -113,6 +113,7 @@ void PaimonSplitReader::finishFileSplitReader() {
   VELOX_CHECK_NOT_NULL(baseRowReader_);
   ++currentFileIndex_;
   baseReader_ = nullptr;
+  baseFileInput_ = nullptr;
   baseRowReader_ = nullptr;
   emptySplit_ = false;
 }
