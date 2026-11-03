@@ -61,9 +61,11 @@ const std::string kOtherPointWkb = {
     '\x00', '\x00', '\x00', '\x00', '\x00', '\x00', '\x44', '\x40' // y = 40
 };
 
+#if defined(VELOX_ENABLE_PARQUET) && !defined(VELOX_ENABLE_GEO)
 // Substring shared by every geospatial-free-build error.
 constexpr std::string_view kBuildFlagMessage{
     "requires a build with geospatial support (VELOX_ENABLE_GEO=ON)"};
+#endif
 
 class IcebergGeometryBuildGateTest : public test::IcebergTestBase {
  protected:
