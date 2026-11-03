@@ -787,8 +787,8 @@ endif()
 if(VELOX_NEEDS_FBTHRIFT)
   find_package(fizz CONFIG REQUIRED)
   find_package(wangle CONFIG REQUIRED)
-  # cuDF's source-only xxhash CPM redirect cannot provide FBThrift's library target.
-  if(NOT TARGET Xxhash::xxhash)
+  # cuDF's source-only xxhash CPM redirect shadows FBThrift's compiled dependency.
+  if(VELOX_ENABLE_CUDF AND NOT TARGET Xxhash::xxhash)
     include("${CMAKE_CURRENT_LIST_DIR}/CMake/FindXxhash.cmake")
     if(NOT Xxhash_FOUND)
       message(FATAL_ERROR "FBThrift requires the xxhash library and headers.")
