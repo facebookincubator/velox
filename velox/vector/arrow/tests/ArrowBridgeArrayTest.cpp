@@ -35,16 +35,16 @@ void mockSchemaRelease(ArrowSchema*) {}
 void mockArrayRelease(ArrowArray*) {}
 
 std::shared_ptr<arrow::Array> toArrow(
-    const VectorPtr& vec,
+    const VectorPtr& vector,
     const ArrowOptions& options,
     memory::MemoryPool* pool) {
   ArrowSchema schema;
   ArrowArray array;
-  exportToArrow(vec, schema, options);
-  exportToArrow(vec, array, pool, options);
+  exportToArrow(vector, schema, options);
+  exportToArrow(vector, array, pool, options);
   EXPECT_OK_AND_ASSIGN(auto type, arrow::ImportType(&schema));
-  EXPECT_OK_AND_ASSIGN(auto ans, arrow::ImportArray(&array, type));
-  return ans;
+  EXPECT_OK_AND_ASSIGN(auto result, arrow::ImportArray(&array, type));
+  return result;
 }
 
 void validateOffsets(
@@ -115,7 +115,7 @@ class ArrowBridgeArrayExportTest : public testing::Test {
     auto expectedElements = BaseVector::copy(*elements);
     auto offsets = makeBuffer<vector_size_t>({0, 3});
     auto sizes = makeBuffer<vector_size_t>({2, 2});
-    auto vec = std::make_shared<ArrayVector>(
+    auto arrayVector = std::make_shared<ArrayVector>(
         pool_.get(),
         ARRAY(elements->type()),
         nullptr,
@@ -123,7 +123,7 @@ class ArrowBridgeArrayExportTest : public testing::Test {
         offsets,
         sizes,
         elements);
-    auto array = toArrow(vec, options_, pool_.get());
+    auto array = toArrow(arrayVector, options_, pool_.get());
     ASSERT_OK(array->ValidateFull());
     EXPECT_EQ(array->null_count(), 0);
     ASSERT_EQ(*array->type(), *arrow::list(elementType));
