@@ -80,6 +80,38 @@ Ideally all patches should be upstream when possible and removed once merged.
 - Try to build and make necessary changes
   - Repeat until success :D (Feel free to raise and issue for review & support)
 
+## Updating the version of a dependency
+
+Change all of these in the same PR:
+
+- The version and the SHA-256 checksum in `<package>.cmake`.
+- The minimum version in `velox_resolve_dependency(<package> <version>)` in `CMakeLists.txt`.
+- The version in `scripts/setup-versions.sh`, which the setup scripts and the CI images use.
+- The minimum version in the table above.
+- Any patches for the dependency (see Patches above).
+
+CI builds use the dependencies installed in the CI images
+(`VELOX_DEPENDENCY_SOURCE=SYSTEM`). Raising a minimum version above what the
+images have makes every PR fail at CMake configure until the images are rebuilt
+with the new version and published. A change to `scripts/setup-versions.sh`
+rebuilds the images only after it merges, and a multi-architecture image is
+published only when all its architectures build. So either:
+
+- Update `scripts/setup-versions.sh` in one PR, and raise the minimum version in
+  a follow-up PR after the new images are published.
+- Or, in the same PR, set `<package>_SOURCE: BUNDLED` for the CI builds that use
+  the images, and remove it in a follow-up PR after the new images are
+  published.
+
+Raising a minimum version also affects builds that use dependencies installed
+by other means, such as Homebrew on macOS or downstream projects. With
+`<package>_SOURCE=AUTO`, an older installed version makes Velox build the
+dependency from source; with `SYSTEM`, the build fails. Describe the effect in
+the PR.
+
+Name both versions in the PR title, for example `build: Update simdjson to
+4.3.0 (from 4.1.0)`, and explain in the description why the update is needed.
+
 ## Specify a custom url/file path for an offline build
 
 Set environment variables `VELOX_<PACKAGE>_URL` to specify a custom dependency url or local tar file path, an optional sha256 checksum can be provided as `VELOX_<PACKAGE>_SHA256`.
