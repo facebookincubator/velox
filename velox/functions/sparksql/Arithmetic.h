@@ -312,30 +312,70 @@ inline int64_t safeDoubleToInt64(const int64_t& arg) {
   return arg;
 }
 
+// Converts the rounded double 'value' to BIGINT like Spark's ceil and floor
+// on DOUBLE input: NaN maps to 0 and a value outside the BIGINT range
+// saturates to the BIGINT limits, or is an error when Spark ANSI mode is
+// enabled.
+FOLLY_ALWAYS_INLINE Status
+doubleToInt64(const double value, const bool ansiEnabled, int64_t& result) {
+  if (ansiEnabled) {
+    VELOX_USER_RETURN(
+        !std::isnan(value) &&
+            (value >= kMinDoubleAboveInt64Max ||
+             value < static_cast<double>(std::numeric_limits<int64_t>::min())),
+        "Arithmetic overflow: {} does not fit in BIGINT",
+        value);
+  }
+  result = safeDoubleToInt64(value);
+  return Status::OK();
+}
+
 template <typename T>
 struct CeilFunction {
   template <typename TInput>
-  FOLLY_ALWAYS_INLINE bool call(int64_t& result, const TInput value) {
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& config,
+      const TInput* /*value*/) {
+    ansiEnabled_ = SparkQueryConfig{config}.ansiEnabled();
+  }
+
+  template <typename TInput>
+  FOLLY_ALWAYS_INLINE Status call(int64_t& result, const TInput value) {
     if constexpr (std::is_integral_v<TInput>) {
       result = value;
+      return Status::OK();
     } else {
-      result = safeDoubleToInt64(std::ceil(value));
+      return doubleToInt64(std::ceil(value), ansiEnabled_, result);
     }
-    return true;
   }
+
+ private:
+  bool ansiEnabled_ = false;
 };
 
 template <typename T>
 struct FloorFunction {
   template <typename TInput>
-  FOLLY_ALWAYS_INLINE bool call(int64_t& result, const TInput value) {
+  FOLLY_ALWAYS_INLINE void initialize(
+      const std::vector<TypePtr>& /*inputTypes*/,
+      const core::QueryConfig& config,
+      const TInput* /*value*/) {
+    ansiEnabled_ = SparkQueryConfig{config}.ansiEnabled();
+  }
+
+  template <typename TInput>
+  FOLLY_ALWAYS_INLINE Status call(int64_t& result, const TInput value) {
     if constexpr (std::is_integral_v<TInput>) {
       result = value;
+      return Status::OK();
     } else {
-      result = safeDoubleToInt64(std::floor(value));
+      return doubleToInt64(std::floor(value), ansiEnabled_, result);
     }
-    return true;
   }
+
+ private:
+  bool ansiEnabled_ = false;
 };
 
 template <typename T>
