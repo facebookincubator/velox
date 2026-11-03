@@ -56,6 +56,7 @@ add_executable(
   InitcapTest.cpp
   InTest.cpp
   IntervalArithmeticTest.cpp
+  JavaFloatingPointTest.cpp
   JsonArrayLengthTest.cpp
   JsonObjectKeysTest.cpp
   LastWinTest.cpp
