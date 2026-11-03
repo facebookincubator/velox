@@ -77,8 +77,11 @@ using ::facebook::velox::fuzzer::FuzzerGenerator;
 // The unfiltered random policy also omits these; this list keeps the repair
 // phase and coverage gate from adding them back. This is not a global
 // unsupported-encoding list.
+// TODO: Remove BlockBitPackingV2 once readers have fully rolled out support for
+// it, in the same change that adds it to
+// RandomEncodingSelectionPolicyFactory::defaultEncodingChoices().
 constexpr auto kExcludedFuzzerCandidateEncodings =
-    std::to_array({EncodingType::SubIntSplit});
+    std::to_array({EncodingType::SubIntSplit, EncodingType::BlockBitPackingV2});
 
 // Scalar types the Nimble writer round-trips with type identity.
 // FieldWriter::create dispatches on the physical TypeKind, so DATE, TIME,
@@ -153,6 +156,7 @@ bool isNumericCompatible(EncodingType encodingType) {
     case EncodingType::Dictionary:
     case EncodingType::RLE:
     case EncodingType::BlockBitPacking:
+    case EncodingType::BlockBitPackingV2:
       return true;
     // Gated on isIntegralType<physicalType>(), which holds for float and
     // double as well since their physical types are uint32_t and uint64_t.
