@@ -15,7 +15,7 @@
  */
 
 #include "velox/experimental/cudf/exec/GpuResources.h"
-#include "velox/experimental/cudf/exec/PrestoPageDevice.h"
+#include "velox/experimental/cudf/serializers/PrestoPageDevice.h"
 
 #include <cudf/detail/utilities/integer_utils.hpp>
 #include <cudf/detail/utilities/vector_factories.hpp>
@@ -109,9 +109,13 @@ TEST_F(PrestoPageDeviceTest, pageBoundariesWithoutStrings) {
   EXPECT_EQ(bounds(7, 0, {}, 1024, 3), (Bounds{0, 3, 6, 7}));
   EXPECT_EQ(bounds(1, 0, {}, 1024, 3), (Bounds{0, 1}));
   EXPECT_EQ(bounds(0, 64, {}, 16, kNoRowCap), (Bounds{0}));
-  // Pages need a positive size and row cap.
+  // Pages need a positive size and row cap, and rows a non-negative cost.
   EXPECT_THROW(bounds(3, 64, {}, 0, kNoRowCap), cudf::logic_error);
+  EXPECT_THROW(
+      bounds(3, 64, {}, std::numeric_limits<int64_t>::max(), kNoRowCap),
+      cudf::logic_error);
   EXPECT_THROW(bounds(3, 64, {}, 16, 0), cudf::logic_error);
+  EXPECT_THROW(bounds(3, -1, {}, 16, kNoRowCap), cudf::logic_error);
 }
 
 TEST_F(PrestoPageDeviceTest, pageBoundariesWithStrings) {
@@ -151,6 +155,32 @@ TEST_F(PrestoPageDeviceTest, pageBoundariesWithStrings) {
   EXPECT_EQ(
       bounds(kNumStrings, 0, {strings32, second}, 8, kNoRowCap),
       (Bounds{0, 1, 2, 4, 5, 6, 7, 8}));
+  // One-byte strings in one-byte pages cut before every row, filling the cut
+  // capacity sized from the last cumulative bit; empty strings in rows that
+  // cost nothing make one page.
+  auto ones = toDevice(std::vector<int32_t>{0, 1, 2, 3, 4, 5});
+  const StringOffsets oneByteEach{ones.data(), kInt32, 0};
+  EXPECT_EQ(
+      bounds(5, 0, {oneByteEach}, 1, kNoRowCap), (Bounds{0, 1, 2, 3, 4, 5}));
+  auto empty = toDevice(std::vector<int32_t>{7, 7, 7, 7});
+  const StringOffsets emptyStrings{empty.data(), kInt32, 0};
+  EXPECT_EQ(bounds(3, 0, {emptyStrings}, 1, kNoRowCap), (Bounds{0, 3}));
+}
+
+// The copies land where their tasks say, a zero-byte task among them.
+TEST_F(PrestoPageDeviceTest, batchedDeviceCopy) {
+  const std::vector<uint8_t> bytes{1, 2, 3, 4, 5, 6, 7, 8, 9};
+  auto src = toDevice(bytes);
+  rmm::device_uvector<uint8_t> dst(8, stream_, mr_);
+  CUDF_CUDA_TRY(cudaMemsetAsync(dst.data(), 0, dst.size(), stream_.get()));
+  const std::vector<detail::CopyTask> tasks = {
+      {src.data() + 6, dst.data(), 3},
+      {src.data(), dst.data() + 3, 0},
+      {src.data() + 1, dst.data() + 4, 4},
+  };
+  detail::batchedDeviceCopy(tasks, stream_, mr_);
+  EXPECT_EQ(toHost(dst), (std::vector<uint8_t>{7, 8, 9, 0, 2, 3, 4, 5}));
+  detail::batchedDeviceCopy({}, stream_, mr_);
 }
 
 TEST_F(PrestoPageDeviceTest, nullBytes) {

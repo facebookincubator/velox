@@ -32,7 +32,8 @@
 namespace facebook::velox::cudf_velox::detail {
 
 /// The offsets of one strings column, addressed the way cuDF stores them: an
-/// int32 or int64 offsets child that the column's slice offset indexes into.
+/// int32 or int64 offsets child, never decreasing, that the column's slice
+/// offset indexes into.
 struct StringOffsets {
   const void* offsets;
   /// INT32 or INT64.
@@ -74,9 +75,10 @@ struct CopyTask {
 
 /// Splits 'numRows' rows into pages and returns the row boundaries, numPages +
 /// 1 values from 0 to numRows, or {0} without rows. A row costs
-/// 'fixedBitsPerRow' bits plus the bytes of its strings. A page holds at least
-/// one row and at most 'maxRows' rows, and exceeds 'pageBytes' by less than
-/// one row. 'pageBytes' and 'maxRows' are positive.
+/// 'fixedBitsPerRow' bits, which is not negative, plus the bytes of its
+/// strings. A page holds at least one row and at most 'maxRows' rows, and
+/// exceeds 'pageBytes' by less than one row. 'pageBytes', at most INT64_MAX /
+/// 8, and 'maxRows' are positive.
 std::vector<int64_t> prestoPageBoundaries(
     int32_t numRows,
     int64_t fixedBitsPerRow,

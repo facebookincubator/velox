@@ -264,7 +264,7 @@ velox_add_cudf_test(
 velox_add_cudf_test(
   NAME velox_cudf_presto_page_device_test
   SOURCES Main.cpp PrestoPageDeviceTest.cpp
-  LIBS ${CUDF_TEST_DEFAULT_LIBS}
+  LIBS ${CUDF_TEST_DEFAULT_LIBS} velox_cudf_presto_serializer
 )
 
 if(VELOX_ENABLE_S3)
