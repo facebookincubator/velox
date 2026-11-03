@@ -15,44 +15,19 @@
  */
 #include "velox/connectors/hive/HiveConfigProvider.h"
 
-#include <glog/logging.h>
-#include "velox/common/config/Config.h"
 #include "velox/connectors/hive/HiveConfig.h"
 
 namespace facebook::velox::connector::hive {
 
-std::vector<config::ConfigProperty> HiveConfigProvider::properties() const {
-  auto props = HiveConfig::registeredProperties();
-  if (catalogConfig_ == nullptr) {
-    return props;
-  }
+HiveConfigProvider::HiveConfigProvider()
+    : FileConfigProvider(HiveConfig::registeredProperties()) {}
 
-  // Build a lookup map from session property name to index in props.
-  std::unordered_map<std::string, size_t> propIndex;
-  for (size_t i = 0; i < props.size(); ++i) {
-    propIndex[props[i].name] = i;
-  }
-
-  // Iterate config-file entries, convert each key to session property name,
-  // and override the code default. Log unrecognized keys.
-  for (const auto& [configKey, value] : catalogConfig_->rawConfigs()) {
-    auto sessionKey = config::ConfigBase::toSessionKey(configKey);
-    auto it = propIndex.find(sessionKey);
-    if (it != propIndex.end()) {
-      props[it->second].defaultValue = normalize(sessionKey, value);
-    } else {
-      LOG(WARNING) << "Unrecognized config property in catalog '"
-                   << catalogName_ << "': " << configKey;
-    }
-  }
-
-  return props;
-}
-
-std::string HiveConfigProvider::normalize(
-    std::string_view /*name*/,
-    std::string_view value) const {
-  return std::string(value);
-}
+HiveConfigProvider::HiveConfigProvider(
+    const std::string& catalogName,
+    const config::ConfigBase* catalogConfig)
+    : FileConfigProvider(
+          HiveConfig::registeredProperties(),
+          catalogName,
+          catalogConfig) {}
 
 } // namespace facebook::velox::connector::hive

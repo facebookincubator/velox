@@ -17,6 +17,7 @@
 
 #include <algorithm>
 #include <iterator>
+#include <numeric>
 
 #include <folly/Conv.h>
 #include <folly/container/F14Set.h>
@@ -66,6 +67,15 @@ std::string canonicalIntegerKey(ScalarKind keyKind, std::string_view key) {
   return canonical;
 }
 
+// Sorts `keys` as strings. Every writer sorts its grouped keys again when it
+// binds its Hybrid FlatMap to a column, and they usually arrive sorted, so a
+// sorted group costs one comparison per key.
+void sortGroupKeys(std::vector<std::string>& keys) {
+  if (!std::is_sorted(keys.begin(), keys.end())) {
+    std::sort(keys.begin(), keys.end());
+  }
+}
+
 } // namespace
 
 std::string HybridFlatMap::canonicalKey(
@@ -103,7 +113,18 @@ HybridFlatMap::HybridFlatMap(ScalarKind keyKind, std::vector<Group> groups)
       supportedKeyKind(keyKind),
       "Unsupported Hybrid FlatMap key kind: {}.",
       keyKind);
+
+  // Reserves room for every grouped key, which can number in the thousands,
+  // so the duplicate check never rehashes the set as it grows.
   folly::F14FastSet<std::string> keys;
+  keys.reserve(
+      std::accumulate(
+          groups_.begin(),
+          groups_.end(),
+          size_t{0},
+          [](size_t numKeys, const Group& group) {
+            return numKeys + group.groupKeys.size();
+          }));
   bool foundDefault{false};
   for (size_t i = 0; i < groups_.size(); ++i) {
     auto& group = groups_[i];
@@ -137,7 +158,7 @@ HybridFlatMap::HybridFlatMap(ScalarKind keyKind, std::vector<Group> groups)
       NIMBLE_USER_CHECK(
           keys.insert(key).second, "Duplicate Hybrid FlatMap key: '{}'.", key);
     }
-    std::sort(group.groupKeys.begin(), group.groupKeys.end());
+    sortGroupKeys(group.groupKeys);
   }
   NIMBLE_USER_CHECK(
       foundDefault, "Hybrid FlatMap must have exactly one Default group.");
@@ -213,7 +234,7 @@ void HybridFlatMap::addGroup(uint32_t groupId, std::vector<std::string> keys) {
     const bool inserted = existingKeys.insert(key).second;
     NIMBLE_USER_CHECK(inserted, "Duplicate Hybrid FlatMap key: '{}'.", key);
   }
-  std::sort(keys.begin(), keys.end());
+  sortGroupKeys(keys);
   groups_.insert(
       groups_.end() - 1,
       Group{.groupId = groupId, .groupKeys = std::move(keys)});

@@ -2274,6 +2274,7 @@ void Writer::checkTopLevelNulls(const velox::VectorPtr& input) {
   const auto numRows = input->size();
   bool batchHasTopLevelNulls{false};
   const bool mustCheckTopLevelNulls = clusterIndexWriter_ != nullptr ||
+      context_->options().enableChunkStats ||
       !context_->options().ignoreTopLevelNulls;
   if (mustCheckTopLevelNulls && input->mayHaveNulls()) {
     for (velox::vector_size_t row = 0; row < numRows; ++row) {
@@ -2286,6 +2287,11 @@ void Writer::checkTopLevelNulls(const velox::VectorPtr& input) {
   NIMBLE_USER_CHECK(
       clusterIndexWriter_ == nullptr || !batchHasTopLevelNulls,
       "Cluster-indexed Nimble files cannot contain top-level null rows");
+  if (context_->options().enableChunkStats) {
+    NIMBLE_USER_CHECK(
+        !batchHasTopLevelNulls,
+        "Nimble files with chunk stats cannot contain top-level null rows");
+  }
   hasTopLevelNulls_ = hasTopLevelNulls_ || batchHasTopLevelNulls;
 }
 

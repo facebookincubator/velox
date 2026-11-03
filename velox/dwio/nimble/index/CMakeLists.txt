@@ -28,6 +28,7 @@ add_library(
   HashIndex.cpp
   HashIndexWriter.cpp
   HierarchicalClusterIndex.cpp
+  HierarchicalClusterIndexFactory.cpp
   HierarchicalClusterIndexWriter.cpp
   IndexConfig.cpp
   IndexFilter.cpp
@@ -45,6 +46,7 @@ add_library(
   VectorIndexConfig.h
   SortedIndexWriter.h
   HierarchicalClusterIndex.h
+  HierarchicalClusterIndexFactory.h
   HierarchicalClusterIndexWriter.h
   HierarchicalKeyFormat.h
   HierarchicalKeyReader.h
