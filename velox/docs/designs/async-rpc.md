@@ -172,6 +172,21 @@ An async-job path returns `kSuccessNoLatency` after a successful unit: its round
 trip is queue and scheduling time, which says nothing about backend load, but
 the success must still recover shared admission capacity.
 
+A transport that retries inside one RPC hides those retries from congestion
+control, which sees only the final outcome. The transport can report in
+`RPCResponse::numOverloadedAttempts` how many attempts before the final one it
+counted as overloaded, such as rate-limited, timed-out or shed attempts. Model
+API also counts errors that carry no error code, which include its load
+shedding. The operator counts them for PER_ROW rows in two stats, which stay
+zero in BATCH mode and for transports that do not report:
+
+- `rpcOverloadedAttempts` sums the reported overloaded attempts, failed rows
+  included.
+- `rpcSuccessesAfterOverload` counts successes that needed at least one.
+
+The counts do not cut the driver window or the shared limiter the way an
+overload error does.
+
 ### Why admission has two scopes
 
 A per-driver window and a per-backend cap look redundant until you ask what each

@@ -174,6 +174,29 @@ class MixedEpochRPCFunction : public DemoAsyncRPCFunction {
   std::optional<folly::Promise<RPCResponse>> slowResponse_;
 };
 
+// Answers every row with a success whose transport reports
+// kNumOverloadedAttempts overloaded attempts before it.
+class OverloadedAttemptsRPCFunction : public DemoAsyncRPCFunction {
+ public:
+  static constexpr int32_t kNumOverloadedAttempts{2};
+
+  std::vector<std::pair<vector_size_t, folly::SemiFuture<RPCResponse>>>
+  dispatchPerRow(
+      const SelectivityVector& rows,
+      const std::vector<VectorPtr>& args) override {
+    const auto* prompts = args.at(0)->asChecked<SimpleVector<StringView>>();
+    std::vector<std::pair<vector_size_t, folly::SemiFuture<RPCResponse>>>
+        futures;
+    rows.applyToSelected([&](vector_size_t row) {
+      auto response = RPCResponse::ok(
+          0, makeTextPayload("demo: " + prompts->valueAt(row).str()));
+      response.numOverloadedAttempts = kNumOverloadedAttempts;
+      futures.emplace_back(row, folly::makeSemiFuture(std::move(response)));
+    });
+    return futures;
+  }
+};
+
 class InvalidAdmissionBatchRPCFunction : public DemoBatchRPCFunction {
  public:
   int32_t admissionUnitsForBatch(int32_t numRows) const override {
@@ -624,6 +647,10 @@ class RPCOperatorTest : public OperatorTestBase {
     AsyncRPCFunctionRegistry::registerFunction(
         "mixed_epoch_rpc",
         []() { return std::make_shared<MixedEpochRPCFunction>(); },
+        DemoAsyncRPCFunction::signatures());
+    AsyncRPCFunctionRegistry::registerFunction(
+        "overloaded_attempts_rpc",
+        []() { return std::make_shared<OverloadedAttemptsRPCFunction>(); },
         DemoAsyncRPCFunction::signatures());
     AsyncRPCFunctionRegistry::registerFunction(
         "invalid_admission_batch_rpc",
@@ -2048,6 +2075,42 @@ TEST_F(RPCOperatorTest, currentEpochSuccessRecoversAlongsideOverload) {
   const auto& customStats = planStats.at(plan->id()).customStats;
   ASSERT_EQ(customStats.count(RPCOperator::kRpcStaleSuccessUnits), 1);
   EXPECT_EQ(customStats.at(RPCOperator::kRpcStaleSuccessUnits).sum, 1);
+}
+
+// Successes after overloaded attempts are counted, but neither the driver
+// window nor the shared limiter treats them as an overload.
+TEST_F(RPCOperatorTest, overloadedAttemptsAreCounted) {
+  constexpr int64_t kCeiling = 8;
+  const DefaultBackendPolicy policy{
+      .adaptive = true, .ceiling = kCeiling, .floor = 1};
+  auto& limiter = sealDefaultBackend(policy);
+
+  std::vector<StringView> prompts(kCeiling, StringView("retried"));
+  auto input = makeRowVector({"prompt"}, {makeFlatVector<StringView>(prompts)});
+  auto plan = makeRPCNode(
+      PlanBuilder().values({input}).planNode(),
+      {"prompt"},
+      "overloaded_attempts_rpc");
+  std::shared_ptr<exec::Task> task;
+  auto result = AssertQueryBuilder(plan)
+                    .configs(sessionFor(policy))
+                    .maxDrivers(1)
+                    .copyResults(pool(), task);
+  ASSERT_EQ(result->size(), kCeiling);
+  expectRanOnSharedLimiter(task);
+
+  EXPECT_EQ(limiter.stats().limitMilli, kCeiling * 1'000);
+  const auto planStats = toPlanStats(task->taskStats());
+  const auto& customStats = planStats.at(plan->id()).customStats;
+  auto statSum = [&](const std::string& key) -> int64_t {
+    auto it = customStats.find(key);
+    return it == customStats.end() ? -1 : it->second.sum;
+  };
+  EXPECT_EQ(statSum(RPCOperator::kRpcCongestionOverloadShrinks), -1);
+  EXPECT_EQ(statSum(RPCOperator::kRpcSuccessesAfterOverload), kCeiling);
+  EXPECT_EQ(
+      statSum(RPCOperator::kRpcOverloadedAttempts),
+      OverloadedAttemptsRPCFunction::kNumOverloadedAttempts * kCeiling);
 }
 
 TEST_F(RPCOperatorTest, batchAdmissionRequiresOneUnitForOneRow) {

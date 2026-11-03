@@ -162,7 +162,11 @@ Responses and payloads
 one outcome: a function-owned ``RpcPayload`` on success, or an ``RpcError``
 containing an ``RPCErrorKind`` and diagnostic message on failure. A
 default-constructed response contains the defensive ``kUnset`` error, so
-"neither payload nor error" is not representable.
+"neither payload nor error" is not representable. A transport that retries
+internally may also report ``numOverloadedAttempts``, the number of earlier
+attempts it counted as overloaded, such as rate-limited, timed-out or shed
+attempts, and ``lastAttemptNanos``, the duration of its final attempt. The
+operator counts the first and does not read the second.
 
 ``RpcPayload`` is a move-only, type-erased value whose object representation is
 stored inline in the response, avoiding a wrapper allocation. The framework
@@ -429,7 +433,9 @@ failures may become ``kOverloaded``; other backend and transport failures
 normally become ``kNonOverloadError``. Framework failures are handled below. A
 canonical typed overload or a function-specific ``kOverloaded`` verdict causes
 admission backoff. This keeps request-level reliability separate from
-cluster-level flow control.
+cluster-level flow control. The overloaded attempts a transport reports are
+only counted, in the ``rpcOverloadedAttempts`` and ``rpcSuccessesAfterOverload``
+runtime stats; they do not feed flow control.
 
 Classified row failures reach ``buildOutput()``, where the function applies its
 configured policy by emitting null or error output, or by failing the query.
