@@ -22,6 +22,7 @@
 
 #include "velox/exec/MergeSource.h"
 #include "velox/exec/Operator.h"
+#include "velox/exec/SpillFile.h"
 
 namespace facebook::velox::exec {
 
@@ -31,9 +32,10 @@ namespace facebook::velox::exec {
 /// It works by identifying and maintaining a window of rows with key matches
 /// (leftMatch_ and rightMatch_), and outputting a cartesian product of each key
 /// match. Since keys can span multiple vectors, multiple batches from either
-/// side may need to be materialized and kept in memory. Therefore, the memory
-/// requirement is proportional to the size of the longest key match. Once all
-/// output for a particular key match is produced, the respective batches are
+/// side may need to be materialized and kept in memory. Without spilling, the
+/// memory requirement is proportional to the size of the longest key match.
+/// Buffered batches can be spilled and restored on demand, caching one restored
+/// batch per side. Once all output for a key match is produced, its batches are
 /// discarded.
 ///
 /// Output is produced outputBatchSize_ rows at a time.
@@ -81,6 +83,10 @@ class MergeJoin : public Operator {
   void finishDrain() override;
 
   void close() override;
+
+  /// Spills buffered match batches and releases inactive restored batches.
+  void reclaim(uint64_t targetBytes, memory::MemoryReclaimer::Stats& stats)
+      override;
 
  private:
   // Sets up 'filter_' and related member variables.
@@ -178,13 +184,31 @@ class MergeJoin : public Operator {
   // with all join keys being the same. The set of rows may span multiple
   // batches of input.
   struct Match {
-    // One or more batches of inputs that contain rows with matching keys.
-    std::vector<RowVectorPtr> inputs;
+    // Retains an input batch or its spill files, preserving row identity when
+    // the batch is read back into a different vector.
+    struct Batch {
+      // Distinguishes rows even when spill reads allocate new vectors.
+      uint64_t id;
 
-    // Stable ids of the corresponding input batches. For right-side matches,
-    // these ids are used to construct globally unique right row ids across
-    // different key matches.
-    std::vector<uint64_t> inputBatchIds;
+      // Original batch; null after spilling.
+      RowVectorPtr input;
+
+      // Original batch size, also available while the data is on disk.
+      vector_size_t numRows;
+
+      // Written once and reused whenever the batch is read back.
+      SpillFiles spillFiles;
+    };
+
+    // One or more batches of inputs that contain rows with matching keys.
+    std::vector<Batch> inputs;
+
+    // Keeps the last spill read across output calls. At most one batch per
+    // side is cached, independent of the match window size.
+    RowVectorPtr restoredInput;
+
+    // Identifies the batch held in 'restoredInput'.
+    uint64_t restoredBatchId{0};
 
     // Row number in the first batch pointing to the first row with matching
     // keys. When the left side is streamed this can also be one past the last
@@ -231,8 +255,19 @@ class MergeJoin : public Operator {
   bool findEndOfMatch(
       const RowVectorPtr& input,
       const std::vector<column_index_t>& keys,
-      uint64_t inputBatchId,
       Match& match);
+
+  // Retains an input batch and reserves headroom for growing the match window.
+  void addInputToMatch(Match& match, const RowVectorPtr& input);
+
+  // Returns a retained batch, reading it from spill files if necessary.
+  RowVectorPtr matchInput(Match& match, size_t batchIndex);
+
+  // Identifies buffered batches not used by the input or output in progress.
+  bool isInputReclaimable(const RowVectorPtr& input) const;
+
+  // Writes an input batch to disk and saves the file metadata for re-reading.
+  void spillMatchBatch(Match::Batch& batch);
 
   // Ensures `output_` is ready to receive records via `addOutput()` or
   // `addOutputRowForLeftJoin()`. Initialize vectors using `outputBatchSize_`.
@@ -274,6 +309,7 @@ class MergeJoin : public Operator {
   bool tryAddOutputRow(
       const RowVectorPtr& leftBatch,
       vector_size_t leftRow,
+      uint64_t leftBatchId,
       const RowVectorPtr& rightBatch,
       vector_size_t rightRow,
       uint64_t rightBatchId);
@@ -497,21 +533,8 @@ class MergeJoin : public Operator {
     // the corresponding left-side row. The caller must call addMatch or
     // addMiss method for each row of output in order, starting with the first
     // row.
-    void addMatch(
-        const VectorPtr& vector,
-        vector_size_t row,
-        vector_size_t outputIndex) {
-      matchingRows_.setValid(outputIndex, true);
-
-      if (lastVector_ != vector || lastIndex_ != row) {
-        // New left-side row.
-        ++lastLeftRowNumber_;
-        lastVector_ = vector;
-        lastIndex_ = row;
-      }
-
-      rawLeftRowNumbers_[outputIndex] = lastLeftRowNumber_;
-    }
+    void
+    addMatch(uint64_t batchId, vector_size_t row, vector_size_t outputIndex);
 
     // Returns a subset of "match" rows in [0, numRows) range that were
     // recorded by addMatch.
@@ -527,17 +550,11 @@ class MergeJoin : public Operator {
     // first row.
     void addMiss(vector_size_t outputIndex) {
       matchingRows_.setValid(outputIndex, false);
-      resetLastVector();
+      resetLastRow();
     }
 
-    // Clear the left-side vector and index of the last added output row. The
-    // left-side vector has been fully processed and is now available for
-    // re-use, hence, need to make sure that new rows won't be confused with
-    // the old ones.
-    void resetLastVector() {
-      lastVector_.reset();
-      lastIndex_ = -1;
-    }
+    // Starts a new block of tracked rows after a miss or a new input batch.
+    void resetLastRow();
 
     // Called for each row that the filter was evaluated on, in order, starting
     // with the first row. Calls 'onMiss' if the filter failed on all output
@@ -568,10 +585,9 @@ class MergeJoin : public Operator {
       }
     }
 
-    // Returns whether `row` corresponds to the same left key as the last
-    // left match evaluated.
-    bool isCurrentLeftMatch(vector_size_t row) {
-      return currentLeftRowNumber_ == rawLeftRowNumbers_[row];
+    // Returns whether the next output resumes the last tracked row.
+    bool isCurrentRow(uint64_t batchId, vector_size_t row) const {
+      return lastBatchId_ == batchId && lastIndex_ == row;
     }
 
     // Called when all rows from the current output batch are processed and the
@@ -580,7 +596,7 @@ class MergeJoin : public Operator {
     // filter failed for all matches of that row.
     template <typename TOnMiss>
     void noMoreFilterResults(TOnMiss onMiss) {
-      if (!currentRowPassed_) {
+      if (currentRow_ != -1 && !currentRowPassed_) {
         onMiss(currentRow_);
       }
 
@@ -595,10 +611,9 @@ class MergeJoin : public Operator {
     // keys. Used in filter evaluation.
     SelectivityVector matchingRows_;
 
-    // The left-side vector and index of the last added row. Used to identify
-    // the end of a block of output rows that correspond to the same left-side
-    // row.
-    VectorPtr lastVector_{nullptr};
+    // Stable batch identity and index of the last added row. Re-reading a
+    // spilled batch must not start a new block of matches for the same row.
+    uint64_t lastBatchId_{0};
     vector_size_t lastIndex_{-1};
 
     // Synthetic numbers used to uniquely identify a left-side row. We cannot
@@ -721,10 +736,8 @@ class MergeJoin : public Operator {
   // Latest batch of input from the right side.
   RowVectorPtr rightInput_;
 
-  // Stable id of the current physical right input batch. Incremented whenever
-  // a new right batch is pulled from the source.
-  uint64_t currentRightInputBatchId_{0};
-  uint64_t nextRightInputBatchId_{1};
+  // Assigns stable identities to match batches on both sides of the join.
+  uint64_t nextMatchBatchId_{1};
 
   // Row number on the left side (input_) to process next.
   vector_size_t leftRowIndex_{0};

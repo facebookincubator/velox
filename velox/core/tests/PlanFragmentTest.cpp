@@ -326,6 +326,35 @@ TEST_F(PlanFragmentTest, hashJoin) {
   }
 }
 
+TEST_F(PlanFragmentTest, mergeJoinCanSpill) {
+  const auto join = std::make_shared<MergeJoinNode>(
+      "mergeJoin",
+      JoinType::kInner,
+      std::vector<FieldAccessTypedExprPtr>{
+          std::make_shared<FieldAccessTypedExpr>(BIGINT(), "c0")},
+      std::vector<FieldAccessTypedExprPtr>{
+          std::make_shared<FieldAccessTypedExpr>(BIGINT(), "u0")},
+      nullptr,
+      valueNode_,
+      probeValueNode_,
+      rowType_);
+  const PlanFragment planFragment{join};
+
+  for (const auto& [spillEnabled, joinSpillEnabled] :
+       {std::pair{false, true}, {true, false}, {true, true}}) {
+    SCOPED_TRACE(
+        fmt::format(
+            "spillEnabled={} joinSpillEnabled={}",
+            spillEnabled,
+            joinSpillEnabled));
+    const auto queryCtx =
+        getSpillQueryCtx(spillEnabled, true, joinSpillEnabled, true);
+    ASSERT_EQ(
+        planFragment.canSpill(queryCtx->queryConfig()),
+        spillEnabled && joinSpillEnabled);
+  }
+}
+
 TEST_F(PlanFragmentTest, executionStrategyToString) {
   ASSERT_EQ(
       executionStrategyToString(core::ExecutionStrategy::kUngrouped),
