@@ -526,6 +526,35 @@ TEST_F(ArithmeticTest, unhex) {
   EXPECT_EQ(unhex("E4B889E9878DE79A84"), "\u4E09\u91CD\u7684");
 }
 
+TEST_F(ArithmeticTest, checkedUnhex) {
+  const auto checkedUnhex = [&](std::optional<std::string> a) {
+    return evaluateOnce<std::string>("checked_unhex(c0)", a);
+  };
+
+  // Valid input decodes like unhex.
+  EXPECT_EQ(checkedUnhex("737472696E67"), "string");
+  EXPECT_EQ(checkedUnhex(""), "");
+  EXPECT_EQ(checkedUnhex("23"), "#");
+  EXPECT_EQ(checkedUnhex("123"), "\x01#");
+  EXPECT_EQ(checkedUnhex("b23"), "\x0B#");
+  EXPECT_EQ(checkedUnhex("b2323"), "\x0B##");
+  EXPECT_EQ(checkedUnhex("F"), "\x0F");
+  EXPECT_EQ(checkedUnhex("ff"), "\xFF");
+  EXPECT_EQ(checkedUnhex("E4B889E9878DE79A84"), "\u4E09\u91CD\u7684");
+  EXPECT_EQ(checkedUnhex(std::nullopt), std::nullopt);
+
+  // Invalid input throws where unhex returns NULL.
+  VELOX_ASSERT_USER_THROW(checkedUnhex("G"), "violates the constraint 'HEX'");
+  VELOX_ASSERT_USER_THROW(checkedUnhex("GG"), "violates the constraint 'HEX'");
+  VELOX_ASSERT_USER_THROW(checkedUnhex("G23"), "violates the constraint 'HEX'");
+
+  // try() turns the error into NULL.
+  EXPECT_EQ(
+      evaluateOnce<std::string>(
+          "try(checked_unhex(c0))", std::optional<std::string>("GG")),
+      std::nullopt);
+}
+
 class CeilFloorTest : public SparkFunctionBaseTest {
  protected:
   template <typename T>

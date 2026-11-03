@@ -656,6 +656,40 @@ struct WidthBucketFunction {
   }
 };
 
+namespace detail {
+// Decodes the hexadecimal string 'input' into 'result'. Returns false if
+// 'input' contains a character that is not a hexadecimal digit.
+template <typename TResult>
+FOLLY_ALWAYS_INLINE bool decodeHex(const StringView& input, TResult& result) {
+  const auto resultSize = (input.size() + 1) >> 1;
+  result.resize(resultSize);
+  const char* inputBuffer = input.data();
+  char* resultBuffer = result.data();
+
+  int32_t i = 0;
+  if ((input.size() & 0x01) != 0) {
+    const auto v = fromHex(inputBuffer[0]);
+    if (v == -1) {
+      return false;
+    }
+    resultBuffer[0] = v;
+    i += 1;
+  }
+
+  while (i < input.size()) {
+    const auto first = fromHex(inputBuffer[i]);
+    const auto second = fromHex(inputBuffer[i + 1]);
+    if (first == -1 || second == -1) {
+      return false;
+    }
+    resultBuffer[(i + 1) / 2] = (first << 4) | second;
+    i += 2;
+  }
+  return true;
+}
+} // namespace detail
+
+/// unhex(x): returns NULL if 'x' is not a valid hexadecimal string.
 template <typename T>
 struct UnHexFunction {
   VELOX_DEFINE_FUNCTION_TYPES(T);
@@ -663,31 +697,23 @@ struct UnHexFunction {
   FOLLY_ALWAYS_INLINE bool call(
       out_type<Varbinary>& result,
       const arg_type<Varchar>& input) {
-    const auto resultSize = (input.size() + 1) >> 1;
-    result.resize(resultSize);
-    const char* inputBuffer = input.data();
-    char* resultBuffer = result.data();
+    return detail::decodeHex(input, result);
+  }
+};
 
-    int32_t i = 0;
-    if ((input.size() & 0x01) != 0) {
-      const auto v = detail::fromHex(inputBuffer[0]);
-      if (v == -1) {
-        return false;
-      }
-      resultBuffer[0] = v;
-      i += 1;
-    }
+/// checked_unhex(x): Spark's to_binary(x, 'hex'), which throws if 'x' is not
+/// a valid hexadecimal string.
+template <typename T>
+struct CheckedUnHexFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
 
-    while (i < input.size()) {
-      const auto first = detail::fromHex(inputBuffer[i]);
-      const auto second = detail::fromHex(inputBuffer[i + 1]);
-      if (first == -1 || second == -1) {
-        return false;
-      }
-      resultBuffer[(i + 1) / 2] = (first << 4) | second;
-      i += 2;
-    }
-    return true;
+  FOLLY_ALWAYS_INLINE Status
+  call(out_type<Varbinary>& result, const arg_type<Varchar>& input) {
+    VELOX_USER_RETURN(
+        !detail::decodeHex(input, result),
+        "The value '{}' of the type STRING is invalid because it violates the constraint 'HEX'",
+        std::string(input.data(), input.size()));
+    return Status::OK();
   }
 };
 

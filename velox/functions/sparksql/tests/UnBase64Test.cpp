@@ -24,6 +24,11 @@ class UnBase64Test : public SparkFunctionBaseTest {
   std::optional<std::string> unbase64(const std::optional<std::string>& a) {
     return evaluateOnce<std::string>("unbase64(c0)", a);
   }
+
+  std::optional<std::string> checkedUnbase64(
+      const std::optional<std::string>& a) {
+    return evaluateOnce<std::string>("checked_unbase64(c0)", a);
+  }
 };
 
 TEST_F(UnBase64Test, basic) {
@@ -64,6 +69,43 @@ TEST_F(UnBase64Test, error) {
   VELOX_ASSERT_USER_THROW(
       unbase64("SGVsbG8gV29ybGQgZnJvbSBWZW===xveCE="),
       "Input byte array has incorrect ending");
+}
+
+TEST_F(UnBase64Test, checked) {
+  // Well-formed input decodes like unbase64.
+  EXPECT_EQ(checkedUnbase64(std::nullopt), std::nullopt);
+  EXPECT_EQ(checkedUnbase64(""), "");
+  EXPECT_EQ(checkedUnbase64("TWFu"), "Man");
+  EXPECT_EQ(checkedUnbase64("TWFu\r\nTWFu"), "ManMan");
+  EXPECT_EQ(checkedUnbase64("TWF u"), "Man");
+  EXPECT_EQ(checkedUnbase64("aGVsbG8gd29ybGQ="), "hello world");
+  EXPECT_EQ(checkedUnbase64("U3BhcmsgU1FM"), "Spark SQL");
+  EXPECT_EQ(checkedUnbase64("aA"), "h");
+  EXPECT_EQ(checkedUnbase64("aA=="), "h");
+  EXPECT_EQ(checkedUnbase64("c3d"), "sw");
+  EXPECT_EQ(checkedUnbase64("c3d="), "sw");
+
+  // Input that unbase64 accepts by skipping characters is an error here.
+  const auto kError = "violates the constraint 'BASE64'";
+  VELOX_ASSERT_USER_THROW(checkedUnbase64("#"), kError);
+  VELOX_ASSERT_USER_THROW(checkedUnbase64("cd@"), kError);
+  VELOX_ASSERT_USER_THROW(checkedUnbase64("@@dmVsb3g="), kError);
+  VELOX_ASSERT_USER_THROW(checkedUnbase64("abc?"), kError);
+  // The last group needs at least two symbols.
+  VELOX_ASSERT_USER_THROW(checkedUnbase64("a"), kError);
+  VELOX_ASSERT_USER_THROW(checkedUnbase64("abcdA"), kError);
+  // Padding completes the last group to four symbols and ends the string.
+  VELOX_ASSERT_USER_THROW(checkedUnbase64("YQ==="), kError);
+  VELOX_ASSERT_USER_THROW(checkedUnbase64("abcdAE="), kError);
+  VELOX_ASSERT_USER_THROW(checkedUnbase64("ab==tm+1"), kError);
+  VELOX_ASSERT_USER_THROW(checkedUnbase64("ab== "), kError);
+  VELOX_ASSERT_USER_THROW(checkedUnbase64("a==="), kError);
+
+  // try() turns the error into NULL.
+  EXPECT_EQ(
+      evaluateOnce<std::string>(
+          "try(checked_unbase64(c0))", std::optional<std::string>("cd@")),
+      std::nullopt);
 }
 
 } // namespace

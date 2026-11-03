@@ -113,6 +113,14 @@ Mathematical Functions
     For integral and interval types, overflow results in an error. Corresponds
     to Spark's operator ``-`` with ``failOnError`` as true.
 
+.. spark:function:: checked_unhex(x) -> varbinary
+
+    Same as :spark:func:`unhex`, except that an error is raised if ``x`` contains a
+    non-hexadecimal character. Corresponds to Spark's ``to_binary(x, 'hex')``. ::
+
+        SELECT checked_unhex("23"); -- #
+        SELECT checked_unhex("G"); -- error
+
 .. spark:function:: cos(x) -> double
 
     Returns the cosine of ``x``.
