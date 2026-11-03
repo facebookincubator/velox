@@ -2764,9 +2764,9 @@ class RowConstructorFunction : public CudfFunction {
         literals_.push_back(nullptr);
       }
     }
-    if (!hasNonLiteralInput) {
-      VELOX_NYI("row_constructor with only literal inputs is not supported");
-    }
+    VELOX_NYI_CHECK(
+        hasNonLiteralInput,
+        "row_constructor with only literal inputs is not supported");
   }
 
   ColumnOrView eval(

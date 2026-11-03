@@ -959,6 +959,35 @@ class RowType : public TypeBase<TypeKind::ROW> {
   std::shared_ptr<const RowType> unionWith(
       const std::shared_ptr<const RowType>& other) const;
 
+  /// The overloads below return the children of 'this' followed by the
+  /// specified fields. They take the same arguments as the ROW() functions
+  /// and avoid building a temporary RowType.
+
+  /// 'names' and 'types' must have the same size.
+  /// {a, b}->unionWith({c, d}, {INTEGER(), VARCHAR()}) => {a, b, c, d}.
+  std::shared_ptr<const RowType> unionWith(
+      const std::vector<std::string>& names,
+      const std::vector<TypePtr>& types) const;
+
+  /// Fields that share a type.
+  /// {a, b}->unionWith({c, d}, BOOLEAN()) => {a, b, c, d}.
+  std::shared_ptr<const RowType> unionWith(
+      const std::vector<std::string>& names,
+      const TypePtr& type) const;
+
+  std::shared_ptr<const RowType> unionWith(
+      std::initializer_list<std::string_view> names,
+      const TypePtr& type) const;
+
+  /// {a, b}->unionWith({{"c", BIGINT()}, {"d", VARCHAR()}}) => {a, b, c, d}.
+  std::shared_ptr<const RowType> unionWith(
+      std::initializer_list<std::pair<std::string_view, TypePtr>> pairs) const;
+
+  /// {a, b}->unionWith("c", BIGINT()) => {a, b, c}.
+  std::shared_ptr<const RowType> unionWith(
+      std::string_view name,
+      const TypePtr& type) const;
+
   folly::dynamic serialize() const override;
 
   const std::vector<std::string>& names() const {

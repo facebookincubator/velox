@@ -15,37 +15,21 @@
  */
 #include "velox/functions/sparksql/LastWin.h"
 
-#include <bit>
-#include <cmath>
-#include <limits>
-
-#include <folly/hash/Hash.h>
-
+#include "velox/functions/sparksql/JavaFloatingPoint.h"
 #include "velox/vector/SimpleVector.h"
 
 namespace facebook::velox::functions::sparksql {
-namespace {
-
-// Returns the bits Java equality compares, collapsing every NaN to one pattern.
-template <typename T>
-auto javaBits(T value) {
-  using Bits = std::conditional_t<sizeof(T) == 4, uint32_t, uint64_t>;
-  return std::bit_cast<Bits>(
-      std::isnan(value) ? std::numeric_limits<T>::quiet_NaN() : value);
-}
-
-} // namespace
 
 uint64_t SparkMapKeyEquality::hash(vector_size_t position) const {
   const auto* base = keys_->base();
   const auto index = keys_->index(offset_ + position);
   switch (base->typeKind()) {
     case TypeKind::REAL:
-      return folly::hasher<uint32_t>{}(
-          javaBits(base->asUnchecked<SimpleVector<float>>()->valueAt(index)));
+      return JavaFloatingPoint::Hash<float>{}(
+          base->asUnchecked<SimpleVector<float>>()->valueAt(index));
     case TypeKind::DOUBLE:
-      return folly::hasher<uint64_t>{}(
-          javaBits(base->asUnchecked<SimpleVector<double>>()->valueAt(index)));
+      return JavaFloatingPoint::Hash<double>{}(
+          base->asUnchecked<SimpleVector<double>>()->valueAt(index));
     default:
       return base->hashValueAt(index);
   }
@@ -58,13 +42,13 @@ bool SparkMapKeyEquality::equals(vector_size_t lhs, vector_size_t rhs) const {
   switch (base->typeKind()) {
     case TypeKind::REAL: {
       const auto* floats = base->asUnchecked<SimpleVector<float>>();
-      return javaBits(floats->valueAt(lhsIndex)) ==
-          javaBits(floats->valueAt(rhsIndex));
+      return JavaFloatingPoint::Equals<float>{}(
+          floats->valueAt(lhsIndex), floats->valueAt(rhsIndex));
     }
     case TypeKind::DOUBLE: {
       const auto* doubles = base->asUnchecked<SimpleVector<double>>();
-      return javaBits(doubles->valueAt(lhsIndex)) ==
-          javaBits(doubles->valueAt(rhsIndex));
+      return JavaFloatingPoint::Equals<double>{}(
+          doubles->valueAt(lhsIndex), doubles->valueAt(rhsIndex));
     }
     default:
       return base->equalValueAt(base, lhsIndex, rhsIndex);

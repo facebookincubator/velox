@@ -4159,15 +4159,17 @@ TEST_F(WriterTest, chunkedStreamsRowSomeNullsWithChunksMinSizeZero) {
 TEST_F(WriterTest, chunkNullCountsForStructNullStream) {
   velox::test::VectorMaker vectorMaker{leafPool_.get()};
 
-  // Batch 1: 5 rows, the entire struct is null.
-  auto nullsVector =
+  // Batch 1: 5 rows, struct column 's' is null in every row.
+  auto nullStructs =
       vectorMaker.rowVector({"c1"}, {vectorMaker.flatVector<int32_t>({})});
-  nullsVector->appendNulls(5);
+  nullStructs->appendNulls(5);
+  auto nullsVector = vectorMaker.rowVector({"s"}, {nullStructs});
 
-  // Batch 2: 3 rows, struct null at row 1 (child values otherwise present).
-  auto someNullsVector = vectorMaker.rowVector(
+  // Batch 2: 3 rows, 's' is null at row 1 (child values otherwise present).
+  auto someNullStructs = vectorMaker.rowVector(
       {"c1"}, {vectorMaker.flatVector<int32_t>({1, 2, 3})});
-  someNullsVector->setNull(1, /*isNull=*/true);
+  someNullStructs->setNull(1, /*isNull=*/true);
+  auto someNullsVector = vectorMaker.rowVector({"s"}, {someNullStructs});
 
   const auto& type = nullsVector->type();
 
@@ -4209,7 +4211,7 @@ TEST_F(WriterTest, chunkNullCountsForStructNullStream) {
   ASSERT_NE(chunkStats, nullptr)
       << "columnar.chunk.stats section should be present";
 
-  // The root struct null stream is the only source of nulls: 5 (batch 1) + 1
+  // The null stream of 's' is the only source of nulls: 5 (batch 1) + 1
   // (batch 2) = 6. Sum per-chunk null counts across every indexed stream; the
   // int child stream has no nulls of its own and is single-chunk (not indexed).
   const uint32_t streamCount = tablet->streamCount(stripeIdentifier);
@@ -5709,6 +5711,30 @@ TEST_F(WriterTest, clusterIndexRejectsTopLevelNulls) {
     NIMBLE_ASSERT_THROW(
         writer.write(input),
         "Cluster-indexed Nimble files cannot contain top-level null rows");
+  }
+}
+
+TEST_F(WriterTest, chunkStatsRejectsTopLevelNulls) {
+  velox::test::VectorMaker vectorMaker{leafPool_.get()};
+  auto input =
+      vectorMaker.rowVector({"c1"}, {vectorMaker.flatVector<int32_t>({1, 2})});
+  input->setNull(1, true);
+
+  for (const bool ignoreTopLevelNulls : {false, true}) {
+    SCOPED_TRACE(ignoreTopLevelNulls);
+    std::string file;
+    nimble::Writer writer(
+        input->type(),
+        std::make_unique<velox::InMemoryWriteFile>(&file),
+        *rootPool_,
+        {
+            .enableChunkStats = true,
+            .enableChunking = true,
+            .ignoreTopLevelNulls = ignoreTopLevelNulls,
+        });
+    NIMBLE_ASSERT_USER_THROW(
+        writer.write(input),
+        "Nimble files with chunk stats cannot contain top-level null rows");
   }
 }
 

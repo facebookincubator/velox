@@ -17,13 +17,11 @@
 
 #include <algorithm>
 #include <array>
-#include <bit>
 #include <functional>
 #include <limits>
 #include <optional>
 #include <utility>
 
-#include "folly/lang/Bits.h"
 #include "velox/common/Casts.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/common/Vector.h"
@@ -75,61 +73,6 @@ std::string_view readSizedSequence(const char*& position, const char* end) {
 }
 
 } // namespace
-
-std::vector<uint64_t> HierarchicalKeyReader::parseEncodedKey(
-    std::string_view key) const {
-  NIMBLE_CHECK_EQ(
-      key.size(),
-      encodedKeyBytes_,
-      "HierarchicalKeyReader requires a complete encoded key.");
-  std::vector<uint64_t> components(keyValueBytes_.size());
-  size_t offset{0};
-  for (uint32_t level = 0; level < keyValueBytes_.size(); ++level) {
-    NIMBLE_CHECK_EQ(
-        key[offset],
-        0,
-        "HierarchicalKeyReader requires non-null encoded key components.");
-    const auto width = keyValueBytes_[level];
-    std::array<char, sizeof(uint64_t)> encodedBytes{};
-    std::copy_n(key.begin() + offset + 1, width, encodedBytes.end() - width);
-    components.at(level) =
-        folly::Endian::big(std::bit_cast<uint64_t>(encodedBytes));
-    offset += 1 + width;
-  }
-  return components;
-}
-
-std::string HierarchicalKeyReader::encodeKey(
-    std::span<const uint64_t> components) const {
-  NIMBLE_CHECK_EQ(components.size(), keyValueBytes_.size());
-  std::string key(encodedKeyBytes_, '\0');
-  size_t offset{0};
-  for (uint32_t level = 0; level < components.size(); ++level) {
-    const auto width = keyValueBytes_[level];
-    const auto encodeValue = [&]<typename T>() {
-      const auto encodedValue =
-          folly::Endian::big(static_cast<T>(components[level]));
-      const auto encodedBytes =
-          std::bit_cast<std::array<char, sizeof(T)>>(encodedValue);
-      std::copy(
-          encodedBytes.begin(),
-          encodedBytes.end(),
-          key.begin() + static_cast<std::string::difference_type>(offset + 1));
-    };
-    if (width == sizeof(uint8_t)) {
-      encodeValue.template operator()<uint8_t>();
-    } else if (width == sizeof(uint16_t)) {
-      encodeValue.template operator()<uint16_t>();
-    } else if (width == sizeof(uint32_t)) {
-      encodeValue.template operator()<uint32_t>();
-    } else {
-      NIMBLE_CHECK_EQ(width, sizeof(uint64_t));
-      encodeValue.template operator()<uint64_t>();
-    }
-    offset += 1 + width;
-  }
-  return key;
-}
 
 namespace detail {
 
@@ -370,26 +313,23 @@ ChildOffsets readEncodedOffsets(
 
 } // namespace detail
 
-void HierarchicalKeyReader::readKeyValueWidths(
+void HierarchicalKeyReader::readLevelWidths(
     const char*& position,
     const char* end) {
-  NIMBLE_CHECK(keyValueBytes_.empty());
-  NIMBLE_CHECK_EQ(encodedKeyBytes_, 0);
+  NIMBLE_CHECK(levelWidths_.empty());
   NIMBLE_CHECK_FILE_GE(
       remainingBytes(position, end),
       numLevels_,
       "Truncated HierarchicalKeyReader metadata.");
 
-  keyValueBytes_.reserve(numLevels_);
+  levelWidths_.reserve(numLevels_);
   for (uint32_t level = 0; level < numLevels_; ++level) {
     const auto width = encoding::read<uint8_t>(position);
     NIMBLE_CHECK_FILE(
         HierarchicalKeyFormat::isSupportedKeyValueBytes(width),
         "Unsupported HierarchicalKeyReader key value width: {}.",
         width);
-    keyValueBytes_.push_back(width);
-    // Each key value follows a non-null marker byte.
-    encodedKeyBytes_ += 1 + width;
+    levelWidths_.push_back(width);
   }
 }
 
@@ -424,7 +364,7 @@ void HierarchicalKeyReader::readSequences(
             memoryPool,
             readSizedSequence(position, end),
             levelCounts[level],
-            keyValueBytes_.at(level),
+            levelWidths_.at(level),
             cacheEncodingViews));
   }
   if (rowCount_ > levelCounts.back()) {
@@ -441,8 +381,10 @@ void HierarchicalKeyReader::readSequences(
 
 HierarchicalKeyReader::HierarchicalKeyReader(
     std::string_view encodedData,
-    velox::memory::MemoryPool* pool,
-    bool cacheEncodingViews) {
+    bool cacheEncodingViews,
+    std::shared_ptr<const HierarchicalKeyCodec> keyCodec,
+    velox::memory::MemoryPool* pool)
+    : keyCodec_{velox::checkedNotNull(std::move(keyCodec))} {
   NIMBLE_CHECK_NOT_NULL(pool);
   NIMBLE_CHECK_FILE_GE(
       encodedData.size(),
@@ -460,7 +402,7 @@ HierarchicalKeyReader::HierarchicalKeyReader(
   rowCount_ = encoding::readUint32(position);
   NIMBLE_CHECK_FILE_GT(rowCount_, 0, "HierarchicalKeyReader has no rows.");
 
-  readKeyValueWidths(position, end);
+  readLevelWidths(position, end);
 
   const auto levelCounts = readLevelValueCounts(position, end, numLevels_);
   NIMBLE_CHECK_FILE_GT(
@@ -524,17 +466,17 @@ std::pair<uint32_t, uint32_t> HierarchicalKeyReader::seekBounds(
       childOffsets_.back().at(parentIndex + 1)};
 }
 
-std::vector<uint64_t> HierarchicalKeyReader::keyAt(uint32_t row) const {
+void HierarchicalKeyReader::levelsAt(uint32_t row, std::span<uint64_t> levels)
+    const {
   NIMBLE_CHECK_LT(row, rowCount_);
-  std::vector<uint64_t> components(numLevels_);
+  NIMBLE_CHECK_EQ(levels.size(), numLevels_);
   auto componentIndex = childOffsets_.back().containingRange(row);
   for (uint32_t level = numLevels_; level-- > 1;) {
-    components[level] = levelSequences_.at(level)->valueAt(componentIndex);
+    levels[level] = levelSequences_.at(level)->valueAt(componentIndex);
     componentIndex =
         childOffsets_.at(level - 1).containingRange(componentIndex);
   }
-  components[0] = levelSequences_.at(0)->valueAt(componentIndex);
-  return components;
+  levels[0] = levelSequences_.at(0)->valueAt(componentIndex);
 }
 
 uint32_t HierarchicalKeyReader::startRowOfSubtree(
@@ -548,17 +490,35 @@ uint32_t HierarchicalKeyReader::startRowOfSubtree(
 
 HierarchicalKeyReader::~HierarchicalKeyReader() = default;
 
+namespace {
+
+// Returns room for the values of 'numLevels' levels of a row. Each thread has
+// its own, so the const reads of a reader that threads share stay thread-safe,
+// and it only grows, so the reads do not allocate.
+std::span<uint64_t> levelScratch(uint32_t numLevels) {
+  thread_local std::vector<uint64_t> levels;
+  if (levels.size() < numLevels) {
+    levels.resize(numLevels);
+  }
+  return {levels.data(), numLevels};
+}
+
+} // namespace
+
 std::optional<uint32_t> HierarchicalKeyReader::seek(
     std::string_view value,
     bool inclusive) const {
-  const auto key = parseEncodedKey(value);
-  const auto [lower, upper] = seekBounds(key);
-  const auto row = inclusive ? lower : upper;
+  const auto levels = levelScratch(numLevels_);
+  const bool after = keyCodec_->parseKey(value, levelWidths_, levels);
+  const auto [lower, upper] = seekBounds(levels);
+  const auto row = inclusive && !after ? lower : upper;
   return row == rowCount_ ? std::nullopt : std::optional<uint32_t>{row};
 }
 
 std::string HierarchicalKeyReader::get(uint32_t row) const {
-  return encodeKey(keyAt(row));
+  const auto levels = levelScratch(numLevels_);
+  levelsAt(row, levels);
+  return keyCodec_->encodeKey(levels, levelWidths_);
 }
 
 namespace {
@@ -626,11 +586,12 @@ uint32_t HierarchicalKeyReader::numLevels() const {
 std::unique_ptr<KeyReader> createHierarchicalKeyReader(
     std::string_view encodedKeys,
     const std::function<void*(uint32_t)>& /*stringBufferFactory*/,
-    velox::memory::MemoryPool* pool,
-    bool cacheEncodingViews) {
+    bool cacheEncodingViews,
+    std::shared_ptr<const HierarchicalKeyCodec> keyCodec,
+    velox::memory::MemoryPool* pool) {
   NIMBLE_CHECK_NOT_NULL(pool);
   return std::make_unique<HierarchicalKeyReader>(
-      encodedKeys, pool, cacheEncodingViews);
+      encodedKeys, cacheEncodingViews, std::move(keyCodec), pool);
 }
 
 } // namespace facebook::nimble::index

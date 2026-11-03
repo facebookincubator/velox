@@ -1699,6 +1699,35 @@ TEST_F(ChunkedDecoderDataTest, skipWithIndexToStreamEndDropsLazyChunkSeek) {
   EXPECT_EQ(decoder.remainingValues(), 0);
 }
 
+// A skip to the end of the stream frees the open chunk with its buffers, as a
+// skip into a later chunk does.
+TEST_F(ChunkedDecoderDataTest, skipWithIndexToStreamEndReleasesChunk) {
+  constexpr uint32_t kRowsPerChunk = 128 << 10;
+  constexpr uint64_t kChunkBytes = kRowsPerChunk * sizeof(uint32_t);
+  const auto [streamData, chunkInfos] = encodeChunkedStream<uint32_t>(
+      {std::vector<uint32_t>(kRowsPerChunk, 42),
+       std::vector<uint32_t>(kRowsPerChunk, 7)},
+      CompressionType::Zstd);
+  // The chunks must be compressed, so that an open chunk holds a decompressed
+  // buffer.
+  ASSERT_LT(streamData.size(), kChunkBytes);
+
+  auto decoderPool = rootPool_->addLeafChild("decoder");
+  ChunkedDecoder decoder(
+      std::make_unique<dwio::common::SeekableArrayInputStream>(
+          streamData.data(), streamData.size()),
+      createTestStreamIndexInternal(chunkInfos),
+      /*decodeValuesWithNulls=*/false,
+      &encodingFactory(),
+      decoderPool.get());
+  decoder.ensureLoaded();
+  ASSERT_GE(decoderPool->usedBytes(), kChunkBytes);
+
+  decoder.skip(2 * kRowsPerChunk);
+  EXPECT_EQ(decoder.currentEncoding(), nullptr);
+  EXPECT_LT(decoderPool->usedBytes(), kChunkBytes);
+}
+
 // A read whose rows are all null in 'incomingNulls' reads no values, so the
 // chunk a skip landed in stays unopened and the next read starts at the row
 // skipped to.
