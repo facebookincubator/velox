@@ -134,6 +134,7 @@ std::shared_ptr<ReaderBase> ReaderBase::create(
   input = maybePreloadInput(std::move(input), options);
 
   auto tabletOptions = TabletReader::configureOptions(options);
+  tabletOptions.fileIoContext = input->getInputStream()->fileIoContext();
 
   auto tablet = TabletReader::create(
       input->getReadFile(), &options.memoryPool(), tabletOptions);
