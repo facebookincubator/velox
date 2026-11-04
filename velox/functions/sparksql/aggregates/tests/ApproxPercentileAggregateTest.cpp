@@ -202,7 +202,7 @@ class ApproxPercentileAggregateTest : public AggregationTestBase {
 
     enableTestStreaming();
     testAggregations(
-        {rows},
+        split(rows),
         {"c0"},
         {functionCall(true, percentile, accuracy, false)},
         {expectedResult},
@@ -261,7 +261,7 @@ class ApproxPercentileAggregateTest : public AggregationTestBase {
 
       enableTestStreaming();
       testAggregations(
-          {rows},
+          split(rows),
           {"c0"},
           {functionCall(true, percentile, accuracy, true)},
           {expected},
