@@ -54,29 +54,29 @@ class HistogramTest : public AggregationTestBase {
          wrapInDictionary(reverseIndices, num, vector2)});
 
     createDuckDbTable({vectors});
-    testAggregations(
-        {vectors},
-        {"c0"},
-        {"histogram(c1)"},
-        "SELECT c0, histogram(c1) FROM tmp GROUP BY c0");
+    AggregationTester(*this)
+        .inputs(vectors)
+        .groupBy({"c0"})
+        .aggregates({"histogram(c1)"})
+        .assertResults("SELECT c0, histogram(c1) FROM tmp GROUP BY c0");
 
-    testAggregations(
-        {vectors},
-        {"c0"},
-        {"histogram(c3)"},
-        "SELECT c0, histogram(c3) FROM tmp GROUP BY c0");
+    AggregationTester(*this)
+        .inputs(vectors)
+        .groupBy({"c0"})
+        .aggregates({"histogram(c3)"})
+        .assertResults("SELECT c0, histogram(c3) FROM tmp GROUP BY c0");
 
-    testAggregations(
-        {vectors},
-        {"c2"},
-        {"histogram(c1)"},
-        "SELECT c2, histogram(c1) FROM tmp GROUP BY c2");
+    AggregationTester(*this)
+        .inputs(vectors)
+        .groupBy({"c2"})
+        .aggregates({"histogram(c1)"})
+        .assertResults("SELECT c2, histogram(c1) FROM tmp GROUP BY c2");
 
-    testAggregations(
-        {vectors},
-        {"c2"},
-        {"histogram(c3)"},
-        "SELECT c2, histogram(c3) FROM tmp GROUP BY c2");
+    AggregationTester(*this)
+        .inputs(vectors)
+        .groupBy({"c2"})
+        .aggregates({"histogram(c3)"})
+        .assertResults("SELECT c2, histogram(c3) FROM tmp GROUP BY c2");
   }
 
   void testGlobalHistogramWithDuck(const VectorPtr& vector) {
@@ -87,11 +87,15 @@ class HistogramTest : public AggregationTestBase {
         makeRowVector({vector, wrapInDictionary(reverseIndices, num, vector)});
 
     createDuckDbTable({vectors});
-    testAggregations(
-        {vectors}, {}, {"histogram(c0)"}, "SELECT histogram(c0) FROM tmp");
+    AggregationTester(*this)
+        .inputs(vectors)
+        .aggregates({"histogram(c0)"})
+        .assertResults("SELECT histogram(c0) FROM tmp");
 
-    testAggregations(
-        {vectors}, {}, {"histogram(c1)"}, "SELECT histogram(c1) FROM tmp");
+    AggregationTester(*this)
+        .inputs(vectors)
+        .aggregates({"histogram(c1)"})
+        .assertResults("SELECT histogram(c1) FROM tmp");
   }
 
   void testHistogram(
@@ -101,7 +105,11 @@ class HistogramTest : public AggregationTestBase {
       const VectorPtr& vector2,
       const RowVectorPtr& expected) {
     auto vectors = makeRowVector({vector1, vector2});
-    testAggregations({vectors}, groupKeys, {expression}, {expected});
+    AggregationTester(*this)
+        .inputs(vectors)
+        .groupBy(groupKeys)
+        .aggregates({expression})
+        .assertResults(expected);
   }
 };
 
@@ -531,7 +539,10 @@ TEST_F(HistogramTest, arrays) {
           makeFlatVector<int64_t>({1, 2, 3, 4})),
   });
 
-  testAggregations({input}, {}, {"histogram(c1)"}, {expected});
+  AggregationTester(*this)
+      .inputs(input)
+      .aggregates({"histogram(c1)"})
+      .assertResults(expected);
 
   expected = makeRowVector({
       makeMapVector(
@@ -544,7 +555,10 @@ TEST_F(HistogramTest, arrays) {
           }),
           makeFlatVector<int64_t>({3, 6, 9, 12})),
   });
-  testAggregations({input, input, input}, {}, {"histogram(c1)"}, {expected});
+  AggregationTester(*this)
+      .inputs({input, input, input})
+      .aggregates({"histogram(c1)"})
+      .assertResults(expected);
 
   // Group by.
   expected = makeRowVector({
@@ -563,7 +577,11 @@ TEST_F(HistogramTest, arrays) {
           }),
           makeFlatVector<int64_t>({1, 2, 3, 2, 1, 1})),
   });
-  testAggregations({input}, {"c0"}, {"histogram(c1)"}, {expected});
+  AggregationTester(*this)
+      .inputs(input)
+      .groupBy({"c0"})
+      .aggregates({"histogram(c1)"})
+      .assertResults(expected);
 
   expected = makeRowVector({
       makeFlatVector<int64_t>({0, 1}),
@@ -581,8 +599,11 @@ TEST_F(HistogramTest, arrays) {
           }),
           makeFlatVector<int64_t>({3, 6, 9, 6, 3, 3})),
   });
-  testAggregations(
-      {input, input, input}, {"c0"}, {"histogram(c1)"}, {expected});
+  AggregationTester(*this)
+      .inputs({input, input, input})
+      .groupBy({"c0"})
+      .aggregates({"histogram(c1)"})
+      .assertResults(expected);
 }
 
 TEST_F(HistogramTest, unknown) {
@@ -595,14 +616,21 @@ TEST_F(HistogramTest, unknown) {
       BaseVector::createNullConstant(MAP(UNKNOWN(), BIGINT()), 1, pool()),
   });
 
-  testAggregations({input}, {}, {"histogram(c1)"}, {expected});
+  AggregationTester(*this)
+      .inputs(input)
+      .aggregates({"histogram(c1)"})
+      .assertResults(expected);
 
   expected = makeRowVector({
       makeFlatVector<int32_t>({0, 1}),
       BaseVector::createNullConstant(MAP(UNKNOWN(), BIGINT()), 2, pool()),
   });
 
-  testAggregations({input}, {"c0"}, {"histogram(c1)"}, {expected});
+  AggregationTester(*this)
+      .inputs(input)
+      .groupBy({"c0"})
+      .aggregates({"histogram(c1)"})
+      .assertResults(expected);
 }
 
 } // namespace

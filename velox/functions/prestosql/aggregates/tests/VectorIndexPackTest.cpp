@@ -79,8 +79,10 @@ TEST_F(VectorIndexPackTest, global) {
       makeFlatVector<std::string>({codec({1, 0, 0, 1, -1, 0})}, VECTOR_INDEX()),
   });
 
-  testAggregations(
-      {data}, {}, {"vector_index_pack(c0, c1, 'cosine')"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"vector_index_pack(c0, c1, 'cosine')"})
+      .assertResults(expected);
 }
 
 TEST_F(VectorIndexPackTest, groupBy) {
@@ -100,9 +102,12 @@ TEST_F(VectorIndexPackTest, groupBy) {
 
   // The incremental check aggregates all rows into one group, where each
   // cluster id appears twice.
-  disableTestIncremental();
-  testAggregations(
-      {data}, {"c0"}, {"vector_index_pack(c1, c2, 'cosine')"}, {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .groupBy({"c0"})
+      .aggregates({"vector_index_pack(c1, c2, 'cosine')"})
+      .disableIncremental()
+      .assertResults(expected);
 }
 
 TEST_F(VectorIndexPackTest, errors) {
@@ -175,15 +180,14 @@ TEST_F(VectorIndexPackTest, mergeExtractErrors) {
           const std::vector<std::string>& centroidsJson,
           const std::string& expectedMessage) {
         SCOPED_TRACE(expectedMessage);
-        testFailingAggregations(
-            {makeRowVector({makeRowVector({
+        AggregationTester(*this)
+            .inputs(makeRowVector({makeRowVector({
                 makeNullableFlatVector<int32_t>(metrics),
                 makeArrayVectorFromJson<int64_t>(idsJson),
                 makeArrayVectorFromJson<float>(centroidsJson),
-            })})},
-            /*groupingKeys=*/{},
-            {"vector_index_pack_merge_extract(c0)"},
-            expectedMessage);
+            })}))
+            .aggregates({"vector_index_pack_merge_extract(c0)"})
+            .assertError(expectedMessage);
       };
   auto testFailing = [&](const std::vector<std::string>& idsJson,
                          const std::vector<std::string>& centroidsJson,
@@ -230,16 +234,15 @@ TEST_F(VectorIndexPackTest, mergeExtractErrors) {
       {"[0]", "[1]"},
       {"[1, 0]", "[0, null]"},
       "Intermediate cluster centroids must not contain nulls");
-  testFailingAggregations(
-      {makeRowVector({makeRowVector({
+  AggregationTester(*this)
+      .inputs(makeRowVector({makeRowVector({
           makeFlatVector<int32_t>({0, 0}),
           makeArrayVector<int64_t>({{0}, {1}}),
           makeArrayVector<float>(
               {{1, 0}, {0, std::numeric_limits<float>::infinity()}}),
-      })})},
-      /*groupingKeys=*/{},
-      {"vector_index_pack_merge_extract(c0)"},
-      "Cluster centroid must not contain NaN or infinity");
+      })}))
+      .aggregates({"vector_index_pack_merge_extract(c0)"})
+      .assertError("Cluster centroid must not contain NaN or infinity");
 }
 
 } // namespace

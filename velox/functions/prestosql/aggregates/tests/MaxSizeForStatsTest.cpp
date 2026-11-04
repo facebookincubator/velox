@@ -44,20 +44,21 @@ TEST_F(MaxSizeForStatsTest, nullValues) {
       makeNullableFlatVector<StringView>({std::nullopt, std::nullopt}),
   })};
 
-  testAggregations(
-      vectors,
-      {},
-      {"max_data_size_for_stats(c0)",
-       "max_data_size_for_stats(c1)",
-       "max_data_size_for_stats(c2)",
-       "max_data_size_for_stats(c3)",
-       "max_data_size_for_stats(c4)",
-       "max_data_size_for_stats(c5)",
-       "max_data_size_for_stats(c6)",
-       "max_data_size_for_stats(c7)",
-       "max_data_size_for_stats(c8)",
-       "max_data_size_for_stats(c9)"},
-      "SELECT NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates(
+          {"max_data_size_for_stats(c0)",
+           "max_data_size_for_stats(c1)",
+           "max_data_size_for_stats(c2)",
+           "max_data_size_for_stats(c3)",
+           "max_data_size_for_stats(c4)",
+           "max_data_size_for_stats(c5)",
+           "max_data_size_for_stats(c6)",
+           "max_data_size_for_stats(c7)",
+           "max_data_size_for_stats(c8)",
+           "max_data_size_for_stats(c9)"})
+      .assertResults(
+          "SELECT NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL");
 }
 
 TEST_F(MaxSizeForStatsTest, nullAndNonNullValues) {
@@ -74,20 +75,20 @@ TEST_F(MaxSizeForStatsTest, nullAndNonNullValues) {
       makeNullableFlatVector<StringView>({std::nullopt, "std::nullopt"}),
   })};
 
-  testAggregations(
-      vectors,
-      {},
-      {"max_data_size_for_stats(c0)",
-       "max_data_size_for_stats(c1)",
-       "max_data_size_for_stats(c2)",
-       "max_data_size_for_stats(c3)",
-       "max_data_size_for_stats(c4)",
-       "max_data_size_for_stats(c5)",
-       "max_data_size_for_stats(c6)",
-       "max_data_size_for_stats(c7)",
-       "max_data_size_for_stats(c8)",
-       "max_data_size_for_stats(c9)"},
-      "SELECT 1, 2, 4, 8, 4, 8, 1, 4, 16, 16");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates(
+          {"max_data_size_for_stats(c0)",
+           "max_data_size_for_stats(c1)",
+           "max_data_size_for_stats(c2)",
+           "max_data_size_for_stats(c3)",
+           "max_data_size_for_stats(c4)",
+           "max_data_size_for_stats(c5)",
+           "max_data_size_for_stats(c6)",
+           "max_data_size_for_stats(c7)",
+           "max_data_size_for_stats(c8)",
+           "max_data_size_for_stats(c9)"})
+      .assertResults("SELECT 1, 2, 4, 8, 4, 8, 1, 4, 16, 16");
 }
 
 template <class T>
@@ -114,34 +115,35 @@ TEST_F(MaxSizeForStatsTest, allScalarTypes) {
        makeFlatVector<Timestamp>(8, generator<Timestamp>)})};
 
   // With grouping keys.
-  testAggregations(
-      vectors,
-      {"c0"},
-      {"max_data_size_for_stats(c1)",
-       "max_data_size_for_stats(c2)",
-       "max_data_size_for_stats(c3)",
-       "max_data_size_for_stats(c4)",
-       "max_data_size_for_stats(c5)",
-       "max_data_size_for_stats(c6)",
-       "max_data_size_for_stats(c7)",
-       "max_data_size_for_stats(c8)",
-       "max_data_size_for_stats(c9)"},
-      "VALUES (1,1,2,4,8,4,8,1,4,16),(2,1,2,4,8,4,8,1,4,16)");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .groupBy({"c0"})
+      .aggregates(
+          {"max_data_size_for_stats(c1)",
+           "max_data_size_for_stats(c2)",
+           "max_data_size_for_stats(c3)",
+           "max_data_size_for_stats(c4)",
+           "max_data_size_for_stats(c5)",
+           "max_data_size_for_stats(c6)",
+           "max_data_size_for_stats(c7)",
+           "max_data_size_for_stats(c8)",
+           "max_data_size_for_stats(c9)"})
+      .assertResults("VALUES (1,1,2,4,8,4,8,1,4,16),(2,1,2,4,8,4,8,1,4,16)");
 
   // Without grouping keys.
-  testAggregations(
-      vectors,
-      {},
-      {"max_data_size_for_stats(c1)",
-       "max_data_size_for_stats(c2)",
-       "max_data_size_for_stats(c3)",
-       "max_data_size_for_stats(c4)",
-       "max_data_size_for_stats(c5)",
-       "max_data_size_for_stats(c6)",
-       "max_data_size_for_stats(c7)",
-       "max_data_size_for_stats(c8)",
-       "max_data_size_for_stats(c9)"},
-      "VALUES (1,2,4,8,4,8,1,4,16)");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates(
+          {"max_data_size_for_stats(c1)",
+           "max_data_size_for_stats(c2)",
+           "max_data_size_for_stats(c3)",
+           "max_data_size_for_stats(c4)",
+           "max_data_size_for_stats(c5)",
+           "max_data_size_for_stats(c6)",
+           "max_data_size_for_stats(c7)",
+           "max_data_size_for_stats(c8)",
+           "max_data_size_for_stats(c9)"})
+      .assertResults("VALUES (1,2,4,8,4,8,1,4,16)");
 }
 
 TEST_F(MaxSizeForStatsTest, arrayGlobalAggregate) {
@@ -152,7 +154,10 @@ TEST_F(MaxSizeForStatsTest, arrayGlobalAggregate) {
           {1, 2, 3},
       }),
   })};
-  testAggregations(vectors, {}, {"max_data_size_for_stats(c0)"}, "SELECT 44");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates({"max_data_size_for_stats(c0)"})
+      .assertResults("SELECT 44");
 }
 
 TEST_F(MaxSizeForStatsTest, mapGlobalAggregate) {
@@ -163,7 +168,10 @@ TEST_F(MaxSizeForStatsTest, mapGlobalAggregate) {
           {{1, 1}, {1, 1}, {1, 1}},
       }),
   })};
-  testAggregations(vectors, {}, {"max_data_size_for_stats(c0)"}, "SELECT 29");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates({"max_data_size_for_stats(c0)"})
+      .assertResults("SELECT 29");
 }
 
 TEST_F(MaxSizeForStatsTest, rowGlobalAggregate) {
@@ -181,7 +189,10 @@ TEST_F(MaxSizeForStatsTest, rowGlobalAggregate) {
           }),
       }),
   })};
-  testAggregations(vectors, {}, {"max_data_size_for_stats(c0)"}, "SELECT 77");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates({"max_data_size_for_stats(c0)"})
+      .assertResults("SELECT 77");
 }
 
 TEST_F(MaxSizeForStatsTest, varbinaryGlobalAggregate) {
@@ -192,7 +203,10 @@ TEST_F(MaxSizeForStatsTest, varbinaryGlobalAggregate) {
   flatVector->set(2, "hello, world !");
 
   auto vectors = {makeRowVector({varbinaryVector})};
-  testAggregations(vectors, {}, {"max_data_size_for_stats(c0)"}, "SELECT 18");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates({"max_data_size_for_stats(c0)"})
+      .assertResults("SELECT 18");
 }
 
 TEST_F(MaxSizeForStatsTest, varcharGlobalAggregate) {
@@ -203,7 +217,10 @@ TEST_F(MaxSizeForStatsTest, varcharGlobalAggregate) {
           "{1, 2, 3}",
       }),
   })};
-  testAggregations(vectors, {}, {"max_data_size_for_stats(c0)"}, "SELECT 19");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates({"max_data_size_for_stats(c0)"})
+      .assertResults("SELECT 19");
 }
 
 TEST_F(MaxSizeForStatsTest, complexRecursiveGlobalAggregate) {
@@ -222,7 +239,10 @@ TEST_F(MaxSizeForStatsTest, complexRecursiveGlobalAggregate) {
       }),
   })};
 
-  testAggregations(vectors, {}, {"max_data_size_for_stats(c0)"}, "SELECT 50");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates({"max_data_size_for_stats(c0)"})
+      .assertResults("SELECT 50");
 }
 
 TEST_F(MaxSizeForStatsTest, constantEncodingTest) {
@@ -243,10 +263,16 @@ TEST_F(MaxSizeForStatsTest, constantEncodingTest) {
 
   auto vectors = {makeRowVector({columnOne, columnTwoConstantEncoded})};
 
-  testAggregations(vectors, {}, {"max_data_size_for_stats(c1)"}, "SELECT 36");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates({"max_data_size_for_stats(c1)"})
+      .assertResults("SELECT 36");
 
-  testAggregations(
-      vectors, {"c0"}, {"max_data_size_for_stats(c1)"}, "VALUES (1,36),(2,36)");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .groupBy({"c0"})
+      .aggregates({"max_data_size_for_stats(c1)"})
+      .assertResults("VALUES (1,36),(2,36)");
 }
 
 TEST_F(MaxSizeForStatsTest, dictionaryEncodingTest) {
@@ -273,10 +299,16 @@ TEST_F(MaxSizeForStatsTest, dictionaryEncodingTest) {
       BaseVector::wrapInDictionary(nullptr, indices, size, columnTwo);
   auto vectors = {makeRowVector({columnOne, columnTwoDictionaryEncoded})};
 
-  testAggregations(vectors, {}, {"max_data_size_for_stats(c1)"}, "SELECT 50");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates({"max_data_size_for_stats(c1)"})
+      .assertResults("SELECT 50");
 
-  testAggregations(
-      vectors, {"c0"}, {"max_data_size_for_stats(c1)"}, "VALUES (1,50),(2,36)");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .groupBy({"c0"})
+      .aggregates({"max_data_size_for_stats(c1)"})
+      .assertResults("VALUES (1,50),(2,36)");
 }
 
 TEST_F(MaxSizeForStatsTest, mask) {

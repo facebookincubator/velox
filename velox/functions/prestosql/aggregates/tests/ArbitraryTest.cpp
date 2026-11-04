@@ -126,40 +126,41 @@ TEST_F(ArbitraryTest, noNulls) {
   // We do not test with TableScan because having two input splits makes the
   // result non-deterministic.
   // Global aggregation.
-  testAggregations(
-      vectors,
-      {},
-      aggregates,
-      "SELECT first(c1), first(c2), first(c3), first(c4), first(c5), first(c6) FROM tmp");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates(aggregates)
+      .assertResults(
+          "SELECT first(c1), first(c2), first(c3), first(c4), first(c5), first(c6) FROM tmp");
 
   // Group by aggregation.
-  testAggregations(
-      [&](PlanBuilder& builder) {
-        builder.values(vectors).project(
-            {"c0 % 10", "c1", "c2", "c3", "c4", "c5", "c6"});
-      },
-      {"p0"},
-      aggregates,
-      "SELECT c0 % 10, first(c1), first(c2), first(c3), first(c4), first(c5), first(c6) FROM tmp GROUP BY 1");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .preAggregation([&](auto& builder) {
+        builder.project({"c0 % 10", "c1", "c2", "c3", "c4", "c5", "c6"});
+      })
+      .groupBy({"p0"})
+      .aggregates(aggregates)
+      .assertResults(
+          "SELECT c0 % 10, first(c1), first(c2), first(c3), first(c4), first(c5), first(c6) FROM tmp GROUP BY 1");
 
   // encodings: use filter to wrap aggregation inputs in a dictionary.
-  testAggregations(
-      [&](PlanBuilder& builder) {
-        builder.values(vectors)
-            .filter("c0 % 2 = 0")
+  AggregationTester(*this)
+      .inputs(vectors)
+      .preAggregation([&](auto& builder) {
+        builder.filter("c0 % 2 = 0")
             .project({"c0 % 10", "c1", "c2", "c3", "c4", "c5", "c6"});
-      },
-      {"p0"},
-      aggregates,
-      "SELECT c0 % 10, first(c1), first(c2), first(c3), first(c4), first(c5), first(c6) FROM tmp WHERE c0 % 2 = 0 GROUP BY 1");
+      })
+      .groupBy({"p0"})
+      .aggregates(aggregates)
+      .assertResults(
+          "SELECT c0 % 10, first(c1), first(c2), first(c3), first(c4), first(c5), first(c6) FROM tmp WHERE c0 % 2 = 0 GROUP BY 1");
 
-  testAggregations(
-      [&](PlanBuilder& builder) {
-        builder.values(vectors).filter("c0 % 2 = 0");
-      },
-      {},
-      aggregates,
-      "SELECT first(c1), first(c2), first(c3), first(c4), first(c5), first(c6) FROM tmp WHERE c0 % 2 = 0");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .preAggregation([&](auto& builder) { builder.filter("c0 % 2 = 0"); })
+      .aggregates(aggregates)
+      .assertResults(
+          "SELECT first(c1), first(c2), first(c3), first(c4), first(c5), first(c6) FROM tmp WHERE c0 % 2 = 0");
 }
 
 TEST_F(ArbitraryTest, nulls) {
@@ -182,18 +183,18 @@ TEST_F(ArbitraryTest, nulls) {
   // We do not test with TableScan because having two input splits makes the
   // result non-deterministic. Also, unknown type is not supported in Writer
   // yet. Global aggregation.
-  testAggregations(
-      vectors,
-      {},
-      {"arbitrary(c1)", "arbitrary(c2)", "arbitrary(c3)"},
-      "SELECT * FROM( VALUES (4, 0.50, NULL)) AS t");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates({"arbitrary(c1)", "arbitrary(c2)", "arbitrary(c3)"})
+      .assertResults("SELECT * FROM( VALUES (4, 0.50, NULL)) AS t");
 
   // Group by aggregation.
-  testAggregations(
-      vectors,
-      {"c0"},
-      {"arbitrary(c1)", "arbitrary(c2)", "arbitrary(c3)"},
-      "SELECT * FROM(VALUES (1, NULL, 0.50, NULL), (2, 4, NULL, NULL), (3, 5, 0.25, NULL)) AS t");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .groupBy({"c0"})
+      .aggregates({"arbitrary(c1)", "arbitrary(c2)", "arbitrary(c3)"})
+      .assertResults(
+          "SELECT * FROM(VALUES (1, NULL, 0.50, NULL), (2, 4, NULL, NULL), (3, 5, 0.25, NULL)) AS t");
 }
 
 TEST_F(ArbitraryTest, varchar) {
@@ -203,36 +204,37 @@ TEST_F(ArbitraryTest, varchar) {
 
   // We do not test with TableScan because having two input splits makes the
   // result non-deterministic.
-  testAggregations(
-      [&](PlanBuilder& builder) {
-        builder.values(vectors).project({"c0 % 11", "c1"});
-      },
-      {"p0"},
-      {"arbitrary(c1)"},
-      "SELECT c0 % 11, first(c1) FROM tmp WHERE c1 IS NOT NULL GROUP BY 1");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .preAggregation(
+          [&](auto& builder) { builder.project({"c0 % 11", "c1"}); })
+      .groupBy({"p0"})
+      .aggregates({"arbitrary(c1)"})
+      .assertResults(
+          "SELECT c0 % 11, first(c1) FROM tmp WHERE c1 IS NOT NULL GROUP BY 1");
 
-  testAggregations(
-      vectors,
-      {},
-      {"arbitrary(c1)"},
-      "SELECT first(c1) FROM tmp WHERE c1 IS NOT NULL");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates({"arbitrary(c1)"})
+      .assertResults("SELECT first(c1) FROM tmp WHERE c1 IS NOT NULL");
 
   // encodings: use filter to wrap aggregation inputs in a dictionary.
-  testAggregations(
-      [&](PlanBuilder& builder) {
-        builder.values(vectors).filter("c0 % 2 = 0").project({"c0 % 11", "c1"});
-      },
-      {"p0"},
-      {"arbitrary(c1)"},
-      "SELECT c0 % 11, first(c1) FROM tmp WHERE c0 % 2 = 0 AND c1 IS NOT NULL GROUP BY 1");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .preAggregation([&](auto& builder) {
+        builder.filter("c0 % 2 = 0").project({"c0 % 11", "c1"});
+      })
+      .groupBy({"p0"})
+      .aggregates({"arbitrary(c1)"})
+      .assertResults(
+          "SELECT c0 % 11, first(c1) FROM tmp WHERE c0 % 2 = 0 AND c1 IS NOT NULL GROUP BY 1");
 
-  testAggregations(
-      [&](PlanBuilder& builder) {
-        builder.values(vectors).filter("c0 % 2 = 0");
-      },
-      {},
-      {"arbitrary(c1)"},
-      "SELECT first(c1) FROM tmp WHERE c0 % 2 = 0 AND c1 IS NOT NULL");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .preAggregation([&](auto& builder) { builder.filter("c0 % 2 = 0"); })
+      .aggregates({"arbitrary(c1)"})
+      .assertResults(
+          "SELECT first(c1) FROM tmp WHERE c0 % 2 = 0 AND c1 IS NOT NULL");
 }
 
 TEST_F(ArbitraryTest, varcharConstAndNulls) {
@@ -244,17 +246,16 @@ TEST_F(ArbitraryTest, varcharConstAndNulls) {
 
   createDuckDbTable(vectors);
 
-  testAggregations(
-      vectors,
-      {},
-      {"arbitrary(c1)", "arbitrary(c2)"},
-      "SELECT first(c1), first(c2) FROM tmp");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates({"arbitrary(c1)", "arbitrary(c2)"})
+      .assertResults("SELECT first(c1), first(c2) FROM tmp");
 
-  testAggregations(
-      vectors,
-      {"c0"},
-      {"arbitrary(c1)", "arbitrary(c2)"},
-      "SELECT c0, first(c1), first(c2) FROM tmp group by c0");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .groupBy({"c0"})
+      .aggregates({"arbitrary(c1)", "arbitrary(c2)"})
+      .assertResults("SELECT c0, first(c1), first(c2) FROM tmp group by c0");
 }
 
 TEST_F(ArbitraryTest, numericConstAndNulls) {
@@ -265,17 +266,16 @@ TEST_F(ArbitraryTest, numericConstAndNulls) {
 
   createDuckDbTable(vectors);
 
-  testAggregations(
-      vectors,
-      {},
-      {"arbitrary(c1)", "arbitrary(c2)"},
-      "SELECT first(c1), first(c2) FROM tmp");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .aggregates({"arbitrary(c1)", "arbitrary(c2)"})
+      .assertResults("SELECT first(c1), first(c2) FROM tmp");
 
-  testAggregations(
-      vectors,
-      {"c0"},
-      {"arbitrary(c1)", "arbitrary(c2)"},
-      "SELECT c0, first(c1), first(c2) FROM tmp group by c0");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .groupBy({"c0"})
+      .aggregates({"arbitrary(c1)", "arbitrary(c2)"})
+      .assertResults("SELECT c0, first(c1), first(c2) FROM tmp group by c0");
 }
 
 TEST_F(ArbitraryTest, boolean) {
@@ -300,7 +300,11 @@ TEST_F(ArbitraryTest, boolean) {
       makeNullableFlatVector<bool>({true, false, std::nullopt, false}),
   });
 
-  testAggregations({data}, {"c0"}, {"arbitrary(c1)"}, {expectedResult});
+  AggregationTester(*this)
+      .inputs(data)
+      .groupBy({"c0"})
+      .aggregates({"arbitrary(c1)"})
+      .assertResults(expectedResult);
 
   // Global aggregation.
   auto plan = PlanBuilder()
@@ -310,7 +314,10 @@ TEST_F(ArbitraryTest, boolean) {
 
   assertQuery(plan, "SELECT true");
 
-  testAggregations({data}, {}, {"arbitrary(c2)"}, "SELECT null");
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"arbitrary(c2)"})
+      .assertResults("SELECT null");
 }
 
 TEST_F(ArbitraryTest, timestamp) {
@@ -339,7 +346,11 @@ TEST_F(ArbitraryTest, timestamp) {
            Timestamp(100, 4)}),
   });
 
-  testAggregations({data}, {"c0"}, {"arbitrary(c1)"}, {expectedResult});
+  AggregationTester(*this)
+      .inputs(data)
+      .groupBy({"c0"})
+      .aggregates({"arbitrary(c1)"})
+      .assertResults(expectedResult);
 
   // Global aggregation.
   auto plan = PlanBuilder()
@@ -354,7 +365,10 @@ TEST_F(ArbitraryTest, timestamp) {
   auto timestamp = result.value<Timestamp>();
   ASSERT_EQ(timestamp, Timestamp(100, 1));
 
-  testAggregations({data}, {}, {"arbitrary(c2)"}, "SELECT null");
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"arbitrary(c2)"})
+      .assertResults("SELECT null");
 }
 
 TEST_F(ArbitraryTest, date) {
@@ -373,7 +387,11 @@ TEST_F(ArbitraryTest, date) {
       makeNullableFlatVector<int32_t>({125, 126, std::nullopt, 128}, DATE()),
   });
 
-  testAggregations({data}, {"c0"}, {"arbitrary(c1)"}, {expectedResult});
+  AggregationTester(*this)
+      .inputs(data)
+      .groupBy({"c0"})
+      .aggregates({"arbitrary(c1)"})
+      .assertResults(expectedResult);
 
   // Global aggregation.
   auto plan = PlanBuilder()
@@ -388,7 +406,10 @@ TEST_F(ArbitraryTest, date) {
   auto date = result.value<int32_t>();
   ASSERT_EQ(date, 125);
 
-  testAggregations({data}, {}, {"arbitrary(c2)"}, "SELECT null");
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"arbitrary(c2)"})
+      .assertResults("SELECT null");
 }
 
 TEST_F(ArbitraryTest, interval) {
@@ -408,7 +429,11 @@ TEST_F(ArbitraryTest, interval) {
           {125, 126, std::nullopt, 128}, INTERVAL_DAY_TIME()),
   });
 
-  testAggregations({data}, {"c0"}, {"arbitrary(c1)"}, {expectedResult});
+  AggregationTester(*this)
+      .inputs(data)
+      .groupBy({"c0"})
+      .aggregates({"arbitrary(c1)"})
+      .assertResults(expectedResult);
 
   // Global aggregation.
   auto plan = PlanBuilder()
@@ -419,7 +444,10 @@ TEST_F(ArbitraryTest, interval) {
   auto interval = readSingleValue(plan);
   ASSERT_EQ(interval.value<int64_t>(), 125);
 
-  testAggregations({data}, {}, {"arbitrary(c2)"}, "SELECT null");
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"arbitrary(c2)"})
+      .assertResults("SELECT null");
 }
 
 TEST_F(ArbitraryTest, longDecimal) {
@@ -447,7 +475,11 @@ TEST_F(ArbitraryTest, longDecimal) {
           DECIMAL(38, 8)),
   });
 
-  testAggregations({data}, {"c0"}, {"arbitrary(c1)"}, {expectedResult});
+  AggregationTester(*this)
+      .inputs(data)
+      .groupBy({"c0"})
+      .aggregates({"arbitrary(c1)"})
+      .assertResults(expectedResult);
 }
 
 TEST_F(ArbitraryTest, shortDecimal) {
@@ -475,7 +507,11 @@ TEST_F(ArbitraryTest, shortDecimal) {
           DECIMAL(15, 2)),
   });
 
-  testAggregations({data}, {"c0"}, {"arbitrary(c1)"}, {expectedResult});
+  AggregationTester(*this)
+      .inputs(data)
+      .groupBy({"c0"})
+      .aggregates({"arbitrary(c1)"})
+      .assertResults(expectedResult);
 }
 
 TEST_F(ArbitraryTest, ipAddress) {
@@ -503,7 +539,11 @@ TEST_F(ArbitraryTest, ipAddress) {
             ipaddress::tryGetIPv6asInt128FromString("172.16.0.1").value()},
            IPADDRESS())});
 
-  testAggregations({data}, {"c0"}, {"arbitrary(c1)"}, {expectedResult});
+  AggregationTester(*this)
+      .inputs(data)
+      .groupBy({"c0"})
+      .aggregates({"arbitrary(c1)"})
+      .assertResults(expectedResult);
 }
 
 class ArbitraryWindowTest : public WindowTestBase {};

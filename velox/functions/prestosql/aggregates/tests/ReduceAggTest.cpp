@@ -62,50 +62,46 @@ TEST_F(ReduceAggTest, integersGlobal) {
   int64_t product = 1 * 2 * 3 * 4 * 5 * 1 * 1;
   auto expected = makeRowVector({makeConstant(product, 1)});
 
-  testAggregations(
-      {data},
-      {},
-      {"reduce_agg(c0, 1, (x, y) -> (x * y), (x, y) -> (x * y))"},
-      {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"reduce_agg(c0, 1, (x, y) -> (x * y), (x, y) -> (x * y))"})
+      .assertResults(expected);
 
   // No nulls. With mask.
   product = 1 * 3 * 4 * 1;
   expected = makeRowVector({makeConstant(product, 1)});
 
-  testAggregations(
-      {data},
-      {},
-      {"reduce_agg(c0, 1, (x, y) -> (x * y), (x, y) -> (x * y)) FILTER (WHERE m)"},
-      {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates(
+          {"reduce_agg(c0, 1, (x, y) -> (x * y), (x, y) -> (x * y)) FILTER (WHERE m)"})
+      .assertResults(expected);
 
   // Some nulls.
   product = 1 * 2 * 0 * 1 * 3;
   expected = makeRowVector({makeConstant(product, 1)});
 
-  testAggregations(
-      {data},
-      {},
-      {"reduce_agg(c1, 1, (x, y) -> (x * y), (x, y) -> (x * y))"},
-      {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"reduce_agg(c1, 1, (x, y) -> (x * y), (x, y) -> (x * y))"})
+      .assertResults(expected);
 
   // Same as above, but using a sum reduction.
   int64_t sum = 1 + 2 + 3 + 4 + 5 + 1 + 1;
   expected = makeRowVector({makeConstant(sum, 1)});
 
-  testAggregations(
-      {data},
-      {},
-      {"reduce_agg(c0, 0, (x, y) -> (x + y), (x, y) -> (x + y))"},
-      {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"reduce_agg(c0, 0, (x, y) -> (x + y), (x, y) -> (x + y))"})
+      .assertResults(expected);
 
   sum = 1 + 2 + 0 + 1 + 3;
   expected = makeRowVector({makeConstant(sum, 1)});
 
-  testAggregations(
-      {data},
-      {},
-      {"reduce_agg(c1, 0, (x, y) -> (x + y), (x, y) -> (x + y))"},
-      {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"reduce_agg(c1, 0, (x, y) -> (x + y), (x, y) -> (x + y))"})
+      .assertResults(expected);
 }
 
 TEST_F(ReduceAggTest, integersGroupBy) {
@@ -122,11 +118,11 @@ TEST_F(ReduceAggTest, integersGroupBy) {
       makeFlatVector<int64_t>({10, 12}),
   });
 
-  testAggregations(
-      {data},
-      {"k"},
-      {"reduce_agg(c0, 1, (x, y) -> (x * y), (x, y) -> (x * y))"},
-      {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .groupBy({"k"})
+      .aggregates({"reduce_agg(c0, 1, (x, y) -> (x * y), (x, y) -> (x * y))"})
+      .assertResults(expected);
 
   // With mask.
   expected = makeRowVector({
@@ -134,11 +130,12 @@ TEST_F(ReduceAggTest, integersGroupBy) {
       makeNullableFlatVector<int64_t>({5, std::nullopt}),
   });
 
-  testAggregations(
-      {data},
-      {"k"},
-      {"reduce_agg(c0, 1, (x, y) -> (x * y), (x, y) -> (x * y)) FILTER (WHERE m)"},
-      {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .groupBy({"k"})
+      .aggregates(
+          {"reduce_agg(c0, 1, (x, y) -> (x * y), (x, y) -> (x * y)) FILTER (WHERE m)"})
+      .assertResults(expected);
 
   // Sum reduction.
   expected = makeRowVector({
@@ -146,11 +143,11 @@ TEST_F(ReduceAggTest, integersGroupBy) {
       makeFlatVector<int64_t>({8, 7}),
   });
 
-  testAggregations(
-      {data},
-      {"k"},
-      {"reduce_agg(c0, 0, (x, y) -> (x + y), (x, y) -> (x + y))"},
-      {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .groupBy({"k"})
+      .aggregates({"reduce_agg(c0, 0, (x, y) -> (x + y), (x, y) -> (x + y))"})
+      .assertResults(expected);
 
   // With mask.
   expected = makeRowVector({
@@ -158,11 +155,12 @@ TEST_F(ReduceAggTest, integersGroupBy) {
       makeNullableFlatVector<int64_t>({6, std::nullopt}),
   });
 
-  testAggregations(
-      {data},
-      {"k"},
-      {"reduce_agg(c0, 0, (x, y) -> (x + y), (x, y) -> (x + y)) FILTER (WHERE m)"},
-      {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .groupBy({"k"})
+      .aggregates(
+          {"reduce_agg(c0, 0, (x, y) -> (x + y), (x, y) -> (x + y)) FILTER (WHERE m)"})
+      .assertResults(expected);
 }
 
 TEST_F(ReduceAggTest, arraysGlobal) {
@@ -182,24 +180,24 @@ TEST_F(ReduceAggTest, arraysGlobal) {
 
   auto expected = makeRowVector({makeArrayVector<int64_t>({{7, 6, 5}})});
 
-  testAggregations(
-      {data, data, data},
-      {},
-      {"reduce_agg(c0, c1, "
-       "(a, b) -> slice(reverse(array_sort(array_distinct(concat(a, b)))), 1, 3), "
-       "(a, b) -> slice(reverse(array_sort(array_distinct(concat(a, b)))), 1, 3))"},
-      {expected});
+  AggregationTester(*this)
+      .inputs({data, data, data})
+      .aggregates(
+          {"reduce_agg(c0, c1, "
+           "(a, b) -> slice(reverse(array_sort(array_distinct(concat(a, b)))), 1, 3), "
+           "(a, b) -> slice(reverse(array_sort(array_distinct(concat(a, b)))), 1, 3))"})
+      .assertResults(expected);
 
   expected = makeRowVector({makeArrayVector<int64_t>({{7, 3, 2}})});
 
-  testAggregations(
-      {data, data, data},
-      {},
-      {"reduce_agg(c0, c1, "
-       "(a, b) -> slice(reverse(array_sort(array_distinct(concat(a, b)))), 1, 3), "
-       "(a, b) -> slice(reverse(array_sort(array_distinct(concat(a, b)))), 1, 3)) "
-       "FILTER (WHERE m)"},
-      {expected});
+  AggregationTester(*this)
+      .inputs({data, data, data})
+      .aggregates(
+          {"reduce_agg(c0, c1, "
+           "(a, b) -> slice(reverse(array_sort(array_distinct(concat(a, b)))), 1, 3), "
+           "(a, b) -> slice(reverse(array_sort(array_distinct(concat(a, b)))), 1, 3)) "
+           "FILTER (WHERE m)"})
+      .assertResults(expected);
 }
 
 TEST_F(ReduceAggTest, arraysGroupBy) {
@@ -226,13 +224,14 @@ TEST_F(ReduceAggTest, arraysGroupBy) {
       }),
   });
 
-  testAggregations(
-      {data, data, data},
-      {"k"},
-      {"reduce_agg(c0, c1, "
-       "(a, b) -> slice(reverse(array_sort(array_distinct(concat(a, b)))), 1, 3), "
-       "(a, b) -> slice(reverse(array_sort(array_distinct(concat(a, b)))), 1, 3))"},
-      {expected});
+  AggregationTester(*this)
+      .inputs({data, data, data})
+      .groupBy({"k"})
+      .aggregates(
+          {"reduce_agg(c0, c1, "
+           "(a, b) -> slice(reverse(array_sort(array_distinct(concat(a, b)))), 1, 3), "
+           "(a, b) -> slice(reverse(array_sort(array_distinct(concat(a, b)))), 1, 3))"})
+      .assertResults(expected);
 
   expected = makeRowVector({
       makeFlatVector<int32_t>({1, 2}),
@@ -242,14 +241,15 @@ TEST_F(ReduceAggTest, arraysGroupBy) {
       }),
   });
 
-  testAggregations(
-      {data, data, data},
-      {"k"},
-      {"reduce_agg(c0, c1, "
-       "(a, b) -> slice(reverse(array_sort(array_distinct(concat(a, b)))), 1, 3), "
-       "(a, b) -> slice(reverse(array_sort(array_distinct(concat(a, b)))), 1, 3)) "
-       "FILTER (WHERE m)"},
-      {expected});
+  AggregationTester(*this)
+      .inputs({data, data, data})
+      .groupBy({"k"})
+      .aggregates(
+          {"reduce_agg(c0, c1, "
+           "(a, b) -> slice(reverse(array_sort(array_distinct(concat(a, b)))), 1, 3), "
+           "(a, b) -> slice(reverse(array_sort(array_distinct(concat(a, b)))), 1, 3)) "
+           "FILTER (WHERE m)"})
+      .assertResults(expected);
 }
 
 TEST_F(ReduceAggTest, nonConstantInitialValueGroupBy) {
@@ -289,13 +289,13 @@ TEST_F(ReduceAggTest, allNullInputSkipsInitialValueCheck) {
       makeNullableArrayVector<int64_t>({std::nullopt, std::nullopt}),
   });
 
-  testAggregations(
-      {data},
-      {"k"},
-      {"reduce_agg(c0, c1, "
-       "(s, x) -> concat(s, array[x]), "
-       "(s, s2) -> concat(s, s2))"},
-      {expected});
+  AggregationTester(*this)
+      .inputs(data)
+      .groupBy({"k"})
+      .aggregates({"reduce_agg(c0, c1, "
+                   "(s, x) -> concat(s, array[x]), "
+                   "(s, s2) -> concat(s, s2))"})
+      .assertResults(expected);
 }
 
 TEST_F(ReduceAggTest, differentInputAndCombine) {
@@ -315,27 +315,27 @@ TEST_F(ReduceAggTest, differentInputAndCombine) {
       makeArrayVector<int32_t>({{1, 2, 3}, {10, 20, 30}}),
   });
 
-  testAggregations(
-      {data, data, data},
-      {"k"},
-      {"reduce_agg(c0, c1, "
-       "(s, x) -> array_sort(array_distinct(concat(s, array[x]))), "
-       "(s, s2) -> array_sort(array_distinct(concat(s, s2))))"},
-      {expected});
+  AggregationTester(*this)
+      .inputs({data, data, data})
+      .groupBy({"k"})
+      .aggregates({"reduce_agg(c0, c1, "
+                   "(s, x) -> array_sort(array_distinct(concat(s, array[x]))), "
+                   "(s, s2) -> array_sort(array_distinct(concat(s, s2))))"})
+      .assertResults(expected);
 
   expected = makeRowVector({
       makeFlatVector<int32_t>({1, 2}),
       makeNullableArrayVector<int32_t>({{{1, 3}}, std::nullopt}),
   });
 
-  testAggregations(
-      {data, data, data},
-      {"k"},
-      {"reduce_agg(c0, c1, "
-       "(s, x) -> array_sort(array_distinct(concat(s, array[x]))), "
-       "(s, s2) -> array_sort(array_distinct(concat(s, s2)))) "
-       "FILTER (WHERE m)"},
-      {expected});
+  AggregationTester(*this)
+      .inputs({data, data, data})
+      .groupBy({"k"})
+      .aggregates({"reduce_agg(c0, c1, "
+                   "(s, x) -> array_sort(array_distinct(concat(s, array[x]))), "
+                   "(s, s2) -> array_sort(array_distinct(concat(s, s2)))) "
+                   "FILTER (WHERE m)"})
+      .assertResults(expected);
 }
 
 TEST_F(ReduceAggTest, fuzzGlobalSum) {
@@ -345,12 +345,10 @@ TEST_F(ReduceAggTest, fuzzGlobalSum) {
 
   auto sumResults = AssertQueryBuilder(plan).copyResults(pool());
 
-  testAggregations(
-      data,
-      {},
-      {"reduce_agg(c0, 0, (x, y) -> (x + y), (x, y) -> (x + y))"},
-      {},
-      {sumResults});
+  AggregationTester(*this)
+      .inputs(data)
+      .aggregates({"reduce_agg(c0, 0, (x, y) -> (x + y), (x, y) -> (x + y))"})
+      .assertResults(sumResults);
 }
 
 TEST_F(ReduceAggTest, fuzzGroupBySum) {
@@ -363,14 +361,14 @@ TEST_F(ReduceAggTest, fuzzGroupBySum) {
 
   auto sumResults = AssertQueryBuilder(plan).copyResults(pool());
 
-  testAggregations(
-      [&](PlanBuilder& builder) {
-        builder.values(data).project({"c0 % 1234 as key", "c0"});
-      },
-      {"key"},
-      {"reduce_agg(c0, 0, (x, y) -> (x + y), (x, y) -> (x + y))"},
-      {},
-      [&](auto& builder) { return builder.assertResults(sumResults); });
+  AggregationTester(*this)
+      .inputs(data)
+      .preAggregation(
+          [&](auto& builder) { builder.project({"c0 % 1234 as key", "c0"}); })
+      .groupBy({"key"})
+      .aggregates({"reduce_agg(c0, 0, (x, y) -> (x + y), (x, y) -> (x + y))"})
+      .assertResults(
+          [&](auto& builder) { return builder.assertResults(sumResults); });
 }
 
 TEST_F(ReduceAggTest, fuzzGlobalAvg) {
@@ -380,19 +378,21 @@ TEST_F(ReduceAggTest, fuzzGlobalAvg) {
 
   auto avgResults = AssertQueryBuilder(plan).copyResults(pool());
 
-  testAggregations(
-      [&](PlanBuilder& builder) {
-        builder.values(data).project({
+  AggregationTester(*this)
+      .inputs(data)
+      .preAggregation([&](auto& builder) {
+        builder.project({
             "c0",
             "cast(row_constructor(0, 0) as row(sum double, count bigint)) as c1",
         });
-      },
-      {},
-      {"reduce_agg(c0, c1, "
-       "(s, x) -> (row_constructor(s.sum + x, s.count + 1)), "
-       "(s, s2) -> (row_constructor(s.sum + s2.sum, s.count + s2.count)))"},
-      {"a0.sum / cast(a0.count as double)"},
-      [&](auto& builder) { return builder.assertResults(avgResults); });
+      })
+      .aggregates(
+          {"reduce_agg(c0, c1, "
+           "(s, x) -> (row_constructor(s.sum + x, s.count + 1)), "
+           "(s, s2) -> (row_constructor(s.sum + s2.sum, s.count + s2.count)))"})
+      .project({"a0.sum / cast(a0.count as double)"})
+      .assertResults(
+          [&](auto& builder) { return builder.assertResults(avgResults); });
 }
 
 TEST_F(ReduceAggTest, fuzzGroupByAvg) {
@@ -405,20 +405,23 @@ TEST_F(ReduceAggTest, fuzzGroupByAvg) {
 
   auto avgResults = AssertQueryBuilder(plan).copyResults(pool());
 
-  testAggregations(
-      [&](PlanBuilder& builder) {
-        builder.values(data).project({
+  AggregationTester(*this)
+      .inputs(data)
+      .preAggregation([&](auto& builder) {
+        builder.project({
             "c0",
             "cast(row_constructor(0, 0) as row(sum double, count bigint)) as c1",
             "c0 % 1234 as key",
         });
-      },
-      {"key"},
-      {"reduce_agg(c0, c1, "
-       "(s, x) -> (row_constructor(s.sum + x, s.count + 1)), "
-       "(s, s2) -> (row_constructor(s.sum + s2.sum, s.count + s2.count)))"},
-      {"key", "a0.sum / cast(a0.count as double)"},
-      [&](auto& builder) { return builder.assertResults(avgResults); });
+      })
+      .groupBy({"key"})
+      .aggregates(
+          {"reduce_agg(c0, c1, "
+           "(s, x) -> (row_constructor(s.sum + x, s.count + 1)), "
+           "(s, s2) -> (row_constructor(s.sum + s2.sum, s.count + s2.count)))"})
+      .project({"key", "a0.sum / cast(a0.count as double)"})
+      .assertResults(
+          [&](auto& builder) { return builder.assertResults(avgResults); });
 }
 
 } // namespace

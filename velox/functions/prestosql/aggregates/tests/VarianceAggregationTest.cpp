@@ -80,23 +80,34 @@ TEST_F(VarianceAggregationTest, varianceConst) {
 
   for (const auto& aggrName : aggrNames_) {
     auto sql = genAggrQuery("SELECT {0}(c1), {0}(c2) FROM tmp", aggrName);
-    testAggregations(vectors, {}, {GEN_AGG("c1"), GEN_AGG("c2")}, sql);
+    AggregationTester(*this)
+        .inputs(vectors)
+        .aggregates({GEN_AGG("c1"), GEN_AGG("c2")})
+        .assertResults(sql);
 
     sql = genAggrQuery(
         "SELECT c0, {0}(c1), {0}(c2) FROM tmp GROUP BY 1", aggrName);
-    testAggregations(vectors, {"c0"}, {GEN_AGG("c1"), GEN_AGG("c2")}, sql);
+    AggregationTester(*this)
+        .inputs(vectors)
+        .groupBy({"c0"})
+        .aggregates({GEN_AGG("c1"), GEN_AGG("c2")})
+        .assertResults(sql);
 
     sql = genAggrQuery("SELECT {0}(c0) FROM tmp", aggrName);
-    testAggregations(vectors, {}, {GEN_AGG("c0")}, sql);
+    AggregationTester(*this)
+        .inputs(vectors)
+        .aggregates({GEN_AGG("c0")})
+        .assertResults(sql);
 
     sql = genAggrQuery("SELECT c0 % 2, {0}(c0) FROM tmp GROUP BY 1", aggrName);
-    testAggregations(
-        [&](PlanBuilder& builder) {
-          builder.values(vectors).project({"c0 % 2 AS c0_mod_2", "c0"});
-        },
-        {"c0_mod_2"},
-        {GEN_AGG("c0")},
-        sql);
+    AggregationTester(*this)
+        .inputs(vectors)
+        .preAggregation([&](auto& builder) {
+          builder.project({"c0 % 2 AS c0_mod_2", "c0"});
+        })
+        .groupBy({"c0_mod_2"})
+        .aggregates({GEN_AGG("c0")})
+        .assertResults(sql);
   }
 }
 
@@ -119,11 +130,18 @@ TEST_F(VarianceAggregationTest, varianceConstNull) {
 
   for (const auto& aggrName : aggrNames_) {
     auto sql = genAggrQuery("SELECT {0}(c1), {0}(c2) FROM tmp", aggrName);
-    testAggregations(vectors, {}, {GEN_AGG("c1"), GEN_AGG("c2")}, sql);
+    AggregationTester(*this)
+        .inputs(vectors)
+        .aggregates({GEN_AGG("c1"), GEN_AGG("c2")})
+        .assertResults(sql);
 
     sql = genAggrQuery(
         "SELECT c0, {0}(c1), {0}(c2) FROM tmp group by c0", aggrName);
-    testAggregations(vectors, {"c0"}, {GEN_AGG("c1"), GEN_AGG("c2")}, sql);
+    AggregationTester(*this)
+        .inputs(vectors)
+        .groupBy({"c0"})
+        .aggregates({GEN_AGG("c1"), GEN_AGG("c2")})
+        .assertResults(sql);
   }
 }
 
@@ -146,11 +164,18 @@ TEST_F(VarianceAggregationTest, varianceNulls) {
 
   for (const auto& aggrName : aggrNames_) {
     auto sql = genAggrQuery("SELECT {0}(c1), {0}(c2) FROM tmp", aggrName);
-    testAggregations(vectors, {}, {GEN_AGG("c1"), GEN_AGG("c2")}, sql);
+    AggregationTester(*this)
+        .inputs(vectors)
+        .aggregates({GEN_AGG("c1"), GEN_AGG("c2")})
+        .assertResults(sql);
 
     sql = genAggrQuery(
         "SELECT c0, {0}(c1), {0}(c2) FROM tmp group by c0", aggrName);
-    testAggregations(vectors, {"c0"}, {GEN_AGG("c1"), GEN_AGG("c2")}, sql);
+    AggregationTester(*this)
+        .inputs(vectors)
+        .groupBy({"c0"})
+        .aggregates({GEN_AGG("c1"), GEN_AGG("c2")})
+        .assertResults(sql);
   }
 }
 
@@ -171,22 +196,20 @@ TEST_F(VarianceAggregationTest, varianceWithGlobalAggregation) {
     //        but got 0.07542579089862542
     auto sql = genAggrQuery(
         "SELECT {0}(c1), {0}(c2), {0}(c4), {0}(c5) FROM tmp", aggrName);
-    testAggregations(
-        vectors,
-        {},
-        {GEN_AGG("c1"), GEN_AGG("c2"), GEN_AGG("c4"), GEN_AGG("c5")},
-        {"a0", "a1", "a2", "a3"},
-        sql);
+    AggregationTester(*this)
+        .inputs(vectors)
+        .aggregates(
+            {GEN_AGG("c1"), GEN_AGG("c2"), GEN_AGG("c4"), GEN_AGG("c5")})
+        .project({"a0", "a1", "a2", "a3"})
+        .assertResults(sql);
 
     // Global aggregation; no input
     sql = genAggrQuery("SELECT {0}(c0) FROM tmp WHERE c0 % 2 = 5", aggrName);
-    testAggregations(
-        [&](PlanBuilder& builder) {
-          builder.values(vectors).filter("c0 % 2 = 5");
-        },
-        {},
-        {GEN_AGG("c0")},
-        sql);
+    AggregationTester(*this)
+        .inputs(vectors)
+        .preAggregation([&](auto& builder) { builder.filter("c0 % 2 = 5"); })
+        .aggregates({GEN_AGG("c0")})
+        .assertResults(sql);
   }
 }
 
@@ -198,13 +221,11 @@ TEST_F(VarianceAggregationTest, varianceWithGlobalAggregationAndFilter) {
     // Global aggregation over filter
     const auto sql =
         genAggrQuery("SELECT {0}(c0) FROM tmp WHERE c0 % 5 = 3", aggrName);
-    testAggregations(
-        [&](PlanBuilder& builder) {
-          builder.values(vectors).filter("c0 % 5 = 3");
-        },
-        {},
-        {GEN_AGG("c0")},
-        sql);
+    AggregationTester(*this)
+        .inputs(vectors)
+        .preAggregation([&](auto& builder) { builder.filter("c0 % 5 = 3"); })
+        .aggregates({GEN_AGG("c0")})
+        .assertResults(sql);
   }
 }
 
@@ -220,32 +241,32 @@ TEST_F(VarianceAggregationTest, varianceWithGroupBy) {
         "SELECT c0 % 10, {0}(c1), {0}(c2), {0}(c3::DOUBLE), {0}(c4), {0}(c5) "
         "FROM tmp GROUP BY 1",
         aggrName);
-    testAggregations(
-        [&](PlanBuilder& builder) {
-          builder.values(vectors).project(
-              {"c0 % 10", "c1", "c2", "c3", "c4", "c5"});
-        },
-        {"p0"},
-        {GEN_AGG("c1"),
-         GEN_AGG("c2"),
-         GEN_AGG("c3"),
-         GEN_AGG("c4"),
-         GEN_AGG("c5")},
-        sql);
+    AggregationTester(*this)
+        .inputs(vectors)
+        .preAggregation([&](auto& builder) {
+          builder.project({"c0 % 10", "c1", "c2", "c3", "c4", "c5"});
+        })
+        .groupBy({"p0"})
+        .aggregates(
+            {GEN_AGG("c1"),
+             GEN_AGG("c2"),
+             GEN_AGG("c3"),
+             GEN_AGG("c4"),
+             GEN_AGG("c5")})
+        .assertResults(sql);
 
     // Group by; no input
     sql = genAggrQuery(
         "SELECT c0 % 10, {0}(c1) FROM tmp WHERE c0 % 2 = 5 GROUP BY 1",
         aggrName);
-    testAggregations(
-        [&](PlanBuilder& builder) {
-          builder.values(vectors)
-              .filter("c0 % 2 = 5")
-              .project({"c0 % 10", "c1"});
-        },
-        {"p0"},
-        {GEN_AGG("c1")},
-        sql);
+    AggregationTester(*this)
+        .inputs(vectors)
+        .preAggregation([&](auto& builder) {
+          builder.filter("c0 % 2 = 5").project({"c0 % 10", "c1"});
+        })
+        .groupBy({"p0"})
+        .aggregates({GEN_AGG("c1")})
+        .assertResults(sql);
   }
 }
 
@@ -258,15 +279,14 @@ TEST_F(VarianceAggregationTest, varianceWithGroupByAndFilter) {
     const auto sql = genAggrQuery(
         "SELECT c0 % 10, {0}(c1) FROM tmp WHERE c2 % 5 = 3 GROUP BY 1",
         aggrName);
-    testAggregations(
-        [&](PlanBuilder& builder) {
-          builder.values(vectors)
-              .filter("c2 % 5 = 3")
-              .project({"c0 % 10", "c1"});
-        },
-        {"p0"},
-        {GEN_AGG("c1")},
-        sql);
+    AggregationTester(*this)
+        .inputs(vectors)
+        .preAggregation([&](auto& builder) {
+          builder.filter("c2 % 5 = 3").project({"c0 % 10", "c1"});
+        })
+        .groupBy({"p0"})
+        .aggregates({GEN_AGG("c1")})
+        .assertResults(sql);
   }
 }
 
@@ -286,7 +306,11 @@ TEST_F(VarianceAggregationTest, varianceWithoutPrecisionLoss) {
 
   for (const auto& aggrName : aggrNames_) {
     auto sql = genAggrQuery("SELECT c0, {0}(c1) FROM tmp GROUP BY 1", aggrName);
-    testAggregations(vectors, {"c0"}, {GEN_AGG("c1")}, sql);
+    AggregationTester(*this)
+        .inputs(vectors)
+        .groupBy({"c0"})
+        .aggregates({GEN_AGG("c1")})
+        .assertResults(sql);
   }
 }
 
