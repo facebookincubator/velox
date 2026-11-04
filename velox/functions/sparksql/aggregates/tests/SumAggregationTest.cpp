@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#include <functional>
+
 #include "velox/exec/AggregateUtil.h"
 #include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/SimpleAggregateAdapter.h"
@@ -734,15 +736,15 @@ TEST_F(SumAggregationTest, abandonPartialAggregation) {
              kBatchSize, [&](auto row) { return batch * kBatchSize + row; }),
          makeFlatVector<int32_t>(
              kBatchSize,
-             folly::identity,
+             std::identity{},
              [](auto row) { return row % 5 == 0; }),
          makeFlatVector<int64_t>(
              kBatchSize,
-             folly::identity,
+             std::identity{},
              [](auto row) { return row % 11 == 0; }),
          makeFlatVector<float>(
              kBatchSize,
-             folly::identity,
+             std::identity{},
              [](auto row) { return row % 7 == 0; }),
          makeFlatVector<bool>(
              kBatchSize, [](auto row) { return row % 3 != 0; })}));
