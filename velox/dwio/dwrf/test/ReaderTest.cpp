@@ -3010,6 +3010,98 @@ TEST_F(TestReader, readFlatMapsAsFlatMapsWithKeyFilter) {
   assertEqualVectors(expected->toMapVector(), resultFlatMap->toMapVector());
 }
 
+TEST_F(TestReader, readFlatMapsAsFlatMapsWithFilter) {
+  // A filter that drops rows, on the flat map or on another column: the flat
+  // map's in-map bits must follow the selected rows, not the rows read.
+  constexpr vector_size_t kNumRows{100};
+  std::vector<
+      std::optional<std::vector<std::pair<int64_t, std::optional<int64_t>>>>>
+      data(kNumRows);
+  for (vector_size_t row = 0; row < kNumRows; ++row) {
+    if (row % 5 == 2) {
+      continue;
+    }
+    data[row].emplace();
+    for (int64_t key = 0; key < 5; ++key) {
+      if ((row + key) % 3 == 0) {
+        data[row]->emplace_back(key, row * 10 + key);
+      }
+    }
+  }
+  auto flatMap = makeNullableFlatMapVector<int64_t, int64_t>(data);
+  auto input = makeRowVector({
+      flatMap->toMapVector(),
+      makeFlatVector<int64_t>(kNumRows, [](auto row) { return row; }),
+  });
+  auto config = std::make_shared<dwrf::Config>();
+  config->set(dwrf::Config::FLATTEN_MAP, true);
+  config->set(dwrf::Config::MAP_FLAT_COLS, {0});
+  auto [writer, reader] = createWriterReader(
+      {input}, pool(), dataIoStats_, metadataIoStats_, config);
+  auto schema = asRowType(input->type());
+  std::vector<int64_t> passingIds;
+  for (int64_t row = 0; row < kNumRows; ++row) {
+    if (row % 4 == 1 || row % 7 == 3) {
+      passingIds.push_back(row);
+    }
+  }
+
+  auto verify = [&](bool filterMap, bool filterOther) {
+    auto scanSpec = std::make_shared<common::ScanSpec>("<root>");
+    scanSpec->addAllChildFields(*schema);
+    if (filterMap) {
+      scanSpec->childByName("c0")->setFilter(
+          std::make_unique<common::IsNotNull>());
+    }
+    if (filterOther) {
+      scanSpec->childByName("c1")->setFilter(
+          common::createBigintValues(passingIds, false));
+    }
+    std::vector<vector_size_t> passing;
+    for (vector_size_t row = 0; row < kNumRows; ++row) {
+      if ((!filterMap || data[row].has_value()) &&
+          (!filterOther ||
+           std::find(passingIds.begin(), passingIds.end(), row) !=
+               passingIds.end())) {
+        passing.push_back(row);
+      }
+    }
+    ASSERT_LT(passing.size(), static_cast<size_t>(kNumRows));
+    RowReaderOptions rowReaderOptions;
+    rowReaderOptions.setScanSpec(scanSpec);
+    rowReaderOptions.setPreserveFlatMapsInMemory(true);
+    auto rowReader = reader->createRowReader(rowReaderOptions);
+
+    VectorPtr batch = BaseVector::create(schema, 0, pool());
+    size_t numPassing{0};
+    while (rowReader->next(16, batch) > 0) {
+      auto column = batch->as<RowVector>()->childAt(0)->loadedVector();
+      ASSERT_EQ(column->encoding(), VectorEncoding::Simple::FLAT_MAP);
+      for (vector_size_t i = 0; i < batch->size(); ++i) {
+        ASSERT_LT(numPassing, passing.size());
+        const auto row = passing[numPassing++];
+        ASSERT_TRUE(column->equalValueAt(flatMap.get(), i, row))
+            << "row " << row << ": expected " << flatMap->toString(row)
+            << " got " << column->toString(i);
+      }
+    }
+    EXPECT_EQ(numPassing, passing.size());
+  };
+
+  {
+    SCOPED_TRACE("filter on another column");
+    verify(false, true);
+  }
+  {
+    SCOPED_TRACE("filter on the flat map");
+    verify(true, false);
+  }
+  {
+    SCOPED_TRACE("filters on both");
+    verify(true, true);
+  }
+}
+
 TEST_F(TestReader, readFlatMapsAsFlatMapsWithStringKeyFilter) {
   // Key pruning in the preserving path must also work for string keys.
   auto flatMap = makeFlatMapVector<StringView, int64_t>({

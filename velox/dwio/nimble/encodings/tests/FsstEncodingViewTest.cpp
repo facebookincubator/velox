@@ -233,9 +233,6 @@ TEST_P(FsstEncodingViewTest, readsAcrossLazyChunkBoundaries) {
 }
 
 TEST_P(FsstEncodingViewTest, decodedChunksUseMemoryPool) {
-  if (!cacheEncodingView()) {
-    GTEST_SKIP() << "Only cached views allocate decoded chunks.";
-  }
   std::vector<std::string> storage;
   auto values = makeValues(storage, 256);
   const auto encoded = encodeFsst(values);
@@ -245,21 +242,27 @@ TEST_P(FsstEncodingViewTest, decodedChunksUseMemoryPool) {
   ASSERT_TRUE(decodePool->trackUsage());
   const auto bytesBeforeView = decodePool->usedBytes();
   auto view = createEncodingView(
-      encoded, decodePool.get(), {.cacheEncodingView = true});
+      encoded, decodePool.get(), {.cacheEncodingView = cacheEncodingView()});
   const auto bytesBeforeDecode = decodePool->usedBytes();
   size_t decodedBytes{0};
   for (const auto value : values) {
     decodedBytes += value.size();
   }
 
+  // Only cached views allocate decoded chunks, so only they grow the pool on
+  // a read. Both settings must release everything they took from the pool.
   std::string_view actual;
   view->readAt(0, &actual);
   EXPECT_EQ(actual, values[0]);
-  EXPECT_GE(decodePool->usedBytes(), bytesBeforeDecode + decodedBytes);
+  if (cacheEncodingView()) {
+    EXPECT_GE(decodePool->usedBytes(), bytesBeforeDecode + decodedBytes);
+  }
   const auto bytesAfterDecode = decodePool->usedBytes();
   view->readAt(1, &actual);
   EXPECT_EQ(actual, values[1]);
-  EXPECT_EQ(decodePool->usedBytes(), bytesAfterDecode);
+  if (cacheEncodingView()) {
+    EXPECT_EQ(decodePool->usedBytes(), bytesAfterDecode);
+  }
   view.reset();
   EXPECT_EQ(decodePool->usedBytes(), bytesBeforeView);
 }
