@@ -52,11 +52,12 @@ class LastAggregateTest : public aggregate::test::AggregationTestBase {
       // result non-deterministic.
       {
         SCOPED_TRACE("ignore null + group by");
-        testAggregations(
-            vectors,
-            {"c0"},
-            {"spark_last_ignore_null(c1)"},
-            "SELECT c0, last(c1 ORDER BY c1 NULLS FIRST) FROM tmp GROUP BY c0");
+        AggregationTester(*this)
+            .inputs(vectors)
+            .groupBy({"c0"})
+            .aggregates({"spark_last_ignore_null(c1)"})
+            .assertResults(
+                "SELECT c0, last(c1 ORDER BY c1 NULLS FIRST) FROM tmp GROUP BY c0");
       }
       {
         // Expected result should have first 7 rows including nulls.
@@ -68,7 +69,11 @@ class LastAggregateTest : public aggregate::test::AggregationTestBase {
                 [](auto row) { return 91 + row; }, // valueAt
                 [](auto row) { return (91 + row) % 3 == 0; }), // nullAt
         })};
-        testAggregations(vectors, {"c0"}, {"spark_last(c1)"}, expected);
+        AggregationTester(*this)
+            .inputs(vectors)
+            .groupBy({"c0"})
+            .aggregates({"spark_last(c1)"})
+            .assertResults(expected);
       }
     }
 
@@ -80,14 +85,19 @@ class LastAggregateTest : public aggregate::test::AggregationTestBase {
       {
         SCOPED_TRACE("ignore null + global");
         auto expectedTrue = {makeRowVector({makeNullableFlatVector<T>({2})})};
-        testAggregations(
-            vectors, {}, {"spark_last_ignore_null(c0)"}, expectedTrue);
+        AggregationTester(*this)
+            .inputs(vectors)
+            .aggregates({"spark_last_ignore_null(c0)"})
+            .assertResults(expectedTrue);
       }
       {
         SCOPED_TRACE("not ignore null + global");
         auto expectedFalse = {
             makeRowVector({makeNullableFlatVector<T>({std::nullopt})})};
-        testAggregations(vectors, {}, {"spark_last(c0)"}, expectedFalse);
+        AggregationTester(*this)
+            .inputs(vectors)
+            .aggregates({"spark_last(c0)"})
+            .assertResults(expectedFalse);
       }
     }
   }
@@ -98,13 +108,20 @@ class LastAggregateTest : public aggregate::test::AggregationTestBase {
       std::vector<RowVectorPtr> hasNullData) {
     {
       SCOPED_TRACE("ignore null + group by");
-      testAggregations(
-          data, {"c0"}, {"spark_last_ignore_null(c1)"}, ignoreNullData);
+      AggregationTester(*this)
+          .inputs(data)
+          .groupBy({"c0"})
+          .aggregates({"spark_last_ignore_null(c1)"})
+          .assertResults(ignoreNullData);
     }
 
     {
       SCOPED_TRACE("not ignore null + group by");
-      testAggregations(data, {"c0"}, {"spark_last(c1)"}, hasNullData);
+      AggregationTester(*this)
+          .inputs(data)
+          .groupBy({"c0"})
+          .aggregates({"spark_last(c1)"})
+          .assertResults(hasNullData);
     }
   }
 
@@ -114,13 +131,18 @@ class LastAggregateTest : public aggregate::test::AggregationTestBase {
       std::vector<RowVectorPtr> hasNullData) {
     {
       SCOPED_TRACE("ignore null + global");
-      testAggregations(
-          data, {}, {"spark_last_ignore_null(c0)"}, ignoreNullData);
+      AggregationTester(*this)
+          .inputs(data)
+          .aggregates({"spark_last_ignore_null(c0)"})
+          .assertResults(ignoreNullData);
     }
 
     {
       SCOPED_TRACE("not ignore null + global");
-      testAggregations(data, {}, {"spark_last(c0)"}, hasNullData);
+      AggregationTester(*this)
+          .inputs(data)
+          .aggregates({"spark_last(c0)"})
+          .assertResults(hasNullData);
     }
   }
 };
@@ -172,8 +194,15 @@ TEST_F(LastAggregateTest, unknownInput) {
         makeAllNullFlatVector<UnknownValue>(numGroups),
     });
 
-    testAggregations({input}, {}, aggregates, {expectedGlobal});
-    testAggregations({input}, {"c0"}, aggregates, {expectedGrouped});
+    AggregationTester(*this)
+        .inputs(input)
+        .aggregates(aggregates)
+        .assertResults(expectedGlobal);
+    AggregationTester(*this)
+        .inputs(input)
+        .groupBy({"c0"})
+        .aggregates(aggregates)
+        .assertResults(expectedGrouped);
   }
 }
 
@@ -446,11 +475,12 @@ TEST_F(LastAggregateTest, varcharGroupBy) {
   createDuckDbTable(vectors);
 
   // Verify when ignoreNull is true.
-  testAggregations(
-      vectors,
-      {"c0"},
-      {"spark_last_ignore_null(c1)"},
-      "SELECT c0, last(c1) FROM tmp WHERE c1 IS NOT NULL GROUP BY c0");
+  AggregationTester(*this)
+      .inputs(vectors)
+      .groupBy({"c0"})
+      .aggregates({"spark_last_ignore_null(c1)"})
+      .assertResults(
+          "SELECT c0, last(c1) FROM tmp WHERE c1 IS NOT NULL GROUP BY c0");
 
   // Verify when ignoreNull is false.
   // Expected result should have last 7 rows [91..98) including nulls.
@@ -461,7 +491,11 @@ TEST_F(LastAggregateTest, varcharGroupBy) {
           [&data](auto row) { return StringView(data[91 + row]); }, // valueAt
           [](auto row) { return (91 + row) % 3 == 0; }), // nullAt
   })};
-  testAggregations(vectors, {"c0"}, {"spark_last(c1)"}, expected);
+  AggregationTester(*this)
+      .inputs(vectors)
+      .groupBy({"c0"})
+      .aggregates({"spark_last(c1)"})
+      .assertResults(expected);
 }
 
 TEST_F(LastAggregateTest, varcharGlobal) {
@@ -554,7 +588,11 @@ TEST_F(LastAggregateTest, mapGroupBy) {
           [](auto idx) { return (92 + idx) * 0.1; }), // valueAt
   })};
 
-  testAggregations(vectors, {"c0"}, {"spark_last(c1)"}, expected);
+  AggregationTester(*this)
+      .inputs(vectors)
+      .groupBy({"c0"})
+      .aggregates({"spark_last(c1)"})
+      .assertResults(expected);
 }
 
 TEST_F(LastAggregateTest, mapGlobal) {

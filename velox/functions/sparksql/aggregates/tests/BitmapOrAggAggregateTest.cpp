@@ -39,7 +39,10 @@ TEST_F(BitmapOrAggAggregateTest, basic) {
   auto expectedResult = makeRowVector({BitmapBuilder::vectorFromBytes(
       pool(), {{{0, 0xFF}, {1, 0x0F}, {2, 0xFF}}})});
 
-  testAggregations({input}, {}, {"bitmap_or_agg(c0)"}, {expectedResult});
+  AggregationTester(*this)
+      .inputs(input)
+      .aggregates({"bitmap_or_agg(c0)"})
+      .assertResults(expectedResult);
 }
 
 TEST_F(BitmapOrAggAggregateTest, allNullInputs) {
@@ -49,7 +52,10 @@ TEST_F(BitmapOrAggAggregateTest, allNullInputs) {
   auto expectedResult =
       makeRowVector({BitmapBuilder::vectorFromBits(pool(), {{}})});
 
-  testAggregations({input}, {}, {"bitmap_or_agg(c0)"}, {expectedResult});
+  AggregationTester(*this)
+      .inputs(input)
+      .aggregates({"bitmap_or_agg(c0)"})
+      .assertResults(expectedResult);
 }
 
 TEST_F(BitmapOrAggAggregateTest, emptyInput) {
@@ -58,7 +64,10 @@ TEST_F(BitmapOrAggAggregateTest, emptyInput) {
   auto expectedResult =
       makeRowVector({BitmapBuilder::vectorFromBits(pool(), {{}})});
 
-  testAggregations({input}, {}, {"bitmap_or_agg(c0)"}, {expectedResult});
+  AggregationTester(*this)
+      .inputs(input)
+      .aggregates({"bitmap_or_agg(c0)"})
+      .assertResults(expectedResult);
 }
 
 TEST_F(BitmapOrAggAggregateTest, mixedNullAndNonNull) {
@@ -69,7 +78,10 @@ TEST_F(BitmapOrAggAggregateTest, mixedNullAndNonNull) {
   auto expectedResult =
       makeRowVector({BitmapBuilder::vectorFromBytes(pool(), {{{0, 0xAA}}})});
 
-  testAggregations({input}, {}, {"bitmap_or_agg(c0)"}, {expectedResult});
+  AggregationTester(*this)
+      .inputs(input)
+      .aggregates({"bitmap_or_agg(c0)"})
+      .assertResults(expectedResult);
 }
 
 TEST_F(BitmapOrAggAggregateTest, groupBy) {
@@ -84,7 +96,11 @@ TEST_F(BitmapOrAggAggregateTest, groupBy) {
       BitmapBuilder::vectorFromBytes(pool(), {{{0, 0xFF}}, {{1, 0xFF}}}),
   });
 
-  testAggregations({input}, {"c0"}, {"bitmap_or_agg(c1)"}, {expectedResult});
+  AggregationTester(*this)
+      .inputs(input)
+      .groupBy({"c0"})
+      .aggregates({"bitmap_or_agg(c1)"})
+      .assertResults(expectedResult);
 }
 
 TEST_F(BitmapOrAggAggregateTest, invalidInputSize) {
@@ -92,10 +108,10 @@ TEST_F(BitmapOrAggAggregateTest, invalidInputSize) {
   auto shortBitmap = std::string(100, '\x01');
   auto input = makeRowVector({makeFlatVector({shortBitmap}, VARBINARY())});
 
-  VELOX_ASSERT_THROW(
-      testAggregations(
-          {input}, {}, {"bitmap_or_agg(c0)"}, std::vector<RowVectorPtr>{}),
-      "bitmap_or_agg expects exactly 4096 byte bitmaps");
+  AggregationTester(*this)
+      .inputs(input)
+      .aggregates({"bitmap_or_agg(c0)"})
+      .assertError("bitmap_or_agg expects exactly 4096 byte bitmaps");
 }
 
 TEST_F(BitmapOrAggAggregateTest, emptyBitmapRejected) {
@@ -103,10 +119,10 @@ TEST_F(BitmapOrAggAggregateTest, emptyBitmapRejected) {
   auto emptyBitmap = std::string();
   auto input = makeRowVector({makeFlatVector({emptyBitmap}, VARBINARY())});
 
-  VELOX_ASSERT_THROW(
-      testAggregations(
-          {input}, {}, {"bitmap_or_agg(c0)"}, std::vector<RowVectorPtr>{}),
-      "bitmap_or_agg expects exactly 4096 byte bitmaps");
+  AggregationTester(*this)
+      .inputs(input)
+      .aggregates({"bitmap_or_agg(c0)"})
+      .assertError("bitmap_or_agg expects exactly 4096 byte bitmaps");
 }
 
 TEST_F(BitmapOrAggAggregateTest, mergeIntermediate) {
@@ -118,8 +134,10 @@ TEST_F(BitmapOrAggAggregateTest, mergeIntermediate) {
   auto expectedResult = makeRowVector({BitmapBuilder::vectorFromBytes(
       pool(), {{{0, 0xFF}, {100, 0x55}, {200, 0xFF}}})});
 
-  testAggregations(
-      {batch1, batch2}, {}, {"bitmap_or_agg(c0)"}, {expectedResult});
+  AggregationTester(*this)
+      .inputs({batch1, batch2})
+      .aggregates({"bitmap_or_agg(c0)"})
+      .assertResults(expectedResult);
 }
 
 TEST_F(BitmapOrAggAggregateTest, invalidIntermediateSize) {
