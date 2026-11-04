@@ -73,7 +73,7 @@ class KHyperLogLogAggregateTest : public AggregationTestBase {
   }
 
   // Helper to verify aggregation results have expected cardinalities.
-  // Uses testAggregations with a custom assert function to test all
+  // Uses AggregationTester with a custom assert function to test all
   // aggregation plan paths.
   void testAggregationWithCardinality(
       const std::vector<RowVectorPtr>& data,
