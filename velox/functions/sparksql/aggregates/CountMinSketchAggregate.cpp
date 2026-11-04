@@ -411,14 +411,19 @@ class CountMinSketchParameters {
     // when 2 / eps is out of int32 range (very small eps), and division by
     // zero later when eps is +infinity (width 0).
     double widthDouble = std::ceil(2.0 / eps);
-    static constexpr char kWidthOutOfRangeMessage[] =
-        "count_min_sketch width out of range for eps: {}";
-    VELOX_USER_CHECK(std::isfinite(widthDouble), kWidthOutOfRangeMessage, eps);
-    VELOX_USER_CHECK_GE(widthDouble, 1.0, kWidthOutOfRangeMessage, eps);
+    VELOX_USER_CHECK(
+        std::isfinite(widthDouble),
+        "count_min_sketch width out of range for eps: {}",
+        eps);
+    VELOX_USER_CHECK_GE(
+        widthDouble,
+        1.0,
+        "count_min_sketch width out of range for eps: {}",
+        eps);
     VELOX_USER_CHECK_LE(
         widthDouble,
         static_cast<double>(std::numeric_limits<int32_t>::max()),
-        kWidthOutOfRangeMessage,
+        "count_min_sketch width out of range for eps: {}",
         eps);
     width_ = static_cast<int32_t>(widthDouble);
     // Use log1p(-c) to match Spark's exact formula and rounding.
