@@ -175,6 +175,44 @@ struct ReduceCountAggregator : ReduceAggregator {
   CountInputKind inputKind_;
 };
 
+// Adds up the sums and the counts of avg states and returns the sum and count
+// totals. Shared by the intermediate and final reduce steps.
+std::pair<std::unique_ptr<cudf::scalar>, std::unique_ptr<cudf::scalar>>
+mergeMeanStates(cudf::column_view const& states, cuda::stream_ref stream) {
+  auto const sumAgg = cudf::make_sum_aggregation<cudf::reduce_aggregation>();
+  auto const sumCol = states.child(0);
+  auto const countCol = states.child(1);
+  auto sumTotal =
+      cudf::reduce(sumCol, *sumAgg, sumCol.type(), stream, get_temp_mr());
+  auto countTotal =
+      cudf::reduce(countCol, *sumAgg, countCol.type(), stream, get_temp_mr());
+  return {std::move(sumTotal), std::move(countTotal)};
+}
+
+// Builds avg's one-row ROW(sum, count) state from one-row sum and count
+// columns. Shared by the partial and intermediate reduce steps.
+std::unique_ptr<cudf::column> makeMeanState(
+    std::unique_ptr<cudf::column> sum,
+    std::unique_ptr<cudf::column> count,
+    bool isNull,
+    cuda::stream_ref stream,
+    rmm::device_async_resource_ref mr) {
+  auto children = std::vector<std::unique_ptr<cudf::column>>();
+  children.push_back(std::move(sum));
+  children.push_back(std::move(count));
+  return cudf::make_structs_column(
+      /*num_rows=*/1,
+      std::move(children),
+      /*null_count=*/isNull ? 1 : 0,
+      cudf::create_null_mask(
+          /*size=*/1,
+          isNull ? cudf::mask_state::ALL_NULL : cudf::mask_state::UNALLOCATED,
+          stream,
+          cudf::memory_resources{mr, get_temp_mr()}),
+      stream,
+      mr);
+}
+
 struct ReduceMeanAggregator : ReduceAggregator {
   ReduceMeanAggregator(
       core::AggregationNode::Step step,
@@ -231,50 +269,45 @@ struct ReduceMeanAggregator : ReduceAggregator {
             stream,
             mr);
 
-        // Assemble into struct as expected by velox. A state with no valid
-        // row is a NULL row, as the CPU partial emits it; makeSumCountState in
-        // CudfGroupby.cpp applies the same rule per group.
-        auto children = std::vector<std::unique_ptr<cudf::column>>();
-        children.push_back(std::move(sumCol));
-        children.push_back(std::move(countCol));
-        auto const noValidRows = numValidRows == 0;
-        return std::make_unique<cudf::column>(
-            cudf::data_type(cudf::type_id::STRUCT),
-            /*size=*/1,
-            rmm::device_buffer{},
-            cudf::create_null_mask(
-                /*size=*/1,
-                noValidRows ? cudf::mask_state::ALL_NULL
-                            : cudf::mask_state::UNALLOCATED,
-                stream,
-                cudf::memory_resources{mr, get_temp_mr()}),
-            /*null_count=*/noValidRows ? 1 : 0,
-            std::move(children));
+        // A state with no valid row is a NULL row, as the CPU partial emits
+        // it; makeSumCountState in CudfGroupby.cpp applies the same rule per
+        // group.
+        return makeMeanState(
+            std::move(sumCol),
+            std::move(countCol),
+            /*isNull=*/numValidRows == 0,
+            stream,
+            mr);
+      }
+      case core::AggregationNode::Step::kIntermediate: {
+        // Returns the merged state instead of dividing. GPU is required to
+        // match CPU results. The CPU returns a NULL state when no rows were
+        // counted.
+        auto [sumTotal, countTotal] =
+            mergeMeanStates(input.column(inputIndex), stream);
+        auto const& count =
+            static_cast<cudf::numeric_scalar<int64_t> const&>(*countTotal);
+        auto const hasCountedRows =
+            count.is_valid(stream) && count.value(stream) > 0;
+
+        return makeMeanState(
+            cudf::make_column_from_scalar(*sumTotal, 1, stream, mr),
+            cudf::make_column_from_scalar(*countTotal, 1, stream, mr),
+            /*isNull=*/!hasCountedRows,
+            stream,
+            mr);
       }
       case core::AggregationNode::Step::kFinal: {
-        // Input column has two children: sum and count
-        auto const sumCol = input.column(inputIndex).child(0);
-        auto const countCol = input.column(inputIndex).child(1);
-
-        // sum the sums
-        auto const sumAggRequest =
-            cudf::make_sum_aggregation<cudf::reduce_aggregation>();
-        auto const sumResultScalar = cudf::reduce(
-            sumCol, *sumAggRequest, sumCol.type(), stream, get_temp_mr());
-        auto sumResultCol =
-            cudf::make_column_from_scalar(*sumResultScalar, 1, stream, mr);
-
-        // sum the counts
-        auto const countAggRequest =
-            cudf::make_sum_aggregation<cudf::reduce_aggregation>();
-        auto const countResultScalar = cudf::reduce(
-            countCol, *countAggRequest, countCol.type(), stream, get_temp_mr());
+        auto [sumTotal, countTotal] =
+            mergeMeanStates(input.column(inputIndex), stream);
+        auto const sumResultCol =
+            cudf::make_column_from_scalar(*sumTotal, 1, stream, mr);
 
         // divide the sums by the counts
         auto const cudfOutputType = cudf_velox::veloxToCudfDataType(outputType);
         return cudf::binary_operation(
             *sumResultCol,
-            *countResultScalar,
+            *countTotal,
             cudf::binary_operator::DIV,
             cudfOutputType,
             stream,
