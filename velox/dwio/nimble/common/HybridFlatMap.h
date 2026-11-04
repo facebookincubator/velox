@@ -16,6 +16,7 @@
 #pragma once
 
 #include <algorithm>
+#include <charconv>
 #include <cstdint>
 #include <limits>
 #include <memory>
@@ -26,9 +27,11 @@
 #include <vector>
 
 #include <fmt/format.h>
+#include <folly/Conv.h>
 #include "folly/container/F14Set.h"
 #include "velox/dwio/nimble/common/Exceptions.h"
 #include "velox/dwio/nimble/common/SchemaTypes.h"
+#include "velox/dwio/nimble/common/Types.h"
 
 namespace facebook::nimble {
 
@@ -182,6 +185,12 @@ class HybridFlatMap {
   /// is not written that way, e.g. "07" or "+7" for an integer kind.
   static std::string canonicalKey(ScalarKind keyKind, std::string_view key);
 
+  /// Returns the value of `key` as a key of the integer type T. Throws the user
+  /// error of canonicalKey() when it would reject `key`. Builds no string for a
+  /// canonical key, so a reader can parse every schema key of every batch.
+  template <typename T>
+  static T parseCanonicalIntegerKey(std::string_view key);
+
   /// Serializes the groups into the flattened HybridFlatMap FlatBuffer table.
   /// `group_ids` and `group_key_counts` are parallel per-group vectors, and
   /// `group_keys` concatenates the keys of every group in group order, so
@@ -233,6 +242,27 @@ class HybridFlatMap {
   // See defaultGroupKeyPresenceMode().
   KeyPresenceMode defaultGroupKeyPresenceMode_{KeyPresenceMode::kBitmap};
 };
+
+// Defined in the header so that readers inline it into their per-key loops.
+template <typename T>
+T HybridFlatMap::parseCanonicalIntegerKey(std::string_view key) {
+  T value{};
+  const auto* end = key.data() + key.size();
+  const auto [parsedEnd, error] = std::from_chars(key.data(), end, value);
+  if (error == std::errc{} && parsedEnd == end) {
+    // std::from_chars accepts leading zeros, which only the key "0" may have.
+    const size_t firstDigit{key.front() == '-' ? 1U : 0U};
+    if (key[firstDigit] != '0' || (firstDigit == 0 && key.size() == 1)) {
+      return value;
+    }
+  }
+  NIMBLE_USER_CHECK(
+      folly::tryTo<T>(key).hasValue(),
+      "Hybrid FlatMap key '{}' cannot be parsed as {}.",
+      key,
+      TypeTraits<T>::dataType);
+  NIMBLE_USER_FAIL("Hybrid FlatMap key '{}' is not canonical.", key);
+}
 
 /// Returns the name of `mode` as spelled in the serialized schema.
 std::string toString(HybridFlatMap::KeyPresenceMode mode);
