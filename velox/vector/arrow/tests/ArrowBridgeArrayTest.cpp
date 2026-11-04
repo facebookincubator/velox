@@ -22,10 +22,8 @@
 
 #include "velox/common/base/Nulls.h"
 #include "velox/common/base/tests/GTestUtils.h"
-#include "velox/core/QueryCtx.h"
 #include "velox/vector/BaseVector.h"
 #include "velox/vector/arrow/Bridge.h"
-#include "velox/vector/tests/utils/VectorMaker.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
 namespace facebook::velox::test {
@@ -67,7 +65,7 @@ struct VeloxToArrowType<Timestamp> {
   using type = int64_t;
 };
 
-class ArrowBridgeArrayExportTest : public testing::Test {
+class ArrowBridgeArrayExportTest : public testing::Test, public VectorTestBase {
  protected:
   static void SetUpTestCase() {
     memory::MemoryManager::testingSetInstance(memory::MemoryManager::Options{});
@@ -511,13 +509,7 @@ class ArrowBridgeArrayExportTest : public testing::Test {
         BaseVector::create(type, 0, pool_.get()), out, options_);
   }
 
-  // Boiler plate structures required by vectorMaker.
   ArrowOptions options_;
-  std::shared_ptr<core::QueryCtx> queryCtx_{velox::core::QueryCtx::create()};
-  std::shared_ptr<memory::MemoryPool> pool_{
-      memory::memoryManager()->addLeafPool()};
-  core::ExecCtx execCtx_{pool_.get(), queryCtx_.get()};
-  facebook::velox::test::VectorMaker vectorMaker_{execCtx_.pool()};
 
  private:
   // Converts timestamp as bigint according to unit, and compares it with the
@@ -1649,7 +1641,7 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
         },
         TIMESTAMP_UTC());
     auto dictionaryVector = BaseVector::wrapInDictionary(
-        nullptr, makeIndicesInReverse(3, pool_.get()), 3, dictionaryValues);
+        nullptr, makeIndicesInReverse(3), 3, dictionaryValues);
     roundtripVector(dictionaryVector);
 
     using NullableTimestampArray =
@@ -2335,9 +2327,6 @@ class ArrowBridgeArrayImportTest : public ArrowBridgeArrayExportTest {
     arrowArray = makeArrowArray(buffers, 2, 4, 0);
     EXPECT_NO_THROW(importFromArrow(arrowSchema, arrowArray, pool_.get()));
   }
-
-  std::shared_ptr<memory::MemoryPool> pool_{
-      memory::memoryManager()->addLeafPool()};
 };
 
 class ArrowBridgeArrayImportAsViewerTest : public ArrowBridgeArrayImportTest {
