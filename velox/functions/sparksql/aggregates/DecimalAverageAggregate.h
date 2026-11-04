@@ -94,7 +94,7 @@ class DecimalAverageAggregate {
     int64_t overflow{0};
     int64_t count{0};
 
-    DecimalAverageAggregate<TInputType, TResultType, throwOnOverflow>* fn;
+    DecimalAverageAggregate* fn;
 
     static constexpr bool is_aligned_ = true;
 
@@ -102,7 +102,7 @@ class DecimalAverageAggregate {
 
     AccumulatorType(
         HashStringAllocator* /*allocator*/,
-        DecimalAverageAggregate<TInputType, TResultType, throwOnOverflow>* fn)
+        DecimalAverageAggregate* fn)
         : fn(fn) {}
 
     FOLLY_ALWAYS_INLINE bool addInput(
