@@ -4658,6 +4658,33 @@ TEST_F(WriterTest, canonicalChunkStatsWritesV2Section) {
       tablet->hasOptionalSection(std::string(nimble::kChunkStatsV2Section)));
 }
 
+TEST_F(WriterTest, chunkStatsWrittenForSingleChunkStreamsByDefault) {
+  // One stripe with one chunk per stream still gets chunk stats, so readers
+  // can prune the whole stripe with them.
+  velox::test::VectorMaker vectorMaker{leafPool_.get()};
+  auto vector = vectorMaker.rowVector(
+      {"c1"}, {vectorMaker.flatVector<int32_t>({1, 2, 3})});
+
+  std::string file;
+  auto writeFile = std::make_unique<velox::InMemoryWriteFile>(&file);
+  nimble::Writer writer(
+      vector->type(),
+      std::move(writeFile),
+      *rootPool_,
+      {
+          .enableChunkStats = true,
+          .enableChunking = true,
+      });
+  writer.write(vector);
+  writer.close();
+
+  auto readFile = std::make_shared<velox::InMemoryReadFile>(file);
+  auto tablet = nimble::TabletReader::create(
+      readFile, leafPool_.get(), makeTestTabletOptions(leafPool_.get()));
+  ASSERT_EQ(tablet->stripeCount(), 1);
+  EXPECT_NE(tablet->stripeIdentifier(0).chunkStats(), nullptr);
+}
+
 TEST_F(WriterTest, conflictingChunkStatsVersionsFail) {
   auto type = velox::ROW({{"c1", velox::INTEGER()}});
   std::string file;
