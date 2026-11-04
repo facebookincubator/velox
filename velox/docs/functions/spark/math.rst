@@ -49,6 +49,8 @@ Mathematical Functions
 .. spark:function:: add(x, y) -> [same as x]
 
     Returns the result of adding x to y. The types of x and y must be the same.
+    For integral types, overflow wraps around, or is an error when Spark ANSI
+    mode is enabled (``spark.ansi_enabled``).
     For interval inputs (``interval day to second`` and
     ``interval year to month``), overflow always throws an exception.
     Corresponds to Spark's operator ``+``.
@@ -235,7 +237,8 @@ Mathematical Functions
 
     Returns the results of dividing x by y. Performs the integer division truncates toward zero.
     Supported types are integral types, x and y must have the same type.
-    Division by zero or overflow results in null. ::
+    Division by zero results in null and BIGINT overflow wraps around, or both
+    are an error when Spark ANSI mode is enabled (``spark.ansi_enabled``). ::
 
         SELECT 3 div 2; -- 1
         SELECT 1L div 2L; -- 0
@@ -245,6 +248,8 @@ Mathematical Functions
 
     Returns the results of dividing x by y. Performs floating point division.
     Supported type is DOUBLE.
+    Division by zero results in null, or an error when Spark ANSI mode is
+    enabled (``spark.ansi_enabled``).
     Corresponds to Spark's operator ``/``. ::
 
         SELECT 3 / 2; -- 1.5
@@ -348,6 +353,8 @@ Mathematical Functions
 .. spark:function:: multiply(x, y) -> [same as x]
 
     Returns the result of multiplying x by y. The types of x and y must be the same.
+    For integral types, overflow wraps around, or is an error when Spark ANSI
+    mode is enabled (``spark.ansi_enabled``).
     Corresponds to Spark's operator ``*``.
 
 .. spark:function:: multiply(x, y) -> [decimal]
@@ -508,6 +515,8 @@ Mathematical Functions
 .. spark:function:: subtract(x, y) -> [same as x]
 
     Returns the result of subtracting y from x. The types of x and y must be the same.
+    For integral types, overflow wraps around, or is an error when Spark ANSI
+    mode is enabled (``spark.ansi_enabled``).
     For interval inputs (``interval day to second`` and
     ``interval year to month``), overflow always throws an exception.
     Corresponds to Spark's operator ``-``.
