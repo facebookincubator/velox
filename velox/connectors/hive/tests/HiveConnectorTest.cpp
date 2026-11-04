@@ -28,6 +28,8 @@
 #include "velox/exec/tests/utils/PlanBuilder.h"
 #include "velox/expression/ExprConstants.h"
 #include "velox/expression/ExprToSubfieldFilter.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneRegistration.h"
+#include "velox/functions/prestosql/types/TimestampWithTimeZoneType.h"
 
 namespace facebook::velox::connector::hive {
 namespace {
@@ -712,6 +714,37 @@ TEST_F(HiveConnectorTest, extractFiltersFromRemainingFilter) {
     ASSERT_TRUE(bytesValues->values().count("FRANCE"));
     ASSERT_TRUE(bytesValues->values().count("GERMANY"));
   }
+}
+
+// A filter on a TIMESTAMP WITH TIME ZONE column would translate to a
+// BigintRange over the packed millis-plus-zone-key domain, which is not
+// order- or equality-isomorphic to the instant domain. Pushing the filter
+// would silently drop rows, so the leaf-call parser rejects it. Verify
+// extractFiltersFromRemainingFilter leaves such a filter as the remaining
+// expression rather than converting it to a subfield filter.
+TEST_F(HiveConnectorTest, extractFiltersRejectsTimestampWithTimeZone) {
+  registerTimestampWithTimeZoneType();
+
+  auto queryCtx = core::QueryCtx::create();
+  exec::SimpleExpressionEvaluator evaluator(queryCtx.get(), pool_.get());
+
+  auto expr = std::make_shared<core::CallTypedExpr>(
+      BOOLEAN(),
+      "eq",
+      std::make_shared<core::FieldAccessTypedExpr>(
+          TIMESTAMP_WITH_TIME_ZONE(), "ts"),
+      std::make_shared<core::ConstantTypedExpr>(
+          TIMESTAMP_WITH_TIME_ZONE(), Variant(int64_t{0})));
+
+  SubfieldFilters filters;
+  double sampleRate = 1;
+  auto remaining =
+      extractFiltersFromRemainingFilter(expr, &evaluator, filters, sampleRate);
+
+  ASSERT_TRUE(remaining);
+  EXPECT_EQ(remaining->toString(), "eq(\"ts\",0)");
+  EXPECT_TRUE(filters.empty());
+  EXPECT_EQ(sampleRate, 1);
 }
 
 TEST_F(HiveConnectorTest, prestoTableSampling) {

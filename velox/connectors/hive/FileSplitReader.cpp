@@ -35,6 +35,7 @@ VectorPtr newConstantFromString(
   if (!value.has_value()) {
     return BaseVector::createNullConstant(type, 1, pool);
   }
+
   return BaseVector::createConstant(
       type,
       PartitionValue::fromString(
