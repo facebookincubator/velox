@@ -471,7 +471,10 @@ void RowColumn::Stats::removeOrUpdateCellStats(
       ++nullCount_;
     }
   }
-  invalidateMinMaxColumnStats();
+  // The min and max of a fixed-width column stay exact after a removal.
+  if (!isFixedWidth()) {
+    invalidateMinMaxColumnStats();
+  }
 }
 
 // static

@@ -2913,6 +2913,12 @@ TEST_P(RowContainerTest, columnStatsMixedTypes) {
   // The first 10 rows have 2 nulls.
   rowContainer->eraseRows(folly::Range(rows.data(), 10));
   checkStats(kNumRows - 10, 849);
+  for (auto i = 0; i < numCols; ++i) {
+    SCOPED_TRACE(fmt::format("column {}", i));
+    EXPECT_EQ(
+        rowContainer->columnStats(i).value().minMaxColumnStatsValid(),
+        i < numFixed);
+  }
 
   // Erasing the remaining rows leaves no cells.
   rowContainer->eraseRows(folly::Range(rows.data() + 10, kNumRows - 10));
@@ -2998,6 +3004,7 @@ TEST_F(RowContainerTest, removeFixedWidthColumnStats) {
   EXPECT_EQ(stats.sumBytes(), kWidth);
   EXPECT_EQ(stats.minBytes(), kWidth);
   EXPECT_EQ(stats.maxBytes(), kWidth);
+  EXPECT_TRUE(stats.minMaxColumnStatsValid());
 
   // A non-null cell set to null moves from the non-null to the null count.
   stats.removeOrUpdateCellStats(0, false, true);
@@ -3006,6 +3013,7 @@ TEST_F(RowContainerTest, removeFixedWidthColumnStats) {
   EXPECT_EQ(stats.sumBytes(), 0);
   EXPECT_EQ(stats.minBytes(), 0);
   EXPECT_EQ(stats.maxBytes(), 0);
+  EXPECT_TRUE(stats.minMaxColumnStatsValid());
 }
 
 TEST_F(RowContainerTest, setAllNull) {
