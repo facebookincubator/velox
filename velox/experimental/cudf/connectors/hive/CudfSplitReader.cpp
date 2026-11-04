@@ -563,7 +563,8 @@ cudf::io::source_info makeSourceInfo(const CudfHiveConnectorSplit& split) {
 
 bool CudfSplitReader::ignoreMissingFiles() const {
   const HiveConfig hiveConfig(cudfHiveConfig_->config());
-  return hiveConfig.ignoreMissingFiles(connectorQueryCtx_->sessionProperties());
+  return hiveConfig.ignoreMissingFiles(
+      connectorQueryCtx_->sessionProperties(), tableHandle_->tableParameters());
 }
 
 void CudfSplitReader::markSplitEmpty() {
