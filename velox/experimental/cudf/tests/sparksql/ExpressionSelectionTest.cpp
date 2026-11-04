@@ -319,8 +319,10 @@ TEST_F(CudfSparkExpressionSelectionTest, signatureVarargsHashWithSeed) {
   ASSERT_TRUE(canExprRunOnGpu(multiCol, queryCtx_.get(), pool_.get()));
 
   // cuDF's Spark hash rejects non-microsecond timestamps at any nesting depth
-  // and arrays of rows. The default timestamp unit is nanoseconds.
+  // and arrays of rows. The default timestamp unit is nanoseconds. The GPU
+  // evaluator receives no column for a constant data argument.
   auto unsupportedRowType = ROW({
+      {"a", BIGINT()},
       {"ts", TIMESTAMP()},
       {"row_ts", ROW({{"ts", TIMESTAMP()}})},
       {"arr_row", ARRAY(ROW({{"x", INTEGER()}}))},
@@ -329,6 +331,7 @@ TEST_F(CudfSparkExpressionSelectionTest, signatureVarargsHashWithSeed) {
            "hash_with_seed(42, ts)",
            "hash_with_seed(42, row_ts)",
            "hash_with_seed(42, arr_row)",
+           "hash_with_seed(42, a, 7)",
        }) {
     SCOPED_TRACE(sql);
     auto expr = optimizeTypedExpr(
@@ -339,15 +342,6 @@ TEST_F(CudfSparkExpressionSelectionTest, signatureVarargsHashWithSeed) {
         {.parseIntegerAsBigint = false, .functionPrefix = ""});
     ASSERT_FALSE(canExprRunOnGpu(expr, queryCtx_.get(), pool_.get()));
   }
-
-  // The GPU evaluator receives no column for a constant data argument.
-  auto constantArg = optimizeTypedExpr(
-      "hash_with_seed(42, a, 7)",
-      rowType_,
-      queryCtx_.get(),
-      execCtx_.get(),
-      {.parseIntegerAsBigint = false, .functionPrefix = ""});
-  ASSERT_FALSE(canExprRunOnGpu(constantArg, queryCtx_.get(), pool_.get()));
 
   // Single-column hash_with_seed is supported.
   auto singleCol = optimizeTypedExpr(
