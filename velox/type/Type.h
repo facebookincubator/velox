@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include <fmt/format.h>
 #include <folly/CPortability.h>
 #include <folly/Random.h>
 #include <folly/container/F14Set.h>
@@ -2469,43 +2470,6 @@ struct hasher<::facebook::velox::UnknownValue> {
   size_t operator()(const ::facebook::velox::UnknownValue /* value */) const {
     return 0;
   }
-};
-
-// Helper functions to allow TypeKind and some common variations to be
-// transparently used by folly::sformat.
-//
-// e.g: folly::sformat("type: {}", typeKind);
-template <>
-class FormatValue<facebook::velox::TypeKind> {
- public:
-  explicit FormatValue(const facebook::velox::TypeKind& type) : type_(type) {}
-
-  template <typename FormatCallback>
-  void format(FormatArg& arg, FormatCallback& cb) const {
-    return format_value::formatString(
-        facebook::velox::TypeKindName::toName(type_), arg, cb);
-  }
-
- private:
-  facebook::velox::TypeKind type_;
-};
-
-/// Prints all types derived from `velox::Type`.
-template <typename T>
-class FormatValue<
-    std::shared_ptr<T>,
-    typename std::enable_if_t<std::is_base_of_v<facebook::velox::Type, T>>> {
- public:
-  explicit FormatValue(const std::shared_ptr<const facebook::velox::Type>& type)
-      : type_(type) {}
-
-  template <typename FormatCallback>
-  void format(FormatArg& arg, FormatCallback& cb) const {
-    return format_value::formatString(type_->toString(), arg, cb);
-  }
-
- private:
-  std::shared_ptr<const facebook::velox::Type> type_;
 };
 
 } // namespace folly

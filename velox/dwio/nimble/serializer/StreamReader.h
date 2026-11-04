@@ -23,6 +23,7 @@
 
 #include <folly/container/F14Map.h>
 #include <folly/coro/Task.h>
+#include "velox/buffer/Buffer.h"
 #include "velox/common/memory/Memory.h"
 #include "velox/dwio/nimble/common/RowRange.h"
 #include "velox/dwio/nimble/common/Vector.h"
@@ -36,12 +37,11 @@ namespace facebook::nimble {
 class EncodingView;
 class FieldReader;
 class FieldReaderFactory;
-class InMemoryChunkedStream;
 class Type;
 
 /// Decodes selected rows from the streams of one projected Nimble type through
 /// FieldReader. Scalar leaves use Decoder's random-access EncodingView path.
-/// Requires an EncodingView for every present stream.
+/// Requires an EncodingView for the encoding of every chunk.
 class StreamReader {
  public:
   /// Binds the projected schema and initializes its reusable reader metadata.
@@ -55,7 +55,7 @@ class StreamReader {
   /// Decodes source ranges contiguously starting at `outputOffset`.
   /// Source ranges must be non-empty, ordered by `startRow`, and disjoint.
   /// `streams` must follow the projected schema's serialization traversal
-  /// order and contain one encoded chunk per present stream.
+  /// order. A present stream can hold several chunks.
   /// String outputs retain backing buffers across calls so values written by
   /// earlier calls remain valid until the assembled output is released.
   /// Inputs and output must remain valid until the returned task completes.
@@ -108,16 +108,17 @@ class StreamReader {
   // projected stream.
   void prepareRead(std::span<const std::string_view> streams);
 
-  // Loads the single encoded chunk of one stream. The chunk's buffers stay
-  // alive until the next reset().
-  std::string_view loadChunk(std::string_view stream);
+  // Splits one stream into the encodings of its chunks, in stream order, and
+  // stores them in loadedChunks_. Decompresses the encodings of compressed
+  // chunks into buffers that stay alive until the next reset().
+  void loadChunks(std::string_view stream);
 
   // Rebuilds the FieldReader tree over one stripe's streams in the cached
   // reader. Rebinds the decoders of the streams that stay present, creates the
   // decoders of new streams and drops those of absent streams.
   void rebuildReader(std::span<const std::string_view> streams);
 
-  // Creates the view of one encoded chunk for the decoders.
+  // Creates the view of the encoding of one chunk for the decoders.
   std::shared_ptr<const EncodingView> makeEncodingView(
       std::string_view encoding) const;
 
@@ -163,8 +164,17 @@ class StreamReader {
   // i is present.
   Vector<uint8_t> cachedKey_;
 
-  // Owns outer-chunk decompression buffers referenced by decoders.
-  std::vector<std::unique_ptr<InMemoryChunkedStream>> chunkedStreams_;
+  // Keeps the decompressed bytes of compressed chunks alive until reset(),
+  // because the decoders' views point into them. Buffers from every stream of
+  // the bound stripe accumulate in load order. Nothing looks them up, so the
+  // order has no meaning.
+  std::vector<velox::BufferPtr> decompressedChunks_;
+
+  // Holds the encodings of the stream that loadChunks() split last, one per
+  // chunk in stream order, for the decoder that binds them next. Reused across
+  // calls to avoid an allocation per stream. Owns no bytes: each view points
+  // into the stream or into a buffer in decompressedChunks_.
+  std::vector<std::string_view> loadedChunks_;
 
   // Set while a stripe is bound to cachedReader_.
   bool streamsBound_{false};

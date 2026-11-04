@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include <functional>
 #include <string_view>
 
 #include "velox/functions/prestosql/tests/CastBaseTest.h"
@@ -45,7 +46,7 @@ class TimestampWithTimeZoneCastTest : public functions::test::CastBaseTest {
     auto parsed =
         util::fromTimestampWithTimezoneString(
             str.c_str(), str.size(), util::TimestampParseMode::kPrestoCast)
-            .thenOrThrow(folly::identity, [&](const Status& status) {
+            .thenOrThrow(std::identity{}, [&](const Status& status) {
               VELOX_USER_FAIL("{}", status.message());
             });
 

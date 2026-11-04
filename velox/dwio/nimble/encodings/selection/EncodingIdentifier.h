@@ -119,6 +119,15 @@ struct EncodingIdentifiers {
     static constexpr NestedEncodingIdentifier Offsets = 2;
   };
 
+  struct BlockBitPackingV2 {
+    // Nested per-block metadata sub-streams for BlockBitPackingV2: the
+    // per-block baselines, the per-block bit widths, and the ascending
+    // per-block data offsets.
+    static constexpr NestedEncodingIdentifier Baselines = 0;
+    static constexpr NestedEncodingIdentifier BitWidths = 1;
+    static constexpr NestedEncodingIdentifier Offsets = 2;
+  };
+
   struct For {
     static constexpr NestedEncodingIdentifier BitWidths = 0;
     static constexpr NestedEncodingIdentifier References = 1;

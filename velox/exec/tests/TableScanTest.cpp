@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include <atomic>
+#include <functional>
 #include <shared_mutex>
 
 #include <fmt/ranges.h>
@@ -2403,7 +2404,7 @@ TEST_F(TableScanTest, partitionedTableTimestampKey) {
   Timestamp ts =
       util::fromTimestampString(
           StringView(partitionValue), util::TimestampParseMode::kPrestoCast)
-          .thenOrThrow(folly::identity, [&](const Status& status) {
+          .thenOrThrow(std::identity{}, [&](const Status& status) {
             VELOX_USER_FAIL("{}", status.message());
           });
   // Read timestamp partition value as UTC.
@@ -5623,7 +5624,7 @@ TEST_F(TableScanTest, timestampPartitionKey) {
                   auto t = util::fromTimestampString(
                                inputs[i], util::TimestampParseMode::kPrestoCast)
                                .thenOrThrow(
-                                   folly::identity, [&](const Status& status) {
+                                   std::identity{}, [&](const Status& status) {
                                      VELOX_USER_FAIL("{}", status.message());
                                    });
                   if (asLocalTime) {
@@ -5760,8 +5761,8 @@ TEST_F(TableScanTest, readFlatMapAsStruct) {
       keys,
       {
           makeFlatIdentityVector<int64_t>(kSize),
-          makeFlatVector<int64_t>(kSize, folly::identity, nullEvery(5)),
-          makeFlatVector<int64_t>(kSize, folly::identity, nullEvery(7)),
+          makeFlatVector<int64_t>(kSize, std::identity{}, nullEvery(5)),
+          makeFlatVector<int64_t>(kSize, std::identity{}, nullEvery(7)),
       });
   auto vector = makeRowVector({c0});
   auto config = std::make_shared<dwrf::Config>();

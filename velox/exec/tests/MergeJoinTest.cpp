@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#include <functional>
+
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/testutil/TestValue.h"
 #include "velox/exec/PlanNodeStats.h"
@@ -364,7 +366,7 @@ class MergeJoinTest : public HiveConnectorTestBase {
     createDuckDbTable("t", leftInput);
     createDuckDbTable("u", rightInput);
 
-    testJoins(leftInput, rightInput, folly::identity);
+    testJoins(leftInput, rightInput, std::identity{});
     testJoins(
         leftInput,
         rightInput,
