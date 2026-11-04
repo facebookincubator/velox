@@ -15,11 +15,11 @@
  */
 #pragma once
 
-#include "velox/connectors/hive/FileColumnHandle.h"
+#include "velox/connectors/common/FileColumnHandle.h"
 #include "velox/dwio/common/ScanSpec.h"
 #include "velox/vector/ComplexVector.h"
 
-namespace facebook::velox::connector::hive {
+namespace facebook::velox::connector {
 
 /// Apply an extraction chain to a vector, producing the output vector.
 /// The input vector must have a type compatible with the chain's expected
@@ -44,4 +44,4 @@ void configureExtractionScanSpec(
     common::ScanSpec& spec,
     memory::MemoryPool* pool);
 
-} // namespace facebook::velox::connector::hive
+} // namespace facebook::velox::connector

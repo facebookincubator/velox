@@ -14,8 +14,9 @@
  * limitations under the License.
  */
 
-#include "velox/connectors/hive/PartitionValue.h"
+#include "velox/connectors/common/PartitionValue.h"
 
+#include <functional>
 #include <string>
 #include <type_traits>
 
@@ -25,7 +26,7 @@
 #include "velox/type/Conversions.h"
 #include "velox/type/DecimalUtil.h"
 
-namespace facebook::velox::connector::hive {
+namespace facebook::velox::connector {
 namespace {
 
 template <TypeKind kind>
@@ -60,7 +61,7 @@ Variant fromStringImpl(
     return Variant::create<kind>(std::string(value));
   } else {
     auto converted = util::Converter<kind>::tryCast(value).thenOrThrow(
-        folly::identity,
+        std::identity{},
         [&](const Status& status) { VELOX_USER_FAIL("{}", status.message()); });
     if constexpr (kind == TypeKind::TIMESTAMP) {
       if (type.equivalent(*TIMESTAMP()) &&
@@ -84,4 +85,4 @@ Variant PartitionValue::fromString(
       fromStringImpl, type.kind(), value, type, timestampMode, dateMode);
 }
 
-} // namespace facebook::velox::connector::hive
+} // namespace facebook::velox::connector

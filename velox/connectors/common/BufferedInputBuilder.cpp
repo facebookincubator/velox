@@ -14,10 +14,10 @@
  * limitations under the License.
  */
 
-#include "velox/connectors/hive/BufferedInputBuilder.h"
-#include "velox/connectors/hive/FileConnectorUtil.h"
+#include "velox/connectors/common/BufferedInputBuilder.h"
+#include "velox/connectors/common/FileConnectorUtil.h"
 
-namespace facebook::velox::connector::hive {
+namespace facebook::velox::connector {
 
 class DefaultBufferInputBuilder : public BufferedInputBuilder {
  public:
@@ -44,4 +44,4 @@ class DefaultBufferInputBuilder : public BufferedInputBuilder {
 std::shared_ptr<BufferedInputBuilder> BufferedInputBuilder::builder_ =
     std::make_shared<DefaultBufferInputBuilder>();
 
-} // namespace facebook::velox::connector::hive
+} // namespace facebook::velox::connector

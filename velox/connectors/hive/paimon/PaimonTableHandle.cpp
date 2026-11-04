@@ -62,10 +62,10 @@ PaimonTableHandle::PaimonTableHandle(
     std::unordered_map<std::string, std::string> options,
     common::SubfieldFilters subfieldFilters,
     core::TypedExprPtr remainingFilter,
-    std::vector<FileColumnHandlePtr> filterColumnHandles,
+    std::vector<connector::FileColumnHandlePtr> filterColumnHandles,
     double sampleRate,
     std::string dbName)
-    : FileTableHandle(
+    : connector::FileTableHandle(
           std::move(connectorId),
           std::move(tableName),
           std::move(subfieldFilters),
@@ -150,7 +150,7 @@ ConnectorTableHandlePtr PaimonTableHandle::create(
   double sampleRate{1.0};
   core::TypedExprPtr remainingFilter;
   common::SubfieldFilters filters;
-  std::vector<FileColumnHandlePtr> filterColumns;
+  std::vector<connector::FileColumnHandlePtr> filterColumns;
   VELOX_USER_CHECK(
       obj["subfieldFilters"].isArray(), "Expected Paimon filter array");
   if (auto it = obj.find("filterColumnHandles"); it != obj.items().end()) {

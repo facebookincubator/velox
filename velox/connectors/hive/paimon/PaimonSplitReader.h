@@ -15,7 +15,7 @@
  */
 #pragma once
 
-#include "velox/connectors/hive/FileSplitReader.h"
+#include "velox/connectors/common/FileSplitReader.h"
 #include "velox/connectors/hive/paimon/PaimonConnectorSplit.h"
 #include "velox/connectors/hive/paimon/PaimonTableHandle.h"
 
@@ -25,7 +25,7 @@ namespace facebook::velox::connector::hive::paimon {
 /// file at a time and reuses FileSplitReader for per-file preparation and batch
 /// reads, advancing past exhausted, empty or skipped files. The same ScanSpec
 /// is reused across files.
-class PaimonSplitReader : public FileSplitReader {
+class PaimonSplitReader : public connector::FileSplitReader {
  public:
   /// @param fileSplit FileConnectorSplit for the first data file.
   /// @param paimonSplit Complete logical split. The caller checks raw-read
@@ -33,12 +33,13 @@ class PaimonSplitReader : public FileSplitReader {
   /// @param partitionKeys Borrowed partition-column handles for the scan,
   ///        distinct from the partition values in paimonSplit.
   PaimonSplitReader(
-      const std::shared_ptr<const FileConnectorSplit>& fileSplit,
+      const std::shared_ptr<const connector::FileConnectorSplit>& fileSplit,
       std::shared_ptr<const PaimonConnectorSplit> paimonSplit,
       const std::shared_ptr<const PaimonTableHandle>& tableHandle,
-      const std::unordered_map<std::string, FileColumnHandlePtr>* partitionKeys,
+      const std::unordered_map<std::string, connector::FileColumnHandlePtr>*
+          partitionKeys,
       const ConnectorQueryCtx* connectorQueryCtx,
-      const std::shared_ptr<const FileConfig>& fileConfig,
+      const std::shared_ptr<const connector::FileConfig>& fileConfig,
       const RowTypePtr& readerOutputType,
       const std::shared_ptr<io::IoStatistics>& dataIoStats,
       const std::shared_ptr<io::IoStatistics>& metadataIoStats,
@@ -70,7 +71,7 @@ class PaimonSplitReader : public FileSplitReader {
 
  private:
   // Builds a FileConnectorSplit from a PaimonDataFile.
-  std::shared_ptr<FileConnectorSplit> makeFileConnectorSplit(
+  std::shared_ptr<connector::FileConnectorSplit> makeFileConnectorSplit(
       const PaimonDataFile& dataFile) const;
 
   // Reuses the current reader or lazily prepares the next non-empty file.
@@ -85,7 +86,7 @@ class PaimonSplitReader : public FileSplitReader {
 
   // FileConnectorSplits built from paimonSplit_->dataFiles(), one per file.
   // Used to switch the base reader between files during iteration.
-  std::vector<std::shared_ptr<FileConnectorSplit>> fileSplits_;
+  std::vector<std::shared_ptr<connector::FileConnectorSplit>> fileSplits_;
 
   // Index of the current file, or the next file to prepare between readers.
   size_t currentFileIndex_{0};

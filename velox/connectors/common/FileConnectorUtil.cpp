@@ -14,17 +14,17 @@
  * limitations under the License.
  */
 
-#include "velox/connectors/hive/FileConnectorUtil.h"
+#include "velox/connectors/common/FileConnectorUtil.h"
 
 #include <fmt/format.h>
 #include <unordered_map>
 
 #include "velox/common/config/Config.h"
-#include "velox/connectors/hive/FileColumnHandle.h"
-#include "velox/connectors/hive/FileConfig.h"
-#include "velox/connectors/hive/FileConnectorSplit.h"
-#include "velox/connectors/hive/FileTableHandle.h"
-#include "velox/connectors/hive/PartitionValue.h"
+#include "velox/connectors/common/FileColumnHandle.h"
+#include "velox/connectors/common/FileConfig.h"
+#include "velox/connectors/common/FileConnectorSplit.h"
+#include "velox/connectors/common/FileTableHandle.h"
+#include "velox/connectors/common/PartitionValue.h"
 #include "velox/dwio/common/Options.h"
 #include "velox/dwio/common/ReaderFactory.h"
 #include "velox/dwio/dwrf/common/Config.h"
@@ -39,7 +39,7 @@
 #include "velox/expression/ExprToSubfieldFilter.h"
 #include "velox/expression/FieldReference.h"
 
-namespace facebook::velox::connector::hive {
+namespace facebook::velox::connector {
 
 FormatScopedConfigs makeFormatScopedConfigs(
     const FileConfig& fileConfig,
@@ -1161,4 +1161,4 @@ std::unique_ptr<common::Filter> createRangeFilter(
       createRangeFilterInternal, type->kind(), lower, upper);
 }
 
-} // namespace facebook::velox::connector::hive
+} // namespace facebook::velox::connector

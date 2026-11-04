@@ -22,9 +22,9 @@
 #include "velox/common/base/Exceptions.h"
 #include "velox/common/config/Config.h"
 #include "velox/common/config/ConfigProperty.h"
-#include "velox/connectors/hive/HiveConfigMacrosDefine.h"
+#include "velox/connectors/common/FileConfigMacrosDefine.h"
 
-namespace facebook::velox::connector::hive {
+namespace facebook::velox::connector {
 
 /// Configuration for file-based data sources. Contains settings for file
 /// reading, I/O coalescing, format-specific options, and metadata caching.
@@ -38,9 +38,9 @@ class FileConfig {
   static void registerFormatProperties(
       std::vector<config::ConfigProperty>& properties);
 
-  // --- VELOX_HIVE_CONFIG_LEGACY properties ---
+  // --- VELOX_FILE_CONFIG_LEGACY properties ---
 
-  VELOX_HIVE_CONFIG_LEGACY(
+  VELOX_FILE_CONFIG_LEGACY(
       kReadTimestampPartitionValueAsLocalTimeSession,
       kReadTimestampPartitionValueAsLocalTime,
       readTimestampPartitionValueAsLocalTime,
@@ -50,7 +50,7 @@ class FileConfig {
       true,
       "Read timestamp partition values as local time.")
 
-  VELOX_HIVE_CONFIG_LEGACY(
+  VELOX_FILE_CONFIG_LEGACY(
       kPreserveFlatMapsInMemorySession,
       kPreserveFlatMapsInMemory,
       preserveFlatMapsInMemory,
@@ -60,7 +60,7 @@ class FileConfig {
       false,
       "Preserve flat maps in memory as FlatMapVectors.")
 
-  VELOX_HIVE_CONFIG_LEGACY(
+  VELOX_FILE_CONFIG_LEGACY(
       kReaderCollectColumnCpuMetricsSession,
       kReaderCollectColumnCpuMetrics,
       readerCollectColumnCpuMetrics,
@@ -70,7 +70,7 @@ class FileConfig {
       false,
       "Collect per-column CPU timing stats.")
 
-  VELOX_HIVE_CONFIG_LEGACY(
+  VELOX_FILE_CONFIG_LEGACY(
       kOrcFooterSpeculativeIoSizeSession,
       kOrcFooterSpeculativeIoSize,
       orcFooterSpeculativeIoSize,
@@ -80,7 +80,7 @@ class FileConfig {
       256UL << 10,
       "Speculative tail-read size in bytes for ORC files.")
 
-  VELOX_HIVE_CONFIG_LEGACY(
+  VELOX_FILE_CONFIG_LEGACY(
       kNimbleFooterSpeculativeIoSizeSession,
       kNimbleFooterSpeculativeIoSize,
       nimbleFooterSpeculativeIoSize,
@@ -90,7 +90,7 @@ class FileConfig {
       8UL << 20,
       "Speculative tail-read size in bytes for Nimble files.")
 
-  VELOX_HIVE_CONFIG_LEGACY(
+  VELOX_FILE_CONFIG_LEGACY(
       kNimblePreserveDictionaryEncodingSession,
       kNimblePreserveDictionaryEncoding,
       nimblePreserveDictionaryEncoding,
@@ -100,7 +100,7 @@ class FileConfig {
       false,
       "Preserve dictionary encoding for Nimble string column reads.")
 
-  VELOX_HIVE_CONFIG_LEGACY(
+  VELOX_FILE_CONFIG_LEGACY(
       kNimbleDictionaryAwareReadsSession,
       kNimbleDictionaryAwareReads,
       nimbleDictionaryAwareReads,
@@ -109,7 +109,7 @@ class FileConfig {
       bool,
       false,
       "Enable dictionary-aware reads for Nimble dictionary-encoded columns.")
-  VELOX_HIVE_CONFIG_LEGACY(
+  VELOX_FILE_CONFIG_LEGACY(
       kNimbleScanFastPathSession,
       kNimbleScanFastPath,
       nimbleScanFastPath,
@@ -118,7 +118,7 @@ class FileConfig {
       bool,
       false,
       "Route Nimble encodings through the scan fast path.")
-  VELOX_HIVE_CONFIG_LEGACY(
+  VELOX_FILE_CONFIG_LEGACY(
       kNimbleLazyColumnIoSession,
       kNimbleLazyColumnIo,
       nimbleLazyColumnIo,
@@ -128,9 +128,9 @@ class FileConfig {
       false,
       "Defer I/O for projected columns without pushdown filters, remaining filters, or transforms.")
 
-  // --- VELOX_HIVE_CONFIG properties ---
+  // --- VELOX_FILE_CONFIG properties ---
 
-  VELOX_HIVE_CONFIG_PROPERTY(
+  VELOX_FILE_CONFIG_PROPERTY(
       kUseColumnNamesSession,
       "use_column_names",
       bool,
@@ -138,7 +138,7 @@ class FileConfig {
       "Map table fields to file fields using names, not indices.")
   static constexpr const char* kUseColumnNames = "use-column-names";
 
-  VELOX_HIVE_CONFIG(
+  VELOX_FILE_CONFIG(
       kFileColumnNamesReadAsLowerCaseSession,
       isFileColumnNamesReadAsLowerCase,
       "file_column_names_read_as_lower_case",
@@ -148,7 +148,7 @@ class FileConfig {
   static constexpr const char* kFileColumnNamesReadAsLowerCase =
       "file-column-names-read-as-lower-case";
 
-  VELOX_HIVE_CONFIG_PROPERTY(
+  VELOX_FILE_CONFIG_PROPERTY(
       kIgnoreMissingFilesSession,
       "ignore_missing_files",
       bool,
@@ -160,7 +160,7 @@ class FileConfig {
         kIgnoreMissingFilesSessionProperty::defaultValue);
   }
 
-  VELOX_HIVE_CONFIG(
+  VELOX_FILE_CONFIG(
       kMaxCoalescedBytesSession,
       maxCoalescedBytes,
       "max-coalesced-bytes",
@@ -169,7 +169,7 @@ class FileConfig {
       "Maximum coalesced bytes for a read request.")
   static constexpr const char* kMaxCoalescedBytes = "max-coalesced-bytes";
 
-  VELOX_HIVE_CONFIG(
+  VELOX_FILE_CONFIG(
       kLoadQuantumSession,
       loadQuantum,
       "load-quantum",
@@ -178,7 +178,7 @@ class FileConfig {
       "Total size in bytes for a direct coalesce request.")
   static constexpr const char* kLoadQuantum = "load-quantum";
 
-  VELOX_HIVE_CONFIG(
+  VELOX_FILE_CONFIG(
       kReadStatsBasedFilterReorderDisabledSession,
       readStatsBasedFilterReorderDisabled,
       "stats_based_filter_reorder_disabled",
@@ -188,7 +188,7 @@ class FileConfig {
   static constexpr const char* kReadStatsBasedFilterReorderDisabled =
       "stats-based-filter-reorder-disabled";
 
-  VELOX_HIVE_CONFIG(
+  VELOX_FILE_CONFIG(
       kIndexEnabledSession,
       indexEnabled,
       "index_enabled",
@@ -197,7 +197,7 @@ class FileConfig {
       "Use cluster index for filter-based row pruning.")
   static constexpr const char* kIndexEnabled = "index-enabled";
 
-  VELOX_HIVE_CONFIG(
+  VELOX_FILE_CONFIG(
       kCacheMetadataSession,
       cacheMetadata,
       "cache_metadata",
@@ -206,7 +206,7 @@ class FileConfig {
       "Cache file metadata in AsyncDataCache.")
   static constexpr const char* kCacheMetadata = "cache-metadata";
 
-  VELOX_HIVE_CONFIG(
+  VELOX_FILE_CONFIG(
       kPinMetadataSession,
       pinMetadata,
       "pin_metadata",
@@ -215,7 +215,7 @@ class FileConfig {
       "Pin parsed metadata objects in reader cache.")
   static constexpr const char* kPinMetadata = "pin-metadata";
 
-  VELOX_HIVE_CONFIG(
+  VELOX_FILE_CONFIG(
       kCacheIndexSession,
       cacheIndex,
       "cache_index",
@@ -224,7 +224,7 @@ class FileConfig {
       "Cache index data in AsyncDataCache.")
   static constexpr const char* kCacheIndex = "cache-index";
 
-  VELOX_HIVE_CONFIG(
+  VELOX_FILE_CONFIG(
       kPinIndexSession,
       pinIndex,
       "pin_index",
@@ -233,7 +233,7 @@ class FileConfig {
       "Pin parsed index objects in reader cache.")
   static constexpr const char* kPinIndex = "pin-index";
 
-  VELOX_HIVE_CONFIG(
+  VELOX_FILE_CONFIG(
       kSelectiveNimbleReaderEnabledSession,
       selectiveNimbleReaderEnabled,
       "selective_nimble_reader_enabled",
@@ -241,7 +241,7 @@ class FileConfig {
       true,
       "Enable selective Nimble reader.")
 
-  VELOX_HIVE_CONFIG(
+  VELOX_FILE_CONFIG(
       kNimbleDirectBufferedInputEnabledSession,
       nimbleDirectBufferedInputEnabled,
       "nimble_direct_buffered_input_enabled",
@@ -253,9 +253,9 @@ class FileConfig {
       "demand. Small streams that fit in one quantum see no reduction. "
       "Streams coalesced with eager columns may also be loaded early.")
 
-  // --- VELOX_HIVE_CONFIG_PROPERTY properties ---
+  // --- VELOX_FILE_CONFIG_PROPERTY properties ---
 
-  VELOX_HIVE_CONFIG_PROPERTY(
+  VELOX_FILE_CONFIG_PROPERTY(
       kMaxCoalescedDistanceSession,
       "orc_max_merge_distance",
       std::string,
@@ -263,7 +263,7 @@ class FileConfig {
       "Maximum merge distance to combine read requests.")
   static constexpr const char* kMaxCoalescedDistance = "max-coalesced-distance";
 
-  VELOX_HIVE_CONFIG_PROPERTY(
+  VELOX_FILE_CONFIG_PROPERTY(
       kParallelUnitLoadCountSession,
       "parallel_unit_load_count",
       size_t,
@@ -272,7 +272,7 @@ class FileConfig {
   static constexpr const char* kParallelUnitLoadCount =
       "parallel-unit-load-count";
 
-  VELOX_HIVE_CONFIG_PROPERTY(
+  VELOX_FILE_CONFIG_PROPERTY(
       kReadTimestampUnitSession,
       "reader.timestamp_unit",
       uint8_t,
@@ -388,6 +388,6 @@ class FileConfig {
   const std::string connectorConfigPrefix_;
 };
 
-} // namespace facebook::velox::connector::hive
+} // namespace facebook::velox::connector
 
-#include "velox/connectors/hive/HiveConfigMacrosUndef.h"
+#include "velox/connectors/common/FileConfigMacrosUndef.h"

@@ -30,7 +30,7 @@ PaimonDataSource::PaimonDataSource(
     folly::Executor* ioExecutor,
     const ConnectorQueryCtx* connectorQueryCtx,
     const std::shared_ptr<PaimonConfig>& paimonConfig)
-    : FileDataSource(
+    : connector::FileDataSource(
           outputType,
           tableHandle,
           assignments,
@@ -72,7 +72,7 @@ void PaimonDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
   // Use the first file to enter the FileDataSource scan pipeline;
   // PaimonSplitReader keeps the full file list.
   const auto& firstFile = paimonSplit_->dataFiles().front();
-  auto firstFileSplit = std::make_shared<FileConnectorSplit>(
+  auto firstFileSplit = std::make_shared<connector::FileConnectorSplit>(
       paimonSplit_->connectorId,
       firstFile.path,
       paimonSplit_->fileFormat(),
@@ -83,10 +83,11 @@ void PaimonDataSource::addSplit(std::shared_ptr<ConnectorSplit> split) {
       /*_properties=*/std::nullopt,
       paimonSplit_->partitionKeys());
 
-  FileDataSource::addSplit(std::move(firstFileSplit));
+  connector::FileDataSource::addSplit(std::move(firstFileSplit));
 }
 
-std::unique_ptr<FileSplitReader> PaimonDataSource::createSplitReader() {
+std::unique_ptr<connector::FileSplitReader>
+PaimonDataSource::createSplitReader() {
   return std::make_unique<PaimonSplitReader>(
       split_,
       paimonSplit_,
@@ -107,7 +108,7 @@ void PaimonDataSource::setFromDataSource(
     std::unique_ptr<DataSource> sourceUnique) {
   auto* source = checkedPointerCast<PaimonDataSource>(sourceUnique.get());
   paimonSplit_ = std::move(source->paimonSplit_);
-  FileDataSource::setFromDataSource(std::move(sourceUnique));
+  connector::FileDataSource::setFromDataSource(std::move(sourceUnique));
   // Rebind the lazy reader's borrowed stats pointer after ownership transfer.
   checkedPointerCast<PaimonSplitReader>(splitReader_.get())
       ->setRuntimeStats(runtimeStats_);

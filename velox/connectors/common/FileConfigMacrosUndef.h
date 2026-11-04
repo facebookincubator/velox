@@ -15,15 +15,15 @@
  * limitations under the License.
  */
 
-// Undefines macros from HiveConfigMacrosDefine.h.
+// Undefines macros from FileConfigMacrosDefine.h.
 // Must be included after all macro usage.
-// No #pragma once — see HiveConfigMacrosDefine.h for explanation.
+// No #pragma once — see FileConfigMacrosDefine.h for explanation.
 
-#ifndef VELOX_HIVE_CONFIG_MACROS_DEFINED
-#error "HiveConfigMacrosUndef.h included without HiveConfigMacrosDefine.h"
+#ifndef VELOX_FILE_CONFIG_MACROS_DEFINED
+#error "FileConfigMacrosUndef.h included without FileConfigMacrosDefine.h"
 #endif
-#undef VELOX_HIVE_CONFIG_MACROS_DEFINED
+#undef VELOX_FILE_CONFIG_MACROS_DEFINED
 
-#undef VELOX_HIVE_CONFIG
-#undef VELOX_HIVE_CONFIG_LEGACY
-#undef VELOX_HIVE_CONFIG_PROPERTY
+#undef VELOX_FILE_CONFIG
+#undef VELOX_FILE_CONFIG_LEGACY
+#undef VELOX_FILE_CONFIG_PROPERTY

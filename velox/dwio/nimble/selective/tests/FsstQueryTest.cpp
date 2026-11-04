@@ -20,7 +20,7 @@
 #include <optional>
 #include <string_view>
 
-#include "velox/connectors/hive/FileConfig.h"
+#include "velox/connectors/common/FileConfig.h"
 #include "velox/core/QueryConfig.h"
 #include "velox/dwio/nimble/common/ChunkedStream.h"
 #include "velox/dwio/nimble/common/SchemaSerialization.h"
@@ -331,11 +331,11 @@ class FsstQueryTest : public HiveConnectorTestBase,
                       fastPath ? 113 : 7)
                   .connectorSessionProperty(
                       kHiveConnectorId,
-                      connector::hive::FileConfig::kNimbleScanFastPathSession,
+                      connector::FileConfig::kNimbleScanFastPathSession,
                       fastPath ? "true" : "false")
                   .connectorSessionProperty(
                       kHiveConnectorId,
-                      connector::hive::FileConfig::
+                      connector::FileConfig::
                           kNimblePreserveDictionaryEncodingSession,
                       preserve ? "true" : "false")
                   .copyResults(pool_.get());

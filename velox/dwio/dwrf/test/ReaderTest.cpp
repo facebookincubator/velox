@@ -23,8 +23,8 @@
 #include "folly/synchronization/Baton.h"
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/common/testutil/TestValue.h"
-#include "velox/connectors/hive/ExtractionUtils.h"
-#include "velox/connectors/hive/HiveConnectorUtil.h"
+#include "velox/connectors/common/ExtractionUtils.h"
+#include "velox/connectors/common/FileConnectorUtil.h"
 #include "velox/dwio/common/ExecutorBarrier.h"
 #include "velox/dwio/common/FileSink.h"
 #include "velox/dwio/common/tests/utils/BatchMaker.h"
@@ -41,6 +41,7 @@
 
 #include <fmt/core.h>
 #include <array>
+#include <functional>
 #include <future>
 #include <memory>
 #include <numeric>
@@ -956,7 +957,7 @@ TEST_F(TestReader, testSubfieldEstimatedSize) {
   auto subfields = makeSubfields({"a", "b.b"});
   folly::F14FastMap<std::string, std::vector<const common::Subfield*>>
       subfieldsByName = groupSubfields(subfields);
-  auto scanSpec = velox::connector::hive::makeScanSpec(
+  auto scanSpec = velox::connector::makeScanSpec(
       outputType, subfieldsByName, {}, {}, schema, {}, {}, {}, true, pool());
   readerOpts.setScanSpec(scanSpec);
 
@@ -976,7 +977,7 @@ TEST_F(TestReader, testSubfieldEstimatedSize) {
   auto subfields2 = makeSubfields({"a", "b"});
   folly::F14FastMap<std::string, std::vector<const common::Subfield*>>
       subfields2ByName = groupSubfields(subfields2);
-  auto scanSpec2 = velox::connector::hive::makeScanSpec(
+  auto scanSpec2 = velox::connector::makeScanSpec(
       outputType, subfields2ByName, {}, {}, schema, {}, {}, {}, true, pool());
   readerOpts2.setScanSpec(scanSpec2);
 
@@ -2730,7 +2731,7 @@ TEST_F(TestReader, failToReuseReaderNulls) {
       {
           makeFlatIdentityVector<int64_t>(11),
           makeFlatVector<int64_t>(
-              11, folly::identity, [](auto i) { return i % 3 == 0; }),
+              11, std::identity{}, [](auto i) { return i % 3 == 0; }),
       });
   // Set a null so that the children will not be loaded lazily.
   bits::setNull(c0->mutableRawNulls(), 10);
@@ -3301,7 +3302,7 @@ TEST_F(TestReader, readStructWithWholeBatchFiltered) {
   const vector_size_t batchSize = 10;
   std::vector<VectorPtr> children{makeFlatVector<int64_t>(
       vectorSize,
-      folly::identity,
+      std::identity{},
       // In the first batch, the parent Rows will all be null.
       [&](auto i) { return i < batchSize; })};
 
@@ -3904,10 +3905,10 @@ TEST_F(TestReader, extractionTransformAfterScanSpecReorder) {
   spec->childByName("id")->setFilter(
       std::make_unique<common::BigintRange>(1, 10, false));
 
-  using connector::hive::applyExtractionChain;
-  using connector::hive::ExtractionPathElement;
-  using connector::hive::ExtractionPathElementPtr;
-  using connector::hive::ExtractionStep;
+  using connector::applyExtractionChain;
+  using connector::ExtractionPathElement;
+  using connector::ExtractionPathElementPtr;
+  using connector::ExtractionStep;
   const std::vector<ExtractionPathElementPtr> keysChain = {
       ExtractionPathElement::simple(ExtractionStep::kMapKeys)};
   const std::vector<ExtractionPathElementPtr> sizeChain = {
@@ -4077,12 +4078,12 @@ TEST_F(TestReader, extractionTransformMapValuesStructField) {
   auto spec = std::make_shared<common::ScanSpec>("<root>");
   spec->addAllChildFields(*schema);
 
-  using connector::hive::applyExtractionChain;
-  using connector::hive::configureExtractionScanSpec;
-  using connector::hive::ExtractionPathElement;
-  using connector::hive::ExtractionPathElementPtr;
-  using connector::hive::ExtractionStep;
-  using connector::hive::NamedExtraction;
+  using connector::applyExtractionChain;
+  using connector::configureExtractionScanSpec;
+  using connector::ExtractionPathElement;
+  using connector::ExtractionPathElementPtr;
+  using connector::ExtractionStep;
+  using connector::NamedExtraction;
 
   // Configure extraction on the "col" spec with the sub-chain starting
   // from the MAP type: [MapValues, ArrayElements, StructField("x")].
@@ -4353,11 +4354,11 @@ TEST_F(TestReader, extractionNestedChainScanSpec) {
   spec->addAllChildFields(*schema);
 
   // Build extraction.
-  using connector::hive::configureExtractionScanSpec;
-  using connector::hive::ExtractionPathElement;
-  using connector::hive::ExtractionPathElementPtr;
-  using connector::hive::ExtractionStep;
-  using connector::hive::NamedExtraction;
+  using connector::configureExtractionScanSpec;
+  using connector::ExtractionPathElement;
+  using connector::ExtractionPathElementPtr;
+  using connector::ExtractionStep;
+  using connector::NamedExtraction;
 
   std::vector<NamedExtraction> extractions = {
       {"out",
@@ -4440,7 +4441,7 @@ TEST_F(TestReader, extractionNestedChainScanSpec) {
   // Configure the ScanSpec for reading.  In production, the extraction is
   // applied to the column's spec (not the root), so we configure "a"'s
   // spec directly with the sub-chain after StructField("a").
-  using connector::hive::applyExtractionChain;
+  using connector::applyExtractionChain;
   auto readSpec = std::make_shared<common::ScanSpec>("<root>");
   readSpec->addAllChildFields(*schema);
   auto* readASpec = readSpec->childByName("a");

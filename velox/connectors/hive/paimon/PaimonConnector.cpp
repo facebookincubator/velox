@@ -26,7 +26,7 @@ PaimonConnector::PaimonConnector(
     const std::string& id,
     std::shared_ptr<const config::ConfigBase> config,
     folly::Executor* ioExecutor)
-    : FileConnector(
+    : connector::FileConnector(
           id,
           std::make_shared<PaimonConfig>(std::move(config)),
           ioExecutor),

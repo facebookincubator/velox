@@ -194,8 +194,8 @@ void addColumnHandles(
         std::make_shared<const IcebergColumnHandle>(
             columnName,
             partitionColumnIds.contains(i)
-                ? FileColumnHandle::ColumnType::kPartitionKey
-                : FileColumnHandle::ColumnType::kRegular,
+                ? connector::FileColumnHandle::ColumnType::kPartitionKey
+                : connector::FileColumnHandle::ColumnType::kRegular,
             type,
             field));
   }
@@ -469,8 +469,8 @@ ColumnHandleMap IcebergTestBase::makeColumnHandles(
     const auto& columnName = rowType->nameOf(i);
     const auto& columnType = rowType->childAt(i);
     const auto columnHandleType = partitionIndices.contains(i)
-        ? FileColumnHandle::ColumnType::kPartitionKey
-        : FileColumnHandle::ColumnType::kRegular;
+        ? connector::FileColumnHandle::ColumnType::kPartitionKey
+        : connector::FileColumnHandle::ColumnType::kRegular;
     assignments.insert(
         {columnName,
          std::make_shared<HiveColumnHandle>(

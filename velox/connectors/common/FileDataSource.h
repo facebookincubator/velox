@@ -24,16 +24,16 @@
 #include "velox/common/io/IoStatistics.h"
 #include "velox/common/io/IoStatisticsRuntimeStats.h"
 #include "velox/connectors/Connector.h"
-#include "velox/connectors/hive/FileConnectorSplit.h"
-#include "velox/connectors/hive/FileConnectorUtil.h"
-#include "velox/connectors/hive/FileScanState.h"
-#include "velox/connectors/hive/FileSplitReader.h"
-#include "velox/connectors/hive/FileTableHandle.h"
+#include "velox/connectors/common/FileConnectorSplit.h"
+#include "velox/connectors/common/FileConnectorUtil.h"
+#include "velox/connectors/common/FileScanState.h"
+#include "velox/connectors/common/FileSplitReader.h"
+#include "velox/connectors/common/FileTableHandle.h"
 #include "velox/dwio/common/Statistics.h"
 #include "velox/exec/OperatorUtils.h"
 #include "velox/expression/Expr.h"
 
-namespace facebook::velox::connector::hive {
+namespace facebook::velox::connector {
 
 /// File-specific scan batch event with split metadata. Non-owning fields are
 /// valid only for the duration of the scan batch callback.
@@ -251,4 +251,4 @@ class FileDataSource : public DataSource {
   exec::FilterEvalCtx filterEvalCtx_;
 };
 
-} // namespace facebook::velox::connector::hive
+} // namespace facebook::velox::connector

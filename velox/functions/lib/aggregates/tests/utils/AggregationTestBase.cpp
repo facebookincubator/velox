@@ -196,14 +196,18 @@ int64_t spilledFiles(const exec::Task& task) {
   return spilledFiles;
 }
 
-// Add a BIGINT column of 4 distinct values to data.
+// Number of distinct values in the extra grouping key 'k0' of the companion
+// plans.
+constexpr int64_t kNumExtraGroupingKeys{4};
+
+// Add a BIGINT column of kNumExtraGroupingKeys distinct values to data.
 RowVectorPtr addExtraGroupingKeyImpl(
     const RowVectorPtr& data,
     const std::vector<std::string>& fieldNames,
     VectorMaker& vectorMaker) {
   auto children = data->children();
   children.push_back(vectorMaker.flatVector<int64_t>(
-      data->size(), [](auto row) { return row % 4; }));
+      data->size(), [](auto row) { return row % kNumExtraGroupingKeys; }));
   return vectorMaker.rowVector(fieldNames, children);
 }
 
@@ -448,7 +452,31 @@ void AggregationTestBase::testAggregationsWithCompanion(
     std::function<std::shared_ptr<exec::Task>(exec::test::AssertQueryBuilder&)>
         assertResults,
     const std::unordered_map<std::string, std::string>& config) {
-  auto dataWithExtraGroupingKey = addExtraGroupingKey(data, "k0");
+  const auto dataWithExtraGroupingKey = addExtraGroupingKey(data, "k0");
+  testAggregationsWithCompanionImpl(
+      data,
+      [&](PlanBuilder& builder) {
+        builder.values(dataWithExtraGroupingKey);
+        preAggregationProcessing(builder);
+      },
+      groupingKeys,
+      aggregates,
+      aggregatesArgTypes,
+      postAggregationProjections,
+      assertResults,
+      config);
+}
+
+void AggregationTestBase::testAggregationsWithCompanionImpl(
+    const std::vector<RowVectorPtr>& data,
+    const std::function<void(PlanBuilder&)>& makeSource,
+    const std::vector<std::string>& groupingKeys,
+    const std::vector<std::string>& aggregates,
+    const std::vector<std::vector<TypePtr>>& aggregatesArgTypes,
+    const std::vector<std::string>& postAggregationProjections,
+    const std::function<std::shared_ptr<exec::Task>(
+        exec::test::AssertQueryBuilder&)>& assertResults,
+    const std::unordered_map<std::string, std::string>& config) {
   auto groupingKeysWithPartialKey = groupingKeys;
   groupingKeysWithPartialKey.push_back("k0");
 
@@ -480,8 +508,7 @@ void AggregationTestBase::testAggregationsWithCompanion(
   {
     SCOPED_TRACE("Run partial + final");
     PlanBuilder builder(pool());
-    builder.values(dataWithExtraGroupingKey);
-    preAggregationProcessing(builder);
+    makeSource(builder);
     builder.partialAggregation(groupingKeysWithPartialKey, partialAggregates)
         .finalAggregation()
         .partialAggregation(groupingKeys, mergeAggregates)
@@ -500,8 +527,7 @@ void AggregationTestBase::testAggregationsWithCompanion(
   if (!groupingKeys.empty() && !hasOrderSensitive(data, aggregates, pool())) {
     SCOPED_TRACE("Run partial + final with spilling");
     PlanBuilder builder(pool());
-    builder.values(dataWithExtraGroupingKey);
-    preAggregationProcessing(builder);
+    makeSource(builder);
 
     // Spilling needs at least 2 batches of input. Use round-robin
     // repartitioning to split input into multiple batches.
@@ -562,8 +588,7 @@ void AggregationTestBase::testAggregationsWithCompanion(
   {
     SCOPED_TRACE("Run single");
     PlanBuilder builder(pool());
-    builder.values(dataWithExtraGroupingKey);
-    preAggregationProcessing(builder);
+    makeSource(builder);
     builder.singleAggregation(groupingKeysWithPartialKey, partialAggregates)
         .singleAggregation(groupingKeys, mergeAggregates)
         .project(extractExpressions);
@@ -580,8 +605,7 @@ void AggregationTestBase::testAggregationsWithCompanion(
   {
     SCOPED_TRACE("Run partial + intermediate + final");
     PlanBuilder builder(pool());
-    builder.values(dataWithExtraGroupingKey);
-    preAggregationProcessing(builder);
+    makeSource(builder);
     builder.partialAggregation(groupingKeysWithPartialKey, partialAggregates)
         .intermediateAggregation()
         .finalAggregation()
@@ -602,8 +626,7 @@ void AggregationTestBase::testAggregationsWithCompanion(
   {
     SCOPED_TRACE("Run partial + intermediate + final merge extract");
     PlanBuilder builder(pool());
-    builder.values(dataWithExtraGroupingKey);
-    preAggregationProcessing(builder);
+    makeSource(builder);
 
     builder.partialAggregation(groupingKeysWithPartialKey, partialAggregates)
         .intermediateAggregation()
@@ -624,8 +647,7 @@ void AggregationTestBase::testAggregationsWithCompanion(
   if (!groupingKeys.empty()) {
     SCOPED_TRACE("Run partial + local exchange + final");
     PlanBuilder builder(pool());
-    builder.values(dataWithExtraGroupingKey);
-    preAggregationProcessing(builder);
+    makeSource(builder);
     builder.partialAggregation(groupingKeysWithPartialKey, partialAggregates)
         .localPartition(groupingKeysWithPartialKey)
         .finalAggregation()
@@ -647,8 +669,7 @@ void AggregationTestBase::testAggregationsWithCompanion(
     SCOPED_TRACE(
         "Run partial + local exchange + intermediate + local exchange + final");
     PlanBuilder builder(pool());
-    builder.values(dataWithExtraGroupingKey);
-    preAggregationProcessing(builder);
+    makeSource(builder);
     builder.partialAggregation(groupingKeysWithPartialKey, partialAggregates)
         .localPartition(groupingKeysWithPartialKey)
         .intermediateAggregation()
@@ -681,7 +702,9 @@ void AggregationTestBase::testAggregationsWithCompanion(
     {
       SCOPED_TRACE("Streaming partial");
       auto partialResult = validateStreamingInTestAggregations(
-          [&](auto& builder) { builder.values(dataWithExtraGroupingKey); },
+          [&](auto& builder) {
+            builder.values(addExtraGroupingKey(data, "k0"));
+          },
           partialAggregates,
           config);
 
@@ -707,8 +730,7 @@ void AggregationTestBase::testAggregationsWithCompanion(
     // Produce real intermediate states from the raw input, add null-bearing
     // copies, then merge and validate using the original result assertion.
     PlanBuilder partialBuilder(pool());
-    partialBuilder.values(dataWithExtraGroupingKey);
-    preAggregationProcessing(partialBuilder);
+    makeSource(partialBuilder);
     partialBuilder
         .partialAggregation(groupingKeysWithPartialKey, partialAggregates)
         .finalAggregation();
@@ -1777,6 +1799,98 @@ void AggregationTestBase::testFailingAggregations(
         validateStreamingInTestAggregations(makeSource, aggregates, config),
         expectedMessage);
   }
+}
+
+void AggregationTestBase::AggregationTester::assertResults(
+    const std::string& duckDbSql) {
+  SCOPED_TRACE(duckDbSql);
+  run([&](auto& builder) { return builder.assertResults(duckDbSql); });
+}
+
+void AggregationTestBase::AggregationTester::assertResults(
+    const std::vector<RowVectorPtr>& expected) {
+  run([&](auto& builder) { return builder.assertResults(expected); });
+}
+
+void AggregationTestBase::AggregationTester::assertResults(
+    const RowVectorPtr& expected) {
+  assertResults(std::vector<RowVectorPtr>{expected});
+}
+
+void AggregationTestBase::AggregationTester::assertResults(
+    const AssertResults& assertResults) {
+  run(assertResults);
+}
+
+void AggregationTestBase::AggregationTester::assertError(
+    const std::string& message) {
+  VELOX_CHECK(
+      !preAggregation_ && projections_.empty() && !companion_,
+      "assertError supports only the input, grouping keys, aggregates and "
+      "configs");
+  test_.testFailingAggregations(
+      inputs_, groupingKeys_, aggregates_, message, config_);
+}
+
+void AggregationTestBase::AggregationTester::run(
+    const AssertResults& assertResults) {
+  VELOX_CHECK(!inputs_.empty(), "The inputs are not set");
+  VELOX_CHECK(!aggregates_.empty(), "The aggregates are not set");
+  ScopedChange<bool> incremental(
+      &test_.testIncremental_, test_.testIncremental_ && incremental_);
+
+  test_.testAggregations(
+      [&](PlanBuilder& builder) { addSource(builder); },
+      groupingKeys_,
+      aggregates_,
+      projections_,
+      assertResults,
+      config_);
+
+  if (companion_) {
+    SCOPED_TRACE("Companion functions");
+    test_.testAggregationsWithCompanionImpl(
+        inputs_,
+        [&](PlanBuilder& builder) {
+          addSource(builder);
+          // Add the extra grouping key after the pre-aggregation nodes, so a
+          // projection there doesn't need to carry it.
+          auto projections = builder.planNode()->outputType()->names();
+          projections.push_back(
+              fmt::format("row_number % {} AS k0", kNumExtraGroupingKeys));
+          builder.rowNumber({}).project(projections);
+        },
+        groupingKeys_,
+        aggregates_,
+        aggregateArgTypes(),
+        projections_,
+        assertResults,
+        config_);
+  }
+}
+
+void AggregationTestBase::AggregationTester::addSource(
+    PlanBuilder& builder) const {
+  builder.values(inputs_);
+  if (preAggregation_) {
+    preAggregation_(builder);
+  }
+}
+
+std::vector<std::vector<TypePtr>>
+AggregationTestBase::AggregationTester::aggregateArgTypes() const {
+  PlanBuilder builder(test_.pool());
+  addSource(builder);
+  builder.singleAggregation(groupingKeys_, aggregates_);
+  const auto& aggregationNode =
+      dynamic_cast<const core::AggregationNode&>(*builder.planNode());
+
+  std::vector<std::vector<TypePtr>> argTypes;
+  argTypes.reserve(aggregationNode.aggregates().size());
+  for (const auto& aggregate : aggregationNode.aggregates()) {
+    argTypes.push_back(aggregate.rawInputTypes);
+  }
+  return argTypes;
 }
 
 uint32_t aggregateAndReadRowSize(

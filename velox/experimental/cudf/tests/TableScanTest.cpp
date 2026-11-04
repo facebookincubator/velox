@@ -1133,7 +1133,7 @@ TEST_F(TableScanTest, partitionedTable) {
     const auto utcTimestamp =
         util::fromTimestampString(
             StringView(partitionValue), util::TimestampParseMode::kPrestoCast)
-            .thenOrThrow(folly::identity, [&](const Status& status) {
+            .thenOrThrow(std::identity{}, [&](const Status& status) {
               VELOX_USER_FAIL("{}", status.message());
             });
     auto localTimestamp = utcTimestamp;
