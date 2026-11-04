@@ -1653,6 +1653,21 @@ TEST_F(DateTimeFunctionsTest, dateTrunc) {
   }
 
   {
+    SCOPED_TRACE("Historical non-whole-minute timezone offset (Asia/Shanghai +08:05:43)");
+    setQueryTimeZone("Asia/Shanghai");
+    // 1900-01-01 12:00:00 UTC is 1900-01-01 20:05:43 in Asia/Shanghai.
+    // Truncating to minute in local time floors to 20:05:00, which is 11:59:17 UTC (-43 seconds).
+    EXPECT_EQ(
+        Timestamp(-2'208'988'843, 0),
+        dateTrunc("minute", Timestamp(-2'208'988'800, 123'456'789)));
+
+    // Long.MinValue + 12 seconds in Asia/Shanghai is -9223372007700 local seconds,
+    // an exact multiple of 60, so minute truncation returns the valid timestamp without overflow.
+    const Timestamp minPlus12(-9'223'372'036'843, 0);
+    EXPECT_EQ(minPlus12, dateTrunc("minute", minPlus12));
+  }
+
+  {
     SCOPED_TRACE("Smallest timestamps whose truncation is in range");
     const Timestamp millisecond(-9'223'372'036'855, 225'000'000);
     EXPECT_EQ(millisecond, dateTrunc("millisecond", millisecond));
