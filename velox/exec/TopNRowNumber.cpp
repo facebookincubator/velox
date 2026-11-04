@@ -322,6 +322,9 @@ char* TopNRowNumber::processRowWithinLimit<
       if (topRows.size() >= limit_) {
         return nullptr;
       }
+      // Rows are discarded only when at least limit_ rows remain.
+      // Since fewer rows are retained here, none have been discarded, so
+      // topRows.size() + 1 is the exact rank.
       partition.topRank = static_cast<int64_t>(topRows.size()) + 1;
     }
   }
