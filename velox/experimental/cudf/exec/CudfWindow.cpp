@@ -272,6 +272,9 @@ std::unique_ptr<cudf::column> computeFullPartitionAverage(
       results[0].results[1]->view(),
       stream,
       mr);
+  // repeat() borrows the mean and count columns from results. Wait for its
+  // GPU reads to finish before results goes out of scope.
+  stream.sync();
   return std::move(result->release()[0]);
 }
 
