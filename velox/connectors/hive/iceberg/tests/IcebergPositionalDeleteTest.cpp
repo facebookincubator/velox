@@ -29,6 +29,7 @@
 #include "velox/dwio/common/tests/utils/DataFiles.h"
 #include "velox/dwio/dwrf/reader/ReaderBase.h"
 #include "velox/dwio/dwrf/writer/FlushPolicy.h"
+#include "velox/exec/PlanNodeStats.h"
 #include "velox/exec/tests/utils/AssertQueryBuilder.h"
 
 namespace facebook::velox::connector::hive::iceberg {
@@ -148,7 +149,7 @@ class IcebergPositionalDeleteTest : public test::IcebergTestBase {
 
   // Writes the requested data files and delete files, then verifies the table
   // scan output against explicit expected values.
-  void assertPositionalDeletes(
+  std::shared_ptr<exec::Task> assertPositionalDeletes(
       const std::vector<DataFileSpec>& dataFiles,
       const std::vector<DeleteFileSpec>& deleteFiles,
       const std::vector<int64_t>& expectedValues,
@@ -190,7 +191,7 @@ class IcebergPositionalDeleteTest : public test::IcebergTestBase {
     }
 
     auto plan = makeIcebergTableScanPlan(ROW({"c0"}, {BIGINT()}));
-    exec::test::AssertQueryBuilder(plan)
+    return exec::test::AssertQueryBuilder(plan)
         .config(core::QueryConfig::kMaxSplitPreloadPerDriver, numPrefetchSplits)
         .splits(splits)
         .assertResults(
@@ -383,6 +384,21 @@ TEST_F(IcebergPositionalDeleteTest, singleBaseFileSinglePositionalDeleteFile) {
   assertSingleBaseFileSingleDeleteFile({}, sequence(0, kRowCount));
   assertSingleBaseFileSingleDeleteFile(sequence(0, kRowCount), {});
   assertSingleBaseFileSingleDeleteFile({20000, 29999}, sequence(0, kRowCount));
+}
+
+TEST_F(IcebergPositionalDeleteTest, reportsDeletedRowsAcrossSplits) {
+  auto task = assertPositionalDeletes(
+      {{"data", {kRowCount / 2, kRowCount / 2}}},
+      {{"delete_1", {{"data", sequence(0, 3 * kRowCount / 4)}}},
+       {"delete_2", {{"data", sequence(kRowCount / 2, kRowCount)}}}},
+      {},
+      /*numPrefetchSplits=*/1,
+      /*splitCount=*/2);
+
+  const auto stats = exec::toPlanStats(task->taskStats());
+  EXPECT_EQ(
+      stats.at("0").customStats.at("icebergPositionalDeleteRows").sum,
+      kRowCount);
 }
 
 // Verifies that deletes for one base file do not affect neighboring files.

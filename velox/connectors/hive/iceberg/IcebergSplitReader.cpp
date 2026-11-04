@@ -1125,6 +1125,11 @@ uint64_t IcebergSplitReader::next(uint64_t size, VectorPtr& output) {
       : nullptr;
 
   auto rowsScanned = baseRowReader_->next(actualSize, output, &mutation);
+  if (mutation.deletedRows != nullptr) {
+    ioStats_->addCounter(
+        "icebergPositionalDeleteRows",
+        RuntimeCounter(bits::countBits(mutation.deletedRows, 0, rowsScanned)));
+  }
 
   auto* pool = connectorQueryCtx_->memoryPool();
 
