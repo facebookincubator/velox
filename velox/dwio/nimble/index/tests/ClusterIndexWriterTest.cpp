@@ -1332,6 +1332,29 @@ TEST_F(ClusterIndexWriterTest, hierarchicalKeyChunksUseIntegralColumns) {
   }
   EXPECT_EQ(hierarchicalKeys, flatKeys);
 
+  // Batches of hierarchical keys cross the chunk boundary mid-batch, and the
+  // keys of the first chunk stay valid past it.
+  for (const auto& [startRow, maxKeys] :
+       std::vector<std::pair<uint32_t, size_t>>{
+           {0, 2}, {0, 6}, {1, 4}, {4, 1}}) {
+    SCOPED_TRACE(fmt::format("startRow={} maxKeys={}", startRow, maxKeys));
+    auto batchCursor = index->keyCursor(
+        RowRange{startRow, static_cast<uint32_t>(flatKeys.size())});
+    std::vector<velox::BufferPtr> buffers;
+    std::vector<std::string_view> keys;
+    while (batchCursor->hasNext()) {
+      batchCursor->next(maxKeys, keys, [&](size_t size) {
+        return buffers
+            .emplace_back(
+                velox::AlignedBuffer::allocate<char>(size, pool_.get()))
+            ->asMutable<void>();
+      });
+    }
+    EXPECT_EQ(
+        std::vector<std::string>(keys.begin(), keys.end()),
+        std::vector<std::string>(flatKeys.begin() + startRow, flatKeys.end()));
+  }
+
   const auto keyType = velox::ROW(
       {{keyColumns[0], velox::BOOLEAN()},
        {keyColumns[1], velox::TINYINT()},

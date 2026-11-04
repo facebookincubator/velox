@@ -13,8 +13,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/functions/lib/DateTimeFormatter.h"
+#include <functional>
+
 #include "velox/common/base/tests/GTestUtils.h"
+#include "velox/functions/lib/DateTimeFormatter.h"
 #include "velox/functions/lib/DateTimeFormatterBuilder.h"
 #include "velox/type/TimestampConversion.h"
 #include "velox/type/tz/TimeZoneMap.h"
@@ -60,7 +62,7 @@ class DateTimeFormatterTest : public testing::Test {
   static Timestamp fromTimestampString(const StringView& timestamp) {
     return util::fromTimestampString(
                timestamp, util::TimestampParseMode::kPrestoCast)
-        .thenOrThrow(folly::identity, [&](const Status& status) {
+        .thenOrThrow(std::identity{}, [&](const Status& status) {
           VELOX_USER_FAIL("{}", status.message());
         });
   }
@@ -68,14 +70,14 @@ class DateTimeFormatterTest : public testing::Test {
   std::shared_ptr<DateTimeFormatter> getJodaDateTimeFormatter(
       const std::string_view& format) const {
     return buildJodaDateTimeFormatter(format).thenOrThrow(
-        folly::identity,
+        std::identity{},
         [&](const Status& status) { VELOX_USER_FAIL("{}", status.message()); });
   }
 
   std::shared_ptr<DateTimeFormatter> getMysqlDateTimeFormatter(
       const std::string_view& format) const {
     return buildMysqlDateTimeFormatter(format).thenOrThrow(
-        folly::identity,
+        std::identity{},
         [&](const Status& status) { VELOX_USER_FAIL("{}", status.message()); });
   }
 
@@ -95,7 +97,7 @@ class DateTimeFormatterTest : public testing::Test {
   DateTimeResult dateTimeResult(
       Expected<DateTimeResult> dateTimeResultExpected) {
     return dateTimeResultExpected.thenOrThrow(
-        folly::identity,
+        std::identity{},
         [&](const Status& status) { VELOX_USER_FAIL("{}", status.message()); });
   }
 

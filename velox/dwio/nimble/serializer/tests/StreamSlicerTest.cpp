@@ -1065,6 +1065,7 @@ TEST_P(StreamSlicerPayloadApiTest, slicesForcedIntegerEncodings) {
       {EncodingType::Constant, {10, 10, 10, 10, 10, 10, 10}},
       {EncodingType::MainlyConstant, {10, 10, 10, 20, 10, 10, 30}},
       {EncodingType::BlockBitPacking, {10, 11, 12, 13, 14, 15, 16}},
+      {EncodingType::BlockBitPackingV2, {10, 11, 12, 13, 14, 15, 16}},
       {EncodingType::PFOR, {10, 11, 12, 13, 14, 15, 16}},
       {EncodingType::SimdForBitpack, {10, 11, 12, 13, 14, 15, 16}},
       {EncodingType::Huffman, {10, 11, 10, 12, 11, 10, 13}},
