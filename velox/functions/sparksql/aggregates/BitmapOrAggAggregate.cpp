@@ -16,6 +16,8 @@
 
 #include "velox/functions/sparksql/aggregates/BitmapOrAggAggregate.h"
 
+#include <algorithm>
+#include <cstdint>
 #include <cstring>
 
 #include "velox/common/base/BitUtil.h"
@@ -57,18 +59,8 @@ class BitmapOrAggAggregate {
         return false;
       }
       auto bitmap = input.value();
-      VELOX_USER_CHECK_EQ(
-          bitmap.size(),
-          kBitmapNumBytes,
-          "bitmap_or_agg expects exactly {} byte bitmaps, got {}",
-          kBitmapNumBytes,
-          bitmap.size());
       init(allocator);
-      bits::orBits(
-          reinterpret_cast<uint64_t*>(data_),
-          reinterpret_cast<const uint64_t*>(bitmap.data()),
-          0,
-          kBitmapNumBits);
+      mergeBitmap(bitmap.data(), bitmap.size());
       return true;
     }
 
@@ -84,11 +76,7 @@ class BitmapOrAggAggregate {
           kBitmapNumBytes,
           "Unexpected intermediate bitmap size");
       init(allocator);
-      bits::orBits(
-          reinterpret_cast<uint64_t*>(data_),
-          reinterpret_cast<const uint64_t*>(serialized.data()),
-          0,
-          kBitmapNumBits);
+      mergeBitmap(serialized.data(), serialized.size());
       return true;
     }
 
@@ -113,6 +101,31 @@ class BitmapOrAggAggregate {
     }
 
    private:
+    // ORs up to min(size, kBitmapNumBytes) bytes of `source` into the
+    // accumulator. Mirrors Spark's BitmapExpressionUtils.bitmapMerge, which
+    // tolerates inputs shorter than the 4096-byte accumulator (only their
+    // bytes are merged, the remainder is left untouched) and ignores any bytes
+    // beyond 4096. Uses memcpy for the word-wise OR to avoid unaligned and
+    // strict-aliasing issues, and to prevent out-of-bounds reads on inputs
+    // shorter than the accumulator.
+    void mergeBitmap(const char* source, size_t size) {
+      const size_t bytesToMerge =
+          std::min(static_cast<size_t>(kBitmapNumBytes), size);
+      size_t offset = 0;
+      for (; offset + sizeof(uint64_t) <= bytesToMerge;
+           offset += sizeof(uint64_t)) {
+        uint64_t sourceWord;
+        uint64_t accWord;
+        std::memcpy(&sourceWord, source + offset, sizeof(uint64_t));
+        std::memcpy(&accWord, data_ + offset, sizeof(uint64_t));
+        accWord |= sourceWord;
+        std::memcpy(data_ + offset, &accWord, sizeof(uint64_t));
+      }
+      for (; offset < bytesToMerge; ++offset) {
+        data_[offset] |= static_cast<uint8_t>(source[offset]);
+      }
+    }
+
     bool writeResult(exec::out_type<Varbinary>& out) const {
       out.resize(kBitmapNumBytes);
       if (data_) {
