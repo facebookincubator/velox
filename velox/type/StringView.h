@@ -22,7 +22,6 @@
 #include <string_view>
 
 #include <folly/FBString.h>
-#include <folly/Format.h>
 #include <folly/Range.h>
 
 #include <fmt/format.h>

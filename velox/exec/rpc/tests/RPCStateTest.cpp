@@ -1086,6 +1086,125 @@ TEST_F(RPCStateTest, completedOverloadBacksOffBeforeReleasingAdmission) {
   EXPECT_TRUE(claimedRow->admissionEpoch.has_value());
 }
 
+class RPCStateOverloadedAttemptsTest : public RPCStateTest {
+ protected:
+  void SetUp() override {
+    RPCStateTest::SetUp();
+    state_->setStreamingMode(RPCStreamingMode::kPerRow);
+    limiter_->configure(
+        RPCRateLimiter::Config{
+            .adaptive = true,
+            .ceiling = kCeiling,
+            .floor = 1,
+        });
+  }
+
+  // Dispatches one row under an admission lease and returns the promise that
+  // completes it.
+  folly::Promise<RPCResponse> dispatch(int64_t rowId) {
+    auto tokens = limiter_->tryAcquireUpTo(1);
+    VELOX_CHECK_EQ(tokens.size(), 1);
+    auto [promise, future] = folly::makePromiseContract<RPCResponse>();
+    state_->addPendingRow(
+        state_,
+        rowId,
+        RPCState::RowLocation{0, 0},
+        std::move(future),
+        limiter_->makeLease(std::move(tokens.front())));
+    return std::move(promise);
+  }
+
+  // Dispatches one row, completes it with 'response' and claims it.
+  std::optional<RPCState::ReadyRow> completeAndClaim(RPCResponse response) {
+    auto promise = dispatch(42);
+    const auto numInFlight = state_->numInFlight();
+    promise.setValue(std::move(response));
+    waitFor([&]() { return state_->numInFlight() < numInFlight; });
+
+    ContinueFuture waitFuture{ContinueFuture::makeEmpty()};
+    std::optional<RPCState::ReadyRow> claimedRow;
+    EXPECT_EQ(
+        state_->tryClaimOrWait(&waitFuture, &claimedRow),
+        RPCState::ClaimResult::kClaimed);
+    return claimedRow;
+  }
+
+  static RPCResponse success() {
+    return RPCResponse::ok(42, makeTextPayload("answer"));
+  }
+
+  static RPCResponse successAfterOverloadedAttempts() {
+    auto response = success();
+    response.numOverloadedAttempts = 3;
+    return response;
+  }
+
+  static constexpr int64_t kCeiling{8};
+  std::shared_ptr<RPCRateLimiter> limiter_{
+      std::make_shared<RPCRateLimiter>("test.row.overloaded_attempts")};
+};
+
+// The attempts and the retried success are counted, and the shared limiter
+// does not back off for them.
+TEST_F(
+    RPCStateOverloadedAttemptsTest,
+    successAfterOverloadedAttemptsIsCounted) {
+  const auto row = completeAndClaim(successAfterOverloadedAttempts());
+
+  ASSERT_TRUE(row.has_value());
+  EXPECT_FALSE(row->sharedOverloadHandled);
+  EXPECT_EQ(limiter_->stats().limitMilli, kCeiling * 1000);
+  const auto snapshot = state_->operatorSnapshot();
+  EXPECT_EQ(snapshot.numOverloadedAttempts, 3);
+  EXPECT_EQ(snapshot.numSuccessesAfterOverload, 1);
+}
+
+TEST_F(
+    RPCStateOverloadedAttemptsTest,
+    successWithoutOverloadedAttemptsIsClean) {
+  const auto row = completeAndClaim(success());
+
+  ASSERT_TRUE(row.has_value());
+  EXPECT_EQ(limiter_->stats().limitMilli, kCeiling * 1000);
+  EXPECT_EQ(state_->operatorSnapshot().numSuccessesAfterOverload, 0);
+}
+
+// A failed response is classified by its own error kind. Its overloaded
+// attempts are still counted.
+TEST_F(
+    RPCStateOverloadedAttemptsTest,
+    failureAfterOverloadedAttemptsKeepsItsErrorKind) {
+  auto response = RPCResponse::failed(
+      42, velox::rpc::RPCErrorKind::kBackendError, "backend error");
+  response.numOverloadedAttempts = 3;
+
+  const auto row = completeAndClaim(std::move(response));
+
+  ASSERT_TRUE(row.has_value());
+  EXPECT_EQ(limiter_->stats().limitMilli, kCeiling * 1000);
+  const auto snapshot = state_->operatorSnapshot();
+  EXPECT_EQ(snapshot.numOverloadedAttempts, 3);
+  EXPECT_EQ(snapshot.numSuccessesAfterOverload, 0);
+}
+
+// A capacity rejection that goes back for another admission counts its
+// overloaded attempts too.
+TEST_F(RPCStateOverloadedAttemptsTest, capacityRetryCountsOverloadedAttempts) {
+  state_->setCapacityRetryEnabled(true);
+  auto rejected = RPCResponse::failed(
+      42, velox::rpc::RPCErrorKind::kRateLimited, "rejected");
+  rejected.numOverloadedAttempts = 1;
+  rejected.setCapacityRetry(
+      {.retryAfter = std::chrono::milliseconds(0),
+       .budget = std::chrono::seconds(60)});
+  auto promise = dispatch(42);
+
+  promise.setValue(std::move(rejected));
+  waitFor([&]() { return state_->hasRetries(); });
+
+  EXPECT_EQ(state_->operatorSnapshot().numOverloadedAttempts, 1);
+}
+
 TEST_F(RPCStateTest, completedRowMemoryIsAccountedUntilReleased) {
   auto root = memory::memoryManager()->addRootPool("rpcResponseAccounting");
   auto pool = root->addLeafChild("leaf");

@@ -16,6 +16,7 @@
 
 #include "velox/experimental/cudf/CudfNoDefaults.h"
 #include "velox/experimental/cudf/serializers/PrestoPageDevice.h"
+#include "velox/experimental/cudf/serializers/PrestoPageDeviceKernels.h"
 
 #include <cudf/detail/offsets_iterator.cuh>
 #include <cudf/detail/utilities/integer_utils.hpp>
@@ -36,6 +37,7 @@
 #include <cuda/std/functional>
 #include <cuda_runtime.h>
 #include <thrust/copy.h>
+#include <thrust/gather.h>
 #include <thrust/iterator/counting_iterator.h>
 #include <thrust/iterator/transform_iterator.h>
 #include <thrust/transform.h>
@@ -44,21 +46,12 @@
 #include <algorithm>
 #include <cstdint>
 #include <limits>
-#include <string>
 
 namespace facebook::velox::cudf_velox::detail {
 namespace {
 
 constexpr int kBlockSize = 256;
 constexpr size_t kMaxGridY = 65535;
-
-// Offsets indices fit cudf::size_type, as the bits of a cuDF column do.
-__device__ __forceinline__ int64_t
-offsetAt(const StringOffsets& offsets, int64_t index) {
-  return cudf::detail::input_offsetalator(
-      offsets.offsets,
-      offsets.offsetsType)[static_cast<cudf::size_type>(index)];
-}
 
 // Serialized bits of one row: the fixed part plus 8 bits per string byte.
 struct RowBits {
@@ -69,9 +62,11 @@ struct RowBits {
   __device__ int64_t operator()(int32_t row) const {
     int64_t stringBytes = 0;
     for (int32_t s = 0; s < numStrings; ++s) {
-      const auto index = strings[s].firstIndex + row;
-      stringBytes +=
-          offsetAt(strings[s], index + 1) - offsetAt(strings[s], index);
+      const cudf::detail::input_offsetalator offsets(
+          strings[s].offsets,
+          strings[s].offsetsType,
+          static_cast<cudf::size_type>(strings[s].firstIndex));
+      stringBytes += offsets[row + 1] - offsets[row];
     }
     return fixedBits + 8 * stringBytes;
   }
@@ -97,26 +92,40 @@ struct MarkPageStarts {
   }
 };
 
-// One block row (blockIdx.y) per task, grid-stride over the task's bytes.
+// The 32 mask bits from 'begin' + 32 * 'word' on, as
+// cudf::detail::get_mask_offset_word reads them; its header needs
+// --extended-lambda, which the cuDF targets do not enable. Reads past 'end'
+// only within the word that holds it.
+__device__ __forceinline__ uint32_t maskWord(
+    const cudf::bitmask_type* mask,
+    int32_t word,
+    cudf::size_type begin,
+    cudf::size_type end) {
+  const auto index = word + cudf::word_index(begin);
+  const auto next = cudf::word_index(end - 1) > index ? mask[index + 1]
+                                                      : cudf::bitmask_type{0};
+  return __funnelshift_r(mask[index], next, begin);
+}
+
+// One block row (blockIdx.y) per task, grid-stride over 32-row words. A mask
+// word becomes four Presto bytes: inverted, since Presto marks the nulls,
+// reversed within each byte, since Presto is MSB first, and cut at the range's
+// last byte.
 __global__ void nullBytesKernel(
     const NullBytesTask* tasks,
     int32_t taskOffset) {
   const NullBytesTask t = tasks[taskOffset + blockIdx.y];
+  const auto begin = static_cast<cudf::size_type>(t.firstBit);
+  const auto end = static_cast<cudf::size_type>(t.firstBit + t.numRows);
   const int32_t numBytes = cudf::util::div_rounding_up_safe(t.numRows, 8);
-  for (int32_t j = blockIdx.x * blockDim.x + threadIdx.x; j < numBytes;
-       j += gridDim.x * blockDim.x) {
-    uint8_t out = 0;
-    const int32_t row0 = j << 3;
-    const int32_t count = min(8, t.numRows - row0);
-#pragma unroll
-    for (int k = 0; k < 8; ++k) {
-      if (k < count &&
-          !cudf::bit_is_set(
-              t.mask, static_cast<cudf::size_type>(t.firstBit + row0 + k))) {
-        out |= static_cast<uint8_t>(0x80u >> k);
-      }
-    }
-    t.dst[j] = out;
+  const int32_t numWords = cudf::util::div_rounding_up_safe(t.numRows, 32);
+  for (int32_t w = blockIdx.x * blockDim.x + threadIdx.x; w < numWords;
+       w += gridDim.x * blockDim.x) {
+    const int32_t rows = min(32, t.numRows - 32 * w);
+    const uint32_t inRange = rows == 32 ? ~0u : (1u << rows) - 1;
+    const uint32_t nulls = ~maskWord(t.mask, w, begin, end) & inRange;
+    const uint32_t out = __byte_perm(__brev(nulls), 0, 0x0123);
+    cuda::std::memcpy(t.dst + 4 * w, &out, min(4, numBytes - 4 * w));
   }
 }
 
@@ -126,11 +135,14 @@ __global__ void stringOffsetsKernel(
     int32_t taskOffset,
     int32_t* overflow) {
   const StringOffsetsTask t = tasks[taskOffset + blockIdx.y];
-  const int64_t first = t.offsets.firstIndex + t.firstRow;
-  const int64_t start = offsetAt(t.offsets, first);
+  const cudf::detail::input_offsetalator offsets(
+      t.offsets.offsets,
+      t.offsets.offsetsType,
+      static_cast<cudf::size_type>(t.offsets.firstIndex + t.firstRow));
+  const int64_t start = offsets[0];
   for (int32_t i = blockIdx.x * blockDim.x + threadIdx.x; i < t.numRows;
        i += gridDim.x * blockDim.x) {
-    const int64_t bytes = offsetAt(t.offsets, first + 1 + i) - start;
+    const int64_t bytes = offsets[i + 1] - start;
     if (bytes > INT32_MAX) {
       *overflow = 1;
     }
@@ -141,15 +153,7 @@ __global__ void stringOffsetsKernel(
   }
 }
 
-struct GatherOffset {
-  StringOffsets offsets;
-
-  __device__ int64_t operator()(int64_t row) const {
-    return offsetAt(offsets, offsets.firstIndex + row);
-  }
-};
-
-// Exactly one of mul, div is 1. Flags a product outside int64.
+// One of mul, div is 1. Flags a product outside int64.
 struct ToMillis {
   int64_t mul;
   int64_t div;
@@ -189,15 +193,6 @@ struct CopySize {
   }
 };
 
-struct ValidPredicate {
-  const cudf::bitmask_type* mask;
-  int64_t firstBit;
-
-  __device__ bool operator()(int32_t i) const {
-    return cudf::bit_is_set(mask, static_cast<cudf::size_type>(firstBit + i));
-  }
-};
-
 struct ToJavaDecimal {
   __device__ __int128_t operator()(__int128_t v) const {
     if (v >= 0) {
@@ -210,57 +205,21 @@ struct ToJavaDecimal {
   }
 };
 
-struct alignas(16) Bytes16 {
-  uint64_t lo;
-  uint64_t hi;
-};
-
-template <typename T>
-int32_t compactValidTyped(
-    const T* src,
-    const cudf::bitmask_type* mask,
-    int64_t firstBit,
-    int32_t numRows,
-    T* dst,
-    cuda::stream_ref stream) {
-  auto end = thrust::copy_if(
-      rmm::exec_policy_nosync(stream),
-      src,
-      src + numRows,
-      thrust::counting_iterator<int32_t>(0),
-      dst,
-      ValidPredicate{mask, firstBit});
-  return static_cast<int32_t>(end - dst);
-}
-
 uint32_t gridXFor(int64_t maxItems) {
   const int64_t blocks =
       cudf::util::div_rounding_up_safe<int64_t>(maxItems, kBlockSize);
   return static_cast<uint32_t>(std::clamp<int64_t>(blocks, 1, 128));
 }
 
-void expectAligned(const void* pointer, int64_t alignment, const char* name) {
-  CUDF_EXPECTS(
-      reinterpret_cast<uintptr_t>(pointer) % alignment == 0,
-      std::string(name) + " must be aligned to the element width");
-}
-
 } // namespace
 
-std::vector<int64_t> prestoPageBoundaries(
+std::vector<int64_t> device::prestoPageBoundaries(
     int32_t numRows,
     int64_t fixedBitsPerRow,
     std::span<const StringOffsets> strings,
     int64_t pageBytes,
     int64_t maxRows,
-    cuda::stream_ref stream,
-    rmm::device_async_resource_ref mr) {
-  CUDF_EXPECTS(pageBytes > 0, "pageBytes must be positive");
-  CUDF_EXPECTS(
-      pageBytes <= std::numeric_limits<int64_t>::max() / 8,
-      "pageBytes must fit in bits");
-  CUDF_EXPECTS(maxRows > 0, "maxRows must be positive");
-  CUDF_EXPECTS(fixedBitsPerRow >= 0, "fixedBitsPerRow must not be negative");
+    cuda::stream_ref stream) {
   std::vector<int64_t> bounds{0};
   if (numRows == 0) {
     return bounds;
@@ -279,15 +238,15 @@ std::vector<int64_t> prestoPageBoundaries(
 
   // The scan of the row bits is consumed as it is produced: one flag per row
   // and the last value, not the 8 bytes per row of the scan itself. The
-  // buffers are allocated before the upload of 'strings', which the function
-  // reads back from the device below, so that nothing can throw while the
-  // stream still has the caller's span to read.
-  rmm::device_uvector<bool> starts(numRows, stream, mr);
-  rmm::device_scalar<int64_t> total(stream, mr);
-  auto deviceStrings = cudf::detail::make_device_uvector_async(
+  // upload of 'strings' waits for the stream: the scan allocates its scratch
+  // and can throw before the stream has read the caller's span.
+  auto mr = get_temp_mr();
+  auto deviceStrings = cudf::detail::make_device_uvector(
       cudf::host_span<StringOffsets const>{strings.data(), strings.size()},
       stream,
       mr);
+  rmm::device_uvector<bool> starts(numRows, stream, mr);
+  rmm::device_scalar<int64_t> total(stream, mr);
   const RowBits rowBits{
       fixedBitsPerRow,
       deviceStrings.data(),
@@ -340,8 +299,7 @@ std::vector<int64_t> prestoPageBoundaries(
 
 void fillPrestoNullBytes(
     std::span<const NullBytesTask> tasks,
-    cuda::stream_ref stream,
-    rmm::device_async_resource_ref mr) {
+    cuda::stream_ref stream) {
   if (tasks.empty()) {
     return;
   }
@@ -350,13 +308,13 @@ void fillPrestoNullBytes(
   auto deviceTasks = cudf::detail::make_device_uvector(
       cudf::host_span<NullBytesTask const>{tasks.data(), tasks.size()},
       stream,
-      mr);
-  int64_t maxBytes = 0;
+      get_temp_mr());
+  int64_t maxWords = 0;
   for (const auto& t : tasks) {
-    maxBytes = std::max<int64_t>(
-        maxBytes, cudf::util::div_rounding_up_safe<int64_t>(t.numRows, 8));
+    maxWords = std::max<int64_t>(
+        maxWords, cudf::util::div_rounding_up_safe<int64_t>(t.numRows, 32));
   }
-  const auto gridX = gridXFor(maxBytes);
+  const auto gridX = gridXFor(maxWords);
   for (size_t offset = 0; offset < tasks.size(); offset += kMaxGridY) {
     const auto count =
         static_cast<uint32_t>(std::min(kMaxGridY, tasks.size() - offset));
@@ -366,15 +324,15 @@ void fillPrestoNullBytes(
   }
 }
 
-bool fillPrestoStringOffsets(
+bool device::fillPrestoStringOffsets(
     std::span<const StringOffsetsTask> tasks,
-    cuda::stream_ref stream,
-    rmm::device_async_resource_ref mr) {
+    cuda::stream_ref stream) {
   if (tasks.empty()) {
     return true;
   }
   // The flag is cleared on the device, and allocated before the upload of
   // 'tasks', which the read of the flag below waits for.
+  auto mr = get_temp_mr();
   rmm::device_scalar<int32_t> overflow(stream, mr);
   overflow.set_value_to_zero_async(stream);
   auto deviceTasks = cudf::detail::make_device_uvector_async(
@@ -398,14 +356,14 @@ bool fillPrestoStringOffsets(
 
 void batchedDeviceCopy(
     std::span<const CopyTask> tasks,
-    cuda::stream_ref stream,
-    rmm::device_async_resource_ref mr) {
+    cuda::stream_ref stream) {
   if (tasks.empty()) {
     return;
   }
   // One upload for the three arrays cub reads, which it takes from the tasks
   // in place; cub skips a task of zero bytes. The upload waits for the
   // stream, since the caller may free 'tasks' on return.
+  auto mr = get_temp_mr();
   auto deviceTasks = cudf::detail::make_device_uvector(
       cudf::host_span<CopyTask const>{tasks.data(), tasks.size()}, stream, mr);
   const auto srcs =
@@ -415,8 +373,9 @@ void batchedDeviceCopy(
   const auto sizes =
       thrust::make_transform_iterator(deviceTasks.data(), CopySize{});
   const auto count = static_cast<int64_t>(tasks.size());
-  // cudf::detail::batched_memcpy_async would take its scratch from the
-  // current device resource; the caller's 'mr' is used here instead.
+  // cudf::detail::batched_memcpy_async takes its scratch from
+  // cudf::get_current_device_resource_ref(), which CudfNoDefaults.h rejects
+  // in this tree, so cub is called directly with the same scratch resource.
   size_t tempBytes = 0;
   CUDF_CUDA_TRY(
       cub::DeviceMemcpy::Batched(
@@ -428,45 +387,43 @@ void batchedDeviceCopy(
   CUDF_CHECK_CUDA(stream.get());
 }
 
-std::vector<int64_t> gatherStringOffsets(
+std::vector<int64_t> device::gatherStringOffsets(
     const StringOffsets& offsets,
     std::span<const int64_t> rows,
-    cuda::stream_ref stream,
-    rmm::device_async_resource_ref mr) {
+    cuda::stream_ref stream) {
   if (rows.empty()) {
     return {};
   }
   // The output is allocated before the upload of 'rows', which the read of
   // the result below waits for.
+  auto mr = get_temp_mr();
   rmm::device_uvector<int64_t> out(rows.size(), stream, mr);
   auto deviceRows = cudf::detail::make_device_uvector_async(
       cudf::host_span<int64_t const>{rows.data(), rows.size()}, stream, mr);
-  thrust::transform(
+  thrust::gather(
       rmm::exec_policy_nosync(stream, mr),
       deviceRows.begin(),
       deviceRows.end(),
-      out.begin(),
-      GatherOffset{offsets});
+      cudf::detail::input_offsetalator(
+          offsets.offsets,
+          offsets.offsetsType,
+          static_cast<cudf::size_type>(offsets.firstIndex)),
+      out.begin());
   return cudf::detail::make_std_vector(
       cudf::device_span<int64_t const>{out.data(), out.size()}, stream);
 }
 
-bool timestampsToMillis(
+bool device::timestampsToMillis(
     const int64_t* src,
     int32_t numRows,
     int64_t mul,
     int64_t div,
     int64_t* dst,
-    cuda::stream_ref stream,
-    rmm::device_async_resource_ref mr) {
-  CUDF_EXPECTS(
-      mul >= 1 && div >= 1 && (mul == 1 || div == 1),
-      "mul and div must be positive and one of them 1");
-  expectAligned(src, sizeof(int64_t), "src");
-  expectAligned(dst, sizeof(int64_t), "dst");
+    cuda::stream_ref stream) {
   if (numRows == 0) {
     return true;
   }
+  auto mr = get_temp_mr();
   rmm::device_scalar<int32_t> overflow(stream, mr);
   overflow.set_value_to_zero_async(stream);
   thrust::transform(
@@ -478,77 +435,20 @@ bool timestampsToMillis(
   return overflow.value(stream) == 0;
 }
 
-void decimalsToJava(
+void device::decimalsToJava(
     const __int128_t* src,
     int32_t numRows,
     __int128_t* dst,
     cuda::stream_ref stream) {
-  expectAligned(src, sizeof(__int128_t), "src");
-  expectAligned(dst, sizeof(__int128_t), "dst");
   if (numRows == 0) {
     return;
   }
   thrust::transform(
-      rmm::exec_policy_nosync(stream),
+      rmm::exec_policy_nosync(stream, get_temp_mr()),
       src,
       src + numRows,
       dst,
       ToJavaDecimal{});
-}
-
-int32_t compactValid(
-    const uint8_t* src,
-    int32_t width,
-    const cudf::bitmask_type* mask,
-    int64_t firstBit,
-    int32_t numRows,
-    uint8_t* dst,
-    cuda::stream_ref stream) {
-  CUDF_EXPECTS(
-      width == 1 || width == 2 || width == 4 || width == 8 || width == 16,
-      "Unsupported fixed width for Presto page compaction");
-  expectAligned(src, width, "src");
-  expectAligned(dst, width, "dst");
-  if (numRows == 0) {
-    return 0;
-  }
-  switch (width) {
-    case 1:
-      return compactValidTyped<uint8_t>(
-          src, mask, firstBit, numRows, dst, stream);
-    case 2:
-      return compactValidTyped<uint16_t>(
-          reinterpret_cast<const uint16_t*>(src),
-          mask,
-          firstBit,
-          numRows,
-          reinterpret_cast<uint16_t*>(dst),
-          stream);
-    case 4:
-      return compactValidTyped<uint32_t>(
-          reinterpret_cast<const uint32_t*>(src),
-          mask,
-          firstBit,
-          numRows,
-          reinterpret_cast<uint32_t*>(dst),
-          stream);
-    case 8:
-      return compactValidTyped<uint64_t>(
-          reinterpret_cast<const uint64_t*>(src),
-          mask,
-          firstBit,
-          numRows,
-          reinterpret_cast<uint64_t*>(dst),
-          stream);
-    default:
-      return compactValidTyped<Bytes16>(
-          reinterpret_cast<const Bytes16*>(src),
-          mask,
-          firstBit,
-          numRows,
-          reinterpret_cast<Bytes16*>(dst),
-          stream);
-  }
 }
 
 } // namespace facebook::velox::cudf_velox::detail

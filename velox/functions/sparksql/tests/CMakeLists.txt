@@ -26,6 +26,7 @@ add_executable(
   ArraySortTest.cpp
   ArrayShuffleTest.cpp
   ArrayUnionTest.cpp
+  ArraysOverlapTest.cpp
   ArgTypesGeneratorTest.cpp
   AssertNotNullTest.cpp
   AtLeastNNonNullsTest.cpp
@@ -56,6 +57,7 @@ add_executable(
   InitcapTest.cpp
   InTest.cpp
   IntervalArithmeticTest.cpp
+  JavaFloatingPointTest.cpp
   JsonArrayLengthTest.cpp
   JsonObjectKeysTest.cpp
   LastWinTest.cpp

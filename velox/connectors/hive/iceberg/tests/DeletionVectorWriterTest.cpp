@@ -842,5 +842,39 @@ TEST_F(DeletionVectorWriterTest, serializeMatchesMapBasedReference) {
     reversedWriter.addDeletedPositions(reversed);
     EXPECT_EQ(reversedWriter.serialize(), expected);
     EXPECT_EQ(reversedWriter.numDistinctPositions(), distinct.size());
+
+    // An existing DV (every other distinct position) seeded first, then the
+    // rest in sorted order, as IcebergDeletionVectorSink does on a merge.
+    std::vector<int64_t> seeded;
+    std::vector<int64_t> added;
+    for (size_t i = 0; i < distinct.size(); ++i) {
+      (i % 2 == 0 ? seeded : added).push_back(distinct[i]);
+    }
+    added.insert(
+        added.end(), seeded.begin(), seeded.begin() + seeded.size() / 3);
+    std::sort(added.begin(), added.end());
+    DeletionVectorWriter mergeWriter;
+    mergeWriter.addDeletedPositions(seeded);
+    mergeWriter.addDeletedPositions(added);
+    EXPECT_EQ(mergeWriter.numDistinctPositions(), distinct.size());
+    EXPECT_EQ(mergeWriter.serialize(), expected);
+    EXPECT_EQ(mergeWriter.serialize(), expected);
   }
+}
+
+TEST_F(DeletionVectorWriterTest, addAfterSerialize) {
+  DeletionVectorWriter writer;
+  writer.addDeletedPositions({5, 1, 5, 70'000});
+  EXPECT_EQ(writer.serialize(), mapBasedSerialize({1, 5, 70'000}));
+  EXPECT_EQ(writer.numPositions(), 3);
+
+  writer.addDeletedPositions({3, 70'000, 1 + (int64_t{1} << 32)});
+  EXPECT_EQ(writer.numDistinctPositions(), 5);
+  EXPECT_EQ(
+      writer.serialize(),
+      mapBasedSerialize({1, 3, 5, 70'000, 1 + (int64_t{1} << 32)}));
+
+  writer.clear();
+  writer.addDeletedPositions({9, 2});
+  EXPECT_EQ(writer.serialize(), mapBasedSerialize({2, 9}));
 }

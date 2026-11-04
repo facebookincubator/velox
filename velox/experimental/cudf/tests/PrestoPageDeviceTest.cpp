@@ -17,10 +17,12 @@
 #include "velox/experimental/cudf/exec/GpuResources.h"
 #include "velox/experimental/cudf/serializers/PrestoPageDevice.h"
 
+#include "velox/common/base/VeloxException.h"
+#include "velox/common/base/tests/GTestUtils.h"
+
 #include <cudf/detail/utilities/integer_utils.hpp>
 #include <cudf/detail/utilities/vector_factories.hpp>
 #include <cudf/utilities/bit.hpp>
-#include <cudf/utilities/error.hpp>
 #include <cudf/utilities/memory_resource.hpp>
 #include <cudf/utilities/span.hpp>
 
@@ -81,7 +83,7 @@ class PrestoPageDeviceTest : public testing::Test {
       int64_t pageBytes,
       int64_t maxRows) {
     return detail::prestoPageBoundaries(
-        numRows, fixedBitsPerRow, strings, pageBytes, maxRows, stream_, mr_);
+        numRows, fixedBitsPerRow, strings, pageBytes, maxRows, stream_);
   }
 
   // Offsets of 8 strings that start at index 2: the strings are 3, 0, 10, 1,
@@ -110,12 +112,12 @@ TEST_F(PrestoPageDeviceTest, pageBoundariesWithoutStrings) {
   EXPECT_EQ(bounds(1, 0, {}, 1024, 3), (Bounds{0, 1}));
   EXPECT_EQ(bounds(0, 64, {}, 16, kNoRowCap), (Bounds{0}));
   // Pages need a positive size and row cap, and rows a non-negative cost.
-  EXPECT_THROW(bounds(3, 64, {}, 0, kNoRowCap), cudf::logic_error);
-  EXPECT_THROW(
+  VELOX_ASSERT_THROW(bounds(3, 64, {}, 0, kNoRowCap), "pageBytes");
+  VELOX_ASSERT_THROW(
       bounds(3, 64, {}, std::numeric_limits<int64_t>::max(), kNoRowCap),
-      cudf::logic_error);
-  EXPECT_THROW(bounds(3, 64, {}, 16, 0), cudf::logic_error);
-  EXPECT_THROW(bounds(3, -1, {}, 16, kNoRowCap), cudf::logic_error);
+      "pageBytes");
+  VELOX_ASSERT_THROW(bounds(3, 64, {}, 16, 0), "maxRows");
+  VELOX_ASSERT_THROW(bounds(3, -1, {}, 16, kNoRowCap), "fixedBitsPerRow");
 }
 
 TEST_F(PrestoPageDeviceTest, pageBoundariesWithStrings) {
@@ -167,22 +169,6 @@ TEST_F(PrestoPageDeviceTest, pageBoundariesWithStrings) {
   EXPECT_EQ(bounds(3, 0, {emptyStrings}, 1, kNoRowCap), (Bounds{0, 3}));
 }
 
-// The copies land where their tasks say, a zero-byte task among them.
-TEST_F(PrestoPageDeviceTest, batchedDeviceCopy) {
-  const std::vector<uint8_t> bytes{1, 2, 3, 4, 5, 6, 7, 8, 9};
-  auto src = toDevice(bytes);
-  rmm::device_uvector<uint8_t> dst(8, stream_, mr_);
-  CUDF_CUDA_TRY(cudaMemsetAsync(dst.data(), 0, dst.size(), stream_.get()));
-  const std::vector<detail::CopyTask> tasks = {
-      {src.data() + 6, dst.data(), 3},
-      {src.data(), dst.data() + 3, 0},
-      {src.data() + 1, dst.data() + 4, 4},
-  };
-  detail::batchedDeviceCopy(tasks, stream_, mr_);
-  EXPECT_EQ(toHost(dst), (std::vector<uint8_t>{7, 8, 9, 0, 2, 3, 4, 5}));
-  detail::batchedDeviceCopy({}, stream_, mr_);
-}
-
 TEST_F(PrestoPageDeviceTest, nullBytes) {
   auto valid = [](int64_t bit) { return bit % 3 != 0 && bit != 77; };
   auto mask = toDevice(makeMask(200, valid));
@@ -194,7 +180,7 @@ TEST_F(PrestoPageDeviceTest, nullBytes) {
       // The last bits of the mask.
       {mask.data(), 191, 9, out.data() + 10},
   };
-  detail::fillPrestoNullBytes(tasks, stream_, mr_);
+  detail::fillPrestoNullBytes(tasks, stream_);
   const auto result = toHost(out);
 
   size_t position = 0;
@@ -230,7 +216,7 @@ TEST_F(PrestoPageDeviceTest, stringOffsets) {
         // Row 0 alone.
         {strings, 0, 1, out.data() + 4 * sizeof(int32_t)},
     };
-    EXPECT_TRUE(detail::fillPrestoStringOffsets(tasks, stream_, mr_));
+    EXPECT_TRUE(detail::fillPrestoStringOffsets(tasks, stream_));
     const auto bytes = toHost(out);
     std::vector<int32_t> actual(5);
     std::memcpy(actual.data(), bytes.data(), bytes.size());
@@ -238,7 +224,7 @@ TEST_F(PrestoPageDeviceTest, stringOffsets) {
 
     const std::vector<int64_t> rows = {0, 2, 5, kNumStrings};
     EXPECT_EQ(
-        detail::gatherStringOffsets(strings, rows, stream_, mr_),
+        detail::gatherStringOffsets(strings, rows, stream_),
         (std::vector<int64_t>{9, 12, 24, 68}));
   }
 }
@@ -253,153 +239,114 @@ TEST_F(PrestoPageDeviceTest, stringOffsetsBeyondInt32) {
   EXPECT_TRUE(
       detail::fillPrestoStringOffsets(
           std::vector<detail::StringOffsetsTask>{{strings, 1, 1, out.data()}},
-          stream_,
-          mr_));
+          stream_));
   EXPECT_FALSE(
       detail::fillPrestoStringOffsets(
           std::vector<detail::StringOffsetsTask>{{strings, 0, 2, out.data()}},
-          stream_,
-          mr_));
+          stream_));
   EXPECT_FALSE(
       detail::fillPrestoStringOffsets(
           std::vector<detail::StringOffsetsTask>{{strings, 1, 2, out.data()}},
-          stream_,
-          mr_));
-}
-
-TEST_F(PrestoPageDeviceTest, compactValid) {
-  constexpr int32_t kNumRows = 50;
-  constexpr int64_t kFirstBit = 33;
-  auto valid = [](int64_t bit) { return bit % 2 == 0 || bit % 5 == 0; };
-  auto mask = toDevice(makeMask(kFirstBit + kNumRows, valid));
-
-  auto check = [&](auto zero) {
-    using T = decltype(zero);
-    SCOPED_TRACE(testing::Message() << "width = " << sizeof(T));
-    std::vector<T> values;
-    std::vector<T> expected;
-    for (int32_t row = 0; row < kNumRows; ++row) {
-      const T value = static_cast<T>(row * 2'654'435'761LL + 1);
-      values.push_back(value);
-      if (valid(kFirstBit + row)) {
-        expected.push_back(value);
-      }
-    }
-    auto src = toDevice(values);
-    rmm::device_uvector<T> dst(kNumRows, stream_, mr_);
-    const auto copied = detail::compactValid(
-        reinterpret_cast<const uint8_t*>(src.data()),
-        sizeof(T),
-        mask.data(),
-        kFirstBit,
-        kNumRows,
-        reinterpret_cast<uint8_t*>(dst.data()),
-        stream_);
-    ASSERT_EQ(copied, expected.size());
-    auto actual = toHost(dst);
-    actual.resize(copied);
-    EXPECT_TRUE(actual == expected);
-  };
-  check(uint8_t{});
-  check(uint16_t{});
-  check(uint32_t{});
-  check(uint64_t{});
-  check(__int128_t{});
+          stream_));
 }
 
 TEST_F(PrestoPageDeviceTest, alignmentAndArgumentChecks) {
   // Values follow the null bitmap in a Presto page, so a destination inside
-  // a page is generally unaligned; the primitives work on aligned scratch
+  // a page is generally unaligned; the conversions work on aligned scratch
   // buffers and refuse anything else.
   rmm::device_uvector<uint8_t> buffer(64, stream_, mr_);
-  auto mask = toDevice(makeMask(8, [](int64_t) { return true; }));
-  auto* aligned = buffer.data();
-  auto* shifted = buffer.data() + 1;
-  for (int32_t width : {2, 4, 8, 16}) {
-    SCOPED_TRACE(testing::Message() << "width = " << width);
-    EXPECT_THROW(
-        detail::compactValid(
-            aligned, width, mask.data(), 0, 2, shifted, stream_),
-        cudf::logic_error);
-    EXPECT_THROW(
-        detail::compactValid(
-            shifted, width, mask.data(), 0, 2, aligned, stream_),
-        cudf::logic_error);
-  }
-  EXPECT_EQ(
-      detail::compactValid(shifted, 1, mask.data(), 0, 2, aligned, stream_), 2);
-  EXPECT_THROW(
-      detail::compactValid(aligned, 3, mask.data(), 0, 2, aligned, stream_),
-      cudf::logic_error);
-
+  auto* const aligned = buffer.data();
   auto* const i64 = reinterpret_cast<int64_t*>(aligned);
   auto* const i64Shifted = reinterpret_cast<int64_t*>(buffer.data() + 4);
-  EXPECT_THROW(
-      detail::timestampsToMillis(i64, 2, 1'000, 1, i64Shifted, stream_, mr_),
-      cudf::logic_error);
-  EXPECT_THROW(
-      detail::timestampsToMillis(i64Shifted, 2, 1'000, 1, i64, stream_, mr_),
-      cudf::logic_error);
-  // mul and div: positive, and at most one of them differs from 1.
-  EXPECT_THROW(
-      detail::timestampsToMillis(i64, 2, 0, 1, i64, stream_, mr_),
-      cudf::logic_error);
-  EXPECT_THROW(
-      detail::timestampsToMillis(i64, 2, 1, 0, i64, stream_, mr_),
-      cudf::logic_error);
-  EXPECT_THROW(
-      detail::timestampsToMillis(i64, 2, 1'000, 1'000, i64, stream_, mr_),
-      cudf::logic_error);
+  constexpr auto kSeconds = cudf::type_id::TIMESTAMP_SECONDS;
+  VELOX_ASSERT_THROW(
+      detail::timestampsToMillis(i64, 2, kSeconds, i64Shifted, stream_),
+      "'dst' must be 8-byte aligned");
+  VELOX_ASSERT_THROW(
+      detail::timestampsToMillis(i64Shifted, 2, kSeconds, i64, stream_),
+      "'src' must be 8-byte aligned");
+  // Only the four 64-bit timestamp units have a scale to milliseconds.
+  VELOX_ASSERT_THROW(
+      detail::timestampsToMillis(
+          i64, 2, cudf::type_id::TIMESTAMP_DAYS, i64, stream_),
+      "Not a cuDF timestamp type with 64-bit ticks");
+  VELOX_ASSERT_THROW(
+      detail::timestampsToMillis(i64, 2, cudf::type_id::INT64, i64, stream_),
+      "Not a cuDF timestamp type with 64-bit ticks");
 
   auto* const i128 = reinterpret_cast<__int128_t*>(aligned);
   auto* const i128Shifted = reinterpret_cast<__int128_t*>(buffer.data() + 8);
-  EXPECT_THROW(
-      detail::decimalsToJava(i128, 2, i128Shifted, stream_), cudf::logic_error);
-  EXPECT_THROW(
-      detail::decimalsToJava(i128Shifted, 2, i128, stream_), cudf::logic_error);
+  VELOX_ASSERT_THROW(
+      detail::decimalsToJava(i128, 2, i128Shifted, stream_),
+      "'dst' must be 16-byte aligned");
+  VELOX_ASSERT_THROW(
+      detail::decimalsToJava(i128Shifted, 2, i128, stream_),
+      "'src' must be 16-byte aligned");
+
+  // The offsets of a strings column are INT32 or INT64.
+  auto offsets = toDevice(std::vector<int32_t>{0, 1, 2});
+  const StringOffsets unsignedOffsets{
+      offsets.data(), cudf::data_type{cudf::type_id::UINT32}, 0};
+  VELOX_ASSERT_THROW(
+      bounds(2, 0, {unsignedOffsets}, 8, kNoRowCap), "INT32 or INT64");
+  VELOX_ASSERT_THROW(
+      detail::fillPrestoStringOffsets(
+          std::vector<detail::StringOffsetsTask>{
+              {unsignedOffsets, 0, 2, aligned}},
+          stream_),
+      "INT32 or INT64");
+  VELOX_ASSERT_THROW(
+      detail::gatherStringOffsets(
+          unsignedOffsets, std::vector<int64_t>{0}, stream_),
+      "INT32 or INT64");
 }
 
 TEST_F(PrestoPageDeviceTest, timestampsToMillis) {
   auto convert = [&](const std::vector<int64_t>& values,
-                     int64_t mul,
-                     int64_t div,
+                     cudf::type_id unit,
                      std::vector<int64_t>* result) {
     auto src = toDevice(values);
     rmm::device_uvector<int64_t> dst(values.size(), stream_, mr_);
     const bool ok = detail::timestampsToMillis(
-        src.data(), values.size(), mul, div, dst.data(), stream_, mr_);
+        src.data(), values.size(), unit, dst.data(), stream_);
     *result = toHost(dst);
     return ok;
   };
   std::vector<int64_t> result;
 
   // Seconds, up to the last values whose milliseconds fit in int64.
+  constexpr auto kSeconds = cudf::type_id::TIMESTAMP_SECONDS;
   constexpr int64_t kMaxSeconds = std::numeric_limits<int64_t>::max() / 1'000;
   constexpr int64_t kMinSeconds = std::numeric_limits<int64_t>::min() / 1'000;
-  EXPECT_TRUE(convert({0, 1, -1, kMaxSeconds, kMinSeconds}, 1'000, 1, &result));
+  EXPECT_TRUE(convert({0, 1, -1, kMaxSeconds, kMinSeconds}, kSeconds, &result));
   EXPECT_EQ(
       result,
       (std::vector<int64_t>{
           0, 1'000, -1'000, kMaxSeconds * 1'000, kMinSeconds * 1'000}));
-  EXPECT_FALSE(convert({0, kMinSeconds - 1}, 1'000, 1, &result));
-  EXPECT_FALSE(convert({kMaxSeconds + 1}, 1'000, 1, &result));
+  EXPECT_FALSE(convert({0, kMinSeconds - 1}, kSeconds, &result));
+  EXPECT_FALSE(convert({kMaxSeconds + 1}, kSeconds, &result));
 
   // Microseconds and nanoseconds round down.
-  EXPECT_TRUE(
-      convert({-1, -1'000, -1'001, 1'999, 0, 1'000}, 1, 1'000, &result));
+  EXPECT_TRUE(convert(
+      {-1, -1'000, -1'001, 1'999, 0, 1'000},
+      cudf::type_id::TIMESTAMP_MICROSECONDS,
+      &result));
   EXPECT_EQ(result, (std::vector<int64_t>{-1, -1, -2, 1, 0, 1}));
-  EXPECT_TRUE(convert({-1, 1'999'999, -1'000'000}, 1, 1'000'000, &result));
+  EXPECT_TRUE(convert(
+      {-1, 1'999'999, -1'000'000},
+      cudf::type_id::TIMESTAMP_NANOSECONDS,
+      &result));
   EXPECT_EQ(result, (std::vector<int64_t>{-1, 1, -1}));
 
   // Milliseconds pass through.
-  EXPECT_TRUE(convert({5, -5}, 1, 1, &result));
+  EXPECT_TRUE(convert({5, -5}, cudf::type_id::TIMESTAMP_MILLISECONDS, &result));
   EXPECT_EQ(result, (std::vector<int64_t>{5, -5}));
 
   // In place.
   auto values = toDevice(std::vector<int64_t>{7, -7, 1'001});
   EXPECT_TRUE(
       detail::timestampsToMillis(
-          values.data(), 3, 1'000, 1, values.data(), stream_, mr_));
+          values.data(), 3, kSeconds, values.data(), stream_));
   EXPECT_EQ(toHost(values), (std::vector<int64_t>{7'000, -7'000, 1'001'000}));
 }
 

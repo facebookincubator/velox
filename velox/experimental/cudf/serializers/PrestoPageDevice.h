@@ -15,12 +15,10 @@
  */
 #pragma once
 
-// Device primitives for laying out Presto SerializedPage bytes on the GPU.
-// Needs only cuDF, RMM and CUDA headers.
+// Device primitives for laying out Presto SerializedPage bytes on the GPU. They
+// return no device memory and take their scratch from get_temp_mr().
 
 #include <cudf/types.hpp>
-
-#include <rmm/resource_ref.hpp>
 
 #include <cuda/stream>
 
@@ -85,49 +83,46 @@ std::vector<int64_t> prestoPageBoundaries(
     std::span<const StringOffsets> strings,
     int64_t pageBytes,
     int64_t maxRows,
-    cuda::stream_ref stream,
-    rmm::device_async_resource_ref mr);
+    cuda::stream_ref stream);
 
 /// Runs every NullBytesTask.
 void fillPrestoNullBytes(
     std::span<const NullBytesTask> tasks,
-    cuda::stream_ref stream,
-    rmm::device_async_resource_ref mr);
+    cuda::stream_ref stream);
 
 /// Runs every StringOffsetsTask. Returns false when the strings of a range
 /// take more bytes than an int32 offset holds, so that no Presto page can
 /// carry the range; 'dst' is unspecified in that case.
 bool fillPrestoStringOffsets(
     std::span<const StringOffsetsTask> tasks,
-    cuda::stream_ref stream,
-    rmm::device_async_resource_ref mr);
+    cuda::stream_ref stream);
 
 /// Runs all copies with one batched device memcpy.
 void batchedDeviceCopy(
     std::span<const CopyTask> tasks,
-    cuda::stream_ref stream,
-    rmm::device_async_resource_ref mr);
+    cuda::stream_ref stream);
 
 /// Returns the offset at which each of 'rows' starts, rows counted from the
 /// column's first row. A row equal to the row count yields the end offset.
 std::vector<int64_t> gatherStringOffsets(
     const StringOffsets& offsets,
     std::span<const int64_t> rows,
-    cuda::stream_ref stream,
-    rmm::device_async_resource_ref mr);
+    cuda::stream_ref stream);
 
-/// dst[i] = floor(src[i] * mul / div). 'mul' and 'div' are positive and one
-/// of them is 1; 'src' and 'dst' are 8-byte aligned and may be the same.
-/// Returns false when a product does not fit in int64, as
-/// Timestamp::toMillis() fails then; 'dst' is unspecified in that case.
+/// Converts timestamps to the milliseconds Presto carries: dst[i] is src[i],
+/// a tick count in the unit of 'timestampType', scaled to milliseconds and
+/// rounded towards negative infinity, as Timestamp::toMillis() rounds.
+/// 'timestampType' is TIMESTAMP_SECONDS, TIMESTAMP_MILLISECONDS,
+/// TIMESTAMP_MICROSECONDS or TIMESTAMP_NANOSECONDS; 'src' and 'dst' are 8-byte
+/// aligned and may be the same. Returns false when a value in seconds does
+/// not fit in int64 milliseconds, as Timestamp::toMillis() fails then; 'dst'
+/// is unspecified in that case.
 bool timestampsToMillis(
     const int64_t* src,
     int32_t numRows,
-    int64_t mul,
-    int64_t div,
+    cudf::type_id timestampType,
     int64_t* dst,
-    cuda::stream_ref stream,
-    rmm::device_async_resource_ref mr);
+    cuda::stream_ref stream);
 
 /// Rewrites two's complement decimals as the sign-magnitude values Presto Java
 /// reads from an INT128_ARRAY block: a negative value becomes its magnitude
@@ -137,18 +132,6 @@ void decimalsToJava(
     const __int128_t* src,
     int32_t numRows,
     __int128_t* dst,
-    cuda::stream_ref stream);
-
-/// Copies the values of the valid rows into 'dst' back to back. 'width' is
-/// the element size in bytes, one of 1, 2, 4, 8, 16, and 'src' and 'dst' are
-/// aligned to it. Returns the number of values copied.
-int32_t compactValid(
-    const uint8_t* src,
-    int32_t width,
-    const cudf::bitmask_type* mask,
-    int64_t firstBit,
-    int32_t numRows,
-    uint8_t* dst,
     cuda::stream_ref stream);
 
 } // namespace facebook::velox::cudf_velox::detail
