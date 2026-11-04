@@ -221,7 +221,8 @@ TEST_P(IcebergGeospatialBuildGateTest, equalityDeleteReaderDependsOnBuildFlag) {
         ioStatistics,
         ioStats,
         runtimeStats,
-        test::kIcebergConnectorId);
+        test::kIcebergConnectorId,
+        /*fileReadOps=*/folly::F14FastMap<std::string, std::string>{});
   };
 
 #ifdef VELOX_ENABLE_GEO
