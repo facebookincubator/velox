@@ -17,9 +17,9 @@
 
 #include "velox/connectors/common/FileConfigProvider.h"
 #include "velox/connectors/common/FileConnector.h"
-#include "velox/connectors/hive/paimon/PaimonConfig.h"
+#include "velox/connectors/paimon/PaimonConfig.h"
 
-namespace facebook::velox::connector::hive::paimon {
+namespace facebook::velox::connector::paimon {
 
 /// Connector for Paimon table scans. Creates PaimonDataSource and reuses the
 /// common File scan pipeline and DWIO readers for physical file access.
@@ -85,4 +85,4 @@ class PaimonConnectorFactory final : public ConnectorFactory {
   }
 };
 
-} // namespace facebook::velox::connector::hive::paimon
+} // namespace facebook::velox::connector::paimon

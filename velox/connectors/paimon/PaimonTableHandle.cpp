@@ -13,12 +13,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/connectors/hive/paimon/PaimonTableHandle.h"
+#include "velox/connectors/paimon/PaimonTableHandle.h"
 
 #include <cmath>
 #include <unordered_set>
 
-namespace facebook::velox::connector::hive::paimon {
+namespace facebook::velox::connector::paimon {
 namespace {
 
 RowTypePtr deriveDataColumns(
@@ -204,4 +204,4 @@ void PaimonTableHandle::registerSerDe() {
       "PaimonTableHandle", create);
 }
 
-} // namespace facebook::velox::connector::hive::paimon
+} // namespace facebook::velox::connector::paimon

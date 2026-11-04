@@ -24,9 +24,9 @@
 
 #include <folly/CPortability.h>
 
-#include "velox/connectors/hive/paimon/PaimonDeletionFile.h"
+#include "velox/connectors/paimon/PaimonDeletionFile.h"
 
-namespace facebook::velox::connector::hive::paimon {
+namespace facebook::velox::connector::paimon {
 
 /// Represents a single Paimon file (data or changelog) within a split.
 /// Mirrors Apache Paimon's DataFileMeta structure.
@@ -168,31 +168,29 @@ FOLLY_ALWAYS_INLINE std::ostream& operator<<(
   return os;
 }
 
-} // namespace facebook::velox::connector::hive::paimon
+} // namespace facebook::velox::connector::paimon
 
 template <>
-struct fmt::formatter<
-    facebook::velox::connector::hive::paimon::PaimonDataFile::Type>
+struct fmt::formatter<facebook::velox::connector::paimon::PaimonDataFile::Type>
     : formatter<std::string> {
   auto format(
-      facebook::velox::connector::hive::paimon::PaimonDataFile::Type type,
+      facebook::velox::connector::paimon::PaimonDataFile::Type type,
       format_context& ctx) const {
     return formatter<std::string>::format(
-        facebook::velox::connector::hive::paimon::PaimonDataFile::typeString(
-            type),
+        facebook::velox::connector::paimon::PaimonDataFile::typeString(type),
         ctx);
   }
 };
 
 template <>
 struct fmt::formatter<
-    facebook::velox::connector::hive::paimon::PaimonDataFile::Source>
+    facebook::velox::connector::paimon::PaimonDataFile::Source>
     : formatter<std::string> {
   auto format(
-      facebook::velox::connector::hive::paimon::PaimonDataFile::Source source,
+      facebook::velox::connector::paimon::PaimonDataFile::Source source,
       format_context& ctx) const {
     return formatter<std::string>::format(
-        facebook::velox::connector::hive::paimon::PaimonDataFile::sourceString(
+        facebook::velox::connector::paimon::PaimonDataFile::sourceString(
             source),
         ctx);
   }

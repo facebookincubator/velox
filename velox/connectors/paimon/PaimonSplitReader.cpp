@@ -13,11 +13,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/connectors/hive/paimon/PaimonSplitReader.h"
+#include "velox/connectors/paimon/PaimonSplitReader.h"
 
 #include <limits>
 
-namespace facebook::velox::connector::hive::paimon {
+namespace facebook::velox::connector::paimon {
 
 PaimonSplitReader::PaimonSplitReader(
     const std::shared_ptr<const connector::FileConnectorSplit>& fileSplit,
@@ -133,4 +133,4 @@ PaimonSplitReader::makeFileConnectorSplit(
       paimonSplit_->partitionKeys());
 }
 
-} // namespace facebook::velox::connector::hive::paimon
+} // namespace facebook::velox::connector::paimon

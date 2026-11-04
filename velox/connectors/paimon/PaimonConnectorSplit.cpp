@@ -13,13 +13,13 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/connectors/hive/paimon/PaimonConnectorSplit.h"
+#include "velox/connectors/paimon/PaimonConnectorSplit.h"
 
 #include <fmt/format.h>
 
 #include "velox/common/base/Exceptions.h"
 
-namespace facebook::velox::connector::hive::paimon {
+namespace facebook::velox::connector::paimon {
 
 std::string paimonTableTypeString(PaimonTableType type) {
   switch (type) {
@@ -211,4 +211,4 @@ std::shared_ptr<PaimonConnectorSplit> PaimonConnectorSplitBuilder::build() {
       rawConvertible_);
 }
 
-} // namespace facebook::velox::connector::hive::paimon
+} // namespace facebook::velox::connector::paimon

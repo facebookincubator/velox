@@ -17,7 +17,7 @@
 
 #include "velox/connectors/common/FileConfig.h"
 
-namespace facebook::velox::connector::hive::paimon {
+namespace facebook::velox::connector::paimon {
 
 /// Paimon-specific connector configuration.
 /// Extends FileConfig with Paimon-specific settings.
@@ -41,4 +41,4 @@ class PaimonConfig : public connector::FileConfig {
             makeConnectorConfigPrefix(kConnectorName)) {}
 };
 
-} // namespace facebook::velox::connector::hive::paimon
+} // namespace facebook::velox::connector::paimon

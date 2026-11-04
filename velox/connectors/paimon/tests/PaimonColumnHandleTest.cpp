@@ -13,15 +13,17 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/connectors/hive/paimon/PaimonColumnHandle.h"
+#include "velox/connectors/paimon/PaimonColumnHandle.h"
 
 #include <gtest/gtest.h>
 
 #include "velox/common/base/tests/GTestUtils.h"
 #include "velox/connectors/hive/TableHandle.h"
 
-namespace facebook::velox::connector::hive::paimon {
+namespace facebook::velox::connector::paimon {
 namespace {
+
+using hive::HiveColumnHandle;
 
 using ColumnType = connector::FileColumnHandle::ColumnType;
 
@@ -318,4 +320,4 @@ TEST_F(PaimonColumnHandleTest, localCallbackIsNotWireState) {
 }
 
 } // namespace
-} // namespace facebook::velox::connector::hive::paimon
+} // namespace facebook::velox::connector::paimon

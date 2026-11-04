@@ -13,8 +13,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "velox/connectors/hive/paimon/PaimonTableHandle.h"
-#include "velox/connectors/hive/paimon/PaimonColumnHandle.h"
+#include "velox/connectors/paimon/PaimonTableHandle.h"
+#include "velox/connectors/paimon/PaimonColumnHandle.h"
 
 #include <gtest/gtest.h>
 #include <limits>
@@ -23,8 +23,12 @@
 #include "velox/connectors/hive/TableHandle.h"
 #include "velox/core/Expressions.h"
 
-namespace facebook::velox::connector::hive::paimon {
+namespace facebook::velox::connector::paimon {
 namespace {
+
+using hive::HiveColumnHandle;
+using hive::HiveColumnHandlePtr;
+using hive::HiveTableHandle;
 
 class PaimonTableHandleTest : public testing::Test {
  protected:
@@ -485,4 +489,4 @@ TEST_F(PaimonTableHandleTest, localCallbackIsNotWireState) {
 }
 
 } // namespace
-} // namespace facebook::velox::connector::hive::paimon
+} // namespace facebook::velox::connector::paimon

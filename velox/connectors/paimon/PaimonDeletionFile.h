@@ -20,7 +20,7 @@
 #include <cstdint>
 #include <string>
 
-namespace facebook::velox::connector::hive::paimon {
+namespace facebook::velox::connector::paimon {
 
 /// Paimon deletion file — a serialized Roaring Bitmap tracking deleted row
 /// positions within an existing data file. Only used for primary-key tables
@@ -124,4 +124,4 @@ struct PaimonDeletionFile {
   static PaimonDeletionFile create(const folly::dynamic& obj);
 };
 
-} // namespace facebook::velox::connector::hive::paimon
+} // namespace facebook::velox::connector::paimon
