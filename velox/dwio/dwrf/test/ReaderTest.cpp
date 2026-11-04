@@ -41,6 +41,7 @@
 
 #include <fmt/core.h>
 #include <array>
+#include <functional>
 #include <future>
 #include <memory>
 #include <numeric>
@@ -2730,7 +2731,7 @@ TEST_F(TestReader, failToReuseReaderNulls) {
       {
           makeFlatIdentityVector<int64_t>(11),
           makeFlatVector<int64_t>(
-              11, folly::identity, [](auto i) { return i % 3 == 0; }),
+              11, std::identity{}, [](auto i) { return i % 3 == 0; }),
       });
   // Set a null so that the children will not be loaded lazily.
   bits::setNull(c0->mutableRawNulls(), 10);
@@ -3301,7 +3302,7 @@ TEST_F(TestReader, readStructWithWholeBatchFiltered) {
   const vector_size_t batchSize = 10;
   std::vector<VectorPtr> children{makeFlatVector<int64_t>(
       vectorSize,
-      folly::identity,
+      std::identity{},
       // In the first batch, the parent Rows will all be null.
       [&](auto i) { return i < batchSize; })};
 
