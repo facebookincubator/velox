@@ -787,6 +787,12 @@ TEST_F(CountMinSketchAggregateTest, columnParametersRejected) {
     SCOPED_TRACE(constantEncoding);
     for (const vector_size_t size : {0, 3}) {
       SCOPED_TRACE(size);
+      // The streaming helper skips aggregation for fewer than two input rows.
+      if (size < 2) {
+        disableTestStreaming();
+      } else {
+        enableTestStreaming();
+      }
       auto input = makeRowVector({
           makeFlatVector<int64_t>(size, [](auto row) { return row; }),
           makeFlatVector<double>(size, [](auto) { return 0.5; }),
