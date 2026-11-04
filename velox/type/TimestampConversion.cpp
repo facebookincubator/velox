@@ -239,7 +239,7 @@ bool tryParseDateString(
   // Fetch the separator.
   sep = buf[pos++];
   if (mode == ParseMode::kPrestoCast || mode == ParseMode::kSparkCast ||
-      mode == ParseMode::kIso8601) {
+      mode == ParseMode::kIso8601 || mode == ParseMode::kHiveCast) {
     // Only '-' is valid for cast.
     if (sep != '-') {
       return false;
@@ -284,12 +284,18 @@ bool tryParseDateString(
     return false;
   }
 
-  if (mode == ParseMode::kPrestoCast || mode == ParseMode::kIso8601) {
+  if (mode == ParseMode::kPrestoCast || mode == ParseMode::kIso8601 ||
+      mode == ParseMode::kHiveCast) {
     Expected<int64_t> expected = daysSinceEpochFromDate(year, month, day);
     if (expected.hasError()) {
       return false;
     }
     daysSinceEpoch = expected.value();
+
+    if (mode == ParseMode::kHiveCast) {
+      return validDate(daysSinceEpoch) &&
+          (pos == len || buf[pos] == 'T' || characterIsSpace(buf[pos]));
+    }
 
     if (mode == ParseMode::kPrestoCast) {
       skipSpaces(buf, len, pos);
@@ -377,6 +383,7 @@ void parseTimeSeparator(
       break;
     case TimestampParseMode::kLegacyCast:
     case TimestampParseMode::kSparkCast:
+    case TimestampParseMode::kHiveCast:
       if (buf[pos] == ' ' || buf[pos] == 'T') {
         pos++;
       }
@@ -394,6 +401,7 @@ bool tryParseTimeString(
     int64_t& result,
     TimestampParseMode parseMode) {
   static constexpr int sep = ':';
+  const bool isHiveTime = parseMode == TimestampParseMode::kHiveCast;
   int32_t hour = 0, min = 0, sec = 0, micros = 0;
   pos = 0;
 
@@ -449,7 +457,7 @@ bool tryParseTimeString(
     if (!parseDoubleDigit(buf, len, pos, sec)) {
       return false;
     }
-    if (sec < 0 || sec > 60) {
+    if (sec < 0 || sec > 60 || (isHiveTime && sec == 60)) {
       return false;
     }
 
@@ -457,8 +465,13 @@ bool tryParseTimeString(
     if (pos < len) {
       if (buf[pos] == '.') {
         ++pos;
+        if (isHiveTime && (pos >= len || !characterIsDigit(buf[pos]))) {
+          return false;
+        }
       } else if (parseMode == TimestampParseMode::kIso8601 && buf[pos] == ',') {
         ++pos;
+      } else if (isHiveTime && characterIsDigit(buf[pos])) {
+        return false;
       }
 
       if (pos >= len) {
@@ -638,18 +651,25 @@ bool tryParseTimestampString(
   const size_t preSeparatorPos = pos;
   parseTimeSeparator(buf, pos, parseMode);
 
-  // In Spark cast mode, once a date-time separator ('T' or ' ') is consumed,
-  // the time component must begin immediately with a digit. This mirrors
-  // Spark's grammar: a separator followed by a timezone, garbage, or end of
-  // input is rejected.
-  if (parseMode == TimestampParseMode::kSparkCast && pos > preSeparatorPos &&
+  // Require a time after either Spark separator or Hive's 'T'. Keep accepting
+  // a date followed only by whitespace in Hive mode.
+  const bool isHiveTime =
+      parseMode == TimestampParseMode::kHiveCast && buf[preSeparatorPos] == 'T';
+  const bool requiresTime =
+      parseMode == TimestampParseMode::kSparkCast || isHiveTime;
+  if (requiresTime && pos > preSeparatorPos &&
       (pos >= len || !characterIsDigit(buf[pos]))) {
     return false;
   }
 
+  // Preserve the existing time grammar for whitespace-separated Hive input.
+  const auto timeParseMode =
+      parseMode == TimestampParseMode::kHiveCast && !isHiveTime
+      ? TimestampParseMode::kPrestoCast
+      : parseMode;
   size_t timePos = 0;
   if (!tryParseTimeString(
-          buf + pos, len - pos, timePos, microsSinceMidnight, parseMode)) {
+          buf + pos, len - pos, timePos, microsSinceMidnight, timeParseMode)) {
     // The rest of the string is not a valid time, but it could be relevant to
     // the caller (e.g. it could be a time zone), return the date we parsed
     // and let them decide what to do with the rest.
@@ -829,6 +849,14 @@ Expected<int32_t> fromDateString(const char* str, size_t len, ParseMode mode) {
                 "Unable to parse date value: \"{}\". "
                 "Valid date string pattern is (YYYY-MM-DD), "
                 "and can be prefixed with [+-]",
+                std::string(str, len)));
+      case ParseMode::kHiveCast:
+        return folly::makeUnexpected(
+            Status::UserError(
+                "Unable to parse date value. "
+                "Valid date string pattern is (YYYY-MM-DD), "
+                "optionally prefixed with [+-] and optionally followed by "
+                "'T' or whitespace and arbitrary text. Got: \"{}\"",
                 std::string(str, len)));
       case ParseMode::kSparkCast:
         return folly::makeUnexpected(
